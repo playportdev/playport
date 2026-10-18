@@ -283,7 +283,13 @@ in the build area:
   size; the desktop memory type behind it is chosen per physical device, and
   `PP_CAPTURE_HEAP_CAP=1` caps the heap at that type's heap. Its
   `VK_EXT_memory_budget` budget follows KosmicKrisp's rule (90% of available
-  memory plus usage, at most the heap), with that heap's usage. Build it beside
+  memory plus usage, at most the heap), with that heap's usage.
+  `PP_CAPTURE_DEVICE_TYPE=discrete` (or `integrated`) overrides the profile's
+  device type. With `PP_CAPTURE_LINEAR=1` (`linear.c`) it logs, per linear
+  image, where it is bound, whether its range is mapped, its layout queries,
+  the copies, barriers (host access included), descriptors and framebuffers
+  naming it, and with `PP_CAPTURE_LINEAR_HASH=N` the content changes of the
+  3D, array and mipmapped ones that no GPU write explains. Build it beside
   its manifest with
   `cc -shared -fPIC -O1 -o DIR/libpp_capture.so capture.c -lpthread` and
   `cp capture.json DIR/`, then run with `VK_ADD_IMPLICIT_LAYER_PATH=DIR

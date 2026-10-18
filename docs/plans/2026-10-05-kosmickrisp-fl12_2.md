@@ -446,19 +446,23 @@ KosmicKrisp (`ios check`), `pp names`, `pp secrets` and `pp test --quick`. The p
   H7 ([PLA-388](https://linear.app/playportdev/issue/PLA-388), mesa 0041: a linear image Metal
   cannot make from a buffer (array, 3D, mip chain) gets a texture of Metal's own layout. The mock
   checks Apple's rules for buffer textures; host test, replays unchanged,
-  [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#linear-images-h7)).
+  [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#linear-images-h7)); H7b (PLA-388, desktop
+  runs; the capture layer logs linear-image use: with a discrete device type RDR2 makes 2 linear
+  images instead of 521 and still picks `Safe`; the CPU writes the 9 mip chains and 3 of the 3D
+  images through the mapping and the GPU writes 1 more for host reads, so 0041's fallback is
+  enough only for the arrays,
+  [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#linear-image-use-and-the-device-type-h7b)).
   Host only; not checked on the phone.
 - **Blocked:** H5 (Apple's Metal compiler for Windows under Wine on the replay's MSL). The
   download needs an Apple account sign-in, and the tools' licence is not published, so whether
   Wine on Linux is permitted is unknown. Nothing downloaded; the owner's step is in the
   [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#apples-metal-compiler-on-the-generated-msl-h5).
-- **Queue (owner-approved 2026-10-17, host only):** H5 (resumed 2026-10-18 under the owner's
-  Wine decision, running); H7b measure on the desktop what RDR2 does with its linear images
-  (binds, maps, `vkGetImageSubresourceLayout`, copies) and whether the integrated device type
-  triggers them and its `Safe` settings (the owner released his Steam client for these runs,
-  2026-10-18); H8 the dev IPA with mesa 0037–0041. Then chunk 0 below (needs the phone).
-- **Running:** H5 (`h5c.md`, no commits; results committed after). Reports: `h1-h3.md` (H1), `h2.md` (H2), `h1b.md` (H1b), `h3.md` (H3),
-  `h4.md` (H4), `h5.md` (H5), `h6.md` (H6), `h6b.md` (H6b), `h7.c6627d62.md` (H7).
+- **Queue (owner-approved 2026-10-17, host only):** next H5d (commit the H5 results under the
+  owner's Wine decision of 2026-10-18, fix `fcanonicalize`); then H8 the dev IPA with mesa
+  0037–0041. Then chunk 0 below (needs the phone).
+- **Running:** none. Reports: `h1-h3.md` (H1), `h2.md` (H2), `h1b.md` (H1b), `h3.md` (H3),
+  `h4.md` (H4), `h5.md` (H5), `h5c.md` (H5, results not yet committed), `h6.md` (H6), `h6b.md`
+  (H6b), `h7.c6627d62.md` (H7), `h7b.md` (H7b).
 - **Phone:** not used by these runs; Hollow Knight on Vulkan first frame+10 is owed for V1–V3,
   H6b and H7 (mesa 0037–0041), on an IPA with 0041 (H4's has 0037–0039 only), then RDR2 after
   PLA-295 and PLA-300.

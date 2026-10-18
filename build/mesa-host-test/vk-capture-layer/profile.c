@@ -11,9 +11,10 @@
  * (DEVICE_LOCAL | HOST_VISIBLE | HOST_COHERENT | HOST_CACHED) on one heap of
  * the report's heap 0 size, as KosmicKrisp has. With PP_CAPTURE_SPOOF=1 it
  * also takes the report's vendor, device ID, name, driver ID, driver name and
- * info, conformance version and an integrated device type. A property an
- * older report does not print is left as the desktop's, but for extension
- * formats. Included by capture.c.
+ * info, conformance version and an integrated device type.
+ * PP_CAPTURE_DEVICE_TYPE=discrete|integrated|N sets the device type, with or
+ * without the spoof. A property an older report does not print is left as
+ * the desktop's, but for extension formats. Included by capture.c.
  *
  * The report's memory type stands for the first desktop type that is
  * DEVICE_LOCAL, HOST_VISIBLE and HOST_COHERENT, chosen per physical device:
@@ -212,6 +213,9 @@ static void prof_limits(VkPhysicalDeviceProperties *p) {
         snprintf(p->deviceName, sizeof p->deviceName, "%s", prof_name);
         p->deviceType = VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU;
     }
+    const char *type = getenv("PP_CAPTURE_DEVICE_TYPE");
+    if (type) p->deviceType = !strcmp(type, "discrete") ? VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU
+                            : !strcmp(type, "integrated") ? VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU : (VkPhysicalDeviceType)atoi(type);
 }
 static void VKAPI_CALL q_GetProps(VkPhysicalDevice pd, VkPhysicalDeviceProperties *p) { p_GetProps(pd, p); prof_limits(p); }
 

@@ -11,6 +11,7 @@
  *
  *    PP_CAPTURE_OUT     directory for capture.PID.log and spv/ (default .)
  *    PP_CAPTURE_GDPA=1  also log every vkGetDeviceProcAddr lookup
+ *    PP_CAPTURE_LINEAR=1  log how linear images are bound, mapped and used (linear.c)
  *
  * The manifest, capture.json, enables it with ENABLE_PP_CAPTURE=1.
  */
@@ -85,6 +86,7 @@ static void dump_features10(const char *what, const VkPhysicalDeviceFeatures *f)
 }
 
 #include "profile.c"
+#include "linear.c"
 
 /* ---------------- instance ---------------- */
 static PFN_vkCreateInstance n_CreateInstance;
@@ -131,7 +133,13 @@ static void VKAPI_CALL c_DestroyInstance(VkInstance i, const VkAllocationCallbac
     X(CmdDrawIndirect) X(CmdDrawIndexedIndirect) X(CmdDrawIndirectCount) X(CmdDrawIndexedIndirectCount) \
     X(CmdSetDepthBounds) X(CmdDispatchBase) X(CmdBeginQuery) X(CmdResolveImage) X(CmdBlitImage) \
     X(CmdPushDescriptorSetKHR) X(CmdBeginRenderPass) X(CreateSwapchainKHR) X(CreateDescriptorPool) \
-    X(CmdDispatchIndirect) X(CmdFillBuffer) X(CmdCopyQueryPoolResults) X(CmdClearAttachments)
+    X(CmdDispatchIndirect) X(CmdFillBuffer) X(CmdCopyQueryPoolResults) X(CmdClearAttachments) \
+    X(DestroyImage) X(DestroyImageView) X(DestroyBuffer) X(FreeMemory) X(BindImageMemory) X(BindImageMemory2) \
+    X(BindBufferMemory) X(BindBufferMemory2) X(MapMemory) X(UnmapMemory) X(FlushMappedMemoryRanges) \
+    X(InvalidateMappedMemoryRanges) X(GetImageSubresourceLayout) X(CmdCopyBufferToImage) X(CmdCopyImageToBuffer) \
+    X(CmdCopyImage) X(CmdClearColorImage) X(CmdPipelineBarrier) X(CmdWaitEvents) X(CmdExecuteCommands) \
+    X(BeginCommandBuffer) X(QueueSubmit) X(QueuePresentKHR) X(UpdateDescriptorSets) X(CreateDescriptorUpdateTemplate) \
+    X(DestroyDescriptorUpdateTemplate) X(UpdateDescriptorSetWithTemplate) X(CreateFramebuffer) X(DestroyFramebuffer)
 #define DECL(n) static PFN_vk##n n_##n;
 DEVFNS(DECL)
 
@@ -172,7 +180,7 @@ static VkResult VKAPI_CALL c_CreateDevice(VkPhysicalDevice pd, const VkDeviceCre
     return r;
 }
 
-static void VKAPI_CALL c_DestroyDevice(VkDevice d, const VkAllocationCallbacks *a) { stats(); L("device destroy\n"); prof_device_destroyed(d); n_DestroyDevice(d, a); }
+static void VKAPI_CALL c_DestroyDevice(VkDevice d, const VkAllocationCallbacks *a) { stats(); lin_device_destroyed(d); L("device destroy\n"); prof_device_destroyed(d); n_DestroyDevice(d, a); }
 
 static uint64_t fnv(const void *p, size_t n) {
     const unsigned char *c = p; uint64_t h = 1469598103934665603ull;
@@ -270,13 +278,16 @@ static VkResult VKAPI_CALL c_CreateImage(VkDevice d, const VkImageCreateInfo *ci
     pthread_mutex_unlock(&mu);
     VkResult r = n_CreateImage(d, ci, a, out);
     if (r != VK_SUCCESS) L("image result %d\n", r);
+    else lin_image_created(d, ci, *out);
     return r;
 }
 
 static VkResult VKAPI_CALL c_CreateImageView(VkDevice d, const VkImageViewCreateInfo *ci, const VkAllocationCallbacks *a, VkImageView *out) {
     L("view type=%d fmt=%s swz=%d%d%d%d aspect=%x pnext=%d\n", ci->viewType, string_VkFormat(ci->format), ci->components.r, ci->components.g, ci->components.b, ci->components.a,
       ci->subresourceRange.aspectMask, ci->pNext ? ((const Hdr *)ci->pNext)->sType : 0);
-    return n_CreateImageView(d, ci, a, out);
+    VkResult r = n_CreateImageView(d, ci, a, out);
+    if (r == VK_SUCCESS) lin_view_created(ci, *out);
+    return r;
 }
 
 static VkResult VKAPI_CALL c_CreateSampler(VkDevice d, const VkSamplerCreateInfo *ci, const VkAllocationCallbacks *a, VkSampler *out) {
@@ -369,6 +380,7 @@ static VkResult VKAPI_CALL c_AllocateMemory(VkDevice d, const VkMemoryAllocateIn
     if (standin != UINT32_MAX) tai.memoryTypeIndex = standin;
     VkResult r = n_AllocateMemory(d, &tai, a, m);
     if (r != VK_SUCCESS) L("alloc result %d\n", r);
+    else lin_mem_allocated(ai, tai.memoryTypeIndex, *m);
     return r;
 }
 
@@ -390,14 +402,95 @@ static void VKAPI_CALL c_CmdDrawIndexedIndirectCount(VkCommandBuffer c, VkBuffer
 static void VKAPI_CALL c_CmdSetDepthBounds(VkCommandBuffer c, float a, float b) { cnt_depthbounds++; n_CmdSetDepthBounds(c, a, b); }
 static void VKAPI_CALL c_CmdDispatchBase(VkCommandBuffer c, uint32_t a, uint32_t b, uint32_t d, uint32_t x, uint32_t y, uint32_t z) { cnt_dispatchbase++; n_CmdDispatchBase(c, a, b, d, x, y, z); }
 static void VKAPI_CALL c_CmdBeginQuery(VkCommandBuffer c, VkQueryPool p, uint32_t q, VkQueryControlFlags f) { if (f & VK_QUERY_CONTROL_PRECISE_BIT) cnt_query_precise++; n_CmdBeginQuery(c, p, q, f); }
-static void VKAPI_CALL c_CmdResolveImage(VkCommandBuffer c, VkImage s, VkImageLayout sl, VkImage d, VkImageLayout dl, uint32_t n, const VkImageResolve *r) { cnt_resolve++; n_CmdResolveImage(c, s, sl, d, dl, n, r); }
-static void VKAPI_CALL c_CmdBlitImage(VkCommandBuffer c, VkImage s, VkImageLayout sl, VkImage d, VkImageLayout dl, uint32_t n, const VkImageBlit *r, VkFilter f) { cnt_blit++; n_CmdBlitImage(c, s, sl, d, dl, n, r, f); }
-static void VKAPI_CALL c_CmdPushDescriptorSetKHR(VkCommandBuffer c, VkPipelineBindPoint bp, VkPipelineLayout l, uint32_t s, uint32_t n, const VkWriteDescriptorSet *w) { cnt_pushdesc++; n_CmdPushDescriptorSetKHR(c, bp, l, s, n, w); }
-static void VKAPI_CALL c_CmdBeginRenderPass(VkCommandBuffer c, const VkRenderPassBeginInfo *b, VkSubpassContents s) { if ((++cnt_rp % 20000) == 0) stats(); n_CmdBeginRenderPass(c, b, s); }
+static void VKAPI_CALL c_CmdResolveImage(VkCommandBuffer c, VkImage s, VkImageLayout sl, VkImage d, VkImageLayout dl, uint32_t n, const VkImageResolve *r) { cnt_resolve++; LIN_CMD(c, s, 0, res_src); LIN_CMD(c, d, 1, res_dst); n_CmdResolveImage(c, s, sl, d, dl, n, r); }
+static void VKAPI_CALL c_CmdBlitImage(VkCommandBuffer c, VkImage s, VkImageLayout sl, VkImage d, VkImageLayout dl, uint32_t n, const VkImageBlit *r, VkFilter f) { cnt_blit++; LIN_CMD(c, s, 0, blit_src); LIN_CMD(c, d, 1, blit_dst); n_CmdBlitImage(c, s, sl, d, dl, n, r, f); }
+static void VKAPI_CALL c_CmdPushDescriptorSetKHR(VkCommandBuffer c, VkPipelineBindPoint bp, VkPipelineLayout l, uint32_t s, uint32_t n, const VkWriteDescriptorSet *w) { cnt_pushdesc++; lin_descriptor_writes(n, w); n_CmdPushDescriptorSetKHR(c, bp, l, s, n, w); }
+static void VKAPI_CALL c_CmdBeginRenderPass(VkCommandBuffer c, const VkRenderPassBeginInfo *b, VkSubpassContents s) { if ((++cnt_rp % 20000) == 0) stats(); lin_render_pass(c, b); n_CmdBeginRenderPass(c, b, s); }
 static void VKAPI_CALL c_CmdDispatchIndirect(VkCommandBuffer c, VkBuffer b, VkDeviceSize o) { cnt_dispatchind++; n_CmdDispatchIndirect(c, b, o); }
 static void VKAPI_CALL c_CmdFillBuffer(VkCommandBuffer c, VkBuffer b, VkDeviceSize o, VkDeviceSize s, uint32_t d) { cnt_fill++; n_CmdFillBuffer(c, b, o, s, d); }
 static void VKAPI_CALL c_CmdCopyQueryPoolResults(VkCommandBuffer c, VkQueryPool p, uint32_t f, uint32_t n, VkBuffer b, VkDeviceSize o, VkDeviceSize s, VkQueryResultFlags fl) { cnt_copyq++; n_CmdCopyQueryPoolResults(c, p, f, n, b, o, s, fl); }
 static void VKAPI_CALL c_CmdClearAttachments(VkCommandBuffer c, uint32_t n, const VkClearAttachment *a, uint32_t r, const VkClearRect *rc) { cnt_clearatt++; n_CmdClearAttachments(c, n, a, r, rc); }
+
+/* linear-image use (linear.c) */
+static void VKAPI_CALL c_DestroyImage(VkDevice d, VkImage i, const VkAllocationCallbacks *a) { lin_image_destroyed(i); n_DestroyImage(d, i, a); }
+static void VKAPI_CALL c_DestroyImageView(VkDevice d, VkImageView v, const VkAllocationCallbacks *a) { lin_view_destroyed(v); n_DestroyImageView(d, v, a); }
+static void VKAPI_CALL c_DestroyBuffer(VkDevice d, VkBuffer b, const VkAllocationCallbacks *a) { lin_buffer_destroyed(b); n_DestroyBuffer(d, b, a); }
+static void VKAPI_CALL c_FreeMemory(VkDevice d, VkDeviceMemory m, const VkAllocationCallbacks *a) { lin_mem_freed(m); n_FreeMemory(d, m, a); }
+static VkResult VKAPI_CALL c_BindImageMemory(VkDevice d, VkImage i, VkDeviceMemory m, VkDeviceSize o) {
+    VkResult r = n_BindImageMemory(d, i, m, o);
+    if (r == VK_SUCCESS) lin_image_bound(d, i, m, o);
+    return r;
+}
+static VkResult VKAPI_CALL c_BindImageMemory2(VkDevice d, uint32_t n, const VkBindImageMemoryInfo *b) {
+    VkResult r = n_BindImageMemory2(d, n, b);
+    for (uint32_t k = 0; r == VK_SUCCESS && k < n; k++) if (b[k].memory) lin_image_bound(d, b[k].image, b[k].memory, b[k].memoryOffset);
+    return r;
+}
+static VkResult VKAPI_CALL c_BindBufferMemory(VkDevice d, VkBuffer b, VkDeviceMemory m, VkDeviceSize o) {
+    VkResult r = n_BindBufferMemory(d, b, m, o);
+    if (r == VK_SUCCESS) lin_buffer_bound(d, b, m, o);
+    return r;
+}
+static VkResult VKAPI_CALL c_BindBufferMemory2(VkDevice d, uint32_t n, const VkBindBufferMemoryInfo *b) {
+    VkResult r = n_BindBufferMemory2(d, n, b);
+    for (uint32_t k = 0; r == VK_SUCCESS && k < n; k++) lin_buffer_bound(d, b[k].buffer, b[k].memory, b[k].memoryOffset);
+    return r;
+}
+static VkResult VKAPI_CALL c_MapMemory(VkDevice d, VkDeviceMemory m, VkDeviceSize o, VkDeviceSize s, VkMemoryMapFlags f, void **p) {
+    VkResult r = n_MapMemory(d, m, o, s, f, p);
+    if (r == VK_SUCCESS) lin_mapped(m, o, s, *p);
+    return r;
+}
+static void VKAPI_CALL c_UnmapMemory(VkDevice d, VkDeviceMemory m) { lin_unmapped(m); n_UnmapMemory(d, m); }
+static VkResult VKAPI_CALL c_FlushMappedMemoryRanges(VkDevice d, uint32_t n, const VkMappedMemoryRange *r) { lin_ranges(n, r, 0); return n_FlushMappedMemoryRanges(d, n, r); }
+static VkResult VKAPI_CALL c_InvalidateMappedMemoryRanges(VkDevice d, uint32_t n, const VkMappedMemoryRange *r) { lin_ranges(n, r, 1); return n_InvalidateMappedMemoryRanges(d, n, r); }
+static void VKAPI_CALL c_GetImageSubresourceLayout(VkDevice d, VkImage i, const VkImageSubresource *s, VkSubresourceLayout *l) {
+    n_GetImageSubresourceLayout(d, i, s, l);
+    lin_layout_queried(i, s, l);
+}
+static void VKAPI_CALL c_CmdCopyBufferToImage(VkCommandBuffer c, VkBuffer b, VkImage i, VkImageLayout l, uint32_t n, const VkBufferImageCopy *r) {
+    LIN_CMD(c, i, 1, b2i); n_CmdCopyBufferToImage(c, b, i, l, n, r);
+}
+static void VKAPI_CALL c_CmdCopyImageToBuffer(VkCommandBuffer c, VkImage i, VkImageLayout l, VkBuffer b, uint32_t n, const VkBufferImageCopy *r) {
+    LIN_CMD(c, i, 0, i2b); n_CmdCopyImageToBuffer(c, i, l, b, n, r);
+}
+static void VKAPI_CALL c_CmdCopyImage(VkCommandBuffer c, VkImage s, VkImageLayout sl, VkImage d, VkImageLayout dl, uint32_t n, const VkImageCopy *r) {
+    if (lin_enabled()) __atomic_fetch_add(&lin_copy_images, 1, __ATOMIC_RELAXED);
+    LIN_CMD(c, s, 0, ci_src); LIN_CMD(c, d, 1, ci_dst); n_CmdCopyImage(c, s, sl, d, dl, n, r);
+}
+static void VKAPI_CALL c_CmdClearColorImage(VkCommandBuffer c, VkImage i, VkImageLayout l, const VkClearColorValue *v, uint32_t n, const VkImageSubresourceRange *r) {
+    LIN_CMD(c, i, 1, clears); n_CmdClearColorImage(c, i, l, v, n, r);
+}
+static void VKAPI_CALL c_CmdPipelineBarrier(VkCommandBuffer c, VkPipelineStageFlags s, VkPipelineStageFlags d, VkDependencyFlags f, uint32_t nm, const VkMemoryBarrier *m,
+                                            uint32_t nb, const VkBufferMemoryBarrier *b, uint32_t ni, const VkImageMemoryBarrier *i) {
+    lin_barriers(s, d, nm, m, ni, i); n_CmdPipelineBarrier(c, s, d, f, nm, m, nb, b, ni, i);
+}
+static void VKAPI_CALL c_CmdWaitEvents(VkCommandBuffer c, uint32_t ne, const VkEvent *e, VkPipelineStageFlags s, VkPipelineStageFlags d, uint32_t nm, const VkMemoryBarrier *m,
+                                       uint32_t nb, const VkBufferMemoryBarrier *b, uint32_t ni, const VkImageMemoryBarrier *i) {
+    lin_barriers(s, d, nm, m, ni, i); n_CmdWaitEvents(c, ne, e, s, d, nm, m, nb, b, ni, i);
+}
+static void VKAPI_CALL c_CmdExecuteCommands(VkCommandBuffer c, uint32_t n, const VkCommandBuffer *s) { lin_execute(c, n, s); n_CmdExecuteCommands(c, n, s); }
+static VkResult VKAPI_CALL c_BeginCommandBuffer(VkCommandBuffer c, const VkCommandBufferBeginInfo *b) { lin_cb_begin(c); return n_BeginCommandBuffer(c, b); }
+static VkResult VKAPI_CALL c_QueueSubmit(VkQueue q, uint32_t n, const VkSubmitInfo *s, VkFence f) { lin_submit(n, s); return n_QueueSubmit(q, n, s, f); }
+static VkResult VKAPI_CALL c_QueuePresentKHR(VkQueue q, const VkPresentInfoKHR *p) { lin_present(); return n_QueuePresentKHR(q, p); }
+static void VKAPI_CALL c_UpdateDescriptorSets(VkDevice d, uint32_t nw, const VkWriteDescriptorSet *w, uint32_t nc, const VkCopyDescriptorSet *c) {
+    lin_descriptor_writes(nw, w); n_UpdateDescriptorSets(d, nw, w, nc, c);
+}
+static VkResult VKAPI_CALL c_CreateDescriptorUpdateTemplate(VkDevice d, const VkDescriptorUpdateTemplateCreateInfo *ci, const VkAllocationCallbacks *a, VkDescriptorUpdateTemplate *t) {
+    VkResult r = n_CreateDescriptorUpdateTemplate(d, ci, a, t);
+    if (r == VK_SUCCESS) lin_template_created(ci, *t);
+    return r;
+}
+static void VKAPI_CALL c_DestroyDescriptorUpdateTemplate(VkDevice d, VkDescriptorUpdateTemplate t, const VkAllocationCallbacks *a) { lin_template_destroyed(t); n_DestroyDescriptorUpdateTemplate(d, t, a); }
+static void VKAPI_CALL c_UpdateDescriptorSetWithTemplate(VkDevice d, VkDescriptorSet s, VkDescriptorUpdateTemplate t, const void *p) {
+    lin_template_write(t, p); n_UpdateDescriptorSetWithTemplate(d, s, t, p);
+}
+static VkResult VKAPI_CALL c_CreateFramebuffer(VkDevice d, const VkFramebufferCreateInfo *ci, const VkAllocationCallbacks *a, VkFramebuffer *fb) {
+    VkResult r = n_CreateFramebuffer(d, ci, a, fb);
+    if (r == VK_SUCCESS) lin_framebuffer_created(ci, *fb);
+    return r;
+}
+static void VKAPI_CALL c_DestroyFramebuffer(VkDevice d, VkFramebuffer fb, const VkAllocationCallbacks *a) { lin_framebuffer_destroyed(fb); n_DestroyFramebuffer(d, fb, a); }
 
 static PFN_vkVoidFunction lookup_dev(const char *n) {
 #define MAP(x) if (!strcmp(n, "vk" #x)) return n_##x ? (PFN_vkVoidFunction)c_##x : NULL;

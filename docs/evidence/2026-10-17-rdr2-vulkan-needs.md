@@ -847,3 +847,77 @@ gives the same numbers as before (h1b: graphics 1,950/1,950, compute 788/788; vk
 1,587/1,607, 757/758; 0 crashes). The replay creates no image. Not checked on the phone. Whether
 Apple's Metal refuses these textures (nil or a validation error) is from its documentation, not
 run.
+
+## Linear image use and the device type (H7b)
+
+**Date:** 2026-10-18. **Linear:** [PLA-388](https://linear.app/playportdev/issue/PLA-388).
+Desktop only: RDR2 under Proton Experimental on the agent's sway display, as in H1b, with the
+KosmicKrisp profile at the phone's 8 GiB heap (H6's report: vendor 0x106b, KosmicKrisp's driver
+ID, spoof on) and the capture layer of this commit. The owner released his Steam client for
+these runs. Not checked on the phone.
+
+**The layer** now has `PP_CAPTURE_LINEAR=1` (`vk-capture-layer/linear.c`): for every linear
+image, the memory and range it is bound to, other resources bound over that range, maps of it,
+`vkGetImageSubresourceLayout` calls, flushes and invalidations, the copies, blits, resolves,
+clears and barriers naming it (host access split into before host reads and after host
+writes), descriptor writes (templates included) and framebuffers naming its views, and the
+submissions of command buffers that write it. With `PP_CAPTURE_LINEAR_HASH=30` it hashes 16
+runs of 64 bytes of each mapped 3D, array or mipmapped linear image every 30 presents and counts
+the changes no GPU write submitted since the sample before explains: CPU writes, or a storage
+write the layer does not track. A sample can miss a write, so the counts are lower bounds.
+`PP_CAPTURE_DEVICE_TYPE=discrete` overrides the profile's device type. A first version held its
+lock while hashing every linear image and searched a memory's objects on every bind; with it,
+Story mode did not finish loading in 10 minutes and Wine reported a game critical section
+waiting 60 s (run `h7b-b`, killed). The committed version loads it in about 2 minutes.
+
+**Run A: the device type** (landing page only, about 3 minutes, `system.xml` removed first so the
+game picks its settings; integrated is runs `h7b-b2` and `h7b-c` up to the landing page):
+
+| | Discrete (`h7b-a`) | Integrated (`h7b-b2`, `h7b-c`) |
+|---|---|---|
+| SGA images at the landing page | 5,936 | 4,583 |
+| linear images | **2** (B8G8R8A8 1280×720, transfer only) | **521**: 21 plain, 435 colour attachments (303 never bound), 56 3D (40 never bound), 9 mip chains |
+| `configSource` the game picks | `kSettingsConfig_Safe` | `kSettingsConfig_Safe` (the same `system.xml`) |
+| video-memory box | none | none |
+
+So the integrated device type is what makes RDR2 create its linear images, and it is not what
+makes it pick `Safe`: neither is the heap (H1b) or the vendor (0 in H1b, Apple here).
+(inference: `Safe` is the game's default for a GPU it does not know.)
+
+**Run B: what the game does with them** (integrated, as H1b; `h7b-b2` with about 5 minutes in
+the world, quit from the pause menu; `h7b-c` with about 6 minutes, for the host-access
+direction). Numbers are `h7b-b2`'s unless marked. Every linear image is bound once, all but one
+into 32 MiB blocks that the game maps whole when it allocates them and keeps mapped. No image
+shares its range with another resource, and no flush or invalidate names one.
+
+| Group | Count (bound) | GPU writes | GPU reads | Layout queried | Host access | CPU through the mapping |
+|---|---|---|---|---|---|---|
+| 2D plain | 10,519 (10,515), Story mode | copy from a buffer: once each in Story mode, every frame for 13 landing-page ones | sampled (70 named in descriptors) | 3 | none | not hashed (2D) |
+| 2D colour attachments | 426 (123; 303 never bound) | render passes (49), storage (78), copies | sampled, copied to buffers (2) | 80 images, 122,208 calls | barriers before host reads and after host writes on 114 | (inference) yes; KosmicKrisp keeps these buffer-backed |
+| 2D arrays RGBA16F 16×28 | 386 (386), Story mode | copy from a buffer (1,618) | sampled (7 named) | no | none | **no**: 1 change in 117,466 samples, explained by a copy |
+| 3D RGBA16F 64×64×16 | 4 (4) | 3: none; 1: storage | all sampled | 3: about 1,300–2,300 calls each | the storage one: 4,030 barriers each way (`h7b-c`) | **yes**: the 3 change 24–41 times each with no GPU write; the storage one changes 19–20 times (storage or CPU) and is ordered for host reads |
+| 3D R32_UINT 32×32×16, 64×64×1 | 8 active (of 12 bound) | copy from a buffer every few frames (2,015–3,465 each) | 2 sampled | no | the 2 sampled: both ways; 2: after host writes | no: changes explained by the copies |
+| 3D R32_UINT 32×32×30, 64×64×1 | 4 | none | none | no | one barrier | no (idle) |
+| 2D R32_SFLOAT 128×72, 7 levels | 9 (9), created `PREINITIALIZED` | **none** | sampled (3 named) | **every level, about 9,400–16,170 calls each** | none | **yes**: all 9 change (1–101 times) with no GPU write |
+
+All 3D and mip-chain activity is in Story mode; at the landing page they are bound and mapped
+but unused.
+
+**What this means for mesa 0041.** Its tiled fallback is enough for the arrays: the game fills
+them only with `vkCmdCopyBufferToImage`, which KosmicKrisp copies into the texture. It is not
+enough for the mip chains (all 9 are written by the CPU at the offsets
+`vkGetImageSubresourceLayout` reports, and only sampled by the GPU) or for 4 of the 16 bound 3D
+images (3 written by the CPU, 1 written by the GPU and ordered for host reads): on the phone the
+GPU would sample a texture the CPU never writes, and the CPU would read memory the GPU never
+writes. A faithful path needs a copy from the mapped memory into the texture before a submission
+that reads it, and back after GPU writes that a host-read barrier names (H7 follow-up 2).
+Reporting a discrete device to RDR2 would avoid all of this (run A), but that is a per-title
+product decision, not made here.
+
+**Owner state.** The owner's Steam client (his desktop session) was stopped with
+`steam -shutdown` at 08:41 and started on sway for the runs; it was stopped again at 09:33 and
+left stopped. Rockstar's cloud got two uploads (`PostFile` at the end of `h7b-a` and at the start
+of `h7b-b2`); the saves `SRDR30000` and `SRDR30015` are unchanged; `cfg.dat`,
+`cloudsavedata.dat` and `ProfileSettings` changed. `system.xml` was restored (sha256 `24963ca1…`).
+`h7b-c` ended at its 600 s timeout in Story mode, and the launcher then showed its sign-in page;
+nothing was entered and no file in the prefix changed after it.
