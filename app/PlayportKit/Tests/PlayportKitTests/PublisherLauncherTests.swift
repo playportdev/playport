@@ -63,6 +63,16 @@ final class PublisherLauncherTests: XCTestCase {
         XCTAssertEqual(own.config, ["env.FEX_SMCCHECKS": "mtrack", "vram-mb": "1024"])
     }
 
+    /// PLA-401: a game's Runtime keys can give Launcher.exe alone its SMC checks
+    /// (patches/fex 0050): the value keeps its own `=`, and the launcher's session-wide
+    /// key stays for every other process.
+    func testRDR2PlayKeepsAnSMCChecksForValueBesideTheLaunchersKey() {
+        let game = LaunchSettings(runtime: "env.FEX_SMCCHECKS_FOR=Launcher.exe=mtrack")
+        XCTAssertEqual(LaunchSettings.runtimeKeys(game.runtime), ["env.FEX_SMCCHECKS_FOR": "Launcher.exe=mtrack"])
+        let play = PublisherLauncher.rockstar.startingGame(LaunchSettings.resolve(game: game, global: LaunchSettings()))
+        XCTAssertEqual(play.settings.runtime, ["env.FEX_SMCCHECKS": "none", "env.FEX_SMCCHECKS_FOR": "Launcher.exe=mtrack"])
+    }
+
     func testOpenTakesTheSavedRuntimeKeysAndFEXInputsOnly() {
         let launcher = PublisherLauncher.rockstar
         XCTAssertEqual(launcher.openSettings(saved: nil).config, launcher.runtime)
