@@ -41,15 +41,15 @@ re-read in this review.
 wine-11.18, `wine-valve` dc26e61, `fex` FEX-2609.1, `dxmt` 7c8dee1, `mesa`
 82d4f86, `dxvk` 52fe923, `vkd3d-proton` 472989a, `gbe` release-2026_09_27).
 
-## Runner state (workstation only, 2026-10-17)
+## Runner state (2026-10-18)
 
 - **Branch:** `dev/pla-76-proton-alignment-ws`, off `main` at f7ac25f, rebased onto `main` at
-  dfc527f (M2a), in the owner-authorized side copy
-  `$PLAYPORT_BUILD/worktrees/pla-76-proton-alignment`. The owner authorized it to build
-  (2026-10-17, beyond decision 0069): its own `.work` holds reflinked copies of main's `cache`,
-  `inputs`, `run` and (M2a) `cef-src`'s CEF payload and notices, with build directories that
-  named main's path removed. No install or phone. Its build records are not canonical (the
-  build path differs); main's build regenerates them after merge. Not merged, not pushed.
+  dfc527f (M2a), checked out in the main checkout since M2b; not merged, not pushed. W1 to W8b
+  and M2a ran in the owner-authorized side copy
+  `$PLAYPORT_BUILD/worktrees/pla-76-proton-alignment` (now detached), which the owner let build
+  (2026-10-17, beyond decision 0069) from reflinked copies of main's `cache`, `inputs`, `run` and
+  (M2a) `cef-src`, with no install or phone. M2b's build in the main checkout reproduced the
+  committed build records, so they are canonical.
 - **Queue, one writer per item:** W1 the C table into ARCHITECTURE.md; W2 A0 re-read against
   Valve's current bleeding-edge (FEX config, app profiles, ARM defaults); W3 B4
   `FEX_APP_CONFIG` in one Mach process (source reading, a design); W4 B6 what Steam appinfo
@@ -78,9 +78,15 @@ wine-11.18, `wine-valve` dc26e61, `fex` FEX-2609.1, `dxmt` 7c8dee1, `mesa`
   [evidence](../evidence/2026-10-18-cpsr-reserved-bits.md)). M2a: rebased onto main (dfc527f);
   main's new fex 0045–0051, wine-pe 0045–0046 and wine-unix 0038–0042 apply unchanged on the
   new pins (`pp rebase` replays, written series tree-equal), the branch's own patches follow
-  main's (madeira-unix 0151→0160, 0152→0161; wine-pe 0045→0047); verified dev IPA `fe24590e`;
-  next M2b phone gates in the main checkout (they replace the W7/W8/W8b IPAs' owed gates).
-  Reports: `agent-notes/pla-76/reports/` in the side copy's build area.
+  main's (madeira-unix 0151→0160, 0152→0161; wine-pe 0045→0047); verified dev IPA `fe24590e`.
+  M2b: the branch moved into the main checkout (owner, 2026-10-18); its build `6e68a205`
+  reproduced M2a's records byte for byte; Hollow Knight first frame+10 twice (+9.87 s cold,
+  +8.66 s warm) and the threadctx probe (checks a–e as on 2026-10-13) passed;
+  [evidence](../evidence/2026-10-18-proton-alignment-phone.md). Owed: Portal 2 (not installed,
+  no room beside RDR2) and its `pp perf`, a console program, RDR2's launcher, and a main-IPA
+  Hollow Knight `pp perf` on today's save for the 45–65 s load window. Not merged.
+  Reports: `agent-notes/pla-76/reports/` in the side copy's build area, `agent-notes/pla-76/m2b-phone.md`
+  in main's.
 
 ## Goal
 
