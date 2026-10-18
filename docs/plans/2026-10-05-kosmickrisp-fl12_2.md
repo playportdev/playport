@@ -411,12 +411,13 @@ KosmicKrisp (`ios check`), `pp names`, `pp secrets` and `pp test --quick`. The p
 
 ## Runner state
 
-- **Branch:** `dev/pla-386-rdr2-vulkan-kk`, off `main` at f7ac25f, in the side copy
+- **Branch:** `dev/pla-386-rdr2-vulkan-kk`, off `main` at f7ac25f, built in the side copy
   `$PLAYPORT_BUILD/worktrees/pla-386-rdr2-vulkan` (owner-authorized 2026-10-17, with its own
   reflinked `.work/cache`, `.work/inputs` and, since 2026-10-18, `.work/run`, with build
-  directories that named main's path removed). The owner authorized it to build (beyond
-  decision 0069); no install or phone. Its build records are not canonical (the build path
-  differs). Not merged, not pushed.
+  directories that named main's path removed) until M1. M1 (owner, 2026-10-18): rebased onto
+  `main` at `dfc527f` without conflicts and checked out in the main checkout, which builds and
+  installs it; the side copy is detached and kept for its `.work` (reports, corpora), to be
+  removed later. Not merged, not pushed.
 - **Done:** the measurement (2026-10-17, PLA-386, evidence above); V0 (replay harness,
   `1fc4605`); V1 (undefined image, mesa 0037, `33e2194`); V2 (pipeline-statistics pools,
   mesa 0038, `efed211`); V3 (8-sample pipelines, mesa 0039, `f4f407b`); V4 (sampled
@@ -481,9 +482,13 @@ KosmicKrisp (`ios check`), `pp names`, `pp secrets` and `pp test --quick`. The p
   phone).
 - **Running:** none. Reports: `h1-h3.md` (H1), `h2.md` (H2), `h1b.md` (H1b), `h3.md` (H3),
   `h4.md` (H4), `h5.md` (H5, blocked), `h5c.md` (H5), `h5d.md` (H5d), `h6.md` (H6), `h6b.md`
-  (H6b), `h7.c6627d62.md` (H7), `h7b.md` (H7b), `h7c.md` (H7c), `h7d.md` (H7d), `h8.md` (H8).
-- **Phone gates owed:** Hollow Knight on Vulkan first frame+10 on H8's IPA (`f49a09d9…`; covers
-  0037–0043), then RDR2 after PLA-295/PLA-300. These runs did not use the phone.
+  (H6b), `h7.c6627d62.md` (H7), `h7b.md` (H7b), `h7c.md` (H7c), `h7d.md` (H7d), `h8.md` (H8);
+  `m1-rdr2-main.md` (M1) in the main checkout's `agent-notes/rdr2-vk/reports/`.
+- **Phone gate (M1, 2026-10-18):** Hollow Knight on Vulkan (KosmicKrisp) reached first
+  frame+10 twice on main's build of 0037–0043 (`3f4f8876…`; first frame +9.18 s and +9.21 s; no
+  `[kk-device]`, `Unknown ALU` or `Unknown intrinsic`; no crash; no build record changed),
+  [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#phone-gate-m1). Owed: RDR2 after
+  PLA-295/PLA-300.
 - **Reports and scratch:** `$PLAYPORT_BUILD/agent-notes/rdr2-vk/` in the main checkout
   (capture runs, Fossilize database, analysis); child reports under
   `agent-notes/rdr2-vk/reports/` of the side copy.

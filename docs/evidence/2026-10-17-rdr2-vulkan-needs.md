@@ -1,8 +1,9 @@
 # What RDR2's Vulkan renderer asks of the driver, against KosmicKrisp
 
 **Date:** 2026-10-17. **Linear:** [PLA-386](https://linear.app/playportdev/issue/PLA-386)
-(under PLA-254). **Kind:** workstation measurement, no phone; two dev IPAs built, not
-installed ([H4](#dev-ipa-with-mesa-00370039-h4), [H8](#dev-ipa-with-mesa-00370043-h8)).
+(under PLA-254). **Kind:** workstation measurement; two dev IPAs built in the side copy, not
+installed ([H4](#dev-ipa-with-mesa-00370039-h4), [H8](#dev-ipa-with-mesa-00370043-h8)); the
+Hollow Knight phone gate on main's build of 0037–0043 in [M1](#phone-gate-m1).
 Answers the open question in the [RDR2 plan](../plans/2026-10-12-rdr2.md): which Vulkan
 features and extensions RDR2's renderer requires, against KosmicKrisp's.
 
@@ -1160,3 +1161,38 @@ stage passes every case, as before, and the iOS check resolves every import.
 0001–0042 (H5d): `rdr2-sga-ingame-h1b` 1,950/1,950 graphics and 788/788 compute, `rdr2-vkd3d-h3`
 1,587/1,607 and 757/758, 0 crashes. Fossilize replays the SGA database under the recorded
 application info, so those pipelines now compile on the discrete type, with the same result.
+
+## Phone gate (M1)
+
+**Date:** 2026-10-18. The branch rebased onto `main` at `dfc527f` (no conflicts; main's mesa
+series had no new patch, so 0037–0043 keep their numbers), moved into the main checkout, built
+there and installed. This IPA replaces H8's as the one the gate covers: H8's was built off
+`f7ac25f` and never installed.
+
+- **IPA:** `out/20261018-231612-3f4f8876/Playport-26.5-3f4f8876.ipa`, sha256
+  `3f4f8876b02fe0f9a5cd023d6fa3ffa5833a19ce20a87a2212f964de2132af0a` (the `installed` event),
+  558,765,643 bytes, dev, at `43fe03e`. `pp build` ran `vulkan` (series mesa), `stage`,
+  `notices`, `app` and `verify`; `verify-ipa` 89 checks passed, 0 failed. KosmicKrisp staged as
+  `79244a1782132480`, 14,321,592 bytes; it carries 0043's `discrete device type` and 0042's
+  `Unknown ALU` strings.
+- **Build records:** none changed (`app/artifacts.tsv` and the `wine-pe` manifests equal
+  main's; KosmicKrisp has no row there).
+- **Host:** `pp test` (full) passed; the `hosttest` stage on the build's tree passed every
+  case (139 KosmicKrisp and 25 Zink MSL libraries).
+- **Phone:** one locked session, `pp install --no-build`, then two Hollow Knight (`app-367520`)
+  plays to first frame +10 with a shot. Battery 80%, 6.7 GB free.
+
+| Run (`ui-runs/`) | Settings | First frame | Result |
+| --- | --- | --- | --- |
+| `20261018T231825` | none (the phone's choice for the title: `graphics: vulkan`) | +9.18 s | `ok`, `until_reached` |
+| `20261018T231915` | `--settings 'app-367520:{"graphics":"vulkan"}'` | +9.21 s | `ok`, `until_reached` |
+
+- **Both on KosmicKrisp:** DXVK logs `Apple A19 Pro GPU (KosmicKrisp 26.2.99)`. Each shot at
+  +10 shows Hollow Knight's title menu (Start Game, Options, Achievements, Extras, Quit Game)
+  under the touch controls.
+- **Logs:** no `[kk-device]` line (0043 matches RDR2's renderer only), no `Unknown ALU`, no
+  `Unknown intrinsic`, no crash report. DXVK's only errors are four display messages, each
+  twice (monitor EDID and device path, DXGI display metadata), and the two `Unhandled JIT SIGBUS` lines every Hollow
+  Knight run on 2026-10-18 has (`20261018T114431` to `20261018T224030`, earlier IPAs).
+- **Not covered:** RDR2 itself on the phone (after PLA-295 and PLA-300); DXMT (0037–0043 change
+  only KosmicKrisp).
