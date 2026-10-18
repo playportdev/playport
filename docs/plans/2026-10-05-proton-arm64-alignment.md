@@ -68,9 +68,10 @@ wine-11.18, `wine-valve` dc26e61, `fex` FEX-2609.1, `dxmt` 7c8dee1, `mesa`
   [evidence](../evidence/2026-10-17-i386-laa.md)); W7 done (`fex` 5285020d and `rpmalloc` ed22744,
   a verified dev IPA, [evidence](../evidence/2026-10-18-fex-5285020d.md); phone gates owed); W8 done
   (`wine` wine-11.20 and `wine-valve` c53678ab, a verified dev IPA,
-  [evidence](../evidence/2026-10-18-wine-11.20.md); phone gates owed); next: none queued — W8b, the
-  hand port of WineHQ 7fb24b7 (reserved CPSR bits) into `signal_arm64_ios.c` and `thread_ios.c`, is
-  listed. Reports: `agent-notes/pla-76/reports/` in the side copy's build area.
+  [evidence](../evidence/2026-10-18-wine-11.20.md); phone gates owed); queue (one writer each): W9
+  [PLA-393](https://linear.app/playportdev/issue/PLA-393), `pp rebase` checks each written
+  patch applies where its pick did (running); W8b the hand port of WineHQ 7fb24b7 (reserved
+  CPSR bits) into `signal_arm64_ios.c` and `thread_ios.c`, built to a verified IPA. Reports: `agent-notes/pla-76/reports/` in the side copy's build area.
 
 ## Goal
 
