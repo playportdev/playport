@@ -119,3 +119,37 @@ Social Club never started, so the change was not exercised. The launcher hung ea
 Two Opens in a row now hit this exit fault, and no launcher Open before 2026-10-18 did. Without a
 working Open, whether the late children are gone and whether Tahoma brings the page's text
 (PLA-385) are both untested. The fault is FEX's; FEX is the owner's call.
+
+## The same Open with FEX's disk cache off: the sign-in page with its text
+
+The exit fault appeared only when FEX's disk cache for the build was warm. The first `[diskcache]`
+line of the first Launcher.exe:
+
+| Open | `[diskcache]` hits / misses | exit faults (`cannot deliver exception`) |
+|---|---|---|
+| `20261017T191412` | 43 / 2,027 (cold) | 0 |
+| `20261017T201653` | 43 / 2,027 (cold) | 0 |
+| `20261018T075924` | 3,915 / 91 (warm) | 4 |
+| `20261018T083301` | 4,095 / 1 (warm) | 2 |
+
+Open `20261018T085305` ran the same installed IPA (`0f8b3ff5e96e461cfdb618bc0d6f394207af7c2e871def80e61e61766595420c`)
+with the launcher's settings `{"runtime":"env.FEX_SMCCHECKS=none","diskCache":false}`, set and cleared
+in one lock session (`set_rc=0 open_rc=0 clear_rc=0`). Battery 16 %, not charging.
+
+- No exit fault. First window at +30.28 s; the run reached first window+240.
+- Children: services, Launcher.exe ×2, RockstarErrorHandler ×2, LauncherPatcher, RockstarService ×2,
+  the CEF browser and 6 renderer starts. No dxdiag, rpcss, dllhost, Unzipper or on_device_model.
+- Screenshots:
+  - 45 s: the launcher's "Connecting to Rockstar Games Services".
+  - 60 s: the Social Club page's background, a faint R★ and the footer text "© 2026 ROCKSTAR GAMES |
+    PRIVACY POLICY | TERMS OF SERVICE | COOKIE SETTINGS".
+  - 90, 150 and 240 s: the **Sign In form with its text**: the heading "Sign In", the Email and
+    Password placeholders, the "Auto Sign In" checkbox, and the cookie notice with its paragraph,
+    "ACCEPT ALL COOKIES", "REJECT ALL" and "COOKIE SETTINGS".
+- The pool still ran out later (head 454/476 MiB, tail 421 MiB, head exhausted ×40, tail
+  refused ×13, one tail_fatal), from renderer restarts; the form stayed up to the end. The band
+  peaked at 12,174 MB (163 threads).
+
+So with the disk cache off, the Tahoma fallback (chromium 0014) draws the page's text, and the
+late children of the component updater, the on-device model and the CPU probe are gone. The exit
+fault with a warm disk cache is a FEX bug, tracked separately; it was not changed here.
