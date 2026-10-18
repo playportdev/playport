@@ -1,4 +1,4 @@
-# The phone over WireGuard: discovery by address, JIT through the workstation's reflection
+# The phone over WireGuard: works on home Wi-Fi, not yet from another network
 
 2026-10-18, PLA-402. Setup:
 
@@ -57,14 +57,40 @@ accepted.
 - JIT `acquire(512 MiB) -> 0 after 10.73 s`. The 2026-09-28 LocalDevVPN baseline was 3.19 s.
 - First frame at +17.41 s; the run reached `until first-frame+10`.
 
+### Away from home, on another Wi-Fi network
+The phone joined a non-home Wi-Fi network, with WireGuard to `10.42.1.2` on. Ping round
+trips were 30–95 ms.
+
+- **Tooling.** `10.42.1.2:62078` accepts the TCP connection, then resets it on the first
+  lockdown message. A bare `QueryType` from the workstation got a reset, and netmuxd logged
+  `Failed to start lockdown session: … Broken pipe`. Two changes did not help:
+  - WireGuard Interface › Addresses `10.42.1.2/16`, which puts the workstation in the
+    tunnel's subnet;
+  - MTU 1280.
+- **JIT.** A Play from Playport stayed on "waiting for JIT" through the reflection.
+  - The cause is not known: the workstation had no root for a capture, and the phone
+    could not be read.
+  - With MTU 1280, the same.
+
 ## Conclusions
 
-The phone must be joined to *a* Wi-Fi network for lockdown to listen. Away from home,
-use a hotspot or venue Wi-Fi; cellular alone does not work. Two cases are not yet run:
+- **At home, joined to home Wi-Fi with WireGuard on, everything works**, through the
+  WireGuard interface and the reflection.
+- **On cellular alone**, nothing listens on 62078.
+- **On another Wi-Fi network**, lockdown accepts the TCP connection, then drops it before
+  answering. The JIT path hangs.
 
-- whether a Wi-Fi without internet works while WireGuard rides cellular;
-- a run truly away from home, on cellular-backed Wi-Fi, where the WAN latency adds to
-  the 10.7 s.
+The working case differs from the failing one only in the Wi-Fi network the phone is
+joined to, not in the tunnel. A plausible explanation is iOS 26.4's change to network
+lockdown: StikDebug and SideStore users report heartbeat `BrokenPipe` and dropped
+loopback connections since iOS 26.4. This is not yet shown. iOS may accept network
+lockdown only from peers it counts as on the joined Wi-Fi's local network.
+
+**Not a working setup yet: a phone away from home cannot be driven this way.**
+
+**Next, at the workstation:** with the phone on a non-home Wi-Fi, capture the reflected
+JIT connection and the phone's resets, and read the app's `jit:` lines, for example over
+a home visit or a pulled log.
 
 ## Not checked
 

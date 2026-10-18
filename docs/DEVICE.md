@@ -62,11 +62,14 @@ The phone can be driven, installed and debugged over WireGuard to the home gatew
 UniFi gateway here; any gateway that routes the VPN subnet to the LAN works; PLA-402,
 [evidence](evidence/2026-10-18-wireguard-away.md)).
 
-**The phone must be joined to a Wi-Fi network**: any network, such as a hotspot from
-another device or a venue's Wi-Fi. On cellular alone, with Wi-Fi switched on but not
-joined, iOS refuses lockdown (port 62078) on every address. That refusal covers the
-tooling and the JIT helper alike. Two things stop working once the phone leaves home
-Wi-Fi:
+**Status: works only while the phone is joined to home Wi-Fi.** That does not yet give
+remote use. Away from home:
+- **On cellular**, iOS refuses lockdown (port 62078).
+- **On another Wi-Fi network**, it accepts the TCP connection and then drops it, and the
+  JIT helper hangs.
+
+The evidence record has what is known; PLA-402 tracks the rest. The two pieces below are
+what a remote setup needs once iOS accepts the connection:
 
 - **Discovery.** netmuxd finds the phone by mDNS, which does not cross a VPN.
   - With `PLAYPORT_PHONE_ADDR` recorded, `pp` adds the phone to netmuxd by address when
