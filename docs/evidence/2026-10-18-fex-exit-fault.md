@@ -83,3 +83,70 @@ copies.
 Games keep the disk cache on. None of the recent Hollow Knight runs exits through
 `NtTerminateProcess` (the driver ends the app), so no game run shows this signature. A game
 that exits on its own with a warm cache would have taken the same path.
+
+## On the phone
+
+IPA `f42c95fc9a2326ab8da9b52f641afcdf6c0de051b459f03ac4566d95903d7d8b` (fex 0047), one lock
+session. The Rockstar launcher's saved settings were `{"runtime":"env.FEX_SMCCHECKS=none",
+"diskCache":true}` for both Opens, then cleared.
+
+- **Hollow Knight `20261018T093427`:** first frame +10.16 s. The final screenshot shows the
+  title menu with the touch controls.
+- **Open 1 `20261018T093540`:** this run warmed the cache for the new FEX build. The first
+  Launcher.exe's first `[diskcache]` line has 43 hits.
+  - 0 `cannot deliver exception`, 0 faults at `+0x1d46c`, 0 `EMULATOR STACK EXHAUSTED`.
+  - 3 `exit_process` and 5 pool `RECLAIM` lines.
+  - Final pool: head 472 MiB (454 live), tail 425 MiB (401 live), head exhausted ×24, tail
+    refused ×1, tail fatal 0.
+  - Sign In form with its text and the cookie notice at 240 s.
+- **Open 2 `20261018T094035`, warm:** the first Launcher.exe has 3,915 hits and the second
+  4,096 (0 misses).
+  - 0 exit faults of any of these kinds.
+  - The first Launcher.exe (l.13534–14239), RockstarErrorHandler (l.14431–15067) and
+    `RockstarService start` (l.31696) reach `exit_process`. Their RECLAIMs free 0x3fec000,
+    0x1ba4000 and 0x24a8000 bytes, the same as the cold Open `20261017T201653`.
+  - This run started no dxdiag.
+  - Final pool: head 463 MiB (454 live), tail 433 MiB (401 live), head exhausted ×4, tail
+    refused 0, tail fatal 0. Band peak 13,641 MB.
+  - Four Social Club helpers still ended with `c0000017` at l.61515–62575.
+  - Screenshots:
+    - 45 s: "Connecting to Rockstar Games Services".
+    - 60 and 90 s: the Sign In form (Email, Password, Auto Sign In) with its text, under
+      the cookie notice.
+    - 150 and 240 s: the same.
+  - Social Club's log reaches `FINISHED` at 4,745 ms.
+
+The tail is no smaller than with the cache off (~420 MiB in `20261018T085305` and
+`20261018T090949`), but the head ran out far less often (4 against 40–80). A less greedy pool
+tail is the next lever. Rockstar's text logs are kept in the build area
+(`agent-notes/pla370-cef/inputs/pla395-rockstar-logs/`).
+
+With the fault fixed, the launcher's disk-cache workaround (81082f9) is reverted, and its
+Open uses FEX's default, the cache on.
+
+## After the revert
+
+IPA `7d544b538865311316e583ef8ca45d11803d8cd4a10fb6ad28b10d80355011dc` (the revert of
+81082f9, so the launcher's disk cache is on by default).
+
+- **`20261018T095302`, saved settings cleared (`{}`), so no `FEX_SMCCHECKS=none`:**
+  - The first Launcher.exe got 3,864 hits. No exit fault (0 `cannot deliver exception`,
+    0 at `+0x1d46c`), 3 `exit_process`.
+  - The pool's tail grew to 561 MiB (481 live), against a head of 336 MiB (251 live).
+  - From 90 s the screen showed Rockstar's "The CEF browser for the Rockstar Games Launcher
+    crashed and could not restart" dialog.
+  - Every earlier Open used the owner's `FEX_SMCCHECKS=none`, so this run is not a
+    comparison for the cache.
+- **`20261018T095950`, with only `{"runtime":"env.FEX_SMCCHECKS=none"}`, the disk cache at
+  its default:**
+  - 4,076 hits. No exit fault, 3 `exit_process`.
+  - At 45 s: "Connecting to Rockstar Games Services". From 60 s the screen is black: no
+    form.
+  - The pool ran out (`[jit-pool] tail CAP: refusing …`, l.57803), ending head 464 MiB
+    (448 live) and tail 433 MiB (433 live), with head exhausted ×18, tail refused ×5 and
+    tail fatal 1.
+  - This is the same pool limit the cache-off Opens hit some of the time (b91356c), not the
+    exit fault.
+
+So the fix holds in all four Opens with a warm or cold cache. Whether the sign-in page
+appears still depends on the pool, which is the next work (a less greedy tail).

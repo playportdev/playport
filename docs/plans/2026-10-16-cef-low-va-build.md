@@ -13,9 +13,9 @@
 - **[PLA-384](https://linear.app/playportdev/issue/PLA-384):** [decision 0114](../decisions/0114-trim-social-clubs-chromium-and-the-launchers-threads.md) (`patches/chromium` 0008–0013, libcef `de6693eb…`; the Rockstar Open's DXVK/vkd3d-proton settings). IPA `73dc65fc…`, Open `20261017T201653`: band peak 13,720 MB at 168 threads (no refusal), launcher `Active`, Social Club's sign-in form on screen from 60 s to the end **but with no text drawn**; the pool's head still runs out for later children (renderers, Unzipper, rpcss/dllhost). HK first frame +10.28 s ([evidence](../evidence/2026-10-17-cef-trim.md)).
 - **2026-10-18: the Sign In page with its text is on the phone** (Open `20261018T085305`, IPA `0f8b3ff5…`, [evidence](../evidence/2026-10-18-cef-late-children.md)).
   - Needed: chromium 0014 (Tahoma, [PLA-385](https://linear.app/playportdev/issue/PLA-385)), cef 0002 and chromium 0015–0016 ([PLA-394](https://linear.app/playportdev/issue/PLA-394)), and FEX's disk cache off for the launcher.
-  - With a warm disk cache, Launcher.exe's exit faults in FEX `CompileBlock`. That leaves dead processes holding pool copies and a FEX lock the next Launcher waits on. It is a FEX bug, tracked separately.
-  - The pool still runs out later, from renderer restarts, but the form stays up.
-  - **Next:** make the launcher's disk cache off its default (like its graphics default); then stage E, where the owner signs in.
+  - **[PLA-395](https://linear.app/playportdev/issue/PLA-395), fixed:** the exit fault with a warm disk cache was FEX's memory notifications reaching its destroyed statics at DLL detach. `patches/fex` 0047 fixes it, and the launcher's disk cache is back on. Warm Open `20261018T094035` (IPA `f42c95fc…`) had no exit fault and showed the Sign In page with its text ([evidence](../evidence/2026-10-18-fex-exit-fault.md)).
+  - The pool still runs out later (tail ~430 MiB), but the form stays up.
+  - **Next:** a less greedy pool tail; then stage E, where the owner signs in.
 - **Process (owner, 2026-10-18):** CEF and launcher changes go straight to the phone after the host checks and `./pp build`; there is no desktop Proton check.
 - **Other levers, only with the owner:** a less greedy pool tail; rpmalloc's span use.
 - **Models:** subagents use `anthropic/claude-opus-5-5:medium` (owner, 2026-10-17).
