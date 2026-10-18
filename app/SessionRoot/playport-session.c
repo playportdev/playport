@@ -31,6 +31,11 @@
 // Wine's SCM, before the title, logs each service's changes as `[service]`
 // lines, and stops them all before it reports the title's end.
 //
+// For a play served by Playport's steamclient64.dll (decision 0115), it is the
+// prefix's running Steam client: its process id is ActiveProcess's pid, which a
+// genuine steam_api checks is alive, until the title's end; a crash's leftover
+// is cleared at its start.
+//
 // x86-64, as every title is, GUI subsystem (no console, so no conhost),
 // kernel32 and user32 only, no C runtime: nothing is loaded that a title would
 // not load too (advapi32 only for the services, looked up). Its lines go to
@@ -530,6 +535,53 @@ static void stop_services(void)
         (unsigned long long)(GetTickCount() - t), (unsigned long long)ended);
 }
 
+/* --- the prefix's Steam client (decision 0115) */
+
+typedef LONG (WINAPI *reg_create_fn)(HKEY, const WCHAR *, DWORD, WCHAR *, DWORD, REGSAM, void *, HKEY *, DWORD *);
+typedef LONG (WINAPI *reg_open_fn)(HKEY, const WCHAR *, DWORD, REGSAM, HKEY *);
+typedef LONG (WINAPI *reg_set_fn)(HKEY, const WCHAR *, DWORD, DWORD, const BYTE *, DWORD);
+typedef LONG (WINAPI *reg_query_fn)(HKEY, const WCHAR *, DWORD *, DWORD *, BYTE *, DWORD *);
+typedef LONG (WINAPI *reg_close_fn)(HKEY);
+static const WCHAR active_process[] = L"Software\\Valve\\Steam\\ActiveProcess";
+static int steam_client_set;
+
+/* ActiveProcess's pid and ActiveUser, in HKCU: create makes the key, else only an
+ * existing one is written (and only when its pid is not already 0). 0, or a Windows error. */
+static DWORD steam_client_keys(DWORD pid, DWORD user, int create)
+{
+    HMODULE advapi = LoadLibraryW(L"advapi32.dll");
+    reg_create_fn reg_create = advapi ? (reg_create_fn)(void *)GetProcAddress(advapi, "RegCreateKeyExW") : NULL;
+    reg_open_fn reg_open = advapi ? (reg_open_fn)(void *)GetProcAddress(advapi, "RegOpenKeyExW") : NULL;
+    reg_set_fn reg_set = advapi ? (reg_set_fn)(void *)GetProcAddress(advapi, "RegSetValueExW") : NULL;
+    reg_query_fn reg_query = advapi ? (reg_query_fn)(void *)GetProcAddress(advapi, "RegQueryValueExW") : NULL;
+    reg_close_fn reg_close = advapi ? (reg_close_fn)(void *)GetProcAddress(advapi, "RegCloseKey") : NULL;
+    HKEY key;
+    LONG rc;
+    DWORD old = 0, size = sizeof(old), type = 0;
+
+    if (!reg_create || !reg_open || !reg_set || !reg_query || !reg_close) return ERROR_PROC_NOT_FOUND;
+    rc = create ? reg_create(HKEY_CURRENT_USER, active_process, 0, NULL, 0, KEY_SET_VALUE, NULL, &key, NULL)
+                : reg_open(HKEY_CURRENT_USER, active_process, 0, KEY_SET_VALUE | KEY_QUERY_VALUE, &key);
+    if (rc) return (DWORD)rc;
+    if (!create && (reg_query(key, L"pid", NULL, &type, (BYTE *)&old, &size) || type != REG_DWORD || !old)) {
+        reg_close(key);
+        return 0;
+    }
+    rc = reg_set(key, L"pid", 0, REG_DWORD, (const BYTE *)&pid, sizeof(pid));
+    if (!rc) rc = reg_set(key, L"ActiveUser", 0, REG_DWORD, (const BYTE *)&user, sizeof(user));
+    reg_close(key);
+    if (!rc && !create) say("steam client: ActiveProcess pid %u cleared", (unsigned long long)old);
+    return (DWORD)rc;
+}
+
+/* The payload's decimal account ID (pp_session_request_valid checked it). */
+static DWORD account_id(const char *payload)
+{
+    DWORD v = 0;
+    while (*payload) v = v * 10 + (DWORD)(*payload++ - '0');
+    return v;
+}
+
 /* --- one title */
 
 /* Before a title's end is reported: the registry on disk. The app may end as
@@ -663,6 +715,7 @@ static void launch(const pp_session_request *r, const char *payload)
     resume_title();
     DeleteFileW(control_path);
     if (r->kind == PP_REQUEST_LAUNCH) stop_services();
+    if (r->kind == PP_REQUEST_LAUNCH && steam_client_set) steam_client_keys(0, 0, 0);
     if (!GetExitCodeProcess(pi.hProcess, &code)) code = GetLastError();
     CloseHandle(pi.hProcess);
     if (job) CloseHandle(job);
@@ -676,6 +729,10 @@ refuse:
     if (error == ERROR_INVALID_DATA && GetLastError()) error = GetLastError();
     say("%s %u: not started, error %u", what, (unsigned long long)r->sequence, (unsigned long long)error);
     if (r->kind == PP_REQUEST_LAUNCH) stop_services();
+    if (r->kind == PP_REQUEST_LAUNCH && steam_client_set) {
+        steam_client_keys(0, 0, 0);
+        flush_registry(r->sequence);
+    }
     reply(r->sequence, PP_TITLE_REFUSED, error);
 done:
     for (i = 0; i < r->envc; i++) if (set[i]) HeapFree(GetProcessHeap(), 0, set[i]);
@@ -731,6 +788,8 @@ void __stdcall entry(void)
         say("desktop window %x, GDI handle table %x", (unsigned long long)(ULONG_PTR)desktop,
             (unsigned long long)((ULONG_PTR *)__readgsqword(0x60))[0xf8 / sizeof(ULONG_PTR)]);   /* TEB->Peb->GdiSharedHandleTable */
     }
+    /* A Steam client pid a crash left (decision 0115): no title runs yet, so none is running. */
+    steam_client_keys(0, 0, 0);
     say("ready, pid %u", (unsigned long long)GetCurrentProcessId());
     reply(0, PP_ROOT_READY, GetCurrentProcessId());
 
@@ -748,6 +807,20 @@ void __stdcall entry(void)
                 say("services %u: not started, error %u", (unsigned long long)r.sequence, (unsigned long long)error);
                 reply(r.sequence, PP_TITLE_REFUSED, error);
             }
+            continue;
+        }
+        if (got && r.kind == PP_REQUEST_STEAM_CLIENT) {
+            DWORD error = steam_client_keys(GetCurrentProcessId(), account_id(payload), 1);
+            if (!error) {
+                steam_client_set = 1;
+                say("steam client %u: ActiveProcess pid %u", (unsigned long long)r.sequence,
+                    (unsigned long long)GetCurrentProcessId());
+                reply(r.sequence, PP_TITLE_STARTED, GetCurrentProcessId());
+            } else {
+                say("steam client %u: keys not written, error %u", (unsigned long long)r.sequence, (unsigned long long)error);
+                reply(r.sequence, PP_TITLE_REFUSED, error);
+            }
+            if (payload) HeapFree(GetProcessHeap(), 0, payload);
             continue;
         }
         if (got && (r.kind == PP_REQUEST_PREREQUISITE || r.kind == PP_REQUEST_PREREQUISITE_LINE)) {

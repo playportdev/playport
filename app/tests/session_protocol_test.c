@@ -99,6 +99,28 @@ int main(void)
     sv.argc = 0; sv.sequence = 0;
     CHECK(!pp_session_request_valid(&sv, NULL, 0));
 
+    /* STEAM_CLIENT: one decimal account ID that fits a DWORD (decision 0115) */
+    pp_session_request sc = { PP_SESSION_MAGIC, 5, PP_REQUEST_STEAM_CLIENT, 9, 1, 0 };
+    CHECK(pp_session_request_valid(&sc, "22202020", 9));
+    sc.length = 11;
+    CHECK(pp_session_request_valid(&sc, "4294967295", 11));
+    CHECK(!pp_session_request_valid(&sc, "4294967296", 11));   /* past a DWORD */
+    sc.length = 2;
+    CHECK(pp_session_request_valid(&sc, "0", 2));
+    sc.length = 1;
+    CHECK(!pp_session_request_valid(&sc, "", 1));              /* no digits */
+    sc.length = 4;
+    CHECK(!pp_session_request_valid(&sc, "1a2", 4));
+    CHECK(!pp_session_request_valid(&sc, "1234", 4));          /* no NUL at the end */
+    sc.length = 12;
+    CHECK(!pp_session_request_valid(&sc, "12345678901", 12));
+    sc.length = 2; sc.argc = 0;
+    CHECK(!pp_session_request_valid(&sc, "7", 2));
+    sc.argc = 1; sc.envc = 1;
+    CHECK(!pp_session_request_valid(&sc, "7", 2));
+    sc.envc = 0;
+    CHECK(!pp_session_request_valid(&sc, NULL, 2));
+
     /* controls: a known kind, a sequence, an arg only for CLOSE and within its bound */
     pp_session_control c = { PP_SESSION_MAGIC, 3, PP_CONTROL_PAUSE, 0 };
     CHECK(pp_session_control_valid(&c, sizeof(c)));
@@ -118,6 +140,8 @@ int main(void)
     CHECK(!pp_session_control_valid(&c, sizeof(c)));   /* nor is a prerequisite */
     c.kind = PP_REQUEST_SERVICES;
     CHECK(!pp_session_control_valid(&c, sizeof(c)));   /* nor the services */
+    c.kind = PP_REQUEST_STEAM_CLIENT;
+    CHECK(!pp_session_control_valid(&c, sizeof(c)));   /* nor the Steam client's keys */
     c.kind = PP_CONTROL_PAUSE; c.sequence = 0;
     CHECK(!pp_session_control_valid(&c, sizeof(c)));
     c.sequence = 1; c.magic = 0;

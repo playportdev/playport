@@ -50,6 +50,9 @@ resources:
   # The Steam API emulator (gbe_fork's steam_api DLLs), copied into a game's folder
   # in place of its own steam_api(64).dll (SteamClientKit SteamAPISwap).
   - Sources/S1Probe/Runtime/steamapi
+  # Playport's Steam client (steamclient64.dll), copied to the prefix's Steam folder for a
+  # play in client mode (decision 0115; LaunchCoordinator).
+  - Sources/S1Probe/Runtime/steamclient
   # Dev-only CEF (0110); release_xtool_yml removes this resource.
   - Sources/S1Probe/Runtime/cef
   - Sources/S1Probe/Runtime/artifacts.tsv

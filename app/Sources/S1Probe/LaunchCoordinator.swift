@@ -186,7 +186,7 @@ enum LaunchCoordinator {
         do {
             let state = try SteamAPISwap.ensure(s.mode, in: s.root, emulator: runtime.appendingPathComponent("steamapi", isDirectory: true),
                                                 settings: settings ?? .init(appID: s.appID))
-            log("steamapi: \(s.mode.rawValue): \(state.rawValue)" + (s.mode == .emulated ? " (\(fields))" : ""))
+            log("steamapi: \(s.mode.rawValue): \(state.rawValue)" + (s.mode != .original ? " (\(fields))" : ""))
             if s.mode == .emulated {
                 if let ticket = s.ticket {
                     let n = try SteamAPISwap.writeTicket(ticket, in: s.root)
@@ -195,14 +195,16 @@ enum LaunchCoordinator {
                     log("ticket: none; the emulator makes up its own")
                 }
             }
-            // The emulator's unix calls reach the play's broker, or none (SteamTicketHost).
+            // The emulator's unix calls reach the play's broker, or none (SteamTicketHost); Playport's
+            // Steam client's reach its own provider (SteamClientHost, decision 0115).
             SteamTicketHost.arm(s.mode == .emulated ? s.tickets : nil)
+            SteamClientHost.arm(s.mode == .client ? prepareSteamClient(s, settings: settings, runtime: runtime) : nil)
             if s.mode == .emulated {
                 log(s.tickets != nil ? "ticket: auth session and web API tickets armed; the CM session stays logged on for them"
                                      : "ticket: auth session and web API tickets off; the emulator makes up its own")
             }
             var stub = "none"
-            if s.mode == .emulated {
+            if s.mode.removesSteamStub {
                 for site in try SteamStub.remove(in: s.root) {
                     log("steamstub: \(site.path): \(site.info.label), " + (site.info.unsupported ?? (site.removed ? "removed" : "kept")))
                     stub = site.removed ? "removed" : "unsupported"
@@ -220,6 +222,31 @@ enum LaunchCoordinator {
             RunEvents.emit("steamapi", ["mode": s.mode.rawValue, "error": "\(error)"])
             #endif
         }
+    }
+
+    /// The prefix's Steam client for a play in client mode (decision 0115): Playport's
+    /// steamclient64.dll in `C:\Program Files (x86)\Steam\` and the `Valve\Steam` keys a genuine
+    /// steam_api reads to find it (top-ups, written before wineserver starts; the session root
+    /// writes ActiveProcess's pid once it runs). Returns what the client answers with.
+    private static func prepareSteamClient(_ s: SteamAPI, settings: SteamAPISwap.Settings?, runtime: URL) -> SteamClientHost.Play {
+        let prefix = WineHostRuntime.shared.prefixURL
+        let source = runtime.appendingPathComponent("steamclient/x86_64-windows/steamclient64.dll")
+        let folder = prefix.appendingPathComponent("drive_c/Program Files (x86)/Steam", isDirectory: true)
+        let dest = folder.appendingPathComponent("steamclient64.dll")
+        do {
+            let shim = try Data(contentsOf: source)
+            if (try? Data(contentsOf: dest)) != shim {
+                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                try shim.write(to: dest, options: .atomic)
+                log("steamclient: Playport's steamclient64.dll (\(shim.count) bytes) placed in C:\\Program Files (x86)\\Steam")
+            }
+            try PrefixRegistryFile(prefix: prefix).add(SteamClientKeys.values)
+            log("steamclient: Valve\\Steam keys topped up in the prefix")
+        } catch {
+            log("steamclient: not placed (\(error)); the game's steam_api finds no Steam client")
+        }
+        return SteamClientHost.Play(appID: s.appID, steamID: settings?.steamID, personaName: settings?.personaName,
+                                    language: settings?.language ?? "english", tickets: s.tickets, appTicket: s.ticket)
     }
 
     /// Takes the encrypted app ticket out of the game's emulator settings
@@ -511,6 +538,12 @@ enum LaunchCoordinator {
             let rc = runtime.startServices()
             log(rc == 0 ? String(format: "services: services.exe runs for this play (%.2f s)", Date().timeIntervalSince(t0))
                         : "services: services.exe not started (\(rc)); the title starts without Windows services")
+        }
+        // Playport's Steam client (decision 0115): the session root stands for Steam's process.
+        if let s = r.steamAPI, s.mode == .client {
+            let rc = runtime.steamClient(accountID: SteamClientHost.accountID)
+            log(rc == 0 ? "steamclient: the session root is the prefix's running Steam client"
+                        : "steamclient: ActiveProcess not written (\(rc)); the game's steam_api finds no running Steam")
         }
         var ran = 0
         if let ended = runPrerequisites(r, environment: environment, pool: pool, ran: &ran, step: step, mark: mark) {

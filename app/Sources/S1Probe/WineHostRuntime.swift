@@ -126,6 +126,12 @@ final class WineHostRuntime: @unchecked Sendable {
         wine_host_session_services(15_000)
     }
 
+    /// Makes the session root the prefix's running Steam client for a play in client mode
+    /// (wine_host_session_steam_client, decision 0115): ActiveProcess's pid and ActiveUser; 0 once written.
+    func steamClient(accountID: UInt32) -> Int32 {
+        wine_host_session_steam_client(accountID, 5_000)
+    }
+
     /// Starts a title as the session root's child (wine_host_session_launch):
     /// `environment` is set over the root's own for this title only.
     func launch(exe: String, args: [String], environment: [String: String]) -> Int32 {

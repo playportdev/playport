@@ -155,3 +155,4 @@
 0155-ntdll-hold-1024-JIT-pool-images-and-keep-a-full-alia.patch
 0156-process-run-a-CEF-browser-s-network-and-video-captur.patch
 0157-ntdll-keep-tail-room-for-every-other-process-and-sma.patch
+0158-ntdll-give-Playport-s-steamclient-its-host-table.patch

@@ -27,6 +27,7 @@ class NetworkDatabases(unittest.TestCase):
                 ("unix", f"wine/fonts/{n}") for n in stage.FONTS] + [
                 ("fex-wow64", "libwow64fex.dll"), ("vulkan-pe", "i386-windows/d3d9.dll"),
                 ("session", "playport-session.exe"), ("session", "playport-url-opener.exe"),
+                ("steamclient", "steamclient64.dll"),
                 ("registry", "system.reg"), ("registry", "user.reg"), ("ca-bundle", "cacert.pem"),
                 ("wine-mono", "bin/libmono-2.0-x86_64.dll")]
             for key, name in files:

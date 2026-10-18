@@ -1635,6 +1635,28 @@ int wine_host_session_services(int timeout_ms)
     return 0;
 }
 
+int wine_host_session_steam_client(unsigned account_id, int timeout_ms)
+{
+    if (!g_session_ready || g_session_launched || g_session_title) return -1;
+    char id[12];
+    int n = snprintf(id, sizeof(id), "%u", account_id);
+    pp_session_request req = { PP_SESSION_MAGIC, ++g_session_seq, PP_REQUEST_STEAM_CLIENT, (uint32_t)n + 1, 1, 0 };
+    host_log("session: steam client %u: the root is the prefix's Steam client (decision 0115)", req.sequence);
+    if (session_send("request", &req, id)) return -4;
+    pp_session_reply r;
+    int rc = session_await(req.sequence, (1u << PP_TITLE_STARTED) | (1u << PP_TITLE_REFUSED), timeout_ms, &r);
+    if (rc != 1) {
+        host_log("session: steam client %u: the root %s", req.sequence, rc < 0 ? "has ended" : "did not answer in time");
+        return -6;
+    }
+    if (r.state == PP_TITLE_REFUSED) {
+        host_log("session: steam client %u: keys not written, Windows error %u", req.sequence, r.code);
+        return -7;
+    }
+    host_log("session: steam client %u: ActiveProcess pid %04x", req.sequence, r.code);
+    return 0;
+}
+
 int wine_host_session_wait(int timeout_ms, int *exit_code)
 {
     if (!g_session_title) return -1;

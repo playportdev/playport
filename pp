@@ -100,6 +100,7 @@ C_TESTS = [
     ("session protocol", ["app/tests/session_protocol_test.c"], []),
     ("jit debugger", ["app/tests/jit_debugger_test.c"], []),
     ("steam tickets", ["app/tests/steam_ticket_test.c", "app/Sources/WineHost/steam_ticket.c"], []),
+    ("steam client", ["app/tests/steam_client_test.c", "app/Sources/WineHost/steam_client.c"], []),
     ("url opener", ["app/tests/url_opener_test.c", "app/Sources/WineHost/url_opener.c"], []),
     ("command line", ["app/tests/command_line_test.c"], []),
     ("cef swap", ["app/tests/cef_swap_test.c", "app/Sources/WineHost/cef_swap.c"], ["-D_GNU_SOURCE", "-pthread"]),

@@ -59,6 +59,8 @@ any mismatch:
                 wow64.dll, wow64win.dll and xtajit.dll are ARM64 PE32+
                 builtins; xtajit exports FEX's WoW64 CPU interface.
                 Build scaffolding only: does not claim 32-bit execution works.
+  steamclient   Playport's Steam client (P9-steamclient): steamclient64.dll, a native
+                x86-64 DLL exporting what a genuine steam_api resolves
   steamapi      the Steam API emulator (P8-steamapi): steam_api64.dll (x86-64)
                 and steam_api.dll (i386) under Runtime/steamapi, native (not
                 marked Wine builtins) and exporting SteamAPI_Init,
@@ -488,6 +490,26 @@ def steamapi_checks(rt, rows):
               "SteamAPI_RunCallbacks and SteamInternal_CreateInterface")
 
 
+def steamclient_checks(rt, rows):
+    """Playport's Steam client (P9-steamclient, decision 0115): a native x86-64 DLL whose export
+    name holds `steamclient` (the runtime gives it its unix table by that name) and that exports
+    what a genuine steam_api resolves."""
+    k = "Runtime/steamclient/x86_64-windows/steamclient64.dll"
+    got = {r[1] for r in rows if r[0] == "resource" and r[6] == "P9-steamclient"}
+    if not got:
+        print("      steamclient: no P9-steamclient rows (an IPA from before Playport's Steam client)")
+        return
+    check(got == {k}, f"steamclient: the one row is {k}")
+    body = rt(k).read_bytes()
+    ex = pe_table(rt(k), "export")
+    want = {"CreateInterface", "Steam_BGetCallback", "Steam_FreeLastCallback", "Steam_GetAPICallResult",
+            "Steam_ReleaseThreadLocalMemory", "Steam_IsKnownInterface", "Steam_NotifyMissingInterface"}
+    check(pe_machine_magic(body) == (0x8664, 0x20b) and b"Wine builtin DLL" not in body[:0x200]
+          and b"steamclient64.dll\0" in body and want <= ex,
+          "steamclient: steamclient64.dll is a native x86-64 DLL named steamclient64.dll exporting "
+          + ", ".join(sorted(want)))
+
+
 def pe_machine_magic(body):
     """COFF machine and optional-header magic, or None for a malformed PE."""
     if len(body) < 0x40 or body[:2] != b"MZ":
@@ -767,7 +789,7 @@ def main():
         # carried it in the SwiftPM resource bundle. A row's Runtime/x is base/x.
         if (app / "artifacts.tsv").exists():
             base, where, dirs = app, "app root", ["arm64ec-windows", "aarch64-windows", "nls", "fonts", "etc", "winsxs", "registry", "vulkan",
-                                                  "steamapi", "i386-windows", "certs", "mono"]
+                                                  "steamapi", "steamclient", "i386-windows", "certs", "mono"]
             check(not any(b.joinpath("Runtime").exists() for b in app.glob("*.bundle")),
                   "resources: Runtime/ at the app root only, not also in a resource bundle")
         else:
@@ -823,6 +845,7 @@ def main():
                     check(same, f"dxmt: bundled {r[1]} is byte-identical to the patched build's {r[5]}")
         host_io_checks(exe, rt, rows)
         steamapi_checks(rt, rows)
+        steamclient_checks(rt, rows)
         wow64_checks(rt, rows)
         steam_checks(exe)
         workstation_path_checks(app)
