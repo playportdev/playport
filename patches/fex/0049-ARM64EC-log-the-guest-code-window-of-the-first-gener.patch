@@ -1,0 +1,134 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kamil=20Postro=C5=BCny?= <kamil@postrozny.pl>
+Date: Sun, 18 Oct 2026 19:17:20 +0200
+Subject: [PATCH] ARM64EC: log the guest code window of the first generated
+ faults on iOS
+
+For the first four generated faults of a process, log sixteen guest code bytes
+before and from the faulting rip, the module and RVA (or a private region's
+offset from its allocation base) and the region's type and protection. This
+tells a real HLT or INT in the guest from a stale or misdecoded translation.
+The bytes are read with NtReadVirtualMemory on the own process, which on iOS
+is mach_vm_read_overwrite: an unreadable page fails the read and never faults
+in the handler. Exception semantics are unchanged.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-10-18-rockstar-generated-fault.md
+Offered-upstream: no; iOS crash diagnosis
+---
+ Source/Windows/ARM64EC/Module.cpp | 75 +++++++++++++++++++++++++++++--
+ Source/Windows/include/winternl.h |  1 +
+ 2 files changed, 73 insertions(+), 3 deletions(-)
+
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index bd4e8bb..5f7ebe2 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -686,6 +686,60 @@ static ARM64_NT_CONTEXT StoreStateToPackedECContext(FEXCore::Core::InternalThrea
+   return ECContext;
+ }
+ 
++#ifdef FEX_IOS_HOST
++static void AppendHexBytes(fextl::string& Out, const uint8_t* Bytes, size_t Count) {
++  static constexpr char Digits[] = "0123456789abcdef";
++  for (size_t i = 0; i < Count; ++i) {
++    Out.push_back(Digits[Bytes[i] >> 4]);
++    Out.push_back(Digits[Bytes[i] & 0xf]);
++  }
++}
++
++// Reads Size bytes at Address, or none when any of them is unreadable.
++static bool ReadGuestCodeBytes(uint64_t Address, uint8_t* Out, size_t Size) {
++  SIZE_T Read = 0;
++  return NtReadVirtualMemory(NtCurrentProcess(), reinterpret_cast<const void*>(Address), Out, Size, &Read) == STATUS_SUCCESS && Read == Size;
++}
++
++static void LogGeneratedFaultWindow(uint64_t Rip) {
++  constexpr size_t WindowSide = 16;
++  fextl::string Module = "unknown";
++  uint64_t Rva = 0;
++  uint32_t Protect = 0;
++  uint32_t Type = 0;
++  MEMORY_BASIC_INFORMATION Info;
++  if (!NtQueryVirtualMemory(NtCurrentProcess(), reinterpret_cast<void*>(Rip), MemoryBasicInformation, &Info, sizeof(Info), nullptr)) {
++    Protect = Info.Protect;
++    Type = Info.Type;
++    // Offset from the allocation base: an image's RVA, or a private region's offset.
++    Rva = Rip - reinterpret_cast<uint64_t>(Info.AllocationBase);
++    if (Info.Type == MEM_IMAGE) {
++      const auto Path = FEX::Windows::GetSectionFilePath(reinterpret_cast<uint64_t>(Info.AllocationBase));
++      Module = Path.empty() ? fextl::string {"image"} : fextl::string {FEX::Windows::BaseName(Path)};
++    } else {
++      Module = "private";
++    }
++  }
++
++  uint8_t Before[WindowSide];
++  uint8_t At[WindowSide];
++  fextl::string BeforeHex;
++  fextl::string AtHex;
++  if (ReadGuestCodeBytes(Rip - WindowSide, Before, WindowSide)) {
++    AppendHexBytes(BeforeHex, Before, WindowSide);
++  } else {
++    BeforeHex = "unreadable";
++  }
++  if (ReadGuestCodeBytes(Rip, At, WindowSide)) {
++    AppendHexBytes(AtHex, At, WindowSide);
++  } else {
++    AtHex = "unreadable";
++  }
++  LogMan::Msg::EFmt("[generated-fault-window] module={} rva={:#x} type={:#x} protect={:#x} before={} at={}", Module, Rva, Type,
++                    Protect, BeforeHex, AtHex);
++}
++#endif
++
+ static void RethrowGuestException(const EXCEPTION_RECORD& Rec, ARM64_NT_CONTEXT& Context) {
+   auto* Thread = GetCPUArea().ThreadState();
+   auto& Fault = Thread->CurrentFrame->SynchronousFaultData;
+@@ -698,9 +752,10 @@ static void RethrowGuestException(const EXCEPTION_RECORD& Rec, ARM64_NT_CONTEXT&
+   LogMan::Msg::DFmt("pc: {:X} rip: {:X}", Context.Pc, GuestContext.Pc);
+ 
+ #ifdef FEX_IOS_HOST
+-  // PLA-401: report only our generated-fault provenance, never guest bytes or
+-  // decoded instructions. The former fault padding carries a handler tag from
+-  // translation through the existing Break IR; exception semantics are unchanged.
++  // PLA-401: report our generated-fault provenance (the guest code window is
++  // logged below, once the rip is resolved). The former fault padding carries a
++  // handler tag from translation through the existing Break IR; exception
++  // semantics are unchanged.
+   if (Fault.FaultToTopAndGeneratedException) {
+     static std::atomic<uint32_t> GeneratedFaultReports {0};
+     if (GeneratedFaultReports.fetch_add(1, std::memory_order_relaxed) < 16) {
+@@ -728,6 +783,20 @@ static void RethrowGuestException(const EXCEPTION_RECORD& Rec, ARM64_NT_CONTEXT&
+     }
+   }
+ 
++#ifdef FEX_IOS_HOST
++  // PLA-401: for the first four generated faults of a process, the guest code
++  // window around the faulting rip (16 bytes each side) and where it lies (module
++  // and RVA, region protection), to tell a real HLT/INT from a stale or misdecoded
++  // translation. NtReadVirtualMemory on the own process is mach_vm_read_overwrite
++  // on iOS: an unreadable page fails the read, it never faults here.
++  if (Fault.FaultToTopAndGeneratedException) {
++    static std::atomic<uint32_t> GeneratedFaultWindows {0};
++    if (GeneratedFaultWindows.fetch_add(1, std::memory_order_relaxed) < 4) {
++      LogGeneratedFaultWindow(GuestContext.Pc);
++    }
++  }
++#endif
++
+   // X64 Windows always clears TF, DF and AF when handling an exception, restoring after.
+   // Current ARM64EC windows can only restore NZCV+SS when returning from an exception and other flags are left untouched from the handler context.
+   // TODO: Can extend wine to support this by mapping the remaining EFlags into reserved cpsr members.
+diff --git a/Source/Windows/include/winternl.h b/Source/Windows/include/winternl.h
+index 2534ee4..cc99385 100644
+--- a/Source/Windows/include/winternl.h
++++ b/Source/Windows/include/winternl.h
+@@ -555,6 +555,7 @@ NTSTATUS WINAPI NtQueryValueKey(HANDLE, const UNICODE_STRING*, KEY_VALUE_INFORMA
+ NTSTATUS WINAPI NtQueryVirtualMemory(HANDLE, LPCVOID, MEMORY_INFORMATION_CLASS, PVOID, SIZE_T, SIZE_T*);
+ NTSTATUS WINAPI NtRaiseException(EXCEPTION_RECORD*, CONTEXT*, BOOL);
+ NTSTATUS WINAPI NtReadFile(HANDLE, HANDLE, PIO_APC_ROUTINE, PVOID, PIO_STATUS_BLOCK, PVOID, ULONG, PLARGE_INTEGER, PULONG);
++NTSTATUS WINAPI NtReadVirtualMemory(HANDLE, const void*, void*, SIZE_T, SIZE_T*);
+ NTSTATUS WINAPI NtSetContextThread(HANDLE, const CONTEXT*);
+ NTSTATUS WINAPI NtSuspendThread(HANDLE, PULONG);
+ NTSTATUS WINAPI NtTerminateProcess(HANDLE, LONG);
