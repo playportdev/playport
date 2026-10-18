@@ -153,3 +153,19 @@ in one lock session (`set_rc=0 open_rc=0 clear_rc=0`). Battery 16 %, not chargin
 So with the disk cache off, the Tahoma fallback (chromium 0014) draws the page's text, and the
 late children of the component updater, the on-device model and the CPU probe are gone. The exit
 fault with a warm disk cache is a FEX bug, tracked separately; it was not changed here.
+
+## The launcher's disk cache off by default (`81082f9`)
+
+IPA `e89750a1d131b1a2658a5174ed45150b5331aa838225c7c7a958b986f4c0c2bc`. One lock session; battery 12 %, not
+charging. The launcher's saved settings carried only `env.FEX_SMCCHECKS=none`, so the entry's new
+default chose the disk cache.
+
+- Hollow Knight (`20261018T090836`): first frame +8.97 s.
+- Open `20261018T090949`: no `[diskcache]` lines and no exit fault, so the default took effect. But the
+  pool ran out before the page: head 480 MiB, tail 417 MiB, head exhausted ×80, at 13 children
+  (dxdiag ran this time). Renderers died with `c0000017`/`c000001d`, and at 62 s the launcher exited on
+  its own (exit 0). Every screenshot was black or the run's end. No Sign In page.
+
+With the disk cache off, one Open of two showed the Sign In page (`20261018T085305`) and one ran out of
+pool first (`20261018T090949`). Each held about 420 MiB of FEX code buffers (the tail). The Open still
+fits the 896 MiB pool only some of the time.
