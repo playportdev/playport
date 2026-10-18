@@ -52,17 +52,6 @@ final class PublisherLauncherTests: XCTestCase {
         XCTAssertEqual(GraphicsBackend.vulkan.runtimeEnvironment, ["DXVK_CONFIG": "dxvk.tilerMode = False"])
     }
 
-    /// PLA-395: the Rockstar launcher's Open runs FEX without its disk cache unless its saved
-    /// settings choose; a game keeps FEX's default, on.
-    func testRockstarOpenRunsWithoutTheDiskCacheByDefault() {
-        XCTAssertFalse(PublisherLauncher.rockstar.diskCache)
-        XCTAssertTrue(FEXProfile.defaultDiskCache)
-        let off = FEXProfile.launch(appID: nil, exe: "Launcher.exe", ordering: MemoryOrdering(),
-                                    diskCache: PublisherLauncher.openSettings(saved: nil).diskCache
-                                        ?? PublisherLauncher.rockstar.diskCache)
-        XCTAssertEqual(off.environment["FEX_DISKCACHE"], "0")
-    }
-
     func testOpenTakesTheSavedRuntimeKeysAndFEXInputsOnly() {
         XCTAssertEqual(PublisherLauncher.openSettings(saved: nil), .init())
         var ordering = MemoryOrdering()

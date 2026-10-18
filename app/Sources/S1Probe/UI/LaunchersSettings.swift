@@ -66,7 +66,7 @@ enum LauncherOpen {
                 + "diskCache=\(saved.diskCache.map { String($0) } ?? "default")")
         }
         let fex = FEXProfile.launch(appID: nil, exe: exe, ordering: saved.ordering, maxInst: saved.maxInst,
-                                    x87Reduced: saved.x87Reduced, diskCache: saved.diskCache ?? l.diskCache)
+                                    x87Reduced: saved.x87Reduced, diskCache: saved.diskCache)
         guard TitleLaunch.shared.start(title: l.name, titleID: l.titleID, exe: exe, args: l.arguments, config: saved.config,
                                        graphics: l.graphics, graphicsEnvironment: l.graphicsEnvironment,
                                        fex: fex, windowsServices: l.windowsServices,
