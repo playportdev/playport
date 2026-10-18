@@ -175,8 +175,8 @@ NEUTRALISE = {
 # PROFILE.
 VC_RUNTIME = {
     "Software\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\x64": [
-        ("Bld", "dword", 0x8681), ("Installed", "dword", 1), ("Major", "dword", 14),
-        ("Minor", "dword", 42), ("Rbld", "dword", 0), ("Version", "sz", "14.42.34433.0"),
+        ("Bld", "dword", 0x8d97), ("Installed", "dword", 1), ("Major", "dword", 14),
+        ("Minor", "dword", 51), ("Rbld", "dword", 0), ("Version", "sz", "14.51.36247.00"),
     ],
 }
 # The Steam install-script HasRunKeys Proton's wine.inf writes (Proton's [ProtonOverrides]
@@ -737,7 +737,7 @@ MEDIA_REGISTER_SHA256 = {  # DLL -> (its DllRegisterServer's source, sha256 of t
     "qedit.dll": ("dlls/qedit/main.c",
                      "8f3edd9dbf6f059532d4d5b1d1598e54f19e1302e91c40b25942cd5139533bed"),
     "quartz.dll": ("dlls/quartz/main.c",
-                     "baaeea7ef0bbaff06ff2da0c7d2a6597cc70950b0563b465a38653c5562d871d"),
+                     "cf99e50d5b9c9577fc447c2882c1c99a030f4c46d2202e476d73113929d36bca"),
     "resampledmo.dll": ("dlls/resampledmo/resampledmo.c",
                      "9fb2b96274e8f5c1f6bcb23993d6a057cd78888b0b7eea651d19147414065021"),
     "vidreszr.dll": ("dlls/vidreszr/vidreszr.c",

@@ -20,7 +20,7 @@ Offered-upstream: no
  1 file changed, 5 insertions(+)
 
 diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
-index c47f865..92d2192 100644
+index 56ba95f..8d88489 100644
 --- a/dlls/ntdll/loader.c
 +++ b/dlls/ntdll/loader.c
 @@ -4377,11 +4377,13 @@ static void load_arm64ec_module(void)
@@ -37,9 +37,9 @@ index c47f865..92d2192 100644
  }
  
  #endif
-@@ -4569,8 +4571,11 @@ void loader_init( CONTEXT *context, void **entry )
+@@ -4571,8 +4573,11 @@ void loader_init( CONTEXT *context, void **entry )
          wm = build_main_module();
-         build_ntdll_module();
+         ntdll_module = build_ntdll_module();
  #ifdef __arm64ec__
 +        ERR( "loader_init: calling load_arm64ec_module\n" );
          load_arm64ec_module();
@@ -47,5 +47,5 @@ index c47f865..92d2192 100644
          update_load_config( wm->ldr.DllBase );
 +        ERR( "loader_init: update_load_config done, proceeding to load kernel32\n" );
  #endif
+         if (TRACE_ON(relay)) RELAY_SetupDLL( ntdll_module );
  
-         if ((status = load_dll( NULL, L"kernel32.dll", 0, &kernel32, FALSE )) != STATUS_SUCCESS)

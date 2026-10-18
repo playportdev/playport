@@ -31,10 +31,10 @@ Offered-upstream: no
  6 files changed, 331 insertions(+), 4 deletions(-)
 
 diff --git a/dlls/ntdll/ntdll.spec b/dlls/ntdll/ntdll.spec
-index ab64aa7..ae997f7 100644
+index a2cc807..30606bf 100644
 --- a/dlls/ntdll/ntdll.spec
 +++ b/dlls/ntdll/ntdll.spec
-@@ -1773,6 +1773,8 @@
+@@ -1779,6 +1779,8 @@
  @ extern -private -arch=arm64ec p_ios_jit_translate_addr
  @ extern -private -arch=arm64,arm64ec p_ios_jit_reverse_translate_addr
  @ extern -private ios_teb_tsd_offset
@@ -76,7 +76,7 @@ index 9d69808..ea42483 100644
 +
  #endif
 diff --git a/dlls/ntdll/sync.c b/dlls/ntdll/sync.c
-index 165631e..c17b955 100644
+index 5b45282..41c0e0d 100644
 --- a/dlls/ntdll/sync.c
 +++ b/dlls/ntdll/sync.c
 @@ -37,6 +37,44 @@
@@ -192,16 +192,16 @@ index 165631e..c17b955 100644
  
      if (size != 1 && size != 2 && size != 4 && size != 8)
          return STATUS_INVALID_PARAMETER;
-@@ -1367,6 +1427,8 @@ void WINAPI RtlWakeAddressAll( const void *addr )
-     unsigned int count = 0;
+@@ -1368,6 +1428,8 @@ void WINAPI RtlWakeAddressAll( const void *addr )
      HANDLE tids[256];
+     DWORD tid;
  
 +    InterlockedIncrement64( &ios_xp_nt.woa_wake_all );   /* ml1131 */
 +
      TRACE("%p\n", addr);
  
      if (!addr) return;
-@@ -1408,6 +1470,8 @@ void WINAPI RtlWakeAddressSingle( const void *addr )
+@@ -1410,6 +1472,8 @@ void WINAPI RtlWakeAddressSingle( const void *addr )
      struct futex_entry *entry;
      DWORD tid = 0;
  
@@ -316,7 +316,7 @@ index 577cdec..e77454a 100644
  #include "config.h"
  
  #include <assert.h>
-@@ -1221,11 +1222,69 @@ NTSTATUS WINAPI NtOpenEvent( HANDLE *handle, ACCESS_MASK access, const OBJECT_AT
+@@ -1224,11 +1225,69 @@ NTSTATUS WINAPI NtOpenEvent( HANDLE *handle, ACCESS_MASK access, const OBJECT_AT
  /******************************************************************************
   *              NtSetEvent (NTDLL.@)
   */
@@ -386,7 +386,7 @@ index 577cdec..e77454a 100644
  
      if ((ret = inproc_set_event( handle, prev_state )) != STATUS_NOT_IMPLEMENTED)
          return ret;
-@@ -1259,6 +1318,7 @@ NTSTATUS WINAPI NtResetEvent( HANDLE handle, LONG *prev_state )
+@@ -1262,6 +1321,7 @@ NTSTATUS WINAPI NtResetEvent( HANDLE handle, LONG *prev_state )
      unsigned int ret;
  
      TRACE( "handle %p, prev_state %p\n", handle, prev_state );
@@ -394,7 +394,7 @@ index 577cdec..e77454a 100644
  
      if ((ret = inproc_reset_event( handle, prev_state )) != STATUS_NOT_IMPLEMENTED)
          return ret;
-@@ -1293,6 +1353,7 @@ NTSTATUS WINAPI NtPulseEvent( HANDLE handle, LONG *prev_state )
+@@ -1296,6 +1356,7 @@ NTSTATUS WINAPI NtPulseEvent( HANDLE handle, LONG *prev_state )
      unsigned int ret;
  
      TRACE( "handle %p, prev_state %p\n", handle, prev_state );
@@ -402,7 +402,7 @@ index 577cdec..e77454a 100644
  
      if ((ret = inproc_pulse_event( handle, prev_state )) != STATUS_NOT_IMPLEMENTED)
          return ret;
-@@ -2380,6 +2441,8 @@ NTSTATUS WINAPI NtWaitForMultipleObjects( DWORD count, const HANDLE *handles, WA
+@@ -2383,6 +2444,8 @@ NTSTATUS WINAPI NtWaitForMultipleObjects( DWORD count, const HANDLE *handles, WA
      UINT i, flags = SELECT_INTERRUPTIBLE;
      unsigned int ret;
  
@@ -411,7 +411,7 @@ index 577cdec..e77454a 100644
      if (!count || count > MAXIMUM_WAIT_OBJECTS) return STATUS_INVALID_PARAMETER_1;
      if (type != WaitAll && type != WaitAny) FIXME( "Unsupported wait type %u\n", type );
  
-@@ -2396,8 +2459,14 @@ NTSTATUS WINAPI NtWaitForMultipleObjects( DWORD count, const HANDLE *handles, WA
+@@ -2399,8 +2462,14 @@ NTSTATUS WINAPI NtWaitForMultipleObjects( DWORD count, const HANDLE *handles, WA
          if (is_pseudo_handle( handles[i] )) return STATUS_INVALID_HANDLE;
      }
  
@@ -426,7 +426,7 @@ index 577cdec..e77454a 100644
          TRACE( "-> %#x\n", ret );
          return ret;
      }
-@@ -2420,10 +2489,18 @@ NTSTATUS WINAPI NtWaitForSingleObject( HANDLE handle, BOOLEAN alertable, const L
+@@ -2423,10 +2492,18 @@ NTSTATUS WINAPI NtWaitForSingleObject( HANDLE handle, BOOLEAN alertable, const L
      UINT flags = SELECT_INTERRUPTIBLE;
      unsigned int ret;
  
@@ -445,7 +445,7 @@ index 577cdec..e77454a 100644
          TRACE( "-> %#x\n", ret );
          return ret;
      }
-@@ -2467,6 +2544,7 @@ NTSTATUS WINAPI NtSignalAndWaitForSingleObject( HANDLE signal, HANDLE wait,
+@@ -2470,6 +2547,7 @@ NTSTATUS WINAPI NtSignalAndWaitForSingleObject( HANDLE signal, HANDLE wait,
   */
  NTSTATUS WINAPI NtYieldExecution(void)
  {
@@ -453,7 +453,7 @@ index 577cdec..e77454a 100644
  #ifdef WINE_IOS
      /* iOS-Madeira ml1063: ADAPTIVE YIELD. A game thread that spins
       * WaitForSingleObject(h, 0) / SwitchToThread() waiting for work keeps a whole
-@@ -2484,11 +2562,22 @@ NTSTATUS WINAPI NtYieldExecution(void)
+@@ -2487,11 +2565,22 @@ NTSTATUS WINAPI NtYieldExecution(void)
          unsigned long long now;
          clock_gettime( CLOCK_MONOTONIC, &ts );
          now = (unsigned long long)ts.tv_sec * 1000000000ull + ts.tv_nsec;
@@ -478,7 +478,7 @@ index 577cdec..e77454a 100644
              return STATUS_SUCCESS;
          }
      }
-@@ -2519,6 +2608,15 @@ NTSTATUS WINAPI NtDelayExecution( BOOLEAN alertable, const LARGE_INTEGER *timeou
+@@ -2522,6 +2611,15 @@ NTSTATUS WINAPI NtDelayExecution( BOOLEAN alertable, const LARGE_INTEGER *timeou
  {
      unsigned int status = STATUS_SUCCESS;
  
@@ -494,7 +494,7 @@ index 577cdec..e77454a 100644
      /* if alertable, we need to query the server */
      if (alertable)
      {
-@@ -2567,8 +2665,10 @@ NTSTATUS WINAPI NtDelayExecution( BOOLEAN alertable, const LARGE_INTEGER *timeou
+@@ -2570,8 +2668,10 @@ NTSTATUS WINAPI NtDelayExecution( BOOLEAN alertable, const LARGE_INTEGER *timeou
  /******************************************************************************
   *              NtQueryPerformanceCounter (NTDLL.@)
   */
@@ -505,7 +505,7 @@ index 577cdec..e77454a 100644
      counter->QuadPart = monotonic_counter();
      if (frequency) frequency->QuadPart = TICKSPERSEC;
      return STATUS_SUCCESS;
-@@ -4013,9 +4113,26 @@ void ios_orphan_check( const unsigned long long *live_stamps, int nstamps )
+@@ -4016,9 +4116,26 @@ void ios_orphan_check( const unsigned long long *live_stamps, int nstamps )
  /***********************************************************************
   *             NtAlertThreadByThreadId (NTDLL.@)
   */
@@ -532,7 +532,7 @@ index 577cdec..e77454a 100644
  
      TRACE( "%p\n", tid );
  
-@@ -4049,6 +4166,7 @@ NTSTATUS WINAPI NtAlertThreadByThreadId( HANDLE tid )
+@@ -4052,6 +4169,7 @@ NTSTATUS WINAPI NtAlertThreadByThreadId( HANDLE tid )
                  ERR( "[alert-unix] ALERT-SENT from=%04x -> pump tid=%04x futex=%p rev=ml482\n",
                       (int)self_tid, (int)(ULONG_PTR)tid, entry ); }
          }
@@ -540,7 +540,7 @@ index 577cdec..e77454a 100644
          if (!InterlockedExchange( futex, 1 ))
              futex_wake_one( futex );
          return STATUS_SUCCESS;
-@@ -4101,6 +4219,8 @@ static LONGLONG update_timeout( ULONGLONG end )
+@@ -4104,6 +4222,8 @@ static LONGLONG update_timeout( ULONGLONG end )
   */
  NTSTATUS WINAPI NtWaitForAlertByThreadId( const void *address, const LARGE_INTEGER *timeout )
  {
@@ -549,7 +549,7 @@ index 577cdec..e77454a 100644
      union tid_alert_entry *entry = get_tid_alert_entry( ULongToHandle(get_thread_data()->tid) );
      /* iOS-Madeira ml406 (task #60): unix-side tap for beacon-marked threads
       * (TEB->Instrumentation[10] == 'PUMP', stamped by the EC chrome-ipc
-@@ -4158,8 +4278,24 @@ NTSTATUS WINAPI NtWaitForAlertByThreadId( const void *address, const LARGE_INTEG
+@@ -4161,8 +4281,24 @@ NTSTATUS WINAPI NtWaitForAlertByThreadId( const void *address, const LARGE_INTEG
              ios_alert_waiters[ios_wslot].addr = address ? address : (const void *)0x1;
          }
  
@@ -574,7 +574,7 @@ index 577cdec..e77454a 100644
              if (timeout)
              {
                  LONGLONG timeleft = update_timeout( end );
-@@ -4171,6 +4307,18 @@ NTSTATUS WINAPI NtWaitForAlertByThreadId( const void *address, const LARGE_INTEG
+@@ -4174,6 +4310,18 @@ NTSTATUS WINAPI NtWaitForAlertByThreadId( const void *address, const LARGE_INTEG
              }
              else
                  ret = futex_wait( futex, 0, NULL );

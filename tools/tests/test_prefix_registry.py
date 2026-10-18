@@ -60,7 +60,7 @@ class VcRuntime(unittest.TestCase):
         self.assertTrue(marked)
         self.assertIn('"Installed"=dword:00000001', values)
         self.assertIn('"Major"=dword:0000000e', values)
-        self.assertIn('"Minor"=dword:0000002a', values)
+        self.assertIn('"Minor"=dword:00000033', values)
         self.assertIn('"Rbld"=dword:00000000', values)
 
 

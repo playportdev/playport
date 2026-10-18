@@ -27,15 +27,15 @@ Evidence: docs/evidence/2026-10-12-vulkan-shared-texture-metal.md
 Offered-upstream: no; in-process only (decision 0101)
 ---
  dlls/win32u/d3dkmt.c         |  10 +++
- dlls/win32u/vulkan.c         | 129 ++++++++++++++++++++++++++++++++---
+ dlls/win32u/vulkan.c         | 114 ++++++++++++++++++++++++++++++++++-
  dlls/win32u/win32u_private.h |   1 +
- 3 files changed, 132 insertions(+), 8 deletions(-)
+ 3 files changed, 123 insertions(+), 2 deletions(-)
 
 diff --git a/dlls/win32u/d3dkmt.c b/dlls/win32u/d3dkmt.c
-index ae82a76..acc64cf 100644
+index 4801745..48ac5b8 100644
 --- a/dlls/win32u/d3dkmt.c
 +++ b/dlls/win32u/d3dkmt.c
-@@ -1817,6 +1817,16 @@ int d3dkmt_object_get_fd( D3DKMT_HANDLE local )
+@@ -1946,6 +1946,16 @@ int d3dkmt_object_get_fd( D3DKMT_HANDLE local )
      return fd;
  }
  
@@ -53,7 +53,7 @@ index ae82a76..acc64cf 100644
  D3DKMT_HANDLE d3dkmt_create_resource( int fd, D3DKMT_HANDLE *global )
  {
 diff --git a/dlls/win32u/vulkan.c b/dlls/win32u/vulkan.c
-index bf8ee43..ab248db 100644
+index 406128d..c5af3a1 100644
 --- a/dlls/win32u/vulkan.c
 +++ b/dlls/win32u/vulkan.c
 @@ -154,6 +154,8 @@ struct device_memory
@@ -140,7 +140,7 @@ index bf8ee43..ab248db 100644
  static VkExternalSemaphoreHandleTypeFlagBits get_host_external_semaphore_type(void)
  {
      struct vulkan_device_extensions extensions = {.has_VK_KHR_external_semaphore_win32 = 1};
-@@ -898,6 +965,8 @@ static VkResult win32u_vkAllocateMemory( VkDevice client_device, const VkMemoryA
+@@ -917,6 +984,8 @@ static VkResult win32u_vkAllocateMemory( VkDevice client_device, const VkMemoryA
                                           const VkAllocationCallbacks *allocator, VkDeviceMemory *ret )
  {
      VkImportMemoryFdInfoKHR fd_info = {.sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR};
@@ -149,40 +149,25 @@ index bf8ee43..ab248db 100644
      VkMemoryAllocateInfo *alloc_info = (VkMemoryAllocateInfo *)client_alloc_info; /* cast away const, chain has been copied in the thunks */
      VkBaseOutStructure **next, *prev = (VkBaseOutStructure *)alloc_info;
      struct vulkan_device *device = vulkan_device_from_handle( client_device );
-@@ -1003,24 +1072,55 @@ static VkResult win32u_vkAllocateMemory( VkDevice client_device, const VkMemoryA
-             if ((res = device->p_vkImportSemaphoreFdKHR( device->host.device, &fd_info ))) goto failed;
-         }
- 
--        if ((fd_info.fd = d3dkmt_object_get_fd( memory->local )) < 0)
-+        if (get_host_external_memory_type() == VK_EXTERNAL_MEMORY_HANDLE_TYPE_MTLHEAP_BIT_EXT)
-         {
--            res = VK_ERROR_INVALID_EXTERNAL_HANDLE;
--            goto failed;
+@@ -1026,19 +1095,45 @@ static VkResult win32u_vkAllocateMemory( VkDevice client_device, const VkMemoryA
+             fd_info.pNext = alloc_info->pNext;
+             alloc_info->pNext = &fd_info;
+             break;
++        case VK_EXTERNAL_MEMORY_HANDLE_TYPE_MTLHEAP_BIT_EXT:
 +            /* the heap is looked up, and imported, under the lock below */
 +            if (!memory->local || !(metal_import = d3dkmt_object_get_global( memory->local )))
 +            {
 +                res = VK_ERROR_INVALID_EXTERNAL_HANDLE;
 +                goto failed;
 +            }
-+            metal_info.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_MTLHEAP_BIT_EXT;
++            metal_info.handleType = type;
 +            metal_info.pNext = alloc_info->pNext;
 +            alloc_info->pNext = &metal_info;
++            break;
+         default:
+             FIXME( "Unsupported memory handle type %#x\n", type );
+             break;
          }
-+        else
-+        {
-+            if ((fd_info.fd = d3dkmt_object_get_fd( memory->local )) < 0)
-+            {
-+                res = VK_ERROR_INVALID_EXTERNAL_HANDLE;
-+                goto failed;
-+            }
- 
--        fd_info.handleType = get_host_external_memory_type();
--        fd_info.pNext = alloc_info->pNext;
--        alloc_info->pNext = &fd_info;
-+            fd_info.handleType = get_host_external_memory_type();
-+            fd_info.pNext = alloc_info->pNext;
-+            alloc_info->pNext = &fd_info;
-+        }
      }
  
 -    if ((res = device->p_vkAllocateMemory( device->host.device, alloc_info, NULL, &host_device_memory ))) goto failed;
@@ -206,22 +191,23 @@ index bf8ee43..ab248db 100644
      {
          if (!memory->local)
          {
-             VkMemoryGetFdInfoKHR get_fd_info = {.sType = VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR, .memory = host_device_memory};
-+            VkMemoryGetMetalHandleInfoEXT get_metal_info = {.sType = VK_STRUCTURE_TYPE_MEMORY_GET_METAL_HANDLE_INFO_EXT, .memory = host_device_memory};
+             VkExternalMemoryHandleTypeFlagBits type;
 +            void *heap = NULL;
              int fd = -1;
  
-             switch ((get_fd_info.handleType = get_host_external_memory_type()))
-@@ -1028,15 +1128,25 @@ static VkResult win32u_vkAllocateMemory( VkDevice client_device, const VkMemoryA
-             case VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT:
+             switch ((type = get_host_external_memory_type()))
+@@ -1049,15 +1144,27 @@ static VkResult win32u_vkAllocateMemory( VkDevice client_device, const VkMemoryA
                  if ((res = device->p_vkGetMemoryFdKHR( device->host.device, &get_fd_info, &fd ))) goto failed;
                  break;
+             }
 +            case VK_EXTERNAL_MEMORY_HANDLE_TYPE_MTLHEAP_BIT_EXT:
-+                get_metal_info.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_MTLHEAP_BIT_EXT;
++            {
++                VkMemoryGetMetalHandleInfoEXT get_metal_info = {.sType = VK_STRUCTURE_TYPE_MEMORY_GET_METAL_HANDLE_INFO_EXT, .memory = host_device_memory, .handleType = type};
 +                if ((res = device->p_vkGetMemoryMetalHandleEXT( device->host.device, &get_metal_info, &heap ))) goto failed;
 +                break;
++            }
              default:
-                 FIXME( "Unsupported handle type %#x\n", get_fd_info.handleType );
+                 FIXME( "Unsupported memory handle type %#x\n", type );
                  break;
              }
  
@@ -239,7 +225,7 @@ index bf8ee43..ab248db 100644
          }
          if (nt_shared && !(memory->shared = create_shared_resource_handle( memory->local, &export_win32 ))) goto failed;
      }
-@@ -1051,6 +1161,7 @@ static VkResult win32u_vkAllocateMemory( VkDevice client_device, const VkMemoryA
+@@ -1072,6 +1179,7 @@ static VkResult win32u_vkAllocateMemory( VkDevice client_device, const VkMemoryA
  
  failed:
      WARN( "Failed to allocate memory, res %d\n", res );
@@ -247,7 +233,7 @@ index bf8ee43..ab248db 100644
      if (host_device_memory) device->p_vkFreeMemory( device->host.device, host_device_memory, NULL );
      if (memory->semaphore) device->p_vkDestroySemaphore( device->host.device, memory->semaphore, NULL );
      d3dkmt_destroy_resource( memory->local );
-@@ -1081,6 +1192,8 @@ static void win32u_vkFreeMemory( VkDevice client_device, VkDeviceMemory client_m
+@@ -1102,6 +1210,8 @@ static void win32u_vkFreeMemory( VkDevice client_device, VkDeviceMemory client_m
          device->p_vkUnmapMemory2KHR( device->host.device, &info );
      }
  

@@ -24,10 +24,10 @@ Offered-upstream: no
  4 files changed, 17 insertions(+), 7 deletions(-)
 
 diff --git a/dlls/ntdll/ntdll.spec b/dlls/ntdll/ntdll.spec
-index d513caf..8ff4bd7 100644
+index 0ecc1f8..43daa88 100644
 --- a/dlls/ntdll/ntdll.spec
 +++ b/dlls/ntdll/ntdll.spec
-@@ -1776,6 +1776,8 @@
+@@ -1782,6 +1782,8 @@
  @ extern -private ios_teb_tsd_offset
  # ml1131: [xp-api] probe counters (sync.c), read by ntdll-unix
  @ extern -private ios_xp_nt
@@ -49,7 +49,7 @@ index 281d746..58ad9ca 100644
  
  #endif
 diff --git a/dlls/ntdll/sync.c b/dlls/ntdll/sync.c
-index c17b955..f42ef5c 100644
+index 41c0e0d..f652dc2 100644
 --- a/dlls/ntdll/sync.c
 +++ b/dlls/ntdll/sync.c
 @@ -44,6 +44,12 @@
@@ -104,16 +104,16 @@ index c17b955..f42ef5c 100644
  
      if (size != 1 && size != 2 && size != 4 && size != 8)
          return STATUS_INVALID_PARAMETER;
-@@ -1427,7 +1433,7 @@ void WINAPI RtlWakeAddressAll( const void *addr )
-     unsigned int count = 0;
+@@ -1428,7 +1434,7 @@ void WINAPI RtlWakeAddressAll( const void *addr )
      HANDLE tids[256];
+     DWORD tid;
  
 -    InterlockedIncrement64( &ios_xp_nt.woa_wake_all );   /* ml1131 */
 +    if (ios_counters_on) InterlockedIncrement64( &ios_xp_nt.woa_wake_all );   /* ml1131 */
  
      TRACE("%p\n", addr);
  
-@@ -1470,7 +1476,7 @@ void WINAPI RtlWakeAddressSingle( const void *addr )
+@@ -1472,7 +1478,7 @@ void WINAPI RtlWakeAddressSingle( const void *addr )
      struct futex_entry *entry;
      DWORD tid = 0;
  

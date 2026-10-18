@@ -50,7 +50,7 @@ index feee54e..81281f0 100644
          return STATUS_SUCCESS;
      }
 diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
-index 0297390..82eeac2 100644
+index 226590e..eea5f72 100644
 --- a/dlls/ntdll/loader.c
 +++ b/dlls/ntdll/loader.c
 @@ -225,6 +225,21 @@ static inline BOOL contains_path( LPCWSTR name )
@@ -75,15 +75,15 @@ index 0297390..82eeac2 100644
  #define RTL_UNLOAD_EVENT_TRACE_NUMBER 64
  
  typedef struct _RTL_UNLOAD_EVENT_TRACE
-@@ -5623,6 +5638,7 @@ void loader_init( CONTEXT *context, void **entry )
-         ANSI_STRING ctrl_routine = RTL_CONSTANT_STRING( "CtrlRoutine" );
+@@ -5625,6 +5640,7 @@ void loader_init( CONTEXT *context, void **entry )
          WINE_MODREF *kernel32;
          PEB *peb = NtCurrentTeb()->Peb;
+         void *ntdll_module;
 +        WCHAR env_str[16];
          unsigned int i;
  
          peb->LdrData            = &ldr;
-@@ -5630,6 +5646,16 @@ void loader_init( CONTEXT *context, void **entry )
+@@ -5632,6 +5648,16 @@ void loader_init( CONTEXT *context, void **entry )
          peb->TlsBitmap          = &tls_bitmap;
          peb->TlsExpansionBitmap = &tls_expansion_bitmap;
          peb->LoaderLock         = &loader_section;

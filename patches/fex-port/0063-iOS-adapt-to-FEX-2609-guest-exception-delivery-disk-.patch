@@ -31,7 +31,7 @@ diff --git a/FEXCore/Source/Interface/Core/JIT/JIT.cpp b/FEXCore/Source/Interfac
 index 99e28d7..5ee7766 100644
 --- a/FEXCore/Source/Interface/Core/JIT/JIT.cpp
 +++ b/FEXCore/Source/Interface/Core/JIT/JIT.cpp
-@@ -1391,8 +1391,16 @@ CPUBackend::CompiledCode Arm64JITCore::LoadCachedCode(std::span<const uint8_t> H
+@@ -1427,8 +1427,16 @@ CPUBackend::CompiledCode Arm64JITCore::LoadCachedCode(std::span<const uint8_t> H
    auto AllocatedInfo = AllocateCodeBufferInSharedCache(HostBytes.size());
  
    uint8_t* Dest = AllocatedInfo.BufferAllocationOffset;
@@ -49,25 +49,25 @@ index 99e28d7..5ee7766 100644
    CPUBackend::CompiledCode Result;
    Result.BlockBegin = Dest;
 diff --git a/Source/Windows/ARM64EC/Module.S b/Source/Windows/ARM64EC/Module.S
-index 5f6a69e..9f58bd4 100644
+index f156816..b16f89c 100644
 --- a/Source/Windows/ARM64EC/Module.S
 +++ b/Source/Windows/ARM64EC/Module.S
-@@ -431,6 +431,10 @@ ExitFunctionSuspendPoint:
+@@ -450,6 +450,10 @@ SyscallTableEnd:
  NtContinueNative:
  #endif
- DIRECT_SYSCALL_WRAPPER("#NtContinueNative", WineNtContinueSyscallId, 0x43)
+ DIRECT_SYSCALL_WRAPPER("#NtContinueNative", WineNtContinueSyscallId)
 +#ifdef FEX_IOS_HOST
 +.global NtRaiseExceptionNative
 +NtRaiseExceptionNative:
 +#endif
- DIRECT_SYSCALL_WRAPPER("#NtRaiseExceptionNative", WineNtRaiseExceptionSyscallId, 0x174)
+ DIRECT_SYSCALL_WRAPPER("#NtRaiseExceptionNative", WineNtRaiseExceptionSyscallId)
  
    // Both of these are wrapped as FEX needs them to setup its call checker at startup time and their NTDLL thunks could
 diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
-index f4732b8..0510793 100644
+index 38a76db..5870525 100644
 --- a/Source/Windows/ARM64EC/Module.cpp
 +++ b/Source/Windows/ARM64EC/Module.cpp
-@@ -704,6 +704,27 @@ static void RethrowGuestException(const EXCEPTION_RECORD& Rec, ARM64_NT_CONTEXT&
+@@ -763,6 +763,27 @@ static void RethrowGuestException(const EXCEPTION_RECORD& Rec, ARM64_NT_CONTEXT&
      GuestContext.Pc -= 1;
    }
  

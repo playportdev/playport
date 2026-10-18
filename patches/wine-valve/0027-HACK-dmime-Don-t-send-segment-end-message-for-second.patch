@@ -8,7 +8,7 @@ CW-Bug-Id: #16680
 CW-Bug-Id: #20424
 CW-Bug-Id: #22409
 Valve-commit: 46cedf9d9fe872e406f6e1ad213dcf91bce0a982
-Picked: clean
+Picked: resolved
 Class: valve
 Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
 Offered-upstream: no
@@ -19,12 +19,12 @@ Offered-upstream: no
  3 files changed, 7 insertions(+), 4 deletions(-)
 
 diff --git a/dlls/dmime/dmime_private.h b/dlls/dmime/dmime_private.h
-index f2d1947..b3a297b 100644
+index 728db4f..888d6b2 100644
 --- a/dlls/dmime/dmime_private.h
 +++ b/dlls/dmime/dmime_private.h
-@@ -77,7 +77,7 @@ extern void set_audiopath_perf_pointer(IDirectMusicAudioPath*,IDirectMusicPerfor
- extern void set_audiopath_dsound_buffer(IDirectMusicAudioPath*,IDirectSoundBuffer*);
- extern void set_audiopath_primary_dsound_buffer(IDirectMusicAudioPath*,IDirectSoundBuffer*);
+@@ -79,7 +79,7 @@ extern void set_audiopath_primary_dsound_buffer(IDirectMusicAudioPath*,IDirectSo
+ 
+ extern HRESULT segment_get_rt_length(IDirectMusicSegment *iface, REFERENCE_TIME *length);
  
 -extern HRESULT segment_state_create(IDirectMusicSegment *segment, MUSIC_TIME start_time,
 +extern HRESULT segment_state_create(IDirectMusicSegment *segment, MUSIC_TIME start_time, DWORD segment_flags,
@@ -45,10 +45,10 @@ index 9ab6e8c..a0c6929 100644
          if (primary) performance_set_primary_segment(This, NULL);
          if (control) performance_set_control_segment(This, NULL);
 diff --git a/dlls/dmime/segmentstate.c b/dlls/dmime/segmentstate.c
-index 4fece41..2c6f889 100644
+index 32b9600..e363022 100644
 --- a/dlls/dmime/segmentstate.c
 +++ b/dlls/dmime/segmentstate.c
-@@ -61,6 +61,7 @@ struct segment_state
+@@ -62,6 +62,7 @@ struct segment_state
      BOOL auto_download;
      DWORD repeats, actual_repeats;
      DWORD track_flags;
@@ -56,7 +56,7 @@ index 4fece41..2c6f889 100644
  
      struct list tracks;
  };
-@@ -118,7 +119,7 @@ static ULONG WINAPI segment_state_Release(IDirectMusicSegmentState8 *iface)
+@@ -119,7 +120,7 @@ static ULONG WINAPI segment_state_Release(IDirectMusicSegmentState8 *iface)
  
      if (!ref)
      {
@@ -65,7 +65,7 @@ index 4fece41..2c6f889 100644
          if (This->segment) IDirectMusicSegment_Release(This->segment);
          if (This->parent_graph) IDirectMusicGraph_Release(This->parent_graph);
          free(This);
-@@ -309,7 +310,7 @@ HRESULT create_dmsegmentstate(REFIID riid, void **ret_iface)
+@@ -291,7 +292,7 @@ HRESULT create_dmsegmentstate(REFIID riid, void **ret_iface)
      return hr;
  }
  
@@ -74,7 +74,7 @@ index 4fece41..2c6f889 100644
          IDirectMusicPerformance8 *performance, IDirectMusicSegmentState **ret_iface)
  {
      IDirectMusicSegmentState *iface;
-@@ -324,6 +325,7 @@ HRESULT segment_state_create(IDirectMusicSegment *segment, MUSIC_TIME start_time
+@@ -308,6 +309,7 @@ HRESULT segment_state_create(IDirectMusicSegment *segment, MUSIC_TIME start_time
      if (FAILED(hr = create_dmsegmentstate(&IID_IDirectMusicSegmentState, (void **)&iface))) return hr;
      This = impl_from_IDirectMusicSegmentState8((IDirectMusicSegmentState8 *)iface);
  
@@ -82,9 +82,9 @@ index 4fece41..2c6f889 100644
      This->segment = segment;
      IDirectMusicSegment_AddRef(This->segment);
  
-@@ -436,6 +438,7 @@ static HRESULT segment_state_play_chunk(struct segment_state *This, IDirectMusic
+@@ -435,6 +437,7 @@ static HRESULT segment_state_play_chunk(struct segment_state *This, IDirectMusic
          {
-             MUSIC_TIME end_time = This->start_time + This->played;
+             MUSIC_TIME end_time = This->actual_start_time + This->played;
  
 +            if (This->segment_flags & DMUS_SEGF_SECONDARY) return S_OK;
              if (FAILED(hr = performance_send_segment_end(performance, end_time, iface, FALSE)))

@@ -101,20 +101,20 @@ if cmp -s "$OUT/gst-macos/gst/gstmacos.h.new" "$OUT/gst-macos/gst/gstmacos.h"; t
 else
     mv "$OUT/gst-macos/gst/gstmacos.h.new" "$OUT/gst-macos/gst/gstmacos.h"
 fi
-# The arm64ec tree builds every program (decision 0082). Wine's configure
-# leaves programs out of an arm64ec build by default (aclocal.m4
-# wine_fn_config_makefile), for its ARM64X layout, where system32's programs are
-# native aarch64 builds. Here system32 is the arm64ec set and an x86-64 session
-# starts no pure ARM64 process, so `start`, `reg`, `conhost` and the rest must be
-# arm64ec builds, as Proton's x86_64 system32 has them. The list is configure's
-# own programs, without the 16-bit ones (enable_win16) and four whose start on
-# the phone would change what happens today: winetest (never shipped), winedbg
-# (kernelbase starts it for any unhandled exception), wineboot (ExitWindowsEx
-# starts it to end the session) and explorer (a folder's ShellExecute opens it).
-ARM64EC_PROGRAMS_LEFT_OUT="win16 tests winetest winedbg wineboot explorer"
-ARM64EC_PROGRAMS=$(sed -n 's#^wine_fn_config_makefile programs/\([^/ ]*\) enable_\([A-Za-z0-9_]*\)$#\2#p' "$WINE/configure" |
-    grep -vxF "$(printf '%s\n' $ARM64EC_PROGRAMS_LEFT_OUT)" | sed 's/^/--enable-/' | tr '\n' ' ')
-[ -n "$ARM64EC_PROGRAMS" ] || { echo "no programs found in $WINE/configure"; exit 1; }
+# The arm64ec tree builds every program (decision 0082). Upstream's ARM64 layout
+# is ARM64X, where system32's programs are native aarch64 builds. Here system32
+# is the arm64ec set and an x86-64 session starts no pure ARM64 process, so
+# `start`, `reg`, `conhost` and the rest must be arm64ec builds, as Proton's
+# x86_64 system32 has them. Since wine-11.20 a program's Makefile.in chooses its
+# architectures (ENABLE_ARCHS): the arm64ec tree builds every program that does
+# not restrict them, and patches/wine-pe 0047 adds arm64ec to the services,
+# conhost and winevdm, which name only the host or the 16-bit one. Four are
+# disabled in this tree, since their start on the phone would change what
+# happens today: winetest (never shipped), winedbg (kernelbase starts it for any
+# unhandled exception), wineboot (ExitWindowsEx starts it to end the session)
+# and explorer (a folder's ShellExecute opens it).
+ARM64EC_PROGRAMS_LEFT_OUT="winetest winedbg wineboot explorer"
+ARM64EC_PROGRAMS=$(printf -- '--disable-%s ' $ARM64EC_PROGRAMS_LEFT_OUT)
 configure_tree() {
     # A kept tree's header dependencies are makedep's from when it was configured:
     # make depend rescans the sources, so a patch that adds or edits an included

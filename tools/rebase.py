@@ -45,6 +45,12 @@ writes, next to the run:
                   resolution (it stays resolved once it is); the upstream
                   patches are left out
   series.diff     those against patches/
+Before series.diff it checks the series the way the build applies it (build/lib.sh
+apply_series): `git am -3` of each written patch onto NEW in verify/, its tree
+compared with its pick's. git apply may put a kept clean patch whose context
+occurs twice at the other place (its line numbers are the old ones); such a
+patch is re-exported from its pick (trailer unchanged) and checked again. A
+patch that still differs stops the run (exit 1, verify/ kept to look at).
 --write copies them into patches/ (uncommitted, for review); --pins also sets
 the component's pins.lock row to NEW. Nothing else in the repository changes.
 
@@ -205,7 +211,7 @@ def start(repo, build, target, new, trial, fetch):
 
 def clear(run):
     """Drop a run's tree, state and results (not the trial tables or the recorded resolutions)."""
-    for f in ("tree", "trial", "patches", "state.json", "range-diff.txt", "flags.txt", "series.diff"):
+    for f in ("tree", "trial", "verify", "patches", "state.json", "range-diff.txt", "flags.txt", "series.diff"):
         p = os.path.join(run, f)
         if os.path.isdir(p) and not os.path.islink(p):
             shutil.rmtree(p)
@@ -341,6 +347,51 @@ def reexport(text, original, cls):
     return head + sep + rest
 
 
+def export_pick(tree, repo, rec):
+    """rec's pick as a patch file (reexport: the original's Subject, the trailer by its class)."""
+    text = sh(["git", "-C", tree, "-c", "core.abbrev=7", "format-patch", "-1", "--zero-commit",
+               "--no-signature", "--stdout", rec["new_commit"]])[1]
+    with open(os.path.join(repo, "patches", rec["series"], rec["patch"]), errors="replace") as f:
+        original = f.read()
+    return reexport(text, original, rec["class"])
+
+
+def verify_series(run, state, out, repo):
+    """Apply the written series as the build does (git am -3 onto NEW, build/lib.sh apply_series) and compare
+    each patch's tree with its pick's. A kept clean patch that lands elsewhere (git apply takes its first
+    matching context nearest its old line numbers; the pick's merge followed the lines) is re-exported from
+    its pick and checked again; a patch that still differs fails with its name. Returns the re-exported ones."""
+    tree, scratch = os.path.join(run, "tree"), os.path.join(run, "verify")
+    if os.path.isdir(scratch):
+        shutil.rmtree(scratch)
+    sh(["git", "clone", "-q", "--shared", "--no-checkout", tree, scratch])
+    git(scratch, "-c", "advice.detachedHead=false", "checkout", "-q", "-f", state["new"])
+    misplaced = []
+    for r in state["picks"]:
+        if r["class"] == "upstream":
+            continue
+        path = os.path.join(out, r["series"], r["patch"])
+        want = git(tree, "rev-parse", r["new_commit"] + "^{tree}")
+        for attempt in (0, 1):
+            before = git(scratch, "rev-parse", "HEAD")
+            applied = sh(["git", "-C", scratch, "am", "-3", "--quiet", path], env=COMMITTER, check=False)[0] == 0
+            if applied and git(scratch, "rev-parse", "HEAD^{tree}") == want:
+                break
+            if not applied:
+                sh(["git", "-C", scratch, "am", "--abort"], check=False)
+            git(scratch, "reset", "-q", "--hard", before)
+            if attempt or r["class"] != "clean":
+                raise Fail(f"{r['series']}/{r['patch']}: git am -3 of the written patch onto {state['new'][:12]} "
+                           f"{'does not make' if applied else 'fails, not'} the tree of its pick {r['new_commit'][:12]} "
+                           f"(the series before it is applied in {scratch})")
+            with open(path, "w") as f:
+                f.write(export_pick(tree, repo, r))
+            r["misplaced"] = True
+            misplaced.append(f"{r['series']}/{r['patch']}")
+    shutil.rmtree(scratch)
+    return misplaced
+
+
 def done(run, state):
     repo, _ = paths()
     tree = os.path.join(run, "tree")
@@ -369,12 +420,9 @@ def done(run, state):
             if r["series"] == s and r["class"] == "clean":  # it applies as it is: the file stays
                 shutil.copyfile(os.path.join(repo, "patches", s, r["patch"]), os.path.join(d, r["patch"]))
             elif r["series"] == s and r["class"] != "upstream":
-                text = sh(["git", "-C", tree, "-c", "core.abbrev=7", "format-patch", "-1", "--zero-commit",
-                           "--no-signature", "--stdout", r["new_commit"]])[1]
-                with open(os.path.join(repo, "patches", s, r["patch"]), errors="replace") as f:
-                    original = f.read()
                 with open(os.path.join(d, r["patch"]), "w") as f:
-                    f.write(reexport(text, original, r["class"]))
+                    f.write(export_pick(tree, repo, r))
+    misplaced = verify_series(run, state, out, repo)
     diff = ""
     for s in state["stack"]:
         diff += sh(["git", "diff", "--no-index", "--no-color", os.path.join("patches", s),
@@ -387,6 +435,8 @@ def done(run, state):
     log(f"{state['target']} onto {state['new'][:12]}: {summary}; range-diff in {run}/range-diff.txt")
     for fl in flags:
         print(f"check (auto-merged, changed in the range-diff): {fl}")
+    for m in misplaced:
+        print(f"re-exported (clean, but git am -3 put the kept patch at another matching context): {m}")
     print(f"series re-exported to {out}; against patches/: {run}/series.diff; pp rebase {state['target']} --write "
           f"copies it into patches/")
     note_moves(state)

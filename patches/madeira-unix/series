@@ -157,3 +157,5 @@
 0157-ntdll-keep-tail-room-for-every-other-process-and-sma.patch
 0158-ntdll-give-Playport-s-steamclient-its-host-table.patch
 0159-wineserver-publish-the-host-s-time-zone-bias-in-the-.patch
+0160-ntdll-unix-win32u-unix-wineserver-port-the-iOS-repla.patch
+0161-ntdll-unix-ignore-attempts-to-set-reserved-CPSR-bits.patch

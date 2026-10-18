@@ -1,0 +1,232 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 18 Oct 2026 02:04:05 +0200
+Subject: [PATCH] ntdll-unix, win32u-unix, wineserver: port the iOS
+ replacements onto wine-11.20
+
+WineHQ's wine-11.19..wine-11.20 changes to the files the *_ios.c
+replacements override, carried into them:
+- eba8937 ntdll: the process affinity is applied when a thread group
+  affinity is set: thread_ios.c's ThreadAffinityMask and
+  ThreadGroupInformation send the new set_thread_info system_affinity
+  and SET_THREAD_INFO_GROUP_AFFINITY. Needed: server/thread.c (built from
+  the wine tree) now masks the requested affinity with system_affinity,
+  so without it every SetThreadAffinityMask failed.
+- cf50ea1 server: volume unmounting is the new unmount_device request:
+  fd_ios.c's unmount_device takes the device number and gets its
+  handler, and default_fd_ioctl drops FSCTL_DISMOUNT_VOLUME. Needed to
+  link: request_ios.c's handler table names req_unmount_device.
+- 251a061 ntdll: cdrom.c is gone (file.c no longer calls
+  cdrom_DeviceIoControl): ntdll-unix/build.sh no longer builds or
+  archives cdrom.o, and cdrom_stub.c is removed.
+- 1c4cb6c win32u: an EDID without a monitor id still gives its other
+  fields: sysparams_ios.c.
+Not carried:
+- 7fb24b7 ntdll: ignore attempts to set reserved CPSR bits
+  (signal_arm64.c, thread.c): a hand port into signal_arm64_ios.c and
+  thread_ios.c of its own.
+- the virtual.c commits (686ccbf, 1cae1f5, f8da67d, 829b468, d4a611a,
+  1b38eb7, fcd111e, a4ca0a3, c417e5b, e6a8d66, 0cd4e6c, 6488ddd, 7bd5f79,
+  35a1ff5):
+  the Linux preloader's reserved areas and address-space limits;
+  virtual_ios.c places the reserves and the virtual heap for iOS itself.
+
+Class: madeira-port
+Evidence: docs/evidence/2026-10-18-wine-11.20.md
+Offered-upstream: no
+---
+ build/ntdll-unix/build.sh         |  5 +----
+ build/ntdll-unix/cdrom_stub.c     | 18 -----------------
+ build/ntdll-unix/thread_ios.c     | 13 ++++++------
+ build/win32u-unix/sysparams_ios.c |  5 +++--
+ build/wineserver/fd_ios.c         | 33 +++++++------------------------
+ 5 files changed, 17 insertions(+), 57 deletions(-)
+ delete mode 100644 build/ntdll-unix/cdrom_stub.c
+
+diff --git a/build/ntdll-unix/build.sh b/build/ntdll-unix/build.sh
+index 24be922..6b0c00b 100755
+--- a/build/ntdll-unix/build.sh
++++ b/build/ntdll-unix/build.sh
+@@ -151,9 +151,6 @@ for src in $WINE_SRC/dlls/ntdll/unix/*.c; do
+         env)
+             compile_one "$BUILD_DIR/env_ios.c" "env"
+             ;;
+-        cdrom)
+-            compile_one "$BUILD_DIR/cdrom_stub.c" "cdrom"
+-            ;;
+         virtual)
+             compile_one "$BUILD_DIR/virtual_ios.c" "virtual"
+             ;;
+@@ -188,7 +185,7 @@ ar rcs "$OBJ_DIR/libntdll_unix.a" \
+     "$OBJ_DIR/dwrite_unixlib.o" \
+     "$OBJ_DIR/winevulkan_unixlib.o" "$OBJ_DIR/winevulkan_thunks.o" \
+     "$OBJ_DIR/opengl32_unixlib.o" "$OBJ_DIR/opengl32_thunks.o" \
+-    "$OBJ_DIR/alpc.o" "$OBJ_DIR/cdrom.o" "$OBJ_DIR/debug.o" "$OBJ_DIR/env.o" "$OBJ_DIR/file.o" \
++    "$OBJ_DIR/alpc.o" "$OBJ_DIR/debug.o" "$OBJ_DIR/env.o" "$OBJ_DIR/file.o" \
+     "$OBJ_DIR/loader.o" "$OBJ_DIR/loadorder.o" "$OBJ_DIR/process.o" "$OBJ_DIR/registry.o" \
+     "$OBJ_DIR/security.o" "$OBJ_DIR/serial.o" "$OBJ_DIR/server.o" \
+     "$OBJ_DIR/signal_arm.o" "$OBJ_DIR/signal_arm64.o" "$OBJ_DIR/signal_i386.o" "$OBJ_DIR/signal_x86_64.o" \
+diff --git a/build/ntdll-unix/cdrom_stub.c b/build/ntdll-unix/cdrom_stub.c
+deleted file mode 100644
+index 7d01e7e..0000000
+--- a/build/ntdll-unix/cdrom_stub.c
++++ /dev/null
+@@ -1,18 +0,0 @@
+-/* cdrom.c stub for iOS - no CD-ROM support */
+-#include "config.h"
+-#include <stdarg.h>
+-#include "ntstatus.h"
+-#define WIN32_NO_STATUS
+-#include "windef.h"
+-#include "winternl.h"
+-#include "winioctl.h"
+-#include "wine/debug.h"
+-
+-NTSTATUS cdrom_DeviceIoControl( HANDLE device, HANDLE event, PIO_APC_ROUTINE apc, void *apc_user,
+-                                 IO_STATUS_BLOCK *io, ULONG code, void *in_buffer,
+-                                 ULONG in_size, void *out_buffer, ULONG out_size )
+-{
+-    io->Information = 0;
+-    io->Status = STATUS_NOT_SUPPORTED;
+-    return STATUS_NOT_SUPPORTED;
+-}
+diff --git a/build/ntdll-unix/thread_ios.c b/build/ntdll-unix/thread_ios.c
+index b333906..2b9a7b6 100644
+--- a/build/ntdll-unix/thread_ios.c
++++ b/build/ntdll-unix/thread_ios.c
+@@ -3101,18 +3101,17 @@ NTSTATUS WINAPI NtSetInformationThread( HANDLE handle, THREADINFOCLASS class,
+ 
+     case ThreadAffinityMask:
+     {
+-        const ULONG_PTR affinity_mask = get_system_affinity_mask();
+         ULONG_PTR req_aff;
+ 
+         if (length != sizeof(ULONG_PTR)) return STATUS_INVALID_PARAMETER;
+-        req_aff = *(const ULONG_PTR *)data & affinity_mask;
+-        if (!req_aff) return STATUS_INVALID_PARAMETER;
++        req_aff = *(const ULONG_PTR *)data;
+         { extern volatile long long ios_affinity_sets; __sync_fetch_and_add( &ios_affinity_sets, 1 ); }   /* ml1117 */
+ 
+         SERVER_START_REQ( set_thread_info )
+         {
+             req->handle   = wine_server_obj_handle( handle );
+             req->affinity = req_aff;
++            req->system_affinity = get_system_affinity_mask();
+             req->mask     = SET_THREAD_INFO_AFFINITY;
+             status = wine_server_call( req );
+         }
+@@ -3148,8 +3147,8 @@ NTSTATUS WINAPI NtSetInformationThread( HANDLE handle, THREADINFOCLASS class,
+ 
+     case ThreadGroupInformation:
+     {
+-        ULONG_PTR affinity_mask = get_system_affinity_mask();
+         const GROUP_AFFINITY *req_aff;
++        ULONG_PTR affinity_mask;
+ 
+         if (length != sizeof(*req_aff)) return STATUS_INVALID_PARAMETER;
+         if (!data) return STATUS_ACCESS_VIOLATION;
+@@ -3161,13 +3160,13 @@ NTSTATUS WINAPI NtSetInformationThread( HANDLE handle, THREADINFOCLASS class,
+ 
+         /* Wine only supports max 64 processors */
+         if (req_aff->Group) return STATUS_INVALID_PARAMETER;
+-        if (req_aff->Mask & ~affinity_mask) return STATUS_INVALID_PARAMETER;
+-        if (req_aff->Mask) affinity_mask = req_aff->Mask;
++        affinity_mask = req_aff->Mask;
+         SERVER_START_REQ( set_thread_info )
+         {
+             req->handle   = wine_server_obj_handle( handle );
+             req->affinity = affinity_mask;
+-            req->mask     = SET_THREAD_INFO_AFFINITY;
++            req->system_affinity = get_system_affinity_mask();
++            req->mask     = SET_THREAD_INFO_GROUP_AFFINITY;
+             status = wine_server_call( req );
+         }
+         SERVER_END_REQ;
+diff --git a/build/win32u-unix/sysparams_ios.c b/build/win32u-unix/sysparams_ios.c
+index 9359cbe..4ef8041 100644
+--- a/build/win32u-unix/sysparams_ios.c
++++ b/build/win32u-unix/sysparams_ios.c
+@@ -500,11 +500,11 @@ static void get_monitor_info_from_edid( struct edid_monitor_info *info, const un
+     for (i = 0; i < 3; ++i)
+     {
+         d = w & 0x1f;
+-        if (!d || d - 1 > 'Z' - 'A') return;
++        if (!d || d - 1 > 'Z' - 'A') goto skip_id;
+         info->monitor_id_string[2 - i] = 'A' + d - 1;
+         w >>= 5;
+     }
+-    if (w) return;
++    if (w) goto skip_id;
+     w = edid[10] | (edid[11] << 8); /* Product code, little endian. */
+     info->manufacturer = *(unsigned short *)(edid + 8);
+     info->product_code = w;
+@@ -512,6 +512,7 @@ static void get_monitor_info_from_edid( struct edid_monitor_info *info, const un
+     info->flags = MONITOR_INFO_HAS_MONITOR_ID;
+     TRACE( "Monitor id %s.\n", info->monitor_id_string );
+ 
++skip_id:
+     for (i = 0; i < 4; ++i)
+     {
+         if (edid[54 + i * 18] || edid[54 + i * 18 + 1])
+diff --git a/build/wineserver/fd_ios.c b/build/wineserver/fd_ios.c
+index 86d460c..b97dcfd 100644
+--- a/build/wineserver/fd_ios.c
++++ b/build/wineserver/fd_ios.c
+@@ -2983,35 +2983,15 @@ static int is_dir_empty( int fd )
+     return empty;
+ }
+ 
+-static inline int is_valid_mounted_device( struct stat *st )
+-{
+-#if defined(linux) || defined(__sun__)
+-    return S_ISBLK( st->st_mode );
+-#else
+-    /* disks are char devices on *BSD */
+-    return S_ISCHR( st->st_mode );
+-#endif
+-}
+-
+ /* close all Unix file descriptors on a device to allow unmounting it */
+-static void unmount_device( struct fd *device_fd )
++static void unmount_device( dev_t dev )
+ {
+     unsigned int i;
+-    struct stat st;
+     struct device *device;
+     struct inode *inode;
+     struct fd *fd;
+-    int unix_fd = get_unix_fd( device_fd );
+ 
+-    if (unix_fd == -1) return;
+-
+-    if (fstat( unix_fd, &st ) == -1 || !is_valid_mounted_device( &st ))
+-    {
+-        set_error( STATUS_INVALID_PARAMETER );
+-        return;
+-    }
+-
+-    if (!(device = get_device( st.st_rdev, -1 ))) return;
++    if (!(device = get_device( dev, -1 ))) return;
+ 
+     for (i = 0; i < INODE_HASH_SIZE; i++)
+     {
+@@ -3316,10 +3296,6 @@ void default_fd_ioctl( struct fd *fd, ioctl_code_t code, struct async *async )
+ {
+     switch(code)
+     {
+-    case FSCTL_DISMOUNT_VOLUME:
+-        unmount_device( fd );
+-        break;
+-
+     case FSCTL_SET_REPARSE_POINT:
+         set_reparse_point( fd, async );
+         break;
+@@ -3949,3 +3925,8 @@ DECL_HANDLER(set_fd_eof_info)
+         release_object( fd );
+     }
+ }
++
++DECL_HANDLER(unmount_device)
++{
++    unmount_device( req->dev );
++}

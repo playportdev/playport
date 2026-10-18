@@ -7,17 +7,17 @@ item (each marked below):
 
 | Item | Status |
 | --- | --- |
-| A0 Proton data in `FEXProfile` | done (3bbc21d) |
+| A0 Proton data in `FEXProfile` | done (3bbc21d); re-read 2026-10-17 (W2): data unchanged, `protonSource` names bleeding-edge `47c39230` |
 | A1 `MaxInst=500` | done ([0055](../decisions/0055-maxinst-500-global.md)) |
 | A2 WoW64 suspend/termination | done: came with FEX `main`, then adapted to iOS's real suspend by patches (PLA-93, 222, 223, 226, 229, 302, 304); leftovers open in their own issues |
 | B1 disk cache default | done: on by default ([0056](../decisions/0056-fex-disk-cache-on.md), [2026-10-14 evidence](../evidence/2026-10-14-fex-disk-cache-on.md); PLA-341): the warm-start crashes were rpmalloc's one-block pages (rpmalloc 0004) |
 | B2 Valve Wine past stable | done (`wine-valve` from bleeding-edge, `pp sync` lists it); questions 4 and 5 answered |
-| B3 LAA for i386 | open, not started; Portal 2 is LAA already (question 3) |
-| B4 child-process FEX profiles | open, not started |
+| B3 LAA for i386 | closed (W6, [evidence](../evidence/2026-10-17-i386-laa.md)): every i386 game image checked (Portal 2, DiRT 3, MKKE) is LAA, so Valve's override would change nothing; reopen when a played i386 title's image lacks the flag and fails near 2 GiB |
+| B4 child-process FEX profiles | designed, not implemented (W3, [evidence](../evidence/2026-10-17-fex-child-profiles.md)): `FEX_APP_CONFIG` works per pseudo-process; waits for a played title with a child entry (B6 is closed) |
 | B5 release log defaults | done (2331995) |
-| B6 Steam appinfo FEX settings | open, not started |
-| B7 CPU topology | open: processor count is the phone's ([0098](../decisions/0098-machine-values-at-session-start.md)); P/E reporting not checked |
-| C table into ARCHITECTURE.md | open |
+| B6 Steam appinfo FEX settings | closed (W4, [evidence](../evidence/2026-10-17-steam-appinfo-fex.md)): the only public value, `tso_enable`, is Auto for every reviewed title, Portal 2 included; Hollow Knight has none; reopen when a played title's is Force On or Off |
+| B7 CPU topology | closed (W5, [evidence](../evidence/2026-10-17-cpu-topology.md)): six equal cores, `EfficiencyClass` 0, as Valve's Proton shows on ARM; Valve's `WINE_CPU_TOPOLOGY` would be unset on the phone; reopen when a played title reads the class |
+| C table into ARCHITECTURE.md | done ([section](../ARCHITECTURE.md#valves-arm64-proton-items-not-carried), W1) |
 | Portal 2 follow-ups | open, not re-measured |
 
 Older "not started" lines below describe the original snapshot.
@@ -40,6 +40,53 @@ re-read in this review.
 `pins.lock` at the commit that adds this plan (`madeira` 8c050d0, `wine`
 wine-11.18, `wine-valve` dc26e61, `fex` FEX-2609.1, `dxmt` 7c8dee1, `mesa`
 82d4f86, `dxvk` 52fe923, `vkd3d-proton` 472989a, `gbe` release-2026_09_27).
+
+## Runner state (2026-10-18)
+
+- **Branch:** `dev/pla-76-proton-alignment-ws`, off `main` at f7ac25f, rebased onto `main` at
+  dfc527f (M2a), checked out in the main checkout since M2b; not merged, not pushed. W1 to W8b
+  and M2a ran in the owner-authorized side copy
+  `$PLAYPORT_BUILD/worktrees/pla-76-proton-alignment` (now detached), which the owner let build
+  (2026-10-17, beyond decision 0069) from reflinked copies of main's `cache`, `inputs`, `run` and
+  (M2a) `cef-src`, with no install or phone. M2b's build in the main checkout reproduced the
+  committed build records, so they are canonical.
+- **Queue, one writer per item:** W1 the C table into ARCHITECTURE.md; W2 A0 re-read against
+  Valve's current bleeding-edge (FEX config, app profiles, ARM defaults); W3 B4
+  `FEX_APP_CONFIG` in one Mach process (source reading, a design); W4 B6 what Steam appinfo
+  carries for 620 and 367520 and whether Playport's PICS client sees it; W5 B7 what Wine on iOS
+  reports for P and E cores (source, desktop Wine where it answers); W6 B3 close or name a
+  blocker; W7 [PLA-389](https://linear.app/playportdev/issue/PLA-389): FEX to Valve's
+  `5285020d` by `pp rebase` (or b49837f alone if the rebase is out of reach), built to a verified
+  dev IPA; W8 [PLA-390](https://linear.app/playportdev/issue/PLA-390): wine 11.20 and
+  `wine-valve` c53678a, built likewise. Each ends in evidence or a plan rewrite; phone gates
+  (Hollow Knight first frame+10 on the exact IPA) stay owed.
+- **Not here:** B1 (done), the Portal 2 follow-ups (phone), installs.
+- **Running:** W1 done (the commit adding [the C table](../ARCHITECTURE.md#valves-arm64-proton-items-not-carried)); W2 done
+  ([2026-10-17 snapshot](#valves-reference-snapshot-2026-10-17)); W3 done (B4 designed,
+  [evidence](../evidence/2026-10-17-fex-child-profiles.md); follow-up PLA-391); W4 done (B6 closed,
+  [evidence](../evidence/2026-10-17-steam-appinfo-fex.md)); W5 done (B7 closed,
+  [evidence](../evidence/2026-10-17-cpu-topology.md)); W6 done (B3 closed,
+  [evidence](../evidence/2026-10-17-i386-laa.md)); W7 done (`fex` 5285020d and `rpmalloc` ed22744,
+  a verified dev IPA, [evidence](../evidence/2026-10-18-fex-5285020d.md); phone gates owed); W8 done
+  (`wine` wine-11.20 and `wine-valve` c53678ab, a verified dev IPA,
+  [evidence](../evidence/2026-10-18-wine-11.20.md); phone gates owed); W9 done
+  ([PLA-393](https://linear.app/playportdev/issue/PLA-393): `pp rebase` replays the written
+  series with `git am -3` and re-exports a clean patch that lands elsewhere; `ensure_series`
+  re-applies when a series' diffs change, [UPSTREAM-SYNC.md](../UPSTREAM-SYNC.md#moving-a-component-pin));
+  W8b done (WineHQ 7fb24b7, reserved CPSR bits, hand-ported into `signal_arm64_ios.c` and
+  `thread_ios.c` as madeira-unix 0161, a verified dev IPA,
+  [evidence](../evidence/2026-10-18-cpsr-reserved-bits.md)). M2a: rebased onto main (dfc527f);
+  main's new fex 0045–0051, wine-pe 0045–0046 and wine-unix 0038–0042 apply unchanged on the
+  new pins (`pp rebase` replays, written series tree-equal), the branch's own patches follow
+  main's (madeira-unix 0151→0160, 0152→0161; wine-pe 0045→0047); verified dev IPA `fe24590e`.
+  M2b: the branch moved into the main checkout (owner, 2026-10-18); its build `6e68a205`
+  reproduced M2a's records byte for byte; Hollow Knight first frame+10 twice (+9.87 s cold,
+  +8.66 s warm) and the threadctx probe (checks a–e as on 2026-10-13) passed;
+  [evidence](../evidence/2026-10-18-proton-alignment-phone.md). Owed: Portal 2 (not installed,
+  no room beside RDR2) and its `pp perf`, a console program, RDR2's launcher, and a main-IPA
+  Hollow Knight `pp perf` on today's save for the 45–65 s load window. Not merged.
+  Reports: `agent-notes/pla-76/reports/` in the side copy's build area, `agent-notes/pla-76/m2b-phone.md`
+  in main's.
 
 ## Goal
 
@@ -92,7 +139,51 @@ Steps 1–2 come first because the helper pays off on the moves of step 3; step 
 needs Madeira `main` as it is when Madeira is next. Nothing is offered upstream
 (owner, 2026-10-05): every patch stays carried.
 
-## Valve's reference snapshot (2026-10-05)
+## Valve's reference snapshot (2026-10-17)
+
+Re-read by W2 from ValveSoftware/Proton and ValveSoftware/wine (blobless clones in the build
+area). Every ARM64 Proton branch carries a commit only for its gitlinks on top of its Proton
+base, so `ae4e5bc925d7` (which `protonSource` named) is not an ancestor of today's head.
+
+| Proton branch | Head | FEX | Wine (ValveSoftware/wine) | DXVK | vkd3d-proton |
+|---|---|---|---|---|---|
+| proton_11.0 (stable) | `bc896217` (10-09) | `1cc4b93e` (FEX-2607) | `e60892cc` | `a6764047` | `212991fc` |
+| experimental_11.0 | `7a94df49` (10-14) | `5285020d` (FEX main, 10-13) | `7fc704ef` | `a78a467c` | `0bb64c56` |
+| bleeding-edge | `47c39230` (10-17) | `5285020d` (FEX main head, 10-13) | `c53678ab` (bleeding-edge head, 10-16) | `c8679a55` (master head, 10-17) | `0bb64c56` (master head, 10-14) |
+
+Against `ae4e5bc925d7` and Playport:
+
+- `FEX_Config.json` (the 8 keys) and `fex_application_profiles` (292030 `setup*` →
+  `X87ReducedPrecision=0`) are byte-identical on all three branches and to `ae4e5bc925d7`:
+  `FEXProfile` needs no data change; only `protonSource` moved.
+- The ARM defaults are unchanged: `FEX_DISKCACHE=1` and `WINE_CPU_TOPOLOGY` from affinity on
+  experimental and bleeding-edge only, `generate_fex_app_config` (appinfo TSO/Multiblock,
+  `SilentLog`, `AppOverrides`) and `FEX_APP_CONFIG_LOCATION` as before. No FEX, MaxInst, LAA
+  or other ARM64 default is new. `Makefile.in` did not change.
+- Proton's own commits since (`1ef4b65a` WoW64 for 4005300 on x86_64 hosts only, two
+  lsteamclient fixes, `f413b3fa` nvapi off without an NV kernel driver): nothing to carry.
+- Playport is behind bleeding-edge on FEX (`3648ee9`, 29 commits; FEX-2610 tagged 10-07),
+  `wine-valve` (`750fd01`, 36 commits, all listed by `pp sync`), `wine` (wine-11.19; WineHQ
+  tagged wine-11.20 on 10-16), DXVK (`e5ffd0f`, 61) and vkd3d-proton (`31d1f89`, 9). `pp sync`
+  reports only the `wine-valve` gap (`wine-valve-new.tsv`); it reads neither Proton nor the
+  FEX, WineHQ, DXVK and vkd3d-proton heads.
+
+Follow-ups from this re-read (to file in Linear; none blocks an item here):
+
+1. FEX `5285020d`: `b49837f` fixes a race on the disk cache's data blob (cache on by default
+   since 0056); `aad2c96`, `4dbb046` and `3a2b1c0` change ARM64EC's `Module.S` (NT syscall
+   numbers read at run time, `NtDllRedirectionLUT` bounds in `CheckCall`), where fex-port
+   patches also apply; `e3f402a`/`b2dffb5` bump the disk-cache key and version beside fex
+   0041–0044; `679d6c7` moves `External/rpmalloc` (`09142d7` → `ed22744`). Port `b49837f` or
+   move the pin (0049); either needs a build and a Hollow Knight play.
+2. `wine-valve` `750fd01..c53678a`: the ARM64-relevant picks are WineHQ commits in wine-11.20:
+   `f9a7e33` (reserved CPSR bits; its `signal_arm64.c` half lands in Madeira's
+   `signal_arm64_ios.c` only by a hand port), `9de060e`/`e408a5a`/`c9e2884` (ARM64
+   Acquire/Release without a full barrier, `winnt.h`), `b2a60dc` (`RtlWaitOnAddress` queue) and
+   `ea85d1c` (thread group affinity under process affinity, B7). A wine-11.20 move brings them.
+3. DXVK and vkd3d-proton heads moved past their pins; no ARM64-specific change was looked for.
+
+### Earlier snapshot (2026-10-05, history)
 
 | Proton branch | Head | FEX | Wine (ValveSoftware/wine) | DXVK | vkd3d-proton |
 |---|---|---|---|---|---|
@@ -117,7 +208,8 @@ Sources:
 - https://github.com/ValveSoftware/Proton/blob/b37494057ba64f96acf66eebe33928838d64b9b6/Makefile.in
 - https://github.com/ValveSoftware/Proton/commit/09d3d6e5f60c51a6c30501306d88f8d385188901
 
-Re-read the heads before starting. Valve moves these branches weekly.
+Re-read the heads before starting. Valve moves these branches weekly. (On 2026-10-05
+`ae4e5bc925d7` replaced `b3749405` on bleeding-edge, with FEX `7d3090f7`.)
 
 ## Step 1: every dependency to its latest version
 
@@ -214,8 +306,9 @@ on the phone and whether it needs a decision record.
 
 **A0. Refresh the Proton data in `FEXProfile`.** *Done (Review 2026-10-13):
 3bbc21d (2026-10-06) checked the data against bleeding-edge `ae4e5bc925d7`
-(2026-10-05), which `protonSource` now names. Not re-diffed against later
-heads.*
+(2026-10-05). Re-read 2026-10-17 (W2): bleeding-edge `47c39230`, experimental_11.0
+`7a94df49` and proton_11.0 `bc896217` carry the same 8 keys and profile; `protonSource`
+names them, no data or test changed ([snapshot](#valves-reference-snapshot-2026-10-17)).*
 - **Change:** `protonSource` still names bleeding-edge `c9e0da9d736c`
   (2026-09-26). Update it to the heads in the snapshot table, and diff the
   8 keys and `fex_application_profiles` again.
@@ -366,38 +459,47 @@ Questions 4 and 5 are answered below.*
   today it lists only proton_11.0, so newer Valve deltas are invisible to it.
 
 **B3. Large address aware for i386 (`WINE_LARGE_ADDRESS_AWARE`, on by default in Proton).**
-*Open, not started (Review 2026-10-13). Both measurements are answered:
-`portal2.exe` is LAA (question 3), so Portal 2 cannot gain; a non-LAA image
-gets 2 GiB (madeira-unix 0063). No title has been seen to need it.*
-- **Change if adopted:** port Valve `799e5f0f` ("ntdll/loader: add support for
-  overriding IMAGE_FILE_LARGE_ADDRESS_AWARE") into Madeira's `virtual_ios.c`
-  WoW64 limit logic as a `madeira-unix` patch. Keep Proton's per-game
-  `noforcelgadd` exceptions as data.
-  - Setting the variable alone does nothing: WineHQ `virtual.c` has no such
-    variable, and Valve's code is on by default only inside Valve Wine.
-- **First, measure:**
-  - whether `portal2.exe` already has the LAA flag;
-  - what the guest window (0047) gives a non-LAA image today: a 2 GiB or a
-    4 GiB user limit.
-- **Expected effect:** more address space for non-LAA 32-bit games. There
-  could be no effect at all on Portal 2.
-- **Risk:** medium. Some i386 code assumes pointers stay below 2 GiB, and the
-  guest-window and allocator contracts are involved.
-- **Phone measurement:** Portal 2 map transitions and save/load. Log the
-  guest's virtual-allocation failures and the window's peak use.
-- **Decision record:** yes (a new global i386 policy).
+*Closed 2026-10-17 (W6, [evidence](../evidence/2026-10-17-i386-laa.md)).* Playport gives a
+WoW64 child 4 GiB or 2 GiB of its window from the image's own flag (madeira-unix 0063 and
+the window patches; nothing reads the variable). Valve Wine (still in bleeding-edge
+`c53678a`; the 2026-10-14 address-space reverts do not touch it) ORs the flag with
+`WINE_LARGE_ADDRESS_AWARE`, on unless set to `0`, in ntdll and the i386 `kernel32`
+`GlobalMemoryStatus`; Proton sets it except for three `noforcelgadd` titles, none in
+Playport's list. Every i386 game image checked carries the flag (Portal 2, DiRT 3, MKKE);
+only a launcher, a tool and an uninstaller do not. No decision record: the policy is
+unchanged.
+- **Reopen when** a played i386 title's game image lacks the flag and its guest
+  allocations fail near 2 GiB. Then: one helper (flag OR override) at every site the
+  evidence lists, Valve's `GlobalMemoryStatus` change as a `wine-pe` patch, Proton's
+  `noforcelgadd` titles as data, and a phone gate on that title and Hollow Knight.
 
-**B4. Per-executable FEX profiles for child processes.** *Open, not started
-(Review 2026-10-13): `FEXProfile` still matches only the executable the launch
-runs.*
-- **Change:** today Witcher `setup*` applies only when the app launches it
-  (0021 cost). Proton writes `AppOverrides` into a per-launch FEX config file
-  (`FEX_APP_CONFIG`), which FEX matches per process.
-- **Investigate:** whether `FEX_APP_CONFIG` works in one Mach process with
-  per-pseudo-process emulators.
-- **Expected effect:** child installers get the right x87 precision.
-- **Risk:** low. No current cohort title needs it.
-- **Decision record:** yes, if the transport changes (extends 0021).
+**B4. Per-executable FEX profiles for child processes.** *Designed, not
+implemented (2026-10-17, W3; [evidence](../evidence/2026-10-17-fex-child-profiles.md)).*
+- **Found:** `FEX_APP_CONFIG` works in one Mach process. Each pseudo-process
+  loads its own emulator copy. Its `ProcessInit` (`BTCpuProcessInit` for WoW64)
+  loads FEX's config from that process's PEB environment and matches
+  `AppOverrides` against its own executable name.
+- **The obstacle is ours:** Playport exports every value as `FEX_*`, and every
+  child inherits those variables. The environment layer sits above
+  `FEX_APP_CONFIG`, so it would mask a `setup*` entry in every process.
+- **Design:** follow Proton. A per-launch file named by `FEX_APP_CONFIG` takes
+  the keys the game's entries set (Proton's global value in `Config`, the
+  entries in `AppOverrides`), and those keys leave the environment. A key the
+  game's page chose stays in the environment. A game without entries is
+  unchanged.
+  - Code points: `FEXProfile.launch`, which adds `appConfig`;
+    `LaunchCoordinator.applyEnvironment`, which writes the file outside
+    `fex-emu` and sets the variable; a `patches/fex` log line with each
+    process's effective values; the x87 footer on the game's page.
+  - The evidence lists the host tests and the phone checks: Hollow Knight,
+    The Witcher 3 and its `setup*` child, which is not yet identified.
+- **Why not now:** it changes what `witcher3.exe` itself receives, through a
+  file FEX has never been shown to read on the phone. It also needs a build,
+  a FEX patch and phone runs, and no played title has a child entry.
+  Implement it when one does. B6 is closed; if it reopens, Steam's TSO value goes
+  in the same file.
+- **Decision record:** yes, at implementation (extends 0021; the draft is in
+  the evidence).
 
 **B5. Release-build log defaults.** *Done (Review 2026-10-13): 2331995
 (2026-10-06). The release runtime already set `WINEDEBUG=-all`; it now also
@@ -415,32 +517,73 @@ log size and CPU was not recorded.*
 - **Decision record:** no.
 
 **B6. Steam appinfo FEX settings (`STEAM_FEX_TSOENABLED`, `STEAM_FEX_MULTIBLOCK`).**
-*Open, not started (Review 2026-10-13).*
-- **Investigate:** whether Playport's PICS client receives these fields, and
-  what values 620 and 367520 get.
-- **Expected effect:** unknown. Valve's per-game TSO/Multiblock data is not
-  public.
-- **Risk:** stale data could turn TSO off.
-- **Decision record:** yes (remote data feeding launch defaults; amends 0021's
-  "not carried").
+*Closed with a reason (2026-10-17, W4; [evidence](../evidence/2026-10-17-steam-appinfo-fex.md)).
+This was a reading of public PICS records and source. No runtime change was made.*
+- **Source:**
+  - TSO comes from the public PICS key
+    `common/steam_frame_compatibility/configuration/tso_enable`, part of the Steam
+    Frame review block. Steam's UI calls it *ARM Translation Memory Ordering*:
+    0 is Auto, 1 Force On, 2 Force Off, and the player can override it.
+  - No appinfo key for Multiblock exists. The only Multiblock in the client is the
+    player's *Override ARM Translation Options* string, the format that Proton's
+    `STEAM_COMPAT_FEX_CONFIG` parses.
+  - How the ARM64 client turns either value into `STEAM_FEX_*` was not seen. The
+    x86 client does not name the variables.
+- **Values:**
+  - Portal 2 (620): 0 (Auto), Frame-verified.
+  - Hollow Knight (367520): no Frame block.
+  - All 21 records with the block, out of 115 public records read (The Witcher 3,
+    RDR2, Cyberpunk, BG3 among them): 0.
+- **Playport:** the PICS client receives each full record
+  (`Library.swift:177-215`), but `SteamAppInfo.parse` keeps none of this block
+  (`SteamApp.swift:80-112`).
+- **Why closed:** Auto leaves FEX at Proton's global `TSOEnabled=1`, which Playport
+  already uses (0021). Carrying the key would change no played title. 0021's "not
+  public" is now half true; it was not amended, because nothing is carried.
+- **Reopen when:** a played title has `tso_enable` 1 or 2, or a Multiblock key
+  appears. The design is in the evidence:
+  - an optional `SteamAppInfo` field;
+  - a `FEXProfile.launch` layer between Proton's entry and the page's picker;
+  - B4's file, if B4 exists by then;
+  - a decision record amending 0021 (remote data feeding a launch default).
 
 **B7. `WINE_CPU_TOPOLOGY` from affinity** (experimental/bleeding-edge).
-*Open (Review 2026-10-13). Playport sets no `WINE_CPU_TOPOLOGY`. The guest
-sees the phone's processor count (`sysconf`, 6 on our phone), and since
-[0098](../decisions/0098-machine-values-at-session-start.md) the registry and
-environment say the same (`NUMBER_OF_PROCESSORS`, one `CentralProcessor` key
-each). Whether P and E cores are told apart was not checked. On the desktop,
-`WINE_CPU_TOPOLOGY=6:…` did not change Tomb Raider's draw fault
-([tomb-raider-draw-diagnostics](../evidence/2026-10-10-tomb-raider-draw-diagnostics.md)).*
-- **Investigate:** whether Wine's topology on iOS reports P and E cores
-  sensibly to games. Valve's code uses Linux `sched_getaffinity`, which iOS
-  does not have.
-- **Expected effect:** only for games that size thread pools by core count.
-- **Decision record:** only if it changes.
+*Closed with a reason (W5, 2026-10-17,
+[evidence](../evidence/2026-10-17-cpu-topology.md)). Source only; no phone reading.*
+- **What the guest sees:** six equal cores in one package, no SMT, `EfficiencyClass` 0 on
+  every core and CPU set, one NUMA node, one group of 6.
+  - The source is WineHQ's Apple branch of `create_logical_proc_info` (from `hw.physicalcpu`,
+    `hw.cacheconfig` and the top-level `hw.l*cachesize`). Playport compiles `system.c`
+    unreplaced.
+  - Each core is told one cluster's cache sizes.
+  - With unequal clusters, an L2 mask can name CPUs that do not exist.
+- **`WINE_CPU_TOPOLOGY`:** absent from our tree, since `wine-valve` did not pick it. Even
+  picked, on iOS it would only lower the count.
+- **Valve on a phone:** Proton's `9ccc0607` sets the variable only when the affinity is
+  narrower than all CPUs, so Valve's value here would be unset. Valve's Wine finds P cores
+  only through Intel's `/sys/devices/cpu_core/cpus`, so on ARM it too reports class 0. We
+  match Valve.
+- **Why not report P cores:**
+  - `hw.perflevelN.*` gives counts, not CPU numbers, and the guest sees real numbers
+    (`pthread_cpu_number_np`).
+  - Affinity is bookkeeping only on iOS.
+  - No played title is known to read the class.
+  - A hybrid-aware engine could drop to 2 workers.
+- **Reopen when:** a played title sizes or places work by `EfficiencyClass` or CPU sets, or a
+  phone reading gives the cluster-to-CPU mapping. The change then: a `wine-unix` patch to the
+  Apple branch, from `hw.perflevelN.*`, with a Hollow Knight gate.
+- **Seen in passing:** FEX's CPUID reports one core on iOS (one MIDR entry), against six from
+  `GetSystemInfo`.
+- **Earlier:** on the desktop, `WINE_CPU_TOPOLOGY=6:…` did not change Tomb Raider's draw
+  fault ([tomb-raider-draw-diagnostics](../evidence/2026-10-10-tomb-raider-draw-diagnostics.md)).
+- **Decision record:** none (nothing changed).
 
 ### C. Not applicable on iOS (record the reason, do not copy)
 
-*Review 2026-10-13: not yet copied into ARCHITECTURE.md (Done when).*
+*Review 2026-10-13: not yet copied into ARCHITECTURE.md (Done when).* *2026-10-17 (W1):
+copied into [ARCHITECTURE.md](../ARCHITECTURE.md#valves-arm64-proton-items-not-carried), with two rows re-worded there: the UnixLib row
+names fex-port 0030 (its entry points are no-ops), and the fsync row says fastsync is on
+by default (0054), madsync off (0023).*
 
 | Proton item | Why not |
 |---|---|
@@ -467,7 +610,9 @@ small-and-frequent moves have not happened since 2026-10-05.*
   the pin-source parts of 0008, 0013 and 0018. **Written: 0049.**
 - `MaxInst=500` (A1): supersedes part of 0021. **Written: 0055.**
 - Disk cache default (B1). **Written: 0056 (default held off).**
-- LAA for i386 (B3).
+- LAA for i386 (B3). *Not needed: closed 2026-10-17 with the policy unchanged.*
+- Child-process FEX profiles through `FEX_APP_CONFIG` (B4), at implementation:
+  extends 0021 (draft in the [evidence](../evidence/2026-10-17-fex-child-profiles.md)).
 - Optionally, a standing policy record that "Valve's ARM64 Proton is the
   reference platform", naming which branch is the reference for which kind of
   change.
@@ -531,7 +676,7 @@ p10) by `pp perf --compare`.
 *Review 2026-10-13: the first item is met
 ([deps-latest](../evidence/2026-10-05-deps-latest.md)); A0, A1, A2, B2 and B5
 are closed, B1 has a named blocker, B3, B4, B6 and B7 are open; the C table is
-not in ARCHITECTURE.md yet; the x86-64-only line is gone (ARCHITECTURE.md now
+in ARCHITECTURE.md (2026-10-17, W1); the x86-64-only line is gone (ARCHITECTURE.md now
 says i386 guests run through WoW64).*
 
 - Step 1's evidence record lists every `pins.lock` row as moved or held with a

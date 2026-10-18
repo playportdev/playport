@@ -139,5 +139,3 @@
 0127-kernelbase-HACK-Force-disable-direct-composition-for.patch
 0128-kernelbase-HACK-Force-disable-direct-composition-for.patch
 0129-gdi32-Allow-font-linking-for-runs-with-missing-glyph.patch
-0130-setupapi-Validate-device-instance-ID-when-creating-o.patch
-0131-setupapi-Be-less-picky-about-device-registry-keys-in.patch

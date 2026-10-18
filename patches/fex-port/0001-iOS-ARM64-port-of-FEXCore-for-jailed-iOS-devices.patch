@@ -66,7 +66,7 @@ Offered-upstream: no
  create mode 100644 FEXCore/include/FEXCore/Utils/DualMap.h
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 87b7c31..80505c3 100644
+index 2d2dfde..42c9b99 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -61,9 +61,9 @@ if (NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
@@ -117,7 +117,7 @@ index 87b7c31..80505c3 100644
    message (STATUS
      " FEX allocator is disabled!\n"
      " This is not a recommended configuration!\n"
-@@ -617,15 +626,17 @@ add_subdirectory(FEXHeaderUtils/)
+@@ -641,15 +650,17 @@ add_subdirectory(FEXHeaderUtils/)
  add_subdirectory(CodeEmitter/)
  add_subdirectory(FEXCore/)
  
@@ -371,10 +371,10 @@ index 3ebadb5..18782d7 100644
    // All are caller saved
    constexpr std::array<ARMEmitter::VRegister, 16> SRAFPR = {
 diff --git a/FEXCore/Source/Interface/Core/CodeCache.cpp b/FEXCore/Source/Interface/Core/CodeCache.cpp
-index a9de6c7..ce7c8ad 100644
+index 87a110c..abcb399 100644
 --- a/FEXCore/Source/Interface/Core/CodeCache.cpp
 +++ b/FEXCore/Source/Interface/Core/CodeCache.cpp
-@@ -355,11 +355,24 @@ bool CodeCache::SaveData(Core::InternalThreadState& Thread, int fd, const Execut
+@@ -345,11 +345,24 @@ bool CodeCache::SaveData(Core::InternalThreadState& Thread, int fd, const Execut
    ::write(fd, Relocations.data(), Relocations.size() * sizeof(Relocations[0]));
  
    // Pad to next page in file so that the CodeBuffer can be mmap'ed into process on load
@@ -874,24 +874,26 @@ index eee5023..aa5d198 100644
    // It's equivalent to systemd's `MemoryDenyWriteExecute` but implemented entirely in the kernel.
    //
 diff --git a/FEXCore/Source/Utils/Allocator.cpp b/FEXCore/Source/Utils/Allocator.cpp
-index 3a779ab..8fc66ec 100644
+index 5196223..017925d 100644
 --- a/FEXCore/Source/Utils/Allocator.cpp
 +++ b/FEXCore/Source/Utils/Allocator.cpp
-@@ -21,9 +21,12 @@
+@@ -21,11 +21,14 @@
  #include <cstdint>
  #include <cstdio>
  #include <fcntl.h>
 -#ifndef _WIN32
 +#if defined(__linux__)
  #include <sys/mman.h>
+ #include <sys/resource.h>
  #include <sys/user.h>
+ #include <unistd.h>
 +#elif defined(__APPLE__)
 +#include <sys/mman.h>
 +#include <mach/vm_page_size.h>
  #endif
  
  namespace fextl::pmr {
-@@ -33,8 +36,8 @@ std::pmr::memory_resource* get_default_resource() {
+@@ -35,8 +38,8 @@ std::pmr::memory_resource* get_default_resource() {
  }
  } // namespace fextl::pmr
  
@@ -901,7 +903,7 @@ index 3a779ab..8fc66ec 100644
  MMAP_Hook mmap {::mmap};
  MUNMAP_Hook munmap {::munmap};
  
-@@ -306,7 +309,56 @@ void UnlockAfterFork(FEXCore::Core::InternalThreadState* Thread, bool Child) {
+@@ -386,7 +389,56 @@ void UnlockAfterFork(FEXCore::Core::InternalThreadState* Thread, bool Child) {
      Alloc64->UnlockAfterFork(Thread, Child);
    }
  }
@@ -958,7 +960,7 @@ index 3a779ab..8fc66ec 100644
  
  void VirtualNameNOP(const char*, const void*, size_t) {}
  void VirtualTHPNOP(const void* Ptr, size_t Size, THPControl Control) {}
-@@ -320,5 +372,5 @@ void SetupHooks(size_t PageSize, HookPtrs Ptrs) {
+@@ -400,5 +452,5 @@ void SetupHooks(size_t PageSize, HookPtrs Ptrs) {
    SetupAllocatorHooks(VirtualName);
  }
  
@@ -966,7 +968,7 @@ index 3a779ab..8fc66ec 100644
  } // namespace FEXCore::Allocator
 +#endif
 diff --git a/FEXCore/Source/Utils/AllocatorHooks.cpp b/FEXCore/Source/Utils/AllocatorHooks.cpp
-index e85f09a..0b1e685 100644
+index 63f84a8..8cae1a0 100644
 --- a/FEXCore/Source/Utils/AllocatorHooks.cpp
 +++ b/FEXCore/Source/Utils/AllocatorHooks.cpp
 @@ -13,7 +13,12 @@
@@ -982,7 +984,7 @@ index e85f09a..0b1e685 100644
  #include <stdlib.h>
  #include <stdio.h>
  #include <string.h>
-@@ -211,12 +216,29 @@ void* calloc(size_t n, size_t size) {
+@@ -227,12 +232,29 @@ void* calloc(size_t n, size_t size) {
    return ::calloc(n, size);
  }
  void* memalign(size_t align, size_t s) {
@@ -1012,7 +1014,7 @@ index e85f09a..0b1e685 100644
    return ::posix_memalign(r, a, s);
  }
  void* realloc(void* ptr, size_t size) {
-@@ -226,10 +248,22 @@ void free(void* ptr) {
+@@ -242,10 +264,22 @@ void free(void* ptr) {
    return ::free(ptr);
  }
  size_t malloc_usable_size(void* ptr) {
