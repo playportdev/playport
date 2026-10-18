@@ -82,13 +82,14 @@ static void say(const char *a, const char *b, const char *c, const char *d, cons
     pp_sc_log l;
     size_t n = 0;
     const char *parts[6] = { a, b, c, d, e, f };
-    if (!unix_call) return;
     memset(&l, 0, sizeof(l));
     l.magic = PP_SC_MAGIC;
     l.size = sizeof(l);
     for (int i = 0; i < 6; i++)
         for (const char *p = parts[i]; p && *p && n < sizeof(l.text) - 1; p++) l.text[n++] = *p;
-    unix_call(unix_handle, PP_SC_LOG, &l);
+    /* No host (desktop Wine): Wine's debugstr channel shows it. */
+    if (unix_call) unix_call(unix_handle, PP_SC_LOG, &l);
+    else OutputDebugStringA(l.text);
 }
 
 static const char *num(char *buf, unsigned long long v)
@@ -285,7 +286,18 @@ static void *const trampolines[MAX_SLOTS] = {
 
 /* --- implemented methods (MSVC x64: this in RCX, a hidden return pointer next) */
 
-static uint64_t app_id(void) { return snapshot.app_id; }
+/* The host's launched app; with no host, the process's SteamAppId, as Steam's client takes a
+ * process it did not start (the app's launch sets it, decision 0020). */
+static uint64_t app_id(void)
+{
+    char v[16];
+    DWORD n;
+    uint64_t id = 0;
+    if (snapshot.app_id) return snapshot.app_id;
+    n = GetEnvironmentVariableA("SteamAppId", v, sizeof(v));
+    for (DWORD i = 0; i < n && i < sizeof(v) && v[i] >= '0' && v[i] <= '9'; i++) id = id * 10 + (uint64_t)(v[i] - '0');
+    return id <= 0xffffffffu ? id : 0;
+}
 static int owns(uint32_t app) { return snapshot.armed && snapshot.owns_app && app && app == snapshot.app_id; }
 
 static iface *find(const char *version, const char *through);
