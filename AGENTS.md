@@ -16,7 +16,7 @@ end.
 | `patches/<target>/` | every change to upstream code, as `git format-patch` files in `series` order |
 | `build/` | what `pp build`, `pp install` and `pp verify` run: `pipeline`, `install`, `verify-ipa.py`, `stages/`, `toolchain/` |
 | `app/` | the iOS app (a Swift package: `Sources/S1Probe` is the app, `HostIOKit`, `PlayportKit`, `SteamClient`) |
-| `tools/` | `pp`'s modules: `phonelib.py` (the phone, the lock, events), `checks.py` (what `pp test` and `pp sync` both check), `ui.py`, `perf.py`, `gpu.py` (GPU debugging), `pad.py` with the scripts in `pad/`, `afc.py`, `sync.py`, `slots.py`; `tests/`; the netmuxd unit in `systemd/` |
+| `tools/` | `pp`'s modules: `phonelib.py` (the phone, the lock, events), `checks.py` (what `pp test` and `pp sync` both check), `ui.py`, `perf.py`, `gpu.py` (GPU debugging), `pad.py` with the scripts in `pad/`, `afc.py`, `sync.py`, `slots.py`; `tests/`; the netmuxd unit in `systemd/`; the JIT reflection for a phone away from home in `net/` |
 | `docs/` | reference (below), decisions (`docs/decisions/`), evidence records (`docs/evidence/`) |
 | `.work/` | the build area (`$PLAYPORT_BUILD`, gitignored): run trees, caches, IPAs, run state, and the phone's lock and install record |
 

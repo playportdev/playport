@@ -52,11 +52,14 @@ import glob
 import importlib.util
 import json
 import os
+import plistlib
 import re
 import secrets
 import shlex
 import shutil
 import signal
+import socket
+import struct
 import subprocess
 import sys
 import threading
@@ -70,7 +73,12 @@ import inputs  # noqa: E402
 
 # netmuxd's socket (pp setup records it; build/install reads the same variable).
 SOCK = inputs.get("PLAYPORT_USBMUX_SOCKET")
+# The phone's address away from home (pp setup --phone-addr; docs/DEVICE.md, Away from home).
+PHONE_ADDR = inputs.get("PLAYPORT_PHONE_ADDR")
 DEVICE_DIR = os.environ.get("PLAYPORT_DEVICE_DIR") or str(inputs.BUILD)  # as inputs.DEVICE_DIR
+# The paired phone's UDID, kept from the last time one phone listed: AddDevice needs it.
+# A secret (AGENTS.md): in the build area only, never in a run directory.
+UDID_FILE = os.path.join(DEVICE_DIR, "phone-udid")
 LOCK = os.environ.get("PLAYPORT_DEVICE_LOCK") or os.path.join(DEVICE_DIR, "device.lock")
 HOLDER = os.path.join(os.path.dirname(LOCK), "device.holder.json")
 STATE = os.path.join(DEVICE_DIR, "device-state.json")
@@ -386,6 +394,98 @@ def netmuxd_restart():
     return True, "no phone listed"
 
 
+def remember_udid(udid):
+    """Keep the listed phone's UDID for netmuxd_add (owner-only file, rewritten when it changes)."""
+    if not udid or not re.fullmatch(r"[0-9A-Fa-f-]{24,40}", udid) or known_udid() == udid:
+        return
+    os.makedirs(DEVICE_DIR, exist_ok=True)
+    fd = os.open(UDID_FILE + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(udid + "\n")
+    os.replace(UDID_FILE + ".tmp", UDID_FILE)
+
+
+def known_udid():
+    try:
+        with open(UDID_FILE) as f:
+            return f.read().strip() or None
+    except OSError:
+        return None
+
+
+def paired_udids():
+    """The UDIDs of the pairing records in the netmuxd unit's --plist-storage (default
+    /var/lib/lockdown): the candidates when no UDID is kept yet."""
+    try:
+        r = subprocess.run(["systemctl", "--user", "show", "netmuxd", "-p", "ExecStart", "--value"],
+                           capture_output=True, text=True, timeout=10)
+        m = re.search(r"--plist-storage (\S+)", r.stdout)
+    except (OSError, subprocess.SubprocessError):
+        m = None
+    d = m.group(1) if m else "/var/lib/lockdown"
+    names = (os.path.basename(p)[:-6] for p in glob.glob(os.path.join(d, "*.plist")))
+    return sorted(n for n in names if re.fullmatch(r"[0-9A-Fa-f-]{24,40}", n))
+
+
+def netmuxd_add(udid, addr, secs=30):
+    """netmuxd's AddDevice extension: list the phone at ADDR without mDNS, which does not
+    cross a VPN. netmuxd first opens a lockdown session and its heartbeat there, and drops
+    the phone again when the heartbeat fails. (added, why). Adds to the shared netmuxd but
+    drops nothing, so no lock is needed."""
+    if not SOCK:
+        return False, "PLAYPORT_USBMUX_SOCKET is not set: run ./pp setup"
+    body = plistlib.dumps({"MessageType": "AddDevice", "ConnectionType": "Network",
+                           "ServiceName": "_apple-mobdev2._tcp.local", "IPAddress": addr,
+                           "DeviceID": udid})
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(secs)
+            s.connect(SOCK)
+            s.sendall(struct.pack("<IIII", 16 + len(body), 1, 8, 1) + body)  # usbmux: plist message
+            head = b""
+            while len(head) < 16:
+                chunk = s.recv(16 - len(head))
+                if not chunk:
+                    # netmuxd drops the request when its plist storage has no pairing record
+                    # for the UDID (an older netmuxd without AddDevice closes it too).
+                    return False, "netmuxd closed the connection: no pairing record for this phone there?"
+                head += chunk
+            size = struct.unpack("<I", head[:4])[0] - 16
+            data = b""
+            while len(data) < size:
+                chunk = s.recv(size - len(data))
+                if not chunk:
+                    break
+                data += chunk
+    except socket.timeout:
+        # netmuxd waits out the TCP connect when the address does not answer.
+        return False, f"netmuxd did not answer in {secs} s: is the phone on the VPN at {addr}, and paired here?"
+    except OSError as e:
+        return False, f"netmuxd at {SOCK}: {e}"
+    try:
+        ok = plistlib.loads(data).get("Result") == 1
+    except Exception:  # noqa: BLE001 - any unreadable reply is a failure
+        ok = False
+    return ok, (f"listed at {addr}" if ok else
+                f"the phone at {addr} refused a lockdown session or does not answer on 62078")
+
+
+def add_away():
+    """Add the phone at PHONE_ADDR to netmuxd: (added, why). With the kept UDID, else with
+    each paired phone's (a wrong one fails its lockdown session); the one that answers is kept."""
+    known = known_udid()
+    udids = [known] if known else paired_udids()
+    if not udids:
+        return False, "no UDID kept and no pairing record: list the phone once at home (pp phone status)"
+    why = None
+    for udid in udids:
+        ok, why = netmuxd_add(udid, PHONE_ADDR)
+        if ok:
+            remember_udid(udid)
+            return True, why
+    return False, why
+
+
 class Phone:
     """One paired phone over netmuxd, and the Playport app on it."""
 
@@ -396,6 +496,7 @@ class Phone:
         self.dry = dry
         self.events = events or Events(echo=False)
         self._bid = None
+        self.away_why = None  # why add_away did not list the phone
 
     # -- commands
     def run(self, name, args, secs, check=True, env=None):
@@ -437,26 +538,50 @@ class Phone:
         with contextlib.suppress(OSError):
             os.remove(os.path.join(self.cmd_dir, "usbmux.out"))  # it carries the UDID
         try:
-            return json.loads(text[text.index("["):text.rindex("]") + 1])
+            devs = json.loads(text[text.index("["):text.rindex("]") + 1])
         except ValueError:
             return []
+        if len(devs) == 1 and isinstance(devs[0], dict):
+            remember_udid(devs[0].get("Identifier"))
+        return devs
+
+    def add_away(self):
+        """When the phone is away (PHONE_ADDR set, nothing listed): add it to netmuxd by
+        address. The number of phones listed after."""
+        if not PHONE_ADDR:
+            return 0
+        ok, why = add_away()
+        self.events("phone-away-added" if ok else "phone-away-skipped", why=why)
+        self.away_why = why
+        for _ in range(5 if ok else 0):
+            n = len(self.devices())
+            if n:
+                return n
+            time.sleep(1)
+        return 0
 
     def ensure(self):
-        """Exactly one phone answers; when none does, restarts netmuxd once if netmuxd_restart
-        allows it (under the device lock, this checkout's socket, not restarted lately)."""
+        """Exactly one phone answers. When none does: adds it at PHONE_ADDR (away from home),
+        else restarts netmuxd once if netmuxd_restart allows it (under the device lock, this
+        checkout's socket, not restarted lately)."""
         n = len(self.devices())
+        if n == 0 and not self.dry:
+            n = self.add_away()
         if n == 0 and not self.dry:
             # A netmuxd started before the network had a route never lists the phone again.
             ok, why = netmuxd_restart()
             self.events("netmuxd-restart" if ok else "netmuxd-restart-skipped", why=why)
-            for _ in range(20 if ok else 0):
+            for i in range(20 if ok else 0):
                 time.sleep(3)
                 n = len(self.devices())
+                if n == 0 and i == 1:
+                    n = self.add_away()  # a restart forgets an added phone
                 if n:
                     break
         if n != 1:
+            away = f" or reachable at {PHONE_ADDR} (WireGuard)" if PHONE_ADDR else ""
             raise PhoneError(f"expected one phone on {SOCK}, found {n}: wake and unlock it, "
-                             "check it is on the same network (or cabled), then retry")
+                             f"check it is on the same network (or cabled){away}, then retry")
         return self
 
     def bundle_id(self):
@@ -834,8 +959,20 @@ def fail(events, msg, code=1):
 if __name__ == "__main__":
     # build/install's restart, under the same guards: prints why, exits 0 only if it restarted.
     # Outside a hold it takes the lock for the restart alone, if no other job holds it.
+    # `add-away`: build/install's AddDevice (no lock: it drops nothing); exits 0 if added.
+    # `remember-udid`: keeps the UDID read from stdin.
+    if sys.argv[1:] == ["add-away"]:
+        if not PHONE_ADDR:
+            print("no PLAYPORT_PHONE_ADDR")
+            sys.exit(1)
+        added, why = add_away()
+        print(why)
+        sys.exit(0 if added else 1)
+    if sys.argv[1:] == ["remember-udid"]:
+        remember_udid(sys.stdin.read().strip())
+        sys.exit(0)
     if sys.argv[1:] != ["netmuxd-restart"]:
-        sys.exit("usage: phonelib.py netmuxd-restart")
+        sys.exit("usage: phonelib.py netmuxd-restart | add-away | remember-udid")
     try:
         with device_lock("netmuxd restart (pp install)", wait=1):
             restarted, why = netmuxd_restart()

@@ -56,6 +56,62 @@ in a slot of its own (remove only that one, with `pymobiledevice3 apps uninstall
 ID). An install is a ~300 MB transfer; one that times out after the
 upload still finishes on the phone, and `pp install` checks for that.
 
+### Away from home (WireGuard)
+
+The phone can be driven, installed and debugged from anywhere, over WireGuard to
+the home gateway (a UniFi gateway here; any gateway that routes the VPN subnet to
+the LAN works) (PLA-402). Two things stop working once the phone leaves home Wi-Fi:
+
+- **Discovery.** netmuxd finds the phone by mDNS, and mDNS does not cross a VPN.
+  With `PLAYPORT_PHONE_ADDR` recorded, when no phone lists, `pp` (every `Phone.ensure`)
+  and `pp install` first add it to netmuxd by address, using netmuxd's `AddDevice`
+  extension (a `phone-away-added` or `phone-away-skipped` event). Only then do they
+  restart netmuxd. `AddDevice` drops nothing, so it needs no lock. It needs the phone's
+  UDID. `pp` keeps it in `$PLAYPORT_DEVICE_DIR/phone-udid` (mode 600, never committed)
+  each time it lists exactly one phone. Before one is kept, `pp` tries each pairing
+  record in netmuxd's plist storage: a wrong one fails its lockdown session. netmuxd drops the phone when its heartbeat
+  fails (the phone slept, or lost the tunnel), and the next command adds it again.
+- **JIT.** iOS runs one VPN at a time, so LocalDevVPN is off while WireGuard is on.
+  The JIT helper's and the restart's packets to `10.7.0.1` then leave the phone. The
+  gateway routes `10.7.0.1` to the workstation, which sends each packet back to its
+  sender as from `10.7.0.1` (`tools/net/jit-reflect.nft`). That is what LocalDevVPN
+  does on the phone. The app's tunnel check counts any VPN that routes `10.7.0.1` as up
+  (`LocalDevVPN.swift`), so it does not open LocalDevVPN, which would replace
+  WireGuard and cut the phone off. Do not turn LocalDevVPN on while away.
+
+Once, on each side:
+
+```sh
+# workstation (root): forwarding and the reflection, kept across reboots
+printf 'net.ipv4.ip_forward = 1\nnet.ipv4.conf.all.send_redirects = 0\n' |
+    sudo tee /etc/sysctl.d/90-playport-jit-reflect.conf && sudo sysctl --system
+sudo install -Dm644 tools/net/jit-reflect.nft /etc/nftables.d/playport-jit-reflect.nft
+#   /etc/nftables.conf: in the forward chain (policy drop), add
+#       ct status dnat ct original ip daddr 10.7.0.1 accept
+#   and at the end of the file
+#       include "/etc/nftables.d/playport-jit-reflect.nft"
+sudo systemctl reload nftables
+./pp setup --phone-addr <the phone's WireGuard address>   # '' forgets it
+```
+
+- **UniFi** (Network › Settings): give the workstation a fixed IP. Under Routing,
+  add a static route: `10.7.0.1/32`, next hop the workstation. The WireGuard server
+  gives the phone's client a fixed address, routed to the LAN without NAT. The
+  firewall must let VPN ↔ Internal through, both ways: netmuxd connects to the
+  phone, and the reflected packets go back to it.
+- **The phone's WireGuard peer**: `AllowedIPs` must include the home LAN and
+  `10.7.0.1/32` (a full tunnel, `0.0.0.0/0`, includes both).
+- Forwarding is on only for the reflection: the existing forward chain's
+  `policy drop` keeps everything else out. On a workstation without such a chain,
+  add one before turning `ip_forward` on.
+- What is slower: every JIT packet and every tooling call crosses the WAN twice,
+  and an install (~300 MB) goes at the home upload rate. `pp install` allows
+  30 minutes. The rules were checked in a three-namespace simulation (phone,
+  gateway with strict rp_filter, workstation with Arch's firewall). Whether
+  lockdownd answers over the phone's WireGuard interface, and whether UniFi passes
+  the reflected packets, is only known once a phone run shows it
+  (PLA-402).
+
 ## JIT activation
 
 Every launch that runs guest code needs a debugger-blessed JIT pool

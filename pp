@@ -4,6 +4,7 @@
 
 Build and ship
   pp setup [--check]              record where this machine's toolchains and netmuxd socket are (once)
+           [--phone-addr IP]      the phone's WireGuard address, for driving it away from home
   pp build [--variant dev|release] [--unsigned] [--clean | --from STAGE] [--to STAGE] [--keep-outputs N] [--plan]
                                   build what changed into a verified IPA (keeps the newest 3;
                                   --plan: which stages would run and why, building nothing;
@@ -423,6 +424,9 @@ def phone_status():
     phone = phonelib.Phone()
     try:
         devs = phone.devices()
+        if not devs and phone.add_away():  # away from home: added by address (docs/DEVICE.md)
+            devs = phone.devices()
+            s["away"] = phonelib.PHONE_ADDR
         s["phones"] = len(devs)
         if len(devs) == 1:
             d = devs[0]
@@ -437,7 +441,10 @@ def phone_status():
             except (ValueError, KeyError):
                 pass
         elif not devs:
-            s["error"] = f"no phone on {phonelib.SOCK}: wake and unlock it, check it is on the same network (or cabled)"
+            away = (f" or on WireGuard at {phonelib.PHONE_ADDR} ({phone.away_why})"
+                    if phonelib.PHONE_ADDR else "")
+            s["error"] = (f"no phone on {phonelib.SOCK}: wake and unlock it, check it is on the same "
+                          f"network (or cabled){away}")
     except phonelib.PhoneError as e:
         s["error"] = str(e)
     print(json.dumps(s, indent=1))
