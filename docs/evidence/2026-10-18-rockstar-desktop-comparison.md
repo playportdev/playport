@@ -121,3 +121,48 @@ has it and the owner's desktop (real Steam) has it.
 Comparing the phone's fault point on the desktop therefore needs a Steam answer with a logged-on
 user. Whether a stand-in snapshot without a valid ticket is enough is not known. Real tickets need
 a Playport Steam session on the workstation, which the owner declined.
+
+## Saved window placement removed: the fault remains (phone, IPA `cbd5a158`)
+
+**Which file holds the placement (desktop):** the same scratch prefix was run twice, once without the
+launcher's `AppData/Local/Rockstar Games/Launcher/settings_user.dat` (run `r2-nosettings`) and
+once with it (`s1`).
+- **Without the file:** the launcher logs "Centering on monitor".
+- **With the file:** it logs "Using saved geometry".
+
+No other file or registry value was changed between the two runs. The file's format was not read.
+
+**The change:** a dev-only action deletes exactly that file, and nothing else, in the prefix.
+- **In the app:** Settings › Launchers › Forget the launcher's saved window settings.
+- **For the driver:** `pp ui --action forget-launcher-window:rockstar`.
+- **Where it lives:** `PublisherLauncher.windowSettingsFile` and `forgetWindowSettings`, commit `2115527`.
+
+**Phone session:** one hold of the lock, IPA
+`cbd5a1580a9f1a0d5027c88b40b9cc50a00ddb168d267b553ef00c10bbe80b26`. Battery went from 19% to 18%,
+not charging; free space stayed between 5.6 and 6.0 GB.
+
+| Run | What |
+| --- | --- |
+| `20261018T211258` | Hollow Knight: first frame +10.10 s, first-frame+10 reached |
+| `20261018T211352` | `forget-launcher-window:rockstar`: `launcher: forget-window rockstar: removed AppData/Local/Rockstar Games/Launcher/settings_user.dat` |
+| `20261018T211417` | RDR2 settings cleared for the session only (`{}`): `graphics=vulkan` |
+| `20261018T211446` | RDR2 from the library, `mark:first window+240`, with screenshots |
+
+**RDR2 (`20261018T211446`), from the crash copy of `launcher.log` and the host log:**
+- **Before the main window:**
+  - The launcher reported that it couldn't read `settings_user.dat` and used its defaults.
+  - The service handshake still timed out, and `Shell_NotifyIconW` still failed.
+  - `Setting up steam title` → `Successfully setup title`. Time to start up: 37,638 ms.
+- **Sign-in:** the Auth window (caption "Rockstar Games - Sign In") was up while the launcher signed in by itself. Auth returned 200 with no input; the remembered sign-in did not depend on the file.
+- **The main window:** Auth → MainWindow (t0), then **`Centering on monitor` 1280×600**. Signed In at +53 ms, Online at +114 ms, `Active` at +130 ms.
+- **The fault, unchanged:**
+  - At +393 ms (263 ms after `Active`): `Exception: 0xc0000096`, backtrace hash `0xCC8D2291`. The backtrace frames have the same offsets from the module base as before.
+  - Host log: `[generated-fault] producer=INTOp … error=0x0`, then `[generated-fault-window] module=Launcher.exe rva=0x258cf6`, with the same code window bytes as in chunk 3 (protect `0x80`).
+  - Then `c0000096` unhandled.
+  - At 90 s, 150 s and 240 s: PlayRDR2's "Unable to launch game, please try reinstalling the game." No `Begin game launch`, and no first frame from the game.
+- **Pool:** head 516 MiB, tail 369 MiB, room 12 MiB, `head_exhausted` 0, alias 15. Band peak 15,144 MiB, 0 refused.
+
+**Reading.** The saved window placement is not the trigger. With the launcher centring its window,
+as on the owner's desktop, the phone executes the same HLT at the same RVA. The size was 1280×600 in
+both cases; only the position differed. The other inputs that still differ are unchanged: Steam's
+answers (our host), the service handshake timeout, the tray icon failure, and the runtime itself.
