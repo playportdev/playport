@@ -45,10 +45,11 @@ class ECCallRing(unittest.TestCase):
         self.assertEqual(len(re.findall(r", lsl #6\n", self.asm)), 2)
 
     def test_fields_agree(self):
-        # The reader's fields: E[0] TEB, E[1] target, E[2] return address or rax,
+        # The reader's fields: E[0] TEB, E[1] target, E[2] 0 (a call) or rax,
         # E[3] rcx, E[4] rdx, E[5] time, E[6] kind (1 call, 2 return).
         self.assertIn("stp x17, x9, [x16]", self.asm)
-        self.assertIn("stp x4, x0, [x16, #16]", self.asm)
+        self.assertIn("stp xzr, x0, [x16, #16]", self.asm)
+        self.assertNotIn("[sp]", self.asm.replace("[sp] is not always readable", ""))
         self.assertIn("stp x1, x4, [x16, #32]", self.asm)
         self.assertIn("str x8, [x16, #16]", self.asm)
         self.assertIn("str x4, [x16, #40]", self.asm)

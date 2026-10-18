@@ -14,24 +14,27 @@ table is cloned from the session root's PEB).
 With FEX_EC_CALL_RING naming the executable, ProcessInit allocates a ring
 in that process only (one [ec-ring] line per process when the variable is
 set), and Module.S appends an entry for every x64 call into an ARM64EC
-function (ExitFunctionEC: the target as addressed, the x64 return
-address, rcx, rdx, CNTVCT) and every return through
-__os_arm64x_dispatch_ret (RetToEntryThunk: the x64 rip and rax) to the
-calling thread's ring: 64 rings by TEB bits 13..18, 512 entries each. The
-first generated fault of the process prints its thread's entries, oldest
-first, each address as module+RVA. Unset, each transition pays one load
-and a branch; nothing else changes.
+function (ExitFunctionEC: the target as addressed, rcx, rdx, CNTVCT) and
+every return through __os_arm64x_dispatch_ret (RetToEntryThunk: the x64
+rip returned to, which names the call site, and rax) to the calling
+thread's ring: 64 rings by TEB bits 13..18, 512 entries each. The first
+generated fault of the process prints its thread's entries, oldest first,
+each address as module+RVA. Unset, each transition pays one load and a
+branch; nothing else changes.
+
+ExitFunctionEC does not read [sp]: a first build that took the x64 return
+address from there faulted in Launcher.exe's loader (run 20261018T223005).
 
 Class: diagnostics
 Evidence: docs/evidence/2026-10-18-rockstar-generated-fault.md
 Offered-upstream: no
 ---
- Source/Windows/ARM64EC/Module.S   | 48 ++++++++++++++++
- Source/Windows/ARM64EC/Module.cpp | 94 ++++++++++++++++++++++++++++++-
- 2 files changed, 141 insertions(+), 1 deletion(-)
+ Source/Windows/ARM64EC/Module.S   | 47 ++++++++++++++++
+ Source/Windows/ARM64EC/Module.cpp | 93 ++++++++++++++++++++++++++++++-
+ 2 files changed, 139 insertions(+), 1 deletion(-)
 
 diff --git a/Source/Windows/ARM64EC/Module.S b/Source/Windows/ARM64EC/Module.S
-index 44531950d..0b320a1ef 100644
+index 44531950d..6d961f07d 100644
 --- a/Source/Windows/ARM64EC/Module.S
 +++ b/Source/Windows/ARM64EC/Module.S
 @@ -54,6 +54,31 @@ DispatchJump:
@@ -66,7 +69,7 @@ index 44531950d..0b320a1ef 100644
  
  check_target_ec:
    // Check if target is in fact x86 code
-@@ -310,6 +335,29 @@ ExitFunctionEC:
+@@ -310,6 +335,28 @@ ExitFunctionEC:
    add x17, x16, #3200
    str x9, [x17, x23, lsl #3]
  2:
@@ -86,8 +89,7 @@ index 44531950d..0b320a1ef 100644
 +  add x16, x16, #4096           // the entry
 +  IOS_LOAD_TEB x17
 +  stp x17, x9, [x16]            // TEB, target as addressed
-+  ldr x4, [sp]
-+  stp x4, x0, [x16, #16]        // x64 return address, rcx
++  stp xzr, x0, [x16, #16]       // (no return address: [sp] is not always readable here), rcx
 +  mrs x4, cntvct_el0
 +  stp x1, x4, [x16, #32]        // rdx, time
 +  mov x4, #1
@@ -97,7 +99,7 @@ index 44531950d..0b320a1ef 100644
    ldr x17, [x17, #0x1788] // TEB->ChpeV2CpuAreaInfo
  #else
 diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
-index c5518bdc3..0b2f6d8f6 100644
+index c5518bdc3..dd5335fca 100644
 --- a/Source/Windows/ARM64EC/Module.cpp
 +++ b/Source/Windows/ARM64EC/Module.cpp
 @@ -114,6 +114,20 @@ __attribute__((aligned(64))) uint64_t IosXpFex[4496] {};
@@ -111,7 +113,7 @@ index c5518bdc3..0b2f6d8f6 100644
 + * rings by TEB bits 13..18); the first generated fault prints its thread's entries.
 + * Layout: 64 uint64 ring indices, then from +4096 64 rings of 512 entries of 8 uint64:
 + *   0 TEB   8 target (call: as the x64 caller addressed it; return: the x64 rip)
-+ *   16 call: the x64 return address; return: rax   24 rcx   32 rdx
++ *   16 call: 0 (the caller is the x64 rip of the return entry); return: rax   24 rcx   32 rdx
 + *   40 CNTVCT   48 kind (1 call, 2 return)
 + * Zero (the default) leaves Module.S one load and a branch per transition. */
 +extern "C" __attribute__((aligned(8))) uint64_t IosEcRing;
@@ -121,7 +123,7 @@ index c5518bdc3..0b2f6d8f6 100644
  #endif // FEX_IOS_HOST
  
  namespace Exception {
-@@ -741,6 +755,51 @@ static void LogGeneratedFaultWindow(uint64_t Rip) {
+@@ -741,6 +755,50 @@ static void LogGeneratedFaultWindow(uint64_t Rip) {
  }
  #endif
  
@@ -161,8 +163,7 @@ index c5518bdc3..0b2f6d8f6 100644
 +    }
 +    const double Ms = Freq && Now >= E[5] ? double(Now - E[5]) * 1000.0 / double(Freq) : -1.0;
 +    if (E[6] == 1) {
-+      LogMan::Msg::EFmt("[ec-ring] -{:.3f}ms call {} from {} rcx={:#x} rdx={:#x}", Ms, DescribeEcRingAddress(E[1]),
-+                        DescribeEcRingAddress(E[2]), E[3], E[4]);
++      LogMan::Msg::EFmt("[ec-ring] -{:.3f}ms call {} rcx={:#x} rdx={:#x}", Ms, DescribeEcRingAddress(E[1]), E[3], E[4]);
 +    } else {
 +      LogMan::Msg::EFmt("[ec-ring] -{:.3f}ms ret to {} rax={:#x}", Ms, DescribeEcRingAddress(E[1]), E[2]);
 +    }
@@ -173,7 +174,7 @@ index c5518bdc3..0b2f6d8f6 100644
  static void RethrowGuestException(const EXCEPTION_RECORD& Rec, ARM64_NT_CONTEXT& Context) {
    auto* Thread = GetCPUArea().ThreadState();
    auto& Fault = Thread->CurrentFrame->SynchronousFaultData;
-@@ -792,9 +851,13 @@ static void RethrowGuestException(const EXCEPTION_RECORD& Rec, ARM64_NT_CONTEXT&
+@@ -792,9 +850,13 @@ static void RethrowGuestException(const EXCEPTION_RECORD& Rec, ARM64_NT_CONTEXT&
    // on iOS: an unreadable page fails the read, it never faults here.
    if (Fault.FaultToTopAndGeneratedException) {
      static std::atomic<uint32_t> GeneratedFaultWindows {0};
@@ -188,7 +189,7 @@ index c5518bdc3..0b2f6d8f6 100644
    }
  #endif
  
-@@ -1009,6 +1072,34 @@ static void ApplySMCChecksFor(std::string_view AppName) {
+@@ -1009,6 +1071,34 @@ static void ApplySMCChecksFor(std::string_view AppName) {
  }
  #endif
  
@@ -223,7 +224,7 @@ index c5518bdc3..0b2f6d8f6 100644
  NTSTATUS ProcessInit() {
    /* iOS-Madeira: DualMap::WriteOffset (RX→RW alias distance) is set below,
     * after InitCRTProcess() populates the environment, and BEFORE InitCore().
-@@ -1064,6 +1155,7 @@ NTSTATUS ProcessInit() {
+@@ -1064,6 +1154,7 @@ NTSTATUS ProcessInit() {
    FEXCore::Config::Set(FEXCore::Config::CONFIG_APP_CONFIG_NAME, AppConfigName);
  #ifdef FEX_IOS_HOST
    ApplySMCChecksFor(AppConfigName);
