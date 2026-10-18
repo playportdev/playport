@@ -106,7 +106,19 @@ and `flags.txt` lists each patch whose range-diff changed with no person
 resolving it (a 3-way merge or a recorded resolution): check those hunks
 against both sides, since git can misplace an auto-merged hunk. A clean
 patch is kept as it is; the others are written again with their `Rebased:` or
-`Picked:` trailer set to `resolved` when the move needed a resolution. The
+`Picked:` trailer set to `resolved` when the move needed a resolution.
+
+Before it finishes, the run applies the written series as the build does
+(`git am -3` onto the new commit, in `verify/`) and compares each patch's tree
+with its pick's. A clean patch kept as it is still carries the old line
+numbers, and when its context occurs twice `git apply` takes the match nearest
+them, which after an upstream shift can be the other function (fex-port 0033,
+wine-port 0033 and wine-unix 0035 in the 2026-10 moves); the pick's merge
+followed the lines. Neither the range-diff nor `flags.txt` shows this, so such
+a patch is re-exported from its pick (trailer unchanged) and named in the
+output; a patch that still differs stops the run with its name. Since
+patch-ids leave line numbers out, `ensure_series` also keeps a hash of the
+diffs a tree was applied from and re-applies when they change. The
 run never commits: review `git diff`, then build and play as for any pin move.
 A pin that is a gitlink of the moved one (FEX's `External/rpmalloc` is the
 `rpmalloc` row) is named when the new commit moves it; it is a run of its own

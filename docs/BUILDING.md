@@ -106,7 +106,9 @@ when piping output: `pp test | tail` alone can hide a failing test exit status.
 Every tree is its pin with its series applied by `apply_series`
 (`build/lib.sh`: `git am -3` with a fixed committer and date, so the commits
 do not depend on who builds); `ensure_series` re-applies a series whose
-patch-ids differ from the tree's commits. What the stage logs show that is
+patch-ids differ from the tree's commits, or whose diffs (line numbers
+included) differ from the ones the tree was applied from (`series_hash`, kept
+as `playport-series` in the tree's git directory). What the stage logs show that is
 not a failure, and what must hold:
 
 - **unix.** The as-built `libwineserver.a` reports `LINK FAIL` under lld with

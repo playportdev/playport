@@ -79,16 +79,35 @@ check_series() {
         { echo "$tree is not $pin plus the $targets series" >&2; return 1; }
 }
 
+# series_hash TARGETS PIN: a hash of the diffs of TARGETS' patches as written,
+# line numbers included (patch-id leaves them out). A patch re-exported with
+# other line numbers can apply elsewhere when its context occurs twice
+# (docs/UPSTREAM-SYNC.md): same patch-id, other tree.
+series_hash() {
+    local t f
+    { echo "$1 $2"; for t in $1; do for f in $(series "$t"); do sed -n '/^---$/,$p' "$f"; done; done; } |
+        sha256sum | cut -d' ' -f1
+}
+
 # ensure_series TREE TARGETS PIN [SUBMODULE]: make TREE PIN plus the series of
-# TARGETS: nothing when check_series already holds, else check out PIN (which
-# drops a stale or partial application, not untracked build outputs) and
-# apply each series again.
+# TARGETS: nothing when check_series already holds and the series' diffs are
+# the ones TREE was applied from (series_hash, kept in its git directory), else
+# check out PIN (which drops a stale or partial application, not untracked
+# build outputs) and apply each series again. A tree with no recorded hash
+# that check_series accepts takes the current one, so trees applied before
+# the hash was recorded are not reapplied for it.
 ensure_series() {
-    local tree=$1 targets=$2 pin=$3 t
-    check_series "$tree" "$targets" "$pin" "${4:-}" 2>/dev/null && return 0
+    local tree=$1 targets=$2 pin=$3 t stamp want
+    want=$(series_hash "$targets" "$pin")
+    if check_series "$tree" "$targets" "$pin" "${4:-}" 2>/dev/null; then
+        stamp=$(git -C "$tree" rev-parse --absolute-git-dir)/playport-series
+        [ -f "$stamp" ] || echo "$want" > "$stamp"
+        [ "$(cat "$stamp")" != "$want" ] || return 0
+    fi
     echo "$tree: (re)applying $targets onto $pin"
     git -C "$tree" am --abort 2>/dev/null || true
     git -C "$tree" -c advice.detachedHead=false checkout -q -f "$pin"
     for t in $targets; do apply_series "$tree" "$t"; done
     check_series "$tree" "$targets" "$pin" "${4:-}"
+    echo "$want" > "$(git -C "$tree" rev-parse --absolute-git-dir)/playport-series"
 }

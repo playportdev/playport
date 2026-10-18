@@ -4,11 +4,15 @@ patches/fex and a Playport copy, all local: a clean replay, the trial's
 conflict counted once, a stop and --continue, rerere reusing that resolution on
 a second run, the range-diff flag on an auto-merged patch, the Rebased: trailer,
 a patch already upstream, and the re-export applied again and matched by
-build/lib.sh check_series. No network, no toolchain.
+build/lib.sh check_series. MisplacedClean: a clean patch whose context occurs
+twice, which git am -3 puts at the other place once upstream shifts the lines,
+re-exported from its pick, and build/lib.sh ensure_series reapplying a tree
+that had the misplaced series. No network, no toolchain.
 
   python3 -m unittest discover -s tools/tests
 """
 
+import json
 import os
 import shutil
 import subprocess
@@ -192,6 +196,125 @@ class Rebase(unittest.TestCase):
         self.pp("fex", "--write", code=1)
         self.pp("fex", "--abort")
         self.pp("fex", self.n0)
+
+
+BLOCK = ["{", "    int x = 0;", "    x++;", "    x++;", "    x++;", "    return x;", "}"]
+
+
+def dup_c(pad=0, second="    x++;"):
+    """Two identical blocks, the second's middle line `second`, with `pad` upstream lines between them."""
+    b2 = BLOCK[:3] + [second] + BLOCK[4:]
+    return "\n".join(["first"] + BLOCK + [f"mid {i}" for i in range(10)] + [f"upstream {i}" for i in range(pad)]
+                     + b2 + ["end"]) + "\n"
+
+
+class MisplacedClean(unittest.TestCase):
+    """fex-port's P1 edits the second block of dup.c. Upstream adds 30 lines between the blocks, so the first
+    block is nearer P1's old line numbers: git apply (and git am -3, as the build applies the series) takes it,
+    while the pick's merge follows the lines to the second. P2 (f.c) is a plain clean patch after it."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="rebase-misplaced-test-")
+        t = self.tmp
+        fex = new_repo(f"{t}/FEX")
+        self.b0 = commit(fex, "fex", **{"dup.c": dup_c(), "f.c": lines(10)})
+        commit(fex, trailer("P1 port second block", "clean"), **{"dup.c": dup_c(second="    x += 2;")})
+        commit(fex, trailer("P2 port f", "clean"), **{"f.c": lines(10, l5="port 5")})
+        repo = self.repo = f"{t}/playport"
+        d = f"{repo}/patches/fex-port"
+        git(fex, "-c", "core.abbrev=7", "format-patch", "-q", "--zero-commit", "--no-signature", "-o", d,
+            f"{self.b0}..HEAD")
+        self.names = sorted(n for n in os.listdir(d) if n.endswith(".patch"))
+        with open(f"{d}/series", "w") as f:
+            f.write("".join(n + "\n" for n in self.names))
+        os.makedirs(f"{repo}/patches/fex")
+        with open(f"{repo}/patches/fex/series", "w") as f:
+            f.write("# fex\n")
+        self.original = read(f"{d}/{self.names[0]}")
+        git(fex, "reset", "-q", "--hard", self.b0)
+        self.n1 = commit(fex, "upstream lines between the blocks", **{"dup.c": dup_c(pad=30)})
+        with open(f"{repo}/pins.lock", "w") as f:
+            f.write(f"fex {self.b0} {fex} main\n")
+        self.build = f"{t}/build"
+        os.makedirs(f"{self.build}/cache")
+        subprocess.run(["git", "clone", "-q", "--bare", fex, f"{self.build}/cache/fex.git"], check=True,
+                       env=dict(os.environ, **ENV))
+        self.run_dir = f"{self.build}/rebase/fex"
+        self.want = dup_c(pad=30, second="    x += 2;")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def pp(self, *args, code=0):
+        r = subprocess.run([sys.executable, TOOL, *args], text=True, capture_output=True,
+                           env=dict(os.environ, **ENV, PLAYPORT_REPO=self.repo, PLAYPORT_BUILD=self.build))
+        self.assertEqual(r.returncode, code, r.stdout + r.stderr)
+        return r.stdout
+
+    def fresh(self, name):
+        tree = f"{self.tmp}/{name}"
+        git(self.tmp, "clone", "-q", "--shared", f"{self.build}/cache/fex.git", tree)
+        git(tree, "checkout", "-q", "-f", self.n1)
+        return tree
+
+    def lib(self, fn, tree):
+        """A build/lib.sh series function on tree, reading this test's patches/."""
+        r = subprocess.run(["bash", "-c", f'. "{LIB}"; PLAYPORT_REPO="{self.repo}"; {fn} "{tree}" "fex-port fex" {self.n1}'],
+                           text=True, capture_output=True, env=dict(os.environ, **ENV, PLAYPORT_BUILD=self.build))
+        return r.returncode, r.stdout + r.stderr
+
+    def test_the_kept_patch_lands_in_the_first_block(self):
+        # The case itself: the patch as it is applies (so the pick is clean) but in the wrong block.
+        tree = self.fresh("as-is")
+        git(tree, "am", "-3", "-q", f"{self.repo}/patches/fex-port/{self.names[0]}")
+        self.assertNotEqual(read(f"{tree}/dup.c"), self.want)
+        self.assertEqual(read(f"{tree}/dup.c").count("x += 2;"), 1)
+
+    def test_a_misplaced_clean_patch_is_reexported_from_its_pick(self):
+        out = self.pp("fex", self.n1)
+        self.assertIn(f"re-exported (clean, but git am -3 put the kept patch at another matching context): "
+                      f"fex-port/{self.names[0]}", out)
+        self.assertFalse(os.path.exists(f"{self.run_dir}/verify"))
+        state = json.loads(read(f"{self.run_dir}/state.json"))
+        p1, p2 = state["picks"]
+        self.assertEqual((p1["class"], p1.get("misplaced")), ("clean", True))
+        self.assertEqual((p2["class"], p2.get("misplaced")), ("clean", None))
+        written = read(f"{self.run_dir}/patches/fex-port/{self.names[0]}")
+        self.assertNotEqual(written, self.original)
+        # Only the line numbers and the index line change: the message and its trailer stay as they were.
+        self.assertEqual(written.partition("\n---\n")[0], self.original.partition("\n---\n")[0])
+        self.assertIn("Rebased: clean\n", written)
+        self.assertEqual(read(f"{self.run_dir}/patches/fex-port/{self.names[1]}"),
+                         read(f"{self.repo}/patches/fex-port/{self.names[1]}"))
+        self.assertIn(self.names[0], read(f"{self.run_dir}/series.diff"))
+        self.assertNotIn(self.names[1], read(f"{self.run_dir}/series.diff"))
+        # The written series, applied as the build does, makes the pick's tree.
+        tree = self.fresh("written")
+        git(tree, "am", "-3", "-q", *[f"{self.run_dir}/patches/fex-port/{n}" for n in self.names])
+        self.assertEqual(read(f"{tree}/dup.c"), self.want)
+        self.assertEqual(git(tree, "rev-parse", "HEAD^{tree}"),
+                         git(f"{self.run_dir}/tree", "rev-parse", "HEAD^{tree}"))
+
+    def test_ensure_series_reapplies_a_tree_with_the_misplaced_series(self):
+        tree = self.fresh("built")
+        st, out = self.lib("ensure_series", tree)  # the old series onto NEW: misplaced
+        self.assertEqual(st, 0, out)
+        self.assertNotEqual(read(f"{tree}/dup.c"), self.want)
+        self.pp("fex", self.n1)
+        self.pp("fex", "--write")
+        # patch-id leaves line numbers out: check_series takes the misplaced tree for the new series.
+        self.assertEqual(self.lib("check_series", tree)[0], 0)
+        st, out = self.lib("ensure_series", tree)
+        self.assertEqual(st, 0, out)
+        self.assertIn("(re)applying", out)
+        self.assertEqual(read(f"{tree}/dup.c"), self.want)
+        st, out = self.lib("ensure_series", tree)
+        self.assertEqual((st, "(re)applying" in out), (0, False), out)
+        # A tree applied before the hash was recorded takes the current one; it is not reapplied for it.
+        os.remove(os.path.join(git(tree, "rev-parse", "--absolute-git-dir"), "playport-series"))
+        st, out = self.lib("ensure_series", tree)
+        self.assertEqual((st, "(re)applying" in out), (0, False), out)
+        self.assertTrue(os.path.exists(os.path.join(git(tree, "rev-parse", "--absolute-git-dir"), "playport-series")))
 
 
 if __name__ == "__main__":
