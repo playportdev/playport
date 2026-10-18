@@ -48,7 +48,11 @@ launcher Open reaches the sign-in page (decisions 0112, 0114, 0116).
   it, with `ActiveUser` (the account ID), on `PP_REQUEST_STEAM_CLIENT`, and sets both to 0 at the
   title's end and at its own start, so a later `original`-mode game never meets a stale id. The
   static keys (`SteamPath`, `SteamExe`, `ActiveProcess\SteamClientDll`, `SteamClientDll64`) are
-  `PrefixRegistryFile` top-ups. All of it only when the mode is `client`.
+  `PrefixRegistryFile` top-ups. All of it only when the mode is `client`. Every key is written in
+  both views of `HKCU\Software` (also under `Software\Wow6432Node\Valve\Steam`): on this runtime
+  an x64 process's 64-bit-view read (`KEY_WOW64_64KEY`, as the Rockstar launcher's steam_api asks)
+  is sent into `Wow6432Node` (run `20261018T112347`, Wine's `reg` channel), where Windows would not
+  look; the runtime's redirection is its own issue.
 - **Unix calls.** A new madeira-unix patch gives a module whose export name contains
   `steamclient` the table `playport_steamclient_unix_call_funcs` (WineHost `steam_client.c`,
   `steam_client_protocol.h`), as 0087 does for `steam_api`; the launcher's genuine steam_api also

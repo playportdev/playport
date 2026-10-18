@@ -542,12 +542,15 @@ typedef LONG (WINAPI *reg_open_fn)(HKEY, const WCHAR *, DWORD, REGSAM, HKEY *);
 typedef LONG (WINAPI *reg_set_fn)(HKEY, const WCHAR *, DWORD, DWORD, const BYTE *, DWORD);
 typedef LONG (WINAPI *reg_query_fn)(HKEY, const WCHAR *, DWORD *, DWORD *, BYTE *, DWORD *);
 typedef LONG (WINAPI *reg_close_fn)(HKEY);
-static const WCHAR active_process[] = L"Software\\Valve\\Steam\\ActiveProcess";
+/* Both views of HKCU\\Software: this runtime sends an x64 process's 64-bit-view read into
+ * Wow6432Node (the launcher's steam_api, run 20261018T112347); PlayportKit SteamClientKeys. */
+static const WCHAR *const active_process[] = { L"Software\\Valve\\Steam\\ActiveProcess",
+                                               L"Software\\Wow6432Node\\Valve\\Steam\\ActiveProcess" };
 static int steam_client_set;
 
-/* ActiveProcess's pid and ActiveUser, in HKCU: create makes the key, else only an
+/* ActiveProcess's pid and ActiveUser in one view, in HKCU: create makes the key, else only an
  * existing one is written (and only when its pid is not already 0). 0, or a Windows error. */
-static DWORD steam_client_keys(DWORD pid, DWORD user, int create)
+static DWORD steam_client_view(const WCHAR *path, DWORD pid, DWORD user, int create)
 {
     HMODULE advapi = LoadLibraryW(L"advapi32.dll");
     reg_create_fn reg_create = advapi ? (reg_create_fn)(void *)GetProcAddress(advapi, "RegCreateKeyExW") : NULL;
@@ -560,8 +563,8 @@ static DWORD steam_client_keys(DWORD pid, DWORD user, int create)
     DWORD old = 0, size = sizeof(old), type = 0;
 
     if (!reg_create || !reg_open || !reg_set || !reg_query || !reg_close) return ERROR_PROC_NOT_FOUND;
-    rc = create ? reg_create(HKEY_CURRENT_USER, active_process, 0, NULL, 0, KEY_SET_VALUE, NULL, &key, NULL)
-                : reg_open(HKEY_CURRENT_USER, active_process, 0, KEY_SET_VALUE | KEY_QUERY_VALUE, &key);
+    rc = create ? reg_create(HKEY_CURRENT_USER, path, 0, NULL, 0, KEY_SET_VALUE, NULL, &key, NULL)
+                : reg_open(HKEY_CURRENT_USER, path, 0, KEY_SET_VALUE | KEY_QUERY_VALUE, &key);
     if (rc) return (DWORD)rc;
     if (!create && (reg_query(key, L"pid", NULL, &type, (BYTE *)&old, &size) || type != REG_DWORD || !old)) {
         reg_close(key);
@@ -572,6 +575,18 @@ static DWORD steam_client_keys(DWORD pid, DWORD user, int create)
     reg_close(key);
     if (!rc && !create) say("steam client: ActiveProcess pid %u cleared", (unsigned long long)old);
     return (DWORD)rc;
+}
+
+/* Both views; the first error, or 0. Clearing (create 0) skips a view that has no key. */
+static DWORD steam_client_keys(DWORD pid, DWORD user, int create)
+{
+    DWORD first = 0, i;
+    for (i = 0; i < sizeof(active_process) / sizeof(*active_process); i++) {
+        DWORD rc = steam_client_view(active_process[i], pid, user, create);
+        if (rc == ERROR_FILE_NOT_FOUND && !create) rc = 0;
+        if (rc && !first) first = rc;
+    }
+    return first;
 }
 
 /* The payload's decimal account ID (pp_session_request_valid checked it). */

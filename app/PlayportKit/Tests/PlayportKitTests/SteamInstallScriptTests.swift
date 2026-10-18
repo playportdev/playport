@@ -326,6 +326,10 @@ final class SteamInstallScriptTests: XCTestCase {
                        "c:/program files (x86)/steam")
         XCTAssertEqual(PrefixRegistryFile.string(inHive: text, key: #"Software\Valve\Steam"#, name: "SteamExe"),
                        "c:/program files (x86)/steam/steam.exe")
+        // The same in the Wow6432Node view, where this runtime sends an x64 process's 64-bit read.
+        XCTAssertEqual(PrefixRegistryFile.string(inHive: text, key: #"Software\Wow6432Node\Valve\Steam\ActiveProcess"#,
+                                                 name: "SteamClientDll64"), #"C:\Program Files (x86)\Steam\steamclient64.dll"#)
+        XCTAssertEqual(SteamClientKeys.values.count, 8)
         XCTAssertFalse(text.contains("\"pid\""))
         XCTAssertTrue(text.hasPrefix(";; playport:top-up\n"))
         XCTAssertFalse(FileManager.default.fileExists(atPath: file.url(.system).path))
