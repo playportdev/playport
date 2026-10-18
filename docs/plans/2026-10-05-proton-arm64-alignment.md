@@ -41,10 +41,12 @@ re-read in this review.
 wine-11.18, `wine-valve` dc26e61, `fex` FEX-2609.1, `dxmt` 7c8dee1, `mesa`
 82d4f86, `dxvk` 52fe923, `vkd3d-proton` 472989a, `gbe` release-2026_09_27).
 
-## Runner state (2026-10-18)
+## Runner state (2026-10-19)
 
 - **Branch:** `dev/pla-76-proton-alignment-ws`, off `main` at f7ac25f, rebased onto `main` at
-  dfc527f (M2a), checked out in the main checkout since M2b; not merged, not pushed. W1 to W8b
+  dfc527f (M2a), checked out in the main checkout since M2b; merged into `main` on 2026-10-19
+  as `c8095ce` (owner: "merge both go main"; Portal 2 skipped, the Hollow Knight load window
+  accepted), `main` not pushed. W1 to W8b
   and M2a ran in the owner-authorized side copy
   `$PLAYPORT_BUILD/worktrees/pla-76-proton-alignment` (now detached), which the owner let build
   (2026-10-17, beyond decision 0069) from reflinked copies of main's `cache`, `inputs`, `run` and
@@ -84,7 +86,14 @@ wine-11.18, `wine-valve` dc26e61, `fex` FEX-2609.1, `dxmt` 7c8dee1, `mesa`
   +8.66 s warm) and the threadctx probe (checks a–e as on 2026-10-13) passed;
   [evidence](../evidence/2026-10-18-proton-alignment-phone.md). Owed: Portal 2 (not installed,
   no room beside RDR2) and its `pp perf`, a console program, RDR2's launcher, and a main-IPA
-  Hollow Knight `pp perf` on today's save for the 45–65 s load window. Not merged.
+  Hollow Knight `pp perf` on today's save for the 45–65 s load window. M3 (2026-10-19): merged
+  (`c8095ce`, then the RDR2 Vulkan branch `db3d0a6`); the merged main's dev IPA `322331eb`
+  passed Hollow Knight first frame+10, and the new console probe
+  (`tools/compat/probes/console.c`) showed conhost and cmd start on the phone (the 2026-10-08
+  `c0000135` is gone) but a child's output through a pipe lost (the probe exits 1);
+  [evidence](../evidence/2026-10-18-proton-alignment-phone.md#merged-main-and-the-console-probe-m3).
+  Still owed: Portal 2 and its `pp perf` (skipped by the owner), RDR2's launcher, the
+  remaining plan items.
   Reports: `agent-notes/pla-76/reports/` in the side copy's build area, `agent-notes/pla-76/m2b-phone.md`
   in main's.
 

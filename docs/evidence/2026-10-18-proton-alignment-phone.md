@@ -100,7 +100,8 @@ The probes were imported through the UI from `tools/compat/probes/build.sh`'s ou
 
 ## Console program (conhost.exe through ENABLE_ARCHS, wine-pe 0047)
 
-**Not checked on the phone.**
+**Not checked on the phone in M2b.** M3 checked it with a new probe
+([below](#merged-main-and-the-console-probe-m3)).
 - Every committed probe is linked with `-mwindows`, so none has a console.
 - The x86-64 console caller of [2026-10-11](2026-10-11-system32-programs.md) was a scratch import
   and was not kept.
@@ -172,7 +173,73 @@ with `--cool 10`. Both runs started at thermal nominal, on battery.
 ## Not checked
 
 - **Portal 2:** first frame+10 and `pp perf` (not installed; above).
-- **A console program or conhost** on the phone (above).
+- **A console program or conhost** on the phone (above; checked in M3, below).
 - **Red Dead Redemption 2's Rockstar launcher through Steam** (M2a gate 6), with the guest
   local-time check. Not in this session's steps; it can ask for a sign-in.
 - **A main-IPA `pp perf` on today's Hollow Knight save,** to decide the 45–65 s load window.
+
+## Merged main and the console probe (M3)
+
+**Date:** 2026-10-19 (the phone session ran from 01:35 to 01:38).
+**Merges:** the owner's decision ("Accept [HK perf load window], merge both go main"; Portal 2
+skipped) merged both branches into `main` with `--no-ff`, without conflicts:
+`c8095ce` (`dev/pla-76-proton-alignment-ws`, `d19fe2f`) and then `db3d0a6`
+(`dev/pla-386-rdr2-vulkan-kk`, `aaf598a`). `main` is not pushed.
+
+**Build:** `./pp build` (dev) on `db3d0a6`. unix, pe, fex and dxmt were unchanged from M2b's
+build; vulkan restaged with the merged Mesa series (0037–0043).
+- **IPA:** `$PLAYPORT_BUILD/out/20261019-013009-322331eb/Playport-26.5-322331eb.ipa`.
+  - sha256 `322331eb09b6e351b21e52cf0df3527ccfcab12025e4ff51b2046d0660e3da42`.
+  - verify-ipa: 89 checks passed, 0 failed.
+- **Build records:** unchanged, so nothing needed committing.
+- **Checks:** `./pp test` (full), `pp slots` (150 slots, 149 calls), `pp names` and
+  `pp secrets` passed.
+
+**The console probe** (`tools/compat/probes/console.c`, `7148fc5`, PLA-390) is the one probe
+built without `-mwindows`.
+- Started from the app, which has no console, it must get a conhost from kernelbase.
+- It checks:
+  - (a) that `CONOUT$` opens, and that `GetConsoleMode` and `WriteConsoleA` succeed on it;
+  - (b) `cmd.exe /c echo <marker>`, with the output in a pipe: exit code 0 and the marker in
+    the output;
+  - (c) `cmd.exe /c exit 7` with `CREATE_NEW_CONSOLE`, which starts a second conhost: exit code 7.
+- **Desktop Wine 11.19:** with the probe started in a new console (`wine start /wait`, on an
+  `xvfb-run` display), every check passes (`done ok`).
+
+**One `pp phone lock` session,** on the IPA above (the `installed` event's
+`ipa_sha256` `322331eb…`):
+
+| Run | Result |
+| --- | --- |
+| `m3-hk` (`--play app-367520 --until first-frame+10 --shot`) | First frame at +8.58 s, ok. JIT 2.76 s. The screenshot shows the Hollow Knight main menu. 2 JIT SIGBUS (the baseline's 2), no crash report. |
+| `m3-import` (`import:Import/console`) | ok |
+| `m3-console` (`--play dir-console --wait 60`) | Exit 1 (`done FAIL`) after 0 s, details below. No crash report. |
+| `m3-uninstall-console` (`uninstall:dir-console`) | ok: folder, record and stage gone, not catalogued. The library then held Hollow Knight, Red Dead Redemption 2 and the probe; M2b's leftover `dir-threadctx-i386` was no longer listed. |
+
+**conhost and cmd start (`m3-console` host log):**
+- The probe's start runs `C:\windows\system32\conhost.exe --server 0x34`. The arm64ec
+  `conhost.exe` loads (`re-patching L"conhost.exe" metadata`, `Load module conhost.exe`), and
+  the log has no `c0000135`.
+- (a) passes: `CONOUT$` opens, `GetConsoleMode` returns mode 3, and `WriteConsoleA` writes 39 of
+  39 bytes. `GetConsoleWindow` is `0x10030`. Standard output is the app's log file (type 1),
+  which the launcher hands to the probe.
+- (b) cmd starts, loads its arm64ec `cmd.exe` and exits 0 (**ok**). **The marker check is BAD**:
+  - the pipe held the runtime's own start-up lines for the child (`[rpm-sink] alive`,
+    `[FEX-iOS] fast-write ENABLED`, `[FEX-iOS] ThreadInit() entered`) and not cmd's echo;
+  - the marker appears nowhere in the log except in cmd's command line.
+- (c) passes: cmd in a new console starts a second conhost (`--server 0x28`), which loads and
+  opens a console window (`[win-text] … "C:\windows\system32\cmd.exe"`), and its exit code
+  is 7 (**ok**).
+- **Before:** a 2026-10-08 log (`20261008T175727`, Portal 2) has the same `NtCreateUserProcess`
+  line for `conhost.exe --server 0x60 --headless`, then
+  `wine: failed to start L"\??\C:\windows\system32\conhost.exe": c0000135`. That failure
+  is gone. The `NtCreateUserProcess` line itself is the runtime's trace of every process start
+  (it also logs `hollow_knight.exe`), not an error.
+
+**Verdict:**
+- conhost and cmd start through wine-pe 0047's arm64ec builds on the merged main IPA.
+- A child's standard output through a pipe is wrong on the phone: the runtime's start-up
+  lines reach the pipe and cmd's output does not. Desktop Wine passes the same check, so the
+  probe exits 1 until this is fixed or explained. This is a separate finding, not part of
+  0047.
+

@@ -417,7 +417,11 @@ KosmicKrisp (`ios check`), `pp names`, `pp secrets` and `pp test --quick`. The p
   directories that named main's path removed) until M1. M1 (owner, 2026-10-18): rebased onto
   `main` at `dfc527f` without conflicts and checked out in the main checkout, which builds and
   installs it; the side copy is detached and kept for its `.work` (reports, corpora), to be
-  removed later. Not merged, not pushed.
+  removed later. Merged into `main` on 2026-10-19 as `db3d0a6` (owner: "merge both go main"),
+  after the Proton alignment branch (`c8095ce`); the merged main's dev IPA `322331eb` passed
+  Hollow Knight first frame+10
+  ([evidence](../evidence/2026-10-18-proton-alignment-phone.md#merged-main-and-the-console-probe-m3)).
+  `main` not pushed. Chunks 0–11 remain.
 - **Done:** the measurement (2026-10-17, PLA-386, evidence above); V0 (replay harness,
   `1fc4605`); V1 (undefined image, mesa 0037, `33e2194`); V2 (pipeline-statistics pools,
   mesa 0038, `efed211`); V3 (8-sample pipelines, mesa 0039, `f4f407b`); V4 (sampled
