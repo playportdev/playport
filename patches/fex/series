@@ -45,3 +45,4 @@
 0044-DiskCache-set-the-WoW64-guest-window-before-the-cont.patch
 0045-ARM64EC-sample-the-inline-self-modifying-code-line-l.patch
 0046-ARM64EC-hold-as-many-image-aliases-as-Wine-s-image-t.patch
+0047-ARM64EC-no-memory-notifications-once-the-DLL-detache.patch

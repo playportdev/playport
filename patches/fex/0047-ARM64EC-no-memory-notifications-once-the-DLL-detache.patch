@@ -1,0 +1,176 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 18 Oct 2026 09:29:10 +0200
+Subject: [PATCH] ARM64EC: no memory notifications once the DLL detaches on iOS
+
+Wine on iOS process-attaches this DLL (ntdll load_arm64ec_module) so
+that mingw's DllMainCRTStartup runs its static constructors. At process
+exit LdrShutdownProcess detaches it too, and the CRT then runs the
+static destructors of CTX, SyscallHandler, InvalidationTracker and the
+other trackers in Module.cpp. Those destructors free memory through
+NtFreeVirtualMemory, whose ARM64EC wrapper calls NotifyMemoryFree. A
+destroyed std::optional still reads as engaged, so the notification
+went into the destroyed InvalidationTracker, whose CTX reference named
+the freed context. Its virtual GetCodeInvalidationMutex call read a
+stale vtable entry (0x30000010a), the call checker sent that to the
+emulator, and CompileBlock faulted calling PreCompile on the freed
+syscall handler (libarm64ecfex.dll+0x1d46c, a load from null+0x48).
+The exception could not be delivered, the thread was aborted, and the
+process never reached exit_process.
+
+It needs a warm disk cache: the cache's in-memory index makes the
+teardown free enough memory that rpmalloc releases spans after the
+context is gone (570 frees in a warm Launcher.exe exit against 23 with
+a cold cache).
+
+DllMain now marks the detach before the CRT runs the destructors, and
+every memory, section and instruction-cache notification returns while
+it is set.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-18-fex-exit-fault.md
+Offered-upstream: no; only the iOS loader attaches the ARM64EC module's DllMain
+---
+ Source/Windows/ARM64EC/Module.cpp | 52 +++++++++++++++++++++++++------
+ 1 file changed, 43 insertions(+), 9 deletions(-)
+
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index b6b48cc..0b1f2d0 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -201,6 +201,25 @@ std::optional<FEX::Windows::CPUFeatures> CPUFeatures;
+ std::optional<FEX::Windows::OvercommitTracker> OvercommitTracker;
+ std::optional<FEX::Windows::ImageTracker> ImageTracker;
+ 
++#ifdef FEX_IOS_HOST
++/* PLA-395: Wine on iOS attaches this DLL (ntdll load_arm64ec_module), so its
++ * DLL_PROCESS_DETACH at process exit runs the destructors of the objects above
++ * while the exiting thread still frees, maps and protects memory. From the
++ * detach on, the memory notifications must not reach them: they are destroyed
++ * or being destroyed. */
++std::atomic<bool> ProcessDetaching {false};
++#endif
++
++// The memory notifications' gate: the tracker exists and is not being torn down.
++bool TrackerAvailable() {
++#ifdef FEX_IOS_HOST
++  if (ProcessDetaching.load(std::memory_order_relaxed)) {
++    return false;
++  }
++#endif
++  return InvalidationTracker.has_value();
++}
++
+ // iOS-Madeira: arm64ec-mingw doesn't reliably run global C++ ctors, so the
+ // recursive_mutex / unordered_map below would be zero-init'd and any lock()
+ // would hang in NtWaitForAlertByThreadId. Wrap as Meyers singletons so they
+@@ -1160,6 +1179,16 @@ NTSTATUS ProcessInit() {
+ 
+ void ProcessTerm(HANDLE Handle, BOOL After, NTSTATUS Status) {}
+ 
++#ifdef FEX_IOS_HOST
++// Called by mingw's DllMainCRTStartup before it runs the static destructors.
++extern "C" BOOL WINAPI DllMain(HINSTANCE, DWORD Reason, LPVOID) {
++  if (Reason == DLL_PROCESS_DETACH) {
++    ProcessDetaching.store(true, std::memory_order_relaxed);
++  }
++  return TRUE;
++}
++#endif
++
+ class ScopedCallbackDisable {
+ private:
+   bool Prev;
+@@ -1485,7 +1514,7 @@ NTSTATUS ResetToConsistentState(EXCEPTION_RECORD* Exception, CONTEXT* GuestConte
+  * required for its correctness. Drop the BEFORE/AFTER mutex entirely
+  * and just call into the tracker directly on AFTER. */
+ void NotifyMemoryAlloc(void* Address, SIZE_T Size, ULONG Type, ULONG Prot, BOOL After, NTSTATUS Status) {
+-  if (!InvalidationTracker || !GetCPUArea().ThreadState()) {
++  if (!TrackerAvailable() || !GetCPUArea().ThreadState()) {
+     return;
+   }
+ 
+@@ -1498,7 +1527,7 @@ void NotifyMemoryAlloc(void* Address, SIZE_T Size, ULONG Type, ULONG Prot, BOOL
+ }
+ 
+ void NotifyMemoryFree(void* Address, SIZE_T Size, ULONG FreeType, BOOL After, NTSTATUS Status) {
+-  if (!InvalidationTracker || !GetCPUArea().ThreadState()) {
++  if (!TrackerAvailable() || !GetCPUArea().ThreadState()) {
+     return;
+   }
+ 
+@@ -1515,7 +1544,7 @@ void NotifyMemoryFree(void* Address, SIZE_T Size, ULONG FreeType, BOOL After, NT
+ }
+ 
+ void NotifyMemoryProtect(void* Address, SIZE_T Size, ULONG NewProt, BOOL After, NTSTATUS Status) {
+-  if (!InvalidationTracker || !GetCPUArea().ThreadState()) {
++  if (!TrackerAvailable() || !GetCPUArea().ThreadState()) {
+     return;
+   }
+ 
+@@ -1558,7 +1587,7 @@ void NotifyMemoryProtect(void* Address, SIZE_T Size, ULONG NewProt, BOOL After,
+  * Idempotent: re-registering the same intervals is harmless, and the syscall path still
+  * fires for the same module whenever its gate does let it through. */
+ extern "C" void NotifyImageMap(void* Address) {
+-  if (!InvalidationTracker || !Address) {
++  if (!TrackerAvailable() || !Address) {
+     return;
+   }
+ 
+@@ -1635,6 +1664,11 @@ NTSTATUS NotifyMapViewOfSection(void* Unk1, void* Address, void* Unk2, SIZE_T Si
+    * (+0x1900733, +0x3b508f0), which is why CEF never finished initialising.
+    *
+    * Keep the tracker null-checks; only the thread-state requirement is wrong. */
++#ifdef FEX_IOS_HOST
++  if (ProcessDetaching.load(std::memory_order_relaxed)) {
++    return STATUS_SUCCESS;
++  }
++#endif
+   if (!InvalidationTracker || !ImageTracker) {
+     /* ml190: do not drop it — replay once ProcessInit has built the trackers. */
+     QueuePendingImageMap(reinterpret_cast<uint64_t>(Address));
+@@ -1660,7 +1694,7 @@ NTSTATUS NotifyMapViewOfSection(void* Unk1, void* Address, void* Unk2, SIZE_T Si
+ }
+ 
+ void NotifyUnmapViewOfSection(void* Address, BOOL After, NTSTATUS Status) {
+-  if (!InvalidationTracker || !GetCPUArea().ThreadState()) {
++  if (!TrackerAvailable() || !GetCPUArea().ThreadState()) {
+     return;
+   }
+ 
+@@ -1676,7 +1710,7 @@ void NotifyUnmapViewOfSection(void* Address, BOOL After, NTSTATUS Status) {
+ }
+ 
+ void FlushInstructionCacheHeavy(const void* Address, SIZE_T Size) {
+-  if (!InvalidationTracker || !GetCPUArea().ThreadState()) {
++  if (!TrackerAvailable() || !GetCPUArea().ThreadState()) {
+     return;
+   }
+ 
+@@ -1685,7 +1719,7 @@ void FlushInstructionCacheHeavy(const void* Address, SIZE_T Size) {
+ }
+ 
+ void BTCpu64FlushInstructionCache(const void* Address, SIZE_T Size) {
+-  if (!InvalidationTracker || !GetCPUArea().ThreadState()) {
++  if (!TrackerAvailable() || !GetCPUArea().ThreadState()) {
+     return;
+   }
+ 
+@@ -1694,7 +1728,7 @@ void BTCpu64FlushInstructionCache(const void* Address, SIZE_T Size) {
+ }
+ 
+ void BTCpu64NotifyMemoryDirty(void* Address, SIZE_T Size) {
+-  if (!InvalidationTracker || !GetCPUArea().ThreadState()) {
++  if (!TrackerAvailable() || !GetCPUArea().ThreadState()) {
+     return;
+   }
+ 
+@@ -1749,7 +1783,7 @@ void BTCpu64NotifyReadFile(HANDLE Handle, void* Address, SIZE_T Size, BOOL After
+     return;
+   }
+ 
+-  if (!InvalidationTracker || !ThreadState) {
++  if (!TrackerAvailable() || !ThreadState) {
+     return;
+   }
+ 
