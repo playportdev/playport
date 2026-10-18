@@ -67,3 +67,32 @@ No sign-in was attempted; no password was typed.
 - RDR2 from the library on Vulkan (now its compatibility default) to the Sign In page.
 - The runtime's `KEY_WOW64_64KEY` redirection into `Wow6432Node` for an x64 process is a runtime
   bug beyond Steam (any x64 program reading `HKCU\Software` that way): its own issue.
+
+## Round 4: Vulkan by default (IPA `7f0caa62f5825054dd1f6549109e4e975e01dbf4eefe7ed58b4286c9a74ae06f`, HEAD `3ed58eb`)
+
+One lock session (`phone-session-4.sh`). RDR2's saved settings were cleared for the session, so the
+compatibility defaults chose Vulkan and `client`.
+
+- Hollow Knight (`20261018T114431`): first frame +9.97 s.
+- RDR2 from the Steam library (`20261018T114545`):
+  - `graphics: vulkan` and `steamapi: client: original`. The session root is the prefix's Steam client.
+  - The launcher's steam_api connected: logged on, tickets armed. It was served SteamClient017/020,
+    Utils010, User022, Friends017 and Apps008, and got a 234-byte auth session ticket. UserStats012,
+    Controller008 and Input006 got stubs, and two of their slots were called and answered 0.
+  - First window at +7.60 s.
+  - 60 s: Social Club's "Verify your email" page with its text, under the cookie notice. Rockstar
+    recognised the Steam-linked account and sent a code to its address. No agent typed anything.
+  - 90 s: the same page with the code field.
+  - Rockstar's `launcher.log`: the account signed in at 09:48:15, the front end was told "external
+    launch post-sign in", and the context went from Auth to MainWindow. 0.2 s later Launcher.exe ended on
+    `Exception: 0xc0000096` (privileged instruction) in its main thread.
+  - Host log: the main thread hit an AV read of 0 in FEX's fault sequence, and FEX turned it into
+    `c0000096` at a guest address in Launcher.exe, which was unhandled. `NtTerminateProcess` was
+    `0xc0000096`.
+  - 150 s and 240 s: PlayRDR2.exe's "Unable to launch game, please try reinstalling the game."
+  - Pool: head 504 MiB, tail 353 MiB, room 40 MiB; no exhaustion or refusals. Band peak 14,971 MB,
+    0 refused.
+
+The Steam bridge got the Steam copy past "Steam failed to initialize", through Social Club's account
+check, to a signed-in launcher. The next blocker is the privileged-instruction exception right after
+the main window opens.
