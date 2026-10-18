@@ -32,4 +32,12 @@ No pool size or rpmalloc change.
 
 ## Progress
 
-- 2026-10-18: plan written.
+- 2026-10-18: plan written. C0–C2 done (`e97073c`, `05a9d97`, `7345956`, `60763bf`); C3 three phone
+  rounds ([evidence](../evidence/2026-10-18-steam-bridge-rdr2.md)): the launcher's steam_api now loads
+  Playport's client, `SteamAPI_Init` succeeds and a live auth ticket is acked; no Sign In yet: the
+  runs were on DXMT, where the launcher exits with code 3. Fixes found by the runs: the
+  `Valve\Steam` keys in both views of `HKCU\Software` (this runtime redirects `KEY_WOW64_64KEY`
+  into `Wow6432Node`), and Vulkan as the game's compatibility default.
+- **Handoff:** build, install, and play RDR2 from the library (Vulkan, client) through
+  `mark:first window+240` with screenshots; stop at the Sign In page. C4 (tickets) only if that run
+  asks. The Wow6432Node redirection needs its own runtime issue.

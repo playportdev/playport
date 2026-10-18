@@ -67,6 +67,9 @@ launcher Open reaches the sign-in page (decisions 0112, 0114, 0116).
 - **A game started through a publisher launcher** inherits that launcher's Open settings: the
   exhaustion grace (0112), the graphics environment (0114) and the runtime keys (0116), under the
   game's own. The link is data (`PublisherLauncher.games`), not an app ID check in the launch.
+  Its backend comes as the game's compatibility default (`graphics: vulkan`, the Open's): on DXMT
+  the launcher ended itself with exit code 3 seven seconds in, after Steam answered, and
+  `PlayRDR2.exe` said "Unable to launch game" (run `20261018T113131`).
 - **D10 is met for Rockstar**: with a working Rockstar launcher (PLA-394), its Steam titles run
   through it rather than being refused.
 

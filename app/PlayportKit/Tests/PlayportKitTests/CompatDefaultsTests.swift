@@ -25,6 +25,8 @@ final class CompatDefaultsTests: XCTestCase {
         let table = try CompatDefaults.load(directory: Self.shipped)
         let rdr2 = try XCTUnwrap(table.entry(for: "app-1174180"))
         XCTAssertEqual(rdr2.settings.steamAPI, .client)
+        // The Rockstar launcher it starts draws through Vulkan, as its Open does (PublisherLauncher.rockstar).
+        XCTAssertEqual(rdr2.settings.graphics, PublisherLauncher.rockstar.graphics)
         XCTAssertEqual(LaunchSettings().over(rdr2.settings).steamAPI, .client)
         XCTAssertEqual(LaunchSettings(steamAPI: .emulated).over(rdr2.settings).steamAPI, .emulated)
     }
