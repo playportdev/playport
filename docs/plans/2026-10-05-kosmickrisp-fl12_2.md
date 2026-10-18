@@ -432,20 +432,22 @@ KosmicKrisp (`ios check`), `pp names`, `pp secrets` and `pp test --quick`. The p
   [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#dx12-route-2026-10-18-h3));
   H4 (the dev IPA with mesa 0037–0039 built in this copy at `99c60b9`: sha256 `1fb1fb9e…`,
   `verify-ipa` 85 checks passed, 0 failed; build records not committed, since their changed rows
-  come from the copy's path, [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#dev-ipa-with-mesa-00370039-h4)).
+  come from the copy's path, [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#dev-ipa-with-mesa-00370039-h4));
+  H6 (tooling: `run-replay.sh --bypass-feature-gate`, `667f8fe`, replays both corpora as the
+  scratch layers did, with no scratch layer; the profile copies float controls, subgroup sizes,
+  the driver ID and extension formats, and devinfo prints them,
+  [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#replay-and-profile-tooling-h6)).
   Host only; not checked on the phone.
 - **Blocked:** H5 (Apple's Metal compiler for Windows under Wine on the replay's MSL). The
   download needs an Apple account sign-in, and the tools' licence is not published, so whether
   Wine on Linux is permitted is unknown. Nothing downloaded; the owner's step is in the
   [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#apples-metal-compiler-on-the-generated-msl-h5).
-- **Queue (owner-approved 2026-10-17, host only):** next H6 tooling: the replay's feature-gate bypass
-  (ImageMSArray and H3's float controls) and the profile layer copying what vkd3d-proton reads
-  (float controls, subgroup size control, driver ID, extension formats; devinfo prints them);
-  H6b [PLA-387](https://linear.app/playportdev/issue/PLA-387); H7 measure RDR2's unsupported linear images on the
+- **Queue (owner-approved 2026-10-17, host only):** next H6b
+  [PLA-387](https://linear.app/playportdev/issue/PLA-387); H7 measure RDR2's unsupported linear images on the
   mock ([PLA-388](https://linear.app/playportdev/issue/PLA-388)). One writer per item. Then
   chunk 0 below (needs the phone).
-- **Running:** H6 (report `h6.md`). Reports: `h1-h3.md` (H1), `h2.md` (H2), `h1b.md` (H1b), `h3.md` (H3),
-  `h4.md` (H4), `h5.md` (H5).
+- **Running:** none. Reports: `h1-h3.md` (H1), `h2.md` (H2), `h1b.md` (H1b), `h3.md` (H3),
+  `h4.md` (H4), `h5.md` (H5), `h6.md` (H6).
 - **Phone:** not used by these runs; Hollow Knight on Vulkan first frame+10 is owed for V1–V3
   (mesa 0037–0039), on H4's IPA (sha256 above), then RDR2 after PLA-295 and PLA-300.
 - **Reports and scratch:** `$PLAYPORT_BUILD/agent-notes/rdr2-vk/` in the main checkout

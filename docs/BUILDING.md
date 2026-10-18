@@ -267,14 +267,19 @@ in the build area:
   is created with only its own features; `NAME/gate/` lists and keeps the
   modules that needed it. Pipelines the device cannot make (sample counts,
   formats, required subgroup sizes) stay skipped.
-- `devinfo.c` prints a device's report: extensions, features, limits, queues,
-  memory and format features (`cc -o devinfo devinfo.c -lvulkan`).
+- `devinfo.c` prints a device's report: extensions, features, the driver's ID,
+  name and conformance version, limits, float-controls and subgroup
+  properties, queues, memory and the features of every format the Vulkan
+  headers name, extension formats included (`cc -o devinfo devinfo.c -lvulkan`).
 - `vk-capture-layer/` is a Linux implicit layer that logs what an application
   creates and saves its SPIR-V (`PP_CAPTURE_OUT`). With
   `PP_CAPTURE_PROFILE=REPORT` (devinfo's output, for example the mock's) it
-  presents the desktop device as that one, and with `PP_CAPTURE_SPOOF=1` under
-  its name and vendor. Its one memory heap has the report's size; the desktop
-  memory type behind it is chosen per physical device, and
+  presents the desktop device as that one: its extensions, features, format
+  features (an extension format the report lacks has none), float controls
+  and subgroup sizes, within what the desktop device has. With
+  `PP_CAPTURE_SPOOF=1` it also takes the report's name, vendor and driver ID,
+  so vkd3d-proton sees KosmicKrisp's. Its one memory heap has the report's
+  size; the desktop memory type behind it is chosen per physical device, and
   `PP_CAPTURE_HEAP_CAP=1` caps the heap at that type's heap. Its
   `VK_EXT_memory_budget` budget follows KosmicKrisp's rule (90% of available
   memory plus usage, at most the heap), with that heap's usage. Build it beside

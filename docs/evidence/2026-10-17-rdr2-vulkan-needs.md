@@ -677,3 +677,67 @@ before any download. No tool was fetched, installed or run, so there are no comp
 - **Without the tool:** whether Apple's compiler accepts this MSL is still unknown. The phone
   answers it at pipeline creation. The host mock bridge writes the MSL and compiles none of it;
   chunk 0's device logs or an RDR2 run on the phone show any failure.
+
+## Replay and profile tooling (H6)
+
+**Date:** 2026-10-18. Host only, in the side copy on `dev/pla-386-rdr2-vulkan-kk`, on the
+mock built from mesa 0001–0039. No game run, no phone.
+
+- **Feature-gate bypass** (`667f8fe`): `run-replay.sh --bypass-feature-gate` builds
+  `build/mesa-host-test/vk-replay-gate/` and replays under it. It replaces V4's and H3's
+  scratch layers.
+  - It reports `shaderStorageImageMultisample` (ImageMSArray) and every float-controls
+    property (DenormPreserve, DenormFlushToZero, SignedZeroInfNanPreserve, RoundingModeRTE and
+    RTZ) to Fossilize only.
+  - At `vkCreateDevice` it clears the feature where the driver lacks it, and restores
+    Fossilize's structs afterwards.
+  - It lists, and keeps, the modules that needed it in `NAME/gate/` (`PP_REPLAY_GATE_OUT`;
+    nothing is written in the working directory).
+  - Pipeline-level gates are left alone: sample counts, formats and required subgroup sizes.
+  - Fossilize's other module gates are SPIR-V extensions and SPIR-V versions (from its
+    messages). In-process replays of all seven corpora under the layer printed no
+    capability, extension or version refusal.
+
+  | Corpus | Graphics | Compute | Modules failing validation | Crashes | Modules that needed the bypass |
+  |---|---|---|---|---|---|
+  | `rdr2-sga-ingame-h1b` | 1,950/1,950 | 788/788 | 0 (87 without) | 0 | 73, ImageMSArray |
+  | `rdr2-vkd3d-h3` | 1,587/1,607 | 757/758 | 0 (3,299 without) | 0 | 2,206, DenormFlushToZero |
+
+  These are the numbers of V4/H1b's msfeat run and of H3's msfeat + fcfeat run. The 21
+  pipelines still skipped on the DX12 corpus are H3's: 14 with 8 samples, 6 with an A8_UNORM
+  attachment and 1 with a required subgroup size.
+- **Profile fidelity:**
+  - `devinfo` now prints the driver (ID, name, info, conformance version), the float-controls
+    properties, the subgroup properties and size control (with the features
+    `subgroupSizeControl` and `computeFullSubgroups`), and every extension format the headers
+    name, with `VkFormatFeatureFlags2`.
+  - The capture layer's profile applies them:
+    - float controls ANDed, the narrower independence;
+    - subgroup sizes within the desktop's range;
+    - stage and operation masks and size-control features ANDed;
+    - format features ANDed in `VkFormatProperties` and `VkFormatProperties3`. An extension
+      format the report lacks has none, and its image format query fails.
+    - With `PP_CAPTURE_SPOOF=1`: the driver ID, name, info and conformance version.
+  - The KosmicKrisp report was regenerated from the mock (5 GiB heap) and its 8 GiB variant
+    updated. The old 8 GiB report had no `vendor` line, so H3's spoofed probe showed vendor 0.
+  - **Checks with `devinfo`:**
+    - On the mock through the layer, with the mock's own report: identical output.
+    - With spoofing: only the name differs (`Mock ` dropped).
+    - With the 8 GiB report: the name and heap 0 differ.
+  - **On RADV with the 8 GiB report and spoofing:** the driver lines, float controls,
+    subgroup lines and vendor are KosmicKrisp's:
+    - driver ID 28 (`MESA_KOSMICKRISP`), "KosmicKrisp", conformance 1.4.6.2;
+    - no denorm flush or preserve, independence NONE;
+    - subgroup size 32 (min = max = 32), required-size stages 0.
+  - Extension formats are KosmicKrisp's where RADV has the features too. Examples:
+    - A8_UNORM: vertex buffer only, so a sampled or colour image is unsupported;
+    - A1B5G5R5: none;
+    - A4R4G4B4: KosmicKrisp's features.
+  - 26 lines stay below the report (AND): ASTC HDR, which RADV lacks, and some YCbCr bits.
+- **Not run:** H3's `d3d12probe` under the new profile, because it uses a prefix outside
+  this copy.
+  - (inference) Proton's stock vkd3d-proton should now stop below H3's SM 6.5: its SM 6.2 gate
+    reads the denorm properties, and KosmicKrisp's are all false.
+  - Playport's vkd3d-proton (patch 0002) counts them as given on KosmicKrisp's driver ID,
+    which the profile now spoofs. A desktop DX12 capture that should match the phone
+    therefore needs an x86-64 build of Playport's vkd3d-proton.

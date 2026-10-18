@@ -3,12 +3,17 @@
  * The capture layer's profile: with PP_CAPTURE_PROFILE=REPORT, where REPORT
  * is devinfo's output for another device (build/mesa-host-test/devinfo.c, for
  * example KosmicKrisp on the host mock), the desktop device shows only that
- * device's extensions, its 1.0 features (ANDed), format features (ANDed),
- * sample counts and line width, one queue family with one queue, and one
- * memory type (DEVICE_LOCAL | HOST_VISIBLE | HOST_COHERENT | HOST_CACHED) on
- * one heap of the report's heap 0 size, as KosmicKrisp has. With
- * PP_CAPTURE_SPOOF=1 it also takes the report's vendor, device ID, name and
- * an integrated device type. Included by capture.c.
+ * device's extensions, its 1.0 features (ANDed), format features (ANDed,
+ * VkFormatFeatureFlags2 too; an extension format the report does not list
+ * has none), sample counts and line width, float controls (ANDed, the
+ * narrower independence), subgroup sizes (within the desktop's range) and
+ * size control (ANDed), one queue family with one queue, and one memory type
+ * (DEVICE_LOCAL | HOST_VISIBLE | HOST_COHERENT | HOST_CACHED) on one heap of
+ * the report's heap 0 size, as KosmicKrisp has. With PP_CAPTURE_SPOOF=1 it
+ * also takes the report's vendor, device ID, name, driver ID, driver name and
+ * info, conformance version and an integrated device type. A property an
+ * older report does not print is left as the desktop's, but for extension
+ * formats. Included by capture.c.
  *
  * The report's memory type stands for the first desktop type that is
  * DEVICE_LOCAL, HOST_VISIBLE and HOST_COHERENT, chosen per physical device:
@@ -22,9 +27,32 @@
 static int prof_on;
 static char **prof_ext; static int prof_next;
 static VkBool32 prof_f10[55];
-static VkFormatProperties prof_fmt[200];
+// A format's features in the report: VkFormatFeatureFlags, and VkFormatFeatureFlags2
+// when the report has them (has2).
+typedef struct { VkFormatProperties p; int has2; VkFormatFeatureFlags2 lin2, opt2, buf2; } ProfFormat;
+static ProfFormat prof_fmt[185]; // core formats, by value
+// Extension formats (>= 1000000000) the report lists; any other has no features.
+static struct { VkFormat f; ProfFormat p; } prof_xfmt[256]; static int prof_nxfmt;
 static uint32_t prof_vendor, prof_devid;
 static char prof_name[256];
+// The driver (spoofed with the name), when the report has it.
+static int prof_has_driver;
+static VkDriverId prof_driver_id;
+static char prof_driver_name[VK_MAX_DRIVER_NAME_SIZE], prof_driver_info[VK_MAX_DRIVER_INFO_SIZE];
+static VkConformanceVersion prof_conformance;
+// Float controls and subgroups, by devinfo's "fc", "subgroup" and "f13" names; -1 when the report lacks one.
+static const char *fcnames[] = {"denormBehaviorIndependence","roundingModeIndependence",
+    "shaderSignedZeroInfNanPreserveFloat16","shaderSignedZeroInfNanPreserveFloat32","shaderSignedZeroInfNanPreserveFloat64",
+    "shaderDenormPreserveFloat16","shaderDenormPreserveFloat32","shaderDenormPreserveFloat64",
+    "shaderDenormFlushToZeroFloat16","shaderDenormFlushToZeroFloat32","shaderDenormFlushToZeroFloat64",
+    "shaderRoundingModeRTEFloat16","shaderRoundingModeRTEFloat32","shaderRoundingModeRTEFloat64",
+    "shaderRoundingModeRTZFloat16","shaderRoundingModeRTZFloat32","shaderRoundingModeRTZFloat64"};
+static long long prof_fc[17];
+static const char *sgnames[] = {"subgroupSize","supportedStages","supportedOperations","quadOperationsInAllStages",
+    "minSubgroupSize","maxSubgroupSize","maxComputeWorkgroupSubgroups","requiredSubgroupSizeStages"};
+enum { SG_SIZE, SG_STAGES, SG_OPS, SG_QUAD, SG_MIN, SG_MAX, SG_MAXWGSG, SG_REQSTAGES, SG_N };
+static long long prof_sg[SG_N];
+static long long prof_size_control = -1, prof_full_subgroups = -1;
 static VkDeviceSize prof_heap = ~0ull;
 // Sample count masks and the widest line, from the report's limits.
 static VkSampleCountFlags prof_color_samples = ~0u, prof_depth_samples = ~0u, prof_storage_samples = ~0u;
@@ -39,7 +67,14 @@ static void prof_load(void) {
     FILE *f = fopen(p, "r");
     if (!f) return;
     char line[512];
-    int fmtidx = 1; // devinfo prints formats 1..184 in order
+    for (int i = 0; i < 17; i++) prof_fc[i] = -1;
+    for (int i = 0; i < SG_N; i++) prof_sg[i] = -1;
+    // Every format these headers name, to read the report's format lines by name.
+    static struct { VkFormat f; const char *name; } known[512]; int nknown = 0;
+    for (long v = 1; v < 1001000000 && nknown < 512; v = v == 184 ? 1000000000 : v + 1) {
+        const char *n = string_VkFormat((VkFormat)v);
+        if (strncmp(n, "Unhandled", 9)) { known[nknown].f = (VkFormat)v; known[nknown++].name = n; }
+    }
     prof_ext = calloc(1024, sizeof(char *));
     while (fgets(line, sizeof line, f)) {
         line[strcspn(line, "\n")] = 0;
@@ -48,12 +83,37 @@ static void prof_load(void) {
             char name[128]; unsigned v;
             if (sscanf(line + 4, "%127s %u", name, &v) == 2)
                 for (int i = 0; i < 55; i++) if (!strcmp(name, f10names[i])) prof_f10[i] = v;
-        } else if (!strncmp(line, "format ", 7)) {
-            unsigned lin, opt, buf; char name[128];
-            if (sscanf(line + 7, "%127s lin=%x opt=%x buf=%x", name, &lin, &opt, &buf) == 4 && fmtidx < 200) {
-                prof_fmt[fmtidx].linearTilingFeatures = lin; prof_fmt[fmtidx].optimalTilingFeatures = opt; prof_fmt[fmtidx].bufferFeatures = buf;
+        } else if (!strncmp(line, "f13 subgroupSizeControl ", 24)) prof_size_control = strtoul(line + 24, NULL, 10);
+        else if (!strncmp(line, "f13 computeFullSubgroups ", 25)) prof_full_subgroups = strtoul(line + 25, NULL, 10);
+        else if (!strncmp(line, "fc ", 3) || !strncmp(line, "subgroup ", 9)) {
+            int fc = line[0] == 'f';
+            char name[128]; char val[32];
+            if (sscanf(line + (fc ? 3 : 9), "%127s %31s", name, val) == 2) {
+                const char **names = fc ? fcnames : sgnames;
+                int n = fc ? 17 : SG_N;
+                // devinfo prints stage and operation masks in hex, the rest in decimal
+                int hex = !fc && (!strcmp(name, "supportedStages") || !strcmp(name, "supportedOperations") || !strcmp(name, "requiredSubgroupSizeStages"));
+                for (int i = 0; i < n; i++) if (!strcmp(name, names[i])) (fc ? prof_fc : prof_sg)[i] = strtoll(val, NULL, hex ? 16 : 10);
             }
-            fmtidx++;
+        } else if (!strncmp(line, "driver id ", 10)) { prof_driver_id = (VkDriverId)atoi(line + 10); prof_has_driver = 1; }
+        else if (!strncmp(line, "driver name ", 12)) snprintf(prof_driver_name, sizeof prof_driver_name, "%.255s", line + 12);
+        else if (!strncmp(line, "driver info ", 12)) snprintf(prof_driver_info, sizeof prof_driver_info, "%.255s", line + 12);
+        else if (!strncmp(line, "driver conformance ", 19)) {
+            unsigned a = 0, b = 0, c = 0, d = 0;
+            sscanf(line + 19, "%u.%u.%u.%u", &a, &b, &c, &d);
+            prof_conformance = (VkConformanceVersion){(uint8_t)a, (uint8_t)b, (uint8_t)c, (uint8_t)d};
+        } else if (!strncmp(line, "format ", 7)) {
+            unsigned lin, opt, buf; char name[128]; unsigned long long lin2, opt2, buf2;
+            int got = sscanf(line + 7, "%127s lin=%x opt=%x buf=%x lin2=%llx opt2=%llx buf2=%llx", name, &lin, &opt, &buf, &lin2, &opt2, &buf2);
+            if (got >= 4) {
+                ProfFormat fp = {{lin, opt, buf}, got == 7, lin2, opt2, buf2};
+                for (int i = 0; i < nknown; i++) {
+                    if (strcmp(name, known[i].name)) continue;
+                    if ((int)known[i].f < 185) prof_fmt[known[i].f] = fp;
+                    else if (prof_nxfmt < 256) { prof_xfmt[prof_nxfmt].f = known[i].f; prof_xfmt[prof_nxfmt++].p = fp; }
+                    break;
+                }
+            }
         } else if (!strncmp(line, "device ", 7)) {
             char *api = strstr(line, " api ");
             if (api) *api = 0;
@@ -69,7 +129,8 @@ static void prof_load(void) {
     }
     fclose(f);
     prof_on = 1;
-    L("profile %s: %d extensions, name '%s', heap %llu\n", p, prof_next, prof_name, (unsigned long long)prof_heap);
+    L("profile %s: %d extensions, name '%s', driver %s %d, heap %llu, %d extension formats\n", p, prof_next, prof_name,
+      prof_has_driver ? prof_driver_name : "-", prof_has_driver ? (int)prof_driver_id : -1, (unsigned long long)prof_heap, prof_nxfmt);
 }
 
 static int prof_has_ext(const char *n) {
@@ -120,11 +181,21 @@ static void prof_mask10(VkPhysicalDeviceFeatures *f) {
     for (int i = 0; i < 55; i++) b[i] = b[i] && prof_f10[i];
 }
 static void VKAPI_CALL q_GetFeatures(VkPhysicalDevice pd, VkPhysicalDeviceFeatures *f) { p_GetFeatures(pd, f); prof_mask10(f); }
+// ANDs a feature with the report's, when the report has it.
+static void prof_and(VkBool32 *b, long long report) { if (report >= 0) *b = *b && report; }
 static void VKAPI_CALL q_GetFeatures2(VkPhysicalDevice pd, VkPhysicalDeviceFeatures2 *f) {
     p_GetFeatures2(pd, f); prof_mask10(&f->features);
     for (Hdr *h = (Hdr *)f->pNext; h; h = (Hdr *)h->pNext) {
         if (h->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES) ((VkPhysicalDeviceVulkan11Features *)h)->storageInputOutput16 = 0;
         if (h->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES) ((VkPhysicalDevice16BitStorageFeatures *)h)->storageInputOutput16 = 0;
+        if (h->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES) {
+            VkPhysicalDeviceVulkan13Features *v = (void *)h;
+            prof_and(&v->subgroupSizeControl, prof_size_control); prof_and(&v->computeFullSubgroups, prof_full_subgroups);
+        }
+        if (h->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES) {
+            VkPhysicalDeviceSubgroupSizeControlFeatures *v = (void *)h;
+            prof_and(&v->subgroupSizeControl, prof_size_control); prof_and(&v->computeFullSubgroups, prof_full_subgroups);
+        }
     }
 }
 
@@ -143,7 +214,87 @@ static void prof_limits(VkPhysicalDeviceProperties *p) {
     }
 }
 static void VKAPI_CALL q_GetProps(VkPhysicalDevice pd, VkPhysicalDeviceProperties *p) { p_GetProps(pd, p); prof_limits(p); }
-static void VKAPI_CALL q_GetProps2(VkPhysicalDevice pd, VkPhysicalDeviceProperties2 *p) { p_GetProps2(pd, p); prof_limits(&p->properties); }
+
+// The narrower of two float-controls independences (NONE < 32_BIT_ONLY < ALL).
+static VkShaderFloatControlsIndependence prof_indep(VkShaderFloatControlsIndependence desk, long long report) {
+    if (report < 0) return desk;
+    static const int rank[] = {[VK_SHADER_FLOAT_CONTROLS_INDEPENDENCE_32_BIT_ONLY] = 1, [VK_SHADER_FLOAT_CONTROLS_INDEPENDENCE_ALL] = 2,
+                               [VK_SHADER_FLOAT_CONTROLS_INDEPENDENCE_NONE] = 0};
+    if (report > 2 || (unsigned)desk > 2) return desk;
+    return rank[report] < rank[desk] ? (VkShaderFloatControlsIndependence)report : desk;
+}
+// One body for VkPhysicalDeviceVulkan12Properties and VkPhysicalDeviceFloatControlsProperties.
+#define PROF_FLOAT_CONTROLS(q) do { \
+    q->denormBehaviorIndependence = prof_indep(q->denormBehaviorIndependence, prof_fc[0]); \
+    q->roundingModeIndependence = prof_indep(q->roundingModeIndependence, prof_fc[1]); \
+    VkBool32 *b_[15] = {&q->shaderSignedZeroInfNanPreserveFloat16, &q->shaderSignedZeroInfNanPreserveFloat32, &q->shaderSignedZeroInfNanPreserveFloat64, \
+        &q->shaderDenormPreserveFloat16, &q->shaderDenormPreserveFloat32, &q->shaderDenormPreserveFloat64, \
+        &q->shaderDenormFlushToZeroFloat16, &q->shaderDenormFlushToZeroFloat32, &q->shaderDenormFlushToZeroFloat64, \
+        &q->shaderRoundingModeRTEFloat16, &q->shaderRoundingModeRTEFloat32, &q->shaderRoundingModeRTEFloat64, \
+        &q->shaderRoundingModeRTZFloat16, &q->shaderRoundingModeRTZFloat32, &q->shaderRoundingModeRTZFloat64}; \
+    for (int i_ = 0; i_ < 15; i_++) prof_and(b_[i_], prof_fc[2 + i_]); } while (0)
+#define PROF_DRIVER(q) do { if (prof_has_driver && getenv("PP_CAPTURE_SPOOF")) { \
+    q->driverID = prof_driver_id; q->conformanceVersion = prof_conformance; \
+    snprintf(q->driverName, sizeof q->driverName, "%s", prof_driver_name); \
+    snprintf(q->driverInfo, sizeof q->driverInfo, "%s", prof_driver_info); } } while (0)
+// The report's subgroup size, when the desktop can run at it (min..max).
+static void prof_subgroup_size(uint32_t *size, uint32_t min, uint32_t max) {
+    if (prof_sg[SG_SIZE] >= min && prof_sg[SG_SIZE] <= max) *size = (uint32_t)prof_sg[SG_SIZE];
+}
+static void prof_mask32(uint32_t *v, long long report) { if (report >= 0) *v &= (uint32_t)report; }
+// The report's size range, narrowed to the desktop's; left as the desktop's when they do not meet.
+static void prof_size_range(uint32_t *min, uint32_t *max) {
+    long long lo = prof_sg[SG_MIN], hi = prof_sg[SG_MAX];
+    if (lo < 0 || hi < 0) return;
+    if (lo < *min) lo = *min;
+    if (hi > *max) hi = *max;
+    if (lo <= hi) { *min = (uint32_t)lo; *max = (uint32_t)hi; }
+}
+static void VKAPI_CALL q_GetProps2(VkPhysicalDevice pd, VkPhysicalDeviceProperties2 *p) {
+    p_GetProps2(pd, p); prof_limits(&p->properties);
+    // The desktop's size range first: the subgroup size must stay inside it.
+    VkPhysicalDeviceSubgroupSizeControlProperties desk = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_PROPERTIES};
+    VkPhysicalDeviceProperties2 dp = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &desk};
+    p_GetProps2(pd, &dp);
+    uint32_t lo = desk.minSubgroupSize, hi = desk.maxSubgroupSize;
+    prof_size_range(&lo, &hi);
+    for (Hdr *h = (Hdr *)p->pNext; h; h = (Hdr *)h->pNext) {
+        switch (h->sType) {
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES: {
+            VkPhysicalDeviceVulkan11Properties *q = (void *)h;
+            prof_subgroup_size(&q->subgroupSize, lo, hi);
+            prof_mask32(&q->subgroupSupportedStages, prof_sg[SG_STAGES]); prof_mask32(&q->subgroupSupportedOperations, prof_sg[SG_OPS]);
+            prof_and(&q->subgroupQuadOperationsInAllStages, prof_sg[SG_QUAD]);
+            break;
+        }
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES: {
+            VkPhysicalDeviceSubgroupProperties *q = (void *)h;
+            prof_subgroup_size(&q->subgroupSize, lo, hi);
+            prof_mask32(&q->supportedStages, prof_sg[SG_STAGES]); prof_mask32(&q->supportedOperations, prof_sg[SG_OPS]);
+            prof_and(&q->quadOperationsInAllStages, prof_sg[SG_QUAD]);
+            break;
+        }
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES: { VkPhysicalDeviceVulkan12Properties *q = (void *)h; PROF_FLOAT_CONTROLS(q); PROF_DRIVER(q); break; }
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FLOAT_CONTROLS_PROPERTIES: { VkPhysicalDeviceFloatControlsProperties *q = (void *)h; PROF_FLOAT_CONTROLS(q); break; }
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES: { VkPhysicalDeviceDriverProperties *q = (void *)h; PROF_DRIVER(q); break; }
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_PROPERTIES: {
+            VkPhysicalDeviceVulkan13Properties *q = (void *)h;
+            q->minSubgroupSize = lo; q->maxSubgroupSize = hi;
+            if (prof_sg[SG_MAXWGSG] >= 0 && prof_sg[SG_MAXWGSG] < q->maxComputeWorkgroupSubgroups) q->maxComputeWorkgroupSubgroups = (uint32_t)prof_sg[SG_MAXWGSG];
+            prof_mask32(&q->requiredSubgroupSizeStages, prof_sg[SG_REQSTAGES]);
+            break;
+        }
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_PROPERTIES: {
+            VkPhysicalDeviceSubgroupSizeControlProperties *q = (void *)h;
+            q->minSubgroupSize = lo; q->maxSubgroupSize = hi;
+            if (prof_sg[SG_MAXWGSG] >= 0 && prof_sg[SG_MAXWGSG] < q->maxComputeWorkgroupSubgroups) q->maxComputeWorkgroupSubgroups = (uint32_t)prof_sg[SG_MAXWGSG];
+            prof_mask32(&q->requiredSubgroupSizeStages, prof_sg[SG_REQSTAGES]);
+            break;
+        }
+        default: break;
+        }
+    }
+}
 
 static void VKAPI_CALL q_GetQF(VkPhysicalDevice pd, uint32_t *n, VkQueueFamilyProperties *q) {
     uint32_t all = 0; p_GetQF(pd, &all, NULL);
@@ -221,14 +372,41 @@ static void VKAPI_CALL q_GetMem2(VkPhysicalDevice pd, VkPhysicalDeviceMemoryProp
     }
 }
 
+// The report's features of a format: a core one's line, an extension one's
+// line or none at all; NULL for VK_FORMAT_UNDEFINED, left as the driver says.
+static const ProfFormat *prof_format(VkFormat f) {
+    static const ProfFormat none = {{0, 0, 0}, 1, 0, 0, 0};
+    if ((int)f <= 0) return NULL;
+    if ((int)f < 185) return &prof_fmt[f];
+    for (int i = 0; i < prof_nxfmt; i++) if (prof_xfmt[i].f == f) return &prof_xfmt[i].p;
+    return &none;
+}
 static void prof_fmtmask(VkFormat f, VkFormatProperties *p) {
-    if ((int)f <= 0 || (int)f >= 200) return; // extension formats: leave as the driver says
-    p->linearTilingFeatures &= prof_fmt[f].linearTilingFeatures;
-    p->optimalTilingFeatures &= prof_fmt[f].optimalTilingFeatures;
-    p->bufferFeatures &= prof_fmt[f].bufferFeatures;
+    const ProfFormat *r = prof_format(f);
+    if (!r) return;
+    p->linearTilingFeatures &= r->p.linearTilingFeatures;
+    p->optimalTilingFeatures &= r->p.optimalTilingFeatures;
+    p->bufferFeatures &= r->p.bufferFeatures;
+}
+// VkFormatProperties3: ANDed with the report's flags2; from a report without
+// them, its 32 bits ANDed and the bits from 31 up (no VkFormatFeatureFlags
+// equivalent) kept, unless the report has no feature at all.
+static void prof_fmtmask2(VkFormatFeatureFlags2 *v, int has2, VkFormatFeatureFlags2 r2, VkFormatFeatureFlags r) {
+    if (has2) *v &= r2;
+    else *v = r ? *v & ((VkFormatFeatureFlags2)r | ~(VkFormatFeatureFlags2)0x7fffffff) : 0;
 }
 static void VKAPI_CALL q_GetFmt(VkPhysicalDevice pd, VkFormat f, VkFormatProperties *p) { p_GetFmt(pd, f, p); prof_fmtmask(f, p); }
-static void VKAPI_CALL q_GetFmt2(VkPhysicalDevice pd, VkFormat f, VkFormatProperties2 *p) { p_GetFmt2(pd, f, p); prof_fmtmask(f, &p->formatProperties); }
+static void VKAPI_CALL q_GetFmt2(VkPhysicalDevice pd, VkFormat f, VkFormatProperties2 *p) {
+    p_GetFmt2(pd, f, p); prof_fmtmask(f, &p->formatProperties);
+    const ProfFormat *r = prof_format(f);
+    for (Hdr *h = (Hdr *)p->pNext; r && h; h = (Hdr *)h->pNext)
+        if (h->sType == VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_3) {
+            VkFormatProperties3 *q = (void *)h;
+            prof_fmtmask2(&q->linearTilingFeatures, r->has2, r->lin2, r->p.linearTilingFeatures);
+            prof_fmtmask2(&q->optimalTilingFeatures, r->has2, r->opt2, r->p.optimalTilingFeatures);
+            prof_fmtmask2(&q->bufferFeatures, r->has2, r->buf2, r->p.bufferFeatures);
+        }
+}
 
 static uint32_t usage_feats(VkImageUsageFlags u) {
     uint32_t r = 0;
@@ -239,10 +417,11 @@ static uint32_t usage_feats(VkImageUsageFlags u) {
     return r;
 }
 static VkResult prof_imgfmt(VkFormat f, VkImageTiling t, VkImageUsageFlags u, VkImageFormatProperties *p) {
-    if ((int)f > 0 && (int)f < 200) {
-        uint32_t have = t == VK_IMAGE_TILING_LINEAR ? prof_fmt[f].linearTilingFeatures : prof_fmt[f].optimalTilingFeatures;
+    const ProfFormat *r = prof_format(f);
+    if (r) {
+        uint32_t have = t == VK_IMAGE_TILING_LINEAR ? r->p.linearTilingFeatures : r->p.optimalTilingFeatures;
         uint32_t need = usage_feats(u);
-        if ((have & need) != need) return VK_ERROR_FORMAT_NOT_SUPPORTED;
+        if ((have & need) != need || !have) return VK_ERROR_FORMAT_NOT_SUPPORTED;
     }
     p->sampleCounts &= (u & VK_IMAGE_USAGE_STORAGE_BIT) ? prof_storage_samples
                      : (u & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT) ? prof_depth_samples : prof_color_samples;
