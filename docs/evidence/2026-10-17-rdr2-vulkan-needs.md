@@ -998,3 +998,97 @@ of `h7b-b2`); the saves `SRDR30000` and `SRDR30015` are unchanged; `cfg.dat`,
 `cloudsavedata.dat` and `ProfileSettings` changed. `system.xml` was restored (sha256 `24963ca1…`).
 `h7b-c` ended at its 600 s timeout in Story mode, and the launcher then showed its sign-in page;
 nothing was entered and no file in the prefix changed after it.
+
+## Discrete vs integrated device type in Story mode (H7c)
+
+**Date:** 2026-10-18. **Linear:** [PLA-397](https://linear.app/playportdev/issue/PLA-397)
+(under PLA-386). Desktop only, as H7b: RDR2 under Proton Experimental on the agent's sway
+display, the KosmicKrisp profile at the phone's 8 GiB heap with the spoof on, the restored
+`system.xml` (sha256 `24963ca1…`: `Safe`, 1280×720 borderless, `vSync 1`), and the capture layer
+of this commit. The question: would reporting a discrete device type to RDR2 (instead of the
+mesa sync path for CPU-accessed linear images, PLA-397) change its upload path in a way that
+costs on unified memory? Not checked on the phone.
+
+**The layer** now has `PP_CAPTURE_MEMUSE=N` (`vk-capture-layer/memuse.c`): per device, the memory
+allocated by the application's memory type (live and peak), the bytes of allocations it maps and
+never maps, buffers whose only usage is `TRANSFER_SRC` (staging), the bytes bound to optimal and
+linear images, and `vkCmdCopyBufferToImage`, `vkCmdCopyBuffer`, `vkCmdCopyImageToBuffer`,
+`vkCmdCopyImage` and `vkCmdUpdateBuffer` with the bytes they move (counted when recorded), every N
+presents; every present's time goes to `present.PID.log`. A headless scratch test on RADV (from
+H7b's) gave the expected counts.
+
+**Runs.** Each: landing page, Story mode (loads in about 1.5 minutes), the same scripted route of
+about 8 minutes (walking, camera pans, the map seven times), quit from the pause menu; the game
+exited normally each time. Only the device type differs within a pair.
+
+| Run | Type | Layer options | Where the route ran | Note |
+|---|---|---|---|---|
+| `h7c-d` | discrete | linear use, hashes every 30 presents, memuse | outdoors at Colter | |
+| `h7c-i` | integrated | the same | inside the cabin; the map stuck open about 4 of 8 minutes | the hash pass stalled every 30th frame (below): its frame times and input are unusable |
+| `h7c-i2` | integrated | memuse only | inside the cabin, then outdoors (last ~3 minutes) | |
+| `h7c-d2` | discrete | memuse only | outdoors at Colter, as `h7c-d` | |
+
+Story mode spawned the discrete runs on the cabin porch and the integrated runs inside the cabin,
+so the scenes are not identical (the autosave changes with every load). The landing page of
+`h7c-d` and `h7c-i` showed the same forest scene.
+
+**Results** (the SGA device; "per frame" is per present over the route):
+
+| | Discrete (`d`, `d2`) | Integrated (`i`, `i2`) |
+|---|---|---|
+| linear images created | **1** (B8G8R8A8 1280×720, transfer src/dst, its own 3.5 MiB allocation, mapped, 1 layout query, sampled once; H7b's landing count was 2) | **11,519**; as H7b: 10,520 plain, 395 colour attachments, 386 arrays, 55 3D, 9 mip chains |
+| linear images the CPU writes through the mapping | **none** (no 3D, array or mip chain) | 8 of the 9 mip chains and 4 of the 16 bound 3D images (`h7c-i`, as H7b) |
+| memory allocated, peak | 2,691 / 2,659 MiB (100–101 allocations) | 2,531 (shorter run) / 2,691 MiB |
+| memory mapped | all of it (never-mapped 0 bytes) | all of it (never-mapped 0 bytes) |
+| bound to optimal / linear images, peak | 1,905 / 3.5 MiB | 1,903 / 80 MiB |
+| staging buffers | 4.2 created per frame, peak 159–162 MiB live | 4.0–4.1 per frame, peak 145 MiB |
+| buffer → image copies | **26.0 per frame, 875 KiB**, all into optimal images | **4.0–4.1 per frame, 208–223 KiB**, 4.0 of them into linear images |
+| buffer → buffer copies | **51–55 per frame, 1.2 MiB** | **1.0 per frame, 1 KiB** |
+| image → buffer copies (readbacks) | **11–12 per frame, 1.0–1.2 MiB** (2.5–18 per segment, up to 1.9 MiB) | **1.0 per frame, 64 KiB** |
+| `vkCmdUpdateBuffer`, image → image | 6.1–6.4 per frame (14 KiB); 9.2 | 7.1–7.3 (21–25 KiB); 9.9–10.1 |
+| present rate over the route | 40.3 / 38.5 per second | 24.6 (stalled by the hash pass) / 54.9 |
+| present interval median, p95, p99 | 25.6, 35.4, 39.8 ms / 29.4, 36.9, 39.3 ms | 16.7, 31.1, 716 ms / 16.7, 28.3, 32.4 ms |
+| landing page (same scene), per frame | 1.52 buffer → image copies, 640 KiB, into optimal images; 59 presents/s | 1.54, 648 KiB, into linear images; 58 presents/s |
+| errors | none: no failed Vulkan call in the layer's log, no device loss, no crash; the Wine `err` lines are the launcher's COM and WinRT ones of every run | the same |
+
+The per-segment counts are steady: in both discrete runs 26.0 buffer → image copies per frame in
+every 30–60-second segment; in `h7c-i2` 1.0 buffer → buffer and 1.0 image → buffer copy per frame
+in every segment, indoors and the outdoor ones alike. So the difference is the device type,
+not the scene. The screenshots show normal rendering in all four runs.
+
+**What changes with the discrete type.** RDR2 stops making linear images and does the same work
+with copies: what it writes with the CPU into linear mip chains and 3D images on an integrated
+device it writes into staging buffers and copies into optimal images, and what it reads back
+from linear colour attachments it copies out to buffers first. That is about 85 more transfer
+commands and about 3 MiB more copy traffic per frame (3.3 against 0.29 MiB). The memory footprint
+is the same: both map all of their memory (the profile has one memory type, so there is no
+host-visible versus device-local choice), and staging peaks about 10% higher.
+
+**Frame times are only a sanity signal here.** The discrete runs present at 38–40 per second
+against 55 for `h7c-i2`, and their slow segments (29–35 per second) are the ones with 15–18
+readbacks per frame (1.6–1.9 MiB), while segments with 2.5 readbacks run at 60. On this desktop
+the profile's memory is RADV's device-local, host-visible type: VRAM through the PCIe BAR, which
+the CPU reads uncached. The layer's own hash pass shows how slow that is: reading about 400 KiB
+of `h7c-i`'s mapped linear images byte by byte took about 710 ms every 30th frame (398 of the 418
+gaps between its 419 intervals over 100 ms are exactly 30 presents). (inference: the discrete runs' slowdown is
+the CPU reading readback buffers through that BAR; on the phone, KosmicKrisp's one memory type is
+host-cached shared memory, so it would not apply.) Desktop RADV is not the phone's GPU, so these
+numbers do not predict the phone's.
+
+**Verdict.** Reporting a discrete device type to RDR2 is safe to adopt as the per-title fix
+(H7d): with it RDR2 makes no linear image that KosmicKrisp needs mesa 0041 or a sync path for
+(one 2D transfer image, buffer-backed), the same memory, no errors, and the same `Safe` settings
+(H7b). Its cost is about 85 more copy commands and about 3 MiB more GPU copy traffic per frame,
+plus CPU reads of about 1–2 MiB of readbacks. (inference: on unified memory that is under 1% of
+the GPU's bandwidth at 30–60 frames per second, and comparable to the copies a sync path would
+make for the 13 CPU-accessed images every submission, without new mesa machinery.) What is not
+measured is KosmicKrisp's per-command cost of those copies on the phone; the frame-time check
+belongs to the first RDR2 play on the phone. PLA-397 stays the fallback if discrete breaks or
+slows RDR2 there, and for other titles that use linear images.
+
+**Owner state.** The owner's Steam client was not running; it was started on sway at 10:12
+(`DISPLAY=:0`, `WAYLAND_DISPLAY=wayland-1`, `BROWSER=/bin/false`), and stopped with
+`steam -shutdown` at 11:20 and left stopped. Rockstar's cloud got one `PostFile` upload at the end
+of each run (10:26, 10:46, 11:03, 11:18). The autosave `SRDR30015` changed in every run (Story
+mode saves on load); `SRDR30000` is unchanged; `cfg.dat` and `cloudsavedata.dat` changed.
+`system.xml` was not changed (sha256 `24963ca1…` before and after). No sign-in page appeared.

@@ -459,13 +459,21 @@ KosmicKrisp (`ios check`), `pp names`, `pp secrets` and `pp test --quick`. The p
   whose untranslated ALU ops now fail visibly and are counted by the mock; after it the host
   test's 164, the Vulkan route's 3,891 and the DX12 route's 3,558 libraries all compile,
   `build/mesa-host-test/msl-compile.sh`,
-  [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#apples-metal-compiler-on-the-generated-msl-h5)).
+  [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#apples-metal-compiler-on-the-generated-msl-h5));
+  H7c ([PLA-397](https://linear.app/playportdev/issue/PLA-397), under the owner's decision of
+  2026-10-18 to take whichever makes RDR2 playable at the least speed: desktop Story-mode runs
+  with a discrete and an integrated device type; with discrete RDR2 makes 1 linear image (2D,
+  transfer only) instead of 11,519, none CPU-written, with the same memory and no errors, and
+  instead copies: about 85 more transfer commands and 3 MiB more copy traffic per frame; the
+  capture layer counts memory, copies and presents (`PP_CAPTURE_MEMUSE`),
+  [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#discrete-vs-integrated-device-type-in-story-mode-h7c)).
   Host only; not checked on the phone.
-- **Queue (owner-approved 2026-10-17, host only):** H5d done; next H8 the dev IPA with mesa
-  0037–0042. Then chunk 0 below (needs the phone).
+- **Queue (owner-approved 2026-10-17, host only):** H7c done; next H7d (a mesa patch reporting
+  a discrete device type to RDR2) or PLA-397 (the sync path, if discrete breaks or slows RDR2),
+  then H8 the dev IPA with mesa 0037–0042 and H7d. Then chunk 0 below (needs the phone).
 - **Running:** none. Reports: `h1-h3.md` (H1), `h2.md` (H2), `h1b.md` (H1b), `h3.md` (H3),
   `h4.md` (H4), `h5.md` (H5, blocked), `h5c.md` (H5), `h5d.md` (H5d), `h6.md` (H6), `h6b.md`
-  (H6b), `h7.c6627d62.md` (H7), `h7b.md` (H7b).
+  (H6b), `h7.c6627d62.md` (H7), `h7b.md` (H7b), `h7c.md` (H7c).
 - **Phone:** not used by these runs; Hollow Knight on Vulkan first frame+10 is owed for V1–V3,
   H6b, H7 and H5d (mesa 0037–0042), on an IPA with 0042 (H4's has 0037–0039 only), then RDR2 after
   PLA-295 and PLA-300.

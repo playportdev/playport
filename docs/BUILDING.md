@@ -293,8 +293,13 @@ in the build area:
   image, where it is bound, whether its range is mapped, its layout queries,
   the copies, barriers (host access included), descriptors and framebuffers
   naming it, and with `PP_CAPTURE_LINEAR_HASH=N` the content changes of the
-  3D, array and mipmapped ones that no GPU write explains. Build it beside
-  its manifest with
+  3D, array and mipmapped ones that no GPU write explains. With
+  `PP_CAPTURE_MEMUSE=N` (`memuse.c`) it counts, per device, the memory
+  allocated (live and peak bytes by memory type, the bytes the application
+  maps and never maps), staging buffers, the bytes bound to optimal and
+  linear images and the copy commands with the bytes they move, in a
+  `memuse` line every N presents, and writes every present's time to
+  `present.PID.log`. Build it beside its manifest with
   `cc -shared -fPIC -O1 -o DIR/libpp_capture.so capture.c -lpthread` and
   `cp capture.json DIR/`, then run with `VK_ADD_IMPLICIT_LAYER_PATH=DIR
   ENABLE_PP_CAPTURE=1`.
