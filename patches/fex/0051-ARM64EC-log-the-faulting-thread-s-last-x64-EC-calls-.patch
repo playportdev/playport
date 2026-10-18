@@ -1,0 +1,236 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 18 Oct 2026 22:23:44 +0200
+Subject: [PATCH] ARM64EC: log the faulting thread's last x64<->EC calls on iOS
+ (diagnostics)
+
+PLA-401: the Rockstar launcher's main thread executes a HLT in an
+inter-function gap of Launcher.exe about 0.3 s after its main window
+opens, and nothing logged says what it reacted to. Wine's relay channel
+is compiled out for ARM64EC (ntdll relay.c), and the session's debug
+channels cannot be narrowed to one process on this runtime (the channel
+table is cloned from the session root's PEB).
+
+With FEX_EC_CALL_RING naming the executable, ProcessInit allocates a ring
+in that process only (one [ec-ring] line per process when the variable is
+set), and Module.S appends an entry for every x64 call into an ARM64EC
+function (ExitFunctionEC: the target as addressed, the x64 return
+address, rcx, rdx, CNTVCT) and every return through
+__os_arm64x_dispatch_ret (RetToEntryThunk: the x64 rip and rax) to the
+calling thread's ring: 64 rings by TEB bits 13..18, 512 entries each. The
+first generated fault of the process prints its thread's entries, oldest
+first, each address as module+RVA. Unset, each transition pays one load
+and a branch; nothing else changes.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-10-18-rockstar-generated-fault.md
+Offered-upstream: no
+---
+ Source/Windows/ARM64EC/Module.S   | 48 ++++++++++++++++
+ Source/Windows/ARM64EC/Module.cpp | 94 ++++++++++++++++++++++++++++++-
+ 2 files changed, 141 insertions(+), 1 deletion(-)
+
+diff --git a/Source/Windows/ARM64EC/Module.S b/Source/Windows/ARM64EC/Module.S
+index 44531950d..0b320a1ef 100644
+--- a/Source/Windows/ARM64EC/Module.S
++++ b/Source/Windows/ARM64EC/Module.S
+@@ -54,6 +54,31 @@ DispatchJump:
+ .globl RetToEntryThunk
+ RetToEntryThunk:
+   mov x9, lr
++#ifdef FEX_IOS_HOST
++  // PLA-401 diagnostics: append this return (target rip, rax) to the thread's ring
++  // while IosEcRing is set (Module.cpp). x4, x5 (x64 r10, r11), x16 and x17 are
++  // volatile at a return; check_target_ec below clobbers x16 and x17 anyway.
++  adrp x16, IosEcRing
++  ldr x16, [x16, #:lo12:IosEcRing]
++  cbz x16, 31f
++  IOS_LOAD_TEB x17
++  ubfx x5, x17, #13, #6
++  add x4, x16, x5, lsl #3       // &index[ring]
++  add x16, x16, x5, lsl #15     // ring base - 4096
++  mov x17, #1
++  ldadd x17, x5, [x4]
++  and x5, x5, #511
++  add x16, x16, x5, lsl #6
++  add x16, x16, #4096           // the entry
++  IOS_LOAD_TEB x17
++  stp x17, x9, [x16]            // TEB, x64 rip returned to
++  str x8, [x16, #16]            // rax
++  mrs x4, cntvct_el0
++  str x4, [x16, #40]            // time
++  mov x4, #2
++  str x4, [x16, #48]            // kind: return
++31:
++#endif
+ 
+ check_target_ec:
+   // Check if target is in fact x86 code
+@@ -310,6 +335,29 @@ ExitFunctionEC:
+   add x17, x16, #3200
+   str x9, [x17, x23, lsl #3]
+ 2:
++  // PLA-401 diagnostics: append this call to the thread's ring while IosEcRing is set
++  // (Module.cpp: layout, FEX_EC_CALL_RING). Same scratch registers as above.
++  adrp x16, IosEcRing
++  ldr x16, [x16, #:lo12:IosEcRing]
++  cbz x16, 3f
++  IOS_LOAD_TEB x17
++  ubfx x23, x17, #13, #6
++  add x4, x16, x23, lsl #3      // &index[ring]
++  add x16, x16, x23, lsl #15    // ring base - 4096
++  mov x17, #1
++  ldadd x17, x23, [x4]
++  and x23, x23, #511
++  add x16, x16, x23, lsl #6
++  add x16, x16, #4096           // the entry
++  IOS_LOAD_TEB x17
++  stp x17, x9, [x16]            // TEB, target as addressed
++  ldr x4, [sp]
++  stp x4, x0, [x16, #16]        // x64 return address, rcx
++  mrs x4, cntvct_el0
++  stp x1, x4, [x16, #32]        // rdx, time
++  mov x4, #1
++  str x4, [x16, #48]            // kind: call
++3:
+   IOS_LOAD_TEB x17
+   ldr x17, [x17, #0x1788] // TEB->ChpeV2CpuAreaInfo
+ #else
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index c5518bdc3..0b2f6d8f6 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -114,6 +114,20 @@ __attribute__((aligned(64))) uint64_t IosXpFex[4496] {};
+  * MADEIRA_NO_COUNTERS. 64-bit for Module.S's single ldr. */
+ extern "C" __attribute__((aligned(8))) uint64_t IosXpFexOn;
+ __attribute__((aligned(8))) uint64_t IosXpFexOn = 1;
++/* PLA-401 diagnostics: the x64<->EC call ring. With FEX_EC_CALL_RING naming this
++ * process's executable, ProcessInit allocates it and Module.S appends an entry for
++ * every x64 call into an ARM64EC function (ExitFunctionEC) and every return through
++ * __os_arm64x_dispatch_ret (RetToEntryThunk), to the ring of the calling thread (64
++ * rings by TEB bits 13..18); the first generated fault prints its thread's entries.
++ * Layout: 64 uint64 ring indices, then from +4096 64 rings of 512 entries of 8 uint64:
++ *   0 TEB   8 target (call: as the x64 caller addressed it; return: the x64 rip)
++ *   16 call: the x64 return address; return: rax   24 rcx   32 rdx
++ *   40 CNTVCT   48 kind (1 call, 2 return)
++ * Zero (the default) leaves Module.S one load and a branch per transition. */
++extern "C" __attribute__((aligned(8))) uint64_t IosEcRing;
++__attribute__((aligned(8))) uint64_t IosEcRing = 0;
++constexpr size_t IosEcRingRings = 64, IosEcRingEntries = 512;
++constexpr size_t IosEcRingBytes = 4096 + IosEcRingRings * IosEcRingEntries * 64;
+ #endif // FEX_IOS_HOST
+ 
+ namespace Exception {
+@@ -741,6 +755,51 @@ static void LogGeneratedFaultWindow(uint64_t Rip) {
+ }
+ #endif
+ 
++// "module+0xrva" for an address in an image (a pool copy translated back), else hex.
++static fextl::string DescribeEcRingAddress(uint64_t Address) {
++  const uint64_t Pe = IosJitReverseTranslate(Address);
++  MEMORY_BASIC_INFORMATION Info;
++  if (!NtQueryVirtualMemory(NtCurrentProcess(), reinterpret_cast<void*>(Pe), MemoryBasicInformation, &Info, sizeof(Info), nullptr) &&
++      Info.Type == MEM_IMAGE) {
++    const auto Path = FEX::Windows::GetSectionFilePath(reinterpret_cast<uint64_t>(Info.AllocationBase));
++    return fextl::fmt::format("{}+{:#x}", Path.empty() ? fextl::string {"image"} : fextl::string {FEX::Windows::BaseName(Path)},
++                              Pe - reinterpret_cast<uint64_t>(Info.AllocationBase));
++  }
++  return fextl::fmt::format("{:#x}", Address);
++}
++
++// The faulting thread's ring, oldest first, with each entry's time before now.
++static void LogEcCallRing() {
++  if (!IosEcRing) {
++    return;
++  }
++  const uint64_t Teb = reinterpret_cast<uint64_t>(IOSLoadTEB());
++  const size_t Ring = (Teb >> 13) & (IosEcRingRings - 1);
++  const auto* Indices = reinterpret_cast<const uint64_t*>(IosEcRing);
++  const auto* Entries = reinterpret_cast<const uint64_t*>(IosEcRing + 4096) + Ring * IosEcRingEntries * 8;
++  uint64_t Now, Freq;
++  __asm__ volatile("mrs %0, cntvct_el0" : "=r"(Now));
++  __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(Freq));
++  const uint64_t Count = __atomic_load_n(&Indices[Ring], __ATOMIC_ACQUIRE);
++  const uint64_t First = Count > IosEcRingEntries ? Count - IosEcRingEntries : 0;
++  LogMan::Msg::EFmt("[ec-ring] thread ring {} of teb {:#x}: {} transitions, the last {} follow (oldest first)", Ring, Teb, Count,
++                    Count - First);
++  for (uint64_t i = First; i < Count; ++i) {
++    const uint64_t* E = Entries + (i % IosEcRingEntries) * 8;
++    if (E[0] != Teb || (E[6] != 1 && E[6] != 2)) {
++      continue;   // another thread's on the same ring, or not yet written
++    }
++    const double Ms = Freq && Now >= E[5] ? double(Now - E[5]) * 1000.0 / double(Freq) : -1.0;
++    if (E[6] == 1) {
++      LogMan::Msg::EFmt("[ec-ring] -{:.3f}ms call {} from {} rcx={:#x} rdx={:#x}", Ms, DescribeEcRingAddress(E[1]),
++                        DescribeEcRingAddress(E[2]), E[3], E[4]);
++    } else {
++      LogMan::Msg::EFmt("[ec-ring] -{:.3f}ms ret to {} rax={:#x}", Ms, DescribeEcRingAddress(E[1]), E[2]);
++    }
++  }
++  LogMan::Msg::EFmt("[ec-ring] end");
++}
++
+ static void RethrowGuestException(const EXCEPTION_RECORD& Rec, ARM64_NT_CONTEXT& Context) {
+   auto* Thread = GetCPUArea().ThreadState();
+   auto& Fault = Thread->CurrentFrame->SynchronousFaultData;
+@@ -792,9 +851,13 @@ static void RethrowGuestException(const EXCEPTION_RECORD& Rec, ARM64_NT_CONTEXT&
+   // on iOS: an unreadable page fails the read, it never faults here.
+   if (Fault.FaultToTopAndGeneratedException) {
+     static std::atomic<uint32_t> GeneratedFaultWindows {0};
+-    if (GeneratedFaultWindows.fetch_add(1, std::memory_order_relaxed) < 4) {
++    const auto Window = GeneratedFaultWindows.fetch_add(1, std::memory_order_relaxed);
++    if (Window < 4) {
+       LogGeneratedFaultWindow(GuestContext.Pc);
+     }
++    if (Window == 0) {
++      LogEcCallRing();
++    }
+   }
+ #endif
+ 
+@@ -1009,6 +1072,34 @@ static void ApplySMCChecksFor(std::string_view AppName) {
+ }
+ #endif
+ 
++#ifdef FEX_IOS_HOST
++// PLA-401 diagnostics: FEX_EC_CALL_RING=<exe> arms the x64<->EC call ring (IosEcRing) in
++// that executable's process only (basename, ASCII case-insensitive). One line per
++// process when the variable is set; silent otherwise.
++static void ArmEcCallRing(std::string_view AppName) {
++  const char* Spec = getenv("FEX_EC_CALL_RING");
++  if (!Spec) {
++    return;
++  }
++  const std::string_view Want {Spec};
++  bool Match = !Want.empty() && Want.size() == AppName.size();
++  for (size_t i = 0; Match && i < Want.size(); ++i) {
++    char A = Want[i], B = AppName[i];
++    if (A >= 'A' && A <= 'Z') A = char(A - 'A' + 'a');
++    if (B >= 'A' && B <= 'Z') B = char(B - 'A' + 'a');
++    Match = A == B;
++  }
++  if (Match) {
++    void* Base = nullptr;
++    SIZE_T Size = IosEcRingBytes;
++    if (!NtAllocateVirtualMemory(NtCurrentProcess(), &Base, 0, &Size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE)) {
++      __atomic_store_n(&IosEcRing, reinterpret_cast<uint64_t>(Base), __ATOMIC_RELEASE);
++    }
++  }
++  LogMan::Msg::EFmt("[ec-ring] exe={} for={} {}", AppName, Spec, !Match ? "other-process" : IosEcRing ? "armed" : "allocation-failed");
++}
++#endif
++
+ NTSTATUS ProcessInit() {
+   /* iOS-Madeira: DualMap::WriteOffset (RX→RW alias distance) is set below,
+    * after InitCRTProcess() populates the environment, and BEFORE InitCore().
+@@ -1064,6 +1155,7 @@ NTSTATUS ProcessInit() {
+   FEXCore::Config::Set(FEXCore::Config::CONFIG_APP_CONFIG_NAME, AppConfigName);
+ #ifdef FEX_IOS_HOST
+   ApplySMCChecksFor(AppConfigName);
++  ArmEcCallRing(AppConfigName);
+ #endif
+ 
+ #if defined(FEX_IOS_HOST) && defined(MADEIRA_ARENA_SELFTEST)
+-- 
+2.56.0
+

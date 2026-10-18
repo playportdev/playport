@@ -49,3 +49,4 @@
 0048-ARM64EC-report-bounded-generated-fault-producer-tele.patch
 0049-ARM64EC-log-the-guest-code-window-of-the-first-gener.patch
 0050-ARM64EC-give-one-executable-its-own-SMC-checks-on-iO.patch
+0051-ARM64EC-log-the-faulting-thread-s-last-x64-EC-calls-.patch
