@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 18 Oct 2026 18:20:18 +0200
+Subject: [PATCH] ntdll: give an SMBIOS type 44 structure the Block Length of
+ its data
+
+append_smbios_wine_core_id_regs_arm64 set the processor-specific block's
+Block Length to the structure's length minus 6. DSP0134 (Tables 129 and
+130) makes a type 44 structure 6 + Y bytes, with a block of Y = 2 + Block
+Length bytes: the Block Length counts the processor-specific data alone,
+so it is the length minus 8. Every type 44 structure Wine generates on
+aarch64 (one per logical processor; on iOS with no ID registers, length
+10 and Block Length 4) claimed two bytes more than the structure holds, and
+a reader that trusts the Block Length reads past its formatted area into
+the string-set terminator. Wine's own reader (wineboot) counts the
+registers instead, so it is unaffected. Upstream since 4571d0e869f.
+
+Found checking the RSMB table Red Dead Redemption 2's launcher reads just
+before it ends on c0000096 (PLA-401); whether it matters to that launcher
+is the phone run's to show.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-18-rockstar-smbios-conformance.md
+Offered-upstream: no
+---
+ dlls/ntdll/unix/system.c | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/ntdll/unix/system.c b/dlls/ntdll/unix/system.c
+index 70a653d..087a1c0 100644
+--- a/dlls/ntdll/unix/system.c
++++ b/dlls/ntdll/unix/system.c
+@@ -2146,7 +2146,10 @@ static WORD append_smbios_wine_core_id_regs_arm64( struct smbios_buffer *buf, WO
+              core_id_regs->num_regs * sizeof(struct smbios_wine_id_reg_value_arm64);
+ 
+     proc_additional_info->hdr.length = length;
+-    proc_additional_info->info_block.length = length - 6;
++    /* The structure is 6 + Y bytes and its block Y is 2 + Block Length: the
++     * Block Length counts the processor-specific data alone (SMBIOS 3.3+). */
++    proc_additional_info->info_block.length =
++        length - offsetof( struct smbios_processor_additional_info, info_block.data );
+ 
+     return append_smbios( buf, &proc_additional_info->hdr, NULL, 0 );
+ }

@@ -1,0 +1,99 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 18 Oct 2026 18:21:17 +0200
+Subject: [PATCH] ntdll: log a process's first firmware table queries and the
+ RSMB table's shape
+
+Red Dead Redemption 2's launcher builds the SMBIOS table on the thread
+that, a few hundred milliseconds later, ends on a generated c0000096
+(PLA-401), but nothing showed what it asked for or got. The first 16
+SystemFirmwareTableInformation queries of a process now log, as ERR
+lines with the thread's id: the provider, action and table id, the
+buffer size, the required size, the table length and the status, and
+for an RSMB table returned whole, its shape: how many structures, how
+many type 44 structures and how many of those have a Block Length of
+their Length - 8, and whether every structure is in bounds with its
+string-set ended and the end marker last. The table's bytes, strings,
+serial numbers and UUID are never logged.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-10-18-rockstar-smbios-conformance.md
+Offered-upstream: no
+---
+ dlls/ntdll/unix/system.c | 56 ++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 56 insertions(+)
+
+diff --git a/dlls/ntdll/unix/system.c b/dlls/ntdll/unix/system.c
+index 4871960..a55a5d7 100644
+--- a/dlls/ntdll/unix/system.c
++++ b/dlls/ntdll/unix/system.c
+@@ -2537,6 +2537,44 @@ static NTSTATUS enum_firmware_info( SYSTEM_FIRMWARE_TABLE_INFORMATION *sfti, ULO
+     }
+ }
+ 
++/* Playport (PLA-401): the shape of an RSMB table a process was given, for the
++ * firmware table log; never its contents. */
++struct smbios_table_check
++{
++    unsigned int structures;      /* structures before the end marker or the first bad one */
++    unsigned int processor_info;  /* type 44 structures */
++    unsigned int processor_info_block_ok;  /* those whose Block Length is their Length - 8 */
++    BOOL valid;                   /* every structure in bounds, string-sets ended, end marker last */
++};
++
++static void check_smbios_table( const BYTE *table, ULONG size, struct smbios_table_check *check )
++{
++    ULONG off = sizeof(struct smbios_prologue), end;
++
++    memset( check, 0, sizeof(*check) );
++    if (size < off || ((const struct smbios_prologue *)table)->length != size - off) return;
++    while (size - off >= sizeof(struct smbios_header))
++    {
++        const struct smbios_header *hdr = (const struct smbios_header *)(table + off);
++
++        if (hdr->length < sizeof(*hdr) || hdr->length > size - off) return;
++        for (end = off + hdr->length; end + 1 < size && (table[end] || table[end + 1]); end++) ;
++        if (end + 1 >= size) return;
++        check->structures++;
++        if (hdr->type == SMBIOS_TYPE_PROCESSOR_ADDITIONAL_INFO)
++        {
++            check->processor_info++;
++            if (hdr->length >= 8 && table[off + 6] == hdr->length - 8) check->processor_info_block_ok++;
++        }
++        off = end + 2;
++        if (hdr->type == SMBIOS_TYPE_END)
++        {
++            check->valid = off == size;
++            return;
++        }
++    }
++}
++
+ static NTSTATUS get_firmware_info( SYSTEM_FIRMWARE_TABLE_INFORMATION *sfti, ULONG available_len,
+                                    ULONG *required_len )
+ {
+@@ -3943,6 +3981,24 @@ NTSTATUS WINAPI NtQuerySystemInformation( SYSTEM_INFORMATION_CLASS class,
+             ret = STATUS_NOT_IMPLEMENTED;
+             FIXME("info_class SYSTEM_FIRMWARE_TABLE_INFORMATION action %d\n", sfti->Action);
+         }
++        {
++            /* Playport (PLA-401): the first queries of a process, sizes and
++             * status only; an RSMB table's shape, never its contents. */
++            static LONG queries;
++            struct smbios_table_check check = { 0 };
++
++            if (InterlockedIncrement( &queries ) <= 16)
++            {
++                if (!ret && sfti->Action == SystemFirmwareTable_Get && sfti->ProviderSignature == RSMB)
++                    check_smbios_table( sfti->TableBuffer, sfti->TableBufferLength, &check );
++                ERR( "Playport: firmware table provider %08x action %u id %08x: size %u required %u "
++                     "table %u status %08x; %u structures, %u type 44 (%u Block Length = Length - 8), %s\n",
++                     (unsigned int)sfti->ProviderSignature, (unsigned int)sfti->Action,
++                     (unsigned int)sfti->TableID, (unsigned int)size, (unsigned int)len,
++                     (unsigned int)sfti->TableBufferLength, ret, check.structures, check.processor_info,
++                     check.processor_info_block_ok, check.valid ? "valid" : "not checked or invalid" );
++            }
++        }
+         break;
+     }
+ 

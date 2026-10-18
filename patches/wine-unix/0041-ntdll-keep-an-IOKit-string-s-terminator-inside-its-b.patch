@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 18 Oct 2026 18:20:25 +0200
+Subject: [PATCH] ntdll: keep an IOKit string's terminator inside its buffer
+
+cf_to_string copied up to buffer_size bytes of a CFData property and then
+wrote the terminating NUL at buffer[length]: a property of buffer_size
+bytes or more (128 for the platform expert's manufacturer and model) wrote
+one byte past the caller's array. It now copies at most buffer_size - 1
+bytes. Nothing shows the iPhone's properties reach that length, so it is
+not known to touch Red Dead Redemption 2's launcher (PLA-401); a host
+test reproduced the overflow while checking the SMBIOS table it reads.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-18-rockstar-smbios-conformance.md
+Offered-upstream: no
+---
+ dlls/ntdll/unix/system.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/dlls/ntdll/unix/system.c b/dlls/ntdll/unix/system.c
+index 087a1c0..4871960 100644
+--- a/dlls/ntdll/unix/system.c
++++ b/dlls/ntdll/unix/system.c
+@@ -2413,7 +2413,7 @@ static void cf_to_string( CFTypeRef type_ref, char *buffer, size_t buffer_size )
+ 
+     if (CFGetTypeID(type_ref) == CFDataGetTypeID())
+     {
+-        size_t length = MIN(CFDataGetLength(type_ref), buffer_size);
++        size_t length = MIN(CFDataGetLength(type_ref), buffer_size - 1);
+         CFDataGetBytes(type_ref, CFRangeMake(0, length), (UInt8*)buffer);
+         buffer[length] = 0;
+     }
