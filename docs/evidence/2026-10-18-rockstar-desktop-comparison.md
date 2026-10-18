@@ -91,3 +91,33 @@ Social Club originals were verified, 81 of 81 files, in the copy and in its sour
   every run.
 - On the desktop, a Steam answer with a logged-on user (a stand-in snapshot), to reach title setup
   without Rockstar's offline path. A sign-in there would still need the owner in person.
+
+## Follow-up: a fresh prefix offered for the owner's own sign-in (no phone files)
+
+The owner offered to sign in in person, on the niri session, for this one run. `DISPLAY=:2` is
+niri's xwayland-satellite, checked by socket ownership, and `WAYLAND_DISPLAY=wayland-2`. URL opens
+were blocked.
+
+**Setup:**
+- A fresh copy of the Stage R prefix, set up as before: Proton 10's wine, our shim with no host,
+  and the stand-in session.
+- No phone files and no remembered session.
+
+**Result:**
+- **Where it stopped:** the launcher took the same path as the earlier run. At 3.1 s, `Setting up steam title: rdr2` → "Aborting launch due to being unable to auto sign in to offline profile!" → error 133.
+- **What it showed:** `SetContext: Invalid -> MainWindow`, the offline main window with the error. There was no `Invalid -> Auth` context, so no Sign In page was offered.
+- **Social Club:** logged `Offline Only Mode: true`. Its UI reached `START_SIGN_IN` internally, but the launcher never showed an Auth window.
+- **No sign-in took place**, so no credentials were involved.
+- **Shutdown:** 18 s after the error, the launcher logged `Shutdown requested! Forced: true` and quit with exit code 0. The earlier run on sway, with no input, stayed up for 240 s, so this was most likely the error dialog's OK or a close on the desktop.
+- **No exception:** no `c0000096`.
+- **Cleanup:** the runner was stopped at about 52 s and the prefix was killed with `wineserver -k`; 0 processes were left. The prefix copy was deleted. Social Club originals were verified, 81 of 81 files, in the copy and in its source.
+
+**Reading.** Without a logged-on Steam user, the launcher's Steam title setup goes straight to
+Rockstar's offline-profile path. This happens with or without a Rockstar profile, before any
+Sign In page. So on the desktop, our shim with no host cannot reach the signed-in main window at
+all. Steam's logged-on state (SteamID and ticket) is the input that gates title setup. The phone
+has it and the owner's desktop (real Steam) has it.
+
+Comparing the phone's fault point on the desktop therefore needs a Steam answer with a logged-on
+user. Whether a stand-in snapshot without a valid ticket is enough is not known. Real tickets need
+a Playport Steam session on the workstation, which the owner declined.
