@@ -291,7 +291,8 @@ counts of W+X requests that lost WRITE, x18 instructions left to fault and
 emulated misaligned atomics) and the FEX arena's use from the last `band:` line
 (`band`: its use and free space in MiB, free 16 MiB span slots, emulator threads
 and refused requests); argv.txt records the command. A launch that ran
-the pool out (`pool=exhausted:<part>`) is not ok. With actions after a play:
+the pool out (`pool=exhausted:<part>`) or FEX's host band (`band=exhausted`)
+is not ok. With actions after a play:
 action, the run is ok when they all ran and the last title's end was ok; the
 result's `title` is that end. The result carries `until` and `until_reached`: a title that
 ends (even with exit 0) before --until matched is not ok (exit 1, why "the title ended … before
@@ -587,7 +588,8 @@ def windows_command_line(args):
 
 def title_ok(done):
     outcome = " " + done.get("outcome", "") + " "
-    return " exit=0x00000000 " in outcome and " pool=exhausted:" not in outcome
+    return (" exit=0x00000000 " in outcome and " pool=exhausted:" not in outcome
+            and " band=exhausted " not in outcome)
 
 
 POOL_RE = re.compile(r"\bpool: (size_mb=.*)$")

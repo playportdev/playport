@@ -151,6 +151,9 @@ enum LaunchCoordinator {
             /// The JIT pool ran out (JitPool.Use.exhaustion) before the title ended,
             /// whatever its exit code: its own outcome, not a crash or a failed start.
             case outOfJitMemory(JitPool.Exhaustion)
+            /// FEX's host band refused a request (FexBand.Use.exhausted) before the title ended,
+            /// whatever its exit code; a pool that also ran out is reported as that (decision 0120).
+            case outOfEmulatorMemory
             /// The title's prerequisites ran and the game did not start: Playport restarts
             /// and the new process starts it, as the same Play (decision 0084).
             case prerequisitesRan
@@ -601,7 +604,7 @@ enum LaunchCoordinator {
             pool.sample()
             if let t = pool.exhaustedAt, Date().timeIntervalSince(t) >= pool.grace {
                 // The restart that follows the launch ends it (decisions 0022, 0030, 0112).
-                log("pool: the game is still running \(Int(pool.grace)) s after it ran out of JIT memory; the restart ends it")
+                log("pool: the game is still running \(Int(pool.grace)) s after it ran out of \(pool.exhaustedWhat); the restart ends it")
                 return pool.end(Outcome(kind: .failed, line: "still-running after_s=\(Int(elapsed))"), mark: mark)
             }
         }
@@ -732,7 +735,9 @@ enum LaunchCoordinator {
     /// (RuntimeLimits) go the same way, as `limits:` lines whenever a count moved
     /// and a `limits:` mark at the end; reaching one does not change the outcome.
     /// So does the FEX arena's use (FexBand), as `band:` lines and a `band:` mark;
-    /// a dev build also writes the arena's map into the log at the end.
+    /// a dev build also writes the arena's map into the log at the end. An arena
+    /// that refused a request ends the launch as a pool that ran out does, after the
+    /// same grace, and turns the outcome into `.outOfEmulatorMemory` (decision 0120).
     private final class PoolLog {
         /// How long a title that ran the pool out gets to end on its own (Request.exhaustionGrace).
         let grace: TimeInterval
@@ -741,8 +746,10 @@ enum LaunchCoordinator {
         private var lastBand: FexBand.Use?
         /// The thread count / 16 of the last map a dev build dumped.
         private var bandMapBucket: UInt64 = 0
-        /// When a reading first showed the pool run out.
+        /// When a reading first showed the pool, or the arena, run out.
         private(set) var exhaustedAt: Date?
+        /// What ran out first, for the log line at the grace's end.
+        private(set) var exhaustedWhat = "JIT memory"
 
         init(grace: TimeInterval) { self.grace = grace }
 
@@ -773,6 +780,13 @@ enum LaunchCoordinator {
 
         private func sampleBand() {
             guard let band = Self.readBand(), band.worthLogging(after: lastBand) else { return }
+            if band.exhausted, lastBand?.exhausted != true {
+                LaunchCoordinator.log("band: ran out of emulator memory (\(band.refused) refused)")
+                if exhaustedAt == nil {
+                    exhaustedAt = Date()
+                    exhaustedWhat = "emulator memory"
+                }
+            }
             lastBand = band
             LaunchCoordinator.log(band.line)
             #if !PLAYPORT_RELEASE
@@ -811,18 +825,23 @@ enum LaunchCoordinator {
 
         func end(_ outcome: Outcome, mark: (String) -> Void) -> Outcome {
             if let limits = Self.readLimits() { mark(limits.line) }
-            if let band = Self.readBand() { mark(band.line) }
+            let band = Self.readBand()
+            if let band { mark(band.line) }
             #if !PLAYPORT_RELEASE
             wine_host_band_dump("launch end")
             #endif
-            guard let use = Self.read() else { return outcome }
+            var o = outcome
+            if band?.exhausted == true, outcome.kind != .prerequisitesRan {
+                o.kind = .outOfEmulatorMemory
+                o.line = FexBand.resultField + " " + outcome.line
+            }
+            guard let use = Self.read() else { return o }
             last = use
             mark(use.line)
-            var o = outcome
             o.poolMB = Int(use.size >> 20)
             guard let e = use.exhaustion else { return o }
             o.kind = .outOfJitMemory(e)
-            o.line = JitPool.resultField(e) + " " + outcome.line
+            o.line = JitPool.resultField(e) + " " + o.line
             return o
         }
     }

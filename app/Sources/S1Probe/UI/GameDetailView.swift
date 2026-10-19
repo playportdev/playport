@@ -1378,6 +1378,11 @@ enum JitNote {
     /// Why a game ended on running out of its JIT pool (LaunchMessage). Every Play
     /// gets the same pool (JitPool.sizeMB, decision 0036); only a dev build's simulated
     /// one is smaller. One that went on running was ended by the restart (decision 0030).
+    /// Why a game ended on FEX's host band filling (LaunchMessage, decision 0120): its size is
+    /// fixed, so there is nothing to set; what fills it is the game's threads, with its launcher's.
+    static let outOfEmulatorMemory = "The x86 emulator keeps a fixed amount of memory for every thread "
+        + "the game and its launcher run, and their threads filled it. This game runs more threads than Playport can hold."
+
     static func outOfMemory(_ part: JitPool.Exhaustion, poolMB: Int) -> String {
         let what = switch part {
         case .head: "the game's program files"

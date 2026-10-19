@@ -95,3 +95,25 @@ RDR2:
 
 **Next blocker:** the FEX host band's per-thread cost, now that the signed-in launcher runs its main
 window's CEF processes. RDR2 stays Broken.
+
+## A full band ends the launch (decision 0120)
+
+Phone, IPA `81e9dc6e4ad23c102c0559f2aa39b96c0c1b039202ba23d83cb5f4628bba064b` (`patches/fex` 0054 and
+the app's band outcome; 89 of 89 IPA checks):
+
+| Game | Run | Observation |
+| --- | --- | --- |
+| Hollow Knight (367520) | `20261019T112814` | first-frame+10 reached |
+| RDR2 (1174180) | `20261019T112934` | `band=exhausted still-running after_s=305`, not ok |
+
+RDR2:
+- The launcher signed in and showed its main window, as before. The band filled at 186 threads,
+  peak 16,219 MiB, 20 refused.
+- **FEX ended the process.** A Social Club helper got `[band] FEX could not allocate its
+  FEXMem_OpDispatcher buffer, bytes=0x1000000 …: ending the process`, then `NtTerminateProcess(…,
+  0xc000012d)`. The helpers faulted 0 times at `0x800000`, against about 450,000. The host log is
+  8 MB, against 197 MB.
+- PlayRDR2.exe then showed its own "Unable to launch game, please try reinstalling the game."
+- **The app ended the launch.** It logged `band: ran out of emulator memory (20 refused)`. 240 s
+  later it logged "the game is still running 240 s after it ran out of emulator memory; the
+  restart ends it". The restart's notice was "Red Dead Redemption 2 ran out of emulator memory".

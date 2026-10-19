@@ -52,3 +52,4 @@
 0051-ARM64EC-log-the-faulting-thread-s-last-x64-EC-calls-.patch
 0052-ARM64EC-send-iOS-diagnostics-to-the-log-never-to-the.patch
 0053-Windows-one-MIDR-a-processor-on-iOS-so-CPUID-counts-.patch
+0054-FEXCore-end-the-process-when-a-pooled-buffer-is-refu.patch

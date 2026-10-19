@@ -1,0 +1,160 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kamil=20Postro=C5=BCny?= <kamil@postrozny.pl>
+Date: Mon, 19 Oct 2026 11:21:39 +0200
+Subject: [PATCH] FEXCore: end the process when a pooled buffer is refused on
+ iOS
+
+The IR emitter's 16 MiB working list, the frontend's buffer and the
+code buffers come from IntrusivePooledAllocator, whose clients use the
+buffer unchecked. On iOS they are mapped in the FEX host band. When a
+title's threads filled the band, VirtualAlloc returned null and
+ResetWorkingList stored through List = 0 + 8 MiB. The fault went to
+the thread's guest handlers, which continued it, and FEX retried the
+compile: about 150,000 faults a thread in two Social Club helpers of
+the Rockstar launcher, for minutes, on a screen that never changed
+(run 20261019T105650, PLA-408).
+
+Check the allocation in ClaimBufferImpl. A null one logs a [band]
+line naming the buffer, its size and the band, then ends the guest
+process with STATUS_COMMITMENT_LIMIT, as the JIT already does when it
+cannot go on (ml460). The reporter is allocation-free, like
+ReportAllocationFailure.
+
+Class: ios-port
+Evidence: docs/evidence/2026-10-19-rockstar-physicaldrive.md
+Offered-upstream: no; the band and its exhaustion are the iOS port's
+---
+ FEXCore/Source/Utils/Allocator.cpp            | 49 +++++++++++++++++++
+ .../FEXCore/Utils/ThreadPoolAllocator.h       | 24 +++++++++
+ FEXCore/include/FEXCore/fextl/allocator.h     |  4 ++
+ 3 files changed, 77 insertions(+)
+
+diff --git a/FEXCore/Source/Utils/Allocator.cpp b/FEXCore/Source/Utils/Allocator.cpp
+index 4aedbd73a..1d83044bd 100644
+--- a/FEXCore/Source/Utils/Allocator.cpp
++++ b/FEXCore/Source/Utils/Allocator.cpp
+@@ -519,4 +519,53 @@ namespace fextl {
+   FEX_TRAP_EXECUTION;
+   __builtin_unreachable();
+ }
++
++#if defined(FEX_IOS_HOST) && defined(_WIN32)
++} // namespace fextl
++extern "C" int32_t NtTerminateProcess(void* ProcessHandle, int32_t ExitStatus);
++namespace fextl {
++/* A pooled buffer the host refused, the FEX band or the heap being full: the IR emitter's
++ * 16 MiB working list, the frontend's decode buffer or a code buffer. Their clients take the
++ * buffer unchecked, so returning null turned into a store at the buffer's size, a fault on every
++ * compile that the thread's guest handlers answered and FEX retried: 150,000 a thread, for
++ * minutes. Name it, then end the guest process with STATUS_COMMITMENT_LIMIT, as the JIT does
++ * when it cannot go on (ml460). Allocation-free, as ReportAllocationFailure above. */
++[[noreturn]] void ReportPooledBufferFailure(const char* Name, std::size_t Bytes) {
++  char Buf[224];
++  size_t i = 0;
++  auto Cat = [&](const char* S) {
++    while (S && *S && i < sizeof(Buf) - 1) {
++      Buf[i++] = *S++;
++    }
++  };
++  auto Hex = [&](unsigned long long V) {
++    const char* D = "0123456789abcdef";
++    Cat("0x");
++    int Started = 0;
++    for (int Shift = 60; Shift >= 0; Shift -= 4) {
++      int Nib = (int)((V >> Shift) & 0xf);
++      if (Nib || Started || !Shift) {
++        if (i < sizeof(Buf) - 1) {
++          Buf[i++] = D[Nib];
++        }
++        Started = 1;
++      }
++    }
++  };
++  Cat("[band] FEX could not allocate its ");
++  Cat(Name);
++  Cat(" buffer, bytes=");
++  Hex(Bytes);
++  Cat(" band=");
++  Hex((unsigned long long)ios_fex_band_base);
++  Cat("..");
++  Hex((unsigned long long)ios_fex_band_end);
++  Cat(": ending the process (STATUS_COMMITMENT_LIMIT)\n");
++  Buf[i] = 0;
++  LogMan::Msg::EFmt("{}", Buf);
++  NtTerminateProcess(reinterpret_cast<void*>(-1), static_cast<int32_t>(0xC000012D));
++  FEX_TRAP_EXECUTION;
++  __builtin_unreachable();
++}
++#endif
+ } // namespace fextl
+diff --git a/FEXCore/include/FEXCore/Utils/ThreadPoolAllocator.h b/FEXCore/include/FEXCore/Utils/ThreadPoolAllocator.h
+index 69e410c1f..73a6f7ac6 100644
+--- a/FEXCore/include/FEXCore/Utils/ThreadPoolAllocator.h
++++ b/FEXCore/include/FEXCore/Utils/ThreadPoolAllocator.h
+@@ -209,6 +209,13 @@ public:
+ protected:
+   IntrusivePooledAllocator() = default;
+ 
++#if defined(FEX_IOS_HOST) && defined(_WIN32)
++  // The FEXMem_ name of a derived allocator's mappings, for a refused buffer's log line.
++  virtual const char* BufferName() const {
++    return "malloc";
++  }
++#endif
++
+   ContainerType::iterator ClaimBufferImpl(size_t Size) {
+     auto BuffersEnd = UnclaimedBuffers.end();
+     ContainerType::iterator BestFit = BuffersEnd;
+@@ -295,6 +302,13 @@ protected:
+ 
+     // Need to allocate a new buffer, couldn't fit
+     auto Data = Alloc(Size);
++#if defined(FEX_IOS_HOST) && defined(_WIN32)
++    // Its clients use the buffer unchecked: the IR emitter's list starts at Data + Size, so a
++    // null Data became a store to the buffer's size, which faulted on every compile.
++    if (!Data) {
++      ::fextl::ReportPooledBufferFailure(BufferName(), Size);
++    }
++#endif
+     return ClaimedBuffers.emplace(ClaimedBuffers.end(), new MemoryBuffer {Data, Size, ClockType::now()});
+   }
+ 
+@@ -400,6 +414,11 @@ private:
+   }
+ 
+   const char* Name {};
++#if defined(FEX_IOS_HOST) && defined(_WIN32)
++  const char* BufferName() const override {
++    return Name ? Name : "unnamed";
++  }
++#endif
+ };
+ 
+ /**
+@@ -436,6 +455,11 @@ private:
+   }
+ 
+   const char* Name {};
++#if defined(FEX_IOS_HOST) && defined(_WIN32)
++  const char* BufferName() const override {
++    return Name ? Name : "unnamed";
++  }
++#endif
+ };
+ 
+ /**
+diff --git a/FEXCore/include/FEXCore/fextl/allocator.h b/FEXCore/include/FEXCore/fextl/allocator.h
+index 9aee01308..477dd4052 100644
+--- a/FEXCore/include/FEXCore/fextl/allocator.h
++++ b/FEXCore/include/FEXCore/fextl/allocator.h
+@@ -8,6 +8,10 @@ namespace fextl {
+ /* Reports an allocation failure and terminates. Out-of-line and allocation-free;
+  * see the call site in FEXAlloc::allocate. */
+ [[noreturn]] FEX_DEFAULT_VISIBILITY void ReportAllocationFailure(std::size_t Alignment, std::size_t Bytes);
++#if defined(FEX_IOS_HOST) && defined(_WIN32)
++// A pooled buffer (ThreadPoolAllocator.h) the host refused: names it, then ends the guest process.
++[[noreturn]] FEX_DEFAULT_VISIBILITY void ReportPooledBufferFailure(const char* Name, std::size_t Bytes);
++#endif
+ 
+ /**
+  * @brief C++ allocator class interface in to FEXCore::Allocator for memory allocations.

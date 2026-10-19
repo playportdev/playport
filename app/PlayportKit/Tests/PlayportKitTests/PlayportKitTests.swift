@@ -1116,6 +1116,16 @@ final class FexBandTests: XCTestCase {
         d.refused = 1
         XCTAssertTrue(d.worthLogging(after: a))
     }
+
+    func testARefusalIsAnExhaustionTheResultLineNames() {
+        var u = FexBand.Use(size: 16 << 30, used: 16 << 30, callret: 197)
+        XCTAssertFalse(u.exhausted)
+        u.refused = 24
+        XCTAssertTrue(u.exhausted)
+        XCTAssertTrue(FexBand.exhausted(in: "band=exhausted still-running after_s=300"))
+        XCTAssertTrue(FexBand.exhausted(in: "pool=exhausted:head band=exhausted exit=0x00000000 after_s=9"))
+        XCTAssertFalse(FexBand.exhausted(in: "exit=0x00000000 after_s=12"))
+    }
 }
 
 final class FocusMoveTests: XCTestCase {

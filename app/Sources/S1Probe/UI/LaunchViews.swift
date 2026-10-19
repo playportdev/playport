@@ -464,6 +464,9 @@ struct LaunchMessage: Codable, Equatable, Identifiable {
         case .outOfJitMemory(let part):
             return .init(title: "\(title) ran out of JIT memory",
                          text: JitNote.outOfMemory(part, poolMB: outcome.poolMB))
+        case .outOfEmulatorMemory:
+            return .init(title: "\(title) ran out of emulator memory",
+                         text: JitNote.outOfEmulatorMemory)
         case .failed:
             return .init(title: "\(title) could not start", text: failedText(line, spent: spent))
         }

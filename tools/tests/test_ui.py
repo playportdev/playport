@@ -527,6 +527,7 @@ class UiEnvTest(unittest.TestCase):
         m = load()
         self.assertTrue(m.title_ok({"outcome": "exit=0x00000000 after_s=12"}))
         self.assertFalse(m.title_ok({"outcome": "pool=exhausted:head exit=0x00000000 after_s=12"}))
+        self.assertFalse(m.title_ok({"outcome": "band=exhausted exit=0x00000000 after_s=12"}))
 
     def test_sigterm_ends_the_app_inside_the_lock(self):
         m = load()

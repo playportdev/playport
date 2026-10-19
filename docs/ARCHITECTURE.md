@@ -450,6 +450,12 @@ Vulkan backend ([fex-band](evidence/2026-09-28-fex-band.md)).
   name hook logged, the log allocated, and the nested allocation made a new
   heap or span before the first was recorded, 231 levels deep, which took
   3.7 GB of the band on Hollow Knight's second thread.
+- **Running out.** The band runs out when it refuses a request, which only FEX makes. A refused
+  pooled buffer (the IR emitter's working list, the frontend's buffer, a code buffer) logs a
+  `[band] FEX could not allocate …` line and ends its guest process with
+  `STATUS_COMMITMENT_LIMIT` (`patches/fex` 0054). The launch then ends as a JIT pool exhaustion
+  does, after the same grace, as *ran out of emulator memory* (`band=exhausted` in its result
+  line) ([decision 0120](decisions/0120-a-full-fex-band-ends-the-launch.md)).
 
 ### Known runtime limits
 
