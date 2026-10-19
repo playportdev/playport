@@ -130,3 +130,61 @@ with the donor pool on, and it sorts by kind, not by process.
 - the split by process;
 - whether the game's libcef load is a fallback from the launcher;
 - any gameplay: no run got past the loading.
+
+## Memory by process (PLA-414)
+
+[PLA-414](https://linear.app/playportdev/issue/PLA-414). madeira-unix 0166 logs `[proc-mem]`
+lines: every Wine view's committed pages, charged to the pseudo-process that made it, as image,
+private memory, or FEX's host band, with what of them `mincore` reports resident and compressed
+(MiB committed/resident/compressed), and FEX's views counted by shape. A dev build walks it
+every other 2 s wait slice and prints it when a process came, went or moved by 32 MiB, and once
+at the launch's end. `tools/tests/test_proc_mem.py` compiles the shipped table header.
+
+IPA `250354775122c23379126e443cf952d7855220683d8ba473284e10deb52f7c32` (dev), session script
+`$PLAYPORT_BUILD/agent-notes/pla414/session1.sh`, which plays through the reusable
+`$PLAYPORT_BUILD/agent-notes/pla413/phone-play.sh` (device log kept, the day's `JetsamEvent`
+pulled). Nothing was pressed.
+
+- **Hollow Knight** (run `20261019T144812`): first frame at +7.99 s.
+- **RDR2** (run `20261019T144905`, `set:donorPoolMB=auto`): first frame at +91.78 s; the run
+  reached its bound, first frame +600 s.
+  - **The app was not in front after the first frame.** The device log shows it `NotVisible`
+    and suspended at 14:51:29, about the first frame; the screenshots at 240 s and at the end
+    show other apps. The phone was in use. What follows the first frame is a background app's
+    and says nothing of the game's loading.
+  - RDR2.exe loaded `socialclub.dll` only in the last seconds before the bound, and no libcef
+    after it. The last footprint line read 8,169 MB, 23 MB under the limit.
+
+### The split at the first frame (in front)
+
+The last `[proc-mem]` before the first frame; footprint 5,040 MB (1,088 compressed), graphics
+151 MB. Resident plus compressed, in MB:
+
+| Process | Image | Private | FEX band | Sum | Committed |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Launcher.exe (78 threads) | 54 | 50 | 119 | 223 | 1,017 |
+| RockstarErrorHandler.exe | 13 | 0 | 31 | 44 | 249 |
+| SocialClubHelper.exe 0x284 | 269 | 127 | 229 | 625 | 950 |
+| SocialClubHelper.exe 0x1b4 | 301 | 61 | 365 | 727 | 1,419 |
+| SocialClubHelper.exe 0x334 (1 thread left) | 271 | 72 | 153 | 496 | 1,029 |
+| an exited process (no live thread) | 270 | 167 | 232 | 669 | 1,104 |
+| **Launcher side** | | | | **2,784** | |
+| RDR2.exe (13 threads) | 49 | 66 | 142 | 257 | 1,280 |
+| RockstarService, services, winedevice, crashpad, session root, PlayRDR2 | | | | 265 | |
+| The runtime's own views | 161 | 28 | 9 | 198 | 2,676 |
+
+- **The launcher side holds about 2.8 GB of the 5.0 GB footprint**, RDR2.exe about 0.26 GB at
+  that point. Each CEF process holds its own libcef image: 284–316 MiB committed, 270–301 MB of
+  it resident or compressed.
+- **An exited process still holds 669 MB.** Its views (a 284 MiB image, the libcef size) have
+  no live thread, but madeira-unix 0154 has not released them. Which process it was, and why
+  its views stay, is not shown.
+- **FEX's band by process:** Launcher.exe's 462 spans and 77 call-return stacks are 825 MiB
+  committed but 119 MB resident or compressed; the band's committed size is mostly address
+  space, not footprint.
+- **At the bound (background):** RDR2.exe had grown to 2,239 MiB private committed (1,163 MB
+  resident, 382 compressed) and 1,356 MiB in FEX's band; the launcher side's processes were
+  mostly compressed.
+
+**Cost.** The walk under `virtual_mutex` took 0–5 ms. `mincore` after it took 44 ms early and
+0.4–1.8 s near the memory limit, on the launch's own thread; the 2 s slices stretched by that.

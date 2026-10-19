@@ -26,7 +26,7 @@
 extern "C" {
 #endif
 
-#define WINE_HOST_ABI_VERSION 9
+#define WINE_HOST_ABI_VERSION 10
 
 typedef void (*wine_host_log_fn)(const char *line);
 
@@ -216,6 +216,15 @@ int wine_host_band_stats_read(wine_host_band_stats *out);
  * views with the free space before each, headed by `why`. Added in ABI 1
  * without changing any existing call. */
 void wine_host_band_dump(const char *why);
+
+/* Memory by pseudo-process into the log as `[proc-mem]` lines (Madeira
+ * virtual_ios.c ios_process_memory_log): each process's committed, resident
+ * and compressed MiB in images, private memory and FEX's band, its FEX views
+ * by kind, and the runtime's own, headed by `why` and what the walk cost.
+ * It prints only when a process came or went or moved by 32 MiB since its
+ * last print, or when `force` is nonzero. Added in ABI 10 without changing any
+ * existing call. */
+void wine_host_process_memory_log(const char *why, int force);
 
 /* Bound the log a session writes (a release build, AppLog.swift). Call before
  * wine_host_jit_pool_acquire and wine_host_init. With a nonzero limit,

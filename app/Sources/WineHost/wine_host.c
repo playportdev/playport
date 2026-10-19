@@ -1810,3 +1810,10 @@ void wine_host_band_dump(const char *why)
 {
     ios_fex_band_dump(why);
 }
+
+extern void ios_process_memory_log(const char *why, int force);
+
+void wine_host_process_memory_log(const char *why, int force)
+{
+    ios_process_memory_log(why, force);
+}

@@ -774,7 +774,8 @@ enum LaunchCoordinator {
     /// (RuntimeLimits) go the same way, as `limits:` lines whenever a count moved
     /// and a `limits:` mark at the end; reaching one does not change the outcome.
     /// So does the FEX arena's use (FexBand), as `band:` lines and a `band:` mark;
-    /// a dev build also writes the arena's map into the log at the end. An arena
+    /// a dev build also writes the arena's map into the log at the end, and memory by
+    /// pseudo-process (`[proc-mem]` lines) as it moves and at the end. An arena
     /// that refused a request ends the launch as a pool that ran out does, after the
     /// same grace, and turns the outcome into `.outOfEmulatorMemory` (decision 0120).
     private final class PoolLog {
@@ -847,9 +848,21 @@ enum LaunchCoordinator {
             #endif
         }
 
+        /// The samples since the last `[proc-mem]` walk (a dev build's).
+        private var processMemorySamples = 0
+
         func sample() {
             sampleLimits()
             sampleBand()
+            #if !PLAYPORT_RELEASE
+            // Memory by pseudo-process (PLA-414), every other sample (about 4 s); the runtime
+            // prints it only when a process came, went or moved by 32 MiB.
+            processMemorySamples += 1
+            if processMemorySamples >= 2 {
+                processMemorySamples = 0
+                wine_host_process_memory_log("sample", 0)
+            }
+            #endif
             guard let use = Self.read(), use.worthLogging(after: last) else { return }
             if let e = use.exhaustion, exhaustedAt == nil {
                 exhaustedAt = Date()
@@ -868,6 +881,7 @@ enum LaunchCoordinator {
             if let band { mark(band.line) }
             #if !PLAYPORT_RELEASE
             wine_host_band_dump("launch end")
+            wine_host_process_memory_log("launch end", 1)
             #endif
             var o = outcome
             if band?.exhausted == true, outcome.kind != .prerequisitesRan {
