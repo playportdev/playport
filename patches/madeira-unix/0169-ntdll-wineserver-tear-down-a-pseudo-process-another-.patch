@@ -1,0 +1,887 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Mon, 19 Oct 2026 17:10:07 +0200
+Subject: [PATCH] ntdll, wineserver: tear down a pseudo-process another process
+ terminated
+
+A child that another process terminates (TerminateProcess from the
+session root, run 20261019T161557) never runs process_exit_wrapper: the
+server kills its threads, they end through abort_thread, and abort_thread
+calls abort_process only when nb_threads, one count for the whole task,
+reaches zero. So its master socket, fd cache, JIT-pool ranges and tail
+carves, and 0154's view release were never given back; SocialClubHelper
+pid 0x284 kept about 1 GB as an `exited` [proc-mem] row. FEX's ThreadTerm
+runs only from the PE side's NtTerminateThread, so none of its threads
+freed its rpmalloc heap, call-return stack or L1 cache either. And 11 of
+pid 0x1b4's threads, blocked in an x86-64 program's in-process wait
+(NtWaitForAlertByThreadId), were never ended: the abort wakes only i386
+waits and retried them for a minute.
+
+The server now reports every ended process (finish_process_tracing, from
+process_killed). At each thread creation and reclamation, on a thread of
+another process, ntdll checks every reported child that has not exited by
+itself; once each of its threads in teb_list has finished or is parked it
+tears it down, once (pp_proc_end.h): it takes the master socket slot
+atomically and closes it, recording a dead child, releases the fd cache
+and the JIT-pool ranges, and deletes the views 0154 deletes. Unlike a
+self-exit it also deletes the process's views in FEX's band: they belong
+to its own FEX instance, whose rpmalloc heaps no other process frees into,
+and no thread of it runs. Each teardown logs a `[proc-end] peb=... pid=...
+killed: freed image= private= spans= callret= l1= band_other= pool= MB,
+kept ... MB; N finished, M parked thread(s)` line. The finished and parked
+TEBs then lose their PEB pointer and TlsExpansionSlots (the PE side never
+freed them; virtual_clear_tls_index writes through it), which keeps them
+out of every later per-process walk. The fixed-base main image is not
+retired, as that needs a server call on the process's own thread;
+ios_jit_reclaim_process marks it dead as before (ml983).
+
+A killed thread of a process being terminated as a whole is parked, not
+ended, when its state proves it blocked in the futex wait of
+NtWaitForAlertByThreadId, holding nothing: the instruction before its pc
+is svc #0x80 with x16 = 515 (__ulock_wait) and x0 UL_COMPARE_AND_WAIT,
+in_alert_wait is set and it is not an i386 wait, FEX's TEB lock stamps
+(WritePriorityMutex shared and write depth, CodeBufferWriteMutex,
+CodeInvalidationMutex read hold, RWX read hold) and InSyscallCallback are
+clear, it holds no uninterrupted section or tracked host mutex (a new
+mirror of server_ios.c's section depth in its thread data: virtual_mutex,
+fd_cache_mutex, the WoW64 registry lock), and it does not own its PEB's
+loader lock. rpmalloc's heap lock is a spin lock whose holder only maps
+memory and never alert-waits. The abort then leaves it suspended for ever
+and stops retrying; one `[proc-end] parked tid=... wait=...` line each.
+Anything not shown is refused, logged once as `[proc-end] not parked
+tid=...: <reason>`, and the thread runs on as before. Nothing resumes it:
+the server's thread object is gone, and every other suspend in the
+runtime is paired with its own resume. A parked thread keeps its TEB, its
+stacks (runtime views) and every view one of its saved registers (x0-x28,
+fp, lr, sp, pc, and the guest's 16 GPRs and rip) points into; of its
+process's views in FEX's band only the L1 caches go, as the FEX state
+that names them stays.
+
+Linear: PLA-416
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-19-rdr2-loading-memory.md
+Offered-upstream: no; pseudo-processes in one Mach task are the iOS port's
+---
+ build/ntdll-unix/pp_proc_end.h      | 178 +++++++++++++++++++++
+ build/ntdll-unix/server_ios.c       |  32 ++++
+ build/ntdll-unix/signal_arm64_ios.c | 130 +++++++++++++++-
+ build/ntdll-unix/virtual_ios.c      | 232 ++++++++++++++++++++++++++--
+ build/wineserver/mach_ios.c         |  42 +++--
+ 5 files changed, 593 insertions(+), 21 deletions(-)
+ create mode 100644 build/ntdll-unix/pp_proc_end.h
+
+diff --git a/build/ntdll-unix/pp_proc_end.h b/build/ntdll-unix/pp_proc_end.h
+new file mode 100644
+index 0000000..a7fbc5d
+--- /dev/null
++++ b/build/ntdll-unix/pp_proc_end.h
+@@ -0,0 +1,178 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later
++ * The end of a pseudo-process another process terminated (Playport, PLA-416,
++ * decision 0127). Such a process never runs process_exit_wrapper: its threads
++ * end through abort_thread, whose count is the whole task's. So the server
++ * reports each ended process, and once every thread of it has finished or is
++ * parked, a thread of another process gives back what process_exit_wrapper
++ * would: its master socket, fd cache, JIT-pool ranges and views, and, unlike a
++ * process that exits by itself (0154), its views in FEX's band.
++ *
++ * A killed thread blocked in an x86-64 program's in-process wait
++ * (NtWaitForAlertByThreadId's __ulock_wait) never reaches a point the abort
++ * can divert it from. If its state shows it holds nothing, it is parked: left
++ * Mach-suspended for ever, and counted as finished. Its TEB, stacks and every
++ * view its saved registers point into stay mapped.
++ *
++ * Pure decisions and formatting, so a host test compiles this header as is. */
++#ifndef PP_PROC_END_H
++#define PP_PROC_END_H
++#include <stdint.h>
++#include <stddef.h>
++#include <stdio.h>
++
++#define PPE_SVC_0X80            0xd4001001u   /* svc #0x80, a Darwin system call */
++#define PPE_SYS_ULOCK_WAIT      515           /* x16 of __ulock_wait */
++#define PPE_UL_COMPARE_AND_WAIT 1             /* x0's operation: futex_wait's */
++#define PPE_REFS                50            /* x0-x28, fp, lr, sp, pc; the guest's 16 GPRs and rip */
++
++/* What the abort read of a killed thread it has stopped. */
++struct ppe_thread_state
++{
++    int      process_ending;      /* the server is ending its whole process */
++    int      readable;            /* every field below was read */
++    int      in_alert_wait;       /* NtWaitForAlertByThreadId runs on it */
++    int      wow64_wait;          /* an i386 program's own wait: ios_alert_wait_check ends it */
++    int      killed_in_wait;      /* already woken to end there */
++    uint32_t insn_before_pc;      /* the instruction before its pc */
++    uint64_t x0, x16;             /* the system call's operation and number */
++    uint64_t fex_stamps;          /* FEX's lock stamps in its TEB, or'ed */
++    int      in_syscall_callback; /* FEX's syscall callback (InSyscallCallback) */
++    uint32_t host_sections;       /* uninterrupted sections and tracked host mutexes it holds */
++    int      owns_loader_lock;    /* PEB->LoaderLock's OwningThread is it */
++};
++
++enum ppe_park
++{
++    PPE_PARK,                 /* park it */
++    PPE_NOT_ENDING,           /* not its whole process: the abort goes on as before */
++    PPE_NOT_ALERT_WAIT,       /* not in NtWaitForAlertByThreadId: the abort goes on as before */
++    PPE_WOW64_WAIT,           /* i386: ended in its wait instead */
++    PPE_UNREAD,               /* its state could not be read */
++    PPE_NOT_BLOCKED,          /* not blocked in the wait's __ulock_wait */
++    PPE_FEX_LOCK,             /* holds a FEX lock or is in a FEX syscall callback */
++    PPE_HOST_LOCK,            /* holds a host section or tracked mutex */
++    PPE_LOADER_LOCK,          /* holds its process's loader lock */
++};
++
++/* Whether a killed thread may be parked. Only one blocked in the host wait of
++ * NtWaitForAlertByThreadId, holding nothing the runtime tracks; anything not
++ * shown is a refusal, and the thread runs on as before. */
++static inline enum ppe_park ppe_may_park( const struct ppe_thread_state *s )
++{
++    if (!s->process_ending) return PPE_NOT_ENDING;
++    if (!s->readable) return PPE_UNREAD;
++    if (s->wow64_wait || s->killed_in_wait) return PPE_WOW64_WAIT;
++    if (!s->in_alert_wait) return PPE_NOT_ALERT_WAIT;
++    if (s->insn_before_pc != PPE_SVC_0X80 || s->x16 != PPE_SYS_ULOCK_WAIT ||
++        (s->x0 & 0xff) != PPE_UL_COMPARE_AND_WAIT)
++        return PPE_NOT_BLOCKED;
++    if (s->fex_stamps || s->in_syscall_callback) return PPE_FEX_LOCK;
++    if (s->host_sections) return PPE_HOST_LOCK;
++    if (s->owns_loader_lock) return PPE_LOADER_LOCK;
++    return PPE_PARK;
++}
++
++/* Whether a refusal is logged: one in the wait but not provably idle. */
++static inline int ppe_refusal_logged( enum ppe_park why )
++{
++    return why >= PPE_UNREAD;
++}
++
++static inline const char *ppe_park_name( enum ppe_park why )
++{
++    static const char *const names[] = { "park", "not its whole process", "not in an alert wait",
++                                         "an i386 wait", "state unreadable", "not blocked in __ulock_wait",
++                                         "holds a FEX lock", "holds a host lock", "holds the loader lock" };
++    return (unsigned)why < sizeof(names) / sizeof(names[0]) ? names[why] : "?";
++}
++
++/* A process's threads, as the sweep finds them in teb_list. */
++struct ppe_census
++{
++    unsigned live, finished, parked;
++};
++
++/* Its teardown may run once none of its threads can run again. */
++static inline int ppe_all_ended( const struct ppe_census *c )
++{
++    return !c->live;
++}
++
++/* The process's views, by what they hold. */
++enum ppe_class { PPE_IMAGE, PPE_PRIVATE, PPE_SPAN, PPE_CALLRET, PPE_L1, PPE_BAND_OTHER, PPE_CLASSES };
++
++static inline int ppe_in_band( enum ppe_class c )
++{
++    return c >= PPE_SPAN;
++}
++
++/* Whether any of a parked thread's saved addresses lies in [base, base + size). */
++static inline int ppe_referenced( uint64_t base, uint64_t size, const uint64_t *refs, unsigned nrefs )
++{
++    unsigned i;
++    for (i = 0; i < nrefs; i++)
++        if (refs[i] >= base && refs[i] - base < size) return 1;
++    return 0;
++}
++
++/* Whether a view of a killed process, one the rules of 0154 would give back
++ * or one in FEX's band, goes. With no thread parked, all of its band goes too:
++ * its rpmalloc heaps, call-return stacks and L1 caches belong to its own FEX
++ * instance, which nothing runs any more. With a thread parked only its L1
++ * caches do, as the FEX state that names them stays; and no view one of its
++ * saved registers points into goes. */
++static inline int ppe_release_view( enum ppe_class c, unsigned parked, uint64_t base, uint64_t size,
++                                    const uint64_t *refs, unsigned nrefs )
++{
++    if (parked && ppe_referenced( base, size, refs, nrefs )) return 0;
++    if (!ppe_in_band( c )) return 1;
++    return !parked || c == PPE_L1;
++}
++
++/* The `[proc-end]` line: MB freed by class, MB kept, the threads it waited for. */
++static inline int ppe_row( char *buf, size_t size, const void *peb, unsigned pid,
++                           const unsigned long long freed[PPE_CLASSES], unsigned long long pool,
++                           unsigned long long kept, const struct ppe_census *c )
++{
++    return snprintf( buf, size, "peb=%p pid=%04x killed: freed image=%llu private=%llu spans=%llu "
++                     "callret=%llu l1=%llu band_other=%llu pool=%llu MB, kept %llu MB; "
++                     "%u finished, %u parked thread(s)",
++                     peb, pid, freed[PPE_IMAGE] >> 20, freed[PPE_PRIVATE] >> 20, freed[PPE_SPAN] >> 20,
++                     freed[PPE_CALLRET] >> 20, freed[PPE_L1] >> 20, freed[PPE_BAND_OTHER] >> 20,
++                     pool >> 20, kept >> 20, c->finished, c->parked );
++}
++
++/* The ended processes the server reported, until each is torn down or found
++ * to have exited by itself. Added from the server's thread, taken on others:
++ * a slot is claimed by its peb, and taking it clears it once. */
++#define PPE_GONE_MAX 64
++struct ppe_gone
++{
++    void *peb;
++    unsigned pid;
++};
++
++/* Report peb; a second report keeps one entry. -1 when the table is full. */
++static inline int ppe_gone_add( struct ppe_gone *t, void *peb, unsigned pid )
++{
++    int i;
++    for (i = 0; i < PPE_GONE_MAX; i++)
++        if (__atomic_load_n( &t[i].peb, __ATOMIC_ACQUIRE ) == peb) return i;
++    for (i = 0; i < PPE_GONE_MAX; i++)
++    {
++        void *expected = NULL;
++        if (__atomic_compare_exchange_n( &t[i].peb, &expected, peb, 0, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED ))
++        {
++            __atomic_store_n( &t[i].pid, pid, __ATOMIC_RELEASE );
++            return i;
++        }
++    }
++    return -1;
++}
++
++/* Take slot i's peb for its teardown: 1 for the one caller that does. */
++static inline int ppe_gone_take( struct ppe_gone *t, int i, void *peb )
++{
++    return __atomic_compare_exchange_n( &t[i].peb, &peb, NULL, 0, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED );
++}
++#endif
+diff --git a/build/ntdll-unix/server_ios.c b/build/ntdll-unix/server_ios.c
+index 4932ac5..2c3ef28 100644
+--- a/build/ntdll-unix/server_ios.c
++++ b/build/ntdll-unix/server_ios.c
+@@ -2239,6 +2239,7 @@ NTSTATUS unixcall_wine_server_call( void *args )
+ #define IOS_SECTION_MAX 16
+ static __thread pthread_mutex_t *ios_sections[IOS_SECTION_MAX];
+ static __thread unsigned int ios_section_depth;
++extern void ios_note_host_sections( unsigned int depth );   /* signal_arm64_ios.c, PLA-416 */
+ 
+ void ios_leave_sections_at_exit( const char *why )
+ {
+@@ -2254,6 +2255,7 @@ void ios_leave_sections_at_exit( const char *why )
+                  mutex == &fd_cache_mutex ? " (fd_cache_mutex)" : "" );
+         mutex_unlock( mutex );
+     }
++    ios_note_host_sections( 0 );   /* PLA-416 */
+ }
+ 
+ /* Playport (PLA-120): record a host mutex the caller has just locked outside a
+@@ -2266,6 +2268,7 @@ void ios_section_track_enter( pthread_mutex_t *mutex )
+ {
+     if (ios_section_depth < IOS_SECTION_MAX) ios_sections[ios_section_depth] = mutex;
+     ios_section_depth++;
++    ios_note_host_sections( ios_section_depth );   /* PLA-416 */
+ }
+ 
+ /* ...and forget it just before the caller unlocks it. */
+@@ -2283,6 +2286,7 @@ void ios_section_track_leave( pthread_mutex_t *mutex )
+             if (j < i) ios_sections[j] = ios_sections[i];
+         }
+         if (i < IOS_SECTION_MAX) ios_sections[i] = NULL;
++        ios_note_host_sections( ios_section_depth );   /* PLA-416 */
+     }
+ }
+ #endif
+@@ -3997,6 +4001,34 @@ int ios_peb_is_dead_child( void *peb )
+     for (i = 0; peb && i < n; i++) if (ios_dead_pebs[i] == peb) return 1;
+     return 0;
+ }
++
++/* Playport (PLA-416): a child another process terminated never runs
++ * process_exit_wrapper. Its teardown (virtual_ios.c ios_proc_end_sweep), on a
++ * thread of another process, starts here: close its master socket, as the
++ * exit would, and record it as a dead child. The slot is taken atomically, so
++ * only one caller gets 1; 0 when it has none any more (it exited by itself,
++ * or was torn down already). */
++int ios_proc_end_take_socket( void *peb )
++{
++    int i, n = ios_proc_socket_count;
++
++    if (n > IOS_MAX_PROC_SOCKETS) n = IOS_MAX_PROC_SOCKETS;
++    for (i = 0; peb && i < n; i++)
++    {
++        void *expected = peb;
++        unsigned int d;
++
++        if (!__atomic_compare_exchange_n( &ios_proc_sockets[i].peb, &expected, NULL, 0,
++                                          __ATOMIC_ACQ_REL, __ATOMIC_RELAXED ))
++            continue;
++        ios_fdt_note_close( ios_proc_sockets[i].fd, "killed-master", peb );
++        close( ios_proc_sockets[i].fd );
++        d = __sync_fetch_and_add( &ios_dead_peb_count, 1 );
++        if (d < IOS_DEAD_PEB_MAX) ios_dead_pebs[d] = peb;
++        return 1;
++    }
++    return 0;
++}
+ #endif
+ 
+ void process_exit_wrapper( int status )
+diff --git a/build/ntdll-unix/signal_arm64_ios.c b/build/ntdll-unix/signal_arm64_ios.c
+index 886da22..7b57000 100644
+--- a/build/ntdll-unix/signal_arm64_ios.c
++++ b/build/ntdll-unix/signal_arm64_ios.c
+@@ -145,6 +145,9 @@ struct arm64_thread_data
+      * when it returns STATUS_THREAD_IS_TERMINATING (ios_alert_wait_check) */
+     BOOL in_alert_wait;
+     LONG killed_in_wait;
++    /* Playport (PLA-416): the uninterrupted sections and tracked host mutexes
++     * it holds (server_ios.c ios_section_track_enter), for the abort to read */
++    LONG host_sections;
+ };
+ 
+ #define IOS_KILLED_IN_WAIT      1
+@@ -157,6 +160,16 @@ static inline struct arm64_thread_data *arm64_thread_data( struct thread_data *d
+     return (struct arm64_thread_data *)get_teb_data(data)->cpu_data;
+ }
+ 
++/* Playport (PLA-416): the calling thread now holds `depth` uninterrupted
++ * sections and tracked host mutexes (server_ios.c), which the abort reads
++ * before it parks a killed thread. */
++void ios_note_host_sections( unsigned int depth )
++{
++    struct thread_data *data = get_thread_data();
++
++    if (data) __atomic_store_n( &arm64_thread_data( data )->host_sections, (LONG)depth, __ATOMIC_RELEASE );
++}
++
+ /***********************************************************************
+  * signal context platform-specific definitions
+  */
+@@ -8435,10 +8448,84 @@ void ios_alert_wait_end( void )
+  * is woken to end there instead (ios_alert_wait_check), and is left alone from
+  * then on; one in any other in-process wait is left to wake as it would.
+  *
+- * Returns 1 when the thread was diverted, 0 when it is not at such a point now,
+- * -1 when it is gone (or has no TEB or syscall frame to end it with).
++ * PLA-416: a thread of a process the server is ending (process_ending) that
++ * is blocked in an x86-64 program's NtWaitForAlertByThreadId, holding nothing
++ * the runtime tracks (ios_abort_park_state, pp_proc_end.h), is parked: left
++ * suspended for ever and counted as finished (ios_proc_end_note_parked). One
++ * that is in the wait but not provably idle is logged once (*refusal_logged)
++ * and runs on as before.
++ *
++ * Returns 2 when the thread was parked, 1 when it was diverted, 0 when it is
++ * not at such a point now, -1 when it is gone (or has no TEB or syscall frame
++ * to end it with).
+  */
+-int ios_abort_thread_in_guest_code( mach_port_t port, TEB *teb )
++#include "pp_proc_end.h"
++
++/* PLA-416: what parking needs to know of a stopped thread, and the addresses
++ * its saved state names (refs, PPE_REFS of them), all through abort_read. */
++static void ios_abort_park_state( TEB *teb, struct arm64_thread_data *arm64_data,
++                                  arm_thread_state64_t *state, int process_ending,
++                                  struct ppe_thread_state *s, uint64_t *refs, unsigned *nrefs )
++{
++    struct syscall_frame *frame = NULL;
++    CHPE_V2_CPU_AREA_INFO *cpu_area = NULL;
++    ARM64EC_NT_CONTEXT *context = NULL;
++    RTL_CRITICAL_SECTION *loader_lock = NULL;
++    PEB *peb = NULL;
++    HANDLE owner = 0, tid = 0;
++    ULONG wpm_depth = 0, wpm_write_depth = 0;
++    ULONG64 cbw_stamp = 0, cim_stamp = 0, guest[17];
++    UCHAR rwx_read = 0;
++    BOOLEAN in_callback = 0;
++    BOOL in_alert_wait = FALSE;
++    LONG killed_in_wait = 0, sections = 0;
++    uintptr_t pc = (uintptr_t)__darwin_arm_thread_state64_get_pc( *state );
++    unsigned i, n = 0;
++
++    memset( s, 0, sizeof(*s) );
++    s->process_ending = process_ending;
++    /* FEX's TEB stamps: Instrumentation[7] its WritePriorityMutex shared-hold
++     * depth, [2] its write-hold depth, [6] its CodeBufferWriteMutex stamp, [8]
++     * its CodeInvalidationMutex read-hold stamp and +0x1700 its RWX read hold
++     * (thread_ios.c pthread_exit_wrapper) */
++    s->readable = abort_read( &arm64_data->in_alert_wait, &in_alert_wait, sizeof(in_alert_wait) ) &&
++                  abort_read( &arm64_data->killed_in_wait, &killed_in_wait, sizeof(killed_in_wait) ) &&
++                  abort_read( &arm64_data->host_sections, &sections, sizeof(sections) ) &&
++                  abort_read( (const void *)(pc - 4), &s->insn_before_pc, sizeof(s->insn_before_pc) ) &&
++                  abort_read( (char *)teb + 0x16f0, &wpm_depth, sizeof(wpm_depth) ) &&
++                  abort_read( (char *)teb + 0x16c8, &wpm_write_depth, sizeof(wpm_write_depth) ) &&
++                  abort_read( (char *)teb + 0x16e8, &cbw_stamp, sizeof(cbw_stamp) ) &&
++                  abort_read( (char *)teb + 0x16f8, &cim_stamp, sizeof(cim_stamp) ) &&
++                  abort_read( (char *)teb + 0x1700, &rwx_read, sizeof(rwx_read) ) &&
++                  abort_read( &teb->ChpeV2CpuAreaInfo, &cpu_area, sizeof(cpu_area) ) && cpu_area &&
++                  abort_read( &cpu_area->InSyscallCallback, &in_callback, sizeof(in_callback) ) &&
++                  abort_read( &cpu_area->ContextAmd64, &context, sizeof(context) ) && context &&
++                  abort_read( (char *)context + 0x78, guest, sizeof(guest) ) &&   /* Rax..R15, Rip */
++                  abort_read( &teb->ClientId.UniqueThread, &tid, sizeof(tid) ) &&
++                  abort_read( &teb->Peb, &peb, sizeof(peb) ) && peb &&
++                  abort_read( &peb->LoaderLock, &loader_lock, sizeof(loader_lock) ) &&
++                  (!loader_lock || abort_read( &loader_lock->OwningThread, &owner, sizeof(owner) )) &&
++                  abort_read( &((struct teb_data *)&teb->GdiTebBatch)->syscall_frame, &frame, sizeof(frame) );
++    s->in_alert_wait = in_alert_wait;
++    s->killed_in_wait = killed_in_wait;
++    s->wow64_wait = in_alert_wait && ios_alert_wait_from_wow64( teb, frame );
++    s->x0 = state->__x[0];
++    s->x16 = state->__x[16];
++    s->fex_stamps = wpm_depth | wpm_write_depth | cbw_stamp | cim_stamp | rwx_read;
++    s->in_syscall_callback = in_callback;
++    s->host_sections = (uint32_t)sections;
++    s->owns_loader_lock = owner && owner == tid;
++
++    for (i = 0; i < 29; i++) refs[n++] = state->__x[i];
++    refs[n++] = (uint64_t)__darwin_arm_thread_state64_get_fp( *state );
++    refs[n++] = (uint64_t)__darwin_arm_thread_state64_get_lr( *state );
++    refs[n++] = (uint64_t)__darwin_arm_thread_state64_get_sp( *state );
++    refs[n++] = (uint64_t)pc;
++    for (i = 0; i < 17 && s->readable; i++) refs[n++] = guest[i];
++    *nrefs = n;
++}
++
++int ios_abort_thread_in_guest_code( mach_port_t port, TEB *teb, int process_ending, int *refusal_logged )
+ {
+     extern void *ios_jit_rx_base_global;
+     extern size_t ios_jit_pool_size_global;
+@@ -8489,6 +8576,43 @@ int ios_abort_thread_in_guest_code( mach_port_t port, TEB *teb )
+             ios_wake_killed_thread_alert( tid );
+         return 0;
+     }
++    if (process_ending && in_alert_wait)
++    {
++        extern BOOL ios_proc_end_note_parked( TEB *teb, const uint64_t *refs, unsigned nrefs );
++        extern int ios_alert_waiter_lookup( unsigned int tid, const void **addr, int *age_s, int *inf );
++        struct ppe_thread_state park;
++        uint64_t refs[PPE_REFS];
++        unsigned nrefs = 0;
++        enum ppe_park why;
++        const void *wait = NULL;
++        int age = 0, inf = 0;
++        HANDLE tid = 0;
++
++        ios_abort_park_state( teb, arm64_data, &state, process_ending, &park, refs, &nrefs );
++        why = ppe_may_park( &park );
++        if (why == PPE_PARK && ios_proc_end_note_parked( teb, refs, nrefs ))
++        {
++            /* never resumed: it stays stopped in its wait */
++            abort_read( &teb->ClientId.UniqueThread, &tid, sizeof(tid) );
++            ios_alert_waiter_lookup( HandleToULong( tid ), &wait, &age, &inf );
++            dprintf( 2, "[proc-end] parked tid=%04x wait=%p futex=%p (PLA-416)\n",
++                     HandleToULong( tid ), wait, (void *)(uintptr_t)state.__x[1] );
++            return 2;
++        }
++        if (why == PPE_PARK || ppe_refusal_logged( why ))
++        {
++            abort_ring_doorbell( teb );
++            thread_resume( port );
++            if (refusal_logged && !*refusal_logged)
++            {
++                *refusal_logged = 1;
++                abort_read( &teb->ClientId.UniqueThread, &tid, sizeof(tid) );
++                dprintf( 2, "[proc-end] not parked tid=%04x: %s; it runs on (PLA-416)\n",
++                         HandleToULong( tid ), why == PPE_PARK ? "the parked tables are full" : ppe_park_name( why ) );
++            }
++            return 0;
++        }
++    }
+     pc = (uintptr_t)__darwin_arm_thread_state64_get_pc( state );
+     if (pc < rx || pc >= rx + ios_jit_pool_size_global || ios_jit_pool_image_pc( pc, NULL ))
+         goto not_now;
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 2f598a2..c7bae78 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -8675,9 +8675,10 @@ static void clear_arm64ec_range( const void *addr, size_t size );
+  * are cleared so a reused range starts with a clean call-routing slate. */
+ static void ios_wow64_release_window( void *owner );
+ 
+-void ios_jit_reclaim_process( void *peb )
++/* PLA-416: returns the bytes of pool ranges and tail carves it freed. */
++size_t ios_jit_reclaim_process_bytes( void *peb )
+ {
+-    size_t total = 0;
++    size_t total = 0, carved = 0;
+     int ranges = 0, maps_killed = 0, aliases_killed = 0, poisoned_ranges = 0;
+     int i, j;
+     char *rx_base = (char *)ios_jit_rx_base_global;
+@@ -8686,9 +8687,9 @@ void ios_jit_reclaim_process( void *peb )
+     struct { unsigned long long pe, jit; } dead_aliases[IOS_JIT_MAX_MAPPINGS];
+     int dead_alias_count = 0;
+ 
+-    if (!peb) return;
++    if (!peb) return 0;
+     ios_wow64_release_window( peb );
+-    if (!rx_base) return;
++    if (!rx_base) return 0;
+ 
+     ios_alias_forget_process( peb );
+ 
+@@ -8884,6 +8885,7 @@ void ios_jit_reclaim_process( void *peb )
+             carve_bytes += ios_tail_carves[ci].size;
+         }
+         pthread_mutex_unlock( &ios_tail_carve_lock );
++        carved = carve_bytes;
+         if (carves || kept)
+             dprintf(2, "[jit-pool] tail RECLAIM peb=%p: %d carve(s) 0x%lx bytes -> free-list, %d kept (a pc inside)\n",
+                     peb, carves, (unsigned long)carve_bytes, kept);
+@@ -8903,6 +8905,12 @@ void ios_jit_reclaim_process( void *peb )
+      * view could go while FEX-translated code referring to it is still entrant.
+      * Server EOF alone would not carry that guarantee; completing this walk does. */
+     ios_exe_win_note_dead_peb( peb );
++    return total + carved;
++}
++
++void ios_jit_reclaim_process( void *peb )
++{
++    ios_jit_reclaim_process_bytes( peb );
+ }
+ 
+ 
+@@ -17569,19 +17577,24 @@ static BOOL ios_view_owner_teb_exited( TEB *teb )
+ 
+ /* The calling thread will not touch its process's guest memory again. A full
+  * table leaves its process's views mapped, never released early. */
+-void ios_view_owner_thread_exit( struct thread_data *data )
++static BOOL ios_view_owner_teb_finished( TEB *teb )
+ {
+-    TEB *teb = data ? data->teb : NULL;   /* NtCurrentTeb() is cleared by now */
+     unsigned int i;
+ 
+-    if (!teb || ios_view_owner_teb_exited( teb )) return;
++    if (!teb || ios_view_owner_teb_exited( teb )) return TRUE;
+     for (i = 0; i < IOS_VIEW_OWNER_EXITED_TEBS; i++)
+     {
+         TEB *expected = NULL;
+         if (__atomic_compare_exchange_n( &ios_view_owner_exited_tebs[i], &expected, teb, FALSE,
+-                                         __ATOMIC_RELEASE, __ATOMIC_RELAXED )) return;
++                                         __ATOMIC_RELEASE, __ATOMIC_RELAXED )) return TRUE;
+     }
+     dprintf( 2, "[view-owner] exited-thread table full: peb=%p keeps its views\n", teb->Peb );
++    return FALSE;
++}
++
++void ios_view_owner_thread_exit( struct thread_data *data )
++{
++    ios_view_owner_teb_finished( data ? data->teb : NULL );   /* NtCurrentTeb() is cleared by now */
+ }
+ 
+ /* A TEB is reused once its thread data is freed. virtual_mutex held. */
+@@ -17650,14 +17663,18 @@ static BOOL ios_view_owner_release_locked( void *peb )
+     return TRUE;
+ }
+ 
++static void ios_proc_end_sweep( void *self );
++
+ /* Release the views of every queued process whose threads have all finished;
+- * never the caller's own process. */
++ * never the caller's own process. PLA-416: first end the children another
++ * process terminated. */
+ static void ios_view_owner_sweep(void)
+ {
+     void *self = ios_jit_current_peb();
+     sigset_t sigset;
+     unsigned int i;
+ 
++    ios_proc_end_sweep( self );
+     for (i = 0; i < IOS_VIEW_OWNER_DEAD_MAX; i++)
+         if (__atomic_load_n( &ios_view_owner_dead[i], __ATOMIC_RELAXED )) break;
+     if (i == IOS_VIEW_OWNER_DEAD_MAX) return;
+@@ -17694,6 +17711,203 @@ void ios_view_owner_process_exit( void *peb )
+     ios_view_owner_sweep();
+ }
+ 
++/* Playport (PLA-416, decision 0127): the end of a child another process
++ * terminated (pp_proc_end.h). It never runs process_exit_wrapper: its threads
++ * end through abort_thread, whose nb_threads counts the whole task, so no last
++ * thread of it calls abort_process. The server reports every ended process
++ * (wineserver mach_ios.c finish_process_tracing, ios_proc_end_process_gone).
++ * Once every thread of one in teb_list has finished or is parked, a thread of
++ * another process gives back, once, what process_exit_wrapper would: the
++ * master socket (ios_proc_end_take_socket, which also records it as a dead
++ * child), the fd cache, the JIT-pool ranges and tail carves, and the views
++ * 0154 releases. Unlike a process that exits by itself, its views in FEX's
++ * band go too: its rpmalloc heaps, call-return stacks and L1 caches, which
++ * FEX's ThreadTerm never released because its threads never left through
++ * NtTerminateThread. With a thread parked, only the L1 caches of the band go,
++ * and no view that holds an address its saved registers name. A process that
++ * exited by itself is left to 0154; an i386 one keeps everything, as 0154
++ * keeps its views. Its fixed-base main image is not retired (that unmaps
++ * through the server on the process's own thread); ios_jit_reclaim_process
++ * marks it dead, so a later thread may delete it (ml983). */
++#include "pp_proc_mem.h"
++#include "pp_proc_end.h"
++
++#define IOS_PROC_END_PARKED_MAX 256
++static struct ppe_gone ios_proc_end_gone[PPE_GONE_MAX];   /* atomic slots */
++static struct
++{
++    TEB     *teb;
++    unsigned nrefs;
++    uint64_t refs[PPE_REFS];
++    int      ready;
++} ios_proc_end_parked[IOS_PROC_END_PARKED_MAX];          /* written once each */
++static unsigned int ios_proc_end_parked_count;
++static uint64_t ios_proc_end_refs[IOS_PROC_END_PARKED_MAX * PPE_REFS];   /* virtual_mutex */
++
++/* The server ended pid's process: on the server's thread, lock-free. */
++void ios_proc_end_process_gone( void *peb, unsigned int pid )
++{
++    if (peb && ppe_gone_add( ios_proc_end_gone, peb, pid ) < 0)
++        dprintf( 2, "[proc-end] peb=%p pid=%04x ended: table full, it is not torn down\n", peb, pid );
++}
++
++/* The abort parked teb's thread (signal_arm64_ios.c), on the server's thread:
++ * record what its saved registers name and count it as finished. FALSE, and
++ * the thread must not stay parked, when either table is full. */
++BOOL ios_proc_end_note_parked( TEB *teb, const uint64_t *refs, unsigned nrefs )
++{
++    unsigned int i = __atomic_fetch_add( &ios_proc_end_parked_count, 1, __ATOMIC_RELAXED );
++
++    if (i >= IOS_PROC_END_PARKED_MAX) return FALSE;
++    if (nrefs > PPE_REFS) nrefs = PPE_REFS;
++    memcpy( ios_proc_end_parked[i].refs, refs, nrefs * sizeof(*refs) );
++    ios_proc_end_parked[i].nrefs = nrefs;
++    ios_proc_end_parked[i].teb = teb;
++    __atomic_store_n( &ios_proc_end_parked[i].ready, 1, __ATOMIC_RELEASE );
++    return ios_view_owner_teb_finished( teb );
++}
++
++static int ios_proc_end_parked_index( TEB *teb )
++{
++    unsigned int i, n = __atomic_load_n( &ios_proc_end_parked_count, __ATOMIC_RELAXED );
++
++    if (n > IOS_PROC_END_PARKED_MAX) n = IOS_PROC_END_PARKED_MAX;
++    for (i = 0; i < n; i++)
++        if (__atomic_load_n( &ios_proc_end_parked[i].ready, __ATOMIC_ACQUIRE ) &&
++            ios_proc_end_parked[i].teb == teb)
++            return i;
++    return -1;
++}
++
++/* virtual_mutex held. */
++static void ios_proc_end_census_locked( void *peb, struct ppe_census *c )
++{
++    struct thread_data *data;
++
++    memset( c, 0, sizeof(*c) );
++    LIST_FOR_EACH_ENTRY( data, &teb_list, struct thread_data, entry )
++    {
++        if (!data->teb || data->teb->Peb != peb) continue;
++        if (!ios_view_owner_teb_exited( data->teb )) c->live++;
++        else if (ios_proc_end_parked_index( data->teb ) >= 0) c->parked++;
++        else c->finished++;
++    }
++}
++
++/* virtual_mutex held. Deletes the killed peb's views pp_proc_end.h lets go. */
++static void ios_proc_end_release_locked( void *peb, const struct ppe_census *census,
++                                         unsigned long long freed[PPE_CLASSES], unsigned long long *kept )
++{
++    struct file_view *view, *next;
++    struct thread_data *data;
++    unsigned int nrefs = 0;
++
++    LIST_FOR_EACH_ENTRY( data, &teb_list, struct thread_data, entry )
++    {
++        int p;
++
++        if (!data->teb || data->teb->Peb != peb) continue;
++        if ((p = ios_proc_end_parked_index( data->teb )) >= 0 &&
++            nrefs + ios_proc_end_parked[p].nrefs <= sizeof(ios_proc_end_refs) / sizeof(ios_proc_end_refs[0]))
++        {
++            memcpy( ios_proc_end_refs + nrefs, ios_proc_end_parked[p].refs,
++                    ios_proc_end_parked[p].nrefs * sizeof(uint64_t) );
++            nrefs += ios_proc_end_parked[p].nrefs;
++        }
++    }
++    WINE_RB_FOR_EACH_ENTRY_DESTRUCTOR( view, next, &views_tree, struct file_view, entry )
++    {
++        uintptr_t base = (uintptr_t)view->base;
++        BOOL band = base + view->size > 0x7c00000000ULL && base < 0x8000000000ULL;
++        enum ppe_class cls = (view->protect & SEC_IMAGE) ? PPE_IMAGE : PPE_PRIVATE;
++
++        if (view->ios_owner_peb != peb) continue;
++        view->ios_owner_peb = NULL;
++        if (band)
++        {
++            switch (ppm_fex_shape( base, view->size ))
++            {
++            case PPM_FEX_SPAN:    cls = PPE_SPAN; break;
++            case PPM_FEX_CALLRET: cls = PPE_CALLRET; break;
++            case PPM_FEX_L1:      cls = PPE_L1; break;
++            default:              cls = PPE_BAND_OTHER; break;
++            }
++        }
++        if ((view->protect & VPROT_SYSTEM) ||
++            (band ? !is_view_valloc( view )
++                  : ios_view_owner_kept_range( view ) || !(is_view_valloc( view ) || (view->protect & SEC_IMAGE))) ||
++            !ppe_release_view( cls, census->parked, base, view->size, ios_proc_end_refs, nrefs ))
++        {
++            *kept += view->size;
++            continue;
++        }
++        freed[cls] += view->size;
++        view->wow64_mapping = 0;   /* the server closed the dead process's handles (0139) */
++        delete_view( view );
++    }
++    LIST_FOR_EACH_ENTRY( data, &teb_list, struct thread_data, entry )
++    {
++        if (!data->teb || data->teb->Peb != peb) continue;
++        /* its PE side never freed it: virtual_clear_tls_index writes through it */
++        data->teb->TlsExpansionSlots = NULL;
++        ios_view_owner_forget_teb( data->teb );
++        /* out of every later walk by process (census, 0154, [proc-mem]), and of
++         * a later process's that gets the same PEB address: none of these
++         * threads runs again, and their TEBs are never reused */
++        data->teb->Peb = NULL;
++    }
++}
++
++/* At each thread creation and reclamation (ios_view_owner_sweep), outside
++ * virtual_mutex; never for the caller's own process. */
++static void ios_proc_end_sweep( void *self )
++{
++    extern int ios_peb_is_dead_child( void *peb );
++    extern int ios_proc_end_take_socket( void *peb );
++    extern void ios_fd_cache_release( void *peb );
++    int i;
++
++    for (i = 0; i < PPE_GONE_MAX; i++)
++    {
++        void *peb = __atomic_load_n( &ios_proc_end_gone[i].peb, __ATOMIC_ACQUIRE );
++        unsigned long long freed[PPE_CLASSES] = { 0 }, kept = 0, pool;
++        struct ppe_census census;
++        unsigned int pid;
++        sigset_t sigset;
++        char row[320];
++
++        if (!peb || peb == self) continue;
++        pid = __atomic_load_n( &ios_proc_end_gone[i].pid, __ATOMIC_ACQUIRE );
++        if (ios_peb_is_dead_child( peb ))   /* it exited by itself: 0154's */
++        {
++            ppe_gone_take( ios_proc_end_gone, i, peb );
++            continue;
++        }
++        server_enter_uninterrupted_section( &virtual_mutex, &sigset );
++        ios_proc_end_census_locked( peb, &census );
++        server_leave_uninterrupted_section( &virtual_mutex, &sigset );
++        if (!ppe_all_ended( &census ) || !ppe_gone_take( ios_proc_end_gone, i, peb )) continue;
++        if (ios_image_info_for_peb( peb )->Machine == IMAGE_FILE_MACHINE_I386)
++        {
++            dprintf( 2, "[proc-end] peb=%p pid=%04x killed: i386, everything is kept\n", peb, pid );
++            continue;
++        }
++        if (!ios_proc_end_take_socket( peb ))
++        {
++            dprintf( 2, "[proc-end] peb=%p pid=%04x ended: no master socket, nothing to tear down\n", peb, pid );
++            continue;
++        }
++        ios_fd_cache_release( peb );
++        pool = ios_jit_reclaim_process_bytes( peb );
++        server_enter_uninterrupted_section( &virtual_mutex, &sigset );
++        ios_proc_end_census_locked( peb, &census );
++        ios_proc_end_release_locked( peb, &census, freed, &kept );
++        server_leave_uninterrupted_section( &virtual_mutex, &sigset );
++        ppe_row( row, sizeof(row), peb, pid, freed, pool, kept, &census );
++        dprintf( 2, "[proc-end] %s (PLA-416)\n", row );
++    }
++}
++
+ /* Playport (diagnostics, PLA-414): memory by pseudo-process, as `[proc-mem]`
+  * lines (pp_proc_mem.h). Under virtual_mutex, each view's committed runs are
+  * charged to the view's owner (image, private or FEX's band) and copied, and
+diff --git a/build/wineserver/mach_ios.c b/build/wineserver/mach_ios.c
+index d01022e..34f13d6 100644
+--- a/build/wineserver/mach_ios.c
++++ b/build/wineserver/mach_ios.c
+@@ -180,6 +180,15 @@ void init_process_tracing( struct process *process )
+ /* terminate the per-process tracing mechanism */
+ void finish_process_tracing( struct process *process )
+ {
++#ifdef WINE_IOS
++    {
++        /* Playport (PLA-416): the process has ended (process_killed). One that
++         * another process terminated never runs process_exit_wrapper; ntdll
++         * tears it down once its threads are gone (virtual_ios.c). */
++        extern void ios_proc_end_process_gone( void *peb, unsigned int pid );
++        ios_proc_end_process_gone( (void *)(ULONG_PTR)process->peb, process->id );
++    }
++#endif
+     if (process->trace_data)
+     {
+         mach_port_deallocate( mach_task_self(), process->trace_data );
+@@ -1008,7 +1017,12 @@ int ios_thread_mach_release( struct thread *thread )
+  * a diversion that something else's thread_set_state undid is made again.
+  * After AA_MAX_TRIES (about a minute) it is left running, as before. The retry
+  * keeps its own send right to the thread, not the server's thread object,
+- * which kill_thread releases. */
++ * which kill_thread releases.
++ *
++ * PLA-416: a thread of a process that is being terminated as a whole
++ * (is_terminating) and is blocked in an x86-64 program's in-process wait,
++ * holding nothing, is parked instead: ntdll leaves it suspended for ever and
++ * the retries end. */
+ #define AA_MAX_TRIES   2000
+ #define AA_LOG_MAX     64
+ 
+@@ -1019,34 +1033,42 @@ struct ios_async_abort
+     thread_id_t   id;
+     unsigned int  tries;      /* attempts so far */
+     unsigned int  diverted;   /* times it was diverted */
++    int           process_ending;  /* PLA-416: its whole process is being terminated */
++    int           refusal_logged;  /* PLA-416: ntdll logged why it was not parked */
++    int           parked;
+ };
+ 
+-extern int ios_abort_thread_in_guest_code( mach_port_t port, void *teb );
++extern int ios_abort_thread_in_guest_code( mach_port_t port, void *teb, int process_ending,
++                                           int *refusal_logged );
+ 
+-static unsigned int aa_started, aa_ended, aa_given_up, aa_logged;
++static unsigned int aa_started, aa_ended, aa_given_up, aa_logged, aa_parked;
+ 
+ static void aa_retry( void *private );
+ 
+ static void aa_finish( struct ios_async_abort *aa, int given_up )
+ {
+     if (given_up) aa_given_up++;
++    else if (aa->parked) aa_parked++;
+     else if (aa->diverted) aa_ended++;
+-    if (given_up || (aa->diverted && aa_logged++ < AA_LOG_MAX))
++    if (given_up || aa->parked || (aa->diverted && aa_logged++ < AA_LOG_MAX))
+         fprintf( stderr, "[async-abort] tid=%04x %s after %u tries, diverted %u times "
+-                 "(killed %u, ended %u, left running %u)\n", aa->id,
+-                 given_up ? "STILL RUNNING, left as it is" : aa->diverted ? "ended" : "gone by itself",
+-                 aa->tries, aa->diverted, aa_started, aa_ended, aa_given_up );
++                 "(killed %u, ended %u, parked %u, left running %u)\n", aa->id,
++                 given_up ? "STILL RUNNING, left as it is" : aa->parked ? "parked" :
++                 aa->diverted ? "ended" : "gone by itself",
++                 aa->tries, aa->diverted, aa_started, aa_ended, aa_parked, aa_given_up );
+     mach_port_deallocate( mach_task_self(), aa->port );
+     free( aa );
+ }
+ 
+ static void aa_step( struct ios_async_abort *aa )
+ {
+-    int ret = ios_abort_thread_in_guest_code( aa->port, (void *)(ULONG_PTR)aa->teb );
++    int ret = ios_abort_thread_in_guest_code( aa->port, (void *)(ULONG_PTR)aa->teb, aa->process_ending,
++                                              &aa->refusal_logged );
+ 
+     aa->tries++;
+-    if (ret < 0)
++    if (ret < 0 || ret == 2)
+     {
++        aa->parked = ret == 2;
+         aa_finish( aa, 0 );
+         return;
+     }
+@@ -1082,6 +1104,8 @@ static int ios_abort_killed_thread( struct thread *thread )
+     aa->teb = thread->teb;
+     aa->id = thread->id;
+     aa->tries = aa->diverted = 0;
++    aa->process_ending = thread->process->is_terminating;
++    aa->refusal_logged = aa->parked = 0;
+     aa_started++;
+     aa_step( aa );
+     return 1;
