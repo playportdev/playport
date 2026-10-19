@@ -4,6 +4,9 @@
 [0124](0124-end-the-rockstar-launcher-after-the-games-sign-in.md): the launcher ends at the
 game's first frame, not at its sign-in, and the field is renamed. Nothing under RDR2.exe is ever
 ended. Not yet shown on the phone.
+Amended by [0130](0130-end-the-rockstar-launcher-at-the-games-sign-in-or-near-the-memory-limit.md):
+the tree ends at the game's sign-in again, or before it near the memory limit, and the field is
+`endLauncherAfterSignIn` again.
 
 ## Context
 

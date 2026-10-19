@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Which of the title's processes the session root ends of the Rockstar Games
- * Launcher at the game's first frame (PP_CONTROL_END_LAUNCHER, decision 0125,
- * amending 0124), and which later starts it counts as the launcher's restarts.
+ * Launcher when the app asks, at the game's sign-in (PP_CONTROL_END_LAUNCHER,
+ * decisions 0125, 0130), and which later starts it counts as the launcher's restarts.
  * The root lists the job's processes with Toolhelp (id, parent id, executable
  * name) and asks this header, which the host test runs too: no library calls.
  *

@@ -39,9 +39,9 @@ public struct PublisherLauncher: Equatable, Sendable, Identifiable {
     /// this one file (forgetWindowSettings). Nil when Playport knows none.
     public let windowSettingsFile: String?
     /// The line the games in `games` log once they signed in through this launcher. A Play whose
-    /// compatibility entry ends the launcher (LaunchSettings.endLauncherAtFirstFrame) ends it at the
-    /// game's first frame and only logs when this line comes (decision 0125); nil for a launcher
-    /// with none. Which processes end is the session root's (app/SessionRoot/launcher_end.h).
+    /// compatibility entry ends the launcher (LaunchSettings.endLauncherAfterSignIn) ends it when
+    /// this line comes, or before it near the memory limit (decision 0130, LauncherEndTrigger); nil
+    /// for a launcher with none. Which processes end is the session root's (app/SessionRoot/launcher_end.h).
     public let signIn: GameSignIn?
 
     /// The launch's title id (TitleLaunch), apart from every store's game ids.

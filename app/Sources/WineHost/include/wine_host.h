@@ -151,7 +151,7 @@ int wine_host_session_wait(int timeout_ms, int *exit_code);
  * PP_CONTROL_CLOSE posts WM_CLOSE to the title's top-level windows and ends
  * its job wait_ms later if it is still running (wait_ms is only a CLOSE's, at
  * most PP_CONTROL_MAX_WAIT_MS). PP_CONTROL_END_LAUNCHER, the launch's own
- * at the game's first frame (decision 0125), ends the Rockstar Games Launcher's
+ * at the game's sign-in (decision 0130), ends the Rockstar Games Launcher's
  * processes but never the game's. 0 with *count the threads, windows or
  * processes it touched; -1 bad call or no title running, -4 the control could not be
  * written, -6 no answer in time or the root ended, -7 the root refused it.

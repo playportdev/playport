@@ -857,9 +857,10 @@ the game is paused:
   Nothing the host's main thread needs is held by a suspended thread, as no
   thread is held inside host code.
 - **The launcher's end.** `PP_CONTROL_END_LAUNCHER` is the launch's own control, not the menu's.
-  Red Dead Redemption 2's Play sends it at the game's first frame (decision
-  [0125](decisions/0125-end-the-whole-rockstar-launcher-at-the-games-first-frame.md), amending
-  [0124](decisions/0124-end-the-rockstar-launcher-after-the-games-sign-in.md)).
+  Red Dead Redemption 2's Play sends it at the game's Social Club sign-in, or before it once the
+  app's footprint is within 1,200 MB of its limit (decision
+  [0130](decisions/0130-end-the-rockstar-launcher-at-the-games-sign-in-or-near-the-memory-limit.md),
+  amending [0125](decisions/0125-end-the-whole-rockstar-launcher-at-the-games-first-frame.md)).
   - The root ends the launcher's tree in the job one process at a time, in one step, never the
     game or a process under it (`app/SessionRoot/launcher_end.h`).
   - It then counts every start of the launcher's images from the job's messages

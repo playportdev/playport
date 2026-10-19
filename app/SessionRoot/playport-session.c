@@ -34,7 +34,7 @@
 // At its start it writes wineboot's volatile HKLM\Hardware\Description\System\BIOS key
 // from the SMBIOS table (decision 0119), which the app's never-run wineboot would.
 //
-// For RDR2's play (decision 0125, amending 0124), at the game's first frame, it ends
+// For RDR2's play (decisions 0125, 0130), when the app asks (the game's sign-in), it ends
 // the Rockstar Games Launcher's tree one process at a time (never the game or a process
 // under it, launcher_end.h), each logged as a `[launcher]` line, then counts and logs
 // every start of the launcher's images (the job's messages) and ends the first restarts
@@ -314,7 +314,7 @@ static DWORD close_title(const DWORD *pids, DWORD n)
     return c.posted;
 }
 
-/* --- the launcher, at the game's first frame (decisions 0124, 0125, launcher_end.h) */
+/* --- the launcher, when the app asks (decisions 0124, 0125, 0130, launcher_end.h) */
 
 #define MAX_PROCS 512
 #define MAX_LAUNCHER_KNOWN 64
@@ -539,8 +539,8 @@ static void control(uint32_t title_seq, HANDLE job, DWORD title, int *closing, D
             say("%s %u: [launcher] already ended once; nothing more", what, (unsigned long long)title_seq);
             break;
         }
-        say("%s %u: [launcher] the game's first frame: ending the launcher, its error handler and its Social "
-            "Club helpers, never the game", what, (unsigned long long)title_seq);
+        say("%s %u: [launcher] ending the launcher, its error handler and its Social Club helpers, never the "
+            "game (the app's title: launcher line gives why)", what, (unsigned long long)title_seq);
         launcher_ended = 1;
         launcher_ended_at = GetTickCount();
         done = end_launcher(title_seq, pids, npids, 0);

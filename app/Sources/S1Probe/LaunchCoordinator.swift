@@ -89,9 +89,9 @@ enum LaunchCoordinator {
         /// The game's own pool from its compatibility entry (LaunchSettings.jitPoolMB, decision
         /// 0108), granted when the memory limit allows; nil for the default.
         var gamePoolMB: Int? = nil
-        /// The publisher launcher the Play starts, which the session root ends at the game's first
-        /// frame, and the game's sign-in through it, which is only logged (decision 0125;
-        /// LaunchSettings.endLauncherAtFirstFrame); nil leaves the launcher to the title.
+        /// The game's sign-in through the publisher launcher the Play starts: the session root
+        /// ends the launcher once it comes, or before it near the memory limit (decision 0130;
+        /// LaunchSettings.endLauncherAfterSignIn); nil leaves the launcher to the title.
         var endLauncher: GameSignIn? = nil
         /// How long the title goes on after it ran the pool out before the launch ends (decisions
         /// 0022, 0030); a publisher's launcher Open carries its own (decision 0112).
@@ -521,9 +521,7 @@ enum LaunchCoordinator {
                 + p.vulkanEnvironment.keys.sorted().map { "\($0)=\(p.vulkanEnvironment[$0]!)" }.joined(separator: " "))
         }
         let environment = applyEnvironment(backend: backend, steamAppID: r.steamAppID, fex: r.fex)
-        let firstFrameSeen = OSAllocatedUnfairLock(initialState: false)
         PacedMetalLayer.onFirstFrame {
-            firstFrameSeen.withLock { $0 = true }
             mark("first frame")
             step(.drawing)
             #if !PLAYPORT_RELEASE
@@ -597,14 +595,13 @@ enum LaunchCoordinator {
         let t0 = Date()
         step(.running(since: t0))
         let launcher = r.endLauncher.map { s in LauncherEnd(signIn: s, profile: runtime.prefixURL.appendingPathComponent("drive_c/users/playport")) }
+        var sampled = Date.distantPast
         while true {
-            // In 2 s slices, so the pool's use is logged as it grows.
-            let w = runtime.wait(ms: 2_000)
+            // In 2 s slices, so the pool's use is logged as it grows; in 1 s slices while a
+            // launcher end reads the footprint (decision 0130), the pool still every 2 s.
+            let w = runtime.wait(ms: launcher?.readsFootprint == true ? 1_000 : 2_000)
             let elapsed = Date().timeIntervalSince(t0)
-            if w.rc == 1, let l = launcher {
-                if !l.ended, firstFrameSeen.withLock({ $0 }) { l.end(elapsed: elapsed) }
-                l.watchSignIn(elapsed: elapsed)
-            }
+            if w.rc == 1, let l = launcher { l.slice(elapsed: elapsed) }
             if w.rc == 0 {
                 let exit = UInt32(bitPattern: w.code)
                 return pool.end(Outcome(kind: .exited(exit), line: "exit=\(String(format: "0x%08x", exit)) after_s=\(Int(elapsed))"),
@@ -613,7 +610,10 @@ enum LaunchCoordinator {
             if w.rc < 0 {
                 return pool.end(Outcome(kind: .failed, line: "launch=failed wait=\(w.rc)"), mark: mark)
             }
-            pool.sample()
+            if Date().timeIntervalSince(sampled) >= 1.9 {
+                sampled = Date()
+                pool.sample()
+            }
             if let t = pool.exhaustedAt, Date().timeIntervalSince(t) >= pool.grace {
                 // The restart that follows the launch ends it (decisions 0022, 0030, 0112).
                 log("pool: the game is still running \(Int(pool.grace)) s after it ran out of \(pool.exhaustedWhat); the restart ends it")
@@ -740,46 +740,78 @@ enum LaunchCoordinator {
         return nil
     }
 
-    /// The publisher launcher's end at the game's first frame (decision 0125, amending 0124). At
-    /// the first wait slice after the first frame it sends PP_CONTROL_END_LAUNCHER, once: the
-    /// root ends the launcher's whole tree in one step (Launcher.exe, RockstarErrorHandler.exe and
-    /// the launcher's SocialClubHelper.exe processes), never the game or a process under it, and
-    /// logs each, and every start of one of those images after it (`session: … [launcher]`
-    /// lines). The game's sign-in is only watched and logged: the game's log as the title started
-    /// is the baseline (GameSignIn.Watch), and every wait slice reads it again until this Play's
-    /// first sign-in line. Only the fixed line text is matched; nothing of the log is logged.
+    /// The publisher launcher's end once the game has signed in (decision 0130, amending 0125).
+    /// The game's log as the title started is the baseline (GameSignIn.Watch); every wait slice
+    /// reads it again, and at this Play's first sign-in line it sends PP_CONTROL_END_LAUNCHER,
+    /// once: the root ends the launcher's whole tree in one step (Launcher.exe,
+    /// RockstarErrorHandler.exe and the launcher's SocialClubHelper.exe processes), never the game
+    /// or a process under it, and logs each, and every start of one of those images after it
+    /// (`session: … [launcher]` lines). Until the end, and for 10 s after it, every slice also
+    /// reads the app's footprint (phys_footprint, the counter of the runtime's `[xp]` fpMB): one
+    /// within LauncherEndTrigger.headroomMB of the limit ends the tree before the sign-in, and
+    /// one within nearMB is logged. A sign-in after such an end is still logged. Only the fixed
+    /// line text is matched; nothing of the log is logged.
     private final class LauncherEnd {
         let file: URL
         let watch: GameSignIn.Watch
-        private(set) var ended = false
+        private var endedAt: Date?
         private var signedIn = false
 
         init(signIn: GameSignIn, profile: URL) {
             file = signIn.file(profile: profile)
             let baseline = try? Data(contentsOf: file)
             watch = GameSignIn.Watch(signIn: signIn, baseline: baseline)
-            log("launcher: ends at the game's first frame, the game's sign-in is only logged (decision 0125); its log "
+            let limit = MemoryLimit.read().limitMB
+            log("launcher: ends at the game's sign-in, or when the footprint reaches the limit less "
+                + "\(LauncherEndTrigger.headroomMB) MB (now \(limit.map { "\(LauncherEndTrigger.memoryThresholdMB(limitMB: $0)) MB" } ?? "no limit"); "
+                + "decision 0130); its log "
                 + (baseline.map { "holds \($0.count) bytes of an earlier start" } ?? "is not there yet"))
         }
 
+        /// Whether the wait slices read the footprint: until the end and for 10 s after it.
+        var readsFootprint: Bool { endedAt.map { Date().timeIntervalSince($0) < 10 } ?? true }
+
+        /// One wait slice: the sign-in, then the footprint, then the end if either calls for it.
+        func slice(elapsed: TimeInterval) {
+            watchSignIn(elapsed: elapsed)
+            guard readsFootprint else { return }
+            let m = MemoryLimit.read()
+            let ended = endedAt != nil
+            if LauncherEndTrigger.near(footprintMB: m.footprintMB, limitMB: m.limitMB), let limit = m.limitMB {
+                log(String(format: "launcher: footprint %d MB of the %d MB limit at +%.1f s", m.footprintMB, limit, elapsed)
+                    + (ended ? ", after the end" : ", the end at \(LauncherEndTrigger.memoryThresholdMB(limitMB: limit)) MB"))
+            }
+            guard !ended, let trigger = LauncherEndTrigger.check(signedIn: signedIn, footprintMB: m.footprintMB,
+                                                                limitMB: m.limitMB) else { return }
+            end(trigger, footprintMB: m.footprintMB, elapsed: elapsed)
+        }
+
         /// Asks the root to end the launcher's tree, once.
-        func end(elapsed: TimeInterval) {
-            ended = true
-            log(String(format: "launcher: the game's first frame is on screen at +%.0f s; ending the launcher", elapsed))
+        private func end(_ trigger: LauncherEndTrigger, footprintMB: Int, elapsed: TimeInterval) {
+            endedAt = Date()
+            switch trigger {
+            case .signedIn:
+                log(String(format: "launcher: the game signed in; ending the launcher at +%.1f s (footprint %d MB)",
+                           elapsed, footprintMB))
+            case .memory(let footprint, let limit):
+                log(String(format: "launcher: the footprint reached %d MB of the %d MB limit before the game's sign-in; "
+                           + "ending the launcher at +%.1f s to free its memory", footprint, limit, elapsed))
+            }
             var n: UInt32 = 0
             let rc = wine_host_session_control(Int32(PP_CONTROL_END_LAUNCHER), 0, 5_000, &n)
             log(rc == 0 ? "launcher: the session root ended \(n) of its processes"
                         : "launcher: the session root did not end it (\(rc))")
             #if !PLAYPORT_RELEASE
-            RunEvents.emit("launcher", ["state": "ended", "after_s": Int(elapsed), "rc": Int(rc), "ended": Int(n)])
+            RunEvents.emit("launcher", ["state": "ended", "trigger": trigger == .signedIn ? "signed-in" : "memory",
+                                        "after_s": Int(elapsed), "footprint_mb": footprintMB, "rc": Int(rc), "ended": Int(n)])
             #endif
         }
 
         /// Logs this Play's first sign-in line of the game, once.
-        func watchSignIn(elapsed: TimeInterval) {
+        private func watchSignIn(elapsed: TimeInterval) {
             guard !signedIn, let data = try? Data(contentsOf: file), watch.signedIn(data) else { return }
             signedIn = true
-            log(String(format: "launcher: the game signed in at +%.0f s", elapsed))
+            log(String(format: "launcher: the game signed in at +%.1f s", elapsed))
             #if !PLAYPORT_RELEASE
             RunEvents.emit("launcher", ["state": "signed-in", "after_s": Int(elapsed)])
             #endif

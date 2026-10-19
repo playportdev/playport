@@ -1,7 +1,7 @@
 {
   "titles": {
     "app-1174180": {
-      "settings": {"windowsServices": true, "jitPoolMB": 896, "steamAPI": "client", "graphics": "vulkan", "endLauncherAtFirstFrame": true, "runtime": "jumbo-mb=8960"},
+      "settings": {"windowsServices": true, "jitPoolMB": 896, "steamAPI": "client", "graphics": "vulkan", "endLauncherAfterSignIn": true, "runtime": "jumbo-mb=8960"},
       "reason": "The Rockstar Games Launcher this game starts installs and uses a Windows service, with its service it outgrows the default JIT pool, it asks Steam's client for the game, and it draws its window through Vulkan. Once the game shows its first frame, Playport closes the launcher and its Social Club browser, never the game, to leave the game its memory. The game reserves 8,960 MB of address space in one piece, so Playport keeps a gap that size free from the start."
     },
     "epic-Buffalo": {

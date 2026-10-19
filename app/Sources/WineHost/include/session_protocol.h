@@ -58,8 +58,8 @@ enum {
      * process id) or REFUSED. It sets both to 0 at the title's end, and at its own start
      * when a crash left them. */
     PP_REQUEST_STEAM_CLIENT = 8,
-    /* A control, while the title runs: the game's first frame is on screen (decision
-     * 0125, amending 0124), so the root ends the Rockstar Games Launcher's tree in the
+    /* A control, while the title runs: the game has signed in, or the app's footprint is
+     * near its limit (decision 0130, amending 0125), so the root ends the Rockstar Games Launcher's tree in the
      * title's job in one step, never the game or a process under it (launcher_end.h):
      * Launcher.exe, RockstarErrorHandler.exe and the launcher's SocialClubHelper.exe
      * processes. Then it counts every start of those images, ends the first restarts it

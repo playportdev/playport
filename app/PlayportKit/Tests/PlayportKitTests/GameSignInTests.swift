@@ -3,8 +3,8 @@ import Foundation
 import XCTest
 @testable import PlayportKit
 
-/// Ending the Rockstar launcher at RDR2's first frame (decision 0125, amending 0124): the
-/// compatibility-only setting, and the sign-in watch the Play now only logs.
+/// Ending the Rockstar launcher once RDR2 has signed in (decision 0130, amending 0125): the
+/// compatibility-only setting, and the sign-in watch that triggers the end.
 final class GameSignInTests: XCTestCase {
     let signIn = PublisherLauncher.rockstar.signIn!
 
@@ -26,8 +26,8 @@ final class GameSignInTests: XCTestCase {
 
     func testTheShippedTableAsksForItForRDR2AndTheLauncherKnowsTheLine() throws {
         let table = try CompatDefaults.load(directory: CompatDefaultsTests.shipped)
-        XCTAssertEqual(table.entry(for: "app-1174180")?.settings.endLauncherAtFirstFrame, true)
-        XCTAssertNil(table.entry(for: "epic-Buffalo")?.settings.endLauncherAtFirstFrame)
+        XCTAssertEqual(table.entry(for: "app-1174180")?.settings.endLauncherAfterSignIn, true)
+        XCTAssertNil(table.entry(for: "epic-Buffalo")?.settings.endLauncherAfterSignIn)
         XCTAssertEqual(PublisherLauncher.startedBy(game: "app-1174180")?.signIn, signIn)
         XCTAssertEqual(signIn.file(profile: URL(fileURLWithPath: "/p/drive_c/users/playport")).path,
                        "/p/drive_c/users/playport/Documents/Rockstar Games/Social Club/socialclub.log")
@@ -36,22 +36,22 @@ final class GameSignInTests: XCTestCase {
     /// Only the compatibility table sets it: a person's (or the driver's) saved value never
     /// reaches the launch, with a default or without one, and it is no setting a person made.
     func testOverIgnoresASavedValue() {
-        let compat = LaunchSettings(windowsServices: true, endLauncherAtFirstFrame: true)
-        XCTAssertEqual(LaunchSettings(endLauncherAtFirstFrame: false).over(compat).endLauncherAtFirstFrame, true)
-        XCTAssertEqual(LaunchSettings().over(compat).endLauncherAtFirstFrame, true)
-        XCTAssertNil(LaunchSettings(endLauncherAtFirstFrame: true).over(LaunchSettings(screen: "720")).endLauncherAtFirstFrame)
-        XCTAssertNil(LaunchSettings(endLauncherAtFirstFrame: true).over(nil).endLauncherAtFirstFrame)
-        XCTAssertFalse(LaunchSettings.resolve(game: LaunchSettings(endLauncherAtFirstFrame: true).over(nil),
-                                              global: LaunchSettings()).endLauncherAtFirstFrame)
+        let compat = LaunchSettings(windowsServices: true, endLauncherAfterSignIn: true)
+        XCTAssertEqual(LaunchSettings(endLauncherAfterSignIn: false).over(compat).endLauncherAfterSignIn, true)
+        XCTAssertEqual(LaunchSettings().over(compat).endLauncherAfterSignIn, true)
+        XCTAssertNil(LaunchSettings(endLauncherAfterSignIn: true).over(LaunchSettings(screen: "720")).endLauncherAfterSignIn)
+        XCTAssertNil(LaunchSettings(endLauncherAfterSignIn: true).over(nil).endLauncherAfterSignIn)
+        XCTAssertFalse(LaunchSettings.resolve(game: LaunchSettings(endLauncherAfterSignIn: true).over(nil),
+                                              global: LaunchSettings()).endLauncherAfterSignIn)
         XCTAssertTrue(LaunchSettings.resolve(game: LaunchSettings(frameLimit: 30).over(compat),
-                                             global: LaunchSettings()).endLauncherAtFirstFrame)
-        XCTAssertTrue(LaunchSettings(endLauncherAtFirstFrame: true).isEmpty)
+                                             global: LaunchSettings()).endLauncherAfterSignIn)
+        XCTAssertTrue(LaunchSettings(endLauncherAfterSignIn: true).isEmpty)
     }
 
-    /// A settings file saved with decision 0124's name for the field carries nothing over.
-    func testTheOldFieldNameIsNotRead() throws {
-        let old = try JSONDecoder().decode(LaunchSettings.self, from: Data(#"{"endLauncherAfterSignIn": true}"#.utf8))
-        XCTAssertNil(old.endLauncherAtFirstFrame)
+    /// A settings file saved with decision 0125's name for the field carries nothing over.
+    func testTheFirstFrameFieldNameIsNotRead() throws {
+        let old = try JSONDecoder().decode(LaunchSettings.self, from: Data(#"{"endLauncherAtFirstFrame": true}"#.utf8))
+        XCTAssertNil(old.endLauncherAfterSignIn)
         XCTAssertTrue(old.isEmpty)
     }
 
