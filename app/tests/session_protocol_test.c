@@ -3,7 +3,8 @@
  * session_protocol_test.c — session_protocol.h on the Linux host (pp test):
  * the request validator the session root runs before it starts anything (a
  * title, one of its prerequisites, or the services of a play that needs them), and
- * the control validator it runs before it pauses, resumes or closes the title.
+ * the control validator it runs before it pauses, resumes or closes the title,
+ * or ends the launcher after the game's sign-in.
  */
 #include "session_protocol.h"
 
@@ -45,7 +46,7 @@ int main(void)
     CHECK(!pp_session_request_valid(&bad, buf, n));
     bad = r; bad.sequence = 0;
     CHECK(!pp_session_request_valid(&bad, buf, n));
-    bad = r; bad.kind = 9;
+    bad = r; bad.kind = 10;
     CHECK(!pp_session_request_valid(&bad, buf, n));
     bad = r; bad.kind = PP_REQUEST_PREREQUISITE;            /* a title's own installer, before it (decision 0079) */
     CHECK(pp_session_request_valid(&bad, buf, n));
@@ -134,6 +135,10 @@ int main(void)
     CHECK(pp_session_control_valid(&c, sizeof(c)));
     c.arg = PP_CONTROL_MAX_WAIT_MS + 1;
     CHECK(!pp_session_control_valid(&c, sizeof(c)));
+    c.arg = 0; c.kind = PP_CONTROL_END_LAUNCHER;        /* the launch's own, after the game's sign-in (decision 0124) */
+    CHECK(pp_session_control_valid(&c, sizeof(c)));
+    c.arg = 1;
+    CHECK(!pp_session_control_valid(&c, sizeof(c)));    /* it carries nothing */
     c.arg = 0; c.kind = PP_REQUEST_LAUNCH;
     CHECK(!pp_session_control_valid(&c, sizeof(c)));   /* a launch is not a control */
     c.kind = PP_REQUEST_PREREQUISITE;

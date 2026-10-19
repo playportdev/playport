@@ -38,6 +38,11 @@ public struct PublisherLauncher: Equatable, Sendable, Identifiable {
     /// a dev build's Settings › Launchers row and the driver's `forget-launcher-window:ID` delete
     /// this one file (forgetWindowSettings). Nil when Playport knows none.
     public let windowSettingsFile: String?
+    /// The line the games in `games` log once they signed in through this launcher, after which
+    /// their Play ends the launcher when their compatibility entry asks for it
+    /// (LaunchSettings.endLauncherAfterSignIn, decision 0124); nil for a launcher with none.
+    /// Which processes end is the session root's (app/SessionRoot/launcher_end.h).
+    public let signIn: GameSignIn?
 
     /// The launch's title id (TitleLaunch), apart from every store's game ids.
     public var titleID: String { "launcher-" + id }
@@ -65,7 +70,11 @@ public struct PublisherLauncher: Equatable, Sendable, Identifiable {
         games: ["app-1174180"],
         // With it the main window logs "Using saved geometry"; without it "Centering on monitor",
         // the prefix otherwise the same (PLA-401, desktop runs s1 and r2-nosettings).
-        windowSettingsFile: "AppData/Local/Rockstar Games/Launcher/settings_user.dat")
+        windowSettingsFile: "AppData/Local/Rockstar Games/Launcher/settings_user.dat",
+        // RDR2's Social Club log: `Signed in online to profile …` at each of the game's sign-ins
+        // (desktop prefix, read with the profiles redacted; decision 0124).
+        signIn: GameSignIn(log: "Documents/Rockstar Games/Social Club/socialclub.log",
+                           line: "Signed in online to profile"))
 
     public static let all: [PublisherLauncher] = [rockstar]
 

@@ -150,8 +150,10 @@ int wine_host_session_wait(int timeout_ms, int *exit_code);
  * at a safe point by the wineserver), PP_CONTROL_RESUME lets them go, and
  * PP_CONTROL_CLOSE posts WM_CLOSE to the title's top-level windows and ends
  * its job wait_ms later if it is still running (wait_ms is only a CLOSE's, at
- * most PP_CONTROL_MAX_WAIT_MS). 0 with *count the threads or windows it
- * touched; -1 bad call or no title running, -4 the control could not be
+ * most PP_CONTROL_MAX_WAIT_MS). PP_CONTROL_END_LAUNCHER, the launch's own
+ * once the game signed in (decision 0124), ends the Rockstar Games Launcher's
+ * processes but never the game's. 0 with *count the threads, windows or
+ * processes it touched; -1 bad call or no title running, -4 the control could not be
  * written, -6 no answer in time or the root ended, -7 the root refused it.
  * Controls are one at a time (a lock). Added in ABI 3 without changing any
  * existing call. */

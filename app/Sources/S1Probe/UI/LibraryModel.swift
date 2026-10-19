@@ -364,7 +364,11 @@ final class LibraryModel: ObservableObject {
                                        steamAppID: t.appID, fex: fex, steamAPI: steamAPI,
                                        memory: MemoryNeed.of(t, cohort: Self.cohort), epic: epic, galaxy: galaxy,
                                        prerequisites: prerequisites, windowsServices: settings.windowsServices,
-                                       jitPoolMB: settings.jitPoolMB, epicOffline: epicOffline,
+                                       jitPoolMB: settings.jitPoolMB,
+                                       // The launcher it starts ends once the game signed in (decision 0124).
+                                       gameSignIn: settings.endLauncherAfterSignIn
+                                           ? PublisherLauncher.startedBy(game: t.id)?.signIn : nil,
+                                       epicOffline: epicOffline,
                                        exhaustionGrace: exhaustionGrace) else {
             endTickets()
             galaxy?.stop()

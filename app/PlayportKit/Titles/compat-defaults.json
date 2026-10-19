@@ -1,8 +1,8 @@
 {
   "titles": {
     "app-1174180": {
-      "settings": {"windowsServices": true, "jitPoolMB": 896, "steamAPI": "client", "graphics": "vulkan"},
-      "reason": "The Rockstar Games Launcher this game starts installs and uses a Windows service, with its service it outgrows the default JIT pool, it asks Steam's client for the game, and it draws its window through Vulkan."
+      "settings": {"windowsServices": true, "jitPoolMB": 896, "steamAPI": "client", "graphics": "vulkan", "endLauncherAfterSignIn": true},
+      "reason": "The Rockstar Games Launcher this game starts installs and uses a Windows service, with its service it outgrows the default JIT pool, it asks Steam's client for the game, and it draws its window through Vulkan. Once the game has signed in to Rockstar, Playport closes the launcher to leave the game its memory."
     },
     "epic-Buffalo": {
       "settings": {"aspect": "16:9"},

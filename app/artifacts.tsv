@@ -2375,7 +2375,7 @@ resource	Runtime/vulkan/i386-windows/d3d11.dll	8306688	8d4a47890c2afadba9a8a13d3
 resource	Runtime/vulkan/i386-windows/dxgi.dll	5607424	96427bc77b2811d94b201aa5cf7b08287dbecb61b13c61c4437ee1e92efa2ae5	vulkan-pe	i386-windows/dxgi.dll	P6-vulkan-pe
 resource	Runtime/steamapi/x86_64-windows/steam_api64.dll	8353280	f0db32854540fbfb0096e212436c03c7cee50f2671ce9bd14eab6da88484e713	steamapi	x86_64-windows/steam_api64.dll	P8-steamapi
 resource	Runtime/steamapi/i386-windows/steam_api.dll	8667648	0d6b96b7689a3286c891dd5b072f9f4b7ca88bf23ed84c2aba9b2b81106f7985	steamapi	i386-windows/steam_api.dll	P8-steamapi
-resource	Runtime/arm64ec-windows/playport-session.exe	33792	ef41c5374cae7003651b6dd918b5c8d7b31186ab4f4b1ddb193cec261bb4bd4a	session	playport-session.exe	P9-session
+resource	Runtime/arm64ec-windows/playport-session.exe	37376	2d561de46ef74f0f1c577b06f07d4d1a6bcf8eb40d8399503aaf9da8e59cb126	session	playport-session.exe	P9-session
 resource	Runtime/arm64ec-windows/playport-url-opener.exe	5120	a4a9e67cec4f8df8e902e2a0714dd7c4828a4d3e0cabb65ef2fb6e214f0a6e4d	session	playport-url-opener.exe	P9-url-opener
 resource	Runtime/steamclient/x86_64-windows/steamclient64.dll	139264	8c775cfb39b7957d8493c5ceafba6cf1bebfb9edb28e5fe028b2a1b779fcf38c	steamclient	steamclient64.dll	P9-steamclient
 resource	Runtime/nls/c_1252.nls	66082	e2634ee32da7977d762d2d45be2053309ee718572a7d8bb0034180dc1b0b6b76	unix	wine/nls/c_1252.nls	nls

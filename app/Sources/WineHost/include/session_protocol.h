@@ -11,7 +11,8 @@
  *             reads it, deletes it and answers under the same sequence
  *   reply     root -> host: the last pp_session_reply, replaced whole
  *   control   host -> root, while the title runs: a pp_session_control from
- *             the in-game menu (pause, resume, close); the root reads it,
+ *             the in-game menu (pause, resume, close), or the launch's own
+ *             (end the launcher once the game signed in); the root reads it,
  *             deletes it and answers in control-reply under its sequence
  *
  * Shared by the host (C, libc) and the root (freestanding x86-64 PE): no
@@ -57,6 +58,13 @@ enum {
      * process id) or REFUSED. It sets both to 0 at the title's end, and at its own start
      * when a crash left them. */
     PP_REQUEST_STEAM_CLIENT = 8,
+    /* A control, while the title runs: the game signed in through the Rockstar Games
+     * Launcher (decision 0124), so the root ends the launcher's processes in the title's
+     * job, never the game or a process under it (launcher_end.h): Launcher.exe and
+     * RockstarErrorHandler.exe at once, the launcher's SocialClubHelper.exe processes
+     * still alive 10 s later. It carries no names or arg; code is the processes wave 1
+     * ended. */
+    PP_CONTROL_END_LAUNCHER = 9,
 };
 
 /* The most a CLOSE waits before it ends the title. */
@@ -94,7 +102,8 @@ static inline int pp_session_control_valid(const pp_session_control *c, uint32_t
 {
     if (!c || size != sizeof(*c) || c->magic != PP_SESSION_MAGIC || !c->sequence) return 0;
     if (c->kind == PP_CONTROL_CLOSE) return c->arg <= PP_CONTROL_MAX_WAIT_MS;
-    return (c->kind == PP_CONTROL_PAUSE || c->kind == PP_CONTROL_RESUME) && c->arg == 0;
+    return (c->kind == PP_CONTROL_PAUSE || c->kind == PP_CONTROL_RESUME || c->kind == PP_CONTROL_END_LAUNCHER) &&
+           c->arg == 0;
 }
 
 /* Whether a request and its payload are whole and well formed: every string

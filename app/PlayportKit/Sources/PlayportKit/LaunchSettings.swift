@@ -60,12 +60,17 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
     /// The game's JIT pool in MiB (per game only, the compatibility table's; decision 0108):
     /// a launcher's many processes outgrow JitPool.minimumMB. Nil is the default pool.
     public var jitPoolMB: Int?
+    /// End the publisher launcher a game's Play starts once the game signed in through it
+    /// (decision 0124): the compatibility table's alone. over() takes it from the game's
+    /// compatibility default and never from a person's settings, so no saved value, `set:`
+    /// or `--settings` reaches it, and no page shows it. Nil is off.
+    public var endLauncherAfterSignIn: Bool?
 
     public init(screen: String? = nil, aspect: String? = nil, frameLimit: Int? = nil, graphics: GraphicsBackend? = nil,
                 arguments: String = "", steamAPI: SteamAPISwap.Mode? = nil,
                 cloudSync: Bool? = nil, ordering: MemoryOrdering = MemoryOrdering(), maxInst: Int? = nil,
                 x87Reduced: Bool? = nil, diskCache: Bool? = nil, runtime: String = "", graphicsOptions: String = "",
-                windowsServices: Bool? = nil, jitPoolMB: Int? = nil) {
+                windowsServices: Bool? = nil, jitPoolMB: Int? = nil, endLauncherAfterSignIn: Bool? = nil) {
         self.screen = screen
         self.aspect = aspect
         self.frameLimit = frameLimit
@@ -81,6 +86,7 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
         self.graphicsOptions = graphicsOptions
         self.windowsServices = windowsServices
         self.jitPoolMB = jitPoolMB
+        self.endLauncherAfterSignIn = endLauncherAfterSignIn
     }
 
     public init(from decoder: Decoder) throws {
@@ -102,8 +108,10 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
         graphicsOptions = try c.decodeIfPresent(String.self, forKey: .graphicsOptions) ?? ""
         windowsServices = try c.decodeIfPresent(Bool.self, forKey: .windowsServices)
         jitPoolMB = try c.decodeIfPresent(Int.self, forKey: .jitPoolMB)
+        endLauncherAfterSignIn = try c.decodeIfPresent(Bool.self, forKey: .endLauncherAfterSignIn)
     }
 
+    /// Whether a person set nothing; endLauncherAfterSignIn, which no person sets, does not count.
     public var isEmpty: Bool {
         screen == nil && aspect == nil && frameLimit == nil && graphics == nil
             && arguments.trimmingCharacters(in: .whitespaces).isEmpty && steamAPI == nil && cloudSync == nil
@@ -198,13 +206,15 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
         public var windowsServices: Bool
         /// The game's JIT pool in MiB (decision 0108); nil for the default (JitPool.sizeMB).
         public var jitPoolMB: Int?
+        /// End the launcher the game's Play starts once the game signed in (decision 0124).
+        public var endLauncherAfterSignIn: Bool
 
         public init(screen: String?, aspect: ScreenAspect = .phone, frameLimit: Int, graphics: GraphicsBackend = .default,
                     arguments: [String] = [], steamAPI: SteamAPISwap.Mode = .emulated,
                     ordering: MemoryOrdering = MemoryOrdering(), maxInst: Int? = nil,
                     x87Reduced: Bool? = nil, diskCache: Bool? = nil, runtime: [String: String] = [:],
                     graphicsEnvironment: [String: String] = [:], windowsServices: Bool = false,
-                    jitPoolMB: Int? = nil) {
+                    jitPoolMB: Int? = nil, endLauncherAfterSignIn: Bool = false) {
             self.screen = screen
             self.aspect = aspect
             self.frameLimit = frameLimit
@@ -219,6 +229,7 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
             self.graphicsEnvironment = graphicsEnvironment
             self.windowsServices = windowsServices
             self.jitPoolMB = jitPoolMB
+            self.endLauncherAfterSignIn = endLauncherAfterSignIn
         }
 
         /// The guest screen's spec for HostIOKit Display.guestSize: the resolution in the shape
@@ -260,7 +271,8 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
                          x87Reduced: game?.x87Reduced, diskCache: game?.diskCache,
                          runtime: runtimeKeys(game?.runtime ?? "") ?? [:],
                          graphicsEnvironment: graphicsEnvironment(game?.graphicsOptions ?? "") ?? [:],
-                         windowsServices: game?.windowsServices ?? false, jitPoolMB: game?.jitPoolMB)
+                         windowsServices: game?.windowsServices ?? false, jitPoolMB: game?.jitPoolMB,
+                         endLauncherAfterSignIn: game?.endLauncherAfterSignIn ?? false)
     }
 
     /// The resolutions the pickers offer, the same in every aspect ratio, as screen specs;
