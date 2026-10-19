@@ -79,6 +79,10 @@ Notes:
   4. It writes `capture.txt`, plus `passes.txt` with `--pass-prof`.
 - **Space:** before the play the phone must have `--expect-gb` (default 1)
   free above a 3.5 GB reserve, or the run is refused (the `space` event).
+- **Timestamp queries:** Metal refuses to capture a device with a counter heap, so while a
+  KosmicKrisp capture is armed a timestamp query pool makes none and its timestamps all read
+  `0xffffffff00000000` (`patches/mesa` 0044, `[kk-query]` lines). GPU timings a game measures with
+  them are 0 in such a play.
 - **Recorded phone evidence:** a DXMT title-screen capture (frame 1200)
   returned its report and pass table (2026-09-29); frame 600 captures on
   [both backends](evidence/2026-10-06-vulkan-perf-tooling.md#03-gpu-capture-on-kosmickrisp)

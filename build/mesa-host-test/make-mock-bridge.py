@@ -233,6 +233,15 @@ body("mtl_new_texture_with_descriptor_linear", r'''
    }
    return kk_mock_new(8, 0);''')
 body("mtl_texture_get_gpu_resource_id", "return (uint64_t)(uintptr_t)texture;")
+# Metal's capture layer refuses a device with a counter heap; with
+# KK_MOCK_REFUSE_COUNTER_HEAP set, making one aborts (patches/mesa 0044).
+body("mtl_new_timestamp_counter_heap", r'''
+   if (getenv("KK_MOCK_REFUSE_COUNTER_HEAP")) {
+      fprintf(stderr, "kk-mock: a timestamp counter heap of %u entries\n",
+              count);
+      abort();
+   }
+   return kk_mock_new(9, 0);''')
 body("mtl_new_library", "kk_mock_record_msl(src);\n   return kk_mock_new(4, 0);")
 body("mtl_new_event", "return kk_mock_new(5, 0);")
 body("mtl_new_shared_event", "return kk_mock_new(5, 0);")

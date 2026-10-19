@@ -1,0 +1,110 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Mon, 19 Oct 2026 23:32:34 +0200
+Subject: [PATCH] kk: no Metal counter heap for a timestamp pool while a GPU
+ capture is armed
+
+Metal's capture layer on iOS 27 refuses to capture a device that has a
+Metal 4 counter heap: "Capturing Metal 4 Counter Heap is not
+supported". KosmicKrisp backs every timestamp query pool with counter
+heaps, so MESA_KK_GPU_CAPTURE_FRAME captures nothing of a game that
+makes timestamp queries, as Red Dead Redemption 2 does.
+
+While a capture is armed (MESA_KK_GPU_CAPTURE or
+MESA_KK_GPU_CAPTURE_FRAME set), a timestamp pool makes no counter
+heap, and its creation is logged ([kk-query]). A timestamp write to
+such a pool stores the low half of the report as 0, in one 32-bit
+store over the unavailable sentinel the reset left there, so the
+query becomes available whole with the value 0xffffffff00000000:
+every timestamp reads the same, and every interval measured with them
+is 0. Without a capture nothing changes.
+
+Mesa main (9a1e58da, checked on 2026-10-18) backs timestamp pools with
+counter heaps and has no such fallback.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-10-20-rdr2-landing-capture.md
+Offered-upstream: no
+---
+ src/kosmickrisp/vulkan/kk_query_pool.c | 29 +++++++++++++++++++++++++-
+ src/kosmickrisp/vulkan/kk_query_pool.h |  7 ++++++-
+ 2 files changed, 34 insertions(+), 2 deletions(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_query_pool.c b/src/kosmickrisp/vulkan/kk_query_pool.c
+index 4e36bcc..3607dfa 100644
+--- a/src/kosmickrisp/vulkan/kk_query_pool.c
++++ b/src/kosmickrisp/vulkan/kk_query_pool.c
+@@ -21,6 +21,9 @@
+ 
+ #include "kosmickrisp/bridge/mtl_bridge.h"
+ 
++#include <inttypes.h>
++#include <stdio.h>
++
+ struct kk_query_report {
+    uint64_t value;
+ };
+@@ -217,6 +220,16 @@ kk_CreateQueryPool(VkDevice device, const VkQueryPoolCreateInfo *pCreateInfo,
+          /* We increment as we go so we can clean up properly if we run out */
+          remap_index[pool->oq.queries++] = index;
+       }
++   } else if (kk_pool_is_ts(pool) &&
++              kk_device_physical(dev)->settings.gpu_capture_enabled) {
++      /* Metal's capture layer refuses to capture a device that has a counter
++       * heap ("Capturing Metal 4 Counter Heap is not supported"). While a
++       * capture is armed, a timestamp pool gets none, and its writes store
++       * KK_TS_CAPTURE_VALUE (kk_CmdWriteTimestamp2). */
++      fprintf(stderr, "[kk-query] timestamp pool of %u queries: no Metal "
++              "counter heap while a GPU capture is armed, its timestamps "
++              "read 0x%" PRIx64 "\n",
++              pool->vk.query_count, (uint64_t)KK_TS_CAPTURE_VALUE);
+    } else if (kk_pool_is_ts(pool)) {
+       /* Timestamps are sampled into Metal counter heaps (one entry per query)
+        * and resolved into `bo` after the GPU writes them. Metal caps a heap's
+@@ -396,9 +409,23 @@ kk_CmdWriteTimestamp2(VkCommandBuffer commandBuffer,
+    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
+    VK_FROM_HANDLE(kk_query_pool, pool, queryPool);
+    struct kk_device *dev = kk_cmd_buffer_device(cmd);
+-   assert(kk_pool_is_ts(pool) && pool->ts.heaps);
++   assert(kk_pool_is_ts(pool));
+ 
+    uint32_t count = kk_mv_query_count(cmd);
++
++   /* A pool made while a GPU capture is armed has no counter heap. A write
++    * zeroes the low half of the unavailable sentinel the reset left in the
++    * report, in one 32-bit store, so the query becomes available whole, as
++    * KK_TS_CAPTURE_VALUE: every timestamp of the pool is the same, and every
++    * interval measured with them is 0. */
++   if (pool->ts.heaps == NULL) {
++      for (uint32_t i = 0; i < count; i++) {
++         kk_cmd_write(cmd, (struct libkk_imm_write){
++                              kk_query_report_addr(dev, pool, query + i),
++                              (uint32_t)KK_TS_CAPTURE_VALUE});
++      }
++      return;
++   }
+    enum mtl_render_stages mtl_stage =
+       kk_pipeline_stages_to_mtl_render_stage(stage);
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_query_pool.h b/src/kosmickrisp/vulkan/kk_query_pool.h
+index febafb8..801c8f8 100644
+--- a/src/kosmickrisp/vulkan/kk_query_pool.h
++++ b/src/kosmickrisp/vulkan/kk_query_pool.h
+@@ -16,11 +16,16 @@
+  * A19's limit is 4096); a larger pool is split over several heaps. */
+ #define KK_TS_HEAP_ENTRIES 4096
+ 
++/* What a timestamp of a pool made while a GPU capture is armed reads: the
++ * unavailable sentinel with its low half zeroed (kk_query_pool.c). */
++#define KK_TS_CAPTURE_VALUE 0xffffffff00000000ull
++
+ struct kk_ts_state {
+    /* Metal 4 counter heaps backing VK_QUERY_TYPE_TIMESTAMP pools, query q in
+     * heaps[q / KK_TS_HEAP_ENTRIES] at q % KK_TS_HEAP_ENTRIES. Timestamps are
+     * sampled into them and later resolved into `bo` (see kk_query_pool.c).
+-    * NULL for non-timestamp pools. */
++    * NULL for non-timestamp pools, and for a timestamp pool made while a GPU
++    * capture is armed. */
+    mtl_counter_heap **heaps;
+    uint32_t heap_count;
+ };

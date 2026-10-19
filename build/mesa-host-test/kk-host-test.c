@@ -16,6 +16,8 @@
  */
 #include <dirent.h>
 #include <dlfcn.h>
+#include <signal.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -429,6 +431,142 @@ check_device_type(void)
  * a linear Metal texture MTLBuffer cannot make (patches/mesa 0041 gives
  * those a texture of Metal's own layout). Each one's subresource layout has
  * to fit the memory it asked for, and the 2D ones' to stay as it was. */
+/* A timestamp pool of 5000 queries (two counter heaps) made, reset, written
+ * and destroyed on its own instance and device, in a child: the driver reads
+ * MESA_KK_GPU_CAPTURE_FRAME once per instance. KK_MOCK_REFUSE_COUNTER_HEAP
+ * makes the mock abort at a counter heap, as Metal's capture refuses one. */
+static void
+timestamp_pool_child(const char *capture_frame)
+{
+   if (capture_frame)
+      setenv("MESA_KK_GPU_CAPTURE_FRAME", capture_frame, 1);
+   setenv("KK_MOCK_REFUSE_COUNTER_HEAP", "1", 1);
+
+   VkApplicationInfo app = {.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
+                            .apiVersion = VK_API_VERSION_1_3};
+   VkInstanceCreateInfo ici = {.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
+                               .pApplicationInfo = &app};
+   CHECK(((PFN_vkCreateInstance)gipa(NULL, "vkCreateInstance"))(&ici,
+                                                                NULL, &inst));
+   uint32_t count = 1;
+   VkPhysicalDevice pd;
+   IPROC(vkEnumeratePhysicalDevices);
+   CHECK(vkEnumeratePhysicalDevices(inst, &count, &pd));
+   float prio = 1.0f;
+   VkDeviceQueueCreateInfo qci = {
+      .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+      .queueCount = 1,
+      .pQueuePriorities = &prio,
+   };
+   VkPhysicalDeviceVulkan12Features v12 = {
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
+      .hostQueryReset = VK_TRUE,
+   };
+   VkDeviceCreateInfo dci = {
+      .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+      .pNext = &v12,
+      .queueCreateInfoCount = 1,
+      .pQueueCreateInfos = &qci,
+   };
+   IPROC(vkCreateDevice);
+   CHECK(vkCreateDevice(pd, &dci, NULL, &dev));
+   DPROC(vkGetDeviceQueue);
+   DPROC(vkCreateQueryPool);
+   DPROC(vkResetQueryPool);
+   DPROC(vkGetQueryPoolResults);
+   DPROC(vkDestroyQueryPool);
+   DPROC(vkCreateCommandPool);
+   DPROC(vkAllocateCommandBuffers);
+   DPROC(vkBeginCommandBuffer);
+   DPROC(vkEndCommandBuffer);
+   DPROC(vkCmdResetQueryPool);
+   DPROC(vkCmdWriteTimestamp);
+   DPROC(vkQueueSubmit);
+   DPROC(vkQueueWaitIdle);
+   VkQueue queue;
+   vkGetDeviceQueue(dev, 0, 0, &queue);
+
+   VkQueryPoolCreateInfo ci = {
+      .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+      .queryType = VK_QUERY_TYPE_TIMESTAMP,
+      .queryCount = 5000,
+   };
+   VkQueryPool ts;
+   CHECK(vkCreateQueryPool(dev, &ci, NULL, &ts));
+   vkResetQueryPool(dev, ts, 0, 5000);
+   uint64_t value = 0;
+   if (vkGetQueryPoolResults(dev, ts, 4500, 1, sizeof(value), &value,
+                             sizeof(value), VK_QUERY_RESULT_64_BIT) !=
+       VK_NOT_READY) {
+      fprintf(stderr, "a reset timestamp query is available\n");
+      _exit(1);
+   }
+
+   VkCommandPoolCreateInfo cpci = {
+      .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+   };
+   VkCommandPool cpool;
+   CHECK(vkCreateCommandPool(dev, &cpci, NULL, &cpool));
+   VkCommandBufferAllocateInfo cbai = {
+      .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+      .commandPool = cpool,
+      .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+      .commandBufferCount = 1,
+   };
+   VkCommandBuffer cmd;
+   CHECK(vkAllocateCommandBuffers(dev, &cbai, &cmd));
+   VkCommandBufferBeginInfo bi = {
+      .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+   };
+   CHECK(vkBeginCommandBuffer(cmd, &bi));
+   vkCmdResetQueryPool(cmd, ts, 0, 5000);
+   vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, ts, 0);
+   vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, ts, 4999);
+   CHECK(vkEndCommandBuffer(cmd));
+   VkSubmitInfo si = {
+      .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+      .commandBufferCount = 1,
+      .pCommandBuffers = &cmd,
+   };
+   CHECK(vkQueueSubmit(queue, 1, &si, VK_NULL_HANDLE));
+   CHECK(vkQueueWaitIdle(queue));
+   vkDestroyQueryPool(dev, ts, NULL);
+   _exit(0);
+}
+
+/* patches/mesa 0044: while a GPU capture is armed, a timestamp pool makes no
+ * Metal counter heap, and its writes still record and submit; without a
+ * capture the same pool makes them (the mock's abort ends that child). */
+static int
+check_capture_timestamp_pool(void)
+{
+   static const struct {
+      const char *capture_frame;
+      bool aborts;
+   } cases[] = {{"3000", false}, {NULL, true}};
+   for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+      pid_t child = fork();
+      if (child == 0)
+         timestamp_pool_child(cases[i].capture_frame);
+      int status = 0;
+      if (child < 0 || waitpid(child, &status, 0) != child) {
+         fprintf(stderr, "timestamp pool child: no status\n");
+         return 1;
+      }
+      bool aborted = WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT;
+      bool passed = WIFEXITED(status) && WEXITSTATUS(status) == 0;
+      if (cases[i].aborts ? !aborted : !passed) {
+         fprintf(stderr, "timestamp pool, MESA_KK_GPU_CAPTURE_FRAME=%s: "
+                 "status %#x, %s expected\n",
+                 cases[i].capture_frame ? cases[i].capture_frame : "(unset)",
+                 status, cases[i].aborts ? "a counter heap" : "none");
+         return 1;
+      }
+   }
+   printf("ok capture-timestamp-pool\n");
+   return 0;
+}
+
 static int
 check_linear_images(VkPhysicalDevice pd, VkQueue queue, VkCommandPool pool)
 {
@@ -690,6 +828,8 @@ main(int argc, char **argv)
    VkInstanceCreateInfo ici = {.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
                                .pApplicationInfo = &app};
    if (check_device_type())
+      return 1;
+   if (check_capture_timestamp_pool())
       return 1;
    if (check_budget_cap(&ici))
       return 1;
