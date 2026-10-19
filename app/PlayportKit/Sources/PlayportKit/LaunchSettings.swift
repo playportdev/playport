@@ -134,6 +134,12 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
         return out
     }
 
+    /// The runtime keys a release build launches with (decision 0126): the game's compatibility
+    /// default's own, never a person's (a dev build's Runtime keys row); none without a default.
+    public static func releaseRuntime(compat: LaunchSettings?) -> [String: String] {
+        runtimeKeys(compat?.runtime ?? "") ?? [:]
+    }
+
     /// Runtime keys as typed (`vram-mb=1024 inproc-sync=1`): `key=value` items at spaces,
     /// a later item for a key winning. nil when an item has no `=` or TitleConfig refuses it.
     public static func runtimeKeys(_ line: String) -> [String: String]? {

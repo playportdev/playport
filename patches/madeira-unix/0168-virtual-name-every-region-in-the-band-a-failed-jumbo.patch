@@ -1,0 +1,83 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Mon, 19 Oct 2026 16:32:17 +0200
+Subject: [PATCH] virtual: name every region in the band a failed jumbo reserve
+ needed
+
+RDR2.exe's 8,960 MB reserve needs one gap in [0x7400000000,
+0x7c00000000), above the furniture ceiling. In run 20261019T155050 it
+found none: a 2 GiB CEF pool at 0x7800000000 and two 256 KiB regions at
+0x76461c0000 and 0x7a6ab40000 split the band, and no line named the
+small ones, as ios_va_occupancy_probe lists only regions of 64 MB or
+more below 64 GB. When a jumbo reserve fails, `[va-band]` lines now list
+every host region in that band (at most 64): its size, the free space
+before it, protections, tag, share mode, object id, whether a pager
+backs it and its resident pages. It changes no placement.
+
+Linear: PLA-417
+Class: diagnostics
+Evidence: docs/evidence/2026-10-19-rdr2-loading-memory.md
+Offered-upstream: no; the band layout is the iOS port's
+---
+ build/ntdll-unix/virtual_ios.c | 41 ++++++++++++++++++++++++++++++++++
+ 1 file changed, 41 insertions(+)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index cf4f977..2f598a2 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -2214,6 +2214,46 @@ static void ios_va_occupancy_probe( const char *why )
+              (unsigned long long)biggest_at, shown );
+ }
+ 
++/* Playport (diagnostics, PLA-417): every host region in the band above the
++ * furniture ceiling, [0x7400000000, 0x7c00000000), where a jumbo reserve that
++ * failed needed one gap. ios_va_occupancy_probe lists only regions of 64 MB or
++ * more below 64 GB, so the small regions that split this band went unnamed
++ * (run 20261019T155050: 256 KiB at 0x76461c0000 and 0x7a6ab40000). One line
++ * per region, at most 64, with the gap before it, its tag, protections, share
++ * mode, object and whether a pager backs it. */
++static void ios_va_band_probe( const char *why )
++{
++    const mach_vm_address_t lo = 0x7400000000ULL, hi = 0x7c00000000ULL;
++    mach_vm_address_t addr = lo, prev_end = lo;
++    int shown = 0, regions = 0;
++
++    dprintf( 2, "[va-band] ==== regions in 0x%llx..0x%llx (%s) ====\n",
++             (unsigned long long)lo, (unsigned long long)hi, why );
++    while (addr < hi)
++    {
++        mach_vm_size_t size = 0;
++        natural_t depth = 0;
++        vm_region_submap_info_data_64_t info;
++        mach_msg_type_number_t cnt = VM_REGION_SUBMAP_INFO_COUNT_64;
++
++        if (mach_vm_region_recurse( mach_task_self(), &addr, &size, &depth,
++                                    (vm_region_recurse_info_t)&info, &cnt ) != KERN_SUCCESS)
++            break;
++        if (addr >= hi) break;
++        regions++;
++        if (shown++ < 64)
++            dprintf( 2, "[va-band] 0x%011llx +0x%llx (%llu MB) after %llu MB free: prot=%x/%x tag=%u share=%u "
++                        "object=0x%x pager=%u res=%u pages%s\n",
++                     (unsigned long long)addr, (unsigned long long)size, (unsigned long long)(size >> 20),
++                     (unsigned long long)((addr - prev_end) >> 20), info.protection, info.max_protection,
++                     info.user_tag, info.share_mode, info.object_id, info.external_pager,
++                     info.pages_resident, depth ? " (submap)" : "" );
++        prev_end = addr + size;
++        addr = prev_end;
++    }
++    dprintf( 2, "[va-band] ==== %d regions (%d listed), %llu MB free at the top ====\n", regions,
++             shown < 64 ? shown : 64, (unsigned long long)(prev_end < hi ? (hi - prev_end) >> 20 : 0) );
++}
+ 
+ /* ml89: report the RX alias's protections for a pool range, WITHOUT touching
+  * them. The first version of this guard probed with mprotect(RX) and dropped
+@@ -20450,6 +20490,7 @@ NTSTATUS WINAPI NtAllocateVirtualMemory( HANDLE process, PVOID *ret, ULONG_PTR z
+                 {
+                     ios_va_gap_probe( "jumbo reserve failed" );
+                     ios_va_occupancy_probe( "jumbo reserve failed" );   /* ml994 */
++                    ios_va_band_probe( "jumbo reserve failed" );        /* PLA-417 */
+                     /* task #35: the gap walk says HOW MUCH is left; this says
+                      * WHAT ate the window, which is what decides whether a
+                      * third pool is reachable at all. */

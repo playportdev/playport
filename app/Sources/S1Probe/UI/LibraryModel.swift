@@ -238,7 +238,8 @@ final class LibraryModel: ObservableObject {
         settings.diskCache = nil
         // Playport's Steam client where it is the game's compatibility default (decision 0115).
         settings.steamAPI = LaunchSettingsStore.shared.compat(for: t.id)?.settings.steamAPI == .client ? .client : .emulated
-        settings.runtime = [:]
+        // The compatibility default's runtime keys only, such as RDR2's address-space holdback (decision 0126).
+        settings.runtime = LaunchSettings.releaseRuntime(compat: LaunchSettingsStore.shared.compat(for: t.id)?.settings)
         settings.graphicsEnvironment = [:]
         #else
         var settings = LaunchSettingsStore.shared.effective(for: t)
