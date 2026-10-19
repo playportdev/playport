@@ -11,8 +11,9 @@ as an image's, as private memory, or as FEX's host memory when the view
 is in FEX's band (also counted by shape: rpmalloc spans, call-return
 stacks, L1 lookup caches), with the runtime's own views as one row. Each
 owner gets its pid, live threads and image name from teb_list; the name
-is read from the PEB only through pointers that lie in committed,
-readable views (a process still starting has unwritten parameters). The views
+is read from the PEB only through pointers that lie in one view, a
+VPROT_SYSTEM one or one committed on every page (a process still
+starting has unwritten parameters). The views
 are walked under virtual_mutex; mincore then sorts their host pages into
 resident and compressed outside it. The JIT pool, a fixed size the pool
 lines report, is left out. The host calls it from its own thread; it
@@ -28,17 +29,17 @@ Class: diagnostics
 Evidence: docs/evidence/2026-10-19-rdr2-loading-memory.md
 Offered-upstream: no; pseudo-processes and FEX's band are the iOS port's
 ---
- build/ntdll-unix/pp_proc_mem.h | 120 +++++++++++++++++++++
- build/ntdll-unix/virtual_ios.c | 192 +++++++++++++++++++++++++++++++++
- 2 files changed, 312 insertions(+)
+ build/ntdll-unix/pp_proc_mem.h | 129 ++++++++++++++++++++++
+ build/ntdll-unix/virtual_ios.c | 195 +++++++++++++++++++++++++++++++++
+ 2 files changed, 324 insertions(+)
  create mode 100644 build/ntdll-unix/pp_proc_mem.h
 
 diff --git a/build/ntdll-unix/pp_proc_mem.h b/build/ntdll-unix/pp_proc_mem.h
 new file mode 100644
-index 0000000..b07a413
+index 0000000..47ae5e2
 --- /dev/null
 +++ b/build/ntdll-unix/pp_proc_mem.h
-@@ -0,0 +1,120 @@
+@@ -0,0 +1,129 @@
 +/* SPDX-License-Identifier: LGPL-2.1-or-later
 + * Memory by pseudo-process (Playport diagnostics, PLA-414): the table the
 + * `[proc-mem]` lines print. Every Wine view belongs to the pseudo-process
@@ -114,6 +115,15 @@ index 0000000..b07a413
 +    if (size) out[n] = 0;
 +}
 +
++/* Whether the host may read a guest range: it lies in one view that is the
++ * runtime's own (a VPROT_SYSTEM view is mapped whole and has no page
++ * protections to read) or has every page committed and none a guard page. */
++enum { PPM_RANGE_NO_VIEW, PPM_RANGE_SYSTEM_VIEW, PPM_RANGE_VIEW };
++static inline int ppm_range_readable( int view, unsigned long pages, unsigned long committed_pages )
++{
++    return view == PPM_RANGE_SYSTEM_VIEW || (view == PPM_RANGE_VIEW && pages && committed_pages == pages);
++}
++
 +static inline unsigned long long ppm_sum( const struct ppm_owner *o, int measure )
 +{
 +    return o->bytes[PPM_IMAGE][measure] + o->bytes[PPM_PRIVATE][measure] + o->bytes[PPM_FEX][measure];
@@ -160,10 +170,10 @@ index 0000000..b07a413
 +}
 +#endif
 diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
-index 4ac34fd..b92d102 100644
+index 4ac34fd..90c64a0 100644
 --- a/build/ntdll-unix/virtual_ios.c
 +++ b/build/ntdll-unix/virtual_ios.c
-@@ -17637,6 +17637,198 @@ void ios_view_owner_process_exit( void *peb )
+@@ -17637,6 +17637,201 @@ void ios_view_owner_process_exit( void *peb )
      ios_view_owner_sweep();
  }
  
@@ -185,18 +195,21 @@ index 4ac34fd..b92d102 100644
 +static int ios_proc_mem_printed;
 +static struct timespec ios_proc_mem_next;   /* no unforced walk before this */
 +
-+/* virtual_mutex held: whether [p, p + size) lies in one view, in pages that
-+ * are committed and readable. A guest pointer is read only after this: a
-+ * process still starting has a PEB whose parameters are not yet written. */
++/* virtual_mutex held: whether [p, p + size) may be read (ppm_range_readable):
++ * inside one view, a VPROT_SYSTEM one or one committed on every page. A guest
++ * pointer is read only after this: a process still starting has a PEB whose
++ * parameters are not yet written. */
 +static BOOL ios_proc_mem_readable_locked( const void *p, size_t size )
 +{
 +    const char *page, *end = (const char *)p + size;
++    struct file_view *view;
++    unsigned long pages = 0, committed = 0;
 +
-+    if (!p || !size || !find_view( p, size )) return FALSE;
-+    for (page = ROUND_ADDR( p, page_mask ); page < end; page += page_mask + 1)
-+        if ((get_page_vprot( page ) & (VPROT_COMMITTED | VPROT_READ | VPROT_GUARD)) != (VPROT_COMMITTED | VPROT_READ))
-+            return FALSE;
-+    return TRUE;
++    if (!p || !size || !(view = find_view( p, size ))) return ppm_range_readable( PPM_RANGE_NO_VIEW, 0, 0 );
++    if (view->protect & VPROT_SYSTEM) return ppm_range_readable( PPM_RANGE_SYSTEM_VIEW, 0, 0 );
++    for (page = ROUND_ADDR( p, page_mask ); page < end; page += page_mask + 1, pages++)
++        if ((get_page_vprot( page ) & (VPROT_COMMITTED | VPROT_GUARD)) == VPROT_COMMITTED) committed++;
++    return ppm_range_readable( PPM_RANGE_VIEW, pages, committed );
 +}
 +
 +/* virtual_mutex held: the image name from o's PEB, when every pointer on the

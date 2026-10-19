@@ -196,8 +196,10 @@ The last `[proc-mem]` before the first frame; footprint 5,040 MB (1,088 compress
   Social Club helper was just starting. The walk read that process's PEB parameters before
   they were written.
 - **The fix in 0166.**
-  - The image name is read only through pointers that lie in one view's committed, readable
-    pages; otherwise the row has no name (`pid=0414 ?`).
+  - The image name is read only through pointers that lie in one view: a VPROT_SYSTEM view,
+    or one committed on every page. Otherwise the row has no name (`pid=0414 ?`). A first
+    version also required the guest READ protection, and in run `20261019T161557` most rows
+    then had no name.
   - An unforced walk within ten times the last walk's cost after it does nothing. Near the
     memory limit `mincore` took up to 4.8 s.
 - **After the fix** (IPA `246f188a76a9f6d9db125db9b8be5856e81a5b8c927e72954c16aff36a74a439`, which

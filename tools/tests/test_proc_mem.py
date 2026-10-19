@@ -95,6 +95,14 @@ int main(void) {
     assert(!strncmp(row, "exited peb=", 11));
     assert(ppm_row(&t.owner[1], row, 8) > 8 && strlen(row) == 7);
     assert(ppm_sum(&last.owner[1], PPM_COMMITTED) == 705ull << 20);
+
+    /* Readable guest ranges: none outside a view (a garbage pointer such as 0x3f3f...),
+     * a runtime (VPROT_SYSTEM) view whole, another view only when every page is committed. */
+    assert(!ppm_range_readable(PPM_RANGE_NO_VIEW, 1, 1));
+    assert(ppm_range_readable(PPM_RANGE_SYSTEM_VIEW, 0, 0));
+    assert(ppm_range_readable(PPM_RANGE_VIEW, 2, 2));
+    assert(!ppm_range_readable(PPM_RANGE_VIEW, 2, 1));
+    assert(!ppm_range_readable(PPM_RANGE_VIEW, 0, 0));
     return 0;
 }
 '''

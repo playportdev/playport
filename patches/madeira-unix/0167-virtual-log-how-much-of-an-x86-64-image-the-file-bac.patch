@@ -24,7 +24,7 @@ Offered-upstream: no; the 16 KiB host page is the iOS port's
  1 file changed, 17 insertions(+)
 
 diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
-index b92d102..7492bb4 100644
+index 90c64a0..cf4f977 100644
 --- a/build/ntdll-unix/virtual_ios.c
 +++ b/build/ntdll-unix/virtual_ios.c
 @@ -12969,6 +12969,12 @@ void ios_map_describe( const void *addr, char *out, size_t outlen )
