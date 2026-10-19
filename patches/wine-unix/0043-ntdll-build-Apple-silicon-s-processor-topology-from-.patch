@@ -1,0 +1,177 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Mon, 19 Oct 2026 08:38:21 +0200
+Subject: [PATCH] ntdll: build Apple silicon's processor topology from its perf
+ levels
+
+On Apple systems create_logical_proc_info takes one L1I, L1D and L2
+size from the top-level hw.* sysctls and how many processors share
+each level from hw.cacheconfig, and gives every core those sizes with
+an L2 for each run of that many cores. The top-level values describe
+one cluster. On a 2 P + 4 E iPhone (iPhone18,4) they are the E
+cluster's: GetLogicalProcessorInformationEx listed 128 KiB L1I, 64 KiB
+L1D and 6 MiB L2 on all six cores, and two L2s with masks 0x0f and
+0xf0, the second naming processors 6 and 7, which do not exist
+(PLA-392, the cputopo probe).
+
+When hw.nperflevels and each level's hw.perflevelN.logicalcpu,
+physicalcpu, cpusperl2, l1icachesize, l1dcachesize and l2cachesize are
+there, one thread a core, and the levels add up to cpu_count, build
+the table from them instead: one package, one core a processor, each
+level's own L1 and L2 sizes, and L2 masks that stay within the level.
+Levels are numbered fastest first; the slowest is given the lowest
+processor numbers, as a timed spin on the phone found processors 0-3
+slower than 4 and 5. EfficiencyClass stays 0 on every core, as on
+Linux ARM machines. Otherwise, as on an Intel Mac or with madeira.cfg's
+cpu-count below the phone's count, the equal-cluster code runs as
+before. Both paths log one ERR line saying which was taken; the perf
+level one gives each level's processors and sizes.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-19-cpu-topology-phone.md
+Offered-upstream: no
+---
+ dlls/ntdll/unix/system.c | 119 +++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 119 insertions(+)
+
+diff --git a/dlls/ntdll/unix/system.c b/dlls/ntdll/unix/system.c
+index a55a5d7..4ae29a9 100644
+--- a/dlls/ntdll/unix/system.c
++++ b/dlls/ntdll/unix/system.c
+@@ -1349,10 +1349,125 @@ static NTSTATUS create_logical_proc_info(void)
+ 
+ #elif defined(__APPLE__)
+ 
++/* Playport (PLA-392): Apple silicon's clusters, from the hw.perflevelN
++ * sysctls: each level's processor count, L1 and L2 sizes and processors per
++ * L2. The top-level hw.* values describe one cluster only, and the equal
++ * clusters the code below assumes from hw.cacheconfig gave a 2 P + 4 E
++ * iPhone an L2 mask of 0xf0, two processors past cpu_count, and the E
++ * cluster's sizes on the P cores. */
++#define APPLE_MAX_PERFLEVELS 4
++
++struct apple_perflevel
++{
++    unsigned int cpus;         /* hw.perflevelN.logicalcpu, one thread a core */
++    unsigned int cpus_per_l2;  /* hw.perflevelN.cpusperl2 */
++    LONGLONG l1i, l1d, l2;     /* sizes in bytes, 0 when not given */
++};
++
++/* An integer sysctl of either width (an int fills the low half), or -1. */
++static LONGLONG apple_sysctl_number( const char *name )
++{
++    LONGLONG value = 0;
++    size_t size = sizeof(value);
++
++    if (sysctlbyname( name, &value, &size, NULL, 0 ) || (size != sizeof(int) && size != sizeof(value)))
++        return -1;
++    return value;
++}
++
++static LONGLONG apple_perflevel_number( unsigned int level, const char *what )
++{
++    char name[48];
++
++    snprintf( name, sizeof(name), "hw.perflevel%u.%s", level, what );
++    return apple_sysctl_number( name );
++}
++
++/* FALSE when the levels are not given, a level has more threads than cores,
++ * or the levels do not add up to cpu_count (madeira.cfg's cpu-count may lower
++ * it). */
++static BOOL read_apple_perflevels( struct apple_perflevel *levels, unsigned int *count )
++{
++    LONGLONG n = apple_sysctl_number( "hw.nperflevels" ), cpus, per_l2, size;
++    unsigned int level, total = 0;
++
++    if (n < 1 || n > APPLE_MAX_PERFLEVELS) return FALSE;
++    for (level = 0; level < n; level++)
++    {
++        cpus = apple_perflevel_number( level, "logicalcpu" );
++        if (cpus < 1 || cpus > 64 || apple_perflevel_number( level, "physicalcpu" ) != cpus) return FALSE;
++        per_l2 = apple_perflevel_number( level, "cpusperl2" );
++        levels[level].cpus = cpus;
++        levels[level].cpus_per_l2 = per_l2 >= 1 && per_l2 <= cpus ? per_l2 : cpus;
++        size = apple_perflevel_number( level, "l1icachesize" );
++        levels[level].l1i = size > 0 ? size : 0;
++        size = apple_perflevel_number( level, "l1dcachesize" );
++        levels[level].l1d = size > 0 ? size : 0;
++        size = apple_perflevel_number( level, "l2cachesize" );
++        levels[level].l2 = size > 0 ? size : 0;
++        total += cpus;
++    }
++    if (total != cpu_count || total > sizeof(ULONG_PTR) * 8) return FALSE;
++    *count = n;
++    return TRUE;
++}
++
++/* One package, one core a processor, each level's own L1 and L2 sizes (the
++ * top-level ones where a level gives none) and L2 masks within the level.
++ * Levels are numbered fastest first; the slowest holds the lowest processor
++ * numbers: on iPhone18,4 a timed spin ran 1.64 times slower on processors 0-3
++ * than on 4 and 5 (docs/evidence/2026-10-19-cpu-topology-phone.md).
++ * EfficiencyClass stays 0 on every core, as on Linux ARM machines. */
++static NTSTATUS create_apple_perflevel_info( const struct apple_perflevel *levels, unsigned int count,
++                                             CACHE_DESCRIPTOR *defaults )
++{
++    ULONG_PTR all_cpus_mask = 0;
++    unsigned int level = count, first = 0, cpu, i;
++    char line[512] = "";
++    int len = 0;
++
++    while (level--)
++    {
++        const struct apple_perflevel *l = &levels[level];
++        CACHE_DESCRIPTOR l1i = defaults[1], l1d = defaults[2], l2 = defaults[3];
++
++        if (l->l1i) l1i.Size = l->l1i;
++        if (l->l1d) l1d.Size = l->l1d;
++        if (l->l2) l2.Size = l->l2;
++        if (len < (int)sizeof(line))
++            len += snprintf( line + len, sizeof(line) - len, "; level %u processors %u-%u l1i %u l1d %u l2 %u by %u",
++                             level, first, first + l->cpus - 1, (unsigned int)l1i.Size, (unsigned int)l1d.Size,
++                             (unsigned int)l2.Size, l->cpus_per_l2 );
++        for (cpu = first; cpu < first + l->cpus; cpu++)
++        {
++            ULONG_PTR mask = (ULONG_PTR)1 << cpu, l2_mask = 0;
++            unsigned int l2_first = first + (cpu - first) / l->cpus_per_l2 * l->cpus_per_l2;
++
++            for (i = l2_first; i < l2_first + l->cpus_per_l2 && i < first + l->cpus; i++)
++                l2_mask |= (ULONG_PTR)1 << i;
++            all_cpus_mask |= mask;
++            if (!logical_proc_info_add_by_id( RelationProcessorPackage, 0, mask )) return STATUS_NO_MEMORY;
++            if (!logical_proc_info_add_by_id( RelationProcessorCore, cpu, mask )) return STATUS_NO_MEMORY;
++            if (l1i.Size && !logical_proc_info_add_cache( mask, &l1i )) return STATUS_NO_MEMORY;
++            if (l1d.Size && !logical_proc_info_add_cache( mask, &l1d )) return STATUS_NO_MEMORY;
++            if (l2.Size && !logical_proc_info_add_cache( l2_mask, &l2 )) return STATUS_NO_MEMORY;
++        }
++        first += l->cpus;
++    }
++    if (defaults[4].Size && !logical_proc_info_add_cache( all_cpus_mask, &defaults[4] ))
++        return STATUS_NO_MEMORY;
++    if (!logical_proc_info_add_numa_node( all_cpus_mask, 0 )) return STATUS_NO_MEMORY;
++    logical_proc_info_add_group( first, all_cpus_mask );
++    ERR( "Playport: processor topology from %u perf levels%s\n", count, line );
++    return STATUS_SUCCESS;
++}
++
+ /* for 'data', max_len is the array count. for 'dataex', max_len is in bytes */
+ static NTSTATUS create_logical_proc_info(void)
+ {
+     unsigned int pkgs_no, cores_no, lcpu_no, lcpu_per_core, cores_per_package, assoc;
++    struct apple_perflevel perflevels[APPLE_MAX_PERFLEVELS];
++    unsigned int perflevel_count;
+     unsigned int cache_ctrs[10] = {0};
+     ULONG_PTR all_cpus_mask = 0;
+     CACHE_DESCRIPTOR cache[10];
+@@ -1418,6 +1533,10 @@ static NTSTATUS create_logical_proc_info(void)
+     if (!sysctlbyname("hw.l3cachesize", &cache_size, &size, NULL, 0))
+         cache[4].Size = cache_size;
+ 
++    if (read_apple_perflevels( perflevels, &perflevel_count ))
++        return create_apple_perflevel_info( perflevels, perflevel_count, cache );
++    ERR( "Playport: no hw.perflevel topology for %u processors; equal clusters from hw.cacheconfig\n", lcpu_no );
++
+     size = sizeof(cache_sharing);
+     if (sysctlbyname("hw.cacheconfig", cache_sharing, &size, NULL, 0) < 0)
+     {

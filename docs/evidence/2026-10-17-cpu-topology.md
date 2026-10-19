@@ -188,7 +188,8 @@ first frame+10 gate on the phone. It would:
 - set `performance_cores` for the measured P CPU numbers;
 - give each cluster its own L1 and L2 entries.
 
-**Seen in passing, not fixed here:**
+**Seen in passing, not fixed here.** Both were fixed later (PLA-392); the phone run is in
+[2026-10-19-cpu-topology-phone.md](2026-10-19-cpu-topology-phone.md).
 - With unequal clusters, the Apple branch's L2 masks can name CPUs that do not exist (the
   `0xf0` case above), and every core gets one cluster's cache sizes. This is upstream WineHQ
   code. Which case the phone hits needs its `hw.cacheconfig`.
