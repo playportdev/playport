@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Mon, 19 Oct 2026 13:23:17 +0200
+Subject: [PATCH] winegcc: align ARM64 and ARM64EC builtins to 16 KiB sections
+
+winegcc links ARM64 and ARM64EC modules with 64 KiB section alignment,
+and the file alignment follows it. On iOS every pseudo-process copies
+each builtin it loads into the JIT pool, and the copy includes the
+padding: kernel32's copy took 960 KiB for 400 KiB of sections. In the
+RDR2 play that ran the pool's head out (PLA-377), 154.7 MiB of the 535
+MiB live were that padding.
+
+The default for these targets is now 0x4000, the phone's page, for
+both the section and the file alignment. Wine's unix loader maps an
+image whose sections are aligned to at least the host page as usual, and
+a writable section now starts on a page of its own, so the pool copy
+needs no data-align shift. winebuild's data-only modules have no code
+and get no copy; they are unchanged.
+
+Linear: PLA-377
+Class: feature
+Evidence: docs/evidence/2026-10-19-smaller-image-copies.md
+Offered-upstream: no; the 16 KiB alignment is for the iOS port's JIT pool
+---
+ tools/winegcc/winegcc.c | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/tools/winegcc/winegcc.c b/tools/winegcc/winegcc.c
+index 0d8586e..5f5c475 100644
+--- a/tools/winegcc/winegcc.c
++++ b/tools/winegcc/winegcc.c
+@@ -2015,8 +2015,11 @@ int main(int argc, char **argv)
+     if (is_pe) use_msvcrt = true;
+     if (output && strendswith( output, ".fake" )) fake_module = true;
+ 
++    /* iOS (PLA-377): every process copies each ARM64 and ARM64EC builtin it
++     * loads into the JIT pool, padding and all, so they are aligned to the
++     * phone's 16 KiB page instead of 64 KiB. */
+     if (!section_align)
+-        section_align = (target.cpu == CPU_ARM64 || target.cpu == CPU_ARM64EC) ? "0x10000" : "0x1000";
++        section_align = (target.cpu == CPU_ARM64 || target.cpu == CPU_ARM64EC) ? "0x4000" : "0x1000";
+ 
+     if (!file_align) file_align = section_align;
+ 

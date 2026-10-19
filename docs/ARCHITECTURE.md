@@ -366,7 +366,9 @@ image is the usual fit. A copy leaves out the image's trailing sections no code
 reaches, a builtin's `.rsrc` and `.reloc` (`patches/madeira-unix` 0165, decision
 [0122](decisions/0122-builtin-copies-without-rsrc-and-reloc.md)): the copy path reads the
 relocations from the PE view, and ntdll's resource functions turn a copy's base
-into the PE view's (`patches/wine-pe` 0048). The head cursor never moves down, so the head stays near the
+into the PE view's (`patches/wine-pe` 0048). ARM64 and ARM64EC builtins are linked with 16 KiB
+sections, not Wine's 64 KiB (`patches/wine-pe` 0049, decision
+[0123](decisions/0123-builtins-linked-with-16-kib-sections.md)). The head cursor never moves down, so the head stays near the
 most that processes alive at once have needed (fragmentation adds some). The ranges never become room.
 
 A pure x86-64 image (AMD64, no CHPE metadata: a game's executable and DLLs)

@@ -78,3 +78,52 @@ higher.
 launcher's own page: *A game is currently running … EXIT*. It is `Launcher.exe`'s window
 `0x30074`, re-shown after the exit. Playport sent the launcher no close. The run ended as
 `pool=exhausted:head` at +348 s.
+
+## A2: builtins linked with 16 KiB sections
+
+### The change
+
+`patches/wine-pe` 0049 sets winegcc's default section and file alignment for ARM64 and ARM64EC to
+`0x4000`, down from `0x10000`. In the IPA, 570 ARM64EC images now have 16 KiB sections. The 19
+that keep 64 KiB are winebuild's data-only modules, which have no code and so get no copy. Four
+images, built outside winegcc, keep 4 KiB: FEX's xtajit64, winemetal, and DXVK's d3d11 and dxgi.
+
+Copy sizes, round16k(SizeOfImage) before, the A1 copy, and the A2 copy:
+
+| image | before KiB | A1 KiB | A2 KiB |
+| --- | ---: | ---: | ---: |
+| kernel32 | 960 | 784 | 464 |
+| kernelbase | 3,200 | 1,104 | 880 |
+| shell32 | 9,920 | 1,168 | 928 |
+
+The build records changed for every ARM64 and ARM64EC builtin. The IPA's uncompressed app went
+from 2,317 MB to 1,750 MB. The deflated IPA stayed about the same: 564 MB, now 562 MB.
+
+### Phone
+
+IPA `43486a171c719f026e9cde32766217dc67c4183005a81b46249b81bbc81e7110` (dev).
+
+The session ran `.work/agent-notes/pla377/a2/phone-session.sh`, with `phone-1.log` beside it.
+
+**Hollow Knight** (run `20261019T133058`):
+- first frame at +8.03 s;
+- pool head 48 MiB, `trimmed_mb=17`;
+- no refusal.
+
+**Red Dead Redemption 2** (run `20261019T133217`, the same route, nothing pressed):
+- **RDR2.exe starts** at about +41–57 s. The head is at 264 MiB, the tail at 465 MiB and the room
+  at 168 MiB.
+- **First frame at +92.85 s.** The run reached its bound of first frame +120 s, with RDR2.exe
+  alive and no process ended but the first RockstarService, which ends by itself.
+- **At the end:**
+  - head 328 MiB, of which 327 MiB live in 547 allocations; RDR2.exe holds 74 copies, 53.6 MiB;
+  - tail 497 MiB, room 72 MiB;
+  - `trimmed_mb=138`, and no head or tail refusal.
+- **Band:** the peak was 5,306 MB at 262 threads, with no refusal.
+- **The screen:** the screenshot at the end shows the game's black screen under the touch
+  controls, with a loading bar at the bottom. The one at 90 s is black.
+
+Two launcher processes took 128 MiB code buffers again: the CEF browser and its first renderer.
+The tail still grew into the room (497 MiB, up from 337 before A1). The head shrank enough that
+both fit. No `resource lookup through the copy` line and no `point at the PE view` line was
+logged in either A run.
