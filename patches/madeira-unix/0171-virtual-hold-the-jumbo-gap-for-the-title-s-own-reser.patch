@@ -1,0 +1,124 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Mon, 19 Oct 2026 18:20:29 +0200
+Subject: [PATCH] virtual: hold the jumbo gap for the title's own reservation,
+ and the cage only on cage-hold
+
+The jumbo hold (ml996, madeira.cfg jumbo-mb) went to the first large
+request that fit it. In run 20261019T173829 a CEF renderer's 2 GB pool
+took RDR2's 8,960 MB hold, and RDR2's reservation fit above the ceiling
+only because a torn-down child had freed its pool there. take() now
+hands the hold only to a request of the held size and logs, at most 8
+times, `[jumbo-hold] keeping the holdback ...` when a smaller one asks
+(pp_jumbo_hold.h). The ml1029 carve is unchanged.
+
+The ml433 cage hold, 8,191 MB of the guest window at 0x7200000000, was
+reserved for any title with jumbo-mb. RDR2 never asks for 8 GB, so it
+held half the window all run, and the rest filled at +94 s. It now
+needs madeira.cfg's own cage-hold key, which The Witcher 3's entry sets
+next to its jumbo-mb.
+
+Linear: PLA-417
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-19-rdr2-whole-launcher-end.md
+Offered-upstream: no; the holds are the iOS port's
+---
+ build/ntdll-unix/pp_jumbo_hold.h | 31 +++++++++++++++++++++++++++++++
+ build/ntdll-unix/virtual_ios.c   | 25 +++++++++++++++++++------
+ 2 files changed, 50 insertions(+), 6 deletions(-)
+ create mode 100644 build/ntdll-unix/pp_jumbo_hold.h
+
+diff --git a/build/ntdll-unix/pp_jumbo_hold.h b/build/ntdll-unix/pp_jumbo_hold.h
+new file mode 100644
+index 0000000..e4a686d
+--- /dev/null
++++ b/build/ntdll-unix/pp_jumbo_hold.h
+@@ -0,0 +1,31 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later
++ * Who may take the boot-time address-space holds (Playport, PLA-417, decision
++ * 0129, amending 0126).
++ *
++ * The jumbo hold (ml996, madeira.cfg jumbo-mb) is sized for one reservation of
++ * the title's own. Handing it to the first request that fits gave RDR2's to a
++ * CEF renderer's 2 GB pool in run 20261019T173829, so only a request of the
++ * held size takes it now.
++ *
++ * The ml433 cage hold, 8 GB of the guest window at 0x7200000000, followed
++ * jumbo-mb; for RDR2, which never asks for 8 GB, it held half the window all
++ * run. It now has its own key, cage-hold, set for The Witcher 3.
++ *
++ * Pure, so a host test compiles this header as is. */
++#ifndef PP_JUMBO_HOLD_H
++#define PP_JUMBO_HOLD_H
++#include <stdint.h>
++
++/* Whether a reservation of `size` takes the jumbo hold of `hold_size`. */
++static inline int ppj_hold_serves( uint64_t size, uint64_t hold_size )
++{
++    return hold_size && size == hold_size;
++}
++
++/* Whether the cage hold is reserved at boot, from madeira.cfg's cage-hold. */
++static inline int ppj_cage_hold_wanted( long long cage_hold )
++{
++    return cage_hold > 0;
++}
++
++#endif
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 0a426ca..d00026b 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -1981,6 +1981,8 @@ static void ios_va_gap_probe( const char *why )
+  * furniture into the remaining holes (4175 MB low, plus whatever the arena
+  * leaves), and if that does not fit, the desktop breaks instead of the game.
+  */
++#include "pp_jumbo_hold.h"
++
+ static uintptr_t ios_jumbo_hold_base;
+ static size_t    ios_jumbo_hold_size;
+ /* ml1029: how much of the holdback must stay reserved for the ONE big guest
+@@ -2094,12 +2096,21 @@ void ios_jumbo_holdback_init( void )
+ }
+ 
+ /* Returns the held base if this request can be served from it, else 0. The
+- * caller maps at that address; the hold is released first and consumed once. */
++ * caller maps at that address; the hold is released first and consumed once.
++ * Playport (PLA-417): only a request of the held size, the title's own. */
+ static uintptr_t ios_jumbo_holdback_take( size_t size )
+ {
+     uintptr_t base = ios_jumbo_hold_base;
+ 
+-    if (!ios_jumbo_hold_size || size > ios_jumbo_hold_size) return 0;
++    if (!ppj_hold_serves( size, ios_jumbo_hold_size ))
++    {
++        static unsigned kept_lines;
++        if (ios_jumbo_hold_size && size < ios_jumbo_hold_size && kept_lines++ < 8)
++            dprintf( 2, "[jumbo-hold] keeping the holdback 0x%llx +%llu MB from a %llu MB request: "
++                     "it is held for one of its own size\n", (unsigned long long)base,
++                     (unsigned long long)ios_jumbo_hold_size >> 20, (unsigned long long)size >> 20 );
++        return 0;
++    }
+     dprintf( 2, "[jumbo-hold] ml996 releasing the holdback 0x%llx +%llu MB for a %llu MB "
+              "request\n", (unsigned long long)base,
+              (unsigned long long)ios_jumbo_hold_size >> 20,
+@@ -15724,13 +15735,15 @@ void virtual_init(void)
+     /* ml433 (#72): hold back the only 8GB-aligned stretch in the guest band
+      * before top-down placement can put furniture in it — see IOS_CAGE_BASE.
+      *
+-     * Playport: only for a title whose madeira.cfg sets jumbo-mb (The Witcher 3,
++     * Playport: only for a title whose madeira.cfg sets cage-hold (The Witcher 3,
+      * whose 8 GB ask this serves). The hold was built for CEF's V8/cppgc cage,
+      * and Playport runs no CEF. For every other title it took 8 GB of the 16 GB
+      * guest window for nothing: Death's Door filled the other 8 GB 14 s in
+-     * (evidence 2026-10-06-guest-va-exhaustion.md). */
+-    if (madeira_cfg_int( "jumbo-mb", 0 ) <= 0)
+-        dprintf( 2, "[cage] no holdback: no jumbo-mb for this title\n" );
++     * (evidence 2026-10-06-guest-va-exhaustion.md). It followed jumbo-mb until
++     * PLA-417: RDR2's jumbo-mb then held it all run for an 8 GB ask RDR2 never
++     * makes, and the rest of the window filled at +94 s. */
++    if (!ppj_cage_hold_wanted( madeira_cfg_int( "cage-hold", 0 ) ))
++        dprintf( 2, "[cage] no holdback: no cage-hold for this title\n" );
+     else if (anon_mmap_fixed( (void *)(uintptr_t)IOS_CAGE_BASE, IOS_CAGE_REAL_SIZE, PROT_NONE, 0 ) != MAP_FAILED)
+     {
+         ios_cage_holdback_live = 1;

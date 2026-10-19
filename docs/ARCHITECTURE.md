@@ -440,6 +440,13 @@ CEF's PartitionAlloc pools and large reservations. When the window is full:
 Each placement that fails logs a `[va-scan] FAILED` line. i386 images go into their process's
 4 GiB window instead.
 
+Two holds keep address space for a title's large reservations from boot, both set by its
+`madeira.cfg` keys ([decisions 0126](decisions/0126-hold-rdr2s-address-space-from-the-start.md),
+[0129](decisions/0129-the-holds-serve-only-their-own-request.md)):
+
+- `jumbo-mb` holds a gap of that size below FEX's band, for the one reservation of that size;
+- `cage-hold` holds 8 GB of the guest window at 0x7200000000, for an 8 GB ask (The Witcher 3).
+
 ### The FEX host band
 
 FEX keeps its host state in one 16 GB range, `[0x7c00000000, 0x8000000000)`,

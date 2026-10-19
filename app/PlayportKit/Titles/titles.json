@@ -52,7 +52,7 @@
       "installedSize": 41585389035,
       "files": 2459,
       "checksums": "witcher3-292030-3280809.sha256",
-      "config": {"jumbo-mb": "32768"},
+      "config": {"cage-hold": "1", "jumbo-mb": "32768"},
       "screen": "720",
       "memoryMB": 6246,
       "note": "Patch 1.32 (classic branch), x86-64, Direct3D 11. Not yet run on the phone with this runtime: jumbo-mb keeps a 32 GB hole free at boot for the game's 32 GB reservation, and the game renders at the panel's aspect at 720 rows, since 1.32 has no render scale (docs/evidence/2026-09-25-witcher3-setup.md)."

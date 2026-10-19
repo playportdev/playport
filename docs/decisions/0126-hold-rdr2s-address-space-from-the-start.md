@@ -1,6 +1,8 @@
 # 0126: RDR2's Play holds an 8,960 MB address-space gap from the runtime's start
 
 **Status:** accepted, 2026-10-19, chosen by the owner (PLA-417). Not yet shown on the phone.
+Amended by [0129](0129-the-holds-serve-only-their-own-request.md): the hold serves only the
+held size, and `jumbo-mb` no longer turns on the ml433 cage hold.
 
 ## Context
 
