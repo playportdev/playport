@@ -1,0 +1,50 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Mon, 19 Oct 2026 08:36:11 +0200
+Subject: [PATCH] Windows: one MIDR a processor on iOS, so CPUID counts every
+ core
+
+iOS gives user space no MIDR, so the iOS branch of FetchHostFeatures
+added a single entry to CPUMIDRs. CPUIDEmu takes its core count from
+the number of entries, so the guest was told of one core: leaf 1
+EBX[23:16] was 1, every leaf 4 subleaf said 1 core, and 0x80000008 ECX
+said 1, while GetSystemInfo and GetLogicalProcessorInformationEx said
+6 on a 2 P + 4 E iPhone (PLA-392; the cputopo probe, both x86-64 and
+i386). A title that counts cores by CPUID would size its work for one.
+
+Add one entry for each processor GetSystemInfo reports, all with the
+same Apple MIDR as before, so CPUID's counts match the processor count
+(madeira.cfg's cpu-count included, since it sets that count). The
+entries are equal, so the hybrid flag stays off, and the per-CPU brand
+string is the same on every processor.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-19-cpu-topology-phone.md
+Offered-upstream: no; the single entry is the iOS port's (fex-port)
+---
+ Source/Windows/Common/CPUFeatures.cpp | 12 +++++++++---
+ 1 file changed, 9 insertions(+), 3 deletions(-)
+
+diff --git a/Source/Windows/Common/CPUFeatures.cpp b/Source/Windows/Common/CPUFeatures.cpp
+index 8eee381..66639f0 100644
+--- a/Source/Windows/Common/CPUFeatures.cpp
++++ b/Source/Windows/Common/CPUFeatures.cpp
+@@ -132,9 +132,15 @@ FEXCore::HostFeatures CPUFeatures::FetchHostFeatures(bool IsWine, FEXCore::HostF
+                       HostFeatures.SupportsAtomics, HostFeatures.SupportsFlagM, HostFeatures.SupportsFlagM2,
+                       HostFeatures.SupportsFCMA, HostFeatures.SupportsAES, HostFeatureControl());
+   }
+-  // iOS gives no MIDR to user space: one entry, with Apple's implementer (0x61)
+-  // and part 0, which CPUID's brand string names "Apple Silicon" on every core.
+-  HostFeatures.CPUMIDRs.push_back(0x6100'0000u);
++  // iOS gives no MIDR to user space: one entry a processor, each with Apple's
++  // implementer (0x61) and part 0, which CPUID's brand string names "Apple
++  // Silicon" on every core. CPUID's core counts (leaf 1 EBX[23:16], leaf 4,
++  // 0x80000008) are the number of entries, so there is one for each processor
++  // GetSystemInfo reports (PLA-392); with a single entry the guest was told of
++  // one core.
++  SYSTEM_INFO SystemInfo {};
++  GetSystemInfo(&SystemInfo);
++  HostFeatures.CPUMIDRs.resize(SystemInfo.dwNumberOfProcessors ? SystemInfo.dwNumberOfProcessors : 1, 0x6100'0000u);
+   HostFeatures.HostType = HostType;
+   HostFeatures.ProcessPID = ProcessPID;
+   return HostFeatures;

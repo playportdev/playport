@@ -41,3 +41,4 @@
 0040-ntdll-give-an-SMBIOS-type-44-structure-the-Block-Len.patch
 0041-ntdll-keep-an-IOKit-string-s-terminator-inside-its-b.patch
 0042-ntdll-log-a-process-s-first-firmware-table-queries-a.patch
+0043-ntdll-build-Apple-silicon-s-processor-topology-from-.patch
