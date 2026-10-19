@@ -45,7 +45,8 @@ yet shown on the phone.
 - **Parking.** A killed thread of a process that is being terminated as a whole is parked, not
   ended, only when its Mach state and the state the runtime already tracks show both of these:
   - it is blocked in the futex wait of `NtWaitForAlertByThreadId`: `svc #0x80` before its pc,
-    `__ulock_wait` with `UL_COMPARE_AND_WAIT`, `in_alert_wait` set, and not an i386 wait;
+    `__ulock_wait2` (`os_sync_wait_on_address`, iOS 17.4 and later) or `__ulock_wait` with
+    `UL_COMPARE_AND_WAIT`, `in_alert_wait` set, and not an i386 wait;
   - it holds nothing: no FEX lock stamp, no FEX syscall callback, no uninterrupted section or
     tracked host mutex, and not its process's loader lock.
 

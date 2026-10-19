@@ -38,7 +38,9 @@ ios_jit_reclaim_process marks it dead as before (ml983).
 A killed thread of a process being terminated as a whole is parked, not
 ended, when its state proves it blocked in the futex wait of
 NtWaitForAlertByThreadId, holding nothing: the instruction before its pc
-is svc #0x80 with x16 = 515 (__ulock_wait) and x0 UL_COMPARE_AND_WAIT,
+is svc #0x80 with x16 = 544 (__ulock_wait2, which os_sync_wait_on_address
+makes on iOS 17.4 and later) or 515 (__ulock_wait) and x0
+UL_COMPARE_AND_WAIT,
 in_alert_wait is set and it is not an i386 wait, FEX's TEB lock stamps
 (WritePriorityMutex shared and write depth, CodeBufferWriteMutex,
 CodeInvalidationMutex read hold, RWX read hold) and InSyscallCallback are
@@ -49,7 +51,8 @@ loader lock. rpmalloc's heap lock is a spin lock whose holder only maps
 memory and never alert-waits. The abort then leaves it suspended for ever
 and stops retrying; one `[proc-end] parked tid=... wait=...` line each.
 Anything not shown is refused, logged once as `[proc-end] not parked
-tid=...: <reason>`, and the thread runs on as before. Nothing resumes it:
+tid=...: <reason> (insn= x16= x0= host= fex=)`, and the thread runs on as
+before. Nothing resumes it:
 the server's thread object is gone, and every other suspend in the
 runtime is paired with its own resume. A parked thread keeps its TEB, its
 stacks (runtime views) and every view one of its saved registers (x0-x28,
@@ -62,20 +65,20 @@ Class: upstream-bug
 Evidence: docs/evidence/2026-10-19-rdr2-loading-memory.md
 Offered-upstream: no; pseudo-processes in one Mach task are the iOS port's
 ---
- build/ntdll-unix/pp_proc_end.h      | 178 +++++++++++++++++++++
+ build/ntdll-unix/pp_proc_end.h      | 181 ++++++++++++++++++++++
  build/ntdll-unix/server_ios.c       |  32 ++++
- build/ntdll-unix/signal_arm64_ios.c | 130 +++++++++++++++-
+ build/ntdll-unix/signal_arm64_ios.c | 139 ++++++++++++++++-
  build/ntdll-unix/virtual_ios.c      | 232 ++++++++++++++++++++++++++--
  build/wineserver/mach_ios.c         |  42 +++--
- 5 files changed, 593 insertions(+), 21 deletions(-)
+ 5 files changed, 605 insertions(+), 21 deletions(-)
  create mode 100644 build/ntdll-unix/pp_proc_end.h
 
 diff --git a/build/ntdll-unix/pp_proc_end.h b/build/ntdll-unix/pp_proc_end.h
 new file mode 100644
-index 0000000..a7fbc5d
+index 0000000..1770629
 --- /dev/null
 +++ b/build/ntdll-unix/pp_proc_end.h
-@@ -0,0 +1,178 @@
+@@ -0,0 +1,181 @@
 +/* SPDX-License-Identifier: LGPL-2.1-or-later
 + * The end of a pseudo-process another process terminated (Playport, PLA-416,
 + * decision 0127). Such a process never runs process_exit_wrapper: its threads
@@ -86,7 +89,7 @@ index 0000000..a7fbc5d
 + * process that exits by itself (0154), its views in FEX's band.
 + *
 + * A killed thread blocked in an x86-64 program's in-process wait
-+ * (NtWaitForAlertByThreadId's __ulock_wait) never reaches a point the abort
++ * (NtWaitForAlertByThreadId's futex_wait) never reaches a point the abort
 + * can divert it from. If its state shows it holds nothing, it is parked: left
 + * Mach-suspended for ever, and counted as finished. Its TEB, stacks and every
 + * view its saved registers point into stay mapped.
@@ -100,6 +103,7 @@ index 0000000..a7fbc5d
 +
 +#define PPE_SVC_0X80            0xd4001001u   /* svc #0x80, a Darwin system call */
 +#define PPE_SYS_ULOCK_WAIT      515           /* x16 of __ulock_wait */
++#define PPE_SYS_ULOCK_WAIT2     544           /* x16 of __ulock_wait2, os_sync_wait_on_address's */
 +#define PPE_UL_COMPARE_AND_WAIT 1             /* x0's operation: futex_wait's */
 +#define PPE_REFS                50            /* x0-x28, fp, lr, sp, pc; the guest's 16 GPRs and rip */
 +
@@ -126,7 +130,7 @@ index 0000000..a7fbc5d
 +    PPE_NOT_ALERT_WAIT,       /* not in NtWaitForAlertByThreadId: the abort goes on as before */
 +    PPE_WOW64_WAIT,           /* i386: ended in its wait instead */
 +    PPE_UNREAD,               /* its state could not be read */
-+    PPE_NOT_BLOCKED,          /* not blocked in the wait's __ulock_wait */
++    PPE_NOT_BLOCKED,          /* not blocked in the wait's futex_wait */
 +    PPE_FEX_LOCK,             /* holds a FEX lock or is in a FEX syscall callback */
 +    PPE_HOST_LOCK,            /* holds a host section or tracked mutex */
 +    PPE_LOADER_LOCK,          /* holds its process's loader lock */
@@ -134,14 +138,16 @@ index 0000000..a7fbc5d
 +
 +/* Whether a killed thread may be parked. Only one blocked in the host wait of
 + * NtWaitForAlertByThreadId, holding nothing the runtime tracks; anything not
-+ * shown is a refusal, and the thread runs on as before. */
++ * shown is a refusal, and the thread runs on as before. futex_wait is
++ * os_sync_wait_on_address (__ulock_wait2) where the OS has it, as iOS 17.4
++ * on does, and __ulock_wait before. */
 +static inline enum ppe_park ppe_may_park( const struct ppe_thread_state *s )
 +{
 +    if (!s->process_ending) return PPE_NOT_ENDING;
 +    if (!s->readable) return PPE_UNREAD;
 +    if (s->wow64_wait || s->killed_in_wait) return PPE_WOW64_WAIT;
 +    if (!s->in_alert_wait) return PPE_NOT_ALERT_WAIT;
-+    if (s->insn_before_pc != PPE_SVC_0X80 || s->x16 != PPE_SYS_ULOCK_WAIT ||
++    if (s->insn_before_pc != PPE_SVC_0X80 || (s->x16 != PPE_SYS_ULOCK_WAIT && s->x16 != PPE_SYS_ULOCK_WAIT2) ||
 +        (s->x0 & 0xff) != PPE_UL_COMPARE_AND_WAIT)
 +        return PPE_NOT_BLOCKED;
 +    if (s->fex_stamps || s->in_syscall_callback) return PPE_FEX_LOCK;
@@ -159,7 +165,7 @@ index 0000000..a7fbc5d
 +static inline const char *ppe_park_name( enum ppe_park why )
 +{
 +    static const char *const names[] = { "park", "not its whole process", "not in an alert wait",
-+                                         "an i386 wait", "state unreadable", "not blocked in __ulock_wait",
++                                         "an i386 wait", "state unreadable", "not blocked in futex_wait",
 +                                         "holds a FEX lock", "holds a host lock", "holds the loader lock" };
 +    return (unsigned)why < sizeof(names) / sizeof(names[0]) ? names[why] : "?";
 +}
@@ -326,7 +332,7 @@ index 4932ac5..2c3ef28 100644
  
  void process_exit_wrapper( int status )
 diff --git a/build/ntdll-unix/signal_arm64_ios.c b/build/ntdll-unix/signal_arm64_ios.c
-index 886da22..7b57000 100644
+index 886da22..0ce9aae 100644
 --- a/build/ntdll-unix/signal_arm64_ios.c
 +++ b/build/ntdll-unix/signal_arm64_ios.c
 @@ -145,6 +145,9 @@ struct arm64_thread_data
@@ -339,24 +345,30 @@ index 886da22..7b57000 100644
  };
  
  #define IOS_KILLED_IN_WAIT      1
-@@ -157,6 +160,16 @@ static inline struct arm64_thread_data *arm64_thread_data( struct thread_data *d
+@@ -157,6 +160,22 @@ static inline struct arm64_thread_data *arm64_thread_data( struct thread_data *d
      return (struct arm64_thread_data *)get_teb_data(data)->cpu_data;
  }
  
 +/* Playport (PLA-416): the calling thread now holds `depth` uninterrupted
 + * sections and tracked host mutexes (server_ios.c), which the abort reads
-+ * before it parks a killed thread. */
++ * before it parks a killed thread. Sections are taken before thread_data_key
++ * exists, when pthread_getspecific( 0 ) is Darwin's pthread_self slot, and on
++ * threads with no TEB: neither has a TEB to note it in. */
 +void ios_note_host_sections( unsigned int depth )
 +{
-+    struct thread_data *data = get_thread_data();
++    extern pthread_key_t thread_data_key;
++    struct thread_data *data = thread_data_key ? pthread_getspecific( thread_data_key ) : NULL;
++    struct teb_data *teb_data = data ? get_teb_data( data ) : NULL;
 +
-+    if (data) __atomic_store_n( &arm64_thread_data( data )->host_sections, (LONG)depth, __ATOMIC_RELEASE );
++    if (teb_data)
++        __atomic_store_n( &((struct arm64_thread_data *)teb_data->cpu_data)->host_sections, (LONG)depth,
++                          __ATOMIC_RELEASE );
 +}
 +
  /***********************************************************************
   * signal context platform-specific definitions
   */
-@@ -8435,10 +8448,84 @@ void ios_alert_wait_end( void )
+@@ -8435,10 +8454,84 @@ void ios_alert_wait_end( void )
   * is woken to end there instead (ios_alert_wait_check), and is left alone from
   * then on; one in any other in-process wait is left to wake as it would.
   *
@@ -444,7 +456,7 @@ index 886da22..7b57000 100644
  {
      extern void *ios_jit_rx_base_global;
      extern size_t ios_jit_pool_size_global;
-@@ -8489,6 +8576,43 @@ int ios_abort_thread_in_guest_code( mach_port_t port, TEB *teb )
+@@ -8489,6 +8582,46 @@ int ios_abort_thread_in_guest_code( mach_port_t port, TEB *teb )
              ios_wake_killed_thread_alert( tid );
          return 0;
      }
@@ -479,8 +491,11 @@ index 886da22..7b57000 100644
 +            {
 +                *refusal_logged = 1;
 +                abort_read( &teb->ClientId.UniqueThread, &tid, sizeof(tid) );
-+                dprintf( 2, "[proc-end] not parked tid=%04x: %s; it runs on (PLA-416)\n",
-+                         HandleToULong( tid ), why == PPE_PARK ? "the parked tables are full" : ppe_park_name( why ) );
++                dprintf( 2, "[proc-end] not parked tid=%04x: %s (insn=%08x x16=%llu x0=%#llx host=%u "
++                         "fex=%#llx); it runs on (PLA-416)\n", HandleToULong( tid ),
++                         why == PPE_PARK ? "the parked tables are full" : ppe_park_name( why ), park.insn_before_pc,
++                         (unsigned long long)park.x16, (unsigned long long)park.x0, park.host_sections,
++                         (unsigned long long)park.fex_stamps );
 +            }
 +            return 0;
 +        }

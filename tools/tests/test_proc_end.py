@@ -41,6 +41,7 @@ int main(void) {
 
     /* Parking: only a provably idle thread in the wait. */
     s = idle(); assert(ppe_may_park(&s) == PPE_PARK);
+    s = idle(); s.x16 = PPE_SYS_ULOCK_WAIT2; assert(ppe_may_park(&s) == PPE_PARK);   /* os_sync_wait_on_address */
     s = idle(); s.process_ending = 0; assert(ppe_may_park(&s) == PPE_NOT_ENDING);
     s = idle(); s.in_alert_wait = 0; assert(ppe_may_park(&s) == PPE_NOT_ALERT_WAIT);
     s = idle(); s.wow64_wait = 1; assert(ppe_may_park(&s) == PPE_WOW64_WAIT);
