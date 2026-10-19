@@ -21,9 +21,9 @@ public enum FexBand {
         public var views: UInt64
         /// The largest free range.
         public var largestFree: UInt64
-        /// Free 16 MiB-aligned 16 MiB blocks: the rpmalloc spans that still fit.
+        /// Free 1 MiB-aligned 1 MiB blocks: the rpmalloc spans that still fit.
         public var spanSlots: UInt64
-        /// rpmalloc spans (16 MiB each).
+        /// rpmalloc spans (1 MiB each).
         public var spans: UInt64
         /// Call-return stacks: one per live emulator thread.
         public var callret: UInt64

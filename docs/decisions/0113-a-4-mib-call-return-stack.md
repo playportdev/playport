@@ -3,6 +3,9 @@
 **Status:** not adopted, 2026-10-17 (owner): the next work trims Chromium's and the launcher's
 threads instead; `patches/fex` 0047 and `patches/madeira-unix` 0157 were removed, and the
 measurement stays in the [evidence](../evidence/2026-10-17-callret-stack.md).
+Adopted by [0121](0121-a-4-mib-call-return-stack-and-1-mib-spans.md) on 2026-10-19 (owner,
+PLA-408): the stack is 4 MiB again, as `patches/fex` 0055 and `patches/madeira-unix` 0164, together
+with 1 MiB rpmalloc spans.
 [PLA-383](https://linear.app/playportdev/issue/PLA-383),
 [PLA-381](https://linear.app/playportdev/issue/PLA-381),
 [PLA-370](https://linear.app/playportdev/issue/PLA-370),

@@ -194,7 +194,7 @@ int wine_host_limit_stats_read(wine_host_limit_stats *out);
  * counts: the arena every emulator thread's host state lives in (its rpmalloc
  * spans, call-return stack and L1 lookup cache). used is what its views hold,
  * peak the most any reading saw, views their number, largest_free the largest
- * free range and span_slots the free 16 MiB-aligned 16 MiB blocks (new
+ * free range and span_slots the free 1 MiB-aligned 1 MiB blocks (new
  * rpmalloc spans that still fit). spans, callret and l1 count the views of
  * each kind (callret and l1: one per live emulator thread), other the bytes
  * of the rest. refused counts requests inside the arena it could not serve: a

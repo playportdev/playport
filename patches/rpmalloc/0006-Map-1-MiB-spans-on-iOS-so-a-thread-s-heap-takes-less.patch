@@ -1,0 +1,151 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Mon, 19 Oct 2026 11:50:03 +0200
+Subject: [PATCH] Map 1 MiB spans on iOS, so a thread's heap takes less of the
+ FEX band
+
+Every emulator thread's rpmalloc heap maps a span per page type it
+uses and a medium or large page per size class it uses, all in the
+16 GiB FEX host band. With the Rockstar Games Launcher's Social Club
+tree up the band filled at 197 threads holding 718 spans of 16 MiB
+(11.2 GB), most of them medium: a 4 MiB medium page for each medium
+size class a thread touched, and a 16 MiB large page for each large
+one.
+
+On FEX_IOS_HOST the span is 1 MiB, and the medium and large pages are
+the span (MEDIUM_PAGE_SIZE_SHIFT 22 -> 20, LARGE_PAGE_SIZE_SHIFT
+24 -> 20). A span holds whole pages, and a page at least one block of
+its largest class; get_size_class fixes the medium classes at up to
+256 KiB, so 512 KiB is the smallest medium page, and 1 MiB keeps three
+of the largest medium blocks a page. The large classes that no longer
+fit a 1 MiB page, above 896 KiB, are cut from the table
+(LARGE_SIZE_CLASS_COUNT 20 -> 7, LARGE_BLOCK_SIZE_LIMIT 896 KiB), so
+their sizes take the huge path, which maps a block at its own size on
+a span boundary. Static asserts hold the page and alignment
+invariants. Without FEX_IOS_HOST nothing changes.
+
+Linear: PLA-408
+Class: ios-port
+Evidence: docs/evidence/2026-10-19-fex-band-per-thread.md
+Offered-upstream: no; the band and its 16 GiB are the iOS port's (rpmalloc-port 0003, 0005)
+---
+ rpmalloc/rpmalloc.c | 67 +++++++++++++++++++++++++++++++++++++++------
+ 1 file changed, 58 insertions(+), 9 deletions(-)
+
+diff --git a/rpmalloc/rpmalloc.c b/rpmalloc/rpmalloc.c
+index 3bad574..255b0a1 100644
+--- a/rpmalloc/rpmalloc.c
++++ b/rpmalloc/rpmalloc.c
+@@ -168,25 +168,44 @@ madvise(caddr_t, size_t, int);
+ 
+ #define SMALL_BLOCK_SIZE_LIMIT (4 * 1024)
+ #define MEDIUM_BLOCK_SIZE_LIMIT (256 * 1024)
++#ifdef FEX_IOS_HOST
++/* Playport: the large classes a 1 MiB large page holds (see SPAN_SIZE below):
++ * the first seven, 320 KiB to 896 KiB. A block above 896 KiB is huge, mapped
++ * at its own size. LARGE_BLOCK_SIZE_LIMIT is the last large class's size. */
++#define LARGE_BLOCK_SIZE_LIMIT (896 * 1024)
++#else
+ #define LARGE_BLOCK_SIZE_LIMIT (8 * 1024 * 1024)
++#endif
+ 
+ #define SMALL_SIZE_CLASS_COUNT 73
+ #define MEDIUM_SIZE_CLASS_COUNT 24
++#ifdef FEX_IOS_HOST
++#define LARGE_SIZE_CLASS_COUNT 7
++#else
+ #define LARGE_SIZE_CLASS_COUNT 20
++#endif
+ #define SIZE_CLASS_COUNT (SMALL_SIZE_CLASS_COUNT + MEDIUM_SIZE_CLASS_COUNT + LARGE_SIZE_CLASS_COUNT)
+ 
+ #define SMALL_PAGE_SIZE_SHIFT 16
+ #define SMALL_PAGE_SIZE (1 << SMALL_PAGE_SIZE_SHIFT)
+ #define SMALL_PAGE_MASK (~((uintptr_t)SMALL_PAGE_SIZE - 1))
++#ifdef FEX_IOS_HOST
++/* Playport: 1 MiB, the span's size (see SPAN_SIZE below). The largest medium
++ * block, 256 KiB, fits three times. */
++#define MEDIUM_PAGE_SIZE_SHIFT 20
++#else
+ #define MEDIUM_PAGE_SIZE_SHIFT 22
++#endif
+ #define MEDIUM_PAGE_SIZE (1 << MEDIUM_PAGE_SIZE_SHIFT)
+ #define MEDIUM_PAGE_MASK (~((uintptr_t)MEDIUM_PAGE_SIZE - 1))
+ #ifdef FEX_IOS_HOST
+ /* iOS-Mythic ml436 (#73): dropped 26 -> 24 to legalise 16MB spans (see the
+  * SPAN_SIZE note below). Large-class ceiling falls 64MB -> 16MB; blocks in
+  * (16MB, 64MB] shift to the huge path, which maps them at exact size — a VA
+- * IMPROVEMENT over carving them from a 64MB span. */
+-#define LARGE_PAGE_SIZE_SHIFT 24
++ * IMPROVEMENT over carving them from a 64MB span.
++ * Playport: 24 -> 20 for 1 MiB spans; the large classes stop at 896 KiB
++ * (LARGE_SIZE_CLASS_COUNT above). */
++#define LARGE_PAGE_SIZE_SHIFT 20
+ #else
+ #define LARGE_PAGE_SIZE_SHIFT 26
+ #endif
+@@ -214,8 +233,26 @@ madvise(caddr_t, size_t, int);
+  * the per-thread span footprint 4x (~48MB worst case); with the ml389 VA diet and
+  * db 5392 exact-aligned maps this puts 74 threads at ~3.5GB. Exit-leak (12 heaps,
+  * ~2GB) is secondary and partially covered by the ml435 ThreadTerm hardening. */
+-static const char ios_span16_marker[] __attribute__((used)) = "rpmalloc-span16 rev=ml436";
+-#define SPAN_SIZE (16 * 1024 * 1024)
++/* Playport: 16MB -> 1MB (decision 0121). Every emulator thread's heap maps a
++ * span per page type it uses, and a medium or large page per size class it
++ * uses; with the Rockstar launcher up the band filled at 197 threads holding
++ * 718 spans (11.2 GB), most of them medium. A span holds whole pages of one
++ * type, so it cannot be smaller than the largest page; a page must hold at
++ * least one block of its largest class plus the page header, and the medium
++ * classes (to 256 KiB) are fixed by get_size_class's formula, so the medium
++ * page cannot be smaller than 512 KiB. A 1 MiB page holds three of the
++ * largest medium blocks, as upstream's pages hold several; at 512 KiB a
++ * 256 KiB block would take a page alone and a block above 448 KiB would be
++ * huge.
++ * Medium and large pages are the span (one page each), as large pages already
++ * were at 16MB; a small span holds sixteen 64 KiB pages. The large classes
++ * that do not fit a 1 MiB page are cut from the table (LARGE_SIZE_CLASS_COUNT),
++ * so get_size_class sends their sizes past SIZE_CLASS_COUNT, to the huge path,
++ * which maps a block at its own size on a SPAN_SIZE boundary. A block's span
++ * is still block & SPAN_MASK: a block starts within its span's first page, and
++ * an aligned or huge block within RPMALLOC_MAX_ALIGNMENT + SPAN_HEADER_SIZE of
++ * it. */
++#define SPAN_SIZE (1024 * 1024)
+ #else
+ #define SPAN_SIZE (256 * 1024 * 1024)
+ #endif
+@@ -639,9 +676,20 @@ static const size_class_t global_size_class[SIZE_CLASS_COUNT] = {
+     MCLASS(640),    MCLASS(768),    MCLASS(896),    MCLASS(1024),   MCLASS(1280),   MCLASS(1536),   MCLASS(1792),
+     MCLASS(2048),   MCLASS(2560),   MCLASS(3072),   MCLASS(3584),   MCLASS(4096),   MCLASS(5120),   MCLASS(6144),
+     MCLASS(7168),   MCLASS(8192),   MCLASS(10240),  MCLASS(12288),  MCLASS(14336),  MCLASS(16384),  LCLASS(20480),
+-    LCLASS(24576),  LCLASS(28672),  LCLASS(32768),  LCLASS(40960),  LCLASS(49152),  LCLASS(57344),  LCLASS(65536),
++    LCLASS(24576),  LCLASS(28672),  LCLASS(32768),  LCLASS(40960),  LCLASS(49152),  LCLASS(57344),
++#ifndef FEX_IOS_HOST
++    LCLASS(65536),
+     LCLASS(81920),  LCLASS(98304),  LCLASS(114688), LCLASS(131072), LCLASS(163840), LCLASS(196608), LCLASS(229376),
+-    LCLASS(262144), LCLASS(327680), LCLASS(393216), LCLASS(458752), LCLASS(524288)};
++    LCLASS(262144), LCLASS(327680), LCLASS(393216), LCLASS(458752), LCLASS(524288)
++#endif
++};
++#ifdef FEX_IOS_HOST
++_Static_assert(SPAN_SIZE >= LARGE_PAGE_SIZE && LARGE_PAGE_SIZE >= MEDIUM_PAGE_SIZE, "a span holds whole pages");
++_Static_assert((MEDIUM_PAGE_SIZE - PAGE_HEADER_SIZE) / MEDIUM_BLOCK_SIZE_LIMIT >= 1, "a medium page holds its largest block");
++_Static_assert((LARGE_PAGE_SIZE - PAGE_HEADER_SIZE) / LARGE_BLOCK_SIZE_LIMIT >= 1, "a large page holds its largest block");
++_Static_assert(57344 * SMALL_GRANULARITY == LARGE_BLOCK_SIZE_LIMIT, "the last large class is LARGE_BLOCK_SIZE_LIMIT");
++_Static_assert(RPMALLOC_MAX_ALIGNMENT + SPAN_HEADER_SIZE < MEDIUM_PAGE_SIZE, "an aligned block stays in its span's first page");
++#endif
+ 
+ //! Threshold number of pages for when free pages are decommitted
+ static uint32_t global_page_free_overflow[4] = {0, 0, 0, 0};
+@@ -2077,9 +2125,10 @@ page_put_local_free_block(page_t* page, block_t* block) {
+ 	if (UNEXPECTED(--page->block_used == 0)) {
+ #ifdef FEX_IOS_HOST
+ 		/* Playport: a page of one block goes from full straight to free. The
+-		 * iOS port's 16 MB large pages (LARGE_PAGE_SIZE_SHIFT 24) hold a single
+-		 * block of the last large class (7-8 MB); upstream's 64 MB pages hold
+-		 * seven, so a full page always became available on an earlier free and
++		 * iOS port's 1 MiB large pages hold a single block of each of the last
++		 * four large classes (512-896 KiB; at 16 MB it was the 8 MB class);
++		 * upstream's 64 MB pages hold seven of its largest, so a full page
++		 * always became available on an earlier free and
+ 		 * page_available_to_free could assume it is on the available list. A
+ 		 * full page is not: unlinking it wrote through its stale prev/next into
+ 		 * other pages' headers. Put it on the list first. */

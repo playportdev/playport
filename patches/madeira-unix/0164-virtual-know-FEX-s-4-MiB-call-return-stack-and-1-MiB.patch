@@ -1,0 +1,76 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sat, 17 Oct 2026 19:31:15 +0200
+Subject: [PATCH] virtual: know FEX's 4 MiB call-return stack and 1 MiB
+ rpmalloc spans in the band census
+
+FEX's call-return stack is 4 MiB and two guard pages (patches/fex, "shrink
+the iOS call-return stack to 4 MiB"), and rpmalloc's span is 1 MiB on a
+1 MiB boundary (patches/rpmalloc, "Map 1 MiB spans on iOS"), not 16 MiB
+each. The band census (0038) knew both by their 16 MiB shapes; the app
+reads its call-return stacks as the band's emulator threads (`band:
+threads=`), so it would have counted none, and no span either, and put
+their bytes under `other`. The census now knows the new shapes, and
+span_slots counts the free 1 MiB-aligned 1 MiB blocks a new span needs.
+The `[band-map]` copy holds up to 16,384 views, the band in 1 MiB spans.
+
+Linear: PLA-408
+Class: diagnostics
+Evidence: docs/evidence/2026-10-19-fex-band-per-thread.md
+Offered-upstream: no; the FEX host band is the iOS port's
+---
+ build/ntdll-unix/virtual_ios.c | 13 +++++++------
+ 1 file changed, 7 insertions(+), 6 deletions(-)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 6ac18a6..f756a31 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -5500,7 +5500,8 @@ struct ios_band_census
+     unsigned long long spans, callret, l1, other_bytes;
+ };
+ 
+-#define IOS_BAND_SPAN 0x1000000ULL   /* rpmalloc's span: 16 MiB, 16 MiB-aligned */
++#define IOS_BAND_SPAN 0x100000ULL    /* rpmalloc's SPAN_SIZE: 1 MiB, 1 MiB-aligned */
++#define IOS_BAND_CALLRET 0x400000ULL /* FEX's CALLRET_STACK_SIZE: 4 MiB */
+ 
+ static void ios_band_gap( struct ios_band_census *c, ULONG_PTR b, ULONG_PTR e )
+ {
+@@ -5531,8 +5532,8 @@ static struct wine_rb_entry *ios_band_first_locked( ULONG_PTR lo )
+     return first;
+ }
+ 
+-/* What each view is, by its shape: an rpmalloc span is exactly 16 MiB on a
+- * 16 MiB boundary, a call-return stack is 16 MiB plus its two guard pages, an
++/* What each view is, by its shape: an rpmalloc span is exactly 1 MiB on a
++ * 1 MiB boundary, a call-return stack is 4 MiB plus its two guard pages, an
+  * L1 lookup cache is 2 MiB; the rest (rpmalloc heap metadata and large blocks,
+  * FEX's pooled buffers) is counted in bytes. virtual_mutex must be held. */
+ static void ios_band_census_locked( struct ios_band_census *c )
+@@ -5554,7 +5555,7 @@ static void ios_band_census_locked( struct ios_band_census *c )
+         c->used += e - b;
+         c->views++;
+         if (view->size == IOS_BAND_SPAN && !(b & (IOS_BAND_SPAN - 1))) c->spans++;
+-        else if (view->size > IOS_BAND_SPAN && view->size <= IOS_BAND_SPAN + 0x10000) c->callret++;
++        else if (view->size > IOS_BAND_CALLRET && view->size <= IOS_BAND_CALLRET + 0x10000) c->callret++;
+         else if (view->size == 0x200000) c->l1++;
+         else c->other_bytes += e - b;
+         if (e > cursor) cursor = e;
+@@ -5566,7 +5567,7 @@ static void ios_band_census_locked( struct ios_band_census *c )
+ /* The arena's map, for the log: its views are copied under virtual_mutex and
+  * printed after, as runs of same-sized views (neighbours at most one 64 KiB
+  * granule apart), one line each with the free space before the run. */
+-#define IOS_BAND_MAP_MAX 8192
++#define IOS_BAND_MAP_MAX 16384 /* the band in 1 MiB spans */
+ struct ios_band_view { ULONG_PTR base, size; };
+ 
+ /* virtual_mutex must be held. Returns how many views it copied (at most max). */
+@@ -5665,7 +5666,7 @@ static void ios_band_unlock( sigset_t *sigset )
+  *    2 peak          the most `used` any census or refusal saw
+  *    3 views         views inside it
+  *    4 largest_free  the largest free range
+- *    5 span_slots    free 16 MiB-aligned 16 MiB blocks: new rpmalloc spans that fit
++ *    5 span_slots    free 1 MiB-aligned 1 MiB blocks: new rpmalloc spans that fit
+  *    6 spans         rpmalloc spans
+  *    7 callret       call-return stacks (one per live emulator thread)
+  *    8 l1            L1 lookup caches (one per live emulator thread)

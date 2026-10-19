@@ -423,23 +423,31 @@ fell from 138 to 83 MiB, Jurassic World Evolution's from 480 to 68.
 
 FEX keeps its host state in one 16 GB range, `[0x7c00000000, 0x8000000000)`,
 which ntdll reserves at start and serves only to FEX's requests (the
-`[fex-arena]` lines). Every emulator thread takes about 50 MB of it: its
-rpmalloc heap's two 16 MB spans (one for small blocks, one for medium),
-a call-return stack of 16 MB and two guard pages, and a 2 MB L1 lookup cache.
+`[fex-arena]` lines). Every emulator thread takes some of it: its rpmalloc
+heap's 1 MiB spans (`patches/rpmalloc` 0006: a small span holds sixteen
+64 KiB pages, and a medium or large page is a whole span, one for each such
+size class the thread uses; a block above 896 KiB is mapped at its own size),
+a 4 MiB call-return stack and two guard pages (`patches/fex` 0055), and a
+2 MiB L1 lookup cache; a thread that starts and touches one small and one
+medium class takes about 8 MiB
+([decision 0121](decisions/0121-a-4-mib-call-return-stack-and-1-mib-spans.md)).
 The L2 cache and its table for the 8 GB `VirtualMemSize` are off on iOS, so
 they take nothing. Call-return stacks are placed from the top of the band
 down (`patches/fex` 0010), and rpmalloc's spans from the bottom up, so the
-stacks leave no holes between 16 MB-aligned spans. Hollow Knight holds
-3.3 GB with 50 threads, and 3.5 GB with DXVK's six compiler threads on the
-Vulkan backend ([fex-band](evidence/2026-09-28-fex-band.md)).
+stacks leave no holes between span-aligned spans. With 16 MiB spans and
+stacks, Hollow Knight held 3.3 GB with 50 threads, and 3.5 GB with DXVK's six
+compiler threads on the Vulkan backend ([fex-band](evidence/2026-09-28-fex-band.md)),
+and the Rockstar launcher filled the band at 197 threads, about 83 MB each
+([evidence](evidence/2026-10-19-rockstar-physicaldrive.md)).
 
-- Madeira-unix 0038 counts the band's views (`ios_fex_band_stats`), and
+- Madeira-unix 0038 counts the band's views (`ios_fex_band_stats`), knowing a span and a
+  call-return stack by their shapes (madeira-unix 0164), and
   `wine_host_band_stats_read` passes the counts to the app. A launch logs a
   `title: band: size_mb=… used_mb=… largest_free_mb=… span_slots=… threads=…
   refused=…` line whenever the use moved by 256 MB or the thread count by 4,
   and marks one when the launch ends; `pp ui` and `pp perf` put the last one
-  in the result event as `band`. `span_slots` is the free 16 MB-aligned
-  blocks, what a new rpmalloc span needs; `refused` counts requests the band
+  in the result event as `band`. `span_slots` is the free 1 MiB-aligned
+  1 MiB blocks, what a new rpmalloc span needs; `refused` counts requests the band
   could not serve (a thread that cannot start). The first refusal, and a dev
   build at 16, 32, 48… threads and at the launch's end, write the band's map
   as `[band-map]` lines.

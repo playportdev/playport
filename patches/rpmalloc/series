@@ -5,3 +5,4 @@
 0003-Map-through-ntdll-where-kernelbase-is-not-loaded-on-.patch
 0004-Free-a-one-block-page-that-is-full-on-iOS-and-keep-l.patch
 0005-Send-iOS-diagnostics-to-FEX-s-log-never-to-the-guest.patch
+0006-Map-1-MiB-spans-on-iOS-so-a-thread-s-heap-takes-less.patch
