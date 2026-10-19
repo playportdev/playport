@@ -85,15 +85,6 @@ pipe before PLA-390. This is concluded from the code history; no older IPA was r
 | Build records | `app/artifacts.tsv`: `xtajit64.dll` (`libarm64ecfex.dll`) and `xtajit.dll` (`libwow64fex.dll`) changed, as expected |
 | `./pp test` (full) | all passed; Swift PlayportKit 337 tests |
 | The new probe on desktop Wine 11.19 (sway's X display, own prefix under `.work`) | every check ok, including `b-echo nothing else in the pipe` (24 bytes); `console: done ok` |
-| Phone | **not run.** At 08:10, `pp phone status` found no phone (`phones: 0`, "wake and unlock it"). A person is needed, so the session was not retried. |
+| Phone (2026-10-19, after the phone was woken) | IPA `a4e14664…` installed (`installed` event sha256 `a4e14664753c7b390cdff3b2ad9086a7e69db6182416b0ec1426d95c80231a4e`); Hollow Knight first frame +9.47 s, main menu (`.work/ui-runs/f2-hk`); console probe `console: done ok`: a-conout/a-mode/a-write, b-echo exit 0, marker present, nothing else in the pipe, c-new-console exit 7, all ok (`.work/ui-runs/f2-console`); probe uninstalled through the UI. |
 
-**Not checked on the phone.** The Hollow Knight gate (`app-367520` through first frame+10) and
-the probe run on IPA `a4e14664…` are still owed. One locked session does both:
-`./pp phone lock -- sh .work/agent-notes/followups/f2/session.sh`. That script installs the IPA,
-plays Hollow Knight, imports and runs the probe, then uninstalls the probe through the UI.
-
-Expected on the phone:
-- the probe ends `console: done ok`, with `b-echo output 24 bytes`;
-- the child's FEX lines appear in `s1-host.log`;
-- the probe's `va-profile` line reads `deferred rpmalloc log (27 bytes)` and carries the
-  `[rpm-sink]` banner.
+**Checked on the phone** (session `.work/agent-notes/followups/f2/session.sh`, log `session.log`): the probe passes every check; Hollow Knight reaches first frame+10.
