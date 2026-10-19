@@ -1,0 +1,63 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Mon, 19 Oct 2026 09:15:38 +0200
+Subject: [PATCH] wineserver: report only the user CPSR bits from the Mach
+ capture
+
+The read side of madeira-unix 0161 (WineHQ 7fb24b7, "ntdll: Ignore
+attempts to set reserved CPSR bits"). Upstream, a context read from a
+suspended thread comes from that thread's own save_context, which now
+reports only cpsr_user_mask (0xf620fc30). On iOS the server captures it
+itself, in mach_ios.c ios_fill_thread_context, and still reported the
+Mach state's whole __cpsr, and the syscall frame's cpsr for a thread in
+a syscall, so GetThreadContext from another thread could return host
+bits (DAIF, the exception level, SSBS) that no context can set. Both
+are now masked with IOS_CPSR_USER_MASK, the same value: the server
+cannot include ntdll's unix_private.h. The frame's cpsr already holds
+user bits when ntdll wrote it, so masking it changes nothing there.
+The guest views are unchanged: the x86-64 flags come from the CPU
+area's ContextAmd64 and the i386 ones from the WoW64 context, not the
+CPSR, and cpsr_to_eflags reads only NZCV and bit 21, all user bits.
+The rest of the capture, and the safe-point checks that use the Mach
+state, are unchanged.
+
+Class: madeira-port
+Evidence: docs/evidence/2026-10-18-cpsr-reserved-bits.md
+Offered-upstream: no
+---
+ build/wineserver/mach_ios.c | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/build/wineserver/mach_ios.c b/build/wineserver/mach_ios.c
+index fc129f1..d01022e 100644
+--- a/build/wineserver/mach_ios.c
++++ b/build/wineserver/mach_ios.c
+@@ -456,6 +456,10 @@ int send_thread_signal( struct thread *thread, int sig )
+ #define IOS_SCF_PC    0x100
+ #define IOS_SCF_CPSR  0x108
+ #define IOS_SCF_SIZE  0x330
++/* cpsr_user_mask (unix/unix_private.h, WineHQ 7fb24b7): the CPSR bits a Windows
++ * context holds. The thread's own save_context reports only these, so a context
++ * captured here from the Mach state or the syscall frame does as well. */
++#define IOS_CPSR_USER_MASK 0xf620fc30
+ #define IOS_CPUAREA_CTX64_OFF      0x18     /* CHPE_V2_CPU_AREA_INFO.ContextAmd64 */
+ #define IOS_CPUAREA_INSIM_OFF      0x00     /* CHPE_V2_CPU_AREA_INFO.InSimulation (BOOLEAN) */
+ #define IOS_CPUAREA_INSYSCB_OFF    0x01     /* CHPE_V2_CPU_AREA_INFO.InSyscallCallback (BOOLEAN) */
+@@ -1194,7 +1198,7 @@ int ios_fill_thread_context( struct thread *thread,
+         native->flags |= SERVER_CTX_CONTROL | SERVER_CTX_INTEGER;
+         native->ctl.arm64_regs.sp     = arm.__sp;
+         native->ctl.arm64_regs.pc     = arm.__pc;
+-        native->ctl.arm64_regs.pstate = arm.__cpsr;
++        native->ctl.arm64_regs.pstate = arm.__cpsr & IOS_CPSR_USER_MASK;
+         /* wine-11.18 split the integer block around x18 (x0[18], x19[12]:
+          * x19-x28, fp, lr); x18 moved to the TLS block, which is not
+          * reported here (iOS owns x18). */
+@@ -1272,7 +1276,7 @@ int ios_fill_thread_context( struct thread *thread,
+                         }
+                         native->ctl.arm64_regs.sp     = fsp;
+                         native->ctl.arm64_regs.pc     = fpc;
+-                        native->ctl.arm64_regs.pstate = *(uint32_t *)(f + IOS_SCF_CPSR);
++                        native->ctl.arm64_regs.pstate = *(uint32_t *)(f + IOS_SCF_CPSR) & IOS_CPSR_USER_MASK;
+                         if (n_sub++ < 48)
+                             fprintf( stderr, "[ctx-frame] ml716 #%d tid=%04x source=syscall-frame "
+                                      "mach_pc=%p sp=%p inside_syscall=1 frame=%p frame_pc=%p frame_sp=%p\n",
