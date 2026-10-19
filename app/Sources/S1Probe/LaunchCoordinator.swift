@@ -40,6 +40,7 @@
 // launch from its start to the game's first frame, in both variants.
 
 import Foundation
+import os
 import HostIOKit
 import PlayportKit
 import EpicClientKit
@@ -88,10 +89,10 @@ enum LaunchCoordinator {
         /// The game's own pool from its compatibility entry (LaunchSettings.jitPoolMB, decision
         /// 0108), granted when the memory limit allows; nil for the default.
         var gamePoolMB: Int? = nil
-        /// The game's sign-in through the publisher launcher its Play starts, after which the
-        /// session root ends that launcher (LaunchSettings.endLauncherAfterSignIn, decision 0124);
-        /// nil leaves the launcher to the title.
-        var gameSignIn: GameSignIn? = nil
+        /// The publisher launcher the Play starts, which the session root ends at the game's first
+        /// frame, and the game's sign-in through it, which is only logged (decision 0125;
+        /// LaunchSettings.endLauncherAtFirstFrame); nil leaves the launcher to the title.
+        var endLauncher: GameSignIn? = nil
         /// How long the title goes on after it ran the pool out before the launch ends (decisions
         /// 0022, 0030); a publisher's launcher Open carries its own (decision 0112).
         var exhaustionGrace: TimeInterval = JitPool.exhaustionGrace
@@ -520,7 +521,9 @@ enum LaunchCoordinator {
                 + p.vulkanEnvironment.keys.sorted().map { "\($0)=\(p.vulkanEnvironment[$0]!)" }.joined(separator: " "))
         }
         let environment = applyEnvironment(backend: backend, steamAppID: r.steamAppID, fex: r.fex)
+        let firstFrameSeen = OSAllocatedUnfairLock(initialState: false)
         PacedMetalLayer.onFirstFrame {
+            firstFrameSeen.withLock { $0 = true }
             mark("first frame")
             step(.drawing)
             #if !PLAYPORT_RELEASE
@@ -593,12 +596,15 @@ enum LaunchCoordinator {
 
         let t0 = Date()
         step(.running(since: t0))
-        var signIn = r.gameSignIn.map { s in LauncherAfterSignIn(signIn: s, profile: runtime.prefixURL.appendingPathComponent("drive_c/users/playport")) }
+        let launcher = r.endLauncher.map { s in LauncherEnd(signIn: s, profile: runtime.prefixURL.appendingPathComponent("drive_c/users/playport")) }
         while true {
             // In 2 s slices, so the pool's use is logged as it grows.
             let w = runtime.wait(ms: 2_000)
             let elapsed = Date().timeIntervalSince(t0)
-            if w.rc == 1, signIn?.check(elapsed: elapsed) == true { signIn = nil }
+            if w.rc == 1, let l = launcher {
+                if !l.ended, firstFrameSeen.withLock({ $0 }) { l.end(elapsed: elapsed) }
+                l.watchSignIn(elapsed: elapsed)
+            }
             if w.rc == 0 {
                 let exit = UInt32(bitPattern: w.code)
                 return pool.end(Outcome(kind: .exited(exit), line: "exit=\(String(format: "0x%08x", exit)) after_s=\(Int(elapsed))"),
@@ -734,36 +740,49 @@ enum LaunchCoordinator {
         return nil
     }
 
-    /// The publisher launcher's end once the game signed in through it (decision 0124): the
-    /// game's log as the title started is the baseline (GameSignIn.Watch); every wait slice
-    /// reads it again, and the first sign-in line of this Play sends PP_CONTROL_END_LAUNCHER,
-    /// once. The root ends the launcher's processes, never the game's, and logs each
-    /// (`session: … [launcher]` lines). Only the fixed line text is matched; nothing of the
-    /// log is logged.
-    private struct LauncherAfterSignIn {
+    /// The publisher launcher's end at the game's first frame (decision 0125, amending 0124). At
+    /// the first wait slice after the first frame it sends PP_CONTROL_END_LAUNCHER, once: the
+    /// root ends the launcher's whole tree in one step (Launcher.exe, RockstarErrorHandler.exe and
+    /// the launcher's SocialClubHelper.exe processes), never the game or a process under it, and
+    /// logs each, and every start of one of those images after it (`session: … [launcher]`
+    /// lines). The game's sign-in is only watched and logged: the game's log as the title started
+    /// is the baseline (GameSignIn.Watch), and every wait slice reads it again until this Play's
+    /// first sign-in line. Only the fixed line text is matched; nothing of the log is logged.
+    private final class LauncherEnd {
         let file: URL
         let watch: GameSignIn.Watch
+        private(set) var ended = false
+        private var signedIn = false
 
         init(signIn: GameSignIn, profile: URL) {
             file = signIn.file(profile: profile)
             let baseline = try? Data(contentsOf: file)
             watch = GameSignIn.Watch(signIn: signIn, baseline: baseline)
-            log("launcher: ends once the game signs in (decision 0124); its log "
+            log("launcher: ends at the game's first frame, the game's sign-in is only logged (decision 0125); its log "
                 + (baseline.map { "holds \($0.count) bytes of an earlier start" } ?? "is not there yet"))
         }
 
-        /// Whether it is done: the game signed in and the root was asked to end the launcher.
-        func check(elapsed: TimeInterval) -> Bool {
-            guard let data = try? Data(contentsOf: file), watch.signedIn(data) else { return false }
-            log(String(format: "launcher: the game signed in at +%.0f s; ending the launcher", elapsed))
+        /// Asks the root to end the launcher's tree, once.
+        func end(elapsed: TimeInterval) {
+            ended = true
+            log(String(format: "launcher: the game's first frame is on screen at +%.0f s; ending the launcher", elapsed))
             var n: UInt32 = 0
             let rc = wine_host_session_control(Int32(PP_CONTROL_END_LAUNCHER), 0, 5_000, &n)
-            log(rc == 0 ? "launcher: the session root ended \(n) of its processes; its Social Club helpers follow in 10 s"
+            log(rc == 0 ? "launcher: the session root ended \(n) of its processes"
                         : "launcher: the session root did not end it (\(rc))")
             #if !PLAYPORT_RELEASE
-            RunEvents.emit("launcher", ["state": "signed-in", "after_s": Int(elapsed), "rc": Int(rc), "ended": Int(n)])
+            RunEvents.emit("launcher", ["state": "ended", "after_s": Int(elapsed), "rc": Int(rc), "ended": Int(n)])
             #endif
-            return true
+        }
+
+        /// Logs this Play's first sign-in line of the game, once.
+        func watchSignIn(elapsed: TimeInterval) {
+            guard !signedIn, let data = try? Data(contentsOf: file), watch.signedIn(data) else { return }
+            signedIn = true
+            log(String(format: "launcher: the game signed in at +%.0f s", elapsed))
+            #if !PLAYPORT_RELEASE
+            RunEvents.emit("launcher", ["state": "signed-in", "after_s": Int(elapsed)])
+            #endif
         }
     }
 

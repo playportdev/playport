@@ -2,9 +2,9 @@
 // A game's own sign-in through the publisher launcher its Play starts (decision 0124): the line
 // the game writes to its log once it has signed in. RDR2 logs `Signed in online to profile …` to
 // its Social Club log (UTF-16LE, `[<ms since start>] text` lines under a `[00000000] <start time>`
-// header) each time it signs in. The launcher is no longer needed after the first such line in
-// this Play, and LaunchCoordinator then asks the session root to end it. Only the fixed text is
-// matched; the rest of the line (the profile) is never read out, logged or kept.
+// header) each time it signs in. LaunchCoordinator logs this Play's first such line; since decision
+// 0125 the launcher ends at the game's first frame, not here. Only the fixed text is matched; the
+// rest of the line (the profile) is never read out, logged or kept.
 
 import Foundation
 

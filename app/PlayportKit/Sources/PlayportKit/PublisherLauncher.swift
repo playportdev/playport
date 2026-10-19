@@ -38,10 +38,10 @@ public struct PublisherLauncher: Equatable, Sendable, Identifiable {
     /// a dev build's Settings › Launchers row and the driver's `forget-launcher-window:ID` delete
     /// this one file (forgetWindowSettings). Nil when Playport knows none.
     public let windowSettingsFile: String?
-    /// The line the games in `games` log once they signed in through this launcher, after which
-    /// their Play ends the launcher when their compatibility entry asks for it
-    /// (LaunchSettings.endLauncherAfterSignIn, decision 0124); nil for a launcher with none.
-    /// Which processes end is the session root's (app/SessionRoot/launcher_end.h).
+    /// The line the games in `games` log once they signed in through this launcher. A Play whose
+    /// compatibility entry ends the launcher (LaunchSettings.endLauncherAtFirstFrame) ends it at the
+    /// game's first frame and only logs when this line comes (decision 0125); nil for a launcher
+    /// with none. Which processes end is the session root's (app/SessionRoot/launcher_end.h).
     public let signIn: GameSignIn?
 
     /// The launch's title id (TitleLaunch), apart from every store's game ids.

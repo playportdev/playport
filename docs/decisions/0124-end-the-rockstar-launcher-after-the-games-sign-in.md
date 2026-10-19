@@ -8,6 +8,9 @@ phone run has the game written its Social Club log
 [0112](0112-a-launchers-open-outlasts-a-pool-exhaustion.md) and
 [0114](0114-trim-social-clubs-chromium-and-the-launchers-threads.md) as below.
 [PLA-409](https://linear.app/playportdev/issue/PLA-409).
+Amended by [0125](0125-end-the-whole-rockstar-launcher-at-the-games-first-frame.md): the whole
+launcher tree ends at the game's first frame, in one step, and the game's sign-in is only logged;
+the field is `endLauncherAtFirstFrame`.
 
 ## Context
 

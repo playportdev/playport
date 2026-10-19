@@ -34,9 +34,11 @@
 // At its start it writes wineboot's volatile HKLM\Hardware\Description\System\BIOS key
 // from the SMBIOS table (decision 0119), which the app's never-run wineboot would.
 //
-// For RDR2's play (decision 0124), once the app saw the game sign in to Social
-// Club, it ends the Rockstar Games Launcher's processes one by one (never the game
-// or a process under it, launcher_end.h), each logged as a `[launcher]` line.
+// For RDR2's play (decision 0125, amending 0124), at the game's first frame, it ends
+// the Rockstar Games Launcher's tree one process at a time (never the game or a process
+// under it, launcher_end.h), each logged as a `[launcher]` line, then counts and logs
+// every start of the launcher's images (the job's messages) and ends the first restarts
+// once more.
 //
 // For a play served by Playport's steamclient64.dll (decision 0115), it is the
 // prefix's running Steam client: its process id is ActiveProcess's pid, which a
@@ -312,73 +314,185 @@ static DWORD close_title(const DWORD *pids, DWORD n)
     return c.posted;
 }
 
-/* --- the launcher, once the game signed in (decision 0124, launcher_end.h) */
+/* --- the launcher, at the game's first frame (decisions 0124, 0125, launcher_end.h) */
 
 #define MAX_PROCS 512
-#define MAX_LAUNCHER_ENDED 32
+#define MAX_LAUNCHER_KNOWN 64
 
-static uint32_t launcher_ended[MAX_LAUNCHER_ENDED];   /* wave 1's processes, for wave 2's parent chains */
-static DWORD nlauncher_ended;
-static int launcher_wave2;                            /* wave 2 is due at launcher_wave2_at */
-static DWORD launcher_wave2_at;
+static PROCESSENTRY32W launcher_pe[MAX_PROCS];
+static pp_launcher_proc launcher_lp[MAX_PROCS];
+static uint32_t launcher_known[MAX_LAUNCHER_KNOWN];   /* launcher processes it ended or saw restart */
+static DWORD nlauncher_known;
+static int launcher_ended;                            /* the end ran, at launcher_ended_at */
+static DWORD launcher_ended_at;
+static int launcher_round_done;                       /* restarts were ended once more */
+static DWORD launcher_restarts, launcher_restarts_ended, launcher_restarts_gone, launcher_restarts_left;
+static DWORD launcher_other_starts, launcher_unopened_starts;
 
-/* Ends one wave of the launcher's processes in the title's job (`pids`); how many it ended.
- * Every process the snapshot lists is kept for the parent chains. */
-static DWORD end_launcher_wave(int wave, uint32_t title_seq, const DWORD *pids, DWORD npids)
+/* A new title: nothing of the launcher's end is done yet. */
+static void launcher_reset(void)
 {
-    static PROCESSENTRY32W pe[MAX_PROCS];
-    static pp_launcher_proc lp[MAX_PROCS];
-    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    DWORD n = 0, i, done = 0, kept = 0;
-    char name[MAX_PATH];
+    nlauncher_known = 0;
+    launcher_ended = launcher_round_done = 0;
+    launcher_restarts = launcher_restarts_ended = launcher_restarts_gone = launcher_restarts_left = 0;
+    launcher_other_starts = launcher_unopened_starts = 0;
+}
 
-    if (snap == INVALID_HANDLE_VALUE) {
-        say("%s %u: [launcher] wave %u: no process list (error %u)", what, (unsigned long long)title_seq,
-            (unsigned long long)wave, (unsigned long long)GetLastError());
-        return 0;
-    }
-    memset(&pe[0], 0, sizeof(pe[0]));
-    pe[0].dwSize = sizeof(pe[0]);
-    for (BOOL more = Process32FirstW(snap, &pe[0]); more && n < MAX_PROCS; ) {
-        lp[n].pid = pe[n].th32ProcessID;
-        lp[n].parent = pe[n].th32ParentProcessID;
-        lp[n].name = (const uint16_t *)pe[n].szExeFile;
+static void launcher_know(uint32_t pid)
+{
+    DWORD k;
+    for (k = 0; k < nlauncher_known; k++) if (launcher_known[k] == pid) return;
+    if (nlauncher_known < MAX_LAUNCHER_KNOWN) launcher_known[nlauncher_known++] = pid;
+}
+
+/* Every process, as launcher_lp (names in launcher_pe); how many, 0 with no list. */
+static DWORD launcher_snapshot(void)
+{
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    DWORD n = 0;
+    if (snap == INVALID_HANDLE_VALUE) return 0;
+    memset(&launcher_pe[0], 0, sizeof(launcher_pe[0]));
+    launcher_pe[0].dwSize = sizeof(launcher_pe[0]);
+    for (BOOL more = Process32FirstW(snap, &launcher_pe[0]); more && n < MAX_PROCS; ) {
+        launcher_lp[n].pid = launcher_pe[n].th32ProcessID;
+        launcher_lp[n].parent = launcher_pe[n].th32ParentProcessID;
+        launcher_lp[n].name = (const uint16_t *)launcher_pe[n].szExeFile;
         if (++n == MAX_PROCS) break;
-        memset(&pe[n], 0, sizeof(pe[n]));
-        pe[n].dwSize = sizeof(pe[n]);
-        more = Process32NextW(snap, &pe[n]);
+        memset(&launcher_pe[n], 0, sizeof(launcher_pe[n]));
+        launcher_pe[n].dwSize = sizeof(launcher_pe[n]);
+        more = Process32NextW(snap, &launcher_pe[n]);
     }
     CloseHandle(snap);
-    for (i = 0; i < n; i++) {
-        HANDLE h;
-        int end;
-        if (!pid_in(lp[i].pid, pids, npids)) continue;
-        end = wave == 1 ? pp_launcher_end_first(lp, n, i)
-                        : pp_launcher_end_second(lp, n, i, launcher_ended, nlauncher_ended);
-        if (!WideCharToMultiByte(CP_UTF8, 0, pe[i].szExeFile, -1, name, sizeof(name), NULL, NULL)) name[0] = 0;
-        if (!end) {
-            if (pp_launcher_under_game(lp, n, i)) {
-                kept++;
-                say("%s %u: [launcher] wave %u keeps %s pid %u (the game or under it)", what,
-                    (unsigned long long)title_seq, (unsigned long long)wave, name, (unsigned long long)lp[i].pid);
-            }
-            continue;
-        }
-        if ((h = OpenProcess(PROCESS_TERMINATE, FALSE, lp[i].pid)) && TerminateProcess(h, ERROR_PROCESS_ABORTED)) {
-            done++;
-            if (wave == 1 && nlauncher_ended < MAX_LAUNCHER_ENDED) launcher_ended[nlauncher_ended++] = lp[i].pid;
-            say("%s %u: [launcher] wave %u ended %s pid %u", what, (unsigned long long)title_seq,
-                (unsigned long long)wave, name, (unsigned long long)lp[i].pid);
-        } else {
-            say("%s %u: [launcher] wave %u could not end %s pid %u (error %u)", what, (unsigned long long)title_seq,
-                (unsigned long long)wave, name, (unsigned long long)lp[i].pid, (unsigned long long)GetLastError());
-        }
-        if (h) CloseHandle(h);
+    return n;
+}
+
+/* Ends the launcher's tree in the title's job (`pids`) in one step, the launcher and its
+ * error handler first; once more (`again`) also its restarts. How many it ended. */
+static DWORD end_launcher(uint32_t title_seq, const DWORD *pids, DWORD npids, int again)
+{
+    const char *step = again ? "once more" : "end";
+    DWORD n = launcher_snapshot(), i, done = 0, kept = 0;
+    int pass;
+    char name[MAX_PATH];
+
+    if (!n) {
+        say("%s %u: [launcher] %s: no process list (error %u)", what, (unsigned long long)title_seq, step,
+            (unsigned long long)GetLastError());
+        return 0;
     }
-    say("%s %u: [launcher] wave %u done: %u ended, %u kept as the game's, of %u processes in the job", what,
-        (unsigned long long)title_seq, (unsigned long long)wave, (unsigned long long)done, (unsigned long long)kept,
+    for (pass = 0; pass < 2; pass++)
+        for (i = 0; i < n; i++) {
+            HANDLE h;
+            int end;
+            if (!pid_in(launcher_lp[i].pid, pids, npids)) continue;
+            end = pass == 0 ? pp_launcher_main(launcher_lp, n, i)
+                            : !pp_launcher_main(launcher_lp, n, i) &&
+                              (pp_launcher_helper(launcher_lp, n, i) ||
+                               (again && pp_launcher_restart(launcher_lp, n, i, launcher_known, nlauncher_known)));
+            if (!WideCharToMultiByte(CP_UTF8, 0, launcher_pe[i].szExeFile, -1, name, sizeof(name), NULL, NULL)) name[0] = 0;
+            if (!end) {
+                if (pass == 1 && pp_launcher_under_game(launcher_lp, n, i)) {
+                    kept++;
+                    say("%s %u: [launcher] %s keeps %s pid %u (the game or under it)", what,
+                        (unsigned long long)title_seq, step, name, (unsigned long long)launcher_lp[i].pid);
+                }
+                continue;
+            }
+            if ((h = OpenProcess(PROCESS_TERMINATE, FALSE, launcher_lp[i].pid)) && TerminateProcess(h, ERROR_PROCESS_ABORTED)) {
+                done++;
+                launcher_know(launcher_lp[i].pid);
+                say("%s %u: [launcher] %s ended %s pid %u", what, (unsigned long long)title_seq, step, name,
+                    (unsigned long long)launcher_lp[i].pid);
+            } else {
+                say("%s %u: [launcher] %s could not end %s pid %u (error %u)", what, (unsigned long long)title_seq,
+                    step, name, (unsigned long long)launcher_lp[i].pid, (unsigned long long)GetLastError());
+            }
+            if (h) CloseHandle(h);
+        }
+    say("%s %u: [launcher] %s done: %u ended, %u kept as the game's, of %u processes in the job", what,
+        (unsigned long long)title_seq, step, (unsigned long long)done, (unsigned long long)kept,
         (unsigned long long)npids);
     return done;
+}
+
+/* A process's parent id, from ProcessBasicInformation (ntdll's, looked up); 0 unknown. */
+static DWORD parent_of(HANDLE h)
+{
+    typedef LONG (WINAPI *query_fn)(HANDLE, ULONG, void *, ULONG, ULONG *);
+    static query_fn query;
+    struct { LONG_PTR exit_status; void *peb; ULONG_PTR affinity; LONG_PTR priority; ULONG_PTR pid, parent; } info;
+    if (!query) query = (query_fn)(void *)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryInformationProcess");
+    if (!query || query(h, 0 /* ProcessBasicInformation */, &info, sizeof(info), NULL)) return 0;
+    return (DWORD)info.parent;
+}
+
+/* A process the title's job got after the end (JOB_OBJECT_MSG_NEW_PROCESS): counted and
+ * logged if it is the launcher's restart, which the first time one still runs is ended
+ * once more, with the launcher's tree. */
+static void launcher_new_process(uint32_t title_seq, DWORD pid, HANDLE job, DWORD title)
+{
+    HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    WCHAR path[MAX_PATH];
+    DWORD len = MAX_PATH, n, exit_code = 0, parent;
+    const WCHAR *base = path;
+    char name[MAX_PATH];
+    int i, running;
+
+    if (!h) {
+        launcher_unopened_starts++;
+        say("%s %u: [launcher] after the end: pid %u started and could not be opened (error %u)", what,
+            (unsigned long long)title_seq, (unsigned long long)pid, (unsigned long long)GetLastError());
+        return;
+    }
+    if (!QueryFullProcessImageNameW(h, 0, path, &len)) len = 0;
+    path[len < MAX_PATH ? len : MAX_PATH - 1] = 0;
+    for (const WCHAR *c = path; *c; c++) if (*c == '\\' || *c == '/') base = c + 1;
+    parent = parent_of(h);
+    running = GetExitCodeProcess(h, &exit_code) && exit_code == STILL_ACTIVE;
+    CloseHandle(h);
+    n = launcher_snapshot();
+    if ((i = pp_launcher_find(launcher_lp, n, pid)) < 0 && n < MAX_PROCS) {
+        launcher_lp[n].pid = pid;
+        launcher_lp[n].parent = parent;
+        launcher_lp[n].name = (const uint16_t *)base;
+        i = (int)n++;
+    }
+    if (i < 0 || !pp_launcher_restart(launcher_lp, n, (uint32_t)i, launcher_known, nlauncher_known)) {
+        launcher_other_starts++;
+        return;
+    }
+    launcher_restarts++;
+    launcher_know(pid);
+    if (!WideCharToMultiByte(CP_UTF8, 0, base, -1, name, sizeof(name), NULL, NULL)) name[0] = 0;
+    if (pp_launcher_restart_action(running, launcher_round_done) == PP_LAUNCHER_RESTART_END) {
+        DWORD pids[MAX_PIDS], npids = title_pids(job, title, pids);
+        say("%s %u: [launcher] restart %u: %s pid %u (parent %u) %u ms after the end, running: ending the "
+            "launcher once more, the last time", what, (unsigned long long)title_seq,
+            (unsigned long long)launcher_restarts, name, (unsigned long long)pid, (unsigned long long)parent,
+            (unsigned long long)(GetTickCount() - launcher_ended_at));
+        launcher_round_done = 1;
+        launcher_restarts_ended += end_launcher(title_seq, pids, npids, 1);
+        return;
+    }
+    if (running) launcher_restarts_left++;
+    else launcher_restarts_gone++;
+    say("%s %u: [launcher] restart %u: %s pid %u (parent %u) %u ms after the end, %s", what,
+        (unsigned long long)title_seq, (unsigned long long)launcher_restarts, name, (unsigned long long)pid,
+        (unsigned long long)parent, (unsigned long long)(GetTickCount() - launcher_ended_at),
+        running ? "running: left running (it was ended once more already)" : "already gone");
+    if (!running) say("%s %u: [launcher] restart %u ended with %x", what, (unsigned long long)title_seq,
+                      (unsigned long long)launcher_restarts, (unsigned long long)exit_code);
+}
+
+/* The job's messages since the last look: after the end, every process it got. */
+static void watch_launcher(uint32_t title_seq, HANDLE port, HANDLE job, DWORD title)
+{
+    DWORD msg;
+    ULONG_PTR key;
+    LPOVERLAPPED ov;
+    while (port && GetQueuedCompletionStatus(port, &msg, &key, &ov, 0))
+        if (msg == JOB_OBJECT_MSG_NEW_PROCESS && launcher_ended)
+            launcher_new_process(title_seq, (DWORD)(ULONG_PTR)ov, job, title);
 }
 
 /* One control, if the host wrote one: acts on it and answers. A CLOSE sets
@@ -421,15 +535,15 @@ static void control(uint32_t title_seq, HANDLE job, DWORD title, int *closing, D
             (unsigned long long)title_seq, (unsigned long long)done, (unsigned long long)npids, (unsigned long long)c.arg);
         break;
     case PP_CONTROL_END_LAUNCHER:
-        if (nlauncher_ended || launcher_wave2) {
+        if (launcher_ended) {
             say("%s %u: [launcher] already ended once; nothing more", what, (unsigned long long)title_seq);
             break;
         }
-        say("%s %u: [launcher] the game signed in: ending the launcher, its Social Club helpers in %u s", what,
-            (unsigned long long)title_seq, (unsigned long long)(PP_LAUNCHER_END_WAVE2_MS / 1000));
-        done = end_launcher_wave(1, title_seq, pids, npids);
-        launcher_wave2 = 1;
-        launcher_wave2_at = GetTickCount() + PP_LAUNCHER_END_WAVE2_MS;
+        say("%s %u: [launcher] the game's first frame: ending the launcher, its error handler and its Social "
+            "Club helpers, never the game", what, (unsigned long long)title_seq);
+        launcher_ended = 1;
+        launcher_ended_at = GetTickCount();
+        done = end_launcher(title_seq, pids, npids, 0);
         break;
     }
     reply_to(control_reply_path, control_reply_tmp, c.sequence, PP_CONTROL_DONE, done);
@@ -820,7 +934,7 @@ static void launch(const pp_session_request *r, const char *payload)
     uint32_t i, n = 2 + r->argc + r->envc, error = ERROR_INVALID_DATA;
     STARTUPINFOW si;
     PROCESS_INFORMATION pi;
-    HANDLE job = NULL, err = GetStdHandle(STD_ERROR_HANDLE);
+    HANDLE job = NULL, port = NULL, err = GetStdHandle(STD_ERROR_HANDLE);
     DWORD code = 0, started = GetTickCount(), close_by = 0;
     int closing = 0, answered = 0;
 
@@ -888,6 +1002,20 @@ static void launch(const pp_session_request *r, const char *payload)
         if (job) CloseHandle(job);
         job = NULL;
     }
+    if (job) {
+        /* Every process the job gets, for the launcher's restarts after its end (decision 0125). */
+        JOBOBJECT_ASSOCIATE_COMPLETION_PORT acp;
+        port = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 1);
+        acp.CompletionKey = job;
+        acp.CompletionPort = port;
+        if (!port || !SetInformationJobObject(job, JobObjectAssociateCompletionPortInformation, &acp, sizeof(acp))) {
+            say("%s %u: no job messages (error %u): a launcher's restarts are not counted", what,
+                (unsigned long long)r->sequence, (unsigned long long)GetLastError());
+            if (port) CloseHandle(port);
+            port = NULL;
+        }
+    }
+    launcher_reset();
     ResumeThread(pi.hThread);
     CloseHandle(pi.hThread);
     say("%s %u: started, pid %u", what, (unsigned long long)r->sequence, (unsigned long long)pi.dwProcessId);
@@ -914,11 +1042,7 @@ static void launch(const pp_session_request *r, const char *payload)
         if (w == WAIT_FAILED) { Sleep(100); if (!job || !job_active(job)) break; }
         if (w == WAIT_OBJECT_0) Sleep(50);   /* a launcher that ended before the processes it started */
         control(r->sequence, job, pi.dwProcessId, &closing, &close_by);
-        if (launcher_wave2 && (LONG)(GetTickCount() - launcher_wave2_at) >= 0) {
-            DWORD pids[MAX_PIDS], npids = title_pids(job, pi.dwProcessId, pids);
-            launcher_wave2 = 0;
-            end_launcher_wave(2, r->sequence, pids, npids);
-        }
+        watch_launcher(r->sequence, port, job, pi.dwProcessId);
         if (closing && (LONG)(GetTickCount() - close_by) >= 0) {
             closing = 0;
             say("%s %u: still running after WM_CLOSE; ending it", what, (unsigned long long)r->sequence);
@@ -928,6 +1052,15 @@ static void launch(const pp_session_request *r, const char *payload)
     }
     resume_title();
     DeleteFileW(control_path);
+    watch_launcher(r->sequence, port, job, pi.dwProcessId);
+    if (launcher_ended)
+        say("%s %u: [launcher] after the end: %u restarts of its images (%u processes ended once more, %u already "
+            "gone, %u left running), %u other processes started, %u could not be opened", what,
+            (unsigned long long)r->sequence, (unsigned long long)launcher_restarts,
+            (unsigned long long)launcher_restarts_ended, (unsigned long long)launcher_restarts_gone,
+            (unsigned long long)launcher_restarts_left, (unsigned long long)launcher_other_starts,
+            (unsigned long long)launcher_unopened_starts);
+    if (port) CloseHandle(port);
     if (r->kind == PP_REQUEST_LAUNCH) stop_services();
     if (r->kind == PP_REQUEST_LAUNCH && steam_client_set) steam_client_keys(0, 0, 0);
     if (!GetExitCodeProcess(pi.hProcess, &code)) code = GetLastError();

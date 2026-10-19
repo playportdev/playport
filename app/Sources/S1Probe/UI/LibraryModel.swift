@@ -366,8 +366,8 @@ final class LibraryModel: ObservableObject {
                                        memory: MemoryNeed.of(t, cohort: Self.cohort), epic: epic, galaxy: galaxy,
                                        prerequisites: prerequisites, windowsServices: settings.windowsServices,
                                        jitPoolMB: settings.jitPoolMB,
-                                       // The launcher it starts ends once the game signed in (decision 0124).
-                                       gameSignIn: settings.endLauncherAfterSignIn
+                                       // The launcher it starts ends at the game's first frame (decision 0125).
+                                       endLauncher: settings.endLauncherAtFirstFrame
                                            ? PublisherLauncher.startedBy(game: t.id)?.signIn : nil,
                                        epicOffline: epicOffline,
                                        exhaustionGrace: exhaustionGrace) else {

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-/* Which of the title's processes the session root ends once the game signed in
- * through the Rockstar Games Launcher (PP_CONTROL_END_LAUNCHER, decision 0124).
+/* Which of the title's processes the session root ends of the Rockstar Games
+ * Launcher at the game's first frame (PP_CONTROL_END_LAUNCHER, decision 0125,
+ * amending 0124), and which later starts it counts as the launcher's restarts.
  * The root lists the job's processes with Toolhelp (id, parent id, executable
  * name) and asks this header, which the host test runs too: no library calls.
  *
@@ -8,15 +9,19 @@
  * its own Social Club helpers. So a tree-kill of the launcher would end the
  * game: the root ends processes one at a time, never RDR2.exe or a process
  * whose parent chain reaches it.
- *   wave 1 (at once):  Launcher.exe and RockstarErrorHandler.exe;
- *   wave 2 (10 s on):  SocialClubHelper.exe whose parent chain ends at a
- *                      process wave 1 ended (the launcher's own CEF). */
+ *   the end (one step): Launcher.exe, RockstarErrorHandler.exe and every
+ *                       SocialClubHelper.exe whose parent chain reaches a
+ *                       Launcher.exe (the launcher's own CEF);
+ *   restarts (after):   every start of one of those images not under the game;
+ *                       a Social Club helper counts when its chain reaches a
+ *                       Launcher.exe or a launcher process the root ended or saw
+ *                       restart. The root ends the first restarts it finds still
+ *                       running once more, in one round, and only reports the rest. */
 #ifndef PLAYPORT_LAUNCHER_END_H
 #define PLAYPORT_LAUNCHER_END_H
 
 #include <stdint.h>
 
-#define PP_LAUNCHER_END_WAVE2_MS 10000u
 /* Parent links followed at most: a cycle of reused process ids cannot loop. */
 #define PP_LAUNCHER_END_DEPTH 32u
 
@@ -60,36 +65,71 @@ static inline int pp_launcher_under_game(const pp_launcher_proc *p, uint32_t n, 
     return 0;
 }
 
-/* Whether process i's parent chain reaches one of the `nended` processes wave 1
- * ended (those are gone, so the chain ends at their id). */
-static inline int pp_launcher_from_ended(const pp_launcher_proc *p, uint32_t n, uint32_t i,
-                                         const uint32_t *ended, uint32_t nended)
+/* Whether process i's parent chain reaches one of the `nknown` launcher processes
+ * (ones that are gone end the chain at their id). */
+static inline int pp_launcher_from_known(const pp_launcher_proc *p, uint32_t n, uint32_t i,
+                                         const uint32_t *known, uint32_t nknown)
 {
     uint32_t depth, k;
     int at = (int)i;
     for (depth = 0; at >= 0 && depth < PP_LAUNCHER_END_DEPTH; depth++) {
-        for (k = 0; k < nended; k++) if (p[at].parent == ended[k]) return 1;
+        for (k = 0; k < nknown; k++) if (p[at].parent == known[k]) return 1;
         if (p[at].parent == p[at].pid) break;
         at = pp_launcher_find(p, n, p[at].parent);
     }
     return 0;
 }
 
-/* Whether wave 1 ends process i: the launcher or its error handler, not under the game. */
-static inline int pp_launcher_end_first(const pp_launcher_proc *p, uint32_t n, uint32_t i)
+/* Whether process i is one of the launcher's own Social Club helpers: a
+ * SocialClubHelper.exe whose parent chain reaches a Launcher.exe, not under the
+ * game (the game's own helpers are RDR2.exe's). */
+static inline int pp_launcher_helper(const pp_launcher_proc *p, uint32_t n, uint32_t i)
+{
+    uint32_t depth;
+    int at;
+    if (!pp_launcher_name_is(p[i].name, "SocialClubHelper.exe") || pp_launcher_under_game(p, n, i)) return 0;
+    at = p[i].parent == p[i].pid ? -1 : pp_launcher_find(p, n, p[i].parent);
+    for (depth = 0; at >= 0 && depth < PP_LAUNCHER_END_DEPTH; depth++) {
+        if (pp_launcher_name_is(p[at].name, "Launcher.exe")) return 1;
+        if (p[at].parent == p[at].pid) break;
+        at = pp_launcher_find(p, n, p[at].parent);
+    }
+    return 0;
+}
+
+/* Whether the launcher itself or its error handler, not under the game. */
+static inline int pp_launcher_main(const pp_launcher_proc *p, uint32_t n, uint32_t i)
 {
     return (pp_launcher_name_is(p[i].name, "Launcher.exe") ||
             pp_launcher_name_is(p[i].name, "RockstarErrorHandler.exe")) &&
            !pp_launcher_under_game(p, n, i);
 }
 
-/* Whether wave 2 ends process i: a Social Club helper the ended launcher started,
- * not under the game. */
-static inline int pp_launcher_end_second(const pp_launcher_proc *p, uint32_t n, uint32_t i,
-                                         const uint32_t *ended, uint32_t nended)
+/* Whether the end ends process i: the launcher, its error handler or its own
+ * Social Club helpers, never the game or a process under it. */
+static inline int pp_launcher_end(const pp_launcher_proc *p, uint32_t n, uint32_t i)
 {
+    return pp_launcher_main(p, n, i) || pp_launcher_helper(p, n, i);
+}
+
+/* Whether process i, started after the end, is the launcher's restart: the
+ * launcher or its error handler again, or a Social Club helper of the launcher or
+ * of one of the `nknown` launcher processes the root ended or saw restart. */
+static inline int pp_launcher_restart(const pp_launcher_proc *p, uint32_t n, uint32_t i,
+                                      const uint32_t *known, uint32_t nknown)
+{
+    if (pp_launcher_main(p, n, i) || pp_launcher_helper(p, n, i)) return 1;
     return pp_launcher_name_is(p[i].name, "SocialClubHelper.exe") && !pp_launcher_under_game(p, n, i) &&
-           pp_launcher_from_ended(p, n, i, ended, nended);
+           pp_launcher_from_known(p, n, i, known, nknown);
+}
+
+/* What the root does with a restart: the first ones it finds still running are
+ * ended once more, in one round; any later or already gone are only reported. */
+enum { PP_LAUNCHER_RESTART_REPORT, PP_LAUNCHER_RESTART_END };
+
+static inline int pp_launcher_restart_action(int running, int round_done)
+{
+    return running && !round_done ? PP_LAUNCHER_RESTART_END : PP_LAUNCHER_RESTART_REPORT;
 }
 
 #endif

@@ -109,12 +109,12 @@ extension LaunchSettings {
     /// default): each setting this level has wins, the rest come from `base`. Runtime keys
     /// and Graphics options merge by key (keyItems, decision 0091); Arguments, free text with
     /// no keys, are the person's alone once typed.
-    /// endLauncherAfterSignIn is the compatibility default's alone (decision 0124): a person's
+    /// endLauncherAtFirstFrame is the compatibility default's alone (decisions 0124, 0125): a person's
     /// value is dropped, with or without a default.
     public func over(_ base: LaunchSettings?) -> LaunchSettings {
         guard let base else {
             var own = self
-            own.endLauncherAfterSignIn = nil
+            own.endLauncherAtFirstFrame = nil
             return own
         }
         func text(_ own: String, _ b: String) -> String { own.trimmingCharacters(in: .whitespaces).isEmpty ? b : own }
@@ -127,7 +127,7 @@ extension LaunchSettings {
                               graphicsOptions: Self.keyItems(graphicsOptions, over: base.graphicsOptions),
                               windowsServices: windowsServices ?? base.windowsServices,
                               jitPoolMB: jitPoolMB ?? base.jitPoolMB,
-                              endLauncherAfterSignIn: base.endLauncherAfterSignIn)
+                              endLauncherAtFirstFrame: base.endLauncherAtFirstFrame)
     }
 
     /// `key=value` items as typed (Runtime keys, Graphics options) over the default's: the

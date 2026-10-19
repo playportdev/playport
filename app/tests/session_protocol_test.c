@@ -135,7 +135,7 @@ int main(void)
     CHECK(pp_session_control_valid(&c, sizeof(c)));
     c.arg = PP_CONTROL_MAX_WAIT_MS + 1;
     CHECK(!pp_session_control_valid(&c, sizeof(c)));
-    c.arg = 0; c.kind = PP_CONTROL_END_LAUNCHER;        /* the launch's own, after the game's sign-in (decision 0124) */
+    c.arg = 0; c.kind = PP_CONTROL_END_LAUNCHER;        /* the launch's own, at the game's first frame (decision 0125) */
     CHECK(pp_session_control_valid(&c, sizeof(c)));
     c.arg = 1;
     CHECK(!pp_session_control_valid(&c, sizeof(c)));    /* it carries nothing */

@@ -834,12 +834,15 @@ the game is paused:
   ([madeira-unix 0048](../patches/madeira-unix/0048-wineserver-back-off-the-retry-of-a-hold-deferred-for.patch)).
   Nothing the host's main thread needs is held by a suspended thread, as no
   thread is held inside host code.
-- **The launcher's end.** `PP_CONTROL_END_LAUNCHER` is the launch's own control,
-  not the menu's. Red Dead Redemption 2's Play sends it once the game has signed in through the
-  Rockstar launcher (decision
-  [0124](decisions/0124-end-the-rockstar-launcher-after-the-games-sign-in.md)). The root ends
-  the launcher's processes in the job one at a time, never the game or a process under it
-  (`app/SessionRoot/launcher_end.h`).
+- **The launcher's end.** `PP_CONTROL_END_LAUNCHER` is the launch's own control, not the menu's.
+  Red Dead Redemption 2's Play sends it at the game's first frame (decision
+  [0125](decisions/0125-end-the-whole-rockstar-launcher-at-the-games-first-frame.md), amending
+  [0124](decisions/0124-end-the-rockstar-launcher-after-the-games-sign-in.md)).
+  - The root ends the launcher's tree in the job one process at a time, in one step, never the
+    game or a process under it (`app/SessionRoot/launcher_end.h`).
+  - It then counts every start of the launcher's images from the job's messages
+    (`JOB_OBJECT_MSG_NEW_PROCESS`). The first restart it finds running is ended once more,
+    along with the launcher's tree.
 
 The rows: Resume (also B, ≡ and Home); Screenshot, the last presented
 drawable's texture (`PacedMetalLayer.lastPresented`; DXMT's layer is not
