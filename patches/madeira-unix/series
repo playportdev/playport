@@ -162,3 +162,4 @@
 0162-wineserver-report-only-the-user-CPSR-bits-from-the-M.patch
 0163-ntdll-give-mountmgr.sys-its-unix-side.patch
 0164-virtual-know-FEX-s-4-MiB-call-return-stack-and-1-MiB.patch
+0165-virtual-leave-a-builtin-s-.rsrc-and-.reloc-out-of-it.patch

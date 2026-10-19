@@ -1,0 +1,113 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Mon, 19 Oct 2026 12:58:11 +0200
+Subject: [PATCH] ntdll: find a builtin's resources through its PE view when
+ given its pool copy
+
+On iOS a builtin's code runs from its JIT-pool copy, so winecrt0's
+image_base() (&__ImageBase) is the copy's base, and DllRegisterServer and
+DllGetVersion look up their resources through it. The copy now leaves
+out the image's trailing .rsrc and .reloc (patches/madeira-unix,
+"copy only what code reaches"), so such a lookup would read past the
+copy, into the next one.
+
+LdrFindResourceDirectory_U, LdrFindResource_U and LdrAccessResource now
+turn a module handle inside a pool copy into its PE address with
+xlate_ios_jit_rev, which leaves any other address alone, and log the
+first 16 lookups through the copies of each image. A data-file handle
+is never a copy and is left alone. The i386 build does not change.
+
+Linear: PLA-377
+Class: feature
+Evidence: docs/evidence/2026-10-19-smaller-image-copies.md
+Offered-upstream: no; the JIT pool is the iOS port's
+---
+ dlls/ntdll/resource.c | 54 +++++++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 52 insertions(+), 2 deletions(-)
+
+diff --git a/dlls/ntdll/resource.c b/dlls/ntdll/resource.c
+index 93055f2..a1de4ad 100644
+--- a/dlls/ntdll/resource.c
++++ b/dlls/ntdll/resource.c
+@@ -53,6 +53,55 @@ static inline BOOL is_data_file_module( HMODULE hmod )
+     return (ULONG_PTR)hmod & 1;
+ }
+ 
++#if defined(__aarch64__) || defined(__arm64ec__)
++/**********************************************************************
++ *  resource_module
++ *
++ * iOS (PLA-377): a builtin's code runs from its JIT-pool copy, so winecrt0's
++ * image_base() (&__ImageBase), which DllRegisterServer and DllGetVersion pass
++ * here, is the copy's base. The copy leaves out the image's .rsrc, so a
++ * lookup through it uses the PE view: xlate_ios_jit_rev turns an address in
++ * a copy into its PE address and leaves any other alone. The first 16
++ * lookups through the copies of each image are logged.
++ */
++static HMODULE resource_module( HMODULE hmod )
++{
++    extern void *xlate_ios_jit_rev( void *ptr );
++    static struct { void *base; LONG count; } seen[64];
++    const IMAGE_EXPORT_DIRECTORY *exports;
++    void *pe;
++    unsigned int i;
++    ULONG size;
++    LONG n = 0;
++
++    if (!hmod || ((ULONG_PTR)hmod & 3)) return hmod;  /* a data file is never a copy */
++    pe = xlate_ios_jit_rev( hmod );
++    if (!pe || pe == hmod) return hmod;
++    for (i = 0; i < ARRAY_SIZE(seen); i++)
++    {
++        void *cur = seen[i].base;
++        if (!cur) cur = InterlockedCompareExchangePointer( &seen[i].base, pe, NULL );
++        if (!cur || cur == pe)
++        {
++            n = InterlockedIncrement( &seen[i].count );
++            break;
++        }
++    }
++    if (n && n <= 16)
++    {
++        exports = RtlImageDirectoryEntryToData( pe, TRUE, IMAGE_DIRECTORY_ENTRY_EXPORT, &size );
++        ERR( "[jit-pool] resource lookup through the copy of %s: using the PE view (%p for %p, #%ld)\n",
++             exports && exports->Name ? debugstr_a( (const char *)pe + exports->Name ) : "?", pe, hmod, n );
++    }
++    return pe;
++}
++#else
++static inline HMODULE resource_module( HMODULE hmod )
++{
++    return hmod;
++}
++#endif
++
+ 
+ /**********************************************************************
+  *  find_first_entry
+@@ -214,7 +263,7 @@ NTSTATUS WINAPI DECLSPEC_HOTPATCH LdrFindResourceDirectory_U( HMODULE hmod, cons
+                      level > 1 ? debugstr_w((LPCWSTR)info->Name) : "",
+                      level > 2 ? info->Language : 0, level );
+ 
+-        status = find_entry( hmod, info, level, &res, TRUE );
++        status = find_entry( resource_module( hmod ), info, level, &res, TRUE );
+         if (status == STATUS_SUCCESS) *dir = res;
+     }
+     __EXCEPT_PAGE_FAULT
+@@ -242,7 +291,7 @@ NTSTATUS WINAPI DECLSPEC_HOTPATCH LdrFindResource_U( HMODULE hmod, const LDR_RES
+                      level > 1 ? debugstr_w((LPCWSTR)info->Name) : "",
+                      level > 2 ? info->Language : 0, level );
+ 
+-        status = find_entry( hmod, info, level, &res, FALSE );
++        status = find_entry( resource_module( hmod ), info, level, &res, FALSE );
+         if (status == STATUS_SUCCESS) *entry = res;
+     }
+     __EXCEPT_PAGE_FAULT
+@@ -269,6 +318,7 @@ static inline NTSTATUS access_resource( HMODULE hmod, const IMAGE_RESOURCE_DATA_
+     {
+         ULONG dirsize;
+ 
++        hmod = resource_module( hmod );
+         if (!RtlImageDirectoryEntryToData( hmod, TRUE, IMAGE_DIRECTORY_ENTRY_RESOURCE, &dirsize ))
+             status = STATUS_RESOURCE_DATA_NOT_FOUND;
+         else

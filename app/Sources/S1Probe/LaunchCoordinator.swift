@@ -760,7 +760,7 @@ enum LaunchCoordinator {
                                tailLive: s.tail_live, aliasLive: s.alias_live, aliasSlots: s.alias_slots,
                                aliasCap: s.alias_cap, images: s.images, childCopies: s.child_copies,
                                childBytes: s.child_bytes, headExhausted: s.head_exhausted, tailRefused: s.tail_refused,
-                               tailFatal: s.tail_fatal, aliasFull: s.alias_full)
+                               tailFatal: s.tail_fatal, aliasFull: s.alias_full, headTrimmed: s.head_trimmed)
         }
 
         static func readLimits() -> RuntimeLimits.Counts? {

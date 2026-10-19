@@ -44,3 +44,4 @@
 0045-userenv-keep-the-iOS-runtime-s-variables-in-a-new-en.patch
 0046-ntdll-log-a-write-to-tracked-code-s-exception-once-i.patch
 0047-programs-build-the-host-arch-services-and-conhost-fo.patch
+0048-ntdll-find-a-builtin-s-resources-through-its-PE-view.patch

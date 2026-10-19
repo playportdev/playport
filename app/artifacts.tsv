@@ -439,7 +439,7 @@ resource	Runtime/arm64ec-windows/npmshtml.dll	655360	2d8afc39c46c19bf25c3228ed7d
 resource	Runtime/arm64ec-windows/npptools.dll	655360	d94151d95046e85813c852fe0eceaea617d85a68f7e95eced214f87f2669bac3	wine-build	build-arm64ec/dlls/npptools/arm64ec-windows/npptools.dll	P2
 resource	Runtime/arm64ec-windows/nsi.dll	655360	b3bfc5ab4e985f331eddf8b5f905fa950d4835561f7f2a36b03f0d03d026cd39	wine-build	build-arm64ec/dlls/nsi/arm64ec-windows/nsi.dll	P2
 resource	Runtime/arm64ec-windows/nsiproxy.sys	589824	39a8850226371260533759d6d86587521617de4749b9ef82ba065415d80f679c	wine-build	build-arm64ec/dlls/nsiproxy.sys/arm64ec-windows/nsiproxy.sys	P2
-resource	Runtime/arm64ec-windows/ntdll.dll	1769472	4ca787e209c2f4cede8fc10042fc3a9626b95933af61052d1ba2f5c249100a68	wine-build	build-arm64ec/dlls/ntdll/arm64ec-windows/ntdll.dll	P2-ec
+resource	Runtime/arm64ec-windows/ntdll.dll	1769472	252e824fc2a49924f1b1b9cef79314d405a0994f8e6ca3b041956f031ab00181	wine-build	build-arm64ec/dlls/ntdll/arm64ec-windows/ntdll.dll	P2-ec
 resource	Runtime/arm64ec-windows/ntdsapi.dll	655360	357e376092ea8879e629da7e5cbbf82653921b05d31f84bc424c227556734835	wine-build	build-arm64ec/dlls/ntdsapi/arm64ec-windows/ntdsapi.dll	P2
 resource	Runtime/arm64ec-windows/ntoskrnl.exe	1245184	93a201b2c99922d77e91355159afdb24cc35322bc8c35b1d183f67d9a73fb190	wine-build	build-arm64ec/dlls/ntoskrnl.exe/arm64ec-windows/ntoskrnl.exe	P2
 resource	Runtime/arm64ec-windows/ntprint.dll	720896	a98abf0e26301273d7d60a6c922098dee648fac91dc26b03531abf41a0836471	wine-build	build-arm64ec/dlls/ntprint/arm64ec-windows/ntprint.dll	P2
@@ -1185,7 +1185,7 @@ resource	Runtime/aarch64-windows/npmshtml.dll	524288	da405ba7aae066df943e73cef37
 resource	Runtime/aarch64-windows/npptools.dll	458752	3430c963e620d649fd636affec1fdc58b168afbc26bbe5cfbc4959d089efe678	wine-build	build-macos/dlls/npptools/aarch64-windows/npptools.dll	P2
 resource	Runtime/aarch64-windows/nsi.dll	458752	ff00b30e466beeb8e101a59bca8cf532e276c2498485f497afe59367b479397d	wine-build	build-macos/dlls/nsi/aarch64-windows/nsi.dll	P2
 resource	Runtime/aarch64-windows/nsiproxy.sys	458752	4ce67cba211cec4c3c2b5ccb85b96d1b63b40a2e2755c3241f39bdb074780cb2	wine-build	build-macos/dlls/nsiproxy.sys/aarch64-windows/nsiproxy.sys	P2
-resource	Runtime/aarch64-windows/ntdll.dll	1376256	95d5e8b1de479ff542e8e5e123073620c80eae41c04423b3ce464cd45d797578	wine-build	build-macos/dlls/ntdll/aarch64-windows/ntdll.dll	P2
+resource	Runtime/aarch64-windows/ntdll.dll	1376256	69dfaa8fb7eb9b4e881b5d88f9e2797ab48470416107e4f607367b51d764a764	wine-build	build-macos/dlls/ntdll/aarch64-windows/ntdll.dll	P2
 resource	Runtime/aarch64-windows/ntdsapi.dll	458752	5eb1e991c7bffd43134b214fa2558a81b715647a66a31050d5747accfd3aa7f5	wine-build	build-macos/dlls/ntdsapi/aarch64-windows/ntdsapi.dll	P2
 resource	Runtime/aarch64-windows/ntoskrnl.exe	1048576	b2f8d44d5b732bac6de9522ec23be0700c00c8be9876e6428189683c5e5b58f8	wine-build	build-macos/dlls/ntoskrnl.exe/aarch64-windows/ntoskrnl.exe	P2
 resource	Runtime/aarch64-windows/ntprint.dll	524288	69d1ea67d019487f12c564f6b5c2f192d730fc407f002baebeffc50b834576c9	wine-build	build-macos/dlls/ntprint/aarch64-windows/ntprint.dll	P2
@@ -1978,7 +1978,7 @@ resource	Runtime/i386-windows/npmshtml.dll	32768	16280358b1ae9a6d53ae5b58a18bee8
 resource	Runtime/i386-windows/npptools.dll	36864	f637b26aa8f3036bd0e89e0e72c9307a6b9047d627aa01c7fdd31b651711e0e7	wine-build	build-macos/dlls/npptools/i386-windows/npptools.dll	P2
 resource	Runtime/i386-windows/nsi.dll	45056	44ed128a9f80156e87f1dd8de24dab7ac3ca0b8d622c1379d21f9485fe06afb1	wine-build	build-macos/dlls/nsi/i386-windows/nsi.dll	P2
 resource	Runtime/i386-windows/nsiproxy.sys	32768	63f2090d76fe3497879693a736978cf0bad0f7488511efaacd8d4fccb3967dc6	wine-build	build-macos/dlls/nsiproxy.sys/i386-windows/nsiproxy.sys	P2
-resource	Runtime/i386-windows/ntdll.dll	942080	e704ec7463de20a7d793426b8e6ab4d3968a82d5879dd612620c05da5a663556	wine-build	build-macos/dlls/ntdll/i386-windows/ntdll.dll	P2
+resource	Runtime/i386-windows/ntdll.dll	942080	4315ea2bb3d6fac7953ede36c2c8e0cc4759700d63b0b1f1fd5e035f51ed39e0	wine-build	build-macos/dlls/ntdll/i386-windows/ntdll.dll	P2
 resource	Runtime/i386-windows/ntdsapi.dll	61440	91a42f7a3112713e51b84d660b4fff5c15150db39036e483065e29098135749c	wine-build	build-macos/dlls/ntdsapi/i386-windows/ntdsapi.dll	P2
 resource	Runtime/i386-windows/ntoskrnl.exe	679936	c570161f2190a0712a747a3434dcf601701cbf42987ac3c0a18b010868668f68	wine-build	build-macos/dlls/ntoskrnl.exe/i386-windows/ntoskrnl.exe	P2
 resource	Runtime/i386-windows/ntprint.dll	45056	0f891342b8309612b84343f4d732bf85b0b7a7c5033fa184ec83a52531c8e39a	wine-build	build-macos/dlls/ntprint/i386-windows/ntprint.dll	P2
@@ -5368,7 +5368,7 @@ resource	Runtime/mono/wine-mono-11.3.0/support/removeuserinstalls-x86.exe	12288	
 resource	Runtime/mono/wine-mono-11.3.0/support/removeuserinstalls-x86_64.exe	14848	716081b9913e005f0e1261f2c2a9d88da970fbe579c7dfd083774b228bd71675	wine-mono	support/removeuserinstalls-x86_64.exe	wine-mono
 resource	Runtime/mono/wine-mono-11.3.0/support/winemono-support.cab	1395918	857cb2bc7001aa6b94a90560a6996f7cf9fe3ebff72ac39e73ed5d05f83b78f4	wine-mono	support/winemono-support.cab	wine-mono
 resource	Runtime/mono/wine-mono-11.3.0/support/winemono-support.msi	22528	0567d9569c9ca7f678c7ccd4a5ccffbd9dc7bdd3c632ce204afaf7068bf9c2db	wine-mono	support/winemono-support.msi	wine-mono
-link	lib/libntdll_unix.a	4743200	b81d741a237c98a7830536a2a5cba15d2078753a9e146ee0fded2b2b45b9585e	unix	mythic/app/Madeira/libntdll_unix.a	P3
+link	lib/libntdll_unix.a	4744824	5044ca01d7fa11b0ce18ebc73cce0de28489a3e4af304ff772c4e9563c8d4fce	unix	mythic/app/Madeira/libntdll_unix.a	P3
 link	lib/libwin32u_unix.a	4122352	6f34a230bab2b69b4061d141e1cc3f85d5ab20a0d6bbf9886858581d3b07871c	unix	mythic/app/Madeira/libwin32u_unix.a	P4-win32u
 link	lib/libwineserver.a	1219560	da82ce87d7c587d6b87daaa22f2bbcdf8a5b10453eb11bd15bb31d0a83932a51	unix	mythic/app/Madeira/libwineserver.a	P4-server
 link	lib/libgnutls.a	3603280	e9fb697d624bb63d1c89e8569f1a8e0e69e576175407853bf34a6279fa1673b3	unix	mythic/toolchains/gnutls-ios/lib/libgnutls.a	P4-crypto

@@ -1033,7 +1033,7 @@ final class JitPoolTests: XCTestCase {
                               tailLive: 128 * mib, aliasLive: 5, aliasSlots: 6, aliasCap: 4096, images: 50)
         XCTAssertEqual(use.line, "pool: size_mb=896 head_mb=153 head_live_mb=150 head_free_mb=0 tail_mb=144 "
                        + "tail_live_mb=128 room_mb=599 alias=5 alias_slots=6 alias_cap=4096 images=50 children=0 "
-                       + "children_mb=0 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none")
+                       + "children_mb=0 trimmed_mb=0 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none")
         XCTAssertNil(use.exhaustion)
         use.tailRefused = 3   // FEX asks again for half: not exhausted
         XCTAssertNil(use.exhaustion)
@@ -1044,6 +1044,8 @@ final class JitPoolTests: XCTestCase {
         XCTAssertTrue(use.line.hasSuffix(" exhausted=head"))
         XCTAssertEqual(JitPool.Use(size: 1, head: 0, tail: 0, aliasFull: 1).exhaustion, .alias)
         XCTAssertEqual(JitPool.Use(size: 10 * mib, head: 8 * mib, tail: 4 * mib).room, 0)
+        XCTAssertTrue(JitPool.Use(size: 896 * mib, head: 0, tail: 0, headTrimmed: 155 * mib + 1).line
+            .contains(" trimmed_mb=156 "))
     }
 
     func testANewLineOnlyWhenTheUseMoved() {

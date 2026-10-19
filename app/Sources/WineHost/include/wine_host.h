@@ -168,13 +168,16 @@ int wine_host_session_control(int kind, unsigned wait_ms, int timeout_ms, unsign
  * pseudo-processes. The last four count refusals a guest sees as failures:
  * the head had no room (head_exhausted), the tail refused a code buffer
  * (tail_refused; tail_fatal for one of 1 MiB or less, after which FEX
- * faults), the alias table had no slot (alias_full). 0 on success, -1 until
+ * faults), the alias table had no slot (alias_full). head_trimmed is the
+ * bytes image copies left out of their images (their trailing .rsrc and
+ * .reloc, PLA-377) since the runtime started. 0 on success, -1 until
  * the runtime has taken the pool (as the first guest process starts). Added in ABI 1 without changing any
- * existing call. */
+ * existing call; head_trimmed added at its end without changing one. */
 typedef struct {
     unsigned long long size, head, head_live, head_free, tail, tail_live;
     unsigned long long alias_live, alias_slots, alias_cap, images, child_copies, child_bytes;
     unsigned long long head_exhausted, tail_refused, tail_fatal, alias_full;
+    unsigned long long head_trimmed;
 } wine_host_pool_stats;
 int wine_host_pool_stats_read(wine_host_pool_stats *out);
 

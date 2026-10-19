@@ -1,0 +1,649 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Mon, 19 Oct 2026 12:59:37 +0200
+Subject: [PATCH] virtual: leave a builtin's .rsrc and .reloc out of its
+ JIT-pool copy
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Every pseudo-process gets its own pool copy of each image it loads
+(decision 0019), and the copy took the whole SizeOfImage. In the RDR2
+play that ran the pool's head out (PLA-377), 155.6 MiB of its 535 MiB
+were the builtins' trailing .rsrc and .reloc, which no code reaches:
+shell32's copy was 9.9 MiB for 0.56 MiB of code.
+
+A copy now ends after the last section code may reach
+(ios_copy_extent.h, shared with build/wow64/copy_extent_test.c): the
+trailing sections that are neither executable nor writable and hold the
+resource directory, or are discardable, and hold no other data
+directory are left out. ntdll keeps its whole image: its child copies
+relocate from their own bytes.
+
+- A mapping keeps two sizes: size is the copy's bytes, which
+  translation, the FEX alias push, the IAT sync and the scans of the copy
+  use, so an address past it keeps its PE address and reads the PE view;
+  image_size is SizeOfImage, which the already-copied containment test,
+  ml352's stale check, the stale purge on add and the module name use.
+- The copy path and the IAT sync read the relocations from the PE view,
+  skip a fixup the copy does not hold, and point a pointer into the part
+  left out at the PE view.
+- The `[jit-pool] image` line carries `copy=0x… of 0x…`, and
+  ios_jit_pool_stats a 17th field, head_trimmed: the bytes copies left
+  out.
+
+ntdll's resource functions find resources through the PE view when given
+a copy's base (patches/wine-pe, "find a builtin's resources through its
+PE view").
+
+Linear: PLA-377
+Class: feature
+Evidence: docs/evidence/2026-10-19-smaller-image-copies.md
+Offered-upstream: no; the JIT pool is the iOS port's
+---
+ build/ntdll-unix/ios_copy_extent.h | 115 ++++++++++++++++++++
+ build/ntdll-unix/virtual_ios.c     | 166 +++++++++++++++++++----------
+ 2 files changed, 227 insertions(+), 54 deletions(-)
+ create mode 100644 build/ntdll-unix/ios_copy_extent.h
+
+diff --git a/build/ntdll-unix/ios_copy_extent.h b/build/ntdll-unix/ios_copy_extent.h
+new file mode 100644
+index 0000000..3634bbd
+--- /dev/null
++++ b/build/ntdll-unix/ios_copy_extent.h
+@@ -0,0 +1,115 @@
++/* What of a PE image its JIT-pool copy needs, shared with the copy-extent test.
++ * SPDX-License-Identifier: LGPL-2.1-or-later
++ */
++#ifndef IOS_COPY_EXTENT_H
++#define IOS_COPY_EXTENT_H
++#include <stddef.h>
++#include <stdint.h>
++#include <string.h>
++
++#define IOS_SCN_MEM_DISCARDABLE 0x02000000u
++#define IOS_SCN_MEM_EXECUTE     0x20000000u
++#define IOS_SCN_MEM_WRITE       0x80000000u
++#define IOS_DIR_RESOURCE  2
++#define IOS_DIR_SECURITY  4   /* a file offset, not an RVA */
++#define IOS_DIR_BASERELOC 5
++
++static inline uint32_t ios_copy_extent_u32( const unsigned char *p )
++{
++    uint32_t v;
++    memcpy( &v, p, sizeof(v) );
++    return v;
++}
++
++static inline uint16_t ios_copy_extent_u16( const unsigned char *p )
++{
++    uint16_t v;
++    memcpy( &v, p, sizeof(v) );
++    return v;
++}
++
++/* Whether no code reaches section `sec` through a pool copy: it is neither
++ * executable nor writable, holds the resource directory (ntdll's resource
++ * functions read it through the PE view) or is discardable (the base
++ * relocations, which the copy path reads from the PE view, and debug info),
++ * and holds no other data directory. */
++static inline int ios_copy_extent_unreached( const unsigned char *sec, const unsigned char *dirs,
++                                             unsigned int ndirs )
++{
++    uint32_t start = ios_copy_extent_u32( sec + 12 );
++    uint32_t vsize = ios_copy_extent_u32( sec + 8 );
++    uint32_t end = start + (vsize ? vsize : ios_copy_extent_u32( sec + 16 ));
++    uint32_t chars = ios_copy_extent_u32( sec + 36 );
++    int resources = 0;
++    unsigned int d;
++
++    if (chars & (IOS_SCN_MEM_EXECUTE | IOS_SCN_MEM_WRITE)) return 0;
++    for (d = 0; d < ndirs; d++)
++    {
++        uint32_t rva = ios_copy_extent_u32( dirs + d * 8 );
++        if (d == IOS_DIR_SECURITY || !rva || rva < start || rva >= end) continue;
++        if (d == IOS_DIR_RESOURCE) resources = 1;
++        else if (d != IOS_DIR_BASERELOC) return 0;
++    }
++    return resources || (chars & IOS_SCN_MEM_DISCARDABLE);
++}
++
++/* The bytes of the image at `image` (mapped, RVA == offset; image_size its
++ * SizeOfImage) a pool copy needs: the end of its last section that code may
++ * reach, rounded up to `page` and at most image_size. The sections left out
++ * are the trailing ones no code reaches (ios_copy_extent_unreached), with
++ * nothing after them but each other: a builtin's .rsrc and .reloc. Returns
++ * image_size when none is left out or the headers cannot be read (only PE32+
++ * images are trimmed). */
++static inline size_t ios_copy_extent( const unsigned char *image, size_t image_size, size_t page )
++{
++    uint32_t lfanew, ndirs, cut, kept_end;
++    uint16_t nsec, optsz;
++    const unsigned char *opt, *dirs, *secs;
++    unsigned int i;
++    size_t extent;
++
++    if (!image || image_size < 0x40 || image[0] != 'M' || image[1] != 'Z') return image_size;
++    lfanew = ios_copy_extent_u32( image + 0x3c );
++    if ((size_t)lfanew + 24 + 112 > image_size) return image_size;
++    if (memcmp( image + lfanew, "PE\0\0", 4 )) return image_size;
++    nsec = ios_copy_extent_u16( image + lfanew + 6 );
++    optsz = ios_copy_extent_u16( image + lfanew + 20 );
++    opt = image + lfanew + 24;
++    if (ios_copy_extent_u16( opt ) != 0x20b || optsz < 112) return image_size;
++    if ((size_t)lfanew + 24 + optsz + (size_t)nsec * 40 > image_size) return image_size;
++    ndirs = ios_copy_extent_u32( opt + 108 );
++    if (ndirs > 16) ndirs = 16;
++    if (112 + ndirs * 8 > optsz) ndirs = (optsz - 112) / 8;
++    dirs = opt + 112;
++    secs = opt + optsz;
++
++    /* walk back from the highest section while each one is unreached */
++    cut = (uint32_t)image_size;
++    for (;;)
++    {
++        const unsigned char *last = NULL;
++        for (i = 0; i < nsec; i++)
++        {
++            uint32_t start = ios_copy_extent_u32( secs + i * 40 + 12 );
++            if (start < cut && (!last || start > ios_copy_extent_u32( last + 12 ))) last = secs + i * 40;
++        }
++        if (!last || !ios_copy_extent_unreached( last, dirs, ndirs )) break;
++        cut = ios_copy_extent_u32( last + 12 );
++    }
++    if (cut >= image_size) return image_size;
++
++    kept_end = ios_copy_extent_u32( opt + 60 );   /* SizeOfHeaders */
++    for (i = 0; i < nsec; i++)
++    {
++        const unsigned char *sec = secs + i * 40;
++        uint32_t start = ios_copy_extent_u32( sec + 12 );
++        uint32_t vsize = ios_copy_extent_u32( sec + 8 );
++        uint32_t end = start + (vsize ? vsize : ios_copy_extent_u32( sec + 16 ));
++        if (start < cut && end > kept_end) kept_end = end;
++    }
++    if (kept_end > cut) return image_size;   /* a kept section overlaps a left-out one */
++    extent = ((size_t)kept_end + page - 1) & ~(page - 1);
++    return extent < image_size ? extent : image_size;
++}
++#endif
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index f756a31..4ac34fd 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -122,6 +122,7 @@ extern kern_return_t vm_protect(mach_port_t target_task, vm_address_t address,
+ #define VPROT_WOW64_DATA 0x8000 /* a data section's view (file or pagefile backed) */
+ #define VPROT_X64_IMAGE 0x10000 /* pure x86-64 image: logical EXEC only, no pool copy */
+ #include "ios_process_image.h"
++#include "ios_copy_extent.h"
+ #include "wine/debug.h"
+ 
+ /* ml648: the Mono-bridge alias table is defined further down, but the anon-alias
+@@ -158,7 +159,18 @@ WINE_DECLARE_DEBUG_CHANNEL(virtual_ranges);
+ struct ios_jit_mapping {
+     void *pe_base;      /* Original PE image base address (unix mapping) */
+     void *jit_base;     /* JIT pool RX address */
+-    size_t size;        /* Size of the mapping */
++    size_t size;        /* Playport (PLA-377): the bytes the pool copy holds. A
++                         * builtin's copy leaves out its trailing .rsrc and
++                         * .reloc (ios_copy_extent.h), so this can be less
++                         * than image_size. Translation (PE to pool and back),
++                         * the FEX alias push, the IAT sync and every scan of
++                         * the copy use it: an address past it keeps its PE
++                         * address and reads the PE view. */
++    size_t image_size;  /* Playport (PLA-377): SizeOfImage, the PE view's
++                         * extent. What names the image (the already-copied
++                         * containment test, ml352's stale check, the stale
++                         * purge on add, ios_pe_module_name on the PE view)
++                         * uses it. */
+     size_t text_offset; /* Offset of .text section within image */
+     size_t text_size;   /* Size of .text section (0 if unknown) */
+     uint64_t pe_image_base; /* PE optional header ImageBase */
+@@ -201,9 +213,11 @@ static size_t jit_pool_offset = 0;
+  * tail refused (tail_fatal: one of 1 MiB or less, the smallest FEX asks for
+  * before it faults at 0xdead), and a guest JIT region the anonymous-alias
+  * table had no slot for. child_copies and child_copy_bytes count the private
+- * ntdll copies pseudo-processes made. */
++ * ntdll copies pseudo-processes made. head_trimmed counts the bytes image
++ * copies left out of their SizeOfImage (PLA-377, ios_copy_extent.h). */
+ static volatile unsigned long ios_pool_head_exhausted, ios_pool_tail_refused, ios_pool_tail_fatal,
+-                              ios_pool_alias_full, ios_pool_child_copies, ios_pool_child_copy_bytes;
++                              ios_pool_alias_full, ios_pool_child_copies, ios_pool_child_copy_bytes,
++                              ios_pool_head_trimmed;
+ 
+ /* Playport: the runtime's known limits that no measured title reaches, counted
+  * so a title that does shows up in its launch's result (ios_runtime_limit_stats):
+@@ -330,7 +344,7 @@ void ios_jit_describe_pool_addr( const void *addr, char *buf, size_t buflen )
+             snprintf( buf, buflen,
+                       "%s pool off=0x%lx -> LIVE mapping[%d] %s pe=%p jit=%p+0x%lx owner=%p",
+                       which, (unsigned long)off, i,
+-                      ios_pe_module_name( ios_jit_mappings[i].pe_base, sz ),
++                      ios_pe_module_name( ios_jit_mappings[i].pe_base, ios_jit_mappings[i].image_size ),
+                       ios_jit_mappings[i].pe_base, (void *)jb, (unsigned long)sz,
+                       ios_jit_mappings[i].owner_peb );
+             return;
+@@ -1389,7 +1403,7 @@ static void ios_pool_owner_search( const uint64_t *wanted, unsigned nwanted )
+                     {
+                         dprintf(2, "[pool-owner] CLUSTER in %s: 0x%llx at +0x%lx and 0x%llx at +0x%lx\n",
+                                 ios_pe_module_name( ios_jit_mappings[mi].pe_base,
+-                                                    ios_jit_mappings[mi].size ),
++                                                    ios_jit_mappings[mi].image_size ),
+                                 (unsigned long long)last_val, (unsigned long)last_off,
+                                 (unsigned long long)v, (unsigned long)off);
+                         reported++;
+@@ -3047,11 +3061,13 @@ static unsigned ios_tail_other_live_processes( void )
+  *   10 child_copies  private ntdll copies made for pseudo-processes
+  *   11 child_bytes   the pool those copies took
+  *   12 head_exhausted, 13 tail_refused, 14 tail_fatal, 15 alias_full: refusals
++ *   16 head_trimmed  the bytes image copies left out (their trailing .rsrc and
++ *                    .reloc), since the start: the head they did not take
+  * Returns how many it wrote (at most n); 0 before the pool is set up. */
+ int ios_jit_pool_stats( unsigned long long *v, int n )
+ {
+     extern size_t ios_jit_pool_size_global;
+-    unsigned long long f[16];
++    unsigned long long f[17];
+     size_t live = 0, freed = 0, tail_live = 0;
+     int i, alias = 0, images = 0, k;
+ 
+@@ -3082,7 +3098,8 @@ int ios_jit_pool_stats( unsigned long long *v, int n )
+     f[13] = ios_pool_tail_refused;
+     f[14] = ios_pool_tail_fatal;
+     f[15] = ios_pool_alias_full;
+-    k = n < 16 ? n : 16;
++    f[16] = ios_pool_head_trimmed;
++    k = n < 17 ? n : 17;
+     for (i = 0; i < k; i++) v[i] = f[i];
+     return k;
+ }
+@@ -3355,7 +3372,7 @@ static void ios_alias_forget_process( void *peb )
+     pthread_rwlock_unlock( &ios_alias_cb_lock );
+ }
+ 
+-void ios_jit_add_mapping(void *pe_base, void *jit_base, size_t size)
++void ios_jit_add_mapping(void *pe_base, void *jit_base, size_t size, size_t image_size)
+ {
+     int i;
+ 
+@@ -3380,14 +3397,15 @@ void ios_jit_add_mapping(void *pe_base, void *jit_base, size_t size)
+         uintptr_t eb = (uintptr_t)ios_jit_mappings[i].pe_base;
+         uintptr_t nb = (uintptr_t)pe_base;
+         if (!ios_jit_mappings[i].pe_base) continue;
+-        if (eb < nb + size && nb < eb + ios_jit_mappings[i].size)
++        if (eb < nb + image_size && nb < eb + ios_jit_mappings[i].image_size)
+         {
+             dprintf(2, "[jit-pool] STALE image mapping purged on add: pe=%p+0x%lx jit=%p owner=%p"
+                     " (overlaps new image %p+0x%lx)\n",
+-                    (void *)eb, (unsigned long)ios_jit_mappings[i].size,
++                    (void *)eb, (unsigned long)ios_jit_mappings[i].image_size,
+                     ios_jit_mappings[i].jit_base, ios_jit_mappings[i].owner_peb,
+-                    pe_base, (unsigned long)size);
++                    pe_base, (unsigned long)image_size);
+             ios_jit_mappings[i].size = 0;
++            ios_jit_mappings[i].image_size = 0;
+             __sync_synchronize();
+             ios_jit_mappings[i].pe_base = NULL;
+         }
+@@ -3419,6 +3437,7 @@ void ios_jit_add_mapping(void *pe_base, void *jit_base, size_t size)
+         }
+         ios_jit_mappings[slot].jit_base = jit_base;
+         ios_jit_mappings[slot].size = size;
++        ios_jit_mappings[slot].image_size = image_size;
+         ios_jit_mappings[slot].text_offset = 0;
+         ios_jit_mappings[slot].text_size = 0;
+         ios_jit_mappings[slot].pe_image_base = 0;
+@@ -3430,7 +3449,7 @@ void ios_jit_add_mapping(void *pe_base, void *jit_base, size_t size)
+         ios_jit_mappings[slot].machine_cached = 0;   /* ml349: slot reuse invalidates memo */
+         ios_jit_mappings[slot].machine_valid = 0;
+         {
+-            const char *name = ios_pe_module_name( pe_base, size );
++            const char *name = ios_pe_module_name( pe_base, image_size );
+             ios_jit_mappings[slot].is_fex = !strcmp( name, "libarm64ecfex.dll" ) ||
+                                             !strcmp( name, "libwow64fex.dll" );
+         }
+@@ -3587,7 +3606,7 @@ void ios_resolve_fex_exports( void )
+     {
+         void *rip_cb, *rel_cb;
+         const char *nm = ios_pe_module_name( ios_jit_mappings[i].pe_base,
+-                                             ios_jit_mappings[i].size );
++                                             ios_jit_mappings[i].image_size );
+         if (!nm) continue;
+         if (!strstr( nm, "xtajit64" ) && !strstr( nm, "arm64ecfex" )) continue;
+ 
+@@ -4618,9 +4637,9 @@ unsigned long long ios_jit_module_base_for_va(unsigned long long va, unsigned lo
+     for (i = 0; i < ios_jit_mapping_count; i++)
+     {
+         uintptr_t b = (uintptr_t)ios_jit_mappings[i].pe_base;
+-        if (va >= b && va < b + ios_jit_mappings[i].size)
++        if (va >= b && va < b + ios_jit_mappings[i].image_size)
+         {
+-            if (size_out) *size_out = ios_jit_mappings[i].size;
++            if (size_out) *size_out = ios_jit_mappings[i].image_size;
+             return b;
+         }
+     }
+@@ -8660,6 +8679,7 @@ void ios_jit_reclaim_process( void *peb )
+                     dead_alias_count++;
+                 }
+                 ios_jit_mappings[j].size = 0;
++                ios_jit_mappings[j].image_size = 0;
+                 __sync_synchronize();
+                 ios_jit_mappings[j].pe_base = NULL;
+                 maps_killed++;
+@@ -10488,7 +10508,7 @@ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
+             {
+                 uintptr_t a = (uintptr_t)base;
+                 uintptr_t mb = (uintptr_t)ios_jit_mappings[i].pe_base;
+-                if (a >= mb && a < mb + ios_jit_mappings[i].size)
++                if (a >= mb && a < mb + ios_jit_mappings[i].image_size)
+                 {
+                     /* ml352: containment alone LIES when the entry is STALE.
+                      * rsaenh.dll unloaded, windows.ui.dll later mapped INSIDE
+@@ -10518,14 +10538,14 @@ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
+                             mach_vm_read_overwrite(mach_task_self(), (mach_vm_address_t)(mb + lfanew + 0x50), 4,
+                                                    (mach_vm_address_t)&imgsz, &got) == KERN_SUCCESS &&
+                             got == 4 &&
+-                            (imgsz == ios_jit_mappings[i].size ||
+-                             ((imgsz + 0x3fffu) & ~0x3fffu) == ios_jit_mappings[i].size);
++                            (imgsz == ios_jit_mappings[i].image_size ||
++                             ((imgsz + 0x3fffu) & ~0x3fffu) == ios_jit_mappings[i].image_size);
+                         if (!entry_ok)
+                         {
+                             dprintf(2, "[jit-pool] STALE containment rev=ml352: entry pe=%p+0x%lx "
+                                     "no longer matches what is mapped there (mz=%04x lfanew=0x%x imgsz=0x%x) "
+                                     "— ignoring entry, copying fresh image for %p\n",
+-                                    (void *)mb, (unsigned long)ios_jit_mappings[i].size,
++                                    (void *)mb, (unsigned long)ios_jit_mappings[i].image_size,
+                                     mz, lfanew, imgsz, base);
+                             continue;
+                         }
+@@ -10543,13 +10563,13 @@ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
+                         {
+                             dprintf(2, "[jit-pool] stale copy replaced: entry pe=%p+0x%lx jit=%p "
+                                     "holds another image's header; copying fresh image for %p\n",
+-                                    (void *)mb, (unsigned long)ios_jit_mappings[i].size,
++                                    (void *)mb, (unsigned long)ios_jit_mappings[i].image_size,
+                                     ios_jit_mappings[i].jit_base, base);
+                             continue;
+                         }
+                     }
+                     ERR("iOS JIT: %p already in mapping %d (%p+0x%lx)\n",
+-                        base, i, (void*)mb, (unsigned long)ios_jit_mappings[i].size);
++                        base, i, (void*)mb, (unsigned long)ios_jit_mappings[i].image_size);
+                     /* If write was requested (e.g. IAT lives in a section that
+                      * the linker also marked EXEC), grant RW on the PE-side
+                      * page via Mach vm_protect. The JIT pool already has the
+@@ -11047,7 +11067,15 @@ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
+              * page sharing). Also kills the 80MB-anchor dance: worst-case
+              * text→tramp distance is now ≤ image size, far under ±128MB. */
+             size_t page_size = 0x4000;
+-            size_t image_alloc = (image_size + page_size - 1) & ~(page_size - 1);
++            /* Playport (PLA-377): the copy leaves out the trailing sections no
++             * code reaches, a builtin's .rsrc and .reloc (ios_copy_extent.h):
++             * the relocations below are read from the PE view, and ntdll's
++             * resource functions read resources there too. ntdll keeps its
++             * whole image: its child copies (ios_jit_copy_module_for_child)
++             * relocate from their own bytes, and it saves little. */
++            size_t copy_size = strcmp( ios_pe_module_name( image_base, image_size ), "ntdll.dll" )
++                               ? ios_copy_extent( image_base, image_size, page_size ) : image_size;
++            size_t image_alloc = (copy_size + page_size - 1) & ~(page_size - 1);
+             size_t tramp_prealloc = ios_x18_tramp_prealloc_scan(image_base, image_size);
+             size_t data_delta = ios_jit_data_align_delta(image_base, image_size);
+             size_t alloc_size = image_alloc + tramp_prealloc + (data_delta ? page_size : 0);
+@@ -11078,23 +11106,26 @@ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
+                 return -1;
+             }
+ 
+-            /* Copy ENTIRE PE image to JIT pool (code + data + headers).
+-             * This preserves ADRP-based PC-relative references between sections. */
++            /* Copy the PE image to JIT pool (code + data + headers), all of it
++             * but the trailing sections copy_size leaves out. This preserves
++             * ADRP-based PC-relative references between sections. */
+             ios_jit_scan_nonexec( "pre-memcpy", ios_pe_module_name( image_base, image_size ),
+-                                  (char *)jit_rx_base + offset, image_size );
+-            memcpy((char *)jit_rw_base + offset, image_base, image_size);
++                                  (char *)jit_rx_base + offset, copy_size );
++            memcpy((char *)jit_rw_base + offset, image_base, copy_size);
+             ios_jit_scan_nonexec( "post-memcpy", ios_pe_module_name( image_base, image_size ),
+-                                  (char *)jit_rx_base + offset, image_size );
+-            sys_icache_invalidate((char *)jit_rx_base + offset, image_size);
++                                  (char *)jit_rx_base + offset, copy_size );
++            sys_icache_invalidate((char *)jit_rx_base + offset, copy_size);
+             ios_jit_scan_nonexec( "post-icache", ios_pe_module_name( image_base, image_size ),
+-                                  (char *)jit_rx_base + offset, image_size );
++                                  (char *)jit_rx_base + offset, copy_size );
+             ios_jit_verify_copy( (const char *)image_base,
+                                  (const char *)jit_rx_base + offset,
+-                                 image_size, ios_pe_module_name( image_base, image_size ),
++                                 copy_size, ios_pe_module_name( image_base, image_size ),
+                                  offset, ios_pool_last_alloc_reused );
++            if (copy_size < image_size)
++                __sync_fetch_and_add( &ios_pool_head_trimmed, image_size - copy_size );
+ 
+-            /* Record mapping for the entire image */
+-            ios_jit_add_mapping(image_base, (char *)jit_rx_base + offset, image_size);
++            /* Record mapping for the copied part of the image */
++            ios_jit_add_mapping(image_base, (char *)jit_rx_base + offset, copy_size, image_size);
+ 
+             ERR("iOS JIT: copied image %p+0x%lx → pool %p (offset 0x%lx, used 0x%lx/0x%lx)\n",
+                 image_base, (unsigned long)image_size, (char *)jit_rx_base + offset,
+@@ -11111,14 +11142,15 @@ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
+                 if (mn && (strstr(mn, "d3d11") || strstr(mn, "D3D11")))
+                     ios_fast_footprint = 1;
+             }
+-            dprintf(2, "[jit-pool] image %p+0x%lx (%s) → pool %p used=0x%lx/0x%lx tramp+0x%lx\n",
++            dprintf(2, "[jit-pool] image %p+0x%lx (%s) → pool %p used=0x%lx/0x%lx copy=0x%lx of 0x%lx tramp+0x%lx\n",
+                     image_base, (unsigned long)image_size,
+                     ios_pe_module_name( image_base, image_size ), (char *)jit_rx_base + offset,
+                     (unsigned long)(offset + alloc_size), (unsigned long)jit_pool_size,
++                    (unsigned long)copy_size, (unsigned long)image_size,
+                     (unsigned long)tramp_prealloc);
+ 
+             ios_jit_verify_text_exec( ios_pe_module_name( image_base, image_size ),
+-                                      (char *)jit_rx_base + offset, image_size );
++                                      (char *)jit_rx_base + offset, copy_size );
+ 
+             /* task #34 [share-probe]: DEFAULT-OFF (set MADEIRA_SHARE_PROBE=1).
+              * ml79: running it inline here (pre-detach, on explorer's boot
+@@ -11171,7 +11203,7 @@ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
+                  * Compute bitmap byte offsets with 12-bit shift so committed
+                  * pages cover where set_arm64ec_range will write. */
+                 size_t bm_start = ((size_t)jit_base >> 12) / 8;
+-                size_t bm_end   = (((size_t)jit_base + image_size) >> 12) / 8;
++                size_t bm_end   = (((size_t)jit_base + copy_size) >> 12) / 8;
+                 size_t bm_size  = ROUND_SIZE(bm_start, bm_end + 1 - bm_start, page_mask);
+                 void *bm_page   = ROUND_ADDR((char *)arm64ec_view->base + bm_start, page_mask);
+                 set_vprot(arm64ec_view, bm_page, bm_size,
+@@ -11241,7 +11273,7 @@ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
+                     {
+                         /* Fallback: mark whole image as EC (old behavior, may misclassify x64 stubs) */
+                         ERR("iOS JIT: no CodeMap found — falling back to coarse-mark whole image\n");
+-                        set_arm64ec_range(jit_base, image_size);
++                        set_arm64ec_range(jit_base, copy_size);
+                     }
+                 }
+                 {
+@@ -11250,14 +11282,14 @@ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
+                      * to the same offset via RW alias (which we just memcpy'd
+                      * to). If they differ, the dual-map isn't aliased correctly
+                      * for this page and FEX/Wine will fetch garbage on BL. */
+-                    if (image_size > 0x4000)
++                    if (copy_size > 0x4000)
+                     {
+                         volatile uint32_t rx_byte0 = *(volatile uint32_t *)((char *)jit_rx_base + offset + 0x4000);
+                         uint32_t rw_byte0 = *(uint32_t *)((char *)jit_rw_base + offset + 0x4000);
+                         ERR("iOS JIT: dual-map RX[+0x4000]=0x%08x  RW[+0x4000]=0x%08x  match=%d\n",
+                             rx_byte0, rw_byte0, rx_byte0 == rw_byte0);
+                         /* Also probe a deeper offset (around middle of image) */
+-                        size_t deep = (image_size / 2) & ~3UL;
++                        size_t deep = (copy_size / 2) & ~3UL;
+                         volatile uint32_t rx_mid = *(volatile uint32_t *)((char *)jit_rx_base + offset + deep);
+                         uint32_t rw_mid = *(uint32_t *)((char *)jit_rw_base + offset + deep);
+                         ERR("iOS JIT: dual-map RX[+0x%lx]=0x%08x  RW[+0x%lx]=0x%08x  match=%d\n",
+@@ -11269,11 +11301,11 @@ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
+                     /* Verify start, middle, and end words */
+                     UINT64 *vmap = (UINT64 *)arm64ec_view->base;
+                     size_t s_idx = ((size_t)jit_base) >> 12;
+-                    size_t e_idx = ((size_t)jit_base + image_size - 1) >> 12;
++                    size_t e_idx = ((size_t)jit_base + copy_size - 1) >> 12;
+                     size_t m_idx = (s_idx + e_idx) / 2;
+                     UINT64 sw = vmap[s_idx / 64], mw = vmap[m_idx / 64], ew = vmap[e_idx / 64];
+                     ERR("iOS JIT: set_arm64ec_range(jit %p+0x%lx) hybrid bm=%p+0x%lx | start_pos=0x%lx word=0x%llx bit%d=%d | mid_pos=0x%lx word=0x%llx bit%d=%d | end_pos=0x%lx word=0x%llx bit%d=%d\n",
+-                        jit_base, (unsigned long)image_size, bm_page, (unsigned long)bm_size,
++                        jit_base, (unsigned long)copy_size, bm_page, (unsigned long)bm_size,
+                         (unsigned long)(s_idx/64), (unsigned long long)sw, (int)(s_idx&63), (int)((sw>>(s_idx&63))&1),
+                         (unsigned long)(m_idx/64), (unsigned long long)mw, (int)(m_idx&63), (int)((mw>>(m_idx&63))&1),
+                         (unsigned long)(e_idx/64), (unsigned long long)ew, (int)(e_idx&63), (int)((ew>>(e_idx&63))&1));
+@@ -11282,7 +11314,7 @@ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
+             else
+             {
+                 ERR("iOS JIT: NOT marking jit %p+0x%lx as EC (no .hexpthk section, pure x86_64)\n",
+-                    (char *)jit_rx_base + offset, (unsigned long)image_size);
++                    (char *)jit_rx_base + offset, (unsigned long)copy_size);
+             }
+ 
+             /* Make data sections in JIT pool writable by remapping from RW view.
+@@ -11406,9 +11438,15 @@ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
+ 
+                     if (reloc_rva && reloc_sz && delta)
+                     {
+-                        char *reloc_data = rw_image + reloc_rva;
++                        /* Playport (PLA-377): the relocations are read from the
++                         * PE view, whose .reloc is the file's: the copy may end
++                         * before it. A fixup in a section the copy left out is
++                         * skipped, and one that points into such a section gets
++                         * the PE view's address, the bytes that are there. */
++                        char *reloc_data = (char *)image_base + reloc_rva;
+                         char *block = reloc_data;
+-                        int fixup_count = 0;
++                        int fixup_count = 0, to_pe_view = 0;
++                        intptr_t pe_view_delta = (intptr_t)image_base - (intptr_t)pe_image_base;
+ 
+                         ERR("iOS JIT:   relocations: RVA=0x%x size=0x%x delta=0x%lx\n",
+                             reloc_rva, reloc_sz, (long)delta);
+@@ -11435,12 +11473,19 @@ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
+                                 if (type == 10)  /* IMAGE_REL_BASED_DIR64 */
+                                 {
+                                     uint64_t *fixup = (uint64_t *)(rw_image + block_rva + off);
+-                                    uint64_t val = *fixup;
+-                                    if (val >= pe_image_base && val < pe_image_base + image_size)
++                                    uint64_t val;
++                                    if ((size_t)block_rva + off + 8 > copy_size) continue;
++                                    val = *fixup;
++                                    if (val >= pe_image_base && val < pe_image_base + copy_size)
+                                     {
+                                         *fixup += delta;
+                                         fixup_count++;
+                                     }
++                                    else if (val >= pe_image_base && val < pe_image_base + image_size)
++                                    {
++                                        *fixup += pe_view_delta;
++                                        to_pe_view++;
++                                    }
+                                     else
+                                     {
+                                         /* Log first few skipped entries */
+@@ -11461,10 +11506,14 @@ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
+                         }
+ 
+                         __asm__ __volatile__("dsb sy" ::: "memory");
+-                        sys_icache_invalidate((char *)jit_rx_base + offset, image_size);
++                        sys_icache_invalidate((char *)jit_rx_base + offset, copy_size);
+ 
+                         ERR("iOS JIT:   applied %d DIR64 fixups (delta=0x%lx)\n",
+                             fixup_count, (long)delta);
++                        if (to_pe_view)
++                            dprintf(2, "[jit-pool] %s: %d pointer(s) into the part its copy left out "
++                                    "point at the PE view\n",
++                                    ios_pe_module_name( image_base, image_size ), to_pe_view);
+                     }
+ 
+                     /* Store relocation info for later IAT sync re-application */
+@@ -11472,7 +11521,7 @@ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
+                                           reloc_rva, reloc_sz);
+ 
+                     /* Debug: show syscall_dispatcher value after relocation */
+-                    if (image_size > 0x64a70)
++                    if (copy_size > 0x64a70)
+                     {
+                         uint64_t rw_val = *(uint64_t *)(rw_image + 0x64a68);
+                         ERR("iOS JIT:   syscall_dispatcher ptr relocated to 0x%llx\n",
+@@ -11545,7 +11594,7 @@ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
+                          * protections below make RW, so the first x18 trampoline
+                          * took an EXECUTE fault (vkd3d-proton's d3d12.dll). The
+                          * allocation has the extra page for the shift. */
+-                        size_t tramp_pool_off = (offset + image_size + page_size - 1) & ~(page_size - 1);
++                        size_t tramp_pool_off = (offset + copy_size + page_size - 1) & ~(page_size - 1);
+                         if (tramp_alloc > tramp_prealloc)
+                         {
+                             __sync_fetch_and_add( &ios_limit_x18_images, 1 );
+@@ -11834,7 +11883,7 @@ int ios_jit_copy_module_for_child(void *module_addr, void *child_peb)
+      * per-pseudo-process copies that keep dying (libarm64ecfex, rpcrt4). */
+     sys_icache_invalidate(rx_dest, m->size);
+     ios_jit_verify_copy( src, rx_dest, m->size,
+-                         ios_pe_module_name( src, m->size ),
++                         ios_pe_module_name( src, m->image_size ),
+                          offset, ios_pool_last_alloc_reused );
+ 
+     pe_off = *(unsigned int *)(rw_dest + 0x3C);
+@@ -11946,7 +11995,7 @@ int ios_jit_copy_module_for_child(void *module_addr, void *child_peb)
+     __asm__ __volatile__("dsb sy" ::: "memory");
+     sys_icache_invalidate(rx_dest, m->size);
+ 
+-    ios_jit_verify_text_exec( ios_pe_module_name( m->pe_base, m->size ), rx_dest, m->size );
++    ios_jit_verify_text_exec( ios_pe_module_name( m->pe_base, m->image_size ), rx_dest, m->size );
+ 
+     /* Register: APPEND an owned entry — the parent's entry stays intact.
+      * Task #25: reuse a tombstoned slot when one exists; pe_base written
+@@ -11958,6 +12007,7 @@ int ios_jit_copy_module_for_child(void *module_addr, void *child_peb)
+         if (slot < 0) slot = ios_jit_mapping_count;
+         ios_jit_mappings[slot].jit_base = rx_dest;
+         ios_jit_mappings[slot].size = m->size;
++        ios_jit_mappings[slot].image_size = m->image_size;
+         ios_jit_mappings[slot].text_offset = m->text_offset;
+         ios_jit_mappings[slot].text_size = m->text_size;
+         ios_jit_mappings[slot].pe_image_base = pe_image_base;
+@@ -22359,7 +22409,11 @@ NTSTATUS WINAPI NtProtectVirtualMemory( HANDLE process, PVOID *addr_ptr, SIZE_T
+                     /* Re-apply DIR64 relocations within the synced region.
+                      * The memcpy overwrote DIR64-relocated values with fresh
+                      * unrelocated data from the unix mapping. Walk the PE reloc
+-                     * table and re-apply entries that fall within this region. */
++                     * table and re-apply entries that fall within this region.
++                     * Playport (PLA-377): the table is read from the PE view, as
++                     * the copy path reads it: the copy may end before .reloc. A
++                     * value that points into the part the copy left out gets the
++                     * PE view's address, as the copy path gives it. */
+                     if (ios_jit_mappings[idx].reloc_rva && ios_jit_mappings[idx].reloc_size
+                         && ios_jit_mappings[idx].reloc_delta)
+                     {
+@@ -22371,11 +22425,13 @@ NTSTATUS WINAPI NtProtectVirtualMemory( HANDLE process, PVOID *addr_ptr, SIZE_T
+                         unsigned int r_sz  = ios_jit_mappings[idx].reloc_size;
+                         uint64_t img_base  = ios_jit_mappings[idx].pe_image_base;
+                         intptr_t r_delta   = ios_jit_mappings[idx].reloc_delta;
+-                        size_t img_size    = ios_jit_mappings[idx].size;
++                        size_t copy_size   = ios_jit_mappings[idx].size;
++                        size_t img_size    = ios_jit_mappings[idx].image_size;
++                        intptr_t pe_view_delta = (intptr_t)pe_start_addr - (intptr_t)img_base;
+                         /* Region bounds as offsets within the PE image */
+                         size_t rgn_off_start = off;
+                         size_t rgn_off_end   = off + size;
+-                        char *block = rw_image + r_rva;
++                        char *block = (char *)pe_start_addr + r_rva;
+                         char *block_end = block + r_sz;
+                         int dir64_count = 0;
+ 
+@@ -22406,11 +22462,13 @@ NTSTATUS WINAPI NtProtectVirtualMemory( HANDLE process, PVOID *addr_ptr, SIZE_T
+                                 {
+                                     uint64_t *fixup = (uint64_t *)(rw_image + fixup_rva);
+                                     uint64_t val = *fixup;
+-                                    if (val >= img_base && val < img_base + img_size)
++                                    if (val >= img_base && val < img_base + copy_size)
+                                     {
+                                         *fixup += r_delta;
+                                         dir64_count++;
+                                     }
++                                    else if (val >= img_base && val < img_base + img_size)
++                                        *fixup += pe_view_delta;
+                                 }
+                             }
+                             block += block_size;

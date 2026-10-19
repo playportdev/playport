@@ -96,11 +96,14 @@ public enum JitPool {
         public var tailRefused: UInt64
         public var tailFatal: UInt64
         public var aliasFull: UInt64
+        /// The bytes image copies left out of their images since the runtime started: a
+        /// builtin's trailing .rsrc and .reloc, which no code reaches (PLA-377).
+        public var headTrimmed: UInt64
 
         public init(size: UInt64, head: UInt64, headLive: UInt64 = 0, headFree: UInt64 = 0, tail: UInt64,
                     tailLive: UInt64 = 0, aliasLive: UInt64 = 0, aliasSlots: UInt64 = 0, aliasCap: UInt64 = 0,
                     images: UInt64 = 0, childCopies: UInt64 = 0, childBytes: UInt64 = 0, headExhausted: UInt64 = 0,
-                    tailRefused: UInt64 = 0, tailFatal: UInt64 = 0, aliasFull: UInt64 = 0) {
+                    tailRefused: UInt64 = 0, tailFatal: UInt64 = 0, aliasFull: UInt64 = 0, headTrimmed: UInt64 = 0) {
             self.size = size
             self.head = head
             self.headLive = headLive
@@ -117,6 +120,7 @@ public enum JitPool {
             self.tailRefused = tailRefused
             self.tailFatal = tailFatal
             self.aliasFull = aliasFull
+            self.headTrimmed = headTrimmed
         }
 
         /// Room between the head and the tail.
@@ -147,7 +151,7 @@ public enum JitPool {
                 ("head_free_mb", Self.mb(headFree)), ("tail_mb", Self.mb(tail)), ("tail_live_mb", Self.mb(tailLive)),
                 ("room_mb", room >> 20), ("alias", aliasLive), ("alias_slots", aliasSlots), ("alias_cap", aliasCap),
                 ("images", images), ("children", childCopies), ("children_mb", Self.mb(childBytes)),
-                ("head_exhausted", headExhausted), ("tail_refused", tailRefused), ("tail_fatal", tailFatal),
+                ("trimmed_mb", Self.mb(headTrimmed)), ("head_exhausted", headExhausted), ("tail_refused", tailRefused), ("tail_fatal", tailFatal),
                 ("alias_full", aliasFull),
             ]
             return "pool: " + fields.map { "\($0.0)=\($0.1)" }.joined(separator: " ")

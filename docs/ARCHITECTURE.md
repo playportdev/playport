@@ -347,7 +347,7 @@ whose title needs more (PlayportKit `MemoryNeed`) before the pool is acquired.
 
 ### JIT pool use
 
-The pool never grows. PE images with native code (a full copy of each ARM64EC,
+The pool never grows. PE images with native code (a copy of each ARM64EC,
 ARM64X or ARM64 image, x18 trampolines included), guest JIT blocks (Mono's, V8's) and each pseudo-process's private
 ntdll copy take its **head**, from the bottom up; FEX's code buffers take its
 **tail**, from the top down, up to 128 MiB each while the room between them
@@ -362,7 +362,11 @@ read-write, which takes execute permission from those pages for good, so a
 freed image range is reused only by another image copy whose own writable
 pages cover every such page (`patches/madeira-unix` 0138,
 [evidence](evidence/2026-10-13-pool-head-reuse.md)); a dead copy of the same
-image is the usual fit. The head cursor never moves down, so the head stays near the
+image is the usual fit. A copy leaves out the image's trailing sections no code
+reaches, a builtin's `.rsrc` and `.reloc` (`patches/madeira-unix` 0165, decision
+[0122](decisions/0122-builtin-copies-without-rsrc-and-reloc.md)): the copy path reads the
+relocations from the PE view, and ntdll's resource functions turn a copy's base
+into the PE view's (`patches/wine-pe` 0048). The head cursor never moves down, so the head stays near the
 most that processes alive at once have needed (fragmentation adds some). The ranges never become room.
 
 A pure x86-64 image (AMD64, no CHPE metadata: a game's executable and DLLs)

@@ -51,6 +51,7 @@ AUDIO_PATCH = REPO / "patches/madeira-unix/0074-audio-give-an-i386-child-the-iOS
 AUDIO_SOURCE = "build/ntdll-unix/audio_null_ios.c"
 RESOLVER_PATCH = REPO / "patches/wine-unix/0013-ws2_32-convert-an-i386-child-s-resolver-pointers-thr.patch"
 RESOLVER_SOURCES = ("dlls/ws2_32/unixlib.c", "dlls/ntdll/unix/socket.c")
+COPY_EXTENT_PATCH = REPO / "patches/madeira-unix/0165-virtual-leave-a-builtin-s-.rsrc-and-.reloc-out-of-it.patch"
 
 
 def pin(name):
@@ -100,6 +101,21 @@ def c_function(text, name):
         depth += {"{": 1, "}": -1}.get(text[end], 0)
         end += 1
     return text[start:end] + "\n"
+
+
+def run_copy_extent_tests(scratch):
+    """0165's JIT-pool copy extent over builtins' section tables (PLA-377)."""
+    with tempfile.TemporaryDirectory(prefix="copy-extent-", dir=scratch) as tmp:
+        root = Path(tmp)
+        subprocess.run(["git", "init", "-q", tmp], check=True)
+        subprocess.run(["git", "-C", tmp, "apply", "--include=build/ntdll-unix/ios_copy_extent.h",
+                        str(COPY_EXTENT_PATCH)], check=True)
+        exe = root / "copy-extent-test"
+        subprocess.run(["clang", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
+                        "-fsanitize=undefined", "-fno-sanitize-recover=all",
+                        "-I", str(root / "build/ntdll-unix"),
+                        str(REPO / "build/wow64/copy_extent_test.c"), "-o", str(exe)], check=True)
+        subprocess.run([str(exe)], check=True)
 
 
 def run_audio_tests(scratch):
@@ -681,6 +697,7 @@ def main():
         subprocess.run([str(opengl_exe)], check=True)
         check_opengl_thunks(OPENGL_PATCH)
     run_audio_tests(scratch)
+    run_copy_extent_tests(scratch)
     run_resolver_tests(scratch)
     run_packed_createstruct_tests(scratch)
     run_menu_item_tests(scratch)
