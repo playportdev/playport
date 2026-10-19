@@ -139,3 +139,4 @@
 0127-kernelbase-HACK-Force-disable-direct-composition-for.patch
 0128-kernelbase-HACK-Force-disable-direct-composition-for.patch
 0129-gdi32-Allow-font-linking-for-runs-with-missing-glyph.patch
+0130-ddraw-Do-not-force-render-target-for-paletted-primar.patch

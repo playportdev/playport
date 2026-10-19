@@ -3,7 +3,8 @@
 Suggested subreddits: r/EmulationOniOS (where the 0.3 reports came from),
 r/sideloaded, r/iosgaming, r/gog and r/EpicGamesPC for the store angle. Post as an
 image post with the body as the first comment, or as a text post with the images
-inline. The release link works only once the v0.4.0 draft is published.
+inline. v0.4.0 was published on 2026-10-08, so the release link works. It ships Wine 11.19
+(its tag's `pins.lock`), which is what the body says; Wine 11.20 came after it.
 
 Images: the two Library screenshots from the site, `site/screenshots/library-gog.webp`
 (the GOG filter: Moonscars, Monster Train, Shogun Showdown, Duck Paradox) and
