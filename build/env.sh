@@ -29,14 +29,13 @@ PLAYPORT_REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 : "${PLAYPORT_DEVICE_DIR:=$PLAYPORT_BUILD}"
 _inputs_local=$PLAYPORT_BUILD/inputs.local
 if [ -f "$_inputs_local" ]; then
-    _env_llvm=${LLVM_MINGW-} _env_sdk=${DARWIN_SDK-} _env_sock=${PLAYPORT_USBMUX_SOCKET-} _env_addr=${PLAYPORT_PHONE_ADDR-}
+    _env_llvm=${LLVM_MINGW-} _env_sdk=${DARWIN_SDK-} _env_sock=${PLAYPORT_USBMUX_SOCKET-}
     # shellcheck disable=SC1090
     . "$_inputs_local"
     LLVM_MINGW=${_env_llvm:-${LLVM_MINGW-}}
     DARWIN_SDK=${_env_sdk:-${DARWIN_SDK-}}
     PLAYPORT_USBMUX_SOCKET=${_env_sock:-${PLAYPORT_USBMUX_SOCKET-}}
-    PLAYPORT_PHONE_ADDR=${_env_addr:-${PLAYPORT_PHONE_ADDR-}}
-    unset _env_llvm _env_sdk _env_sock _env_addr
+    unset _env_llvm _env_sdk _env_sock
 fi
 unset _inputs_local
 : "${LLVM_MINGW:=}" "${DARWIN_SDK:=}"
