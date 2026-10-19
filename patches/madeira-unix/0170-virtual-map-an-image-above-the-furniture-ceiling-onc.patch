@@ -1,0 +1,132 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Mon, 19 Oct 2026 18:12:50 +0200
+Subject: [PATCH] virtual: map an image above the furniture ceiling once the
+ window below it is full
+
+map_image_view caps an image at the furniture ceiling (0x73ffff0000)
+itself when its caller set no upper limit. map_view then takes that cap
+for the caller's: no floor raise, no retry above the ceiling, and
+STATUS_NO_MEMORY. A private allocation the window cannot take spills
+above the ceiling; an image could not. In run 20261019T173829 the
+window was full from +94 s, and RDR2.exe's three loads of the 6 MB
+socialclub.dll failed with c0000017, so the game showed Social Club
+error 4.
+
+When both placements below the ceiling fail with STATUS_NO_MEMORY and
+the cap was ours, the image is now mapped bottom-up in [ceiling,
+0x7c00000000), below FEX's band, as the private spill is
+(pp_image_place.h), and a `[va-ceiling] image size=... above the
+ceiling:` line says where. Nothing changes when the window has room,
+for an image whose caller set its own upper limit, or for i386 images,
+which WoW64's window places before this.
+
+Linear: PLA-418
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-19-rdr2-whole-launcher-end.md
+Offered-upstream: no; the furniture ceiling is the iOS port's
+---
+ build/ntdll-unix/pp_image_place.h | 38 +++++++++++++++++++++++++++++++
+ build/ntdll-unix/virtual_ios.c    | 23 +++++++++++++++++--
+ 2 files changed, 59 insertions(+), 2 deletions(-)
+ create mode 100644 build/ntdll-unix/pp_image_place.h
+
+diff --git a/build/ntdll-unix/pp_image_place.h b/build/ntdll-unix/pp_image_place.h
+new file mode 100644
+index 0000000..1e0754a
+--- /dev/null
++++ b/build/ntdll-unix/pp_image_place.h
+@@ -0,0 +1,38 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later
++ * Where a PE image goes once the guest window below the furniture ceiling is
++ * full (Playport, PLA-418, decision 0128). map_image_view caps an image at the
++ * ceiling itself when its caller set no upper limit, so map_view treats that
++ * cap as the caller's and has no way past it: a private allocation spills above
++ * the ceiling, an image failed with STATUS_NO_MEMORY (RDR2's socialclub.dll in
++ * run 20261019T173829). An image the window could not take now gets the space
++ * above the ceiling, below FEX's band, placed bottom-up as the private spill
++ * is. A caller's own limit still holds.
++ *
++ * Pure, so a host test compiles this header as is. */
++#ifndef PP_IMAGE_PLACE_H
++#define PP_IMAGE_PLACE_H
++#include <stdint.h>
++
++#define PPI_STATUS_NO_MEMORY 0xc0000017u
++#define PPI_FEX_BAND         0x7c00000000ull   /* FEX's band starts here; no image goes in it */
++
++/* Whether an image whose placement below the ceiling ended in `status` may be
++ * placed above it, and if so the window [*lo, *hi] (hi inclusive, as map_view's
++ * limit_high). Only when the cap was ours (`caller_limit_high` 0) and the window
++ * was full (STATUS_NO_MEMORY); never when there is no ceiling or no room. */
++static inline int ppi_image_above_ceiling( uint32_t status, uint64_t caller_limit_high, uint64_t ceiling,
++                                           uint64_t limit_low, uint64_t user_limit, uint64_t size,
++                                           uint64_t *lo, uint64_t *hi )
++{
++    uint64_t start, end;
++
++    if (status != PPI_STATUS_NO_MEMORY || caller_limit_high || !ceiling) return 0;
++    start = limit_low > ceiling ? limit_low : ceiling;
++    end = user_limit < PPI_FEX_BAND ? user_limit : PPI_FEX_BAND;
++    if (end <= start || end - start < size) return 0;
++    *lo = start;
++    *hi = end - 1;
++    return 1;
++}
++
++#endif
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index c7bae78..0a426ca 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -15195,6 +15195,8 @@ static unsigned int get_mapping_info( HANDLE handle, ACCESS_MASK access, unsigne
+ }
+ 
+ 
++#include "pp_image_place.h"
++
+ /***********************************************************************
+  *             map_image_view
+  *
+@@ -15207,7 +15209,7 @@ static NTSTATUS map_image_view( struct file_view **view_ret, struct pe_image_inf
+     unsigned int vprot = SEC_IMAGE | SEC_FILE | VPROT_COMMITTED | VPROT_READ | VPROT_EXEC | VPROT_WRITECOPY;
+     void *base;
+     NTSTATUS status;
+-    ULONG_PTR start, end;
++    ULONG_PTR start, end, caller_limit_high;
+     BOOL top_down = (image_info->image_charact & IMAGE_FILE_DLL) &&
+                     (image_info->image_flags & IMAGE_FLAGS_ImageDynamicallyRelocated);
+ 
+@@ -15220,6 +15222,7 @@ static NTSTATUS map_image_view( struct file_view **view_ret, struct pe_image_inf
+     }
+ 
+     limit_low = max( limit_low, (ULONG_PTR)address_space_start );  /* make sure the DOS area remains free */
++    caller_limit_high = limit_high;
+     /* task #35 furniture ceiling: images pack below it (inclusive limit).
+      * Disabled while ios_furniture_ceiling == 0 — see its definition. */
+     if (!limit_high)
+@@ -15347,7 +15350,23 @@ static NTSTATUS map_image_view( struct file_view **view_ret, struct pe_image_inf
+ 
+     /* then any suitable address */
+ 
+-    return map_view( view_ret, NULL, size, top_down ? MEM_TOP_DOWN : 0, vprot, limit_low, limit_high, 0 );
++    status = map_view( view_ret, NULL, size, top_down ? MEM_TOP_DOWN : 0, vprot, limit_low, limit_high, 0 );
++
++    /* Playport (PLA-418): the window below the ceiling is full and the cap was
++     * ours, so above it, bottom-up, as a private allocation spills. */
++    {
++        uint64_t above_lo, above_hi;
++
++        if (ppi_image_above_ceiling( status, caller_limit_high, ios_furniture_ceiling, limit_low,
++                                     (ULONG_PTR)user_space_limit, size, &above_lo, &above_hi ))
++        {
++            status = map_view( view_ret, NULL, size, 0, vprot, above_lo, above_hi, 0 );
++            dprintf( 2, "[va-ceiling] image size=%#lx above the ceiling: %s %p\n", (unsigned long)size,
++                     status ? "FAILED, none in" : "placed at",
++                     status ? (void *)(ULONG_PTR)above_lo : (*view_ret)->base );
++        }
++    }
++    return status;
+ }
+ 
+ 

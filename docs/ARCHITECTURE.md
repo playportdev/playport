@@ -425,6 +425,21 @@ fell from 138 to 83 MiB, Jurassic World Evolution's from 480 to 68.
   in an alert. A dev build's Settings can set the
   pool (*Simulated JIT memory*, `set:jitPoolSimulatedMB=184`) to drive it.
 
+### The guest window
+
+Wine places its own allocations and every x86-64 and ARM64EC image below the
+furniture ceiling, in the guest window [0x7048000000, 0x73ffff0000) above the JIT pool's
+RW alias. The band between the ceiling and FEX's band, [0x73ffff0000, 0x7c00000000), is kept for
+CEF's PartitionAlloc pools and large reservations. When the window is full:
+
+- a private allocation is placed bottom-up above the ceiling (`[va-ceiling] … placed at`);
+- an image whose caller set no upper limit is placed there too, below FEX's band
+  (`[va-ceiling] image …`, madeira-unix 0170,
+  [decision 0128](decisions/0128-an-image-maps-above-the-furniture-ceiling-when-the-window-is-full.md)).
+
+Each placement that fails logs a `[va-scan] FAILED` line. i386 images go into their process's
+4 GiB window instead.
+
 ### The FEX host band
 
 FEX keeps its host state in one 16 GB range, `[0x7c00000000, 0x8000000000)`,
