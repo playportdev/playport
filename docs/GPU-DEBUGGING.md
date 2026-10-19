@@ -72,7 +72,13 @@ Notes:
      next until first frame + `--secs` (default N/50 + 20).
   2. It pulls the bundle into the run directory
      (`$PLAYPORT_BUILD/gpu-runs/<time>`).
-  3. It writes `capture.txt`, plus `passes.txt` with `--pass-prof`.
+  3. It deletes the bundle on the phone (the capture is written into the game's
+     folder) once the phone's tree has the files, bytes and links of the pulled
+     copy (`afc.py rm-bundle`, a `Documents/…/NAME.gputrace` only); the `bundle`
+     event says so, with the free space after. A bundle left there fails the run.
+  4. It writes `capture.txt`, plus `passes.txt` with `--pass-prof`.
+- **Space:** before the play the phone must have `--expect-gb` (default 1)
+  free above a 3.5 GB reserve, or the run is refused (the `space` event).
 - **Recorded phone evidence:** a DXMT title-screen capture (frame 1200)
   returned its report and pass table (2026-09-29); frame 600 captures on
   [both backends](evidence/2026-10-06-vulkan-perf-tooling.md#03-gpu-capture-on-kosmickrisp)

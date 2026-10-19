@@ -20,6 +20,12 @@ USBMUXD_SOCKET_ADDRESS set.
                                   a bundle directory (a Metal .gputrace) into DEST/<its name>:
                                   its files and subdirectories, and its links as local links,
                                   never followed; one line per file
+  afc.py BUNDLE_ID rm-bundle REMOTE FILES BYTES LINKS
+                                  delete one Metal capture bundle, Documents/.../NAME.gputrace
+                                  (what GPU capture writes into a game's folder), once its tree
+                                  holds exactly FILES files of BYTES bytes in all and LINKS links,
+                                  as the local copy pp gpu capture pulled does; its links are
+                                  removed, never followed. Nothing else (bundle_refusal)
 
 rotate-log: the app appends every launch to s1-host.log and never trims it, and
 every driver pulls the whole file; this renames it in one AFC call, nothing is
@@ -81,6 +87,15 @@ async def main(bundle_id, op, args):
             if not (await kind(afc, args[0])).startswith("dir"):
                 sys.exit(f"{args[0]}: not a directory")
             await pull_tree(afc, args[0].rstrip("/"), os.path.join(args[1], os.path.basename(args[0].rstrip("/"))))
+        elif op == "rm-bundle" and len(args) == 4:
+            why = bundle_refusal(args[0])
+            if why:
+                sys.exit(f"{args[0]}: {why}")
+            try:
+                expect = tuple(int(x) for x in args[1:])
+            except ValueError:
+                sys.exit(f"rm-bundle: FILES BYTES LINKS are counts, not {args[1:]}")
+            print(await rm_bundle(afc, args[0].rstrip("/"), expect))
         elif op == "ls" and len(args) == 1:
             if not await afc.exists(args[0]):
                 sys.exit(f"{args[0]}: no such file or directory")
@@ -100,6 +115,55 @@ def rm_refusal(path):
     if not name or "/" in name or name in (".", "..") or not name.endswith(".zip") or name == ".zip":
         return "rm deletes only Documents/NAME.zip (a file put there for import:)"
     return None
+
+
+BUNDLE_NAME = re.compile(r"[A-Za-z0-9._()+-]+\.gputrace")
+
+
+def bundle_refusal(path):
+    """Why rm-bundle will not delete this path, or None: only a directory named NAME.gputrace
+    under Documents/, by a path of plain names (no ., .. or empty part)."""
+    parts = path.rstrip("/").split("/")
+    if (len(parts) < 2 or parts[0] != "Documents" or any(p in ("", ".", "..") for p in parts)
+            or not BUNDLE_NAME.fullmatch(parts[-1]) or parts[-1] == ".gputrace"):
+        return "rm-bundle deletes only a Documents/.../NAME.gputrace capture bundle"
+    return None
+
+
+async def tree(afc, remote):
+    """Every entry under REMOTE, parents before their children: (path, kind, size), kind
+    "dir", "file" or "link" (a link is listed, never followed), size a file's bytes."""
+    out = []
+    for n in sorted(set(await afc.listdir(remote)) - {".", ".."}):
+        path = remote + "/" + n
+        k, _, v = (await kind(afc, path)).partition(" ")
+        out.append((path, k, int(v) if k == "file" else 0))
+        if k == "dir":
+            out += await tree(afc, path)
+    return out
+
+
+def counts(entries):
+    """(files, bytes, links) of tree()'s entries."""
+    files = [s for _, k, s in entries if k == "file"]
+    return len(files), sum(files), sum(1 for _, k, _ in entries if k == "link")
+
+
+async def rm_bundle(afc, remote, expect):
+    """Delete the bundle at REMOTE when its tree counts as EXPECT (files, bytes, links); what
+    was removed. Exits, deleting nothing, when it is not a directory or the counts differ."""
+    k = await kind(afc, remote)
+    if k != "dir":
+        sys.exit(f"{remote}: " + ("no such bundle" if k == "absent" else "not a directory"))
+    entries = await tree(afc, remote)
+    found = counts(entries)
+    if found != tuple(expect):
+        sys.exit(f"{remote}: holds {found[0]} files, {found[1]} bytes, {found[2]} links, not the "
+                 f"{expect[0]}, {expect[1]}, {expect[2]} pulled: left in place")
+    for path, _, _ in reversed(entries):   # children before their directory
+        await afc.rm_single(path)
+    await afc.rm_single(remote)
+    return f"{remote}: removed ({found[0]} files, {found[1]} bytes, {found[2]} links)"
 
 
 IMPORT_PART = re.compile(r"[A-Za-z0-9 ._()'+-]+")   # pp ui's import:PATH characters

@@ -3,7 +3,7 @@
 """pp gpu: GPU debugging on the phone from this workstation (docs/GPU-DEBUGGING.md).
 
   pp gpu capture --frame N [--title ID] [--secs S] [--pad [first-frame+]SECS:SCRIPT ...]
-                 [--settings JSON] [--pass-prof] [--out DIR]
+                 [--settings JSON] [--pass-prof] [--expect-gb G] [--out DIR]
       one frame of a play as a Metal .gputrace: sets Settings' Diagnostics (GPU capture
       at frame N, and the switches asked for) in one launch, plays in the next (Metal
       allows a capture only in a process that started with it), pulls the bundle into
@@ -12,7 +12,10 @@
       written (2026-09-29) --secs: seconds after the first frame to keep
       playing (default: N/50 + 20, about frame N at 60 FPS with room).
       --settings '{"graphics":"vulkan"}' captures on the Vulkan backend, where
-      KosmicKrisp writes the frame (patches/mesa 0017)
+      KosmicKrisp writes the frame (patches/mesa 0017). The capture is written into
+      the game's folder on the phone: before the play the phone must have room for
+      --expect-gb (default 1) above a 3.5 GB reserve, and after a pull whose files,
+      bytes and links match the phone's the bundle is deleted there (afc.py rm-bundle)
   pp gpu validate [--title ID] [--secs S] [--pad ...] [--shaders | --stop] [--out DIR]
       a play with Metal's API validation (--shaders: and shader validation) on;
       validation.txt groups what it found: the API layer's messages, shader
@@ -54,6 +57,42 @@ CAPTURE_RE = re.compile(r"A new capture will be saved to .*?/Documents/(.*\.gput
 # DXMT's report of a command buffer's error and its logs, where shader validation's findings arrive
 CMDBUF_RE = re.compile(r"err:\s+(Device error at frame \d+: .*|Frame (\d+): (.*))$")
 METAL_LOG_RE = re.compile(r"\{(Metal|MetalTools)\}\[\d+\] <(ERROR|FAULT|NOTICE|DEFAULT)>")
+# The phone's free space a capture must leave (the device runs' stop rule)
+RESERVE_GB = 3.5
+
+
+def free_gb(phone):
+    """The phone's free space in GB (lockdown's AmountDataAvailable, as pp phone status), or None."""
+    text = phone.pmd("disk", "lockdown", "get", "com.apple.disk_usage", check=False)
+    try:
+        return json.loads(text[text.index("{"):text.rindex("}") + 1])["AmountDataAvailable"] / 1e9
+    except (ValueError, KeyError):
+        return None
+
+
+def space_refusal(free, expect_gb):
+    """Why a capture of about EXPECT_GB may not be written with FREE GB free, or None."""
+    if free is None:
+        return "the phone's free space could not be read (pp phone status)"
+    if free - RESERVE_GB < expect_gb:
+        return (f"the phone has {free:.1f} GB free: a capture of {expect_gb:g} GB would leave less than "
+                f"the {RESERVE_GB:g} GB reserve")
+    return None
+
+
+def local_counts(path):
+    """(files, bytes, links) of a pulled bundle, as afc.py's counts() of the phone's: links
+    counted, never followed."""
+    files = size = links = 0
+    for root, dirs, names in os.walk(path):
+        for n in names + [d for d in dirs if os.path.islink(os.path.join(root, d))]:
+            p = os.path.join(root, n)
+            if os.path.islink(p):
+                links += 1
+            else:
+                files += 1
+                size += os.path.getsize(p)
+    return files, size, links
 
 
 def ui(out, *args, on_line=None):
@@ -266,6 +305,11 @@ def cmd_capture(a):
     settings = {"gpuCaptureFrame": a.frame, "passProfile": "true" if a.pass_prof else "false",
                 "metalValidation": "off"}
     with phonelib.device_lock("pp gpu capture", events=ev, expect_s=a.secs + 150):
+        free = free_gb(phonelib.Phone(a.out, events=ev).ensure())
+        why = space_refusal(free, a.expect_gb)
+        ev("space", free_gb=free and round(free, 1), expect_gb=a.expect_gb, reserve_gb=RESERVE_GB, ok=not why)
+        if why:
+            return ev.result(False, 1, why=why, out=a.out)
         r = play(a, ev, a.out, settings)
         log = os.path.join(a.out, "run", "pull", "s1-host.log")
         if not os.path.exists(log):
@@ -277,12 +321,25 @@ def cmd_capture(a):
             return ev.result(False, 1, why=f"no capture in the log: did the play reach frame {a.frame}? "
                                           "(a longer --secs, or a smaller --frame)", out=a.out, **extra)
         phone = phonelib.Phone(a.out, events=ev).ensure()
-        local = phone.pull_bundle("Documents/" + found[-1], a.out)
+        remote = "Documents/" + found[-1]
+        local = phone.pull_bundle(remote, a.out)
+        pulled = local_counts(local)
+        try:
+            said = phone.afc("rm-bundle", "rm-bundle", remote, *map(str, pulled), secs=900).strip()
+            removed = True
+        except phonelib.PhoneError as e:
+            said, removed = str(e), False
+        free = free_gb(phone)
+        ev("bundle", remote=remote, files=pulled[0], bytes=pulled[1], links=pulled[2], removed=removed,
+           said=said, free_gb=free and round(free, 1))
     import gputrace
     with open(os.path.join(a.out, "capture.txt"), "w") as f:
         f.write(gputrace.report(gputrace.summarize(local)))
+    if not removed:
+        return ev.result(False, 1, why=f"the bundle stayed on the phone: {said}", out=a.out, capture=local,
+                         report=os.path.join(a.out, "capture.txt"), **extra)
     return ev.result(bool(r.get("ok")), 0, out=a.out, capture=local, report=os.path.join(a.out, "capture.txt"),
-                     **extra)
+                     bundle_gb=round(pulled[1] / 1e9, 2), **extra)
 
 
 def finish(out, log, validation, pass_prof):
@@ -373,6 +430,8 @@ def main(argv):
     if sub == "capture":
         p.add_argument("--frame", type=int, required=True, help="the frame to capture, counted from the game's first present")
         p.add_argument("--pass-prof", action="store_true", help="GPU time per pass during the same play")
+        p.add_argument("--expect-gb", type=float, default=1.0,
+                       help=f"the bundle's expected size: the phone must have this much free above {RESERVE_GB:g} GB")
     else:
         p.add_argument("--shaders", action="store_true", help="shader validation too")
         p.add_argument("--stop", action="store_true",
