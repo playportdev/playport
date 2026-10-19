@@ -1,0 +1,148 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Mon, 19 Oct 2026 08:03:39 +0200
+Subject: [PATCH] Send iOS diagnostics to FEX's log, never to the guest's
+ standard error
+
+On the iOS host every rpmalloc diagnostic went to
+GetStdHandle(STD_ERROR_HANDLE): the [rpm-sink] banner each process
+prints in rpmalloc_initialize, [rpm-band], [rpm-avail], [rpfree-skip],
+the [rpm-poison] notes' copy, and the VA band selector's beacons. That
+handle is the guest process's own: a pipe its parent reads, a file, a
+console. PLA-403: a probe that ran "cmd.exe /c echo" with its output in
+a pipe read "[rpm-sink] alive rev=ml492" there, before FEX's own
+start-up lines (FEX patch of the same name).
+
+They now go through ios_rpm_diag: to the sink FEX's Logging::Init sets
+(its log, through ntdll's __wine_dbg_output), and until then into
+ios_va_log, the buffer ARM64EC's ProcessInit already flushes once LogMan
+is up. The selector's beacons only ever reached the guest's handle
+early in a process, where it usually failed; they stay deferred. The
+[rpm-poison] notes still also go to C:\rpm-poison.log. Without
+FEX_IOS_HOST nothing changes.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-19-child-stdout-pipe.md
+Offered-upstream: no; the writes are the iOS port's (rpmalloc-port)
+---
+ rpmalloc/rpmalloc.c | 52 ++++++++++++++++++++++++++++++++-------------
+ 1 file changed, 37 insertions(+), 15 deletions(-)
+
+diff --git a/rpmalloc/rpmalloc.c b/rpmalloc/rpmalloc.c
+index f85a5ea..3bad574 100644
+--- a/rpmalloc/rpmalloc.c
++++ b/rpmalloc/rpmalloc.c
+@@ -949,20 +949,15 @@ typedef PVOID(WINAPI* ios_valloc2_t)(HANDLE, PVOID, SIZE_T, ULONG, ULONG, MEM_EX
+ 
+ static void
+ ios_va_emit(const char* buf, int len) {
+-	unsigned long w;
+ 	int room;
+-	WriteFile(GetStdHandle((unsigned long)-12), buf, (unsigned long)len, &w, 0);
+ 
+ 	/* ml751: DEFER. Do not call ANY logging API from here.
+ 	 *
+-	 * The WriteFile above targets the Win32 STD_ERROR_HANDLE, which on iOS
+-	 * reaches nothing we capture -- which is why every [va-profile] beacon is
+-	 * absent from the device logs although the selector plainly runs. ml750
+-	 * tried to fix that with OutputDebugStringA and CRASHED EVERY LAUNCH:
+-	 * x18=0x0, NULL dereference, no build-id line at all. This runs during
+-	 * rpmalloc's allocator init, BEFORE the ARM64EC TEB exists, and
+-	 * OutputDebugStringA reaches into ntdll and touches it. WriteFile survived
+-	 * only because it was failing silently.
++	 * ml750 tried OutputDebugStringA and CRASHED EVERY LAUNCH: x18=0x0, NULL
++	 * dereference, no build-id line at all. This runs during rpmalloc's
++	 * allocator init, BEFORE the ARM64EC TEB exists, and OutputDebugStringA
++	 * reaches into ntdll and touches it. Nor does it write to the Win32
++	 * STD_ERROR_HANDLE: that is the guest's handle (ios_rpm_diag below).
+ 	 *
+ 	 * So append to a plain static buffer -- memcpy and an integer, no syscall,
+ 	 * no TEB, no lock, no allocation -- and let Module.cpp flush it once LogMan
+@@ -976,6 +971,24 @@ ios_va_emit(const char* buf, int len) {
+ 	}
+ }
+ 
++/* Playport (PLA-403): rpmalloc's diagnostics go to the runtime's log, never to
++ * the guest's standard error handle. GetStdHandle(STD_ERROR_HANDLE) is the
++ * guest process's own handle: a pipe its parent reads, a file, a console. A
++ * parent capturing a child's output read [rpm-sink] and the other runtime
++ * lines in it. FEX's Logging::Init sets the sink (its log, through ntdll's
++ * __wine_dbg_output); until then a line waits in ios_va_log, which ARM64EC's
++ * ProcessInit flushes once LogMan is up. */
++void (*ios_rpm_diag_sink)(const char* buf, int len) = 0;
++
++static void
++ios_rpm_diag(const char* buf, int len) {
++	void (*sink)(const char*, int) = ios_rpm_diag_sink;
++	if (sink)
++		sink(buf, len);
++	else
++		ios_va_emit(buf, len);
++}
++
+ static int
+ ios_va_cat(char* buf, int i, const char* s) {
+ 	while (*s)
+@@ -1356,14 +1369,13 @@ os_mmap(size_t size, size_t alignment, size_t* offset, size_t* mapped_size) {
+ 			const char *szs = " size=0x";
+ 			unsigned long long _p = (unsigned long long)(uintptr_t)ptr, _s = (unsigned long long)size;
+ 			int i = 0, j;
+-			unsigned long w;
+ 			while (pre[i]) { buf[i] = pre[i]; i++; }
+ 			for (j = 60; j >= 0; j -= 4) buf[i++] = hexd[(_p >> j) & 0xf];
+ 			for (j = 0; szs[j]; ++j) buf[i++] = szs[j];
+ 			for (j = 60; j >= 0; j -= 4) buf[i++] = hexd[(_s >> j) & 0xf];
+ 			buf[i++] = ' '; buf[i++] = 'm'; buf[i++] = 'l'; buf[i++] = '4';
+ 			buf[i++] = '6'; buf[i++] = '5'; buf[i++] = '\n';
+-			WriteFile(GetStdHandle((unsigned long)-12), buf, (unsigned long)i, &w, 0);
++			ios_rpm_diag(buf, i);
+ 		}
+ 	}
+ #endif
+@@ -1667,7 +1679,7 @@ ios_rpm_emit(const char* buf, int len) {
+ 	void* h = ios_rpm_emit_handle();
+ 	if (h)
+ 		WriteFile(h, buf, (unsigned long)len, &w, 0);
+-	WriteFile(GetStdHandle((unsigned long)-12), buf, (unsigned long)len, &w, 0);
++	ios_rpm_diag(buf, len);
+ }
+ 
+ static void
+@@ -1922,7 +1934,6 @@ rpm_avail_check(heap_t* heap, size_t size_class, page_t* page, int is_head, cons
+ 		char buf[256];
+ 		const char* hexd = "0123456789abcdef";
+ 		int i = 0, j;
+-		unsigned long w;
+ #define RPM_STR(s)                                     \
+ 	do {                                               \
+ 		const char* _s = (s);                          \
+@@ -1960,7 +1971,14 @@ rpm_avail_check(heap_t* heap, size_t size_class, page_t* page, int is_head, cons
+ 		buf[i++] = '\n';
+ #undef RPM_STR
+ #undef RPM_HEX
+-		WriteFile(GetStdHandle((unsigned long)-12), buf, (unsigned long)i, &w, 0);
++#ifdef FEX_IOS_HOST
++		ios_rpm_diag(buf, i);
++#else
++		{
++			unsigned long w;
++			WriteFile(GetStdHandle((unsigned long)-12), buf, (unsigned long)i, &w, 0);
++		}
++#endif
+ 	}
+ 	return bad;
+ }
+@@ -3172,9 +3190,13 @@ rpfree(void* ptr) {
+ 		for (int k = 0; lrstr[k]; ++k) buf[i++] = lrstr[k];
+ 		for (int j = 60; j >= 0; j -= 4) buf[i++] = hexd[(_lr >> j) & 0xf];
+ 		buf[i++] = '\n';
++#ifdef FEX_IOS_HOST
++		ios_rpm_diag(buf, i);
++#else
+ 		void *h = GetStdHandle((unsigned long)-12);
+ 		unsigned long w;
+ 		WriteFile(h, buf, (unsigned long)i, &w, 0);
++#endif
+ 		return;
+ 	}
+ 	block_deallocate(ptr);

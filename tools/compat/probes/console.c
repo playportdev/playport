@@ -12,8 +12,10 @@
  *      standard output handle's type and GetConsoleWindow are only reported
  *      (a parent may hand over its own output, a headless conhost has no
  *      window)
- *   b  "cmd.exe /c echo <marker>" with its output in a pipe: exit code 0 and
- *      the marker in what it wrote
+ *   b  "cmd.exe /c echo <marker>" with its output in a pipe: exit code 0,
+ *      the marker in what it wrote, and nothing else in the pipe (the
+ *      runtime's own lines once arrived there, PLA-403); a NUL in the
+ *      output is shown as \0
  *   c  "cmd.exe /c exit 7" with CREATE_NEW_CONSOLE (a second conhost start):
  *      exit code 7
  *
@@ -78,9 +80,11 @@ static void phase_console(void)
     CloseHandle(con);
 }
 
-/* Runs cmdline, its output into a pipe when output is not NULL; returns the
- * exit code, or -1 if it did not start or end in time. */
-static long run_child(const char *what, char *cmdline, DWORD flags, char *output, DWORD output_size)
+/* Runs cmdline, its output into a pipe when output is not NULL (the bytes
+ * read into *output_len); returns the exit code, or -1 if it did not start or
+ * end in time. */
+static long run_child(const char *what, char *cmdline, DWORD flags, char *output, DWORD output_size,
+                      DWORD *output_len)
 {
     SECURITY_ATTRIBUTES inherit = {sizeof(inherit), NULL, TRUE};
     STARTUPINFOA si;
@@ -118,6 +122,7 @@ static long run_child(const char *what, char *cmdline, DWORD flags, char *output
             got += n;
         }
         output[got] = 0;
+        *output_len = got;
         CloseHandle(read_end);
     }
     wait = WaitForSingleObject(pi.hProcess, CHILD_WAIT_MS);
@@ -130,20 +135,28 @@ static long run_child(const char *what, char *cmdline, DWORD flags, char *output
 
 static void phase_cmd_echo(void)
 {
+    static const char expected[] = CMD_MARKER "\r\n";
     char cmdline[] = "cmd.exe /c echo " CMD_MARKER;
-    char output[512], *end;
-    long code = run_child("b-echo", cmdline, 0, output, sizeof(output));
+    char output[512], shown[400];
+    DWORD len = 0, i, n = 0;
+    long code = run_child("b-echo", cmdline, 0, output, sizeof(output), &len);
 
-    for (end = output + strlen(output); end > output && (end[-1] == '\r' || end[-1] == '\n'); end--) *(end - 1) = 0;
-    probe_log("b-echo output \"%s\"\n", output);
+    for (i = 0; i < len && n + 3 < sizeof(shown); i++) {
+        if (output[i] == 0) { shown[n++] = '\\'; shown[n++] = '0'; }
+        else if (output[i] != '\r' && !(output[i] == '\n' && i + 1 == len)) shown[n++] = output[i];
+    }
+    shown[n] = 0;
+    probe_log("b-echo output %lu bytes \"%s\"\n", len, shown);
     probe_log("CHECK b-echo exit code %ld: %s\n", code, verdict(code == 0));
-    probe_log("CHECK b-echo marker in its output: %s\n", verdict(strstr(output, CMD_MARKER) != NULL));
+    probe_log("CHECK b-echo marker in its output: %s\n", verdict(memchr(output, 0, len) == NULL && strstr(output, CMD_MARKER) != NULL));
+    probe_log("CHECK b-echo nothing else in the pipe: %s\n",
+              verdict(len == strlen(expected) && !memcmp(output, expected, len)));
 }
 
 static void phase_cmd_new_console(void)
 {
     char cmdline[] = "cmd.exe /c exit 7";
-    long code = run_child("c-new-console", cmdline, CREATE_NEW_CONSOLE, NULL, 0);
+    long code = run_child("c-new-console", cmdline, CREATE_NEW_CONSOLE, NULL, 0, NULL);
 
     probe_log("CHECK c-new-console exit code %ld (7 expected): %s\n", code, verdict(code == 7));
 }
