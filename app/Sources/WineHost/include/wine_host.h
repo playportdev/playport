@@ -93,8 +93,8 @@ int wine_host_session_start(int timeout_ms);
  * own directory as the working directory, args[0..nargs-1] (at most 64, each
  * under 1024 bytes) as its arguments and env[0..nenv-1] (at most 128
  * "NAME=VALUE" entries) set over the root's environment for this title only.
- * The prefix's system32 is linked again first, with the launch's backend
- * overlay (PLAYPORT_DLL_OVERLAY). Everything the title starts runs in its job
+ * The prefix's system32 is linked again first, with the launch's
+ * overlays (PLAYPORT_DLL_OVERLAY). Everything the title starts runs in its job
  * and counts as the title. Waits up to timeout_ms for the root's answer.
  * Once per process: a second call is refused, whatever the first returned.
  * 0 started; -1 bad call (no session, a second launch, a prerequisite still

@@ -365,6 +365,7 @@ final class LibraryModel: ObservableObject {
                                        steamAppID: t.appID, fex: fex, steamAPI: steamAPI,
                                        memory: MemoryNeed.of(t, cohort: Self.cohort), epic: epic, galaxy: galaxy,
                                        prerequisites: prerequisites, windowsServices: settings.windowsServices,
+                                       khronosVulkanLoader: settings.khronosVulkanLoader,
                                        jitPoolMB: settings.jitPoolMB,
                                        // The launcher it starts ends at the game's sign-in (decision 0130).
                                        endLauncher: settings.endLauncherAfterSignIn

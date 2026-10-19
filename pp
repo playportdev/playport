@@ -96,6 +96,7 @@ C_TESTS = [
     ("host log", ["app/tests/host_log_test.c", "app/Sources/HostIO/host_log.c"], ["-D_DEFAULT_SOURCE"]),
     ("title path", ["app/tests/title_path_test.c", "app/Sources/WineHost/title_path.c"], ["-D_DEFAULT_SOURCE"]),
     ("dotnet fake DLLs", ["app/tests/dotnet_fakedlls_test.c", "app/Sources/WineHost/dotnet_fakedlls.c"], ["-D_DEFAULT_SOURCE"]),
+    ("dll overlay", ["app/tests/dll_overlay_test.c", "app/Sources/WineHost/dll_overlay.c"], ["-D_DEFAULT_SOURCE"]),
     ("prefix registry", ["app/tests/prefix_registry_test.c", "app/Sources/WineHost/prefix_registry.c"], ["-D_DEFAULT_SOURCE"]),
     ("self-check", ["app/tests/selfcheck_test.c", "app/Sources/WineHost/selfcheck.c"], []),
     ("session protocol", ["app/tests/session_protocol_test.c"], []),

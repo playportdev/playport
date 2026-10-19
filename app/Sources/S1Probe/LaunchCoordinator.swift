@@ -86,6 +86,9 @@ enum LaunchCoordinator {
         /// Start Windows services (services.exe, Wine's SCM) before the prerequisites and the
         /// title (LaunchSettings.windowsServices, decision 0107).
         var windowsServices = false
+        /// The Khronos Vulkan loader in place of Wine's vulkan-1.dll, linked into system32 after
+        /// the backend's set (LaunchSettings.khronosVulkanLoader, decision 0131).
+        var khronosVulkanLoader = false
         /// The game's own pool from its compatibility entry (LaunchSettings.jitPoolMB, decision
         /// 0108), granted when the memory limit allows; nil for the default.
         var gamePoolMB: Int? = nil
@@ -391,12 +394,17 @@ enum LaunchCoordinator {
             log("graphics: \(r.graphics.rawValue) is not in this build")
             return Outcome(kind: .refused, line: "launch=refused graphics=\(r.graphics.rawValue) reason=not-in-this-build")
         }
-        if let overlay = r.graphics.runtimeOverlay {
-            setenv("PLAYPORT_DLL_OVERLAY", overlay, 1)
+        guard !r.khronosVulkanLoader || Manifest.hasRuntimeDirectory(GraphicsBackend.khronosVulkanLoaderOverlay) else {
+            log("vulkan loader: Khronos is not in this build")
+            return Outcome(kind: .refused, line: "launch=refused vulkan-loader=khronos reason=not-in-this-build")
+        }
+        // The backend's set, then the Khronos loader's, over the runtime's (wine_host.c, dll_overlay.h).
+        if let overlays = GraphicsBackend.runtimeOverlays(graphics: r.graphics, khronosVulkanLoader: r.khronosVulkanLoader) {
+            setenv("PLAYPORT_DLL_OVERLAY", overlays, 1)
         } else {
             unsetenv("PLAYPORT_DLL_OVERLAY")
         }
-        log("graphics: \(r.graphics.rawValue)")
+        log("graphics: \(r.graphics.rawValue); vulkan loader: \(r.khronosVulkanLoader ? "Khronos" : "Wine's")")
 
         if r.config.isEmpty {
             // Undo an earlier launch's title config: this one reads the shared file.

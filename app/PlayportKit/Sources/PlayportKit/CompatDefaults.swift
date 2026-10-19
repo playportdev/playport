@@ -127,6 +127,7 @@ extension LaunchSettings {
                               graphicsOptions: Self.keyItems(graphicsOptions, over: base.graphicsOptions),
                               windowsServices: windowsServices ?? base.windowsServices,
                               jitPoolMB: jitPoolMB ?? base.jitPoolMB,
+                              khronosVulkanLoader: khronosVulkanLoader ?? base.khronosVulkanLoader,
                               endLauncherAfterSignIn: base.endLauncherAfterSignIn)
     }
 

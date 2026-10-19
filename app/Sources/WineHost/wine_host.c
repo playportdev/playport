@@ -12,6 +12,7 @@
  */
 
 #include "wine_host.h"
+#include "dll_overlay.h"
 #include "dotnet_fakedlls.h"
 #include "prefix_registry.h"
 #include "selfcheck.h"
@@ -19,6 +20,7 @@
 #include "title_path.h"
 #include "session_protocol.h"
 
+#include <CommonCrypto/CommonDigest.h>
 #include <dirent.h>
 #include <dlfcn.h>
 #include <errno.h>
@@ -401,80 +403,21 @@ static int mkdirs(const char *path)
     return (mkdir(buf, 0755) && errno != EEXIST) ? -1 : 0;
 }
 
-/* Link every file of src_dir into sys32, replacing what is there; the count linked. */
-static int link_dir_into(const char *src_dir, const char *sys32)
-{
-    char src[1600], dst[1600];
-    DIR *d = opendir(src_dir);
-    if (!d) return -1;
-    int n = 0;
-    struct dirent *e;
-    while ((e = readdir(d))) {
-        if (e->d_name[0] == '.') continue;
-        snprintf(src, sizeof(src), "%s/%s", src_dir, e->d_name);
-        snprintf(dst, sizeof(dst), "%s/%s", sys32, e->d_name);
-        unlink(dst);
-        if (symlink(src, dst) == 0) n++;
-    }
-    closedir(d);
-    return n;
-}
-
-/* PLAYPORT_DLL_OVERLAY when it names one directory of the runtime, else NULL. */
+/* PLAYPORT_DLL_OVERLAY, the launch's overlay list (dll_overlay.h), or NULL. */
 static const char *dll_overlay(void)
 {
     const char *o = getenv("PLAYPORT_DLL_OVERLAY");
-    if (!o || !o[0] || strchr(o, '/') || strchr(o, ':') || strstr(o, "..")) return NULL;
-    return o;
-}
-
-/* Remove every link in sys32 into an <arch>-windows set, the bundle's or an
- * overlay's, of this or an earlier bundle path; other entries stay. */
-static void unlink_runtime_links(const char *sys32)
-{
-    static const char set[] = "-windows/";
-    char dst[1600], target[1600];
-    char **names = NULL;
-    size_t count = 0, cap = 0;
-    DIR *d = opendir(sys32);
-    if (!d) return;
-    struct dirent *e;
-    while ((e = readdir(d))) {
-        if (e->d_name[0] == '.') continue;
-        snprintf(dst, sizeof(dst), "%s/%s", sys32, e->d_name);
-        ssize_t len = readlink(dst, target, sizeof(target) - 1);
-        if (len <= 0) continue;
-        target[len] = 0;
-        char *leaf = strrchr(target, '/');
-        if (!leaf) continue;
-        size_t sl = sizeof(set) - 1;
-        if ((size_t)(leaf + 1 - target) < sl || strncmp(leaf + 1 - sl, set, sl)) continue;
-        if (count == cap) {
-            size_t ncap = cap ? 2 * cap : 64;
-            char **grown = realloc(names, ncap * sizeof(*names));
-            if (!grown) break;
-            names = grown;
-            cap = ncap;
-        }
-        if ((names[count] = strdup(e->d_name))) count++;
-    }
-    closedir(d);
-    for (size_t i = 0; i < count; i++) {
-        snprintf(dst, sizeof(dst), "%s/%s", sys32, names[i]);
-        unlink(dst);
-        free(names[i]);
-    }
-    free(names);
+    return o && o[0] ? o : NULL;
 }
 
 /* The WoW64 (i386) title's farms, since system32 is the session's ARM64EC
  * set: drive_c/windows/sysarm64, the aarch64 set its native loader takes
  * (wine-pe 0015), and drive_c/windows/syswow64, the i386 set its guest loader
- * reaches through wow64's system32 redirection. The launch's backend overlay
- * (PLAYPORT_DLL_OVERLAY) goes over a set it has one for: the Vulkan backend's
- * i386 d3d9.dll (DXVK) over Wine's. Every link is recreated, so a later
- * launch without the overlay gets Wine's DLL back. A failure is logged: only
- * i386 titles need them. */
+ * reaches through wow64's system32 redirection. The launch's overlays
+ * (PLAYPORT_DLL_OVERLAY) go over a set they have one for: the Vulkan backend's
+ * i386 d3d9.dll (DXVK) over Wine's; an overlay with no such set is skipped.
+ * Every link is recreated, so a later launch without the overlay gets Wine's
+ * DLL back. A failure is logged: only i386 titles need them. */
 static void link_wow64_farm(const char *name, const char *pe_arch)
 {
     char src_dir[1200], dir[1200];
@@ -484,13 +427,13 @@ static void link_wow64_farm(const char *name, const char *pe_arch)
         host_log("cannot create %s: %s", dir, strerror(errno));
         return;
     }
-    host_log("%s: %d links -> %s", name, link_dir_into(src_dir, dir), src_dir);
+    host_log("%s: %d links -> %s", name, dll_overlay_link_dir(src_dir, dir), src_dir);
     const char *overlay = dll_overlay();
     if (overlay) {
-        char over_dir[1400];
-        snprintf(over_dir, sizeof(over_dir), "%s/%s/%s-windows", g_runtime, overlay, pe_arch);
-        int m = link_dir_into(over_dir, dir);   /* -1: the overlay has no such set */
-        if (m >= 0) host_log("%s: %d links from %s over them", name, m, over_dir);
+        char set[32], log[512];
+        snprintf(set, sizeof(set), "%s-windows", pe_arch);
+        int m = dll_overlay_link(g_runtime, overlay, set, dir, 0, log, sizeof(log));
+        host_log("%s: %d links from overlays over them (%s)", name, m, log);
     }
 }
 
@@ -506,7 +449,7 @@ static void link_fonts(void)
         host_log("cannot create %s: %s", dir, strerror(errno));
         return;
     }
-    host_log("fonts: %d links -> %s", link_dir_into(src_dir, dir), src_dir);
+    host_log("fonts: %d links -> %s", dll_overlay_link_dir(src_dir, dir), src_dir);
 }
 
 /* One field of a winsxs name as setupapi's fakedll.c append_string makes it:
@@ -703,7 +646,7 @@ static void link_drivers(const char *src_dir, const char *sys32)
         host_log("cannot create %s: %s", drivers, strerror(errno));
         return;
     }
-    unlink_runtime_links(drivers);
+    dll_overlay_unlink_runtime_links(drivers);
     DIR *d = opendir(src_dir);
     if (!d) return;
     int n = 0;
@@ -720,50 +663,73 @@ static void link_drivers(const char *src_dir, const char *sys32)
     host_log("system32/drivers: %d links -> %s", n, src_dir);
 }
 
+/* Which vulkan-1.dll system32 links to: the link's target and the first 16 hex
+ * digits of its sha256, which app/artifacts.tsv's row of that file has. Wine's
+ * builtin and the Khronos loader (Runtime/vulkan-loader, decision 0131) differ. */
+static void log_vulkan_loader(const char *sys32)
+{
+    char link[1300], target[1600];
+    snprintf(link, sizeof(link), "%s/vulkan-1.dll", sys32);
+    ssize_t len = readlink(link, target, sizeof(target) - 1);
+    if (len <= 0) {
+        host_log("system32: vulkan-1.dll is no runtime link");
+        return;
+    }
+    target[len] = 0;
+    char hex[17] = "?";
+    int fd = open(target, O_RDONLY);
+    if (fd >= 0) {
+        CC_SHA256_CTX ctx;
+        unsigned char buf[65536], md[CC_SHA256_DIGEST_LENGTH];
+        ssize_t r;
+        CC_SHA256_Init(&ctx);
+        while ((r = read(fd, buf, sizeof(buf))) > 0) CC_SHA256_Update(&ctx, buf, (CC_LONG)r);
+        close(fd);
+        CC_SHA256_Final(md, &ctx);
+        for (int i = 0; i < 8; i++) snprintf(hex + 2 * i, 3, "%02x", md[i]);
+    }
+    const char *runtime_rel = strncmp(target, g_runtime, strlen(g_runtime)) ? target : target + strlen(g_runtime) + 1;
+    host_log("system32: vulkan-1.dll -> %s sha256 %s", runtime_rel, hex);
+}
+
 /* Point drive_c/windows/system32 at the bundle's PE set. The bundle path
- * changes on every reinstall, so the links are always recreated. A Direct3D
- * backend other than DXMT (PLAYPORT_DLL_OVERLAY, PlayportKit
- * GraphicsBackend.runtimeOverlay) has its own <arch>-windows set, linked over
- * the bundle's: DLLs load through these links, not through WINEDLLPATH's
- * builtin search, so this is where its d3d11.dll replaces DXMT's. Every
- * earlier link into a runtime set is removed first, so a later DXMT launch
- * gets exactly DXMT's set back, without an overlay's extra DLLs. */
+ * changes on every reinstall, so the links are always recreated. The launch's
+ * overlays (PLAYPORT_DLL_OVERLAY, dll_overlay.h) have their own <arch>-windows
+ * sets, linked over the bundle's in order: a Direct3D backend other than DXMT
+ * (PlayportKit GraphicsBackend.runtimeOverlay), then the Khronos Vulkan loader
+ * for a play with khronosVulkanLoader (decision 0131). DLLs load through these
+ * links, not through WINEDLLPATH's builtin search, so this is where the
+ * backend's d3d11.dll replaces DXMT's and the loader's vulkan-1.dll Wine's.
+ * Each overlay must link a file here. Every earlier link into a runtime set is
+ * removed first, so a later launch gets exactly the sets it names back,
+ * without an earlier overlay's extra files. */
 static int link_system32(const char *pe_arch)
 {
-    char src_dir[1200], sys32[1200], src[1600], dst[1600];
+    char src_dir[1200], sys32[1200];
     snprintf(src_dir, sizeof(src_dir), "%s/%s-windows", g_runtime, pe_arch);
     snprintf(sys32, sizeof(sys32), "%s/drive_c/windows/system32", g_prefix);
     if (mkdirs(sys32)) {
         host_log("cannot create %s: %s", sys32, strerror(errno));
         return -1;
     }
-    unlink_runtime_links(sys32);
-    DIR *d = opendir(src_dir);
-    if (!d) {
+    dll_overlay_unlink_runtime_links(sys32);
+    int n = dll_overlay_link_dir(src_dir, sys32);
+    if (n < 0) {
         host_log("cannot open %s: %s", src_dir, strerror(errno));
         return -1;
     }
-    int n = 0;
-    struct dirent *e;
-    while ((e = readdir(d))) {
-        if (e->d_name[0] == '.') continue;
-        snprintf(src, sizeof(src), "%s/%s", src_dir, e->d_name);
-        snprintf(dst, sizeof(dst), "%s/%s", sys32, e->d_name);
-        unlink(dst);
-        if (symlink(src, dst) == 0) n++;
-    }
-    closedir(d);
     host_log("system32: %d links -> %s", n, src_dir);
     if (n > 0) link_drivers(src_dir, sys32);
     const char *overlay = dll_overlay();
     if (n > 0 && overlay) {
-        char over_dir[1400];
-        snprintf(over_dir, sizeof(over_dir), "%s/%s/%s-windows", g_runtime, overlay, pe_arch);
-        int m = link_dir_into(over_dir, sys32);
-        host_log("system32: %d links from %s over them", m, over_dir);
+        char set[32], log[512];
+        snprintf(set, sizeof(set), "%s-windows", pe_arch);
+        int m = dll_overlay_link(g_runtime, overlay, set, sys32, 1, log, sizeof(log));
+        host_log("system32: %d links from overlays %s over them (%s)", m, overlay, log);
         if (m <= 0) return -1;
     }
     if (n > 0) {
+        log_vulkan_loader(sys32);
         link_wow64_farm("sysarm64", "aarch64");
         link_wow64_farm("syswow64", "i386");
     }
@@ -1350,18 +1316,14 @@ int wine_host_init(const wine_host_config *c)
     setenv("HOME", g_prefix, 1);
     setenv("USER", WINE_HOST_USER, 1);
     setenv("WINELOADERNOEXEC", "1", 1);   /* no re-exec of a loader binary */
-    /* A Direct3D backend other than DXMT ships its builtins in a directory of
-     * the runtime (PlayportKit GraphicsBackend.runtimeOverlay), which the
-     * launch names in PLAYPORT_DLL_OVERLAY; its <arch>-windows builtins are
-     * found before the runtime's own. */
-    const char *overlay = dll_overlay();
-    if (overlay) {
-        char dllpath[2 * sizeof(g_runtime) + 64];
-        snprintf(dllpath, sizeof(dllpath), "%s/%s:%s", g_runtime, overlay, g_runtime);
-        setenv("WINEDLLPATH", dllpath, 1);
-    } else {
-        setenv("WINEDLLPATH", g_runtime, 1);
-    }
+    /* The launch's overlays (PLAYPORT_DLL_OVERLAY, dll_overlay.h: a Direct3D
+     * backend other than DXMT, the Khronos Vulkan loader) ship their builtins in
+     * directories of the runtime; their <arch>-windows builtins are found
+     * before the runtime's own, the last overlay first. */
+    char dllpath[(DLL_OVERLAY_MAX + 1) * (sizeof(g_runtime) + DLL_OVERLAY_NAME + 2)];
+    if (dll_overlay_search_path(g_runtime, dll_overlay(), dllpath, sizeof(dllpath)))
+        host_log("PLAYPORT_DLL_OVERLAY=%s refused", dll_overlay());
+    setenv("WINEDLLPATH", dllpath, 1);
     host_log("WINEDLLPATH=%s", getenv("WINEDLLPATH"));
     /* iOS has no call that lists the system's trusted roots, so crypt32's unix
      * side reads them from this file (the runtime's Mozilla root store,
@@ -1584,7 +1546,7 @@ static int session_request(uint32_t kind, const char *dos_path, const char *cons
     host_log("session: %s -> %d %s", dos_path, rc, msg);
     if (rc) return -5;
     /* The title's own DLLs load from its directory; everything else from the
-     * runtime's set, with this launch's backend overlay (PLAYPORT_DLL_OVERLAY). */
+     * runtime's set, with this launch's overlays (PLAYPORT_DLL_OVERLAY). */
     if (link_system32(g_pe_arch)) return -2;
 
     char *payload = malloc(PP_SESSION_MAX_PAYLOAD);

@@ -1020,6 +1020,24 @@ private struct GameDetailPage: View {
                 settings.wrappedValue.windowsServices = $0.isEmpty ? nil : $0 == "on"
             }
         }
+        // The Khronos Vulkan loader (decision 0131): its vulkan-1.dll in place of Wine's, for this play.
+        let khronosName: (Bool) -> String = { $0 ? "Khronos" : "Wine's" }
+        let loader = OptionValue.of(own: settings.wrappedValue.khronosVulkanLoader, compat: compat?.khronosVulkanLoader,
+                                    inherited: false, name: khronosName)
+        PadRow(id: "opt:khronosVulkanLoader", title: "Vulkan loader", value: loader.text, accessory: .chevron,
+               changed: loader.changed, style: .plain,
+               reset: loader.changed ? { settings.wrappedValue.khronosVulkanLoader = nil } : nil) {
+            PadModal.shared.picker(
+                title: "Vulkan loader", context: "\(context) · Windows",
+                note: "The Khronos Vulkan loader loads the Vulkan layers a game asks for, such as its overlay's; "
+                    + "Wine's own loads none.",
+                options: [PadOption(id: "", label: "Default",
+                                    detail: compat?.khronosVulkanLoader.map { "\(khronosName($0)), for this game" } ?? "Wine's"),
+                          PadOption(id: "khronos", label: "Khronos"), PadOption(id: "wine", label: "Wine's")],
+                selected: settings.wrappedValue.khronosVulkanLoader.map { $0 ? "khronos" : "wine" } ?? "") {
+                settings.wrappedValue.khronosVulkanLoader = $0.isEmpty ? nil : $0 == "khronos"
+            }
+        }
         let compatKeys = compat?.runtime.trimmingCharacters(in: .whitespaces) ?? ""
         let compatOptions = compat?.graphicsOptions.trimmingCharacters(in: .whitespaces) ?? ""
         let forThisGame: (String) -> String? = { $0.isEmpty ? nil : "\(OptionValue.compatMarker) For this game: \($0); your own key of the same name wins" }

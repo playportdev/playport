@@ -60,6 +60,11 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
     /// The game's JIT pool in MiB (per game only, the compatibility table's; decision 0108):
     /// a launcher's many processes outgrow JitPool.minimumMB. Nil is the default pool.
     public var jitPoolMB: Int?
+    /// The Khronos Vulkan loader in place of Wine's vulkan-1.dll (per game only, decision 0131):
+    /// a game whose own Vulkan layer (RDR2's Social Club) must load, which Wine's does not do.
+    /// A dev build's game page and `set:` change it; a release build shows no row, so the
+    /// compatibility table decides. Nil is off: Wine's own.
+    public var khronosVulkanLoader: Bool?
     /// End the publisher launcher a game's Play starts, its whole tree but never the game or a
     /// process under it, once the game has signed in, or before that near the memory limit
     /// (decision 0130, amending 0125): the compatibility table's alone. over() takes it from the game's
@@ -71,7 +76,8 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
                 arguments: String = "", steamAPI: SteamAPISwap.Mode? = nil,
                 cloudSync: Bool? = nil, ordering: MemoryOrdering = MemoryOrdering(), maxInst: Int? = nil,
                 x87Reduced: Bool? = nil, diskCache: Bool? = nil, runtime: String = "", graphicsOptions: String = "",
-                windowsServices: Bool? = nil, jitPoolMB: Int? = nil, endLauncherAfterSignIn: Bool? = nil) {
+                windowsServices: Bool? = nil, jitPoolMB: Int? = nil, khronosVulkanLoader: Bool? = nil,
+                endLauncherAfterSignIn: Bool? = nil) {
         self.screen = screen
         self.aspect = aspect
         self.frameLimit = frameLimit
@@ -87,6 +93,7 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
         self.graphicsOptions = graphicsOptions
         self.windowsServices = windowsServices
         self.jitPoolMB = jitPoolMB
+        self.khronosVulkanLoader = khronosVulkanLoader
         self.endLauncherAfterSignIn = endLauncherAfterSignIn
     }
 
@@ -109,6 +116,7 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
         graphicsOptions = try c.decodeIfPresent(String.self, forKey: .graphicsOptions) ?? ""
         windowsServices = try c.decodeIfPresent(Bool.self, forKey: .windowsServices)
         jitPoolMB = try c.decodeIfPresent(Int.self, forKey: .jitPoolMB)
+        khronosVulkanLoader = try c.decodeIfPresent(Bool.self, forKey: .khronosVulkanLoader)
         endLauncherAfterSignIn = try c.decodeIfPresent(Bool.self, forKey: .endLauncherAfterSignIn)
     }
 
@@ -119,7 +127,7 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
             && ordering.isEmpty && maxInst == nil && x87Reduced == nil && diskCache == nil
             && runtime.trimmingCharacters(in: .whitespaces).isEmpty
             && graphicsOptions.trimmingCharacters(in: .whitespaces).isEmpty && windowsServices == nil
-            && jitPoolMB == nil
+            && jitPoolMB == nil && khronosVulkanLoader == nil
     }
 
     /// Arguments as a command line splits them: at spaces, except inside
@@ -213,6 +221,8 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
         public var windowsServices: Bool
         /// The game's JIT pool in MiB (decision 0108); nil for the default (JitPool.sizeMB).
         public var jitPoolMB: Int?
+        /// The Khronos Vulkan loader in place of Wine's vulkan-1.dll (decision 0131).
+        public var khronosVulkanLoader: Bool
         /// End the launcher the game's Play starts at the game's sign-in (decision 0130).
         public var endLauncherAfterSignIn: Bool
 
@@ -221,7 +231,7 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
                     ordering: MemoryOrdering = MemoryOrdering(), maxInst: Int? = nil,
                     x87Reduced: Bool? = nil, diskCache: Bool? = nil, runtime: [String: String] = [:],
                     graphicsEnvironment: [String: String] = [:], windowsServices: Bool = false,
-                    jitPoolMB: Int? = nil, endLauncherAfterSignIn: Bool = false) {
+                    jitPoolMB: Int? = nil, khronosVulkanLoader: Bool = false, endLauncherAfterSignIn: Bool = false) {
             self.screen = screen
             self.aspect = aspect
             self.frameLimit = frameLimit
@@ -236,7 +246,13 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
             self.graphicsEnvironment = graphicsEnvironment
             self.windowsServices = windowsServices
             self.jitPoolMB = jitPoolMB
+            self.khronosVulkanLoader = khronosVulkanLoader
             self.endLauncherAfterSignIn = endLauncherAfterSignIn
+        }
+
+        /// PLAYPORT_DLL_OVERLAY for this launch (wine_host.c, dll_overlay.h).
+        public var runtimeOverlays: String? {
+            GraphicsBackend.runtimeOverlays(graphics: graphics, khronosVulkanLoader: khronosVulkanLoader)
         }
 
         /// The guest screen's spec for HostIOKit Display.guestSize: the resolution in the shape
@@ -279,6 +295,7 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
                          runtime: runtimeKeys(game?.runtime ?? "") ?? [:],
                          graphicsEnvironment: graphicsEnvironment(game?.graphicsOptions ?? "") ?? [:],
                          windowsServices: game?.windowsServices ?? false, jitPoolMB: game?.jitPoolMB,
+                         khronosVulkanLoader: game?.khronosVulkanLoader ?? false,
                          endLauncherAfterSignIn: game?.endLauncherAfterSignIn ?? false)
     }
 
@@ -310,6 +327,18 @@ public enum GraphicsBackend: String, Codable, CaseIterable, Sendable {
         case .dxmt: nil
         case .vulkan: "vulkan"
         }
+    }
+
+    /// The runtime directory of the Khronos Vulkan loader (decision 0131): its vulkan-1.dll
+    /// and winevulkan's ICD manifest, linked into system32 after the backend's set.
+    public static let khronosVulkanLoaderOverlay = "vulkan-loader"
+
+    /// PLAYPORT_DLL_OVERLAY for a launch: the runtime directories whose <arch>-windows sets go
+    /// over the runtime's own, in order (a later one's file wins), comma-separated: the
+    /// backend's, then the Khronos Vulkan loader's. Nil for none.
+    public static func runtimeOverlays(graphics: GraphicsBackend, khronosVulkanLoader: Bool) -> String? {
+        let list = [graphics.runtimeOverlay, khronosVulkanLoader ? khronosVulkanLoaderOverlay : nil].compactMap { $0 }
+        return list.isEmpty ? nil : list.joined(separator: ",")
     }
 
     /// Environment this backend's launches start with.

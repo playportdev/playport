@@ -187,9 +187,15 @@ enum Manifest {
     /// only when its builtins were staged under the runtime (GraphicsBackend.runtimeOverlay).
     static func has(_ graphics: GraphicsBackend) -> Bool {
         guard let overlay = graphics.runtimeOverlay else { return true }
+        return hasRuntimeDirectory(overlay)
+    }
+
+    /// Whether this build staged a directory of the runtime (an overlay's: Runtime/vulkan,
+    /// Runtime/vulkan-loader).
+    static func hasRuntimeDirectory(_ name: String) -> Bool {
         guard let runtime else { return false }
         var dir: ObjCBool = false
-        return FileManager.default.fileExists(atPath: runtime.appendingPathComponent(overlay).path, isDirectory: &dir)
+        return FileManager.default.fileExists(atPath: runtime.appendingPathComponent(name).path, isDirectory: &dir)
             && dir.boolValue
     }
 
