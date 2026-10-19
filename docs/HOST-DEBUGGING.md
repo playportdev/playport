@@ -55,8 +55,9 @@ In a run's `pull/s1-host.log`:
 Working copies belong under `$PLAYPORT_BUILD/agent-notes/`, uncommitted. The inventory below
 is a **2026-10-07 snapshot** under `agent-notes/store-auth/`, not supported tooling or guaranteed
 present files. Check availability in the authorized checkout before reuse; missing scripts are not
-an instruction to recreate live store clients. Host-only side worktrees cannot run games, browsers
-or phone commands or borrow this state ([0069](decisions/0069-host-only-worktrees.md)).
+an instruction to recreate live store clients. A side worktree runs desktop Wine/Proton only in
+its own build area and prefixes, never phone commands, and does not borrow this state
+([0117](decisions/0117-side-copies-that-build.md)).
 
 - **Game files:** scratch Linux builds of Playport's Epic/GOG installers (`eos/desktop/src`,
   `build`, copies of `app/EpicClient` + `app/ContentKit`) used an authorized workstation session.

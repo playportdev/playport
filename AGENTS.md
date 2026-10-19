@@ -63,13 +63,16 @@ end.
   (another `PLAYPORT_RUN`, a `pp sync` candidate) puts them back and leaves its own beside
   the IPA (`out/…/records/`).
 - **Checkout isolation** (decisions [0028](docs/decisions/0028-one-checkout.md),
-  [0069](docs/decisions/0069-host-only-worktrees.md)). Builds and device work stay in
-  the main checkout, on a branch, one build at a time. An owner-authorized side
-  worktree may edit docs/code and run isolated host checks only: no main checkout
-  source, index, branch or runtime-state changes; no builds, installs, phone commands,
-  browser or games. Keep scratch and test outputs in its own `.work`; do not copy,
-  symlink or share main's `.work`, mutable caches or submodules. A command that needs
-  those inputs waits for the main session; report unrun build/device gates explicitly.
+  [0069](docs/decisions/0069-host-only-worktrees.md),
+  [0117](docs/decisions/0117-side-copies-that-build.md)). Device work stays in the main
+  checkout, on a branch. An owner-authorized side worktree (`.work/worktrees/<name>`, its
+  own branch, one writer) may build and test with its own `.work`: reflink main's `cache`,
+  `inputs` and `run` into it (never symlink or share) and rewrite main's paths first, as
+  0117 lists; prove with a marker that main's `.work` was not written. It never changes
+  main's source, index, branch or runtime state, and never runs `pp install`, `pp ui`,
+  `pp perf`, `pp phone`, `pp release` or `pp sync`: its branch moves to the main checkout,
+  rebased, for phone gates. It commits only path-independent build-record rows; report
+  unrun device gates explicitly.
 - **The UI is the only entry point** (decision 0012). A person does everything in the
   app's UI, and the workstation tests it by driving that UI (`pp ui`). Add no launch
   mode, environment switch, terminal client or push-a-file tool that reaches app

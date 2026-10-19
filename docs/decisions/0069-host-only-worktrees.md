@@ -3,7 +3,9 @@
 **Status:** accepted, 2026-10-08. Narrowly amends
 [0028](0028-one-checkout.md)'s prohibition on per-agent checkouts; its main-checkout
 build policy and [0016](0016-agents-share-the-phone.md)'s device safety rules stand.
-**Linear:** https://linear.app/playportdev/issue/PLA-86 (under PLA-84).
+**Linear:** https://linear.app/playportdev/issue/PLA-86 (under PLA-84). Amended by
+[0117](0117-side-copies-that-build.md): a side copy may build and test with its own reflinked
+build area.
 
 ## Decision
 
