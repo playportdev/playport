@@ -1,7 +1,9 @@
 # 0132: A torn-down process with a parked thread has its FEX band views emptied in place
 
 **Status:** accepted, 2026-10-19, design approved by the supervisor for the owner (PLA-416
-follow-up). Amends [0127](0127-end-a-terminated-pseudo-process.md). Not yet shown on the phone.
+follow-up). Amends [0127](0127-end-a-terminated-pseudo-process.md). Shown on the phone in run
+`20261019T215954`: the launcher's end emptied 2,324 MB and the footprint fell 1,021 MB, with no
+fault after it ([evidence](../evidence/2026-10-19-rdr2-proc-end-band-emptied.md)).
 
 ## Context
 
@@ -72,8 +74,6 @@ follow-up). Amends [0127](0127-end-a-terminated-pseudo-process.md). Not yet show
 - **Address space stays.** Emptied views keep their reservation in the 16 GB band. Before, they kept
   their reservation and their pages. The band peaked at 5.7 GB.
 - **Edges.** A committed run that shares a host page with another run keeps that page.
-- **Measured only on the next phone run.** The saving is expected to match the band footprint above.
-  The `footprint A->B` figure shows it.
 
 Implemented by madeira-unix 0172; the rules are in `pp_proc_end.h` and tested by
 `tools/tests/test_proc_end.py`.
