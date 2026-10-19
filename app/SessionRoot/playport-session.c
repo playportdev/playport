@@ -31,6 +31,9 @@
 // Wine's SCM, before the title, logs each service's changes as `[service]`
 // lines, and stops them all before it reports the title's end.
 //
+// At its start it writes wineboot's volatile HKLM\Hardware\Description\System\BIOS key
+// from the SMBIOS table (decision 0119), which the app's never-run wineboot would.
+//
 // For a play served by Playport's steamclient64.dll (decision 0115), it is the
 // prefix's running Steam client: its process id is ActiveProcess's pid, which a
 // genuine steam_api checks is alive, until the title's end; a crash's leftover
@@ -38,8 +41,8 @@
 //
 // x86-64, as every title is, GUI subsystem (no console, so no conhost),
 // kernel32 and user32 only, no C runtime: nothing is loaded that a title would
-// not load too (advapi32 only for the services, looked up). Its lines go to
-// stderr, the app log, prefixed `session:`.
+// not load too (advapi32 only for the services, the Steam keys and the BIOS
+// key, looked up). Its lines go to stderr, the app log, prefixed `session:`.
 
 #include <windows.h>
 #include <tlhelp32.h>
@@ -589,6 +592,112 @@ static DWORD steam_client_keys(DWORD pid, DWORD user, int create)
     return first;
 }
 
+/* --- the BIOS key wineboot makes (decision 0119)
+ *
+ * The app never runs wineboot, whose create_hardware_registry_keys writes the volatile
+ * HKLM\Hardware\Description\System\BIOS from the SMBIOS table (GetSystemFirmwareTable RSMB):
+ * the BIOS (type 0), system (1) and baseboard (2) strings and the BIOS release numbers. The
+ * host writes the rest of that key (WineHost prefix_registry_machine_values). This is
+ * wineboot's code for those three structures, run once at the session's start, so the key
+ * matches the SMBIOS table a program reads itself, as on desktop Wine. */
+#pragma pack(push, 1)
+struct smbios_prologue { BYTE calling_method, major_version, minor_version, revision; DWORD length; };
+struct smbios_header { BYTE type, length; WORD handle; };
+#pragma pack(pop)
+
+static BYTE smbios[16384];
+static WCHAR smbios_str[256];
+
+/* The structure of TYPE (the first), or NULL: wineboot's find_smbios_entry. */
+static const struct smbios_header *find_smbios_entry(BYTE type, const BYTE *buf, UINT len)
+{
+    const struct smbios_prologue *prologue = (const struct smbios_prologue *)buf;
+    const BYTE *start, *ptr;
+    const struct smbios_header *hdr;
+
+    if (len < sizeof(*prologue)) return NULL;
+    if (prologue->length > len - sizeof(*prologue) || prologue->length < sizeof(*hdr)) return NULL;
+    start = (const BYTE *)(prologue + 1);
+    hdr = (const struct smbios_header *)start;
+    for (;;) {
+        if ((const BYTE *)hdr - start >= (LONG_PTR)(prologue->length - sizeof(*hdr))) return NULL;
+        if (!hdr->length) return NULL;
+        if (hdr->type == type) {
+            if ((const BYTE *)hdr - start + hdr->length > prologue->length) return NULL;
+            return hdr;
+        }
+        for (ptr = (const BYTE *)hdr + hdr->length; ptr - buf < len && *ptr; ptr++)
+            for (; ptr - buf < len; ptr++) if (!*ptr) break;
+        if (ptr == (const BYTE *)hdr + hdr->length) ptr++;
+        hdr = (const struct smbios_header *)(ptr + 1);
+    }
+}
+
+/* String ID of the structure HDR (its strings follow it), as wide text; "" when absent, as
+ * wineboot's set_value_from_smbios_string writes. SMBIOS strings are ASCII. */
+static const WCHAR *smbios_string(const struct smbios_header *hdr, BYTE id, const BYTE *buf, UINT len)
+{
+    const BYTE *ptr;
+    UINT i = 0, n = 0;
+    smbios_str[0] = 0;
+    if (!id) return smbios_str;
+    for (ptr = (const BYTE *)hdr + hdr->length; ptr - buf < len && *ptr; ptr++) {
+        if (++i == id) {
+            for (; ptr - buf < len && *ptr && n + 1 < sizeof(smbios_str) / sizeof(*smbios_str); ptr++)
+                smbios_str[n++] = *ptr;
+            smbios_str[n] = 0;
+            return smbios_str;
+        }
+        for (; ptr - buf < len; ptr++) if (!*ptr) break;
+    }
+    return smbios_str;
+}
+
+static void bios_key(void)
+{
+    HMODULE advapi = LoadLibraryW(L"advapi32.dll");
+    reg_create_fn reg_create = advapi ? (reg_create_fn)(void *)GetProcAddress(advapi, "RegCreateKeyExW") : NULL;
+    reg_set_fn reg_set = advapi ? (reg_set_fn)(void *)GetProcAddress(advapi, "RegSetValueExW") : NULL;
+    reg_close_fn reg_close = advapi ? (reg_close_fn)(void *)GetProcAddress(advapi, "RegCloseKey") : NULL;
+    const struct smbios_header *h;
+    UINT len = GetSystemFirmwareTable('RSMB', 0, smbios, sizeof(smbios));
+    HKEY key;
+    int values = 0;
+
+#define SZ(name, id) do { const WCHAR *v_ = smbios_string(h, (id), smbios, len); \
+        if (!reg_set(key, name, 0, REG_SZ, (const BYTE *)v_, (DWORD)((wlen(v_) + 1) * sizeof(WCHAR)))) values++; } while (0)
+#define DW(name, v) do { DWORD d_ = (v); if (!reg_set(key, name, 0, REG_DWORD, (const BYTE *)&d_, sizeof(d_))) values++; } while (0)
+    if (!reg_create || !reg_set || !reg_close) return;
+    if (!len || len > sizeof(smbios)) {
+        say("bios key: no SMBIOS table (%u bytes)", (unsigned long long)len);
+        return;
+    }
+    if (reg_create(HKEY_LOCAL_MACHINE, L"Hardware\\Description\\System\\BIOS", 0, NULL, REG_OPTION_VOLATILE,
+                   KEY_ALL_ACCESS, NULL, &key, NULL))
+        return;
+    if ((h = find_smbios_entry(2, smbios, len))) {   /* baseboard: vendor 4, product 5, version 6 */
+        const BYTE *b = (const BYTE *)h;
+        SZ(L"BaseBoardManufacturer", b[4]); SZ(L"BaseBoardProduct", b[5]); SZ(L"BaseBoardVersion", b[6]);
+    }
+    if ((h = find_smbios_entry(0, smbios, len))) {   /* BIOS: vendor 4, version 5, date 8, releases 0x14-0x17 */
+        const BYTE *b = (const BYTE *)h;
+        SZ(L"BIOSVendor", b[4]); SZ(L"BIOSVersion", b[5]); SZ(L"BIOSReleaseDate", b[8]);
+        DW(L"BiosMajorRelease", h->length >= 0x18 ? b[0x14] : 0xff);
+        DW(L"BiosMinorRelease", h->length >= 0x18 ? b[0x15] : 0xff);
+        DW(L"ECFirmwareMajorVersion", h->length >= 0x18 ? b[0x16] : 0xff);
+        DW(L"ECFirmwareMinorVersion", h->length >= 0x18 ? b[0x17] : 0xff);
+    }
+    if ((h = find_smbios_entry(1, smbios, len))) {   /* system: vendor 4, product 5, version 6, SKU 0x19, family 0x1a */
+        const BYTE *b = (const BYTE *)h;
+        SZ(L"SystemManufacturer", b[4]); SZ(L"SystemProductName", b[5]); SZ(L"SystemVersion", b[6]);
+        SZ(L"SystemSKU", h->length >= 0x1b ? b[0x19] : 0); SZ(L"SystemFamily", h->length >= 0x1b ? b[0x1a] : 0);
+    }
+#undef SZ
+#undef DW
+    reg_close(key);
+    say("bios key: %u values from SMBIOS", (unsigned long long)values);
+}
+
 /* The payload's decimal account ID (pp_session_request_valid checked it). */
 static DWORD account_id(const char *payload)
 {
@@ -805,6 +914,7 @@ void __stdcall entry(void)
     }
     /* A Steam client pid a crash left (decision 0115): no title runs yet, so none is running. */
     steam_client_keys(0, 0, 0);
+    bios_key();
     say("ready, pid %u", (unsigned long long)GetCurrentProcessId());
     reply(0, PP_ROOT_READY, GetCurrentProcessId());
 

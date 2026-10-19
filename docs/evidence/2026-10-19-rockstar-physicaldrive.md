@@ -56,3 +56,42 @@ RDR2:
 
 **Status:** the PhysicalDrive check passes as on desktop Wine. RDR2 is still Broken, now on the
 jump to an unmapped address after the main window.
+
+## The next call: `HKLM\Hardware\Description\System\BIOS` (decision 0119)
+
+A second run on the same IPA had the call ring armed for Launcher.exe (`20261019T104312`). It
+shows:
+- The jump target is `Launcher.exe + 0x400b842d` in both runs, under different image bases: a
+  computed address, not a stale pointer.
+- The last call before the jump, 8.4 ms earlier, is `kernelbase.RegOpenKeyExA(HKEY_LOCAL_MACHINE,
+  …)`, which returns `ERROR_FILE_NOT_FOUND`. Before it came loader-lock pairs, and before those
+  the SMBIOS read.
+- wineboot writes the volatile `Hardware\Description\System\BIOS` key from that SMBIOS table at
+  every session start. The app never runs wineboot, and the host wrote only the processor part of
+  that key.
+
+The session root now writes that key (`playport-session.c` `bios_key`). Under desktop Wine 11.19
+in a scratch prefix it wrote 15 values that match wineboot's own for the same table, value for
+value.
+
+Phone, IPA `4232943d87d4793aca626218e08afa24eac7129190902d04b9a92d6d190967ba` (89 of 89 IPA checks):
+
+| Game | Run | Observation |
+| --- | --- | --- |
+| Hollow Knight (367520) | `20261019T105528` | first frame +9.30 s, first-frame+10 reached |
+| RDR2 (1174180) | `20261019T105650` | see below |
+
+RDR2:
+- **No crash.** `session: bios key: 15 values from SMBIOS`. The launcher signed in, showed its main
+  window ("Rockstar Games Launcher") and made its disk query. There was no jump, no `c0000005` and
+  no `c0000096`.
+- **Then the FEX band filled.** 197 emulator threads used 16,274 of 16,384 MiB, 718 rpmalloc spans
+  of 16 MiB, and 24 requests were refused.
+- **Two Social Club helpers then spun.** They are the CEF children the main window starts. Their
+  FEX code (`libarm64ecfex.dll` +0x10aad0) stores through `0x800000` and handles the fault, about
+  150,000 times per thread. The screen stayed on the launcher's logo until the run was stopped at
+  about 10 minutes.
+- `RDR2.exe` was not started.
+
+**Next blocker:** the FEX host band's per-thread cost, now that the signed-in launcher runs its main
+window's CEF processes. RDR2 stays Broken.
