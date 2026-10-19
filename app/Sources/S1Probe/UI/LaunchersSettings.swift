@@ -59,10 +59,10 @@ enum LauncherOpen {
         // as for a game's play.
         if l.windowsServices {
             do {
-                try PrefixRegistryFile(prefix: prefix).add(WindowsServices.rpcss + [WindowsServices.startTimeout])
-                log("open \(l.id): Windows services on; RpcSs's service entry and the start timeout topped up in the prefix")
+                try PrefixRegistryFile(prefix: prefix).add(WindowsServices.prefixEntries)
+                log("open \(l.id): Windows services on; RpcSs's and MountMgr's service entries and the start timeout topped up in the prefix")
             } catch {
-                log("open \(l.id): RpcSs's service entry and the start timeout not written (\(error))")
+                log("open \(l.id): RpcSs's and MountMgr's service entries and the start timeout not written (\(error))")
             }
         }
         await Task.detached(priority: .userInitiated) { EmulatorCache.keepWithinBudget { log in

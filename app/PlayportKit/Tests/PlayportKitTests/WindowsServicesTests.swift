@@ -4,7 +4,7 @@ import XCTest
 @testable import PlayportKit
 
 /// Windows services for a play that needs them (decision 0107): the per-game setting, the
-/// compatibility table's entry for Red Dead Redemption 2, and RpcSs's service entry.
+/// compatibility table's entry for Red Dead Redemption 2, and RpcSs's and MountMgr's service entries.
 final class WindowsServicesTests: XCTestCase {
     func testTheSettingIsOffUnlessAGameOrItsCompatibilityDefaultTurnsItOn() throws {
         let global = LaunchSettings()
@@ -44,6 +44,24 @@ final class WindowsServicesTests: XCTestCase {
         try file.add(WindowsServices.rpcss)
         XCTAssertEqual(try String(contentsOf: file.url(.system), encoding: .utf8), text)
         XCTAssertFalse(FileManager.default.fileExists(atPath: file.url(.user).path))
+    }
+
+    func testMountMgrEntryIsWineInfsKernelDriverAndOnlyTopsUp() throws {
+        let prefix = FileManager.default.temporaryDirectory.appendingPathComponent("ws-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: prefix) }
+        let file = PrefixRegistryFile(prefix: prefix)
+        try file.add(WindowsServices.mountmgr)
+        let text = try String(contentsOf: file.url(.system), encoding: .utf8)
+        // wine.inf [MountMgrService]: a kernel driver (1) the SCM starts with itself (boot, 0).
+        XCTAssertEqual(text, ";; playport:top-up\n[System\\\\CurrentControlSet\\\\Services\\\\MountMgr]\n"
+                       + "\"Type\"=dword:00000001\n\"Start\"=dword:00000000\n\"ErrorControl\"=dword:00000001\n"
+                       + "\"Group\"=\"System Bus Extender\"\n"
+                       + "\"ImagePath\"=\"C:\\\\windows\\\\system32\\\\drivers\\\\mountmgr.sys\"\n"
+                       + "\"DisplayName\"=\"Mount Manager\"\n\"Description\"=\"Device mounting service\"\n\n")
+        try file.add(WindowsServices.mountmgr)
+        XCTAssertEqual(try String(contentsOf: file.url(.system), encoding: .utf8), text)
+        // A play with services writes all three.
+        XCTAssertEqual(WindowsServices.prefixEntries, WindowsServices.rpcss + WindowsServices.mountmgr + [WindowsServices.startTimeout])
     }
 
     func testTheStartTimeoutIsAStringServicesExeReadsAndOnlyTopsUp() throws {

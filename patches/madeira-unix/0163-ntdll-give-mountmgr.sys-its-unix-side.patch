@@ -1,0 +1,193 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Mon, 19 Oct 2026 10:22:33 +0200
+Subject: [PATCH] ntdll: give mountmgr.sys its unix side
+
+Wine's mount manager (mountmgr.sys under winedevice) makes the NT
+device namespace's disks and volumes: \Device\Harddisk0 with its
+\??\PhysicalDrive0 link, \Device\HarddiskVolumeN for each dosdevices
+drive, and \??\MountPointManager. Its DriverEntry first binds its unix
+side and returns that status, so on iOS, where no unix library is
+loaded by name, the driver never started and none of those objects
+existed. The Rockstar Games Launcher opens \\.\PhysicalDrive0 to 9
+after sign-in and executes a HLT when none opens (Playport's PLA-401).
+
+Compile mountmgr's unixlib.c into libntdll_unix.a and map a module
+whose name contains "mountmgr" to its table. Its host device and
+keychain back-ends (udisks, DiskArbitration, the macOS keychain, CD
+ioctls) get the bodies Wine uses where a back-end is not compiled in;
+non-static names are prefixed so ntdll's own errno_to_status is not
+shadowed. The driver is 64-bit only: no WoW64 table.
+
+Class: host-app
+Evidence: docs/evidence/2026-10-19-rockstar-physicaldrive.md
+Offered-upstream: no; Playport one-process integration
+---
+ build/ntdll-unix/build.sh                   |  8 +++
+ build/ntdll-unix/mountmgr_unixlib_ios.c     | 77 +++++++++++++++++++++
+ build/ntdll-unix/shims/mountmgr_ios_names.h | 16 +++++
+ build/ntdll-unix/virtual_ios.c              | 11 +++
+ 4 files changed, 112 insertions(+)
+ create mode 100644 build/ntdll-unix/mountmgr_unixlib_ios.c
+ create mode 100644 build/ntdll-unix/shims/mountmgr_ios_names.h
+
+diff --git a/build/ntdll-unix/build.sh b/build/ntdll-unix/build.sh
+index 6b0c00b..6ca4db4 100755
+--- a/build/ntdll-unix/build.sh
++++ b/build/ntdll-unix/build.sh
+@@ -121,6 +121,13 @@ compile_unixlib "$WINE_SRC/dlls/nsiproxy.sys/ip.c" "nsi_ip" nsi \
+     -include "$BUILD_DIR/shims/nsi_ios_config.h"
+ compile_unixlib "$WINE_SRC/dlls/nsiproxy.sys/udp.c" "nsi_udp" nsi \
+     -include "$BUILD_DIR/shims/nsi_ios_config.h"
++# Playport: mountmgr.sys's unix side (drives, volumes and dosdevices links for
++# the mount manager and its Harddisk0, \\.\PhysicalDrive0), for a play that runs
++# Wine's services. Its host device and keychain back-ends are iOS stubs.
++compile_unixlib "$WINE_SRC/dlls/mountmgr.sys/unixlib.c" "mountmgr_unixlib" mountmgr \
++    -I"$WINE_SRC/dlls/mountmgr.sys" -include "$BUILD_DIR/shims/mountmgr_ios_names.h"
++compile_unixlib "$BUILD_DIR/mountmgr_unixlib_ios.c" "mountmgr_unixlib_ios" mountmgr \
++    -I"$WINE_SRC/dlls/mountmgr.sys" -include "$BUILD_DIR/shims/mountmgr_ios_names.h"
+ # Playport: winevulkan's unix side (the Vulkan thunks between the PE
+ # winevulkan.dll and win32u's Vulkan, which dlopens KosmicKrisp).
+ compile_unixlib "$WINE_SRC/dlls/winevulkan/vulkan.c" "winevulkan_unixlib" "winevulkan" \
+@@ -183,6 +190,7 @@ ar rcs "$OBJ_DIR/libntdll_unix.a" \
+     "$OBJ_DIR/gnutls_symtab_ios.o" "$OBJ_DIR/ws2_32_unixlib.o" \
+     "$OBJ_DIR/secur32_unixlib.o" "$OBJ_DIR/crypt32_unixlib.o" \
+     "$OBJ_DIR/dwrite_unixlib.o" \
++    "$OBJ_DIR/mountmgr_unixlib.o" "$OBJ_DIR/mountmgr_unixlib_ios.o" \
+     "$OBJ_DIR/winevulkan_unixlib.o" "$OBJ_DIR/winevulkan_thunks.o" \
+     "$OBJ_DIR/opengl32_unixlib.o" "$OBJ_DIR/opengl32_thunks.o" \
+     "$OBJ_DIR/alpc.o" "$OBJ_DIR/debug.o" "$OBJ_DIR/env.o" "$OBJ_DIR/file.o" \
+diff --git a/build/ntdll-unix/mountmgr_unixlib_ios.c b/build/ntdll-unix/mountmgr_unixlib_ios.c
+new file mode 100644
+index 0000000..a882165
+--- /dev/null
++++ b/build/ntdll-unix/mountmgr_unixlib_ios.c
+@@ -0,0 +1,77 @@
++/* Playport: the platform back-ends of mountmgr.sys's unix side on iOS.
++ *
++ * wine/dlls/mountmgr.sys/unixlib.c (the call table, drives, volumes, dosdevices
++ * links, shell folders) is compiled as it is. Its other unix sources are the
++ * host's device and keychain back-ends: dbus.c (udisks, Linux), diskarb.c
++ * (DiskArbitration and SystemConfiguration, macOS), cred.c (the macOS
++ * keychain) and cdrom.c (CD ioctls). iOS has none of these frameworks
++ * for an app, so this file gives them the bodies Wine itself uses where a
++ * back-end is absent: the "not compiled in" loops of dbus.c and diskarb.c,
++ * cred.c's non-Apple STATUS_NOT_SUPPORTED (advapi32 then keeps credentials in
++ * the registry, as on Linux), and no CD drive (mountmgr never makes a CD
++ * device here, so the cdrom calls are never reached).
++ *
++ * The non-static names are renamed by build.sh (mountmgr_ios_names.h) so
++ * they cannot collide with ntdll's own errno_to_status in the archive. */
++
++#include "config.h"
++#include <stdarg.h>
++#include "unixlib.h"
++#include "wine/debug.h"
++
++WINE_DEFAULT_DEBUG_CHANNEL(mountmgr);
++
++void run_diskarbitration_loop(void)
++{
++    TRACE( "Skipping, Disk Arbitration support not compiled in\n" );
++}
++
++void run_dbus_loop(void)
++{
++    TRACE( "Skipping, DBUS support not compiled in\n" );
++}
++
++NTSTATUS dhcp_request( void *args )
++{
++    return STATUS_NOT_SUPPORTED;
++}
++
++NTSTATUS query_symbol_file( void *args )
++{
++    return STATUS_NOT_SUPPORTED;
++}
++
++NTSTATUS read_credential( void *args )
++{
++    return STATUS_NOT_SUPPORTED;
++}
++
++NTSTATUS write_credential( void *args )
++{
++    return STATUS_NOT_SUPPORTED;
++}
++
++NTSTATUS delete_credential( void *args )
++{
++    return STATUS_NOT_SUPPORTED;
++}
++
++NTSTATUS enumerate_credentials( void *args )
++{
++    return STATUS_NOT_SUPPORTED;
++}
++
++NTSTATUS cdrom_open( void *args )
++{
++    return STATUS_NO_SUCH_DEVICE;
++}
++
++NTSTATUS cdrom_close( void *args )
++{
++    return STATUS_SUCCESS;
++}
++
++NTSTATUS cdrom_ioctl( void *args )
++{
++    return STATUS_NOT_SUPPORTED;
++}
+diff --git a/build/ntdll-unix/shims/mountmgr_ios_names.h b/build/ntdll-unix/shims/mountmgr_ios_names.h
+new file mode 100644
+index 0000000..2a0c179
+--- /dev/null
++++ b/build/ntdll-unix/shims/mountmgr_ios_names.h
+@@ -0,0 +1,16 @@
++/* Playport: mountmgr.sys's unix side in libntdll_unix.a. Its non-static
++ * names get a prefix, so they cannot collide with ntdll's own (errno_to_status)
++ * or another library's in the one archive. */
++#define errno_to_status          mountmgr_errno_to_status
++#define queue_device_op          mountmgr_queue_device_op
++#define run_dbus_loop            mountmgr_run_dbus_loop
++#define run_diskarbitration_loop mountmgr_run_diskarbitration_loop
++#define cdrom_open               mountmgr_cdrom_open
++#define cdrom_close              mountmgr_cdrom_close
++#define cdrom_ioctl              mountmgr_cdrom_ioctl
++#define dhcp_request             mountmgr_dhcp_request
++#define query_symbol_file        mountmgr_query_symbol_file
++#define read_credential          mountmgr_read_credential
++#define write_credential         mountmgr_write_credential
++#define delete_credential        mountmgr_delete_credential
++#define enumerate_credentials    mountmgr_enumerate_credentials
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index c4804b0..6ac18a6 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -7874,6 +7874,12 @@ extern const void *playport_steamclient_unix_call_funcs[];
+  * the same table. */
+ extern const void *playport_url_unix_call_funcs[];
+ 
++/* Playport: mountmgr.sys's unix side (wine/dlls/mountmgr.sys/unixlib.c with
++ * iOS stubs for its host back-ends, mountmgr_unixlib_ios.c). winedevice loads
++ * the driver only in a play that runs Wine's services; it is 64-bit only, so
++ * there is no WoW64 table. */
++extern const void *mountmgr_unix_call_funcs[];
++
+ /* win32u's unix init, statically linked via libwin32u_unix.a. Renamed
+  * from __wine_unix_lib_init in build/win32u-unix/build.sh so future
+  * statically-linked unix libs can keep their own init without colliding.
+@@ -7988,6 +7994,11 @@ static NTSTATUS load_builtin_unixlib( void *module, BOOL wow, const void **funcs
+             dprintf(2, "[unixlib] module %p (%s) -> playport_url_unix_call_funcs (%p)\n",
+                 module, match, (void *)playport_url_unix_call_funcs);
+             status = STATUS_SUCCESS;
++        } else if (match && strstr(match, "mountmgr")) {
++            *funcs = (const void *)mountmgr_unix_call_funcs;
++            dprintf(2, "[unixlib] module %p (%s) -> mountmgr_unix_call_funcs (%p)\n",
++                module, match, (void *)mountmgr_unix_call_funcs);
++            status = STATUS_SUCCESS;
+         } else if (match && strstr(match, "nsi.dll")) {
+             *funcs = (const void *)nsi_unix_call_funcs;
+             dprintf(2, "[unixlib] module %p (%s) -> nsi_unix_call_funcs (%p) rev=ml472\n",

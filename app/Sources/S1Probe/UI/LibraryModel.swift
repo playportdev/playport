@@ -344,10 +344,10 @@ final class LibraryModel: ObservableObject {
         // start timeout, for the SCM this play starts; a top-up, so a prefix that has them keeps its own.
         if settings.windowsServices {
             do {
-                try PrefixRegistryFile(prefix: WineHostRuntime.shared.prefixURL).add(WindowsServices.rpcss + [WindowsServices.startTimeout])
-                Self.log("play \(t.name): Windows services on; RpcSs's service entry and the start timeout topped up in the prefix")
+                try PrefixRegistryFile(prefix: WineHostRuntime.shared.prefixURL).add(WindowsServices.prefixEntries)
+                Self.log("play \(t.name): Windows services on; RpcSs's and MountMgr's service entries and the start timeout topped up in the prefix")
             } catch {
-                Self.log("play \(t.name): RpcSs's service entry and the start timeout not written (\(error))")
+                Self.log("play \(t.name): RpcSs's and MountMgr's service entries and the start timeout not written (\(error))")
             }
         }
         // A GOG game's Galaxy service (decision 0063), on by default: listening from now to the game's exit

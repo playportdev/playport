@@ -689,6 +689,37 @@ static void link_dotnet_fakedlls(void)
     host_log("dotnet: %s", err);
 }
 
+/* drive_c/windows/system32/drivers gets the set's kernel drivers (*.sys), where
+ * wineboot puts their fake DLLs (wine.inf's dirid 12) and where a driver
+ * service's ImagePath names them: the mount manager's is
+ * C:\windows\system32\drivers\mountmgr.sys (decision 0118), which ntoskrnl
+ * loads by that full path, so no builtin search finds it elsewhere. Earlier
+ * links into a runtime set are removed first; drivers/etc is kept. */
+static void link_drivers(const char *src_dir, const char *sys32)
+{
+    char drivers[1300], src[1600], dst[1600];
+    snprintf(drivers, sizeof(drivers), "%s/drivers", sys32);
+    if (mkdirs(drivers)) {
+        host_log("cannot create %s: %s", drivers, strerror(errno));
+        return;
+    }
+    unlink_runtime_links(drivers);
+    DIR *d = opendir(src_dir);
+    if (!d) return;
+    int n = 0;
+    struct dirent *e;
+    while ((e = readdir(d))) {
+        size_t l = strlen(e->d_name);
+        if (l < 5 || strcasecmp(e->d_name + l - 4, ".sys")) continue;
+        snprintf(src, sizeof(src), "%s/%s", src_dir, e->d_name);
+        snprintf(dst, sizeof(dst), "%s/%s", drivers, e->d_name);
+        unlink(dst);
+        if (symlink(src, dst) == 0) n++;
+    }
+    closedir(d);
+    host_log("system32/drivers: %d links -> %s", n, src_dir);
+}
+
 /* Point drive_c/windows/system32 at the bundle's PE set. The bundle path
  * changes on every reinstall, so the links are always recreated. A Direct3D
  * backend other than DXMT (PLAYPORT_DLL_OVERLAY, PlayportKit
@@ -723,6 +754,7 @@ static int link_system32(const char *pe_arch)
     }
     closedir(d);
     host_log("system32: %d links -> %s", n, src_dir);
+    if (n > 0) link_drivers(src_dir, sys32);
     const char *overlay = dll_overlay();
     if (n > 0 && overlay) {
         char over_dir[1400];
