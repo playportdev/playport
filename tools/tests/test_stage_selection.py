@@ -103,7 +103,7 @@ class Record(unittest.TestCase):
                 p.write_bytes(f"{key} {name}".encode())
             out = root / "artifacts.tsv"
             common = dict(REPO=root, ROOTS=roots, MANIFEST=out, GENERATED=gen, NLS=[], FONTS=[], ETC=[], SXS=[], LINK=[], SOURCES=[],
-                          VULKAN_PE=[], VULKAN_PE_I386=[], STEAMAPI=[], GAPS=[])
+                          VULKAN_PE=[], VULKAN_PE_I386=[], VULKAN_LOADER=[], STEAMAPI=[], GAPS=[])
             with patch.multiple(stage, **common), patch.object(stage, "reference_names", return_value=[]):
                 stage.record()
             rows = {r[1]: r for r in (l.split("\t") for l in out.read_text().splitlines()

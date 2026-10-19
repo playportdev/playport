@@ -195,6 +195,17 @@
       ]
     },
     {
+      "name": "Khronos Vulkan-Loader",
+      "covers": [
+        "P6-vulkan-loader"
+      ],
+      "licence": "Apache-2.0; bundled cJSON MIT; Vulkan-Headers Apache-2.0 OR MIT",
+      "include": [
+        "Vulkan-Loader-*",
+        "Vulkan-Headers-*"
+      ]
+    },
+    {
       "name": "vkd3d-proton",
       "covers": [
         "P6-vulkan-pe"

@@ -23,6 +23,7 @@
 #   P5-winios Madeira pin app/Madeira/Winios/ (the reference's app-side Winios display driver); Winios.m + patches/madeira-winios; WiniosGamepad.c, the controller snapshot Wine's xinput1_*.dll (P2) read through libwin32u_unix.a
 #   P5-dxshim Madeira pin app/Madeira/IOSDisplayShim.{h,m}, unmodified: the macdrv_functions table DXMT's winemetal unix side looks up for a CAMetalLayer
 #   P6-vulkan-pe DXVK at its pin, unmodified, and vkd3d-proton at its pin + patches/vkd3d-proton, for arm64ec (build/stages/vulkan-pe.sh, llvm-mingw 20260922), marked Wine builtins; staged under Runtime/vulkan/, which a launch set to Vulkan puts first on WINEDLLPATH (decision 0014)
+#   P6-vulkan-loader the Khronos Vulkan-Loader (Apache-2.0) at the vulkan-loader pin with the vulkan-headers pin, unmodified, for arm64ec (build/stages/vulkan-pe.sh loader, llvm-mingw 20260922), marked a Wine builtin, and the wine pin's dlls/winevulkan/winevulkan.json (the ICD manifest winevulkan's DllRegisterServer writes); staged under Runtime/vulkan-loader/, which a play with khronosVulkanLoader links over system32 (decision 0131)
 #   P6-gst    winegstreamer's unix side (wine pin + patches/wine-port + patches/wine-unix) prelinked with the static plugin set from the pins.lock gstreamer iOS release (build/stages/gstreamer.sh); one object, one exported symbol
 #   P8-steamapi gbe_fork (LGPL-3.0) at the gbe pin + patches/gbe: its regular steam_api for x86-64 and i386 with its static dependencies (build/stages/steamapi.sh, llvm-mingw 20260922); native DLLs under Runtime/steamapi/, which the app copies into a game's folder in place of the game's own (SteamClientKit SteamAPISwap)
 #   P9-session app/SessionRoot/playport-session.c (Playport's own) compiled by build/stages/session-root.sh (llvm-mingw 20260922) as a freestanding x86-64 program: the one Wine main process of an app run, which starts every title as its child (decision 0027); in arm64ec-windows so the prefix's system32 has it
@@ -2373,6 +2374,8 @@ resource	Runtime/vulkan/i386-windows/d3d9.dll	7475200	6b7b2be77bdb09cbf6ee8c2d5e
 resource	Runtime/vulkan/i386-windows/d3d10core.dll	438272	667a647a191f01cef80050b514610644aa66fd2cfacd5c00035b6b068b65b774	vulkan-pe	i386-windows/d3d10core.dll	P6-vulkan-pe
 resource	Runtime/vulkan/i386-windows/d3d11.dll	8306688	8d4a47890c2afadba9a8a13d3f9c615537ed0ba8b7af070883ef155a7d9575ea	vulkan-pe	i386-windows/d3d11.dll	P6-vulkan-pe
 resource	Runtime/vulkan/i386-windows/dxgi.dll	5607424	96427bc77b2811d94b201aa5cf7b08287dbecb61b13c61c4437ee1e92efa2ae5	vulkan-pe	i386-windows/dxgi.dll	P6-vulkan-pe
+resource	Runtime/vulkan-loader/arm64ec-windows/vulkan-1.dll	762880	db87edae47763dc52b0bbb20e3fef5713cb129de339b81943ff57f581b2d5daf	vulkan-loader	arm64ec-windows/vulkan-1.dll	P6-vulkan-loader
+resource	Runtime/vulkan-loader/arm64ec-windows/winevulkan.json	137	0947fde3a7cf0efea1fad4c0b0ea1822e122a56e0c821e39df68daf561ca50f8	vulkan-loader	arm64ec-windows/winevulkan.json	P6-vulkan-loader
 resource	Runtime/steamapi/x86_64-windows/steam_api64.dll	8353280	f0db32854540fbfb0096e212436c03c7cee50f2671ce9bd14eab6da88484e713	steamapi	x86_64-windows/steam_api64.dll	P8-steamapi
 resource	Runtime/steamapi/i386-windows/steam_api.dll	8667648	0d6b96b7689a3286c891dd5b072f9f4b7ca88bf23ed84c2aba9b2b81106f7985	steamapi	i386-windows/steam_api.dll	P8-steamapi
 resource	Runtime/arm64ec-windows/playport-session.exe	41984	dd349d3008ad9232345cc9550112f3596f28a0524ecee440ccdaeac270bcc8e9	session	playport-session.exe	P9-session
@@ -2419,7 +2422,7 @@ resource	Runtime/winsxs/msvcr90/msvcr90.manifest	374	c137bf556c09d6071bdfe0bb998
 resource	Runtime/winsxs/msxml3/msxml3.manifest	322	69304ab6275f1614af7ccc021bea1af6773566e1a21c4b169c02f3c535c740cb	unix	wine/dlls/msxml3/msxml3.manifest	winsxs
 resource	Runtime/winsxs/msxml4/msxml4.manifest	306	04e566672246f68a36f7ea72c0d21c2fa5d44ab71e7a5fa07c6ad8490f76ae83	unix	wine/dlls/msxml4/msxml4.manifest	winsxs
 resource	Runtime/winsxs/msxml6/msxml6.manifest	322	80318507a7351e74d73e25cbc850f60190a5e52c1586aa3043dfc50dc77a7ae7	unix	wine/dlls/msxml6/msxml6.manifest	winsxs
-resource	Runtime/registry/system.reg	1317459	4e2796ce21fa8186370b436b49727ffd61cfc13d35f7836ca0118ef50c679e77	registry	system.reg	P7-reg
+resource	Runtime/registry/system.reg	1317572	3e3e5d2800c860430f20216ada704ba940849a0669354c33743b08b83b2c5ea4	registry	system.reg	P7-reg
 resource	Runtime/registry/user.reg	12233	5088f07a85858de831633f8873b83600e40a717851af5fbdc0e0fd041caf34a0	registry	user.reg	P7-reg
 resource	Runtime/certs/cacert.pem	188900	a41b5d356aea97a529fe27e0f7316d2f9d946d75927476cf9cf1b90637d00505	ca-bundle	cacert.pem	ca-bundle
 resource	Runtime/mono/wine-mono-11.3.0/bin/libmono-2.0-x86.dll	3725824	cda071f4f4948abc4ab85593ec06f3b633c7420dcf455d10157e06d460f2db9f	wine-mono	bin/libmono-2.0-x86.dll	wine-mono

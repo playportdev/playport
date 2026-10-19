@@ -41,8 +41,9 @@
 #   dxmt     the DXMT unix slice (libdxmt_combined.a) and PE DLLs, one patched tree
 #   vulkan   the Vulkan Direct3D backend (decision 0014): KosmicKrisp for iOS as
 #            app/Staged/KosmicKrisp.xcframework (build/stages/mesa.sh), with Mesa's
-#            EGL and Zink as MesaEGL/MesaGallium.xcframework, DXVK and
-#            vkd3d-proton for arm64ec (build/stages/vulkan-pe.sh)
+#            EGL and Zink as MesaEGL/MesaGallium.xcframework, DXVK,
+#            vkd3d-proton and the Khronos Vulkan-Loader for arm64ec
+#            (build/stages/vulkan-pe.sh; the loader: decision 0131)
 #   steamapi the Steam API emulator a game loads in place of its steam_api(64).dll:
 #            gbe_fork's steam_api for x86-64 and i386 (build/stages/steamapi.sh)
 #   idevice  idevice's C FFI for iOS with the pins.lock Rust, prelinked into one object
@@ -323,9 +324,9 @@ stage_vulkan() {
     say "  $(grep '^staged KosmicKrisp' "$RUN/logs/vulkan.log" | tail -1)"
     say "  $(grep '^staged MesaGallium' "$RUN/logs/vulkan.log" | tail -1)"
     say "  $(grep '^staged MesaEGL' "$RUN/logs/vulkan.log" | tail -1)"
-    run vulkan env WINEBUILD="$RUN/pe/wine/build-tools/tools/winebuild/winebuild" \
+    run vulkan env WINEBUILD="$RUN/pe/wine/build-tools/tools/winebuild/winebuild" WINE_SRC="$RUN/pe/wine" \
         bash "$HERE/stages/vulkan-pe.sh" "$RUN/vulkan-pe"
-    say "  $(grep -c 'arm64ec-windows/' "$RUN/logs/vulkan.log") vulkan-pe DLLs"
+    say "  $(grep -c ' arm64ec-windows/.*\.dll$' "$RUN/logs/vulkan.log") vulkan-pe DLLs"
 }
 
 stage_stage() {
@@ -461,7 +462,7 @@ digest_inputs() {
         dxmt) pins madeira dxmt dxmt-port llvm-project; series_text dxmt-port dxmt
               files build/stages/dxmt-base.sh build/stages/dxmt-patched.sh build/stages/dxmt-combined.sh build/air-helpers
               after pe ;;
-        vulkan) pins mesa dxvk vkd3d-proton; series_text mesa dxvk vkd3d-proton
+        vulkan) pins mesa dxvk vkd3d-proton vulkan-loader vulkan-headers; series_text mesa dxvk vkd3d-proton
                 files build/stages/mesa.sh build/stages/vulkan-pe.sh build/check-macho-imports.py
                 after pe ;;
         steamapi) pins gbe abseil-cpp; series_text gbe; files build/stages/steamapi.sh build/steamapi-vtables.py ;;

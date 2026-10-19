@@ -38,7 +38,11 @@
 # Vulkan driver on Metal, built for iOS by build/stages/mesa.sh; every IPA
 # carries it (decision 0015). dxvk and vkd3d-proton are the Vulkan
 # backend's Direct3D layers, built by build/stages/vulkan-pe.sh: dxvk
-# unmodified, vkd3d-proton with patches/vkd3d-proton.
+# unmodified, vkd3d-proton with patches/vkd3d-proton. vulkan-loader is the
+# Khronos Vulkan-Loader (Apache-2.0) at the tag of the wine pin's Vulkan headers
+# (v1.4.363), built unmodified for arm64ec against vulkan-headers at the same tag
+# by the same stage: the vulkan-1.dll a play with khronosVulkanLoader gets in place
+# of Wine's (decision 0131). Both move with the wine pin's VK_HEADER_VERSION.
 #
 # gbe is gbe_fork (Detanup01/gbe_fork, LGPL-3.0), the Steam API emulator a game
 # loads in place of its steam_api(64).dll: its release-2026_09_27 tag, with
@@ -58,6 +62,8 @@ rpmalloc-port 1f271c0c3202663801a0aec32bdb57e5241d6a0e  https://github.com/willf
 mesa         b39d173ca9369c19fda2635be6655d308067e52d  https://gitlab.freedesktop.org/mesa/mesa.git main
 dxvk         e5ffd0fe5e5d62e68b2831d1285b51e61bb454d8  https://github.com/doitsujin/dxvk.git         master
 vkd3d-proton 31d1f89ca5b3f2fd3b6f025c8e6f73ed3eaa852b  https://github.com/HansKristian-Work/vkd3d-proton.git master
+vulkan-loader 9e9518d2cf00054a220ae1a40f4406804b420ef5  https://github.com/KhronosGroup/Vulkan-Loader.git   -
+vulkan-headers 6802bb4733b63ed5efd3adb308a6c885ef180ea1  https://github.com/KhronosGroup/Vulkan-Headers.git  -
 gbe          7103add7ca6ef3ef8353279219880068f2494fc8  https://github.com/Detanup01/gbe_fork.git     dev
 #
 # CEF 143.0.14 / Chromium 143.0.7499.193 (decision 0110). Built separately;

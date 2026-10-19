@@ -321,7 +321,8 @@ class NoticeProvenance(unittest.TestCase):
         log = out / ".copy-sources.tsv"
         log.write_text(f"git.txt\t{self.tree / 'LICENSE'}\nrust.txt\t{rust_notice}\n")
         env = {key: str(self.tree) for key in
-               ("WINE", "FEX", "MYTHIC", "DXMT", "LLVM", "FREETYPE", "MESA", "DXVK", "VKD3D", "GBE", "ABSL", "STIKJIT", "IDEVICE")}
+               ("WINE", "FEX", "MYTHIC", "DXMT", "LLVM", "FREETYPE", "MESA", "DXVK", "VKD3D", "VULKAN_LOADER", "VULKAN_HEADERS",
+                "GBE", "ABSL", "STIKJIT", "IDEVICE")}
         with patch.dict(os.environ, {**env, "RUST_ROOT": str(rust)}):
             with self.assertRaisesRegex(ValueError, "lacks locked release archive"):
                 provenance.validate_copies(self.tree, log)
@@ -476,7 +477,8 @@ class NoticeProvenance(unittest.TestCase):
         log = self.derived_fixture([f"archive-member\tnotice.txt\t{archive}\tvendor/LICENSE"])
         manifest = log.parent / "derived-origins.json"
         env = dict(os.environ, **{key: str(self.tree) for key in
-                   ("WINE", "FEX", "MYTHIC", "DXMT", "LLVM", "FREETYPE", "MESA", "DXVK", "VKD3D", "GBE", "ABSL", "STIKJIT", "IDEVICE")})
+                   ("WINE", "FEX", "MYTHIC", "DXMT", "LLVM", "FREETYPE", "MESA", "DXVK", "VKD3D", "VULKAN_LOADER", "VULKAN_HEADERS",
+                    "GBE", "ABSL", "STIKJIT", "IDEVICE")})
         result = subprocess.run([sys.executable, str(REPO / "build/notices-provenance.py"),
                                  "derived", str(self.tree), str(log), str(manifest)],
                                 env=env, capture_output=True, text=True)

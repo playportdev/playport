@@ -13,7 +13,8 @@
 # it never changes RUST_ROOT's compiler/standard-library documentation location.
 #
 # Tree roots (env; the defaults are a finished pp build run in
-# $PLAYPORT_RUN, default $PLAYPORT_BUILD/run): WINE FEX MYTHIC DXMT LLVM FREETYPE MESA DXVK VKD3D GBE ABSL, and STIKJIT and
+# $PLAYPORT_RUN, default $PLAYPORT_BUILD/run): WINE FEX MYTHIC DXMT LLVM FREETYPE MESA DXVK VKD3D
+# VULKAN_LOADER VULKAN_HEADERS GBE ABSL, and STIKJIT and
 # IDEVICE (the checkouts build/stages/stikjit.sh keeps under
 # $PLAYPORT_BUILD/cache). Each must match its exact pin-plus-series tree.
 # IDEVICE_RUN (default $RUN/idevice) is build/stages/idevice.sh's output: its
@@ -57,6 +58,8 @@ FREETYPE=${FREETYPE:-$RUN/unix/mythic/research/freetype}
 MESA=${MESA:-$RUN/mesa/mesa}
 DXVK=${DXVK:-$RUN/vulkan-pe/dxvk}
 VKD3D=${VKD3D:-$RUN/vulkan-pe/vkd3d-proton}
+VULKAN_LOADER=${VULKAN_LOADER:-$RUN/vulkan-pe/vulkan-loader}
+VULKAN_HEADERS=${VULKAN_HEADERS:-$RUN/vulkan-pe/vulkan-headers}
 GBE=${GBE:-$RUN/steamapi/gbe}
 ABSL=${ABSL:-$RUN/steamapi/abseil-cpp}
 STIKJIT=${STIKJIT:-$PLAYPORT_BUILD/cache/stikjit-$(pin stikjit)/src}
@@ -78,7 +81,7 @@ export GST_NOTICE_CERBERO GST_NOTICE_SOURCES LLVM_RUNTIME_SOURCE LLVM_MINGW_SOUR
 # Work beside the destination (same filesystem), then publish only on success.
 OUT=$(mktemp -d "${FINAL_OUT}.partial.XXXXXX")
 trap 'rm -rf -- "$OUT"' EXIT
-export WINE FEX MYTHIC DXMT LLVM FREETYPE MESA DXVK VKD3D GBE ABSL STIKJIT IDEVICE
+export WINE FEX MYTHIC DXMT LLVM FREETYPE MESA DXVK VKD3D VULKAN_LOADER VULKAN_HEADERS GBE ABSL STIKJIT IDEVICE
 python3 "$REPO/build/notices-provenance.py" trees "$REPO" "$PLAYPORT_BUILD/tmp" "$OUT/tree-provenance.json"
 python3 "$REPO/build/notices-rust.py" "$REPO" "$IDEVICE" "$IDEVICE_RUN" "$RUST_ROOT" \
     "$PLAYPORT_BUILD/tmp" "$OUT/rust-provenance.json" --cargo-home "$RUST_NOTICE_CARGO_HOME" --collect-notices "$OUT"
@@ -194,6 +197,14 @@ cp_ dxil-spirv-LICENSE.MIT.txt "$DXIL/LICENSE.MIT"
 cp_ dxil-spirv-dxbc-spirv-LICENSE.txt "$DXIL/subprojects/dxbc-spirv/LICENSE"
 excerpt_ dxil-spirv-bc-decoder-header.txt "$DXIL/third_party/bc-decoder/llvm_decoder.cpp" 1 23   # no licence file in the directory
 excerpt_ dxil-spirv-glslang-spirv-header.txt "$DXIL/third_party/glslang-spirv/SpvBuilder.cpp" 1 34
+# The Khronos Vulkan-Loader (Runtime/vulkan-loader: vulkan-1.dll, decision 0131), the cJSON
+# it compiles in (no licence file in the directory: its header), and the Vulkan-Headers it
+# is compiled against
+cp_ Vulkan-Loader-LICENSE.txt "$VULKAN_LOADER/LICENSE.txt"
+for f in "$VULKAN_LOADER"/LICENSES/*; do cp_ "Vulkan-Loader-LICENSES-$(basename "$f")" "$f"; done
+excerpt_ Vulkan-Loader-cJSON-header.txt "$VULKAN_LOADER/loader/cJSON.c" 1 21
+cp_ Vulkan-Headers-LICENSE.md "$VULKAN_HEADERS/LICENSE.md"
+for f in "$VULKAN_HEADERS"/LICENSES/*; do cp_ "Vulkan-Headers-LICENSES-$(basename "$f")" "$f"; done
 # gbe_fork (Runtime/steamapi: steam_api64.dll, steam_api.dll), the libraries in
 # its tree, and the dependencies it links statically: each from the archive on
 # its third-party/deps/common branch (the build's), and Abseil from its pin

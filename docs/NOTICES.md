@@ -39,7 +39,7 @@ The script copies each licence and notice file byte for byte from the pinned
 trees of a finished `pp build` run into `OUT`, and writes
 `SHA256SUMS`. The tree roots default to that run's layout under
 `$PLAYPORT_BUILD/run` and can be overridden with `WINE`, `FEX`, `MYTHIC`
-(the Madeira checkout), `DXMT`, `LLVM`, `FREETYPE`, `MESA`, `DXVK`, `VKD3D`, `GBE` and `ABSL`; `STIKJIT` and
+(the Madeira checkout), `DXMT`, `LLVM`, `FREETYPE`, `MESA`, `DXVK`, `VKD3D`, `VULKAN_LOADER`, `VULKAN_HEADERS`, `GBE` and `ABSL`; `STIKJIT` and
 `IDEVICE` default to the checkouts `build/stages/stikjit.sh` keeps in
 `$PLAYPORT_BUILD/cache`, and `IDEVICE_RUN` to the run's `idevice` stage output.
 `build/notices-provenance.py` reconstructs each expected Git tree from its pin
@@ -430,6 +430,7 @@ See [the Mesa audit](release-audits/mesa.md) for scope and source-level evidence
 | `mesa-header-superset-<flattened-source-path>.txt` | full committed Vulkan/video, OpenGL (`include/GL`), EGL (`include/EGL`) and `include/KHR` headers and top-level SPIR-V headers in Mesa | scoped copyright/permission/normative-warning superset, including code and other platforms; not compiled-header applicability |
 | `DXVK-LICENSE.txt`, `DXVK-libdisplay-info-LICENSE.txt`, `DXVK-dxbc-spirv-LICENSE.txt`, `DXVK-mingw-directx-headers-COPYING.MinGW-w64.txt` | DXVK and its `subprojects/`, `include/native/directx` | the DXVK DLLs in `Runtime/vulkan/` (zlib/libpng; libdisplay-info and dxbc-spirv MIT) |
 | `khronos-<dxvk\|vkd3d>-<flattened-source-path>` (21 texts at the current pins) | seven Vulkan/SPIR-V header checkouts, including nested dxbc-spirv/dxil-spirv copies | root attributions and recursive notice/`LICENSES/` superset for the PE backend; not Mesa's vendored headers or an applicability audit |
+| `Vulkan-Loader-LICENSE.txt`, `Vulkan-Loader-LICENSES-<name>` for every file in its `LICENSES/`, `Vulkan-Loader-cJSON-header.txt`, `Vulkan-Headers-LICENSE.md`, `Vulkan-Headers-LICENSES-<name>` | the Khronos Vulkan-Loader and the Vulkan-Headers it is compiled against (the cJSON header is the first 21 lines of `loader/cJSON.c`; its directory has no licence file) | `vulkan-1.dll` in `Runtime/vulkan-loader/` (Apache-2.0; cJSON MIT; headers Apache-2.0 OR MIT) |
 | `vkd3d-proton-COPYING.txt`, `vkd3d-proton-LICENSE.txt`, `vkd3d-proton-AUTHORS.txt` | vkd3d-proton (LGPL-2.1-or-later) | `d3d12.dll`, `d3d12core.dll` in `Runtime/vulkan/` |
 | `dxil-spirv-LICENSE.MIT.txt`, `dxil-spirv-dxbc-spirv-LICENSE.txt`, `dxil-spirv-bc-decoder-header.txt`, `dxil-spirv-glslang-spirv-header.txt` | vkd3d-proton `subprojects/dxil-spirv` (the two headers are the first lines of a source file; those directories have no licence file) | the shader converter inside `d3d12core.dll` |
 | `gbe_fork-LICENSE.txt` | gbe_fork (LGPL-3.0) | `steam_api64.dll`, `steam_api.dll` in `Runtime/steamapi/` |

@@ -12,21 +12,34 @@
 # launch set to Vulkan finds them before DXMT's (wine_host_init,
 # PLAYPORT_DLL_OVERLAY).
 #
+# The loader stage builds the Khronos Vulkan-Loader (vulkan-1.dll, unmodified, at
+# the vulkan-loader pin with the vulkan-headers pin) for arm64ec, beside Wine's
+# own winevulkan.json, the ICD manifest winevulkan's DllRegisterServer writes
+# (decision 0131). The app stages them under Runtime/vulkan-loader/arm64ec-windows,
+# which a play with khronosVulkanLoader links over system32 after its backend's set.
+# The loader has no assembler here (USE_GAS/USE_MASM off): its trampolines for
+# functions it does not know are aarch64 code, not ARM64EC, and the headers it is
+# built with are winevulkan's, so it knows every function winevulkan has.
+#
 #   build/stages/vulkan-pe.sh [ROOT] [stage...]   ROOT defaults to $PLAYPORT_BUILD/run/vulkan-pe;
-#                                                  stages: src dxvk vkd3d (default all)
+#                                                  stages: src dxvk dxvk32 vkd3d loader (default all)
 #
 # Inputs (env): LLVM_MINGW (build/lib.sh); WINEBUILD, default the pe stage's
-# $PLAYPORT_BUILD/run/pe/wine/build-tools/tools/winebuild/winebuild.
-# Output: ROOT/pe/arm64ec-windows/*.dll, ROOT/pe/i386-windows/*.dll. Host tools: meson, ninja, glslangValidator.
+# $PLAYPORT_BUILD/run/pe/wine/build-tools/tools/winebuild/winebuild; WINE_SRC, the
+# pe stage's Wine tree (default $PLAYPORT_BUILD/run/pe/wine), for winevulkan.json.
+# Output: ROOT/pe/arm64ec-windows/*.dll, ROOT/pe/i386-windows/*.dll,
+# ROOT/loader/arm64ec-windows/{vulkan-1.dll,winevulkan.json}. Host tools: meson, ninja,
+# cmake, glslangValidator.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/../lib.sh"
 ROOT=$(realpath -m "${1:-$PLAYPORT_BUILD/run/vulkan-pe}")
 shift || true
-STAGES=${*:-src dxvk dxvk32 vkd3d}
+STAGES=${*:-src dxvk dxvk32 vkd3d loader}
 MINGW=${LLVM_MINGW:?set LLVM_MINGW (pp setup)}
 WINEBUILD=${WINEBUILD:-$PLAYPORT_BUILD/run/pe/wine/build-tools/tools/winebuild/winebuild}
+WINE_SRC=${WINE_SRC:-$PLAYPORT_BUILD/run/pe/wine}
 JOBS=${JOBS:-$(nproc)}
 ARCH=arm64ec
 
@@ -78,10 +91,10 @@ endian = 'little'
 EOF
 }
 
-# install_dll SRC: strip, mark builtin, copy into pe/<Wine arch>-windows.
+# install_dll SRC [DIR]: strip, mark builtin, copy into DIR (default pe/<Wine arch>-windows).
 install_dll() {
-    local dir=$ROOT/pe/$ARCH-windows
-    [ "$ARCH" = i686 ] && dir=$ROOT/pe/i386-windows
+    local dir=${2:-$ROOT/pe/$ARCH-windows}
+    [ -z "${2:-}" ] && [ "$ARCH" = i686 ] && dir=$ROOT/pe/i386-windows
     mkdir -p "$dir"
     local out=$dir/$(basename "$1")
     "$MINGW/bin/llvm-strip" --strip-debug -o "$out" "$1"
@@ -91,6 +104,8 @@ install_dll() {
 stage_src() {
     fetch dxvk "$ROOT/dxvk" dxvk
     fetch vkd3d-proton "$ROOT/vkd3d-proton" vkd3d-proton
+    fetch vulkan-loader "$ROOT/vulkan-loader"
+    fetch vulkan-headers "$ROOT/vulkan-headers"
 }
 
 stage_dxvk() {
@@ -131,10 +146,39 @@ stage_vkd3d() {
     install_dll "$ROOT/build-vkd3d/libs/d3d12core/d3d12core.dll"
 }
 
+# The Khronos loader (decision 0131): the headers installed into a prefix its CMake
+# finds by path only, then the loader against them, for arm64ec.
+stage_loader() {
+    rm -rf "$ROOT/build-vulkan-headers" "$ROOT/vulkan-headers-install" "$ROOT/build-vulkan-loader" "$ROOT/loader"
+    cmake -S "$ROOT/vulkan-headers" -B "$ROOT/build-vulkan-headers" -G Ninja \
+        -DCMAKE_INSTALL_PREFIX="$ROOT/vulkan-headers-install" > "$ROOT/cmake-vulkan-headers.log"
+    cmake --install "$ROOT/build-vulkan-headers" >> "$ROOT/cmake-vulkan-headers.log"
+    cat > "$ROOT/toolchain-$ARCH.cmake" <<EOF
+set(CMAKE_SYSTEM_NAME Windows)
+set(CMAKE_SYSTEM_PROCESSOR $ARCH)
+set(CMAKE_C_COMPILER $MINGW/bin/$ARCH-w64-mingw32-clang)
+set(CMAKE_CXX_COMPILER $MINGW/bin/$ARCH-w64-mingw32-clang++)
+set(CMAKE_RC_COMPILER $MINGW/bin/$ARCH-w64-mingw32-windres)
+set(CMAKE_AR $MINGW/bin/llvm-ar)
+set(CMAKE_RANLIB $MINGW/bin/llvm-ranlib)
+set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+EOF
+    # lld stamps each PE with its link time otherwise: no two builds would match
+    cmake -S "$ROOT/vulkan-loader" -B "$ROOT/build-vulkan-loader" -G Ninja \
+        -DCMAKE_TOOLCHAIN_FILE="$ROOT/toolchain-$ARCH.cmake" -DCMAKE_BUILD_TYPE=Release \
+        -DVulkanHeaders_DIR="$ROOT/vulkan-headers-install/share/cmake/VulkanHeaders" \
+        -DUSE_GAS=OFF -DUSE_MASM=OFF -DBUILD_TESTS=OFF \
+        -DCMAKE_SHARED_LINKER_FLAGS=-Wl,--no-insert-timestamp > "$ROOT/cmake-vulkan-loader.log" 2>&1
+    ninja -C "$ROOT/build-vulkan-loader" -j "$JOBS" > "$ROOT/ninja-vulkan-loader.log"
+    install_dll "$ROOT/build-vulkan-loader/loader/vulkan-1.dll" "$ROOT/loader/$ARCH-windows"
+    cp "$WINE_SRC/dlls/winevulkan/winevulkan.json" "$ROOT/loader/$ARCH-windows/winevulkan.json"
+}
+
 for s in $STAGES; do
     case $s in
-    src|dxvk|dxvk32|vkd3d) echo "== vulkan-pe: $s"; "stage_$s" ;;
-    *) echo "no stage $s (src dxvk dxvk32 vkd3d)" >&2; exit 2 ;;
+    src|dxvk|dxvk32|vkd3d|loader) echo "== vulkan-pe: $s"; "stage_$s" ;;
+    *) echo "no stage $s (src dxvk dxvk32 vkd3d loader)" >&2; exit 2 ;;
     esac
 done
 (cd "$ROOT/pe" && sha256sum */*.dll)
+[ ! -d "$ROOT/loader" ] || (cd "$ROOT/loader" && sha256sum */*)

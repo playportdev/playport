@@ -36,6 +36,8 @@ under $PLAYPORT_RUN, default $PLAYPORT_BUILD/run):
   DXMT_PE_ROOT        dxmt-patched/pe    stages/dxmt-patched.sh pe (P5-dxmt-pe); the
                                          same patched tree as P5-dxmt's unix objects
   VULKAN_PE_ROOT      vulkan-pe/pe       stages/vulkan-pe.sh (P6-vulkan-pe): DXVK and vkd3d-proton
+  VULKAN_LOADER_ROOT  vulkan-pe/loader   stages/vulkan-pe.sh loader (P6-vulkan-loader): the Khronos
+                                         Vulkan-Loader and winevulkan.json
   STEAMAPI_ROOT       steamapi/pe        stages/steamapi.sh (P8-steamapi): gbe_fork's steam_api DLLs
   session             session            stages/session-root.sh (P9-session, P9-url-opener): the session
                                          root and the URL opener
@@ -81,6 +83,7 @@ ROOTS = {
     "dxmt": Path(os.environ.get("DXMT_COMBINED_ROOT", RUN / "dxmt-combined")),
     "dxmt-pe": Path(os.environ.get("DXMT_PE_ROOT", RUN / "dxmt-patched" / "pe")),
     "vulkan-pe": Path(os.environ.get("VULKAN_PE_ROOT", RUN / "vulkan-pe" / "pe")),
+    "vulkan-loader": Path(os.environ.get("VULKAN_LOADER_ROOT", RUN / "vulkan-pe" / "loader")),
     "steamapi": Path(os.environ.get("STEAMAPI_ROOT", RUN / "steamapi" / "pe")),
     "session": RUN / "session",
     "steamclient": RUN / "steamclient",
@@ -118,6 +121,7 @@ HEADER = """\
 #   P5-winios Madeira pin app/Madeira/Winios/ (the reference's app-side Winios display driver); Winios.m + patches/madeira-winios; WiniosGamepad.c, the controller snapshot Wine's xinput1_*.dll (P2) read through libwin32u_unix.a
 #   P5-dxshim Madeira pin app/Madeira/IOSDisplayShim.{h,m}, unmodified: the macdrv_functions table DXMT's winemetal unix side looks up for a CAMetalLayer
 #   P6-vulkan-pe DXVK at its pin, unmodified, and vkd3d-proton at its pin + patches/vkd3d-proton, for arm64ec (build/stages/vulkan-pe.sh, llvm-mingw 20260922), marked Wine builtins; staged under Runtime/vulkan/, which a launch set to Vulkan puts first on WINEDLLPATH (decision 0014)
+#   P6-vulkan-loader the Khronos Vulkan-Loader (Apache-2.0) at the vulkan-loader pin with the vulkan-headers pin, unmodified, for arm64ec (build/stages/vulkan-pe.sh loader, llvm-mingw 20260922), marked a Wine builtin, and the wine pin's dlls/winevulkan/winevulkan.json (the ICD manifest winevulkan's DllRegisterServer writes); staged under Runtime/vulkan-loader/, which a play with khronosVulkanLoader links over system32 (decision 0131)
 #   P6-gst    winegstreamer's unix side (wine pin + patches/wine-port + patches/wine-unix) prelinked with the static plugin set from the pins.lock gstreamer iOS release (build/stages/gstreamer.sh); one object, one exported symbol
 #   P8-steamapi gbe_fork (LGPL-3.0) at the gbe pin + patches/gbe: its regular steam_api for x86-64 and i386 with its static dependencies (build/stages/steamapi.sh, llvm-mingw 20260922); native DLLs under Runtime/steamapi/, which the app copies into a game's folder in place of the game's own (SteamClientKit SteamAPISwap)
 #   P9-session app/SessionRoot/playport-session.c (Playport's own) compiled by build/stages/session-root.sh (llvm-mingw 20260922) as a freestanding x86-64 program: the one Wine main process of an app run, which starts every title as its child (decision 0027); in arm64ec-windows so the prefix's system32 has it
@@ -210,6 +214,8 @@ NOT_SHIPPED = {"winetest.exe"}
 # DXVK's and vkd3d-proton's DLLs (build/stages/vulkan-pe.sh).
 VULKAN_PE = ["d3d8.dll", "d3d9.dll", "d3d10core.dll", "d3d11.dll", "dxgi.dll", "d3d12.dll", "d3d12core.dll"]
 VULKAN_PE_I386 = ["d3d9.dll", "d3d10core.dll", "d3d11.dll", "dxgi.dll"]
+# The Khronos Vulkan loader and the ICD manifest it finds winevulkan by (build/stages/vulkan-pe.sh loader).
+VULKAN_LOADER = ["vulkan-1.dll", "winevulkan.json"]
 
 def wine_mono_files():
     """Every file of the unpacked Wine Mono tree (build/stages/wine-mono.sh), relative to
@@ -311,6 +317,10 @@ def record():
     # DXVK's Direct3D 9 to 11 for an i386 (WoW64) title, over Wine's wined3d ones.
     for name in VULKAN_PE_I386:
         add("resource", f"Runtime/vulkan/i386-windows/{name}", "vulkan-pe", f"i386-windows/{name}", "P6-vulkan-pe")
+    # The Khronos Vulkan loader and winevulkan's ICD manifest (decision 0131), under Runtime/vulkan-loader/.
+    for name in VULKAN_LOADER:
+        add("resource", f"Runtime/vulkan-loader/arm64ec-windows/{name}", "vulkan-loader", f"arm64ec-windows/{name}",
+            "P6-vulkan-loader")
     for arch, name in STEAMAPI:
         add("resource", f"Runtime/steamapi/{arch}-windows/{name}", "steamapi", f"{arch}-windows/{name}", "P8-steamapi")
     add("resource", "Runtime/arm64ec-windows/playport-session.exe", "session", "playport-session.exe", "P9-session")

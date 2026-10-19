@@ -222,7 +222,8 @@ class KhronosNotices(unittest.TestCase):
             required[tree.name] = set(roots)
             return {}
 
-        variables = ("WINE", "FEX", "MYTHIC", "DXMT", "LLVM", "FREETYPE", "MESA", "DXVK", "VKD3D", "GBE", "ABSL", "STIKJIT", "IDEVICE")
+        variables = ("WINE", "FEX", "MYTHIC", "DXMT", "LLVM", "FREETYPE", "MESA", "DXVK", "VKD3D", "VULKAN_LOADER", "VULKAN_HEADERS",
+                     "GBE", "ABSL", "STIKJIT", "IDEVICE")
         env = {key: str(self.root / key) for key in variables}
         with patch.dict(os.environ, env), patch.object(p, "verify_tree", verify), patch.object(p, "series", return_value=[]):
             p.collect(REPO, self.root)

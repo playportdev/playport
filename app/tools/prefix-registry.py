@@ -497,6 +497,35 @@ def register_msisip(hive, main):
     register_sip(hive, "MSISIP.DLL", MSISIP_SUBJECT, MSISIP_FUNCTIONS)
 
 
+# What winevulkan's DllRegisterServer writes (dlls/winevulkan/loader.c, called by wineboot through
+# wine.inf's RegisterDllsSection): winevulkan registered as an ICD with the Khronos Vulkan loader,
+# by its manifest's path under Drivers. The manifest itself, system32\winevulkan.json, comes with
+# the loader's set (Runtime/vulkan-loader), linked into system32 only for a play that gets the
+# Khronos loader (decision 0131); Wine's own vulkan-1 reads neither. Marked for top-up.
+WINEVULKAN_REGISTER = "dlls/winevulkan/loader.c"
+WINEVULKAN_REGISTER_SHA256 = "c2d35a9a3ee0d6a803ece0adefc41357c773f68e977bce3c4f95e392737df473"
+WINEVULKAN_DRIVERS_KEY = "Software\\Khronos\\Vulkan\\Drivers"
+WINEVULKAN_JSON = f"{SYSTEM32}\\winevulkan.json"
+
+
+def winevulkan_register_digest(loader):
+    """sha256 of winevulkan's DllRegisterServer and the two names it writes."""
+    m = re.search(r"^HRESULT WINAPI DllRegisterServer\(void\)\n\{.*?^\}$", loader, re.M | re.S)
+    names = re.findall(r"^static const WCHAR (?:winevulkan_json_pathW|vulkan_driversW)\[\] = .*$", loader, re.M)
+    if not m or len(names) != 2:
+        return None
+    return hashlib.sha256("\n".join(names + [m.group(0)]).encode()).hexdigest()
+
+
+def register_winevulkan(hive, loader):
+    """winevulkan's DllRegisterServer: HKLM Drivers names system32's winevulkan.json. Returns the marked path."""
+    digest = winevulkan_register_digest(loader)
+    if digest != WINEVULKAN_REGISTER_SHA256:
+        raise SystemExit(f"{WINEVULKAN_REGISTER}: its DllRegisterServer changed (sha256 {digest}); check "
+                         "register_winevulkan in app/tools/prefix-registry.py and update WINEVULKAN_REGISTER_SHA256")
+    hive.value(WINEVULKAN_DRIVERS_KEY, WINEVULKAN_JSON, "dword", 0)
+    return WINEVULKAN_DRIVERS_KEY.lower()
+
 # wine.inf's registry, as wineboot applies it (programs/wineboot/wineboot.c update_wineprefix runs
 # `rundll32 setupapi,InstallHinfSection DefaultInstall 128 wine.inf`, which on x86-64 installs
 # [DefaultInstall.ntamd64]): every
@@ -1310,6 +1339,11 @@ def generate():
         if not (WINE_SRC / MSISIP_REGISTER).is_file():
             raise SystemExit(f"{WINE_SRC / MSISIP_REGISTER} does not exist; build the pe stage first")
         register_msisip(hives["system"], (WINE_SRC / MSISIP_REGISTER).read_text())
+    winevulkan_marked = set()
+    if "winevulkan.dll" in staged:
+        if not (WINE_SRC / WINEVULKAN_REGISTER).is_file():
+            raise SystemExit(f"{WINE_SRC / WINEVULKAN_REGISTER} does not exist; build the pe stage first")
+        winevulkan_marked.add(register_winevulkan(hives["system"], (WINE_SRC / WINEVULKAN_REGISTER).read_text()))
     wic_marked = set()
     if "windowscodecs.dll" in staged:
         if not (WINE_SRC / WIC_REGSVR).is_file():
@@ -1355,6 +1389,7 @@ def generate():
     marked["system"] |= {path.lower() for path in STEAM_REDIST_RUN}
     marked["system"].add(FONTS_KEY.lower())
     marked["system"] |= wic_marked
+    marked["system"] |= winevulkan_marked
     for name in hives:
         marked[name] |= inf_marked[name] | i386_marked[name]
     marked["system"] |= register_media(hives["system"], MEDIA_REGISTRATIONS.read_text(), staged, WINE_SRC)

@@ -82,6 +82,23 @@
       "allow_binary": {}
     },
     {
+      "name": "vulkan-loader",
+      "pin": "vulkan-loader",
+      "why": "the Khronos Vulkan-Loader, unmodified (Runtime/vulkan-loader, decision 0131)",
+      "local": ["run:vulkan-pe/vulkan-loader"],
+      "drop": {
+        "tests/framework/data/binaries/*": "prebuilt dummy libraries the loader's own tests load; the build does not build the tests"
+      },
+      "allow_binary": {}
+    },
+    {
+      "name": "vulkan-headers",
+      "pin": "vulkan-headers",
+      "why": "the Vulkan-Headers the Khronos Vulkan-Loader is compiled against, unmodified",
+      "local": ["run:vulkan-pe/vulkan-headers"],
+      "allow_binary": {}
+    },
+    {
       "name": "vkd3d-proton",
       "pin": "vkd3d-proton",
       "why": "vkd3d-proton with dxil-spirv and its headers; patches/vkd3d-proton is in the playport archive",

@@ -789,6 +789,7 @@ def main():
         # carried it in the SwiftPM resource bundle. A row's Runtime/x is base/x.
         if (app / "artifacts.tsv").exists():
             base, where, dirs = app, "app root", ["arm64ec-windows", "aarch64-windows", "nls", "fonts", "etc", "winsxs", "registry", "vulkan",
+                                                  "vulkan-loader",
                                                   "steamapi", "steamclient", "i386-windows", "certs", "mono"]
             check(not any(b.joinpath("Runtime").exists() for b in app.glob("*.bundle")),
                   "resources: Runtime/ at the app root only, not also in a resource bundle")

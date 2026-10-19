@@ -47,6 +47,9 @@ resources:
   # The Vulkan Direct3D backend's DLLs (DXVK, vkd3d-proton), first on WINEDLLPATH
   # for a launch set to Vulkan (decision 0014; wine_host.c PLAYPORT_DLL_OVERLAY).
   - Sources/S1Probe/Runtime/vulkan
+  # The Khronos Vulkan loader and winevulkan's ICD manifest, linked over system32 for a play with
+  # khronosVulkanLoader (decision 0131; wine_host.c PLAYPORT_DLL_OVERLAY).
+  - Sources/S1Probe/Runtime/vulkan-loader
   # The Steam API emulator (gbe_fork's steam_api DLLs), copied into a game's folder
   # in place of its own steam_api(64).dll (SteamClientKit SteamAPISwap).
   - Sources/S1Probe/Runtime/steamapi

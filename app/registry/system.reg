@@ -23883,6 +23883,10 @@ WINE REGISTRY Version 2
 "DLLPath"="C:\\windows\\system32\\winemapi.dll"
 
 ;; playport:top-up
+[Software\\Khronos\\Vulkan\\Drivers]
+"C:\\windows\\system32\\winevulkan.json"=dword:00000000
+
+;; playport:top-up
 [Software\\Microsoft\\.NETFramework]
 "InstallRoot"="C:\\windows\\Microsoft.NET\\Framework64\\"
 

@@ -3,7 +3,8 @@
 committed user.reg seed, marked for top-up, with the values that keep winedbg's
 crash dialog, winemenubuilder and control.exe's add-on download off the phone;
 the Visual C++ runtime key (VC_RUNTIME), wintrust's and msisip's registration
-(register_wintrust: OID functions, trust providers, SIPs; register_msisip) and the Windows Imaging Component
+(register_wintrust: OID functions, trust providers, SIPs; register_msisip), winevulkan's Vulkan driver
+key (register_winevulkan, decision 0131) and the Windows Imaging Component
 registration (register_wic, decision 0072) in the committed system.reg seed,
 and its reading of windowscodecs' regsvr.c tables; wine.inf's AddReg sections, urlmon's
 REGINST zones, the media registrations and the i386-only modules' classes (decision 0080),
@@ -102,6 +103,13 @@ class WintrustRegistration(unittest.TestCase):
         _marked, values = system["Software\\\\Microsoft\\\\Cryptography\\\\OID\\\\EncodingType 0\\\\"
                                  "CryptSIPDllIsMyFileType2\\\\{000C10F1-0000-0000-C000-000000000046}"]
         self.assertEqual(values, ['"Dll"="MSISIP.DLL"', '"FuncName"="MsiSIPIsMyTypeOfFile"'])
+
+    def test_winevulkan_is_a_vulkan_driver_by_its_system32_manifest_marked_for_top_up(self):
+        # winevulkan's DllRegisterServer (decision 0131): what the Khronos loader reads to find it.
+        system = sections((REPO / "app/registry/system.reg").read_text())
+        marked, values = system["Software\\\\Khronos\\\\Vulkan\\\\Drivers"]
+        self.assertTrue(marked)
+        self.assertEqual(values, ['"C:\\\\windows\\\\system32\\\\winevulkan.json"=dword:00000000'])
 
     def test_indirect_data_struct_decodes_through_wintrust(self):
         system = sections((REPO / "app/registry/system.reg").read_text())
@@ -391,6 +399,10 @@ class WicSource(unittest.TestCase):
     def test_changed_msisip_registration_stops_the_generation(self):
         with self.assertRaisesRegex(SystemExit, "DllRegisterServer changed"):
             self.mod.register_msisip(self.mod.Hive(), "HRESULT WINAPI DllRegisterServer(void)\n{\n}\n")
+
+    def test_changed_winevulkan_registration_stops_the_generation(self):
+        with self.assertRaisesRegex(SystemExit, "DllRegisterServer changed"):
+            self.mod.register_winevulkan(self.mod.Hive(), "HRESULT WINAPI DllRegisterServer(void)\n{\n}\n")
 
 
 if __name__ == "__main__":
