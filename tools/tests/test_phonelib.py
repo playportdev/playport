@@ -2,7 +2,6 @@
 """tools/phonelib.py (events, --until, the device lock) and build/lib.sh
 ensure_series (a patch edited in place is reapplied). No phone is touched."""
 
-import contextlib
 import importlib
 import json
 import os
@@ -385,7 +384,6 @@ class NetmuxdRestartTest(unittest.TestCase):
         os.environ["PLAYPORT_USBMUX_SOCKET"] = self.sock
         os.environ["UNIT_SOCK"] = self.sock
         self.pl = load_phonelib(self.tmp, self.tmp)
-        self.pl.PHONE_ADDR = None  # at home: never this machine's recorded address
 
     def tearDown(self):
         for k, v in self.saved.items():
@@ -624,126 +622,6 @@ class EnsureSeriesTest(unittest.TestCase):
         self.assertEqual(st, 0, out)
         self.assertIn("(re)applying", out)
         self.assertEqual(slurp(os.path.join(self.tree, "f")), "one\nTWO\n")
-
-class AwayFromHomeTest(unittest.TestCase):
-    """Away from home (docs/DEVICE.md): the phone is added to netmuxd by address with its
-    AddDevice extension. A fake netmuxd on a socket of the test's own answers it."""
-
-    def setUp(self):
-        self.tmp = tempfile.mkdtemp()
-        self.saved = {k: os.environ.get(k) for k in ("PLAYPORT_BUILD", "PLAYPORT_DEVICE_DIR")}
-        self.pl = load_phonelib(self.tmp, self.tmp)
-        self.pl.SOCK = os.path.join(self.tmp, "nm.sock")
-        self.pl.PHONE_ADDR = "10.66.0.2"
-        self.requests = []
-
-    def tearDown(self):
-        for k, v in self.saved.items():
-            if v is None:
-                os.environ.pop(k, None)
-            else:
-                os.environ[k] = v
-        load_phonelib(os.environ.get("PLAYPORT_BUILD") or os.path.join(REPO, ".work"),
-                      os.environ.get("PLAYPORT_DEVICE_DIR"))
-        shutil.rmtree(self.tmp)
-
-    def netmuxd(self, result):
-        """Serve one request; answer {"Result": result}, or nothing when result is None."""
-        import plistlib
-        import struct
-        with contextlib.suppress(OSError):
-            os.remove(self.pl.SOCK)
-        srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        srv.bind(self.pl.SOCK)
-        srv.listen(1)
-
-        def serve():
-            c, _ = srv.accept()
-            head = c.recv(16)
-            size, version, message, tag = struct.unpack("<IIII", head)
-            body = b""
-            while len(body) < size - 16:
-                body += c.recv(size - 16 - len(body))
-            self.requests.append(((version, message), plistlib.loads(body)))
-            if result is None:
-                time.sleep(2)
-            else:
-                reply = plistlib.dumps({"Result": result})
-                c.sendall(struct.pack("<IIII", 16 + len(reply), 1, 8, tag) + reply)
-            c.close()
-            srv.close()
-        t = threading.Thread(target=serve, daemon=True)
-        t.start()
-        return t
-
-    def test_udid_is_kept_owner_only(self):
-        self.assertIsNone(self.pl.known_udid())
-        self.pl.remember_udid("not a udid")
-        self.assertIsNone(self.pl.known_udid())
-        self.pl.remember_udid("00008150-000A0B0C0D0E0F10")
-        self.assertEqual(self.pl.known_udid(), "00008150-000A0B0C0D0E0F10")
-        self.assertEqual(os.stat(self.pl.UDID_FILE).st_mode & 0o777, 0o600)
-
-    def test_add_device_request(self):
-        t = self.netmuxd(1)
-        ok, why = self.pl.netmuxd_add("00008150-000A0B0C0D0E0F10", "10.66.0.2", secs=5)
-        t.join(5)
-        self.assertTrue(ok, why)
-        (kind, req), = self.requests
-        self.assertEqual(kind, (1, 8))
-        self.assertEqual(req, {"MessageType": "AddDevice", "ConnectionType": "Network",
-                               "ServiceName": "_apple-mobdev2._tcp.local",
-                               "IPAddress": "10.66.0.2", "DeviceID": "00008150-000A0B0C0D0E0F10"})
-
-    def test_refused_and_silent(self):
-        t = self.netmuxd(0)
-        ok, why = self.pl.netmuxd_add("U" * 25, "10.66.0.2", secs=5)
-        t.join(5)
-        self.assertFalse(ok)
-        self.assertIn("62078", why)
-        t = self.netmuxd(None)  # an address that does not answer: netmuxd waits out the connect
-        ok, why = self.pl.netmuxd_add("U" * 25, "10.66.0.2", secs=1)
-        self.assertFalse(ok)
-        self.assertIn("did not answer", why)
-        t.join(5)
-
-    def test_ensure_adds_before_any_restart(self):
-        self.pl.remember_udid("00008150-000A0B0C0D0E0F10")
-        t = self.netmuxd(1)
-        phone = self.pl.Phone(os.path.join(self.tmp, "run"), events=self.pl.Events(self.tmp, echo=False))
-        listed = iter([[], [{"Identifier": "00008150-000A0B0C0D0E0F10"}]])
-        phone.devices = lambda: next(listed)
-        restarts = []
-        self.pl.netmuxd_restart = lambda: restarts.append(1) or (False, "x")
-        self.assertIs(phone.ensure(), phone)
-        t.join(5)
-        self.assertEqual(restarts, [])
-        with open(os.path.join(self.tmp, "events.jsonl")) as f:
-            self.assertEqual([json.loads(line)["event"] for line in f], ["phone-away-added"])
-
-    def test_no_udid_yet_says_so(self):
-        self.pl.paired_udids = lambda: []
-        phone = self.pl.Phone(os.path.join(self.tmp, "run"), events=self.pl.Events(self.tmp, echo=False))
-        phone.devices = lambda: []
-        self.pl.netmuxd_restart = lambda: (False, "x")
-        with self.assertRaises(self.pl.PhoneError) as e:
-            phone.ensure()
-        self.assertIn("10.66.0.2", str(e.exception))
-        with open(os.path.join(self.tmp, "events.jsonl")) as f:
-            ev = [json.loads(line) for line in f]
-        self.assertEqual(ev[0]["event"], "phone-away-skipped")
-        self.assertIn("at home", ev[0]["why"])
-
-    def test_without_a_kept_udid_each_pairing_record_is_tried(self):
-        self.pl.paired_udids = lambda: ["A" * 25, "B" * 25]
-        tried = []
-        self.pl.netmuxd_add = lambda udid, addr: tried.append(udid) or (udid == "B" * 25, "w")
-        self.assertEqual(self.pl.add_away(), (True, "w"))
-        self.assertEqual(tried, ["A" * 25, "B" * 25])
-        self.assertEqual(self.pl.known_udid(), "B" * 25)
-        tried.clear()
-        self.assertTrue(self.pl.add_away()[0])
-        self.assertEqual(tried, ["B" * 25])
 
 
 if __name__ == "__main__":

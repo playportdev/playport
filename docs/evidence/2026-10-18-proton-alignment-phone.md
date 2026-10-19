@@ -241,5 +241,7 @@ built without `-mwindows`.
 - A child's standard output through a pipe is wrong on the phone: the runtime's start-up
   lines reach the pipe and cmd's output does not. Desktop Wine passes the same check, so the
   probe exits 1 until this is fixed or explained. This is a separate finding, not part of
-  0047.
+  0047. Explained in [the child-stdout record](2026-10-19-child-stdout-pipe.md) (PLA-403).
+  FEX and rpmalloc wrote their start-up diagnostics to the guest's own standard error handle,
+  with a NUL.
 

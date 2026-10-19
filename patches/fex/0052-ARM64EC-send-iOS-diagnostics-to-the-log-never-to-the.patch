@@ -1,0 +1,324 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Mon, 19 Oct 2026 08:03:50 +0200
+Subject: [PATCH] ARM64EC: send iOS diagnostics to the log, never to the
+ guest's standard error
+
+The iOS port's start-up diagnostics were written with WriteFile to the
+process parameters' hStdError: "[FEX-iOS] fast-write ENABLED" in
+ProcessInit, and in every ThreadInit "ThreadInit() entered", the TI:
+step markers, the DispatcherPatch lines and "ThreadInit() done", plus
+the gs_cached and JIT pool FATAL lines. Logging.cpp fell back to the
+same handle when __wine_dbg_output did not resolve. That handle is the
+guest process's own: a pipe its parent reads, a file, a console. It
+reached the app's log only when the launcher had handed the log file
+over as the game's standard error.
+
+PLA-403: a console probe ran "cmd.exe /c echo <marker>" with its
+standard output and error in a pipe and read "[rpm-sink] alive", the
+fast-write line and "ThreadInit() entered" there, and not the marker.
+"ThreadInit() entered" was written as 32 bytes, its terminating NUL
+included, so the C string the probe printed ended there; the TI:
+markers, the DispatcherPatch lines, "ThreadInit() done" and cmd's
+output followed in the pipe and were cut off by the NUL and the probe's
+511-byte buffer.
+
+Write them through Logging::IosDiagWrite: ntdll's __wine_dbg_output in
+NUL-terminated pieces (it takes a C string; the old call passed the
+buffer as is), the path LogMan's lines already take to the app's log.
+Without __wine_dbg_output a line is dropped. Logging::Init also hands
+rpmalloc its sink (rpmalloc patch of the same name), and ProcessInit's
+flush of the deferred buffer now names it the deferred rpmalloc log,
+since rpmalloc's early lines wait there too.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-19-child-stdout-pipe.md
+Offered-upstream: no; the writes are the iOS port's (fex-port)
+---
+ Source/Windows/ARM64EC/Module.cpp | 90 +++++++++----------------------
+ Source/Windows/Common/Logging.cpp | 54 +++++++++++++------
+ Source/Windows/Common/Logging.h   |  8 +++
+ 3 files changed, 69 insertions(+), 83 deletions(-)
+
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index 11b8367..3b9b950 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -1284,7 +1284,7 @@ NTSTATUS ProcessInit() {
+   {
+     if (ios_va_log_len > 0) {
+       ios_va_log[ios_va_log_len] = 0;
+-      LogMan::Msg::EFmt("[va-profile] ml751 deferred selector log ({} bytes):\n{}",
++      LogMan::Msg::EFmt("[va-profile] ml751 deferred rpmalloc log ({} bytes):\n{}",
+                         ios_va_log_len, ios_va_log);
+     } else {
+       LogMan::Msg::EFmt("[va-profile] ml751 selector emitted NOTHING -- it did not run");
+@@ -1347,10 +1347,6 @@ NTSTATUS ProcessInit() {
+     uint64_t rw = rw_env ? strtoull(rw_env, nullptr, 16) : 0;
+     uint64_t rx = rx_env ? strtoull(rx_env, nullptr, 16) : 0;
+     int64_t off = (rw && rx) ? (int64_t)(rw - rx) : 0;
+-    HANDLE stderr_h = NtCurrentTeb()->ProcessEnvironmentBlock->ProcessParameters
+-        ? reinterpret_cast<HANDLE>(reinterpret_cast<RTL_USER_PROCESS_PARAMETERS64*>(
+-              NtCurrentTeb()->ProcessEnvironmentBlock->ProcessParameters)->hStdError)
+-        : nullptr;
+     char buf[160];
+     if (off != 0) {
+       /* iOS-Madeira 2026-07-06: FAST-WRITE re-enabled per the 2026-07-03
+@@ -1367,7 +1363,7 @@ NTSTATUS ProcessInit() {
+       int n = snprintf(buf, sizeof(buf),
+           "[FEX-iOS] fast-write ENABLED (WriteOffset=0x%llx RW=0x%llx RX=0x%llx)\n",
+           (unsigned long long)off, (unsigned long long)rw, (unsigned long long)rx);
+-      if (stderr_h) { ULONG w = 0; WriteFile(stderr_h, buf, n, &w, nullptr); }
++      FEX::Windows::Logging::IosDiagWrite(buf, n > 0 ? static_cast<size_t>(n) : 0);
+     } else {
+       /* Playport: refuse to start. With WriteOffset 0 every emitted
+        * instruction, literal and fixup is stored to the RX address and has to
+@@ -1379,7 +1375,7 @@ NTSTATUS ProcessInit() {
+       int n = snprintf(buf, sizeof(buf),
+           "[FEX-iOS] FATAL: WINE_IOS_JIT_RW/RX missing (RW=%s RX=%s): no RW alias for the JIT pool, refusing to start\n",
+           rw_env ? rw_env : "(null)", rx_env ? rx_env : "(null)");
+-      if (stderr_h) { ULONG w = 0; WriteFile(stderr_h, buf, n, &w, nullptr); }
++      FEX::Windows::Logging::IosDiagWrite(buf, n > 0 ? static_cast<size_t>(n) : 0);
+       return STATUS_UNSUCCESSFUL;
+     }
+   }
+@@ -2334,16 +2330,7 @@ extern "C" BOOLEAN BTCpu64IosGuestContext(void* TebPtr, ARM64_NT_CONTEXT* Contex
+  * These markers bisect which init step dies (CreateThread's per-thread
+  * CodeBuffer/LookupCache allocation is the prime suspect). */
+ static void IosTiLog(const char* msg) {
+-  HANDLE stderr_h = NtCurrentTeb()->ProcessEnvironmentBlock->ProcessParameters
+-      ? reinterpret_cast<HANDLE>(reinterpret_cast<RTL_USER_PROCESS_PARAMETERS64*>(
+-            NtCurrentTeb()->ProcessEnvironmentBlock->ProcessParameters)->hStdError)
+-      : nullptr;
+-  if (stderr_h) {
+-    ULONG written = 0;
+-    size_t len = 0;
+-    while (msg[len]) len++;
+-    WriteFile(stderr_h, msg, static_cast<DWORD>(len), &written, nullptr);
+-  }
++  FEX::Windows::Logging::IosDiagWrite(msg, __builtin_strlen(msg));
+ }
+ #endif
+ 
+@@ -2354,17 +2341,7 @@ NTSTATUS ThreadInit() {
+    * is calling BTCpu64ThreadInit for the main x86_64 thread before the
+    * dispatcher is invoked. Without this, EmulatorData[0] is garbage and
+    * the dispatcher BLR's into uninitialized memory. */
+-  {
+-    HANDLE stderr_h = NtCurrentTeb()->ProcessEnvironmentBlock->ProcessParameters
+-        ? reinterpret_cast<HANDLE>(reinterpret_cast<RTL_USER_PROCESS_PARAMETERS64*>(
+-              NtCurrentTeb()->ProcessEnvironmentBlock->ProcessParameters)->hStdError)
+-        : nullptr;
+-    if (stderr_h) {
+-      const char *msg = "[FEX-iOS] ThreadInit() entered\n";
+-      ULONG written = 0;
+-      WriteFile(stderr_h, msg, 32, &written, nullptr);
+-    }
+-  }
++  IosTiLog("[FEX-iOS] ThreadInit() entered\n");
+ #endif
+   std::scoped_lock Lock(ThreadCreationMutex);
+ #ifdef FEX_IOS_HOST
+@@ -2449,13 +2426,7 @@ NTSTATUS ThreadInit() {
+   }
+   /* Hard guard: if somehow STILL zero, log loudly so we catch it. */
+   if (Frame->State.gs_cached == 0) {
+-    HANDLE stderr_h_g = NtCurrentTeb() ? (HANDLE)reinterpret_cast<RTL_USER_PROCESS_PARAMETERS64*>(
+-        NtCurrentTeb()->ProcessEnvironmentBlock->ProcessParameters)->hStdError : nullptr;
+-    if (stderr_h_g) {
+-      const char *msg = "[FEX-iOS] FATAL: gs_cached STILL 0 after IOSLoadTEB!\n";
+-      ULONG written = 0;
+-      WriteFile(stderr_h_g, msg, 53, &written, nullptr);
+-    }
++    IosTiLog("[FEX-iOS] FATAL: gs_cached STILL 0 after IOSLoadTEB!\n");
+   }
+ #endif
+ 
+@@ -2571,12 +2542,7 @@ NTSTATUS ThreadInit() {
+       // canonical 7-invalid-words sequence, and rewrite them in-place.
+     };
+ 
+-    HANDLE stderr_h = NtCurrentTeb()->ProcessEnvironmentBlock->ProcessParameters
+-        ? reinterpret_cast<HANDLE>(reinterpret_cast<RTL_USER_PROCESS_PARAMETERS64*>(
+-              NtCurrentTeb()->ProcessEnvironmentBlock->ProcessParameters)->hStdError)
+-        : nullptr;
+     auto log_hex = [&](const char* label, uint64_t val) {
+-      if (!stderr_h) return;
+       char buf[160];
+       const char* hexd = "0123456789abcdef";
+       int n = 0;
+@@ -2584,8 +2550,7 @@ NTSTATUS ThreadInit() {
+       buf[n++] = '0'; buf[n++] = 'x';
+       for (int j = 60; j >= 0; j -= 4) buf[n++] = hexd[(val >> j) & 0xf];
+       buf[n++] = '\n';
+-      ULONG written = 0;
+-      WriteFile(stderr_h, buf, n, &written, nullptr);
++      FEX::Windows::Logging::IosDiagWrite(buf, n);
+     };
+ 
+     log_hex("[FEX-iOS] DispatcherPatch: EnterEC=", EnterEC);
+@@ -2735,30 +2700,23 @@ NTSTATUS ThreadInit() {
+ #endif
+ #ifdef FEX_IOS_HOST
+   {
+-    HANDLE stderr_h = NtCurrentTeb()->ProcessEnvironmentBlock->ProcessParameters
+-        ? reinterpret_cast<HANDLE>(reinterpret_cast<RTL_USER_PROCESS_PARAMETERS64*>(
+-              NtCurrentTeb()->ProcessEnvironmentBlock->ProcessParameters)->hStdError)
+-        : nullptr;
+-    if (stderr_h) {
+-      char buf[256];
+-      const char *hexd = "0123456789abcdef";
+-      const char *prefix = "[FEX-iOS] ThreadInit() done: EmulatorData[0]=0x";
+-      int i = 0;
+-      while (prefix[i]) { buf[i] = prefix[i]; i++; }
+-      unsigned long long ed0 = (unsigned long long)CPUArea.Area->EmulatorData[0];
+-      for (int j = 60; j >= 0; j -= 4) buf[i++] = hexd[(ed0 >> j) & 0xf];
+-      const char *p2 = " EnterEC=0x";
+-      for (int k = 0; p2[k]; ++k) buf[i++] = p2[k];
+-      unsigned long long enter_ec = (unsigned long long)CPUArea.DispatcherLoopTopEnterEC();
+-      for (int j = 60; j >= 0; j -= 4) buf[i++] = hexd[(enter_ec >> j) & 0xf];
+-      const char *p3 = " gs_cached=0x";
+-      for (int k = 0; p3[k]; ++k) buf[i++] = p3[k];
+-      unsigned long long gs = (unsigned long long)Frame->State.gs_cached;
+-      for (int j = 60; j >= 0; j -= 4) buf[i++] = hexd[(gs >> j) & 0xf];
+-      buf[i++] = '\n';
+-      ULONG written = 0;
+-      WriteFile(stderr_h, buf, i, &written, nullptr);
+-    }
++    char buf[256];
++    const char *hexd = "0123456789abcdef";
++    const char *prefix = "[FEX-iOS] ThreadInit() done: EmulatorData[0]=0x";
++    int i = 0;
++    while (prefix[i]) { buf[i] = prefix[i]; i++; }
++    unsigned long long ed0 = (unsigned long long)CPUArea.Area->EmulatorData[0];
++    for (int j = 60; j >= 0; j -= 4) buf[i++] = hexd[(ed0 >> j) & 0xf];
++    const char *p2 = " EnterEC=0x";
++    for (int k = 0; p2[k]; ++k) buf[i++] = p2[k];
++    unsigned long long enter_ec = (unsigned long long)CPUArea.DispatcherLoopTopEnterEC();
++    for (int j = 60; j >= 0; j -= 4) buf[i++] = hexd[(enter_ec >> j) & 0xf];
++    const char *p3 = " gs_cached=0x";
++    for (int k = 0; p3[k]; ++k) buf[i++] = p3[k];
++    unsigned long long gs = (unsigned long long)Frame->State.gs_cached;
++    for (int j = 60; j >= 0; j -= 4) buf[i++] = hexd[(gs >> j) & 0xf];
++    buf[i++] = '\n';
++    FEX::Windows::Logging::IosDiagWrite(buf, i);
+   }
+ #endif
+   return STATUS_SUCCESS;
+diff --git a/Source/Windows/Common/Logging.cpp b/Source/Windows/Common/Logging.cpp
+index 6f4ab70..e5c6ef0 100644
+--- a/Source/Windows/Common/Logging.cpp
++++ b/Source/Windows/Common/Logging.cpp
+@@ -11,6 +11,9 @@
+ 
+ #ifdef FEX_IOS_HOST
+ #include <unistd.h>
++
++/* rpmalloc's diagnostics come here once Init has run (rpmalloc.c, ios_rpm_diag). */
++extern "C" void (*ios_rpm_diag_sink)(const char* buf, int len);
+ #endif
+ 
+ namespace {
+@@ -24,15 +27,16 @@ FILE* LogFile;
+  * Logging::Init() IS called (ARM64EC Module.cpp ProcessInit) and ProcessInit completes,
+  * yet even its own install trace never showed up. Cause: this is a PE module, so
+  * ::write(2, ...) goes through the CRT's descriptor table bound to the Windows stderr
+- * HANDLE — NOT the unix fd 2 that the app redirects into madeira-log.txt. Writing to the
+- * process's real hStdError is the path already proven to work here (see the FEX-iOS FATAL
+- * message in ARM64EC/Module.cpp). */
++ * HANDLE — NOT the unix fd 2 that the app redirects into madeira-log.txt.
++ *
++ * ml195: __wine_dbg_output is exported by our PE ntdll and is exactly what that ntdll's
++ * own ERR() lines go through — those reach madeira-log.txt reliably.
++ *
++ * Playport (PLA-403): nothing here falls back to the process's hStdError. That is the
++ * guest's own handle (a pipe its parent reads, a file, a console): cmd.exe's output
++ * through a pipe carried FEX's start-up lines, with a NUL from "ThreadInit() entered".
++ * Without __wine_dbg_output a line is dropped. */
+ static void IosLogWrite(const char* Str, size_t Len) {
+-  /* ml195: hStdError is NULL in this context, so the WriteFile path produced nothing
+-   * (which also means the pre-existing "[FEX-iOS] FATAL" message was never functional).
+-   * Prefer __wine_dbg_output: it IS exported by our PE ntdll (export table ordinal 1464)
+-   * and is exactly what that ntdll's own ERR() lines go through — those reach
+-   * madeira-log.txt reliably. Keep WriteFile as a fallback. */
+   static int (__cdecl *DbgOut)(const char*);
+   static bool Resolved;
+   if (!Resolved) {
+@@ -40,19 +44,28 @@ static void IosLogWrite(const char* Str, size_t Len) {
+     DbgOut = reinterpret_cast<decltype(DbgOut)>(
+         GetProcAddress(GetModuleHandleA("ntdll.dll"), "__wine_dbg_output"));
+   }
+-  if (DbgOut) {
+-    DbgOut(Str);
++  if (!DbgOut) {
+     return;
+   }
+-  HANDLE h = NtCurrentTeb()->ProcessEnvironmentBlock->ProcessParameters
+-                 ? reinterpret_cast<HANDLE>(reinterpret_cast<RTL_USER_PROCESS_PARAMETERS64*>(
+-                       NtCurrentTeb()->ProcessEnvironmentBlock->ProcessParameters)->hStdError)
+-                 : nullptr;
+-  if (h) {
+-    ULONG Written = 0;
+-    WriteFile(h, Str, static_cast<DWORD>(Len), &Written, nullptr);
++  /* __wine_dbg_output takes a C string: copy Len bytes, in pieces, NUL-terminated. */
++  char Piece[512];
++  while (Len) {
++    const size_t N = Len < sizeof(Piece) - 1 ? Len : sizeof(Piece) - 1;
++    __builtin_memcpy(Piece, Str, N);
++    Piece[N] = 0;
++    DbgOut(Piece);
++    Str += N;
++    Len -= N;
++  }
++}
++
++#ifdef FEX_IOS_HOST
++static void IosRpmDiagSink(const char* Buf, int Len) {
++  if (Len > 0) {
++    IosLogWrite(Buf, static_cast<size_t>(Len));
+   }
+ }
++#endif
+ 
+ static void MsgHandler(LogMan::DebugLevels Level, const char* Message) {
+   const auto Output = fextl::fmt::format("{} {:X} {}\n", LogMan::DebugLevelStr(Level), GetCurrentThreadId(), Message);
+@@ -91,6 +104,12 @@ void UnimplementedLog(const char* Func) {
+ }
+ } // namespace FEX::Windows::Logging
+ namespace FEX::Windows::Logging {
++#ifdef FEX_IOS_HOST
++void IosDiagWrite(const char* Str, size_t Len) {
++  IosLogWrite(Str, Len);
++}
++#endif
++
+ void Init() {
+ #ifndef FEX_IOS_HOST
+   FEX_CONFIG_OPT(SilentLog, SILENTLOG);
+@@ -103,6 +122,7 @@ void Init() {
+   /* iOS-Madeira: trace install via stderr directly to confirm Init() ran. */
+   const char *m = "[FEX-iOS] Logging::Init installing MsgHandler\n";
+   IosLogWrite(m, __builtin_strlen(m));
++  ios_rpm_diag_sink = IosRpmDiagSink;
+ #endif
+ 
+   WineDbgOut = reinterpret_cast<decltype(WineDbgOut)>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "__wine_dbg_output"));
+diff --git a/Source/Windows/Common/Logging.h b/Source/Windows/Common/Logging.h
+index bb5f198..a3cbd39 100644
+--- a/Source/Windows/Common/Logging.h
++++ b/Source/Windows/Common/Logging.h
+@@ -1,6 +1,14 @@
+ // SPDX-License-Identifier: MIT
+ #pragma once
+ 
++#include <cstddef>
++
+ namespace FEX::Windows::Logging {
+ void Init();
++#ifdef FEX_IOS_HOST
++// Writes a runtime diagnostic to the app's log through ntdll's
++// __wine_dbg_output; Len bytes, need not be NUL-terminated. Never to the guest
++// process's standard handles (PLA-403).
++void IosDiagWrite(const char* Str, size_t Len);
++#endif
+ } // namespace FEX::Windows::Logging
