@@ -2,7 +2,8 @@
 
 **Status:** accepted, 2026-10-19, approved by the supervisor for the owner (PLA-416). Amends
 madeira-unix 0154 (PLA-368), which released only the views of a child that exits by itself. Not
-yet shown on the phone.
+yet shown on the phone. Amended by [0132](0132-empty-a-parked-processs-fex-band-in-place.md): with a
+thread parked, the band views kept below are emptied in place.
 
 ## Context
 

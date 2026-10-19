@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Compile and exercise the rules for ending a terminated pseudo-process, shipped in madeira-unix 0169 (PLA-416)."""
+"""Compile and exercise the rules for ending a terminated pseudo-process: madeira-unix 0169 (PLA-416), and 0172,
+which empties a parked process's FEX band views in place (decision 0132)."""
 import pathlib
 import shutil
 import subprocess
@@ -7,21 +8,26 @@ import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-PATCH = ROOT / "patches/madeira-unix/0169-ntdll-wineserver-tear-down-a-pseudo-process-another-.patch"
+SERIES = ROOT / "patches/madeira-unix"
+PATCHES = ("0169-ntdll-wineserver-tear-down-a-pseudo-process-another-.patch",
+           "0172-ntdll-empty-a-killed-process-s-FEX-band-views-in-pla.patch")
+HEADER = "build/ntdll-unix/pp_proc_end.h"
 
 
-def added_header():
-    text = PATCH.read_text()
-    section = text.split("diff --git a/build/ntdll-unix/pp_proc_end.h", 1)[1]
-    section = section.split("diff --git ", 1)[0]
-    return "\n".join(line[1:] for line in section.splitlines()
-                     if line.startswith("+") and not line.startswith("+++")) + "\n"
+def shipped_header(directory):
+    """pp_proc_end.h as the series leaves it: 0169 adds it, 0172 changes it."""
+    subprocess.run(["git", "init", "-q", str(directory)], check=True)
+    for name in PATCHES:
+        subprocess.run(["git", "apply", f"--include={HEADER}", str(SERIES / name)], cwd=directory, check=True)
+    return directory / HEADER
 
 
 TEST_C = r'''
 #include "pp_proc_end.h"
 #include <assert.h>
 #include <string.h>
+#include <sys/mman.h>
+#include <unistd.h>
 
 /* A thread of a process being terminated, blocked in NtWaitForAlertByThreadId's futex wait, holding nothing. */
 static struct ppe_thread_state idle(void) {
@@ -66,22 +72,54 @@ int main(void) {
     c.finished = 17; c.parked = 11; assert(ppe_all_ended(&c));
     c.live = 1; assert(!ppe_all_ended(&c));
 
-    /* What goes: with nothing parked, all of FEX's band too; with a thread parked, of the band only
-     * the L1 caches, and no view a parked thread's registers point into. */
+    /* What goes: with nothing parked, all of FEX's band too; with a thread parked, of the band the L1 caches go
+     * and the rest is emptied in place, and no view a parked thread's saved address lies in changes (0132). */
     const uint64_t refs[] = { 0x7c00000123ull, 0x7300004000ull };
-    assert(ppe_release_view(PPE_IMAGE, 0, 0x7300000000ull, 0x10000, refs, 2));
-    assert(ppe_release_view(PPE_SPAN, 0, 0x7c00000000ull, 0x100000, refs, 2));
-    assert(ppe_release_view(PPE_CALLRET, 0, 0x7d00000000ull, 0x408000, refs, 2));
-    assert(ppe_release_view(PPE_PRIVATE, 1, 0x7200000000ull, 0x10000, refs, 2));
-    assert(!ppe_release_view(PPE_PRIVATE, 1, 0x7300000000ull, 0x10000, refs, 2));   /* x1 points into it */
-    assert(!ppe_release_view(PPE_SPAN, 1, 0x7c10000000ull, 0x100000, refs, 2));
-    assert(!ppe_release_view(PPE_CALLRET, 1, 0x7d00000000ull, 0x408000, refs, 2));
-    assert(!ppe_release_view(PPE_BAND_OTHER, 1, 0x7d10000000ull, 0x10000, refs, 2));
-    assert(ppe_release_view(PPE_L1, 1, 0x7e00000000ull, 0x200000, refs, 2));
-    assert(!ppe_release_view(PPE_L1, 1, 0x7c00000000ull, 0x200000, refs, 2));       /* referenced */
+    assert(ppe_view_fate(PPE_IMAGE, 0, 0x7300000000ull, 0x10000, refs, 2) == PPE_FREE);
+    assert(ppe_view_fate(PPE_SPAN, 0, 0x7c00000000ull, 0x100000, refs, 2) == PPE_FREE);
+    assert(ppe_view_fate(PPE_CALLRET, 0, 0x7d00000000ull, 0x408000, refs, 2) == PPE_FREE);
+    assert(ppe_view_fate(PPE_PRIVATE, 1, 0x7200000000ull, 0x10000, refs, 2) == PPE_FREE);
+    assert(ppe_view_fate(PPE_PRIVATE, 1, 0x7300000000ull, 0x10000, refs, 2) == PPE_KEEP_REF);   /* x1 points into it */
+    assert(ppe_view_fate(PPE_SPAN, 1, 0x7c10000000ull, 0x100000, refs, 2) == PPE_EMPTY);
+    assert(ppe_view_fate(PPE_CALLRET, 1, 0x7d00000000ull, 0x408000, refs, 2) == PPE_EMPTY);
+    assert(ppe_view_fate(PPE_BAND_OTHER, 1, 0x7d10000000ull, 0x10000, refs, 2) == PPE_EMPTY);
+    assert(ppe_view_fate(PPE_L1, 1, 0x7e00000000ull, 0x200000, refs, 2) == PPE_FREE);
+    assert(ppe_view_fate(PPE_SPAN, 1, 0x7c00000000ull, 0x100000, refs, 2) == PPE_KEEP_REF);    /* referenced */
+    assert(ppe_view_fate(PPE_L1, 1, 0x7c00000000ull, 0x200000, refs, 2) == PPE_KEEP_REF);
+    assert(PPE_REFS == 53);   /* x0-x28, fp, lr, sp, pc, 17 guest, TPIDRRO_EL0, TEB, wait address */
     assert(ppe_referenced(0x1000, 0x1000, (const uint64_t[]){ 0x1fff }, 1));
     assert(!ppe_referenced(0x1000, 0x1000, (const uint64_t[]){ 0x2000 }, 1));
     assert(!ppe_referenced(0x1000, 0x1000, (const uint64_t[]){ 0xfff }, 1));
+
+    /* Only whole host pages of a committed run are replaced. */
+    uint64_t lo, hi;
+    assert(ppe_host_pages(0x7c00001000ull, 0x8000, 0x3fff, &lo, &hi) && lo == 0x7c00004000ull && hi == 0x7c00008000ull);
+    assert(ppe_host_pages(0x7c00000000ull, 0x100000, 0x3fff, &lo, &hi) && lo == 0x7c00000000ull && hi == 0x7c00100000ull);
+    assert(!ppe_host_pages(0x7c00001000ull, 0x2000, 0x3fff, &lo, &hi));
+    assert(!ppe_host_pages(0x7c00003000ull, 0x2000, 0x3fff, &lo, &hi));
+
+    /* Emptying in place, as ios_proc_end_empty_view_locked maps over: the range stays mapped at its protection and
+     * reads zero, so a late reader ([waiters], [census-hold]) or a late lock reap neither faults nor sees old data;
+     * and a view is taken once, so a second teardown leaves it alone. */
+    {
+        size_t page = (size_t)sysconf(_SC_PAGESIZE), size = 4 * page;
+        unsigned char *view = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        int peb_a, peb_b;
+        void *owner = &peb_a;
+        assert(view != MAP_FAILED);
+        memset(view, 0xa5, size);
+        assert(ppe_host_pages((uintptr_t)view, size, page - 1, &lo, &hi) && hi - lo == size);
+        assert(ppe_take_view(&owner, &peb_a) && owner == NULL);
+        assert(mmap((void *)(uintptr_t)lo, hi - lo, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,
+                    -1, 0) == (void *)(uintptr_t)lo);
+        for (size_t k = 0; k < size; k += 512) assert(view[k] == 0);
+        __atomic_compare_exchange_n((int *)(view + 64), &(int){ 0 }, 1, 0, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED);
+        assert(*(int *)(view + 64) == 1);
+        assert(!ppe_take_view(&owner, &peb_a));   /* a second teardown of the same process */
+        assert(!ppe_take_view(&owner, &peb_b));   /* or another process's walk */
+        assert(!ppe_take_view(&owner, NULL));
+        munmap(view, size);
+    }
 
     /* Idempotence: a process reported twice has one entry, and is taken for its teardown once. */
     static struct ppe_gone gone[PPE_GONE_MAX];
@@ -96,12 +134,14 @@ int main(void) {
     assert(ppe_gone_add(gone, &pebs[PPE_GONE_MAX], 1) < 0);
 
     /* The line. */
-    char row[320];
-    unsigned long long freed[PPE_CLASSES] = { 251ull << 20, 120ull << 20, 300ull << 20, 72ull << 20, 36ull << 20, 5ull << 20 };
+    char row[400];
+    struct ppe_result r = { { 251ull << 20, 120ull << 20, 0, 0, 36ull << 20, 0 }, 48ull << 20, 700ull << 20,
+                            790ull << 20, 9, 8140ull << 20, 7350ull << 20 };
     struct ppe_census done = { 0, 37, 11 };
-    ppe_row(row, sizeof row, (void *)0x1533f8000ull, 0x284, freed, 48ull << 20, 90ull << 20, &done);
-    assert(!strcmp(row, "peb=0x1533f8000 pid=0284 killed: freed image=251 private=120 spans=300 callret=72 l1=36 "
-                        "band_other=5 pool=48 MB, kept 90 MB; 37 finished, 11 parked thread(s)"));
+    ppe_row(row, sizeof row, (void *)0x1533f8000ull, 0x284, &r, &done);
+    assert(!strcmp(row, "peb=0x1533f8000 pid=0284 killed: freed image=251 private=120 spans=0 callret=0 l1=36 "
+                        "band_other=0 pool=48 MB, emptied=700 MB, kept 790 MB (9 view(s) a parked register points "
+                        "into); 37 finished, 11 parked thread(s); footprint 8140->7350 MB"));
     return 0;
 }
 '''
@@ -115,10 +155,10 @@ class ProcessEndTests(unittest.TestCase):
         scratch.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=scratch) as td:
             d = pathlib.Path(td)
-            (d / "pp_proc_end.h").write_text(added_header())
+            header = shipped_header(d)
             (d / "test.c").write_text(TEST_C)
-            subprocess.run([cc, "-std=gnu11", "-Wall", "-Wextra", "-Werror", "-o", str(d / "t"), str(d / "test.c")],
-                           check=True)
+            subprocess.run([cc, "-std=gnu11", "-Wall", "-Wextra", "-Werror", "-I", str(header.parent), "-o",
+                            str(d / "t"), str(d / "test.c")], check=True)
             subprocess.run([str(d / "t")], check=True)
 
 

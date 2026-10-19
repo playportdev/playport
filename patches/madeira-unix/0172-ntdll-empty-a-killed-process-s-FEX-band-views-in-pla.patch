@@ -1,0 +1,377 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Mon, 19 Oct 2026 21:50:15 +0200
+Subject: [PATCH] ntdll: empty a killed process's FEX band views in place when
+ a thread of it is parked
+
+With a thread parked, 0169 tore down a killed process but kept its views
+in FEX's band: only the L1 caches went, as the parked thread's FEX state
+may name the rest. In run 20261019T210854 every killed process had a
+parked thread, so every teardown kept its band: the two SocialClubHelper
+processes the launcher ends kept 621 and 472 MB, the launcher tree's end
+2.2 GB committed, about 1.0 GB of the footprint (the runtime's [proc-mem]
+fex row went from 38/0/25 to 3190/605/422 MB committed/resident/compressed)
+of a peak 52 MB under the limit.
+
+The teardown now empties each such view in place: every whole host page
+of its committed runs is mapped over with fresh anonymous zero-fill at the
+protection mach_vm_region reports for it, as decommit_pages' mmap-over
+does on the band. The view, its vprot and its address range stay, so
+nothing else is ever placed there and a late reader (the [waiters] and
+[census-hold] dumps, a lock reap) finds zeros instead of a fault, while
+the old pages, resident and compressed, leave the footprint. An
+executable range is left as it is. The views it empties are the dead
+process's valloc views in the band (rpmalloc spans, call-return stacks,
+the rest); sections and file mappings, VPROT_SYSTEM views, the JIT pool
+and every view outside the band keep 0169's rules, and L1 caches are
+still deleted. A view that holds any of a parked thread's saved addresses
+stays whole: x0-x28, fp, lr, sp, pc, the guest's GPRs and rip, and now
+also its TPIDRRO_EL0 (THREAD_IDENTIFIER_INFO's thread_handle; iOS owns
+and zeroes TPIDR_EL0), its TEB and its alert-wait address. Each view is
+taken from its process once (ppe_take_view), so a second teardown never
+touches it again.
+
+The [proc-end] line adds `emptied=N MB`, the number of views kept because
+a parked register points into them, and the task's footprint before and
+after the teardown.
+
+Linear: PLA-416
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-19-rdr2-warm-cache-error-18.md
+Offered-upstream: no; pseudo-processes in one Mach task are the iOS port's
+---
+ build/ntdll-unix/pp_proc_end.h      |  91 ++++++++++++++++++------
+ build/ntdll-unix/signal_arm64_ios.c |  22 +++++-
+ build/ntdll-unix/virtual_ios.c      | 105 +++++++++++++++++++++++-----
+ 3 files changed, 178 insertions(+), 40 deletions(-)
+
+diff --git a/build/ntdll-unix/pp_proc_end.h b/build/ntdll-unix/pp_proc_end.h
+index 1770629..33e19ab 100644
+--- a/build/ntdll-unix/pp_proc_end.h
++++ b/build/ntdll-unix/pp_proc_end.h
+@@ -13,6 +13,11 @@
+  * Mach-suspended for ever, and counted as finished. Its TEB, stacks and every
+  * view its saved registers point into stay mapped.
+  *
++ * The rest of such a process's views in FEX's band are emptied in place
++ * (decision 0132): their pages are replaced by fresh zero-fill at the same
++ * protection, so the view, its address range and every page's protection stay
++ * and only the memory goes.
++ *
+  * Pure decisions and formatting, so a host test compiles this header as is. */
+ #ifndef PP_PROC_END_H
+ #define PP_PROC_END_H
+@@ -24,7 +29,8 @@
+ #define PPE_SYS_ULOCK_WAIT      515           /* x16 of __ulock_wait */
+ #define PPE_SYS_ULOCK_WAIT2     544           /* x16 of __ulock_wait2, os_sync_wait_on_address's */
+ #define PPE_UL_COMPARE_AND_WAIT 1             /* x0's operation: futex_wait's */
+-#define PPE_REFS                50            /* x0-x28, fp, lr, sp, pc; the guest's 16 GPRs and rip */
++#define PPE_REFS                53            /* x0-x28, fp, lr, sp, pc; the guest's 16 GPRs and rip;
++                                                 TPIDRRO_EL0, its TEB and its wait address */
+ 
+ /* What the abort read of a killed thread it has stopped. */
+ struct ppe_thread_state
+@@ -118,31 +124,74 @@ static inline int ppe_referenced( uint64_t base, uint64_t size, const uint64_t *
+     return 0;
+ }
+ 
+-/* Whether a view of a killed process, one the rules of 0154 would give back
+- * or one in FEX's band, goes. With no thread parked, all of its band goes too:
++enum ppe_fate
++{
++    PPE_FREE,       /* deleted */
++    PPE_EMPTY,      /* kept, its pages replaced by zero-fill at the same protection */
++    PPE_KEEP_REF,   /* kept whole: a parked thread's saved address lies in it */
++};
++
++/* What becomes of a view of a killed process, one the rules of 0154 would give
++ * back or one in FEX's band. With no thread parked, all of its band goes too:
+  * its rpmalloc heaps, call-return stacks and L1 caches belong to its own FEX
+- * instance, which nothing runs any more. With a thread parked only its L1
+- * caches do, as the FEX state that names them stays; and no view one of its
+- * saved registers points into goes. */
+-static inline int ppe_release_view( enum ppe_class c, unsigned parked, uint64_t base, uint64_t size,
+-                                    const uint64_t *refs, unsigned nrefs )
+-{
+-    if (parked && ppe_referenced( base, size, refs, nrefs )) return 0;
+-    if (!ppe_in_band( c )) return 1;
+-    return !parked || c == PPE_L1;
++ * instance, which nothing runs any more. With a thread parked, no view one of
++ * its saved addresses lies in changes; of the rest of the band the L1 caches
++ * go, and the rpmalloc spans, call-return stacks and other views are emptied:
++ * the parked thread's FEX state may name them, so their addresses stay
++ * mapped and reserved, but nothing reads their contents again (0132). */
++static inline enum ppe_fate ppe_view_fate( enum ppe_class c, unsigned parked, uint64_t base, uint64_t size,
++                                           const uint64_t *refs, unsigned nrefs )
++{
++    if (parked && ppe_referenced( base, size, refs, nrefs )) return PPE_KEEP_REF;
++    if (!ppe_in_band( c ) || !parked || c == PPE_L1) return PPE_FREE;
++    return PPE_EMPTY;
++}
++
++/* The whole host pages of [base, base + size): 0 when there are none. A run of
++ * 4 KiB guest pages that shares a host page with another run leaves that page
++ * alone, so no other run's protection or contents change. */
++static inline int ppe_host_pages( uint64_t base, uint64_t size, uint64_t host_page_mask,
++                                  uint64_t *start, uint64_t *end )
++{
++    *start = (base + host_page_mask) & ~host_page_mask;
++    *end = (base + size) & ~host_page_mask;
++    return *end > *start;
++}
++
++/* Take a view for its process's teardown: 1 once, when it is owner's; it then
++ * belongs to the runtime, so a second teardown or a later walk by process
++ * never frees or empties it again. */
++static inline int ppe_take_view( void **view_owner, const void *owner )
++{
++    if (!owner || *view_owner != owner) return 0;
++    *view_owner = NULL;
++    return 1;
+ }
+ 
+-/* The `[proc-end]` line: MB freed by class, MB kept, the threads it waited for. */
+-static inline int ppe_row( char *buf, size_t size, const void *peb, unsigned pid,
+-                           const unsigned long long freed[PPE_CLASSES], unsigned long long pool,
+-                           unsigned long long kept, const struct ppe_census *c )
++/* What a teardown did, for its `[proc-end]` line. */
++struct ppe_result
++{
++    unsigned long long freed[PPE_CLASSES];   /* bytes of the views deleted, by class */
++    unsigned long long pool;                 /* bytes of JIT-pool ranges and tail carves */
++    unsigned long long emptied;              /* committed bytes of band views replaced by zero-fill */
++    unsigned long long kept;                 /* bytes of the views kept, emptied ones included */
++    unsigned kept_by_register;               /* views kept whole: a parked thread's saved address is in them */
++    unsigned long long footprint_before, footprint_after;   /* phys_footprint around the teardown */
++};
++
++/* The `[proc-end]` line: MB freed by class, MB emptied and kept, the threads
++ * it waited for, the task's footprint before and after. */
++static inline int ppe_row( char *buf, size_t size, const void *peb, unsigned pid, const struct ppe_result *r,
++                           const struct ppe_census *c )
+ {
+     return snprintf( buf, size, "peb=%p pid=%04x killed: freed image=%llu private=%llu spans=%llu "
+-                     "callret=%llu l1=%llu band_other=%llu pool=%llu MB, kept %llu MB; "
+-                     "%u finished, %u parked thread(s)",
+-                     peb, pid, freed[PPE_IMAGE] >> 20, freed[PPE_PRIVATE] >> 20, freed[PPE_SPAN] >> 20,
+-                     freed[PPE_CALLRET] >> 20, freed[PPE_L1] >> 20, freed[PPE_BAND_OTHER] >> 20,
+-                     pool >> 20, kept >> 20, c->finished, c->parked );
++                     "callret=%llu l1=%llu band_other=%llu pool=%llu MB, emptied=%llu MB, kept %llu MB "
++                     "(%u view(s) a parked register points into); %u finished, %u parked thread(s); "
++                     "footprint %llu->%llu MB",
++                     peb, pid, r->freed[PPE_IMAGE] >> 20, r->freed[PPE_PRIVATE] >> 20, r->freed[PPE_SPAN] >> 20,
++                     r->freed[PPE_CALLRET] >> 20, r->freed[PPE_L1] >> 20, r->freed[PPE_BAND_OTHER] >> 20,
++                     r->pool >> 20, r->emptied >> 20, r->kept >> 20, r->kept_by_register, c->finished, c->parked,
++                     r->footprint_before >> 20, r->footprint_after >> 20 );
+ }
+ 
+ /* The ended processes the server reported, until each is torn down or found
+diff --git a/build/ntdll-unix/signal_arm64_ios.c b/build/ntdll-unix/signal_arm64_ios.c
+index 0ce9aae..575952f 100644
+--- a/build/ntdll-unix/signal_arm64_ios.c
++++ b/build/ntdll-unix/signal_arm64_ios.c
+@@ -8468,8 +8468,11 @@ void ios_alert_wait_end( void )
+ #include "pp_proc_end.h"
+ 
+ /* PLA-416: what parking needs to know of a stopped thread, and the addresses
+- * its saved state names (refs, PPE_REFS of them), all through abort_read. */
+-static void ios_abort_park_state( TEB *teb, struct arm64_thread_data *arm64_data,
++ * its saved state names (refs, PPE_REFS of them), all through abort_read.
++ * Decision 0132 adds its TPIDRRO_EL0 (THREAD_IDENTIFIER_INFO's thread_handle:
++ * iOS owns and zeroes TPIDR_EL0, and x18 is among x0-x28), its TEB and the
++ * address of its alert wait, which [waiters] and [census-hold] read later. */
++static void ios_abort_park_state( mach_port_t port, TEB *teb, struct arm64_thread_data *arm64_data,
+                                   arm_thread_state64_t *state, int process_ending,
+                                   struct ppe_thread_state *s, uint64_t *refs, unsigned *nrefs )
+ {
+@@ -8528,6 +8531,19 @@ static void ios_abort_park_state( TEB *teb, struct arm64_thread_data *arm64_data
+     refs[n++] = (uint64_t)__darwin_arm_thread_state64_get_sp( *state );
+     refs[n++] = (uint64_t)pc;
+     for (i = 0; i < 17 && s->readable; i++) refs[n++] = guest[i];
++    {
++        extern int ios_alert_waiter_lookup( unsigned int tid, const void **addr, int *age_s, int *inf );
++        thread_identifier_info_data_t ident;
++        mach_msg_type_number_t ident_count = THREAD_IDENTIFIER_INFO_COUNT;
++        const void *wait = NULL;
++        int age = 0, inf = 0;
++
++        if (thread_info( port, THREAD_IDENTIFIER_INFO, (thread_info_t)&ident, &ident_count ) == KERN_SUCCESS)
++            refs[n++] = ident.thread_handle;
++        refs[n++] = (uint64_t)(uintptr_t)teb;
++        if (tid && ios_alert_waiter_lookup( HandleToULong( tid ), &wait, &age, &inf ))
++            refs[n++] = (uint64_t)(uintptr_t)wait;
++    }
+     *nrefs = n;
+ }
+ 
+@@ -8594,7 +8610,7 @@ int ios_abort_thread_in_guest_code( mach_port_t port, TEB *teb, int process_endi
+         int age = 0, inf = 0;
+         HANDLE tid = 0;
+ 
+-        ios_abort_park_state( teb, arm64_data, &state, process_ending, &park, refs, &nrefs );
++        ios_abort_park_state( port, teb, arm64_data, &state, process_ending, &park, refs, &nrefs );
+         why = ppe_may_park( &park );
+         if (why == PPE_PARK && ios_proc_end_note_parked( teb, refs, nrefs ))
+         {
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index d00026b..c5f15d9 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -17755,8 +17755,10 @@ void ios_view_owner_process_exit( void *peb )
+  * 0154 releases. Unlike a process that exits by itself, its views in FEX's
+  * band go too: its rpmalloc heaps, call-return stacks and L1 caches, which
+  * FEX's ThreadTerm never released because its threads never left through
+- * NtTerminateThread. With a thread parked, only the L1 caches of the band go,
+- * and no view that holds an address its saved registers name. A process that
++ * NtTerminateThread. With a thread parked, no view that holds an address its
++ * saved registers name changes; of the rest of the band the L1 caches go and
++ * every other view is emptied in place (decision 0132,
++ * ios_proc_end_empty_view_locked). A process that
+  * exited by itself is left to 0154; an i386 one keeps everything, as 0154
+  * keeps its views. Its fixed-base main image is not retired (that unmaps
+  * through the server on the process's own thread); ios_jit_reclaim_process
+@@ -17826,9 +17828,70 @@ static void ios_proc_end_census_locked( void *peb, struct ppe_census *c )
+     }
+ }
+ 
+-/* virtual_mutex held. Deletes the killed peb's views pp_proc_end.h lets go. */
+-static void ios_proc_end_release_locked( void *peb, const struct ppe_census *census,
+-                                         unsigned long long freed[PPE_CLASSES], unsigned long long *kept )
++/* virtual_mutex held. Empties a kept band view of a killed process (decision
++ * 0132): each whole host page of its committed runs is mapped over with fresh
++ * anonymous zero-fill at the protection it has now, as decommit_pages'
++ * mmap-over does. The view, its vprot and its address range stay, so nothing
++ * else is ever placed there, and a reader (a [waiters] dump, a lock reap) finds
++ * zeros, not a fault; the old pages, resident and compressed, leave the
++ * footprint. An executable range is left as it is. The band lies outside the
++ * guest window, so no donor-pool or swap-tier range is in it. Returns the
++ * bytes replaced. */
++static unsigned long long ios_proc_end_empty_view_locked( struct file_view *view )
++{
++    char *p = view->base, *end = (char *)view->base + view->size;
++    unsigned long long emptied = 0;
++
++    while (p < end)
++    {
++        BYTE vprot;
++        SIZE_T len = get_vprot_range_size( p, end - p, VPROT_COMMITTED, &vprot );
++        uint64_t start, stop;
++
++        if (!len) break;
++        if ((vprot & VPROT_COMMITTED) && ppe_host_pages( (uintptr_t)p, len, host_page_mask, &start, &stop ))
++        {
++            while (start < stop)
++            {
++                mach_vm_address_t addr = start;
++                mach_vm_size_t size = 0;
++                vm_region_basic_info_data_64_t info;
++                mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT_64;
++                mach_port_t object = MACH_PORT_NULL;
++                uint64_t to;
++
++                if (mach_vm_region( mach_task_self(), &addr, &size, VM_REGION_BASIC_INFO_64,
++                                    (vm_region_info_t)&info, &count, &object ) != KERN_SUCCESS ||
++                    addr >= stop)
++                    break;
++                if (addr < start) { size -= start - addr; addr = start; }
++                to = addr + size < stop ? addr + size : stop;
++                if (!(info.protection & VM_PROT_EXECUTE) &&
++                    anon_mmap_fixed( (void *)(uintptr_t)addr, to - addr,
++                                     (info.protection & VM_PROT_READ ? PROT_READ : 0) |
++                                     (info.protection & VM_PROT_WRITE ? PROT_WRITE : 0), 0 ) != MAP_FAILED)
++                    emptied += to - addr;
++                start = to;
++            }
++        }
++        p += len;
++    }
++    return emptied;
++}
++
++static unsigned long long ios_proc_end_footprint(void)
++{
++    task_vm_info_data_t info;
++    mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
++
++    if (task_info( mach_task_self(), TASK_VM_INFO, (task_info_t)&info, &count ) != KERN_SUCCESS) return 0;
++    return info.phys_footprint;
++}
++
++/* virtual_mutex held. Deletes or empties the killed peb's views as
++ * pp_proc_end.h decides. Each view is taken once (ppe_take_view): it then
++ * belongs to the runtime, so no later walk by process touches it again. */
++static void ios_proc_end_release_locked( void *peb, const struct ppe_census *census, struct ppe_result *r )
+ {
+     struct file_view *view, *next;
+     struct thread_data *data;
+@@ -17852,9 +17915,9 @@ static void ios_proc_end_release_locked( void *peb, const struct ppe_census *cen
+         uintptr_t base = (uintptr_t)view->base;
+         BOOL band = base + view->size > 0x7c00000000ULL && base < 0x8000000000ULL;
+         enum ppe_class cls = (view->protect & SEC_IMAGE) ? PPE_IMAGE : PPE_PRIVATE;
++        enum ppe_fate fate;
+ 
+-        if (view->ios_owner_peb != peb) continue;
+-        view->ios_owner_peb = NULL;
++        if (!ppe_take_view( &view->ios_owner_peb, peb )) continue;
+         if (band)
+         {
+             switch (ppm_fex_shape( base, view->size ))
+@@ -17867,13 +17930,20 @@ static void ios_proc_end_release_locked( void *peb, const struct ppe_census *cen
+         }
+         if ((view->protect & VPROT_SYSTEM) ||
+             (band ? !is_view_valloc( view )
+-                  : ios_view_owner_kept_range( view ) || !(is_view_valloc( view ) || (view->protect & SEC_IMAGE))) ||
+-            !ppe_release_view( cls, census->parked, base, view->size, ios_proc_end_refs, nrefs ))
++                  : ios_view_owner_kept_range( view ) || !(is_view_valloc( view ) || (view->protect & SEC_IMAGE))))
++        {
++            r->kept += view->size;
++            continue;
++        }
++        fate = ppe_view_fate( cls, census->parked, base, view->size, ios_proc_end_refs, nrefs );
++        if (fate != PPE_FREE)
+         {
+-            *kept += view->size;
++            r->kept += view->size;
++            if (fate == PPE_KEEP_REF) r->kept_by_register++;
++            else r->emptied += ios_proc_end_empty_view_locked( view );
+             continue;
+         }
+-        freed[cls] += view->size;
++        r->freed[cls] += view->size;
+         view->wow64_mapping = 0;   /* the server closed the dead process's handles (0139) */
+         delete_view( view );
+     }
+@@ -17902,11 +17972,11 @@ static void ios_proc_end_sweep( void *self )
+     for (i = 0; i < PPE_GONE_MAX; i++)
+     {
+         void *peb = __atomic_load_n( &ios_proc_end_gone[i].peb, __ATOMIC_ACQUIRE );
+-        unsigned long long freed[PPE_CLASSES] = { 0 }, kept = 0, pool;
++        struct ppe_result result;
+         struct ppe_census census;
+         unsigned int pid;
+         sigset_t sigset;
+-        char row[320];
++        char row[400];
+ 
+         if (!peb || peb == self) continue;
+         pid = __atomic_load_n( &ios_proc_end_gone[i].pid, __ATOMIC_ACQUIRE );
+@@ -17929,13 +17999,16 @@ static void ios_proc_end_sweep( void *self )
+             dprintf( 2, "[proc-end] peb=%p pid=%04x ended: no master socket, nothing to tear down\n", peb, pid );
+             continue;
+         }
++        memset( &result, 0, sizeof(result) );
++        result.footprint_before = ios_proc_end_footprint();
+         ios_fd_cache_release( peb );
+-        pool = ios_jit_reclaim_process_bytes( peb );
++        result.pool = ios_jit_reclaim_process_bytes( peb );
+         server_enter_uninterrupted_section( &virtual_mutex, &sigset );
+         ios_proc_end_census_locked( peb, &census );
+-        ios_proc_end_release_locked( peb, &census, freed, &kept );
++        ios_proc_end_release_locked( peb, &census, &result );
+         server_leave_uninterrupted_section( &virtual_mutex, &sigset );
+-        ppe_row( row, sizeof(row), peb, pid, freed, pool, kept, &census );
++        result.footprint_after = ios_proc_end_footprint();
++        ppe_row( row, sizeof(row), peb, pid, &result, &census );
+         dprintf( 2, "[proc-end] %s (PLA-416)\n", row );
+     }
+ }

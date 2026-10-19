@@ -169,3 +169,4 @@
 0169-ntdll-wineserver-tear-down-a-pseudo-process-another-.patch
 0170-virtual-map-an-image-above-the-furniture-ceiling-onc.patch
 0171-virtual-hold-the-jumbo-gap-for-the-title-s-own-reser.patch
+0172-ntdll-empty-a-killed-process-s-FEX-band-views-in-pla.patch
