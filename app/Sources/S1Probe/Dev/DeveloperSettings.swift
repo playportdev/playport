@@ -77,7 +77,7 @@ struct DeveloperSettings: View {
                value: simulatedPool > 0 ? MemoryNeed.format(mb: simulatedPool) : "Off",
                options: [PadOption(id: "0", label: "Off")] + pools.map { PadOption(id: "\($0)", label: MemoryNeed.format(mb: $0)) },
                selected: "\(simulatedPool)", note: nil) { simulatedPool = Int($0) ?? 0 }
-        // docs/plans/2026-10-12-donor-memory.md step 3 (DonorPool.swift); Off, Auto (PLA-351) or a
+        // docs/plans/finished.md#guest-ram-from-donor-processes step 3 (DonorPool.swift); Off, Auto (PLA-351) or a
         // fixed size to experiment with. Not offered on a 4 or 6 GB phone (PlayportKit DonorPoolSizing).
         if DonorPoolSizing.offered(physicalMB: Int(ProcessInfo.processInfo.physicalMemory >> 20)) {
             // Read through DonorPool.setting: the driver's set: may store "auto" as a string.

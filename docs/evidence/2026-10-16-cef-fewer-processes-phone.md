@@ -2,7 +2,7 @@
 
 **Linear:** [PLA-378](https://linear.app/playportdev/issue/PLA-378), for
 [PLA-370](https://linear.app/playportdev/issue/PLA-370) stage D. Plan:
-[CEF low-VA build](../plans/2026-10-16-cef-low-va-build.md). Decision:
+[CEF low-VA build](../plans/finished.md#own-low-address-space-cef). Decision:
 [0111](../decisions/0111-fewer-cef-processes-with-chromium-features.md), which amends 0109 by the
 owner's choice.
 **Change:** `patches/madeira-unix` 0156 (after 0152). A CEF browser also gets

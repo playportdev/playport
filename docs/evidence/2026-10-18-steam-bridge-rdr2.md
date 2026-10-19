@@ -2,7 +2,7 @@
 
 **Linear:** [PLA-398](https://linear.app/playportdev/issue/PLA-398) (under
 [PLA-253](https://linear.app/playportdev/issue/PLA-253)).
-**Plan:** [Steam bridge for RDR2](../plans/2026-10-18-steam-bridge-rdr2.md).
+**Plan:** [Steam bridge for RDR2](../plans/finished.md#steam-bridge-for-rdr2).
 **Change:** decision [0115](../decisions/0115-a-steam-client-for-the-launched-app.md),
 `app/SteamClientShim`, `patches/madeira-unix` 0158, WineHost `steam_client.c`, the session root's
 `PP_REQUEST_STEAM_CLIENT`. Branch `dev/pla-291-rockstar-launcher`.

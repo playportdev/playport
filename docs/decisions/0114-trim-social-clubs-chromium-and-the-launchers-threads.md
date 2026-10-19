@@ -6,7 +6,7 @@ and processes; FEX, the pool and rpmalloc unchanged). Follows
 [0111](0111-fewer-cef-processes-with-chromium-features.md)**: storage no longer stays out.
 [PLA-384](https://linear.app/playportdev/issue/PLA-384),
 [PLA-370](https://linear.app/playportdev/issue/PLA-370),
-[plan](../plans/2026-10-16-cef-low-va-build.md),
+[plan](../plans/finished.md#own-low-address-space-cef),
 [evidence](../evidence/2026-10-17-cef-trim.md).
 
 ## Context

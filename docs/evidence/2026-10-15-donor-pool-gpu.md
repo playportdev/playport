@@ -4,7 +4,7 @@
 **Linear:** [PLA-354](https://linear.app/playportdev/issue/PLA-354) (child of
 [PLA-216](https://linear.app/playportdev/issue/PLA-216)); the titles are PLA-42 (Hollow Knight)
 and PLA-49 (Kingdom Come).
-**Plan:** [donor memory](../plans/2026-10-12-donor-memory.md), step 5 ("Graphics memory"), queue
+**Plan:** [donor memory](../plans/finished.md#guest-ram-from-donor-processes), step 5 ("Graphics memory"), queue
 item 4. The owner was asleep and the phone was in unattended mode. Where there was a choice, the
 conservative option was taken (listed under "Choices").
 

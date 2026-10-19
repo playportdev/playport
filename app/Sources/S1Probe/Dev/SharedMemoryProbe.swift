@@ -29,7 +29,7 @@ final class SharedMemoryProbe: ObservableObject {
         return result.0
     }
 
-    /// The donor variant (H1, docs/plans/2026-10-12-donor-memory.md step 1): the helper
+    /// The donor variant (H1, docs/plans/finished.md#guest-ram-from-donor-processes step 1): the helper
     /// allocates and the app maps and verifies as in run(mb:), then the helper is
     /// ended while the app keeps its mappings. purgeable picks the helper's object kind.
     func runDonor(mb: Int, purgeable: Bool) async -> Bool {
@@ -45,7 +45,7 @@ final class SharedMemoryProbe: ObservableObject {
         return result.0
     }
 
-    /// The totals Settings and the driver offer for runDonors (docs/plans/2026-10-12-donor-memory.md step 2).
+    /// The totals Settings and the driver offer for runDonors (docs/plans/finished.md#guest-ram-from-donor-processes step 2).
     static let donorTotals = [6144, 8192, 10240]
 
     /// Several donors, one after another (step 2): each round starts a fresh helper process,

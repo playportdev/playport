@@ -3,7 +3,7 @@
 **Date:** 2026-10-14. **Branch:** `research/extended-memory`.
 **Linear:** [PLA-351](https://linear.app/playportdev/issue/PLA-351) (under
 [PLA-216](https://linear.app/playportdev/issue/PLA-216)).
-**Plan:** [donor memory](../plans/2026-10-12-donor-memory.md), queue item 2.
+**Plan:** [donor memory](../plans/finished.md#guest-ram-from-donor-processes), queue item 2.
 The owner was away and the phone was in unattended mode; where there was a choice, the
 conservative option was taken (listed under "Choices").
 

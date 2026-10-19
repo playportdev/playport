@@ -8,7 +8,7 @@
 [PLA-216](https://linear.app/playportdev/issue/PLA-216); the title is PLA-42 (Hollow Knight,
 app-367520).
 **Decision:** [0106](../decisions/0106-8gb-row-in-full-and-vulkan-plan-default.md).
-**Plan:** [donor memory](../plans/2026-10-12-donor-memory.md). The purge path is the one
+**Plan:** [donor memory](../plans/finished.md#guest-ram-from-donor-processes). The purge path is the one
 [the copy-back probe](2026-10-15-donor-pool-copyback.md) never reached.
 
 ## Setup

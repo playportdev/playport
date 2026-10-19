@@ -3,7 +3,7 @@
 **Date:** 2026-10-14. **Branch:** `research/extended-memory`.
 **Linear:** [PLA-216](https://linear.app/playportdev/issue/PLA-216); the titles are PLA-49
 (Kingdom Come) and PLA-42 (Hollow Knight).
-**Plan:** [donor memory](../plans/2026-10-12-donor-memory.md), queue item 1 (phone measurements).
+**Plan:** [donor memory](../plans/finished.md#guest-ram-from-donor-processes), queue item 1 (phone measurements).
 The owner was away and the phone was in unattended mode. Where there was a choice, the
 conservative option was taken; the supervisor approved each one.
 

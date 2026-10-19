@@ -4,7 +4,7 @@
 needed to bring the Rockstar launcher's sign-in page up (PLA-394). 0115 was left for the Steam
 bridge record. [PLA-394](https://linear.app/playportdev/issue/PLA-394),
 [PLA-370](https://linear.app/playportdev/issue/PLA-370),
-[plan](../plans/2026-10-16-cef-low-va-build.md),
+[plan](../plans/finished.md#own-low-address-space-cef),
 [evidence](../evidence/2026-10-18-pool-tail.md).
 
 ## Context

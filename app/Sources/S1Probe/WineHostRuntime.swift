@@ -13,7 +13,7 @@ import WineHost
 // madeira-unix 0148 calls these optional host hooks; the static link needs a
 // definition. A release build backs nothing: every request keeps Wine's
 // ordinary mmap. A dev build's donor pool answers them (SharedMemory/GuestPool.m,
-// Dev/DonorPool.swift; docs/plans/2026-10-12-donor-memory.md).
+// Dev/DonorPool.swift; docs/plans/finished.md#guest-ram-from-donor-processes).
 @_cdecl("playport_guest_memory_backing")
 func playportGuestMemoryBackingDisabled(_ address: UnsafeMutableRawPointer?, _ bytes: UInt) -> Int32 { 0 }
 @_cdecl("playport_guest_memory_released")

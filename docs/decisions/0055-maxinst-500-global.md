@@ -3,7 +3,7 @@
 **Status:** accepted, 2026-10-06, by the owner. Supersedes the `MaxInst` part of
 [0021](0021-fex-ordering-per-game.md) (with 0048, Proton's other values for
 `X87ReducedPrecision`); the rest of 0021 stands. Closes item A1 of the
-[Proton alignment plan](../plans/2026-10-05-proton-arm64-alignment.md).
+[Proton alignment plan](../plans/finished.md#proton-arm64-alignment).
 
 ## Decision
 

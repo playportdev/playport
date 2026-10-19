@@ -2,6 +2,16 @@
 
 **Linear:** [PLA-73](https://linear.app/playportdev/issue/PLA-73).
 **Repository path:** `docs/plans/2026-10-05-release-simplification.md`.
+**Status 2026-10-19:** still not started; the 2026-10-13 review below holds, except:
+- the next free decision number is now **0118** (0117 is the highest);
+- [decision 0115](../decisions/0115-a-steam-client-for-the-launched-app.md) (PLA-398) changed the
+  release block in `LibraryModel.play` (now `UI/LibraryModel.swift:230-243`). It still forces
+  the emulator, unless the title's compatibility default names `client`; that is RDR2
+  (1174180) only today. So the "Steam API" point below is handled for that one case, by a
+  special case rather than step 3's one path;
+- the compatibility table now holds two titles: RDR2 (`windowsServices`, `jitPoolMB`,
+  `steamAPI`, `graphics`) and an Epic title's aspect ratio.
+
 **Review 2026-10-13:** open, not started. No step below is implemented: the release app
 still shows the Metal HUD switch, About's Build and Runtime interface rows and Setup
 check's JIT memory row, and `LibraryModel.play` still resets the dev-only fields by hand
@@ -265,9 +275,9 @@ release`, a person's walk and `playport.log` pull, an evidence record) is withdr
 
 ## Out of scope
 
-- Proton's remaining global FEX values: `MaxInst=500` is taken by 0055 (item A1 of
-  `2026-10-05-proton-arm64-alignment.md`; Review 2026-10-13); the disk cache default
-  is 0056's, held off. The owner's direction is that Valve's defaults are ours.
+- Proton's remaining global FEX values: `MaxInst=500` is taken by 0055 (item A1 of the
+  [Proton alignment plan](finished.md#proton-arm64-alignment)); the disk cache is on by default
+  (0056). The owner's direction is that Valve's defaults are ours.
 - The Steam bridge itself and the emulator's removal (PLA-253, PLA-256); this plan
   only keeps the release app's Steam API a default, not a stored value.
 - Dropping DXMT and with it the Direct3D row (0100's later record).

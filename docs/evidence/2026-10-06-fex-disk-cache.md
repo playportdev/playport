@@ -3,7 +3,7 @@
 **Date:** 2026-10-06. **Branch:** `maxinst-500`. **Phone:** iPhone18,4, iOS 27.0, on
 battery. **Title:** The Witcher 3 1.32 (classic branch, `bin/x64`), app 292030, on DXMT.
 Closes the precondition of alignment item B1
-([plan](../plans/2026-10-05-proton-arm64-alignment.md)): the warm-start crash
+([plan](../plans/finished.md#proton-arm64-alignment)): the warm-start crash
 recorded in [2026-09-26-first-run-stutter.md](2026-09-26-first-run-stutter.md).
 
 ## How the cache was turned on

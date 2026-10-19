@@ -1,6 +1,15 @@
 # Plan: a Steam client bridge for games (the game's own steam_api, Playport's steamclient)
 
-**Date:** 2026-10-12. **Kind:** design and execution plan, decided, not started; Phase 1 can start
+**Date:** 2026-10-12. **Kind:** design and execution plan, decided. **Status 2026-10-19:**
+no phase has started. One slice of Phase 1 has shipped for one game:
+[decision 0115](../decisions/0115-a-steam-client-for-the-launched-app.md) and the
+[Steam bridge for RDR2](finished.md#steam-bridge-for-rdr2) (PLA-398, merged in `dfc527f`). It adds
+Steam API mode `client`; an x86-64 `steamclient64.dll` (`app/SteamClientShim`) serving
+ISteamClient, Utils, User, Friends and Apps for the launched app, with logging stubs for the rest;
+madeira-unix 0158's unix table; and the `Valve\Steam` keys in both registry views (PLA-400). It is
+the compatibility default of RDR2 (1174180) alone. Every other title still uses the emulator.
+Phase 1 (PLA-257) builds on that slice: generated vtables, callbacks and call results, and Hollow
+Knight on `client`.
 (Review 2026-10-13: the owner took decisions D1–D10 on 2026-10-13, see
 [Owner decisions](#owner-decisions-decided-2026-10-13)). **Linear:** [PLA-253](https://linear.app/playportdev/issue/PLA-253)
 (umbrella; each phase has its own issue, listed under [Phases](#phases)).

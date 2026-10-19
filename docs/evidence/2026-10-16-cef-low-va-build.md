@@ -2,7 +2,7 @@
 
 **Date:** 2026-10-16 (build 15:09–18:03, runs 18:07–18:14). **Branch:** `dev/pla-291-rockstar-launcher`
 (from `860e23d`). **Linear:** [PLA-370](https://linear.app/playportdev/issue/PLA-370). **Plan:**
-[low-VA CEF](../plans/2026-10-16-cef-low-va-build.md), stage C. **Decision:**
+[low-VA CEF](../plans/finished.md#own-low-address-space-cef), stage C. **Decision:**
 [0110](../decisions/0110-own-cef-build-for-a-clients-cef.md).
 
 Host only: no phone, no `pp` build, no sign-in, no game. Rockstar's binaries were not analysed; only

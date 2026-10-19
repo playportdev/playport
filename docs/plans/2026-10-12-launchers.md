@@ -3,8 +3,18 @@ launchers in general; part 2, Red Dead Redemption 2, is [the RDR2 plan](2026-10-
 
 # Plan: publisher launchers (Rockstar Games Launcher, Ubisoft Connect, EA app, Battle.net)
 
-**Date:** 2026-10-12. **Kind:** design and execution plan, decided, not started. **Review
-2026-10-13:** the owner took D1–D10 as recommended (74c7c52); the answers are under
+**Date:** 2026-10-12. **Kind:** design and execution plan, decided; the Rockstar track is under
+way, Ubisoft, EA and Battle.net are not started.
+**Status 2026-10-19:** Rockstar Stage R is done, and Stage 0 is done up to the sign-in page. With
+Playport's own CEF ([finished](finished.md#own-low-address-space-cef), PLA-370), the launcher's Open
+shows Social Club's Sign In page on the phone. Through the Steam bridge slice
+([finished](finished.md#steam-bridge-for-rdr2), PLA-398), RDR2's Steam copy signs in and reaches the
+launcher's main window. It then ends on `0xc0000096` under FEX
+([PLA-401](https://linear.app/playportdev/issue/PLA-401), parked), so Stage 2 (PLA-295) is not
+reached. Also open: the pool head's margin (PLA-399), the FEX self-modifying-code fix (PLA-367) and
+distribution of the CEF payload (PLA-372). All of this is merged into `main` (`dfc527f`). The
+Progress log below is in its original order: the newest entries are not at the end.
+**Review 2026-10-13:** the owner took D1–D10 as recommended (74c7c52); the answers are under
 [Owner decisions](#owner-decisions). Next: Stage 0, with its workstation reconnaissance (Stage R,
 PLA-291) first. Until a launcher works, the Steam client bridge's D10 refuses its Steam and Epic
 copies with a message ([PLA-266](https://linear.app/playportdev/issue/PLA-266)); see
@@ -16,7 +26,7 @@ plan: `$PLAYPORT_BUILD/agent-notes/pla254/`.
 **Owner, 2026-10-15:** work the Rockstar Games Launcher alone first (Stages R, 0, 1, 2 for
 Rockstar only; Ubisoft, EA and Battle.net wait). Run with the plan-runner skill: hard tasks
 `anthropic/claude-opus-5-5` (medium), easy tasks `anthropic/claude-sonnet-5-5` (medium).
-Branch `dev/pla-291-rockstar-launcher` from `main` `f7ac25f`, not merged. Reports and scratch:
+Branch `dev/pla-291-rockstar-launcher` from `main` `f7ac25f`, merged 2026-10-18 (`dfc527f`). Reports and scratch:
 `$PLAYPORT_BUILD/agent-notes/pla254-rockstar/` (`reports/`, `inputs/`).
 
 - **Why now:** RDR2's Steam copy (installed on the phone, about 120 GB) stops at its
@@ -123,7 +133,7 @@ Branch `dev/pla-291-rockstar-launcher` from `main` `f7ac25f`, not merged. Report
   PLA-206's x86-64 FullSMC deadlock; or, as an owner decision, `SMCChecks` off for
   `RockstarService.exe` and `Launcher.exe` through FEX's per-executable AppConfig (cheap, but
   stale code if the protector ever writes different code). Then Open again.
-- **2026-10-16: Social Club's CEF needs our own build.** After the PLA-369 research and the [swap test](../evidence/2026-10-16-cef-swap-test.md), the owner chose to plan a same-version low-address-space CEF build: [plan](2026-10-16-cef-low-va-build.md), [PLA-370](https://linear.app/playportdev/issue/PLA-370), decision 0110 (accepted the same day). Chunk 10 (PLA-368) is done. Nothing is running.
+- **2026-10-16: Social Club's CEF needs our own build.** After the PLA-369 research and the [swap test](../evidence/2026-10-16-cef-swap-test.md), the owner chose to plan a same-version low-address-space CEF build: [plan](finished.md#own-low-address-space-cef), [PLA-370](https://linear.app/playportdev/issue/PLA-370), decision 0110 (accepted the same day). Chunk 10 (PLA-368) is done. Nothing is running.
 - **Owner decisions, 2026-10-16:** [PLA-369](https://linear.app/playportdev/issue/PLA-369): research route 1 (a larger or separate address window for CEF processes) and route 3 (sign-in shown another way); no in-memory patching of Chromium. [PLA-367](https://linear.app/playportdev/issue/PLA-367): the proper FEX fix first (PLA-206's deadlock, then FullSMC for hot pages); no per-executable `SMCChecks=none`. [PLA-368](https://linear.app/playportdev/issue/PLA-368): the next chunk. **Chunk 10 done:** madeira-unix 0154 releases an exited child's private and image views (about 300 MB per Rockstar CEF helper); the footprint now climbs about 36 MB per helper, not about 260 MB ([evidence](../evidence/2026-10-15-rockstar-stage0-phone.md#chunk-10-an-exited-childs-views-are-released-pla-368)). Next: what the 142 MB of kept views per helper are, and a regression play of a title whose children worked. The PLA-369 research is done.
 - **Chunk 11, PLA-369 swap test (host only), done:** Spotify's stock CEF 143.0.14 (`+gdd46a37`, Chromium 143.0.7499.193, Social Club's exact version) put in place of Social Club's CEF files: the launcher reaches the sign-in page with no refusal or error, the same as with Rockstar's files. Each CEF process reserves two 32 GiB, 32 GiB-aligned pools plus two 16 GiB regions; a renderer adds a third 32 GiB pool, a 1,320 GiB V8 sandbox placeholder and 1 GiB. The tree at sign-in is 6 non-renderers plus 3 renderers ([evidence](../evidence/2026-10-16-cef-swap-test.md)). Route 1 (a same-version low-address-space CEF build) stays open; costing it is the owner's call.
 - **Stopped: chunk 9 (run `4e17ac0e`), waiting on the owner's architecture call ([PLA-369](https://linear.app/playportdev/issue/PLA-369), [PLA-368](https://linear.app/playportdev/issue/PLA-368)).** Host analysis only, no phone run ([evidence](../evidence/2026-10-15-rockstar-stage0-phone.md#chunk-9-why-cefs-browser-dies-and-why-crashed-helpers-cost-memory-pla-369-pla-368-stopped-for-the-owner)).

@@ -3,7 +3,7 @@
 **Date:** 2026-10-15 (07:09–07:13). **Branch:** `research/extended-memory`.
 **Linear:** [PLA-353](https://linear.app/playportdev/issue/PLA-353), under
 [PLA-216](https://linear.app/playportdev/issue/PLA-216).
-**Plan:** [donor memory](../plans/2026-10-12-donor-memory.md), the follow-up left open by
+**Plan:** [donor memory](../plans/finished.md#guest-ram-from-donor-processes), the follow-up left open by
 [the memory plan](2026-10-14-memory-plan.md).
 
 **Setup:**

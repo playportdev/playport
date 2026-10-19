@@ -4,7 +4,7 @@
 own switches). **Amends [0109](0109-chromium-switches-for-a-cef-browser.md)**: its switch set
 only. [PLA-378](https://linear.app/playportdev/issue/PLA-378),
 [PLA-370](https://linear.app/playportdev/issue/PLA-370),
-[plan](../plans/2026-10-16-cef-low-va-build.md).
+[plan](../plans/finished.md#own-low-address-space-cef).
 Amended by [0114](0114-trim-social-clubs-chromium-and-the-launchers-threads.md): the storage
 service now runs in the browser too, by a compiled default in our CEF.
 

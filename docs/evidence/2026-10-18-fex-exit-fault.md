@@ -3,7 +3,7 @@
 **Linear:** [PLA-395](https://linear.app/playportdev/issue/PLA-395),
 [PLA-394](https://linear.app/playportdev/issue/PLA-394),
 [PLA-370](https://linear.app/playportdev/issue/PLA-370).
-**Plan:** [low-VA CEF](../plans/2026-10-16-cef-low-va-build.md).
+**Plan:** [low-VA CEF](../plans/finished.md#own-low-address-space-cef).
 **Fix:** `patches/fex` 0047. Branch `dev/pla-291-rockstar-launcher`.
 
 **Question:** With a warm FEX disk cache (decision 0056), the first Launcher.exe,

@@ -1,7 +1,7 @@
 # Our low-address-space CEF on the phone: the Rockstar Games Launcher's Open (PLA-370 stage D)
 
 **Linear:** [PLA-370](https://linear.app/playportdev/issue/PLA-370). Plan:
-[CEF low-VA build](../plans/2026-10-16-cef-low-va-build.md), stage D. Decision
+[CEF low-VA build](../plans/finished.md#own-low-address-space-cef), stage D. Decision
 [0110](../decisions/0110-own-cef-build-for-a-clients-cef.md).
 
 - **IPA:** dev, sha256 `2eefce7e28ef00777f9aa8049436afd61243feedbc0f40775d2a64c5046c07bb`, built from

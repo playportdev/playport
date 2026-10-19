@@ -1,7 +1,7 @@
 # Reserved CPSR bits: WineHQ 7fb24b7 hand-ported into the iOS replacements
 
 **Date:** 2026-10-18. **Linear:** [PLA-390](https://linear.app/playportdev/issue/PLA-390)
-(under PLA-76, the [Proton ARM64 alignment plan](../plans/2026-10-05-proton-arm64-alignment.md),
+(under PLA-76, the [Proton ARM64 alignment plan](../plans/finished.md#proton-arm64-alignment),
 item W8b; related to PLA-302, PLA-303 and PLA-304). **Branch:** `dev/pla-76-proton-alignment-ws`,
 built in the owner-authorized side copy (its own build area; no install, no phone). The owner was
 away, so the conservative option was taken: the commit as upstream wrote it, at the sites the iOS

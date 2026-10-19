@@ -7,7 +7,7 @@ and [0062](0062-steam-live-session.md) (the Steam bridge plan's D1), and
 [0112](0112-a-launchers-open-outlasts-a-pool-exhaustion.md),
 [0114](0114-trim-social-clubs-chromium-and-the-launchers-threads.md) and
 [0116](0116-tail-room-for-every-process-and-the-launchers-smc-checks.md) (Open only → also a game
-the launcher starts). [Plan](../plans/2026-10-18-steam-bridge-rdr2.md),
+the launcher starts). [Plan](../plans/finished.md#steam-bridge-for-rdr2),
 [bridge plan](../plans/2026-10-12-steamclient-bridge.md).
 
 ## Context

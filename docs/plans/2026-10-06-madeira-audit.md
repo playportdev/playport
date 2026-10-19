@@ -41,6 +41,16 @@ backing for committed FEX data, and for fresh guest RW commits of 1 MiB or more 
 `[0x7000000000, 0x7c00000000)`. That is the range T4's steering and T10's layout move, so
 whichever lands second rebases onto the other.
 
+**Update 2026-10-19 (not a re-reconciliation).** The donor pool has landed on `main`
+(`5a7a248`) as madeira-unix 0148
+(fresh guest data through host hooks), 0149 (a census) and 0150 (every fresh commit of a host
+page); 0147 was dropped. T4 and T10 now rebase onto them. Other `patches/madeira-unix` work since
+0143 that touches this audit's files: 0146 (WoW64 window slots), 0154 (an exited child's views
+released, PLA-368), 0155 (1024 JIT pool images and alias entries), 0157 (tail room for every
+process, [0116](../decisions/0116-tail-room-for-every-process-and-the-launchers-smc-checks.md)),
+and 0160–0162 (the iOS port onto Wine 11.20, and CPSR bits). No topic below has been checked
+against 0144–0162; do that before you implement one.
+
 **Date:** 2026-10-06. **Kind:** plan, research only: nothing changed, nothing built, no phone used. **Pins read:** `madeira` 8c050d0 (frozen, decision 0054) with `patches/madeira-unix` 0001–0085, as built in `.work/run/unix/mythic/build/`. The FEX tree is `.work/run/fex`, with `patches/fex-port` and `patches/fex` applied. **Logs read:** `.work/agent-notes/va-exhaustion/v2/{hk,dd1-3,p2,w3*}/pull/s1-host.log`, from the IPA `965b7f27…` (0082–0085). The Hollow Knight log (`v2/hk`, about 48,900 lines for one play to first-frame+10) is the main source for the counts below.
 
 ## Method

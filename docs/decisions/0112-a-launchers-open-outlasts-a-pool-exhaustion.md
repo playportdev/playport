@@ -4,7 +4,7 @@
 10 s after a head exhaustion). **Amends [0022](0022-stop-a-game-that-ran-the-pool-out.md)**: its
 10 s, for this one Open only. [PLA-381](https://linear.app/playportdev/issue/PLA-381),
 [PLA-370](https://linear.app/playportdev/issue/PLA-370),
-[plan](../plans/2026-10-16-cef-low-va-build.md).
+[plan](../plans/finished.md#own-low-address-space-cef).
 
 ## Context
 

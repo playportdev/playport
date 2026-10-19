@@ -4,7 +4,7 @@
 **Linear:** [PLA-351](https://linear.app/playportdev/issue/PLA-351) (Auto) and
 [PLA-216](https://linear.app/playportdev/issue/PLA-216) (the pool's cost); the titles are PLA-42
 (Hollow Knight) and PLA-49 (Kingdom Come).
-**Plan:** [donor memory](../plans/2026-10-12-donor-memory.md), the queue's follow-ups to items 1
+**Plan:** [donor memory](../plans/finished.md#guest-ram-from-donor-processes), the queue's follow-ups to items 1
 and 2. The owner was asleep and the phone was in unattended mode. Where there was a choice, the
 conservative option was taken (listed under "Choices").
 

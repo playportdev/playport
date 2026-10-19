@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // The donor pool behind madeira-unix 0148's hooks, dev builds only
-// (docs/plans/2026-10-12-donor-memory.md, step 3). The app keeps the pool's
+// (docs/plans/finished.md#guest-ram-from-donor-processes, step 3). The app keeps the pool's
 // purgeable objects as memory-entry send rights and maps none of them: each
 // fresh guest commit Wine offers is backed by vm_map of an unused range of one
 // object at Wine's own address, so pool pages are resident only once the game

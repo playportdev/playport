@@ -8,7 +8,7 @@
 from `proton_11.0`); the rest of those records stands: each component is still
 built from its own upstream with Madeira's port and Playport's changes as
 patch series. The owner's direction of 2026-10-05, as written in the
-[Proton ARM64 alignment plan](../plans/2026-10-05-proton-arm64-alignment.md#goal).
+[Proton ARM64 alignment plan](../plans/finished.md#proton-arm64-alignment).
 
 ## Decision
 

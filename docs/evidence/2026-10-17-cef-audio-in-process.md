@@ -2,7 +2,7 @@
 
 **Linear:** [PLA-381](https://linear.app/playportdev/issue/PLA-381),
 [PLA-370](https://linear.app/playportdev/issue/PLA-370).
-**Plan:** [low-VA CEF](../plans/2026-10-16-cef-low-va-build.md).
+**Plan:** [low-VA CEF](../plans/finished.md#own-low-address-space-cef).
 **Decisions:** [0110](../decisions/0110-own-cef-build-for-a-clients-cef.md),
 [0111](../decisions/0111-fewer-cef-processes-with-chromium-features.md).
 Branch `dev/pla-291-rockstar-launcher`. Host only; nothing ran on the phone.

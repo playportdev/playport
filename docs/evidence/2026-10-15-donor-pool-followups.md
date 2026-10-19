@@ -2,7 +2,7 @@
 
 **Date:** 2026-10-15 (00:09–01:03). **Branch:** `research/extended-memory`.
 **Linear:** [PLA-216](https://linear.app/playportdev/issue/PLA-216); the title is PLA-42.
-**Plan:** [donor memory](../plans/2026-10-12-donor-memory.md), the HK A/B and the detach probe
+**Plan:** [donor memory](../plans/finished.md#guest-ram-from-donor-processes), the HK A/B and the detach probe
 left open by [the measure runs](2026-10-14-donor-pool-measure.md).
 
 **Setup:**

@@ -1,7 +1,7 @@
 # Proton alignment on the phone: FEX 5285020d, Wine 11.20 and the CPSR masks, built in the main checkout (PLA-76)
 
 **Date:** 2026-10-18 (the phone session ran from 00:09 to 00:40 on 2026-10-19).
-**Kind:** the M2b phone gates of the [Proton ARM64 alignment plan](../plans/2026-10-05-proton-arm64-alignment.md).
+**Kind:** the M2b phone gates of the [Proton ARM64 alignment plan](../plans/finished.md#proton-arm64-alignment).
 **Linear:** [PLA-76](https://linear.app/playportdev/issue/PLA-76), with
 [PLA-389](https://linear.app/playportdev/issue/PLA-389) (`fex` 5285020d, `rpmalloc` ed22744),
 [PLA-390](https://linear.app/playportdev/issue/PLA-390) (`wine` wine-11.20, `wine-valve` c53678ab,

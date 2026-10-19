@@ -4,9 +4,11 @@
 [`docs/design/2026-10-09-touch-controls/`](../design/2026-10-09-touch-controls/)
 (boards and README).
 
-**Date:** 2026-10-09. **Kind:** plan. **Status:** running (started over 2026-10-13
-from `main` at `412de5f`; an earlier attempt is abandoned and not reused). Branch
-`dev/pla-13-touch-controls`. The four items under [To confirm](#to-confirm) take the
+**Date:** 2026-10-09. **Kind:** plan. **Status (2026-10-19):** phases 1–3 are done, signed off
+by the owner and merged to `main` (`631bd7f`, 2026-10-13), and that run has stopped. Phases 4+
+are not started; the next run starts on a new branch from `main`. Open follow-ups: PLA-338,
+PLA-339 and PLA-340. The Run state below is the 2026-10-13 run's record (started over from
+`main` at `412de5f`; the branch was `dev/pla-13-touch-controls`). The four items under [To confirm](#to-confirm) take the
 proposed answer unless the owner says otherwise before the phase that needs them.
 
 ## Run state

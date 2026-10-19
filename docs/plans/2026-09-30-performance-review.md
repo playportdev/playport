@@ -8,6 +8,9 @@ DXMT-only work): A4, the DXMT parts of A5 and C5. Everything else is an open hyp
 `pp perf` A/B yet. Items shared with another plan are tracked there: B1 and C7 under PLA-75
 (T1, T2), the disk cache, CPU topology and Valve picks under PLA-76, the present path under
 PLA-72, the host feature set under PLA-132. This plan is not a second work queue.
+**Update 2026-10-19:** the Proton alignment plan (PLA-76) finished
+([outcome](finished.md#proton-arm64-alignment)). Its disk-cache, CPU-topology and FEX-move rows
+are done in the ledger below; Portal 2's thermal headroom is PLA-406.
 
 **Date:** 2026-09-30. **Status:** review and plan. The code was read and the
 series were applied to scratch trees; nothing was built, installed or run on
@@ -59,12 +62,12 @@ change landed, and its cost is still a hypothesis until a `pp perf` A/B shows it
 | C5 build flags | open (FEX, unix); superseded (DXMT) | `fex.sh` still `-DENABLE_LTO=FALSE` with no tuning; the unix side still `arm64-apple-ios17.0` with no `-mcpu`. DXMT's `LLVM_ENABLE_ASSERTIONS=On` and NDEBUG are DXMT-only (0100) |
 | C6 diagnostics on FEX hot paths | open | not changed |
 | C7 call-return reset in hitches | open | the same finding is T2 of the Madeira audit (PLA-75), tracked there |
-| D FEX move past 2609.1 | done | FEX `main` `3648ee9` (`c96db80`, decision 0049), which contains Valve's cache series listed in D and `638329278` |
+| D FEX move past 2609.1 | done | FEX `main` `3648ee9` (`c96db80`, decision 0049), which contains Valve's cache series listed in D and `638329278`; since 2026-10-19 FEX `5285020d` (PLA-389, [evidence](../evidence/2026-10-18-fex-5285020d.md)) |
 | D disk cache default | done | on by default (decision 0056, PLA-341, [2026-10-14](../evidence/2026-10-14-fex-disk-cache-on.md)): the warm-start crashes were rpmalloc's one-block pages (rpmalloc 0004); keyed on the FEX build (fex 0041), one database for every TEB slot (fex 0042); WoW64 processes too, keyed on their guest window (fex 0043) |
 | D `MaxInst=500` | done | decision 0055 (`afd3900`), taken without the A/B |
 | D inline `PCMPxSTRx` | done | in the FEX pin above; not measured |
 | D `X87ReducedPrecision=1` | done | decision 0048 (below) |
-| D CPU topology | open | Valve `edd5fa7c08e`/`a75c78b4079` not picked; PLA-76 (B7) |
+| D CPU topology | done | B7 closed with a reason ([evidence](../evidence/2026-10-17-cpu-topology.md)): six equal cores, as Valve's Proton shows on ARM, so Valve's `WINE_CPU_TOPOLOGY` would be unset; FEX's CPUID now counts every core and Apple's clusters keep their own caches (fex 0053, PLA-392) |
 | D `NtUserGetAsyncKeyState` recent bit | open | Valve `4aa2ab99c59` not picked |
 | D TSO metadata | open | `AddForceTSOInformation` not counted |
 | E `FlushInstructionCache` on ARM64EC | done | wine-pe 0044 ([PLA-325](https://linear.app/playportdev/issue/PLA-325), [ARM64EC flush](../evidence/2026-10-13-arm64ec-flush.md)): the x86-64 no-op excludes ARM64EC, and the ARM64EC branch it had shadowed (never built) assembles and links. The childabort `flush rw-neighbour` check on x86-64 went from 980,469 of 996,036 calls stale to 0 of 66,449 |

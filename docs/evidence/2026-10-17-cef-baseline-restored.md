@@ -2,7 +2,7 @@
 
 **Linear:** [PLA-380](https://linear.app/playportdev/issue/PLA-380),
 [PLA-379](https://linear.app/playportdev/issue/PLA-379).
-**Plan:** [low-VA CEF](../plans/2026-10-16-cef-low-va-build.md).
+**Plan:** [low-VA CEF](../plans/finished.md#own-low-address-space-cef).
 Owner direction, 2026-10-17: park V8; do the FEX cap independently. This is a
 restoration-only checkpoint, not acceptance of the rejected V8 experiment or a
 completed FEX policy. Starting HEAD `068b158`, branch `dev/pla-291-rockstar-launcher`.

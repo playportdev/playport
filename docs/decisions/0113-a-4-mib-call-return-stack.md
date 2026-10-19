@@ -6,7 +6,7 @@ measurement stays in the [evidence](../evidence/2026-10-17-callret-stack.md).
 [PLA-383](https://linear.app/playportdev/issue/PLA-383),
 [PLA-381](https://linear.app/playportdev/issue/PLA-381),
 [PLA-370](https://linear.app/playportdev/issue/PLA-370),
-[plan](../plans/2026-10-16-cef-low-va-build.md),
+[plan](../plans/finished.md#own-low-address-space-cef),
 [evidence](../evidence/2026-10-17-callret-stack.md).
 
 ## Context

@@ -2,7 +2,7 @@
 
 **Date:** 2026-10-14. Branch `research/extended-memory`, commit `0534342`.
 **Linear:** [PLA-216](https://linear.app/playportdev/issue/PLA-216).
-**Plan:** [donor memory, step 1](../plans/2026-10-12-donor-memory.md#1-does-the-memory-stay-free-after-the-donor-dies-h1).
+**Plan:** [donor memory, step 1](../plans/finished.md#guest-ram-from-donor-processes).
 **IPA:** `Playport-26.5-19e10116.ipa` (dev, entitled build), SHA256
 `19e101160b76d98838ccf85003ab71d2a85208b2d23a78a1bd4eed2d67defdb6`, installed
 in place. iPhone18,4, iOS 27.0.1, one phone. Every run below is on that IPA

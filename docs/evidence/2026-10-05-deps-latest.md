@@ -1,6 +1,6 @@
 # Every dependency to its latest version (alignment plan, step 1)
 
-**Date:** 2026-10-05. **Plan:** [Proton ARM64 alignment](../plans/2026-10-05-proton-arm64-alignment.md),
+**Date:** 2026-10-05. **Plan:** [Proton ARM64 alignment](../plans/finished.md#proton-arm64-alignment),
 step 1 (rows 2–10), under decision [0049](../decisions/0049-latest-pins.md).
 **Kind:** one move per commit, each built and committed with its IPA while
 the phone was away (14:14–15:43), then played in order on the phone (gate,

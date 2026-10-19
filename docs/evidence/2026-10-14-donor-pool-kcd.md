@@ -6,7 +6,7 @@ merge `3db126b` and `8bb3093` (`pp pad wait-text --crop --highlight-above`).
 **Linear:** [PLA-216](https://linear.app/playportdev/issue/PLA-216); the title
 is PLA-49; the crash fixed first is
 [PLA-350](https://linear.app/playportdev/issue/PLA-350).
-**Plan:** [donor memory, step 4](../plans/2026-10-12-donor-memory.md#4-does-it-help-a-game).
+**Plan:** [donor memory, step 4](../plans/finished.md#guest-ram-from-donor-processes).
 **IPA:** `Playport-26.5-f1f024ae.ipa` (dev, entitled build), SHA256
 `f1f024aed7548b6eb01a8002de8e4f685dfa92f728d540cdce8d52c4cf56e26b`, installed
 in place. iPhone18,4, iOS 27.0.1, 11734 MiB physical RAM, battery 80 % on

@@ -40,6 +40,13 @@ features below, but it hits three KosmicKrisp defects that the host mock shows. 
 chunks V0–V4 in [RDR2 on Vulkan](#rdr2-on-vulkan-chunks-v0v4), run before chunk 0. See
 [Runner state](#runner-state) for what is running.
 
+**Status 2026-10-19:** the RDR2 Vulkan work (V0–V4, H1–H8, mesa 0037–0043 and the host
+replay, capture and Metal-compiler tools) is merged into `main` (`db3d0a6`). Hollow Knight on
+Vulkan passes on that build. RDR2's renderer has not run on the phone: its launcher stops first
+(PLA-401). PLA-386 stays open for that phone check; the sync path for CPU-written linear images
+(PLA-397) is the fallback if the discrete device type (mesa 0043) is not enough. The FL12_2
+chunks 0–11 are not started.
+
 **Date:** 2026-10-05. **Kind:** research and plan.
 **Status:** proposed, not executed. Research, upstream status, game requirements
 and estimates below are the original snapshot, not newly verified facts. Before
@@ -536,7 +543,7 @@ plays above.
 - The original dependency plan's Mesa move has already changed the pin. Check what
   landed or remains; this is not a separate upgrade. (Review 2026-10-13: any later move
   now rebases 35 Mesa patches, not 16, including the Zink and EGL patches.) Coordinate any remaining move
-  with [Proton alignment](2026-10-05-proton-arm64-alignment.md) (PLA-76) and respect
+  with [Proton alignment](finished.md#proton-arm64-alignment) (PLA-76) and respect
   held/frozen dependencies.
 - Upstream MR !44786 ("kk: Add geometry shader support") may replace or conflict with
   our 0005. Re-run the GS/XFB host tests either way.

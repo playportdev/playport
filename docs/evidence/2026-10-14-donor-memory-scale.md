@@ -2,7 +2,7 @@
 
 **Date:** 2026-10-14. Branch `research/extended-memory`, commit `9552b8b`.
 **Linear:** [PLA-216](https://linear.app/playportdev/issue/PLA-216).
-**Plan:** [donor memory, step 2](../plans/2026-10-12-donor-memory.md#2-how-much-memory-and-from-how-many-donors)
+**Plan:** [donor memory, step 2](../plans/finished.md#guest-ram-from-donor-processes)
 (entitled builds only; the unentitled part is deferred by the owner).
 **IPA:** `Playport-26.5-fc107a8d.ipa` (dev, entitled build), SHA256
 `fc107a8d9d9b5b98600e0bd050e198f4058160bd22b3961916ef23b6350eb9a1`, installed

@@ -2,7 +2,7 @@
 
 **Linear:** [PLA-373](https://linear.app/playportdev/issue/PLA-373), for
 [PLA-370](https://linear.app/playportdev/issue/PLA-370) stage D. Plan:
-[CEF low-VA build](../plans/2026-10-16-cef-low-va-build.md).
+[CEF low-VA build](../plans/finished.md#own-low-address-space-cef).
 **Change:** `patches/fex` 0046 and `patches/madeira-unix` 0155, with the host test
 `tools/tests/test_alias_table_caps.py`.
 **Question:** In the phone Open of [CEF on the phone](2026-10-16-cef-low-va-phone.md),

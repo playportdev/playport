@@ -10,7 +10,7 @@ pointed at the launch's slot (0042), in place of 0021's database per offset. WoW
 processes use it too (0043, PLA-345), keyed on their guest window's base, which 0022
 had kept them off for.
 Item B1 of the
-[Proton alignment plan](../plans/2026-10-05-proton-arm64-alignment.md); changes the
+[Proton alignment plan](../plans/finished.md#proton-arm64-alignment); changes the
 "stays off" outcome of the
 [first-run stutter evidence](../evidence/2026-09-26-first-run-stutter.md). The
 measurements are in the [evidence record](../evidence/2026-10-06-fex-disk-cache.md).

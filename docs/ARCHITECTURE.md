@@ -18,7 +18,7 @@ rebased as `patches/*-port` series (decisions
 
 Valve's Proton bleeding-edge is the reference for ARM64 defaults, not a base
 ([decision 0049](decisions/0049-latest-pins.md); the items taken and still open
-are in [the alignment plan](plans/2026-10-05-proton-arm64-alignment.md)). These
+are in [the alignment plan](plans/finished.md#proton-arm64-alignment)). These
 do not apply on iOS:
 
 | Proton item | Why not |
@@ -218,7 +218,7 @@ pool is on (`set:donorPoolMB=auto|2048|4096|6144`, off by default): at Play, aft
 the JIT activation, helpers that then end give purgeable objects, and each
 commit is a `vm_map` of an unused range of one at Wine's address
 (`SharedMemory/GuestPool.m`, `Dev/DonorPool.swift`;
-[plan](plans/2026-10-12-donor-memory.md), step 3). Auto takes the phone's tier's
+[plan](plans/finished.md#guest-ram-from-donor-processes), step 3). Auto takes the phone's tier's
 pool ([decision 0105](decisions/0105-memory-defaults-per-phone.md): 4 GiB on a 12 GB
 phone, 1 GiB on 8 GB, none and no setting under), at most one donor's grant
 (PlayportKit `DonorPoolSizing`). During play the pool stops taking unused pages

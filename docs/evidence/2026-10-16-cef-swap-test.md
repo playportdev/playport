@@ -147,7 +147,7 @@ On the phone those all share one address window.
 ## Our stock-args build in place of Social Club's (PLA-370 stage B exit)
 
 **Date:** 2026-10-16 (14:47–14:50). **Linear:** [PLA-370](https://linear.app/playportdev/issue/PLA-370).
-**Plan:** [CEF low-VA build](../plans/2026-10-16-cef-low-va-build.md), stage B. The same procedure,
+**Plan:** [CEF low-VA build](../plans/finished.md#own-low-address-space-cef), stage B. The same procedure,
 prefix and runner as the swap above (`swaprun.sh`, 150 s, `WINEDEBUG=+pid,+virtual,+process,+loaddll`),
 run `runs/swap-ours1`. Host only, no sign-in.
 

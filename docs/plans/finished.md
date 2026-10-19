@@ -125,8 +125,9 @@ Open for "fully playable":
 - Fonts: the owner's distribution review of the Tahoma fallback faces
   (`build/app-notices.json` is `unreviewed`) before an IPA is given to anyone.
 - Progress past one chamber through an elevator, by a person playing.
-- Headroom under heat, hitches and footprint growth: moved to
-  [the Proton alignment plan](2026-10-05-proton-arm64-alignment.md#portal-2-performance-follow-ups).
+- Headroom under heat, hitches and footprint growth: moved to the Proton alignment plan, then
+  to [PLA-406](https://linear.app/playportdev/issue/PLA-406) when that plan
+  [finished](#proton-arm64-alignment).
 - The hint glyph follows the last device used; a retired window's final teardown
   has not been seen on the phone.
 
@@ -267,6 +268,107 @@ the umbrella tracked nothing they do not.
   - [PLA-319](https://linear.app/playportdev/issue/PLA-319): the release detailed-log switch, decided by the owner, not scheduled;
   - [PLA-11](https://linear.app/playportdev/issue/PLA-11): LiveContainer and Madeira A/B.
 
+## Guest RAM from donor processes
+
+`plans/2026-10-12-donor-memory.md` ([PLA-216](https://linear.app/playportdev/issue/PLA-216)).
+Steps 1–5 done 2026-10-14/15 on `research/extended-memory`, merged into `main` (`5a7a248`,
+then `510c9e4`); removed 2026-10-19. A donor app extension maps memory and is killed; what it
+mapped stays verified and outside the app's footprint, and a pool taken at Play backs the
+guest's fresh commits.
+- **Steps:** kill-after-map (step 1, 4096 MiB kept,
+  [evidence](../evidence/2026-10-14-donor-memory.md)); several donors, physical RAM the wall
+  (step 2, [evidence](../evidence/2026-10-14-donor-memory-scale.md)); a pool at Play serving
+  madeira-unix 0148, widened to small commits by 0150, reuse within an object, `MADV_ZERO`
+  zeroing (step 3, [evidence](../evidence/2026-10-14-donor-pool-at-play.md),
+  [widen](../evidence/2026-10-14-donor-pool-widen.md)); Kingdom Come's peak `fpMB` 7,682 → 3,884,
+  32 min with no jetsam (step 4, [evidence](../evidence/2026-10-14-donor-pool-measure.md));
+  no-copy Metal buffers over the pool, DXMT 0012 `gpu-pool-buffers`, off by default (step 5,
+  [evidence](../evidence/2026-10-15-donor-pool-gpu.md)).
+- **Defaults:** Auto sizing from the headroom (PLA-351), one memory plan per Play for guest RAM
+  and video memory (PLA-352), the Vulkan clamp, mesa 0036 (PLA-353), memory defaults per phone
+  ([0105](../decisions/0105-memory-defaults-per-phone.md)), the 8 GB row in full and the Vulkan
+  clamp on by default ([0106](../decisions/0106-8gb-row-in-full-and-vulkan-plan-default.md));
+  purges and the detach probe checked on the phone
+  ([purge](../evidence/2026-10-15-donor-pool-purge.md),
+  [copy-back](../evidence/2026-10-15-donor-pool-copyback.md)).
+- **Open:** an 8 GB phone ([PLA-355](https://linear.app/playportdev/issue/PLA-355), the owner);
+  the Vulkan clamp on a heavy title and Hollow Knight's lower 1 % lows with the pool
+  ([PLA-407](https://linear.app/playportdev/issue/PLA-407)); RDR2's memory tier (PLA-254,
+  fallback PLA-268).
+
+## Proton ARM64 alignment
+
+`plans/2026-10-05-proton-arm64-alignment.md` ([PLA-76](https://linear.app/playportdev/issue/PLA-76)).
+Its "Done when" was met on 2026-10-19 and the branch merged (`c8095ce`); removed 2026-10-19.
+Valve's ARM64 Proton (bleeding-edge) is the reference, never the base.
+- **Step 1, every dependency to latest** ([deps-latest](../evidence/2026-10-05-deps-latest.md),
+  [0049](../decisions/0049-latest-pins.md)); then FEX 5285020d with rpmalloc ed22744 (PLA-389,
+  [evidence](../evidence/2026-10-18-fex-5285020d.md)) and Wine 11.20 with wine-valve c53678ab
+  (PLA-390, [evidence](../evidence/2026-10-18-wine-11.20.md)), on the phone in
+  [proton-alignment-phone](../evidence/2026-10-18-proton-alignment-phone.md).
+- **Step 2:** A0 Proton data in `FEXProfile`; A1 `MaxInst=500`
+  ([0055](../decisions/0055-maxinst-500-global.md)); A2 WoW64 suspend and termination; B1 disk
+  cache on ([0056](../decisions/0056-fex-disk-cache-on.md)); B2 Valve Wine past stable; B5 release
+  log defaults; reserved CPSR bits (madeira-unix 0161/0162,
+  [evidence](../evidence/2026-10-18-cpsr-reserved-bits.md)). Closed with a reason: B3 LAA
+  ([evidence](../evidence/2026-10-17-i386-laa.md)), B6 Steam appinfo
+  ([evidence](../evidence/2026-10-17-steam-appinfo-fex.md)), B7 CPU topology
+  ([evidence](../evidence/2026-10-17-cpu-topology.md); FEX's CPUID count and Apple's clusters
+  fixed later in PLA-392). The C table is in
+  [ARCHITECTURE.md](../ARCHITECTURE.md#valves-arm64-proton-items-not-carried). `pp rebase` checks
+  where a written series lands (PLA-393).
+- **Open:** B4, child-process FEX profiles, designed
+  ([evidence](../evidence/2026-10-17-fex-child-profiles.md)) and waiting for a played title with
+  a child entry; the env `FEX_*` precedence ([PLA-391](https://linear.app/playportdev/issue/PLA-391));
+  the Portal 2 performance follow-ups, never re-measured
+  ([PLA-406](https://linear.app/playportdev/issue/PLA-406)); SetThreadContext on a running thread
+  (PLA-303). Later pin moves follow [UPSTREAM-SYNC.md](../UPSTREAM-SYNC.md).
+
+## Own low-address-space CEF
+
+`plans/2026-10-16-cef-low-va-build.md` ([PLA-370](https://linear.app/playportdev/issue/PLA-370);
+[decision 0110](../decisions/0110-own-cef-build-for-a-clients-cef.md)). Stages A–D done
+2026-10-16/18, merged with the Rockstar track (`dfc527f`); removed 2026-10-19. Playport builds
+CEF 143.0.14 from source on Linux (xwin) with low-address-space settings and loads it in place of
+Social Club's CEF of the exact same version (wine-unix 0039); it ships in the dev IPA only.
+- **Stages:** toolchain and stock build ([swap test](../evidence/2026-10-16-cef-swap-test.md)); the
+  low-VA build ([evidence](../evidence/2026-10-16-cef-low-va-build.md)); on the phone, after the
+  alias table (PLA-373), fonts (PLA-374), fewer processes
+  ([0111](../decisions/0111-fewer-cef-processes-with-chromium-features.md)), a longer Open grace
+  ([0112](../decisions/0112-a-launchers-open-outlasts-a-pool-exhaustion.md)), Chromium and thread
+  trims ([0114](../decisions/0114-trim-social-clubs-chromium-and-the-launchers-threads.md)), late
+  children (PLA-394) and the tail room
+  ([0116](../decisions/0116-tail-room-for-every-process-and-the-launchers-smc-checks.md)), the
+  launcher's Open showed Social Club's Sign In page with its text in 3 of 3 runs
+  ([evidence](../evidence/2026-10-18-pool-tail.md)). [0113](../decisions/0113-a-4-mib-call-return-stack.md)
+  was not adopted.
+- **Stage E:** the account signed in through RDR2's Steam copy (the
+  [Steam bridge slice](#steam-bridge-for-rdr2)); the launcher then reached its main window.
+- **Open:** the pool head's thin margin ([PLA-399](https://linear.app/playportdev/issue/PLA-399),
+  sharing image copies is PLA-377); distribution of the payload
+  ([PLA-372](https://linear.app/playportdev/issue/PLA-372)); the browser timeout watch item
+  (PLA-371); the FEX self-modifying-code fix (PLA-367); RDR2 through the launcher (PLA-401,
+  PLA-295).
+
+## Steam bridge for RDR2
+
+`plans/2026-10-18-steam-bridge-rdr2.md` ([PLA-398](https://linear.app/playportdev/issue/PLA-398),
+under PLA-253; [decision 0115](../decisions/0115-a-steam-client-for-the-launched-app.md)). Done
+2026-10-18, merged (`dfc527f`); removed 2026-10-19. The smallest slice of the
+[Steam client bridge](2026-10-12-steamclient-bridge.md): Playport's x86-64 `steamclient64.dll`
+(`app/SteamClientShim`, madeira-unix 0158, WineHost `steam_client.c`) serves the game's genuine
+`steam_api64.dll` for the launched app only (Steam API mode `client`, RDR2's compatibility
+default, also in release).
+- **Result:** on Vulkan, the Rockstar launcher started by RDR2's Steam copy passed
+  `SteamAPI_Init` with a live auth ticket, went through Social Club's email check, signed in and
+  opened its main window ([evidence](../evidence/2026-10-18-steam-bridge-rdr2.md)). C4 (more
+  tickets) was not needed.
+- **Open:** the launcher then ends on `0xc0000096` under FEX
+  ([PLA-401](https://linear.app/playportdev/issue/PLA-401),
+  [evidence](../evidence/2026-10-18-rockstar-generated-fault.md)); the `HKCU\Software`
+  Wow6432Node redirection worked around by writing both views
+  ([PLA-400](https://linear.app/playportdev/issue/PLA-400)); the full bridge is PLA-253.
+
 ## Removed without being carried out
 
 These plans were removed on 2026-10-06 without being carried out. Their open
@@ -325,5 +427,5 @@ added three points:
 - `PlayportJIT.appex` is signed with the memory entitlement too, so a SideStore
   install without it lowers both processes' limits.
 
-The runtime alternative that needs no entitlement is now
-[the donor-memory plan](2026-10-12-donor-memory.md) (PLA-216).
+The runtime alternative that needs no entitlement is the
+[donor-memory pool](#guest-ram-from-donor-processes) (PLA-216).

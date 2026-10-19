@@ -2,7 +2,7 @@
 
 **Linear:** [PLA-374](https://linear.app/playportdev/issue/PLA-374), for
 [PLA-370](https://linear.app/playportdev/issue/PLA-370) stage D. Plan:
-[CEF low-VA build](../plans/2026-10-16-cef-low-va-build.md).
+[CEF low-VA build](../plans/finished.md#own-low-address-space-cef).
 **Change:** `app/tools/prefix-registry.py` (`FONTS`), the regenerated `app/registry/system.reg`,
 and the test `Fonts` in `tools/tests/test_prefix_registry.py`.
 **Question:** In the phone Open of [the alias table fix](2026-10-16-alias-table-cap-phone.md),

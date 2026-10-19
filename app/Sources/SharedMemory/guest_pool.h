@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
- * The donor pool's bookkeeping (docs/plans/2026-10-12-donor-memory.md, steps 3
+ * The donor pool's bookkeeping (docs/plans/finished.md#guest-ram-from-donor-processes, steps 3
  * and 4): which part of which pool object backs which guest range. Pure C, no
  * Mach, so the host tests it (app/tests/guest_pool_test.c); GuestPool.m maps,
  * zeroes and purges.

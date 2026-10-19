@@ -7,7 +7,7 @@
 [PLA-216](https://linear.app/playportdev/issue/PLA-216); titles PLA-42 (Hollow Knight, app-367520)
 and PLA-49 (Kingdom Come: Deliverance, app-379430).
 **Decision:** [0105](../decisions/0105-memory-defaults-per-phone.md).
-**Plan:** [donor memory](../plans/2026-10-12-donor-memory.md).
+**Plan:** [donor memory](../plans/finished.md#guest-ram-from-donor-processes).
 
 ## Setup
 

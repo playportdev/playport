@@ -2,7 +2,7 @@
 
 **Date:** 2026-10-14. Branch `research/extended-memory`, commit `25f484d`.
 **Linear:** [PLA-216](https://linear.app/playportdev/issue/PLA-216).
-**Plan:** [donor memory, step 3](../plans/2026-10-12-donor-memory.md#3-a-pool-at-play-that-feeds-0127).
+**Plan:** [donor memory, step 3](../plans/finished.md#guest-ram-from-donor-processes).
 **IPA:** `Playport-26.5-d8226b20.ipa` (dev, entitled build), SHA256
 `d8226b2012621e7142426f06ddda3eb46ad699d24ea096abd90afaaa4a62dd57`, installed
 in place. iPhone18,4, iOS 27.0.1, 11734 MiB physical RAM, on power. Every run

@@ -2,7 +2,7 @@
 
 **Date:** 2026-10-15 (06:56–06:58). **Branch:** `research/extended-memory`.
 **Linear:** [PLA-216](https://linear.app/playportdev/issue/PLA-216).
-**Plan:** [donor memory](../plans/2026-10-12-donor-memory.md), the detach probe left open by
+**Plan:** [donor memory](../plans/finished.md#guest-ram-from-donor-processes), the detach probe left open by
 [the follow-ups](2026-10-15-donor-pool-followups.md).
 
 **Setup:**

@@ -3,7 +3,7 @@
 **Date:** 2026-10-14. Branch `research/extended-memory`, commit `9f4d5bf`
 (on `aa56a57`). **Linear:** [PLA-216](https://linear.app/playportdev/issue/PLA-216);
 the title is PLA-49.
-**Plan:** [donor memory, step 4](../plans/2026-10-12-donor-memory.md#4-does-it-help-a-game).
+**Plan:** [donor memory, step 4](../plans/finished.md#guest-ram-from-donor-processes).
 **IPA:** `Playport-26.5-2010a999.ipa` (dev, entitled build), SHA256
 `2010a999cbfbdc596acf1f66e3a0a7c662fe01a821c9c9930ef520e516f29021`, installed
 in place. iPhone18,4, iOS 27.0.1, 11734 MiB physical RAM, battery 79 → 72 %

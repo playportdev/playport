@@ -2,7 +2,7 @@
 
 **Date:** 2026-10-14. Branch `research/extended-memory`. **Linear:**
 [PLA-216](https://linear.app/playportdev/issue/PLA-216); the title is PLA-49.
-**Plan:** [donor memory, step 4](../plans/2026-10-12-donor-memory.md#4-does-it-help-a-game).
+**Plan:** [donor memory, step 4](../plans/finished.md#guest-ram-from-donor-processes).
 iPhone18,4, iOS 27.0.1, 11734 MiB physical RAM, on external power, 5.4–5.5 GB
 storage free.
 
