@@ -72,6 +72,17 @@ class SeriesClassification(unittest.TestCase):
         self.assertLessEqual(set(os.listdir(patches)), set(tool.TARGET_COMPONENT) | tool.NOT_REPLAYED)
 
 
+class TagOrder(unittest.TestCase):
+    def test_newest_release_tag_by_version(self):
+        spec = importlib.util.spec_from_file_location("sync_tags", TOOL)
+        tool = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(tool)
+        order = ["wine-11.9", "wine-11.10-rc1", "wine-11.10", "wine-11.20"]
+        self.assertEqual(sorted(reversed(order), key=tool.tag_key), order)
+        self.assertLess(tool.tag_key("FEX-2510"), tool.tag_key("FEX-2510.1"))
+        self.assertIsNone(tool.tag_key("latest"))
+
+
 class UpstreamSync(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -247,9 +258,11 @@ class UpstreamSync(unittest.TestCase):
     def tearDownClass(cls):
         shutil.rmtree(cls.tmp)
 
-    def playport(self, name, valve=None):
-        """A Playport copy pinned at m0, with its own build area (and a wine-valve row at valve)."""
+    def playport(self, name, valve=None, urls=None, extra=""):
+        """A Playport copy pinned at m0, with its own build area (and a wine-valve row at valve);
+        urls replaces a row's repository, extra adds pins.lock rows."""
         t = self.tmp
+        url = dict({"wine": f"{t}/wine"}, **(urls or {}))
         pp = new_repo(f"{t}/{name}")
         os.makedirs(f"{pp}/tools")
         shutil.copy(TOOL, f"{pp}/tools/sync.py")
@@ -267,7 +280,7 @@ class UpstreamSync(unittest.TestCase):
         os.chmod(f"{pp}/pp", 0o755)
         write(pp, "pins.lock", "# name commit repository branch\n"
               f"madeira      {self.m0}  {t}/Madeira  main\n"
-              f"wine         {self.wine}  {t}/wine  main\n"
+              f"wine         {self.wine}  {url['wine']}  main\n"
               f"wine-port    {self.wport}  {t}/wine-port  main\n"
               f"fex          {self.fex}  {t}/FEX  main\n"
               f"fex-port     {self.fport}  {t}/FEX-port  main\n"
@@ -275,7 +288,7 @@ class UpstreamSync(unittest.TestCase):
               f"dxmt-port    {self.port}  {t}/dxmt-port  main\n"
               f"rpmalloc     {self.rpm}  {t}/rpmalloc  main\n"
               f"rpmalloc-port {self.rport}  {t}/rpmalloc-port  main\n"
-              + (f"wine-valve   {valve}  {t}/valve  proton_11.0\n" if valve else ""))
+              + (f"wine-valve   {valve}  {t}/valve  proton_11.0\n" if valve else "") + extra)
         write(pp, ".gitmodules", f'[submodule "upstream/madeira"]\n\tpath = upstream/madeira\n\turl = {t}/Madeira\n')
         for target, src in (("wine-port", self.wine_port_patches), ("wine-valve", self.wine_valve_patches),
                             ("wine-unix", self.wine_patches),
@@ -350,6 +363,51 @@ class UpstreamSync(unittest.TestCase):
         self.assertEqual(git(pp, "status", "--porcelain"), "")
         self.assertNotIn("sync/", git(pp, "branch", "--list"))
         self.assertFalse(os.path.exists(f"{build}/sync/madeira-pin.git"))
+
+    def test_watch_reports_the_component_pins_and_moves_none(self):
+        t = self.tmp
+        # wine: two commits past the pin; the newest tag by version is wine-11.10 (not 11.9, its rc
+        # or an old date tag).
+        wine = f"{t}/wine-ahead"
+        git(t, "clone", "-q", f"{t}/wine", wine)
+        git(wine, "tag", "-a", "-m", "wine-11.0", "wine-11.0", self.wine)
+        git(wine, "tag", "wine-20050930", self.wine)
+        w1 = commit(wine, "wine: next", **{"n.c": "1\n"})
+        for tag in ("wine-11.9", "wine-11.10", "wine-11.10-rc1"):
+            git(wine, "tag", tag, w1)
+        w2 = commit(wine, "wine: after", **{"n.c": "2\n"})
+        # fex: its newest FEX-* tag, annotated (read through its peeled commit), is the pin.
+        git(f"{t}/FEX", "tag", "-f", "FEX-2509.1", self.fex)
+        git(f"{t}/FEX", "tag", "-f", "-a", "-m", "FEX-2510", "FEX-2510", self.fex)
+        # mesa: no mirror is kept for it, so its commits are not counted (and none is cloned).
+        mesa = new_repo(f"{t}/mesa-up")
+        mpin = commit(mesa, "mesa", **{"m.c": "m\n"})
+        mtip = commit(mesa, "mesa next", **{"m.c": "m2\n"})
+        git(mesa, "tag", "mesa-26.0.0", mtip)
+        pp, build = self.playport("pp-pins", valve=self.v0, urls={"wine": wine},
+                                  extra=f"mesa         {mpin}  {mesa}  main\n"
+                                        f"dxvk         {mpin}  {t}/no-such-dxvk  master\n")
+        head, pins = git(pp, "rev-parse", "HEAD"), git(pp, "show", "HEAD:pins.lock")
+        st, out = self.run_tool(pp, build, watch=True)
+        self.assertEqual(st, 0, out)   # an unreachable upstream is a line, not a failure
+        with open(f"{build}/sync/watch-{self.m0[:8]}/WATCH.md") as f:
+            report = f.read()
+        self.assertIn("## Component pins", report)
+        self.assertIn(f"- wine `{self.wine[:12]}`: main `{w2[:12]}`, 2 commit(s) past the pin; newest tag "
+                      "wine-11.10, 1 commit(s) past the pin", report)
+        self.assertIn(f"- wine-valve `{self.v0[:12]}`: proton_11.0 `{self.v1[:12]}`, 1 commit(s) past the pin",
+                      report)
+        self.assertIn(f"- fex `{self.fex[:12]}`: main is at the pin; newest tag FEX-2510 is the pin", report)
+        self.assertIn(f"- rpmalloc `{self.rpm[:12]}`: main is at the pin\n", report)
+        self.assertIn(f"- dxmt `{self.dxmt[:12]}`: main is at the pin\n", report)
+        self.assertIn(f"- mesa `{mpin[:12]}`: main `{mtip[:12]}`, commits since the pin not counted "
+                      f"(no mirror under sync/mirrors); newest tag mesa-26.0.0 `{mtip[:12]}`", report)
+        self.assertIn(f"- dxvk `{mpin[:12]}`: upstream unreachable (", report)
+        self.assertFalse(os.path.exists(f"{build}/sync/mirrors/mesa.git"))
+        # Nothing moved.
+        self.assertEqual(git(pp, "rev-parse", "HEAD"), head)
+        self.assertEqual(git(pp, "show", "HEAD:pins.lock"), pins)
+        self.assertEqual(git(pp, "status", "--porcelain"), "")
 
     def test_a_pin_move_needs_the_0054_override(self):
         pp, build = self.playport("pp-frozen")

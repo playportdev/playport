@@ -16,6 +16,14 @@ files; a commit that touches a file Playport's own series patch is marked.
 WATCH.md and watch.tsv in $PLAYPORT_BUILD/sync/watch-<sha8>/. A wanted fix is
 ported by hand as a Playport patch (docs/UPSTREAM-SYNC.md).
 
+WATCH.md's "Component pins" also compares the wine, wine-valve, fex, rpmalloc,
+dxmt, mesa, dxvk and vkd3d-proton rows with their upstreams (git ls-remote):
+the tracked branch's tip, the newest release tag (named as wine-11.20,
+FEX-2610, mesa-26.3.0, v3.1.1) and, where the row's mirror under mirrors/ is
+there (fetched, never cloned for this), the commits since the pin. A component
+upstream it cannot reach is a line, not a failure. Those pins move by hand
+(pp rebase), never here.
+
 Moving the pin needs --move-pin-0054, which names the decision that froze it;
 a pin move needs a new decision record first. Its stages:
 
@@ -468,6 +476,131 @@ def valve_notice(valve, path):
     return (f"wine-valve: {len(valve['commits'])} new Valve commit(s) on {valve['branch']} past the pin "
             f"{valve['pin'][:12]} (head {valve['head'][:12]}" + (", branch rewritten" if valve["rebased"] else "") +
             f"), listed in {path}: review them and move the wine-valve row by hand (decision 0018; reported only)")
+
+
+# --- the component pins ---------------------------------------------------------
+
+# The pins the watch report also compares with their upstreams (report only: each moves by a
+# manual rebase or pick, decisions 0049 and 0054), with the release tags whose newest it names:
+# the ls-remote pattern and the names that count (WineHQ's old wine-YYYYMMDD tags do not).
+# None: no tag is named.
+PIN_REPORT = {"wine": ("wine-*", r"wine-\d+\.\d+(\.\d+)?(-rc\d+)?"), "wine-valve": None,
+              "fex": ("FEX-*", r"FEX-\d+(\.\d+)?"), "rpmalloc": None, "dxmt": ("v*", r"v\d+(\.\d+)*"),
+              "mesa": ("mesa-*", r"mesa-\d+\.\d+\.\d+(-rc\d+)?"), "dxvk": ("v*", r"v\d+(\.\d+)*"),
+              "vkd3d-proton": ("v*", r"v\d+(\.\d+)*")}
+
+
+def tag_key(name):
+    """A sort key for a release tag's version (wine-11.20 after wine-11.9, an -rc before its
+    release), or None for a tag without a version."""
+    m = re.match(r"^\D*?(\d+(?:\.\d+)*)(.*)$", name)
+    if not m:
+        return None
+    pre = re.search(r"(rc|alpha|beta|pre)\D*(\d*)", m.group(2), re.I)
+    return tuple(int(x) for x in m.group(1).split(".")), ((0, int(pre.group(2) or 0)) if pre else (1, 0))
+
+
+def ls_remote(url, branch, tags_spec):
+    """(the branch tip, (the newest release tag of tags_spec, its commit) or None) from git ls-remote."""
+    pattern, release = tags_spec or (None, None)
+    refs = [f"refs/heads/{branch}"] + ([f"refs/tags/{pattern}"] if pattern else [])
+    st, out = sh(["git", "ls-remote", url, *refs], check=False, timeout=120, env={"GIT_TERMINAL_PROMPT": "0"})
+    if st != 0:
+        raise Fail(next((l for l in out.splitlines() if l.strip()), f"git ls-remote exited {st}").strip())
+    tip, tags = None, {}
+    for line in out.splitlines():
+        f = line.split()
+        if len(f) != 2:
+            continue
+        if f[1] == f"refs/heads/{branch}":
+            tip = f[0]
+        elif f[1].startswith("refs/tags/"):
+            name = f[1][len("refs/tags/"):]
+            if name.endswith("^{}"):          # the peeled commit of an annotated tag wins
+                tags[name[:-3]] = f[0]
+            else:
+                tags.setdefault(name, f[0])
+    if tip is None:
+        raise Fail(f"the remote has no branch {branch}")
+    keyed = [(tag_key(n), n) for n in tags if release and re.fullmatch(release, n) and tag_key(n)]
+    newest = max(keyed)[1] if keyed else None
+    return tip, ((newest, tags[newest]) if newest else None)
+
+
+def commits_between(mm, old, new):
+    """The commits in old..new from a local mirror when new descends from old, or None (the
+    mirror lacks either, or new does not descend from old)."""
+    if not all(git_ok(mm, "cat-file", "-e", c + "^{commit}") for c in (old, new)):
+        return None
+    if not git_ok(mm, "merge-base", "--is-ancestor", old, new):
+        return None
+    return int(git(mm, "rev-list", "--count", f"{old}..{new}"))
+
+
+def pin_report(pins):
+    """A dict per PIN_REPORT row in pins.lock, for pin_line: each upstream's branch tip and newest tag from git ls-remote,
+    and the commits since the pin from the row's mirror in $PLAYPORT_BUILD/sync/mirrors when one
+    is there (fetched only when it lacks the tip; never cloned here). Nothing moves."""
+    out = []
+    for row, tags_spec in PIN_REPORT.items():
+        if row not in pins or pins[row]["branch"] == "-":
+            continue
+        p = pins[row]
+        r = {"row": row, "pin": p["commit"], "branch": p["branch"], "tip": None, "past": None,
+             "rewritten": False, "tag": None, "tag_commit": None, "tag_past": None, "pin_past_tag": None,
+             "mirror": False, "error": None}
+        out.append(r)
+        try:
+            r["tip"], tag = ls_remote(p["url"], p["branch"], tags_spec)
+        except Fail as e:
+            r["error"] = str(e).splitlines()[0][:300]
+            continue
+        if tag:
+            r["tag"], r["tag_commit"] = tag
+        mm = os.path.join(MIRRORS, row + ".git")
+        if not os.path.isdir(mm):
+            continue
+        r["mirror"] = True
+        if not git_ok(mm, "cat-file", "-e", r["tip"] + "^{commit}"):
+            sh(["git", "-C", mm, "fetch", "--quiet", "--no-tags", "origin",
+                f"+refs/heads/{p['branch']}:refs/remotes/origin/{p['branch']}"], check=False, timeout=600,
+               env={"GIT_TERMINAL_PROMPT": "0"})
+        r["past"] = commits_between(mm, r["pin"], r["tip"])
+        if r["past"] is None and all(git_ok(mm, "cat-file", "-e", c + "^{commit}") for c in (r["pin"], r["tip"])):
+            # a rewritten branch (Valve rebases bleeding-edge): counted from the merge base
+            base = git(mm, "merge-base", r["pin"], r["tip"], check=False)
+            r["rewritten"] = True
+            r["past"] = commits_between(mm, base, r["tip"]) if base else None
+        if r["tag_commit"] and r["tag_commit"] != r["pin"]:
+            r["tag_past"] = commits_between(mm, r["pin"], r["tag_commit"])
+            if r["tag_past"] is None:
+                r["pin_past_tag"] = commits_between(mm, r["tag_commit"], r["pin"])
+    return out
+
+
+def pin_line(r):
+    """One report line for a pin_report row."""
+    head = f"{r['row']} `{r['pin'][:12]}`"
+    if r["error"]:
+        return f"{head}: upstream unreachable ({r['error']})"
+    if r["tip"] == r["pin"]:
+        line = f"{head}: {r['branch']} is at the pin"
+    elif r["past"] is not None:
+        line = (f"{head}: {r['branch']} `{r['tip'][:12]}`, {r['past']} commit(s) past the "
+                + ("merge base (branch rewritten since the pin)" if r["rewritten"] else "pin"))
+    else:
+        line = (f"{head}: {r['branch']} `{r['tip'][:12]}`, commits since the pin not counted "
+                + ("(the mirror lacks them)" if r["mirror"] else "(no mirror under sync/mirrors)"))
+    if r["tag"]:
+        if r["tag_commit"] == r["pin"]:
+            line += f"; newest tag {r['tag']} is the pin"
+        elif r["tag_past"]:
+            line += f"; newest tag {r['tag']}, {r['tag_past']} commit(s) past the pin"
+        elif r["pin_past_tag"]:
+            line += f"; newest tag {r['tag']}, the pin {r['pin_past_tag']} commit(s) past it"
+        else:
+            line += f"; newest tag {r['tag']} `{r['tag_commit'][:12]}`"
+    return line
 
 
 # --- replay -----------------------------------------------------------------
@@ -1005,7 +1138,7 @@ def watch_rows(res, repo):
     return rows
 
 
-def write_watch(rundir, new, rows, res, replay):
+def write_watch(rundir, new, rows, res, replay, pinned=()):
     lines = [f"# Watching Madeira: {new[:12]}", "",
              "The madeira pin is frozen (decision 0054): nothing here moves a pin. A wanted fix is "
              "ported by hand as a Playport patch (docs/UPSTREAM-SYNC.md, \"Watching Madeira\"). "
@@ -1020,6 +1153,11 @@ def write_watch(rundir, new, rows, res, replay):
             tsv.append(f"{row}\t{c['commit']}\t{c['date']}\t{c['subject']}\t{','.join(c['owned'])}\t"
                        f"{','.join(c['files'])}")
         lines.append("")
+    if pinned:
+        lines += ["## Component pins", "",
+                  "Each upstream's tracked branch and newest tag against its pins.lock row (reported only: "
+                  "these pins move by a manual rebase or pick, docs/UPSTREAM-SYNC.md, \"Moving a component pin\").",
+                  ""] + [f"- {pin_line(r)}" for r in pinned] + [""]
     if res["flags"] or res["info"]:
         lines += ["## Notes", ""] + [f"- {f['kind']}: {f['detail']}" for f in res["flags"]] + \
                  [f"- {i}" for i in res["info"]] + [""]
@@ -1059,12 +1197,14 @@ def watch(sha, pins, replay_too):
         replay = [replay_target(t, TARGET_COMPONENT[t], res, rundir, REPO)
                   for t in sorted(os.listdir(os.path.join(REPO, "patches"))) if t in TARGET_COMPONENT]
         remove_trees(res, replay)
-    path = write_watch(rundir, new, rows, res, replay)
-    print(open(path).read())
     try:
         valve = valve_news(pins)
     except Fail as e:   # reported only, as in a move
         valve = {"error": str(e).splitlines()[0][:300], "commits": []}
+    log("pins: the component upstreams' branches and tags")
+    pinned = pin_report(pins)
+    path = write_watch(rundir, new, rows, res, replay, pinned)
+    print(open(path).read())
     notice = valve_notice(valve, write_valve_news(valve, rundir))
     if notice:
         print(f"pp sync: {notice}")

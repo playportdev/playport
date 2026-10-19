@@ -50,6 +50,17 @@ sort the commits by its rules, pick the wanted ones onto `patches/wine-valve`,
 and move the row (a Hollow Knight play gates it). When Valve has rewritten the
 branch, a commit is new if its subject is not among the pin's.
 
+The watch report's "Component pins" section shows how far each other upstream
+has gone: for `wine`, `wine-valve`, `fex`, `rpmalloc`, `dxmt`, `mesa`, `dxvk`
+and `vkd3d-proton`, the tracked branch's tip and the newest release tag (named
+as `wine-11.20`, `FEX-2610`, `mesa-26.3.0`, `v3.1.1`) from `git ls-remote`, and
+the commits between the pin and each, counted in the row's mirror under
+`$PLAYPORT_BUILD/sync/mirrors` (the watch keeps those for `wine`, `fex`,
+`rpmalloc`, `dxmt` and `wine-valve`; the others are not cloned for this, so
+their counts stay open). An upstream it cannot reach is a line in the report,
+not a failure. It is a prompt for a move ([below](#moving-a-component-pin)),
+never one itself.
+
 ## Porting a Madeira fix
 
 A wanted commit becomes a Playport patch on the frozen base, re-exported,
