@@ -222,7 +222,8 @@ void wine_host_band_dump(const char *why);
  * and compressed MiB in images, private memory and FEX's band, its FEX views
  * by kind, and the runtime's own, headed by `why` and what the walk cost.
  * It prints only when a process came or went or moved by 32 MiB since its
- * last print, or when `force` is nonzero. Added in ABI 10 without changing any
+ * last print, or when `force` is nonzero; an unforced call within ten times
+ * the last walk's cost after it does nothing. Added in ABI 10 without changing any
  * existing call. */
 void wine_host_process_memory_log(const char *why, int force);
 

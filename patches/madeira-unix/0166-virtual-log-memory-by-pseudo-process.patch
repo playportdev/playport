@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: The Playport authors <dev@playport.dev>
 Date: Mon, 19 Oct 2026 14:42:52 +0200
-Subject: [PATCH] virtual: log memory by pseudo-process
+Subject: [PATCH 166/167] virtual: log memory by pseudo-process
 
 Every Wine view carries the pseudo-process that made it (0154), but no
 line split memory by process: the guest band and FEX's band were only
@@ -10,12 +10,16 @@ ios_process_memory_log charges each view's committed pages to its owner,
 as an image's, as private memory, or as FEX's host memory when the view
 is in FEX's band (also counted by shape: rpmalloc spans, call-return
 stacks, L1 lookup caches), with the runtime's own views as one row. Each
-owner gets its pid, live threads and image name from teb_list. The views
+owner gets its pid, live threads and image name from teb_list; the name
+is read from the PEB only through pointers that lie in committed,
+readable views (a process still starting has unwritten parameters). The views
 are walked under virtual_mutex; mincore then sorts their host pages into
 resident and compressed outside it. The JIT pool, a fixed size the pool
 lines report, is left out. The host calls it from its own thread; it
 prints `[proc-mem]` lines only when an owner came or went or moved by
 32 MiB since its last print, or when forced, with what the walk cost.
+An unforced call within ten times the last walk's cost after it does
+nothing: mincore took up to 4.8 s near the memory limit.
 pp_proc_mem.h holds the table, its change test and its rows, so a host
 test compiles it as shipped.
 
@@ -24,9 +28,9 @@ Class: diagnostics
 Evidence: docs/evidence/2026-10-19-rdr2-loading-memory.md
 Offered-upstream: no; pseudo-processes and FEX's band are the iOS port's
 ---
- build/ntdll-unix/pp_proc_mem.h | 120 +++++++++++++++++++++++++
- build/ntdll-unix/virtual_ios.c | 155 +++++++++++++++++++++++++++++++++
- 2 files changed, 275 insertions(+)
+ build/ntdll-unix/pp_proc_mem.h | 120 +++++++++++++++++++++
+ build/ntdll-unix/virtual_ios.c | 192 +++++++++++++++++++++++++++++++++
+ 2 files changed, 312 insertions(+)
  create mode 100644 build/ntdll-unix/pp_proc_mem.h
 
 diff --git a/build/ntdll-unix/pp_proc_mem.h b/build/ntdll-unix/pp_proc_mem.h
@@ -156,10 +160,10 @@ index 0000000..b07a413
 +}
 +#endif
 diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
-index 4ac34fd..1d9fc19 100644
+index 4ac34fd..b92d102 100644
 --- a/build/ntdll-unix/virtual_ios.c
 +++ b/build/ntdll-unix/virtual_ios.c
-@@ -17637,6 +17637,161 @@ void ios_view_owner_process_exit( void *peb )
+@@ -17637,6 +17637,198 @@ void ios_view_owner_process_exit( void *peb )
      ios_view_owner_sweep();
  }
  
@@ -169,7 +173,8 @@ index 4ac34fd..1d9fc19 100644
 + * each owner gets its pid, live threads and image name from teb_list; the JIT
 + * pool, a fixed size the pool lines report, is left out. After the lock,
 + * mincore sorts the runs' host pages into resident and compressed, each host
-+ * page counted once. The host calls it from its own thread; it prints only
++ * page counted once. The host calls it from its own thread; an unforced call
++ * within ten times the last walk's cost after it does nothing. It prints only
 + * when an owner came or went or moved by 32 MiB since the last print, or when
 + * forced, with what it cost. */
 +#include "pp_proc_mem.h"
@@ -178,16 +183,36 @@ index 4ac34fd..1d9fc19 100644
 +struct ios_proc_mem_run { uintptr_t base, end; unsigned short owner, kind; };
 +static struct ppm_table ios_proc_mem_now, ios_proc_mem_last;
 +static int ios_proc_mem_printed;
++static struct timespec ios_proc_mem_next;   /* no unforced walk before this */
 +
-+/* virtual_mutex held; o's process has a live thread, so its PEB is mapped. */
++/* virtual_mutex held: whether [p, p + size) lies in one view, in pages that
++ * are committed and readable. A guest pointer is read only after this: a
++ * process still starting has a PEB whose parameters are not yet written. */
++static BOOL ios_proc_mem_readable_locked( const void *p, size_t size )
++{
++    const char *page, *end = (const char *)p + size;
++
++    if (!p || !size || !find_view( p, size )) return FALSE;
++    for (page = ROUND_ADDR( p, page_mask ); page < end; page += page_mask + 1)
++        if ((get_page_vprot( page ) & (VPROT_COMMITTED | VPROT_READ | VPROT_GUARD)) != (VPROT_COMMITTED | VPROT_READ))
++            return FALSE;
++    return TRUE;
++}
++
++/* virtual_mutex held: the image name from o's PEB, when every pointer on the
++ * way is readable guest memory; otherwise the row has no name. */
 +static void ios_proc_mem_name_locked( struct ppm_owner *o )
 +{
 +    const PEB *peb = o->peb;
-+    const RTL_USER_PROCESS_PARAMETERS *params = peb->ProcessParameters;
++    const RTL_USER_PROCESS_PARAMETERS *params;
++    const UNICODE_STRING *path;
 +
-+    if (!params || !params->ImagePathName.Buffer) return;
-+    ppm_name( o->name, sizeof(o->name), (const uint16_t *)params->ImagePathName.Buffer,
-+              params->ImagePathName.Length / sizeof(WCHAR) );
++    if (!ios_proc_mem_readable_locked( peb, sizeof(*peb) )) return;
++    params = peb->ProcessParameters;
++    if (!ios_proc_mem_readable_locked( params, sizeof(*params) )) return;
++    path = &params->ImagePathName;
++    if (!path->Length || path->Length > 1024 || !ios_proc_mem_readable_locked( path->Buffer, path->Length )) return;
++    ppm_name( o->name, sizeof(o->name), (const uint16_t *)path->Buffer, path->Length / sizeof(WCHAR) );
 +}
 +
 +void ios_process_memory_log( const char *why, int force )
@@ -208,9 +233,19 @@ index 4ac34fd..1d9fc19 100644
 +    char row[320];
 +    int m;
 +
-+    if (!(runs = malloc( IOS_PROC_MEM_RUNS * sizeof(*runs) ))) return;
 +    pthread_mutex_lock( &serial );
 +    clock_gettime( CLOCK_MONOTONIC, &t0 );
++    /* Bounded cost: an unforced walk waits ten times as long as the last one took. */
++    if (!force && (t0.tv_sec - ios_proc_mem_next.tv_sec) * 1000 + (t0.tv_nsec - ios_proc_mem_next.tv_nsec) / 1000000 < 0)
++    {
++        pthread_mutex_unlock( &serial );
++        return;
++    }
++    if (!(runs = malloc( IOS_PROC_MEM_RUNS * sizeof(*runs) )))
++    {
++        pthread_mutex_unlock( &serial );
++        return;
++    }
 +    if (!ios_band_lock( &sigset ))
 +    {
 +        pthread_mutex_unlock( &serial );
@@ -296,6 +331,12 @@ index 4ac34fd..1d9fc19 100644
 +    }
 +    clock_gettime( CLOCK_MONOTONIC, &t2 );
 +    free( runs );
++    {
++        long long took_ns = (t2.tv_sec - t0.tv_sec) * 1000000000ll + (t2.tv_nsec - t0.tv_nsec);
++        long long next_ns = t2.tv_nsec + 10 * took_ns;
++        ios_proc_mem_next.tv_sec = t2.tv_sec + next_ns / 1000000000ll;
++        ios_proc_mem_next.tv_nsec = next_ns % 1000000000ll;
++    }
 +
 +    if (force || ppm_moved( t, ios_proc_mem_printed ? &ios_proc_mem_last : NULL, 32ull << 20 ))
 +    {

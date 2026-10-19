@@ -188,3 +188,21 @@ The last `[proc-mem]` before the first frame; footprint 5,040 MB (1,088 compress
 
 **Cost.** The walk under `virtual_mutex` took 0–5 ms. `mincore` after it took 44 ms early and
 0.4–1.8 s near the memory limit, on the launch's own thread; the 2 s slices stretched by that.
+
+### A crash in the walk, fixed
+
+- **The crash.** In RDR2 run `20261019T153520` (IPA `58c3d690…`), the app ended at +162 s in
+  `ios_process_memory_log` itself: SIGSEGV at `0x3f3f3f3f3f3f3f3f` on the launch's thread. A
+  Social Club helper was just starting. The walk read that process's PEB parameters before
+  they were written.
+- **The fix in 0166.**
+  - The image name is read only through pointers that lie in one view's committed, readable
+    pages; otherwise the row has no name (`pid=0414 ?`).
+  - An unforced walk within ten times the last walk's cost after it does nothing. Near the
+    memory limit `mincore` took up to 4.8 s.
+- **After the fix** (IPA `246f188a76a9f6d9db125db9b8be5856e81a5b8c927e72954c16aff36a74a439`, which
+  also carried uncommitted launcher changes):
+  - Hollow Knight (run `20261019T154957`) reached its first frame at +9.22 s.
+  - The RDR2 run `20261019T155050` walked to its end without a fault. It reached no first
+    frame, for a reason outside this walk: RDR2.exe's 8,960 MB reservation found no gap in
+    0x74–0x7c.

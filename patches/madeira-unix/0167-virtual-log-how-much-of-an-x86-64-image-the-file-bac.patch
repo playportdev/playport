@@ -1,7 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: The Playport authors <dev@playport.dev>
 Date: Mon, 19 Oct 2026 15:13:26 +0200
-Subject: [PATCH] virtual: log how much of an x86-64 image the file backs
+Subject: [PATCH 167/167] virtual: log how much of an x86-64 image the file
+ backs
 
 map_file_into_view_ex maps an image section from the file (MAP_PRIVATE)
 only when it is aligned to the host's 16 KiB page in memory and in the
@@ -23,7 +24,7 @@ Offered-upstream: no; the 16 KiB host page is the iOS port's
  1 file changed, 17 insertions(+)
 
 diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
-index 1d9fc19..91452b8 100644
+index b92d102..7492bb4 100644
 --- a/build/ntdll-unix/virtual_ios.c
 +++ b/build/ntdll-unix/virtual_ios.c
 @@ -12969,6 +12969,12 @@ void ios_map_describe( const void *addr, char *out, size_t outlen )
