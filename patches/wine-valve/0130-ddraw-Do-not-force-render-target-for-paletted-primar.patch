@@ -1,0 +1,73 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Paul Gofman <pgofman@codeweavers.com>
+Date: Tue, 13 Oct 2026 14:09:03 -0600
+Subject: [PATCH] ddraw: Do not force render target for paletted primary
+ surfaces.
+
+Fixes a regression introduced by 6b486ec7830ae245241fe406d95330b7d7078a31.
+
+CW-Bug-Id: #27855
+
+Valve's tree names the test force_3ddevice and passes it the surface
+description; WineHQ took 6b486ec as is_render_target(), which takes only
+the caps, at the same three call sites. Here is_render_target() takes the
+surface description, so a version 1 primary surface with a palette-indexed
+format is not forced to a render target, as in Valve's commit.
+
+Valve-commit: 7fc704ef49c50e9702c9983a5250d5738697bb04
+Picked: resolved
+Class: valve
+Evidence: docs/evidence/2026-10-18-wine-11.20.md
+Offered-upstream: no
+---
+ dlls/ddraw/surface.c | 14 ++++++++------
+ 1 file changed, 8 insertions(+), 6 deletions(-)
+
+diff --git a/dlls/ddraw/surface.c b/dlls/ddraw/surface.c
+index 3d30b2e..3e119cb 100644
+--- a/dlls/ddraw/surface.c
++++ b/dlls/ddraw/surface.c
+@@ -6354,11 +6354,13 @@ static HRESULT ddraw_surface_reserve_memory(struct wined3d_texture *wined3d_text
+     return hr;
+ }
+ 
+-static bool is_render_target(struct ddraw *ddraw, DWORD caps, unsigned int surface_version)
++static bool is_render_target(struct ddraw *ddraw, const DDSURFACEDESC2 *desc, unsigned int surface_version)
+ {
+-    if (caps & DDSCAPS_3DDEVICE)
++    if (desc->ddsCaps.dwCaps & DDSCAPS_3DDEVICE)
+         return true;
+-    return surface_version == 1 && caps & DDSCAPS_PRIMARYSURFACE && !(ddraw->flags & DDRAW_NO3D);
++    if ((ddraw->flags & DDRAW_NO3D) || !(surface_version == 1 && desc->ddsCaps.dwCaps & DDSCAPS_PRIMARYSURFACE))
++        return false;
++    return !format_is_paletteindexed(&desc->ddpfPixelFormat);
+ }
+ 
+ static void wined3d_resource_desc_from_ddraw(struct ddraw *ddraw,
+@@ -6384,7 +6386,7 @@ static void wined3d_resource_desc_from_ddraw(struct ddraw *ddraw,
+     wined3d_desc->bind_flags |= WINED3D_BIND_SHADER_RESOURCE;
+     if (caps & DDSCAPS_ZBUFFER)
+         wined3d_desc->bind_flags |= WINED3D_BIND_DEPTH_STENCIL;
+-    else if (is_render_target(ddraw, caps, version))
++    else if (is_render_target(ddraw, desc, version))
+         wined3d_desc->bind_flags |= WINED3D_BIND_RENDER_TARGET;
+ 
+     if ((caps & DDSCAPS_SYSTEMMEMORY) && !(caps2 & (DDSCAPS2_TEXTUREMANAGE | DDSCAPS2_D3DTEXTUREMANAGE)))
+@@ -6402,7 +6404,7 @@ static void wined3d_resource_desc_from_ddraw(struct ddraw *ddraw,
+         else if (caps & DDSCAPS_VIDEOMEMORY)
+         {
+             /* Dynamic resources can't be written by the GPU. */
+-            if (!(caps & DDSCAPS_ZBUFFER) && !is_render_target(ddraw, caps, version))
++            if (!(caps & DDSCAPS_ZBUFFER) && !is_render_target(ddraw, desc, version))
+                 wined3d_desc->usage |= WINED3DUSAGE_DYNAMIC;
+         }
+     }
+@@ -7010,7 +7012,7 @@ HRESULT ddraw_surface_create(struct ddraw *ddraw, const DDSURFACEDESC2 *surface_
+ 
+             if (desc->ddsCaps.dwCaps & DDSCAPS_ZBUFFER)
+                 bind_flags |= WINED3D_BIND_DEPTH_STENCIL;
+-            else if (is_render_target(ddraw, desc->ddsCaps.dwCaps, version))
++            else if (is_render_target(ddraw, desc, version))
+                 bind_flags |= WINED3D_BIND_RENDER_TARGET;
+ 
+             if (!(ddraw->flags & DDRAW_NO3D) && SUCCEEDED(hr = wined3d_check_device_format(ddraw->wined3d,

@@ -176,7 +176,7 @@ resource	Runtime/arm64ec-windows/dbgeng.dll	786432	3b23b863a106f72cd5252e99d5701
 resource	Runtime/arm64ec-windows/dbghelp.dll	1245184	94850605bedfd7f5c6b37342bec25913415999fb300b7d6d610ddddf9dc5e1be	wine-build	build-arm64ec/dlls/dbghelp/arm64ec-windows/dbghelp.dll	P2
 resource	Runtime/arm64ec-windows/dciman32.dll	655360	bbebc090242f41d088dfd88ac0f7799fc342a185972665620d22cfd1430f44e9	wine-build	build-arm64ec/dlls/dciman32/arm64ec-windows/dciman32.dll	P2
 resource	Runtime/arm64ec-windows/dcomp.dll	720896	d91222c588f8e685d6bc52292a9b06c1dd5f2d35706fd85387cadbbd7b57ec02	wine-build	build-arm64ec/dlls/dcomp/arm64ec-windows/dcomp.dll	P2
-resource	Runtime/arm64ec-windows/ddraw.dll	1441792	d881eb600e2fb179b4131049bd385b8930d72bd9a091cb3c90a20e597f4b25cf	wine-build	build-arm64ec/dlls/ddraw/arm64ec-windows/ddraw.dll	P2
+resource	Runtime/arm64ec-windows/ddraw.dll	1441792	6c77de5eddfe7712271e265e0fd130ae171f93dcc6f2e840667a65558cfafafa	wine-build	build-arm64ec/dlls/ddraw/arm64ec-windows/ddraw.dll	P2
 resource	Runtime/arm64ec-windows/ddrawex.dll	851968	9e252b0a4aabb0a58a67ea4abbeeeda05ad590d62653e2673a0fdf9fbb6141e9	wine-build	build-arm64ec/dlls/ddrawex/arm64ec-windows/ddrawex.dll	P2
 resource	Runtime/arm64ec-windows/desk.cpl	720896	c1ded2b9f5a15544aef655919563e1044ad83edfb112aaab57e49a17a80e261c	wine-build	build-arm64ec/dlls/desk.cpl/arm64ec-windows/desk.cpl	P2
 resource	Runtime/arm64ec-windows/devenum.dll	851968	16a2a939247046265bd3da3820ded468dce369cd61a6cd12a101baffc64ecc37	wine-build	build-arm64ec/dlls/devenum/arm64ec-windows/devenum.dll	P2
@@ -921,7 +921,7 @@ resource	Runtime/aarch64-windows/dbgeng.dll	524288	c23bb5778dfe29edf134f8a14822d
 resource	Runtime/aarch64-windows/dbghelp.dll	1048576	f9da850a38e6048d36a32bed99d20f6f3e53aa475a97986b1cc8c1a4569a5b1a	wine-build	build-macos/dlls/dbghelp/aarch64-windows/dbghelp.dll	P2
 resource	Runtime/aarch64-windows/dciman32.dll	458752	c061046fcb0d16c1bf8bc5efdd4fdd29ee2d3c90db216d98638c3ab31b186166	wine-build	build-macos/dlls/dciman32/aarch64-windows/dciman32.dll	P2
 resource	Runtime/aarch64-windows/dcomp.dll	524288	ebe10eda03fa066c82296f62d07df888a2a71ec9662234302b4c454d3c9bed87	wine-build	build-macos/dlls/dcomp/aarch64-windows/dcomp.dll	P2
-resource	Runtime/aarch64-windows/ddraw.dll	1114112	475bad77fd4bb4bc228c31dccbfbb8e3fe960d66cd6a351d9596a5cf4ffb19c9	wine-build	build-macos/dlls/ddraw/aarch64-windows/ddraw.dll	P2
+resource	Runtime/aarch64-windows/ddraw.dll	1114112	ed768e9fefe73c1b7b504f9460915b331bec4c25fe55ed54be3b7d36c14cb453	wine-build	build-macos/dlls/ddraw/aarch64-windows/ddraw.dll	P2
 resource	Runtime/aarch64-windows/ddrawex.dll	720896	82b9f30614756f8d3a97de42784b6a2713cc64f07bcbf5bbe708938d02441b45	wine-build	build-macos/dlls/ddrawex/aarch64-windows/ddrawex.dll	P2
 resource	Runtime/aarch64-windows/desk.cpl	589824	02f76985157d5bcf8c0145aa953e10ffc7a87854ceddca8d593f01bf54c580d1	wine-build	build-macos/dlls/desk.cpl/aarch64-windows/desk.cpl	P2
 resource	Runtime/aarch64-windows/devenum.dll	720896	a0a2fe2f5932730da33729059fbfcbd04e46e883345f9f16b20439565a180153	wine-build	build-macos/dlls/devenum/aarch64-windows/devenum.dll	P2
@@ -1682,7 +1682,7 @@ resource	Runtime/i386-windows/dbghelp.dll	618496	0f8e547c07803868d864b0f658b4264
 resource	Runtime/i386-windows/dciman32.dll	36864	6f22345cd3e065a47934975c6a1c3f2262d09533e1f0259736ce3a4cedacc559	wine-build	build-macos/dlls/dciman32/i386-windows/dciman32.dll	P2
 resource	Runtime/i386-windows/dcomp.dll	40960	2e218f0308da24a8478142fe9a00fa3bc095eaf8a71936eb76aa4102b4be903f	wine-build	build-macos/dlls/dcomp/i386-windows/dcomp.dll	P2
 resource	Runtime/i386-windows/ddeml.dll16	40960	26df96141a2531281a40ed4b336d393da24c1ca12c6baa65727970c3f08382af	wine-build	build-macos/dlls/ddeml.dll16/i386-windows/ddeml.dll16	P2
-resource	Runtime/i386-windows/ddraw.dll	700416	91d80adb0698eb66791e5640cb6251b3ef5212d8cdf1d2e67079dfccf2d54671	wine-build	build-macos/dlls/ddraw/i386-windows/ddraw.dll	P2
+resource	Runtime/i386-windows/ddraw.dll	700416	aeab0b1c39a53af25bda1ab72ccf45e58f60f5706cd368db420e7d19051d2ac6	wine-build	build-macos/dlls/ddraw/i386-windows/ddraw.dll	P2
 resource	Runtime/i386-windows/ddrawex.dll	311296	f48d8382ed6f27eae71372fed7decd40ec73c347217ee93cae701096bea49d6f	wine-build	build-macos/dlls/ddrawex/i386-windows/ddrawex.dll	P2
 resource	Runtime/i386-windows/desk.cpl	122880	9f7571019a390ae194a1d36896f35f4672afe6e5d6ef06eec8eedcdb00f65be2	wine-build	build-macos/dlls/desk.cpl/i386-windows/desk.cpl	P2
 resource	Runtime/i386-windows/devenum.dll	299008	428cf469e26d79a5c60086b1ecaba467bb2c5a5b1d205a95f5a0696792cfff0d	wine-build	build-macos/dlls/devenum/i386-windows/devenum.dll	P2

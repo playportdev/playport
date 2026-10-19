@@ -15,7 +15,7 @@ c92f2231a10	upstream: wine-11.20 has it (WineHQ 61dfdd1)	dinput/tests: Add a tes
 981e2f0b900	upstream: wine-11.20's winmm add_joystick already initialises device (WineHQ folded the fixup in)	fixup! winmm: Avoid duplicating the same joystick devices.
 ac41217cc73	upstream: wine-11.19 has it (already in the base)	ntdll: Add SIGQUIT to the blocked signals.
 290276fb04e	upstream: wine-11.19 has it (already in the base)	d2d1: Allow value NULL in d2d_effect_SetInput.
-7fc704ef49c	conflict: not taken. WineHQ has the regressing change (6b486ec) but its code is is_render_target(ddraw, caps, version) with three callers, not Valve's force_3ddevice; the fix needs the pixel format there, a ddraw change rather than a pick (follow-up)	ddraw: Do not force render target for paletted primary surfaces.
+7fc704ef49c	picked (resolved, 2026-10-19, wine-valve 0130, PLA-390): WineHQ has the regressing change (6b486ec) as is_render_target(ddraw, caps, version) with three callers, not Valve's force_3ddevice; is_render_target() now takes the surface description, so it can test the pixel format as Valve's fix does	ddraw: Do not force render target for paletted primary surfaces.
 d3745ba077a	proton: explorer shutting down Xalia, Proton's Linux accessibility layer	explorer: Shut down Xalia when quitting.
 6eb78e124f1	reverted: reverts Valve's x86_64 syscall emulation, which the series never carried (x86_64 Linux host)	Revert "fixup! ntdll: Support x86_64 syscall emulation."
 9f00f2a60e6	reverted: reverts Valve's x86_64 syscall emulation, which the series never carried (x86_64 Linux host)	Revert "ntdll: Support x86_64 syscall emulation."

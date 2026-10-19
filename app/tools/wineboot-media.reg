@@ -3,9 +3,9 @@
 ;; DMOs (DMORegister) and Media Foundation transforms (MFTRegister), as a desktop prefix of the
 ;; same Wine (wineboot --init) holds them. Each section names the DLL whose DllRegisterServer
 ;; writes it; app/tools/prefix-registry.py MEDIA_REGISTER_SHA256 guards that code.
-;; Not from a prefix: quartz's Color Space Converter (wine-11.20), whose FilterData is
-;; FM2_WriteFilterData's layout, checked against three entries here
-;; (docs/evidence/2026-10-18-wine-11.20.md).
+;; quartz's Color Space Converter (wine-11.20) is what wine-11.20's quartz.dll DllRegisterServer
+;; wrote into a desktop wine-11.19 prefix (its WoW64 view; every other quartz entry here is equal
+;; there), not a wineboot'ed wine-11.20 prefix (docs/evidence/2026-10-18-wine-11.20.md).
 
 ;; quartz.dll
 [Software\\Classes\\CLSID\\{083863F1-70DE-11D0-BD40-00A0C911CE86}\\Instance\\{1643E180-90F5-11CE-97D5-00AA0055595A}]

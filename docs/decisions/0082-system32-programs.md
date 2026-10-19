@@ -7,6 +7,13 @@ away (the conservative option at each choice, recorded for review);
 rest of both stands. [Evidence](../evidence/2026-10-11-system32-programs.md). Its "a `.cmd`
 prerequisite now really runs `cmd`, `conhost`, `start`" is amended by
 [0096](0096-steam-outcome-parity.md): a standard Steam VC++ `.cmd` runs its installer directly.
+Since wine-11.20 the mechanism below is out of date, not the decision: a program's `Makefile.in`
+chooses its architectures (`ENABLE_ARCHS`), so `--enable-<program>` no longer adds one. The
+arm64ec tree builds every program that does not restrict them, `patches/wine-pe` 0047 adds
+arm64ec to the ten that name only the host or the 16-bit architecture (`conhost`, the services,
+`winemenubuilder`, `winevdm`), and `wine-pe.sh` passes `--disable-` for `winetest`, `winedbg`,
+`wineboot` and `explorer`; the arm64ec set is what it was on wine-11.19
+([evidence](../evidence/2026-10-18-wine-11.20.md)).
 
 ## Context
 
