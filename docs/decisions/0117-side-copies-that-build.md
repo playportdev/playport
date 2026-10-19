@@ -4,7 +4,7 @@
 [0069](0069-host-only-worktrees.md): an owner-authorized side worktree may build and test with
 its own copy of the build area, not only run host checks. [0028](0028-one-checkout.md)'s main
 checkout stays the phone's, and [0016](0016-agents-share-the-phone.md)'s device rules stand.
-[PLA-86](https://linear.app/playportdev/issue/PLA-86).
+[PLA-405](https://linear.app/playportdev/issue/PLA-405) (0069: [PLA-86](https://linear.app/playportdev/issue/PLA-86)).
 
 ## Decision
 
