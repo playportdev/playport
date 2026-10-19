@@ -1,2 +1,3 @@
 0001-Allow-an-explicit-Windows-target-on-a-Linux-host.patch
 0002-Turn-the-component-updater-off-in-a-Windows-browser.patch
+0003-Link-libcef-with-16-KiB-sections.patch

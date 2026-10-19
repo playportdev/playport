@@ -1,0 +1,53 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Mon, 19 Oct 2026 15:10:00 +0200
+Subject: [PATCH] SwiftShader: link vk_swiftshader with 16 KiB sections
+
+Link vk_swiftshader.dll with /ALIGN:16384 and /FILEALIGN:16384, as libcef
+(patches/cef 0003): Wine on iOS then maps its sections from the file
+instead of reading the DLL into each process's private memory (PLA-415).
+/WX:NO after /WX keeps lld-link's /ALIGN-without-/DRIVER warning a
+warning. Apply after the pinned CEF stock patches.
+
+Class: feature
+Evidence: docs/evidence/2026-10-19-shared-libcef.md
+Offered-upstream: no
+Upstream-repo: swiftshader
+---
+ third_party/swiftshader/src/Vulkan/BUILD.gn | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+
+diff --git a/third_party/swiftshader/src/Vulkan/BUILD.gn b/third_party/swiftshader/src/Vulkan/BUILD.gn
+index 852068cad..335816af3 100644
+--- a/third_party/swiftshader/src/Vulkan/BUILD.gn
++++ b/third_party/swiftshader/src/Vulkan/BUILD.gn
+@@ -198,6 +198,19 @@
+   ]
+ }
+ 
++# Playport: sections aligned to 16 KiB in memory and in the file, so that a
++# host with 16 KiB pages (Wine on iOS) maps each section from the DLL file
++# instead of reading it into every process's private memory. lld-link warns
++# that /ALIGN without /DRIVER may not run; Windows and Wine load such a DLL,
++# so that warning alone is not fatal here (this config comes after /WX).
++config("playport_16k_sections") {
++  ldflags = [
++    "/ALIGN:16384",
++    "/FILEALIGN:16384",
++    "/WX:NO",
++  ]
++}
++
+ swiftshader_shared_library("swiftshader_libvulkan") {
+   # TODO(capn): Use the same ICD name on both Windows and non-Windows.
+   if (is_win) {
+@@ -211,6 +224,9 @@
+       "Vulkan.rc",
+       "vk_swiftshader.def",
+     ]
++
++    # Playport: 16 KiB sections, mapped from the file on a 16 KiB-page host.
++    configs = [ ":playport_16k_sections" ]
+   } else if (is_mac) {
+     ldflags = [
+       "-Wl,-install_name,@rpath/libvk_swiftshader.dylib",

@@ -1,0 +1,80 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Mon, 19 Oct 2026 15:13:26 +0200
+Subject: [PATCH] virtual: log how much of an x86-64 image the file backs
+
+map_file_into_view_ex maps an image section from the file (MAP_PRIVATE)
+only when it is aligned to the host's 16 KiB page in memory and in the
+file, and otherwise reads it into the view; nothing said which. Each
+x86-64 image's mapping now logs `[img-map] x64 <name> at <base>:
+file-mapped N read N of <size>` with its section and file alignment:
+the bytes of its sections mapped from the file, whose clean pages every
+process that maps the image shares, and the bytes read into this
+process's own memory. Playport's libcef, linked with 16 KiB sections
+(patches/cef 0003), should read nothing; one linked with 4 KiB sections
+reads all 246 MiB in every process (PLA-415). It changes no mapping.
+
+Linear: PLA-415
+Class: diagnostics
+Evidence: docs/evidence/2026-10-19-shared-libcef.md
+Offered-upstream: no; the 16 KiB host page is the iOS port's
+---
+ build/ntdll-unix/virtual_ios.c | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 1d9fc19..91452b8 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -12969,6 +12969,12 @@ void ios_map_describe( const void *addr, char *out, size_t outlen )
+     }
+ }
+ 
++/* Playport (diagnostics, PLA-415): the bytes of the image being mapped on
++ * this thread that map_file_into_view_ex mapped from the file and that it
++ * read into the view instead; map_image_into_view logs them per x86-64 image
++ * (`[img-map] x64`). virtual_mutex is held around both. */
++static __thread unsigned long long ios_img_file_mapped, ios_img_file_read;
++
+ static NTSTATUS map_file_into_view_ex( struct file_view *view, int fd, size_t start, size_t size,
+                                        off_t offset, unsigned int vprot, BOOL removable,
+                                        BOOL for_image )
+@@ -13087,6 +13093,7 @@ static NTSTATUS map_file_into_view_ex( struct file_view *view, int fd, size_t st
+         {
+             ios_map_record( view->base, view->size, start, size, map_size, host_size,
+                             fd, (long long)offset, (flags & MAP_SHARED) != 0, for_image );
++            if (for_image) ios_img_file_mapped += host_size;
+             return STATUS_SUCCESS;
+         }
+ 
+@@ -13126,6 +13133,7 @@ static NTSTATUS map_file_into_view_ex( struct file_view *view, int fd, size_t st
+ 
+     mprotect( map_addr, map_size, PROT_READ | PROT_WRITE );
+     pread( fd, map_addr, size, offset );
++    if (for_image) ios_img_file_read += size;
+     return STATUS_SUCCESS;
+ }
+ 
+@@ -14757,6 +14765,7 @@ static NTSTATUS map_image_into_view( struct file_view *view, const UNICODE_STRIN
+ 
+     /* map all the sections */
+ 
++    ios_img_file_mapped = ios_img_file_read = 0;
+     for (i = pos = 0; i < nt->FileHeader.NumberOfSections; i++)
+     {
+         static const SIZE_T sector_align = 0x1ff;
+@@ -14878,6 +14887,14 @@ static NTSTATUS map_image_into_view( struct file_view *view, const UNICODE_STRIN
+     if (nt->FileHeader.Machine == IMAGE_FILE_MACHINE_AMD64 &&
+         !(view->protect & (VPROT_ARM64EC | VPROT_WOW64_IMAGE)))
+         view->protect |= VPROT_X64_IMAGE;
++    /* Playport (diagnostics, PLA-415): how much of an x86-64 image's sections
++     * the file backs (clean pages shared by every process that maps it) and
++     * how much was read into this process's own memory. */
++    if (nt->FileHeader.Machine == IMAGE_FILE_MACHINE_AMD64)
++        dprintf( 2, "[img-map] x64 %s at %p: file-mapped 0x%llx read 0x%llx of 0x%lx (sections %u, align 0x%x/0x%x)\n",
++                 debugstr_us(nt_name), ptr, ios_img_file_mapped, ios_img_file_read, (unsigned long)total_size,
++                 nt->FileHeader.NumberOfSections, (unsigned)nt->OptionalHeader.SectionAlignment,
++                 (unsigned)nt->OptionalHeader.FileAlignment );
+ #endif
+ 
+     /* Window-backed PE32 uses host storage but guest-only relocation deltas.

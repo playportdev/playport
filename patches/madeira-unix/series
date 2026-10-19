@@ -164,3 +164,4 @@
 0164-virtual-know-FEX-s-4-MiB-call-return-stack-and-1-MiB.patch
 0165-virtual-leave-a-builtin-s-.rsrc-and-.reloc-out-of-it.patch
 0166-virtual-log-memory-by-pseudo-process.patch
+0167-virtual-log-how-much-of-an-x86-64-image-the-file-bac.patch

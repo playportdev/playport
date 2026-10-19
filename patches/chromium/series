@@ -14,3 +14,5 @@
 0014-Try-Tahoma-last-in-Blink-s-last-resort-fonts-on-Windows.patch
 0015-Do-not-use-the-on-device-model-service-on-Windows.patch
 0016-No-system-CPU-probe-on-Windows.patch
+0017-ANGLE-link-libGLESv2-with-16-KiB-sections.patch
+0018-SwiftShader-link-vk_swiftshader-with-16-KiB-sections.patch

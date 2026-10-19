@@ -26,6 +26,35 @@ class Payload(unittest.TestCase):
         self.digest = hashlib.sha256(b'fixture').hexdigest()
         self.record.write_text(f'{self.digest}  Release/libcef.dll\n')
 
+    @staticmethod
+    def pe(section_alignment, file_alignment, sections):
+        """A PE header with (rva, raw size, raw offset) sections."""
+        import struct
+        data = bytearray(0x400)
+        data[:2] = b'MZ'
+        struct.pack_into('<I', data, 0x3c, 0x80)
+        data[0x80:0x84] = b'PE\0\0'
+        struct.pack_into('<H12xH', data, 0x86, len(sections), 0xf0)
+        struct.pack_into('<II', data, 0x98 + 32, section_alignment, file_alignment)
+        for i, (rva, size, offset) in enumerate(sections):
+            struct.pack_into('<8sIIII', data, 0x98 + 0xf0 + 40 * i, b'.s%d' % i, size, rva, size, offset)
+        return bytes(data)
+
+    def test_16k_sections(self):
+        good = self.pe(0x4000, 0x4000, [(0x4000, 0x4000, 0x4000), (0x8000, 0, 0)])
+        self.assertEqual(payload.unaligned_sections(good), [])
+        self.assertEqual(payload.unaligned_sections(self.pe(0x1000, 0x200, [(0x1000, 0x200, 0x400)])),
+                         ['alignment 0x1000/0x200', '.s0 rva 0x1000 file 0x400'])
+        self.assertEqual(payload.unaligned_sections(self.pe(0x4000, 0x4000, [(0x4000, 0x200, 0x4200)])),
+                         ['.s0 rva 0x4000 file 0x4200'])
+        (self.root / 'Release/libcef.dll').write_bytes(good)
+        self.assertEqual(payload.verify_16k_sections(self.root, ('Release/libcef.dll',)), ['Release/libcef.dll'])
+        (self.root / 'Release/libcef.dll').write_bytes(self.pe(0x1000, 0x200, []))
+        with self.assertRaisesRegex(ValueError, 'not 16 KiB-aligned: Release/libcef.dll: alignment'):
+            payload.verify_16k_sections(self.root, ('Release/libcef.dll',))
+        with self.assertRaisesRegex(ValueError, 'not a PE image'):
+            payload.unaligned_sections(b'fixture')
+
     def test_verified(self):
         self.assertEqual(payload.verify_payload(self.root, self.record), ['Release/libcef.dll'])
 

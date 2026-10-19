@@ -66,10 +66,12 @@ and chrome_elf nevertheless contain statically linked MSVC CRT code.
    for Playport's Chromium series.
 4. Apply `patches/chromium/series` in order at `src`, with `git apply` **without
    `--index`**. Paths include nested DEPS repositories. ANGLE patches name
-   `Upstream-repo: angle`; Dawn patches name `Upstream-repo: dawn`. These are not
-   independently pinned components. The source snapshot used here has ANGLE
-   `2dfb5b7603d09c1d06f9d7a894752431d98b9a3e` and Dawn
-   `479f62d2194fd6e44c37d07654ca6e41c42bd332`.
+   `Upstream-repo: angle`, Dawn patches `Upstream-repo: dawn` and SwiftShader
+   patches `Upstream-repo: swiftshader`. These are not independently pinned
+   components. The source snapshot used here has ANGLE
+   `2dfb5b7603d09c1d06f9d7a894752431d98b9a3e`, Dawn
+   `479f62d2194fd6e44c37d07654ca6e41c42bd332` and SwiftShader
+   `3d536c0fc62b1cdea0f78c3c38d79be559855b88`.
 5. Never rerun the stock patcher over these changes. For regeneration use only
    `run-project-files.sh` below.
 

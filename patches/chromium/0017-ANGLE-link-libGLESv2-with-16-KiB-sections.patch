@@ -1,0 +1,53 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Mon, 19 Oct 2026 15:10:00 +0200
+Subject: [PATCH] ANGLE: link libGLESv2 with 16 KiB sections
+
+Link libGLESv2.dll with /ALIGN:16384 and /FILEALIGN:16384, as libcef
+(patches/cef 0003): Wine on iOS then maps its sections from the file
+instead of reading the DLL into each process's private memory (PLA-415).
+/WX:NO after /WX keeps lld-link's /ALIGN-without-/DRIVER warning a
+warning. Apply after the pinned CEF stock patches.
+
+Class: feature
+Evidence: docs/evidence/2026-10-19-shared-libcef.md
+Offered-upstream: no
+Upstream-repo: angle
+---
+ third_party/angle/BUILD.gn | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+
+diff --git a/third_party/angle/BUILD.gn b/third_party/angle/BUILD.gn
+index fcc773e68..958139b40 100644
+--- a/third_party/angle/BUILD.gn
++++ b/third_party/angle/BUILD.gn
+@@ -1405,6 +1405,19 @@
+   ]
+ }
+ 
++# Playport: sections aligned to 16 KiB in memory and in the file, so that a
++# host with 16 KiB pages (Wine on iOS) maps each section from the DLL file
++# instead of reading it into every process's private memory. lld-link warns
++# that /ALIGN without /DRIVER may not run; Windows and Wine load such a DLL,
++# so that warning alone is not fatal here (this config comes after /WX).
++config("playport_16k_sections") {
++  ldflags = [
++    "/ALIGN:16384",
++    "/FILEALIGN:16384",
++    "/WX:NO",
++  ]
++}
++
+ set_defaults("angle_libGLESv2") {
+   sources = []
+   output_name = "libGLESv2"
+@@ -1436,6 +1449,9 @@
+       sources += [ "src/libGLESv2/${invoker.output_name}_autogen.def" ]
+       sources += [ "src/libGLESv2/libGLESv2.rc" ]
+       deps += [ ":angle_version" ]
++
++      # Playport: 16 KiB sections, mapped from the file on a 16 KiB-page host.
++      configs += [ ":playport_16k_sections" ]
+     }
+   }
+ }

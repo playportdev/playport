@@ -6,6 +6,7 @@ import hashlib
 import os
 from pathlib import Path, PurePosixPath
 import re
+import struct
 import sys
 
 REPO = Path(__file__).resolve().parents[2]
@@ -51,6 +52,43 @@ def verify_payload(source, record=RECORD, payload=True):
     return list(paths)
 
 
+# Linked with 16 KiB sections (patches/cef 0003, patches/chromium 0017-0018), so that Wine on
+# iOS maps their sections from the file instead of reading each DLL into every process (PLA-415).
+SECTIONS_16K = ('Release/libcef.dll', 'Release/libGLESv2.dll', 'Release/vk_swiftshader.dll')
+PAGE_16K = 0x4000
+
+
+def unaligned_sections(data):
+    """The PE image's alignments and sections that a 16 KiB-page host cannot map from the file."""
+    if data[:2] != b'MZ':
+        raise ValueError('not a PE image')
+    pe = struct.unpack_from('<I', data, 0x3c)[0]
+    if data[pe:pe + 4] != b'PE\0\0':
+        raise ValueError('not a PE image')
+    count, optional_size = struct.unpack_from('<H12xH', data, pe + 6)
+    optional = pe + 24
+    section_alignment, file_alignment = struct.unpack_from('<II', data, optional + 32)
+    bad = []
+    if section_alignment % PAGE_16K or file_alignment % PAGE_16K:
+        bad.append(f'alignment {section_alignment:#x}/{file_alignment:#x}')
+    table = optional + optional_size
+    for i in range(count):
+        name, _, rva, raw_size, raw_offset = struct.unpack_from('<8sIIII', data, table + 40 * i)
+        if rva % PAGE_16K or (raw_size and raw_offset % PAGE_16K):
+            label = name.rstrip(b'\0').decode(errors='replace')
+            bad.append(f'{label} rva {rva:#x} file {raw_offset:#x}')
+    return bad
+
+
+def verify_16k_sections(source, names=SECTIONS_16K):
+    """Raise unless every named DLL has 16 KiB-aligned sections in memory and in the file."""
+    for name in names:
+        bad = unaligned_sections((source / name).read_bytes())
+        if bad:
+            raise ValueError(f'CEF payload not 16 KiB-aligned: {name}: {", ".join(bad[:4])}')
+    return list(names)
+
+
 def runtime_entries(record=RECORD, notices_record=NOTICES_RECORD):
     """Flatten the recorded runtime and notices, never the import library."""
     entries = {}
@@ -87,10 +125,11 @@ def main():
     args = parser.parse_args()
     try:
         paths = verify_payload(args.source)
+        verify_16k_sections(args.source)
     except (OSError, ValueError) as error:
         print(f'cef-payload: {error}', file=sys.stderr)
         return 1
-    print(f'cef-payload: 143.0.14: {len(paths)} files verified')
+    print(f'cef-payload: 143.0.14: {len(paths)} files verified, {len(SECTIONS_16K)} DLLs with 16 KiB sections')
     return 0
 
 

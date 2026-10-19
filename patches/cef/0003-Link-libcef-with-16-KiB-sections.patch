@@ -1,0 +1,59 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Mon, 19 Oct 2026 15:10:00 +0200
+Subject: [PATCH] Link libcef with 16 KiB sections
+
+Link libcef.dll with /ALIGN:16384 and /FILEALIGN:16384, so that every
+section starts on a 16 KiB boundary in memory and in the file. Wine on
+iOS maps an image section from the file (MAP_PRIVATE) only when both are
+16 KiB-aligned, the host's page size; with 4 KiB sections and 0x200 file
+alignment it reads all of libcef (246 MiB) into each process's private
+memory, six copies in a Red Dead Redemption 2 play (PLA-415). Mapped from
+the file, only the pages a process relocates or writes become its own.
+lld-link warns that /ALIGN without /DRIVER may not run, and Chromium
+links with /WX; the config comes after /WX and adds /WX:NO, so that
+warning stays a warning. Apply to the CEF pin before its stock Chromium
+patcher runs.
+
+Class: feature
+Evidence: docs/evidence/2026-10-19-shared-libcef.md
+Offered-upstream: no
+---
+ BUILD.gn | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/BUILD.gn b/BUILD.gn
+index 6f653c8cc..c8fc79f9c 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -1123,6 +1123,19 @@
+ # libcef_dll_wrapper static targets.
+ #
+ 
++# Playport: sections aligned to 16 KiB in memory and in the file, so that a
++# host with 16 KiB pages (Wine on iOS) maps each section from the DLL file
++# instead of reading it into every process's private memory. lld-link warns
++# that /ALIGN without /DRIVER may not run; Windows and Wine load such a DLL,
++# so that warning alone is not fatal here (this config comes after /WX).
++config("playport_16k_sections") {
++  ldflags = [
++    "/ALIGN:16384",
++    "/FILEALIGN:16384",
++    "/WX:NO",
++  ]
++}
++
+ # Configuration that will be applied to all targets that build autogen files.
+ config("libcef_autogen_config") {
+   if (is_clang) {
+@@ -1793,6 +1806,10 @@
+       # we need some DLLs loaded in child processes before sandbox lockdown.
+       configs += [ "//build/config/win:delayloads" ]
+ 
++      # Playport: 16 KiB sections in memory and in the file, so a 16 KiB-page
++      # host can map them from the file and share their clean pages.
++      configs += [ ":playport_16k_sections" ]
++
+       libs = [
+         "comctl32.lib",
+         # For D3D11_DECODER_PROFILE_H264_VLD_NOFGT.
