@@ -135,3 +135,24 @@ horizontally, the phone's projection P00 ≈ 4.02 against the desktop's 1.1486),
 aspect is wrong (about 0.507). KosmicKrisp's surface reports an identity `currentTransform`
 (`wsi_common_metal.c`), so a Vulkan pre-rotation is not it. The game's `system.xml` stays at
 Resolution Scale Off after this run.
+
+## 7. s6: 14 minutes of gameplay with the stick at Resolution Scale Off, no memory kill
+
+Run `…T133438-rdr2-s6` (IPA `62cea69c`, the same settings as s5, no Settings visit): Story at
+13:37:54, the left stick pushed for 20 s in every ~35 s from 13:40:27 (13 cycles; the view changed
+in each, no stand-up prompt was seen), gameplay until 13:54:52, when the run was ended from the
+workstation: a supervision script read one `pp phone status` without the app's pid and ended
+the run, while the host log shows the game still presenting (`[frames]` 13:54:52) and no jetsam
+line for the app. Not a memory kill; the script now needs three such reads in a row.
+
+- **Footprint:** 6.8–7.25 GB through the 14 minutes, peak 7,650 MB (graphics 2.8–3.2 GB,
+  compressed 3.7–4.1 GB); level while moving.
+- **Presents/s:** 17.7–25.4 per minute of gameplay (13.5 in the first minute), 42–50 on the
+  landing page.
+- **Wineserver thread:** mean 30 %, p50 16 %, max 70 % of its `[thread-sample]`s.
+- **Social Club:** 170 helper starts refused at creation; no `proc-socket table FULL`.
+- **Compiler:** no `[kk-compile] FAIL`, no MTLCompilerService highwater kill.
+- **Thermal:** nominal at launch, then fair, then serious.
+- **GPU wiring:** from 13:39:42 the kernel logged 644 `IOGPUCommandDescriptor::prepare …
+  preparedBytes != requiredBytes` faults for the app (required about 2.4–2.5 GB, `maxWired`
+  8,589,950,976); the game kept drawing.
