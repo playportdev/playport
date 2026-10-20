@@ -1,0 +1,230 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 20 Oct 2026 14:42:21 +0200
+Subject: [PATCH] win32u: give the virtual display a display-config path
+
+In the virtual-monitor regime GetDisplayConfigBufferSizes counts the
+virtual monitor as one active path, but QueryDisplayConfig skips every
+monitor without a source and returns no path, and
+DisplayConfigGetDeviceInfo finds no source or target for any adapter.
+Red Dead Redemption 2 asks exactly this before it sizes its window and
+camera (run 20261020T142311-rdr2-f1: buffer sizes 1 path and 2 modes,
+then QueryDisplayConfig 0 paths, then GET_SOURCE_NAME failing), and on
+the phone it centres its window on a 1920x1080 desktop that does not
+exist and draws its world stretched about 3.5 times horizontally
+(PLA-364).
+
+QueryDisplayConfig now returns the virtual display's one path, source
+0 to target 0 on the virtual adapter's luid (the one D3DKMT already
+opens, now ios_virtual_adapter_luid), with the current mode as source
+and target mode, and a desktop image mode for QDC_VIRTUAL_MODE_AWARE,
+as the monitor loop gives a real monitor's. DisplayConfigGetDeviceInfo
+answers for that adapter and id 0: the source's GDI name \\.\DISPLAY1,
+a target with no EDID (internal output), and the native size as the
+preferred mode.
+
+Class: ios-port
+Evidence: docs/evidence/2026-10-20-rdr2-aspect.md
+Offered-upstream: no
+---
+ build/win32u-unix/sysparams_ios.c | 152 +++++++++++++++++++++++++-----
+ 1 file changed, 128 insertions(+), 24 deletions(-)
+
+diff --git a/build/win32u-unix/sysparams_ios.c b/build/win32u-unix/sysparams_ios.c
+index 1a04f05..1916700 100644
+--- a/build/win32u-unix/sysparams_ios.c
++++ b/build/win32u-unix/sysparams_ios.c
+@@ -3814,6 +3814,45 @@ static BOOL source_mode_exists( const DISPLAYCONFIG_MODE_INFO *modes, UINT32 mod
+     return FALSE;
+ }
+ 
++#ifdef WINE_IOS
++static BOOL ios_virtual_monitor_active(void);
++static BOOL ios_virtual_enum_display_settings( DWORD index, DEVMODEW *devmode, DWORD flags );
++static LUID ios_virtual_adapter_luid(void);
++
++/* The virtual display's one path (source 0 to target 0) at the current mode, as
++ * the loop over the monitors below gives a real monitor's: the virtual monitor
++ * has no source, so that loop returned no path while GetDisplayConfigBufferSizes
++ * counted one. RDR2 asks QueryDisplayConfig for the display before it sizes
++ * its window and camera (PLA-364). */
++static LONG ios_virtual_query_display_config( UINT32 flags, UINT32 *paths_count, DISPLAYCONFIG_PATH_INFO *paths,
++                                              UINT32 *modes_count, DISPLAYCONFIG_MODE_INFO *modes )
++{
++    UINT32 need_modes = (flags & QDC_VIRTUAL_MODE_AWARE) ? 3 : 2;
++    DEVMODEW devmode = {.dmSize = sizeof(DEVMODEW)};
++    LUID luid = ios_virtual_adapter_luid();
++
++    if (!paths || !modes) return ERROR_INVALID_PARAMETER;
++    if (*paths_count < 1 || *modes_count < need_modes) return ERROR_INSUFFICIENT_BUFFER;
++    ios_virtual_enum_display_settings( ENUM_CURRENT_SETTINGS, &devmode, 0 );
++    memset( paths, 0, sizeof(*paths) );
++    memset( modes, 0, need_modes * sizeof(*modes) );
++    set_mode_source_info( &modes[0], &luid, 0, &devmode );
++    set_mode_target_info( &modes[1], &luid, 0, flags, &devmode );
++    paths[0].flags = DISPLAYCONFIG_PATH_ACTIVE;
++    if (flags & QDC_VIRTUAL_MODE_AWARE)
++    {
++        paths[0].flags |= DISPLAYCONFIG_PATH_SUPPORT_VIRTUAL_MODE;
++        set_mode_desktop_info( &modes[2], &luid, 0, &modes[0].sourceMode );
++        set_path_target_info( &paths[0].targetInfo, &luid, 0, 1, 2, flags, &devmode );
++    }
++    else set_path_target_info( &paths[0].targetInfo, &luid, 0, 1, ~0u, flags, &devmode );
++    set_path_source_info( &paths[0].sourceInfo, &luid, 0, 0, flags );
++    *paths_count = 1;
++    *modes_count = need_modes;
++    return ERROR_SUCCESS;
++}
++#endif
++
+ /***********************************************************************
+  *              NtUserQueryDisplayConfig (win32u.@)
+  */
+@@ -3862,6 +3901,11 @@ static LONG query_display_config_unlogged( UINT32 flags, UINT32 *paths_count, DI
+         *topology_id = DISPLAYCONFIG_TOPOLOGY_INTERNAL;
+     }
+ 
++#ifdef WINE_IOS
++    if (ios_virtual_monitor_active())
++        return ios_virtual_query_display_config( flags, paths_count, paths, modes_count, modes );
++#endif
++
+     if (!lock_display_devices( FALSE ))
+         return ERROR_GEN_FAILURE;
+ 
+@@ -4131,6 +4175,40 @@ static void monitor_get_interface_name( struct monitor *monitor, WCHAR *interfac
+ }
+ 
+ /* see D3DKMTOpenAdapterFromGdiDisplayName */
++/* ml1006: the virtual display's adapter, one identity for the process lifetime:
++ * the registered GPU's luid if there is one, else one allocated once (software).
++ * QueryDisplayConfig and DisplayConfigGetDeviceInfo name the same adapter. */
++static LUID ios_virtual_adapter_luid(void)
++{
++    static LUID virtual_luid;
++    static BOOL virtual_luid_ready;
++    LUID luid;
++
++    pthread_mutex_lock( &display_lock );
++    if (!virtual_luid_ready)
++    {
++        struct gpu *first = LIST_ENTRY( list_head( &gpus ), struct gpu, entry );
++        if (!list_empty( &gpus ) && first)
++        {
++            virtual_luid = first->luid;
++            dprintf( 2, "[vmode] ml1006 virtual adapter adopts the registered GPU luid "
++                     "%08x%08x\n", (unsigned)virtual_luid.HighPart,
++                     (unsigned)virtual_luid.LowPart );
++        }
++        else
++        {
++            NtAllocateLocallyUniqueId( &virtual_luid );
++            dprintf( 2, "[vmode] ml1006 no GPU registered; allocated a SOFTWARE virtual "
++                     "adapter luid %08x%08x (not a hardware identity)\n",
++                     (unsigned)virtual_luid.HighPart, (unsigned)virtual_luid.LowPart );
++        }
++        virtual_luid_ready = TRUE;
++    }
++    luid = virtual_luid;
++    pthread_mutex_unlock( &display_lock );
++    return luid;
++}
++
+ static NTSTATUS d3dkmt_open_adapter_from_gdi_display_name( D3DKMT_OPENADAPTERFROMGDIDISPLAYNAME *desc )
+ {
+     NTSTATUS status = STATUS_UNSUCCESSFUL;
+@@ -4181,8 +4259,6 @@ static NTSTATUS d3dkmt_open_adapter_from_gdi_display_name( D3DKMT_OPENADAPTERFRO
+     if (ios_virtual_monitor_active())
+     {
+         static const WCHAR kmt_display1W[] = {'\\','\\','.','\\','D','I','S','P','L','A','Y','1',0};
+-        static LUID virtual_luid;
+-        static BOOL virtual_luid_ready;
+ 
+         if (name.Length != (sizeof(kmt_display1W) - sizeof(WCHAR)) ||
+             wcsnicmp( name.Buffer, kmt_display1W, ARRAY_SIZE(kmt_display1W) - 1 ))
+@@ -4194,28 +4270,7 @@ static NTSTATUS d3dkmt_open_adapter_from_gdi_display_name( D3DKMT_OPENADAPTERFRO
+             return STATUS_UNSUCCESSFUL;
+         }
+ 
+-        pthread_mutex_lock( &display_lock );
+-        if (!virtual_luid_ready)
+-        {
+-            struct gpu *first = LIST_ENTRY( list_head( &gpus ), struct gpu, entry );
+-            if (!list_empty( &gpus ) && first)
+-            {
+-                virtual_luid = first->luid;
+-                dprintf( 2, "[vmode] ml1006 virtual adapter adopts the registered GPU luid "
+-                         "%08x%08x\n", (unsigned)virtual_luid.HighPart,
+-                         (unsigned)virtual_luid.LowPart );
+-            }
+-            else
+-            {
+-                NtAllocateLocallyUniqueId( &virtual_luid );
+-                dprintf( 2, "[vmode] ml1006 no GPU registered; allocated a SOFTWARE virtual "
+-                         "adapter luid %08x%08x (not a hardware identity)\n",
+-                         (unsigned)virtual_luid.HighPart, (unsigned)virtual_luid.LowPart );
+-            }
+-            virtual_luid_ready = TRUE;
+-        }
+-        luid_desc.AdapterLuid = virtual_luid;
+-        pthread_mutex_unlock( &display_lock );
++        luid_desc.AdapterLuid = ios_virtual_adapter_luid();
+ 
+         if ((status = NtGdiDdDDIOpenAdapterFromLuid( &luid_desc )))
+         {
+@@ -8364,6 +8419,55 @@ static NTSTATUS display_config_get_device_info_unlogged( DISPLAYCONFIG_DEVICE_IN
+     if (!packet || packet->size < sizeof(*packet))
+         return STATUS_UNSUCCESSFUL;
+ 
++#ifdef WINE_IOS
++    /* The virtual display's source and target (ios_virtual_query_display_config):
++     * its GDI name, a target with no EDID, and its native size as the preferred mode. */
++    if (ios_virtual_monitor_active() && packet->id == 0)
++    {
++        LUID luid = ios_virtual_adapter_luid();
++
++        if (!memcmp( &packet->adapterId, &luid, sizeof(luid) ))
++        {
++            static const WCHAR display1W[] = {'\\','\\','.','\\','D','I','S','P','L','A','Y','1',0};
++            DEVMODEW devmode = {.dmSize = sizeof(DEVMODEW)};
++
++            switch (packet->type)
++            {
++            case DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME:
++            {
++                DISPLAYCONFIG_SOURCE_DEVICE_NAME *source_name = (DISPLAYCONFIG_SOURCE_DEVICE_NAME *)packet;
++                if (packet->size < sizeof(*source_name)) return STATUS_INVALID_PARAMETER;
++                memcpy( source_name->viewGdiDeviceName, display1W, sizeof(display1W) );
++                return STATUS_SUCCESS;
++            }
++            case DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME:
++            {
++                DISPLAYCONFIG_TARGET_DEVICE_NAME *target_name = (DISPLAYCONFIG_TARGET_DEVICE_NAME *)packet;
++                if (packet->size < sizeof(*target_name)) return STATUS_INVALID_PARAMETER;
++                memset( &target_name->flags, 0, sizeof(*target_name) - offsetof(DISPLAYCONFIG_TARGET_DEVICE_NAME, flags) );
++                target_name->outputTechnology = DISPLAYCONFIG_OUTPUT_TECHNOLOGY_INTERNAL;
++                return STATUS_SUCCESS;
++            }
++            case DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_PREFERRED_MODE:
++            {
++                DISPLAYCONFIG_TARGET_PREFERRED_MODE *preferred_mode = (DISPLAYCONFIG_TARGET_PREFERRED_MODE *)packet;
++                DISPLAYCONFIG_MODE_INFO info;
++                if (packet->size < sizeof(*preferred_mode)) return STATUS_INVALID_PARAMETER;
++                ios_virtual_enum_display_settings( ENUM_REGISTRY_SETTINGS, &devmode, 0 );
++                memset( &info, 0, sizeof(info) );
++                set_mode_target_info( &info, &luid, 0, 0, &devmode );
++                preferred_mode->width = devmode.dmPelsWidth;
++                preferred_mode->height = devmode.dmPelsHeight;
++                preferred_mode->targetMode = info.targetMode;
++                return STATUS_SUCCESS;
++            }
++            default:
++                break;
++            }
++        }
++    }
++#endif
++
+     switch (packet->type)
+     {
+     case DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME:

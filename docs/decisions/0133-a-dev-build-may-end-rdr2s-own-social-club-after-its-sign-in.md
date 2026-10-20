@@ -1,7 +1,8 @@
 # 0133: A dev build may end RDR2's own Social Club helpers after the game's sign-in
 
 **Status:** accepted, 2026-10-20, as a dev experiment, approved by the supervisor for the owner
-(PLA-413). Amends [0130](0130-end-the-rockstar-launcher-at-the-games-sign-in-or-near-the-memory-limit.md),
+(PLA-413); the end waits 120 s or more after the sign-in since
+[0141](0141-end-rdr2s-own-social-club-no-sooner-than-120-s-after-its-sign-in.md). Amends [0130](0130-end-the-rockstar-launcher-at-the-games-sign-in-or-near-the-memory-limit.md),
 which never ends the game's own `SocialClubHelper.exe`. It is not a compatibility default: it may
 become one for RDR2 only after a run shows the game going on without a blocking Social Club error
 and without an exit.

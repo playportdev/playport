@@ -778,8 +778,8 @@ enum LaunchCoordinator {
     /// line text is matched; nothing of the log is logged.
     ///
     /// A dev build's Settings › Developer › End the game's Social Club (decision 0133, amending
-    /// 0130) also sends PP_CONTROL_END_GAME_SOCIAL_CLUB once, after the sign-in, at the first slice
-    /// whose footprint is within LauncherEndTrigger.headroomMB of the limit (the game starts its
+    /// 0130) also sends PP_CONTROL_END_GAME_SOCIAL_CLUB once, 120 s or more after the sign-in (decision
+    /// 0141), at the first slice whose footprint is within LauncherEndTrigger.headroomMB of the limit (the game starts its
     /// own helpers only after its sign-in): the root ends the game's own SocialClubHelper.exe
     /// processes, never the game. The slices read the footprint until then.
     private final class LauncherEnd {
@@ -788,6 +788,7 @@ enum LaunchCoordinator {
         let endGameSocialClub: Bool
         private var endedAt: Date?
         private var signedIn = false
+        private var signedInAt: TimeInterval?
         private var gameSocialClubEnded = false
 
         init(signIn: GameSignIn, profile: URL, endGameSocialClub: Bool) {
@@ -800,8 +801,9 @@ enum LaunchCoordinator {
                 + "\(LauncherEndTrigger.beforeSignInHeadroomMB) MB (now \(limit.map { "\(LauncherEndTrigger.beforeSignInThresholdMB(limitMB: $0)) MB" } ?? "no limit"); "
                 + "decisions 0130, 0140); its log "
                 + (baseline.map { "holds \($0.count) bytes of an earlier start" } ?? "is not there yet"))
-            if endGameSocialClub { log("launcher: the game's own Social Club ends too, after its sign-in, when the footprint reaches the "
-                                         + "limit less \(LauncherEndTrigger.headroomMB) MB (dev, decision 0133)") }
+            if endGameSocialClub { log("launcher: the game's own Social Club ends too, \(Int(LauncherEndTrigger.gameSocialClubAfterSignInS)) s "
+                                         + "or more after its sign-in, when the footprint reaches the limit less "
+                                         + "\(LauncherEndTrigger.headroomMB) MB (dev, decisions 0133, 0141)") }
         }
 
         /// Whether the wait slices read the footprint: until the end and for 10 s after it.
@@ -815,8 +817,9 @@ enum LaunchCoordinator {
             guard readsFootprint else { return }
             let m = MemoryLimit.read()
             let ended = endedAt != nil
-            if signedIn, endGameSocialClub, !gameSocialClubEnded, let limit = m.limitMB,
-               m.footprintMB >= LauncherEndTrigger.memoryThresholdMB(limitMB: limit) {
+            if endGameSocialClub, !gameSocialClubEnded, let limit = m.limitMB,
+               LauncherEndTrigger.endsGameSocialClub(sinceSignInS: signedInAt.map { elapsed - $0 },
+                                                     footprintMB: m.footprintMB, limitMB: limit) {
                 endGameSocialClubNow(footprintMB: m.footprintMB, limitMB: limit, elapsed: elapsed)
             }
             if LauncherEndTrigger.near(footprintMB: m.footprintMB, limitMB: m.limitMB), let limit = m.limitMB {
@@ -870,6 +873,7 @@ enum LaunchCoordinator {
         private func watchSignIn(elapsed: TimeInterval) {
             guard !signedIn, let data = try? Data(contentsOf: file), watch.signedIn(data) else { return }
             signedIn = true
+            signedInAt = elapsed
             log(String(format: "launcher: the game signed in at +%.1f s", elapsed))
             #if !PLAYPORT_RELEASE
             RunEvents.emit("launcher", ["state": "signed-in", "after_s": Int(elapsed)])

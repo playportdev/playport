@@ -37,6 +37,19 @@ public enum LauncherEndTrigger: Equatable, Sendable {
     /// under `limitMB` (decision 0133).
     public static func memoryThresholdMB(limitMB: Int) -> Int { limitMB - headroomMB }
 
+    /// After the sign-in, a dev build ends the game's own Social Club no sooner than this many
+    /// seconds after it (decision 0141): run 20261020T143924-rdr2-f2 ended it 1.2 s after the
+    /// game's helper signed in, the helper's channel broke, the game signed out and never left
+    /// its loading screen; the runs that played (s5, s6, e3b) ended it 144-155 s after.
+    public static let gameSocialClubAfterSignInS: Double = 120
+
+    /// Whether a dev build ends the game's own Social Club now: signed in at least
+    /// gameSocialClubAfterSignInS ago, with the footprint within headroomMB of `limitMB`.
+    public static func endsGameSocialClub(sinceSignInS: Double?, footprintMB: Int, limitMB: Int?) -> Bool {
+        guard let sinceSignInS, sinceSignInS >= gameSocialClubAfterSignInS, let limitMB else { return false }
+        return footprintMB >= memoryThresholdMB(limitMB: limitMB)
+    }
+
     /// The footprint at which the launcher's end comes before the sign-in, under `limitMB`.
     public static func beforeSignInThresholdMB(limitMB: Int) -> Int { limitMB - beforeSignInHeadroomMB }
 

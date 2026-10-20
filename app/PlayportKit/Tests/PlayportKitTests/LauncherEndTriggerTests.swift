@@ -27,6 +27,16 @@ final class LauncherEndTriggerTests: XCTestCase {
         XCTAssertEqual(LauncherEndTrigger.memoryThresholdMB(limitMB: 8_192), 6_992)
     }
 
+    func testTheGameSocialClubEndWaits120SecondsAfterTheSignIn() {
+        // Run f2: the footprint was over the threshold at the sign-in itself.
+        XCTAssertFalse(LauncherEndTrigger.endsGameSocialClub(sinceSignInS: nil, footprintMB: 7_018, limitMB: 8_192))
+        XCTAssertFalse(LauncherEndTrigger.endsGameSocialClub(sinceSignInS: 0, footprintMB: 7_018, limitMB: 8_192))
+        XCTAssertFalse(LauncherEndTrigger.endsGameSocialClub(sinceSignInS: 119.9, footprintMB: 7_500, limitMB: 8_192))
+        XCTAssertTrue(LauncherEndTrigger.endsGameSocialClub(sinceSignInS: 120, footprintMB: 6_992, limitMB: 8_192))
+        XCTAssertFalse(LauncherEndTrigger.endsGameSocialClub(sinceSignInS: 150, footprintMB: 6_991, limitMB: 8_192))
+        XCTAssertFalse(LauncherEndTrigger.endsGameSocialClub(sinceSignInS: 150, footprintMB: 9_000, limitMB: nil))
+    }
+
     func testNoReportedLimitNeverEndsItForMemory() {
         XCTAssertNil(LauncherEndTrigger.check(signedIn: false, footprintMB: 9_000, limitMB: nil))
         XCTAssertFalse(LauncherEndTrigger.near(footprintMB: 9_000, limitMB: nil))
