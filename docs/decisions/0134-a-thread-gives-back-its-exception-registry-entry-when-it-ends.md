@@ -38,8 +38,8 @@
   send rights (ml401), so a new thread never carries an ended thread's name.
 - **The trampoline page holds 1,024 slots**: the reserved page is 0x4000 bytes of 16-byte slots.
   Slot 0, the first thread's and every overflow's, is never given back.
-- **The registry stays at 512 entries.** The run's peak of live threads was about 162, counting
-  the parked ones.
+- **The registry stays at 512 entries.** With the give-back, the phone runs had at most 284 entries
+  live at once.
 - **Logging.** Each give-back logs `[thread-slots] port=… ended|parked: idx=… tramp=… live=N`, and
   each registration line ends with `live=N`.
 - **Where.** madeira-unix 0173, `pp_thread_slots.h`, `tools/tests/test_thread_slots.py`.
@@ -52,3 +52,13 @@
   reports, the pump sampler) no longer see ended or parked threads. A thread that ends holding a FEX lock is
   still named by `[exit-hold]`.
 - **The FULL path stays.** With more than 512 live threads the old fallback still applies.
+
+## What the runs showed
+
+On IPA `82b9cd29` ([evidence](../evidence/2026-10-20-rdr2-thread-registry.md), section 3):
+- **Hollow Knight's check passed.**
+- **Three RDR2 Story runs passed m10b's 512 registrations** (510–516), with no `FULL`. At most
+  284 entries were live at once, and freed entries were reused (the highest index stayed at that
+  count).
+- **None ended with RDR2's 0xc0000005.** All three ended at the 8,192 MB memory limit, one after
+  2.5 min of gameplay in which Arthur walked under the left stick.
