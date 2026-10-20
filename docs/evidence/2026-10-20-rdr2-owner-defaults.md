@@ -88,9 +88,25 @@ sign-in, +101.9 to +128.0 s). Run directories `.work/ui-runs/20261020T*-rdr2-<ru
 - **Against s6** (IPA 62cea69c, 14 min of Story) at the Story press +60 s, o1 is 1,062 MB higher
   (6,249 against 5,187 MB): internal +695, compressed +480, graphics +362 MB; the donor pool's live
   memory is about the same (2,634 against 2,428 MB). Named: the runtime's FEX memory resident and
-  compressed +328 MB (367 against 39; already in f2 on 0fec3324 at +9 s, so before today's defaults),
-  RDR2.exe private +200 MB, the game's own device memory +218 MiB (`[kk-mem] memory=` 1,246 against
-  1,028) with KosmicKrisp's Metal memory +225 MiB, host malloc +76 MB.
+  compressed +328 MB (367 against 39), RDR2.exe private +200 MB, the game's own device memory
+  +218 MiB (`[kk-mem] memory=` 1,246 against 1,028) with KosmicKrisp's Metal memory +225 MiB, host
+  malloc +76 MB.
+- **Correction (host log analysis, PLA-413).** The +328 MB of runtime FEX memory is not a change
+  between the IPAs; it is a per-run race. It depends on how the launcher's two `--type=renderer`
+  SocialClubHelper.exe processes end, about 25 s after they start:
+  - when the launcher's browser terminates them first (`[proc-end] … killed … emptied=592 MB`),
+    0127/0132 empty their FEX band: s6 (39 MB) and r2 (37 MB);
+  - when a renderer ends itself (`NtTerminateProcess(handle=0xffffffffffffffff, exit_code=0x0)`),
+    madeira-unix 0154 keeps its band (`[view-owner] … exited: freed 270 views (3056 MB), kept 559
+    (680 MB)`): its other threads never pass FEX's ThreadTerm. That is 12 of the 14 RDR2 runs that
+    day, on every IPA: f2, f3, o1–o4, b1, w1, w2, w2b and the owner's arms (365–396 MB where
+    measured), and s5 (175 MB, one renderer each way).
+
+  f2 ran IPA `7cd89034` (built on c86f4fa, committed as a8c9d59), not `0fec3324`: its `events.jsonl`
+  has that `ipa_sha256`. The RDR2.exe private +200 MB and device memory +218 MiB at +60 s are load
+  progress: o1's load ran about 40 s ahead of s6's, and at matched stages the plateaus agree (RDR2
+  private resident+compressed 2,750–2,876 MB, device memory 1,658–1,722 MiB in s5, s6, f3, o1, o4
+  and r2). madeira-unix 0203 (decision 0143) releases a self-exited child's band as a killed one's.
 - `[fastsync] desync` 0 and `[kk-compile] FAIL` 0 in every run.
 
 ## The white beard
