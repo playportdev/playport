@@ -57,3 +57,4 @@
 0060-kk-drop-a-SPIR-V-unroll-hint-from-a-loop-that-would-.patch
 0061-kk-MESA_KK_DUMP_MSL_MIN_KB-dumps-large-pipelines-MSL.patch
 0062-kk-skip-a-Metal-build-whose-MSL-was-interrupted-twic.patch
+0063-kk-MESA_KK_FRAME_PROBE_S-logs-draws-and-scans-for-pr.patch

@@ -1,0 +1,374 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 20 Oct 2026 14:14:26 +0200
+Subject: [PATCH] win32u: log the display values each process is given (dev)
+
+Red Dead Redemption 2 draws its 3D world stretched about 3.5 times
+horizontally on the phone (PLA-364): its camera projects with an aspect
+of about 0.507 where the desktop's is 1.778, while the HUD, the window
+and the swap chain are 16:9. Nothing showed which display values the
+game reads.
+
+With MADEIRA_DISPLAY_QUERY_LOG=1 in the environment, win32u logs, as
+"[disp-q] pid=XXXX" lines, each distinct answer a process gets from
+GetSystemMetrics(ForDpi), GetMonitorInfo, the primary monitor and
+virtual screen rectangles, EnumDisplaySettings, EnumDisplayDevices,
+GetDisplayConfigBufferSizes, QueryDisplayConfig (its paths and modes),
+DisplayConfigGetDeviceInfo and the display DC's GetDeviceCaps. A line
+repeated with the same answer is not written again; at most 2048 lines
+in all (display_query_log.h). Without the variable it costs one getenv.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-10-20-rdr2-aspect.md
+Offered-upstream: no
+---
+ build/win32u-unix/display_query_log.h |  65 +++++++++++
+ build/win32u-unix/driver_ios.c        |  12 +-
+ build/win32u-unix/sysparams_ios.c     | 156 ++++++++++++++++++++++++--
+ 3 files changed, 220 insertions(+), 13 deletions(-)
+ create mode 100644 build/win32u-unix/display_query_log.h
+
+diff --git a/build/win32u-unix/display_query_log.h b/build/win32u-unix/display_query_log.h
+new file mode 100644
+index 0000000..59e5f3d
+--- /dev/null
++++ b/build/win32u-unix/display_query_log.h
+@@ -0,0 +1,65 @@
++/* Playport (PLA-364): a dev log of the display values each process is given.
++ *
++ * With MADEIRA_DISPLAY_QUERY_LOG=1 in the environment, each distinct line,
++ * process id and answer included, is written once to stderr as
++ * "[disp-q] pid=XXXX ...": a game that asks for the same metric every frame
++ * logs it once, and again only when the answer changes. At most 2048 distinct
++ * lines are written in all. Off (one getenv) when the variable is unset. */
++#ifndef PLAYPORT_DISPLAY_QUERY_LOG_H
++#define PLAYPORT_DISPLAY_QUERY_LOG_H
++
++#include <stdarg.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++
++#define DISPLAY_QUERY_LOG_LINES 2048
++
++static int display_query_log_on(void)
++{
++    static int on = -1;
++    if (on < 0)
++    {
++        const char *e = getenv( "MADEIRA_DISPLAY_QUERY_LOG" );
++        on = e && *e && *e != '0';
++    }
++    return on;
++}
++
++static void __attribute__((format(printf, 1, 2))) display_query_log( const char *fmt, ... )
++{
++    static unsigned long long seen[DISPLAY_QUERY_LOG_LINES * 2];
++    char line[512];
++    unsigned long long hash = 1469598103934665603ull;
++    unsigned int pid = HandleToULong( NtCurrentTeb()->ClientId.UniqueProcess ), i, slot;
++    int n;
++    va_list args;
++
++    if (!display_query_log_on()) return;
++    n = snprintf( line, sizeof(line), "[disp-q] pid=%04x ", pid );
++    va_start( args, fmt );
++    vsnprintf( line + n, sizeof(line) - n, fmt, args );
++    va_end( args );
++    for (i = 0; line[i]; i++) hash = (hash ^ (unsigned char)line[i]) * 1099511628211ull;
++    if (!hash) hash = 1;
++    slot = (unsigned int)(hash % (DISPLAY_QUERY_LOG_LINES * 2));
++    for (i = 0; i < DISPLAY_QUERY_LOG_LINES * 2; i++, slot = (slot + 1) % (DISPLAY_QUERY_LOG_LINES * 2))
++    {
++        unsigned long long cur = __atomic_load_n( &seen[slot], __ATOMIC_RELAXED );
++        if (cur == hash) return;
++        if (cur) continue;
++        if (__atomic_compare_exchange_n( &seen[slot], &cur, hash, 0, __ATOMIC_RELAXED, __ATOMIC_RELAXED )) break;
++        if (cur == hash) return;
++    }
++    if (i == DISPLAY_QUERY_LOG_LINES * 2) return;
++    {
++        static int written;
++        if (__atomic_add_fetch( &written, 1, __ATOMIC_RELAXED ) > DISPLAY_QUERY_LOG_LINES) return;
++    }
++    n = strlen( line );
++    if (n && line[n - 1] != '\n' && n < (int)sizeof(line) - 1) { line[n++] = '\n'; line[n] = 0; }
++    write( 2, line, n );
++}
++
++#endif
+diff --git a/build/win32u-unix/driver_ios.c b/build/win32u-unix/driver_ios.c
+index d6d93e5..2d40113 100644
+--- a/build/win32u-unix/driver_ios.c
++++ b/build/win32u-unix/driver_ios.c
+@@ -32,6 +32,7 @@
+ #include "wine/winbase16.h"
+ #include "wine/list.h"
+ #include "wine/debug.h"
++#include "display_query_log.h"
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(driver);
+ WINE_DECLARE_DEBUG_CHANNEL(winediag);
+@@ -663,7 +664,7 @@ static BOOL nulldrv_GetCharWidthInfo( PHYSDEV dev, void *info )
+     return FALSE;
+ }
+ 
+-static INT nulldrv_GetDeviceCaps( PHYSDEV dev, INT cap )
++static INT nulldrv_GetDeviceCaps_unlogged( PHYSDEV dev, INT cap )
+ {
+     int bpp;
+ 
+@@ -806,6 +807,15 @@ static INT nulldrv_GetDeviceCaps( PHYSDEV dev, INT cap )
+     }
+ }
+ 
++/* Playport (PLA-364): GetDeviceCaps' answers in the display query log
++ * (display_query_log.h), once per process, capability and value. */
++static INT nulldrv_GetDeviceCaps( PHYSDEV dev, INT cap )
++{
++    INT value = nulldrv_GetDeviceCaps_unlogged( dev, cap );
++    display_query_log( "GetDeviceCaps %d -> %d", cap, value );
++    return value;
++}
++
+ static UINT nulldrv_GetDeviceGammaRamp( PHYSDEV dev, void *ramp )
+ {
+     return -1; /* use default implementation */
+diff --git a/build/win32u-unix/sysparams_ios.c b/build/win32u-unix/sysparams_ios.c
+index 4ef8041..1a04f05 100644
+--- a/build/win32u-unix/sysparams_ios.c
++++ b/build/win32u-unix/sysparams_ios.c
+@@ -37,6 +37,22 @@
+ #include "d3dkmdt.h"
+ #include "wine/wingdi16.h"
+ #include "wine/server.h"
++#include "display_query_log.h"
++
++/* Playport (PLA-364): GetMonitorInfo's answer for the display query log. */
++static void display_query_log_monitor_info( HMONITOR handle, const MONITORINFO *info, BOOL got )
++{
++    if (!display_query_log_on()) return;
++    if (!got || !info)
++    {
++        display_query_log( "GetMonitorInfo %p -> FALSE", handle );
++        return;
++    }
++    display_query_log( "GetMonitorInfo %p cb=%u -> monitor %s work %s flags %#x device %s", handle,
++                       (UINT)info->cbSize, wine_dbgstr_rect( &info->rcMonitor ), wine_dbgstr_rect( &info->rcWork ),
++                       (UINT)info->dwFlags, info->cbSize >= sizeof(MONITORINFOEXW)
++                       ? debugstr_w( ((const MONITORINFOEXW *)info)->szDevice ) : "-" );
++}
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(system);
+ 
+@@ -3596,8 +3612,8 @@ RECT get_primary_monitor_rect( struct ratio dpi )
+ /**********************************************************************
+  *           NtUserGetDisplayConfigBufferSizes    (win32u.@)
+  */
+-LONG WINAPI NtUserGetDisplayConfigBufferSizes( UINT32 flags, UINT32 *num_path_info,
+-                                               UINT32 *num_mode_info )
++static LONG get_display_config_buffer_sizes_unlogged( UINT32 flags, UINT32 *num_path_info,
++                                                      UINT32 *num_mode_info )
+ {
+     struct monitor *monitor;
+     UINT32 count = 0;
+@@ -3801,9 +3817,9 @@ static BOOL source_mode_exists( const DISPLAYCONFIG_MODE_INFO *modes, UINT32 mod
+ /***********************************************************************
+  *              NtUserQueryDisplayConfig (win32u.@)
+  */
+-LONG WINAPI NtUserQueryDisplayConfig( UINT32 flags, UINT32 *paths_count, DISPLAYCONFIG_PATH_INFO *paths,
+-                                      UINT32 *modes_count, DISPLAYCONFIG_MODE_INFO *modes,
+-                                      DISPLAYCONFIG_TOPOLOGY_ID *topology_id )
++static LONG query_display_config_unlogged( UINT32 flags, UINT32 *paths_count, DISPLAYCONFIG_PATH_INFO *paths,
++                                           UINT32 *modes_count, DISPLAYCONFIG_MODE_INFO *modes,
++                                           DISPLAYCONFIG_TOPOLOGY_ID *topology_id )
+ {
+     ULONG source_index;
+     LONG ret;
+@@ -4242,8 +4258,8 @@ static NTSTATUS d3dkmt_open_adapter_from_gdi_display_name( D3DKMT_OPENADAPTERFRO
+ /***********************************************************************
+  *	     NtUserEnumDisplayDevices    (win32u.@)
+  */
+-NTSTATUS WINAPI NtUserEnumDisplayDevices( UNICODE_STRING *device, DWORD index,
+-                                          DISPLAY_DEVICEW *info, DWORD flags )
++static NTSTATUS enum_display_devices_unlogged( UNICODE_STRING *device, DWORD index,
++                                               DISPLAY_DEVICEW *info, DWORD flags )
+ {
+     struct monitor *monitor = NULL;
+     struct source *source = NULL;
+@@ -5094,7 +5110,7 @@ static BOOL source_enum_display_settings( const struct source *source, UINT inde
+ /***********************************************************************
+  *	     NtUserEnumDisplaySettings    (win32u.@)
+  */
+-BOOL WINAPI NtUserEnumDisplaySettings( UNICODE_STRING *device, DWORD index, DEVMODEW *devmode, DWORD flags )
++static BOOL enum_display_settings_unlogged( UNICODE_STRING *device, DWORD index, DEVMODEW *devmode, DWORD flags )
+ {
+     static const WCHAR wine_display_driverW[] = {'W','i','n','e',' ','D','i','s','p','l','a','y',' ','D','r','i','v','e','r',0};
+     struct source *source;
+@@ -8222,6 +8238,7 @@ ULONG_PTR WINAPI NtUserCallOneParam( ULONG_PTR arg, ULONG code )
+ 
+     case NtUserCallOneParam_GetPrimaryMonitorRect:
+         *(RECT *)arg = get_primary_monitor_rect( no_dpi );
++        display_query_log( "GetPrimaryMonitorRect -> %s", wine_dbgstr_rect( (RECT *)arg ) );
+         return 1;
+ 
+     case NtUserCallOneParam_GetSysColorBrush:
+@@ -8231,7 +8248,11 @@ ULONG_PTR WINAPI NtUserCallOneParam( ULONG_PTR arg, ULONG code )
+         return HandleToUlong( get_sys_color_pen(arg) );
+ 
+     case NtUserCallOneParam_GetSystemMetrics:
+-        return get_system_metrics( arg );
++    {
++        int metric = get_system_metrics( arg );
++        display_query_log( "GetSystemMetrics %d -> %d", (int)arg, metric );
++        return metric;
++    }
+ 
+     case NtUserCallOneParam_SetKeyboardAutoRepeat:
+         return set_keyboard_auto_repeat( arg );
+@@ -8276,10 +8297,18 @@ ULONG_PTR WINAPI NtUserCallTwoParam( ULONG_PTR arg1, ULONG_PTR arg2, ULONG code
+         return get_menu_info( UlongToHandle(arg1), (MENUINFO *)arg2 );
+ 
+     case NtUserCallTwoParam_GetMonitorInfo:
+-        return get_monitor_info( UlongToHandle(arg1), (MONITORINFO *)arg2, get_thread_dpi() );
++    {
++        BOOL got = get_monitor_info( UlongToHandle(arg1), (MONITORINFO *)arg2, get_thread_dpi() );
++        display_query_log_monitor_info( UlongToHandle(arg1), (MONITORINFO *)arg2, got );
++        return got;
++    }
+ 
+     case NtUserCallTwoParam_GetSystemMetricsForDpi:
+-        return get_system_metrics_for_dpi( arg1, arg2 );
++    {
++        int metric = get_system_metrics_for_dpi( arg1, arg2 );
++        display_query_log( "GetSystemMetricsForDpi %d dpi=%u -> %d", (int)arg1, (UINT)arg2, metric );
++        return metric;
++    }
+ 
+     case NtUserCallTwoParam_MonitorFromRect:
+         return HandleToUlong( monitor_from_rect( (const RECT *)arg1, arg2, get_thread_dpi() ));
+@@ -8298,6 +8327,7 @@ ULONG_PTR WINAPI NtUserCallTwoParam( ULONG_PTR arg1, ULONG_PTR arg2, ULONG code
+ 
+     case NtUserCallTwoParam_GetVirtualScreenRect:
+         *(RECT *)arg1 = get_virtual_screen_rect( no_dpi, arg2 );
++        display_query_log( "GetVirtualScreenRect -> %s", wine_dbgstr_rect( (RECT *)arg1 ) );
+         return 1;
+ 
+     /* Madeira/iOS (ml668): the host gamepad slot. Body in
+@@ -8324,7 +8354,7 @@ ULONG_PTR WINAPI NtUserCallTwoParam( ULONG_PTR arg1, ULONG_PTR arg2, ULONG code
+ /***********************************************************************
+  *           NtUserDisplayConfigGetDeviceInfo    (win32u.@)
+  */
+-NTSTATUS WINAPI NtUserDisplayConfigGetDeviceInfo( DISPLAYCONFIG_DEVICE_INFO_HEADER *packet )
++static NTSTATUS display_config_get_device_info_unlogged( DISPLAYCONFIG_DEVICE_INFO_HEADER *packet )
+ {
+     NTSTATUS ret = STATUS_UNSUCCESSFUL;
+     char buffer[CCHDEVICENAME];
+@@ -8778,3 +8808,105 @@ BOOL get_gpu_info_from_uuid( const GUID *uuid, LUID *luid, UINT32 *node_mask, ch
+     unlock_display_devices();
+     return found;
+ }
++
++/* Playport (PLA-364): the display queries, each answer logged once per
++ * process when MADEIRA_DISPLAY_QUERY_LOG is set (display_query_log.h). */
++LONG WINAPI NtUserGetDisplayConfigBufferSizes( UINT32 flags, UINT32 *num_path_info,
++                                               UINT32 *num_mode_info )
++{
++    LONG ret = get_display_config_buffer_sizes_unlogged( flags, num_path_info, num_mode_info );
++    display_query_log( "GetDisplayConfigBufferSizes flags=%#x -> %d paths=%d modes=%d", flags, (int)ret,
++                       num_path_info && !ret ? (int)*num_path_info : -1,
++                       num_mode_info && !ret ? (int)*num_mode_info : -1 );
++    return ret;
++}
++
++LONG WINAPI NtUserQueryDisplayConfig( UINT32 flags, UINT32 *paths_count, DISPLAYCONFIG_PATH_INFO *paths,
++                                      UINT32 *modes_count, DISPLAYCONFIG_MODE_INFO *modes,
++                                      DISPLAYCONFIG_TOPOLOGY_ID *topology_id )
++{
++    int paths_in = paths_count ? (int)*paths_count : -1, modes_in = modes_count ? (int)*modes_count : -1;
++    LONG ret = query_display_config_unlogged( flags, paths_count, paths, modes_count, modes, topology_id );
++    UINT32 i;
++
++    if (!display_query_log_on()) return ret;
++    display_query_log( "QueryDisplayConfig flags=%#x in paths=%d modes=%d -> %d paths=%d modes=%d", flags,
++                       paths_in, modes_in, (int)ret, paths_count ? (int)*paths_count : -1,
++                       modes_count ? (int)*modes_count : -1 );
++    if (ret) return ret;
++    for (i = 0; paths && i < *paths_count; i++)
++        display_query_log( "QueryDisplayConfig path %u flags=%#x source id=%u mode=%u target id=%u mode=%u "
++                           "rotation=%u scaling=%u active=%d", i, (UINT)paths[i].flags,
++                           paths[i].sourceInfo.id, paths[i].sourceInfo.modeInfoIdx, paths[i].targetInfo.id,
++                           paths[i].targetInfo.modeInfoIdx, (UINT)paths[i].targetInfo.rotation,
++                           (UINT)paths[i].targetInfo.scaling, (int)paths[i].targetInfo.targetAvailable );
++    for (i = 0; modes && i < *modes_count; i++)
++    {
++        const DISPLAYCONFIG_MODE_INFO *m = &modes[i];
++        if (m->infoType == DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE)
++            display_query_log( "QueryDisplayConfig mode %u source id=%u %ux%u at %d,%d", i, m->id,
++                               m->sourceMode.width, m->sourceMode.height, (int)m->sourceMode.position.x,
++                               (int)m->sourceMode.position.y );
++        else if (m->infoType == DISPLAYCONFIG_MODE_INFO_TYPE_TARGET)
++            display_query_log( "QueryDisplayConfig mode %u target id=%u active %ux%u total %ux%u", i, m->id,
++                               m->targetMode.targetVideoSignalInfo.activeSize.cx,
++                               m->targetMode.targetVideoSignalInfo.activeSize.cy,
++                               m->targetMode.targetVideoSignalInfo.totalSize.cx,
++                               m->targetMode.targetVideoSignalInfo.totalSize.cy );
++        else
++            display_query_log( "QueryDisplayConfig mode %u type=%u id=%u", i, (UINT)m->infoType, m->id );
++    }
++    return ret;
++}
++
++NTSTATUS WINAPI NtUserDisplayConfigGetDeviceInfo( DISPLAYCONFIG_DEVICE_INFO_HEADER *packet )
++{
++    NTSTATUS ret = display_config_get_device_info_unlogged( packet );
++
++    if (!display_query_log_on() || !packet) return ret;
++    if (!ret && packet->type == DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_PREFERRED_MODE)
++    {
++        const DISPLAYCONFIG_TARGET_PREFERRED_MODE *mode = (const DISPLAYCONFIG_TARGET_PREFERRED_MODE *)packet;
++        display_query_log( "DisplayConfigGetDeviceInfo type=%d id=%u -> %#x preferred %ux%u active %ux%u",
++                           (int)packet->type, packet->id, (UINT)ret, mode->width, mode->height,
++                           mode->targetMode.targetVideoSignalInfo.activeSize.cx,
++                           mode->targetMode.targetVideoSignalInfo.activeSize.cy );
++    }
++    else
++        display_query_log( "DisplayConfigGetDeviceInfo type=%d size=%u id=%u -> %#x", (int)packet->type,
++                           packet->size, packet->id, (UINT)ret );
++    return ret;
++}
++
++NTSTATUS WINAPI NtUserEnumDisplayDevices( UNICODE_STRING *device, DWORD index,
++                                          DISPLAY_DEVICEW *info, DWORD flags )
++{
++    NTSTATUS ret = enum_display_devices_unlogged( device, index, info, flags );
++
++    if (!display_query_log_on()) return ret;
++    if (ret || !info)
++        display_query_log( "EnumDisplayDevices dev=%s idx=%u flags=%#x -> %#x", debugstr_us( device ),
++                           (UINT)index, (UINT)flags, (UINT)ret );
++    else
++        display_query_log( "EnumDisplayDevices dev=%s idx=%u flags=%#x -> name %s string %s state %#x",
++                           debugstr_us( device ), (UINT)index, (UINT)flags, debugstr_w( info->DeviceName ),
++                           debugstr_w( info->DeviceString ), (UINT)info->StateFlags );
++    return ret;
++}
++
++BOOL WINAPI NtUserEnumDisplaySettings( UNICODE_STRING *device, DWORD index, DEVMODEW *devmode, DWORD flags )
++{
++    BOOL ret = enum_display_settings_unlogged( device, index, devmode, flags );
++
++    if (!display_query_log_on()) return ret;
++    if (!ret || !devmode)
++        display_query_log( "EnumDisplaySettings dev=%s idx=%d flags=%#x -> FALSE", debugstr_us( device ),
++                           (int)index, (UINT)flags );
++    else
++        display_query_log( "EnumDisplaySettings dev=%s idx=%d flags=%#x -> %ux%u bpp=%u hz=%u orientation=%u "
++                           "at %d,%d fields=%#x", debugstr_us( device ), (int)index, (UINT)flags,
++                           (UINT)devmode->dmPelsWidth, (UINT)devmode->dmPelsHeight, (UINT)devmode->dmBitsPerPel,
++                           (UINT)devmode->dmDisplayFrequency, (UINT)devmode->dmDisplayOrientation,
++                           (int)devmode->dmPosition.x, (int)devmode->dmPosition.y, (UINT)devmode->dmFields );
++    return ret;
++}

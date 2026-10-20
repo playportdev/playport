@@ -42,3 +42,4 @@
 0041-ntdll-keep-an-IOKit-string-s-terminator-inside-its-b.patch
 0042-ntdll-log-a-process-s-first-firmware-table-queries-a.patch
 0043-ntdll-build-Apple-silicon-s-processor-topology-from-.patch
+0044-win32u-log-a-Vulkan-surface-s-driver-and-given-exten.patch

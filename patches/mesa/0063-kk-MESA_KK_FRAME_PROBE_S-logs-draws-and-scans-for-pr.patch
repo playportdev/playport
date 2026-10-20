@@ -1,0 +1,305 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 20 Oct 2026 14:14:26 +0200
+Subject: [PATCH] kk: MESA_KK_FRAME_PROBE_S logs draws and scans for
+ projections
+
+Red Dead Redemption 2's 3D world is drawn stretched about 3.5 times
+horizontally on the phone (PLA-364). Whether its G-buffer viewport or
+its camera's projection is wrong decides where to look, and the draw
+log (MESA_KK_DEBUG=draws) spends its 400 lines on the launcher long
+before the game draws a world.
+
+With MESA_KK_FRAME_PROBE_S=N, every N seconds after the process's first
+draw, ten times at most, a probe logs the state of the next 2500 draws
+as [kk-draw] lines (render area, attachment, viewport, scissor), and a
+thread of its own scans every live host-visible allocation, under the
+debug registry's lock, for perspective view-projection matrices: at
+each 16-byte offset, row- or column-major, rows 0, 1 and 3 of the xyz
+part orthogonal and |row 3| = 1. The most frequent |row 0|, |row 1|
+pairs, P00 and P11, are logged as [kk-proj] lines with P11/P00, the
+aspect the game projected with. Allocations are registered for this
+as for the draw log. 0, the default, does neither.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-10-20-rdr2-aspect.md
+Offered-upstream: no
+---
+ src/kosmickrisp/vulkan/kk_cmd_draw.c      |  40 +++++++-
+ src/kosmickrisp/vulkan/kk_debug.c         |   3 +
+ src/kosmickrisp/vulkan/kk_debug.h         |   7 ++
+ src/kosmickrisp/vulkan/kk_device_memory.c | 117 +++++++++++++++++++++-
+ src/kosmickrisp/vulkan/kk_device_memory.h |   5 +
+ 5 files changed, 165 insertions(+), 7 deletions(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_draw.c b/src/kosmickrisp/vulkan/kk_cmd_draw.c
+index 47eeab0..f08f72f 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_draw.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_draw.c
+@@ -30,6 +30,7 @@
+ #include "kk_debug.h"
+ #include "kk_device_memory.h"
+ #include "util/u_atomic.h"
++#include "util/os_time.h"
+ #include "util/format/u_format.h"
+ #include <stdio.h>
+ 
+@@ -2380,11 +2381,39 @@ build_draw_data(struct kk_cmd_buffer *cmd, struct kk_draw_command *data,
+    return draw;
+ }
+ 
++/* MESA_KK_FRAME_PROBE_S: whether this draw is in a probe's window; starts a
++ * probe (its projection scan and a window of 2500 draws) when one is due. */
++static bool
++kk_frame_probe_draw(void)
++{
++   static int64_t start_ns = 0;
++   static uint32_t probes = 0u;
++   static int32_t window = 0;
++   int64_t now = os_time_get_nano();
++   int64_t start = p_atomic_read(&start_ns);
++
++   if (!start) {
++      p_atomic_cmpxchg(&start_ns, 0, now);
++      start = p_atomic_read(&start_ns);
++   }
++   uint32_t done = p_atomic_read(&probes);
++   if (done < 10u &&
++       now - start >= (int64_t)(done + 1u) * kk_frame_probe_s * 1000000000ll &&
++       p_atomic_cmpxchg(&probes, done, done + 1u) == done) {
++      fprintf(stderr, "[kk-proj] probe=%u at %llds: the next 2500 draws follow\n",
++              done + 1u, (long long)((now - start) / 1000000000ll));
++      p_atomic_set(&window, 2500);
++      kk_debug_scan_projections(done + 1u);
++   }
++   return p_atomic_read(&window) > 0 && p_atomic_dec_return(&window) >= 0;
++}
++
+ static void
+-kk_debug_log_draw(struct kk_cmd_buffer *cmd, const struct kk_draw_command *data)
++kk_debug_log_draw(struct kk_cmd_buffer *cmd, const struct kk_draw_command *data,
++                  bool probe)
+ {
+    static uint32_t logged = 0u;
+-   if (p_atomic_inc_return(&logged) > 400u)
++   if (!probe && p_atomic_inc_return(&logged) > 400u)
+       return;
+    const struct vk_dynamic_graphics_state *dyn = &cmd->vk.dynamic_graphics_state;
+    const struct kk_rendering_state *r = &cmd->state.gfx.render;
+@@ -2470,10 +2499,11 @@ kk_draw(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
+    struct vk_dynamic_graphics_state *dyn = &cmd->vk.dynamic_graphics_state;
+ 
+    kk_flush_gfx_state(cmd);
+-   if (KK_DEBUG(DRAWS)) {
+-      kk_debug_log_draw(cmd, data);
++   bool probe = kk_frame_probe_s > 0 && kk_frame_probe_draw();
++   if (KK_DEBUG(DRAWS) || probe)
++      kk_debug_log_draw(cmd, data, probe);
++   if (KK_DEBUG(DRAWS))
+       kk_debug_log_vertices(cmd, data);
+-   }
+ 
+    data->restart = dyn->ia.primitive_restart_enable;
+    data->restart_index = dyn->ia.primitive_restart_index;
+diff --git a/src/kosmickrisp/vulkan/kk_debug.c b/src/kosmickrisp/vulkan/kk_debug.c
+index eedb5ad..588831e 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.c
++++ b/src/kosmickrisp/vulkan/kk_debug.c
+@@ -29,6 +29,8 @@ enum kk_experimental kk_mesa_experimental_flags = 0;
+ 
+ int kk_dump_msl_min_kb = -1;
+ 
++int kk_frame_probe_s = 0;
++
+ const struct debug_named_value experimental_flags[] = {
+    {"all", UINT64_MAX},
+    {"custom_border", KK_EXPERIMENTAL_CUSTOM_BORDER},
+@@ -49,4 +51,5 @@ kk_process_debug_variable(void)
+    kk_mesa_debug_flags = debug_get_option_mesa_kk_debug();
+    kk_mesa_experimental_flags = debug_get_option_mesa_kk_experimental();
+    kk_dump_msl_min_kb = debug_get_num_option("MESA_KK_DUMP_MSL_MIN_KB", -1);
++   kk_frame_probe_s = debug_get_num_option("MESA_KK_FRAME_PROBE_S", 0);
+ }
+diff --git a/src/kosmickrisp/vulkan/kk_debug.h b/src/kosmickrisp/vulkan/kk_debug.h
+index f046505..f17caed 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.h
++++ b/src/kosmickrisp/vulkan/kk_debug.h
+@@ -78,6 +78,13 @@ extern enum kk_experimental kk_mesa_experimental_flags;
+  * default, dumps nothing */
+ extern int kk_dump_msl_min_kb;
+ 
++/* MESA_KK_FRAME_PROBE_S: every this many seconds after the process's first
++ * draw, ten times at most, log the state of the next 2500 draws ([kk-draw])
++ * and scan the host-visible device memory for perspective view-projection
++ * matrices ([kk-proj], kk_debug_scan_projections); 0, the default, does
++ * neither */
++extern int kk_frame_probe_s;
++
+ extern void kk_process_debug_variable(void);
+ 
+ #endif /* KK_DEBUG_H */
+diff --git a/src/kosmickrisp/vulkan/kk_device_memory.c b/src/kosmickrisp/vulkan/kk_device_memory.c
+index 2415298..fe35738 100644
+--- a/src/kosmickrisp/vulkan/kk_device_memory.c
++++ b/src/kosmickrisp/vulkan/kk_device_memory.c
+@@ -22,6 +22,9 @@
+ #include "util/u_memory.h"
+ 
+ #include <inttypes.h>
++#include <math.h>
++#include <stdlib.h>
++#include "util/os_time.h"
+ #include <sys/mman.h>
+ #include <pthread.h>
+ 
+@@ -155,7 +158,7 @@ kk_AllocateMemory(VkDevice device, const VkMemoryAllocateInfo *pAllocateInfo,
+       kk_bo_set_kind(mem->bo, KK_BO_KIND_DEVICE_MEMORY);
+    }
+ 
+-   if (KK_DEBUG(DRAWS))
++   if (KK_DEBUG(DRAWS) || kk_frame_probe_s > 0)
+       kk_debug_record_memory(dev, mem->bo);
+ 
+    *pMem = kk_device_memory_to_handle(mem);
+@@ -218,6 +221,116 @@ kk_debug_read_gpu(struct kk_device *dev, uint64_t gpu, void *dst, size_t size)
+    return found;
+ }
+ 
++/* A view-projection VP = P * V, with V a rigid view transform: the xyz parts
++ * of VP's rows 0, 1 and 3 are orthogonal, |row 3| = 1, |row 0| = P00 and
++ * |row 1| = P11, so P11 / P00 is the aspect the game projected with. Both
++ * row- and column-major layouts are tried, at every 16-byte offset. */
++struct kk_proj_hit {
++   int32_t p00, p11; /* times 10000 */
++   uint32_t count;
++};
++
++static float
++kk_proj_dot(const float *a, const float *b)
++{
++   return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
++}
++
++static void
++kk_proj_check(const float *m, struct kk_proj_hit *hits, uint32_t *hit_count,
++              uint32_t *dropped)
++{
++   for (int column_major = 0; column_major < 2; column_major++) {
++      float r[4][3];
++      for (int i = 0; i < 4; i++)
++         for (int c = 0; c < 3; c++)
++            r[i][c] = column_major ? m[c * 4 + i] : m[i * 4 + c];
++      float n3 = kk_proj_dot(r[3], r[3]);
++      if (!(fabsf(n3 - 1.0f) < 4e-3f))
++         continue;
++      float n0 = sqrtf(kk_proj_dot(r[0], r[0]));
++      float n1 = sqrtf(kk_proj_dot(r[1], r[1]));
++      if (!(n0 > 0.1f && n0 < 20.0f && n1 > 0.1f && n1 < 20.0f))
++         continue;
++      if (fabsf(n0 - 1.0f) < 1e-3f && fabsf(n1 - 1.0f) < 1e-3f)
++         continue; /* a rigid transform, not a projection */
++      if (fabsf(kk_proj_dot(r[0], r[1])) > 2e-3f * n0 * n1 ||
++          fabsf(kk_proj_dot(r[0], r[3])) > 2e-3f * n0 ||
++          fabsf(kk_proj_dot(r[1], r[3])) > 2e-3f * n1)
++         continue;
++      int32_t p00 = (int32_t)lroundf(n0 * 10000.0f);
++      int32_t p11 = (int32_t)lroundf(n1 * 10000.0f);
++      uint32_t i;
++      for (i = 0; i < *hit_count; i++)
++         if (hits[i].p00 == p00 && hits[i].p11 == p11)
++            break;
++      if (i < *hit_count)
++         hits[i].count++;
++      else if (*hit_count < 256)
++         hits[(*hit_count)++] = (struct kk_proj_hit){p00, p11, 1u};
++      else
++         (*dropped)++;
++   }
++}
++
++static int
++kk_proj_hit_order(const void *a, const void *b)
++{
++   const struct kk_proj_hit *x = a, *y = b;
++   return x->count < y->count ? 1 : x->count > y->count ? -1 : 0;
++}
++
++static void *
++kk_debug_scan_thread(void *arg)
++{
++   unsigned probe = (unsigned)(uintptr_t)arg;
++   struct kk_proj_hit *hits = calloc(256, sizeof(*hits));
++   uint32_t hit_count = 0u, dropped = 0u, bos = 0u;
++   uint64_t bytes = 0u;
++   int64_t start = os_time_get_nano();
++
++   if (!hits)
++      return NULL;
++   /* Under the registry lock: no allocation is freed while it is read. */
++   pthread_mutex_lock(&kk_debug_mem_lock);
++   for (uint32_t i = 0; i < ARRAY_SIZE(kk_debug_mem); i++) {
++      const struct kk_bo *bo = kk_debug_mem[i].bo;
++      if (!bo || !bo->cpu || bo->size_B < 64u)
++         continue;
++      const float *f = bo->cpu;
++      uint64_t floats = bo->size_B / 4u;
++      bos++;
++      bytes += bo->size_B;
++      for (uint64_t o = 0; o + 16u <= floats; o += 4u)
++         kk_proj_check(f + o, hits, &hit_count, &dropped);
++   }
++   pthread_mutex_unlock(&kk_debug_mem_lock);
++   qsort(hits, hit_count, sizeof(*hits), kk_proj_hit_order);
++   fprintf(stderr, "[kk-proj] probe=%u scanned %u allocations, %llu MB in %lld ms: "
++           "%u distinct pairs, %u not counted\n", probe, bos,
++           (unsigned long long)(bytes >> 20),
++           (long long)((os_time_get_nano() - start) / 1000000), hit_count, dropped);
++   for (uint32_t i = 0; i < hit_count && i < 24u; i++)
++      fprintf(stderr, "[kk-proj] probe=%u P00 %.4f P11 %.4f aspect %.4f hits %u\n", probe,
++              hits[i].p00 / 10000.0, hits[i].p11 / 10000.0,
++              hits[i].p00 ? (double)hits[i].p11 / hits[i].p00 : 0.0, hits[i].count);
++   free(hits);
++   return NULL;
++}
++
++void
++kk_debug_scan_projections(unsigned probe)
++{
++   pthread_t thread;
++   pthread_attr_t attr;
++
++   pthread_attr_init(&attr);
++   pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
++   if (pthread_create(&thread, &attr, kk_debug_scan_thread, (void *)(uintptr_t)probe))
++      fprintf(stderr, "[kk-proj] probe=%u: no scan thread\n", probe);
++   pthread_attr_destroy(&attr);
++}
++
+ VKAPI_ATTR void VKAPI_CALL
+ kk_FreeMemory(VkDevice device, VkDeviceMemory _mem,
+               const VkAllocationCallbacks *pAllocator)
+@@ -228,7 +341,7 @@ kk_FreeMemory(VkDevice device, VkDeviceMemory _mem,
+    if (!mem)
+       return;
+ 
+-   if (KK_DEBUG(DRAWS))
++   if (KK_DEBUG(DRAWS) || kk_frame_probe_s > 0)
+       kk_debug_forget_memory(dev, mem->bo);
+ 
+    /* According to spec, memory is implicitly unmapped upon free */
+diff --git a/src/kosmickrisp/vulkan/kk_device_memory.h b/src/kosmickrisp/vulkan/kk_device_memory.h
+index 30b07e9..6c1347e 100644
+--- a/src/kosmickrisp/vulkan/kk_device_memory.h
++++ b/src/kosmickrisp/vulkan/kk_device_memory.h
+@@ -29,6 +29,11 @@ VK_DEFINE_NONDISP_HANDLE_CASTS(kk_device_memory, vk.base, VkDeviceMemory,
+  * registry lock. The caller never retains a pointer to freed memory. */
+ bool kk_debug_read_gpu(struct kk_device *dev, uint64_t gpu, void *dst, size_t size);
+ 
++/* MESA_KK_FRAME_PROBE_S: on a thread of its own, scan every live host-visible
++ * allocation for perspective view-projection matrices and log the most
++ * frequent |row 0|, |row 1| pairs (P00, P11) as [kk-proj] lines. */
++void kk_debug_scan_projections(unsigned probe);
++
+ extern const VkExternalMemoryProperties kk_mtlheap_mem_props;
+ extern const VkExternalMemoryProperties kk_host_mem_props;
+ 

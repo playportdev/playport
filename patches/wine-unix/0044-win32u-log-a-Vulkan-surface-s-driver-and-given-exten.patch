@@ -1,0 +1,123 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 20 Oct 2026 14:14:26 +0200
+Subject: [PATCH] win32u: log a Vulkan surface's driver and given extents (dev)
+
+Red Dead Redemption 2's 3D world is drawn stretched about 3.5 times
+horizontally on the phone (PLA-364). KosmicKrisp reports its layer,
+2736x1260, as a surface's extents, and win32u replaces them with the
+window's client rectangle; nothing showed what a game was given.
+
+With MADEIRA_DISPLAY_QUERY_LOG=1 in the environment, each surface
+capabilities query logs, as "[vk-surf] pid=XXXX" lines, the driver's
+current, minimum and maximum extents and transform and the extents the
+game is given, when they differ from the last line (64 at most), and
+the first 16 vkGetPhysicalDeviceSurfaceCapabilities2KHR queries log the
+structures chained to them, with a present scaling structure's extents.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-10-20-rdr2-aspect.md
+Offered-upstream: no
+---
+ dlls/win32u/vulkan.c | 64 ++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 64 insertions(+)
+
+diff --git a/dlls/win32u/vulkan.c b/dlls/win32u/vulkan.c
+index c5af3a16c5b..5b9846d164f 100644
+--- a/dlls/win32u/vulkan.c
++++ b/dlls/win32u/vulkan.c
+@@ -26,6 +26,8 @@
+ 
+ #include <dlfcn.h>
+ #include <pthread.h>
++#include <stdio.h>
++#include <stdlib.h>
+ #include <unistd.h>
+ 
+ #include "ntstatus.h"
+@@ -1766,9 +1768,69 @@ static BOOL get_surface_rect( HWND hwnd, RECT *rect, struct ratio dpi )
+     return TRUE;
+ }
+ 
++/* Playport (PLA-364): with MADEIRA_DISPLAY_QUERY_LOG set, the surface extents the
++ * driver gave and the ones a game is given instead, logged when they change, at most
++ * 64 times; and the structures chained to a vkGetPhysicalDeviceSurfaceCapabilities2KHR
++ * query, the first 16 times. */
++static int surface_log_on(void)
++{
++    static int on = -1;
++    if (on < 0)
++    {
++        const char *e = getenv( "MADEIRA_DISPLAY_QUERY_LOG" );
++        on = e && *e && *e != '0';
++    }
++    return on;
++}
++
++static void log_surface_capabilities( struct surface *surface, const VkSurfaceCapabilitiesKHR *host,
++                                      const VkSurfaceCapabilitiesKHR *given )
++{
++    static char last[256];
++    static LONG lines;
++    char line[256];
++
++    if (!surface_log_on()) return;
++    snprintf( line, sizeof(line), "hwnd=%p driver cur %ux%u min %ux%u max %ux%u transform %#x -> given cur %ux%u "
++              "min %ux%u max %ux%u", surface->hwnd, host->currentExtent.width, host->currentExtent.height,
++              host->minImageExtent.width, host->minImageExtent.height, host->maxImageExtent.width,
++              host->maxImageExtent.height, host->currentTransform, given->currentExtent.width,
++              given->currentExtent.height, given->minImageExtent.width, given->minImageExtent.height,
++              given->maxImageExtent.width, given->maxImageExtent.height );
++    if (!strcmp( line, last ) || InterlockedIncrement( &lines ) > 64) return;
++    strcpy( last, line );
++    fprintf( stderr, "[vk-surf] pid=%04x %s\n", (UINT)GetCurrentProcessId(), line );
++}
++
++static void log_surface_capabilities2( const VkPhysicalDeviceSurfaceInfo2KHR *info, const VkSurfaceCapabilities2KHR *caps )
++{
++    static LONG lines;
++    const VkBaseInStructure *in;
++    const VkBaseOutStructure *out;
++    char line[256];
++    int n = 0;
++
++    if (!surface_log_on() || InterlockedIncrement( &lines ) > 16) return;
++    for (in = info->pNext; in && n < 200; in = in->pNext) n += snprintf( line + n, sizeof(line) - n, " in=%d", in->sType );
++    for (out = caps->pNext; out && n < 200; out = out->pNext)
++    {
++        if (out->sType == VK_STRUCTURE_TYPE_SURFACE_PRESENT_SCALING_CAPABILITIES_EXT)
++        {
++            const VkSurfacePresentScalingCapabilitiesEXT *scaling = (const void *)out;
++            n += snprintf( line + n, sizeof(line) - n, " scaling min %ux%u max %ux%u",
++                           scaling->minScaledImageExtent.width, scaling->minScaledImageExtent.height,
++                           scaling->maxScaledImageExtent.width, scaling->maxScaledImageExtent.height );
++        }
++        else n += snprintf( line + n, sizeof(line) - n, " out=%d", out->sType );
++    }
++    line[n] = 0;
++    fprintf( stderr, "[vk-surf] pid=%04x caps2 chain:%s\n", (UINT)GetCurrentProcessId(), n ? line : " none" );
++}
++
+ static void adjust_surface_capabilities( struct vulkan_instance *instance, struct surface *surface,
+                                          VkSurfaceCapabilitiesKHR *capabilities )
+ {
++    VkSurfaceCapabilitiesKHR host = *capabilities;
+     RECT client_rect;
+ 
+     /* Many Windows games, for example Strange Brigade, No Man's Sky, Path of Exile
+@@ -1789,6 +1851,7 @@ static void adjust_surface_capabilities( struct vulkan_instance *instance, struc
+     capabilities->maxImageExtent.height = client_rect.bottom - client_rect.top;
+     capabilities->currentExtent.width = client_rect.right - client_rect.left;
+     capabilities->currentExtent.height = client_rect.bottom - client_rect.top;
++    log_surface_capabilities( surface, &host, capabilities );
+ }
+ 
+ static VkResult win32u_vkGetPhysicalDeviceSurfaceCapabilitiesKHR( VkPhysicalDevice client_physical_device, VkSurfaceKHR client_surface,
+@@ -1829,6 +1892,7 @@ static VkResult win32u_vkGetPhysicalDeviceSurfaceCapabilities2KHR( VkPhysicalDev
+     res = instance->p_vkGetPhysicalDeviceSurfaceCapabilities2KHR( physical_device->host.physical_device,
+                                                                      &surface_info_host, capabilities );
+     if (!res) adjust_surface_capabilities( instance, surface, &capabilities->surfaceCapabilities );
++    if (!res) log_surface_capabilities2( surface_info, capabilities );
+     return res;
+ }
+ 
