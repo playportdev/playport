@@ -331,7 +331,9 @@ static int launcher_round_done;                       /* restarts were ended onc
 static DWORD launcher_restarts, launcher_restarts_ended, launcher_restarts_gone, launcher_restarts_left;
 static DWORD launcher_other_starts, launcher_unopened_starts;
 static int game_sc_ended;                             /* the game's Social Club end ran (decision 0133) */
-static DWORD game_sc_ended_at, game_sc_restarts;
+static DWORD game_sc_ended_at, game_sc_restarts, game_sc_restarts_failed, game_sc_swept_at;
+static uint32_t game_sc_gone[MAX_LAUNCHER_KNOWN];      /* the game's helpers it ended, maybe still listed */
+static DWORD ngame_sc_gone;
 
 /* A new title: nothing of the launcher's end is done yet. */
 static void launcher_reset(void)
@@ -341,7 +343,8 @@ static void launcher_reset(void)
     launcher_restarts = launcher_restarts_ended = launcher_restarts_gone = launcher_restarts_left = 0;
     launcher_other_starts = launcher_unopened_starts = 0;
     game_sc_ended = 0;
-    game_sc_restarts = 0;
+    game_sc_restarts = game_sc_restarts_failed = 0;
+    ngame_sc_gone = 0;
 }
 
 static void launcher_know(uint32_t pid)
@@ -509,6 +512,7 @@ static DWORD end_game_social_club(uint32_t title_seq, const DWORD *pids, DWORD n
         if (!WideCharToMultiByte(CP_UTF8, 0, launcher_pe[i].szExeFile, -1, name, sizeof(name), NULL, NULL)) name[0] = 0;
         if ((h = OpenProcess(PROCESS_TERMINATE, FALSE, launcher_lp[i].pid)) && TerminateProcess(h, ERROR_PROCESS_ABORTED)) {
             done++;
+            if (ngame_sc_gone < MAX_LAUNCHER_KNOWN) game_sc_gone[ngame_sc_gone++] = launcher_lp[i].pid;
             say("%s %u: [game-sc] ended %s pid %u (parent %u)", what, (unsigned long long)title_seq, name,
                 (unsigned long long)launcher_lp[i].pid, (unsigned long long)launcher_lp[i].parent);
         } else {
@@ -522,39 +526,57 @@ static DWORD end_game_social_club(uint32_t title_seq, const DWORD *pids, DWORD n
     return done;
 }
 
-/* The most restarts of the game's Social Club helpers the root ends once more (decision 0133):
- * the game starts a new browser about a second after the end; past this many, the rest run. */
-#define GAME_SC_RESTART_ENDS 8u
+/* How often the root looks for restarts of the game's Social Club helpers after their end
+ * (decision 0135), and how many of those ends it logs one by one */
+#define GAME_SC_SWEEP_MS 250u
+#define GAME_SC_LOGGED_ENDS 8u
 
-/* A process the title's job got after the game's Social Club end: when it is one of the game's
- * Social Club helpers again, logged and, the first GAME_SC_RESTART_ENDS times, ended once more. */
-static void game_sc_new_process(uint32_t title_seq, DWORD pid)
+/* After the game's Social Club end, every GAME_SC_SWEEP_MS: the game's own Social Club helpers
+ * again, from the process list, each ended once more (decision 0135). The game starts a new
+ * browser about every 5 s for as long as its helper is gone (run e2b: 9 starts in 46 s), so every
+ * start is ended; the first GAME_SC_LOGGED_ENDS are logged one by one, then every 10th. The
+ * title's end gives the count. The job's message for a new process came before the process list
+ * named it, so 0133's handling left a restart running (runs sc4, r3). */
+static void game_sc_sweep(uint32_t title_seq)
 {
-    DWORD n = launcher_snapshot();
-    int i = pp_launcher_find(launcher_lp, n, pid);
-    HANDLE h;
-    if (i < 0 || !pp_game_social_club(launcher_lp, n, (uint32_t)i)) return;
-    game_sc_restarts++;
-    if (game_sc_restarts > GAME_SC_RESTART_ENDS) {
-        say("%s %u: [game-sc] after the end: SocialClubHelper.exe pid %u (parent %u) started %u ms after it; left "
-            "running (%u restarts ended already)", what, (unsigned long long)title_seq, (unsigned long long)pid,
-            (unsigned long long)launcher_lp[i].parent, (unsigned long long)(GetTickCount() - game_sc_ended_at),
-            (unsigned long long)GAME_SC_RESTART_ENDS);
-        return;
+    DWORD n, i;
+    char name[MAX_PATH];
+
+    if (!game_sc_ended) return;
+    if (GetTickCount() - game_sc_swept_at < GAME_SC_SWEEP_MS) return;
+    game_sc_swept_at = GetTickCount();
+    n = launcher_snapshot();
+    for (i = 0; i < n; i++) {
+        HANDLE h;
+        int ended;
+        if (!pp_game_social_club_restart(launcher_lp, n, i, game_sc_gone, ngame_sc_gone)) continue;
+        game_sc_restarts++;
+        if (ngame_sc_gone == MAX_LAUNCHER_KNOWN) {   /* the oldest ended ones are long gone */
+            DWORD k;
+            for (k = 0; k < MAX_LAUNCHER_KNOWN / 2; k++) game_sc_gone[k] = game_sc_gone[k + MAX_LAUNCHER_KNOWN / 2];
+            ngame_sc_gone = MAX_LAUNCHER_KNOWN / 2;
+        }
+        game_sc_gone[ngame_sc_gone++] = launcher_lp[i].pid;
+        ended = (h = OpenProcess(PROCESS_TERMINATE, FALSE, launcher_lp[i].pid)) && TerminateProcess(h, ERROR_PROCESS_ABORTED);
+        if (!ended) game_sc_restarts_failed++;
+        if (game_sc_restarts <= GAME_SC_LOGGED_ENDS || game_sc_restarts % 10 == 0 || !ended) {
+            if (!WideCharToMultiByte(CP_UTF8, 0, launcher_pe[i].szExeFile, -1, name, sizeof(name), NULL, NULL)) name[0] = 0;
+            if (ended)
+                say("%s %u: [game-sc] after the end: %s pid %u (parent %u) found %u ms after it; ended once more "
+                    "(restart %u)", what, (unsigned long long)title_seq, name, (unsigned long long)launcher_lp[i].pid,
+                    (unsigned long long)launcher_lp[i].parent, (unsigned long long)(GetTickCount() - game_sc_ended_at),
+                    (unsigned long long)game_sc_restarts);
+            else
+                say("%s %u: [game-sc] after the end: %s pid %u found %u ms after it; could not end it (error %u)",
+                    what, (unsigned long long)title_seq, name, (unsigned long long)launcher_lp[i].pid,
+                    (unsigned long long)(GetTickCount() - game_sc_ended_at), (unsigned long long)GetLastError());
+        }
+        if (h) CloseHandle(h);
     }
-    if ((h = OpenProcess(PROCESS_TERMINATE, FALSE, pid)) && TerminateProcess(h, ERROR_PROCESS_ABORTED))
-        say("%s %u: [game-sc] after the end: SocialClubHelper.exe pid %u (parent %u) started %u ms after it; "
-            "ended once more (restart %u of %u)", what, (unsigned long long)title_seq, (unsigned long long)pid,
-            (unsigned long long)launcher_lp[i].parent, (unsigned long long)(GetTickCount() - game_sc_ended_at),
-            (unsigned long long)game_sc_restarts, (unsigned long long)GAME_SC_RESTART_ENDS);
-    else
-        say("%s %u: [game-sc] after the end: SocialClubHelper.exe pid %u started %u ms after it; could not end it "
-            "(error %u)", what, (unsigned long long)title_seq, (unsigned long long)pid,
-            (unsigned long long)(GetTickCount() - game_sc_ended_at), (unsigned long long)GetLastError());
-    if (h) CloseHandle(h);
 }
 
-/* The job's messages since the last look: after an end, every process it got. */
+/* The job's messages since the last look: after an end, every process it got; after the game's
+ * Social Club end, its sweep. */
 static void watch_launcher(uint32_t title_seq, HANDLE port, HANDLE job, DWORD title)
 {
     DWORD msg;
@@ -563,8 +585,8 @@ static void watch_launcher(uint32_t title_seq, HANDLE port, HANDLE job, DWORD ti
     while (port && GetQueuedCompletionStatus(port, &msg, &key, &ov, 0)) {
         if (msg != JOB_OBJECT_MSG_NEW_PROCESS) continue;
         if (launcher_ended) launcher_new_process(title_seq, (DWORD)(ULONG_PTR)ov, job, title);
-        if (game_sc_ended) game_sc_new_process(title_seq, (DWORD)(ULONG_PTR)ov);
     }
+    game_sc_sweep(title_seq);
 }
 
 /* One control, if the host wrote one: acts on it and answers. A CLOSE sets
@@ -1144,9 +1166,9 @@ static void launch(const pp_session_request *r, const char *payload)
             (unsigned long long)launcher_restarts_left, (unsigned long long)launcher_other_starts,
             (unsigned long long)launcher_unopened_starts);
     if (game_sc_ended)
-        say("%s %u: [game-sc] after the end: %u starts of the game's Social Club helpers (the first %u ended once "
-            "more)", what, (unsigned long long)r->sequence, (unsigned long long)game_sc_restarts,
-            (unsigned long long)GAME_SC_RESTART_ENDS);
+        say("%s %u: [game-sc] after the end: %u restarts of the game's Social Club helpers, %u of them could "
+            "not be ended", what, (unsigned long long)r->sequence, (unsigned long long)game_sc_restarts,
+            (unsigned long long)game_sc_restarts_failed);
     if (port) CloseHandle(port);
     if (r->kind == PP_REQUEST_LAUNCH) stop_services();
     if (r->kind == PP_REQUEST_LAUNCH && steam_client_set) steam_client_keys(0, 0, 0);

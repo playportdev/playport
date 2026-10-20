@@ -2378,7 +2378,7 @@ resource	Runtime/vulkan-loader/arm64ec-windows/vulkan-1.dll	762880	db87edae47763
 resource	Runtime/vulkan-loader/arm64ec-windows/winevulkan.json	137	0947fde3a7cf0efea1fad4c0b0ea1822e122a56e0c821e39df68daf561ca50f8	vulkan-loader	arm64ec-windows/winevulkan.json	P6-vulkan-loader
 resource	Runtime/steamapi/x86_64-windows/steam_api64.dll	8353280	f0db32854540fbfb0096e212436c03c7cee50f2671ce9bd14eab6da88484e713	steamapi	x86_64-windows/steam_api64.dll	P8-steamapi
 resource	Runtime/steamapi/i386-windows/steam_api.dll	8667648	0d6b96b7689a3286c891dd5b072f9f4b7ca88bf23ed84c2aba9b2b81106f7985	steamapi	i386-windows/steam_api.dll	P8-steamapi
-resource	Runtime/arm64ec-windows/playport-session.exe	43520	b5e7d565782750523371b6f9b1f898a380c313851a85426668315139b2cefb67	session	playport-session.exe	P9-session
+resource	Runtime/arm64ec-windows/playport-session.exe	44032	c3a3e333fe086aa6fecc7ecf981f04a0d360da06382e1ee8c46375efff918f72	session	playport-session.exe	P9-session
 resource	Runtime/arm64ec-windows/playport-url-opener.exe	5120	a4a9e67cec4f8df8e902e2a0714dd7c4828a4d3e0cabb65ef2fb6e214f0a6e4d	session	playport-url-opener.exe	P9-url-opener
 resource	Runtime/steamclient/x86_64-windows/steamclient64.dll	139264	8c775cfb39b7957d8493c5ceafba6cf1bebfb9edb28e5fe028b2a1b779fcf38c	steamclient	steamclient64.dll	P9-steamclient
 resource	Runtime/nls/c_1252.nls	66082	e2634ee32da7977d762d2d45be2053309ee718572a7d8bb0034180dc1b0b6b76	unix	wine/nls/c_1252.nls	nls
@@ -5371,7 +5371,7 @@ resource	Runtime/mono/wine-mono-11.3.0/support/removeuserinstalls-x86.exe	12288	
 resource	Runtime/mono/wine-mono-11.3.0/support/removeuserinstalls-x86_64.exe	14848	716081b9913e005f0e1261f2c2a9d88da970fbe579c7dfd083774b228bd71675	wine-mono	support/removeuserinstalls-x86_64.exe	wine-mono
 resource	Runtime/mono/wine-mono-11.3.0/support/winemono-support.cab	1395918	857cb2bc7001aa6b94a90560a6996f7cf9fe3ebff72ac39e73ed5d05f83b78f4	wine-mono	support/winemono-support.cab	wine-mono
 resource	Runtime/mono/wine-mono-11.3.0/support/winemono-support.msi	22528	0567d9569c9ca7f678c7ccd4a5ccffbd9dc7bdd3c632ce204afaf7068bf9c2db	wine-mono	support/winemono-support.msi	wine-mono
-link	lib/libntdll_unix.a	4766536	0505f9e163be83242923dcc6f57f88e4212c06a808754030de7507e1722ff000	unix	mythic/app/Madeira/libntdll_unix.a	P3
+link	lib/libntdll_unix.a	4766552	2c7e82f0d718a51e843c0bf34a3557a7f609670561b691df5c1d99ff4439b542	unix	mythic/app/Madeira/libntdll_unix.a	P3
 link	lib/libwin32u_unix.a	4122352	6f34a230bab2b69b4061d141e1cc3f85d5ab20a0d6bbf9886858581d3b07871c	unix	mythic/app/Madeira/libwin32u_unix.a	P4-win32u
 link	lib/libwineserver.a	1220288	066f3580dcfd48e86cccd8885dc9c6e6488c4a8df5159dc10d672173e215e754	unix	mythic/app/Madeira/libwineserver.a	P4-server
 link	lib/libgnutls.a	3603280	e9fb697d624bb63d1c89e8569f1a8e0e69e576175407853bf34a6279fa1673b3	unix	mythic/toolchains/gnutls-ios/lib/libgnutls.a	P4-crypto

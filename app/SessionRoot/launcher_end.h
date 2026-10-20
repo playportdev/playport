@@ -132,6 +132,19 @@ static inline int pp_game_social_club(const pp_launcher_proc *p, uint32_t n, uin
     return pp_launcher_name_is(p[i].name, "SocialClubHelper.exe") && pp_launcher_under_game(p, n, i);
 }
 
+/* Whether the root's sweep after the game's Social Club end ends process i
+ * (decisions 0133, 0135): one of the game's own Social Club helpers that is
+ * not among the `nended` processes it ended already, which may still be listed
+ * while they go. */
+static inline int pp_game_social_club_restart(const pp_launcher_proc *p, uint32_t n, uint32_t i,
+                                              const uint32_t *ended, uint32_t nended)
+{
+    uint32_t k;
+    if (!pp_game_social_club(p, n, i)) return 0;
+    for (k = 0; k < nended; k++) if (ended[k] == p[i].pid) return 0;
+    return 1;
+}
+
 /* What the root does with a restart: the first ones it finds still running are
  * ended once more, in one round; any later or already gone are only reported. */
 enum { PP_LAUNCHER_RESTART_REPORT, PP_LAUNCHER_RESTART_END };

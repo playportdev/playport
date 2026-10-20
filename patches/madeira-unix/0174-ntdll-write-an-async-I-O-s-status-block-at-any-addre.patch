@@ -1,0 +1,110 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 20 Oct 2026 09:12:07 +0200
+Subject: [PATCH] ntdll: write an async I/O's status block at any address
+
+The Rockstar Games Launcher ended at the start of RDR2's runs
+20261020T085541-rdr2-e1a and T090505-rdr2-e1b, before it started
+RDR2.exe: its log ends with "Exception: 0xc0000005" right after its
+cloud-save upload (cloudsave.asmx/PostFile), the first upload with a
+changed save. In s1-host.log the launcher thread's APC_ASYNC_IO in
+invoke_system_apc faulted on stlr w20, [x19] with x19 = 0x1790ece3e:
+set_async_iosb writes the status block's Status with a release store,
+and on ARM64 a release store to an address that is not aligned
+faults. x86 allows it, and the launcher put its IO_STATUS_BLOCK at an
+odd address. The bus handler emulates such accesses only in guest
+code, so the fault went to the launcher as 0x80000002, and PlayRDR2
+then showed "Unable to launch game".
+
+invoke_system_apc now writes the status block with
+ios_set_async_iosb (pp_async_iosb.h): Information, then Status with a
+release store where Status is aligned, and otherwise a release fence
+and a plain store, which ARM64 allows at any address of normal memory.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-20-rdr2-gameplay-memory.md
+Offered-upstream: no
+---
+ build/ntdll-unix/pp_async_iosb.h | 34 ++++++++++++++++++++++++++++++++
+ build/ntdll-unix/server_ios.c    | 20 ++++++++++++++++++-
+ 2 files changed, 53 insertions(+), 1 deletion(-)
+ create mode 100644 build/ntdll-unix/pp_async_iosb.h
+
+diff --git a/build/ntdll-unix/pp_async_iosb.h b/build/ntdll-unix/pp_async_iosb.h
+new file mode 100644
+index 0000000..cd6f58f
+--- /dev/null
++++ b/build/ntdll-unix/pp_async_iosb.h
+@@ -0,0 +1,34 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later
++ * An async I/O's IO_STATUS_BLOCK written at any address (Playport, PLA-364).
++ *
++ * Wine's set_async_iosb writes Information, then Status with a release store,
++ * which GetOverlappedResult's acquire read pairs with. On ARM64 a release
++ * store (stlr) faults when its address is not aligned; x86 allows it, and a
++ * guest may put its IOSB anywhere. The Rockstar Games Launcher's cloud-save
++ * upload completes with one at ...e3e: the bus fault in invoke_system_apc ended
++ * the launcher before it started RDR2 (runs 20261020T085541-rdr2-e1a and
++ * T090505-rdr2-e1b). A misaligned Status gets a release fence and a plain
++ * store, which ARM64 allows at any address of normal memory.
++ *
++ * Pure stores, so a host test compiles this header as is. */
++#ifndef PP_ASYNC_IOSB_H
++#define PP_ASYNC_IOSB_H
++#include <stdint.h>
++#include <string.h>
++
++/* Information (info_size bytes of info, little-endian), then Status with
++ * release semantics. */
++static inline void pp_iosb_store( void *status_ptr, void *info_ptr, size_t info_size,
++                                  uint32_t status, uint64_t info )
++{
++    memcpy( info_ptr, &info, info_size );
++    if (!((uintptr_t)status_ptr & (sizeof(status) - 1)))
++    {
++        __atomic_store_n( (uint32_t *)status_ptr, status, __ATOMIC_RELEASE );
++        return;
++    }
++    __atomic_thread_fence( __ATOMIC_RELEASE );
++    memcpy( status_ptr, &status, sizeof(status) );
++}
++
++#endif
+diff --git a/build/ntdll-unix/server_ios.c b/build/ntdll-unix/server_ios.c
+index 2c3ef28..4d2fb59 100644
+--- a/build/ntdll-unix/server_ios.c
++++ b/build/ntdll-unix/server_ios.c
+@@ -2375,6 +2375,24 @@ static NTSTATUS invoke_user_apc( CONTEXT *context, const struct user_apc *apc, N
+ }
+ 
+ 
++/* Playport (PLA-364): set_async_iosb for an IOSB at any address (pp_async_iosb.h). */
++#include "pp_async_iosb.h"
++
++static void ios_set_async_iosb( client_ptr_t iosb, NTSTATUS status, ULONG_PTR info )
++{
++    if (!iosb) return;
++    if (in_wow64_call())
++    {
++        IO_STATUS_BLOCK32 *io = wine_server_get_ptr( iosb );
++        pp_iosb_store( &io->Status, &io->Information, sizeof(io->Information), status, info );
++    }
++    else
++    {
++        IO_STATUS_BLOCK *io = wine_server_get_ptr( iosb );
++        pp_iosb_store( &io->Status, &io->Information, sizeof(io->Information), status, info );
++    }
++}
++
+ /***********************************************************************
+  *              invoke_system_apc
+  */
+@@ -2402,7 +2420,7 @@ static void invoke_system_apc( const union apc_call *call, union apc_result *res
+             result->async_io.status = status;
+             result->async_io.total = info;
+             /* the server will pass us NULL if a call failed synchronously */
+-            set_async_iosb( call->async_io.sb, result->async_io.status, info );
++            ios_set_async_iosb( call->async_io.sb, result->async_io.status, info );
+         }
+         else result->async_io.status = STATUS_PENDING; /* restart it */
+         break;

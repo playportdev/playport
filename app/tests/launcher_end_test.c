@@ -128,6 +128,18 @@ int main(void)
         CHECK(!pp_launcher_restart(q, m, 6, known, nknown));
         known[nknown++] = 0x700;                    /* the root saw 0x700 restart */
         CHECK(pp_launcher_restart(q, m, 6, known, nknown));
+
+        /* the sweep after the game's Social Club end: the game's new helper, once; never the
+         * launcher's, nor the game */
+        {
+            uint32_t sc_ended[3] = { 0x600, 0x6c8 }, nsc = 2;
+            CHECK(pp_game_social_club_restart(q, m, 5, sc_ended, nsc));
+            CHECK(!pp_game_social_club_restart(q, m, 2, sc_ended, nsc));
+            CHECK(!pp_game_social_club_restart(q, m, 4, sc_ended, nsc));
+            CHECK(!pp_game_social_club_restart(q, m, 1, sc_ended, nsc));
+            sc_ended[nsc++] = 0x670;                /* ended by the sweep, still listed */
+            CHECK(!pp_game_social_club_restart(q, m, 5, sc_ended, nsc));
+        }
     }
 
     /* restarts are ended once more only while one still runs and only in one round */

@@ -69,8 +69,8 @@ enum {
     /* A control, a dev build's only, after the game's sign-in (decision 0133, amending 0130):
      * the root ends the game's own Social Club helpers in the title's job, every
      * SocialClubHelper.exe whose parent chain reaches RDR2.exe (launcher_end.h), never
-     * RDR2.exe or anything else, once; the first 8 later starts of them are ended once more,
-     * the rest only logged. It carries
+     * RDR2.exe or anything else, once; every later start of them is ended once more
+     * (decision 0135). It carries
      * no names or arg; code is the processes it ended. */
     PP_CONTROL_END_GAME_SOCIAL_CLUB = 10,
 };

@@ -171,3 +171,4 @@
 0171-virtual-hold-the-jumbo-gap-for-the-title-s-own-reser.patch
 0172-ntdll-empty-a-killed-process-s-FEX-band-views-in-pla.patch
 0173-ntdll-give-back-a-thread-s-exception-registry-entry-.patch
+0174-ntdll-write-an-async-I-O-s-status-block-at-any-addre.patch
