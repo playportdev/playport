@@ -773,7 +773,7 @@ enum LaunchCoordinator {
     /// or a process under it, and logs each, and every start of one of those images after it
     /// (`session: … [launcher]` lines). Until the end, and for 10 s after it, every slice also
     /// reads the app's footprint (phys_footprint, the counter of the runtime's `[xp]` fpMB): one
-    /// within LauncherEndTrigger.headroomMB of the limit ends the tree before the sign-in, and
+    /// within LauncherEndTrigger.beforeSignInHeadroomMB of the limit ends the tree before the sign-in (decision 0140), and
     /// one within nearMB is logged. A sign-in after such an end is still logged. Only the fixed
     /// line text is matched; nothing of the log is logged.
     ///
@@ -797,8 +797,8 @@ enum LaunchCoordinator {
             watch = GameSignIn.Watch(signIn: signIn, baseline: baseline)
             let limit = MemoryLimit.read().limitMB
             log("launcher: ends at the game's sign-in, or when the footprint reaches the limit less "
-                + "\(LauncherEndTrigger.headroomMB) MB (now \(limit.map { "\(LauncherEndTrigger.memoryThresholdMB(limitMB: $0)) MB" } ?? "no limit"); "
-                + "decision 0130); its log "
+                + "\(LauncherEndTrigger.beforeSignInHeadroomMB) MB (now \(limit.map { "\(LauncherEndTrigger.beforeSignInThresholdMB(limitMB: $0)) MB" } ?? "no limit"); "
+                + "decisions 0130, 0140); its log "
                 + (baseline.map { "holds \($0.count) bytes of an earlier start" } ?? "is not there yet"))
             if endGameSocialClub { log("launcher: the game's own Social Club ends too, after its sign-in, when the footprint reaches the "
                                          + "limit less \(LauncherEndTrigger.headroomMB) MB (dev, decision 0133)") }
@@ -821,7 +821,7 @@ enum LaunchCoordinator {
             }
             if LauncherEndTrigger.near(footprintMB: m.footprintMB, limitMB: m.limitMB), let limit = m.limitMB {
                 log(String(format: "launcher: footprint %d MB of the %d MB limit at +%.1f s", m.footprintMB, limit, elapsed)
-                    + (ended ? ", after the end" : ", the end at \(LauncherEndTrigger.memoryThresholdMB(limitMB: limit)) MB"))
+                    + (ended ? ", after the end" : ", the end at \(LauncherEndTrigger.beforeSignInThresholdMB(limitMB: limit)) MB"))
             }
             guard !ended, let trigger = LauncherEndTrigger.check(signedIn: signedIn, footprintMB: m.footprintMB,
                                                                 limitMB: m.limitMB) else { return }
@@ -838,6 +838,8 @@ enum LaunchCoordinator {
             case .memory(let footprint, let limit):
                 log(String(format: "launcher: the footprint reached %d MB of the %d MB limit before the game's sign-in; "
                            + "ending the launcher at +%.1f s to free its memory", footprint, limit, elapsed))
+                log("launcher: why: iOS would end the app within \(LauncherEndTrigger.beforeSignInHeadroomMB) MB; "
+                    + "without the launcher the game may not sign in (decision 0140)")
             }
             var n: UInt32 = 0
             let rc = wine_host_session_control(Int32(PP_CONTROL_END_LAUNCHER), 0, 5_000, &n)

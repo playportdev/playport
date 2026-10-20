@@ -1,7 +1,8 @@
 # 0130: RDR2's Play ends the whole Rockstar launcher tree at the game's sign-in, or before it near the memory limit
 
 **Status:** accepted, 2026-10-19, chosen by the owner (PLA-409, PLA-413); the headroom and the field
-name approved by the supervisor. Amends
+name approved by the supervisor. The headroom before the sign-in is 400 MB since
+[0140](0140-end-the-rockstar-launcher-before-the-sign-in-only-near-a-kill.md). Amends
 [0125](0125-end-the-whole-rockstar-launcher-at-the-games-first-frame.md): the trigger is the
 game's sign-in again, as in [0124](0124-end-the-rockstar-launcher-after-the-games-sign-in.md), with
 a memory safety. Everything else in 0125 stays. On the phone the memory safety fired first, about

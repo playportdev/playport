@@ -2,8 +2,8 @@
 import XCTest
 @testable import PlayportKit
 
-/// When RDR2's Play ends the Rockstar launcher (decision 0130): at the game's sign-in, or before
-/// it once the footprint comes within 1,200 MB of the limit.
+/// When RDR2's Play ends the Rockstar launcher (decisions 0130, 0140): at the game's sign-in, or
+/// before it once the footprint comes within 400 MB of the limit.
 final class LauncherEndTriggerTests: XCTestCase {
     func testTheSignInEndsItWhateverTheFootprint() {
         XCTAssertEqual(LauncherEndTrigger.check(signedIn: true, footprintMB: 3_000, limitMB: 8_192), .signedIn)
@@ -11,14 +11,20 @@ final class LauncherEndTriggerTests: XCTestCase {
         XCTAssertEqual(LauncherEndTrigger.check(signedIn: true, footprintMB: 3_000, limitMB: nil), .signedIn)
     }
 
-    func testTheFootprintEndsItAtTheLimitLessTheHeadroom() {
-        XCTAssertEqual(LauncherEndTrigger.memoryThresholdMB(limitMB: 8_192), 6_992)
-        XCTAssertNil(LauncherEndTrigger.check(signedIn: false, footprintMB: 6_991, limitMB: 8_192))
-        XCTAssertEqual(LauncherEndTrigger.check(signedIn: false, footprintMB: 6_992, limitMB: 8_192),
-                       .memory(footprintMB: 6_992, limitMB: 8_192))
+    func testTheFootprintEndsItBeforeTheSignInOnlyNearTheLimit() {
+        XCTAssertEqual(LauncherEndTrigger.beforeSignInThresholdMB(limitMB: 8_192), 7_792)
+        // Runs s4 and f1 (2026-10-20) ended it at 7,020-7,027 MB, and the game did not sign in.
+        XCTAssertNil(LauncherEndTrigger.check(signedIn: false, footprintMB: 7_027, limitMB: 8_192))
+        XCTAssertNil(LauncherEndTrigger.check(signedIn: false, footprintMB: 7_791, limitMB: 8_192))
+        XCTAssertEqual(LauncherEndTrigger.check(signedIn: false, footprintMB: 7_792, limitMB: 8_192),
+                       .memory(footprintMB: 7_792, limitMB: 8_192))
         // The limit before Game Mode is about 6 GB on the reference phone.
-        XCTAssertEqual(LauncherEndTrigger.check(signedIn: false, footprintMB: 4_944, limitMB: 6_144),
-                       .memory(footprintMB: 4_944, limitMB: 6_144))
+        XCTAssertEqual(LauncherEndTrigger.check(signedIn: false, footprintMB: 5_744, limitMB: 6_144),
+                       .memory(footprintMB: 5_744, limitMB: 6_144))
+    }
+
+    func testTheGameSocialClubEndKeepsItsHeadroom() {
+        XCTAssertEqual(LauncherEndTrigger.memoryThresholdMB(limitMB: 8_192), 6_992)
     }
 
     func testNoReportedLimitNeverEndsItForMemory() {
