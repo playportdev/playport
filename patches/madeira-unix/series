@@ -174,3 +174,4 @@
 0174-ntdll-write-an-async-I-O-s-status-block-at-any-addre.patch
 0175-wineserver-read-only-the-request-fds-of-threads-that.patch
 0176-ntdll-reuse-a-child-process-s-master-socket-entry-af.patch
+0177-ntdll-refuse-RDR2-s-later-Social-Club-helper-starts-.patch

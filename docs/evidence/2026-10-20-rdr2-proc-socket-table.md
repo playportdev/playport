@@ -20,6 +20,7 @@ screenshots and device logs under `$PLAYPORT_BUILD/agent-notes/pla413e/` (never 
 | --- | --- | --- | --- |
 | `a076ca1985d38a4731f0bdfb51a27e0cfd15f05a193b63822e6739ae2d66100d` | main + srvpoll (0175) + kkcompile (0052, 0053) | passed (`ui-runs/20261020T105019`; `[srv-pending] MADEIRA_SRV_PENDING=1`) | `…T105836-rdr2-s1`; `…T112521-rdr2-s2` with runtime `env.MADEIRA_SRV_PENDING=0` |
 | `e843d571ef5c19b50889712bc4386fea8987065304d7a08e98d4c27061a403c5` | + madeira-unix 0176 | passed (`…T115140`) | `…T115239-rdr2-s3` |
+| `f7bfed851d70e448d157cb4adf6dcccb257c7fd228f9d3e9dc009d62b49bd127` | + madeira-unix 0177 and decision 0138 (dev switch, off by default) | not run yet (phone paused for a desktop reference run) | none yet |
 
 A Steam check on `a076ca19` (`…T105608`: Games, then Settings › Accounts) showed Steam signed in;
 the wineserver does not run there, so the log has no `[srv-poll]` line at all.
@@ -47,10 +48,15 @@ the wineserver does not run there, so the log has no `[srv-poll]` line at all.
 | run | first frame | wineserver thread cpu (`[thread-sample]` mean / p50 / max) | PROF-BT `read_request` share | `[kk-compile] FAIL` | MTLCompilerService `killing_highwater_process` |
 | --- | --- | --- | --- | --- | --- |
 | r3/e3b (before, `ac3ceac7`) | 112 s | 75 / 85 / 89 % | 62 % | (no logging) | r3: 11 |
-| s1 (pending on) | 420 s | 24 / 19 / 66 % (includes 10 min hung) | 5 % | 0 | 15 |
+| s1 (pending on) | 420 s | 24 / 19 / 66 % (includes the hang) | 5 % | 0 | 15 |
 | s2 (pending off) | ~130 s | 58 / 75 / 88 % | 56 % | 0 | 13 |
 | s3 (pending on) | 85 s | 46 / 57 / 70 % | 8 % | 0 | 0 (4.5 min run) |
 
+- **The A/B (s1 against s2, the same IPA, the same scene; per-minute `[xp-t]` and `[frames]`):**
+  in 3D gameplay the wineserver took 14.1 % of a core with the pending set (s1, 11:09–11:12:44)
+  against 40.6 % without it (s2, 11:30:30–11:34:22) and 46.5 % in r3; a request's round trip was
+  0.14 ms against 0.32–0.33 ms; the game presented 20.6 frames/s against 14.6 (s2) and 14.2 (r3),
+  with 6 hitches over 1.5 s against 22. The pending set stays on.
 - With the pending set the wineserver thread spends 78–79 % of its samples waiting instead of
   23–31 %, and `read_request` drops from over half its samples to 5–8 %.
 - s1's 420 s to first frame was not the pending set: s3, with it on, reached first frame in 85 s.

@@ -1,0 +1,148 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 20 Oct 2026 12:05:27 +0200
+Subject: [PATCH] ntdll: refuse RDR2's later Social Club helper starts (dev)
+
+With the dev experiment of decisions 0133 and 0135, the session root
+ends RDR2's own SocialClubHelper.exe after its sign-in and then every
+restart of it. The game starts it again about every 5 s for the rest of
+the play (30 starts in 153 s in run 20261020T095216-rdr2-e3b): each a
+new pseudo-process with its image copies, FEX start-up and master
+socket, ended a quarter of a second later.
+
+With PLAYPORT_REFUSE_GAME_SC_RESTART=1 in the environment, which the
+app sets only when Settings > Developer asks for it with the end on,
+NtCreateUserProcess lets the game's first SocialClubHelper.exe start go
+ahead and fails every later one with STATUS_ACCESS_DENIED
+(pp_game_sc_refuse.h). Only a start whose creator's image is RDR2.exe
+and whose image is SocialClubHelper.exe counts, per game process; the
+launcher's own helper and Chromium's --type= children are left alone.
+The first refusals are logged one by one, then every 10th.
+
+Class: host-app
+Evidence: docs/decisions/0138-refuse-rdr2s-social-club-restarts-at-process-creation.md
+Offered-upstream: no
+---
+ build/ntdll-unix/pp_game_sc_refuse.h | 73 ++++++++++++++++++++++++++++
+ build/ntdll-unix/process_ios.c       | 21 ++++++++
+ 2 files changed, 94 insertions(+)
+ create mode 100644 build/ntdll-unix/pp_game_sc_refuse.h
+
+diff --git a/build/ntdll-unix/pp_game_sc_refuse.h b/build/ntdll-unix/pp_game_sc_refuse.h
+new file mode 100644
+index 0000000..491354a
+--- /dev/null
++++ b/build/ntdll-unix/pp_game_sc_refuse.h
+@@ -0,0 +1,73 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later
++ * RDR2's later Social Club helper starts refused at process creation
++ * (Playport, PLA-413, PLA-364, decision 0138; dev only, off by default).
++ *
++ * With the dev experiment of decisions 0133 and 0135 on, the session root ends
++ * the game's own SocialClubHelper.exe after its sign-in, and the game starts
++ * it again about every 5 s for the rest of the play: in run e3b 30 starts in
++ * 153 s, each a new pseudo-process with its image copies, FEX start-up and a
++ * master socket, ended a quarter of a second later. With
++ * PLAYPORT_REFUSE_GAME_SC_RESTART=1 in the environment (the app sets it for a
++ * Play that ends the game's Social Club, when Settings › Developer asks), the
++ * game's first SocialClubHelper.exe start goes ahead and every later one fails
++ * at NtCreateUserProcess with STATUS_ACCESS_DENIED, as CreateProcess would for
++ * a file the game may not run. Only a start whose creator's image is RDR2.exe
++ * and whose image is SocialClubHelper.exe counts; the launcher's own helper and
++ * Chromium's --type= children are left as they are.
++ *
++ * Pure name matching and counting, so a host test compiles this header as is. */
++#ifndef PP_GAME_SC_REFUSE_H
++#define PP_GAME_SC_REFUSE_H
++
++#include <stddef.h>
++
++typedef unsigned short pp_wchar;
++
++/* 1 when the last path element of name[0..len) is base (ASCII, any case). */
++static inline int ppgsc_basename_is( const pp_wchar *name, size_t len, const char *base )
++{
++    size_t start = len, n = 0, k;
++    while (base[n]) n++;
++    while (start > 0 && name[start - 1] != '\\' && name[start - 1] != '/') start--;
++    /* a quoted path may end in its closing quote */
++    if (len > start && name[len - 1] == '"') len--;
++    if (len - start != n) return 0;
++    for (k = 0; k < n; k++)
++    {
++        pp_wchar c = name[start + k];
++        char b = base[k];
++        if (c >= 'A' && c <= 'Z') c += 32;
++        if (b >= 'A' && b <= 'Z') b += 32;
++        if (c != (pp_wchar)(unsigned char)b) return 0;
++    }
++    return 1;
++}
++
++/* The game's helper starts so far, for the game process that made them: a
++ * new RDR2.exe (another PEB) counts from 0 again. */
++struct ppgsc_state
++{
++    void *game;
++    unsigned starts;
++};
++
++/* Decide one start: 0 lets it go, else its number among the game's helper
++ * starts (2, 3, ...), which the caller refuses. creator_id names the creating
++ * process (its PEB). on: PLAYPORT_REFUSE_GAME_SC_RESTART is 1. */
++static inline unsigned ppgsc_refuse( struct ppgsc_state *st, int on, void *creator_id,
++                                     const pp_wchar *creator, size_t creator_len,
++                                     const pp_wchar *image, size_t image_len )
++{
++    void *prev;
++    if (!on || !creator || !image) return 0;
++    if (!ppgsc_basename_is( creator, creator_len, "RDR2.exe" )) return 0;
++    if (!ppgsc_basename_is( image, image_len, "SocialClubHelper.exe" )) return 0;
++    prev = __atomic_exchange_n( &st->game, creator_id, __ATOMIC_ACQ_REL );
++    if (prev != creator_id) __atomic_store_n( &st->starts, 0, __ATOMIC_RELEASE );
++    {
++        unsigned n = __atomic_add_fetch( &st->starts, 1, __ATOMIC_ACQ_REL );
++        return n > 1 ? n : 0;
++    }
++}
++
++#endif /* PP_GAME_SC_REFUSE_H */
+diff --git a/build/ntdll-unix/process_ios.c b/build/ntdll-unix/process_ios.c
+index 51eb559..0919213 100644
+--- a/build/ntdll-unix/process_ios.c
++++ b/build/ntdll-unix/process_ios.c
+@@ -74,6 +74,7 @@
+ #include "wine/condrv.h"
+ #include "wine/server.h"
+ #include "wine/debug.h"
++#include "pp_game_sc_refuse.h"
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(process);
+ 
+@@ -1154,6 +1155,26 @@ NTSTATUS WINAPI NtCreateUserProcess( HANDLE *process_handle_ptr, HANDLE *thread_
+         }
+     }
+ 
++    /* Playport (decision 0138, dev): RDR2's later Social Club helper starts are refused. */
++    {
++        static struct ppgsc_state game_sc;
++        const char *on = getenv( "PLAYPORT_REFUSE_GAME_SC_RESTART" );
++        PEB *peb = NtCurrentTeb()->Peb;
++        const UNICODE_STRING *creator = (peb && peb->ProcessParameters) ? &peb->ProcessParameters->ImagePathName : NULL;
++        unsigned n = ppgsc_refuse( &game_sc, on && !strcmp( on, "1" ), peb,
++                                   creator ? (const pp_wchar *)creator->Buffer : NULL,
++                                   creator ? creator->Length / sizeof(WCHAR) : 0,
++                                   (const pp_wchar *)params->ImagePathName.Buffer,
++                                   params->ImagePathName.Length / sizeof(WCHAR) );
++        if (n)
++        {
++            if (n <= 9 || n % 10 == 0)
++                dprintf( 2, "[game-sc] refused the game's Social Club helper start %u (%s; decision 0138)\n",
++                         n, debugstr_us( &params->ImagePathName ) );
++            return STATUS_ACCESS_DENIED;
++        }
++    }
++
+     chromium_policy( &path, params );
+ 
+     /* ml526: stamp every accepted spawn on the startup timeline. This is the

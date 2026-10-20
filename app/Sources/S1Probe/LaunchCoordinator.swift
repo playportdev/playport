@@ -404,6 +404,15 @@ enum LaunchCoordinator {
         } else {
             unsetenv("PLAYPORT_DLL_OVERLAY")
         }
+        #if !PLAYPORT_RELEASE
+        // Decision 0138 (dev): ntdll refuses RDR2's later Social Club helper starts.
+        if r.endLauncher != nil && GameSocialClubEnd.enabled && GameSocialClubEnd.refuseRestart {
+            setenv(GameSocialClubEnd.refuseRestartVariable, "1", 1)
+            log("launcher: the game's Social Club helper starts after the first are refused (dev, decision 0138)")
+        } else {
+            unsetenv(GameSocialClubEnd.refuseRestartVariable)
+        }
+        #endif
         log("graphics: \(r.graphics.rawValue); vulkan loader: \(r.khronosVulkanLoader ? "Khronos" : "Wine's")")
 
         if r.config.isEmpty {
