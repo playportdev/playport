@@ -1,0 +1,382 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 20 Oct 2026 07:49:19 +0200
+Subject: [PATCH] ntdll: give back a thread's exception registry entry and
+ trampoline slot when it ends
+
+The Mach exception thread registry (port -> TEB, trampoline) and the
+TEB-restore trampoline slots in the JIT pool's first page were handed out
+once per thread and never given back. In run 20261020T073042-rdr2-m10b
+the session had registered 512 threads in all, of which about 350 had
+ended and 35 were parked, when RDR2's thread 0878 logged
+`[thread-registry] FULL (512 slots)`: its Mach exceptions resolved to the
+slot-0 TEB, another process's, and RDR2 ended with 0xc0000005 about 10 s
+into gameplay. From the 257th thread on, every thread had also shared
+trampoline slot 0 with the first one, whose TEB word each overwrote.
+
+A thread now gives both back as it ends (pthread_exit_wrapper, last
+before pthread_exit), and a parked thread (decision 0127) when it is
+parked: it stays Mach-suspended for ever, so it runs and faults no more.
+A registration reuses the lowest free entry before raising the
+high-water mark (pp_thread_slots.h). An entry is claimed with
+MACH_PORT_DEAD, which names no thread, and published port last; it is
+given back TEB first, then port 0, so the lock-free readers never match
+a port to a later thread's TEB. Registered port names stay pinned (ml401),
+so no new thread can carry an old thread's name. The trampoline page
+holds 1024 slots (0x4000 / 16), not 256; slot 0, the first thread's and
+every overflow's, is never given back. Each give-back logs a
+`[thread-slots] port=... ended|parked: idx=... tramp=... live=N` line,
+and each registration its live count.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-20-rdr2-thread-registry.md
+Offered-upstream: no; the Mach exception registry is the iOS port's
+---
+ build/ntdll-unix/pp_thread_slots.h  | 120 ++++++++++++++++++++++++++++
+ build/ntdll-unix/signal_arm64_ios.c |  95 +++++++++++++++-------
+ build/ntdll-unix/thread_ios.c       |   6 ++
+ build/ntdll-unix/virtual_ios.c      |  24 ++++--
+ 4 files changed, 213 insertions(+), 32 deletions(-)
+ create mode 100644 build/ntdll-unix/pp_thread_slots.h
+
+diff --git a/build/ntdll-unix/pp_thread_slots.h b/build/ntdll-unix/pp_thread_slots.h
+new file mode 100644
+index 0000000..0f60ab8
+--- /dev/null
++++ b/build/ntdll-unix/pp_thread_slots.h
+@@ -0,0 +1,120 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later
++ * A guest thread's two per-thread slots (Playport, PLA-364, decision 0134):
++ * its entry in the Mach exception thread registry (port -> TEB, trampoline)
++ * and its TEB-restore trampoline in the JIT pool's first page. Both were
++ * handed out once and never given back, so a session that had created 512
++ * threads in all registered no more ([thread-registry] FULL), and from the
++ * 257th each thread shared trampoline slot 0 with the first.
++ *
++ * A thread gives both back as it ends (pthread_exit_wrapper), and a parked
++ * thread (decision 0127) when it is parked: it stays Mach-suspended for ever,
++ * so it runs, and faults, no more. A registry port name is never recycled
++ * (the registration pins send rights to it), so an entry is reused only by a
++ * new thread's own port.
++ *
++ * Readers scan the registry without a lock up to its high-water mark. A
++ * claimed entry holds PPTS_CLAIMED, which names no thread, until it is
++ * published; a given-back one holds port 0 after its TEB is cleared.
++ *
++ * Pure slot bookkeeping, so a host test compiles this header as is. */
++#ifndef PP_THREAD_SLOTS_H
++#define PP_THREAD_SLOTS_H
++#include <stdint.h>
++
++#define PPTS_CLAIMED 0xffffffffu   /* MACH_PORT_DEAD: claimed, not yet published */
++
++struct ios_thread_entry
++{
++    unsigned int mach_thread;      /* 0: free */
++    uintptr_t teb;
++    void *trampoline;
++};
++
++/* The entry for port: the one already naming it (the same thread registering
++ * again), else the lowest free one, else a new one at the high-water mark
++ * *count. -1 when all max are taken. *again says it already named port. */
++static inline int ppts_registry_claim( struct ios_thread_entry *reg, volatile int32_t *count, int max,
++                                       unsigned int port, int *again )
++{
++    for (;;)
++    {
++        int i, n = __atomic_load_n( count, __ATOMIC_ACQUIRE );
++        unsigned int expect;
++
++        if (n > max) n = max;
++        for (i = 0; i < n; i++)
++            if (__atomic_load_n( &reg[i].mach_thread, __ATOMIC_ACQUIRE ) == port)
++            {
++                *again = 1;
++                return i;
++            }
++        *again = 0;
++        for (i = 0; i < n; i++)
++        {
++            expect = 0;
++            if (__atomic_compare_exchange_n( &reg[i].mach_thread, &expect, PPTS_CLAIMED, 0,
++                                             __ATOMIC_ACQ_REL, __ATOMIC_RELAXED ))
++                return i;
++        }
++        i = __atomic_fetch_add( count, 1, __ATOMIC_ACQ_REL );
++        if (i >= max) return -1;
++        expect = 0;
++        if (__atomic_compare_exchange_n( &reg[i].mach_thread, &expect, PPTS_CLAIMED, 0,
++                                         __ATOMIC_ACQ_REL, __ATOMIC_RELAXED ))
++            return i;
++        /* a free-entry scan that saw the raised mark took it first: look again */
++    }
++}
++
++/* Fill a claimed (or the thread's own) entry; the port goes in last. */
++static inline void ppts_registry_publish( struct ios_thread_entry *reg, int i, unsigned int port,
++                                          uintptr_t teb, void *trampoline )
++{
++    __atomic_store_n( &reg[i].teb, teb, __ATOMIC_RELAXED );
++    __atomic_store_n( &reg[i].trampoline, trampoline, __ATOMIC_RELAXED );
++    __atomic_store_n( &reg[i].mach_thread, port, __ATOMIC_RELEASE );
++}
++
++/* Give back entry i if it still names port: TEB first, then the port, so no
++ * reader matching the old port finds a later thread's TEB. 1 when given back. */
++static inline int ppts_registry_release( struct ios_thread_entry *reg, int count, int i, unsigned int port )
++{
++    if (i < 0 || i >= count || !port || __atomic_load_n( &reg[i].mach_thread, __ATOMIC_ACQUIRE ) != port)
++        return 0;
++    __atomic_store_n( &reg[i].teb, 0, __ATOMIC_RELAXED );
++    __atomic_store_n( &reg[i].trampoline, (void *)0, __ATOMIC_RELAXED );
++    __atomic_store_n( &reg[i].mach_thread, 0, __ATOMIC_RELEASE );
++    return 1;
++}
++
++/* The entry naming port, or -1. */
++static inline int ppts_registry_find( const struct ios_thread_entry *reg, int count, unsigned int port )
++{
++    int i;
++    if (!port) return -1;
++    for (i = 0; i < count; i++)
++        if (__atomic_load_n( &reg[i].mach_thread, __ATOMIC_ACQUIRE ) == port) return i;
++    return -1;
++}
++
++/* Trampoline slots: the lowest free of max, -1 when all are taken. Slot 0 is
++ * the first thread's and every overflow's, so it is never given back. */
++static inline int ppts_trampoline_claim( volatile uint8_t *used, int max )
++{
++    int i;
++    for (i = 0; i < max; i++)
++    {
++        uint8_t expect = 0;
++        if (__atomic_compare_exchange_n( &used[i], &expect, 1, 0, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED ))
++            return i;
++    }
++    return -1;
++}
++
++static inline int ppts_trampoline_release( volatile uint8_t *used, int max, int slot )
++{
++    if (slot <= 0 || slot >= max) return 0;
++    return __atomic_exchange_n( &used[slot], 0, __ATOMIC_ACQ_REL ) == 1;
++}
++
++#endif /* PP_THREAD_SLOTS_H */
+diff --git a/build/ntdll-unix/signal_arm64_ios.c b/build/ntdll-unix/signal_arm64_ios.c
+index 575952f..59a72d8 100644
+--- a/build/ntdll-unix/signal_arm64_ios.c
++++ b/build/ntdll-unix/signal_arm64_ios.c
+@@ -586,13 +586,12 @@ static __thread int ios_my_slot = -1;
+  * past the 64-entry array. */
+ #define IOS_MAX_WINE_THREADS 512
+ 
+-struct ios_thread_entry {
+-    thread_t mach_thread;
+-    uintptr_t teb;
+-    void *trampoline;
+-};
++/* Playport (PLA-364, decision 0134): an entry is given back when its thread
++ * ends or is parked, and reused (pp_thread_slots.h). */
++#include "pp_thread_slots.h"
+ static struct ios_thread_entry ios_thread_registry[IOS_MAX_WINE_THREADS];
+ static volatile int32_t ios_thread_count = 0;
++static __thread int ios_my_registry_idx = -1;
+ 
+ /* Exact-match registry probe — NO slot-0 fallback.
+  *
+@@ -635,6 +634,53 @@ void ios_thread_registry_forget( uintptr_t start, uintptr_t end )
+             __atomic_store_n( &ios_thread_registry[i].teb, 0, __ATOMIC_RELEASE );
+ }
+ 
++/* Playport (PLA-364, decision 0134): registry entries in use, of
++ * IOS_MAX_WINE_THREADS, for the [thread-slots] lines. */
++static volatile int32_t ios_thread_live = 0;
++
++/* The ending thread gives back its registry entry and trampoline slot
++ * (pthread_exit_wrapper, last before pthread_exit). A fault of it after this
++ * is a native thread's, as the slot-0 fallback would have made it before. */
++void ios_thread_slots_release_self( void )
++{
++    extern int ios_jit_free_trampoline( void *trampoline );
++    unsigned int port = pthread_mach_thread_np( pthread_self() );
++    void *trampoline = ios_my_trampoline;
++    int idx = ios_my_registry_idx, released, freed;
++
++    ios_my_trampoline = NULL;
++    ios_my_slot = -1;
++    ios_my_registry_idx = -1;
++    released = ppts_registry_release( ios_thread_registry, ios_thread_registry_count(), idx, port );
++    if (released) __atomic_fetch_sub( &ios_thread_live, 1, __ATOMIC_RELAXED );
++    freed = ios_jit_free_trampoline( trampoline );
++    if (released || freed)
++        dprintf( 2, "[thread-slots] port=0x%x ended: idx=%d%s tramp=%p%s live=%d (PLA-364)\n",
++                 port, idx, released ? "" : " (not held)", trampoline, freed ? "" : " (kept)",
++                 (int)__atomic_load_n( &ios_thread_live, __ATOMIC_RELAXED ) );
++}
++
++/* A parked thread (decision 0127) gives back both too: Mach-suspended for
++ * ever, it runs and faults no more. Its port name stays pinned, so no new
++ * thread can be confused with it. */
++void ios_thread_slots_release_parked( thread_t port )
++{
++    extern int ios_jit_free_trampoline( void *trampoline );
++    int count = ios_thread_registry_count();
++    int idx = ppts_registry_find( ios_thread_registry, count, port );
++    void *trampoline = idx >= 0 ? __atomic_load_n( &ios_thread_registry[idx].trampoline, __ATOMIC_ACQUIRE ) : NULL;
++    int released = ppts_registry_release( ios_thread_registry, count, idx, port ), freed = 0;
++
++    if (released)
++    {
++        __atomic_fetch_sub( &ios_thread_live, 1, __ATOMIC_RELAXED );
++        freed = ios_jit_free_trampoline( trampoline );
++    }
++    dprintf( 2, "[thread-slots] port=0x%x parked: idx=%d%s tramp=%p%s live=%d (PLA-364)\n",
++             port, idx, released ? "" : " (not held)", trampoline, freed ? "" : " (kept)",
++             (int)__atomic_load_n( &ios_thread_live, __ATOMIC_RELAXED ) );
++}
++
+ static int ios_thread_is_registered(thread_t mach_thread)
+ {
+     int count = __sync_fetch_and_add(&ios_thread_count, 0);
+@@ -6220,21 +6266,15 @@ static void ios_setup_mach_exception_handler( thread_t pe_thread, uintptr_t teb,
+      * ml384: replace an existing entry for the same port first — the kernel
+      * recycles thread port names, and a stale entry earlier in the array would
+      * shadow the new registration in ios_lookup_thread (first match wins). */
+-    int idx, reg_count = __sync_fetch_and_add(&ios_thread_count, 0);
+-    if (reg_count > IOS_MAX_WINE_THREADS) reg_count = IOS_MAX_WINE_THREADS;
+-    for (idx = 0; idx < reg_count; idx++)
+-        if (ios_thread_registry[idx].mach_thread == pe_thread) break;
+-    if (idx == reg_count)
+-    {
+-        idx = __sync_fetch_and_add(&ios_thread_count, 1);
+-        if (idx >= IOS_MAX_WINE_THREADS)
+-        {
+-            ERR("[thread-registry] FULL (%d slots) — thread 0x%x teb=%p NOT registered; "
+-                "Mach events on it will resolve to the slot-0 TEB (wrong process!)\n",
+-                IOS_MAX_WINE_THREADS, pe_thread, (void *)teb);
+-            idx = -1;
+-        }
+-    }
++    /* Playport (PLA-364, decision 0134): an entry given back by an ended or
++     * parked thread is reused before the high-water mark grows. */
++    int again = 0;
++    int idx = ppts_registry_claim( ios_thread_registry, &ios_thread_count, IOS_MAX_WINE_THREADS,
++                                   pe_thread, &again );
++    if (idx < 0)
++        ERR("[thread-registry] FULL (%d slots) — thread 0x%x teb=%p NOT registered; "
++            "Mach events on it will resolve to the slot-0 TEB (wrong process!)\n",
++            IOS_MAX_WINE_THREADS, pe_thread, (void *)teb);
+     if (idx >= 0)
+     {
+         /* ml390 (task #66): make the replace path LOUD.  If a name gets
+@@ -6243,14 +6283,13 @@ static void ios_setup_mach_exception_handler( thread_t pe_thread, uintptr_t teb,
+          * thread_set_state aimed at the new owner could land on the old one
+          * (zeroed-state suspect).  old_teb!=0 && old_teb!=new_teb = the case
+          * to correlate offline against [reg-miss] and fault dumps. */
+-        if (idx < reg_count && ios_thread_registry[idx].teb &&
++        if (again && ios_thread_registry[idx].teb &&
+             ios_thread_registry[idx].teb != teb)
+             ERR( "[thread-registry] REPLACE idx=%d port=0x%x old_teb=%p new_teb=%p\n",
+                  idx, pe_thread, (void *)ios_thread_registry[idx].teb, (void *)teb );
+-        ios_thread_registry[idx].teb = teb;
+-        ios_thread_registry[idx].trampoline = trampoline;
+-        __sync_synchronize();
+-        ios_thread_registry[idx].mach_thread = pe_thread;
++        ppts_registry_publish( ios_thread_registry, idx, pe_thread, teb, trampoline );
++        if (!again) __atomic_fetch_add( &ios_thread_live, 1, __ATOMIC_RELAXED );
++        if (pe_thread == pthread_mach_thread_np( pthread_self() )) ios_my_registry_idx = idx;
+         /* ml401 (tasks #60/#66): EVERY registry port name proved
+          * MACH_SEND_INVALID_DEST when the census sampler tried to use it —
+          * something deallocates the mach_thread_self() ref after we store the
+@@ -6283,8 +6322,9 @@ static void ios_setup_mach_exception_handler( thread_t pe_thread, uintptr_t teb,
+                                       ARM_THREAD_STATE64 );
+     if (kr != KERN_SUCCESS) { ERR("mach exc set ports: kr=%d thread=0x%x\n", kr, pe_thread); return; }
+ 
+-    ERR("Mach exception handler registered thread 0x%x (idx=%d), teb=%p tramp=%p usd=%p mask=ba+bi rev=ml353\n",
+-        pe_thread, idx, (void*)teb, trampoline, (void*)ios_exc_usd);
++    ERR("Mach exception handler registered thread 0x%x (idx=%d), teb=%p tramp=%p usd=%p mask=ba+bi rev=ml353 live=%d\n",
++        pe_thread, idx, (void*)teb, trampoline, (void*)ios_exc_usd,
++        (int)__atomic_load_n( &ios_thread_live, __ATOMIC_RELAXED ));
+ }
+ #endif
+ 
+@@ -8619,6 +8659,7 @@ int ios_abort_thread_in_guest_code( mach_port_t port, TEB *teb, int process_endi
+             ios_alert_waiter_lookup( HandleToULong( tid ), &wait, &age, &inf );
+             dprintf( 2, "[proc-end] parked tid=%04x wait=%p futex=%p (PLA-416)\n",
+                      HandleToULong( tid ), wait, (void *)(uintptr_t)state.__x[1] );
++            ios_thread_slots_release_parked( port );
+             return 2;
+         }
+         if (why == PPE_PARK || ppe_refusal_logged( why ))
+diff --git a/build/ntdll-unix/thread_ios.c b/build/ntdll-unix/thread_ios.c
+index b6959b8..338779b 100644
+--- a/build/ntdll-unix/thread_ios.c
++++ b/build/ntdll-unix/thread_ios.c
+@@ -1279,6 +1279,12 @@ static DECLSPEC_NORETURN void pthread_exit_wrapper( int status )
+         extern void ios_view_owner_thread_exit( struct thread_data *data );
+         ios_view_owner_thread_exit( get_thread_data() );
+     }
++    {
++        /* Playport (PLA-364, decision 0134): give back its exception registry
++         * entry and TEB-restore trampoline slot for a later thread. */
++        extern void ios_thread_slots_release_self( void );
++        ios_thread_slots_release_self();
++    }
+     pthread_exit( UIntToPtr(status) );
+ }
+ 
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index c5f15d9..3bca630 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -3278,21 +3278,25 @@ int ios_fast_footprint = 0;                    /* ml670: set when d3d11 loads */
+  *
+  * Each Wine "process" thread gets its own slot with its own TEB address.
+  * Slot 0 is the default (backward compatible with ios_jit_teb_trampoline).
+- * Max 256 slots in one 16KB page (256 * 16 = 4096, well within 0x4000).
++ * Max 1024 slots in one 16KB page (1024 * 16 = 0x4000).
+  *
+  * Usage: SEGV/Mach handler sets x17 = target_PC, PC = thread's trampoline.
+  * Trampoline runs: loads x18 = thread's TEB, jumps to x17 = target PC.
+  */
+ void *ios_jit_teb_trampoline = NULL;  /* RX address of slot 0 trampoline (offset 8) */
+ #define IOS_JIT_TRAMPOLINE_SIZE 16    /* Bytes per trampoline slot */
+-#define IOS_JIT_MAX_SLOTS 256         /* Max threads with trampolines */
+-static volatile int32_t ios_jit_next_slot = 0;  /* Next slot to allocate */
++/* Playport (PLA-364, decision 0134): the reserved first page (0x4000) holds
++ * 1024 slots, and a slot is given back when its thread ends or is parked
++ * (pp_thread_slots.h); slot 0, the first thread's and every overflow's, never is. */
++#define IOS_JIT_MAX_SLOTS 1024        /* Max threads with trampolines: 0x4000 / 16 */
++#include "pp_thread_slots.h"
++static volatile uint8_t ios_jit_slot_used[IOS_JIT_MAX_SLOTS];
+ 
+ /* Allocate a per-thread trampoline slot. Returns slot index (0-based). */
+ int ios_jit_alloc_trampoline_slot(void)
+ {
+-    int slot = __sync_fetch_and_add(&ios_jit_next_slot, 1);
+-    if (slot >= IOS_JIT_MAX_SLOTS) return 0;  /* fallback to slot 0 */
++    int slot = ppts_trampoline_claim( ios_jit_slot_used, IOS_JIT_MAX_SLOTS );
++    if (slot < 0) return 0;  /* fallback to slot 0 */
+ 
+     /* Write trampoline code to this slot's RW view */
+     if (ios_jit_rw_base_global)
+@@ -3307,6 +3311,16 @@ int ios_jit_alloc_trampoline_slot(void)
+     return slot;
+ }
+ 
++/* Give back the slot whose trampoline is at RX address trampoline; 1 when given back. */
++int ios_jit_free_trampoline( void *trampoline )
++{
++    uintptr_t rx = (uintptr_t)ios_jit_rx_base_global, t = (uintptr_t)trampoline;
++
++    if (!rx || t < rx + 8 || (t - rx - 8) % IOS_JIT_TRAMPOLINE_SIZE) return 0;
++    return ppts_trampoline_release( ios_jit_slot_used, IOS_JIT_MAX_SLOTS,
++                                    (int)((t - rx - 8) / IOS_JIT_TRAMPOLINE_SIZE) );
++}
++
+ /* Write TEB address to a specific trampoline slot */
+ void ios_jit_set_teb_slot(int slot, uintptr_t teb)
+ {
