@@ -1,0 +1,404 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 20 Oct 2026 09:48:52 +0200
+Subject: [PATCH] wineserver: read only the request fds of threads that have a
+ request
+
+The iOS server loop cannot poll its AF_UNIX client fds, so on every pass
+it set a synthetic POLLIN on every client fd and tried a non-blocking
+read() on each. With RDR2's 220-280 threads that was O(threads) failed
+syscalls per pass: in run 20261020T081946-rdr2-r3 the wineserver thread
+used 48-85 % of a core, almost all of it in read <- read_request <-
+thread_poll_event <- main_loop. The wake semaphore made it worse: every
+request signalled it and nothing drained it, so once requests (5-6 k/s)
+outran the loop it stopped sleeping.
+
+Server and clients are one process. A client now marks its thread id in
+a shared set (wineserver/pp_srv_pending.h: a bitmap of ptids with a
+summary word per 64 words) after it writes a request, and after it
+closes its request fd as it ends. The loop drains the set each pass and
+reads only those threads' request fds; the sweep still reads every
+other client fd (process sockets) each pass, and the thread request fds
+too on a full sweep every 50 ms, the net for a missed mark. An id the
+set cannot hold (0 before init_first_thread's reply, or above 0xfffc)
+asks for a full sweep at once. A partly read request is marked again;
+a mark while the request fd waits for a reply's POLLOUT is retried
+each pass.
+
+The wake semaphore is signalled only by the first mark since the loop
+last re-armed (once per pass, before it sleeps), and the loop does not
+sleep while marks wait, so a mark is never left for the 1 ms tick and
+the semaphore's count no longer grows with the request rate.
+
+INET fds keep their real zero-timeout poll() each pass, and the loop
+still wakes at least every 1 ms for timers, so Steam's CM pings keep
+their budget. MADEIRA_SRV_PENDING=0 restores the old sweep for an A/B.
+The heartbeat logs a [srv-pending] line: marks read, stale ids, partial
+requests, deferred marks, full sweeps, forced ones, and requests a full
+sweep found waiting (a missed mark, or one about to be made).
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-20-wineserver-pending-set.md
+Offered-upstream: no; the in-process server loop is the iOS port's
+---
+ build/ntdll-unix/server_ios.c     |   9 ++-
+ build/ntdll-unix/thread_ios.c     |   6 ++
+ build/wineserver/fd_ios.c         | 130 +++++++++++++++++++++++++++++-
+ build/wineserver/pp_srv_pending.h | 120 +++++++++++++++++++++++++++
+ 4 files changed, 259 insertions(+), 6 deletions(-)
+ create mode 100644 build/wineserver/pp_srv_pending.h
+
+diff --git a/build/ntdll-unix/server_ios.c b/build/ntdll-unix/server_ios.c
+index 2c3ef28..893b514 100644
+--- a/build/ntdll-unix/server_ios.c
++++ b/build/ntdll-unix/server_ios.c
+@@ -2183,10 +2183,13 @@ unsigned int server_call_unlocked( void *req_ptr )
+     if ((ret = send_request( data->request_fd, req ))) return ret;
+     /* iOS-Madeira 2026-07-05: kick the in-process server loop out of its
+      * tick sleep so the request is picked up in ~50us instead of waiting
+-     * for the next 1ms iteration (fd_ios.c ios_srv_wake_sem). */
++     * for the next 1ms iteration (fd_ios.c ios_srv_wake_sem).
++     * Playport (PLA-364): and mark this thread's request fd as the one to
++     * read (wineserver/pp_srv_pending.h); the wake is signalled only when
++     * the server is not already awake for an earlier mark. */
+     {
+-        extern void ios_wineserver_wake(void);
+-        ios_wineserver_wake();
++        extern void ios_wineserver_kick_thread( unsigned int tid );
++        ios_wineserver_kick_thread( data->tid );
+     }
+     ret = wait_reply( data->reply_fd, req );
+     if (counting) ios_srv_note_call( type, mach_absolute_time() - t0 );   /* Playport: [srv] census */
+diff --git a/build/ntdll-unix/thread_ios.c b/build/ntdll-unix/thread_ios.c
+index 338779b..4e552ce 100644
+--- a/build/ntdll-unix/thread_ios.c
++++ b/build/ntdll-unix/thread_ios.c
+@@ -1155,6 +1155,12 @@ static DECLSPEC_NORETURN void pthread_exit_wrapper( int status )
+         close( data->wait_fd[1] );
+         close( data->reply_fd );
+         close( data->request_fd );
++        {
++            /* Playport (PLA-364): the server reads the end of the request
++             * fd now, not at its next full sweep (pp_srv_pending.h) */
++            extern void ios_wineserver_kick_thread( unsigned int tid );
++            ios_wineserver_kick_thread( data->tid );
++        }
+     }
+     /* iOS-Madeira (Steam S0): we write the TEB directly into TSD slot 275
+      * (start_thread above) because FEX hardcodes offset 0x898 — but we
+diff --git a/build/wineserver/fd_ios.c b/build/wineserver/fd_ios.c
+index 93e07e3..4798dc9 100644
+--- a/build/wineserver/fd_ios.c
++++ b/build/wineserver/fd_ios.c
+@@ -45,6 +45,23 @@ void ios_wineserver_wake(void)
+     if (ios_srv_wake_sem) semaphore_signal( ios_srv_wake_sem );
+ }
+ 
++/* Playport (PLA-364): the threads with something on their request fd, a
++ * request or its end (pp_srv_pending.h). main_loop reads only theirs, and
++ * every client fd at most every IOS_SRV_FULL_SWEEP_NS. On unless
++ * MADEIRA_SRV_PENDING=0; main_loop decides once, before any client runs. */
++#include "pp_srv_pending.h"
++static struct ppsp_set ios_srv_pending;
++static int ios_srv_pending_on;
++
++/* ntdll, after thread tid writes a request or closes its request fd */
++void ios_wineserver_kick_thread( unsigned int tid )
++{
++    if (!__atomic_load_n( &ios_srv_pending_on, __ATOMIC_ACQUIRE ))
++        ios_wineserver_wake();
++    else if (ppsp_mark( &ios_srv_pending, tid ))
++        ios_wineserver_wake();
++}
++
+ /* __WINESRC__ must be defined via -D flag so unicode_fix.h can see it */
+ 
+ #include <assert.h>
+@@ -1162,6 +1179,58 @@ static signed char ios_fd_is_inet( int user, int fd )
+     return cache_val[user];
+ }
+ 
++/* Playport (PLA-364): the pending set's side of main_loop. */
++#define IOS_SRV_FULL_SWEEP_NS 50000000ull   /* the net for a missed mark: 50 ms */
++static struct ppsp_set ios_srv_deferred;    /* marked while its request fd waits for a reply's
++                                             * POLLOUT: retried every pass, never keeps us awake */
++static unsigned long long ios_pend_marked, ios_pend_stale, ios_pend_partial, ios_pend_deferred;
++static unsigned long long ios_pend_full, ios_pend_forced, ios_pend_found;
++
++/* Is poll user `user` (in use) a thread's request fd? */
++static int ios_fd_is_thread_request( int user )
++{
++    struct fd *fd = poll_users[user];
++    struct object *obj = fd->user;
++
++    return obj && obj->ops->type == &thread_type && ((struct thread *)obj)->request_fd == fd;
++}
++
++/* Read thread tid's request fd, as the sweep's synthetic POLLIN did. */
++static void ios_pending_dispatch( uint32_t tid, void *ctx )
++{
++    struct thread *thread;
++    struct fd *fd;
++    int user;
++
++    (void)ctx;
++    if (!(thread = get_thread_from_id( tid )))
++    {
++        ios_pend_stale++;   /* ended, or its id now names a process */
++        return;
++    }
++    ios_pend_marked++;
++    fd = thread->request_fd;
++    if (fd && (user = fd->poll_index) >= 0 && user < nb_users && poll_users[user] == fd && pollfd[user].fd >= 0)
++    {
++        if (pollfd[user].events & POLLIN)
++        {
++            fd_poll_event( fd, POLLIN );
++            /* the rest of a large request is still coming: read again next pass */
++            if (thread->request_fd == fd && thread->req_toread)
++            {
++                ios_pend_partial++;
++                ppsp_mark_quiet( &ios_srv_pending, tid );
++            }
++        }
++        else
++        {
++            ios_pend_deferred++;
++            ppsp_mark_quiet( &ios_srv_deferred, tid );
++        }
++    }
++    release_object( thread );
++}
++
+ void main_loop(void)
+ {
+     int i, ret, timeout;
+@@ -1215,6 +1284,7 @@ void main_loop(void)
+         static int ios_post_inject = 0;  /* trace first N iters after injection */
+         static int ios_client_fd_start = -1;  /* first poll index added by injection */
+         unsigned long long ios_next_timer_ns = ~0ull;  /* ns until next timer (deadline-aware sleep) */
++        int ios_full_sweep = 1;  /* Playport: this pass reads every client fd */
+ 
+         /* iOS socketpair bypass: check for injected client fd from app bridge */
+         extern volatile int g_injected_client_fd;
+@@ -1230,6 +1300,14 @@ void main_loop(void)
+             ws_log("[wineserver-fd] request-wake semaphore: kr=%d sem=0x%x", skr, ios_srv_wake_sem);
+             if (skr != KERN_SUCCESS) ios_srv_wake_sem = 0;
+         }
++        {
++            const char *e = getenv( "MADEIRA_SRV_PENDING" );
++            int on = !(e && *e == '0');
++            __atomic_store_n( &ios_srv_pending_on, on, __ATOMIC_RELEASE );
++            ws_log("[srv-pending] MADEIRA_SRV_PENDING=%d (%s)", on,
++                   on ? "read marked request fds, every client fd each 50 ms"
++                      : "read every client fd every pass");
++        }
+         while (active_users)
+         {
+             /* Check stop flag */
+@@ -1261,6 +1339,11 @@ void main_loop(void)
+                        ios_syn_top_user, ios_syn_top_n);
+                 memset( ios_syn_per_user, 0, sizeof(ios_syn_per_user) );
+                 ios_syn_top_user = -1; ios_syn_top_n = 0;
++                if (ios_srv_pending_on)
++                    ws_log("[srv-pending] iter=%d marked=%llu stale=%llu partial=%llu deferred=%llu "
++                           "full=%llu forced=%llu found=%llu",
++                           ios_iter, ios_pend_marked, ios_pend_stale, ios_pend_partial,
++                           ios_pend_deferred, ios_pend_full, ios_pend_forced, ios_pend_found);
+             }
+ 
+             /* [srv-queues] desktop-mode diagnostic: dump every thread's
+@@ -1333,6 +1416,9 @@ void main_loop(void)
+                 if (!lt_tb.denom) mach_timebase_info( &lt_tb );
+                 lt_t0 = mach_absolute_time();
+                 if (ios_next_timer_ns < sleep_ns) sleep_ns = ios_next_timer_ns;
++                /* Playport: a mark already waiting is read now; else the
++                 * next mark signals (pp_srv_pending.h) */
++                if (ios_srv_pending_on && ppsp_rearm( &ios_srv_pending )) sleep_ns = 0;
+                 if (sleep_ns > 0)
+                 {
+                     /* ml585 A/B, default OFF. MADEIRA_SRV_NOSEM=1 ignores the
+@@ -1475,6 +1561,31 @@ void main_loop(void)
+                 }
+             }
+ 
++            /* Playport (PLA-364): the marked threads' request fds; the sweep
++             * below then reads the other client fds every pass, and the
++             * request fds only on a full sweep (every 50 ms, or when a mark
++             * the set could not hold asked for one). */
++            ios_full_sweep = 1;
++            if (ios_srv_pending_on)
++            {
++                static mach_timebase_info_data_t fs_tb;
++                static unsigned long long fs_last;
++                unsigned long long fs_now;
++                int forced;
++
++                ppsp_drain( &ios_srv_deferred, ios_pending_dispatch, NULL );
++                forced = ppsp_drain( &ios_srv_pending, ios_pending_dispatch, NULL );
++                if (!fs_tb.denom) mach_timebase_info( &fs_tb );
++                fs_now = mach_absolute_time() * fs_tb.numer / fs_tb.denom;
++                ios_full_sweep = forced || fs_now - fs_last >= IOS_SRV_FULL_SWEEP_NS;
++                if (ios_full_sweep)
++                {
++                    fs_last = fs_now;
++                    ios_pend_full++;
++                    if (forced) ios_pend_forced++;
++                }
++            }
++
+             /* Check non-master fds for events.
+              * Init fds (signal pipes, files): use ioctl(FIONREAD) — works for pipes/files.
+              * Client fds (socketpair, request pipe): always try non-blocking read —
+@@ -1493,9 +1604,22 @@ void main_loop(void)
+                         if (ios_client_fd_start >= 0 && i >= ios_client_fd_start)
+                         {
+                             /* Client fd (socketpair/pipe from injection) —
+-                             * always try, ioctl broken for AF_UNIX on iOS */
+-                            revents |= POLLIN;
+-                            ios_c_synin++;
++                             * always try, ioctl broken for AF_UNIX on iOS.
++                             * Playport: a thread's request fd (a pipe) only
++                             * on a full sweep; one with a request waiting
++                             * there is a mark the set missed (or one about
++                             * to be made). */
++                            if (ios_full_sweep || !ios_fd_is_thread_request( i ))
++                            {
++                                if (ios_srv_pending_on && ios_fd_is_thread_request( i ))
++                                {
++                                    int waiting = 0;
++                                    if (ioctl( pollfd[i].fd, FIONREAD, &waiting ) == 0 && waiting > 0)
++                                        ios_pend_found++;
++                                }
++                                revents |= POLLIN;
++                                ios_c_synin++;
++                            }
+                         }
+                         else
+                         {
+diff --git a/build/wineserver/pp_srv_pending.h b/build/wineserver/pp_srv_pending.h
+new file mode 100644
+index 0000000..5dfbc33
+--- /dev/null
++++ b/build/wineserver/pp_srv_pending.h
+@@ -0,0 +1,120 @@
++/* Playport (PLA-364, madeira-unix 0175): the wineserver's set of threads with a
++ * request to read.
++ *
++ * The iOS server loop cannot poll its client pipes, so it used to try a
++ * non-blocking read() on every client fd on every pass: with RDR2's 220-280
++ * threads that was most of a core in failed reads (read_request <-
++ * thread_poll_event). Server and clients are one process, so a client now
++ * marks its thread id here after it writes a request (or closes its request
++ * fd), and the server reads only the marked threads' request fds; a full
++ * sweep at a low rate remains as the net for a missed mark.
++ *
++ * Thread ids are multiples of 4 (wineserver ptids); an id the set cannot
++ * hold (0 before init_first_thread's reply, or above PPSP_MAX_TID) asks for
++ * one full sweep instead.
++ *
++ * Wake coalescing: a client signals the server's wake semaphore only when it
++ * is the first to mark since the server last re-armed (ppsp_rearm, once per
++ * pass, before it sleeps). Rearm stores `armed = 0` and then looks for marks;
++ * a client sets its bits and then exchanges `armed`. In the single order of
++ * these sequentially consistent operations either the server sees the mark
++ * (and does not sleep) or the client sees `armed == 0` (and signals): a mark
++ * is never left waiting for the 1 ms tick, and the semaphore's count no
++ * longer grows with the request rate. */
++#ifndef PP_SRV_PENDING_H
++#define PP_SRV_PENDING_H
++
++#include <stdint.h>
++
++#define PPSP_MAX_TID   0xfffcu                 /* the highest id with a bit of its own */
++#define PPSP_SLOTS     ((PPSP_MAX_TID >> 2) + 1)  /* 16,384 */
++#define PPSP_WORDS     (PPSP_SLOTS / 64)       /* 256 */
++#define PPSP_SUMMARY   (PPSP_WORDS / 64)       /* 4: a bit per non-empty word */
++
++struct ppsp_set
++{
++    uint64_t word[PPSP_WORDS];      /* bit (tid >> 2): that thread has something to read */
++    uint64_t summary[PPSP_SUMMARY]; /* bit w: word[w] may be non-zero */
++    uint32_t sweep;                 /* a mark the set cannot hold: sweep every request fd */
++    uint32_t armed;                 /* a client has signalled since the last ppsp_rearm */
++};
++
++/* Mark tid without the wake: the server re-marking a thread whose request is
++ * still arriving, or deferring one. */
++static inline void ppsp_mark_quiet( struct ppsp_set *s, uint32_t tid )
++{
++    uint32_t slot = tid >> 2;
++
++    if (!tid || (tid & 3) || tid > PPSP_MAX_TID)
++    {
++        __atomic_store_n( &s->sweep, 1, __ATOMIC_SEQ_CST );
++        return;
++    }
++    __atomic_fetch_or( &s->word[slot >> 6], 1ull << (slot & 63), __ATOMIC_SEQ_CST );
++    __atomic_fetch_or( &s->summary[slot >> 12], 1ull << ((slot >> 6) & 63), __ATOMIC_SEQ_CST );
++}
++
++/* Client, after its write: returns nonzero when the caller must signal the
++ * server's wake semaphore. */
++static inline int ppsp_mark( struct ppsp_set *s, uint32_t tid )
++{
++    ppsp_mark_quiet( s, tid );
++    return !__atomic_exchange_n( &s->armed, 1, __ATOMIC_SEQ_CST );
++}
++
++/* Is any mark waiting? */
++static inline int ppsp_pending( struct ppsp_set *s )
++{
++    unsigned int i;
++
++    if (__atomic_load_n( &s->sweep, __ATOMIC_SEQ_CST )) return 1;
++    for (i = 0; i < PPSP_SUMMARY; i++)
++        if (__atomic_load_n( &s->summary[i], __ATOMIC_SEQ_CST )) return 1;
++    return 0;
++}
++
++/* Server, once per pass before it sleeps: lets the next mark signal again.
++ * Returns nonzero when marks are already waiting (do not sleep). */
++static inline int ppsp_rearm( struct ppsp_set *s )
++{
++    __atomic_store_n( &s->armed, 0, __ATOMIC_SEQ_CST );
++    return ppsp_pending( s );
++}
++
++/* Server: takes every mark, calling fn for each marked thread id (in id
++ * order); fn may mark again, for the next drain. Returns nonzero when a
++ * full sweep was asked for. */
++static inline int ppsp_drain( struct ppsp_set *s, void (*fn)( uint32_t tid, void *ctx ), void *ctx )
++{
++    unsigned int i;
++    int sweep = 0;
++
++    if (__atomic_load_n( &s->sweep, __ATOMIC_RELAXED ))
++        sweep = __atomic_exchange_n( &s->sweep, 0, __ATOMIC_SEQ_CST ) != 0;
++    for (i = 0; i < PPSP_SUMMARY; i++)
++    {
++        uint64_t sum;
++
++        if (!__atomic_load_n( &s->summary[i], __ATOMIC_RELAXED )) continue;
++        /* the summary first: a bit a client sets after this exchange sets
++         * its summary bit again, so the next drain finds it */
++        sum = __atomic_exchange_n( &s->summary[i], 0, __ATOMIC_SEQ_CST );
++        while (sum)
++        {
++            unsigned int w = i * 64 + (unsigned int)__builtin_ctzll( sum );
++            uint64_t bits = __atomic_exchange_n( &s->word[w], 0, __ATOMIC_SEQ_CST );
++
++            sum &= sum - 1;
++            while (bits)
++            {
++                uint32_t slot = w * 64 + (uint32_t)__builtin_ctzll( bits );
++
++                bits &= bits - 1;
++                fn( slot << 2, ctx );
++            }
++        }
++    }
++    return sweep;
++}
++
++#endif /* PP_SRV_PENDING_H */
