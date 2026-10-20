@@ -32,10 +32,9 @@ final class CompatDefaultsTests: XCTestCase {
     }
 
     /// RDR2's runtime keys: its address-space holdback, and the owner's chosen defaults for an
-    /// owner-run test (decision 0142): a 3,072 MiB heap, fastsync semaphores, FEX without AFP and
-    /// in-process sync.
+    /// owner-run test (decision 0142): a 3,072 MiB heap, fastsync semaphores and FEX without AFP.
     static let rdr2Runtime = "jumbo-mb=8960 env.PLAYPORT_VK_HEAP_MB=3072 env.MADEIRA_FASTSYNC_SEM=1 "
-        + "env.FEX_HOSTFEATURES=disableafp inproc-sync=1"
+        + "env.FEX_HOSTFEATURES=disableafp"
 
     /// Each of the owner's RDR2 defaults is a runtime key, so a person's Runtime keys row
     /// overrides it by key and keeps the rest (decision 0142).
@@ -44,11 +43,11 @@ final class CompatDefaultsTests: XCTestCase {
         let rdr2 = try XCTUnwrap(table.entry(for: "app-1174180"))
         XCTAssertEqual(LaunchSettings.runtimeKeys(rdr2.settings.runtime),
                        ["jumbo-mb": "8960", "env.PLAYPORT_VK_HEAP_MB": "3072", "env.MADEIRA_FASTSYNC_SEM": "1",
-                        "env.FEX_HOSTFEATURES": "disableafp", "inproc-sync": "1"])
-        let own = LaunchSettings(runtime: "inproc-sync=0 env.PLAYPORT_VK_HEAP_MB=0").over(rdr2.settings)
+                        "env.FEX_HOSTFEATURES": "disableafp"])
+        let own = LaunchSettings(runtime: "env.MADEIRA_FASTSYNC_SEM=0 env.PLAYPORT_VK_HEAP_MB=0").over(rdr2.settings)
         XCTAssertEqual(LaunchSettings.runtimeKeys(own.runtime),
-                       ["jumbo-mb": "8960", "env.PLAYPORT_VK_HEAP_MB": "0", "env.MADEIRA_FASTSYNC_SEM": "1",
-                        "env.FEX_HOSTFEATURES": "disableafp", "inproc-sync": "0"])
+                       ["jumbo-mb": "8960", "env.PLAYPORT_VK_HEAP_MB": "0", "env.MADEIRA_FASTSYNC_SEM": "0",
+                        "env.FEX_HOSTFEATURES": "disableafp"])
     }
 
     /// The table reaches players: no issue id or tracker address anywhere in it.

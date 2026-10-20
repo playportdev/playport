@@ -1,10 +1,11 @@
-# 0142: RDR2's owner-test defaults: a 3,072 MiB heap, in-process sync, fastsync semaphores, FEX without AFP
+# 0142: RDR2's owner-test defaults: a 3,072 MiB heap, fastsync semaphores, FEX without AFP
 
 **Status:** accepted, 2026-10-20, as the owner's chosen defaults for a Red Dead Redemption 2 test
 the owner plays on the phone (PLA-413, PLA-364). Amends
 [0106](0106-8gb-row-in-full-and-vulkan-plan-default.md): KosmicKrisp's heap size may follow a title's
 value, not only its budget. Revisit with the owner's results: each default stays only if that play
-supports it.
+supports it. **Amended the same day:** `inproc-sync=1` is dropped from the default after the
+owner's first play (below, and the evidence).
 
 ## Context
 
@@ -25,22 +26,22 @@ supports it.
   and under the working set; the budget is never over it. Allocations past it still succeed: nothing
   in the driver checks an allocation against the heap's size (the mesa host test allocates 384 MiB
   under a 256 MiB heap). Unset, nothing changes.
-- **RDR2's compatibility default (`app-1174180`) adds four runtime keys** to `jumbo-mb=8960`:
-  `env.PLAYPORT_VK_HEAP_MB=3072 env.MADEIRA_FASTSYNC_SEM=1 env.FEX_HOSTFEATURES=disableafp
-  inproc-sync=1`. Like any runtime key of a default, a person's Runtime keys row (dev build)
-  overrides each by key: `env.PLAYPORT_VK_HEAP_MB=0`, `env.MADEIRA_FASTSYNC_SEM=0`,
-  `env.FEX_HOSTFEATURES=enableafp` (FEX's own default on iOS), `inproc-sync=0`.
-- **In-process sync wins over fastsync.** The code runs one in-process engine per session: with
-  madsync's device handed out, ntdll's fastsync is off whatever `MADEIRA_FASTSYNC` says and the
-  server allocates no cells. So while `inproc-sync=1` stands `MADEIRA_FASTSYNC_SEM=1` does nothing;
-  it is there for a play with `inproc-sync=0`, which gets fastsync `auto` with semaphores.
+- **RDR2's compatibility default (`app-1174180`) adds three runtime keys** to `jumbo-mb=8960`:
+  `env.PLAYPORT_VK_HEAP_MB=3072 env.MADEIRA_FASTSYNC_SEM=1 env.FEX_HOSTFEATURES=disableafp`. Like
+  any runtime key of a default, a person's Runtime keys row (dev build) overrides each by key:
+  `env.PLAYPORT_VK_HEAP_MB=0`, `env.MADEIRA_FASTSYNC_SEM=0`, `env.FEX_HOSTFEATURES=enableafp`
+  (FEX's own default on iOS).
+- **`inproc-sync=1` is not a default.** The owner chose it too, and the first build had it. The code
+  runs one in-process engine per session: with madsync's device handed out, ntdll's fastsync is off
+  whatever `MADEIRA_FASTSYNC` says and the server allocates no cells, so the semaphore switch did
+  nothing. In the owner's first play the Rockstar launcher could not open the service control
+  manager (`Unable to open SC manager! (1722)`) and showed "Failed to connect to the Rockstar Games
+  Library Service"; RDR2.exe never started. With `inproc-sync=0` the launcher started the game.
+  The service manager's RPC runs over a named pipe, the case 0023's defect names. A person can still
+  set `inproc-sync=1` in the Runtime keys row.
 
 ## Costs and risks
 
-- **madsync keeps 0023's defects**: a thread blocked in it runs no system APC, so an async
-  completion such as a named-pipe read's can be lost (a read returns 0 bytes), and one global mutex
-  serialises it. The Rockstar launcher and Social Club use pipes. This is the owner's choice for
-  this test, not a fix.
 - **A 3,072 MiB heap is a smaller pool target for the game**; a game that refuses a setting it
   thinks the heap cannot hold may lower its own quality or refuse a preset.
 - **The defaults reach a release build too**, where a person cannot override runtime keys (0126).
