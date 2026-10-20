@@ -107,9 +107,9 @@ A at first frame +83 s, on the Story tab. The last full `[footprint]` line befor
   one, or stop, is not known: every run ended at the limit within 70–100 s of the end.
 - **The saves.** The profile's save files were backed up before the first run with the control
   (`agent-notes/pla413c/save-backup-0`, hashes in `save-backup-0.sha256`) and compared after sc1,
-  sc2 and adv. The slots (`SRDR30000`, `SRDR30015`) and `Player` are unchanged. `cfg.dat` changes
-  every run, also in sc1, where nothing was ended. After adv, `ProfileSettings` and
-  `cloudsavedata.dat` changed too, at their old sizes (2,840 and 9,964 bytes). No file is
+  sc2, adv and sc4. The slots (`SRDR30000`, `SRDR30015`) and `Player` are unchanged. `cfg.dat` changes
+  every run, also in sc1, where nothing was ended. After adv and after sc4, `ProfileSettings`
+  and `cloudsavedata.dat` changed too, at their old sizes (2,840 and 9,964 bytes). No file is
   truncated.
 
 ## 4. What fills the limit at the kill (sc2, the last `[proc-mem]` and `[phys-map]` lines)
