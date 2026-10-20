@@ -1,0 +1,211 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 20 Oct 2026 23:49:34 +0200
+Subject: [PATCH] ntdll: MADEIRA_X64_CS_FASTPATH=1 takes an x64 module's free
+ critical sections without leaving the emulator
+
+On the phone RDR2 makes about 520,000 x64->EC transitions a second, and
+145,000 of them are EnterCriticalSection and LeaveCriticalSection
+calls into ntdll; a few hundred a second find the section contended.
+Under the CPU power clamp that holds the game on the E cores, fps
+follows the work per frame, and each transition is FEX leaving its
+JIT code for ARM64EC and coming back.
+
+With MADEIRA_X64_CS_FASTPATH=1 (off by default), the loader binds an
+x64 module's imports of EnterCriticalSection, LeaveCriticalSection and
+their Rtl names, when they resolve to ntdll's x64 export thunks, to two
+x64 stubs in one page made per process:
+
+- Enter takes a free section: lock cmpxchg LockCount -1 -> 0, then
+  OwningThread from gs:0x48 and RecursionCount 1;
+- Leave releases a section held once with no waiter: it clears
+  RecursionCount and OwningThread, then lock cmpxchg LockCount 0 -> -1,
+  and if a waiter came it restores both before going on;
+- every other case (contended, recursive, spin count) jumps on to
+  ntdll's export thunk, the address the import had before.
+
+FEX runs the stubs as guest code, so the free case never leaves the
+JIT. A [x64-cs] line gives the page and each import descriptor it
+rewrote. Not covered: addresses from GetProcAddress, EC callers, and
+the ml810 history (compiled out by default).
+
+Linear: PLA-364
+Class: feature
+Evidence: docs/evidence/2026-10-20-rdr2-perf-arms.md
+Offered-upstream: no; the transition cost is the iOS port's
+---
+ dlls/ntdll/loader.c | 140 ++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 140 insertions(+)
+
+diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
+index cede605..4c85161 100644
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -1436,6 +1436,128 @@ static BOOL arm64ec_iat_is_exported_x64( HMODULE module, const IMAGE_THUNK_DATA
+     }
+     return selected;
+ }
++
++/* Playport: MADEIRA_X64_CS_FASTPATH=1 (off by default). Each x64 call of
++ * EnterCriticalSection or LeaveCriticalSection costs an x64->EC transition into
++ * ntdll, about 145,000 a second in RDR2, and almost every one finds the
++ * section free (a few hundred a second contend). With the switch, an x64
++ * module's imports of the two go to x64 stubs that FEX runs inline: Enter
++ * takes a free section (LockCount -1 -> 0), Leave releases a section held once
++ * with no waiter (LockCount 0 -> -1); every other case jumps on to ntdll's
++ * export, as the import did before. Offsets are the x64 RTL_CRITICAL_SECTION's
++ * (LockCount 0x8, RecursionCount 0xc, OwningThread 0x10); the owner is the
++ * TEB's ClientId.UniqueThread, gs:0x48. Leave clears the owner before the
++ * release and restores it if a waiter came, as RtlLeaveCriticalSection expects
++ * to find the section held. Each stub ends in jmp *0(%rip) and its target. */
++static const BYTE x64_cs_enter_code[] =
++{
++    0xb8, 0xff, 0xff, 0xff, 0xff,                   /* 00: mov $-1,%eax */
++    0x31, 0xd2,                                     /* 05: xor %edx,%edx */
++    0xf0, 0x0f, 0xb1, 0x51, 0x08,                   /* 07: lock cmpxchg %edx,0x8(%rcx) */
++    0x75, 0x17,                                     /* 0c: jne 25 */
++    0x65, 0x48, 0x8b, 0x04, 0x25, 0x48, 0, 0, 0,    /* 0e: mov %gs:0x48,%rax */
++    0x48, 0x89, 0x41, 0x10,                         /* 17: mov %rax,0x10(%rcx) */
++    0xc7, 0x41, 0x0c, 0x01, 0, 0, 0,                /* 1b: movl $1,0xc(%rcx) */
++    0x31, 0xc0,                                     /* 22: xor %eax,%eax */
++    0xc3,                                           /* 24: ret */
++    0xff, 0x25, 0, 0, 0, 0,                         /* 25: jmp *0(%rip) */
++};
++static const BYTE x64_cs_leave_code[] =
++{
++    0x83, 0x79, 0x0c, 0x01,                         /* 00: cmpl $1,0xc(%rcx) */
++    0x75, 0x3a,                                     /* 04: jne 40 */
++    0x83, 0x79, 0x08, 0x00,                         /* 06: cmpl $0,0x8(%rcx) */
++    0x75, 0x34,                                     /* 0a: jne 40 */
++    0xc7, 0x41, 0x0c, 0, 0, 0, 0,                   /* 0c: movl $0,0xc(%rcx) */
++    0x48, 0xc7, 0x41, 0x10, 0, 0, 0, 0,             /* 13: movq $0,0x10(%rcx) */
++    0x31, 0xc0,                                     /* 1b: xor %eax,%eax */
++    0xba, 0xff, 0xff, 0xff, 0xff,                   /* 1d: mov $-1,%edx */
++    0xf0, 0x0f, 0xb1, 0x51, 0x08,                   /* 22: lock cmpxchg %edx,0x8(%rcx) */
++    0x75, 0x03,                                     /* 27: jne 2c */
++    0x31, 0xc0,                                     /* 29: xor %eax,%eax */
++    0xc3,                                           /* 2b: ret */
++    0x65, 0x48, 0x8b, 0x04, 0x25, 0x48, 0, 0, 0,    /* 2c: mov %gs:0x48,%rax */
++    0x48, 0x89, 0x41, 0x10,                         /* 35: mov %rax,0x10(%rcx) */
++    0xc7, 0x41, 0x0c, 0x01, 0, 0, 0,                /* 39: movl $1,0xc(%rcx) */
++    0xff, 0x25, 0, 0, 0, 0,                         /* 40: jmp *0(%rip) */
++};
++C_ASSERT( sizeof(x64_cs_enter_code) == 0x2b && sizeof(x64_cs_leave_code) == 0x46 );
++/* the x64 export thunk ntdll's exports start with (see arm64x_check_call) */
++static const BYTE x64_cs_export_thunk[] = { 0x48, 0x8b, 0xc4, 0x48, 0x89, 0x58, 0x20, 0x55, 0x5d, 0xe9 };
++
++static BOOL x64_cs_fastpath_on(void)
++{
++    static int on = -1;
++    if (on < 0)
++    {
++        UNICODE_STRING nm, val;
++        WCHAR buf[8];
++        RtlInitUnicodeString( &nm, L"MADEIRA_X64_CS_FASTPATH" );
++        val.Buffer = buf; val.Length = 0; val.MaximumLength = sizeof(buf);
++        on = (!RtlQueryEnvironmentVariable_U( NULL, &nm, &val ) && val.Length && buf[0] == '1');
++    }
++    return on;
++}
++
++/* The x64 stub for an x64 module's import of name resolved to target, or NULL
++ * to keep target. The page is made once a process, with both stubs and their
++ * targets, ntdll's two exports, before any of it runs. */
++static void *x64_cs_stub_for( HMODULE importer, const char *name, void *target )
++{
++    static BYTE *stubs;   /* enter at 0, leave at 0x80 */
++    static void *targets[2];
++    static BOOL tried;
++    const IMAGE_NT_HEADERS *nt = RtlImageNtHeader( importer );
++    LDR_DATA_TABLE_ENTRY *mod;
++    int leave;
++
++    if (!strcmp( name, "EnterCriticalSection" ) || !strcmp( name, "RtlEnterCriticalSection" )) leave = 0;
++    else if (!strcmp( name, "LeaveCriticalSection" ) || !strcmp( name, "RtlLeaveCriticalSection" )) leave = 1;
++    else return NULL;
++    if (!x64_cs_fastpath_on()) return NULL;
++    if (!nt || nt->FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64 || arm64ec_get_module_metadata( importer ))
++        return NULL;
++    if (LdrFindEntryForAddress( target, &mod ) || mod->DdagNode != node_ntdll) return NULL;
++
++    if (!tried)
++    {
++        const IMAGE_EXPORT_DIRECTORY *exports;
++        DWORD exp_size;
++        void *base = NULL;
++        SIZE_T size = 0x1000;
++        ULONG old;
++
++        tried = TRUE;
++        if (!(exports = RtlImageDirectoryEntryToData( mod->DllBase, TRUE, IMAGE_DIRECTORY_ENTRY_EXPORT, &exp_size )))
++            return NULL;
++        targets[0] = find_named_export( mod->DllBase, exports, exp_size, "RtlEnterCriticalSection", -1, NULL, NULL, FALSE );
++        targets[1] = find_named_export( mod->DllBase, exports, exp_size, "RtlLeaveCriticalSection", -1, NULL, NULL, FALSE );
++        if (!targets[0] || !targets[1] ||
++            memcmp( targets[0], x64_cs_export_thunk, sizeof(x64_cs_export_thunk) ) ||
++            memcmp( targets[1], x64_cs_export_thunk, sizeof(x64_cs_export_thunk) ))
++        {
++            ERR( "[x64-cs] ntdll's exports %p %p are not x64 export thunks; the switch is off\n",
++                 targets[0], targets[1] );
++            return NULL;
++        }
++        if (NtAllocateVirtualMemory( NtCurrentProcess(), &base, 0, &size, MEM_RESERVE | MEM_COMMIT,
++                                     PAGE_EXECUTE_READWRITE ))
++        {
++            ERR( "[x64-cs] no page for the stubs; the switch is off\n" );
++            return NULL;
++        }
++        memcpy( base, x64_cs_enter_code, sizeof(x64_cs_enter_code) );
++        memcpy( (BYTE *)base + sizeof(x64_cs_enter_code), &targets[0], sizeof(void *) );
++        memcpy( (BYTE *)base + 0x80, x64_cs_leave_code, sizeof(x64_cs_leave_code) );
++        memcpy( (BYTE *)base + 0x80 + sizeof(x64_cs_leave_code), &targets[1], sizeof(void *) );
++        NtProtectVirtualMemory( NtCurrentProcess(), &base, &size, PAGE_EXECUTE_READ, &old );
++        stubs = base;
++        ERR( "[x64-cs] x64 critical-section stubs at %p for %p %p (MADEIRA_X64_CS_FASTPATH)\n",
++             stubs, targets[0], targets[1] );
++    }
++    if (!stubs || target != targets[leave]) return NULL;
++    return leave ? stubs + 0x80 : stubs;
++}
+ #endif
+ 
+ static BOOL import_dll( WINE_MODREF *wm, const IMAGE_IMPORT_DESCRIPTOR *descr, LPCWSTR load_path, WINE_MODREF **pwm )
+@@ -1455,6 +1577,9 @@ static BOOL import_dll( WINE_MODREF *wm, const IMAGE_IMPORT_DESCRIPTOR *descr, L
+     PVOID protect_base;
+     SIZE_T protect_size = 0;
+     DWORD protect_old;
++#ifdef __arm64ec__
++    unsigned int x64_cs_slots = 0;   /* MADEIRA_X64_CS_FASTPATH */
++#endif
+ 
+     thunk_list = get_rva( module, (DWORD)descr->FirstThunk );
+     if (descr->OriginalFirstThunk)
+@@ -1648,6 +1773,16 @@ static BOOL import_dll( WINE_MODREF *wm, const IMAGE_IMPORT_DESCRIPTOR *descr, L
+                                       : "POOL STALE  <== executing copy sees the OLD x64 thunk" );
+                 }
+             }
++            else if (!imp_metadata)
++            {
++                void *stub = x64_cs_stub_for( module, (const char *)pe_name->Name,
++                                              (void *)thunk_list->u1.Function );
++                if (stub)
++                {
++                    thunk_list->u1.Function = (ULONG_PTR)stub;
++                    x64_cs_slots++;
++                }
++            }
+ #endif
+             TRACE_(imports)("--- %s %s.%d = %p\n",
+                             pe_name->Name, name, pe_name->Hint, (void *)thunk_list->u1.Function);
+@@ -1673,6 +1808,11 @@ static BOOL import_dll( WINE_MODREF *wm, const IMAGE_IMPORT_DESCRIPTOR *descr, L
+     }
+ 
+ done:
++#ifdef __arm64ec__
++    if (x64_cs_slots)
++        ERR( "[x64-cs] %s: %u of its %s imports go to the x64 stubs\n",
++             debugstr_w(wm->ldr.BaseDllName.Buffer), x64_cs_slots, name );
++#endif
+     /* restore old protection of the import address table */
+     NtProtectVirtualMemory( NtCurrentProcess(), &protect_base, &protect_size, protect_old, &protect_old );
+     *pwm = wmImp;

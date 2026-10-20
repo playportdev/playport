@@ -90,3 +90,45 @@ In every arm the GPU is busy under half the time and nothing waits on present (p
     winevulkan, batched or made cheaper;
   - `lock_file`/`unlock_file` handled without the server (200 requests/s);
   - why the threads land on E cores.
+
+## Follow-up on the host: why the E cores, and a critical-section switch
+
+**Why the E cores: the SoC's power clamp, not QoS.** Every RDR2 thread already runs at
+`USER_INTERACTIVE`, the highest class short of real-time. In pA's `[xp-qos]` census, the main thread
+`-041c` and the workers `-0450`, `-0454`, `-04f8` and `-0504` are `UI` 47, or 44–46 while the kernel
+decays their priority for CPU use. ECO never switched on: the log has no `[eco]` line. The P cores
+empty out when the power clamp takes hold:
+
+| Run | Before the clamp | After the clamp |
+| --- | --- | --- |
+| pA | P share 45–80 % until 22:36:50 | P share 0–5 % from 22:37:00 (`thermal: serious` at 22:35:20) |
+| n2 (per ten minutes) | P share 58 % (21:1x) | P share 14 % (21:2x), then 1–2 % (21:3x–21:4x) |
+
+After the clamp:
+
+- the P clock sits at its 1.31–1.44 GHz floor;
+- the process draws about 330–400 mW of CPU power;
+- about 30 threads wait for a core at any time (`run=` over `dt`), against 3–10 before.
+
+The Rockstar launcher's processes use under 1 % of a core each, so Madeira's unported `[bg-qos]`
+would not help either. No QoS change was made. Under a power clamp, fps follows the work per frame,
+not thread priority, so cutting instructions and transitions per frame is the lever.
+
+**Critical sections: wine-pe 0050, `env.MADEIRA_X64_CS_FASTPATH=1`, off by default.**
+
+- **Where the cost is.** Almost every one of the 145 k/s Enter/Leave calls finds the section free:
+  `[xp-api]` shows 390–430 contended enters a second.
+- **What the switch does.** The loader binds an x64 module's imports of `EnterCriticalSection` and
+  `LeaveCriticalSection` (and their `Rtl` names) to x64 stubs. It does so only for imports that
+  resolve to ntdll's x64 export thunks. FEX runs the stubs inline:
+  - Enter takes a free section;
+  - Leave releases a section held once with no waiter;
+  - every other case jumps on to ntdll's export.
+- **Logs.** `[x64-cs]` lines give the stubs' page and each import descriptor rewritten.
+- **Host check.** `tools/tests/test_x64_cs_fastpath.py` runs the stubs natively on x86-64. Six
+  threads use one section with recursion: half call the stubs, half call a C copy of Wine's functions.
+  A lone thread never leaves the stubs.
+- **Limits.** The switch does not cover pointers from `GetProcAddress`. If RDR2 resolves its imports
+  itself, the `[xp-api-top]` counts of ntdll's Enter and Leave
+  bodies will not fall.
+- **Phone.** Not run on the phone. Dev IPA `f01287bb9978568bd8efeb6afb5fa64dd451ca6895bbcc1d94050efd6c71a9eb`.
