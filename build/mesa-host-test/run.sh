@@ -85,6 +85,44 @@ retries=$(grep -c '^\[kk-compile\] [a-z]* retry ' "$ROOT/retry.log" || true)
 [ "$retries" = 2 ] || { echo "compile_retry: $retries retries logged, not 2" >&2; exit 1; }
 echo "compile_retry and parallel_stages: 2 interrupted builds retried"
 
+# MESA_KK_DUMP_MSL_MIN_KB (mesa 0061): builds over 8 KB of MSL leave their
+# MSL and SPIR-V in kk-dump beside the shader cache directory, among them
+# unroll-hint.frag's SPIR-V as it was given.
+rm -rf "$ROOT/dump"; mkdir -p "$ROOT/dump/kosmickrisp"
+MESA_SHADER_CACHE_DIR="$ROOT/dump/kosmickrisp" MESA_KK_DUMP_MSL_MIN_KB=8 MESA_SHADER_CACHE_DISABLE=true \
+    "$ROOT/kk-host-test" "$ROOT/build/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.so" "$ROOT/spv" \
+    >"$ROOT/dump.log" 2>&1 || { cat "$ROOT/dump.log" >&2; exit 1; }
+dumped=$(ls "$ROOT/dump/kk-dump" | grep -c '\.txt$' || true)
+same=0
+for f in "$ROOT/dump/kk-dump/"*.frag.spv; do
+    cmp -s "$f" "$ROOT/spv/unroll-hint.frag.spv" && same=1
+done
+[ "$dumped" -gt 0 ] && [ "$same" = 1 ] ||
+    { echo "MESA_KK_DUMP_MSL_MIN_KB: $dumped dumps, unroll-hint.frag's SPIR-V among them: $same" >&2; exit 1; }
+echo "MESA_KK_DUMP_MSL_MIN_KB: $dumped pipelines dumped"
+
+# The known-fail list (mesa 0062): the first build fails as interrupted in two
+# launches, and the third launch skips it and fails that pipeline at once;
+# MESA_KK_DEBUG=no_known_fail builds it.
+rm -rf "$ROOT/known-fail"; mkdir -p "$ROOT/known-fail"
+known_fail() {
+    MESA_SHADER_CACHE_DIR="$ROOT/known-fail" MESA_SHADER_CACHE_DISABLE=true "$@" \
+        "$ROOT/kk-host-test" "$ROOT/build/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.so" "$ROOT/spv"
+}
+for n in 1 2; do
+    if known_fail env KK_MOCK_INTERRUPT_BUILDS=1 MESA_KK_DEBUG=compile >"$ROOT/known-fail-$n.log" 2>&1; then
+        echo "known-fail: launch $n built everything with an interrupted build" >&2; exit 1
+    fi
+done
+msl=$(sed -n 's/^\[kk-compile\] render FAIL .*interrupted=1 .* msl=\([0-9a-f]*\)$/\1/p' "$ROOT/known-fail-1.log")
+if known_fail env >"$ROOT/known-fail-3.log" 2>&1 ||
+   ! grep -q "^\[kk-compile\] skip known-fail render msl=$msl " "$ROOT/known-fail-3.log"; then
+    echo "known-fail: launch 3 did not skip msl=$msl" >&2; cat "$ROOT/known-fail-3.log" >&2; exit 1
+fi
+known_fail env MESA_KK_DEBUG=no_known_fail >"$ROOT/known-fail-4.log" 2>&1 ||
+    { echo "known-fail: MESA_KK_DEBUG=no_known_fail did not build msl=$msl" >&2; exit 1; }
+echo "known-fail list: msl=$msl skipped after 2 interrupted builds"
+
 # Zink and EGL on the same mock driver: a second build of the tree. Zink loads
 # the Vulkan loader (libvulkan.so.1), limited to the mock by VK_DRIVER_FILES.
 [ -f "$ROOT/build-gl/build.ninja" ] ||

@@ -1,0 +1,529 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 20 Oct 2026 12:13:18 +0200
+Subject: [PATCH 61/62] kk: MESA_KK_DUMP_MSL_MIN_KB dumps large pipelines' MSL
+ and SPIR-V
+
+A dev switch, off by default, to bring the shaders behind slow or failed
+Metal builds off the phone. With MESA_KK_DUMP_MSL_MIN_KB=N, a Metal build
+(render or compute) whose MSL is over N KB writes, before it is built, into
+kk-dump beside MESA_SHADER_CACHE_DIR (on the phone Library/Caches/kk-dump,
+which the app's container vends over AFC):
+
+- MSL.STAGE.metal, each stage's MSL as Metal gets it;
+- MSL.STAGE.spv, the SPIR-V of that stage of the pipeline being created,
+  when its create info gives SPIR-V;
+- MSL.txt last: kind, the full MSL hash, and per stage its MSL bytes and
+  entry point, SPIR-V bytes and entry point and specialization constants
+  (ID:hex bytes).
+
+MSL is the first 16 hex digits of the MSL hash, as MESA_KK_DEBUG=compile's
+msl= shows it; the hash is now taken once per build, before it. A hash
+already dumped is not dumped again, and nothing more is written once the
+directory holds 200 MB (logged once). Each dump logs
+"[kk-dump] KIND msl=... bytes=...".
+
+The Vulkan runtime remembers, per thread, the stage create infos of the
+graphics or compute pipeline it is creating, and
+vk_pipeline_creating_stage_spirv gives a stage's SPIR-V, entry point and
+specialization from them; KosmicKrisp builds Metal pipelines within that
+call, from translated or cached MSL alike.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-10-20-kk-msl-size.md
+Offered-upstream: no
+---
+ src/kosmickrisp/vulkan/kk_debug.c  |   3 +
+ src/kosmickrisp/vulkan/kk_debug.h  |   5 +
+ src/kosmickrisp/vulkan/kk_shader.c | 248 +++++++++++++++++++++++++++--
+ src/vulkan/runtime/vk_pipeline.c   |  47 ++++++
+ src/vulkan/runtime/vk_pipeline.h   |  12 ++
+ 5 files changed, 298 insertions(+), 17 deletions(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_debug.c b/src/kosmickrisp/vulkan/kk_debug.c
+index 3303ff0..5419440 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.c
++++ b/src/kosmickrisp/vulkan/kk_debug.c
+@@ -26,6 +26,8 @@ DEBUG_GET_ONCE_FLAGS_OPTION(mesa_kk_debug, "MESA_KK_DEBUG", debug_flags, 0);
+ 
+ enum kk_experimental kk_mesa_experimental_flags = 0;
+ 
++int kk_dump_msl_min_kb = -1;
++
+ const struct debug_named_value experimental_flags[] = {
+    {"all", UINT64_MAX},
+    {"custom_border", KK_EXPERIMENTAL_CUSTOM_BORDER},
+@@ -45,4 +47,5 @@ kk_process_debug_variable(void)
+ {
+    kk_mesa_debug_flags = debug_get_option_mesa_kk_debug();
+    kk_mesa_experimental_flags = debug_get_option_mesa_kk_experimental();
++   kk_dump_msl_min_kb = debug_get_num_option("MESA_KK_DUMP_MSL_MIN_KB", -1);
+ }
+diff --git a/src/kosmickrisp/vulkan/kk_debug.h b/src/kosmickrisp/vulkan/kk_debug.h
+index 1e1835b..be9e5e6 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.h
++++ b/src/kosmickrisp/vulkan/kk_debug.h
+@@ -70,6 +70,11 @@ extern enum kk_experimental kk_mesa_experimental_flags;
+ #define KK_EXPERIMENTAL(flag)                                                  \
+    unlikely(kk_mesa_experimental_flags &KK_EXPERIMENTAL_##flag)
+ 
++/* MESA_KK_DUMP_MSL_MIN_KB: a Metal build whose MSL is over this many KB
++ * writes its MSL and SPIR-V to the dump directory (kk_dump_msl); -1, the
++ * default, dumps nothing */
++extern int kk_dump_msl_min_kb;
++
+ extern void kk_process_debug_variable(void);
+ 
+ #endif /* KK_DEBUG_H */
+diff --git a/src/kosmickrisp/vulkan/kk_shader.c b/src/kosmickrisp/vulkan/kk_shader.c
+index 0bd2497..6d68bdc 100644
+--- a/src/kosmickrisp/vulkan/kk_shader.c
++++ b/src/kosmickrisp/vulkan/kk_shader.c
+@@ -29,10 +29,15 @@
+ 
+ #include "c11/threads.h"
+ #include "util/mesa-blake3.h"
++#include "util/simple_mtx.h"
+ #include "util/os_time.h"
+ #include "util/u_atomic.h"
+ 
++#include <dirent.h>
++#include <errno.h>
++#include <limits.h>
+ #include <math.h>
++#include <sys/stat.h>
+ #include <zlib.h>
+ 
+ #ifdef __APPLE__
+@@ -1697,8 +1702,214 @@ struct kk_metal_build {
+    /* The step that failed, NULL if none, and its error. */
+    const char *failed_step;
+    struct mtl_build_error error;
++   /* blake3 of the MSL, the vertex then the fragment source with their
++    * terminating NULs (kk_msl_hash) */
++   char msl[BLAKE3_HEX_LEN];
+ };
+ 
++static void
++kk_msl_hash(const struct msl_compile_data *first,
++            const struct msl_compile_data *second, char hex[BLAKE3_HEX_LEN])
++{
++   struct mesa_blake3 ctx;
++   blake3_hash hash;
++   _mesa_blake3_init(&ctx);
++   _mesa_blake3_update(&ctx, first->code, strlen(first->code) + 1);
++   if (second)
++      _mesa_blake3_update(&ctx, second->code, strlen(second->code) + 1);
++   _mesa_blake3_final(&ctx, hash);
++   _mesa_blake3_format(hex, hash);
++}
++
++/* MESA_KK_DUMP_MSL_MIN_KB=N: a Metal build whose MSL is over N KB writes,
++ * before it is built, into the directory beside MESA_SHADER_CACHE_DIR named
++ * kk-dump: per stage MSL.STAGE.metal and, when the pipeline being created
++ * gave SPIR-V, MSL.STAGE.spv, then MSL.txt with the entry points and
++ * specialization constants. MSL is the first 16 hex digits of the MSL hash,
++ * as MESA_KK_DEBUG=compile's msl= shows it. A hash already dumped is not
++ * dumped again, and nothing more is written once the directory holds
++ * KK_DUMP_CAP_BYTES. */
++#define KK_DUMP_CAP_BYTES (200ull << 20)
++
++static simple_mtx_t kk_dump_lock = SIMPLE_MTX_INITIALIZER;
++static char kk_dump_dir[PATH_MAX];
++/* Bytes in kk_dump_dir; -1 until the directory has been looked at, and
++ * kk_dump_dir stays empty when there is none. */
++static int64_t kk_dump_bytes = -1;
++static bool kk_dump_cap_logged;
++
++/* The dump directory, made and its bytes counted on first use; NULL when
++ * there is none. Takes kk_dump_lock. */
++static const char *
++kk_dump_directory(void)
++{
++   if (kk_dump_bytes >= 0)
++      return kk_dump_dir[0] ? kk_dump_dir : NULL;
++   kk_dump_bytes = 0;
++
++   const char *cache = getenv("MESA_SHADER_CACHE_DIR");
++   size_t len = cache ? strlen(cache) : 0;
++   while (len > 1 && cache[len - 1] == '/')
++      len--;
++   while (len > 0 && cache[len - 1] != '/')
++      len--;
++   if (len == 0 ||
++       snprintf(kk_dump_dir, sizeof(kk_dump_dir), "%.*skk-dump", (int)len,
++                cache) >= (int)sizeof(kk_dump_dir) ||
++       (mkdir(kk_dump_dir, 0755) != 0 && errno != EEXIST)) {
++      fprintf(stderr, "[kk-dump] no directory beside MESA_SHADER_CACHE_DIR "
++                      "(%s): nothing is dumped\n", cache ? cache : "unset");
++      kk_dump_dir[0] = 0;
++      return NULL;
++   }
++
++   DIR *dir = opendir(kk_dump_dir);
++   if (dir) {
++      for (struct dirent *e; (e = readdir(dir));) {
++         struct stat st;
++         if (fstatat(dirfd(dir), e->d_name, &st, 0) == 0 && S_ISREG(st.st_mode))
++            kk_dump_bytes += st.st_size;
++      }
++      closedir(dir);
++   }
++   fprintf(stderr, "[kk-dump] MSL over %d KB goes to %s (%lld bytes there, "
++                   "cap %llu)\n",
++           kk_dump_msl_min_kb, kk_dump_dir, (long long)kk_dump_bytes,
++           (unsigned long long)KK_DUMP_CAP_BYTES);
++   return kk_dump_dir;
++}
++
++static bool
++kk_dump_file(const char *dir, const char *name, const void *data, size_t size)
++{
++   char path[PATH_MAX];
++   snprintf(path, sizeof(path), "%s/%s", dir, name);
++   FILE *f = fopen(path, "wb");
++   if (!f)
++      return false;
++   bool ok = fwrite(data, 1, size, f) == size;
++   ok = fclose(f) == 0 && ok;
++   kk_dump_bytes += size;
++   return ok;
++}
++
++/* One stage of a build, for kk_dump_msl */
++struct kk_dump_stage {
++   mesa_shader_stage stage;
++   const struct msl_compile_data *data;
++   const uint32_t *spirv;
++   size_t spirv_size;
++   const char *entrypoint;
++   const VkSpecializationInfo *specialization;
++};
++
++static void
++kk_dump_msl(const char *kind, const char *msl,
++            mesa_shader_stage first_stage, const struct msl_compile_data *first,
++            mesa_shader_stage second_stage,
++            const struct msl_compile_data *second)
++{
++   struct kk_dump_stage stages[2] = {
++      {first_stage, first},
++      {second_stage, second},
++   };
++   const uint32_t stage_count = second ? 2u : 1u;
++   size_t msl_bytes = 0, bytes = 0;
++   for (uint32_t i = 0; i < stage_count; i++) {
++      struct kk_dump_stage *s = &stages[i];
++      msl_bytes += strlen(s->data->code);
++      if (vk_pipeline_creating_stage_spirv(s->stage, &s->spirv, &s->spirv_size,
++                                           &s->entrypoint, &s->specialization))
++         bytes += s->spirv_size;
++   }
++   if (msl_bytes <= (size_t)kk_dump_msl_min_kb * 1024u)
++      return;
++   bytes += msl_bytes;
++
++   simple_mtx_lock(&kk_dump_lock);
++   const char *dir = kk_dump_directory();
++   char name[64], path[PATH_MAX];
++   snprintf(name, sizeof(name), "%.16s.txt", msl);
++   snprintf(path, sizeof(path), "%s/%s", dir ? dir : "", name);
++   struct stat st;
++   if (dir == NULL || stat(path, &st) == 0) {
++      simple_mtx_unlock(&kk_dump_lock);
++      return;
++   }
++   if (kk_dump_bytes + bytes > KK_DUMP_CAP_BYTES) {
++      if (!kk_dump_cap_logged)
++         fprintf(stderr, "[kk-dump] %s holds %lld bytes, cap %llu: no more "
++                         "dumps (first left out: msl=%.16s bytes=%zu)\n",
++                 dir, (long long)kk_dump_bytes,
++                 (unsigned long long)KK_DUMP_CAP_BYTES, msl, bytes);
++      kk_dump_cap_logged = true;
++      simple_mtx_unlock(&kk_dump_lock);
++      return;
++   }
++
++   char *text = NULL;
++   size_t text_size = 0;
++   FILE *txt = open_memstream(&text, &text_size);
++   bool ok = txt != NULL;
++   if (txt)
++      fprintf(txt, "kind %s\nmsl %s\n", kind, msl);
++   for (uint32_t i = 0; i < stage_count; i++) {
++      const struct kk_dump_stage *s = &stages[i];
++      const char *ext = _mesa_shader_stage_to_file_ext(s->stage);
++      snprintf(name, sizeof(name), "%.16s.%s.metal", msl, ext);
++      ok = kk_dump_file(dir, name, s->data->code, strlen(s->data->code)) && ok;
++      if (txt)
++         fprintf(txt, "stage %s msl_bytes %zu msl_entry %s", ext,
++                 strlen(s->data->code), s->data->entrypoint_name);
++      if (s->spirv == NULL) {
++         if (txt)
++            fprintf(txt, " spirv none\n");
++         continue;
++      }
++      snprintf(name, sizeof(name), "%.16s.%s.spv", msl, ext);
++      ok = kk_dump_file(dir, name, s->spirv, s->spirv_size) && ok;
++      if (!txt)
++         continue;
++      fprintf(txt, " spirv_bytes %zu spirv_entry %s", s->spirv_size,
++              s->entrypoint);
++      const VkSpecializationInfo *spec = s->specialization;
++      fprintf(txt, " spec_constants %u",
++              spec ? spec->mapEntryCount : 0u);
++      for (uint32_t c = 0; spec && c < spec->mapEntryCount; c++) {
++         const VkSpecializationMapEntry *e = &spec->pMapEntries[c];
++         fprintf(txt, " %u:", e->constantID);
++         for (size_t b = 0; b < e->size && e->offset + b < spec->dataSize; b++)
++            fprintf(txt, "%02x",
++                    ((const uint8_t *)spec->pData)[e->offset + b]);
++      }
++      fprintf(txt, "\n");
++   }
++   if (txt && fclose(txt) == 0) {
++      snprintf(name, sizeof(name), "%.16s.txt", msl);
++      ok = kk_dump_file(dir, name, text, text_size) && ok;
++   } else {
++      ok = false;
++   }
++   free(text);
++   fprintf(stderr, "[kk-dump] %s msl=%.16s bytes=%zu%s\n", kind, msl,
++           msl_bytes, ok ? "" : " (a file could not be written)");
++   simple_mtx_unlock(&kk_dump_lock);
++}
++
++/* What a Metal build does before it builds: the MSL hash, and the dump. */
++static void
++kk_begin_metal_build(struct kk_metal_build *build,
++                     mesa_shader_stage first_stage,
++                     const struct msl_compile_data *first,
++                     mesa_shader_stage second_stage,
++                     const struct msl_compile_data *second)
++{
++   kk_msl_hash(first, second, build->msl);
++   if (kk_dump_msl_min_kb >= 0)
++      kk_dump_msl(build->kind, build->msl, first_stage, first, second_stage,
++                  second);
++}
++
+ /* MESA_KK_EXPERIMENTAL=compile_retry: a library or pipeline build that failed
+  * because Metal's compiler service connection was interrupted is built again,
+  * at most KK_COMPILE_RETRIES times, KK_COMPILE_RETRY_WAIT_MS after each
+@@ -1793,15 +2004,7 @@ kk_note_metal_build(const struct kk_metal_build *build,
+    timespec_get(&wall, TIME_UTC);
+    const int64_t wall_ms = wall.tv_sec * INT64_C(1000) + wall.tv_nsec / 1000000;
+ 
+-   struct mesa_blake3 ctx;
+-   blake3_hash hash;
+-   char hex[BLAKE3_HEX_LEN];
+-   _mesa_blake3_init(&ctx);
+-   _mesa_blake3_update(&ctx, first->code, strlen(first->code) + 1);
+-   if (second)
+-      _mesa_blake3_update(&ctx, second->code, strlen(second->code) + 1);
+-   _mesa_blake3_final(&ctx, hash);
+-   _mesa_blake3_format(hex, hash);
++   const char *hex = build->msl;
+ 
+    char steps[80];
+    char bytes[48];
+@@ -1837,8 +2040,10 @@ kk_note_metal_build(const struct kk_metal_build *build,
+               hex);
+ }
+ 
++/* stage: the API stage the MSL comes from, for kk_dump_msl. */
+ static VkResult
+ kk_compile_compute_pipeline(struct kk_device *device,
++                            mesa_shader_stage stage,
+                             const struct msl_compile_data *data,
+                             uint32_t local_size_threads,
+                             mtl_compute_pipeline_state **pipe,
+@@ -1847,8 +2052,9 @@ kk_compile_compute_pipeline(struct kk_device *device,
+    struct kk_metal_build build = {
+       .kind = "compute",
+       .src = src,
+-      .start = os_time_get_nano(),
+    };
++   kk_begin_metal_build(&build, stage, data, MESA_SHADER_NONE, NULL);
++   build.start = os_time_get_nano();
+ 
+    struct kk_library_build library_build = {
+       .device = device,
+@@ -2165,7 +2371,8 @@ kk_compile_graphics_pipeline(struct kk_device *device, struct kk_shader *vs,
+       uint32_t local_thread_size = vs_stage == MESA_SHADER_TESS_CTRL
+                                       ? vs->info.vs.tess_local_thread_size
+                                       : 64u;
+-      result = kk_compile_compute_pipeline(device, &vs->msl_data[vs_stage],
++      result = kk_compile_compute_pipeline(device, vs_stage,
++                                           &vs->msl_data[vs_stage],
+                                            local_thread_size,
+                                            &pipe->gfx.pre_render[i], src);
+ 
+@@ -2178,17 +2385,20 @@ kk_compile_graphics_pipeline(struct kk_device *device, struct kk_shader *vs,
+     * now MESA_SHADER_GEOMETRY, whose code is the rasterization shader. */
+    if (has_gs) {
+       assert(vs_stage == MESA_SHADER_GEOMETRY);
+-      result = kk_compile_compute_pipeline(device, &vs->gs_main, 64u,
++      result = kk_compile_compute_pipeline(device, MESA_SHADER_GEOMETRY,
++                                           &vs->gs_main, 64u,
+                                            &pipe->gfx.gs, src);
+       if (result != VK_SUCCESS)
+          return VK_ERROR_INVALID_SHADER_NV;
+       if (vs->gs_count.code) {
+-         result = kk_compile_compute_pipeline(device, &vs->gs_count, 64u,
++         result = kk_compile_compute_pipeline(device, MESA_SHADER_GEOMETRY,
++                                              &vs->gs_count, 64u,
+                                               &pipe->gfx.gs_count, src);
+          if (result != VK_SUCCESS)
+             return VK_ERROR_INVALID_SHADER_NV;
+       }
+-      result = kk_compile_compute_pipeline(device, &vs->gs_pre, 1u,
++      result = kk_compile_compute_pipeline(device, MESA_SHADER_GEOMETRY,
++                                           &vs->gs_pre, 1u,
+                                            &pipe->gfx.gs_pre, src);
+       if (result != VK_SUCCESS)
+          return VK_ERROR_INVALID_SHADER_NV;
+@@ -2198,10 +2408,12 @@ kk_compile_graphics_pipeline(struct kk_device *device, struct kk_shader *vs,
+    struct kk_metal_build build = {
+       .kind = "render",
+       .src = src,
+-      .start = os_time_get_nano(),
+    };
+    const struct msl_compile_data *vs_data = &vs->msl_data[vs_stage];
+    const struct msl_compile_data *fs_data = &vs->msl_data[MESA_SHADER_FRAGMENT];
++   kk_begin_metal_build(&build, vs_stage, vs_data, MESA_SHADER_FRAGMENT,
++                        fs_data);
++   build.start = os_time_get_nano();
+    struct kk_library_build vertex_build = {
+       .device = device,
+       .data = vs_data,
+@@ -2741,7 +2953,8 @@ kk_compile_shaders(struct vk_device *device, uint32_t shader_count,
+                                     s->info.cs.local_size.y *
+                                     s->info.cs.local_size.z;
+       result =
+-         kk_compile_compute_pipeline(dev, &s->msl_data[MESA_SHADER_COMPUTE],
++         kk_compile_compute_pipeline(dev, MESA_SHADER_COMPUTE,
++                                     &s->msl_data[MESA_SHADER_COMPUTE],
+                                      local_size_threads, &s->pipeline.cs,
+                                      KK_SRC_TRANSLATED);
+    } else {
+@@ -2924,7 +3137,8 @@ kk_deserialize_shader(struct vk_device *vk_dev, struct blob_reader *blob,
+                                     shader->info.cs.local_size.y *
+                                     shader->info.cs.local_size.z;
+       result = kk_compile_compute_pipeline(
+-         dev, &shader->msl_data[MESA_SHADER_COMPUTE], local_size_threads,
++         dev, MESA_SHADER_COMPUTE, &shader->msl_data[MESA_SHADER_COMPUTE],
++         local_size_threads,
+          &shader->pipeline.cs, KK_SRC_DESERIALIZED);
+    } else if (info.stage == MESA_SHADER_VERTEX) {
+       result = kk_compile_graphics_pipeline(dev, shader, KK_SRC_DESERIALIZED);
+diff --git a/src/vulkan/runtime/vk_pipeline.c b/src/vulkan/runtime/vk_pipeline.c
+index ed15c0f..9d41de6 100644
+--- a/src/vulkan/runtime/vk_pipeline.c
++++ b/src/vulkan/runtime/vk_pipeline.c
+@@ -45,6 +45,7 @@
+ 
+ #include "shader_enums.h"
+ 
++#include "c11/threads.h"
+ #include "util/mesa-blake3.h"
+ #include "util/u_atomic.h"
+ 
+@@ -168,6 +169,44 @@ vk_set_subgroup_size(nir_shader *shader,
+    assert(shader->info.max_subgroup_size >= shader->info.min_subgroup_size);
+ }
+ 
++/* The stages of the pipeline this thread is creating, for
++ * vk_pipeline_creating_stage_spirv. */
++static thread_local const VkPipelineShaderStageCreateInfo *creating_stages;
++static thread_local uint32_t creating_stage_count;
++
++bool
++vk_pipeline_creating_stage_spirv(mesa_shader_stage stage,
++                                 const uint32_t **words, size_t *size,
++                                 const char **entrypoint,
++                                 const VkSpecializationInfo **specialization)
++{
++   for (uint32_t i = 0; i < creating_stage_count; i++) {
++      const VkPipelineShaderStageCreateInfo *info = &creating_stages[i];
++      if (vk_to_mesa_shader_stage(info->stage) != stage)
++         continue;
++
++      VK_FROM_HANDLE(vk_shader_module, module, info->module);
++      if (module != NULL) {
++         /* A driver's internal module holds NIR, not SPIR-V. */
++         if (module->size == 0)
++            return false;
++         *words = (const uint32_t *)module->data;
++         *size = module->size;
++      } else {
++         const VkShaderModuleCreateInfo *minfo =
++            vk_find_struct_const(info->pNext, SHADER_MODULE_CREATE_INFO);
++         if (minfo == NULL)
++            return false;
++         *words = minfo->pCode;
++         *size = minfo->codeSize;
++      }
++      *entrypoint = info->pName;
++      *specialization = info->pSpecializationInfo;
++      return true;
++   }
++   return false;
++}
++
+ VkResult
+ vk_pipeline_shader_stage_to_nir(struct vk_device *device,
+                                 VkPipelineCreateFlags2KHR pipeline_flags,
+@@ -2360,10 +2399,14 @@ vk_common_CreateGraphicsPipelines(VkDevice _device,
+ 
+    unsigned i = 0;
+    for (; i < createInfoCount; i++) {
++      creating_stages = pCreateInfos[i].pStages;
++      creating_stage_count = pCreateInfos[i].stageCount;
+       VkResult result = vk_create_graphics_pipeline(device, cache,
+                                                     &pCreateInfos[i],
+                                                     pAllocator,
+                                                     &pPipelines[i]);
++      creating_stages = NULL;
++      creating_stage_count = 0;
+       if (result == VK_SUCCESS)
+          continue;
+ 
+@@ -2768,10 +2811,14 @@ vk_common_CreateComputePipelines(VkDevice _device,
+ 
+    unsigned i = 0;
+    for (; i < createInfoCount; i++) {
++      creating_stages = &pCreateInfos[i].stage;
++      creating_stage_count = 1;
+       VkResult result = vk_create_compute_pipeline(device, cache,
+                                                    &pCreateInfos[i],
+                                                    pAllocator,
+                                                    &pPipelines[i]);
++      creating_stages = NULL;
++      creating_stage_count = 0;
+       if (result == VK_SUCCESS)
+          continue;
+ 
+diff --git a/src/vulkan/runtime/vk_pipeline.h b/src/vulkan/runtime/vk_pipeline.h
+index 3c7cafd..0372c6a 100644
+--- a/src/vulkan/runtime/vk_pipeline.h
++++ b/src/vulkan/runtime/vk_pipeline.h
+@@ -46,6 +46,18 @@ vk_pipeline_shader_stage_is_null(const VkPipelineShaderStageCreateInfo *info);
+ bool
+ vk_pipeline_shader_stage_has_identifier(const VkPipelineShaderStageCreateInfo *info);
+ 
++/* The SPIR-V, entry point and specialization of a stage of the pipeline
++ * this thread is creating (vkCreateGraphicsPipelines or
++ * vkCreateComputePipelines), for a driver's debug dumps; false when there is
++ * none: no pipeline being created, no such stage in its create info (one
++ * from a library), or no SPIR-V (a module given by its identifier, or an
++ * internal one). */
++bool
++vk_pipeline_creating_stage_spirv(mesa_shader_stage stage,
++                                 const uint32_t **words, size_t *size,
++                                 const char **entrypoint,
++                                 const VkSpecializationInfo **specialization);
++
+ VkResult
+ vk_pipeline_shader_stage_to_nir(struct vk_device *device,
+                                 VkPipelineCreateFlags2KHR pipeline_flags,

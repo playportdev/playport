@@ -1,0 +1,152 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 20 Oct 2026 12:09:40 +0200
+Subject: [PATCH 60/62] kk: drop a SPIR-V unroll hint from a loop that would
+ unroll too large
+
+A SPIR-V unroll hint (LoopControl Unroll, HLSL's [unroll]) makes
+nir_opt_loop_unroll unroll a loop whatever its size. A loop whose trip
+count has a bound but which may break earlier unrolls into one if nested
+in the last for each iteration. Red Dead Redemption 2 has nine fragment
+shaders with such a loop: up to 64 iterations, NIR instruction cost 692.
+Unrolled, each became 5.3 to 6.7 MB of MSL nested 64 levels deep, which
+MTLCompilerService on iOS failed to compile in 34 to 40 s per attempt, ended
+by jetsam at its 150 MB memory limit (MTLLibraryErrorDomain:3, interrupted).
+
+Before each nir_opt_loop_unroll, a loop whose cost times trip count is
+over 4096 loses the hint and is left to Metal's compiler as a loop, as one
+without a hint is (KosmicKrisp sets no max_unroll_iterations). The largest
+hinted loop below the limit in that game's pipelines costs 1,460, and their
+MSL is unchanged byte for byte; the nine become 67 to 308 KB. Geometry
+shaders keep their hints: poly counts their vertices from unrolled loops.
+Compute pipelines never run this loop pass.
+
+MESA_KK_DEBUG=unroll_hints keeps every hint, as upstream does, and keys
+the compiled shaders apart.
+
+Class: ios-port
+Evidence: docs/evidence/2026-10-20-kk-msl-size.md
+Offered-upstream: no
+---
+ src/kosmickrisp/vulkan/kk_debug.c  |  1 +
+ src/kosmickrisp/vulkan/kk_debug.h  |  3 ++
+ src/kosmickrisp/vulkan/kk_shader.c | 66 ++++++++++++++++++++++++++++++
+ 3 files changed, 70 insertions(+)
+
+diff --git a/src/kosmickrisp/vulkan/kk_debug.c b/src/kosmickrisp/vulkan/kk_debug.c
+index 25e0666..3303ff0 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.c
++++ b/src/kosmickrisp/vulkan/kk_debug.c
+@@ -18,6 +18,7 @@ const struct debug_named_value debug_flags[] = {
+    {"os26_workarounds", KK_DEBUG_OS26_WORKAROUNDS},
+    {"integrated_device", KK_DEBUG_INTEGRATED_DEVICE},
+    {"memory", KK_DEBUG_MEMORY},
++   {"unroll_hints", KK_DEBUG_UNROLL_HINTS},
+    {NULL, 0},
+ };
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_debug.h b/src/kosmickrisp/vulkan/kk_debug.h
+index 47b2dbc..1e1835b 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.h
++++ b/src/kosmickrisp/vulkan/kk_debug.h
+@@ -37,6 +37,9 @@ enum kk_debug {
+     * queue submits: Metal's allocated size, buffer objects, shaders and the
+     * pipeline cache's objects */
+    KK_DEBUG_MEMORY = 1ull << 9,
++   /* Unroll every loop with a SPIR-V unroll hint, as upstream does, however
++    * large it grows (kk_drop_costly_unroll_hints) */
++   KK_DEBUG_UNROLL_HINTS = 1ull << 10,
+ };
+ 
+ extern enum kk_debug kk_mesa_debug_flags;
+diff --git a/src/kosmickrisp/vulkan/kk_shader.c b/src/kosmickrisp/vulkan/kk_shader.c
+index 7a2fc2b..0bd2497 100644
+--- a/src/kosmickrisp/vulkan/kk_shader.c
++++ b/src/kosmickrisp/vulkan/kk_shader.c
+@@ -285,6 +285,10 @@ kk_hash_graphics_state(struct vk_physical_device *device,
+       const char solid[] = "kk-debug-solid-blended-v3";
+       _mesa_blake3_update(&blake3_ctx, solid, sizeof(solid));
+    }
++   if (KK_DEBUG(UNROLL_HINTS)) {
++      const char unroll_hints[] = "kk-debug-unroll-hints";
++      _mesa_blake3_update(&blake3_ctx, unroll_hints, sizeof(unroll_hints));
++   }
+ 
+    _mesa_blake3_final(&blake3_ctx, blake3_out);
+ }
+@@ -1502,6 +1506,67 @@ kk_compile_nir_shader(struct kk_device *dev, nir_shader *nir,
+    return VK_SUCCESS;
+ }
+ 
++/* A SPIR-V unroll hint (LoopControl Unroll, HLSL's [unroll]) makes
++ * nir_opt_loop_unroll unroll a loop whatever its size. A loop whose trip count
++ * has a bound but which may break earlier unrolls into one if nested in the
++ * last for each iteration: Red Dead Redemption 2's 64-iteration lighting loops
++ * became fragment shaders of 6 MB of MSL that MTLCompilerService on iOS could
++ * not compile under its 150 MB memory limit (PLA-364). Above this cost, the
++ * loop's NIR instruction cost times its trip count, the hint is dropped and
++ * the loop is left to Metal's compiler, as a loop without a hint is. The
++ * largest hinted loop below the limit in that game's pipelines costs 1,460. */
++#define KK_UNROLL_HINT_COST_LIMIT 4096u
++
++static void
++kk_drop_costly_unroll_hints_in_list(struct exec_list *list)
++{
++   foreach_list_typed(nir_cf_node, node, node, list) {
++      switch (node->type) {
++      case nir_cf_node_if: {
++         nir_if *nif = nir_cf_node_as_if(node);
++         kk_drop_costly_unroll_hints_in_list(&nif->then_list);
++         kk_drop_costly_unroll_hints_in_list(&nif->else_list);
++         break;
++      }
++      case nir_cf_node_loop: {
++         nir_loop *loop = nir_cf_node_as_loop(node);
++         kk_drop_costly_unroll_hints_in_list(&loop->body);
++         if (loop->control != nir_loop_control_unroll || loop->info == NULL)
++            break;
++         const uint64_t trip_count = loop->info->max_trip_count
++                                        ? loop->info->max_trip_count
++                                        : loop->info->guessed_trip_count;
++         if ((uint64_t)loop->info->instr_cost * trip_count >
++             KK_UNROLL_HINT_COST_LIMIT)
++            loop->control = nir_loop_control_none;
++         break;
++      }
++      default:
++         break;
++      }
++   }
++}
++
++/* Drops the unroll hint of each loop that would unroll past
++ * KK_UNROLL_HINT_COST_LIMIT, unless MESA_KK_DEBUG=unroll_hints. Geometry
++ * shaders keep theirs: poly counts their vertices at compile time from
++ * unrolled loops. */
++static void
++kk_drop_costly_unroll_hints(nir_shader *nir)
++{
++   if (KK_DEBUG(UNROLL_HINTS) || nir->info.stage == MESA_SHADER_GEOMETRY)
++      return;
++
++   nir_foreach_function_impl(impl, nir) {
++      /* The analysis nir_opt_loop_unroll requires next, with its arguments,
++       * so that it is not made twice. */
++      nir_metadata_require(impl, nir_metadata_loop_analysis,
++                           nir->options->force_indirect_unrolling,
++                           (int)nir->options->force_indirect_unrolling_sampler);
++      kk_drop_costly_unroll_hints_in_list(&impl->body);
++   }
++}
++
+ static void
+ nir_opts(nir_shader *nir, void *data)
+ {
+@@ -1532,6 +1597,7 @@ nir_opts(nir_shader *nir, void *data)
+       NIR_PASS(progress, nir, nir_opt_constant_folding);
+ 
+       NIR_PASS(progress, nir, nir_opt_undef);
++      kk_drop_costly_unroll_hints(nir);
+       NIR_PASS(progress, nir, nir_opt_loop_unroll);
+    } while (progress);
+ }

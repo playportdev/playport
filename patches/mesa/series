@@ -52,3 +52,8 @@
 # KosmicKrisp Metal-build levers (PLA-364): MESA_KK_DEBUG=compile failures and steps, MESA_KK_EXPERIMENTAL compile switches
 0052-kk-MESA_KK_DEBUG-compile-logs-failed-Metal-builds-an.patch
 0053-kk-MESA_KK_EXPERIMENTAL-compile_retry-parallel_stage.patch
+
+# KosmicKrisp MSL size (PLA-364): costly SPIR-V unroll hints dropped, MESA_KK_DUMP_MSL_MIN_KB, the known-fail list
+0060-kk-drop-a-SPIR-V-unroll-hint-from-a-loop-that-would-.patch
+0061-kk-MESA_KK_DUMP_MSL_MIN_KB-dumps-large-pipelines-MSL.patch
+0062-kk-skip-a-Metal-build-whose-MSL-was-interrupted-twic.patch

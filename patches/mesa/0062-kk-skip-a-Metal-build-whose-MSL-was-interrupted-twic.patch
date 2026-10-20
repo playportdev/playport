@@ -1,0 +1,269 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 20 Oct 2026 12:14:31 +0200
+Subject: [PATCH 62/62] kk: skip a Metal build whose MSL was interrupted twice
+ (known-fail list)
+
+iOS ends MTLCompilerService at its 150 MB memory limit, and a library
+build then fails with the compiler service interrupted after Metal's own
+retries. Red Dead Redemption 2 asked for the same three pipelines again and
+again, each failing after 34 to 47 s of compiling, 4 times a run, while
+the service was killed 13 to 15 times.
+
+A build (render or compute, any step) that fails with the compiler service
+interrupted appends its full MSL hash to
+MESA_SHADER_CACHE_DIR/kk-known-fail-UUID.txt, UUID the device's
+pipelineCacheUUID (the driver build, GPU and MSL version). Once an MSL has
+failed so twice, in one launch or across launches, its later builds fail
+at once with VK_ERROR_INVALID_SHADER_NV, what the failed builds returned,
+and log
+  [kk-compile] skip known-fail render|compute msl=... interrupted=N src=... tid=...
+The second failure logs "[kk-compile] known-fail ... later builds of it
+fail at once". Files of other UUIDs are deleted when the list is read, so
+any Mesa change empties it, and a changed MSL has another hash; clearing
+the shader cache (Settings > Storage) clears it. Without
+MESA_SHADER_CACHE_DIR the list lasts for the process.
+MESA_KK_DEBUG=no_known_fail turns it off: every MSL builds and nothing is
+recorded.
+
+The risk: an MSL that would build on a less loaded phone stays skipped
+until Mesa changes or the cache is cleared.
+
+Class: ios-port
+Evidence: docs/evidence/2026-10-20-kk-msl-size.md
+Offered-upstream: no
+---
+ src/kosmickrisp/vulkan/kk_debug.c  |   1 +
+ src/kosmickrisp/vulkan/kk_debug.h  |   3 +
+ src/kosmickrisp/vulkan/kk_shader.c | 150 ++++++++++++++++++++++++++++-
+ 3 files changed, 150 insertions(+), 4 deletions(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_debug.c b/src/kosmickrisp/vulkan/kk_debug.c
+index 5419440..eedb5ad 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.c
++++ b/src/kosmickrisp/vulkan/kk_debug.c
+@@ -19,6 +19,7 @@ const struct debug_named_value debug_flags[] = {
+    {"integrated_device", KK_DEBUG_INTEGRATED_DEVICE},
+    {"memory", KK_DEBUG_MEMORY},
+    {"unroll_hints", KK_DEBUG_UNROLL_HINTS},
++   {"no_known_fail", KK_DEBUG_NO_KNOWN_FAIL},
+    {NULL, 0},
+ };
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_debug.h b/src/kosmickrisp/vulkan/kk_debug.h
+index be9e5e6..f046505 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.h
++++ b/src/kosmickrisp/vulkan/kk_debug.h
+@@ -40,6 +40,9 @@ enum kk_debug {
+    /* Unroll every loop with a SPIR-V unroll hint, as upstream does, however
+     * large it grows (kk_drop_costly_unroll_hints) */
+    KK_DEBUG_UNROLL_HINTS = 1ull << 10,
++   /* Turn the known-fail list off (kk_known_fail_skip): build every MSL,
++    * record nothing */
++   KK_DEBUG_NO_KNOWN_FAIL = 1ull << 11,
+ };
+ 
+ extern enum kk_debug kk_mesa_debug_flags;
+diff --git a/src/kosmickrisp/vulkan/kk_shader.c b/src/kosmickrisp/vulkan/kk_shader.c
+index 6d68bdc..d45dc84 100644
+--- a/src/kosmickrisp/vulkan/kk_shader.c
++++ b/src/kosmickrisp/vulkan/kk_shader.c
+@@ -29,6 +29,8 @@
+ 
+ #include "c11/threads.h"
+ #include "util/mesa-blake3.h"
++#include "util/hash_table.h"
++#include "util/ralloc.h"
+ #include "util/simple_mtx.h"
+ #include "util/os_time.h"
+ #include "util/u_atomic.h"
+@@ -1705,6 +1707,8 @@ struct kk_metal_build {
+    /* blake3 of the MSL, the vertex then the fragment source with their
+     * terminating NULs (kk_msl_hash) */
+    char msl[BLAKE3_HEX_LEN];
++   /* The device's pipelineCacheUUID, which keys the known-fail list */
++   const uint8_t *cache_uuid;
+ };
+ 
+ static void
+@@ -1896,14 +1900,147 @@ kk_dump_msl(const char *kind, const char *msl,
+    simple_mtx_unlock(&kk_dump_lock);
+ }
+ 
++/* The known-fail list: an MSL whose Metal build failed with Metal's compiler
++ * service interrupted KK_KNOWN_FAIL_INTERRUPTS times is not built again; its
++ * build fails at once, as the failed builds did (VK_ERROR_INVALID_SHADER_NV),
++ * logging "[kk-compile] skip known-fail". iOS ends MTLCompilerService at its
++ * 150 MB memory limit, and Red Dead Redemption 2 asked for the same few
++ * pipelines again and again, each failing after 34 to 47 s (PLA-364).
++ *
++ * Each such failure appends the full MSL hash as a line to
++ * MESA_SHADER_CACHE_DIR/kk-known-fail-UUID.txt, UUID the device's
++ * pipelineCacheUUID (the driver build, GPU and MSL version), so the list
++ * lasts across launches until Mesa or the MSL changes; files of other UUIDs
++ * are deleted, and clearing the shader cache clears the list. Without
++ * MESA_SHADER_CACHE_DIR it lasts for the process. MESA_KK_DEBUG=no_known_fail
++ * turns it off. */
++#define KK_KNOWN_FAIL_INTERRUPTS 2u
++
++static simple_mtx_t kk_known_fail_lock = SIMPLE_MTX_INITIALIZER;
++/* Full MSL hash -> interrupted failures, NULL until loaded */
++static struct hash_table *kk_known_fail;
++/* The list's file, empty when there is none */
++static char kk_known_fail_path[PATH_MAX];
++
++static void
++kk_known_fail_count(const char *hex)
++{
++   struct hash_entry *entry = _mesa_hash_table_search(kk_known_fail, hex);
++   if (entry)
++      entry->data = (void *)((uintptr_t)entry->data + 1u);
++   else
++      _mesa_hash_table_insert(kk_known_fail, ralloc_strdup(kk_known_fail, hex),
++                              (void *)(uintptr_t)1u);
++}
++
++/* Reads the list once. Takes kk_known_fail_lock. */
++static void
++kk_known_fail_load(const uint8_t *cache_uuid)
++{
++   if (kk_known_fail)
++      return;
++   kk_known_fail = _mesa_hash_table_create(NULL, _mesa_hash_string,
++                                           _mesa_key_string_equal);
++   const char *dir = getenv("MESA_SHADER_CACHE_DIR");
++   if (dir == NULL || dir[0] == 0)
++      return;
++
++   char name[64] = "kk-known-fail-";
++   for (unsigned i = 0; i < VK_UUID_SIZE; i++)
++      snprintf(name + strlen(name), 3, "%02x", cache_uuid[i]);
++   strcat(name, ".txt");
++   if (snprintf(kk_known_fail_path, sizeof(kk_known_fail_path), "%s/%s", dir,
++                name) >= (int)sizeof(kk_known_fail_path)) {
++      kk_known_fail_path[0] = 0;
++      return;
++   }
++
++   DIR *d = opendir(dir);
++   if (d) {
++      for (struct dirent *e; (e = readdir(d));) {
++         if (strncmp(e->d_name, "kk-known-fail-", 14) == 0 &&
++             strcmp(e->d_name, name) != 0)
++            unlinkat(dirfd(d), e->d_name, 0);
++      }
++      closedir(d);
++   }
++
++   FILE *f = fopen(kk_known_fail_path, "r");
++   if (f == NULL)
++      return;
++   char line[BLAKE3_HEX_LEN + 2];
++   unsigned known = 0;
++   while (fgets(line, sizeof(line), f)) {
++      line[strcspn(line, "\n")] = 0;
++      if (strlen(line) != BLAKE3_HEX_LEN - 1)
++         continue;
++      kk_known_fail_count(line);
++      struct hash_entry *entry = _mesa_hash_table_search(kk_known_fail, line);
++      known += (uintptr_t)entry->data == KK_KNOWN_FAIL_INTERRUPTS;
++   }
++   fclose(f);
++   fprintf(stderr, "[kk-compile] known-fail list %s: %u MSL skipped\n",
++           kk_known_fail_path, known);
++}
++
++/* Whether the build's MSL is on the known-fail list; logs the skip. */
++static bool
++kk_known_fail_skip(const struct kk_metal_build *build)
++{
++   if (KK_DEBUG(NO_KNOWN_FAIL))
++      return false;
++   simple_mtx_lock(&kk_known_fail_lock);
++   kk_known_fail_load(build->cache_uuid);
++   struct hash_entry *entry = _mesa_hash_table_search(kk_known_fail,
++                                                      build->msl);
++   const uintptr_t failures = entry ? (uintptr_t)entry->data : 0u;
++   simple_mtx_unlock(&kk_known_fail_lock);
++   if (failures < KK_KNOWN_FAIL_INTERRUPTS)
++      return false;
++   fprintf(stderr,
++           "[kk-compile] skip known-fail %s msl=%.16s interrupted=%u src=%s "
++           "tid=%llu\n",
++           build->kind, build->msl, (unsigned)failures, build->src,
++           (unsigned long long)kk_thread_id());
++   return true;
++}
++
++/* Counts a build that failed with the compiler service interrupted. */
++static void
++kk_known_fail_record(const struct kk_metal_build *build)
++{
++   if (KK_DEBUG(NO_KNOWN_FAIL) || build->failed_step == NULL ||
++       !build->error.compiler_interrupted)
++      return;
++   simple_mtx_lock(&kk_known_fail_lock);
++   kk_known_fail_load(build->cache_uuid);
++   kk_known_fail_count(build->msl);
++   const uintptr_t failures =
++      (uintptr_t)_mesa_hash_table_search(kk_known_fail, build->msl)->data;
++   FILE *f = kk_known_fail_path[0] ? fopen(kk_known_fail_path, "a") : NULL;
++   if (f) {
++      fprintf(f, "%s\n", build->msl);
++      fclose(f);
++   }
++   simple_mtx_unlock(&kk_known_fail_lock);
++   if (failures == KK_KNOWN_FAIL_INTERRUPTS)
++      fprintf(stderr,
++              "[kk-compile] known-fail %s msl=%.16s: interrupted %u times, "
++              "later builds of it fail at once%s\n",
++              build->kind, build->msl, (unsigned)failures,
++              f ? "" : " (in this process only)");
++}
++
+ /* What a Metal build does before it builds: the MSL hash, and the dump. */
+ static void
+-kk_begin_metal_build(struct kk_metal_build *build,
++kk_begin_metal_build(struct kk_metal_build *build, struct kk_device *device,
+                      mesa_shader_stage first_stage,
+                      const struct msl_compile_data *first,
+                      mesa_shader_stage second_stage,
+                      const struct msl_compile_data *second)
+ {
++   build->cache_uuid =
++      kk_device_physical(device)->vk.properties.pipelineCacheUUID;
+    kk_msl_hash(first, second, build->msl);
+    if (kk_dump_msl_min_kb >= 0)
+       kk_dump_msl(build->kind, build->msl, first_stage, first, second_stage,
+@@ -1990,6 +2127,7 @@ kk_note_metal_build(const struct kk_metal_build *build,
+                     const struct msl_compile_data *first,
+                     const struct msl_compile_data *second)
+ {
++   kk_known_fail_record(build);
+    if (!KK_DEBUG(COMPILE))
+       return;
+ 
+@@ -2053,7 +2191,9 @@ kk_compile_compute_pipeline(struct kk_device *device,
+       .kind = "compute",
+       .src = src,
+    };
+-   kk_begin_metal_build(&build, stage, data, MESA_SHADER_NONE, NULL);
++   kk_begin_metal_build(&build, device, stage, data, MESA_SHADER_NONE, NULL);
++   if (kk_known_fail_skip(&build))
++      return VK_ERROR_INVALID_SHADER_NV;
+    build.start = os_time_get_nano();
+ 
+    struct kk_library_build library_build = {
+@@ -2411,8 +2551,10 @@ kk_compile_graphics_pipeline(struct kk_device *device, struct kk_shader *vs,
+    };
+    const struct msl_compile_data *vs_data = &vs->msl_data[vs_stage];
+    const struct msl_compile_data *fs_data = &vs->msl_data[MESA_SHADER_FRAGMENT];
+-   kk_begin_metal_build(&build, vs_stage, vs_data, MESA_SHADER_FRAGMENT,
+-                        fs_data);
++   kk_begin_metal_build(&build, device, vs_stage, vs_data,
++                        MESA_SHADER_FRAGMENT, fs_data);
++   if (kk_known_fail_skip(&build))
++      return VK_ERROR_INVALID_SHADER_NV;
+    build.start = os_time_get_nano();
+    struct kk_library_build vertex_build = {
+       .device = device,

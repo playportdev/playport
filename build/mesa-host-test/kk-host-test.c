@@ -102,6 +102,29 @@ msl_contains(int first, int last, const char *text)
    return false;
 }
 
+/* How many times text occurs in the MSL libraries [first, last) of the
+ * mock. */
+static int
+msl_count_text(int first, int last, const char *text)
+{
+   const char *dir = getenv("KK_MOCK_MSL_DIR");
+   int count = 0;
+   for (int i = first; dir && i < last; ++i) {
+      char path[4096];
+      snprintf(path, sizeof(path), "%s/%04d.metal", dir, i);
+      FILE *f = fopen(path, "r");
+      if (!f)
+         continue;
+      static char src[1 << 20];
+      size_t n = fread(src, 1, sizeof(src) - 1, f);
+      fclose(f);
+      src[n] = 0;
+      for (const char *p = strstr(src, text); p; p = strstr(p + 1, text))
+         ++count;
+   }
+   return count;
+}
+
 static VkShaderModule load_module(const char *name);
 static VkShaderModule
 load_module(const char *name)
@@ -1056,6 +1079,7 @@ main(int argc, char **argv)
    const VkPolygonMode FILL = VK_POLYGON_MODE_FILL;
    struct pipe_desc descs[] = {
       {"no-gs", "pass.vert", NULL, NULL, NULL, "color.frag", TRI, false, FIRST, FILL},
+      {"unroll-hint", "pass.vert", NULL, NULL, NULL, "unroll-hint.frag", TRI, false, FIRST, FILL},
       {"gs-passthrough", "pass.vert", NULL, NULL, "passthrough.geom", "color.frag", TRI, false, FIRST, FILL},
       {"gs-dynamic-count", "pass.vert", NULL, NULL, "dynamic.geom", "color.frag", VK_PRIMITIVE_TOPOLOGY_POINT_LIST, false, FIRST, FILL},
       {"gs-lines-out", "pass.vert", NULL, NULL, "lines.geom", "color.frag", TRI, false, FIRST, FILL},
@@ -1104,6 +1128,17 @@ main(int argc, char **argv)
          fprintf(stderr, "pipeline %s: no vertex function writes transform "
                          "feedback\n", descs[i].name);
          return 1;
+      }
+      /* A loop with an unroll hint that would unroll into 64 nested ifs of
+       * a large body stays a loop, and a small hinted loop is still unrolled
+       * (mesa 0060): the fragment MSL has exactly one loop. */
+      if (!strcmp(descs[i].name, "unroll-hint") && msl_before >= 0) {
+         const int loops = msl_count_text(msl_before, msl_count(),
+                                          "for (uint64_t no_crash");
+         if (loops != 1) {
+            fprintf(stderr, "unroll-hint: %d loops in the MSL, not 1\n", loops);
+            return 1;
+         }
       }
       bool tess = descs[i].tcs != NULL;
 
