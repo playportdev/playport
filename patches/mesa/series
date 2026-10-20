@@ -44,3 +44,7 @@
 0043-kk-report-a-discrete-device-type-to-Red-Dead-Redempt.patch
 0044-kk-no-Metal-counter-heap-for-a-timestamp-pool-while-.patch
 0045-wsi-metal-a-swap-chain-configures-the-layer-again-wh.patch
+0046-kk-MESA_KK_DEBUG-memory-logs-the-driver-s-live-memor.patch
+0047-kk-MESA_KK_DEBUG-memory-counts-the-Metal-command-all.patch
+0048-kk-a-built-shader-keeps-its-MSL-compressed.patch
+0049-vulkan-a-precompiled-shader-keeps-its-NIR-compressed.patch

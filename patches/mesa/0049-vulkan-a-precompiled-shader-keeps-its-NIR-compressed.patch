@@ -1,0 +1,185 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 20 Oct 2026 06:25:45 +0200
+Subject: [PATCH 49/49] vulkan: a precompiled shader keeps its NIR compressed
+
+The pipeline cache keeps each precompiled shader's serialized NIR in
+host memory, for compiling a shader the cache does not hold yet and for
+serializing the cache. Red Dead Redemption 2's warm-up of its pipelines
+on KosmicKrisp leaves 1,823 of them in the cache, holding 131 MiB
+(MESA_KK_DEBUG=memory: precomp=1823/131.3), counted against iOS's
+8,192 MB per-process limit through the Story load that runs out of it.
+
+A precompiled shader now compresses its NIR with zlib at its fastest
+level once it is made or deserialized, and inflates it when it is read:
+RDR2's NIR compresses from 131 to 23 MiB (measured on the game's own
+pipeline cache file). What is compiled and serialized is unchanged.
+Without zlib, or if compression fails, the NIR is kept as before.
+
+MESA_KK_DEBUG=memory's precomp counts the compressed size.
+
+Class: ios-port
+Evidence: docs/evidence/2026-10-20-rdr2-kk-memory.md
+Offered-upstream: no
+---
+ src/vulkan/runtime/vk_pipeline.c | 93 +++++++++++++++++++++++++++++---
+ 1 file changed, 87 insertions(+), 6 deletions(-)
+
+diff --git a/src/vulkan/runtime/vk_pipeline.c b/src/vulkan/runtime/vk_pipeline.c
+index 57ea79f..ed15c0f 100644
+--- a/src/vulkan/runtime/vk_pipeline.c
++++ b/src/vulkan/runtime/vk_pipeline.c
+@@ -48,6 +48,10 @@
+ #include "util/mesa-blake3.h"
+ #include "util/u_atomic.h"
+ 
++#ifdef HAVE_ZLIB
++#include <zlib.h>
++#endif
++
+ struct vk_pipeline_binary {
+    struct vk_object_base base;
+ 
+@@ -664,9 +668,71 @@ struct vk_pipeline_precomp_shader {
+    uint32_t embedded_sampler_count;
+    struct vk_sampler_state *embedded_samplers;
+ 
++   /* The serialized NIR, kept compressed when it can be
++    * (vk_pipeline_precomp_shader_pack): then nir_blob is empty and
++    * nir_packed holds nir_packed_size bytes that inflate to nir_size. It is
++    * read again only to compile a shader the cache does not hold, or to
++    * serialize the cache. */
+    struct blob nir_blob;
++   uint8_t *nir_packed;
++   size_t nir_packed_size;
++   size_t nir_size;
+ };
+ 
++/* The bytes of NIR the shader holds in host memory */
++static size_t
++vk_pipeline_precomp_shader_held(const struct vk_pipeline_precomp_shader *shader)
++{
++   return shader->nir_packed ? shader->nir_packed_size : shader->nir_blob.size;
++}
++
++static void
++vk_pipeline_precomp_shader_pack(struct vk_pipeline_precomp_shader *shader)
++{
++   shader->nir_size = shader->nir_blob.size;
++#ifdef HAVE_ZLIB
++   uLongf packed_size = compressBound(shader->nir_blob.size);
++   uint8_t *packed = malloc(packed_size);
++   if (packed == NULL)
++      return;
++   if (compress2(packed, &packed_size, shader->nir_blob.data,
++                 shader->nir_blob.size, Z_BEST_SPEED) != Z_OK) {
++      free(packed);
++      return;
++   }
++   uint8_t *trimmed = realloc(packed, packed_size);
++   shader->nir_packed = trimmed ? trimmed : packed;
++   shader->nir_packed_size = packed_size;
++   blob_finish(&shader->nir_blob);
++   blob_init(&shader->nir_blob);
++#endif
++}
++
++/* The serialized NIR, in nir_blob or inflated into *inflated (to free) */
++static const void *
++vk_pipeline_precomp_shader_nir(const struct vk_pipeline_precomp_shader *shader,
++                               void **inflated)
++{
++   *inflated = NULL;
++   if (shader->nir_packed == NULL)
++      return shader->nir_blob.data;
++#ifdef HAVE_ZLIB
++   uLongf size = shader->nir_size;
++   void *data = malloc(size);
++   if (data == NULL ||
++       uncompress(data, &size, shader->nir_packed, shader->nir_packed_size) !=
++          Z_OK ||
++       size != shader->nir_size) {
++      free(data);
++      return NULL;
++   }
++   *inflated = data;
++   return data;
++#else
++   return NULL;
++#endif
++}
++
+ static struct vk_pipeline_precomp_shader *
+ vk_pipeline_precomp_shader_ref(struct vk_pipeline_precomp_shader *shader)
+ {
+@@ -733,9 +799,11 @@ vk_pipeline_precomp_shader_create(struct vk_device *device,
+       shader->embedded_samplers[i] = embedded_samplers[i];
+ 
+    shader->nir_blob = blob;
++   vk_pipeline_precomp_shader_pack(shader);
+ 
+    p_atomic_inc(&vk_pipeline_cache_stats.precomp_count);
+-   p_atomic_add(&vk_pipeline_cache_stats.precomp_bytes, (int64_t)blob.size);
++   p_atomic_add(&vk_pipeline_cache_stats.precomp_bytes,
++                (int64_t)vk_pipeline_precomp_shader_held(shader));
+ 
+    return shader;
+ 
+@@ -759,8 +827,13 @@ vk_pipeline_precomp_shader_serialize(struct vk_pipeline_cache_object *obj,
+    blob_write_bytes(blob, shader->embedded_samplers,
+                     shader->embedded_sampler_count *
+                     sizeof(*shader->embedded_samplers));
+-   blob_write_uint64(blob, shader->nir_blob.size);
+-   blob_write_bytes(blob, shader->nir_blob.data, shader->nir_blob.size);
++   void *inflated;
++   const void *nir = vk_pipeline_precomp_shader_nir(shader, &inflated);
++   if (nir == NULL)
++      return false;
++   blob_write_uint64(blob, shader->nir_size);
++   blob_write_bytes(blob, nir, shader->nir_size);
++   free(inflated);
+ 
+    return !blob->out_of_memory;
+ }
+@@ -819,10 +892,11 @@ vk_pipeline_precomp_shader_deserialize(struct vk_device *device,
+    blob_write_bytes(&shader->nir_blob, nir_data, nir_size);
+    if (shader->nir_blob.out_of_memory)
+       goto fail_cache_obj;
++   vk_pipeline_precomp_shader_pack(shader);
+ 
+    p_atomic_inc(&vk_pipeline_cache_stats.precomp_count);
+    p_atomic_add(&vk_pipeline_cache_stats.precomp_bytes,
+-                (int64_t)shader->nir_blob.size);
++                (int64_t)vk_pipeline_precomp_shader_held(shader));
+ 
+    return &shader->cache_obj;
+ 
+@@ -851,8 +925,9 @@ vk_pipeline_precomp_shader_destroy(struct vk_device *device,
+ 
+    p_atomic_dec(&vk_pipeline_cache_stats.precomp_count);
+    p_atomic_add(&vk_pipeline_cache_stats.precomp_bytes,
+-                -(int64_t)shader->nir_blob.size);
++                -(int64_t)vk_pipeline_precomp_shader_held(shader));
+    blob_finish(&shader->nir_blob);
++   free(shader->nir_packed);
+    vk_pipeline_cache_object_finish(&shader->cache_obj);
+    vk_free(&device->alloc, shader);
+ }
+@@ -861,10 +936,16 @@ static nir_shader *
+ vk_pipeline_precomp_shader_get_nir(const struct vk_pipeline_precomp_shader *shader,
+                                    const struct nir_shader_compiler_options *nir_options)
+ {
++   void *inflated;
++   const void *data = vk_pipeline_precomp_shader_nir(shader, &inflated);
++   if (data == NULL)
++      return NULL;
++
+    struct blob_reader blob;
+-   blob_reader_init(&blob, shader->nir_blob.data, shader->nir_blob.size);
++   blob_reader_init(&blob, data, shader->nir_size);
+ 
+    nir_shader *nir = nir_deserialize(NULL, nir_options, &blob);
++   free(inflated);
+    if (blob.overrun) {
+       ralloc_free(nir);
+       return NULL;

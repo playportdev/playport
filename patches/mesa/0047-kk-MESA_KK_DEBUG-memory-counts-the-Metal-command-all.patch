@@ -1,0 +1,229 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 20 Oct 2026 05:54:29 +0200
+Subject: [PATCH 47/49] kk: MESA_KK_DEBUG=memory counts the Metal command
+ allocators
+
+KosmicKrisp encodes each command buffer with a Metal 4 command
+allocator from its pool and gives the allocator back when the
+recording ends. Nothing calls mtl_command_allocator_reset, and a Metal
+command allocator marks its heaps for reuse only on a reset. During Red
+Dead Redemption 2's Story load the graphics ledger grew past the Metal
+allocations KosmicKrisp makes itself (MTLDevice.currentAllocatedSize
+1,378 to 2,331 MiB, against a ledger of 1,513 to 2,937 MB), so whether
+the allocators' memory grows is the question.
+
+MESA_KK_DEBUG=memory's [kk-mem] line adds allocators=N/MiB: the live
+command allocators and the sum of their allocatedSize. They are counted
+only with the flag.
+
+A reset of a command buffer's allocator when the command buffer was
+reset or destroyed (the allocator kept by the command buffer from its
+begin) made Hollow Knight end at its first frames, with a null write in
+IOGPU under vkBeginCommandBuffer: Metal reaches the allocator of a
+command buffer's last recording when the command buffer begins again.
+It is not part of this patch.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-10-20-rdr2-kk-memory.md
+Offered-upstream: no
+---
+ src/kosmickrisp/bridge/mtl_command_buffer.h   |  1 +
+ src/kosmickrisp/bridge/mtl_command_buffer.m   |  9 ++++
+ .../bridge/stubs/mtl_command_buffer.c         |  6 +++
+ src/kosmickrisp/vulkan/kk_bo.c                | 10 +++-
+ src/kosmickrisp/vulkan/kk_cmd_pool.c          | 53 ++++++++++++++++++-
+ src/kosmickrisp/vulkan/kk_cmd_pool.h          |  4 ++
+ 6 files changed, 80 insertions(+), 3 deletions(-)
+
+diff --git a/src/kosmickrisp/bridge/mtl_command_buffer.h b/src/kosmickrisp/bridge/mtl_command_buffer.h
+index 2763b0e..d1d7ee6 100644
+--- a/src/kosmickrisp/bridge/mtl_command_buffer.h
++++ b/src/kosmickrisp/bridge/mtl_command_buffer.h
+@@ -12,6 +12,7 @@
+ #include <stdint.h>
+ 
+ void mtl_command_allocator_reset(mtl_command_allocator *allocator);
++uint64_t mtl_command_allocator_allocated_size(mtl_command_allocator *allocator);
+ 
+ void mtl_begin_command_buffer(mtl_command_buffer *command_buffer,
+                               mtl_command_allocator *allocator);
+diff --git a/src/kosmickrisp/bridge/mtl_command_buffer.m b/src/kosmickrisp/bridge/mtl_command_buffer.m
+index 2b342a0..929f18f 100644
+--- a/src/kosmickrisp/bridge/mtl_command_buffer.m
++++ b/src/kosmickrisp/bridge/mtl_command_buffer.m
+@@ -20,6 +20,15 @@ mtl_command_allocator_reset(mtl_command_allocator *allocator)
+    }
+ }
+ 
++uint64_t
++mtl_command_allocator_allocated_size(mtl_command_allocator *allocator)
++{
++   @autoreleasepool {
++      id<MTL4CommandAllocator> alloc = (id<MTL4CommandAllocator>)allocator;
++      return [alloc allocatedSize];
++   }
++}
++
+ void
+ mtl_begin_command_buffer(mtl_command_buffer *command_buffer,
+                          mtl_command_allocator *allocator)
+diff --git a/src/kosmickrisp/bridge/stubs/mtl_command_buffer.c b/src/kosmickrisp/bridge/stubs/mtl_command_buffer.c
+index 2fe1e3b..21b1157 100644
+--- a/src/kosmickrisp/bridge/stubs/mtl_command_buffer.c
++++ b/src/kosmickrisp/bridge/stubs/mtl_command_buffer.c
+@@ -11,6 +11,12 @@ mtl_command_allocator_reset(mtl_command_allocator *allocator)
+ {
+ }
+ 
++uint64_t
++mtl_command_allocator_allocated_size(mtl_command_allocator *allocator)
++{
++   return 0u;
++}
++
+ void
+ mtl_begin_command_buffer(mtl_command_buffer *command_buffer,
+                          mtl_command_allocator *allocator)
+diff --git a/src/kosmickrisp/vulkan/kk_bo.c b/src/kosmickrisp/vulkan/kk_bo.c
+index a042696..9b36d77 100644
+--- a/src/kosmickrisp/vulkan/kk_bo.c
++++ b/src/kosmickrisp/vulkan/kk_bo.c
+@@ -6,6 +6,7 @@
+ 
+ #include "kk_bo.h"
+ 
++#include "kk_cmd_pool.h"
+ #include "kk_device.h"
+ #include "kk_physical_device.h"
+ 
+@@ -127,6 +128,9 @@ kk_memory_log(struct kk_device *dev)
+       return;
+ 
+    const double mib = 1024.0 * 1024.0;
++   uint32_t allocator_count = 0;
++   const uint64_t allocator_bytes =
++      kk_cmd_pool_allocators_size(&allocator_count);
+    int64_t bo_total = 0;
+    for (unsigned i = KK_BO_KIND_INTERNAL; i < KK_BO_KIND_COUNT; i++)
+       bo_total += p_atomic_read(&kk_memory_stats.bo_bytes[i]);
+@@ -136,7 +140,8 @@ kk_memory_log(struct kk_device *dev)
+    fprintf(stderr,
+            "[kk-mem] metal=%.0f bos=%.0f memory=%d/%.0f internal=%d/%.0f "
+            "descriptor=%d/%.0f query=%d/%.0f command=%d/%.0f | shaders=%d "
+-           "pipelines=%d msl=%.1f | cache raw=%d/%.1f precomp=%d/%.1f MiB\n",
++           "pipelines=%d msl=%.1f | cache raw=%d/%.1f precomp=%d/%.1f | "
++           "allocators=%u/%.1f MiB\n",
+            mtl_device_current_allocated_size(dev->mtl_handle) / mib,
+            bo_total / mib, KK_BO_FIELD(DEVICE_MEMORY), KK_BO_FIELD(INTERNAL),
+            KK_BO_FIELD(DESCRIPTOR_POOL), KK_BO_FIELD(QUERY),
+@@ -146,7 +151,8 @@ kk_memory_log(struct kk_device *dev)
+            p_atomic_read(&vk_pipeline_cache_stats.raw_count),
+            p_atomic_read(&vk_pipeline_cache_stats.raw_bytes) / mib,
+            p_atomic_read(&vk_pipeline_cache_stats.precomp_count),
+-           p_atomic_read(&vk_pipeline_cache_stats.precomp_bytes) / mib);
++           p_atomic_read(&vk_pipeline_cache_stats.precomp_bytes) / mib,
++           allocator_count, allocator_bytes / mib);
+ #undef KK_BO_FIELD
+ }
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_pool.c b/src/kosmickrisp/vulkan/kk_cmd_pool.c
+index 204da13..7e00c36 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_pool.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_pool.c
+@@ -7,6 +7,7 @@
+ 
+ #include "kk_cmd_pool.h"
+ 
++#include "kk_debug.h"
+ #include "kk_device.h"
+ #include "kk_entrypoints.h"
+ #include "kk_physical_device.h"
+@@ -15,6 +16,51 @@
+ 
+ #include "vk_common_entrypoints.h"
+ 
++#include "c11/threads.h"
++
++/* Every live Metal command allocator, for kk_cmd_pool_allocators_size */
++static struct util_dynarray kk_allocators = UTIL_DYNARRAY_INIT;
++static mtx_t kk_allocators_lock;
++static once_flag kk_allocators_once = ONCE_FLAG_INIT;
++
++static void
++kk_allocators_init(void)
++{
++   mtx_init(&kk_allocators_lock, mtx_plain);
++}
++
++static void
++kk_allocators_add(mtl_command_allocator *allocator)
++{
++   call_once(&kk_allocators_once, kk_allocators_init);
++   mtx_lock(&kk_allocators_lock);
++   util_dynarray_append(&kk_allocators, allocator);
++   mtx_unlock(&kk_allocators_lock);
++}
++
++static void
++kk_allocators_remove(mtl_command_allocator *allocator)
++{
++   call_once(&kk_allocators_once, kk_allocators_init);
++   mtx_lock(&kk_allocators_lock);
++   util_dynarray_delete_unordered(&kk_allocators, mtl_command_allocator *,
++                                  allocator);
++   mtx_unlock(&kk_allocators_lock);
++}
++
++uint64_t
++kk_cmd_pool_allocators_size(uint32_t *count)
++{
++   uint64_t size = 0u;
++   call_once(&kk_allocators_once, kk_allocators_init);
++   mtx_lock(&kk_allocators_lock);
++   *count = util_dynarray_num_elements(&kk_allocators, mtl_command_allocator *);
++   util_dynarray_foreach(&kk_allocators, mtl_command_allocator *, allocator)
++      size += mtl_command_allocator_allocated_size(*allocator);
++   mtx_unlock(&kk_allocators_lock);
++   return size;
++}
++
+ static VkResult
+ kk_cmd_bo_create(struct kk_cmd_pool *pool, struct kk_cmd_bo **bo_out)
+ {
+@@ -95,7 +141,10 @@ kk_cmd_pool_get_allocator(struct kk_cmd_pool *pool)
+                                mtl_command_allocator *);
+ 
+    struct kk_device *dev = kk_cmd_pool_device(pool);
+-   return mtl_new_command_allocator(dev->mtl_handle);
++   mtl_command_allocator *allocator = mtl_new_command_allocator(dev->mtl_handle);
++   if (allocator != NULL && KK_DEBUG(MEMORY))
++      kk_allocators_add(allocator);
++   return allocator;
+ }
+ 
+ void
+@@ -160,6 +209,8 @@ kk_cmd_pool_release_mtl_objects(struct kk_cmd_pool *pool)
+ {
+    util_dynarray_foreach(&pool->metal.free_allocators, mtl_command_allocator *,
+                          allocator) {
++      if (KK_DEBUG(MEMORY))
++         kk_allocators_remove(*allocator);
+       mtl_release(*allocator);
+    }
+    util_dynarray_clear(&pool->metal.free_allocators);
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_pool.h b/src/kosmickrisp/vulkan/kk_cmd_pool.h
+index 479e70e..d031eff 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_pool.h
++++ b/src/kosmickrisp/vulkan/kk_cmd_pool.h
+@@ -53,6 +53,10 @@ VkResult kk_cmd_pool_alloc_bo(struct kk_cmd_pool *pool,
+ void kk_cmd_pool_free_bo_list(struct kk_cmd_pool *pool, struct list_head *bos);
+ 
+ mtl_command_allocator *kk_cmd_pool_get_allocator(struct kk_cmd_pool *pool);
++
++/* The live Metal command allocators and the memory they hold, for the
++ * [kk-mem] census */
++uint64_t kk_cmd_pool_allocators_size(uint32_t *count);
+ void kk_cmd_pool_return_allocator(struct kk_cmd_pool *pool,
+                                   mtl_command_allocator *allocator);
+ mtl_command_buffer *kk_cmd_pool_get_cmd_buf(struct kk_cmd_pool *pool);

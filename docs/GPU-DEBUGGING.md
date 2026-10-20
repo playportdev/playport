@@ -28,6 +28,7 @@ before it is needed.
 | Why a pass is slow (bandwidth, ALU, occupancy) | a Mac: Xcode's replay with counters | [On a Mac](#on-a-mac) |
 | Where a hitch comes from (compiles, driver, CPU and GPU overlap) | our logs (`hitches.txt`); a Mac: Metal System Trace | [On a Mac](#on-a-mac) |
 | Which draw makes the picture wrong | a Mac: replay between draws, the shader debugger | [On a Mac](#on-a-mac) |
+| What KosmicKrisp's memory is: the game's own, KosmicKrisp's buffers, its Metal command allocators, the shaders' source | a dev build's `[kk-mem]` lines, at most one every 10 s (`MESA_KK_DEBUG=memory`, set with `compile` by `WineHostRuntime.swift`; `patches/mesa` 0046, 0047) | [rdr2-kk-memory](evidence/2026-10-20-rdr2-kk-memory.md) |
 | Is a Vulkan picture wrong because of a KosmicKrisp workaround that OS version 27 turns off | the game's Graphics options: `MESA_KK_DEBUG=os26_workarounds` (all of them back on), then `MESA_KK_DISABLE_WORKAROUNDS=N` beside it to find which one (`patches/mesa` 0029) | [unity-urp-vulkan](evidence/2026-10-11-unity-urp-vulkan.md), [kk-ios27-workarounds](evidence/2026-10-11-kk-ios27-workarounds.md) |
 
 ## Diagnostics in Settings

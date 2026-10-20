@@ -1,0 +1,230 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 20 Oct 2026 06:24:56 +0200
+Subject: [PATCH 48/49] kk: a built shader keeps its MSL compressed
+
+KosmicKrisp keeps every shader's MSL source after the Metal build, for
+serialization (vkGetPipelineCacheData and Mesa's disk cache) only. Red
+Dead Redemption 2 creates 3,129 shaders as it warms its pipelines on
+the landing page, and they held 342 MiB of MSL in host memory
+(MESA_KK_DEBUG=memory: msl=342.3), counted against iOS's 8,192 MB
+per-process limit through the whole Story load that runs out of it.
+
+Once a shader is compiled or deserialized, its MSL is now compressed
+with zlib at its fastest level and the source freed; serialization
+inflates it again. RDR2's MSL compresses from 342 to 72 MiB (measured
+on the game's own pipeline cache file). What is serialized is
+unchanged. If compression fails, the source is kept as it is.
+
+MESA_KK_DEBUG=memory's msl counts the compressed size.
+
+Class: ios-port
+Evidence: docs/evidence/2026-10-20-rdr2-kk-memory.md
+Offered-upstream: no
+---
+ src/kosmickrisp/vulkan/kk_shader.c | 98 ++++++++++++++++++++++++++----
+ src/kosmickrisp/vulkan/kk_shader.h |  6 ++
+ 2 files changed, 92 insertions(+), 12 deletions(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_shader.c b/src/kosmickrisp/vulkan/kk_shader.c
+index 842bbd0..dd3e852 100644
+--- a/src/kosmickrisp/vulkan/kk_shader.c
++++ b/src/kosmickrisp/vulkan/kk_shader.c
+@@ -33,6 +33,7 @@
+ #include "util/u_atomic.h"
+ 
+ #include <math.h>
++#include <zlib.h>
+ 
+ #include "vk_blend.h"
+ #include "vk_format.h"
+@@ -925,14 +926,54 @@ kk_lower_nir(struct kk_device *dev, nir_shader *nir, bool emulated_stage,
+ 
+ static const struct vk_shader_ops kk_shader_ops;
+ 
++/* Compresses a built shader's MSL source (zlib's fastest level; MSL shrinks
++ * about 5 times), which only serialization reads again. Left as it is when
++ * compression fails. */
++static void
++kk_msl_data_pack(struct msl_compile_data *data)
++{
++   if (data->code == NULL)
++      return;
++
++   const uLong code_size = strlen(data->code) + 1;
++   uLongf packed_size = compressBound(code_size);
++   uint8_t *packed = malloc(packed_size);
++   if (packed == NULL)
++      return;
++   if (compress2(packed, &packed_size, (const Bytef *)data->code, code_size,
++                 Z_BEST_SPEED) != Z_OK) {
++      free(packed);
++      return;
++   }
++   uint8_t *trimmed = realloc(packed, packed_size);
++
++   data->packed = trimmed ? trimmed : packed;
++   data->packed_size = packed_size;
++   data->code_size = code_size;
++   ralloc_free(data->code);
++   data->code = NULL;
++}
++
++static void
++kk_shader_pack_msl(struct kk_shader *shader)
++{
++   for (unsigned i = 0; i < MESA_SHADER_STAGES; i++)
++      kk_msl_data_pack(&shader->msl_data[i]);
++   kk_msl_data_pack(&shader->gs_main);
++   kk_msl_data_pack(&shader->gs_count);
++   kk_msl_data_pack(&shader->gs_pre);
++}
++
+ /* Adds (sign 1) or removes (sign -1) a shader from the [kk-mem] census. */
+ static void
+ kk_shader_count(struct kk_shader *shader, int sign)
+ {
++   /* The MSL held in host memory, compressed or not */
+    int64_t msl = 0;
+    for (unsigned i = 0; i < MESA_SHADER_STAGES; i++) {
+       if (shader->msl_data[i].code)
+          msl += strlen(shader->msl_data[i].code) + 1;
++      msl += shader->msl_data[i].packed_size;
+    }
+    const struct msl_compile_data *gs_data[] = {&shader->gs_main,
+                                                &shader->gs_count,
+@@ -940,6 +981,7 @@ kk_shader_count(struct kk_shader *shader, int sign)
+    for (unsigned i = 0; i < ARRAY_SIZE(gs_data); ++i) {
+       if (gs_data[i]->code)
+          msl += strlen(gs_data[i]->code) + 1;
++      msl += gs_data[i]->packed_size;
+    }
+    const bool pipeline =
+       (shader->info.stage == MESA_SHADER_COMPUTE && shader->pipeline.cs) ||
+@@ -993,6 +1035,7 @@ kk_shader_destroy(struct vk_device *vk_dev, struct kk_shader *shader,
+          struct msl_compile_data *data = &shader->msl_data[i];
+          ralloc_free((void *)data->entrypoint_name);
+          ralloc_free((void *)data->code);
++         free(data->packed);
+       }
+    }
+ 
+@@ -1001,11 +1044,13 @@ kk_shader_destroy(struct vk_device *vk_dev, struct kk_shader *shader,
+    for (unsigned i = 0; i < ARRAY_SIZE(gs_data); ++i) {
+       ralloc_free((void *)gs_data[i]->entrypoint_name);
+       ralloc_free((void *)gs_data[i]->code);
++      free(gs_data[i]->packed);
+    }
+ 
+    struct msl_compile_data *data = &shader->msl_data[shader->info.stage];
+    ralloc_free((void *)data->entrypoint_name);
+    ralloc_free((void *)data->code);
++   free(data->packed);
+ 
+    vk_shader_free(&dev->vk, pAllocator, &shader->vk);
+ }
+@@ -2450,15 +2495,37 @@ kk_shader_has_gs_main(const struct kk_shader *shader)
+             BITFIELD_BIT(MESA_SHADER_GEOMETRY)));
+ }
+ 
++static bool
++kk_msl_data_has_code(const struct msl_compile_data *data)
++{
++   return data->code != NULL || data->packed != NULL;
++}
++
+ static void
+ kk_msl_data_serialize(const struct msl_compile_data *data, struct blob *blob)
+ {
+    uint32_t entrypoint_length = strlen(data->entrypoint_name) + 1;
+-   uint32_t code_length = strlen(data->code) + 1;
++   const char *code = data->code;
++   char *inflated = NULL;
++   if (code == NULL) {
++      uLongf size = data->code_size;
++      inflated = malloc(size);
++      if (inflated == NULL ||
++          uncompress((Bytef *)inflated, &size, data->packed,
++                     data->packed_size) != Z_OK ||
++          size != data->code_size) {
++         free(inflated);
++         blob->out_of_memory = true;
++         return;
++      }
++      code = inflated;
++   }
++   uint32_t code_length = strlen(code) + 1;
+    blob_write_uint32(blob, entrypoint_length);
+    blob_write_uint32(blob, code_length);
+    blob_write_bytes(blob, data->entrypoint_name, entrypoint_length);
+-   blob_write_bytes(blob, data->code, code_length);
++   blob_write_bytes(blob, code, code_length);
++   free(inflated);
+ }
+ 
+ static void
+@@ -2483,8 +2550,8 @@ kk_shader_serialize(struct vk_device *vk_dev, const struct vk_shader *vk_shader,
+    }
+    if (kk_shader_has_gs_main(shader)) {
+       kk_msl_data_serialize(&shader->gs_main, blob);
+-      blob_write_uint8(blob, shader->gs_count.code != NULL);
+-      if (shader->gs_count.code)
++      blob_write_uint8(blob, kk_msl_data_has_code(&shader->gs_count));
++      if (kk_msl_data_has_code(&shader->gs_count))
+          kk_msl_data_serialize(&shader->gs_count, blob);
+       kk_msl_data_serialize(&shader->gs_pre, blob);
+    }
+@@ -2703,12 +2770,14 @@ kk_compile_shaders_noted(struct vk_device *device, uint32_t shader_count,
+                                         shaders_out);
+    if (KK_DEBUG(COMPILE))
+       kk_note_shader_source(false, start);
+-   if (KK_DEBUG(MEMORY) && result == VK_SUCCESS) {
+-      for (uint32_t i = 0; i < shader_count; i++) {
+-         if (shaders_out[i])
+-            kk_shader_count(
+-               container_of(shaders_out[i], struct kk_shader, vk), 1);
+-      }
++   for (uint32_t i = 0; result == VK_SUCCESS && i < shader_count; i++) {
++      if (shaders_out[i] == NULL)
++         continue;
++      struct kk_shader *shader =
++         container_of(shaders_out[i], struct kk_shader, vk);
++      kk_shader_pack_msl(shader);
++      if (KK_DEBUG(MEMORY))
++         kk_shader_count(shader, 1);
+    }
+    return result;
+ }
+@@ -2724,8 +2793,13 @@ kk_deserialize_shader_noted(struct vk_device *vk_dev, struct blob_reader *blob,
+                                            pAllocator, shader_out);
+    if (KK_DEBUG(COMPILE))
+       kk_note_shader_source(true, start);
+-   if (KK_DEBUG(MEMORY) && result == VK_SUCCESS)
+-      kk_shader_count(container_of(*shader_out, struct kk_shader, vk), 1);
++   if (result == VK_SUCCESS) {
++      struct kk_shader *shader =
++         container_of(*shader_out, struct kk_shader, vk);
++      kk_shader_pack_msl(shader);
++      if (KK_DEBUG(MEMORY))
++         kk_shader_count(shader, 1);
++   }
+    return result;
+ }
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_shader.h b/src/kosmickrisp/vulkan/kk_shader.h
+index aec372b..48daf31 100644
+--- a/src/kosmickrisp/vulkan/kk_shader.h
++++ b/src/kosmickrisp/vulkan/kk_shader.h
+@@ -155,6 +155,12 @@ struct kk_pipeline_handles {
+ struct msl_compile_data {
+    char *code;
+    char *entrypoint_name;
++   /* Once the shader is built, its MSL is needed only to serialize it, and
++    * is kept compressed (kk_shader_pack_msl): packed holds packed_size bytes
++    * that inflate to the code_size bytes of the source, and code is NULL. */
++   uint8_t *packed;
++   uint32_t packed_size;
++   uint32_t code_size;
+ };
+ 
+ struct kk_shader {

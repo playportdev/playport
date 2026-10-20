@@ -63,8 +63,9 @@ final class WineHostRuntime: @unchecked Sendable {
         #if PLAYPORT_RELEASE
         Self.quietRuntime()
         #else
-        // KosmicKrisp's shader-source counts and slow Metal builds (mesa 0016).
-        setenv("MESA_KK_DEBUG", "compile", 0)
+        // KosmicKrisp's shader-source counts and slow Metal builds (mesa 0016), and its
+        // live memory by kind every 10 s (mesa 0046).
+        setenv("MESA_KK_DEBUG", "compile,memory", 0)
         #endif
         let size = mb << 20
         let t0 = Date()

@@ -1,0 +1,523 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 20 Oct 2026 04:54:11 +0200
+Subject: [PATCH] kk: MESA_KK_DEBUG=memory logs the driver's live memory by
+ kind
+
+Red Dead Redemption 2's Story load ends at iOS's 8,192 MB per-process
+limit, and the graphics ledger reaches 1.5 GB at its landing page while
+host malloc grows by about 790 MB as the game creates the 3,136
+pipelines of its 465 MB pipeline cache. Which part of that is the
+game's device memory, which is the driver's own buffers, which is
+Metal's (pipeline states), and which is the pipeline cache's data held
+in host memory was not known.
+
+With MESA_KK_DEBUG=memory, a queue submit logs one line at most every
+10 s:
+
+  [kk-mem] metal=MiB bos=MiB memory=N/MiB internal=N/MiB
+    descriptor=N/MiB query=N/MiB command=N/MiB | shaders=N
+    pipelines=N msl=MiB | cache raw=N/MiB precomp=N/MiB MiB
+
+metal is MTLDevice.currentAllocatedSize. bos is the sum of the live
+buffer objects KosmicKrisp allocated, split by what they back: device
+memory (vkAllocateMemory, imported memory not counted), the driver's
+own buffers, descriptor pools, query pools and tables, and command
+buffer upload memory. shaders and pipelines count the live kk_shader
+objects and those holding a Metal pipeline state; msl is the MSL source
+they keep for serialization. raw and precomp are the pipeline cache
+objects the Vulkan runtime holds in host memory: entries imported and
+not yet used (raw data objects) and precompiled NIR shaders.
+
+Without the flag nothing is counted or logged, except the buffer
+object byte counts (two atomics per allocation and free).
+
+Class: diagnostics
+Evidence: docs/evidence/2026-10-20-rdr2-kk-memory.md
+Offered-upstream: no
+---
+ src/kosmickrisp/vulkan/kk_bo.c             | 62 ++++++++++++++++++++++
+ src/kosmickrisp/vulkan/kk_bo.h             | 32 +++++++++++
+ src/kosmickrisp/vulkan/kk_cmd_buffer.c     |  1 +
+ src/kosmickrisp/vulkan/kk_cmd_pool.c       |  1 +
+ src/kosmickrisp/vulkan/kk_debug.c          |  1 +
+ src/kosmickrisp/vulkan/kk_debug.h          |  4 ++
+ src/kosmickrisp/vulkan/kk_descriptor_set.c |  1 +
+ src/kosmickrisp/vulkan/kk_device_memory.c  |  1 +
+ src/kosmickrisp/vulkan/kk_query_pool.c     |  1 +
+ src/kosmickrisp/vulkan/kk_query_table.c    |  1 +
+ src/kosmickrisp/vulkan/kk_queue.c          |  4 ++
+ src/kosmickrisp/vulkan/kk_shader.c         | 54 +++++++++++++++----
+ src/kosmickrisp/vulkan/kk_shader.h         |  2 +
+ src/vulkan/runtime/vk_pipeline.c           | 11 ++++
+ src/vulkan/runtime/vk_pipeline_cache.c     |  9 ++++
+ src/vulkan/runtime/vk_pipeline_cache.h     | 12 +++++
+ 16 files changed, 187 insertions(+), 10 deletions(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_bo.c b/src/kosmickrisp/vulkan/kk_bo.c
+index 4e3cbbb..a042696 100644
+--- a/src/kosmickrisp/vulkan/kk_bo.c
++++ b/src/kosmickrisp/vulkan/kk_bo.c
+@@ -11,7 +11,12 @@
+ 
+ #include "kosmickrisp/bridge/mtl_bridge.h"
+ 
++#include "util/u_atomic.h"
+ #include "util/u_memory.h"
++#include "util/os_time.h"
++#include "vk_pipeline_cache.h"
++
++#include <stdio.h>
+ 
+ #if DETECT_OS_APPLE
+ #include <TargetConditionals.h>
+@@ -74,6 +79,9 @@ kk_alloc_bo(struct kk_device *dev, struct vk_object_base *log_obj,
+       goto fail_alloc;
+    }
+ 
++   bo->kind = KK_BO_KIND_INTERNAL;
++   p_atomic_add(&kk_memory_stats.bo_bytes[bo->kind], (int64_t)size_B);
++   p_atomic_inc(&kk_memory_stats.bo_count[bo->kind]);
+    bo->mtl_handle = handle;
+    bo->size_B = size_B;
+    bo->map = map;
+@@ -93,9 +101,63 @@ fail_heap:
+    return result;
+ }
+ 
++struct kk_memory_stats kk_memory_stats;
++
++void
++kk_bo_set_kind(struct kk_bo *bo, enum kk_bo_kind kind)
++{
++   if (bo->kind == KK_BO_KIND_IMPORTED)
++      return;
++   p_atomic_add(&kk_memory_stats.bo_bytes[bo->kind], -(int64_t)bo->size_B);
++   p_atomic_dec(&kk_memory_stats.bo_count[bo->kind]);
++   bo->kind = kind;
++   p_atomic_add(&kk_memory_stats.bo_bytes[kind], (int64_t)bo->size_B);
++   p_atomic_inc(&kk_memory_stats.bo_count[kind]);
++}
++
++void
++kk_memory_log(struct kk_device *dev)
++{
++   static int64_t last_ns;
++   const int64_t now = os_time_get_nano();
++   const int64_t last = p_atomic_read(&last_ns);
++   if (last != 0 && now - last < INT64_C(10000000000))
++      return;
++   if (p_atomic_cmpxchg(&last_ns, last, now) != last)
++      return;
++
++   const double mib = 1024.0 * 1024.0;
++   int64_t bo_total = 0;
++   for (unsigned i = KK_BO_KIND_INTERNAL; i < KK_BO_KIND_COUNT; i++)
++      bo_total += p_atomic_read(&kk_memory_stats.bo_bytes[i]);
++#define KK_BO_FIELD(kind)                                                      \
++   p_atomic_read(&kk_memory_stats.bo_count[KK_BO_KIND_##kind]),                \
++      p_atomic_read(&kk_memory_stats.bo_bytes[KK_BO_KIND_##kind]) / mib
++   fprintf(stderr,
++           "[kk-mem] metal=%.0f bos=%.0f memory=%d/%.0f internal=%d/%.0f "
++           "descriptor=%d/%.0f query=%d/%.0f command=%d/%.0f | shaders=%d "
++           "pipelines=%d msl=%.1f | cache raw=%d/%.1f precomp=%d/%.1f MiB\n",
++           mtl_device_current_allocated_size(dev->mtl_handle) / mib,
++           bo_total / mib, KK_BO_FIELD(DEVICE_MEMORY), KK_BO_FIELD(INTERNAL),
++           KK_BO_FIELD(DESCRIPTOR_POOL), KK_BO_FIELD(QUERY),
++           KK_BO_FIELD(COMMAND), p_atomic_read(&kk_memory_stats.shaders),
++           p_atomic_read(&kk_memory_stats.pipelines),
++           p_atomic_read(&kk_memory_stats.msl_bytes) / mib,
++           p_atomic_read(&vk_pipeline_cache_stats.raw_count),
++           p_atomic_read(&vk_pipeline_cache_stats.raw_bytes) / mib,
++           p_atomic_read(&vk_pipeline_cache_stats.precomp_count),
++           p_atomic_read(&vk_pipeline_cache_stats.precomp_bytes) / mib);
++#undef KK_BO_FIELD
++}
++
+ void
+ kk_destroy_bo(struct kk_device *dev, struct kk_bo *bo)
+ {
++   if (bo->kind != KK_BO_KIND_IMPORTED) {
++      p_atomic_add(&kk_memory_stats.bo_bytes[bo->kind], -(int64_t)bo->size_B);
++      p_atomic_dec(&kk_memory_stats.bo_count[bo->kind]);
++   }
++
+    /* We may only have a mapped buffer, for example if the memory was imported
+     * from a host pointer */
+    if (bo->mtl_handle)
+diff --git a/src/kosmickrisp/vulkan/kk_bo.h b/src/kosmickrisp/vulkan/kk_bo.h
+index d1590b9..bf1fdcf 100644
+--- a/src/kosmickrisp/vulkan/kk_bo.h
++++ b/src/kosmickrisp/vulkan/kk_bo.h
+@@ -17,7 +17,33 @@
+ struct kk_device;
+ struct vk_object_base;
+ 
++/* What a buffer object backs, for the [kk-mem] census (MESA_KK_DEBUG=memory).
++ * Imported memory is not the driver's allocation and is not counted. */
++enum kk_bo_kind {
++   KK_BO_KIND_IMPORTED = 0,
++   KK_BO_KIND_INTERNAL,
++   KK_BO_KIND_DEVICE_MEMORY,
++   KK_BO_KIND_DESCRIPTOR_POOL,
++   KK_BO_KIND_QUERY,
++   KK_BO_KIND_COMMAND,
++   KK_BO_KIND_COUNT,
++};
++
++/* Live counts for the [kk-mem] census, updated with atomics. */
++struct kk_memory_stats {
++   int64_t bo_bytes[KK_BO_KIND_COUNT];
++   int32_t bo_count[KK_BO_KIND_COUNT];
++   /* Live kk_shader objects, the pipelines among them that hold Metal
++    * pipeline states, and the MSL source they keep for serialization */
++   int32_t shaders;
++   int32_t pipelines;
++   int64_t msl_bytes;
++};
++
++extern struct kk_memory_stats kk_memory_stats;
++
+ struct kk_bo {
++   enum kk_bo_kind kind;
+    mtl_heap *mtl_handle;
+    mtl_buffer *map;
+    uint64_t size_B;
+@@ -45,4 +71,10 @@ VkResult kk_bo_unmap(struct kk_device *dev, struct kk_bo *bo, void *addr,
+ 
+ void kk_bo_set_label(struct kk_bo *bo, const char *label);
+ 
++void kk_bo_set_kind(struct kk_bo *bo, enum kk_bo_kind kind);
++
++/* One [kk-mem] line when MESA_KK_DEBUG has memory and 10 s have passed since
++ * the last one. */
++void kk_memory_log(struct kk_device *dev);
++
+ #endif /* KK_BO_H */
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.c b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+index 1b210fa..b17e9d9 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_buffer.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+@@ -693,6 +693,7 @@ kk_pool_alloc(struct kk_cmd_buffer *cmd, uint32_t size_B, uint32_t alignment_B)
+          vk_command_buffer_set_error(&cmd->vk, result);
+          return (struct kk_ptr){0};
+       }
++      kk_bo_set_kind(buffer, KK_BO_KIND_COMMAND);
+       util_dynarray_append(&cmd->large_bos, buffer);
+ 
+       return (struct kk_ptr){
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_pool.c b/src/kosmickrisp/vulkan/kk_cmd_pool.c
+index e2c2fc8..204da13 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_pool.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_pool.c
+@@ -31,6 +31,7 @@ kk_cmd_bo_create(struct kk_cmd_pool *pool, struct kk_cmd_bo **bo_out)
+       vk_free(&pool->vk.alloc, bo);
+       return vk_error(pool, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+    }
++   kk_bo_set_kind(bo->bo, KK_BO_KIND_COMMAND);
+ 
+    *bo_out = bo;
+    return VK_SUCCESS;
+diff --git a/src/kosmickrisp/vulkan/kk_debug.c b/src/kosmickrisp/vulkan/kk_debug.c
+index 527c8ee..a48d29d 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.c
++++ b/src/kosmickrisp/vulkan/kk_debug.c
+@@ -17,6 +17,7 @@ const struct debug_named_value debug_flags[] = {
+    {"solid", KK_DEBUG_SOLID},
+    {"os26_workarounds", KK_DEBUG_OS26_WORKAROUNDS},
+    {"integrated_device", KK_DEBUG_INTEGRATED_DEVICE},
++   {"memory", KK_DEBUG_MEMORY},
+    {NULL, 0},
+ };
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_debug.h b/src/kosmickrisp/vulkan/kk_debug.h
+index 2ddff85..9b1dcab 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.h
++++ b/src/kosmickrisp/vulkan/kk_debug.h
+@@ -32,6 +32,10 @@ enum kk_debug {
+    /* Report the integrated device type to the applications that get the
+     * discrete one (kk_get_device_type), to compare */
+    KK_DEBUG_INTEGRATED_DEVICE = 1ull << 8,
++   /* Log the driver's live memory by kind ([kk-mem]) at most every 10 s, from
++    * queue submits: Metal's allocated size, buffer objects, shaders and the
++    * pipeline cache's objects */
++   KK_DEBUG_MEMORY = 1ull << 9,
+ };
+ 
+ extern enum kk_debug kk_mesa_debug_flags;
+diff --git a/src/kosmickrisp/vulkan/kk_descriptor_set.c b/src/kosmickrisp/vulkan/kk_descriptor_set.c
+index bee91fb..07d37d8 100644
+--- a/src/kosmickrisp/vulkan/kk_descriptor_set.c
++++ b/src/kosmickrisp/vulkan/kk_descriptor_set.c
+@@ -550,6 +550,7 @@ kk_CreateDescriptorPool(VkDevice _device,
+          kk_destroy_descriptor_pool(dev, pAllocator, pool);
+          return result;
+       }
++      kk_bo_set_kind(pool->bo, KK_BO_KIND_DESCRIPTOR_POOL);
+ 
+       /* The BO may be larger thanks to GPU page alignment.  We may as well
+        * make that extra space available to the client.
+diff --git a/src/kosmickrisp/vulkan/kk_device_memory.c b/src/kosmickrisp/vulkan/kk_device_memory.c
+index 77d049c..2415298 100644
+--- a/src/kosmickrisp/vulkan/kk_device_memory.c
++++ b/src/kosmickrisp/vulkan/kk_device_memory.c
+@@ -152,6 +152,7 @@ kk_AllocateMemory(VkDevice device, const VkMemoryAllocateInfo *pAllocateInfo,
+          kk_alloc_bo(dev, &dev->vk.base, aligned_size, alignment, &mem->bo);
+       if (result != VK_SUCCESS)
+          goto fail_alloc;
++      kk_bo_set_kind(mem->bo, KK_BO_KIND_DEVICE_MEMORY);
+    }
+ 
+    if (KK_DEBUG(DRAWS))
+diff --git a/src/kosmickrisp/vulkan/kk_query_pool.c b/src/kosmickrisp/vulkan/kk_query_pool.c
+index 3607dfa..771646a 100644
+--- a/src/kosmickrisp/vulkan/kk_query_pool.c
++++ b/src/kosmickrisp/vulkan/kk_query_pool.c
+@@ -200,6 +200,7 @@ kk_CreateQueryPool(VkDevice device, const VkQueryPoolCreateInfo *pCreateInfo,
+       kk_DestroyQueryPool(device, kk_query_pool_to_handle(pool), pAllocator);
+       return vk_error(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+    }
++   kk_bo_set_kind(pool->bo, KK_BO_KIND_QUERY);
+ 
+    if (kk_pool_is_oq(pool)) {
+       uint16_t *remap_index = kk_pool_index_ptr(pool);
+diff --git a/src/kosmickrisp/vulkan/kk_query_table.c b/src/kosmickrisp/vulkan/kk_query_table.c
+index 8a0833e..89e2e28 100644
+--- a/src/kosmickrisp/vulkan/kk_query_table.c
++++ b/src/kosmickrisp/vulkan/kk_query_table.c
+@@ -27,6 +27,7 @@ kk_query_table_grow_locked(struct kk_device *dev, struct kk_query_table *table,
+    result = kk_alloc_bo(dev, &dev->vk.base, new_mem_size, 256, &bo);
+    if (result != VK_SUCCESS)
+       return result;
++   kk_bo_set_kind(bo, KK_BO_KIND_QUERY);
+ 
+    /* We don't allow resize */
+    assert(table->bo == NULL);
+diff --git a/src/kosmickrisp/vulkan/kk_queue.c b/src/kosmickrisp/vulkan/kk_queue.c
+index a884614..15834fd 100644
+--- a/src/kosmickrisp/vulkan/kk_queue.c
++++ b/src/kosmickrisp/vulkan/kk_queue.c
+@@ -12,6 +12,7 @@
+ #include "util/u_debug.h"
+ #include "kk_buffer.h"
+ #include "kk_cmd_buffer.h"
++#include "kk_debug.h"
+ #include "kk_device.h"
+ #include "kk_entrypoints.h"
+ #include "kk_physical_device.h"
+@@ -231,6 +232,9 @@ kk_queue_submit(struct vk_queue *vk_queue, struct vk_queue_submit *submit)
+ 
+    kk_queue_capture_frame(queue, false);
+ 
++   if (KK_DEBUG(MEMORY))
++      kk_memory_log(dev);
++
+    for (struct vk_sync_wait *wait = submit->waits,
+                             *end = submit->waits + submit->wait_count;
+         wait != end; ++wait) {
+diff --git a/src/kosmickrisp/vulkan/kk_shader.c b/src/kosmickrisp/vulkan/kk_shader.c
+index 70f3296..842bbd0 100644
+--- a/src/kosmickrisp/vulkan/kk_shader.c
++++ b/src/kosmickrisp/vulkan/kk_shader.c
+@@ -925,12 +925,41 @@ kk_lower_nir(struct kk_device *dev, nir_shader *nir, bool emulated_stage,
+ 
+ static const struct vk_shader_ops kk_shader_ops;
+ 
++/* Adds (sign 1) or removes (sign -1) a shader from the [kk-mem] census. */
++static void
++kk_shader_count(struct kk_shader *shader, int sign)
++{
++   int64_t msl = 0;
++   for (unsigned i = 0; i < MESA_SHADER_STAGES; i++) {
++      if (shader->msl_data[i].code)
++         msl += strlen(shader->msl_data[i].code) + 1;
++   }
++   const struct msl_compile_data *gs_data[] = {&shader->gs_main,
++                                               &shader->gs_count,
++                                               &shader->gs_pre};
++   for (unsigned i = 0; i < ARRAY_SIZE(gs_data); ++i) {
++      if (gs_data[i]->code)
++         msl += strlen(gs_data[i]->code) + 1;
++   }
++   const bool pipeline =
++      (shader->info.stage == MESA_SHADER_COMPUTE && shader->pipeline.cs) ||
++      (shader->info.stage == MESA_SHADER_VERTEX && shader->pipeline.gfx.render);
++
++   p_atomic_add(&kk_memory_stats.shaders, sign);
++   p_atomic_add(&kk_memory_stats.pipelines, pipeline ? sign : 0);
++   p_atomic_add(&kk_memory_stats.msl_bytes, sign * msl);
++   shader->counted = sign > 0;
++}
++
+ static void
+ kk_shader_destroy(struct vk_device *vk_dev, struct kk_shader *shader,
+                   const VkAllocationCallbacks *pAllocator)
+ {
+    struct kk_device *dev = container_of(vk_dev, struct kk_device, vk);
+ 
++   if (shader->counted)
++      kk_shader_count(shader, -1);
++
+    struct kk_pipeline_handles *pipe = &shader->pipeline;
+ 
+    if (shader->info.stage == MESA_SHADER_COMPUTE) {
+@@ -2668,14 +2697,19 @@ kk_compile_shaders_noted(struct vk_device *device, uint32_t shader_count,
+                          const VkAllocationCallbacks *pAllocator,
+                          struct vk_shader **shaders_out)
+ {
+-   if (!KK_DEBUG(COMPILE))
+-      return kk_compile_shaders(device, shader_count, infos, state,
+-                                enabled_features, pAllocator, shaders_out);
+-   const int64_t start = os_time_get_nano();
++   const int64_t start = KK_DEBUG(COMPILE) ? os_time_get_nano() : 0;
+    VkResult result = kk_compile_shaders(device, shader_count, infos, state,
+                                         enabled_features, pAllocator,
+                                         shaders_out);
+-   kk_note_shader_source(false, start);
++   if (KK_DEBUG(COMPILE))
++      kk_note_shader_source(false, start);
++   if (KK_DEBUG(MEMORY) && result == VK_SUCCESS) {
++      for (uint32_t i = 0; i < shader_count; i++) {
++         if (shaders_out[i])
++            kk_shader_count(
++               container_of(shaders_out[i], struct kk_shader, vk), 1);
++      }
++   }
+    return result;
+ }
+ 
+@@ -2685,13 +2719,13 @@ kk_deserialize_shader_noted(struct vk_device *vk_dev, struct blob_reader *blob,
+                             const VkAllocationCallbacks *pAllocator,
+                             struct vk_shader **shader_out)
+ {
+-   if (!KK_DEBUG(COMPILE))
+-      return kk_deserialize_shader(vk_dev, blob, binary_version, pAllocator,
+-                                   shader_out);
+-   const int64_t start = os_time_get_nano();
++   const int64_t start = KK_DEBUG(COMPILE) ? os_time_get_nano() : 0;
+    VkResult result = kk_deserialize_shader(vk_dev, blob, binary_version,
+                                            pAllocator, shader_out);
+-   kk_note_shader_source(true, start);
++   if (KK_DEBUG(COMPILE))
++      kk_note_shader_source(true, start);
++   if (KK_DEBUG(MEMORY) && result == VK_SUCCESS)
++      kk_shader_count(container_of(*shader_out, struct kk_shader, vk), 1);
+    return result;
+ }
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_shader.h b/src/kosmickrisp/vulkan/kk_shader.h
+index 1c01382..aec372b 100644
+--- a/src/kosmickrisp/vulkan/kk_shader.h
++++ b/src/kosmickrisp/vulkan/kk_shader.h
+@@ -172,6 +172,8 @@ struct kk_shader {
+     * program, set like gs_main. */
+    struct msl_compile_data gs_count;
+    struct msl_compile_data gs_pre;
++   /* Counted in kk_memory_stats (MESA_KK_DEBUG=memory) */
++   bool counted;
+ };
+ 
+ VK_DEFINE_NONDISP_HANDLE_CASTS(kk_shader, vk.base, VkShaderEXT,
+diff --git a/src/vulkan/runtime/vk_pipeline.c b/src/vulkan/runtime/vk_pipeline.c
+index d134e22..57ea79f 100644
+--- a/src/vulkan/runtime/vk_pipeline.c
++++ b/src/vulkan/runtime/vk_pipeline.c
+@@ -46,6 +46,7 @@
+ #include "shader_enums.h"
+ 
+ #include "util/mesa-blake3.h"
++#include "util/u_atomic.h"
+ 
+ struct vk_pipeline_binary {
+    struct vk_object_base base;
+@@ -733,6 +734,9 @@ vk_pipeline_precomp_shader_create(struct vk_device *device,
+ 
+    shader->nir_blob = blob;
+ 
++   p_atomic_inc(&vk_pipeline_cache_stats.precomp_count);
++   p_atomic_add(&vk_pipeline_cache_stats.precomp_bytes, (int64_t)blob.size);
++
+    return shader;
+ 
+ fail_blob:
+@@ -816,6 +820,10 @@ vk_pipeline_precomp_shader_deserialize(struct vk_device *device,
+    if (shader->nir_blob.out_of_memory)
+       goto fail_cache_obj;
+ 
++   p_atomic_inc(&vk_pipeline_cache_stats.precomp_count);
++   p_atomic_add(&vk_pipeline_cache_stats.precomp_bytes,
++                (int64_t)shader->nir_blob.size);
++
+    return &shader->cache_obj;
+ 
+ fail_cache_obj:
+@@ -841,6 +849,9 @@ vk_pipeline_precomp_shader_destroy(struct vk_device *device,
+    struct vk_pipeline_precomp_shader *shader =
+       vk_pipeline_precomp_shader_from_cache_obj(obj);
+ 
++   p_atomic_dec(&vk_pipeline_cache_stats.precomp_count);
++   p_atomic_add(&vk_pipeline_cache_stats.precomp_bytes,
++                -(int64_t)shader->nir_blob.size);
+    blob_finish(&shader->nir_blob);
+    vk_pipeline_cache_object_finish(&shader->cache_obj);
+    vk_free(&device->alloc, shader);
+diff --git a/src/vulkan/runtime/vk_pipeline_cache.c b/src/vulkan/runtime/vk_pipeline_cache.c
+index 225ba3a..0a79fa6 100644
+--- a/src/vulkan/runtime/vk_pipeline_cache.c
++++ b/src/vulkan/runtime/vk_pipeline_cache.c
+@@ -32,6 +32,7 @@
+ #include "compiler/nir/nir_serialize.h"
+ 
+ #include "util/blob.h"
++#include "util/u_atomic.h"
+ #include "util/u_debug.h"
+ #include "util/disk_cache.h"
+ #include "util/hash_table.h"
+@@ -91,9 +92,14 @@ vk_raw_data_cache_object_destroy(struct vk_device *device,
+    struct vk_raw_data_cache_object *data_obj =
+       container_of(object, struct vk_raw_data_cache_object, base);
+ 
++   p_atomic_dec(&vk_pipeline_cache_stats.raw_count);
++   p_atomic_add(&vk_pipeline_cache_stats.raw_bytes,
++                -(int64_t)data_obj->data_size);
+    vk_free(&device->alloc, data_obj);
+ }
+ 
++struct vk_pipeline_cache_stats vk_pipeline_cache_stats;
++
+ const struct vk_pipeline_cache_object_ops vk_raw_data_cache_object_ops = {
+    .serialize = vk_raw_data_cache_object_serialize,
+    .deserialize = vk_raw_data_cache_object_deserialize,
+@@ -123,6 +129,9 @@ vk_raw_data_cache_object_create(struct vk_device *device,
+    memcpy(obj_key_data, key_data, key_size);
+    memcpy(obj_data, data, data_size);
+ 
++   p_atomic_inc(&vk_pipeline_cache_stats.raw_count);
++   p_atomic_add(&vk_pipeline_cache_stats.raw_bytes, (int64_t)data_size);
++
+    return data_obj;
+ }
+ 
+diff --git a/src/vulkan/runtime/vk_pipeline_cache.h b/src/vulkan/runtime/vk_pipeline_cache.h
+index 05f778b..5612e2d 100644
+--- a/src/vulkan/runtime/vk_pipeline_cache.h
++++ b/src/vulkan/runtime/vk_pipeline_cache.h
+@@ -311,6 +311,18 @@ vk_raw_data_cache_object_create(struct vk_device *device,
+ 
+ extern const struct vk_pipeline_cache_object_ops vk_raw_data_cache_object_ops;
+ 
++/* Live raw data objects and precompiled (NIR) shaders in all pipeline caches,
++ * with the bytes of data they hold, updated with atomics: for a driver's
++ * memory census (KosmicKrisp's [kk-mem]). */
++struct vk_pipeline_cache_stats {
++   int32_t raw_count;
++   int64_t raw_bytes;
++   int32_t precomp_count;
++   int64_t precomp_bytes;
++};
++
++extern struct vk_pipeline_cache_stats vk_pipeline_cache_stats;
++
+ #ifdef __cplusplus
+ }
+ #endif
