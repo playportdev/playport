@@ -19,6 +19,7 @@
 #include "timezone_bias.h"
 #include "title_path.h"
 #include "session_protocol.h"
+#include "sc_single.h"
 
 #include <CommonCrypto/CommonDigest.h>
 #include <dirent.h>
@@ -40,6 +41,12 @@
 #include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
+
+/* Called by ntdll's process policy, before any single-process flag or write. */
+int playport_sc_single_enabled(void)
+{
+    return pp_sc_single_enabled(getenv("PLAYPORT_SC_SINGLE"));
+}
 
 /* --- unix-side archive entry points ------------------------------------ */
 

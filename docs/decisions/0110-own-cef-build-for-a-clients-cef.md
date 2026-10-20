@@ -5,6 +5,10 @@
 [PLA-369](https://linear.app/playportdev/issue/PLA-369),
 [plan](../plans/finished.md#own-low-address-space-cef).
 
+Amended by [0150](0150-dev-single-process-social-club.md): the owner permits a
+dev-only, exact-build-guarded in-memory Social Club page-bridge patch for
+opt-in single-process mode; all other no-patching restrictions remain.
+
 ## Context
 
 Social Club, the Rockstar Games Launcher's UI and RDR2's in-game overlay, embeds CEF

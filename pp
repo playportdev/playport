@@ -101,6 +101,8 @@ C_TESTS = [
     ("self-check", ["app/tests/selfcheck_test.c", "app/Sources/WineHost/selfcheck.c"], []),
     ("session protocol", ["app/tests/session_protocol_test.c"], []),
     ("launcher end", ["app/tests/launcher_end_test.c"], []),
+    ("Social Club single-process dev gate", ["app/tests/sc_single_test.c"], []),
+    ("Social Club single-process release gate", ["app/tests/sc_single_test.c"], ["-DPLAYPORT_RELEASE"]),
     ("jit debugger", ["app/tests/jit_debugger_test.c"], []),
     ("steam tickets", ["app/tests/steam_ticket_test.c", "app/Sources/WineHost/steam_ticket.c"], []),
     ("steam client", ["app/tests/steam_client_test.c", "app/Sources/WineHost/steam_client.c"], []),

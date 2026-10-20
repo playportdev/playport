@@ -177,3 +177,4 @@
 0177-ntdll-refuse-RDR2-s-later-Social-Club-helper-starts-.patch
 0178-win32u-log-the-display-values-each-process-is-given-.patch
 0179-win32u-give-the-virtual-display-a-display-config-pat.patch
+0190-ntdll-dev-single-process-social-club.patch

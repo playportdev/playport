@@ -8,6 +8,10 @@ and D2 there. [PLA-277](https://linear.app/playportdev/issue/PLA-277),
 Amended by [0111](0111-fewer-cef-processes-with-chromium-features.md) (2026-10-16): the switch set
 also turns on `NetworkServiceInProcess2` and `RunVideoCaptureServiceInBrowserProcess`.
 
+Amended by [0150](0150-dev-single-process-social-club.md): the owner permits a
+dev-only, exact-build-guarded in-memory Social Club page-bridge patch for
+opt-in single-process mode; all other no-patching restrictions remain.
+
 ## Context
 
 The Rockstar Games Launcher draws its UI with CEF (Chromium 143) in `SocialClubHelper.exe`, which

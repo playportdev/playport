@@ -66,6 +66,7 @@ let package = Package(
     targets: [
         .target(
             name: "WineHost",
+            cSettings: release ? [.define("PLAYPORT_RELEASE")] : [],
             linkerSettings: [
                 // Every archive the reference app links (Madeira.xcodeproj),
                 // in its order. libdxmt_combined.a is the DXMT unix slice plus
