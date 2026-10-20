@@ -20,7 +20,8 @@ screenshots and device logs under `$PLAYPORT_BUILD/agent-notes/pla413e/` (never 
 | --- | --- | --- | --- |
 | `a076ca1985d38a4731f0bdfb51a27e0cfd15f05a193b63822e6739ae2d66100d` | main + srvpoll (0175) + kkcompile (0052, 0053) | passed (`ui-runs/20261020T105019`; `[srv-pending] MADEIRA_SRV_PENDING=1`) | `…T105836-rdr2-s1`; `…T112521-rdr2-s2` with runtime `env.MADEIRA_SRV_PENDING=0` |
 | `e843d571ef5c19b50889712bc4386fea8987065304d7a08e98d4c27061a403c5` | + madeira-unix 0176 | passed (`…T115140`) | `…T115239-rdr2-s3` |
-| `f7bfed851d70e448d157cb4adf6dcccb257c7fd228f9d3e9dc009d62b49bd127` | + madeira-unix 0177 and decision 0138 (dev switch, off by default) | not run yet (phone paused for a desktop reference run) | none yet |
+| `f7bfed851d70e448d157cb4adf6dcccb257c7fd228f9d3e9dc009d62b49bd127` | + madeira-unix 0177 and decision 0138 (dev switch, off by default) | not run (superseded by the next build) | none |
+| `62cea69c0c81f75d924cf3c3b9e0f9d80735838191e9616b934675416785eff5` | + mesa 0060–0062 (decision 0139) | passed (`…T125123`, `…T130013`) | `…T125218-rdr2-s4` (shader translation run), `…T130113-rdr2-s5`, both with `--action set:refuseGameSocialClubRestart=true` and graphics option `MESA_KK_DUMP_MSL_MIN_KB=1024` |
 
 A Steam check on `a076ca19` (`…T105608`: Games, then Settings › Accounts) showed Steam signed in;
 the wineserver does not run there, so the log has no `[srv-poll]` line at all.
@@ -41,7 +42,10 @@ the wineserver does not run there, so the log has no `[srv-poll]` line at all.
   entry back with one compare-and-swap, reading the socket first, so one of them closes it, never a
   later child's socket in a reused entry. The host test runs 1,000 start/end pairs in a 4-entry
   table, and 8 threads × 20,000 start/end pairs under ThreadSanitizer.
-- **Not yet shown on the phone:** s3 ended at 13 helper starts (section 3), before the 56th.
+- **On the phone:** s3 ended at 13 helper starts (section 3). In s5 (section 5) the game asked
+  for its helper 260 times more and no `proc-socket table FULL` line came, but those starts were
+  refused at creation (decision 0138), so they took no entry: 0176's reuse is covered by the host
+  test, not yet by a run with 56 live-then-ended children.
 
 ## 2. The pending set (0175) and the compile logging (0052) on RDR2
 
@@ -83,3 +87,51 @@ logs show the guest screen 1280×720 (`title: display: screen 1280x720 (the titl
 show: the 3D fills a 16:9 box). The game's window is 1280×720 client at (317,167) (`[win-pos]
 hwnd=0x100b4 vis={317,167,1597,887}`): centred as on a 1920×1080 screen, with only its top-left
 963×553 on the 1280×720 screen. The 1/1 comparison and a GPU capture are still to do.
+
+## 5. s5: 25 minutes after first frame, no memory kill (0176, 0177/0138, mesa 0060–0062)
+
+Run `…T130113-rdr2-s5` reached its stop condition (first frame +1,500 s) with the app alive
+(`ok: true`). Story was selected at 13:04:12; gameplay (HUD, minimap) from about 13:06 to the
+stop at 13:28, of which 13:10–13:26 was the game's pause menu and Settings (section 6). The left
+stick moved the view (screenshot change 17–109 per cycle, `mover.log`), not seated.
+
+| | r3 (`82b9cd29`) | s5 |
+| --- | --- | --- |
+| end | 8,192 MB limit after ~2.5 min of gameplay | the run's stop, 22 min after Story |
+| footprint, gameplay at scale 1/2 | 7.9 GB at the kill | 7.15–7.33 GB (13:06–13:10) |
+| footprint, menus | | 7.05–7.10 GB, level for 13 min |
+| footprint, gameplay at scale 1/1 | | 7.39–7.47 GB, peak 7,864 MB at the switch |
+| graphics (`[footprint]`) | ~3.1 GB | 2.9–3.1 GB at 1/2, 3.15–3.27 GB at 1/1 |
+| presents/s, gameplay | 10–18 | 15.7–22.0 at 1/2, 12.8–21.5 at 1/1; menus 41–46 |
+| wineserver thread cpu (mean / p50 / max) | 75 / 85 / 89 % (e3b) | 39 / 41 / 72 %; `read_request` 8 % of its PROF-BT samples |
+| game helper starts | 30 ended in 153 s (e3b) | 2 ended after the sign-in, then 260 refused at creation (`[game-sc] refused … start 260`) |
+| `[kk-compile] FAIL` | | 0 (3,455 pipelines from the cache) |
+| MTLCompilerService `killing_highwater_process` | 11 | 0 |
+| thermal | | fair at launch, serious later |
+
+- **The compile levers:** s4, the first launch after mesa 0060's build ID change, translated
+  1,986 shaders (45.6 s) and built 13.0 s of Metal with no failure and no MTLCompilerService
+  highwater kill; s1, the same 1,986 translations without 0060, had 15. No MSL of 1 MB or more was
+  dumped (`Library/Caches/kk-dump` absent after s4 and s5).
+- **s4's memory trigger:** the translation pushed the footprint to 7,027 MB at +134 s, before the
+  game's Social Club sign-in, so decision 0130 ended the launcher and its helpers. The game then
+  had no Story entitlement: its landing page offered "Buy Red Dead Redemption 2 Story Mode" on A,
+  and the landing script's A opened the Social Club overlay, which showed "Disconnected from
+  Rockstar Games Launcher"; nothing else was pressed and the run was ended. The landing script now
+  reads the screen and presses nothing when it shows Buy, Purchase or Store.
+- **Saves after s5** (against `pla413c/save-backup-0`): the manual slot `SRDR30000` is unchanged;
+  the autosave `SRDR30015`, `ProfileSettings`, `Player`, `cfg.dat` and `cloudsavedata.dat`
+  changed (the game's own autosave and settings; in s2 the owner answered a cloud-save mismatch by
+  keeping the local saves).
+
+## 6. The stretch is the same at Resolution Scale Off
+
+In s5 the game's Settings › Graphics › Resolution Scale went from 1/2 (×0.500) to Off, applied and
+confirmed; the game recreated its window and swap chain (1280×720 at (317,167)). Back in
+gameplay at the same cabin, the 3D was as stretched horizontally as at 1/2, now sharper; the HUD
+and minimap stayed right. The stretch is not the half-resolution path or its upscale: with the
+desktop reference ([rdr2-desktop-reference](2026-10-20-rdr2-desktop-reference.md): ×3.50
+horizontally, the phone's projection P00 ≈ 4.02 against the desktop's 1.1486), the game's camera
+aspect is wrong (about 0.507). KosmicKrisp's surface reports an identity `currentTransform`
+(`wsi_common_metal.c`), so a Vulkan pre-rotation is not it. The game's `system.xml` stays at
+Resolution Scale Off after this run.
