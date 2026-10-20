@@ -1,0 +1,153 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 20 Oct 2026 01:53:35 +0200
+Subject: [PATCH] wsi/metal: a swap chain configures the layer again when
+ another changed it
+
+A CAMetalLayer has one drawable size, pixel format and colour space,
+and every swap chain made on its surface sets them in
+wsi_metal_layer_configure. An application can make a second swap chain
+on the same surface and keep presenting the first: Red Dead Redemption
+2 makes a 124x11 A2R10G10B10 one after its 1280x720 B8G8R8A8 one, and
+presents the 1280x720 one. Its drawables then come 124x11 and 10-bit,
+while its blit into them is built for its own size and format: the
+phone showed the landing page as one flat band two drawable rows high
+and the loading video as 124-column blue, magenta and cyan noise.
+
+Before each acquire, a swap chain whose size or pixel format the layer
+no longer has configures the layer again as it did when it was made
+(size, image count, format, colour space, opacity, present mode,
+framebuffer-only), and logs it ([kk-wsi] layer back to the presenting
+chain). Swap chain creation is logged with its format, colour space,
+size and whether it replaces an old one.
+
+Mesa main (9a1e58da, checked on 2026-10-18) configures the layer only
+when a swap chain is made.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-20-rdr2-landing-capture.md
+Offered-upstream: no
+---
+ src/vulkan/wsi/wsi_common_metal.c       | 36 +++++++++++++++++++++++++
+ src/vulkan/wsi/wsi_common_metal_layer.h |  4 +++
+ src/vulkan/wsi/wsi_common_metal_layer.m | 17 ++++++++++++
+ 3 files changed, 57 insertions(+)
+
+diff --git a/src/vulkan/wsi/wsi_common_metal.c b/src/vulkan/wsi/wsi_common_metal.c
+index 81ba62b..03a2fa9 100644
+--- a/src/vulkan/wsi/wsi_common_metal.c
++++ b/src/vulkan/wsi/wsi_common_metal.c
+@@ -377,6 +377,12 @@ struct wsi_metal_swapchain {
+ 
+    VkExtent2D extent;
+    VkFormat vk_format;
++   VkColorSpaceKHR color_space;
++   /* How this chain configured the layer, to configure it again */
++   uint32_t layer_image_count;
++   bool layer_opaque;
++   bool layer_immediate;
++   bool layer_framebuffer_only;
+ 
+    VkIcdSurfaceMetal *surface;
+ 
+@@ -624,6 +630,26 @@ wsi_metal_swapchain_acquire_next_image(struct wsi_swapchain *wsi_chain,
+    clock_gettime(CLOCK_MONOTONIC, &start_time);
+    timespec_add(&end_time, &rel_timeout, &start_time);
+ 
++   /* A layer has one drawable size, pixel format and colour space, and every
++    * swap chain made on its surface sets them; an application can keep
++    * presenting an older swap chain after making another one (Red Dead
++    * Redemption 2 makes a 124x11 A2R10G10B10 one and goes on with its
++    * 1280x720 B8G8R8A8 one). Its drawables would then come in the other
++    * chain's size and format, while its blit into them is built for its own.
++    * Configure the layer for this chain again before it hands out a
++    * drawable. */
++   if (!wsi_metal_layer_matches(chain->surface->pLayer, chain->extent.width,
++                                chain->extent.height, chain->vk_format)) {
++      kk_wsi_trace(3, "layer back to the presenting chain: format=%d colorspace=%d %ux%u\n",
++                   (int)chain->vk_format, (int)chain->color_space,
++                   chain->extent.width, chain->extent.height);
++      wsi_metal_layer_configure(chain->surface->pLayer, chain->extent.width,
++                                chain->extent.height, chain->layer_image_count,
++                                chain->vk_format, chain->color_space,
++                                chain->layer_opaque, chain->layer_immediate,
++                                chain->layer_framebuffer_only);
++   }
++
+    while (1) {
+       /* Try to acquire an drawable. Unfortunately we might block for up to 1 second. */
+       CAMetalDrawable *drawable = wsi_metal_layer_acquire_drawable(chain->surface->pLayer);
+@@ -689,6 +715,7 @@ wsi_metal_swapchain_set_present_mode(struct wsi_swapchain *wsi_chain,
+ {
+    struct wsi_metal_swapchain *chain = (struct wsi_metal_swapchain *)wsi_chain;
+    const bool immediate_mode = mode == VK_PRESENT_MODE_IMMEDIATE_KHR;
++   chain->layer_immediate = immediate_mode;
+    wsi_metal_layer_set_immediate(chain->surface->pLayer, immediate_mode);
+ }
+ 
+@@ -965,6 +992,10 @@ wsi_metal_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
+ #endif
+    const bool framebuffer_only = !wsi_device->sw;
+ 
++   kk_wsi_trace(3, "create chain format=%d colorspace=%d %ux%u images=%u old=%d\n",
++                (int)pCreateInfo->imageFormat, (int)pCreateInfo->imageColorSpace,
++                pCreateInfo->imageExtent.width, pCreateInfo->imageExtent.height,
++                (unsigned)num_images, pCreateInfo->oldSwapchain != VK_NULL_HANDLE);
+    VkResult result = wsi_metal_layer_configure(metal_surface->pLayer,
+       pCreateInfo->imageExtent.width, pCreateInfo->imageExtent.height,
+       num_images, pCreateInfo->imageFormat, pCreateInfo->imageColorSpace,
+@@ -1010,6 +1041,11 @@ wsi_metal_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
+    chain->base.image_count = num_images;
+    chain->extent = pCreateInfo->imageExtent;
+    chain->vk_format = pCreateInfo->imageFormat;
++   chain->color_space = pCreateInfo->imageColorSpace;
++   chain->layer_image_count = num_images;
++   chain->layer_opaque = layer_opaque;
++   chain->layer_immediate = immediate_mode;
++   chain->layer_framebuffer_only = framebuffer_only;
+    chain->surface = metal_surface;
+    chain->current_image_index = 0;
+    chain->opaque_composition = opaque_composition;
+diff --git a/src/vulkan/wsi/wsi_common_metal_layer.h b/src/vulkan/wsi/wsi_common_metal_layer.h
+index f98fd1a..35364ea 100644
+--- a/src/vulkan/wsi/wsi_common_metal_layer.h
++++ b/src/vulkan/wsi/wsi_common_metal_layer.h
+@@ -33,6 +33,10 @@ void
+ wsi_metal_layer_set_hdr_metadata(const CAMetalLayer *metal_layer,
+                                  const VkHdrMetadataEXT *metadata);
+ 
++bool
++wsi_metal_layer_matches(const CAMetalLayer *metal_layer,
++                        uint32_t width, uint32_t height, VkFormat format);
++
+ CAMetalDrawable *
+ wsi_metal_layer_acquire_drawable(const CAMetalLayer *metal_layer);
+ 
+diff --git a/src/vulkan/wsi/wsi_common_metal_layer.m b/src/vulkan/wsi/wsi_common_metal_layer.m
+index 3f978e8..7e28c27 100644
+--- a/src/vulkan/wsi/wsi_common_metal_layer.m
++++ b/src/vulkan/wsi/wsi_common_metal_layer.m
+@@ -271,6 +271,23 @@ wsi_metal_layer_set_hdr_metadata(const CAMetalLayer *metal_layer,
+    }
+ }
+ 
++/* Whether the layer still has this drawable size and pixel format: every
++ * swap chain made on a surface configures its one layer (see
++ * wsi_metal_swapchain_acquire_next_image). */
++bool
++wsi_metal_layer_matches(const CAMetalLayer *metal_layer,
++                        uint32_t width, uint32_t height, VkFormat format)
++{
++   @autoreleasepool {
++      MTLPixelFormat metal_format;
++      if (get_mtl_pixel_format(format, &metal_format) != VK_SUCCESS)
++         return true;
++      CGSize size = metal_layer.drawableSize;
++      return metal_layer.pixelFormat == metal_format &&
++             (uint32_t)size.width == width && (uint32_t)size.height == height;
++   }
++}
++
+ CAMetalDrawable *
+ wsi_metal_layer_acquire_drawable(const CAMetalLayer *metal_layer)
+ {

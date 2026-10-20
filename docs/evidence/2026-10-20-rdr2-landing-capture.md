@@ -1,4 +1,4 @@
-# 2026-10-20: RDR2's landing page captured with KosmicKrisp: the capture works with no timestamp counter heap; the frame's inputs are right in memory, the picture is not; the band is not a stale pipeline cache, texture compression, fragment-shader descriptor coherence or the HDR colour spaces
+# 2026-10-20: RDR2's blue band was a 124×11 10-bit drawable: a second swap chain reconfigured the shared CAMetalLayer, and the game kept presenting its 1280×720 one; with the layer configured again per swap chain (mesa 0045) the landing page renders. Also: KosmicKrisp captures with no timestamp counter heap (mesa 0044)
 
 **Linear:** PLA-364 (related: PLA-413, PLA-416). **Plan:** `.work/plans/rdr2-blue-band.md`.
 **Follows:** [rdr2-landing-press](2026-10-19-rdr2-landing-press.md), whose capture KosmicKrisp's counter heap
@@ -17,7 +17,9 @@ The phone was unattended (owner away). Every IPA got the Hollow Knight gate (`--
 | `116d6ec1…` | 0044 + a throwaway: `MESA_KK_DEBUG=solid` also into a B8G8R8A8 target | +9.86 s | `ui-runs/20261020T011454-rdr2-exp-solidsc` |
 | `23dda743…` | 0044 + a throwaway: `[kk-draw]` for the draws that do not blend every channel | +9.85 s | `ui-runs/20261020T012441-rdr2-exp-draws` |
 | `855c6140f9153a67899e48192c3d373a0b97c8c4a154262ba8b10aa8c480d234` | 0044 + a candidate: no HDR colour spaces on iOS (not shipped) | +9.87 s | `ui-runs/20261020T013619-rdr2-sdr` (A pressed at first frame +77.6 s) |
-| `879fc40503e301b306ade96dd03ac34b9fd898d30cd9be5a0734a3016c9b3170` | 0044, left installed | +9.85 s (`ui-runs/20261020T014832`) | — |
+| `879fc40503e301b306ade96dd03ac34b9fd898d30cd9be5a0734a3016c9b3170` | 0044 | +9.85 s (`ui-runs/20261020T014832`) | — |
+| `06d534182cfec6f56a638d628af5da1e6193d5ebd237933a95a3c3f243ae12f8` | 0044 + a first 0045: only the layer's pixel format put back | +7.65 s (`ui-runs/20261020T015739`) | `ui-runs/20261020T015835-rdr2-layerfmt` |
+| `f03e22d3b26794928aabaa5bbdd2b31ff8cc099eb75ad215fdc493f6fc6be418` | 0044 + 0045 as committed | +8.94 s (`ui-runs/20261020T021101`) | `ui-runs/20261020T021150-rdr2-layercfg` |
 
 PlayRDR2's "Unable to launch game" box was closed by one pad A each time (decision 0076), from a
 watcher on the run's events (`dialog shown`), in plays without `--quiet`.
@@ -94,7 +96,48 @@ does with these inputs, which no replay here can show.
   swap-chain image's red and green, or the screenshot's source is not the image the draws wrote.
   This is inferred, not shown.
 
-## 4. Story load and memory (the same as on 2026-10-19)
+## 4. The cause: two swap chains on one layer (`patches/mesa` 0045)
+
+The 0045 logging (`[kk-wsi] create chain …`) shows the game's swap chains on its window's surface,
+in `ui-runs/20261020T015835-rdr2-layerfmt`:
+
+```
+[kk-wsi] create chain format=58 colorspace=0 124x11 images=3 old=0
+[kk-wsi] create chain format=44 colorspace=0 1280x720 images=3 old=0
+[kk-wsi] create chain format=58 colorspace=0 124x11 images=3 old=0
+[kk-wsi] layer format back to the presenting chain's: format=44 colorspace=0 chain=1280x720
+```
+
+- **The chains:** format 58 is `A2R10G10B10_UNORM_PACK32` and 44 is `B8G8R8A8_UNORM`. After its
+  1280×720 B8G8R8A8 chain, the game makes another 124×11 A2R10G10B10 chain on the same surface and
+  goes on presenting the 1280×720 one.
+- **What went wrong:** KosmicKrisp's Metal WSI configures the surface's one CAMetalLayer (drawable
+  size, pixel format, colour space) only when a chain is made. From then on every drawable was
+  124×11 and 10-bit, while the blit into it was built for 1280×720 B8G8R8A8.
+- **What the phone showed:** the 124×11 drawable stretched over the screen:
+  - the band is about two drawable rows (143 of 737 screen rows; 11 rows give 67 each);
+  - the "16-px blocks" of the loading noise are drawable columns (1600 / 124 = 12.9 px);
+  - the colours are B8G8R8A8 bits read as 10-bit channels. Magenta under solid,
+    0xFFFF00FF, reads (0x0FF, 0x3C0, 0x3FF) / 1023 = (64, 239, 255): the cyan measured.
+- **The first fix** (`ui-runs/20261020T015835-rdr2-layerfmt`) put back only the pixel format. The
+  screen went black, since the drawable stayed 124×11.
+- **The committed 0045** configures the layer again, as the presenting chain made it, whenever
+  the layer's drawable size or pixel format is not that chain's. That means size, image count,
+  format, colour space, opacity, present mode and framebuffer-only.
+
+**Result** (`ui-runs/20261020T021150-rdr2-layercfg`, IPA `f03e22d3`):
+- the landing page renders: the RED DEAD ONLINE logo in white and red, the snowy panorama
+  strip, the tab bar "Story / Online" (LB/RB) and the prompts "Social Club", "Play" and
+  "Quit Game";
+- the pad's A at first frame +77.6 s pressed Play on the Online tab, which opened the "Rockstar
+  Games Online Policies" page (EULA, terms, privacy and a Submit button). It renders correctly, and
+  nothing was accepted;
+- the app stayed up to the stop (first frame +200 s).
+
+The earlier sections stay as the record of how the band was narrowed down; the inference at the
+end of section 3 is now shown.
+
+## 5. Story load and memory (the run without 0045, `ui-runs/20261020T013619-rdr2-sdr`)
 
 - In `ui-runs/20261020T013619-rdr2-sdr`, A at first frame +77.6 s started the Story load. The strip
   went to blocky blue, magenta and cyan noise; the app ended about 100 s later.
@@ -107,13 +150,5 @@ does with these inputs, which no replay here can show.
 
 ## Not shown
 
-- Where the band's colour comes from. The lead is the swap chain:
-  - the game replaces its window and makes a second swap chain on the same CAMetalLayer
-    ([rdr2-blue-band](2026-10-19-rdr2-blue-band.md));
-  - the layer's drawable is 10-bit while the game draws into B8G8R8A8 and the WSI blit is built
-    for B8G8R8A8 (`[kk-draw] att0=b8g8r8a8_unorm … vp=2048x1024`);
-  - so the next run should log each `vkCreateSwapchainKHR` (format, colour space, old swap chain)
-    and the layer's pixel format at each present, and check the screenshot's readable source
-    (`patches/mesa` 0035) against a frame drawn by a known shader.
-- Whether HDR off in the game's own menu changes the picture.
-- Gameplay.
+- The Story tab, its loading screen and gameplay with 0045 (the press reached the Online tab).
+- Whether the Story load now fits in memory.
