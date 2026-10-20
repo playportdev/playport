@@ -148,7 +148,22 @@ end of section 3 is now shown.
 - Frame rate: 53 fps on the landing page and early in the load (640 frames per 12 s), falling to
   40 fps before the end.
 
+## 6. Story mode with 0045 (IPA `f03e22d3`)
+
+- **`ui-runs/20261020T022120-rdr2-story`:** the landing page was already on the Story tab: RED DEAD
+  REDEMPTION II logo, panorama, prompts "Settings", "Social Club", "Story" (A) and "Quit Game". The
+  scripted LB moved it to Online, and A opened the Online Policies page, which stayed up to the
+  stop. Nothing was ticked or submitted.
+- **`ui-runs/20261020T022900-rdr2-story`:** A alone at first frame +77.6 s, on the Story tab,
+  started the Story load with no policy page. The loading screens render correctly: sepia
+  artwork (a rider, a creek, a forest lake) with the spinner, from about +90 s after the press.
+- **The end:** the app was ended about 90–100 s after the press, at phys 8,055 MB (peak 8,055),
+  compressed 4,644 MB and graphics 3,268 MB: the 8,192 MB limit, as on 2026-10-19.
+  The landing page offers "Settings", for lowering Texture Quality (Ultra in `system.xml`) before
+  the load; that was not done in this session.
+- **Frame rate in the load:** 1,280 frames per about 24 s, 53 fps.
+
 ## Not shown
 
-- The Story tab, its loading screen and gameplay with 0045 (the press reached the Online tab).
-- Whether the Story load now fits in memory.
+- Gameplay: the Story load still ends at the memory limit.
+- Whether lower in-game graphics settings make it fit.
