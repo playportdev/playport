@@ -48,3 +48,7 @@
 0047-kk-MESA_KK_DEBUG-memory-counts-the-Metal-command-all.patch
 0048-kk-a-built-shader-keeps-its-MSL-compressed.patch
 0049-vulkan-a-precompiled-shader-keeps-its-NIR-compressed.patch
+
+# KosmicKrisp Metal-build levers (PLA-364): MESA_KK_DEBUG=compile failures and steps, MESA_KK_EXPERIMENTAL compile switches
+0052-kk-MESA_KK_DEBUG-compile-logs-failed-Metal-builds-an.patch
+0053-kk-MESA_KK_EXPERIMENTAL-compile_retry-parallel_stage.patch

@@ -73,6 +73,18 @@ KK_MOCK_MSL_DIR="$ROOT/msl" MESA_SHADER_CACHE_DISABLE=true \
     "$ROOT/kk-host-test" "$ROOT/build/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.so" "$ROOT/spv"
 echo "MSL libraries: $(ls "$ROOT/msl" | wc -l) in $ROOT/msl"
 
+# The same pipelines with the vertex and fragment libraries built at once and
+# the first two library builds failing as if Metal's compiler service had
+# been interrupted (KK_MOCK_INTERRUPT_BUILDS): compile_retry builds them
+# again, so everything still builds, and each retry is logged (mesa 0053).
+KK_MOCK_INTERRUPT_BUILDS=2 MESA_KK_EXPERIMENTAL=compile_retry,parallel_stages \
+    MESA_KK_DEBUG=compile MESA_SHADER_CACHE_DISABLE=true \
+    "$ROOT/kk-host-test" "$ROOT/build/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.so" "$ROOT/spv" \
+    >"$ROOT/retry.log" 2>&1 || { cat "$ROOT/retry.log" >&2; exit 1; }
+retries=$(grep -c '^\[kk-compile\] [a-z]* retry ' "$ROOT/retry.log" || true)
+[ "$retries" = 2 ] || { echo "compile_retry: $retries retries logged, not 2" >&2; exit 1; }
+echo "compile_retry and parallel_stages: 2 interrupted builds retried"
+
 # Zink and EGL on the same mock driver: a second build of the tree. Zink loads
 # the Vulkan loader (libvulkan.so.1), limited to the mock by VK_DRIVER_FILES.
 [ -f "$ROOT/build-gl/build.ninja" ] ||

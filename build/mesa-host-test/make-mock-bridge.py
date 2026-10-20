@@ -13,7 +13,10 @@ commits complete at once. Every MSL library the driver compiles is written to
 $KK_MOCK_MSL_DIR (if set), and one the MSL backend could not translate (it
 prints "Unknown intrinsic NAME", or "ALU OP" for an ALU op, "Unknown ALU OP"
 from mesa 0042 on) is reported on stderr and counted; the process exits 3 at
-exit if there was any.
+exit if there was any. With KK_MOCK_INTERRUPT_BUILDS=N the first N library
+builds that take an error report (the pipelines', not the driver's own
+shaders') fail as if Metal's compiler service had been interrupted (mesa
+0053's compile_retry builds them again).
 
 The stubs are the template, so a new bridge function upstream still links:
 it gets the stub's body, with a dummy handle for a pointer return.
@@ -45,6 +48,7 @@ struct kk_mock_obj {
 
 void *kk_mock_new(int kind, uint64_t size);
 void kk_mock_record_msl(const char *src);
+int kk_mock_interrupt_build(void);
 
 /* The sample counts of an A19 (supportsTextureSampleCount:). */
 #define KK_MOCK_SAMPLE_COUNT_OK(n) ((n) == 1 || (n) == 2 || (n) == 4)
@@ -107,10 +111,25 @@ kk_mock_untranslated(const char *src, const char *p)
    return NULL;
 }
 
+/* Whether this library build fails as interrupted: the first
+ * KK_MOCK_INTERRUPT_BUILDS do. Builds may run on two threads at once. */
+int
+kk_mock_interrupt_build(void)
+{
+   static int left = INT32_MIN; /* INT32_MIN: not read yet */
+   if (__atomic_load_n(&left, __ATOMIC_SEQ_CST) == INT32_MIN) {
+      const char *v = getenv("KK_MOCK_INTERRUPT_BUILDS");
+      int expected = INT32_MIN;
+      __atomic_compare_exchange_n(&left, &expected, v ? atoi(v) : 0, 0,
+                                  __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+   }
+   return __atomic_sub_fetch(&left, 1, __ATOMIC_SEQ_CST) >= 0;
+}
+
 void
 kk_mock_record_msl(const char *src)
 {
-   unsigned n = kk_mock_msl_count++;
+   unsigned n = __atomic_fetch_add(&kk_mock_msl_count, 1, __ATOMIC_SEQ_CST);
    const char *dir = getenv("KK_MOCK_MSL_DIR");
    if (dir) {
       char path[4096];
@@ -242,7 +261,16 @@ body("mtl_new_timestamp_counter_heap", r'''
       abort();
    }
    return kk_mock_new(9, 0);''')
-body("mtl_new_library", "kk_mock_record_msl(src);\n   return kk_mock_new(4, 0);")
+body("mtl_new_library", r'''
+   kk_mock_record_msl(src);
+   if (error && kk_mock_interrupt_build()) {
+      memset(error, 0, sizeof(*error));
+      error->code = 2;
+      snprintf(error->domain, sizeof(error->domain), "kk-mock");
+      error->compiler_interrupted = true;
+      return NULL;
+   }
+   return kk_mock_new(4, 0);''')
 body("mtl_new_event", "return kk_mock_new(5, 0);")
 body("mtl_new_shared_event", "return kk_mock_new(5, 0);")
 body("mtl_shared_event_get_signaled_value", "return ((struct kk_mock_obj *)event_handle)->value;")

@@ -1,0 +1,399 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 20 Oct 2026 09:48:59 +0200
+Subject: [PATCH 53/53] kk: MESA_KK_EXPERIMENTAL compile_retry, parallel_stages
+ and library_size_opt
+
+Three switches for Metal builds, all off by default, to measure on the
+phone against Red Dead Redemption 2's slow and failed pipeline builds.
+iOS ends MTLCompilerService when it passes its 150 MB memory limit under
+system memory pressure ("killing_highwater_process"), and the build then
+fails with XPC_ERROR_CONNECTION_INTERRUPTED after Metal's own retries.
+
+- compile_retry: a library or pipeline build that failed with an
+  interrupted compiler-service connection (mtl_build_error's
+  compiler_interrupted) is built again, at most twice, 200 ms after
+  each failure. Each retry is logged as "[kk-compile] render|compute
+  retry N/2 step=... after_ms=... err=DOMAIN:CODE src=... tid=...".
+  A build that fails otherwise, or a third time, fails as before.
+- parallel_stages: a render pipeline's fragment library builds on a
+  second thread while the calling thread builds the vertex library;
+  the pipeline is made once both are done. If the thread cannot be
+  made, the two build one after the other as before.
+- library_size_opt: libraries build with
+  MTLLibraryOptimizationLevelSize, which may lower the compiler's
+  memory per build; untested on the phone.
+
+MESA_KK_DEBUG=compile's build lines add retries= and, for render
+builds, par=0|1.
+
+Class: ios-port
+Evidence: docs/evidence/2026-10-20-kk-compile-levers.md
+Offered-upstream: no
+---
+ src/kosmickrisp/bridge/mtl_compiler.h       |   5 +-
+ src/kosmickrisp/bridge/mtl_compiler.m       |   4 +-
+ src/kosmickrisp/bridge/stubs/mtl_compiler.c |   2 +-
+ src/kosmickrisp/vulkan/kk_debug.c           |   3 +
+ src/kosmickrisp/vulkan/kk_debug.h           |   9 +
+ src/kosmickrisp/vulkan/kk_device_lib.c      |   3 +-
+ src/kosmickrisp/vulkan/kk_shader.c          | 181 ++++++++++++++++----
+ 7 files changed, 167 insertions(+), 40 deletions(-)
+
+diff --git a/src/kosmickrisp/bridge/mtl_compiler.h b/src/kosmickrisp/bridge/mtl_compiler.h
+index 5d82017..11e3ea8 100644
+--- a/src/kosmickrisp/bridge/mtl_compiler.h
++++ b/src/kosmickrisp/bridge/mtl_compiler.h
+@@ -29,13 +29,14 @@ struct mtl_build_error {
+ /* Compiler */
+ mtl_compiler *mtl_new_compiler(mtl_device *device);
+ 
+-/* Library and pipelines: error, if not NULL, receives why a build failed. */
++/* Library and pipelines: error, if not NULL, receives why a build failed.
++ * optimize_size builds a library with MTLLibraryOptimizationLevelSize. */
+ mtl_library *
+ mtl_new_library(mtl_compiler *compiler, const char *src,
+                 enum mtl_language_version msl_version,
+                 enum mtl_math_mode math_mode,
+                 enum mtl_math_floating_point_functions math_fp_fns,
+-                struct mtl_build_error *error);
++                bool optimize_size, struct mtl_build_error *error);
+ mtl_function_descriptor *
+ mtl_new_library_function_descriptor(mtl_library *library,
+                                     const char *entry_point);
+diff --git a/src/kosmickrisp/bridge/mtl_compiler.m b/src/kosmickrisp/bridge/mtl_compiler.m
+index 6d79463..090aa76 100644
+--- a/src/kosmickrisp/bridge/mtl_compiler.m
++++ b/src/kosmickrisp/bridge/mtl_compiler.m
+@@ -59,7 +59,7 @@ mtl_new_library(mtl_compiler *compiler, const char *src,
+                 enum mtl_language_version msl_version,
+                 enum mtl_math_mode math_mode,
+                 enum mtl_math_floating_point_functions math_fp_fns,
+-                struct mtl_build_error *error)
++                bool optimize_size, struct mtl_build_error *error)
+ {
+    @autoreleasepool {
+       id<MTL4Compiler> comp = (id<MTL4Compiler>)compiler;
+@@ -69,6 +69,8 @@ mtl_new_library(mtl_compiler *compiler, const char *src,
+       opts.languageVersion = (MTLLanguageVersion)msl_version;
+       opts.mathMode = (MTLMathMode)math_mode;
+       opts.mathFloatingPointFunctions = (MTLMathFloatingPointFunctions)math_fp_fns;
++      if (optimize_size)
++         opts.optimizationLevel = MTLLibraryOptimizationLevelSize;
+ 
+       MTL4LibraryDescriptor *desc = [[MTL4LibraryDescriptor new] autorelease];
+       desc.source = ns_src;
+diff --git a/src/kosmickrisp/bridge/stubs/mtl_compiler.c b/src/kosmickrisp/bridge/stubs/mtl_compiler.c
+index a0577a3..54b4c86 100644
+--- a/src/kosmickrisp/bridge/stubs/mtl_compiler.c
++++ b/src/kosmickrisp/bridge/stubs/mtl_compiler.c
+@@ -21,7 +21,7 @@ mtl_new_library(mtl_compiler *compiler, const char *src,
+                 enum mtl_language_version msl_version,
+                 enum mtl_math_mode math_mode,
+                 enum mtl_math_floating_point_functions math_fp_fns,
+-                struct mtl_build_error *error)
++                bool optimize_size, struct mtl_build_error *error)
+ {
+    return NULL;
+ }
+diff --git a/src/kosmickrisp/vulkan/kk_debug.c b/src/kosmickrisp/vulkan/kk_debug.c
+index a48d29d..25e0666 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.c
++++ b/src/kosmickrisp/vulkan/kk_debug.c
+@@ -30,6 +30,9 @@ const struct debug_named_value experimental_flags[] = {
+    {"custom_border", KK_EXPERIMENTAL_CUSTOM_BORDER},
+    {"image_view_min_lod", KK_EXPERIMENTAL_IMAGE_VIEW_MIN_LOD},
+    {"m5_optimize_e5b9g9r9", KK_EXPERIMENTAL_M5_OPTIMIZE_E5B9G9R9},
++   {"compile_retry", KK_EXPERIMENTAL_COMPILE_RETRY},
++   {"parallel_stages", KK_EXPERIMENTAL_PARALLEL_STAGES},
++   {"library_size_opt", KK_EXPERIMENTAL_LIBRARY_SIZE_OPT},
+    {NULL, 0},
+ };
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_debug.h b/src/kosmickrisp/vulkan/kk_debug.h
+index 078c194..47b2dbc 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.h
++++ b/src/kosmickrisp/vulkan/kk_debug.h
+@@ -51,6 +51,15 @@ enum kk_experimental {
+    /* Using allowGPUOptimizedContents on M5 for this format causes
+     * vkCmdCopyImage() tests in CTS to fail, but it is otherwise usable */
+    KK_EXPERIMENTAL_M5_OPTIMIZE_E5B9G9R9 = 1ull << 2,
++   /* Build a library or pipeline again, twice at most and 200 ms after the
++    * failure, when it failed because Metal's compiler service connection was
++    * interrupted */
++   KK_EXPERIMENTAL_COMPILE_RETRY = 1ull << 3,
++   /* Build a render pipeline's vertex and fragment libraries at the same
++    * time, the fragment one on a second thread */
++   KK_EXPERIMENTAL_PARALLEL_STAGES = 1ull << 4,
++   /* Build libraries with MTLLibraryOptimizationLevelSize */
++   KK_EXPERIMENTAL_LIBRARY_SIZE_OPT = 1ull << 5,
+ };
+ 
+ extern enum kk_experimental kk_mesa_experimental_flags;
+diff --git a/src/kosmickrisp/vulkan/kk_device_lib.c b/src/kosmickrisp/vulkan/kk_device_lib.c
+index 6d66c14..00aab42 100644
+--- a/src/kosmickrisp/vulkan/kk_device_lib.c
++++ b/src/kosmickrisp/vulkan/kk_device_lib.c
+@@ -30,7 +30,8 @@ build_precompiled_shaders(struct kk_device *dev)
+ 
+       mtl_library *library = mtl_new_library(
+          dev->mtl_compiler_handle, msl, pdev->info.msl_version,
+-         MTL_MATH_MODE_FAST, MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST, NULL);
++         MTL_MATH_MODE_FAST, MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST, false,
++         NULL);
+       if (library == NULL)
+          goto fail;
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_shader.c b/src/kosmickrisp/vulkan/kk_shader.c
+index b6636c4..7a2fc2b 100644
+--- a/src/kosmickrisp/vulkan/kk_shader.c
++++ b/src/kosmickrisp/vulkan/kk_shader.c
+@@ -1623,24 +1623,83 @@ struct kk_metal_build {
+    /* Each step's time: the vertex (render) or the only (compute) library,
+     * the fragment library, the pipeline. */
+    int64_t first_library_ns, second_library_ns, pipeline_ns;
++   /* Builds repeated (MESA_KK_EXPERIMENTAL=compile_retry), all steps. */
++   uint32_t retries;
++   /* The libraries were built at the same time
++    * (MESA_KK_EXPERIMENTAL=parallel_stages). */
++   bool parallel;
+    /* The step that failed, NULL if none, and its error. */
+    const char *failed_step;
+    struct mtl_build_error error;
+ };
+ 
+-/* MSL to a Metal library; *ns receives the time it took. */
+-static mtl_library *
+-kk_build_library(struct kk_device *device, const struct msl_compile_data *data,
+-                 int64_t *ns, struct mtl_build_error *error)
++/* MESA_KK_EXPERIMENTAL=compile_retry: a library or pipeline build that failed
++ * because Metal's compiler service connection was interrupted is built again,
++ * at most KK_COMPILE_RETRIES times, KK_COMPILE_RETRY_WAIT_MS after each
++ * failure. Metal has already retried such a build itself by then ("This
++ * error occurred after multiple retries"). */
++#define KK_COMPILE_RETRIES 2u
++#define KK_COMPILE_RETRY_WAIT_MS 200u
++
++/* Whether a failed build step is built again; if so, logs the retry and
++ * waits. *retries counts the step's retries so far; start is when the failed
++ * attempt began. */
++static bool
++kk_retry_build(const char *kind, const char *step, const char *src,
++               uint32_t *retries, const struct mtl_build_error *error,
++               int64_t start)
++{
++   if (!KK_EXPERIMENTAL(COMPILE_RETRY) || !error->compiler_interrupted ||
++       *retries >= KK_COMPILE_RETRIES)
++      return false;
++
++   (*retries)++;
++   fprintf(stderr,
++           "[kk-compile] %s retry %u/%u step=%s after_ms=%.1f err=%s:%lld "
++           "src=%s tid=%llu\n",
++           kind, *retries, KK_COMPILE_RETRIES, step,
++           (os_time_get_nano() - start) / 1e6, error->domain,
++           (long long)error->code, src, (unsigned long long)kk_thread_id());
++   os_time_sleep(KK_COMPILE_RETRY_WAIT_MS * 1000);
++   return true;
++}
++
++/* One MSL library build: what to build, and how it went. */
++struct kk_library_build {
++   struct kk_device *device;
++   const struct msl_compile_data *data;
++   const char *kind, *step, *src;
++   mtl_library *library;
++   int64_t ns; /* retries included */
++   uint32_t retries;
++   struct mtl_build_error error;
++};
++
++static void
++kk_build_library(struct kk_library_build *build)
+ {
+-   struct kk_physical_device *pdev = kk_device_physical(device);
++   struct kk_physical_device *pdev = kk_device_physical(build->device);
+    const int64_t start = os_time_get_nano();
+-   memset(error, 0, sizeof(*error));
+-   mtl_library *library = mtl_new_library(
+-      device->mtl_compiler_handle, data->code, pdev->info.msl_version,
+-      MTL_MATH_MODE_FAST, MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST, error);
+-   *ns = os_time_get_nano() - start;
+-   return library;
++   int64_t attempt_start;
++   do {
++      attempt_start = os_time_get_nano();
++      memset(&build->error, 0, sizeof(build->error));
++      build->library = mtl_new_library(
++         build->device->mtl_compiler_handle, build->data->code,
++         pdev->info.msl_version, MTL_MATH_MODE_FAST,
++         MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST,
++         KK_EXPERIMENTAL(LIBRARY_SIZE_OPT), &build->error);
++   } while (build->library == NULL &&
++            kk_retry_build(build->kind, build->step, build->src,
++                           &build->retries, &build->error, attempt_start));
++   build->ns = os_time_get_nano() - start;
++}
++
++static int
++kk_build_library_thread(void *build)
++{
++   kk_build_library(build);
++   return 0;
+ }
+ 
+ /* One shader's Metal build, as it ended. A failed one is always logged, with
+@@ -1678,12 +1737,12 @@ kk_note_metal_build(const struct kk_metal_build *build,
+    _mesa_blake3_final(&ctx, hash);
+    _mesa_blake3_format(hex, hash);
+ 
+-   char steps[64];
++   char steps[80];
+    char bytes[48];
+    if (second) {
+-      snprintf(steps, sizeof(steps), "vs=%.1f fs=%.1f pipe=%.1f",
++      snprintf(steps, sizeof(steps), "vs=%.1f fs=%.1f pipe=%.1f par=%d",
+                build->first_library_ns / 1e6, build->second_library_ns / 1e6,
+-               build->pipeline_ns / 1e6);
++               build->pipeline_ns / 1e6, build->parallel);
+       snprintf(bytes, sizeof(bytes), "%zu+%zu", strlen(first->code),
+                strlen(second->code));
+    } else {
+@@ -1695,18 +1754,19 @@ kk_note_metal_build(const struct kk_metal_build *build,
+    if (build->failed_step)
+       fprintf(stderr,
+               "[kk-compile] %s FAIL ms=%.1f step=%s err=%s:%lld "
+-              "interrupted=%d %s src=%s tid=%llu bytes=%s wall_ms=%lld "
+-              "msl=%.16s\n",
++              "interrupted=%d %s retries=%u src=%s tid=%llu bytes=%s "
++              "wall_ms=%lld msl=%.16s\n",
+               build->kind, elapsed / 1e6, build->failed_step,
+               build->error.domain, (long long)build->error.code,
+-              build->error.compiler_interrupted, steps, build->src,
++              build->error.compiler_interrupted, steps, build->retries,
++              build->src,
+               (unsigned long long)kk_thread_id(), bytes, (long long)wall_ms,
+               hex);
+    else
+       fprintf(stderr,
+-              "[kk-compile] %s ms=%.1f %s src=%s tid=%llu bytes=%s "
+-              "wall_ms=%lld msl=%.16s\n",
+-              build->kind, elapsed / 1e6, steps, build->src,
++              "[kk-compile] %s ms=%.1f %s retries=%u src=%s tid=%llu "
++              "bytes=%s wall_ms=%lld msl=%.16s\n",
++              build->kind, elapsed / 1e6, steps, build->retries, build->src,
+               (unsigned long long)kk_thread_id(), bytes, (long long)wall_ms,
+               hex);
+ }
+@@ -1724,10 +1784,20 @@ kk_compile_compute_pipeline(struct kk_device *device,
+       .start = os_time_get_nano(),
+    };
+ 
+-   mtl_library *library =
+-      kk_build_library(device, data, &build.first_library_ns, &build.error);
++   struct kk_library_build library_build = {
++      .device = device,
++      .data = data,
++      .kind = build.kind,
++      .step = "library",
++      .src = src,
++   };
++   kk_build_library(&library_build);
++   mtl_library *library = library_build.library;
++   build.first_library_ns = library_build.ns;
++   build.retries = library_build.retries;
+    if (library == NULL) {
+       build.failed_step = "library";
++      build.error = library_build.error;
+       kk_note_metal_build(&build, data, NULL);
+       return VK_ERROR_INVALID_SHADER_NV;
+    }
+@@ -1735,8 +1805,17 @@ kk_compile_compute_pipeline(struct kk_device *device,
+    mtl_function_descriptor *function =
+       mtl_new_library_function_descriptor(library, data->entrypoint_name);
+    const int64_t pipeline_start = os_time_get_nano();
+-   mtl_compute_pipeline_state *pipeline = mtl_new_compute_pipeline_state(
+-      device->mtl_compiler_handle, function, local_size_threads, &build.error);
++   mtl_compute_pipeline_state *pipeline;
++   int64_t attempt_start;
++   do {
++      attempt_start = os_time_get_nano();
++      memset(&build.error, 0, sizeof(build.error));
++      pipeline = mtl_new_compute_pipeline_state(
++         device->mtl_compiler_handle, function, local_size_threads,
++         &build.error);
++   } while (pipeline == NULL &&
++            kk_retry_build(build.kind, "pipeline", src, &build.retries,
++                           &build.error, attempt_start));
+    build.pipeline_ns = os_time_get_nano() - pipeline_start;
+    mtl_release(function);
+    mtl_release(library);
+@@ -2057,16 +2136,41 @@ kk_compile_graphics_pipeline(struct kk_device *device, struct kk_shader *vs,
+    };
+    const struct msl_compile_data *vs_data = &vs->msl_data[vs_stage];
+    const struct msl_compile_data *fs_data = &vs->msl_data[MESA_SHADER_FRAGMENT];
+-   mtl_library *fragment_library = NULL;
+-   mtl_library *vertex_library = kk_build_library(
+-      device, vs_data, &build.first_library_ns, &build.error);
++   struct kk_library_build vertex_build = {
++      .device = device,
++      .data = vs_data,
++      .kind = build.kind,
++      .step = "vertex-library",
++      .src = src,
++   };
++   struct kk_library_build fragment_build = vertex_build;
++   fragment_build.data = fs_data;
++   fragment_build.step = "fragment-library";
++
++   /* With parallel_stages the fragment library builds on a second thread
++    * while this one builds the vertex library; if that thread cannot be
++    * made, the two build one after the other. */
++   thrd_t fragment_thread;
++   build.parallel = KK_EXPERIMENTAL(PARALLEL_STAGES) &&
++                    thrd_create(&fragment_thread, kk_build_library_thread,
++                                &fragment_build) == thrd_success;
++   kk_build_library(&vertex_build);
++   if (build.parallel)
++      thrd_join(fragment_thread, NULL);
++   else if (vertex_build.library)
++      kk_build_library(&fragment_build);
++
++   mtl_library *vertex_library = vertex_build.library;
++   mtl_library *fragment_library = fragment_build.library;
++   build.first_library_ns = vertex_build.ns;
++   build.second_library_ns = fragment_build.ns;
++   build.retries = vertex_build.retries + fragment_build.retries;
+    if (vertex_library == NULL) {
+-      build.failed_step = "vertex-library";
+-   } else {
+-      fragment_library = kk_build_library(
+-         device, fs_data, &build.second_library_ns, &build.error);
+-      if (fragment_library == NULL)
+-         build.failed_step = "fragment-library";
++      build.failed_step = vertex_build.step;
++      build.error = vertex_build.error;
++   } else if (fragment_library == NULL) {
++      build.failed_step = fragment_build.step;
++      build.error = fragment_build.error;
+    }
+    if (build.failed_step) {
+       result = VK_ERROR_INVALID_SHADER_NV;
+@@ -2117,8 +2221,15 @@ kk_compile_graphics_pipeline(struct kk_device *device, struct kk_shader *vs,
+    }
+ 
+    const int64_t pipeline_start = os_time_get_nano();
+-   pipe->gfx.render = mtl_new_render_pipeline(
+-      device->mtl_compiler_handle, pipeline_descriptor, &build.error);
++   int64_t attempt_start;
++   do {
++      attempt_start = os_time_get_nano();
++      memset(&build.error, 0, sizeof(build.error));
++      pipe->gfx.render = mtl_new_render_pipeline(
++         device->mtl_compiler_handle, pipeline_descriptor, &build.error);
++   } while (pipe->gfx.render == NULL &&
++            kk_retry_build(build.kind, "pipeline", src, &build.retries,
++                           &build.error, attempt_start));
+    build.pipeline_ns = os_time_get_nano() - pipeline_start;
+    if (pipe->gfx.render == NULL) {
+       result = VK_ERROR_INVALID_SHADER_NV;
