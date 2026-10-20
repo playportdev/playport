@@ -1,6 +1,6 @@
 **Linear:** PLA-413 (and PLA-364)
 
-# 2026-10-20: what KosmicKrisp holds during RDR2's Story load, and two cuts
+# 2026-10-20: what KosmicKrisp holds during RDR2's Story load; with the shaders' source kept compressed, Story reaches gameplay once, and then RDR2 crashes when the runtime's thread registry is full
 
 **Plan:** `.work/plans/rdr2-story-memory.md`.
 **Follows:** [rdr2-story-memory-levers](2026-10-20-rdr2-story-memory-levers.md), lever #4: the
@@ -12,7 +12,12 @@ KosmicKrisp and host overhead census.
 - **Not kept:** a second cut, resetting the Metal command allocators. It worked for Hollow Knight,
   but RDR2's long-lived command buffers defeated each of its three forms (section 4).
 
-The Story load still ends at the 8,192 MB limit. It reaches the intro's title cards.
+**The Story load on the committed IPA** (`…T073042-rdr2-m10b`, section 6):
+- **It reached gameplay once.** Arthur sat in the cabin, then stood with the HUD (minimap, "Sit (Y)"),
+  under left-stick input.
+- **RDR2 crashed 10 s later, not at the memory limit.** A new thread found the Mach exception thread
+  registry full (512 slots), and the game ended with an access violation at phys 7,153 MB.
+- **The other Story runs** were killed at the 8,192 MB limit at the intro's title cards.
 
 **Run conditions:**
 - the phone was unattended (owner away), on external power at 80 %, with 4.7–5.7 GB free;
@@ -33,7 +38,7 @@ device logs under `$PLAYPORT_BUILD/agent-notes/pla413d/`.
 | `a3ca19186006fa973aaee454c252bfff321efbfd8808933a15afd95645c11b25` | 0046 (census) | passed (`20261020T045840`) | `…T045939-rdr2-m1` (landing only; see below) |
 | `f5b642213489cabc1ea1079a94e97d18b89dfd72518b1dbdd1ec9a840fbfeccf` | 0046, 0047 (allocator census) | passed (`20261020T061008`) | `…T061102-rdr2-m6a` (landing), `…T061733-rdr2-m6b` (Story) |
 | `3f9bfec07cf917758e86e6b102270b81fdf7d26d7ad1ba331da6200265f2f486` | + 0048, 0049 (MSL and NIR compressed) | passed (`20261020T063309`) | `…T063404-rdr2-m7a` (landing), `…T065003-rdr2-m7b` (Story) |
-| `500381f60ad18d41b34ae80287ca05e10449f35c7a2d2f92b83d9781556c09a1` | 0046–0049, as committed | passed (`20261020T072258`) | `…T072409-rdr2-m10a` (landing) |
+| `500381f60ad18d41b34ae80287ca05e10449f35c7a2d2f92b83d9781556c09a1` | 0046–0049, as committed | passed (`20261020T072258`) | `…T072409-rdr2-m10a` (landing), `…T073042-rdr2-m10b` (Story: gameplay, section 6) |
 
 **Builds that were not kept:**
 - `58d35fe5…`: the third form of 0050. It passed Hollow Knight (`20261020T070046`). RDR2's runs
@@ -239,6 +244,37 @@ section 4; m7b is the committed series, 0046–0049, on IPA `3f9bfec0`.
 - **The load still needs more than the limit leaves.** Driver-side growth remains during the Story
   load: allocators +518 MiB and upload memory +80 MiB in m7b.
 
+## 6. m10b: gameplay, then a crash at the thread registry
+
+This is the committed series on IPA `500381f6`. A was pressed on the Story tab at 07:35:25. From
+150 s after A, a script held the left stick forward for 10 s every 30 s:
+07:37:55, 07:38:48 and 07:39:24.
+
+**The screenshots** (`agent-notes/pla413d/m10b/`):
+- **07:38:23 and 07:38:51:** the cabin interior in 3D, with Arthur seated on a bench. Hats and coats
+  hang on the wall, and a lit window is behind him. The scene is the same in both, with no HUD.
+- **07:39:05:** Arthur standing, seen from behind at a wooden wall, with the minimap at the lower
+  left and the prompt "Sit (Y)" at the lower right. It came after the second stick push
+  (07:38:48–07:39:04): the player has control and the character has moved from the bench.
+- **07:39:23:** Playport's own screen. The game had ended.
+
+**How it ended** (`pull/s1-host.log`):
+- At 07:39:14 RDR2.exe (pid 0414) started a thread, and the runtime logged
+  `[thread-registry] FULL (512 slots) — thread … NOT registered; Mach events on it will resolve to the
+  slot-0 TEB (wrong process!)`.
+- That thread then ended RDR2 with `exit_code=0xc0000005`. The title ended with exit 0 after 494 s.
+- **Memory was not the cause.** The footprint was 7,153 MB (peak 7,830), and graphics 2,979 MB.
+- **The allocators kept growing:** 48 / 632 MiB, with upload memory at 381 MiB.
+- Threads of ended processes were parked rather than ended. Among them are the game's Social Club
+  helpers, ended under decision 0133 (`[proc-end] parked …`). Whether they hold registry slots is
+  not established.
+
+**Frame rate in the 3D stretch:**
+- 4.5 fps over the 72 s before the crash (07:37:45–07:38:57), and 16 fps over the 20 s before that.
+- KosmicKrisp translated 7 new shaders in 48.6 s, about 7 s each (`translated=7 (48597 ms)`), against
+  3.3 s each in the earlier `adv` run.
+- The phone was at `thermal: serious` from the launch.
+
 ## Performance
 
 - **Landing page and loading screens:** 48–54 fps (`[frames]`, m7b).
@@ -263,7 +299,8 @@ section 4; m7b is the committed series, 0046–0049, on IPA `3f9bfec0`.
 
 ## Not shown
 
-- Gameplay with the character moving: no run passed the intro's title cards.
+- Gameplay that lasts: one run (m10b) gave about 10 s of control, then crashed at the thread
+  registry. No run moved the character for 10–20 s.
 - What fills the rest of the footprint at the kill outside KosmicKrisp: RDR2.exe's private 3.5 GB,
   the JIT pool's 896 MB and the FEX band are unchanged by this work.
 - A Story run on the committed IPA `500381f6` itself. It has the same patches as `3f9bfec0` (m7b),
