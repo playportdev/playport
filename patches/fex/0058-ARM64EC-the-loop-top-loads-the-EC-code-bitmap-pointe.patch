@@ -1,0 +1,152 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 20 Oct 2026 16:53:53 +0200
+Subject: [PATCH] ARM64EC: the loop top loads the EC code bitmap pointer from
+ the frame on iOS
+
+Every guest call into ARM64EC code through the import table misses L1
+and reaches the dispatcher loop top, which tests the EC code bitmap
+before it looks for a block. On iOS the test found the bitmap through
+TPIDRRO_EL0, the TEB's TSD slot, TEB->Peb and PEB->EcCodeBitMap: an mrs
+and three dependent loads before the bitmap word itself.
+
+PEB->EcCodeBitMap is set when the first ARM64EC image is mapped, before
+this module loads, and never changes. ProcessInit reads it once through
+the same TEB and PEB offsets (a static_assert pins them to the ones the
+dispatcher walks), ThreadInit stores it in each thread's CpuStateFrame
+(IosEcCodeBitMap, appended after the existing fields, iOS ARM64EC only),
+and the loop top loads it with one LDR from STATE. The bitmap test is
+unchanged: four instructions fewer per pass, the mrs among them.
+
+On by default, as in Madeira; if the pointer is still null at
+ProcessInit, or with MADEIRA_FEX_EC_BITMAP_CACHE=0 at launch, the walk
+is emitted as before. One "FEX: ec-bitmap-cache-v1 ... enabled= map="
+line logs the choice.
+
+Madeira-commit: d2b623f54ea970d3713f22ace593271d6105c6a2 (willfaust/FEX)
+Linear: PLA-364
+Class: feature
+Evidence: docs/evidence/2026-10-20-rdr2-perf-ports.md
+Offered-upstream: no; the TSD walk it replaces is the iOS port's
+---
+ .../Interface/Core/Dispatcher/Dispatcher.cpp  | 24 ++++++++++++++-----
+ FEXCore/include/FEXCore/Core/CoreState.h      | 10 ++++++++
+ Source/Windows/ARM64EC/Module.cpp             | 24 +++++++++++++++++++
+ 3 files changed, 52 insertions(+), 6 deletions(-)
+
+diff --git a/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp b/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
+index 6248231..012ee4b 100644
+--- a/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
++++ b/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
+@@ -40,6 +40,12 @@
+ #include <bit>
+ #include <cstring>
+ 
++#if defined(FEX_IOS_HOST) && defined(ARCHITECTURE_arm64ec)
++// Set by ARM64EC/Module.cpp before the dispatcher is emitted, once every thread's frame carries
++// PEB->EcCodeBitMap (CpuStateFrame::IosEcCodeBitMap): the loop top's EC code check loads it from there.
++extern "C" uint32_t IosEcCodeBitMapCached = 0;
++#endif
++
+ namespace FEXCore::CPU {
+ 
+ static void SleepThread(FEXCore::Context::ContextImpl* CTX, FEXCore::Core::CpuStateFrame* Frame) {
+@@ -233,15 +239,21 @@ void Dispatcher::EmitDispatcher() {
+   // Check the EC code bitmap incase we need to exit the JIT to call into native code.
+   ARMEmitter::ForwardLabel l_NotECCode;
+ #ifdef FEX_IOS_HOST
+-  // iOS clobbers x18 — read TEB from TPIDRRO_EL0+TSD slot 275 instead.
+-  mrs(TMP1, ARMEmitter::SystemRegister::TPIDRRO_EL0);
+-  and_(ARMEmitter::Size::i64Bit, TMP1, TMP1, ~7ULL);
+-  ldr(TMP1, TMP1, IosTebTsdOffset);
+-  ldr(TMP1, TMP1, TEB_PEB_OFFSET);
++  if (IosEcCodeBitMapCached) {
++    // PEB->EcCodeBitMap as stored in this thread's frame: one load instead of the TEB/PEB walk below.
++    ldr(TMP1, STATE_PTR(CpuStateFrame, IosEcCodeBitMap));
++  } else {
++    // iOS clobbers x18 — read TEB from TPIDRRO_EL0+TSD slot 275 instead.
++    mrs(TMP1, ARMEmitter::SystemRegister::TPIDRRO_EL0);
++    and_(ARMEmitter::Size::i64Bit, TMP1, TMP1, ~7ULL);
++    ldr(TMP1, TMP1, IosTebTsdOffset);
++    ldr(TMP1, TMP1, TEB_PEB_OFFSET);
++    ldr(TMP1, TMP1, PEB_EC_CODE_BITMAP_OFFSET);
++  }
+ #else
+   ldr(TMP1, ARMEmitter::XReg::x18, TEB_PEB_OFFSET);
+-#endif
+   ldr(TMP1, TMP1, PEB_EC_CODE_BITMAP_OFFSET);
++#endif
+ 
+   lsr(ARMEmitter::Size::i64Bit, TMP2, RipReg, 18);
+   ldr(TMP1, TMP1, TMP2, ARMEmitter::ExtendedType::LSL_64, 3);
+diff --git a/FEXCore/include/FEXCore/Core/CoreState.h b/FEXCore/include/FEXCore/Core/CoreState.h
+index c0e5e78..3e845ea 100644
+--- a/FEXCore/include/FEXCore/Core/CoreState.h
++++ b/FEXCore/include/FEXCore/Core/CoreState.h
+@@ -488,7 +488,17 @@ struct CpuStateFrame {
+    * offline. That makes the real bug "the dispatcher is being entered at the wrong address", of
+    * which the State.rip corruption is only the visible consequence. */
+   uint64_t IosLastCallbackLR {};
++
++#if defined(FEX_IOS_HOST) && defined(ARCHITECTURE_arm64ec)
++  // PEB->EcCodeBitMap for the dispatcher's EC code check, stored by the frontend at thread init. The
++  // pointer does not change once the first ARM64EC image is mapped, before any thread enters the JIT.
++  uint64_t IosEcCodeBitMap {};
++#endif
+ };
++#if defined(FEX_IOS_HOST) && defined(ARCHITECTURE_arm64ec)
++static_assert(offsetof(CpuStateFrame, IosEcCodeBitMap) % 8 == 0 && offsetof(CpuStateFrame, IosEcCodeBitMap) <= 32760,
++              "IosEcCodeBitMap is loaded with a scaled LDR");
++#endif
+ static_assert(offsetof(CpuStateFrame, State) == 0, "CPUState must be first member in CpuStateFrame");
+ static_assert(offsetof(CpuStateFrame, Pointers) % 8 == 0, "JITPointers need to be aligned to 8 bytes");
+ static_assert(offsetof(CpuStateFrame, Pointers) + sizeof(CpuStateFrame::Pointers) <= 32760, "JITPointers maximum pointer needs to be less "
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index 7c887ee..e573e88 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -83,6 +83,10 @@ extern "C" uint64_t IosJitReverseTranslate(uint64_t Addr);
+ extern "C" uint64_t IosSubfloorToReal(uint64_t Addr);   // ml951
+ extern "C" uint64_t IosSubfloorToLow(uint64_t Addr);    // ml951
+ extern "C" uint64_t IosSubfloorClipSize(uint64_t LowAddr, uint64_t Size);  // ml951
++/* Defined in FEXCore Dispatcher.cpp; read when the dispatcher is emitted. */
++extern "C" uint32_t IosEcCodeBitMapCached;
++/* PEB->EcCodeBitMap as read in ProcessInit; ThreadInit stores it in every thread's frame. */
++static uint64_t IosEcCodeBitMapValue = 0;
+ /* ml316: FFS-bypass diagnostics, written by ExitToX64's bypass path in Module.S:
+  * [0] = native short-circuits taken, [1] = last EC target,
+  * [2] = FFS matched but target not EC (fell through to emulation), [3] = last such
+@@ -1370,6 +1374,22 @@ NTSTATUS ProcessInit() {
+     CTX = FEXCore::Context::Context::CreateNewContext(HostFeatures);
+   }
+ 
++#ifdef FEX_IOS_HOST
++  {
++    /* PEB->EcCodeBitMap is set when the first ARM64EC image is mapped, before this module loads, and
++     * never moves, so every thread's frame carries it (ThreadInit) and the dispatcher's EC code check
++     * loads it from there. Set before InitCore, which emits the dispatcher.
++     * MADEIRA_FEX_EC_BITMAP_CACHE=0 keeps the TPIDRRO_EL0 -> TEB -> PEB walk. */
++    static_assert(offsetof(__TEB, Peb) == 0x60 && offsetof(__PEB, EcCodeBitMap) == 0x368,
++                  "the TEB_PEB_OFFSET and PEB_EC_CODE_BITMAP_OFFSET the dispatcher walks");
++    const char* BitMapOpt = getenv("MADEIRA_FEX_EC_BITMAP_CACHE");
++    IosEcCodeBitMapValue = reinterpret_cast<uint64_t>(reinterpret_cast<__TEB*>(IOSLoadTEB())->Peb->EcCodeBitMap);
++    IosEcCodeBitMapCached = IosEcCodeBitMapValue && !(BitMapOpt && strcmp(BitMapOpt, "0") == 0);
++    LogMan::Msg::IFmt("FEX: ec-bitmap-cache-v1 madeira-bcd enabled={} map={:#x}", IosEcCodeBitMapCached != 0,
++                      IosEcCodeBitMapValue);
++  }
++#endif
++
+   CTX->SetSignalDelegator(SignalDelegator.get());
+   CTX->SetSyscallHandler(SyscallHandler.get());
+ 
+@@ -2468,6 +2488,10 @@ NTSTATUS ThreadInit() {
+ 
+   Frame->State.cs_idx = FEXCore::Core::CPUState::DEFAULT_USER_CS << 3;
+   Frame->State.cs_cached = FEXCore::Core::CPUState::CalculateGDTBase(GDT);
++#ifdef FEX_IOS_HOST
++  // For the dispatcher's EC code check (CpuStateFrame::IosEcCodeBitMap).
++  Frame->IosEcCodeBitMap = IosEcCodeBitMapValue;
++#endif
+ 
+ #ifdef FEX_IOS_HOST
+   /* iOS-Madeira: set up GS base for x86_64 TLS access. On Windows x64 the

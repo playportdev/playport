@@ -1,0 +1,117 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 20 Oct 2026 16:53:02 +0200
+Subject: [PATCH] ARM64EC: decide SMC-path plain stores without the backpatch
+ lock on iOS
+
+After HandleRWXAccessViolation claims a write into tracked code, the iOS
+SMC branch (ml657) calls HandleUnalignedAccess for every faulting store.
+For a plain store that call can only decline: it takes the backpatch
+lock in the code buffer (a CASAL and a release store into the RX view,
+each a Mach exception Wine emulates), logs "Unhandled JIT SIGBUS" and
+returns nothing. For a store FEX already backpatched to DMB + STR it
+takes the same lock and returns -4.
+
+IosSmcStoreFastPath decides those encodings first, from the same words
+and with the same result for Pc: STR/STRB/STRH with an immediate offset,
+STUR* and the backpatch form STR* [Xn, xzr]. An immediate-offset store
+declines with Pc unchanged, as does a STUR* or STR* [Xn, xzr] without a
+DMB in front or outside the code buffer; after a DMB in the code buffer
+Pc moves back 4 unless the handler type is NonAtomic, as
+HandleUnalignedAccess returns -4. Atomics and everything else still go
+to HandleUnalignedAccess. Checked against this tree's
+HandleUnalignedAccess (its bounded backpatch lock included): the
+declining and -4 cases are the ones it reaches for these encodings.
+
+On by default, as in Madeira; MADEIRA_FEX_SMC_FASTPATH=0 at launch
+restores the locked path. One "FEX: smc-store-fastpath-v1 ... enabled="
+line logs the choice. Madeira measured RockstarService.exe at 150-180
+SMC faults a second on one thread (bursts of 1,000-2,300 at launch) in
+GTA V Enhanced; RDR2's launcher runs the same service.
+
+Madeira-commit: 34466b22b5e694c0a61e6edb6946c5afeaeef8e7 (willfaust/FEX)
+Linear: PLA-364
+Class: feature
+Evidence: docs/evidence/2026-10-20-rdr2-perf-ports.md
+Offered-upstream: no; the SMC branch is the iOS port's
+---
+ Source/Windows/ARM64EC/Module.cpp | 52 +++++++++++++++++++++++++++++++
+ 1 file changed, 52 insertions(+)
+
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index 87e6ffd..1a08c89 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -1104,6 +1104,48 @@ int64_t WriteOffset = 0;
+ } // namespace FEXCore::DualMap
+ #endif
+ 
++#ifdef FEX_IOS_HOST
++/* madeira-bcd: smc-store-fastpath v1. On the iOS SMC path (ml657 below) a
++ * plain store, or one FEX already backpatched to DMB + STR, used to enter
++ * HandleUnalignedAccess, which takes the backpatch lock in the code buffer
++ * (a CASAL and a release store into the RX view: two Mach exceptions that
++ * Wine emulates) only to decline with "Unhandled JIT SIGBUS" or to return -4.
++ * Decide those encodings here from the same words, with the same result for
++ * Pc; everything else still goes to HandleUnalignedAccess. The masks are
++ * FEXCore's (Arm64.cpp: LDSTUNSCALED_MASK/STUR_INST, LDSTREGISTER_MASK/
++ * STR_INST, DMB); a FEX move that changes HandleUnalignedAccess's store
++ * cases must be checked against these. */
++static bool IosSmcFastPath = true;
++
++static bool IosSmcStoreFastPath(FEXCore::Core::InternalThreadState* Thread, ARM64_NT_CONTEXT& Context) {
++  if (!IosSmcFastPath) {
++    return false;
++  }
++  constexpr uint32_t IosStrImmMask = 0x3FC0'0000, IosStrImmInst = 0x3900'0000;  // STR/STRB/STRH Rt, [Xn, #uimm12]
++  constexpr uint32_t IosSturMask = 0x3BE0'0C00, IosSturInst = 0x3800'0000;      // STUR*, including STURB
++  constexpr uint32_t IosStrRegMask = 0x3FFF'FC00, IosStrRegInst = 0x383F'6800;  // STR* [Xn, xzr], the backpatch form
++  constexpr uint32_t IosDmbIsh = 0xD503'3BBF;
++  const auto* Pc = reinterpret_cast<const uint32_t*>(Context.Pc);
++  const uint32_t Instr = __atomic_load_n(&Pc[0], __ATOMIC_ACQUIRE);
++  if ((Instr & IosStrImmMask) == IosStrImmInst) {
++    return true;  // no handler family matches: it declines, Pc unchanged
++  }
++  if ((Instr & IosSturMask) != IosSturInst && (Instr & IosStrRegMask) != IosStrRegInst) {
++    return false;  // an atomic or anything else: unchanged path
++  }
++  if (__atomic_load_n(&Pc[-1], __ATOMIC_ACQUIRE) != IosDmbIsh) {
++    return true;  // declines, or returns 0 for NonAtomic: Pc unchanged either way
++  }
++  if (!CTX->IsAddressInCodeBuffer(Thread, Context.Pc)) {
++    return true;  // the non-JIT path has no case for these: it declines
++  }
++  if (Exception::HandlerConfig->GetUnalignedHandlerType() != FEXCore::ArchHelpers::Arm64::UnalignedHandlerType::NonAtomic) {
++    Context.Pc -= 4;  // backpatched DMB + STR: rerun the half-barrier, as HandleUnalignedAccess returns -4
++  }
++  return true;
++}
++#endif
++
+ #ifdef FEX_IOS_HOST
+ // PLA-401 diagnostics: FEX_SMCCHECKS_FOR (SMCChecksFor.h) sets SMCChecks for one
+ // executable only. The environment layer is FEX's highest, so a session-wide
+@@ -1383,6 +1425,14 @@ NTSTATUS ProcessInit() {
+ 
+   CTX->InitCore();
+   Exception::HandlerConfig.emplace(*CTX);
++#ifdef FEX_IOS_HOST
++  {
++    /* madeira-bcd: smc-store-fastpath v1. MADEIRA_FEX_SMC_FASTPATH=0 restores the locked path. */
++    const char* SmcFastOpt = getenv("MADEIRA_FEX_SMC_FASTPATH");
++    IosSmcFastPath = !(SmcFastOpt && strcmp(SmcFastOpt, "0") == 0);
++    LogMan::Msg::IFmt("FEX: smc-store-fastpath-v1 madeira-bcd enabled={}", IosSmcFastPath);
++  }
++#endif
+   InvalidationTracker.emplace(*CTX, Threads);
+   ImageTracker.emplace(*CTX, false);
+ 
+@@ -1647,6 +1697,8 @@ bool ResetToConsistentStateImpl(const ThreadCPUArea CPUArea, EXCEPTION_RECORD* E
+                               "store (fault {:X}); preserved PC[-1]={:08X} PC[+1]={:08X}; retrying at the same pc",
+                               ++Ml1018Count, Ml1018Insn, SmcPc, FaultAddress, Ml1018Pc[-1], Ml1018Pc[1]);
+           }
++        } else if (IosSmcStoreFastPath(Thread, *NativeContext)) {
++          /* madeira-bcd: smc-store-fastpath v1: decided without the backpatch lock */
+         } else if (Exception::HandleUnalignedAccess(CPUArea, *NativeContext, CTX->IsAddressInCodeBuffer(Thread, SmcPc))) {
+           static unsigned SmcAtomicCount;
+           if (SmcAtomicCount < 16) {

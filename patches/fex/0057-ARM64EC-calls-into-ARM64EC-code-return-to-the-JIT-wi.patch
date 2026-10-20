@@ -1,0 +1,165 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 20 Oct 2026 16:53:28 +0200
+Subject: [PATCH] ARM64EC: calls into ARM64EC code return to the JIT with RET
+ on iOS
+
+A guest CALL into ARM64EC code leaves the JIT for ExitFunctionEC; the
+callee returns through __os_arm64x_dispatch_ret, enter_jit and the
+dispatcher's EnterEC entry, which on iOS branches to the loop top: EC
+code bitmap check, trap flag check, L1 probe, then `br` to the block.
+Calls through the import table reach the dispatcher with `blr` and push
+a return-address predictor entry nothing pops, so the caller's own RET,
+and each RET above it, is predicted from another call's entry.
+
+With IosEcReturnWithRet set (read when the dispatcher and blocks are
+emitted):
+- the direct CALL path into ARM64EC code leaves with `blr` too
+  (ExitFunctionEC loads LR itself on every path that uses it), so every
+  guest CALL into ARM64EC code pushes one entry; JMPs keep `br`;
+- EnterEC probes L1 itself and enters a hit with `ret`, popping it. The
+  trap flag, a miss and an empty entry take the loop top as before.
+An L1 entry exists only for an address the loop top already found
+outside the EC code bitmap, so skipping that test cannot change the
+outcome. The returned-to path drops from 22 instructions to 10.
+
+Madeira took this after eliding the call-ret shadow stack (its
+813bc99); Playport keeps that stack (fex 0006), and this does not touch
+it: the EC call path never pushed a call-ret entry, and EnterEC on iOS
+never popped one, with the switch on or off.
+
+On by default, as in Madeira; MADEIRA_FEX_EC_RET=0 at launch keeps `br`
+and the loop-top re-entry, byte for byte. One "FEX: ec-ret-v1 ...
+enabled=" line logs the choice.
+
+Madeira-commit: 1e771919a65bf1a344304ad03b9bd7649a1221e5 (willfaust/FEX)
+Linear: PLA-364
+Class: feature
+Evidence: docs/evidence/2026-10-20-rdr2-perf-ports.md
+Offered-upstream: no; the iOS EnterEC path is the iOS port's
+---
+ .../Core/ArchHelpers/Arm64Emitter.cpp         |  5 +++++
+ .../Interface/Core/ArchHelpers/Arm64Emitter.h |  8 ++++++++
+ .../Interface/Core/Dispatcher/Dispatcher.cpp  | 19 ++++++++++++++++++-
+ .../Source/Interface/Core/JIT/BranchOps.cpp   | 10 ++++++++++
+ Source/Windows/ARM64EC/Module.cpp             | 13 +++++++++++++
+ 5 files changed, 54 insertions(+), 1 deletion(-)
+
+diff --git a/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.cpp b/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.cpp
+index c0c0c45..9bdd9c6 100644
+--- a/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.cpp
++++ b/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.cpp
+@@ -23,6 +23,11 @@
+ #include <tuple>
+ #include <utility>
+ 
++#if defined(FEX_IOS_HOST) && defined(ARCHITECTURE_arm64ec)
++// Set by ARM64EC/Module.cpp before the dispatcher is emitted. See IosEcReturnWithRet in Arm64Emitter.h.
++extern "C" uint32_t IosEcReturnWithRet = 0;
++#endif
++
+ #ifdef FEX_IOS_HOST
+ // Published by wine's ntdll (data export `ios_teb_tsd_offset`), imported in
+ // ARM64EC/Module.cpp at process init. See IosTebTsdOffset in Arm64Emitter.h.
+diff --git a/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.h b/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.h
+index 7e6037c..10d9fb1 100644
+--- a/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.h
++++ b/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.h
+@@ -107,6 +107,14 @@ constexpr size_t CPU_AREA_EMULATOR_DATA_OFFSET = 0x30;
+ // before any code is emitted. It is zero until then, and emitting a read
+ // against zero is a bug, not a fallback -- see the check at its import site.
+ extern "C" uint32_t IosTebTsdOffset;
++
++// Keeps the host return-address predictor balanced across guest calls into ARM64EC code. The indirect
++// CALL path reaches such a callee through the dispatcher with BLR (an ARM64EC target never hits L1),
++// while the callee's return re-entered the JIT through the loop top with BR, so every such call left an
++// entry behind that later guest RETs were predicted from. When set, the direct CALL path leaves with BLR
++// as well and EnterEC enters an L1 hit with RET: each call pushes one entry and its return pops it.
++// Set by the frontend before the dispatcher is emitted; 0 keeps BR and the loop-top re-entry.
++extern "C" uint32_t IosEcReturnWithRet;
+ #endif
+ 
+ constexpr uint64_t EC_CODE_BITMAP_MAX_ADDRESS = 1ULL << 47;
+diff --git a/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp b/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
+index 63f1093..6248231 100644
+--- a/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
++++ b/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
+@@ -185,7 +185,24 @@ void Dispatcher::EmitDispatcher() {
+    * DllMain at unix_calls=4523 (same shape as the dispatcher-guard regression
+    * in feedback_fex_dispatcher_guard_regression.md). Reverted. The host-PC
+    * leak needs a different angle. */
+-  (void)b(&LoopTop);
++  if (IosEcReturnWithRet) {
++    // An L1 hit is a block compiled for this address, never ARM64EC code: enter it with RET, which pops the
++    // predictor entry the guest CALL pushed when it left the JIT with BLR. The trap flag, a miss and an
++    // ARM64EC target (never in L1) take the loop top as before.
++    ldrb(TMP1, STATE_PTR(CpuStateFrame, State.flags[X86State::RFLAG_TF_RAW_LOC]));
++    (void)cbnz(ARMEmitter::Size::i32Bit, TMP1, &LoopTop);
++    ldp<ARMEmitter::IndexType::OFFSET>(TMP1, TMP2, STATE, offsetof(FEXCore::Core::CpuStateFrame, State.L1Pointer));
++    and_(ARMEmitter::Size::i64Bit, TMP2, TMP2, EC_CALL_CHECKER_PC_REG, ARMEmitter::ShiftType::LSL,
++         FEXCore::ilog2(sizeof(LookupCache::LookupCacheEntry)));
++    add(TMP1, TMP1, TMP2);
++    ldp<ARMEmitter::IndexType::OFFSET>(TMP4, TMP2, TMP1, 0);
++    sub(TMP2, TMP2, EC_CALL_CHECKER_PC_REG);
++    (void)cbnz(ARMEmitter::Size::i64Bit, TMP2, &LoopTop);
++    (void)cbz(ARMEmitter::Size::i64Bit, TMP4, &LoopTop);
++    ret(TMP4);
++  } else {
++    (void)b(&LoopTop);
++  }
+ #else
+   // As ARM64EC uses this as an entrypoint for both guest calls and host returns, opportunistically try to return
+   // using the call-ret stack to avoid unbalancing it.
+diff --git a/FEXCore/Source/Interface/Core/JIT/BranchOps.cpp b/FEXCore/Source/Interface/Core/JIT/BranchOps.cpp
+index 34dbca1..1ecb47e 100644
+--- a/FEXCore/Source/Interface/Core/JIT/BranchOps.cpp
++++ b/FEXCore/Source/Interface/Core/JIT/BranchOps.cpp
+@@ -90,7 +90,17 @@ DEF_OP(ExitFunction) {
+         InsertGuestRIPMove(EC_CALL_CHECKER_PC_REG, NewRIP);
+       }
+       ldr(TMP2, STATE_PTR(CpuStateFrame, Pointers.ExitFunctionEC));
++#ifdef FEX_IOS_HOST
++      if (Op->Hint == IR::BranchHint::Call && IosEcReturnWithRet) {
++        // Push the return-address predictor entry the RET in EnterEC pops (IosEcReturnWithRet in
++        // Arm64Emitter.h). ExitFunctionEC loads LR itself on every path that uses it.
++        blr(TMP2);
++      } else {
++        br(TMP2);
++      }
++#else
+       br(TMP2);
++#endif
+     } else {
+ #endif
+       // In order to support direct branches without constantly hitting the L1 cache, we emit a call to a block linker,
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index 1a08c89..7c887ee 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -88,6 +88,8 @@ extern "C" uint64_t IosSubfloorClipSize(uint64_t LowAddr, uint64_t Size);  // ml
+  * [2] = FFS matched but target not EC (fell through to emulation), [3] = last such
+  * target. Read by the [ffs-bypass] reporter in Core.cpp's CompileBlock. */
+ extern "C" uint64_t IosFfsBypassLog[4];
++/* Defined in FEXCore Arm64Emitter.cpp; read when the dispatcher and blocks are emitted. */
++extern "C" uint32_t IosEcReturnWithRet;
+ 
+ /* Raw TSD byte offset (from TPIDRRO_EL0 & ~7) of the slot holding the TEB.
+  * Discovered and published by wine's ntdll-unix; imported in ProcessInit.
+@@ -1371,6 +1373,17 @@ NTSTATUS ProcessInit() {
+   CTX->SetSignalDelegator(SignalDelegator.get());
+   CTX->SetSyscallHandler(SyscallHandler.get());
+ 
++#ifdef FEX_IOS_HOST
++  {
++    /* Guest calls into ARM64EC code leave the JIT with BLR and their returns re-enter it with RET, so the
++     * host return-address predictor stays balanced (IosEcReturnWithRet in Arm64Emitter.h). Set before
++     * InitCore, which emits the dispatcher. MADEIRA_FEX_EC_RET=0 keeps BR and the loop-top re-entry. */
++    const char* EcRetOpt = getenv("MADEIRA_FEX_EC_RET");
++    IosEcReturnWithRet = !(EcRetOpt && strcmp(EcRetOpt, "0") == 0);
++    LogMan::Msg::IFmt("FEX: ec-ret-v1 madeira-bcd enabled={}", IosEcReturnWithRet != 0);
++  }
++#endif
++
+ #ifdef FEX_IOS_HOST
+   /* Set DualMap::WriteOffset BEFORE InitCore (the dispatcher's emit path
+    * reads it via the JIT class constructor). Compute it from the SAME
