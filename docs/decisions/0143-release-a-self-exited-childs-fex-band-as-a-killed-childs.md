@@ -1,8 +1,10 @@
 # 0143: A child that exits by itself has its FEX band views released as a killed child's
 
 **Status:** accepted, 2026-10-20, directed by the supervisor for the owner (PLA-413). Amends
-[0127](0127-end-a-terminated-pseudo-process.md) and madeira-unix 0154 (PLA-368). Not yet shown on
-the phone.
+[0127](0127-end-a-terminated-pseudo-process.md) and madeira-unix 0154 (PLA-368). Shown on the
+phone in runs `20261020T211148` and `20261020T211703`: each self-exited renderer emptied 593–617 MB,
+and the runtime's FEX row stayed at 23 MB resident+compressed at Story +63 s
+([evidence](../evidence/2026-10-20-rdr2-self-exit-band.md)).
 
 ## Context
 
