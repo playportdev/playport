@@ -861,7 +861,7 @@ final class FEXProfileTests: XCTestCase {
         XCTAssertEqual(LaunchSettings.runtimeKeys(""), [:])
     }
 
-    func testGraphicsOptionsSetOnlyTheAllowlistedVariables() {
+    func testGraphicsOptionsSetAnyVariable() {
         // A DXVK option without its variable joins DXVK_CONFIG, as DXVK splits it (at ;).
         XCTAssertEqual(LaunchSettings.graphicsEnvironment("dxvk.tilerMode=False dxgi.maxFrameLatency=2"),
                        ["DXVK_CONFIG": "dxvk.tilerMode = False;dxgi.maxFrameLatency = 2"])
@@ -871,11 +871,15 @@ final class FEXProfileTests: XCTestCase {
         XCTAssertEqual(LaunchSettings.graphicsEnvironment("VKD3D_CONFIG=one_time_submit VKD3D_CONFIG=no_upload_hvv MESA_KK_EXPERIMENTAL=all"),
                        ["VKD3D_CONFIG": "one_time_submit,no_upload_hvv", "MESA_KK_EXPERIMENTAL": "all"])
         XCTAssertEqual(LaunchSettings.graphicsEnvironment(""), [:])
-        // Anything else is refused whole: another variable, a bare word, an unknown section.
-        XCTAssertNil(LaunchSettings.graphicsEnvironment("DYLD_INSERT_LIBRARIES=x"))
+        // Any other variable is set too (decision 0135); repeated, its last value wins.
+        XCTAssertEqual(LaunchSettings.graphicsEnvironment("_X1=a MESA_KK_EXPERIMENTAL=parallel_stages _X1=b"),
+                       ["_X1": "b", "MESA_KK_EXPERIMENTAL": "parallel_stages"])
+        // Anything else is refused whole: a bare word, an unknown section, a bad name.
         XCTAssertNil(LaunchSettings.graphicsEnvironment("dxvk.tilerMode=False oops"))
         XCTAssertNil(LaunchSettings.graphicsEnvironment("wine.x=1"))
         XCTAssertNil(LaunchSettings.graphicsEnvironment("=1"))
+        XCTAssertNil(LaunchSettings.graphicsEnvironment("1X=1"))
+        XCTAssertNil(LaunchSettings.graphicsEnvironment("A-B=1"))
         // Per game only, saved and resolved like the runtime keys.
         let s = try! JSONDecoder().decode(LaunchSettings.self, from: Data(#"{"graphicsOptions":"dxvk.hud=fps"}"#.utf8))
         XCTAssertFalse(s.isEmpty)

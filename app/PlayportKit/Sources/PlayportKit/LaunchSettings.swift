@@ -49,10 +49,10 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
     /// `key=value` items split at spaces (`vram-mb=1024 totalphys=6144 inproc-sync=1`).
     /// LaunchSettings.runtimeKeys parses them; TitleConfig writes them after the title's.
     public var runtime: String
-    /// The Vulkan layers' options (per game only; a dev build's, decision 0060), as typed:
-    /// items split at spaces, each `NAME=value` for an allowlisted variable
-    /// (LaunchSettings.graphicsVariables) or a DXVK option (`dxvk.tilerMode=False`), which
-    /// goes into DXVK_CONFIG. LaunchSettings.graphicsEnvironment parses them.
+    /// The game's environment variables and Vulkan layers' options (per game only; a dev
+    /// build's, decisions 0060 and 0135), as typed: items split at spaces, each `NAME=value`
+    /// for any variable or a DXVK option (`dxvk.tilerMode=False`), which goes into
+    /// DXVK_CONFIG. LaunchSettings.graphicsEnvironment parses them.
     public var graphicsOptions: String
     /// Start Windows services for the game (services.exe, Wine's SCM, and the services it
     /// starts; per game only, decision 0107): a launcher that installs and uses one. Nil is off.
@@ -160,29 +160,39 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
         return (try? TitleConfig.validate(out)) == nil ? nil : out
     }
 
-    /// The variables a game's Graphics options may set (decision 0060): DXVK's and
-    /// vkd3d-proton's option strings and KosmicKrisp's debug, experimental and
-    /// workaround switches. Nothing else reaches a game's environment this way.
+    /// The list variables a game's Graphics options join when repeated (decision 0060):
+    /// DXVK's and vkd3d-proton's option strings and KosmicKrisp's debug, experimental and
+    /// workaround switches. Any other variable may be set too (decision 0135); repeated,
+    /// its last item wins.
     public static let graphicsVariables = ["DXVK_CONFIG", "VKD3D_CONFIG", "MESA_KK_DEBUG",
                                            "MESA_KK_EXPERIMENTAL", "MESA_KK_DISABLE_WORKAROUNDS"]
     /// The sections of a DXVK option an item may name without DXVK_CONFIG= (dxvk.conf's).
     public static let dxvkSections = ["dxvk", "dxgi", "d3d11", "d3d10", "d3d9", "d3d8"]
 
+    /// An environment variable name: `[A-Za-z_][A-Za-z0-9_]*`.
+    static func isVariableName(_ name: String) -> Bool {
+        guard let first = name.unicodeScalars.first, first == "_" || (first.isASCII && first.properties.isAlphabetic)
+        else { return false }
+        return name.unicodeScalars.allSatisfy { $0 == "_" || ($0.isASCII && ($0.properties.isAlphabetic || ("0"..."9").contains($0))) }
+    }
+
     /// Graphics options as typed (`dxvk.tilerMode=False VKD3D_CONFIG=one_time_submit`):
-    /// items at spaces (double quotes keep spaces), each `NAME=value` for a variable in
-    /// graphicsVariables or `section.option=value` for DXVK. DXVK options join DXVK_CONFIG
-    /// with `;`, as DXVK splits it; a repeated other variable joins with `,`, as vkd3d-proton
-    /// and Mesa split theirs. nil when an item is neither, or names another variable.
+    /// items at spaces (double quotes keep spaces), each `NAME=value` for any variable (NAME
+    /// `[A-Za-z_][A-Za-z0-9_]*`) or `section.option=value` for DXVK. DXVK options join
+    /// DXVK_CONFIG with `;`, as DXVK splits it; another of graphicsVariables repeated joins
+    /// with `,`, as vkd3d-proton and Mesa split theirs; any other variable repeated takes its
+    /// last value. nil when an item is neither.
     public static func graphicsEnvironment(_ line: String) -> [String: String]? {
         var out: [String: String] = [:]
         func add(_ name: String, _ value: String) {
             guard !value.isEmpty else { return }
+            guard graphicsVariables.contains(name) else { out[name] = value; return }
             out[name] = out[name].map { $0 + (name == "DXVK_CONFIG" ? ";" : ",") + value } ?? value
         }
         for item in splitArguments(line) {
             guard let eq = item.firstIndex(of: "="), eq != item.startIndex else { return nil }
             let name = String(item[..<eq]), value = String(item[item.index(after: eq)...])
-            if graphicsVariables.contains(name) {
+            if isVariableName(name) {
                 add(name, value)
             } else if let dot = name.firstIndex(of: "."), dxvkSections.contains(String(name[..<dot])),
                       name.index(after: dot) < name.endIndex {

@@ -1051,11 +1051,11 @@ private struct GameDetailPage: View {
                                      placeholder: "For example vram-mb=1024 inproc-sync=1",
                                      maxLength: 200) { settings.wrappedValue.runtime = $0 }
         }
-        // The Vulkan layers' options (decision 0060): an allowlisted set of variables, Vulkan launches only.
+        // The game's environment variables and Vulkan layers' options (decisions 0060, 0135).
         let options = settings.wrappedValue.graphicsOptions.trimmingCharacters(in: .whitespaces)
         PadRow(id: "opt:graphicsOptions", title: "Graphics options",
                subtitle: options.isEmpty || LaunchSettings.graphicsEnvironment(options) != nil ? forThisGame(compatOptions)
-                   : "Not DXVK options or \(LaunchSettings.graphicsVariables.joined(separator: ", ")) items: not used",
+                   : "Not NAME=value or DXVK option items: not used",
                subtitleLines: 2,
                value: options.isEmpty ? "None" : options, accessory: .chevron, changed: !options.isEmpty, style: .plain,
                reset: options.isEmpty ? nil : { settings.wrappedValue.graphicsOptions = "" }) {

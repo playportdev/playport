@@ -292,13 +292,13 @@ not that gameplay appeared: inspect the timeline, log and screenshot.
   `{"screen":"native","frameLimit":0}`. `arguments` adds to the game's command
   line, e.g. `{"arguments":"-DX12"}`. A dev build's
   `graphicsOptions` (the Developer section's *Graphics options*, decision
-  [0060](decisions/0060-graphics-options.md)) set the Vulkan layers' variables
-  from an allowlist: `{"graphicsOptions":"dxvk.tilerMode=False VKD3D_CONFIG=one_time_submit"}`
+  [0060](decisions/0060-graphics-options.md), [0135](decisions/0135-graphics-options-set-any-variable.md))
+  set any environment variable: `{"graphicsOptions":"dxvk.tilerMode=False VKD3D_CONFIG=one_time_submit"}`
   (a `dxvk.`/`dxgi.`/`d3d11.` item goes into `DXVK_CONFIG`, after the Vulkan backend's own
-  `dxvk.tilerMode = False`, decision [0066](decisions/0066-dxvk-tiler-mode-off.md); also `MESA_KK_DEBUG`,
-  `MESA_KK_EXPERIMENTAL`, `MESA_KK_DISABLE_WORKAROUNDS`). Otherwise a game's options have no environment
-  variables, so the runtime's environment switches (`WINE_HOST_LOG_STAMP`,
-  `WINE_HOST_SAMPLE`, `WINE_HOST_DIAG` in `wine_host.c`) have no way in. A
+  `dxvk.tilerMode = False`, decision [0066](decisions/0066-dxvk-tiler-mode-off.md); a repeated
+  `DXVK_CONFIG`, `VKD3D_CONFIG` or `MESA_KK_*` list joins, any other variable's last value wins).
+  The release app has no such row, so there the runtime's environment switches
+  (`WINE_HOST_LOG_STAMP`, `WINE_HOST_SAMPLE`, `WINE_HOST_DIAG` in `wine_host.c`) have no way in. A
   cohort title's madeira.cfg keys come from its `titles.json` entry
   ([ARCHITECTURE.md](ARCHITECTURE.md#madeiracfg-switches)).
 - **The scripted pad.** A launch with `--pad` plays `Documents/vpad.txt` as a
