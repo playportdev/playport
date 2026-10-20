@@ -1,7 +1,7 @@
 # The wineserver reads only marked request fds: host checks (PLA-364, CPU lever 1)
 
 **Linear:** PLA-364 (RDR2 gameplay CPU).
-**Decision:** [0135](../decisions/0135-the-wineserver-reads-only-marked-request-fds.md).
+**Decision:** [0136](../decisions/0136-the-wineserver-reads-only-marked-request-fds.md).
 **Change:** madeira-unix 0175 (`build/wineserver/pp_srv_pending.h`, `fd_ios.c`'s `main_loop`,
 `server_call_unlocked`, `pthread_exit_wrapper`), test `tools/tests/test_srv_pending.py`.
 **Switch:** `MADEIRA_SRV_PENDING`, on by default; the runtime key `env.MADEIRA_SRV_PENDING=0`
@@ -29,7 +29,7 @@ code. No new phone run was made.
 
 ## 2. The change
 
-Decision 0135 describes it. In short:
+Decision 0136 describes it. In short:
 
 - **The client marks its thread id** in a shared bitmap after it writes a request, and after it
   closes its request fd as it ends.
