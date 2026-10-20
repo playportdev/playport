@@ -1,0 +1,91 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 20 Oct 2026 17:02:14 +0200
+Subject: [PATCH] ntdll: env.MADEIRA_ECO_NATIVE=1 runs the runtime's helper
+ threads at utility QoS
+
+The runtime's native helper threads, the JIT-pool warmer (page warming
+and the periodic address-space censuses) and the stale-pointer healer,
+do no work a frame waits for, yet they are created at the QoS of the
+thread that started them and run on the performance cores the game's
+threads need. Our RDR2 sample s1 showed the warmer in bursts of 20-37 %
+of a core; Madeira measured both on performance cores at ~2.8 GHz in
+Horizon Zero Dawn.
+
+With MADEIRA_ECO_NATIVE=1 (a runtime key, env.MADEIRA_ECO_NATIVE=1) each
+moves itself to utility QoS when it starts ([eco-native] logs it), so
+it runs on the efficiency cores at their lower clock, ECO on or off. Not
+moved: the wineserver thread, the Mach exception thread (it services the
+faults guest threads wait on), the samplers (already utility), audio,
+the UI. Off by default, as in Madeira.
+
+Madeira-commit: 740473a0a9fbcafc97299bb189de0a66c4b78225
+Linear: PLA-364
+Class: feature
+Evidence: docs/evidence/2026-10-20-rdr2-perf-ports.md
+Offered-upstream: no
+---
+ build/ntdll-unix/signal_arm64_ios.c |  1 +
+ build/ntdll-unix/thread_ios.c       | 24 ++++++++++++++++++++++++
+ build/ntdll-unix/virtual_ios.c      |  1 +
+ 3 files changed, 26 insertions(+)
+
+diff --git a/build/ntdll-unix/signal_arm64_ios.c b/build/ntdll-unix/signal_arm64_ios.c
+index 59a72d8..8a02347 100644
+--- a/build/ntdll-unix/signal_arm64_ios.c
++++ b/build/ntdll-unix/signal_arm64_ios.c
+@@ -554,6 +554,7 @@ static void *ios_stale_va_scanner( void *arg )
+      * MADEIRA_NO_HEAL=1 reverts to dry-run reporting. */
+     int do_heal = getenv( "MADEIRA_NO_HEAL" ) == NULL;
+     pthread_setname_np( "wine-stale-heal" );
++    { extern void ios_eco_native_self( const char *who ); ios_eco_native_self( "wine-stale-heal" ); }
+     for (;;)
+     {
+         usleep( 100000 );
+diff --git a/build/ntdll-unix/thread_ios.c b/build/ntdll-unix/thread_ios.c
+index 4e552ce..b93ad39 100644
+--- a/build/ntdll-unix/thread_ios.c
++++ b/build/ntdll-unix/thread_ios.c
+@@ -1123,6 +1123,30 @@ static void contexts_from_server( CONTEXT *context, struct context_data server_c
+ }
+ 
+ 
++/* env.MADEIRA_ECO_NATIVE = 1 (opt-in, Madeira's 740473a). The runtime's own
++ * native helper threads -- the JIT-pool warmer (virtual_ios.c: page warming
++ * and the periodic address-space censuses) and the stale-pointer healer
++ * (signal_arm64_ios.c) -- do no work a frame waits for, yet they are created
++ * at the QoS of the thread that started them. With the switch each moves
++ * itself to utility QoS when it starts, so it runs on the efficiency cores at
++ * their lower clock, ECO on or off. Not moved: the wineserver thread, the Mach
++ * exception thread (it services the faults guest threads wait on), the
++ * samplers (already utility), audio, the UI. */
++void ios_eco_native_self( const char *who )
++{
++    static int on = -1;
++    int r;
++    if (on < 0)
++    {
++        const char *e = getenv( "MADEIRA_ECO_NATIVE" );   /* 1: the runtime's native helper threads run at utility QoS */
++        on = e && *e && strcmp( e, "0" ) != 0;
++    }
++    if (!on) return;
++    r = pthread_set_qos_class_self_np( QOS_CLASS_UTILITY, 0 );
++    dprintf( 2, "[eco-native] %s thread at utility QoS%s (MADEIRA_ECO_NATIVE)\n", who, r ? ": refused" : "" );
++}
++
++
+ /***********************************************************************
+  *           pthread_exit_wrapper
+  */
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 4bcdadf..294a164 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -715,6 +715,7 @@ static unsigned ios_warmer_sweep_cycles( void )
+ static void *ios_pool_warmer_thread( void *arg )
+ {
+     unsigned cycle = 0;
++    { extern void ios_eco_native_self( const char *who ); ios_eco_native_self( "pool-warmer" ); }
+     for (;;)
+     {
+         /* ml1060: THE MONITOR WAS A TENTH OF THE MACHINE. Above 2400 MB this loop

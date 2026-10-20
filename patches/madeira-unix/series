@@ -178,3 +178,6 @@
 0178-win32u-log-the-display-values-each-process-is-given-.patch
 0179-win32u-give-the-virtual-display-a-display-config-pat.patch
 0190-ntdll-dev-single-process-social-club.patch
+0200-ntdll-MADEIRA_WARMER_SWEEP_CYCLES-sets-the-pool-warm.patch
+0201-ntdll-env.MADEIRA_ECO_NATIVE-1-runs-the-runtime-s-he.patch
+0202-ntdll-env.MADEIRA_POWER_GOV_MW-holds-the-CPU-power-w.patch

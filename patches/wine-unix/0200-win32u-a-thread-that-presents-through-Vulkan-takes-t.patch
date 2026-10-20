@@ -1,0 +1,52 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 20 Oct 2026 17:04:31 +0200
+Subject: [PATCH] win32u: a thread that presents through Vulkan takes the [xp]
+ presenting role
+
+The [xp] sampler (madeira-unix server_ios.c) knows a game's presenting
+thread only from DXMT, whose present thread registers role P through
+winemetal. A Vulkan game (RDR2 through KosmicKrisp, a DXVK or vkd3d game)
+registered none, so [xp] never listed its presenting thread, [xp-api]
+took no game process for its x64->EC module counts, and nothing at the
+runtime level knew the game presents.
+
+win32u_vkQueuePresentKHR now registers its calling thread as role P
+(ios_xp_set_role, once a thread, one "[xp] ml1128 role P" line), as
+DXMT's present thread does. The power governor (madeira-unix 0202,
+MADEIRA_POWER_GOV_MW) reads it to know a game presents.
+
+Linear: PLA-364
+Class: diagnostics
+Evidence: docs/evidence/2026-10-20-rdr2-perf-ports.md
+Offered-upstream: no; ios_xp_set_role is the iOS port's
+---
+ dlls/win32u/vulkan.c | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/dlls/win32u/vulkan.c b/dlls/win32u/vulkan.c
+index 5b9846d..bbacc0f 100644
+--- a/dlls/win32u/vulkan.c
++++ b/dlls/win32u/vulkan.c
+@@ -2241,6 +2241,21 @@ static VkResult win32u_vkQueuePresentKHR( VkQueue client_queue, const VkPresentI
+ 
+     TRACE( "queue %p, present_info %p\n", queue, present_info );
+ 
++#ifdef WINE_IOS
++    {
++        /* The [xp] sampler's presenting-thread role (P), as DXMT's present thread
++         * sets it: [xp] lists the thread, takes its process for [xp-api], and the
++         * power governor (MADEIRA_POWER_GOV_MW) knows a game presents. Once a thread. */
++        extern void ios_xp_set_role( int role, UINT64 wtid );
++        static __thread int xp_role_set;
++        if (!xp_role_set)
++        {
++            xp_role_set = 1;
++            ios_xp_set_role( 'P', HandleToULong( NtCurrentTeb()->ClientId.UniqueThread ) );
++        }
++    }
++#endif
++
+     if (present_info->swapchainCount > ARRAY_SIZE(swapchains_buffer) &&
+         !(swapchains = malloc( present_info->swapchainCount * sizeof(*swapchains) )))
+         return VK_ERROR_OUT_OF_HOST_MEMORY;

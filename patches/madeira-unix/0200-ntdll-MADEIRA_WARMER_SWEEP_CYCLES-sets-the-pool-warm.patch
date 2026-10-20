@@ -1,0 +1,147 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 20 Oct 2026 17:01:41 +0200
+Subject: [PATCH] ntdll: MADEIRA_WARMER_SWEEP_CYCLES sets the pool warmer's
+ census period
+
+The pool warmer's censuses (the slot probe, the window inventories and
+the physical-map walk over every region) run at cycles 1 and 2 and then
+every 150 ~2 s cycles (madeira-unix's IOS_WARMER_CENSUS_CYCLES, about
+five minutes). Our RDR2 sample s1 showed ios_pool_warmer_thread in
+bursts of 20-37 % of a core in mach_vm_region_recurse, the walk's call,
+with no line saying what one walk cost.
+
+As Madeira's dfb565c did for its own 10 s walk, the period is now a key,
+MADEIRA_WARMER_SWEEP_CYCLES (1 to 100000; default 150, unchanged), and
+the [phys-map] line logs each walk's time ("walk N ms; next in N
+cycles"). 100000 leaves only the two early censuses, for an A/B of what
+the later ones cost a game. The guest census's 15-cycle walk while the
+dev donor pool backs guest memory is not changed.
+
+Also from dfb565c: [xp-t] lists a native thread (no TEB) as m<thread id>
+only; each is now named once ([xp-names] m<tid> "<name>"), the first
+time it is busy enough (2 ms a sample) to be listed, so a busy helper
+thread can be told from another.
+
+Madeira-commit: dfb565c40bc8ef3bc18d902343e29fbc2018bb1a
+Linear: PLA-364
+Class: feature
+Evidence: docs/evidence/2026-10-20-rdr2-perf-ports.md
+Offered-upstream: no
+---
+ build/ntdll-unix/server_ios.c  | 17 +++++++++++++++++
+ build/ntdll-unix/virtual_ios.c | 34 +++++++++++++++++++++++++++-------
+ 2 files changed, 44 insertions(+), 7 deletions(-)
+
+diff --git a/build/ntdll-unix/server_ios.c b/build/ntdll-unix/server_ios.c
+index 29e3854..b192f59 100644
+--- a/build/ntdll-unix/server_ios.c
++++ b/build/ntdll-unix/server_ios.c
+@@ -1700,6 +1700,22 @@ static void ios_xp_qos_census( const char *wall )
+     wine_log_write( "%s", line );
+ }
+ 
++/* [xp-t] shows a native thread (no TEB) as m<thread id> only. Name each once,
++ * the first time it is busy enough to be listed (Madeira's dfb565c). */
++static void ios_xp_name_native( pthread_t pt, uint64_t tid )
++{
++    static uint64_t named[128];
++    static int n;
++    char name[64] = "";
++    int i;
++
++    for (i = 0; i < n; i++) if (named[i] == tid) return;
++    if (n == (int)(sizeof(named) / sizeof(named[0]))) return;
++    named[n++] = tid;
++    pthread_getname_np( pt, name, sizeof(name) );
++    wine_log_write( "[xp-names] m%llu \"%s\"", (unsigned long long)tid, name[0] ? name : "(unnamed)" );
++}
++
+ static void ios_xprobe_main( void )
+ {
+     static struct ios_xp_row rows[1024];
+@@ -1763,6 +1779,7 @@ static void ios_xprobe_main( void )
+                                 uint64_t teb = pt_ ? ios_ts_teb( pt_ ) : 0; uint32_t w = 0;
+                                 if (teb) ios_ts_read( teb + 0x48, &w, 4 );
+                                 r->tid = idi.thread_id; r->wtid = w; r->p_ms = pt; r->e_ms = et;
++                                if (!w && pt_ && pt + et >= 2.0) ios_xp_name_native( pt_, idi.thread_id );
+                                 r->p_ghz = pt > 0 ? pcy / (pt * 1e6) : 0; r->e_ghz = et > 0 ? ecy / (et * 1e6) : 0;
+                                 r->minst = (double)((cur[0].instr - pv->c[0].instr) + (cur[1].instr - pv->c[1].instr)) / 1e6;
+                                 r->role = NULL;
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 3bca630..4bcdadf 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -695,8 +695,22 @@ extern int ios_fast_footprint;
+  * 2 chamber) -- ran every 15th and 5th ~2 s cycle. One took a P-core for
+  * 154 ms while the game thread all but stopped, inside a 596 ms chamber hitch.
+  * They now run once early (cycles 1 and 2) and then about every five minutes;
+- * the page warming and the cheap per-cycle lines are unchanged. */
+-#define IOS_WARMER_CENSUS_CYCLES 150
++ * the page warming and the cheap per-cycle lines are unchanged.
++ * MADEIRA_WARMER_SWEEP_CYCLES sets that period in cycles (default 150, as
++ * Madeira's dfb565c made its own 10 s walk a knob: 1 to 100000), for an A/B of
++ * what the censuses cost a game; [phys-map] logs each walk's time. */
++static unsigned ios_warmer_sweep_cycles( void )
++{
++    static unsigned v;
++    if (!v)
++    {
++        /* cycles of ~2 s between the warmer's censuses (default 150, about five minutes). */
++        const char *e = getenv( "MADEIRA_WARMER_SWEEP_CYCLES" );
++        unsigned long n = e && *e ? strtoul( e, NULL, 10 ) : 0;
++        v = n >= 1 && n <= 100000 ? (unsigned)n : 150;
++    }
++    return v;
++}
+ 
+ static void *ios_pool_warmer_thread( void *arg )
+ {
+@@ -838,7 +852,7 @@ static void *ios_pool_warmer_thread( void *arg )
+                     dprintf(2, "[pool-rot] clean: %lu .text pages sampled across %u mappings (cycle=%u)\n",
+                             (unsigned long)checked, ios_jit_mapping_count, cycle);
+             }
+-            if (cycle == 1 || (cycle % IOS_WARMER_CENSUS_CYCLES) == 0)
++            if (cycle == 1 || (cycle % ios_warmer_sweep_cycles()) == 0)
+             {
+                 /* ml469 (wall #79): one-shot proof of whether TCP loopback
+                  * works at all under this port — the webhelper's transport
+@@ -988,12 +1002,12 @@ static void *ios_pool_warmer_thread( void *arg )
+              * vs FEX lookup caches vs CEF heap. Walk the address space and
+              * charge private-dirty+swapped pages to each region; the base
+              * addresses identify the owner offline (pool = RX base, FEX bands,
+-             * PA pools, guest heap). Cycle 2, then every IOS_WARMER_CENSUS_CYCLES
++             * PA pools, guest heap). Cycle 2, then every ios_warmer_sweep_cycles()
+              * cycles, because the walk is tens of thousands of kernel calls.
+              * Playport: every 15th cycle (about 30 s) while the host backs guest
+              * memory (the dev donor pool, ios_guest_back), beside [guest-census]. */
+             extern int ios_guest_census_on;
+-            if (cycle == 2 || (cycle % IOS_WARMER_CENSUS_CYCLES) == 0 || (ios_guest_census_on && !(cycle % 15)))
++            if (cycle == 2 || (cycle % ios_warmer_sweep_cycles()) == 0 || (ios_guest_census_on && !(cycle % 15)))
+             {
+                 struct { unsigned long long base, size, dirty, res, swap; unsigned tag; } top[12];
+                 unsigned long long dirty_by_tag[256];
+@@ -1053,6 +1067,8 @@ static void *ios_pool_warmer_thread( void *arg )
+                 memset( band_dirty, 0, sizeof(band_dirty) );
+                 memset( band_res, 0, sizeof(band_res) );
+                 memset( band_shared, 0, sizeof(band_shared) );
++                struct timespec pm_t0, pm_t1;   /* what the walk costs */
++                clock_gettime( CLOCK_MONOTONIC, &pm_t0 );
+                 for (;;)
+                 {
+                     vm_region_submap_info_data_64_t info;
+@@ -1158,8 +1174,12 @@ static void *ios_pool_warmer_thread( void *arg )
+                     raddr += rsize;
+                     if (++regions > 200000) { dprintf(2, "[phys-map] TRUNCATED at %u regions\n", regions); break; }
+                 }
+-                dprintf(2, "[phys-map] rev=ml359 cycle=%u regions=%u total_dirty=%llu MB\n",
+-                        cycle, regions, total_dirty >> 20);
++                clock_gettime( CLOCK_MONOTONIC, &pm_t1 );
++                dprintf(2, "[phys-map] rev=ml359 cycle=%u regions=%u total_dirty=%llu MB (walk %ld ms; next in %u "
++                           "cycles, MADEIRA_WARMER_SWEEP_CYCLES)\n",
++                        cycle, regions, total_dirty >> 20,
++                        (long)((pm_t1.tv_sec - pm_t0.tv_sec) * 1000 + (pm_t1.tv_nsec - pm_t0.tv_nsec) / 1000000),
++                        ios_warmer_sweep_cycles());
+                 for (ti = 0; ti < 12; ti++)
+                 {
+                     if (!top[ti].dirty) continue;
