@@ -59,3 +59,4 @@
 0062-kk-skip-a-Metal-build-whose-MSL-was-interrupted-twic.patch
 0063-kk-MESA_KK_FRAME_PROBE_S-logs-draws-and-scans-for-pr.patch
 0064-kk-PLAYPORT_VK_HEAP_MB-reports-a-smaller-device-loca.patch
+0080-kk-MESA_KK_DEBUG-gpu-logs-GPU-time-frames-and-presen.patch

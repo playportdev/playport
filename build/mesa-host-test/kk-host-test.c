@@ -438,6 +438,150 @@ check_heap_cap(const VkInstanceCreateInfo *ici)
    return 0;
 }
 
+/* patches/mesa 0080: MESA_KK_DEBUG=gpu sums the completed command buffers'
+ * GPU time into [kk-gpu] lines, and the queue's end logs the last interval.
+ * The mock gives each command buffer 2 ms, back to back, so three submits of
+ * a buffer copy (no shader to build) are gpu=6.0 ms and busy=6.0 ms over cbs=3. The driver reads
+ * MESA_KK_DEBUG once per process: the device lives in a child, which this
+ * process runs before it touches the driver, and whose stderr it reads. */
+static void
+gpu_log_child(void)
+{
+   setenv("MESA_KK_DEBUG", "gpu", 1);
+   VkApplicationInfo app = {.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
+                            .apiVersion = VK_API_VERSION_1_3};
+   VkInstanceCreateInfo ici = {.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
+                               .pApplicationInfo = &app};
+   CHECK(((PFN_vkCreateInstance)gipa(NULL, "vkCreateInstance"))(&ici, NULL, &inst));
+   uint32_t count = 1;
+   VkPhysicalDevice pd;
+   IPROC(vkEnumeratePhysicalDevices);
+   CHECK(vkEnumeratePhysicalDevices(inst, &count, &pd));
+   float prio = 1.0f;
+   VkDeviceQueueCreateInfo qci = {
+      .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+      .queueCount = 1,
+      .pQueuePriorities = &prio,
+   };
+   VkDeviceCreateInfo dci = {
+      .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+      .queueCreateInfoCount = 1,
+      .pQueueCreateInfos = &qci,
+   };
+   IPROC(vkCreateDevice);
+   CHECK(vkCreateDevice(pd, &dci, NULL, &dev));
+   DPROC(vkGetDeviceQueue);
+   DPROC(vkCreateBuffer);
+   DPROC(vkGetBufferMemoryRequirements);
+   DPROC(vkAllocateMemory);
+   DPROC(vkBindBufferMemory);
+   DPROC(vkCreateCommandPool);
+   DPROC(vkAllocateCommandBuffers);
+   DPROC(vkBeginCommandBuffer);
+   DPROC(vkEndCommandBuffer);
+   DPROC(vkCmdCopyBuffer);
+   DPROC(vkQueueSubmit);
+   DPROC(vkQueueWaitIdle);
+   DPROC(vkDestroyCommandPool);
+   DPROC(vkDestroyBuffer);
+   DPROC(vkFreeMemory);
+   DPROC(vkDestroyDevice);
+   VkQueue queue;
+   vkGetDeviceQueue(dev, 0, 0, &queue);
+
+   VkBufferCreateInfo bci = {
+      .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+      .size = 4096,
+      .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+   };
+   VkBuffer buf;
+   CHECK(vkCreateBuffer(dev, &bci, NULL, &buf));
+   VkMemoryRequirements req;
+   vkGetBufferMemoryRequirements(dev, buf, &req);
+   VkMemoryAllocateInfo mai = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+                               .allocationSize = req.size,
+                               .memoryTypeIndex = __builtin_ctz(req.memoryTypeBits)};
+   VkDeviceMemory mem;
+   CHECK(vkAllocateMemory(dev, &mai, NULL, &mem));
+   CHECK(vkBindBufferMemory(dev, buf, mem, 0));
+
+   VkCommandPoolCreateInfo cpci = {
+      .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+      .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+   };
+   VkCommandPool cpool;
+   CHECK(vkCreateCommandPool(dev, &cpci, NULL, &cpool));
+   VkCommandBufferAllocateInfo cbai = {
+      .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+      .commandPool = cpool,
+      .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+      .commandBufferCount = 1,
+   };
+   VkCommandBuffer cmd;
+   CHECK(vkAllocateCommandBuffers(dev, &cbai, &cmd));
+   for (int n = 0; n < 3; n++) {
+      VkCommandBufferBeginInfo bi = {
+         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+         .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+      };
+      CHECK(vkBeginCommandBuffer(cmd, &bi));
+      VkBufferCopy region = {.srcOffset = 0, .dstOffset = 2048, .size = 1024};
+      vkCmdCopyBuffer(cmd, buf, buf, 1, &region);
+      CHECK(vkEndCommandBuffer(cmd));
+      VkSubmitInfo si = {
+         .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+         .commandBufferCount = 1,
+         .pCommandBuffers = &cmd,
+      };
+      CHECK(vkQueueSubmit(queue, 1, &si, VK_NULL_HANDLE));
+      CHECK(vkQueueWaitIdle(queue));
+   }
+   vkDestroyCommandPool(dev, cpool, NULL);
+   vkDestroyBuffer(dev, buf, NULL);
+   vkFreeMemory(dev, mem, NULL);
+   vkDestroyDevice(dev, NULL);
+   _exit(0);
+}
+
+static int
+check_gpu_log(void)
+{
+   int fds[2];
+   if (pipe(fds))
+      return 1;
+   pid_t child = fork();
+   if (child == 0) {
+      close(fds[0]);
+      dup2(fds[1], 2);
+      gpu_log_child();
+   }
+   close(fds[1]);
+   static char log[1 << 16];
+   size_t len = 0;
+   for (ssize_t r; len < sizeof(log) - 1 && (r = read(fds[0], log + len, sizeof(log) - 1 - len)) > 0;)
+      len += r;
+   log[len] = 0;
+   close(fds[0]);
+   int status = 0;
+   if (child < 0 || waitpid(child, &status, 0) != child || !WIFEXITED(status) ||
+       WEXITSTATUS(status) != 0) {
+      fprintf(stderr, "MESA_KK_DEBUG=gpu child: status %#x\n%s", status, log);
+      return 1;
+   }
+   const char *line = strstr(log, "[kk-gpu] ");
+   const char *final = line ? strstr(line, " final: ") : NULL;
+   const char *gpu = final ? strstr(final, " gpu=6.0 ms busy=6.0 ms ") : NULL;
+   const char *cbs = gpu ? strstr(gpu, " cbs=3 ") : NULL;
+   if (!cbs) {
+      fprintf(stderr, "MESA_KK_DEBUG=gpu: no final [kk-gpu] line with gpu=6.0 "
+              "ms busy=6.0 ms cbs=3 in:\n%s", log);
+      return 1;
+   }
+   const char *end = strchr(line, '\n');
+   printf("ok gpu-log: %.*s\n", end ? (int)(end - line) : (int)strlen(line), line);
+   return 0;
+}
+
 /* The device type a fresh instance with these application and engine names
  * sees. */
 static VkPhysicalDeviceType
@@ -919,6 +1063,8 @@ main(int argc, char **argv)
                             .apiVersion = VK_API_VERSION_1_3};
    VkInstanceCreateInfo ici = {.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
                                .pApplicationInfo = &app};
+   if (check_gpu_log())
+      return 1;
    if (check_device_type())
       return 1;
    if (check_capture_timestamp_pool())

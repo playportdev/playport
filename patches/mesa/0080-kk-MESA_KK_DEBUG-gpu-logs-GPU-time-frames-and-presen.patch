@@ -1,0 +1,319 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 20 Oct 2026 16:57:27 +0200
+Subject: [PATCH] kk: MESA_KK_DEBUG=gpu logs GPU time, frames and present waits
+ each second
+
+To tell a GPU-bound frame from a CPU-bound one on the phone there was
+no number: the [kk-queue] lines give the GPU time of the first 40
+command buffers only. With MESA_KK_DEBUG=gpu, about once a second a
+[kk-gpu] line sums the interval:
+
+- gpu: each completed command buffer's GPUEndTime - GPUStartTime, from
+  the commit feedback handlers the queue already installs; busy: the
+  same with overlapping command buffers counted once, and its share of
+  the interval; cbs: how many completed;
+- frames and fps: submits that present a drawable; gpu/frame: busy over
+  frames;
+- acquire: time the presenting threads spent in the layer's nextDrawable
+  (wsi_metal_acquire_wait_ns), present-wait: in vkWaitForPresentKHR
+  (wsi_metal_present_wait_ns), both totals the Metal WSI keeps;
+- submit: CPU time in the driver's queue submit, re-recording included.
+  Command encoding happens in the application's recording calls and is
+  not counted.
+
+The interval is closed by the first submit a second after it opened, so
+an idle second is folded into the next line; the queue's end logs the
+last interval as "final". One process-wide record under a mutex:
+completion handlers run on Metal's threads. Off unless the flag is set;
+the dev app sets it (MESA_KK_DEBUG=compile,memory,gpu), the release app
+none. The host test runs three buffer copies in a child with the flag
+and finds gpu=6.0 ms busy=6.0 ms cbs=3 in the final line (the mock now
+gives each command buffer 2 ms of GPU time).
+
+Linear: PLA-364
+Class: diagnostics
+Evidence: docs/evidence/2026-10-20-rdr2-perf-ports.md
+Offered-upstream: no
+---
+ src/kosmickrisp/vulkan/kk_debug.c       |   1 +
+ src/kosmickrisp/vulkan/kk_debug.h       |   4 +
+ src/kosmickrisp/vulkan/kk_queue.c       | 113 ++++++++++++++++++++++++
+ src/vulkan/wsi/wsi_common_metal.c       |  24 ++++-
+ src/vulkan/wsi/wsi_common_metal_layer.h |   6 ++
+ 5 files changed, 146 insertions(+), 2 deletions(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_debug.c b/src/kosmickrisp/vulkan/kk_debug.c
+index 588831e..d85f2fd 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.c
++++ b/src/kosmickrisp/vulkan/kk_debug.c
+@@ -20,6 +20,7 @@ const struct debug_named_value debug_flags[] = {
+    {"memory", KK_DEBUG_MEMORY},
+    {"unroll_hints", KK_DEBUG_UNROLL_HINTS},
+    {"no_known_fail", KK_DEBUG_NO_KNOWN_FAIL},
++   {"gpu", KK_DEBUG_GPU},
+    {NULL, 0},
+ };
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_debug.h b/src/kosmickrisp/vulkan/kk_debug.h
+index f17caed..1ca9386 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.h
++++ b/src/kosmickrisp/vulkan/kk_debug.h
+@@ -43,6 +43,10 @@ enum kk_debug {
+    /* Turn the known-fail list off (kk_known_fail_skip): build every MSL,
+     * record nothing */
+    KK_DEBUG_NO_KNOWN_FAIL = 1ull << 11,
++   /* About once a second log [kk-gpu]: the GPU time of the command buffers
++    * that completed, frames presented, and the time the presenting threads
++    * were blocked for a drawable or a present (kk_gpu_log) */
++   KK_DEBUG_GPU = 1ull << 12,
+ };
+ 
+ extern enum kk_debug kk_mesa_debug_flags;
+diff --git a/src/kosmickrisp/vulkan/kk_queue.c b/src/kosmickrisp/vulkan/kk_queue.c
+index 15834fd..22e9d02 100644
+--- a/src/kosmickrisp/vulkan/kk_queue.c
++++ b/src/kosmickrisp/vulkan/kk_queue.c
+@@ -9,6 +9,9 @@
+ 
+ #include <stdio.h>
+ #include <time.h>
++#include "util/os_time.h"
++#include "util/simple_mtx.h"
++#include "util/u_atomic.h"
+ #include "util/u_debug.h"
+ #include "kk_buffer.h"
+ #include "kk_cmd_buffer.h"
+@@ -23,6 +26,108 @@
+ 
+ #include "vk_cmd_queue.h"
+ 
++#ifdef VK_USE_PLATFORM_METAL_EXT
++#include "wsi_common_metal_layer.h"
++#endif
++
++/* MESA_KK_DEBUG=gpu: what one interval of about a second cost, for telling a
++ * GPU-bound frame from a CPU-bound one. The GPU time is each completed
++ * command buffer's GPUEndTime - GPUStartTime, summed (gpu) and with overlaps
++ * counted once (busy); frames are the submits that present a drawable;
++ * acquire and present-wait are the time the presenting threads were blocked
++ * in the layer's nextDrawable and in vkWaitForPresentKHR; submit is the CPU
++ * time spent in the driver's queue submit (re-recording included). One
++ * process-wide record: completion handlers run on Metal's threads. */
++static struct {
++   simple_mtx_t lock;
++   int64_t start_ns; /* 0 until the first submit */
++   double gpu_s;
++   double busy_s;
++   double busy_end;
++   uint32_t cmd_buffers;
++   uint32_t frames;
++   int64_t submit_ns;
++   uint64_t acquire_wait_ns;      /* the WSI totals at start_ns */
++   uint64_t present_wait_ns;
++} kk_gpu = {.lock = SIMPLE_MTX_INITIALIZER};
++
++static void
++kk_gpu_wsi_totals(uint64_t *acquire_wait_ns, uint64_t *present_wait_ns)
++{
++#ifdef VK_USE_PLATFORM_METAL_EXT
++   *acquire_wait_ns = p_atomic_read(&wsi_metal_acquire_wait_ns);
++   *present_wait_ns = p_atomic_read(&wsi_metal_present_wait_ns);
++#else
++   *acquire_wait_ns = *present_wait_ns = 0;
++#endif
++}
++
++static void
++kk_gpu_account(const struct mtl_feedback_data *data)
++{
++   if (!KK_DEBUG(GPU) || !(data->gpu_end > data->gpu_start))
++      return;
++   simple_mtx_lock(&kk_gpu.lock);
++   kk_gpu.cmd_buffers++;
++   kk_gpu.gpu_s += data->gpu_end - data->gpu_start;
++   if (data->gpu_start >= kk_gpu.busy_end)
++      kk_gpu.busy_s += data->gpu_end - data->gpu_start;
++   else if (data->gpu_end > kk_gpu.busy_end)
++      kk_gpu.busy_s += data->gpu_end - kk_gpu.busy_end;
++   if (data->gpu_end > kk_gpu.busy_end)
++      kk_gpu.busy_end = data->gpu_end;
++   simple_mtx_unlock(&kk_gpu.lock);
++}
++
++/* Called after each submit with its frames and CPU time; logs once the
++ * interval reaches a second, or at once when final (the queue's end). */
++static void
++kk_gpu_log(uint32_t frames, int64_t submit_ns, bool final)
++{
++   if (!KK_DEBUG(GPU))
++      return;
++   int64_t now = os_time_get_nano();
++   simple_mtx_lock(&kk_gpu.lock);
++   kk_gpu.frames += frames;
++   kk_gpu.submit_ns += submit_ns;
++   if (!kk_gpu.start_ns) {
++      if (final) {
++         simple_mtx_unlock(&kk_gpu.lock);
++         return;
++      }
++      kk_gpu.start_ns = now;
++      kk_gpu_wsi_totals(&kk_gpu.acquire_wait_ns, &kk_gpu.present_wait_ns);
++   }
++   double span_s = (now - kk_gpu.start_ns) / 1e9;
++   if (span_s < 1.0 && !final) {
++      simple_mtx_unlock(&kk_gpu.lock);
++      return;
++   }
++   uint64_t acquire_wait_ns, present_wait_ns;
++   kk_gpu_wsi_totals(&acquire_wait_ns, &present_wait_ns);
++   double per_frame = kk_gpu.frames ? kk_gpu.busy_s * 1000.0 / kk_gpu.frames : 0.0;
++   fprintf(stderr,
++           "[kk-gpu] %.2f s%s: frames=%u fps=%.1f gpu=%.1f ms busy=%.1f ms "
++           "(%.0f%%) cbs=%u gpu/frame=%.2f ms acquire=%.1f ms "
++           "present-wait=%.1f ms submit=%.1f ms\n",
++           span_s, final ? " final" : "", kk_gpu.frames,
++           span_s > 0.0 ? kk_gpu.frames / span_s : 0.0, kk_gpu.gpu_s * 1000.0,
++           kk_gpu.busy_s * 1000.0,
++           span_s > 0.0 ? kk_gpu.busy_s * 100.0 / span_s : 0.0,
++           kk_gpu.cmd_buffers, per_frame,
++           (acquire_wait_ns - kk_gpu.acquire_wait_ns) / 1e6,
++           (present_wait_ns - kk_gpu.present_wait_ns) / 1e6,
++           kk_gpu.submit_ns / 1e6);
++   fflush(stderr);
++   kk_gpu.start_ns = now;
++   kk_gpu.acquire_wait_ns = acquire_wait_ns;
++   kk_gpu.present_wait_ns = present_wait_ns;
++   kk_gpu.gpu_s = kk_gpu.busy_s = 0.0;
++   kk_gpu.cmd_buffers = kk_gpu.frames = 0;
++   kk_gpu.submit_ns = 0;
++   simple_mtx_unlock(&kk_gpu.lock);
++}
++
+ struct kk_commit_data {
+    struct kk_queue *queue;
+    struct kk_cmd_buffer *cmd;
+@@ -48,6 +153,7 @@ kk_queue_release_cmd_buffer_locked(struct kk_queue *queue,
+ static void
+ check_device_lost(struct kk_device *dev, struct mtl_feedback_data *data)
+ {
++   kk_gpu_account(data);
+    static unsigned traced;
+    if (traced < 40 || data->error != MTL_COMMAND_QUEUE_ERROR_NONE) {
+       traced++;
+@@ -230,6 +336,8 @@ kk_queue_submit(struct vk_queue *vk_queue, struct vk_queue_submit *submit)
+    if (vk_queue_is_lost(&queue->vk))
+       return VK_ERROR_DEVICE_LOST;
+ 
++   int64_t submit_start = KK_DEBUG(GPU) ? os_time_get_nano() : 0;
++   uint32_t frames = 0u;
+    kk_queue_capture_frame(queue, false);
+ 
+    if (KK_DEBUG(MEMORY))
+@@ -275,6 +383,7 @@ kk_queue_submit(struct vk_queue *vk_queue, struct vk_queue_submit *submit)
+          mtl_release(cmd_buffer->drawable);
+          cmd_buffer->drawable = NULL;
+          kk_queue_capture_frame(queue, true);
++         frames++;
+       }
+    }
+ 
+@@ -286,6 +395,9 @@ kk_queue_submit(struct vk_queue *vk_queue, struct vk_queue_submit *submit)
+                        signal->signal_value);
+    }
+ 
++   if (KK_DEBUG(GPU))
++      kk_gpu_log(frames, os_time_get_nano() - submit_start, false);
++
+    return VK_SUCCESS;
+ }
+ 
+@@ -355,6 +467,7 @@ kk_queue_finish(struct kk_device *dev, struct kk_queue *queue)
+ {
+    /* There may be in-flight command buffers, wait for them to finish. */
+    kk_queue_wait_for_commits(queue);
++   kk_gpu_log(0u, 0, true);
+ 
+    mtl_command_queue_remove_residency_set(queue->mtl_handle,
+                                           dev->residency_set.handle);
+diff --git a/src/vulkan/wsi/wsi_common_metal.c b/src/vulkan/wsi/wsi_common_metal.c
+index 03a2fa9..68af120 100644
+--- a/src/vulkan/wsi/wsi_common_metal.c
++++ b/src/vulkan/wsi/wsi_common_metal.c
+@@ -9,6 +9,8 @@
+ #include "vk_util.h"
+ 
+ #include "util/cnd_monotonic.h"
++#include "util/os_time.h"
++#include "util/u_atomic.h"
+ #include "util/timespec.h"
+ #include "util/u_vector.h"
+ 
+@@ -38,6 +40,9 @@ static atomic_uint kk_wsi_trace_n[4];
+ #include <TargetConditionals.h>
+ #endif
+ 
++uint64_t wsi_metal_acquire_wait_ns;
++uint64_t wsi_metal_present_wait_ns;
++
+ struct wsi_metal {
+    struct wsi_interface base;
+ 
+@@ -652,7 +657,9 @@ wsi_metal_swapchain_acquire_next_image(struct wsi_swapchain *wsi_chain,
+ 
+    while (1) {
+       /* Try to acquire an drawable. Unfortunately we might block for up to 1 second. */
++      int64_t wait_start = os_time_get_nano();
+       CAMetalDrawable *drawable = wsi_metal_layer_acquire_drawable(chain->surface->pLayer);
++      p_atomic_add(&wsi_metal_acquire_wait_ns, (uint64_t)(os_time_get_nano() - wait_start));
+       if (drawable) {
+          uint32_t i = (chain->current_image_index++) % chain->base.image_count;
+          struct wsi_metal_image *image = &chain->images[i];
+@@ -846,6 +853,19 @@ wsi_metal_swapchain_wait_for_present(struct wsi_swapchain *wsi_chain,
+    return result;
+ }
+ 
++/* wsi_metal_swapchain_wait_for_present, its time added to
++ * wsi_metal_present_wait_ns */
++static VkResult
++wsi_metal_swapchain_wait_for_present_counted(struct wsi_swapchain *wsi_chain,
++                                             uint64_t waitValue,
++                                             uint64_t timeout)
++{
++   int64_t wait_start = os_time_get_nano();
++   VkResult result = wsi_metal_swapchain_wait_for_present(wsi_chain, waitValue, timeout);
++   p_atomic_add(&wsi_metal_present_wait_ns, (uint64_t)(os_time_get_nano() - wait_start));
++   return result;
++}
++
+ static void
+ wsi_metal_swapchain_set_hdr_metadata(struct wsi_swapchain *wsi_chain,
+                                      const VkHdrMetadataEXT* pMetadata)
+@@ -1034,8 +1054,8 @@ wsi_metal_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
+    chain->base.release_images = wsi_metal_swapchain_release_images;
+    chain->base.set_present_mode = wsi_metal_swapchain_set_present_mode;
+    chain->base.queue_present = wsi_metal_swapchain_queue_present;
+-   chain->base.wait_for_present = wsi_metal_swapchain_wait_for_present;
+-   chain->base.wait_for_present2 = wsi_metal_swapchain_wait_for_present;
++   chain->base.wait_for_present = wsi_metal_swapchain_wait_for_present_counted;
++   chain->base.wait_for_present2 = wsi_metal_swapchain_wait_for_present_counted;
+    chain->base.set_hdr_metadata = wsi_metal_swapchain_set_hdr_metadata;
+    chain->base.present_mode = wsi_swapchain_get_present_mode(wsi_device, pCreateInfo);
+    chain->base.image_count = num_images;
+diff --git a/src/vulkan/wsi/wsi_common_metal_layer.h b/src/vulkan/wsi/wsi_common_metal_layer.h
+index 35364ea..7e623a4 100644
+--- a/src/vulkan/wsi/wsi_common_metal_layer.h
++++ b/src/vulkan/wsi/wsi_common_metal_layer.h
+@@ -15,6 +15,12 @@
+ 
+ typedef void CAMetalDrawable;
+ 
++/* Nanoseconds the presenting threads have spent so far waiting for the
++ * layer's next drawable and in vkWaitForPresentKHR, read by KosmicKrisp's
++ * MESA_KK_DEBUG=gpu log (kk_gpu_log). Updated with p_atomic_add. */
++extern uint64_t wsi_metal_acquire_wait_ns;
++extern uint64_t wsi_metal_present_wait_ns;
++
+ void
+ wsi_metal_layer_size(const CAMetalLayer *metal_layer,
+    uint32_t *width, uint32_t *height);

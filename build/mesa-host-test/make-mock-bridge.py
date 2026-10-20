@@ -277,7 +277,8 @@ body("mtl_shared_event_get_signaled_value", "return ((struct kk_mock_obj *)event
 body("mtl_shared_event_set_signaled_value", "((struct kk_mock_obj *)event_handle)->value = value;")
 body("mtl_shared_event_wait_until_signaled_value", "return ((struct kk_mock_obj *)event_handle)->value >= value;")
 body("mtl_signal_event", "((struct kk_mock_obj *)event)->value = value;")
-# Commit options remember one feedback handler; commit calls it at once.
+# Commit options remember one feedback handler; commit calls it at once, with
+# a GPU time of 2 ms for each command buffer, back to back.
 body("mtl_new_commit_options", "return kk_mock_new(6, 0);")
 body("mtl_commit_options_add_feedback_handler", r'''
    struct kk_mock_obj *o = options;
@@ -285,11 +286,15 @@ body("mtl_commit_options_add_feedback_handler", r'''
    o->value = (uint64_t)(uintptr_t)data;''')
 body("mtl_command_queue_commit", r'''
    struct kk_mock_obj *o = options;
+   static double gpu_clock = 100.0;
    if (o && o->mem) {
       struct mtl_feedback_data fb = {
          .user_data = (void *)(uintptr_t)o->value,
+         .gpu_start = gpu_clock,
+         .gpu_end = gpu_clock + 0.002 * count,
          .error = MTL_COMMAND_QUEUE_ERROR_NONE,
       };
+      gpu_clock += 0.002 * count;
       ((mtl_feedback_handler_callback)o->mem)(&fb);
    }''')
 body("ns_is_os_version_at_least", "return major < 27 || (major == 27 && minor == 0 && patch == 0);")
