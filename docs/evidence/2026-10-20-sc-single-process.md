@@ -116,3 +116,18 @@ desktop numbers:
   preflight and the mapping refuses that load.
 - Nothing was left out for touching a protection, licence, privilege or authentication check: the
   ported code changes only CefApp, MessageLoop and IPC wiring, plus bounded tracing.
+
+## Main checkout (2026-10-20)
+
+Cherry-picked onto main as 700c61c and cdb177e; main's `pp build` (dev IPA
+`c903bf08d254ab34277f9f3a223030c1da074af70ceef511c1383b40e4282747`) left `app/artifacts.tsv` unchanged,
+so the `libntdll_unix.a` row is confirmed. `pp test` passed; Hollow Knight first frame+10 passed.
+
+**Arm A (run `sA`, `env.PLAYPORT_SC_SINGLE=1`, 0133 and 0138 off): void as a memory and sign-in
+result** — the owner had to put the app in the background, and it was killed in the background
+(`highwater 0`, 7,968,834 KB) at 17:28:10. Its log still shows the gate: `config: environment
+PLAYPORT_SC_SINGLE=1` 1, `preflight: exact helper build and all SHA-256 ranges accepted` 2,
+`verified browser` 2, `[sc-rph] SocialClubHelper.exe at` 2 (equal to verified), `refusing verified
+helper --type= child` 0, `race:` 0, `multi-process fallback` 0, `cannot read helper` 0,
+`SC_INIT_ERR` 0; the game signed in and Story was pressed (17:24:25). Arm B and an arm A rerun were not
+run: every later Story run was ended by the load (see 2026-10-20-rdr2-owner-defaults.md).
