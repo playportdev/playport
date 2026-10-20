@@ -173,3 +173,4 @@
 0173-ntdll-give-back-a-thread-s-exception-registry-entry-.patch
 0174-ntdll-write-an-async-I-O-s-status-block-at-any-addre.patch
 0175-wineserver-read-only-the-request-fds-of-threads-that.patch
+0176-ntdll-reuse-a-child-process-s-master-socket-entry-af.patch

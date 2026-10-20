@@ -1,0 +1,222 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 20 Oct 2026 11:45:15 +0200
+Subject: [PATCH] ntdll: reuse a child process's master socket entry after it
+ ends
+
+RDR2's Story runs 20261020T105836-rdr2-s1 and T112521-rdr2-s2 stopped
+drawing a few minutes into Story at the 56th start of the game's
+SocialClubHelper.exe. The game restarts its helper about every 5 s
+and the session root ends each restart (decision 0135). The child
+logged "[Wine child] proc-socket table FULL (64)!", then
+"wine client error:0: version mismatch 172/964": it had no entry of
+its own, so it spoke on another process's master socket. The game's
+frames stopped there and its threads stopped running.
+
+ios_register_proc_socket took the next of the 64 entries and never a
+given-back one: an exit or a teardown set the entry's PEB to NULL, but
+the count only grew. A registration now claims the lowest free entry
+(pp_proc_sockets.h), with a placeholder until its socket is in place,
+and readers scan up to the high-water mark, at most 64. An exit and a
+teardown give the entry back with one compare-and-swap, reading the
+socket first, so only one of them closes it, and never a later child's
+socket in a reused entry.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-20-rdr2-proc-socket-table.md
+Offered-upstream: no
+---
+ build/ntdll-unix/pp_proc_sockets.h | 83 ++++++++++++++++++++++++++++++
+ build/ntdll-unix/server_ios.c      | 51 +++++++++---------
+ 2 files changed, 106 insertions(+), 28 deletions(-)
+ create mode 100644 build/ntdll-unix/pp_proc_sockets.h
+
+diff --git a/build/ntdll-unix/pp_proc_sockets.h b/build/ntdll-unix/pp_proc_sockets.h
+new file mode 100644
+index 0000000..eb2bf92
+--- /dev/null
++++ b/build/ntdll-unix/pp_proc_sockets.h
+@@ -0,0 +1,83 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later
++ * The child pseudo-processes' master sockets (Playport, PLA-364, PLA-413).
++ * Each child registers its socket to the wineserver under its PEB, and gives
++ * the entry back as it exits or is torn down (peb = NULL). A registration
++ * used to take the next entry and never a given-back one, so the session's
++ * 64th child found the table full: RDR2 restarts its Social Club helper about
++ * every 5 s and the session root ends each restart (decision 0135), and the
++ * 56th helper start in runs s1 and s2 logged "proc-socket table FULL", then
++ * spoke on another process's socket ("version mismatch 172/964") and the game
++ * stopped drawing.
++ *
++ * A registration now takes the lowest free entry. Readers scan the table
++ * without a lock up to its high-water mark. A claimed entry holds PPPS_CLAIMED,
++ * which is no PEB, until it is published with its socket in place, so a
++ * teardown that looks for a PEB never closes a socket that is not yet there.
++ *
++ * Pure slot bookkeeping, so a host test compiles this header as is. */
++#ifndef PP_PROC_SOCKETS_H
++#define PP_PROC_SOCKETS_H
++
++#define PPPS_CLAIMED ((void *)1)   /* claimed, not yet published */
++
++struct ios_proc_socket
++{
++    void *peb;      /* NULL = free slot */
++    int fd;         /* this pseudo-process's master socket to wineserver */
++    int exiting;    /* per-process process_exiting flag (a BOOL) */
++};
++
++/* Claim the lowest free entry of max and raise the high-water mark *count
++ * past it; -1 when all max are taken. */
++static inline int ppps_claim( struct ios_proc_socket *table, int *count, int max )
++{
++    int i;
++    for (i = 0; i < max; i++)
++    {
++        void *expect = (void *)0;
++        if (__atomic_compare_exchange_n( &table[i].peb, &expect, PPPS_CLAIMED, 0,
++                                         __ATOMIC_ACQ_REL, __ATOMIC_RELAXED ))
++        {
++            int n = __atomic_load_n( count, __ATOMIC_ACQUIRE );
++            while (n < i + 1 && !__atomic_compare_exchange_n( count, &n, i + 1, 0,
++                                                              __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE ))
++                ;
++            return i;
++        }
++    }
++    return -1;
++}
++
++/* Fill a claimed entry; the PEB goes in last. */
++static inline void ppps_publish( struct ios_proc_socket *table, int i, void *peb, int fd )
++{
++    __atomic_store_n( &table[i].fd, fd, __ATOMIC_RELAXED );
++    __atomic_store_n( &table[i].exiting, 0, __ATOMIC_RELAXED );
++    __atomic_store_n( &table[i].peb, peb, __ATOMIC_RELEASE );
++}
++
++/* Give back entry i if it still names peb; *fd gets its socket, read before
++ * the entry is free, so the caller closes this child's socket and never a later
++ * child's. 1 for the one caller that gave it back (an exit and a teardown may
++ * race), else 0. */
++static inline int ppps_release( struct ios_proc_socket *table, int i, void *peb, int *fd )
++{
++    void *expect = peb;
++    int f;
++    if (!peb || peb == PPPS_CLAIMED || __atomic_load_n( &table[i].peb, __ATOMIC_ACQUIRE ) != peb) return 0;
++    f = __atomic_load_n( &table[i].fd, __ATOMIC_RELAXED );   /* published before the PEB */
++    if (!__atomic_compare_exchange_n( &table[i].peb, &expect, (void *)0, 0,
++                                      __ATOMIC_ACQ_REL, __ATOMIC_RELAXED ))
++        return 0;
++    *fd = f;
++    return 1;
++}
++
++/* How many entries a reader scans: the high-water mark, at most max. */
++static inline int ppps_scan_count( int *count, int max )
++{
++    int n = __atomic_load_n( count, __ATOMIC_ACQUIRE );
++    return n > max ? max : n;
++}
++
++#endif /* PP_PROC_SOCKETS_H */
+diff --git a/build/ntdll-unix/server_ios.c b/build/ntdll-unix/server_ios.c
+index 927a715..29e3854 100644
+--- a/build/ntdll-unix/server_ios.c
++++ b/build/ntdll-unix/server_ios.c
+@@ -177,21 +177,17 @@ sigset_t server_block_set;  /* signals to block during server calls */
+ static int fd_socket = -1;
+ 
+ #ifdef WINE_IOS
++#include "pp_proc_sockets.h"
+ #define IOS_MAX_PROC_SOCKETS 64
+-static struct ios_proc_socket
+-{
+-    void *peb;      /* NULL = free slot */
+-    int fd;         /* this pseudo-process's master socket to wineserver */
+-    BOOL exiting;   /* per-process process_exiting flag */
+-} ios_proc_sockets[IOS_MAX_PROC_SOCKETS];
+-static int ios_proc_socket_count = 0;
++static struct ios_proc_socket ios_proc_sockets[IOS_MAX_PROC_SOCKETS];
++static int ios_proc_socket_count = 0;   /* high-water mark (pp_proc_sockets.h) */
+ 
+ extern void *ios_jit_current_peb(void);
+ 
+ static int ios_proc_socket_index(void)
+ {
+     void *cur = ios_jit_current_peb();
+-    int i, n = ios_proc_socket_count;
++    int i, n = ppps_scan_count( &ios_proc_socket_count, IOS_MAX_PROC_SOCKETS );
+     if (cur)
+         for (i = 0; i < n; i++)
+             if (ios_proc_sockets[i].peb == cur) return i;
+@@ -310,17 +306,14 @@ static void ios_fdt_autopsy( const char *what, int fd, int ret, int err )
+ 
+ static void ios_register_proc_socket(void *peb_id, int fd)
+ {
+-    int idx = __sync_fetch_and_add(&ios_proc_socket_count, 1);
+-    if (idx >= IOS_MAX_PROC_SOCKETS)
++    int idx = ppps_claim( ios_proc_sockets, &ios_proc_socket_count, IOS_MAX_PROC_SOCKETS );
++    if (idx < 0)
+     {
+-        wine_log_write("[Wine child] proc-socket table FULL (%d)!", idx);
++        wine_log_write("[Wine child] proc-socket table FULL (%d live)!", IOS_MAX_PROC_SOCKETS);
+         return;
+     }
+     ios_fdt_reg( fd, FDT_MASTER, peb_id );
+-    ios_proc_sockets[idx].fd = fd;
+-    ios_proc_sockets[idx].exiting = FALSE;
+-    __sync_synchronize();
+-    ios_proc_sockets[idx].peb = peb_id;
++    ppps_publish( ios_proc_sockets, idx, peb_id, fd );
+ }
+ #endif
+ static _Thread_local int initial_cwd = -1;
+@@ -4031,19 +4024,16 @@ int ios_peb_is_dead_child( void *peb )
+  * or was torn down already). */
+ int ios_proc_end_take_socket( void *peb )
+ {
+-    int i, n = ios_proc_socket_count;
++    int i, n = ppps_scan_count( &ios_proc_socket_count, IOS_MAX_PROC_SOCKETS );
+ 
+-    if (n > IOS_MAX_PROC_SOCKETS) n = IOS_MAX_PROC_SOCKETS;
+     for (i = 0; peb && i < n; i++)
+     {
+-        void *expected = peb;
+         unsigned int d;
++        int fd;
+ 
+-        if (!__atomic_compare_exchange_n( &ios_proc_sockets[i].peb, &expected, NULL, 0,
+-                                          __ATOMIC_ACQ_REL, __ATOMIC_RELAXED ))
+-            continue;
+-        ios_fdt_note_close( ios_proc_sockets[i].fd, "killed-master", peb );
+-        close( ios_proc_sockets[i].fd );
++        if (!ppps_release( ios_proc_sockets, i, peb, &fd )) continue;
++        ios_fdt_note_close( fd, "killed-master", peb );
++        close( fd );
+         d = __sync_fetch_and_add( &ios_dead_peb_count, 1 );
+         if (d < IOS_DEAD_PEB_MAX) ios_dead_pebs[d] = peb;
+         return 1;
+@@ -4077,12 +4067,17 @@ void process_exit_wrapper( int status )
+             extern void ios_wow64_release_window_at_exit( void *owner );
+             ios_wow64_release_window_at_exit( dead_peb );
+         }
+-        ios_fdt_note_close( ios_proc_sockets[i].fd, "exit-master", dead_peb );
+-        close( ios_proc_sockets[i].fd );
+-        ios_proc_sockets[i].peb = NULL;
+         {
+-            unsigned int d = __sync_fetch_and_add( &ios_dead_peb_count, 1 );
+-            if (d < IOS_DEAD_PEB_MAX) ios_dead_pebs[d] = dead_peb;
++            int fd;
++            /* the entry is free for the next child once its socket is read */
++            if (ppps_release( ios_proc_sockets, i, dead_peb, &fd ))
++            {
++                unsigned int d;
++                ios_fdt_note_close( fd, "exit-master", dead_peb );
++                close( fd );
++                d = __sync_fetch_and_add( &ios_dead_peb_count, 1 );
++                if (d < IOS_DEAD_PEB_MAX) ios_dead_pebs[d] = dead_peb;
++            }
+         }
+         /* ml571: drop this pseudo-process's fd cache and close what it held.
+          * Must happen on the SAME identity used to key it, and before the JIT
