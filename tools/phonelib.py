@@ -530,16 +530,24 @@ class Phone:
         with contextlib.suppress(OSError):
             os.remove(local)
         name = "pull-" + os.path.basename(remote)
-        self.pmd(name, "apps", "pull", self.bundle_id(), remote, dest, secs=300, check=False)
+        # afc.py pull, not pymobiledevice3's apps pull: that one's 4 MB reads lost the
+        # connection on large files and left a 0-byte file behind (afc.py PULL_CHUNK).
+        cmd = ["timeout", "600", pmd_python(), os.path.join(HERE, "afc.py"), self.bundle_id(), "pull", remote, local]
         self.pull_error = None
-        if os.path.exists(local):
+        if self.dry:
+            print("DRY " + shlex.join(cmd), flush=True)
+            return None
+        with open(os.path.join(self.cmd_dir, name + ".out"), "wb") as out, \
+                open(os.path.join(self.cmd_dir, name + ".err"), "wb") as err:
+            rc = subprocess.run(cmd, stdout=out, stderr=err, env=pmd_env()).returncode
+        if rc == 0 and os.path.exists(local):
             return local
         try:
             with open(os.path.join(self.cmd_dir, name + ".err"), errors="replace") as f:
                 tail = [x.strip() for x in f if x.strip()]
         except OSError:
             tail = []
-        self.pull_error = (tail[-1][:300] if tail else "no file came back") + f" (see {self.cmd_dir}/{name}.err)"
+        self.pull_error = (tail[-1][:300] if tail else f"no file came back (exit {rc})") + f" (see {self.cmd_dir}/{name}.err)"
         return None
 
     def pull_bundle(self, remote, dest):

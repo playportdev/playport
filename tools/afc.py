@@ -16,6 +16,10 @@ USBMUXD_SOCKET_ADDRESS set.
                                   file a person or a probe put there). Nothing else: no directory, no
                                   other name, none of the app's own files
   afc.py BUNDLE_ID stat REMOTE    "file SIZE", "dir", "link TARGET" or "absent"
+  afc.py BUNDLE_ID pull REMOTE LOCAL
+                                  one plain file to the path LOCAL, in PULL_CHUNK reads: a
+                                  dropped connection is reopened and the read resumes at its
+                                  offset (pull_file); LOCAL appears only whole. Prints its size
   afc.py BUNDLE_ID pull-bundle REMOTE DEST
                                   a bundle directory (a Metal .gputrace) into DEST/<its name>:
                                   its files and subdirectories, and its links as local links,
@@ -39,10 +43,18 @@ import sys
 LOG, PREV = "Documents/s1-host.log", "Documents/s1-host.prev.log"
 
 
-async def main(bundle_id, op, args):
+async def connect(bundle_id):
     from pymobiledevice3.lockdown import create_using_usbmux
     from pymobiledevice3.services.house_arrest import HouseArrestService
-    afc = await HouseArrestService.create(await create_using_usbmux(), bundle_id)
+    return await HouseArrestService.create(await create_using_usbmux(), bundle_id)
+
+
+async def main(bundle_id, op, args):
+    if op == "pull" and len(args) == 2:
+        size = await pull_file(lambda: connect(bundle_id), args[0], args[1])
+        print(f"{size} {args[1]}")
+        return
+    afc = await connect(bundle_id)
     async with afc:
         if op == "rotate-log":
             if not await afc.exists(LOG):
@@ -196,6 +208,57 @@ async def pull_tree(afc, remote, local):
             with open(dst, "wb") as f:
                 f.write(await afc.get_file_contents(src))
             print(f"{v:>12} {dst}", flush=True)
+
+
+# pymobiledevice3's own pull reads 4 MB at a time; over the network link (netmuxd) the phone
+# dropped the connection on the first such read of an 18 MB s1-host.log, every time, leaving a
+# 0-byte file. Smaller reads came through.
+PULL_CHUNK = 512 * 1024
+PULL_TRIES = 6   # connections opened in a row without a byte of progress
+
+
+async def pull_file(connect, remote, local, chunk=PULL_CHUNK, tries=PULL_TRIES):
+    """REMOTE (a plain file) into the file LOCAL; its size. connect() opens a new AFC service.
+    A read that fails (the connection dropped) reopens one and seeks back to the bytes already
+    written; it gives up after `tries` connections in a row that add nothing. The bytes go to
+    LOCAL.part, renamed to LOCAL once all `size` (stat'ed at the start) are in, so a failed pull
+    leaves no LOCAL. A file still growing is pulled up to its starting size."""
+    part = local + ".part"
+    done, size, idle, last = 0, None, 0, None
+    with open(part, "wb") as f:
+        while size is None or done < size:
+            if idle >= tries:
+                os.remove(part)
+                raise SystemExit(f"{remote}: {done} of {size} bytes after {tries} connections "
+                                 f"without progress: {last}")
+            idle += 1
+            try:
+                afc = await connect()
+                async with afc:
+                    if size is None:
+                        k, _, v = (await kind(afc, remote)).partition(" ")
+                        if k != "file":
+                            os.remove(part)
+                            raise SystemExit(f"{remote}: " + ("no such file" if k == "absent" else "not a plain file"))
+                        size = int(v)
+                    h = await afc.fopen(remote)
+                    if done:
+                        await afc.fseek(h, done)
+                    while done < size:
+                        data = await afc.fread(h, min(chunk, size - done))
+                        if not data:
+                            break
+                        f.write(data)
+                        done += len(data)
+                        idle = 0
+                    await afc.fclose(h)
+            except SystemExit:
+                raise
+            except Exception as e:   # the connection dropped: reopen and resume
+                last = f"{type(e).__name__}: {e}"[:200]
+                f.flush()
+    os.replace(part, local)
+    return size
 
 
 async def kind(afc, path):
