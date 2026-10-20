@@ -5,7 +5,9 @@ madeira-unix 0154 (PLA-368), which released only the views of a child that exits
 yet shown on the phone. Amended by [0132](0132-empty-a-parked-processs-fex-band-in-place.md): with a
 thread parked, the band views kept below are emptied in place. Amended by
 [0134](0134-a-thread-gives-back-its-exception-registry-entry-when-it-ends.md): a parked thread gives
-back its exception registry entry and trampoline slot.
+back its exception registry entry and trampoline slot. Amended by
+[0143](0143-release-a-self-exited-childs-fex-band-as-a-killed-childs.md): a child that exits by
+itself has its band views released by the same rules.
 
 ## Context
 

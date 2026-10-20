@@ -1,0 +1,265 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 20 Oct 2026 19:28:57 +0200
+Subject: [PATCH] ntdll: release a self-exited child's FEX band views as a
+ killed child's
+
+0154 kept every view an exited child had in FEX's band, assuming FEX's
+ThreadTerm had already released a process that exits by itself. When
+one of the Rockstar launcher's CEF renderers ends itself with
+NtTerminateProcess(-1), its other 16-17 threads end through
+abort_thread and never pass ThreadTerm, so their rpmalloc heaps,
+call-return stacks and L1 caches stayed: `[view-owner] ... exited:
+freed 270 views (3056 MB), kept 559 (680 MB)` per renderer, 330-390 MB
+of it resident or compressed at RDR2's Story +60 s (the runtime's
+`[proc-mem]` fex row 3033/294/75 in f2 against 2499/23/16 in s6, where
+the launcher killed both renderers and 0169/0172 emptied them). Which
+path a renderer takes is a race in CEF; 12 of 14 runs took this one.
+
+0154's release, once every thread of the child has finished or is
+parked, now takes its views by 0169/0172's rules
+(ios_proc_end_release_views_locked, shared with the kill path): views
+it allocated in the band go, L1 caches always, the rest deleted with no
+thread parked and emptied in place with one parked (decision 0132); no
+view a parked thread's saved address lies in changes, in the band or
+out of it. Outside the band 0154's rules stay (private memory and
+images go; other sections, VPROT_SYSTEM views, the JIT pool and WoW64
+windows stay), as does every view of an i386 child. Only the child's
+own views are taken, once (ppe_take_view), and the band holds no
+donor-pool or swap-tier range. process_exit_wrapper has already given
+back its JIT-pool ranges and alias callbacks. Its TEBs keep 0154's
+handling.
+
+The `[view-owner] peb=... exited:` line now gives what [proc-end]
+gives: MB freed by class, emptied and kept, the views a parked
+register keeps, the finished and parked threads and the task's
+footprint before and after. Decision 0143 records the rule; its pure
+parts are tested by tools/tests/test_proc_end.py.
+
+Linear: PLA-413
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-20-rdr2-owner-defaults.md
+Offered-upstream: no; pseudo-processes sharing one view tree are the iOS port's
+---
+ build/ntdll-unix/pp_proc_end.h |  30 ++++++++++
+ build/ntdll-unix/virtual_ios.c | 101 ++++++++++++++++++++-------------
+ 2 files changed, 90 insertions(+), 41 deletions(-)
+
+diff --git a/build/ntdll-unix/pp_proc_end.h b/build/ntdll-unix/pp_proc_end.h
+index 33e19ab..1074e9a 100644
+--- a/build/ntdll-unix/pp_proc_end.h
++++ b/build/ntdll-unix/pp_proc_end.h
+@@ -18,6 +18,11 @@
+  * protection, so the view, its address range and every page's protection stay
+  * and only the memory goes.
+  *
++ * A child that exits by itself (0154) has its views released by the same rules
++ * once all its threads have finished or are parked (decision 0143): its
++ * NtTerminateProcess(-1) ends its other threads through abort_thread too, so
++ * their FEX state in the band was never released either.
++ *
+  * Pure decisions and formatting, so a host test compiles this header as is. */
+ #ifndef PP_PROC_END_H
+ #define PP_PROC_END_H
+@@ -158,6 +163,18 @@ static inline int ppe_host_pages( uint64_t base, uint64_t size, uint64_t host_pa
+     return *end > *start;
+ }
+ 
++/* Whether a dead process's view is one ppe_view_fate decides for; any other
++ * is kept as it is. Never a VPROT_SYSTEM view. In FEX's band, any view it
++ * allocated (rpmalloc spans, call-return stacks, L1 caches, the rest), not a
++ * section. Elsewhere, 0154's: its private memory and images, not other
++ * sections and nothing in the JIT pool or a WoW64 window (runtime_range). */
++static inline int ppe_view_released( int system, int band, int valloc, int image, int runtime_range )
++{
++    if (system) return 0;
++    if (band) return valloc;
++    return !runtime_range && (valloc || image);
++}
++
+ /* Take a view for its process's teardown: 1 once, when it is owner's; it then
+  * belongs to the runtime, so a second teardown or a later walk by process
+  * never frees or empties it again. */
+@@ -194,6 +211,19 @@ static inline int ppe_row( char *buf, size_t size, const void *peb, unsigned pid
+                      r->footprint_before >> 20, r->footprint_after >> 20 );
+ }
+ 
++/* The `[view-owner]` line of a child that exited by itself, as ppe_row's. */
++static inline int ppe_exit_row( char *buf, size_t size, const void *peb, const struct ppe_result *r,
++                                const struct ppe_census *c )
++{
++    return snprintf( buf, size, "peb=%p exited: freed image=%llu private=%llu spans=%llu callret=%llu l1=%llu "
++                     "band_other=%llu MB, emptied=%llu MB, kept %llu MB (%u view(s) a parked register points "
++                     "into); %u finished, %u parked thread(s); footprint %llu->%llu MB",
++                     peb, r->freed[PPE_IMAGE] >> 20, r->freed[PPE_PRIVATE] >> 20, r->freed[PPE_SPAN] >> 20,
++                     r->freed[PPE_CALLRET] >> 20, r->freed[PPE_L1] >> 20, r->freed[PPE_BAND_OTHER] >> 20,
++                     r->emptied >> 20, r->kept >> 20, r->kept_by_register, c->finished, c->parked,
++                     r->footprint_before >> 20, r->footprint_after >> 20 );
++}
++
+ /* The ended processes the server reported, until each is torn down or found
+  * to have exited by itself. Added from the server's thread, taken on others:
+  * a slot is claimed by its peb, and taking it clears it once. */
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 37c76bf..235261d 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -17724,9 +17724,11 @@ static BOOL ios_wow64_free_teb( struct thread_data *data )
+  * a thread of another process. What goes, through delete_view: views it made
+  * by allocation (private memory) and image views. What stays, counted as kept:
+  * views of other sections (shared memory a long-lived process may have cached,
+- * such as win32u's session blocks), VPROT_SYSTEM views, anything in FEX's band,
+- * the JIT pool or a WoW64 window, and every view of an i386 child (its window
+- * is torn down by 0139; its secondary threads are not in teb_list). */
++ * such as win32u's session blocks), VPROT_SYSTEM views, the JIT pool or a
++ * WoW64 window, and every view of an i386 child (its window is torn down by
++ * 0139; its secondary threads are not in teb_list). Decision 0143: its views
++ * in FEX's band go as a killed process's do, and with a thread parked no view
++ * a parked register names changes (ios_view_owner_release_exited_locked). */
+ #define IOS_VIEW_OWNER_DEAD_MAX 64
+ #define IOS_VIEW_OWNER_EXITED_TEBS 1024
+ static void *ios_view_owner_dead[IOS_VIEW_OWNER_DEAD_MAX];       /* virtual_mutex */
+@@ -17791,41 +17793,20 @@ static BOOL ios_view_owner_kept_range( const struct file_view *view )
+     return FALSE;
+ }
+ 
+-/* virtual_mutex held. Releases peb's views if all its threads have finished. */
++static void ios_view_owner_release_exited_locked( void *peb );
++
++/* virtual_mutex held. Releases peb's views if all its threads have finished
++ * (a parked thread counts as finished). */
+ static BOOL ios_view_owner_release_locked( void *peb )
+ {
+-    struct file_view *view, *next;
+     struct thread_data *data;
+-    unsigned long freed = 0, kept = 0;
+-    unsigned long long freed_bytes = 0, kept_bytes = 0;
+-    unsigned int threads = 0;
+ 
+     LIST_FOR_EACH_ENTRY( data, &teb_list, struct thread_data, entry )
+     {
+         if (!data->teb || data->teb->Peb != peb) continue;
+         if (!ios_view_owner_teb_exited( data->teb )) return FALSE;
+-        threads++;
+     }
+-    WINE_RB_FOR_EACH_ENTRY_DESTRUCTOR( view, next, &views_tree, struct file_view, entry )
+-    {
+-        if (view->ios_owner_peb != peb) continue;
+-        view->ios_owner_peb = NULL;
+-        if ((view->protect & VPROT_SYSTEM) || ios_view_owner_kept_range( view ) ||
+-            !(is_view_valloc( view ) || (view->protect & SEC_IMAGE)))
+-        {
+-            kept++;
+-            kept_bytes += view->size;
+-            continue;
+-        }
+-        freed++;
+-        freed_bytes += view->size;
+-        view->wow64_mapping = 0;   /* the server closed the dead process's handles (0139) */
+-        delete_view( view );
+-    }
+-    LIST_FOR_EACH_ENTRY( data, &teb_list, struct thread_data, entry )
+-        if (data->teb && data->teb->Peb == peb) ios_view_owner_forget_teb( data->teb );
+-    dprintf( 2, "[view-owner] peb=%p exited: freed %lu views (%llu MB), kept %lu (%llu MB); "
+-             "%u finished thread(s)\n", peb, freed, freed_bytes >> 20, kept, kept_bytes >> 20, threads );
++    ios_view_owner_release_exited_locked( peb );
+     return TRUE;
+ }
+ 
+@@ -17892,11 +17873,14 @@ void ios_view_owner_process_exit( void *peb )
+  * NtTerminateThread. With a thread parked, no view that holds an address its
+  * saved registers name changes; of the rest of the band the L1 caches go and
+  * every other view is emptied in place (decision 0132,
+- * ios_proc_end_empty_view_locked). A process that
+- * exited by itself is left to 0154; an i386 one keeps everything, as 0154
+- * keeps its views. Its fixed-base main image is not retired (that unmaps
+- * through the server on the process's own thread); ios_jit_reclaim_process
+- * marks it dead, so a later thread may delete it (ml983). */
++ * ios_proc_end_empty_view_locked). A process that exited by itself is left to
++ * 0154, whose release takes its views by the same rules (decision 0143): its
++ * own NtTerminateProcess(-1) ends its other threads through abort_thread as
++ * well, so their band was never released either. An i386 one keeps
++ * everything, as 0154 keeps its views. Its fixed-base main image is not
++ * retired (that unmaps through the server on the process's own thread);
++ * ios_jit_reclaim_process marks it dead, so a later thread may delete it
++ * (ml983). */
+ #include "pp_proc_mem.h"
+ #include "pp_proc_end.h"
+ 
+@@ -18022,10 +18006,11 @@ static unsigned long long ios_proc_end_footprint(void)
+     return info.phys_footprint;
+ }
+ 
+-/* virtual_mutex held. Deletes or empties the killed peb's views as
+- * pp_proc_end.h decides. Each view is taken once (ppe_take_view): it then
+- * belongs to the runtime, so no later walk by process touches it again. */
+-static void ios_proc_end_release_locked( void *peb, const struct ppe_census *census, struct ppe_result *r )
++/* virtual_mutex held. Deletes or empties a dead peb's views as pp_proc_end.h
++ * decides, for a killed process and one that exited by itself (decision
++ * 0143). Each view is taken once (ppe_take_view): it then belongs to the
++ * runtime, so no later walk by process touches it again. */
++static void ios_proc_end_release_views_locked( void *peb, const struct ppe_census *census, struct ppe_result *r )
+ {
+     struct file_view *view, *next;
+     struct thread_data *data;
+@@ -18062,9 +18047,8 @@ static void ios_proc_end_release_locked( void *peb, const struct ppe_census *cen
+             default:              cls = PPE_BAND_OTHER; break;
+             }
+         }
+-        if ((view->protect & VPROT_SYSTEM) ||
+-            (band ? !is_view_valloc( view )
+-                  : ios_view_owner_kept_range( view ) || !(is_view_valloc( view ) || (view->protect & SEC_IMAGE))))
++        if (!ppe_view_released( !!(view->protect & VPROT_SYSTEM), band, is_view_valloc( view ),
++                                !!(view->protect & SEC_IMAGE), !band && ios_view_owner_kept_range( view ) ))
+         {
+             r->kept += view->size;
+             continue;
+@@ -18081,6 +18065,14 @@ static void ios_proc_end_release_locked( void *peb, const struct ppe_census *cen
+         view->wow64_mapping = 0;   /* the server closed the dead process's handles (0139) */
+         delete_view( view );
+     }
++}
++
++/* virtual_mutex held. The killed peb's views, then its TEBs. */
++static void ios_proc_end_release_locked( void *peb, const struct ppe_census *census, struct ppe_result *r )
++{
++    struct thread_data *data;
++
++    ios_proc_end_release_views_locked( peb, census, r );
+     LIST_FOR_EACH_ENTRY( data, &teb_list, struct thread_data, entry )
+     {
+         if (!data->teb || data->teb->Peb != peb) continue;
+@@ -18094,6 +18086,33 @@ static void ios_proc_end_release_locked( void *peb, const struct ppe_census *cen
+     }
+ }
+ 
++/* virtual_mutex held; every thread of peb, a child that exited by itself, has
++ * finished or is parked (ios_view_owner_release_locked). Decision 0143: its
++ * views go by a killed process's rules, its band included: its own
++ * NtTerminateProcess(-1) ended its other threads through abort_thread, so
++ * FEX's ThreadTerm never released their rpmalloc heaps, call-return stacks and
++ * L1 caches, and with a thread parked the band is emptied in place and no view
++ * a parked register names changes. process_exit_wrapper has already given
++ * back its JIT-pool ranges and alias callbacks (ios_jit_reclaim_process). Its
++ * TEBs keep 0154's handling: those that finished are reclaimed and reused. */
++static void ios_view_owner_release_exited_locked( void *peb )
++{
++    struct ppe_result result;
++    struct ppe_census census;
++    struct thread_data *data;
++    char row[400];
++
++    memset( &result, 0, sizeof(result) );
++    result.footprint_before = ios_proc_end_footprint();
++    ios_proc_end_census_locked( peb, &census );
++    ios_proc_end_release_views_locked( peb, &census, &result );
++    LIST_FOR_EACH_ENTRY( data, &teb_list, struct thread_data, entry )
++        if (data->teb && data->teb->Peb == peb) ios_view_owner_forget_teb( data->teb );
++    result.footprint_after = ios_proc_end_footprint();
++    ppe_exit_row( row, sizeof(row), peb, &result, &census );
++    dprintf( 2, "[view-owner] %s (PLA-413)\n", row );
++}
++
+ /* At each thread creation and reclamation (ios_view_owner_sweep), outside
+  * virtual_mutex; never for the caller's own process. */
+ static void ios_proc_end_sweep( void *self )

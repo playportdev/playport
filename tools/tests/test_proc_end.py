@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Compile and exercise the rules for ending a terminated pseudo-process: madeira-unix 0169 (PLA-416), and 0172,
-which empties a parked process's FEX band views in place (decision 0132)."""
+"""Compile and exercise the rules for ending a terminated pseudo-process: madeira-unix 0169 (PLA-416), 0172,
+which empties a parked process's FEX band views in place (decision 0132), and 0203, which gives a child that exits by
+itself the same rules for its views, FEX's band included (decision 0143, PLA-413)."""
 import pathlib
 import shutil
 import subprocess
@@ -10,12 +11,13 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 SERIES = ROOT / "patches/madeira-unix"
 PATCHES = ("0169-ntdll-wineserver-tear-down-a-pseudo-process-another-.patch",
-           "0172-ntdll-empty-a-killed-process-s-FEX-band-views-in-pla.patch")
+           "0172-ntdll-empty-a-killed-process-s-FEX-band-views-in-pla.patch",
+           "0203-ntdll-release-a-self-exited-child-s-FEX-band-views-a.patch")
 HEADER = "build/ntdll-unix/pp_proc_end.h"
 
 
 def shipped_header(directory):
-    """pp_proc_end.h as the series leaves it: 0169 adds it, 0172 changes it."""
+    """pp_proc_end.h as the series leaves it: 0169 adds it, 0172 and 0203 change it."""
     subprocess.run(["git", "init", "-q", str(directory)], check=True)
     for name in PATCHES:
         subprocess.run(["git", "apply", f"--include={HEADER}", str(SERIES / name)], cwd=directory, check=True)
@@ -91,6 +93,19 @@ int main(void) {
     assert(!ppe_referenced(0x1000, 0x1000, (const uint64_t[]){ 0x2000 }, 1));
     assert(!ppe_referenced(0x1000, 0x1000, (const uint64_t[]){ 0xfff }, 1));
 
+    /* Which views of a dead process (killed, or exited by itself since 0203) the fate above decides for. In FEX's
+     * band, every view it allocated, its L1 caches, spans and call-return stacks among them, which 0154 kept for a
+     * self-exit; a section there stays. Outside it, 0154's: private memory and images, not other sections, and
+     * nothing in the JIT pool or a WoW64 window. Never a VPROT_SYSTEM view. */
+    assert(ppe_view_released(0, 1, 1, 0, 0));
+    assert(!ppe_view_released(0, 1, 0, 0, 0));    /* a section in the band */
+    assert(!ppe_view_released(1, 1, 1, 0, 0));    /* VPROT_SYSTEM */
+    assert(ppe_view_released(0, 0, 1, 0, 0));     /* private memory */
+    assert(ppe_view_released(0, 0, 0, 1, 0));     /* an image */
+    assert(!ppe_view_released(0, 0, 0, 0, 0));    /* another section: shared memory a live process may hold */
+    assert(!ppe_view_released(0, 0, 1, 0, 1));    /* the JIT pool or a WoW64 window */
+    assert(!ppe_view_released(1, 0, 1, 0, 0));
+
     /* Only whole host pages of a committed run are replaced. */
     uint64_t lo, hi;
     assert(ppe_host_pages(0x7c00001000ull, 0x8000, 0x3fff, &lo, &hi) && lo == 0x7c00004000ull && hi == 0x7c00008000ull);
@@ -142,6 +157,16 @@ int main(void) {
     assert(!strcmp(row, "peb=0x1533f8000 pid=0284 killed: freed image=251 private=120 spans=0 callret=0 l1=36 "
                         "band_other=0 pool=48 MB, emptied=700 MB, kept 790 MB (9 view(s) a parked register points "
                         "into); 37 finished, 11 parked thread(s); footprint 8140->7350 MB"));
+
+    /* A renderer that ended itself (f2's pid 0334): with nothing parked its band goes, as a killed one's. */
+    struct ppe_result x = { { 0, 3056ull << 20, 420ull << 20, 66ull << 20, 160ull << 20, 34ull << 20 }, 0, 0,
+                            4ull << 20, 0, 7100ull << 20, 6780ull << 20 };
+    struct ppe_census exited = { 0, 18, 0 };
+    assert(ppe_view_fate(PPE_SPAN, exited.parked, 0x7c10000000ull, 0x100000, refs, 2) == PPE_FREE);
+    ppe_exit_row(row, sizeof row, (void *)0x14b4a4000ull, &x, &exited);
+    assert(!strcmp(row, "peb=0x14b4a4000 exited: freed image=0 private=3056 spans=420 callret=66 l1=160 "
+                        "band_other=34 MB, emptied=0 MB, kept 4 MB (0 view(s) a parked register points into); "
+                        "18 finished, 0 parked thread(s); footprint 7100->6780 MB"));
     return 0;
 }
 '''
