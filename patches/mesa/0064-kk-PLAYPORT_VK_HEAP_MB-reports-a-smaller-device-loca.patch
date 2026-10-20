@@ -1,0 +1,53 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 20 Oct 2026 15:43:20 +0200
+Subject: [PATCH] kk: PLAYPORT_VK_HEAP_MB reports a smaller device-local heap
+
+KosmicKrisp reports heap 0's size as Metal's recommended working set,
+8,192 MiB on the reference phone, and PLAYPORT_VK_BUDGET_MB (0036)
+caps only the VK_EXT_memory_budget budget, on purpose. Red Dead
+Redemption 2's Graphics settings show 8,192 MB of video memory, so it
+reads the heap size, and since its camera's aspect was fixed (madeira-
+unix 0179) its footprint passes the 8 GB limit about 6 minutes into a
+Play (PLA-413).
+
+With PLAYPORT_VK_HEAP_MB=N (256 MiB up to, not including, the working
+set), heap 0 is reported as N MiB, and the budget never over it.
+Allocations past it still succeed, as Metal allows: nothing in the
+driver checks an allocation against the heap's size (the host test
+allocates 384 MiB under a 256 MiB heap). Unset, or out of that range,
+nothing changes. The host app sets it per game (decision 0142).
+
+Class: host-app
+Evidence: docs/evidence/2026-10-20-rdr2-owner-defaults.md
+Offered-upstream: no
+---
+ src/kosmickrisp/vulkan/kk_physical_device.c | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/src/kosmickrisp/vulkan/kk_physical_device.c b/src/kosmickrisp/vulkan/kk_physical_device.c
+index c8e36a0..e029a94 100644
+--- a/src/kosmickrisp/vulkan/kk_physical_device.c
++++ b/src/kosmickrisp/vulkan/kk_physical_device.c
+@@ -1298,6 +1298,21 @@ kk_enumerate_physical_devices(struct vk_instance *_instance)
+               sysmem_size_B >> 20, budget_cap_MB);
+    }
+ 
++   /* PLAYPORT_VK_HEAP_MB (256 MiB up to the working set), set per game by the
++    * host app: heap 0's size is reported as this rather than Metal's
++    * recommended working set, for a game that sizes its pools from the heap
++    * size, not the budget (RDR2's settings show the heap size as its video
++    * memory). Allocations past it still succeed, as Metal allows; the budget
++    * stays as above, never over the reported size. */
++   int64_t heap_cap_MB = debug_get_num_option("PLAYPORT_VK_HEAP_MB", 0);
++   if (heap_cap_MB >= 256 && (uint64_t)heap_cap_MB < (sysmem_size_B >> 20)) {
++      fprintf(stderr, "[kk-memory] heap 0: size %" PRId64 " MiB reported in place of "
++              "%" PRIu64 " MiB (PLAYPORT_VK_HEAP_MB)\n", heap_cap_MB, sysmem_size_B >> 20);
++      sysmem_size_B = (uint64_t)heap_cap_MB << 20;
++      if (!pdev->heap_budget_cap_B || pdev->heap_budget_cap_B > sysmem_size_B)
++         pdev->heap_budget_cap_B = sysmem_size_B;
++   }
++
+    uint32_t sysmem_heap_idx = pdev->mem_heap_count++;
+    pdev->mem_heaps[sysmem_heap_idx] = (struct kk_memory_heap){
+       .size = sysmem_size_B,

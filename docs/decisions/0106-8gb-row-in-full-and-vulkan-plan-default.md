@@ -2,7 +2,9 @@
 
 **Status:** accepted, 2026-10-15, by the owner ("fix vulkan, set 8gb limits as I said, the 8gb
 test that will be run one day can change them"); the 512 MiB margin is the implementing
-worker's choice. Amends [0105](0105-memory-defaults-per-phone.md).
+worker's choice. Amended by
+[0142](0142-rdr2-owner-test-defaults-heap-size-sync-and-afp.md) (a title may set KosmicKrisp's heap
+size too). Amends [0105](0105-memory-defaults-per-phone.md).
 [PLA-355](https://linear.app/playportdev/issue/PLA-355) (the 8 GB row),
 [PLA-362](https://linear.app/playportdev/issue/PLA-362) (Vulkan),
 [PLA-216](https://linear.app/playportdev/issue/PLA-216).

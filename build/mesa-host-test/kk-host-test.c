@@ -7,8 +7,9 @@
  * driver's CPU side: that every pipeline compiles (NIR validation runs in a
  * debug build), that every MSL library is fully translated (the mock exits 3
  * otherwise) and that recording the draws does not crash or assert. First,
- * which instances get a discrete device type, and that PLAYPORT_VK_BUDGET_MB
- * caps the heap's budget and not its size.
+ * which instances get a discrete device type, that PLAYPORT_VK_BUDGET_MB
+ * caps the heap's budget and not its size, and that PLAYPORT_VK_HEAP_MB
+ * reports a smaller heap that allocations may still pass.
  *
  *    kk-host-test DRIVER.so SPV_DIR
  *
@@ -366,6 +367,74 @@ check_budget_cap(const VkInstanceCreateInfo *ici)
               (unsigned long long)cap_budget);
       return 1;
    }
+   return 0;
+}
+
+/* patches/mesa 0064: PLAYPORT_VK_HEAP_MB reports heap 0's size as that
+ * value and keeps the budget at or under it; under 256 or at the working set
+ * or over it changes nothing. Allocations past the reported size still
+ * succeed: two of 192 MiB under a 256 MiB heap. */
+static int
+check_heap_cap(const VkInstanceCreateInfo *ici)
+{
+   uint64_t size, budget, low_size, high_size, both_size, both_budget, unused;
+   unsetenv("PLAYPORT_VK_BUDGET_MB");
+   setenv("PLAYPORT_VK_HEAP_MB", "1536", 1);
+   heap_and_budget(ici, &size, &budget);
+   setenv("PLAYPORT_VK_HEAP_MB", "100", 1);
+   heap_and_budget(ici, &low_size, &unused);
+   setenv("PLAYPORT_VK_HEAP_MB", "5120", 1);
+   heap_and_budget(ici, &high_size, &unused);
+   setenv("PLAYPORT_VK_HEAP_MB", "3072", 1);
+   setenv("PLAYPORT_VK_BUDGET_MB", "1024", 1);
+   heap_and_budget(ici, &both_size, &both_budget);
+   unsetenv("PLAYPORT_VK_BUDGET_MB");
+   printf("memory: heap at 1536: heap %llu MiB, budget %llu MiB; 100 and "
+          "5120 (ignored): heap %llu, %llu MiB; heap 3072 budget 1024: "
+          "heap %llu MiB, budget %llu MiB\n",
+          (unsigned long long)size, (unsigned long long)budget,
+          (unsigned long long)low_size, (unsigned long long)high_size,
+          (unsigned long long)both_size, (unsigned long long)both_budget);
+   if (size != 1536 || budget > 1536 || low_size != 5120 ||
+       high_size != 5120 || both_size != 3072 || both_budget != 1024) {
+      fprintf(stderr, "PLAYPORT_VK_HEAP_MB did not set heap 0 as expected\n");
+      return 1;
+   }
+
+   setenv("PLAYPORT_VK_HEAP_MB", "256", 1);
+   VkInstance i;
+   CHECK(((PFN_vkCreateInstance)gipa(NULL, "vkCreateInstance"))(ici, NULL, &i));
+   unsetenv("PLAYPORT_VK_HEAP_MB");
+   uint32_t count = 1;
+   VkPhysicalDevice pd;
+   CHECK(((PFN_vkEnumeratePhysicalDevices)gipa(i, "vkEnumeratePhysicalDevices"))(
+      i, &count, &pd));
+   float prio = 1.0f;
+   VkDeviceQueueCreateInfo qci = {
+      .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+      .queueCount = 1,
+      .pQueuePriorities = &prio,
+   };
+   VkDeviceCreateInfo dci = {
+      .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+      .queueCreateInfoCount = 1,
+      .pQueueCreateInfos = &qci,
+   };
+   VkDevice d;
+   CHECK(((PFN_vkCreateDevice)gipa(i, "vkCreateDevice"))(pd, &dci, NULL, &d));
+   PFN_vkAllocateMemory alloc = (PFN_vkAllocateMemory)gipa(i, "vkAllocateMemory");
+   PFN_vkFreeMemory release = (PFN_vkFreeMemory)gipa(i, "vkFreeMemory");
+   VkMemoryAllocateInfo mai = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+                               .allocationSize = 192ull << 20,
+                               .memoryTypeIndex = 0};
+   VkDeviceMemory a, b;
+   CHECK(alloc(d, &mai, NULL, &a));
+   CHECK(alloc(d, &mai, NULL, &b));
+   release(d, a, NULL);
+   release(d, b, NULL);
+   ((PFN_vkDestroyDevice)gipa(i, "vkDestroyDevice"))(d, NULL);
+   ((PFN_vkDestroyInstance)gipa(i, "vkDestroyInstance"))(i, NULL);
+   printf("ok heap-cap: 384 MiB allocated under a 256 MiB heap\n");
    return 0;
 }
 
@@ -855,6 +924,8 @@ main(int argc, char **argv)
    if (check_capture_timestamp_pool())
       return 1;
    if (check_budget_cap(&ici))
+      return 1;
+   if (check_heap_cap(&ici))
       return 1;
    CHECK(vkCreateInstance(&ici, NULL, &inst));
 

@@ -78,7 +78,7 @@ class JumboHoldTests(unittest.TestCase):
         self.assertEqual(cage, ["The Witcher 3"])
         runtimes = {key: runtime_keys(entry.get("settings", {}).get("runtime", ""))
                     for key, entry in compat["titles"].items()}
-        self.assertEqual(runtimes["app-1174180"], {"jumbo-mb": "8960"})   # RDR2 holds no cage
+        self.assertEqual(runtimes["app-1174180"]["jumbo-mb"], "8960")   # RDR2 holds no cage
         self.assertEqual([key for key, keys in runtimes.items() if "cage-hold" in keys], [])
 
 

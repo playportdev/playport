@@ -1,8 +1,8 @@
 {
   "titles": {
     "app-1174180": {
-      "settings": {"windowsServices": true, "jitPoolMB": 896, "steamAPI": "client", "graphics": "vulkan", "khronosVulkanLoader": true, "endLauncherAfterSignIn": true, "runtime": "jumbo-mb=8960"},
-      "reason": "The Rockstar Games Launcher this game starts installs and uses a Windows service, with its service it outgrows the default JIT pool, it asks Steam's client for the game, and it draws its window through Vulkan. Its Social Club needs its own Vulkan layer, which only the Khronos Vulkan loader loads, so the game gets that loader in place of Wine's. Once the game shows its first frame, Playport closes the launcher and its Social Club browser, never the game, to leave the game its memory. The game reserves 8,960 MB of address space in one piece, so Playport keeps a gap that size free from the start."
+      "settings": {"windowsServices": true, "jitPoolMB": 896, "steamAPI": "client", "graphics": "vulkan", "khronosVulkanLoader": true, "endLauncherAfterSignIn": true, "runtime": "jumbo-mb=8960 env.PLAYPORT_VK_HEAP_MB=3072 env.MADEIRA_FASTSYNC_SEM=1 env.FEX_HOSTFEATURES=disableafp inproc-sync=1"},
+      "reason": "The Rockstar Games Launcher this game starts installs and uses a Windows service, with its service it outgrows the default JIT pool, it asks Steam's client for the game, and it draws its window through Vulkan. Its Social Club needs its own Vulkan layer, which only the Khronos Vulkan loader loads, so the game gets that loader in place of Wine's. Once the game shows its first frame, Playport closes the launcher and its Social Club browser, never the game, to leave the game its memory. The game reserves 8,960 MB of address space in one piece, so Playport keeps a gap that size free from the start. For a test the owner plays with chosen settings, the game is told its graphics memory is 3,072 MB rather than 8,192 MB, waits on events and semaphores in the app itself rather than through the Windows server, and runs its x86 code without the CPU's alternate floating-point mode; each can be changed back in the game's Runtime keys."
     },
     "epic-Buffalo": {
       "settings": {"aspect": "16:9"},
