@@ -292,7 +292,7 @@ not that gameplay appeared: inspect the timeline, log and screenshot.
   `{"screen":"native","frameLimit":0}`. `arguments` adds to the game's command
   line, e.g. `{"arguments":"-DX12"}`. A dev build's
   `graphicsOptions` (the Developer section's *Graphics options*, decision
-  [0060](decisions/0060-graphics-options.md), [0135](decisions/0135-graphics-options-set-any-variable.md))
+  [0060](decisions/0060-graphics-options.md), [0137](decisions/0137-graphics-options-set-any-variable.md))
   set any environment variable: `{"graphicsOptions":"dxvk.tilerMode=False VKD3D_CONFIG=one_time_submit"}`
   (a `dxvk.`/`dxgi.`/`d3d11.` item goes into `DXVK_CONFIG`, after the Vulkan backend's own
   `dxvk.tilerMode = False`, decision [0066](decisions/0066-dxvk-tiler-mode-off.md); a repeated

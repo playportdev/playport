@@ -30,7 +30,7 @@ Built in the side copy `.work/worktrees/kkcompile` (decision 0117), branch `kkco
     be made, the two libraries build one after the other.
   - `library_size_opt`: libraries build with `MTLCompileOptions.optimizationLevel =
     MTLLibraryOptimizationLevelSize`.
-- **The switches reach the phone** through a game's Graphics options. Decision 0135 (the owner's,
+- **The switches reach the phone** through a game's Graphics options. Decision 0137 (the owner's,
   this day) lets that row set any variable; these switches use `MESA_KK_EXPERIMENTAL`, which 0060
   already allowed. Setting `MESA_KK_EXPERIMENTAL` leaves the dev build's
   `MESA_KK_DEBUG=compile,memory` in place.

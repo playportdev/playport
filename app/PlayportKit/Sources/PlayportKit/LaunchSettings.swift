@@ -50,7 +50,7 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
     /// LaunchSettings.runtimeKeys parses them; TitleConfig writes them after the title's.
     public var runtime: String
     /// The game's environment variables and Vulkan layers' options (per game only; a dev
-    /// build's, decisions 0060 and 0135), as typed: items split at spaces, each `NAME=value`
+    /// build's, decisions 0060 and 0137), as typed: items split at spaces, each `NAME=value`
     /// for any variable or a DXVK option (`dxvk.tilerMode=False`), which goes into
     /// DXVK_CONFIG. LaunchSettings.graphicsEnvironment parses them.
     public var graphicsOptions: String
@@ -162,7 +162,7 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
 
     /// The list variables a game's Graphics options join when repeated (decision 0060):
     /// DXVK's and vkd3d-proton's option strings and KosmicKrisp's debug, experimental and
-    /// workaround switches. Any other variable may be set too (decision 0135); repeated,
+    /// workaround switches. Any other variable may be set too (decision 0137); repeated,
     /// its last item wins.
     public static let graphicsVariables = ["DXVK_CONFIG", "VKD3D_CONFIG", "MESA_KK_DEBUG",
                                            "MESA_KK_EXPERIMENTAL", "MESA_KK_DISABLE_WORKAROUNDS"]

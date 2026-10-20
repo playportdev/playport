@@ -1051,7 +1051,7 @@ private struct GameDetailPage: View {
                                      placeholder: "For example vram-mb=1024 inproc-sync=1",
                                      maxLength: 200) { settings.wrappedValue.runtime = $0 }
         }
-        // The game's environment variables and Vulkan layers' options (decisions 0060, 0135).
+        // The game's environment variables and Vulkan layers' options (decisions 0060, 0137).
         let options = settings.wrappedValue.graphicsOptions.trimmingCharacters(in: .whitespaces)
         PadRow(id: "opt:graphicsOptions", title: "Graphics options",
                subtitle: options.isEmpty || LaunchSettings.graphicsEnvironment(options) != nil ? forThisGame(compatOptions)

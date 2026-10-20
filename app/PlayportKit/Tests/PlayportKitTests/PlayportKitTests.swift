@@ -871,7 +871,7 @@ final class FEXProfileTests: XCTestCase {
         XCTAssertEqual(LaunchSettings.graphicsEnvironment("VKD3D_CONFIG=one_time_submit VKD3D_CONFIG=no_upload_hvv MESA_KK_EXPERIMENTAL=all"),
                        ["VKD3D_CONFIG": "one_time_submit,no_upload_hvv", "MESA_KK_EXPERIMENTAL": "all"])
         XCTAssertEqual(LaunchSettings.graphicsEnvironment(""), [:])
-        // Any other variable is set too (decision 0135); repeated, its last value wins.
+        // Any other variable is set too (decision 0137); repeated, its last value wins.
         XCTAssertEqual(LaunchSettings.graphicsEnvironment("_X1=a MESA_KK_EXPERIMENTAL=parallel_stages _X1=b"),
                        ["_X1": "b", "MESA_KK_EXPERIMENTAL": "parallel_stages"])
         // Anything else is refused whole: a bare word, an unknown section, a bad name.

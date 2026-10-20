@@ -1,4 +1,4 @@
-# 0135: A dev build's Graphics options set any environment variable
+# 0137: A dev build's Graphics options set any environment variable
 
 **Status:** accepted, 2026-10-20, by the owner (relayed by the supervisor during PLA-364).
 Supersedes [0060](0060-graphics-options.md)'s allowlist; the rest of 0060 holds. Dev builds
