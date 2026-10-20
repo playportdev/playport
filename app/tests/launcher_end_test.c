@@ -83,12 +83,28 @@ int main(void)
         CHECK(!pp_launcher_end(under, 3, 2));   /* and a helper under it */
     }
 
+    /* the game's own Social Club end (decision 0133): the game's helper and its renderer only;
+     * never the game, its crash handler, the launcher's helpers or the namesake under the game */
+    nended = 0;
+    for (i = 0; i < n; i++)
+        if (pp_game_social_club(p, n, i)) ended[nended++] = p[i].pid;
+    CHECK(nended == 2 && ended[0] == 0x500 && ended[1] == 0x510);
+    nended = 0;
+    for (i = 0; i < n; i++)
+        if (pp_launcher_end(p, n, i)) ended[nended++] = p[i].pid;
+
     /* after the end the launcher's processes are gone; RDR2.exe's parent is a dead id */
     p[1] = p[--n]; p[2] = p[--n];
     for (i = 0; i < n; i++)
         if (p[i].pid == 0x1b4 || p[i].pid == 0x284) { p[i] = p[--n]; i = (uint32_t)-1; }
     for (i = 0; i < n; i++) CHECK(!pp_launcher_end(p, n, i));   /* nothing of the launcher is left */
     for (i = 0; i < n; i++) CHECK(!pp_launcher_restart(p, n, i, ended, nended));   /* the game's are no restarts */
+    {
+        /* with the launcher gone, the game's helpers are still the game's, and still the only ones */
+        uint32_t sc = 0;
+        for (i = 0; i < n; i++) sc += pp_game_social_club(p, n, i) ? 1u : 0u;
+        CHECK(sc == 2);
+    }
     {
         /* restarts: the launcher again (from PlayRDR2.exe), a helper of an ended launcher, a helper of
          * the restarted launcher once the root knows it; never the game's new helper, nor a helper
@@ -127,6 +143,7 @@ int main(void)
         CHECK(!pp_launcher_under_game(loop, 2, 0));
         CHECK(!pp_launcher_helper(loop, 2, 0));
         CHECK(!pp_launcher_restart(loop, 2, 0, &none, 1));
+        CHECK(!pp_game_social_club(loop, 2, 0));
     }
 
     printf("%s\n", failures ? "launcher end: FAILED" : "launcher end: ok");

@@ -66,6 +66,13 @@ enum {
      * finds running once more, and reports the rest. It carries no names or arg; code is
      * the processes it ended. */
     PP_CONTROL_END_LAUNCHER = 9,
+    /* A control, a dev build's only, after the game's sign-in (decision 0133, amending 0130):
+     * the root ends the game's own Social Club helpers in the title's job, every
+     * SocialClubHelper.exe whose parent chain reaches RDR2.exe (launcher_end.h), never
+     * RDR2.exe or anything else, once; the first 8 later starts of them are ended once more,
+     * the rest only logged. It carries
+     * no names or arg; code is the processes it ended. */
+    PP_CONTROL_END_GAME_SOCIAL_CLUB = 10,
 };
 
 /* The most a CLOSE waits before it ends the title. */
@@ -103,7 +110,8 @@ static inline int pp_session_control_valid(const pp_session_control *c, uint32_t
 {
     if (!c || size != sizeof(*c) || c->magic != PP_SESSION_MAGIC || !c->sequence) return 0;
     if (c->kind == PP_CONTROL_CLOSE) return c->arg <= PP_CONTROL_MAX_WAIT_MS;
-    return (c->kind == PP_CONTROL_PAUSE || c->kind == PP_CONTROL_RESUME || c->kind == PP_CONTROL_END_LAUNCHER) &&
+    return (c->kind == PP_CONTROL_PAUSE || c->kind == PP_CONTROL_RESUME || c->kind == PP_CONTROL_END_LAUNCHER ||
+            c->kind == PP_CONTROL_END_GAME_SOCIAL_CLUB) &&
            c->arg == 0;
 }
 

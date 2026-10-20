@@ -38,7 +38,9 @@
 // the Rockstar Games Launcher's tree one process at a time (never the game or a process
 // under it, launcher_end.h), each logged as a `[launcher]` line, then counts and logs
 // every start of the launcher's images (the job's messages) and ends the first restarts
-// once more.
+// once more. A dev build may also ask it, after the game's sign-in, to end the game's own
+// Social Club helpers once (decision 0133), `[game-sc]` lines; their first restarts are ended
+// once more and the rest logged.
 //
 // For a play served by Playport's steamclient64.dll (decision 0115), it is the
 // prefix's running Steam client: its process id is ActiveProcess's pid, which a
@@ -328,6 +330,8 @@ static DWORD launcher_ended_at;
 static int launcher_round_done;                       /* restarts were ended once more */
 static DWORD launcher_restarts, launcher_restarts_ended, launcher_restarts_gone, launcher_restarts_left;
 static DWORD launcher_other_starts, launcher_unopened_starts;
+static int game_sc_ended;                             /* the game's Social Club end ran (decision 0133) */
+static DWORD game_sc_ended_at, game_sc_restarts;
 
 /* A new title: nothing of the launcher's end is done yet. */
 static void launcher_reset(void)
@@ -336,6 +340,8 @@ static void launcher_reset(void)
     launcher_ended = launcher_round_done = 0;
     launcher_restarts = launcher_restarts_ended = launcher_restarts_gone = launcher_restarts_left = 0;
     launcher_other_starts = launcher_unopened_starts = 0;
+    game_sc_ended = 0;
+    game_sc_restarts = 0;
 }
 
 static void launcher_know(uint32_t pid)
@@ -484,15 +490,81 @@ static void launcher_new_process(uint32_t title_seq, DWORD pid, HANDLE job, DWOR
                       (unsigned long long)launcher_restarts, (unsigned long long)exit_code);
 }
 
-/* The job's messages since the last look: after the end, every process it got. */
+/* Ends the game's own Social Club helpers in the title's job (`pids`), once (decision 0133):
+ * every SocialClubHelper.exe whose parent chain reaches RDR2.exe, never the game itself or
+ * any other image. How many it ended. */
+static DWORD end_game_social_club(uint32_t title_seq, const DWORD *pids, DWORD npids)
+{
+    DWORD n = launcher_snapshot(), i, done = 0;
+    char name[MAX_PATH];
+
+    if (!n) {
+        say("%s %u: [game-sc] no process list (error %u)", what, (unsigned long long)title_seq,
+            (unsigned long long)GetLastError());
+        return 0;
+    }
+    for (i = 0; i < n; i++) {
+        HANDLE h;
+        if (!pid_in(launcher_lp[i].pid, pids, npids) || !pp_game_social_club(launcher_lp, n, i)) continue;
+        if (!WideCharToMultiByte(CP_UTF8, 0, launcher_pe[i].szExeFile, -1, name, sizeof(name), NULL, NULL)) name[0] = 0;
+        if ((h = OpenProcess(PROCESS_TERMINATE, FALSE, launcher_lp[i].pid)) && TerminateProcess(h, ERROR_PROCESS_ABORTED)) {
+            done++;
+            say("%s %u: [game-sc] ended %s pid %u (parent %u)", what, (unsigned long long)title_seq, name,
+                (unsigned long long)launcher_lp[i].pid, (unsigned long long)launcher_lp[i].parent);
+        } else {
+            say("%s %u: [game-sc] could not end %s pid %u (error %u)", what, (unsigned long long)title_seq, name,
+                (unsigned long long)launcher_lp[i].pid, (unsigned long long)GetLastError());
+        }
+        if (h) CloseHandle(h);
+    }
+    say("%s %u: [game-sc] done: %u ended of %u processes in the job", what, (unsigned long long)title_seq,
+        (unsigned long long)done, (unsigned long long)npids);
+    return done;
+}
+
+/* The most restarts of the game's Social Club helpers the root ends once more (decision 0133):
+ * the game starts a new browser about a second after the end; past this many, the rest run. */
+#define GAME_SC_RESTART_ENDS 8u
+
+/* A process the title's job got after the game's Social Club end: when it is one of the game's
+ * Social Club helpers again, logged and, the first GAME_SC_RESTART_ENDS times, ended once more. */
+static void game_sc_new_process(uint32_t title_seq, DWORD pid)
+{
+    DWORD n = launcher_snapshot();
+    int i = pp_launcher_find(launcher_lp, n, pid);
+    HANDLE h;
+    if (i < 0 || !pp_game_social_club(launcher_lp, n, (uint32_t)i)) return;
+    game_sc_restarts++;
+    if (game_sc_restarts > GAME_SC_RESTART_ENDS) {
+        say("%s %u: [game-sc] after the end: SocialClubHelper.exe pid %u (parent %u) started %u ms after it; left "
+            "running (%u restarts ended already)", what, (unsigned long long)title_seq, (unsigned long long)pid,
+            (unsigned long long)launcher_lp[i].parent, (unsigned long long)(GetTickCount() - game_sc_ended_at),
+            (unsigned long long)GAME_SC_RESTART_ENDS);
+        return;
+    }
+    if ((h = OpenProcess(PROCESS_TERMINATE, FALSE, pid)) && TerminateProcess(h, ERROR_PROCESS_ABORTED))
+        say("%s %u: [game-sc] after the end: SocialClubHelper.exe pid %u (parent %u) started %u ms after it; "
+            "ended once more (restart %u of %u)", what, (unsigned long long)title_seq, (unsigned long long)pid,
+            (unsigned long long)launcher_lp[i].parent, (unsigned long long)(GetTickCount() - game_sc_ended_at),
+            (unsigned long long)game_sc_restarts, (unsigned long long)GAME_SC_RESTART_ENDS);
+    else
+        say("%s %u: [game-sc] after the end: SocialClubHelper.exe pid %u started %u ms after it; could not end it "
+            "(error %u)", what, (unsigned long long)title_seq, (unsigned long long)pid,
+            (unsigned long long)(GetTickCount() - game_sc_ended_at), (unsigned long long)GetLastError());
+    if (h) CloseHandle(h);
+}
+
+/* The job's messages since the last look: after an end, every process it got. */
 static void watch_launcher(uint32_t title_seq, HANDLE port, HANDLE job, DWORD title)
 {
     DWORD msg;
     ULONG_PTR key;
     LPOVERLAPPED ov;
-    while (port && GetQueuedCompletionStatus(port, &msg, &key, &ov, 0))
-        if (msg == JOB_OBJECT_MSG_NEW_PROCESS && launcher_ended)
-            launcher_new_process(title_seq, (DWORD)(ULONG_PTR)ov, job, title);
+    while (port && GetQueuedCompletionStatus(port, &msg, &key, &ov, 0)) {
+        if (msg != JOB_OBJECT_MSG_NEW_PROCESS) continue;
+        if (launcher_ended) launcher_new_process(title_seq, (DWORD)(ULONG_PTR)ov, job, title);
+        if (game_sc_ended) game_sc_new_process(title_seq, (DWORD)(ULONG_PTR)ov);
+    }
 }
 
 /* One control, if the host wrote one: acts on it and answers. A CLOSE sets
@@ -544,6 +616,17 @@ static void control(uint32_t title_seq, HANDLE job, DWORD title, int *closing, D
         launcher_ended = 1;
         launcher_ended_at = GetTickCount();
         done = end_launcher(title_seq, pids, npids, 0);
+        break;
+    case PP_CONTROL_END_GAME_SOCIAL_CLUB:
+        if (game_sc_ended) {
+            say("%s %u: [game-sc] already ended once; nothing more", what, (unsigned long long)title_seq);
+            break;
+        }
+        say("%s %u: [game-sc] ending the game's own Social Club helpers, never the game (a dev build's, "
+            "after its sign-in)", what, (unsigned long long)title_seq);
+        game_sc_ended = 1;
+        game_sc_ended_at = GetTickCount();
+        done = end_game_social_club(title_seq, pids, npids);
         break;
     }
     reply_to(control_reply_path, control_reply_tmp, c.sequence, PP_CONTROL_DONE, done);
@@ -1060,6 +1143,10 @@ static void launch(const pp_session_request *r, const char *payload)
             (unsigned long long)launcher_restarts_ended, (unsigned long long)launcher_restarts_gone,
             (unsigned long long)launcher_restarts_left, (unsigned long long)launcher_other_starts,
             (unsigned long long)launcher_unopened_starts);
+    if (game_sc_ended)
+        say("%s %u: [game-sc] after the end: %u starts of the game's Social Club helpers (the first %u ended once "
+            "more)", what, (unsigned long long)r->sequence, (unsigned long long)game_sc_restarts,
+            (unsigned long long)GAME_SC_RESTART_ENDS);
     if (port) CloseHandle(port);
     if (r->kind == PP_REQUEST_LAUNCH) stop_services();
     if (r->kind == PP_REQUEST_LAUNCH && steam_client_set) steam_client_keys(0, 0, 0);

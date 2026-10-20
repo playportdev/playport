@@ -152,7 +152,8 @@ int wine_host_session_wait(int timeout_ms, int *exit_code);
  * its job wait_ms later if it is still running (wait_ms is only a CLOSE's, at
  * most PP_CONTROL_MAX_WAIT_MS). PP_CONTROL_END_LAUNCHER, the launch's own
  * at the game's sign-in (decision 0130), ends the Rockstar Games Launcher's
- * processes but never the game's. 0 with *count the threads, windows or
+ * processes but never the game's; PP_CONTROL_END_GAME_SOCIAL_CLUB, a dev build's after the
+ * sign-in (decision 0133), ends the game's own Social Club helpers but never the game. 0 with *count the threads, windows or
  * processes it touched; -1 bad call or no title running, -4 the control could not be
  * written, -6 no answer in time or the root ended, -7 the root refused it.
  * Controls are one at a time (a lock). Added in ABI 3 without changing any

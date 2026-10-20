@@ -602,7 +602,15 @@ enum LaunchCoordinator {
 
         let t0 = Date()
         step(.running(since: t0))
-        let launcher = r.endLauncher.map { s in LauncherEnd(signIn: s, profile: runtime.prefixURL.appendingPathComponent("drive_c/users/playport")) }
+        #if PLAYPORT_RELEASE
+        let endGameSocialClub = false
+        #else
+        let endGameSocialClub = GameSocialClubEnd.enabled   // decision 0133: Settings › Developer
+        #endif
+        let launcher = r.endLauncher.map { s in
+            LauncherEnd(signIn: s, profile: runtime.prefixURL.appendingPathComponent("drive_c/users/playport"),
+                        endGameSocialClub: endGameSocialClub)
+        }
         var sampled = Date.distantPast
         while true {
             // In 2 s slices, so the pool's use is logged as it grows; in 1 s slices while a
@@ -759,13 +767,22 @@ enum LaunchCoordinator {
     /// within LauncherEndTrigger.headroomMB of the limit ends the tree before the sign-in, and
     /// one within nearMB is logged. A sign-in after such an end is still logged. Only the fixed
     /// line text is matched; nothing of the log is logged.
+    ///
+    /// A dev build's Settings › Developer › End the game's Social Club (decision 0133, amending
+    /// 0130) also sends PP_CONTROL_END_GAME_SOCIAL_CLUB once, after the sign-in, at the first slice
+    /// whose footprint is within LauncherEndTrigger.headroomMB of the limit (the game starts its
+    /// own helpers only after its sign-in): the root ends the game's own SocialClubHelper.exe
+    /// processes, never the game. The slices read the footprint until then.
     private final class LauncherEnd {
         let file: URL
         let watch: GameSignIn.Watch
+        let endGameSocialClub: Bool
         private var endedAt: Date?
         private var signedIn = false
+        private var gameSocialClubEnded = false
 
-        init(signIn: GameSignIn, profile: URL) {
+        init(signIn: GameSignIn, profile: URL, endGameSocialClub: Bool) {
+            self.endGameSocialClub = endGameSocialClub
             file = signIn.file(profile: profile)
             let baseline = try? Data(contentsOf: file)
             watch = GameSignIn.Watch(signIn: signIn, baseline: baseline)
@@ -774,10 +791,14 @@ enum LaunchCoordinator {
                 + "\(LauncherEndTrigger.headroomMB) MB (now \(limit.map { "\(LauncherEndTrigger.memoryThresholdMB(limitMB: $0)) MB" } ?? "no limit"); "
                 + "decision 0130); its log "
                 + (baseline.map { "holds \($0.count) bytes of an earlier start" } ?? "is not there yet"))
+            if endGameSocialClub { log("launcher: the game's own Social Club ends too, after its sign-in, when the footprint reaches the "
+                                         + "limit less \(LauncherEndTrigger.headroomMB) MB (dev, decision 0133)") }
         }
 
         /// Whether the wait slices read the footprint: until the end and for 10 s after it.
-        var readsFootprint: Bool { endedAt.map { Date().timeIntervalSince($0) < 10 } ?? true }
+        var readsFootprint: Bool {
+            (endedAt.map { Date().timeIntervalSince($0) < 10 } ?? true) || (endGameSocialClub && !gameSocialClubEnded)
+        }
 
         /// One wait slice: the sign-in, then the footprint, then the end if either calls for it.
         func slice(elapsed: TimeInterval) {
@@ -785,6 +806,10 @@ enum LaunchCoordinator {
             guard readsFootprint else { return }
             let m = MemoryLimit.read()
             let ended = endedAt != nil
+            if signedIn, endGameSocialClub, !gameSocialClubEnded, let limit = m.limitMB,
+               m.footprintMB >= LauncherEndTrigger.memoryThresholdMB(limitMB: limit) {
+                endGameSocialClubNow(footprintMB: m.footprintMB, limitMB: limit, elapsed: elapsed)
+            }
             if LauncherEndTrigger.near(footprintMB: m.footprintMB, limitMB: m.limitMB), let limit = m.limitMB {
                 log(String(format: "launcher: footprint %d MB of the %d MB limit at +%.1f s", m.footprintMB, limit, elapsed)
                     + (ended ? ", after the end" : ", the end at \(LauncherEndTrigger.memoryThresholdMB(limitMB: limit)) MB"))
@@ -812,6 +837,21 @@ enum LaunchCoordinator {
             #if !PLAYPORT_RELEASE
             RunEvents.emit("launcher", ["state": "ended", "trigger": trigger == .signedIn ? "signed-in" : "memory",
                                         "after_s": Int(elapsed), "footprint_mb": footprintMB, "rc": Int(rc), "ended": Int(n)])
+            #endif
+        }
+
+        /// Asks the root to end the game's own Social Club helpers, once (decision 0133).
+        private func endGameSocialClubNow(footprintMB footprint: Int, limitMB: Int, elapsed: TimeInterval) {
+            gameSocialClubEnded = true
+            log(String(format: "launcher: the footprint reached %d MB of the %d MB limit after the sign-in; ending the "
+                       + "game's own Social Club at +%.1f s (dev, decision 0133)", footprint, limitMB, elapsed))
+            var n: UInt32 = 0
+            let rc = wine_host_session_control(Int32(PP_CONTROL_END_GAME_SOCIAL_CLUB), 0, 5_000, &n)
+            log(rc == 0 ? "launcher: the session root ended \(n) of the game's Social Club processes"
+                        : "launcher: the session root did not end the game's Social Club (\(rc))")
+            #if !PLAYPORT_RELEASE
+            RunEvents.emit("launcher", ["state": "game-social-club-ended", "after_s": Int(elapsed),
+                                        "footprint_mb": footprint, "rc": Int(rc), "ended": Int(n)])
             #endif
         }
 

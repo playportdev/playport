@@ -139,6 +139,10 @@ int main(void)
     CHECK(pp_session_control_valid(&c, sizeof(c)));
     c.arg = 1;
     CHECK(!pp_session_control_valid(&c, sizeof(c)));    /* it carries nothing */
+    c.arg = 0; c.kind = PP_CONTROL_END_GAME_SOCIAL_CLUB; /* a dev build's, after the game's sign-in (decision 0133) */
+    CHECK(pp_session_control_valid(&c, sizeof(c)));
+    c.arg = 1;
+    CHECK(!pp_session_control_valid(&c, sizeof(c)));    /* it carries nothing */
     c.arg = 0; c.kind = PP_REQUEST_LAUNCH;
     CHECK(!pp_session_control_valid(&c, sizeof(c)));   /* a launch is not a control */
     c.kind = PP_REQUEST_PREREQUISITE;

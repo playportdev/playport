@@ -21,6 +21,7 @@ struct DeveloperSettings: View {
     @AppStorage(MemoryLimit.simulatedKey) private var simulated = 0
     @AppStorage(MemoryLimit.simulatedPoolKey) private var simulatedPool = 0
     @AppStorage(DonorPool.key) private var donorPool = 0
+    @AppStorage(GameSocialClubEnd.key) private var endGameSocialClub = false
     @ObservedObject private var sharedMemory = SharedMemoryProbe.shared
     @ObservedObject private var probe = HelperLifetimeProbe.shared
     @ObservedObject private var authProbe = NativeAuthProbe.shared
@@ -93,6 +94,10 @@ struct DeveloperSettings: View {
                 donorPool = Int($0) ?? 0
             }
         }
+        // Decision 0133: RDR2's Story load reaches the memory limit with the game's Social Club alive.
+        SettingsSwitchRow(id: "dev:endGameSocialClub", title: "End the game's Social Club (experiment)",
+                          subtitle: "Next Play: RDR2's own Social Club helpers end after its sign-in, near the memory limit; never the game",
+                          on: $endGameSocialClub)
     }
 
     private static func choices(_ base: [Int], with current: Int) -> [Int] {

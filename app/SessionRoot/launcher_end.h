@@ -123,6 +123,15 @@ static inline int pp_launcher_restart(const pp_launcher_proc *p, uint32_t n, uin
            pp_launcher_from_known(p, n, i, known, nknown);
 }
 
+/* Whether process i is one of the game's own Social Club helpers, which a dev build's
+ * PP_CONTROL_END_GAME_SOCIAL_CLUB ends after the game's sign-in (decision 0133): a
+ * SocialClubHelper.exe whose parent chain reaches RDR2.exe (its browser, the game's
+ * child, and the browser's renderers). Never RDR2.exe itself or any other image. */
+static inline int pp_game_social_club(const pp_launcher_proc *p, uint32_t n, uint32_t i)
+{
+    return pp_launcher_name_is(p[i].name, "SocialClubHelper.exe") && pp_launcher_under_game(p, n, i);
+}
+
 /* What the root does with a restart: the first ones it finds still running are
  * ended once more, in one round; any later or already gone are only reported. */
 enum { PP_LAUNCHER_RESTART_REPORT, PP_LAUNCHER_RESTART_END };
