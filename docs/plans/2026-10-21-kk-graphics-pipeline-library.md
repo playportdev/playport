@@ -9,6 +9,18 @@ from the main checkout after the branch moves there. **Pins read:** `mesa` b39d1
 **Owner's decision (2026-10-21):** implement full GPL, staged behind
 `MESA_KK_EXPERIMENTAL=gpl`, off by default, until the phone shows it works.
 
+## Runner state
+
+- **Branch:** `dev/kk-gpl` in the side copy `.work/worktrees/kkgpl`, not merged, not pushed.
+  Workstation only (owner, 2026-10-21): no phone gate until the branch moves to the main checkout.
+- **Done:** G0's host harness and G1 in `ea258b0` (`patches/mesa` 0096; host test `check_gpl`;
+  evidence [2026-10-21-kk-gpl-host](../evidence/2026-10-21-kk-gpl-host.md)). G0's phone baseline
+  is not run.
+- **Running:** G2 (separate vertex shader), writer on the hard-task model.
+- **Queue:** G2, G3, G4 (workstation); then G0's phone baseline and G5 from the main checkout; G6.
+- **Phone:** not used by this plan yet.
+- **Notes:** reports in the side copy's `.work/agent-notes/kk-gpl/reports/`.
+
 ## Why
 
 KosmicKrisp (KK) exposes neither `VK_EXT_graphics_pipeline_library` (GPL) nor
