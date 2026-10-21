@@ -1,0 +1,94 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Wed, 21 Oct 2026 11:01:40 +0200
+Subject: [PATCH 212/212] ntdll: PLAYPORT_SC_BLOCK_CRASHPAD=1 refuses crash
+ reporter starts (dev)
+
+RDR2's launcher and game each start a crash reporter: Rockstar's
+crashpad host RockstarErrorHandler.exe (the launcher's held 17 MB of
+image copies and a code buffer; the game's about 106 MB), and Social
+Club's Chromium can start a crashpad handler, itself with
+--type=crashpad-handler. Each is a pseudo-process with its own image
+copies, FEX start-up and master socket, and nothing on the phone reads
+its reports.
+
+With PLAYPORT_SC_BLOCK_CRASHPAD=1 in the environment (off by default,
+a dev experiment), NtCreateUserProcess fails a start whose image is
+RockstarErrorHandler.exe or whose command line holds
+--type=crashpad-handler with STATUS_ACCESS_DENIED, as 0177 does for the
+game's later Social Club helpers (pp_game_sc_refuse.h's
+ppgsc_is_crashpad). The first refusals are logged one by one as
+[sc-crashpad], then every 10th. Whether the launcher and the game go on
+without their reporter only a phone run shows.
+
+Linear: PLA-413
+Class: host-app
+Evidence: docs/evidence/2026-10-21-batch2.md
+Offered-upstream: no
+---
+ build/ntdll-unix/pp_game_sc_refuse.h | 24 ++++++++++++++++++++++++
+ build/ntdll-unix/process_ios.c       | 18 ++++++++++++++++++
+ 2 files changed, 42 insertions(+)
+
+diff --git a/build/ntdll-unix/pp_game_sc_refuse.h b/build/ntdll-unix/pp_game_sc_refuse.h
+index 491354a..c70fa81 100644
+--- a/build/ntdll-unix/pp_game_sc_refuse.h
++++ b/build/ntdll-unix/pp_game_sc_refuse.h
+@@ -70,4 +70,28 @@ static inline unsigned ppgsc_refuse( struct ppgsc_state *st, int on, void *creat
+     }
+ }
+ 
++/* Playport (dev, off by default): with PLAYPORT_SC_BLOCK_CRASHPAD=1 in the environment, no crash
++ * reporter starts: Rockstar's RockstarErrorHandler.exe, the crashpad host the launcher and the game
++ * start (17 MB of image copies and a code buffer for the launcher's; about 106 MB for the game's), and
++ * a Chromium crashpad handler (--type=crashpad-handler in its command line). 1 refuses the start. */
++static inline int ppgsc_is_crashpad( const pp_wchar *image, size_t image_len,
++                                     const pp_wchar *cmdline, size_t cmdline_len )
++{
++    static const char want[] = "--type=crashpad-handler";
++    size_t n = sizeof(want) - 1, k, j;
++    if (image && ppgsc_basename_is( image, image_len, "RockstarErrorHandler.exe" )) return 1;
++    if (!cmdline) return 0;
++    for (k = 0; k + n <= cmdline_len; k++)
++    {
++        for (j = 0; j < n; j++)
++        {
++            pp_wchar c = cmdline[k + j];
++            if (c >= 'A' && c <= 'Z') c += 32;
++            if (c != (pp_wchar)(unsigned char)want[j]) break;
++        }
++        if (j == n) return 1;
++    }
++    return 0;
++}
++
+ #endif /* PP_GAME_SC_REFUSE_H */
+diff --git a/build/ntdll-unix/process_ios.c b/build/ntdll-unix/process_ios.c
+index c769edf..74b15b1 100644
+--- a/build/ntdll-unix/process_ios.c
++++ b/build/ntdll-unix/process_ios.c
+@@ -1182,6 +1182,24 @@ NTSTATUS WINAPI NtCreateUserProcess( HANDLE *process_handle_ptr, HANDLE *thread_
+         }
+     }
+ 
++    /* Playport (dev): PLAYPORT_SC_BLOCK_CRASHPAD=1 refuses every crash reporter start. */
++    {
++        static LONG refused;
++        const char *on = getenv( "PLAYPORT_SC_BLOCK_CRASHPAD" );
++        if (on && !strcmp( on, "1" )
++            && ppgsc_is_crashpad( (const pp_wchar *)params->ImagePathName.Buffer,
++                                  params->ImagePathName.Length / sizeof(WCHAR),
++                                  (const pp_wchar *)params->CommandLine.Buffer,
++                                  params->CommandLine.Length / sizeof(WCHAR) ))
++        {
++            LONG n = InterlockedIncrement( &refused );
++            if (n <= 9 || n % 10 == 0)
++                dprintf( 2, "[sc-crashpad] refused crash reporter start %d (%s)\n",
++                         (int)n, debugstr_us( &params->ImagePathName ) );
++            return STATUS_ACCESS_DENIED;
++        }
++    }
++
+ 
+     /* ml526: stamp every accepted spawn on the startup timeline. This is the
+      * boundary the coarse phase accounting could not see — steam.exe -> the

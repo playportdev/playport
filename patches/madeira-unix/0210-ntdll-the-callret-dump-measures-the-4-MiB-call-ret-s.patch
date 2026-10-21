@@ -1,0 +1,51 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Wed, 21 Oct 2026 11:01:03 +0200
+Subject: [PATCH 210/212] ntdll: the [callret] dump measures the 4 MiB call-ret
+ stack
+
+The fault path's [callret] line took the stack's default position as
+base + 4 MiB, from the 16 MiB stack before fex 0055, and gave the depth
+as a share of 4 MB. With the 4 MiB stack, sp starts and resets at base
++ 2 MiB and the inline guard resets it 1 MiB either side, so run pB2
+printed a stack 25 % into the guard window as 74 % of 4 MB, and an
+underflow (more pops than pushes, from EC->x64 callbacks) as 0 used.
+The line now takes base + 2 MiB, gives the share of the 1 MiB window
+and prints the underflow's entries on their own. Diagnostic only.
+
+Linear: PLA-364
+Class: diagnostics
+Evidence: docs/evidence/2026-10-21-batch2.md
+Offered-upstream: no; Madeira's iOS code
+---
+ build/ntdll-unix/signal_arm64_ios.c | 14 +++++++++++---
+ 1 file changed, 11 insertions(+), 3 deletions(-)
+
+diff --git a/build/ntdll-unix/signal_arm64_ios.c b/build/ntdll-unix/signal_arm64_ios.c
+index cde0683..2e4afe6 100644
+--- a/build/ntdll-unix/signal_arm64_ios.c
++++ b/build/ntdll-unix/signal_arm64_ios.c
+@@ -10347,12 +10347,20 @@ static void segv_handler( int signal, siginfo_t *siginfo, void *sigcontext )
+                              * entries (4.6% and 0.3% of the window). Print what
+                              * is actually being asked — entries USED — so it
+                              * cannot be misread again. */
+-                            unsigned long long dflt = cr[1] + 0x400000;
++                            /* Playport: the stack is 4 MiB now (fex 0055), sp starts and
++                             * resets at base + 2 MiB, and the inline guard resets it when it
++                             * leaves [base + 1 MiB, base + 3 MiB): 1 MiB, 65,536 entries, either
++                             * way. The old base + 4 MiB default was the 16 MiB stack's, so a stack
++                             * 25 % into the window printed as 74 % of 4 MB. Pops past the default
++                             * (an underflow, EC->x64 callbacks) print as their own count. */
++                            unsigned long long dflt = cr[1] + 0x200000;
+                             unsigned long long used_b = (dflt > cr[0]) ? dflt - cr[0] : 0;
++                            unsigned long long under_b = (cr[0] > dflt) ? cr[0] - dflt : 0;
+ 
+-                            ERR("  [callret] sp=%p base=%p default=%p used=%llu entries (%llu bytes, %llu%% of 4MB)\n",
++                            ERR("  [callret] sp=%p base=%p default=%p used=%llu entries (%llu bytes, %llu%% of the 1 MiB "
++                                "guard window) underflow=%llu entries\n",
+                                 (void *)cr[0], (void *)cr[1], (void *)(uintptr_t)dflt,
+-                                used_b / 16, used_b, (used_b * 100) / 0x400000 );
++                                used_b / 16, used_b, (used_b * 100) / 0x100000, under_b / 16 );
+ 
+                             /* ml213: the cap was 0x100000, but a real run had depth=168218
+                              * (1.28MB of stack) and the dump was skipped for no good
