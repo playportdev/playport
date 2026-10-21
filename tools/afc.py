@@ -23,7 +23,10 @@ USBMUXD_SOCKET_ADDRESS set.
   afc.py BUNDLE_ID pull-bundle REMOTE DEST
                                   a bundle directory (a Metal .gputrace) into DEST/<its name>:
                                   its files and subdirectories, and its links as local links,
-                                  never followed; one line per file
+                                  never followed; one line per file. PULL_CONNECTIONS AFC
+                                  connections at once (pull_tree), each file in PULL_CHUNK
+                                  reads; a file already in DEST at its size is kept, so a
+                                  stopped pull resumes where it was
   afc.py BUNDLE_ID rm-bundle REMOTE FILES BYTES LINKS
                                   delete one Metal capture bundle, Documents/.../NAME.gputrace
                                   (what GPU capture writes into a game's folder), once its tree
@@ -98,7 +101,9 @@ async def main(bundle_id, op, args):
         elif op == "pull-bundle" and len(args) == 2:
             if not (await kind(afc, args[0])).startswith("dir"):
                 sys.exit(f"{args[0]}: not a directory")
-            await pull_tree(afc, args[0].rstrip("/"), os.path.join(args[1], os.path.basename(args[0].rstrip("/"))))
+            remote = args[0].rstrip("/")
+            n = await pull_tree(lambda: connect(bundle_id), remote, os.path.join(args[1], os.path.basename(remote)))
+            print(f"pulled {n[0]} files ({n[1]} bytes, {n[3]} kept from before), {n[2]} links", flush=True)
         elif op == "rm-bundle" and len(args) == 4:
             why = bundle_refusal(args[0])
             if why:
@@ -193,21 +198,122 @@ def import_refusal(path):
     return None
 
 
-async def pull_tree(afc, remote, local):
-    os.makedirs(local, exist_ok=True)
-    for n in sorted(set(await afc.listdir(remote)) - {".", ".."}):
-        src, dst = remote + "/" + n, os.path.join(local, n)
-        k, _, v = (await kind(afc, src)).partition(" ")
-        if os.path.lexists(dst) and not os.path.isdir(dst):
-            os.remove(dst)
-        if k == "dir":
-            await pull_tree(afc, src, dst)
-        elif k == "link":
-            os.symlink(v, dst)
-        elif k == "file":
-            with open(dst, "wb") as f:
-                f.write(await afc.get_file_contents(src))
-            print(f"{v:>12} {dst}", flush=True)
+# One AFC connection answers one request at a time, and over the network link (netmuxd)
+# every request is a round trip: a bundle of ~1,000 entries pulled one by one, two
+# requests to stat each and a whole read per file, took over 20 minutes for 2.5 GB
+# (2026-10-21). So the tree is walked and pulled by this many connections at once.
+PULL_CONNECTIONS = 8
+
+
+async def pull_tree(connect, remote, local, workers=None, chunk=None, tries=None):
+    """The directory REMOTE into LOCAL: its subdirectories, its files and its links (as local
+    links, never followed), by `workers` connections from connect(). Each entry is a task in
+    one queue: a directory is listed and its entries queued; an entry is stat'ed, then made,
+    linked or pulled (in `chunk` reads, to LOCAL.part, renamed once whole). A file already
+    in LOCAL at the size the phone has is kept, so a stopped pull resumes. A dropped
+    connection is reopened and its task retried; `tries` connections in a row that fail one
+    task, with no read bringing bytes in between, end the pull; a file's pull resumes at the
+    bytes its LOCAL.part already holds. (files, bytes, links, files kept)."""
+    workers, chunk, tries = workers or PULL_CONNECTIONS, chunk or PULL_CHUNK, tries or PULL_TRIES
+    queue = asyncio.Queue()
+    queue.put_nowait(("dir", remote, local))
+    done = [0, 0, 0, 0]
+    failed = []
+    progress = [0]   # reads that brought bytes: a retry after progress starts its count again
+
+    async def task(afc, what, src, dst):
+        if what == "dir":
+            os.makedirs(dst, exist_ok=True)
+            for n in sorted(set(await afc.listdir(src)) - {".", ".."}):
+                queue.put_nowait(("entry", src + "/" + n, os.path.join(dst, n)))
+            return
+        st = await afc.stat(src)
+        fmt = st.get("st_ifmt")
+        if fmt == "S_IFDIR":
+            if os.path.lexists(dst) and not os.path.isdir(dst):
+                os.remove(dst)
+            queue.put_nowait(("dir", src, dst))
+        elif fmt == "S_IFLNK":
+            target = st.get("LinkTarget", "?")
+            if os.path.islink(dst) and os.readlink(dst) == target:
+                pass
+            else:
+                if os.path.lexists(dst):
+                    os.remove(dst)
+                os.symlink(target, dst)
+            done[2] += 1
+        else:
+            size = int(st.get("st_size", 0))
+            if os.path.isfile(dst) and not os.path.islink(dst) and os.path.getsize(dst) == size:
+                done[3] += 1
+            else:
+                if os.path.lexists(dst):
+                    os.remove(dst)
+                part = dst + ".part"
+                got = os.path.getsize(part) if os.path.isfile(part) else 0
+                if got > size:
+                    got = 0
+                with open(part, "r+b" if got else "wb") as f:
+                    f.truncate(got)
+                    f.seek(got)
+                    h = await afc.fopen(src)
+                    if got:
+                        await afc.fseek(h, got)
+                    while got < size:
+                        data = await afc.fread(h, min(chunk, size - got))
+                        if not data:
+                            break
+                        f.write(data)
+                        f.flush()
+                        got += len(data)
+                        progress[0] += 1
+                    await afc.fclose(h)
+                if got != size:
+                    raise ConnectionError(f"{src}: {got} of {size} bytes")
+                os.replace(part, dst)
+                print(f"{size:>12} {dst}", flush=True)
+            done[0] += 1
+            done[1] += size
+
+    async def worker():
+        afc = None
+        while True:
+            item = await queue.get()
+            try:
+                if failed:
+                    continue
+                last, idle, seen = None, 0, progress[0]
+                while idle < tries:
+                    idle += 1
+                    try:
+                        if afc is None:
+                            afc = await connect()
+                            await afc.__aenter__()
+                        await task(afc, *item)
+                        break
+                    except Exception as e:   # the connection dropped: reopen, retry the task
+                        last = f"{type(e).__name__}: {e}"[:200]
+                        if afc is not None:
+                            try:
+                                await afc.__aexit__(None, None, None)
+                            except Exception:
+                                pass
+                        afc = None
+                        if progress[0] != seen:
+                            idle, seen = 0, progress[0]
+                else:
+                    failed.append(f"{item[1]}: {tries} connections in a row failed: {last}")
+            finally:
+                queue.task_done()
+
+    pool = [asyncio.create_task(worker()) for _ in range(workers)]
+    await queue.join()
+    for p in pool:
+        p.cancel()
+    await asyncio.gather(*pool, return_exceptions=True)
+    if failed:
+        raise SystemExit(failed[0])
+    return tuple(done)
 
 
 # pymobiledevice3's own pull reads 4 MB at a time; over the network link (netmuxd) the phone
