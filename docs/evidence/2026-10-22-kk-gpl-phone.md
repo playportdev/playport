@@ -3,7 +3,7 @@
 **Linear:** [PLA-424](https://linear.app/playportdev/issue/PLA-424). **Plan:**
 [kk-graphics-pipeline-library](../plans/2026-10-21-kk-graphics-pipeline-library.md). **Host
 results:** [2026-10-21-kk-gpl-host](2026-10-21-kk-gpl-host.md).
-**Patches:** `patches/mesa` 0096–0099, all behind `MESA_KK_EXPERIMENTAL=gpl`.
+**Patches:** `patches/mesa` 0096–0100, all behind `MESA_KK_EXPERIMENTAL=gpl`.
 
 ## IPA and runs
 
@@ -113,3 +113,110 @@ vertex MSL; the fragment MSL was new to it. Totals line:
 
 80 % battery on external power, 7.7–7.9 GB free, unattended mode on. The app was not uninstalled
 and no title was installed.
+
+## G5b: the sample-mask fix (mesa 0100) and Hollow Knight played with the flag on
+
+**Patch:** `patches/mesa` 0100. A link's static sample mask counts as all ones when it has the
+bit of every rasterization sample (`mask & BITFIELD_MASK(samples) == BITFIELD_MASK(samples)`), so
+DXVK's `0x1` at one sample no longer forces a whole pipeline. The separately compiled fragment
+shader never lowers a sample mask, and a Metal pipeline has no sample mask of its own, so such a
+link draws as one with `0xffff`. The link key hashes the draw's whole state, mask included, so
+nothing else changes. The whole-pipeline path (`kk_lower_fs`, the static sample mask lowering)
+still compares with `0xffff` and is unchanged, so flag-off MSL is byte-identical; it lowers DXVK's
+`0x1` at one sample into every fragment shader, which is harmless but not needed (follow-up, not
+changed).
+
+**Host** (`build/mesa-host-test/run.sh`, main checkout's `.work/run/mesa`): exit 0.
+- New links in `check_gpl`: a fragment shader and a fragment output library with `pSampleMask`
+  `0x1` at one sample fast-link (`ok gpl fast sample-mask 0x1 of 1 rgba8: MSL libraries at link
+  0, at draw 0`). With `0x5` at four samples, drawn into a 4-sample target, the link still falls
+  back (`link full fallback=sample-mask count=1`, `at draw 2`).
+- Without 0100 the same test fails: `gpl fast sample-mask 0x1 of 1 rgba8: MSL libraries at link
+  0, at draw 2`.
+- Against a baseline copied before any change: flag-off MSL 158 of 158 and Zink 25 of 25
+  byte-identical. Flag on, all 204 earlier `msl-gpl` files come back in the same order and
+  bytes. The 4 new ones are the two new fragment libraries (byte-identical to the existing
+  fragment library's MSL) and the `0x5` fallback's whole pipeline (with `[[sample_mask]]`).
+  `msl-compile.sh` was not run: no new MSL text besides that whole pipeline from the unchanged
+  path.
+
+**IPA (dev):** `.work/out/20261022-013602-0afe7d74/Playport-26.5-0afe7d74.ipa`, SHA256
+`0afe7d74d19b8399c214139446050bc0c6f09100af2e8064c57f12ee2a68f632`, 89 IPA checks passed, no
+build record changed, `pp install` upgraded in place.
+
+| Run | Graphics options | Route | First frame | Result |
+| --- | --- | --- | --- | --- |
+| `20261022T013805` | none (smoke gate) | first-frame+10 | +10.98 s | title menu |
+| `20261022T013918` (`on1`) | `MESA_KK_EXPERIMENTAL=gpl MESA_KK_DEBUG=compile,memory` | pad route | +10.87 s | gameplay; **40 `link FAIL`** |
+| `20261022T014505` (`off1`) | none | pad route | +11.00 s | gameplay |
+| `20261022T014953` (`off2`) | `MESA_KK_DEBUG=compile,memory` | pad route | +11.09 s | gameplay |
+
+The pad route, under one `pp phone lock` each:
+- `pp ui --pad --play app-367520 --until first-frame+25 --leave-running --shot`;
+- `pp pad push hk-new-game --wait` (profile 1's save, King's Pass), then `hk-walk --wait`;
+- `hk-roam` for 90 s;
+- `pp phone log`, `pp phone kill`.
+
+About 4 minutes of play each. The screenshots after each script and the pulled `s1-host.log`
+are in `$PLAYPORT_BUILD/agent-notes/kk-gpl/g5b/<run>/` (not committed).
+
+### Flag on: every fast link fails in Metal
+
+- `on1` is the only flag-on launch. Flag-on runs stopped there, as the G5b task required on a
+  `link FAIL`.
+- DXVK: `Graphics pipeline libraries supported` (two devices). `graphics options:
+  MESA_KK_DEBUG=compile,memory MESA_KK_EXPERIMENTAL=gpl`.
+- 0100 works: no `link full fallback` line at all (G5 had 26 of 26 `sample-mask`).
+- **But all 40 links that now link apart fail.** 40 `[kk-compile] link FAIL ms=… stages=0x11`
+  (812 ms in total, 8 over 20 ms, the longest 104.5 ms) and no `link separate`. Each is preceded by
+  `Failed to create MTLRenderPipelineState: Vertex shader writes point size but
+  inputPrimitiveTopology is MTLPrimitiveTopologyClassTriangle` and
+  `[kk-compile] render FAIL … step=pipeline err=AGXMetalG18P:3` (34 distinct MSL hashes).
+  `[kk-compile] totals translated=2 (187 ms) deserialized=62 (14 ms) metal=500 ms failed=26`.
+- **Cause, from the code:** G2's vertex shader compiled on its own always writes a point size
+  (`kk_lower_nir`, "always writes a point size, so that it can draw any topology", mesa
+  0097). The pipeline descriptor sets `inputPrimitiveTopology` to the draw's class
+  (`vs->info.vs.topology`, "Layered rendering in Metal requires setting primitive topology
+  class"). Metal refuses that pair for triangles. The host mock does not check it, and G5 never
+  linked apart (every link fell back), so this is the first separate link on Metal. The host
+  library MSL shows the same: the vertex libraries 0158, 0160 and 0164 all have `[[point_size]]`.
+- Not seen: `link separate`, `link separate-vertex`, `link totals` (40 links, under 64),
+  `gpl … deserialized` (0100's build changed the driver's build ID, so the library shaders were
+  cold again) and `[kk-mem] gpl device finish`.
+- Library compiles at library creation: `gpl vertex built` 23 (1,007 ms, 1.4–216 ms), `gpl
+  fragment built` 31 (2,963 ms, 0.1–389 ms), `gpl empty-fragment built` 1.
+- `[kk-mem] … shaders=161 pipelines=54 msl=0.9 | … | gpl sources=54 shaders=55 libraries=55
+  links=40`. Flag off (`off2`): `shaders=106 pipelines=54 msl=0.3`.
+
+### Rendering, flag on against off
+
+At the same three places, flag on (`on1`) and flag off (`off1`, `off2`) look the same:
+- after `hk-new-game`, the Knight standing in King's Pass' opening cave, with the HUD (soul
+  vessel, five masks), the grass and the particles;
+- after `hk-walk`, the lumafly room, the floating platforms and the dark overhang on the right,
+  the "Sound and Score by Christopher Larkin" credit;
+- 90 s into `hk-roam`, the Knight under the overhang.
+
+The differences are the run's state: the geo count (3–4 against 2) and the masks lost. No
+missing sprite, wrong blend or broken geometry was seen. This shows nothing about GPL's
+rendering, though. With every fast link failed, the frames come from DXVK's optimized (whole)
+pipelines, which `deserialized=62` read from the cache. A failed link's draws are skipped until
+then, between screenshots. The fixed-function blend and the runtime vertex fetch have still not
+drawn on the phone.
+
+### First frame, compile totals, frame rate
+
+- First frame: +10.87 s on, +11.00 s and +11.09 s off, +10.98 s smoke gate.
+- `[kk-compile] totals` off (`off2`): `translated=0 (0 ms) deserialized=64 (13 ms) metal=13 ms
+  failed=0`. On: `translated=2 (187 ms) deserialized=62 (14 ms) metal=500 ms failed=26`, plus
+  3,970 ms of library compiles on DXVK's workers.
+- Frame rate from the `[frames]` counter (a line every 16 frames): 60.0 FPS over the last 100 s
+  in all three. Over the 241 s, 56.7 on against 57.0 off. Gaps over 0.4 s between `[frames]`
+  lines: 36 on against 32 (both off runs), the longest 2.01 s against 1.49 s. That is loading and
+  the cinematic in all runs; GPU time was not measured.
+
+### Not run
+
+- The second flag-on launch (the cache path) and the longer flag-on play: stopped on `link FAIL`.
+- GPU time on against off (`pp perf`): nothing to measure until a fast link draws.
+- Portal 2 and D3D12, as in G5.
