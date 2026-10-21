@@ -42,8 +42,31 @@ It then builds the optimized (link-time-optimized) pipeline in the background an
 Since [0153](../decisions/0153-rdr2s-settings-are-every-games-defaults.md), Vulkan is every
 game's default backend, so every DXVK title has these hitches.
 
+**Who benefits.** GPL is an API the caller has to use; the driver cannot apply it on its own.
+
+- **DXVK (D3D9/10/11): fully.** D3D11 has no pipeline objects, so DXVK finds out which shader
+  goes with which state only at a draw. GPL is how it moves that compile off the draw.
+- **vkd3d-proton (D3D12): partly.** D3D12 games create whole pipelines up front
+  (`CreateGraphicsPipelineState`), on their own threads, and vkd3d-proton compiles them in full
+  there; GPL changes nothing for those. At our pin it uses GPL only when a pipeline's state is
+  unknown at creation (`d3d12_pipeline_state_init_static_pipeline` in `libs/vkd3d/state.c`):
+  - an unknown depth/stencil format with a depth test;
+  - topology type `UNDEFINED`;
+  - tessellation with an unknown patch count.
+
+  In those cases it builds a partial library and links at the draw instead of compiling the
+  whole pipeline there. Like DXVK, it turns GPL off without
+  `graphicsPipelineLibraryIndependentInterpolationDecoration`.
+- **Native Vulkan games (RDR2): not at all.** The game creates its own pipelines with
+  `vkCreateGraphicsPipelines`, on threads it picks itself. As far as we know RDR2 never uses
+  GPL (inferred). Its compile stalls are
+  [PLA-425](https://linear.app/playportdev/issue/PLA-425): a persistent Metal cache or
+  binary archive, or cheaper MSL.
+
 **Where KK's compile time goes.** On the phone, `MESA_KK_DEBUG=compile` logged 942 render
-builds over 20 ms, all of them RDR2's (`.work/ui-runs/*rdr2*/pull/s1-host.log`):
+builds over 20 ms, all of them RDR2's (`.work/ui-runs/*rdr2*/pull/s1-host.log`). They are used
+here only for the split between the libraries and the pipeline; this plan does not help RDR2
+(above):
 
 | step | total |
 | --- | --- |
@@ -182,7 +205,9 @@ Nothing changes with the flag off. Phone gates run only from the main checkout.
 - **G5: phone (main checkout).**
   - Hollow Knight first frame+10 with the flag on (dev Graphics options,
     [0137](../decisions/0137-graphics-options-set-any-variable.md)).
-  - DXVK's log shows GPL in use.
+  - DXVK's log shows GPL in use. A D3D12 title shows vkd3d-proton accepts GPL (it needs
+    independent interpolation).
+  - RDR2 is not a G5 title: it does not use GPL (PLA-425).
   - Portal 2 chapter-load hitches with the flag off against on, the method of
     [2026-10-05](../evidence/2026-10-05-portal2-hitches-requests.md).
   - GPU time with the flag on against off: the runtime fetch, the fixed-function blend.
