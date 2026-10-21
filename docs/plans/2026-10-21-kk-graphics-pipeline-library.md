@@ -19,16 +19,18 @@ from the main checkout after the branch moves there. **Pins read:** `mesa` b39d1
     fast link compiles only the fragment side at its first draw.
   - G3 in `68fde5b` (`patches/mesa` 0098; dev IPA `417caed8`, side copy, not installed). Both
     libraries are built at library creation; a fast link only builds the Metal pipeline.
+  - G4 in `7ba6d95` (`patches/mesa` 0099; dev IPA `a20453f7`, side copy, not installed). Library
+    shaders serialize into pipeline caches and rebuild their Metal libraries when read back;
+    `MESA_KK_DEBUG=memory` counts them, and `[kk-compile] link totals` logs links by kind and
+    fallbacks by reason.
   - Evidence: [2026-10-21-kk-gpl-host](../evidence/2026-10-21-kk-gpl-host.md).
   - G0's phone baseline is not run.
-- **Running:** G4 writer, subagent run `14047391` (report to `.work/agent-notes/kk-gpl/reports/g4.md`).
-- **Queue:** G4 next (cache and accounting, workstation; also from G3: count library shaders
-  and their Metal libraries under `MESA_KK_DEBUG=memory`, pack their MSL, cache the per-draw
-  blocker checks); then G0's phone baseline and G5 from
-  the main checkout; G6.
+- **Running:** none.
+- **Queue:** the workstation chunks are done. Next, once `dev/kk-gpl` moves to the main checkout,
+  rebased: G0's phone baseline, then G5 there; G6 after G5.
 - **Phone:** not used by this plan yet.
 - **Notes:** reports in the side copy's `.work/agent-notes/kk-gpl/reports/` (G2: `g2.md`, G3:
-  `g3.md`).
+  `g3.md`, G4: `g4.md`, with what G5 greps for).
 
 ## Why
 
@@ -212,6 +214,10 @@ Nothing changes with the flag off. Phone gates run only from the main checkout.
   - Serialize and deserialize separate shaders (MSL, the NIR blob, the flag); deserializing
     rebuilds the library.
   - `[kk-compile] link` logging and `MESA_KK_DEBUG=memory` counts for libraries and links.
+
+  Done (`patches/mesa` 0099), with the per-draw blocker checks skipped for a draw with the last
+  link's key. A source with a transient reason or a Y'CbCr set layout is not serialized
+  (evidence, G4).
 - **G5: phone (main checkout).**
   - Hollow Knight first frame+10 with the flag on (dev Graphics options,
     [0137](../decisions/0137-graphics-options-set-any-variable.md)).
