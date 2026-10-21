@@ -99,9 +99,14 @@ echo "MESA_KK_BATCH2: the host test passes with all items and without map and re
 # with the first vertex shader; fast links only build the Metal pipeline from
 # them, but two, which fall back for VK_POLYGON_MODE_POINT and a logic op
 # (the pipeline without rasterization above, with transform feedback, falls
-# back too).
+# back too). A device of its own takes a vertex and a fragment shader library
+# through a pipeline cache: from the cache their Metal libraries are built
+# again from the same MSL, a fast link compiles nothing and a logic op link
+# compiles the same whole pipeline as before, and when the device goes its
+# link totals are logged and its counts of library shaders, Metal libraries
+# and links (MESA_KK_DEBUG=memory) are back to zero.
 rm -rf "$ROOT/msl-gpl"; mkdir -p "$ROOT/msl-gpl"
-MESA_KK_EXPERIMENTAL=gpl MESA_KK_DEBUG=compile KK_MOCK_MSL_DIR="$ROOT/msl-gpl" MESA_SHADER_CACHE_DISABLE=true \
+MESA_KK_EXPERIMENTAL=gpl MESA_KK_DEBUG=compile,memory KK_MOCK_MSL_DIR="$ROOT/msl-gpl" MESA_SHADER_CACHE_DISABLE=true \
     "$ROOT/kk-host-test" "$ROOT/build/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.so" "$ROOT/spv" \
     >"$ROOT/gpl.log" 2>&1 || { cat "$ROOT/gpl.log" >&2; exit 1; }
 grep -q '^ok gpl: libraries, fast and optimized links drawn' "$ROOT/gpl.log" ||
@@ -111,15 +116,19 @@ for f in "$ROOT/msl/"*.metal; do
         { echo "MESA_KK_EXPERIMENTAL=gpl: ${f##*/} is not the MSL made without it" >&2; exit 1; }
 done
 gpl_lines() { grep -c "^\[kk-compile\] $1" "$ROOT/gpl.log" || true; }
-[ "$(gpl_lines 'gpl vertex built ')" = 3 ] && [ "$(gpl_lines 'gpl empty-fragment built ')" = 1 ] &&
-    [ "$(gpl_lines 'gpl fragment built ')" = 4 ] && [ "$(gpl_lines 'gpl fragment \(full\|at-link\)=')" = 0 ] &&
-    [ "$(gpl_lines 'link separate ')" = 7 ] && [ "$(gpl_lines 'link separate-vertex ')" = 0 ] &&
+[ "$(gpl_lines 'gpl vertex built ')" = 4 ] && [ "$(gpl_lines 'gpl empty-fragment built ')" = 2 ] &&
+    [ "$(gpl_lines 'gpl fragment built ')" = 5 ] && [ "$(gpl_lines 'gpl fragment \(full\|at-link\)=')" = 0 ] &&
+    [ "$(gpl_lines 'gpl vertex deserialized ')" = 1 ] && [ "$(gpl_lines 'gpl fragment deserialized ')" = 1 ] &&
+    [ "$(gpl_lines 'link separate ')" = 8 ] && [ "$(gpl_lines 'link separate-vertex ')" = 0 ] &&
     [ "$(gpl_lines 'link full fallback=point-fill count=1 ')" = 1 ] &&
-    [ "$(gpl_lines 'link full fallback=logic-op count=1 ')" = 1 ] &&
-    [ "$(gpl_lines 'link FAIL ')" = 0 ] ||
-    { grep '^\[kk-compile\] \(gpl\|link\)' "$ROOT/gpl.log" >&2
-      echo "MESA_KK_EXPERIMENTAL=gpl: not 3 vertex and 1 + 4 fragment libraries, 7 separate links, a point-fill and a logic-op fallback" >&2; exit 1; }
-grep '^\(ok \)\?gpl\|^\[kk-compile\] \(gpl\|link\)' "$ROOT/gpl.log"
+    [ "$(gpl_lines 'link full fallback=logic-op count=1 ')" = 2 ] &&
+    [ "$(gpl_lines 'link full fallback=logic-op count=2 ')" = 1 ] &&
+    [ "$(gpl_lines 'link FAIL ')" = 0 ] &&
+    [ "$(gpl_lines 'link totals links=3 separate=1 separate-vertex=0 full=2 failed=0 fallbacks=logic-op:2$')" = 1 ] &&
+    [ "$(grep -c '^\[kk-mem\] gpl device finish: live sources=0 shaders=1 libraries=1 links=0, after sources=0 shaders=0 libraries=0 links=0$' "$ROOT/gpl.log")" = 1 ] ||
+    { grep '^\[kk-compile\] \(gpl\|link\)\|^\[kk-mem\] gpl' "$ROOT/gpl.log" >&2
+      echo "MESA_KK_EXPERIMENTAL=gpl: not 3 + 1 vertex and 1 + 4 + 1 + 1 fragment libraries, 1 + 1 from the cache, 7 + 1 separate links, a point-fill and 1 + 2 logic-op fallbacks, the second device's totals and counts back to zero" >&2; exit 1; }
+grep '^\(ok \)\?gpl\|^\[kk-compile\] \(gpl\|link\)\|^\[kk-mem\] gpl' "$ROOT/gpl.log"
 
 # The same pipelines with the vertex and fragment libraries built at once and
 # the first two library builds failing as if Metal's compiler service had

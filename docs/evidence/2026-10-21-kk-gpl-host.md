@@ -228,3 +228,107 @@ to coverage may dither differently, and none of this is checked on a GPU. Plan G
 
 The dev IPA from this tree (built in the side copy, not installed) has sha256
 `417caed89f7a69656416aad24df3abb3aa309ed6bedd36bb70a606f503d69524`.
+
+## G4: `patches/mesa` 0099, library shaders cached and counted (2026-10-21)
+
+**Pipeline caches.** A pipeline library's shader now serializes into a pipeline cache. Before, it
+was left out. Its blob holds everything a link compiles it with:
+
+- the NIR, the create flags, the robustness state, the embedded samplers, the push constant range,
+  the sample shading state and the view mask;
+- its set layouts, as far as compiling reads them: each binding's type, size, offset, stride and
+  dynamic buffer index;
+- the vertex and fragment shaders compiled on their own: their MSL and what links check of them;
+- the reasons a shader could not be compiled on its own, by name.
+
+Deserializing builds their Metal libraries again from that MSL. As at compile, it also builds the
+empty fragment shader with the first vertex shader.
+
+Some sources are not serialized, so the cache just does not keep them:
+
+- a source whose reason may not hold in another run (out of memory, a failed Metal library build);
+- a source whose set layout has an immutable sampler with a Y'CbCr conversion, which a
+  deserialized layout cannot carry.
+
+The blob starts with a magic word where a whole pipeline's starts with its stage, then a version.
+A blob of another version is refused rather than read. The cache key marker is now
+`kk-gpl-separate-v4`.
+
+**Memory.** The shaders compiled on their own keep their MSL packed, as other shaders do. A link
+inflates a copy. With `MESA_KK_DEBUG=memory` they count as shaders on the `[kk-mem]` line. With the
+flag, that line also ends with each device's own counts: `| gpl sources= shaders= libraries=
+links=`, which are library shaders, shaders compiled on their own (the empty fragment shader
+included), their Metal libraries, and links. When a device goes, `[kk-mem] gpl device finish` gives
+the counts before it releases its own objects and after. Without the flag the line is unchanged.
+
+**Link totals.** With `MESA_KK_DEBUG=compile`, every 64 links and when the device goes, the log
+has `[kk-compile] link totals links= separate= separate-vertex= full= failed=
+fallbacks=<reason>:<count>,...`. Fallbacks are now counted by the reason's text. A deserialized
+reason is another string with the same text.
+
+**Per-draw checks.** Some draws need none of the fragment side's checks: those whose link key (in
+the mode of the link bound last) and colour attachment count match that link's. This covers the
+colour attachment loop, the empty fragment shader's lock and the pair's fallback lookup. They
+reuse the link, because everything those checks read is in the key. The empty fragment shader is
+read without a lock once it is compiled. Results are unchanged. A temporary probe (not committed)
+counted 13 draws reusing the link without the checks, the second draw of each link, and no draw
+whose state was unchanged going through them.
+
+**Host test.** `check_gpl` adds `gpl_round_trip` on a device of its own, with a fragment shader
+(`gpl-ubo.frag`) that reads a uniform buffer at binding 1 of a set layout with two combined image
+samplers at binding 0. The test makes the four libraries and a logic-op fragment output library
+with an empty `VkPipelineCache`, then draws the logic-op link. It reads the cache's data,
+destroys everything and makes the libraries again from a cache built from that data. Then it draws
+the logic-op link again and fast-links the four. The run is `MESA_KK_EXPERIMENTAL=gpl
+MESA_KK_DEBUG=compile,memory`:
+
+```
+[kk-compile] gpl vertex built ms=3.2 library_ms=0.2
+[kk-compile] gpl empty-fragment built ms=0.1 library_ms=0.0
+[kk-compile] gpl fragment built ms=0.4 library_ms=0.1
+[kk-compile] link full fallback=logic-op count=1 ms=1.5 stages=0x11
+[kk-compile] gpl vertex deserialized ms=0.3 library_ms=0.3
+[kk-compile] gpl fragment deserialized ms=0.0 library_ms=0.0
+[kk-compile] link full fallback=logic-op count=2 ms=1.6 stages=0x11
+[kk-compile] link separate ms=0.2 stages=0x11
+ok gpl cache: libraries from the cache made 2 MSL libraries, the same; logic op link 2, the same; fast link: MSL libraries at link 0, at draw 0
+[kk-compile] link totals links=3 separate=1 separate-vertex=0 full=2 failed=0 fallbacks=logic-op:2
+[kk-mem] gpl device finish: live sources=0 shaders=1 libraries=1 links=0, after sources=0 shaders=0 libraries=0 links=0
+```
+
+The test checks these results:
+
+- From the cache, the libraries build 2 MSL libraries, byte-identical to the vertex and fragment
+  libraries made the first time.
+- The logic-op link, which compiles the whole pipeline from the NIR and set layouts the cache gave,
+  makes the same 2 MSL libraries as before the cache.
+- The fast link compiles nothing, at link or at draw.
+- When the device goes, only its empty fragment shader and its library are still alive, and then
+  nothing is.
+
+`run.sh` checks every count above along with G3's, which are unchanged on the first device.
+
+**What did not change.** Against G3's output (`.work/agent-notes/kk-gpl/g3-baseline`, same host
+test, `patches/mesa` up to 0098):
+
+- the flag-off MSL (158 libraries) is byte-identical;
+- with the flag, MSL 0000–0177 are byte-identical: every pipeline and GPL case of G3, in the same
+  order.
+
+The second device adds 0178–0203:
+
+- 0178–0194: its internal kernels;
+- 0195–0197: the vertex, empty fragment and `gpl-ubo.frag` libraries;
+- 0198–0199: the logic-op link;
+- 0200–0201: the libraries from the cache;
+- 0202–0203: the logic-op link again.
+
+**Metal front end.** `msl-compile.sh` compiled the nine new libraries (0195–0203) to AIR with no
+errors.
+
+**Not covered on the host.** The test does not cover a `VkPipelineCache` across processes (the
+disk cache is off in the host test), or a set layout with immutable samplers. Everything here
+still needs the phone to show it works (plan G5).
+
+The dev IPA from this tree (built in the side copy, not installed) has sha256
+`a20453f7d827fd299d457e48126ab875f5d9be9c13ba742ce446457ccce6d1ed`.

@@ -1,0 +1,1071 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Wed, 21 Oct 2026 22:27:52 +0200
+Subject: [PATCH] kk: MESA_KK_EXPERIMENTAL=gpl, pipeline library shaders cached
+ and counted
+
+With MESA_KK_EXPERIMENTAL=gpl, a pipeline library's shader now
+serializes into pipeline caches (kk_gpl_serialize) instead of being
+left out. Its blob holds what a link compiles it with: the NIR, the
+create flags, the robustness state, its set layouts (what compiling
+reads of them: bindings' types, sizes, offsets and strides, dynamic
+buffer indices), the embedded samplers, the push constant range, the
+sample shading state and the view mask; and the vertex and fragment
+shaders compiled on their own, with their MSL and what links check of
+them, and the reasons a source could not be compiled on its own, by
+name. Deserializing it (kk_gpl_deserialize) builds their Metal
+libraries again from that MSL, and the empty fragment shader with a
+vertex shader as at compile. A source whose reason may not hold in
+another run (out of memory, a failed Metal library build) or whose set
+layout has a Y'CbCr conversion is not serialized. The blob starts with
+a magic word where a whole pipeline's starts with its stage, then a
+version: a blob of another version is refused rather than read, and the
+cache key marker is bumped to kk-gpl-separate-v4.
+
+The vertex and fragment shaders compiled on their own keep their MSL
+packed, as other shaders do, and links inflate a copy. Under
+MESA_KK_DEBUG=memory they count as shaders, and each device counts its
+library shaders, the shaders compiled on their own (the empty fragment
+shader's too), their Metal libraries and its links: on the [kk-mem]
+line ("| gpl sources= shaders= libraries= links=") and, when the device
+goes, before and after it releases its own ("[kk-mem] gpl device
+finish").
+
+MESA_KK_DEBUG=compile logs "[kk-compile] link totals links= separate=
+separate-vertex= full= failed= fallbacks=<reason>:<count>,..." every 64
+links and when the device goes. Fallbacks are counted by the reason's
+text.
+
+A draw whose link key, in the mode of the link bound last, and colour
+attachment count are those of that link uses it without the fragment
+side's checks and the pair's fallback lookup: what they read is in the
+key. The empty fragment shader is read without a lock once compiled.
+
+Nothing changes without the flag, and no MSL changes with it.
+
+Linear: PLA-424
+Class: feature
+Evidence: docs/evidence/2026-10-21-kk-gpl-host.md
+Offered-upstream: not yet
+---
+ src/kosmickrisp/vulkan/kk_bo.c     |  16 +-
+ src/kosmickrisp/vulkan/kk_gpl.c    | 112 +++++-
+ src/kosmickrisp/vulkan/kk_gpl.h    |  23 ++
+ src/kosmickrisp/vulkan/kk_shader.c | 576 ++++++++++++++++++++++++++---
+ 4 files changed, 652 insertions(+), 75 deletions(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_bo.c b/src/kosmickrisp/vulkan/kk_bo.c
+index 9b36d77..45e725e 100644
+--- a/src/kosmickrisp/vulkan/kk_bo.c
++++ b/src/kosmickrisp/vulkan/kk_bo.c
+@@ -8,6 +8,7 @@
+ 
+ #include "kk_cmd_pool.h"
+ #include "kk_device.h"
++#include "kk_gpl.h"
+ #include "kk_physical_device.h"
+ 
+ #include "kosmickrisp/bridge/mtl_bridge.h"
+@@ -134,6 +135,17 @@ kk_memory_log(struct kk_device *dev)
+    int64_t bo_total = 0;
+    for (unsigned i = KK_BO_KIND_INTERNAL; i < KK_BO_KIND_COUNT; i++)
+       bo_total += p_atomic_read(&kk_memory_stats.bo_bytes[i]);
++   /* Playport (PLA-424): with MESA_KK_EXPERIMENTAL=gpl, the device's
++    * pipeline library objects */
++   char gpl[96] = "";
++   const struct kk_gpl_memory_stats *gpl_stats = kk_gpl_memory_stats(dev);
++   if (gpl_stats)
++      snprintf(gpl, sizeof(gpl),
++               " | gpl sources=%d shaders=%d libraries=%d links=%d",
++               p_atomic_read(&gpl_stats->sources),
++               p_atomic_read(&gpl_stats->shaders),
++               p_atomic_read(&gpl_stats->libraries),
++               p_atomic_read(&gpl_stats->links));
+ #define KK_BO_FIELD(kind)                                                      \
+    p_atomic_read(&kk_memory_stats.bo_count[KK_BO_KIND_##kind]),                \
+       p_atomic_read(&kk_memory_stats.bo_bytes[KK_BO_KIND_##kind]) / mib
+@@ -141,7 +153,7 @@ kk_memory_log(struct kk_device *dev)
+            "[kk-mem] metal=%.0f bos=%.0f memory=%d/%.0f internal=%d/%.0f "
+            "descriptor=%d/%.0f query=%d/%.0f command=%d/%.0f | shaders=%d "
+            "pipelines=%d msl=%.1f | cache raw=%d/%.1f precomp=%d/%.1f | "
+-           "allocators=%u/%.1f MiB\n",
++           "allocators=%u/%.1f MiB%s\n",
+            mtl_device_current_allocated_size(dev->mtl_handle) / mib,
+            bo_total / mib, KK_BO_FIELD(DEVICE_MEMORY), KK_BO_FIELD(INTERNAL),
+            KK_BO_FIELD(DESCRIPTOR_POOL), KK_BO_FIELD(QUERY),
+@@ -152,7 +164,7 @@ kk_memory_log(struct kk_device *dev)
+            p_atomic_read(&vk_pipeline_cache_stats.raw_bytes) / mib,
+            p_atomic_read(&vk_pipeline_cache_stats.precomp_count),
+            p_atomic_read(&vk_pipeline_cache_stats.precomp_bytes) / mib,
+-           allocator_count, allocator_bytes / mib);
++           allocator_count, allocator_bytes / mib, gpl);
+ #undef KK_BO_FIELD
+ }
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_gpl.c b/src/kosmickrisp/vulkan/kk_gpl.c
+index 4bff4a4..f1c2f80 100644
+--- a/src/kosmickrisp/vulkan/kk_gpl.c
++++ b/src/kosmickrisp/vulkan/kk_gpl.c
+@@ -35,9 +35,13 @@ struct kk_gpl_link {
+ /* Why links compiled the whole pipeline rather than use the shaders compiled
+  * on their own (kk_gpl_vertex_blocker, kk_gpl_fragment_blocker,
+  * kk_gpl_link_compile), counted for MESA_KK_DEBUG=compile; the reasons are
+- * static strings. */
++ * static strings, compared by content (a deserialized source's are those of
++ * kk_shader.c's table). */
+ #define KK_GPL_FALLBACK_REASONS 32
+ 
++/* [kk-compile] link totals every this many links, and at device finish */
++#define KK_GPL_TOTALS_EVERY 64
++
+ struct kk_gpl_cache {
+    simple_mtx_t lock;
+    /* blake3 key -> struct kk_gpl_link */
+@@ -45,17 +49,22 @@ struct kk_gpl_cache {
+    /* Vertex and fragment source id pairs (kk_gpl_pair) whose separate link
+     * fell back -> the reason */
+    struct hash_table_u64 *unfit_pairs;
+-   /* For MESA_KK_DEBUG=compile */
+-   uint32_t compiled, failed;
++   /* For MESA_KK_DEBUG=compile: links made, by kind (built from the two
++    * shaders compiled on their own, with the fragment shader compiled at
++    * link, the whole pipeline compiled), and those that failed */
++   uint32_t links_made, separate, separate_vertex, full, failed;
+    struct {
+       const char *reason;
+       uint32_t count;
+    } fallbacks[KK_GPL_FALLBACK_REASONS];
+ 
+-   /* kk_gpl_empty_fragment, compiled once under empty_lock */
++   /* kk_gpl_empty_fragment, compiled once under empty_lock; empty_compiled
++    * is set (atomically) once it is */
+    simple_mtx_t empty_lock;
+    bool empty_compiled;
+    struct kk_gpl_source empty;
++
++   struct kk_gpl_memory_stats memory;
+ };
+ 
+ static uint64_t
+@@ -74,12 +83,37 @@ kk_gpl_count_fallback(struct kk_gpl_cache *cache, const char *reason)
+    for (uint32_t i = 0; i < KK_GPL_FALLBACK_REASONS; i++) {
+       if (cache->fallbacks[i].reason == NULL)
+          cache->fallbacks[i].reason = reason;
+-      if (cache->fallbacks[i].reason == reason)
++      if (strcmp(cache->fallbacks[i].reason, reason) == 0)
+          return ++cache->fallbacks[i].count;
+    }
+    return 0;
+ }
+ 
++/* MESA_KK_DEBUG=compile: the links made so far, by kind, and the fallbacks
++ * by reason */
++static void
++kk_gpl_log_totals(struct kk_gpl_cache *cache)
++{
++   char reasons[512];
++   int n = 0;
++   reasons[0] = 0;
++   simple_mtx_lock(&cache->lock);
++   const uint32_t links = cache->links_made, separate = cache->separate,
++                  separate_vertex = cache->separate_vertex,
++                  full = cache->full, failed = cache->failed;
++   for (uint32_t i = 0; i < KK_GPL_FALLBACK_REASONS &&
++                        cache->fallbacks[i].reason && n < (int)sizeof(reasons);
++        i++)
++      n += snprintf(reasons + n, sizeof(reasons) - n, "%s%s:%u", n ? "," : "",
++                    cache->fallbacks[i].reason, cache->fallbacks[i].count);
++   simple_mtx_unlock(&cache->lock);
++   fprintf(stderr,
++           "[kk-compile] link totals links=%u separate=%u separate-vertex=%u "
++           "full=%u failed=%u fallbacks=%s\n",
++           links, separate, separate_vertex, full, failed,
++           reasons[0] ? reasons : "none");
++}
++
+ static uint32_t
+ kk_gpl_key_hash(const void *key)
+ {
+@@ -120,6 +154,12 @@ kk_gpl_device_init(struct kk_device *dev)
+    return VK_SUCCESS;
+ }
+ 
++struct kk_gpl_memory_stats *
++kk_gpl_memory_stats(struct kk_device *dev)
++{
++   return dev->gpl_cache ? &dev->gpl_cache->memory : NULL;
++}
++
+ static void
+ kk_gpl_link_destroy(struct kk_device *dev, struct kk_gpl_link *link)
+ {
+@@ -136,11 +176,26 @@ kk_gpl_device_finish(struct kk_device *dev)
+    struct kk_gpl_cache *cache = dev->gpl_cache;
+    if (!cache)
+       return;
+-   hash_table_foreach(cache->links, entry)
++   if (KK_DEBUG(COMPILE) && cache->links_made)
++      kk_gpl_log_totals(cache);
++   const struct kk_gpl_memory_stats live = cache->memory;
++   hash_table_foreach(cache->links, entry) {
+       kk_gpl_link_destroy(dev, entry->data);
++      p_atomic_dec(&cache->memory.links);
++   }
+    _mesa_hash_table_destroy(cache->links, NULL);
+    _mesa_hash_table_u64_destroy(cache->unfit_pairs);
+    kk_gpl_source_release(dev, &cache->empty);
++   /* What the application left, and the device's own (the empty fragment
++    * shader), then what is left after them: none */
++   if (KK_DEBUG(MEMORY))
++      fprintf(stderr,
++              "[kk-mem] gpl device finish: live sources=%d shaders=%d "
++              "libraries=%d links=%d, after sources=%d shaders=%d "
++              "libraries=%d links=%d\n",
++              live.sources, live.shaders, live.libraries, live.links,
++              cache->memory.sources, cache->memory.shaders,
++              cache->memory.libraries, cache->memory.links);
+    simple_mtx_destroy(&cache->empty_lock);
+    simple_mtx_destroy(&cache->lock);
+    vk_free(&dev->vk.alloc, cache);
+@@ -153,10 +208,13 @@ kk_gpl_empty_fragment(struct kk_device *dev)
+    struct kk_gpl_cache *cache = dev->gpl_cache;
+    if (!cache)
+       return NULL;
++   /* Draws without a fragment shader ask for it: no lock once compiled */
++   if (p_atomic_read(&cache->empty_compiled))
++      return &cache->empty;
+    simple_mtx_lock(&cache->empty_lock);
+    if (!cache->empty_compiled) {
+       kk_gpl_compile_empty_fragment(dev, &cache->empty);
+-      cache->empty_compiled = true;
++      p_atomic_set(&cache->empty_compiled, true);
+    }
+    simple_mtx_unlock(&cache->empty_lock);
+    return &cache->empty;
+@@ -185,6 +243,7 @@ kk_gpl_forget(struct kk_device *dev, uint64_t id)
+          if (!uses)
+             continue;
+          _mesa_hash_table_remove(cache->links, entry);
++         p_atomic_dec(&cache->memory.links);
+          dead[count++] = link;
+          if (count == ARRAY_SIZE(dead))
+             break;
+@@ -367,16 +426,31 @@ kk_gpl_resolve(struct kk_cmd_buffer *cmd)
+ 
+    /* Whether the shaders compiled on their own can serve this draw */
+    const char *blocker = kk_gpl_vertex_blocker(sources, &ds.state);
++   blake3_hash key;
++   bool keyed = false, keyed_separate = false;
++   if (blocker == NULL && !g->dirty &&
++       ds.rp.color_attachment_count == g->color_attachment_count) {
++      /* What the fragment side's checks read, and the pair's link-time
++       * fallback, is all in the key (with the colour attachment count): a
++       * draw with the key of the link bound last, in that link's mode, links
++       * the same. */
++      keyed_separate = g->blocker == NULL;
++      kk_gpl_key(dev, sources, &ds.state, keyed_separate, key);
++      keyed = true;
++      if (memcmp(key, g->key, sizeof(key)) == 0)
++         return cmd->state.shaders[MESA_SHADER_VERTEX] != NULL;
++   }
+    if (blocker == NULL)
+       blocker = kk_gpl_fragment_blocker(dev, sources, &ds.state);
+-   simple_mtx_lock(&cache->lock);
+-   if (blocker == NULL)
++   if (blocker == NULL) {
++      simple_mtx_lock(&cache->lock);
+       blocker = _mesa_hash_table_u64_search(cache->unfit_pairs,
+                                             kk_gpl_pair(sources));
+-   simple_mtx_unlock(&cache->lock);
++      simple_mtx_unlock(&cache->lock);
++   }
+ 
+-   blake3_hash key;
+-   kk_gpl_key(dev, sources, &ds.state, blocker == NULL, key);
++   if (!keyed || keyed_separate != (blocker == NULL))
++      kk_gpl_key(dev, sources, &ds.state, blocker == NULL, key);
+    if (!g->dirty && memcmp(key, g->key, sizeof(key)) == 0)
+       return cmd->state.shaders[MESA_SHADER_VERTEX] != NULL;
+ 
+@@ -444,15 +518,25 @@ kk_gpl_resolve(struct kk_cmd_buffer *cmd)
+          link = entry->data;
+       } else {
+          _mesa_hash_table_insert(cache->links, link->key, link);
+-         if (result == VK_SUCCESS)
+-            cache->compiled++;
++         p_atomic_inc(&cache->memory.links);
++         const uint32_t links = ++cache->links_made;
++         if (blocker)
++            cache->full++;
++         else if (fragment_at_link)
++            cache->separate_vertex++;
+          else
++            cache->separate++;
++         if (result != VK_SUCCESS)
+             cache->failed++;
+          simple_mtx_unlock(&cache->lock);
++         if (KK_DEBUG(COMPILE) && links % KK_GPL_TOTALS_EVERY == 0)
++            kk_gpl_log_totals(cache);
+       }
+    }
+ 
+    memcpy(g->key, key, sizeof(key));
++   g->blocker = blocker;
++   g->color_attachment_count = ds.rp.color_attachment_count;
+    g->dirty = false;
+    if (link->linked[MESA_SHADER_VERTEX] == NULL) {
+       /* Failed: leave nothing of it bound, and skip its draws. */
+diff --git a/src/kosmickrisp/vulkan/kk_gpl.h b/src/kosmickrisp/vulkan/kk_gpl.h
+index 00dd58e..b967c50 100644
+--- a/src/kosmickrisp/vulkan/kk_gpl.h
++++ b/src/kosmickrisp/vulkan/kk_gpl.h
+@@ -21,6 +21,10 @@
+  * serves every vertex input state and topology of a class. What they cannot
+  * serve falls back to the whole compile, counted by reason ([kk-compile]
+  * link lines).
++ *
++ * A pipeline library's shader serializes (pipeline caches) with its NIR and
++ * what compiling it needs, and with the MSL of the shaders compiled on their
++ * own; deserializing it builds their Metal libraries again.
+  */
+ 
+ #ifndef KK_GPL_H
+@@ -89,6 +93,17 @@ struct kk_gpl_source {
+    const char *fragment_at_link;
+ };
+ 
++/* MESA_KK_DEBUG=memory: a device's live pipeline library shaders (each a
++ * struct kk_gpl_source), the shaders compiled on their own for them (and
++ * the empty fragment shader), their Metal libraries, and links. Updated
++ * with atomics. */
++struct kk_gpl_memory_stats {
++   int32_t sources;
++   int32_t shaders;
++   int32_t libraries;
++   int32_t links;
++};
++
+ /* Graphics stages a link covers: vertex to fragment */
+ #define KK_GPL_STAGES (MESA_SHADER_FRAGMENT + 1)
+ 
+@@ -102,6 +117,11 @@ struct kk_gpl_cmd_state {
+    BITSET_DECLARE(static_set, MESA_VK_DYNAMIC_GRAPHICS_STATE_ENUM_MAX);
+    /* Key of the link bound last */
+    blake3_hash key;
++   /* Why that link compiled the whole pipeline (NULL if it did not), and the
++    * colour attachment count it was checked with: a draw whose key is the
++    * same in that mode needs no blocker checks (kk_gpl_resolve) */
++   const char *blocker;
++   uint32_t color_attachment_count;
+    bool dirty;
+ };
+ 
+@@ -113,6 +133,9 @@ void kk_gpl_device_finish(struct kk_device *dev);
+ /* Drops the links that use the source with this id */
+ void kk_gpl_forget(struct kk_device *dev, uint64_t id);
+ 
++/* The device's counts, NULL without MESA_KK_EXPERIMENTAL=gpl */
++struct kk_gpl_memory_stats *kk_gpl_memory_stats(struct kk_device *dev);
++
+ /* Before a draw: links the bound library shaders, if any, and binds the
+  * result. False if they could not be linked (the draw is skipped). */
+ bool kk_gpl_resolve(struct kk_cmd_buffer *cmd);
+diff --git a/src/kosmickrisp/vulkan/kk_shader.c b/src/kosmickrisp/vulkan/kk_shader.c
+index 1f72b2e..e9811f9 100644
+--- a/src/kosmickrisp/vulkan/kk_shader.c
++++ b/src/kosmickrisp/vulkan/kk_shader.c
+@@ -299,7 +299,7 @@ kk_hash_graphics_state(struct vk_physical_device *device,
+     * keep their NIR (kk_gpl_compile_separate), so they are keyed apart from
+     * a whole pipeline's. */
+    if (kk_gpl_partial_state(state)) {
+-      const char separate[] = "kk-gpl-separate-v3";
++      const char separate[] = "kk-gpl-separate-v4";
+       _mesa_blake3_update(&blake3_ctx, separate, sizeof(separate));
+    }
+ 
+@@ -1024,6 +1024,27 @@ kk_msl_data_pack(struct msl_compile_data *data)
+    data->code = NULL;
+ }
+ 
++/* A built shader's MSL source as a new ralloc string, inflated if it is
++ * packed; NULL if it cannot be. */
++static char *
++kk_msl_data_code_dup(const struct msl_compile_data *data)
++{
++   if (data->code)
++      return ralloc_strdup(NULL, data->code);
++   if (data->packed == NULL)
++      return NULL;
++   char *code = ralloc_size(NULL, data->code_size);
++   uLongf size = data->code_size;
++   if (code == NULL ||
++       uncompress((Bytef *)code, &size, data->packed, data->packed_size) !=
++          Z_OK ||
++       size != data->code_size) {
++      ralloc_free(code);
++      return NULL;
++   }
++   return code;
++}
++
+ static void
+ kk_shader_pack_msl(struct kk_shader *shader)
+ {
+@@ -1075,6 +1096,7 @@ kk_shader_destroy(struct vk_device *vk_dev, struct kk_shader *shader,
+       struct kk_gpl_source *src = shader->gpl;
+       kk_gpl_forget(dev, src->id);
+       kk_gpl_source_release(dev, src);
++      p_atomic_dec(&kk_gpl_memory_stats(dev)->sources);
+       for (uint32_t i = 0; i < src->set_layout_count; i++) {
+          if (src->set_layouts[i])
+             vk_descriptor_set_layout_unref(&dev->vk, src->set_layouts[i]);
+@@ -3497,16 +3519,33 @@ kk_msl_serialize(struct kk_shader *shader, mesa_shader_stage stage,
+    kk_msl_data_serialize(&shader->msl_data[stage], blob);
+ }
+ 
++/* Playport (PLA-424): a pipeline library's shader serialized
++ * (kk_gpl_serialize). Its blob starts with KK_GPL_BLOB_MAGIC where a whole
++ * pipeline's starts with its stage, and then KK_GPL_BLOB_VERSION: a blob of
++ * another version is refused, not read. The cache key changes with it too
++ * (kk_hash_graphics_state). */
++#define KK_GPL_BLOB_MAGIC   0x4c50474bu /* "KGPL" */
++#define KK_GPL_BLOB_VERSION 1u
++static_assert(offsetof(struct kk_shader_info, stage) == 0 &&
++                 sizeof(mesa_shader_stage) == sizeof(uint32_t),
++              "a whole pipeline's blob starts with its stage");
++
++static bool kk_gpl_serialize(const struct kk_shader *shader,
++                             struct blob *blob);
++static VkResult kk_gpl_deserialize(struct kk_device *dev,
++                                   struct blob_reader *blob,
++                                   const VkAllocationCallbacks *pAllocator,
++                                   struct vk_shader **shader_out);
++
+ static bool
+ kk_shader_serialize(struct vk_device *vk_dev, const struct vk_shader *vk_shader,
+                     struct blob *blob)
+ {
+    struct kk_shader *shader = container_of(vk_shader, struct kk_shader, vk);
+ 
+-   /* Playport (PLA-424): a pipeline library's shader holds NIR and set
+-    * layouts, not MSL; it is not serialized. */
++   /* Playport (PLA-424): a pipeline library's shader */
+    if (shader->gpl)
+-      return false;
++      return kk_gpl_serialize(shader, blob);
+ 
+    blob_write_bytes(blob, &shader->info, sizeof(shader->info));
+    kk_msl_serialize(shader, shader->info.stage, blob);
+@@ -3564,6 +3603,13 @@ kk_deserialize_shader(struct vk_device *vk_dev, struct blob_reader *blob,
+ {
+    struct kk_device *dev = container_of(vk_dev, struct kk_device, vk);
+ 
++   /* Playport (PLA-424): a pipeline library's shader (kk_gpl_serialize) */
++   uint32_t first = 0;
++   if (blob->end - blob->current >= (ptrdiff_t)sizeof(first))
++      memcpy(&first, blob->current, sizeof(first));
++   if (first == KK_GPL_BLOB_MAGIC)
++      return kk_gpl_deserialize(dev, blob, pAllocator, shader_out);
++
+    struct kk_shader_info info;
+    blob_copy_bytes(blob, &info, sizeof(info));
+    if (blob->overrun)
+@@ -3807,6 +3853,57 @@ kk_gpl_single_slot_varyings(nir_shader *nir, bool *indirect)
+                                      nir_metadata_control_flow, indirect);
+ }
+ 
++/* Builds the Metal library of a vertex or fragment shader compiled on its own
++ * (or deserialized: msl_src) into src, which keeps both, or says why it could
++ * not be built. kind names it on the [kk-compile] gpl line. A kept shader's
++ * MSL is packed, and it and its library are counted. */
++static void
++kk_gpl_build_library(struct kk_device *dev, struct kk_gpl_source *src,
++                     struct kk_shader *shader, const char *kind,
++                     const char *msl_src, int64_t start)
++{
++   const bool vertex = shader->info.stage == MESA_SHADER_VERTEX;
++   struct kk_library_build build = {
++      .device = dev,
++      .data = &shader->msl_data[shader->info.stage],
++      .kind = "gpl",
++      .step = vertex ? "vertex-library" : "fragment-library",
++      .src = msl_src,
++   };
++   kk_build_library(&build);
++   if (KK_DEBUG(COMPILE)) {
++      const char *how = build.library == NULL ? "FAIL"
++                        : strcmp(msl_src, KK_SRC_DESERIALIZED) == 0
++                           ? "deserialized"
++                           : "built";
++      fprintf(stderr, "[kk-compile] gpl %s %s ms=%.1f library_ms=%.1f\n", kind,
++              how, (os_time_get_nano() - start) / 1e6, build.ns / 1e6);
++   }
++   if (build.library == NULL) {
++      kk_shader_destroy(&dev->vk, shader, &dev->vk.alloc);
++      if (vertex)
++         src->vertex_blocker = "vertex-library";
++      else
++         src->fragment_at_link = "fragment-library";
++      return;
++   }
++
++   /* Links copy the MSL out again (kk_msl_data_code_dup) */
++   kk_shader_pack_msl(shader);
++   if (KK_DEBUG(MEMORY))
++      kk_shader_count(shader, 1);
++   struct kk_gpl_memory_stats *memory = kk_gpl_memory_stats(dev);
++   p_atomic_inc(&memory->shaders);
++   p_atomic_inc(&memory->libraries);
++   if (vertex) {
++      src->vertex = shader;
++      src->vertex_library = build.library;
++   } else {
++      src->fragment = shader;
++      src->fragment_library = build.library;
++   }
++}
++
+ /* Playport (PLA-424): a vertex shader alone in its pipeline library, compiled
+  * apart from the other libraries (runtime vertex fetch, a point size always,
+  * vec4 user varyings) into src->vertex, and its Metal library built. Without
+@@ -3853,54 +3950,8 @@ kk_gpl_compile_vertex(struct kk_device *dev, struct kk_gpl_source *src,
+       return;
+    }
+ 
+-   struct kk_library_build build = {
+-      .device = dev,
+-      .data = &vs->msl_data[MESA_SHADER_VERTEX],
+-      .kind = "gpl",
+-      .step = "vertex-library",
+-      .src = KK_SRC_TRANSLATED,
+-   };
+-   kk_build_library(&build);
+-   if (KK_DEBUG(COMPILE))
+-      fprintf(stderr, "[kk-compile] gpl vertex %s ms=%.1f library_ms=%.1f\n",
+-              build.library ? "built" : "FAIL",
+-              (os_time_get_nano() - start) / 1e6, build.ns / 1e6);
+-   if (build.library == NULL) {
+-      kk_shader_destroy(&dev->vk, vs, &dev->vk.alloc);
+-      src->vertex_blocker = "vertex-library";
+-      return;
+-   }
+-
+-   src->vertex = vs;
+-   src->vertex_library = build.library;
+    src->view_mask = state->mv ? state->mv->view_mask : 0;
+-}
+-
+-/* Builds the Metal library of a fragment shader compiled on its own into
+- * src, or says why it could not be built. */
+-static void
+-kk_gpl_build_fragment(struct kk_device *dev, struct kk_gpl_source *src,
+-                      struct kk_shader *fs, const char *kind, int64_t start)
+-{
+-   struct kk_library_build build = {
+-      .device = dev,
+-      .data = &fs->msl_data[MESA_SHADER_FRAGMENT],
+-      .kind = "gpl",
+-      .step = "fragment-library",
+-      .src = KK_SRC_TRANSLATED,
+-   };
+-   kk_build_library(&build);
+-   if (KK_DEBUG(COMPILE))
+-      fprintf(stderr, "[kk-compile] gpl %s %s ms=%.1f library_ms=%.1f\n", kind,
+-              build.library ? "built" : "FAIL",
+-              (os_time_get_nano() - start) / 1e6, build.ns / 1e6);
+-   if (build.library == NULL) {
+-      kk_shader_destroy(&dev->vk, fs, &dev->vk.alloc);
+-      src->fragment_at_link = "fragment-library";
+-      return;
+-   }
+-   src->fragment = fs;
+-   src->fragment_library = build.library;
++   kk_gpl_build_library(dev, src, vs, "vertex", KK_SRC_TRANSLATED, start);
+ }
+ 
+ /* Why a fragment shader compiled on its own (NIR lowered for it) does not
+@@ -3991,7 +4042,7 @@ kk_gpl_compile_fragment(struct kk_device *dev, struct kk_gpl_source *src,
+                  full ? "full" : "at-link", reason);
+       return;
+    }
+-   kk_gpl_build_fragment(dev, src, fs, "fragment", start);
++   kk_gpl_build_library(dev, src, fs, "fragment", KK_SRC_TRANSLATED, start);
+ }
+ 
+ /* The device's empty fragment shader compiled on its own (kk_gpl.h) */
+@@ -4009,20 +4060,32 @@ kk_gpl_compile_empty_fragment(struct kk_device *dev, struct kk_gpl_source *src)
+       src->fragment_at_link = "fragment-compile";
+       return;
+    }
+-   kk_gpl_build_fragment(dev, src, fs, "empty-fragment", start);
++   kk_gpl_build_library(dev, src, fs, "empty-fragment", KK_SRC_TRANSLATED,
++                        start);
+ }
+ 
+ void
+ kk_gpl_source_release(struct kk_device *dev, struct kk_gpl_source *src)
+ {
+-   if (src->vertex_library)
++   struct kk_gpl_memory_stats *memory = kk_gpl_memory_stats(dev);
++   if (src->vertex_library) {
+       mtl_release(src->vertex_library);
+-   if (src->vertex)
++      p_atomic_dec(&memory->libraries);
++   }
++   if (src->vertex) {
+       kk_shader_destroy(&dev->vk, src->vertex, &dev->vk.alloc);
+-   if (src->fragment_library)
++      p_atomic_dec(&memory->shaders);
++   }
++   if (src->fragment_library) {
+       mtl_release(src->fragment_library);
+-   if (src->fragment)
++      p_atomic_dec(&memory->libraries);
++   }
++   if (src->fragment) {
+       kk_shader_destroy(&dev->vk, src->fragment, &dev->vk.alloc);
++      p_atomic_dec(&memory->shaders);
++   }
++   src->vertex_library = src->fragment_library = NULL;
++   src->vertex = src->fragment = NULL;
+ }
+ 
+ static VkResult
+@@ -4083,6 +4146,386 @@ kk_gpl_source_init(struct kk_device *dev, struct kk_gpl_source *src,
+    return VK_SUCCESS;
+ }
+ 
++/* Every reason a struct kk_gpl_source keeps (kk_gpl_compile_vertex,
++ * kk_gpl_compile_fragment, kk_gpl_build_library), by which a blob names
++ * one */
++static const char *const kk_gpl_source_reasons[] = {
++   "stages",           "xfb",
++   "memory",           "varying-indirect",
++   "vertex-compile",   "vertex-library",
++   "debug-solid",      "input-attachment",
++   "fragment-clip-input", "fragment-primitive-id",
++   "dual-source",      "triangle-merge",
++   "fragment-compile", "fragment-library",
++};
++
++/* Reasons that may not hold in another run: a source with one is not
++ * serialized */
++static bool
++kk_gpl_reason_is_transient(const char *reason)
++{
++   return reason && (strcmp(reason, "memory") == 0 ||
++                     strcmp(reason, "vertex-library") == 0 ||
++                     strcmp(reason, "fragment-library") == 0);
++}
++
++static void
++kk_gpl_reason_serialize(struct blob *blob, const char *reason)
++{
++   blob_write_string(blob, reason ? reason : "");
++}
++
++/* *ok is cleared for a reason that is not in kk_gpl_source_reasons */
++static const char *
++kk_gpl_reason_deserialize(struct blob_reader *blob, bool *ok)
++{
++   const char *reason = blob_read_string(blob);
++   if (reason == NULL) {
++      *ok = false;
++      return NULL;
++   }
++   if (reason[0] == 0)
++      return NULL;
++   for (uint32_t i = 0; i < ARRAY_SIZE(kk_gpl_source_reasons); i++) {
++      if (strcmp(reason, kk_gpl_source_reasons[i]) == 0)
++         return kk_gpl_source_reasons[i];
++   }
++   *ok = false;
++   return NULL;
++}
++
++/* What compiling NIR with a descriptor set layout reads of it
++ * (kk_nir_lower_descriptors). Immutable samplers matter only for their
++ * Y'CbCr conversions (lookup_ycbcr_conversion): a layout with one is not
++ * serialized. */
++static bool
++kk_gpl_set_layout_serializable(const struct vk_descriptor_set_layout *vk_layout)
++{
++   const struct kk_descriptor_set_layout *layout =
++      vk_to_kk_descriptor_set_layout((struct vk_descriptor_set_layout *)vk_layout);
++   for (uint32_t b = 0; b < layout->binding_count; b++) {
++      const struct kk_descriptor_set_binding_layout *binding =
++         &layout->binding[b];
++      if (binding->immutable_samplers == NULL)
++         continue;
++      for (uint32_t i = 0; i < binding->array_size; i++) {
++         const struct kk_sampler *sampler = binding->immutable_samplers[i];
++         if (sampler && sampler->vk.ycbcr_conversion)
++            return false;
++      }
++   }
++   return true;
++}
++
++static void
++kk_gpl_set_layout_serialize(struct blob *blob,
++                            const struct vk_descriptor_set_layout *vk_layout)
++{
++   const struct kk_descriptor_set_layout *layout =
++      vk_to_kk_descriptor_set_layout((struct vk_descriptor_set_layout *)vk_layout);
++   blob_write_uint32(blob, layout->vk.flags);
++   blob_write_uint32(blob, layout->vk.dynamic_descriptor_count);
++   blob_write_bytes(blob, layout->vk.blake3, sizeof(layout->vk.blake3));
++   blob_write_uint32(blob, layout->flags);
++   blob_write_uint32(blob, layout->non_variable_descriptor_buffer_size);
++   blob_write_uint32(blob, layout->max_buffer_size);
++   blob_write_bytes(blob, layout->dynamic_ubos, sizeof(layout->dynamic_ubos));
++   blob_write_uint32(blob, layout->descriptor_count);
++   blob_write_uint32(blob, layout->binding_count);
++   for (uint32_t b = 0; b < layout->binding_count; b++) {
++      const struct kk_descriptor_set_binding_layout *binding =
++         &layout->binding[b];
++      blob_write_uint32(blob, binding->type);
++      blob_write_uint32(blob, binding->flags);
++      blob_write_uint32(blob, binding->array_size);
++      blob_write_uint32(blob, binding->offset);
++      blob_write_uint8(blob, binding->stride);
++      blob_write_uint8(blob, binding->dynamic_buffer_index);
++   }
++}
++
++/* A layout with what kk_gpl_set_layout_serialize wrote, for compiling only:
++ * no immutable samplers, no embedded sampler buffer. */
++static struct vk_descriptor_set_layout *
++kk_gpl_set_layout_deserialize(struct kk_device *dev, struct blob_reader *blob)
++{
++   const VkDescriptorSetLayoutCreateInfo info = {
++      .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
++      .flags = blob_read_uint32(blob),
++   };
++   const uint32_t dynamic_descriptor_count = blob_read_uint32(blob);
++   blake3_hash blake3;
++   blob_copy_bytes(blob, blake3, sizeof(blake3));
++   const uint32_t flags = blob_read_uint32(blob);
++   const uint32_t non_variable_size = blob_read_uint32(blob);
++   const uint32_t max_buffer_size = blob_read_uint32(blob);
++   BITSET_DECLARE(dynamic_ubos, KK_MAX_DYNAMIC_BUFFERS);
++   blob_copy_bytes(blob, dynamic_ubos, sizeof(dynamic_ubos));
++   const uint32_t descriptor_count = blob_read_uint32(blob);
++   const uint32_t binding_count = blob_read_uint32(blob);
++   /* Each binding takes 18 bytes of the blob */
++   if (blob->overrun || binding_count > (blob->end - blob->current) / 18)
++      return NULL;
++
++   struct kk_descriptor_set_layout *layout = vk_descriptor_set_layout_zalloc(
++      &dev->vk,
++      sizeof(*layout) + binding_count * sizeof(layout->binding[0]), &info);
++   if (layout == NULL)
++      return NULL;
++   layout->vk.dynamic_descriptor_count = dynamic_descriptor_count;
++   memcpy(layout->vk.blake3, blake3, sizeof(blake3));
++   layout->flags = flags;
++   layout->non_variable_descriptor_buffer_size = non_variable_size;
++   layout->max_buffer_size = max_buffer_size;
++   BITSET_COPY(layout->dynamic_ubos, dynamic_ubos);
++   layout->descriptor_count = descriptor_count;
++   layout->binding_count = binding_count;
++   for (uint32_t b = 0; b < binding_count; b++) {
++      struct kk_descriptor_set_binding_layout *binding = &layout->binding[b];
++      binding->type = blob_read_uint32(blob);
++      binding->flags = blob_read_uint32(blob);
++      binding->array_size = blob_read_uint32(blob);
++      binding->offset = blob_read_uint32(blob);
++      binding->stride = blob_read_uint8(blob);
++      binding->dynamic_buffer_index = blob_read_uint8(blob);
++   }
++   return &layout->vk;
++}
++
++/* A vertex or fragment shader compiled on its own: what links read of it */
++static void
++kk_gpl_shader_serialize(struct blob *blob, const struct kk_shader *shader)
++{
++   blob_write_bytes(blob, &shader->info, sizeof(shader->info));
++   kk_msl_data_serialize(&shader->msl_data[shader->info.stage], blob);
++   blob_write_uint8(blob, shader->gpl_vertex_fetch);
++   blob_write_bytes(blob, shader->gpl_varying_types,
++                    sizeof(shader->gpl_varying_types));
++   blob_write_uint32(blob, shader->gpl_varyings_read);
++   blob_write_bytes(blob, shader->gpl_output_types,
++                    sizeof(shader->gpl_output_types));
++   blob_write_uint8(blob, shader->gpl_writes_depth);
++   blob_write_uint8(blob, shader->gpl_dual_source);
++}
++
++static struct kk_shader *
++kk_gpl_shader_deserialize(struct kk_device *dev, struct blob_reader *blob,
++                          mesa_shader_stage stage)
++{
++   struct kk_shader_info info;
++   blob_copy_bytes(blob, &info, sizeof(info));
++   if (blob->overrun || info.stage != stage)
++      return NULL;
++   struct kk_shader *shader = vk_shader_zalloc(
++      &dev->vk, &kk_shader_ops, stage, &dev->vk.alloc, sizeof(*shader));
++   if (shader == NULL)
++      return NULL;
++   shader->info = info;
++   if (kk_msl_data_deserialize(blob, &shader->msl_data[stage]) != VK_SUCCESS) {
++      kk_shader_destroy(&dev->vk, shader, &dev->vk.alloc);
++      return NULL;
++   }
++   shader->gpl_vertex_fetch = blob_read_uint8(blob);
++   blob_copy_bytes(blob, shader->gpl_varying_types,
++                   sizeof(shader->gpl_varying_types));
++   shader->gpl_varyings_read = blob_read_uint32(blob);
++   blob_copy_bytes(blob, shader->gpl_output_types,
++                   sizeof(shader->gpl_output_types));
++   shader->gpl_writes_depth = blob_read_uint8(blob);
++   shader->gpl_dual_source = blob_read_uint8(blob);
++   if (blob->overrun) {
++      kk_shader_destroy(&dev->vk, shader, &dev->vk.alloc);
++      return NULL;
++   }
++   return shader;
++}
++
++/* A pipeline library's shader: its struct kk_gpl_source. False (the shader
++ * is not cached) if it cannot be read back the same: a reason that may not
++ * hold in another run, or a set layout with a Y'CbCr conversion. */
++static bool
++kk_gpl_serialize(const struct kk_shader *shader, struct blob *blob)
++{
++   const struct kk_gpl_source *src = shader->gpl;
++   if (kk_gpl_reason_is_transient(src->vertex_blocker) ||
++       kk_gpl_reason_is_transient(src->fragment_at_link))
++      return false;
++   for (uint32_t i = 0; i < src->set_layout_count; i++) {
++      if (src->set_layouts[i] &&
++          !kk_gpl_set_layout_serializable(src->set_layouts[i]))
++         return false;
++   }
++
++   blob_write_uint32(blob, KK_GPL_BLOB_MAGIC);
++   blob_write_uint32(blob, KK_GPL_BLOB_VERSION);
++   blob_write_uint32(blob, shader->info.stage);
++   blob_write_uint64(blob, src->nir_size);
++   blob_write_bytes(blob, src->nir, src->nir_size);
++   blob_write_uint32(blob, src->flags);
++   blob_write_bytes(blob, &src->rs, sizeof(src->rs));
++   blob_write_uint32(blob, src->set_layout_count);
++   for (uint32_t i = 0; i < src->set_layout_count; i++) {
++      blob_write_uint8(blob, src->set_layouts[i] != NULL);
++      if (src->set_layouts[i])
++         kk_gpl_set_layout_serialize(blob, src->set_layouts[i]);
++   }
++   blob_write_uint32(blob, src->embedded_sampler_count);
++   blob_write_bytes(blob, src->embedded_samplers,
++                    src->embedded_sampler_count *
++                       sizeof(*src->embedded_samplers));
++   blob_write_uint32(blob, src->push_constant_range_count);
++   blob_write_bytes(blob, &src->push_constant_range,
++                    sizeof(src->push_constant_range));
++   blob_write_uint8(blob, src->sample_shading_enable);
++   blob_write_bytes(blob, &src->min_sample_shading,
++                    sizeof(src->min_sample_shading));
++   blob_write_uint32(blob, src->view_mask);
++
++   kk_gpl_reason_serialize(blob, src->vertex_blocker);
++   blob_write_uint8(blob, src->vertex != NULL);
++   if (src->vertex)
++      kk_gpl_shader_serialize(blob, src->vertex);
++   kk_gpl_reason_serialize(blob, src->fragment_fallback);
++   kk_gpl_reason_serialize(blob, src->fragment_at_link);
++   blob_write_uint8(blob, src->fragment != NULL);
++   if (src->fragment)
++      kk_gpl_shader_serialize(blob, src->fragment);
++   return !blob->out_of_memory;
++}
++
++/* The pipeline library's shader kk_gpl_serialize wrote, its shaders compiled
++ * on their own with their Metal libraries built again. */
++static VkResult
++kk_gpl_deserialize(struct kk_device *dev, struct blob_reader *blob,
++                   const VkAllocationCallbacks *pAllocator,
++                   struct vk_shader **shader_out)
++{
++   const int64_t start = os_time_get_nano();
++   const uint32_t magic = blob_read_uint32(blob);
++   const uint32_t version = blob_read_uint32(blob);
++   const uint32_t stage = blob_read_uint32(blob);
++   if (blob->overrun || magic != KK_GPL_BLOB_MAGIC ||
++       version != KK_GPL_BLOB_VERSION || dev->gpl_cache == NULL ||
++       stage > MESA_SHADER_FRAGMENT)
++      return vk_error(dev, VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT);
++
++   struct kk_shader *shader = vk_shader_zalloc(
++      &dev->vk, &kk_shader_ops, stage, pAllocator, sizeof(*shader));
++   struct kk_gpl_source *src =
++      shader ? vk_zalloc(&dev->vk.alloc, sizeof(*src), 8,
++                         VK_SYSTEM_ALLOCATION_SCOPE_DEVICE)
++             : NULL;
++   if (src == NULL) {
++      if (shader)
++         vk_shader_free(&dev->vk, pAllocator, &shader->vk);
++      return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
++   }
++   shader->info.stage = stage;
++   shader->gpl = src;
++   p_atomic_inc(&kk_gpl_memory_stats(dev)->sources);
++   src->id = p_atomic_inc_return(&kk_gpl_next_id);
++
++   VkResult result = VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT;
++   bool ok = true;
++   const uint64_t nir_size = blob_read_uint64(blob);
++   if (blob->overrun || nir_size > (uint64_t)(blob->end - blob->current))
++      goto fail;
++   src->nir = malloc(nir_size);
++   if (src->nir == NULL) {
++      result = VK_ERROR_OUT_OF_HOST_MEMORY;
++      goto fail;
++   }
++   blob_copy_bytes(blob, src->nir, nir_size);
++   src->nir_size = nir_size;
++   src->flags = blob_read_uint32(blob);
++   blob_copy_bytes(blob, &src->rs, sizeof(src->rs));
++
++   const uint32_t set_layout_count = blob_read_uint32(blob);
++   if (blob->overrun || set_layout_count > KK_MAX_SETS)
++      goto fail;
++   if (set_layout_count) {
++      src->set_layouts =
++         vk_zalloc(&dev->vk.alloc, set_layout_count * sizeof(*src->set_layouts),
++                   8, VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
++      if (src->set_layouts == NULL) {
++         result = VK_ERROR_OUT_OF_HOST_MEMORY;
++         goto fail;
++      }
++      src->set_layout_count = set_layout_count;
++   }
++   for (uint32_t i = 0; i < set_layout_count; i++) {
++      if (!blob_read_uint8(blob))
++         continue;
++      src->set_layouts[i] = kk_gpl_set_layout_deserialize(dev, blob);
++      if (src->set_layouts[i] == NULL)
++         goto fail;
++   }
++
++   const uint32_t embedded_sampler_count = blob_read_uint32(blob);
++   const size_t embedded_size =
++      (size_t)embedded_sampler_count * sizeof(*src->embedded_samplers);
++   if (blob->overrun ||
++       embedded_size > (size_t)(blob->end - blob->current))
++      goto fail;
++   if (embedded_sampler_count) {
++      src->embedded_samplers = vk_alloc(&dev->vk.alloc, embedded_size, 8,
++                                        VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
++      if (src->embedded_samplers == NULL) {
++         result = VK_ERROR_OUT_OF_HOST_MEMORY;
++         goto fail;
++      }
++      blob_copy_bytes(blob, src->embedded_samplers, embedded_size);
++      src->embedded_sampler_count = embedded_sampler_count;
++   }
++   src->push_constant_range_count = blob_read_uint32(blob);
++   blob_copy_bytes(blob, &src->push_constant_range,
++                   sizeof(src->push_constant_range));
++   src->sample_shading_enable = blob_read_uint8(blob);
++   blob_copy_bytes(blob, &src->min_sample_shading,
++                   sizeof(src->min_sample_shading));
++   src->view_mask = blob_read_uint32(blob);
++
++   src->vertex_blocker = kk_gpl_reason_deserialize(blob, &ok);
++   struct kk_shader *vertex = NULL;
++   if (ok && !blob->overrun && blob_read_uint8(blob)) {
++      vertex = kk_gpl_shader_deserialize(dev, blob, MESA_SHADER_VERTEX);
++      ok = vertex != NULL;
++   }
++   src->fragment_fallback = kk_gpl_reason_deserialize(blob, &ok);
++   src->fragment_at_link = kk_gpl_reason_deserialize(blob, &ok);
++   struct kk_shader *fragment = NULL;
++   if (ok && !blob->overrun && blob_read_uint8(blob)) {
++      fragment = kk_gpl_shader_deserialize(dev, blob, MESA_SHADER_FRAGMENT);
++      ok = fragment != NULL;
++   }
++   if (!ok || blob->overrun) {
++      if (vertex)
++         kk_shader_destroy(&dev->vk, vertex, &dev->vk.alloc);
++      if (fragment)
++         kk_shader_destroy(&dev->vk, fragment, &dev->vk.alloc);
++      goto fail;
++   }
++
++   /* As kk_gpl_compile_separate: the libraries are built now, and links
++    * without a fragment shader use the empty one */
++   if (vertex) {
++      kk_gpl_build_library(dev, src, vertex, "vertex", KK_SRC_DESERIALIZED,
++                           start);
++      if (src->vertex)
++         kk_gpl_empty_fragment(dev);
++   }
++   if (fragment)
++      kk_gpl_build_library(dev, src, fragment, "fragment",
++                           KK_SRC_DESERIALIZED, start);
++
++   *shader_out = &shader->vk;
++   return VK_SUCCESS;
++
++fail:
++   kk_shader_destroy(&dev->vk, shader, pAllocator);
++   return vk_error(dev, result);
++}
++
+ /* A pipeline library's shaders: their NIR and what compiling it needs, kept
+  * until a draw links them (kk_gpl_link_compile). */
+ static VkResult
+@@ -4105,6 +4548,7 @@ kk_gpl_compile_separate(struct kk_device *dev, uint32_t shader_count,
+          if (src) {
+             shader->info.stage = infos[i].stage;
+             shader->gpl = src;
++            p_atomic_inc(&kk_gpl_memory_stats(dev)->sources);
+             result = kk_gpl_source_init(dev, src, &infos[i], state);
+             if (result != VK_SUCCESS) {
+                kk_shader_destroy(&dev->vk, shader, pAllocator);
+@@ -4366,9 +4810,14 @@ kk_gpl_linked_vertex(struct kk_device *dev, const struct kk_shader *vertex)
+    memcpy(vs->gpl_varying_types, vertex->gpl_varying_types,
+           sizeof(vs->gpl_varying_types));
+    vs->msl_data[MESA_SHADER_VERTEX].code =
+-      ralloc_strdup(NULL, vertex->msl_data[MESA_SHADER_VERTEX].code);
++      kk_msl_data_code_dup(&vertex->msl_data[MESA_SHADER_VERTEX]);
+    vs->msl_data[MESA_SHADER_VERTEX].entrypoint_name =
+       ralloc_strdup(NULL, vertex->msl_data[MESA_SHADER_VERTEX].entrypoint_name);
++   if (vs->msl_data[MESA_SHADER_VERTEX].code == NULL ||
++       vs->msl_data[MESA_SHADER_VERTEX].entrypoint_name == NULL) {
++      kk_shader_destroy(&dev->vk, vs, &dev->vk.alloc);
++      return NULL;
++   }
+    return vs;
+ }
+ 
+@@ -4429,9 +4878,15 @@ kk_gpl_link_libraries(struct kk_device *dev, const struct kk_gpl_source *vsrc,
+    }
+    fs->info = fragment->info;
+    fs->msl_data[MESA_SHADER_FRAGMENT].code =
+-      ralloc_strdup(NULL, fragment->msl_data[MESA_SHADER_FRAGMENT].code);
++      kk_msl_data_code_dup(&fragment->msl_data[MESA_SHADER_FRAGMENT]);
+    fs->msl_data[MESA_SHADER_FRAGMENT].entrypoint_name = ralloc_strdup(
+       NULL, fragment->msl_data[MESA_SHADER_FRAGMENT].entrypoint_name);
++   if (fs->msl_data[MESA_SHADER_FRAGMENT].code == NULL ||
++       fs->msl_data[MESA_SHADER_FRAGMENT].entrypoint_name == NULL) {
++      kk_shader_destroy(&dev->vk, vs, &dev->vk.alloc);
++      kk_shader_destroy(&dev->vk, fs, &dev->vk.alloc);
++      return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
++   }
+ 
+    struct kk_shader *pair[] = {vs, fs};
+    gather_graphics_pipeline_create_info(dev, state, pair, ARRAY_SIZE(pair));
+@@ -4646,6 +5101,9 @@ kk_deserialize_shader_noted(struct vk_device *vk_dev, struct blob_reader *blob,
+    if (result == VK_SUCCESS) {
+       struct kk_shader *shader =
+          container_of(*shader_out, struct kk_shader, vk);
++      /* A pipeline library's shader counts as its source (kk_gpl.h) */
++      if (shader->gpl)
++         return result;
+       kk_shader_pack_msl(shader);
+       if (KK_DEBUG(MEMORY))
+          kk_shader_count(shader, 1);
