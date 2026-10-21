@@ -60,6 +60,17 @@ map, type AMD64). Over the 592 ARM64EC DLLs staged by the current build:
   - with a code map, both for a source mapping and for a rebased child copy;
   - without a code map, where the old failure is kept.
 
+## The InitOnceExecuteOnce stub again (wine-pe 0053)
+
+- **What is in the build.** The stub is back as wine-pe 0053, behind `MADEIRA_X64_ONCE_FASTPATH=1`,
+  off by default. It sits on top of the QueryPerformanceCounter stub
+  ([2026-10-21-x64-qpc-stub.md](2026-10-21-x64-qpc-stub.md)) in dev IPA `6aa8353e`.
+- **The scan.** Its ntdll is now 0x8bd65 bytes of .text, and its x64 code starts a page later. The
+  patcher's scan leaves one x64 word and no x18 instruction in the code unpatched. Without 0204 that
+  build would by chance have skipped none.
+- **Still undecided.** Only an RDR2 launcher run on the phone decides whether the stub stays.
+- **Host test.** `tools/tests/test_x64_once_fastpath.py` runs the stub natively.
+
 ## Not checked
 
 - **On the phone:** nothing yet.

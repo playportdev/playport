@@ -49,3 +49,4 @@
 0050-ntdll-MADEIRA_X64_CS_FASTPATH-1-takes-an-x64-module-.patch
 0051-ntdll-make-the-process-heap-s-first-region-HeapSegme.patch
 0052-ntdll-MADEIRA_X64_QPC_FASTPATH-1-answers-an-x64-modu.patch
+0053-ntdll-MADEIRA_X64_ONCE_FASTPATH-1-answers-an-x64-mod.patch
