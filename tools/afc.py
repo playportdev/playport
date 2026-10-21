@@ -112,7 +112,7 @@ async def main(bundle_id, op, args):
                 expect = tuple(int(x) for x in args[1:])
             except ValueError:
                 sys.exit(f"rm-bundle: FILES BYTES LINKS are counts, not {args[1:]}")
-            print(await rm_bundle(afc, args[0].rstrip("/"), expect))
+            print(await rm_bundle(lambda: connect(bundle_id), args[0].rstrip("/"), expect))
         elif op == "ls" and len(args) == 1:
             if not await afc.exists(args[0]):
                 sys.exit(f"{args[0]}: no such file or directory")
@@ -147,17 +147,91 @@ def bundle_refusal(path):
     return None
 
 
-async def tree(afc, remote):
+def connector(afc_or_connect):
+    """connect() for the pooled walks: a callable as it is; one connection (an object, as
+    the tests' in-memory AFC) shared by every worker, each request still one at a time."""
+    if callable(afc_or_connect):
+        return afc_or_connect
+
+    async def same():
+        return afc_or_connect
+    return same
+
+
+async def pooled(connect, first, task, workers=None, tries=None):
+    """Run task(afc, item, put) for `first` and every item it put(), by `workers` workers, each
+    on its own connection from connect(). A failed task gets a new connection and is retried;
+    `tries` failures in a row end the run (SystemExit)."""
+    workers, tries = workers or PULL_CONNECTIONS, tries or PULL_TRIES
+    queue, failed = asyncio.Queue(), []
+    for item in first:
+        queue.put_nowait(item)
+
+    async def close(afc):
+        exit_ = getattr(afc, "__aexit__", None)
+        if exit_:
+            try:
+                await exit_(None, None, None)
+            except Exception:
+                pass
+
+    async def worker():
+        afc = None
+        while True:
+            item = await queue.get()
+            try:
+                if failed:
+                    continue
+                last = None
+                for _ in range(tries):
+                    try:
+                        if afc is None:
+                            afc = await connect()
+                            enter = getattr(afc, "__aenter__", None)
+                            if enter:
+                                await enter()
+                        await task(afc, item, queue.put_nowait)
+                        break
+                    except SystemExit:
+                        raise
+                    except Exception as e:   # the connection dropped: reopen, retry
+                        last = f"{type(e).__name__}: {e}"[:200]
+                        await close(afc)
+                        afc = None
+                else:
+                    failed.append(f"{item}: {tries} connections in a row failed: {last}")
+            finally:
+                queue.task_done()
+
+    pool = [asyncio.create_task(worker()) for _ in range(workers)]
+    await queue.join()
+    for t in pool:
+        t.cancel()
+    await asyncio.gather(*pool, return_exceptions=True)
+    if failed:
+        raise SystemExit(failed[0])
+
+
+async def tree(afc, remote, workers=None):
     """Every entry under REMOTE, parents before their children: (path, kind, size), kind
-    "dir", "file" or "link" (a link is listed, never followed), size a file's bytes."""
-    out = []
-    for n in sorted(set(await afc.listdir(remote)) - {".", ".."}):
-        path = remote + "/" + n
+    "dir", "file" or "link" (a link is listed, never followed), size a file's bytes. AFC is
+    a connection or a connect(); with connect(), `workers` connections walk it at once (a
+    capture bundle holds ~200,000 links: one by one over the network link took hours)."""
+    found = {}
+
+    async def task(afc, item, put):
+        what, path = item
+        if what == "dir":
+            for n in sorted(set(await afc.listdir(path)) - {".", ".."}):
+                put(("entry", path + "/" + n))
+            return
         k, _, v = (await kind(afc, path)).partition(" ")
-        out.append((path, k, int(v) if k == "file" else 0))
+        found[path] = (path, k, int(v) if k == "file" else 0)
         if k == "dir":
-            out += await tree(afc, path)
-    return out
+            put(("dir", path))
+
+    await pooled(connector(afc), [("dir", remote)], task, workers)
+    return sorted(found.values(), key=lambda e: e[0].split("/"))
 
 
 def counts(entries):
@@ -166,10 +240,27 @@ def counts(entries):
     return len(files), sum(files), sum(1 for _, k, _ in entries if k == "link")
 
 
+async def rm_one(afc, path):
+    """rm_single on a connection, or on one connect() opens (then closed)."""
+    if not callable(afc):
+        return await afc.rm_single(path)
+    async with await afc() as c:
+        return await c.rm_single(path)
+
+
+async def kind_of(afc, path):
+    if not callable(afc):
+        return await kind(afc, path)
+    async with await afc() as c:
+        return await kind(c, path)
+
+
 async def rm_bundle(afc, remote, expect):
     """Delete the bundle at REMOTE when its tree counts as EXPECT (files, bytes, links); what
-    was removed. Exits, deleting nothing, when it is not a directory or the counts differ."""
-    k = await kind(afc, remote)
+    was removed. Exits, deleting nothing, when it is not a directory or the counts differ.
+    AFC is a connection or a connect() (then the walk and the removal run on
+    PULL_CONNECTIONS connections at once)."""
+    k = await kind_of(afc, remote)
     if k != "dir":
         sys.exit(f"{remote}: " + ("no such bundle" if k == "absent" else "not a directory"))
     entries = await tree(afc, remote)
@@ -177,9 +268,15 @@ async def rm_bundle(afc, remote, expect):
     if found != tuple(expect):
         sys.exit(f"{remote}: holds {found[0]} files, {found[1]} bytes, {found[2]} links, not the "
                  f"{expect[0]}, {expect[1]}, {expect[2]} pulled: left in place")
-    for path, _, _ in reversed(entries):   # children before their directory
-        await afc.rm_single(path)
-    await afc.rm_single(remote)
+    # every file and link at once, then the directories, deepest first
+    leaves = [("rm", p) for p, k, _ in entries if k != "dir"]
+
+    async def rm(afc, item, put):
+        await afc.rm_single(item[1])
+    await pooled(connector(afc), leaves, rm)
+    for path, _, _ in sorted((e for e in entries if e[1] == "dir"), key=lambda e: -e[0].count("/")):
+        await rm_one(afc, path)
+    await rm_one(afc, remote)
     return f"{remote}: removed ({found[0]} files, {found[1]} bytes, {found[2]} links)"
 
 
