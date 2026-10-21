@@ -377,12 +377,21 @@ static DWORD launcher_snapshot(void)
     return n;
 }
 
+/* How long the end waits, after it, for the processes it ended with exit code 0 to exit. */
+#define LAUNCHER_EXIT_WAIT_MS 1000
+#define MAX_LAUNCHER_EXIT_0 8
+
 /* Ends the launcher's tree in the title's job (`pids`) in one step, the launcher and its
- * error handler first; once more (`again`) also its restarts. How many it ended. */
+ * error handler first; once more (`again`) also its restarts. Launcher.exe ends with exit
+ * code 0, the rest with ERROR_PROCESS_ABORTED (pp_launcher_end_code, decision 0156); Wine
+ * keeps a thread's own code when the code is 0, so the end then logs the code each
+ * Launcher.exe exited with. How many it ended. */
 static DWORD end_launcher(uint32_t title_seq, const DWORD *pids, DWORD npids, int again)
 {
     const char *step = again ? "once more" : "end";
-    DWORD n = launcher_snapshot(), i, done = 0, kept = 0;
+    DWORD n = launcher_snapshot(), i, done = 0, kept = 0, nexit0 = 0, k, t, code;
+    HANDLE exit0[MAX_LAUNCHER_EXIT_0];
+    DWORD exit0_pid[MAX_LAUNCHER_EXIT_0];
     int pass;
     char name[MAX_PATH];
 
@@ -409,17 +418,38 @@ static DWORD end_launcher(uint32_t title_seq, const DWORD *pids, DWORD npids, in
                 }
                 continue;
             }
-            if ((h = OpenProcess(PROCESS_TERMINATE, FALSE, launcher_lp[i].pid)) && TerminateProcess(h, ERROR_PROCESS_ABORTED)) {
+            code = pp_launcher_end_code(launcher_lp, i);
+            if ((h = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE,
+                                 launcher_lp[i].pid)) && TerminateProcess(h, code)) {
                 done++;
                 launcher_know(launcher_lp[i].pid);
-                say("%s %u: [launcher] %s ended %s pid %u", what, (unsigned long long)title_seq, step, name,
-                    (unsigned long long)launcher_lp[i].pid);
+                say("%s %u: [launcher] %s ended %s pid %u (exit code %u)", what, (unsigned long long)title_seq, step,
+                    name, (unsigned long long)launcher_lp[i].pid, (unsigned long long)code);
+                if (!code && nexit0 < MAX_LAUNCHER_EXIT_0) {
+                    exit0_pid[nexit0] = launcher_lp[i].pid;
+                    exit0[nexit0++] = h;
+                    h = NULL;
+                }
             } else {
                 say("%s %u: [launcher] %s could not end %s pid %u (error %u)", what, (unsigned long long)title_seq,
                     step, name, (unsigned long long)launcher_lp[i].pid, (unsigned long long)GetLastError());
             }
             if (h) CloseHandle(h);
         }
+    t = GetTickCount();
+    for (k = 0; k < nexit0; k++) {
+        DWORD spent = GetTickCount() - t;
+        if (WaitForSingleObject(exit0[k], spent < LAUNCHER_EXIT_WAIT_MS ? LAUNCHER_EXIT_WAIT_MS - spent : 0) ==
+                WAIT_OBJECT_0 && GetExitCodeProcess(exit0[k], &code))
+            say("%s %u: [launcher] %s: Launcher.exe pid %u exited with code %u%s", what, (unsigned long long)title_seq,
+                step, (unsigned long long)exit0_pid[k], (unsigned long long)code,
+                code ? " (not 0: PlayRDR2.exe will show its Unable to launch game box)" : "");
+        else
+            say("%s %u: [launcher] %s: Launcher.exe pid %u had not exited %u ms after the end; its exit code is "
+                "not known", what, (unsigned long long)title_seq, step, (unsigned long long)exit0_pid[k],
+                (unsigned long long)(GetTickCount() - t));
+        CloseHandle(exit0[k]);
+    }
     say("%s %u: [launcher] %s done: %u ended, %u kept as the game's, of %u processes in the job", what,
         (unsigned long long)title_seq, step, (unsigned long long)done, (unsigned long long)kept,
         (unsigned long long)npids);

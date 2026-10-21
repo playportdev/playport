@@ -113,6 +113,17 @@ static inline int pp_launcher_end(const pp_launcher_proc *p, uint32_t n, uint32_
     return pp_launcher_main(p, n, i) || pp_launcher_helper(p, n, i);
 }
 
+/* The exit code the end gives process i (decision 0156). Rockstar's Steam stub PlayRDR2.exe
+ * waits on Launcher.exe and shows "Unable to launch game" unless its exit code is 0, so
+ * Launcher.exe ends with 0, as when a person quits it; the launcher's other processes end
+ * with ERROR_PROCESS_ABORTED. */
+#define PP_LAUNCHER_END_ABORTED 1067u   /* ERROR_PROCESS_ABORTED */
+
+static inline uint32_t pp_launcher_end_code(const pp_launcher_proc *p, uint32_t i)
+{
+    return pp_launcher_name_is(p[i].name, "Launcher.exe") ? 0 : PP_LAUNCHER_END_ABORTED;
+}
+
 /* Whether process i, started after the end, is the launcher's restart: the
  * launcher or its error handler again, or a Social Club helper of the launcher or
  * of one of the `nknown` launcher processes the root ended or saw restart. */

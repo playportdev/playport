@@ -3,7 +3,7 @@
  * launcher_end_test.c — app/SessionRoot/launcher_end.h on the Linux host (pp test):
  * which processes the session root ends of the Rockstar Games Launcher at the
  * game's first frame, and which later starts are its restarts (PP_CONTROL_END_LAUNCHER,
- * decision 0125). The process
+ * decision 0125), and the exit code each ends with (decision 0156). The process
  * tree is RDR2's Steam play: PlayRDR2.exe starts Launcher.exe, which starts its
  * error handler, its Social Club browser (whose renderers are its children) and
  * RDR2.exe; the game starts its own Social Club helper and crash handler.
@@ -66,6 +66,15 @@ int main(void)
         if (pp_launcher_end(p, n, i)) ended[nended++] = p[i].pid;
     CHECK(nended == 4 && ended[0] == 0x70 && ended[1] == 0x7c && ended[2] == 0x1b4 && ended[3] == 0x284);
     CHECK(pp_launcher_main(p, n, 1) && pp_launcher_main(p, n, 2) && !pp_launcher_main(p, n, 3));
+    /* the exit codes (decision 0156): Launcher.exe, which PlayRDR2.exe waits on, ends with 0
+     * whatever its name's case; its error handler and its helpers with ERROR_PROCESS_ABORTED */
+    CHECK(pp_launcher_end_code(p, 1) == 0);
+    CHECK(pp_launcher_end_code(p, 2) == 1067u && pp_launcher_end_code(p, 3) == 1067u &&
+          pp_launcher_end_code(p, 4) == 1067u);
+    {
+        pp_launcher_proc lower[1] = { { 0x70, 0x64, u16(14, "LAUNCHER.exe") } };
+        CHECK(pp_launcher_end_code(lower, 0) == 0);
+    }
     CHECK(pp_launcher_helper(p, n, 3) && pp_launcher_helper(p, n, 4));
     CHECK(!pp_launcher_helper(p, n, 7) && !pp_launcher_helper(p, n, 8));
     {

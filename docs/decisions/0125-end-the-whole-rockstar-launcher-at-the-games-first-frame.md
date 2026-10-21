@@ -7,6 +7,8 @@ ended. Not yet shown on the phone.
 Amended by [0130](0130-end-the-rockstar-launcher-at-the-games-sign-in-or-near-the-memory-limit.md):
 the tree ends at the game's sign-in again, or before it near the memory limit, and the field is
 `endLauncherAfterSignIn` again.
+Amended by [0156](0156-end-the-rockstar-launcher-with-exit-code-0.md): `Launcher.exe` ends
+with exit code 0, so PlayRDR2's box no longer appears at the end.
 
 ## Context
 

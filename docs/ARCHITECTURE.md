@@ -864,6 +864,10 @@ the game is paused:
   amending [0125](decisions/0125-end-the-whole-rockstar-launcher-at-the-games-first-frame.md)).
   - The root ends the launcher's tree in the job one process at a time, in one step, never the
     game or a process under it (`app/SessionRoot/launcher_end.h`).
+  - `Launcher.exe` ends with exit code 0 and the rest with 1067 (`pp_launcher_end_code`): Rockstar's
+    Steam stub `PlayRDR2.exe` waits on the launcher and shows "Unable to launch game" for any other
+    code. The root then logs the code `Launcher.exe` exited with (decision
+    [0156](decisions/0156-end-the-rockstar-launcher-with-exit-code-0.md)).
   - It then counts every start of the launcher's images from the job's messages
     (`JOB_OBJECT_MSG_NEW_PROCESS`). The first restart it finds running is ended once more,
     along with the launcher's tree.

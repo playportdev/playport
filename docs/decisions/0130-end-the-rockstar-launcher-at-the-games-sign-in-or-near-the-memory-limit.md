@@ -8,6 +8,8 @@ game's sign-in again, as in [0124](0124-end-the-rockstar-launcher-after-the-game
 a memory safety. Everything else in 0125 stays. On the phone the memory safety fired first, about
 3 s after the game reached the launcher's game channel, and the game did not sign in (run
 `20261019T194156`, [evidence](../evidence/2026-10-19-rdr2-launcher-end-at-sign-in.md)).
+Amended by [0156](0156-end-the-rockstar-launcher-with-exit-code-0.md): the end gives `Launcher.exe`
+exit code 0.
 
 ## Context
 
