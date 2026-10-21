@@ -63,3 +63,9 @@
 0081-kk-keep-the-depth-stencil-states-compiled-for-dynami.patch
 0082-kk-MESA_KK_SAFE_MATH-1-builds-shader-libraries-with-.patch
 0083-wsi-metal-one-window-s-swap-chains-own-the-layer-ano.patch
+0090-kk-four-small-correctness-fixes-dispatch-counts-an-a.patch
+0091-kk-MESA_KK_BATCH2-1-three-CPU-cost-items-off-by-defa.patch
+0092-kk-MESA_KK_BATCH2-alloc-a-command-allocator-without-.patch
+0093-kk-a-timestamp-resolve-updates-a-fence-the-next-comp.patch
+0094-kk-MESA_KK_BATCH2-ampl-no-vertex-amplification-call-.patch
+0095-kk-MESA_KK_BATCH2-oq-a-pass-s-deferred-query-writes-.patch

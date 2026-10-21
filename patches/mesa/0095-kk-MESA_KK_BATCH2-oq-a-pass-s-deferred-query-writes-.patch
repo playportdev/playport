@@ -1,0 +1,96 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Wed, 21 Oct 2026 11:21:29 +0200
+Subject: [PATCH] kk: MESA_KK_BATCH2 "oq", a pass's deferred query writes in
+ one dispatch
+
+A query write inside a render pass (an occlusion query's end marks it
+available) is deferred to the pass's end, and flush_post_render_writes
+then issued one libkk_write_u32 dispatch per write after the render
+encoder, each a pool upload, two barriers, the pipeline and the root
+bound again. With MESA_KK_BATCH2 "oq" (on with MESA_KK_BATCH2=1) two
+or more writes go up as one array and one libkk_write_u32_array
+dispatch (KosmicKrisp's own kernel, a thread per write) does them.
+RDR2 keeps occlusion queries in 6 pools.
+
+Linear: PLA-364
+Class: feature
+Evidence: docs/evidence/2026-10-21-batch2.md
+Offered-upstream: not yet
+---
+ src/kosmickrisp/vulkan/kk_cmd_buffer.c | 21 +++++++++++++++++++--
+ src/kosmickrisp/vulkan/kk_debug.c      |  5 +++--
+ src/kosmickrisp/vulkan/kk_debug.h      |  2 ++
+ 3 files changed, 24 insertions(+), 4 deletions(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.c b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+index 68a0d59..b30d946 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_buffer.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+@@ -405,8 +405,25 @@ flush_post_render_writes(struct kk_cmd_buffer *cmd)
+                                    struct libkk_imm_write))
+       return;
+ 
+-   util_dynarray_foreach(&cmd->post_render_writes, struct libkk_imm_write, w) {
+-      libkk_write_u32(cmd, kk_grid_1d(1), true, (uint64_t)w->address, w->value);
++   /* Playport, MESA_KK_BATCH2 "oq": the writes in one dispatch of
++    * libkk_write_u32_array over an uploaded copy, not a dispatch each (a
++    * pool upload, two barriers, the pipeline and the root bound again). An
++    * occlusion query's end queues one per query inside a pass. */
++   const uint32_t count = util_dynarray_num_elements(&cmd->post_render_writes,
++                                                     struct libkk_imm_write);
++   struct kk_ptr array =
++      KK_BATCH2(OQ) && count > 1u
++         ? kk_pool_upload(cmd, util_dynarray_begin(&cmd->post_render_writes),
++                          count * sizeof(struct libkk_imm_write), 8u)
++         : (struct kk_ptr){0};
++   if (array.gpu) {
++      libkk_write_u32_array(cmd, kk_grid_1d(count), true, array.gpu);
++   } else {
++      util_dynarray_foreach(&cmd->post_render_writes, struct libkk_imm_write,
++                            w) {
++         libkk_write_u32(cmd, kk_grid_1d(1), true, (uint64_t)w->address,
++                         w->value);
++      }
+    }
+ 
+    util_dynarray_clear(&cmd->post_render_writes);
+diff --git a/src/kosmickrisp/vulkan/kk_debug.c b/src/kosmickrisp/vulkan/kk_debug.c
+index 2dc9957..8d1c14b 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.c
++++ b/src/kosmickrisp/vulkan/kk_debug.c
+@@ -57,6 +57,7 @@ static const struct debug_named_value batch2_items[] = {
+    {"residency", KK_BATCH2_RESIDENCY},
+    {"alloc", KK_BATCH2_ALLOC},
+    {"ampl", KK_BATCH2_AMPL},
++   {"oq", KK_BATCH2_OQ},
+    {NULL, 0},
+ };
+ 
+@@ -66,11 +67,11 @@ kk_process_debug_variable(void)
+    if (debug_get_bool_option("MESA_KK_BATCH2", false)) {
+       kk_batch2_flags =
+          (KK_BATCH2_ROOT | KK_BATCH2_MAP | KK_BATCH2_RESIDENCY |
+-          KK_BATCH2_ALLOC | KK_BATCH2_AMPL) &
++          KK_BATCH2_ALLOC | KK_BATCH2_AMPL | KK_BATCH2_OQ) &
+          ~(uint32_t)debug_parse_flags_option(
+             "MESA_KK_BATCH2_SKIP", os_get_option("MESA_KK_BATCH2_SKIP"),
+             batch2_items, 0);
+-      fprintf(stderr, "[kk-batch2] items=%#x (root 1, map 2, residency 4, alloc 8, ampl 16)\n",
++      fprintf(stderr, "[kk-batch2] items=%#x (root 1, map 2, residency 4, alloc 8, ampl 16, oq 32)\n",
+               kk_batch2_flags);
+    }
+    kk_mesa_debug_flags = debug_get_option_mesa_kk_debug();
+diff --git a/src/kosmickrisp/vulkan/kk_debug.h b/src/kosmickrisp/vulkan/kk_debug.h
+index ecc2cc1..5cca0ea 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.h
++++ b/src/kosmickrisp/vulkan/kk_debug.h
+@@ -74,6 +74,8 @@ enum kk_batch2 {
+    KK_BATCH2_ALLOC = 1u << 3,
+    /* "ampl": no vertex amplification call on a new encoder without multiview */
+    KK_BATCH2_AMPL = 1u << 4,
++   /* "oq": a pass's deferred query writes in one dispatch */
++   KK_BATCH2_OQ = 1u << 5,
+ };
+ 
+ extern uint32_t kk_batch2_flags;

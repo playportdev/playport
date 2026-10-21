@@ -1,0 +1,94 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Wed, 21 Oct 2026 11:19:22 +0200
+Subject: [PATCH] kk: MESA_KK_BATCH2 "ampl", no vertex amplification call on a
+ new encoder without multiview
+
+cs_start_render set the vertex amplification count on every new render
+encoder, also without multiview, where it sets one view with no
+render-target or viewport offset: a new encoder's default. That is one
+more bridge call (objc_msgSend and an autorelease pool) per render pass
+and per restart of one; RDR2 begins about 3 M render passes in a story
+session, 3.4 draws each. With MESA_KK_BATCH2 "ampl" (on with
+MESA_KK_BATCH2=1) the call is made only with a view mask.
+
+Linear: PLA-364
+Class: feature
+Evidence: docs/evidence/2026-10-21-batch2.md
+Offered-upstream: not yet
+---
+ src/kosmickrisp/vulkan/kk_cmd_buffer.c | 19 ++++++++++++-------
+ src/kosmickrisp/vulkan/kk_debug.c      |  5 +++--
+ src/kosmickrisp/vulkan/kk_debug.h      |  2 ++
+ 3 files changed, 17 insertions(+), 9 deletions(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.c b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+index a2ff547..68a0d59 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_buffer.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+@@ -307,14 +307,19 @@ cs_start_render(struct kk_cmd_buffer *cmd)
+    state->render.ds_write_available = false;
+    state->render.storage_write_available = false;
+ 
+-   uint32_t layer_ids[KK_MAX_MULTIVIEW_VIEW_COUNT] = {};
+-   uint32_t count = 0u;
+-   u_foreach_bit(id, view_mask)
+-      layer_ids[count++] = id;
+-   if (view_mask == 0u) {
+-      layer_ids[count++] = 0;
++   /* Playport, MESA_KK_BATCH2 "ampl": without multiview a new encoder's
++    * default (one view, no offsets) is what this would set, once per render
++    * pass and restart; RDR2 begins about 3 M passes in a session. */
++   if (view_mask != 0u || !KK_BATCH2(AMPL)) {
++      uint32_t layer_ids[KK_MAX_MULTIVIEW_VIEW_COUNT] = {};
++      uint32_t count = 0u;
++      u_foreach_bit(id, view_mask)
++         layer_ids[count++] = id;
++      if (view_mask == 0u) {
++         layer_ids[count++] = 0;
++      }
++      mtl_set_vertex_amplification_count(cmd->metal.render, layer_ids, count);
+    }
+-   mtl_set_vertex_amplification_count(cmd->metal.render, layer_ids, count);
+ 
+    /* Argument table won't ever change */
+    mtl_render_set_argument_table(
+diff --git a/src/kosmickrisp/vulkan/kk_debug.c b/src/kosmickrisp/vulkan/kk_debug.c
+index 36d1b4d..2dc9957 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.c
++++ b/src/kosmickrisp/vulkan/kk_debug.c
+@@ -56,6 +56,7 @@ static const struct debug_named_value batch2_items[] = {
+    {"map", KK_BATCH2_MAP},
+    {"residency", KK_BATCH2_RESIDENCY},
+    {"alloc", KK_BATCH2_ALLOC},
++   {"ampl", KK_BATCH2_AMPL},
+    {NULL, 0},
+ };
+ 
+@@ -65,11 +66,11 @@ kk_process_debug_variable(void)
+    if (debug_get_bool_option("MESA_KK_BATCH2", false)) {
+       kk_batch2_flags =
+          (KK_BATCH2_ROOT | KK_BATCH2_MAP | KK_BATCH2_RESIDENCY |
+-          KK_BATCH2_ALLOC) &
++          KK_BATCH2_ALLOC | KK_BATCH2_AMPL) &
+          ~(uint32_t)debug_parse_flags_option(
+             "MESA_KK_BATCH2_SKIP", os_get_option("MESA_KK_BATCH2_SKIP"),
+             batch2_items, 0);
+-      fprintf(stderr, "[kk-batch2] items=%#x (root 1, map 2, residency 4, alloc 8)\n",
++      fprintf(stderr, "[kk-batch2] items=%#x (root 1, map 2, residency 4, alloc 8, ampl 16)\n",
+               kk_batch2_flags);
+    }
+    kk_mesa_debug_flags = debug_get_option_mesa_kk_debug();
+diff --git a/src/kosmickrisp/vulkan/kk_debug.h b/src/kosmickrisp/vulkan/kk_debug.h
+index a0abd0a..ecc2cc1 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.h
++++ b/src/kosmickrisp/vulkan/kk_debug.h
+@@ -72,6 +72,8 @@ enum kk_batch2 {
+    KK_BATCH2_RESIDENCY = 1u << 2,
+    /* "alloc": a command allocator without users is reset before it records */
+    KK_BATCH2_ALLOC = 1u << 3,
++   /* "ampl": no vertex amplification call on a new encoder without multiview */
++   KK_BATCH2_AMPL = 1u << 4,
+ };
+ 
+ extern uint32_t kk_batch2_flags;

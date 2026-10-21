@@ -1,0 +1,325 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Wed, 21 Oct 2026 11:05:30 +0200
+Subject: [PATCH] kk: MESA_KK_BATCH2=1, three CPU-cost items, off by default
+
+MESA_KK_BATCH2=1 turns on these, less those MESA_KK_BATCH2_SKIP names
+(comma-separated), so a failing batch can be bisected; a
+[kk-batch2] items= line says which:
+
+root: a draw or dispatch uploads only the root descriptor table's used
+prefix, up to the last dynamic buffer written since the command buffer
+began (at least one: the device-barrier lowering reads
+dynamic_buffers[0].zero), not all 2.2 KiB; RDR2 binds new sets at
+nearly every one of its 10 M indirect draws. set_dynamic_buffer_start
+moves before dynamic_buffers so the used part is a prefix, on or off;
+shaders read every field by offsetof.
+
+map: a vkMapMemory without a placed address returns Metal's own CPU
+mapping of the buffer, not a vm_remap of the whole allocation, which
+doubled the address space of RDR2's 2.6-2.8 GiB of persistently mapped
+memory and made a kernel call per map. A reserving unmap of such a map
+fails with VK_ERROR_MEMORY_MAP_FAILED: the range is Metal's.
+
+residency: a submit commits the residency set and requests residency
+only after an allocation was added or removed, not at every submit;
+the set is attached to the queue.
+
+Linear: PLA-364
+Class: feature
+Evidence: docs/evidence/2026-10-21-batch2.md
+Offered-upstream: not yet
+---
+ src/kosmickrisp/vulkan/kk_cmd_buffer.c    | 15 +++++++++++++--
+ src/kosmickrisp/vulkan/kk_cmd_buffer.h    | 14 ++++++++++----
+ src/kosmickrisp/vulkan/kk_debug.c         | 21 +++++++++++++++++++++
+ src/kosmickrisp/vulkan/kk_debug.h         | 16 ++++++++++++++++
+ src/kosmickrisp/vulkan/kk_device.c        | 16 ++++++++++++++--
+ src/kosmickrisp/vulkan/kk_device.h        |  3 +++
+ src/kosmickrisp/vulkan/kk_device_memory.c | 23 ++++++++++++++++++++++-
+ src/kosmickrisp/vulkan/kk_device_memory.h |  3 +++
+ 8 files changed, 102 insertions(+), 9 deletions(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.c b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+index 7283f5f..f2df5ad 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_buffer.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+@@ -557,6 +557,7 @@ kk_bind_descriptor_sets(struct kk_descriptor_state *desc,
+       }
+    }
+    assert(dyn_buffer_start <= KK_MAX_DYNAMIC_BUFFERS);
++   desc->dynamic_buffers_used = MAX2(desc->dynamic_buffers_used, dyn_buffer_start);
+    assert(next_dyn_offset <= info->dynamicOffsetCount);
+ 
+    desc->root_dirty = true;
+@@ -776,13 +777,23 @@ kk_upload_descriptor_root(struct kk_cmd_buffer *cmd,
+ {
+    struct kk_descriptor_state *desc = kk_get_descriptors_state(cmd, bind_point);
+    struct kk_root_descriptor_table *root = &desc->root;
+-   struct kk_ptr root_ptr = kk_pool_alloc(cmd, sizeof(*root), 8u);
++   /* Playport, MESA_KK_BATCH2 "root": only the prefix up to the last dynamic
++    * buffer written, a third to half of the 2.2 KiB table that RDR2 had
++    * uploaded at each of its 10 M draws. Nothing reads past it: a dynamic
++    * buffer is written before any shader may use it. */
++   const uint32_t size =
++      KK_BATCH2(ROOT)
++         ? offsetof(struct kk_root_descriptor_table, dynamic_buffers) +
++              MAX2(desc->dynamic_buffers_used, 1u) *
++                 sizeof(struct kk_buffer_address)
++         : sizeof(*root);
++   struct kk_ptr root_ptr = kk_pool_alloc(cmd, size, 8u);
+    if (unlikely(!root_ptr.gpu))
+       return 0u;
+ 
+    root->addr = root_ptr.gpu;
+ 
+-   memcpy(root_ptr.cpu, root, sizeof(*root));
++   memcpy(root_ptr.cpu, root, size);
+    desc->root_dirty = false;
+ 
+    return root_ptr.gpu;
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.h b/src/kosmickrisp/vulkan/kk_cmd_buffer.h
+index fa57bf7..7d6bbee 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_buffer.h
++++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.h
+@@ -55,16 +55,22 @@ struct kk_root_descriptor_table {
+    /* Descriptor set base addresses */
+    uint64_t sets[KK_MAX_SETS];
+ 
+-   /* Dynamic buffer bindings */
+-   struct kk_buffer_address dynamic_buffers[KK_MAX_DYNAMIC_BUFFERS];
+-
+-   /* Start index in dynamic_buffers where each set starts */
++   /* Start index in dynamic_buffers where each set starts. Playport: before
++    * dynamic_buffers, so the table's used part is a prefix (MESA_KK_BATCH2
++    * "root", kk_upload_descriptor_root); shaders read every field by offsetof. */
+    uint8_t set_dynamic_buffer_start[KK_MAX_SETS];
++
++   /* Dynamic buffer bindings: last, the used prefix ends in them */
++   struct kk_buffer_address dynamic_buffers[KK_MAX_DYNAMIC_BUFFERS];
+ };
+ 
+ struct kk_descriptor_state {
+    bool root_dirty;
+    struct kk_root_descriptor_table root;
++   /* Playport: dynamic_buffers entries written since the command buffer
++    * began, a high-water mark (at least 1: the device-barrier lowering reads
++    * dynamic_buffers[0].zero). */
++   uint32_t dynamic_buffers_used;
+ 
+    uint32_t set_sizes[KK_MAX_SETS];
+    struct kk_descriptor_set *sets[KK_MAX_SETS];
+diff --git a/src/kosmickrisp/vulkan/kk_debug.c b/src/kosmickrisp/vulkan/kk_debug.c
+index d85f2fd..af71eaa 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.c
++++ b/src/kosmickrisp/vulkan/kk_debug.c
+@@ -4,6 +4,9 @@
+  */
+ #include "kk_debug.h"
+ #include "util/u_debug.h"
++#include "util/os_misc.h"
++
++#include <stdio.h>
+ 
+ enum kk_debug kk_mesa_debug_flags = 0;
+ 
+@@ -46,9 +49,27 @@ const struct debug_named_value experimental_flags[] = {
+ DEBUG_GET_ONCE_FLAGS_OPTION(mesa_kk_experimental, "MESA_KK_EXPERIMENTAL",
+                             experimental_flags, 0);
+ 
++uint32_t kk_batch2_flags = 0;
++
++static const struct debug_named_value batch2_items[] = {
++   {"root", KK_BATCH2_ROOT},
++   {"map", KK_BATCH2_MAP},
++   {"residency", KK_BATCH2_RESIDENCY},
++   {NULL, 0},
++};
++
+ void
+ kk_process_debug_variable(void)
+ {
++   if (debug_get_bool_option("MESA_KK_BATCH2", false)) {
++      kk_batch2_flags =
++         (KK_BATCH2_ROOT | KK_BATCH2_MAP | KK_BATCH2_RESIDENCY) &
++         ~(uint32_t)debug_parse_flags_option(
++            "MESA_KK_BATCH2_SKIP", os_get_option("MESA_KK_BATCH2_SKIP"),
++            batch2_items, 0);
++      fprintf(stderr, "[kk-batch2] items=%#x (root 1, map 2, residency 4)\n",
++              kk_batch2_flags);
++   }
+    kk_mesa_debug_flags = debug_get_option_mesa_kk_debug();
+    kk_mesa_experimental_flags = debug_get_option_mesa_kk_experimental();
+    kk_dump_msl_min_kb = debug_get_num_option("MESA_KK_DUMP_MSL_MIN_KB", -1);
+diff --git a/src/kosmickrisp/vulkan/kk_debug.h b/src/kosmickrisp/vulkan/kk_debug.h
+index 0ff9729..ad00706 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.h
++++ b/src/kosmickrisp/vulkan/kk_debug.h
+@@ -60,6 +60,22 @@ extern uint32_t kk_gpu_begins, kk_gpu_once_begins, kk_gpu_passes, kk_gpu_ds_comp
+ 
+ #define KK_DEBUG(flag) unlikely(kk_mesa_debug_flags &KK_DEBUG_##flag)
+ 
++/* Playport: MESA_KK_BATCH2=1 turns on these CPU-cost items, less the ones
++ * MESA_KK_BATCH2_SKIP names (comma-separated, the names in kk_debug.c), so a
++ * failing batch can be bisected. Off by default. */
++enum kk_batch2 {
++   /* "root": a draw or dispatch uploads only the root table's used prefix */
++   KK_BATCH2_ROOT = 1u << 0,
++   /* "map": a vkMapMemory that is not placed returns Metal's own mapping */
++   KK_BATCH2_MAP = 1u << 1,
++   /* "residency": a submit commits the residency set only after it changed */
++   KK_BATCH2_RESIDENCY = 1u << 2,
++};
++
++extern uint32_t kk_batch2_flags;
++
++#define KK_BATCH2(item) unlikely(kk_batch2_flags &KK_BATCH2_##item)
++
+ enum kk_experimental {
+    /* Advertise custom border features */
+    KK_EXPERIMENTAL_CUSTOM_BORDER = 1ull << 0,
+diff --git a/src/kosmickrisp/vulkan/kk_device.c b/src/kosmickrisp/vulkan/kk_device.c
+index ee3d1db..9b24128 100644
+--- a/src/kosmickrisp/vulkan/kk_device.c
++++ b/src/kosmickrisp/vulkan/kk_device.c
+@@ -10,6 +10,7 @@
+ #include "kk_buffer.h"
+ #include "kk_buffer_view.h"
+ #include "kk_cmd_buffer.h"
++#include "kk_debug.h"
+ #include "kk_entrypoints.h"
+ #include "kk_image.h"
+ #include "kk_image_view.h"
+@@ -303,6 +304,7 @@ kk_CreateDevice(VkPhysicalDevice physicalDevice,
+    /* We need to initialize the device residency set before any bo is created. */
+    simple_mtx_init(&dev->residency_set.mutex, mtx_plain);
+    dev->residency_set.handle = mtl_new_residency_set(dev->mtl_handle);
++   dev->residency_set.dirty = true;
+    if (dev->residency_set.handle == NULL)
+       goto fail_compiler;
+ 
+@@ -466,6 +468,7 @@ kk_device_add_heap_to_residency_set(struct kk_device *dev, mtl_heap *heap)
+ {
+    simple_mtx_lock(&dev->residency_set.mutex);
+    mtl_residency_set_add_allocation(dev->residency_set.handle, heap);
++   dev->residency_set.dirty = true;
+    simple_mtx_unlock(&dev->residency_set.mutex);
+ }
+ 
+@@ -474,6 +477,7 @@ kk_device_remove_heap_from_residency_set(struct kk_device *dev, mtl_heap *heap)
+ {
+    simple_mtx_lock(&dev->residency_set.mutex);
+    mtl_residency_set_remove_allocation(dev->residency_set.handle, heap);
++   dev->residency_set.dirty = true;
+    simple_mtx_unlock(&dev->residency_set.mutex);
+ }
+ 
+@@ -482,6 +486,7 @@ kk_device_add_buffer_to_residency_set(struct kk_device *dev, mtl_buffer *buffer)
+ {
+    simple_mtx_lock(&dev->residency_set.mutex);
+    mtl_residency_set_add_allocation(dev->residency_set.handle, buffer);
++   dev->residency_set.dirty = true;
+    simple_mtx_unlock(&dev->residency_set.mutex);
+ }
+ 
+@@ -491,6 +496,7 @@ kk_device_remove_buffer_from_residency_set(struct kk_device *dev,
+ {
+    simple_mtx_lock(&dev->residency_set.mutex);
+    mtl_residency_set_remove_allocation(dev->residency_set.handle, buffer);
++   dev->residency_set.dirty = true;
+    simple_mtx_unlock(&dev->residency_set.mutex);
+ }
+ 
+@@ -498,8 +504,14 @@ void
+ kk_device_make_resources_resident(struct kk_device *dev)
+ {
+    simple_mtx_lock(&dev->residency_set.mutex);
+-   mtl_residency_set_commit(dev->residency_set.handle);
+-   mtl_residency_set_request_residency(dev->residency_set.handle);
++   /* Playport, MESA_KK_BATCH2 "residency": commit and request residency only
++    * after the set changed. The set is attached to the queue, so a committed
++    * set needs no commit at every submit; requestResidency is a paging hint. */
++   if (!KK_BATCH2(RESIDENCY) || dev->residency_set.dirty) {
++      mtl_residency_set_commit(dev->residency_set.handle);
++      mtl_residency_set_request_residency(dev->residency_set.handle);
++      dev->residency_set.dirty = false;
++   }
+    simple_mtx_unlock(&dev->residency_set.mutex);
+ }
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_device.h b/src/kosmickrisp/vulkan/kk_device.h
+index 204e096..cf1c9f8 100644
+--- a/src/kosmickrisp/vulkan/kk_device.h
++++ b/src/kosmickrisp/vulkan/kk_device.h
+@@ -32,6 +32,9 @@ struct vk_pipeline_cache;
+ struct kk_residency_set {
+    simple_mtx_t mutex;
+    mtl_residency_set *handle;
++   /* Playport, MESA_KK_BATCH2 "residency": an allocation was added or removed
++    * since the last commit (under mutex). */
++   bool dirty;
+ };
+ 
+ struct mtl_sampler_packed {
+diff --git a/src/kosmickrisp/vulkan/kk_device_memory.c b/src/kosmickrisp/vulkan/kk_device_memory.c
+index fe35738..d0c0c64 100644
+--- a/src/kosmickrisp/vulkan/kk_device_memory.c
++++ b/src/kosmickrisp/vulkan/kk_device_memory.c
+@@ -345,7 +345,7 @@ kk_FreeMemory(VkDevice device, VkDeviceMemory _mem,
+       kk_debug_forget_memory(dev, mem->bo);
+ 
+    /* According to spec, memory is implicitly unmapped upon free */
+-   if (mem->map)
++   if (mem->map && !mem->map_is_metal)
+       kk_bo_unmap(dev, mem->bo, mem->map, false);
+ 
+    kk_destroy_bo(dev, mem->bo);
+@@ -402,6 +402,18 @@ kk_MapMemory2KHR(VkDevice device, const VkMemoryMapInfoKHR *pMemoryMapInfo,
+                        "Memory object already mapped.");
+    }
+ 
++   /* Playport, MESA_KK_BATCH2 "map": without a placed address, Metal's own
++    * CPU mapping of the buffer serves. A vm_remap of the whole allocation per
++    * map doubled the address space of RDR2's 2.6-2.8 GiB of persistently
++    * mapped memory. A reserving unmap of such a map fails (kk_UnmapMemory2KHR):
++    * the range is Metal's. */
++   if (!fixed_addr && KK_BATCH2(MAP) && mem->bo->cpu) {
++      mem->map = mem->bo->cpu;
++      mem->map_is_metal = true;
++      *ppData = mem->map + offset;
++      return VK_SUCCESS;
++   }
++
+    void *mapped_addr = fixed_addr;
+    result = kk_bo_map_placed(dev, mem->bo, &mapped_addr);
+    if (result != VK_SUCCESS)
+@@ -427,6 +439,15 @@ kk_UnmapMemory2KHR(VkDevice device,
+ 
+    bool reserved = pMemoryUnmapInfo->flags & VK_MEMORY_UNMAP_RESERVE_BIT_EXT;
+ 
++   if (mem->map_is_metal) {
++      if (reserved)
++         return vk_errorf(dev, VK_ERROR_MEMORY_MAP_FAILED,
++                          "a reserving unmap of Metal's own mapping");
++      mem->map = NULL;
++      mem->map_is_metal = false;
++      return VK_SUCCESS;
++   }
++
+    result = kk_bo_unmap(dev, mem->bo, mem->map, reserved);
+    if (result != VK_SUCCESS)
+       return result;
+diff --git a/src/kosmickrisp/vulkan/kk_device_memory.h b/src/kosmickrisp/vulkan/kk_device_memory.h
+index 6c1347e..528eb70 100644
+--- a/src/kosmickrisp/vulkan/kk_device_memory.h
++++ b/src/kosmickrisp/vulkan/kk_device_memory.h
+@@ -20,6 +20,9 @@ struct kk_device_memory {
+    struct vk_device_memory vk;
+    struct kk_bo *bo;
+    void *map;
++   /* Playport, MESA_KK_BATCH2 "map": map is Metal's own mapping (bo->cpu), not
++    * a vm_remap of it, so unmapping has nothing to take down. */
++   bool map_is_metal;
+ };
+ 
+ VK_DEFINE_NONDISP_HANDLE_CASTS(kk_device_memory, vk.base, VkDeviceMemory,

@@ -1,0 +1,313 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Wed, 21 Oct 2026 11:17:11 +0200
+Subject: [PATCH] kk: MESA_KK_BATCH2 "alloc", a command allocator without users
+ is reset before it records
+
+Metal 4 keeps every command encoded through an MTL4CommandAllocator
+until the allocator is reset, and nothing reset one: a recording took
+an allocator from its pool at vkBeginCommandBuffer and gave it back at
+vkEndCommandBuffer, the pool handed it to the next recording, and each
+allocator grew with every command buffer ever encoded into it. 0047
+measures it; its message records that resetting the allocator a command
+buffer kept from its begin crashed (IOGPU null write under
+vkBeginCommandBuffer): after End the pool may already have given it to
+another recording. Giving each command buffer its own allocator
+(ded9a76a) made RDR2 hold 950 of them, 1.2 GB.
+
+Each allocator now counts its users: the command buffers whose current
+recording it holds, from their Begin until they are reset, freed or
+begin again, when Vulkan guarantees they are not pending; the queue's
+re-record buffers are reset after GPU completion under the queue
+mutex. With MESA_KK_BATCH2 "alloc" (on with MESA_KK_BATCH2=1) a
+Begin takes a free allocator with no users and resets it first; with
+none, the pool makes a new one up to 8, and past that shares one that
+still has users, as before. A ring of command buffers per pool then
+settles on one allocator per buffer in flight, each reset at reuse.
+The [kk-mem] allocators= line (MESA_KK_DEBUG=memory) shows their count
+and size.
+
+Linear: PLA-364
+Class: feature
+Evidence: docs/evidence/2026-10-21-batch2.md
+Offered-upstream: not yet
+---
+ src/kosmickrisp/vulkan/kk_cmd_buffer.c | 24 +++++++--
+ src/kosmickrisp/vulkan/kk_cmd_buffer.h |  4 ++
+ src/kosmickrisp/vulkan/kk_cmd_pool.c   | 71 ++++++++++++++++++++------
+ src/kosmickrisp/vulkan/kk_cmd_pool.h   | 20 +++++++-
+ src/kosmickrisp/vulkan/kk_debug.c      |  6 ++-
+ src/kosmickrisp/vulkan/kk_debug.h      |  2 +
+ 6 files changed, 105 insertions(+), 22 deletions(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.c b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+index f2df5ad..1d613c9 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_buffer.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+@@ -70,10 +70,22 @@ end_recording(struct kk_cmd_buffer *cmd)
+ 
+    cs_end(cmd);
+    mtl_end_command_buffer(cmd->metal.cmd_buf);
+-   kk_cmd_pool_return_allocator(kk_cmd_buffer_pool(cmd), cmd->metal.allocator);
++   kk_cmd_pool_return_allocator(kk_cmd_buffer_pool(cmd), cmd->metal.encoded_in);
+    cmd->metal.allocator = NULL;
+ }
+ 
++/* Playport: the recording this command buffer encoded is no longer needed
++ * (it is reset, freed or begins again, so not pending). */
++static void
++kk_cmd_release_allocator(struct kk_cmd_buffer *cmd)
++{
++   if (cmd->metal.encoded_in) {
++      assert(cmd->metal.encoded_in->users > 0u);
++      cmd->metal.encoded_in->users--;
++      cmd->metal.encoded_in = NULL;
++   }
++}
++
+ static void
+ kk_destroy_cmd_buffer(struct vk_command_buffer *vk_cmd_buffer)
+ {
+@@ -86,6 +98,7 @@ kk_destroy_cmd_buffer(struct vk_command_buffer *vk_cmd_buffer)
+ 
+    /* Ensure closed command buffer for safe returns to pool */
+    end_recording(cmd);
++   kk_cmd_release_allocator(cmd);
+    if (cmd->metal.cmd_buf)
+       kk_cmd_pool_return_cmd_buf(pool, cmd->metal.cmd_buf);
+    cmd->metal.cmd_buf = NULL;
+@@ -166,6 +179,7 @@ kk_reset_cmd_buffer_internal(struct kk_cmd_buffer *cmd)
+ 
+    /* Ensure closed command buffer so we can start it again */
+    end_recording(cmd);
++   kk_cmd_release_allocator(cmd);
+    kk_cmd_release_resources(dev, cmd);
+ 
+    cmd->uploader.bo = NULL;
+@@ -226,10 +240,14 @@ kk_BeginCommandBuffer(VkCommandBuffer commandBuffer,
+    /* vk_command_buffer_begin will reset the command buffer meaning the
+     * allocator may be returned to the pool. Request a new one. */
+    if (cmd->metal.allocator == NULL) {
+-      cmd->metal.allocator = kk_cmd_pool_get_allocator(pool);
++      kk_cmd_release_allocator(cmd);
++      struct kk_cmd_allocator *allocator = kk_cmd_pool_get_allocator(pool);
+ 
+-      if (cmd->metal.allocator == NULL)
++      if (allocator == NULL)
+          goto fail_allocator;
++      allocator->users++;
++      cmd->metal.encoded_in = allocator;
++      cmd->metal.allocator = allocator->handle;
+    }
+    mtl_begin_command_buffer(cmd->metal.cmd_buf, cmd->metal.allocator);
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.h b/src/kosmickrisp/vulkan/kk_cmd_buffer.h
+index 7d6bbee..e38e419 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_buffer.h
++++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.h
+@@ -265,7 +265,11 @@ struct kk_cmd_buffer {
+    struct vk_command_buffer vk;
+ 
+    struct {
++      /* the allocator recording now, NULL outside Begin..End */
+       mtl_command_allocator *allocator;
++      /* Playport: the allocator the current recording encoded into, held
++       * past End until reset, free or the next Begin (kk_cmd_pool.h) */
++      struct kk_cmd_allocator *encoded_in;
+       mtl_command_buffer *cmd_buf;
+       mtl_render_encoder *render;
+       mtl_compute_encoder *compute;
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_pool.c b/src/kosmickrisp/vulkan/kk_cmd_pool.c
+index 7e00c36..6ce76a8 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_pool.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_pool.c
+@@ -132,24 +132,62 @@ kk_cmd_pool_free_bo_list(struct kk_cmd_pool *pool, struct list_head *bos)
+    }
+ }
+ 
+-mtl_command_allocator *
+-kk_cmd_pool_get_allocator(struct kk_cmd_pool *pool)
++/* Playport, MESA_KK_BATCH2 "alloc": a pool makes up to this many allocators
++ * so that one without users is usually free to reset; past it a recording
++ * shares one that still has users, as before. Per-command-buffer allocators
++ * had reached 950 and 1.2 GB in RDR2 (ded9a76a). */
++#define KK_CMD_POOL_ALLOCATOR_CAP 8
++
++static struct kk_cmd_allocator *
++kk_cmd_pool_new_allocator(struct kk_cmd_pool *pool)
+ {
+-   if (util_dynarray_num_elements(&pool->metal.free_allocators,
+-                                  mtl_command_allocator *) > 0u)
+-      return util_dynarray_pop(&pool->metal.free_allocators,
+-                               mtl_command_allocator *);
+-
+    struct kk_device *dev = kk_cmd_pool_device(pool);
+-   mtl_command_allocator *allocator = mtl_new_command_allocator(dev->mtl_handle);
+-   if (allocator != NULL && KK_DEBUG(MEMORY))
+-      kk_allocators_add(allocator);
++   struct kk_cmd_allocator *allocator =
++      vk_zalloc(&pool->vk.alloc, sizeof(*allocator), 8,
++                VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
++   if (allocator == NULL)
++      return NULL;
++   allocator->handle = mtl_new_command_allocator(dev->mtl_handle);
++   if (allocator->handle == NULL) {
++      vk_free(&pool->vk.alloc, allocator);
++      return NULL;
++   }
++   if (KK_DEBUG(MEMORY))
++      kk_allocators_add(allocator->handle);
++   pool->metal.allocator_count++;
+    return allocator;
+ }
+ 
++struct kk_cmd_allocator *
++kk_cmd_pool_get_allocator(struct kk_cmd_pool *pool)
++{
++   struct util_dynarray *free_list = &pool->metal.free_allocators;
++   const unsigned n =
++      util_dynarray_num_elements(free_list, struct kk_cmd_allocator *);
++
++   if (KK_BATCH2(ALLOC)) {
++      struct kk_cmd_allocator **all = util_dynarray_begin(free_list);
++      for (unsigned i = n; i-- > 0u;) {
++         if (all[i]->users == 0u) {
++            struct kk_cmd_allocator *allocator = all[i];
++            all[i] = all[n - 1u];
++            (void)util_dynarray_pop(free_list, struct kk_cmd_allocator *);
++            mtl_command_allocator_reset(allocator->handle);
++            return allocator;
++         }
++      }
++      if (pool->metal.allocator_count < KK_CMD_POOL_ALLOCATOR_CAP)
++         return kk_cmd_pool_new_allocator(pool);
++   }
++
++   if (n > 0u)
++      return util_dynarray_pop(free_list, struct kk_cmd_allocator *);
++   return kk_cmd_pool_new_allocator(pool);
++}
++
+ void
+ kk_cmd_pool_return_allocator(struct kk_cmd_pool *pool,
+-                             mtl_command_allocator *allocator)
++                             struct kk_cmd_allocator *allocator)
+ {
+    util_dynarray_append(&pool->metal.free_allocators, allocator);
+ }
+@@ -195,6 +233,7 @@ kk_CreateCommandPool(VkDevice _device,
+    }
+ 
+    pool->metal.free_allocators = UTIL_DYNARRAY_INIT;
++   pool->metal.allocator_count = 0u;
+    pool->metal.free_cmd_bufs = UTIL_DYNARRAY_INIT;
+ 
+    list_inithead(&pool->free_bos);
+@@ -207,13 +246,15 @@ kk_CreateCommandPool(VkDevice _device,
+ static void
+ kk_cmd_pool_release_mtl_objects(struct kk_cmd_pool *pool)
+ {
+-   util_dynarray_foreach(&pool->metal.free_allocators, mtl_command_allocator *,
+-                         allocator) {
++   util_dynarray_foreach(&pool->metal.free_allocators,
++                         struct kk_cmd_allocator *, allocator) {
+       if (KK_DEBUG(MEMORY))
+-         kk_allocators_remove(*allocator);
+-      mtl_release(*allocator);
++         kk_allocators_remove((*allocator)->handle);
++      mtl_release((*allocator)->handle);
++      vk_free(&pool->vk.alloc, *allocator);
+    }
+    util_dynarray_clear(&pool->metal.free_allocators);
++   pool->metal.allocator_count = 0u;
+ 
+    util_dynarray_foreach(&pool->metal.free_cmd_bufs, mtl_command_buffer *,
+                          cmd_buf) {
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_pool.h b/src/kosmickrisp/vulkan/kk_cmd_pool.h
+index d031eff..2f3e80c 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_pool.h
++++ b/src/kosmickrisp/vulkan/kk_cmd_pool.h
+@@ -33,11 +33,27 @@ struct kk_cmd_pool {
+    uint32_t num_free_bos;
+ 
+    struct {
++      /* struct kk_cmd_allocator *: not recording now */
+       struct util_dynarray free_allocators;
+       struct util_dynarray free_cmd_bufs;
++      /* allocators made for this pool, free or recording */
++      uint32_t allocator_count;
+    } metal;
+ };
+ 
++/* Playport: a Metal command allocator and the command buffers whose current
++ * recording it holds (kk_cmd_buffer::metal.encoded_in). With MESA_KK_BATCH2
++ * "alloc", one without users is reset before it records again: Metal 4 keeps
++ * every encoded command in its allocator until a reset, which nothing did, so
++ * an allocator grew with every command buffer ever encoded into it. A user
++ * holds it from its Begin to its reset, free or next Begin, when Vulkan
++ * guarantees it is no longer pending, so no command in an allocator without
++ * users can still be read by the GPU or be recording. */
++struct kk_cmd_allocator {
++   mtl_command_allocator *handle;
++   uint32_t users;
++};
++
+ VK_DEFINE_NONDISP_HANDLE_CASTS(kk_cmd_pool, vk.base, VkCommandPool,
+                                VK_OBJECT_TYPE_COMMAND_POOL)
+ 
+@@ -52,13 +68,13 @@ VkResult kk_cmd_pool_alloc_bo(struct kk_cmd_pool *pool,
+ 
+ void kk_cmd_pool_free_bo_list(struct kk_cmd_pool *pool, struct list_head *bos);
+ 
+-mtl_command_allocator *kk_cmd_pool_get_allocator(struct kk_cmd_pool *pool);
++struct kk_cmd_allocator *kk_cmd_pool_get_allocator(struct kk_cmd_pool *pool);
+ 
+ /* The live Metal command allocators and the memory they hold, for the
+  * [kk-mem] census */
+ uint64_t kk_cmd_pool_allocators_size(uint32_t *count);
+ void kk_cmd_pool_return_allocator(struct kk_cmd_pool *pool,
+-                                  mtl_command_allocator *allocator);
++                                  struct kk_cmd_allocator *allocator);
+ mtl_command_buffer *kk_cmd_pool_get_cmd_buf(struct kk_cmd_pool *pool);
+ void kk_cmd_pool_return_cmd_buf(struct kk_cmd_pool *pool,
+                                 mtl_command_buffer *cmd_buf);
+diff --git a/src/kosmickrisp/vulkan/kk_debug.c b/src/kosmickrisp/vulkan/kk_debug.c
+index af71eaa..36d1b4d 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.c
++++ b/src/kosmickrisp/vulkan/kk_debug.c
+@@ -55,6 +55,7 @@ static const struct debug_named_value batch2_items[] = {
+    {"root", KK_BATCH2_ROOT},
+    {"map", KK_BATCH2_MAP},
+    {"residency", KK_BATCH2_RESIDENCY},
++   {"alloc", KK_BATCH2_ALLOC},
+    {NULL, 0},
+ };
+ 
+@@ -63,11 +64,12 @@ kk_process_debug_variable(void)
+ {
+    if (debug_get_bool_option("MESA_KK_BATCH2", false)) {
+       kk_batch2_flags =
+-         (KK_BATCH2_ROOT | KK_BATCH2_MAP | KK_BATCH2_RESIDENCY) &
++         (KK_BATCH2_ROOT | KK_BATCH2_MAP | KK_BATCH2_RESIDENCY |
++          KK_BATCH2_ALLOC) &
+          ~(uint32_t)debug_parse_flags_option(
+             "MESA_KK_BATCH2_SKIP", os_get_option("MESA_KK_BATCH2_SKIP"),
+             batch2_items, 0);
+-      fprintf(stderr, "[kk-batch2] items=%#x (root 1, map 2, residency 4)\n",
++      fprintf(stderr, "[kk-batch2] items=%#x (root 1, map 2, residency 4, alloc 8)\n",
+               kk_batch2_flags);
+    }
+    kk_mesa_debug_flags = debug_get_option_mesa_kk_debug();
+diff --git a/src/kosmickrisp/vulkan/kk_debug.h b/src/kosmickrisp/vulkan/kk_debug.h
+index ad00706..a0abd0a 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.h
++++ b/src/kosmickrisp/vulkan/kk_debug.h
+@@ -70,6 +70,8 @@ enum kk_batch2 {
+    KK_BATCH2_MAP = 1u << 1,
+    /* "residency": a submit commits the residency set only after it changed */
+    KK_BATCH2_RESIDENCY = 1u << 2,
++   /* "alloc": a command allocator without users is reset before it records */
++   KK_BATCH2_ALLOC = 1u << 3,
+ };
+ 
+ extern uint32_t kk_batch2_flags;

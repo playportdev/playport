@@ -73,6 +73,24 @@ KK_MOCK_MSL_DIR="$ROOT/msl" MESA_SHADER_CACHE_DISABLE=true \
     "$ROOT/kk-host-test" "$ROOT/build/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.so" "$ROOT/spv"
 echo "MSL libraries: $(ls "$ROOT/msl" | wc -l) in $ROOT/msl"
 
+# The same run with MESA_KK_BATCH2=1 (mesa 0091, 0092, 0094, 0095): the
+# used-prefix root upload, Metal's own mapping for a vkMapMemory that is not
+# placed, the residency commit only after a change, command allocators reset
+# once without users, no default vertex amplification call and a pass's query
+# writes in one dispatch, all six on and named in the log; then without map
+# and residency.
+MESA_KK_BATCH2=1 MESA_SHADER_CACHE_DISABLE=true \
+    "$ROOT/kk-host-test" "$ROOT/build/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.so" "$ROOT/spv" \
+    >"$ROOT/batch2.log" 2>&1 || { cat "$ROOT/batch2.log" >&2; exit 1; }
+grep -q '^\[kk-batch2\] items=0x3f ' "$ROOT/batch2.log" ||
+    { echo "MESA_KK_BATCH2=1: no [kk-batch2] items=0x3f line" >&2; exit 1; }
+MESA_KK_BATCH2=1 MESA_KK_BATCH2_SKIP=map,residency MESA_SHADER_CACHE_DISABLE=true \
+    "$ROOT/kk-host-test" "$ROOT/build/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.so" "$ROOT/spv" \
+    >"$ROOT/batch2-skip.log" 2>&1 || { cat "$ROOT/batch2-skip.log" >&2; exit 1; }
+grep -q '^\[kk-batch2\] items=0x39 ' "$ROOT/batch2-skip.log" ||
+    { echo "MESA_KK_BATCH2_SKIP=map,residency: not items=0x39" >&2; exit 1; }
+echo "MESA_KK_BATCH2: the host test passes with all items and without map and residency"
+
 # The same pipelines with the vertex and fragment libraries built at once and
 # the first two library builds failing as if Metal's compiler service had
 # been interrupted (KK_MOCK_INTERRUPT_BUILDS): compile_retry builds them
