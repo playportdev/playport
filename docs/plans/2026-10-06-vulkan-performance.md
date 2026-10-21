@@ -1,8 +1,9 @@
 # Plan: Vulkan at least on par with DXMT, on Hollow Knight in Direct3D 11 and 12
 
 **Linear:** [PLA-72](https://linear.app/playportdev/issue/PLA-72).
-**Date:** 2026-10-06, revised 2026-10-07, reviewed 2026-10-13. **Kind:** plan, in progress,
-**paused by the owner since 2026-10-08** (PLA-72 stays In Progress; see [Review 2026-10-13](#review-2026-10-13),
+**Date:** 2026-10-06, revised 2026-10-07, reviewed 2026-10-13 and 2026-10-21. **Kind:** plan, in progress,
+**paused by the owner since 2026-10-08** (PLA-72 stays In Progress; see [Review 2026-10-21](#review-2026-10-21-why-dxmt-is-still-faster-desk-research),
+[Review 2026-10-13](#review-2026-10-13),
 [How the work continues](#how-the-work-continues-owner-2026-10-07) and [Progress](#progress)). **Pins read:** as in the
 [KosmicKrisp-default plan](2026-10-06-kosmickrisp-default.md): `mesa` b39d173 (a
 Mesa `main` commit of 2026-10-05; `main` was 54 commits ahead on 2026-10-06, none
@@ -16,6 +17,89 @@ for this plan's exit criteria. **Owner's answers** (2026-10-06) are under
 **Read [How the work continues](#how-the-work-continues-owner-2026-10-07) first:** since
 2026-10-07 it replaces the measurement protocol, the matrices of steps 1 and 10 and the
 order of steps 3–9. The rest of the plan stays as the background and the list of levers.
+
+## Review 2026-10-21: why DXMT is still faster (desk research)
+
+Read-only: no build, no phone run. Code read in the build area's trees (`.work/run/mesa/mesa`:
+`mesa` b39d173 + 65 Playport commits; `.work/run/vulkan-pe/dxvk` and `vkd3d-proton`;
+`.work/run/dxmt-patched/dxmt`), against the series at HEAD `87fd9ef` (`patches/mesa` 69,
+`patches/dxvk` 7, `patches/vkd3d-proton` 6, `patches/dxmt` 13; pins unchanged). Since 2026-10-21,
+decision [0153](../decisions/0153-rdr2s-settings-are-every-games-defaults.md) makes Vulkan every
+game's default backend, ahead of this plan's exit criteria, so the gaps below are now the
+players' default.
+
+**The gap still stands as the [standing](../evidence/2026-10-08-vulkan-perf-standing.md) left it.**
+No Hollow Knight Vulkan-against-DXMT run has been made since. At native/free, GPU ms: DXVK +29 %,
+vkd3d +4 % over DXMT; phone energy a frame +17 % and +12 %; Mi/f at native/60 +11 % and +22 %.
+About 25 of DXVK's 29 points are DXVK-specific, since vkd3d runs on the same KosmicKrisp. Ruled out
+already: the sample-mask lowering, private storage (before 0019), render-pass splits or forced
+load/store, KosmicKrisp's own CPU time.
+
+**Leads, from the code (inferences; none measured):**
+
+1. **DXVK's shaders reach KosmicKrisp with NaN/Inf preserve on every float op (new; the best
+   candidate for the DXVK-only GPU gap).**
+   - KosmicKrisp reports `shaderFloatControls2` and `shaderSignedZeroInfNanPreserveFloat32`
+     (`kk_physical_device.c:391`, `:773`).
+   - DXVK's dxbc-spirv starts every shader at `OpFlag::ePrecise` (`dxbc_converter.h:109`); a
+     shader with `refactoringAllowed` (fxc's default) only drops `ePrecise` and adds `eNoSz`
+     (`dxbc_converter.cpp:700`), never `eNoNan`/`eNoInf`. With float controls 2 the SPIR-V gets
+     `FPFastMathDefault` without NotNaN/NotInf (`spirv_builder.cpp:4018`).
+   - KosmicKrisp then puts each such ALU op in its own `{ #pragma METAL fp math_mode(relaxed) }`
+     block (`safe` for no-contract ops, so for every op of a shader without `refactoringAllowed`),
+     and workaround 14 turns each inf/nan-preserving `fmul` into
+     `!&buf0.contents[0] ? 1 : a * b` (`nir_to_msl.c`, `alu_fp_math_mode_pragma` and
+     `alu_to_msl`), which likely also stops multiply-add fusion.
+   - vkd3d-proton's dxil-spirv preserves NaN/Inf only for dxilconv/dxbc-spirv modules or with
+     `force_precise` (`dxil_converter.cpp:7630`), so Unity's DXC-built D3D12 shaders stay
+     fast-math. DXMT's airconv emits LLVM fast-math flags except on `precise` instructions
+     (`UseFastMath`) and builds with `MTLMathModeFast` (`winemetal_unix.c:5430`).
+   - That split matches DXVK +29 % against vkd3d +4 %. Not checked: no dump of Hollow Knight's DXVK
+     MSL exists in the build area (the only one, `agent-notes/owner-test/kkdump`, is RDR2's
+     native Vulkan; it already shows the per-op pragma blocks and the `fmul` guard).
+2. **Coarse barriers (both routes).** KosmicKrisp is on Metal 4, with no driver hazard tracking.
+   `end_encoder` puts an all-stages-to-all-stages barrier after every encoder (its own comment:
+   "probably overkill", `kk_cmd_buffer.c:377`), so one pass cannot overlap the next; inside a pass
+   every `vkCmdPipelineBarrier2` is an encoder-stage barrier, or a pass split when a write is then
+   read as a texture. DXMT makes every resource untracked and keeps fences per subresource and per
+   stage (`dxmt_context.hpp` `fenceTrackers`, `fence_wait_vertex`), waiting only on real
+   dependencies, so the next pass's vertex work can overlap the previous pass's fragment work.
+3. **DXMT's encoder-list pass (both routes).** Before encoding, DXMT folds clear passes into load
+   actions and resolves into store actions, merges consecutive render passes with the same
+   attachments, makes a store `DontCare` when a later clear overwrites it, and reorders encoders
+   with no data dependency (`dxmt_context.cpp` ~1340–1490, `render_pass_optimized` /
+   `clear_pass_optimized` statistics). KosmicKrisp encodes what it is given. The DontCare rule may
+   be the depth store in pass 20 of the [King's Pass capture](../evidence/2026-10-08-vulkan-perf-kings-pass-capture.md)
+   (17.2 MB a frame; DXMT stores none).
+4. **Shader cost shared by both routes.** Every float comparison is forced to `safe` math
+   (workaround 14, with workaround 17's `isnan` checks); descriptors are reached through
+   64-bit address arithmetic on the root table (`t + ulong(248u)` in the dumps) where DXMT reads
+   argument-buffer fields; workaround 6 (`coherent device`) stays on for vertex and compute shaders
+   (`patches/mesa` 0030). Robust image access (workaround 16) adds a level query only to `txf`/image
+   loads with a non-constant LOD, so it is small, and both DXVK and vkd3d enable it.
+5. **Already known:** the WSI's copy into the drawable (27.6 MB a frame, about 0.1–0.15 ms,
+   not removable safely); one unix call per Vulkan command through winevulkan where DXMT
+   chains a whole encoder's commands per call (step 8, never measured); shared-storage
+   textures under a whole-heap buffer (tested only before 0019); vkd3d's extra
+   UnityGfxDeviceWorker guest work (item 8).
+
+**Checks, cheapest first (each a warm native/free DXVK pair, read as GPU ms and sys mJ/f, with
+a screenshot; a switch so the pair runs on one IPA):**
+
+1. Graphics options `MESA_KK_DISABLE_WORKAROUNDS=14` (no `fmul` guard, no forced `safe`
+   comparisons). Correctness risk: the NaN cases workaround 14 exists for.
+2. A `patches/mesa` debug switch that hides `shaderFloatControls2` and
+   `shaderSignedZeroInfNanPreserveFloat32`, so DXVK emits no preserve mode (fast-math MSL).
+   First on the host: replay a DXVK pipeline set through the KosmicKrisp mock
+   (`build/stages/mesa.sh ROOT hosttest`, `KK_MOCK_MSL_DIR`) and compare the MSL with and
+   without it. If it closes the gap, the lasting fix is per op (honour `NoContraction`/precise
+   only) rather than a driver that lies about features.
+3. Count encoders and barriers a frame in a King's Pass capture on KosmicKrisp, against DXMT's
+   pass statistics; then, if the count is high, a narrower encoder-end barrier and DXMT's
+   clear/merge rules for KosmicKrisp, each as one change.
+
+These replace nothing in the [Progress](#progress) handoff's chunk list; they rank ahead of its
+chunk 2 (DXVK's own GPU time), which they refine.
 
 ## Review 2026-10-13
 
@@ -920,3 +1004,7 @@ without the owner is recorded here with its reason.
        is left in the build area (`agent-notes/vulkan-perf/research-kk-defaults.md`).
     5. Then the cooled exit runs ([Exit criteria](#exit-criteria)), with the gate; stability
        counts every exit run and gate play.
+- **2026-10-21, desk research (no build, no phone run):** why DXMT is still faster, and three
+  checks for DXVK's own GPU time (the floating-point mode DXVK's shaders reach KosmicKrisp with,
+  workaround 14, encoder-end barriers and DXMT's pass merging): see
+  [Review 2026-10-21](#review-2026-10-21-why-dxmt-is-still-faster-desk-research).
