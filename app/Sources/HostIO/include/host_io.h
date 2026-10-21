@@ -59,6 +59,9 @@ void host_log(const char *path, const char *line);
 /* A release build's limit (AppLog.swift): with a nonzero limit, host_log
  * drops a line once the file has reached it. 0, the default, is no limit. */
 void host_log_set_limit(long bytes);
+/* AppLog.swift's rotation at launch: a log at path over `over` bytes becomes
+ * previous, replacing it; a log at or under it stays. */
+void host_log_rotate(const char *path, const char *previous, long over);
 
 /* host_memory.c: the app's memory, in bytes. available is what
  * os_proc_available_memory() reports left before iOS ends the process (0: no

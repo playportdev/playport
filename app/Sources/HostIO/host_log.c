@@ -49,3 +49,11 @@ void host_log(const char *path, const char *line)
     (void)!writev(fd, iov, 2);
     close(fd);
 }
+
+void host_log_rotate(const char *path, const char *previous, long over)
+{
+    struct stat st;
+    if (!path || !previous || stat(path, &st) || st.st_size <= over) return;
+    unlink(previous);
+    rename(path, previous);
+}

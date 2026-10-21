@@ -5,8 +5,11 @@
 
 #include "log_cap.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 void log_cap_tally_init(log_cap_tally *t, long cap)
 {
@@ -42,4 +45,33 @@ size_t log_cap_tally_feed(log_cap_tally *t, const char *buf, size_t n, double no
         return out_size - 1;
     }
     return (size_t)len;
+}
+
+int log_cap_divert(int log_fd, int err_fd, long cap, void (*before_switch)(void))
+{
+    struct stat st;
+    int p[2];
+    if (fstat(log_fd, &st) || st.st_size < cap) return -1;
+    if (pipe(p)) return -1;
+    dprintf(log_fd, "[wine_host] log: %ld MiB reached; the runtime's lines are counted from here, not written\n",
+            cap >> 20);
+    if (before_switch) before_switch();
+    dup2(p[1], err_fd);
+    close(p[1]);
+    return p[0];
+}
+
+void log_cap_drain(int in, int log_fd, long cap, double interval, double (*now)(void))
+{
+    static char buf[65536];
+    char report[512];
+    log_cap_tally tally;
+    log_cap_tally_init(&tally, cap);
+    for (;;) {
+        ssize_t n = read(in, buf, sizeof(buf));
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) return;
+        size_t len = log_cap_tally_feed(&tally, buf, (size_t)n, now(), interval, report, sizeof(report));
+        if (len) (void)!write(log_fd, report, len);
+    }
 }

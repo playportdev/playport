@@ -41,4 +41,16 @@ void log_cap_tally_init(log_cap_tally *t, long cap);
 size_t log_cap_tally_feed(log_cap_tally *t, const char *buf, size_t n, double now, double interval,
                           char *out, size_t out_size);
 
+/* The switch at the cap (wine_host.c's log_cap_thread, once a second): when
+ * the log open at log_fd has reached cap bytes, appends the line saying so,
+ * calls before_switch (if any), points err_fd (stderr) at a new pipe and
+ * returns the pipe's read end. Returns -1, changing nothing, while the log is
+ * under the cap, and -1 if the pipe cannot be made. */
+int log_cap_divert(int log_fd, int err_fd, long cap, void (*before_switch)(void));
+
+/* The pipe's reader after log_cap_divert: until every writer has closed it,
+ * counts what arrives (log_cap_tally_feed, the clock read by now) and appends
+ * only the reports, at most one per interval seconds, to log_fd. */
+void log_cap_drain(int in, int log_fd, long cap, double interval, double (*now)(void));
+
 #endif

@@ -4,7 +4,9 @@
  * with no limit every line is appended; with a release build's limit
  * (host_log_set_limit, AppLog.swift) lines stop once the file has reached it,
  * whether host_log appends to the file itself or, once stderr is the log
- * (wine_host_init's dup2), writes through stderr.
+ * (wine_host_init's dup2), writes through stderr. The rotation at launch
+ * (host_log_rotate, AppLog.swift), forced with small sizes: a log over the
+ * size becomes the previous log, replacing it; one at or under it stays.
  */
 #include "host_io.h"
 
@@ -63,7 +65,27 @@ int main(void)
     host_log(path, line);
     CHECK(size_of(path) == 6600);
 
+    /* Rotation: 6600 bytes is not over 6600, so it stays. */
+    char previous[1100];
+    snprintf(previous, sizeof(previous), "%s.prev", path);
+    host_log_rotate(path, previous, 6600);
+    CHECK(size_of(path) == 6600 && size_of(previous) == -1);
+
+    /* Over it: the log becomes the previous log. */
+    host_log_rotate(path, previous, 6599);
+    CHECK(size_of(path) == -1 && size_of(previous) == 6600);
+
+    /* A new session's log, rotated again: it replaces the older previous log. */
+    for (i = 0; i < 3; i++) host_log(path, line);
+    host_log_rotate(path, previous, 200);
+    CHECK(size_of(path) == -1 && size_of(previous) == 300);
+
+    /* No log at all: nothing happens. */
+    host_log_rotate(path, previous, 0);
+    CHECK(size_of(previous) == 300);
+
+    unlink(previous);
     unlink(path);
-    printf("host_log: %s\n", failures ? "FAILED" : "unlimited, limited and through-stderr appends as expected");
+    printf("host_log: %s\n", failures ? "FAILED" : "unlimited, limited and through-stderr appends as expected; rotation forced");
     return failures != 0;
 }

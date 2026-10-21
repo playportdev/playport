@@ -363,33 +363,26 @@ static void *log_limit_thread(void *arg)
  * log_cap_tally's report lines (log_cap.h). This file's own lines (g_log) and
  * HostIO's (host_log.c, which then appends to the file itself) still land:
  * they are few, and they carry the marks the drivers read. */
+static void log_cap_quiet_server(void)
+{
+    wineserver_log_set_file("/dev/null");
+    fflush(stderr);
+}
+
+static double log_cap_now(void)
+{
+    return clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1e9;
+}
+
 static void *log_cap_thread(void *arg)
 {
     (void)arg;
     for (;;) {
-        struct stat st;
         sleep(1);
-        if (fstat(g_log_fd, &st) || st.st_size < WINE_HOST_DEV_LOG_CAP) continue;
-        int p[2];
-        if (pipe(p)) return NULL;
-        dprintf(g_log_fd, "[wine_host] log: %ld MiB reached; the runtime's lines are counted from here, not written\n",
-                WINE_HOST_DEV_LOG_CAP >> 20);
-        wineserver_log_set_file("/dev/null");
-        fflush(stderr);
-        dup2(p[1], STDERR_FILENO);
-        close(p[1]);
-        static char buf[65536];
-        char report[512];
-        log_cap_tally tally;
-        log_cap_tally_init(&tally, WINE_HOST_DEV_LOG_CAP);
-        for (;;) {
-            ssize_t n = read(p[0], buf, sizeof(buf));
-            if (n < 0 && errno == EINTR) continue;
-            if (n <= 0) return NULL;
-            double now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1e9;
-            size_t len = log_cap_tally_feed(&tally, buf, (size_t)n, now, 10.0, report, sizeof(report));
-            if (len) (void)!write(g_log_fd, report, len);
-        }
+        int in = log_cap_divert(g_log_fd, STDERR_FILENO, WINE_HOST_DEV_LOG_CAP, log_cap_quiet_server);
+        if (in < 0) continue;
+        log_cap_drain(in, g_log_fd, WINE_HOST_DEV_LOG_CAP, 10.0, log_cap_now);
+        return NULL;
     }
 }
 

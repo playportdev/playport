@@ -53,14 +53,11 @@ enum AppLog {
         #endif
     }
 
-    /// At launch, a log over `bytes` becomes the previous log, replacing it.
+    /// At launch, a log over `bytes` becomes the previous log, replacing it
+    /// (host_log_rotate, host_log.c).
     private static func rotate(over bytes: Int) {
-        let fm = FileManager.default
-        if let size = (try? fm.attributesOfItem(atPath: path))?[.size] as? Int, size > bytes {
-            let previous = url.deletingLastPathComponent().appendingPathComponent(previousName)
-            try? fm.removeItem(at: previous)
-            try? fm.moveItem(at: url, to: previous)
-        }
+        let previous = url.deletingLastPathComponent().appendingPathComponent(previousName)
+        host_log_rotate(path, previous.path, bytes)
     }
 
     /// One line, from any thread. Before wine_host_init this is the only
