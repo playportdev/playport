@@ -17,13 +17,14 @@ from the main checkout after the branch moves there. **Pins read:** `mesa` b39d1
   - G0's host harness and G1 in `ea258b0` (`patches/mesa` 0096; host test `check_gpl`).
   - G2 in `8c31a22` (`patches/mesa` 0097; dev IPA `5a25af6e`, side copy, not installed). The vertex library is built at library creation; a
     fast link compiles only the fragment side at its first draw.
-  - G3 in the commit "MESA_KK_EXPERIMENTAL=gpl compiles a library's fragment shader on its own
-    (mesa 0098, G3)" (`patches/mesa` 0098; dev IPA `417caed8`, side copy, not installed). Both
+  - G3 in `68fde5b` (`patches/mesa` 0098; dev IPA `417caed8`, side copy, not installed). Both
     libraries are built at library creation; a fast link only builds the Metal pipeline.
   - Evidence: [2026-10-21-kk-gpl-host](../evidence/2026-10-21-kk-gpl-host.md).
   - G0's phone baseline is not run.
 - **Running:** none.
-- **Queue:** G4 next (cache and accounting, workstation); then G0's phone baseline and G5 from
+- **Queue:** G4 next (cache and accounting, workstation; also from G3: count library shaders
+  and their Metal libraries under `MESA_KK_DEBUG=memory`, pack their MSL, cache the per-draw
+  blocker checks); then G0's phone baseline and G5 from
   the main checkout; G6.
 - **Phone:** not used by this plan yet.
 - **Notes:** reports in the side copy's `.work/agent-notes/kk-gpl/reports/` (G2: `g2.md`, G3:
@@ -142,8 +143,11 @@ Two compile modes, picked per partition in `kk_compile_shaders`:
 - **Blend in Metal, not the shader.** Blending, the write mask and alpha to coverage/one move
   to the Metal pipeline's fixed-function state (`MTL4RenderPipelineColorAttachmentDescriptor`).
   Outputs keep their SPIR-V types, and dual-source outputs are `index(1)`.
-- **Clamp and sample mask from the root.** Depth clamp emulation is already driven by root
-  flags. The sample mask comes from the root when it is not all ones.
+- **Clamp from the root; sample mask by fallback.** Depth clamp emulation is already driven by
+  root flags. A separate fragment shader writes no sample mask (G3): writing `[[sample_mask]]`
+  on every fast-linked draw would likely cost hidden-surface removal, so a draw whose mask is
+  not all ones compiles the whole pipeline (`sample-mask`). The root has 2 spare bytes after
+  `emulate_viewport_z` if G5 shows this fallback is common.
 
 **Fast link, at draw time.** A device-wide cache maps (vertex shader, fragment shader, link key)
 to an `MTLRenderPipelineState` and its depth/stencil state. The link key holds the colour,
