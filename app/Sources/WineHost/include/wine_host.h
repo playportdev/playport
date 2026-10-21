@@ -26,7 +26,7 @@
 extern "C" {
 #endif
 
-#define WINE_HOST_ABI_VERSION 10
+#define WINE_HOST_ABI_VERSION 11
 
 typedef void (*wine_host_log_fn)(const char *line);
 
@@ -153,7 +153,9 @@ int wine_host_session_wait(int timeout_ms, int *exit_code);
  * most PP_CONTROL_MAX_WAIT_MS). PP_CONTROL_END_LAUNCHER, the launch's own
  * at the game's sign-in (decision 0130), ends the Rockstar Games Launcher's
  * processes but never the game's; PP_CONTROL_END_GAME_SOCIAL_CLUB, a dev build's after the
- * sign-in (decision 0133), ends the game's own Social Club helpers but never the game. 0 with *count the threads, windows or
+ * sign-in (decision 0133), ends the game's own Social Club helpers but never the game;
+ * PP_CONTROL_ALLOW_GAME_SOCIAL_CLUB, after a re-sign-in that follows that end (decision 0155),
+ * stops the root ending their restarts, *count 1 when it did. 0 with *count the threads, windows or
  * processes it touched; -1 bad call or no title running, -4 the control could not be
  * written, -6 no answer in time or the root ended, -7 the root refused it.
  * Controls are one at a time (a lock). Added in ABI 3 without changing any
@@ -227,6 +229,14 @@ void wine_host_band_dump(const char *why);
  * the last walk's cost after it does nothing. Added in ABI 10 without changing any
  * existing call. */
 void wine_host_process_memory_log(const char *why, int force);
+
+/* Allow (on nonzero) or refuse again (0) the game's later Social Club helper
+ * starts that ntdll refuses under PLAYPORT_REFUSE_GAME_SC_RESTART=1 (decision
+ * 0138): once the game signs in again after their end, its reload needs the
+ * helper (decision 0155). Each start allowed is logged as `[game-sc] restart
+ * allowed start N`. Any app thread. Added in ABI 11 without changing any
+ * existing call. */
+void wine_host_game_sc_allow_restarts(int on);
 
 /* Bound the log a session writes (a release build, AppLog.swift). Call before
  * wine_host_jit_pool_acquire and wine_host_init. With a nonzero limit,

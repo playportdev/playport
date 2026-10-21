@@ -73,6 +73,12 @@ enum {
      * (decision 0135). It carries
      * no names or arg; code is the processes it ended. */
     PP_CONTROL_END_GAME_SOCIAL_CLUB = 10,
+    /* A control, after that end, once the game has signed in again (decision 0155): the
+     * root stops ending the restarts of the game's own Social Club helpers, and a later
+     * END_GAME_SOCIAL_CLUB ends them again (launcher_end.h pp_game_sc_control), at most
+     * PP_GAME_SC_MAX_ALLOWS times a title. It carries no names or arg; code is 1 when the
+     * root stopped, 0 when there was nothing to stop or no allow was left. */
+    PP_CONTROL_ALLOW_GAME_SOCIAL_CLUB = 11,
 };
 
 /* The most a CLOSE waits before it ends the title. */
@@ -111,7 +117,7 @@ static inline int pp_session_control_valid(const pp_session_control *c, uint32_t
     if (!c || size != sizeof(*c) || c->magic != PP_SESSION_MAGIC || !c->sequence) return 0;
     if (c->kind == PP_CONTROL_CLOSE) return c->arg <= PP_CONTROL_MAX_WAIT_MS;
     return (c->kind == PP_CONTROL_PAUSE || c->kind == PP_CONTROL_RESUME || c->kind == PP_CONTROL_END_LAUNCHER ||
-            c->kind == PP_CONTROL_END_GAME_SOCIAL_CLUB) &&
+            c->kind == PP_CONTROL_END_GAME_SOCIAL_CLUB || c->kind == PP_CONTROL_ALLOW_GAME_SOCIAL_CLUB) &&
            c->arg == 0;
 }
 

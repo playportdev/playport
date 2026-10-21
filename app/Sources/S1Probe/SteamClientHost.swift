@@ -141,6 +141,8 @@ enum SteamClientHost {
 
     private static let guestLog: @convention(c) (UnsafePointer<CChar>?) -> Void = { text in
         guard let text else { return }
-        SteamClientHost.log(String(cString: text))
+        let line = String(cString: text)
+        GameSocialClubEnd.noteSteamTrace(line)   // decision 0155's fallback detector
+        SteamClientHost.log(line)
     }
 }

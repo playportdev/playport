@@ -1827,3 +1827,10 @@ void wine_host_process_memory_log(const char *why, int force)
 {
     ios_process_memory_log(why, force);
 }
+
+extern void ios_game_sc_allow_restarts(int on);
+
+void wine_host_game_sc_allow_restarts(int on)
+{
+    ios_game_sc_allow_restarts(on ? 1 : 0);
+}

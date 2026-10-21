@@ -1,0 +1,104 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Wed, 21 Oct 2026 19:43:39 +0200
+Subject: [PATCH] ntdll: the app allows RDR2's Social Club helper restarts
+ after a re-sign-in
+
+With decision 0138's refusal on, every SocialClubHelper.exe start by
+RDR2.exe after the first fails at NtCreateUserProcess. In 4 of 9 runs
+(PLA-413) the game took the end of its helper as a sign-out, signed in
+again and started a reload that needs the helper: refused every 5 s, it
+sat on its own loading spinner.
+
+ios_game_sc_allow_restarts(1), which the app calls through
+wine_host_game_sc_allow_restarts once it sees the game sign in again
+after the end, lets such starts go ahead, each logged as
+`[game-sc] restart allowed start N`; ios_game_sc_allow_restarts(0)
+refuses them again. The state moves from NtCreateUserProcess to file
+scope so the setter reaches it; the allow is an atomic the start reads.
+
+Class: host-app
+Evidence: docs/decisions/0155-allow-rdr2s-social-club-restart-after-a-re-sign-in.md
+Offered-upstream: no
+---
+ build/ntdll-unix/pp_game_sc_refuse.h | 15 +++++++++++++++
+ build/ntdll-unix/process_ios.c       | 18 +++++++++++++++---
+ 2 files changed, 30 insertions(+), 3 deletions(-)
+
+diff --git a/build/ntdll-unix/pp_game_sc_refuse.h b/build/ntdll-unix/pp_game_sc_refuse.h
+index c70fa81..74641e5 100644
+--- a/build/ntdll-unix/pp_game_sc_refuse.h
++++ b/build/ntdll-unix/pp_game_sc_refuse.h
+@@ -49,6 +49,7 @@ struct ppgsc_state
+ {
+     void *game;
+     unsigned starts;
++    int allow;      /* 1 while the app allows the game's restarts (decision 0155) */
+ };
+ 
+ /* Decide one start: 0 lets it go, else its number among the game's helper
+@@ -70,6 +71,20 @@ static inline unsigned ppgsc_refuse( struct ppgsc_state *st, int on, void *creat
+     }
+ }
+ 
++/* Decision 0155: after the end the game may sign in again, and its reload
++ * needs the helper. The app allows its restarts from then until the new
++ * sign-in (ios_game_sc_allow_restarts): a start ppgsc_refuse numbered goes
++ * ahead while this answers 1. */
++static inline void ppgsc_set_allow( struct ppgsc_state *st, int on )
++{
++    __atomic_store_n( &st->allow, on ? 1 : 0, __ATOMIC_RELEASE );
++}
++
++static inline int ppgsc_allowed( struct ppgsc_state *st )
++{
++    return __atomic_load_n( &st->allow, __ATOMIC_ACQUIRE );
++}
++
+ /* Playport (dev, off by default): with PLAYPORT_SC_BLOCK_CRASHPAD=1 in the environment, no crash
+  * reporter starts: Rockstar's RockstarErrorHandler.exe, the crashpad host the launcher and the game
+  * start (17 MB of image copies and a code buffer for the launcher's; about 106 MB for the game's), and
+diff --git a/build/ntdll-unix/process_ios.c b/build/ntdll-unix/process_ios.c
+index 74b15b1..50bd0ba 100644
+--- a/build/ntdll-unix/process_ios.c
++++ b/build/ntdll-unix/process_ios.c
+@@ -986,6 +986,16 @@ static void chromium_policy( const UNICODE_STRING *nt_image, RTL_USER_PROCESS_PA
+ }
+ #endif
+ 
++/* Playport (decisions 0138, 0155): the game's Social Club helper starts. */
++static struct ppgsc_state game_sc;
++
++/* The app allows (1) or refuses again (0) the game's later helper starts
++ * (wine_host_game_sc_allow_restarts, decision 0155). */
++void ios_game_sc_allow_restarts( int on )
++{
++    ppgsc_set_allow( &game_sc, on );
++}
++
+ NTSTATUS WINAPI NtCreateUserProcess( HANDLE *process_handle_ptr, HANDLE *thread_handle_ptr,
+                                      ACCESS_MASK process_access, ACCESS_MASK thread_access,
+                                      OBJECT_ATTRIBUTES *process_attr, OBJECT_ATTRIBUTES *thread_attr,
+@@ -1162,9 +1172,9 @@ NTSTATUS WINAPI NtCreateUserProcess( HANDLE *process_handle_ptr, HANDLE *thread_
+         }
+     }
+ 
+-    /* Playport (decision 0138, dev): RDR2's later Social Club helper starts are refused. */
++    /* Playport (decision 0138, dev): RDR2's later Social Club helper starts are refused,
++     * but while the app allows them (decision 0155) they go ahead. */
+     {
+-        static struct ppgsc_state game_sc;
+         const char *on = getenv( "PLAYPORT_REFUSE_GAME_SC_RESTART" );
+         PEB *peb = NtCurrentTeb()->Peb;
+         const UNICODE_STRING *creator = (peb && peb->ProcessParameters) ? &peb->ProcessParameters->ImagePathName : NULL;
+@@ -1173,7 +1183,9 @@ NTSTATUS WINAPI NtCreateUserProcess( HANDLE *process_handle_ptr, HANDLE *thread_
+                                    creator ? creator->Length / sizeof(WCHAR) : 0,
+                                    (const pp_wchar *)params->ImagePathName.Buffer,
+                                    params->ImagePathName.Length / sizeof(WCHAR) );
+-        if (n)
++        if (n && ppgsc_allowed( &game_sc ))
++            dprintf( 2, "[game-sc] restart allowed start %u\n", n );
++        else if (n)
+         {
+             if (n <= 9 || n % 10 == 0)
+                 dprintf( 2, "[game-sc] refused the game's Social Club helper start %u (%s; decision 0138)\n",

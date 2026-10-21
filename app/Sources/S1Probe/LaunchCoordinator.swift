@@ -612,7 +612,8 @@ enum LaunchCoordinator {
         let endGameSocialClub = GameSocialClubEnd.enabled   // decisions 0133, 0153: Settings › Graphics
         let launcher = r.endLauncher.map { s in
             LauncherEnd(signIn: s, profile: runtime.prefixURL.appendingPathComponent("drive_c/users/playport"),
-                        endGameSocialClub: endGameSocialClub)
+                        endGameSocialClub: endGameSocialClub,
+                        refuseGameSocialClubRestart: endGameSocialClub && GameSocialClubEnd.refuseRestart)
         }
         var sampled = Date.distantPast
         while true {
@@ -776,6 +777,13 @@ enum LaunchCoordinator {
     /// 0141), at the first slice whose footprint is within LauncherEndTrigger.headroomMB of the limit (the game starts its
     /// own helpers only after its sign-in): the root ends the game's own SocialClubHelper.exe
     /// processes, never the game. The slices read the footprint until then.
+    ///
+    /// With ntdll refusing the helper's restarts (decision 0138), the slices then watch for the
+    /// game signing in again (decision 0155, GameSocialClubReSignIn): a new sign-in line in its
+    /// log, or a GetCurrentGameLanguage burst. At one they send the root
+    /// PP_CONTROL_ALLOW_GAME_SOCIAL_CLUB (its sweep stops) and then allow ntdll's restarts, until
+    /// the next sign-in line or 90 s; the end may then run again 120 s after that sign-in, at
+    /// most twice a Play. A run with no re-sign-in logs nothing of it.
     private final class LauncherEnd {
         let file: URL
         let watch: GameSignIn.Watch
@@ -784,9 +792,14 @@ enum LaunchCoordinator {
         private var signedIn = false
         private var signedInAt: TimeInterval?
         private var gameSocialClubEnded = false
+        /// This Play's sign-in lines in the game's log, as last read.
+        private var signIns = 0
+        /// The re-sign-in watch after the end; nil unless ntdll refuses the helper's restarts.
+        private var reSignIn: GameSocialClubReSignIn?
 
-        init(signIn: GameSignIn, profile: URL, endGameSocialClub: Bool) {
+        init(signIn: GameSignIn, profile: URL, endGameSocialClub: Bool, refuseGameSocialClubRestart: Bool) {
             self.endGameSocialClub = endGameSocialClub
+            reSignIn = refuseGameSocialClubRestart ? GameSocialClubReSignIn() : nil
             file = signIn.file(profile: profile)
             let baseline = try? Data(contentsOf: file)
             watch = GameSignIn.Watch(signIn: signIn, baseline: baseline)
@@ -802,17 +815,25 @@ enum LaunchCoordinator {
 
         /// Whether the wait slices read the footprint: until the end and for 10 s after it.
         var readsFootprint: Bool {
-            (endedAt.map { Date().timeIntervalSince($0) < 10 } ?? true) || (endGameSocialClub && !gameSocialClubEnded)
+            (endedAt.map { Date().timeIntervalSince($0) < 10 } ?? true)
+                || (endGameSocialClub && (!gameSocialClubEnded || reSignIn?.reEndSignInAt != nil))
+        }
+
+        /// The sign-in an end of the game's Social Club counts 0141's 120 s from: the first, or
+        /// after a re-sign-in the new one (decision 0155); nil while none may run.
+        private var gameSocialClubSignInAt: TimeInterval? {
+            gameSocialClubEnded ? reSignIn?.reEndSignInAt : signedInAt
         }
 
         /// One wait slice: the sign-in, then the footprint, then the end if either calls for it.
         func slice(elapsed: TimeInterval) {
             watchSignIn(elapsed: elapsed)
+            watchReSignIn(elapsed: elapsed)
             guard readsFootprint else { return }
             let m = MemoryLimit.read()
             let ended = endedAt != nil
-            if endGameSocialClub, !gameSocialClubEnded, let limit = m.limitMB,
-               LauncherEndTrigger.endsGameSocialClub(sinceSignInS: signedInAt.map { elapsed - $0 },
+            if endGameSocialClub, let anchor = gameSocialClubSignInAt, let limit = m.limitMB,
+               LauncherEndTrigger.endsGameSocialClub(sinceSignInS: elapsed - anchor,
                                                      footprintMB: m.footprintMB, limitMB: limit) {
                 endGameSocialClubNow(footprintMB: m.footprintMB, limitMB: limit, elapsed: elapsed)
             }
@@ -851,27 +872,68 @@ enum LaunchCoordinator {
         /// Asks the root to end the game's own Social Club helpers, once (decision 0133).
         private func endGameSocialClubNow(footprintMB footprint: Int, limitMB: Int, elapsed: TimeInterval) {
             gameSocialClubEnded = true
+            _ = GameSocialClubEnd.takeLanguageCalls()   // a burst counts only from the end on
             log(String(format: "launcher: the footprint reached %d MB of the %d MB limit after the sign-in; ending the "
                        + "game's own Social Club at +%.1f s (decisions 0133, 0153)", footprint, limitMB, elapsed))
             var n: UInt32 = 0
             let rc = wine_host_session_control(Int32(PP_CONTROL_END_GAME_SOCIAL_CLUB), 0, 5_000, &n)
             log(rc == 0 ? "launcher: the session root ended \(n) of the game's Social Club processes"
                         : "launcher: the session root did not end the game's Social Club (\(rc))")
+            if let data = try? Data(contentsOf: file) { signIns = watch.signIns(data) }
+            if reSignIn?.ended(at: elapsed, signIns: signIns) == true { log("[game-sc] re-ended after re-sign-in") }
             #if !PLAYPORT_RELEASE
             RunEvents.emit("launcher", ["state": "game-social-club-ended", "after_s": Int(elapsed),
                                         "footprint_mb": footprint, "rc": Int(rc), "ended": Int(n)])
             #endif
         }
 
-        /// Logs this Play's first sign-in line of the game, once.
+        /// Logs this Play's first sign-in line of the game, once; after the end of its Social Club,
+        /// counts the lines for the re-sign-in watch.
         private func watchSignIn(elapsed: TimeInterval) {
-            guard !signedIn, let data = try? Data(contentsOf: file), watch.signedIn(data) else { return }
+            guard !signedIn || reSignIn?.watching == true, let data = try? Data(contentsOf: file) else { return }
+            signIns = watch.signIns(data)
+            guard !signedIn, signIns > 0 else { return }
             signedIn = true
             signedInAt = elapsed
             log(String(format: "launcher: the game signed in at +%.1f s", elapsed))
             #if !PLAYPORT_RELEASE
             RunEvents.emit("launcher", ["state": "signed-in", "after_s": Int(elapsed)])
             #endif
+        }
+
+        /// After the end of the game's Social Club: a re-sign-in allows its restarts, the root's
+        /// sweep stopped first so a helper started in between is not ended (decision 0155).
+        private func watchReSignIn(elapsed: TimeInterval) {
+            guard var r = reSignIn, r.watching else { return }
+            defer { reSignIn = r }
+            switch r.slice(at: elapsed, signIns: signIns, languageCalls: GameSocialClubEnd.takeLanguageCalls()) {
+            case nil:
+                return
+            case .allow(let detector):
+                log("[game-sc] re-sign-in after end (\(detector.rawValue))")
+                var n: UInt32 = 0
+                let rc = wine_host_session_control(Int32(PP_CONTROL_ALLOW_GAME_SOCIAL_CLUB), 0, 5_000, &n)
+                guard rc == 0, n == 1 else {
+                    r.allowFailed()
+                    log("[game-sc] re-sign-in after end: the session root did not stop its sweep (\(rc), \(n)); "
+                        + "restarts stay refused")
+                    return
+                }
+                wine_host_game_sc_allow_restarts(1)
+                log("[game-sc] re-sign-in after end: allowing restart")
+                #if !PLAYPORT_RELEASE
+                RunEvents.emit("launcher", ["state": "game-social-club-allowed", "after_s": Int(elapsed),
+                                            "detector": detector.rawValue, "allow": r.allows])
+                #endif
+            case .noAllowLeft(let detector):
+                log("[game-sc] re-sign-in after end (\(detector.rawValue)): no allow left "
+                    + "(\(GameSocialClubReSignIn.maxAllows) used); restarts stay refused")
+            case .refuseAgain(let signedIn):
+                wine_host_game_sc_allow_restarts(0)
+                log(signedIn ? "[game-sc] signed in again (socialclub.log): restarts refused again"
+                             : "[game-sc] no new sign-in line \(Int(GameSocialClubReSignIn.allowCapS)) s after the allow: "
+                               + "restarts refused again")
+            }
         }
     }
 

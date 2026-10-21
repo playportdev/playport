@@ -21,6 +21,7 @@
 #define PLAYPORT_LAUNCHER_END_H
 
 #include <stdint.h>
+#include "../Sources/WineHost/include/session_protocol.h"
 
 /* Parent links followed at most: a cycle of reused process ids cannot loop. */
 #define PP_LAUNCHER_END_DEPTH 32u
@@ -143,6 +144,29 @@ static inline int pp_game_social_club_restart(const pp_launcher_proc *p, uint32_
     if (!pp_game_social_club(p, n, i)) return 0;
     for (k = 0; k < nended; k++) if (ended[k] == p[i].pid) return 0;
     return 1;
+}
+
+/* The game's Social Club controls (decisions 0133, 0135, 0155). END ends the game's helpers
+ * and starts the sweep that ends their restarts (`*ended` 1), once until an ALLOW; ALLOW,
+ * after an end, stops the sweep (`*ended` 0) so a restart runs, at most PP_GAME_SC_MAX_ALLOWS
+ * times a title (`*allows`), and a later END ends them again. What the root does now. */
+#define PP_GAME_SC_MAX_ALLOWS 2u
+enum { PP_GAME_SC_NOTHING, PP_GAME_SC_END, PP_GAME_SC_STOP_SWEEP };
+
+static inline int pp_game_sc_control(int kind, int *ended, uint32_t *allows)
+{
+    if (kind == PP_CONTROL_END_GAME_SOCIAL_CLUB) {
+        if (*ended) return PP_GAME_SC_NOTHING;
+        *ended = 1;
+        return PP_GAME_SC_END;
+    }
+    if (kind == PP_CONTROL_ALLOW_GAME_SOCIAL_CLUB) {
+        if (!*ended || *allows >= PP_GAME_SC_MAX_ALLOWS) return PP_GAME_SC_NOTHING;
+        *ended = 0;
+        ++*allows;
+        return PP_GAME_SC_STOP_SWEEP;
+    }
+    return PP_GAME_SC_NOTHING;
 }
 
 /* What the root does with a restart: the first ones it finds still running are

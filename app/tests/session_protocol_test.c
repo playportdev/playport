@@ -143,6 +143,12 @@ int main(void)
     CHECK(pp_session_control_valid(&c, sizeof(c)));
     c.arg = 1;
     CHECK(!pp_session_control_valid(&c, sizeof(c)));    /* it carries nothing */
+    c.arg = 0; c.kind = PP_CONTROL_ALLOW_GAME_SOCIAL_CLUB; /* after a re-sign-in that follows it (decision 0155) */
+    CHECK(pp_session_control_valid(&c, sizeof(c)));
+    c.arg = 1;
+    CHECK(!pp_session_control_valid(&c, sizeof(c)));    /* it carries nothing */
+    c.arg = 0; c.kind = PP_CONTROL_ALLOW_GAME_SOCIAL_CLUB + 1;
+    CHECK(!pp_session_control_valid(&c, sizeof(c)));    /* no kind past it */
     c.arg = 0; c.kind = PP_REQUEST_LAUNCH;
     CHECK(!pp_session_control_valid(&c, sizeof(c)));   /* a launch is not a control */
     c.kind = PP_REQUEST_PREREQUISITE;

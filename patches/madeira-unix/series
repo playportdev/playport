@@ -187,3 +187,4 @@
 0210-ntdll-the-callret-dump-measures-the-4-MiB-call-ret-s.patch
 0211-ntdll-the-request-size-of-Chromium-s-out-of-memory-e.patch
 0212-ntdll-PLAYPORT_SC_BLOCK_CRASHPAD-1-refuses-crash-rep.patch
+0213-ntdll-the-app-allows-RDR2-s-Social-Club-helper-resta.patch

@@ -330,7 +330,8 @@ static DWORD launcher_ended_at;
 static int launcher_round_done;                       /* restarts were ended once more */
 static DWORD launcher_restarts, launcher_restarts_ended, launcher_restarts_gone, launcher_restarts_left;
 static DWORD launcher_other_starts, launcher_unopened_starts;
-static int game_sc_ended;                             /* the game's Social Club end ran (decision 0133) */
+static int game_sc_ended;                             /* the game's Social Club end ran and its sweep runs (0133, 0135) */
+static uint32_t game_sc_allows;                       /* ALLOWs that stopped the sweep (decision 0155) */
 static DWORD game_sc_ended_at, game_sc_restarts, game_sc_restarts_failed, game_sc_swept_at;
 static uint32_t game_sc_gone[MAX_LAUNCHER_KNOWN];      /* the game's helpers it ended, maybe still listed */
 static DWORD ngame_sc_gone;
@@ -343,6 +344,7 @@ static void launcher_reset(void)
     launcher_restarts = launcher_restarts_ended = launcher_restarts_gone = launcher_restarts_left = 0;
     launcher_other_starts = launcher_unopened_starts = 0;
     game_sc_ended = 0;
+    game_sc_allows = 0;
     game_sc_restarts = game_sc_restarts_failed = 0;
     ngame_sc_gone = 0;
 }
@@ -640,15 +642,24 @@ static void control(uint32_t title_seq, HANDLE job, DWORD title, int *closing, D
         done = end_launcher(title_seq, pids, npids, 0);
         break;
     case PP_CONTROL_END_GAME_SOCIAL_CLUB:
-        if (game_sc_ended) {
+        if (pp_game_sc_control(c.kind, &game_sc_ended, &game_sc_allows) != PP_GAME_SC_END) {
             say("%s %u: [game-sc] already ended once; nothing more", what, (unsigned long long)title_seq);
             break;
         }
         say("%s %u: [game-sc] ending the game's own Social Club helpers, never the game (a dev build's, "
             "after its sign-in)", what, (unsigned long long)title_seq);
-        game_sc_ended = 1;
         game_sc_ended_at = GetTickCount();
         done = end_game_social_club(title_seq, pids, npids);
+        break;
+    case PP_CONTROL_ALLOW_GAME_SOCIAL_CLUB:
+        if (pp_game_sc_control(c.kind, &game_sc_ended, &game_sc_allows) != PP_GAME_SC_STOP_SWEEP) {
+            say("%s %u: [game-sc] restarts allowed: nothing to stop (no end, or %u allows already)", what,
+                (unsigned long long)title_seq, (unsigned long long)game_sc_allows);
+            break;
+        }
+        say("%s %u: [game-sc] restarts allowed: the sweep stops (allow %u, decision 0155)", what,
+            (unsigned long long)title_seq, (unsigned long long)game_sc_allows);
+        done = 1;
         break;
     }
     reply_to(control_reply_path, control_reply_tmp, c.sequence, PP_CONTROL_DONE, done);

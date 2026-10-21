@@ -38,25 +38,30 @@ public struct GameSignIn: Equatable, Sendable {
         }
 
         /// Whether the log as read now holds the sign-in line written in this Play.
-        public func signedIn(_ data: Data) -> Bool {
+        public func signedIn(_ data: Data) -> Bool { signIns(data) > 0 }
+
+        /// How many sign-in lines the log as read now holds from this Play: after the first, a
+        /// new one is the game signing in again (decision 0155, GameSocialClubReSignIn).
+        public func signIns(_ data: Data) -> Int {
             var fresh = data
             if let baseline, data.count >= baseline.count, data.prefix(baseline.count) == baseline {
                 // From the character the baseline ended in: one it held half of is read whole.
                 fresh = data.dropFirst(baseline.count & ~1)
             }
-            guard !fresh.isEmpty else { return false }
+            guard !fresh.isEmpty else { return 0 }
             // UTF-16LE: an odd byte left at the end is the start of a character still being written.
             let bytes = [UInt8](fresh.prefix(fresh.count & ~1))
             let units = stride(from: 0, to: bytes.count, by: 2).map { UInt16(bytes[$0]) | UInt16(bytes[$0 + 1]) << 8 }
             let text = String(decoding: units, as: UTF16.self)
+            var count = 0
             for line in text.split(whereSeparator: { $0.isNewline }) {
                 var rest = line.drop { $0 == "\u{FEFF}" }
                 if rest.first == "[", let close = rest.firstIndex(of: "]") {
                     rest = rest[rest.index(after: close)...].drop { $0 == " " }
                 }
-                if rest.hasPrefix(signIn.line) { return true }
+                if rest.hasPrefix(signIn.line) { count += 1 }
             }
-            return false
+            return count
         }
     }
 }

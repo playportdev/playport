@@ -148,6 +148,28 @@ int main(void)
     CHECK(pp_launcher_restart_action(0, 0) == PP_LAUNCHER_RESTART_REPORT);
     CHECK(pp_launcher_restart_action(0, 1) == PP_LAUNCHER_RESTART_REPORT);
 
+    /* the game's Social Club controls (decision 0155): ALLOW stops the sweep only after an END,
+     * at most PP_GAME_SC_MAX_ALLOWS times; END ends again after each ALLOW, never twice in a row */
+    {
+        int ended = 0;
+        uint32_t allows = 0;
+        CHECK(pp_game_sc_control(PP_CONTROL_ALLOW_GAME_SOCIAL_CLUB, &ended, &allows) == PP_GAME_SC_NOTHING);
+        CHECK(!ended && allows == 0);
+        CHECK(pp_game_sc_control(PP_CONTROL_END_GAME_SOCIAL_CLUB, &ended, &allows) == PP_GAME_SC_END && ended);
+        CHECK(pp_game_sc_control(PP_CONTROL_END_GAME_SOCIAL_CLUB, &ended, &allows) == PP_GAME_SC_NOTHING && ended);
+        CHECK(pp_game_sc_control(PP_CONTROL_ALLOW_GAME_SOCIAL_CLUB, &ended, &allows) == PP_GAME_SC_STOP_SWEEP);
+        CHECK(!ended && allows == 1);
+        CHECK(pp_game_sc_control(PP_CONTROL_ALLOW_GAME_SOCIAL_CLUB, &ended, &allows) == PP_GAME_SC_NOTHING);
+        CHECK(allows == 1);
+        CHECK(pp_game_sc_control(PP_CONTROL_END_GAME_SOCIAL_CLUB, &ended, &allows) == PP_GAME_SC_END && ended);
+        CHECK(pp_game_sc_control(PP_CONTROL_ALLOW_GAME_SOCIAL_CLUB, &ended, &allows) == PP_GAME_SC_STOP_SWEEP);
+        CHECK(!ended && allows == 2);
+        CHECK(pp_game_sc_control(PP_CONTROL_END_GAME_SOCIAL_CLUB, &ended, &allows) == PP_GAME_SC_END && ended);
+        CHECK(pp_game_sc_control(PP_CONTROL_ALLOW_GAME_SOCIAL_CLUB, &ended, &allows) == PP_GAME_SC_NOTHING);
+        CHECK(ended && allows == PP_GAME_SC_MAX_ALLOWS);   /* the third: the sweep goes on */
+        CHECK(pp_game_sc_control(PP_CONTROL_PAUSE, &ended, &allows) == PP_GAME_SC_NOTHING && ended);
+    }
+
     /* a parent cycle (reused ids) ends the walk */
     {
         pp_launcher_proc loop[2] = { { 1, 2, u16(12, "SocialClubHelper.exe") }, { 2, 1, u16(13, "SocialClubHelper.exe") } };
