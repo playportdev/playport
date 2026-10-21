@@ -382,6 +382,40 @@ static void test_handoff(void)
     errno = 0; CHECK( wait1( fd, 4, 0 ) == -1 && errno == EBADF );
 }
 
+static unsigned long long live(void)
+{
+    struct ppsync_stats s;
+    ppsync_get_stats( &s );
+    return s.live_objects;
+}
+
+/* Posts nobody takes do not fill the table: a repost of the same handle
+ * replaces the old one, a full table drops its oldest, and each dropped post
+ * gives its reference back. */
+static void test_handoff_leaks(void)
+{
+    unsigned long long before = live();
+    int e = event( 0, 1 ), f = event( 0, 0 ), fd, i;
+
+    ppsync_post( 0x34, 0x10, e );
+    ppsync_post( 0x34, 0x10, f );               /* the same handle again: replaces */
+    CHECK( ppsync_take( 0x34, 0x10 ) == f );
+    CHECK( ppsync_take( 0x34, 0x10 ) == -1 );
+    close( f );                                 /* the take's reference */
+
+    for (i = 0; i < 3000; i++) ppsync_post( 0x38, 0x1000 + 4 * i, e );   /* never taken */
+    ppsync_post( 0x38, 0x8, e );
+    fd = ppsync_take( 0x38, 0x8 );              /* the newest still gets through */
+    CHECK( fd == e );
+    close( fd );
+    CHECK( ppsync_take( 0x38, 0x1000 ) == -1 );  /* the oldest went */
+    for (i = 3000 - 1024 + 1; i < 3000; i++)    /* take the rest, so each reference returns */
+        if ((fd = ppsync_take( 0x38, 0x1000 + 4 * i )) == e) close( fd );
+    close( f );
+    close( e );
+    CHECK( live() == before );
+}
+
 /* ---- stress ---------------------------------------------------------------
  * Workers share a mutex guarding a plain counter, a pair of semaphores whose
  * tokens move only through wait-all (so their counts stay equal), an
@@ -569,6 +603,7 @@ int main(void)
     test_kick();
     test_freeze();
     test_handoff();
+    test_handoff_leaks();
     test_stress();
     test_ping_pong();
     test_freeze_storm();

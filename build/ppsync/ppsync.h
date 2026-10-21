@@ -37,9 +37,12 @@ extern int  ppsync_close( int fd );
 
 /* The server -> client hand-off that replaces SCM_RIGHTS for pseudo fds: the
  * server posts the descriptor it answers a request with (taking a reference),
- * the client takes it (receiving that reference). */
-extern void ppsync_post( unsigned int pid, unsigned int handle, int fd );
-extern int  ppsync_take( unsigned int pid, unsigned int handle );
+ * the client takes it (receiving that reference). Both key it by the
+ * requesting Wine thread's id and the handle: a TEB's process id can differ
+ * from the server's view of the thread. A post nobody takes is replaced by
+ * the next for the same key, or dropped when the table is full. */
+extern void ppsync_post( unsigned int tid, unsigned int handle, int fd );
+extern int  ppsync_take( unsigned int tid, unsigned int handle );
 
 extern void ppsync_kick( unsigned int tid );
 extern void ppsync_freeze( unsigned int tid, int frozen );

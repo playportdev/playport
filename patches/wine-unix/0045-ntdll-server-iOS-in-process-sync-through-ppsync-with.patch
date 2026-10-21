@@ -31,21 +31,26 @@ completion APC was queued for a waiting thread returned no data
   it does not leave one until resumed, as check_wait() keeps a
   suspended thread's server wait.
 
-madsync_* become ppsync_*. Other platforms are unchanged.
+madsync_* become ppsync_*. A descriptor is handed over for the
+requesting thread, keyed by its thread id (the server's current->id, the
+client's thread_data tid). It is no longer keyed by its process: a thread
+whose TEB names another process than the server's (pid 0x20 against 0x3e4
+in RDR2's play) missed every take, and each leaked a hand-off slot until
+the table was full. Other platforms are unchanged.
 
 Class: feature
-Evidence: docs/plans/2026-10-21-ppsync.md (host tests: build/ppsync/ppsync_test.c; phone gates not run)
+Evidence: docs/plans/2026-10-21-ppsync.md (host tests: build/ppsync/ppsync_test.c; RDR2 runs 20261022T000210, 001107, 001437, 003947)
 Offered-upstream: no; the ntsync driver gets these from signals
 ---
  dlls/ntdll/unix/sync.c | 28 ++++++++++++++++++++++++----
- server/inproc_sync.c   |  4 ++--
+ server/inproc_sync.c   |  7 +++++--
  server/process.c       |  6 ++++++
  server/thread.c        | 38 ++++++++++++++++++++++++++++++++++++--
  server/thread.h        |  3 +++
- 5 files changed, 71 insertions(+), 8 deletions(-)
+ 5 files changed, 74 insertions(+), 8 deletions(-)
 
 diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
-index 50203e7..5e257b1 100644
+index 50203e7..f03980c 100644
 --- a/dlls/ntdll/unix/sync.c
 +++ b/dlls/ntdll/unix/sync.c
 @@ -434,8 +434,28 @@ static NTSTATUS linux_wait_objs( int device, DWORD count, const int *objs, WAIT_
@@ -86,7 +91,7 @@ index 50203e7..5e257b1 100644
 -            sync->fd = madsync_take( GetCurrentProcessId(), wine_server_obj_handle( handle ) );
 +            /* The descriptor is a pseudo fd handed over in-process; see
 +             * build/ppsync. Nothing travels over the socket. */
-+            sync->fd = ppsync_take( GetCurrentProcessId(), wine_server_obj_handle( handle ) );
++            sync->fd = ppsync_take( get_thread_data()->tid, wine_server_obj_handle( handle ) );
              if (sync->fd < 0) ret = STATUS_INVALID_HANDLE;
  #else
              obj_handle_t fd_handle;
@@ -95,12 +100,12 @@ index 50203e7..5e257b1 100644
  #ifdef WINE_IOS
                  (void)token;
 -                data->alert_fd = fd = madsync_take( GetCurrentProcessId(), reply->handle );
-+                data->alert_fd = fd = ppsync_take( GetCurrentProcessId(), reply->handle );
++                data->alert_fd = fd = ppsync_take( data->tid, reply->handle );
  #else
                  data->alert_fd = fd = wine_server_receive_fd( &token );
                  assert( token == reply->handle );
 diff --git a/server/inproc_sync.c b/server/inproc_sync.c
-index 0c10f1c..7fedefc 100644
+index 0c10f1c..3c24291 100644
 --- a/server/inproc_sync.c
 +++ b/server/inproc_sync.c
 @@ -49,7 +49,7 @@ int get_inproc_device_fd(void)
@@ -112,12 +117,15 @@ index 0c10f1c..7fedefc 100644
  #else
      if (fd == -2) fd = open( "/dev/ntsync", O_CLOEXEC | O_RDONLY );
  #endif
-@@ -290,7 +290,7 @@ DECL_HANDLER(get_inproc_sync_fd)
+@@ -290,7 +290,10 @@ DECL_HANDLER(get_inproc_sync_fd)
  
      if ((fd = get_obj_inproc_sync( obj, &reply->type )) < 0) set_error( STATUS_NOT_IMPLEMENTED );
  #ifdef WINE_IOS
 -    else madsync_post( get_process_id( current->process ), req->handle, fd );   /* ml1058: no SCM_RIGHTS for a pseudo fd */
-+    else ppsync_post( get_process_id( current->process ), req->handle, fd );   /* no SCM_RIGHTS for a pseudo fd */
++    /* No SCM_RIGHTS for a pseudo fd: it is posted for the requesting thread,
++     * by its id. Not by its process: a thread's TEB may name another process
++     * than the server has it in, so a pid key could miss. */
++    else ppsync_post( get_thread_id( current ), req->handle, fd );
  #else
      else send_client_fd( current->process, fd, req->handle );
  #endif
@@ -146,7 +154,7 @@ index 23ddab4..8e1f73d 100644
          }
      }
 diff --git a/server/thread.c b/server/thread.c
-index f8902ec..fabc3c2 100644
+index f8902ec..8fe1afa 100644
 --- a/server/thread.c
 +++ b/server/thread.c
 @@ -411,6 +411,29 @@ static inline int is_thread_suspended( struct thread *thread )
@@ -231,8 +239,8 @@ index f8902ec..fabc3c2 100644
  #ifdef WINE_IOS
 -        { extern void madsync_post( unsigned int pid, unsigned int handle, int fd );
 -          madsync_post( get_process_id( current->process ), reply->handle, fd ); }   /* ml1058 */
-+        { extern void ppsync_post( unsigned int pid, unsigned int handle, int fd );
-+          ppsync_post( get_process_id( current->process ), reply->handle, fd ); }   /* no SCM_RIGHTS for a pseudo fd */
++        { extern void ppsync_post( unsigned int tid, unsigned int handle, int fd );
++          ppsync_post( get_thread_id( current ), reply->handle, fd ); }   /* posted for this thread, by its id */
  #else
          send_client_fd( current->process, fd, reply->handle );
  #endif

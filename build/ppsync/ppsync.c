@@ -419,39 +419,75 @@ int ppsync_close( int fd )
 
 /* ---- server -> client hand-off -------------------------------------------- */
 
+/* A post is taken by the requesting thread right after the server's reply,
+ * so a live entry is microseconds old. An entry that is never taken (a reply
+ * the client did not act on) must not fill the table: a post for the same
+ * (tid, handle) replaces it, and a full table drops its oldest entry. Each
+ * dropped entry gives back the reference its post took, and the first few
+ * are logged, as are takes that find nothing. */
 #define PPS_POSTS 1024
-static struct { unsigned int pid, handle; int fd; } g_post[PPS_POSTS];
+static struct { unsigned int tid, handle; int fd; unsigned long long seq; } g_post[PPS_POSTS];
+static unsigned long long g_post_seq;
 static pps_lock_t g_post_lock = PPS_LOCK_INITIALIZER;
+static _Atomic unsigned long long g_post_replaced, g_post_evicted, g_take_missed;
 
-void ppsync_post( unsigned int pid, unsigned int handle, int fd )
+static void post_drop( unsigned int i, const char *why, _Atomic unsigned long long *counter )
+{
+    struct pps_obj *o = obj_of( g_post[i].fd );
+    unsigned long long n = atomic_fetch_add_explicit( counter, 1, RLX );
+    if (n < 8 || !(n & (n - 1)))
+        dprintf( 2, "[ppsync] hand-off %s: tid %04x handle %#x (%llu posts old), %llu so far\n",
+                 why, g_post[i].tid, g_post[i].handle, g_post_seq - g_post[i].seq, n + 1 );
+    g_post[i].fd = 0;
+    if (o) obj_unref( o );
+}
+
+void ppsync_post( unsigned int tid, unsigned int handle, int fd )
 {
     struct pps_obj *o = obj_of( fd );
-    unsigned int i;
-    static int logged;
+    unsigned int i, slot = PPS_POSTS, oldest = 0;
 
     if (!o) return;
+    atomic_fetch_add_explicit( &o->refs, 1, RLX );
     pps_lock_wait( &g_post_lock );
-    for (i = 0; i < PPS_POSTS; i++) if (!g_post[i].fd) break;
-    if (i < PPS_POSTS)
+    for (i = 0; i < PPS_POSTS; i++)
     {
-        atomic_fetch_add_explicit( &o->refs, 1, RLX );
-        g_post[i].pid = pid; g_post[i].handle = handle; g_post[i].fd = fd;
+        if (!g_post[i].fd) { if (slot == PPS_POSTS) slot = i; continue; }
+        if (g_post[i].tid == tid && g_post[i].handle == handle)
+        {
+            post_drop( i, "replaced", &g_post_replaced );
+            if (slot == PPS_POSTS || slot > i) slot = i;
+            continue;
+        }
+        if (g_post[i].seq < g_post[oldest].seq || !g_post[oldest].fd) oldest = i;
     }
-    else if (!logged++) dprintf( 2, "[ppsync] hand-off table full; pid %04x handle %#x dropped\n", pid, handle );
+    if (slot == PPS_POSTS)
+    {
+        post_drop( oldest, "evicted", &g_post_evicted );
+        slot = oldest;
+    }
+    g_post[slot].tid = tid; g_post[slot].handle = handle; g_post[slot].fd = fd;
+    g_post[slot].seq = ++g_post_seq;
     pps_unlock( &g_post_lock );
 }
 
-int ppsync_take( unsigned int pid, unsigned int handle )
+int ppsync_take( unsigned int tid, unsigned int handle )
 {
     unsigned int i; int fd = -1;
     pps_lock_wait( &g_post_lock );
     for (i = 0; i < PPS_POSTS; i++)
-        if (g_post[i].fd && g_post[i].pid == pid && g_post[i].handle == handle)
+        if (g_post[i].fd && g_post[i].tid == tid && g_post[i].handle == handle)
         {
             fd = g_post[i].fd; g_post[i].fd = 0;
             break;
         }
     pps_unlock( &g_post_lock );
+    if (fd < 0)
+    {
+        unsigned long long n = atomic_fetch_add_explicit( &g_take_missed, 1, RLX );
+        if (n < 8 || !(n & (n - 1)))
+            dprintf( 2, "[ppsync] hand-off missed: tid %04x handle %#x, %llu so far\n", tid, handle, n + 1 );
+    }
     return fd;
 }
 
