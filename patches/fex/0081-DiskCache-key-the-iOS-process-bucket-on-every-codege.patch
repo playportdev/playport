@@ -1,0 +1,144 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Wed, 21 Oct 2026 18:57:17 +0200
+Subject: [PATCH] DiskCache: key the iOS process bucket on every codegen switch
+
+The disk cache's process bucket covers FEX's config options that affect
+codegen (SerializeForCache), not the environment switches Playport and
+Madeira read on their own, so flipping one could run blocks compiled
+under its other value:
+
+MADEIRA_FEX_EC_RET (IosEcReturnWithRet: BranchOps' BL into ARM64EC
+code), MADEIRA_X64_QPC_FASTPATH (IosRdtscSelfSync: OpcodeDispatcher's
+RDTSC), MADEIRA_FEX_AFPOFF_FPCR (IosAfpOffFpcr: SetRoundingMode,
+FillStaticRegs), MADEIRA_NO_DFE (the pass list) and FEX_TRACE_RIP (a
+Print at each listed 32-bit address).
+
+0080 keyed the bucket on IosAfpOffFpcr, but DiskCache::Init runs in
+the context's constructor, before ProcessInit sets that global (or
+IosEcReturnWithRet, IosRdtscSelfSync), so it always read 0. Init now
+reads the variables themselves: IosCodegenSwitches.h lists them, and
+each one set adds "name=value" to the process bucket's hash. With none
+set the bucket is unchanged.
+
+The other switches change no compiled block: MADEIRA_FEX_EC_CALLRET_POP
+and MADEIRA_FEX_EC_BITMAP_CACHE only the dispatcher, emitted each run;
+MADEIRA_FEX_BATCH2 the transition code in Module.S, the sweeper and
+where a backpatch is written; MADEIRA_FEX_SMC_FASTPATH,
+MADEIRA_FEX_EC_EXIT_LEAN, MADEIRA_KEEP_SMC and FEX_EC_CALL_RING
+runtime paths; FEX_SMCCHECKS_FOR sets SMCChecks, already in the config.
+
+Class: ios-port
+Evidence: docs/evidence/2026-10-21-afp-fpcr-and-qpc.md
+Offered-upstream: no; the switches are Madeira's and Playport's iOS code
+---
+ FEXCore/Source/Interface/Core/DiskCache.cpp   | 18 ++++-----
+ .../Interface/Core/IosCodegenSwitches.h       | 37 +++++++++++++++++++
+ Source/Windows/ARM64EC/Module.cpp             |  6 ++-
+ 3 files changed, 49 insertions(+), 12 deletions(-)
+ create mode 100644 FEXCore/Source/Interface/Core/IosCodegenSwitches.h
+
+diff --git a/FEXCore/Source/Interface/Core/DiskCache.cpp b/FEXCore/Source/Interface/Core/DiskCache.cpp
+index bf6df085e..8f8401de7 100644
+--- a/FEXCore/Source/Interface/Core/DiskCache.cpp
++++ b/FEXCore/Source/Interface/Core/DiskCache.cpp
+@@ -11,10 +11,8 @@ extern "C" uint32_t IosTebTsdOffset;
+ // without moving FormatVersion.
+ #include <git_version.h>
+ extern "C" uint64_t IosGuestWindowBase = 0;
+-#ifdef ARCHITECTURE_arm64ec
+-// What FPCR holds without AFP (Arm64Emitter.h).
+-extern "C" uint32_t IosAfpOffFpcr;
+-#endif
++#include "Interface/Core/IosCodegenSwitches.h"
++#include <cstdlib>
+ #endif
+ 
+ #include <FEXCore/Config/Config.h>
+@@ -485,13 +483,13 @@ namespace DiskCache {
+     if (IosGuestWindowBase) {
+       ProcessBucketHash = XXH3_64bits_withSeed(&IosGuestWindowBase, sizeof(IosGuestWindowBase), ProcessBucketHash);
+     }
+-#ifdef ARCHITECTURE_arm64ec
+-    // Playport: SetRoundingMode and FillStaticRegs write FPCR.FIZ and FPCR.AH as IosAfpOffFpcr asks
+-    // (Arm64Emitter.h), so a block only runs under the mode it was compiled in.
+-    if (IosAfpOffFpcr) {
+-      ProcessBucketHash = XXH3_64bits_withSeed(&IosAfpOffFpcr, sizeof(IosAfpOffFpcr), ProcessBucketHash);
++    // Playport: the switches that change codegen outside FEX's config (IosCodegenSwitches.h), so a block
++    // only runs under the values it was compiled with.
++    fextl::string CodegenSwitches;
++    AppendIosCodegenSwitches(CodegenSwitches, [](const char* Name) -> const char* { return getenv(Name); });
++    if (!CodegenSwitches.empty()) {
++      ProcessBucketHash = XXH3_64bits_withSeed(CodegenSwitches.data(), CodegenSwitches.size(), ProcessBucketHash);
+     }
+-#endif
+ #endif
+     BucketHash.high64 = MachineBucketHash;
+     BucketHash.low64 = ProcessBucketHash;
+diff --git a/FEXCore/Source/Interface/Core/IosCodegenSwitches.h b/FEXCore/Source/Interface/Core/IosCodegenSwitches.h
+new file mode 100644
+index 000000000..6a7458e4a
+--- /dev/null
++++ b/FEXCore/Source/Interface/Core/IosCodegenSwitches.h
+@@ -0,0 +1,37 @@
++// SPDX-License-Identifier: MIT
++#pragma once
++
++#include <cstring>
++
++namespace FEXCore::DiskCache {
++
++// Playport: the environment switches that change what a block compiles to without being FEX config
++// options (SerializeForCache covers those). DiskCache::Init keys the process bucket on them, so a
++// block cached under one value never runs under another. Init runs in the context's constructor,
++// before ARM64EC's ProcessInit sets IosEcReturnWithRet, IosRdtscSelfSync and IosAfpOffFpcr from
++// them, so it reads the variables, not those globals.
++inline constexpr const char* IosCodegenSwitchNames[] = {
++  "MADEIRA_FEX_EC_RET",       // IosEcReturnWithRet: BranchOps' BL into ARM64EC code
++  "MADEIRA_X64_QPC_FASTPATH", // IosRdtscSelfSync: OpcodeDispatcher's RDTSC
++  "MADEIRA_FEX_AFPOFF_FPCR",  // IosAfpOffFpcr: SetRoundingMode, FillStaticRegs
++  "MADEIRA_NO_DFE",           // PassManager: no DeadFlagCalculationElimination
++  "FEX_TRACE_RIP",            // CompileBlock: a Print at each listed 32-bit address
++};
++
++// Appends "name=value" and a NUL for each switch GetEnv(name) finds set, in IosCodegenSwitchNames
++// order. Out is a string type with append(const char*, size_t).
++template<typename String, typename GetEnvFn>
++void AppendIosCodegenSwitches(String& Out, GetEnvFn&& GetEnv) {
++  for (const char* Name : IosCodegenSwitchNames) {
++    const char* Value = GetEnv(Name);
++    if (!Value) {
++      continue;
++    }
++    Out.append(Name, strlen(Name));
++    Out.append("=", 1);
++    Out.append(Value, strlen(Value));
++    Out.append("\0", 1);
++  }
++}
++
++} // namespace FEXCore::DiskCache
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index 1c3810da6..3a95eedb2 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -1392,7 +1392,7 @@ NTSTATUS ProcessInit() {
+      * MADEIRA_FEX_AFPOFF_FPCR: 0 (the default) FEX's behaviour, fiz FIZ = MXCSR.DAZ, ah AH and FIZ kept for
+      * the thread, ahx AH and FIZ set on entering the JIT and cleared on leaving it. ah leaves AH set for
+      * ARM64EC code, so ExitFunctionECJit stays right; ahx needs ExitFunctionEC's FPCR clear. Set before
+-     * InitCore, which emits the dispatcher and opens the disk cache (keyed on the mode). */
++     * InitCore, which emits the dispatcher; the disk cache keys on the variable (IosCodegenSwitches.h). */
+     if (!HostFeatures.SupportsAFP) {
+       const char* FpcrOpt = getenv("MADEIRA_FEX_AFPOFF_FPCR");
+       if (FpcrOpt && strcmp(FpcrOpt, "fiz") == 0) {
+@@ -1435,7 +1435,9 @@ NTSTATUS ProcessInit() {
+   {
+     /* Guest calls into ARM64EC code leave the JIT with BLR and their returns re-enter it with RET, so the
+      * host return-address predictor stays balanced (IosEcReturnWithRet in Arm64Emitter.h). Set before
+-     * InitCore, which emits the dispatcher. MADEIRA_FEX_EC_RET=0 keeps BR and the loop-top re-entry. */
++     * InitCore, which emits the dispatcher. MADEIRA_FEX_EC_RET=0 keeps BR and the loop-top re-entry.
++     * Playport: a switch that changes what a block compiles to, as this one and MADEIRA_X64_QPC_FASTPATH
++     * do, is listed in IosCodegenSwitches.h, which keys the disk cache. */
+     const char* EcRetOpt = getenv("MADEIRA_FEX_EC_RET");
+     IosEcReturnWithRet = !(EcRetOpt && strcmp(EcRetOpt, "0") == 0);
+     LogMan::Msg::IFmt("FEX: ec-ret-v1 madeira-bcd enabled={}", IosEcReturnWithRet != 0);
