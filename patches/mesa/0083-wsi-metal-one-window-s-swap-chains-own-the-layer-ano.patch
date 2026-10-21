@@ -1,0 +1,273 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Wed, 21 Oct 2026 11:40:00 +0200
+Subject: [PATCH] wsi/metal: one window's swap chains own the layer; another
+ window's draw offscreen
+
+On the phone every window's Vulkan surface is the one CAMetalLayer the
+app shows. 0045 makes a swap chain configure the layer again for itself
+before it takes a drawable when another chain changed it; with two
+windows that both present, the chains took the layer in turns on every
+frame and the screen flashed between them. RDR2's launcher with its
+Social Club browser in one process (PLAYPORT_SC_SINGLE=1) does that:
+the launcher's 1280x600 chain and the sign-in window's 700x800 chain
+alternated from the first frame (runs scA1, x1, x2: "layer back to the
+presenting chain" until its trace cap), and the screen alternated
+between the launcher's progress page and the sign-in popup until the
+launcher was ended.
+
+The app's win32u driver says which window owns the layer
+(playport_vk_surface_shown, found with dlsym; without it every surface
+owns it). A chain whose window owns it works as before. A chain whose
+window does not configures nothing on the surface's layer: at its
+first such acquire it makes a layer of its own on the same device
+(made resident on the Metal 4 queue like the shown one), configured
+as the chain configured the shown one, takes its drawables from it and
+presents them there, where nothing shows them; a present wait on such
+a present completes at once, since an offscreen drawable may never be
+reported presented. The chain draws to the screen again when its
+window owns the layer again. Each switch is logged ([kk-wsi] the WxH
+chain now draws ...), at most once a second per chain.
+
+Linear: PLA-364
+Class: feature
+Evidence: docs/evidence/2026-10-21-rdr2-combined-arms.md
+Offered-upstream: no; the one-layer screen is the iOS app's
+---
+ src/vulkan/wsi/wsi_common_metal.c       | 107 +++++++++++++++++++++---
+ src/vulkan/wsi/wsi_common_metal_layer.h |   8 ++
+ src/vulkan/wsi/wsi_common_metal_layer.m |  16 ++++
+ 3 files changed, 120 insertions(+), 11 deletions(-)
+
+diff --git a/src/vulkan/wsi/wsi_common_metal.c b/src/vulkan/wsi/wsi_common_metal.c
+index 68af120c971..787aa05b36c 100644
+--- a/src/vulkan/wsi/wsi_common_metal.c
++++ b/src/vulkan/wsi/wsi_common_metal.c
+@@ -21,6 +21,7 @@
+ #include "vulkan/vulkan_core.h"
+ 
+ #include <assert.h>
++#include <dlfcn.h>
+ #include <stdio.h>
+ #include <stdatomic.h>
+ 
+@@ -364,6 +365,8 @@ wsi_metal_surface_get_present_rectangles(VkIcdSurfaceBase *surface,
+ struct wsi_metal_image {
+    struct wsi_image base;
+    CAMetalDrawable *drawable;
++   /* the drawable is the offscreen layer's (Playport) */
++   bool offscreen;
+ };
+ 
+ struct wsi_metal_present_info {
+@@ -390,6 +393,12 @@ struct wsi_metal_swapchain {
+    bool layer_framebuffer_only;
+ 
+    VkIcdSurfaceMetal *surface;
++   /* Playport: while another window owns the screen, this chain draws to a
++    * layer of its own (made at the first need, kept for the chain's life) */
++   CAMetalLayer *offscreen_layer;
++   bool offscreen;
++   uint64_t offscreen_logged_ns;
++   uint32_t offscreen_unlogged;
+ 
+    struct wsi_metal_layer_blit_context *blit_context;
+    struct wsi_metal_present_info *present_info;
+@@ -620,6 +629,67 @@ wsi_cmd_blit_image_to_image(const struct wsi_swapchain *chain,
+    return result;
+ }
+ 
++/* Playport: on the phone every window's surface is the one layer, so two
++ * windows' swap chains that both present took it in turns, each configuring it
++ * for itself again (wsi_metal_swapchain_acquire_next_image), and the screen
++ * flashed between them (the Rockstar launcher and, with its Social Club in one
++ * process, the sign-in window's own browser surface). The app's win32u driver
++ * says which window owns the layer (playport_vk_surface_shown); without it,
++ * every surface does. */
++typedef int (*playport_vk_surface_shown_fn)(const void *surface);
++
++static bool
++wsi_metal_surface_shown(const VkIcdSurfaceMetal *surface)
++{
++   static playport_vk_surface_shown_fn shown_fn;
++   static atomic_bool looked_up;
++
++   if (!atomic_load(&looked_up)) {
++      shown_fn = (playport_vk_surface_shown_fn)dlsym(RTLD_DEFAULT, "playport_vk_surface_shown");
++      atomic_store(&looked_up, true);
++   }
++   return !shown_fn || shown_fn(surface);
++}
++
++/* The layer this chain draws to now: the surface's while its window owns the
++ * screen, else its own offscreen layer. Each switch is logged, at most once a
++ * second per chain. */
++static const CAMetalLayer *
++wsi_metal_chain_layer(struct wsi_metal_swapchain *chain)
++{
++   const bool offscreen = !wsi_metal_surface_shown(chain->surface);
++
++   if (offscreen && !chain->offscreen_layer) {
++      chain->offscreen_layer = wsi_metal_layer_create_offscreen(chain->surface->pLayer);
++      wsi_metal_layer_configure(chain->offscreen_layer, chain->extent.width,
++                                chain->extent.height, chain->layer_image_count,
++                                chain->vk_format, chain->color_space,
++                                chain->layer_opaque, chain->layer_immediate,
++                                chain->layer_framebuffer_only);
++      if (chain->base.wsi->metal.get_mtl4_command_queue) {
++         void *mtl4_queue = chain->base.wsi->metal.get_mtl4_command_queue(chain->base.device);
++         if (mtl4_queue)
++            wsi_metal_layer_make_queue_resident(chain->offscreen_layer, mtl4_queue);
++      }
++   }
++   if (offscreen != chain->offscreen) {
++      const uint64_t now = os_time_get_nano();
++      chain->offscreen = offscreen;
++      if (chain->offscreen_logged_ns && now - chain->offscreen_logged_ns < 1000000000ull) {
++         chain->offscreen_unlogged++;
++      } else {
++         fprintf(stderr, "[kk-wsi] the %ux%u chain now draws %s (%u earlier switches not logged)\n",
++                 chain->extent.width, chain->extent.height,
++                 offscreen ? "to a layer nothing shows: another window owns the screen" : "to the screen",
++                 chain->offscreen_unlogged);
++         fflush(stderr);
++         chain->offscreen_logged_ns = now;
++         chain->offscreen_unlogged = 0;
++      }
++   }
++   return offscreen ? chain->offscreen_layer : chain->surface->pLayer;
++}
++
+ static VkResult
+ wsi_metal_swapchain_acquire_next_image(struct wsi_swapchain *wsi_chain,
+                                        const VkAcquireNextImageInfoKHR *info,
+@@ -643,12 +713,13 @@ wsi_metal_swapchain_acquire_next_image(struct wsi_swapchain *wsi_chain,
+     * chain's size and format, while its blit into them is built for its own.
+     * Configure the layer for this chain again before it hands out a
+     * drawable. */
+-   if (!wsi_metal_layer_matches(chain->surface->pLayer, chain->extent.width,
++   const CAMetalLayer *layer = wsi_metal_chain_layer(chain);
++   if (!wsi_metal_layer_matches(layer, chain->extent.width,
+                                 chain->extent.height, chain->vk_format)) {
+       kk_wsi_trace(3, "layer back to the presenting chain: format=%d colorspace=%d %ux%u\n",
+                    (int)chain->vk_format, (int)chain->color_space,
+                    chain->extent.width, chain->extent.height);
+-      wsi_metal_layer_configure(chain->surface->pLayer, chain->extent.width,
++      wsi_metal_layer_configure(layer, chain->extent.width,
+                                 chain->extent.height, chain->layer_image_count,
+                                 chain->vk_format, chain->color_space,
+                                 chain->layer_opaque, chain->layer_immediate,
+@@ -658,13 +729,14 @@ wsi_metal_swapchain_acquire_next_image(struct wsi_swapchain *wsi_chain,
+    while (1) {
+       /* Try to acquire an drawable. Unfortunately we might block for up to 1 second. */
+       int64_t wait_start = os_time_get_nano();
+-      CAMetalDrawable *drawable = wsi_metal_layer_acquire_drawable(chain->surface->pLayer);
++      CAMetalDrawable *drawable = wsi_metal_layer_acquire_drawable(layer);
+       p_atomic_add(&wsi_metal_acquire_wait_ns, (uint64_t)(os_time_get_nano() - wait_start));
+       if (drawable) {
+          uint32_t i = (chain->current_image_index++) % chain->base.image_count;
+          struct wsi_metal_image *image = &chain->images[i];
+          *image_index = i;
+          image->drawable = drawable;
++         image->offscreen = layer != chain->surface->pLayer;
+          if (!wsi_chain->wsi->sw) {
+             chain->base.wsi->metal.bind_drawable_to_vkimage(image->base.blit.image,
+                                                             image->drawable);
+@@ -757,9 +829,13 @@ wsi_metal_swapchain_queue_present(struct wsi_swapchain *wsi_chain,
+ 
+    if (present_id && wsi_chain->present_wait_enabled) {
+       wsi_metal_retain_present_info(chain->present_info);
+-      wsi_metal_layer_add_presented_handler(
+-         image->drawable, wsi_metal_present_complete, chain->present_info,
+-         present_id);
++      /* nothing shows an offscreen layer, so it may never say presented */
++      if (image->offscreen)
++         wsi_metal_present_complete(chain->present_info, present_id);
++      else
++         wsi_metal_layer_add_presented_handler(
++            image->drawable, wsi_metal_present_complete, chain->present_info,
++            present_id);
+    }
+ 
+    if (wsi_chain->wsi->sw) {
+@@ -965,9 +1041,14 @@ wsi_metal_swapchain_destroy(struct wsi_swapchain *wsi_chain,
+ 
+    if (chain->base.wsi->metal.get_mtl4_command_queue) {
+       void *mtl4_queue = chain->base.wsi->metal.get_mtl4_command_queue(chain->base.device);
+-      if (mtl4_queue)
++      if (mtl4_queue) {
+          wsi_metal_layer_remove_queue_resident(chain->surface->pLayer, mtl4_queue);
++         if (chain->offscreen_layer)
++            wsi_metal_layer_remove_queue_resident(chain->offscreen_layer, mtl4_queue);
++      }
+    }
++   if (chain->offscreen_layer)
++      wsi_metal_layer_release(chain->offscreen_layer);
+ 
+    wsi_swapchain_finish(&chain->base);
+ 
+@@ -1016,10 +1097,14 @@ wsi_metal_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
+                 (int)pCreateInfo->imageFormat, (int)pCreateInfo->imageColorSpace,
+                 pCreateInfo->imageExtent.width, pCreateInfo->imageExtent.height,
+                 (unsigned)num_images, pCreateInfo->oldSwapchain != VK_NULL_HANDLE);
+-   VkResult result = wsi_metal_layer_configure(metal_surface->pLayer,
+-      pCreateInfo->imageExtent.width, pCreateInfo->imageExtent.height,
+-      num_images, pCreateInfo->imageFormat, pCreateInfo->imageColorSpace,
+-      layer_opaque, immediate_mode, framebuffer_only);
++   /* A chain whose window does not own the screen leaves the layer alone; it
++    * makes its own at its first acquire (wsi_metal_chain_layer). */
++   VkResult result = VK_SUCCESS;
++   if (wsi_metal_surface_shown(metal_surface))
++      result = wsi_metal_layer_configure(metal_surface->pLayer,
++         pCreateInfo->imageExtent.width, pCreateInfo->imageExtent.height,
++         num_images, pCreateInfo->imageFormat, pCreateInfo->imageColorSpace,
++         layer_opaque, immediate_mode, framebuffer_only);
+    if (result != VK_SUCCESS)
+       return result;
+ 
+diff --git a/src/vulkan/wsi/wsi_common_metal_layer.h b/src/vulkan/wsi/wsi_common_metal_layer.h
+index 7e623a499a5..2d904b5fb26 100644
+--- a/src/vulkan/wsi/wsi_common_metal_layer.h
++++ b/src/vulkan/wsi/wsi_common_metal_layer.h
+@@ -46,6 +46,14 @@ wsi_metal_layer_matches(const CAMetalLayer *metal_layer,
+ CAMetalDrawable *
+ wsi_metal_layer_acquire_drawable(const CAMetalLayer *metal_layer);
+ 
++/* A layer of its own on the shown layer's device, which no view shows: a swap
++ * chain whose window does not own the screen draws there (Playport). */
++CAMetalLayer *
++wsi_metal_layer_create_offscreen(const CAMetalLayer *shown_layer);
++
++void
++wsi_metal_layer_release(CAMetalLayer *metal_layer);
++
+ void
+ wsi_metal_release_drawable(CAMetalDrawable *drawable_ptr);
+ 
+diff --git a/src/vulkan/wsi/wsi_common_metal_layer.m b/src/vulkan/wsi/wsi_common_metal_layer.m
+index 7e28c271689..3e53de6a784 100644
+--- a/src/vulkan/wsi/wsi_common_metal_layer.m
++++ b/src/vulkan/wsi/wsi_common_metal_layer.m
+@@ -297,6 +297,22 @@ wsi_metal_layer_acquire_drawable(const CAMetalLayer *metal_layer)
+    }
+ }
+ 
++CAMetalLayer *
++wsi_metal_layer_create_offscreen(const CAMetalLayer *shown_layer)
++{
++   @autoreleasepool {
++      CAMetalLayer *layer = [[CAMetalLayer alloc] init];
++      layer.device = shown_layer.device ? shown_layer.device : shown_layer.preferredDevice;
++      return layer;
++   }
++}
++
++void
++wsi_metal_layer_release(CAMetalLayer *metal_layer)
++{
++   [metal_layer release];
++}
++
+ void
+ wsi_metal_release_drawable(CAMetalDrawable *drawable_ptr)
+ {

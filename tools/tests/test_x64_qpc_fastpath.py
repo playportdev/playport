@@ -12,6 +12,8 @@ stand-in for the ARM64EC path that uses those same functions:
   CPUID, and a stand-in for FEX's: EAX 1, EBX 2^6, ECX 24, the only other bytes changed);
 - with the real RDTSC, stub and EC-path calls interleaved on four threads for 2.5 s never go
   backwards, across the resyncs in that time."""
+import importlib.util
+import os
 import pathlib
 import platform
 import re
@@ -283,6 +285,37 @@ class X64QpcFastpath(unittest.TestCase):
             out = subprocess.run([str(exe)], capture_output=True, text=True, timeout=120)
             self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
             self.assertIn("x64 qpc stub: ok", out.stdout)
+
+
+STAGED = pathlib.Path(os.environ.get("PLAYPORT_BUILD", ROOT / ".work")) / "run/pe/staged/build-arm64ec/dlls"
+
+
+@unittest.skipUnless(importlib.util.find_spec("pefile"), "reads the built DLLs with pefile")
+@unittest.skipUnless((STAGED / "kernel32/arm64ec-windows/kernel32.dll").exists(), "needs a built arm64ec kernel32")
+class X64QpcKernel32Import(unittest.TestCase):
+    """RDR2 imports QueryPerformanceCounter from KERNEL32. The built KERNEL32's export is the x64
+    jmp [rip+d] the loader follows, through an import of kernelbase's QueryPerformanceCounter,
+    which kernelbase forwards to ntdll's RtlQueryPerformanceCounter."""
+
+    def test_kernel32_export_is_one_jump_to_ntdll(self):
+        import pefile
+        loader = added_lines("dlls/ntdll/loader.c")
+        self.assertIn("code[0] != 0xff || code[1] != 0x25", loader)
+        self.assertIn("target = *(void **)(code + 6 + *(const INT32 *)(code + 2));", loader)
+
+        k32 = pefile.PE(str(STAGED / "kernel32/arm64ec-windows/kernel32.dll"))
+        export = next(e for e in k32.DIRECTORY_ENTRY_EXPORT.symbols if e.name == b"QueryPerformanceCounter")
+        self.assertIsNone(export.forwarder)
+        code = k32.get_data(export.address, 6)
+        self.assertEqual(code[:2], b"\xff\x25")
+        slot = export.address + 6 + int.from_bytes(code[2:6], "little", signed=True)
+        imported = {imp.address - k32.OPTIONAL_HEADER.ImageBase: (dll.dll.lower(), imp.name)
+                    for dll in k32.DIRECTORY_ENTRY_IMPORT for imp in dll.imports}
+        self.assertEqual(imported.get(slot), (b"kernelbase.dll", b"QueryPerformanceCounter"))
+
+        kb = pefile.PE(str(STAGED / "kernelbase/arm64ec-windows/kernelbase.dll"))
+        forward = next(e for e in kb.DIRECTORY_ENTRY_EXPORT.symbols if e.name == b"QueryPerformanceCounter")
+        self.assertEqual(forward.forwarder, b"ntdll.RtlQueryPerformanceCounter")
 
 
 if __name__ == "__main__":

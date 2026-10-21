@@ -1,0 +1,156 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Wed, 21 Oct 2026 11:40:00 +0200
+Subject: [PATCH] win32u: one top-level window owns the phone's layer for
+ Vulkan
+
+In game mode every window's Vulkan surface is the one phone layer. Two
+windows that both present took it in turns (mesa 0083 has the story:
+RDR2's launcher and its in-process Social Club sign-in window flashed
+on the screen).
+
+The driver now keeps the Vulkan surfaces it makes with their top-level
+window (game mode only; desktop mode gives each window its own layer)
+and exports playport_vk_surface_shown, which KosmicKrisp's swap chains
+ask before they touch the layer. While all surfaces belong to one
+top-level window, each owns the layer, as before. Otherwise the owner
+is the first window that made a surface; it changes only when the
+foreground window changes to another window with a surface, or when
+the owner is destroyed or hidden and a visible window presents: a
+present alone never moves it. Each change is logged ([vk-shown] the
+phone's layer goes to window ...), at most one line a second with the
+count of changes not logged.
+
+Linear: PLA-364
+Class: feature
+Evidence: docs/evidence/2026-10-21-rdr2-combined-arms.md
+Offered-upstream: no; the one-layer screen is the iOS app's
+---
+ build/win32u-unix/driver_ios.c | 107 +++++++++++++++++++++++++++++++++
+ 1 file changed, 107 insertions(+)
+
+diff --git a/build/win32u-unix/driver_ios.c b/build/win32u-unix/driver_ios.c
+index 2d401139fbe..25bee8f680f 100644
+--- a/build/win32u-unix/driver_ios.c
++++ b/build/win32u-unix/driver_ios.c
+@@ -1527,6 +1527,111 @@ static UINT nulldrv_VulkanInit( UINT version, void *vulkan_handle, const struct
+ typedef void *(*winios_create_metal_view_fn)( void *view, void *device );
+ typedef void *(*winios_get_metal_layer_fn)( void *metal_view );
+ 
++/* Playport: in game mode every window's Vulkan surface is the one phone layer,
++ * so two windows that present (the Rockstar launcher and, with its Social Club
++ * in one process, the sign-in window's own browser surface) took the layer in
++ * turns on every present and the screen flashed between them. One top-level
++ * window owns the layer: the first with a Vulkan surface, then the foreground
++ * window when the foreground changes to a window with a surface, or the
++ * presenting window when the owner is gone or hidden. KosmicKrisp's swap
++ * chains ask playport_vk_surface_shown before they touch the layer and draw a
++ * window that does not own it to a layer of their own, which nothing shows. */
++#define WINIOS_VK_SURFACES 64
++static pthread_mutex_t winios_vk_shown_lock = PTHREAD_MUTEX_INITIALIZER;
++static struct { const void *surface; HWND root; } winios_vk_surfaces[WINIOS_VK_SURFACES];
++static unsigned int winios_vk_surface_count;
++static HWND winios_vk_owner, winios_vk_foreground;
++static ULONGLONG winios_vk_owner_logged;
++static unsigned int winios_vk_owner_unlogged;
++
++static HWND winios_vk_root( HWND hwnd )
++{
++    HWND root = NtUserGetAncestor( hwnd, GA_ROOT );
++    return root ? root : hwnd;
++}
++
++/* Every change is counted; at most one line a second says so (the lock is held). */
++static void winios_vk_set_owner( HWND root, const char *why )
++{
++    ULONGLONG now = NtGetTickCount();
++
++    winios_vk_owner = root;
++    if (winios_vk_owner_logged && now - winios_vk_owner_logged < 1000)
++    {
++        winios_vk_owner_unlogged++;
++        return;
++    }
++    dprintf( 2, "[vk-shown] the phone's layer goes to window %p (%s; %u surfaces; %u earlier changes not logged)\n",
++             root, why, winios_vk_surface_count, winios_vk_owner_unlogged );
++    winios_vk_owner_logged = now;
++    winios_vk_owner_unlogged = 0;
++}
++
++static void winios_vk_surface_created( const void *surface, HWND hwnd )
++{
++    HWND root = winios_vk_root( hwnd );
++    unsigned int i;
++
++    pthread_mutex_lock( &winios_vk_shown_lock );
++    for (i = 0; i < winios_vk_surface_count; i++) if (winios_vk_surfaces[i].surface == surface) break;
++    if (i == WINIOS_VK_SURFACES)
++    {
++        /* full: the oldest goes (a surface made again for a window has the newest entry) */
++        memmove( winios_vk_surfaces, winios_vk_surfaces + 1, sizeof(winios_vk_surfaces[0]) * (WINIOS_VK_SURFACES - 1) );
++        i = WINIOS_VK_SURFACES - 1;
++    }
++    else if (i == winios_vk_surface_count) winios_vk_surface_count++;
++    winios_vk_surfaces[i].surface = surface;
++    winios_vk_surfaces[i].root = root;
++    if (!winios_vk_owner) winios_vk_set_owner( root, "the first window with a Vulkan surface" );
++    pthread_mutex_unlock( &winios_vk_shown_lock );
++}
++
++static BOOL winios_vk_has_root( HWND root )
++{
++    unsigned int i;
++    for (i = 0; i < winios_vk_surface_count; i++) if (winios_vk_surfaces[i].root == root) return TRUE;
++    return FALSE;
++}
++
++/* Called by KosmicKrisp's swap chains (mesa 0083) before they configure the
++ * layer or take a drawable: nonzero when the surface's window owns the layer. A
++ * surface this table does not know, or every surface while one top-level
++ * window has them all, owns it. */
++__attribute__((used, visibility("default")))
++int playport_vk_surface_shown( const void *surface )
++{
++    HWND root = 0, owner, foreground;
++    BOOL other = FALSE, owner_shown, root_visible;
++    unsigned int i;
++    int shown;
++
++    pthread_mutex_lock( &winios_vk_shown_lock );
++    for (i = 0; i < winios_vk_surface_count; i++) if (winios_vk_surfaces[i].surface == surface) root = winios_vk_surfaces[i].root;
++    for (i = 0; root && i < winios_vk_surface_count; i++) if (winios_vk_surfaces[i].root != root) other = TRUE;
++    owner = winios_vk_owner;
++    pthread_mutex_unlock( &winios_vk_shown_lock );
++    if (!root || !other) return 1;
++
++    /* the window calls take win32u's own lock: not under this one */
++    if ((foreground = NtUserGetForegroundWindow())) foreground = winios_vk_root( foreground );
++    owner_shown = owner && is_window( owner ) && (get_window_long( owner, GWL_STYLE ) & WS_VISIBLE);
++    root_visible = !!(get_window_long( root, GWL_STYLE ) & WS_VISIBLE);
++
++    pthread_mutex_lock( &winios_vk_shown_lock );
++    if (foreground != winios_vk_foreground)
++    {
++        winios_vk_foreground = foreground;
++        if (foreground && foreground != winios_vk_owner && winios_vk_has_root( foreground ))
++            winios_vk_set_owner( foreground, "the foreground window" );
++    }
++    if (winios_vk_owner == owner && !owner_shown && root_visible && root != owner)
++        winios_vk_set_owner( root, "the owner is gone or hidden; this window presents" );
++    shown = root == winios_vk_owner;
++    pthread_mutex_unlock( &winios_vk_shown_lock );
++    return shown;
++}
++
+ static VkResult winios_vulkan_surface_create( struct client_surface *client, const struct vulkan_instance *instance,
+                                               VkSurfaceKHR *handle )
+ {
+@@ -1553,6 +1658,8 @@ static VkResult winios_vulkan_surface_create( struct client_surface *client, con
+     info.pLayer = get_layer( view );
+     res = instance->p_vkCreateMetalSurfaceEXT( instance->host.instance, &info, NULL, handle );
+     dprintf( 2, "[winios] vulkan: metal surface for hwnd %p layer %p -> %d\n", client->hwnd, info.pLayer, res );
++    if (res == VK_SUCCESS && !winios_desktop_mode())
++        winios_vk_surface_created( (const void *)(UINT_PTR)*handle, client->hwnd );
+     return res;
+ }
+ 

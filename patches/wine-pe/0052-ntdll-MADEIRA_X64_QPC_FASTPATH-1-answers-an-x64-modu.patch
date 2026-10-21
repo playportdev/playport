@@ -12,7 +12,10 @@ against the system call and resynced about once a second).
 With MADEIRA_X64_QPC_FASTPATH=1 (off by default), the loader binds an
 x64 module's import of QueryPerformanceCounter or
 RtlQueryPerformanceCounter, when it resolves to ntdll's x64 export
-thunk, to an x64 stub in a page made per process. The stub gives what
+thunk or to KERNEL32's (a "-import" export: one x64 jmp [rip+d]
+through KERNEL32's import of kernelbase's, forwarded to ntdll's, which
+the loader follows; RDR2 imports it from KERNEL32, and the first
+build, which took only ntdll's, bound nothing on the phone), to an x64 stub in a page made per process. The stub gives what
 RtlQueryPerformanceCounter gives for the same count, with its
 divisions and 64-bit arithmetic: ticks(count) + offset, from the state
 time.c now keeps in struct qpc_state, read while its sequence count is
@@ -34,16 +37,16 @@ Class: feature
 Evidence: docs/evidence/2026-10-21-x64-qpc-stub.md
 Offered-upstream: no; the transition cost is the iOS port's
 ---
- dlls/ntdll/loader.c     | 157 ++++++++++++++++++++++++++++++++++++++++
- dlls/ntdll/ntdll_misc.h |  17 +++++
- dlls/ntdll/time.c       |  42 ++++++++---
- 3 files changed, 205 insertions(+), 11 deletions(-)
+ dlls/ntdll/loader.c     | 171 ++++++++++++++++++++++++++++++++++++++++
+ dlls/ntdll/ntdll_misc.h |  17 ++++
+ dlls/ntdll/time.c       |  42 +++++++---
+ 3 files changed, 219 insertions(+), 11 deletions(-)
 
 diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
-index adffb8a20d1..6516fcae0d2 100644
+index fe5a846ca78..c06327932fa 100644
 --- a/dlls/ntdll/loader.c
 +++ b/dlls/ntdll/loader.c
-@@ -1558,6 +1558,161 @@ static void *x64_cs_stub_for( HMODULE importer, const char *name, void *target )
+@@ -1558,6 +1558,175 @@ static void *x64_cs_stub_for( HMODULE importer, const char *name, void *target )
      if (!stubs || target != targets[leave]) return NULL;
      return leave ? stubs + 0x80 : stubs;
  }
@@ -155,7 +158,7 @@ index adffb8a20d1..6516fcae0d2 100644
 +static void *x64_qpc_stub_for( HMODULE importer, const char *name, void *target )
 +{
 +    static BYTE *stub;
-+    static void *qpc_target;
++    static void *qpc_target, *qpc_ec;
 +    static BOOL tried;
 +    const IMAGE_NT_HEADERS *nt;
 +    LDR_DATA_TABLE_ENTRY *mod;
@@ -165,7 +168,18 @@ index adffb8a20d1..6516fcae0d2 100644
 +    nt = RtlImageNtHeader( importer );
 +    if (!nt || nt->FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64 || arm64ec_get_module_metadata( importer ))
 +        return NULL;
-+    if (LdrFindEntryForAddress( target, &mod ) || mod->DdagNode != node_ntdll) return NULL;
++    if (LdrFindEntryForAddress( target, &mod )) return NULL;
++    if (mod->DdagNode != node_ntdll)
++    {
++        /* KERNEL32's QueryPerformanceCounter is a "-import" export: x64 code, jmp [rip+d],
++         * through KERNEL32's import of kernelbase's, which is forwarded to ntdll's
++         * RtlQueryPerformanceCounter. Follow that one jump (RDR2 imports it from KERNEL32). */
++        const BYTE *code = target;
++
++        if (mod->DdagNode != node_kernel32 || code[0] != 0xff || code[1] != 0x25) return NULL;
++        target = *(void **)(code + 6 + *(const INT32 *)(code + 2));
++        if (LdrFindEntryForAddress( target, &mod ) || mod->DdagNode != node_ntdll) return NULL;
++    }
 +
 +    if (!tried)
 +    {
@@ -196,16 +210,19 @@ index adffb8a20d1..6516fcae0d2 100644
 +        memcpy( (BYTE *)base + sizeof(x64_qpc_code) + sizeof(void *), &qpc_target, sizeof(void *) );
 +        NtProtectVirtualMemory( NtCurrentProcess(), &base, &size, PAGE_EXECUTE_READ, &old );
 +        stub = base;
++        /* the export thunk ends in jmp rel32 to the ARM64EC function, which an import may hold too */
++        qpc_ec = (BYTE *)qpc_target + sizeof(x64_cs_export_thunk) + 4 +
++                 *(const INT32 *)((BYTE *)qpc_target + sizeof(x64_cs_export_thunk));
 +        ERR( "[x64-qpc] x64 QueryPerformanceCounter stub at %p for %p, state %p (MADEIRA_X64_QPC_FASTPATH)\n",
 +             stub, qpc_target, state );
 +    }
-+    if (!stub || target != qpc_target) return NULL;
++    if (!stub || (target != qpc_target && target != qpc_ec)) return NULL;
 +    return stub;
 +}
  #endif
  
  static BOOL import_dll( WINE_MODREF *wm, const IMAGE_IMPORT_DESCRIPTOR *descr, LPCWSTR load_path, WINE_MODREF **pwm )
-@@ -1777,6 +1932,8 @@ static BOOL import_dll( WINE_MODREF *wm, const IMAGE_IMPORT_DESCRIPTOR *descr, L
+@@ -1777,6 +1946,8 @@ static BOOL import_dll( WINE_MODREF *wm, const IMAGE_IMPORT_DESCRIPTOR *descr, L
              {
                  void *stub = x64_cs_stub_for( module, (const char *)pe_name->Name,
                                                (void *)thunk_list->u1.Function );
