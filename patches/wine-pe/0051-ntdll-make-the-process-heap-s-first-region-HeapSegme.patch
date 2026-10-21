@@ -20,21 +20,25 @@ Wine's heap keeps a free entry committed after the last block, so
 a short over-read stays in mapped memory.
 
 Create the process heap with the PEB's HeapSegmentReserve and
-HeapSegmentCommit (1 MB and 64 KB unless the registry sets them).
+HeapSegmentCommit, and with Windows' 1 MB and 64 KB where they are 0:
+wine.inf writes both values as 0 to the Session Manager key, so the
+PEB fields are 0 in every prefix, and passing them alone left the
+region at 64 KB (RDR2 run q1 faulted the same way on a build with
+only that).
 
 Linear: PLA-413
 Class: upstream-bug
 Evidence: docs/evidence/2026-10-21-rdr2-cs-fastpath-and-heap.md
 Offered-upstream: no
 ---
- dlls/ntdll/loader.c | 10 +++++++++-
- 1 file changed, 9 insertions(+), 1 deletion(-)
+ dlls/ntdll/loader.c | 13 ++++++++++++-
+ 1 file changed, 12 insertions(+), 1 deletion(-)
 
 diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
 index 4c85161..adffb8a 100644
 --- a/dlls/ntdll/loader.c
 +++ b/dlls/ntdll/loader.c
-@@ -5997,7 +5997,15 @@ void loader_init( CONTEXT *context, void **entry )
+@@ -5997,7 +5997,18 @@ void loader_init( CONTEXT *context, void **entry )
              heap_top_down_hack = TRUE;
          }
  
@@ -45,9 +49,12 @@ index 4c85161..adffb8a 100644
 +         * main thread read a 12-character string at heap+0xffe8 one character past,
 +         * at heap+0x10000, which Wine does not map (0xc0000005 right after PlayRDR2's
 +         * box closes, runs r1, n1, a1). Inside a larger region the heap keeps a
-+         * free entry committed after the last block. */
-+        peb->ProcessHeap        = RtlCreateHeap( heap_flags, NULL, peb->HeapSegmentReserve,
-+                                                 peb->HeapSegmentCommit, NULL, NULL );
++         * free entry committed after the last block. wine.inf writes both PEB values as 0,
++         * so 0 takes Windows' defaults (RDR2 run q1 faulted with the PEB's 0 passed on). */
++        peb->ProcessHeap        = RtlCreateHeap( heap_flags, NULL,
++                                                 peb->HeapSegmentReserve ? peb->HeapSegmentReserve : 0x100000,
++                                                 peb->HeapSegmentCommit ? peb->HeapSegmentCommit : 0x10000,
++                                                 NULL, NULL );
  
          RtlInitializeBitMap( &tls_bitmap, peb->TlsBitmapBits, sizeof(peb->TlsBitmapBits) * 8 );
          RtlInitializeBitMap( &tls_expansion_bitmap, peb->TlsExpansionBitmapBits,
