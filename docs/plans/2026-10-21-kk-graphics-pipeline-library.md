@@ -21,7 +21,7 @@ from the main checkout after the branch moves there. **Pins read:** `mesa` b39d1
     libraries are built at library creation; a fast link only builds the Metal pipeline.
   - Evidence: [2026-10-21-kk-gpl-host](../evidence/2026-10-21-kk-gpl-host.md).
   - G0's phone baseline is not run.
-- **Running:** none.
+- **Running:** G4 writer, subagent run `14047391` (report to `.work/agent-notes/kk-gpl/reports/g4.md`).
 - **Queue:** G4 next (cache and accounting, workstation; also from G3: count library shaders
   and their Metal libraries under `MESA_KK_DEBUG=memory`, pack their MSL, cache the per-draw
   blocker checks); then G0's phone baseline and G5 from
