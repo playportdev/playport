@@ -1,0 +1,307 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Pavel Demyanov <greypax@gmail.com>
+Date: Wed, 21 Oct 2026 18:07:50 +0300
+Subject: [PATCH] windows.gaming.input: a Gamepad provider for each host pad
+ slot
+
+Wine's providers come from SetupAPI's HID and WINEXINPUT device lists
+through dinput, and with no winebus both are empty, so a game that reads
+pads through Windows.Gaming.Input (Rewired's Rewired_WindowsGamingInput
+plugin, Anger Foot's input source) sees none. hostpad_providers_create adds
+a Gamepad provider for each host slot that holds a pad, with no dinput
+device behind it: its state is the slot's XInput state laid out as
+gamepad.c reads a Gamepad's (axes left Y, left X, right Y, right X, the
+two triggers; buttons A B X Y LB RB View Menu LS RS; the D-pad as switch
+0), its VID/PID 045E:02FF, its display name Controller (XBOX One For
+Windows); vibration is kept and not sent.
+
+The providers are made on the monitor thread before it signals the start
+event, not with the others after it: the activation that started the thread
+then returns with them in the first Gamepads list, and no GamepadAdded
+handler can be registered yet. Made after the signal they raced the
+caller: Rewired's first list was empty, and its handler, run under
+manager_cs on this thread while the main thread waited for that lock, hung
+Anger Foot at start.
+
+Class: feature
+Evidence: docs/evidence/2026-10-21-hostpad-gamepads.md
+Offered-upstream: no; the host pad exists only on the iOS port
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ dlls/windows.gaming.input/main.c     |   4 +
+ dlls/windows.gaming.input/private.h  |   1 +
+ dlls/windows.gaming.input/provider.c | 141 ++++++++++++++++++++++++++-
+ 3 files changed, 144 insertions(+), 2 deletions(-)
+
+diff --git a/dlls/windows.gaming.input/main.c b/dlls/windows.gaming.input/main.c
+index 7b0a68f..9996d50 100644
+--- a/dlls/windows.gaming.input/main.c
++++ b/dlls/windows.gaming.input/main.c
+@@ -122,6 +122,10 @@ static DWORD WINAPI monitor_thread_proc( void *param )
+     RegisterClassExW( &wndclass );
+     hwnd = CreateWindowExW( 0, wndclass.lpszClassName, NULL, 0, 0, 0, 0, 0, HWND_MESSAGE, NULL, NULL, NULL );
+     devnotify = RegisterDeviceNotificationW( hwnd, &filter, DEVICE_NOTIFY_ALL_INTERFACE_CLASSES );
++    /* Playport: the host pads' providers before the activation returns, so the
++     * caller's first Gamepads list has them, and no GamepadAdded handler runs
++     * on this thread under manager_cs while the caller waits for that lock. */
++    hostpad_providers_create();
+     SetEvent( start_event );
+     initialize_providers();
+ 
+diff --git a/dlls/windows.gaming.input/private.h b/dlls/windows.gaming.input/private.h
+index e345ca4..3e10328 100644
+--- a/dlls/windows.gaming.input/private.h
++++ b/dlls/windows.gaming.input/private.h
+@@ -66,6 +66,7 @@ extern HRESULT vector_create( const struct vector_iids *iids, void **out );
+ 
+ extern void provider_create( const WCHAR *device_path );
+ extern void provider_remove( const WCHAR *device_path );
++extern void hostpad_providers_create(void);
+ 
+ extern void manager_on_provider_created( IGameControllerProvider *provider );
+ extern void manager_on_provider_removed( IGameControllerProvider *provider );
+diff --git a/dlls/windows.gaming.input/provider.c b/dlls/windows.gaming.input/provider.c
+index e8ce9ae..38c84df 100644
+--- a/dlls/windows.gaming.input/provider.c
++++ b/dlls/windows.gaming.input/provider.c
+@@ -26,6 +26,8 @@
+ #include "hidusage.h"
+ 
+ #include "wine/debug.h"
++#include "xinput.h"
++#include "ntuser.h"
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(input);
+ 
+@@ -63,8 +65,31 @@ struct provider
+     BYTE haptics_report;
+     HIDP_CAPS caps;
+     HANDLE device;
++
++    BOOL hostpad;       /* a Playport host pad slot: state from XInput, no dinput device */
++    UINT hostpad_slot;
+ };
+ 
++/* Playport hostpad: the app's pads reach Windows only through XInput (win32u's
++ * host snapshot); there is no winebus, so no HID or XI_ device lists them.
++ * Each slot that holds a pad when the providers are made gets a Gamepad
++ * provider of its own here (hostpad_providers_create), read from that snapshot. */
++
++static ULONG_PTR (WINAPI *pNtUserCallTwoParam)( ULONG_PTR, ULONG_PTR, ULONG );
++
++static BOOL hostpad_state( UINT slot, XINPUT_STATE *state )
++{
++    memset( state, 0, sizeof(*state) );
++    if (!pNtUserCallTwoParam)
++    {
++        HMODULE win32u = GetModuleHandleW( L"win32u.dll" );
++        if (win32u) pNtUserCallTwoParam = (void *)GetProcAddress( win32u, "NtUserCallTwoParam" );
++        if (!pNtUserCallTwoParam) return FALSE;
++    }
++    return pNtUserCallTwoParam( slot | (NtUserGamepadOp_State << 8), (ULONG_PTR)state,
++                                NtUserCallTwoParam_GetGamepadState );
++}
++
+ static inline struct provider *impl_from_IWineGameControllerProvider( IWineGameControllerProvider *iface )
+ {
+     return CONTAINING_RECORD( iface, struct provider, IWineGameControllerProvider_iface );
+@@ -113,7 +138,7 @@ static ULONG WINAPI wine_provider_Release( IWineGameControllerProvider *iface )
+ 
+     if (!ref)
+     {
+-        IDirectInputDevice8_Release( impl->dinput_device );
++        if (impl->dinput_device) IDirectInputDevice8_Release( impl->dinput_device );
+         HidD_FreePreparsedData( impl->preparsed );
+         CloseHandle( impl->device );
+         free( impl->report_buf );
+@@ -155,6 +180,11 @@ static HRESULT WINAPI wine_provider_get_DisplayName( IWineGameControllerProvider
+ 
+     TRACE( "iface %p, value %p\n", iface, value );
+ 
++    if (impl->hostpad)
++    {
++        static const WCHAR name[] = L"Controller (XBOX One For Windows)";
++        return WindowsCreateString( name, wcslen( name ), value );
++    }
+     if (FAILED(hr = IDirectInputDevice8_GetDeviceInfo( impl->dinput_device, &instance ))) return hr;
+     return WindowsCreateString( instance.tszProductName, wcslen( instance.tszProductName ), value );
+ }
+@@ -175,6 +205,11 @@ static HRESULT WINAPI wine_provider_get_Type( IWineGameControllerProvider *iface
+ 
+     TRACE( "iface %p, value %p.\n", iface, value );
+ 
++    if (impl->hostpad)
++    {
++        *value = WineGameControllerType_Gamepad;
++        return S_OK;
++    }
+     if (FAILED(hr = IDirectInputDevice8_GetDeviceInfo( impl->dinput_device, &instance ))) return hr;
+ 
+     if ((tmp = wcschr( impl->device_path + 8, '#' )) && !wcsnicmp( tmp - 6, L"&XI_", 4 ))
+@@ -203,6 +238,11 @@ static HRESULT WINAPI wine_provider_get_AxisCount( IWineGameControllerProvider *
+ 
+     TRACE( "iface %p, value %p.\n", iface, value );
+ 
++    if (impl->hostpad)
++    {
++        *value = 6;
++        return S_OK;
++    }
+     if (SUCCEEDED(hr = IDirectInputDevice8_GetCapabilities( impl->dinput_device, &caps )))
+         *value = caps.dwAxes;
+     return hr;
+@@ -216,6 +256,11 @@ static HRESULT WINAPI wine_provider_get_ButtonCount( IWineGameControllerProvider
+ 
+     TRACE( "iface %p, value %p.\n", iface, value );
+ 
++    if (impl->hostpad)
++    {
++        *value = 10;
++        return S_OK;
++    }
+     if (SUCCEEDED(hr = IDirectInputDevice8_GetCapabilities( impl->dinput_device, &caps )))
+         *value = caps.dwButtons;
+     return hr;
+@@ -229,6 +274,11 @@ static HRESULT WINAPI wine_provider_get_SwitchCount( IWineGameControllerProvider
+ 
+     TRACE( "iface %p, value %p.\n", iface, value );
+ 
++    if (impl->hostpad)
++    {
++        *value = 1;
++        return S_OK;
++    }
+     if (SUCCEEDED(hr = IDirectInputDevice8_GetCapabilities( impl->dinput_device, &caps )))
+         *value = caps.dwPOVs;
+     return hr;
+@@ -243,6 +293,43 @@ static HRESULT WINAPI wine_provider_get_State( IWineGameControllerProvider *ifac
+ 
+     TRACE( "iface %p, out %p.\n", iface, out );
+ 
++    if (impl->hostpad)
++    {
++        /* as gamepad.c reads a Gamepad's state: axes 0-3 left Y, left X, right Y,
++         * right X (0..1, up and right at 1), 4-5 the triggers, buttons A B X Y
++         * LB RB View Menu LS RS, switch 0 the D-pad */
++        static const GameControllerSwitchPosition dpad[16] =
++        {
++            GameControllerSwitchPosition_Center, GameControllerSwitchPosition_Up,
++            GameControllerSwitchPosition_Down, GameControllerSwitchPosition_Center,
++            GameControllerSwitchPosition_Left, GameControllerSwitchPosition_UpLeft,
++            GameControllerSwitchPosition_DownLeft, GameControllerSwitchPosition_Left,
++            GameControllerSwitchPosition_Right, GameControllerSwitchPosition_UpRight,
++            GameControllerSwitchPosition_DownRight, GameControllerSwitchPosition_Right,
++            GameControllerSwitchPosition_Center, GameControllerSwitchPosition_Up,
++            GameControllerSwitchPosition_Down, GameControllerSwitchPosition_Center,
++        };
++        static const WORD order[10] =
++        {
++            XINPUT_GAMEPAD_A, XINPUT_GAMEPAD_B, XINPUT_GAMEPAD_X, XINPUT_GAMEPAD_Y,
++            XINPUT_GAMEPAD_LEFT_SHOULDER, XINPUT_GAMEPAD_RIGHT_SHOULDER, XINPUT_GAMEPAD_BACK,
++            XINPUT_GAMEPAD_START, XINPUT_GAMEPAD_LEFT_THUMB, XINPUT_GAMEPAD_RIGHT_THUMB,
++        };
++        XINPUT_STATE pad;
++
++        memset( out, 0, sizeof(*out) );
++        hostpad_state( impl->hostpad_slot, &pad );
++        out->axes[0] = (pad.Gamepad.sThumbLY + 32768) / 65535.;
++        out->axes[1] = (pad.Gamepad.sThumbLX + 32768) / 65535.;
++        out->axes[2] = (pad.Gamepad.sThumbRY + 32768) / 65535.;
++        out->axes[3] = (pad.Gamepad.sThumbRX + 32768) / 65535.;
++        out->axes[4] = pad.Gamepad.bLeftTrigger / 255.;
++        out->axes[5] = pad.Gamepad.bRightTrigger / 255.;
++        for (i = 0; i < ARRAY_SIZE(order); i++) out->buttons[i] = !!(pad.Gamepad.wButtons & order[i]);
++        out->switches[0] = dpad[pad.Gamepad.wButtons & 0x0f];
++        out->timestamp = GetTickCount64();
++        return S_OK;
++    }
+     if (FAILED(hr = IDirectInputDevice8_GetDeviceState( impl->dinput_device, sizeof(state), &state )))
+     {
+         WARN( "Failed to read device state, hr %#lx\n", hr );
+@@ -318,6 +405,11 @@ static HRESULT WINAPI wine_provider_put_Vibration( IWineGameControllerProvider *
+     TRACE( "iface %p, value %p.\n", iface, &value );
+ 
+     if (!memcmp( &impl->vibration, &value, sizeof(value) )) return S_OK;
++    if (impl->hostpad)
++    {
++        impl->vibration = value;
++        return S_OK;
++    }
+     impl->vibration = value;
+ 
+     status = HidP_InitializeReportForID( HidP_Output, impl->haptics_report, preparsed, report_buf, report_len );
+@@ -357,7 +449,8 @@ static HRESULT WINAPI wine_provider_get_ForceFeedbackMotor( IWineGameControllerP
+ 
+     TRACE( "iface %p, value %p.\n", iface, value );
+ 
+-    if (SUCCEEDED(hr = IDirectInputDevice8_GetCapabilities( impl->dinput_device, &caps )) && (caps.dwFlags & DIDC_FORCEFEEDBACK))
++    if (!impl->hostpad && SUCCEEDED(hr = IDirectInputDevice8_GetCapabilities( impl->dinput_device, &caps )) &&
++        (caps.dwFlags & DIDC_FORCEFEEDBACK))
+         return force_feedback_motor_create( impl->dinput_device, value );
+ 
+     *value = NULL;
+@@ -402,6 +495,11 @@ static HRESULT WINAPI game_provider_get_HardwareProductId( IGameControllerProvid
+ 
+     TRACE( "iface %p, value %p.\n", iface, value );
+ 
++    if (impl->hostpad)
++    {
++        *value = 0x02ff;
++        return S_OK;
++    }
+     if (SUCCEEDED(hr = IDirectInputDevice8_GetProperty( impl->dinput_device, DIPROP_VIDPID, &vid_pid.diph )))
+         *value = HIWORD(vid_pid.dwData);
+     return hr;
+@@ -415,6 +513,11 @@ static HRESULT WINAPI game_provider_get_HardwareVendorId( IGameControllerProvide
+ 
+     TRACE( "iface %p, value %p.\n", iface, value );
+ 
++    if (impl->hostpad)
++    {
++        *value = 0x045e;
++        return S_OK;
++    }
+     if (SUCCEEDED(hr = IDirectInputDevice8_GetProperty( impl->dinput_device, DIPROP_VIDPID, &vid_pid.diph )))
+         *value = LOWORD(vid_pid.dwData);
+     return hr;
+@@ -812,6 +915,40 @@ done:
+     IDirectInputDevice_Release( dinput_device );
+ }
+ 
++/* A Gamepad provider for each host pad slot that holds a pad now. */
++void hostpad_providers_create(void)
++{
++    IGameControllerProvider *provider;
++    struct provider *impl, *entry;
++    XINPUT_STATE state;
++    BOOL found;
++    UINT slot;
++
++    for (slot = 0; slot < XUSER_MAX_COUNT; slot++)
++    {
++        if (!hostpad_state( slot, &state )) continue;
++        if (!(impl = calloc( 1, sizeof(*impl) ))) return;
++        impl->IWineGameControllerProvider_iface.lpVtbl = &wine_provider_vtbl;
++        impl->IGameControllerProvider_iface.lpVtbl = &game_provider_vtbl;
++        impl->ref = 1;
++        impl->hostpad = TRUE;
++        impl->hostpad_slot = slot;
++        swprintf( impl->device_path, ARRAY_SIZE(impl->device_path), L"playport-hostpad-%u", slot );
++        list_init( &impl->entry );
++        provider = &impl->IGameControllerProvider_iface;
++
++        EnterCriticalSection( &provider_cs );
++        found = FALSE;
++        LIST_FOR_EACH_ENTRY( entry, &provider_list, struct provider, entry )
++            if ((found = !wcsicmp( entry->device_path, impl->device_path ))) break;
++        if (!found) list_add_tail( &provider_list, &impl->entry );
++        LeaveCriticalSection( &provider_cs );
++
++        if (found) IGameControllerProvider_Release( provider );
++        else manager_on_provider_created( provider );
++    }
++}
++
+ void provider_remove( const WCHAR *device_path )
+ {
+     IGameControllerProvider *provider;

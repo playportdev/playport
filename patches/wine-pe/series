@@ -41,3 +41,6 @@
 0042-wow64-report-another-thread-s-guest-context-from-FEX.patch
 0043-ntdll-wait-again-after-unqueueing-when-a-killed-thre.patch
 0044-kernelbase-let-an-ARM64EC-FlushInstructionCache-reach.patch
+0045-user32-list-a-virtual-XInput-pad-in-the-raw-input-de.patch
+0046-kernelbase-serve-the-virtual-pads-as-HID-devices.patch
+0047-windows.gaming.input-a-Gamepad-provider-for-each-hos.patch

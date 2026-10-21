@@ -1,0 +1,220 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Pavel Demyanov <greypax@gmail.com>
+Date: Wed, 21 Oct 2026 18:07:50 +0300
+Subject: [PATCH] user32: list a virtual XInput pad in the raw input device
+ list
+
+The app's pads reach Windows only through XInput (win32u's host snapshot,
+NtUserGetGamepadState): with no winebus in this process no HID device
+exists for them, so an input layer that finds XInput pads in the raw input
+device list sees no controller at all. Unity's raw input layer (<RI.Hid>)
+is one: it lists the HID devices, opens each, and reads a device whose path
+holds "IG_" through XInputGetState.
+
+GetRawInputDeviceList now adds one HID device per host slot that holds a
+pad, after the real devices, and GetRawInputDeviceInfo names it as Windows
+names an XInput pad's HID collection,
+\\?\HID#VID_045E&PID_02FF&IG_xx#3&5ead<slot>&0&0000#{4d1e55b2-...}, with a
+Generic Desktop / Game Pad RID_DEVICE_INFO and no preparsed data (the
+device's own preparsed data comes from kernelbase's hostpad.c once it is
+opened). It is an Xbox One controller: Rewired's controller database knows
+that VID/PID and name with combined triggers, an Xbox 360 one only through
+its own XInput. The handles, 0x5ead0000 + slot, do not meet the keyboard's
+and the mouse's (1 and 2), the only real devices here.
+
+Class: feature
+Evidence: docs/evidence/2026-10-21-hostpad-gamepads.md
+Offered-upstream: no; the host pad exists only on the iOS port
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ dlls/user32/input.c     | 147 +++++++++++++++++++++++++++++++++++++++-
+ dlls/user32/user32.spec |   4 +-
+ 2 files changed, 147 insertions(+), 4 deletions(-)
+
+diff --git a/dlls/user32/input.c b/dlls/user32/input.c
+index 6048276..7639083 100644
+--- a/dlls/user32/input.c
++++ b/dlls/user32/input.c
+@@ -596,6 +596,149 @@ BOOL WINAPI UnregisterDeviceNotification( HDEVNOTIFY handle )
+     return I_ScUnregisterDeviceNotification( handle );
+ }
+ 
++/* Playport: a virtual Xbox One controller for each host pad slot.
++ *
++ * The app's pads reach Windows only through XInput (NtUserGetGamepadState):
++ * there is no winebus in this process, so no HID device exists for them.
++ * Input libraries that find XInput pads in the raw input device list (Rewired
++ * looks for "ig_" in the device path, then reads the pad with XInputGetState)
++ * see no controller at all. Each connected host slot adds one HID device to
++ * the list, named like the one Windows creates for an XInput pad. It is an
++ * Xbox One controller: Rewired's controller database knows that name and
++ * VID/PID with combined triggers, but an Xbox 360 one only through XInput. The real
++ * devices here are the keyboard and the mouse, with handles 1 and 2. */
++#define HOSTPAD_HANDLE_BASE 0x5ead0000u
++#define HOSTPAD_SLOTS       4
++
++/* Playport hostpad diagnostics: the app runs Wine with WINEDEBUG=-all, so
++ * these lines go to the log through __wine_dbg_output, within a budget. */
++
++static BOOL hostpad_connected( UINT slot )
++{
++    BYTE state[16]; /* XINPUT_STATE */
++    return NtUserGetGamepadState( slot, NtUserGamepadOp_State, state );
++}
++
++static BOOL hostpad_slot( HANDLE device, UINT *slot )
++{
++    ULONG_PTR value = (ULONG_PTR)device;
++
++    if (value < HOSTPAD_HANDLE_BASE || value >= HOSTPAD_HANDLE_BASE + HOSTPAD_SLOTS) return FALSE;
++    *slot = value - HOSTPAD_HANDLE_BASE;
++    return TRUE;
++}
++
++/* The connected slots' devices into pads; their count. */
++static UINT hostpad_list( RAWINPUTDEVICELIST *pads )
++{
++    UINT slot, count = 0;
++
++    for (slot = 0; slot < HOSTPAD_SLOTS; slot++)
++    {
++        if (!hostpad_connected( slot )) continue;
++        pads[count].hDevice = ULongToHandle( HOSTPAD_HANDLE_BASE + slot );
++        pads[count].dwType = RIM_TYPEHID;
++        count++;
++    }
++    return count;
++}
++
++/***********************************************************************
++ *              GetRawInputDeviceList   (USER32.@)
++ */
++UINT WINAPI GetRawInputDeviceList( RAWINPUTDEVICELIST *list, UINT *count, UINT size )
++{
++    RAWINPUTDEVICELIST pads[HOSTPAD_SLOTS];
++    UINT real = 0, room, ret, n_pads;
++
++    n_pads = hostpad_list( pads );
++    if (!n_pads || !count || size != sizeof(*list))
++    {
++        return NtUserGetRawInputDeviceList( list, count, size );
++    }
++
++    if (!list || *count < n_pads)
++    {
++        if (NtUserGetRawInputDeviceList( NULL, &real, size ) == ~0u) return ~0u;
++        *count = real + n_pads;
++        if (!list) return 0;
++        RtlSetLastWin32Error( ERROR_INSUFFICIENT_BUFFER );
++        return ~0u;
++    }
++
++    room = *count - n_pads;
++    if ((ret = NtUserGetRawInputDeviceList( list, &room, size )) == ~0u)
++    {
++        if (RtlGetLastWin32Error() == ERROR_INSUFFICIENT_BUFFER) *count = room + n_pads;
++        return ~0u;
++    }
++    memcpy( list + ret, pads, n_pads * sizeof(*pads) );
++    return ret + n_pads;
++}
++
++/***********************************************************************
++ *              GetRawInputDeviceInfoW   (USER32.@)
++ */
++UINT WINAPI GetRawInputDeviceInfoW( HANDLE device, UINT command, void *data, UINT *size )
++{
++    RID_DEVICE_INFO info;
++    WCHAR name[128];
++    UINT slot, len, data_len;
++
++    if (!hostpad_slot( device, &slot )) return NtUserGetRawInputDeviceInfo( device, command, data, size );
++
++    if (!size)
++    {
++        RtlSetLastWin32Error( ERROR_NOACCESS );
++        return ~0u;
++    }
++    if (!hostpad_connected( slot ))
++    {
++        RtlSetLastWin32Error( ERROR_INVALID_HANDLE );
++        return ~0u;
++    }
++
++    data_len = *size;
++    switch (command)
++    {
++    case RIDI_DEVICENAME:
++        len = wsprintfW( name, L"\\\\?\\HID#VID_045E&PID_02FF&IG_%02X#3&5ead%04X&0&0000"
++                         L"#{4d1e55b2-f16f-11cf-88cb-001111000030}", slot, slot ) + 1;
++        if (len <= data_len && data) memcpy( data, name, len * sizeof(WCHAR) );
++        break;
++
++    case RIDI_DEVICEINFO:
++        memset( &info, 0, sizeof(info) );
++        info.cbSize = sizeof(info);
++        info.dwType = RIM_TYPEHID;
++        info.hid.dwVendorId = 0x045e;      /* Microsoft */
++        info.hid.dwProductId = 0x02ff;     /* Xbox One controller, as Windows 10 names its XInput HID */
++        info.hid.dwVersionNumber = 0x0114;
++        info.hid.usUsagePage = 0x01;       /* Generic Desktop */
++        info.hid.usUsage = 0x05;           /* Game Pad */
++        len = sizeof(info);
++        if (len <= data_len && data) memcpy( data, &info, len );
++        break;
++
++    case RIDI_PREPARSEDDATA:
++        len = 0; /* as for a device without a HID collection: XInput reads it */
++        break;
++
++    default:
++        RtlSetLastWin32Error( ERROR_INVALID_PARAMETER );
++        return ~0u;
++    }
++
++    *size = len;
++    if (!data) return 0;
++    if (data_len < len)
++    {
++        RtlSetLastWin32Error( ERROR_INSUFFICIENT_BUFFER );
++        return ~0u;
++    }
++    return len;
++}
++
+ /***********************************************************************
+  *              GetRawInputDeviceInfoA   (USER32.@)
+  */
+@@ -618,7 +761,7 @@ UINT WINAPI GetRawInputDeviceInfoA( HANDLE device, UINT command, void *data, UIN
+         else
+             nameW = NULL;
+ 
+-        ret = NtUserGetRawInputDeviceInfo( device, command, nameW, &sizeW );
++        ret = GetRawInputDeviceInfoW( device, command, nameW, &sizeW );
+ 
+         if (ret && ret != ~0U)
+             WideCharToMultiByte( CP_ACP, 0, nameW, -1, data, *size, NULL, NULL );
+@@ -630,7 +773,7 @@ UINT WINAPI GetRawInputDeviceInfoA( HANDLE device, UINT command, void *data, UIN
+         return ret;
+     }
+ 
+-    return NtUserGetRawInputDeviceInfo( device, command, data, size );
++    return GetRawInputDeviceInfoW( device, command, data, size );
+ }
+ 
+ /***********************************************************************
+diff --git a/dlls/user32/user32.spec b/dlls/user32/user32.spec
+index d818e0f..f80cad5 100644
+--- a/dlls/user32/user32.spec
++++ b/dlls/user32/user32.spec
+@@ -659,8 +659,8 @@
+ @ stdcall GetRawInputBuffer(ptr ptr long) NtUserGetRawInputBuffer
+ @ stdcall GetRawInputData(ptr long ptr ptr long) NtUserGetRawInputData
+ @ stdcall GetRawInputDeviceInfoA(ptr long ptr ptr)
+-@ stdcall GetRawInputDeviceInfoW(ptr long ptr ptr) NtUserGetRawInputDeviceInfo
+-@ stdcall GetRawInputDeviceList(ptr ptr long) NtUserGetRawInputDeviceList
++@ stdcall GetRawInputDeviceInfoW(ptr long ptr ptr)
++@ stdcall GetRawInputDeviceList(ptr ptr long)
+ @ stdcall GetRawPointerDeviceData(long long long ptr ptr)
+ # @ stub GetReasonTitleFromReasonCode
+ @ stdcall GetRegisteredRawInputDevices(ptr ptr long) NtUserGetRegisteredRawInputDevices
