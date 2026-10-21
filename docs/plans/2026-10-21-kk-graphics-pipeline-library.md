@@ -30,7 +30,8 @@ from the main checkout after the branch moves there. **Pins read:** `mesa` b39d1
       fast-links.
   - Evidence: [2026-10-21-kk-gpl-host](../evidence/2026-10-21-kk-gpl-host.md),
     [2026-10-22-kk-gpl-phone](../evidence/2026-10-22-kk-gpl-phone.md).
-- **Running:** none.
+- **Running:** G5b writer (patches/mesa 0100, the sample-mask fix, then G5 again on Hollow Knight), main checkout; report `.work/agent-notes/kk-gpl/reports/g5b.md`.
+- **Settled (owner away, supervisor, 2026-10-22):** Portal 2 is not installed for G5 (7.9 GB free); the G5 evidence is Hollow Knight, played into King's Pass. D3D12 is not checked (RDR2 would change its saved API).
 - **Queue:** G6 is blocked. First, a fix for the `sample-mask` fallback: DXVK cuts the mask to
   the sample count (`0x1` at one sample), and G3's rule needs `0xffff`. Then rerun G5 on Hollow
   Knight. Portal 2's hitch comparison needs Portal 2 installed (it is not); the D3D12 and GPU-time
