@@ -15,8 +15,7 @@ from the main checkout after the branch moves there. **Pins read:** `mesa` b39d1
   Workstation only (owner, 2026-10-21): no phone gate until the branch moves to the main checkout.
 - **Done:**
   - G0's host harness and G1 in `ea258b0` (`patches/mesa` 0096; host test `check_gpl`).
-  - G2 in the commit "MESA_KK_EXPERIMENTAL=gpl compiles a library's vertex shader on its own
-    (mesa 0097, G2)" (`patches/mesa` 0097). The vertex library is built at library creation; a
+  - G2 in `8c31a22` (`patches/mesa` 0097; dev IPA `5a25af6e`, side copy, not installed). The vertex library is built at library creation; a
     fast link compiles only the fragment side at its first draw.
   - Evidence: [2026-10-21-kk-gpl-host](../evidence/2026-10-21-kk-gpl-host.md).
   - G0's phone baseline is not run.
