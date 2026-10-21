@@ -19,7 +19,7 @@ from the main checkout after the branch moves there. **Pins read:** `mesa` b39d1
     fast link compiles only the fragment side at its first draw.
   - Evidence: [2026-10-21-kk-gpl-host](../evidence/2026-10-21-kk-gpl-host.md).
   - G0's phone baseline is not run.
-- **Running:** none.
+- **Running:** G3 writer, run `5d495921` (models: hard anthropic/claude-opus-5-5 medium, easy anthropic/claude-sonnet-5-5 medium); report to `g3.md`.
 - **Queue:** G3 next (separate fragment shader), then G4 (workstation); then G0's phone baseline
   and G5 from the main checkout; G6.
 - **Phone:** not used by this plan yet.
