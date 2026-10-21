@@ -90,6 +90,9 @@ from checks import SWIFT_PACKAGES  # noqa: E402
 # where it is not checked out: CI clones without submodules.
 PADS = ["app/tests/pads_test.c", "app/Sources/HostIO/hio_pads.c", "upstream/madeira/app/Madeira/Winios/WiniosGamepad.c"]
 PADS_FLAGS = ["-Iupstream/madeira/app/Madeira/Winios", "-pthread"]
+# The runtime's in-process NT sync engine (build/ppsync/README.md).
+PPSYNC = ["build/ppsync/ppsync_test.c", "build/ppsync/ppsync.c"]
+PPSYNC_FLAGS = ["-Ibuild/ppsync", "-D_GNU_SOURCE", "-pthread"]
 C_TESTS = [
     ("pads", PADS, PADS_FLAGS),
     ("pads (ThreadSanitizer)", PADS, PADS_FLAGS + ["-fsanitize=thread", "-O1", "-g"]),
@@ -114,6 +117,9 @@ C_TESTS = [
     ("cef swap", ["app/tests/cef_swap_test.c", "app/Sources/WineHost/cef_swap.c"], ["-D_GNU_SOURCE", "-pthread"]),
     ("guest pool", ["app/tests/guest_pool_test.c", "app/Sources/SharedMemory/guest_pool.c"],
      ["-Iapp/Sources/SharedMemory", "-fsanitize=address,undefined"]),
+    ("ppsync", PPSYNC, PPSYNC_FLAGS),
+    ("ppsync (ThreadSanitizer)", PPSYNC, PPSYNC_FLAGS + ["-fsanitize=thread", "-O1", "-g"]),
+    ("ppsync (AddressSanitizer)", PPSYNC, PPSYNC_FLAGS + ["-fsanitize=address,undefined", "-g"]),
 ]
 
 
