@@ -347,6 +347,16 @@ static void test_freeze(void)
     pthread_join( t, NULL );
     CHECK( w.ret == 0 && !signaled( w.fds[0] ) && !signaled( w.fds[1] ) );
 
+    /* a kick reaches a thread held frozen at the start of a wait */
+    ppsync_freeze( 0x300, 1 );
+    t = start_waiter( &w );
+    sleep_ms( 20 );
+    CHECK( !atomic_load( &w.done ) );
+    ppsync_kick( 0x300 );
+    pthread_join( t, NULL );
+    CHECK( w.ret == -1 && w.err == ECANCELED );
+    ppsync_freeze( 0x300, 0 );
+
     /* gone: a frozen waiter is thawed and kicked */
     w.count = 1; w.all = 0;
     t = start_blocked( &w );
@@ -498,6 +508,54 @@ static void test_ping_pong(void)
     close( g_ping ); close( g_pong );
 }
 
+/* A waiter takes an auto-reset event over and over, with infinite waits,
+ * while another thread freezes and thaws it as fast as it can: a thaw the
+ * waiter misses leaves it asleep on a set event. */
+#define STORM 3000
+static int g_storm_ev, g_storm_ack;
+static _Atomic int g_storm_done, g_storm_stuck;
+
+static void *storm_waiter( void *p )
+{
+    int i;
+    (void)p;
+    for (i = 0; i < STORM; i++)
+    {
+        int ret;
+        while ((ret = wait1( g_storm_ev, 0x3004, 3000 )) && errno == ECANCELED) ;
+        if (ret) { atomic_fetch_add( &g_storm_stuck, 1 ); break; }
+        set( g_storm_ack );
+    }
+    atomic_store( &g_storm_done, 1 );
+    return NULL;
+}
+
+static void *storm_poker( void *p )
+{
+    (void)p;
+    while (!atomic_load( &g_storm_done )) { ppsync_freeze( 0x3004, 1 ); ppsync_freeze( 0x3004, 0 ); }
+    return NULL;
+}
+
+static void test_freeze_storm(void)
+{
+    pthread_t w, k;
+    int i;
+    g_storm_ev = event( 0, 0 ); g_storm_ack = event( 0, 0 );
+    pthread_create( &w, NULL, storm_waiter, NULL );
+    pthread_create( &k, NULL, storm_poker, NULL );
+    for (i = 0; i < STORM && !atomic_load( &g_storm_done ); i++)
+    {
+        set( g_storm_ev );
+        while (wait1( g_storm_ack, 0x3008, 100 ) && !atomic_load( &g_storm_done )) ;
+    }
+    pthread_join( w, NULL );
+    pthread_join( k, NULL );
+    ppsync_freeze( 0x3004, 0 );
+    CHECK( !atomic_load( &g_storm_stuck ) );
+    close( g_storm_ev ); close( g_storm_ack );
+}
+
 int main(void)
 {
     struct ppsync_stats s;
@@ -513,6 +571,7 @@ int main(void)
     test_handoff();
     test_stress();
     test_ping_pong();
+    test_freeze_storm();
     ppsync_get_stats( &s );
     printf( "ppsync: %llu waits, %llu slept, %llu polls, %llu wakes, %llu kicks, %llu frozen, %llu live objects\n",
             s.waits, s.blocked, s.polls, s.wakes, s.cancels, s.frozen_waits, s.live_objects );

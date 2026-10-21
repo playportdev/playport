@@ -17,7 +17,7 @@ struct DeveloperSettings: View {
     @AppStorage(Diagnostics.cpuProfileKey) private var cpuProfile = false
     @AppStorage(MetalValidation.key) private var validation = MetalValidation.Level.off.rawValue
     @AppStorage(RuntimeCounters.key) private var countersOff = false
-    @AppStorage(Fastsync.offKey) private var fastsyncOff = false
+    @AppStorage(InprocSync.offKey) private var inprocSyncOff = false
     @AppStorage(MemoryLimit.simulatedKey) private var simulated = 0
     @AppStorage(MemoryLimit.simulatedPoolKey) private var simulatedPool = 0
     @ObservedObject private var sharedMemory = SharedMemoryProbe.shared
@@ -56,8 +56,8 @@ struct DeveloperSettings: View {
                note: "From Playport's next start; it costs CPU and GPU time.") { validation = $0 }
         SettingsSwitchRow(id: "dev:counters", title: "Runtime counters", subtitle: "Off from Playport's next start, as a release build",
                           on: Binding(get: { !countersOff }, set: { countersOff = !$0 }))
-        SettingsSwitchRow(id: "dev:fastsync", title: "Fastsync", subtitle: "In-process event and semaphore waits; off from Playport's next start",
-                          on: Binding(get: { !fastsyncOff }, set: { fastsyncOff = !$0 }))
+        SettingsSwitchRow(id: "dev:inprocsync", title: "In-process sync", subtitle: "NT waits without the wineserver (ppsync); off from Playport's next start",
+                          on: Binding(get: { !inprocSyncOff }, set: { inprocSyncOff = !$0 }))
     }
 
     // MARK: memory

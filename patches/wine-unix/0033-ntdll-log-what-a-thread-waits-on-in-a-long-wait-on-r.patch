@@ -24,10 +24,10 @@ Offered-upstream: no; iOS-only diagnostics
  1 file changed, 216 insertions(+)
 
 diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
-index 5ba275cf6cb..e44597a7e1d 100644
+index 2072089..2996017 100644
 --- a/dlls/ntdll/unix/sync.c
 +++ b/dlls/ntdll/unix/sync.c
-@@ -3424,11 +3424,227 @@ NTSTATUS WINAPI NtQueryTimer( HANDLE handle, TIMER_INFORMATION_CLASS class,
+@@ -2464,11 +2464,227 @@ NTSTATUS WINAPI NtQueryTimer( HANDLE handle, TIMER_INFORMATION_CLASS class,
  }
  
  

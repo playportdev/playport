@@ -453,7 +453,7 @@ digest_inputs() {
         case $s in unix|pe|fex|dxmt|vulkan|steamapi|idevice) toolchain; files build/lib.sh ;; esac
         case $s in
         unix) pins madeira wine wine-port wine-valve freetype gstreamer; series_text madeira-unix wine-port wine-valve wine-unix
-              files build/stages/unix.sh build/stages/unix-gaps.sh build/stages/gstreamer.sh ;;
+              files build/stages/unix.sh build/stages/unix-gaps.sh build/stages/gstreamer.sh build/ppsync ;;
         pe) pins wine wine-port wine-valve gstreamer; series_text wine-port wine-valve wine-pe
             files build/stages/wine-pe.sh build/stages/wine-pe-manifest.py build/stages/wine-pe-strip.py
             gst_release ;;

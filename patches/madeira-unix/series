@@ -12,7 +12,6 @@
 0011-win32u-report-the-host-panel-s-refresh-rate-for-the-.patch
 0012-audio-let-the-host-app-suspend-and-resume-the-proces.patch
 0013-server-build-against-the-iOS-26.5-SDK-s-rusage_info_.patch
-0014-madsync-make-in-process-sync-opt-in.patch
 0015-thread-set-a-named-thread-s-QoS-class-from-WINE_IOS_.patch
 0016-virtual-keep-the-jumbo-holdback-out-of-FEX-s-preferr.patch
 0017-virtual-serve-an-8-GB-ask-from-the-cage-before-the-j.patch
@@ -79,7 +78,6 @@
 0078-ntdll-log-each-thread-s-QoS-class-and-the-Windows-pr.patch
 0079-ntdll-profile-an-i386-guest-s-code-by-its-address-an.patch
 0080-ntdll-unix-win32u-unix-wineserver-port-the-iOS-repla.patch
-0081-server-flush-fastsync-s-handle-cache-at-process-init.patch
 0082-ntdll-place-a-request-the-furniture-ceiling-clamped-.patch
 0083-ntdll-process-drop-what-was-there-only-for-CEF.patch
 0084-ntdll-a-4-GB-floor-constrains-nothing-on-iOS.patch
@@ -188,3 +186,4 @@
 0211-ntdll-the-request-size-of-Chromium-s-out-of-memory-e.patch
 0212-ntdll-PLAYPORT_SC_BLOCK_CRASHPAD-1-refuses-crash-rep.patch
 0213-ntdll-the-app-allows-RDR2-s-Social-Club-helper-resta.patch
+0220-ntdll-unix-wineserver-build-Playport-s-ppsync-in-pla.patch

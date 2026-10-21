@@ -158,6 +158,7 @@ struct pps_tstate
     _Atomic uint32_t kicked;
     _Atomic uint32_t frozen;
     _Atomic uint32_t sleeping;   /* about to sleep, or asleep, on futex: a waker must make the call */
+    _Atomic uint32_t thaws;      /* bumped by every thaw: a waiter looks at its objects again */
     _Atomic unsigned long long waits, polls, blocked, wakes, timeouts, cancels, frozen_waits,
                                spin_hits, contended;
 };
@@ -262,6 +263,7 @@ static void ws_add( struct pps_wakeset *ws, struct pps_tstate *t )
 static void ws_flush( struct pps_wakeset *ws, struct pps_tstate *self )
 {
     unsigned int i;
+    if (self == &g_private[PPS_PRIVATE]) self = NULL;   /* shared: the wake may be another thread's */
     for (i = 0; i < ws->n; i++) if (ws->t[i] != self) wake_tstate( ws->t[i] );
     ws->n = 0;
 }
@@ -727,14 +729,17 @@ static struct pps_waiter *self_waiter(void)
     return tls_w;
 }
 
-/* A frozen thread does not go on past a wait until it is thawed. */
-static void wait_thawed( struct pps_tstate *t )
+/* A frozen thread does not go on past a wait until it is thawed, or until it
+ * is kicked: a suspended thread still runs system APCs (check_wait). Returns
+ * whether a kick ended it. */
+static int wait_thawed( struct pps_tstate *t )
 {
     int counted = 0;
     for (;;)
     {
         uint32_t seq = atomic_load( &t->futex );
-        if (!atomic_load( &t->frozen )) return;
+        if (!atomic_load( &t->frozen )) return 0;
+        if (atomic_load( &t->kicked )) return 1;
         if (!counted++) count( &t->frozen_waits );
         sleep_tstate( t, seq, 0 );
     }
@@ -753,22 +758,23 @@ static int do_wait( struct ntsync_wait_args *args, int all )
     struct pps_tstate *t;
     struct pps_waiter *q;
     uint32_t i, j;
-    int ret = 0, s, kicked = 0, retry = 0;
+    int ret = 0, s, kicked = 0;
+    uint32_t thaws;
 
     if (args->count > NTSYNC_MAX_WAIT_COUNT) { errno = EINVAL; return -1; }
     t = self_tstate( args->owner );
     count( &t->waits );
 
-    /* A system APC (or the thread's end) first: nothing has been consumed. */
+    /* A suspended thread does not start a wait, as the server would not let
+     * its wait be satisfied. A system APC (or the thread's end) goes first,
+     * suspended or not: nothing has been consumed. */
+    wait_thawed( t );
     if (atomic_load( &t->kicked ) && atomic_exchange( &t->kicked, 0 ))
     {
         count( &t->cancels );
         errno = ECANCELED;
         return -1;
     }
-    /* A suspended thread does not start a wait, as the server would not let
-     * its wait be satisfied. */
-    wait_thawed( t );
 
     /* A poll on one object that finds it not ready needs no lock: one load is
      * its state at one instant, and the alert (read last) is only ever lowered
@@ -815,6 +821,10 @@ static int do_wait( struct ntsync_wait_args *args, int all )
         q->n++;
     }
 
+    /* Wakers pass over a frozen waiter, so every thaw from here on makes it
+     * look at its objects again (read before linking: a freeze and thaw during
+     * the link are not missed). */
+    thaws = atomic_load( &t->thaws );
     waiter_link( q, &ws );
     ws_flush( &ws, t );
 
@@ -854,10 +864,9 @@ static int do_wait( struct ntsync_wait_args *args, int all )
             if (atomic_compare_exchange_strong( &q->signaled, &pending, PPS_CANCELLED )) { kicked = 1; break; }
             continue;
         }
-        if (atomic_load( &t->frozen )) retry = 1;
-        else if (retry)
+        if (!atomic_load( &t->frozen ) && atomic_load( &t->thaws ) != thaws)
         {
-            retry = 0;
+            thaws = atomic_load( &t->thaws );
             waiter_retry( q, &ws );
             ws_flush( &ws, t );
             continue;
@@ -873,7 +882,6 @@ static int do_wait( struct ntsync_wait_args *args, int all )
             rel = args->timeout - now;
         }
         sleep_tstate( t, seq, rel );
-        retry = 1;   /* a thaw, a spurious wake or a timeout: look again first */
     }
 
     waiter_unlink( q );
@@ -897,7 +905,11 @@ static int do_wait( struct ntsync_wait_args *args, int all )
         ret = -1;
     }
     waiter_release( q );
-    if (!kicked) wait_thawed( t );   /* a system APC may run while suspended; nothing else may */
+    /* A satisfied or timed-out wait of a suspended thread returns when it is
+     * resumed. A kick while it is held here cannot be taken without losing
+     * the result: it returns, and its next wait takes the kick first (the
+     * deferred physical hold stops it in guest code meanwhile). */
+    if (!kicked) wait_thawed( t );
     if (!(atomic_load_explicit( &t->waits, RLX ) & 0xffff)) stats_maybe_log();
     return ret;
 }
@@ -912,19 +924,31 @@ void ppsync_kick( unsigned int tid )
     wake_tstate( t );
 }
 
+/* A thaw bumps `thaws' before it clears `frozen', and the futex word last, so
+ * a waiter that sees frozen == 0 sees the new count. */
+static void thaw( struct pps_tstate *t )
+{
+    atomic_fetch_add( &t->thaws, 1 );
+    atomic_store( &t->frozen, 0 );
+}
+
 void ppsync_freeze( unsigned int tid, int on )
 {
     struct pps_tstate *t = tstate_of( tid, 1 );
     if (!t) return;
-    atomic_store( &t->frozen, on ? 1 : 0 );
-    if (!on) wake_tstate( t );
+    if (on) atomic_store( &t->frozen, 1 );
+    else if (atomic_load( &t->frozen ))
+    {
+        thaw( t );
+        wake_tstate( t );
+    }
 }
 
 void ppsync_thread_gone( unsigned int tid )
 {
     struct pps_tstate *t = tstate_of( tid, 0 );
     if (!t) return;
-    atomic_store( &t->frozen, 0 );
+    thaw( t );
     atomic_store( &t->kicked, 1 );
     wake_tstate( t );
 }

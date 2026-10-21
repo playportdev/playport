@@ -28,7 +28,7 @@ Offered-upstream: no
  1 file changed, 65 insertions(+), 2 deletions(-)
 
 diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
-index 1036a72..7a64afe 100644
+index 2028a8b..604b6b2 100644
 --- a/dlls/ntdll/unix/sync.c
 +++ b/dlls/ntdll/unix/sync.c
 @@ -609,6 +609,10 @@ void ios_inproc_cache_release( void *peb )
@@ -42,7 +42,7 @@ index 1036a72..7a64afe 100644
  }
  #define inproc_sync_cache               (ios_get_inproc_cache()->blocks)
  #define inproc_sync_cache_initial_block (ios_get_inproc_cache()->initial)
-@@ -3913,6 +3917,65 @@ NTSTATUS WINAPI NtOpenKeyedEvent( HANDLE *handle, ACCESS_MASK access, const OBJE
+@@ -2896,6 +2900,65 @@ NTSTATUS WINAPI NtOpenKeyedEvent( HANDLE *handle, ACCESS_MASK access, const OBJE
      return ret;
  }
  
@@ -108,7 +108,7 @@ index 1036a72..7a64afe 100644
  /******************************************************************************
   *              NtWaitForKeyedEvent (NTDLL.@)
   */
-@@ -3924,7 +3987,7 @@ NTSTATUS WINAPI NtWaitForKeyedEvent( HANDLE handle, const void *key,
+@@ -2907,7 +2970,7 @@ NTSTATUS WINAPI NtWaitForKeyedEvent( HANDLE handle, const void *key,
  
      TRACE( "handle %p, key %p, alertable %u, timeout %s\n", handle, key, alertable, debugstr_timeout(timeout) );
  
@@ -117,7 +117,7 @@ index 1036a72..7a64afe 100644
      if ((ULONG_PTR)key & 1) return STATUS_INVALID_PARAMETER_1;
      if (alertable) flags |= SELECT_ALERTABLE;
      select_op.keyed_event.op     = SELECT_KEYED_EVENT_WAIT;
-@@ -3945,7 +4008,7 @@ NTSTATUS WINAPI NtReleaseKeyedEvent( HANDLE handle, const void *key,
+@@ -2928,7 +2991,7 @@ NTSTATUS WINAPI NtReleaseKeyedEvent( HANDLE handle, const void *key,
  
      TRACE( "handle %p, key %p, alertable %u, timeout %s\n", handle, key, alertable, debugstr_timeout(timeout) );
  

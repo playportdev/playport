@@ -28,10 +28,10 @@ Offered-upstream: no; signal delivery is the iOS port's
  1 file changed, 31 insertions(+)
 
 diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
-index 2d9d29b..21146e5 100644
+index 29468c6..50203e7 100644
 --- a/dlls/ntdll/unix/sync.c
 +++ b/dlls/ntdll/unix/sync.c
-@@ -6080,6 +6080,31 @@ static LONGLONG update_timeout( ULONGLONG end )
+@@ -5063,6 +5063,31 @@ static LONGLONG update_timeout( ULONGLONG end )
  #endif
  
  
@@ -63,7 +63,7 @@ index 2d9d29b..21146e5 100644
  /***********************************************************************
   *             NtWaitForAlertByThreadId (NTDLL.@)
   */
-@@ -6122,7 +6147,9 @@ NTSTATUS WINAPI NtWaitForAlertByThreadId( const void *address, const LARGE_INTEG
+@@ -5105,7 +5130,9 @@ NTSTATUS WINAPI NtWaitForAlertByThreadId( const void *address, const LARGE_INTEG
          ULONGLONG end;
          int ret;
          int ios_wslot;
@@ -73,7 +73,7 @@ index 2d9d29b..21146e5 100644
          if (timeout)
          {
              if (timeout->QuadPart == TIMEOUT_INFINITE)
-@@ -6162,6 +6189,7 @@ NTSTATUS WINAPI NtWaitForAlertByThreadId( const void *address, const LARGE_INTEG
+@@ -5145,6 +5172,7 @@ NTSTATUS WINAPI NtWaitForAlertByThreadId( const void *address, const LARGE_INTEG
          while (!InterlockedExchange( futex, 0 ))
          {
              unsigned long long ios_woke;
@@ -81,7 +81,7 @@ index 2d9d29b..21146e5 100644
              if (timeout)
              {
                  LONGLONG timeleft = update_timeout( end );
-@@ -6188,6 +6216,7 @@ NTSTATUS WINAPI NtWaitForAlertByThreadId( const void *address, const LARGE_INTEG
+@@ -5171,6 +5199,7 @@ NTSTATUS WINAPI NtWaitForAlertByThreadId( const void *address, const LARGE_INTEG
  
              if (ret == -1 && errno == ETIMEDOUT)
              {
@@ -89,7 +89,7 @@ index 2d9d29b..21146e5 100644
                  if (ios_wslot >= 0) ios_alert_waiters[ios_wslot].addr = NULL;
                  if (ios_marked && ios_alert_unix_n < 120) { InterlockedIncrement( &ios_alert_unix_n );
                      ERR( "[alert-unix] tid=%04x -> TIMEOUT\n",
-@@ -6196,6 +6225,8 @@ NTSTATUS WINAPI NtWaitForAlertByThreadId( const void *address, const LARGE_INTEG
+@@ -5179,6 +5208,8 @@ NTSTATUS WINAPI NtWaitForAlertByThreadId( const void *address, const LARGE_INTEG
              }
          }
          if (ios_wslot >= 0) ios_alert_waiters[ios_wslot].addr = NULL;

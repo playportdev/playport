@@ -52,7 +52,11 @@ The unix stage copies this directory into the Madeira tree as `build/ppsync`
     reached zero. A frozen thread's wait is not satisfied, and a frozen thread
     does not start or leave a wait. A server wait behaves the same way:
     `check_wait` refuses a suspended thread. The exception is a kick, because
-    system APCs run while a thread is suspended.
+    system APCs run while a thread is suspended: a kick ends the hold at the
+    start of a wait. A thread held at the end of a satisfied wait returns its
+    result instead, and takes the kick at its next wait. Every thaw makes a
+    waiter look at its objects again (`thaws`), because wakers pass over a
+    frozen waiter.
   - `ppsync_thread_gone(tid)`: thaw and kick.
 - **Polls.** A zero-timeout wait on one object that is not ready is answered
   without a lock. One load is the object's state at one instant, and the alert,

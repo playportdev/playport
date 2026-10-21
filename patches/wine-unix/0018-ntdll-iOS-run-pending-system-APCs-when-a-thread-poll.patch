@@ -30,10 +30,10 @@ Offered-upstream: no; upstream signals the thread (SIGUSR1), which iOS cannot
  1 file changed, 28 insertions(+)
 
 diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
-index 1036a72ff97..f2dce022612 100644
+index 061d81c..2028a8b 100644
 --- a/dlls/ntdll/unix/sync.c
 +++ b/dlls/ntdll/unix/sync.c
-@@ -4063,6 +4063,26 @@ NTSTATUS WINAPI NtSetIoCompletionEx( HANDLE completion_handle, HANDLE completion
+@@ -3046,6 +3046,26 @@ NTSTATUS WINAPI NtSetIoCompletionEx( HANDLE completion_handle, HANDLE completion
      return ret;
  }
  
@@ -60,7 +60,7 @@ index 1036a72ff97..f2dce022612 100644
  /***********************************************************************
   *             NtRemoveIoCompletion (NTDLL.@)
   */
-@@ -4090,7 +4110,11 @@ NTSTATUS WINAPI NtRemoveIoCompletion( HANDLE handle, ULONG_PTR *key, ULONG_PTR *
+@@ -3073,7 +3093,11 @@ NTSTATUS WINAPI NtRemoveIoCompletion( HANDLE handle, ULONG_PTR *key, ULONG_PTR *
      SERVER_END_REQ;
      if (status != STATUS_PENDING) return status;
      if (!timeout || timeout->QuadPart) status = server_wait_for_object( wait_handle, FALSE, timeout );
@@ -72,7 +72,7 @@ index 1036a72ff97..f2dce022612 100644
      if (status != WAIT_OBJECT_0) return status;
  
      SERVER_START_REQ( get_thread_completion )
-@@ -4154,7 +4178,11 @@ NTSTATUS WINAPI NtRemoveIoCompletionEx( HANDLE handle, FILE_IO_COMPLETION_INFORM
+@@ -3137,7 +3161,11 @@ NTSTATUS WINAPI NtRemoveIoCompletionEx( HANDLE handle, FILE_IO_COMPLETION_INFORM
          goto done;
      }
      if (!timeout || timeout->QuadPart) status = server_wait_for_object( wait_handle, alertable, timeout );
@@ -84,6 +84,3 @@ index 1036a72ff97..f2dce022612 100644
      if (status != WAIT_OBJECT_0) goto done;
  
      SERVER_START_REQ( get_thread_completion )
--- 
-2.47.0
-

@@ -52,6 +52,13 @@ stage_clones() {
     # wine-port's ntdll includes ../../../../build/madeira_cfg.h, i.e. it
     # expects to sit at <Madeira>/wine; resolve that from ROOT/wine as well.
     ln -sfn "$M/build" "$ROOT/build"
+    # The in-process sync engine is Playport's (build/ppsync/README.md);
+    # madeira-unix 0220 builds it from <Madeira>/build/ppsync, where its
+    # "../madeira_cfg.h" is Madeira's. Copied afresh every time (a symlinked
+    # directory would resolve that include in this checkout instead), so a
+    # copied run tree builds this checkout's.
+    rm -rf "$M/build/ppsync"
+    cp -R "$PLAYPORT_REPO/build/ppsync" "$M/build/ppsync"
     # A moved freetype pin is not the tag of a clone made before the move.
     [ "$(git -C "$M/research/freetype" describe --tags --exact-match 2>/dev/null)" = "$FREETYPE_TAG" ] || {
         rm -rf "$M/research/freetype"

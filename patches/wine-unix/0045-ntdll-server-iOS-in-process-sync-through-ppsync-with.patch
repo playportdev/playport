@@ -1,0 +1,252 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Wed, 21 Oct 2026 11:44:05 +0200
+Subject: [PATCH] ntdll, server: iOS in-process sync through ppsync, with kicks
+ and freezes
+
+Wine's in-process synchronisation (inproc_sync) on iOS runs on
+build/ppsync, Playport's userspace stand-in for the ntsync driver, in
+place of Madeira's madsync. Fastsync (wine-unix 0015-0017) is dropped
+from the series: ppsync covers every waitable object and every kind of
+wait that fastsync's cells covered for events and semaphores alone.
+
+A thread waiting in ppsync is not in a server wait, so the three ways
+the server reaches a thread do not arrive. SIGUSR1 (a system APC) and
+SIGQUIT (its end) are never delivered on iOS, and there is no select
+reply to send. madsync had no replacement, so a named-pipe read whose
+completion APC was queued for a waiting thread returned no data
+(madeira-unix 0014), and RDR2's launcher could not reach its service
+(decision 0142). The server now tells ppsync directly:
+
+- queue_apc() kicks the thread when it queues a system APC, and
+  kill_thread() does when it ends the thread: the wait returns
+  ECANCELED with nothing consumed, and linux_wait_objs() makes a
+  zero-timeout server wait, which runs the APC (or ends the thread),
+  then waits again to the same deadline. An alertable wait that finds a
+  user APC there returns STATUS_USER_APC, as the alert object's path
+  does;
+- suspend_thread(), resume_thread(), suspend_process(),
+  resume_process() and new_thread tell ppsync whether the thread is
+  suspended. A suspended thread's in-process wait is not satisfied and
+  it does not leave one until resumed, as check_wait() keeps a
+  suspended thread's server wait.
+
+madsync_* become ppsync_*. Other platforms are unchanged.
+
+Class: feature
+Evidence: docs/plans/2026-10-21-ppsync.md (host tests: build/ppsync/ppsync_test.c; phone gates not run)
+Offered-upstream: no; the ntsync driver gets these from signals
+---
+ dlls/ntdll/unix/sync.c | 28 ++++++++++++++++++++++++----
+ server/inproc_sync.c   |  4 ++--
+ server/process.c       |  6 ++++++
+ server/thread.c        | 38 ++++++++++++++++++++++++++++++++++++--
+ server/thread.h        |  3 +++
+ 5 files changed, 71 insertions(+), 8 deletions(-)
+
+diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
+index 50203e7..5e257b1 100644
+--- a/dlls/ntdll/unix/sync.c
++++ b/dlls/ntdll/unix/sync.c
+@@ -434,8 +434,28 @@ static NTSTATUS linux_wait_objs( int device, DWORD count, const int *objs, WAIT_
+     if (type != WaitAll || count == 1) request = NTSYNC_IOC_WAIT_ANY;
+     else request = NTSYNC_IOC_WAIT_ALL;
+ 
++#ifdef WINE_IOS
++    for (;;)
++    {
++        ret = ioctl( device, request, &args );
++        if (ret < 0 && errno == EINTR) continue;
++        if (ret < 0 && errno == ECANCELED)
++        {
++            /* Playport (build/ppsync): the server queued a system APC for this
++             * thread, or is ending it, and no signal tells the thread. Nothing
++             * was consumed. A zero-timeout server wait runs the APC (or ends
++             * the thread); then wait again, to the same deadline. */
++            static const LARGE_INTEGER zero;
++            NTSTATUS status = server_wait( NULL, 0, SELECT_INTERRUPTIBLE | (alert_fd ? SELECT_ALERTABLE : 0), &zero );
++            if (status == STATUS_USER_APC) return status;
++            continue;
++        }
++        break;
++    }
++#else
+     do { ret = ioctl( device, request, &args ); }
+     while (ret < 0 && errno == EINTR);
++#endif
+ 
+     if (!ret)
+     {
+@@ -756,9 +776,9 @@ static NTSTATUS get_server_inproc_sync( HANDLE handle, struct inproc_sync *sync
+         {
+             sync->refcount = 1;
+ #ifdef WINE_IOS
+-            /* ml1058: the descriptor is a pseudo fd handed over in-process; see
+-             * build/madsync. Nothing travels over the socket. */
+-            sync->fd = madsync_take( GetCurrentProcessId(), wine_server_obj_handle( handle ) );
++            /* The descriptor is a pseudo fd handed over in-process; see
++             * build/ppsync. Nothing travels over the socket. */
++            sync->fd = ppsync_take( GetCurrentProcessId(), wine_server_obj_handle( handle ) );
+             if (sync->fd < 0) ret = STATUS_INVALID_HANDLE;
+ #else
+             obj_handle_t fd_handle;
+@@ -974,7 +994,7 @@ static int get_inproc_alert_fd(void)
+             {
+ #ifdef WINE_IOS
+                 (void)token;
+-                data->alert_fd = fd = madsync_take( GetCurrentProcessId(), reply->handle );
++                data->alert_fd = fd = ppsync_take( GetCurrentProcessId(), reply->handle );
+ #else
+                 data->alert_fd = fd = wine_server_receive_fd( &token );
+                 assert( token == reply->handle );
+diff --git a/server/inproc_sync.c b/server/inproc_sync.c
+index 0c10f1c..7fedefc 100644
+--- a/server/inproc_sync.c
++++ b/server/inproc_sync.c
+@@ -49,7 +49,7 @@ int get_inproc_device_fd(void)
+ {
+     static int fd = -2;
+ #ifdef WINE_IOS
+-    if (fd == -2) fd = madsync_enabled() ? MADSYNC_DEVICE_FD : -1;   /* ml1058: the userspace "driver" */
++    if (fd == -2) fd = ppsync_enabled() ? PPSYNC_DEVICE_FD : -1;   /* Playport: build/ppsync is the "driver" */
+ #else
+     if (fd == -2) fd = open( "/dev/ntsync", O_CLOEXEC | O_RDONLY );
+ #endif
+@@ -290,7 +290,7 @@ DECL_HANDLER(get_inproc_sync_fd)
+ 
+     if ((fd = get_obj_inproc_sync( obj, &reply->type )) < 0) set_error( STATUS_NOT_IMPLEMENTED );
+ #ifdef WINE_IOS
+-    else madsync_post( get_process_id( current->process ), req->handle, fd );   /* ml1058: no SCM_RIGHTS for a pseudo fd */
++    else ppsync_post( get_process_id( current->process ), req->handle, fd );   /* no SCM_RIGHTS for a pseudo fd */
+ #else
+     else send_client_fd( current->process, fd, req->handle );
+ #endif
+diff --git a/server/process.c b/server/process.c
+index 23ddab4..8e1f73d 100644
+--- a/server/process.c
++++ b/server/process.c
+@@ -1028,6 +1028,9 @@ void suspend_process( struct process *process )
+         {
+             struct thread *thread = LIST_ENTRY( ptr, struct thread, proc_entry );
+             if (!thread->bypass_proc_suspend && !thread->suspend) stop_thread( thread );
++#ifdef WINE_IOS
++            ios_ppsync_suspend_state( thread );
++#endif
+         }
+     }
+ }
+@@ -1043,6 +1046,9 @@ void resume_process( struct process *process )
+         LIST_FOR_EACH_SAFE( ptr, next, &process->thread_list )
+         {
+             struct thread *thread = LIST_ENTRY( ptr, struct thread, proc_entry );
++#ifdef WINE_IOS
++            ios_ppsync_suspend_state( thread );
++#endif
+             if (!thread->bypass_proc_suspend && !thread->suspend) wake_thread( thread );
+         }
+     }
+diff --git a/server/thread.c b/server/thread.c
+index f8902ec..fabc3c2 100644
+--- a/server/thread.c
++++ b/server/thread.c
+@@ -411,6 +411,29 @@ static inline int is_thread_suspended( struct thread *thread )
+     return !thread->bypass_proc_suspend && thread->process->suspend;
+ }
+ 
++#ifdef WINE_IOS
++/* Playport: ppsync (build/ppsync) waits happen in the client, where the
++ * server's usual means of reaching a thread (SIGUSR1 for a system APC or a
++ * suspension, SIGQUIT to end it, the select reply) do not arrive. So the
++ * server tells ppsync directly: a thread that is suspended is frozen (its wait
++ * is not satisfied and it does not leave one, as check_wait() refuses a
++ * suspended thread), and a thread with a system APC queued, or being ended, is
++ * kicked (its wait returns so that its next server call runs the APC or ends
++ * it). Nothing to do when the server hands out no in-process objects. */
++extern void ppsync_kick( unsigned int tid );
++extern void ppsync_freeze( unsigned int tid, int frozen );
++extern void ppsync_thread_gone( unsigned int tid );
++
++void ios_ppsync_suspend_state( struct thread *thread )
++{
++    /* The counts themselves, not is_thread_suspended(): a cooperative
++     * suspension is in a server wait, never in ppsync, and nothing refreshes
++     * the state when it ends. A dead thread was thawed by kill_thread(). */
++    if (get_inproc_device_fd() < 0 || thread->state == TERMINATED) return;
++    ppsync_freeze( thread->id, thread->suspend || (!thread->bypass_proc_suspend && thread->process->suspend) );
++}
++#endif
++
+ /* check if address looks valid for a client-side data structure (TEB etc.) */
+ static inline int is_valid_address( client_ptr_t addr )
+ {
+@@ -1013,6 +1036,7 @@ int suspend_thread( struct thread *thread )
+          * Idempotent: a no-op when the capture already claimed one. */
+         if (ios_real_suspend_enabled() && thread->suspend == 1)
+             ios_thread_mach_hold( thread );
++        ios_ppsync_suspend_state( thread );
+ #endif
+     }
+     else set_error( STATUS_SUSPEND_COUNT_EXCEEDED );
+@@ -1074,6 +1098,7 @@ int resume_thread( struct thread *thread )
+         }
+ #ifdef WINE_IOS
+         ios_drop_mach_capture( thread );
++        ios_ppsync_suspend_state( thread );
+ #endif
+         if (!is_thread_suspended( thread )) wake_thread( thread );
+     }
+@@ -1637,6 +1662,9 @@ static int queue_apc( struct process *process, struct thread *thread, struct thr
+ 
+     grab_object( apc );
+     list_add_tail( queue, &apc->entry );
++#ifdef WINE_IOS
++    if (queue == &thread->system_apc && get_inproc_device_fd() >= 0) ppsync_kick( thread->id );
++#endif
+     if (!list_prev( queue, &apc->entry ))  /* first one */
+     {
+         if (apc->call.type == APC_USER && thread->alert_sync)
+@@ -1788,6 +1816,9 @@ void kill_thread( struct thread *thread, int violent_death )
+     thread->state = TERMINATED;
+     thread->exit_time = current_time;
+     if (current == thread) current = NULL;
++#ifdef WINE_IOS
++    if (get_inproc_device_fd() >= 0) ppsync_thread_gone( thread->id );   /* no SIGQUIT reaches it */
++#endif
+     if (debug_level)
+         fprintf( stderr,"%04x: *killed* exit_code=%d\n",
+                  thread->id, thread->exit_code );
+@@ -1893,6 +1924,9 @@ DECL_HANDLER(new_thread)
+         thread->dbg_hidden = !!(req->flags & THREAD_CREATE_FLAGS_HIDE_FROM_DEBUGGER);
+         thread->bypass_proc_suspend = !!(req->flags & THREAD_CREATE_FLAGS_BYPASS_PROCESS_FREEZE);
+         add_process_thread( process, thread );
++#ifdef WINE_IOS
++        ios_ppsync_suspend_state( thread );   /* a reused thread id starts as this thread is */
++#endif
+         reply->tid = get_thread_id( thread );
+         if ((reply->handle = alloc_handle_no_access_check( current->process, thread,
+                                                            req->access, params.attr )))
+@@ -2617,8 +2651,8 @@ DECL_HANDLER(get_inproc_alert_fd)
+     {
+         reply->handle = get_thread_id( current ) | 1; /* arbitrary token */
+ #ifdef WINE_IOS
+-        { extern void madsync_post( unsigned int pid, unsigned int handle, int fd );
+-          madsync_post( get_process_id( current->process ), reply->handle, fd ); }   /* ml1058 */
++        { extern void ppsync_post( unsigned int pid, unsigned int handle, int fd );
++          ppsync_post( get_process_id( current->process ), reply->handle, fd ); }   /* no SCM_RIGHTS for a pseudo fd */
+ #else
+         send_client_fd( current->process, fd, reply->handle );
+ #endif
+diff --git a/server/thread.h b/server/thread.h
+index 50f543a..9322e41 100644
+--- a/server/thread.h
++++ b/server/thread.h
+@@ -179,6 +179,9 @@ extern void init_thread_context( struct thread *thread );
+ extern void get_thread_context( struct thread *thread, struct context_data *context, unsigned int flags );
+ extern void set_thread_context( struct thread *thread, const struct context_data *context, unsigned int flags );
+ extern int send_thread_signal( struct thread *thread, int sig );
++#ifdef WINE_IOS
++extern void ios_ppsync_suspend_state( struct thread *thread );
++#endif
+ 
+ extern unsigned int global_error;  /* global error code for when no thread is current */
+ 

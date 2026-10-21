@@ -32,10 +32,11 @@ final class CompatDefaultsTests: XCTestCase {
     }
 
     /// Every game's runtime keys (decision 0153, from RDR2's of decisions 0126, 0142, 0152, plus
-    /// the crash-reporter refusal): the address-space holdback, a 3,072 MiB heap, fastsync
-    /// semaphores, the x64 critical-section stubs and FEX's batch 2; and FEX without AFP, with
-    /// FPCR.FIZ from MXCSR.DAZ (decision 0154, from RDR2's of 0142).
-    static let everyGameRuntime = "jumbo-mb=8960 env.PLAYPORT_VK_HEAP_MB=3072 env.MADEIRA_FASTSYNC_SEM=1 "
+    /// the crash-reporter refusal): the address-space holdback, a 3,072 MiB heap, the x64
+    /// critical-section stubs and FEX's batch 2; and FEX without AFP, with FPCR.FIZ from
+    /// MXCSR.DAZ (decision 0154, from RDR2's of 0142). Its fastsync semaphores went with fastsync
+    /// (decision 0157): ppsync takes every semaphore in process.
+    static let everyGameRuntime = "jumbo-mb=8960 env.PLAYPORT_VK_HEAP_MB=3072 "
         + "env.MADEIRA_X64_CS_FASTPATH=1 env.MADEIRA_FEX_BATCH2=1 env.PLAYPORT_SC_BLOCK_CRASHPAD=1 "
         + "env.FEX_HOSTFEATURES=disableafp env.MADEIRA_FEX_AFPOFF_FPCR=fiz"
 
@@ -44,7 +45,7 @@ final class CompatDefaultsTests: XCTestCase {
     /// by key and keep the rest (decisions 0091, 0153).
     func testEveryGamesDefaultsAreTheLowestRuntimeKeys() throws {
         XCTAssertEqual(LaunchSettings.everyGame.runtime, Self.everyGameRuntime)
-        let every: [String: String] = ["jumbo-mb": "8960", "env.PLAYPORT_VK_HEAP_MB": "3072", "env.MADEIRA_FASTSYNC_SEM": "1",
+        let every: [String: String] = ["jumbo-mb": "8960", "env.PLAYPORT_VK_HEAP_MB": "3072",
                                        "env.MADEIRA_X64_CS_FASTPATH": "1", "env.MADEIRA_FEX_BATCH2": "1",
                                        "env.PLAYPORT_SC_BLOCK_CRASHPAD": "1", "env.FEX_HOSTFEATURES": "disableafp",
                                        "env.MADEIRA_FEX_AFPOFF_FPCR": "fiz"]
@@ -55,10 +56,10 @@ final class CompatDefaultsTests: XCTestCase {
         // A cohort title's own key (The Witcher 3's address-space hold) wins over everyGame's.
         XCTAssertEqual(plain.config(over: ["jumbo-mb": "32768", "cage-hold": "1"])["jumbo-mb"], "32768")
         // A person's key wins over all; everyGame's other keys stay.
-        let own = LaunchSettings(runtime: "env.MADEIRA_FASTSYNC_SEM=0 env.PLAYPORT_VK_HEAP_MB=0 env.MADEIRA_FEX_BATCH2=0")
+        let own = LaunchSettings(runtime: "inproc-sync=0 env.PLAYPORT_VK_HEAP_MB=0 env.MADEIRA_FEX_BATCH2=0")
             .over(LaunchSettings.overEveryGame(nil))
         let config = LaunchSettings.resolve(game: own, global: LaunchSettings()).config(over: ["jumbo-mb": "32768"])
-        XCTAssertEqual(config, ["jumbo-mb": "32768", "env.PLAYPORT_VK_HEAP_MB": "0", "env.MADEIRA_FASTSYNC_SEM": "0",
+        XCTAssertEqual(config, ["jumbo-mb": "32768", "env.PLAYPORT_VK_HEAP_MB": "0", "inproc-sync": "0",
                                 "env.MADEIRA_X64_CS_FASTPATH": "1", "env.MADEIRA_FEX_BATCH2": "0",
                                 "env.PLAYPORT_SC_BLOCK_CRASHPAD": "1", "env.FEX_HOSTFEATURES": "disableafp",
                                 "env.MADEIRA_FEX_AFPOFF_FPCR": "fiz"])

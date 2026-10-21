@@ -16,8 +16,10 @@
  *                         suspended thread's server wait is never woken; a
  *                         frozen thread leaving a wait blocks until thawed.
  *   ppsync_thread_gone( tid )
- *                         the thread is dead to the server: thaw and kick it,
- *                         and forget its state so a reused id starts clean.
+ *                         the thread is dead to the server: thaw and kick it.
+ *                         The kick stays on the id's record, so a new thread
+ *                         that reuses the id may see one spurious ECANCELED
+ *                         (one extra zero-timeout server wait).
  *
  * `tid' is the Windows thread id, the `owner' of ntsync_wait_args. */
 #ifndef PPSYNC_H

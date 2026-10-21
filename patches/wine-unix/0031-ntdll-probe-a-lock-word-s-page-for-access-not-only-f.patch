@@ -22,7 +22,7 @@ Offered-upstream: no
  1 file changed, 30 insertions(+), 6 deletions(-)
 
 diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
-index 694e467..5ba275c 100644
+index 0aa20aa..2072089 100644
 --- a/dlls/ntdll/unix/sync.c
 +++ b/dlls/ntdll/unix/sync.c
 @@ -56,7 +56,9 @@
@@ -35,7 +35,7 @@ index 694e467..5ba275c 100644
  #endif
  #ifdef HAVE_KQUEUE
  # include <sys/event.h>
-@@ -4956,6 +4958,28 @@ static void ios_shared_futex_wake( const void *addr, int all )
+@@ -3939,6 +3941,28 @@ static void ios_shared_futex_wake( const void *addr, int all )
          NtAlertThreadByThreadId( (HANDLE)(ULONG_PTR)tids[i] );
  }
  
@@ -64,7 +64,7 @@ index 694e467..5ba275c 100644
  void ios_wpm_reap_shared( unsigned long long mutex_addr, unsigned int depth, unsigned long long dead_teb )
  {
      volatile LONG *futex = (volatile LONG *)(ULONG_PTR)mutex_addr;
-@@ -4964,7 +4988,7 @@ void ios_wpm_reap_shared( unsigned long long mutex_addr, unsigned int depth, uns
+@@ -3947,7 +3971,7 @@ void ios_wpm_reap_shared( unsigned long long mutex_addr, unsigned int depth, uns
      if (!mutex_addr || (mutex_addr & 3) || mutex_addr >= 0x8000000000ULL) return;
      {
          char *page = (char *)((ULONG_PTR)mutex_addr & ~0x3fffULL);
@@ -73,7 +73,7 @@ index 694e467..5ba275c 100644
      }
      do
      {
-@@ -5000,7 +5024,7 @@ void ios_srw_reap_exclusive( unsigned long long lock_addr, unsigned long long de
+@@ -3983,7 +4007,7 @@ void ios_srw_reap_exclusive( unsigned long long lock_addr, unsigned long long de
      if (!lock_addr || (lock_addr & 3) || lock_addr >= 0x8000000000ULL) return;
      {
          char *page = (char *)((ULONG_PTR)lock_addr & ~0x3fffULL);
@@ -82,7 +82,7 @@ index 694e467..5ba275c 100644
      }
      do
      {
-@@ -5122,9 +5146,9 @@ void ios_alert_waiter_dump(void)
+@@ -4105,9 +4129,9 @@ void ios_alert_waiter_dump(void)
                      ULONG_PTR row = base + line * 0x40;
                      unsigned long long *w = rows[line];
                      char *page = (char *)(row & ~0x3fffULL);
@@ -94,7 +94,7 @@ index 694e467..5ba275c 100644
                      memcpy( w, (void *)row, 0x40 );
                      have_rows[line] = 1;
                      dprintf( 2, "[hot-lock]  %p: %016llx %016llx %016llx %016llx %016llx %016llx %016llx %016llx\n",
-@@ -5171,7 +5195,7 @@ void ios_alert_waiter_dump(void)
+@@ -4154,7 +4178,7 @@ void ios_alert_waiter_dump(void)
          {
              ULONG_PTR al = (ULONG_PTR)a & ~3ULL;
              char *page = (char *)(al & ~0x3fffULL);
@@ -103,7 +103,7 @@ index 694e467..5ba275c 100644
              {
                  w0 = *(volatile unsigned int *)al;
                  if (((al + 4) & ~0x3fffULL) == (ULONG_PTR)page)
-@@ -5209,7 +5233,7 @@ void ios_orphan_check( const unsigned long long *live_stamps, int nstamps )
+@@ -4192,7 +4216,7 @@ void ios_orphan_check( const unsigned long long *live_stamps, int nstamps )
          if (nsame < 3) continue;
          {
              char *page = (char *)((ULONG_PTR)lock & ~0x3fffULL);

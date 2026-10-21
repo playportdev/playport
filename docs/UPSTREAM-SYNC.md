@@ -22,7 +22,8 @@ file) to `$PLAYPORT_BUILD/sync/watch-<sha8>/`. It lists, oldest first:
 
 - **Madeira's own commits** past the pin that touch a path the build
   compiles or stages (`MADEIRA_BUILT` in `tools/sync.py`: `build/ntdll-unix`,
-  `build/wineserver`, `build/win32u-unix`, `build/madsync`,
+  `build/wineserver`, `build/win32u-unix`, `build/madsync` (no longer built:
+  ppsync grew from it, so a madsync fix may be worth porting),
   `build/madeira_cfg.h`, the GnuTLS and FreeType builds, Winios) or a file
   `patches/madeira-unix` or `patches/madeira-winios` patches. The rest are
   counted, not listed.
@@ -77,8 +78,9 @@ never hand-edited ([0053](decisions/0053-carrying-model.md)):
   `Class:`, `Evidence:` and `Offered-upstream:`. Keep the original author.
 - Branch `madeira-main` holds Madeira `bbbf8d0` re-ported onto Playport's
   bases (2026-10-06); its patches are often the shortest route. Fastsync came
-  that way: `patches/wine-unix` 0015–0017 and `patches/madeira-unix` 0081
-  ([evidence](evidence/2026-10-06-fastsync-on-8c050d0.md)).
+  that way, as `patches/wine-unix` 0015–0017 and `patches/madeira-unix` 0081
+  ([evidence](evidence/2026-10-06-fastsync-on-8c050d0.md)), until ppsync
+  replaced it (decision 0157).
 - Build, `pp test`, and the device gate on both cohort titles, as for any
   patch.
 

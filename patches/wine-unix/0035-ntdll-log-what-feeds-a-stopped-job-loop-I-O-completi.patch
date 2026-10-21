@@ -95,7 +95,7 @@ index daeaabf..ee712a5 100644
          add_completion( handle, cvalue, status, total, ret_status == STATUS_PENDING );
      return ret_status;
 diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
-index e44597a..2d9d29b 100644
+index 2996017..29468c6 100644
 --- a/dlls/ntdll/unix/sync.c
 +++ b/dlls/ntdll/unix/sync.c
 @@ -76,6 +76,9 @@
@@ -108,7 +108,7 @@ index e44597a..2d9d29b 100644
  
  HANDLE keyed_event = 0;
  int inproc_device_fd = -1;
-@@ -2257,6 +2260,9 @@ NTSTATUS WINAPI NtSetEvent( HANDLE handle, LONG *prev_state )
+@@ -1318,6 +1321,9 @@ NTSTATUS WINAPI NtSetEvent( HANDLE handle, LONG *prev_state )
  
      TRACE( "handle %p, prev_state %p\n", handle, prev_state );
      IOS_COUNT( __sync_fetch_and_add( &ios_xp_set_event, 1 ) );   /* ml1131 */
@@ -116,9 +116,9 @@ index e44597a..2d9d29b 100644
 +    if (WARN_ON(iolog)) iolog_event_op( handle, 's' );
 +#endif
  
- #ifdef WINE_IOS
-     switch (madeira_fast_event_op( handle, 1, prev_state ))
-@@ -2307,6 +2313,9 @@ NTSTATUS WINAPI NtResetEvent( HANDLE handle, LONG *prev_state )
+     if ((ret = inproc_set_event( handle, prev_state )) != STATUS_NOT_IMPLEMENTED)
+         return ret;
+@@ -1352,6 +1358,9 @@ NTSTATUS WINAPI NtResetEvent( HANDLE handle, LONG *prev_state )
  
      TRACE( "handle %p, prev_state %p\n", handle, prev_state );
      IOS_COUNT( __sync_fetch_and_add( &ios_xp_reset_event, 1 ) );   /* ml1131 */
@@ -126,9 +126,9 @@ index e44597a..2d9d29b 100644
 +    if (WARN_ON(iolog)) iolog_event_op( handle, 'r' );
 +#endif
  
- #ifdef WINE_IOS
-     /* a reset releases nobody: the cell update is the whole operation */
-@@ -2347,6 +2356,9 @@ NTSTATUS WINAPI NtPulseEvent( HANDLE handle, LONG *prev_state )
+     if ((ret = inproc_reset_event( handle, prev_state )) != STATUS_NOT_IMPLEMENTED)
+         return ret;
+@@ -1387,6 +1396,9 @@ NTSTATUS WINAPI NtPulseEvent( HANDLE handle, LONG *prev_state )
  
      TRACE( "handle %p, prev_state %p\n", handle, prev_state );
      IOS_COUNT( __sync_fetch_and_add( &ios_xp_pulse_event, 1 ) );   /* ml1131 */
@@ -138,7 +138,7 @@ index e44597a..2d9d29b 100644
  
      if ((ret = inproc_pulse_event( handle, prev_state )) != STATUS_NOT_IMPLEMENTED)
          return ret;
-@@ -3594,6 +3606,398 @@ static void waitlog_end( const HANDLE *handles, NTSTATUS status, ULONGLONG start
+@@ -2634,6 +2646,398 @@ static void waitlog_end( const HANDLE *handles, NTSTATUS status, ULONGLONG start
                      (unsigned int)(ticks / TICKSPERSEC), (unsigned int)(ticks % TICKSPERSEC / (TICKSPERSEC / 10)) );
  }
  
@@ -537,7 +537,7 @@ index e44597a..2d9d29b 100644
  static NTSTATUS wait_for_multiple_objects( DWORD count, const HANDLE *handles, WAIT_TYPE type,
                                             BOOLEAN alertable, const LARGE_INTEGER *timeout );
  static NTSTATUS wait_for_single_object( HANDLE handle, BOOLEAN alertable, const LARGE_INTEGER *timeout );
-@@ -3607,6 +4011,11 @@ NTSTATUS WINAPI NtWaitForMultipleObjects( DWORD count, const HANDLE *handles, WA
+@@ -2647,6 +3051,11 @@ NTSTATUS WINAPI NtWaitForMultipleObjects( DWORD count, const HANDLE *handles, WA
      ULONGLONG start;
      NTSTATUS ret;
  
@@ -549,7 +549,7 @@ index e44597a..2d9d29b 100644
      if (!WARN_ON(waitlog) || !count || count > MAXIMUM_WAIT_OBJECTS ||
          !waitlog_start( count, handles, type, alertable, timeout ))
          return wait_for_multiple_objects( count, handles, type, alertable, timeout );
-@@ -3616,18 +4025,19 @@ NTSTATUS WINAPI NtWaitForMultipleObjects( DWORD count, const HANDLE *handles, WA
+@@ -2656,18 +3065,19 @@ NTSTATUS WINAPI NtWaitForMultipleObjects( DWORD count, const HANDLE *handles, WA
      return ret;
  }
  
@@ -573,7 +573,7 @@ index e44597a..2d9d29b 100644
      if (!WARN_ON(waitlog) || !waitlog_start( 1, &handle, WaitAny, alertable, timeout ))
          return wait_for_single_object( handle, alertable, timeout );
      start = monotonic_counter();
-@@ -3719,10 +4129,14 @@ NTSTATUS WINAPI NtWaitForMultipleObjects( DWORD count, const HANDLE *handles, WA
+@@ -2729,10 +3139,14 @@ NTSTATUS WINAPI NtWaitForMultipleObjects( DWORD count, const HANDLE *handles, WA
  }
  
  
@@ -588,7 +588,7 @@ index e44597a..2d9d29b 100644
  {
      union select_op select_op;
      UINT flags = SELECT_INTERRUPTIBLE;
-@@ -3876,6 +4290,9 @@ NTSTATUS WINAPI NtDelayExecution( BOOLEAN alertable, const LARGE_INTEGER *timeou
+@@ -2859,6 +3273,9 @@ NTSTATUS WINAPI NtDelayExecution( BOOLEAN alertable, const LARGE_INTEGER *timeou
  
      IOS_ECO_POLL();   /* ml1133 */
  
@@ -598,7 +598,7 @@ index e44597a..2d9d29b 100644
      if (ios_counters_on)
      {   /* ml1131: requested delay: 0, < 1 ms, < 5 ms, < 20 ms, >= 20 ms, infinite */
          long long d = (!timeout || timeout->QuadPart == TIMEOUT_INFINITE) ? -1
-@@ -4311,6 +4728,9 @@ NTSTATUS WINAPI NtSetIoCompletion( HANDLE handle, ULONG_PTR key, ULONG_PTR value
+@@ -3294,6 +3711,9 @@ NTSTATUS WINAPI NtSetIoCompletion( HANDLE handle, ULONG_PTR key, ULONG_PTR value
          ret = wine_server_call( req );
      }
      SERVER_END_REQ;
@@ -608,7 +608,7 @@ index e44597a..2d9d29b 100644
      return ret;
  }
  
-@@ -4364,11 +4784,54 @@ static unsigned int ios_poll_completion_wait( HANDLE wait_handle )
+@@ -3347,11 +3767,54 @@ static unsigned int ios_poll_completion_wait( HANDLE wait_handle )
  }
  #endif
  
@@ -663,7 +663,7 @@ index e44597a..2d9d29b 100644
  {
      HANDLE wait_handle = NULL;
      unsigned int status;
-@@ -4414,11 +4877,16 @@ NTSTATUS WINAPI NtRemoveIoCompletion( HANDLE handle, ULONG_PTR *key, ULONG_PTR *
+@@ -3397,11 +3860,16 @@ NTSTATUS WINAPI NtRemoveIoCompletion( HANDLE handle, ULONG_PTR *key, ULONG_PTR *
  }
  
  
@@ -681,10 +681,10 @@ index e44597a..2d9d29b 100644
      HANDLE wait_handle = NULL;
      unsigned int status;
 diff --git a/dlls/ntdll/unix/unix_private.h b/dlls/ntdll/unix/unix_private.h
-index 0969ffa..923d70d 100644
+index a762cf2..742fea0 100644
 --- a/dlls/ntdll/unix/unix_private.h
 +++ b/dlls/ntdll/unix/unix_private.h
-@@ -530,6 +530,14 @@ static inline BOOL is_ec_code( ULONG_PTR ptr )
+@@ -523,6 +523,14 @@ static inline BOOL is_ec_code( ULONG_PTR ptr )
      if (!map) return FALSE;
      return (map[page / 64] >> (page & 63)) & 1;
  }

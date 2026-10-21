@@ -26,10 +26,10 @@ Offered-upstream: no
  1 file changed, 24 insertions(+), 2 deletions(-)
 
 diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
-index 7a5cb18..694e467 100644
+index 604b6b2..0aa20aa 100644
 --- a/dlls/ntdll/unix/sync.c
 +++ b/dlls/ntdll/unix/sync.c
-@@ -5113,21 +5113,43 @@ void ios_alert_waiter_dump(void)
+@@ -4096,21 +4096,43 @@ void ios_alert_waiter_dump(void)
              hot_dumps++;
              {
                  ULONG_PTR base = ((ULONG_PTR)a & ~0xfULL) - 0x100;

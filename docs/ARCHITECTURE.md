@@ -27,7 +27,7 @@ do not apply on iOS:
 | FEX Linux UnixLib (prctl hardware TSO and unaligned atomics, THP, VMA names) | Linux-only kernel interfaces. iOS has no separate FEX UnixLib; its entry points are no-ops (`patches/fex-port` 0030). |
 | `-march=armv8.2-a -mtune=cortex-x3` | Tuning for Snapdragon/Cortex. Apple cores need their own check. |
 | `-marm64x` for DXVK/vkd3d-proton | ARM64X serves native ARM64 callers. All guests are x86. Revisit only if native ARM64 Windows games come into scope. |
-| fsync/ntsync, the Steam runtime, `PROTON_USE_ARM64` paths, `SilentLog`/`PROTON_LOG`, NVAPI | Linux launcher, driver or GPU specifics. In-process sync is fastsync, carried as Playport patches and on by default (0054); madsync stays off (0023). |
+| fsync/ntsync, the Steam runtime, `PROTON_USE_ARM64` paths, `SilentLog`/`PROTON_LOG`, NVAPI | Linux launcher, driver or GPU specifics. In-process sync is ppsync, Playport's userspace ntsync driver ([below](#in-process-sync), 0157, proposed). |
 | FEX `client.json`/`steamwebhelper.json` app configs | These target the Linux Steam client. Playport's Steam client is native Swift. |
 | Valve Wine AVX/YMM contexts, SVE state | FEX on iOS advertises no AVX (`patches/fex-port` 0009), and Apple CPUs have no SVE (0018). |
 | `MIMALLOC_DISABLE_REDIRECT` for Teardown (1167630) | Per-game data, not an ARM default. Carry it only if Teardown is played. |
@@ -1198,16 +1198,27 @@ default (decision 0106), `vulkan-vram-plan = 0` turns both off for a title. Opt-
 by default: `vram-budget-event = 1` signals DXGI's budget-change event when the ml1075
 trim moves the budget (it hung RDR2 when it never fired).
 
-**`inproc-sync` is off by default**
-([madeira-unix 0014](../patches/madeira-unix/0014-madsync-make-in-process-sync-opt-in.patch)).
-With Madeira's in-process NT sync (madsync) on, a thread blocked in madsync
-never makes the server wait that would run a system APC. iOS delivers no
-`SIGUSR1`, so the asynchronous completion that copies a named-pipe read's data
-never runs and the read returns 0 bytes. `inproc-sync = 1` turns it back on for experiments
-(wine-unix 0006 fixed its crash at start on the wine-11.18 port). It stays off
-([decision 0023](decisions/0023-in-process-sync-stays-off.md)): the server's
-round trips are under 1 % of Hollow Knight's main thread, and The Witcher 3's
-frame is GPU-bound. `pp perf`'s `server.txt` has the requests per frame.
+### In-process sync
+
+Wine's in-process NT synchronisation (`inproc_sync`, written for the Linux
+ntsync driver) runs on **ppsync**, Playport's userspace driver
+([build/ppsync/README.md](../build/ppsync/README.md); `patches/wine-unix` 0045,
+`patches/madeira-unix` 0220; [decision 0157](decisions/0157-ppsync.md),
+proposed). Every event, mutex, semaphore and server-signalled object (process,
+thread, timer, queue, file) is waited on and signalled without a wineserver
+round trip. Objects have their own locks, and wait-all takes a global one.
+
+The server reaches a thread waiting in ppsync where Linux would signal it.
+When it queues a system APC or ends the thread, it kicks the thread: the wait
+returns, and a zero-timeout server wait runs the APC or ends the thread. When
+it suspends the thread, it freezes it: its wait is not satisfied, as
+`check_wait` refuses a suspended thread.
+
+ppsync is on by default. `inproc-sync = 0` (a title's runtime keys) or
+Settings › Developer › In-process sync turns it off, back to server waits.
+`pp perf`'s `server.txt` has the requests per frame. It replaced Madeira's
+madsync, which was off because system APCs never ran in its waits (decisions
+0023, 0142), and fastsync's event and semaphore cells (0054).
 
 ### Guest network tables
 

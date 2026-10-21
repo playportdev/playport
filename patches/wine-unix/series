@@ -13,9 +13,6 @@
 0012-ntdll-convert-an-i386-child-s-socket-buffers-through.patch
 0013-ws2_32-convert-an-i386-child-s-resolver-pointers-thr.patch
 0014-win32u-answer-NtUserSetCursor-for-the-cursor-the-thr.patch
-0015-server-iOS-opt-in-fastsync-cells-for-events-and-sema.patch
-0016-ntdll-iOS-opt-in-fastsync-client-for-events-and-sema.patch
-0017-include-list-wine-madeira_fastsync.h-so-makedep-can-.patch
 0018-ntdll-iOS-run-pending-system-APCs-when-a-thread-poll.patch
 0019-nsiproxy-serve-iOS-adapter-and-IPv4-IPv6-route-snaps.patch
 0020-ntdll-iOS-one-default-keyed-event-per-pseudo-process.patch
@@ -43,4 +40,5 @@
 0042-ntdll-log-a-process-s-first-firmware-table-queries-a.patch
 0043-ntdll-build-Apple-silicon-s-processor-topology-from-.patch
 0044-win32u-log-a-Vulkan-surface-s-driver-and-given-exten.patch
+0045-ntdll-server-iOS-in-process-sync-through-ppsync-with.patch
 0200-win32u-a-thread-that-presents-through-Vulkan-takes-t.patch
