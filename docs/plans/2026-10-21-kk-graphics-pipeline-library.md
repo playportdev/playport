@@ -36,7 +36,7 @@ from the main checkout after the branch moves there. **Pins read:** `mesa` b39d1
     - flag-on runs stopped after one launch, as the task required on `link FAIL`.
   - Evidence: [2026-10-21-kk-gpl-host](../evidence/2026-10-21-kk-gpl-host.md),
     [2026-10-22-kk-gpl-phone](../evidence/2026-10-22-kk-gpl-phone.md).
-- **Running:** none.
+- **Running:** G5c writer (the separate link's point size against the topology class, then G5 again on Hollow Knight), main checkout; report `.work/agent-notes/kk-gpl/reports/g5c.md`.
 - **Settled (owner away, supervisor, 2026-10-22):** Portal 2 is not installed for G5 (7.9 GB free); the G5 evidence is Hollow Knight, played into King's Pass. D3D12 is not checked (RDR2 would change its saved API).
 - **Queue:** G6 is blocked: the flag stays off. First a fix for the separate link's point size,
   then G5 again on Hollow Knight (two flag-on launches into King's Pass). The fix needs a choice:
