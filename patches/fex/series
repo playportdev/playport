@@ -58,3 +58,4 @@
 0057-ARM64EC-calls-into-ARM64EC-code-return-to-the-JIT-wi.patch
 0058-ARM64EC-the-loop-top-loads-the-EC-code-bitmap-pointe.patch
 0059-ARM64EC-a-leaner-ExitFunctionEC-for-the-JIT-s-own-ex.patch
+0060-ARM64EC-MADEIRA_FEX_EC_CALLRET_POP-1-pops-an-indirec.patch

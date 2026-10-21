@@ -1,9 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: The Playport authors <dev@playport.dev>
 Date: Wed, 21 Oct 2026 02:03:21 +0200
-Subject: [PATCH 52/52] ntdll: MADEIRA_X64_ONCE_FASTPATH=1 answers an x64
- module's InitOnceExecuteOnce on a completed INIT_ONCE without leaving the
- emulator
+Subject: [PATCH] ntdll: MADEIRA_X64_ONCE_FASTPATH=1 answers an x64 module's
+ InitOnceExecuteOnce on a completed INIT_ONCE without leaving the emulator
 
 After the critical sections (0050), RDR2's next non-Vulkan x64->EC
 transition is kernelbase's InitOnceExecuteOnce, about 25,000 calls a
@@ -27,7 +26,7 @@ Offered-upstream: no; the transition cost is the iOS port's
  1 file changed, 93 insertions(+)
 
 diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
-index adffb8a..4b018f6 100644
+index 4c85161..3535ab5 100644
 --- a/dlls/ntdll/loader.c
 +++ b/dlls/ntdll/loader.c
 @@ -1558,6 +1558,97 @@ static void *x64_cs_stub_for( HMODULE importer, const char *name, void *target )

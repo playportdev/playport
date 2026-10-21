@@ -1,0 +1,69 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Wed, 21 Oct 2026 02:34:21 +0200
+Subject: [PATCH] kk: MESA_KK_SAFE_MATH=1 builds shader libraries with safe
+ math and precise functions
+
+KosmicKrisp builds every MSL library with Metal's fast math and fast
+floating-point functions. Fast math may assume no NaN, Inf or signed
+zero, so max() and saturate() can lose the NaN filtering D3D-derived
+shaders rely on, and pow, exp and rsqrt may be approximations.
+
+RDR2 shows Arthur's beard and hair speckled pale white, with the ear a
+flat saturated red, in bright light only. MESA_KK_SAFE_MATH=1 (off by
+default) builds the game's libraries with MTL_MATH_MODE_SAFE and
+MTL_MATH_FLOATING_POINT_FUNCTIONS_PRECISE, as an A/B for that look.
+Libraries are always built from MSL, so no cached binary carries the
+other mode.
+
+Linear: PLA-413
+Class: diagnostics
+Evidence: docs/evidence/2026-10-21-rdr2-cs-fastpath-and-heap.md
+Offered-upstream: no
+---
+ src/kosmickrisp/vulkan/kk_shader.c | 21 +++++++++++++++++++--
+ 1 file changed, 19 insertions(+), 2 deletions(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_shader.c b/src/kosmickrisp/vulkan/kk_shader.c
+index 6b6b1e6..b1b21ab 100644
+--- a/src/kosmickrisp/vulkan/kk_shader.c
++++ b/src/kosmickrisp/vulkan/kk_shader.c
+@@ -2090,10 +2090,25 @@ struct kk_library_build {
+    struct mtl_build_error error;
+ };
+ 
++/* Playport: MESA_KK_SAFE_MATH=1 builds the game's shader libraries with
++ * Metal's safe math and precise floating-point functions instead of fast
++ * math, which may assume no NaN, Inf or signed zero and drop the NaN
++ * filtering of max() and saturate() that D3D-derived shaders rely on. An A/B
++ * for RDR2's white-speckled hair and red ear in bright light. */
++static bool
++kk_safe_math(void)
++{
++   static int safe = -1;
++   if (safe < 0)
++      safe = debug_get_bool_option("MESA_KK_SAFE_MATH", false) ? 1 : 0;
++   return safe;
++}
++
+ static void
+ kk_build_library(struct kk_library_build *build)
+ {
+    struct kk_physical_device *pdev = kk_device_physical(build->device);
++   const bool safe_math = kk_safe_math();
+    const int64_t start = os_time_get_nano();
+    int64_t attempt_start;
+    do {
+@@ -2101,8 +2116,10 @@ kk_build_library(struct kk_library_build *build)
+       memset(&build->error, 0, sizeof(build->error));
+       build->library = mtl_new_library(
+          build->device->mtl_compiler_handle, build->data->code,
+-         pdev->info.msl_version, MTL_MATH_MODE_FAST,
+-         MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST,
++         pdev->info.msl_version,
++         safe_math ? MTL_MATH_MODE_SAFE : MTL_MATH_MODE_FAST,
++         safe_math ? MTL_MATH_FLOATING_POINT_FUNCTIONS_PRECISE
++                   : MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST,
+          KK_EXPERIMENTAL(LIBRARY_SIZE_OPT), &build->error);
+    } while (build->library == NULL &&
+             kk_retry_build(build->kind, build->step, build->src,

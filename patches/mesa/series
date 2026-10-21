@@ -60,3 +60,5 @@
 0063-kk-MESA_KK_FRAME_PROBE_S-logs-draws-and-scans-for-pr.patch
 0064-kk-PLAYPORT_VK_HEAP_MB-reports-a-smaller-device-loca.patch
 0080-kk-MESA_KK_DEBUG-gpu-logs-GPU-time-frames-and-presen.patch
+0081-kk-keep-the-depth-stencil-states-compiled-for-dynami.patch
+0082-kk-MESA_KK_SAFE_MATH-1-builds-shader-libraries-with-.patch

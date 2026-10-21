@@ -1,0 +1,121 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Wed, 21 Oct 2026 02:20:28 +0200
+Subject: [PATCH] ARM64EC: MADEIRA_FEX_EC_CALLRET_POP=1 pops an indirect CALL's
+ call-ret entry in EnterEC on iOS
+
+An indirect guest CALL that reaches ARM64EC code goes through the
+dispatcher with BLR after pushing a call-ret entry (its return address
+and the host label after the BLR). The callee returns through
+EnterEC, which on iOS never pops that entry: Madeira dropped
+upstream's opportunistic pop while its host-PC leak was open. Each
+such call then leaves one entry behind, and every guest RET above it
+pops the wrong one and misses, until the live-window guard resets the
+stack. RDR2 makes about 500,000 x64->EC calls a second; a worker in
+run pB2 had 64,878 net entries leaked.
+
+With MADEIRA_FEX_EC_CALLRET_POP=1 (off by default), EnterEC does what
+upstream's does: when the top entry is for the address being returned
+to, it pops it, writes the pointer back to the frame and returns to
+its host label with RET, the predictor entry the BLR pushed. The trap
+flag, a stack outside the live window, another address and a (0,0)
+entry fall through to the existing path. "FEX: ec-callret-pop
+enabled=" is logged at process start.
+
+Linear: PLA-364
+Class: feature
+Evidence: docs/evidence/2026-10-21-rdr2-cs-fastpath-and-heap.md
+Offered-upstream: no; upstream already pops here
+---
+ .../Core/ArchHelpers/Arm64Emitter.cpp         |  1 +
+ .../Interface/Core/ArchHelpers/Arm64Emitter.h |  4 ++++
+ .../Interface/Core/Dispatcher/Dispatcher.cpp  | 24 +++++++++++++++++++
+ Source/Windows/ARM64EC/Module.cpp             |  6 +++++
+ 4 files changed, 35 insertions(+)
+
+diff --git a/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.cpp b/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.cpp
+index 9bdd9c6..3072385 100644
+--- a/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.cpp
++++ b/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.cpp
+@@ -26,6 +26,7 @@
+ #if defined(FEX_IOS_HOST) && defined(ARCHITECTURE_arm64ec)
+ // Set by ARM64EC/Module.cpp before the dispatcher is emitted. See IosEcReturnWithRet in Arm64Emitter.h.
+ extern "C" uint32_t IosEcReturnWithRet = 0;
++extern "C" uint32_t IosEcCallRetPop = 0;
+ #endif
+ 
+ #ifdef FEX_IOS_HOST
+diff --git a/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.h b/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.h
+index 10d9fb1..6a9acc6 100644
+--- a/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.h
++++ b/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.h
+@@ -115,6 +115,10 @@ extern "C" uint32_t IosTebTsdOffset;
+ // as well and EnterEC enters an L1 hit with RET: each call pushes one entry and its return pops it.
+ // Set by the frontend before the dispatcher is emitted; 0 keeps BR and the loop-top re-entry.
+ extern "C" uint32_t IosEcReturnWithRet;
++// Playport: EnterEC pops the call-ret entry an indirect guest CALL into ARM64EC code pushed, when it is for
++// the address being returned to (Dispatcher.cpp). Set by the frontend before the dispatcher is emitted
++// (MADEIRA_FEX_EC_CALLRET_POP=1); 0 leaves the call-ret stack alone there, as Madeira did.
++extern "C" uint32_t IosEcCallRetPop;
+ #endif
+ 
+ constexpr uint64_t EC_CODE_BITMAP_MAX_ADDRESS = 1ULL << 47;
+diff --git a/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp b/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
+index 012ee4b..78169a0 100644
+--- a/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
++++ b/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
+@@ -191,6 +191,30 @@ void Dispatcher::EmitDispatcher() {
+    * DllMain at unix_calls=4523 (same shape as the dispatcher-guard regression
+    * in feedback_fex_dispatcher_guard_regression.md). Reverted. The host-PC
+    * leak needs a different angle. */
++  if (IosEcCallRetPop) {
++    // Playport: an indirect guest CALL into ARM64EC code pushed a call-ret entry (its return address and the
++    // host label after its BLR) and the callee returns here, so pop it as upstream's EnterEC does: when the
++    // top entry is for this return address, return to its host label with RET, the predictor entry that
++    // BLR pushed. Without it each such call leaves one entry behind, and every guest RET above it pops the
++    // wrong one and misses. The trap flag, a reset stack, another address or a (0,0) entry fall through.
++    ARMEmitter::ForwardLabel l_NoPop;
++    ldrb(TMP1, STATE_PTR(CpuStateFrame, State.flags[X86State::RFLAG_TF_RAW_LOC]));
++    (void)cbnz(ARMEmitter::Size::i32Bit, TMP1, &l_NoPop);
++    // The live-window guard of the CALL and RET sites (BranchOps.cpp): out of it, leave the stack alone.
++    ldr(TMP1, STATE, offsetof(FEXCore::Core::CpuStateFrame, State.callret_sp_base));
++    add(ARMEmitter::Size::i64Bit, TMP1, TMP1, FEXCore::Core::InternalThreadState::CALLRET_LIVE_OFFSET);
++    sub(ARMEmitter::Size::i64Bit, TMP1, REG_CALLRET_SP, TMP1);
++    lsr(ARMEmitter::Size::i64Bit, TMP1, TMP1, FEXCore::Core::InternalThreadState::CALLRET_LIVE_SHIFT);
++    (void)cbnz(ARMEmitter::Size::i64Bit, TMP1, &l_NoPop);
++    ldp<ARMEmitter::IndexType::OFFSET>(TMP1, TMP2, REG_CALLRET_SP);
++    sub(ARMEmitter::Size::i64Bit, TMP1, TMP1, EC_CALL_CHECKER_PC_REG);
++    (void)cbnz(ARMEmitter::Size::i64Bit, TMP1, &l_NoPop);
++    (void)cbz(ARMEmitter::Size::i64Bit, TMP2, &l_NoPop);
++    add(ARMEmitter::Size::i64Bit, REG_CALLRET_SP, REG_CALLRET_SP, 0x10);
++    str(REG_CALLRET_SP, STATE, offsetof(FEXCore::Core::CpuStateFrame, State.callret_sp));
++    ret(TMP2);
++    (void)Bind(&l_NoPop);
++  }
+   if (IosEcReturnWithRet) {
+     // An L1 hit is a block compiled for this address, never ARM64EC code: enter it with RET, which pops the
+     // predictor entry the guest CALL pushed when it left the JIT with BLR. The trap flag, a miss and an
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index 815499a..661a33b 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -94,6 +94,7 @@ static uint64_t IosEcCodeBitMapValue = 0;
+ extern "C" uint64_t IosFfsBypassLog[4];
+ /* Defined in FEXCore Arm64Emitter.cpp; read when the dispatcher and blocks are emitted. */
+ extern "C" uint32_t IosEcReturnWithRet;
++extern "C" uint32_t IosEcCallRetPop;
+ 
+ /* Raw TSD byte offset (from TPIDRRO_EL0 & ~7) of the slot holding the TEB.
+  * Discovered and published by wine's ntdll-unix; imported in ProcessInit.
+@@ -1417,6 +1418,11 @@ NTSTATUS ProcessInit() {
+     const char* EcRetOpt = getenv("MADEIRA_FEX_EC_RET");
+     IosEcReturnWithRet = !(EcRetOpt && strcmp(EcRetOpt, "0") == 0);
+     LogMan::Msg::IFmt("FEX: ec-ret-v1 madeira-bcd enabled={}", IosEcReturnWithRet != 0);
++    /* Playport: MADEIRA_FEX_EC_CALLRET_POP=1 has EnterEC pop the call-ret entry of an indirect guest CALL
++     * into ARM64EC code (IosEcCallRetPop in Arm64Emitter.h). Off by default. */
++    const char* PopOpt = getenv("MADEIRA_FEX_EC_CALLRET_POP");
++    IosEcCallRetPop = PopOpt && strcmp(PopOpt, "1") == 0;
++    LogMan::Msg::IFmt("FEX: ec-callret-pop enabled={}", IosEcCallRetPop != 0);
+   }
+ #endif
+ 

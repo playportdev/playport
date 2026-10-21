@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Run wine-pe 0052's x64 InitOnceExecuteOnce stub (MADEIRA_X64_ONCE_FASTPATH, PLA-364) natively on an x86-64 host.
+"""Run wine-pe 0051's x64 InitOnceExecuteOnce stub (MADEIRA_X64_ONCE_FASTPATH, PLA-364) natively on an x86-64 host.
 A completed INIT_ONCE (Ptr & 3 == 2) is answered in the stub: TRUE, and the context Ptr & ~3 when one is asked for.
 Every other state reaches the slow target, a C stand-in for kernelbase's export, with all four arguments intact."""
 import pathlib
@@ -11,7 +11,7 @@ import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-PATCH = ROOT / "patches/wine-pe/0052-ntdll-MADEIRA_X64_ONCE_FASTPATH-1-answers-an-x64-mod.patch"
+PATCH = ROOT / "patches/wine-pe/0051-ntdll-MADEIRA_X64_ONCE_FASTPATH-1-answers-an-x64-mod.patch"
 
 TEST_C = r'''
 #include <stdint.h>
