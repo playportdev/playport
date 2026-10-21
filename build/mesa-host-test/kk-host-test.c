@@ -2151,6 +2151,10 @@ enum gpl_output {
    /* SRC1_COLOR blending */
    GPL_DUAL_SOURCE,
    GPL_LOGIC_OP,
+   /* pSampleMask 0x1 at one sample, as DXVK gives it: every sample */
+   GPL_SAMPLE_MASK,
+   /* pSampleMask 0x5 at four samples: not every sample */
+   GPL_SAMPLE_MASK_PARTIAL,
 };
 
 static VkPipeline
@@ -2201,9 +2205,17 @@ gpl_library(const struct gpl_libs *g, VkGraphicsPipelineLibraryFlagsEXT part,
       .polygonMode = polygon_mode,
       .lineWidth = 1.0f,
    };
+   const VkSampleMask sample_mask =
+      output == GPL_SAMPLE_MASK_PARTIAL ? 0x5 : 0x1;
    VkPipelineMultisampleStateCreateInfo ms = {
       .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
-      .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+      .rasterizationSamples = output == GPL_SAMPLE_MASK_PARTIAL
+                                 ? VK_SAMPLE_COUNT_4_BIT
+                                 : VK_SAMPLE_COUNT_1_BIT,
+      .pSampleMask = output == GPL_SAMPLE_MASK ||
+                           output == GPL_SAMPLE_MASK_PARTIAL
+                        ? &sample_mask
+                        : NULL,
       .alphaToCoverageEnable = output == GPL_ALPHA_TO_COVERAGE,
    };
    VkPipelineDepthStencilStateCreateInfo ds = {
@@ -2296,11 +2308,11 @@ gpl_link(const struct gpl_libs *g, const VkPipeline libs[4], bool lto)
    return p;
 }
 
-/* A 64x64 colour target; image_out and memory_out, if not NULL, get what
- * to destroy with it */
+/* A 64x64 colour target of samples samples; image_out and memory_out, if
+ * not NULL, get what to destroy with it */
 static VkImageView
-gpl_target(VkPhysicalDevice pd, VkFormat format, VkImage *image_out,
-           VkDeviceMemory *memory_out)
+gpl_target(VkPhysicalDevice pd, VkFormat format, VkSampleCountFlagBits samples,
+           VkImage *image_out, VkDeviceMemory *memory_out)
 {
    DPROC(vkCreateImage);
    DPROC(vkGetImageMemoryRequirements);
@@ -2314,7 +2326,7 @@ gpl_target(VkPhysicalDevice pd, VkFormat format, VkImage *image_out,
       .extent = {64, 64, 1},
       .mipLevels = 1,
       .arrayLayers = 1,
-      .samples = VK_SAMPLE_COUNT_1_BIT,
+      .samples = samples,
       .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
    };
    VkImage image;
@@ -2475,7 +2487,8 @@ gpl_round_trip(VkPhysicalDevice pd)
    VkImage image;
    VkDeviceMemory image_mem;
    VkImageView view =
-      gpl_target(pd, VK_FORMAT_R8G8B8A8_UNORM, &image, &image_mem);
+      gpl_target(pd, VK_FORMAT_R8G8B8A8_UNORM, VK_SAMPLE_COUNT_1_BIT, &image,
+                 &image_mem);
 
    const VkDescriptorSetLayoutBinding bindings[] = {
       {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2,
@@ -2673,13 +2686,18 @@ check_gpl(VkPhysicalDevice pd, VkQueue queue, VkCommandPool pool, VkBuffer buf)
    VkPipeline out_logic = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_OUTPUT_INTERFACE_BIT_EXT, RGBA32F, RGBA8, GPL_LOGIC_OP, true, FILL);
    VkPipeline pre_vary = gpl_library(&gv, VK_GRAPHICS_PIPELINE_LIBRARY_PRE_RASTERIZATION_SHADERS_BIT_EXT, RGBA32F, RGBA8, PLAIN, true, FILL);
    VkPipeline frag_vary = gpl_library(&gv, VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT, RGBA32F, RGBA8, PLAIN, true, FILL);
+   /* Their multisample state matches the fragment output library's */
+   VkPipeline frag_smask = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT, RGBA32F, RGBA8, GPL_SAMPLE_MASK, true, FILL);
+   VkPipeline frag_smask4 = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT, RGBA32F, RGBA8, GPL_SAMPLE_MASK_PARTIAL, true, FILL);
+   VkPipeline out_smask = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_OUTPUT_INTERFACE_BIT_EXT, RGBA32F, RGBA8, GPL_SAMPLE_MASK, true, FILL);
+   VkPipeline out_smask4 = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_OUTPUT_INTERFACE_BIT_EXT, RGBA32F, RGBA8, GPL_SAMPLE_MASK_PARTIAL, true, FILL);
    const int msl_libs = msl_count();
    /* Each pre-rasterization library builds its vertex shader's library, the
     * first one also the empty fragment shader's, and each fragment shader
-    * library its fragment shader's: 3 vertex and 1 + 4 fragment */
-   printf("gpl: 18 libraries made %d MSL libraries\n", msl_libs - msl_start);
-   if (msl_start >= 0 && msl_libs - msl_start != 3 + 5) {
-      fprintf(stderr, "gpl: the libraries made %d MSL libraries, not 8\n",
+    * library its fragment shader's: 3 vertex and 1 + 6 fragment */
+   printf("gpl: 21 libraries made %d MSL libraries\n", msl_libs - msl_start);
+   if (msl_start >= 0 && msl_libs - msl_start != 3 + 7) {
+      fprintf(stderr, "gpl: the libraries made %d MSL libraries, not 10\n",
               msl_libs - msl_start);
       return 1;
    }
@@ -2692,6 +2710,8 @@ check_gpl(VkPhysicalDevice pd, VkQueue queue, VkCommandPool pool, VkBuffer buf)
       bool lto;
       VkFormat color;
       int at_link, at_draw;
+      /* Drawn into a 4-sample target */
+      bool four_samples;
    } links[] = {
       {"fast f32 rgba8", {vi_f32, pre, frag, out_u8}, false, RGBA8, 0, 0},
       {"fast u8 rgba8", {vi_u8, pre, frag, out_u8}, false, RGBA8, 0, 0},
@@ -2706,9 +2726,13 @@ check_gpl(VkPhysicalDevice pd, VkQueue queue, VkCommandPool pool, VkBuffer buf)
       {"fast varyings rgba8", {vi_f32, pre_vary, frag_vary, out_u8}, false, RGBA8, 0, 0},
       {"lto f32 rgba8", {vi_f32, pre, frag, out_u8}, true, RGBA8, 2, 0},
       {"lto u8 rgba16f blend", {vi_u8, pre, frag, out_f16}, true, RGBA16F, 2, 0},
+      {"fast sample-mask 0x1 of 1 rgba8", {vi_f32, pre, frag_smask, out_smask}, false, RGBA8, 0, 0},
+      {"fast sample-mask 0x5 of 4 fallback", {vi_f32, pre, frag_smask4, out_smask4}, false, RGBA8, 0, -1, true},
    };
-   VkImageView views[2] = {gpl_target(pd, RGBA8, NULL, NULL),
-                           gpl_target(pd, RGBA16F, NULL, NULL)};
+   VkImageView views[3] = {
+      gpl_target(pd, RGBA8, VK_SAMPLE_COUNT_1_BIT, NULL, NULL),
+      gpl_target(pd, RGBA16F, VK_SAMPLE_COUNT_1_BIT, NULL, NULL),
+      gpl_target(pd, RGBA8, VK_SAMPLE_COUNT_4_BIT, NULL, NULL)};
    for (unsigned i = 0; i < sizeof(links) / sizeof(links[0]); i++) {
       const int before_link = msl_count();
       VkPipeline p = gpl_link(&g, links[i].libs, links[i].lto);
@@ -2728,7 +2752,9 @@ check_gpl(VkPhysicalDevice pd, VkQueue queue, VkCommandPool pool, VkBuffer buf)
       CHECK(vkBeginCommandBuffer(cmd, &bi));
       VkRenderingAttachmentInfo ca = {
          .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-         .imageView = views[links[i].color == RGBA16F],
+         .imageView = views[links[i].four_samples       ? 2
+                            : links[i].color == RGBA16F ? 1
+                                                        : 0],
          .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
          .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
          .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
@@ -2775,7 +2801,8 @@ check_gpl(VkPhysicalDevice pd, VkQueue queue, VkCommandPool pool, VkBuffer buf)
    VkPipeline libs[] = {vi_f32,   vi_u8,     vi_bgra8, pre,      pre_points,
                         frag,     no_frag,   frag_a2c, frag_dual, out_u8,
                         out_f16,  out_mask,  out_a2c,  out_dual, out_logic,
-                        pre_vary, frag_vary};
+                        pre_vary, frag_vary, frag_smask, frag_smask4,
+                        out_smask, out_smask4};
    for (unsigned i = 0; i < sizeof(libs) / sizeof(libs[0]); i++)
       vkDestroyPipeline(dev, libs[i], NULL);
    if (gpl_round_trip(pd))
