@@ -16,7 +16,7 @@ from the main checkout after the branch moves there. **Pins read:** `mesa` b39d1
 - **Done:** G0's host harness and G1 in `ea258b0` (`patches/mesa` 0096; host test `check_gpl`;
   evidence [2026-10-21-kk-gpl-host](../evidence/2026-10-21-kk-gpl-host.md)). G0's phone baseline
   is not run.
-- **Running:** G2 (separate vertex shader), writer on the hard-task model.
+- **Running:** G2 (separate vertex shader), writer run `a9c0fa4d` (report `.work/agent-notes/kk-gpl/reports/g2.md`).
 - **Queue:** G2, G3, G4 (workstation); then G0's phone baseline and G5 from the main checkout; G6.
 - **Phone:** not used by this plan yet.
 - **Notes:** reports in the side copy's `.work/agent-notes/kk-gpl/reports/`.
