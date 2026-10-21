@@ -26,8 +26,10 @@ final class GameSignInTests: XCTestCase {
 
     func testTheShippedTableAsksForItForRDR2AndTheLauncherKnowsTheLine() throws {
         let table = try CompatDefaults.load(directory: CompatDefaultsTests.shipped)
-        XCTAssertEqual(table.entry(for: "app-1174180")?.settings.endLauncherAfterSignIn, true)
-        XCTAssertNil(table.entry(for: "epic-Buffalo")?.settings.endLauncherAfterSignIn)
+        // Every game's default since decision 0153; only a game with a publisher's launcher has one to end.
+        XCTAssertEqual(LaunchSettings.overEveryGame(table.entry(for: "app-1174180")?.settings).endLauncherAfterSignIn, true)
+        XCTAssertEqual(LaunchSettings.overEveryGame(table.entry(for: "epic-Buffalo")?.settings).endLauncherAfterSignIn, true)
+        XCTAssertNil(PublisherLauncher.startedBy(game: "app-367520"))
         XCTAssertEqual(PublisherLauncher.startedBy(game: "app-1174180")?.signIn, signIn)
         XCTAssertEqual(signIn.file(profile: URL(fileURLWithPath: "/p/drive_c/users/playport")).path,
                        "/p/drive_c/users/playport/Documents/Rockstar Games/Social Club/socialclub.log")

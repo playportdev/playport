@@ -17,9 +17,7 @@
 import Foundation
 import JITHelperXPC
 import StikJIT
-#if !PLAYPORT_RELEASE
 import SharedMemory
-#endif
 
 @objc(PlayportJITHelper)
 final class JITHelper: NSObject, NSExtensionRequestHandling, JITHelping {
@@ -110,7 +108,7 @@ final class JITHelper: NSObject, NSExtensionRequestHandling, JITHelping {
         }
     }
 
-    #if !PLAYPORT_RELEASE
+    // The donor pool's objects (decision 0153: dev and release builds).
     private var memoryRegions: [PPMemoryRegion] = []
 
     func memoryAllocate(bytes: UInt64, token: UInt64, purgeable: Bool, reply: @escaping (PPMemoryRegion?, NSDictionary, String?) -> Void) {
@@ -148,6 +146,7 @@ final class JITHelper: NSObject, NSExtensionRequestHandling, JITHelping {
         }
     }
 
+    #if !PLAYPORT_RELEASE
     // The helper-lifetime probe (JITHelping.lifetimeProbe). Timestamps are the
     // wall clock in ms since 1970, the same clock the app logs its exit with.
     private static let probeURL = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]

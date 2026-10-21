@@ -24,11 +24,13 @@ final class KhronosVulkanLoaderTests: XCTestCase {
         XCTAssertNil(try JSONDecoder().decode(LaunchSettings.self, from: Data(#"{"screen":"720"}"#.utf8)).khronosVulkanLoader)
     }
 
-    func testTheShippedTableGivesItToRedDeadRedemption2Only() throws {
+    /// Every game's default since decision 0153 (LaunchSettings.everyGame), not the table's.
+    func testEveryGameGetsItAndTheTableNamesItForNone() throws {
         let table = try CompatDefaults.load(directory: CompatDefaultsTests.shipped)
-        XCTAssertEqual(table.entry(for: "app-1174180")?.settings.khronosVulkanLoader, true)
+        XCTAssertNil(table.entry(for: "app-1174180")?.settings.khronosVulkanLoader)
         XCTAssertNil(table.entry(for: "epic-Buffalo")?.settings.khronosVulkanLoader)
-        XCTAssertNil(table.entry(for: "app-367520"))   // Hollow Knight keeps Wine's
+        XCTAssertEqual(LaunchSettings.overEveryGame(nil).khronosVulkanLoader, true)
+        XCTAssertEqual(LaunchSettings.overEveryGame(table.entry(for: "app-1174180")?.settings).khronosVulkanLoader, true)
     }
 
     func testTheOverlayListIsTheBackendsSetThenTheLoaders() {
@@ -38,6 +40,8 @@ final class KhronosVulkanLoaderTests: XCTestCase {
         XCTAssertEqual(GraphicsBackend.runtimeOverlays(graphics: .dxmt, khronosVulkanLoader: true), "vulkan-loader")
         let rdr2 = LaunchSettings.resolve(game: LaunchSettings(graphics: .vulkan, khronosVulkanLoader: true), global: LaunchSettings())
         XCTAssertEqual(rdr2.runtimeOverlays, "vulkan,vulkan-loader")
-        XCTAssertEqual(LaunchSettings.resolve(game: nil, global: LaunchSettings()).runtimeOverlays, nil)
+        XCTAssertEqual(LaunchSettings.resolve(game: nil, global: LaunchSettings()).runtimeOverlays, "vulkan")   // decision 0153
+        XCTAssertEqual(LaunchSettings.resolve(game: LaunchSettings.overEveryGame(nil), global: LaunchSettings()).runtimeOverlays,
+                       "vulkan,vulkan-loader")
     }
 }

@@ -1004,8 +1004,10 @@ private struct GameDetailPage: View {
         // A compatibility default's keys stay under the person's own, per key (decision 0091).
         let compat = launchSettings.compat(for: t.id)?.settings
         // Windows services (decision 0107): services.exe and the services it starts, for this play.
+        // Unset, every game's default (decision 0153).
+        let every = LaunchSettings.everyGame
         let services = OptionValue.of(own: settings.wrappedValue.windowsServices, compat: compat?.windowsServices,
-                                      inherited: false, name: onOff)
+                                      inherited: every.windowsServices ?? false, name: onOff)
         PadRow(id: "opt:windowsServices", title: "Windows services", value: services.text, accessory: .chevron,
                changed: services.changed, style: .plain,
                reset: services.changed ? { settings.wrappedValue.windowsServices = nil } : nil) {
@@ -1014,7 +1016,7 @@ private struct GameDetailPage: View {
                 note: "Starts Wine's service manager (services.exe) before the game, for a launcher that installs "
                     + "and uses a Windows service; its services stop when the game ends.",
                 options: [PadOption(id: "", label: "Default",
-                                    detail: compat?.windowsServices.map { "\(onOff($0)), for this game" } ?? "Off"),
+                                    detail: compat?.windowsServices.map { "\(onOff($0)), for this game" } ?? onOff(every.windowsServices ?? false)),
                           PadOption(id: "on", label: "On"), PadOption(id: "off", label: "Off")],
                 selected: settings.wrappedValue.windowsServices.map { $0 ? "on" : "off" } ?? "") {
                 settings.wrappedValue.windowsServices = $0.isEmpty ? nil : $0 == "on"
@@ -1023,7 +1025,7 @@ private struct GameDetailPage: View {
         // The Khronos Vulkan loader (decision 0131): its vulkan-1.dll in place of Wine's, for this play.
         let khronosName: (Bool) -> String = { $0 ? "Khronos" : "Wine's" }
         let loader = OptionValue.of(own: settings.wrappedValue.khronosVulkanLoader, compat: compat?.khronosVulkanLoader,
-                                    inherited: false, name: khronosName)
+                                    inherited: every.khronosVulkanLoader ?? false, name: khronosName)
         PadRow(id: "opt:khronosVulkanLoader", title: "Vulkan loader", value: loader.text, accessory: .chevron,
                changed: loader.changed, style: .plain,
                reset: loader.changed ? { settings.wrappedValue.khronosVulkanLoader = nil } : nil) {
@@ -1032,13 +1034,15 @@ private struct GameDetailPage: View {
                 note: "The Khronos Vulkan loader loads the Vulkan layers a game asks for, such as its overlay's; "
                     + "Wine's own loads none.",
                 options: [PadOption(id: "", label: "Default",
-                                    detail: compat?.khronosVulkanLoader.map { "\(khronosName($0)), for this game" } ?? "Wine's"),
+                                    detail: compat?.khronosVulkanLoader.map { "\(khronosName($0)), for this game" }
+                                        ?? khronosName(every.khronosVulkanLoader ?? false)),
                           PadOption(id: "khronos", label: "Khronos"), PadOption(id: "wine", label: "Wine's")],
                 selected: settings.wrappedValue.khronosVulkanLoader.map { $0 ? "khronos" : "wine" } ?? "") {
                 settings.wrappedValue.khronosVulkanLoader = $0.isEmpty ? nil : $0 == "khronos"
             }
         }
-        let compatKeys = compat?.runtime.trimmingCharacters(in: .whitespaces) ?? ""
+        let compatKeys = LaunchSettings.keyItems(compat?.runtime ?? "", over: LaunchSettings.everyGame.runtime)
+            .trimmingCharacters(in: .whitespaces)
         let compatOptions = compat?.graphicsOptions.trimmingCharacters(in: .whitespaces) ?? ""
         let forThisGame: (String) -> String? = { $0.isEmpty ? nil : "\(OptionValue.compatMarker) For this game: \($0); your own key of the same name wins" }
         let keys = settings.wrappedValue.runtime.trimmingCharacters(in: .whitespaces)
@@ -1065,7 +1069,7 @@ private struct GameDetailPage: View {
         }
         if let app = t.appID {
             // Playport's Steam client (decision 0115) may be the game's compatibility default.
-            let steamAPI = OptionValue.of(own: settings.wrappedValue.steamAPI, compat: compat?.steamAPI, inherited: .emulated,
+            let steamAPI = OptionValue.of(own: settings.wrappedValue.steamAPI, compat: compat?.steamAPI, inherited: every.steamAPI ?? .emulated,
                                           name: Self.steamAPIModeText)
             PadRow(id: "opt:steamAPI", title: "Steam API", value: steamAPI.text, accessory: .chevron,
                    changed: steamAPI.changed, style: .plain,
@@ -1077,7 +1081,7 @@ private struct GameDetailPage: View {
                         + "Changes apply from the game's next launch.",
                     options: [PadOption(id: "", label: "Default",
                                         detail: compat?.steamAPI.map { "\(Self.steamAPIModeText($0)), for this game" }
-                                            ?? Self.steamAPIModeText(.emulated)),
+                                            ?? Self.steamAPIModeText(every.steamAPI ?? .emulated)),
                               PadOption(id: SteamAPISwap.Mode.emulated.rawValue, label: Self.steamAPIModeText(.emulated)),
                               PadOption(id: SteamAPISwap.Mode.client.rawValue, label: Self.steamAPIModeText(.client)),
                               PadOption(id: SteamAPISwap.Mode.original.rawValue, label: Self.steamAPIModeText(.original))],

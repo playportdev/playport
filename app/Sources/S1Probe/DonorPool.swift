@@ -1,16 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Settings › Developer › Memory › Donor pool (dev builds only; decision 0012:
-// `pp ui --action set:donorPoolMB=auto`, or a fixed size such as 4096). When on, a Play
-// takes a pool from JIT helpers that then end, after the JIT activation and before
-// Wine starts, and puts it behind madeira-unix 0148's guest hooks
+// Settings › Graphics › Donor memory, in dev and release builds, Auto unless set (decision 0153,
+// amending 0105; `pp ui --action set:donorPoolMB=auto`, `off`, or in a dev build a fixed size such
+// as 4096). When on, a Play takes a pool from JIT helpers that then end (DonorRounds), after the
+// JIT activation and before Wine starts, and puts it behind madeira-unix 0148's guest hooks
 // (SharedMemory/GuestPool.m): Wine's fresh RW guest commits (a host page or more, 0150) are backed
 // by it, charged to no process (docs/evidence/2026-10-14-donor-memory.md).
 // Nothing touches the pool here: its pages are resident only once the game
 // uses them, and physical RAM is the wall (docs/evidence/2026-10-14-donor-memory-scale.md),
 // so Auto takes the phone's tier's pool (decision 0105) and a fixed size is capped by what
-// jetsam's level says is free (PlayportKit DonorPoolSizing, PLA-351).
+// jetsam's level says is free (PlayportKit DonorPoolSizing, PLA-351). A phone the pool is not
+// offered on (DonorPoolSizing.offered) gets none.
 // During play the pool stops growing when the phone runs low (watchGrowth). Any failure
-// leaves the Play on ordinary memory.
+// leaves the Play on ordinary memory. A release build logs the install and the pressure
+// changes, not the periodic stats.
 import Foundation
 import PlayportKit
 import SharedMemory
@@ -20,8 +22,12 @@ enum DonorPool {
 
     private static func log(_ text: String) { WineHostRuntime.appendLog("donor-pool: " + text) }
 
-    /// The setting as stored (Settings writes an Int; the driver's set: may write "auto").
-    static var setting: DonorPoolSizing.Setting { DonorPoolSizing.Setting(stored: UserDefaults.standard.object(forKey: key)) }
+    /// The setting as stored (Settings writes an Int; the driver's set: may write "auto"); Auto
+    /// when never set (decision 0153).
+    static var setting: DonorPoolSizing.Setting {
+        guard let stored = UserDefaults.standard.object(forKey: key) else { return .auto }
+        return DonorPoolSizing.Setting(stored: stored)
+    }
 
     /// The phone now, for DonorPoolSizing: the app's available memory and footprint, RAM, jetsam's level.
     private static func reading() -> DonorPoolSizing.Reading {
@@ -58,11 +64,11 @@ enum DonorPool {
         }
         log("setting=\(setting == .auto ? "auto" : "\(setting.stored)") target_mb=\(decision.targetMB) "
             + "reason=\"\(decision.reason)\" spare_floor_mb=\(DonorPoolSizing.spareFloorMB(physicalMB: r.physicalMB)) "
-            + SharedMemoryProbe.describe(pp_memory_snapshot()) + " " + SharedMemoryProbe.system())
+            + DonorRounds.describe(pp_memory_snapshot()) + " " + DonorRounds.system())
         guard decision.targetMB > 0 else {
             // No pool; one fresh helper's available memory still records this phone's donor limit.
             let donor = setting == .auto && DonorPoolSizing.offered(physicalMB: r.physicalMB)
-                ? SharedMemoryProbe.donorLimitMB { log($0) } : nil
+                ? DonorRounds.donorLimitMB { log($0) } : nil
             autoLine(donorMB: donor, target: 0, reason: decision.reason)
             log("no room for a pool; ordinary memory")
             return installed
@@ -70,7 +76,7 @@ enum DonorPool {
         let t0 = Date()
         // Auto takes one donor's grant at most (its limit less a margin: about 5.4 GiB on the
         // 12 GB phone); the fixed sizes keep taking more donors.
-        let rounds = SharedMemoryProbe.donorRounds(mb: decision.targetMB, touch: false, gateFirstDonor: true,
+        let rounds = DonorRounds.donorRounds(mb: decision.targetMB, touch: false, gateFirstDonor: true,
                                                    donors: setting == .auto ? 1 : 8) { log($0) }
         let granted = rounds.regions.reduce(0) { $0 + Int($1.byteCount >> 20) }
         let seconds = String(format: "%.2f", Date().timeIntervalSince(t0))
@@ -87,9 +93,11 @@ enum DonorPool {
             return installed
         }
         log("installed granted_mb=\(granted) objects=\(rounds.regions.count) donors=\(rounds.pids.count) "
-            + "stop=\"\(rounds.stop)\" in \(seconds) s " + SharedMemoryProbe.describe(pp_memory_snapshot())
-            + " " + SharedMemoryProbe.system())
+            + "stop=\"\(rounds.stop)\" in \(seconds) s " + DonorRounds.describe(pp_memory_snapshot())
+            + " " + DonorRounds.system())
+        #if !PLAYPORT_RELEASE
         startPeriodicReport()
+        #endif
         watchGrowth(physicalMB: r.physicalMB)
         installed.poolMB = granted
         return installed
@@ -181,6 +189,6 @@ enum DonorPool {
             "madv_failures=\(n("madv_failures"))", "growing=\(n("growing"))", "growth_refused=\(n("growth_refused"))",
             "app_footprint_mb=\(footprint)", "app_available_mb=\(available)",
         ]
-        log("stats at \(when): " + fields.joined(separator: " ") + " " + SharedMemoryProbe.system())
+        log("stats at \(when): " + fields.joined(separator: " ") + " " + DonorRounds.system())
     }
 }

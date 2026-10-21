@@ -63,6 +63,8 @@ final class Direct3D12Tests: XCTestCase {
         XCTAssertFalse(Direct3D12.imports(in: bad))
     }
 
+    /// Vulkan is every game's default since decision 0153; DX12's detection (0044) and a
+    /// person's or Settings' DXMT choice still decide over it.
     func testDX12DefaultAndExplicitOverrides() {
         let global = LaunchSettings()
         XCTAssertEqual(LaunchSettings.resolve(game: nil, global: global, importsDirect3D12: true).graphics, .vulkan)
@@ -71,10 +73,10 @@ final class Direct3D12Tests: XCTestCase {
         }
         XCTAssertEqual(LaunchSettings.resolve(game: nil, global: global, arguments: ["-DX12"]).graphics, .vulkan)
         XCTAssertEqual(LaunchSettings.resolve(game: LaunchSettings(arguments: "-dx11"), global: global,
-                                             importsDirect3D12: true, arguments: ["-dx12"]).graphics, .dxmt)
+                                             importsDirect3D12: true, arguments: ["-dx12"]).graphics, .vulkan)
         XCTAssertEqual(LaunchSettings.resolve(game: LaunchSettings(arguments: "-dx11 -DX12"), global: global).graphics, .vulkan)
-        XCTAssertEqual(LaunchSettings.resolve(game: LaunchSettings(arguments: "-DX12-debug"), global: global).graphics, .dxmt)
-        XCTAssertEqual(LaunchSettings.resolve(game: nil, global: LaunchSettings(arguments: "-DX12")).graphics, .dxmt)
+        XCTAssertEqual(LaunchSettings.resolve(game: LaunchSettings(arguments: "-DX12-debug"), global: global).graphics, .vulkan)
+        XCTAssertEqual(LaunchSettings.resolve(game: nil, global: LaunchSettings(arguments: "-DX12")).graphics, .vulkan)
         XCTAssertEqual(LaunchSettings.resolve(game: nil, global: LaunchSettings(graphics: .dxmt), importsDirect3D12: true).graphics, .dxmt)
         XCTAssertEqual(LaunchSettings.resolve(game: LaunchSettings(graphics: .dxmt, arguments: "-dx12"), global: global).graphics, .dxmt)
         XCTAssertEqual(LaunchSettings.resolve(game: LaunchSettings(graphics: .vulkan, arguments: "-dx11"), global: global).graphics, .vulkan)
@@ -85,7 +87,7 @@ final class Direct3D12Tests: XCTestCase {
     func testI386DefaultAndExplicitOverrides() {
         let global = LaunchSettings()
         XCTAssertEqual(LaunchSettings.resolve(game: nil, global: global, i386: true).graphics, .vulkan)
-        XCTAssertEqual(LaunchSettings.resolve(game: nil, global: global, i386: false).graphics, .dxmt)
+        XCTAssertEqual(LaunchSettings.resolve(game: nil, global: global, i386: false).graphics, .vulkan)   // decision 0153
         XCTAssertEqual(LaunchSettings.resolve(game: LaunchSettings(arguments: "-dx11"), global: global, i386: true).graphics, .vulkan)
         XCTAssertEqual(LaunchSettings.resolve(game: LaunchSettings(graphics: .dxmt), global: global, i386: true).graphics, .dxmt)
         XCTAssertEqual(LaunchSettings.resolve(game: nil, global: LaunchSettings(graphics: .dxmt), i386: true).graphics, .dxmt)

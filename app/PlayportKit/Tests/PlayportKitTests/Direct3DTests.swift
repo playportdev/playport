@@ -140,7 +140,8 @@ final class Direct3DTests: XCTestCase {
         let result = Direct3D.detect(executable: exe, root: root)
         XCTAssertEqual(result.apis, [.d3d11, .d3d12])
         XCTAssertEqual(LaunchSettings.resolve(game: nil, global: LaunchSettings(), importsDirect3D12: result.hasDirect3D12).graphics, .vulkan)
-        XCTAssertEqual(LaunchSettings.resolve(game: LaunchSettings(arguments: "-dx11"), global: LaunchSettings(), importsDirect3D12: result.hasDirect3D12).graphics, .dxmt)
+        // Vulkan whatever the arguments since decision 0153; DXMT is a choice.
+        XCTAssertEqual(LaunchSettings.resolve(game: LaunchSettings(arguments: "-dx11"), global: LaunchSettings(), importsDirect3D12: result.hasDirect3D12).graphics, .vulkan)
     }
 
     func testUnknownIsUnknownAndDetectionRoundTrips() throws {

@@ -629,8 +629,8 @@ final class LaunchSettingsTests: XCTestCase {
     }
 
     func testGraphicsBackendIsInheritedLikeTheOtherSettings() {
-        XCTAssertEqual(LaunchSettings.resolve(game: nil, global: LaunchSettings()).graphics, .dxmt)
-        XCTAssertEqual(LaunchSettings.resolve(game: nil, global: LaunchSettings(graphics: .vulkan)).graphics, .vulkan)
+        XCTAssertEqual(LaunchSettings.resolve(game: nil, global: LaunchSettings()).graphics, .vulkan)   // decision 0153
+        XCTAssertEqual(LaunchSettings.resolve(game: nil, global: LaunchSettings(graphics: .dxmt)).graphics, .dxmt)
         // A game's own choice wins either way.
         XCTAssertEqual(LaunchSettings.resolve(game: LaunchSettings(graphics: .dxmt), global: LaunchSettings(graphics: .vulkan)).graphics, .dxmt)
         XCTAssertEqual(LaunchSettings.resolve(game: LaunchSettings(graphics: .vulkan), global: LaunchSettings()).graphics, .vulkan)
@@ -852,8 +852,9 @@ final class FEXProfileTests: XCTestCase {
         XCTAssertFalse(keys.isEmpty)
         let on = LaunchSettings.resolve(game: keys, global: LaunchSettings())
         XCTAssertEqual(on.runtime, ["vram-mb": "768", "inproc-sync": "1"])
+        // All over every game's keys (decision 0153), the title's cohort jumbo-mb over everyGame's.
         XCTAssertEqual(on.config(over: ["jumbo-mb": "32768", "vram-mb": "2048"]),
-                       ["jumbo-mb": "32768", "vram-mb": "768", "inproc-sync": "1"])
+                       LaunchSettings.everyGameKeys.merging(["jumbo-mb": "32768", "vram-mb": "768", "inproc-sync": "1"]) { _, b in b })
         XCTAssertEqual(LaunchSettings.resolve(game: nil, global: keys).runtime, [:])
         XCTAssertNil(LaunchSettings.runtimeKeys("vram-mb"))
         XCTAssertNil(LaunchSettings.runtimeKeys("a b=1"))
@@ -1473,7 +1474,7 @@ final class OptionValueTests: XCTestCase {
         XCTAssertEqual(OptionValue.of(own: Int?.none, inherited: inherited.frameLimit) { "\($0) fps" },
                        OptionValue(text: "Default · 60 fps", changed: false))
         XCTAssertEqual(OptionValue.of(own: GraphicsBackend?.none, inherited: inherited.graphics) { $0.rawValue.uppercased() },
-                       OptionValue(text: "Default · DXMT", changed: false))
+                       OptionValue(text: "Default · VULKAN", changed: false))
         // Set for the game: its value alone, marked. Setting it to the default's value still marks it.
         XCTAssertEqual(OptionValue.of(own: 30, inherited: 60) { "\($0) fps" }, OptionValue(text: "30 fps", changed: true))
         XCTAssertEqual(OptionValue.of(own: 60, inherited: 60) { "\($0) fps" }, OptionValue(text: "60 fps", changed: true))

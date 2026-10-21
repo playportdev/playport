@@ -212,13 +212,13 @@ not a private no-footprint entitlement or a file-backed swap area.
 
 madeira-unix 0148 offers fresh large RW guest commits to optional host hooks
 (`playport_guest_memory_backing`, and `playport_guest_memory_released` with the
-range and whether it was detached to ordinary memory). A release build answers
-them with the stubs in `WineHostRuntime.swift`, so Wine keeps its ordinary mmap.
-A dev build answers them from a donor pool when Settings › Developer › Donor
-pool is on (`set:donorPoolMB=auto|2048|4096|6144`, off by default): at Play, after
+range and whether it was detached to ordinary memory). Both builds answer them
+from a donor pool, on as Auto unless Settings › Graphics › Donor memory turns it off
+([decision 0153](decisions/0153-rdr2s-settings-are-every-games-defaults.md);
+`set:donorPoolMB=off|auto`, and in a dev build `2048|4096|6144`): at Play, after
 the JIT activation, helpers that then end give purgeable objects, and each
 commit is a `vm_map` of an unused range of one at Wine's address
-(`SharedMemory/GuestPool.m`, `Dev/DonorPool.swift`;
+(`SharedMemory/GuestPool.m`, `DonorPool.swift`, `DonorRounds.swift`;
 [plan](plans/finished.md#guest-ram-from-donor-processes), step 3). Auto takes the phone's tier's
 pool ([decision 0105](decisions/0105-memory-defaults-per-phone.md): 4 GiB on a 12 GB
 phone, 1 GiB on 8 GB, none and no setting under), at most one donor's grant
@@ -867,6 +867,11 @@ the game is paused:
   - It then counts every start of the launcher's images from the job's messages
     (`JOB_OBJECT_MSG_NEW_PROCESS`). The first restart it finds running is ended once more,
     along with the launcher's tree.
+- **The game's own Social Club end.** `PP_CONTROL_END_GAME_SOCIAL_CLUB`, 120 s or more after the
+  sign-in near the limit, ends the `SocialClubHelper.exe` processes under RDR2.exe, and ntdll refuses
+  their later starts (`PLAYPORT_REFUSE_GAME_SC_RESTART`). Both are on in dev and release builds unless
+  Settings › Graphics turns them off (`GameSocialClubEnd.swift`; decisions 0133, 0138, 0141,
+  [0153](decisions/0153-rdr2s-settings-are-every-games-defaults.md)).
 
 The rows: Resume (also B, ≡ and Home); Screenshot, the last presented
 drawable's texture (`PacedMetalLayer.lastPresented`; DXMT's layer is not
@@ -1164,7 +1169,7 @@ land in that directory for such a launch. The first title in a process fixes
 the guest's screen (`TitleScreen.configure`).
 
 **The memory plan** (PLA-352, PlayportKit `MemoryPlan`). Just before Wine starts,
-after the JIT pool and a dev build's donor pool, the app tells the runtime the
+after the JIT pool and the donor pool, the app tells the runtime the
 guest's RAM G and the video figure V through the environment: `MADEIRA_TOTAL_PHYS_MB`
 (ml992) and `PLAYPORT_VRAM_MB` (DXMT ml1042, patches/dxmt 0011; its formula stays the
 fallback). Both come from the phone's tier by its RAM

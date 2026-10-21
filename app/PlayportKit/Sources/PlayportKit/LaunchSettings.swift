@@ -4,9 +4,9 @@
 // command-line arguments, which steam_api it loads, FEX's x86 memory
 // ordering over the game's profile, FEX's block size and x87 precision (FEXProfile).
 // A game's own value wins over the global one, which wins over the defaults:
-// 720 rows at 60 FPS on DXMT (Vulkan for i386 and detected DX12 games; `defaultScreen`, `defaultFrameLimit`,
-// GraphicsBackend.default). A cohort title's screen (LaunchPlan.screen) no
-// longer sets it (decision 0034). Native and no limit are a
+// 720 rows at 60 FPS on Vulkan (`defaultScreen`, `defaultFrameLimit`, GraphicsBackend.default),
+// with LaunchSettings.everyGame's services, pool, loader, Steam client and runtime keys
+// (decision 0153). A cohort title's screen (LaunchPlan.screen) no longer sets it (decision 0034). Native and no limit are a
 // choice in Settings or on a game's page. A limit of 0 runs presents free, with
 // no vsync lock (TitleScreen.swift).
 
@@ -143,10 +143,47 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
         return out
     }
 
+    /// What every game launches with unless its compatibility default or a person's choice for it
+    /// says otherwise (decision 0153): Red Dead Redemption 2's settings, which work, made everyone's,
+    /// as the base under each title's compatibility default (overEveryGame). Each acts only where its
+    /// trigger exists: Windows services start the service manager, which runs only the services a
+    /// game installed; the launcher's end needs a publisher's launcher (PublisherLauncher.startedBy);
+    /// the Khronos loader loads only the layers a game asks for; Playport's Steam client serves only a
+    /// Steam app; `env.PLAYPORT_SC_BLOCK_CRASHPAD=1` refuses only Rockstar's and Chromium's crash
+    /// reporters. The backend is GraphicsBackend.default, below Settings' own choice. The runtime keys
+    /// merge by key (keyItems), so a game's `env.MADEIRA_FEX_BATCH2=0` turns one off. RDR2's
+    /// `env.FEX_HOSTFEATURES=disableafp` stays its own: Hollow Knight draws black without AFP.
+    public static let everyGame = LaunchSettings(
+        steamAPI: .client,
+        runtime: "jumbo-mb=8960 env.PLAYPORT_VK_HEAP_MB=3072 env.MADEIRA_FASTSYNC_SEM=1 "
+            + "env.MADEIRA_X64_CS_FASTPATH=1 env.MADEIRA_FEX_BATCH2=1 env.PLAYPORT_SC_BLOCK_CRASHPAD=1",
+        windowsServices: true, jitPoolMB: 896, khronosVulkanLoader: true, endLauncherAfterSignIn: true)
+
+    /// A title's compatibility default (nil for none) over everyGame: each setting the title's
+    /// entry has wins; the launcher's end is the entry's, else everyGame's. The runtime keys stay the
+    /// entry's own: everyGame's go under the title's madeira.cfg keys too (Effective.config), so a
+    /// cohort title's `jumbo-mb=32768` keeps its value.
+    public static func overEveryGame(_ compat: LaunchSettings?) -> LaunchSettings {
+        var s = (compat ?? LaunchSettings()).over(everyGame)
+        s.runtime = compat?.runtime ?? ""
+        s.endLauncherAfterSignIn = compat?.endLauncherAfterSignIn ?? everyGame.endLauncherAfterSignIn
+        return s
+    }
+
+    /// everyGame's runtime keys, the lowest level of a launch's madeira.cfg keys (Effective.config).
+    public static let everyGameKeys: [String: String] = runtimeKeys(everyGame.runtime) ?? [:]
+
     /// The runtime keys a release build launches with (decision 0126): the game's compatibility
-    /// default's own, never a person's (a dev build's Runtime keys row); none without a default.
+    /// default's, never a person's (a dev build's Runtime keys row); everyGame's go under them and
+    /// the title's own in Effective.config (decision 0153).
     public static func releaseRuntime(compat: LaunchSettings?) -> [String: String] {
         runtimeKeys(compat?.runtime ?? "") ?? [:]
+    }
+
+    /// The Steam API a release build launches a Steam app with (decisions 0115, 0153): the game's
+    /// compatibility default's, else everyGame's, never a person's.
+    public static func releaseSteamAPI(compat: LaunchSettings?) -> SteamAPISwap.Mode {
+        overEveryGame(compat).steamAPI ?? .emulated
     }
 
     /// Runtime keys as typed (`vram-mb=1024 inproc-sync=1`): `key=value` items at spaces,
@@ -269,9 +306,10 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
         /// (ScreenAspect.spec(level:)); an old `WxH` or `4:3` resolution as it is.
         public var guestScreen: String? { aspect.spec(level: screen) }
 
-        /// The title's madeira.cfg keys (its cohort entry's) with these over them.
+        /// The title's madeira.cfg keys (its cohort entry's) with these over them, all over
+        /// every game's runtime keys (LaunchSettings.everyGameKeys, decision 0153).
         public func config(over base: [String: String]) -> [String: String] {
-            base.merging(runtime) { _, own in own }
+            LaunchSettings.everyGameKeys.merging(base) { _, title in title }.merging(runtime) { _, own in own }
         }
     }
 
@@ -283,8 +321,8 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
     public static let defaultFrameLimit = 60
 
     /// The game's value, else the global one, else the defaults (720 rows,
-    /// 60 FPS, Vulkan for an i386 executable (decision 0047) or DX12 (0044), DXMT
-    /// otherwise). Explicit graphics choices still win. `arguments` are the title's
+    /// 60 FPS, Vulkan (decision 0153; before it, only for an i386 executable, 0047, or
+    /// DX12, 0044)). `game` is a person's own over overEveryGame's (LaunchSettingsStore). Explicit graphics choices still win. `arguments` are the title's
     /// base arguments, before the player's; they do not move an i386 title off Vulkan,
     /// since DXMT has no i386 build. Invalid values are skipped as if unset.
     public static func resolve(game: LaunchSettings?, global: LaunchSettings,
@@ -328,7 +366,9 @@ public enum GraphicsBackend: String, Codable, CaseIterable, Sendable {
     /// KosmicKrisp, Mesa's Vulkan driver on Metal.
     case vulkan
 
-    public static let `default`: GraphicsBackend = .dxmt
+    /// Every game's backend unless Settings or its page says otherwise (decision 0153,
+    /// LaunchSettings.everyGame); DXMT stays a choice.
+    public static let `default`: GraphicsBackend = .vulkan
 
     /// The directory under the runtime whose <arch>-windows builtins go
     /// before the runtime's own for this backend (WINEDLLPATH); nil for none.

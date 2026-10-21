@@ -61,7 +61,9 @@ maximum). Sign-in is the title's `the game signed in` / `ending the launcher at`
     steady at ~7310 MB. This is the same state as x8 and qp1.
   - The black came 48 s after the game's helper was ended. In the defaults runs the end came at a similar point
     (nd1: +290 s, just before the porch), and the porch held.
-  - One run does not show the cause.
+  - The same black spinner has come without single-process too: r2 in
+    [the owner defaults](2026-10-20-rdr2-owner-defaults.md) (defaults, Resolution Scale 1/2: "a spinner on black at
+    60 frames/s" for 9 min), x8, and qp1. One run does not show the cause.
 - **fps.** The porch's 26 s (15:17:14–15:17:40) gave 19.0 fps, GPU busy 47 %, 24.9 ms a frame, E 1.67 GHz:
   11.4 fps/E-GHz. That is at `nominal`/`fair`, not `serious`, and not a 60 s window, so it is not comparable with
   10.4–11.0 in d2–d5 and nd1.

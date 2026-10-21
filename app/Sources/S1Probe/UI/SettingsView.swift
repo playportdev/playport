@@ -272,6 +272,11 @@ struct SettingsSwitchRow: View {
 private struct GraphicsSettings: View {
     @ObservedObject private var launchSettings = LaunchSettingsStore.shared
     @AppStorage(MetalHUD.key) private var metalHUD = false
+    // On unless turned off (decision 0153; GameSocialClubEnd).
+    @AppStorage(GameSocialClubEnd.key) private var endGameSocialClub = true
+    @AppStorage(GameSocialClubEnd.refuseRestartKey) private var refuseGameSocialClubRestart = true
+    /// Read only to redraw the donor row when it changes; DonorPool.setting reads it (Auto when unset).
+    @AppStorage(DonorPool.key) private var donorPoolStored = DonorPoolSizing.Setting.autoStored
 
     var body: some View {
         SettingsNote(text: "What every game uses unless you change it on the game's page.")
@@ -290,15 +295,51 @@ private struct GraphicsSettings: View {
                  name: LaunchSettingsText.frameLimit, value: global.frameLimit)
         let backends = SettingSteps(values: GraphicsBackend.allCases.filter { Manifest.has($0) || $0 == launchSettings.global.graphics },
                                     defaultValue: GraphicsBackend.default)
-        valueRow("graphics", "Direct3D", "Vulkan is experimental", backends,
+        valueRow("graphics", "Direct3D", "Vulkan, or DXMT for Direct3D 10 and 11", backends,
                  name: LaunchSettingsText.graphics, value: global.graphics)
         SettingsSwitchRow(id: "metalHUD", title: "Metal HUD", subtitle: "Frame rate, frame time and memory over a game",
                           on: $metalHUD)
+        memoryRows
         SettingsNote(text: "From each game's next start. 720p at 60 fps keeps the phone cool enough to hold its "
                      + "frame rate; Native is the screen's full resolution, and Off runs a game as fast as the screen "
                      + "allows. Another aspect ratio than the phone's shows the game with bars at its sides or above and below; "
                      + "16:9 helps a game that shows only black on a screen as wide as the phone's. "
                      + LaunchSettingsText.graphicsFooter)
+    }
+
+    /// Every game's memory defaults (decision 0153): the donor pool, on phones with a tier pool
+    /// (DonorPoolSizing.offered), and the end of a game's own Social Club after its sign-in.
+    @ViewBuilder
+    private var memoryRows: some View {
+        if DonorPoolSizing.offered(physicalMB: Int(ProcessInfo.processInfo.physicalMemory >> 20)) {
+            // Through DonorPool.setting: the driver's set: may store "auto" or "off" as a string.
+            let _ = donorPoolStored
+            let current = DonorPool.setting
+            let options = Self.donorOptions
+            PadRow(id: "set:donorPool", title: "Donor memory", subtitle: "Memory from helpers that then end, for the game",
+                   value: options.first { $0.0 == current }?.1 ?? "\(current.stored) MB (fixed)", accessory: .chevron, hint: "Change") {
+                PadModal.shared.picker(title: "Donor memory", context: "Settings · Graphics",
+                                       note: "Auto takes the phone's default pool before the game starts and stops on low "
+                                           + "memory; any failure plays on ordinary memory. From each game's next start.",
+                                       options: options.map { PadOption(id: "\($0.0.stored)", label: $0.1) },
+                                       selected: "\(current.stored)") { donorPoolStored = Int($0) ?? 0 }
+            }
+        }
+        SettingsSwitchRow(id: "endGameSocialClub", title: "End a game's own Social Club",
+                          subtitle: "Rockstar's: after its sign-in, near the memory limit; never the game",
+                          on: $endGameSocialClub)
+        SettingsSwitchRow(id: "refuseGameSocialClubRestart", title: "Refuse its restarts",
+                          subtitle: "With the end on: the game's later Social Club starts fail",
+                          on: $refuseGameSocialClubRestart)
+    }
+
+    /// Off and Auto; a dev build also offers the fixed sizes to experiment with.
+    private static var donorOptions: [(DonorPoolSizing.Setting, String)] {
+        var options: [(DonorPoolSizing.Setting, String)] = [(.off, "Off"), (.auto, "Auto")]
+        #if !PLAYPORT_RELEASE
+        options += DonorPoolSizing.fixedSizesMB.map { (.fixed($0), MemoryNeed.format(mb: $0) + " (fixed)") }
+        #endif
+        return options
     }
 
     private func valueRow<T: Equatable & Sendable>(_ id: String, _ title: String, _ subtitle: String, _ steps: SettingSteps<T>,

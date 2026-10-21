@@ -20,9 +20,6 @@ struct DeveloperSettings: View {
     @AppStorage(Fastsync.offKey) private var fastsyncOff = false
     @AppStorage(MemoryLimit.simulatedKey) private var simulated = 0
     @AppStorage(MemoryLimit.simulatedPoolKey) private var simulatedPool = 0
-    @AppStorage(DonorPool.key) private var donorPool = 0
-    @AppStorage(GameSocialClubEnd.key) private var endGameSocialClub = false
-    @AppStorage(GameSocialClubEnd.refuseRestartKey) private var refuseGameSocialClubRestart = false
     @ObservedObject private var sharedMemory = SharedMemoryProbe.shared
     @ObservedObject private var probe = HelperLifetimeProbe.shared
     @ObservedObject private var authProbe = NativeAuthProbe.shared
@@ -79,30 +76,7 @@ struct DeveloperSettings: View {
                value: simulatedPool > 0 ? MemoryNeed.format(mb: simulatedPool) : "Off",
                options: [PadOption(id: "0", label: "Off")] + pools.map { PadOption(id: "\($0)", label: MemoryNeed.format(mb: $0)) },
                selected: "\(simulatedPool)", note: nil) { simulatedPool = Int($0) ?? 0 }
-        // docs/plans/finished.md#guest-ram-from-donor-processes step 3 (DonorPool.swift); Off, Auto (PLA-351) or a
-        // fixed size to experiment with. Not offered on a 4 or 6 GB phone (PlayportKit DonorPoolSizing).
-        if DonorPoolSizing.offered(physicalMB: Int(ProcessInfo.processInfo.physicalMemory >> 20)) {
-            // Read through DonorPool.setting: the driver's set: may store "auto" as a string.
-            let current = donorPool == DonorPoolSizing.Setting.autoStored ? .auto : DonorPool.setting
-            let options: [(DonorPoolSizing.Setting, String)] = [(.off, "Off"), (.auto, "Auto")]
-                + DonorPoolSizing.fixedSizesMB.map { (.fixed($0), MemoryNeed.format(mb: $0) + " (fixed)") }
-            choice("dev:donorPool", "Donor pool (experiment)", subtitle: "Next Play: guest RAM from helpers that then end",
-                   value: options.first { $0.0 == current }?.1 ?? "\(current.stored) MB (fixed)",
-                   options: options.map { PadOption(id: "\($0.0.stored)", label: $0.1) },
-                   selected: "\(current.stored)",
-                   note: "Auto: the phone's default pool, stopping on low memory. "
-                       + "Any failure plays on ordinary memory.") {
-                donorPool = Int($0) ?? 0
-            }
-        }
-        // Decision 0133: RDR2's Story load reaches the memory limit with the game's Social Club alive.
-        SettingsSwitchRow(id: "dev:endGameSocialClub", title: "End the game's Social Club (experiment)",
-                          subtitle: "Next Play: RDR2's own Social Club helpers end after its sign-in, near the memory limit; never the game",
-                          on: $endGameSocialClub)
-        // Decision 0138: the game restarts its helper about every 5 s after that end.
-        SettingsSwitchRow(id: "dev:refuseGameSocialClubRestart", title: "Refuse the game's Social Club restarts (experiment)",
-                          subtitle: "With the end on, next Play: RDR2's later Social Club helper starts fail at process creation",
-                          on: $refuseGameSocialClubRestart)
+        // The donor pool and the end of a game's own Social Club are Settings › Graphics' rows (decision 0153).
     }
 
     private static func choices(_ base: [Int], with current: Int) -> [Int] {

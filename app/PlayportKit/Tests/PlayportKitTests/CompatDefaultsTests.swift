@@ -20,38 +20,50 @@ final class CompatDefaultsTests: XCTestCase {
         XCTAssertNil(table.entry(for: "app-367520"))
     }
 
-    /// Red Dead Redemption 2's Steam copy is served by Playport's Steam client (decision 0115).
-    func testTheShippedTableGivesRDR2PlayportsSteamClient() throws {
+    /// Every game is served by Playport's Steam client since decision 0153 (0115 was RDR2's alone);
+    /// RDR2's entry keeps the backend the Rockstar launcher it starts draws with.
+    func testEveryGameGetsPlayportsSteamClientAndRDR2KeepsVulkan() throws {
         let table = try CompatDefaults.load(directory: Self.shipped)
         let rdr2 = try XCTUnwrap(table.entry(for: "app-1174180"))
-        XCTAssertEqual(rdr2.settings.steamAPI, .client)
-        // The Rockstar launcher it starts draws through Vulkan, as its Open does (PublisherLauncher.rockstar).
+        XCTAssertNil(rdr2.settings.steamAPI)
         XCTAssertEqual(rdr2.settings.graphics, PublisherLauncher.rockstar.graphics)
-        XCTAssertEqual(LaunchSettings().over(rdr2.settings).steamAPI, .client)
-        XCTAssertEqual(LaunchSettings(steamAPI: .emulated).over(rdr2.settings).steamAPI, .emulated)
+        XCTAssertEqual(LaunchSettings().over(LaunchSettings.overEveryGame(rdr2.settings)).steamAPI, .client)
+        XCTAssertEqual(LaunchSettings(steamAPI: .emulated).over(LaunchSettings.overEveryGame(nil)).steamAPI, .emulated)
     }
 
-    /// RDR2's runtime keys: its address-space holdback, and the owner's chosen defaults for an
-    /// owner-run test (decision 0142): a 3,072 MiB heap, fastsync semaphores and FEX without AFP;
-    /// and the x64 critical-section stubs and FEX's batch 2 (decision 0152).
-    static let rdr2Runtime = "jumbo-mb=8960 env.PLAYPORT_VK_HEAP_MB=3072 env.MADEIRA_FASTSYNC_SEM=1 "
-        + "env.FEX_HOSTFEATURES=disableafp env.MADEIRA_X64_CS_FASTPATH=1 env.MADEIRA_FEX_BATCH2=1"
+    /// Every game's runtime keys (decision 0153, from RDR2's of decisions 0126, 0142, 0152, plus
+    /// the crash-reporter refusal): the address-space holdback, a 3,072 MiB heap, fastsync
+    /// semaphores, the x64 critical-section stubs and FEX's batch 2. FEX without AFP stays RDR2's.
+    static let everyGameRuntime = "jumbo-mb=8960 env.PLAYPORT_VK_HEAP_MB=3072 env.MADEIRA_FASTSYNC_SEM=1 "
+        + "env.MADEIRA_X64_CS_FASTPATH=1 env.MADEIRA_FEX_BATCH2=1 env.PLAYPORT_SC_BLOCK_CRASHPAD=1"
 
-    /// Each of the owner's RDR2 defaults is a runtime key, so a person's Runtime keys row
-    /// overrides it by key and keeps the rest (decisions 0142, 0152).
-    func testRDR2sOwnerDefaultsAreRuntimeKeysAPersonOverrides() throws {
-        let table = try CompatDefaults.load(directory: Self.shipped)
-        let rdr2 = try XCTUnwrap(table.entry(for: "app-1174180"))
-        XCTAssertEqual(LaunchSettings.runtimeKeys(rdr2.settings.runtime),
-                       ["jumbo-mb": "8960", "env.PLAYPORT_VK_HEAP_MB": "3072", "env.MADEIRA_FASTSYNC_SEM": "1",
-                        "env.FEX_HOSTFEATURES": "disableafp", "env.MADEIRA_X64_CS_FASTPATH": "1",
-                        "env.MADEIRA_FEX_BATCH2": "1"])
+    /// Each default is a madeira.cfg key at the lowest level of a launch's config (Effective.config):
+    /// a title's cohort keys, then its compatibility entry's and a person's Runtime keys override it
+    /// by key and keep the rest (decisions 0091, 0153).
+    func testEveryGamesDefaultsAreTheLowestRuntimeKeys() throws {
+        XCTAssertEqual(LaunchSettings.everyGame.runtime, Self.everyGameRuntime)
+        let every: [String: String] = ["jumbo-mb": "8960", "env.PLAYPORT_VK_HEAP_MB": "3072", "env.MADEIRA_FASTSYNC_SEM": "1",
+                                       "env.MADEIRA_X64_CS_FASTPATH": "1", "env.MADEIRA_FEX_BATCH2": "1",
+                                       "env.PLAYPORT_SC_BLOCK_CRASHPAD": "1"]
+        XCTAssertEqual(LaunchSettings.everyGameKeys, every)
+        let plain = LaunchSettings.resolve(game: LaunchSettings.overEveryGame(nil), global: LaunchSettings())
+        XCTAssertEqual(plain.runtime, [:])
+        XCTAssertEqual(plain.config(over: [:]), every)
+        // A cohort title's own key (The Witcher 3's address-space hold) wins over everyGame's.
+        XCTAssertEqual(plain.config(over: ["jumbo-mb": "32768", "cage-hold": "1"])["jumbo-mb"], "32768")
+        // A person's key wins over all; everyGame's other keys stay.
         let own = LaunchSettings(runtime: "env.MADEIRA_FASTSYNC_SEM=0 env.PLAYPORT_VK_HEAP_MB=0 env.MADEIRA_FEX_BATCH2=0")
-            .over(rdr2.settings)
-        XCTAssertEqual(LaunchSettings.runtimeKeys(own.runtime),
-                       ["jumbo-mb": "8960", "env.PLAYPORT_VK_HEAP_MB": "0", "env.MADEIRA_FASTSYNC_SEM": "0",
-                        "env.FEX_HOSTFEATURES": "disableafp", "env.MADEIRA_X64_CS_FASTPATH": "1",
-                        "env.MADEIRA_FEX_BATCH2": "0"])
+            .over(LaunchSettings.overEveryGame(nil))
+        let config = LaunchSettings.resolve(game: own, global: LaunchSettings()).config(over: ["jumbo-mb": "32768"])
+        XCTAssertEqual(config, ["jumbo-mb": "32768", "env.PLAYPORT_VK_HEAP_MB": "0", "env.MADEIRA_FASTSYNC_SEM": "0",
+                                "env.MADEIRA_X64_CS_FASTPATH": "1", "env.MADEIRA_FEX_BATCH2": "0",
+                                "env.PLAYPORT_SC_BLOCK_CRASHPAD": "1"])
+        // A title's entry keeps its own runtime keys and takes everyGame's other settings.
+        let titled = LaunchSettings.overEveryGame(LaunchSettings(runtime: "jumbo-mb=4096"))
+        XCTAssertEqual(titled.runtime, "jumbo-mb=4096")
+        XCTAssertEqual(LaunchSettings.resolve(game: titled, global: LaunchSettings()).config(over: [:])["jumbo-mb"], "4096")
+        XCTAssertEqual(titled.jitPoolMB, 896)
+        XCTAssertEqual(LaunchSettings.overEveryGame(LaunchSettings(endLauncherAfterSignIn: false)).endLauncherAfterSignIn, false)
     }
 
     /// The table reaches players: no issue id or tracker address anywhere in it.

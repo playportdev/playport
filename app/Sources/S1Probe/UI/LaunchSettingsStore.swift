@@ -47,11 +47,12 @@ final class LaunchSettingsStore: ObservableObject {
     /// A game's compatibility default, nil for none.
     func compat(for id: String) -> CompatDefaults.Entry? { Self.compat.entry(for: id) }
 
-    /// The person's own settings for a game over its compatibility default.
+    /// The person's own settings for a game over its compatibility default, over Playport's
+    /// defaults for every game (LaunchSettings.everyGame, decision 0153).
     func effective(for title: InstalledTitle, inheritingGraphics: Bool = false) -> LaunchSettings.Effective {
-        let compat = Self.compat.entry(for: title.id)?.settings
-        var game = games[title.id].map { $0.over(compat) } ?? compat
-        if inheritingGraphics { game?.graphics = compat?.graphics }
+        let compat = LaunchSettings.overEveryGame(Self.compat.entry(for: title.id)?.settings)
+        var game: LaunchSettings? = games[title.id].map { $0.over(compat) } ?? compat
+        if inheritingGraphics { game?.graphics = compat.graphics }
         let arguments = (try? title.launchPlan(cohort: LibraryModel.cohort))?.args ?? []
         return LaunchSettings.resolve(game: game, global: global,
                                       importsDirect3D12: title.detectsDirect3D12, i386: title.isI386,
@@ -111,7 +112,7 @@ enum LaunchSettingsText {
     static func graphicsDetail(_ g: GraphicsBackend) -> String {
         switch g {
         case .dxmt: "Direct3D 10 and 11 on Metal"
-        case .vulkan: "Direct3D 8 to 12, experimental"
+        case .vulkan: "Direct3D 8 to 12"
         }
     }
 
@@ -140,9 +141,8 @@ enum LaunchSettingsText {
         return "Found references to \(detection.summary). This does not identify a dual-renderer game's active API."
     }
 
-    static let graphicsFooter = "DXMT runs Direct3D 10 and 11 on Metal. The default is Vulkan for 32-bit games and detected Direct3D 12 games, DXMT otherwise. "
-        + "Vulkan runs Direct3D 8 to 11 through DXVK and Direct3D 12 through vkd3d-proton, on Mesa's "
-        + "KosmicKrisp driver; it is experimental."
+    static let graphicsFooter = "The default is Vulkan: Direct3D 8 to 11 through DXVK and Direct3D 12 through vkd3d-proton, "
+        + "on Mesa's KosmicKrisp driver. DXMT runs Direct3D 10 and 11 straight on Metal."
 
     static func ordering(_ s: MemoryOrdering.Setting) -> String {
         switch s {

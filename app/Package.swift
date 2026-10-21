@@ -144,12 +144,12 @@ let package = Package(
         .binaryTarget(name: "MesaEGL", path: "Staged/MesaEGL.xcframework"),
         .binaryTarget(name: "MesaGallium", path: "Staged/MesaGallium.xcframework"),
         .target(name: "SharedMemory", cSettings: [.unsafeFlags(["-fobjc-arc", "-O2"])]),
-        .target(name: "JITHelperXPC", dependencies: release ? [] : ["SharedMemory"],
+        .target(name: "JITHelperXPC", dependencies: ["SharedMemory"],
                 swiftSettings: release ? [.define("PLAYPORT_RELEASE")] : []),
         .target(name: "PlayportJITEntry"),
         .target(
             name: "PlayportJIT",
-            dependencies: ["StikJIT", "JITHelperXPC", "PlayportJITEntry"] + (release ? [] : ["SharedMemory"]),
+            dependencies: ["StikJIT", "JITHelperXPC", "PlayportJITEntry", "SharedMemory"],
             swiftSettings: [.swiftLanguageMode(.v5)] + (release ? [.define("PLAYPORT_RELEASE")] : []),
             linkerSettings: [
                 // Nothing references the principal class but the Objective-C
@@ -166,7 +166,7 @@ let package = Package(
                            .product(name: "GOGClientKit", package: "GOGClient"),
                            .product(name: "EpicClientKit", package: "EpicClient"),
                            .product(name: "PlayportKit", package: "PlayportKit")]
-                + ["Relaunch"] + (release ? [] : ["AuthProbe"]) + (release ? [] : ["SharedMemory"]),
+                + ["Relaunch", "SharedMemory"] + (release ? [] : ["AuthProbe"]),
             path: "Sources/S1Probe",
             // Runtime/ ships at the app root through xtool.yml `resources`, not
             // as a SwiftPM resource bundle: ntdll resolves nls/ and <arch>-windows/

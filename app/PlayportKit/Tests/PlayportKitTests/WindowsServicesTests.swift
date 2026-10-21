@@ -22,23 +22,33 @@ final class WindowsServicesTests: XCTestCase {
         XCTAssertNil(try JSONDecoder().decode(LaunchSettings.self, from: Data(#"{"screen":"720"}"#.utf8)).windowsServices)
     }
 
-    func testTheShippedTableTurnsThemOnForRedDeadRedemption2Only() throws {
+    /// Every game starts its services since decision 0153 (LaunchSettings.everyGame); RDR2's
+    /// table entry keeps only its backend and FEX without AFP.
+    func testEveryGameStartsThemAndRDR2sEntryKeepsOnlyItsBackend() throws {
         let table = try CompatDefaults.load(directory: CompatDefaultsTests.shipped)
         let rdr2 = try XCTUnwrap(table.entry(for: "app-1174180"))
-        XCTAssertEqual(rdr2.settings, LaunchSettings(graphics: .vulkan, steamAPI: .client, runtime: CompatDefaultsTests.rdr2Runtime,
-                                                     windowsServices: true, jitPoolMB: 896, khronosVulkanLoader: true,
-                                                     endLauncherAfterSignIn: true))
-        XCTAssertNil(table.entry(for: "epic-Buffalo")?.settings.windowsServices)
-        XCTAssertNil(table.entry(for: "app-367520"))   // Hollow Knight starts no services
+        XCTAssertEqual(rdr2.settings, LaunchSettings(graphics: .vulkan, runtime: "env.FEX_HOSTFEATURES=disableafp"))
+        XCTAssertEqual(LaunchSettings.overEveryGame(rdr2.settings).windowsServices, true)
+        XCTAssertEqual(LaunchSettings.overEveryGame(nil).windowsServices, true)
+        XCTAssertEqual(LaunchSettings(windowsServices: false).over(LaunchSettings.overEveryGame(nil)).windowsServices, false)
+        XCTAssertNil(table.entry(for: "app-367520"))
     }
 
-    /// A release build runs RDR2 with its address-space holdback, the compatibility default's own
-    /// runtime key, and no person's keys (decision 0126).
-    func testAReleaseBuildKeepsOnlyTheCompatibilityDefaultsRuntimeKeys() throws {
+    /// A release build launches with the compatibility default's runtime keys, never a person's
+    /// (decision 0126), over everyGame's in the launch's config (decision 0153).
+    func testAReleaseBuildKeepsTheDefaultsRuntimeKeysOnly() throws {
         let table = try CompatDefaults.load(directory: CompatDefaultsTests.shipped)
-        XCTAssertEqual(LaunchSettings.releaseRuntime(compat: table.entry(for: "app-1174180")?.settings)["jumbo-mb"], "8960")
-        XCTAssertEqual(LaunchSettings.releaseRuntime(compat: table.entry(for: "app-367520")?.settings), [:])
-        XCTAssertEqual(LaunchSettings.releaseRuntime(compat: LaunchSettings(runtime: "no-equals")), [:])
+        XCTAssertNil(LaunchSettings.everyGameKeys["env.FEX_HOSTFEATURES"])   // Hollow Knight draws black without AFP
+        let rdr2 = LaunchSettings.releaseRuntime(compat: table.entry(for: "app-1174180")?.settings)
+        XCTAssertEqual(rdr2, ["env.FEX_HOSTFEATURES": "disableafp"])
+        var effective = LaunchSettings.resolve(game: nil, global: LaunchSettings())
+        effective.runtime = rdr2
+        var every = LaunchSettings.everyGameKeys
+        every["env.FEX_HOSTFEATURES"] = "disableafp"
+        XCTAssertEqual(effective.config(over: [:]), every)
+        XCTAssertEqual(LaunchSettings.releaseRuntime(compat: nil), [:])
+        XCTAssertEqual(LaunchSettings.releaseSteamAPI(compat: nil), .client)
+        XCTAssertEqual(LaunchSettings.releaseSteamAPI(compat: LaunchSettings(steamAPI: .emulated)), .emulated)
     }
 
     func testRpcSsEntryIsWineInfsAndOnlyTopsUp() throws {

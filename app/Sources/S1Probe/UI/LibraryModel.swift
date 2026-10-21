@@ -226,20 +226,21 @@ final class LibraryModel: ObservableObject {
               !TitleLaunch.shared.running, !TitleLaunch.shared.spent,
               SteamAccountModel.current?.installs.jobs[t.key] == nil else { return false }
         var plan = try t.launchPlan(cohort: Self.cohort)
-        // The player's settings over 720p, 60 fps, Vulkan for DX12 and DXMT otherwise.
+        // The player's settings over 720p, 60 fps, Vulkan and every game's defaults (decision 0153).
         #if PLAYPORT_RELEASE
         var settings = LaunchSettingsStore.shared.effective(for: t)
         // Memory ordering, block size, x87 precision, the disk cache, the Steam API choice and runtime keys are a dev build's
-        // (decision 0034): the player's app runs the game's profile and the emulator (Playport's Steam client where the
-        // game's compatibility default names it), whatever a dev build left stored.
+        // (decision 0034): the player's app runs the game's profile and the defaults, whatever a dev build left stored.
         settings.ordering = MemoryOrdering()
         settings.maxInst = nil
         settings.x87Reduced = nil
         settings.diskCache = nil
-        // Playport's Steam client where it is the game's compatibility default (decision 0115).
-        settings.steamAPI = LaunchSettingsStore.shared.compat(for: t.id)?.settings.steamAPI == .client ? .client : .emulated
-        // The compatibility default's runtime keys only, such as RDR2's address-space holdback (decision 0126).
-        settings.runtime = LaunchSettings.releaseRuntime(compat: LaunchSettingsStore.shared.compat(for: t.id)?.settings)
+        // Playport's Steam client unless the game's compatibility default says otherwise (decisions 0115, 0153).
+        let compat = LaunchSettingsStore.shared.compat(for: t.id)?.settings
+        settings.steamAPI = LaunchSettings.releaseSteamAPI(compat: compat)
+        // The compatibility default's runtime keys, never a person's (decision 0126); every game's go under
+        // them in config(over:) (decision 0153).
+        settings.runtime = LaunchSettings.releaseRuntime(compat: compat)
         settings.graphicsEnvironment = [:]
         #else
         var settings = LaunchSettingsStore.shared.effective(for: t)

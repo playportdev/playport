@@ -404,15 +404,13 @@ enum LaunchCoordinator {
         } else {
             unsetenv("PLAYPORT_DLL_OVERLAY")
         }
-        #if !PLAYPORT_RELEASE
-        // Decision 0138 (dev): ntdll refuses RDR2's later Social Club helper starts.
+        // Decisions 0138, 0153: ntdll refuses RDR2's later Social Club helper starts.
         if r.endLauncher != nil && GameSocialClubEnd.enabled && GameSocialClubEnd.refuseRestart {
             setenv(GameSocialClubEnd.refuseRestartVariable, "1", 1)
-            log("launcher: the game's Social Club helper starts after the first are refused (dev, decision 0138)")
+            log("launcher: the game's Social Club helper starts after the first are refused (decision 0138)")
         } else {
             unsetenv(GameSocialClubEnd.refuseRestartVariable)
         }
-        #endif
         log("graphics: \(r.graphics.rawValue); vulkan loader: \(r.khronosVulkanLoader ? "Khronos" : "Wine's")")
 
         if r.config.isEmpty {
@@ -611,11 +609,7 @@ enum LaunchCoordinator {
 
         let t0 = Date()
         step(.running(since: t0))
-        #if PLAYPORT_RELEASE
-        let endGameSocialClub = false
-        #else
-        let endGameSocialClub = GameSocialClubEnd.enabled   // decision 0133: Settings › Developer
-        #endif
+        let endGameSocialClub = GameSocialClubEnd.enabled   // decisions 0133, 0153: Settings › Graphics
         let launcher = r.endLauncher.map { s in
             LauncherEnd(signIn: s, profile: runtime.prefixURL.appendingPathComponent("drive_c/users/playport"),
                         endGameSocialClub: endGameSocialClub)
@@ -803,7 +797,7 @@ enum LaunchCoordinator {
                 + (baseline.map { "holds \($0.count) bytes of an earlier start" } ?? "is not there yet"))
             if endGameSocialClub { log("launcher: the game's own Social Club ends too, \(Int(LauncherEndTrigger.gameSocialClubAfterSignInS)) s "
                                          + "or more after its sign-in, when the footprint reaches the limit less "
-                                         + "\(LauncherEndTrigger.headroomMB) MB (dev, decisions 0133, 0141)") }
+                                         + "\(LauncherEndTrigger.headroomMB) MB (decisions 0133, 0141, 0153)") }
         }
 
         /// Whether the wait slices read the footprint: until the end and for 10 s after it.
@@ -858,7 +852,7 @@ enum LaunchCoordinator {
         private func endGameSocialClubNow(footprintMB footprint: Int, limitMB: Int, elapsed: TimeInterval) {
             gameSocialClubEnded = true
             log(String(format: "launcher: the footprint reached %d MB of the %d MB limit after the sign-in; ending the "
-                       + "game's own Social Club at +%.1f s (dev, decision 0133)", footprint, limitMB, elapsed))
+                       + "game's own Social Club at +%.1f s (decisions 0133, 0153)", footprint, limitMB, elapsed))
             var n: UInt32 = 0
             let rc = wine_host_session_control(Int32(PP_CONTROL_END_GAME_SOCIAL_CLUB), 0, 5_000, &n)
             log(rc == 0 ? "launcher: the session root ended \(n) of the game's Social Club processes"

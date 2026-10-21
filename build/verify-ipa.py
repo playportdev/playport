@@ -108,7 +108,8 @@ any mismatch:
                 UI_ACTIONS, HIO_VPAD, s1-host.log, run-events.jsonl), and its
                 Info.plist queries no URL scheme; it carries
                 the quiet-runtime switch MADEIRA_NO_DIAGNOSTICS and its log,
-                playport.log
+                playport.log, and links the donor pool (decision 0153:
+                pp_guest_pool_install, playport_guest_memory_backing)
 
 Identifiers (team, profile, UDID, certificate subject) are not printed.
 Needs: openssl, llvm-nm, llvm-objdump (host LLVM), and llvm-mingw's llvm-objdump
@@ -155,6 +156,8 @@ DEV_TYPES = ["UIDriver", "VirtualPad", "RunEvents", "WebSheetDriver",
 DEV_STRINGS = [b"S1_MODE", b"TITLE_NONCE", b"UI_ACTIONS", b"UI_SETTINGS", b"UI_CONTROLS", b"HIO_VPAD", b"s1-host.log",
                b"run-events.jsonl", b"steam-drive.log"]
 RELEASE_STRINGS = [b"MADEIRA_NO_DIAGNOSTICS", b"playport.log"]
+# The donor pool, in both builds since decision 0153: GuestPool.m's install and 0148's hook.
+RELEASE_SYMBOLS = ["_pp_guest_pool_install", "_playport_guest_memory_backing"]
 
 
 def check(ok, what):
@@ -593,6 +596,9 @@ def release_checks(exe, info):
     check(not found, "variant: none of the dev code's environment names or files" + (f" (found {', '.join(found)})" if found else ""))
     missing = [d.decode() for d in RELEASE_STRINGS if d not in body]
     check(not missing, "variant: the quiet-runtime switch and playport.log are in the executable"
+          + (f" (missing {', '.join(missing)})" if missing else ""))
+    missing = [n for n in RELEASE_SYMBOLS if n not in syms]
+    check(not missing, "variant: the donor pool is linked (decision 0153)"
           + (f" (missing {', '.join(missing)})" if missing else ""))
 
 
