@@ -27,7 +27,8 @@ the runs ended once their question was answered.
 | `6aa8353e09c76effaa4399c44183bc1fb89557eb4191728081f172fad95b61a6` | f4f998c | madeira-unix 0204, wine-pe 0051 as first written, 0052 QPC, 0053 InitOnce | passed (`.work/ui-runs/20261021T103559`; ntdll `[x18-patch] … x64_skipped=1`) |
 | `375c7233932b185292c9a9db68f2358f7b39587f6e46cb369dee349e635bcbf2` | 03a458a | + wine-pe 0051 fixed (below) | passed (`…T105309`) |
 | `6ab8471c6fdd27f3e4a9fa6219b70b5b0169d08a15f8a5402dd19fb64ebae0f1` | e704edf | + madeira-unix 0205 / mesa 0083 (one window owns the layer), batch 2 merged ([2026-10-21-batch2.md](2026-10-21-batch2.md)) | passed (`…T120007`) |
-| `7910e2a383b1e051ce161804a9cb088c39e84e7caa1873d29ac0281a0c32d186` | cd377ae | + wine-pe 0052 binds KERNEL32's QueryPerformanceCounter by name | passed (`…T122756`'s gate, `hk-7910`) |
+| `7910e2a383b1e051ce161804a9cb088c39e84e7caa1873d29ac0281a0c32d186` | cd377ae | + wine-pe 0052 binds KERNEL32's QueryPerformanceCounter by name | passed (`…T122657`) |
+| `ae8dbb17c2498bbc07ac2245f6d4f458d60fed5a4143083509dea8d89870d836` | this commit | + RDR2's compatibility default with decision 0152's two keys | passed (`…T140859`) |
 
 ## wine-pe 0051 was a no-op; fixed
 
@@ -117,9 +118,18 @@ the runs ended once their question was answered.
 | y1 (`…T113226-rdr2-y1`) | 375c7233 | defaults | 16.6 | 43 % | 26.0 ms | 3.05 | 1.59 | 10.4 | 431 | 630 k | 7310 |
 | d2 (`…T121700-rdr2-d2`) | 6ab8471c | defaults | 15.4 | 42 % | 27.6 ms | 2.90 | 1.48 | 10.4 | 377 | 564 k | 7439 |
 | d3 (`…T123515-rdr2-d3`) | 7910e2a3 | defaults | 15.4 | 42 % | 27.6 ms | 3.04 | 1.45 | 10.6 | 385 | 544 k | 7038 |
+| d4 (`…T132605-rdr2-d4`) | 7910e2a3 | defaults | 15.4 | 42 % | 27.5 ms | 2.97 | 1.45 | 10.6 | 378 | 564 k | 6918 |
+| d5 (`…T135614-rdr2-d5`) | 7910e2a3 | defaults | 14.8 | 41 % | 27.8 ms | 3.06 | 1.39 | 10.6 | 366 | 546 k | 6988 |
 | x7 (`…T130024-rdr2-x7`) | 7910e2a3 | CS, ECO_NATIVE, SAFE_MATH, FEX_BATCH2 | 14.3 | 50 % | 35.4 ms | 3.13 | 1.17 | 12.2 | 312 | 415 k | 7014 |
+| x10 (`…T133428-rdr2-x10`) | 7910e2a3 | CS, FEX_BATCH2 | 15.7 | 43 % | 27.4 ms | 3.06 | 1.35 | 11.6 | 351 | 457 k | 7149 |
+| x11 (`…T134726-rdr2-x11`) | 7910e2a3 | CS, FEX_BATCH2 | 15.7 | 43 % | 27.3 ms | 3.00 | 1.35 | 11.6 | 342 | 457 k | 6966 |
+| x9 (`…T131800-rdr2-x9`) | 7910e2a3 | CS, FEX_BATCH2 | *17.8* | 32 % | 23.4 ms | 1.99 | 1.43 | *12.4* | 305 | *49 k* | 7169 |
 
-y1's 300 s window: 16.3 fps at E 1.53 GHz (10.7 fps/E-GHz).
+300 s windows: y1 16.3 fps at E 1.53 GHz (10.7 fps/E-GHz); x10 15.6 fps at E 1.34 GHz (11.6).
+
+x9 is not the same scene. Its porch window drew 627 indexed draws a frame (`vkCmdDrawIndexed` 11,158/s), against
+1,860–1,950 in d3, d4, x7, x10 and x11; its x64→EC rate and core count fell with it. It is left out of the
+comparison.
 
 Arms that did not reach a measured window:
 
@@ -129,7 +139,13 @@ Arms that did not reach a measured window:
 | x2 (`…T112105-rdr2-x2`, log in `.work/agent-notes/pla413e/x2/host`) | 375c7233 | SC_SINGLE, CS, QPC, SAFE_MATH, ECO_NATIVE | the same; ended by the owner |
 | x5 (`…T122756-rdr2-x5`) | 7910e2a3 | CS, QPC, SAFE_MATH, ECO_NATIVE, FEX_BATCH2, KK_BATCH2, SC_BLOCK_CRASHPAD | the app died during the porch load (12:34:07; a crash corpse, no jetsam line; peak 6855 MB) |
 | x6 (`…T124552-rdr2-x6`) | 7910e2a3 | x5 without QPC | **jetsam per-process-limit** at the porch load (peak 8015 MB) |
-| qp1 (`…T125213-rdr2-qp1`) | 7910e2a3 | QPC only | the porch showed once (12:57:45), then a black screen at 60 fps with the orange spinner to the end; `RtlQueryPerformanceCounter` left `[xp-api-top]` (the stub took the calls) |
+| x8 (`…T130932-rdr2-x8`) | 7910e2a3 | x7 + KK_BATCH2 with `MESA_KK_BATCH2_SKIP=alloc` | loading screens, then black with the orange spinner at 60 fps (GPU 0.6 ms a frame) where the porch should be; the next run (x9) loaded the porch, so the save is unchanged |
+300 s windows: y1 16.3 fps at E 1.53 GHz (10.7 fps/E-GHz); x10 15.6 fps at E 1.34 GHz (11.6).
+
+x9 is not the same scene. Its porch window drew 627 indexed draws a frame (`vkCmdDrawIndexed` 11,158/s), against
+1,860–1,950 in d3, d4, x7, x10 and x11; its x64→EC rate and core count fell with it. It is left out of the
+comparison.
+ | 7910e2a3 | QPC only | the porch showed once (12:57:45), then a black screen at 60 fps with the orange spinner to the end; `RtlQueryPerformanceCounter` left `[xp-api-top]` (the stub took the calls) |
 
 - **The QPC stub binds, and RDR2 misbehaves with it.**
   - On 6aa8–6ab8 it bound nothing (`[x64-qpc]` absent): RDR2 and its launcher import
@@ -149,3 +165,28 @@ Arms that did not reach a measured window:
 - **Arthur's hair (SAFE_MATH).** Crops of the porch view, d3 (defaults, 12:41:32) against x7 (13:07:04): the
   hair and beard look the same, dark brown with grey highlights, in both. The porch is in shade, and 0082
   targets a red flat artefact "in bright light only", so the porch does not decide it.
+
+## Defaults: CS and FEX batch 2 (decision 0152)
+
+- **What was compared.** Four defaults runs (d2–d5) against two runs with `env.MADEIRA_X64_CS_FASTPATH=1
+  env.MADEIRA_FEX_BATCH2=1` (x10, x11), all on 7910e2a3, back to back.
+- **Result.** The switched runs were 9–12 % higher in fps per E-core GHz (11.6 against 10.4–10.6; the
+  defaults spread ±1 %), 2–6 % higher in fps, and drew 5–11 % less CPU power, at the same memory peak. Both
+  signed in and held the porch with no fault.
+- **The gain is modest.** It is mostly the same frame rate at a lower CPU clock under the clamp.
+- **Decision.** [0152](../decisions/0152-rdr2-default-x64-critical-sections-and-fex-batch2.md) makes the two
+  keys RDR2's compatibility default.
+- **Left off:**
+  - QPC (qp1, x5);
+  - KK batch 2 (x6, x8);
+  - SAFE_MATH (GPU +28 %, x7) and ECO_NATIVE (only measured with SAFE_MATH);
+  - ONCE and CALLRET_POP (run only in x1, which the layer fight ended; the launcher started with both on and
+    the InitOnce stub bound in five processes, but nothing was measured);
+  - single-process Social Club (owner's decision; above).
+
+**On the new default (nd1, `…T140959-rdr2-nd1`, ae8dbb17, no runtime-key row).**
+- The log shows `config: environment MADEIRA_X64_CS_FASTPATH=1` and `MADEIRA_FEX_BATCH2=1` from the
+  compatibility default, `FEX: batch2 bits=0xf`, and the `[x64-cs]` imports.
+- The game signed in at +128.9 s.
+- At the porch (60 s, `thermal: serious` from 14:11:15, after a 4 min build pause): 16.5 fps at E 1.50 GHz,
+  11.0 fps/E-GHz, 376 mW, peak 7549 MB.
