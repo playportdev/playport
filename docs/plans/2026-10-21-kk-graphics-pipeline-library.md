@@ -11,8 +11,10 @@ from the main checkout after the branch moves there. **Pins read:** `mesa` b39d1
 
 ## Runner state
 
-- **Branch:** `dev/kk-gpl` in the side copy `.work/worktrees/kkgpl`, not merged, not pushed.
-  Workstation only (owner, 2026-10-21): no phone gate until the branch moves to the main checkout.
+- **Branch:** `dev/kk-gpl-phone`, `dev/kk-gpl` rebased onto `main` `c2ed344` without conflicts
+  (`pp test --quick` passed), not merged, not pushed. It is in the side copy `.work/worktrees/kkgpl`
+  and is checked out in the main checkout for the phone gates. The commit ids below are from
+  `dev/kk-gpl`, which is kept as it was.
 - **Done:**
   - G0's host harness and G1 in `ea258b0` (`patches/mesa` 0096; host test `check_gpl`).
   - G2 in `8c31a22` (`patches/mesa` 0097; dev IPA `5a25af6e`, side copy, not installed). The vertex library is built at library creation; a
@@ -26,8 +28,9 @@ from the main checkout after the branch moves there. **Pins read:** `mesa` b39d1
   - Evidence: [2026-10-21-kk-gpl-host](../evidence/2026-10-21-kk-gpl-host.md).
   - G0's phone baseline is not run.
 - **Running:** none.
-- **Queue:** the workstation chunks are done. Next, once `dev/kk-gpl` moves to the main checkout,
-  rebased: G0's phone baseline, then G5 there; G6 after G5.
+- **Queue:** the workstation chunks are done. Next, in the main checkout on `dev/kk-gpl-phone`:
+  `./pp build` (commit the KosmicKrisp records it changes), G0's phone baseline, then G5; G6
+  after G5.
 - **Phone:** not used by this plan yet.
 - **Notes:** reports in the side copy's `.work/agent-notes/kk-gpl/reports/` (G2: `g2.md`, G3:
   `g3.md`, G4: `g4.md`, with what G5 greps for).
