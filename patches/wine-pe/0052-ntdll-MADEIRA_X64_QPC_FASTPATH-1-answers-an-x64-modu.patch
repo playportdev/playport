@@ -1,0 +1,331 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Wed, 21 Oct 2026 05:20:13 +0200
+Subject: [PATCH] ntdll: MADEIRA_X64_QPC_FASTPATH=1 answers an x64 module's
+ QueryPerformanceCounter without leaving the emulator
+
+RDR2 calls QueryPerformanceCounter about 40,000 times a second, each an
+x64->EC transition into ntdll's RtlQueryPerformanceCounter, which
+already counts in user mode (CNTVCT, converted with an offset measured
+against the system call and resynced about once a second).
+
+With MADEIRA_X64_QPC_FASTPATH=1 (off by default), the loader binds an
+x64 module's import of QueryPerformanceCounter or
+RtlQueryPerformanceCounter, when it resolves to ntdll's x64 export
+thunk, to an x64 stub in a page made per process. The stub gives what
+RtlQueryPerformanceCounter gives for the same count, with its
+divisions and 64-bit arithmetic: ticks(count) + offset, from the state
+time.c now keeps in struct qpc_state, read while its sequence count is
+even and unchanged and only within a second of the last resync. The
+count is RDTSC's, shifted right by FEX's TSC scale, which the stub
+reads once from CPUID 15h and keeps only when its ECX is CNTFRQ. No
+state yet, a resync writing or due, or an unknown scale jumps on to
+the export, which resyncs.
+
+A resync now writes the offset and last_sync under the sequence count;
+a thread that finds another one writing them leaves them to it and
+uses the offset already there (its own on the first sync). A [x64-qpc]
+line gives the stub's page; the [x64-cs] import line counts it with
+the critical-section stubs. fex 0061 makes RDTSC self-synchronizing
+under the same switch. Not covered: GetProcAddress callers.
+
+Linear: PLA-364
+Class: feature
+Evidence: docs/evidence/2026-10-21-x64-qpc-stub.md
+Offered-upstream: no; the transition cost is the iOS port's
+---
+ dlls/ntdll/loader.c     | 157 ++++++++++++++++++++++++++++++++++++++++
+ dlls/ntdll/ntdll_misc.h |  17 +++++
+ dlls/ntdll/time.c       |  42 ++++++++---
+ 3 files changed, 205 insertions(+), 11 deletions(-)
+
+diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
+index adffb8a20d1..6516fcae0d2 100644
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -1558,6 +1558,161 @@ static void *x64_cs_stub_for( HMODULE importer, const char *name, void *target )
+     if (!stubs || target != targets[leave]) return NULL;
+     return leave ? stubs + 0x80 : stubs;
+ }
++
++/* Playport: MADEIRA_X64_QPC_FASTPATH=1 (off by default). RDR2 calls
++ * QueryPerformanceCounter about 40,000 times a second, each an x64->EC
++ * transition into ntdll. With the switch, an x64 module's import of it (or
++ * of RtlQueryPerformanceCounter) goes to an x64 stub that gives what
++ * RtlQueryPerformanceCounter gives for the same count: ticks(count) + offset
++ * from struct qpc_state (time.c), read while its seq is even and unchanged,
++ * and only within a second of the last resync. Anything else (no state yet,
++ * a resync writing or due, an unknown RDTSC scale) jumps on to ntdll's
++ * export, the import's address before, which resyncs.
++ *
++ * The count is RDTSC's shifted right by x64_tsc_shift. FEX's RDTSC is the
++ * generic timer shifted left by its TSC scale, which CPUID 15h gives
++ * (EBX / EAX = 2^scale, ECX = the timer's frequency); the stub reads it on
++ * its first call and keeps the shift, or 0xfe when ECX is not CNTFRQ or the
++ * ratio is no power of two. The divisions are RtlQueryPerformanceCounter's,
++ * 64-bit as in C. FEX makes RDTSC self-synchronizing (ISB) under the same
++ * switch, as qpc_read_cntvct is, so a thread's counts never go back.
++ * Arguments: rcx counter; rax, rcx, rdx and r8-r11 are written, rbx is
++ * saved around CPUID. The stub ends in its state pointer and target. */
++static const BYTE x64_qpc_code[] =
++{
++    0x49, 0x89, 0xcb,                               /* 00: mov r11,rcx */
++    0x4c, 0x8b, 0x05, 0xc6, 0x00, 0x00, 0x00,       /* 03: mov r8,[rip+0xc6] */
++    0x41, 0x0f, 0xb6, 0x48, 0x04,                   /* 0a: movzx ecx,byte [r8+0x4] */
++    0x80, 0xf9, 0xfe,                               /* 0f: cmp cl,0xfe */
++    0x0f, 0x84, 0xaf, 0x00, 0x00, 0x00,             /* 12: je c7 */
++    0x77, 0x74,                                     /* 18: ja 8e */
++    0x0f, 0x31,                                     /* 1a: rdtsc */
++    0x48, 0xc1, 0xe2, 0x20,                         /* 1c: shl rdx,0x20 */
++    0x89, 0xc0,                                     /* 20: mov eax,eax */
++    0x48, 0x09, 0xd0,                               /* 22: or rax,rdx */
++    0x48, 0xd3, 0xe8,                               /* 25: shr rax,cl */
++    0x45, 0x8b, 0x08,                               /* 28: mov r9d,[r8] */
++    0x41, 0xf7, 0xc1, 0x01, 0x00, 0x00, 0x00,       /* 2b: test r9d,0x1 */
++    0x0f, 0x85, 0x8f, 0x00, 0x00, 0x00,             /* 32: jne c7 */
++    0x0f, 0xae, 0xe8,                               /* 38: lfence */
++    0x4d, 0x8b, 0x50, 0x08,                         /* 3b: mov r10,[r8+0x8] */
++    0x49, 0x8b, 0x48, 0x18,                         /* 3f: mov rcx,[r8+0x18] */
++    0x49, 0x8b, 0x50, 0x10,                         /* 43: mov rdx,[r8+0x10] */
++    0x0f, 0xae, 0xe8,                               /* 47: lfence */
++    0x45, 0x3b, 0x08,                               /* 4a: cmp r9d,[r8] */
++    0x75, 0x78,                                     /* 4d: jne c7 */
++    0x4d, 0x85, 0xd2,                               /* 4f: test r10,r10 */
++    0x74, 0x73,                                     /* 52: je c7 */
++    0x48, 0x85, 0xc9,                               /* 54: test rcx,rcx */
++    0x74, 0x6e,                                     /* 57: je c7 */
++    0x49, 0x89, 0xc1,                               /* 59: mov r9,rax */
++    0x49, 0x29, 0xc9,                               /* 5c: sub r9,rcx */
++    0x4d, 0x39, 0xd1,                               /* 5f: cmp r9,r10 */
++    0x73, 0x63,                                     /* 62: jae c7 */
++    0x48, 0x89, 0xd1,                               /* 64: mov rcx,rdx */
++    0x31, 0xd2,                                     /* 67: xor edx,edx */
++    0x49, 0xf7, 0xf2,                               /* 69: div r10 */
++    0x4c, 0x69, 0xc8, 0x80, 0x96, 0x98, 0x00,       /* 6c: imul r9,rax,0x989680 */
++    0x48, 0x69, 0xc2, 0x80, 0x96, 0x98, 0x00,       /* 73: imul rax,rdx,0x989680 */
++    0x31, 0xd2,                                     /* 7a: xor edx,edx */
++    0x49, 0xf7, 0xf2,                               /* 7c: div r10 */
++    0x4c, 0x01, 0xc8,                               /* 7f: add rax,r9 */
++    0x48, 0x01, 0xc8,                               /* 82: add rax,rcx */
++    0x49, 0x89, 0x03,                               /* 85: mov [r11],rax */
++    0xb8, 0x01, 0x00, 0x00, 0x00,                   /* 88: mov eax,0x1 */
++    0xc3,                                           /* 8d: ret */
++    0x53,                                           /* 8e: push rbx */
++    0xb8, 0x15, 0x00, 0x00, 0x00,                   /* 8f: mov eax,0x15 */
++    0x31, 0xc9,                                     /* 94: xor ecx,ecx */
++    0x0f, 0xa2,                                     /* 96: cpuid */
++    0x41, 0xb9, 0xfe, 0x00, 0x00, 0x00,             /* 98: mov r9d,0xfe */
++    0x83, 0xf8, 0x01,                               /* 9e: cmp eax,0x1 */
++    0x75, 0x1f,                                     /* a1: jne c2 */
++    0x8d, 0x53, 0xff,                               /* a3: lea edx,[rbx-0x1] */
++    0x85, 0xdb,                                     /* a6: test ebx,ebx */
++    0x74, 0x18,                                     /* a8: je c2 */
++    0x85, 0xda,                                     /* aa: test edx,ebx */
++    0x75, 0x14,                                     /* ac: jne c2 */
++    0x49, 0x8b, 0x50, 0x08,                         /* ae: mov rdx,[r8+0x8] */
++    0x48, 0x85, 0xd2,                               /* b2: test rdx,rdx */
++    0x74, 0x0f,                                     /* b5: je c6 */
++    0x89, 0xc9,                                     /* b7: mov ecx,ecx */
++    0x48, 0x39, 0xca,                               /* b9: cmp rdx,rcx */
++    0x75, 0x04,                                     /* bc: jne c2 */
++    0x44, 0x0f, 0xbc, 0xcb,                         /* be: bsf r9d,ebx */
++    0x45, 0x88, 0x48, 0x04,                         /* c2: mov byte [r8+0x4],r9b */
++    0x5b,                                           /* c6: pop rbx */
++    0x4c, 0x89, 0xd9,                               /* c7: mov rcx,r11 */
++    0xff, 0x25, 0x08, 0x00, 0x00, 0x00,             /* ca: jmp [rip+0x8] */
++};
++C_ASSERT( sizeof(x64_qpc_code) == 0xd0 );
++
++static BOOL x64_qpc_fastpath_on(void)
++{
++    static int on = -1;
++    if (on < 0)
++    {
++        UNICODE_STRING nm, val;
++        WCHAR buf[8];
++        RtlInitUnicodeString( &nm, L"MADEIRA_X64_QPC_FASTPATH" );
++        val.Buffer = buf; val.Length = 0; val.MaximumLength = sizeof(buf);
++        on = (!RtlQueryEnvironmentVariable_U( NULL, &nm, &val ) && val.Length && buf[0] == '1');
++    }
++    return on;
++}
++
++/* The x64 stub for an x64 module's import of name resolved to target, or NULL
++ * to keep target; the stub's page is made once a process, before it runs. */
++static void *x64_qpc_stub_for( HMODULE importer, const char *name, void *target )
++{
++    static BYTE *stub;
++    static void *qpc_target;
++    static BOOL tried;
++    const IMAGE_NT_HEADERS *nt;
++    LDR_DATA_TABLE_ENTRY *mod;
++
++    if (strcmp( name, "QueryPerformanceCounter" ) && strcmp( name, "RtlQueryPerformanceCounter" )) return NULL;
++    if (!x64_qpc_fastpath_on()) return NULL;
++    nt = RtlImageNtHeader( importer );
++    if (!nt || nt->FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64 || arm64ec_get_module_metadata( importer ))
++        return NULL;
++    if (LdrFindEntryForAddress( target, &mod ) || mod->DdagNode != node_ntdll) return NULL;
++
++    if (!tried)
++    {
++        const IMAGE_EXPORT_DIRECTORY *exports;
++        DWORD exp_size;
++        void *base = NULL, *state = &qpc_state;
++        SIZE_T size = 0x1000;
++        ULONG old;
++
++        tried = TRUE;
++        if (!(exports = RtlImageDirectoryEntryToData( mod->DllBase, TRUE, IMAGE_DIRECTORY_ENTRY_EXPORT, &exp_size )))
++            return NULL;
++        qpc_target = find_named_export( mod->DllBase, exports, exp_size, "RtlQueryPerformanceCounter", -1, NULL, NULL, FALSE );
++        if (!qpc_target || memcmp( qpc_target, x64_cs_export_thunk, sizeof(x64_cs_export_thunk) ))
++        {
++            ERR( "[x64-qpc] ntdll's RtlQueryPerformanceCounter %p is not an x64 export thunk; the switch is off\n",
++                 qpc_target );
++            return NULL;
++        }
++        if (NtAllocateVirtualMemory( NtCurrentProcess(), &base, 0, &size, MEM_RESERVE | MEM_COMMIT,
++                                     PAGE_EXECUTE_READWRITE ))
++        {
++            ERR( "[x64-qpc] no page for the stub; the switch is off\n" );
++            return NULL;
++        }
++        memcpy( base, x64_qpc_code, sizeof(x64_qpc_code) );
++        memcpy( (BYTE *)base + sizeof(x64_qpc_code), &state, sizeof(void *) );
++        memcpy( (BYTE *)base + sizeof(x64_qpc_code) + sizeof(void *), &qpc_target, sizeof(void *) );
++        NtProtectVirtualMemory( NtCurrentProcess(), &base, &size, PAGE_EXECUTE_READ, &old );
++        stub = base;
++        ERR( "[x64-qpc] x64 QueryPerformanceCounter stub at %p for %p, state %p (MADEIRA_X64_QPC_FASTPATH)\n",
++             stub, qpc_target, state );
++    }
++    if (!stub || target != qpc_target) return NULL;
++    return stub;
++}
+ #endif
+ 
+ static BOOL import_dll( WINE_MODREF *wm, const IMAGE_IMPORT_DESCRIPTOR *descr, LPCWSTR load_path, WINE_MODREF **pwm )
+@@ -1777,6 +1932,8 @@ static BOOL import_dll( WINE_MODREF *wm, const IMAGE_IMPORT_DESCRIPTOR *descr, L
+             {
+                 void *stub = x64_cs_stub_for( module, (const char *)pe_name->Name,
+                                               (void *)thunk_list->u1.Function );
++                if (!stub) stub = x64_qpc_stub_for( module, (const char *)pe_name->Name,
++                                                    (void *)thunk_list->u1.Function );
+                 if (stub)
+                 {
+                     thunk_list->u1.Function = (ULONG_PTR)stub;
+diff --git a/dlls/ntdll/ntdll_misc.h b/dlls/ntdll/ntdll_misc.h
+index 58ad9ca6509..de9f7eb8508 100644
+--- a/dlls/ntdll/ntdll_misc.h
++++ b/dlls/ntdll/ntdll_misc.h
+@@ -217,4 +217,21 @@ extern struct ios_xp_nt ios_xp_nt;
+ extern unsigned int ios_counters_on;
+ extern void ios_xp_nt_init(void);
+ 
++#if defined(__aarch64__) || defined(__arm64ec__)
++/* Playport: RtlQueryPerformanceCounter's state (time.c). MADEIRA_X64_QPC_FASTPATH's
++ * x64 stub (loader.c) reads it at these offsets: a value is ticks(count) +
++ * offset only while seq is even and unchanged across the reads. */
++struct qpc_state
++{
++    volatile LONG seq;       /* 0x00: odd while a resync writes offset and last_sync */
++    BYTE x64_tsc_shift;      /* 0x04: the stub's own, RDTSC over the count: 0xff unknown, 0xfe unusable */
++    ULONGLONG freq;          /* 0x08: CNTFRQ, set once */
++    LONGLONG offset;         /* 0x10: ticks to add, 100 ns */
++    ULONGLONG last_sync;     /* 0x18: the count at the last resync, 0 before the first */
++};
++C_ASSERT( FIELD_OFFSET( struct qpc_state, x64_tsc_shift ) == 0x04 && FIELD_OFFSET( struct qpc_state, freq ) == 0x08 &&
++          FIELD_OFFSET( struct qpc_state, offset ) == 0x10 && FIELD_OFFSET( struct qpc_state, last_sync ) == 0x18 );
++extern struct qpc_state qpc_state;
++#endif
++
+ #endif
+diff --git a/dlls/ntdll/time.c b/dlls/ntdll/time.c
+index 2fbda1ac54f..2c5ae32327f 100644
+--- a/dlls/ntdll/time.c
++++ b/dlls/ntdll/time.c
+@@ -391,9 +391,13 @@ LONGLONG WINAPI RtlGetSystemTimePrecise( void )
+  * between the two is measured against the syscall and re-checked about once a
+  * second of counter time. The offset only ever moves forward, and only by more
+  * than 1 ms (a real sleep), so it is constant while the game runs and the
+- * counter stays monotonic within and across threads. */
+-static ULONGLONG qpc_freq, qpc_last_sync;
+-static LONGLONG qpc_offset;
++ * counter stays monotonic within and across threads.
++ *
++ * Playport: the state is struct qpc_state (ntdll_misc.h), which
++ * MADEIRA_X64_QPC_FASTPATH's x64 stub (loader.c) reads too. A resync writes
++ * the offset and last_sync under its sequence count; a thread that finds
++ * another one writing leaves the update to it. */
++struct qpc_state qpc_state = { .x64_tsc_shift = 0xff };
+ static LONG qpc_disabled;
+ 
+ static inline ULONGLONG qpc_read_cntvct(void)
+@@ -405,23 +409,39 @@ static inline ULONGLONG qpc_read_cntvct(void)
+ 
+ static inline ULONGLONG qpc_to_ticks( ULONGLONG c )
+ {
+-    return (c / qpc_freq) * TICKSPERSEC + (c % qpc_freq) * TICKSPERSEC / qpc_freq;
++    return (c / qpc_state.freq) * TICKSPERSEC + (c % qpc_state.freq) * TICKSPERSEC / qpc_state.freq;
++}
++
++/* The offset to add after a resync that measured off at count c1: written
++ * with c1 as last_sync unless another thread is writing them. */
++static LONGLONG qpc_resync( LONGLONG off, ULONGLONG c1 )
++{
++    LONG seq = qpc_state.seq;
++
++    if ((seq & 1) || InterlockedCompareExchange( &qpc_state.seq, seq + 1, seq ) != seq)
++        return qpc_state.last_sync ? qpc_state.offset : off;
++    if (!qpc_state.last_sync || off > qpc_state.offset + TICKSPERSEC / 1000) qpc_state.offset = off;
++    qpc_state.last_sync = c1;
++    off = qpc_state.offset;
++    InterlockedExchange( &qpc_state.seq, seq + 2 );
++    return off;
+ }
+ 
+ BOOL WINAPI DECLSPEC_HOTPATCH RtlQueryPerformanceCounter( LARGE_INTEGER *counter )
+ {
+     ULONGLONG c;
++    LONGLONG offset;
+ 
+     if (qpc_disabled) goto slow;
+-    if (!qpc_freq)
++    if (!qpc_state.freq)
+     {
+         ULONGLONG f;
+         __asm__ __volatile__( "mrs %0, cntfrq_el0" : "=r"(f) );
+         if (!f) { qpc_disabled = 1; goto slow; }
+-        qpc_freq = f;
++        qpc_state.freq = f;
+     }
+     c = qpc_read_cntvct();
+-    if (!qpc_last_sync || c - qpc_last_sync >= qpc_freq)
++    if (!qpc_state.last_sync || c - qpc_state.last_sync >= qpc_state.freq)
+     {
+         LARGE_INTEGER sys;
+         ULONGLONG c0 = qpc_read_cntvct(), c1;
+@@ -429,11 +449,11 @@ BOOL WINAPI DECLSPEC_HOTPATCH RtlQueryPerformanceCounter( LARGE_INTEGER *counter
+         NtQueryPerformanceCounter( &sys, NULL );
+         c1 = qpc_read_cntvct();
+         off = sys.QuadPart - (LONGLONG)qpc_to_ticks( c0 + (c1 - c0) / 2 );
+-        if (!qpc_last_sync || off > qpc_offset + TICKSPERSEC / 1000) qpc_offset = off;
+-        qpc_last_sync = c1;
++        offset = qpc_resync( off, c1 );
+         c = c1;
+     }
+-    counter->QuadPart = (LONGLONG)qpc_to_ticks( c ) + qpc_offset;
++    else offset = qpc_state.offset;
++    counter->QuadPart = (LONGLONG)qpc_to_ticks( c ) + offset;
+     if (ios_counters_on)
+     {   /* ml1131: per-thread gap between successive reads (spin loop or not?).
+          * Plain stores into the calling thread's slot; a tid-hash collision only
+@@ -441,7 +461,7 @@ BOOL WINAPI DECLSPEC_HOTPATCH RtlQueryPerformanceCounter( LARGE_INTEGER *counter
+         static ULONGLONG t1, t10, t100, t1000;
+         DWORD tid = GetCurrentThreadId();
+         struct ios_xp_nt_qpc *q = &ios_xp_nt.qpc[(tid >> 2) & 255];
+-        if (!t1) { ios_xp_nt_init(); t1 = qpc_freq / 1000000; t10 = t1 * 10; t100 = t1 * 100; t1000 = t1 * 1000; }
++        if (!t1) { ios_xp_nt_init(); t1 = qpc_state.freq / 1000000; t10 = t1 * 10; t100 = t1 * 100; t1000 = t1 * 1000; }
+         if (q->tid != tid) { q->tid = tid; q->last = c; q->calls = 0; memset( q->hist, 0, sizeof(q->hist) ); }
+         else
+         {

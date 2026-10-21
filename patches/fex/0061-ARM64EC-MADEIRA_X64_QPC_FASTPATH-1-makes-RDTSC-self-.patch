@@ -1,0 +1,101 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Wed, 21 Oct 2026 05:20:13 +0200
+Subject: [PATCH] ARM64EC: MADEIRA_X64_QPC_FASTPATH=1 makes RDTSC
+ self-synchronizing on iOS
+
+FEX's RDTSC reads CNTVCT_EL0 with no ISB, so a read can be taken ahead
+of the instructions before it, and two reads in a thread can come out
+of order. Wine's ntdll (wine-pe 0052) binds x64 imports of
+QueryPerformanceCounter under MADEIRA_X64_QPC_FASTPATH=1 to an x64
+stub that counts with RDTSC, and QueryPerformanceCounter must never go
+back; RtlQueryPerformanceCounter's own read has an ISB.
+
+With the same switch (off by default), RDTSC reads the timer as RDTSCP
+already does: CNTVCTSS_EL0 with ECV, an ISB and CNTVCT_EL0 without.
+"FEX: rdtsc-self-sync enabled=" is logged at process start.
+
+Linear: PLA-364
+Class: feature
+Evidence: docs/evidence/2026-10-21-x64-qpc-stub.md
+Offered-upstream: no; RDTSC stays as upstream's without the switch
+---
+ .../Source/Interface/Core/ArchHelpers/Arm64Emitter.cpp    | 1 +
+ FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.h  | 4 ++++
+ FEXCore/Source/Interface/Core/OpcodeDispatcher.cpp        | 8 ++++++++
+ Source/Windows/ARM64EC/Module.cpp                         | 7 +++++++
+ 4 files changed, 20 insertions(+)
+
+diff --git a/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.cpp b/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.cpp
+index 3072385e7..fa36672f0 100644
+--- a/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.cpp
++++ b/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.cpp
+@@ -27,6 +27,7 @@
+ // Set by ARM64EC/Module.cpp before the dispatcher is emitted. See IosEcReturnWithRet in Arm64Emitter.h.
+ extern "C" uint32_t IosEcReturnWithRet = 0;
+ extern "C" uint32_t IosEcCallRetPop = 0;
++extern "C" uint32_t IosRdtscSelfSync = 0;
+ #endif
+ 
+ #ifdef FEX_IOS_HOST
+diff --git a/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.h b/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.h
+index 6a9acc6ff..800b4da83 100644
+--- a/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.h
++++ b/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.h
+@@ -119,6 +119,10 @@ extern "C" uint32_t IosEcReturnWithRet;
+ // the address being returned to (Dispatcher.cpp). Set by the frontend before the dispatcher is emitted
+ // (MADEIRA_FEX_EC_CALLRET_POP=1); 0 leaves the call-ret stack alone there, as Madeira did.
+ extern "C" uint32_t IosEcCallRetPop;
++// Playport: RDTSC reads the generic timer self-synchronized (ISB, or CNTVCTSS_EL0), as RDTSCP does, so a
++// thread's reads never go back (MADEIRA_X64_QPC_FASTPATH=1, whose x64 QueryPerformanceCounter stub in
++// ntdll's loader.c counts with RDTSC). Set by the frontend before any code is compiled; 0 is FEX's RDTSC.
++extern "C" uint32_t IosRdtscSelfSync;
+ #endif
+ 
+ constexpr uint64_t EC_CODE_BITMAP_MAX_ADDRESS = 1ULL << 47;
+diff --git a/FEXCore/Source/Interface/Core/OpcodeDispatcher.cpp b/FEXCore/Source/Interface/Core/OpcodeDispatcher.cpp
+index dbd902b5b..aa1d4ca13 100644
+--- a/FEXCore/Source/Interface/Core/OpcodeDispatcher.cpp
++++ b/FEXCore/Source/Interface/Core/OpcodeDispatcher.cpp
+@@ -3128,8 +3128,16 @@ OpDispatchBuilder::CycleCounterPair OpDispatchBuilder::CycleCounter(bool SelfSyn
+   };
+ }
+ 
++#if defined(FEX_IOS_HOST) && defined(ARCHITECTURE_arm64ec)
++extern "C" uint32_t IosRdtscSelfSync; // Arm64Emitter.h
++#endif
++
+ void OpDispatchBuilder::RDTSCOp(OpcodeArgs) {
++#if defined(FEX_IOS_HOST) && defined(ARCHITECTURE_arm64ec)
++  auto Counter = CycleCounter(IosRdtscSelfSync != 0);
++#else
+   auto Counter = CycleCounter(false);
++#endif
+   StoreGPRRegister(X86State::REG_RAX, Counter.CounterLow);
+   StoreGPRRegister(X86State::REG_RDX, Counter.CounterHigh);
+ }
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index 661a33b47..c5a62a2d0 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -95,6 +95,7 @@ extern "C" uint64_t IosFfsBypassLog[4];
+ /* Defined in FEXCore Arm64Emitter.cpp; read when the dispatcher and blocks are emitted. */
+ extern "C" uint32_t IosEcReturnWithRet;
+ extern "C" uint32_t IosEcCallRetPop;
++extern "C" uint32_t IosRdtscSelfSync;
+ 
+ /* Raw TSD byte offset (from TPIDRRO_EL0 & ~7) of the slot holding the TEB.
+  * Discovered and published by wine's ntdll-unix; imported in ProcessInit.
+@@ -1423,6 +1424,12 @@ NTSTATUS ProcessInit() {
+     const char* PopOpt = getenv("MADEIRA_FEX_EC_CALLRET_POP");
+     IosEcCallRetPop = PopOpt && strcmp(PopOpt, "1") == 0;
+     LogMan::Msg::IFmt("FEX: ec-callret-pop enabled={}", IosEcCallRetPop != 0);
++    /* Playport: MADEIRA_X64_QPC_FASTPATH=1 binds x64 imports of QueryPerformanceCounter to an x64 stub that
++     * counts with RDTSC (ntdll's loader.c), so RDTSC reads the timer self-synchronized (IosRdtscSelfSync in
++     * Arm64Emitter.h), as RtlQueryPerformanceCounter does. Off by default. */
++    const char* QpcOpt = getenv("MADEIRA_X64_QPC_FASTPATH");
++    IosRdtscSelfSync = QpcOpt && strcmp(QpcOpt, "1") == 0;
++    LogMan::Msg::IFmt("FEX: rdtsc-self-sync enabled={}", IosRdtscSelfSync != 0);
+   }
+ #endif
+ 
