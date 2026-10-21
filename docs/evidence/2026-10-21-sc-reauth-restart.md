@@ -141,3 +141,19 @@ So these were three fine runs (the race fired in 4 of 9 before; 0 of 3 here, 4 o
 
 The fix itself (allow, restart, world drawn after about +40 s, re-end near the limit) stays unproven
 on the phone until a run races.
+
+## 8. Two more runs (main, IPA `41431327`, decision 0156)
+
+The two RDR2 Story runs of [the launcher's exit code 0](2026-10-21-launcher-end-exit-0.md) (same
+defaults, `UNTIL=600`, no press on a box since 0156 removed it) also played on past the end of the
+game's own Social Club:
+
+| Run | `[game-sc] done` | Played after done | Re-sign-in / allow lines | `[kk-gpu]` after done | Last screenshot | Peak footprint | Jetsam |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| lb1 (`20261021T220845-rdr2-lb1`) | ff +143 s | 482 s | none | 469 one-second lines, none at 55+ fps; 16–20 fps at the end | the cabin, Arthur on the bed | 7652 MB | none |
+| lb2 (`20261021T222231-rdr2-lb2`) | ff +162 s | 463 s | none | 448, none at 55+ fps; 18–19 fps at the end | the cabin, Arthur on the bed | 7253 MB | none |
+
+As in ra1–ra3: the helpers ended once (`done: 2 ended of 4 processes in the job`), ntdll refused
+their restarts to the end (start 90), all 45 steamclient trace lines naming GetCurrentGameLanguage
+come before the end, and none of the section 2 lines appeared. The race fired in 0 of 5 runs on
+main (4 of 14 in all); the fix and both detectors stay unproven on the phone.
