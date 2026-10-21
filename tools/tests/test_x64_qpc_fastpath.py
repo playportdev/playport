@@ -293,15 +293,16 @@ STAGED = pathlib.Path(os.environ.get("PLAYPORT_BUILD", ROOT / ".work")) / "run/p
 @unittest.skipUnless(importlib.util.find_spec("pefile"), "reads the built DLLs with pefile")
 @unittest.skipUnless((STAGED / "kernel32/arm64ec-windows/kernel32.dll").exists(), "needs a built arm64ec kernel32")
 class X64QpcKernel32Import(unittest.TestCase):
-    """RDR2 imports QueryPerformanceCounter from KERNEL32. The built KERNEL32's export is the x64
-    jmp [rip+d] the loader follows, through an import of kernelbase's QueryPerformanceCounter,
-    which kernelbase forwards to ntdll's RtlQueryPerformanceCounter."""
+    """RDR2 imports QueryPerformanceCounter from KERNEL32, which the loader binds to the stub by
+    name: the built KERNEL32's export is an x64 jmp [rip+d] through its import of kernelbase's
+    QueryPerformanceCounter, which kernelbase forwards to ntdll's RtlQueryPerformanceCounter, so
+    the name stands for the function the stub falls back to."""
 
-    def test_kernel32_export_is_one_jump_to_ntdll(self):
+    def test_kernel32_export_is_ntdlls_by_way_of_kernelbase(self):
         import pefile
         loader = added_lines("dlls/ntdll/loader.c")
-        self.assertIn("code[0] != 0xff || code[1] != 0x25", loader)
-        self.assertIn("target = *(void **)(code + 6 + *(const INT32 *)(code + 2));", loader)
+        self.assertIn("_stricmp( dll, \"kernel32.dll\" ) || strcmp( name, \"QueryPerformanceCounter\" )", loader)
+        self.assertIn("by_name = TRUE;", loader)
 
         k32 = pefile.PE(str(STAGED / "kernel32/arm64ec-windows/kernel32.dll"))
         export = next(e for e in k32.DIRECTORY_ENTRY_EXPORT.symbols if e.name == b"QueryPerformanceCounter")

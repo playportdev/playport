@@ -32,11 +32,11 @@ Offered-upstream: no; the transition cost is the iOS port's
  1 file changed, 93 insertions(+)
 
 diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
-index c06327932fa..f5ac2ccf98c 100644
+index 3f904d229dc..a99c46f311b 100644
 --- a/dlls/ntdll/loader.c
 +++ b/dlls/ntdll/loader.c
-@@ -1727,6 +1727,97 @@ static void *x64_qpc_stub_for( HMODULE importer, const char *name, void *target
-     if (!stub || (target != qpc_target && target != qpc_ec)) return NULL;
+@@ -1740,6 +1740,97 @@ static void *x64_qpc_stub_for( HMODULE importer, const char *dll, const char *na
+     if (!stub || (!by_name && target != qpc_target && target != qpc_ec)) return NULL;
      return stub;
  }
 +
@@ -133,9 +133,9 @@ index c06327932fa..f5ac2ccf98c 100644
  #endif
  
  static BOOL import_dll( WINE_MODREF *wm, const IMAGE_IMPORT_DESCRIPTOR *descr, LPCWSTR load_path, WINE_MODREF **pwm )
-@@ -1948,6 +2039,8 @@ static BOOL import_dll( WINE_MODREF *wm, const IMAGE_IMPORT_DESCRIPTOR *descr, L
+@@ -1961,6 +2052,8 @@ static BOOL import_dll( WINE_MODREF *wm, const IMAGE_IMPORT_DESCRIPTOR *descr, L
                                                (void *)thunk_list->u1.Function );
-                 if (!stub) stub = x64_qpc_stub_for( module, (const char *)pe_name->Name,
+                 if (!stub) stub = x64_qpc_stub_for( module, name, (const char *)pe_name->Name,
                                                      (void *)thunk_list->u1.Function );
 +                if (!stub) stub = x64_once_stub_for( module, (const char *)pe_name->Name,
 +                                                     (void *)thunk_list->u1.Function );
