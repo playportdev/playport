@@ -1,13 +1,15 @@
 # RDR2: allow the Social Club restart after a re-sign-in that follows its end (PLA-413)
 
 **Linear:** PLA-413. **Decision:** [0155](../decisions/0155-allow-rdr2s-social-club-restart-after-a-re-sign-in.md).
-**IPA:** dev, `Playport-26.5-b09df78f.ipa`, sha256
-`b09df78f2566ca7600a3355c3b25233c6a25b30af20854b42835586711d89dcc`. It was built in the side
-worktree `.work/worktrees/screauth` (decision 0117), on branch `screauth` rebased onto main `1030a6d`.
+**IPA:** dev, built in the side worktree `.work/worktrees/screauth` (decision 0117) on branch
+`screauth` rebased onto main `1030a6d`: `Playport-26.5-b09df78f.ipa`, sha256
+`b09df78f2566ca7600a3355c3b25233c6a25b30af20854b42835586711d89dcc`. After the fast-forward into main
+(`64e4d9e`), main's build gave `Playport-26.5-b24c29a3.ipa`, sha256
+`b24c29a39780d53c757073b6b97769a470aa49f0bfb1c015906033cb67899fc1`; every phone run below used that.
 
-**Phone test not run.** This was built and checked on the host only. Neither the Hollow Knight gate
-nor RDR2 has run on this IPA. Whether the game's reload finishes once its helper may restart is
-not shown yet.
+**Phone result (section 7): the race did not fire in 3 RDR2 Story runs.** No re-sign-in after the
+end, so no allow, and none of the new lines (no false positive). Whether the reload finishes once the
+helper may restart, and which detector sees the re-sign-in, is still not shown.
 
 ## 1. The cause (from the read-only analysis)
 
@@ -103,4 +105,39 @@ What proves it, in the pulled `s1-host.log`:
   decision is 0155; wine_host ABI 10 → 11; session control 11.
 - `app/artifacts.tsv`: only the `playport-session.exe` and `lib/libntdll_unix.a` rows. Neither
   file names a build path. `libdxmt_combined.a` and `libidevice_ffi.a` keep main's values, as
-  0117 says. The main checkout's build confirms them.
+  0117 says. The main checkout's build confirms them: `./pp build` in main after the fast-forward
+  left `app/artifacts.tsv` and `build/generated/` unchanged (verify-ipa 89 checks passed), and
+  `./pp test` passed.
+
+## 7. Phone results (main, IPA `b24c29a3`)
+
+Phone: 80 %, on external power, 4.1–4.8 GB free before each run; unattended mode on. Hollow Knight
+gate: `pp ui --play app-367520 --until first-frame+10 --shot`, first frame at +11.9 s; the screenshot
+shows the title menu (Start Game, Options, …) under a notification banner. Run directory
+`.work/ui-runs/20261021T205101`.
+
+RDR2 Story with the defaults (`qarm.sh NAME ''`, `RUN_IPA=b24c29a3`, aspect 16:9, no stick input;
+the scripted pad pressed only A on the PlayRDR2 launch box and A on the Story tab), each until first frame + `UNTIL`:
+
+| Run | First frame | `[game-sc] done` | Played after done | Re-sign-in / allow lines | `[kk-gpu]` after done | Last screenshot | Peak footprint | Jetsam |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| ra1 (`20261021T205254-rdr2-ra1`, UNTIL 540) | +91.6 s | ff +155 s | 385 s | none | 391 one-second lines, none at 55+ fps; 16–19 fps at the end | the cabin, Arthur on the bed | 7078 MB | none |
+| ra2 (`20261021T210528-rdr2-ra2`, UNTIL 540) | +105.0 s | ff +184 s | 356 s | none | 364, none at 55+ fps; 17–19 fps | the cabin | 7516 MB | none |
+| ra3 (`20261021T211752-rdr2-ra3`, UNTIL 600) | +114.4 s | ff +187 s | 413 s | none | 431, none at 55+ fps; 16–18 fps | the cabin | 7262 MB | none |
+
+Every run ended the game's helpers once (`done: 2 ended of 4 processes in the job`), and ntdll then
+refused its restarts every ~5 s to the end (start 80, 70 and 90). The dev steamclient trace shows no
+GetCurrentGameLanguage call after the end in any run (all 45 trace lines naming it come before), so
+the steam-language fallback had nothing to count, and the app wrote none of the section 2 lines.
+Jetsam: no `JetsamEvent` report pulled for the day, and the app ran to the end of every run.
+
+So these were three fine runs (the race fired in 4 of 9 before; 0 of 3 here, 4 of 12 in all):
+- **no false positive**: neither detector fired without a re-sign-in;
+- **socialclub.log**: not shown either way, since the game never signed in again;
+- **steam-language**: not exercised; it exists only in a dev build (the steamclient trace is
+  dev-only), so a release build relies on the socialclub.log detector alone. If a racing run shows
+  only steam-language firing, a release-capable detector is needed (for example counting
+  GetCurrentGameLanguage in the Swift steamclient provider itself, without the trace).
+
+The fix itself (allow, restart, world drawn after about +40 s, re-end near the limit) stays unproven
+on the phone until a run races.
