@@ -157,6 +157,33 @@ load_module(const char *name)
    return m;
 }
 
+/* Whether this run asks for VK_EXT_graphics_pipeline_library (PLA-424):
+ * MESA_KK_EXPERIMENTAL names gpl. */
+static bool
+gpl_wanted(void)
+{
+   const char *e = getenv("MESA_KK_EXPERIMENTAL");
+   return e && strstr(e, "gpl");
+}
+
+static bool
+has_device_extension(VkPhysicalDevice pd, const char *name)
+{
+   IPROC(vkEnumerateDeviceExtensionProperties);
+   uint32_t n = 0;
+   CHECK(vkEnumerateDeviceExtensionProperties(pd, NULL, &n, NULL));
+   VkExtensionProperties *p = calloc(n, sizeof(*p));
+   CHECK(vkEnumerateDeviceExtensionProperties(pd, NULL, &n, p));
+   bool found = false;
+   for (uint32_t i = 0; i < n; i++)
+      found |= !strcmp(p[i].extensionName, name);
+   free(p);
+   return found;
+}
+
+static int check_gpl(VkPhysicalDevice pd, VkQueue queue, VkCommandPool pool,
+                     VkBuffer buf);
+
 struct pipe_desc {
    const char *name;
    const char *vs, *tcs, *tes, *gs, *fs;
@@ -1132,9 +1159,24 @@ main(int argc, char **argv)
       .dynamicRendering = VK_TRUE,
       .synchronization2 = VK_TRUE,
    };
+   VkPhysicalDeviceGraphicsPipelineLibraryFeaturesEXT gpl_enable = {
+      .sType =
+         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GRAPHICS_PIPELINE_LIBRARY_FEATURES_EXT,
+      .pNext = &v13,
+      .graphicsPipelineLibrary = VK_TRUE,
+   };
+   /* PLA-424: VK_EXT_graphics_pipeline_library only with
+    * MESA_KK_EXPERIMENTAL=gpl; without it nothing changes. */
+   const bool gpl = has_device_extension(pd, "VK_EXT_graphics_pipeline_library");
+   if (gpl != gpl_wanted()) {
+      fprintf(stderr, "VK_EXT_graphics_pipeline_library %s with MESA_KK_EXPERIMENTAL=%s\n",
+              gpl ? "exposed" : "not exposed",
+              getenv("MESA_KK_EXPERIMENTAL") ? getenv("MESA_KK_EXPERIMENTAL") : "");
+      return 1;
+   }
    VkPhysicalDeviceTransformFeedbackFeaturesEXT xfb_enable = {
       .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TRANSFORM_FEEDBACK_FEATURES_EXT,
-      .pNext = &v13,
+      .pNext = gpl ? (void *)&gpl_enable : (void *)&v13,
       .transformFeedback = VK_TRUE,
       .geometryStreams = VK_TRUE,
    };
@@ -1150,13 +1192,20 @@ main(int argc, char **argv)
       .shaderClipDistance = VK_TRUE,
       .shaderCullDistance = VK_TRUE,
    };
-   const char *exts[] = {"VK_EXT_transform_feedback", "VK_EXT_provoking_vertex"};
+   const char *exts[4] = {"VK_EXT_transform_feedback"};
+   uint32_t next = 1;
+   if (pv_feat.provokingVertexLast)
+      exts[next++] = "VK_EXT_provoking_vertex";
+   if (gpl) {
+      exts[next++] = "VK_KHR_pipeline_library";
+      exts[next++] = "VK_EXT_graphics_pipeline_library";
+   }
    VkDeviceCreateInfo dci = {
       .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
       .pNext = &pv_enable,
       .queueCreateInfoCount = 1,
       .pQueueCreateInfos = &qci,
-      .enabledExtensionCount = pv_feat.provokingVertexLast ? 2 : 1,
+      .enabledExtensionCount = next,
       .ppEnabledExtensionNames = exts,
       .pEnabledFeatures = &feats,
    };
@@ -2041,5 +2090,326 @@ main(int argc, char **argv)
 
    if (check_linear_images(pd, queue, pool))
       return 1;
+   if (gpl_wanted() && check_gpl(pd, queue, pool, buf))
+      return 1;
+   return 0;
+}
+
+/* VK_EXT_graphics_pipeline_library, used the way DXVK uses it (PLA-424):
+ * one library per part (vertex input, pre-rasterization with the vertex
+ * shader, fragment shader, fragment output), linked fast (no flags) and with
+ * link-time optimization, drawn into two colour formats with two vertex
+ * layouts, and a depth-only pipeline whose fragment shader library has no
+ * shader. Each pipeline records draws and is submitted. */
+struct gpl_libs {
+   VkPipelineLayout layout;
+   VkShaderModule vs, fs;
+};
+
+static VkPipeline
+gpl_library(const struct gpl_libs *g, VkGraphicsPipelineLibraryFlagsEXT part,
+            VkFormat attr_format, VkFormat color, bool blend, bool with_fs)
+{
+   DPROC(vkCreateGraphicsPipelines);
+   VkGraphicsPipelineLibraryCreateInfoEXT lib = {
+      .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_LIBRARY_CREATE_INFO_EXT,
+      .flags = part,
+   };
+   VkPipelineRenderingCreateInfo rinfo = {
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
+      .pNext = &lib,
+      .colorAttachmentCount = color != VK_FORMAT_UNDEFINED,
+      .pColorAttachmentFormats = &color,
+   };
+   VkGraphicsPipelineCreateInfo ci = {
+      .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+      .pNext = &rinfo,
+      .flags = VK_PIPELINE_CREATE_LIBRARY_BIT_KHR |
+               VK_PIPELINE_CREATE_RETAIN_LINK_TIME_OPTIMIZATION_INFO_BIT_EXT,
+   };
+
+   VkVertexInputBindingDescription binding = {
+      0, attr_format == VK_FORMAT_R8G8B8A8_UNORM ? 4 : 16,
+      VK_VERTEX_INPUT_RATE_VERTEX};
+   VkVertexInputAttributeDescription attr = {0, 0, attr_format, 0};
+   VkPipelineVertexInputStateCreateInfo vi = {
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+      .vertexBindingDescriptionCount = 1,
+      .pVertexBindingDescriptions = &binding,
+      .vertexAttributeDescriptionCount = 1,
+      .pVertexAttributeDescriptions = &attr,
+   };
+   VkPipelineInputAssemblyStateCreateInfo ia = {
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+      .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+   };
+   VkPipelineViewportStateCreateInfo vp = {
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+      .viewportCount = 1,
+      .scissorCount = 1,
+   };
+   VkPipelineRasterizationStateCreateInfo rs = {
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+      .polygonMode = VK_POLYGON_MODE_FILL,
+      .lineWidth = 1.0f,
+   };
+   VkPipelineMultisampleStateCreateInfo ms = {
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+      .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+   };
+   VkPipelineDepthStencilStateCreateInfo ds = {
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+   };
+   VkPipelineColorBlendAttachmentState att = {
+      .blendEnable = blend,
+      .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
+      .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+      .colorBlendOp = VK_BLEND_OP_ADD,
+      .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+      .dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
+      .alphaBlendOp = VK_BLEND_OP_ADD,
+      .colorWriteMask = 0xf,
+   };
+   VkPipelineColorBlendStateCreateInfo cb = {
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+      .attachmentCount = color != VK_FORMAT_UNDEFINED,
+      .pAttachments = &att,
+   };
+   VkDynamicState dyn_states[] = {VK_DYNAMIC_STATE_VIEWPORT,
+                                  VK_DYNAMIC_STATE_SCISSOR};
+   VkPipelineDynamicStateCreateInfo dyn = {
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+      .dynamicStateCount = 2,
+      .pDynamicStates = dyn_states,
+   };
+   VkPipelineShaderStageCreateInfo stage = {
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+      .pName = "main",
+   };
+
+   switch (part) {
+   case VK_GRAPHICS_PIPELINE_LIBRARY_VERTEX_INPUT_INTERFACE_BIT_EXT:
+      ci.pVertexInputState = &vi;
+      ci.pInputAssemblyState = &ia;
+      break;
+   case VK_GRAPHICS_PIPELINE_LIBRARY_PRE_RASTERIZATION_SHADERS_BIT_EXT:
+      stage.stage = VK_SHADER_STAGE_VERTEX_BIT;
+      stage.module = g->vs;
+      ci.stageCount = 1;
+      ci.pStages = &stage;
+      ci.pViewportState = &vp;
+      ci.pRasterizationState = &rs;
+      ci.pDynamicState = &dyn;
+      ci.layout = g->layout;
+      break;
+   case VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT:
+      stage.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+      stage.module = g->fs;
+      ci.stageCount = with_fs;
+      ci.pStages = &stage;
+      ci.pMultisampleState = &ms;
+      ci.pDepthStencilState = &ds;
+      ci.layout = g->layout;
+      break;
+   case VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_OUTPUT_INTERFACE_BIT_EXT:
+      ci.pMultisampleState = &ms;
+      ci.pColorBlendState = &cb;
+      break;
+   }
+   VkPipeline p;
+   CHECK(vkCreateGraphicsPipelines(dev, VK_NULL_HANDLE, 1, &ci, NULL, &p));
+   return p;
+}
+
+static VkPipeline
+gpl_link(const struct gpl_libs *g, const VkPipeline libs[4], bool lto)
+{
+   DPROC(vkCreateGraphicsPipelines);
+   VkPipelineLibraryCreateInfoKHR li = {
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_LIBRARY_CREATE_INFO_KHR,
+      .libraryCount = 4,
+      .pLibraries = libs,
+   };
+   VkGraphicsPipelineCreateInfo ci = {
+      .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+      .pNext = &li,
+      .flags = lto ? VK_PIPELINE_CREATE_LINK_TIME_OPTIMIZATION_BIT_EXT : 0,
+      .layout = g->layout,
+   };
+   VkPipeline p;
+   CHECK(vkCreateGraphicsPipelines(dev, VK_NULL_HANDLE, 1, &ci, NULL, &p));
+   return p;
+}
+
+static VkImageView
+gpl_target(VkPhysicalDevice pd, VkFormat format)
+{
+   DPROC(vkCreateImage);
+   DPROC(vkGetImageMemoryRequirements);
+   DPROC(vkAllocateMemory);
+   DPROC(vkBindImageMemory);
+   DPROC(vkCreateImageView);
+   VkImageCreateInfo imci = {
+      .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+      .imageType = VK_IMAGE_TYPE_2D,
+      .format = format,
+      .extent = {64, 64, 1},
+      .mipLevels = 1,
+      .arrayLayers = 1,
+      .samples = VK_SAMPLE_COUNT_1_BIT,
+      .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+   };
+   VkImage image;
+   CHECK(vkCreateImage(dev, &imci, NULL, &image));
+   VkMemoryRequirements mr;
+   vkGetImageMemoryRequirements(dev, image, &mr);
+   VkMemoryAllocateInfo mai = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+                               .allocationSize = mr.size,
+                               .memoryTypeIndex =
+                                  find_memory(pd, mr.memoryTypeBits)};
+   VkDeviceMemory mem;
+   CHECK(vkAllocateMemory(dev, &mai, NULL, &mem));
+   CHECK(vkBindImageMemory(dev, image, mem, 0));
+   VkImageViewCreateInfo ivci = {
+      .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+      .image = image,
+      .viewType = VK_IMAGE_VIEW_TYPE_2D,
+      .format = format,
+      .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
+   };
+   VkImageView view;
+   CHECK(vkCreateImageView(dev, &ivci, NULL, &view));
+   return view;
+}
+
+static int
+check_gpl(VkPhysicalDevice pd, VkQueue queue, VkCommandPool pool, VkBuffer buf)
+{
+   DPROC(vkCreatePipelineLayout);
+   DPROC(vkAllocateCommandBuffers);
+   DPROC(vkBeginCommandBuffer);
+   DPROC(vkEndCommandBuffer);
+   DPROC(vkCmdBeginRendering);
+   DPROC(vkCmdEndRendering);
+   DPROC(vkCmdBindPipeline);
+   DPROC(vkCmdSetViewport);
+   DPROC(vkCmdSetScissor);
+   DPROC(vkCmdBindVertexBuffers);
+   DPROC(vkCmdDraw);
+   DPROC(vkQueueSubmit);
+   DPROC(vkQueueWaitIdle);
+   DPROC(vkDestroyPipeline);
+
+   IPROC(vkGetPhysicalDeviceFeatures2);
+   VkPhysicalDeviceGraphicsPipelineLibraryFeaturesEXT feat = {
+      .sType =
+         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GRAPHICS_PIPELINE_LIBRARY_FEATURES_EXT,
+   };
+   VkPhysicalDeviceFeatures2 f2 = {
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+      .pNext = &feat,
+   };
+   vkGetPhysicalDeviceFeatures2(pd, &f2);
+   if (!feat.graphicsPipelineLibrary) {
+      fprintf(stderr, "gpl: graphicsPipelineLibrary not reported\n");
+      return 1;
+   }
+
+   VkPipelineLayoutCreateInfo plci = {
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+      .flags = VK_PIPELINE_LAYOUT_CREATE_INDEPENDENT_SETS_BIT_EXT,
+   };
+   struct gpl_libs g = {.vs = load_module("pass.vert"),
+                        .fs = load_module("color.frag")};
+   CHECK(vkCreatePipelineLayout(dev, &plci, NULL, &g.layout));
+
+   const VkFormat RGBA8 = VK_FORMAT_R8G8B8A8_UNORM;
+   const VkFormat RGBA16F = VK_FORMAT_R16G16B16A16_SFLOAT;
+   const VkFormat RGBA32F = VK_FORMAT_R32G32B32A32_SFLOAT;
+   const VkFormat NONE = VK_FORMAT_UNDEFINED;
+   const int msl_start = msl_count();
+   VkPipeline vi_f32 = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_VERTEX_INPUT_INTERFACE_BIT_EXT, RGBA32F, NONE, false, true);
+   VkPipeline vi_u8 = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_VERTEX_INPUT_INTERFACE_BIT_EXT, RGBA8, NONE, false, true);
+   VkPipeline pre = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_PRE_RASTERIZATION_SHADERS_BIT_EXT, RGBA32F, RGBA8, false, true);
+   VkPipeline frag = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT, RGBA32F, RGBA8, false, true);
+   VkPipeline no_frag = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT, RGBA32F, RGBA8, false, false);
+   VkPipeline out_u8 = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_OUTPUT_INTERFACE_BIT_EXT, RGBA32F, RGBA8, false, true);
+   VkPipeline out_f16 = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_OUTPUT_INTERFACE_BIT_EXT, RGBA32F, RGBA16F, true, true);
+   const int msl_libs = msl_count();
+   printf("gpl: 7 libraries made %d MSL libraries\n", msl_libs - msl_start);
+
+   struct {
+      const char *name;
+      VkPipeline libs[4];
+      bool lto;
+      VkFormat color;
+   } links[] = {
+      {"fast f32 rgba8", {vi_f32, pre, frag, out_u8}, false, RGBA8},
+      {"fast u8 rgba8", {vi_u8, pre, frag, out_u8}, false, RGBA8},
+      {"fast f32 rgba16f blend", {vi_f32, pre, frag, out_f16}, false, RGBA16F},
+      {"fast no-fs rgba8", {vi_f32, pre, no_frag, out_u8}, false, RGBA8},
+      {"lto f32 rgba8", {vi_f32, pre, frag, out_u8}, true, RGBA8},
+      {"lto u8 rgba16f blend", {vi_u8, pre, frag, out_f16}, true, RGBA16F},
+   };
+   VkImageView views[2] = {gpl_target(pd, RGBA8), gpl_target(pd, RGBA16F)};
+   for (unsigned i = 0; i < sizeof(links) / sizeof(links[0]); i++) {
+      const int before_link = msl_count();
+      VkPipeline p = gpl_link(&g, links[i].libs, links[i].lto);
+      const int linked = msl_count();
+
+      VkCommandBufferAllocateInfo cbai = {
+         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+         .commandPool = pool,
+         .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+         .commandBufferCount = 1,
+      };
+      VkCommandBuffer cmd;
+      CHECK(vkAllocateCommandBuffers(dev, &cbai, &cmd));
+      VkCommandBufferBeginInfo bi = {
+         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+      };
+      CHECK(vkBeginCommandBuffer(cmd, &bi));
+      VkRenderingAttachmentInfo ca = {
+         .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+         .imageView = views[links[i].color == RGBA16F],
+         .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+         .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+         .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+      };
+      VkRenderingInfo ri = {
+         .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+         .renderArea = {{0, 0}, {64, 64}},
+         .layerCount = 1,
+         .colorAttachmentCount = 1,
+         .pColorAttachments = &ca,
+      };
+      vkCmdBeginRendering(cmd, &ri);
+      vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p);
+      VkViewport vpt = {0, 0, 64, 64, 0, 1};
+      VkRect2D sc = {{0, 0}, {64, 64}};
+      vkCmdSetViewport(cmd, 0, 1, &vpt);
+      vkCmdSetScissor(cmd, 0, 1, &sc);
+      VkDeviceSize off = 0;
+      vkCmdBindVertexBuffers(cmd, 0, 1, &buf, &off);
+      vkCmdDraw(cmd, 12, 1, 0, 0);
+      vkCmdDraw(cmd, 24, 3, 3, 1);
+      vkCmdEndRendering(cmd);
+      CHECK(vkEndCommandBuffer(cmd));
+      const int drawn = msl_count();
+      VkSubmitInfo si = {
+         .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+         .commandBufferCount = 1,
+         .pCommandBuffers = &cmd,
+      };
+      CHECK(vkQueueSubmit(queue, 1, &si, VK_NULL_HANDLE));
+      CHECK(vkQueueWaitIdle(queue));
+      printf("ok gpl %s: MSL libraries at link %d, at draw %d\n", links[i].name,
+             linked - before_link, drawn - linked);
+      vkDestroyPipeline(dev, p, NULL);
+   }
+   VkPipeline libs[] = {vi_f32, vi_u8, pre, frag, no_frag, out_u8, out_f16};
+   for (unsigned i = 0; i < sizeof(libs) / sizeof(libs[0]); i++)
+      vkDestroyPipeline(dev, libs[i], NULL);
+   printf("ok gpl: libraries, fast and optimized links drawn\n");
    return 0;
 }

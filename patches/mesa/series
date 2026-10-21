@@ -69,3 +69,4 @@
 0093-kk-a-timestamp-resolve-updates-a-fence-the-next-comp.patch
 0094-kk-MESA_KK_BATCH2-ampl-no-vertex-amplification-call-.patch
 0095-kk-MESA_KK_BATCH2-oq-a-pass-s-deferred-query-writes-.patch
+0096-kk-MESA_KK_EXPERIMENTAL-gpl-VK_EXT_graphics_pipeline.patch
