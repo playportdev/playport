@@ -107,7 +107,7 @@ the runs ended once their question was answered.
 - **Verdict.** Single-process works: it signs in, makes fewer processes, and the flashing is fixed. With the
   workarounds off, though, the live helper costs about 300 MB and RDR2 then reaches the memory limit at the
   porch load (x4). It also delays the launcher by 35–85 s. Defaults unchanged (owner decision). Not tried:
-  single-process with `endGameSocialClubAfterSignIn=true`.
+  single-process with `endGameSocialClubAfterSignIn=true` (since run: [xs1](2026-10-21-rdr2-sc-single-with-end.md)).
 
 ## The performance arms
 
