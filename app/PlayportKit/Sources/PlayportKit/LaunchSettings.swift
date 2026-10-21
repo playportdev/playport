@@ -151,12 +151,14 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
     /// the Khronos loader loads only the layers a game asks for; Playport's Steam client serves only a
     /// Steam app; `env.PLAYPORT_SC_BLOCK_CRASHPAD=1` refuses only Rockstar's and Chromium's crash
     /// reporters. The backend is GraphicsBackend.default, below Settings' own choice. The runtime keys
-    /// merge by key (keyItems), so a game's `env.MADEIRA_FEX_BATCH2=0` turns one off. RDR2's
-    /// `env.FEX_HOSTFEATURES=disableafp` stays its own: Hollow Knight draws black without AFP.
+    /// merge by key (keyItems), so a game's `env.MADEIRA_FEX_BATCH2=0` turns one off. FEX runs x64
+    /// code without AFP and with FPCR.FIZ from MXCSR.DAZ (decision 0154: Hollow Knight draws black
+    /// without AFP unless FIZ follows DAZ); a game's `env.FEX_HOSTFEATURES=enableafp` keeps AFP.
     public static let everyGame = LaunchSettings(
         steamAPI: .client,
         runtime: "jumbo-mb=8960 env.PLAYPORT_VK_HEAP_MB=3072 env.MADEIRA_FASTSYNC_SEM=1 "
-            + "env.MADEIRA_X64_CS_FASTPATH=1 env.MADEIRA_FEX_BATCH2=1 env.PLAYPORT_SC_BLOCK_CRASHPAD=1",
+            + "env.MADEIRA_X64_CS_FASTPATH=1 env.MADEIRA_FEX_BATCH2=1 env.PLAYPORT_SC_BLOCK_CRASHPAD=1 "
+            + "env.FEX_HOSTFEATURES=disableafp env.MADEIRA_FEX_AFPOFF_FPCR=fiz",
         windowsServices: true, jitPoolMB: 896, khronosVulkanLoader: true, endLauncherAfterSignIn: true)
 
     /// A title's compatibility default (nil for none) over everyGame: each setting the title's

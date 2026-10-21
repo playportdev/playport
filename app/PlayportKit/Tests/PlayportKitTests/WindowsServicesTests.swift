@@ -23,11 +23,11 @@ final class WindowsServicesTests: XCTestCase {
     }
 
     /// Every game starts its services since decision 0153 (LaunchSettings.everyGame); RDR2's
-    /// table entry keeps only its backend and FEX without AFP.
+    /// table entry keeps only its backend (FEX without AFP is everyone's since decision 0154).
     func testEveryGameStartsThemAndRDR2sEntryKeepsOnlyItsBackend() throws {
         let table = try CompatDefaults.load(directory: CompatDefaultsTests.shipped)
         let rdr2 = try XCTUnwrap(table.entry(for: "app-1174180"))
-        XCTAssertEqual(rdr2.settings, LaunchSettings(graphics: .vulkan, runtime: "env.FEX_HOSTFEATURES=disableafp"))
+        XCTAssertEqual(rdr2.settings, LaunchSettings(graphics: .vulkan))
         XCTAssertEqual(LaunchSettings.overEveryGame(rdr2.settings).windowsServices, true)
         XCTAssertEqual(LaunchSettings.overEveryGame(nil).windowsServices, true)
         XCTAssertEqual(LaunchSettings(windowsServices: false).over(LaunchSettings.overEveryGame(nil)).windowsServices, false)
@@ -38,13 +38,15 @@ final class WindowsServicesTests: XCTestCase {
     /// (decision 0126), over everyGame's in the launch's config (decision 0153).
     func testAReleaseBuildKeepsTheDefaultsRuntimeKeysOnly() throws {
         let table = try CompatDefaults.load(directory: CompatDefaultsTests.shipped)
-        XCTAssertNil(LaunchSettings.everyGameKeys["env.FEX_HOSTFEATURES"])   // Hollow Knight draws black without AFP
+        XCTAssertEqual(LaunchSettings.everyGameKeys["env.FEX_HOSTFEATURES"], "disableafp")   // decision 0154
+        XCTAssertEqual(LaunchSettings.everyGameKeys["env.MADEIRA_FEX_AFPOFF_FPCR"], "fiz")
         let rdr2 = LaunchSettings.releaseRuntime(compat: table.entry(for: "app-1174180")?.settings)
-        XCTAssertEqual(rdr2, ["env.FEX_HOSTFEATURES": "disableafp"])
+        XCTAssertEqual(rdr2, [:])
+        let titled = LaunchSettings.releaseRuntime(compat: LaunchSettings(runtime: "env.FEX_HOSTFEATURES=enableafp"))
         var effective = LaunchSettings.resolve(game: nil, global: LaunchSettings())
-        effective.runtime = rdr2
+        effective.runtime = titled
         var every = LaunchSettings.everyGameKeys
-        every["env.FEX_HOSTFEATURES"] = "disableafp"
+        every["env.FEX_HOSTFEATURES"] = "enableafp"
         XCTAssertEqual(effective.config(over: [:]), every)
         XCTAssertEqual(LaunchSettings.releaseRuntime(compat: nil), [:])
         XCTAssertEqual(LaunchSettings.releaseSteamAPI(compat: nil), .client)

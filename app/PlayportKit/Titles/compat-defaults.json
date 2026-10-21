@@ -1,8 +1,8 @@
 {
   "titles": {
     "app-1174180": {
-      "settings": {"graphics": "vulkan", "runtime": "env.FEX_HOSTFEATURES=disableafp"},
-      "reason": "This game draws through Vulkan or Direct3D 12, which only the Vulkan layer runs, so it keeps Vulkan even when Settings chooses DXMT for every game. It runs its x86 code without the CPU's alternate floating-point mode, which costs less on each switch into native code; other games keep that mode."
+      "settings": {"graphics": "vulkan"},
+      "reason": "This game draws through Vulkan or Direct3D 12, which only the Vulkan layer runs, so it keeps Vulkan even when Settings chooses DXMT for every game."
     },
     "epic-Buffalo": {
       "settings": {"aspect": "16:9"},
