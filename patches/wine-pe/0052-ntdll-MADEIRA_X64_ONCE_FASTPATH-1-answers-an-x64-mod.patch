@@ -1,0 +1,139 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Wed, 21 Oct 2026 02:03:21 +0200
+Subject: [PATCH 52/52] ntdll: MADEIRA_X64_ONCE_FASTPATH=1 answers an x64
+ module's InitOnceExecuteOnce on a completed INIT_ONCE without leaving the
+ emulator
+
+After the critical sections (0050), RDR2's next non-Vulkan x64->EC
+transition is kernelbase's InitOnceExecuteOnce, about 25,000 calls a
+second, nearly all on INIT_ONCEs that completed long ago.
+
+With MADEIRA_X64_ONCE_FASTPATH=1 (off by default), the loader binds
+an x64 module's import of InitOnceExecuteOnce, when it resolves to
+kernelbase's x64 export thunk, to an x64 stub in a page made per
+process. For Ptr & 3 == 2 it does what RtlRunOnceBeginInitialize
+does: the context, Ptr & ~3, is stored when asked for and the call
+returns TRUE. Any other state jumps on to kernelbase's export, the
+import's address before. A [x64-once] line gives the stub's page; the
+[x64-cs] import line counts it with the critical-section stubs.
+
+Linear: PLA-364
+Class: feature
+Evidence: docs/evidence/2026-10-21-rdr2-cs-fastpath-and-heap.md
+Offered-upstream: no; the transition cost is the iOS port's
+---
+ dlls/ntdll/loader.c | 93 +++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 93 insertions(+)
+
+diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
+index adffb8a..4b018f6 100644
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -1558,6 +1558,97 @@ static void *x64_cs_stub_for( HMODULE importer, const char *name, void *target )
+     if (!stubs || target != targets[leave]) return NULL;
+     return leave ? stubs + 0x80 : stubs;
+ }
++
++/* Playport: MADEIRA_X64_ONCE_FASTPATH=1 (off by default). RDR2 calls
++ * InitOnceExecuteOnce about 25,000 times a second on initialised INIT_ONCEs,
++ * each an x64->EC transition into kernelbase. An x64 module's import of it
++ * goes to an x64 stub that does what RtlRunOnceBeginInitialize does for a
++ * completed one (Ptr & 3 == 2): the context is Ptr & ~3, stored if asked
++ * for, and the call returns TRUE. Any other state (first call, in progress)
++ * jumps on to kernelbase's export, the import's address before. Arguments:
++ * rcx once, rdx func, r8 param, r9 context; only rax and r10 are written. */
++static const BYTE x64_once_code[] =
++{
++    0x48, 0x8b, 0x01,                               /* 00: mov (%rcx),%rax */
++    0x41, 0x89, 0xc2,                               /* 03: mov %eax,%r10d */
++    0x41, 0x83, 0xe2, 0x03,                         /* 06: and $3,%r10d */
++    0x41, 0x83, 0xfa, 0x02,                         /* 0a: cmp $2,%r10d */
++    0x75, 0x12,                                     /* 0e: jne 22 */
++    0x4d, 0x85, 0xc9,                               /* 10: test %r9,%r9 */
++    0x74, 0x07,                                     /* 13: je 1c */
++    0x48, 0x83, 0xe0, 0xfc,                         /* 15: and $-4,%rax */
++    0x49, 0x89, 0x01,                               /* 19: mov %rax,(%r9) */
++    0xb8, 0x01, 0, 0, 0,                            /* 1c: mov $1,%eax */
++    0xc3,                                           /* 21: ret */
++    0xff, 0x25, 0, 0, 0, 0,                         /* 22: jmp *0(%rip) */
++};
++C_ASSERT( sizeof(x64_once_code) == 0x28 );
++
++static BOOL x64_once_fastpath_on(void)
++{
++    static int on = -1;
++    if (on < 0)
++    {
++        UNICODE_STRING nm, val;
++        WCHAR buf[8];
++        RtlInitUnicodeString( &nm, L"MADEIRA_X64_ONCE_FASTPATH" );
++        val.Buffer = buf; val.Length = 0; val.MaximumLength = sizeof(buf);
++        on = (!RtlQueryEnvironmentVariable_U( NULL, &nm, &val ) && val.Length && buf[0] == '1');
++    }
++    return on;
++}
++
++/* The x64 stub for an x64 module's import of InitOnceExecuteOnce resolved to
++ * target, or NULL to keep target; the stub's page is made once a process. */
++static void *x64_once_stub_for( HMODULE importer, const char *name, void *target )
++{
++    static BYTE *stub;
++    static void *once_target;
++    static BOOL tried;
++    const IMAGE_NT_HEADERS *nt;
++    LDR_DATA_TABLE_ENTRY *mod;
++    UNICODE_STRING kernelbase = RTL_CONSTANT_STRING( L"kernelbase.dll" );
++
++    if (strcmp( name, "InitOnceExecuteOnce" ) || !x64_once_fastpath_on()) return NULL;
++    nt = RtlImageNtHeader( importer );
++    if (!nt || nt->FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64 || arm64ec_get_module_metadata( importer ))
++        return NULL;
++    if (LdrFindEntryForAddress( target, &mod ) || !RtlEqualUnicodeString( &mod->BaseDllName, &kernelbase, TRUE ))
++        return NULL;
++
++    if (!tried)
++    {
++        const IMAGE_EXPORT_DIRECTORY *exports;
++        DWORD exp_size;
++        void *base = NULL;
++        SIZE_T size = 0x1000;
++        ULONG old;
++
++        tried = TRUE;
++        if (!(exports = RtlImageDirectoryEntryToData( mod->DllBase, TRUE, IMAGE_DIRECTORY_ENTRY_EXPORT, &exp_size )))
++            return NULL;
++        once_target = find_named_export( mod->DllBase, exports, exp_size, "InitOnceExecuteOnce", -1, NULL, NULL, FALSE );
++        if (!once_target || memcmp( once_target, x64_cs_export_thunk, sizeof(x64_cs_export_thunk) ))
++        {
++            ERR( "[x64-once] kernelbase's InitOnceExecuteOnce %p is not an x64 export thunk; the switch is off\n",
++                 once_target );
++            return NULL;
++        }
++        if (NtAllocateVirtualMemory( NtCurrentProcess(), &base, 0, &size, MEM_RESERVE | MEM_COMMIT,
++                                     PAGE_EXECUTE_READWRITE ))
++        {
++            ERR( "[x64-once] no page for the stub; the switch is off\n" );
++            return NULL;
++        }
++        memcpy( base, x64_once_code, sizeof(x64_once_code) );
++        memcpy( (BYTE *)base + sizeof(x64_once_code), &once_target, sizeof(void *) );
++        NtProtectVirtualMemory( NtCurrentProcess(), &base, &size, PAGE_EXECUTE_READ, &old );
++        stub = base;
++        ERR( "[x64-once] x64 InitOnceExecuteOnce stub at %p for %p (MADEIRA_X64_ONCE_FASTPATH)\n", stub, once_target );
++    }
++    if (!stub || target != once_target) return NULL;
++    return stub;
++}
+ #endif
+ 
+ static BOOL import_dll( WINE_MODREF *wm, const IMAGE_IMPORT_DESCRIPTOR *descr, LPCWSTR load_path, WINE_MODREF **pwm )
+@@ -1777,6 +1868,8 @@ static BOOL import_dll( WINE_MODREF *wm, const IMAGE_IMPORT_DESCRIPTOR *descr, L
+             {
+                 void *stub = x64_cs_stub_for( module, (const char *)pe_name->Name,
+                                               (void *)thunk_list->u1.Function );
++                if (!stub) stub = x64_once_stub_for( module, (const char *)pe_name->Name,
++                                                     (void *)thunk_list->u1.Function );
+                 if (stub)
+                 {
+                     thunk_list->u1.Function = (ULONG_PTR)stub;
