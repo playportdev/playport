@@ -60,3 +60,5 @@
 0059-ARM64EC-a-leaner-ExitFunctionEC-for-the-JIT-s-own-ex.patch
 0060-ARM64EC-MADEIRA_FEX_EC_CALLRET_POP-1-pops-an-indirec.patch
 0061-ARM64EC-MADEIRA_X64_QPC_FASTPATH-1-makes-RDTSC-self-.patch
+0070-ARM64EC-read-the-iOS-alias-table-under-a-sequence-co.patch
+0071-ARM64EC-MADEIRA_FEX_BATCH2-1-four-transition-and-bac.patch

@@ -1,0 +1,378 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Wed, 21 Oct 2026 10:58:03 +0200
+Subject: [PATCH 70/71] ARM64EC: read the iOS alias table under a sequence
+ count, one writer at a time
+
+Module.S's x64->EC translation (ExitFunctionEC, ExitFunctionECJit and
+ExitToX64's FFS bypass) read an IosAliasEntries slot's PeBase, Size and
+JitBase as three plain loads with no order among them. The writer
+retires a slot (Size 0) and later reuses it for another image (PeBase,
+JitBase, barrier, Size), so a reader across a retire and reuse could
+pair the old image's PeBase with the new image's Size and JitBase and
+branch into the wrong pool copy. BTCpu64IosAddAliasMapping also had no
+lock: two images loading at once in two processes could take the same
+retired slot or the same new index, and one image was then not listed.
+
+IosAliasGen is now the table's sequence count: a writer, one at a time
+under a spin lock, makes it odd before its first entry store and even
+after its last. The asm walks read it with LDAR first and again after
+the entry (DMB ISHLD), and leave the target untranslated when it was
+odd or moved: the PE VA then reaches the pool copy through the Mach
+exec-fault redirect, as an image not in the table always has.
+IosJitTranslate and IosJitReverseTranslate read again instead. The lock
+is taken over after about 4 M spins and an odd count left by a writer
+that ended inside moves on by two, so a thread killed in its unix call
+cannot stop later images from being listed.
+
+Linear: PLA-364
+Class: ios-port
+Evidence: docs/evidence/2026-10-21-batch2.md
+Offered-upstream: no; Madeira's iOS code
+---
+ Source/Windows/ARM64EC/IosJitAlias.cpp | 134 ++++++++++++++++++++-----
+ Source/Windows/ARM64EC/Module.S        |  72 ++++++++++---
+ 2 files changed, 168 insertions(+), 38 deletions(-)
+
+diff --git a/Source/Windows/ARM64EC/IosJitAlias.cpp b/Source/Windows/ARM64EC/IosJitAlias.cpp
+index 7fdeb5c98..ab121a2cf 100644
+--- a/Source/Windows/ARM64EC/IosJitAlias.cpp
++++ b/Source/Windows/ARM64EC/IosJitAlias.cpp
+@@ -53,11 +53,70 @@ volatile int IosAliasCount = 0;
+  * runtime) are registered late, so oldest-first cost ~150 iterations per
+  * x64->EC call at up to a million calls a second. */
+ IosAliasEntry* volatile IosAliasLast = nullptr;
++/* Playport: the table's sequence count. BTCpu64IosAddAliasMapping makes it odd before it changes an
++ * entry and even again after, so a reader that sees it odd, or sees it move across its read, drops
++ * what it read: Module.S's walks then leave the target untranslated, IosJitTranslate and
++ * IosJitReverseTranslate read again. Without it a reader could pair a retired slot's old PeBase with
++ * the Size and JitBase of the image that reused it, and branch into the wrong copy. */
++volatile uint64_t IosAliasGen = 0;
+ }
+ 
+ namespace {
+ IosAliasEntry* const g_Entries = IosAliasEntries;
+ volatile int& g_EntryCount = IosAliasCount;
++
++/* Playport: one writer at a time. Two images loading at once in different processes could take
++ * the same retired slot or the same new index, and one image was then left out of the table. */
++std::atomic<uint32_t> g_AliasWriteLock {0};
++
++/* Bounded: a writer ended inside (a thread killed in its unix call) must not stop every later image
++ * from being listed, so after about 4 M spins the lock is taken over. */
++void AliasWriteLock() {
++  for (uint32_t Spins = 0; g_AliasWriteLock.exchange(1, std::memory_order_acquire); ) {
++    while (g_AliasWriteLock.load(std::memory_order_relaxed)) {
++      __asm__ volatile("yield");
++      if (++Spins >= (1u << 22)) {
++        return;
++      }
++    }
++  }
++}
++
++void AliasWriteUnlock() {
++  g_AliasWriteLock.store(0, std::memory_order_release);
++}
++
++// Under the lock: the count goes odd before the first entry store and even after the last. An odd
++// count here was left by a writer that ended inside; it moves on by two, still odd.
++void AliasChangeBegin() {
++  const uint64_t Gen = IosAliasGen;
++  __atomic_store_n(&IosAliasGen, (Gen & 1) ? Gen + 2 : Gen + 1, __ATOMIC_RELAXED);
++  __atomic_thread_fence(__ATOMIC_SEQ_CST);
++}
++
++void AliasChangeEnd() {
++  __atomic_thread_fence(__ATOMIC_SEQ_CST);
++  __atomic_store_n(&IosAliasGen, IosAliasGen + 1, __ATOMIC_RELEASE);
++}
++
++// A reader's consistent view: Read(count) runs until no change overlapped it. After many
++// attempts against a writer that does not finish, the caller's untranslated answer stands.
++template<typename F>
++uint64_t AliasRead(uint64_t Untranslated, F Read) {
++  for (int Attempt = 0; Attempt < 4096; Attempt++) {
++    const uint64_t Gen = __atomic_load_n(&IosAliasGen, __ATOMIC_ACQUIRE);
++    if (Gen & 1) {
++      __asm__ volatile("yield");
++      continue;
++    }
++    const uint64_t Result = Read(__atomic_load_n(&g_EntryCount, __ATOMIC_ACQUIRE));
++    __atomic_thread_fence(__ATOMIC_ACQUIRE);
++    if (__atomic_load_n(&IosAliasGen, __ATOMIC_RELAXED) == Gen) {
++      return Result;
++    }
++  }
++  return Untranslated;
++}
+ }  // namespace
+ 
+ extern "C" {
+@@ -371,26 +430,43 @@ static bool IosSubfloorAdd(uint64_t LowBase, uint64_t RealBase, uint64_t Size) {
+  * a LogMan message goes out through ntdll's __wine_dbg_output, a nested
+  * unix call from there, and the next x86-64 child died at a wild pc right
+  * after the first "table full" message. */
++static int IosAddAliasMappingLocked(uint64_t PeBase, uint64_t JitBase, uint64_t Size);
++static int IosAliasInsert(uint64_t PeBase, uint64_t JitBase, uint64_t Size, int count);
++
+ int BTCpu64IosAddAliasMapping(uint64_t PeBase, uint64_t JitBase, uint64_t Size) {
++  /* ml951: a sub-floor window arrives through this same entry point, marked by
++   * a below-4GB "PeBase" (no real PE base can be there on iOS). Route it to the
++   * query-only table and return -- it must NEVER land in IosAliasEntries, which
++   * Module.S uses to rewrite branch targets. */
++  if (Size && PeBase < kIosSubfloorFloor) {
++    return IosSubfloorAdd(PeBase, JitBase, Size) ? 1 : 0;
++  }
++  AliasWriteLock();
++  const int Result = IosAddAliasMappingLocked(PeBase, JitBase, Size);
++  AliasWriteUnlock();
++  return Result;
++}
++
++static int IosAddAliasMappingLocked(uint64_t PeBase, uint64_t JitBase, uint64_t Size) {
+   if (!Size) {
+     const int count = g_EntryCount;
++    bool Changing = false;
+     for (int i = 0; i < count; i++) {
+       if (g_Entries[i].Size && g_Entries[i].PeBase == PeBase && g_Entries[i].JitBase == JitBase) {
++        if (!Changing) {
++          AliasChangeBegin();
++          Changing = true;
++        }
+         g_Entries[i].Size = 0;  // a zero-size entry matches no query, Module.S's walk included
+         __sync_synchronize();
+       }
+     }
++    if (Changing) {
++      AliasChangeEnd();
++    }
+     return 1;
+   }
+ 
+-  /* ml951: a sub-floor window arrives through this same entry point, marked by
+-   * a below-4GB "PeBase" (no real PE base can be there on iOS). Route it to the
+-   * query-only table and return -- it must NEVER land in IosAliasEntries, which
+-   * Module.S uses to rewrite branch targets. */
+-  if (PeBase < kIosSubfloorFloor) {
+-    return IosSubfloorAdd(PeBase, JitBase, Size) ? 1 : 0;
+-  }
+-
+   int count = g_EntryCount;
+ 
+   // Identical re-registration: nothing to do.
+@@ -400,6 +476,14 @@ int BTCpu64IosAddAliasMapping(uint64_t PeBase, uint64_t JitBase, uint64_t Size)
+     }
+   }
+ 
++  AliasChangeBegin();
++  const int Result = IosAliasInsert(PeBase, JitBase, Size, count);
++  AliasChangeEnd();
++  return Result;
++}
++
++// Between AliasChangeBegin and AliasChangeEnd: count is IosAliasCount.
++static int IosAliasInsert(uint64_t PeBase, uint64_t JitBase, uint64_t Size, int count) {
+   // Retire every entry whose PE range overlaps the incoming image: a live
+   // image proves any overlapping entry is dead (two images cannot share a VA).
+   for (int i = 0; i < count; i++) {
+@@ -441,27 +525,29 @@ int BTCpu64IosAddAliasMapping(uint64_t PeBase, uint64_t JitBase, uint64_t Size)
+ }
+ 
+ uint64_t IosJitTranslate(uint64_t Addr) {
+-  int count = g_EntryCount;
+-  for (int i = 0; i < count; i++) {
+-    uint64_t pb = g_Entries[i].PeBase;
+-    uint64_t sz = g_Entries[i].Size;
+-    if (Addr >= pb && Addr < pb + sz) {
+-      return g_Entries[i].JitBase + (Addr - pb);
++  return AliasRead(Addr, [Addr](int count) {
++    for (int i = 0; i < count; i++) {
++      uint64_t pb = g_Entries[i].PeBase;
++      uint64_t sz = g_Entries[i].Size;
++      if (Addr >= pb && Addr < pb + sz) {
++        return g_Entries[i].JitBase + (Addr - pb);
++      }
+     }
+-  }
+-  return Addr;
++    return Addr;
++  });
+ }
+ 
+ uint64_t IosJitReverseTranslate(uint64_t Addr) {
+-  int count = g_EntryCount;
+-  for (int i = 0; i < count; i++) {
+-    uint64_t jb = g_Entries[i].JitBase;
+-    uint64_t sz = g_Entries[i].Size;
+-    if (Addr >= jb && Addr < jb + sz) {
+-      return g_Entries[i].PeBase + (Addr - jb);
++  return AliasRead(Addr, [Addr](int count) {
++    for (int i = 0; i < count; i++) {
++      uint64_t jb = g_Entries[i].JitBase;
++      uint64_t sz = g_Entries[i].Size;
++      if (Addr >= jb && Addr < jb + sz) {
++        return g_Entries[i].PeBase + (Addr - jb);
++      }
+     }
+-  }
+-  return Addr;
++    return Addr;
++  });
+ }
+ 
+ }  // extern "C"
+diff --git a/Source/Windows/ARM64EC/Module.S b/Source/Windows/ARM64EC/Module.S
+index 3fb3ca8cf..5049ca7e5 100644
+--- a/Source/Windows/ARM64EC/Module.S
++++ b/Source/Windows/ARM64EC/Module.S
+@@ -40,6 +40,27 @@
+   and \reg, \reg, #~7
+   ldr \reg, [\reg, #0x898]
+ .endm
++// Playport: ExitFunctionEC and ExitFunctionECJit read IosAliasEntries under IosAliasGen, the table's
++// sequence count (IosJitAlias.cpp), which a writer makes odd while it changes the table. BEGIN leaves
++// the target untranslated while it is odd, else puts it in x17 bits 32-63 (bits 0-31 count the walk's
++// entries); END branches to \changed when it moved since, so a slot retired and reused under the read
++// cannot pair one image's PeBase and Size with another's JitBase. Untranslated is always correct:
++// the PE VA reaches the pool copy through the Mach exec-fault redirect. END clobbers x16.
++.macro IOS_ALIAS_READ_BEGIN
++  adrp x17, IosAliasGen
++  add x17, x17, #:lo12:IosAliasGen
++  ldar x17, [x17]
++  tbnz x17, #0, ios_ec_xlate_done
++  lsl x17, x17, #32
++.endm
++.macro IOS_ALIAS_READ_END changed
++  dmb ishld
++  adrp x16, IosAliasGen
++  ldr x16, [x16, #:lo12:IosAliasGen]
++  eor x16, x17, x16, lsl #32
++  lsr x16, x16, #32
++  cbnz x16, \changed
++.endm
+ #endif
+ 
+   // __os_arm64x_x64_jump in ARM64EC docs
+@@ -155,6 +176,15 @@ ExitToX64:
+   // x4/x9 are spilled to free loop registers; restored on every exit path.
+   // (Native EC callers keep sp 16-aligned at call boundaries per AAPCS.)
+   stp x4, x9, [sp, #-16]!
++  // Playport: the table is read under IosAliasGen (IosJitAlias.cpp), odd while a writer changes it.
++  // An odd count, or one that moved by the end, leaves the target untranslated, so a slot retired
++  // and reused under the walk cannot pair one image's PeBase with another's JitBase. x9 keeps the
++  // count in bits 32-63 and the entries left in bits 0-31.
++  adrp x9, IosAliasGen
++  add x9, x9, #:lo12:IosAliasGen
++  ldar x9, [x9]
++  tbnz x9, #0, ios_ffs_xlate_done
++  lsl x9, x9, #32
+   // ml1116: last-hit entry first, then the table newest-first.
+   adrp x16, IosAliasLast
+   ldr x16, [x16, #:lo12:IosAliasLast]
+@@ -165,15 +195,16 @@ ExitToX64:
+   cmp x4, x23
+   b.lo ios_ffs_xlate_hit
+ ios_ffs_xlate_walk:
+-  adrp x9, IosAliasCount
+-  ldr w9, [x9, #:lo12:IosAliasCount]
++  adrp x23, IosAliasCount
++  ldr w23, [x23, #:lo12:IosAliasCount]
++  orr x9, x9, x23
+   adrp x16, IosAliasEntries
+   add x16, x16, #:lo12:IosAliasEntries
+-  add x16, x16, x9, lsl #5   // one past the last entry
++  add x16, x16, x23, lsl #5   // one past the last entry
+ ios_ffs_xlate_loop:
+   cbz w9, ios_ffs_xlate_done
+   sub x16, x16, #32
+-  sub w9, w9, #1
++  sub x9, x9, #1
+   ldr x4, [x16, #8]      // Entry.JitBase
+   sub x4, x17, x4
+   ldr x23, [x16, #16]    // Entry.Size
+@@ -185,7 +216,14 @@ ios_ffs_xlate_hit_walk:
+   str x16, [x23, #:lo12:IosAliasLast]
+ ios_ffs_xlate_hit:
+   ldr x23, [x16]         // Entry.PeBase
+-  add x17, x23, x4       // target in PE space
++  add x23, x23, x4       // target in PE space
++  dmb ishld
++  adrp x16, IosAliasGen
++  ldr x16, [x16, #:lo12:IosAliasGen]
++  eor x16, x9, x16, lsl #32
++  lsr x16, x16, #32
++  cbnz x16, ios_ffs_xlate_done  // the table changed under the read: untranslated
++  mov x17, x23
+ ios_ffs_xlate_done:
+   IOS_LOAD_TEB x16
+   ldr x16, [x16, #0x60]  // TEB->PEB
+@@ -335,6 +373,7 @@ ExitFunctionECJit:
+   strb wzr, [x17, #0x0] // ChpeV2CpuAreaInfo->InSimulation
+   ldr w17, [x28, #IOS_FRAME_SUSPEND_DOORBELL] // *ChpeV2CpuAreaInfo->SuspendDoorbell
+   cbnz w17, ExitFunctionSuspendPoint
++  IOS_ALIAS_READ_BEGIN
+   ldr x16, [x28, #IOS_FRAME_ALIAS_HINT]
+   cbz x16, ios_ec_jit_xlate_walk
+   ldr x23, [x16]        // Entry.PeBase
+@@ -343,15 +382,16 @@ ExitFunctionECJit:
+   cmp x23, x4
+   b.lo ios_ec_xlate_hit
+ ios_ec_jit_xlate_walk:
+-  adrp x17, IosAliasCount
+-  ldr w17, [x17, #:lo12:IosAliasCount]
++  adrp x4, IosAliasCount
++  ldr w4, [x4, #:lo12:IosAliasCount]
++  orr x17, x17, x4
+   adrp x16, IosAliasEntries
+   add x16, x16, #:lo12:IosAliasEntries
+-  add x16, x16, x17, lsl #5   // one past the last entry
++  add x16, x16, x4, lsl #5   // one past the last entry
+ ios_ec_jit_xlate_loop:
+   cbz w17, ios_ec_xlate_done
+   sub x16, x16, #32
+-  sub w17, w17, #1
++  sub x17, x17, #1
+   ldr x23, [x16]        // Entry.PeBase
+   sub x23, x9, x23
+   ldr x4, [x16, #16]    // Entry.Size
+@@ -449,6 +489,7 @@ ExitFunctionSuspendResumePoint:
+   // x64 R10 (volatile at this call/ret boundary) and is clobbered by the
+   // entry-thunk path below. NZCV is clobbered by the cmp at check_thunk
+   // regardless.
++  IOS_ALIAS_READ_BEGIN
+   // ml1116: last-hit entry first, then the table newest-first.
+   adrp x16, IosAliasLast
+   ldr x16, [x16, #:lo12:IosAliasLast]
+@@ -459,15 +500,16 @@ ExitFunctionSuspendResumePoint:
+   cmp x23, x4
+   b.lo ios_ec_xlate_hit
+ ios_ec_xlate_walk:
+-  adrp x17, IosAliasCount
+-  ldr w17, [x17, #:lo12:IosAliasCount]
++  adrp x4, IosAliasCount
++  ldr w4, [x4, #:lo12:IosAliasCount]
++  orr x17, x17, x4
+   adrp x16, IosAliasEntries
+   add x16, x16, #:lo12:IosAliasEntries
+-  add x16, x16, x17, lsl #5   // one past the last entry
++  add x16, x16, x4, lsl #5   // one past the last entry
+ ios_ec_xlate_loop:
+   cbz w17, ios_ec_xlate_done
+   sub x16, x16, #32
+-  sub w17, w17, #1
++  sub x17, x17, #1
+   ldr x23, [x16]        // Entry.PeBase
+   sub x23, x9, x23      // offset into image (unsigned-wraps huge if below base)
+   ldr x4, [x16, #16]    // Entry.Size
+@@ -479,7 +521,9 @@ ios_ec_xlate_hit_walk:
+   str x16, [x4, #:lo12:IosAliasLast]
+ ios_ec_xlate_hit:
+   ldr x4, [x16, #8]     // Entry.JitBase
+-  add x9, x4, x23
++  add x4, x4, x23
++  IOS_ALIAS_READ_END ios_ec_xlate_done
++  mov x9, x4
+ ios_ec_xlate_done:
+ #endif
+   // Either return to an exit thunk (return to ARM64EC function) or call an entry thunk (call to ARM64EC function).

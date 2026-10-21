@@ -1,0 +1,532 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Wed, 21 Oct 2026 11:00:46 +0200
+Subject: [PATCH] ARM64EC: MADEIRA_FEX_BATCH2=1, four transition and backpatch
+ items on iOS, off by default
+
+MADEIRA_FEX_BATCH2=1 sets IosFexBatch2 (Arm64Emitter.h) at process init,
+less the items MADEIRA_FEX_BATCH2_SKIP names (comma-separated), so a
+failing batch can be bisected:
+
+alias: x64->EC translation by one probe. The writer keeps every listed
+image's 64 KB granules in IosAliasGranules (32768 slots, linear
+probing, at most half full), under IosAliasGen: granule + 1 and the
+image's JitBase - PeBase, or a part marker when the granule is not all
+one image's. ExitFunctionEC and ExitFunctionECJit probe it before the
+hint and walk: an empty slot means no image (the target stays), a whole
+granule read with the count even and unmoved adds the delta, anything
+else takes the walk. RDR2 makes about 520,000 x64->EC calls a second
+and the table holds about 460 entries, retired ones included, walked
+newest-first behind a one-entry hint. A retire rebuilds the table; on
+overflow the lookup turns itself off. The log says
+"FEX: batch2 bits=... alias-granules=N".
+
+ffs: ExitToX64's FFS bypass branches to the pool copy the target was
+found in, not to its PE VA, which reached the copy through a Mach
+exec-fault redirect (about 33 us).
+
+dmb: enter_jit drops its DMB ISH between the InSimulation store and the
+sweep gate read, about 520,000 times a second. The sweeper, once per
+code generation, calls NtFlushProcessWriteBuffers between its gate
+store and its InSimulation reads: Wine iOS reads every thread's
+registers there, which takes each through a barrier, the asymmetric
+form of the same handshake.
+
+uabp: HandleUnalignedAccess takes the backpatch lock and stores the
+patched instructions through the RW alias; through the RX view each
+store and the CAS was a Mach exception Wine emulated.
+
+Linear: PLA-364
+Class: feature
+Evidence: docs/evidence/2026-10-21-batch2.md
+Offered-upstream: no; Madeira's iOS code
+---
+ .../Core/ArchHelpers/Arm64Emitter.cpp         |   1 +
+ .../Interface/Core/ArchHelpers/Arm64Emitter.h |   9 ++
+ FEXCore/Source/Interface/Core/CPUBackend.cpp  |  14 +++
+ FEXCore/Source/Utils/ArchHelpers/Arm64.cpp    |  34 ++++--
+ Source/Windows/ARM64EC/IosJitAlias.cpp        | 112 ++++++++++++++++++
+ Source/Windows/ARM64EC/Module.S               |  65 +++++++++-
+ Source/Windows/ARM64EC/Module.cpp             |  27 +++++
+ 7 files changed, 252 insertions(+), 10 deletions(-)
+
+diff --git a/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.cpp b/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.cpp
+index fa36672f0..46df7bcf6 100644
+--- a/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.cpp
++++ b/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.cpp
+@@ -28,6 +28,7 @@
+ extern "C" uint32_t IosEcReturnWithRet = 0;
+ extern "C" uint32_t IosEcCallRetPop = 0;
+ extern "C" uint32_t IosRdtscSelfSync = 0;
++extern "C" uint32_t IosFexBatch2 = 0;
+ #endif
+ 
+ #ifdef FEX_IOS_HOST
+diff --git a/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.h b/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.h
+index 800b4da83..4123ca507 100644
+--- a/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.h
++++ b/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.h
+@@ -123,6 +123,15 @@ extern "C" uint32_t IosEcCallRetPop;
+ // thread's reads never go back (MADEIRA_X64_QPC_FASTPATH=1, whose x64 QueryPerformanceCounter stub in
+ // ntdll's loader.c counts with RDTSC). Set by the frontend before any code is compiled; 0 is FEX's RDTSC.
+ extern "C" uint32_t IosRdtscSelfSync;
++// Playport: the MADEIRA_FEX_BATCH2=1 items, one bit each, set by the frontend at process init (Module.cpp),
++// less those named in MADEIRA_FEX_BATCH2_SKIP; 0 is the behaviour without them.
++enum IosFexBatch2Bits : uint32_t {
++  IOS_FEX_BATCH2_ALIAS = 1u << 0, // "alias": x64->EC targets through IosAliasGranules (IosJitAlias.cpp, Module.S)
++  IOS_FEX_BATCH2_FFS = 1u << 1,   // "ffs": ExitToX64's FFS bypass branches to the pool copy (Module.S)
++  IOS_FEX_BATCH2_DMB = 1u << 2,   // "dmb": enter_jit without DMB ISH; the sweeper flushes write buffers (CPUBackend.cpp)
++  IOS_FEX_BATCH2_UABP = 1u << 3,  // "uabp": HandleUnalignedAccess backpatches through the RW alias (Arm64.cpp)
++};
++extern "C" uint32_t IosFexBatch2;
+ #endif
+ 
+ constexpr uint64_t EC_CODE_BITMAP_MAX_ADDRESS = 1ULL << 47;
+diff --git a/FEXCore/Source/Interface/Core/CPUBackend.cpp b/FEXCore/Source/Interface/Core/CPUBackend.cpp
+index b59c10c06..6a686e1e3 100644
+--- a/FEXCore/Source/Interface/Core/CPUBackend.cpp
++++ b/FEXCore/Source/Interface/Core/CPUBackend.cpp
+@@ -496,6 +496,10 @@ namespace CPU {
+    *    self-migration path under an even richer lock context. */
+   extern "C" {
+   __attribute__((used)) uint64_t IosCodeBufferSweepGate = 0;
++#ifdef ARCHITECTURE_arm64ec
++  extern uint32_t IosFexBatch2; // Arm64Emitter.h
++  long __stdcall NtFlushProcessWriteBuffers(void); // ntdll
++#endif
+   }
+ 
+   namespace {
+@@ -596,6 +600,16 @@ namespace CPU {
+ 
+     __atomic_store_n(&IosCodeBufferSweepGate, 1, __ATOMIC_SEQ_CST);
+     std::atomic_thread_fence(std::memory_order_seq_cst);
++#ifdef ARCHITECTURE_arm64ec
++    /* Playport, MADEIRA_FEX_BATCH2 "dmb" (IOS_FEX_BATCH2_DMB): enter_jit stores InSimulation and reads the gate
++     * without a barrier between, so this side supplies one on every thread: Wine's NtFlushProcessWriteBuffers
++     * reads each thread's registers (thread_get_register_pointer_values, as .NET does), which takes it through
++     * a barrier. A thread whose gate read came before that sees its InSimulation store read below; one whose
++     * read came after sees the gate. */
++    if (__atomic_load_n(&IosFexBatch2, __ATOMIC_RELAXED) & (1u << 2)) {
++      NtFlushProcessWriteBuffers();
++    }
++#endif
+ 
+     int Migrated = 0, InSimSkip = 0, SigPinSkip = 0, Raced = 0;
+     for (size_t i = 0; i < SnapCount; i++) {
+diff --git a/FEXCore/Source/Utils/ArchHelpers/Arm64.cpp b/FEXCore/Source/Utils/ArchHelpers/Arm64.cpp
+index df3076845..fb28a1810 100644
+--- a/FEXCore/Source/Utils/ArchHelpers/Arm64.cpp
++++ b/FEXCore/Source/Utils/ArchHelpers/Arm64.cpp
+@@ -2139,6 +2139,22 @@ static uint64_t HandleAtomicLoadstoreExclusive(uintptr_t ProgramCounter, uint64_
+   return NumInstructionsToSkip * 4;
+ }
+ 
++#if defined(FEX_IOS_HOST) && defined(ARCHITECTURE_arm64ec)
++extern "C" uint32_t IosFexBatch2;
++#endif
++
++// Playport, MADEIRA_FEX_BATCH2 "uabp" (IOS_FEX_BATCH2_UABP): on iOS the code buffer is the RX view of a dual
++// map, and every store into it, the backpatch lock's CAS included, is a Mach exception that Wine emulates.
++// Through the RW alias they are plain stores to the same memory; the icache is still flushed at the RX address.
++static inline uint32_t* BackpatchWriteAddr(uint32_t* RXAddr) {
++#if defined(FEX_IOS_HOST) && defined(ARCHITECTURE_arm64ec)
++  if (__atomic_load_n(&IosFexBatch2, __ATOMIC_RELAXED) & (1u << 3)) {
++    return FEXCore::DualMap::WriteAddr(RXAddr);
++  }
++#endif
++  return RXAddr;
++}
++
+ [[nodiscard]]
+ std::optional<int32_t> HandleUnalignedAccess(FEXCore::Core::InternalThreadState* Thread, UnalignedHandlerType HandleType,
+                                              uintptr_t ProgramCounter, uint64_t* GPRs, bool IsJIT) {
+@@ -2322,7 +2338,7 @@ std::optional<int32_t> HandleUnalignedAccess(FEXCore::Core::InternalThreadState*
+   // thread identity into the word (waiters only ever test zero/nonzero); on
+   // timeout, emulate this one access with the same helpers the !IsJIT path
+   // uses and leave the code unpatched.
+-  uint32_t* BPFutex = &InlineTail->SpinLockFutex;
++  uint32_t* BPFutex = BackpatchWriteAddr(&InlineTail->SpinLockFutex);
+   const uint32_t BPStamp = 0x80000000u | (static_cast<uint32_t>(reinterpret_cast<uintptr_t>(Thread) >> 4) & 0x7FFFFFFFu);
+   bool BPLocked = false;
+   for (int Attempt = 0; Attempt < 8; ++Attempt) {
+@@ -2383,9 +2399,9 @@ std::optional<int32_t> HandleUnalignedAccess(FEXCore::Core::InternalThreadState*
+     LDR |= DataReg;
+     if (HandleType != UnalignedHandlerType::NonAtomic) {
+       // Ordering matters with cross-thread visibility!
+-      std::atomic_ref<uint32_t>(PC[1]).store(DMB_LD, std::memory_order_release); // Back-patch the half-barrier.
++      std::atomic_ref<uint32_t>(*BackpatchWriteAddr(&PC[1])).store(DMB_LD, std::memory_order_release); // Back-patch the half-barrier.
+     }
+-    std::atomic_ref<uint32_t>(PC[0]).store(LDR, std::memory_order_release);
++    std::atomic_ref<uint32_t>(*BackpatchWriteAddr(&PC[0])).store(LDR, std::memory_order_release);
+     ClearICache(&PC[0], 8);
+     // With the instruction modified, now execute again.
+     return 0;
+@@ -2395,9 +2411,9 @@ std::optional<int32_t> HandleUnalignedAccess(FEXCore::Core::InternalThreadState*
+     STR |= AddrReg << 5;
+     STR |= DataReg;
+     if (HandleType != UnalignedHandlerType::NonAtomic) {
+-      std::atomic_ref<uint32_t>(PC[-1]).store(DMB, std::memory_order_release); // Back-patch the half-barrier.
++      std::atomic_ref<uint32_t>(*BackpatchWriteAddr(&PC[-1])).store(DMB, std::memory_order_release); // Back-patch the half-barrier.
+     }
+-    std::atomic_ref<uint32_t>(PC[0]).store(STR, std::memory_order_release);
++    std::atomic_ref<uint32_t>(*BackpatchWriteAddr(&PC[0])).store(STR, std::memory_order_release);
+     ClearICache(&PC[-1], 8);
+     // Back up one instruction and have another go
+     return -4;
+@@ -2410,9 +2426,9 @@ std::optional<int32_t> HandleUnalignedAccess(FEXCore::Core::InternalThreadState*
+     LDUR |= Instr & (0b1'1111'1111 << 12);
+     if (HandleType != UnalignedHandlerType::NonAtomic) {
+       // Ordering matters with cross-thread visibility!
+-      std::atomic_ref<uint32_t>(PC[1]).store(DMB_LD, std::memory_order_release); // Back-patch the half-barrier.
++      std::atomic_ref<uint32_t>(*BackpatchWriteAddr(&PC[1])).store(DMB_LD, std::memory_order_release); // Back-patch the half-barrier.
+     }
+-    std::atomic_ref<uint32_t>(PC[0]).store(LDUR, std::memory_order_release);
++    std::atomic_ref<uint32_t>(*BackpatchWriteAddr(&PC[0])).store(LDUR, std::memory_order_release);
+     ClearICache(&PC[0], 8);
+     // With the instruction modified, now execute again.
+     return 0;
+@@ -2423,9 +2439,9 @@ std::optional<int32_t> HandleUnalignedAccess(FEXCore::Core::InternalThreadState*
+     STUR |= DataReg;
+     STUR |= Instr & (0b1'1111'1111 << 12);
+     if (HandleType != UnalignedHandlerType::NonAtomic) {
+-      std::atomic_ref<uint32_t>(PC[-1]).store(DMB, std::memory_order_release); // Back-patch the half-barrier.
++      std::atomic_ref<uint32_t>(*BackpatchWriteAddr(&PC[-1])).store(DMB, std::memory_order_release); // Back-patch the half-barrier.
+     }
+-    std::atomic_ref<uint32_t>(PC[0]).store(STUR, std::memory_order_release);
++    std::atomic_ref<uint32_t>(*BackpatchWriteAddr(&PC[0])).store(STUR, std::memory_order_release);
+ 
+     ClearICache(&PC[-1], 8);
+     // Back up one instruction and have another go
+diff --git a/Source/Windows/ARM64EC/IosJitAlias.cpp b/Source/Windows/ARM64EC/IosJitAlias.cpp
+index ab121a2cf..4127fe2e1 100644
+--- a/Source/Windows/ARM64EC/IosJitAlias.cpp
++++ b/Source/Windows/ARM64EC/IosJitAlias.cpp
+@@ -18,6 +18,7 @@
+ // their own TU sidesteps the issue.
+ 
+ #include <cstdint>
++#include <cstring>
+ #include <atomic>
+ #include <FEXCore/Utils/LogManager.h>
+ #include <windows.h>
+@@ -59,6 +60,22 @@ IosAliasEntry* volatile IosAliasLast = nullptr;
+  * IosJitReverseTranslate read again. Without it a reader could pair a retired slot's old PeBase with
+  * the Size and JitBase of the image that reused it, and branch into the wrong copy. */
+ volatile uint64_t IosAliasGen = 0;
++
++/* Playport, MADEIRA_FEX_BATCH2 "alias" (IosFexBatch2 bit 0, Arm64Emitter.h): every listed image's
++ * 64 KB granules, kept by the writer under IosAliasGen, so Module.S translates an x64->EC target with
++ * one probe instead of the hint and walk. Open addressing from (granule + 1) & 32767, linear probing,
++ * never more than half full. Key: granule + 1, 0 for an empty slot. Delta: JitBase - PeBase of the one
++ * image the granule lies in whole, or kAliasGranulePart (odd, no delta is) when it is only partly an
++ * image's or two images claim it: those take the walk. Module.S relies on the 16-byte slot, the 32768
++ * slots and key below 2^40. */
++struct IosAliasGranule {
++  uint64_t Key;
++  uint64_t Delta;
++};
++constexpr uint32_t kAliasGranuleSlots = 32768;
++constexpr uint64_t kAliasGranulePart = 1;
++alignas(16) IosAliasGranule IosAliasGranules[kAliasGranuleSlots];
++extern uint32_t IosFexBatch2;
+ }
+ 
+ namespace {
+@@ -99,6 +116,70 @@ void AliasChangeEnd() {
+   __atomic_store_n(&IosAliasGen, IosAliasGen + 1, __ATOMIC_RELEASE);
+ }
+ 
++uint32_t g_AliasGranulesUsed = 0;
++
++// Under the lock with IosAliasGen odd. False when the table would be more than half full.
++bool AliasGranulePut(uint64_t Key, uint64_t Delta) {
++  for (uint32_t i = Key & (kAliasGranuleSlots - 1);; i = (i + 1) & (kAliasGranuleSlots - 1)) {
++    IosAliasGranule& Slot = IosAliasGranules[i];
++    if (Slot.Key == Key) {
++      if (Slot.Delta != Delta) {
++        Slot.Delta = kAliasGranulePart;
++      }
++      return true;
++    }
++    if (!Slot.Key) {
++      if (g_AliasGranulesUsed >= kAliasGranuleSlots / 2) {
++        return false;
++      }
++      Slot.Delta = Delta;
++      Slot.Key = Key;
++      g_AliasGranulesUsed++;
++      return true;
++    }
++  }
++}
++
++bool AliasGranulesAddImage(uint64_t PeBase, uint64_t JitBase, uint64_t Size) {
++  const uint64_t End = PeBase + Size;
++  if (!Size || End < PeBase || (End >> 56)) {
++    return false;
++  }
++  const uint64_t Delta = JitBase - PeBase;
++  for (uint64_t Granule = PeBase >> 16; Granule <= (End - 1) >> 16; Granule++) {
++    const bool Whole = (Granule << 16) >= PeBase && ((Granule + 1) << 16) <= End && !(Delta & 1);
++    if (!AliasGranulePut(Granule + 1, Whole ? Delta : kAliasGranulePart)) {
++      return false;
++    }
++  }
++  return true;
++}
++
++// Under the lock with IosAliasGen odd: the granule lookup off (bit 0 cleared) and the table emptied,
++// as no later change keeps it: a reader whose read of bit 0 was older than the count it then reads
++// finds every slot empty and leaves the target untranslated. Module.S walks as before.
++void AliasGranulesOff() {
++  __atomic_fetch_and(&IosFexBatch2, ~1u, __ATOMIC_RELAXED);
++  memset(IosAliasGranules, 0, sizeof(IosAliasGranules));
++  g_AliasGranulesUsed = 0;
++}
++
++// Under the lock with IosAliasGen odd: the table from the live entries, or off on overflow.
++void AliasGranulesRebuild() {
++  if (!(__atomic_load_n(&IosFexBatch2, __ATOMIC_RELAXED) & 1)) {
++    return;
++  }
++  memset(IosAliasGranules, 0, sizeof(IosAliasGranules));
++  g_AliasGranulesUsed = 0;
++  const int count = g_EntryCount;
++  for (int i = 0; i < count; i++) {
++    if (g_Entries[i].Size && !AliasGranulesAddImage(g_Entries[i].PeBase, g_Entries[i].JitBase, g_Entries[i].Size)) {
++      AliasGranulesOff();
++      return;
++    }
++  }
++}
++
+ // A reader's consistent view: Read(count) runs until no change overlapped it. After many
+ // attempts against a writer that does not finish, the caller's untranslated answer stands.
+ template<typename F>
+@@ -432,6 +513,7 @@ static bool IosSubfloorAdd(uint64_t LowBase, uint64_t RealBase, uint64_t Size) {
+  * after the first "table full" message. */
+ static int IosAddAliasMappingLocked(uint64_t PeBase, uint64_t JitBase, uint64_t Size);
+ static int IosAliasInsert(uint64_t PeBase, uint64_t JitBase, uint64_t Size, int count);
++static int IosAliasList(uint64_t PeBase, uint64_t JitBase, uint64_t Size, int count, bool& Retired);
+ 
+ int BTCpu64IosAddAliasMapping(uint64_t PeBase, uint64_t JitBase, uint64_t Size) {
+   /* ml951: a sub-floor window arrives through this same entry point, marked by
+@@ -462,6 +544,7 @@ static int IosAddAliasMappingLocked(uint64_t PeBase, uint64_t JitBase, uint64_t
+       }
+     }
+     if (Changing) {
++      AliasGranulesRebuild();
+       AliasChangeEnd();
+     }
+     return 1;
+@@ -482,8 +565,36 @@ static int IosAddAliasMappingLocked(uint64_t PeBase, uint64_t JitBase, uint64_t
+   return Result;
+ }
+ 
++/* Playport: MADEIRA_FEX_BATCH2 "alias" on (Module.cpp, ProcessInit): sets bit 0 and builds the granule
++ * table from the entries listed so far, under the writer lock, so no image added meanwhile is missed.
++ * Returns the granules used, or -1 when they did not fit and the walk stays. */
++int IosAliasGranulesEnable(void) {
++  AliasWriteLock();
++  AliasChangeBegin();
++  __atomic_fetch_or(&IosFexBatch2, 1u, __ATOMIC_RELAXED);
++  AliasGranulesRebuild();
++  const int Used = (__atomic_load_n(&IosFexBatch2, __ATOMIC_RELAXED) & 1) ? static_cast<int>(g_AliasGranulesUsed) : -1;
++  AliasChangeEnd();
++  AliasWriteUnlock();
++  return Used;
++}
++
+ // Between AliasChangeBegin and AliasChangeEnd: count is IosAliasCount.
+ static int IosAliasInsert(uint64_t PeBase, uint64_t JitBase, uint64_t Size, int count) {
++  bool Retired = false;
++  const int Listed = IosAliasList(PeBase, JitBase, Size, count, Retired);
++  if (__atomic_load_n(&IosFexBatch2, __ATOMIC_RELAXED) & 1) {
++    if (Retired) {
++      AliasGranulesRebuild();
++    } else if (Listed && !AliasGranulesAddImage(PeBase, JitBase, Size)) {
++      AliasGranulesOff();
++    }
++  }
++  return Listed;
++}
++
++// IosAliasInsert's table part; Retired: an overlapping entry was retired.
++static int IosAliasList(uint64_t PeBase, uint64_t JitBase, uint64_t Size, int count, bool& Retired) {
+   // Retire every entry whose PE range overlaps the incoming image: a live
+   // image proves any overlapping entry is dead (two images cannot share a VA).
+   for (int i = 0; i < count; i++) {
+@@ -495,6 +606,7 @@ static int IosAliasInsert(uint64_t PeBase, uint64_t JitBase, uint64_t Size, int
+     if (pb < PeBase + Size && PeBase < pb + sz) {
+       g_Entries[i].Size = 0;
+       __sync_synchronize();
++      Retired = true;
+     }
+   }
+ 
+diff --git a/Source/Windows/ARM64EC/Module.S b/Source/Windows/ARM64EC/Module.S
+index 5049ca7e5..1513cbb16 100644
+--- a/Source/Windows/ARM64EC/Module.S
++++ b/Source/Windows/ARM64EC/Module.S
+@@ -53,6 +53,50 @@
+   tbnz x17, #0, ios_ec_xlate_done
+   lsl x17, x17, #32
+ .endm
++// Playport, MADEIRA_FEX_BATCH2 "alias" (IosFexBatch2 bit 0): x9's 64 KB granule in IosAliasGranules,
++// a table the writer keeps of every listed image's granules (IosJitAlias.cpp), replaces the walk. A
++// slot holds granule + 1 and the image's JitBase - PeBase, or 1 when the granule is not all one
++// image's. An empty slot ends the probe: no image there, x9 stays, \done. A whole granule's delta
++// read with IosAliasGen even and unmoved is added to x9, \done. Anything else (the bit clear, a writer
++// active, the count moved, a part granule) falls through to the hint and walk. Clobbers x4, x16,
++// x17, x23.
++.macro IOS_ALIAS_GRANULE_LOOKUP done
++  adrp x16, IosFexBatch2
++  ldr w16, [x16, #:lo12:IosFexBatch2]
++  tbz w16, #0, .Lios_gl_slow\@
++  adrp x16, IosAliasGen
++  add x16, x16, #:lo12:IosAliasGen
++  ldar x23, [x16]
++  tbnz x23, #0, .Lios_gl_slow\@
++  adrp x16, IosAliasGranules
++  add x16, x16, #:lo12:IosAliasGranules
++  lsr x17, x9, #16
++  add x17, x17, #1              // the slot key, granule + 1
++  bfi x17, x23, #40, #24        // the sequence count's low 24 bits above it
++  ubfiz x4, x17, #4, #15        // 32768 slots of 16 bytes
++.Lios_gl_probe\@:
++  ldr x23, [x16, x4]
++  cbz x23, \done
++  eor x23, x23, x17
++  lsl x23, x23, #24
++  cbz x23, .Lios_gl_found\@
++  add x4, x4, #16
++  and x4, x4, #0x7fff0
++  b .Lios_gl_probe\@
++.Lios_gl_found\@:
++  add x16, x16, x4
++  ldr x4, [x16, #8]
++  dmb ishld
++  adrp x16, IosAliasGen
++  ldr x23, [x16, #:lo12:IosAliasGen]
++  eor x23, x23, x17, lsr #40
++  lsl x23, x23, #40
++  cbnz x23, .Lios_gl_slow\@
++  tbnz x4, #0, .Lios_gl_slow\@
++  add x9, x9, x4
++  b \done
++.Lios_gl_slow\@:
++.endm
+ .macro IOS_ALIAS_READ_END changed
+   dmb ishld
+   adrp x16, IosAliasGen
+@@ -223,8 +267,12 @@ ios_ffs_xlate_hit:
+   eor x16, x9, x16, lsl #32
+   lsr x16, x16, #32
+   cbnz x16, ios_ffs_xlate_done  // the table changed under the read: untranslated
++  mov x9, x17            // Playport: the pool copy the target was found in, runnable as it is
+   mov x17, x23
++  b ios_ffs_xlate_check
+ ios_ffs_xlate_done:
++  mov x9, x17
++ios_ffs_xlate_check:
+   IOS_LOAD_TEB x16
+   ldr x16, [x16, #0x60]  // TEB->PEB
+   ldr x16, [x16, #0x368] // PEB->EcCodeBitMap
+@@ -234,6 +282,13 @@ ios_ffs_xlate_done:
+   lsr x23, x17, #12
+   lsr x16, x16, x23
+   tbz x16, #0, ios_ffs_reject
++  // Playport, MADEIRA_FEX_BATCH2 "ffs" (IosFexBatch2 bit 1): branch to the pool copy, not the PE VA,
++  // which pays a Mach exec-fault redirect (about 33 us) to get there.
++  adrp x16, IosFexBatch2
++  ldr w16, [x16, #:lo12:IosFexBatch2]
++  tbz w16, #1, 1f
++  mov x17, x9
++1:
+   ldp x4, x9, [sp], #16
+   adrp x16, IosFfsBypassLog
+   add x16, x16, #:lo12:IosFfsBypassLog
+@@ -241,7 +296,7 @@ ios_ffs_xlate_done:
+   add x23, x23, #1
+   str x23, [x16]         // [0] = bypass count (diagnostic, read by Core.cpp reporter)
+   str x17, [x16, #8]     // [1] = last EC target taken natively
+-  br x17                 // PE VA; the Mach exec-fault redirect maps it to the pool copy
++  br x17                 // PE VA (the Mach exec-fault redirect maps it to the pool copy), or the copy
+ ios_ffs_reject:
+   // Pattern matched but the (PE-space) target is not EC per the bitmap: fall
+   // through to normal emulation -- correct for genuine x64 jmp targets -- but
+@@ -273,6 +328,12 @@ enter_jit:
+   // published above; the full barrier orders it before the gate read, so
+   // either the sweeper sees us in-simulation (and skips this thread) or we
+   // see the gate (and wait out the sweep before touching L1/callret state).
++  // Playport, MADEIRA_FEX_BATCH2 "dmb" (IosFexBatch2 bit 2): no barrier here; the sweeper, which
++  // runs once per code generation, calls NtFlushProcessWriteBuffers between its gate store and its
++  // InSimulation reads instead (CPUBackend.cpp), which puts every thread through one.
++  adrp x16, IosFexBatch2
++  ldr w16, [x16, #:lo12:IosFexBatch2]
++  tbnz w16, #2, 8f
+   dmb ish
+ 8:
+   adrp x16, IosCodeBufferSweepGate
+@@ -373,6 +434,7 @@ ExitFunctionECJit:
+   strb wzr, [x17, #0x0] // ChpeV2CpuAreaInfo->InSimulation
+   ldr w17, [x28, #IOS_FRAME_SUSPEND_DOORBELL] // *ChpeV2CpuAreaInfo->SuspendDoorbell
+   cbnz w17, ExitFunctionSuspendPoint
++  IOS_ALIAS_GRANULE_LOOKUP ios_ec_xlate_done
+   IOS_ALIAS_READ_BEGIN
+   ldr x16, [x28, #IOS_FRAME_ALIAS_HINT]
+   cbz x16, ios_ec_jit_xlate_walk
+@@ -489,6 +551,7 @@ ExitFunctionSuspendResumePoint:
+   // x64 R10 (volatile at this call/ret boundary) and is clobbered by the
+   // entry-thunk path below. NZCV is clobbered by the cmp at check_thunk
+   // regardless.
++  IOS_ALIAS_GRANULE_LOOKUP ios_ec_xlate_done
+   IOS_ALIAS_READ_BEGIN
+   // ml1116: last-hit entry first, then the table newest-first.
+   adrp x16, IosAliasLast
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index c5a62a2d0..2ee304b88 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -96,6 +96,8 @@ extern "C" uint64_t IosFfsBypassLog[4];
+ extern "C" uint32_t IosEcReturnWithRet;
+ extern "C" uint32_t IosEcCallRetPop;
+ extern "C" uint32_t IosRdtscSelfSync;
++extern "C" uint32_t IosFexBatch2;
++extern "C" int IosAliasGranulesEnable(void);
+ 
+ /* Raw TSD byte offset (from TPIDRRO_EL0 & ~7) of the slot holding the TEB.
+  * Discovered and published by wine's ntdll-unix; imported in ProcessInit.
+@@ -1430,6 +1432,31 @@ NTSTATUS ProcessInit() {
+     const char* QpcOpt = getenv("MADEIRA_X64_QPC_FASTPATH");
+     IosRdtscSelfSync = QpcOpt && strcmp(QpcOpt, "1") == 0;
+     LogMan::Msg::IFmt("FEX: rdtsc-self-sync enabled={}", IosRdtscSelfSync != 0);
++    /* Playport: MADEIRA_FEX_BATCH2=1 turns on the IosFexBatch2 items (Arm64Emitter.h), less the ones
++     * MADEIRA_FEX_BATCH2_SKIP names (comma-separated: alias, ffs, dmb, uabp). Off by default. */
++    const char* Batch2Opt = getenv("MADEIRA_FEX_BATCH2");
++    if (Batch2Opt && strcmp(Batch2Opt, "1") == 0) {
++      const char* Skip = getenv("MADEIRA_FEX_BATCH2_SKIP");
++      const auto Skipped = [Skip](const char* Name) {
++        const size_t Len = strlen(Name);
++        for (const char* p = Skip; p && *p;) {
++          const char* Comma = strchr(p, ',');
++          const size_t ItemLen = Comma ? static_cast<size_t>(Comma - p) : strlen(p);
++          if (ItemLen == Len && strncmp(p, Name, Len) == 0) {
++            return true;
++          }
++          p = Comma ? Comma + 1 : nullptr;
++        }
++        return false;
++      };
++      uint32_t Bits = 0;
++      if (!Skipped("ffs")) Bits |= 1u << 1; // IOS_FEX_BATCH2_FFS (Arm64Emitter.h)
++      if (!Skipped("dmb")) Bits |= 1u << 2; // IOS_FEX_BATCH2_DMB
++      if (!Skipped("uabp")) Bits |= 1u << 3; // IOS_FEX_BATCH2_UABP
++      __atomic_fetch_or(&IosFexBatch2, Bits, __ATOMIC_RELEASE);
++      const int Granules = Skipped("alias") ? -2 : IosAliasGranulesEnable();
++      LogMan::Msg::IFmt("FEX: batch2 bits={:#x} alias-granules={} (-1 too many, -2 skipped)", IosFexBatch2, Granules);
++    }
+   }
+ #endif
+ 
