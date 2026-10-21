@@ -31,8 +31,8 @@ USBMUXD_SOCKET_ADDRESS set.
                                   as the local copy pp gpu capture pulled does; its links are
                                   removed, never followed. Nothing else (bundle_refusal)
 
-rotate-log: the app appends every launch to s1-host.log and never trims it, and
-every driver pulls the whole file; this renames it in one AFC call, nothing is
+rotate-log: the app appends every launch to s1-host.log (moving it aside itself only
+past 256 MiB, WINE_HOST_DEV_LOG_CAP), and every driver pulls the whole file; this renames it in one AFC call, nothing is
 copied. Run it only while the app is not running.
 """
 import asyncio

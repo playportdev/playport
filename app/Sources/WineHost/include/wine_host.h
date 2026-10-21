@@ -238,6 +238,12 @@ void wine_host_process_memory_log(const char *why, int force);
  * without changing any existing call. */
 void wine_host_set_log_limit(size_t bytes);
 
+/* With no limit (a dev build), the runtime's lines past this many bytes of the
+ * log in one session are counted, not written (log_cap.h). 256 MiB: a long
+ * RDR2 run's whole log was about 40 MB. A literal, so Swift imports it
+ * (AppLog.swift). */
+#define WINE_HOST_DEV_LOG_CAP 268435456L
+
 /* The host side of the game's Steam tickets (steam_ticket_protocol.h,
  * decision 0062): the calls playport_steam_unix_call_funcs (steam_ticket.c)
  * makes, on the game's thread, after it checked the block. Each returns an

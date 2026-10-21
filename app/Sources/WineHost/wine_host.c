@@ -14,6 +14,7 @@
 #include "wine_host.h"
 #include "dll_overlay.h"
 #include "dotnet_fakedlls.h"
+#include "log_cap.h"
 #include "prefix_registry.h"
 #include "selfcheck.h"
 #include "timezone_bias.h"
@@ -65,6 +66,7 @@ static FILE *g_log;
 static wine_host_log_fn g_log_fn;
 static pthread_mutex_t g_log_lock = PTHREAD_MUTEX_INITIALIZER;
 static size_t g_log_limit;   /* wine_host_set_log_limit; 0 is none */
+static int g_log_fd = -1;    /* the log file, for the dev cap (log_cap.h): stderr is a pipe under WINE_HOST_LOG_STAMP */
 static pthread_t g_server_thread, g_guest_thread;
 static int g_server_started, g_guest_started;
 /* The guest's argv: "wine", the session root's DOS path and its directory. */
@@ -352,6 +354,42 @@ static void *log_limit_thread(void *arg)
         }
         pthread_mutex_unlock(&g_log_lock);
         return NULL;
+    }
+}
+
+/* With no limit (a dev build), once a second: when the log file has reached
+ * WINE_HOST_DEV_LOG_CAP, say so, give the wineserver /dev/null, point stderr
+ * at a pipe and become its reader, which counts what arrives and appends only
+ * log_cap_tally's report lines (log_cap.h). This file's own lines (g_log) and
+ * HostIO's (host_log.c, which then appends to the file itself) still land:
+ * they are few, and they carry the marks the drivers read. */
+static void *log_cap_thread(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        struct stat st;
+        sleep(1);
+        if (fstat(g_log_fd, &st) || st.st_size < WINE_HOST_DEV_LOG_CAP) continue;
+        int p[2];
+        if (pipe(p)) return NULL;
+        dprintf(g_log_fd, "[wine_host] log: %ld MiB reached; the runtime's lines are counted from here, not written\n",
+                WINE_HOST_DEV_LOG_CAP >> 20);
+        wineserver_log_set_file("/dev/null");
+        fflush(stderr);
+        dup2(p[1], STDERR_FILENO);
+        close(p[1]);
+        static char buf[65536];
+        char report[512];
+        log_cap_tally tally;
+        log_cap_tally_init(&tally, WINE_HOST_DEV_LOG_CAP);
+        for (;;) {
+            ssize_t n = read(p[0], buf, sizeof(buf));
+            if (n < 0 && errno == EINTR) continue;
+            if (n <= 0) return NULL;
+            double now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1e9;
+            size_t len = log_cap_tally_feed(&tally, buf, (size_t)n, now, 10.0, report, sizeof(report));
+            if (len) (void)!write(g_log_fd, report, len);
+        }
     }
 }
 
@@ -1261,7 +1299,8 @@ int wine_host_init(const wine_host_config *c)
         int fd = open(c->log_path, O_WRONLY | O_CREAT | O_APPEND, 0644);
         if (fd >= 0) {   /* ntdll and wineserver report through stderr */
             dup2(fd, STDERR_FILENO);
-            close(fd);
+            if (g_log_limit) close(fd);
+            else { fcntl(fd, F_SETFD, FD_CLOEXEC); g_log_fd = fd; }
         }
         if (g_log_limit) {
             pthread_t t;
@@ -1278,6 +1317,15 @@ int wine_host_init(const wine_host_config *c)
              * by default: they cost time, so only for a profile run. */
             if (getenv("WINE_HOST_DIAG")) madeira_set_diag_enabled(1);
             if (getenv("WINE_HOST_SAMPLE")) start_sampler(atof(getenv("WINE_HOST_SAMPLE")) > 0 ? atof(getenv("WINE_HOST_SAMPLE")) : 15);
+            if (g_log_fd >= 0) {
+                pthread_t t;
+                pthread_attr_t attr;
+                pthread_attr_init(&attr);
+                pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+                pthread_attr_set_qos_class_np(&attr, QOS_CLASS_USER_INITIATED, 0);
+                pthread_create(&t, &attr, log_cap_thread, NULL);
+                pthread_attr_destroy(&attr);
+            }
         }
     }
     host_log("init abi=%d runtime=%s prefix=%s", WINE_HOST_ABI_VERSION, c->runtime_dir, c->prefix_dir);

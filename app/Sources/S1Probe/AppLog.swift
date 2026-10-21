@@ -4,8 +4,13 @@
 // HostIO's (host_log.c), and once wine_host_init has pointed stderr at it,
 // the runtime's.
 //
-//   dev      s1-host.log, appended across launches with no size limit; the
-//            workstation drivers pull it and parse it (docs/DEVICE.md)
+//   dev      s1-host.log, appended across launches; the workstation drivers
+//            move it aside before a launch, pull it and parse it
+//            (docs/DEVICE.md). Bounded only against a runaway: at launch a
+//            log over WINE_HOST_DEV_LOG_CAP (256 MiB, log_cap.h) becomes
+//            s1-host.prev.log; within a session the runtime's lines past
+//            the cap are counted, not written (wine_host.c's log_cap_thread),
+//            while the app's own lines go on to twice the cap.
 //   release  playport.log (decision 0009). At launch a log over half the
 //            limit becomes playport.previous.log, replacing the older one;
 //            within a session the log stops at the limit: these appends and
@@ -25,6 +30,8 @@ enum AppLog {
     static let limit = 4 << 20
     #else
     static let name = "s1-host.log"
+    static let previousName = "s1-host.prev.log"
+    static let limit = WINE_HOST_DEV_LOG_CAP
     #endif
 
     /// Fixed at first use, in the app's init: wine_host_init later points HOME
@@ -37,15 +44,23 @@ enum AppLog {
     /// Once, in the app's init, before anything is logged.
     static func start() {
         #if PLAYPORT_RELEASE
+        rotate(over: limit / 2)
+        host_log_set_limit(limit)
+        wine_host_set_log_limit(limit)
+        #else
+        rotate(over: limit)
+        host_log_set_limit(2 * limit)
+        #endif
+    }
+
+    /// At launch, a log over `bytes` becomes the previous log, replacing it.
+    private static func rotate(over bytes: Int) {
         let fm = FileManager.default
-        if let size = (try? fm.attributesOfItem(atPath: path))?[.size] as? Int, size > limit / 2 {
+        if let size = (try? fm.attributesOfItem(atPath: path))?[.size] as? Int, size > bytes {
             let previous = url.deletingLastPathComponent().appendingPathComponent(previousName)
             try? fm.removeItem(at: previous)
             try? fm.moveItem(at: url, to: previous)
         }
-        host_log_set_limit(limit)
-        wine_host_set_log_limit(limit)
-        #endif
     }
 
     /// One line, from any thread. Before wine_host_init this is the only

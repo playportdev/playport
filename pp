@@ -94,6 +94,7 @@ C_TESTS = [
     ("pads", PADS, PADS_FLAGS),
     ("pads (ThreadSanitizer)", PADS, PADS_FLAGS + ["-fsanitize=thread", "-O1", "-g"]),
     ("host log", ["app/tests/host_log_test.c", "app/Sources/HostIO/host_log.c"], ["-D_DEFAULT_SOURCE"]),
+    ("log cap", ["app/tests/log_cap_test.c", "app/Sources/WineHost/log_cap.c"], []),
     ("title path", ["app/tests/title_path_test.c", "app/Sources/WineHost/title_path.c"], ["-D_DEFAULT_SOURCE"]),
     ("dotnet fake DLLs", ["app/tests/dotnet_fakedlls_test.c", "app/Sources/WineHost/dotnet_fakedlls.c"], ["-D_DEFAULT_SOURCE"]),
     ("dll overlay", ["app/tests/dll_overlay_test.c", "app/Sources/WineHost/dll_overlay.c"], ["-D_DEFAULT_SOURCE"]),
