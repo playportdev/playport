@@ -47,4 +47,4 @@
 0048-ntdll-find-a-builtin-s-resources-through-its-PE-view.patch
 0049-winegcc-align-ARM64-and-ARM64EC-builtins-to-16-KiB-s.patch
 0050-ntdll-MADEIRA_X64_CS_FASTPATH-1-takes-an-x64-module-.patch
-0051-ntdll-MADEIRA_X64_ONCE_FASTPATH-1-answers-an-x64-mod.patch
+0051-ntdll-make-the-process-heap-s-first-region-HeapSegme.patch
