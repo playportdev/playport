@@ -53,7 +53,10 @@ Same IPA, Hollow Knight, first frame + 30 s:
 | `disableafp` (LRCPC2 on) | off | bridge | black (`20261013T071114`) |
 
 From 15b on the previous IPA: `disableafp` alone (the access-violation route) shows the menu, and
-`disablelrcpc2` alone (the bridge route, AFP on) shows the menu. So the black needs AFP off **and**
+`disablelrcpc2` alone (the bridge route, AFP on) shows the menu. **Correction (2026-10-21):** the
+`disableafp` runs of 15b (`20261013T063943`, `20261013T064052`) were black too, so the black needs AFP
+off only, not the bridge route; the conclusion below does not hold
+([2026-10-21-afp-off.md](2026-10-21-afp-off.md)). So the black needs AFP off **and**
 the bridge route, not LRCPC2 itself: AFP off with LRCPC2 on is black too once TSO off sends it down the
 bridge route. The cause between the two is not found. AFP changes FPCR handling at every
 JIT entry and exit (NEP, AH, FIZ) and scalar SSE code; the two routes differ in how the first `xchg`

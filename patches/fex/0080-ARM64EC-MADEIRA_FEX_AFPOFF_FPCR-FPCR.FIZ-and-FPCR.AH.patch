@@ -1,0 +1,248 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Wed, 21 Oct 2026 16:24:58 +0200
+Subject: [PATCH] ARM64EC: MADEIRA_FEX_AFPOFF_FPCR, FPCR.FIZ and FPCR.AH
+ without AFP on iOS
+
+Without FEAT_AFP (FEX_HOSTFEATURES=disableafp) FEX keeps x86's scalar
+SSE semantics itself: every scalar result goes through VTMP1 and an INS
+into the destination, and minss/maxss/minps/maxps compare and select.
+What it leaves out is FPCR: x64 code runs with FPCR.AH=0 and FIZ=0, so
+an invalid operation gives +NaN where x86 gives -NaN, two NaN operands
+are ordered as ARM orders them, MXCSR.FTZ (FPCR.FZ) flushes denormal
+inputs as well as outputs, and MXCSR.DAZ alone is not applied. Hollow
+Knight (Unity 6, Direct3D 11 on DXVK) draws black at 60 fps that way,
+and its menu with AFP.
+
+The phone has FEAT_AFP; the switch only stops FEX writing FPCR at every
+x64 <-> ARM64EC transition. MADEIRA_FEX_AFPOFF_FPCR sets IosAfpOffFpcr
+(Arm64Emitter.h) at process init, before the dispatcher is emitted, so
+a phone run can tell which of those bits a game needs:
+
+0 (default): FEX's behaviour, unchanged.
+fiz: FPCR.FIZ follows MXCSR.DAZ. SetRoundingMode (LDMXCSR, FXRSTOR,
+XRSTOR) inserts it, as with AFP, and FillStaticRegs rewrites FPCR only
+when FIZ differs from DAZ (a context restore leaves it clear). FIZ stays
+set for ARM64EC code, as ExitFunctionEC leaves it with AFP.
+ah: as fiz, plus FPCR.AH, kept for the thread: ARM64EC code runs with
+AH too, so no transition writes FPCR. EnterEC sets AH and FIZ only when
+AH is missing (a new thread, a reset FPCR).
+ahx: AH and FIZ set on entering the JIT and cleared on leaving it, as
+AFP does less NEP: ARM64EC code keeps IEEE behaviour, and each
+transition writes FPCR twice. ExitFunctionECJit leaves FPCR alone, so
+ahx keeps ExitFunctionEC.
+
+FPCR.NEP stays clear in every mode. The disk cache's process bucket
+is keyed on the mode: SetRoundingMode and FillStaticRegs are compiled
+into blocks. The log says "FEX: afpoff-fpcr mode=N (...)".
+
+Class: feature
+Evidence: docs/evidence/2026-10-21-afp-off.md
+Offered-upstream: no; FEX's AFP path covers hosts with AFP, and this is for the iOS ARM64EC host that turns it off
+---
+ .../Core/ArchHelpers/Arm64Emitter.cpp         | 53 +++++++++++++++++++
+ .../Interface/Core/ArchHelpers/Arm64Emitter.h | 13 ++++-
+ FEXCore/Source/Interface/Core/DiskCache.cpp   | 11 ++++
+ FEXCore/Source/Interface/Core/JIT/MiscOps.cpp | 11 ++++
+ Source/Windows/ARM64EC/Module.cpp             | 20 ++++++-
+ 5 files changed, 106 insertions(+), 2 deletions(-)
+
+diff --git a/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.cpp b/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.cpp
+index 46df7bcf6..d6932aece 100644
+--- a/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.cpp
++++ b/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.cpp
+@@ -29,6 +29,7 @@ extern "C" uint32_t IosEcReturnWithRet = 0;
+ extern "C" uint32_t IosEcCallRetPop = 0;
+ extern "C" uint32_t IosRdtscSelfSync = 0;
+ extern "C" uint32_t IosFexBatch2 = 0;
++extern "C" uint32_t IosAfpOffFpcr = 0;
+ #endif
+ 
+ #ifdef FEX_IOS_HOST
+@@ -690,6 +691,48 @@ void Arm64Emitter::FillSpecialRegs(ARMEmitter::Register TmpReg, ARMEmitter::Regi
+ 
+     msr(ARMEmitter::SystemRegister::FPCR, TmpReg);
+   }
++#if defined(FEX_IOS_HOST) && defined(ARCHITECTURE_arm64ec)
++  else if (IosAfpOffFpcr == IOS_AFPOFF_FPCR_AHX) {
++    // Playport: as with AFP, less NEP: AH on entering the JIT, FIZ from MXCSR.DAZ. SpillStaticRegs and
++    // ExitFunctionEC clear them again.
++    mrs(TmpReg, ARMEmitter::SystemRegister::FPCR);
++    orr(ARMEmitter::Size::i64Bit, TmpReg, TmpReg, 1U << 1); // AH
++    if (Options.SetFIZ) {
++      ldr(TmpReg2.W(), STATE.R(), offsetof(FEXCore::Core::CPUState, mxcsr));
++      bfxil(ARMEmitter::Size::i64Bit, TmpReg, TmpReg2, 6, 1);
++    }
++    msr(ARMEmitter::SystemRegister::FPCR, TmpReg);
++  } else if (IosAfpOffFpcr == IOS_AFPOFF_FPCR_FIZ || IosAfpOffFpcr == IOS_AFPOFF_FPCR_AH) {
++    // Playport: FIZ (and AH) stay set for the thread, so they are written only when they differ from
++    // what they should be, as after a context restore or in a new thread: an FPCR write stalls Apple
++    // cores. Branches only, NZCV may already hold the guest's flags here.
++    const bool SetAH = IosAfpOffFpcr == IOS_AFPOFF_FPCR_AH;
++    ARMEmitter::ForwardLabel FPCRSet;
++    if (Options.SetFIZ) {
++      mrs(TmpReg, ARMEmitter::SystemRegister::FPCR);
++      ldr(TmpReg2.W(), STATE.R(), offsetof(FEXCore::Core::CPUState, mxcsr));
++      ubfx(ARMEmitter::Size::i64Bit, TmpReg2, TmpReg2, 6, 1); // FIZ = MXCSR.DAZ
++      if (SetAH) {
++        orr(ARMEmitter::Size::i64Bit, TmpReg2, TmpReg2, 1U << 1); // AH
++      }
++      eor(ARMEmitter::Size::i64Bit, TmpReg2, TmpReg2, TmpReg);
++      and_(ARMEmitter::Size::i64Bit, TmpReg2, TmpReg2, SetAH ? 0b11 : 0b01);
++      (void)cbz(ARMEmitter::Size::i64Bit, TmpReg2, &FPCRSet);
++      eor(ARMEmitter::Size::i64Bit, TmpReg, TmpReg, TmpReg2);
++      msr(ARMEmitter::SystemRegister::FPCR, TmpReg);
++      (void)Bind(&FPCRSet);
++    } else if (SetAH) {
++      // Entry from ARM64EC code: AH is still set unless the FPCR was reset, and then FIZ was too.
++      mrs(TmpReg, ARMEmitter::SystemRegister::FPCR);
++      (void)tbnz(TmpReg, 1, &FPCRSet);
++      orr(ARMEmitter::Size::i64Bit, TmpReg, TmpReg, 1U << 1); // AH
++      ldr(TmpReg2.W(), STATE.R(), offsetof(FEXCore::Core::CPUState, mxcsr));
++      bfxil(ARMEmitter::Size::i64Bit, TmpReg, TmpReg2, 6, 1);
++      msr(ARMEmitter::SystemRegister::FPCR, TmpReg);
++      (void)Bind(&FPCRSet);
++    }
++  }
++#endif
+ #endif
+ 
+   if (Options.SetPredRegs && EmitterCTX->HostFeatures.SupportsSVE()) {
+@@ -729,6 +772,16 @@ void Arm64Emitter::SpillStaticRegs(ARMEmitter::Register TmpReg, SpillStaticRegOp
+           (1U << 0)); // FIZ
+     msr(ARMEmitter::SystemRegister::FPCR, TmpReg);
+   }
++#if defined(FEX_IOS_HOST) && defined(ARCHITECTURE_arm64ec)
++  else if (IosAfpOffFpcr == IOS_AFPOFF_FPCR_AHX) {
++    // Playport: as with AFP, less NEP (never set without it).
++    mrs(TmpReg, ARMEmitter::SystemRegister::FPCR);
++    bic(ARMEmitter::Size::i64Bit, TmpReg, TmpReg,
++        (1U << 1) |   // AH
++          (1U << 0)); // FIZ
++    msr(ARMEmitter::SystemRegister::FPCR, TmpReg);
++  }
++#endif
+ #endif
+ 
+   if (Options.NZCV) {
+diff --git a/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.h b/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.h
+index 4123ca507..968f43316 100644
+--- a/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.h
++++ b/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.h
+@@ -132,6 +132,17 @@ enum IosFexBatch2Bits : uint32_t {
+   IOS_FEX_BATCH2_UABP = 1u << 3,  // "uabp": HandleUnalignedAccess backpatches through the RW alias (Arm64.cpp)
+ };
+ extern "C" uint32_t IosFexBatch2;
++// Playport: what FPCR holds for x64 code without FEAT_AFP (HostFeatures.SupportsAFP false), set by the
++// frontend before the dispatcher is emitted (MADEIRA_FEX_AFPOFF_FPCR). FPCR.NEP is never set without AFP:
++// FEX's code inserts every scalar result itself. The modes differ in FPCR.FIZ (MXCSR.DAZ) and FPCR.AH
++// (x86's default NaN sign, NaN operand order, FZ flushing outputs only).
++enum IosAfpOffFpcrMode : uint32_t {
++  IOS_AFPOFF_FPCR_NONE = 0, // "0": FEX's behaviour, FPCR as the thread has it (no AH, no FIZ)
++  IOS_AFPOFF_FPCR_FIZ = 1,  // "fiz": FIZ follows MXCSR.DAZ; left set for ARM64EC code, as with AFP
++  IOS_AFPOFF_FPCR_AH = 2,   // "ah": AH and FIZ kept for the thread, ARM64EC code included; written only when missing
++  IOS_AFPOFF_FPCR_AHX = 3,  // "ahx": AH and FIZ set on entry to the JIT and cleared on leaving it, as AFP does
++};
++extern "C" uint32_t IosAfpOffFpcr;
+ #endif
+ 
+ constexpr uint64_t EC_CODE_BITMAP_MAX_ADDRESS = 1ULL << 47;
+@@ -183,7 +194,7 @@ protected:
+     // Whether or not to set the FPCR.FIZ (flush inputs to zero) bit in the FPCR to
+     // the current value of the emulated MXCSR.DAZ bit.
+     // Will only attempt to do so, even when set to true, if and only if the host system
+-    // supports FEAT_AFP.
++    // supports FEAT_AFP (or, on the iOS ARM64EC host, IosAfpOffFpcr asks for FIZ).
+     bool SetFIZ {};
+ 
+     // Whether or not FillSpecialRegs should load our SVE predicate temporaries
+diff --git a/FEXCore/Source/Interface/Core/DiskCache.cpp b/FEXCore/Source/Interface/Core/DiskCache.cpp
+index dbfcdf817..bf6df085e 100644
+--- a/FEXCore/Source/Interface/Core/DiskCache.cpp
++++ b/FEXCore/Source/Interface/Core/DiskCache.cpp
+@@ -11,6 +11,10 @@ extern "C" uint32_t IosTebTsdOffset;
+ // without moving FormatVersion.
+ #include <git_version.h>
+ extern "C" uint64_t IosGuestWindowBase = 0;
++#ifdef ARCHITECTURE_arm64ec
++// What FPCR holds without AFP (Arm64Emitter.h).
++extern "C" uint32_t IosAfpOffFpcr;
++#endif
+ #endif
+ 
+ #include <FEXCore/Config/Config.h>
+@@ -481,6 +485,13 @@ namespace DiskCache {
+     if (IosGuestWindowBase) {
+       ProcessBucketHash = XXH3_64bits_withSeed(&IosGuestWindowBase, sizeof(IosGuestWindowBase), ProcessBucketHash);
+     }
++#ifdef ARCHITECTURE_arm64ec
++    // Playport: SetRoundingMode and FillStaticRegs write FPCR.FIZ and FPCR.AH as IosAfpOffFpcr asks
++    // (Arm64Emitter.h), so a block only runs under the mode it was compiled in.
++    if (IosAfpOffFpcr) {
++      ProcessBucketHash = XXH3_64bits_withSeed(&IosAfpOffFpcr, sizeof(IosAfpOffFpcr), ProcessBucketHash);
++    }
++#endif
+ #endif
+     BucketHash.high64 = MachineBucketHash;
+     BucketHash.low64 = ProcessBucketHash;
+diff --git a/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp b/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp
+index 8e77f39ae..4a8946859 100644
+--- a/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp
++++ b/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp
+@@ -149,6 +149,17 @@ DEF_OP(SetRoundingMode) {
+     // Extract DAZ from MXCSR and insert to in FPCR.FIZ
+     bfxil(ARMEmitter::Size::i64Bit, TMP1, MXCSR, 6, 1);
+   }
++#if defined(FEX_IOS_HOST) && defined(ARCHITECTURE_arm64ec)
++  if (!HostSupportsAFP && IosAfpOffFpcr != IOS_AFPOFF_FPCR_NONE) {
++    // Playport: without AFP, FIZ and AH as IosAfpOffFpcr asks (Arm64Emitter.h).
++    if (Op->SetDAZ) {
++      bfxil(ARMEmitter::Size::i64Bit, TMP1, MXCSR, 6, 1);
++    }
++    if (IosAfpOffFpcr == IOS_AFPOFF_FPCR_AH || IosAfpOffFpcr == IOS_AFPOFF_FPCR_AHX) {
++      orr(ARMEmitter::Size::i64Bit, TMP1, TMP1, 1U << 1);
++    }
++  }
++#endif
+ 
+   // Now save the new FPCR
+   msr(ARMEmitter::SystemRegister::FPCR, TMP1);
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index 2ee304b88..1c3810da6 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -97,6 +97,7 @@ extern "C" uint32_t IosEcReturnWithRet;
+ extern "C" uint32_t IosEcCallRetPop;
+ extern "C" uint32_t IosRdtscSelfSync;
+ extern "C" uint32_t IosFexBatch2;
++extern "C" uint32_t IosAfpOffFpcr; // Arm64Emitter.h: 0 none, 1 fiz, 2 ah, 3 ahx
+ extern "C" int IosAliasGranulesEnable(void);
+ 
+ /* Raw TSD byte offset (from TPIDRRO_EL0 & ~7) of the slot holding the TEB.
+@@ -1387,8 +1388,25 @@ NTSTATUS ProcessInit() {
+     /* ExitFunctionECJit (Module.S) leaves out ExitFunctionEC's FPCR test, so it is used only without AFP,
+      * when FEX never sets FPCR.NEP or FPCR.AH, and only while the call ring (FEX_EC_CALL_RING, armed above)
+      * is off: it appends no ring entry. MADEIRA_FEX_EC_EXIT_LEAN=0 keeps ExitFunctionEC. */
++    /* Playport: what FPCR holds for x64 code without AFP (IosAfpOffFpcr in Arm64Emitter.h), from
++     * MADEIRA_FEX_AFPOFF_FPCR: 0 (the default) FEX's behaviour, fiz FIZ = MXCSR.DAZ, ah AH and FIZ kept for
++     * the thread, ahx AH and FIZ set on entering the JIT and cleared on leaving it. ah leaves AH set for
++     * ARM64EC code, so ExitFunctionECJit stays right; ahx needs ExitFunctionEC's FPCR clear. Set before
++     * InitCore, which emits the dispatcher and opens the disk cache (keyed on the mode). */
++    if (!HostFeatures.SupportsAFP) {
++      const char* FpcrOpt = getenv("MADEIRA_FEX_AFPOFF_FPCR");
++      if (FpcrOpt && strcmp(FpcrOpt, "fiz") == 0) {
++        IosAfpOffFpcr = 1; // IOS_AFPOFF_FPCR_FIZ
++      } else if (FpcrOpt && strcmp(FpcrOpt, "ah") == 0) {
++        IosAfpOffFpcr = 2; // IOS_AFPOFF_FPCR_AH
++      } else if (FpcrOpt && strcmp(FpcrOpt, "ahx") == 0) {
++        IosAfpOffFpcr = 3; // IOS_AFPOFF_FPCR_AHX
++      }
++      LogMan::Msg::IFmt("FEX: afpoff-fpcr mode={} ({})", IosAfpOffFpcr, FpcrOpt ? FpcrOpt : "0");
++    }
+     const char* LeanOpt = getenv("MADEIRA_FEX_EC_EXIT_LEAN");
+-    IosEcExitLean = !HostFeatures.SupportsAFP && !IosEcRing && !(LeanOpt && strcmp(LeanOpt, "0") == 0);
++    IosEcExitLean = !HostFeatures.SupportsAFP && IosAfpOffFpcr != 3 /* ahx */ && !IosEcRing &&
++                    !(LeanOpt && strcmp(LeanOpt, "0") == 0);
+     LogMan::Msg::IFmt("FEX: ec-exit-lean-v1 madeira-bcd enabled={} afp={} ring={}", IosEcExitLean != 0,
+                       HostFeatures.SupportsAFP, IosEcRing != 0);
+ #endif

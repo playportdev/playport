@@ -60,13 +60,16 @@ the first rows keep LRCPC2=1):
 | `FEX_HOSTFEATURES` | LRCPC2 in FEX | SIGBUS lines | Screenshot |
 | --- | --- | --- | --- |
 | `disableflagm,disableflagm2` (`20261013T063843`) | 1 | 2 (as normal) | first frame +10 |
-| `disableafp` (`20261013T063943`) | 1 | 2 | first frame +10 |
-| `disableflagm,disableflagm2,disableafp` (`20261013T064052`) | 1 | 2 | first frame +10 |
+| `disableafp` (`20261013T063943`) | 1 | 2 | first frame +10, **black** (re-read 2026-10-21) |
+| `disableflagm,disableflagm2,disableafp` (`20261013T064052`) | 1 | 2 | first frame +10, **black** (re-read 2026-10-21) |
 | `disablelrcpc2` (`20261013T064151`) | 0 | 8.5k | HK menu |
 | `disableflagm,disableflagm2,disablelrcpc2` (`20261013T064545`) | 0 | 8.5k | picture (not black) |
 | `disableafp,disablelrcpc2` (`20261013T064441`) | 0 | 8.5k | **black** at +15 |
 | all four (`20261013T064317`, +25 s) | 0 | 8.5k | **black** |
 
+So FlagM, FlagM2 and LRCPC2 off are fine on HK. **Correction (2026-10-21):** the two `disableafp`
+rows with LRCPC2 on were black as well (their screenshots), so AFP off alone is black on HK, whatever
+LRCPC2 does; see [2026-10-21-afp-off.md](2026-10-21-afp-off.md). The original text read:
 So FlagM, FlagM2 and AFP off are fine on HK, as is LRCPC2 off alone. What an A12 gets from the app is
 `disableflagm,disableflagm2,disableafp` and no `enablelrcpc2`, which is the last row: the games on an A12
 will show the same black until that is understood. Not caused by the new profile logic, which only
