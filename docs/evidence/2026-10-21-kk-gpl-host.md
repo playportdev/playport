@@ -123,3 +123,108 @@ attribute: a uniform branch over three load widths, then every conversion comput
 with selects. For `pass.vert`, with one attribute, the vertex MSL is 932 lines, against 69 in
 the optimized link. This applies only to fast
 links, until DXVK swaps in the optimized pipeline. Plan G5 measures it on the phone.
+
+## G3: `patches/mesa` 0098, the fragment shader compiled on its own (2026-10-21)
+
+A fragment shader alone in its fragment shader library is now compiled when the library is made,
+and its Metal library is built then. Its MSL depends on no colour or depth format:
+
+- **Blending in Metal.** The shader does no blending (`nir_lower_blend`), no alpha to coverage or
+  to one, and no swizzle for non-native formats. Every colour output is declared with 4
+  components and keeps its SPIR-V type. The link sets blending, the write masks and alpha to
+  coverage and to one on the Metal pipeline's colour attachments and multisample state, from the
+  draw's state. The blend constants also go to the render encoder. Formats without blending are
+  written without it.
+- **Dual-source blending.** The second source is declared `[[color(0), index(1)]]`.
+- **Depth.** A depth write stays unless early fragment tests are forced. Depth clamp emulation is
+  always compiled in, and the root table's flag turns it on per draw, as before.
+- **Varyings.** User varyings are 4-component values, as on the vertex side.
+
+An empty fragment shader is compiled the same way once per device, with the first vertex shader
+compiled on its own, for links without a fragment shader. A fast link of two shaders compiled on
+their own now only builds the Metal pipeline from the two libraries.
+
+**Sample mask: a fallback, not the root.** The plan says the sample mask comes from the root
+table when it is not all ones. A fragment function that writes `[[sample_mask]]` changes coverage
+on every draw, all-ones masks included, which may cost GPU time on every fast-linked draw. So the
+fragment shader compiled on its own writes no sample mask, and a draw whose mask is not all ones
+compiles the whole pipeline (`sample-mask`). DXVK's masks are almost always all ones. The root
+table has 2 bytes of padding after `emulate_viewport_z` if a later chunk wants the mask there.
+
+`check_gpl` adds a fragment shader with both dual-source outputs (`gpl-dual.frag`), a fragment
+shader library with alpha to coverage, and fragment output libraries with a write mask of RGB,
+alpha to coverage, `SRC1_COLOR` blending and a logic op. The run is `MESA_KK_EXPERIMENTAL=gpl
+MESA_KK_DEBUG=compile` (`.work/run/mesa/hosttest/gpl.log`):
+
+| Link | at library creation | at link | at the first draw |
+| --- | --- | --- | --- |
+| the 18 libraries (3 vertex, 4 fragment shaders) | 8 | | |
+| fast, f32 attributes, RGBA8 | | 0 | 0 |
+| fast, u8 and BGRA8 attributes, RGBA8 | | 0 | 0 |
+| fast, RGBA16F blended | | 0 | 0 |
+| fast, write mask RGB | | 0 | 0 |
+| fast, alpha to coverage | | 0 | 0 |
+| fast, dual-source blending | | 0 | 0 |
+| fast, no fragment shader | | 0 | 0 |
+| fast, point fill (fallback) | | 0 | 6 |
+| fast, logic op (fallback) | | 0 | 2 |
+| fast, varyings pair | | 0 | 0 |
+| optimized, f32 attributes, RGBA8 | | 2 | 0 |
+| optimized, u8 attributes, RGBA16F blended | | 2 | 0 |
+
+The 8 MSL libraries at library creation are 3 vertex shaders, the empty fragment shader and 4
+fragment shaders. The log has `[kk-compile] gpl vertex built` 3 times, `gpl empty-fragment built`
+once, `gpl fragment built` 4 times and `link separate` 7 times. It has no `link separate-vertex`
+(a fragment shader compiled at the draw). The fallbacks are `link full fallback=point-fill
+count=1`, `link full fallback=logic-op count=1`, and `link full fallback=xfb count=1` as in G2.
+`run.sh` checks each count.
+
+**What did not change.** Against G2's output (same host test, `patches/mesa` up to 0097):
+
+- the flag-off MSL (158 libraries) is byte-identical;
+- with the flag, the MSL of the 158 non-GPL pipelines is byte-identical;
+- the optimized links' four libraries and the point-fill fallback's six are byte-identical to
+  G2's.
+
+**Metal front end.** `msl-compile.sh` compiled all ten libraries of the GPL libraries and the
+logic-op fallback to AIR with no errors: three vertex libraries, the empty fragment shader, four
+fragment shaders (`[[color(0), index(1)]]` among them) and the logic-op pipeline's two. `metal
+-c` checks one stage at a time. Only the phone can check that Metal links two separately built
+libraries into a pipeline, with fixed-function blending (plan G5).
+
+**Fallback reasons.** On top of G2's, a link compiles the whole pipeline for:
+
+- `logic-op`, `advanced-blend`;
+- `format-swizzle`: a colour format that is not native;
+- `output-type`: a colour output of a type the format cannot take;
+- `dual-source`: `SRC1` blend factors without a second source, a second source without them, or
+  with more than one colour attachment;
+- `depth-write`: a depth write with no depth attachment;
+- `sample-mask`: a sample mask that is not all ones;
+- `alpha-to-coverage`: alpha to coverage with no colour output 0;
+- `varying-unwritten`, `varying-type`: a fragment input that the vertex shader does not write,
+  or writes as another type;
+- `cull-distance`: a vertex shader that writes cull distances, whose discards the fragment
+  shader does;
+- `multiview`: a view mask other than the fragment shader library's;
+- from the fragment shader itself: `input-attachment`, `fragment-primitive-id`,
+  `fragment-clip-input` and `varying-indirect`.
+
+The fragment shader keeps G2's path and is compiled at the first draw (`link separate-vertex
+fragment=<reason>`) when it cannot be compiled on its own for other reasons:
+
+- a written location 1 beside dual-source blending (`dual-source`);
+- shaders that need quad helpers on an M1 or M2 before OS 27, where disabling triangle merging
+  depends on the sample count (`triangle-merge`);
+- `MESA_KK_DEBUG=solid` (`debug-solid`);
+- a pipeline library with more stages (`stages`);
+- a compile or library failure.
+
+None of these occurred on the host.
+
+**GPU cost, not measured.** Metal's fixed-function blending and alpha to coverage replace the
+shader blending and coverage that whole pipelines use. Results should match, but Metal's alpha
+to coverage may dither differently, and none of this is checked on a GPU. Plan G5 measures it.
+
+The dev IPA from this tree (built in the side copy, not installed) has sha256
+`417caed89f7a69656416aad24df3abb3aa309ed6bedd36bb70a606f503d69524`.

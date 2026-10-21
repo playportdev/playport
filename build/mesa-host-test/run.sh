@@ -94,10 +94,12 @@ echo "MESA_KK_BATCH2: the host test passes with all items and without map and re
 # VK_EXT_graphics_pipeline_library (PLA-424): exposed only with
 # MESA_KK_EXPERIMENTAL=gpl (the runs above check it is not exposed without);
 # with it, every pipeline above still builds and draws, with the same MSL,
-# and DXVK-style libraries link fast and optimized and draw. Each vertex
-# shader library is built on its own; fast links use it but one, which falls
-# back for VK_POLYGON_MODE_POINT (the pipeline without rasterization above,
-# with transform feedback, falls back too).
+# and DXVK-style libraries link fast and optimized and draw. Each vertex and
+# fragment shader library is built on its own, and an empty fragment shader
+# with the first vertex shader; fast links only build the Metal pipeline from
+# them, but two, which fall back for VK_POLYGON_MODE_POINT and a logic op
+# (the pipeline without rasterization above, with transform feedback, falls
+# back too).
 rm -rf "$ROOT/msl-gpl"; mkdir -p "$ROOT/msl-gpl"
 MESA_KK_EXPERIMENTAL=gpl MESA_KK_DEBUG=compile KK_MOCK_MSL_DIR="$ROOT/msl-gpl" MESA_SHADER_CACHE_DISABLE=true \
     "$ROOT/kk-host-test" "$ROOT/build/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.so" "$ROOT/spv" \
@@ -109,11 +111,14 @@ for f in "$ROOT/msl/"*.metal; do
         { echo "MESA_KK_EXPERIMENTAL=gpl: ${f##*/} is not the MSL made without it" >&2; exit 1; }
 done
 gpl_lines() { grep -c "^\[kk-compile\] $1" "$ROOT/gpl.log" || true; }
-[ "$(gpl_lines 'gpl vertex built ')" = 3 ] && [ "$(gpl_lines 'link separate-vertex ')" = 4 ] &&
+[ "$(gpl_lines 'gpl vertex built ')" = 3 ] && [ "$(gpl_lines 'gpl empty-fragment built ')" = 1 ] &&
+    [ "$(gpl_lines 'gpl fragment built ')" = 4 ] && [ "$(gpl_lines 'gpl fragment \(full\|at-link\)=')" = 0 ] &&
+    [ "$(gpl_lines 'link separate ')" = 7 ] && [ "$(gpl_lines 'link separate-vertex ')" = 0 ] &&
     [ "$(gpl_lines 'link full fallback=point-fill count=1 ')" = 1 ] &&
+    [ "$(gpl_lines 'link full fallback=logic-op count=1 ')" = 1 ] &&
     [ "$(gpl_lines 'link FAIL ')" = 0 ] ||
     { grep '^\[kk-compile\] \(gpl\|link\)' "$ROOT/gpl.log" >&2
-      echo "MESA_KK_EXPERIMENTAL=gpl: not 3 vertex libraries, 4 separate links and 1 point-fill fallback" >&2; exit 1; }
+      echo "MESA_KK_EXPERIMENTAL=gpl: not 3 vertex and 1 + 4 fragment libraries, 7 separate links, a point-fill and a logic-op fallback" >&2; exit 1; }
 grep '^\(ok \)\?gpl\|^\[kk-compile\] \(gpl\|link\)' "$ROOT/gpl.log"
 
 # The same pipelines with the vertex and fragment libraries built at once and

@@ -1191,6 +1191,9 @@ main(int argc, char **argv)
       .fillModeNonSolid = f2.features.fillModeNonSolid,
       .shaderClipDistance = VK_TRUE,
       .shaderCullDistance = VK_TRUE,
+      /* check_gpl's dual-source blend and logic op links */
+      .dualSrcBlend = gpl,
+      .logicOp = gpl,
    };
    const char *exts[4] = {"VK_EXT_transform_feedback"};
    uint32_t next = 1;
@@ -2100,20 +2103,34 @@ main(int argc, char **argv)
  * shader, fragment shader, fragment output), linked fast (no flags) and with
  * link-time optimization, drawn into two colour formats with three vertex
  * layouts, and a depth-only pipeline whose fragment shader library has no
- * shader. Each pipeline records draws and is submitted. The vertex shader's
- * library is built with its pipeline library, and a fast link compiles only
- * the fragment side at its first draw, once for every vertex layout; with
- * VK_POLYGON_MODE_POINT the link falls back to compiling the whole
- * pipeline. */
+ * shader. Each pipeline records draws and is submitted. The vertex and
+ * fragment shaders' libraries are built with their pipeline libraries (and
+ * an empty fragment shader's with the first vertex shader's), and a fast link
+ * only builds the Metal pipeline from them, blending in Metal's fixed
+ * function, whatever the vertex layout; with VK_POLYGON_MODE_POINT or a logic
+ * op the link falls back to compiling the whole pipeline. */
 struct gpl_libs {
    VkPipelineLayout layout;
    VkShaderModule vs, fs;
 };
 
+/* A library's blend and multisample state */
+enum gpl_output {
+   GPL_PLAIN,
+   /* Alpha blending */
+   GPL_BLEND,
+   /* Only red, green and blue written */
+   GPL_WRITE_MASK,
+   GPL_ALPHA_TO_COVERAGE,
+   /* SRC1_COLOR blending */
+   GPL_DUAL_SOURCE,
+   GPL_LOGIC_OP,
+};
+
 static VkPipeline
 gpl_library(const struct gpl_libs *g, VkGraphicsPipelineLibraryFlagsEXT part,
-            VkFormat attr_format, VkFormat color, bool blend, bool with_fs,
-            VkPolygonMode polygon_mode)
+            VkFormat attr_format, VkFormat color, enum gpl_output output,
+            bool with_fs, VkPolygonMode polygon_mode)
 {
    DPROC(vkCreateGraphicsPipelines);
    VkGraphicsPipelineLibraryCreateInfoEXT lib = {
@@ -2161,22 +2178,29 @@ gpl_library(const struct gpl_libs *g, VkGraphicsPipelineLibraryFlagsEXT part,
    VkPipelineMultisampleStateCreateInfo ms = {
       .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
       .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+      .alphaToCoverageEnable = output == GPL_ALPHA_TO_COVERAGE,
    };
    VkPipelineDepthStencilStateCreateInfo ds = {
       .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
    };
    VkPipelineColorBlendAttachmentState att = {
-      .blendEnable = blend,
-      .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
-      .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+      .blendEnable = output == GPL_BLEND || output == GPL_DUAL_SOURCE,
+      .srcColorBlendFactor = output == GPL_DUAL_SOURCE
+                                ? VK_BLEND_FACTOR_ONE
+                                : VK_BLEND_FACTOR_SRC_ALPHA,
+      .dstColorBlendFactor = output == GPL_DUAL_SOURCE
+                                ? VK_BLEND_FACTOR_SRC1_COLOR
+                                : VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
       .colorBlendOp = VK_BLEND_OP_ADD,
       .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
       .dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
       .alphaBlendOp = VK_BLEND_OP_ADD,
-      .colorWriteMask = 0xf,
+      .colorWriteMask = output == GPL_WRITE_MASK ? 0x7 : 0xf,
    };
    VkPipelineColorBlendStateCreateInfo cb = {
       .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+      .logicOpEnable = output == GPL_LOGIC_OP,
+      .logicOp = VK_LOGIC_OP_XOR,
       .attachmentCount = color != VK_FORMAT_UNDEFINED,
       .pAttachments = &att,
    };
@@ -2332,6 +2356,8 @@ check_gpl(VkPhysicalDevice pd, VkQueue queue, VkCommandPool pool, VkBuffer buf)
    struct gpl_libs gv = {.layout = g.layout,
                          .vs = load_module("gpl-varyings.vert"),
                          .fs = load_module("gpl-varyings.frag")};
+   /* A fragment shader with both sources of dual-source blending */
+   struct gpl_libs gd = {.layout = g.layout, .fs = load_module("gpl-dual.frag")};
 
    const VkFormat RGBA8 = VK_FORMAT_R8G8B8A8_UNORM;
    const VkFormat RGBA16F = VK_FORMAT_R16G16B16A16_SFLOAT;
@@ -2340,22 +2366,32 @@ check_gpl(VkPhysicalDevice pd, VkQueue queue, VkCommandPool pool, VkBuffer buf)
    const VkFormat NONE = VK_FORMAT_UNDEFINED;
    const VkPolygonMode FILL = VK_POLYGON_MODE_FILL;
    const int msl_start = msl_count();
-   VkPipeline vi_f32 = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_VERTEX_INPUT_INTERFACE_BIT_EXT, RGBA32F, NONE, false, true, FILL);
-   VkPipeline vi_u8 = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_VERTEX_INPUT_INTERFACE_BIT_EXT, RGBA8, NONE, false, true, FILL);
-   VkPipeline vi_bgra8 = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_VERTEX_INPUT_INTERFACE_BIT_EXT, BGRA8, NONE, false, true, FILL);
-   VkPipeline pre = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_PRE_RASTERIZATION_SHADERS_BIT_EXT, RGBA32F, RGBA8, false, true, FILL);
-   VkPipeline pre_points = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_PRE_RASTERIZATION_SHADERS_BIT_EXT, RGBA32F, RGBA8, false, true, VK_POLYGON_MODE_POINT);
-   VkPipeline frag = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT, RGBA32F, RGBA8, false, true, FILL);
-   VkPipeline no_frag = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT, RGBA32F, RGBA8, false, false, FILL);
-   VkPipeline out_u8 = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_OUTPUT_INTERFACE_BIT_EXT, RGBA32F, RGBA8, false, true, FILL);
-   VkPipeline out_f16 = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_OUTPUT_INTERFACE_BIT_EXT, RGBA32F, RGBA16F, true, true, FILL);
-   VkPipeline pre_vary = gpl_library(&gv, VK_GRAPHICS_PIPELINE_LIBRARY_PRE_RASTERIZATION_SHADERS_BIT_EXT, RGBA32F, RGBA8, false, true, FILL);
-   VkPipeline frag_vary = gpl_library(&gv, VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT, RGBA32F, RGBA8, false, true, FILL);
+   const enum gpl_output PLAIN = GPL_PLAIN;
+   VkPipeline vi_f32 = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_VERTEX_INPUT_INTERFACE_BIT_EXT, RGBA32F, NONE, PLAIN, true, FILL);
+   VkPipeline vi_u8 = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_VERTEX_INPUT_INTERFACE_BIT_EXT, RGBA8, NONE, PLAIN, true, FILL);
+   VkPipeline vi_bgra8 = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_VERTEX_INPUT_INTERFACE_BIT_EXT, BGRA8, NONE, PLAIN, true, FILL);
+   VkPipeline pre = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_PRE_RASTERIZATION_SHADERS_BIT_EXT, RGBA32F, RGBA8, PLAIN, true, FILL);
+   VkPipeline pre_points = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_PRE_RASTERIZATION_SHADERS_BIT_EXT, RGBA32F, RGBA8, PLAIN, true, VK_POLYGON_MODE_POINT);
+   VkPipeline frag = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT, RGBA32F, RGBA8, PLAIN, true, FILL);
+   VkPipeline no_frag = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT, RGBA32F, RGBA8, PLAIN, false, FILL);
+   /* Its multisample state matches the fragment output library's */
+   VkPipeline frag_a2c = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT, RGBA32F, RGBA8, GPL_ALPHA_TO_COVERAGE, true, FILL);
+   VkPipeline frag_dual = gpl_library(&gd, VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT, RGBA32F, RGBA8, PLAIN, true, FILL);
+   VkPipeline out_u8 = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_OUTPUT_INTERFACE_BIT_EXT, RGBA32F, RGBA8, PLAIN, true, FILL);
+   VkPipeline out_f16 = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_OUTPUT_INTERFACE_BIT_EXT, RGBA32F, RGBA16F, GPL_BLEND, true, FILL);
+   VkPipeline out_mask = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_OUTPUT_INTERFACE_BIT_EXT, RGBA32F, RGBA8, GPL_WRITE_MASK, true, FILL);
+   VkPipeline out_a2c = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_OUTPUT_INTERFACE_BIT_EXT, RGBA32F, RGBA8, GPL_ALPHA_TO_COVERAGE, true, FILL);
+   VkPipeline out_dual = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_OUTPUT_INTERFACE_BIT_EXT, RGBA32F, RGBA8, GPL_DUAL_SOURCE, true, FILL);
+   VkPipeline out_logic = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_OUTPUT_INTERFACE_BIT_EXT, RGBA32F, RGBA8, GPL_LOGIC_OP, true, FILL);
+   VkPipeline pre_vary = gpl_library(&gv, VK_GRAPHICS_PIPELINE_LIBRARY_PRE_RASTERIZATION_SHADERS_BIT_EXT, RGBA32F, RGBA8, PLAIN, true, FILL);
+   VkPipeline frag_vary = gpl_library(&gv, VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT, RGBA32F, RGBA8, PLAIN, true, FILL);
    const int msl_libs = msl_count();
-   /* Each pre-rasterization library builds its vertex shader's library */
-   printf("gpl: 11 libraries made %d MSL libraries\n", msl_libs - msl_start);
-   if (msl_start >= 0 && msl_libs - msl_start != 3) {
-      fprintf(stderr, "gpl: the libraries made %d MSL libraries, not 3\n",
+   /* Each pre-rasterization library builds its vertex shader's library, the
+    * first one also the empty fragment shader's, and each fragment shader
+    * library its fragment shader's: 3 vertex and 1 + 4 fragment */
+   printf("gpl: 18 libraries made %d MSL libraries\n", msl_libs - msl_start);
+   if (msl_start >= 0 && msl_libs - msl_start != 3 + 5) {
+      fprintf(stderr, "gpl: the libraries made %d MSL libraries, not 8\n",
               msl_libs - msl_start);
       return 1;
    }
@@ -2369,14 +2405,17 @@ check_gpl(VkPhysicalDevice pd, VkQueue queue, VkCommandPool pool, VkBuffer buf)
       VkFormat color;
       int at_link, at_draw;
    } links[] = {
-      {"fast f32 rgba8", {vi_f32, pre, frag, out_u8}, false, RGBA8, 0, 1},
-      /* the same link with other vertex layouts: nothing to compile */
+      {"fast f32 rgba8", {vi_f32, pre, frag, out_u8}, false, RGBA8, 0, 0},
       {"fast u8 rgba8", {vi_u8, pre, frag, out_u8}, false, RGBA8, 0, 0},
       {"fast bgra8 rgba8", {vi_bgra8, pre, frag, out_u8}, false, RGBA8, 0, 0},
-      {"fast f32 rgba16f blend", {vi_f32, pre, frag, out_f16}, false, RGBA16F, 0, 1},
-      {"fast no-fs rgba8", {vi_f32, pre, no_frag, out_u8}, false, RGBA8, 0, 1},
+      {"fast f32 rgba16f blend", {vi_f32, pre, frag, out_f16}, false, RGBA16F, 0, 0},
+      {"fast write-mask rgba8", {vi_f32, pre, frag, out_mask}, false, RGBA8, 0, 0},
+      {"fast alpha-to-coverage rgba8", {vi_f32, pre, frag_a2c, out_a2c}, false, RGBA8, 0, 0},
+      {"fast dual-source rgba8", {vi_f32, pre, frag_dual, out_dual}, false, RGBA8, 0, 0},
+      {"fast no-fs rgba8", {vi_f32, pre, no_frag, out_u8}, false, RGBA8, 0, 0},
       {"fast point-fill fallback", {vi_f32, pre_points, frag, out_u8}, false, RGBA8, 0, -1},
-      {"fast varyings rgba8", {vi_f32, pre_vary, frag_vary, out_u8}, false, RGBA8, 0, 1},
+      {"fast logic-op fallback", {vi_f32, pre, frag, out_logic}, false, RGBA8, 0, -1},
+      {"fast varyings rgba8", {vi_f32, pre_vary, frag_vary, out_u8}, false, RGBA8, 0, 0},
       {"lto f32 rgba8", {vi_f32, pre, frag, out_u8}, true, RGBA8, 2, 0},
       {"lto u8 rgba16f blend", {vi_u8, pre, frag, out_f16}, true, RGBA16F, 2, 0},
    };
@@ -2444,8 +2483,10 @@ check_gpl(VkPhysicalDevice pd, VkQueue queue, VkCommandPool pool, VkBuffer buf)
              at_link, at_draw);
       vkDestroyPipeline(dev, p, NULL);
    }
-   VkPipeline libs[] = {vi_f32, vi_u8, vi_bgra8, pre, pre_points, frag,
-                        no_frag, out_u8, out_f16, pre_vary, frag_vary};
+   VkPipeline libs[] = {vi_f32,   vi_u8,     vi_bgra8, pre,      pre_points,
+                        frag,     no_frag,   frag_a2c, frag_dual, out_u8,
+                        out_f16,  out_mask,  out_a2c,  out_dual, out_logic,
+                        pre_vary, frag_vary};
    for (unsigned i = 0; i < sizeof(libs) / sizeof(libs[0]); i++)
       vkDestroyPipeline(dev, libs[i], NULL);
    printf("ok gpl: libraries, fast and optimized links drawn\n");

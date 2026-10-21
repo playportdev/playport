@@ -17,13 +17,17 @@ from the main checkout after the branch moves there. **Pins read:** `mesa` b39d1
   - G0's host harness and G1 in `ea258b0` (`patches/mesa` 0096; host test `check_gpl`).
   - G2 in `8c31a22` (`patches/mesa` 0097; dev IPA `5a25af6e`, side copy, not installed). The vertex library is built at library creation; a
     fast link compiles only the fragment side at its first draw.
+  - G3 in the commit "MESA_KK_EXPERIMENTAL=gpl compiles a library's fragment shader on its own
+    (mesa 0098, G3)" (`patches/mesa` 0098; dev IPA `417caed8`, side copy, not installed). Both
+    libraries are built at library creation; a fast link only builds the Metal pipeline.
   - Evidence: [2026-10-21-kk-gpl-host](../evidence/2026-10-21-kk-gpl-host.md).
   - G0's phone baseline is not run.
-- **Running:** G3 writer, run `5d495921` (models: hard anthropic/claude-opus-5-5 medium, easy anthropic/claude-sonnet-5-5 medium); report to `g3.md`.
-- **Queue:** G3 next (separate fragment shader), then G4 (workstation); then G0's phone baseline
-  and G5 from the main checkout; G6.
+- **Running:** none.
+- **Queue:** G4 next (cache and accounting, workstation); then G0's phone baseline and G5 from
+  the main checkout; G6.
 - **Phone:** not used by this plan yet.
-- **Notes:** reports in the side copy's `.work/agent-notes/kk-gpl/reports/` (G2: `g2.md`).
+- **Notes:** reports in the side copy's `.work/agent-notes/kk-gpl/reports/` (G2: `g2.md`, G3:
+  `g3.md`).
 
 ## Why
 
@@ -198,6 +202,8 @@ Nothing changes with the flag off. Phone gates run only from the main checkout.
 - **G3: separate fragment shader.** Fixed-function blend, write mask and alpha to coverage/one;
   outputs independent of formats; the sample mask from the root; the fallback list above. The
   fragment Metal library is built at library time, so a link builds the pipeline only.
+  Done (`patches/mesa` 0098). A sample mask other than all ones falls back instead of coming
+  from the root (evidence, G3).
 - **G4: cache and accounting.**
   - Serialize and deserialize separate shaders (MSL, the NIR blob, the flag); deserializing
     rebuilds the library.
