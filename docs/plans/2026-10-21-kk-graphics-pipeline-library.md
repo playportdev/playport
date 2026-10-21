@@ -11,29 +11,34 @@ from the main checkout after the branch moves there. **Pins read:** `mesa` b39d1
 
 ## Runner state
 
-- **Branch:** `dev/kk-gpl-phone`, `dev/kk-gpl` rebased onto `main` `c2ed344` without conflicts
-  (`pp test --quick` passed), not merged, not pushed. It is in the side copy `.work/worktrees/kkgpl`
-  and is checked out in the main checkout for the phone gates. The commit ids below are from
-  `dev/kk-gpl`, which is kept as it was.
+- **Branch:** `dev/kk-gpl-phone`, `dev/kk-gpl` rebased onto `main` `6871884` without conflicts
+  (`pp test --quick` passed), checked out in the main checkout. Not merged, not pushed. The
+  commit ids below are from `dev/kk-gpl`, which is kept as it was.
 - **Done:**
   - G0's host harness and G1 in `ea258b0` (`patches/mesa` 0096; host test `check_gpl`).
-  - G2 in `8c31a22` (`patches/mesa` 0097; dev IPA `5a25af6e`, side copy, not installed). The vertex library is built at library creation; a
-    fast link compiles only the fragment side at its first draw.
-  - G3 in `68fde5b` (`patches/mesa` 0098; dev IPA `417caed8`, side copy, not installed). Both
-    libraries are built at library creation; a fast link only builds the Metal pipeline.
-  - G4 in `7ba6d95` (`patches/mesa` 0099; dev IPA `a20453f7`, side copy, not installed). Library
-    shaders serialize into pipeline caches and rebuild their Metal libraries when read back;
-    `MESA_KK_DEBUG=memory` counts them, and `[kk-compile] link totals` logs links by kind and
-    fallbacks by reason.
-  - Evidence: [2026-10-21-kk-gpl-host](../evidence/2026-10-21-kk-gpl-host.md).
-  - G0's phone baseline is not run.
+  - G2 in `8c31a22` (`patches/mesa` 0097). The vertex library is built at library creation.
+  - G3 in `68fde5b` (`patches/mesa` 0098). Both libraries are built at library creation; a fast
+    link only builds the Metal pipeline.
+  - G4 in `7ba6d95` (`patches/mesa` 0099). Library shaders serialize into pipeline caches;
+    `MESA_KK_DEBUG=memory` and `[kk-compile] link totals` count them.
+  - G0's phone baseline and G5 on dev IPA `eb64cb9a`, Hollow Knight only
+    ([2026-10-22-kk-gpl-phone](../evidence/2026-10-22-kk-gpl-phone.md)):
+    - flag off, no Metal build over 20 ms at the menu, and the 20 ms threshold has no variable;
+    - flag on, DXVK reports GPL supported, no `link FAIL`, the menu renders, and a second launch
+      reads all 34 library shaders from the disk cache;
+    - but every link (26 of 26, both launches) is `link full fallback=sample-mask`, so no draw
+      fast-links.
+  - Evidence: [2026-10-21-kk-gpl-host](../evidence/2026-10-21-kk-gpl-host.md),
+    [2026-10-22-kk-gpl-phone](../evidence/2026-10-22-kk-gpl-phone.md).
 - **Running:** none.
-- **Queue:** the workstation chunks are done. Next, in the main checkout on `dev/kk-gpl-phone`:
-  `./pp build` (commit the KosmicKrisp records it changes), G0's phone baseline, then G5; G6
-  after G5.
-- **Phone:** not used by this plan yet.
-- **Notes:** reports in the side copy's `.work/agent-notes/kk-gpl/reports/` (G2: `g2.md`, G3:
-  `g3.md`, G4: `g4.md`, with what G5 greps for).
+- **Queue:** G6 is blocked. First, a fix for the `sample-mask` fallback: DXVK cuts the mask to
+  the sample count (`0x1` at one sample), and G3's rule needs `0xffff`. Then rerun G5 on Hollow
+  Knight. Portal 2's hitch comparison needs Portal 2 installed (it is not); the D3D12 and GPU-time
+  checks are also still open (evidence, Not run).
+- **Phone:** IPA `eb64cb9a` installed, 80 % battery on power, 7.9 GB free, unattended mode on.
+  Installed titles: Hollow Knight and RDR2.
+- **Notes:** G2–G4 reports in the side copy's `.work/agent-notes/kk-gpl/reports/`; G5's in the
+  main checkout's `.work/agent-notes/kk-gpl/reports/g5.md`.
 
 ## Why
 
@@ -230,6 +235,11 @@ Nothing changes with the flag off. Phone gates run only from the main checkout.
   - Portal 2 chapter-load hitches with the flag off against on, the method of
     [2026-10-05](../evidence/2026-10-05-portal2-hitches-requests.md).
   - GPU time with the flag on against off: the runtime fetch, the fixed-function blend.
+
+  Run on IPA `eb64cb9a` (evidence, 2026-10-22). Hollow Knight reached its menu with the flag on,
+  twice. DXVK reports GPL supported. There was no `link FAIL`, and the second launch read the
+  library shaders from the disk cache. Every link fell back (`sample-mask`), so nothing fast-linked.
+  Portal 2 is not installed; the D3D12 and GPU-time checks were not run.
 - **G6: default.** A decision record either turns the flag on by default or keeps it off, from
   G5's evidence.
 
