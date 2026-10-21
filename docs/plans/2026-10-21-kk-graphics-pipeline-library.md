@@ -13,13 +13,18 @@ from the main checkout after the branch moves there. **Pins read:** `mesa` b39d1
 
 - **Branch:** `dev/kk-gpl` in the side copy `.work/worktrees/kkgpl`, not merged, not pushed.
   Workstation only (owner, 2026-10-21): no phone gate until the branch moves to the main checkout.
-- **Done:** G0's host harness and G1 in `ea258b0` (`patches/mesa` 0096; host test `check_gpl`;
-  evidence [2026-10-21-kk-gpl-host](../evidence/2026-10-21-kk-gpl-host.md)). G0's phone baseline
-  is not run.
-- **Running:** G2 (separate vertex shader), writer run `a9c0fa4d` (report `.work/agent-notes/kk-gpl/reports/g2.md`).
-- **Queue:** G2, G3, G4 (workstation); then G0's phone baseline and G5 from the main checkout; G6.
+- **Done:**
+  - G0's host harness and G1 in `ea258b0` (`patches/mesa` 0096; host test `check_gpl`).
+  - G2 in the commit "MESA_KK_EXPERIMENTAL=gpl compiles a library's vertex shader on its own
+    (mesa 0097, G2)" (`patches/mesa` 0097). The vertex library is built at library creation; a
+    fast link compiles only the fragment side at its first draw.
+  - Evidence: [2026-10-21-kk-gpl-host](../evidence/2026-10-21-kk-gpl-host.md).
+  - G0's phone baseline is not run.
+- **Running:** none.
+- **Queue:** G3 next (separate fragment shader), then G4 (workstation); then G0's phone baseline
+  and G5 from the main checkout; G6.
 - **Phone:** not used by this plan yet.
-- **Notes:** reports in the side copy's `.work/agent-notes/kk-gpl/reports/`.
+- **Notes:** reports in the side copy's `.work/agent-notes/kk-gpl/reports/` (G2: `g2.md`).
 
 ## Why
 

@@ -2098,9 +2098,13 @@ main(int argc, char **argv)
 /* VK_EXT_graphics_pipeline_library, used the way DXVK uses it (PLA-424):
  * one library per part (vertex input, pre-rasterization with the vertex
  * shader, fragment shader, fragment output), linked fast (no flags) and with
- * link-time optimization, drawn into two colour formats with two vertex
+ * link-time optimization, drawn into two colour formats with three vertex
  * layouts, and a depth-only pipeline whose fragment shader library has no
- * shader. Each pipeline records draws and is submitted. */
+ * shader. Each pipeline records draws and is submitted. The vertex shader's
+ * library is built with its pipeline library, and a fast link compiles only
+ * the fragment side at its first draw, once for every vertex layout; with
+ * VK_POLYGON_MODE_POINT the link falls back to compiling the whole
+ * pipeline. */
 struct gpl_libs {
    VkPipelineLayout layout;
    VkShaderModule vs, fs;
@@ -2108,7 +2112,8 @@ struct gpl_libs {
 
 static VkPipeline
 gpl_library(const struct gpl_libs *g, VkGraphicsPipelineLibraryFlagsEXT part,
-            VkFormat attr_format, VkFormat color, bool blend, bool with_fs)
+            VkFormat attr_format, VkFormat color, bool blend, bool with_fs,
+            VkPolygonMode polygon_mode)
 {
    DPROC(vkCreateGraphicsPipelines);
    VkGraphicsPipelineLibraryCreateInfoEXT lib = {
@@ -2129,7 +2134,7 @@ gpl_library(const struct gpl_libs *g, VkGraphicsPipelineLibraryFlagsEXT part,
    };
 
    VkVertexInputBindingDescription binding = {
-      0, attr_format == VK_FORMAT_R8G8B8A8_UNORM ? 4 : 16,
+      0, attr_format == VK_FORMAT_R32G32B32A32_SFLOAT ? 16 : 4,
       VK_VERTEX_INPUT_RATE_VERTEX};
    VkVertexInputAttributeDescription attr = {0, 0, attr_format, 0};
    VkPipelineVertexInputStateCreateInfo vi = {
@@ -2150,7 +2155,7 @@ gpl_library(const struct gpl_libs *g, VkGraphicsPipelineLibraryFlagsEXT part,
    };
    VkPipelineRasterizationStateCreateInfo rs = {
       .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
-      .polygonMode = VK_POLYGON_MODE_FILL,
+      .polygonMode = polygon_mode,
       .lineWidth = 1.0f,
    };
    VkPipelineMultisampleStateCreateInfo ms = {
@@ -2322,34 +2327,58 @@ check_gpl(VkPhysicalDevice pd, VkQueue queue, VkCommandPool pool, VkBuffer buf)
    struct gpl_libs g = {.vs = load_module("pass.vert"),
                         .fs = load_module("color.frag")};
    CHECK(vkCreatePipelineLayout(dev, &plci, NULL, &g.layout));
+   /* Shaders whose fragment side reads fewer components than the vertex
+    * side writes, of a float and a flat integer output */
+   struct gpl_libs gv = {.layout = g.layout,
+                         .vs = load_module("gpl-varyings.vert"),
+                         .fs = load_module("gpl-varyings.frag")};
 
    const VkFormat RGBA8 = VK_FORMAT_R8G8B8A8_UNORM;
    const VkFormat RGBA16F = VK_FORMAT_R16G16B16A16_SFLOAT;
    const VkFormat RGBA32F = VK_FORMAT_R32G32B32A32_SFLOAT;
+   const VkFormat BGRA8 = VK_FORMAT_B8G8R8A8_UNORM;
    const VkFormat NONE = VK_FORMAT_UNDEFINED;
+   const VkPolygonMode FILL = VK_POLYGON_MODE_FILL;
    const int msl_start = msl_count();
-   VkPipeline vi_f32 = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_VERTEX_INPUT_INTERFACE_BIT_EXT, RGBA32F, NONE, false, true);
-   VkPipeline vi_u8 = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_VERTEX_INPUT_INTERFACE_BIT_EXT, RGBA8, NONE, false, true);
-   VkPipeline pre = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_PRE_RASTERIZATION_SHADERS_BIT_EXT, RGBA32F, RGBA8, false, true);
-   VkPipeline frag = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT, RGBA32F, RGBA8, false, true);
-   VkPipeline no_frag = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT, RGBA32F, RGBA8, false, false);
-   VkPipeline out_u8 = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_OUTPUT_INTERFACE_BIT_EXT, RGBA32F, RGBA8, false, true);
-   VkPipeline out_f16 = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_OUTPUT_INTERFACE_BIT_EXT, RGBA32F, RGBA16F, true, true);
+   VkPipeline vi_f32 = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_VERTEX_INPUT_INTERFACE_BIT_EXT, RGBA32F, NONE, false, true, FILL);
+   VkPipeline vi_u8 = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_VERTEX_INPUT_INTERFACE_BIT_EXT, RGBA8, NONE, false, true, FILL);
+   VkPipeline vi_bgra8 = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_VERTEX_INPUT_INTERFACE_BIT_EXT, BGRA8, NONE, false, true, FILL);
+   VkPipeline pre = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_PRE_RASTERIZATION_SHADERS_BIT_EXT, RGBA32F, RGBA8, false, true, FILL);
+   VkPipeline pre_points = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_PRE_RASTERIZATION_SHADERS_BIT_EXT, RGBA32F, RGBA8, false, true, VK_POLYGON_MODE_POINT);
+   VkPipeline frag = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT, RGBA32F, RGBA8, false, true, FILL);
+   VkPipeline no_frag = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT, RGBA32F, RGBA8, false, false, FILL);
+   VkPipeline out_u8 = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_OUTPUT_INTERFACE_BIT_EXT, RGBA32F, RGBA8, false, true, FILL);
+   VkPipeline out_f16 = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_OUTPUT_INTERFACE_BIT_EXT, RGBA32F, RGBA16F, true, true, FILL);
+   VkPipeline pre_vary = gpl_library(&gv, VK_GRAPHICS_PIPELINE_LIBRARY_PRE_RASTERIZATION_SHADERS_BIT_EXT, RGBA32F, RGBA8, false, true, FILL);
+   VkPipeline frag_vary = gpl_library(&gv, VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT, RGBA32F, RGBA8, false, true, FILL);
    const int msl_libs = msl_count();
-   printf("gpl: 7 libraries made %d MSL libraries\n", msl_libs - msl_start);
+   /* Each pre-rasterization library builds its vertex shader's library */
+   printf("gpl: 11 libraries made %d MSL libraries\n", msl_libs - msl_start);
+   if (msl_start >= 0 && msl_libs - msl_start != 3) {
+      fprintf(stderr, "gpl: the libraries made %d MSL libraries, not 3\n",
+              msl_libs - msl_start);
+      return 1;
+   }
 
+   /* MSL libraries each link compiles at link and at its first draw; -1 for
+    * a whole pipeline (2 or more) */
    struct {
       const char *name;
       VkPipeline libs[4];
       bool lto;
       VkFormat color;
+      int at_link, at_draw;
    } links[] = {
-      {"fast f32 rgba8", {vi_f32, pre, frag, out_u8}, false, RGBA8},
-      {"fast u8 rgba8", {vi_u8, pre, frag, out_u8}, false, RGBA8},
-      {"fast f32 rgba16f blend", {vi_f32, pre, frag, out_f16}, false, RGBA16F},
-      {"fast no-fs rgba8", {vi_f32, pre, no_frag, out_u8}, false, RGBA8},
-      {"lto f32 rgba8", {vi_f32, pre, frag, out_u8}, true, RGBA8},
-      {"lto u8 rgba16f blend", {vi_u8, pre, frag, out_f16}, true, RGBA16F},
+      {"fast f32 rgba8", {vi_f32, pre, frag, out_u8}, false, RGBA8, 0, 1},
+      /* the same link with other vertex layouts: nothing to compile */
+      {"fast u8 rgba8", {vi_u8, pre, frag, out_u8}, false, RGBA8, 0, 0},
+      {"fast bgra8 rgba8", {vi_bgra8, pre, frag, out_u8}, false, RGBA8, 0, 0},
+      {"fast f32 rgba16f blend", {vi_f32, pre, frag, out_f16}, false, RGBA16F, 0, 1},
+      {"fast no-fs rgba8", {vi_f32, pre, no_frag, out_u8}, false, RGBA8, 0, 1},
+      {"fast point-fill fallback", {vi_f32, pre_points, frag, out_u8}, false, RGBA8, 0, -1},
+      {"fast varyings rgba8", {vi_f32, pre_vary, frag_vary, out_u8}, false, RGBA8, 0, 1},
+      {"lto f32 rgba8", {vi_f32, pre, frag, out_u8}, true, RGBA8, 2, 0},
+      {"lto u8 rgba16f blend", {vi_u8, pre, frag, out_f16}, true, RGBA16F, 2, 0},
    };
    VkImageView views[2] = {gpl_target(pd, RGBA8), gpl_target(pd, RGBA16F)};
    for (unsigned i = 0; i < sizeof(links) / sizeof(links[0]); i++) {
@@ -2403,11 +2432,20 @@ check_gpl(VkPhysicalDevice pd, VkQueue queue, VkCommandPool pool, VkBuffer buf)
       };
       CHECK(vkQueueSubmit(queue, 1, &si, VK_NULL_HANDLE));
       CHECK(vkQueueWaitIdle(queue));
+      const int at_link = linked - before_link, at_draw = drawn - linked;
+      if (before_link >= 0 &&
+          (at_link != links[i].at_link ||
+           (links[i].at_draw < 0 ? at_draw < 2 : at_draw != links[i].at_draw))) {
+         fprintf(stderr, "gpl %s: MSL libraries at link %d, at draw %d\n",
+                 links[i].name, at_link, at_draw);
+         return 1;
+      }
       printf("ok gpl %s: MSL libraries at link %d, at draw %d\n", links[i].name,
-             linked - before_link, drawn - linked);
+             at_link, at_draw);
       vkDestroyPipeline(dev, p, NULL);
    }
-   VkPipeline libs[] = {vi_f32, vi_u8, pre, frag, no_frag, out_u8, out_f16};
+   VkPipeline libs[] = {vi_f32, vi_u8, vi_bgra8, pre, pre_points, frag,
+                        no_frag, out_u8, out_f16, pre_vary, frag_vary};
    for (unsigned i = 0; i < sizeof(libs) / sizeof(libs[0]); i++)
       vkDestroyPipeline(dev, libs[i], NULL);
    printf("ok gpl: libraries, fast and optimized links drawn\n");
