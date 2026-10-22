@@ -378,6 +378,118 @@ find_memory(VkPhysicalDevice pd, uint32_t bits)
    return 0;
 }
 
+/* VK_EXT_memory_priority and VK_EXT_pageable_device_local_memory (PLA-431),
+ * on a device of its own: exposed, with their features, only when
+ * MESA_KK_EXPERIMENTAL names memory_priority, and without them the device has
+ * no vkSetDeviceMemoryPriorityEXT. With them, as DXVK and vkd3d-proton use
+ * them: an allocation with a priority, then vkSetDeviceMemoryPriorityEXT on
+ * it twice, through the device's dispatch. It runs after the checks that
+ * fork and before this process submits, so this process's first [kk-mem]
+ * line (MESA_KK_DEBUG=memory) counts 1 allocation and 2 calls. */
+static int
+check_memory_priority(const VkInstanceCreateInfo *ici)
+{
+   const char *experimental = getenv("MESA_KK_EXPERIMENTAL");
+   const bool wanted = experimental && strstr(experimental, "memory_priority");
+   VkInstance i;
+   CHECK(((PFN_vkCreateInstance)gipa(NULL, "vkCreateInstance"))(ici, NULL, &i));
+   uint32_t count = 1;
+   VkPhysicalDevice pd;
+   CHECK(((PFN_vkEnumeratePhysicalDevices)gipa(i, "vkEnumeratePhysicalDevices"))(
+      i, &count, &pd));
+   PFN_vkEnumerateDeviceExtensionProperties enumerate =
+      (PFN_vkEnumerateDeviceExtensionProperties)gipa(
+         i, "vkEnumerateDeviceExtensionProperties");
+   uint32_t n = 0;
+   CHECK(enumerate(pd, NULL, &n, NULL));
+   VkExtensionProperties *props = calloc(n, sizeof(*props));
+   CHECK(enumerate(pd, NULL, &n, props));
+   bool priority_ext = false, pageable_ext = false;
+   for (uint32_t e = 0; e < n; e++) {
+      priority_ext |= !strcmp(props[e].extensionName, "VK_EXT_memory_priority");
+      pageable_ext |=
+         !strcmp(props[e].extensionName, "VK_EXT_pageable_device_local_memory");
+   }
+   free(props);
+   VkPhysicalDeviceMemoryPriorityFeaturesEXT priority_feat = {
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PRIORITY_FEATURES_EXT,
+   };
+   VkPhysicalDevicePageableDeviceLocalMemoryFeaturesEXT pageable_feat = {
+      .sType =
+         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PAGEABLE_DEVICE_LOCAL_MEMORY_FEATURES_EXT,
+      .pNext = &priority_feat,
+   };
+   VkPhysicalDeviceFeatures2 f2 = {
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+      .pNext = &pageable_feat,
+   };
+   ((PFN_vkGetPhysicalDeviceFeatures2)gipa(i, "vkGetPhysicalDeviceFeatures2"))(
+      pd, &f2);
+   if (priority_ext != wanted || pageable_ext != wanted ||
+       priority_feat.memoryPriority != wanted ||
+       pageable_feat.pageableDeviceLocalMemory != wanted) {
+      fprintf(stderr, "VK_EXT_memory_priority %d, "
+                      "VK_EXT_pageable_device_local_memory %d, memoryPriority %d, "
+                      "pageableDeviceLocalMemory %d with MESA_KK_EXPERIMENTAL=%s\n",
+              priority_ext, pageable_ext, priority_feat.memoryPriority,
+              pageable_feat.pageableDeviceLocalMemory,
+              experimental ? experimental : "");
+      return 1;
+   }
+
+   float prio = 1.0f;
+   VkDeviceQueueCreateInfo qci = {
+      .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+      .queueCount = 1,
+      .pQueuePriorities = &prio,
+   };
+   const char *exts[] = {"VK_EXT_memory_priority",
+                         "VK_EXT_pageable_device_local_memory"};
+   VkDeviceCreateInfo dci = {
+      .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+      .pNext = wanted ? &f2 : NULL,
+      .queueCreateInfoCount = 1,
+      .pQueueCreateInfos = &qci,
+      .enabledExtensionCount = wanted ? 2 : 0,
+      .ppEnabledExtensionNames = exts,
+   };
+   VkDevice d;
+   CHECK(((PFN_vkCreateDevice)gipa(i, "vkCreateDevice"))(pd, &dci, NULL, &d));
+   PFN_vkSetDeviceMemoryPriorityEXT set_priority =
+      (PFN_vkSetDeviceMemoryPriorityEXT)((PFN_vkGetDeviceProcAddr)gipa(
+         i, "vkGetDeviceProcAddr"))(d, "vkSetDeviceMemoryPriorityEXT");
+   if (!set_priority != !wanted) {
+      fprintf(stderr, "memory_priority: vkSetDeviceMemoryPriorityEXT %s\n",
+              set_priority ? "without the extensions" : "missing");
+      return 1;
+   }
+   if (wanted) {
+      PFN_vkAllocateMemory alloc =
+         (PFN_vkAllocateMemory)gipa(i, "vkAllocateMemory");
+      PFN_vkFreeMemory release = (PFN_vkFreeMemory)gipa(i, "vkFreeMemory");
+      VkMemoryPriorityAllocateInfoEXT priority = {
+         .sType = VK_STRUCTURE_TYPE_MEMORY_PRIORITY_ALLOCATE_INFO_EXT,
+         .priority = 1.0f,
+      };
+      VkMemoryAllocateInfo mai = {
+         .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+         .pNext = &priority,
+         .allocationSize = 65536,
+         .memoryTypeIndex = 0,
+      };
+      VkDeviceMemory mem;
+      CHECK(alloc(d, &mai, NULL, &mem));
+      set_priority(d, mem, 0.0f);
+      set_priority(d, mem, 0.5f);
+      release(d, mem, NULL);
+      printf("ok memory_priority: an allocation with priority 1.0, then "
+             "vkSetDeviceMemoryPriorityEXT 0.0 and 0.5\n");
+   }
+   ((PFN_vkDestroyDevice)gipa(i, "vkDestroyDevice"))(d, NULL);
+   ((PFN_vkDestroyInstance)gipa(i, "vkDestroyInstance"))(i, NULL);
+   return 0;
+}
+
 /* Heap 0's size and VK_EXT_memory_budget budget in MiB, from a fresh
  * instance (the driver reads PLAYPORT_VK_BUDGET_MB when it enumerates). */
 static void
@@ -1571,6 +1683,8 @@ main(int argc, char **argv)
    if (check_budget_cap(&ici))
       return 1;
    if (check_heap_cap(&ici))
+      return 1;
+   if (check_memory_priority(&ici))
       return 1;
    CHECK(vkCreateInstance(&ici, NULL, &inst));
 

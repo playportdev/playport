@@ -324,6 +324,32 @@ msl_sums() { for f in "$ROOT/msl/"*.metal; do md5sum <"$1/${f##*/}"; done | sort
 serial=$(grep -c '^\[kk-compile\] gpl-phases .* libraries_inflight=1 ' "$ROOT/serial.log" || true)
 [ "$serial" = 17 ] || { echo "MESA_KK_DEBUG=serial_libraries: $serial of 17 gpl-phases lines with one library in flight" >&2; exit 1; }
 echo "MESA_KK_DEBUG=compile,serial_libraries: 17 gpl-phases lines, the same MSL"
+# VK_EXT_memory_priority and VK_EXT_pageable_device_local_memory (PLA-431):
+# exposed, with their features, only with MESA_KK_EXPERIMENTAL=memory_priority
+# (the runs above check they are not exposed, and that the device has no
+# vkSetDeviceMemoryPriorityEXT, without it). With it, an allocation with a
+# priority and two vkSetDeviceMemoryPriorityEXT calls are accepted and counted
+# in the [kk-mem] line (the forked checks' lines count none), and every
+# pipeline builds the same MSL: a priority changes nothing.
+rm -rf "$ROOT/msl-memory-priority"; mkdir -p "$ROOT/msl-memory-priority"
+MESA_KK_EXPERIMENTAL=memory_priority MESA_KK_DEBUG=memory KK_MOCK_MSL_DIR="$ROOT/msl-memory-priority" \
+    MESA_SHADER_CACHE_DISABLE=true \
+    "$ROOT/kk-host-test" "$ROOT/build/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.so" "$ROOT/spv" \
+    >"$ROOT/memory-priority.log" 2>&1 || { cat "$ROOT/memory-priority.log" >&2; exit 1; }
+grep -q '^ok memory_priority: ' "$ROOT/memory-priority.log" ||
+    { echo "MESA_KK_EXPERIMENTAL=memory_priority: the memory priority case did not run" >&2; exit 1; }
+grep -q '^\[kk-mem\] .* | priority allocations=1 sets=2$' "$ROOT/memory-priority.log" ||
+    { grep '^\[kk-mem\] ' "$ROOT/memory-priority.log" >&2
+      echo "MESA_KK_EXPERIMENTAL=memory_priority: no [kk-mem] line counts 1 allocation and 2 calls" >&2; exit 1; }
+[ "$(ls "$ROOT/msl-memory-priority" | wc -l)" = "$(ls "$ROOT/msl" | wc -l)" ] ||
+    { echo "MESA_KK_EXPERIMENTAL=memory_priority: not as many MSL libraries as without it" >&2; exit 1; }
+for f in "$ROOT/msl/"*.metal; do
+    cmp -s "$f" "$ROOT/msl-memory-priority/${f##*/}" ||
+        { echo "MESA_KK_EXPERIMENTAL=memory_priority: ${f##*/} is not the MSL made without it" >&2; exit 1; }
+done
+grep '^ok memory_priority: ' "$ROOT/memory-priority.log"
+grep -m1 '^\[kk-mem\] .* | priority allocations=1 sets=2$' "$ROOT/memory-priority.log"
+echo "MESA_KK_EXPERIMENTAL=memory_priority: $(ls "$ROOT/msl-memory-priority" | wc -l) MSL libraries, each the one made without it"
 
 # The same pipelines with the vertex and fragment libraries built at once and
 # the first two library builds failing as if Metal's compiler service had
