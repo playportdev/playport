@@ -1,0 +1,312 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 22 Oct 2026 09:24:54 +0200
+Subject: [PATCH] kk: MESA_KK_DEBUG=compile times a pipeline library's phases;
+ serial_libraries builds one Metal library at a time
+
+With MESA_KK_DEBUG=compile, each Metal library built for a pipeline
+library shader (MESA_KK_EXPERIMENTAL=gpl) is followed by a
+"[kk-compile] gpl-phases" line: the time spent lowering its NIR for the
+library (kk_lower_nir and the passes before it), the rest of
+kk_compile_shader's NIR passes, nir_to_msl, the wait for
+serial_libraries and the Metal library build (MTL4Compiler
+newLibraryWithDescriptor, synchronous on the calling thread); the
+Metal library and pipeline builds in flight when it began, itself
+included; the MSL's size, the thread and the wall clock.
+
+MESA_KK_DEBUG=serial_libraries holds one process-wide mutex for every
+Metal library build (kk_build_library), so that a library's time is the
+compiler's alone with nothing else in it, and its wait is the queue's.
+Pipeline builds stay concurrent. A measurement for Portal 2's 600
+library builds at a chapter load, which took a median of 361 ms
+(vertex) and 1,059 ms (fragment) each while the first ones took 12 to
+75 ms.
+
+Without either flag nothing changes: the counters, the clock reads
+and the mutex are behind them, and the MSL is the same.
+
+Linear: PLA-437
+Class: diagnostics
+Evidence: docs/evidence/2026-10-22-kk-gpl-cold-cache.md
+Offered-upstream: no
+---
+ src/kosmickrisp/vulkan/kk_debug.c  |  1 +
+ src/kosmickrisp/vulkan/kk_debug.h  |  4 ++
+ src/kosmickrisp/vulkan/kk_shader.c | 92 +++++++++++++++++++++++++++---
+ src/kosmickrisp/vulkan/kk_shader.h |  3 +
+ 4 files changed, 91 insertions(+), 9 deletions(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_debug.c b/src/kosmickrisp/vulkan/kk_debug.c
+index 71d1253..0d5b3f7 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.c
++++ b/src/kosmickrisp/vulkan/kk_debug.c
+@@ -24,6 +24,7 @@ const struct debug_named_value debug_flags[] = {
+    {"unroll_hints", KK_DEBUG_UNROLL_HINTS},
+    {"no_known_fail", KK_DEBUG_NO_KNOWN_FAIL},
+    {"gpu", KK_DEBUG_GPU},
++   {"serial_libraries", KK_DEBUG_SERIAL_LIBRARIES},
+    {NULL, 0},
+ };
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_debug.h b/src/kosmickrisp/vulkan/kk_debug.h
+index e248d5e..dcf465b 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.h
++++ b/src/kosmickrisp/vulkan/kk_debug.h
+@@ -49,6 +49,10 @@ enum kk_debug {
+     * that completed, frames presented, and the time the presenting threads
+     * were blocked for a drawable or a present (kk_gpu_log) */
+    KK_DEBUG_GPU = 1ull << 12,
++   /* Playport (PLA-437): build one Metal library at a time (kk_build_library),
++    * so that its time is the compiler's alone; with compile, the wait for the
++    * one before is logged ([kk-compile] gpl-phases wait_ms) */
++   KK_DEBUG_SERIAL_LIBRARIES = 1ull << 13,
+ };
+ 
+ extern enum kk_debug kk_mesa_debug_flags;
+diff --git a/src/kosmickrisp/vulkan/kk_shader.c b/src/kosmickrisp/vulkan/kk_shader.c
+index 411e265..d01c7a0 100644
+--- a/src/kosmickrisp/vulkan/kk_shader.c
++++ b/src/kosmickrisp/vulkan/kk_shader.c
+@@ -1668,7 +1668,11 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
+    }
+ 
+    struct msl_compile_data *data = &shader->msl_data[stage];
++   const int64_t msl_start =
++      gpl == KK_GPL_LIBRARY && KK_DEBUG(COMPILE) ? os_time_get_nano() : 0;
+    data->code = nir_to_msl(nir, &translate_options);
++   if (gpl == KK_GPL_LIBRARY && KK_DEBUG(COMPILE))
++      shader->gpl_msl_ns = os_time_get_nano() - msl_start;
+    const char *entrypoint_name = nir_shader_get_entrypoint(nir)->function->name;
+ 
+    /* We need to steal so it doesn't get destroyed with the nir. Needs to happen
+@@ -2293,8 +2297,20 @@ struct kk_library_build {
+    int64_t ns; /* retries included */
+    uint32_t retries;
+    struct mtl_build_error error;
++   /* MESA_KK_DEBUG=compile: the Metal library and pipeline builds in flight
++    * when this one began, itself included; with serial_libraries, the time
++    * it waited for the one before (not in ns) */
++   uint32_t libraries_inflight, pipelines_inflight;
++   int64_t wait_ns;
+ };
+ 
++/* MESA_KK_DEBUG=compile: Metal library builds (kk_build_library) and
++ * pipeline builds in flight, for [kk-compile] gpl-phases */
++static uint32_t kk_libraries_inflight, kk_pipelines_inflight;
++
++/* MESA_KK_DEBUG=serial_libraries: held for each Metal library build */
++static simple_mtx_t kk_serial_library_lock = SIMPLE_MTX_INITIALIZER;
++
+ /* Playport: MESA_KK_SAFE_MATH=1 builds the game's shader libraries with
+  * Metal's safe math and precise floating-point functions instead of fast
+  * math, which may assume no NaN, Inf or signed zero and drop the NaN
+@@ -2314,6 +2330,15 @@ kk_build_library(struct kk_library_build *build)
+ {
+    struct kk_physical_device *pdev = kk_device_physical(build->device);
+    const bool safe_math = kk_safe_math();
++   if (KK_DEBUG(SERIAL_LIBRARIES)) {
++      const int64_t wait_start = os_time_get_nano();
++      simple_mtx_lock(&kk_serial_library_lock);
++      build->wait_ns = os_time_get_nano() - wait_start;
++   }
++   if (KK_DEBUG(COMPILE)) {
++      build->libraries_inflight = p_atomic_inc_return(&kk_libraries_inflight);
++      build->pipelines_inflight = p_atomic_read(&kk_pipelines_inflight);
++   }
+    const int64_t start = os_time_get_nano();
+    int64_t attempt_start;
+    do {
+@@ -2330,6 +2355,10 @@ kk_build_library(struct kk_library_build *build)
+             kk_retry_build(build->kind, build->step, build->src,
+                            &build->retries, &build->error, attempt_start));
+    build->ns = os_time_get_nano() - start;
++   if (KK_DEBUG(COMPILE))
++      p_atomic_dec(&kk_libraries_inflight);
++   if (KK_DEBUG(SERIAL_LIBRARIES))
++      simple_mtx_unlock(&kk_serial_library_lock);
+ }
+ 
+ static int
+@@ -2442,6 +2471,8 @@ kk_compile_compute_pipeline(struct kk_device *device,
+    const int64_t pipeline_start = os_time_get_nano();
+    mtl_compute_pipeline_state *pipeline;
+    int64_t attempt_start;
++   if (KK_DEBUG(COMPILE))
++      p_atomic_inc(&kk_pipelines_inflight);
+    do {
+       attempt_start = os_time_get_nano();
+       memset(&build.error, 0, sizeof(build.error));
+@@ -2452,6 +2483,8 @@ kk_compile_compute_pipeline(struct kk_device *device,
+             kk_retry_build(build.kind, "pipeline", src, &build.retries,
+                            &build.error, attempt_start));
+    build.pipeline_ns = os_time_get_nano() - pipeline_start;
++   if (KK_DEBUG(COMPILE))
++      p_atomic_dec(&kk_pipelines_inflight);
+    mtl_release(function);
+    mtl_release(library);
+ 
+@@ -2985,6 +3018,8 @@ kk_compile_graphics_pipeline(struct kk_device *device, struct kk_shader *vs,
+ 
+    const int64_t pipeline_start = os_time_get_nano();
+    int64_t attempt_start;
++   if (KK_DEBUG(COMPILE))
++      p_atomic_inc(&kk_pipelines_inflight);
+    do {
+       attempt_start = os_time_get_nano();
+       memset(&build.error, 0, sizeof(build.error));
+@@ -2994,6 +3029,8 @@ kk_compile_graphics_pipeline(struct kk_device *device, struct kk_shader *vs,
+             kk_retry_build(build.kind, "pipeline", src, &build.retries,
+                            &build.error, attempt_start));
+    build.pipeline_ns = os_time_get_nano() - pipeline_start;
++   if (KK_DEBUG(COMPILE))
++      p_atomic_dec(&kk_pipelines_inflight);
+    if (pipe->gfx.render == NULL) {
+       result = VK_ERROR_INVALID_SHADER_NV;
+       build.failed_step = "pipeline";
+@@ -3857,14 +3894,25 @@ kk_gpl_single_slot_varyings(nir_shader *nir, bool *indirect)
+                                      nir_metadata_control_flow, indirect);
+ }
+ 
++/* Playport (PLA-437): when a pipeline library shader compiled on its own
++ * finished lowering its NIR for the library (kk_lower_nir and the passes
++ * before it) and kk_compile_shader (the rest of the NIR passes, then
++ * nir_to_msl), for [kk-compile] gpl-phases */
++struct kk_gpl_front_end {
++   int64_t lowered, compiled;
++};
++
+ /* Builds the Metal library of a vertex or fragment shader compiled on its own
+- * (or deserialized: msl_src) into src, which keeps both, or says why it could
+- * not be built. kind names it on the [kk-compile] gpl line. A kept shader's
+- * MSL is packed, and it and its library are counted. */
++ * (or deserialized: msl_src, front_end NULL) into src, which keeps both, or
++ * says why it could not be built. kind names it on the [kk-compile] gpl line,
++ * which a [kk-compile] gpl-phases line follows: the time of each phase since
++ * start, the Metal builds in flight and the wait for serial_libraries. A kept
++ * shader's MSL is packed, and it and its library are counted. */
+ static void
+ kk_gpl_build_library(struct kk_device *dev, struct kk_gpl_source *src,
+                      struct kk_shader *shader, const char *kind,
+-                     const char *msl_src, int64_t start)
++                     const char *msl_src, int64_t start,
++                     const struct kk_gpl_front_end *front_end)
+ {
+    const bool vertex = shader->info.stage == MESA_SHADER_VERTEX;
+    struct kk_library_build build = {
+@@ -3882,6 +3930,24 @@ kk_gpl_build_library(struct kk_device *dev, struct kk_gpl_source *src,
+                            : "built";
+       fprintf(stderr, "[kk-compile] gpl %s %s ms=%.1f library_ms=%.1f\n", kind,
+               how, (os_time_get_nano() - start) / 1e6, build.ns / 1e6);
++
++      const int64_t lower_ns = front_end ? front_end->lowered - start : 0;
++      const int64_t compile_ns =
++         front_end ? front_end->compiled - front_end->lowered : 0;
++      const int64_t msl_ns = front_end ? shader->gpl_msl_ns : 0;
++      struct timespec wall = {0};
++      timespec_get(&wall, TIME_UTC);
++      fprintf(stderr,
++              "[kk-compile] gpl-phases %s %s lower_ms=%.1f nir_ms=%.1f "
++              "msl_ms=%.1f wait_ms=%.1f library_ms=%.1f "
++              "libraries_inflight=%u pipelines_inflight=%u bytes=%zu "
++              "tid=%llu wall_ms=%lld\n",
++              kind, how, lower_ns / 1e6, (compile_ns - msl_ns) / 1e6,
++              msl_ns / 1e6, build.wait_ns / 1e6, build.ns / 1e6,
++              build.libraries_inflight, build.pipelines_inflight,
++              strlen(build.data->code), (unsigned long long)kk_thread_id(),
++              (long long)(wall.tv_sec * INT64_C(1000) +
++                          wall.tv_nsec / 1000000));
+    }
+    if (build.library == NULL) {
+       kk_shader_destroy(&dev->vk, shader, &dev->vk.alloc);
+@@ -3947,15 +4013,18 @@ kk_gpl_compile_vertex(struct kk_device *dev, struct kk_gpl_source *src,
+    }
+    nir->info.next_stage = MESA_SHADER_FRAGMENT;
+ 
++   struct kk_gpl_front_end front_end = {.lowered = os_time_get_nano()};
+    struct kk_shader *vs = NULL;
+    if (kk_compile_shader(dev, nir, NULL, info->robustness, state,
+                          &dev->vk.alloc, KK_GPL_LIBRARY, &vs) != VK_SUCCESS) {
+       src->vertex_blocker = "vertex-compile";
+       return;
+    }
++   front_end.compiled = os_time_get_nano();
+ 
+    src->view_mask = state->mv ? state->mv->view_mask : 0;
+-   kk_gpl_build_library(dev, src, vs, "vertex", KK_SRC_TRANSLATED, start);
++   kk_gpl_build_library(dev, src, vs, "vertex", KK_SRC_TRANSLATED, start,
++                        &front_end);
+ }
+ 
+ /* Why a fragment shader compiled on its own (NIR lowered for it) does not
+@@ -4030,11 +4099,13 @@ kk_gpl_compile_fragment(struct kk_device *dev, struct kk_gpl_source *src,
+          ralloc_free(nir);
+    }
+ 
++   struct kk_gpl_front_end front_end = {.lowered = os_time_get_nano()};
+    struct kk_shader *fs = NULL;
+    if (reason == NULL &&
+        kk_compile_shader(dev, nir, NULL, info->robustness, state,
+                          &dev->vk.alloc, KK_GPL_LIBRARY, &fs) != VK_SUCCESS)
+       reason = "fragment-compile";
++   front_end.compiled = os_time_get_nano();
+ 
+    if (reason) {
+       if (full)
+@@ -4046,7 +4117,8 @@ kk_gpl_compile_fragment(struct kk_device *dev, struct kk_gpl_source *src,
+                  full ? "full" : "at-link", reason);
+       return;
+    }
+-   kk_gpl_build_library(dev, src, fs, "fragment", KK_SRC_TRANSLATED, start);
++   kk_gpl_build_library(dev, src, fs, "fragment", KK_SRC_TRANSLATED, start,
++                        &front_end);
+ }
+ 
+ /* The device's empty fragment shader compiled on its own (kk_gpl.h) */
+@@ -4058,14 +4130,16 @@ kk_gpl_compile_empty_fragment(struct kk_device *dev, struct kk_gpl_source *src)
+    nir_shader *nir =
+       get_empty_nir(dev, MESA_SHADER_FRAGMENT, &state,
+                     kk_make_feature_key(&dev->vk.enabled_features), true);
++   struct kk_gpl_front_end front_end = {.lowered = os_time_get_nano()};
+    struct kk_shader *fs = NULL;
+    if (kk_compile_shader(dev, nir, NULL, &rs_none, &state, &dev->vk.alloc,
+                          KK_GPL_LIBRARY, &fs) != VK_SUCCESS) {
+       src->fragment_at_link = "fragment-compile";
+       return;
+    }
++   front_end.compiled = os_time_get_nano();
+    kk_gpl_build_library(dev, src, fs, "empty-fragment", KK_SRC_TRANSLATED,
+-                        start);
++                        start, &front_end);
+ }
+ 
+ void
+@@ -4514,13 +4588,13 @@ kk_gpl_deserialize(struct kk_device *dev, struct blob_reader *blob,
+     * without a fragment shader use the empty one */
+    if (vertex) {
+       kk_gpl_build_library(dev, src, vertex, "vertex", KK_SRC_DESERIALIZED,
+-                           start);
++                           start, NULL);
+       if (src->vertex)
+          kk_gpl_empty_fragment(dev);
+    }
+    if (fragment)
+       kk_gpl_build_library(dev, src, fragment, "fragment",
+-                           KK_SRC_DESERIALIZED, start);
++                           KK_SRC_DESERIALIZED, start, NULL);
+ 
+    *shader_out = &shader->vk;
+    return VK_SUCCESS;
+diff --git a/src/kosmickrisp/vulkan/kk_shader.h b/src/kosmickrisp/vulkan/kk_shader.h
+index 510cb3b..bdcf663 100644
+--- a/src/kosmickrisp/vulkan/kk_shader.h
++++ b/src/kosmickrisp/vulkan/kk_shader.h
+@@ -202,6 +202,9 @@ struct kk_shader {
+    uint8_t gpl_output_types[MAX_DRAW_BUFFERS];
+    bool gpl_writes_depth;
+    bool gpl_dual_source;
++   /* Playport (PLA-437): nir_to_msl's time for a pipeline library shader,
++    * with MESA_KK_DEBUG=compile ([kk-compile] gpl-phases msl_ms) */
++   int64_t gpl_msl_ns;
+ };
+ 
+ VK_DEFINE_NONDISP_HANDLE_CASTS(kk_shader, vk.base, VkShaderEXT,

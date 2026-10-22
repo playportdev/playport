@@ -77,3 +77,4 @@
 0101-kk-MESA_KK_EXPERIMENTAL-gpl-separate-links-leave-the.patch
 0102-kk-MESA_KK_EXPERIMENTAL-gpl-blend-constants-leave-li.patch
 0103-kk-a-static-sample-mask-with-every-sample-is-not-low.patch
+0104-kk-MESA_KK_DEBUG-compile-times-a-pipeline-library-s-.patch

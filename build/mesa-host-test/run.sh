@@ -138,6 +138,26 @@ gpl_lines() { grep -c "^\[kk-compile\] $1" "$ROOT/gpl.log" || true; }
       echo "MESA_KK_EXPERIMENTAL=gpl: not 4 + 1 vertex and 1 + 6 + 1 + 1 fragment libraries, 1 + 1 from the cache, 10 + 1 separate links (one for both blend constants), a point-fill, a sample-mask, a point-size-layer and 1 + 2 logic-op fallbacks, the second device's totals and counts back to zero" >&2; exit 1; }
 grep '^\(ok \)\?gpl\|^\[kk-compile\] \(gpl\|link\)\|^\[kk-mem\] gpl' "$ROOT/gpl.log"
 
+# Each of those 16 library builds is followed by its phases (PLA-437): NIR
+# lowering, the rest of the NIR passes, nir_to_msl, the Metal library, and the
+# builds in flight. With MESA_KK_DEBUG=serial_libraries too, one Metal library
+# builds at a time, the vertex and fragment ones of a pipeline included
+# (parallel_stages), and every pipeline still builds with the same MSL.
+phases=$(grep -c '^\[kk-compile\] gpl-phases [a-z-]* \(built\|deserialized\) lower_ms=[0-9.]* nir_ms=[0-9.-]* msl_ms=[0-9.]* wait_ms=0\.0 library_ms=[0-9.]* libraries_inflight=1 pipelines_inflight=0 bytes=[0-9]* ' "$ROOT/gpl.log" || true)
+[ "$phases" = 16 ] || { echo "MESA_KK_DEBUG=compile: $phases gpl-phases lines, not 16" >&2; exit 1; }
+rm -rf "$ROOT/msl-serial"; mkdir -p "$ROOT/msl-serial"
+MESA_KK_EXPERIMENTAL=gpl,parallel_stages MESA_KK_DEBUG=compile,serial_libraries KK_MOCK_MSL_DIR="$ROOT/msl-serial" \
+    MESA_SHADER_CACHE_DISABLE=true \
+    "$ROOT/kk-host-test" "$ROOT/build/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.so" "$ROOT/spv" \
+    >"$ROOT/serial.log" 2>&1 || { cat "$ROOT/serial.log" >&2; exit 1; }
+for f in "$ROOT/msl/"*.metal; do
+    cmp -s "$f" "$ROOT/msl-serial/${f##*/}" ||
+        { echo "MESA_KK_DEBUG=serial_libraries: ${f##*/} is not the MSL made without it" >&2; exit 1; }
+done
+serial=$(grep -c '^\[kk-compile\] gpl-phases .* libraries_inflight=1 ' "$ROOT/serial.log" || true)
+[ "$serial" = 16 ] || { echo "MESA_KK_DEBUG=serial_libraries: $serial of 16 gpl-phases lines with one library in flight" >&2; exit 1; }
+echo "MESA_KK_DEBUG=compile,serial_libraries: 16 gpl-phases lines, the same MSL"
+
 # The same pipelines with the vertex and fragment libraries built at once and
 # the first two library builds failing as if Metal's compiler service had
 # been interrupted (KK_MOCK_INTERRUPT_BUILDS): compile_retry builds them
