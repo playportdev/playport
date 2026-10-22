@@ -50,7 +50,7 @@ from the main checkout after the branch moves there. **Pins read:** `mesa` b39d1
     - the flag keeps 135 more shaders and 40 more pipelines (msl 1.9 MB against 0.3 MB).
   - Evidence: [2026-10-21-kk-gpl-host](../evidence/2026-10-21-kk-gpl-host.md),
     [2026-10-22-kk-gpl-phone](../evidence/2026-10-22-kk-gpl-phone.md).
-- **Running:** none.
+- **Running:** G6 and closing writer (decision 0158 keeps the flag off; the plan moves to finished.md; follow-ups PLA-428, PLA-429, PLA-430), main checkout; report `.work/agent-notes/kk-gpl/reports/g6.md`.
 - **Settled (owner away, supervisor, 2026-10-22):** Portal 2 is not installed for G5 (7.9 GB free); the G5 evidence is Hollow Knight, played into King's Pass. D3D12 is not checked (RDR2 would change its saved API).
 - **Queue:**
   - G6 decision record. The G5c writer recommends keeping the flag off: fast links work and render
