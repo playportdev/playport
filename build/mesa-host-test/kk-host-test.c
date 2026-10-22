@@ -2140,7 +2140,7 @@ struct gpl_libs {
 /* The pipeline cache libraries are made with (gpl_round_trip) */
 static VkPipelineCache gpl_pipeline_cache;
 
-/* A library's blend and multisample state */
+/* A library's blend and multisample state, or input assembly */
 enum gpl_output {
    GPL_PLAIN,
    /* Alpha blending */
@@ -2155,6 +2155,8 @@ enum gpl_output {
    GPL_SAMPLE_MASK,
    /* pSampleMask 0x5 at four samples: not every sample */
    GPL_SAMPLE_MASK_PARTIAL,
+   /* A point list */
+   GPL_POINTS,
 };
 
 static VkPipeline
@@ -2193,7 +2195,8 @@ gpl_library(const struct gpl_libs *g, VkGraphicsPipelineLibraryFlagsEXT part,
    };
    VkPipelineInputAssemblyStateCreateInfo ia = {
       .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
-      .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+      .topology = output == GPL_POINTS ? VK_PRIMITIVE_TOPOLOGY_POINT_LIST
+                                       : VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
    };
    VkPipelineViewportStateCreateInfo vp = {
       .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
@@ -2659,6 +2662,8 @@ check_gpl(VkPhysicalDevice pd, VkQueue queue, VkCommandPool pool, VkBuffer buf)
                          .fs = load_module("gpl-varyings.frag")};
    /* A fragment shader with both sources of dual-source blending */
    struct gpl_libs gd = {.layout = g.layout, .fs = load_module("gpl-dual.frag")};
+   /* A vertex shader that writes a layer */
+   struct gpl_libs gl = {.layout = g.layout, .vs = load_module("gpl-layer.vert")};
 
    const VkFormat RGBA8 = VK_FORMAT_R8G8B8A8_UNORM;
    const VkFormat RGBA16F = VK_FORMAT_R16G16B16A16_SFLOAT;
@@ -2691,13 +2696,15 @@ check_gpl(VkPhysicalDevice pd, VkQueue queue, VkCommandPool pool, VkBuffer buf)
    VkPipeline frag_smask4 = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT, RGBA32F, RGBA8, GPL_SAMPLE_MASK_PARTIAL, true, FILL);
    VkPipeline out_smask = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_OUTPUT_INTERFACE_BIT_EXT, RGBA32F, RGBA8, GPL_SAMPLE_MASK, true, FILL);
    VkPipeline out_smask4 = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_OUTPUT_INTERFACE_BIT_EXT, RGBA32F, RGBA8, GPL_SAMPLE_MASK_PARTIAL, true, FILL);
+   VkPipeline vi_points = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_VERTEX_INPUT_INTERFACE_BIT_EXT, RGBA32F, NONE, GPL_POINTS, true, FILL);
+   VkPipeline pre_layer = gpl_library(&gl, VK_GRAPHICS_PIPELINE_LIBRARY_PRE_RASTERIZATION_SHADERS_BIT_EXT, RGBA32F, RGBA8, PLAIN, true, FILL);
    const int msl_libs = msl_count();
    /* Each pre-rasterization library builds its vertex shader's library, the
     * first one also the empty fragment shader's, and each fragment shader
-    * library its fragment shader's: 3 vertex and 1 + 6 fragment */
-   printf("gpl: 21 libraries made %d MSL libraries\n", msl_libs - msl_start);
-   if (msl_start >= 0 && msl_libs - msl_start != 3 + 7) {
-      fprintf(stderr, "gpl: the libraries made %d MSL libraries, not 10\n",
+    * library its fragment shader's: 4 vertex and 1 + 6 fragment */
+   printf("gpl: 23 libraries made %d MSL libraries\n", msl_libs - msl_start);
+   if (msl_start >= 0 && msl_libs - msl_start != 4 + 7) {
+      fprintf(stderr, "gpl: the libraries made %d MSL libraries, not 11\n",
               msl_libs - msl_start);
       return 1;
    }
@@ -2728,6 +2735,12 @@ check_gpl(VkPhysicalDevice pd, VkQueue queue, VkCommandPool pool, VkBuffer buf)
       {"lto u8 rgba16f blend", {vi_u8, pre, frag, out_f16}, true, RGBA16F, 2, 0},
       {"fast sample-mask 0x1 of 1 rgba8", {vi_f32, pre, frag_smask, out_smask}, false, RGBA8, 0, 0},
       {"fast sample-mask 0x5 of 4 fallback", {vi_f32, pre, frag_smask4, out_smask4}, false, RGBA8, 0, -1, true},
+      /* Its vertex library writes a point size, as every one does: Metal
+       * (the mock) refuses that with the line and triangle classes, so the
+       * other fast links leave the class unspecified, which a vertex shader
+       * that writes a layer cannot have */
+      {"fast points rgba8", {vi_points, pre, frag, out_u8}, false, RGBA8, 0, 0},
+      {"fast layer point-size fallback", {vi_f32, pre_layer, frag, out_u8}, false, RGBA8, 0, -1},
    };
    VkImageView views[3] = {
       gpl_target(pd, RGBA8, VK_SAMPLE_COUNT_1_BIT, NULL, NULL),
@@ -2802,7 +2815,7 @@ check_gpl(VkPhysicalDevice pd, VkQueue queue, VkCommandPool pool, VkBuffer buf)
                         frag,     no_frag,   frag_a2c, frag_dual, out_u8,
                         out_f16,  out_mask,  out_a2c,  out_dual, out_logic,
                         pre_vary, frag_vary, frag_smask, frag_smask4,
-                        out_smask, out_smask4};
+                        out_smask, out_smask4, vi_points, pre_layer};
    for (unsigned i = 0; i < sizeof(libs) / sizeof(libs[0]); i++)
       vkDestroyPipeline(dev, libs[i], NULL);
    if (gpl_round_trip(pd))
