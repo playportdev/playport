@@ -1,4 +1,4 @@
-# KosmicKrisp GPL with a cleared shader cache: Hollow Knight (PLA-429)
+# KosmicKrisp GPL with a cleared shader cache: Hollow Knight and Portal 2 (PLA-429)
 
 **Linear:** [PLA-429](https://linear.app/playportdev/issue/PLA-429). This follows
 [decision 0158](../decisions/0158-kk-gpl-stays-experimental.md) and the phone evidence in
@@ -21,6 +21,11 @@
   - **Gameplay** (after +60 s, the King's Pass slashes and walk): 0.5–1.0 s against 1.7 s.
   - Same route, two runs each, alternating off, on, off, on, each after a Clear.
   - FPS and rendering match the flag off; there were no `link FAIL`.
+- **Portal 2 stalls twice as long with the flag** (below): 29.6–30.1 s against 16.6–17.2 s.
+  - DXVK compiles a pipeline library for each of the 600 shaders that Source creates at load,
+    and a KosmicKrisp fragment library costs up to about 510 ms of Metal compile.
+  - So decision 0158 stands: the flag stays off. It helps a title that creates only the shaders
+    it draws and hurts one that creates them all at load.
 - **What is still kept:** DXVK 3.1.1's own shader cache (`%LOCALAPPDATA%\dxvk\*.dxvk.bin`, in
   the prefix). It holds DXVK's IR of the game's shaders: it saves DXBC translation, not Vulkan
   or Metal compiles, and Clear leaves it.
@@ -81,3 +86,74 @@ libraries already compiled, not the 150–270 ms whole compile.
 - A title that loads its shaders well before drawing would gain more.
 
 Hollow Knight was removed from the phone after these runs, to make room for Portal 2.
+
+## Portal 2: the flag doubles the stalls
+
+Portal 2 (`app-620`) was installed after Hollow Knight was removed: 12.8 GB, in 115 s. It was
+measured on dev IPA `58b57b1958f4cf5727e7ce28001ea8ff62c811453fe0d46737447ba856ae7337` (`7103952`,
+with mesa 0102 and 0103, below).
+
+**Steam API.** The first play stopped at the game's "Steam is not running" box.
+- Every game's default is Playport's Steam client (decision 0153), which is
+  `steamclient64.dll` only. Portal 2 is 32-bit and looked for `steamclient.dll`.
+- Every run here therefore set `"steamAPI":"emulated"` for the title.
+- That gives a fresh install no save, so SINGLE PLAYER opens on NEW GAME.
+  `.work/agent-notes/pla429/p2-fresh-new-game.txt` is `p2-new-game` without its DOWN.
+
+**Route:** `.work/agent-notes/pla429/p2route.sh`, one `pp phone lock` per run.
+1. Clear, as for Hollow Knight.
+2. Play to first frame+30.
+3. New Game, chapter 1 and its load, the look tutorial.
+4. `p2-walk` for 90 s in the relaxation vault.
+
+| Run | `pp ui` run | First frame | Stall beyond 60 FPS | after +60 s | gaps > 1 s | longest | FPS (240 s) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| p2off1 | `20261022T075810` | +11.57 s | 16.6 s | 7.4 s | 4 | 5.72 s | 54.9 |
+| p2on1 | `20261022T080407` | +13.02 s | 30.1 s | 12.0 s | 6 | 11.77 s | 50.8 |
+| p2off2 | `20261022T081010` | +13.43 s | 17.2 s | 7.7 s | 5 | 6.00 s | 54.8 |
+| p2on2 | `20261022T081614` | +11.64 s | 29.6 s | 11.7 s | 7 | 10.51 s | 50.9 |
+
+- **Why the flag loses here:**
+  - Flag off: the route builds 30 whole pipelines, 5.7–5.9 s in all.
+  - Flag on:
+    - DXVK makes a pipeline library for every shader the game creates, and Source creates its
+      shaders at load.
+    - So KosmicKrisp built 213 vertex and 390 fragment libraries, about 104 s of compiles. A
+      fragment library is up to about 510 ms, most of it Metal's library compile.
+    - Each launch also paid 24 separate links (1.0 s in all) and 31 whole pipelines that DXVK
+      optimizes in the background.
+  - The chapter load's gap doubles: 5.7–6.0 s off against 10.5–11.8 s on. Later gaps are longer
+    too.
+- **Same with the flag:** rendering (the vault shots match), FPS over the last 100 s (60.0), and 0
+  `link FAIL`.
+- **`[kk-mem]`:** off `shaders=77 pipelines=43 msl=0.3`; on `shaders=98 pipelines=37 msl=1.9`.
+
+**GPU time.** Two `pp perf` runs, each 150 s with the same pads, compared over 90–150 s, the
+walk (`.work/agent-notes/pla429/perf-p2-{off,on}`):
+
+| | FPS | GPU ms | gpu% |
+| --- | --- | --- | --- |
+| off | 60.0 | 12.75 | 83.5 |
+| on | 59.8 | 13.73 | 86.8 |
+
+The on run came right after the off run and the eight cold runs. Its thermal budget fell to
+404 mW, and the process ran on the E cores, so part of the +1 ms may be the GPU's clock rather
+than the separate pipelines.
+
+## mesa 0102 and 0103
+
+- **0102 (PLA-428):** a GPL link's key and compile state leave out the dynamic blend constants.
+  No compile reads them:
+  - a whole pipeline's shader loads them from the root table;
+  - a separate link's Metal blend has them set on the encoder.
+  - **Host check:** two draws with other constants now make 1 separate link, not 2. `run.sh` counts
+    11 `link separate`; without the change the count is 12 and the test fails.
+- **0103 (PLA-430):** a whole pipeline's static sample mask with every rasterization sample (DXVK's
+  `0x1` at one sample) no longer adds the sample-mask output and KK_WORKAROUND_7's discard.
+  - **Host check:** pipelines with `0x1` at 1 sample and `0xf` at 4 write no `sample_mask_out`, and
+    `0x5` at 4 does. Without the change, `0x1` gave 2 and the test failed.
+  - Every MSL file from before (158 flag off, 211 with the flag, 25 Zink) is byte-identical. The 6
+    new files are the new check's.
+- **On the phone:** Portal 2 ran on these with defaults (the p2off runs) to its chapter at 60 FPS.
+- **Not run:** Hollow Knight's smoke gate on `58b57b19`. It was uninstalled on the owner's request
+  for room.
