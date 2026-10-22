@@ -174,3 +174,64 @@ than the separate pipelines.
     - no "Steam is not running".
 - **Room on the phone:** to install the IPAs, Portal 2 was uninstalled and installed again twice
   (121–139 s each). The phone has 1.2 GB free beside it and RDR2, under `pp install`'s 2 GB.
+
+## What a pipeline library's build costs (PLA-437)
+
+- **mesa 0104** (`MESA_KK_DEBUG=compile`): after each `[kk-compile] gpl` line, a `gpl-phases` line
+  gives the build's phases:
+  - NIR lowering for the library;
+  - the rest of the NIR passes;
+  - `nir_to_msl`;
+  - the Metal library (`MTL4Compiler newLibraryWithDescriptor`, synchronous on the calling thread);
+  - the Metal library and pipeline builds in flight, and the MSL's size.
+
+  `MESA_KK_DEBUG=serial_libraries` builds one Metal library at a time, process-wide. KosmicKrisp
+  holds no lock of its own around a library build: the calling thread (one of DXVK's workers)
+  runs every phase.
+- **Host check:** `run.sh` counts 16 `gpl-phases` lines. With `serial_libraries` and
+  `parallel_stages`, every pipeline builds, one library at a time, with the same MSL.
+- **On the phone:** dev IPA `03838a71a8779a89ecbd09854e27a9ea6fff81389b7c213b24244a4b8bb3f2aa`,
+  Portal 2 with a cleared shader cache and the PLA-429 route (New Game, chapter 1, 90 s walk).
+  Every run reached chapter 1's look tutorial.
+
+  | run | ui run | stall beyond 60 FPS | chapter-load gap |
+  | --- | --- | --- | --- |
+  | gpl | `.work/ui-runs/20261022T094110` | 32.7 s | 12.21 s |
+  | gpl | `.work/ui-runs/20261022T095752` | 31.9 s | 12.38 s |
+  | gpl, `serial_libraries` | `.work/ui-runs/20261022T094811` | 66.3 s | 35.59 s |
+
+  PLA-429's gpl runs: 29.6–30.1 s and 10.5–11.8 s. Off: 16.6–17.2 s and 5.7–6.0 s.
+
+  Times per library (ms):
+
+  | library | in flight | front end (NIR + MSL), median | Metal library, median / p90 | MSL, median |
+  | --- | --- | --- | --- | --- |
+  | vertex (205, 235) | 3 | 13.0, 13.7 | 344 / 710, 432 / 731 | 247, 285 KB |
+  | fragment (390, 391) | 3 | 4.0, 4.0 | 1,060 / 1,607, 1,000 / 1,544 | 66 KB |
+  | vertex, serial (202) | 1 | 9.4 | 229 / 459 | 245 KB |
+  | fragment, serial (360) | 1 | 2.9 | 645 / 916 | 68 KB |
+
+- **What it shows:**
+  - The Metal library build is 97–99% of a library's cost. Mesa's front end (NIR passes and
+    `nir_to_msl`) took 4.9–5.7 s for about 600 libraries; Metal took 512–513 s.
+  - DXVK runs three worker threads, so libraries in flight are 3 at the median and 6 at most;
+    600 at once never happens.
+  - Three in flight cost each library 1.5–1.65× its serial time. Throughput is still about 1.7×
+    higher: the libraries' wall-clock span was 192 s at 2.7 in flight against 314 s serial.
+  - A library's time grows with its MSL: about 1.2 ms per KB for vertex, 1.65 ms per KB for
+    fragment, serial.
+  - Library MSL is much larger than a whole pipeline's: vertex 245 KB against 11 KB, fragment
+    66 KB against 12 KB (whole-pipeline builds over 20 ms, PLA-429 off run). Each vertex
+    attribute's runtime vertex fetch is inlined, about 27 KB per attribute on the host.
+  - The libraries keep building for about 190 s, long after chapter 1 appears (about +62 s). A
+    chapter-load gap has about 60 library builds in flight, and 335 more start after it.
+  - The draw thread waits for them:
+    - Serialized, the draw thread's own link pipelines took 2.4 s, against 7.6 s with 3 in flight.
+      Its gap still grew to 35.6 s.
+    - Concurrent library builds slow the draw-time link pipelines about 3×: link median 122 ms and
+      max 2,254 ms, against 67 ms and 276 ms serial.
+- **Not run:** a gpl-off run on this IPA; the comparison uses PLA-429's off runs. Hollow Knight's
+  smoke gate passed on this IPA: first frame at +12.28 s, `.work/ui-runs/20261022T093339`.
+- **The IPA's app** was built from a working tree with another change's uncommitted
+  `SettingsView.swift`. The Settings screen is not on these runs' path, which reach it only to
+  clear the shader cache.
