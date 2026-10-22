@@ -73,20 +73,21 @@ KK_MOCK_MSL_DIR="$ROOT/msl" KK_MOCK_MSL_VERSIONS="$ROOT/msl-versions" MESA_SHADE
     "$ROOT/kk-host-test" "$ROOT/build/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.so" "$ROOT/spv"
 echo "MSL libraries: $(ls "$ROOT/msl" | wc -l) in $ROOT/msl"
 
-# MESA_KK_EXPERIMENTAL=msl40 (PLA-437): the mock is iOS 27, so every library
-# above is MSL 4.1 (0x40001); with msl40 every one is 4.0 (0x40000), with the
-# same MSL, and kk-host-test checks shaderSharedFloat32AtomicAdd is then off.
-rm -rf "$ROOT/msl-msl40" "$ROOT/msl40-versions"; mkdir -p "$ROOT/msl-msl40"
-MESA_KK_EXPERIMENTAL=msl40 KK_MOCK_MSL_DIR="$ROOT/msl-msl40" KK_MOCK_MSL_VERSIONS="$ROOT/msl40-versions" \
+# MSL 4.0 (PLA-437): every library above is MSL 4.0 (0x40000); with
+# MESA_KK_EXPERIMENTAL=msl41 the mock, iOS 27, gives 4.1 (0x40001) to every
+# one, with the same MSL, and kk-host-test checks shaderSharedFloat32AtomicAdd
+# is on only then.
+rm -rf "$ROOT/msl-msl41" "$ROOT/msl41-versions"; mkdir -p "$ROOT/msl-msl41"
+MESA_KK_EXPERIMENTAL=msl41 KK_MOCK_MSL_DIR="$ROOT/msl-msl41" KK_MOCK_MSL_VERSIONS="$ROOT/msl41-versions" \
     MESA_SHADER_CACHE_DISABLE=true \
     "$ROOT/kk-host-test" "$ROOT/build/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.so" "$ROOT/spv" \
-    >"$ROOT/msl40.log" 2>&1 || { cat "$ROOT/msl40.log" >&2; exit 1; }
-[ "$(sort -u "$ROOT/msl-versions")" = 0x40001 ] && [ "$(sort -u "$ROOT/msl40-versions")" = 0x40000 ] &&
-    [ "$(wc -l <"$ROOT/msl40-versions")" = "$(wc -l <"$ROOT/msl-versions")" ] ||
-    { echo "MESA_KK_EXPERIMENTAL=msl40: language versions $(sort -u "$ROOT/msl-versions" | tr '\n' ' ')without it, $(sort -u "$ROOT/msl40-versions" | tr '\n' ' ')with it" >&2; exit 1; }
-diff -rq "$ROOT/msl" "$ROOT/msl-msl40" >/dev/null ||
-    { echo "MESA_KK_EXPERIMENTAL=msl40: not the MSL made without it" >&2; exit 1; }
-echo "MESA_KK_EXPERIMENTAL=msl40: $(wc -l <"$ROOT/msl40-versions") libraries as MSL 4.0, the same MSL"
+    >"$ROOT/msl41.log" 2>&1 || { cat "$ROOT/msl41.log" >&2; exit 1; }
+[ "$(sort -u "$ROOT/msl-versions")" = 0x40000 ] && [ "$(sort -u "$ROOT/msl41-versions")" = 0x40001 ] &&
+    [ "$(wc -l <"$ROOT/msl41-versions")" = "$(wc -l <"$ROOT/msl-versions")" ] ||
+    { echo "MSL language versions $(sort -u "$ROOT/msl-versions" | tr '\n' ' ')by default, $(sort -u "$ROOT/msl41-versions" | tr '\n' ' ')with MESA_KK_EXPERIMENTAL=msl41" >&2; exit 1; }
+diff -rq "$ROOT/msl" "$ROOT/msl-msl41" >/dev/null ||
+    { echo "MESA_KK_EXPERIMENTAL=msl41: not the MSL made without it" >&2; exit 1; }
+echo "MSL 4.0: $(wc -l <"$ROOT/msl-versions") libraries, as 4.1 with MESA_KK_EXPERIMENTAL=msl41 with the same MSL"
 
 # The same run with MESA_KK_BATCH2=1 (mesa 0091, 0092, 0094, 0095): the
 # used-prefix root upload, Metal's own mapping for a vkMapMemory that is not

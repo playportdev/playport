@@ -80,3 +80,4 @@
 0104-kk-MESA_KK_DEBUG-compile-times-a-pipeline-library-s-.patch
 0105-kk-MESA_KK_DUMP_MSL_MIN_KB-dumps-pipeline-libraries-.patch
 0106-kk-MESA_KK_EXPERIMENTAL-msl40-compiles-MSL-as-4.0-on.patch
+0107-kk-MSL-4.0-by-default-on-iOS-27-MESA_KK_EXPERIMENTAL.patch

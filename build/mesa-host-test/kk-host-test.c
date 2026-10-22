@@ -188,13 +188,13 @@ gpl_wanted(void)
    return e && strstr(e, "gpl");
 }
 
-/* Whether this run asks for MSL 4.0 (PLA-437): MESA_KK_EXPERIMENTAL names
- * msl40. */
+/* Whether this run asks for MSL 4.1 (PLA-437): MESA_KK_EXPERIMENTAL names
+ * msl41. */
 static bool
-msl40_wanted(void)
+msl41_wanted(void)
 {
    const char *e = getenv("MESA_KK_EXPERIMENTAL");
-   return e && strstr(e, "msl40");
+   return e && strstr(e, "msl41");
 }
 
 static bool
@@ -1180,9 +1180,9 @@ main(int argc, char **argv)
       fprintf(stderr, "geometryShader not exposed\n");
       return 1;
    }
-   /* PLA-437: the mock is iOS 27, so MSL 4.1 and shared float atomic add,
-    * but not with MESA_KK_EXPERIMENTAL=msl40 (MSL 4.0). */
-   if (atomic_float_feat.shaderSharedFloat32AtomicAdd == msl40_wanted()) {
+   /* PLA-437: MSL 4.0, so no shared float atomic add, unless
+    * MESA_KK_EXPERIMENTAL=msl41 (the mock is iOS 27, which has 4.1). */
+   if (atomic_float_feat.shaderSharedFloat32AtomicAdd != msl41_wanted()) {
       fprintf(stderr, "shaderSharedFloat32AtomicAdd %d with MESA_KK_EXPERIMENTAL=%s\n",
               atomic_float_feat.shaderSharedFloat32AtomicAdd,
               getenv("MESA_KK_EXPERIMENTAL") ? getenv("MESA_KK_EXPERIMENTAL") : "");
