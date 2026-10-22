@@ -446,3 +446,18 @@ Hollow Knight used the PLA-429 route.
   `.work/ui-runs/20261022T163630`.
 - **Scripts:** `.work/agent-notes/pla437/split4.py` (Portal 2 split), `hksplit4.py`, `med4.py`
   (build medians and failures), `fps4.py`; logs in `runs4/<run>/log/s1-host.log`.
+
+**MSL 4.0 by default** ([decision 0159](../decisions/0159-kosmickrisp-compiles-msl-4-0.md), mesa
+0107, `710efd8`), dev IPA `e35e253afa7bc8c7f4268c130d52b49de648f80059028a697d2c6504f67a3f3d`,
+Graphics options `MESA_KK_DEBUG=compile,memory` only:
+
+- **Smoke gate** (defaults): ok, first frame +11.46 s, title screen shown,
+  `.work/ui-runs/20261022T164616`.
+- **Hollow Knight cold** (`hkdef1`, `.work/ui-runs/20261022T164938`): stall 5.2 s (loading
+  3.9 s, gameplay 1.3 s), 36 whole pipelines in 2.9 s (fragment median 56 ms), 0 failures, 58.7
+  FPS (60.0 over the last 100 s), first frame +11.69 s: as with `msl40`.
+- **Portal 2 cold** (`p2def1`, `.work/ui-runs/20261022T170959`, after Hollow Knight was removed
+  and Portal 2 installed again): stall 14.4 s (menu 3.4, loading 10.6, gameplay 0.5 s), 30
+  whole pipelines in 3.0 s (fragment median 65 ms), 0 failures, LOOK UP reached, 55.6 FPS (60.0
+  over the last 100 s), first frame +10.70 s: as with `msl40`.
+- **Phone state afterwards:** `e35e253a` installed, Portal 2 installed, Hollow Knight not.
