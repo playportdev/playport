@@ -1,0 +1,164 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kamil=20Postro=C5=BCny?= <kamil@postrozny.pl>
+Date: Thu, 22 Oct 2026 14:56:28 +0200
+Subject: [PATCH] kk: MESA_KK_EXPERIMENTAL=gpl libraries name a queried
+ texture's sampled type
+
+A texture's size, level count or sample count query loaded its texture
+handle with the query's dest_type, which SPIR-V gives as int whatever
+the texture holds. A float texture whose size a shader queries was
+therefore declared in MSL as texture2d<int> beside the texture2d<float>
+its sampling loads. DXVK's D3D9 fragment shaders, which a pipeline
+library compiles unspecialized, query every sampler's size for fetch4,
+so each names texture2d<int> once per sampler.
+
+Metal's compiler pays for each texture type a library names: on the
+phone, adding an unused texture2d<int> declaration to a fragment library
+costs it about 140 ms of newLibraryWithDescriptor at MSL 4.1 (PLA-437
+step 3). At MSL 4.0, the default since 0107, naming the queried
+textures float instead takes a D3D9 fragment library from 121 to 80 ms
+and another from 145 to 101 ms (PLA-437 step 5).
+
+In a shader compiled for a pipeline library (kk_lower_nir's
+gpl_separate) a query now loads the handle with the texture's sampled
+type, from its deref's GLSL type: float for a float texture, int and
+uint for integer ones. The query's result type, and the MSL that
+converts to it, are unchanged. Metal's get_width, get_height,
+get_depth, get_array_size, get_num_mip_levels and get_num_samples do
+not depend on the element type.
+
+Whole pipelines, with or without MESA_KK_EXPERIMENTAL=gpl, and the
+whole pipeline a link falls back to, keep their MSL.
+
+Linear: PLA-437
+Class: feature
+Evidence: docs/evidence/2026-10-22-kk-gpl-cold-cache.md
+Offered-upstream: no
+---
+ .../vulkan/kk_nir_lower_descriptors.c         | 47 ++++++++++++++++++-
+ src/kosmickrisp/vulkan/kk_shader.c            |  4 +-
+ src/kosmickrisp/vulkan/kk_shader.h            |  3 +-
+ 3 files changed, 49 insertions(+), 5 deletions(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_nir_lower_descriptors.c b/src/kosmickrisp/vulkan/kk_nir_lower_descriptors.c
+index 86c9268..2f13f29 100644
+--- a/src/kosmickrisp/vulkan/kk_nir_lower_descriptors.c
++++ b/src/kosmickrisp/vulkan/kk_nir_lower_descriptors.c
+@@ -29,6 +29,9 @@ struct lower_descriptors_ctx {
+    bool clamp_desc_array_bounds;
+    nir_address_format ubo_addr_format;
+    nir_address_format ssbo_addr_format;
++
++   /* Playport (PLA-437): texture_handle_type, for pipeline libraries only */
++   bool query_sampled_type;
+ };
+ 
+ static const struct kk_descriptor_set_binding_layout *
+@@ -607,6 +610,42 @@ kk_nir_remove_undef_textures(nir_shader *nir)
+                                        nir_metadata_control_flow, NULL);
+ }
+ 
++/* The element type of the MSL texture a tex instruction loads. A query of a
++ * texture's size, level count or sample count reads no texel, and its
++ * dest_type is the query's int result; named after it, a float texture is
++ * declared as texture2d<int> beside the texture2d<float> its sampling loads,
++ * and every MSL type a shader names costs Metal's compiler time (PLA-437).
++ * A query takes the texture's sampled type from its deref instead, in a
++ * shader compiled for a pipeline library (MESA_KK_EXPERIMENTAL=gpl), whose
++ * DXVK D3D9 fragment shaders query every sampler's size; other shaders keep
++ * their MSL.
++ */
++static nir_alu_type
++texture_handle_type(const nir_tex_instr *tex, nir_deref_instr *texture,
++                    const struct lower_descriptors_ctx *ctx)
++{
++   if (!ctx->query_sampled_type)
++      return tex->dest_type;
++
++   switch (tex->op) {
++   case nir_texop_txs:
++   case nir_texop_query_levels:
++   case nir_texop_texture_samples:
++      switch (glsl_get_sampler_result_type(glsl_without_array(texture->type))) {
++      case GLSL_TYPE_FLOAT:
++         return nir_type_float32;
++      case GLSL_TYPE_INT:
++         return nir_type_int32;
++      case GLSL_TYPE_UINT:
++         return nir_type_uint32;
++      default:
++         return tex->dest_type;
++      }
++   default:
++      return tex->dest_type;
++   }
++}
++
+ static bool
+ lower_tex(nir_builder *b, nir_tex_instr *tex,
+           const struct lower_descriptors_ctx *ctx)
+@@ -724,7 +763,9 @@ lower_tex(nir_builder *b, nir_tex_instr *tex,
+                                             .image_array = tex->is_array);
+       } else {
+          handle = nir_load_texture_handle_kk(
+-            b, 1, 64, resource_addr, .dest_type = tex->dest_type,
++            b, 1, 64, resource_addr,
++            .dest_type = texture_handle_type(
++               tex, nir_src_as_deref(nir_src_for_ssa(texture)), ctx),
+             .image_dim = tex->sampler_dim, .image_array = tex->is_array);
+       }
+       nir_tex_instr_add_src(tex, nir_tex_src_texture_handle, handle);
+@@ -940,7 +981,8 @@ bool
+ kk_nir_lower_descriptors(nir_shader *nir,
+                          const struct vk_pipeline_robustness_state *rs,
+                          uint32_t set_layout_count,
+-                         struct vk_descriptor_set_layout *const *set_layouts)
++                         struct vk_descriptor_set_layout *const *set_layouts,
++                         bool query_sampled_type)
+ {
+    struct lower_descriptors_ctx ctx = {
+       .clamp_desc_array_bounds =
+@@ -951,6 +993,7 @@ kk_nir_lower_descriptors(nir_shader *nir,
+          rs->images != VK_PIPELINE_ROBUSTNESS_IMAGE_BEHAVIOR_DISABLED,
+       .ssbo_addr_format = kk_buffer_addr_format(rs->storage_buffers),
+       .ubo_addr_format = kk_buffer_addr_format(rs->uniform_buffers),
++      .query_sampled_type = query_sampled_type,
+    };
+ 
+    assert(set_layout_count <= KK_MAX_SETS);
+diff --git a/src/kosmickrisp/vulkan/kk_shader.c b/src/kosmickrisp/vulkan/kk_shader.c
+index 58b8946..6dcbbf2 100644
+--- a/src/kosmickrisp/vulkan/kk_shader.c
++++ b/src/kosmickrisp/vulkan/kk_shader.c
+@@ -977,7 +977,7 @@ kk_lower_nir(struct kk_device *dev, nir_shader *nir, bool emulated_stage,
+     * the lower descriptor pass
+     */
+    NIR_PASS(_, nir, kk_nir_lower_descriptors, rs, set_layout_count,
+-            set_layouts);
++            set_layouts, gpl_separate);
+ 
+    /* KK_WORKAROUND_16 - must be called after kk_nir_lower_descriptors(), which
+     * lowers all image intrinsics to be bindless */
+@@ -1426,7 +1426,7 @@ kk_compile_gs(struct kk_device *dev, nir_shader **nir_inout,
+    kk_lower_hw_vs(rast, state,
+                   shader->info.gs.info.mode == MESA_PRIM_POINTS);
+    msl_nir_lower_clip_cull_distance(rast, 0);
+-   NIR_PASS(_, rast, kk_nir_lower_descriptors, robustness, 0u, NULL);
++   NIR_PASS(_, rast, kk_nir_lower_descriptors, robustness, 0u, NULL, false);
+ 
+    *nir_inout = rast;
+ }
+diff --git a/src/kosmickrisp/vulkan/kk_shader.h b/src/kosmickrisp/vulkan/kk_shader.h
+index bdcf663..f9efbf9 100644
+--- a/src/kosmickrisp/vulkan/kk_shader.h
++++ b/src/kosmickrisp/vulkan/kk_shader.h
+@@ -230,7 +230,8 @@ bool
+ kk_nir_lower_descriptors(nir_shader *nir,
+                          const struct vk_pipeline_robustness_state *rs,
+                          uint32_t set_layout_count,
+-                         struct vk_descriptor_set_layout *const *set_layouts);
++                         struct vk_descriptor_set_layout *const *set_layouts,
++                         bool query_sampled_type);
+ 
+ bool kk_nir_remove_undef_textures(nir_shader *nir);
+ 

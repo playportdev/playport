@@ -1734,6 +1734,44 @@ main(int argc, char **argv)
       printf("ok texel-buffers-unaligned\n");
    }
 
+   /* Size and level queries of an int and a uint texture
+    * (shaders/query-int.frag) name them int and uint (PLA-437). */
+   {
+      DPROC(vkCreateDescriptorSetLayout);
+      VkDescriptorSetLayoutBinding bindings[] = {
+         {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT},
+         {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT},
+      };
+      VkDescriptorSetLayoutCreateInfo dslci = {
+         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+         .bindingCount = 2,
+         .pBindings = bindings,
+      };
+      VkDescriptorSetLayout dsl;
+      CHECK(vkCreateDescriptorSetLayout(dev, &dslci, NULL, &dsl));
+      VkPipelineLayoutCreateInfo qplci = {
+         .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+         .setLayoutCount = 1,
+         .pSetLayouts = &dsl,
+      };
+      VkPipelineLayout qpl;
+      CHECK(vkCreatePipelineLayout(dev, &qplci, NULL, &qpl));
+
+      int msl_before = msl_count();
+      struct pipe_desc di = {"query-int", "pass.vert", NULL, NULL, NULL,
+                             "query-int.frag", TRI, false, FIRST, FILL};
+      make_pipeline(&di, qpl);
+      int msl_after = msl_count();
+      if (msl_before >= 0 &&
+          (!msl_contains(msl_before, msl_after, "texture2d<int>") ||
+           !msl_contains(msl_before, msl_after, "texture2d<uint>") ||
+           msl_contains(msl_before, msl_after, "texture2d<float>"))) {
+         fprintf(stderr, "query-int: not texture2d<int> and texture2d<uint> alone\n");
+         return 1;
+      }
+      printf("ok query-texture-type\n");
+   }
+
    /* A defined sampler with an undefined image (shaders/undef-image.frag.spvasm):
     * the pipeline builds, and descriptor lowering does not abort. */
    {
@@ -2777,6 +2815,43 @@ check_gpl(VkPhysicalDevice pd, VkQueue queue, VkCommandPool pool, VkBuffer buf)
       fprintf(stderr, "gpl: the libraries made %d MSL libraries, not 11\n",
               msl_libs - msl_start);
       return 1;
+   }
+
+   /* A fragment shader library whose float textures are only queried
+    * (shaders/query-float.frag), as DXVK's D3D9 fetch4 path queries every
+    * sampler's size: its MSL names them float, not int (PLA-437) */
+   {
+      DPROC(vkCreateDescriptorSetLayout);
+      VkDescriptorSetLayoutBinding bindings[] = {
+         {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT},
+         {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT},
+      };
+      VkDescriptorSetLayoutCreateInfo dslci = {
+         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+         .bindingCount = 2,
+         .pBindings = bindings,
+      };
+      VkDescriptorSetLayout dsl;
+      CHECK(vkCreateDescriptorSetLayout(dev, &dslci, NULL, &dsl));
+      VkPipelineLayoutCreateInfo qplci = plci;
+      qplci.setLayoutCount = 1;
+      qplci.pSetLayouts = &dsl;
+      struct gpl_libs gq = {.fs = load_module("query-float.frag")};
+      CHECK(vkCreatePipelineLayout(dev, &qplci, NULL, &gq.layout));
+      const int before = msl_count();
+      VkPipeline frag_query = gpl_library(&gq, VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT, RGBA32F, RGBA8, PLAIN, true, FILL);
+      const int after = msl_count();
+      if (before >= 0 &&
+          (after - before != 1 ||
+           !msl_contains(before, after, "texture2d<float>") ||
+           !msl_contains(before, after, "texture2d_ms<float>") ||
+           msl_contains(before, after, "texture2d<int>") ||
+           msl_contains(before, after, "texture2d_ms<int>"))) {
+         fprintf(stderr, "gpl: the query-float library is not 1 MSL library with texture2d<float> and texture2d_ms<float> alone\n");
+         return 1;
+      }
+      vkDestroyPipeline(dev, frag_query, NULL);
+      printf("ok gpl query-texture-type\n");
    }
 
    /* MSL libraries each link compiles at link and at its first draw; -1 for

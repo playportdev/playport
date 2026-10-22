@@ -133,13 +133,18 @@ MESA_KK_EXPERIMENTAL=gpl MESA_KK_DEBUG=compile,memory KK_MOCK_MSL_DIR="$ROOT/msl
     >"$ROOT/gpl.log" 2>&1 || { cat "$ROOT/gpl.log" >&2; exit 1; }
 grep -q '^ok gpl: libraries, fast and optimized links drawn' "$ROOT/gpl.log" ||
     { echo "MESA_KK_EXPERIMENTAL=gpl: the GPL cases did not run" >&2; exit 1; }
+# A fragment library that only queries float textures' size, levels and
+# samples names them texture2d<float> and texture2d_ms<float>, no int type
+# (PLA-437).
+grep -q '^ok gpl query-texture-type$' "$ROOT/gpl.log" ||
+    { echo "MESA_KK_EXPERIMENTAL=gpl: the query-texture-type library did not run" >&2; exit 1; }
 for f in "$ROOT/msl/"*.metal; do
     cmp -s "$f" "$ROOT/msl-gpl/${f##*/}" ||
         { echo "MESA_KK_EXPERIMENTAL=gpl: ${f##*/} is not the MSL made without it" >&2; exit 1; }
 done
 gpl_lines() { grep -c "^\[kk-compile\] $1" "$ROOT/gpl.log" || true; }
 [ "$(gpl_lines 'gpl vertex built ')" = 5 ] && [ "$(gpl_lines 'gpl empty-fragment built ')" = 2 ] &&
-    [ "$(gpl_lines 'gpl fragment built ')" = 7 ] && [ "$(gpl_lines 'gpl fragment \(full\|at-link\)=')" = 0 ] &&
+    [ "$(gpl_lines 'gpl fragment built ')" = 8 ] && [ "$(gpl_lines 'gpl fragment \(full\|at-link\)=')" = 0 ] &&
     [ "$(gpl_lines 'gpl vertex deserialized ')" = 1 ] && [ "$(gpl_lines 'gpl fragment deserialized ')" = 1 ] &&
     [ "$(gpl_lines 'link separate ')" = 11 ] && [ "$(gpl_lines 'link separate-vertex ')" = 0 ] &&
     [ "$(gpl_lines 'link full fallback=point-fill count=1 ')" = 1 ] &&
@@ -151,16 +156,16 @@ gpl_lines() { grep -c "^\[kk-compile\] $1" "$ROOT/gpl.log" || true; }
     [ "$(gpl_lines 'link totals links=3 separate=1 separate-vertex=0 full=2 failed=0 fallbacks=logic-op:2$')" = 1 ] &&
     [ "$(grep -c '^\[kk-mem\] gpl device finish: live sources=0 shaders=1 libraries=1 links=0, after sources=0 shaders=0 libraries=0 links=0$' "$ROOT/gpl.log")" = 1 ] ||
     { grep '^\[kk-compile\] \(gpl\|link\)\|^\[kk-mem\] gpl' "$ROOT/gpl.log" >&2
-      echo "MESA_KK_EXPERIMENTAL=gpl: not 4 + 1 vertex and 1 + 6 + 1 + 1 fragment libraries, 1 + 1 from the cache, 10 + 1 separate links (one for both blend constants), a point-fill, a sample-mask, a point-size-layer and 1 + 2 logic-op fallbacks, the second device's totals and counts back to zero" >&2; exit 1; }
+      echo "MESA_KK_EXPERIMENTAL=gpl: not 4 + 1 vertex and 1 + 6 + 1 + 1 + 1 fragment libraries, 1 + 1 from the cache, 10 + 1 separate links (one for both blend constants), a point-fill, a sample-mask, a point-size-layer and 1 + 2 logic-op fallbacks, the second device's totals and counts back to zero" >&2; exit 1; }
 grep '^\(ok \)\?gpl\|^\[kk-compile\] \(gpl\|link\)\|^\[kk-mem\] gpl' "$ROOT/gpl.log"
 
-# Each of those 16 library builds is followed by its phases (PLA-437): NIR
+# Each of those 17 library builds is followed by its phases (PLA-437): NIR
 # lowering, the rest of the NIR passes, nir_to_msl, the Metal library, and the
 # builds in flight. With MESA_KK_DEBUG=serial_libraries too, one Metal library
 # builds at a time, the vertex and fragment ones of a pipeline included
 # (parallel_stages), and every pipeline still builds with the same MSL.
 phases=$(grep -c '^\[kk-compile\] gpl-phases [a-z-]* \(built\|deserialized\) lower_ms=[0-9.]* nir_ms=[0-9.-]* msl_ms=[0-9.]* wait_ms=0\.0 library_ms=[0-9.]* libraries_inflight=1 pipelines_inflight=0 bytes=[0-9]* ' "$ROOT/gpl.log" || true)
-[ "$phases" = 16 ] || { echo "MESA_KK_DEBUG=compile: $phases gpl-phases lines, not 16" >&2; exit 1; }
+[ "$phases" = 17 ] || { echo "MESA_KK_DEBUG=compile: $phases gpl-phases lines, not 17" >&2; exit 1; }
 rm -rf "$ROOT/msl-serial"; mkdir -p "$ROOT/msl-serial"
 MESA_KK_EXPERIMENTAL=gpl,parallel_stages MESA_KK_DEBUG=compile,serial_libraries KK_MOCK_MSL_DIR="$ROOT/msl-serial" \
     MESA_SHADER_CACHE_DISABLE=true \
@@ -172,8 +177,8 @@ msl_sums() { for f in "$ROOT/msl/"*.metal; do md5sum <"$1/${f##*/}"; done | sort
 [ "$(msl_sums "$ROOT/msl")" = "$(msl_sums "$ROOT/msl-serial")" ] ||
     { echo "MESA_KK_DEBUG=serial_libraries: not the MSL made without it" >&2; exit 1; }
 serial=$(grep -c '^\[kk-compile\] gpl-phases .* libraries_inflight=1 ' "$ROOT/serial.log" || true)
-[ "$serial" = 16 ] || { echo "MESA_KK_DEBUG=serial_libraries: $serial of 16 gpl-phases lines with one library in flight" >&2; exit 1; }
-echo "MESA_KK_DEBUG=compile,serial_libraries: 16 gpl-phases lines, the same MSL"
+[ "$serial" = 17 ] || { echo "MESA_KK_DEBUG=serial_libraries: $serial of 17 gpl-phases lines with one library in flight" >&2; exit 1; }
+echo "MESA_KK_DEBUG=compile,serial_libraries: 17 gpl-phases lines, the same MSL"
 
 # The same pipelines with the vertex and fragment libraries built at once and
 # the first two library builds failing as if Metal's compiler service had
