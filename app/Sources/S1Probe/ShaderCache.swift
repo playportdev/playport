@@ -5,8 +5,12 @@
 // MESA_SHADER_CACHE_DIR and DXMT_SHADER_CACHE_PATH there and caps Mesa's at
 // 1 GB, which Mesa trims itself. Settings > Storage shows their size and clears
 // them (decision 0012: through the UI); each backend fills its cache again
-// from the next launch. DXVK's cache lives in the prefix's AppData\Local\dxvk
-// and is not one of these.
+// from the next launch. Metal's own caches of what it compiled from that MSL
+// (com.apple.metal, com.apple.metalfe, com.apple.gpuarchiver under
+// Library/Caches/<bundle id>) are cleared with them (PLA-429): without that a
+// cleared cache still skips Metal's compiles, so the next launch is not the
+// first launch a person sees. DXVK's cache lives in the prefix's
+// AppData\Local\dxvk and is not one of these.
 
 import Foundation
 
@@ -14,7 +18,14 @@ enum ShaderCache {
     /// The cache directories, in the app's Library/Caches.
     nonisolated static var directories: [URL] {
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-        return ["kosmickrisp", "dxmt"].map { caches.appendingPathComponent($0, isDirectory: true) }
+        var dirs = ["kosmickrisp", "dxmt"].map { caches.appendingPathComponent($0, isDirectory: true) }
+        if let id = Bundle.main.bundleIdentifier {
+            let own = caches.appendingPathComponent(id, isDirectory: true)
+            dirs += ["com.apple.metal", "com.apple.metalfe", "com.apple.gpuarchiver"].map {
+                own.appendingPathComponent($0, isDirectory: true)
+            }
+        }
+        return dirs
     }
 
     /// Their size on disk, 0 when there is none: the space their files take,
