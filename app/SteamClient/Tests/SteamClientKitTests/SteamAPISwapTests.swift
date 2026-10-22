@@ -44,6 +44,16 @@ final class SteamAPISwapTests: XCTestCase {
     func read(_ path: String) -> [UInt8]? { (try? Data(contentsOf: root.appendingPathComponent(path))).map(Array.init) }
     func exists(_ path: String) -> Bool { FileManager.default.fileExists(atPath: root.appendingPathComponent(path).path) }
 
+    func testPlayportsClientIsForAGameWithA64BitSteamAPIOnly() throws {
+        XCTAssertEqual(SteamAPISwap.launchMode(.client, in: root), .client)
+        XCTAssertEqual(SteamAPISwap.launchMode(.original, in: root), .original)
+        try FileManager.default.removeItem(at: root.appendingPathComponent("Game_Data"))
+        XCTAssertEqual(SteamAPISwap.launchMode(.client, in: root), .emulated)
+        XCTAssertEqual(SteamAPISwap.launchMode(.original, in: root), .original)
+        try FileManager.default.removeItem(at: root.appendingPathComponent("tools"))
+        XCTAssertEqual(SteamAPISwap.launchMode(.client, in: root), .client)
+    }
+
     func testApplyKeepsTheOriginalsAndWritesSettings() throws {
         XCTAssertEqual(SteamAPISwap.state(in: root), .original)
         XCTAssertEqual(SteamAPISwap.sites(in: root).map(\.path), ["Game_Data/Plugins/x86_64/steam_api64.dll", "tools/steam_api.dll"])

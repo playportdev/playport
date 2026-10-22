@@ -267,9 +267,15 @@ final class LibraryModel: ObservableObject {
             ticket = await service.encryptedAppTicket(appID: app)
             tickets = await service.prepareTicketSession(appID: app, playLog: SteamTicketHost.log)
         }
-        let steamAPI = t.appID.map { app in
-            LaunchCoordinator.SteamAPI(appID: app, root: Self.paths.games.appendingPathComponent(t.installDir, isDirectory: true),
-                                       mode: settings.steamAPI,
+        let steamAPI = t.appID.map { app -> LaunchCoordinator.SteamAPI in
+            let root = Self.paths.games.appendingPathComponent(t.installDir, isDirectory: true)
+            // Playport's Steam client is 64-bit only: a 32-bit game gets the emulator (PLA-432).
+            let mode = SteamAPISwap.launchMode(settings.steamAPI, in: root)
+            if mode != settings.steamAPI {
+                Self.log("steamapi: \(t.name)'s steam_api is 32-bit only; \(mode.rawValue), not \(settings.steamAPI.rawValue)")
+            }
+            return LaunchCoordinator.SteamAPI(appID: app, root: root,
+                                       mode: mode,
                                        settings: { await service?.emulatorSettings(appID: app) ?? .init(appID: app) },
                                        ticket: ticket, tickets: tickets)
         }
