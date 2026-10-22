@@ -3,7 +3,7 @@
 **Linear:** [PLA-424](https://linear.app/playportdev/issue/PLA-424). **Plan:**
 [kk-graphics-pipeline-library](../plans/2026-10-21-kk-graphics-pipeline-library.md). **Host
 results:** [2026-10-21-kk-gpl-host](2026-10-21-kk-gpl-host.md).
-**Patches:** `patches/mesa` 0096–0100, all behind `MESA_KK_EXPERIMENTAL=gpl`.
+**Patches:** `patches/mesa` 0096–0101, all behind `MESA_KK_EXPERIMENTAL=gpl`.
 
 ## IPA and runs
 
@@ -219,4 +219,167 @@ drawn on the phone.
 
 - The second flag-on launch (the cache path) and the longer flag-on play: stopped on `link FAIL`.
 - GPU time on against off (`pp perf`): nothing to measure until a fast link draws.
+- Portal 2 and D3D12, as in G5.
+
+## G5c: separate links with an unspecified topology class (mesa 0101), Hollow Knight twice with the flag on
+
+**Patch:** `patches/mesa` 0101. A link of a vertex shader compiled on its own (both separate link
+paths, `kk_gpl_link_libraries` and `kk_gpl_link_separate`) now leaves the Metal pipeline's
+`inputPrimitiveTopology` unspecified when the vertex shader writes a point size and the draw's
+class is lines or triangles (`kk_gpl_link_topology`). Point lists keep the point class. Whole
+pipelines are unchanged: they still set the class and drop the point size for lines and
+triangles.
+
+**Why this option.** Of the three options in the G5c task, it is the most conservative:
+- (a) the unspecified class is Metal's default for a render pipeline descriptor;
+- it changes no MSL, so it adds no compile and no new library;
+- (b) a point-size function constant would cost a backend compile at every link;
+- (c) a second vertex library would double the vertex library compiles and their memory.
+
+Metal needs a class for layered rendering (KosmicKrisp's own comment where the class is set). So
+a vertex shader that writes a layer or viewport index as well as the point size, drawn as lines
+or triangles, falls back to the whole pipeline (`fallback=point-size-layer`). Multiview is covered
+by the same rule: its lowering writes the layer. Hollow Knight never hits it (0 such lines).
+
+**Other separate-link rules of Metal, read in the code (none changed):**
+- *Varyings by `[[user]]` name and type:* a fragment input the vertex shader does not write
+  falls back (`varying-unwritten`), and so does a type mismatch (`varying-type`, or for a
+  fragment shader compiled at link, `kk_gpl_fs_match`). Extra vertex outputs are allowed.
+- *`index(1)` against Source1 blend factors:* `dual-source` falls back unless the factors and the
+  shader's second output agree, with one colour attachment.
+- *Alpha to coverage:* it falls back without colour output 0. The raster sample count comes from
+  the draw's multisample state, as for whole pipelines.
+- *Depth write without a depth attachment, logic op, non-native formats, output type against
+  format:* all fall back.
+- *Not checked:* a stencil export without a stencil attachment, and a colour output with no
+  attachment format. The phone showed no failure of either (0 `link FAIL`).
+
+**Host** (`build/mesa-host-test/run.sh`): exit 0.
+- **The mock now validates as Metal does** (`make-mock-bridge.py`):
+  - a library records whether its MSL has `[[point_size]]` or `[[render_target_array_index]]`;
+  - a function descriptor and the pipeline descriptor's vertex function carry that, and the
+    descriptor records its topology class;
+  - `mtl_new_render_pipeline` fails, with an error as Metal returns it, for a point size with the
+    line or triangle class (the phone's failure), or a layer with an unspecified class.
+- **New links in `check_gpl`:**
+  - a point-list vertex input library links fast with the point class (`ok gpl fast points
+    rgba8: MSL libraries at link 0, at draw 0`);
+  - a vertex shader that writes `gl_Layer` (`shaders/gpl-layer.vert`) falls back (`link full
+    fallback=point-size-layer count=1`, `at draw 2`).
+  - `run.sh` now expects 5 vertex libraries built, 10 `link separate` and that fallback.
+- **The test fails without the fix:**
+  - without 0101's mesa change, 9 `kk-mock: Failed to create MTLRenderPipelineState: Vertex
+    shader writes point size but inputPrimitiveTopology is a line or triangle class` and a
+    `link FAIL`: every fast triangle link, as on the phone;
+  - without the `point-size-layer` fallback, the layer link fails (`Vertex shader writes a layer
+    but inputPrimitiveTopology is unspecified`).
+- **MSL against a baseline copied before any change:**
+  - flag off: 158 of 158 byte-identical; Zink: 25 of 25 byte-identical;
+  - flag on: all 208 earlier `msl-gpl` files come back in order and byte for byte. The 3 new ones
+    are the layer vertex library (`[[point_size]]` and `[[render_target_array_index]]`) and its
+    fallback's whole pipeline (vertex without a point size; fragment identical to an earlier one).
+  - `msl-compile.sh` (Metal tools under Wine) compiled all 3: "3 files, 3 compiled, 0 failed".
+- **Checks:** `pp test` passed; `pp names` and `pp secrets` are clean.
+
+**IPA (dev):** `.work/out/20261022-021330-0712b0ce/Playport-26.5-0712b0ce.ipa`, SHA256
+`0712b0cec80845d5147f6aa823625c270e07ecf1134e183f6a4959308ae00f56`, 89 IPA checks passed, no
+build record changed, `pp install --no-build` upgraded in place (30 s, container kept).
+
+| Run | Graphics options | Route | First frame | Result |
+| --- | --- | --- | --- | --- |
+| `20261022T021448` | none (smoke gate) | first-frame+10 | +10.37 s | title menu |
+| `20261022T021946` (`on1`) | `MESA_KK_EXPERIMENTAL=gpl MESA_KK_DEBUG=compile,memory` | pad route | +11.16 s | gameplay; 40 `link separate`, 0 `link FAIL` |
+| `20261022T022518` (`on2`) | same | pad route | +11.24 s | gameplay; 40 `link separate` (cache path), 0 `link FAIL` |
+| `20261022T023011` (`off`) | `MESA_KK_DEBUG=compile,memory` | pad route | +11.10 s | gameplay |
+
+- **Route:** the same pad route as G5b, with G5b's script.
+- **Logs and screenshots:** in `$PLAYPORT_BUILD/agent-notes/kk-gpl/g5c/<run>/`, not committed.
+- **Flag-off reference:** `off` on this IPA, and G5b's `off1` and `off2` at the same places.
+- **One launch that did not happen:** a first attempt with a malformed `--settings` argument made
+  `pp ui` exit 2 before launching (the pads then pushed into nothing). Its directory is
+  `on1-badarg`; it is not counted.
+
+### Flag on: every separate link builds
+
+- **Flag in effect:** `graphics options: MESA_KK_DEBUG=compile,memory MESA_KK_EXPERIMENTAL=gpl`;
+  DXVK reports `Graphics pipeline libraries supported` (two devices).
+- **`on1`, the first launch after the driver build changed:**
+  - 40 `[kk-compile] link separate ms=… stages=0x11`, 0 `link separate-vertex`, 0 `link full`,
+    0 `link FAIL`, 0 `render FAIL`, no `Failed to create MTLRenderPipelineState`;
+  - the links took 1,164 ms in all. 23 took over 20 ms; the longest took 101.9 ms. That is Metal
+    building the pipeline from the two libraries;
+  - library compiles: `gpl vertex built` 23 (103 ms in all, at most 11.6 ms), `gpl fragment built`
+    31 (24 ms), `gpl empty-fragment built` 1. That is a tenth of G5b's (1,007 ms and 2,963 ms) for
+    the same MSL. This is likely Metal's own shader cache on the phone (inferred, not
+    measured);
+  - `[kk-compile] totals translated=2 (6 ms) deserialized=62 (14 ms) metal=773 ms failed=0`.
+- **`on2`, the second launch:**
+  - every library shader came from the pipeline cache: `gpl vertex deserialized` 23 (3 ms in all)
+    and `gpl fragment deserialized` 31 (1.5 ms). The empty fragment shader is built again
+    (0.4 ms);
+  - 40 `link separate`, 40 ms in all, the longest 2.3 ms, 0 `link FAIL`. Metal's pipeline cache
+    now has the cold run's pipelines;
+  - totals lines `translated=0 (0 ms) deserialized=64 (19 ms) metal=13 ms failed=0`, then
+    `deserialized=128 (33 ms) metal=25 ms failed=0`.
+- **Not seen:**
+  - `link totals`: the route makes 40 links in each launch, and it prints every 64;
+  - `[kk-mem] gpl device finish`: the app is killed, not closed.
+- **Memory, last `[kk-mem]` line:**
+  - on: `shaders=241 pipelines=94 msl=1.9 | … | gpl sources=54 shaders=55 libraries=55 links=40`;
+  - off: `shaders=106 pipelines=54 msl=0.3`.
+
+  With the flag on, DXVK still builds every optimized pipeline, so the links and libraries come
+  on top.
+
+### Rendering, flag on against off
+
+- **Title menu at first frame +25 s** (`on1`'s `screen-stop.png`, during and after 20 of the
+  links): the logo glow, the particles and the menu, as in the flag-off smoke gate.
+- **After `hk-new-game`, after `hk-walk`, and 90 s into `hk-roam`:** `on1` and `on2` look like
+  `off1`, `off2` and `off`:
+  - the King's Pass cave with the HUD, grass and particles;
+  - the lumafly room with its additive glows, the floating platforms, the dark overhang and the
+    credit text.
+
+  The differences are the run's state: geo 2–3, masks lost, the Knight's position, where the
+  particles are, and the credit's fade.
+- **No missing sprite, wrong blend, broken geometry or corruption** was seen in any screenshot.
+- **Unlike G5b, the fast links now draw.** No link failed, so DXVK's first draws of each new
+  pipeline used them: the runtime vertex fetch and Metal's fixed-function blend. The links fall
+  at the title, the menu, the load and in King's Pass. What the screenshots cannot show is which
+  frames at the shot times came from a fast link and which from DXVK's optimized pipelines,
+  which replace them once built. So "renders the same" rests on five screenshots per run.
+
+### First frame, frame rate, hitches
+
+- **First frame:** +11.16 s and +11.24 s on, +11.10 s off, +10.37 s at the smoke gate (G5b:
+  10.87–11.09 s).
+- **Frame rate** from `[frames]` (a line every 16 frames):
+
+  | | `on1` | `on2` | `off` |
+  | --- | --- | --- | --- |
+  | last 100 s | 60.0 | 60.0 | 60.0 |
+  | whole 240 s | 57.1 | 57.2 | 57.0 |
+
+- **Gaps between `[frames]` lines** (about 0.27 s at 60 FPS):
+
+  | | `on1` | `on2` | `off` |
+  | --- | --- | --- | --- |
+  | over 0.3 s | 35 (21.0 s in all) | 36 (20.8 s) | 38 (21.9 s) |
+  | over 0.4 s | 31 | 30 | 32 |
+  | over 1 s | 2 | 2 | 2 |
+  | longest | 1.84 s | 1.50 s | 1.50 s |
+  | over 0.3 s from +60 s | 23 | 24 | 27 |
+
+  Loading and the cinematic make most of them in every run. The cold links (up to 102 ms each)
+  do not show as more gaps. Flag off has no stall to remove here either: its 64 whole pipelines
+  all come from the pipeline cache (`deserialized=64`).
+- **GPU time:** not measured. `pp perf` was not run, and the logs do not give it.
+
+### Not run
+
+- `link totals`: this route never reaches 64 links.
+- GPU time on against off.
+- A title whose pipelines are not cached, where GPL should cut stalls. Hollow Knight's are all
+  cached with the flag off.
 - Portal 2 and D3D12, as in G5.

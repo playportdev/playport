@@ -34,24 +34,35 @@ from the main checkout after the branch moves there. **Pins read:** `mesa` b39d1
     - Hollow Knight still plays into King's Pass and looks as with the flag off, on DXVK's
       optimized pipelines; 60 FPS on and off. First frame +10.87 s on, +11.0 s off;
     - flag-on runs stopped after one launch, as the task required on `link FAIL`.
+  - G5c on `dev/kk-gpl-phone` (`patches/mesa` 0101): separate links leave Metal's topology class
+    unspecified for lines and triangles, as the vertex library always writes a point size. A
+    vertex shader that also writes a layer or viewport falls back (`point-size-layer`). The host
+    mock now refuses what Metal refused. Host test: a point list links fast, a layer link falls
+    back, flag-off and earlier MSL unchanged. On dev IPA `0712b0ce`
+    ([2026-10-22-kk-gpl-phone](../evidence/2026-10-22-kk-gpl-phone.md#g5c-separate-links-with-an-unspecified-topology-class-mesa-0101-hollow-knight-twice-with-the-flag-on)):
+    - **every link builds:** 40 `link separate` in each of two flag-on launches, 0 `link FAIL`.
+      Cold, 1,164 ms in all (up to 102 ms each). The second launch read all 54 library shaders
+      from the cache and linked in 40 ms in all;
+    - Hollow Knight looks as with the flag off at the same places, and the fast links now draw
+      (runtime vertex fetch, fixed-function blend);
+    - 60 FPS on and off; first frame +11.2 s on, +11.1 s off; no fewer or shorter hitches, since
+      Hollow Knight's whole pipelines are all cached with the flag off;
+    - the flag keeps 135 more shaders and 40 more pipelines (msl 1.9 MB against 0.3 MB).
   - Evidence: [2026-10-21-kk-gpl-host](../evidence/2026-10-21-kk-gpl-host.md),
     [2026-10-22-kk-gpl-phone](../evidence/2026-10-22-kk-gpl-phone.md).
-- **Running:** G5c writer (the separate link's point size against the topology class, then G5 again on Hollow Knight), main checkout; report `.work/agent-notes/kk-gpl/reports/g5c.md`.
+- **Running:** none.
 - **Settled (owner away, supervisor, 2026-10-22):** Portal 2 is not installed for G5 (7.9 GB free); the G5 evidence is Hollow Knight, played into King's Pass. D3D12 is not checked (RDR2 would change its saved API).
-- **Queue:** G6 is blocked: the flag stays off. First a fix for the separate link's point size,
-  then G5 again on Hollow Knight (two flag-on launches into King's Pass). The fix needs a choice:
-  - the separate link sets `inputPrimitiveTopology` to unspecified when the vertex library writes
-    a point size and the class is not points (small; Metal's acceptance and cost unverified, and
-    layered rendering needs the class);
-  - or a vertex library without the point size for line and triangle classes (a second compile,
-    or a function constant).
-  After that: the runtime vertex fetch and the fixed-function blend on the phone, then GPU time
-  on against off. Portal 2's hitch comparison needs Portal 2 installed (it is not); D3D12 is
-  still open.
-- **Phone:** IPA `0afe7d74` installed, 80 % battery on power, 7.9 GB free, unattended mode on.
+- **Queue:**
+  - G6 decision record. The G5c writer recommends keeping the flag off: fast links work and render
+    the same, but Hollow Knight shows no stall reduction and the flag costs memory.
+  - Before turning it on, it needs a title whose pipelines are not cached (Portal 2's chapter
+    loads, once installed), to show the stall reduction.
+  - Still open: GPU time on against off (`pp perf`), D3D12, and the flag-off sample-mask
+    follow-up (Notes).
+- **Phone:** IPA `0712b0ce` installed, 80 % battery on power, 7.9 GB free, unattended mode on.
   Installed titles: Hollow Knight and RDR2.
-- **Notes:** G2–G4 reports in the side copy's `.work/agent-notes/kk-gpl/reports/`; G5's and G5b's
-  in the main checkout's `.work/agent-notes/kk-gpl/reports/`. Follow-up, not changed: the
+- **Notes:** G2–G4 reports in the side copy's `.work/agent-notes/kk-gpl/reports/`; G5's, G5b's and
+  G5c's in the main checkout's `.work/agent-notes/kk-gpl/reports/`. Follow-up, not changed: the
   whole-pipeline path also lowers a sample mask that is not `0xffff`, so DXVK's `0x1` at one
   sample adds a sample-mask write (and KK_WORKAROUND_7's discard) to every flag-off fragment
   shader.
@@ -260,6 +271,12 @@ Nothing changes with the flag off. Phone gates run only from the main checkout.
   G5b (`patches/mesa` 0100, IPA `0afe7d74`, evidence 2026-10-22): the `sample-mask` fallback is
   gone, and then every separate link failed in Metal on the vertex library's point size (40
   `link FAIL`). Hollow Knight still renders on DXVK's optimized pipelines.
+
+  G5c (`patches/mesa` 0101, IPA `0712b0ce`, evidence 2026-10-22): separate links leave the
+  topology class unspecified for lines and triangles; all 40 links build in each of two flag-on
+  launches (the second from the library cache, 40 ms of links in all), with no rendering
+  difference and no frame-rate or hitch difference in Hollow Knight. GPU time, Portal 2 and
+  D3D12 were not run.
 - **G6: default.** A decision record either turns the flag on by default or keeps it off, from
   G5's evidence.
 
