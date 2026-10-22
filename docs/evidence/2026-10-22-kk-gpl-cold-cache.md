@@ -461,3 +461,93 @@ Graphics options `MESA_KK_DEBUG=compile,memory` only:
   whole pipelines in 3.0 s (fragment median 65 ms), 0 failures, LOOK UP reached, 55.6 FPS (60.0
   over the last 100 s), first frame +10.70 s: as with `msl40`.
 - **Phone state afterwards:** `e35e253a` installed, Portal 2 installed, Hollow Knight not.
+
+## A queried texture's type in pipeline libraries (mesa 0108), and MSL 4.0 against 4.1 on the GPU (PLA-437 step 5)
+
+KosmicKrisp declares a texture that a shader only queries (size, levels, samples) with the
+query's int result type, so DXVK's D3D9 fragment libraries, which query every sampler's size
+for fetch4, name `texture2d<int>` beside `texture2d<float>`. Each texture type a library names
+costs the phone's MSL front end time (check A above).
+
+**Probe** (experiment IPA `0c69857fac2df7eb41f4a33cf447e5e0874994483ebc032ff36397bda215b5bf`,
+mesa 0107 plus an uncommitted `MESA_KK_MSL_PROBE` patch, never committed): at Portal 2's device
+creation, before the game compiles anything, serially, 3 rounds, each source with a unique
+comment and entry-point name per round, `newLibraryWithDescriptor` at MSL 4.0 (the default).
+`_floatq` is the same library with its query-only `texture2d<int>` handles declared
+`texture2d<float>`, which is what 0108 emits. `pp ui` run `.work/ui-runs/20261022T173726`, log
+`.work/agent-notes/pla437/runs5/p2probe/log/s1-host.log` (`[kk-probe]`):
+
+| Library | Rounds (ms) | Median | Saving |
+| --- | --- | --- | --- |
+| a20eb_orig (15.7 KB fragment library) | 179.3, 115.6, 121.3 | 121.3 | – |
+| a20eb_floatq | 77.9, 80.5, 79.8 | 79.8 | **41.5 ms (34%)** |
+| 158a_orig (66.6 KB fragment library) | 144.7, 146.1, 140.6 | 144.7 | – |
+| 158a_floatq | 102.1, 101.1, 101.2 | 101.2 | **43.5 ms (30%)** |
+
+**Flag-off whole pipelines do not have the problem.** The same run dumped every Metal build
+(`MESA_KK_DUMP_MSL_MIN_KB=0`, Graphics options also `MESA_KK_DEBUG=compile,memory`) along the
+cold Portal 2 route; it built the same 30 whole pipelines (the same `msl=` hashes) as step 4's
+default runs. Pulled to `.work/agent-notes/pla437/runs5/p2off-dump/dump/`: **0 of 30** name an
+int or uint texture or query a size, level count or sample count. Their texture types are
+`texture2d<float>`, `depth2d<float>`, `texturecube<float>`, `texture2d_ms<float>` and
+`texture2d_array<float>`.
+
+So the fix is scoped to pipeline libraries (mesa 0108, `Class: feature`): only a shader compiled
+for a pipeline library (`MESA_KK_EXPERIMENTAL=gpl`) declares a queried texture with its sampled
+type. Every whole pipeline keeps its MSL (host test: the 164 flag-off MSL files of the previous
+run are among the new run's 166, unchanged; flag-on whole pipelines match flag-off; a new
+query-float fragment library is one MSL library with `texture2d<float>` and
+`texture2d_ms<float>` only, and query-int keeps `texture2d<int>`/`texture2d<uint>`).
+
+**Cold Portal 2 on the 0108 build** (dev IPA
+`71029ff49f204321f5cedbe2cd8a05b2b5a7415881232a1a00375b4c54b0ddd0`, `ed8c27d`), with the same
+route, Clear first and split as step 4, `runs5/<run>`:
+
+| Run | `pp ui` run | MESA_KK_EXPERIMENTAL | First frame | Stall | menu / loading / gameplay | Longest gap | Whole pipelines (sum, median fs) | Libraries: vertex / fragment (median) | FPS whole / last 100 s |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| p2def1 | `20261022T180858` | – | +10.37 s | 14.5 s | 3.4 / 10.7 / 0.4 s | 5.94 s | 30 (3.0 s, 64 ms) | – | 55.5 / 60.0 |
+| p2def2 | `20261022T182040` | – | +10.39 s | 14.6 s | 3.4 / 10.6 / 0.5 s | 5.63 s | 30 (3.2 s, 65 ms) | – | 55.5 / 60.0 |
+| p2gpl1 | `20261022T181445` | gpl | +10.34 s | 26.9 s | 6.0 / 15.9 / 5.0 s | 12.08 s | 31 (4.4 s) | 383 (387 ms) / 803 (355 ms) | 51.7 / 59.9 |
+| p2gpl2 | `20261022T182627` | gpl | +10.50 s | 26.5 s | 6.0 / 15.8 / 4.7 s | 12.10 s | 31 (4.3 s) | 383 (380 ms) / 821 (335 ms) | 51.9 / 60.0 |
+
+- **Default** is unchanged, as expected from identical MSL: 14.5–14.6 s against step 4's
+  14.3–14.4 s, the same 30 pipelines, 0 failures.
+- **gpl:** the fragment library median falls 446–447 → 335–355 ms (−21–25%), but DXVK builds
+  more libraries in the same route (1,186–1,204 against 1,092–1,097) and the vertex median rises
+  348 → 380–387 ms, so the stall stays at 26.5–26.9 s against 26.9 s. Decision 0158 stands.
+- 0 `[kk-compile] … FAIL`, `Failed to create MTLLibrary` or `link FAIL`; every run reached
+  chapter 1's LOOK UP and renders the room as before.
+
+**Hollow Knight** (installed after Portal 2 was removed): cold default run `hkdef1`
+(`.work/ui-runs/20261022T191640`): stall 5.0 s (loading 4.1 s, gameplay 0.9 s), longest gap
+2.62 s, 37 whole pipelines in 3.0 s (fragment median 59 ms), 0 failures, 58.8 FPS (60.0 over
+the last 100 s), first frame +12.99 s; step 4's default was 5.2 s. **Smoke gate**
+(`--until first-frame+10 --shot`): ok, first frame +12.36 s (`.work/ui-runs/20261022T192115`)
+and +11.96 s (`20261022T192232`). Both stop shots are black: the title scene was still loading
+(a 1.5 s gap at about first frame+12.5 s). A run to first frame+20
+(`20261022T192334`) shows the title screen.
+
+**GPU time, MSL 4.0 (default) against 4.1 (`MESA_KK_EXPERIMENTAL=msl41`)**, same IPA, warm
+cache (each arm had a warm-up run first; every measured run deserialized all 64 shaders and
+compiled none), arms alternated, `pp perf --cool 3 --cool-max 10`, thermal nominal, 80% on the
+charger, Graphics options `MESA_KK_DEBUG=compile` plus the arm's flag. Runs are in
+`.work/agent-notes/pla437/runs5/perf/<run>`.
+
+- Portal 2: `pp perf --title app-620 --secs 180 --pad
+  first-frame+30:.work/agent-notes/pla429/p2-fresh-new-game.txt --pad first-frame+75:p2-walk`
+  (new game, chapter 1, the walk).
+- Hollow Knight: `pp perf --secs 200 --pad first-frame+35:hk-new-game --pad
+  first-frame+90:hk-walk` (profile 1's save, King's Pass). Its walk does not end in the same
+  spot each run, so its gameplay window varies by scene as well as by arm.
+
+| Title | Arm | Runs | GPU ms, whole run | GPU ms, gameplay (P2 90–180 s, HK 100–200 s) | FPS | Frame ms |
+| --- | --- | --- | --- | --- | --- | --- |
+| Portal 2 | 4.0 | p2a-def, p2b-def | 10.31, 10.57 (mean 10.44) | 13.51, 13.54 (13.53) | 58.9, 58.7 | 16.83, 16.93 |
+| Portal 2 | 4.1 | p2a-41, p2b-41 | 10.52, 10.40 (10.46) | 13.53, 13.53 (13.53) | 58.9, 58.9 | 16.86, 16.86 |
+| Hollow Knight | 4.0 | hka-def, hkb-def | 7.41, 7.37 (7.39) | 7.80, 7.97 (7.89) | 58.9, 59.1 | 16.89, 16.83 |
+| Hollow Knight | 4.1 | hka-41, hkb-41 | 7.69, 7.16 (7.43) | 8.12, 7.51 (7.82) | 59.0, 59.1 | 16.84, 16.83 |
+
+- **No GPU regression from 4.0.** Portal 2's GPU time is the same to 0.2% (whole run −0.2%,
+  gameplay 0.0%). Hollow Knight's means differ by −0.5% (whole) and +0.9% (gameplay), well
+  inside the 4–8% spread between two runs of the same arm. Both play at 59.3–60.0 FPS.
+- **Phone state afterwards:** `71029ff4` installed, Portal 2 installed, Hollow Knight not.
