@@ -235,3 +235,114 @@ than the separate pipelines.
 - **The IPA's app** was built from a working tree with another change's uncommitted
   `SettingsView.swift`. The Settings screen is not on these runs' path, which reach it only to
   clear the shader cache.
+
+## Building pipeline libraries in the background: tried and reverted (PLA-437 step 2)
+
+**Result:** a KosmicKrisp queue that builds a pipeline library's Metal library after
+`vkCreateGraphicsPipelines` returns missed both targets, so it was reverted (`082540c`). Step 1's
+synchronous library builds stay, and the flag stays off (decision 0158).
+
+- **Portal 2** (cold cache, flag on) stalled 26.7–27.9 s, against 17.1 s flag-off on the same IPA.
+- **Hollow Knight** stalled 6.7–9.1 s, against 5.5–5.9 s for step 1's synchronous builds.
+
+**What was tried.** Commits `1b741e4` and `d046a5f` (mesa 0105 and 0106) hold the code; the
+revert removed it. A third patch was measured but never committed.
+
+- **0105:** `vkCreateGraphicsPipelines` made the MSL and queued the Metal library.
+  - One thread built the queue at utility QoS, oldest first.
+  - A link whose libraries were not built yet compiled the whole pipeline
+    (`fallback=library-pending`) and moved them to the queue's front.
+  - A library destroyed while queued was never built.
+  - Deserialized libraries were built at once.
+  - `MESA_KK_DEBUG=sync_libraries` kept the old path.
+- **0106:** a deserialized library whose MSL had been dropped unbuilt was queued too (below).
+- **Uncommitted, measured:** three threads at default QoS. A build started no sooner than 10 ms
+  after it was queued, unless a link had moved it to the front.
+- **Host test** (mock Metal, with a gate holding the queue's builds) covered:
+  - a link before the build, which falls back;
+  - a pipeline cache read meanwhile, whose libraries deserialize and link fast;
+  - libraries destroyed while queued and while building;
+  - the drained queue, which links fast;
+  - device destroy with builds running and one queued.
+
+  With the old path the test fails: the libraries made 6 MSL libraries, not 1. Flag-off MSL
+  stayed byte-identical: 164 files, before and after the revert.
+
+**IPAs** (dev, each built from `main` plus the other writer's uncommitted `SettingsView.swift`, as
+in step 1):
+
+- `177203b28a09601d1d9d4e052da94c97771c77b65e7e163b4322d46643df65c9` (0105);
+- `130556426a2d7b09c7390c99e61fd1e9bc1e3c927dcbbfe36cdbd328eedf7fea` (0105, 0106);
+- `a7f70fe17ba92f52012553e815f4cf49decdca9a7ba9b17cfab34434b8e44188` (plus the hold);
+- `6345fd16579215cd87c6fdb97727a5fb5b6061f68043ab7984a3a7da99f5324f` (0105, 0106);
+- `d58f1c029570f6827ecd0cf3a721089484d1020c4d4b30c1b2cadd02ea550c7f` (plus three threads);
+- after the revert, `6e9fce2f2e3c4ca2f31314554cac92185e61a4be2ab3ace3a214ddbd826d5bd3` (`082540c`),
+  left installed. It has step 1's mesa (0104 last), which passed Hollow Knight's smoke gate on
+  `03838a71`; it got no run of its own.
+
+**Runs.** Portal 2 used the PLA-429 route with a Clear first. Every run reached chapter 1's look
+tutorial, with 0 `link FAIL` and 60 FPS over the last 100 s.
+
+| IPA (sha256 prefix) | mesa | run | `pp ui` run | stall | chapter-load gap | links: separate / library-pending |
+| --- | --- | --- | --- | --- | --- | --- |
+| `177203b2` | 0105 | gpl | `20261022T103255` | 27.1 s | 7.61 s | 22 / 2 |
+| `130556426` | 0105, 0106 | gpl | `20261022T105531` | 26.7 s | 8.16 s | 0 / 25 |
+| `a7f70fe1` | + a hold* | gpl | `20261022T111116` | 27.0 s | 7.93 s | 0 / 25 |
+| `6345fd16` | 0105, 0106 | gpl | `20261022T112532` | 27.7 s | 8.41 s | 0 / 25 |
+| `6345fd16` | 0105, 0106 | off | `20261022T113127` | 17.1 s | 5.99 s | – |
+| `d58f1c02` | + 3 threads | gpl | `20261022T122545` | 27.9 s | 8.03 s | 2 / 23 |
+| `d58f1c02` | + 3 threads | gpl | `20261022T123138` | 27.7 s | 7.98 s | 2 / 23 |
+
+\* The hold kept the queue from starting a build while a link compiled. It changed nothing and was
+dropped.
+
+Hollow Knight used the PLA-429 route.
+
+| IPA | queue | run | `pp ui` run | first frame | stall | links: separate / library-pending |
+| --- | --- | --- | --- | --- | --- | --- |
+| `6345fd16` | 1 thread | gpl | `20261022T113933` | +12.95 s | 8.0 s | 7 / 35 |
+| `6345fd16` | – | off | `20261022T114614` | +12.71 s | 8.5 s | – |
+| `6345fd16` | 1 thread | gpl | `20261022T115248` | +13.58 s | 9.1 s | 7 / 35 |
+| `d58f1c02` | 3 threads | gpl | `20261022T120809` | +12.87 s | 7.1 s | 31 / 10 |
+| `d58f1c02` | 3 threads | gpl | `20261022T121456` | +11.90 s | 6.7 s | 31 / 11 |
+
+- **Hollow Knight, other measures:**
+  - FPS 57.8–58.4, 59.7–60.0 over the last 100 s; 0 `link FAIL`.
+  - The lumafly-room shots show the same scene as PLA-429's.
+  - Smoke gate on `d58f1c02`, defaults: first frame +10.73 s, `20261022T121924`.
+- **Per library, Hollow Knight:**
+  - one thread: vertex 137–142 ms and fragment 309–314 ms (median), but a median 0.7–2.3 s in the
+    queue;
+  - three threads: 103–156 ms and 259–283 ms, with 0.1–0.35 s in the queue.
+
+**Why it failed.**
+
+- **Portal 2 is 32-bit, and DXVK destroys each of its libraries as soon as it is made.** This is
+  `DxvkShaderPipelineLibrary::compilePipeline` when `mustTrackPipelineLifetime()` is true:
+  `dxvk.trackPipelineLifetime` is Auto, which means true for a 32-bit process on any driver but
+  RADV.
+  - DXVK counts on the driver's disk cache to make the library again when a draw needs it.
+  - So 1,709–1,730 queued libraries per run were dropped within about a millisecond (median
+    0.1 ms).
+  - The draw then made each one again from the disk cache.
+- **Before 0106 the draw paid an uncached Metal build.** Deserializing built the Metal library at
+  once on the draw's thread, from nothing: 0.1–0.75 s each, giving a 10 s gap at about +67 s. In
+  step 1 the first build had warmed Metal's cache, so the same deserialization took 0.1 ms.
+- **With 0106 every draw link fell back.** 0106 queued those deserializations, and DXVK destroys
+  the library again after use, so 23–25 of 25 links were whole-pipeline compiles.
+  - Each took about 480 ms on the draw's thread, against about 190 ms flag-off.
+  - Its fragment MSL is about twice a flag-off pipeline's: unspecialized library NIR.
+  - DXVK's own optimized compile of the same pipeline runs at the same time.
+  - Flag-off's draw thread built 29 pipelines in 5.8 s; with the queue it built 24–25 in
+    11.6–12.4 s.
+- **Waiting at the link instead was not taken.** The alternative was to wait for a running build,
+  or build a queued one on the draw's thread. Step 1's uncontended medians make that slower:
+  - a library costs 229 ms (vertex) and 645 ms (fragment);
+  - the fast link adds 60–120 ms;
+  - against a 150–270 ms (Hollow Knight) or about 480 ms (Portal 2) whole compile.
+- **The load before the chapter is longer too:** gaps of 5.1–5.3 s and 7.6–8.4 s, against
+  3.8 s and 6.0 s off. All 1,700 libraries now pass the front end (4–14 ms each) and are
+  serialized, which step 1's slow builds never reached.
+- **Hollow Knight links right after it creates its libraries.** One utility thread left most of
+  them pending (35 of 42 links fell back). Three threads brought that to 10–11, but the fallbacks
+  still cost more than step 1's draws waiting on DXVK's three compile threads.
