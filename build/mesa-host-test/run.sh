@@ -110,12 +110,9 @@ echo "MESA_KK_BATCH2: the host test passes with all items and without map and re
 # again from the same MSL, a fast link compiles nothing and a logic op link
 # compiles the same whole pipeline as before, and when the device goes its
 # link totals are logged and its counts of library shaders, Metal libraries
-# and links (MESA_KK_DEBUG=memory) are back to zero. These runs build the
-# Metal libraries in vkCreateGraphicsPipelines (MESA_KK_DEBUG=sync_libraries,
-# as before the background queue of PLA-437, which the gpl-queue run below
-# checks), so that the counts at each link are those of the libraries.
+# and links (MESA_KK_DEBUG=memory) are back to zero.
 rm -rf "$ROOT/msl-gpl"; mkdir -p "$ROOT/msl-gpl"
-MESA_KK_EXPERIMENTAL=gpl MESA_KK_DEBUG=compile,memory,sync_libraries KK_MOCK_MSL_DIR="$ROOT/msl-gpl" MESA_SHADER_CACHE_DISABLE=true \
+MESA_KK_EXPERIMENTAL=gpl MESA_KK_DEBUG=compile,memory KK_MOCK_MSL_DIR="$ROOT/msl-gpl" MESA_SHADER_CACHE_DISABLE=true \
     "$ROOT/kk-host-test" "$ROOT/build/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.so" "$ROOT/spv" \
     >"$ROOT/gpl.log" 2>&1 || { cat "$ROOT/gpl.log" >&2; exit 1; }
 grep -q '^ok gpl: libraries, fast and optimized links drawn' "$ROOT/gpl.log" ||
@@ -149,7 +146,7 @@ grep '^\(ok \)\?gpl\|^\[kk-compile\] \(gpl\|link\)\|^\[kk-mem\] gpl' "$ROOT/gpl.
 phases=$(grep -c '^\[kk-compile\] gpl-phases [a-z-]* \(built\|deserialized\) lower_ms=[0-9.]* nir_ms=[0-9.-]* msl_ms=[0-9.]* wait_ms=0\.0 library_ms=[0-9.]* libraries_inflight=1 pipelines_inflight=0 bytes=[0-9]* ' "$ROOT/gpl.log" || true)
 [ "$phases" = 16 ] || { echo "MESA_KK_DEBUG=compile: $phases gpl-phases lines, not 16" >&2; exit 1; }
 rm -rf "$ROOT/msl-serial"; mkdir -p "$ROOT/msl-serial"
-MESA_KK_EXPERIMENTAL=gpl,parallel_stages MESA_KK_DEBUG=compile,serial_libraries,sync_libraries KK_MOCK_MSL_DIR="$ROOT/msl-serial" \
+MESA_KK_EXPERIMENTAL=gpl,parallel_stages MESA_KK_DEBUG=compile,serial_libraries KK_MOCK_MSL_DIR="$ROOT/msl-serial" \
     MESA_SHADER_CACHE_DISABLE=true \
     "$ROOT/kk-host-test" "$ROOT/build/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.so" "$ROOT/spv" \
     >"$ROOT/serial.log" 2>&1 || { cat "$ROOT/serial.log" >&2; exit 1; }
@@ -161,46 +158,6 @@ msl_sums() { for f in "$ROOT/msl/"*.metal; do md5sum <"$1/${f##*/}"; done | sort
 serial=$(grep -c '^\[kk-compile\] gpl-phases .* libraries_inflight=1 ' "$ROOT/serial.log" || true)
 [ "$serial" = 16 ] || { echo "MESA_KK_DEBUG=serial_libraries: $serial of 16 gpl-phases lines with one library in flight" >&2; exit 1; }
 echo "MESA_KK_DEBUG=compile,serial_libraries: 16 gpl-phases lines, the same MSL"
-
-# The device's background queue of pipeline library Metal libraries
-# (PLA-437), kk-host-test.c's check_gpl_queue, with the queue's builds held at
-# the mock's gate (KK_MOCK_LIBRARY_GATE): a link before its libraries are
-# built compiles the whole pipeline (library-pending) and moves them to the
-# queue's front; libraries from a pipeline cache read meanwhile are built at
-# once and link fast; one library destroyed while queued is never built and
-# one destroyed while building is dropped; the one destroyed unbuilt, made
-# again from its cache (as DXVK does for a 32-bit game), is queued and its
-# link falls back too; once the queue has built the rest, both links' libraries
-# link fast; and the device goes with one library building and one queued. The pipelines before it keep their MSL (one, without
-# rasterization, links in full for its transform feedback, fallback=xfb).
-rm -rf "$ROOT/msl-queue"; mkdir -p "$ROOT/msl-queue"
-KK_HOST_TEST_GPL_QUEUE=1 KK_MOCK_LIBRARY_GATE="$ROOT/library-gate" \
-    MESA_KK_EXPERIMENTAL=gpl MESA_KK_DEBUG=compile KK_MOCK_MSL_DIR="$ROOT/msl-queue" \
-    MESA_SHADER_CACHE_DISABLE=true \
-    "$ROOT/kk-host-test" "$ROOT/build/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.so" "$ROOT/spv" \
-    >"$ROOT/queue.log" 2>&1 || { cat "$ROOT/queue.log" >&2; exit 1; }
-rm -f "$ROOT/library-gate"
-for f in "$ROOT/msl/"*.metal; do
-    cmp -s "$f" "$ROOT/msl-queue/${f##*/}" ||
-        { echo "gpl queue: ${f##*/} is not the MSL made without MESA_KK_EXPERIMENTAL=gpl" >&2; exit 1; }
-done
-queue_lines() { grep -c "^\[kk-compile\] $1" "$ROOT/queue.log" || true; }
-[ "$(queue_lines 'link full fallback=library-pending count=1 ')" = 1 ] &&
-    [ "$(queue_lines 'link full fallback=library-pending count=2 ')" = 1 ] &&
-    [ "$(queue_lines 'link full fallback=xfb ')" = 1 ] && [ "$(queue_lines 'link full ')" = 3 ] &&
-    [ "$(queue_lines 'link separate ')" = 3 ] &&
-    [ "$(queue_lines 'link FAIL ')" = 0 ] &&
-    [ "$(queue_lines 'gpl fragment dropped queued ')" = 1 ] &&
-    [ "$(queue_lines 'gpl vertex dropped building ')" = 1 ] &&
-    [ "$(queue_lines 'gpl vertex deserialized ')" = 1 ] && [ "$(queue_lines 'gpl fragment deserialized ')" = 2 ] &&
-    [ "$(queue_lines 'gpl-phases fragment deserialized .* queue_ms=[1-9][0-9.]*$')" = 1 ] &&
-    [ "$(queue_lines 'gpl-phases \(vertex\|fragment\) built .* queue_ms=[0-9.]*$')" = 5 ] &&
-    [ "$(queue_lines 'gpl-queue finish queued=8 deserialized=1 built=4 failed=0 dropped=2 promoted=3 waiting=1$')" = 1 ] &&
-    [ "$(queue_lines 'link totals links=5 separate=3 separate-vertex=0 full=2 failed=0 fallbacks=library-pending:2$')" = 1 ] &&
-    [ "$(grep -c '^ok gpl queue: ' "$ROOT/queue.log")" = 5 ] ||
-    { grep '^\(ok \)\?gpl\|^\[kk-compile\] \(gpl\|link\)' "$ROOT/queue.log" >&2
-      echo "gpl queue: not 2 library-pending fallbacks and 3 separate links, 1 queued and 1 building library dropped, 1 + 1 from the cache at once and 1 queued, 6 built by the queue (the last at device finish), 1 left queued then" >&2; exit 1; }
-grep '^ok gpl queue\|^\[kk-compile\] \(gpl-queue\|link\|gpl [a-z-]* \(dropped\|built\|deserialized\)\)' "$ROOT/queue.log"
 
 # The same pipelines with the vertex and fragment libraries built at once and
 # the first two library builds failing as if Metal's compiler service had

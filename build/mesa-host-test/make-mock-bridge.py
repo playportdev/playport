@@ -16,9 +16,7 @@ from mesa 0042 on) is reported on stderr and counted; the process exits 3 at
 exit if there was any. With KK_MOCK_INTERRUPT_BUILDS=N the first N library
 builds that take an error report (the pipelines', not the driver's own
 shaders') fail as if Metal's compiler service had been interrupted (mesa
-0053's compile_retry builds them again). With KK_MOCK_LIBRARY_GATE=PATH a
-library build on the driver's library queue thread (kk-gpl-library, PLA-437)
-waits while PATH exists, before it is written or counted.
+0053's compile_retry builds them again).
 
 The stubs are the template, so a new bridge function upstream still links:
 it gets the stub's body, with a dummy handle for a pointer return.
@@ -36,7 +34,6 @@ COMMON = r'''
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
-#include <sys/prctl.h>
 #include <unistd.h>
 
 /* Every handle is one of these, so release/retain and labels are harmless. */
@@ -59,7 +56,6 @@ struct kk_mock_obj {
 void *kk_mock_new(int kind, uint64_t size);
 void kk_mock_record_msl(const char *src);
 int kk_mock_interrupt_build(void);
-void kk_mock_library_gate(void);
 
 /* The sample counts of an A19 (supportsTextureSampleCount:). */
 #define KK_MOCK_SAMPLE_COUNT_OK(n) ((n) == 1 || (n) == 2 || (n) == 4)
@@ -135,20 +131,6 @@ kk_mock_interrupt_build(void)
                                   __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
    }
    return __atomic_sub_fetch(&left, 1, __ATOMIC_SEQ_CST) >= 0;
-}
-
-/* KK_MOCK_LIBRARY_GATE: the library queue thread's builds wait while the
- * file exists */
-void
-kk_mock_library_gate(void)
-{
-   const char *gate = getenv("KK_MOCK_LIBRARY_GATE");
-   char name[16] = {0};
-   if (gate == NULL || prctl(PR_GET_NAME, name) != 0 ||
-       strcmp(name, "kk-gpl-library") != 0)
-      return;
-   while (access(gate, F_OK) == 0)
-      usleep(1000);
 }
 
 void
@@ -287,7 +269,6 @@ body("mtl_new_timestamp_counter_heap", r'''
    }
    return kk_mock_new(9, 0);''')
 body("mtl_new_library", r'''
-   kk_mock_library_gate();
    kk_mock_record_msl(src);
    if (error && kk_mock_interrupt_build()) {
       memset(error, 0, sizeof(*error));
