@@ -187,6 +187,20 @@ done
     { echo "MESA_KK_DUMP_MSL_MIN_KB: $dumped dumps, unroll-hint.frag's SPIR-V among them: $same" >&2; exit 1; }
 echo "MESA_KK_DUMP_MSL_MIN_KB: $dumped pipelines dumped"
 
+# With MESA_KK_EXPERIMENTAL=gpl each pipeline library's MSL is dumped too
+# (kind gpl), with its SPIR-V (PLA-437).
+rm -rf "$ROOT/dump-gpl"; mkdir -p "$ROOT/dump-gpl/kosmickrisp"
+MESA_SHADER_CACHE_DIR="$ROOT/dump-gpl/kosmickrisp" MESA_KK_DUMP_MSL_MIN_KB=0 MESA_KK_EXPERIMENTAL=gpl \
+    MESA_SHADER_CACHE_DISABLE=true \
+    "$ROOT/kk-host-test" "$ROOT/build/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.so" "$ROOT/spv" \
+    >"$ROOT/dump-gpl.log" 2>&1 || { cat "$ROOT/dump-gpl.log" >&2; exit 1; }
+gpl_dumps=$(grep -l '^kind gpl$' "$ROOT/dump-gpl/kk-dump/"*.txt | wc -l)
+gpl_vert=$(grep -l '^stage vert .* spirv_bytes ' $(grep -l '^kind gpl$' "$ROOT/dump-gpl/kk-dump/"*.txt) | wc -l)
+gpl_frag=$(grep -l '^stage frag .* spirv_bytes ' $(grep -l '^kind gpl$' "$ROOT/dump-gpl/kk-dump/"*.txt) | wc -l)
+[ "$gpl_vert" -gt 0 ] && [ "$gpl_frag" -gt 0 ] ||
+    { echo "MESA_KK_DUMP_MSL_MIN_KB with gpl: $gpl_dumps library dumps, $gpl_vert vertex and $gpl_frag fragment with SPIR-V" >&2; exit 1; }
+echo "MESA_KK_DUMP_MSL_MIN_KB with gpl: $gpl_dumps pipeline libraries dumped ($gpl_vert vertex, $gpl_frag fragment)"
+
 # The known-fail list (mesa 0062): the first build fails as interrupted in two
 # launches, and the third launch skips it and fails that pipeline at once;
 # MESA_KK_DEBUG=no_known_fail builds it.

@@ -1,0 +1,46 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kamil=20Postro=C5=BCny?= <kamil@postrozny.pl>
+Date: Thu, 22 Oct 2026 12:53:13 +0200
+Subject: [PATCH] kk: MESA_KK_DUMP_MSL_MIN_KB dumps pipeline libraries' MSL too
+
+A Metal library built for a pipeline library shader translated by
+MESA_KK_EXPERIMENTAL=gpl did not reach kk_begin_metal_build, so
+MESA_KK_DUMP_MSL_MIN_KB left it out. It is dumped now as a pipeline's
+MSL is, with kind gpl, its stage's MSL and the SPIR-V the library was
+made from. Libraries read back from a pipeline cache are not dumped
+again.
+
+A measurement for Portal 2's pipeline libraries, whose MSL is 5 to 20
+times a whole pipeline's (vertex 245 KB against 11 KB, fragment 66 KB
+against 12 KB) and whose Metal build time scales with it.
+
+Without MESA_KK_DUMP_MSL_MIN_KB nothing changes.
+
+Linear: PLA-437
+Class: diagnostics
+Evidence: docs/evidence/2026-10-22-kk-gpl-cold-cache.md
+Offered-upstream: no
+---
+ src/kosmickrisp/vulkan/kk_shader.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/src/kosmickrisp/vulkan/kk_shader.c b/src/kosmickrisp/vulkan/kk_shader.c
+index d01c7a0..58b8946 100644
+--- a/src/kosmickrisp/vulkan/kk_shader.c
++++ b/src/kosmickrisp/vulkan/kk_shader.c
+@@ -3922,6 +3922,15 @@ kk_gpl_build_library(struct kk_device *dev, struct kk_gpl_source *src,
+       .step = vertex ? "vertex-library" : "fragment-library",
+       .src = msl_src,
+    };
++   /* MESA_KK_DUMP_MSL_MIN_KB: a library translated here is dumped as a
++    * pipeline's MSL is (kind gpl), with the SPIR-V the library was made
++    * from */
++   if (kk_dump_msl_min_kb >= 0 && front_end) {
++      char msl[BLAKE3_HEX_LEN];
++      kk_msl_hash(build.data, NULL, msl);
++      kk_dump_msl("gpl", msl, shader->info.stage, build.data,
++                  MESA_SHADER_NONE, NULL);
++   }
+    kk_build_library(&build);
+    if (KK_DEBUG(COMPILE)) {
+       const char *how = build.library == NULL ? "FAIL"
