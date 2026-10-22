@@ -1,0 +1,1389 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Wed, 21 Oct 2026 18:37:34 +0200
+Subject: [PATCH] kk: MESA_KK_EXPERIMENTAL=gpl, a library's vertex shader
+ compiled on its own
+
+With MESA_KK_EXPERIMENTAL=gpl, a vertex shader alone in its pipeline
+library (DXVK's pre-rasterization library) is now also compiled on its
+own when the library is created, and its Metal library is built then,
+on the application's thread (kk_gpl_compile_vertex). Its MSL depends on
+no other library:
+
+- Attributes are fetched through a layout the draw gives
+  (kk_nir_lower_vbo_runtime): kk_flush_dynamic_state uploads one struct
+  kk_vertex_fetch per attribute slot (format class, stride, divisor,
+  input rate) from the dynamic vertex input state, and the new last
+  field kk_per_draw_data::vertex_fetch points at it. The format word
+  covers every format KosmicKrisp advertises for vertex buffers: 8, 16
+  and 32-bit channels, 10-10-10-2 and 11-11-10, with the format's
+  swizzle. The base address and robustness clamp stay in the root
+  table, as for other vertex shaders. The root table's layout does not
+  change, so no other shader's MSL does; per-draw data is uploaded
+  without the new field unless the bound vertex shader reads it.
+- It always writes a point size; the topology class is set on the Metal
+  pipeline at link time.
+- Its user varyings, and those of the fragment shader linked to it, are
+  declared as vec4s (nir_to_msl_options::vec4_user_varyings), so that
+  stages compiled apart agree however many components each uses.
+
+The first draw of a fast link with that vertex shader compiles only the
+fragment shader, reading 0 for what the vertex shader does not write,
+and builds the pipeline with the vertex library already built
+(kk_gpl_link_separate). The device link cache keys such links without
+the vertex input state and with the topology's class only, so other
+vertex layouts reuse the pipeline. A link the vertex shader cannot
+serve compiles the whole pipeline as before, and [kk-compile] link
+lines count the reasons: tessellation or geometry stages, transform
+feedback, VK_POLYGON_MODE_POINT on triangles, another view mask, an
+attribute format outside the fetch, a fragment input of another type
+than the output, an indirectly indexed varying, a fragment shader
+reading clip or cull distances. Pipelines that are not fast links,
+link-time-optimized ones included, and everything without the flag
+compile as before, to the same MSL.
+
+The fragment side still compiles at the first draw; building it at
+library creation too follows.
+
+Linear: PLA-424
+Class: feature
+Evidence: docs/evidence/2026-10-21-kk-gpl-host.md
+Offered-upstream: not yet
+---
+ src/kosmickrisp/compiler/nir_to_msl.c     |  10 +
+ src/kosmickrisp/compiler/nir_to_msl.h     |   5 +
+ src/kosmickrisp/vulkan/kk_cmd_buffer.h    |   5 +
+ src/kosmickrisp/vulkan/kk_cmd_draw.c      |  39 ++-
+ src/kosmickrisp/vulkan/kk_gpl.c           | 135 ++++++-
+ src/kosmickrisp/vulkan/kk_gpl.h           |  33 +-
+ src/kosmickrisp/vulkan/kk_nir_lower_vbo.c | 281 +++++++++++++++
+ src/kosmickrisp/vulkan/kk_nir_lower_vbo.h |  52 +++
+ src/kosmickrisp/vulkan/kk_shader.c        | 406 ++++++++++++++++++++--
+ src/kosmickrisp/vulkan/kk_shader.h        |  10 +-
+ 10 files changed, 943 insertions(+), 33 deletions(-)
+
+diff --git a/src/kosmickrisp/compiler/nir_to_msl.c b/src/kosmickrisp/compiler/nir_to_msl.c
+index 274823e..3a3e378 100644
+--- a/src/kosmickrisp/compiler/nir_to_msl.c
++++ b/src/kosmickrisp/compiler/nir_to_msl.c
+@@ -2396,6 +2396,16 @@ msl_gather_info(struct nir_to_msl_ctx *ctx, struct nir_to_msl_options *options)
+        ctx->shader->info.stage == MESA_SHADER_FRAGMENT) {
+       msl_gather_io_info(ctx, ctx->inputs_info, ctx->outputs_info);
+ 
++      if (options->vec4_user_varyings) {
++         struct io_slot_info *info =
++            ctx->shader->info.stage == MESA_SHADER_VERTEX ? ctx->outputs_info
++                                                          : ctx->inputs_info;
++         for (unsigned i = VARYING_SLOT_VAR0; i <= VARYING_SLOT_VAR31; ++i) {
++            if (info[i].num_components)
++               info[i].num_components = 4u;
++         }
++      }
++
+       if (ctx->shader->info.stage == MESA_SHADER_FRAGMENT) {
+          /* Metal does not have a system value for sample position but an
+           * entrypoint "get_sample_position" that take the sample index aka
+diff --git a/src/kosmickrisp/compiler/nir_to_msl.h b/src/kosmickrisp/compiler/nir_to_msl.h
+index 423df8a..1446bd9 100644
+--- a/src/kosmickrisp/compiler/nir_to_msl.h
++++ b/src/kosmickrisp/compiler/nir_to_msl.h
+@@ -23,6 +23,11 @@ struct nir_to_msl_options {
+     * the render target has. This leads to an incorrect calculation of the
+     * component count for the render target formats. */
+    uint8_t rts_component_count[MAX_DRAW_BUFFERS];
++
++   /* Playport (PLA-424): declare every user varying (VARYING_SLOT_VARn) a
++    * vertex shader writes or a fragment shader reads with 4 components, so
++    * that stages compiled apart agree on them however many each uses. */
++   bool vec4_user_varyings;
+ };
+ 
+ /* Assumes nir_shader_gather_info has been called beforehand. */
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.h b/src/kosmickrisp/vulkan/kk_cmd_buffer.h
+index 5de06b2..36bf0e2 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_buffer.h
++++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.h
+@@ -114,6 +114,11 @@ struct kk_per_draw_data {
+     * addresses in geometry and transform feedback emulation */
+    uint64_t zero_page;
+    uint64_t scratch_page;
++
++   /* Playport (PLA-424): the struct kk_vertex_fetch table of a vertex shader
++    * compiled for a pipeline library (kk_shader::gpl_vertex_fetch), else 0.
++    * Last: without it the upload stops before it (kk_bind_per_draw_data). */
++   uint64_t vertex_fetch;
+ };
+ 
+ struct kk_attachment {
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_draw.c b/src/kosmickrisp/vulkan/kk_cmd_draw.c
+index 97e3cfb..b292df1 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_draw.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_draw.c
+@@ -1287,6 +1287,34 @@ kk_upload_tess_params(struct kk_cmd_buffer *cmd, struct poly_tess_params *out,
+    memcpy(out, &args, sizeof(args));
+ }
+ 
++/* Playport (PLA-424): the struct kk_vertex_fetch table of a vertex shader
++ * compiled for a pipeline library, from the dynamic vertex input state, in
++ * the attribute slots of kk_root_descriptor_table::draw.attrib_base. */
++static uint64_t
++kk_upload_vertex_fetch(struct kk_cmd_buffer *cmd, const struct kk_shader *vs)
++{
++   const struct vk_dynamic_graphics_state *dyn =
++      &cmd->vk.dynamic_graphics_state;
++   struct kk_vertex_fetch fetch[KK_MAX_ATTRIBS] = {0};
++   unsigned slot = 0;
++   u_foreach_bit(i, vs->info.vs.attribs_read) {
++      if (dyn->vi->attributes_valid & BITFIELD_BIT(i)) {
++         const struct vk_vertex_attribute_state *attr = &dyn->vi->attributes[i];
++         const struct vk_vertex_binding_state *binding =
++            &dyn->vi->bindings[attr->binding];
++         fetch[slot].format =
++            kk_vertex_fetch_format(vk_format_to_pipe_format(attr->format));
++         if (binding->input_rate == VK_VERTEX_INPUT_RATE_INSTANCE)
++            fetch[slot].format |= KK_VERTEX_FETCH_INSTANCED;
++         fetch[slot].stride = dyn->vi_binding_strides[attr->binding];
++         fetch[slot].divisor = binding->divisor;
++      }
++      slot++;
++   }
++   return kk_pool_upload(cmd, fetch, MAX2(slot, 1u) * sizeof(fetch[0]), 16u)
++      .gpu;
++}
++
+ static void
+ kk_flush_dynamic_state(struct kk_cmd_buffer *cmd)
+ {
+@@ -1476,6 +1504,10 @@ kk_flush_dynamic_state(struct kk_cmd_buffer *cmd)
+          slot++;
+       }
+       desc->root_dirty = true;
++      gfx->per_draw_data.vertex_fetch =
++         vs->gpl_vertex_fetch && vs->info.vs.attribs_read
++            ? kk_upload_vertex_fetch(cmd, vs)
++            : 0u;
+    }
+ 
+    if (desc->root_dirty)
+@@ -1953,8 +1985,13 @@ static void
+ kk_bind_per_draw_data(struct kk_cmd_buffer *cmd)
+ {
+    struct kk_graphics_state *gfx = &cmd->state.gfx;
++   /* Playport (PLA-424): vertex_fetch, last, only for the shaders that read
++    * it */
++   const size_t size = gfx->per_draw_data.vertex_fetch
++                          ? sizeof(gfx->per_draw_data)
++                          : offsetof(struct kk_per_draw_data, vertex_fetch);
+    struct kk_ptr shader_data_gpu =
+-      kk_pool_upload(cmd, &gfx->per_draw_data, sizeof(gfx->per_draw_data), 8u);
++      kk_pool_upload(cmd, &gfx->per_draw_data, size, 8u);
+    if (unlikely(!shader_data_gpu.gpu))
+       return;
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_gpl.c b/src/kosmickrisp/vulkan/kk_gpl.c
+index a778c7e..c7a8de1 100644
+--- a/src/kosmickrisp/vulkan/kk_gpl.c
++++ b/src/kosmickrisp/vulkan/kk_gpl.c
+@@ -32,14 +32,48 @@ struct kk_gpl_link {
+    struct kk_shader *linked[KK_GPL_STAGES];
+ };
+ 
++/* Why links compiled the whole pipeline rather than use the vertex shader
++ * compiled on its own (kk_gpl_vertex_blocker, kk_gpl_link_compile), counted
++ * for MESA_KK_DEBUG=compile; the reasons are static strings. */
++#define KK_GPL_FALLBACK_REASONS 16
++
+ struct kk_gpl_cache {
+    simple_mtx_t lock;
+    /* blake3 key -> struct kk_gpl_link */
+    struct hash_table *links;
++   /* Vertex and fragment source id pairs (kk_gpl_pair) whose separate link
++    * fell back -> the reason */
++   struct hash_table_u64 *unfit_pairs;
+    /* For MESA_KK_DEBUG=compile */
+    uint32_t compiled, failed;
++   struct {
++      const char *reason;
++      uint32_t count;
++   } fallbacks[KK_GPL_FALLBACK_REASONS];
+ };
+ 
++static uint64_t
++kk_gpl_pair(struct kk_shader *const *sources)
++{
++   const uint64_t fs = sources[MESA_SHADER_FRAGMENT]
++                          ? sources[MESA_SHADER_FRAGMENT]->gpl->id
++                          : 0;
++   return sources[MESA_SHADER_VERTEX]->gpl->id << 32 ^ fs;
++}
++
++/* Counts a fallback; the count so far. Under the cache's lock. */
++static uint32_t
++kk_gpl_count_fallback(struct kk_gpl_cache *cache, const char *reason)
++{
++   for (uint32_t i = 0; i < KK_GPL_FALLBACK_REASONS; i++) {
++      if (cache->fallbacks[i].reason == NULL)
++         cache->fallbacks[i].reason = reason;
++      if (cache->fallbacks[i].reason == reason)
++         return ++cache->fallbacks[i].count;
++   }
++   return 0;
++}
++
+ static uint32_t
+ kk_gpl_key_hash(const void *key)
+ {
+@@ -67,7 +101,10 @@ kk_gpl_device_init(struct kk_device *dev)
+       return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
+    cache->links =
+       _mesa_hash_table_create(NULL, kk_gpl_key_hash, kk_gpl_key_equal);
+-   if (!cache->links) {
++   cache->unfit_pairs = _mesa_hash_table_u64_create(NULL);
++   if (!cache->links || !cache->unfit_pairs) {
++      _mesa_hash_table_destroy(cache->links, NULL);
++      _mesa_hash_table_u64_destroy(cache->unfit_pairs);
+       vk_free(&dev->vk.alloc, cache);
+       return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
+    }
+@@ -95,6 +132,7 @@ kk_gpl_device_finish(struct kk_device *dev)
+    hash_table_foreach(cache->links, entry)
+       kk_gpl_link_destroy(dev, entry->data);
+    _mesa_hash_table_destroy(cache->links, NULL);
++   _mesa_hash_table_u64_destroy(cache->unfit_pairs);
+    simple_mtx_destroy(&cache->lock);
+    vk_free(&dev->vk.alloc, cache);
+    dev->gpl_cache = NULL;
+@@ -221,10 +259,50 @@ kk_gpl_draw_state(const struct kk_cmd_buffer *cmd,
+    st->mv = &out->mv;
+ }
+ 
++/* A topology of the same class: what a link with the vertex shader compiled
++ * on its own depends on */
++static VkPrimitiveTopology
++kk_gpl_class_topology(VkPrimitiveTopology topology)
++{
++   switch (topology) {
++   case VK_PRIMITIVE_TOPOLOGY_POINT_LIST:
++      return VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
++   case VK_PRIMITIVE_TOPOLOGY_LINE_LIST:
++   case VK_PRIMITIVE_TOPOLOGY_LINE_STRIP:
++      return VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
++   default:
++      return topology == VK_PRIMITIVE_TOPOLOGY_LINE_LIST_WITH_ADJACENCY ||
++                   topology == VK_PRIMITIVE_TOPOLOGY_LINE_STRIP_WITH_ADJACENCY
++                ? VK_PRIMITIVE_TOPOLOGY_LINE_LIST_WITH_ADJACENCY
++             : topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST_WITH_ADJACENCY ||
++                   topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP_WITH_ADJACENCY
++                ? VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST_WITH_ADJACENCY
++                : VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
++   }
++}
++
++/* The link's key. A link with the vertex shader compiled on its own
++ * (separate_vertex) does not depend on the vertex input state, nor on the
++ * topology beyond its class: draws that differ only there share it. */
+ static void
+ kk_gpl_key(struct kk_device *dev, struct kk_shader *const *sources,
+-           const struct vk_graphics_pipeline_state *st, blake3_hash key)
++           const struct vk_graphics_pipeline_state *draw_st,
++           bool separate_vertex, blake3_hash key)
+ {
++   struct vk_graphics_pipeline_state separate_st;
++   struct vk_input_assembly_state separate_ia;
++   const struct vk_graphics_pipeline_state *st = draw_st;
++   if (separate_vertex) {
++      separate_st = *draw_st;
++      separate_st.vi = NULL;
++      separate_ia = (struct vk_input_assembly_state){
++         .primitive_topology =
++            kk_gpl_class_topology(draw_st->ia->primitive_topology),
++      };
++      separate_st.ia = &separate_ia;
++      st = &separate_st;
++   }
++
+    blake3_hash state_hash;
+    VkShaderStageFlags stages = st->shader_stages | VK_SHADER_STAGE_VERTEX_BIT |
+                                VK_SHADER_STAGE_FRAGMENT_BIT;
+@@ -235,6 +313,8 @@ kk_gpl_key(struct kk_device *dev, struct kk_shader *const *sources,
+    struct mesa_blake3 ctx;
+    _mesa_blake3_init(&ctx);
+    _mesa_blake3_update(&ctx, state_hash, sizeof(state_hash));
++   const uint8_t mode = separate_vertex;
++   _mesa_blake3_update(&ctx, &mode, sizeof(mode));
+    _mesa_blake3_update(&ctx, st->dynamic, sizeof(st->dynamic));
+    for (uint32_t s = 0; s < KK_GPL_STAGES; s++) {
+       uint64_t id = sources[s] ? sources[s]->gpl->id : 0;
+@@ -260,8 +340,17 @@ kk_gpl_resolve(struct kk_cmd_buffer *cmd)
+    struct kk_gpl_cache *cache = dev->gpl_cache;
+    struct kk_gpl_draw_state ds;
+    kk_gpl_draw_state(cmd, sources, &ds);
++
++   /* Whether the vertex shader compiled on its own can serve this draw */
++   const char *blocker = kk_gpl_vertex_blocker(sources, &ds.state);
++   simple_mtx_lock(&cache->lock);
++   if (blocker == NULL)
++      blocker = _mesa_hash_table_u64_search(cache->unfit_pairs,
++                                            kk_gpl_pair(sources));
++   simple_mtx_unlock(&cache->lock);
++
+    blake3_hash key;
+-   kk_gpl_key(dev, sources, &ds.state, key);
++   kk_gpl_key(dev, sources, &ds.state, blocker == NULL, key);
+    if (!g->dirty && memcmp(key, g->key, sizeof(key)) == 0)
+       return cmd->state.shaders[MESA_SHADER_VERTEX] != NULL;
+ 
+@@ -279,13 +368,39 @@ kk_gpl_resolve(struct kk_cmd_buffer *cmd)
+          link->ids[s] = sources[s] ? sources[s]->gpl->id : 0;
+ 
+       const int64_t start = os_time_get_nano();
+-      VkResult result =
+-         kk_gpl_link_compile(dev, sources, &ds.state, link->linked);
+-      if (KK_DEBUG(COMPILE))
+-         fprintf(stderr, "[kk-compile] link %s ms=%.1f stages=%#x\n",
+-                 result == VK_SUCCESS ? "full" : "FAIL",
+-                 (os_time_get_nano() - start) / 1e6,
+-                 ds.state.shader_stages);
++      const char *fallback = NULL;
++      VkResult result = kk_gpl_link_compile(
++         dev, sources, &ds.state, blocker == NULL, link->linked, &fallback);
++
++      if (fallback) {
++         /* The pair cannot link apart; the whole pipeline compiled depends
++          * on all of the draw's state, so it is keyed by all of it. */
++         blocker = fallback;
++         kk_gpl_key(dev, sources, &ds.state, false, key);
++         memcpy(link->key, key, sizeof(key));
++      }
++      simple_mtx_lock(&cache->lock);
++      if (fallback)
++         _mesa_hash_table_u64_insert(cache->unfit_pairs, kk_gpl_pair(sources),
++                                     (void *)fallback);
++      const uint32_t fallbacks =
++         blocker ? kk_gpl_count_fallback(cache, blocker) : 0;
++      simple_mtx_unlock(&cache->lock);
++
++      if (KK_DEBUG(COMPILE)) {
++         if (blocker)
++            fprintf(stderr,
++                    "[kk-compile] link %s fallback=%s count=%u ms=%.1f "
++                    "stages=%#x\n",
++                    result == VK_SUCCESS ? "full" : "FAIL", blocker, fallbacks,
++                    (os_time_get_nano() - start) / 1e6,
++                    ds.state.shader_stages);
++         else
++            fprintf(stderr, "[kk-compile] link %s ms=%.1f stages=%#x\n",
++                    result == VK_SUCCESS ? "separate-vertex" : "FAIL",
++                    (os_time_get_nano() - start) / 1e6,
++                    ds.state.shader_stages);
++      }
+ 
+       /* Another thread may have linked the same meanwhile: keep the first. */
+       simple_mtx_lock(&cache->lock);
+diff --git a/src/kosmickrisp/vulkan/kk_gpl.h b/src/kosmickrisp/vulkan/kk_gpl.h
+index 68daaa7..4f310c1 100644
+--- a/src/kosmickrisp/vulkan/kk_gpl.h
++++ b/src/kosmickrisp/vulkan/kk_gpl.h
+@@ -10,6 +10,13 @@
+  * compiled for the bound set with the state the draw has (vertex input,
+  * colour blend, multisample and attachment formats from the dynamic and
+  * rendering state), and binds those as a whole pipeline's.
++ *
++ * A vertex shader alone in its library is also compiled on its own, its Metal
++ * library built at once: it fetches attributes through the layout the draw
++ * gives and always writes a point size. A link with it compiles only the
++ * fragment shader and builds the pipeline, and serves every vertex input
++ * state and topology of a class. What it cannot serve falls back to the
++ * whole compile, counted by reason ([kk-compile] link lines).
+  */
+ 
+ #ifndef KK_GPL_H
+@@ -54,6 +61,17 @@ struct kk_gpl_source {
+    /* Fragment shader library state that is not dynamic state */
+    bool sample_shading_enable;
+    float min_sample_shading;
++
++   /* A vertex shader alone in its library is also compiled on its own
++    * (kk_gpl_compile_vertex): vertex is that shader, whose MSL depends on no
++    * other library, and vertex_library its Metal library, built at once.
++    * A link then builds only the fragment side (kk_gpl_link_compile). When
++    * it could not be, vertex is NULL and vertex_blocker says why. */
++   struct kk_shader *vertex;
++   mtl_library *vertex_library;
++   const char *vertex_blocker;
++   /* The view mask vertex was compiled with */
++   uint32_t view_mask;
+ };
+ 
+ /* Graphics stages a link covers: vertex to fragment */
+@@ -85,10 +103,23 @@ void kk_gpl_forget(struct kk_device *dev, uint64_t id);
+ bool kk_gpl_resolve(struct kk_cmd_buffer *cmd);
+ 
+ /* kk_shader.c */
++
++/* Why a link with this state cannot use the vertex shader compiled on its
++ * own (struct kk_gpl_source::vertex), or NULL if it can. */
++const char *
++kk_gpl_vertex_blocker(struct kk_shader *const *sources,
++                      const struct vk_graphics_pipeline_state *state);
++
++/* Compiles the link of sources with state into linked. With separate_vertex
++ * (kk_gpl_vertex_blocker gave NULL), it compiles only the fragment shader
++ * and builds the pipeline with the vertex shader's library; if the fragment
++ * shader does not fit that vertex shader, it compiles the whole pipeline
++ * after all, and *fallback says why. */
+ VkResult kk_gpl_link_compile(struct kk_device *dev,
+                              struct kk_shader *const *sources,
+                              const struct vk_graphics_pipeline_state *state,
+-                             struct kk_shader **linked);
++                             bool separate_vertex, struct kk_shader **linked,
++                             const char **fallback);
+ void kk_cmd_bind_linked_shader(struct kk_cmd_buffer *cmd,
+                                mesa_shader_stage stage,
+                                struct kk_shader *shader);
+diff --git a/src/kosmickrisp/vulkan/kk_nir_lower_vbo.c b/src/kosmickrisp/vulkan/kk_nir_lower_vbo.c
+index 6d56e56..309690c 100644
+--- a/src/kosmickrisp/vulkan/kk_nir_lower_vbo.c
++++ b/src/kosmickrisp/vulkan/kk_nir_lower_vbo.c
+@@ -12,6 +12,7 @@
+ #include "compiler/nir/nir_builder.h"
+ #include "compiler/nir/nir_format_convert.h"
+ #include "util/bitset.h"
++#include "util/u_dynarray.h"
+ #include "util/u_math.h"
+ #include "shader_enums.h"
+ 
+@@ -280,3 +281,283 @@ kk_nir_lower_vbo(nir_shader *nir, struct kk_attribute *attribs,
+    return nir_shader_intrinsics_pass(nir, pass, nir_metadata_control_flow,
+                                      &ctx);
+ }
++
++/* Playport (PLA-424): the runtime vertex fetch (struct kk_vertex_fetch). */
++
++uint32_t
++kk_vertex_fetch_format(enum pipe_format format)
++{
++   if (!kk_vbo_supports_format(format))
++      return 0;
++
++   const struct util_format_description *desc = util_format_description(format);
++   int chan = util_format_get_first_non_void_channel(format);
++   if (chan < 0)
++      return 0;
++   const struct util_format_channel_description *c = &desc->channel[chan];
++
++   enum kk_vertex_fetch_layout layout;
++   uint32_t channels = 1;
++   if (is_rg11_b10(desc)) {
++      layout = KK_VERTEX_FETCH_RG11B10F;
++   } else if (is_rgb10_a2(desc)) {
++      layout = KK_VERTEX_FETCH_RGB10A2;
++   } else {
++      switch (c->size) {
++      case 8:
++         layout = KK_VERTEX_FETCH_ARRAY8;
++         break;
++      case 16:
++         layout = KK_VERTEX_FETCH_ARRAY16;
++         break;
++      case 32:
++         layout = KK_VERTEX_FETCH_ARRAY32;
++         break;
++      default:
++         return 0;
++      }
++      channels = desc->nr_channels;
++      for (unsigned i = 0; i < channels; ++i) {
++         if (desc->channel[i].size != c->size ||
++             desc->channel[i].type != c->type)
++            return 0;
++      }
++   }
++
++   enum kk_vertex_fetch_numeric numeric;
++   switch (c->type) {
++   case UTIL_FORMAT_TYPE_UNSIGNED:
++      numeric = c->normalized     ? KK_VERTEX_FETCH_UNORM
++                : c->pure_integer ? KK_VERTEX_FETCH_UINT
++                                  : KK_VERTEX_FETCH_USCALED;
++      break;
++   case UTIL_FORMAT_TYPE_SIGNED:
++      numeric = c->normalized     ? KK_VERTEX_FETCH_SNORM
++                : c->pure_integer ? KK_VERTEX_FETCH_SINT
++                                  : KK_VERTEX_FETCH_SSCALED;
++      break;
++   case UTIL_FORMAT_TYPE_FLOAT:
++      if (layout != KK_VERTEX_FETCH_RG11B10F && c->size != 16 && c->size != 32)
++         return 0;
++      numeric = KK_VERTEX_FETCH_FLOAT;
++      break;
++   default:
++      return 0;
++   }
++
++   uint32_t swizzle = 0;
++   for (unsigned i = 0; i < 4; ++i) {
++      if (desc->swizzle[i] > PIPE_SWIZZLE_1)
++         return 0;
++      swizzle |= desc->swizzle[i] << (3 * i);
++   }
++
++   return layout << KK_VERTEX_FETCH_LAYOUT_SHIFT |
++          channels << KK_VERTEX_FETCH_CHANNELS_SHIFT |
++          numeric << KK_VERTEX_FETCH_NUMERIC_SHIFT |
++          swizzle << KK_VERTEX_FETCH_SWIZZLE_SHIFT;
++}
++
++static nir_def *
++fetch_field(nir_builder *b, nir_def *format, unsigned shift, unsigned bits)
++{
++   return nir_ubitfield_extract_imm(b, format, shift, bits);
++}
++
++/* The four 32-bit words the attribute's channels start from: one load per
++ * channel of the attribute's channel size, each within the attribute (a
++ * channel past the last one stored reads the last one again). The branches
++ * are uniform: every vertex of a draw has the same layout. */
++static void
++fetch_raw(nir_builder *b, nir_def *layout, nir_def *channels, nir_def *base,
++          nir_def *byte_offset, nir_def *raw[4])
++{
++   nir_def *last = nir_iadd_imm(b, nir_umax(b, channels, nir_imm_int(b, 1)), -1);
++   nir_def *a8[4], *a16[4], *a32[4];
++
++   nir_push_if(b, nir_ieq_imm(b, layout, KK_VERTEX_FETCH_ARRAY8));
++   for (unsigned c = 0; c < 4; ++c) {
++      nir_def *i = nir_iadd(b, byte_offset, nir_umin(b, nir_imm_int(b, c), last));
++      a8[c] = nir_u2u32(b, nir_load_constant_agx(b, 1, 8, base, i,
++                                                 .format = PIPE_FORMAT_R8_UINT,
++                                                 .base = 0u));
++   }
++   nir_push_else(b, NULL);
++   nir_push_if(b, nir_ieq_imm(b, layout, KK_VERTEX_FETCH_ARRAY16));
++   for (unsigned c = 0; c < 4; ++c) {
++      nir_def *i = nir_iadd(b, nir_ushr_imm(b, byte_offset, 1),
++                            nir_umin(b, nir_imm_int(b, c), last));
++      a16[c] = nir_u2u32(b, nir_load_constant_agx(b, 1, 16, base, i,
++                                                  .format = PIPE_FORMAT_R16_UINT,
++                                                  .base = 0u));
++   }
++   nir_push_else(b, NULL);
++   for (unsigned c = 0; c < 4; ++c) {
++      nir_def *i = nir_iadd(b, nir_ushr_imm(b, byte_offset, 2),
++                            nir_umin(b, nir_imm_int(b, c), last));
++      a32[c] = nir_load_constant_agx(b, 1, 32, base, i,
++                                     .format = PIPE_FORMAT_R32_UINT, .base = 0u);
++   }
++   nir_pop_if(b, NULL);
++   nir_def *wide[4];
++   for (unsigned c = 0; c < 4; ++c)
++      wide[c] = nir_if_phi(b, a16[c], a32[c]);
++   nir_pop_if(b, NULL);
++   for (unsigned c = 0; c < 4; ++c)
++      raw[c] = nir_if_phi(b, a8[c], wide[c]);
++}
++
++static void
++runtime_load(struct nir_builder *b, nir_intrinsic_instr *intr, bool robustness2)
++{
++   b->cursor = nir_instr_remove(&intr->instr);
++
++   nir_src *offset_src = nir_get_io_offset_src(intr);
++   assert(nir_src_is_const(*offset_src) && "no attribute indirects");
++   unsigned index = nir_intrinsic_base(intr) + nir_src_as_uint(*offset_src);
++
++   /* This attribute's slot of the layout */
++   nir_def *per_draw = nir_load_per_draw_ptr_kk(b, 1, 64);
++   nir_def *table = nir_load_global_constant(
++      b, 1, 64,
++      nir_iadd_imm(b, per_draw, offsetof(struct kk_per_draw_data, vertex_fetch)),
++      .align_mul = 8);
++   nir_def *entry = nir_load_global_constant(
++      b, 4, 32,
++      nir_iadd_imm(b, table, index * sizeof(struct kk_vertex_fetch)),
++      .align_mul = 16);
++   nir_def *format = nir_channel(b, entry, 0);
++   nir_def *stride = nir_channel(b, entry, 1);
++   nir_def *divisor = nir_channel(b, entry, 2);
++
++   nir_def *layout = fetch_field(b, format, KK_VERTEX_FETCH_LAYOUT_SHIFT, 3);
++   nir_def *channels = fetch_field(b, format, KK_VERTEX_FETCH_CHANNELS_SHIFT, 3);
++   nir_def *numeric = fetch_field(b, format, KK_VERTEX_FETCH_NUMERIC_SHIFT, 3);
++   nir_def *instanced =
++      nir_ine_imm(b, nir_iand_imm(b, format, KK_VERTEX_FETCH_INSTANCED), 0);
++
++   /* The element, as kk_nir_lower_vbo computes it for a known rate */
++   nir_def *per_instance = nir_bcsel(
++      b, nir_ieq_imm(b, divisor, 0), nir_imm_int(b, 0),
++      nir_udiv(b, nir_load_instance_id(b),
++               nir_umax(b, divisor, nir_imm_int(b, 1))));
++   per_instance = nir_iadd(b, per_instance, nir_load_base_instance(b));
++   nir_def *el = nir_bcsel(b, instanced, per_instance, nir_load_vertex_id(b));
++   BITSET_SET(b->shader->info.system_values_read, SYSTEM_VALUE_INSTANCE_ID);
++   BITSET_SET(b->shader->info.system_values_read, SYSTEM_VALUE_BASE_INSTANCE);
++   BITSET_SET(b->shader->info.system_values_read, SYSTEM_VALUE_VERTEX_ID);
++
++   nir_def *argbuf = nir_load_buffer_ptr_kk(b, 1, 64, .binding = 0);
++   nir_def *base = nir_load_global_constant(
++      b, 1, 64,
++      nir_iadd_imm(b, argbuf,
++                   offsetof(struct kk_root_descriptor_table,
++                            draw.attrib_base[index])));
++
++   nir_def *raw[4];
++   fetch_raw(b, layout, channels, base, nir_imul(b, el, stride), raw);
++
++   if (robustness2) {
++      nir_def *bounds = nir_load_global_constant(
++         b, 1, 32,
++         nir_iadd_imm(b, argbuf,
++                      offsetof(struct kk_root_descriptor_table,
++                               draw.attrib_clamps[index])));
++      nir_def *oob = nir_ult(b, bounds, el);
++      for (unsigned c = 0; c < 4; ++c)
++         raw[c] = nir_bcsel(b, oob, nir_imm_int(b, 0), raw[c]);
++   }
++
++   /* Channel bits, then the packed formats split into channels */
++   nir_def *packed10 = nir_ieq_imm(b, layout, KK_VERTEX_FETCH_RGB10A2);
++   nir_def *packed11 = nir_ieq_imm(b, layout, KK_VERTEX_FETCH_RG11B10F);
++   nir_def *size = nir_bcsel(
++      b, nir_ieq_imm(b, layout, KK_VERTEX_FETCH_ARRAY8), nir_imm_int(b, 8),
++      nir_bcsel(b, nir_ieq_imm(b, layout, KK_VERTEX_FETCH_ARRAY16),
++                nir_imm_int(b, 16), nir_imm_int(b, 32)));
++   nir_def *f11 = nir_format_unpack_11f11f10f(b, raw[0]);
++
++   const bool is_int_dest =
++      nir_alu_type_get_base_type(nir_intrinsic_dest_type(intr)) !=
++      nir_type_float;
++   nir_def *conv[4];
++   for (unsigned c = 0; c < 4; ++c) {
++      nir_def *bits =
++         nir_bcsel(b, packed10, nir_imm_int(b, c == 3 ? 2 : 10), size);
++      nir_def *v = nir_bcsel(
++         b, packed10, nir_ubitfield_extract_imm(b, raw[0], 10 * c, c == 3 ? 2 : 10),
++         raw[c]);
++
++      nir_def *shift = nir_isub(b, nir_imm_int(b, 32), bits);
++      nir_def *sext = nir_ishr(b, nir_ishl(b, v, shift), shift);
++      nir_def *umax = nir_ushr(b, nir_imm_int(b, ~0), shift);
++      nir_def *smax = nir_ushr(b, nir_imm_int(b, 0x7fffffff), shift);
++
++      nir_def *unorm = nir_fdiv(b, nir_u2f32(b, v), nir_u2f32(b, umax));
++      nir_def *snorm = nir_fmax(b, nir_fdiv(b, nir_i2f32(b, sext), nir_i2f32(b, smax)),
++                                nir_imm_float(b, -1.0f));
++      nir_def *flt = nir_bcsel(b, nir_ieq_imm(b, bits, 16),
++                               nir_f2f32(b, nir_u2u16(b, v)), v);
++
++      nir_def *r = unorm;
++      r = nir_bcsel(b, nir_ieq_imm(b, numeric, KK_VERTEX_FETCH_SNORM), snorm, r);
++      r = nir_bcsel(b, nir_ieq_imm(b, numeric, KK_VERTEX_FETCH_USCALED),
++                    nir_u2f32(b, v), r);
++      r = nir_bcsel(b, nir_ieq_imm(b, numeric, KK_VERTEX_FETCH_SSCALED),
++                    nir_i2f32(b, sext), r);
++      r = nir_bcsel(b, nir_ieq_imm(b, numeric, KK_VERTEX_FETCH_UINT), v, r);
++      r = nir_bcsel(b, nir_ieq_imm(b, numeric, KK_VERTEX_FETCH_SINT), sext, r);
++      r = nir_bcsel(b, nir_ieq_imm(b, numeric, KK_VERTEX_FETCH_FLOAT), flt, r);
++      conv[c] = nir_bcsel(b, packed11,
++                          c < 3 ? nir_channel(b, f11, c) : nir_imm_int(b, 0), r);
++   }
++
++   /* The format's swizzle, which also gives the missing components */
++   nir_def *one = nir_imm_int(b, is_int_dest ? 1 : fui(1.0f));
++   nir_def *channels_out[4] = {NULL};
++   for (unsigned i = 0; i < intr->num_components; ++i) {
++      unsigned c = nir_intrinsic_component(intr) + i;
++      nir_def *s =
++         fetch_field(b, format, KK_VERTEX_FETCH_SWIZZLE_SHIFT + 3 * c, 3);
++      nir_def *v = conv[0];
++      for (unsigned k = 1; k < 4; ++k)
++         v = nir_bcsel(b, nir_ieq_imm(b, s, k), conv[k], v);
++      v = nir_bcsel(b, nir_ieq_imm(b, s, PIPE_SWIZZLE_0), nir_imm_int(b, 0), v);
++      v = nir_bcsel(b, nir_ieq_imm(b, s, PIPE_SWIZZLE_1), one, v);
++
++      if (intr->def.bit_size == 16)
++         v = is_int_dest ? nir_u2u16(b, v) : nir_f2f16(b, v);
++      channels_out[i] = v;
++   }
++
++   nir_def *logical = nir_vec(b, channels_out, intr->num_components);
++   nir_def_rewrite_uses(&intr->def, logical);
++}
++
++bool
++kk_nir_lower_vbo_runtime(nir_shader *nir, bool robustness2)
++{
++   assert(nir->info.stage == MESA_SHADER_VERTEX);
++   nir_function_impl *impl = nir_shader_get_entrypoint(nir);
++
++   /* Collected first: each load adds control flow. */
++   struct util_dynarray loads;
++   util_dynarray_init(&loads, NULL);
++   nir_foreach_block(block, impl) {
++      nir_foreach_instr(instr, block) {
++         if (instr->type != nir_instr_type_intrinsic)
++            continue;
++         nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
++         if (intr->intrinsic == nir_intrinsic_load_input)
++            util_dynarray_append_typed(&loads, nir_intrinsic_instr *, intr);
++      }
++   }
++
++   nir_builder b = nir_builder_create(impl);
++   util_dynarray_foreach(&loads, nir_intrinsic_instr *, intr)
++      runtime_load(&b, *intr, robustness2);
++
++   bool progress = loads.size > 0;
++   util_dynarray_fini(&loads);
++   return nir_progress(progress, impl, nir_metadata_none);
++}
+diff --git a/src/kosmickrisp/vulkan/kk_nir_lower_vbo.h b/src/kosmickrisp/vulkan/kk_nir_lower_vbo.h
+index af47837..8f33a25 100644
+--- a/src/kosmickrisp/vulkan/kk_nir_lower_vbo.h
++++ b/src/kosmickrisp/vulkan/kk_nir_lower_vbo.h
+@@ -40,6 +40,58 @@ bool kk_nir_lower_vbo(nir_shader *shader, struct kk_attribute *attribs,
+ 
+ bool kk_vbo_supports_format(enum pipe_format format);
+ 
++/* Playport (PLA-424): vertex fetch from a layout given at draw time, for a
++ * vertex shader compiled for a pipeline library without its vertex input
++ * state. kk_per_draw_data::vertex_fetch points at one entry per attribute
++ * slot (the slots of kk_root_descriptor_table::draw.attrib_base), which
++ * kk_flush_dynamic_state fills from the dynamic vertex input state. */
++struct kk_vertex_fetch {
++   /* KK_VERTEX_FETCH_* fields; 0 for an attribute without a format */
++   uint32_t format;
++   uint32_t stride;
++   /* Instanced attributes: 0 gives every instance the first element */
++   uint32_t divisor;
++   uint32_t pad;
++};
++
++/* How the attribute is stored */
++enum kk_vertex_fetch_layout {
++   KK_VERTEX_FETCH_NONE = 0,
++   /* 1 to 4 channels of 8, 16 or 32 bits */
++   KK_VERTEX_FETCH_ARRAY8 = 1,
++   KK_VERTEX_FETCH_ARRAY16 = 2,
++   KK_VERTEX_FETCH_ARRAY32 = 3,
++   /* One 32-bit word: 10, 10, 10 and 2 bits, or 11, 11 and 10-bit floats */
++   KK_VERTEX_FETCH_RGB10A2 = 4,
++   KK_VERTEX_FETCH_RG11B10F = 5,
++};
++
++/* How its channels convert */
++enum kk_vertex_fetch_numeric {
++   KK_VERTEX_FETCH_UNORM = 0,
++   KK_VERTEX_FETCH_SNORM = 1,
++   KK_VERTEX_FETCH_USCALED = 2,
++   KK_VERTEX_FETCH_SSCALED = 3,
++   KK_VERTEX_FETCH_UINT = 4,
++   KK_VERTEX_FETCH_SINT = 5,
++   KK_VERTEX_FETCH_FLOAT = 6,
++};
++
++/* kk_vertex_fetch::format: the layout (3 bits), the channels stored (3
++ * bits), the numeric type (3 bits), the format's swizzle (PIPE_SWIZZLE_X to
++ * PIPE_SWIZZLE_1, 3 bits for each of 4 components) and the input rate. */
++#define KK_VERTEX_FETCH_LAYOUT_SHIFT   0
++#define KK_VERTEX_FETCH_CHANNELS_SHIFT 3
++#define KK_VERTEX_FETCH_NUMERIC_SHIFT  6
++#define KK_VERTEX_FETCH_SWIZZLE_SHIFT  9
++#define KK_VERTEX_FETCH_INSTANCED      (1u << 21)
++
++/* format's kk_vertex_fetch::format without the input rate, or 0 if the
++ * runtime fetch cannot read it */
++uint32_t kk_vertex_fetch_format(enum pipe_format format);
++
++bool kk_nir_lower_vbo_runtime(nir_shader *shader, bool robustness2);
++
+ #ifdef __cplusplus
+ } /* extern C */
+ #endif
+\ No newline at end of file
+diff --git a/src/kosmickrisp/vulkan/kk_shader.c b/src/kosmickrisp/vulkan/kk_shader.c
+index f4abcab..99314e2 100644
+--- a/src/kosmickrisp/vulkan/kk_shader.c
++++ b/src/kosmickrisp/vulkan/kk_shader.c
+@@ -299,7 +299,7 @@ kk_hash_graphics_state(struct vk_physical_device *device,
+     * keep their NIR (kk_gpl_compile_separate), so they are keyed apart from
+     * a whole pipeline's. */
+    if (kk_gpl_partial_state(state)) {
+-      const char separate[] = "kk-gpl-separate-v1";
++      const char separate[] = "kk-gpl-separate-v2";
+       _mesa_blake3_update(&blake3_ctx, separate, sizeof(separate));
+    }
+ 
+@@ -452,7 +452,8 @@ kk_is_possible_both_depth_clip_clamp(
+ 
+ static void
+ kk_lower_vs_vbo(nir_shader *nir, const struct vk_graphics_pipeline_state *state,
+-                const struct vk_pipeline_robustness_state *rs)
++                const struct vk_pipeline_robustness_state *rs,
++                bool runtime_fetch)
+ {
+    assert(!(nir->info.inputs_read & BITFIELD64_MASK(VERT_ATTRIB_GENERIC0)) &&
+           "Fixed-function attributes not used in Vulkan");
+@@ -461,6 +462,15 @@ kk_lower_vs_vbo(nir_shader *nir, const struct vk_graphics_pipeline_state *state,
+    /* Fold constant offset srcs for IO. */
+    NIR_PASS(_, nir, nir_opt_constant_folding);
+ 
++   /* Playport (PLA-424): a pipeline library's vertex shader reads the layout
++    * the draw gives. */
++   if (runtime_fetch) {
++      NIR_PASS(_, nir, kk_nir_lower_vbo_runtime,
++               rs->vertex_inputs ==
++                  VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_ROBUST_BUFFER_ACCESS_2);
++      return;
++   }
++
+    struct kk_attribute attributes[KK_MAX_ATTRIBS] = {};
+    uint64_t attribs_read = nir->info.inputs_read >> VERT_ATTRIB_GENERIC0;
+    u_foreach_bit(i, state->vi->attributes_valid) {
+@@ -830,7 +840,9 @@ kk_lower_nir(struct kk_device *dev, nir_shader *nir, bool emulated_stage,
+ 
+    /* Massage IO related variables to please Metal */
+    if (nir->info.stage == MESA_SHADER_VERTEX) {
+-      NIR_PASS(_, nir, kk_nir_lower_vs_multiview, state->mv->view_mask);
++      /* Playport (PLA-424): a pipeline library may have no multiview state */
++      NIR_PASS(_, nir, kk_nir_lower_vs_multiview,
++               state->mv ? state->mv->view_mask : 0);
+ 
+       /* kk_nir_lower_vs_multiview may create a temporary array to assign the
+        * correct view index. Since we don't handle derefs, we need to get rid of
+@@ -920,10 +932,14 @@ kk_lower_nir(struct kk_device *dev, nir_shader *nir, bool emulated_stage,
+    if ((nir->info.stage == MESA_SHADER_VERTEX ||
+         nir->info.stage == MESA_SHADER_TESS_EVAL) &&
+        !emulated_stage) {
++      /* Playport (PLA-424): a vertex shader without the input assembly state
++       * (compiled for a pipeline library) always writes a point size, so
++       * that it can draw any topology. */
+       bool is_point =
+          nir->info.stage == MESA_SHADER_TESS_EVAL
+             ? nir->info.tess.point_mode
+-            : state->ia->primitive_topology == VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
++            : state->ia == NULL ||
++                 state->ia->primitive_topology == VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
+       kk_lower_hw_vs(nir, state, is_point);
+    } else if (nir->info.stage == MESA_SHADER_FRAGMENT) {
+       kk_lower_fs(dev, nir, state);
+@@ -1041,6 +1057,10 @@ kk_shader_destroy(struct vk_device *vk_dev, struct kk_shader *shader,
+    if (shader->gpl) {
+       struct kk_gpl_source *src = shader->gpl;
+       kk_gpl_forget(dev, src->id);
++      if (src->vertex_library)
++         mtl_release(src->vertex_library);
++      if (src->vertex)
++         kk_shader_destroy(vk_dev, src->vertex, &dev->vk.alloc);
+       for (uint32_t i = 0; i < src->set_layout_count; i++) {
+          if (src->set_layouts[i])
+             vk_descriptor_set_layout_unref(&dev->vk, src->set_layouts[i]);
+@@ -1371,13 +1391,44 @@ kk_compile_gs(struct kk_device *dev, nir_shader **nir_inout,
+    *nir_inout = rast;
+ }
+ 
++/* Playport (PLA-424): VARYING_SLOT_VARn's type in a vertex shader's stores */
++static bool
++gather_varying_type(nir_builder *b, nir_intrinsic_instr *intr, void *data)
++{
++   if (intr->intrinsic != nir_intrinsic_store_output)
++      return false;
++
++   uint8_t *types = data;
++   nir_io_semantics io = nir_intrinsic_io_semantics(intr);
++   unsigned location = io.location + nir_src_as_uint(intr->src[1]);
++   if (location >= VARYING_SLOT_VAR0 && location <= VARYING_SLOT_VAR31)
++      types[location - VARYING_SLOT_VAR0] = nir_intrinsic_src_type(intr);
++   return false;
++}
++
++/* Playport (PLA-424): what linking a vertex shader compiled for a pipeline
++ * library needs, from its NIR as nir_to_msl translates it. */
++static void
++kk_gpl_note_vertex_outputs(struct kk_shader *shader, nir_shader *nir)
++{
++   shader->gpl_vertex_fetch = true;
++   /* The vertex fetch reads the per-draw data. */
++   shader->info.uses_per_draw_data = msl_gather_uses_per_draw_data(nir);
++   shader->info.vs.outputs_written = nir->info.outputs_written;
++   nir_shader_intrinsics_pass(nir, gather_varying_type, nir_metadata_all,
++                              shader->gpl_varying_types);
++}
++
++/* Playport (PLA-424): gpl_separate compiles a vertex shader of a pipeline
++ * library on its own (runtime vertex fetch), or the fragment shader linked to
++ * one; both declare their user varyings as vec4s. */
+ static VkResult
+ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
+                   struct kk_shader *prev_stage,
+                   const struct vk_pipeline_robustness_state *robustness,
+                   const struct vk_graphics_pipeline_state *state,
+                   const VkAllocationCallbacks *pAllocator,
+-                  struct kk_shader **shader_out)
++                  bool gpl_separate, struct kk_shader **shader_out)
+ {
+    assert(nir->info.io_lowered && "nir must have lowered io");
+    struct kk_physical_device *pdev = kk_device_physical(dev);
+@@ -1417,7 +1468,7 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
+    if (stage == MESA_SHADER_VERTEX) {
+       /* VBO lowering needs to go here otherwise, the linking step removes all
+        * inputs since we read vertex attributes from UBOs. */
+-      kk_lower_vs_vbo(nir, state, robustness);
++      kk_lower_vs_vbo(nir, state, robustness, gpl_separate);
+       if (nir->info.next_stage == MESA_SHADER_TESS_CTRL ||
+           nir->info.next_stage == MESA_SHADER_GEOMETRY) {
+          NIR_PASS(_, nir, poly_nir_lower_vs_before_gs);
+@@ -1475,7 +1526,10 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
+    struct nir_to_msl_options translate_options = {
+       .mem_ctx = NULL,
+       .disabled_workarounds = pdev->settings.disabled_workarounds,
++      .vec4_user_varyings = gpl_separate,
+    };
++   if (gpl_separate && stage == MESA_SHADER_VERTEX)
++      kk_gpl_note_vertex_outputs(shader, nir);
+    if (nir->info.stage != MESA_SHADER_FRAGMENT &&
+        pdev->settings.vertex_compute_workaround_6)
+       translate_options.disabled_workarounds &= ~BITFIELD64_BIT(6);
+@@ -1540,7 +1594,7 @@ kk_compile_nir_shader(struct kk_device *dev, nir_shader *nir,
+    struct kk_shader *shader = NULL;
+    nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
+    VkResult result =
+-      kk_compile_shader(dev, nir, NULL, &rs_none, NULL, alloc, &shader);
++      kk_compile_shader(dev, nir, NULL, &rs_none, NULL, alloc, false, &shader);
+    if (result != VK_SUCCESS)
+       return result;
+ 
+@@ -2612,9 +2666,11 @@ gather_graphics_pipeline_create_info(
+       vk_primitive_topology_to_mtl_primitive_topology_class(topology);
+ }
+ 
++/* Playport (PLA-424): vertex_library, if not NULL, is the vertex function's
++ * library, built already (struct kk_gpl_source::vertex_library). */
+ static VkResult
+ kk_compile_graphics_pipeline(struct kk_device *device, struct kk_shader *vs,
+-                             const char *src)
++                             const char *src, mtl_library *vertex_library_built)
+ {
+    VkResult result = VK_SUCCESS;
+    struct kk_pipeline_handles *pipe = &vs->pipeline;
+@@ -2693,14 +2749,19 @@ kk_compile_graphics_pipeline(struct kk_device *device, struct kk_shader *vs,
+     * while this one builds the vertex library; if that thread cannot be
+     * made, the two build one after the other. */
+    thrd_t fragment_thread;
+-   build.parallel = KK_EXPERIMENTAL(PARALLEL_STAGES) &&
+-                    thrd_create(&fragment_thread, kk_build_library_thread,
+-                                &fragment_build) == thrd_success;
+-   kk_build_library(&vertex_build);
+-   if (build.parallel)
+-      thrd_join(fragment_thread, NULL);
+-   else if (vertex_build.library)
++   if (vertex_library_built) {
++      vertex_build.library = mtl_retain(vertex_library_built);
+       kk_build_library(&fragment_build);
++   } else {
++      build.parallel = KK_EXPERIMENTAL(PARALLEL_STAGES) &&
++                       thrd_create(&fragment_thread, kk_build_library_thread,
++                                   &fragment_build) == thrd_success;
++      kk_build_library(&vertex_build);
++      if (build.parallel)
++         thrd_join(fragment_thread, NULL);
++      else if (vertex_build.library)
++         kk_build_library(&fragment_build);
++   }
+ 
+    mtl_library *vertex_library = vertex_build.library;
+    mtl_library *fragment_library = fragment_build.library;
+@@ -3188,7 +3249,7 @@ kk_compile_shaders(struct vk_device *device, uint32_t shader_count,
+       struct kk_shader *prev_stage = i > 0 ? shaders[i - 1] : NULL;
+       result =
+          kk_compile_shader(dev, nir_shaders[i], prev_stage, vertex_robustness,
+-                           state, pAllocator, &shaders[i]);
++                           state, pAllocator, false, &shaders[i]);
+ 
+       if (result != VK_SUCCESS) {
+          /* Clean up all the shaders before this point */
+@@ -3223,7 +3284,8 @@ kk_compile_shaders(struct vk_device *device, uint32_t shader_count,
+                                      KK_SRC_TRANSLATED);
+    } else {
+       gather_graphics_pipeline_create_info(dev, state, shaders, total_shaders);
+-      result = kk_compile_graphics_pipeline(dev, shaders[0], KK_SRC_TRANSLATED);
++      result = kk_compile_graphics_pipeline(dev, shaders[0], KK_SRC_TRANSLATED,
++                                            NULL);
+ 
+       /* Free generated fragment and geometry shaders, and put the
+        * application's shaders back in its order. */
+@@ -3410,7 +3472,8 @@ kk_deserialize_shader(struct vk_device *vk_dev, struct blob_reader *blob,
+          local_size_threads,
+          &shader->pipeline.cs, KK_SRC_DESERIALIZED);
+    } else if (info.stage == MESA_SHADER_VERTEX) {
+-      result = kk_compile_graphics_pipeline(dev, shader, KK_SRC_DESERIALIZED);
++      result = kk_compile_graphics_pipeline(dev, shader, KK_SRC_DESERIALIZED,
++                                            NULL);
+    }
+ 
+    if (result != VK_SUCCESS)
+@@ -3568,6 +3631,116 @@ kk_gpl_partial_state(const struct vk_graphics_pipeline_state *state)
+ 
+ static uint64_t kk_gpl_next_id;
+ 
++/* Rewrites the VARYING_SLOT_VARn outputs (a vertex shader) or inputs (a
++ * fragment shader) of an array to one slot each, as nir_to_msl reads them.
++ * Sets *indirect if an offset is not constant. */
++static bool
++single_slot_varying(nir_builder *b, nir_intrinsic_instr *intr, void *data)
++{
++   bool *indirect = data;
++   if (b->shader->info.stage == MESA_SHADER_VERTEX
++          ? intr->intrinsic != nir_intrinsic_store_output
++          : intr->intrinsic != nir_intrinsic_load_input &&
++               intr->intrinsic != nir_intrinsic_load_interpolated_input)
++      return false;
++
++   nir_io_semantics io = nir_intrinsic_io_semantics(intr);
++   if (io.location < VARYING_SLOT_VAR0 || io.location > VARYING_SLOT_VAR31)
++      return false;
++   nir_src *offset = nir_get_io_offset_src(intr);
++   if (!nir_src_is_const(*offset)) {
++      *indirect = true;
++      return false;
++   }
++   unsigned off = nir_src_as_uint(*offset);
++   if (off == 0 && io.num_slots == 1)
++      return false;
++
++   io.location += off;
++   io.num_slots = 1;
++   nir_intrinsic_set_io_semantics(intr, io);
++   nir_intrinsic_set_base(intr, nir_intrinsic_base(intr) + off);
++   b->cursor = nir_before_instr(&intr->instr);
++   nir_src_rewrite(offset, nir_imm_int(b, 0));
++   return true;
++}
++
++static bool
++kk_gpl_single_slot_varyings(nir_shader *nir, bool *indirect)
++{
++   return nir_shader_intrinsics_pass(nir, single_slot_varying,
++                                     nir_metadata_control_flow, indirect);
++}
++
++/* Playport (PLA-424): a vertex shader alone in its pipeline library, compiled
++ * apart from the other libraries (runtime vertex fetch, a point size always,
++ * vec4 user varyings) into src->vertex, and its Metal library built. Without
++ * it, src->vertex_blocker says why, and links compile the whole pipeline. */
++static void
++kk_gpl_compile_vertex(struct kk_device *dev, struct kk_gpl_source *src,
++                      const struct vk_shader_compile_info *info,
++                      const struct vk_graphics_pipeline_state *state)
++{
++   struct kk_physical_device *pdev = kk_device_physical(dev);
++   const int64_t start = os_time_get_nano();
++
++   if (info->next_stage_mask & ~VK_SHADER_STAGE_FRAGMENT_BIT) {
++      src->vertex_blocker = "stages";
++      return;
++   }
++   if (info->nir->xfb_info && info->nir->xfb_info->output_count) {
++      src->vertex_blocker = "xfb";
++      return;
++   }
++
++   nir_shader *nir = nir_shader_clone(NULL, info->nir);
++   if (nir == NULL) {
++      src->vertex_blocker = "memory";
++      return;
++   }
++   msl_preprocess_nir_workarounds(nir, pdev->settings.disabled_workarounds);
++   kk_lower_nir(dev, nir, false, info->robustness, info->set_layout_count,
++                info->set_layouts, state,
++                kk_make_feature_key(&dev->vk.enabled_features));
++   bool indirect = false;
++   NIR_PASS(_, nir, kk_gpl_single_slot_varyings, &indirect);
++   if (indirect) {
++      ralloc_free(nir);
++      src->vertex_blocker = "varying-indirect";
++      return;
++   }
++   nir->info.next_stage = MESA_SHADER_FRAGMENT;
++
++   struct kk_shader *vs = NULL;
++   if (kk_compile_shader(dev, nir, NULL, info->robustness, state,
++                         &dev->vk.alloc, true, &vs) != VK_SUCCESS) {
++      src->vertex_blocker = "vertex-compile";
++      return;
++   }
++
++   struct kk_library_build build = {
++      .device = dev,
++      .data = &vs->msl_data[MESA_SHADER_VERTEX],
++      .kind = "gpl",
++      .step = "vertex-library",
++      .src = KK_SRC_TRANSLATED,
++   };
++   kk_build_library(&build);
++   if (KK_DEBUG(COMPILE))
++      fprintf(stderr, "[kk-compile] gpl vertex %s ms=%.1f library_ms=%.1f\n",
++              build.library ? "built" : "FAIL",
++              (os_time_get_nano() - start) / 1e6, build.ns / 1e6);
++   if (build.library == NULL) {
++      kk_shader_destroy(&dev->vk, vs, &dev->vk.alloc);
++      src->vertex_blocker = "vertex-library";
++      return;
++   }
++
++   src->vertex = vs;
++   src->vertex_library = build.library;
++   src->view_mask = state->mv ? state->mv->view_mask : 0;
++}
++
+ static VkResult
+ kk_gpl_source_init(struct kk_device *dev, struct kk_gpl_source *src,
+                    const struct vk_shader_compile_info *info,
+@@ -3652,6 +3825,11 @@ kk_gpl_compile_separate(struct kk_device *dev, uint32_t shader_count,
+             if (result != VK_SUCCESS) {
+                kk_shader_destroy(&dev->vk, shader, pAllocator);
+                shader = NULL;
++            } else if (infos[i].stage == MESA_SHADER_VERTEX) {
++               if (shader_count == 1)
++                  kk_gpl_compile_vertex(dev, src, &infos[i], state);
++               else
++                  src->vertex_blocker = "stages";
+             }
+          } else {
+             if (shader)
+@@ -3708,23 +3886,211 @@ kk_compile_shaders_noted(struct vk_device *device, uint32_t shader_count,
+    return result;
+ }
+ 
++const char *
++kk_gpl_vertex_blocker(struct kk_shader *const *sources,
++                      const struct vk_graphics_pipeline_state *state)
++{
++   const struct kk_shader *vs = sources[MESA_SHADER_VERTEX];
++   if (vs == NULL)
++      return "stages";
++   for (uint32_t s = MESA_SHADER_TESS_CTRL; s <= MESA_SHADER_GEOMETRY; s++) {
++      if (sources[s])
++         return "stages";
++   }
++   if (vs->gpl->vertex == NULL)
++      return vs->gpl->vertex_blocker;
++
++   if ((state->mv ? state->mv->view_mask : 0) != vs->gpl->view_mask)
++      return "multiview";
++
++   /* VK_POLYGON_MODE_POINT adds a geometry shader to triangles */
++   if (state->rs && state->rs->polygon_mode == VK_POLYGON_MODE_POINT &&
++       state->ia) {
++      enum mesa_prim prim = kk_topology_class(state->ia->primitive_topology);
++      if (prim == MESA_PRIM_TRIANGLES || prim == MESA_PRIM_TRIANGLES_ADJACENCY)
++         return "point-fill";
++   }
++
++   u_foreach_bit(i, vs->gpl->vertex->info.vs.attribs_read) {
++      if (state->vi && (state->vi->attributes_valid & BITFIELD_BIT(i)) &&
++          kk_vertex_fetch_format(vk_format_to_pipe_format(
++             state->vi->attributes[i].format)) == 0)
++         return "vertex-format";
++   }
++   return NULL;
++}
++
++/* What a fragment shader reads of the vertex shader compiled on its own */
++struct kk_gpl_fs_match {
++   uint64_t written;
++   const uint8_t *types;
++   const char *blocker;
++};
++
++/* An input the vertex shader does not write reads 0, as linking would make
++ * it, and an input of another type than the output cannot link. */
++static bool
++match_fs_input(nir_builder *b, nir_intrinsic_instr *intr, void *data)
++{
++   if (intr->intrinsic != nir_intrinsic_load_input &&
++       intr->intrinsic != nir_intrinsic_load_interpolated_input)
++      return false;
++
++   struct kk_gpl_fs_match *m = data;
++   nir_io_semantics io = nir_intrinsic_io_semantics(intr);
++   nir_src *offset = nir_get_io_offset_src(intr);
++   if (!nir_src_is_const(*offset)) {
++      m->blocker = "varying-indirect";
++      return false;
++   }
++   unsigned location = io.location + nir_src_as_uint(*offset);
++   if (location == VARYING_SLOT_CLIP_DIST0 ||
++       location == VARYING_SLOT_CLIP_DIST1 ||
++       location == VARYING_SLOT_CULL_DIST0 ||
++       location == VARYING_SLOT_CULL_DIST1) {
++      m->blocker = "fragment-clip-input";
++      return false;
++   }
++   if (!(m->written & BITFIELD64_BIT(location))) {
++      b->cursor = nir_before_instr(&intr->instr);
++      nir_def_replace(&intr->def, nir_imm_zero(b, intr->def.num_components,
++                                               intr->def.bit_size));
++      return true;
++   }
++   if (location >= VARYING_SLOT_VAR0 && location <= VARYING_SLOT_VAR31 &&
++       m->types[location - VARYING_SLOT_VAR0] != nir_intrinsic_dest_type(intr))
++      m->blocker = "varying-type";
++   return false;
++}
++
++/* The link with the vertex shader compiled on its own: compiles the fragment
++ * shader (or an empty one) to match it, and builds the pipeline with its
++ * library. *fallback is set, and nothing compiled, if the fragment shader
++ * does not fit it. */
++static VkResult
++kk_gpl_link_separate(struct kk_device *dev, struct kk_shader *const *sources,
++                     const struct vk_graphics_pipeline_state *state,
++                     struct kk_shader **linked, const char **fallback)
++{
++   struct kk_physical_device *pdev = kk_device_physical(dev);
++   const struct kk_gpl_source *vsrc = sources[MESA_SHADER_VERTEX]->gpl;
++   const struct kk_shader *vertex = vsrc->vertex;
++   const struct kk_shader *fs_source = sources[MESA_SHADER_FRAGMENT];
++   const enum kk_feature_key features =
++      kk_make_feature_key(&dev->vk.enabled_features);
++
++   nir_shader *fs_nir;
++   if (fs_source) {
++      const struct kk_gpl_source *fsrc = fs_source->gpl;
++      struct blob_reader reader;
++      blob_reader_init(&reader, fsrc->nir, fsrc->nir_size);
++      fs_nir = nir_deserialize(
++         NULL, kk_get_nir_options(&pdev->vk, MESA_SHADER_FRAGMENT, &fsrc->rs),
++         &reader);
++      if (fs_nir == NULL)
++         return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
++      msl_preprocess_nir_workarounds(fs_nir,
++                                     pdev->settings.disabled_workarounds);
++      kk_lower_nir(dev, fs_nir, false, &fsrc->rs, fsrc->set_layout_count,
++                   fsrc->set_layouts, state, features);
++   } else {
++      fs_nir = get_empty_nir(dev, MESA_SHADER_FRAGMENT, state, features);
++   }
++
++   bool indirect = false;
++   NIR_PASS(_, fs_nir, kk_gpl_single_slot_varyings, &indirect);
++   struct kk_gpl_fs_match match = {
++      .written = vertex->info.vs.outputs_written,
++      .types = vertex->gpl_varying_types,
++      .blocker = indirect ? "varying-indirect" : NULL,
++   };
++   if (!indirect)
++      NIR_PASS(_, fs_nir, nir_shader_intrinsics_pass, match_fs_input,
++               nir_metadata_control_flow, &match);
++   if (match.blocker) {
++      ralloc_free(fs_nir);
++      *fallback = match.blocker;
++      return VK_SUCCESS;
++   }
++   nir_shader_gather_info(fs_nir, nir_shader_get_entrypoint(fs_nir));
++
++   /* The linked vertex shader holds the pipeline; its MSL is the library's. */
++   struct kk_shader *vs =
++      vk_shader_zalloc(&dev->vk, &kk_shader_ops, MESA_SHADER_VERTEX,
++                       &dev->vk.alloc, sizeof(*vs));
++   if (vs == NULL) {
++      ralloc_free(fs_nir);
++      return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
++   }
++   vs->info = vertex->info;
++   vs->gpl_vertex_fetch = true;
++   memcpy(vs->gpl_varying_types, vertex->gpl_varying_types,
++          sizeof(vs->gpl_varying_types));
++   vs->msl_data[MESA_SHADER_VERTEX].code =
++      ralloc_strdup(NULL, vertex->msl_data[MESA_SHADER_VERTEX].code);
++   vs->msl_data[MESA_SHADER_VERTEX].entrypoint_name =
++      ralloc_strdup(NULL, vertex->msl_data[MESA_SHADER_VERTEX].entrypoint_name);
++
++   struct kk_shader *fs = NULL;
++   VkResult result = kk_compile_shader(dev, fs_nir, vs, &vsrc->rs, state,
++                                       &dev->vk.alloc, true, &fs);
++   if (result != VK_SUCCESS) {
++      kk_shader_destroy(&dev->vk, vs, &dev->vk.alloc);
++      return result;
++   }
++
++   struct kk_shader *pair[] = {vs, fs};
++   gather_graphics_pipeline_create_info(dev, state, pair, ARRAY_SIZE(pair));
++   result = kk_compile_graphics_pipeline(dev, vs, KK_SRC_TRANSLATED,
++                                         vsrc->vertex_library);
++   /* A generated fragment shader lives on in the pipeline only */
++   if (fs_source == NULL || result != VK_SUCCESS) {
++      kk_shader_destroy(&dev->vk, fs, &dev->vk.alloc);
++      fs = NULL;
++   }
++   if (result != VK_SUCCESS) {
++      kk_shader_destroy(&dev->vk, vs, &dev->vk.alloc);
++      return result;
++   }
++
++   linked[MESA_SHADER_VERTEX] = vs;
++   linked[MESA_SHADER_FRAGMENT] = fs;
++   for (uint32_t s = 0; s < KK_GPL_STAGES; s++) {
++      if (linked[s] == NULL)
++         continue;
++      kk_shader_pack_msl(linked[s]);
++      if (KK_DEBUG(MEMORY))
++         kk_shader_count(linked[s], 1);
++   }
++   return VK_SUCCESS;
++}
++
+ /* Playport (PLA-424): the bound library shaders compiled as one pipeline with
+- * the state a draw has. sources and linked are indexed by stage. */
++ * the state a draw has, or with the vertex shader compiled on its own.
++ * sources and linked are indexed by stage. */
+ VkResult
+ kk_gpl_link_compile(struct kk_device *dev, struct kk_shader *const *sources,
+                     const struct vk_graphics_pipeline_state *state,
+-                    struct kk_shader **linked)
++                    bool separate_vertex, struct kk_shader **linked,
++                    const char **fallback)
+ {
+    struct kk_physical_device *pdev = kk_device_physical(dev);
+    struct vk_shader_compile_info infos[KK_GPL_STAGES];
+    mesa_shader_stage stages[KK_GPL_STAGES];
+    uint32_t count = 0;
+ 
++   *fallback = NULL;
+    for (uint32_t s = 0; s < KK_GPL_STAGES; s++) {
+       linked[s] = NULL;
+       if (sources[s])
+          stages[count++] = s;
+    }
++   if (separate_vertex) {
++      VkResult result =
++         kk_gpl_link_separate(dev, sources, state, linked, fallback);
++      if (*fallback == NULL)
++         return result;
++   }
+    if (count == 0)
+       return VK_SUCCESS;
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_shader.h b/src/kosmickrisp/vulkan/kk_shader.h
+index f6b150d..52e4c49 100644
+--- a/src/kosmickrisp/vulkan/kk_shader.h
++++ b/src/kosmickrisp/vulkan/kk_shader.h
+@@ -182,8 +182,16 @@ struct kk_shader {
+    /* Counted in kk_memory_stats (MESA_KK_DEBUG=memory) */
+    bool counted;
+    /* Playport (PLA-424): set when compiled for a pipeline library; the
+-    * shader then has no MSL or Metal objects, and a draw links it (kk_gpl.h) */
++    * shader then has no MSL or Metal objects of its own (a vertex shader's
++    * compile on its own is kk_gpl_source::vertex), and a draw links it
++    * (kk_gpl.h) */
+    struct kk_gpl_source *gpl;
++   /* Playport (PLA-424): a vertex shader compiled apart from its vertex
++    * input state, which fetches attributes through the layout the draw gives
++    * (kk_per_draw_data::vertex_fetch), and the nir_alu_type of each
++    * VARYING_SLOT_VARn it writes, for the fragment shader it is linked with */
++   bool gpl_vertex_fetch;
++   uint8_t gpl_varying_types[32];
+ };
+ 
+ VK_DEFINE_NONDISP_HANDLE_CASTS(kk_shader, vk.base, VkShaderEXT,

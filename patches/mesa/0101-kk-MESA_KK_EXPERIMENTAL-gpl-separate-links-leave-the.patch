@@ -1,0 +1,86 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 22 Oct 2026 02:08:06 +0200
+Subject: [PATCH] kk: MESA_KK_EXPERIMENTAL=gpl, separate links leave the
+ topology class unspecified
+
+With MESA_KK_EXPERIMENTAL=gpl, a link of a vertex shader compiled on
+its own now leaves the Metal pipeline's input primitive topology class
+unspecified for line and triangle topologies. Such a vertex shader
+writes a point size for any topology, and Metal refused every one of
+those pipelines ("Vertex shader writes point size but
+inputPrimitiveTopology is MTLPrimitiveTopologyClassTriangle"), so no
+separate link built on the phone. Metal ignores the point size of lines
+and triangles; point lists keep the point class.
+
+Layered rendering in Metal needs the class, so a link whose vertex
+shader writes a layer or viewport index as well as the point size, to
+lines or triangles, compiles the whole pipeline
+(fallback=point-size-layer). Whole pipelines are unchanged.
+
+Linear: PLA-424
+Class: feature
+Evidence: docs/evidence/2026-10-22-kk-gpl-phone.md
+Offered-upstream: not yet
+---
+ src/kosmickrisp/vulkan/kk_shader.c | 26 ++++++++++++++++++++++++++
+ 1 file changed, 26 insertions(+)
+
+diff --git a/src/kosmickrisp/vulkan/kk_shader.c b/src/kosmickrisp/vulkan/kk_shader.c
+index f0d9f11..83332c1 100644
+--- a/src/kosmickrisp/vulkan/kk_shader.c
++++ b/src/kosmickrisp/vulkan/kk_shader.c
+@@ -4649,6 +4649,16 @@ kk_gpl_vertex_blocker(struct kk_shader *const *sources,
+          return "point-fill";
+    }
+ 
++   /* Links of a vertex shader that writes a point size leave the topology
++    * class unspecified for lines and triangles (kk_gpl_link_topology), and
++    * layered rendering in Metal requires the class */
++   const uint64_t written = vs->gpl->vertex->info.vs.outputs_written;
++   if ((written & VARYING_BIT_PSIZ) &&
++       (written & (VARYING_BIT_LAYER | VARYING_BIT_VIEWPORT)) && state->ia &&
++       vk_primitive_topology_to_mtl_primitive_topology_class(
++          state->ia->primitive_topology) != MTL_PRIMITIVE_TOPOLOGY_CLASS_POINT)
++      return "point-size-layer";
++
+    u_foreach_bit(i, vs->gpl->vertex->info.vs.attribs_read) {
+       if (state->vi && (state->vi->attributes_valid & BITFIELD_BIT(i)) &&
+           kk_vertex_fetch_format(vk_format_to_pipe_format(
+@@ -4799,6 +4809,20 @@ match_fs_input(nir_builder *b, nir_intrinsic_instr *intr, void *data)
+    return false;
+ }
+ 
++/* Metal refuses a pipeline whose vertex function writes a point size with
++ * the line or triangle topology class. A vertex shader compiled on its own
++ * writes one for any topology (kk_lower_nir), so its links to lines and
++ * triangles leave the class unspecified, which Metal accepts unless the
++ * vertex shader writes a layer or viewport (kk_gpl_vertex_blocker). Call it
++ * after gather_graphics_pipeline_create_info. */
++static void
++kk_gpl_link_topology(struct kk_shader *vs)
++{
++   if ((vs->info.vs.outputs_written & VARYING_BIT_PSIZ) &&
++       vs->info.vs.topology != MTL_PRIMITIVE_TOPOLOGY_CLASS_POINT)
++      vs->info.vs.topology = MTL_PRIMITIVE_TOPOLOGY_CLASS_UNSPECIFIED;
++}
++
+ /* The linked vertex shader, which holds the pipeline: a copy of the vertex
+  * shader compiled on its own, whose MSL is its library's. */
+ static struct kk_shader *
+@@ -4894,6 +4918,7 @@ kk_gpl_link_libraries(struct kk_device *dev, const struct kk_gpl_source *vsrc,
+ 
+    struct kk_shader *pair[] = {vs, fs};
+    gather_graphics_pipeline_create_info(dev, state, pair, ARRAY_SIZE(pair));
++   kk_gpl_link_topology(vs);
+    VkResult result = kk_compile_graphics_pipeline(
+       dev, vs, KK_SRC_TRANSLATED, vsrc->vertex_library,
+       fsrc->fragment_library, state);
+@@ -4989,6 +5014,7 @@ kk_gpl_link_separate(struct kk_device *dev, struct kk_shader *const *sources,
+ 
+    struct kk_shader *pair[] = {vs, fs};
+    gather_graphics_pipeline_create_info(dev, state, pair, ARRAY_SIZE(pair));
++   kk_gpl_link_topology(vs);
+    result = kk_compile_graphics_pipeline(dev, vs, KK_SRC_TRANSLATED,
+                                          vsrc->vertex_library, NULL, NULL);
+    /* A generated fragment shader lives on in the pipeline only */

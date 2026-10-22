@@ -1,0 +1,1642 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Wed, 21 Oct 2026 21:19:03 +0200
+Subject: [PATCH] kk: MESA_KK_EXPERIMENTAL=gpl, a library's fragment shader
+ compiled on its own
+
+With MESA_KK_EXPERIMENTAL=gpl, a fragment shader alone in its pipeline
+library (DXVK's fragment shader library) is now also compiled on its
+own when the library is created, and its Metal library is built then
+(kk_gpl_compile_fragment). Its MSL depends on no colour or depth format
+(kk_lower_fs with gpl_separate):
+
+- No blending in the shader (nir_lower_blend), no alpha to coverage or
+  to one, no output signedness forced to the formats, no swizzle for
+  non-native formats; every colour output is declared with 4
+  components. Outputs keep their SPIR-V types.
+- Dual-source blending's second source is declared
+  [[color(0), index(1)]] (nir_to_msl_options::dual_source_blend).
+- Depth writes stay unless early fragment tests are forced; depth
+  clamp emulation is always in, driven by the root table's flag as
+  before.
+- No static sample mask: a draw whose sample mask is not all ones
+  compiles the whole pipeline.
+- User varyings are vec4s, as the vertex side's.
+
+An empty fragment shader is compiled the same way once per device,
+with the first vertex shader compiled on its own, for links without a
+fragment shader.
+
+A fast link of a vertex and a fragment shader both compiled on their
+own now only builds the Metal render pipeline from the two libraries
+(kk_gpl_link_libraries). Blending, the write masks and alpha to
+coverage and to one are set on the pipeline's colour attachments and
+multisample state from the draw's state (kk_gpl_set_fixed_function;
+new bridge functions for MTL4RenderPipelineColorAttachmentDescriptor's
+blend state and write mask and the descriptor's alpha to coverage and
+to one), and the blend constants are set on the render encoder too.
+Formats without blending are written without it. The link cache key
+is as for G2's links.
+
+Separately compiled stages match by their user varyings' names and
+types, so the link checks the fragment shader's inputs against the
+vertex shader's outputs and compiles the whole pipeline if one is not
+written or has another type, or if the vertex shader writes cull
+distances (the fragment shader does their discards). Links also
+compile the whole pipeline, counted by reason on [kk-compile] link
+lines, for: a logic op, an advanced blend op, a non-native colour
+format, a colour output of a type the format cannot take, dual-source
+blend factors without a second source (or with more than one colour
+attachment), a depth write without a depth attachment, a sample mask
+that is not all ones, alpha to coverage without colour output 0,
+another view mask, and a fragment shader that reads input
+attachments, gl_PrimitiveID or clip or cull distances, or indexes
+varyings indirectly. A fragment shader that cannot be compiled on its
+own otherwise (a written location 1 beside dual-source blending,
+triangle merging that depends on the sample count on M1 and M2 before
+OS 27, MESA_KK_DEBUG=solid, a compile or library failure) is compiled
+at the first draw as before ([kk-compile] link separate-vertex
+fragment=<reason>).
+
+Pipelines that are not fast links, link-time-optimized ones included,
+and everything without the flag compile as before, to the same MSL.
+
+Linear: PLA-424
+Class: feature
+Evidence: docs/evidence/2026-10-21-kk-gpl-host.md
+Offered-upstream: not yet
+---
+ src/kosmickrisp/bridge/mtl_compiler.h       |  22 +
+ src/kosmickrisp/bridge/mtl_compiler.m       | 126 ++++
+ src/kosmickrisp/bridge/mtl_encoder.h        |   4 +
+ src/kosmickrisp/bridge/mtl_encoder.m        |  10 +
+ src/kosmickrisp/bridge/stubs/mtl_compiler.c |  25 +
+ src/kosmickrisp/bridge/stubs/mtl_encoder.c  |   6 +
+ src/kosmickrisp/compiler/msl_iomap.c        |   2 +
+ src/kosmickrisp/compiler/msl_private.h      |   2 +
+ src/kosmickrisp/compiler/nir_to_msl.c       |   1 +
+ src/kosmickrisp/compiler/nir_to_msl.h       |   6 +
+ src/kosmickrisp/vulkan/kk_cmd_draw.c        |   8 +
+ src/kosmickrisp/vulkan/kk_gpl.c             |  51 +-
+ src/kosmickrisp/vulkan/kk_gpl.h             |  60 +-
+ src/kosmickrisp/vulkan/kk_shader.c          | 647 +++++++++++++++++---
+ src/kosmickrisp/vulkan/kk_shader.h          |  10 +
+ 15 files changed, 880 insertions(+), 100 deletions(-)
+
+diff --git a/src/kosmickrisp/bridge/mtl_compiler.h b/src/kosmickrisp/bridge/mtl_compiler.h
+index 11e3ea8..a623639 100644
+--- a/src/kosmickrisp/bridge/mtl_compiler.h
++++ b/src/kosmickrisp/bridge/mtl_compiler.h
+@@ -15,6 +15,10 @@
+ /* Bridge enums */
+ enum mtl_pixel_format;
+ 
++/* TODO_KOSMICKRISP Remove */
++enum VkBlendFactor;
++enum VkBlendOp;
++
+ /* Why a library or pipeline build failed: its NSError. All zero when the
+  * build succeeded. */
+ struct mtl_build_error {
+@@ -74,6 +78,24 @@ void mtl_render_pipeline_descriptor_set_rasterization_enabled(
+ void mtl_render_pipeline_descriptor_set_max_vertex_amplification_count(
+    mtl_render_pipeline_descriptor *descriptor, uint32_t count);
+ 
++/* Playport (PLA-424): Metal's fixed-function blending for a colour
++ * attachment, from Vulkan's blend factors and operations (no advanced ones)
++ * and colour write mask (VkColorComponentFlags) */
++void mtl_render_pipeline_descriptor_set_color_attachment_blend(
++   mtl_render_pipeline_descriptor *descriptor, uint8_t index, bool enable,
++   enum VkBlendFactor src_rgb, enum VkBlendFactor dst_rgb,
++   enum VkBlendOp rgb_op, enum VkBlendFactor src_alpha,
++   enum VkBlendFactor dst_alpha, enum VkBlendOp alpha_op,
++   uint8_t write_mask);
++
++/* Playport (PLA-424): Metal's fixed-function alpha to coverage and alpha to
++ * one */
++void mtl_render_pipeline_descriptor_set_alpha_to_coverage(
++   mtl_render_pipeline_descriptor *descriptor, bool enable);
++
++void mtl_render_pipeline_descriptor_set_alpha_to_one(
++   mtl_render_pipeline_descriptor *descriptor, bool enable);
++
+ /* Render pipeline */
+ mtl_render_pipeline_state *
+ mtl_new_render_pipeline(mtl_compiler *compiler,
+diff --git a/src/kosmickrisp/bridge/mtl_compiler.m b/src/kosmickrisp/bridge/mtl_compiler.m
+index 090aa76..e366532 100644
+--- a/src/kosmickrisp/bridge/mtl_compiler.m
++++ b/src/kosmickrisp/bridge/mtl_compiler.m
+@@ -13,6 +13,9 @@
+ #include <Metal/MTL4RenderPipeline.h>
+ #include <Metal/MTLDevice.h>
+ 
++#include "vulkan/vulkan.h"
++
++#include <assert.h>
+ #include <stdio.h>
+ #include <string.h>
+ 
+@@ -209,6 +212,129 @@ mtl_render_pipeline_descriptor_set_max_vertex_amplification_count(mtl_render_pip
+    }
+ }
+ 
++static MTLBlendFactor
++map_vk_blend_factor(VkBlendFactor factor)
++{
++   switch (factor) {
++   case VK_BLEND_FACTOR_ZERO:
++      return MTLBlendFactorZero;
++   case VK_BLEND_FACTOR_ONE:
++      return MTLBlendFactorOne;
++   case VK_BLEND_FACTOR_SRC_COLOR:
++      return MTLBlendFactorSourceColor;
++   case VK_BLEND_FACTOR_ONE_MINUS_SRC_COLOR:
++      return MTLBlendFactorOneMinusSourceColor;
++   case VK_BLEND_FACTOR_DST_COLOR:
++      return MTLBlendFactorDestinationColor;
++   case VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR:
++      return MTLBlendFactorOneMinusDestinationColor;
++   case VK_BLEND_FACTOR_SRC_ALPHA:
++      return MTLBlendFactorSourceAlpha;
++   case VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA:
++      return MTLBlendFactorOneMinusSourceAlpha;
++   case VK_BLEND_FACTOR_DST_ALPHA:
++      return MTLBlendFactorDestinationAlpha;
++   case VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA:
++      return MTLBlendFactorOneMinusDestinationAlpha;
++   case VK_BLEND_FACTOR_CONSTANT_COLOR:
++      return MTLBlendFactorBlendColor;
++   case VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_COLOR:
++      return MTLBlendFactorOneMinusBlendColor;
++   case VK_BLEND_FACTOR_CONSTANT_ALPHA:
++      return MTLBlendFactorBlendAlpha;
++   case VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA:
++      return MTLBlendFactorOneMinusBlendAlpha;
++   case VK_BLEND_FACTOR_SRC_ALPHA_SATURATE:
++      return MTLBlendFactorSourceAlphaSaturated;
++   case VK_BLEND_FACTOR_SRC1_COLOR:
++      return MTLBlendFactorSource1Color;
++   case VK_BLEND_FACTOR_ONE_MINUS_SRC1_COLOR:
++      return MTLBlendFactorOneMinusSource1Color;
++   case VK_BLEND_FACTOR_SRC1_ALPHA:
++      return MTLBlendFactorSource1Alpha;
++   case VK_BLEND_FACTOR_ONE_MINUS_SRC1_ALPHA:
++      return MTLBlendFactorOneMinusSource1Alpha;
++   default:
++      assert(false && "Unsupported VkBlendFactor");
++      return MTLBlendFactorOne;
++   }
++}
++
++static MTLBlendOperation
++map_vk_blend_op(VkBlendOp op)
++{
++   switch (op) {
++   case VK_BLEND_OP_ADD:
++      return MTLBlendOperationAdd;
++   case VK_BLEND_OP_SUBTRACT:
++      return MTLBlendOperationSubtract;
++   case VK_BLEND_OP_REVERSE_SUBTRACT:
++      return MTLBlendOperationReverseSubtract;
++   case VK_BLEND_OP_MIN:
++      return MTLBlendOperationMin;
++   case VK_BLEND_OP_MAX:
++      return MTLBlendOperationMax;
++   default:
++      assert(false && "Unsupported VkBlendOp");
++      return MTLBlendOperationAdd;
++   }
++}
++
++void
++mtl_render_pipeline_descriptor_set_color_attachment_blend(
++   mtl_render_pipeline_descriptor *descriptor, uint8_t index, bool enable,
++   enum VkBlendFactor src_rgb, enum VkBlendFactor dst_rgb,
++   enum VkBlendOp rgb_op, enum VkBlendFactor src_alpha,
++   enum VkBlendFactor dst_alpha, enum VkBlendOp alpha_op,
++   uint8_t write_mask)
++{
++   @autoreleasepool {
++      MTL4RenderPipelineDescriptor *desc = (MTL4RenderPipelineDescriptor *)descriptor;
++      MTL4RenderPipelineColorAttachmentDescriptor *att = desc.colorAttachments[index];
++      att.blendingState = enable ? MTL4BlendStateEnabled : MTL4BlendStateDisabled;
++      if (enable) {
++         att.sourceRGBBlendFactor = map_vk_blend_factor(src_rgb);
++         att.destinationRGBBlendFactor = map_vk_blend_factor(dst_rgb);
++         att.rgbBlendOperation = map_vk_blend_op(rgb_op);
++         att.sourceAlphaBlendFactor = map_vk_blend_factor(src_alpha);
++         att.destinationAlphaBlendFactor = map_vk_blend_factor(dst_alpha);
++         att.alphaBlendOperation = map_vk_blend_op(alpha_op);
++      }
++      /* Vulkan's R, G, B, A bits are 0 to 3, Metal's 3 to 0 */
++      MTLColorWriteMask mask = MTLColorWriteMaskNone;
++      if (write_mask & VK_COLOR_COMPONENT_R_BIT)
++         mask |= MTLColorWriteMaskRed;
++      if (write_mask & VK_COLOR_COMPONENT_G_BIT)
++         mask |= MTLColorWriteMaskGreen;
++      if (write_mask & VK_COLOR_COMPONENT_B_BIT)
++         mask |= MTLColorWriteMaskBlue;
++      if (write_mask & VK_COLOR_COMPONENT_A_BIT)
++         mask |= MTLColorWriteMaskAlpha;
++      att.writeMask = mask;
++   }
++}
++
++void
++mtl_render_pipeline_descriptor_set_alpha_to_coverage(mtl_render_pipeline_descriptor *descriptor,
++                                                     bool enable)
++{
++   @autoreleasepool {
++      MTL4RenderPipelineDescriptor *desc = (MTL4RenderPipelineDescriptor *)descriptor;
++      desc.alphaToCoverageState =
++         enable ? MTL4AlphaToCoverageStateEnabled : MTL4AlphaToCoverageStateDisabled;
++   }
++}
++
++void
++mtl_render_pipeline_descriptor_set_alpha_to_one(mtl_render_pipeline_descriptor *descriptor,
++                                                bool enable)
++{
++   @autoreleasepool {
++      MTL4RenderPipelineDescriptor *desc = (MTL4RenderPipelineDescriptor *)descriptor;
++      desc.alphaToOneState = enable ? MTL4AlphaToOneStateEnabled : MTL4AlphaToOneStateDisabled;
++   }
++}
++
+ /* Render pipeline */
+ mtl_render_pipeline_state *
+ mtl_new_render_pipeline(mtl_compiler *compiler, mtl_render_pass_descriptor *descriptor,
+diff --git a/src/kosmickrisp/bridge/mtl_encoder.h b/src/kosmickrisp/bridge/mtl_encoder.h
+index 706f295..8e4dd8f 100644
+--- a/src/kosmickrisp/bridge/mtl_encoder.h
++++ b/src/kosmickrisp/bridge/mtl_encoder.h
+@@ -117,6 +117,10 @@ void mtl_set_depth_clip_mode(mtl_render_encoder *encoder,
+ void mtl_set_depth_test_bounds(mtl_render_encoder *encoder, float min,
+                                float max);
+ 
++/* Playport (PLA-424): the constant colour of fixed-function blending */
++void mtl_set_blend_color(mtl_render_encoder *encoder, float red, float green,
++                         float blue, float alpha);
++
+ void mtl_set_vertex_amplification_count(mtl_render_encoder *encoder,
+                                         uint32_t *layer_ids, uint32_t id_count);
+ 
+diff --git a/src/kosmickrisp/bridge/mtl_encoder.m b/src/kosmickrisp/bridge/mtl_encoder.m
+index cf36245..bcd07ed 100644
+--- a/src/kosmickrisp/bridge/mtl_encoder.m
++++ b/src/kosmickrisp/bridge/mtl_encoder.m
+@@ -411,6 +411,16 @@ mtl_set_depth_test_bounds(mtl_render_encoder *encoder, float min, float max)
+    }
+ }
+ 
++void
++mtl_set_blend_color(mtl_render_encoder *encoder, float red, float green,
++                    float blue, float alpha)
++{
++   @autoreleasepool {
++      id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)encoder;
++      [enc setBlendColorRed:red green:green blue:blue alpha:alpha];
++   }
++}
++
+ void
+ mtl_set_vertex_amplification_count(mtl_render_encoder *encoder,
+                                    uint32_t *layer_ids, uint32_t id_count)
+diff --git a/src/kosmickrisp/bridge/stubs/mtl_compiler.c b/src/kosmickrisp/bridge/stubs/mtl_compiler.c
+index 54b4c86..9759fc0 100644
+--- a/src/kosmickrisp/bridge/stubs/mtl_compiler.c
++++ b/src/kosmickrisp/bridge/stubs/mtl_compiler.c
+@@ -8,6 +8,9 @@
+ 
+ #include "mtl_format.h"
+ 
++/* TODO_KOSMICKRISP Remove */
++#include "vulkan/vulkan.h"
++
+ /* Compiler */
+ mtl_compiler *
+ mtl_new_compiler(mtl_device *device)
+@@ -94,6 +97,28 @@ mtl_render_pipeline_descriptor_set_max_vertex_amplification_count(
+ {
+ }
+ 
++void
++mtl_render_pipeline_descriptor_set_color_attachment_blend(
++   mtl_render_pipeline_descriptor *descriptor, uint8_t index, bool enable,
++   enum VkBlendFactor src_rgb, enum VkBlendFactor dst_rgb,
++   enum VkBlendOp rgb_op, enum VkBlendFactor src_alpha,
++   enum VkBlendFactor dst_alpha, enum VkBlendOp alpha_op,
++   uint8_t write_mask)
++{
++}
++
++void
++mtl_render_pipeline_descriptor_set_alpha_to_coverage(
++   mtl_render_pipeline_descriptor *descriptor, bool enable)
++{
++}
++
++void
++mtl_render_pipeline_descriptor_set_alpha_to_one(
++   mtl_render_pipeline_descriptor *descriptor, bool enable)
++{
++}
++
+ /* Render pipeline */
+ mtl_render_pipeline_state *
+ mtl_new_render_pipeline(mtl_compiler *compiler,
+diff --git a/src/kosmickrisp/bridge/stubs/mtl_encoder.c b/src/kosmickrisp/bridge/stubs/mtl_encoder.c
+index e66ef31..8d35b9f 100644
+--- a/src/kosmickrisp/bridge/stubs/mtl_encoder.c
++++ b/src/kosmickrisp/bridge/stubs/mtl_encoder.c
+@@ -209,6 +209,12 @@ mtl_set_depth_test_bounds(mtl_render_encoder *encoder, float min, float max)
+ {
+ }
+ 
++void
++mtl_set_blend_color(mtl_render_encoder *encoder, float red, float green,
++                    float blue, float alpha)
++{
++}
++
+ void
+ mtl_set_vertex_amplification_count(mtl_render_encoder *encoder,
+                                    uint32_t *layer_ids, uint32_t id_count)
+diff --git a/src/kosmickrisp/compiler/msl_iomap.c b/src/kosmickrisp/compiler/msl_iomap.c
+index 669e655..539e2ac 100644
+--- a/src/kosmickrisp/compiler/msl_iomap.c
++++ b/src/kosmickrisp/compiler/msl_iomap.c
+@@ -306,6 +306,8 @@ fs_output_block(nir_shader *shader, struct nir_to_msl_ctx *ctx)
+          assert(depth_layout_arg[depth_layout]);
+          P(ctx, "%s [[depth(%s)]];\n", FS_OUTPUT_NAME[location],
+            depth_layout_arg[depth_layout]);
++      } else if (ctx->dual_source_blend && location == FRAG_RESULT_DATA1) {
++         P(ctx, "%s [[color(0), index(1)]];\n", FS_OUTPUT_NAME[location]);
+       } else {
+          // TODO: scalarized fs outputs
+          P(ctx, "%s [[%s]];\n", FS_OUTPUT_NAME[location],
+diff --git a/src/kosmickrisp/compiler/msl_private.h b/src/kosmickrisp/compiler/msl_private.h
+index 75da653..99cdc1f 100644
+--- a/src/kosmickrisp/compiler/msl_private.h
++++ b/src/kosmickrisp/compiler/msl_private.h
+@@ -25,6 +25,8 @@ struct nir_to_msl_ctx {
+    struct _mesa_string_buffer *text;
+    uint64_t disabled_workarounds;
+    bool uses_per_draw_data;
++   /* nir_to_msl_options::dual_source_blend */
++   bool dual_source_blend;
+    unsigned short indentlevel;
+    struct io_slot_info inputs_info[NUM_TOTAL_VARYING_SLOTS];
+    struct io_slot_info outputs_info[NUM_TOTAL_VARYING_SLOTS];
+diff --git a/src/kosmickrisp/compiler/nir_to_msl.c b/src/kosmickrisp/compiler/nir_to_msl.c
+index 3a3e378..b5239c2 100644
+--- a/src/kosmickrisp/compiler/nir_to_msl.c
++++ b/src/kosmickrisp/compiler/nir_to_msl.c
+@@ -2517,6 +2517,7 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
+       .shader = shader,
+       .text = _mesa_string_buffer_create(options->mem_ctx, 1024),
+       .disabled_workarounds = options->disabled_workarounds,
++      .dual_source_blend = options->dual_source_blend,
+    };
+    nir_function_impl *impl = nir_shader_get_entrypoint(shader);
+    msl_gather_info(&ctx, options);
+diff --git a/src/kosmickrisp/compiler/nir_to_msl.h b/src/kosmickrisp/compiler/nir_to_msl.h
+index 1446bd9..9cdbdf6 100644
+--- a/src/kosmickrisp/compiler/nir_to_msl.h
++++ b/src/kosmickrisp/compiler/nir_to_msl.h
+@@ -28,6 +28,12 @@ struct nir_to_msl_options {
+     * vertex shader writes or a fragment shader reads with 4 components, so
+     * that stages compiled apart agree on them however many each uses. */
+    bool vec4_user_varyings;
++
++   /* Playport (PLA-424): FRAG_RESULT_DATA1 holds the second source of
++    * dual-source blending, declared [[color(0), index(1)]], as a fragment
++    * shader compiled for a pipeline library blends in Metal's fixed
++    * function. */
++   bool dual_source_blend;
+ };
+ 
+ /* Assumes nir_shader_gather_info has been called beforehand. */
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_draw.c b/src/kosmickrisp/vulkan/kk_cmd_draw.c
+index b292df1..fa469fc 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_draw.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_draw.c
+@@ -1479,6 +1479,14 @@ kk_flush_dynamic_state(struct kk_cmd_buffer *cmd)
+       memcpy(desc->root.draw.blend_constant, dyn->cb.blend_constants,
+              sizeof(dyn->cb.blend_constants));
+       desc->root_dirty = true;
++
++      /* Playport (PLA-424): pipelines with a fragment shader compiled for a
++       * pipeline library blend in Metal's fixed function. */
++      if (KK_EXPERIMENTAL(GPL))
++         mtl_set_blend_color(enc, dyn->cb.blend_constants[0],
++                             dyn->cb.blend_constants[1],
++                             dyn->cb.blend_constants[2],
++                             dyn->cb.blend_constants[3]);
+    }
+ 
+    if (IS_DIRTY(VI) || IS_DIRTY(VI_BINDINGS_VALID) ||
+diff --git a/src/kosmickrisp/vulkan/kk_gpl.c b/src/kosmickrisp/vulkan/kk_gpl.c
+index c7a8de1..4bff4a4 100644
+--- a/src/kosmickrisp/vulkan/kk_gpl.c
++++ b/src/kosmickrisp/vulkan/kk_gpl.c
+@@ -32,10 +32,11 @@ struct kk_gpl_link {
+    struct kk_shader *linked[KK_GPL_STAGES];
+ };
+ 
+-/* Why links compiled the whole pipeline rather than use the vertex shader
+- * compiled on its own (kk_gpl_vertex_blocker, kk_gpl_link_compile), counted
+- * for MESA_KK_DEBUG=compile; the reasons are static strings. */
+-#define KK_GPL_FALLBACK_REASONS 16
++/* Why links compiled the whole pipeline rather than use the shaders compiled
++ * on their own (kk_gpl_vertex_blocker, kk_gpl_fragment_blocker,
++ * kk_gpl_link_compile), counted for MESA_KK_DEBUG=compile; the reasons are
++ * static strings. */
++#define KK_GPL_FALLBACK_REASONS 32
+ 
+ struct kk_gpl_cache {
+    simple_mtx_t lock;
+@@ -50,6 +51,11 @@ struct kk_gpl_cache {
+       const char *reason;
+       uint32_t count;
+    } fallbacks[KK_GPL_FALLBACK_REASONS];
++
++   /* kk_gpl_empty_fragment, compiled once under empty_lock */
++   simple_mtx_t empty_lock;
++   bool empty_compiled;
++   struct kk_gpl_source empty;
+ };
+ 
+ static uint64_t
+@@ -109,6 +115,7 @@ kk_gpl_device_init(struct kk_device *dev)
+       return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
+    }
+    simple_mtx_init(&cache->lock, mtx_plain);
++   simple_mtx_init(&cache->empty_lock, mtx_plain);
+    dev->gpl_cache = cache;
+    return VK_SUCCESS;
+ }
+@@ -133,11 +140,28 @@ kk_gpl_device_finish(struct kk_device *dev)
+       kk_gpl_link_destroy(dev, entry->data);
+    _mesa_hash_table_destroy(cache->links, NULL);
+    _mesa_hash_table_u64_destroy(cache->unfit_pairs);
++   kk_gpl_source_release(dev, &cache->empty);
++   simple_mtx_destroy(&cache->empty_lock);
+    simple_mtx_destroy(&cache->lock);
+    vk_free(&dev->vk.alloc, cache);
+    dev->gpl_cache = NULL;
+ }
+ 
++const struct kk_gpl_source *
++kk_gpl_empty_fragment(struct kk_device *dev)
++{
++   struct kk_gpl_cache *cache = dev->gpl_cache;
++   if (!cache)
++      return NULL;
++   simple_mtx_lock(&cache->empty_lock);
++   if (!cache->empty_compiled) {
++      kk_gpl_compile_empty_fragment(dev, &cache->empty);
++      cache->empty_compiled = true;
++   }
++   simple_mtx_unlock(&cache->empty_lock);
++   return &cache->empty;
++}
++
+ void
+ kk_gpl_forget(struct kk_device *dev, uint64_t id)
+ {
+@@ -341,8 +365,10 @@ kk_gpl_resolve(struct kk_cmd_buffer *cmd)
+    struct kk_gpl_draw_state ds;
+    kk_gpl_draw_state(cmd, sources, &ds);
+ 
+-   /* Whether the vertex shader compiled on its own can serve this draw */
++   /* Whether the shaders compiled on their own can serve this draw */
+    const char *blocker = kk_gpl_vertex_blocker(sources, &ds.state);
++   if (blocker == NULL)
++      blocker = kk_gpl_fragment_blocker(dev, sources, &ds.state);
+    simple_mtx_lock(&cache->lock);
+    if (blocker == NULL)
+       blocker = _mesa_hash_table_u64_search(cache->unfit_pairs,
+@@ -368,9 +394,10 @@ kk_gpl_resolve(struct kk_cmd_buffer *cmd)
+          link->ids[s] = sources[s] ? sources[s]->gpl->id : 0;
+ 
+       const int64_t start = os_time_get_nano();
+-      const char *fallback = NULL;
+-      VkResult result = kk_gpl_link_compile(
+-         dev, sources, &ds.state, blocker == NULL, link->linked, &fallback);
++      const char *fallback = NULL, *fragment_at_link = NULL;
++      VkResult result =
++         kk_gpl_link_compile(dev, sources, &ds.state, blocker == NULL,
++                             link->linked, &fallback, &fragment_at_link);
+ 
+       if (fallback) {
+          /* The pair cannot link apart; the whole pipeline compiled depends
+@@ -395,9 +422,15 @@ kk_gpl_resolve(struct kk_cmd_buffer *cmd)
+                     result == VK_SUCCESS ? "full" : "FAIL", blocker, fallbacks,
+                     (os_time_get_nano() - start) / 1e6,
+                     ds.state.shader_stages);
++         else if (fragment_at_link)
++            fprintf(stderr,
++                    "[kk-compile] link %s fragment=%s ms=%.1f stages=%#x\n",
++                    result == VK_SUCCESS ? "separate-vertex" : "FAIL",
++                    fragment_at_link, (os_time_get_nano() - start) / 1e6,
++                    ds.state.shader_stages);
+          else
+             fprintf(stderr, "[kk-compile] link %s ms=%.1f stages=%#x\n",
+-                    result == VK_SUCCESS ? "separate-vertex" : "FAIL",
++                    result == VK_SUCCESS ? "separate" : "FAIL",
+                     (os_time_get_nano() - start) / 1e6,
+                     ds.state.shader_stages);
+       }
+diff --git a/src/kosmickrisp/vulkan/kk_gpl.h b/src/kosmickrisp/vulkan/kk_gpl.h
+index 4f310c1..00dd58e 100644
+--- a/src/kosmickrisp/vulkan/kk_gpl.h
++++ b/src/kosmickrisp/vulkan/kk_gpl.h
+@@ -13,10 +13,14 @@
+  *
+  * A vertex shader alone in its library is also compiled on its own, its Metal
+  * library built at once: it fetches attributes through the layout the draw
+- * gives and always writes a point size. A link with it compiles only the
+- * fragment shader and builds the pipeline, and serves every vertex input
+- * state and topology of a class. What it cannot serve falls back to the
+- * whole compile, counted by reason ([kk-compile] link lines).
++ * gives and always writes a point size. So is a fragment shader alone in its
++ * library: its MSL depends on no attachment format, and the pipeline blends
++ * in Metal's fixed function. A link with both only builds the Metal pipeline
++ * from the two libraries; with a vertex shader compiled on its own and a
++ * fragment shader that could not be, it compiles the fragment shader. Either
++ * serves every vertex input state and topology of a class. What they cannot
++ * serve falls back to the whole compile, counted by reason ([kk-compile]
++ * link lines).
+  */
+ 
+ #ifndef KK_GPL_H
+@@ -70,8 +74,19 @@ struct kk_gpl_source {
+    struct kk_shader *vertex;
+    mtl_library *vertex_library;
+    const char *vertex_blocker;
+-   /* The view mask vertex was compiled with */
++   /* The view mask vertex or fragment was compiled with */
+    uint32_t view_mask;
++
++   /* A fragment shader alone in its library is also compiled on its own
++    * (kk_gpl_compile_fragment): fragment is that shader, whose MSL depends
++    * on no other library, and fragment_library its Metal library, built at
++    * once. When it could not be, fragment is NULL, and either
++    * fragment_fallback says why links compile the whole pipeline, or
++    * fragment_at_link why they compile the fragment shader for the draw. */
++   struct kk_shader *fragment;
++   mtl_library *fragment_library;
++   const char *fragment_fallback;
++   const char *fragment_at_link;
+ };
+ 
+ /* Graphics stages a link covers: vertex to fragment */
+@@ -110,16 +125,41 @@ const char *
+ kk_gpl_vertex_blocker(struct kk_shader *const *sources,
+                       const struct vk_graphics_pipeline_state *state);
+ 
++/* With the vertex shader compiled on its own: why a link with this state
++ * cannot use the fragment shader (or the empty one) compiled on its own
++ * either, or NULL if it can or the fragment shader is compiled at link
++ * (struct kk_gpl_source::fragment_at_link). */
++const char *
++kk_gpl_fragment_blocker(struct kk_device *dev,
++                        struct kk_shader *const *sources,
++                        const struct vk_graphics_pipeline_state *state);
++
++/* Compiles the empty fragment shader on its own into src (kk_gpl.c keeps
++ * the device's one: kk_gpl_empty_fragment). */
++void kk_gpl_compile_empty_fragment(struct kk_device *dev,
++                                   struct kk_gpl_source *src);
++void kk_gpl_source_release(struct kk_device *dev, struct kk_gpl_source *src);
++
++/* kk_gpl.c */
++
++/* The device's empty fragment shader compiled on its own, for links without
++ * a fragment shader: compiled at the first call (from a pipeline library's
++ * compile), and kept until the device goes. */
++const struct kk_gpl_source *kk_gpl_empty_fragment(struct kk_device *dev);
++
+ /* Compiles the link of sources with state into linked. With separate_vertex
+- * (kk_gpl_vertex_blocker gave NULL), it compiles only the fragment shader
+- * and builds the pipeline with the vertex shader's library; if the fragment
+- * shader does not fit that vertex shader, it compiles the whole pipeline
+- * after all, and *fallback says why. */
++ * (kk_gpl_vertex_blocker and kk_gpl_fragment_blocker gave NULL), it builds
++ * the pipeline with the vertex shader's library and the fragment shader's;
++ * if that was not compiled on its own, it compiles the fragment shader, and
++ * *fragment_at_link says why. If the fragment shader does not fit that
++ * vertex shader, it compiles the whole pipeline after all, and *fallback
++ * says why. */
+ VkResult kk_gpl_link_compile(struct kk_device *dev,
+                              struct kk_shader *const *sources,
+                              const struct vk_graphics_pipeline_state *state,
+                              bool separate_vertex, struct kk_shader **linked,
+-                             const char **fallback);
++                             const char **fallback,
++                             const char **fragment_at_link);
+ void kk_cmd_bind_linked_shader(struct kk_cmd_buffer *cmd,
+                                mesa_shader_stage stage,
+                                struct kk_shader *shader);
+diff --git a/src/kosmickrisp/vulkan/kk_shader.c b/src/kosmickrisp/vulkan/kk_shader.c
+index 99314e2..1f72b2e 100644
+--- a/src/kosmickrisp/vulkan/kk_shader.c
++++ b/src/kosmickrisp/vulkan/kk_shader.c
+@@ -299,7 +299,7 @@ kk_hash_graphics_state(struct vk_physical_device *device,
+     * keep their NIR (kk_gpl_compile_separate), so they are keyed apart from
+     * a whole pipeline's. */
+    if (kk_gpl_partial_state(state)) {
+-      const char separate[] = "kk-gpl-separate-v2";
++      const char separate[] = "kk-gpl-separate-v3";
+       _mesa_blake3_update(&blake3_ctx, separate, sizeof(separate));
+    }
+ 
+@@ -619,9 +619,16 @@ kk_nir_solid_fragment_output(nir_builder *b, nir_intrinsic_instr *intr,
+    return true;
+ }
+ 
++/* Playport (PLA-424): gpl_separate lowers a fragment shader compiled for a
++ * pipeline library on its own (kk_gpl_compile_fragment), whose state has no
++ * fragment output part: its MSL depends on no colour or depth format, and
++ * blending, the write mask and alpha to coverage and to one are Metal's fixed
++ * function (kk_gpl_set_fixed_function). Its outputs keep their types, depth
++ * clamp emulation follows the root table's flag, and a draw whose sample mask
++ * is not all ones does not use it (kk_gpl_fragment_blocker). */
+ static void
+ kk_lower_fs(struct kk_device *dev, nir_shader *nir,
+-            const struct vk_graphics_pipeline_state *state)
++            const struct vk_graphics_pipeline_state *state, bool gpl_separate)
+ {
+    struct kk_physical_device *pdev = kk_device_physical(dev);
+ 
+@@ -629,7 +636,7 @@ kk_lower_fs(struct kk_device *dev, nir_shader *nir,
+       state->ms && state->ms->sample_shading_enable;
+ 
+    /* Must be lowered before blending */
+-   if (state->ms) {
++   if (state->ms && !gpl_separate) {
+       NIR_PASS(_, nir, msl_nir_lower_multisample_alpha,
+                state->ms->alpha_to_coverage_enable,
+                state->ms->alpha_to_one_enable);
+@@ -642,13 +649,14 @@ kk_lower_fs(struct kk_device *dev, nir_shader *nir,
+    if (nir->info.fs.uses_sample_shading)
+       NIR_PASS(_, nir, msl_nir_lower_sample_shading);
+ 
+-   if (state->cb)
++   if (state->cb && !gpl_separate)
+       kk_lower_fs_blend(nir, state);
+ 
+    /* Only blended draws, and not for a pass into a B8G8R8A8 target: that is the swap chain's, and
+     * its blit (DXVK's presenter) must copy the title's own image */
+    bool to_swapchain = false, blended = false;
+-   for (uint32_t i = 0u; i < state->rp->color_attachment_count; ++i) {
++   for (uint32_t i = 0u; !gpl_separate && i < state->rp->color_attachment_count;
++        ++i) {
+       VkFormat f = state->rp->color_attachment_formats[i];
+       to_swapchain |= f == VK_FORMAT_B8G8R8A8_UNORM || f == VK_FORMAT_B8G8R8A8_SRGB;
+       blended |= state->cb && state->cb->attachments[i].blend_enable;
+@@ -657,26 +665,30 @@ kk_lower_fs(struct kk_device *dev, nir_shader *nir,
+       NIR_PASS(_, nir, nir_shader_intrinsics_pass, kk_nir_solid_fragment_output,
+                nir_metadata_control_flow, NULL);
+ 
+-   enum pipe_format rts[MAX_DRAW_BUFFERS] = {PIPE_FORMAT_NONE};
+-   const struct vk_render_pass_state *rp = state->rp;
+-   for (uint32_t i = 0u; i < rp->color_attachment_count; ++i) {
+-      uint8_t logical_index = kk_get_logical_color_att_index(state, i);
+-      if (logical_index != MESA_VK_ATTACHMENT_UNUSED) {
+-         rts[logical_index] =
+-            vk_format_to_pipe_format(rp->color_attachment_formats[i]);
++   if (!gpl_separate) {
++      enum pipe_format rts[MAX_DRAW_BUFFERS] = {PIPE_FORMAT_NONE};
++      const struct vk_render_pass_state *rp = state->rp;
++      for (uint32_t i = 0u; i < rp->color_attachment_count; ++i) {
++         uint8_t logical_index = kk_get_logical_color_att_index(state, i);
++         if (logical_index != MESA_VK_ATTACHMENT_UNUSED) {
++            rts[logical_index] =
++               vk_format_to_pipe_format(rp->color_attachment_formats[i]);
++         }
+       }
+-   }
+ 
+-   NIR_PASS(_, nir, msl_nir_fs_force_output_signedness, rts);
++      NIR_PASS(_, nir, msl_nir_fs_force_output_signedness, rts);
++   }
+ 
+-   if (state->rp->depth_attachment_format == VK_FORMAT_UNDEFINED ||
++   if ((!gpl_separate &&
++        state->rp->depth_attachment_format == VK_FORMAT_UNDEFINED) ||
+        nir->info.fs.early_fragment_tests) {
+       NIR_PASS(_, nir, msl_nir_fs_remove_depth_write);
+    }
+ 
+    /* In any situation where both clip and clamp can be enabled, we need to
+-    * add clamp emulation to the shader */
+-   if (kk_is_possible_both_depth_clip_clamp(state, true))
++    * add clamp emulation to the shader. A separate fragment shader has it
++    * always: the root table says whether a draw emulates depth clamp. */
++   if (gpl_separate || kk_is_possible_both_depth_clip_clamp(state, true))
+       NIR_PASS(_, nir, msl_nir_lower_fs_combined_depth_clamp_clip);
+ 
+    /* Input attachments are treated as 2D textures. Fixes sampler dimension */
+@@ -684,12 +696,14 @@ kk_lower_fs(struct kk_device *dev, nir_shader *nir,
+             NULL);
+ 
+    /* Swizzle non-native formats' outputs */
+-   NIR_PASS(_, nir, nir_shader_intrinsics_pass, kk_nir_swizzle_fragment_output,
+-            nir_metadata_control_flow, (void *)state);
++   if (!gpl_separate)
++      NIR_PASS(_, nir, nir_shader_intrinsics_pass,
++               kk_nir_swizzle_fragment_output, nir_metadata_control_flow,
++               (void *)state);
+ 
+    NIR_PASS(_, nir, msl_nir_fs_io_types);
+ 
+-   if (state->ms && state->ms->rasterization_samples &&
++   if (!gpl_separate && state->ms && state->ms->rasterization_samples &&
+        state->ms->sample_mask != UINT16_MAX) {
+ 
+       /* KK_WORKAROUND_7 */
+@@ -817,13 +831,15 @@ kk_fs_needs_forced_depth_write(const nir_shader *nir,
+                                        indices_known);
+ }
+ 
++/* Playport (PLA-424): gpl_separate lowers a shader compiled for a pipeline
++ * library on its own (kk_lower_fs). */
+ static void
+ kk_lower_nir(struct kk_device *dev, nir_shader *nir, bool emulated_stage,
+              const struct vk_pipeline_robustness_state *rs,
+              uint32_t set_layout_count,
+              struct vk_descriptor_set_layout *const *set_layouts,
+              const struct vk_graphics_pipeline_state *state,
+-             enum kk_feature_key features)
++             enum kk_feature_key features, bool gpl_separate)
+ {
+    struct kk_physical_device *pdev = kk_device_physical(dev);
+ 
+@@ -851,7 +867,8 @@ kk_lower_nir(struct kk_device *dev, nir_shader *nir, bool emulated_stage,
+                glsl_get_natural_size_align_bytes,
+                glsl_get_natural_size_align_bytes);
+    } else if (nir->info.stage == MESA_SHADER_FRAGMENT) {
+-      NIR_PASS(_, nir, kk_nir_lower_fs_multiview, state->mv->view_mask);
++      NIR_PASS(_, nir, kk_nir_lower_fs_multiview,
++               state->mv ? state->mv->view_mask : 0);
+ 
+       /* Run before nir_lower_input_attachments() below, which rewrites the
+        * subpass loads it looks for. */
+@@ -942,7 +959,7 @@ kk_lower_nir(struct kk_device *dev, nir_shader *nir, bool emulated_stage,
+                  state->ia->primitive_topology == VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
+       kk_lower_hw_vs(nir, state, is_point);
+    } else if (nir->info.stage == MESA_SHADER_FRAGMENT) {
+-      kk_lower_fs(dev, nir, state);
++      kk_lower_fs(dev, nir, state, gpl_separate);
+    }
+ 
+    if (features & KK_FEAT_CUSTOM_BORDER)
+@@ -1057,10 +1074,7 @@ kk_shader_destroy(struct vk_device *vk_dev, struct kk_shader *shader,
+    if (shader->gpl) {
+       struct kk_gpl_source *src = shader->gpl;
+       kk_gpl_forget(dev, src->id);
+-      if (src->vertex_library)
+-         mtl_release(src->vertex_library);
+-      if (src->vertex)
+-         kk_shader_destroy(vk_dev, src->vertex, &dev->vk.alloc);
++      kk_gpl_source_release(dev, src);
+       for (uint32_t i = 0; i < src->set_layout_count; i++) {
+          if (src->set_layouts[i])
+             vk_descriptor_set_layout_unref(&dev->vk, src->set_layouts[i]);
+@@ -1419,16 +1433,78 @@ kk_gpl_note_vertex_outputs(struct kk_shader *shader, nir_shader *nir)
+                               shader->gpl_varying_types);
+ }
+ 
+-/* Playport (PLA-424): gpl_separate compiles a vertex shader of a pipeline
+- * library on its own (runtime vertex fetch), or the fragment shader linked to
+- * one; both declare their user varyings as vec4s. */
++static bool
++gather_fragment_io(nir_builder *b, nir_intrinsic_instr *intr, void *data)
++{
++   struct kk_shader *shader = data;
++   if (intr->intrinsic == nir_intrinsic_store_output) {
++      nir_io_semantics io = nir_intrinsic_io_semantics(intr);
++      unsigned location = io.location + nir_src_as_uint(intr->src[1]);
++      if (location >= FRAG_RESULT_DATA0 && location <= FRAG_RESULT_DATA7)
++         shader->gpl_output_types[location - FRAG_RESULT_DATA0] =
++            nir_intrinsic_src_type(intr);
++   } else if (intr->intrinsic == nir_intrinsic_load_input ||
++              intr->intrinsic == nir_intrinsic_load_interpolated_input) {
++      nir_io_semantics io = nir_intrinsic_io_semantics(intr);
++      unsigned location =
++         io.location + nir_src_as_uint(*nir_get_io_offset_src(intr));
++      if (location >= VARYING_SLOT_VAR0 && location <= VARYING_SLOT_VAR31) {
++         shader->gpl_varyings_read |= BITFIELD_BIT(location - VARYING_SLOT_VAR0);
++         shader->gpl_varying_types[location - VARYING_SLOT_VAR0] =
++            nir_intrinsic_dest_type(intr);
++      }
++   }
++   return false;
++}
++
++/* Playport (PLA-424): what linking a fragment shader compiled for a pipeline
++ * library needs, from its NIR as nir_to_msl translates it. */
++static void
++kk_gpl_note_fragment_io(struct kk_shader *shader, nir_shader *nir)
++{
++   nir_shader_intrinsics_pass(nir, gather_fragment_io, nir_metadata_all,
++                              shader);
++   shader->gpl_writes_depth =
++      nir->info.outputs_written & BITFIELD64_BIT(FRAG_RESULT_DEPTH);
++}
++
++/* Moves dual-source blending's second source (FRAG_RESULT_DATA0, index 1) to
++ * FRAG_RESULT_DATA1, which nir_to_msl declares [[color(0), index(1)]]
++ * (nir_to_msl_options::dual_source_blend). */
++static bool
++second_source_to_data1(nir_builder *b, nir_intrinsic_instr *intr, void *data)
++{
++   if (intr->intrinsic != nir_intrinsic_store_output)
++      return false;
++   nir_io_semantics io = nir_intrinsic_io_semantics(intr);
++   if (!io.dual_source_blend_index)
++      return false;
++   io.location = FRAG_RESULT_DATA1;
++   io.dual_source_blend_index = 0;
++   nir_intrinsic_set_io_semantics(intr, io);
++   return true;
++}
++
++/* Playport (PLA-424): what a shader is compiled for */
++enum kk_gpl_compile {
++   /* A whole pipeline, or compute */
++   KK_GPL_WHOLE,
++   /* The fragment shader of a link with a vertex shader compiled on its own:
++    * its user varyings are vec4s */
++   KK_GPL_LINKED_FRAGMENT,
++   /* A pipeline library's shader on its own: user varyings are vec4s; a
++    * vertex shader fetches through the draw's layout, and a fragment
++    * shader's MSL depends on no attachment format */
++   KK_GPL_LIBRARY,
++};
++
+ static VkResult
+ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
+                   struct kk_shader *prev_stage,
+                   const struct vk_pipeline_robustness_state *robustness,
+                   const struct vk_graphics_pipeline_state *state,
+                   const VkAllocationCallbacks *pAllocator,
+-                  bool gpl_separate, struct kk_shader **shader_out)
++                  enum kk_gpl_compile gpl, struct kk_shader **shader_out)
+ {
+    assert(nir->info.io_lowered && "nir must have lowered io");
+    struct kk_physical_device *pdev = kk_device_physical(dev);
+@@ -1446,6 +1522,11 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
+ 
+    gather_shader_info(shader, nir, state);
+ 
++   bool dual_source = false;
++   if (gpl == KK_GPL_LIBRARY && stage == MESA_SHADER_FRAGMENT)
++      NIR_PASS(dual_source, nir, nir_shader_intrinsics_pass,
++               second_source_to_data1, nir_metadata_all, NULL);
++
+    /* A stage before a geometry shader keeps its clip and cull distances as
+     * plain outputs: the geometry shader reads them, and its rasterization
+     * shader is the stage that feeds Metal's clip distances. */
+@@ -1468,7 +1549,7 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
+    if (stage == MESA_SHADER_VERTEX) {
+       /* VBO lowering needs to go here otherwise, the linking step removes all
+        * inputs since we read vertex attributes from UBOs. */
+-      kk_lower_vs_vbo(nir, state, robustness, gpl_separate);
++      kk_lower_vs_vbo(nir, state, robustness, gpl == KK_GPL_LIBRARY);
+       if (nir->info.next_stage == MESA_SHADER_TESS_CTRL ||
+           nir->info.next_stage == MESA_SHADER_GEOMETRY) {
+          NIR_PASS(_, nir, poly_nir_lower_vs_before_gs);
+@@ -1526,10 +1607,15 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
+    struct nir_to_msl_options translate_options = {
+       .mem_ctx = NULL,
+       .disabled_workarounds = pdev->settings.disabled_workarounds,
+-      .vec4_user_varyings = gpl_separate,
++      .vec4_user_varyings = gpl != KK_GPL_WHOLE,
++      .dual_source_blend = dual_source,
+    };
+-   if (gpl_separate && stage == MESA_SHADER_VERTEX)
++   if (gpl == KK_GPL_LIBRARY && stage == MESA_SHADER_VERTEX)
+       kk_gpl_note_vertex_outputs(shader, nir);
++   if (gpl == KK_GPL_LIBRARY && stage == MESA_SHADER_FRAGMENT) {
++      kk_gpl_note_fragment_io(shader, nir);
++      shader->gpl_dual_source = dual_source;
++   }
+    if (nir->info.stage != MESA_SHADER_FRAGMENT &&
+        pdev->settings.vertex_compute_workaround_6)
+       translate_options.disabled_workarounds &= ~BITFIELD64_BIT(6);
+@@ -1539,7 +1625,9 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
+           * to coverage with unused attachments. */
+          translate_options.rts_component_count[i] = 4;
+       }
+-      for (uint32_t i = 0u; i < state->rp->color_attachment_count; ++i) {
++      for (uint32_t i = 0u;
++           gpl != KK_GPL_LIBRARY && i < state->rp->color_attachment_count;
++           ++i) {
+          uint8_t logical_index = kk_get_logical_color_att_index(state, i);
+          if (logical_index == MESA_VK_ATTACHMENT_UNUSED) {
+             continue;
+@@ -1594,7 +1682,8 @@ kk_compile_nir_shader(struct kk_device *dev, nir_shader *nir,
+    struct kk_shader *shader = NULL;
+    nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
+    VkResult result =
+-      kk_compile_shader(dev, nir, NULL, &rs_none, NULL, alloc, false, &shader);
++      kk_compile_shader(dev, nir, NULL, &rs_none, NULL, alloc, KK_GPL_WHOLE,
++                        &shader);
+    if (result != VK_SUCCESS)
+       return result;
+ 
+@@ -1702,7 +1791,7 @@ nir_opts(nir_shader *nir, void *data)
+ static nir_shader *
+ get_empty_nir(struct kk_device *dev, mesa_shader_stage stage,
+               const struct vk_graphics_pipeline_state *state,
+-              enum kk_feature_key features)
++              enum kk_feature_key features, bool gpl_separate)
+ {
+    nir_shader *nir = nir_shader_create(
+       NULL, stage,
+@@ -1720,7 +1809,8 @@ get_empty_nir(struct kk_device *dev, mesa_shader_stage stage,
+       .null_uniform_buffer_descriptor = false,
+       .null_storage_buffer_descriptor = false,
+    };
+-   kk_lower_nir(dev, nir, false, &no_robustness, 0u, NULL, state, features);
++   kk_lower_nir(dev, nir, false, &no_robustness, 0u, NULL, state, features,
++                gpl_separate);
+    nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
+ 
+    return nir;
+@@ -2666,11 +2756,49 @@ gather_graphics_pipeline_create_info(
+       vk_primitive_topology_to_mtl_primitive_topology_class(topology);
+ }
+ 
+-/* Playport (PLA-424): vertex_library, if not NULL, is the vertex function's
+- * library, built already (struct kk_gpl_source::vertex_library). */
++/* Playport (PLA-424): the blend state, write masks and alpha to coverage and
++ * to one of a pipeline whose fragment shader was compiled for a pipeline
++ * library on its own, in Metal's fixed function. */
++static void
++kk_gpl_set_fixed_function(mtl_render_pipeline_descriptor *descriptor,
++                          const struct vk_graphics_pipeline_state *state)
++{
++   const struct vk_render_pass_state *rp = state->rp;
++   for (uint32_t i = 0u; state->cb && i < rp->color_attachment_count; ++i) {
++      uint8_t logical_index = kk_get_logical_color_att_index(state, i);
++      VkFormat format = rp->color_attachment_formats[i];
++      if (logical_index == MESA_VK_ATTACHMENT_UNUSED ||
++          format == VK_FORMAT_UNDEFINED)
++         continue;
++
++      /* Formats without blending (integer ones) are written as they are */
++      const struct vk_color_blend_attachment_state *att =
++         &state->cb->attachments[i];
++      const struct kk_va_format *va =
++         kk_get_va_format(vk_format_to_pipe_format(format));
++      mtl_render_pipeline_descriptor_set_color_attachment_blend(
++         descriptor, logical_index, att->blend_enable && va && va->blend,
++         att->src_color_blend_factor, att->dst_color_blend_factor,
++         att->color_blend_op, att->src_alpha_blend_factor,
++         att->dst_alpha_blend_factor, att->alpha_blend_op, att->write_mask);
++   }
++   if (state->ms) {
++      mtl_render_pipeline_descriptor_set_alpha_to_coverage(
++         descriptor, state->ms->alpha_to_coverage_enable);
++      mtl_render_pipeline_descriptor_set_alpha_to_one(
++         descriptor, state->ms->alpha_to_one_enable);
++   }
++}
++
++/* Playport (PLA-424): vertex_library and fragment_library, if not NULL, are
++ * the functions' libraries, built already (struct kk_gpl_source); with
++ * fixed_function, the pipeline blends in Metal's fixed function with that
++ * state (kk_gpl_set_fixed_function). */
+ static VkResult
+ kk_compile_graphics_pipeline(struct kk_device *device, struct kk_shader *vs,
+-                             const char *src, mtl_library *vertex_library_built)
++                             const char *src, mtl_library *vertex_library_built,
++                             mtl_library *fragment_library_built,
++                             const struct vk_graphics_pipeline_state *fixed_function)
+ {
+    VkResult result = VK_SUCCESS;
+    struct kk_pipeline_handles *pipe = &vs->pipeline;
+@@ -2751,7 +2879,10 @@ kk_compile_graphics_pipeline(struct kk_device *device, struct kk_shader *vs,
+    thrd_t fragment_thread;
+    if (vertex_library_built) {
+       vertex_build.library = mtl_retain(vertex_library_built);
+-      kk_build_library(&fragment_build);
++      if (fragment_library_built)
++         fragment_build.library = mtl_retain(fragment_library_built);
++      else
++         kk_build_library(&fragment_build);
+    } else {
+       build.parallel = KK_EXPERIMENTAL(PARALLEL_STAGES) &&
+                        thrd_create(&fragment_thread, kk_build_library_thread,
+@@ -2808,6 +2939,9 @@ kk_compile_graphics_pipeline(struct kk_device *device, struct kk_shader *vs,
+             pipeline_descriptor, i, vs->info.vs.rt_formats[i]);
+    }
+ 
++   if (fixed_function)
++      kk_gpl_set_fixed_function(pipeline_descriptor, fixed_function);
++
+    if (vs->info.vs.has_ds) {
+       pipe->gfx.ds_handle = kk_compile_ds_state(device, &vs->info);
+    }
+@@ -3203,7 +3337,8 @@ kk_compile_shaders(struct vk_device *device, uint32_t shader_count,
+ 
+       msl_preprocess_nir_workarounds(nir, pdev->settings.disabled_workarounds);
+       kk_lower_nir(dev, nir, emulated_stage, info->robustness,
+-                   info->set_layout_count, info->set_layouts, state, features);
++                   info->set_layout_count, info->set_layouts, state, features,
++                   false);
+ 
+       if (nir->info.stage == MESA_SHADER_VERTEX)
+          vertex_robustness = info->robustness;
+@@ -3217,7 +3352,7 @@ kk_compile_shaders(struct vk_device *device, uint32_t shader_count,
+    uint32_t total_shaders = shader_count;
+    if (state && infos[shader_count - 1u].stage != MESA_SHADER_FRAGMENT) {
+       nir_shaders[shader_count] =
+-         get_empty_nir(dev, MESA_SHADER_FRAGMENT, state, features);
++         get_empty_nir(dev, MESA_SHADER_FRAGMENT, state, features, false);
+       total_shaders += 1u;
+    }
+ 
+@@ -3249,7 +3384,7 @@ kk_compile_shaders(struct vk_device *device, uint32_t shader_count,
+       struct kk_shader *prev_stage = i > 0 ? shaders[i - 1] : NULL;
+       result =
+          kk_compile_shader(dev, nir_shaders[i], prev_stage, vertex_robustness,
+-                           state, pAllocator, false, &shaders[i]);
++                           state, pAllocator, KK_GPL_WHOLE, &shaders[i]);
+ 
+       if (result != VK_SUCCESS) {
+          /* Clean up all the shaders before this point */
+@@ -3285,7 +3420,7 @@ kk_compile_shaders(struct vk_device *device, uint32_t shader_count,
+    } else {
+       gather_graphics_pipeline_create_info(dev, state, shaders, total_shaders);
+       result = kk_compile_graphics_pipeline(dev, shaders[0], KK_SRC_TRANSLATED,
+-                                            NULL);
++                                            NULL, NULL, NULL);
+ 
+       /* Free generated fragment and geometry shaders, and put the
+        * application's shaders back in its order. */
+@@ -3473,7 +3608,7 @@ kk_deserialize_shader(struct vk_device *vk_dev, struct blob_reader *blob,
+          &shader->pipeline.cs, KK_SRC_DESERIALIZED);
+    } else if (info.stage == MESA_SHADER_VERTEX) {
+       result = kk_compile_graphics_pipeline(dev, shader, KK_SRC_DESERIALIZED,
+-                                            NULL);
++                                            NULL, NULL, NULL);
+    }
+ 
+    if (result != VK_SUCCESS)
+@@ -3701,7 +3836,7 @@ kk_gpl_compile_vertex(struct kk_device *dev, struct kk_gpl_source *src,
+    msl_preprocess_nir_workarounds(nir, pdev->settings.disabled_workarounds);
+    kk_lower_nir(dev, nir, false, info->robustness, info->set_layout_count,
+                 info->set_layouts, state,
+-                kk_make_feature_key(&dev->vk.enabled_features));
++                kk_make_feature_key(&dev->vk.enabled_features), true);
+    bool indirect = false;
+    NIR_PASS(_, nir, kk_gpl_single_slot_varyings, &indirect);
+    if (indirect) {
+@@ -3713,7 +3848,7 @@ kk_gpl_compile_vertex(struct kk_device *dev, struct kk_gpl_source *src,
+ 
+    struct kk_shader *vs = NULL;
+    if (kk_compile_shader(dev, nir, NULL, info->robustness, state,
+-                         &dev->vk.alloc, true, &vs) != VK_SUCCESS) {
++                         &dev->vk.alloc, KK_GPL_LIBRARY, &vs) != VK_SUCCESS) {
+       src->vertex_blocker = "vertex-compile";
+       return;
+    }
+@@ -3741,6 +3876,155 @@ kk_gpl_compile_vertex(struct kk_device *dev, struct kk_gpl_source *src,
+    src->view_mask = state->mv ? state->mv->view_mask : 0;
+ }
+ 
++/* Builds the Metal library of a fragment shader compiled on its own into
++ * src, or says why it could not be built. */
++static void
++kk_gpl_build_fragment(struct kk_device *dev, struct kk_gpl_source *src,
++                      struct kk_shader *fs, const char *kind, int64_t start)
++{
++   struct kk_library_build build = {
++      .device = dev,
++      .data = &fs->msl_data[MESA_SHADER_FRAGMENT],
++      .kind = "gpl",
++      .step = "fragment-library",
++      .src = KK_SRC_TRANSLATED,
++   };
++   kk_build_library(&build);
++   if (KK_DEBUG(COMPILE))
++      fprintf(stderr, "[kk-compile] gpl %s %s ms=%.1f library_ms=%.1f\n", kind,
++              build.library ? "built" : "FAIL",
++              (os_time_get_nano() - start) / 1e6, build.ns / 1e6);
++   if (build.library == NULL) {
++      kk_shader_destroy(&dev->vk, fs, &dev->vk.alloc);
++      src->fragment_at_link = "fragment-library";
++      return;
++   }
++   src->fragment = fs;
++   src->fragment_library = build.library;
++}
++
++/* Why a fragment shader compiled on its own (NIR lowered for it) does not
++ * fit links, which then compile the whole pipeline (*full) or the fragment
++ * shader at link; NULL if it fits. */
++static const char *
++kk_gpl_fragment_unfit(struct kk_device *dev, const nir_shader *nir,
++                      bool indirect, bool *full)
++{
++   struct kk_physical_device *pdev = kk_device_physical(dev);
++   const uint64_t clip_cull = VARYING_BIT_CLIP_DIST0 | VARYING_BIT_CLIP_DIST1 |
++                              VARYING_BIT_CULL_DIST0 | VARYING_BIT_CULL_DIST1;
++   *full = true;
++   if (indirect)
++      return "varying-indirect";
++   if (nir->info.inputs_read & clip_cull)
++      return "fragment-clip-input";
++   if ((nir->info.inputs_read & VARYING_BIT_PRIMITIVE_ID) ||
++       BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_PRIMITIVE_ID))
++      return "fragment-primitive-id";
++
++   *full = false;
++   /* Dual-source blending's second source goes to FRAG_RESULT_DATA1 */
++   if (nir->info.fs.color_is_dual_source &&
++       (nir->info.outputs_written & BITFIELD64_BIT(FRAG_RESULT_DATA1)))
++      return "dual-source";
++   /* kk_lower_fs disables triangle merging unless the draw is multisampled
++    * on an M1 or M2 before OS 27: that depends on the draw's sample count. */
++   if ((nir->info.fs.needs_full_quad_helper_invocations ||
++        nir->info.fs.needs_coarse_quad_helper_invocations) &&
++       !ns_is_os_version_at_least(27, 0, 0) &&
++       (pdev->info.gpu_apple_family == 7 || pdev->info.gpu_apple_family == 8))
++      return "triangle-merge";
++   return NULL;
++}
++
++/* Playport (PLA-424): a fragment shader alone in its pipeline library,
++ * compiled apart from the other libraries (kk_lower_fs with gpl_separate,
++ * vec4 user varyings) into src->fragment, and its Metal library built.
++ * Without it, src->fragment_fallback or src->fragment_at_link says why. */
++static void
++kk_gpl_compile_fragment(struct kk_device *dev, struct kk_gpl_source *src,
++                        const struct vk_shader_compile_info *info,
++                        const struct vk_graphics_pipeline_state *state)
++{
++   struct kk_physical_device *pdev = kk_device_physical(dev);
++   const int64_t start = os_time_get_nano();
++   const char *reason = NULL;
++   bool full = false;
++
++   src->view_mask = state->mv ? state->mv->view_mask : 0;
++   if (KK_DEBUG(SOLID)) {
++      reason = "debug-solid";
++   } else if (kk_fs_reads_input_attachment(info->nir, 0, 0, false)) {
++      reason = "input-attachment";
++      full = true;
++   }
++
++   nir_shader *nir = reason ? NULL : nir_shader_clone(NULL, info->nir);
++   if (reason == NULL && nir == NULL)
++      reason = "memory";
++   if (reason == NULL) {
++      msl_preprocess_nir_workarounds(nir, pdev->settings.disabled_workarounds);
++      kk_lower_nir(dev, nir, false, info->robustness, info->set_layout_count,
++                   info->set_layouts, state,
++                   kk_make_feature_key(&dev->vk.enabled_features), true);
++      bool indirect = false;
++      NIR_PASS(_, nir, kk_gpl_single_slot_varyings, &indirect);
++      nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
++      reason = kk_gpl_fragment_unfit(dev, nir, indirect, &full);
++      if (reason)
++         ralloc_free(nir);
++   }
++
++   struct kk_shader *fs = NULL;
++   if (reason == NULL &&
++       kk_compile_shader(dev, nir, NULL, info->robustness, state,
++                         &dev->vk.alloc, KK_GPL_LIBRARY, &fs) != VK_SUCCESS)
++      reason = "fragment-compile";
++
++   if (reason) {
++      if (full)
++         src->fragment_fallback = reason;
++      else
++         src->fragment_at_link = reason;
++      if (KK_DEBUG(COMPILE))
++         fprintf(stderr, "[kk-compile] gpl fragment %s=%s\n",
++                 full ? "full" : "at-link", reason);
++      return;
++   }
++   kk_gpl_build_fragment(dev, src, fs, "fragment", start);
++}
++
++/* The device's empty fragment shader compiled on its own (kk_gpl.h) */
++void
++kk_gpl_compile_empty_fragment(struct kk_device *dev, struct kk_gpl_source *src)
++{
++   const int64_t start = os_time_get_nano();
++   const struct vk_graphics_pipeline_state state = {0};
++   nir_shader *nir =
++      get_empty_nir(dev, MESA_SHADER_FRAGMENT, &state,
++                    kk_make_feature_key(&dev->vk.enabled_features), true);
++   struct kk_shader *fs = NULL;
++   if (kk_compile_shader(dev, nir, NULL, &rs_none, &state, &dev->vk.alloc,
++                         KK_GPL_LIBRARY, &fs) != VK_SUCCESS) {
++      src->fragment_at_link = "fragment-compile";
++      return;
++   }
++   kk_gpl_build_fragment(dev, src, fs, "empty-fragment", start);
++}
++
++void
++kk_gpl_source_release(struct kk_device *dev, struct kk_gpl_source *src)
++{
++   if (src->vertex_library)
++      mtl_release(src->vertex_library);
++   if (src->vertex)
++      kk_shader_destroy(&dev->vk, src->vertex, &dev->vk.alloc);
++   if (src->fragment_library)
++      mtl_release(src->fragment_library);
++   if (src->fragment)
++      kk_shader_destroy(&dev->vk, src->fragment, &dev->vk.alloc);
++}
++
+ static VkResult
+ kk_gpl_source_init(struct kk_device *dev, struct kk_gpl_source *src,
+                    const struct vk_shader_compile_info *info,
+@@ -3830,6 +4114,16 @@ kk_gpl_compile_separate(struct kk_device *dev, uint32_t shader_count,
+                   kk_gpl_compile_vertex(dev, src, &infos[i], state);
+                else
+                   src->vertex_blocker = "stages";
++               /* Links without a fragment shader use the empty one,
++                * compiled with the first vertex shader compiled on its
++                * own */
++               if (src->vertex)
++                  kk_gpl_empty_fragment(dev);
++            } else if (infos[i].stage == MESA_SHADER_FRAGMENT) {
++               if (shader_count == 1)
++                  kk_gpl_compile_fragment(dev, src, &infos[i], state);
++               else
++                  src->fragment_at_link = "stages";
+             }
+          } else {
+             if (shader)
+@@ -3920,6 +4214,100 @@ kk_gpl_vertex_blocker(struct kk_shader *const *sources,
+    return NULL;
+ }
+ 
++static bool
++kk_blend_factor_is_src1(VkBlendFactor factor)
++{
++   return factor >= VK_BLEND_FACTOR_SRC1_COLOR &&
++          factor <= VK_BLEND_FACTOR_ONE_MINUS_SRC1_ALPHA;
++}
++
++/* Whether Metal can write a fragment output of this type to the format:
++ * a float to a float or normalized format, an integer of the format's
++ * signedness otherwise. */
++static bool
++kk_gpl_output_type_fits(enum pipe_format format, nir_alu_type type)
++{
++   nir_alu_type base = nir_alu_type_get_base_type(type);
++   if (util_format_is_pure_sint(format))
++      return base == nir_type_int;
++   if (util_format_is_pure_uint(format))
++      return base == nir_type_uint;
++   return base == nir_type_float;
++}
++
++const char *
++kk_gpl_fragment_blocker(struct kk_device *dev,
++                        struct kk_shader *const *sources,
++                        const struct vk_graphics_pipeline_state *state)
++{
++   const struct kk_shader *fs_source = sources[MESA_SHADER_FRAGMENT];
++   const struct kk_gpl_source *fsrc =
++      fs_source ? fs_source->gpl : kk_gpl_empty_fragment(dev);
++   if (fsrc == NULL)
++      return NULL;
++   if (fsrc->fragment_fallback)
++      return fsrc->fragment_fallback;
++   const struct kk_shader *fs = fsrc->fragment;
++   if (fs == NULL)
++      return NULL;
++
++   /* The empty fragment shader reads no view index */
++   if (fs_source && (state->mv ? state->mv->view_mask : 0) != fsrc->view_mask)
++      return "multiview";
++
++   const struct vk_color_blend_state *cb = state->cb;
++   if (cb && cb->logic_op_enable)
++      return "logic-op";
++
++   const struct vk_render_pass_state *rp = state->rp;
++   bool src1 = false;
++   for (uint32_t i = 0u; i < rp->color_attachment_count; ++i) {
++      uint8_t logical_index = kk_get_logical_color_att_index(state, i);
++      VkFormat format = rp->color_attachment_formats[i];
++      if (logical_index == MESA_VK_ATTACHMENT_UNUSED ||
++          format == VK_FORMAT_UNDEFINED)
++         continue;
++
++      enum pipe_format pformat = vk_format_to_pipe_format(format);
++      const struct kk_va_format *va = kk_get_va_format(pformat);
++      if (va && !va->is_native)
++         return "format-swizzle";
++
++      const struct vk_color_blend_attachment_state *att =
++         cb ? &cb->attachments[i] : NULL;
++      if (att && att->blend_enable) {
++         if (att->color_blend_op >= VK_BLEND_OP_ZERO_EXT)
++            return "advanced-blend";
++         src1 |= kk_blend_factor_is_src1(att->src_color_blend_factor) ||
++                 kk_blend_factor_is_src1(att->dst_color_blend_factor) ||
++                 kk_blend_factor_is_src1(att->src_alpha_blend_factor) ||
++                 kk_blend_factor_is_src1(att->dst_alpha_blend_factor);
++      }
++
++      nir_alu_type type = fs->gpl_output_types[logical_index];
++      if (type && !kk_gpl_output_type_fits(pformat, type))
++         return "output-type";
++   }
++   /* Metal's dual-source blending has the second source as index(1) of the
++    * only colour attachment */
++   if (src1 != fs->gpl_dual_source ||
++       (fs->gpl_dual_source && rp->color_attachment_count > 1))
++      return "dual-source";
++
++   if (fs->gpl_writes_depth &&
++       rp->depth_attachment_format == VK_FORMAT_UNDEFINED)
++      return "depth-write";
++
++   if (state->ms && state->ms->rasterization_samples &&
++       state->ms->sample_mask != UINT16_MAX)
++      return "sample-mask";
++   /* Metal's alpha to coverage reads colour output 0 */
++   if (state->ms && state->ms->alpha_to_coverage_enable &&
++       fs->gpl_output_types[0] == 0)
++      return "alpha-to-coverage";
++   return NULL;
++}
++
+ /* What a fragment shader reads of the vertex shader compiled on its own */
+ struct kk_gpl_fs_match {
+    uint64_t written;
+@@ -3963,14 +4351,119 @@ match_fs_input(nir_builder *b, nir_intrinsic_instr *intr, void *data)
+    return false;
+ }
+ 
+-/* The link with the vertex shader compiled on its own: compiles the fragment
+- * shader (or an empty one) to match it, and builds the pipeline with its
+- * library. *fallback is set, and nothing compiled, if the fragment shader
+- * does not fit it. */
++/* The linked vertex shader, which holds the pipeline: a copy of the vertex
++ * shader compiled on its own, whose MSL is its library's. */
++static struct kk_shader *
++kk_gpl_linked_vertex(struct kk_device *dev, const struct kk_shader *vertex)
++{
++   struct kk_shader *vs =
++      vk_shader_zalloc(&dev->vk, &kk_shader_ops, MESA_SHADER_VERTEX,
++                       &dev->vk.alloc, sizeof(*vs));
++   if (vs == NULL)
++      return NULL;
++   vs->info = vertex->info;
++   vs->gpl_vertex_fetch = true;
++   memcpy(vs->gpl_varying_types, vertex->gpl_varying_types,
++          sizeof(vs->gpl_varying_types));
++   vs->msl_data[MESA_SHADER_VERTEX].code =
++      ralloc_strdup(NULL, vertex->msl_data[MESA_SHADER_VERTEX].code);
++   vs->msl_data[MESA_SHADER_VERTEX].entrypoint_name =
++      ralloc_strdup(NULL, vertex->msl_data[MESA_SHADER_VERTEX].entrypoint_name);
++   return vs;
++}
++
++static void
++kk_gpl_linked_done(struct kk_shader **linked)
++{
++   for (uint32_t s = 0; s < KK_GPL_STAGES; s++) {
++      if (linked[s] == NULL)
++         continue;
++      kk_shader_pack_msl(linked[s]);
++      if (KK_DEBUG(MEMORY))
++         kk_shader_count(linked[s], 1);
++   }
++}
++
++/* The link of a vertex and a fragment shader both compiled on their own:
++ * builds only the Metal pipeline, from their libraries, with the draw's blend
++ * and multisample state in Metal's fixed function. Separately compiled stages
++ * match by their user varyings' names and types, so *fallback is set, and
++ * nothing built, if the fragment shader reads one the vertex shader does not
++ * write as it reads it. fs_is_api: the fragment shader is the application's
++ * (not the empty one), and a link keeps its copy. */
++static VkResult
++kk_gpl_link_libraries(struct kk_device *dev, const struct kk_gpl_source *vsrc,
++                      const struct kk_gpl_source *fsrc, bool fs_is_api,
++                      const struct vk_graphics_pipeline_state *state,
++                      struct kk_shader **linked, const char **fallback)
++{
++   const struct kk_shader *vertex = vsrc->vertex;
++   const struct kk_shader *fragment = fsrc->fragment;
++   u_foreach_bit(i, fragment->gpl_varyings_read) {
++      if (!(vertex->info.vs.outputs_written &
++            BITFIELD64_BIT(VARYING_SLOT_VAR0 + i))) {
++         *fallback = "varying-unwritten";
++         return VK_SUCCESS;
++      }
++      if (vertex->gpl_varying_types[i] != fragment->gpl_varying_types[i]) {
++         *fallback = "varying-type";
++         return VK_SUCCESS;
++      }
++   }
++   /* The fragment shader does the cull distance discards */
++   if (vertex->info.num_cull_distances) {
++      *fallback = "cull-distance";
++      return VK_SUCCESS;
++   }
++
++   struct kk_shader *vs = kk_gpl_linked_vertex(dev, vertex);
++   struct kk_shader *fs =
++      vk_shader_zalloc(&dev->vk, &kk_shader_ops, MESA_SHADER_FRAGMENT,
++                       &dev->vk.alloc, sizeof(*fs));
++   if (vs == NULL || fs == NULL) {
++      if (vs)
++         kk_shader_destroy(&dev->vk, vs, &dev->vk.alloc);
++      if (fs)
++         vk_shader_free(&dev->vk, &dev->vk.alloc, &fs->vk);
++      return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
++   }
++   fs->info = fragment->info;
++   fs->msl_data[MESA_SHADER_FRAGMENT].code =
++      ralloc_strdup(NULL, fragment->msl_data[MESA_SHADER_FRAGMENT].code);
++   fs->msl_data[MESA_SHADER_FRAGMENT].entrypoint_name = ralloc_strdup(
++      NULL, fragment->msl_data[MESA_SHADER_FRAGMENT].entrypoint_name);
++
++   struct kk_shader *pair[] = {vs, fs};
++   gather_graphics_pipeline_create_info(dev, state, pair, ARRAY_SIZE(pair));
++   VkResult result = kk_compile_graphics_pipeline(
++      dev, vs, KK_SRC_TRANSLATED, vsrc->vertex_library,
++      fsrc->fragment_library, state);
++   if (!fs_is_api || result != VK_SUCCESS) {
++      kk_shader_destroy(&dev->vk, fs, &dev->vk.alloc);
++      fs = NULL;
++   }
++   if (result != VK_SUCCESS) {
++      kk_shader_destroy(&dev->vk, vs, &dev->vk.alloc);
++      return result;
++   }
++
++   linked[MESA_SHADER_VERTEX] = vs;
++   linked[MESA_SHADER_FRAGMENT] = fs;
++   kk_gpl_linked_done(linked);
++   return VK_SUCCESS;
++}
++
++/* The link with the vertex shader compiled on its own. With the fragment
++ * shader (or the empty one) compiled on its own too, it builds the pipeline
++ * from their libraries (kk_gpl_link_libraries). Otherwise it compiles the
++ * fragment shader to match the vertex shader, *fragment_at_link says why, and
++ * builds the pipeline with the vertex shader's library. *fallback is set, and
++ * nothing compiled, if the fragment shader does not fit it. */
+ static VkResult
+ kk_gpl_link_separate(struct kk_device *dev, struct kk_shader *const *sources,
+                      const struct vk_graphics_pipeline_state *state,
+-                     struct kk_shader **linked, const char **fallback)
++                     struct kk_shader **linked, const char **fallback,
++                     const char **fragment_at_link)
+ {
+    struct kk_physical_device *pdev = kk_device_physical(dev);
+    const struct kk_gpl_source *vsrc = sources[MESA_SHADER_VERTEX]->gpl;
+@@ -3979,6 +4472,13 @@ kk_gpl_link_separate(struct kk_device *dev, struct kk_shader *const *sources,
+    const enum kk_feature_key features =
+       kk_make_feature_key(&dev->vk.enabled_features);
+ 
++   const struct kk_gpl_source *fsrc_built =
++      fs_source ? fs_source->gpl : kk_gpl_empty_fragment(dev);
++   if (fsrc_built && fsrc_built->fragment)
++      return kk_gpl_link_libraries(dev, vsrc, fsrc_built, fs_source != NULL,
++                                   state, linked, fallback);
++   *fragment_at_link = fsrc_built ? fsrc_built->fragment_at_link : "memory";
++
+    nir_shader *fs_nir;
+    if (fs_source) {
+       const struct kk_gpl_source *fsrc = fs_source->gpl;
+@@ -3992,9 +4492,9 @@ kk_gpl_link_separate(struct kk_device *dev, struct kk_shader *const *sources,
+       msl_preprocess_nir_workarounds(fs_nir,
+                                      pdev->settings.disabled_workarounds);
+       kk_lower_nir(dev, fs_nir, false, &fsrc->rs, fsrc->set_layout_count,
+-                   fsrc->set_layouts, state, features);
++                   fsrc->set_layouts, state, features, false);
+    } else {
+-      fs_nir = get_empty_nir(dev, MESA_SHADER_FRAGMENT, state, features);
++      fs_nir = get_empty_nir(dev, MESA_SHADER_FRAGMENT, state, features, false);
+    }
+ 
+    bool indirect = false;
+@@ -4014,26 +4514,15 @@ kk_gpl_link_separate(struct kk_device *dev, struct kk_shader *const *sources,
+    }
+    nir_shader_gather_info(fs_nir, nir_shader_get_entrypoint(fs_nir));
+ 
+-   /* The linked vertex shader holds the pipeline; its MSL is the library's. */
+-   struct kk_shader *vs =
+-      vk_shader_zalloc(&dev->vk, &kk_shader_ops, MESA_SHADER_VERTEX,
+-                       &dev->vk.alloc, sizeof(*vs));
++   struct kk_shader *vs = kk_gpl_linked_vertex(dev, vertex);
+    if (vs == NULL) {
+       ralloc_free(fs_nir);
+       return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
+    }
+-   vs->info = vertex->info;
+-   vs->gpl_vertex_fetch = true;
+-   memcpy(vs->gpl_varying_types, vertex->gpl_varying_types,
+-          sizeof(vs->gpl_varying_types));
+-   vs->msl_data[MESA_SHADER_VERTEX].code =
+-      ralloc_strdup(NULL, vertex->msl_data[MESA_SHADER_VERTEX].code);
+-   vs->msl_data[MESA_SHADER_VERTEX].entrypoint_name =
+-      ralloc_strdup(NULL, vertex->msl_data[MESA_SHADER_VERTEX].entrypoint_name);
+ 
+    struct kk_shader *fs = NULL;
+    VkResult result = kk_compile_shader(dev, fs_nir, vs, &vsrc->rs, state,
+-                                       &dev->vk.alloc, true, &fs);
++                                       &dev->vk.alloc, KK_GPL_LINKED_FRAGMENT, &fs);
+    if (result != VK_SUCCESS) {
+       kk_shader_destroy(&dev->vk, vs, &dev->vk.alloc);
+       return result;
+@@ -4042,7 +4531,7 @@ kk_gpl_link_separate(struct kk_device *dev, struct kk_shader *const *sources,
+    struct kk_shader *pair[] = {vs, fs};
+    gather_graphics_pipeline_create_info(dev, state, pair, ARRAY_SIZE(pair));
+    result = kk_compile_graphics_pipeline(dev, vs, KK_SRC_TRANSLATED,
+-                                         vsrc->vertex_library);
++                                         vsrc->vertex_library, NULL, NULL);
+    /* A generated fragment shader lives on in the pipeline only */
+    if (fs_source == NULL || result != VK_SUCCESS) {
+       kk_shader_destroy(&dev->vk, fs, &dev->vk.alloc);
+@@ -4055,24 +4544,18 @@ kk_gpl_link_separate(struct kk_device *dev, struct kk_shader *const *sources,
+ 
+    linked[MESA_SHADER_VERTEX] = vs;
+    linked[MESA_SHADER_FRAGMENT] = fs;
+-   for (uint32_t s = 0; s < KK_GPL_STAGES; s++) {
+-      if (linked[s] == NULL)
+-         continue;
+-      kk_shader_pack_msl(linked[s]);
+-      if (KK_DEBUG(MEMORY))
+-         kk_shader_count(linked[s], 1);
+-   }
++   kk_gpl_linked_done(linked);
+    return VK_SUCCESS;
+ }
+ 
+ /* Playport (PLA-424): the bound library shaders compiled as one pipeline with
+- * the state a draw has, or with the vertex shader compiled on its own.
++ * the state a draw has, or with the shaders compiled on their own.
+  * sources and linked are indexed by stage. */
+ VkResult
+ kk_gpl_link_compile(struct kk_device *dev, struct kk_shader *const *sources,
+                     const struct vk_graphics_pipeline_state *state,
+                     bool separate_vertex, struct kk_shader **linked,
+-                    const char **fallback)
++                    const char **fallback, const char **fragment_at_link)
+ {
+    struct kk_physical_device *pdev = kk_device_physical(dev);
+    struct vk_shader_compile_info infos[KK_GPL_STAGES];
+@@ -4080,16 +4563,18 @@ kk_gpl_link_compile(struct kk_device *dev, struct kk_shader *const *sources,
+    uint32_t count = 0;
+ 
+    *fallback = NULL;
++   *fragment_at_link = NULL;
+    for (uint32_t s = 0; s < KK_GPL_STAGES; s++) {
+       linked[s] = NULL;
+       if (sources[s])
+          stages[count++] = s;
+    }
+    if (separate_vertex) {
+-      VkResult result =
+-         kk_gpl_link_separate(dev, sources, state, linked, fallback);
++      VkResult result = kk_gpl_link_separate(dev, sources, state, linked,
++                                             fallback, fragment_at_link);
+       if (*fallback == NULL)
+          return result;
++      *fragment_at_link = NULL;
+    }
+    if (count == 0)
+       return VK_SUCCESS;
+diff --git a/src/kosmickrisp/vulkan/kk_shader.h b/src/kosmickrisp/vulkan/kk_shader.h
+index 52e4c49..510cb3b 100644
+--- a/src/kosmickrisp/vulkan/kk_shader.h
++++ b/src/kosmickrisp/vulkan/kk_shader.h
+@@ -192,6 +192,16 @@ struct kk_shader {
+     * VARYING_SLOT_VARn it writes, for the fragment shader it is linked with */
+    bool gpl_vertex_fetch;
+    uint8_t gpl_varying_types[32];
++   /* Playport (PLA-424): a fragment shader compiled for a pipeline library
++    * on its own (kk_gpl_compile_fragment), which a link checks against the
++    * vertex shader and the draw's state: the VARYING_SLOT_VARn it reads (their
++    * nir_alu_type in gpl_varying_types), the nir_alu_type of each colour
++    * output (0 for none), whether it writes depth, and whether
++    * FRAG_RESULT_DATA1 is dual-source blending's second source. */
++   uint32_t gpl_varyings_read;
++   uint8_t gpl_output_types[MAX_DRAW_BUFFERS];
++   bool gpl_writes_depth;
++   bool gpl_dual_source;
+ };
+ 
+ VK_DEFINE_NONDISP_HANDLE_CASTS(kk_shader, vk.base, VkShaderEXT,

@@ -69,3 +69,9 @@
 0093-kk-a-timestamp-resolve-updates-a-fence-the-next-comp.patch
 0094-kk-MESA_KK_BATCH2-ampl-no-vertex-amplification-call-.patch
 0095-kk-MESA_KK_BATCH2-oq-a-pass-s-deferred-query-writes-.patch
+0096-kk-MESA_KK_EXPERIMENTAL-gpl-VK_EXT_graphics_pipeline.patch
+0097-kk-MESA_KK_EXPERIMENTAL-gpl-a-library-s-vertex-shade.patch
+0098-kk-MESA_KK_EXPERIMENTAL-gpl-a-library-s-fragment-sha.patch
+0099-kk-MESA_KK_EXPERIMENTAL-gpl-pipeline-library-shaders.patch
+0100-kk-MESA_KK_EXPERIMENTAL-gpl-a-sample-mask-with-every.patch
+0101-kk-MESA_KK_EXPERIMENTAL-gpl-separate-links-leave-the.patch

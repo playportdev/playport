@@ -1,0 +1,1097 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Wed, 21 Oct 2026 18:03:01 +0200
+Subject: [PATCH] kk: MESA_KK_EXPERIMENTAL=gpl,
+ VK_EXT_graphics_pipeline_library linked at the draw
+
+With MESA_KK_EXPERIMENTAL=gpl, KosmicKrisp advertises
+VK_KHR_pipeline_library, VK_EXT_graphics_pipeline_library and its
+graphicsPipelineLibrary feature, so DXVK's GPL path can run. Without the
+flag nothing changes.
+
+A pipeline library's state lacks the vertex input part or the fragment
+output part, and KosmicKrisp's compile reads both. When the runtime
+compiles shaders for such state (kk_gpl_partial_state), each shader keeps
+only what a compile needs: its NIR serialized, the robustness state,
+references to its set layouts, embedded samplers and push range, and the
+fragment library's sample shading. A fast-linked pipeline binds these
+shaders as they are.
+
+Before its first draw, kk_gpl_resolve builds the whole pipeline's state
+from the dynamic and rendering state: what the bound pipeline does not set
+counts as dynamic. It keys that state by the shaders' hash plus the source
+ids, and takes the shaders compiled for the key from the device's link
+cache, compiling them as one pipeline on a miss. It then binds them the way
+a whole pipeline's shaders are bound. A link-time-optimized link compiles
+from the retained NIR as before.
+
+This first step is correct but no faster: the draw still compiles. Making
+the MSL of library shaders independent of the other libraries, so that a
+link builds only the Metal pipeline, follows.
+[kk-compile] link lines count links with MESA_KK_DEBUG=compile. Keys
+tolerate the NULL parts of a library's state, library shaders are not
+serialized, and meta operations save and restore the bound library
+shaders.
+
+Linear: PLA-424
+Class: feature
+Evidence: docs/evidence/2026-10-21-kk-gpl-host.md
+Offered-upstream: not yet
+---
+ src/kosmickrisp/vulkan/kk_cmd_buffer.h      |   3 +
+ src/kosmickrisp/vulkan/kk_cmd_draw.c        |   6 +
+ src/kosmickrisp/vulkan/kk_cmd_meta.c        |   4 +
+ src/kosmickrisp/vulkan/kk_debug.c           |   1 +
+ src/kosmickrisp/vulkan/kk_debug.h           |   3 +
+ src/kosmickrisp/vulkan/kk_device.c          |  10 +-
+ src/kosmickrisp/vulkan/kk_device.h          |   3 +
+ src/kosmickrisp/vulkan/kk_gpl.c             | 317 ++++++++++++++++++++
+ src/kosmickrisp/vulkan/kk_gpl.h             |  97 ++++++
+ src/kosmickrisp/vulkan/kk_physical_device.c |   7 +
+ src/kosmickrisp/vulkan/kk_shader.c          | 300 +++++++++++++++++-
+ src/kosmickrisp/vulkan/kk_shader.h          |   4 +
+ src/kosmickrisp/vulkan/meson.build          |   2 +
+ 13 files changed, 740 insertions(+), 17 deletions(-)
+ create mode 100644 src/kosmickrisp/vulkan/kk_gpl.c
+ create mode 100644 src/kosmickrisp/vulkan/kk_gpl.h
+
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.h b/src/kosmickrisp/vulkan/kk_cmd_buffer.h
+index 2b72109..5de06b2 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_buffer.h
++++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.h
+@@ -11,6 +11,7 @@
+ #include "kk_private.h"
+ 
+ #include "kk_descriptor_set.h"
++#include "kk_gpl.h"
+ #include "kk_image.h"
+ #include "kk_nir_lower_vbo.h"
+ #include "kk_shader.h"
+@@ -300,6 +301,8 @@ struct kk_cmd_buffer {
+       uint64_t root_addr;
+       /* Only tracks graphics shaders since compute is always bound for now. */
+       uint32_t dirty_shaders;
++      /* Playport (PLA-424): bound pipeline library shaders */
++      struct kk_gpl_cmd_state gpl;
+    } state;
+ 
+    struct kk_uploader uploader;
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_draw.c b/src/kosmickrisp/vulkan/kk_cmd_draw.c
+index 2542162..97e3cfb 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_draw.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_draw.c
+@@ -2513,6 +2513,12 @@ kk_draw(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
+ {
+    struct vk_dynamic_graphics_state *dyn = &cmd->vk.dynamic_graphics_state;
+ 
++   /* Playport (PLA-424): link bound pipeline library shaders first; what
++    * the draw uploads depends on the shaders that come out. */
++   if (!kk_gpl_resolve(cmd))
++      return;
++   data->upload_mask = build_per_draw_upload_mask(cmd);
++
+    kk_flush_gfx_state(cmd);
+    bool probe = kk_frame_probe_s > 0 && kk_frame_probe_draw();
+    if (KK_DEBUG(DRAWS) || probe)
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_meta.c b/src/kosmickrisp/vulkan/kk_cmd_meta.c
+index 9163df5..6f28519 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_meta.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_meta.c
+@@ -70,6 +70,8 @@ struct kk_meta_save {
+    struct vk_sample_locations_state _dynamic_sl;
+    struct vk_dynamic_graphics_state dynamic;
+    struct kk_shader *shaders[MESA_SHADER_STAGES];
++   /* Playport (PLA-424) */
++   struct kk_gpl_cmd_state gpl;
+    struct {
+       union {
+          struct {
+@@ -103,6 +105,7 @@ kk_meta_begin(struct kk_cmd_buffer *cmd, struct kk_meta_save *save,
+       for (uint32_t stage = 0u; stage < MESA_SHADER_COMPUTE; ++stage) {
+          save->shaders[stage] = cmd->state.shaders[stage];
+       }
++      save->gpl = cmd->state.gpl;
+ 
+       save->pipeline.gfx.ds = cmd->state.gfx.depth_stencil_state;
+       save->pipeline.gfx.occlusion = cmd->state.gfx.occlusion.mode;
+@@ -176,6 +179,7 @@ kk_meta_end(struct kk_cmd_buffer *cmd, struct kk_meta_save *save,
+       for (uint32_t stage = 0u; stage < MESA_SHADER_COMPUTE; ++stage) {
+          cmd->state.shaders[stage] = save->shaders[stage];
+       }
++      cmd->state.gpl = save->gpl;
+       cmd->state.dirty_shaders |= BITFIELD_MASK(MESA_SHADER_COMPUTE);
+ 
+       if (cmd->state.gfx.is_depth_stencil_dynamic)
+diff --git a/src/kosmickrisp/vulkan/kk_debug.c b/src/kosmickrisp/vulkan/kk_debug.c
+index 8d1c14b..71d1253 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.c
++++ b/src/kosmickrisp/vulkan/kk_debug.c
+@@ -43,6 +43,7 @@ const struct debug_named_value experimental_flags[] = {
+    {"compile_retry", KK_EXPERIMENTAL_COMPILE_RETRY},
+    {"parallel_stages", KK_EXPERIMENTAL_PARALLEL_STAGES},
+    {"library_size_opt", KK_EXPERIMENTAL_LIBRARY_SIZE_OPT},
++   {"gpl", KK_EXPERIMENTAL_GPL},
+    {NULL, 0},
+ };
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_debug.h b/src/kosmickrisp/vulkan/kk_debug.h
+index 5cca0ea..e248d5e 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.h
++++ b/src/kosmickrisp/vulkan/kk_debug.h
+@@ -99,6 +99,9 @@ enum kk_experimental {
+    KK_EXPERIMENTAL_PARALLEL_STAGES = 1ull << 4,
+    /* Build libraries with MTLLibraryOptimizationLevelSize */
+    KK_EXPERIMENTAL_LIBRARY_SIZE_OPT = 1ull << 5,
++   /* Playport (PLA-424): advertise VK_EXT_graphics_pipeline_library; library
++    * shaders compile apart and the draw links them (kk_gpl.c) */
++   KK_EXPERIMENTAL_GPL = 1ull << 6,
+ };
+ 
+ extern enum kk_experimental kk_mesa_experimental_flags;
+diff --git a/src/kosmickrisp/vulkan/kk_device.c b/src/kosmickrisp/vulkan/kk_device.c
+index 9b24128..9bba758 100644
+--- a/src/kosmickrisp/vulkan/kk_device.c
++++ b/src/kosmickrisp/vulkan/kk_device.c
+@@ -348,10 +348,14 @@ kk_CreateDevice(VkPhysicalDevice physicalDevice,
+    simple_mtx_init(&dev->ds_states.lock, mtx_plain);
+    dev->ds_states.count = 0u;
+ 
+-   result = kk_init_sampler_heap(dev, &dev->samplers);
++   result = kk_gpl_device_init(dev);
+    if (result != VK_SUCCESS)
+       goto fail_query_table;
+ 
++   result = kk_init_sampler_heap(dev, &dev->samplers);
++   if (result != VK_SUCCESS)
++      goto fail_gpl;
++
+    result = kk_device_init_lib(dev);
+    if (result != VK_SUCCESS)
+       goto fail_sampler_heap;
+@@ -369,6 +373,8 @@ kk_CreateDevice(VkPhysicalDevice physicalDevice,
+ 
+ fail_sampler_heap:
+    kk_destroy_sampler_heap(dev, &dev->samplers);
++fail_gpl:
++   kk_gpl_device_finish(dev);
+ fail_query_table:
+    kk_query_table_finish(dev, &dev->occlusion_queries);
+ fail_meta:
+@@ -420,6 +426,8 @@ kk_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
+    simple_mtx_destroy(&dev->ds_states.lock);
+    kk_destroy_sampler_heap(dev, &dev->samplers);
+    vk_pipeline_cache_destroy(dev->vk.mem_cache, NULL);
++   /* After the cache, whose library shaders drop their links */
++   kk_gpl_device_finish(dev);
+ 
+    /* Geometry heap */
+    if (dev->heap)
+diff --git a/src/kosmickrisp/vulkan/kk_device.h b/src/kosmickrisp/vulkan/kk_device.h
+index cf1c9f8..f72b1ad 100644
+--- a/src/kosmickrisp/vulkan/kk_device.h
++++ b/src/kosmickrisp/vulkan/kk_device.h
+@@ -129,6 +129,9 @@ struct kk_device {
+          mtl_depth_stencil_state *state;
+       } entries[KK_DS_STATE_CACHE_SIZE];
+    } ds_states;
++
++   /* Playport (PLA-424): pipeline library shaders linked by draws (kk_gpl.c) */
++   struct kk_gpl_cache *gpl_cache;
+ };
+ 
+ #define KK_SINK_PAGE_SIZE 16384u
+diff --git a/src/kosmickrisp/vulkan/kk_gpl.c b/src/kosmickrisp/vulkan/kk_gpl.c
+new file mode 100644
+index 0000000..a778c7e
+--- /dev/null
++++ b/src/kosmickrisp/vulkan/kk_gpl.c
+@@ -0,0 +1,317 @@
++/*
++ * Copyright 2026 The Playport authors
++ * SPDX-License-Identifier: MIT
++ *
++ * Playport (PLA-424): links pipeline library shaders at the draw. See
++ * kk_gpl.h.
++ */
++
++#include "kk_gpl.h"
++
++#include "kk_cmd_buffer.h"
++#include "kk_debug.h"
++#include "kk_device.h"
++#include "kk_physical_device.h"
++#include "kk_shader.h"
++
++#include "util/hash_table.h"
++#include "util/os_time.h"
++#include "util/simple_mtx.h"
++#include "util/u_atomic.h"
++
++#include "vk_render_pass.h"
++
++#include <stdio.h>
++
++struct kk_gpl_link {
++   blake3_hash key;
++   /* The sources linked, by stage (0 for none) */
++   uint64_t ids[KK_GPL_STAGES];
++   /* The shaders compiled for them, by stage. All NULL when the link
++    * failed: draws with it are skipped, and it is not compiled again. */
++   struct kk_shader *linked[KK_GPL_STAGES];
++};
++
++struct kk_gpl_cache {
++   simple_mtx_t lock;
++   /* blake3 key -> struct kk_gpl_link */
++   struct hash_table *links;
++   /* For MESA_KK_DEBUG=compile */
++   uint32_t compiled, failed;
++};
++
++static uint32_t
++kk_gpl_key_hash(const void *key)
++{
++   uint32_t h;
++   memcpy(&h, key, sizeof(h));
++   return h;
++}
++
++static bool
++kk_gpl_key_equal(const void *a, const void *b)
++{
++   return memcmp(a, b, sizeof(blake3_hash)) == 0;
++}
++
++VkResult
++kk_gpl_device_init(struct kk_device *dev)
++{
++   if (!KK_EXPERIMENTAL(GPL))
++      return VK_SUCCESS;
++
++   struct kk_gpl_cache *cache =
++      vk_zalloc(&dev->vk.alloc, sizeof(*cache), 8,
++                VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
++   if (!cache)
++      return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
++   cache->links =
++      _mesa_hash_table_create(NULL, kk_gpl_key_hash, kk_gpl_key_equal);
++   if (!cache->links) {
++      vk_free(&dev->vk.alloc, cache);
++      return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
++   }
++   simple_mtx_init(&cache->lock, mtx_plain);
++   dev->gpl_cache = cache;
++   return VK_SUCCESS;
++}
++
++static void
++kk_gpl_link_destroy(struct kk_device *dev, struct kk_gpl_link *link)
++{
++   for (uint32_t s = 0; s < KK_GPL_STAGES; s++) {
++      if (link->linked[s])
++         kk_shader_release(dev, link->linked[s]);
++   }
++   free(link);
++}
++
++void
++kk_gpl_device_finish(struct kk_device *dev)
++{
++   struct kk_gpl_cache *cache = dev->gpl_cache;
++   if (!cache)
++      return;
++   hash_table_foreach(cache->links, entry)
++      kk_gpl_link_destroy(dev, entry->data);
++   _mesa_hash_table_destroy(cache->links, NULL);
++   simple_mtx_destroy(&cache->lock);
++   vk_free(&dev->vk.alloc, cache);
++   dev->gpl_cache = NULL;
++}
++
++void
++kk_gpl_forget(struct kk_device *dev, uint64_t id)
++{
++   struct kk_gpl_cache *cache = dev->gpl_cache;
++   if (!cache)
++      return;
++
++   /* The application destroys a library's shader only once no command
++    * buffer in flight uses a pipeline made with it, so neither do the
++    * links made with it. */
++   struct kk_gpl_link *dead[64];
++   uint32_t count;
++   do {
++      count = 0;
++      simple_mtx_lock(&cache->lock);
++      hash_table_foreach(cache->links, entry) {
++         struct kk_gpl_link *link = entry->data;
++         bool uses = false;
++         for (uint32_t s = 0; s < KK_GPL_STAGES; s++)
++            uses |= link->ids[s] == id;
++         if (!uses)
++            continue;
++         _mesa_hash_table_remove(cache->links, entry);
++         dead[count++] = link;
++         if (count == ARRAY_SIZE(dead))
++            break;
++      }
++      simple_mtx_unlock(&cache->lock);
++      for (uint32_t i = 0; i < count; i++)
++         kk_gpl_link_destroy(dev, dead[i]);
++   } while (count == ARRAY_SIZE(dead));
++}
++
++/* The render pass state of the current rendering, as a pipeline for it
++ * would have. */
++static void
++kk_gpl_rendering_rp(const struct kk_cmd_buffer *cmd,
++                    struct vk_render_pass_state *rp)
++{
++   const struct kk_rendering_state *render = &cmd->state.gfx.render;
++   memset(rp, 0, sizeof(*rp));
++   rp->color_attachment_count = render->color_att_count;
++   rp->attachments = 0;
++   for (uint32_t i = 0; i < render->color_att_count; i++) {
++      rp->color_attachment_formats[i] = render->color_att[i].vk_format;
++      if (render->color_att[i].vk_format != VK_FORMAT_UNDEFINED)
++         rp->attachments |= MESA_VK_RP_ATTACHMENT_COLOR_0_BIT << i;
++   }
++   rp->depth_attachment_format = render->depth_att.vk_format;
++   if (rp->depth_attachment_format != VK_FORMAT_UNDEFINED)
++      rp->attachments |= MESA_VK_RP_ATTACHMENT_DEPTH_BIT;
++   rp->stencil_attachment_format = render->stencil_att.vk_format;
++   if (rp->stencil_attachment_format != VK_FORMAT_UNDEFINED)
++      rp->attachments |= MESA_VK_RP_ATTACHMENT_STENCIL_BIT;
++}
++
++/* Everything a whole pipeline's compile reads, from the library shaders and
++ * the draw's dynamic and rendering state. */
++struct kk_gpl_draw_state {
++   struct vk_graphics_pipeline_state state;
++   struct vk_input_assembly_state ia;
++   struct vk_multisample_state ms;
++   struct vk_render_pass_state rp;
++   struct vk_multiview_state mv;
++};
++
++static void
++kk_gpl_draw_state(const struct kk_cmd_buffer *cmd,
++                  struct kk_shader *const *sources,
++                  struct kk_gpl_draw_state *out)
++{
++   const struct vk_dynamic_graphics_state *dyn =
++      &cmd->vk.dynamic_graphics_state;
++   const struct kk_gpl_cmd_state *g = &cmd->state.gpl;
++   memset(out, 0, sizeof(*out));
++   struct vk_graphics_pipeline_state *st = &out->state;
++
++   /* What the bound pipeline does not set is dynamic. */
++   BITSET_DECLARE(all, MESA_VK_DYNAMIC_GRAPHICS_STATE_ENUM_MAX);
++   BITSET_ONES(all);
++   BITSET_ANDNOT(st->dynamic, all, g->static_set);
++
++   for (uint32_t s = 0; s < KK_GPL_STAGES; s++) {
++      if (sources[s])
++         st->shader_stages |= mesa_to_vk_shader_stage(s);
++   }
++
++   st->vi = dyn->vi;
++   out->ia = dyn->ia;
++   st->ia = &out->ia;
++   st->ts = &dyn->ts;
++   st->vp = &dyn->vp;
++   st->rs = &dyn->rs;
++   st->fsr = &dyn->fsr;
++
++   const struct kk_gpl_source *fs =
++      sources[MESA_SHADER_FRAGMENT] ? sources[MESA_SHADER_FRAGMENT]->gpl
++                                    : NULL;
++   out->ms = (struct vk_multisample_state){
++      .rasterization_samples = dyn->ms.rasterization_samples,
++      .sample_shading_enable = fs && fs->sample_shading_enable,
++      .min_sample_shading = fs ? fs->min_sample_shading : 0.0f,
++      .sample_mask = dyn->ms.sample_mask,
++      .alpha_to_coverage_enable = dyn->ms.alpha_to_coverage_enable,
++      .alpha_to_one_enable = dyn->ms.alpha_to_one_enable,
++      .sample_locations_enable = dyn->ms.sample_locations_enable,
++      .sample_locations = dyn->ms.sample_locations,
++   };
++   /* A pipeline without rasterization has no multisample state */
++   st->ms = out->ms.rasterization_samples ? &out->ms : NULL;
++   st->ds = &dyn->ds;
++   st->cb = &dyn->cb;
++   st->cal = &dyn->cal;
++   st->ial = &dyn->ial;
++
++   kk_gpl_rendering_rp(cmd, &out->rp);
++   st->rp = &out->rp;
++   out->mv.view_mask = cmd->state.gfx.render.view_mask;
++   st->mv = &out->mv;
++}
++
++static void
++kk_gpl_key(struct kk_device *dev, struct kk_shader *const *sources,
++           const struct vk_graphics_pipeline_state *st, blake3_hash key)
++{
++   blake3_hash state_hash;
++   VkShaderStageFlags stages = st->shader_stages | VK_SHADER_STAGE_VERTEX_BIT |
++                               VK_SHADER_STAGE_FRAGMENT_BIT;
++   dev->vk.shader_ops->hash_state(dev->vk.physical, st,
++                                  &dev->vk.enabled_features, stages,
++                                  state_hash);
++
++   struct mesa_blake3 ctx;
++   _mesa_blake3_init(&ctx);
++   _mesa_blake3_update(&ctx, state_hash, sizeof(state_hash));
++   _mesa_blake3_update(&ctx, st->dynamic, sizeof(st->dynamic));
++   for (uint32_t s = 0; s < KK_GPL_STAGES; s++) {
++      uint64_t id = sources[s] ? sources[s]->gpl->id : 0;
++      _mesa_blake3_update(&ctx, &id, sizeof(id));
++   }
++   _mesa_blake3_final(&ctx, key);
++}
++
++bool
++kk_gpl_resolve(struct kk_cmd_buffer *cmd)
++{
++   struct kk_gpl_cmd_state *g = &cmd->state.gpl;
++   struct kk_shader *sources[KK_GPL_STAGES];
++   bool any = false;
++   for (uint32_t s = 0; s < KK_GPL_STAGES; s++) {
++      sources[s] = g->bound[s];
++      any |= sources[s] != NULL;
++   }
++   if (!any)
++      return true;
++
++   struct kk_device *dev = kk_cmd_buffer_device(cmd);
++   struct kk_gpl_cache *cache = dev->gpl_cache;
++   struct kk_gpl_draw_state ds;
++   kk_gpl_draw_state(cmd, sources, &ds);
++   blake3_hash key;
++   kk_gpl_key(dev, sources, &ds.state, key);
++   if (!g->dirty && memcmp(key, g->key, sizeof(key)) == 0)
++      return cmd->state.shaders[MESA_SHADER_VERTEX] != NULL;
++
++   simple_mtx_lock(&cache->lock);
++   struct hash_entry *entry = _mesa_hash_table_search(cache->links, key);
++   struct kk_gpl_link *link = entry ? entry->data : NULL;
++   simple_mtx_unlock(&cache->lock);
++
++   if (!link) {
++      link = calloc(1, sizeof(*link));
++      if (!link)
++         return false;
++      memcpy(link->key, key, sizeof(key));
++      for (uint32_t s = 0; s < KK_GPL_STAGES; s++)
++         link->ids[s] = sources[s] ? sources[s]->gpl->id : 0;
++
++      const int64_t start = os_time_get_nano();
++      VkResult result =
++         kk_gpl_link_compile(dev, sources, &ds.state, link->linked);
++      if (KK_DEBUG(COMPILE))
++         fprintf(stderr, "[kk-compile] link %s ms=%.1f stages=%#x\n",
++                 result == VK_SUCCESS ? "full" : "FAIL",
++                 (os_time_get_nano() - start) / 1e6,
++                 ds.state.shader_stages);
++
++      /* Another thread may have linked the same meanwhile: keep the first. */
++      simple_mtx_lock(&cache->lock);
++      entry = _mesa_hash_table_search(cache->links, key);
++      if (entry) {
++         simple_mtx_unlock(&cache->lock);
++         kk_gpl_link_destroy(dev, link);
++         link = entry->data;
++      } else {
++         _mesa_hash_table_insert(cache->links, link->key, link);
++         if (result == VK_SUCCESS)
++            cache->compiled++;
++         else
++            cache->failed++;
++         simple_mtx_unlock(&cache->lock);
++      }
++   }
++
++   memcpy(g->key, key, sizeof(key));
++   g->dirty = false;
++   if (link->linked[MESA_SHADER_VERTEX] == NULL) {
++      /* Failed: leave nothing of it bound, and skip its draws. */
++      cmd->state.shaders[MESA_SHADER_VERTEX] = NULL;
++      return false;
++   }
++   for (uint32_t s = 0; s < KK_GPL_STAGES; s++)
++      kk_cmd_bind_linked_shader(cmd, s, link->linked[s]);
++   return true;
++}
+diff --git a/src/kosmickrisp/vulkan/kk_gpl.h b/src/kosmickrisp/vulkan/kk_gpl.h
+new file mode 100644
+index 0000000..68daaa7
+--- /dev/null
++++ b/src/kosmickrisp/vulkan/kk_gpl.h
+@@ -0,0 +1,97 @@
++/*
++ * Copyright 2026 The Playport authors
++ * SPDX-License-Identifier: MIT
++ *
++ * Playport (PLA-424): VK_EXT_graphics_pipeline_library with
++ * MESA_KK_EXPERIMENTAL=gpl. A pipeline library's shaders compile apart
++ * (kk_gpl_compile_separate in kk_shader.c): they keep what the compile needs
++ * and no Metal objects. A fast-linked pipeline binds them as they are, and
++ * the first draw with them links: the device's link cache gives the shaders
++ * compiled for the bound set with the state the draw has (vertex input,
++ * colour blend, multisample and attachment formats from the dynamic and
++ * rendering state), and binds those as a whole pipeline's.
++ */
++
++#ifndef KK_GPL_H
++#define KK_GPL_H 1
++
++#include "kk_private.h"
++
++#include "util/bitset.h"
++#include "util/mesa-blake3.h"
++
++#include "vk_graphics_state.h"
++#include "vk_pipeline.h"
++
++struct kk_cmd_buffer;
++struct kk_device;
++struct kk_shader;
++struct vk_descriptor_set_layout;
++struct vk_sampler_state;
++
++/* What a shader compiled for a pipeline library keeps, to compile it with the
++ * other stages once a draw gives the rest of the state. */
++struct kk_gpl_source {
++   /* Unique per source, never reused: keys the link cache */
++   uint64_t id;
++
++   /* The NIR the runtime gave, serialized */
++   void *nir;
++   size_t nir_size;
++
++   VkShaderCreateFlagsEXT flags;
++   struct vk_pipeline_robustness_state rs;
++
++   uint32_t set_layout_count;
++   struct vk_descriptor_set_layout **set_layouts;
++
++   uint32_t embedded_sampler_count;
++   struct vk_sampler_state *embedded_samplers;
++
++   uint32_t push_constant_range_count;
++   VkPushConstantRange push_constant_range;
++
++   /* Fragment shader library state that is not dynamic state */
++   bool sample_shading_enable;
++   float min_sample_shading;
++};
++
++/* Graphics stages a link covers: vertex to fragment */
++#define KK_GPL_STAGES (MESA_SHADER_FRAGMENT + 1)
++
++/* Command buffer state */
++struct kk_gpl_cmd_state {
++   /* Shaders of pipeline libraries bound per stage, NULL for none or a
++    * whole pipeline's shader */
++   struct kk_shader *bound[KK_GPL_STAGES];
++   /* The state the bound pipeline sets (vk_dynamic_graphics_state::set);
++    * the rest is dynamic */
++   BITSET_DECLARE(static_set, MESA_VK_DYNAMIC_GRAPHICS_STATE_ENUM_MAX);
++   /* Key of the link bound last */
++   blake3_hash key;
++   bool dirty;
++};
++
++bool kk_gpl_partial_state(const struct vk_graphics_pipeline_state *state);
++
++VkResult kk_gpl_device_init(struct kk_device *dev);
++void kk_gpl_device_finish(struct kk_device *dev);
++
++/* Drops the links that use the source with this id */
++void kk_gpl_forget(struct kk_device *dev, uint64_t id);
++
++/* Before a draw: links the bound library shaders, if any, and binds the
++ * result. False if they could not be linked (the draw is skipped). */
++bool kk_gpl_resolve(struct kk_cmd_buffer *cmd);
++
++/* kk_shader.c */
++VkResult kk_gpl_link_compile(struct kk_device *dev,
++                             struct kk_shader *const *sources,
++                             const struct vk_graphics_pipeline_state *state,
++                             struct kk_shader **linked);
++void kk_cmd_bind_linked_shader(struct kk_cmd_buffer *cmd,
++                               mesa_shader_stage stage,
++                               struct kk_shader *shader);
++void kk_shader_release(struct kk_device *dev, struct kk_shader *shader);
++
++#endif /* KK_GPL_H */
+diff --git a/src/kosmickrisp/vulkan/kk_physical_device.c b/src/kosmickrisp/vulkan/kk_physical_device.c
+index e029a94..5cfe787 100644
+--- a/src/kosmickrisp/vulkan/kk_physical_device.c
++++ b/src/kosmickrisp/vulkan/kk_physical_device.c
+@@ -158,10 +158,14 @@ kk_get_device_extensions(const struct kk_instance *instance,
+       .KHR_maintenance6 = true,
+       .KHR_map_memory2 = true,
+       .KHR_push_descriptor = true,
++      /* Playport: VK_EXT_graphics_pipeline_library and what it needs, only
++       * with MESA_KK_EXPERIMENTAL=gpl (PLA-424) */
++      .KHR_pipeline_library = KK_EXPERIMENTAL(GPL),
+       .KHR_shader_expect_assume = true,
+       .KHR_shader_float_controls2 = true,
+       .KHR_shader_subgroup_rotate = true,
+       .KHR_vertex_attribute_divisor = true,
++      .EXT_graphics_pipeline_library = KK_EXPERIMENTAL(GPL),
+       .EXT_global_priority = true,
+       .EXT_global_priority_query = true,
+       .EXT_host_image_copy = true,
+@@ -495,6 +499,9 @@ kk_get_device_features(
+       /* VK_EXT_depth_clip_enable */
+       .depthClipEnable = true,
+ 
++      /* VK_EXT_graphics_pipeline_library, Playport (PLA-424) */
++      .graphicsPipelineLibrary = KK_EXPERIMENTAL(GPL),
++
+       /* VK_EXT_extended_dynamic_state3 */
+       .extendedDynamicState3DepthClampEnable = true,
+       .extendedDynamicState3DepthClipEnable = true,
+diff --git a/src/kosmickrisp/vulkan/kk_shader.c b/src/kosmickrisp/vulkan/kk_shader.c
+index b1b21ab..f4abcab 100644
+--- a/src/kosmickrisp/vulkan/kk_shader.c
++++ b/src/kosmickrisp/vulkan/kk_shader.c
+@@ -12,6 +12,7 @@
+ #include "kk_descriptor_set_layout.h"
+ #include "kk_device.h"
+ #include "kk_format.h"
++#include "kk_gpl.h"
+ #include "kk_nir_lower_vbo.h"
+ #include "kk_physical_device.h"
+ #include "kk_sampler.h"
+@@ -22,6 +23,7 @@
+ #include "kosmickrisp/compiler/nir_to_msl.h"
+ 
+ #include "nir_builder.h"
++#include "nir_serialize.h"
+ #include "nir_xfb_info.h"
+ #include "nir_lower_blend.h"
+ 
+@@ -169,14 +171,20 @@ kk_populate_vs_key(struct kk_vs_key *key,
+                    const struct vk_graphics_pipeline_state *state)
+ {
+    memset(key, 0, sizeof(*key));
+-   key->is_points =
+-      (state->ia->primitive_topology == VK_PRIMITIVE_TOPOLOGY_POINT_LIST);
+-   key->topology_class = vk_primitive_topology_to_mtl_primitive_topology_class(
+-      state->ia->primitive_topology);
++   /* Playport (PLA-424): a pipeline library has only its own parts of the
++    * state; the parts it lacks stay zero. */
++   if (state->ia) {
++      key->is_points =
++         (state->ia->primitive_topology == VK_PRIMITIVE_TOPOLOGY_POINT_LIST);
++      key->topology_class =
++         vk_primitive_topology_to_mtl_primitive_topology_class(
++            state->ia->primitive_topology);
++   }
+    key->point_fill =
+       state->rs && state->rs->polygon_mode == VK_POLYGON_MODE_POINT;
+    key->clip_clamp_off = kk_is_possible_both_depth_clip_clamp(state, false);
+-   key->vi = *state->vi;
++   if (state->vi)
++      key->vi = *state->vi;
+ }
+ 
+ struct kk_fs_key {
+@@ -206,8 +214,9 @@ kk_populate_fs_key(struct kk_fs_key *key,
+ 
+    /* Required since we [de]serialize blend, and render target swizzle for
+     * non-native formats */
+-   memcpy(key->color_formats, state->rp->color_attachment_formats,
+-          sizeof(key->color_formats));
++   if (state->rp)
++      memcpy(key->color_formats, state->rp->color_attachment_formats,
++             sizeof(key->color_formats));
+ 
+    if (has_static_depth_stencil_state(state))
+       key->ds = *(state->ds);
+@@ -229,9 +238,10 @@ kk_populate_fs_key(struct kk_fs_key *key,
+    key->clip_clamp_on = kk_is_possible_both_depth_clip_clamp(state, true);
+ 
+    /* Depth writes are removed unless there's an actual attachment */
+-   key->has_depth = state->rp->depth_attachment_format != VK_FORMAT_UNDEFINED;
++   key->has_depth =
++      state->rp && state->rp->depth_attachment_format != VK_FORMAT_UNDEFINED;
+    key->has_stencil =
+-      state->rp->stencil_attachment_format != VK_FORMAT_UNDEFINED;
++      state->rp && state->rp->stencil_attachment_format != VK_FORMAT_UNDEFINED;
+ 
+    /* Values that modify if a forced depth is present or not */
+    key->depth_input_att =
+@@ -281,8 +291,16 @@ kk_hash_graphics_state(struct vk_physical_device *device,
+       kk_populate_fs_key(&key, state);
+       _mesa_blake3_update(&blake3_ctx, &key, sizeof(key));
+ 
+-      _mesa_blake3_update(&blake3_ctx, &state->mv->view_mask,
+-                          sizeof(state->mv->view_mask));
++      const uint32_t view_mask = state->mv ? state->mv->view_mask : 0;
++      _mesa_blake3_update(&blake3_ctx, &view_mask, sizeof(view_mask));
++   }
++
++   /* Playport (PLA-424): a pipeline library's shaders compile apart and
++    * keep their NIR (kk_gpl_compile_separate), so they are keyed apart from
++    * a whole pipeline's. */
++   if (kk_gpl_partial_state(state)) {
++      const char separate[] = "kk-gpl-separate-v1";
++      _mesa_blake3_update(&blake3_ctx, separate, sizeof(separate));
+    }
+ 
+    enum kk_feature_key feature_key = kk_make_feature_key(enabled_features);
+@@ -1018,6 +1036,23 @@ kk_shader_destroy(struct vk_device *vk_dev, struct kk_shader *shader,
+ {
+    struct kk_device *dev = container_of(vk_dev, struct kk_device, vk);
+ 
++   /* Playport (PLA-424): a pipeline library's shader has no Metal objects;
++    * the links made with it go with it. */
++   if (shader->gpl) {
++      struct kk_gpl_source *src = shader->gpl;
++      kk_gpl_forget(dev, src->id);
++      for (uint32_t i = 0; i < src->set_layout_count; i++) {
++         if (src->set_layouts[i])
++            vk_descriptor_set_layout_unref(&dev->vk, src->set_layouts[i]);
++      }
++      vk_free(&dev->vk.alloc, src->set_layouts);
++      vk_free(&dev->vk.alloc, src->embedded_samplers);
++      free(src->nir);
++      vk_free(&dev->vk.alloc, src);
++      vk_shader_free(&dev->vk, pAllocator, &shader->vk);
++      return;
++   }
++
+    if (shader->counted)
+       kk_shader_count(shader, -1);
+ 
+@@ -3271,6 +3306,11 @@ kk_shader_serialize(struct vk_device *vk_dev, const struct vk_shader *vk_shader,
+ {
+    struct kk_shader *shader = container_of(vk_shader, struct kk_shader, vk);
+ 
++   /* Playport (PLA-424): a pipeline library's shader holds NIR and set
++    * layouts, not MSL; it is not serialized. */
++   if (shader->gpl)
++      return false;
++
+    blob_write_bytes(blob, &shader->info, sizeof(shader->info));
+    kk_msl_serialize(shader, shader->info.stage, blob);
+    if (shader->info.stage == MESA_SHADER_VERTEX) {
+@@ -3391,10 +3431,9 @@ kk_cmd_bind_compute_shader(struct kk_cmd_buffer *cmd, struct kk_shader *shader)
+    cmd->state.shaders[MESA_SHADER_COMPUTE] = shader;
+ }
+ 
+-static void
+-kk_cmd_bind_graphics_shader(struct kk_cmd_buffer *cmd,
+-                            const mesa_shader_stage stage,
+-                            struct kk_shader *shader)
++void
++kk_cmd_bind_linked_shader(struct kk_cmd_buffer *cmd, mesa_shader_stage stage,
++                          struct kk_shader *shader)
+ {
+    cmd->state.shaders[stage] = shader;
+    cmd->state.dirty_shaders |= BITFIELD_BIT(stage);
+@@ -3421,6 +3460,33 @@ kk_cmd_bind_graphics_shader(struct kk_cmd_buffer *cmd,
+    cmd->state.gfx.pipeline_sample_count = shader->info.vs.sample_count;
+ }
+ 
++/* Playport (PLA-424): a pipeline library's shader is bound for the next
++ * draw to link (kk_gpl_resolve); a whole pipeline's is bound at once. */
++static void
++kk_cmd_bind_graphics_shader(struct kk_cmd_buffer *cmd,
++                            const mesa_shader_stage stage,
++                            struct kk_shader *shader)
++{
++   if (stage < KK_GPL_STAGES) {
++      cmd->state.gpl.bound[stage] = shader && shader->gpl ? shader : NULL;
++      if (shader && shader->gpl) {
++         cmd->state.gpl.dirty = true;
++         return;
++      }
++   }
++   kk_cmd_bind_linked_shader(cmd, stage, shader);
++}
++
++static void
++kk_cmd_set_dynamic_graphics_state(struct vk_command_buffer *cmd_buffer,
++                                  const struct vk_dynamic_graphics_state *state)
++{
++   struct kk_cmd_buffer *cmd =
++      container_of(cmd_buffer, struct kk_cmd_buffer, vk);
++   BITSET_COPY(cmd->state.gpl.static_set, state->set);
++   vk_cmd_set_dynamic_graphics_state(cmd_buffer, state);
++}
++
+ static void
+ kk_cmd_bind_shaders(struct vk_command_buffer *cmd_buffer, uint32_t stage_count,
+                     const mesa_shader_stage *stages,
+@@ -3487,6 +3553,130 @@ static const struct vk_shader_ops kk_shader_ops = {
+       kk_shader_get_executable_internal_representations,
+ };
+ 
++/* Playport (PLA-424): whether the runtime compiles shaders for a pipeline
++ * library, whose state lacks the vertex input or the fragment output part
++ * (or a whole pipeline without rasterization, which has no fragment output
++ * part either: its vertex shader is linked at the draw too). */
++bool
++kk_gpl_partial_state(const struct vk_graphics_pipeline_state *state)
++{
++   if (!KK_EXPERIMENTAL(GPL) || state == NULL)
++      return false;
++   return state->vi == NULL || state->ia == NULL || state->rp == NULL ||
++          !vk_render_pass_state_has_attachment_info(state->rp);
++}
++
++static uint64_t kk_gpl_next_id;
++
++static VkResult
++kk_gpl_source_init(struct kk_device *dev, struct kk_gpl_source *src,
++                   const struct vk_shader_compile_info *info,
++                   const struct vk_graphics_pipeline_state *state)
++{
++   src->id = p_atomic_inc_return(&kk_gpl_next_id);
++
++   struct blob blob;
++   blob_init(&blob);
++   nir_serialize(&blob, info->nir, false);
++   if (blob.out_of_memory) {
++      blob_finish(&blob);
++      return VK_ERROR_OUT_OF_HOST_MEMORY;
++   }
++   blob_finish_get_buffer(&blob, &src->nir, &src->nir_size);
++
++   src->flags = info->flags & ~VK_SHADER_CREATE_LINK_STAGE_BIT_EXT;
++   src->rs = *info->robustness;
++
++   if (info->set_layout_count) {
++      src->set_layouts =
++         vk_zalloc(&dev->vk.alloc,
++                   info->set_layout_count * sizeof(*src->set_layouts), 8,
++                   VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
++      if (!src->set_layouts)
++         return VK_ERROR_OUT_OF_HOST_MEMORY;
++      src->set_layout_count = info->set_layout_count;
++      for (uint32_t i = 0; i < info->set_layout_count; i++) {
++         if (info->set_layouts[i])
++            src->set_layouts[i] =
++               vk_descriptor_set_layout_ref(info->set_layouts[i]);
++      }
++   }
++
++   if (info->embedded_sampler_count) {
++      size_t size =
++         info->embedded_sampler_count * sizeof(*src->embedded_samplers);
++      src->embedded_samplers = vk_alloc(&dev->vk.alloc, size, 8,
++                                        VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
++      if (!src->embedded_samplers)
++         return VK_ERROR_OUT_OF_HOST_MEMORY;
++      memcpy(src->embedded_samplers, info->embedded_samplers, size);
++      src->embedded_sampler_count = info->embedded_sampler_count;
++   }
++
++   if (info->push_constant_range_count) {
++      assert(info->push_constant_range_count == 1);
++      src->push_constant_range = info->push_constant_ranges[0];
++      src->push_constant_range_count = 1;
++   }
++
++   if (info->stage == MESA_SHADER_FRAGMENT && state->ms) {
++      src->sample_shading_enable = state->ms->sample_shading_enable;
++      src->min_sample_shading = state->ms->min_sample_shading;
++   }
++   return VK_SUCCESS;
++}
++
++/* A pipeline library's shaders: their NIR and what compiling it needs, kept
++ * until a draw links them (kk_gpl_link_compile). */
++static VkResult
++kk_gpl_compile_separate(struct kk_device *dev, uint32_t shader_count,
++                        struct vk_shader_compile_info *infos,
++                        const struct vk_graphics_pipeline_state *state,
++                        const VkAllocationCallbacks *pAllocator,
++                        struct vk_shader **shaders_out)
++{
++   VkResult result = VK_SUCCESS;
++   for (uint32_t i = 0; i < shader_count; i++) {
++      struct kk_shader *shader = NULL;
++      if (result == VK_SUCCESS) {
++         shader = vk_shader_zalloc(&dev->vk, &kk_shader_ops, infos[i].stage,
++                                   pAllocator, sizeof(*shader));
++         struct kk_gpl_source *src =
++            shader ? vk_zalloc(&dev->vk.alloc, sizeof(*src), 8,
++                               VK_SYSTEM_ALLOCATION_SCOPE_DEVICE)
++                   : NULL;
++         if (src) {
++            shader->info.stage = infos[i].stage;
++            shader->gpl = src;
++            result = kk_gpl_source_init(dev, src, &infos[i], state);
++            if (result != VK_SUCCESS) {
++               kk_shader_destroy(&dev->vk, shader, pAllocator);
++               shader = NULL;
++            }
++         } else {
++            if (shader)
++               vk_shader_free(&dev->vk, pAllocator, &shader->vk);
++            shader = NULL;
++            result = VK_ERROR_OUT_OF_HOST_MEMORY;
++         }
++      }
++      ralloc_free(infos[i].nir);
++      shaders_out[i] = shader ? &shader->vk : NULL;
++   }
++
++   if (result != VK_SUCCESS) {
++      for (uint32_t i = 0; i < shader_count; i++) {
++         if (shaders_out[i])
++            kk_shader_destroy(&dev->vk,
++                              container_of(shaders_out[i], struct kk_shader, vk),
++                              pAllocator);
++         shaders_out[i] = NULL;
++      }
++      return vk_error(dev, result);
++   }
++   return VK_SUCCESS;
++}
++
+ static VkResult
+ kk_compile_shaders_noted(struct vk_device *device, uint32_t shader_count,
+                          struct vk_shader_compile_info *infos,
+@@ -3495,6 +3685,11 @@ kk_compile_shaders_noted(struct vk_device *device, uint32_t shader_count,
+                          const VkAllocationCallbacks *pAllocator,
+                          struct vk_shader **shaders_out)
+ {
++   if (kk_gpl_partial_state(state))
++      return kk_gpl_compile_separate(
++         container_of(device, struct kk_device, vk), shader_count, infos,
++         state, pAllocator, shaders_out);
++
+    const int64_t start = KK_DEBUG(COMPILE) ? os_time_get_nano() : 0;
+    VkResult result = kk_compile_shaders(device, shader_count, infos, state,
+                                         enabled_features, pAllocator,
+@@ -3513,6 +3708,79 @@ kk_compile_shaders_noted(struct vk_device *device, uint32_t shader_count,
+    return result;
+ }
+ 
++/* Playport (PLA-424): the bound library shaders compiled as one pipeline with
++ * the state a draw has. sources and linked are indexed by stage. */
++VkResult
++kk_gpl_link_compile(struct kk_device *dev, struct kk_shader *const *sources,
++                    const struct vk_graphics_pipeline_state *state,
++                    struct kk_shader **linked)
++{
++   struct kk_physical_device *pdev = kk_device_physical(dev);
++   struct vk_shader_compile_info infos[KK_GPL_STAGES];
++   mesa_shader_stage stages[KK_GPL_STAGES];
++   uint32_t count = 0;
++
++   for (uint32_t s = 0; s < KK_GPL_STAGES; s++) {
++      linked[s] = NULL;
++      if (sources[s])
++         stages[count++] = s;
++   }
++   if (count == 0)
++      return VK_SUCCESS;
++
++   for (uint32_t i = 0; i < count; i++) {
++      const struct kk_gpl_source *src = sources[stages[i]]->gpl;
++      struct blob_reader reader;
++      blob_reader_init(&reader, src->nir, src->nir_size);
++      nir_shader *nir = nir_deserialize(
++         NULL, kk_get_nir_options(&pdev->vk, stages[i], &src->rs), &reader);
++      if (nir == NULL) {
++         for (uint32_t j = 0; j < i; j++)
++            ralloc_free(infos[j].nir);
++         return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
++      }
++
++      VkShaderStageFlags next_stage;
++      if (stages[i] == MESA_SHADER_FRAGMENT)
++         next_stage = 0;
++      else if (i + 1 < count)
++         next_stage = mesa_to_vk_shader_stage(stages[i + 1]);
++      else
++         next_stage = VK_SHADER_STAGE_FRAGMENT_BIT;
++
++      infos[i] = (struct vk_shader_compile_info){
++         .stage = stages[i],
++         .flags = src->flags |
++                  (count > 1 ? VK_SHADER_CREATE_LINK_STAGE_BIT_EXT : 0),
++         .next_stage_mask = next_stage,
++         .nir = nir,
++         .robustness = &src->rs,
++         .set_layout_count = src->set_layout_count,
++         .set_layouts = src->set_layouts,
++         .embedded_sampler_count = src->embedded_sampler_count,
++         .embedded_samplers = src->embedded_samplers,
++         .push_constant_range_count = src->push_constant_range_count,
++         .push_constant_ranges = &src->push_constant_range,
++      };
++   }
++
++   struct vk_shader *out[KK_GPL_STAGES];
++   VkResult result =
++      kk_compile_shaders_noted(&dev->vk, count, infos, state,
++                               &dev->vk.enabled_features, &dev->vk.alloc, out);
++   if (result != VK_SUCCESS)
++      return result;
++   for (uint32_t i = 0; i < count; i++)
++      linked[stages[i]] = container_of(out[i], struct kk_shader, vk);
++   return VK_SUCCESS;
++}
++
++void
++kk_shader_release(struct kk_device *dev, struct kk_shader *shader)
++{
++   kk_shader_destroy(&dev->vk, shader, &dev->vk.alloc);
++}
++
+ static VkResult
+ kk_deserialize_shader_noted(struct vk_device *vk_dev, struct blob_reader *blob,
+                             uint32_t binary_version,
+@@ -3543,6 +3811,6 @@ const struct vk_device_shader_ops kk_device_shader_ops = {
+       kk_compile_shaders_noted, /* This will only generate the MSL string we
+                                    need to use for actual library generation */
+    .deserialize = kk_deserialize_shader_noted,
+-   .cmd_set_dynamic_graphics_state = vk_cmd_set_dynamic_graphics_state,
++   .cmd_set_dynamic_graphics_state = kk_cmd_set_dynamic_graphics_state,
+    .cmd_bind_shaders = kk_cmd_bind_shaders,
+ };
+diff --git a/src/kosmickrisp/vulkan/kk_shader.h b/src/kosmickrisp/vulkan/kk_shader.h
+index 48daf31..f6b150d 100644
+--- a/src/kosmickrisp/vulkan/kk_shader.h
++++ b/src/kosmickrisp/vulkan/kk_shader.h
+@@ -20,6 +20,7 @@
+ #include "vk_shader.h"
+ 
+ struct kk_cmd_buffer;
++struct kk_gpl_source;
+ 
+ /* kk_per_draw_data::point_fill_cull: the rasterizer state the point fill
+  * geometry shader (VK_POLYGON_MODE_POINT) culls triangles with. */
+@@ -180,6 +181,9 @@ struct kk_shader {
+    struct msl_compile_data gs_pre;
+    /* Counted in kk_memory_stats (MESA_KK_DEBUG=memory) */
+    bool counted;
++   /* Playport (PLA-424): set when compiled for a pipeline library; the
++    * shader then has no MSL or Metal objects, and a draw links it (kk_gpl.h) */
++   struct kk_gpl_source *gpl;
+ };
+ 
+ VK_DEFINE_NONDISP_HANDLE_CASTS(kk_shader, vk.base, VkShaderEXT,
+diff --git a/src/kosmickrisp/vulkan/meson.build b/src/kosmickrisp/vulkan/meson.build
+index f82e80f..f6e1784 100644
+--- a/src/kosmickrisp/vulkan/meson.build
++++ b/src/kosmickrisp/vulkan/meson.build
+@@ -80,6 +80,8 @@ kk_files = files(
+   'kk_event.c',
+   'kk_format.h',
+   'kk_format.c',
++  'kk_gpl.c',
++  'kk_gpl.h',
+   'kk_image_layout.h',
+   'kk_image_layout.c',
+   'kk_image_view.h',

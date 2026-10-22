@@ -43,8 +43,15 @@ struct kk_mock_obj {
    uint64_t size;
    uint64_t value;       /* events */
    int kind;
+   /* Libraries, their function descriptors and render pipeline descriptors
+    * (the vertex function's): what the MSL writes, KK_MOCK_MSL_* */
+   uint32_t msl_writes;
+   /* Render pipeline descriptors: the input primitive topology class */
+   int topology_class;
 };
 #define KK_MOCK_MAGIC 0x6b6b6d6bu
+#define KK_MOCK_MSL_POINT_SIZE 0x1u
+#define KK_MOCK_MSL_LAYER 0x2u
 
 void *kk_mock_new(int kind, uint64_t size);
 void kk_mock_record_msl(const char *src);
@@ -270,7 +277,50 @@ body("mtl_new_library", r'''
       error->compiler_interrupted = true;
       return NULL;
    }
-   return kk_mock_new(4, 0);''')
+   struct kk_mock_obj *l = kk_mock_new(4, 0);
+   if (strstr(src, "[[point_size]]"))
+      l->msl_writes |= KK_MOCK_MSL_POINT_SIZE;
+   if (strstr(src, "[[render_target_array_index]]"))
+      l->msl_writes |= KK_MOCK_MSL_LAYER;
+   return l;''')
+# Metal refuses a render pipeline whose vertex function writes a point size
+# with the line or triangle topology class ("Vertex shader writes point size
+# but inputPrimitiveTopology is MTLPrimitiveTopologyClassTriangle", seen on
+# the phone, PLA-424), and layered rendering needs the class: either one
+# fails the build as Metal does (nil and an error).
+body("mtl_new_library_function_descriptor", r'''
+   struct kk_mock_obj *f = kk_mock_new(10, 0);
+   if (library)
+      f->msl_writes = ((struct kk_mock_obj *)library)->msl_writes;
+   return f;''')
+body("mtl_render_pipeline_descriptor_set_vertex_shader", r'''
+   ((struct kk_mock_obj *)descriptor)->msl_writes =
+      shader ? ((struct kk_mock_obj *)shader)->msl_writes : 0;''')
+body("mtl_render_pipeline_descriptor_set_input_primitive_topology",
+     "((struct kk_mock_obj *)descriptor)->topology_class = topology_class;")
+body("mtl_new_render_pipeline", r'''
+   struct kk_mock_obj *d = (struct kk_mock_obj *)descriptor;
+   const char *bad = NULL;
+   if ((d->msl_writes & KK_MOCK_MSL_POINT_SIZE) &&
+       (d->topology_class == MTL_PRIMITIVE_TOPOLOGY_CLASS_LINE ||
+        d->topology_class == MTL_PRIMITIVE_TOPOLOGY_CLASS_TRIANGLE))
+      bad = "Vertex shader writes point size but inputPrimitiveTopology is "
+            "a line or triangle class";
+   else if ((d->msl_writes & KK_MOCK_MSL_LAYER) &&
+            d->topology_class == MTL_PRIMITIVE_TOPOLOGY_CLASS_UNSPECIFIED)
+      bad = "Vertex shader writes a layer but inputPrimitiveTopology is "
+            "unspecified";
+   if (bad) {
+      fprintf(stderr, "kk-mock: Failed to create MTLRenderPipelineState: %s\n",
+              bad);
+      if (error) {
+         memset(error, 0, sizeof(*error));
+         error->code = 1;
+         snprintf(error->domain, sizeof(error->domain), "kk-mock");
+      }
+      return NULL;
+   }
+   return kk_mock_new(11, 0);''')
 body("mtl_new_event", "return kk_mock_new(5, 0);")
 body("mtl_new_shared_event", "return kk_mock_new(5, 0);")
 body("mtl_shared_event_get_signaled_value", "return ((struct kk_mock_obj *)event_handle)->value;")

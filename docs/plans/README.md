@@ -68,6 +68,10 @@ removed after review; raw private FL12_2 research remains in `.work/scratch/fl12
   (PLA-401) stay open. See [outcome](finished.md#own-low-address-space-cef).
 - **Steam bridge for RDR2** (2026-10-19): goal passed (PLA-398 Done); PLA-401 and PLA-400 stay
   open. See [outcome](finished.md#steam-bridge-for-rdr2).
+- **KosmicKrisp graphics pipeline library** (2026-10-22): G0–G6 done on `dev/kk-gpl-phone`
+  (mesa 0096–0101, to be merged); decision 0158 keeps `MESA_KK_EXPERIMENTAL=gpl` off by default.
+  PLA-429 measures an uncached title, D3D12 and GPU time; PLA-428, PLA-430 and PLA-425 stay
+  open. See [outcome](finished.md#kosmickrisp-graphics-pipeline-library).
 
 - **OpenGL through Zink:** chunks 1a–5 done 2026-10-11 (decisions 0087–0089); see
   [outcome and evidence](finished.md#opengl-through-zink). Remaining work is in

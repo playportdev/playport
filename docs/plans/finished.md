@@ -369,6 +369,32 @@ default, also in release).
   Wow6432Node redirection worked around by writing both views
   ([PLA-400](https://linear.app/playportdev/issue/PLA-400)); the full bridge is PLA-253.
 
+## KosmicKrisp graphics pipeline library
+
+`plans/2026-10-21-kk-graphics-pipeline-library.md`
+([PLA-424](https://linear.app/playportdev/issue/PLA-424);
+[decision 0158](../decisions/0158-kk-gpl-stays-experimental.md)). Done 2026-10-22 on branch
+`dev/kk-gpl-phone`, to be merged; removed 2026-10-22. Full `VK_EXT_graphics_pipeline_library` in
+KosmicKrisp for DXVK (and vkd3d-proton's partial pipelines), behind `MESA_KK_EXPERIMENTAL=gpl`,
+off by default.
+- **Result:** `patches/mesa` 0096–0101: links at the draw (0096), the vertex and fragment
+  libraries compiled on their own at library creation (0097, 0098), library shaders in pipeline
+  caches and counted (0099), a sample mask with every sample's bit links apart (0100), and
+  separate links leave Metal's topology class unspecified (0101). Nothing changes with the flag
+  off. On dev IPA `0712b0ce`, Hollow Knight fast-links 40 of 40 with 0 failures in two launches;
+  the second reads its 54 library shaders from Mesa's disk cache and links in 40 ms in all. It
+  renders as flag off, at 60 FPS, with the same hitches. The flag costs 135 more live shaders, 40
+  more pipelines, 1.6 MB more MSL and about 1.2 s of cold link builds. No stall reduction was
+  measured, since the flag-off pipelines are all cached, so decision 0158 keeps the flag off.
+- **Open:** a title with uncached pipelines, D3D12 and GPU time, then the default
+  ([PLA-429](https://linear.app/playportdev/issue/PLA-429)); flag-off sample-mask lowering of
+  DXVK's `0x1` at one sample ([PLA-430](https://linear.app/playportdev/issue/PLA-430)); the link
+  key's dynamic blend constants and the untested layer/stencil-export rules
+  ([PLA-428](https://linear.app/playportdev/issue/PLA-428)); native Vulkan (RDR2) compile stalls
+  ([PLA-425](https://linear.app/playportdev/issue/PLA-425)).
+- **Evidence:** [host](../evidence/2026-10-21-kk-gpl-host.md),
+  [phone](../evidence/2026-10-22-kk-gpl-phone.md).
+
 ## Removed without being carried out
 
 These plans were removed on 2026-10-06 without being carried out. Their open

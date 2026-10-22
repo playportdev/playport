@@ -1,0 +1,46 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 22 Oct 2026 01:30:28 +0200
+Subject: [PATCH] kk: MESA_KK_EXPERIMENTAL=gpl, a sample mask with every sample
+ links apart
+
+With MESA_KK_EXPERIMENTAL=gpl, a link of pipeline libraries whose
+static sample mask has the bit of every rasterization sample now links
+the shaders compiled on their own, as with a mask of all ones; only a
+mask without one of them still compiles the whole pipeline
+(fallback=sample-mask). Vulkan ignores the bits above the sample count,
+and DXVK gives the mask cut to it: 0x1 at one sample, which made every
+link of Hollow Knight's a whole-pipeline fallback.
+
+The whole-pipeline path is left as it was: it still lowers a mask that
+is not 0xffff into the fragment shader.
+
+Linear: PLA-424
+Class: feature
+Evidence: docs/evidence/2026-10-22-kk-gpl-phone.md
+Offered-upstream: not yet
+---
+ src/kosmickrisp/vulkan/kk_shader.c | 10 +++++++---
+ 1 file changed, 7 insertions(+), 3 deletions(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_shader.c b/src/kosmickrisp/vulkan/kk_shader.c
+index e9811f9..f0d9f11 100644
+--- a/src/kosmickrisp/vulkan/kk_shader.c
++++ b/src/kosmickrisp/vulkan/kk_shader.c
+@@ -4742,9 +4742,13 @@ kk_gpl_fragment_blocker(struct kk_device *dev,
+        rp->depth_attachment_format == VK_FORMAT_UNDEFINED)
+       return "depth-write";
+ 
+-   if (state->ms && state->ms->rasterization_samples &&
+-       state->ms->sample_mask != UINT16_MAX)
+-      return "sample-mask";
++   /* Only the rasterization samples' bits of the mask count: DXVK gives it
++    * cut to the sample count, 0x1 at one sample */
++   if (state->ms && state->ms->rasterization_samples) {
++      const uint16_t samples = BITFIELD_MASK(state->ms->rasterization_samples);
++      if ((state->ms->sample_mask & samples) != samples)
++         return "sample-mask";
++   }
+    /* Metal's alpha to coverage reads colour output 0 */
+    if (state->ms && state->ms->alpha_to_coverage_enable &&
+        fs->gpl_output_types[0] == 0)
