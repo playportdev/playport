@@ -112,13 +112,12 @@ public enum SteamAPISwap {
     }
 
     /// The mode a launch gets for `mode` (PLA-432): Playport's Steam client is a 64-bit
-    /// steamclient64.dll, which a 32-bit steam_api.dll cannot load (it asks for steamclient.dll and
-    /// the game says Steam is not running), so a game whose steam_api DLLs are all 32-bit gets the
-    /// emulator instead. Every other mode, and a game with no steam_api DLL, keeps its own.
-    public static func launchMode(_ mode: Mode, in root: URL) -> Mode {
-        guard mode == .client else { return mode }
-        let s = sites(in: root)
-        return !s.isEmpty && !s.contains(where: { $0.arch == "x86_64" }) ? .emulated : mode
+    /// steamclient64.dll, which a 32-bit game's steam_api.dll cannot load (it asks for
+    /// steamclient.dll and the game says Steam is not running), so a game whose executable is
+    /// i386 gets the emulator instead. A 32-bit game can ship a steam_api64.dll for its tools
+    /// (Portal 2's bin/win64), so the executable decides, not the DLLs.
+    public static func launchMode(_ mode: Mode, executableIsI386: Bool) -> Mode {
+        mode == .client && executableIsI386 ? .emulated : mode
     }
 
     public static func state(in root: URL) -> State {

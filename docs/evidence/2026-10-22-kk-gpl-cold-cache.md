@@ -157,3 +157,20 @@ than the separate pipelines.
 - **On the phone:** Portal 2 ran on these with defaults (the p2off runs) to its chapter at 60 FPS.
 - **Not run:** Hollow Knight's smoke gate on `58b57b19`. It was uninstalled on the owner's request
   for room.
+
+## 32-bit games and Playport's Steam client (PLA-432)
+
+- **The fix** (`b233798`, then this change): `SteamAPISwap.launchMode` gives a game whose
+  executable is i386 (`InstalledTitle.isI386`) the emulator in place of `client`.
+  - The executable decides, not the DLLs: Portal 2 ships `bin/win64/steam_api64.dll` for its
+    tools.
+  - The first version, which looked at the DLLs, kept `client` and the game still stopped.
+- **On the phone:**
+  - Dev IPA `45cc0148f09ce663f6a14e1755a29feb429d0b4d35002f136a46ad5fdbdb1418`, Portal 2 installed again with no settings.
+  - Run `.work/ui-runs/20261022T085839`:
+    - first frame +9.12 s;
+    - the log has `steamapi: Portal 2 is 32-bit: emulated, not client`;
+    - New Game reaches chapter 1's look tutorial;
+    - no "Steam is not running".
+- **Room on the phone:** to install the IPAs, Portal 2 was uninstalled and installed again twice
+  (121–139 s each). The phone has 1.2 GB free beside it and RDR2, under `pp install`'s 2 GB.
