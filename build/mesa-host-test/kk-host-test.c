@@ -188,6 +188,15 @@ gpl_wanted(void)
    return e && strstr(e, "gpl");
 }
 
+/* Whether this run asks for MSL 4.0 (PLA-437): MESA_KK_EXPERIMENTAL names
+ * msl40. */
+static bool
+msl40_wanted(void)
+{
+   const char *e = getenv("MESA_KK_EXPERIMENTAL");
+   return e && strstr(e, "msl40");
+}
+
 static bool
 has_device_extension(VkPhysicalDevice pd, const char *name)
 {
@@ -1140,8 +1149,12 @@ main(int argc, char **argv)
    IPROC(vkGetPhysicalDeviceFeatures2);
    VkPhysicalDeviceProperties props;
    vkGetPhysicalDeviceProperties(pd, &props);
+   VkPhysicalDeviceShaderAtomicFloatFeaturesEXT atomic_float_feat = {
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT,
+   };
    VkPhysicalDeviceTransformFeedbackFeaturesEXT xfb_feat = {
       .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TRANSFORM_FEEDBACK_FEATURES_EXT,
+      .pNext = &atomic_float_feat,
    };
    VkPhysicalDeviceProvokingVertexFeaturesEXT pv_feat = {
       .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROVOKING_VERTEX_FEATURES_EXT,
@@ -1165,6 +1178,14 @@ main(int argc, char **argv)
    }
    if (!f2.features.geometryShader) {
       fprintf(stderr, "geometryShader not exposed\n");
+      return 1;
+   }
+   /* PLA-437: the mock is iOS 27, so MSL 4.1 and shared float atomic add,
+    * but not with MESA_KK_EXPERIMENTAL=msl40 (MSL 4.0). */
+   if (atomic_float_feat.shaderSharedFloat32AtomicAdd == msl40_wanted()) {
+      fprintf(stderr, "shaderSharedFloat32AtomicAdd %d with MESA_KK_EXPERIMENTAL=%s\n",
+              atomic_float_feat.shaderSharedFloat32AtomicAdd,
+              getenv("MESA_KK_EXPERIMENTAL") ? getenv("MESA_KK_EXPERIMENTAL") : "");
       return 1;
    }
 

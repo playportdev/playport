@@ -68,10 +68,25 @@ for s in "$HERE"/shaders/*; do
 done
 cc -O1 -g -Wall -o "$ROOT/kk-host-test" "$HERE/kk-host-test.c" -ldl
 
-rm -rf "$ROOT/msl"; mkdir -p "$ROOT/msl"
-KK_MOCK_MSL_DIR="$ROOT/msl" MESA_SHADER_CACHE_DISABLE=true \
+rm -rf "$ROOT/msl" "$ROOT/msl-versions"; mkdir -p "$ROOT/msl"
+KK_MOCK_MSL_DIR="$ROOT/msl" KK_MOCK_MSL_VERSIONS="$ROOT/msl-versions" MESA_SHADER_CACHE_DISABLE=true \
     "$ROOT/kk-host-test" "$ROOT/build/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.so" "$ROOT/spv"
 echo "MSL libraries: $(ls "$ROOT/msl" | wc -l) in $ROOT/msl"
+
+# MESA_KK_EXPERIMENTAL=msl40 (PLA-437): the mock is iOS 27, so every library
+# above is MSL 4.1 (0x40001); with msl40 every one is 4.0 (0x40000), with the
+# same MSL, and kk-host-test checks shaderSharedFloat32AtomicAdd is then off.
+rm -rf "$ROOT/msl-msl40" "$ROOT/msl40-versions"; mkdir -p "$ROOT/msl-msl40"
+MESA_KK_EXPERIMENTAL=msl40 KK_MOCK_MSL_DIR="$ROOT/msl-msl40" KK_MOCK_MSL_VERSIONS="$ROOT/msl40-versions" \
+    MESA_SHADER_CACHE_DISABLE=true \
+    "$ROOT/kk-host-test" "$ROOT/build/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.so" "$ROOT/spv" \
+    >"$ROOT/msl40.log" 2>&1 || { cat "$ROOT/msl40.log" >&2; exit 1; }
+[ "$(sort -u "$ROOT/msl-versions")" = 0x40001 ] && [ "$(sort -u "$ROOT/msl40-versions")" = 0x40000 ] &&
+    [ "$(wc -l <"$ROOT/msl40-versions")" = "$(wc -l <"$ROOT/msl-versions")" ] ||
+    { echo "MESA_KK_EXPERIMENTAL=msl40: language versions $(sort -u "$ROOT/msl-versions" | tr '\n' ' ')without it, $(sort -u "$ROOT/msl40-versions" | tr '\n' ' ')with it" >&2; exit 1; }
+diff -rq "$ROOT/msl" "$ROOT/msl-msl40" >/dev/null ||
+    { echo "MESA_KK_EXPERIMENTAL=msl40: not the MSL made without it" >&2; exit 1; }
+echo "MESA_KK_EXPERIMENTAL=msl40: $(wc -l <"$ROOT/msl40-versions") libraries as MSL 4.0, the same MSL"
 
 # The same run with MESA_KK_BATCH2=1 (mesa 0091, 0092, 0094, 0095): the
 # used-prefix root upload, Metal's own mapping for a vkMapMemory that is not

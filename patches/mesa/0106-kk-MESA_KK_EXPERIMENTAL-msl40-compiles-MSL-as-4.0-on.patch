@@ -1,0 +1,71 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kamil=20Postro=C5=BCny?= <kamil@postrozny.pl>
+Date: Thu, 22 Oct 2026 15:06:17 +0200
+Subject: [PATCH] kk: MESA_KK_EXPERIMENTAL=msl40 compiles MSL as 4.0 on iOS 27
+
+On iOS 27 the driver asks Metal for MSL 4.1. On the phone the same MSL
+builds 2 to 2.6 times faster in newLibraryWithDescriptor as 4.0: a
+Portal 2 fragment library 350 ms against 136 ms, a whole pipeline's
+fragment shader 160 ms against 64 ms, with the same render pipeline
+times. MESA_KK_EXPERIMENTAL=msl40 keeps 4.0 there.
+
+The language version decides only the compile option and one feature:
+shaderSharedFloat32AtomicAdd needs 4.1, so it is not advertised then.
+The pipeline cache key already covers the version. The MSL text does
+not change.
+
+Without msl40 nothing changes.
+
+Linear: PLA-437
+Class: ios-port
+Evidence: docs/evidence/2026-10-22-kk-gpl-cold-cache.md
+Offered-upstream: no
+---
+ src/kosmickrisp/vulkan/kk_debug.c           | 1 +
+ src/kosmickrisp/vulkan/kk_debug.h           | 4 ++++
+ src/kosmickrisp/vulkan/kk_physical_device.c | 5 +++--
+ 3 files changed, 8 insertions(+), 2 deletions(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_debug.c b/src/kosmickrisp/vulkan/kk_debug.c
+index 0d5b3f7..35e2ddd 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.c
++++ b/src/kosmickrisp/vulkan/kk_debug.c
+@@ -45,6 +45,7 @@ const struct debug_named_value experimental_flags[] = {
+    {"parallel_stages", KK_EXPERIMENTAL_PARALLEL_STAGES},
+    {"library_size_opt", KK_EXPERIMENTAL_LIBRARY_SIZE_OPT},
+    {"gpl", KK_EXPERIMENTAL_GPL},
++   {"msl40", KK_EXPERIMENTAL_MSL40},
+    {NULL, 0},
+ };
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_debug.h b/src/kosmickrisp/vulkan/kk_debug.h
+index dcf465b..2b4e5dc 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.h
++++ b/src/kosmickrisp/vulkan/kk_debug.h
+@@ -106,6 +106,10 @@ enum kk_experimental {
+    /* Playport (PLA-424): advertise VK_EXT_graphics_pipeline_library; library
+     * shaders compile apart and the draw links them (kk_gpl.c) */
+    KK_EXPERIMENTAL_GPL = 1ull << 6,
++   /* Playport (PLA-437): compile MSL as 4.0 where the OS offers 4.1 (iOS
++    * 27), which builds libraries 2-2.6x faster on the phone; the device then
++    * does not advertise shaderSharedFloat32AtomicAdd, which needs 4.1 */
++   KK_EXPERIMENTAL_MSL40 = 1ull << 7,
+ };
+ 
+ extern enum kk_experimental kk_mesa_experimental_flags;
+diff --git a/src/kosmickrisp/vulkan/kk_physical_device.c b/src/kosmickrisp/vulkan/kk_physical_device.c
+index 5cfe787..3aba446 100644
+--- a/src/kosmickrisp/vulkan/kk_physical_device.c
++++ b/src/kosmickrisp/vulkan/kk_physical_device.c
+@@ -1158,8 +1158,9 @@ get_metal_limits(struct kk_physical_device *pdev)
+       mtl_device_get_gpu_apple_family(pdev->mtl_dev_handle);
+ 
+    /* Determine the supported MSL version based on the OS. The version used to
+-    * compile determines what features are available. */
+-   if (ns_is_os_version_at_least(27, 0, 0))
++    * compile determines what features are available. MESA_KK_EXPERIMENTAL=
++    * msl40 keeps 4.0 (PLA-437). */
++   if (ns_is_os_version_at_least(27, 0, 0) && !KK_EXPERIMENTAL(MSL40))
+       pdev->info.msl_version = MTL_LANGUAGE_VERSION_4_1;
+    else
+       pdev->info.msl_version = MTL_LANGUAGE_VERSION_4_0;

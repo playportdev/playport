@@ -268,8 +268,18 @@ body("mtl_new_timestamp_counter_heap", r'''
       abort();
    }
    return kk_mock_new(9, 0);''')
+# With KK_MOCK_MSL_VERSIONS set, each library's MSL language version is
+# appended to that file, one hex number a line (PLA-437: msl40).
 body("mtl_new_library", r'''
    kk_mock_record_msl(src);
+   const char *versions = getenv("KK_MOCK_MSL_VERSIONS");
+   if (versions) {
+      FILE *f = fopen(versions, "a");
+      if (f) {
+         fprintf(f, "%#x\n", (unsigned)msl_version);
+         fclose(f);
+      }
+   }
    if (error && kk_mock_interrupt_build()) {
       memset(error, 0, sizeof(*error));
       error->code = 2;
