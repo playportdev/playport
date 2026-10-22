@@ -1,7 +1,7 @@
 # KosmicKrisp graphics pipeline library on the phone: G0's baseline and G5 (PLA-424)
 
 **Linear:** [PLA-424](https://linear.app/playportdev/issue/PLA-424). **Plan:**
-[kk-graphics-pipeline-library](../plans/2026-10-21-kk-graphics-pipeline-library.md). **Host
+[kk-graphics-pipeline-library](../plans/finished.md#kosmickrisp-graphics-pipeline-library). **Host
 results:** [2026-10-21-kk-gpl-host](2026-10-21-kk-gpl-host.md).
 **Patches:** `patches/mesa` 0096–0101, all behind `MESA_KK_EXPERIMENTAL=gpl`.
 
