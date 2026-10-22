@@ -387,3 +387,62 @@ Hollow Knight used the PLA-429 route.
 - **Phone state afterwards:** the committed build
   `69d360e0aef8d4e9e8ea7d3fc3c62909463e57912f814a3a92e3d0b0d4459467` is installed, with Portal 2
   installed. Nothing was changed in the patch series.
+
+## MSL 4.0 against 4.1, and `library_size_opt`, cold (PLA-437 step 4)
+
+- **Build.** Dev IPA `a9867db432f0ca851d316db1d42b1096ad1f0124db7719f9749778acc3704319`
+  (`0f07753`, mesa 0106): `MESA_KK_EXPERIMENTAL=msl40` compiles every Metal library as MSL 4.0
+  on iOS 27 and leaves out `shaderSharedFloat32AtomicAdd`, the one feature KosmicKrisp gates on
+  4.1. The MSL text is the same (host test: 215 libraries, all 4.0, the same files).
+- **Routes.** As above, with a Clear first in each run (`.work/agent-notes/pla437/p2route4.sh`,
+  `hkroute4.sh`, a copy of PLA-429's writing under `runs4/<run>`). Graphics options
+  `MESA_KK_DEBUG=compile,memory` plus the run's `MESA_KK_EXPERIMENTAL`. Every run finished its
+  route: Portal 2 at chapter 1's LOOK UP tutorial, Hollow Knight in the same room as PLA-429's.
+- **Split.** The stall (beyond 60 FPS, from `[frames]` every 16 frames, as above) is cut in
+  three for Portal 2 by the route's own clock: before the A on chapter 1 (start and main menu),
+  from it to the end of the last gap over 1 s within 20 s (the chapter's loading screen), and
+  after (the tutorial and the walk: gameplay hitches). For Hollow Knight its two gaps over 1 s
+  are its two loads (the title screen's, the new game's); the rest is gameplay.
+
+**Portal 2** (`app-620`):
+
+| Run | `pp ui` run | MESA_KK_EXPERIMENTAL | First frame | Stall | menu / loading / gameplay | Longest gap | Whole pipelines (sum, median fs) | FPS whole / last 100 s |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| p2off1 | `20261022T151926` | – | +12.26 s | 17.1 s | 3.6 / 12.1 / 1.4 s | 5.80 s | 30 (6.0 s, 157 ms) | 54.8 / 60.0 |
+| p2off2 | `20261022T155037` | – | +12.99 s | 17.0 s | 3.6 / 12.5 / 0.8 s | 5.87 s | 30 (6.0 s, 161 ms) | 54.8 / 60.0 |
+| p2msl1 | `20261022T152529` | msl40 | +10.52 s | **14.3 s** | 3.4 / 10.5 / 0.4 s | 5.90 s | 30 (3.0 s, 63 ms) | 55.6 / 60.0 |
+| p2msl2 | `20261022T154448` | msl40 | +10.71 s | **14.3 s** | 3.4 / 10.5 / 0.4 s | 5.83 s | 30 (2.9 s, 66 ms) | 55.6 / 60.0 |
+| p2gplmsl1 | `20261022T153231` | gpl,msl40 | +10.74 s | 26.9 s | 6.0 / 16.3 / 4.6 s | 12.07 s | 31 (4.5 s) + 1,097 libraries | 51.7 / 60.0 |
+| p2gplmsl2 | `20261022T160241` | gpl,msl40 | +10.67 s | 26.9 s | 5.9 / 16.3 / 4.7 s | 11.61 s | 31 (4.5 s) + 1,092 libraries | 51.8 / 60.0 |
+| p2size1 | `20261022T153822` | library_size_opt | +13.04 s | 17.3 s | 3.7 / 12.8 / 0.8 s | 5.95 s | 30 (6.1 s, 163 ms) | 54.7 / 60.0 |
+| p2size2 | `20261022T155628` | library_size_opt | +12.44 s | 16.9 s | 3.6 / 12.0 / 1.3 s | 5.79 s | 30 (5.9 s, 154 ms) | 54.7 / 60.0 |
+
+- **msl40** cuts the stall by 16% (17.0–17.1 → 14.3 s), mostly gameplay hitches (0.8–1.4 →
+  0.4 s; gaps over 0.35 s after the load 4 → 2) and 1.6–2.0 s of the load. The chapter's
+  longest gap stays at about 5.8 s: it is not compile-bound. Whole-pipeline build time halves
+  (fragment library median 157–161 → 63–66 ms; `pipe=` unchanged at 13–14 ms).
+- **gpl with msl40** stalls 26.9 s, against 29.6–32.7 s for gpl at 4.1 (PLA-429, step 1). Its
+  fragment library median falls from 1,000–1,060 ms to 446–447 ms (vertex 344–432 → 348 ms), so
+  DXVK builds more of them in the route (1,092–1,097 against 595–626), and it still stalls far
+  more than flag off. Decision 0158 stands.
+- **library_size_opt** changes nothing measurable (16.9–17.3 s, the same build times), so
+  `msl40 library_size_opt` was not run.
+- **No failure under 4.0:** 0 `[kk-compile] … FAIL`, 0 `Failed to create MTLLibrary`, 0
+  `link FAIL` in every run; the same 30–31 pipelines as at 4.1; the walk's shots show the same
+  room as off.
+
+**Hollow Knight** (`app-367520`), installed after Portal 2 was removed:
+
+| Run | `pp ui` run | MESA_KK_EXPERIMENTAL | First frame | Stall | loading / gameplay | Longest gap | Whole pipelines (sum, median fs) | FPS whole / last 100 s |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| hkoff1 | `20261022T161101` | – | +12.17 s | 7.5 s | 5.9 / 1.6 s | 3.79 s | 37 (6.1 s, 147 ms) | 58.2 / 60.0 |
+| hkoff2 | `20261022T162422` | – | +13.98 s | 7.6 s | 6.0 / 1.6 s | 3.85 s | 38 (6.1 s, 146 ms) | 58.1 / 60.0 |
+| hkmsl1 | `20261022T161745` | msl40 | +12.52 s | **5.3 s** | 3.9 / 1.4 s | 2.48 s | 35 (2.9 s, 56 ms) | 58.7 / 60.0 |
+| hkmsl2 | `20261022T163132` | msl40 | +12.58 s | **5.3 s** | 3.9 / 1.4 s | 2.48 s | 35 (2.9 s, 56 ms) | 58.7 / 59.6 |
+
+- **msl40** cuts the stall by 30% (7.5–7.6 → 5.3 s): both loads shorten (3.8 → 2.5 s and
+  2.7 → 2.0 s), gameplay gaps over 0.35 s 4 → 2. 0 failures; the same room renders.
+- **Smoke gate** on `a9867db4` (defaults): ok, first frame +13.09 s,
+  `.work/ui-runs/20261022T163630`.
+- **Scripts:** `.work/agent-notes/pla437/split4.py` (Portal 2 split), `hksplit4.py`, `med4.py`
+  (build medians and failures), `fps4.py`; logs in `runs4/<run>/log/s1-host.log`.
