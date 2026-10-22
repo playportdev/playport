@@ -2930,7 +2930,9 @@ msl_wait(int n)
  * "fallback=library-pending") and moves them to the queue's front, a
  * pipeline cache read meanwhile still has their MSL, so libraries made from
  * it are deserialized and link fast at once; libraries destroyed while queued
- * are never built, and one destroyed while building is dropped after; once
+ * are never built, and one destroyed while building is dropped after; one
+ * destroyed unbuilt and made again from a cache (as DXVK does for a 32-bit
+ * game) is queued, not built at once, and its link falls back too; once
  * the gate opens the queue builds the rest and the first link's libraries
  * link fast. Then the device is destroyed with one library building and one
  * queued (kept by a pipeline cache the application leaks), and its gate
@@ -3028,7 +3030,7 @@ check_gpl_queue(VkPhysicalDevice pd)
     * fragment shader is built at once */
    VkPipeline pre_x = gpl_library(&gl, PRE, RGBA32F, RGBA8, GPL_PLAIN, true, FILL);
    VkPipeline vi = gpl_library(&g, VI, RGBA32F, NONE, GPL_PLAIN, true, FILL);
-   VkPipeline frag_other = gpl_library(&gd, FRAG, RGBA32F, RGBA8, GPL_PLAIN, true, FILL);
+   VkPipeline frag_other = gpl_library(&gv, FRAG, RGBA32F, RGBA8, GPL_PLAIN, true, FILL);
    VkPipelineCacheCreateInfo pcci = {
       .sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO,
    };
@@ -3036,9 +3038,14 @@ check_gpl_queue(VkPhysicalDevice pd)
    const VkPipelineCache cache = gpl_pipeline_cache;
    VkPipeline pre = gpl_library(&g, PRE, RGBA32F, RGBA8, GPL_PLAIN, true, FILL);
    VkPipeline frag = gpl_library(&g, FRAG, RGBA32F, RGBA8, GPL_PLAIN, true, FILL);
+   /* As DXVK makes a 32-bit game's libraries: destroyed at once, and made
+    * again from the cache when a draw needs them */
+   CHECK(vkCreatePipelineCache(dev, &pcci, NULL, &gpl_pipeline_cache));
+   const VkPipelineCache cache_drop = gpl_pipeline_cache;
+   VkPipeline frag_drop = gpl_library(&gd, FRAG, RGBA32F, RGBA8, GPL_PLAIN, true, FILL);
    gpl_pipeline_cache = VK_NULL_HANDLE;
-   VkPipeline frag_drop = gpl_library(&gv, FRAG, RGBA32F, RGBA8, GPL_PLAIN, true, FILL);
    VkPipeline out = gpl_library(&g, OUT, RGBA32F, RGBA8, GPL_PLAIN, true, FILL);
+   VkPipeline out_dual = gpl_library(&g, OUT, RGBA32F, RGBA8, GPL_DUAL_SOURCE, true, FILL);
    const int m1 = msl_count();
    if (m1 != m0 + 1) {
       fprintf(stderr, "gpl queue: the libraries made %d MSL libraries, not "
@@ -3068,8 +3075,13 @@ check_gpl_queue(VkPhysicalDevice pd)
    void *data = malloc(size);
    CHECK(vkGetPipelineCacheData(dev, cache, &size, data));
 
-   /* Destroyed while queued, and while building */
+   /* Destroyed while queued (with its cache), and while building */
+   size_t drop_size = 0;
+   CHECK(vkGetPipelineCacheData(dev, cache_drop, &drop_size, NULL));
+   void *drop_data = malloc(drop_size);
+   CHECK(vkGetPipelineCacheData(dev, cache_drop, &drop_size, drop_data));
    vkDestroyPipeline(dev, frag_drop, NULL);
+   vkDestroyPipelineCache(dev, cache_drop, NULL);
    vkDestroyPipeline(dev, pre_x, NULL);
 
    /* From the cache, built at once though the queue waits, and linked fast */
@@ -3095,26 +3107,54 @@ check_gpl_queue(VkPhysicalDevice pd)
    printf("ok gpl queue: libraries from the cache made %d MSL libraries, "
           "their link %d, while the queue waits\n", m4 - m3, m5 - m4);
 
+   /* The library destroyed unbuilt, from the cache: its Metal library was
+    * never built, so it is queued rather than built at once, and its link
+    * compiles the whole pipeline */
+   pcci.initialDataSize = drop_size;
+   pcci.pInitialData = drop_data;
+   CHECK(vkCreatePipelineCache(dev, &pcci, NULL, &gpl_pipeline_cache));
+   const VkPipelineCache cache3 = gpl_pipeline_cache;
+   VkPipeline frag_again = gpl_library(&gd, FRAG, RGBA32F, RGBA8, GPL_PLAIN, true, FILL);
+   gpl_pipeline_cache = VK_NULL_HANDLE;
+   free(drop_data);
+   const VkPipeline libs3[4] = {vi, pre2, frag_again, out_dual};
+   VkPipeline pending3 = gpl_link(&g, libs3, false);
+   const int m5a = msl_count();
+   gpl_draw(queue, pool, buf, view, pending3);
+   const int m5b = msl_count();
+   if (m5a != m5 || m5b - m5a < 2) {
+      fprintf(stderr, "gpl queue: the library made again from the cache made "
+                      "%d MSL libraries (not 0), its link at draw %d (not 2 "
+                      "or more)\n", m5a - m5, m5b - m5a);
+      return 1;
+   }
+   printf("ok gpl queue: a library destroyed unbuilt and made again from the "
+          "cache is queued: MSL libraries %d, its link at draw %d\n",
+          m5a - m5, m5b - m5a);
+
    /* The gate opens: the vertex shader destroyed while building, the first
-    * link's two libraries and frag_other are built, frag_drop never */
+    * link's two libraries, frag_again and frag_other are built, frag_drop
+    * never */
    gpl_gate(false);
-   const int m6 = msl_wait(m5 + 4);
+   const int m6 = msl_wait(m5b + 5);
    usleep(100 * 1000);
-   if (m6 != m5 + 4 || msl_count() != m6) {
-      fprintf(stderr, "gpl queue: the queue built %d MSL libraries, not 4\n",
-              msl_count() - m5);
+   if (m6 != m5b + 5 || msl_count() != m6) {
+      fprintf(stderr, "gpl queue: the queue built %d MSL libraries, not 5\n",
+              msl_count() - m5b);
       return 1;
    }
    VkPipeline fast = gpl_link(&g, libs, false);
    gpl_draw(queue, pool, buf, view, fast);
+   VkPipeline fast3 = gpl_link(&g, libs3, false);
+   gpl_draw(queue, pool, buf, view, fast3);
    const int m7 = msl_count();
    if (m7 != m6) {
-      fprintf(stderr, "gpl queue: the link once its libraries are built "
+      fprintf(stderr, "gpl queue: the links once their libraries are built "
                       "made %d MSL libraries, not 0\n", m7 - m6);
       return 1;
    }
-   printf("ok gpl queue: the queue built %d MSL libraries, then the link "
-          "made %d\n", m6 - m5, m7 - m6);
+   printf("ok gpl queue: the queue built %d MSL libraries, then the links "
+          "made %d\n", m6 - m5b, m7 - m6);
 
    /* The device goes with one library building and one queued: their
     * shaders are left in a pipeline cache the application does not destroy
@@ -3126,13 +3166,15 @@ check_gpl_queue(VkPhysicalDevice pd)
    VkPipeline pre_q = gpl_library(&gv, PRE, RGBA32F, RGBA8, GPL_PLAIN, true, FILL);
    VkPipeline frag_q = gpl_library(&gv, FRAG, RGBA32F, RGBA8, GPL_PLAIN, true, FILL);
    gpl_pipeline_cache = VK_NULL_HANDLE;
-   const VkPipeline done[] = {pending, cached, fast,  vi,     frag_other,
-                              pre,     frag,   out,   pre2,   frag2,
+   const VkPipeline done[] = {pending, cached, fast,       pending3, fast3,
+                              vi,      frag_other, pre,   frag,     out,
+                              out_dual, pre2,  frag2,      frag_again,
                               pre_q,   frag_q};
    for (unsigned i = 0; i < sizeof(done) / sizeof(done[0]); i++)
       vkDestroyPipeline(dev, done[i], NULL);
    vkDestroyPipelineCache(dev, cache, NULL);
    vkDestroyPipelineCache(dev, cache2, NULL);
+   vkDestroyPipelineCache(dev, cache3, NULL);
    vkDestroyImageView(dev, view, NULL);
    vkDestroyImage(dev, image, NULL);
    vkFreeMemory(dev, image_mem, NULL);

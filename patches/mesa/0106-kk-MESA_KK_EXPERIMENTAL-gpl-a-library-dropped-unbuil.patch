@@ -1,0 +1,271 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 22 Oct 2026 10:43:30 +0200
+Subject: [PATCH] kk: MESA_KK_EXPERIMENTAL=gpl, a library dropped unbuilt is
+ queued again when deserialized
+
+DXVK destroys a 32-bit game's pipeline library as soon as it has made
+it (DxvkShaderPipelineLibrary::compilePipeline with
+mustTrackPipelineLifetime, to save address space), counting on the
+driver's disk cache when a draw needs it again. With the background
+queue that drops the library's job before Metal has compiled its MSL:
+on the phone Portal 2 dropped 1,709 queued libraries within a
+millisecond, and its draws then made them again from the disk cache,
+whose deserialization builds the Metal library at once, from nothing,
+on the draw's thread: 0.1-0.75 s each, a 10 s chapter-load gap.
+
+The queue now remembers the MSL hash (XXH64) of each job dropped
+before its library was built, until a build of the same MSL ends. A
+deserialized library whose MSL is among them is queued like a new one
+(its gpl-phases line says deserialized, with queue_ms): the draw's link
+compiles the whole pipeline (library-pending) and moves it to the
+queue's front. Every other deserialization, a later launch's from
+Metal's own cache among them, is built at once as before.
+"[kk-compile] gpl-queue" also counts the deserialized ones queued.
+
+Linear: PLA-437
+Class: feature
+Evidence: docs/evidence/2026-10-22-kk-gpl-cold-cache.md
+Offered-upstream: no
+---
+ src/kosmickrisp/vulkan/kk_gpl.h    |   6 +-
+ src/kosmickrisp/vulkan/kk_shader.c | 100 +++++++++++++++++++++++------
+ 2 files changed, 86 insertions(+), 20 deletions(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_gpl.h b/src/kosmickrisp/vulkan/kk_gpl.h
+index 87c974f..8a6b6c4 100644
+--- a/src/kosmickrisp/vulkan/kk_gpl.h
++++ b/src/kosmickrisp/vulkan/kk_gpl.h
+@@ -31,8 +31,10 @@
+  * queue, one at a time on a thread of its own (kk_gpl_library_job in
+  * kk_shader.c). A link whose libraries are not built yet compiles the whole
+  * pipeline ("library-pending", kk_gpl_library_blocker) and moves them to the
+- * queue's front. Deserialized libraries, the empty fragment shader's, and
+- * all of them with MESA_KK_DEBUG=sync_libraries are built at once.
++ * queue's front. Deserialized libraries (but those whose MSL's job was
++ * dropped unbuilt: kk_gpl_library_queue::unbuilt), the empty fragment
++ * shader's, and all of them with MESA_KK_DEBUG=sync_libraries are built at
++ * once.
+  */
+ 
+ #ifndef KK_GPL_H
+diff --git a/src/kosmickrisp/vulkan/kk_shader.c b/src/kosmickrisp/vulkan/kk_shader.c
+index 0b07c4f..0414385 100644
+--- a/src/kosmickrisp/vulkan/kk_shader.c
++++ b/src/kosmickrisp/vulkan/kk_shader.c
+@@ -39,6 +39,8 @@
+ #include "util/u_atomic.h"
+ #include "util/u_debug.h"
+ #include "util/u_thread.h"
++#define XXH_INLINE_ALL
++#include "util/xxhash.h"
+ 
+ #include <dirent.h>
+ #include <errno.h>
+@@ -3981,9 +3983,13 @@ struct kk_gpl_library_job {
+    uint32_t state;
+    mtl_library *library;
+    bool vertex;
++   /* Queued by kk_gpl_deserialize (kk_gpl_library_queue::unbuilt) */
++   bool deserialized;
+    /* A copy of the shader's MSL, packed as the shader's is (or not, if
+-    * packing failed), so that the job does not depend on the shader */
++    * packing failed), so that the job does not depend on the shader, and
++    * the MSL's hash */
+    struct msl_compile_data msl;
++   uint64_t msl_hash;
+    /* For [kk-compile]: when the shader's build began and when it was queued,
+     * and the phases before */
+    int64_t start, queued;
+@@ -4002,9 +4008,19 @@ struct kk_gpl_library_queue {
+     * the first job. */
+    thrd_t thread;
+    bool started, stop;
+-   /* For MESA_KK_DEBUG=compile: jobs queued, built, failed, dropped, and
+-    * moved to the front */
+-   uint32_t queued, built, failed, dropped, promoted;
++   /* The MSL hashes of jobs dropped before their library was built, until a
++    * job with the same MSL builds it. DXVK destroys a 32-bit game's pipeline
++    * library as soon as it is made (to save address space; it counts on the
++    * driver's disk cache when it needs the library again, mostly at a
++    * draw), which drops its job before Metal ever compiled the MSL: then a
++    * deserialization of it would build the Metal library from nothing on
++    * the calling thread, the draw's, so it is queued instead
++    * (kk_gpl_deserialize). Any other deserialization (a later launch's) has
++    * Metal's own cache, and is built at once. */
++   struct hash_table_u64 *unbuilt;
++   /* For MESA_KK_DEBUG=compile: jobs queued (deserialized ones among them),
++    * built, failed, dropped, and moved to the front */
++   uint32_t queued, deserialized, built, failed, dropped, promoted;
+ };
+ 
+ VkResult
+@@ -4023,6 +4039,13 @@ kk_gpl_library_queue_init(struct kk_device *dev)
+       return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
+    }
+    list_inithead(&q->jobs);
++   q->unbuilt = _mesa_hash_table_u64_create(NULL);
++   if (q->unbuilt == NULL) {
++      cnd_destroy(&q->cond);
++      mtx_destroy(&q->lock);
++      free(q);
++      return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
++   }
+    dev->gpl_library_queue = q;
+    return VK_SUCCESS;
+ }
+@@ -4054,14 +4077,16 @@ kk_gpl_library_job_build(struct kk_gpl_library_job *job)
+       .data = &data,
+       .kind = "gpl",
+       .step = job->vertex ? "vertex-library" : "fragment-library",
+-      .src = KK_SRC_TRANSLATED,
++      .src = job->deserialized ? KK_SRC_DESERIALIZED : KK_SRC_TRANSLATED,
+    };
+    if (code)
+       kk_build_library(&build);
+    if (KK_DEBUG(COMPILE))
+       kk_gpl_log_library(job->vertex ? "vertex" : "fragment",
+-                         build.library ? "built" : "FAIL", job->start, &build,
+-                         &job->phases, queue_ns);
++                         build.library == NULL ? "FAIL"
++                         : job->deserialized   ? "deserialized"
++                                               : "built",
++                         job->start, &build, &job->phases, queue_ns);
+    ralloc_free(code);
+    return build.library;
+ }
+@@ -4073,6 +4098,9 @@ static mtl_library *
+ kk_gpl_library_job_done(struct kk_gpl_library_queue *q,
+                         struct kk_gpl_library_job *job, mtl_library *library)
+ {
++   /* Metal has compiled this MSL now */
++   if (library)
++      _mesa_hash_table_u64_remove(q->unbuilt, job->msl_hash);
+    if (job->state == KK_GPL_LIBRARY_DROPPED)
+       return library;
+    if (library) {
+@@ -4122,9 +4150,35 @@ kk_gpl_library_worker(void *data)
+    return 0;
+ }
+ 
++/* The hash of a shader's MSL before it is packed, for
++ * kk_gpl_library_queue::unbuilt */
++static uint64_t
++kk_gpl_msl_hash(const struct kk_shader *shader)
++{
++   const char *code = shader->msl_data[shader->info.stage].code;
++   return code ? XXH64(code, strlen(code), 0) : 0;
++}
++
++/* Whether the Metal library of a deserialized shader's MSL is one whose job
++ * was dropped unbuilt (kk_gpl_library_queue::unbuilt) */
++static bool
++kk_gpl_library_unbuilt(struct kk_device *dev, const struct kk_shader *shader)
++{
++   struct kk_gpl_library_queue *q = dev->gpl_library_queue;
++   if (q == NULL || KK_DEBUG(SYNC_LIBRARIES))
++      return false;
++   const uint64_t hash = kk_gpl_msl_hash(shader);
++   mtx_lock(&q->lock);
++   const bool unbuilt =
++      _mesa_hash_table_u64_search(q->unbuilt, hash) != NULL;
++   mtx_unlock(&q->lock);
++   return unbuilt;
++}
++
+ /* Queues the Metal library of a vertex or fragment shader compiled on its
+  * own (as kk_gpl_build_library would build it) into src, which keeps the
+- * shader with its MSL packed, and the job. */
++ * shader with its MSL packed, and the job. front_end is NULL for a
++ * deserialized shader. */
+ static void
+ kk_gpl_queue_library(struct kk_device *dev, struct kk_gpl_source *src,
+                      struct kk_shader *shader, int64_t start,
+@@ -4134,6 +4188,7 @@ kk_gpl_queue_library(struct kk_device *dev, struct kk_gpl_source *src,
+    const bool vertex = shader->info.stage == MESA_SHADER_VERTEX;
+    const struct kk_gpl_phases phases =
+       kk_gpl_phases_of(shader, start, front_end);
++   const uint64_t msl_hash = kk_gpl_msl_hash(shader);
+    /* Links copy the MSL out again (kk_msl_data_code_dup) */
+    kk_shader_pack_msl(shader);
+    const struct msl_compile_data *data = &shader->msl_data[shader->info.stage];
+@@ -4162,6 +4217,8 @@ kk_gpl_queue_library(struct kk_device *dev, struct kk_gpl_source *src,
+    job->dev = dev;
+    job->state = KK_GPL_LIBRARY_QUEUED;
+    job->vertex = vertex;
++   job->deserialized = front_end == NULL;
++   job->msl_hash = msl_hash;
+    job->start = start;
+    job->queued = os_time_get_nano();
+    job->phases = phases;
+@@ -4184,6 +4241,7 @@ kk_gpl_queue_library(struct kk_device *dev, struct kk_gpl_source *src,
+    if (q->started && !q->stop) {
+       list_addtail(&job->link, &q->jobs);
+       q->queued++;
++      q->deserialized += job->deserialized;
+       cnd_signal(&q->cond);
+       mtx_unlock(&q->lock);
+       return;
+@@ -4215,6 +4273,8 @@ kk_gpl_library_job_drop(struct kk_gpl_library_job *job)
+             list_del(&job->link);
+          p_atomic_set(&job->state, KK_GPL_LIBRARY_DROPPED);
+          q->dropped++;
++         /* Until its build (or another of the same MSL) ends */
++         _mesa_hash_table_u64_insert(q->unbuilt, job->msl_hash, (void *)1);
+       }
+       mtx_unlock(&q->lock);
+    }
+@@ -4255,14 +4315,15 @@ kk_gpl_library_queue_log(struct kk_device *dev, const char *when)
+       mtx_unlock(&q->lock);
+       return;
+    }
+-   const uint32_t queued = q->queued, built = q->built, failed = q->failed,
+-                  dropped = q->dropped, promoted = q->promoted,
+-                  waiting = list_length(&q->jobs);
++   const uint32_t queued = q->queued, deserialized = q->deserialized,
++                  built = q->built, failed = q->failed, dropped = q->dropped,
++                  promoted = q->promoted, waiting = list_length(&q->jobs);
+    mtx_unlock(&q->lock);
+    fprintf(stderr,
+-           "[kk-compile] gpl-queue %s queued=%u built=%u failed=%u "
+-           "dropped=%u promoted=%u waiting=%u\n",
+-           when, queued, built, failed, dropped, promoted, waiting);
++           "[kk-compile] gpl-queue %s queued=%u deserialized=%u built=%u "
++           "failed=%u dropped=%u promoted=%u waiting=%u\n",
++           when, queued, deserialized, built, failed, dropped, promoted,
++           waiting);
+ }
+ 
+ void
+@@ -4290,6 +4351,7 @@ kk_gpl_library_queue_finish(struct kk_device *dev)
+    list_for_each_entry_safe(struct kk_gpl_library_job, job, &left, link)
+       kk_gpl_library_job_unref(job);
+ 
++   _mesa_hash_table_u64_destroy(q->unbuilt);
+    cnd_destroy(&q->cond);
+    mtx_destroy(&q->lock);
+    free(q);
+@@ -5014,17 +5076,19 @@ kk_gpl_deserialize(struct kk_device *dev, struct blob_reader *blob,
+       goto fail;
+    }
+ 
+-   /* As kk_gpl_compile_separate: the libraries are built now, and links
+-    * without a fragment shader use the empty one */
++   /* As kk_gpl_compile_separate: the libraries are built now (or queued, if
++    * their MSL's job was dropped unbuilt: kk_gpl_library_queue::unbuilt),
++    * and links without a fragment shader use the empty one */
+    if (vertex) {
+       kk_gpl_build_library(dev, src, vertex, "vertex", KK_SRC_DESERIALIZED,
+-                           start, NULL, false);
++                           start, NULL, kk_gpl_library_unbuilt(dev, vertex));
+       if (src->vertex)
+          kk_gpl_empty_fragment(dev);
+    }
+    if (fragment)
+       kk_gpl_build_library(dev, src, fragment, "fragment",
+-                           KK_SRC_DESERIALIZED, start, NULL, false);
++                           KK_SRC_DESERIALIZED, start, NULL,
++                           kk_gpl_library_unbuilt(dev, fragment));
+ 
+    *shader_out = &shader->vk;
+    return VK_SUCCESS;

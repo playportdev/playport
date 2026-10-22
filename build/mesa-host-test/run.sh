@@ -168,9 +168,10 @@ echo "MESA_KK_DEBUG=compile,serial_libraries: 16 gpl-phases lines, the same MSL"
 # built compiles the whole pipeline (library-pending) and moves them to the
 # queue's front; libraries from a pipeline cache read meanwhile are built at
 # once and link fast; one library destroyed while queued is never built and
-# one destroyed while building is dropped; once the queue has built the rest,
-# the first link's libraries link fast; and the device goes with one library
-# building and one queued. The pipelines before it keep their MSL (one, without
+# one destroyed while building is dropped; the one destroyed unbuilt, made
+# again from its cache (as DXVK does for a 32-bit game), is queued and its
+# link falls back too; once the queue has built the rest, both links' libraries
+# link fast; and the device goes with one library building and one queued. The pipelines before it keep their MSL (one, without
 # rasterization, links in full for its transform feedback, fallback=xfb).
 rm -rf "$ROOT/msl-queue"; mkdir -p "$ROOT/msl-queue"
 KK_HOST_TEST_GPL_QUEUE=1 KK_MOCK_LIBRARY_GATE="$ROOT/library-gate" \
@@ -185,18 +186,20 @@ for f in "$ROOT/msl/"*.metal; do
 done
 queue_lines() { grep -c "^\[kk-compile\] $1" "$ROOT/queue.log" || true; }
 [ "$(queue_lines 'link full fallback=library-pending count=1 ')" = 1 ] &&
-    [ "$(queue_lines 'link full fallback=xfb ')" = 1 ] && [ "$(queue_lines 'link full ')" = 2 ] &&
-    [ "$(queue_lines 'link separate ')" = 2 ] &&
+    [ "$(queue_lines 'link full fallback=library-pending count=2 ')" = 1 ] &&
+    [ "$(queue_lines 'link full fallback=xfb ')" = 1 ] && [ "$(queue_lines 'link full ')" = 3 ] &&
+    [ "$(queue_lines 'link separate ')" = 3 ] &&
     [ "$(queue_lines 'link FAIL ')" = 0 ] &&
     [ "$(queue_lines 'gpl fragment dropped queued ')" = 1 ] &&
     [ "$(queue_lines 'gpl vertex dropped building ')" = 1 ] &&
-    [ "$(queue_lines 'gpl vertex deserialized ')" = 1 ] && [ "$(queue_lines 'gpl fragment deserialized ')" = 1 ] &&
+    [ "$(queue_lines 'gpl vertex deserialized ')" = 1 ] && [ "$(queue_lines 'gpl fragment deserialized ')" = 2 ] &&
+    [ "$(queue_lines 'gpl-phases fragment deserialized .* queue_ms=[1-9][0-9.]*$')" = 1 ] &&
     [ "$(queue_lines 'gpl-phases \(vertex\|fragment\) built .* queue_ms=[0-9.]*$')" = 5 ] &&
-    [ "$(queue_lines 'gpl-queue finish queued=7 built=3 failed=0 dropped=2 promoted=2 waiting=1$')" = 1 ] &&
-    [ "$(queue_lines 'link totals links=3 separate=2 separate-vertex=0 full=1 failed=0 fallbacks=library-pending:1$')" = 1 ] &&
-    [ "$(grep -c '^ok gpl queue: ' "$ROOT/queue.log")" = 4 ] ||
+    [ "$(queue_lines 'gpl-queue finish queued=8 deserialized=1 built=4 failed=0 dropped=2 promoted=3 waiting=1$')" = 1 ] &&
+    [ "$(queue_lines 'link totals links=5 separate=3 separate-vertex=0 full=2 failed=0 fallbacks=library-pending:2$')" = 1 ] &&
+    [ "$(grep -c '^ok gpl queue: ' "$ROOT/queue.log")" = 5 ] ||
     { grep '^\(ok \)\?gpl\|^\[kk-compile\] \(gpl\|link\)' "$ROOT/queue.log" >&2
-      echo "gpl queue: not 1 library-pending fallback and 2 separate links, 1 queued and 1 building library dropped, 1 + 1 from the cache, 5 built by the queue (the last at device finish), 1 left queued then" >&2; exit 1; }
+      echo "gpl queue: not 2 library-pending fallbacks and 3 separate links, 1 queued and 1 building library dropped, 1 + 1 from the cache at once and 1 queued, 6 built by the queue (the last at device finish), 1 left queued then" >&2; exit 1; }
 grep '^ok gpl queue\|^\[kk-compile\] \(gpl-queue\|link\|gpl [a-z-]* \(dropped\|built\|deserialized\)\)' "$ROOT/queue.log"
 
 # The same pipelines with the vertex and fragment libraries built at once and
