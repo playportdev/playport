@@ -75,3 +75,5 @@
 0099-kk-MESA_KK_EXPERIMENTAL-gpl-pipeline-library-shaders.patch
 0100-kk-MESA_KK_EXPERIMENTAL-gpl-a-sample-mask-with-every.patch
 0101-kk-MESA_KK_EXPERIMENTAL-gpl-separate-links-leave-the.patch
+0102-kk-MESA_KK_EXPERIMENTAL-gpl-blend-constants-leave-li.patch
+0103-kk-a-static-sample-mask-with-every-sample-is-not-low.patch

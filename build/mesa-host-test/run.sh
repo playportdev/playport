@@ -101,7 +101,8 @@ echo "MESA_KK_BATCH2: the host test passes with all items and without map and re
 # sample mask without every one of four samples and a vertex shader that
 # writes a layer (the pipeline without rasterization above, with transform
 # feedback, falls back too); a sample mask of 0x1 at one sample, as DXVK
-# gives it, and a point list link fast. The mock refuses a pipeline whose
+# gives it, and a point list link fast, and two draws that differ only in
+# their dynamic blend constants share one link (PLA-428). The mock refuses a pipeline whose
 # vertex function writes a point size, as every vertex library's does, with
 # the line or triangle topology class, as Metal does. A device of its own
 # takes a vertex and a fragment shader library
@@ -124,7 +125,7 @@ gpl_lines() { grep -c "^\[kk-compile\] $1" "$ROOT/gpl.log" || true; }
 [ "$(gpl_lines 'gpl vertex built ')" = 5 ] && [ "$(gpl_lines 'gpl empty-fragment built ')" = 2 ] &&
     [ "$(gpl_lines 'gpl fragment built ')" = 7 ] && [ "$(gpl_lines 'gpl fragment \(full\|at-link\)=')" = 0 ] &&
     [ "$(gpl_lines 'gpl vertex deserialized ')" = 1 ] && [ "$(gpl_lines 'gpl fragment deserialized ')" = 1 ] &&
-    [ "$(gpl_lines 'link separate ')" = 10 ] && [ "$(gpl_lines 'link separate-vertex ')" = 0 ] &&
+    [ "$(gpl_lines 'link separate ')" = 11 ] && [ "$(gpl_lines 'link separate-vertex ')" = 0 ] &&
     [ "$(gpl_lines 'link full fallback=point-fill count=1 ')" = 1 ] &&
     [ "$(gpl_lines 'link full fallback=logic-op count=1 ')" = 2 ] &&
     [ "$(gpl_lines 'link full fallback=sample-mask count=1 ')" = 1 ] &&
@@ -134,7 +135,7 @@ gpl_lines() { grep -c "^\[kk-compile\] $1" "$ROOT/gpl.log" || true; }
     [ "$(gpl_lines 'link totals links=3 separate=1 separate-vertex=0 full=2 failed=0 fallbacks=logic-op:2$')" = 1 ] &&
     [ "$(grep -c '^\[kk-mem\] gpl device finish: live sources=0 shaders=1 libraries=1 links=0, after sources=0 shaders=0 libraries=0 links=0$' "$ROOT/gpl.log")" = 1 ] ||
     { grep '^\[kk-compile\] \(gpl\|link\)\|^\[kk-mem\] gpl' "$ROOT/gpl.log" >&2
-      echo "MESA_KK_EXPERIMENTAL=gpl: not 4 + 1 vertex and 1 + 6 + 1 + 1 fragment libraries, 1 + 1 from the cache, 9 + 1 separate links, a point-fill, a sample-mask, a point-size-layer and 1 + 2 logic-op fallbacks, the second device's totals and counts back to zero" >&2; exit 1; }
+      echo "MESA_KK_EXPERIMENTAL=gpl: not 4 + 1 vertex and 1 + 6 + 1 + 1 fragment libraries, 1 + 1 from the cache, 10 + 1 separate links (one for both blend constants), a point-fill, a sample-mask, a point-size-layer and 1 + 2 logic-op fallbacks, the second device's totals and counts back to zero" >&2; exit 1; }
 grep '^\(ok \)\?gpl\|^\[kk-compile\] \(gpl\|link\)\|^\[kk-mem\] gpl' "$ROOT/gpl.log"
 
 # The same pipelines with the vertex and fragment libraries built at once and

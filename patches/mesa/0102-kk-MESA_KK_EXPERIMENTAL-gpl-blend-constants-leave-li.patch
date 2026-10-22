@@ -1,0 +1,49 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 22 Oct 2026 07:29:23 +0200
+Subject: [PATCH] kk: MESA_KK_EXPERIMENTAL=gpl, blend constants leave links
+ alone
+
+With MESA_KK_EXPERIMENTAL=gpl, the state a draw's link is keyed and
+compiled by no longer carries the dynamic blend constants. No compile
+reads them: a whole pipeline's fragment shader loads them from the root
+table and a separate link's Metal blend has them set on the encoder.
+Before, a draw that changed only the blend constants made, and kept, a
+new Metal render pipeline for each value.
+
+Linear: PLA-428
+Class: feature
+Evidence: docs/evidence/2026-10-22-kk-gpl-cold-cache.md
+Offered-upstream: not yet
+---
+ src/kosmickrisp/vulkan/kk_gpl.c | 10 +++++++++-
+ 1 file changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_gpl.c b/src/kosmickrisp/vulkan/kk_gpl.c
+index f1c2f80..281492d 100644
+--- a/src/kosmickrisp/vulkan/kk_gpl.c
++++ b/src/kosmickrisp/vulkan/kk_gpl.c
+@@ -285,6 +285,7 @@ struct kk_gpl_draw_state {
+    struct vk_multisample_state ms;
+    struct vk_render_pass_state rp;
+    struct vk_multiview_state mv;
++   struct vk_color_blend_state cb;
+ };
+ 
+ static void
+@@ -332,7 +333,14 @@ kk_gpl_draw_state(const struct kk_cmd_buffer *cmd,
+    /* A pipeline without rasterization has no multisample state */
+    st->ms = out->ms.rasterization_samples ? &out->ms : NULL;
+    st->ds = &dyn->ds;
+-   st->cb = &dyn->cb;
++   /* Playport (PLA-428): no compile reads the blend constants (a whole
++    * pipeline's shader loads them from the root table, a separate link's
++    * Metal blend sets them on the encoder), so a draw that changes only them
++    * keeps its link: they are left out of the state the link is keyed and
++    * compiled by. */
++   out->cb = dyn->cb;
++   memset(out->cb.blend_constants, 0, sizeof(out->cb.blend_constants));
++   st->cb = &out->cb;
+    st->cal = &dyn->cal;
+    st->ial = &dyn->ial;
+ 

@@ -221,6 +221,8 @@ struct pipe_desc {
    /* 0 is VK_SAMPLE_COUNT_1_BIT */
    VkSampleCountFlagBits samples;
    bool no_attachments;
+   /* pSampleMask's word; 0 for none */
+   VkSampleMask sample_mask;
 };
 
 static VkPipeline
@@ -297,6 +299,7 @@ make_pipeline(const struct pipe_desc *d, VkPipelineLayout layout)
    VkPipelineMultisampleStateCreateInfo ms = {
       .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
       .rasterizationSamples = d->samples ? d->samples : VK_SAMPLE_COUNT_1_BIT,
+      .pSampleMask = d->sample_mask ? &d->sample_mask : NULL,
    };
    VkPipelineColorBlendAttachmentState att = {.colorWriteMask = 0xf};
    VkPipelineColorBlendStateCreateInfo cb = {
@@ -2114,6 +2117,38 @@ main(int argc, char **argv)
       printf("ok ms-array\n");
    }
 
+   /* A static sample mask that has every rasterization sample, as DXVK
+    * gives 0x1 at one sample, writes no sample mask in the fragment shader
+    * (PLA-430); 0x5 at four samples does. */
+   {
+      DPROC(vkDestroyPipeline);
+      struct pipe_desc dm = {"sample-mask", "pass.vert", NULL, NULL, NULL,
+                             "color.frag", TRI, false, FIRST, FILL};
+      const struct {
+         VkSampleCountFlagBits samples;
+         VkSampleMask mask;
+         bool lowered;
+      } masks[] = {{VK_SAMPLE_COUNT_1_BIT, 0x1, false},
+                   {VK_SAMPLE_COUNT_4_BIT, 0xf, false},
+                   {VK_SAMPLE_COUNT_4_BIT, 0x5, true}};
+      for (unsigned i = 0; i < sizeof(masks) / sizeof(masks[0]); i++) {
+         dm.samples = masks[i].samples;
+         dm.sample_mask = masks[i].mask;
+         const int before = msl_count();
+         VkPipeline p = make_pipeline(&dm, layout);
+         const int written =
+            before < 0 ? -1 : msl_count_text(before, msl_count(), "sample_mask_out");
+         if (before >= 0 && (written > 0) != masks[i].lowered) {
+            fprintf(stderr, "sample mask %#x at %d samples: %d sample mask "
+                    "outputs in its MSL\n", masks[i].mask, masks[i].samples,
+                    written);
+            return 1;
+         }
+         vkDestroyPipeline(dev, p, NULL);
+      }
+      printf("ok sample-mask: a mask with every sample is not lowered\n");
+   }
+
    if (check_linear_images(pd, queue, pool))
       return 1;
    if (gpl_wanted() && check_gpl(pd, queue, pool, buf))
@@ -2157,6 +2192,8 @@ enum gpl_output {
    GPL_SAMPLE_MASK_PARTIAL,
    /* A point list */
    GPL_POINTS,
+   /* CONSTANT_COLOR blending with dynamic blend constants */
+   GPL_BLEND_CONSTANT,
 };
 
 static VkPipeline
@@ -2225,9 +2262,11 @@ gpl_library(const struct gpl_libs *g, VkGraphicsPipelineLibraryFlagsEXT part,
       .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
    };
    VkPipelineColorBlendAttachmentState att = {
-      .blendEnable = output == GPL_BLEND || output == GPL_DUAL_SOURCE,
-      .srcColorBlendFactor = output == GPL_DUAL_SOURCE
-                                ? VK_BLEND_FACTOR_ONE
+      .blendEnable = output == GPL_BLEND || output == GPL_DUAL_SOURCE ||
+                     output == GPL_BLEND_CONSTANT,
+      .srcColorBlendFactor = output == GPL_DUAL_SOURCE ? VK_BLEND_FACTOR_ONE
+                             : output == GPL_BLEND_CONSTANT
+                                ? VK_BLEND_FACTOR_CONSTANT_COLOR
                                 : VK_BLEND_FACTOR_SRC_ALPHA,
       .dstColorBlendFactor = output == GPL_DUAL_SOURCE
                                 ? VK_BLEND_FACTOR_SRC1_COLOR
@@ -2251,6 +2290,12 @@ gpl_library(const struct gpl_libs *g, VkGraphicsPipelineLibraryFlagsEXT part,
       .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
       .dynamicStateCount = 2,
       .pDynamicStates = dyn_states,
+   };
+   const VkDynamicState dyn_cb_state = VK_DYNAMIC_STATE_BLEND_CONSTANTS;
+   VkPipelineDynamicStateCreateInfo dyn_cb = {
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+      .dynamicStateCount = 1,
+      .pDynamicStates = &dyn_cb_state,
    };
    VkPipelineShaderStageCreateInfo stage = {
       .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
@@ -2284,6 +2329,8 @@ gpl_library(const struct gpl_libs *g, VkGraphicsPipelineLibraryFlagsEXT part,
    case VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_OUTPUT_INTERFACE_BIT_EXT:
       ci.pMultisampleState = &ms;
       ci.pColorBlendState = &cb;
+      if (output == GPL_BLEND_CONSTANT)
+         ci.pDynamicState = &dyn_cb;
       break;
    }
    VkPipeline p;
@@ -2627,6 +2674,7 @@ check_gpl(VkPhysicalDevice pd, VkQueue queue, VkCommandPool pool, VkBuffer buf)
    DPROC(vkCmdBindPipeline);
    DPROC(vkCmdSetViewport);
    DPROC(vkCmdSetScissor);
+   DPROC(vkCmdSetBlendConstants);
    DPROC(vkCmdBindVertexBuffers);
    DPROC(vkCmdDraw);
    DPROC(vkQueueSubmit);
@@ -2698,11 +2746,12 @@ check_gpl(VkPhysicalDevice pd, VkQueue queue, VkCommandPool pool, VkBuffer buf)
    VkPipeline out_smask4 = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_OUTPUT_INTERFACE_BIT_EXT, RGBA32F, RGBA8, GPL_SAMPLE_MASK_PARTIAL, true, FILL);
    VkPipeline vi_points = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_VERTEX_INPUT_INTERFACE_BIT_EXT, RGBA32F, NONE, GPL_POINTS, true, FILL);
    VkPipeline pre_layer = gpl_library(&gl, VK_GRAPHICS_PIPELINE_LIBRARY_PRE_RASTERIZATION_SHADERS_BIT_EXT, RGBA32F, RGBA8, PLAIN, true, FILL);
+   VkPipeline out_const = gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_OUTPUT_INTERFACE_BIT_EXT, RGBA32F, RGBA8, GPL_BLEND_CONSTANT, true, FILL);
    const int msl_libs = msl_count();
    /* Each pre-rasterization library builds its vertex shader's library, the
     * first one also the empty fragment shader's, and each fragment shader
     * library its fragment shader's: 4 vertex and 1 + 6 fragment */
-   printf("gpl: 23 libraries made %d MSL libraries\n", msl_libs - msl_start);
+   printf("gpl: 24 libraries made %d MSL libraries\n", msl_libs - msl_start);
    if (msl_start >= 0 && msl_libs - msl_start != 4 + 7) {
       fprintf(stderr, "gpl: the libraries made %d MSL libraries, not 11\n",
               msl_libs - msl_start);
@@ -2719,6 +2768,9 @@ check_gpl(VkPhysicalDevice pd, VkQueue queue, VkCommandPool pool, VkBuffer buf)
       int at_link, at_draw;
       /* Drawn into a 4-sample target */
       bool four_samples;
+      /* Its two draws set other blend constants: one link serves both
+       * (run.sh counts the separate links) */
+      bool blend_constants;
    } links[] = {
       {"fast f32 rgba8", {vi_f32, pre, frag, out_u8}, false, RGBA8, 0, 0},
       {"fast u8 rgba8", {vi_u8, pre, frag, out_u8}, false, RGBA8, 0, 0},
@@ -2741,6 +2793,7 @@ check_gpl(VkPhysicalDevice pd, VkQueue queue, VkCommandPool pool, VkBuffer buf)
        * that writes a layer cannot have */
       {"fast points rgba8", {vi_points, pre, frag, out_u8}, false, RGBA8, 0, 0},
       {"fast layer point-size fallback", {vi_f32, pre_layer, frag, out_u8}, false, RGBA8, 0, -1},
+      {"fast blend constants rgba8", {vi_f32, pre, frag, out_const}, false, RGBA8, 0, 0, false, true},
    };
    VkImageView views[3] = {
       gpl_target(pd, RGBA8, VK_SAMPLE_COUNT_1_BIT, NULL, NULL),
@@ -2787,7 +2840,13 @@ check_gpl(VkPhysicalDevice pd, VkQueue queue, VkCommandPool pool, VkBuffer buf)
       vkCmdSetScissor(cmd, 0, 1, &sc);
       VkDeviceSize off = 0;
       vkCmdBindVertexBuffers(cmd, 0, 1, &buf, &off);
+      const float quarter[4] = {0.25f, 0.25f, 0.25f, 0.25f};
+      const float three_quarters[4] = {0.75f, 0.5f, 0.25f, 1.0f};
+      if (links[i].blend_constants)
+         vkCmdSetBlendConstants(cmd, quarter);
       vkCmdDraw(cmd, 12, 1, 0, 0);
+      if (links[i].blend_constants)
+         vkCmdSetBlendConstants(cmd, three_quarters);
       vkCmdDraw(cmd, 24, 3, 3, 1);
       vkCmdEndRendering(cmd);
       CHECK(vkEndCommandBuffer(cmd));
@@ -2815,7 +2874,8 @@ check_gpl(VkPhysicalDevice pd, VkQueue queue, VkCommandPool pool, VkBuffer buf)
                         frag,     no_frag,   frag_a2c, frag_dual, out_u8,
                         out_f16,  out_mask,  out_a2c,  out_dual, out_logic,
                         pre_vary, frag_vary, frag_smask, frag_smask4,
-                        out_smask, out_smask4, vi_points, pre_layer};
+                        out_smask, out_smask4, vi_points, pre_layer,
+                        out_const};
    for (unsigned i = 0; i < sizeof(libs) / sizeof(libs[0]); i++)
       vkDestroyPipeline(dev, libs[i], NULL);
    if (gpl_round_trip(pd))

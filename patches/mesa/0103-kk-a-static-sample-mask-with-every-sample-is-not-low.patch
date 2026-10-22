@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 22 Oct 2026 07:31:21 +0200
+Subject: [PATCH] kk: a static sample mask with every sample is not lowered
+
+A fragment shader of a pipeline whose static sample mask has a bit for
+every rasterization sample is no longer given the sample mask output
+and KK_WORKAROUND_7's discard. DXVK gives the mask as
+sampleMask & ((1 << samples) - 1), 0x1 at one sample, which the check
+against UINT16_MAX took for a partial mask: every whole pipeline that
+DXVK built at one sample read the sample mask and could discard. Such a
+mask masks nothing. A mask without some sample is lowered as before.
+
+This is the comparison mesa 0100 made for MESA_KK_EXPERIMENTAL=gpl's
+separate links, on the path that runs without it.
+
+Linear: PLA-430
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-22-kk-gpl-cold-cache.md
+Offered-upstream: not yet
+---
+ src/kosmickrisp/vulkan/kk_shader.c | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_shader.c b/src/kosmickrisp/vulkan/kk_shader.c
+index 83332c1..411e265 100644
+--- a/src/kosmickrisp/vulkan/kk_shader.c
++++ b/src/kosmickrisp/vulkan/kk_shader.c
+@@ -703,8 +703,12 @@ kk_lower_fs(struct kk_device *dev, nir_shader *nir,
+ 
+    NIR_PASS(_, nir, msl_nir_fs_io_types);
+ 
++   /* Playport (PLA-430): a mask that has every rasterization sample, as
++    * DXVK's 0x1 at one sample, masks nothing. */
+    if (!gpl_separate && state->ms && state->ms->rasterization_samples &&
+-       state->ms->sample_mask != UINT16_MAX) {
++       (state->ms->sample_mask &
++        BITFIELD_MASK(state->ms->rasterization_samples)) !=
++          BITFIELD_MASK(state->ms->rasterization_samples)) {
+ 
+       /* KK_WORKAROUND_7 */
+       if (!(pdev->settings.disabled_workarounds & BITFIELD64_BIT(7))) {
