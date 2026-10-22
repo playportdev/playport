@@ -351,6 +351,36 @@ grep '^ok memory_priority: ' "$ROOT/memory-priority.log"
 grep -m1 '^\[kk-mem\] .* | priority allocations=1 sets=2$' "$ROOT/memory-priority.log"
 echo "MESA_KK_EXPERIMENTAL=memory_priority: $(ls "$ROOT/msl-memory-priority" | wc -l) MSL libraries, each the one made without it"
 
+# VK_EXT_shader_module_identifier (PLA-431): exposed, with its feature, only
+# with MESA_KK_EXPERIMENTAL=module_identifier (the runs above check it is not,
+# and that the device has no vkGetShaderModuleIdentifierEXT, without it; the
+# algorithm UUID is MESA-BLAKE3 either way). With it, identifiers are the
+# SPIR-V's; a pipeline from an identifier fails with
+# VK_PIPELINE_COMPILE_REQUIRED unless a pipeline cache has its shader, and is
+# made from one, also on a second device; with gpl as well, a vertex shader
+# library from an identifier, linked fast and drawn. Every pipeline above
+# builds the same MSL; the identifier checks' own libraries come after them.
+for flags in module_identifier gpl,module_identifier; do
+    case $flags in
+    gpl,*) name=module-identifier-gpl like=msl-gpl ;;
+    *) name=module-identifier like=msl ;;
+    esac
+    rm -rf "$ROOT/msl-$name"; mkdir -p "$ROOT/msl-$name"
+    MESA_KK_EXPERIMENTAL=$flags KK_MOCK_MSL_DIR="$ROOT/msl-$name" MESA_SHADER_CACHE_DISABLE=true \
+        "$ROOT/kk-host-test" "$ROOT/build/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.so" "$ROOT/spv" \
+        >"$ROOT/$name.log" 2>&1 || { cat "$ROOT/$name.log" >&2; exit 1; }
+    grep -q '^ok module_identifier: ' "$ROOT/$name.log" ||
+        { echo "MESA_KK_EXPERIMENTAL=$flags: the module identifier case did not run" >&2; exit 1; }
+    [ "$flags" = module_identifier ] || grep -q '^ok module_identifier gpl: ' "$ROOT/$name.log" ||
+        { echo "MESA_KK_EXPERIMENTAL=$flags: the module identifier library case did not run" >&2; exit 1; }
+    for f in "$ROOT/$like/"*.metal; do
+        cmp -s "$f" "$ROOT/msl-$name/${f##*/}" ||
+            { echo "MESA_KK_EXPERIMENTAL=$flags: ${f##*/} is not the MSL made without it" >&2; exit 1; }
+    done
+    grep '^ok module_identifier' "$ROOT/$name.log"
+    echo "MESA_KK_EXPERIMENTAL=$flags: $(ls "$ROOT/$like" | wc -l) MSL libraries, each the one made without it, then $(( $(ls "$ROOT/msl-$name" | wc -l) - $(ls "$ROOT/$like" | wc -l) )) of the identifier checks"
+done
+
 # The same pipelines with the vertex and fragment libraries built at once and
 # the first two library builds failing as if Metal's compiler service had
 # been interrupted (KK_MOCK_INTERRUPT_BUILDS): compile_retry builds them
