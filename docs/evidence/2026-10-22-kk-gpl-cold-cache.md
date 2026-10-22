@@ -346,3 +346,44 @@ Hollow Knight used the PLA-429 route.
 - **Hollow Knight links right after it creates its libraries.** One utility thread left most of
   them pending (35 of 42 links fell back). Three threads brought that to 10–11, but the fallbacks
   still cost more than step 1's draws waiting on DXVK's three compile threads.
+
+## Where a library's Metal time goes: MSL front end, not pipelines (PLA-437 check A)
+
+- **Method.** An uncommitted experiment build (dev IPA
+  `bbc344c483b270032cbde11b18dfb19f66c32070657ec8b036396d7a9c8a81f0`) timed each stage serially
+  at Portal 2's device creation, 3 rounds each, with entry points renamed every round so no Metal
+  cache hit. Run `.work/ui-runs/20261022T145046`.
+  - Shaders are real Portal 2 MSL from the step 3 dumps. Each was built three ways:
+    - from source as MSL 4.1 (what KosmicKrisp asks for on iOS 27);
+    - from source as MSL 4.0;
+    - from an AIR metallib built on the workstation by Apple's Windows Metal tools (6.2) under
+      Wine, loaded with `newLibraryWithData`.
+  - Pipelines used the same fixed descriptor on every path.
+- **Results, median ms on iPhone18,4, iOS 27.0:**
+
+  | Shader | Library from source, MSL 4.1 | MSL 4.0 | Library from metallib | Pipeline (from source / from metallib) |
+  | --- | --- | --- | --- | --- |
+  | fragment library a20eb (3 texture types) | 349.6 | 136.4 | 0.01 | 13.1 / 13.8 |
+  | a20eb without texture types | 14.3 | 10.5 | 0.01 | 9.6 / 9.2 |
+  | a20eb without textures plus one unused `texture2d<float>` | 147.8 | 63.0 | 0.01 | 9.3 / 9.2 |
+  | fragment library 158a | 390.3 | 152.1 | 0.01 | 34.5 / 32.7 |
+  | vertex library 3bee | 312.1 | 173.9 | 0.02 | 77.0 / 72.3 |
+  | DXVK whole pipeline 867de (vs, fs) | 15.0, 159.6 | 11.8, 64.3 | 0.01 | 17.1 / 18.1 |
+
+  - Function creation (`newFunctionWithName`, MTL4 function descriptors) is ≤0.02 ms.
+  - A repeated pipeline build takes 0.1 ms, which is what a cache hit looks like. No timed row
+    shows it.
+- **What it shows:**
+  - A library's cost is the phone's MSL→AIR front end. The step 3 texture-type cost is in that
+    front end: with AIR it disappears, and the pipeline does not grow.
+  - The same MSL compiles 2–2.6× faster as MSL 4.0 than as 4.1. In KosmicKrisp, 4.1 only enables
+    `shaderSharedFloat32AtomicAdd`.
+  - Precompiled AIR would save about 350 ms per a20eb-like fragment library, 312 ms per 3bee-like
+    vertex library and 175 ms per whole pipeline, serial. The cost of generating AIR in the app is
+    not counted.
+- **GPU binaries.** The Windows tools make `applegpu_g18p` (A19 Pro) archives only for iOS ≤ 26:
+  `-ios-version-min 27.0` is refused. iOS 27 rejects the iOS 26 archive ("deployment target …
+  not compatible with current OS"). A GPU binary could only save the 8–77 ms pipeline step.
+- **Phone state afterwards:** the committed build
+  `69d360e0aef8d4e9e8ea7d3fc3c62909463e57912f814a3a92e3d0b0d4459467` is installed, with Portal 2
+  installed. Nothing was changed in the patch series.
