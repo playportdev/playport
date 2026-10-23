@@ -352,4 +352,13 @@ Logs, exact commands, outcomes, unrun gates and the successful HK run plus the
 setup-blocked DXMT attempt for parent Linear/compatibility posts are in
 `$PLAYPORT_BUILD/agent-notes/pla72r/reports/review-fixes.md`. The prior 39 played
 runs remain in the earlier inventory; the review fixes add one successful HK
-launch, not a new benchmark matrix. Independent review is still required.
+launch, not a new benchmark matrix.
+
+Parent follow-up review inspected mesa 0118, both new C tests, the focused-test
+runner and harness selection. Independently reran the 17 real-parser cases and
+12 NIR mapping/boundary cases: all passed. Default host MSL still matched the
+168-file baseline byte-for-byte; `pp names`, `pp secrets` and `git diff --check`
+passed. The three bounded review findings are addressed for retaining opt-in
+diagnostics. This is not proof of GPU robustness, broad synchronization safety,
+or permission to promote experimental defaults. No further phone attempt was
+made after the optional JIT setup failure.
