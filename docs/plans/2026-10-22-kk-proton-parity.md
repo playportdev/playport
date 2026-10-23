@@ -182,11 +182,15 @@ The supervisor keeps this section.
      [Host evidence](../evidence/2026-10-23-descriptor-prof-parser-host.md); detailed correction
      reports left under `.work/agent-notes/kk-parity/reports/a0-parser-{fixes,duplicate-fix}.md`.
      Accepted for owner coordination and separately gated device calibration/smoke only, not A2.
-     **Next:** confirm owner readiness, existing-save activity/autosave permission and coordinate
-     dev upgrade + menu smoke/calibration before any owner gameplay measurement.
-  5. Coordinate owner-chosen save/room/activity, load/measurement window and worthwhile budget;
-     device calibration, controls and bounded controller measurements after review.
-  No phone runs until that coordination. No save automation/new slot authorized. No sampler
+     **Owner approved prepare-now:** dev upgrade in place and short menu-only probe checks.
+     Later the owner will load their existing save/room personally; normal autosaves allowed.
+  5. **Running: menu-only device prep** (PLA-431): verified probe IPA `74c0d54e…`, flag-off/on
+     smoke on both routes, actual-platform clock/calibration and complete-snapshot viability.
+     Report left in the build area at `.work/agent-notes/kk-parity/reports/a0-device-prep.md`.
+     No save navigation or automated gameplay. Then coordinate owner scene/activity/window and
+     worthwhile budget, controls and bounded controller measurements; no performance claim from menu prep.
+  Phone use authorized only for that bounded prep; human gameplay waits for owner handoff.
+  No save automation/new slot authorized. No sampler
   redesign, CPU-clock bridge or descriptor implementation approved. Checkpoint `5a46a4a`;
   no merge or push. A2–A4 remain **not started**, gated on evidence that descriptor cost matters.
 - **B1 phone (2026-10-23):** both flag-off routes and memory_priority DXVK/D3D12 reached
