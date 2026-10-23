@@ -118,14 +118,15 @@ The supervisor keeps this section.
      Parent reviewed correction `1846ca5` and independently reran the full host suite:
      exit 0, replay counts and 236 off/on MSL identity confirmed. Log left in the build
      area at `.work/agent-notes/kk-parity/supervisor-replay-host.log`.
-  2. **DXVK 0006 implemented** (`cea547f`), host checked; independent review **BLOCK**
+  2. **DXVK 0006 implemented** (`cea547f`), host checked; initial independent review **BLOCK**
      (child `6cbf8167`, report left in the build area at
      `.work/agent-notes/kk-parity/reports/a0-dxvk-probe-review.md`). Parent helper rerun
      passed (log `supervisor-dxvk-helper.log` under those notes), but lacked the failing trace.
-     **Clock correction 0007 implemented** (`9edfd9b`), independent re-review running
+     **Clock correction 0007 accepted** (`9edfd9b`), independent re-review **ACCEPT**
      (revived reviewer `f466bbe4`, report left in the build area at
-     `.work/agent-notes/kk-parity/reports/a0-dxvk-clock-rereview.md`). Parent regression
-     rerun also running (log `supervisor-dxvk-clock.log` under those notes). Child starts
+     `.work/agent-notes/kk-parity/reports/a0-dxvk-clock-rereview.md`); prior P1 closed.
+     Parent regression rerun passed, including both rejection traces
+     (log `supervisor-dxvk-clock.log` under those notes). Child starts
      before the previous sibling end are rejected; child-end bookkeeping is monotonic,
      with explicit errors and ancestor invalidation. Real-helper regressions first failed
      against 0006: reviewer trace yielded exclusive 30, overlapping siblings 40, no errors.
@@ -135,8 +136,8 @@ The supervisor keeps this section.
      IPA `a1e362fa…` verified 89/89; six actual DXVK artifact rows changed, protected owner
      UI edit included/uncommitted. Quick 712 Python/26 C groups pass; names/secrets clean.
      [Clock-fix host evidence](../evidence/2026-10-23-dxvk-descriptor-clock-fix-host.md).
-     No Mesa/ARM64EC inspection suite or phone rerun. **Focused independent re-review
-     before acceptance or next-client reference use; vkd3d not started, A2 still gated.**
+     No Mesa/ARM64EC inspection suite or phone rerun in the correction. **Accepted as
+     reference for the vkd3d host writer only; A2 and phone measurement remain gated.**
      Default-off
      `PLAYPORT_DESCRIPTOR_STATS=1`, per-device checked elapsed scopes, same-thread fixed
      TLS nesting, client inclusive/exclusive and summed-thread outermost attribution;
@@ -150,8 +151,9 @@ The supervisor keeps this section.
      No DXVK Vulkan execution, phone calibration/smoke or gameplay. Denominator is
      client submission requests, not frames. Per-thread rows withdrawn by supervisor;
      aggregates are thread sums, not wall union/CPU time. A2 remains gated.
-  3. **Next, separately authorized:** vkd3d scoped client accounting, preserve optimized
-     copy selection (host only); not started by the DXVK writer.
+  3. **Running: vkd3d-only host writer**, scoped client accounting, preserve optimized
+     copy selection. Report left in the build area at
+     `.work/agent-notes/kk-parity/reports/a0-vkd3d-probe-host.md`.
   4. Parser/integration and independent validation of nesting/coverage/clock error handling.
   5. Coordinate owner-chosen save/room/activity, load/measurement window and worthwhile budget;
      device calibration, controls and bounded controller measurements after review.
