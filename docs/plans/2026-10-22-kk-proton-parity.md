@@ -96,9 +96,16 @@ The supervisor keeps this section.
   opportunity; a large one alone cannot prove benefit. Existing vkd3d API profiling changes
   optimized vtable selection, so is not a drop-in baseline. No safe automatic existing-save
   workload established; New Game/King's Pass scripts need owner permission and assumptions.
-  Await owner choice of measurement scope and workload. If scoped diagnostics are chosen,
-  use sequential KK, DXVK, vkd3d and parser/integration chunks, each with its own checks.
-  No implementation or extra phone run authorized by this investigation. Checkpoint `e15bc3c`;
+  **Owner approved scoped diagnostics and existing-save human-controller gameplay.**
+  Ordered measurement queue (PLA-431), one writer each:
+  1. KK `MESA_KK_DEBUG=descriptor_stats` counters/elapsed timing and host coverage (host only).
+  2. DXVK scoped client accounting, preserve default/disabled behavior (host only).
+  3. vkd3d scoped client accounting, preserve optimized copy selection (host only).
+  4. Parser/integration and independent validation of nesting/coverage/clock error handling.
+  5. Coordinate owner-chosen save/room/activity, load/measurement window and worthwhile budget;
+     device calibration, controls and bounded controller measurements after review.
+  No phone runs until that coordination. No save automation/new slot authorized. No sampler
+  redesign, CPU-clock bridge or descriptor implementation approved. Checkpoint `526e016`;
   no merge or push. A2–A4 remain **not started**, gated on evidence that descriptor cost matters.
 - **B1 phone (2026-10-23):** both flag-off routes and memory_priority DXVK/D3D12 reached
   first-frame+10. DXVK features 0 off / 1 on; priority counts 14/14 and 28/13.
@@ -127,8 +134,8 @@ The supervisor keeps this section.
   No runtime/profiler changes or extra plays. Settings/diagnostics restored; last captured
   page black, 80% external power, inherited unattended unchanged.
 - **Phone queue** (PLA-431, main checkout):
-  - A0 measurement-design investigation done; next owner-selected measurement improvement and
-    representative workload, then bounded phone measurement; preliminary menu artifacts retained;
+  - A0 scoped diagnostics host queue approved; phone calibration/measurement waits for reviewed
+    probe and owner-coordinated existing-save controller workload; preliminary menu artifacts retained;
   - A's gates after an authorized A2–A4, which have not started.
 - **Phone:** installed titles are Hollow Knight (`app-367520`) and RDR2. The D3D12 route is Hollow
   Knight with `-force-d3d12` (vkd3d-proton). No installed title is known to use depth bias.
