@@ -1,0 +1,206 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Pavel Demyanov <greypax@gmail.com>
+Date: Fri, 23 Oct 2026 13:21:35 +0300
+Subject: [PATCH] ntdll, msvcrt: stop a target unwind at any scope record of
+ the same __try
+
+clang splits one __try into several scope table records, one per
+contiguous code range. A target unwind into an __except block can then
+start at a record whose range does not hold the target, and
+__C_specific_handler ran the enclosing __finally although the target is
+inside its __try. Windows treats records with the same handler and jump
+target as one scope, and stops at an __except record whose jump target is
+the unwind target; both copies of the handler now do the same: ntdll's
+(arm64 and x64) and msvcrt's (arm64, arm and x64), which vcruntime140_1
+imports through vcruntime140 and ucrtbase.
+
+call_catch_block4 (vcruntime140_1) is built this way:
+
+  0  0x117b0-0x117c4  filter cxx_rethrow_filter  jump 0x118cc
+  1  0x117b0-0x117c4  __finally cxx_catch_cleanup
+  2  0x118cc-0x119b8  __finally cxx_catch_cleanup
+
+When a catch block rethrows, the unwind into the rethrow __except
+(0x118cc) started at record 1 and called cxx_catch_cleanup early; the
+rethrown exception then unregistered the same frame info a second time,
+and _FindAndUnlinkFrame read through a NULL list head (SEGV at 0x8 in
+ucrtbase). Baldur's Gate 3 does this when a level loads: it catches an
+ls::khonsu::Exception and rethrows it, and crashpad then ended the game
+with 0xffff7001.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-23-baldurs-gate-3.md
+Offered-upstream: no
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ dlls/msvcrt/except.c | 33 ++++++++++++++++++++++----------
+ dlls/ntdll/unwind.c  | 45 +++++++++++++++++++++++++++++++++++++-------
+ 2 files changed, 61 insertions(+), 17 deletions(-)
+
+diff --git a/dlls/msvcrt/except.c b/dlls/msvcrt/except.c
+index b70d74e..3406e5d 100644
+--- a/dlls/msvcrt/except.c
++++ b/dlls/msvcrt/except.c
+@@ -1097,6 +1097,23 @@ int* CDECL __processing_throw(void)
+ } while(0)
+ 
+ LONG __C_ExecuteExceptionFilter( EXCEPTION_POINTERS *ptrs, void *frame, PEXCEPTION_FILTER filter, BYTE *nonvolatile );
++
++/* An unwind to target stops at a scope when the target is inside the same __try:
++ * in this record or in another one with the same handler and jump target (clang
++ * splits one __try into several records), or when the target is this __except. */
++static BOOL unwind_target_reached( const SCOPE_TABLE *table, unsigned int index, ULONG_PTR target )
++{
++    unsigned int i;
++
++    for (i = 0; i < table->Count; i++)
++    {
++        if (target < table->ScopeRecord[i].BeginAddress) continue;
++        if (target >= table->ScopeRecord[i].EndAddress) continue;
++        if (table->ScopeRecord[i].JumpTarget == table->ScopeRecord[index].JumpTarget &&
++            table->ScopeRecord[i].HandlerAddress == table->ScopeRecord[index].HandlerAddress) return TRUE;
++    }
++    return table->ScopeRecord[index].JumpTarget && target == table->ScopeRecord[index].JumpTarget;
++}
+ #endif
+ 
+ #if defined(__aarch64__)  || defined(__arm64ec__)
+@@ -1126,14 +1143,13 @@ EXCEPTION_DISPOSITION WINAPI __C_specific_handler( EXCEPTION_RECORD *rec, void *
+         {
+             if (pc < base + table->ScopeRecord[i].BeginAddress) continue;
+             if (pc >= base + table->ScopeRecord[i].EndAddress) continue;
+-            if (table->ScopeRecord[i].JumpTarget) continue;
+ 
+             if (rec->ExceptionFlags & EXCEPTION_TARGET_UNWIND &&
+-                dispatch->TargetPc >= base + table->ScopeRecord[i].BeginAddress &&
+-                dispatch->TargetPc < base + table->ScopeRecord[i].EndAddress)
++                unwind_target_reached( table, i, dispatch->TargetPc - base ))
+             {
+                 break;
+             }
++            if (table->ScopeRecord[i].JumpTarget) continue;
+             handler = (void *)(base + table->ScopeRecord[i].HandlerAddress);
+             dispatch->ScopeIndex = i + 1;
+             TRACE_(unwind)( "scope %u calling __finally %p frame %p\n", i, handler, frame );
+@@ -1204,14 +1220,13 @@ EXCEPTION_DISPOSITION WINAPI __C_specific_handler( EXCEPTION_RECORD *rec, void *
+         {
+             if (pc < base + table->ScopeRecord[i].BeginAddress) continue;
+             if (pc >= base + table->ScopeRecord[i].EndAddress) continue;
+-            if (table->ScopeRecord[i].JumpTarget) continue;
+ 
+             if (rec->ExceptionFlags & EXCEPTION_TARGET_UNWIND &&
+-                dispatch->TargetPc >= base + table->ScopeRecord[i].BeginAddress &&
+-                dispatch->TargetPc < base + table->ScopeRecord[i].EndAddress)
++                unwind_target_reached( table, i, dispatch->TargetPc - base ))
+             {
+                 break;
+             }
++            if (table->ScopeRecord[i].JumpTarget) continue;
+             handler = (void *)(base + table->ScopeRecord[i].HandlerAddress);
+             dispatch->ScopeIndex = i + 1;
+             TRACE_(unwind)( "scope %u calling __finally %p frame %p\n", i, handler, frame );
+@@ -1281,15 +1296,13 @@ EXCEPTION_DISPOSITION WINAPI __C_specific_handler( EXCEPTION_RECORD *rec, void *
+         {
+             if (pc < base + table->ScopeRecord[i].BeginAddress) continue;
+             if (pc >= base + table->ScopeRecord[i].EndAddress) continue;
+-            if (table->ScopeRecord[i].JumpTarget) continue;
+ 
+             if (rec->ExceptionFlags & EXCEPTION_TARGET_UNWIND &&
+-                dispatch->TargetIp >= base + table->ScopeRecord[i].BeginAddress &&
+-                dispatch->TargetIp < base + table->ScopeRecord[i].EndAddress)
++                unwind_target_reached( table, i, dispatch->TargetIp - base ))
+             {
+                 break;
+             }
+-            else
++            else if (!table->ScopeRecord[i].JumpTarget)
+             {
+                 PTERMINATION_HANDLER handler = (void *)(base + table->ScopeRecord[i].HandlerAddress);
+                 dispatch->ScopeIndex = i + 1;
+diff --git a/dlls/ntdll/unwind.c b/dlls/ntdll/unwind.c
+index 5b31dca..b785ee4 100644
+--- a/dlls/ntdll/unwind.c
++++ b/dlls/ntdll/unwind.c
+@@ -857,6 +857,23 @@ PEXCEPTION_ROUTINE WINAPI RtlVirtualUnwind( ULONG type, ULONG_PTR base, ULONG_PT
+ }
+ 
+ 
++/* An unwind to target stops at a scope when the target is inside the same __try:
++ * in this record or in another one with the same handler and jump target (clang
++ * splits one __try into several records), or when the target is this __except. */
++static BOOL unwind_target_reached_arm64( const SCOPE_TABLE *table, unsigned int index, ULONG_PTR target )
++{
++    unsigned int i;
++
++    for (i = 0; i < table->Count; i++)
++    {
++        if (target < table->ScopeRecord[i].BeginAddress) continue;
++        if (target >= table->ScopeRecord[i].EndAddress) continue;
++        if (table->ScopeRecord[i].JumpTarget == table->ScopeRecord[index].JumpTarget &&
++            table->ScopeRecord[i].HandlerAddress == table->ScopeRecord[index].HandlerAddress) return TRUE;
++    }
++    return table->ScopeRecord[index].JumpTarget && target == table->ScopeRecord[index].JumpTarget;
++}
++
+ /*******************************************************************
+  *		__C_specific_handler (NTDLL.@)
+  */
+@@ -881,14 +898,13 @@ EXCEPTION_DISPOSITION WINAPI __C_specific_handler( EXCEPTION_RECORD *rec, void *
+         {
+             if (pc < base + table->ScopeRecord[i].BeginAddress) continue;
+             if (pc >= base + table->ScopeRecord[i].EndAddress) continue;
+-            if (table->ScopeRecord[i].JumpTarget) continue;
+ 
+             if (rec->ExceptionFlags & EXCEPTION_TARGET_UNWIND &&
+-                dispatch->TargetPc >= base + table->ScopeRecord[i].BeginAddress &&
+-                dispatch->TargetPc < base + table->ScopeRecord[i].EndAddress)
++                unwind_target_reached_arm64( table, i, dispatch->TargetPc - base ))
+             {
+                 break;
+             }
++            if (table->ScopeRecord[i].JumpTarget) continue;
+             handler = (void *)(base + table->ScopeRecord[i].HandlerAddress);
+             dispatch->ScopeIndex = i + 1;
+             TRACE( "scope %u calling __finally %p frame %p\n", i, handler, frame );
+@@ -2316,6 +2332,23 @@ PEXCEPTION_ROUTINE WINAPI RtlVirtualUnwind( ULONG type, ULONG64 base, ULONG64 pc
+ }
+ 
+ 
++/* An unwind to target stops at a scope when the target is inside the same __try:
++ * in this record or in another one with the same handler and jump target (clang
++ * splits one __try into several records), or when the target is this __except. */
++static BOOL unwind_target_reached( const SCOPE_TABLE *table, unsigned int index, ULONG_PTR target )
++{
++    unsigned int i;
++
++    for (i = 0; i < table->Count; i++)
++    {
++        if (target < table->ScopeRecord[i].BeginAddress) continue;
++        if (target >= table->ScopeRecord[i].EndAddress) continue;
++        if (table->ScopeRecord[i].JumpTarget == table->ScopeRecord[index].JumpTarget &&
++            table->ScopeRecord[i].HandlerAddress == table->ScopeRecord[index].HandlerAddress) return TRUE;
++    }
++    return table->ScopeRecord[index].JumpTarget && target == table->ScopeRecord[index].JumpTarget;
++}
++
+ /*******************************************************************
+  *		__C_specific_handler (NTDLL.@)
+  */
+@@ -2342,15 +2375,13 @@ EXCEPTION_DISPOSITION WINAPI __C_specific_handler( EXCEPTION_RECORD *rec, void *
+         {
+             if (pc < base + table->ScopeRecord[i].BeginAddress) continue;
+             if (pc >= base + table->ScopeRecord[i].EndAddress) continue;
+-            if (table->ScopeRecord[i].JumpTarget) continue;
+ 
+             if (rec->ExceptionFlags & EXCEPTION_TARGET_UNWIND &&
+-                dispatch->TargetIp >= base + table->ScopeRecord[i].BeginAddress &&
+-                dispatch->TargetIp < base + table->ScopeRecord[i].EndAddress)
++                unwind_target_reached( table, i, dispatch->TargetIp - base ))
+             {
+                 break;
+             }
+-            else
++            else if (!table->ScopeRecord[i].JumpTarget)
+             {
+                 PTERMINATION_HANDLER handler = (void *)(base + table->ScopeRecord[i].HandlerAddress);
+                 dispatch->ScopeIndex = i + 1;
