@@ -196,10 +196,14 @@ The supervisor keeps this section.
      restored, explicitly captured black, lock released; no gameplay or save navigation.
      [Device blocker evidence](../evidence/2026-10-23-descriptor-probe-device-prep.md);
      report `.work/agent-notes/kk-parity/reports/a0-device-prep.md` in the build area.
-     **Host-only wire-emission correction implemented** (`68e5eab`), independent review running
+     **Host-only wire-emission correction implemented** (`68e5eab`), independent review **BLOCK**
      (child `7ca57dde`, report left in the build area at
      `.work/agent-notes/kk-parity/reports/a0-emission-review.md`). Parent emitter-matrix rerun
-     also running (log `supervisor-emission.log` under those notes). Branch unmerged/unpushed.
+     passed (log `supervisor-emission.log` under those notes), but lacked unsupported sink cases.
+     **Next minimal fix:** support only regular files with successful F_GETFL/O_APPEND or
+     FIFO rows within known positive PIPE_BUF; other types/flags failures latch output failure.
+     Add actual-emitter regressions and append-open host captures, then re-review; no phone retry.
+     Branch unmerged/unpushed.
      Mesa0122 changes only KK diagnostic
      emission: checked2048-byte complete-row formatting and one raw write to the confirmed normal
      O_APPEND file sink. Actual committed emitter regression red before fix; deterministic
