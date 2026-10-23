@@ -115,7 +115,10 @@ The supervisor keeps this section.
      Original 185/219 MSL prefixes unchanged; replay adds 17 at end, 236 off/on identical.
      Per-device disjoint scopes use checked monotonic elapsed time, not CPU time.
      No phone calibration/smoke or gameplay; A0 justification remains insufficient.
-  2. **Next: DXVK only**, scoped client accounting, preserve default/disabled behavior
+     Parent reviewed correction `1846ca5` and independently reran the full host suite:
+     exit 0, replay counts and 236 off/on MSL identity confirmed. Log left in the build
+     area at `.work/agent-notes/kk-parity/supervisor-replay-host.log`.
+  2. **Running: DXVK only**, scoped client accounting, preserve default/disabled behavior
      (host only); retain client-exclusive/inclusive attribution and separate uncovered
      native replay rather than assume parity/containment or subtract cross-layer windows.
   3. vkd3d scoped client accounting, preserve optimized copy selection (host only).
@@ -123,7 +126,7 @@ The supervisor keeps this section.
   5. Coordinate owner-chosen save/room/activity, load/measurement window and worthwhile budget;
      device calibration, controls and bounded controller measurements after review.
   No phone runs until that coordination. No save automation/new slot authorized. No sampler
-  redesign, CPU-clock bridge or descriptor implementation approved. Checkpoint `8b6a20e`;
+  redesign, CPU-clock bridge or descriptor implementation approved. Checkpoint `1846ca5`;
   no merge or push. A2–A4 remain **not started**, gated on evidence that descriptor cost matters.
 - **B1 phone (2026-10-23):** both flag-off routes and memory_priority DXVK/D3D12 reached
   first-frame+10. DXVK features 0 off / 1 on; priority counts 14/14 and 28/13.
