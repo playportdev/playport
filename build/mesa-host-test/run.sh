@@ -450,10 +450,12 @@ echo "known-fail list: msl=$msl skipped after 2 interrupted builds"
 for mode in off on; do
     debug=; [ "$mode" = off ] || debug=descriptor_stats,vertex_stats
     rm -rf "$ROOT/msl-descriptor-$mode"; mkdir -p "$ROOT/msl-descriptor-$mode"
+    # Truncate once; the real emitter requires an O_APPEND regular-file sink.
+    : >"$ROOT/descriptor-$mode.log"
     KK_HOST_DESCRIPTOR_TEST=1 MESA_KK_DEBUG="$debug" \
         KK_MOCK_MSL_DIR="$ROOT/msl-descriptor-$mode" MESA_SHADER_CACHE_DISABLE=true \
         timeout --kill-after=5s 90s "$ROOT/kk-host-test" "$ROOT/build/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.so" "$ROOT/spv" \
-        >"$ROOT/descriptor-$mode.log" 2>&1 || { tail -60 "$ROOT/descriptor-$mode.log" >&2; exit 1; }
+        >>"$ROOT/descriptor-$mode.log" 2>&1 || { tail -60 "$ROOT/descriptor-$mode.log" >&2; exit 1; }
     for f in "$ROOT/msl/"*.metal; do
         cmp -s "$f" "$ROOT/msl-descriptor-$mode/${f##*/}" ||
             { echo "descriptor-$mode changed ${f##*/}" >&2; exit 1; }
@@ -477,7 +479,9 @@ exe = root / 'kk-descriptor-stats-test'
 subprocess.run(['cc', '-pthread', '-Wl,--gc-sections', '-o', str(exe), str(obj),
                 str(build / entry['output']),
                 str(build / 'src/c11/impl/libmesa_util_c11.a')], check=True)
-with (root / 'descriptor-helper.log').open('w') as log:
+helper_log = root / 'descriptor-helper.log'
+helper_log.write_text('')
+with helper_log.open('a') as log:
     subprocess.run([str(exe)], stdout=log, stderr=log, check=True)
 
 # Exercise the generated mock itself. The old inline completion fails the

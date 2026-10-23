@@ -96,3 +96,4 @@
 0120-kk-MESA_KK_EXPERIMENTAL-module_identifier-VK_EXT_sha.patch
 0121-kk-descriptor-cost-diagnostics.patch
 0122-kk-descriptor-single-write-records.patch
+0123-kk-descriptor-supported-sinks.patch

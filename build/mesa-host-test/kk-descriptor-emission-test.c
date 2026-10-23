@@ -16,15 +16,20 @@
 ssize_t __real_write(int, const void *, size_t);
 int __real_vsnprintf(char *, size_t, const char *, va_list);
 long __real_fpathconf(int, int);
+int __real_fcntl64(int, int, ...);
+int __real_fstat64(int, struct stat64 *);
 int __wrap_fprintf(FILE *, const char *, ...);
 ssize_t __wrap_write(int, const void *, size_t);
 int __wrap_vsnprintf(char *, size_t, const char *, va_list);
 long __wrap_fpathconf(int, int);
+int __wrap_fcntl64(int, int, ...);
+int __wrap_fstat64(int, struct stat64 *);
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t changed = PTHREAD_COND_INITIALIZER;
 static int requested, completed, done, peer_fd, handshakes;
 static const char peer[] = "info:  [client-like] independent raw writer\n";
 static int armed, calls, target, injected, format_calls;
+static int record_writes, poison_writes, stat_calls, flag_calls;
 static const char *mode;
 static unsigned seed;
 
@@ -79,6 +84,8 @@ int __wrap_fprintf(FILE *file, const char *fmt, ...)
 ssize_t __wrap_write(int fd, const void *buf, size_t len)
 {
    if (fd != STDERR_FILENO) return __real_write(fd, buf, len);
+   if (len >= 15 && !memcmp(buf, "[kk-descriptor]", 15)) record_writes++;
+   if (len >= 16 && !memcmp(buf, "\n[kk-descriptor]", 16)) poison_writes++;
    if (armed) {
       calls++;
       if ((!strcmp(mode, "eintr") && calls <= 2) ||
@@ -126,6 +133,60 @@ long __wrap_fpathconf(int fd, int name)
    return __real_fpathconf(fd, name);
 }
 
+/* Mesa's Linux host flags select the large-file syscall symbols. */
+int __wrap_fcntl64(int fd, int command, ...)
+{
+   /* Only production F_GETFL is wrapped; setup uses __real_fcntl64. */
+   assert(fd == STDERR_FILENO && command == F_GETFL);
+   flag_calls++;
+   if (armed && !strcmp(mode, "getfl-error")) {
+      errno = EIO;
+      return -1;
+   }
+   return __real_fcntl64(fd, command);
+}
+
+int __wrap_fstat64(int fd, struct stat64 *st)
+{
+   int result = __real_fstat64(fd, st);
+   if (fd == STDERR_FILENO) {
+      stat_calls++;
+      if (!result && armed && !strcmp(mode, "unsupported-type"))
+         st->st_mode = (st->st_mode & ~S_IFMT) | S_IFSOCK;
+   }
+   return result;
+}
+
+static void test_rejected_sink(void)
+{
+   struct kk_descriptor_stats s = {0};
+   bool after_init = !strcmp(mode, "nonappend-after-init");
+   if (after_init) {
+      kk_descriptor_stats_init(&s);
+      assert(!s.emission_failed && record_writes == 17 && !poison_writes);
+      int flags = __real_fcntl64(STDERR_FILENO, F_GETFL);
+      assert(flags >= 0 && (flags & O_APPEND));
+      assert(!__real_fcntl64(STDERR_FILENO, F_SETFL, flags & ~O_APPEND));
+      calls = format_calls = record_writes = poison_writes = stat_calls = flag_calls = 0;
+   }
+   armed = 1;
+   if (after_init) kk_descriptor_stats_log(&s, 0, true);
+   else kk_descriptor_stats_init(&s);
+   int init_calls = calls, init_formats = format_calls;
+   kk_descriptor_stats_log(&s, 0, true);
+   kk_descriptor_stats_log(&s, 0, true);
+   printf("sink=%s latch=%u record_writes=%d poison_writes=%d writes=%d "
+          "stat_queries=%d flag_queries=%d future_writes=%d\n",
+          mode, s.emission_failed, record_writes, poison_writes, calls,
+          stat_calls, flag_calls, calls - init_calls);
+   fflush(stdout);
+   assert(s.emission_failed && record_writes == 0 && poison_writes == 1);
+   assert(calls == 1 && calls == init_calls && format_calls == init_formats);
+   assert(stat_calls == 1);
+   assert(flag_calls == ((!strcmp(mode, "nonappend") || after_init ||
+                          !strcmp(mode, "getfl-error")) ? 1 : 0));
+}
+
 /* Free-running competition, with a pinned PRNG determining bounded burst
  * sizes. No sleeps, shared FILE locks or artificial serialization. */
 static void *stress_writer(void *unused)
@@ -156,11 +217,26 @@ int main(int argc, char **argv)
    assert(argc >= 3);
    mode = argv[1];
    seed = argc > 3 ? strtoul(argv[3], NULL, 0) : 1;
-   int log = open(argv[2], O_WRONLY | O_CREAT | O_TRUNC | O_APPEND, 0600);
+   int flags = O_WRONLY | O_CREAT | O_TRUNC;
+   if (strcmp(mode, "nonappend")) flags |= O_APPEND;
+   int log = open(argv[2], flags, 0600);
    assert(log >= 0);
    assert(dup2(log, STDERR_FILENO) == STDERR_FILENO);
    close(log);
    setbuf(stderr, NULL); /* Same unbuffered native stderr as Wine init_options. */
+   if (!strcmp(mode, "nonappend") || !strcmp(mode, "nonappend-after-init") ||
+       !strcmp(mode, "unsupported-null") || !strcmp(mode, "unsupported-type") ||
+       !strcmp(mode, "getfl-error")) {
+      if (!strcmp(mode, "nonappend"))
+         assert(!(__real_fcntl64(STDERR_FILENO, F_GETFL) & O_APPEND));
+      if (!strcmp(mode, "unsupported-null")) {
+         int null = open("/dev/null", O_WRONLY);
+         assert(null >= 0 && dup2(null, STDERR_FILENO) == STDERR_FILENO);
+         close(null);
+      }
+      test_rejected_sink();
+      return 0;
+   }
    int p[2];
    pthread_t drain, client;
    bool pipe_mode = !strcmp(mode, "pipe") || !strcmp(mode, "pipe-small");

@@ -23,13 +23,15 @@ for name, path in [('emitter', source), ('fixture', here / 'kk-descriptor-emissi
     subprocess.run(args + ['-c', str(path), '-o', str(out / (name + '.o'))], cwd=build, check=True)
 exe = out / 'kk-descriptor-emission-test'
 subprocess.run(['cc', '-pthread', '-Wl,--gc-sections',
-                '-Wl,--wrap=write,--wrap=fprintf,--wrap=vsnprintf,--wrap=fpathconf',
+                '-Wl,--wrap=write,--wrap=fprintf,--wrap=vsnprintf,--wrap=fpathconf,'
+                '--wrap=fstat64,--wrap=fcntl64',
                 '-o', str(exe), str(out / 'fixture.o'), str(out / 'emitter.o'),
                 str(build / 'src/c11/impl/libmesa_util_c11.a')], check=True)
 
 modes = sys.argv[4:] or ['append', 'pipe', 'max', 'format-error', 'format-overflow',
                          'eintr', 'eintr-limit', 'short', 'newline-short', 'write-error',
-                         'pipe-small', 'stress']
+                         'pipe-small', 'stress', 'nonappend', 'unsupported-null',
+                         'unsupported-type', 'getfl-error', 'nonappend-after-init']
 for mode in modes:
     seeds = [1, 431, 0xdeadbeef] if mode == 'stress' else [1]
     for seed in seeds:
@@ -74,6 +76,12 @@ for mode in modes:
                 assert max(lengths) <= bound < 2048
                 print(f'max u64 payload: observed {max(lengths)} bytes; '
                       f'v1 snapshot conservative bound {bound} bytes including newline')
+        elif mode in ('nonappend', 'unsupported-null', 'unsupported-type', 'getfl-error',
+                       'nonappend-after-init'):
+            assert not snapshots, (mode, snapshots[:1])
+            assert len(records) == (17 if mode == 'nonappend-after-init' else 0), mode
+            assert len(malformed) == (0 if mode == 'unsupported-null' else 1), (mode, malformed)
+            print((out / f'{mode}-{seed}.stdout').read_text().strip())
         elif mode == 'newline-short':
             # Honest terminal edge: all fields survive but final newline/poison do not.
             # With unchanged schema the strict parser CAN accept the final capture.

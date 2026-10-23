@@ -200,10 +200,20 @@ The supervisor keeps this section.
      (child `7ca57dde`, report left in the build area at
      `.work/agent-notes/kk-parity/reports/a0-emission-review.md`). Parent emitter-matrix rerun
      passed (log `supervisor-emission.log` under those notes), but lacked unsupported sink cases.
-     **Next minimal fix:** support only regular files with successful F_GETFL/O_APPEND or
-     FIFO rows within known positive PIPE_BUF; other types/flags failures latch output failure.
-     Add actual-emitter regressions and append-open host captures, then re-review; no phone retry.
-     Branch unmerged/unpushed.
+     **Minimal sink correction0123 implemented; independent re-review PENDING** (PLA-431,
+     starting HEAD `2c15869`). Supports only regular files with successful F_GETFL/O_APPEND or
+     FIFO rows within known positive PIPE_BUF; other types/flag failures use the existing latch
+     and best-effort poison. Four actual-emitter sink tests red before production edit:37 record
+     writes/latch0; green:0 record writes/1 poison attempt/latch1/0 future writes. After-init
+     nonappend transition also tested; host API/helper captures truncate once then append-open.
+     Full Mesa suite preserves236 baseline/off-on MSL identity and replay counts; three4010-row
+     stress seeds, unchanged33 parser tests, quick745 Python/26 C groups, names/secrets pass.
+     New dev IPA `689b9479…` verified89/89, owner edit included/uncommitted, not exact committed
+     source; no build-record changes. No phone commands or parser/schema/client/bridge changes.
+     [Sink-fix host evidence](../evidence/2026-10-23-descriptor-emission-sink-fix-host.md);
+     report `.work/agent-notes/kk-parity/reports/a0-emission-sink-fix.md` in the build area.
+     No self-clearance of the BLOCK verdict: re-review before separately authorizing any prep.
+     Branch unmerged/unpushed; stable-fd2 and approved terminal-loss limits retained.
      Mesa0122 changes only KK diagnostic
      emission: checked2048-byte complete-row formatting and one raw write to the confirmed normal
      O_APPEND file sink. Actual committed emitter regression red before fix; deterministic
@@ -251,8 +261,9 @@ The supervisor keeps this section.
   page black, 80% external power, inherited unattended unchanged.
 - **Phone queue** (PLA-431, main checkout):
   - A0 scoped diagnostics host queue accepted; device prep blocked by actual interleaved
-    telemetry (evidence above). KK0122 emission correction host-checked; independent review
-    pending, no device reenactment. Review first, then authorize renewed calibration/smoke;
+    telemetry (evidence above). KK0122 review BLOCK/P1 addressed by host-checked0123 supported-sink
+    correction; independent re-review pending, no device reenactment. Re-review first, then
+    separately authorize renewed calibration/smoke;
     owner existing-save workload coordination
     and human measurement remain pending. No save automation or automatic measurement;
   - A's gates after an authorized A2–A4, which have not started.

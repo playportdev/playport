@@ -1,0 +1,49 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kamil=20Postro=C5=BCny?= <kamil@postrozny.pl>
+Date: Fri, 23 Oct 2026 20:31:50 +0200
+Subject: [PATCH] kk: reject unsupported descriptor diagnostic sinks
+
+Require successful F_GETFL/O_APPEND for regular files and a known fitting PIPE_BUF for FIFOs. Reuse the existing failure latch and best-effort poison for every other sink.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-10-23-descriptor-emission-sink-fix-host.md
+Offered-upstream: no
+---
+ src/kosmickrisp/vulkan/kk_debug.c | 12 +++++++++---
+ 1 file changed, 9 insertions(+), 3 deletions(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_debug.c b/src/kosmickrisp/vulkan/kk_debug.c
+index 2b2faa3..06dbb00 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.c
++++ b/src/kosmickrisp/vulkan/kk_debug.c
+@@ -283,6 +283,7 @@ kk_vertex_stats_log(uint32_t frames, bool final)
+ 
+ /* PLA-431: fixed per-device aggregates, no thread registry or hot-path lock. */
+ #include <errno.h>
++#include <fcntl.h>
+ #include <inttypes.h>
+ #include <stdarg.h>
+ #include <sys/stat.h>
+@@ -338,14 +339,19 @@ descriptor_record_emit(struct kk_descriptor_stats *s,
+    int saved_errno = errno;
+    struct stat st;
+    bool valid = !r->failed && r->length && !fstat(STDERR_FILENO, &st);
+-   if (valid && S_ISFIFO(st.st_mode)) {
++   if (valid && S_ISREG(st.st_mode)) {
++      int flags = fcntl(STDERR_FILENO, F_GETFL);
++      valid = flags >= 0 && (flags & O_APPEND);
++   } else if (valid && S_ISFIFO(st.st_mode)) {
+       long pipe_buf = fpathconf(STDERR_FILENO, _PC_PIPE_BUF);
+       valid = pipe_buf > 0 && r->length <= (size_t)pipe_buf;
++   } else {
++      valid = false;
+    }
+    /* The app's normal sink is an O_APPEND regular file. One write, not one
+     * stdio call, prevents another appender from entering this record. For a
+-    * pipe this only holds up to its actual PIPE_BUF, checked above. Terminals,
+-    * non-append independent file handles and downstream relays have no such
++    * pipe this only holds up to its actual PIPE_BUF, checked above. Other sink
++    * types and non-append files are rejected. Downstream relays have no such
+     * guarantee. This does not serialize other writers' own partial records. */
+    if (valid) {
+       for (unsigned attempt = 0; attempt < 3; attempt++) {
