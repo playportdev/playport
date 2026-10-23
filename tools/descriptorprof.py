@@ -18,6 +18,8 @@ Policy: both complete boundaries must be quiescent with fully matching counts;
 ANY historical operation/report error rejects that boundary, including otherwise
 clock_ok captures. Per-row history survives partial captures; resets and final
 are terminal within an identity. Timing deltas must be feasible for new calls.
+Any duplicate row (even identical) quarantines its capture and all later captures
+under that input/stream identity; conflicting rows are not reconciled.
 No recovery correction or interval max subtraction. Capture brackets bound
 observation separation, NOT exact workload event boundaries.
 Missing banners reject snapshots; missing calibration/tails stay explicit, never
@@ -353,7 +355,7 @@ def analyze_sources(sources):
                     serial = record['snapshot']
                     found = next((s for s in snapshots if s['metadata']['snapshot'] == serial), None)
                     if found is None:
-                        found = {'metadata': snapshot_metadata(record), 'rows': {}, 'lines': [], 'reasons': [], 'final_observed': False}
+                        found = {'metadata': snapshot_metadata(record), 'rows': {}, 'lines': [], 'reasons': [], 'final_observed': False, 'duplicate_rows': []}
                         snapshots.append(found)
                     elif found is not snapshots[-1]:
                         found['reasons'].append('out-of-order snapshot row')
@@ -361,9 +363,11 @@ def analyze_sources(sources):
                     row_key = (record['op'], record.get('category', 'native'))
                     if row_key in found['rows']:
                         found['reasons'].append('duplicate operation/category row')
+                        found['duplicate_rows'].append({'line': number, 'values': record})
+                    else:
+                        found['rows'][row_key] = {k: record[k] for k in FIELDS[component]}
                     if snapshot_metadata(record) != found['metadata']:
                         found['reasons'].append('inconsistent snapshot metadata/identity/units')
-                    found['rows'][row_key] = {k: record[k] for k in FIELDS[component]}
                     found['lines'].append(number)
             except ValueError as exc:
                 file_issues.append({'source': source, 'source_index': source_index, 'line': number, 'reason': str(exc)})
@@ -387,8 +391,15 @@ def analyze_sources(sources):
             previous = None
             last_seen_rows = {}
             final_seen = False
+            duplicate_contaminated = False
             for snapshot in stream['snapshots']:
                 meta = snapshot['metadata']
+                # Even identical duplicates terminate trust; never reconstruct a
+                # clean history by choosing among conflicting observations.
+                duplicate_contaminated |= bool(snapshot['duplicate_rows'])
+                if duplicate_contaminated:
+                    snapshot['reasons'].append('duplicate row contamination; no recovery within this identity')
+                    snapshot['valid'] = False
                 if previous:
                     old = previous['metadata']
                     broken_sequence |= (meta['snapshot'] <= old['snapshot'] or meta['ts_begin'] < old['ts_end']
@@ -445,6 +456,10 @@ def text_report(report):
             lines.append('  line %d: %s' % (issue['line'], issue['reason']))
         for snapshot in stream['snapshots']:
             lines.append('  snapshot %d rows=%d lines=%s..%s: %s' % (snapshot['metadata']['snapshot'], len(snapshot['rows']), min(snapshot['lines']), max(snapshot['lines']), 'valid capture (not exact event boundary)' if snapshot['valid'] else '; '.join(snapshot['reasons'])))
+            for duplicate in snapshot['duplicate_rows']:
+                row = duplicate['values']
+                lines.append('    duplicate row line %d: %s/%s (raw values retained in JSON)' % (
+                    duplicate['line'], row['op'], row.get('category', 'native')))
         if not stream['intervals']:
             lines.append('  INSUFFICIENT: two consecutive valid complete snapshots required; no zero baseline')
         for interval in stream['intervals']:

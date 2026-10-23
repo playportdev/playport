@@ -210,8 +210,66 @@ Retained under `$PLAYPORT_BUILD/agent-notes/kk-parity/`:
 `a0-parser-fixes-before{,-corrected,-final}.log`, `a0-parser-fixes-after.log`,
 `a0-parser-fixes-traces.txt`, `a0-parser-fixes-{quick,names,secrets}.log`,
 `a0-parser-fixes-real.{json,txt}` and `a0-parser-fixes-real-summary.txt`.
-Correction report: `reports/a0-parser-fixes.md`. Independent re-review is pending;
-the previous BLOCK remains in force for parser acceptance/device coordination.
+Correction report: `reports/a0-parser-fixes.md`. Subsequent independent re-review
+closed findings 2–4 and the original partial-capture traces, but retained a P1
+duplicate-overwrite variant of finding 1. That follow-up correction is below;
+parser acceptance/device coordination remain BLOCK pending independent re-review.
+
+## Duplicate-row follow-up (after `51d7f22`)
+
+The re-review found that snapshot ingestion still overwrote an earlier duplicate
+row before last-seen history validation. Reproduced the actual false recovery
+before changing the parser: snapshot1 update clock_errors1, followed by duplicate
+same-metadata update clock_errors0, then clean snapshots2/3. KK and both clients'
+clock/nesting-error variants all produced `[rejected, usable]`, a combined CLI
+**exit2/mixed with 5 falsely usable windows**. Snapshot1 retained only the duplicate
+reason, with the original error erased. The initial 28 tests did not cover this.
+
+Approved conservative policy: **any duplicate operation/category row, including an
+identical duplicate, quarantines that capture and every subsequent capture under
+that input/stream identity**. No conflicting-value reconstruction is attempted.
+The reason is `duplicate row contamination; no recovery within this identity`.
+Earlier clean windows are not retroactively invalidated; independent/interleaved
+streams and separate input files are not contaminated by this policy.
+
+The first observed row stays in the snapshot's `rows`; each later duplicate is
+retained in `duplicate_rows` as full parsed values (including error counters and
+metadata) with its exact source line. Capture/interval line lists still include
+every occurrence; text reports print duplicate line and operation/category.
+Final-observed OR and metadata-conflict rejection still inspect every record.
+This is a small ingestion/forward-quarantine correction, not a producer/schema,
+clock/window, summary architecture or historical-error recovery redesign.
+
+- **Test-first:** 33 focused tests against the unchanged parser: **51 failing
+  assertions, no errors**. All original 28 tests passed; four new methods exposed
+  missing quarantine/provenance, while the malformed-record method already passed.
+- **After fix:** **33 focused tests pass** (five new methods). Tests cover KK and
+  client clock/nesting errors, both duplicate orders, identical/repeated duplicates,
+  preceding clean intervals, metadata/final conflicts, late duplicate arrival,
+  missing-key/duplicate cardinality, malformed records in either order and
+  interleaved unrelated device/separate-file isolation. Full raw duplicate values
+  and exact lines are asserted; no schema constants manufacture compatibility.
+- The same five saved raw synthetic traces now produce `[rejected, rejected]`,
+  **exit1/insufficient, zero usable windows**. Each contaminated and subsequent
+  snapshot explicitly carries the new reason; interval reasons point to the
+  invalid boundaries with both boundary line lists retained. Prefix fixtures
+  preserve `[usable, rejected, rejected, rejected]`.
+- `./pp test --quick`: **745 Python tests and 26 C groups passed**; Swift omitted.
+  `./pp names`, `./pp secrets` and whitespace checks pass.
+- Four real read-only logs listed above: text/JSON **exit2/mixed**, **11 usable KK
+  intervals / 5 rejected helper windows**, zero schema issues. All capture/window
+  validity is unchanged from the previous correction; none contains duplicate
+  contamination. DXVK's single capture and partial vkd3d output remain insufficient.
+  All four input SHA256 checks pass; no input rewrites.
+
+Retained under `$PLAYPORT_BUILD/agent-notes/kk-parity/`:
+`a0-parser-duplicate-{before,after,quick,names,secrets}.log`, five raw
+`a0-parser-duplicate-{kk,dxvk,vkd3d}-{clock_errors,nest_errors}.log` traces (KK only
+clock_errors), `a0-parser-duplicate-traces-{before,after}.{json,txt}`,
+`a0-parser-duplicate-traces-after-cli.txt`, `a0-parser-duplicate-real.{json,txt}`
+and `a0-parser-duplicate-real-summary.txt`. Report:
+`reports/a0-parser-duplicate-fix.md`. **Independent re-review pending; prior BLOCK
+remains in force.** No new IPA, app build, producer/runtime edits or phone work.
 
 ## Protected state and next gate
 

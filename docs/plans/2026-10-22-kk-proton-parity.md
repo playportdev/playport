@@ -176,8 +176,14 @@ The supervisor keeps this section.
      `.work/agent-notes/kk-parity/reports/a0-parser-rereview.md`). Parent 28-test rerun passed
      (log `supervisor-parser-fixes.log` under those notes). Three findings closed; remaining
      duplicate-row overwrite can erase observed errors and falsely permit later recovery.
-     **Next minimal correction:** quarantine duplicate captures and all later captures of the
-     same identity, preserving earlier clean windows; test KK and client clock/nesting errors.
+     **Duplicate correction implemented; independent re-review pending/BLOCK:** any duplicate
+     operation/category row (including identical) quarantines its capture and every later capture
+     under the same input/stream identity. First rows and full duplicate values/exact lines remain
+     inspectable; no conflicting-value history reconstruction. Earlier clean windows and unrelated
+     interleaved streams remain usable. Test-first33 failed51 assertions; corrected33 pass,
+     quick745/26 and names/secrets pass. Five actual false-recovery traces now reject both windows
+     (exit1/zero usable, previously exit2/five usable). Four real inputs unchanged: 11 usable KK /
+     5 rejected helper windows. Report `.work/agent-notes/kk-parity/reports/a0-parser-duplicate-fix.md`.
      No producer change or device work. Retain last-seen
      per-operation/category cumulative/error history across partial captures; reject infeasible
      interval timing/max and client outer deltas; make any observed final terminal even with

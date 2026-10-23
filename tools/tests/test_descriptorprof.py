@@ -515,6 +515,98 @@ class DescriptorProf(unittest.TestCase):
                 self.assertEqual(sample['values'], dp.parse_record(raw))
                 self.assertEqual(report['usable_intervals'], 1)  # calibration is not a timing correction
 
+    def test_duplicate_error_rows_quarantine_identity_forward(self):
+        for component in OPERATIONS:
+            op, cat = ('update', 'native') if component == 'kk' else ('vk_bind', 'prep')
+            for error in (('clock_errors',) if component == 'kk' else ('clock_errors', 'nest_errors')):
+                for error_first in (True, False):
+                    for preceding_clean in (False, True):
+                        with self.subTest(component=component, error=error, error_first=error_first, preceding_clean=preceding_clean):
+                            serial = 3 if preceding_clean else 1
+                            head = fixture(component) if preceding_clean else [banner(component)] + calibration(component)
+                            rows = snapshot(component, serial, changes={(op, cat): {error: int(error_first)}})
+                            duplicate = next(l for l in snapshot(component, serial,
+                                changes={(op, cat): {error: int(not error_first)}})
+                                if (' op=' + op + ' ') in l and (component == 'kk' or ('category=' + cat + ' ') in l))
+                            lines = head + rows + [duplicate] + snapshot(component, serial + 1) + snapshot(component, serial + 2)
+                            stream = analyze(lines)['streams'][0]
+                            expected = [True, False, False, False] if preceding_clean else [False, False]
+                            self.assertEqual([i['valid'] for i in stream['intervals']], expected)
+                            for capture in stream['snapshots'][serial - 1:]:
+                                self.assertIn('duplicate row contamination; no recovery within this identity', capture['reasons'])
+                            capture = stream['snapshots'][serial - 1]
+                            kept = next(r for r in capture['rows'] if r['op'] == op and r['category'] == cat)
+                            self.assertEqual(kept[error], int(error_first))
+                            duplicate_line = len(head) + len(rows) + 1
+                            self.assertEqual(capture['duplicate_rows'], [{'line': duplicate_line, 'values': dp.parse_record(duplicate)}])
+                            self.assertIn(duplicate_line, capture['lines'])
+                            self.assertEqual(stream['intervals'][-2]['lines'][0], capture['lines'])
+
+    def test_identical_duplicate_rows_are_conservatively_terminal(self):
+        for component in OPERATIONS:
+            for count in (1, 3):
+                with self.subTest(component=component, duplicate_count=count):
+                    rows = snapshot(component, 3)
+                    report = analyze(fixture(component) + rows + [rows[-1]] * count
+                        + snapshot(component, 4) + snapshot(component, 5))
+                    stream = report['streams'][0]
+                    self.assertEqual([i['valid'] for i in stream['intervals']], [True, False, False, False])
+                    self.assertEqual(len(stream['snapshots'][2]['duplicate_rows']), count)
+                    self.assertIn('duplicate row contamination', dp.text_report(report))
+
+    def test_duplicate_metadata_final_conflicts_and_late_arrival_stay_terminal(self):
+        for component in OPERATIONS:
+            for conflict in ('ts_end', 'final'):
+                for duplicate_first in (True, False):
+                    for late in (True, False):
+                        with self.subTest(component=component, conflict=conflict, duplicate_first=duplicate_first, late=late):
+                            rows = snapshot(component, 3)
+                            duplicate = rows[-1].replace('ts_end=3002', 'ts_end=3003') if conflict == 'ts_end' else rows[-1].replace('final=0', 'final=1')
+                            if duplicate_first:
+                                rows, duplicate = [duplicate] + rows[:-1], rows[-1]
+                            lines = fixture(component) + rows
+                            if not late:
+                                lines += [duplicate]
+                            lines += snapshot(component, 4)
+                            if late:
+                                lines += [duplicate]
+                            lines += snapshot(component, 5)
+                            stream = analyze(lines)['streams'][0]
+                            self.assertEqual([i['valid'] for i in stream['intervals']], [True, False, False, False])
+                            self.assertIn('duplicate row contamination; no recovery within this identity', stream['snapshots'][-1]['reasons'])
+                            self.assertEqual(stream['snapshots'][2]['duplicate_rows'][0]['values'], dp.parse_record(duplicate))
+                            if conflict == 'final':
+                                self.assertTrue(stream['snapshots'][2]['final_observed'])
+
+    def test_duplicate_missing_cardinality_is_stream_local(self):
+        for component in OPERATIONS:
+            # Same number of wire rows as a complete capture, but one missing key
+            # is replaced by a duplicate. A separate interleaved device stays clean.
+            rows = snapshot(component, 3)
+            contaminated = fixture(component) + rows[:-1] + [rows[0]] + snapshot(component, 4) + snapshot(component, 5)
+            other = fixture(component, count=5, device=2)
+            woven = []
+            for i in range(max(len(contaminated), len(other))):
+                for source in (contaminated, other):
+                    if i < len(source):
+                        woven.append(source[i])
+            report = dp.analyze_sources([('woven.log', woven), ('separate.log', fixture(component, count=5))])
+            streams = report['streams']
+            bad = next(s for s in streams if s['source_index'] == 0 and s['identity']['device'] == 1)
+            self.assertEqual([i['valid'] for i in bad['intervals']], [True, False, False, False])
+            self.assertIn('incomplete row set', '; '.join(bad['snapshots'][2]['reasons']))
+            self.assertTrue(all(i['valid'] for s in streams if s is not bad for i in s['intervals']))
+
+    def test_malformed_duplicate_records_never_create_recovery(self):
+        for component in OPERATIONS:
+            for malformed_first in (True, False):
+                rows = snapshot(component, 1)
+                malformed = rows[-1].replace(' active=0', ' active=-1')
+                lines = [banner(component)] + ([malformed] + rows if malformed_first else rows + [malformed])
+                report = analyze(lines + snapshot(component, 2) + snapshot(component, 3))
+                self.assertEqual(report['usable_intervals'], 0)
+                self.assertIn('invalid unsigned u64: active', reasons(report))
+
     def test_cli_json_text_and_no_data_exit(self):
         root = Path(__file__).resolve().parents[2]
         scratch = root / '.work' / 'agent-notes' / 'kk-parity' / 'tmp'
