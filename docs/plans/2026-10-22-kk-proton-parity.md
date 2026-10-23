@@ -196,12 +196,17 @@ The supervisor keeps this section.
      restored, explicitly captured black, lock released; no gameplay or save navigation.
      [Device blocker evidence](../evidence/2026-10-23-descriptor-probe-device-prep.md);
      report `.work/agent-notes/kk-parity/reports/a0-device-prep.md` in the build area.
-     Next: separately authorized focused wire-emission correction/review, then bounded
-     prep rerun authorization before owner scene/activity/window/budget coordination.
+     **Running: focused host-only wire-emission diagnosis/correction** (PLA-431), no parser
+     weakening/reconstruction. Rank: KK multi-write record interleaving, client long-line splits,
+     then app sink multiplexing. Reproduce with production emitter/concurrent independent writers;
+     inspect the real sink before choosing a single-record emission fix. Stop for wider logging
+     architecture changes. Report left in the build area at
+     `.work/agent-notes/kk-parity/reports/a0-emission-fix.md`. Independent review and a separately
+     bounded prep retry follow before owner scene/activity/window/budget coordination.
      No performance or perturbation claim from this menu prep.
   No further phone plays authorized by this checkpoint; human gameplay waits for owner handoff.
   No save automation/new slot authorized. No sampler
-  redesign, CPU-clock bridge or descriptor implementation approved. Checkpoint `5a46a4a`;
+  redesign, CPU-clock bridge or descriptor implementation approved. Checkpoint `93d81a2`;
   no merge or push. A2–A4 remain **not started**, gated on evidence that descriptor cost matters.
 - **B1 phone (2026-10-23):** both flag-off routes and memory_priority DXVK/D3D12 reached
   first-frame+10. DXVK features 0 off / 1 on; priority counts 14/14 and 28/13.
