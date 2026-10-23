@@ -5,6 +5,11 @@
 chunk B3. **Where:** the workstation's host mock of KosmicKrisp (`build/mesa-host-test`), from
 the side copy `.work/worktrees/kkparity` (decision 0117). **Not run on the phone.**
 
+**Rebase note (2026-10-23):** These are historical side-copy results, not validation of the
+rebased driver. Original Mesa 0105 is now 0120, experimental bit 17, on main base
+`26699f6`; fresh validation and the B1 phone gate are in
+[phone evidence](2026-10-23-kk-memory-priority-phone.md).
+
 ## What changed: `patches/mesa` 0105 (2026-10-22)
 
 - `MESA_KK_EXPERIMENTAL=module_identifier` (`KK_EXPERIMENTAL_MODULE_IDENTIFIER`, `1ull << 8`)

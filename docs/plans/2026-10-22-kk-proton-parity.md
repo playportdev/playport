@@ -5,9 +5,9 @@
 [PLA-434](https://linear.app/playportdev/issue/PLA-434) (B4 int64 atomics),
 [PLA-435](https://linear.app/playportdev/issue/PLA-435) (C present wait and low latency).
 **Date:** 2026-10-22. **Kind:** plan, research done, in progress. **Branch:**
-`dev/kk-proton-parity`, built in the side copy `.work/worktrees/kkparity`
-([0117](../decisions/0117-side-copies-that-build.md)). Its phone gates run from the main checkout
-after the branch moves there. **Pins read:** `mesa` b39d173 + `patches/mesa` 0001–0103; `dxvk`
+`dev/kk-proton-parity`, now in the main checkout after rebasing onto `26699f6`
+([0117](../decisions/0117-side-copies-that-build.md)); the former side copy
+`.work/worktrees/kkparity` is detached at `4fa1e73`. **Pins read:** `mesa` b39d173 + `patches/mesa` 0001–0103; `dxvk`
 e5ffd0f + `patches/dxvk` 0001–0005 (tree head d942d78); `vkd3d-proton` 31d1f89 +
 `patches/vkd3d-proton` 0001–0004 (tree head 567710d). Trees read: `$PLAYPORT_BUILD/run/vulkan-pe/dxvk`,
 `$PLAYPORT_BUILD/run/vulkan-pe/vkd3d-proton`, and the patched Mesa in
@@ -69,17 +69,32 @@ e5ffd0f + `patches/dxvk` 0001–0005 (tree head d942d78); `vkd3d-proton` 31d1f89
 
 The supervisor keeps this section.
 
-- **Branch:** `dev/kk-proton-parity` in `.work/worktrees/kkparity`, from `main` `7103952`.
+- **Branch:** `dev/kk-proton-parity` in the main checkout, rebased from `7103952` onto
+  main `26699f6`; transfer HEAD `4fa1e73`. Side copy detached; main branch untouched.
+  Owner SettingsView edit preserved byte-for-byte and uncommitted (SHA256
+  `14f47ed236724bf1250e2d7447f4fa9f16f4c93eb305c5fe5f8ee4d863b3a3fe`).
 - **Done:** research; side copy S0 (2026-10-22: two `pp build`s exit 0, IPA `29cfa508…` 89/89 checks, host test and `pp test --quick` pass, nothing committed; report left in the build area at `.work/agent-notes/kk-parity/reports/s0-side-copy.md`). S0 found that meson's binary `coredata.dat` in a copied `run/mesa` names main and writes into main's `meson-private`: delete those meson dirs before a copy's first build (PLA-436).
-- **B1 done** (`a2fba62`, mesa 0104, flag `memory_priority`): host test 59 ok, flag MSL 181/181 identical, side-copy IPA `3393f48f…` 89/89; [evidence](../evidence/2026-10-22-kk-memory-priority-host.md). Phone gate queued.
-- **B3 done** (`12d113b`, mesa 0105, flag `module_identifier`): common-runtime identifiers, `MESA-BLAKE3` algorithm UUID kept (supervisor, spec's "should"); identifier pipelines only from a cache, else `VK_PIPELINE_COMPILE_REQUIRED`. Host test 62 ok (supervisor reran), MSL 181/234 identical; side-copy IPA `c88649a7…` 89/89; [evidence](../evidence/2026-10-22-kk-module-identifier-host.md). Phone gate queued.
-- **Next (owner handoff 2026-10-23):** rebase onto current main (observed `26699f6`),
-  transfer the branch to main checkout, preserving the owner's uncommitted
-  `app/Sources/S1Probe/UI/SettingsView.swift` edit without committing it. Stop on conflict.
-  Then build/install and B1 phone gate; separate workers follow for B3 and A0.
-  A2–A4 remain gated on A0. Branch not merged or pushed; pre-handoff HEAD `fc7f3f8`.
-- **Phone queue** (PLA-431, main checkout; owner released phone and checkout; none run):
-  - B1: Hollow Knight first frame+10 with `graphicsOptions` `MESA_KK_EXPERIMENTAL=memory_priority MESA_KK_DEBUG=memory`, DXVK and `-force-d3d12` (commands in the evidence record); pass = both extensions in the DXVK/vkd3d logs, `[kk-mem]` priority counts > 0;
+- **B1 done** (`a2fba62` → `7dee945`, mesa 0119, bit 16, flag `memory_priority`): host test 59 ok, flag MSL 181/181 identical, side-copy IPA `3393f48f…` 89/89; [historical host evidence](../evidence/2026-10-22-kk-memory-priority-host.md).
+  Rebased host suite: 185/185 identical. **Phone runtime gate passed** on both routes,
+  with vkd3d-specific client-log verification limited;
+  [phone evidence](../evidence/2026-10-23-kk-memory-priority-phone.md).
+- **B3 done** (`12d113b` → `2a76219`, mesa 0120, bit 17, flag `module_identifier`): common-runtime identifiers, `MESA-BLAKE3` algorithm UUID kept (supervisor, spec's "should"); identifier pipelines only from a cache, else `VK_PIPELINE_COMPILE_REQUIRED`. Host test 62 ok (supervisor reran), MSL 181/234 identical; side-copy IPA `c88649a7…` 89/89; [evidence](../evidence/2026-10-22-kk-module-identifier-host.md). Phone gate queued.
+- **Integration (2026-10-23):** append conflicts in host runner/series and wanted-helper
+  definitions resolved by retaining both sides. Mesa patches regenerated against 0118;
+  main bits 0–15 retained, parity moved to 16/17 (supervisor approved). Range-diff inspected;
+  no other semantic change. Fresh main IPA `5e3fc6a8…` verified 89/89; no build-record
+  changes. Owner edit included, not committed. Full host suite, combined parity/GPL run,
+  `pp test --quick`, names and secrets passed. B3 MSL comparison now 185/239.
+- **Next:** separate **B3 phone gate**, then **A0 CPU profile** workers.
+  A2–A4 remain gated on A0. No merge or push.
+- **B1 phone (2026-10-23):** both flag-off routes and memory_priority DXVK/D3D12 reached
+  first-frame+10. DXVK features 0 off / 1 on; priority counts 14/14 and 28/13.
+  vkd3d's extension-name TRACE is compiled out; its initial priority allocation is behavioral
+  evidence for memoryPriority, but global counters do not prove its pageable enablement.
+  Runtime gate accepted with that explicit limit, not literal fulfillment of the original
+  vkd3d client-log criterion. No gameplay/performance claim. Settings restored; battery 80%
+  external, existing unattended setting unchanged.
+- **Phone queue** (PLA-431, main checkout; B3 and A0 unrun):
   - B3: Hollow Knight `-force-d3d12` with `MESA_KK_EXPERIMENTAL=module_identifier VKD3D_CONFIG=pipeline_library_log`, twice (second run hits vkd3d's cache), and DXVK with `gpl,module_identifier` (commands in the evidence record);
   - A0: baseline CPU profile (Hollow Knight DXVK and `-force-d3d12`);
   - A's gates after A2–A4.
@@ -90,9 +105,9 @@ The supervisor keeps this section.
 
 ## How each chunk is built (the GPL pattern)
 
-- **Patches.** One `patches/mesa` file per chunk, starting at 0104, with `Class: feature`, an
+- **Patches.** One `patches/mesa` file per chunk, B1 at 0119 and B3 at 0120 after the main-checkout rebase, with `Class: feature`, an
   `Evidence:` link and `Offered-upstream: no`.
-- **The flag.** A new `KK_EXPERIMENTAL_<NAME>` bit after `GPL` (`1ull << 6`) in
+- **The flag.** A new `KK_EXPERIMENTAL_<NAME>` bit after main's bit 15 (B1: 16, B3: 17) in
   `kk_debug.h`/`kk_debug.c`. The table entry and feature read `KK_EXPERIMENTAL(<NAME>)`, as `gpl`
   does in `kk_physical_device.c`.
 - **Host test.** `build/mesa-host-test/run.sh` runs `kk-host-test` once more with the flag.
@@ -571,17 +586,18 @@ KK's descriptor model is NVK's. That makes descriptor buffers a close port of NV
 
 ## Ordered chunk queue
 
-There is one writer at a time, in the side copy, and each chunk ends in a commit with its host
-test passing. Phone gates collect in the Runner state's queue for the main checkout.
+There is one writer at a time. The branch is now in the main checkout; the side copy is
+detached. Each chunk ends in a commit with its checks passing; pending phone gates remain
+in the Runner state's queue.
 
 | # | Chunk | Size | Flag | Done when |
 | --- | --- | --- | --- | --- |
 | 0 | Side copy `.work/worktrees/kkparity` on `dev/kk-proton-parity` (0117 rewrite, marker); baseline `run.sh` and its MSL saved as the byte-identity baseline | S | — | Marker in place. `pp build` verified in the side copy. Baseline host test passes and its `msl/` is kept under the side copy's `.work` |
 | A0 | Phone baseline (queued, main checkout): `pp perf --cpu-prof` on Hollow Knight DXVK and `-force-d3d12`. How much CPU goes to `vkUpdateDescriptorSets*`/`kk_*Descriptor*` and vkd3d's `CopyDescriptors` | S | — | Evidence file with the share per thread. It decides whether A2 is worth L |
-| B1 | `memory_priority` | S | `memory_priority` | Mesa 0104. Host test: extensions only with flag, the calls accepted, MSL identical. Committed; phone gate queued |
-| B3 | `shader_module_identifier` | S | `module_identifier` | Mesa 0105. Host test: identifier, UUID, `FAIL_ON_PIPELINE_COMPILE_REQUIRED` miss/hit, cache, GPL library, MSL identical. Committed; gate queued |
-| A2 | **Gated on A0.** Descriptor buffer core with the vkd3d 4-byte SSBO alignment (A1 folded in): properties, layout size and offset, `vkGetDescriptorEXT`, bind and offsets, push descriptors, meta save/restore | L | `descriptor_buffer` | Mesa 0106 (split if large; A1's alignment may be its own patch under the same flag). Host test: bytes equal to `vkUpdateDescriptorSets`; draws and clear-between-draws restore set 0; flag-off MSL byte-identical; vkd3d-engine MSL with 4-byte alignment compiles with `msl-compile.sh`; cache key hashes the alignment. Committed |
-| A3 | Embedded immutable samplers (`vkCmdBindDescriptorBufferEmbeddedSamplers2EXT`) | S–M | `descriptor_buffer` | Mesa 0107. Host test: a layout with embedded samplers draws; MSL identical |
+| B1 | `memory_priority` | S | `memory_priority` | Mesa 0119. Host test: extensions only with flag, the calls accepted, MSL identical. Phone runtime gate passed with vkd3d logging limit (evidence above) |
+| B3 | `shader_module_identifier` | S | `module_identifier` | Mesa 0120. Host test: identifier, UUID, `FAIL_ON_PIPELINE_COMPILE_REQUIRED` miss/hit, cache, GPL library, MSL identical. Committed; gate queued |
+| A2 | **Gated on A0.** Descriptor buffer core with the vkd3d 4-byte SSBO alignment (A1 folded in): properties, layout size and offset, `vkGetDescriptorEXT`, bind and offsets, push descriptors, meta save/restore | L | `descriptor_buffer` | Next free Mesa number (split if large; A1's alignment may be its own patch under the same flag). Host test: bytes equal to `vkUpdateDescriptorSets`; draws and clear-between-draws restore set 0; flag-off MSL byte-identical; vkd3d-engine MSL with 4-byte alignment compiles with `msl-compile.sh`; cache key hashes the alignment. Committed |
+| A3 | Embedded immutable samplers (`vkCmdBindDescriptorBufferEmbeddedSamplers2EXT`) | S–M | `descriptor_buffer` | Next free Mesa number. Host test: a layout with embedded samplers draws; MSL identical |
 | A4 | GPL with descriptor buffers (`gpl,descriptor_buffer`) | S | both | Host test: a DXVK-style library set with the flag links and draws |
 | A5 | Phone gates for A (queued): Hollow Knight `-force-d3d12` with `descriptor_buffer`; DXVK with `dxvk.enableDescriptorBuffer=True`; `pp perf --cpu-prof` against A0 | M | — | Evidence file. vkd3d log shows the descriptor-buffer path. Rendering as flag-off. CPU per frame against A0 |
 | D | Decision record 0159: which flags stay off, which become defaults; `finished.md` entry | S | — | Decision accepted by the owner |

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: The Playport authors <dev@playport.dev>
 Date: Fri, 23 Oct 2026 07:13:34 +0200
-Subject: [PATCH] kk: MESA_KK_EXPERIMENTAL=module_identifier, 
+Subject: [PATCH] kk: MESA_KK_EXPERIMENTAL=module_identifier,
  VK_EXT_shader_module_identifier
 
 With MESA_KK_EXPERIMENTAL=module_identifier, KosmicKrisp advertises
