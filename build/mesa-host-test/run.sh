@@ -596,6 +596,11 @@ print(f'descriptor MSL: {len(list((root / "msl-descriptor-on").glob("*.metal")))
 print('descriptor_stats: exact 10-operation counts, two-device/init-failure separation, rollback, threads, clock errors and overflow; MSL off/on identical')
 PY
 
+# Compile the actual emitter, not a printf model. Independent raw appenders,
+# strict schema/interval checks and bounded fault injection need no GPU mock.
+python3 "$HERE/kk-descriptor-emission-test.py" "$ROOT/build" \
+    "$TREE/src/kosmickrisp/vulkan/kk_debug.c" "$ROOT/descriptor-emission"
+
 # Zink and EGL on the same mock driver: a second build of the tree. Zink loads
 # the Vulkan loader (libvulkan.so.1), limited to the mock by VK_DRIVER_FILES.
 [ -f "$ROOT/build-gl/build.ninja" ] ||

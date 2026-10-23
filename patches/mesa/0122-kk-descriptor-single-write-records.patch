@@ -1,0 +1,203 @@
+From 7e398afb1cb120299e6354936a4f1f063cac9b4c Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kamil=20Postro=C5=BCny?= <kamil@postrozny.pl>
+Date: Fri, 23 Oct 2026 20:06:02 +0200
+Subject: [PATCH] kk: emit descriptor diagnostics as bounded single-write
+ records
+
+Format complete rows before output; stop device emission after a formatting or sink failure. Preserve the v1 schema and diagnostic timing/counters.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-10-23-descriptor-emission-fix-host.md
+Offered-upstream: no
+---
+ src/kosmickrisp/vulkan/kk_debug.c            | 104 +++++++++++++++++--
+ src/kosmickrisp/vulkan/kk_descriptor_stats.h |   1 +
+ 2 files changed, 95 insertions(+), 10 deletions(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_debug.c b/src/kosmickrisp/vulkan/kk_debug.c
+index b224c60..2b2faa3 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.c
++++ b/src/kosmickrisp/vulkan/kk_debug.c
+@@ -282,7 +282,10 @@ kk_vertex_stats_log(uint32_t frames, bool final)
+ }
+ 
+ /* PLA-431: fixed per-device aggregates, no thread registry or hot-path lock. */
++#include <errno.h>
+ #include <inttypes.h>
++#include <stdarg.h>
++#include <sys/stat.h>
+ #include <unistd.h>
+ #include "kk_descriptor_stats.h"
+ 
+@@ -298,6 +301,75 @@ static const char *const descriptor_fields[KK_DESCRIPTOR_FIELD_COUNT] = {
+    "clock_errors",    "active",
+ };
+ 
++/* Fixed v1 rows fit even with every u64 at 20 digits. Check every append:
++ * no truncated record is ever deliberately submitted to the sink. */
++struct descriptor_record {
++   char text[2048];
++   size_t length;
++   bool failed;
++};
++
++static void descriptor_record_append(struct descriptor_record *r,
++                                     const char *fmt, ...)
++   PRINTFLIKE(2, 3);
++
++static void
++descriptor_record_append(struct descriptor_record *r, const char *fmt, ...)
++{
++   if (r->failed)
++      return;
++   va_list ap;
++   va_start(ap, fmt);
++   int n = vsnprintf(r->text + r->length, sizeof(r->text) - r->length, fmt, ap);
++   va_end(ap);
++   if (n < 0 || (size_t)n >= sizeof(r->text) - r->length) {
++      r->failed = true;
++      return;
++   }
++   r->length += n;
++}
++
++static bool
++descriptor_record_emit(struct kk_descriptor_stats *s,
++                       const struct descriptor_record *r)
++{
++   if (s->emission_failed)
++      return false;
++   int saved_errno = errno;
++   struct stat st;
++   bool valid = !r->failed && r->length && !fstat(STDERR_FILENO, &st);
++   if (valid && S_ISFIFO(st.st_mode)) {
++      long pipe_buf = fpathconf(STDERR_FILENO, _PC_PIPE_BUF);
++      valid = pipe_buf > 0 && r->length <= (size_t)pipe_buf;
++   }
++   /* The app's normal sink is an O_APPEND regular file. One write, not one
++    * stdio call, prevents another appender from entering this record. For a
++    * pipe this only holds up to its actual PIPE_BUF, checked above. Terminals,
++    * non-append independent file handles and downstream relays have no such
++    * guarantee. This does not serialize other writers' own partial records. */
++   if (valid) {
++      for (unsigned attempt = 0; attempt < 3; attempt++) {
++         ssize_t n = write(STDERR_FILENO, r->text, r->length);
++         if (n == (ssize_t)r->length) {
++            errno = saved_errno;
++            return true;
++         }
++         if (n >= 0 || errno != EINTR)
++            break;
++      }
++   }
++   /* Never continue a positive short write: another writer may already have
++    * appended after its prefix. Stop this device's reports permanently. The
++    * malformed marker invalidates strict consumers if the sink still works;
++    * unrecoverable loss (even just the final newline) cannot be made reliably
++    * detectable without changing the transport/schema. */
++   s->emission_failed = true;
++   static const char poison[] = "\n[kk-descriptor] emission failed\n";
++   (void)!write(STDERR_FILENO, poison, sizeof(poison) - 1);
++   errno = saved_errno;
++   return false;
++}
++
+ /* Saturate, rather than silently wrap. Once overflow is sticky the entire
+  * device sequence is unsuitable for interval subtraction, including frames. */
+ static void
+@@ -402,8 +474,9 @@ kk_descriptor_stats_init(struct kk_descriptor_stats *s)
+    s->generation = __atomic_add_fetch(&generation, 1, __ATOMIC_RELAXED);
+    s->init_ns = kk_descriptor_clock();
+    s->overflow = !s->generation;
+-   fprintf(
+-      stderr,
++   struct descriptor_record record = {0};
++   descriptor_record_append(
++      &record,
+       "[kk-descriptor] v=1 component=kk kind=enabled pid=%ld device=%" PRIu64
+       " init_ticks=%" PRIu64
+       " hz=1000000000 clock=monotonic_elapsed cpu_clock=unsupported"
+@@ -412,6 +485,8 @@ kk_descriptor_stats_init(struct kk_descriptor_stats *s)
+       " excluded=layout_template_lifecycle_constants_attachments_shader_loads"
+       " publication=relaxed_bracketed boundary=timestamp_range final_may_be_incomplete=1\n",
+       (long)getpid(), s->generation, s->init_ns);
++   if (!descriptor_record_emit(s, &record))
++      return;
+    /* Bounded raw samples, not a correction to operation durations. The outer
+     * empty measurement includes both checked reads and atomic publication.
+     * Calibration uses scratch counters, never contaminates operation totals. */
+@@ -428,13 +503,16 @@ kk_descriptor_stats_init(struct kk_descriptor_stats *s)
+       bool empty_ok =
+          c && d && d >= c &&
+          scratch.values[KK_DESCRIPTOR_UPDATE][KK_DESCRIPTOR_CLOCK_ERRORS] == 0;
+-      fprintf(
+-         stderr,
++      record = (struct descriptor_record){0};
++      descriptor_record_append(
++         &record,
+          "[kk-descriptor] v=1 component=kk kind=calibration pid=%ld device=%" PRIu64
+          " sample=%u hz=1000000000 reads=6 adjacent_ok=%u adjacent_ticks=%" PRIu64
+          " empty_ok=%u empty_ticks=%" PRIu64 "\n",
+          (long)getpid(), s->generation, i, adjacent_ok, adjacent_ok ? b - a : 0,
+          empty_ok, empty_ok ? d - c : 0);
++      if (!descriptor_record_emit(s, &record))
++         return;
+    }
+ }
+ 
+@@ -446,6 +524,10 @@ kk_descriptor_stats_log(struct kk_descriptor_stats *s, uint32_t frames,
+    /* Serializes reports only. Never blocks an instrumented operation. */
+    if (__atomic_exchange_n(&s->logging, 1, __ATOMIC_ACQUIRE))
+       return;
++   if (s->emission_failed) {
++      __atomic_store_n(&s->logging, 0, __ATOMIC_RELEASE);
++      return;
++   }
+    uint64_t a = kk_descriptor_clock();
+    bool start_ok = s->init_ns && a &&
+                    (!s->last_log_ns || a >= s->last_log_ns);
+@@ -483,10 +565,10 @@ kk_descriptor_stats_log(struct kk_descriptor_stats *s, uint32_t frames,
+    bool clock_ok = start_ok && b && b >= a;
+    if (!b || (a && b < a))
+       descriptor_add_checked(s, &s->report_clock_errors, 1);
+-   flockfile(stderr);
+    for (unsigned op = 0; op < KK_DESCRIPTOR_OP_COUNT; op++) {
+-      fprintf(
+-         stderr,
++      struct descriptor_record record = {0};
++      descriptor_record_append(
++         &record,
+          "[kk-descriptor] v=1 component=kk kind=snapshot pid=%ld device=%" PRIu64
+          " init_ticks=%" PRIu64 " ts_begin=%" PRIu64 " ts_end=%" PRIu64
+          " hz=1000000000 snapshot=%" PRIu64 " frames=%" PRIu64
+@@ -497,10 +579,12 @@ kk_descriptor_stats_log(struct kk_descriptor_stats *s, uint32_t frames,
+          presented, final, clock_ok, s->report_clock_errors, overflow, quiet, entered0, completed0,
+          entered1, completed1, descriptor_ops[op]);
+       for (unsigned f = 0; f < KK_DESCRIPTOR_FIELD_COUNT; f++)
+-         fprintf(stderr, " %s=%" PRIu64, descriptor_fields[f], values[op][f]);
+-      fputc('\n', stderr);
++         descriptor_record_append(&record, " %s=%" PRIu64,
++                                  descriptor_fields[f], values[op][f]);
++      descriptor_record_append(&record, "\n");
++      if (!descriptor_record_emit(s, &record))
++         break;
+    }
+-   funlockfile(stderr);
+    s->last_log_ns = a;
+    __atomic_store_n(&s->logging, 0, __ATOMIC_RELEASE);
+ }
+diff --git a/src/kosmickrisp/vulkan/kk_descriptor_stats.h b/src/kosmickrisp/vulkan/kk_descriptor_stats.h
+index 77a4aa3..6f60fe5 100644
+--- a/src/kosmickrisp/vulkan/kk_descriptor_stats.h
++++ b/src/kosmickrisp/vulkan/kk_descriptor_stats.h
+@@ -52,6 +52,7 @@ struct kk_descriptor_stats {
+    uint64_t generation, init_ns, frames, last_log_ns, snapshot;
+    uint64_t entered, completed, report_clock_errors;
+    bool reported_clock_failure;
++   bool emission_failed; /* Report path only; a failed sink never resumes. */
+    uint32_t overflow, logging;
+ };
+ 
+-- 
+2.56.0
+

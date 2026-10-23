@@ -196,13 +196,21 @@ The supervisor keeps this section.
      restored, explicitly captured black, lock released; no gameplay or save navigation.
      [Device blocker evidence](../evidence/2026-10-23-descriptor-probe-device-prep.md);
      report `.work/agent-notes/kk-parity/reports/a0-device-prep.md` in the build area.
-     **Running: focused host-only wire-emission diagnosis/correction** (PLA-431), no parser
-     weakening/reconstruction. Rank: KK multi-write record interleaving, client long-line splits,
-     then app sink multiplexing. Reproduce with production emitter/concurrent independent writers;
-     inspect the real sink before choosing a single-record emission fix. Stop for wider logging
-     architecture changes. Report left in the build area at
-     `.work/agent-notes/kk-parity/reports/a0-emission-fix.md`. Independent review and a separately
-     bounded prep retry follow before owner scene/activity/window/budget coordination.
+     **Host-only wire-emission correction implemented; independent review pending** (PLA-431,
+     starting HEAD `4a8197a`, branch still unmerged/unpushed). Mesa0122 changes only KK diagnostic
+     emission: checked2048-byte complete-row formatting and one raw write to the confirmed normal
+     O_APPEND file sink. Actual committed emitter regression red before fix; deterministic
+     `write_records=0info:` splice reproduced with an independent raw appender, then strict-parser
+     append/pipe fixtures and three pinned stress seeds pass. Full host suite preserves236/236
+     descriptor off/on MSL and the pre-fix236 prefix; unchanged33 parser tests and quick/names/secrets
+     pass. Dev IPA `9d0d2b2a…` verified89/89, owner UI included/uncommitted, not exact committed-source
+     provenance; no build-record changes. No parser/schema/timing/counter/activation changes or
+     phone commands. Pipe rows above actual PIPE_BUF fail closed; terminal sink failure cannot
+     guarantee detection of a newline-only short (explicitly tested/accepted limitation).
+     [Host evidence](../evidence/2026-10-23-descriptor-emission-fix-host.md); report
+     `.work/agent-notes/kk-parity/reports/a0-emission-fix.md` in the build area.
+     Next: independent review, then separately authorized bounded prep retry, before owner
+     scene/activity/window/budget coordination. Original raw log remains bad and unchanged.
      No performance or perturbation claim from this menu prep.
   No further phone plays authorized by this checkpoint; human gameplay waits for owner handoff.
   No save automation/new slot authorized. No sampler
@@ -236,8 +244,9 @@ The supervisor keeps this section.
   page black, 80% external power, inherited unattended unchanged.
 - **Phone queue** (PLA-431, main checkout):
   - A0 scoped diagnostics host queue accepted; device prep blocked by actual interleaved
-    telemetry (evidence above). Correct/review emission in a separate authorized chunk,
-    then authorize renewed calibration/smoke; owner existing-save workload coordination
+    telemetry (evidence above). KK0122 emission correction host-checked; independent review
+    pending, no device reenactment. Review first, then authorize renewed calibration/smoke;
+    owner existing-save workload coordination
     and human measurement remain pending. No save automation or automatic measurement;
   - A's gates after an authorized A2–A4, which have not started.
 - **Phone:** installed titles are Hollow Knight (`app-367520`) and RDR2. The D3D12 route is Hollow
