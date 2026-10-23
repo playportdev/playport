@@ -167,7 +167,10 @@ The supervisor keeps this section.
      report left in the build area at
      `.work/agent-notes/kk-parity/reports/a0-vkd3d-probe-host.md`.
      Accepted for parser/integration only; A2 and phone gates remain gated.
-  4. **Offline parser/integration host checked; independent review pending.**
+  4. **Offline parser/integration implemented** (`496547c`), host checked; independent review
+     running (child `349f2b57`, report left in the build area at
+     `.work/agent-notes/kk-parity/reports/a0-parser-review.md`). Parent focused rerun also
+     running (log `supervisor-parser.log` under those notes).
      `python3 tools/descriptorprof.py [--json] saved.log ...` enforces v1 integer schemas,
      complete 10/36/54-row identities, conservative quiescent/error-free boundaries and
      cumulative deltas; preserves brackets, raw calibration/coverage and rejected evidence.
@@ -182,7 +185,7 @@ The supervisor keeps this section.
   5. Coordinate owner-chosen save/room/activity, load/measurement window and worthwhile budget;
      device calibration, controls and bounded controller measurements after review.
   No phone runs until that coordination. No save automation/new slot authorized. No sampler
-  redesign, CPU-clock bridge or descriptor implementation approved. Checkpoint `147ebbc`;
+  redesign, CPU-clock bridge or descriptor implementation approved. Checkpoint `496547c`;
   no merge or push. A2–A4 remain **not started**, gated on evidence that descriptor cost matters.
 - **B1 phone (2026-10-23):** both flag-off routes and memory_priority DXVK/D3D12 reached
   first-frame+10. DXVK features 0 off / 1 on; priority counts 14/14 and 28/13.
