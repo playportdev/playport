@@ -208,3 +208,44 @@ Experimental IPA 315cee09:
 `pla72r-g3-nofp-a`, `pla72r-g3-nofp-b`, `pla72r-g3-off-b`,
 `pla72r-g-nb-count`. Every producer completed exit 0. The old experimental smoke
 is listed above. Final committed-main installation and gate are recorded below.
+
+## Final committed-main installation
+
+Code/tests/probes/evidence committed as `ecd6c15`; no default switch changed.
+Rebuilt its committed app sources, **excluding the foreign SettingsView edit**:
+its exact bytes were saved under the build area and restored byte-for-byte after
+the build. No generated build-record row changed. The final verified dev IPA is
+`b9acbe707087c29368d829c58d5e10048d316d6dd89561fd0ec437fa76ec3ecc`
+(`out/20261023-045230-b9acbe70/Playport-26.5-b9acbe70.ipa` beneath the build area),
+89 verification checks passed, 0 failed. Upgraded in place; container retained.
+
+Final Hollow Knight gates (720/60, no experimental options), both successful:
+
+| backend | run directory under build area | result |
+| --- | --- | --- |
+| Vulkan | ui-runs/20261023T045359 | first-frame+10 |
+| DXMT | ui-runs/20261023T045454 | first-frame+10 |
+
+The first smoke command had an invalid `pp ui --settings` argument (missing the
+title-ID prefix), failed before launching the game, and was corrected; it was
+not a failed game start or a duplicate play.
+
+Final default-options native/free route-v2 run: `perf-runs/pla72r-final-off`,
+exit 0; `graphicsOptions=[]` confirmed in the launch log. Window `85:125`:
+78.7 FPS, p99 25.01 ms, GPU 11.29 ms, tiler 88.0%, 76.8 Mi/f,
+CPU 252 mW, phone 54.3 mJ/f. Nominal start, pressure at 75 s, charge 80%,
+external power. It ended at the same King's Pass cave as the original walking
+Vulkan baseline, correctly rendered, with no Metal/compile errors. This is a
+final correctness/performance check, not an optimization claim across IPAs.
+
+Phone status confirms the final IPA and committed runtime `ecd6c15`. HUD was
+returned to off through the UI; session-only settings were undone. Hollow Knight
+remains installed, Portal 2 absent, RDR2 untouched; unattended mode renewed.
+No push. A subsequent documentation-only commit records these final results;
+the installed code is that committed main runtime. Compatibility/Linear updates
+are left to the supervisor, with a machine-readable run/IPA inventory in
+`$PLAYPORT_BUILD/agent-notes/pla72r/reports/W-gpt-runs.json`.
+
+**Remaining limits:** no Portal 2 gate (kept uninstalled by this handoff), no
+Vulkan float-controls CTS, no general proof of the experimental barrier or
+robust-vector pass, no D3D12 parity/exit runs. Unsafe switches must remain opt-in.
