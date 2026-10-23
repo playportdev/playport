@@ -167,41 +167,23 @@ The supervisor keeps this section.
      report left in the build area at
      `.work/agent-notes/kk-parity/reports/a0-vkd3d-probe-host.md`.
      Accepted for parser/integration only; A2 and phone gates remain gated.
-  4. **Offline parser/integration implemented** (`496547c`), host checked; independent review
-     **BLOCK** (child `349f2b57`, report left in the build area at
-     `.work/agent-notes/kk-parity/reports/a0-parser-review.md`). Parent focused rerun passed
-     (log `supervisor-parser.log` under those notes), but omitted the review counterexamples.
-     **Bounded correction implemented** (`bafeced`), independent re-review **BLOCK**
-     (revived reviewer `caf88b04`, report left in the build area at
-     `.work/agent-notes/kk-parity/reports/a0-parser-rereview.md`). Parent 28-test rerun passed
-     (log `supervisor-parser-fixes.log` under those notes). Three findings closed; remaining
-     duplicate-row overwrite can erase observed errors and falsely permit later recovery.
-     **Duplicate correction implemented** (`5a46a4a`), independent re-review running
-     (revived reviewer `e5bf2014`, report left in the build area at
-     `.work/agent-notes/kk-parity/reports/a0-parser-final-review.md`). Parent 33-test rerun
-     also running (log `supervisor-parser-duplicate.log` under those notes); BLOCK remains.
-     Any duplicate
-     operation/category row (including identical) quarantines its capture and every later capture
-     under the same input/stream identity. First rows and full duplicate values/exact lines remain
-     inspectable; no conflicting-value history reconstruction. Earlier clean windows and unrelated
-     interleaved streams remain usable. Test-first33 failed51 assertions; corrected33 pass,
-     quick745/26 and names/secrets pass. Five actual false-recovery traces now reject both windows
-     (exit1/zero usable, previously exit2/five usable). Four real inputs unchanged: 11 usable KK /
-     5 rejected helper windows. Report `.work/agent-notes/kk-parity/reports/a0-parser-duplicate-fix.md`.
-     No producer change or device work. Retain last-seen
-     per-operation/category cumulative/error history across partial captures; reject infeasible
-     interval timing/max and client outer deltas; make any observed final terminal even with
-     partial/conflicting metadata; retain raw calibration with producer-specific invalid reasons.
-     No native/schema/runtime/Swift/default/pin/descriptor-buffer changes or new IPA/phone work.
-     Earlier clean windows, valid quantized calls and feasible maximum growth remain usable.
-     Test-first regressions reproduced all four findings: corrected 28 focused tests pass
-     (initial 18 are historical); quick740/26, names/secrets pass. Four unchanged real logs
-     remain exit2/mixed: 11 usable KK intervals, 5 rejected helper windows; DXVK single capture
-     and partial vkd3d output insufficient. No cross-layer join/sum/subtraction, CPU attribution
-     or presented-frame normalization. [Host evidence](../evidence/2026-10-23-descriptor-prof-parser-host.md).
-     Correction report `.work/agent-notes/kk-parity/reports/a0-parser-fixes.md`; the original
-     review BLOCK stays in force until independent re-review clears. Supervisor owns Linear
-     synchronization. Device coordination and A2 remain blocked; no merge or push.
+  4. **Offline parser/integration ACCEPT**: `496547c`, corrections `bafeced` and `5a46a4a`.
+     Original review blockers (history loss, timing feasibility, post-final recovery, calibration
+     contradictions, then duplicate-row history loss) are closed by original reviewer `e5bf2014`;
+     report left in the build area at `.work/agent-notes/kk-parity/reports/a0-parser-final-review.md`.
+     Parent independently reran all 33 focused tests: pass (`supervisor-parser-duplicate.log`).
+     Quick745 Python/26 C groups, names/secrets pass. No native changes or new IPA.
+     Strict10/36/54 rows, per-row cumulative history through gaps, integer timing feasibility,
+     terminal final, raw calibration validity and forward duplicate quarantine prevent false
+     recovery. Earlier clean windows and unrelated identities remain usable; raw invalid evidence
+     retained. Real host inputs unchanged: 11 usable KK intervals/5 rejected helper windows;
+     one DXVK capture and partial vkd3d output insufficient, not actual client interval proof.
+     No cross-layer join/sum/subtraction, CPU attribution or presented-frame normalization.
+     [Host evidence](../evidence/2026-10-23-descriptor-prof-parser-host.md); detailed correction
+     reports left under `.work/agent-notes/kk-parity/reports/a0-parser-{fixes,duplicate-fix}.md`.
+     Accepted for owner coordination and separately gated device calibration/smoke only, not A2.
+     **Next:** confirm owner readiness, existing-save activity/autosave permission and coordinate
+     dev upgrade + menu smoke/calibration before any owner gameplay measurement.
   5. Coordinate owner-chosen save/room/activity, load/measurement window and worthwhile budget;
      device calibration, controls and bounded controller measurements after review.
   No phone runs until that coordination. No save automation/new slot authorized. No sampler
