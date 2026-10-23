@@ -452,7 +452,7 @@ for mode in off on; do
     rm -rf "$ROOT/msl-descriptor-$mode"; mkdir -p "$ROOT/msl-descriptor-$mode"
     KK_HOST_DESCRIPTOR_TEST=1 MESA_KK_DEBUG="$debug" \
         KK_MOCK_MSL_DIR="$ROOT/msl-descriptor-$mode" MESA_SHADER_CACHE_DISABLE=true \
-        "$ROOT/kk-host-test" "$ROOT/build/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.so" "$ROOT/spv" \
+        timeout --kill-after=5s 90s "$ROOT/kk-host-test" "$ROOT/build/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.so" "$ROOT/spv" \
         >"$ROOT/descriptor-$mode.log" 2>&1 || { tail -60 "$ROOT/descriptor-$mode.log" >&2; exit 1; }
     for f in "$ROOT/msl/"*.metal; do
         cmp -s "$f" "$ROOT/msl-descriptor-$mode/${f##*/}" ||
@@ -480,8 +480,20 @@ subprocess.run(['cc', '-pthread', '-Wl,--gc-sections', '-o', str(exe), str(obj),
 with (root / 'descriptor-helper.log').open('w') as log:
     subprocess.run([str(exe)], stdout=log, stderr=log, check=True)
 
+# Exercise the generated mock itself. The old inline completion fails the
+# committing assertion; timeout also bounds future synchronization regressions.
+mock_exe = root / 'kk-mock-feedback-test'
+bridge = build / 'src/kosmickrisp/bridge/libmtl_bridge.a.p'
+subprocess.run(['cc', '-UNDEBUG', '-I' + str(root / 'mesa/src'),
+                '-o', str(mock_exe), str(here / 'kk-mock-feedback-test.c'),
+                str(bridge / 'stubs_mtl_command_queue.c.o'),
+                str(bridge / 'stubs_mtl_bridge.c.o'),
+                str(bridge / 'stubs_mtl_sync.c.o')], check=True)
+with (root / 'mock-feedback.log').open('w') as log:
+    subprocess.run([str(mock_exe)], stdout=log, stderr=log, check=True, timeout=10)
+
 # This is a known-count fixture assertion, NOT the future interval parser.
-text = (root / 'descriptor-on.log').read_text().split('descriptor-fixture begin\n')[1]
+text = (root / 'descriptor-on.log').read_text().split('descriptor-fixture begin\n')[1].split('descriptor-fixture end\n')[0]
 rows = [dict(token.split('=', 1) for token in line.split()[1:])
         for line in text.splitlines() if line.startswith('[kk-descriptor] ')]
 enabled = [r for r in rows if r['kind'] == 'enabled']
@@ -525,6 +537,62 @@ helper = (root / 'descriptor-helper.log').read_text()
 assert 'quiescent=0' in helper and 'active=1' in helper and 'overflow=1' in helper
 assert 'clock_errors=3' in helper and 'ok descriptor helper:' in helper
 assert 'clock_ok=0 report_clock_errors=3' in helper
+# Completed logs only: each phase is bracketed after idle and contains the
+# normal native reporter's ten rows, not synthetic test counter copies.
+replay = (root / 'descriptor-on.log').read_text().split('descriptor-replay begin\n')[1]
+phases = [('secondary-recorded', 0), ('secondary-executed-once', 1),
+          ('secondary-executed-twice', 2), ('secondary-primary-submitted', 2),
+          ('reusable-recorded', 3), ('reusable-submit-1', 3),
+          ('reusable-submit-2', 4), ('reusable-submit-3', 5)]
+previous = None
+identity = None
+for phase, calls in phases:
+    section = replay.split(f'descriptor-replay phase={phase} begin\n')[1].split(
+        f'descriptor-replay phase={phase} end\n')[0]
+    snapshot = [dict(token.split('=', 1) for token in line.split()[1:])
+                for line in section.splitlines() if line.startswith('[kk-descriptor] ')]
+    assert len(snapshot) == 10 and {r['op'] for r in snapshot} == set(expected), (phase, snapshot)
+    for field in ('snapshot', 'ts_begin', 'ts_end', 'hz', 'frames',
+                  'entered_before', 'completed_before', 'entered_after', 'completed_after'):
+        assert len({r[field] for r in snapshot}) == 1, (phase, field)
+    assert snapshot[0]['hz'] == '1000000000' and snapshot[0]['frames'] == '0'
+    current_identity = {(r['pid'], r['device'], r['init_ticks']) for r in snapshot}
+    assert len(current_identity) == 1
+    assert all(r['device'] not in {e['device'] for e in enabled} for r in snapshot)
+    if identity is not None:
+        assert current_identity == identity
+    identity = current_identity
+    current = {r['op']: r for r in snapshot}
+    for op, row in current.items():
+        assert row['kind'] == 'snapshot' and row['v'] == '1' and row['component'] == 'kk'
+        assert row['final'] == row['active'] == row['overflow'] == row['clock_errors'] == row['report_clock_errors'] == '0'
+        assert row['clock_ok'] == row['quiescent'] == '1'
+        assert int(row['ts_end']) >= int(row['ts_begin']) > 0
+        assert row['entered_before'] == row['completed_before'] == row['entered_after'] == row['completed_after']
+        assert row['timed_calls'] == row['calls'] and int(row['elapsed_ticks']) >= int(row['max_ticks'])
+        if previous:
+            assert int(row['snapshot']) > int(previous[op]['snapshot'])
+            for field in ('calls', 'timed_calls', 'elapsed_ticks', 'max_ticks'):
+                assert int(row[field]) >= int(previous[op][field]), (phase, row)
+        want = {}
+        if op == 'bind':
+            want = dict(calls=calls, sets=calls)
+        elif op in ('push', 'push_template'):
+            want = dict(calls=calls, write_records=calls, write_elements=calls)
+        elif op == 'pool_create':
+            want = dict(calls=1, sets=1, pool_entries=1, pool_elements=1)
+        elif op == 'allocate':
+            want = dict(calls=1, sets=1)
+        elif op == 'update':
+            want = dict(calls=1, write_records=1, write_elements=1)
+        for field in ('calls', 'sets', 'write_records', 'write_elements', 'write_bytes',
+                      'copy_records', 'copy_elements', 'copy_bytes', 'dynamic_offsets',
+                      'pool_entries', 'pool_elements', 'pool_bytes', 'failures'):
+            assert int(row[field]) == want.get(field, 0), (phase, op, field, row, want)
+    previous = current
+print('descriptor replay: secondary recorded/executed1/executed2/submitted=0/1/2/2; '
+      'reusable recorded/submit1/submit2/submit3=3/3/4/5 (bind, push, push_template each)')
+print(f'descriptor MSL: {len(list((root / "msl-descriptor-on").glob("*.metal")))} off/on identical files')
 print('descriptor_stats: exact 10-operation counts, two-device/init-failure separation, rollback, threads, clock errors and overflow; MSL off/on identical')
 PY
 

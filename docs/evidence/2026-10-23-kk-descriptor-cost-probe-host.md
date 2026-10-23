@@ -3,8 +3,9 @@
 **Linear:** [PLA-431](https://linear.app/playportdev/issue/PLA-431). **Plan:**
 [Proton parity](../plans/2026-10-22-kk-proton-parity.md), A0 measurement queue item 1.
 Mesa **0121**, diagnostics only, default off. **No phone commands, game launches,
-CPU-cost conclusion or A2 authorization.** Independent review precedes client integration
-and owner-coordinated existing-save gameplay. The earlier menu sampler remains
+CPU-cost conclusion or A2 authorization.** Independent review of `8b6a20e` ACCEPT
+with a P2 replay-interpretation note; the host-only correction below addresses that note,
+not device readiness. Client integration/review still precedes owner-coordinated gameplay. The earlier menu sampler remains
 [insufficient](2026-10-23-kk-descriptor-cpu-baseline.md).
 
 ## Source, coverage and overlap
@@ -31,10 +32,11 @@ Within KK, valid disjoint elapsed totals may be summed across operations/threads
 (they are not a process wall-time union). **Never add KK totals to client Vulkan or
 client-inclusive envelopes.** KK alone does not cover client preparation/copies.
 
-Calls and work are requested API work, including failed requests. Writes/copies
+Calls count **driver entrypoint executions, not application API calls**. Work is
+requested at **each driver execution**, including replay and failed requests. Writes/copies
 separate records, descriptor elements and **inline-uniform bytes**. Templates count
 entries as write records. A combined graphics/compute bind/push counts its API inputs
-once, not once per stage. `sets`: pool-create capacity, allocate/free requested slots,
+once per driver execution, not once per stage. `sets`: pool-create capacity, allocate/free requested slots,
 bind requested sets, reset/destroy live sets actually traversed. Pool entries/elements/
 inline bytes describe requested capacity. `failures` counts non-success Vulkan results,
 or command recording error present at push exit (not necessarily a newly caused error).
@@ -45,6 +47,8 @@ Null pool destroy still counts a call with zero sets.
 Every line starts `[kk-descriptor] v=1 component=kk kind=...` with whitespace-separated
 `key=value` fields. Kinds: `enabled`, `calibration`, `snapshot`. Enabled coverage banner
 states exclusions, disjoint rollback accounting, and `cpu_clock=unsupported`.
+The v1 wire schema/banner is unchanged: interpret `calls` and every work-unit field
+using the driver-execution/replay contract above, not a client API-call denominator.
 Snapshot identity: `pid`, `device` generation, `init_ticks`, per-device `snapshot`.
 All numerical telemetry is integer: `ts_begin`, `ts_end`, `hz=1000000000`, cumulative
 `frames`, `final`, `clock_ok`, `report_clock_errors`, `overflow`, `quiescent`,
@@ -114,7 +118,7 @@ after device allocation produce three distinct initialized sequences; neither em
 sequence inherits the measured device's counters. Diagnostics-off emits no probe
 lines; `descriptor_stats,vertex_stats` preserves both flags' output.
 
-The unchanged established **185-file** MSL prefix matches the fresh pre-change copy
+At the original 0121 validation, the unchanged established **185-file** MSL prefix matches the fresh pre-change copy
 by filename and bytes. Diagnostic off/on runs each produce **219 files**, all identical
 including the extra fixture devices; **44 `ok` labels** each (43 existing, one fixture).
 Full host runner and Zink mock pass; Zink produces **25** MSL files. No GPU executes.
@@ -130,9 +134,101 @@ logging or work-count traversal**. Original descriptor processing/reference-coun
 atomics, prologues and branches remain. This is static path inspection, not proof of
 zero instruction/cache/layout overhead, a whole-program proof, or an on-phone control.
 
-## Built artifact
+## Replay correction (host only, PLA-431)
 
-Main-checkout `./pp build` exits 0; verified dev IPA:
+The dispatch source explains why application/native count parity and containment in
+client descriptor-preparation scopes cannot be assumed. Paths below are relative to
+`$PLAYPORT_BUILD/run/mesa/mesa/src/` (0121 source unchanged):
+
+- `kosmickrisp/util/kk_dispatch_cmd_gen.py:81–89`: secondary recording only enqueues;
+  primary recording dispatches immediately and also enqueues when reusable.
+- `vulkan/runtime/vk_command_buffer.c:157–169`: executing a secondary replays its
+  command queue through driver dispatch into the primary.
+- `kosmickrisp/vulkan/kk_queue.c:267–268,378–381`: resubmitting a previously submitted
+  reusable primary re-records its queued commands through driver dispatch.
+
+A secondary bind/push application call can therefore contribute **zero** initially,
+then multiple native executions as that secondary is executed. A reusable primary
+bind/push executes at recording and again on later submissions, without another
+application bind/push call. These elapsed values are **real, disjoint KK API scopes**;
+replay does not establish overlap among the ten native scopes. Do not suppress or
+deduplicate replay to manufacture application-call counts. Client probes must retain
+client-exclusive and client-inclusive attribution with a **separate uncovered-native
+category**, including replay outside the selected client scopes. Native costs may be
+inside some broader client envelopes, but cannot universally be assumed contained in
+client descriptor preparation. Never add overlapping layers or subtract independently
+windowed native totals to invent client exclusives.
+
+`check_descriptor_replay` appends one device after the original fixtures. It records
+one bind, one push and one template-push in a secondary, executes it twice into a
+one-time primary, then records the same three operations in a separate reusable
+primary and submits it three times. Actual cumulative native assertions, **each of
+`bind`, `push`, `push_template`**, are:
+
+| Stable snapshot boundary | Calls / timed calls | Bind sets | Push records / elements (each push kind) |
+| --- | ---: | ---: | ---: |
+| Secondary recorded | 0 | 0 | 0 / 0 |
+| Secondary executed once | 1 | 1 | 1 / 1 |
+| Secondary executed twice | 2 | 2 | 2 / 2 |
+| That one-time primary submitted | 2 | 2 | 2 / 2 |
+| Separate reusable primary recorded | 3 | 3 | 3 / 3 |
+| Reusable primary submission 1 | 3 | 3 | 3 / 3 |
+| Reusable primary submission 2 | 4 | 4 | 4 / 4 |
+| Reusable primary submission 3 | 5 | 5 | 5 / 5 |
+
+Thus two application calls of each kind yield five driver executions of each kind.
+All other work columns and failures for those operations are zero in this fixture;
+elapsed/max are valid and nondecreasing, not deterministic or CPU measurements.
+The runner requires ten distinct operation rows per phase, consistent device identity
+and snapshot serial, valid checked clocks, equal entered/completed capture brackets,
+no active/error/overflow state, exact work counts, and monotonic cumulative elapsed.
+Unrelated operations retain exact setup counts; no duplicate accounting model is used.
+
+Usage/lifetimes: secondary uses `SIMULTANEOUS_USE` for its two executions in one
+primary; that primary is `ONE_TIME_SUBMIT`; reusable primary has flags **0** and is
+never resubmitted while pending. All sets/layouts/templates/command pools remain alive
+until fence waits/queue idle. Every submit has a fence with a bounded wait. Each
+snapshot uses the **real native reporter** on an empty submit after idle and two seconds
+past the one-second report throttle. The sleep selects reporting, not completion;
+fences/idle establish completion. Only completed producer logs are parsed within
+explicit phase markers; no racing live stderr reads or test-forced counters/snapshots.
+
+The first attempt stalled on reusable submission 2: the historical mock called
+completion inline while `kk_queue.c:244–292` held the queue mutex, and the replay
+callback tried to lock it at `:197`. The parent watchdog SIGTERM'd that exact fixture
+PID; **that run failed**, not a test pass or evidence of a production runtime defect.
+With supervisor approval, the test-only mock now supports opt-in
+`KK_MOCK_DEFER_FEEDBACK`: commit copies callback/payload into a per-queue FIFO,
+returns, and queue signal drains exactly once before publishing fence completion.
+Queue release also drains a pending tail. Only the replay fixture opts in; historical
+synchronous behavior stays the default. No threads/detached lifetimes or general mock
+scheduler; this does **not** model concurrent Metal callbacks. The focused
+`kk-mock-feedback-test.c` tests no commit reentry, FIFO, copied payload/options lifetime,
+exactly-once signal/release drains and synchronous default. Against the old generated
+mock it fails immediately at `!committing` (expected SIGABRT, bounded ten-second run).
+Replay arms now have 90-second producer timeouts; helper mock regression has ten seconds.
+No production file, instrumentation, wire schema, shader or app behavior changed.
+
+Final runner passes: **185/185 historical baseline files unchanged** and **219/219
+prior diagnostic prefix files unchanged** by filename/bytes in both off/on arms.
+The new device adds **17 files only at the end**: **236/236 off/on files identical**,
+**45 `ok` labels** per arm (44 prior + replay). Flag-off still emits **no probe lines**;
+flag-on retains vertex diagnostics. Existing real-helper/API tests and Zink pass;
+Zink still produces **25** MSL files. The mock does not render or prove GPU correctness.
+
+Correction checks: final host runner, `./pp test --quick` (712 Python tests, 26 C
+groups), `./pp names`, `./pp secrets`, exact staged-path/whitespace review all pass.
+Logs under `$PLAYPORT_BUILD/agent-notes/kk-parity/`: `a0-replay-host-final.log`,
+`a0-replay-focused.log`, `a0-replay-old-mock-regression.log`,
+`a0-replay-{quick,names,secrets}.log`; failed/parent-interrupted attempt retained as
+`a0-replay-host-first.log` and `a0-replay-off-stalled.log`.
+Host runner also retains `descriptor-{off,on,helper}.log` and `mock-feedback.log`.
+No phone proof, calibration, perturbation control, rebuild or new IPA in this
+**tests/docs-only correction**; the historical IPA below retains its owner-edit caveat.
+
+## Historical built artifact (unchanged by replay correction)
+
+The original main-checkout `./pp build` exited 0; verified dev IPA:
 `$PLAYPORT_BUILD/out/20261023-093752-1a7935b2/Playport-26.5-1a7935b2.ipa`, SHA256
 `1a7935b20aa98b88e394087111eec4384bb6e47730756104d2b16b7f51d9fedf`.
 **89 checks passed, 0 failed.** No changed `app/artifacts.tsv` or generated Wine PE
@@ -147,7 +243,7 @@ Mesa payload is the final 0121 patch; no client/parser changes are included.
 
 ## Reproduction and remaining gates
 
-The final commands below exited **0**, using `PLAYPORT_BUILD=$PWD/.work` and
+The original 0121 commands below exited **0**, using `PLAYPORT_BUILD=$PWD/.work` and
 `TMPDIR=$PLAYPORT_BUILD/agent-notes/kk-parity/tmp`, foreground waits up to 1,800 s:
 
 ```sh

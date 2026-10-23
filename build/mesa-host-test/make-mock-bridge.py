@@ -9,7 +9,9 @@ return NULL and zero, so no device is ever found. This writes a copy of those
 files in which the driver gets a device (an Apple GPU family 10 with iOS 27
 limits), heaps and buffers backed by host memory (GPU address == CPU address),
 and dummy handles for everything else. The command stream is not executed:
-commits complete at once. Every MSL library the driver compiles is written to
+commits complete at once unless the replay fixture opts into deferred FIFO feedback
+(KK_MOCK_DEFER_FEEDBACK): callbacks drain before the next queue signal. No GPU
+commands execute in either mode. Every MSL library the driver compiles is written to
 $KK_MOCK_MSL_DIR (if set), and one the MSL backend could not translate (it
 prints "Unknown intrinsic NAME", or "ALU OP" for an ALU op, "Unknown ALU OP"
 from mesa 0042 on) is reported on stderr and counted; the process exits 3 at
@@ -39,6 +41,8 @@ COMMON = r'''
 #include <stdint.h>
 #include <unistd.h>
 
+struct kk_mock_feedback;
+
 /* Every handle is one of these, so release/retain and labels are harmless. */
 struct kk_mock_obj {
    uint32_t magic;
@@ -46,6 +50,7 @@ struct kk_mock_obj {
    uint64_t size;
    uint64_t value;       /* events */
    int kind;
+   struct kk_mock_feedback *feedback_head, *feedback_tail; /* command queues only */
    /* Libraries, their function descriptors and render pipeline descriptors
     * (the vertex function's): what the MSL writes, KK_MOCK_MSL_* */
    uint32_t msl_writes;
@@ -57,6 +62,7 @@ struct kk_mock_obj {
 #define KK_MOCK_MSL_LAYER 0x2u
 
 void *kk_mock_new(int kind, uint64_t size);
+void kk_mock_drain_feedback(void *queue);
 void kk_mock_record_msl(const char *src);
 void kk_mock_trace(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 int kk_mock_interrupt_build(void);
@@ -70,7 +76,33 @@ def body(name, text):
     DEFS[name] = text
 
 # mtl_bridge.c: the shared helpers live here
-EXTRA = {"mtl_device.c": '#include "kk_image_layout.h"\n',
+EXTRA = {"mtl_command_queue.c": r'''
+/* Test-only, externally synchronized queue. Defer completion until commit has
+ * returned and the driver's queue mutex is unlocked. A signal drains FIFO
+ * feedback before it becomes visible to a host fence wait. No worker threads,
+ * detached callbacks or copied pointers into temporary commit options. */
+struct kk_mock_feedback {
+   mtl_feedback_handler_callback callback;
+   struct mtl_feedback_data data;
+   struct kk_mock_feedback *next;
+};
+
+void
+kk_mock_drain_feedback(void *handle)
+{
+   struct kk_mock_obj *queue = handle;
+   if (!queue || queue->kind != 11)
+      return;
+   while (queue->feedback_head) {
+      struct kk_mock_feedback *job = queue->feedback_head;
+      queue->feedback_head = job->next;
+      if (!queue->feedback_head)
+         queue->feedback_tail = NULL;
+      job->callback(&job->data);
+      free(job);
+   }
+}
+''', "mtl_device.c": '#include "kk_image_layout.h"\n',
          "mtl_buffer.c": '#include "kk_image_layout.h"\n#include "mtl_format.h"\n',
          "mtl_bridge.c": r'''
 static int kk_mock_bad_msl;
@@ -181,7 +213,7 @@ kk_mock_record_msl(const char *src)
 '''}
 
 body("mtl_retain", "return handle;")
-body("mtl_release", "(void)handle;")
+body("mtl_release", "kk_mock_drain_feedback(handle);")
 body("mtl_device_create", "return kk_mock_new(1, 0);")
 body("mtl_device_get_name", 'snprintf(buffer, 256, "Mock Apple A19 Pro GPU");')
 body("mtl_device_get_architecture_name", 'snprintf(buffer, 256, "applegpu_g18p");')
@@ -356,7 +388,8 @@ body("mtl_new_shared_event", "return kk_mock_new(5, 0);")
 body("mtl_shared_event_get_signaled_value", "return ((struct kk_mock_obj *)event_handle)->value;")
 body("mtl_shared_event_set_signaled_value", "((struct kk_mock_obj *)event_handle)->value = value;")
 body("mtl_shared_event_wait_until_signaled_value", "return ((struct kk_mock_obj *)event_handle)->value >= value;")
-body("mtl_signal_event", "((struct kk_mock_obj *)event)->value = value;")
+body("mtl_new_command_queue", "return kk_mock_new(11, 0);")
+body("mtl_signal_event", "kk_mock_drain_feedback(queue); ((struct kk_mock_obj *)event)->value = value;")
 # Commit options remember one feedback handler; commit calls it at once, with
 # a GPU time of 2 ms for each command buffer, back to back.
 body("mtl_new_commit_options", "return kk_mock_new(6, 0);")
@@ -375,7 +408,21 @@ body("mtl_command_queue_commit", r'''
          .error = MTL_COMMAND_QUEUE_ERROR_NONE,
       };
       gpu_clock += 0.002 * count;
-      ((mtl_feedback_handler_callback)o->mem)(&fb);
+      if (getenv("KK_MOCK_DEFER_FEEDBACK")) {
+         struct kk_mock_obj *q = queue;
+         struct kk_mock_feedback *job = calloc(1, sizeof(*job));
+         if (!job)
+            abort();
+         job->callback = (mtl_feedback_handler_callback)o->mem;
+         job->data = fb;
+         if (q->feedback_tail)
+            q->feedback_tail->next = job;
+         else
+            q->feedback_head = job;
+         q->feedback_tail = job;
+      } else {
+         ((mtl_feedback_handler_callback)o->mem)(&fb);
+      }
    }''')
 body("ns_is_os_version_at_least", "return major < 27 || (major == 27 && minor == 0 && patch == 0);")
 body("mtl_drawable_get_texture", "return kk_mock_new(7, 0);")

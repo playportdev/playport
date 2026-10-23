@@ -101,17 +101,23 @@ The supervisor keeps this section.
   1. KK `MESA_KK_DEBUG=descriptor_stats` counters/elapsed timing and host coverage:
      **implemented** (`8b6a20e`), host checks passed; independent review ACCEPT
      (child `31c95ed3`, report left in the build area at
-     `.work/agent-notes/kk-parity/reports/a0-kk-probe-review.md`). Before DXVK, a bounded
-     documentation/replay-test correction closes its P2 finding: bind/push counts measure
-     driver executions including secondary/reusable-primary replay, not application-call
+     `.work/agent-notes/kk-parity/reports/a0-kk-probe-review.md`). The bounded
+     documentation/replay-test correction closes its P2 finding (host checks passed):
+     bind/push counts measure driver executions including secondary/reusable-primary
+     replay, not application-call
      counts. Preserve replay costs as potentially uncovered by client scopes; no client/native
-     count-parity or containment assumption. No blocking API-behavior defect established.
+     count-parity or containment assumption. Real snapshots assert 0/1/2/2 secondary
+     and 3/3/4/5 reusable-primary cumulative calls per bind/push/template-push. Test-only
+     opt-in deferred mock feedback avoids inline callback reentry; no production change.
+     No blocking API-behavior defect established.
      Mesa 0121; [host evidence](../evidence/2026-10-23-kk-descriptor-cost-probe-host.md).
      Dev IPA `1a7935b2…` verified 89/89, owner UI edit included/uncommitted;
-     185 established MSL files unchanged, 219 diagnostic off/on identical.
+     Original 185/219 MSL prefixes unchanged; replay adds 17 at end, 236 off/on identical.
      Per-device disjoint scopes use checked monotonic elapsed time, not CPU time.
      No phone calibration/smoke or gameplay; A0 justification remains insufficient.
-  2. DXVK scoped client accounting, preserve default/disabled behavior (host only).
+  2. **Next: DXVK only**, scoped client accounting, preserve default/disabled behavior
+     (host only); retain client-exclusive/inclusive attribution and separate uncovered
+     native replay rather than assume parity/containment or subtract cross-layer windows.
   3. vkd3d scoped client accounting, preserve optimized copy selection (host only).
   4. Parser/integration and independent validation of nesting/coverage/clock error handling.
   5. Coordinate owner-chosen save/room/activity, load/measurement window and worthwhile budget;

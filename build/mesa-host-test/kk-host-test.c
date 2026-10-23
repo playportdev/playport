@@ -1889,6 +1889,168 @@ check_descriptor_stats(VkPhysicalDevice pd)
    return 0;
 }
 
+/* A fence forces the mock's opt-in deferred feedback to drain before host
+ * observation and before any referenced resources can be destroyed. */
+static void
+descriptor_replay_submit(VkDevice d, VkQueue queue, const VkSubmitInfo *submit)
+{
+   DPROC(vkCreateFence); DPROC(vkDestroyFence); DPROC(vkWaitForFences);
+   DPROC(vkQueueSubmit);
+   VkFenceCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+   VkFence fence;
+   CHECK(vkCreateFence(d, &ci, NULL, &fence));
+   CHECK(vkQueueSubmit(queue, 1, submit, fence));
+   CHECK(vkWaitForFences(d, 1, &fence, VK_TRUE, 30000000000ull));
+   vkDestroyFence(d, fence, NULL);
+}
+
+/* Capture real native telemetry only after all host/mock work is idle. An empty
+ * submit invokes the normal reporter; waiting past its one-second throttle
+ * avoids modifying production state or parsing a live stderr stream. */
+static void
+descriptor_replay_snapshot(VkDevice d, VkQueue queue, const char *phase)
+{
+   DPROC(vkQueueWaitIdle);
+   CHECK(vkQueueWaitIdle(queue));
+   sleep(2);
+   fprintf(stderr, "descriptor-replay phase=%s begin\n", phase);
+   VkSubmitInfo empty = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO};
+   descriptor_replay_submit(d, queue, &empty);
+   CHECK(vkQueueWaitIdle(queue));
+   fprintf(stderr, "descriptor-replay phase=%s end\n", phase);
+}
+
+static int
+check_descriptor_replay(VkPhysicalDevice pd)
+{
+   if (!getenv("KK_HOST_DESCRIPTOR_TEST"))
+      return 0;
+   fprintf(stderr, "descriptor-replay begin\n");
+   if (setenv("KK_MOCK_DEFER_FEEDBACK", "1", 1))
+      return 1;
+   DPROC(vkCreateDevice); DPROC(vkDestroyDevice); DPROC(vkGetDeviceQueue);
+   DPROC(vkCreateDescriptorSetLayout); DPROC(vkDestroyDescriptorSetLayout);
+   DPROC(vkCreateDescriptorPool); DPROC(vkDestroyDescriptorPool);
+   DPROC(vkAllocateDescriptorSets); DPROC(vkUpdateDescriptorSets);
+   DPROC(vkCreatePipelineLayout); DPROC(vkDestroyPipelineLayout);
+   DPROC(vkCreateDescriptorUpdateTemplate); DPROC(vkDestroyDescriptorUpdateTemplate);
+   DPROC(vkCreateCommandPool); DPROC(vkDestroyCommandPool); DPROC(vkAllocateCommandBuffers);
+   DPROC(vkBeginCommandBuffer); DPROC(vkEndCommandBuffer); DPROC(vkCmdExecuteCommands);
+   DPROC(vkCmdBindDescriptorSets); DPROC(vkCmdPushDescriptorSetKHR);
+   DPROC(vkCmdPushDescriptorSetWithTemplateKHR); DPROC(vkQueueWaitIdle);
+   float priority = 1;
+   VkDeviceQueueCreateInfo qci = {.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+      .queueCount = 1, .pQueuePriorities = &priority};
+   const char *exts[] = {"VK_KHR_push_descriptor", "VK_EXT_robustness2"};
+   VkPhysicalDeviceRobustness2FeaturesEXT robustness = {
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT,
+      .nullDescriptor = VK_TRUE};
+   VkDeviceCreateInfo dci = {.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+      .pNext = &robustness, .queueCreateInfoCount = 1, .pQueueCreateInfos = &qci,
+      .enabledExtensionCount = 2, .ppEnabledExtensionNames = exts};
+   VkDevice d;
+   CHECK(vkCreateDevice(pd, &dci, NULL, &d));
+   VkQueue queue;
+   vkGetDeviceQueue(d, 0, 0, &queue);
+   VkDescriptorSetLayoutBinding binding = {.binding = 0,
+      .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .descriptorCount = 1,
+      .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT};
+   VkDescriptorSetLayoutCreateInfo lci = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+      .bindingCount = 1, .pBindings = &binding};
+   VkDescriptorSetLayout layout, push_layout;
+   CHECK(vkCreateDescriptorSetLayout(d, &lci, NULL, &layout));
+   lci.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
+   CHECK(vkCreateDescriptorSetLayout(d, &lci, NULL, &push_layout));
+   VkPipelineLayoutCreateInfo plci = {.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+      .setLayoutCount = 1, .pSetLayouts = &layout};
+   VkPipelineLayout pl, push_pl;
+   CHECK(vkCreatePipelineLayout(d, &plci, NULL, &pl));
+   plci.pSetLayouts = &push_layout;
+   CHECK(vkCreatePipelineLayout(d, &plci, NULL, &push_pl));
+   VkDescriptorPoolSize size = {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1};
+   VkDescriptorPoolCreateInfo pci = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+      .maxSets = 1, .poolSizeCount = 1, .pPoolSizes = &size};
+   VkDescriptorPool pool;
+   CHECK(vkCreateDescriptorPool(d, &pci, NULL, &pool));
+   VkDescriptorSetAllocateInfo ai = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+      .descriptorPool = pool, .descriptorSetCount = 1, .pSetLayouts = &layout};
+   VkDescriptorSet set;
+   CHECK(vkAllocateDescriptorSets(d, &ai, &set));
+   VkDescriptorBufferInfo buffer = {.range = VK_WHOLE_SIZE}; /* enabled nullDescriptor */
+   VkWriteDescriptorSet write = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+      .dstSet = set, .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+      .descriptorCount = 1, .pBufferInfo = &buffer};
+   vkUpdateDescriptorSets(d, 1, &write, 0, NULL);
+   write.dstSet = VK_NULL_HANDLE;
+   VkDescriptorUpdateTemplateEntry entry = {.descriptorCount = 1,
+      .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .stride = sizeof(buffer)};
+   VkDescriptorUpdateTemplateCreateInfo ti = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_UPDATE_TEMPLATE_CREATE_INFO,
+      .descriptorUpdateEntryCount = 1, .pDescriptorUpdateEntries = &entry,
+      .templateType = VK_DESCRIPTOR_UPDATE_TEMPLATE_TYPE_PUSH_DESCRIPTORS_KHR,
+      .pipelineBindPoint = VK_PIPELINE_BIND_POINT_COMPUTE, .pipelineLayout = push_pl};
+   VkDescriptorUpdateTemplate t;
+   CHECK(vkCreateDescriptorUpdateTemplate(d, &ti, NULL, &t));
+   VkCommandPoolCreateInfo cpci = {.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+   VkCommandPool cp;
+   CHECK(vkCreateCommandPool(d, &cpci, NULL, &cp));
+   VkCommandBufferAllocateInfo cbai = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+      .commandPool = cp, .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY, .commandBufferCount = 2};
+   VkCommandBuffer primary[2], secondary;
+   CHECK(vkAllocateCommandBuffers(d, &cbai, primary));
+   cbai.level = VK_COMMAND_BUFFER_LEVEL_SECONDARY;
+   cbai.commandBufferCount = 1;
+   CHECK(vkAllocateCommandBuffers(d, &cbai, &secondary));
+   VkCommandBufferInheritanceInfo inheritance = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_INFO};
+   VkCommandBufferBeginInfo bi = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+      .flags = VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT, .pInheritanceInfo = &inheritance};
+   CHECK(vkBeginCommandBuffer(secondary, &bi));
+   vkCmdBindDescriptorSets(secondary, VK_PIPELINE_BIND_POINT_COMPUTE, pl, 0, 1, &set, 0, NULL);
+   vkCmdPushDescriptorSetKHR(secondary, VK_PIPELINE_BIND_POINT_COMPUTE, push_pl, 0, 1, &write);
+   vkCmdPushDescriptorSetWithTemplateKHR(secondary, t, push_pl, 0, &buffer);
+   CHECK(vkEndCommandBuffer(secondary));
+   descriptor_replay_snapshot(d, queue, "secondary-recorded");
+   bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+   bi.pInheritanceInfo = NULL;
+   CHECK(vkBeginCommandBuffer(primary[0], &bi));
+   vkCmdExecuteCommands(primary[0], 1, &secondary);
+   descriptor_replay_snapshot(d, queue, "secondary-executed-once");
+   vkCmdExecuteCommands(primary[0], 1, &secondary);
+   CHECK(vkEndCommandBuffer(primary[0]));
+   descriptor_replay_snapshot(d, queue, "secondary-executed-twice");
+   VkSubmitInfo submit = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+      .commandBufferCount = 1, .pCommandBuffers = &primary[0]};
+   descriptor_replay_submit(d, queue, &submit);
+   descriptor_replay_snapshot(d, queue, "secondary-primary-submitted");
+   /* No ONE_TIME_SUBMIT: valid to resubmit after each wait. Keep every set,
+    * layout, template and secondary alive until all submissions complete. */
+   bi.flags = 0;
+   CHECK(vkBeginCommandBuffer(primary[1], &bi));
+   vkCmdBindDescriptorSets(primary[1], VK_PIPELINE_BIND_POINT_COMPUTE, pl, 0, 1, &set, 0, NULL);
+   vkCmdPushDescriptorSetKHR(primary[1], VK_PIPELINE_BIND_POINT_COMPUTE, push_pl, 0, 1, &write);
+   vkCmdPushDescriptorSetWithTemplateKHR(primary[1], t, push_pl, 0, &buffer);
+   CHECK(vkEndCommandBuffer(primary[1]));
+   descriptor_replay_snapshot(d, queue, "reusable-recorded");
+   submit.pCommandBuffers = &primary[1];
+   const char *phases[] = {"reusable-submit-1", "reusable-submit-2", "reusable-submit-3"};
+   for (unsigned i = 0; i < 3; i++) {
+      descriptor_replay_submit(d, queue, &submit);
+      descriptor_replay_snapshot(d, queue, phases[i]);
+   }
+   CHECK(vkQueueWaitIdle(queue));
+   vkDestroyCommandPool(d, cp, NULL);
+   vkDestroyDescriptorUpdateTemplate(d, t, NULL);
+   vkDestroyPipelineLayout(d, pl, NULL);
+   vkDestroyPipelineLayout(d, push_pl, NULL);
+   vkDestroyDescriptorPool(d, pool, NULL);
+   vkDestroyDescriptorSetLayout(d, layout, NULL);
+   vkDestroyDescriptorSetLayout(d, push_layout, NULL);
+   vkDestroyDevice(d, NULL);
+   unsetenv("KK_MOCK_DEFER_FEEDBACK");
+   fprintf(stderr, "descriptor-replay end\n");
+   puts("ok descriptor replay: deferred secondary bind/push/template-push, repeated execution and reusable-primary resubmission");
+   return 0;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -3077,6 +3239,8 @@ main(int argc, char **argv)
    if (check_module_identifier(pd, queue, pool, buf))
       return 1;
    if (check_descriptor_stats(pd))
+      return 1;
+   if (check_descriptor_replay(pd))
       return 1;
    return 0;
 }
