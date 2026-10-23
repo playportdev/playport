@@ -11,7 +11,9 @@ performed while writing it; execution not started. **Branch:** main checkout, br
 `dev/kk-proton-parity` at HEAD `1948309` (this plan is documentation only; the branch's
 own work is PLA-431 and is unchanged by it).
 
-**Pins read** (`pins.lock`, unchanged): `mesa` b39d173 + `patches/mesa` 0001–0120;
+**Pins read** (`pins.lock`, unchanged): `mesa` b39d173 + `patches/mesa` 0001–0120 read for
+this plan (`patches/mesa` 0121, another plan's in-flight diagnostics patch, was not read; take
+the next free number from `patches/mesa/series` when a change lands);
 `dxvk` e5ffd0f + `patches/dxvk` 0001–0005; `vkd3d-proton` 31d1f89 + `patches/vkd3d-proton`
 0001–0004; `dxmt` 68af85e + `patches/dxmt` 0002–0012 + `patches/dxmt-port` (frozen, decision
 0054). **Trees read:** `$PLAYPORT_BUILD/run/mesa/mesa/src/kosmickrisp`,
