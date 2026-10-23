@@ -240,10 +240,14 @@ The supervisor keeps this section.
      [Retry evidence](../evidence/2026-10-23-descriptor-probe-device-prep-retry.md); report
      `.work/agent-notes/kk-parity/reports/a0-device-prep-retry.md` in the build area.
      Original bad raw log remains immutable. No gameplay/performance/perturbation proof.
-  The bounded retry is stopped; no further phone play/fix authorization here.
+  **Running next: read-only source/binary/saved-artifact diagnosis** (PLA-431), before any
+  further patch/build or phone play. Identify the failing sink/format/write branch if provable;
+  otherwise propose the smallest reason-coded failure evidence, not a sink bypass. Report left
+  in the build area at `.work/agent-notes/kk-parity/reports/a0-native-emission-diagnosis.md`.
+  The bounded retry is stopped; no further phone play or implementation in that investigation.
   Human gameplay still waits for owner handoff.
   No save automation/new slot authorized. No sampler
-  redesign, CPU-clock bridge or descriptor implementation approved. Checkpoint `cdaff3c`;
+  redesign, CPU-clock bridge or descriptor implementation approved. Checkpoint `c7d458f`;
   no merge or push. A2–A4 remain **not started**, gated on evidence that descriptor cost matters.
 - **B1 phone (2026-10-23):** both flag-off routes and memory_priority DXVK/D3D12 reached
   first-frame+10. DXVK features 0 off / 1 on; priority counts 14/14 and 28/13.
