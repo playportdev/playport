@@ -118,7 +118,11 @@ The supervisor keeps this section.
      Parent reviewed correction `1846ca5` and independently reran the full host suite:
      exit 0, replay counts and 236 off/on MSL identity confirmed. Log left in the build
      area at `.work/agent-notes/kk-parity/supervisor-replay-host.log`.
-  2. **DXVK 0006 implemented, host checked; independent review pending.** Default-off
+  2. **DXVK 0006 implemented** (`cea547f`), host checked; independent review running
+     (child `6cbf8167`, report left in the build area at
+     `.work/agent-notes/kk-parity/reports/a0-dxvk-probe-review.md`), before vkd3d writer.
+     Parent helper rerun also running (log `supervisor-dxvk-helper.log` under those notes).
+     Default-off
      `PLAYPORT_DESCRIPTOR_STATS=1`, per-device checked elapsed scopes, same-thread fixed
      TLS nesting, client inclusive/exclusive and summed-thread outermost attribution;
      standalone pool work and specification-data exclusions separate. No cross-layer
@@ -137,7 +141,7 @@ The supervisor keeps this section.
   5. Coordinate owner-chosen save/room/activity, load/measurement window and worthwhile budget;
      device calibration, controls and bounded controller measurements after review.
   No phone runs until that coordination. No save automation/new slot authorized. No sampler
-  redesign, CPU-clock bridge or descriptor implementation approved. Checkpoint `1846ca5`;
+  redesign, CPU-clock bridge or descriptor implementation approved. Checkpoint `cea547f`;
   no merge or push. A2–A4 remain **not started**, gated on evidence that descriptor cost matters.
 - **B1 phone (2026-10-23):** both flag-off routes and memory_priority DXVK/D3D12 reached
   first-frame+10. DXVK features 0 off / 1 on; priority counts 14/14 and 28/13.
