@@ -151,7 +151,11 @@ The supervisor keeps this section.
      No DXVK Vulkan execution, phone calibration/smoke or gameplay. Denominator is
      client submission requests, not frames. Per-thread rows withdrawn by supervisor;
      aggregates are thread sums, not wall union/CPU time. A2 remains gated.
-  3. **vkd3d 0005 implemented, host checked; independent review pending.** Default-off
+  3. **vkd3d 0005 implemented** (`147ebbc`), host checked; independent review running
+     (child `d845db51`, report left in the build area at
+     `.work/agent-notes/kk-parity/reports/a0-vkd3d-probe-review.md`), before parser writer.
+     Parent helper rerun also running (log `supervisor-vkd3d-helper.log` under those notes).
+     Default-off
      scoped elapsed/thread-sum diagnostics preserve all eight Simple implementations
      and vtable selection; RTV/DSV/constants exclusions remain separate. Real-helper
      regressions, GCC/clang, ASan/UBSan and full ARM64EC/i386 builds pass. Actual
@@ -167,7 +171,7 @@ The supervisor keeps this section.
   5. Coordinate owner-chosen save/room/activity, load/measurement window and worthwhile budget;
      device calibration, controls and bounded controller measurements after review.
   No phone runs until that coordination. No save automation/new slot authorized. No sampler
-  redesign, CPU-clock bridge or descriptor implementation approved. Checkpoint `9edfd9b`;
+  redesign, CPU-clock bridge or descriptor implementation approved. Checkpoint `147ebbc`;
   no merge or push. A2–A4 remain **not started**, gated on evidence that descriptor cost matters.
 - **B1 phone (2026-10-23):** both flag-off routes and memory_priority DXVK/D3D12 reached
   first-frame+10. DXVK features 0 off / 1 on; priority counts 14/14 and 28/13.
