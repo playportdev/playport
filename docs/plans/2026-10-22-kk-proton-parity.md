@@ -168,20 +168,24 @@ The supervisor keeps this section.
      `.work/agent-notes/kk-parity/reports/a0-vkd3d-probe-host.md`.
      Accepted for parser/integration only; A2 and phone gates remain gated.
   4. **Offline parser/integration implemented** (`496547c`), host checked; independent review
-     running (child `349f2b57`, report left in the build area at
-     `.work/agent-notes/kk-parity/reports/a0-parser-review.md`). Parent focused rerun also
-     running (log `supervisor-parser.log` under those notes).
+     **BLOCK** (child `349f2b57`, report left in the build area at
+     `.work/agent-notes/kk-parity/reports/a0-parser-review.md`). Parent focused rerun passed
+     (log `supervisor-parser.log` under those notes), but omitted the review counterexamples.
+     **Next correction:** preserve per-row cumulative history across partial captures, reject
+     infeasible timing deltas, make orderly-final state terminal, and validate calibration
+     containment/flags. Add before/after regressions, then focused re-review. Device work blocked.
      `python3 tools/descriptorprof.py [--json] saved.log ...` enforces v1 integer schemas,
      complete 10/36/54-row identities, conservative quiescent/error-free boundaries and
      cumulative deltas; preserves brackets, raw calibration/coverage and rejected evidence.
-     Historical errors reject boundaries; reset/saturation cannot invent recovery epochs.
+     Intended contract: historical errors reject boundaries and reset/saturation cannot invent
+     recovery epochs; the review found gaps in history/interval/lifetime checks, not yet fixed.
      Prep exclusives partition Vulkan/non-Vulkan elapsed, standalone/excluded remain separate.
      No cross-layer join/sum/subtraction, CPU attribution or presented-frame normalization.
      18 focused tests, quick730 and read-only real-helper parsing pass (11 usable KK intervals,
      5 rejected helper windows; DXVK single capture and partial vkd3d output insufficient).
      [Host evidence](../evidence/2026-10-23-descriptor-prof-parser-host.md); report in the build
      area at `.work/agent-notes/kk-parity/reports/a0-descriptor-parser.md`.
-     **Next independent review**, before owner scene/load/window coordination or device work.
+     **Fix and independent re-review required**, before owner coordination or device work.
   5. Coordinate owner-chosen save/room/activity, load/measurement window and worthwhile budget;
      device calibration, controls and bounded controller measurements after review.
   No phone runs until that coordination. No save automation/new slot authorized. No sampler
