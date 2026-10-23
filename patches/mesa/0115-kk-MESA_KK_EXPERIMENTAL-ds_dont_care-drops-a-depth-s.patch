@@ -1,0 +1,344 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kamil=20Postro=C5=BCny?= <kamil@postrozny.pl>
+Date: Thu, 22 Oct 2026 21:23:04 +0200
+Subject: [PATCH] kk: MESA_KK_EXPERIMENTAL=ds_dont_care drops a depth store the
+ next pass clears
+
+KosmicKrisp sets each attachment's store action when a pass ends and
+ends its encoder then, so a depth or stencil aspect that the very next
+pass clears is still written to memory: in the King's Pass capture
+(docs/evidence/2026-10-08-vulkan-perf-kings-pass-capture.md) DXVK's
+full-resolution pass 20 stores 17.2 MB of D32FS8 a frame that DXMT's
+matching pass does not, because DXMT's encoder list makes a store
+DontCare when a later clear overwrites it (dxmt_context.cpp,
+checkEncoderRelation, "DontCare can be used because it's going to be
+cleared anyway").
+
+With MESA_KK_EXPERIMENTAL=ds_dont_care a pass that ends on its whole
+framebuffer, not suspended and resolving nothing, with a depth or
+stencil attachment, sets its colour stores and leaves its render
+encoder open, the depth and stencil stores unset. The next command that
+encodes ends it (cs_end, cs_get_compute, and so a copy, dispatch, query
+or event write, or the command buffer's end), with the stores the pass
+asked for, except when that command is the next pass's begin and the
+pass clears or discards the same subresource (image, level, layers) of
+that aspect on its whole area, from the origin to at least the level's
+size and on every layer, without resuming: then that aspect's store is
+DontCare. Vulkan gives a cleared or discarded attachment no earlier
+contents, and no command between the two passes encoded anything that
+could read them; barriers between the two encode nothing and are
+ordered by the encoder's end barrier as before. Within one command
+buffer only, so no other submission sees the dropped store. Whether
+pass 20 is such a pair is what MESA_KK_DEBUG=passes tells
+(dead-ds-direct against dead-ds-later): in the capture a compute
+encoder, a small upload, sits between it and the next depth clear, and
+then this rule keeps the store.
+
+With MESA_KK_DEBUG=passes, [kk-passes] counts the encoders left open
+(deferred-ends) and the stores made DontCare (ds-dont-care). Without
+the flag every pass ends at once, as before.
+
+Linear: PLA-72
+Class: feature
+Evidence: docs/evidence/2026-10-22-vulkan-perf-resume.md
+Offered-upstream: no
+---
+ src/kosmickrisp/vulkan/kk_cmd_buffer.c | 134 ++++++++++++++++++++++++-
+ src/kosmickrisp/vulkan/kk_cmd_buffer.h |  19 ++++
+ src/kosmickrisp/vulkan/kk_cmd_draw.c   |  15 ++-
+ src/kosmickrisp/vulkan/kk_debug.c      |   3 +
+ src/kosmickrisp/vulkan/kk_debug.h      |   8 ++
+ 5 files changed, 174 insertions(+), 5 deletions(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.c b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+index f32988b..f1d6577 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_buffer.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+@@ -366,6 +366,8 @@ cs_get_render(struct kk_cmd_buffer *cmd)
+ mtl_compute_encoder *
+ cs_get_compute(struct kk_cmd_buffer *cmd)
+ {
++   kk_end_deferred_render(cmd, NULL);
++
+    /* If we are inside render, we need to force a restart later */
+    if (cmd->metal.render) {
+       KK_PASS_STAT(COMPUTE_SPLITS);
+@@ -475,6 +477,8 @@ cs_end(struct kk_cmd_buffer *cmd)
+ {
+    assert(cmd);
+ 
++   kk_end_deferred_render(cmd, NULL);
++
+    /* Render first as it may open a compute encoder for post render writes. */
+    if (cmd->metal.render) {
+       if (KK_DEBUG(PASSES) && !cmd->pass_debug.encoder_draws)
+@@ -1094,8 +1098,11 @@ kk_get_attachment_store_op(const struct kk_attachment *attachment,
+    return store_action;
+ }
+ 
+-void
+-kk_apply_attachment_store_ops(struct kk_cmd_buffer *cmd, bool force_store)
++/* colour_only: Playport (PLA-72), leave the depth and stencil stores unset
++ * (kk_defer_render_end) */
++static void
++kk_apply_store_ops(struct kk_cmd_buffer *cmd, bool force_store,
++                   bool colour_only)
+ {
+    if (!cmd->metal.render)
+       return;
+@@ -1118,6 +1125,8 @@ kk_apply_attachment_store_ops(struct kk_cmd_buffer *cmd, bool force_store)
+                                            logical_index);
+       }
+    }
++   if (colour_only)
++      return;
+    enum mtl_store_action depth_store_action = MTL_STORE_ACTION_UNKNOWN;
+    enum mtl_store_action stencil_store_action = MTL_STORE_ACTION_UNKNOWN;
+    if (render->depth_att.iview) {
+@@ -1157,6 +1166,127 @@ kk_apply_attachment_store_ops(struct kk_cmd_buffer *cmd, bool force_store)
+    }
+ }
+ 
++void
++kk_apply_attachment_store_ops(struct kk_cmd_buffer *cmd, bool force_store)
++{
++   kk_apply_store_ops(cmd, force_store, false);
++}
++
++bool
++kk_defer_render_end(struct kk_cmd_buffer *cmd)
++{
++   const struct kk_rendering_state *render = &cmd->state.gfx.render;
++
++   /* Only a pass whose encoder is open, on its whole framebuffer, not
++    * suspended, that resolves nothing (so the depth and stencil stores are
++    * plain Store or DontCare, and no resolve pass follows) */
++   if (!cmd->metal.render || render->force_attachment_store ||
++       !render->rendering_to_whole_framebuffer ||
++       (render->flags & (VK_RENDERING_SUSPENDING_BIT |
++                         VK_RENDERING_CUSTOM_RESOLVE_BIT_EXT)) ||
++       (!render->depth_att.iview && !render->stencil_att.iview))
++      return false;
++   for (uint32_t i = 0; i < render->color_att_count; i++) {
++      if (render->color_att[i].iview &&
++          render->color_att[i].resolve_mode != VK_RESOLVE_MODE_NONE)
++         return false;
++   }
++   enum mtl_store_action store[2] = {MTL_STORE_ACTION_STORE,
++                                     MTL_STORE_ACTION_STORE};
++   for (uint32_t i = 0; i < 2; i++) {
++      const struct kk_attachment *att =
++         i ? &render->stencil_att : &render->depth_att;
++      if (!att->iview)
++         continue;
++      if (att->resolve_mode != VK_RESOLVE_MODE_NONE)
++         return false;
++      store[i] = kk_get_attachment_store_op(
++         att, false, true,
++         i ? VK_IMAGE_ASPECT_STENCIL_BIT : VK_IMAGE_ASPECT_DEPTH_BIT);
++      if (store[i] != MTL_STORE_ACTION_STORE &&
++          store[i] != MTL_STORE_ACTION_DONT_CARE)
++         return false;
++   }
++
++   kk_apply_store_ops(cmd, false, true);
++   for (uint32_t i = 0; i < 2; i++) {
++      const struct kk_attachment *att =
++         i ? &render->stencil_att : &render->depth_att;
++      cmd->ended_ds[i].image = att->iview ? att->iview->vk.image : NULL;
++      if (!att->iview)
++         continue;
++      cmd->ended_ds[i].level = att->iview->vk.base_mip_level;
++      cmd->ended_ds[i].layer = att->iview->vk.base_array_layer;
++      cmd->ended_ds[i].layers = att->iview->vk.layer_count;
++      cmd->ended_ds[i].store = store[i];
++   }
++   KK_PASS_STAT(DEFERRED_ENDS);
++   cmd->metal.ended_render = cmd->metal.render;
++   cmd->metal.render = NULL;
++   return true;
++}
++
++/* Whether next, a pass about to begin, writes all of aspect i (0 depth, 1
++ * stencil) of the ended pass's attachment before reading any: it clears
++ * or discards it on its whole area, every layer, and does not resume. */
++static bool
++kk_next_pass_overwrites(const struct kk_cmd_buffer *cmd, uint32_t i,
++                        const struct kk_rendering_state *next)
++{
++   const struct kk_attachment *att =
++      i ? &next->stencil_att : &next->depth_att;
++   if (!att->iview || att->iview->vk.image != cmd->ended_ds[i].image ||
++       att->iview->vk.base_mip_level != cmd->ended_ds[i].level ||
++       att->iview->vk.base_array_layer != cmd->ended_ds[i].layer ||
++       att->iview->vk.layer_count != cmd->ended_ds[i].layers ||
++       (att->load_op != VK_ATTACHMENT_LOAD_OP_CLEAR &&
++        att->load_op != VK_ATTACHMENT_LOAD_OP_DONT_CARE) ||
++       !next->rendering_to_whole_framebuffer ||
++       (next->flags & VK_RENDERING_RESUMING_BIT))
++      return false;
++
++   const struct vk_image *image = att->iview->vk.image;
++   const uint32_t level = cmd->ended_ds[i].level;
++   const uint32_t layers = cmd->ended_ds[i].layers;
++   return next->area.offset.x == 0 && next->area.offset.y == 0 &&
++          next->area.extent.width >= u_minify(image->extent.width, level) &&
++          next->area.extent.height >= u_minify(image->extent.height, level) &&
++          (next->view_mask ? next->view_mask == BITFIELD_MASK(layers)
++                           : next->layer_count >= layers);
++}
++
++void
++kk_end_deferred_render(struct kk_cmd_buffer *cmd,
++                       const struct kk_rendering_state *next)
++{
++   mtl_render_encoder *encoder = cmd->metal.ended_render;
++   if (!encoder)
++      return;
++   cmd->metal.ended_render = NULL;
++
++   for (uint32_t i = 0; i < 2; i++) {
++      if (!cmd->ended_ds[i].image)
++         continue;
++      enum mtl_store_action store = cmd->ended_ds[i].store;
++      if (store == MTL_STORE_ACTION_STORE && next &&
++          kk_next_pass_overwrites(cmd, i, next)) {
++         store = MTL_STORE_ACTION_DONT_CARE;
++         KK_PASS_STAT(DS_DONT_CARE);
++      }
++      if (i)
++         mtl_render_set_stencil_store_action(encoder, store);
++      else
++         mtl_render_set_depth_store_action(encoder, store);
++   }
++
++   /* As cs_end ends a render encoder */
++   if (KK_DEBUG(PASSES) && !cmd->pass_debug.encoder_draws)
++      KK_PASS_STAT(EMPTY_RENDER);
++   end_encoder(cmd, encoder, true);
++   util_dynarray_clear(&cmd->ts_stage_map);
++   flush_post_render_writes(cmd);
++}
++
+ bool
+ kk_attachment_do_renderpass_resolve(const struct kk_attachment *attachment,
+                                     bool rendering_to_whole_framebuffer,
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.h b/src/kosmickrisp/vulkan/kk_cmd_buffer.h
+index 6aeefad..6f952ce 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_buffer.h
++++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.h
+@@ -319,7 +319,18 @@ struct kk_cmd_buffer {
+       mtl_command_buffer *cmd_buf;
+       mtl_render_encoder *render;
+       mtl_compute_encoder *compute;
++      /* Playport (PLA-72), MESA_KK_EXPERIMENTAL=ds_dont_care: the render
++       * encoder of a pass that ended, still open until the next command that
++       * encodes, with its depth and stencil stores unset (ended_ds) */
++      mtl_render_encoder *ended_render;
+    } metal;
++   /* The depth (0) and stencil (1) attachments of metal.ended_render and
++    * the store each would have */
++   struct {
++      const struct vk_image *image; /* NULL: none */
++      uint32_t level, layer, layers;
++      enum mtl_store_action store;
++   } ended_ds[2];
+    /* Pending timestamp resolves (struct kk_ts_resolve), flushed at cs_end. */
+    struct util_dynarray ts_resolves;
+    /* Playport: the fence those resolves update when folded into the command
+@@ -456,6 +467,14 @@ void kk_apply_attachment_store_ops(struct kk_cmd_buffer *cmd, bool force_store);
+  * state is cleared */
+ void kk_pass_debug_begin_rendering(struct kk_cmd_buffer *cmd);
+ 
++/* Playport (PLA-72), MESA_KK_EXPERIMENTAL=ds_dont_care: at a pass's end,
++ * leave its render encoder open (true) or not; and end that encoder, with
++ * DontCare for a depth or stencil aspect the next pass (NULL: none) clears
++ * or discards whole */
++bool kk_defer_render_end(struct kk_cmd_buffer *cmd);
++void kk_end_deferred_render(struct kk_cmd_buffer *cmd,
++                            const struct kk_rendering_state *next);
++
+ /* Playport (PLA-72), MESA_KK_EXPERIMENTAL=narrow_barriers: a dependency
+  * recorded by a pipeline barrier or an event wait */
+ void kk_note_vertex_dependency(struct kk_cmd_buffer *cmd,
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_draw.c b/src/kosmickrisp/vulkan/kk_cmd_draw.c
+index 3bc476d..ae437a1 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_draw.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_draw.c
+@@ -384,6 +384,9 @@ kk_CmdBeginRendering(VkCommandBuffer commandBuffer,
+ 
+    if (KK_DEBUG(PASSES))
+       kk_pass_debug_begin_rendering(cmd);
++   /* Playport (PLA-72): the pass before may have left its encoder open for
++    * this one's depth and stencil load actions (ds_dont_care) */
++   kk_end_deferred_render(cmd, render);
+ 
+    kk_set_color_attachments(pass_descriptor, render, dyn, force_attachment_load,
+                             is_whole_framebuffer);
+@@ -651,10 +654,16 @@ kk_CmdEndRendering2KHR(VkCommandBuffer commandBuffer,
+    if (KK_DEBUG(PASSES))
+       kk_pass_debug_end_rendering(cmd);
+ 
+-   kk_apply_attachment_store_ops(cmd, false);
++   /* Playport (PLA-72), MESA_KK_EXPERIMENTAL=ds_dont_care: a pass that
++    * stores depth or stencil leaves its encoder open, those stores unset,
++    * until the next command that encodes (kk_end_deferred_render) */
++   if (!(KK_EXPERIMENTAL(DS_DONT_CARE) && !need_meta_resolve &&
++         kk_defer_render_end(cmd))) {
++      kk_apply_attachment_store_ops(cmd, false);
+ 
+-   /* Clean up previous encoder */
+-   cs_end(cmd);
++      /* Clean up previous encoder */
++      cs_end(cmd);
++   }
+    mtl_release(cmd->state.gfx.render_pass_descriptor);
+    cmd->state.gfx.render_pass_descriptor = NULL;
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_debug.c b/src/kosmickrisp/vulkan/kk_debug.c
+index 30bd8b1..18cfb9c 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.c
++++ b/src/kosmickrisp/vulkan/kk_debug.c
+@@ -55,6 +55,7 @@ const struct debug_named_value experimental_flags[] = {
+    {"ubo_unbounded", KK_EXPERIMENTAL_UBO_UNBOUNDED},
+    {"const_offset_loads", KK_EXPERIMENTAL_CONST_OFFSET_LOADS},
+    {"narrow_barriers", KK_EXPERIMENTAL_NARROW_BARRIERS},
++   {"ds_dont_care", KK_EXPERIMENTAL_DS_DONT_CARE},
+    {NULL, 0},
+ };
+ 
+@@ -115,6 +116,8 @@ static const char *const kk_pass_stat_names[KK_PASS_STAT_COUNT] = {
+    [KK_PASS_STAT_DEAD_DS_LATER] = "dead-ds-later",
+    [KK_PASS_STAT_NARROW_END_BARRIERS] = "narrow-ends",
+    [KK_PASS_STAT_VERTEX_WAITS] = "vertex-waits",
++   [KK_PASS_STAT_DEFERRED_ENDS] = "deferred-ends",
++   [KK_PASS_STAT_DS_DONT_CARE] = "ds-dont-care",
+ };
+ 
+ static struct {
+diff --git a/src/kosmickrisp/vulkan/kk_debug.h b/src/kosmickrisp/vulkan/kk_debug.h
+index 617d301..f8ca508 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.h
++++ b/src/kosmickrisp/vulkan/kk_debug.h
+@@ -107,6 +107,10 @@ enum kk_pass_stat {
+     * before them in it */
+    KK_PASS_STAT_NARROW_END_BARRIERS,
+    KK_PASS_STAT_VERTEX_WAITS,
++   /* MESA_KK_EXPERIMENTAL=ds_dont_care: render encoders whose end waited
++    * for the next pass, and depth or stencil stores that became DontCare */
++   KK_PASS_STAT_DEFERRED_ENDS,
++   KK_PASS_STAT_DS_DONT_CARE,
+    KK_PASS_STAT_COUNT,
+ };
+ 
+@@ -198,6 +202,10 @@ enum kk_experimental {
+     * before rasterization makes the next render encoder wait for it
+     * (kk_cmd_buffer.c end_encoder, kk_note_vertex_dependency) */
+    KK_EXPERIMENTAL_NARROW_BARRIERS = 1ull << 13,
++   /* Playport (PLA-72): a pass's depth or stencil store is DontCare when the
++    * command buffer's next pass, with no other encoder before it, clears or
++    * discards all of that aspect (kk_defer_render_end) */
++   KK_EXPERIMENTAL_DS_DONT_CARE = 1ull << 14,
+ };
+ 
+ extern enum kk_experimental kk_mesa_experimental_flags;

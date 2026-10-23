@@ -82,3 +82,12 @@
 0106-kk-MESA_KK_EXPERIMENTAL-msl40-compiles-MSL-as-4.0-on.patch
 0107-kk-MSL-4.0-by-default-on-iOS-27-MESA_KK_EXPERIMENTAL.patch
 0108-kk-MESA_KK_EXPERIMENTAL-gpl-libraries-name-a-queried.patch
+0109-kk-MESA_KK_EXPERIMENTAL-no_fp_preserve-hides-NaN-and.patch
+0110-kk-MESA_KK_EXPERIMENTAL-fp_precise_only-keeps-NaN-ca.patch
+0111-kk-MESA_KK_EXPERIMENTAL-root_table_loads-loads-the-r.patch
+0112-kk-MESA_KK_EXPERIMENTAL-ubo_unbounded-and-const_offs.patch
+0113-kk-MESA_KK_DEBUG-passes-counts-encoders-barriers-and.patch
+0114-kk-MESA_KK_EXPERIMENTAL-narrow_barriers-lets-a-pass-.patch
+0115-kk-MESA_KK_EXPERIMENTAL-ds_dont_care-drops-a-depth-s.patch
+0116-kk-MESA_KK_DEBUG-vertex_stats-counts-draws-vertices-.patch
+0117-kk-MESA_KK_EXPERIMENTAL-ubo_vec4_bounds-checks-a-rob.patch

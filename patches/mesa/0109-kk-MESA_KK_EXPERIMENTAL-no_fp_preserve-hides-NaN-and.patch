@@ -1,0 +1,108 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kamil=20Postro=C5=BCny?= <kamil@postrozny.pl>
+Date: Thu, 22 Oct 2026 21:12:24 +0200
+Subject: [PATCH] kk: MESA_KK_EXPERIMENTAL=no_fp_preserve hides NaN and Inf
+ preservation
+
+KosmicKrisp reports shaderSignedZeroInfNanPreserveFloat16/32 and
+shaderFloatControls2. DXVK's dxbc-spirv starts every D3D11 shader with
+NaN, Inf and signed zero preserved (fxc's refactoringAllowed only drops
+the signed zero) and, where the device reports the property, says so:
+on KosmicKrisp, which reports no independent denorm mode and so gets
+dxbc-spirv's float controls 1 path, with SignedZeroInfNanPreserve as
+the execution mode; with float controls 2 it would be FPFastMathDefault
+without NotNaN and NotInf. Every float operation then reaches
+nir_to_msl preserving NaN and Inf: each is wrapped in its own math
+mode block, relaxed (safe if NoContraction, as every operation of a
+shader without refactoringAllowed is, and all of Hollow Knight's are),
+each multiplication becomes "!&buf0.contents[0] ? 1 : a * b"
+(workaround 14) and abs, fma, min, max, rsqrt, sqrt and the like call
+Metal's precise:: functions. DXMT's airconv compiles the same shaders
+without NaN or Inf care and with Metal's fast functions.
+
+With MESA_KK_EXPERIMENTAL=no_fp_preserve the device reports neither
+shaderSignedZeroInfNanPreserveFloat16/32 nor VK_KHR_shader_float_controls2
+and its feature. DXVK then emits no SignedZeroInfNanPreserve (nor
+FPFastMathDefault); its NoContraction decorations, so the safe blocks,
+stay. vkd3d-proton reads the same properties. Off by default: Vulkan
+1.4 requires shaderFloatControls2, and a shader that relies on NaN or
+Inf may draw differently, as with DXMT.
+
+The MSL made from a given SPIR-V does not change; without the switch
+nothing changes.
+
+Linear: PLA-72
+Class: diagnostics
+Evidence: docs/plans/2026-10-06-vulkan-performance.md (Review 2026-10-21, lead 1)
+Offered-upstream: no
+---
+ src/kosmickrisp/vulkan/kk_debug.c           |  1 +
+ src/kosmickrisp/vulkan/kk_debug.h           |  7 +++++++
+ src/kosmickrisp/vulkan/kk_physical_device.c | 10 ++++++----
+ 3 files changed, 14 insertions(+), 4 deletions(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_debug.c b/src/kosmickrisp/vulkan/kk_debug.c
+index fb09572..9dc1746 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.c
++++ b/src/kosmickrisp/vulkan/kk_debug.c
+@@ -46,6 +46,7 @@ const struct debug_named_value experimental_flags[] = {
+    {"library_size_opt", KK_EXPERIMENTAL_LIBRARY_SIZE_OPT},
+    {"gpl", KK_EXPERIMENTAL_GPL},
+    {"msl41", KK_EXPERIMENTAL_MSL41},
++   {"no_fp_preserve", KK_EXPERIMENTAL_NO_FP_PRESERVE},
+    {NULL, 0},
+ };
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_debug.h b/src/kosmickrisp/vulkan/kk_debug.h
+index 65f2659..426fe3c 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.h
++++ b/src/kosmickrisp/vulkan/kk_debug.h
+@@ -110,6 +110,13 @@ enum kk_experimental {
+     * and advertise shaderSharedFloat32AtomicAdd, which needs it; by default
+     * MSL is 4.0, which builds libraries 2-2.6x faster on the phone */
+    KK_EXPERIMENTAL_MSL41 = 1ull << 7,
++   /* Playport (PLA-72): report neither shaderFloatControls2 (nor
++    * VK_KHR_shader_float_controls2) nor shaderSignedZeroInfNanPreserve for
++    * 16- and 32-bit floats, so that DXVK asks for no NaN, Inf or signed zero
++    * preservation (no SignedZeroInfNanPreserve, no FPFastMathDefault): no
++    * workaround 14 guards, no precise:: functions. Below Vulkan 1.4's
++    * required features. */
++   KK_EXPERIMENTAL_NO_FP_PRESERVE = 1ull << 8,
+ };
+ 
+ extern enum kk_experimental kk_mesa_experimental_flags;
+diff --git a/src/kosmickrisp/vulkan/kk_physical_device.c b/src/kosmickrisp/vulkan/kk_physical_device.c
+index becbbf8..a307f13 100644
+--- a/src/kosmickrisp/vulkan/kk_physical_device.c
++++ b/src/kosmickrisp/vulkan/kk_physical_device.c
+@@ -162,7 +162,8 @@ kk_get_device_extensions(const struct kk_instance *instance,
+        * with MESA_KK_EXPERIMENTAL=gpl (PLA-424) */
+       .KHR_pipeline_library = KK_EXPERIMENTAL(GPL),
+       .KHR_shader_expect_assume = true,
+-      .KHR_shader_float_controls2 = true,
++      /* Playport (PLA-72): not with MESA_KK_EXPERIMENTAL=no_fp_preserve */
++      .KHR_shader_float_controls2 = !KK_EXPERIMENTAL(NO_FP_PRESERVE),
+       .KHR_shader_subgroup_rotate = true,
+       .KHR_vertex_attribute_divisor = true,
+       .EXT_graphics_pipeline_library = KK_EXPERIMENTAL(GPL),
+@@ -392,7 +393,7 @@ kk_get_device_features(
+       .maintenance6 = true,
+       .pipelineRobustness = true,
+       .pushDescriptor = true,
+-      .shaderFloatControls2 = true,
++      .shaderFloatControls2 = !KK_EXPERIMENTAL(NO_FP_PRESERVE),
+       .shaderSubgroupRotate = true,
+       .shaderSubgroupRotateClustered = true,
+       .vertexAttributeInstanceRateDivisor = true,
+@@ -776,8 +777,9 @@ kk_get_device_properties(
+       .conformanceVersion = (VkConformanceVersion){1, 4, 6, 2},
+       .denormBehaviorIndependence = VK_SHADER_FLOAT_CONTROLS_INDEPENDENCE_NONE,
+       .roundingModeIndependence = VK_SHADER_FLOAT_CONTROLS_INDEPENDENCE_NONE,
+-      .shaderSignedZeroInfNanPreserveFloat16 = true,
+-      .shaderSignedZeroInfNanPreserveFloat32 = true,
++      /* Playport (PLA-72): neither with MESA_KK_EXPERIMENTAL=no_fp_preserve */
++      .shaderSignedZeroInfNanPreserveFloat16 = !KK_EXPERIMENTAL(NO_FP_PRESERVE),
++      .shaderSignedZeroInfNanPreserveFloat32 = !KK_EXPERIMENTAL(NO_FP_PRESERVE),
+       .shaderSignedZeroInfNanPreserveFloat64 = false,
+       .shaderDenormPreserveFloat16 = false,
+       .shaderDenormPreserveFloat32 = false,

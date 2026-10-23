@@ -1,0 +1,655 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kamil=20Postro=C5=BCny?= <kamil@postrozny.pl>
+Date: Thu, 22 Oct 2026 21:17:08 +0200
+Subject: [PATCH] kk: MESA_KK_DEBUG=passes counts encoders, barriers and passes
+ a frame
+
+KosmicKrisp encodes each Vulkan command as it comes: a render pass is
+one Metal render encoder or more, every encoder ends on an all-stages
+barrier, and nothing folds, merges or drops work between passes. DXMT
+plans a whole encoder list first (dxmt_context.cpp,
+checkEncoderRelation) and counts what it saved per frame
+(render_pass_optimized, clear_pass_optimized). To tell whether rules
+of that kind would save anything on KosmicKrisp, the driver must say
+what a frame records.
+
+With MESA_KK_DEBUG=passes the queue logs, about once a second and at
+its end, a [kk-passes] line: the interval's totals and their mean per
+presented frame of command buffers, render passes, render and compute
+encoders, Metal draws, render encoders ended without a draw, clear-only
+passes, encoder-end barriers, pipeline barriers by where they fall (in
+a render encoder, splitting it, in a compute encoder, with no encoder),
+and render encoders ended for compute work. It also counts the passes
+DXMT's rules would apply to, within one command buffer:
+
+- fold-cand: a clear-only pass, then with no encoder between, a pass
+  that loads an attachment subresource the first cleared;
+- merge-cand: a pass, then with no encoder or barrier between, one with
+  the same attachments, area and layers that loads all of them and
+  whose predecessor stored all of them;
+- dead-ds-direct / dead-ds-later: a depth or stencil aspect a pass
+  stored that the next pass using it clears or discards on its whole
+  area, with no encoder between or with encoders between (whose reads,
+  if any, are not seen, so this one is an upper bound).
+
+Without the flag nothing is counted or kept and the encoded commands
+are unchanged.
+
+Linear: PLA-72
+Class: diagnostics
+Evidence: docs/evidence/2026-10-22-vulkan-perf-resume.md
+Offered-upstream: no
+---
+ src/kosmickrisp/vulkan/kk_cmd_buffer.c | 191 ++++++++++++++++++++++++-
+ src/kosmickrisp/vulkan/kk_cmd_buffer.h |  50 +++++++
+ src/kosmickrisp/vulkan/kk_cmd_draw.c   |  13 ++
+ src/kosmickrisp/vulkan/kk_debug.c      |  74 ++++++++++
+ src/kosmickrisp/vulkan/kk_debug.h      |  53 +++++++
+ src/kosmickrisp/vulkan/kk_event.c      |   4 +
+ src/kosmickrisp/vulkan/kk_queue.c      |   3 +
+ 7 files changed, 387 insertions(+), 1 deletion(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.c b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+index b30d946..da6f90e 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_buffer.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+@@ -240,6 +240,10 @@ kk_BeginCommandBuffer(VkCommandBuffer commandBuffer,
+       if (cmd->one_time_submit)
+          p_atomic_inc(&kk_gpu_once_begins);
+    }
++   if (KK_DEBUG(PASSES)) {
++      memset(&cmd->pass_debug, 0, sizeof(cmd->pass_debug));
++      KK_PASS_STAT(CMD_BUFFERS);
++   }
+ 
+    /* vk_command_buffer_begin will reset the command buffer meaning the
+     * allocator may be returned to the pool. Request a new one. */
+@@ -299,6 +303,11 @@ cs_start_render(struct kk_cmd_buffer *cmd)
+ 
+    cmd->metal.render = mtl_new_render_command_encoder_with_descriptor(
+       cmd->metal.cmd_buf, state->render_pass_descriptor);
++   if (KK_DEBUG(PASSES)) {
++      KK_PASS_STAT(RENDER_ENCODERS);
++      cmd->pass_debug.encoders++;
++      cmd->pass_debug.encoder_draws = 0u;
++   }
+ 
+    kk_encoder_update_debug(cmd, cmd->metal.render);
+    /* Starting a new render pass means we already flushed and no barrier is
+@@ -350,6 +359,7 @@ cs_get_compute(struct kk_cmd_buffer *cmd)
+ {
+    /* If we are inside render, we need to force a restart later */
+    if (cmd->metal.render) {
++      KK_PASS_STAT(COMPUTE_SPLITS);
+       kk_apply_attachment_store_ops(cmd, true);
+       cs_end(cmd);
+       kk_cmd_buffer_dirty_all_gfx(cmd);
+@@ -358,6 +368,10 @@ cs_get_compute(struct kk_cmd_buffer *cmd)
+ 
+    if (cmd->metal.compute == NULL) {
+       cmd->metal.compute = mtl_new_compute_command_encoder(cmd->metal.cmd_buf);
++      if (KK_DEBUG(PASSES)) {
++         KK_PASS_STAT(COMPUTE_ENCODERS);
++         cmd->pass_debug.encoders++;
++      }
+       mtl_compute_set_argument_table(cmd->metal.compute, cmd->argument_table);
+       kk_encoder_update_debug(cmd, cmd->metal.compute);
+       if (cmd->ts_fence_pending) {
+@@ -375,6 +389,7 @@ end_encoder(struct kk_cmd_buffer *cmd, mtl_command_encoder *encoder)
+ {
+    /* TODO_KOSMICKRISP This is probably overkill */
+    mtl_barrier_after_stages(encoder, MTL_STAGE_ALL, MTL_STAGE_ALL);
++   KK_PASS_STAT(END_BARRIERS);
+    mtl_end_encoding(encoder);
+    mtl_release(encoder);
+ 
+@@ -436,6 +451,8 @@ cs_end(struct kk_cmd_buffer *cmd)
+ 
+    /* Render first as it may open a compute encoder for post render writes. */
+    if (cmd->metal.render) {
++      if (KK_DEBUG(PASSES) && !cmd->pass_debug.encoder_draws)
++         KK_PASS_STAT(EMPTY_RENDER);
+       end_encoder(cmd, cmd->metal.render);
+       cmd->metal.render = NULL;
+ 
+@@ -527,6 +544,11 @@ kk_CmdPipelineBarrier2(VkCommandBuffer commandBuffer,
+ {
+    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
+ 
++   if (KK_DEBUG(PASSES)) {
++      KK_PASS_STAT(PIPELINE_BARRIERS);
++      cmd->pass_debug.barriers++;
++   }
++
+    /* TODO_KOSMICKRISP Lighten barriers according to the actual requested
+     * barrier. To take advantage of this we need to remove the chaining of
+     * encoders. */
+@@ -537,19 +559,25 @@ kk_CmdPipelineBarrier2(VkCommandBuffer commandBuffer,
+        */
+       if (cmd->state.gfx.render.samples > 1 ||
+           kk_barrier_requires_encoder_split(cmd, pDependencyInfo)) {
++         KK_PASS_STAT(BARRIER_SPLITS);
+          kk_apply_attachment_store_ops(cmd, true);
+          cs_end(cmd);
+          cs_start_render(cmd);
+-      } else
++      } else {
++         KK_PASS_STAT(BARRIERS_RENDER);
+          mtl_barrier_after_encoder_stages(cmd->metal.render, MTL_STAGE_VERTEX,
+                                           MTL_STAGE_FRAGMENT);
++      }
+    } else if (cmd->metal.compute) {
++      KK_PASS_STAT(BARRIERS_COMPUTE);
+       /* We chain encoders, so an intra-encoder barrier is enough here:
+        * no need to tear down and recreate the encoder.
+        */
+       mtl_barrier_after_encoder_stages(cmd->metal.compute,
+                                        MTL_STAGE_DISPATCH | MTL_STAGE_BLIT,
+                                        MTL_STAGE_DISPATCH | MTL_STAGE_BLIT);
++   } else {
++      KK_PASS_STAT(BARRIERS_IDLE);
+    }
+ }
+ 
+@@ -1207,3 +1235,164 @@ kk_CmdInsertDebugUtilsLabelEXT(VkCommandBuffer _commandBuffer,
+       mtl_encoder_insert_debug_signpost(cmd->metal.compute,
+                                         pLabelInfo->pLabelName);
+ }
++
++/* Playport (PLA-72): MESA_KK_DEBUG=passes. A pass's attachments as
++ * kk_pass_debug compares them: colour slots, then depth and stencil. */
++static void
++kk_pass_debug_atts(const struct kk_rendering_state *render,
++                   struct kk_pass_debug_att *atts)
++{
++   memset(atts, 0, sizeof(*atts) * KK_PASS_DEBUG_ATTS);
++   for (uint32_t i = 0; i < KK_PASS_DEBUG_ATTS; i++) {
++      const struct kk_attachment *att =
++         i < KK_MAX_RTS
++            ? (i < render->color_att_count ? &render->color_att[i] : NULL)
++         : i == KK_MAX_RTS ? &render->depth_att
++                           : &render->stencil_att;
++      if (!att || !att->iview)
++         continue;
++      atts[i] = (struct kk_pass_debug_att){
++         .image = att->iview->vk.image,
++         .format = att->vk_format,
++         .level = att->iview->vk.base_mip_level,
++         .layer = att->iview->vk.base_array_layer,
++         .layers = att->iview->vk.layer_count,
++         .load_op = att->load_op,
++         .store_op = att->store_op,
++      };
++   }
++}
++
++static bool
++kk_pass_debug_same_subresource(const struct kk_pass_debug_att *a,
++                               const struct kk_pass_debug_att *b)
++{
++   return a->image == b->image && a->format == b->format &&
++          a->level == b->level && a->layer == b->layer &&
++          a->layers == b->layers;
++}
++
++void
++kk_pass_debug_begin_rendering(struct kk_cmd_buffer *cmd)
++{
++   struct kk_pass_debug *pd = &cmd->pass_debug;
++   const struct kk_rendering_state *render = &cmd->state.gfx.render;
++   const bool whole = render->rendering_to_whole_framebuffer &&
++                      !(render->flags & VK_RENDERING_RESUMING_BIT);
++   struct kk_pass_debug_att atts[KK_PASS_DEBUG_ATTS];
++   kk_pass_debug_atts(render, atts);
++
++   pd->pass_draws = 0u;
++   pd->pass_clears = false;
++   for (uint32_t i = 0; i < KK_PASS_DEBUG_ATTS; i++)
++      pd->pass_clears |= whole && atts[i].image &&
++                         atts[i].load_op == VK_ATTACHMENT_LOAD_OP_CLEAR;
++
++   const bool direct = pd->last_valid && pd->encoders == pd->last_encoders;
++   if (direct && pd->last_clear_only) {
++      bool fold = false;
++      for (uint32_t i = 0; i < KK_PASS_DEBUG_ATTS; i++) {
++         if (!atts[i].image || atts[i].load_op != VK_ATTACHMENT_LOAD_OP_LOAD)
++            continue;
++         for (uint32_t j = 0; j < KK_PASS_DEBUG_ATTS; j++)
++            fold |= pd->last[j].image &&
++                    pd->last[j].load_op == VK_ATTACHMENT_LOAD_OP_CLEAR &&
++                    kk_pass_debug_same_subresource(&atts[i], &pd->last[j]);
++      }
++      if (fold)
++         KK_PASS_STAT(FOLD_CANDIDATES);
++   }
++   if (direct && pd->barriers == pd->last_barriers &&
++       !memcmp(&pd->last_area, &render->area, sizeof(render->area)) &&
++       pd->last_layers == render->layer_count &&
++       pd->last_view_mask == render->view_mask &&
++       pd->last_color_count == render->color_att_count) {
++      bool merge = true;
++      for (uint32_t i = 0; i < KK_PASS_DEBUG_ATTS; i++) {
++         merge &= !atts[i].image == !pd->last[i].image;
++         if (!merge || !atts[i].image)
++            continue;
++         merge &= kk_pass_debug_same_subresource(&atts[i], &pd->last[i]) &&
++                  atts[i].load_op == VK_ATTACHMENT_LOAD_OP_LOAD &&
++                  pd->last[i].store_op == VK_ATTACHMENT_STORE_OP_STORE;
++      }
++      if (merge)
++         KK_PASS_STAT(MERGE_CANDIDATES);
++   }
++
++   /* A stored depth or stencil aspect this pass uses: dead if the pass
++    * clears or discards all of it, read otherwise */
++   for (uint32_t i = KK_MAX_RTS; i < KK_PASS_DEBUG_ATTS; i++) {
++      if (!atts[i].image)
++         continue;
++      const VkImageAspectFlags aspect =
++         i == KK_MAX_RTS ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_STENCIL_BIT;
++      for (uint32_t j = 0; j < KK_PASS_DEBUG_STORES; j++) {
++         if (pd->stored[j].image != atts[i].image ||
++             pd->stored[j].level != atts[i].level ||
++             pd->stored[j].layer != atts[i].layer ||
++             pd->stored[j].aspect != aspect)
++            continue;
++         if (whole && (atts[i].load_op == VK_ATTACHMENT_LOAD_OP_CLEAR ||
++                       atts[i].load_op == VK_ATTACHMENT_LOAD_OP_DONT_CARE)) {
++            if (pd->stored[j].encoders == pd->encoders)
++               KK_PASS_STAT(DEAD_DS_DIRECT);
++            else
++               KK_PASS_STAT(DEAD_DS_LATER);
++         }
++         pd->stored[j].image = NULL;
++      }
++   }
++}
++
++void
++kk_pass_debug_end_rendering(struct kk_cmd_buffer *cmd)
++{
++   struct kk_pass_debug *pd = &cmd->pass_debug;
++   const struct kk_rendering_state *render = &cmd->state.gfx.render;
++
++   const bool clear_only = pd->pass_clears && !pd->pass_draws;
++   if (clear_only)
++      KK_PASS_STAT(CLEAR_ONLY);
++
++   pd->last_valid = true;
++   pd->last_clear_only = clear_only;
++   pd->last_encoders = pd->encoders;
++   pd->last_barriers = pd->barriers;
++   pd->last_area = render->area;
++   pd->last_layers = render->layer_count;
++   pd->last_view_mask = render->view_mask;
++   pd->last_color_count = render->color_att_count;
++   kk_pass_debug_atts(render, pd->last);
++
++   const bool force_store = render->force_attachment_store;
++   for (uint32_t i = KK_MAX_RTS; i < KK_PASS_DEBUG_ATTS; i++) {
++      const struct kk_attachment *att =
++         i == KK_MAX_RTS ? &render->depth_att : &render->stencil_att;
++      const VkImageAspectFlags aspect =
++         i == KK_MAX_RTS ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_STENCIL_BIT;
++      if (!att->iview ||
++          kk_get_attachment_store_op(att, force_store,
++                                     render->rendering_to_whole_framebuffer,
++                                     aspect) == MTL_STORE_ACTION_DONT_CARE)
++         continue;
++      uint32_t slot = pd->stored_next;
++      for (uint32_t j = 0; j < KK_PASS_DEBUG_STORES; j++) {
++         if (!pd->stored[j].image ||
++             (pd->stored[j].image == pd->last[i].image &&
++              pd->stored[j].level == pd->last[i].level &&
++              pd->stored[j].layer == pd->last[i].layer &&
++              pd->stored[j].aspect == aspect)) {
++            slot = j;
++            break;
++         }
++      }
++      if (slot == pd->stored_next)
++         pd->stored_next = (pd->stored_next + 1u) % KK_PASS_DEBUG_STORES;
++      pd->stored[slot].image = pd->last[i].image;
++      pd->stored[slot].level = pd->last[i].level;
++      pd->stored[slot].layer = pd->last[i].layer;
++      pd->stored[slot].aspect = aspect;
++      pd->stored[slot].encoders = pd->encoders;
++   }
++}
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.h b/src/kosmickrisp/vulkan/kk_cmd_buffer.h
+index 36bf0e2..cf78375 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_buffer.h
++++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.h
+@@ -244,6 +244,46 @@ struct kk_conditional_rendering_state {
+ 
+ struct kk_encoder;
+ 
++/* Playport (PLA-72): one attachment of a pass, as MESA_KK_DEBUG=passes
++ * compares passes (kk_pass_debug_begin_rendering) */
++struct kk_pass_debug_att {
++   const struct vk_image *image; /* NULL: no attachment */
++   VkFormat format;
++   uint32_t level, layer, layers;
++   VkAttachmentLoadOp load_op;
++   VkAttachmentStoreOp store_op;
++};
++
++#define KK_PASS_DEBUG_ATTS (KK_MAX_RTS + 2)
++#define KK_PASS_DEBUG_STORES 8
++
++struct kk_pass_debug {
++   /* Encoders begun and pipeline barriers or event waits recorded in this
++    * command buffer */
++   uint32_t encoders, barriers;
++   /* Draws since the render encoder and since the pass began */
++   uint32_t encoder_draws, pass_draws;
++   /* The pass has a clear load action */
++   bool pass_clears;
++
++   /* The last pass, as it ended: colour slots, then depth and stencil */
++   bool last_valid, last_clear_only;
++   uint32_t last_encoders, last_barriers;
++   VkRect2D last_area;
++   uint32_t last_layers, last_view_mask, last_color_count;
++   struct kk_pass_debug_att last[KK_PASS_DEBUG_ATTS];
++
++   /* Depth and stencil aspects a pass stored that no later pass used yet,
++    * with the encoder count at that pass's end */
++   struct {
++      const struct vk_image *image;
++      uint32_t level, layer;
++      VkImageAspectFlags aspect;
++      uint32_t encoders;
++   } stored[KK_PASS_DEBUG_STORES];
++   uint32_t stored_next;
++};
++
+ struct kk_uploader {
+    /** List of kk_cmd_bo */
+    struct list_head bos;
+@@ -323,6 +363,10 @@ struct kk_cmd_buffer {
+    /* Metal command buffers are single-shot: a resubmission must re-record
+     * by replaying the enqueued commands (see rerecord_cmd_buffer). */
+    bool submitted;
++
++   /* Playport (PLA-72): MESA_KK_DEBUG=passes bookkeeping, reset at
++    * vkBeginCommandBuffer */
++   struct kk_pass_debug pass_debug;
+ };
+ 
+ VK_DEFINE_HANDLE_CASTS(kk_cmd_buffer, vk.base, VkCommandBuffer,
+@@ -402,6 +446,12 @@ void kk_cmd_buffer_flush_push_descriptors(struct kk_cmd_buffer *cmd,
+ 
+ void kk_apply_attachment_store_ops(struct kk_cmd_buffer *cmd, bool force_store);
+ 
++/* Playport (PLA-72): MESA_KK_DEBUG=passes, called with the pass's rendering
++ * state set up, before its first encoder begins, and at its end before the
++ * state is cleared */
++void kk_pass_debug_begin_rendering(struct kk_cmd_buffer *cmd);
++void kk_pass_debug_end_rendering(struct kk_cmd_buffer *cmd);
++
+ bool kk_attachment_do_renderpass_resolve(const struct kk_attachment *attachment,
+                                          bool rendering_to_whole_framebuffer,
+                                          VkImageAspectFlags aspect);
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_draw.c b/src/kosmickrisp/vulkan/kk_cmd_draw.c
+index fa469fc..3bc476d 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_draw.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_draw.c
+@@ -265,6 +265,7 @@ kk_CmdBeginRendering(VkCommandBuffer commandBuffer,
+ 
+    if (KK_DEBUG(GPU))
+       p_atomic_inc(&kk_gpu_passes);
++   KK_PASS_STAT(PASSES);
+ 
+    struct kk_rendering_state *render = &cmd->state.gfx.render;
+ 
+@@ -381,6 +382,9 @@ kk_CmdBeginRendering(VkCommandBuffer commandBuffer,
+    render->force_attachment_store =
+       !is_whole_framebuffer || (render->flags & VK_RENDERING_SUSPENDING_BIT);
+ 
++   if (KK_DEBUG(PASSES))
++      kk_pass_debug_begin_rendering(cmd);
++
+    kk_set_color_attachments(pass_descriptor, render, dyn, force_attachment_load,
+                             is_whole_framebuffer);
+ 
+@@ -644,6 +648,9 @@ kk_CmdEndRendering2KHR(VkCommandBuffer commandBuffer,
+       .pStencilAttachment = &vk_stencil_att,
+    };
+ 
++   if (KK_DEBUG(PASSES))
++      kk_pass_debug_end_rendering(cmd);
++
+    kk_apply_attachment_store_ops(cmd, false);
+ 
+    /* Clean up previous encoder */
+@@ -1772,6 +1779,12 @@ kk_dispatch_draw(struct kk_cmd_buffer *cmd, struct kk_draw_data data)
+ {
+    mtl_render_encoder *enc = cs_get_render(cmd);
+ 
++   if (KK_DEBUG(PASSES)) {
++      KK_PASS_STAT(DRAWS);
++      cmd->pass_debug.encoder_draws++;
++      cmd->pass_debug.pass_draws++;
++   }
++
+    if (kk_grid_is_indirect(data.grid)) {
+       if (data.index.el_size_B) {
+          struct kk_addr_range index_range =
+diff --git a/src/kosmickrisp/vulkan/kk_debug.c b/src/kosmickrisp/vulkan/kk_debug.c
+index 560bd70..66581d7 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.c
++++ b/src/kosmickrisp/vulkan/kk_debug.c
+@@ -5,6 +5,8 @@
+ #include "kk_debug.h"
+ #include "util/u_debug.h"
+ #include "util/os_misc.h"
++#include "util/os_time.h"
++#include "util/simple_mtx.h"
+ 
+ #include <stdio.h>
+ 
+@@ -25,6 +27,7 @@ const struct debug_named_value debug_flags[] = {
+    {"no_known_fail", KK_DEBUG_NO_KNOWN_FAIL},
+    {"gpu", KK_DEBUG_GPU},
+    {"serial_libraries", KK_DEBUG_SERIAL_LIBRARIES},
++   {"passes", KK_DEBUG_PASSES},
+    {NULL, 0},
+ };
+ 
+@@ -87,3 +90,74 @@ kk_process_debug_variable(void)
+    kk_dump_msl_min_kb = debug_get_num_option("MESA_KK_DUMP_MSL_MIN_KB", -1);
+    kk_frame_probe_s = debug_get_num_option("MESA_KK_FRAME_PROBE_S", 0);
+ }
++
++uint32_t kk_pass_stats[KK_PASS_STAT_COUNT];
++
++static const char *const kk_pass_stat_names[KK_PASS_STAT_COUNT] = {
++   [KK_PASS_STAT_CMD_BUFFERS] = "cbs",
++   [KK_PASS_STAT_PASSES] = "passes",
++   [KK_PASS_STAT_RENDER_ENCODERS] = "render-enc",
++   [KK_PASS_STAT_COMPUTE_ENCODERS] = "compute-enc",
++   [KK_PASS_STAT_DRAWS] = "draws",
++   [KK_PASS_STAT_EMPTY_RENDER] = "empty-render-enc",
++   [KK_PASS_STAT_CLEAR_ONLY] = "clear-only",
++   [KK_PASS_STAT_END_BARRIERS] = "end-barriers",
++   [KK_PASS_STAT_PIPELINE_BARRIERS] = "pipeline-barriers",
++   [KK_PASS_STAT_BARRIERS_RENDER] = "in-render",
++   [KK_PASS_STAT_BARRIER_SPLITS] = "splits",
++   [KK_PASS_STAT_BARRIERS_COMPUTE] = "in-compute",
++   [KK_PASS_STAT_BARRIERS_IDLE] = "idle",
++   [KK_PASS_STAT_COMPUTE_SPLITS] = "compute-splits",
++   [KK_PASS_STAT_FOLD_CANDIDATES] = "fold-cand",
++   [KK_PASS_STAT_MERGE_CANDIDATES] = "merge-cand",
++   [KK_PASS_STAT_DEAD_DS_DIRECT] = "dead-ds-direct",
++   [KK_PASS_STAT_DEAD_DS_LATER] = "dead-ds-later",
++};
++
++static struct {
++   simple_mtx_t lock;
++   int64_t start_ns; /* 0 until the first submit */
++   uint32_t frames;
++} kk_pass_log = {.lock = SIMPLE_MTX_INITIALIZER};
++
++void
++kk_pass_stats_log(uint32_t frames, bool final)
++{
++   if (!KK_DEBUG(PASSES))
++      return;
++   int64_t now = os_time_get_nano();
++   simple_mtx_lock(&kk_pass_log.lock);
++   kk_pass_log.frames += frames;
++   if (!kk_pass_log.start_ns) {
++      kk_pass_log.start_ns = now;
++      simple_mtx_unlock(&kk_pass_log.lock);
++      return;
++   }
++   double span_s = (now - kk_pass_log.start_ns) / 1e9;
++   if (span_s < 1.0 && !final) {
++      simple_mtx_unlock(&kk_pass_log.lock);
++      return;
++   }
++   /* Totals over the interval, then per presented frame */
++   char line[2048];
++   int len = snprintf(line, sizeof(line), "[kk-passes] %.2f s%s: frames=%u",
++                      span_s, final ? " final" : "", kk_pass_log.frames);
++   uint32_t totals[KK_PASS_STAT_COUNT];
++   for (unsigned i = 0; i < KK_PASS_STAT_COUNT; i++) {
++      totals[i] = p_atomic_xchg(&kk_pass_stats[i], 0u);
++      len += snprintf(line + len, sizeof(line) - len, " %s=%u",
++                      kk_pass_stat_names[i], totals[i]);
++   }
++   len += snprintf(line + len, sizeof(line) - len, " | per frame:");
++   for (unsigned i = 0; i < KK_PASS_STAT_COUNT; i++) {
++      len += snprintf(line + len, sizeof(line) - len, " %s=%.1f",
++                      kk_pass_stat_names[i],
++                      kk_pass_log.frames ? (double)totals[i] / kk_pass_log.frames
++                                         : 0.0);
++   }
++   fprintf(stderr, "%s\n", line);
++   fflush(stderr);
++   kk_pass_log.start_ns = now;
++   kk_pass_log.frames = 0;
++   simple_mtx_unlock(&kk_pass_log.lock);
++}
+diff --git a/src/kosmickrisp/vulkan/kk_debug.h b/src/kosmickrisp/vulkan/kk_debug.h
+index 393d9a3..f8a883d 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.h
++++ b/src/kosmickrisp/vulkan/kk_debug.h
+@@ -5,8 +5,11 @@
+ #ifndef KK_DEBUG_H
+ #define KK_DEBUG_H 1
+ 
++#include <stdbool.h>
+ #include <stdint.h>
+ 
++#include "util/u_atomic.h"
++
+ enum kk_debug {
+    /* Print out the NIR from the compiler */
+    KK_DEBUG_NIR = 1ull << 0,
+@@ -53,6 +56,11 @@ enum kk_debug {
+     * so that its time is the compiler's alone; with compile, the wait for the
+     * one before is logged ([kk-compile] gpl-phases wait_ms) */
+    KK_DEBUG_SERIAL_LIBRARIES = 1ull << 13,
++   /* Playport (PLA-72): about once a second log [kk-passes], the encoders,
++    * barriers, passes and draws a presented frame records, and how many
++    * passes DXMT's encoder-list rules would fold, merge or store DontCare
++    * (kk_pass_stats_log, kk_pass_debug_begin_rendering) */
++   KK_DEBUG_PASSES = 1ull << 14,
+ };
+ 
+ extern enum kk_debug kk_mesa_debug_flags;
+@@ -64,6 +72,51 @@ extern uint32_t kk_gpu_begins, kk_gpu_once_begins, kk_gpu_passes, kk_gpu_ds_comp
+ 
+ #define KK_DEBUG(flag) unlikely(kk_mesa_debug_flags &KK_DEBUG_##flag)
+ 
++/* Playport (PLA-72): the counts [kk-passes] logs with KK_DEBUG(PASSES), in
++ * the order kk_pass_stat_names (kk_debug.c) names them */
++enum kk_pass_stat {
++   KK_PASS_STAT_CMD_BUFFERS,     /* command buffers begun */
++   KK_PASS_STAT_PASSES,          /* vkCmdBeginRendering */
++   KK_PASS_STAT_RENDER_ENCODERS, /* Metal render encoders begun */
++   KK_PASS_STAT_COMPUTE_ENCODERS,
++   KK_PASS_STAT_DRAWS,           /* Metal draws */
++   KK_PASS_STAT_EMPTY_RENDER,    /* render encoders ended without a draw */
++   KK_PASS_STAT_CLEAR_ONLY,      /* passes with a clear load and no draw */
++   KK_PASS_STAT_END_BARRIERS,    /* encoder-end barriers, all stages */
++   KK_PASS_STAT_PIPELINE_BARRIERS, /* vkCmdPipelineBarrier2 */
++   KK_PASS_STAT_BARRIERS_RENDER, /* ... in a render encoder, not splitting */
++   KK_PASS_STAT_BARRIER_SPLITS,  /* ... that split the render encoder */
++   KK_PASS_STAT_BARRIERS_COMPUTE, /* ... in a compute encoder */
++   KK_PASS_STAT_BARRIERS_IDLE,   /* ... with no encoder open */
++   KK_PASS_STAT_COMPUTE_SPLITS,  /* render encoders ended for compute work */
++   /* A clear-only pass, then with no encoder between, a pass that loads an
++    * attachment the first cleared: DXMT folds the clear into the load */
++   KK_PASS_STAT_FOLD_CANDIDATES,
++   /* A pass, then with no encoder or barrier between, one with the same
++    * attachments and area that loads every one the first stored: DXMT
++    * merges them */
++   KK_PASS_STAT_MERGE_CANDIDATES,
++   /* A depth or stencil aspect a pass stored, cleared or discarded on its
++    * whole area by the next pass of the command buffer that uses it, with
++    * no encoder between (a DontCare store loses nothing) or with encoders
++    * between (their reads, if any, are not seen) */
++   KK_PASS_STAT_DEAD_DS_DIRECT,
++   KK_PASS_STAT_DEAD_DS_LATER,
++   KK_PASS_STAT_COUNT,
++};
++
++extern uint32_t kk_pass_stats[KK_PASS_STAT_COUNT];
++
++#define KK_PASS_STAT(name)                                                     \
++   do {                                                                        \
++      if (KK_DEBUG(PASSES))                                                    \
++         p_atomic_inc(&kk_pass_stats[KK_PASS_STAT_##name]);                    \
++   } while (0)
++
++/* Called after each submit with the frames it presented; logs [kk-passes]
++ * once the interval reaches a second, or at once when final. */
++extern void kk_pass_stats_log(uint32_t frames, bool final);
++
+ /* Playport: MESA_KK_BATCH2=1 turns on these CPU-cost items, less the ones
+  * MESA_KK_BATCH2_SKIP names (comma-separated, the names in kk_debug.c), so a
+  * failing batch can be bisected. Off by default. */
+diff --git a/src/kosmickrisp/vulkan/kk_event.c b/src/kosmickrisp/vulkan/kk_event.c
+index 3e6db31..c1c5e18 100644
+--- a/src/kosmickrisp/vulkan/kk_event.c
++++ b/src/kosmickrisp/vulkan/kk_event.c
+@@ -10,6 +10,7 @@
+ #include "kk_bo.h"
+ #include "kk_cmd_buffer.h"
+ #include "kk_device.h"
++#include "kk_debug.h"
+ #include "kk_entrypoints.h"
+ 
+ #define KK_EVENT_MEM_SIZE sizeof(VkResult)
+@@ -113,4 +114,7 @@ kk_CmdWaitEvents2(VkCommandBuffer commandBuffer, uint32_t eventCount,
+                   const VkDependencyInfo *pDependencyInfos)
+ {
+    /* We do nothing, event should already be set by the time we are here. */
++   VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
++   if (KK_DEBUG(PASSES))
++      cmd->pass_debug.barriers++;
+ }
+diff --git a/src/kosmickrisp/vulkan/kk_queue.c b/src/kosmickrisp/vulkan/kk_queue.c
+index 267ddd6..b9e3e78 100644
+--- a/src/kosmickrisp/vulkan/kk_queue.c
++++ b/src/kosmickrisp/vulkan/kk_queue.c
+@@ -405,6 +405,8 @@ kk_queue_submit(struct vk_queue *vk_queue, struct vk_queue_submit *submit)
+ 
+    if (KK_DEBUG(GPU))
+       kk_gpu_log(frames, os_time_get_nano() - submit_start, false);
++   if (KK_DEBUG(PASSES))
++      kk_pass_stats_log(frames, false);
+ 
+    return VK_SUCCESS;
+ }
+@@ -476,6 +478,7 @@ kk_queue_finish(struct kk_device *dev, struct kk_queue *queue)
+    /* There may be in-flight command buffers, wait for them to finish. */
+    kk_queue_wait_for_commits(queue);
+    kk_gpu_log(0u, 0, true);
++   kk_pass_stats_log(0u, true);
+ 
+    mtl_command_queue_remove_residency_set(queue->mtl_handle,
+                                           dev->residency_set.handle);

@@ -1,0 +1,222 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kamil=20Postro=C5=BCny?= <kamil@postrozny.pl>
+Date: Thu, 22 Oct 2026 21:24:42 +0200
+Subject: [PATCH] kk: MESA_KK_EXPERIMENTAL=root_table_loads loads the root
+ table through buf0
+
+Every descriptor, push constant and vertex buffer address a shader
+reads comes from the root table, buffer argument 0, as
+"t = (ulong)&buf0.contents[0]; t2 = t + ulong(936u);
+t3 = *(constant ulong*)(t2)": through the argument's address as an
+integer. Metal's front end keeps that as ptrtoint, add and inttoptr
+(checked with Apple's Windows metal 32023): the load is from an
+arbitrary constant pointer, and the argument loses its nocapture,
+readonly and alias scope, so the GPU compiler cannot tell the load
+reads buffer 0 at a fixed offset. DXMT reads argument buffer fields
+through the argument.
+
+With MESA_KK_EXPERIMENTAL=root_table_loads a load_global_constant from
+load_buffer_ptr_kk or load_per_draw_ptr_kk, or from either plus an
+offset that is a constant or an SSA value, is emitted as
+"*(constant ulong*)((constant uchar *)&buf0.contents[0] + ulong(936u))",
+which Metal's front end compiles to a getelementptr inbounds from the
+argument. Loads through a register offset and every other load are
+unchanged. The switch enters the pipeline cache UUID; without it the
+UUID and the MSL are unchanged.
+
+Linear: PLA-72
+Class: diagnostics
+Evidence: docs/plans/2026-10-06-vulkan-performance.md (Review 2026-10-21, lead 4)
+Offered-upstream: no
+---
+ src/kosmickrisp/compiler/msl_private.h      |  2 +
+ src/kosmickrisp/compiler/nir_to_msl.c       | 67 ++++++++++++++++++++-
+ src/kosmickrisp/compiler/nir_to_msl.h       |  6 ++
+ src/kosmickrisp/vulkan/kk_debug.c           |  1 +
+ src/kosmickrisp/vulkan/kk_debug.h           |  3 +
+ src/kosmickrisp/vulkan/kk_physical_device.c |  3 +-
+ src/kosmickrisp/vulkan/kk_shader.c          |  2 +
+ 7 files changed, 80 insertions(+), 4 deletions(-)
+
+diff --git a/src/kosmickrisp/compiler/msl_private.h b/src/kosmickrisp/compiler/msl_private.h
+index b014965..b6a55b5 100644
+--- a/src/kosmickrisp/compiler/msl_private.h
++++ b/src/kosmickrisp/compiler/msl_private.h
+@@ -31,6 +31,8 @@ struct nir_to_msl_ctx {
+     * the ALU instructions just emitted share, NULL if none is open */
+    bool fp_precise_only;
+    const char *open_fp_math_mode;
++   /* nir_to_msl_options::root_table_loads */
++   bool root_table_loads;
+    unsigned short indentlevel;
+    struct io_slot_info inputs_info[NUM_TOTAL_VARYING_SLOTS];
+    struct io_slot_info outputs_info[NUM_TOTAL_VARYING_SLOTS];
+diff --git a/src/kosmickrisp/compiler/nir_to_msl.c b/src/kosmickrisp/compiler/nir_to_msl.c
+index 49d8f87..4fec2f9 100644
+--- a/src/kosmickrisp/compiler/nir_to_msl.c
++++ b/src/kosmickrisp/compiler/nir_to_msl.c
+@@ -870,6 +870,65 @@ src_to_packed_load(struct nir_to_msl_ctx *ctx, nir_src *src,
+    P(ctx, ")");
+ }
+ 
++/* The buffer argument whose address def loads (load_buffer_ptr_kk,
++ * load_per_draw_ptr_kk), NULL if it is something else */
++static const char *
++root_table_buffer(nir_def *def, char *name, size_t size)
++{
++   if (!nir_def_is_intrinsic(def))
++      return NULL;
++   nir_intrinsic_instr *intr = nir_def_as_intrinsic(def);
++   if (intr->intrinsic == nir_intrinsic_load_per_draw_ptr_kk)
++      return "per_draw";
++   if (intr->intrinsic != nir_intrinsic_load_buffer_ptr_kk)
++      return NULL;
++   snprintf(name, size, "buf%d", nir_intrinsic_binding(intr));
++   return name;
++}
++
++/* nir_to_msl_options::root_table_loads: a constant load from a buffer
++ * argument's address, or from it plus an offset that is a constant or an SSA
++ * value (assigned once, so the same where the load reads it), is emitted as
++ * a load through the argument, "(constant uchar *)&buf0.contents[0] + off",
++ * rather than through the address as an integer. Returns false, emitting
++ * nothing, for any other load. */
++static bool
++root_table_load_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
++{
++   nir_def *addr = instr->src[0].ssa;
++   nir_alu_instr *add = NULL;
++   unsigned offset_src = 0;
++   char name[16];
++   const char *buffer = root_table_buffer(addr, name, sizeof(name));
++   if (!buffer) {
++      if (!nir_def_is_alu(addr))
++         return false;
++      add = nir_def_as_alu(addr);
++      if (add->op != nir_op_iadd)
++         return false;
++      for (unsigned i = 0; i < 2 && !buffer; i++) {
++         buffer = root_table_buffer(add->src[i].src.ssa, name, sizeof(name));
++         offset_src = 1 - i;
++      }
++      if (!buffer || is_register(add->src[offset_src].src.ssa))
++         return false;
++   }
++
++   const char *type = msl_type_for_def(ctx->types, &instr->def);
++   if (instr->def.num_components == 1) {
++      P(ctx, "*(constant %s*)(", type);
++   } else {
++      P(ctx, "%s(*(constant packed_%s*)(", type, type);
++   }
++   P(ctx, "(constant uchar *)&%s.contents[0]", buffer);
++   if (add) {
++      P(ctx, " + ");
++      alu_src_to_msl(ctx, add, offset_src);
++   }
++   P(ctx, instr->def.num_components == 1 ? ")" : "))");
++   return true;
++}
++
+ /* Non-packed types have stricter alignment requirements that packed types.
+  * This helps us cast the pointer to a packed type and then it builds the
+  * non-packed type for Metal usage.
+@@ -1368,9 +1427,10 @@ intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
+       break;
+    }
+    case nir_intrinsic_load_global_constant: {
+-      src_to_packed_load(ctx, &instr->src[0], "constant",
+-                         msl_type_for_def(ctx->types, &instr->def),
+-                         instr->def.num_components);
++      if (!(ctx->root_table_loads && root_table_load_to_msl(ctx, instr)))
++         src_to_packed_load(ctx, &instr->src[0], "constant",
++                            msl_type_for_def(ctx->types, &instr->def),
++                            instr->def.num_components);
+       P(ctx, ";\n");
+       break;
+    }
+@@ -2562,6 +2622,7 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
+       .disabled_workarounds = options->disabled_workarounds,
+       .dual_source_blend = options->dual_source_blend,
+       .fp_precise_only = options->fp_precise_only,
++      .root_table_loads = options->root_table_loads,
+    };
+    nir_function_impl *impl = nir_shader_get_entrypoint(shader);
+    msl_gather_info(&ctx, options);
+diff --git a/src/kosmickrisp/compiler/nir_to_msl.h b/src/kosmickrisp/compiler/nir_to_msl.h
+index abae6d2..3b6b72d 100644
+--- a/src/kosmickrisp/compiler/nir_to_msl.h
++++ b/src/kosmickrisp/compiler/nir_to_msl.h
+@@ -42,6 +42,12 @@ struct nir_to_msl_options {
+     * against folding NaN * 0 (KK_WORKAROUND_14), which only relaxed math
+     * does. */
+    bool fp_precise_only;
++
++   /* Playport (PLA-72): a constant load from the root table (or the
++    * per-draw data) at an offset is emitted as a load through the buffer
++    * argument, not through its address converted to an integer and back,
++    * which hides from Metal's compiler which buffer it reads. */
++   bool root_table_loads;
+ };
+ 
+ /* Assumes nir_shader_gather_info has been called beforehand. */
+diff --git a/src/kosmickrisp/vulkan/kk_debug.c b/src/kosmickrisp/vulkan/kk_debug.c
+index 82dfce4..4148a55 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.c
++++ b/src/kosmickrisp/vulkan/kk_debug.c
+@@ -48,6 +48,7 @@ const struct debug_named_value experimental_flags[] = {
+    {"msl41", KK_EXPERIMENTAL_MSL41},
+    {"no_fp_preserve", KK_EXPERIMENTAL_NO_FP_PRESERVE},
+    {"fp_precise_only", KK_EXPERIMENTAL_FP_PRECISE_ONLY},
++   {"root_table_loads", KK_EXPERIMENTAL_ROOT_TABLE_LOADS},
+    {NULL, 0},
+ };
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_debug.h b/src/kosmickrisp/vulkan/kk_debug.h
+index f1e3093..f569f3c 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.h
++++ b/src/kosmickrisp/vulkan/kk_debug.h
+@@ -122,6 +122,9 @@ enum kk_experimental {
+     * (msl_nir_fp_precise_only), and let consecutive operations with the same
+     * math mode share one pragma block */
+    KK_EXPERIMENTAL_FP_PRECISE_ONLY = 1ull << 9,
++   /* Playport (PLA-72): load from the root table and the per-draw data
++    * through their buffer arguments (nir_to_msl_options::root_table_loads) */
++   KK_EXPERIMENTAL_ROOT_TABLE_LOADS = 1ull << 10,
+ };
+ 
+ extern enum kk_experimental kk_mesa_experimental_flags;
+diff --git a/src/kosmickrisp/vulkan/kk_physical_device.c b/src/kosmickrisp/vulkan/kk_physical_device.c
+index 085839f..a53222e 100644
+--- a/src/kosmickrisp/vulkan/kk_physical_device.c
++++ b/src/kosmickrisp/vulkan/kk_physical_device.c
+@@ -1065,7 +1065,8 @@ kk_physical_device_init_pipeline_cache(struct kk_physical_device *pdev)
+    /* Playport (PLA-72): the experimental switches that change the MSL, only
+     * when one is set, so that the UUID without them is unchanged */
+    const uint64_t msl_experimental =
+-      kk_mesa_experimental_flags & KK_EXPERIMENTAL_FP_PRECISE_ONLY;
++      kk_mesa_experimental_flags &
++      (KK_EXPERIMENTAL_FP_PRECISE_ONLY | KK_EXPERIMENTAL_ROOT_TABLE_LOADS);
+    if (msl_experimental)
+       _mesa_blake3_update(&blake3_ctx, &msl_experimental,
+                           sizeof(msl_experimental));
+diff --git a/src/kosmickrisp/vulkan/kk_shader.c b/src/kosmickrisp/vulkan/kk_shader.c
+index ec5d287..732bd3f 100644
+--- a/src/kosmickrisp/vulkan/kk_shader.c
++++ b/src/kosmickrisp/vulkan/kk_shader.c
+@@ -1361,6 +1361,7 @@ kk_compile_gs_compute(struct kk_physical_device *pdev, nir_shader *nir,
+       .mem_ctx = NULL,
+       .disabled_workarounds = pdev->settings.disabled_workarounds,
+       .fp_precise_only = KK_EXPERIMENTAL(FP_PRECISE_ONLY),
++      .root_table_loads = KK_EXPERIMENTAL(ROOT_TABLE_LOADS),
+    };
+    out->code = nir_to_msl(nir, &options);
+    const char *entrypoint = nir_shader_get_entrypoint(nir)->function->name;
+@@ -1640,6 +1641,7 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
+       .vec4_user_varyings = gpl != KK_GPL_WHOLE,
+       .dual_source_blend = dual_source,
+       .fp_precise_only = KK_EXPERIMENTAL(FP_PRECISE_ONLY),
++      .root_table_loads = KK_EXPERIMENTAL(ROOT_TABLE_LOADS),
+    };
+    if (gpl == KK_GPL_LIBRARY && stage == MESA_SHADER_VERTEX)
+       kk_gpl_note_vertex_outputs(shader, nir);

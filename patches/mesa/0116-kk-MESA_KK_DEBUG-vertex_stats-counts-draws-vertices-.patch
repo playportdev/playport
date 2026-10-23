@@ -1,0 +1,280 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kamil=20Postro=C5=BCny?= <kamil@postrozny.pl>
+Date: Thu, 22 Oct 2026 23:12:29 +0200
+Subject: [PATCH] kk: MESA_KK_DEBUG=vertex_stats counts draws, vertices and
+ vertex outputs a frame
+
+On Hollow Knight at native resolution the GPU's tiler is busy 80 % of
+the time with DXVK on KosmicKrisp against 48 % on DXMT, at the same
+frame rate and GPU time (dvt graphics' Tiler Utilization %, pp perf's
+til% column). The tiler runs the vertex stage and bins its primitives.
+Both backends get the same D3D11 draws from the game, so the driver
+must say what vertex work a frame asks for, to tell more geometry from
+costlier vertex shading.
+
+With MESA_KK_DEBUG=vertex_stats the queue logs, about once a second and
+at its end, a [kk-vertex] line: the interval's totals and their mean
+per presented frame of draws (each draw of a multi-draw counted), those
+indexed, indirect, unrolled by a compute pass and with an emulated
+geometry or tessellation stage, and for direct draws their vertices
+(or indices) times instances, their primitives and those vertices times
+the vertex shader's vec4 output slots (outputs_written, the position
+counted), then the output slots a vertex writes. Indirect draws are
+counted but their vertices are not known on the CPU.
+
+Without the flag nothing is counted and the commands and MSL are
+unchanged.
+
+Linear: PLA-72
+Class: diagnostics
+Evidence: docs/evidence/2026-10-22-vulkan-perf-resume.md
+Offered-upstream: no
+---
+ src/kosmickrisp/vulkan/kk_cmd_draw.c | 72 +++++++++++++++++++++++++++-
+ src/kosmickrisp/vulkan/kk_debug.c    | 71 +++++++++++++++++++++++++++
+ src/kosmickrisp/vulkan/kk_debug.h    | 27 +++++++++++
+ src/kosmickrisp/vulkan/kk_queue.c    |  3 ++
+ 4 files changed, 172 insertions(+), 1 deletion(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_draw.c b/src/kosmickrisp/vulkan/kk_cmd_draw.c
+index ae437a1..ee00d2d 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_draw.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_draw.c
+@@ -2575,6 +2575,73 @@ kk_debug_log_vertices(struct kk_cmd_buffer *cmd, const struct kk_draw_command *d
+    fprintf(stderr, "%s\n", line);
+ }
+ 
++/* Primitives of a direct draw of n vertices or indices, restarts not seen */
++static uint64_t
++kk_vertex_stats_primitives(enum mesa_prim prim, uint64_t n)
++{
++   switch (prim) {
++   case MESA_PRIM_POINTS:
++      return n;
++   case MESA_PRIM_LINES:
++      return n / 2u;
++   case MESA_PRIM_LINE_STRIP:
++      return n > 1u ? n - 1u : 0u;
++   case MESA_PRIM_TRIANGLES:
++      return n / 3u;
++   case MESA_PRIM_TRIANGLE_STRIP:
++   case MESA_PRIM_TRIANGLE_FAN:
++      return n > 2u ? n - 2u : 0u;
++   case MESA_PRIM_LINES_ADJACENCY:
++      return n / 4u;
++   case MESA_PRIM_TRIANGLES_ADJACENCY:
++      return n / 6u;
++   default:
++      return 0u;
++   }
++}
++
++/* Playport (PLA-72), MESA_KK_DEBUG=vertex_stats: count a draw command's
++ * draws and, for direct ones, their vertices, primitives and the vertex
++ * shader output slots those vertices write ([kk-vertex], kk_debug.c) */
++static void
++kk_vertex_stats_note_draw(struct kk_cmd_buffer *cmd,
++                          const struct kk_draw_command *data, bool unroll)
++{
++   const struct kk_shader *vs = cmd->state.shaders[MESA_SHADER_VERTEX];
++   const uint64_t draws = data->draw_count;
++   p_atomic_add(&kk_vertex_stats[KK_VERTEX_STAT_DRAWS], draws);
++   if (data->indexed)
++      p_atomic_add(&kk_vertex_stats[KK_VERTEX_STAT_INDEXED], draws);
++   if (unroll)
++      p_atomic_add(&kk_vertex_stats[KK_VERTEX_STAT_UNROLLED], draws);
++   if (kk_pipeline_has_gs(cmd) || cmd->state.shaders[MESA_SHADER_TESS_EVAL])
++      p_atomic_add(&kk_vertex_stats[KK_VERTEX_STAT_EMULATED], draws);
++   if (data->indirect) {
++      p_atomic_add(&kk_vertex_stats[KK_VERTEX_STAT_INDIRECT], draws);
++      return;
++   }
++
++   uint64_t vertices = 0u, prims = 0u;
++   for (uint32_t i = 0; i < data->draw_count; i++) {
++      uint64_t n, instances;
++      if (data->indexed) {
++         n = data->indexed_draws[i].indexCount;
++         instances = data->indexed_draws[i].instanceCount;
++      } else {
++         n = data->draws[i].vertexCount;
++         instances = data->draws[i].instanceCount;
++      }
++      vertices += n * instances;
++      prims += kk_vertex_stats_primitives(data->prim, n) * instances;
++   }
++   const uint64_t slots =
++      vs ? util_bitcount64(vs->info.vs.outputs_written) : 0u;
++   p_atomic_add(&kk_vertex_stats[KK_VERTEX_STAT_VERTICES], vertices);
++   p_atomic_add(&kk_vertex_stats[KK_VERTEX_STAT_PRIMITIVES], prims);
++   p_atomic_add(&kk_vertex_stats[KK_VERTEX_STAT_OUTPUT_SLOTS],
++                vertices * slots);
++}
++
+ static void
+ kk_draw(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
+ {
+@@ -2606,7 +2673,10 @@ kk_draw(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
+    bool gs = kk_pipeline_has_gs(cmd);
+ 
+    /* Unroll geometry. Skip draw if we fail. */
+-   if (requires_unroll(cmd, data) && !kk_unroll_geometry(cmd, data))
++   bool unroll = requires_unroll(cmd, data);
++   if (KK_DEBUG(VERTEX_STATS))
++      kk_vertex_stats_note_draw(cmd, data, unroll);
++   if (unroll && !kk_unroll_geometry(cmd, data))
+       return;
+ 
+    for (uint32_t i = 0; i < data->draw_count; i++) {
+diff --git a/src/kosmickrisp/vulkan/kk_debug.c b/src/kosmickrisp/vulkan/kk_debug.c
+index 18cfb9c..c1bcc8b 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.c
++++ b/src/kosmickrisp/vulkan/kk_debug.c
+@@ -28,6 +28,7 @@ const struct debug_named_value debug_flags[] = {
+    {"gpu", KK_DEBUG_GPU},
+    {"serial_libraries", KK_DEBUG_SERIAL_LIBRARIES},
+    {"passes", KK_DEBUG_PASSES},
++   {"vertex_stats", KK_DEBUG_VERTEX_STATS},
+    {NULL, 0},
+ };
+ 
+@@ -167,3 +168,73 @@ kk_pass_stats_log(uint32_t frames, bool final)
+    kk_pass_log.frames = 0;
+    simple_mtx_unlock(&kk_pass_log.lock);
+ }
++
++uint64_t kk_vertex_stats[KK_VERTEX_STAT_COUNT];
++
++static const char *const kk_vertex_stat_names[KK_VERTEX_STAT_COUNT] = {
++   [KK_VERTEX_STAT_DRAWS] = "draws",
++   [KK_VERTEX_STAT_INDEXED] = "indexed",
++   [KK_VERTEX_STAT_INDIRECT] = "indirect",
++   [KK_VERTEX_STAT_UNROLLED] = "unrolled",
++   [KK_VERTEX_STAT_EMULATED] = "gs-tess",
++   [KK_VERTEX_STAT_VERTICES] = "vertices",
++   [KK_VERTEX_STAT_PRIMITIVES] = "prims",
++   [KK_VERTEX_STAT_OUTPUT_SLOTS] = "out-slots",
++};
++
++static struct {
++   simple_mtx_t lock;
++   int64_t start_ns; /* 0 until the first submit */
++   uint32_t frames;
++} kk_vertex_log = {.lock = SIMPLE_MTX_INITIALIZER};
++
++void
++kk_vertex_stats_log(uint32_t frames, bool final)
++{
++   if (!KK_DEBUG(VERTEX_STATS))
++      return;
++   int64_t now = os_time_get_nano();
++   simple_mtx_lock(&kk_vertex_log.lock);
++   kk_vertex_log.frames += frames;
++   /* The interval starts at the first submit; a final line before any
++    * submit (draws recorded, none submitted) spans 0 s */
++   if (!kk_vertex_log.start_ns && !final) {
++      kk_vertex_log.start_ns = now;
++      simple_mtx_unlock(&kk_vertex_log.lock);
++      return;
++   }
++   double span_s =
++      kk_vertex_log.start_ns ? (now - kk_vertex_log.start_ns) / 1e9 : 0.0;
++   if (span_s < 1.0 && !final) {
++      simple_mtx_unlock(&kk_vertex_log.lock);
++      return;
++   }
++   /* Totals over the interval, then per presented frame, then the output
++    * slots a vertex of the direct draws writes */
++   char line[1024];
++   int len = snprintf(line, sizeof(line), "[kk-vertex] %.2f s%s: frames=%u",
++                      span_s, final ? " final" : "", kk_vertex_log.frames);
++   uint64_t totals[KK_VERTEX_STAT_COUNT];
++   for (unsigned i = 0; i < KK_VERTEX_STAT_COUNT; i++) {
++      totals[i] = p_atomic_xchg(&kk_vertex_stats[i], 0ull);
++      len += snprintf(line + len, sizeof(line) - len, " %s=%llu",
++                      kk_vertex_stat_names[i], (unsigned long long)totals[i]);
++   }
++   len += snprintf(line + len, sizeof(line) - len, " | per frame:");
++   for (unsigned i = 0; i < KK_VERTEX_STAT_COUNT; i++) {
++      len += snprintf(line + len, sizeof(line) - len, " %s=%.1f",
++                      kk_vertex_stat_names[i],
++                      kk_vertex_log.frames
++                         ? (double)totals[i] / kk_vertex_log.frames
++                         : 0.0);
++   }
++   const uint64_t vertices = totals[KK_VERTEX_STAT_VERTICES];
++   snprintf(line + len, sizeof(line) - len, " | out-slots/vertex=%.2f",
++            vertices ? (double)totals[KK_VERTEX_STAT_OUTPUT_SLOTS] / vertices
++                     : 0.0);
++   fprintf(stderr, "%s\n", line);
++   fflush(stderr);
++   kk_vertex_log.start_ns = now;
++   kk_vertex_log.frames = 0;
++   simple_mtx_unlock(&kk_vertex_log.lock);
++}
+diff --git a/src/kosmickrisp/vulkan/kk_debug.h b/src/kosmickrisp/vulkan/kk_debug.h
+index f8ca508..835c460 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.h
++++ b/src/kosmickrisp/vulkan/kk_debug.h
+@@ -61,6 +61,11 @@ enum kk_debug {
+     * passes DXMT's encoder-list rules would fold, merge or store DontCare
+     * (kk_pass_stats_log, kk_pass_debug_begin_rendering) */
+    KK_DEBUG_PASSES = 1ull << 14,
++   /* Playport (PLA-72): about once a second log [kk-vertex], the draws, the
++    * vertices and primitives of direct draws and the vertex shader output
++    * slots they write, a presented frame (kk_vertex_stats_log,
++    * kk_vertex_stats_note_draw) */
++   KK_DEBUG_VERTEX_STATS = 1ull << 15,
+ };
+ 
+ extern enum kk_debug kk_mesa_debug_flags;
+@@ -126,6 +131,28 @@ extern uint32_t kk_pass_stats[KK_PASS_STAT_COUNT];
+  * once the interval reaches a second, or at once when final. */
+ extern void kk_pass_stats_log(uint32_t frames, bool final);
+ 
++/* Playport (PLA-72): the counts [kk-vertex] logs with KK_DEBUG(VERTEX_STATS),
++ * in the order kk_vertex_stat_names (kk_debug.c) names them */
++enum kk_vertex_stat {
++   KK_VERTEX_STAT_DRAWS,          /* draws, each of a multi-draw counted */
++   KK_VERTEX_STAT_INDEXED,        /* ... of them indexed */
++   KK_VERTEX_STAT_INDIRECT,       /* ... indirect: no counts below */
++   KK_VERTEX_STAT_UNROLLED,       /* ... unrolled by a compute pass first */
++   KK_VERTEX_STAT_EMULATED,       /* ... with a geometry or tessellation stage */
++   KK_VERTEX_STAT_VERTICES,       /* direct: vertices or indices x instances */
++   KK_VERTEX_STAT_PRIMITIVES,     /* direct: their primitives */
++   /* direct: vertices x the vec4 output slots the vertex shader writes
++    * (outputs_written, the position counted) */
++   KK_VERTEX_STAT_OUTPUT_SLOTS,
++   KK_VERTEX_STAT_COUNT,
++};
++
++extern uint64_t kk_vertex_stats[KK_VERTEX_STAT_COUNT];
++
++/* Called after each submit with the frames it presented; logs [kk-vertex]
++ * once the interval reaches a second, or at once when final. */
++extern void kk_vertex_stats_log(uint32_t frames, bool final);
++
+ /* Playport: MESA_KK_BATCH2=1 turns on these CPU-cost items, less the ones
+  * MESA_KK_BATCH2_SKIP names (comma-separated, the names in kk_debug.c), so a
+  * failing batch can be bisected. Off by default. */
+diff --git a/src/kosmickrisp/vulkan/kk_queue.c b/src/kosmickrisp/vulkan/kk_queue.c
+index b9e3e78..628845c 100644
+--- a/src/kosmickrisp/vulkan/kk_queue.c
++++ b/src/kosmickrisp/vulkan/kk_queue.c
+@@ -407,6 +407,8 @@ kk_queue_submit(struct vk_queue *vk_queue, struct vk_queue_submit *submit)
+       kk_gpu_log(frames, os_time_get_nano() - submit_start, false);
+    if (KK_DEBUG(PASSES))
+       kk_pass_stats_log(frames, false);
++   if (KK_DEBUG(VERTEX_STATS))
++      kk_vertex_stats_log(frames, false);
+ 
+    return VK_SUCCESS;
+ }
+@@ -479,6 +481,7 @@ kk_queue_finish(struct kk_device *dev, struct kk_queue *queue)
+    kk_queue_wait_for_commits(queue);
+    kk_gpu_log(0u, 0, true);
+    kk_pass_stats_log(0u, true);
++   kk_vertex_stats_log(0u, true);
+ 
+    mtl_command_queue_remove_residency_set(queue->mtl_handle,
+                                           dev->residency_set.handle);

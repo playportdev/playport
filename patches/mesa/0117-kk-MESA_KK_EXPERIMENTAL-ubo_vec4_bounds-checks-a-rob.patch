@@ -1,0 +1,320 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kamil=20Postro=C5=BCny?= <kamil@postrozny.pl>
+Date: Thu, 22 Oct 2026 23:12:29 +0200
+Subject: [PATCH] kk: MESA_KK_EXPERIMENTAL=ubo_vec4_bounds checks a robust UBO
+ once per 16 bytes
+
+With robust uniform buffers, nir_lower_explicit_io splits every load
+into 32-bit components, each behind its own bounds check, because it
+does not know the device's granularity. DXVK enables robustness, so a
+D3D11 constant buffer vec4 is four checked scalar loads: Hollow
+Knight's phone MSL has 1536 of them in 70 stages, 1385 in its vertex
+shaders, where DXMT reads constant buffers with unchecked vector loads.
+
+KosmicKrisp reports robustUniformBufferAccessSizeAlignment = 64
+(KK_MIN_UBO_ALIGNMENT), so a uniform buffer's range is rounded up to 64
+bytes for bounds checking. When the lowest byte a load reads in a
+16-byte aligned chunk of the range is below the range, the whole chunk
+is below the range rounded up to 16, and so to 64. One load of the
+chunk's components behind one check at that lowest offset is as robust
+as the device says it is, and it stays inside the memory allocation,
+whose size is a multiple of 4 KiB.
+
+With MESA_KK_EXPERIMENTAL=ubo_vec4_bounds, kk_nir_merge_ubo_loads
+merges the constant-offset 32-bit scalar bounded loads of one block
+that share a base, a bound, an access and a 16-byte chunk into one load
+of up to four components at the earliest of them. A shader with scalar
+bounded loads is first optimized (constant folding, copy propagation,
+algebraic, CSE) so that offsets are constants and loads of one buffer
+share their base and bound; others are left as they are. nir_to_msl
+already prints a vector bounded load (`offset < bound ? uint4(...) :
+0`), which Apple's compiler accepts.
+
+On Hollow Knight's dump, replayed on the host mock: 1293 checked scalar
+loads become 33 and 335 checked vector loads; AIR (Apple's Windows
+metal 32023) goes from 18396 to 16650 instructions, icmp 1475 to 550,
+inttoptr 2041 to 1116. Every stage compiles.
+
+The flag enters the pipeline cache UUID; without it the UUID and the
+MSL are unchanged.
+
+Linear: PLA-72
+Class: feature
+Evidence: docs/evidence/2026-10-22-vulkan-perf-resume.md
+Offered-upstream: no
+---
+ src/kosmickrisp/vulkan/kk_debug.c             |   1 +
+ src/kosmickrisp/vulkan/kk_debug.h             |   5 +
+ .../vulkan/kk_nir_merge_ubo_loads.c           | 177 ++++++++++++++++++
+ src/kosmickrisp/vulkan/kk_physical_device.c   |   3 +-
+ src/kosmickrisp/vulkan/kk_shader.c            |   3 +
+ src/kosmickrisp/vulkan/kk_shader.h            |   3 +
+ src/kosmickrisp/vulkan/meson.build            |   1 +
+ 7 files changed, 192 insertions(+), 1 deletion(-)
+ create mode 100644 src/kosmickrisp/vulkan/kk_nir_merge_ubo_loads.c
+
+diff --git a/src/kosmickrisp/vulkan/kk_debug.c b/src/kosmickrisp/vulkan/kk_debug.c
+index c1bcc8b..efd5782 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.c
++++ b/src/kosmickrisp/vulkan/kk_debug.c
+@@ -57,6 +57,7 @@ const struct debug_named_value experimental_flags[] = {
+    {"const_offset_loads", KK_EXPERIMENTAL_CONST_OFFSET_LOADS},
+    {"narrow_barriers", KK_EXPERIMENTAL_NARROW_BARRIERS},
+    {"ds_dont_care", KK_EXPERIMENTAL_DS_DONT_CARE},
++   {"ubo_vec4_bounds", KK_EXPERIMENTAL_UBO_VEC4_BOUNDS},
+    {NULL, 0},
+ };
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_debug.h b/src/kosmickrisp/vulkan/kk_debug.h
+index 835c460..222116f 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.h
++++ b/src/kosmickrisp/vulkan/kk_debug.h
+@@ -233,6 +233,11 @@ enum kk_experimental {
+     * command buffer's next pass, with no other encoder before it, clears or
+     * discards all of that aspect (kk_defer_render_end) */
+    KK_EXPERIMENTAL_DS_DONT_CARE = 1ull << 14,
++   /* Playport (PLA-72): one bounds check per 16-byte chunk of a robust
++    * uniform buffer read at constant offsets, one load of its components,
++    * not one checked load per component (kk_nir_merge_ubo_loads); within
++    * the 64-byte robustUniformBufferAccessSizeAlignment the device reports */
++   KK_EXPERIMENTAL_UBO_VEC4_BOUNDS = 1ull << 15,
+ };
+ 
+ extern enum kk_experimental kk_mesa_experimental_flags;
+diff --git a/src/kosmickrisp/vulkan/kk_nir_merge_ubo_loads.c b/src/kosmickrisp/vulkan/kk_nir_merge_ubo_loads.c
+new file mode 100644
+index 0000000..7ea3f40
+--- /dev/null
++++ b/src/kosmickrisp/vulkan/kk_nir_merge_ubo_loads.c
+@@ -0,0 +1,177 @@
++/*
++ * Copyright 2026 The Playport authors
++ * SPDX-License-Identifier: MIT
++ *
++ * Playport (PLA-72), MESA_KK_EXPERIMENTAL=ubo_vec4_bounds: one bounds check
++ * per 16-byte chunk of a robust uniform buffer, not per component.
++ *
++ * With robust uniform buffers nir_lower_explicit_io splits every load into
++ * 32-bit components, each with its own bounds check
++ * (load_global_constant_bounded, `offset < bound ? load : 0` in MSL),
++ * because it does not know the device's bounds-check granularity. A D3D11
++ * constant buffer vec4 read through DXVK is so four checked scalar loads.
++ *
++ * KosmicKrisp reports robustUniformBufferAccessSizeAlignment = 64
++ * (KK_MIN_UBO_ALIGNMENT): a uniform buffer's range is rounded up to 64 bytes
++ * for bounds checking. When the lowest byte a load reads in a 16-byte aligned
++ * chunk of the range is below the range, every byte of that chunk is below
++ * the range rounded up to 16, and so to 64: one load of the chunk's
++ * components with one check at its lowest offset is as robust as the device
++ * says it is.
++ *
++ * kk_nir_merge_ubo_loads merges the constant-offset 32-bit scalar bounded
++ * loads of one block that share a base address, a bound, an access and a
++ * 16-byte chunk into one load of up to four components at the earliest of
++ * them. Loads with a dynamic offset are left as they are. A shader with
++ * scalar bounded loads is first optimized (constant folding, copy
++ * propagation, algebraic, CSE), so that offsets are constants and the loads
++ * of one buffer share their base and bound; a shader without them is left
++ * as it is.
++ */
++#include "kk_shader.h"
++
++#include "compiler/nir/nir.h"
++#include "compiler/nir/nir_builder.h"
++#include "util/u_dynarray.h"
++
++struct ubo_load {
++   nir_intrinsic_instr *intr;
++   nir_def *base;
++   nir_def *bound;
++   enum gl_access_qualifier access;
++   uint32_t offset;
++   bool merged;
++};
++
++static bool
++is_scalar_const_bounded_load(const nir_intrinsic_instr *intr)
++{
++   return intr->intrinsic == nir_intrinsic_load_global_constant_bounded &&
++          intr->def.num_components == 1 && intr->def.bit_size == 32 &&
++          nir_src_is_const(intr->src[1]) &&
++          nir_src_as_uint(intr->src[1]) <= UINT32_MAX &&
++          (nir_src_as_uint(intr->src[1]) & 3u) == 0u;
++}
++
++static bool
++same_chunk(const struct ubo_load *a, const struct ubo_load *b)
++{
++   return a->base == b->base && a->bound == b->bound &&
++          a->access == b->access &&
++          (a->offset & ~15u) == (b->offset & ~15u);
++}
++
++static bool
++merge_block(nir_builder *b, nir_block *block, struct util_dynarray *loads)
++{
++   util_dynarray_clear(loads);
++   nir_foreach_instr(instr, block) {
++      if (instr->type != nir_instr_type_intrinsic)
++         continue;
++      nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
++      if (!is_scalar_const_bounded_load(intr))
++         continue;
++      struct ubo_load load = {
++         .intr = intr,
++         .base = intr->src[0].ssa,
++         .bound = intr->src[2].ssa,
++         .access = nir_intrinsic_access(intr),
++         .offset = (uint32_t)nir_src_as_uint(intr->src[1]),
++      };
++      util_dynarray_append(loads, load);
++   }
++
++   bool progress = false;
++   const unsigned count = util_dynarray_num_elements(loads, struct ubo_load);
++   struct ubo_load *all = util_dynarray_begin(loads);
++   for (unsigned i = 0; i < count; i++) {
++      const struct ubo_load first = all[i];
++      if (first.merged)
++         continue;
++
++      /* first is the group's earliest member in the block; low the one at
++       * the lowest offset, whose alignment the merged load takes */
++      unsigned members = 0;
++      const struct ubo_load *low = &all[i];
++      uint32_t hi = first.offset;
++      for (unsigned j = i; j < count; j++) {
++         if (all[j].merged || !same_chunk(&first, &all[j]))
++            continue;
++         members++;
++         if (all[j].offset < low->offset)
++            low = &all[j];
++         hi = MAX2(hi, all[j].offset);
++      }
++      if (members < 2 || low->offset == hi)
++         continue;
++
++      const uint32_t lo = low->offset;
++      b->cursor = nir_before_instr(&first.intr->instr);
++      nir_def *vec = nir_load_global_constant_bounded(
++         b, (hi - lo) / 4u + 1u, 32, first.base, nir_imm_int(b, lo),
++         first.bound, .access = first.access,
++         .align_mul = nir_intrinsic_align_mul(low->intr),
++         .align_offset = nir_intrinsic_align_offset(low->intr));
++
++      for (unsigned j = i; j < count; j++) {
++         struct ubo_load *m = &all[j];
++         if (m->merged || !same_chunk(&first, m))
++            continue;
++         m->merged = true;
++         nir_def_replace(&m->intr->def,
++                         nir_channel(b, vec, (m->offset - lo) / 4u));
++      }
++      progress = true;
++   }
++   return progress;
++}
++
++static bool
++has_scalar_bounded_load(nir_shader *nir)
++{
++   nir_foreach_function_impl(impl, nir) {
++      nir_foreach_block(block, impl) {
++         nir_foreach_instr(instr, block) {
++            if (instr->type != nir_instr_type_intrinsic)
++               continue;
++            nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
++            if (intr->intrinsic ==
++                   nir_intrinsic_load_global_constant_bounded &&
++                intr->def.num_components == 1 && intr->def.bit_size == 32)
++               return true;
++         }
++      }
++   }
++   return false;
++}
++
++bool
++kk_nir_merge_ubo_loads(nir_shader *nir)
++{
++   if (!has_scalar_bounded_load(nir))
++      return false;
++
++   bool progress = false, opt;
++   do {
++      opt = false;
++      NIR_PASS(opt, nir, nir_opt_constant_folding);
++      NIR_PASS(opt, nir, nir_opt_copy_prop);
++      NIR_PASS(opt, nir, nir_opt_algebraic);
++      NIR_PASS(opt, nir, nir_opt_cse);
++      NIR_PASS(opt, nir, nir_opt_dce);
++      progress |= opt;
++   } while (opt);
++   struct util_dynarray loads;
++   util_dynarray_init(&loads, NULL);
++
++   nir_foreach_function_impl(impl, nir) {
++      nir_builder b = nir_builder_create(impl);
++      bool impl_progress = false;
++      nir_foreach_block(block, impl)
++         impl_progress |= merge_block(&b, block, &loads);
++      progress |= nir_progress(impl_progress, impl, nir_metadata_control_flow);
++   }
++
++   util_dynarray_fini(&loads);
++   return progress;
++}
+diff --git a/src/kosmickrisp/vulkan/kk_physical_device.c b/src/kosmickrisp/vulkan/kk_physical_device.c
+index 9b66538..f8b1f19 100644
+--- a/src/kosmickrisp/vulkan/kk_physical_device.c
++++ b/src/kosmickrisp/vulkan/kk_physical_device.c
+@@ -1067,7 +1067,8 @@ kk_physical_device_init_pipeline_cache(struct kk_physical_device *pdev)
+    const uint64_t msl_experimental =
+       kk_mesa_experimental_flags &
+       (KK_EXPERIMENTAL_FP_PRECISE_ONLY | KK_EXPERIMENTAL_ROOT_TABLE_LOADS |
+-       KK_EXPERIMENTAL_UBO_UNBOUNDED | KK_EXPERIMENTAL_CONST_OFFSET_LOADS);
++       KK_EXPERIMENTAL_UBO_UNBOUNDED | KK_EXPERIMENTAL_CONST_OFFSET_LOADS |
++       KK_EXPERIMENTAL_UBO_VEC4_BOUNDS);
+    if (msl_experimental)
+       _mesa_blake3_update(&blake3_ctx, &msl_experimental,
+                           sizeof(msl_experimental));
+diff --git a/src/kosmickrisp/vulkan/kk_shader.c b/src/kosmickrisp/vulkan/kk_shader.c
+index aceeec6..45f0013 100644
+--- a/src/kosmickrisp/vulkan/kk_shader.c
++++ b/src/kosmickrisp/vulkan/kk_shader.c
+@@ -1634,6 +1634,9 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
+ 
+    NIR_PASS(_, nir, kk_nir_lower_poly);
+ 
++   if (KK_EXPERIMENTAL(UBO_VEC4_BOUNDS))
++      NIR_PASS(_, nir, kk_nir_merge_ubo_loads);
++
+    msl_optimize_nir(nir);
+    modify_nir_info(nir);
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_shader.h b/src/kosmickrisp/vulkan/kk_shader.h
+index 21b6b74..641ef02 100644
+--- a/src/kosmickrisp/vulkan/kk_shader.h
++++ b/src/kosmickrisp/vulkan/kk_shader.h
+@@ -248,6 +248,9 @@ kk_nir_lower_descriptors(nir_shader *nir,
+ 
+ bool kk_nir_remove_undef_textures(nir_shader *nir);
+ 
++/* Playport (PLA-72), MESA_KK_EXPERIMENTAL=ubo_vec4_bounds */
++bool kk_nir_merge_ubo_loads(nir_shader *nir);
++
+ /* KK_WORKAROUND_18 */
+ bool kk_nir_add_device_barrier_workaround(nir_shader *nir);
+ 
+diff --git a/src/kosmickrisp/vulkan/meson.build b/src/kosmickrisp/vulkan/meson.build
+index f6e1784..37456c1 100644
+--- a/src/kosmickrisp/vulkan/meson.build
++++ b/src/kosmickrisp/vulkan/meson.build
+@@ -98,6 +98,7 @@ kk_files = files(
+   'kk_nir_lower_textures.c',
+   'kk_nir_lower_vbo.h',
+   'kk_nir_lower_vbo.c',
++  'kk_nir_merge_ubo_loads.c',
+   'kk_physical_device.h',
+   'kk_physical_device.c',
+   'kk_query_pool.h',

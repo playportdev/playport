@@ -16,7 +16,9 @@ from mesa 0042 on) is reported on stderr and counted; the process exits 3 at
 exit if there was any. With KK_MOCK_INTERRUPT_BUILDS=N the first N library
 builds that take an error report (the pipelines', not the driver's own
 shaders') fail as if Metal's compiler service had been interrupted (mesa
-0053's compile_retry builds them again).
+0053's compile_retry builds them again). With KK_MOCK_TRACE_ENCODERS set,
+encoders begun and ended, their barriers and their store actions are
+printed on stderr as "kk-mock-enc: ..." lines (PLA-72).
 
 The stubs are the template, so a new bridge function upstream still links:
 it gets the stub's body, with a dummy handle for a pointer return.
@@ -30,6 +32,7 @@ stubs = os.path.join(tree, "src/kosmickrisp/bridge/stubs")
 os.makedirs(out, exist_ok=True)
 
 COMMON = r'''
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -55,6 +58,7 @@ struct kk_mock_obj {
 
 void *kk_mock_new(int kind, uint64_t size);
 void kk_mock_record_msl(const char *src);
+void kk_mock_trace(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 int kk_mock_interrupt_build(void);
 
 /* The sample counts of an A19 (supportsTextureSampleCount:). */
@@ -84,6 +88,22 @@ kk_mock_exit(void)
       fflush(stderr);
       _exit(3);
    }
+}
+
+void
+kk_mock_trace(const char *fmt, ...)
+{
+   static int on = -1;
+   if (on < 0)
+      on = getenv("KK_MOCK_TRACE_ENCODERS") != NULL;
+   if (!on)
+      return;
+   va_list ap;
+   va_start(ap, fmt);
+   fputs("kk-mock-enc: ", stderr);
+   vfprintf(stderr, fmt, ap);
+   fputc('\n', stderr);
+   va_end(ap);
 }
 
 void *
@@ -359,6 +379,15 @@ body("mtl_command_queue_commit", r'''
    }''')
 body("ns_is_os_version_at_least", "return major < 27 || (major == 27 && minor == 0 && patch == 0);")
 body("mtl_drawable_get_texture", "return kk_mock_new(7, 0);")
+# KK_MOCK_TRACE_ENCODERS: the encoder sequence, barriers and store actions.
+body("mtl_new_render_command_encoder_with_descriptor", 'kk_mock_trace("render"); return kk_mock_new(0, 0);')
+body("mtl_new_compute_command_encoder", 'kk_mock_trace("compute"); return kk_mock_new(0, 0);')
+body("mtl_end_encoding", 'kk_mock_trace("end");')
+body("mtl_barrier_after_stages", 'kk_mock_trace("producer-barrier after=%#x before-queue=%#x", (unsigned)after_stages, (unsigned)before_queue_stages);')
+body("mtl_barrier_after_queue_stages", 'kk_mock_trace("consumer-barrier after-queue=%#x before=%#x", (unsigned)after_queue_stages, (unsigned)before_stages);')
+body("mtl_render_set_color_store_action", 'kk_mock_trace("color-store %u action=%u", index, (unsigned)action);')
+body("mtl_render_set_depth_store_action", 'kk_mock_trace("depth-store action=%u", (unsigned)action);')
+body("mtl_render_set_stencil_store_action", 'kk_mock_trace("stencil-store action=%u", (unsigned)action);')
 
 FUNC = re.compile(r'^(?P<ret>[A-Za-z_][\w \*]*?)\n(?P<name>\w+)\((?P<args>[^)]*)\)\n\{\n(?P<body>.*?)^\}', re.S | re.M)
 

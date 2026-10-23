@@ -89,6 +89,113 @@ diff -rq "$ROOT/msl" "$ROOT/msl-msl41" >/dev/null ||
     { echo "MESA_KK_EXPERIMENTAL=msl41: not the MSL made without it" >&2; exit 1; }
 echo "MSL 4.0: $(wc -l <"$ROOT/msl-versions") libraries, as 4.1 with MESA_KK_EXPERIMENTAL=msl41 with the same MSL"
 
+# Float maths and root table loads (PLA-72), each behind a switch:
+# dxvk-fp.frag is a fragment shader as DXVK's dxbc-spirv gives KosmicKrisp,
+# with SignedZeroInfNanPreserve and precise (NoContraction) operations, and
+# kk-host-test logs how many multiplications its pipeline's MSL guards
+# (workaround 14), how many math mode blocks it has and how many root table
+# loads go through buf0.
+fp_run() {
+    local name=$1; shift
+    rm -rf "$ROOT/msl-$name"; mkdir -p "$ROOT/msl-$name"
+    env "$@" KK_MOCK_MSL_DIR="$ROOT/msl-$name" MESA_SHADER_CACHE_DISABLE=true \
+        "$ROOT/kk-host-test" "$ROOT/build/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.so" "$ROOT/spv" \
+        >"$ROOT/$name.log" 2>&1 || { cat "$ROOT/$name.log" >&2; exit 1; }
+    diff -rq "$ROOT/msl" "$ROOT/msl-$name" | grep -c . || true
+}
+# Lines of the MSL libraries in DIR but math mode blocks' braces and
+# pragmas, file by file
+fp_unblocked() { for f in "$1"/*.metal; do grep -v '^ *\({\|}\|#pragma METAL fp math_mode(.*)\)$' "$f" | md5sum; done; }
+fp_line() { sed -n 's/^dxvk-fp: //p' "$ROOT/$1.log"; }
+# Without a switch: the guards and blocks are there, and no root table load
+# goes through buf0. kk-host-test checks float controls 2 and NaN and Inf
+# preservation are reported.
+[ "$(fp_run fp-default)" = 0 ] || { echo "PLA-72: the MSL of a second run is not the first's" >&2; exit 1; }
+default_fp=$(fp_line fp-default)
+case $default_fp in
+"fmul_guards="[1-9]*" math_modes="[1-9]*" root_table_loads=0") ;;
+*) echo "PLA-72: dxvk-fp without a switch: $default_fp" >&2; exit 1 ;;
+esac
+# no_fp_preserve: kk-host-test checks they are not reported; the MSL of the
+# same SPIR-V is the same.
+[ "$(fp_run fp-no-preserve MESA_KK_EXPERIMENTAL=no_fp_preserve)" = 0 ] ||
+    { echo "MESA_KK_EXPERIMENTAL=no_fp_preserve: not the MSL made without it" >&2; exit 1; }
+# fp_precise_only: dxvk-fp's MSL guards no multiplication and has fewer math
+# mode blocks; every other library differs only in its blocks.
+fp_run fp-precise-only MESA_KK_EXPERIMENTAL=fp_precise_only >/dev/null
+precise_fp=$(fp_line fp-precise-only)
+case $precise_fp in
+"fmul_guards=0 math_modes="[1-9]*" root_table_loads=0") ;;
+*) echo "MESA_KK_EXPERIMENTAL=fp_precise_only: dxvk-fp: $precise_fp" >&2; exit 1 ;;
+esac
+blocks() { echo "$1" | sed 's/.* math_modes=\([0-9]*\) .*/\1/'; }
+[ "$(blocks "$precise_fp")" -lt "$(blocks "$default_fp")" ] ||
+    { echo "MESA_KK_EXPERIMENTAL=fp_precise_only: $(blocks "$precise_fp") math mode blocks, not fewer than $(blocks "$default_fp")" >&2; exit 1; }
+other=$(diff <(fp_unblocked "$ROOT/msl") <(fp_unblocked "$ROOT/msl-fp-precise-only") | grep -c '^>' || true)
+[ "$other" = 1 ] ||
+    { echo "MESA_KK_EXPERIMENTAL=fp_precise_only: $other libraries differ in more than math mode blocks, not dxvk-fp's alone" >&2; exit 1; }
+# root_table_loads: root table and per-draw loads go through their buffer
+# arguments, and only the libraries that have such loads change.
+fp_run fp-root MESA_KK_EXPERIMENTAL=root_table_loads >/dev/null
+root_pat='(constant uchar \*)&\(buf0\|per_draw\)\.contents\[0\] +'
+root_loads=$(cat "$ROOT/msl-fp-root/"*.metal | grep -c "$root_pat" || true)
+root_other=0
+for f in "$ROOT/msl/"*.metal; do
+    g=$ROOT/msl-fp-root/${f##*/}
+    cmp -s "$f" "$g" || grep -q "$root_pat" "$g" || root_other=$((root_other + 1))
+done
+[ "$root_loads" -gt 0 ] && [ "$root_other" = 0 ] ||
+    { echo "MESA_KK_EXPERIMENTAL=root_table_loads: $root_loads loads through buf0 or per_draw, $root_other other libraries changed" >&2; exit 1; }
+# ubo_unbounded and const_offset_loads, on the GPL run's libraries with every
+# buffer robust (MESA_KK_DEBUG=force_robustness), where gpl-ubo.frag's uniform
+# buffer reads are bounds-checked: ubo_unbounded drops every check;
+# const_offset_loads reads descriptor sets from the constant address space
+# and changes nothing else.
+ubo_run() {
+    local name=$1; shift
+    rm -rf "$ROOT/msl-$name"; mkdir -p "$ROOT/msl-$name"
+    env "$@" MESA_KK_DEBUG=force_robustness KK_MOCK_MSL_DIR="$ROOT/msl-$name" MESA_SHADER_CACHE_DISABLE=true \
+        "$ROOT/kk-host-test" "$ROOT/build/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.so" "$ROOT/spv" \
+        >"$ROOT/$name.log" 2>&1 || { cat "$ROOT/$name.log" >&2; exit 1; }
+    cat "$ROOT/msl-$name/"*.metal | grep -c '< t[0-9]* ? \*(constant' || true
+}
+ubo_spaces() { for f in "$1"/*.metal; do sed 's/(device packed_/(constant packed_/g' "$f" | md5sum; done; }
+bounded=$(ubo_run ubo-robust MESA_KK_EXPERIMENTAL=gpl)
+unbounded=$(ubo_run ubo-unbounded MESA_KK_EXPERIMENTAL=gpl,ubo_unbounded)
+const_bounded=$(ubo_run ubo-const MESA_KK_EXPERIMENTAL=gpl,const_offset_loads)
+const_changed=$(diff -rq "$ROOT/msl-ubo-robust" "$ROOT/msl-ubo-const" | grep -c . || true)
+[ "$bounded" -gt 0 ] && [ "$unbounded" = 0 ] && [ "$const_bounded" = "$bounded" ] && [ "$const_changed" -gt 0 ] &&
+    [ "$(ubo_spaces "$ROOT/msl-ubo-robust")" = "$(ubo_spaces "$ROOT/msl-ubo-const")" ] ||
+    { echo "PLA-72: $bounded bounds-checked uniform buffer reads, $unbounded with ubo_unbounded, $const_bounded with const_offset_loads, which changed $const_changed libraries (only to the constant address space?)" >&2; exit 1; }
+echo "PLA-72: dxvk-fp $default_fp by default, $precise_fp with fp_precise_only; no_fp_preserve keeps the MSL; root_table_loads: $root_loads loads through buf0 or per_draw; ubo_unbounded: $bounded bounds-checked uniform buffer reads to 0; const_offset_loads: $const_changed libraries read descriptor sets from constant space"
+# ubo_vec4_bounds, on the same robust run: the bounds-checked scalar reads of
+# one 16-byte chunk become one checked vector read (gpl-ubo.frag's tint), and
+# only libraries with bounds-checked reads change.
+vec_scalar=$(ubo_run ubo-vec4 MESA_KK_EXPERIMENTAL=gpl,ubo_vec4_bounds)
+vec_pat='< t[0-9]* ? [a-z]*[234](\*(constant packed_'
+vec_loads=$(cat "$ROOT/msl-ubo-vec4/"*.metal | grep -c "$vec_pat" || true)
+vec_other=0
+for f in "$ROOT/msl-ubo-robust/"*.metal; do
+    g=$ROOT/msl-ubo-vec4/${f##*/}
+    cmp -s "$f" "$g" || grep -q '< t[0-9]* ? \*(constant' "$f" || vec_other=$((vec_other + 1))
+done
+[ "$vec_loads" -gt 0 ] && [ "$vec_scalar" -lt "$bounded" ] && [ "$vec_other" = 0 ] ||
+    { echo "MESA_KK_EXPERIMENTAL=ubo_vec4_bounds: $bounded checked scalar reads to $vec_scalar, $vec_loads checked vector reads, $vec_other libraries without checked reads changed" >&2; exit 1; }
+echo "PLA-72: ubo_vec4_bounds: $bounded checked scalar uniform buffer reads to $vec_scalar and $vec_loads checked vector reads"
+
+
+# The same run with MESA_KK_EXPERIMENTAL=narrow_barriers,ds_dont_care (mesa
+# 0114, 0115; check_pass_rules checks the barriers and stores they encode):
+# every pipeline still builds and draws, with the same MSL.
+rm -rf "$ROOT/msl-pass-rules"; mkdir -p "$ROOT/msl-pass-rules"
+MESA_KK_EXPERIMENTAL=narrow_barriers,ds_dont_care KK_MOCK_MSL_DIR="$ROOT/msl-pass-rules" \
+    MESA_SHADER_CACHE_DISABLE=true \
+    "$ROOT/kk-host-test" "$ROOT/build/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.so" "$ROOT/spv" \
+    >"$ROOT/pass-rules.log" 2>&1 || { cat "$ROOT/pass-rules.log" >&2; exit 1; }
+diff -rq "$ROOT/msl" "$ROOT/msl-pass-rules" >/dev/null ||
+    { echo "MESA_KK_EXPERIMENTAL=narrow_barriers,ds_dont_care: not the MSL made without them" >&2; exit 1; }
+echo "MESA_KK_EXPERIMENTAL=narrow_barriers,ds_dont_care: every pipeline builds and draws, the same MSL"
+
 # The same run with MESA_KK_BATCH2=1 (mesa 0091, 0092, 0094, 0095): the
 # used-prefix root upload, Metal's own mapping for a vkMapMemory that is not
 # placed, the residency commit only after a change, command allocators reset
@@ -158,6 +265,26 @@ gpl_lines() { grep -c "^\[kk-compile\] $1" "$ROOT/gpl.log" || true; }
     { grep '^\[kk-compile\] \(gpl\|link\)\|^\[kk-mem\] gpl' "$ROOT/gpl.log" >&2
       echo "MESA_KK_EXPERIMENTAL=gpl: not 4 + 1 vertex and 1 + 6 + 1 + 1 + 1 fragment libraries, 1 + 1 from the cache, 10 + 1 separate links (one for both blend constants), a point-fill, a sample-mask, a point-size-layer and 1 + 2 logic-op fallbacks, the second device's totals and counts back to zero" >&2; exit 1; }
 grep '^\(ok \)\?gpl\|^\[kk-compile\] \(gpl\|link\)\|^\[kk-mem\] gpl' "$ROOT/gpl.log"
+
+# MESA_KK_DEBUG=vertex_stats (PLA-72), on the GPL run, whose second device
+# draws and goes: its final [kk-vertex] line counts the draws, their
+# vertices, primitives and vertex output slots, with the same MSL; no line
+# without the flag.
+rm -rf "$ROOT/msl-vertex-stats"; mkdir -p "$ROOT/msl-vertex-stats"
+MESA_KK_EXPERIMENTAL=gpl MESA_KK_DEBUG=vertex_stats KK_MOCK_MSL_DIR="$ROOT/msl-vertex-stats" \
+    MESA_SHADER_CACHE_DISABLE=true \
+    "$ROOT/kk-host-test" "$ROOT/build/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.so" "$ROOT/spv" \
+    >"$ROOT/vertex-stats.log" 2>&1 || { cat "$ROOT/vertex-stats.log" >&2; exit 1; }
+diff -rq "$ROOT/msl-gpl" "$ROOT/msl-vertex-stats" >/dev/null ||
+    { echo "MESA_KK_DEBUG=vertex_stats: not the MSL made without it" >&2; exit 1; }
+vertex_line=$(grep -m1 '^\[kk-vertex\] .* final: .* draws=[1-9]' "$ROOT/vertex-stats.log" || true)
+case $vertex_line in
+*" draws="[1-9]*" vertices="[1-9]*" prims="[1-9]*" out-slots="[1-9]*" | per frame:"*" | out-slots/vertex="[1-9]*) ;;
+*) echo "MESA_KK_DEBUG=vertex_stats: no final [kk-vertex] line with draws, vertices, primitives and output slots: $vertex_line" >&2; exit 1 ;;
+esac
+! grep -q '^\[kk-vertex\]' "$ROOT/gpl.log" ||
+    { echo "PLA-72: a [kk-vertex] line without MESA_KK_DEBUG=vertex_stats" >&2; exit 1; }
+echo "MESA_KK_DEBUG=vertex_stats: ${vertex_line%% | per frame:*}"
 
 # Each of those 17 library builds is followed by its phases (PLA-437): NIR
 # lowering, the rest of the NIR passes, nir_to_msl, the Metal library, and the

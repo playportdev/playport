@@ -1,0 +1,276 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kamil=20Postro=C5=BCny?= <kamil@postrozny.pl>
+Date: Thu, 22 Oct 2026 21:19:59 +0200
+Subject: [PATCH] kk: MESA_KK_EXPERIMENTAL=narrow_barriers lets a pass's vertex
+ work overlap the last
+
+KosmicKrisp is on Metal 4, which tracks no hazards: every encoder ends on
+a producer barrier from all stages to all stages of the work after it
+(end_encoder, "probably overkill"). The next render pass's vertex stage
+therefore waits for every fragment of the one before, which a tiled GPU
+would otherwise overlap; DXMT waits only on the fences a pass's vertex
+or fragment stage really needs (fence_wait_vertex), so its next pass
+does overlap.
+
+With MESA_KK_EXPERIMENTAL=narrow_barriers the end barrier of a render
+encoder holds back every stage of the later work but the vertex stage.
+In Vulkan a later command's pre-rasterization stage depends on earlier
+work only through a dependency whose second scope names such a stage,
+so the driver records one: a pipeline barrier or event wait whose
+destination stages include any stage but the fragment, compute,
+transfer, host and bottom-of-pipe ones (top of pipe, indirect, vertex
+input, vertex/tessellation/geometry shaders, transform feedback,
+conditional rendering, all graphics, all commands) makes the next render
+encoder begin with a consumer barrier: its vertex stage waits for all
+the queue's earlier work. The first render encoder of each command
+buffer waits too, so work before the command buffer, and a semaphore
+wait's stages, are ordered as before.
+
+The end barrier stays whole for compute encoders (the driver's own
+tessellation, geometry and unroll emulation, query and marker writes
+are compute work that a render encoder's vertex stage reads, with no
+Vulkan barrier) and for render encoders inside transform feedback,
+whose vertex stage advances the offsets the next one reads.
+
+With MESA_KK_DEBUG=passes, [kk-passes] counts narrowed ends
+(narrow-ends) and vertex waits (vertex-waits). Without the flag every
+barrier is as before.
+
+Linear: PLA-72
+Class: feature
+Evidence: docs/evidence/2026-10-22-vulkan-perf-resume.md
+Offered-upstream: no
+---
+ src/kosmickrisp/vulkan/kk_cmd_buffer.c | 72 ++++++++++++++++++++++++--
+ src/kosmickrisp/vulkan/kk_cmd_buffer.h | 10 ++++
+ src/kosmickrisp/vulkan/kk_debug.c      |  3 ++
+ src/kosmickrisp/vulkan/kk_debug.h      | 13 ++++-
+ src/kosmickrisp/vulkan/kk_event.c      |  2 +
+ 5 files changed, 95 insertions(+), 5 deletions(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.c b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+index da6f90e..f32988b 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_buffer.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+@@ -244,6 +244,9 @@ kk_BeginCommandBuffer(VkCommandBuffer commandBuffer,
+       memset(&cmd->pass_debug, 0, sizeof(cmd->pass_debug));
+       KK_PASS_STAT(CMD_BUFFERS);
+    }
++   /* Playport (PLA-72): the first render encoder waits for whatever the
++    * queue ran before, as every encoder end used to make it */
++   cmd->vertex_wait = KK_EXPERIMENTAL(NARROW_BARRIERS);
+ 
+    /* vk_command_buffer_begin will reset the command buffer meaning the
+     * allocator may be returned to the pool. Request a new one. */
+@@ -310,6 +313,12 @@ cs_start_render(struct kk_cmd_buffer *cmd)
+    }
+ 
+    kk_encoder_update_debug(cmd, cmd->metal.render);
++   if (cmd->vertex_wait) {
++      KK_PASS_STAT(VERTEX_WAITS);
++      mtl_barrier_after_queue_stages(cmd->metal.render, MTL_STAGE_ALL,
++                                     MTL_STAGE_VERTEX);
++      cmd->vertex_wait = false;
++   }
+    /* Starting a new render pass means we already flushed and no barrier is
+     * needed. */
+    state->render.write_available = false;
+@@ -385,11 +394,28 @@ cs_get_compute(struct kk_cmd_buffer *cmd)
+ }
+ 
+ static void
+-end_encoder(struct kk_cmd_buffer *cmd, mtl_command_encoder *encoder)
++end_encoder(struct kk_cmd_buffer *cmd, mtl_command_encoder *encoder,
++            bool render)
+ {
++   /* Playport (PLA-72), MESA_KK_EXPERIMENTAL=narrow_barriers: after a render
++    * encoder, the work that follows waits for it in every stage but the
++    * vertex stage. What the vertex stage of a later render encoder needs
++    * from before it is what a barrier or event wait into a stage before
++    * rasterization names (kk_note_vertex_dependency), and that encoder then
++    * waits for it (cs_start_render). The driver's own work that the vertex
++    * stage reads (tessellation, geometry and unroll emulation, query and
++    * marker writes) is compute, whose end barrier stays whole; so do render
++    * encoders inside transform feedback, whose vertex stage advances the
++    * counters the next one reads. */
++   const bool narrow = render && KK_EXPERIMENTAL(NARROW_BARRIERS) &&
++                       !cmd->state.gfx.xfb.enabled;
+    /* TODO_KOSMICKRISP This is probably overkill */
+-   mtl_barrier_after_stages(encoder, MTL_STAGE_ALL, MTL_STAGE_ALL);
++   mtl_barrier_after_stages(encoder, MTL_STAGE_ALL,
++                            narrow ? MTL_STAGE_ALL & ~MTL_STAGE_VERTEX
++                                   : MTL_STAGE_ALL);
+    KK_PASS_STAT(END_BARRIERS);
++   if (narrow)
++      KK_PASS_STAT(NARROW_END_BARRIERS);
+    mtl_end_encoding(encoder);
+    mtl_release(encoder);
+ 
+@@ -453,7 +479,7 @@ cs_end(struct kk_cmd_buffer *cmd)
+    if (cmd->metal.render) {
+       if (KK_DEBUG(PASSES) && !cmd->pass_debug.encoder_draws)
+          KK_PASS_STAT(EMPTY_RENDER);
+-      end_encoder(cmd, cmd->metal.render);
++      end_encoder(cmd, cmd->metal.render, true);
+       cmd->metal.render = NULL;
+ 
+       /* The stage map is only valid for the current render encoder */
+@@ -462,7 +488,7 @@ cs_end(struct kk_cmd_buffer *cmd)
+    }
+ 
+    if (cmd->metal.compute) {
+-      end_encoder(cmd, cmd->metal.compute);
++      end_encoder(cmd, cmd->metal.compute, false);
+       cmd->metal.compute = NULL;
+    }
+ }
+@@ -548,6 +574,7 @@ kk_CmdPipelineBarrier2(VkCommandBuffer commandBuffer,
+       KK_PASS_STAT(PIPELINE_BARRIERS);
+       cmd->pass_debug.barriers++;
+    }
++   kk_note_vertex_dependency(cmd, pDependencyInfo);
+ 
+    /* TODO_KOSMICKRISP Lighten barriers according to the actual requested
+     * barrier. To take advantage of this we need to remove the chaining of
+@@ -581,6 +608,43 @@ kk_CmdPipelineBarrier2(VkCommandBuffer commandBuffer,
+    }
+ }
+ 
++void
++kk_note_vertex_dependency(struct kk_cmd_buffer *cmd,
++                          const VkDependencyInfo *dep)
++{
++   /* The stages a narrowed end barrier still holds back: those of the
++    * fragment and compute stages and of transfers (blit and dispatch, or a
++    * render pass's fragments for vk_meta), and the pipeline's end. Any
++    * other second-scope stage (top of pipe, indirect, vertex input, the
++    * shaders before rasterization, transform feedback, conditional
++    * rendering, all graphics, all commands) may be the vertex stage. */
++   const VkPipelineStageFlags2 held =
++      VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
++      VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
++      VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT |
++      VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT |
++      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
++      VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT | VK_PIPELINE_STAGE_2_COPY_BIT |
++      VK_PIPELINE_STAGE_2_RESOLVE_BIT | VK_PIPELINE_STAGE_2_BLIT_BIT |
++      VK_PIPELINE_STAGE_2_CLEAR_BIT | VK_PIPELINE_STAGE_2_HOST_BIT |
++      VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT;
++
++   if (!KK_EXPERIMENTAL(NARROW_BARRIERS) || cmd->vertex_wait)
++      return;
++
++   VkPipelineStageFlags2 dst = 0;
++   for (uint32_t i = 0; i < dep->memoryBarrierCount; i++)
++      dst |= dep->pMemoryBarriers[i].dstStageMask;
++   for (uint32_t i = 0; i < dep->bufferMemoryBarrierCount; i++)
++      dst |= dep->pBufferMemoryBarriers[i].dstStageMask;
++   for (uint32_t i = 0; i < dep->imageMemoryBarrierCount; i++)
++      dst |= dep->pImageMemoryBarriers[i].dstStageMask;
++
++   /* Kept until the next render encoder begins, even when this barrier
++    * falls inside a pass and splits nothing: waiting once more is safe. */
++   cmd->vertex_wait = (dst & ~held) != 0;
++}
++
+ static void
+ kk_bind_descriptor_sets(struct kk_descriptor_state *desc,
+                         const VkBindDescriptorSetsInfoKHR *info)
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.h b/src/kosmickrisp/vulkan/kk_cmd_buffer.h
+index cf78375..6aeefad 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_buffer.h
++++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.h
+@@ -364,6 +364,11 @@ struct kk_cmd_buffer {
+     * by replaying the enqueued commands (see rerecord_cmd_buffer). */
+    bool submitted;
+ 
++   /* Playport (PLA-72), MESA_KK_EXPERIMENTAL=narrow_barriers: the next
++    * render encoder waits, before its vertex stage, for the work before it
++    * in the queue (kk_note_vertex_dependency) */
++   bool vertex_wait;
++
+    /* Playport (PLA-72): MESA_KK_DEBUG=passes bookkeeping, reset at
+     * vkBeginCommandBuffer */
+    struct kk_pass_debug pass_debug;
+@@ -450,6 +455,11 @@ void kk_apply_attachment_store_ops(struct kk_cmd_buffer *cmd, bool force_store);
+  * state set up, before its first encoder begins, and at its end before the
+  * state is cleared */
+ void kk_pass_debug_begin_rendering(struct kk_cmd_buffer *cmd);
++
++/* Playport (PLA-72), MESA_KK_EXPERIMENTAL=narrow_barriers: a dependency
++ * recorded by a pipeline barrier or an event wait */
++void kk_note_vertex_dependency(struct kk_cmd_buffer *cmd,
++                               const VkDependencyInfo *dep);
+ void kk_pass_debug_end_rendering(struct kk_cmd_buffer *cmd);
+ 
+ bool kk_attachment_do_renderpass_resolve(const struct kk_attachment *attachment,
+diff --git a/src/kosmickrisp/vulkan/kk_debug.c b/src/kosmickrisp/vulkan/kk_debug.c
+index 66581d7..30bd8b1 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.c
++++ b/src/kosmickrisp/vulkan/kk_debug.c
+@@ -54,6 +54,7 @@ const struct debug_named_value experimental_flags[] = {
+    {"root_table_loads", KK_EXPERIMENTAL_ROOT_TABLE_LOADS},
+    {"ubo_unbounded", KK_EXPERIMENTAL_UBO_UNBOUNDED},
+    {"const_offset_loads", KK_EXPERIMENTAL_CONST_OFFSET_LOADS},
++   {"narrow_barriers", KK_EXPERIMENTAL_NARROW_BARRIERS},
+    {NULL, 0},
+ };
+ 
+@@ -112,6 +113,8 @@ static const char *const kk_pass_stat_names[KK_PASS_STAT_COUNT] = {
+    [KK_PASS_STAT_MERGE_CANDIDATES] = "merge-cand",
+    [KK_PASS_STAT_DEAD_DS_DIRECT] = "dead-ds-direct",
+    [KK_PASS_STAT_DEAD_DS_LATER] = "dead-ds-later",
++   [KK_PASS_STAT_NARROW_END_BARRIERS] = "narrow-ends",
++   [KK_PASS_STAT_VERTEX_WAITS] = "vertex-waits",
+ };
+ 
+ static struct {
+diff --git a/src/kosmickrisp/vulkan/kk_debug.h b/src/kosmickrisp/vulkan/kk_debug.h
+index f8a883d..617d301 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.h
++++ b/src/kosmickrisp/vulkan/kk_debug.h
+@@ -82,7 +82,7 @@ enum kk_pass_stat {
+    KK_PASS_STAT_DRAWS,           /* Metal draws */
+    KK_PASS_STAT_EMPTY_RENDER,    /* render encoders ended without a draw */
+    KK_PASS_STAT_CLEAR_ONLY,      /* passes with a clear load and no draw */
+-   KK_PASS_STAT_END_BARRIERS,    /* encoder-end barriers, all stages */
++   KK_PASS_STAT_END_BARRIERS,    /* encoder-end barriers */
+    KK_PASS_STAT_PIPELINE_BARRIERS, /* vkCmdPipelineBarrier2 */
+    KK_PASS_STAT_BARRIERS_RENDER, /* ... in a render encoder, not splitting */
+    KK_PASS_STAT_BARRIER_SPLITS,  /* ... that split the render encoder */
+@@ -102,6 +102,11 @@ enum kk_pass_stat {
+     * between (their reads, if any, are not seen) */
+    KK_PASS_STAT_DEAD_DS_DIRECT,
+    KK_PASS_STAT_DEAD_DS_LATER,
++   /* MESA_KK_EXPERIMENTAL=narrow_barriers: render encoder ends that left
++    * the vertex stage free, and render encoders that waited for the work
++    * before them in it */
++   KK_PASS_STAT_NARROW_END_BARRIERS,
++   KK_PASS_STAT_VERTEX_WAITS,
+    KK_PASS_STAT_COUNT,
+ };
+ 
+@@ -187,6 +192,12 @@ enum kk_experimental {
+     * uniform buffers) from the constant address space, not the device one
+     * (nir_to_msl_options::constant_offset_loads); ubo_unbounded implies it */
+    KK_EXPERIMENTAL_CONST_OFFSET_LOADS = 1ull << 12,
++   /* Playport (PLA-72): a render encoder's end barrier leaves the vertex
++    * stage of the work after it free, so the next pass's vertex work can
++    * overlap this one's fragment work; a barrier or event wait into a stage
++    * before rasterization makes the next render encoder wait for it
++    * (kk_cmd_buffer.c end_encoder, kk_note_vertex_dependency) */
++   KK_EXPERIMENTAL_NARROW_BARRIERS = 1ull << 13,
+ };
+ 
+ extern enum kk_experimental kk_mesa_experimental_flags;
+diff --git a/src/kosmickrisp/vulkan/kk_event.c b/src/kosmickrisp/vulkan/kk_event.c
+index c1c5e18..a7bd1e9 100644
+--- a/src/kosmickrisp/vulkan/kk_event.c
++++ b/src/kosmickrisp/vulkan/kk_event.c
+@@ -117,4 +117,6 @@ kk_CmdWaitEvents2(VkCommandBuffer commandBuffer, uint32_t eventCount,
+    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
+    if (KK_DEBUG(PASSES))
+       cmd->pass_debug.barriers++;
++   for (uint32_t i = 0; i < eventCount; i++)
++      kk_note_vertex_dependency(cmd, &pDependencyInfos[i]);
+ }

@@ -15,6 +15,7 @@
  *
  * SPV_DIR holds the SPIR-V the test script compiled from shaders/.
  */
+#define _GNU_SOURCE /* memmem */
 #include <dirent.h>
 #include <dlfcn.h>
 #include <signal.h>
@@ -195,6 +196,15 @@ msl41_wanted(void)
 {
    const char *e = getenv("MESA_KK_EXPERIMENTAL");
    return e && strstr(e, "msl41");
+}
+
+/* Whether this run hides float controls 2 and NaN and Inf preservation
+ * (PLA-72): MESA_KK_EXPERIMENTAL names no_fp_preserve. */
+static bool
+no_fp_preserve_wanted(void)
+{
+   const char *e = getenv("MESA_KK_EXPERIMENTAL");
+   return e && strstr(e, "no_fp_preserve");
 }
 
 static bool
@@ -640,6 +650,432 @@ check_gpu_log(void)
    }
    const char *end = strchr(line, '\n');
    printf("ok gpu-log: %.*s\n", end ? (int)(end - line) : (int)strlen(line), line);
+   return 0;
+}
+
+/* patches/mesa 0113 (PLA-72): one command buffer of six passes without
+ * draws, in a child with MESA_KK_DEBUG and MESA_KK_EXPERIMENTAL as given and
+ * the mock's encoder trace on, whose stderr pass_rules_log reads. RGBA8
+ * colour and D32_SFLOAT_S8_UINT depth/stencil, 64x64, every pass on all of
+ * them; C clear, L load, x don't care, S store:
+ *   P1 colour C/S (clear-only)
+ *   P2 colour L/S, depth and stencil C/S (clear-only)
+ *   P3 all L/S
+ *   P4 colour L/S, depth and stencil C/S (clear-only)
+ *   a buffer copy (a compute encoder)
+ *   P5 colour L/S, depth C/S, stencil L/S (clear-only)
+ *   a barrier into the vertex shader, outside a pass
+ *   P6 all L/S on a 32x32 area (not the whole framebuffer) */
+static void
+pass_rules_child(const char *debug, const char *experimental)
+{
+   /* What the test script's runs record or change stays theirs */
+   unsetenv("KK_MOCK_MSL_DIR");
+   unsetenv("KK_MOCK_MSL_VERSIONS");
+   unsetenv("KK_MOCK_INTERRUPT_BUILDS");
+   unsetenv("MESA_KK_DUMP_MSL_MIN_KB");
+   setenv("MESA_SHADER_CACHE_DISABLE", "true", 1);
+   setenv("KK_MOCK_TRACE_ENCODERS", "1", 1);
+   if (debug)
+      setenv("MESA_KK_DEBUG", debug, 1);
+   else
+      unsetenv("MESA_KK_DEBUG");
+   if (experimental)
+      setenv("MESA_KK_EXPERIMENTAL", experimental, 1);
+   else
+      unsetenv("MESA_KK_EXPERIMENTAL");
+
+   VkApplicationInfo app = {.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
+                            .apiVersion = VK_API_VERSION_1_3};
+   VkInstanceCreateInfo ici = {.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
+                               .pApplicationInfo = &app};
+   CHECK(((PFN_vkCreateInstance)gipa(NULL, "vkCreateInstance"))(&ici, NULL, &inst));
+   uint32_t count = 1;
+   VkPhysicalDevice pd;
+   IPROC(vkEnumeratePhysicalDevices);
+   CHECK(vkEnumeratePhysicalDevices(inst, &count, &pd));
+   float prio = 1.0f;
+   VkDeviceQueueCreateInfo qci = {
+      .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+      .queueCount = 1,
+      .pQueuePriorities = &prio,
+   };
+   VkPhysicalDeviceVulkan13Features v13 = {
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
+      .synchronization2 = VK_TRUE,
+      .dynamicRendering = VK_TRUE,
+   };
+   VkDeviceCreateInfo dci = {
+      .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+      .pNext = &v13,
+      .queueCreateInfoCount = 1,
+      .pQueueCreateInfos = &qci,
+   };
+   IPROC(vkCreateDevice);
+   CHECK(vkCreateDevice(pd, &dci, NULL, &dev));
+   DPROC(vkGetDeviceQueue);
+   DPROC(vkCreateImage);
+   DPROC(vkGetImageMemoryRequirements);
+   DPROC(vkBindImageMemory);
+   DPROC(vkCreateImageView);
+   DPROC(vkCreateBuffer);
+   DPROC(vkGetBufferMemoryRequirements);
+   DPROC(vkBindBufferMemory);
+   DPROC(vkAllocateMemory);
+   DPROC(vkCreateCommandPool);
+   DPROC(vkAllocateCommandBuffers);
+   DPROC(vkBeginCommandBuffer);
+   DPROC(vkEndCommandBuffer);
+   DPROC(vkCmdBeginRendering);
+   DPROC(vkCmdEndRendering);
+   DPROC(vkCmdCopyBuffer);
+   DPROC(vkCmdPipelineBarrier2);
+   DPROC(vkQueueSubmit);
+   DPROC(vkQueueWaitIdle);
+   DPROC(vkDestroyDevice);
+   VkQueue queue;
+   vkGetDeviceQueue(dev, 0, 0, &queue);
+
+   const VkFormat formats[2] = {VK_FORMAT_R8G8B8A8_UNORM,
+                                VK_FORMAT_D32_SFLOAT_S8_UINT};
+   VkImageView views[2];
+   for (unsigned i = 0; i < 2; i++) {
+      VkImageCreateInfo ci = {
+         .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+         .imageType = VK_IMAGE_TYPE_2D,
+         .format = formats[i],
+         .extent = {64, 64, 1},
+         .mipLevels = 1,
+         .arrayLayers = 1,
+         .samples = VK_SAMPLE_COUNT_1_BIT,
+         .tiling = VK_IMAGE_TILING_OPTIMAL,
+         .usage = i ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT
+                    : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+      };
+      VkImage image;
+      CHECK(vkCreateImage(dev, &ci, NULL, &image));
+      VkMemoryRequirements mr;
+      vkGetImageMemoryRequirements(dev, image, &mr);
+      VkMemoryAllocateInfo mai = {
+         .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+         .allocationSize = mr.size,
+         .memoryTypeIndex = __builtin_ctz(mr.memoryTypeBits),
+      };
+      VkDeviceMemory mem;
+      CHECK(vkAllocateMemory(dev, &mai, NULL, &mem));
+      CHECK(vkBindImageMemory(dev, image, mem, 0));
+      VkImageViewCreateInfo vci = {
+         .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+         .image = image,
+         .viewType = VK_IMAGE_VIEW_TYPE_2D,
+         .format = formats[i],
+         .subresourceRange = {i ? VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT
+                                : VK_IMAGE_ASPECT_COLOR_BIT,
+                              0, 1, 0, 1},
+      };
+      CHECK(vkCreateImageView(dev, &vci, NULL, &views[i]));
+   }
+   VkBufferCreateInfo bci = {
+      .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+      .size = 4096,
+      .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+   };
+   VkBuffer buf;
+   CHECK(vkCreateBuffer(dev, &bci, NULL, &buf));
+   VkMemoryRequirements req;
+   vkGetBufferMemoryRequirements(dev, buf, &req);
+   VkMemoryAllocateInfo mai = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+                               .allocationSize = req.size,
+                               .memoryTypeIndex = __builtin_ctz(req.memoryTypeBits)};
+   VkDeviceMemory mem;
+   CHECK(vkAllocateMemory(dev, &mai, NULL, &mem));
+   CHECK(vkBindBufferMemory(dev, buf, mem, 0));
+
+   VkCommandPoolCreateInfo cpci = {.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+   VkCommandPool cpool;
+   CHECK(vkCreateCommandPool(dev, &cpci, NULL, &cpool));
+   VkCommandBufferAllocateInfo cbai = {
+      .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+      .commandPool = cpool,
+      .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+      .commandBufferCount = 1,
+   };
+   VkCommandBuffer cmd;
+   CHECK(vkAllocateCommandBuffers(dev, &cbai, &cmd));
+   VkCommandBufferBeginInfo bi = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+   CHECK(vkBeginCommandBuffer(cmd, &bi));
+
+   static const struct {
+      bool depth;
+      VkAttachmentLoadOp load[3]; /* colour, depth, stencil */
+      uint32_t size;
+      bool copy_after, barrier_after;
+   } passes[] = {
+      {false, {VK_ATTACHMENT_LOAD_OP_CLEAR}, 64, false, false},
+      {true, {VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_LOAD_OP_CLEAR}, 64, false, false},
+      {true, {VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_LOAD_OP_LOAD}, 64, false, false},
+      {true, {VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_LOAD_OP_CLEAR}, 64, true, false},
+      {true, {VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_LOAD_OP_LOAD}, 64, false, true},
+      {true, {VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_LOAD_OP_LOAD}, 32, false, false},
+   };
+   for (unsigned p = 0; p < sizeof(passes) / sizeof(passes[0]); p++) {
+      VkRenderingAttachmentInfo att[3];
+      for (unsigned a = 0; a < 3; a++)
+         att[a] = (VkRenderingAttachmentInfo){
+            .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+            .imageView = views[a ? 1 : 0],
+            .imageLayout = a ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+                             : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            .loadOp = passes[p].load[a],
+            .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+            .clearValue.depthStencil = {1.0f, 0},
+         };
+      VkRenderingInfo ri = {
+         .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+         .renderArea = {{0, 0}, {passes[p].size, passes[p].size}},
+         .layerCount = 1,
+         .colorAttachmentCount = 1,
+         .pColorAttachments = &att[0],
+         .pDepthAttachment = passes[p].depth ? &att[1] : NULL,
+         .pStencilAttachment = passes[p].depth ? &att[2] : NULL,
+      };
+      vkCmdBeginRendering(cmd, &ri);
+      vkCmdEndRendering(cmd);
+      if (passes[p].copy_after) {
+         VkBufferCopy region = {.srcOffset = 0, .dstOffset = 2048, .size = 1024};
+         vkCmdCopyBuffer(cmd, buf, buf, 1, &region);
+      }
+      if (passes[p].barrier_after) {
+         VkMemoryBarrier2 mb = {
+            .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+            .srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+            .srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT,
+            .dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT,
+            .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT,
+         };
+         VkDependencyInfo di = {
+            .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+            .memoryBarrierCount = 1,
+            .pMemoryBarriers = &mb,
+         };
+         vkCmdPipelineBarrier2(cmd, &di);
+      }
+   }
+   CHECK(vkEndCommandBuffer(cmd));
+   VkSubmitInfo si = {
+      .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+      .commandBufferCount = 1,
+      .pCommandBuffers = &cmd,
+   };
+   CHECK(vkQueueSubmit(queue, 1, &si, VK_NULL_HANDLE));
+   CHECK(vkQueueWaitIdle(queue));
+   vkDestroyDevice(dev, NULL);
+   _exit(0);
+}
+
+/* Runs pass_rules_child with these variables; its stderr in log. */
+static int
+pass_rules_log(const char *debug, const char *experimental, char *log,
+               size_t size)
+{
+   int fds[2];
+   if (pipe(fds))
+      return 1;
+   pid_t child = fork();
+   if (child == 0) {
+      close(fds[0]);
+      dup2(fds[1], 2);
+      pass_rules_child(debug, experimental);
+   }
+   close(fds[1]);
+   size_t len = 0;
+   for (ssize_t r; len < size - 1 && (r = read(fds[0], log + len, size - 1 - len)) > 0;)
+      len += r;
+   log[len] = 0;
+   close(fds[0]);
+   int status = 0;
+   if (child < 0 || waitpid(child, &status, 0) != child || !WIFEXITED(status) ||
+       WEXITSTATUS(status) != 0) {
+      fprintf(stderr, "pass rules child (MESA_KK_DEBUG=%s MESA_KK_EXPERIMENTAL=%s): "
+              "status %#x\n%s", debug ? debug : "", experimental ? experimental : "",
+              status, log);
+      return 1;
+   }
+   return 0;
+}
+
+/* How many lines of log hold text */
+static unsigned
+log_lines_with(const char *log, const char *text)
+{
+   unsigned n = 0;
+   for (const char *l = log; l && *l;) {
+      const char *e = strchr(l, '\n');
+      size_t len = e ? (size_t)(e - l) : strlen(l);
+      const char *hit = strstr(l, text);
+      n += hit && hit < l + len;
+      l = e ? e + 1 : NULL;
+   }
+   return n;
+}
+
+/* The mock's encoder trace: its "kk-mock-enc: " lines, without the prefix,
+ * those that begin with only (all for NULL, all but the store actions for
+ * ""), one per line */
+static void
+encoder_trace(const char *log, const char *only, char *out, size_t size)
+{
+   size_t len = 0;
+   out[0] = 0;
+   for (const char *l = strstr(log, "kk-mock-enc: "); l;
+        l = strstr(l + 1, "kk-mock-enc: ")) {
+      const char *t = l + strlen("kk-mock-enc: ");
+      const char *e = strchr(t, '\n');
+      size_t n = e ? (size_t)(e - t) : strlen(t);
+      if (only && *only && strncmp(t, only, strlen(only)))
+         continue;
+      if (only && !*only && memmem(t, n, "-store ", 7))
+         continue;
+      if (len + n + 2 < size) {
+         memcpy(out + len, t, n);
+         len += n;
+         out[len++] = '\n';
+         out[len] = 0;
+      }
+   }
+}
+
+/* The store-action lines of a trace */
+static void
+encoder_stores(const char *trace, char *out, size_t size)
+{
+   size_t len = 0;
+   out[0] = 0;
+   for (const char *l = trace; l && *l;) {
+      const char *e = strchr(l, '\n');
+      size_t n = e ? (size_t)(e - l) + 1 : strlen(l);
+      if (memmem(l, n, "-store ", 7) && len + n + 1 < size) {
+         memcpy(out + len, l, n);
+         len += n;
+         out[len] = 0;
+      }
+      l = e ? e + 1 : NULL;
+   }
+}
+
+/* MESA_KK_DEBUG=passes counts what the six passes record, and the final
+ * [kk-passes] line has them; without it nothing is counted and every
+ * encoder ends on an all-stages barrier, every depth and stencil store a
+ * Store. */
+static int
+check_pass_rules(void)
+{
+   static char log[1 << 16], trace[1 << 14];
+   if (pass_rules_log(NULL, NULL, log, sizeof(log)))
+      return 1;
+   encoder_trace(log, NULL, trace, sizeof(trace));
+   if (strstr(log, "[kk-passes]") ||
+       log_lines_with(trace, "render") != 6 || log_lines_with(trace, "compute") != 1 ||
+       log_lines_with(trace, "producer-barrier after=0x7c00001f before-queue=0x7c00001f") != 7 ||
+       log_lines_with(trace, "producer-barrier") != 7 ||
+       log_lines_with(trace, "consumer-barrier") != 0 ||
+       log_lines_with(trace, "depth-store action=1") != 5 ||
+       log_lines_with(trace, "stencil-store action=1") != 5 ||
+       log_lines_with(trace, "-store action=0") != 0) {
+      fprintf(stderr, "pass rules, no flags: not 6 render and 1 compute encoders, "
+              "7 all-stages end barriers and every store a Store:\n%s", trace);
+      return 1;
+   }
+   static char default_trace[1 << 14];
+   memcpy(default_trace, trace, sizeof(trace));
+
+   if (pass_rules_log("passes", NULL, log, sizeof(log)))
+      return 1;
+   const char *line = strstr(log, "[kk-passes] ");
+   const char *final = line ? strstr(line, " final: ") : NULL;
+   static const char *const want[] = {
+      " cbs=1 ", " passes=6 ", " render-enc=6 ", " compute-enc=1 ", " draws=0 ",
+      " empty-render-enc=6 ", " clear-only=4 ", " end-barriers=7 ",
+      " pipeline-barriers=1 ", " in-render=0 ", " splits=0 ", " in-compute=0 ",
+      " idle=1 ", " compute-splits=0 ", " fold-cand=3 ", " merge-cand=1 ",
+      " dead-ds-direct=2 ", " dead-ds-later=1 ",
+   };
+   const char *end = final ? strchr(final, '\n') : NULL;
+   for (unsigned i = 0; final && i < sizeof(want) / sizeof(want[0]); i++) {
+      const char *hit = strstr(final, want[i]);
+      if (!hit || (end && hit > end)) {
+         fprintf(stderr, "MESA_KK_DEBUG=passes: no%s in the final [kk-passes] line:\n%.*s\n",
+                 want[i], end ? (int)(end - line) : (int)strlen(line), line);
+         return 1;
+      }
+   }
+   encoder_trace(log, NULL, trace, sizeof(trace));
+   if (!final || strcmp(trace, default_trace)) {
+      fprintf(stderr, "MESA_KK_DEBUG=passes: no final [kk-passes] line, or not the "
+              "encoders, barriers and stores made without it:\n%s", log);
+      return 1;
+   }
+   printf("ok pass-rules: %.*s\n", end ? (int)(end - line) : (int)strlen(line), line);
+
+   /* patches/mesa 0114: MESA_KK_EXPERIMENTAL=narrow_barriers ends each
+    * render encoder on a barrier that leaves the vertex stage free (the
+    * compute one stays whole); the command buffer's first render encoder and
+    * the one after the barrier into the vertex shader wait for the queue's
+    * earlier work before their vertex stage. The stores are unchanged. */
+   if (pass_rules_log("passes", "narrow_barriers", log, sizeof(log)))
+      return 1;
+   static const char narrow_want[] =
+      "render\nconsumer-barrier after-queue=0x7c00001f before=0x1\n"
+      "producer-barrier after=0x7c00001f before-queue=0x7c00001e\nend\n"
+      "render\nproducer-barrier after=0x7c00001f before-queue=0x7c00001e\nend\n"
+      "render\nproducer-barrier after=0x7c00001f before-queue=0x7c00001e\nend\n"
+      "render\nproducer-barrier after=0x7c00001f before-queue=0x7c00001e\nend\n"
+      "compute\nproducer-barrier after=0x7c00001f before-queue=0x7c00001f\nend\n"
+      "render\nproducer-barrier after=0x7c00001f before-queue=0x7c00001e\nend\n"
+      "render\nconsumer-barrier after-queue=0x7c00001f before=0x1\n"
+      "producer-barrier after=0x7c00001f before-queue=0x7c00001e\nend\n";
+   static char stores[1 << 14], default_stores[1 << 14];
+   encoder_trace(log, NULL, trace, sizeof(trace));
+   encoder_stores(trace, stores, sizeof(stores));
+   encoder_stores(default_trace, default_stores, sizeof(default_stores));
+   encoder_trace(log, "", trace, sizeof(trace));
+   line = strstr(log, "[kk-passes] ");
+   final = line ? strstr(line, " final: ") : NULL;
+   if (strcmp(trace, narrow_want) || strcmp(stores, default_stores) || !final ||
+       !strstr(final, " narrow-ends=6 ") || !strstr(final, " vertex-waits=2 ")) {
+      fprintf(stderr, "MESA_KK_EXPERIMENTAL=narrow_barriers: not the narrowed end "
+              "barriers, the two vertex waits and the same stores:\n%s", log);
+      return 1;
+   }
+   printf("ok pass-rules narrow_barriers: 6 render encoder ends leave the vertex "
+          "stage free, 2 vertex waits\n");
+
+   /* patches/mesa 0115: with MESA_KK_EXPERIMENTAL=ds_dont_care P2 to P5 leave
+    * their encoder open at their end; only P3's depth and stencil stores,
+    * which P4 clears whole with no encoder between, become DontCare. P4's
+    * end waits for the copy, P5's for P6, which loads; everything else is
+    * the trace made without the flag. */
+   if (pass_rules_log("passes", "ds_dont_care", log, sizeof(log)))
+      return 1;
+   encoder_trace(log, NULL, trace, sizeof(trace));
+   const char *second = strstr(trace, "depth-store ");
+   second = second ? strstr(second + 1, "depth-store ") : NULL;
+   bool p3 = second && !strncmp(second, "depth-store action=0\n", 21) &&
+             !strncmp(second + 21, "stencil-store action=0\n", 23);
+   unsigned dont_care = log_lines_with(trace, "-store action=0");
+   for (char *a; (a = strstr(trace, "-store action=0"));)
+      a[strlen("-store action=")] = '1';
+   line = strstr(log, "[kk-passes] ");
+   final = line ? strstr(line, " final: ") : NULL;
+   if (!p3 || dont_care != 2 || strcmp(trace, default_trace) || !final ||
+       !strstr(final, " deferred-ends=4 ") || !strstr(final, " ds-dont-care=2 ")) {
+      fprintf(stderr, "MESA_KK_EXPERIMENTAL=ds_dont_care: not DontCare for P3's "
+              "depth and stencil only, 4 deferred ends and the trace made "
+              "without it otherwise:\n%s", log);
+      return 1;
+   }
+   printf("ok pass-rules ds_dont_care: P3's depth and stencil stores DontCare, "
+          "4 deferred ends\n");
    return 0;
 }
 
@@ -1126,6 +1562,8 @@ main(int argc, char **argv)
                                .pApplicationInfo = &app};
    if (check_gpu_log())
       return 1;
+   if (check_pass_rules())
+      return 1;
    if (check_device_type())
       return 1;
    if (check_capture_timestamp_pool())
@@ -1187,6 +1625,42 @@ main(int argc, char **argv)
               atomic_float_feat.shaderSharedFloat32AtomicAdd,
               getenv("MESA_KK_EXPERIMENTAL") ? getenv("MESA_KK_EXPERIMENTAL") : "");
       return 1;
+   }
+   /* PLA-72: float controls 2, VK_KHR_shader_float_controls2 and signed
+    * zero, Inf and NaN preservation for 16- and 32-bit floats are reported
+    * unless MESA_KK_EXPERIMENTAL=no_fp_preserve. */
+   {
+      IPROC(vkGetPhysicalDeviceProperties2);
+      VkPhysicalDeviceShaderFloatControls2FeaturesKHR fc2 = {
+         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT_CONTROLS_2_FEATURES_KHR,
+      };
+      VkPhysicalDeviceFeatures2 fc2f = {
+         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+         .pNext = &fc2,
+      };
+      vkGetPhysicalDeviceFeatures2(pd, &fc2f);
+      VkPhysicalDeviceVulkan12Properties p12 = {
+         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES,
+      };
+      VkPhysicalDeviceProperties2 p2 = {
+         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
+         .pNext = &p12,
+      };
+      vkGetPhysicalDeviceProperties2(pd, &p2);
+      const bool want = !no_fp_preserve_wanted();
+      if (fc2.shaderFloatControls2 != want ||
+          has_device_extension(pd, "VK_KHR_shader_float_controls2") != want ||
+          p12.shaderSignedZeroInfNanPreserveFloat16 != want ||
+          p12.shaderSignedZeroInfNanPreserveFloat32 != want) {
+         fprintf(stderr, "float controls: shaderFloatControls2 %u, "
+                         "shaderSignedZeroInfNanPreserveFloat16 %u and 32 %u "
+                         "with MESA_KK_EXPERIMENTAL=%s\n",
+                 fc2.shaderFloatControls2,
+                 p12.shaderSignedZeroInfNanPreserveFloat16,
+                 p12.shaderSignedZeroInfNanPreserveFloat32,
+                 getenv("MESA_KK_EXPERIMENTAL") ? getenv("MESA_KK_EXPERIMENTAL") : "");
+         return 1;
+      }
    }
 
    float prio = 1.0f;
@@ -1396,6 +1870,7 @@ main(int argc, char **argv)
    struct pipe_desc descs[] = {
       {"no-gs", "pass.vert", NULL, NULL, NULL, "color.frag", TRI, false, FIRST, FILL},
       {"unroll-hint", "pass.vert", NULL, NULL, NULL, "unroll-hint.frag", TRI, false, FIRST, FILL},
+      {"dxvk-fp", "pass.vert", NULL, NULL, NULL, "dxvk-fp.frag", TRI, false, FIRST, FILL},
       {"gs-passthrough", "pass.vert", NULL, NULL, "passthrough.geom", "color.frag", TRI, false, FIRST, FILL},
       {"gs-dynamic-count", "pass.vert", NULL, NULL, "dynamic.geom", "color.frag", VK_PRIMITIVE_TOPOLOGY_POINT_LIST, false, FIRST, FILL},
       {"gs-lines-out", "pass.vert", NULL, NULL, "lines.geom", "color.frag", TRI, false, FIRST, FILL},
@@ -1456,6 +1931,14 @@ main(int argc, char **argv)
             return 1;
          }
       }
+      /* PLA-72: how the pipeline's MSL guards multiplications against
+       * NaN * 0 folding (workaround 14), how many math mode blocks it has
+       * and how many root table loads go through buf0 */
+      if (!strcmp(descs[i].name, "dxvk-fp") && msl_before >= 0)
+         printf("dxvk-fp: fmul_guards=%d math_modes=%d root_table_loads=%d\n",
+                msl_count_text(msl_before, msl_count(), "!&buf0.contents[0] ? 1 :"),
+                msl_count_text(msl_before, msl_count(), "#pragma METAL fp math_mode"),
+                msl_count_text(msl_before, msl_count(), "(constant uchar *)&buf0.contents[0] +"));
       bool tess = descs[i].tcs != NULL;
 
       VkCommandBufferAllocateInfo cbai = {

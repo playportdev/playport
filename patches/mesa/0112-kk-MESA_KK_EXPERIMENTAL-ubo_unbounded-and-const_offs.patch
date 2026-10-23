@@ -1,0 +1,230 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kamil=20Postro=C5=BCny?= <kamil@postrozny.pl>
+Date: Thu, 22 Oct 2026 21:34:17 +0200
+Subject: [PATCH] kk: MESA_KK_EXPERIMENTAL=ubo_unbounded and const_offset_loads
+
+DXVK enables robust buffer access, so every uniform buffer read of a
+D3D11 constant buffer is a scalar load behind a bounds check,
+"uint(72u) < t21 ? *(constant float*)((t20 + uint(72u))) : 0": 1244 of
+them in 62 shader stages of Hollow Knight, about 1400 compares and
+selects and 2000 inttoptr casts in their AIR. DXMT reads constant
+buffers with unchecked loads from the argument's pointer. Descriptor
+sets are read with load_global_constant_offset, from the device
+address space ("coherent device" in vertex shaders on iOS 27, by
+workaround 6), though nothing on the GPU writes them.
+
+Two measuring switches, off by default:
+- const_offset_loads: load_global_constant_offset, which descriptor
+  sets and unchecked uniform buffers are read with, reads the constant
+  address space, as a checked uniform buffer read already does. Same
+  addresses and values.
+- ubo_unbounded: uniform buffers take the unchecked address format
+  (kk_ubo_addr_format) whatever the pipeline's robustness, and imply
+  const_offset_loads. A read past the bound range is no longer 0 and
+  may fault: for measuring only, never a default without the owner.
+  In Hollow Knight's replayed shaders every check goes and the AIR has
+  31 % fewer instructions.
+Both enter the pipeline cache UUID; without them the UUID and the MSL
+are unchanged.
+
+Linear: PLA-72
+Class: diagnostics
+Evidence: docs/plans/2026-10-06-vulkan-performance.md (Review 2026-10-21, lead 4)
+Offered-upstream: no
+---
+ src/kosmickrisp/compiler/msl_private.h            |  2 ++
+ src/kosmickrisp/compiler/nir_to_msl.c             |  5 ++++-
+ src/kosmickrisp/compiler/nir_to_msl.h             |  7 +++++++
+ src/kosmickrisp/vulkan/kk_debug.c                 |  2 ++
+ src/kosmickrisp/vulkan/kk_debug.h                 |  9 +++++++++
+ src/kosmickrisp/vulkan/kk_nir_lower_descriptors.c |  2 +-
+ src/kosmickrisp/vulkan/kk_physical_device.c       |  3 ++-
+ src/kosmickrisp/vulkan/kk_shader.c                |  8 ++++++--
+ src/kosmickrisp/vulkan/kk_shader.h                | 13 +++++++++++++
+ 9 files changed, 46 insertions(+), 5 deletions(-)
+
+diff --git a/src/kosmickrisp/compiler/msl_private.h b/src/kosmickrisp/compiler/msl_private.h
+index b6a55b5..9fc03ef 100644
+--- a/src/kosmickrisp/compiler/msl_private.h
++++ b/src/kosmickrisp/compiler/msl_private.h
+@@ -33,6 +33,8 @@ struct nir_to_msl_ctx {
+    const char *open_fp_math_mode;
+    /* nir_to_msl_options::root_table_loads */
+    bool root_table_loads;
++   /* nir_to_msl_options::constant_offset_loads */
++   bool constant_offset_loads;
+    unsigned short indentlevel;
+    struct io_slot_info inputs_info[NUM_TOTAL_VARYING_SLOTS];
+    struct io_slot_info outputs_info[NUM_TOTAL_VARYING_SLOTS];
+diff --git a/src/kosmickrisp/compiler/nir_to_msl.c b/src/kosmickrisp/compiler/nir_to_msl.c
+index 4fec2f9..a1c9cf7 100644
+--- a/src/kosmickrisp/compiler/nir_to_msl.c
++++ b/src/kosmickrisp/compiler/nir_to_msl.c
+@@ -1448,7 +1448,9 @@ intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
+    case nir_intrinsic_load_global_constant_offset: {
+       enum gl_access_qualifier access = nir_intrinsic_access(instr);
+       const char *type = msl_type_for_def(ctx->types, &instr->def);
+-      const char *qualifier = global_access_qualifier(ctx, access);
++      const char *qualifier = ctx->constant_offset_loads
++                                 ? "constant"
++                                 : global_access_qualifier(ctx, access);
+       if (access & ACCESS_ATOMIC) {
+          assert(instr->num_components == 1u &&
+                 "We can only do single component with atomics");
+@@ -2623,6 +2625,7 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
+       .dual_source_blend = options->dual_source_blend,
+       .fp_precise_only = options->fp_precise_only,
+       .root_table_loads = options->root_table_loads,
++      .constant_offset_loads = options->constant_offset_loads,
+    };
+    nir_function_impl *impl = nir_shader_get_entrypoint(shader);
+    msl_gather_info(&ctx, options);
+diff --git a/src/kosmickrisp/compiler/nir_to_msl.h b/src/kosmickrisp/compiler/nir_to_msl.h
+index 3b6b72d..31c563a 100644
+--- a/src/kosmickrisp/compiler/nir_to_msl.h
++++ b/src/kosmickrisp/compiler/nir_to_msl.h
+@@ -48,6 +48,13 @@ struct nir_to_msl_options {
+     * argument, not through its address converted to an integer and back,
+     * which hides from Metal's compiler which buffer it reads. */
+    bool root_table_loads;
++
++   /* Playport (PLA-72): load_global_constant_offset, which descriptor sets
++    * (kk_nir_lower_descriptors) and uniform buffers without bounds checks
++    * are read with, reads the constant address space, as a bounds-checked
++    * uniform buffer's load_global_constant_bounded does, rather than the
++    * device one. */
++   bool constant_offset_loads;
+ };
+ 
+ /* Assumes nir_shader_gather_info has been called beforehand. */
+diff --git a/src/kosmickrisp/vulkan/kk_debug.c b/src/kosmickrisp/vulkan/kk_debug.c
+index 4148a55..560bd70 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.c
++++ b/src/kosmickrisp/vulkan/kk_debug.c
+@@ -49,6 +49,8 @@ const struct debug_named_value experimental_flags[] = {
+    {"no_fp_preserve", KK_EXPERIMENTAL_NO_FP_PRESERVE},
+    {"fp_precise_only", KK_EXPERIMENTAL_FP_PRECISE_ONLY},
+    {"root_table_loads", KK_EXPERIMENTAL_ROOT_TABLE_LOADS},
++   {"ubo_unbounded", KK_EXPERIMENTAL_UBO_UNBOUNDED},
++   {"const_offset_loads", KK_EXPERIMENTAL_CONST_OFFSET_LOADS},
+    {NULL, 0},
+ };
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_debug.h b/src/kosmickrisp/vulkan/kk_debug.h
+index f569f3c..393d9a3 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.h
++++ b/src/kosmickrisp/vulkan/kk_debug.h
+@@ -125,6 +125,15 @@ enum kk_experimental {
+    /* Playport (PLA-72): load from the root table and the per-draw data
+     * through their buffer arguments (nir_to_msl_options::root_table_loads) */
+    KK_EXPERIMENTAL_ROOT_TABLE_LOADS = 1ull << 10,
++   /* Playport (PLA-72): no bounds check on uniform buffer reads, whatever
++    * the robustness (kk_ubo_addr_format), read from the constant address
++    * space as the bounds-checked ones are (implies const_offset_loads).
++    * Out-of-bounds reads are not 0 and may fault: for measuring only */
++   KK_EXPERIMENTAL_UBO_UNBOUNDED = 1ull << 11,
++   /* Playport (PLA-72): read descriptor sets (and, with ubo_unbounded,
++    * uniform buffers) from the constant address space, not the device one
++    * (nir_to_msl_options::constant_offset_loads); ubo_unbounded implies it */
++   KK_EXPERIMENTAL_CONST_OFFSET_LOADS = 1ull << 12,
+ };
+ 
+ extern enum kk_experimental kk_mesa_experimental_flags;
+diff --git a/src/kosmickrisp/vulkan/kk_nir_lower_descriptors.c b/src/kosmickrisp/vulkan/kk_nir_lower_descriptors.c
+index 2f13f29..4b246ce 100644
+--- a/src/kosmickrisp/vulkan/kk_nir_lower_descriptors.c
++++ b/src/kosmickrisp/vulkan/kk_nir_lower_descriptors.c
+@@ -992,7 +992,7 @@ kk_nir_lower_descriptors(nir_shader *nir,
+             VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DISABLED ||
+          rs->images != VK_PIPELINE_ROBUSTNESS_IMAGE_BEHAVIOR_DISABLED,
+       .ssbo_addr_format = kk_buffer_addr_format(rs->storage_buffers),
+-      .ubo_addr_format = kk_buffer_addr_format(rs->uniform_buffers),
++      .ubo_addr_format = kk_ubo_addr_format(rs->uniform_buffers),
+       .query_sampled_type = query_sampled_type,
+    };
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_physical_device.c b/src/kosmickrisp/vulkan/kk_physical_device.c
+index a53222e..9b66538 100644
+--- a/src/kosmickrisp/vulkan/kk_physical_device.c
++++ b/src/kosmickrisp/vulkan/kk_physical_device.c
+@@ -1066,7 +1066,8 @@ kk_physical_device_init_pipeline_cache(struct kk_physical_device *pdev)
+     * when one is set, so that the UUID without them is unchanged */
+    const uint64_t msl_experimental =
+       kk_mesa_experimental_flags &
+-      (KK_EXPERIMENTAL_FP_PRECISE_ONLY | KK_EXPERIMENTAL_ROOT_TABLE_LOADS);
++      (KK_EXPERIMENTAL_FP_PRECISE_ONLY | KK_EXPERIMENTAL_ROOT_TABLE_LOADS |
++       KK_EXPERIMENTAL_UBO_UNBOUNDED | KK_EXPERIMENTAL_CONST_OFFSET_LOADS);
+    if (msl_experimental)
+       _mesa_blake3_update(&blake3_ctx, &msl_experimental,
+                           sizeof(msl_experimental));
+diff --git a/src/kosmickrisp/vulkan/kk_shader.c b/src/kosmickrisp/vulkan/kk_shader.c
+index 732bd3f..aceeec6 100644
+--- a/src/kosmickrisp/vulkan/kk_shader.c
++++ b/src/kosmickrisp/vulkan/kk_shader.c
+@@ -102,7 +102,7 @@ kk_get_spirv_options(struct vk_physical_device *vk_pdev,
+       .environment = NIR_SPIRV_VULKAN,
+       .ssbo_addr_format = kk_buffer_addr_format(rs->storage_buffers),
+       .phys_ssbo_addr_format = nir_address_format_64bit_global,
+-      .ubo_addr_format = kk_buffer_addr_format(rs->uniform_buffers),
++      .ubo_addr_format = kk_ubo_addr_format(rs->uniform_buffers),
+       .shared_addr_format = nir_address_format_32bit_offset,
+       .min_ssbo_alignment = KK_MIN_SSBO_ALIGNMENT,
+       .min_ubo_alignment = KK_MIN_UBO_ALIGNMENT,
+@@ -907,7 +907,7 @@ kk_lower_nir(struct kk_device *dev, nir_shader *nir, bool emulated_stage,
+    NIR_PASS(_, nir, nir_lower_explicit_io, nir_var_mem_ssbo,
+             kk_buffer_addr_format(rs->storage_buffers));
+    NIR_PASS(_, nir, nir_lower_explicit_io, nir_var_mem_ubo,
+-            kk_buffer_addr_format(rs->uniform_buffers));
++            kk_ubo_addr_format(rs->uniform_buffers));
+ 
+    NIR_PASS(_, nir, nir_lower_io, nir_var_shader_in | nir_var_shader_out,
+             type_size_vec4,
+@@ -1362,6 +1362,8 @@ kk_compile_gs_compute(struct kk_physical_device *pdev, nir_shader *nir,
+       .disabled_workarounds = pdev->settings.disabled_workarounds,
+       .fp_precise_only = KK_EXPERIMENTAL(FP_PRECISE_ONLY),
+       .root_table_loads = KK_EXPERIMENTAL(ROOT_TABLE_LOADS),
++      .constant_offset_loads = KK_EXPERIMENTAL(CONST_OFFSET_LOADS) ||
++                               KK_EXPERIMENTAL(UBO_UNBOUNDED),
+    };
+    out->code = nir_to_msl(nir, &options);
+    const char *entrypoint = nir_shader_get_entrypoint(nir)->function->name;
+@@ -1642,6 +1644,8 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
+       .dual_source_blend = dual_source,
+       .fp_precise_only = KK_EXPERIMENTAL(FP_PRECISE_ONLY),
+       .root_table_loads = KK_EXPERIMENTAL(ROOT_TABLE_LOADS),
++      .constant_offset_loads = KK_EXPERIMENTAL(CONST_OFFSET_LOADS) ||
++                               KK_EXPERIMENTAL(UBO_UNBOUNDED),
+    };
+    if (gpl == KK_GPL_LIBRARY && stage == MESA_SHADER_VERTEX)
+       kk_gpl_note_vertex_outputs(shader, nir);
+diff --git a/src/kosmickrisp/vulkan/kk_shader.h b/src/kosmickrisp/vulkan/kk_shader.h
+index f9efbf9..21b6b74 100644
+--- a/src/kosmickrisp/vulkan/kk_shader.h
++++ b/src/kosmickrisp/vulkan/kk_shader.h
+@@ -8,6 +8,7 @@
+ #ifndef KK_SHADER_H
+ #define KK_SHADER_H 1
+ 
++#include "kk_debug.h"
+ #include "kk_device_memory.h"
+ #include "kk_private.h"
+ 
+@@ -226,6 +227,18 @@ kk_buffer_addr_format(VkPipelineRobustnessBufferBehaviorEXT robustness)
+    }
+ }
+ 
++/* Playport (PLA-72): uniform buffers' address format. With
++ * MESA_KK_EXPERIMENTAL=ubo_unbounded never bounds-checked, as DXMT reads
++ * D3D11 constant buffers: a read past the bound range is no longer 0 and
++ * may fault. For measuring only. */
++static inline nir_address_format
++kk_ubo_addr_format(VkPipelineRobustnessBufferBehaviorEXT robustness)
++{
++   if (KK_EXPERIMENTAL(UBO_UNBOUNDED))
++      robustness = VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DISABLED;
++   return kk_buffer_addr_format(robustness);
++}
++
+ bool
+ kk_nir_lower_descriptors(nir_shader *nir,
+                          const struct vk_pipeline_robustness_state *rs,

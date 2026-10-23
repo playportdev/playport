@@ -1,0 +1,320 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kamil=20Postro=C5=BCny?= <kamil@postrozny.pl>
+Date: Thu, 22 Oct 2026 21:21:52 +0200
+Subject: [PATCH] kk: MESA_KK_EXPERIMENTAL=fp_precise_only keeps NaN care to
+ precise ops
+
+DXVK's D3D11 shaders reach KosmicKrisp with SignedZeroInfNanPreserve
+as their execution mode (dxbc-spirv's float controls 1 path, since
+KosmicKrisp reports no independent denorm mode) and, unless fxc set
+refactoringAllowed, NoContraction on every float operation. In Hollow
+Knight's every operation is NoContraction. nir_to_msl puts each
+operation in its own "#pragma METAL fp math_mode(safe)" block and,
+by workaround 14, turns each multiplication into
+"!&buf0.contents[0] ? 1 : a * b": 42 such selects in one fragment
+shader. Workaround 14 guards against Metal folding NaN * 0.0 to 0.0
+under relaxed math; safe math does not fold it (workaround 14 itself
+moved the comparisons to safe for that reason).
+
+With MESA_KK_EXPERIMENTAL=fp_precise_only:
+- msl_nir_fp_precise_only clears signed zero, Inf and NaN preservation
+  from every operation that is not precise (exact), but comparisons,
+  isfinite, isnormal, min, max and saturate, whose NaN behaviour SPIR-V
+  or GLSL.std.450 (NMin, NMax, NClamp) defines: a shader that
+  preserves them only by default compiles fast but for those;
+- a precise multiplication, compiled safe, gets no workaround 14 guard;
+- consecutive operations of a block with the same math mode share one
+  pragma block.
+The switch enters the pipeline cache UUID; without it the UUID and the
+MSL are unchanged.
+
+Linear: PLA-72
+Class: diagnostics
+Evidence: docs/plans/2026-10-06-vulkan-performance.md (Review 2026-10-21, leads 1 and 4)
+Offered-upstream: no
+---
+ .../compiler/msl_nir_lower_common.c           | 40 +++++++++++++
+ src/kosmickrisp/compiler/msl_private.h        |  4 ++
+ src/kosmickrisp/compiler/nir_to_msl.c         | 56 +++++++++++++++++--
+ src/kosmickrisp/compiler/nir_to_msl.h         |  9 +++
+ src/kosmickrisp/vulkan/kk_debug.c             |  1 +
+ src/kosmickrisp/vulkan/kk_debug.h             |  5 ++
+ src/kosmickrisp/vulkan/kk_physical_device.c   |  7 +++
+ src/kosmickrisp/vulkan/kk_shader.c            |  5 ++
+ 8 files changed, 121 insertions(+), 6 deletions(-)
+
+diff --git a/src/kosmickrisp/compiler/msl_nir_lower_common.c b/src/kosmickrisp/compiler/msl_nir_lower_common.c
+index c4f6645..9c84d2f 100644
+--- a/src/kosmickrisp/compiler/msl_nir_lower_common.c
++++ b/src/kosmickrisp/compiler/msl_nir_lower_common.c
+@@ -992,3 +992,43 @@ msl_nir_lower_multisample_alpha(nir_shader *s, bool alpha_to_coverage,
+ 
+    return progress;
+ }
++
++static bool
++fp_precise_only_instr(nir_builder *b, nir_alu_instr *alu, void *data)
++{
++   if (!nir_alu_instr_is_signed_zero_inf_nan_preserve(alu) ||
++       nir_alu_instr_is_exact(alu))
++      return false;
++
++   /* These ask for NaN or Inf handling in what they compute (SPIR-V's
++    * ordered and unordered comparisons, GLSL.std.450's NMin, NMax and
++    * NClamp, which DXVK uses for D3D's min, max and saturate), not through a
++    * shader's default float mode. */
++   switch (alu->op) {
++   case nir_op_fisfinite:
++   case nir_op_fisnormal:
++   case nir_op_fmin:
++   case nir_op_fmax:
++   case nir_op_fsat:
++      return false;
++   default:
++      if (nir_alu_instr_is_comparison(alu))
++         return false;
++   }
++
++   alu->fp_math_ctrl &= ~nir_fp_preserve_sz_inf_nan;
++   return true;
++}
++
++/* Playport (PLA-72): keep signed zero, Inf and NaN preservation only on
++ * precise (exact) operations and on the operations above, not on every
++ * operation of a shader that preserves them by default (SPIR-V's
++ * SignedZeroInfNanPreserve or FPFastMathDefault, as DXVK's shaders do),
++ * which nir_to_msl compiles relaxed with every multiplication guarded
++ * (KK_WORKAROUND_14). */
++bool
++msl_nir_fp_precise_only(nir_shader *nir)
++{
++   return nir_shader_alu_pass(nir, fp_precise_only_instr, nir_metadata_all,
++                              NULL);
++}
+diff --git a/src/kosmickrisp/compiler/msl_private.h b/src/kosmickrisp/compiler/msl_private.h
+index 99cdc1f..b014965 100644
+--- a/src/kosmickrisp/compiler/msl_private.h
++++ b/src/kosmickrisp/compiler/msl_private.h
+@@ -27,6 +27,10 @@ struct nir_to_msl_ctx {
+    bool uses_per_draw_data;
+    /* nir_to_msl_options::dual_source_blend */
+    bool dual_source_blend;
++   /* nir_to_msl_options::fp_precise_only, and the math mode of the block
++    * the ALU instructions just emitted share, NULL if none is open */
++   bool fp_precise_only;
++   const char *open_fp_math_mode;
+    unsigned short indentlevel;
+    struct io_slot_info inputs_info[NUM_TOTAL_VARYING_SLOTS];
+    struct io_slot_info outputs_info[NUM_TOTAL_VARYING_SLOTS];
+diff --git a/src/kosmickrisp/compiler/nir_to_msl.c b/src/kosmickrisp/compiler/nir_to_msl.c
+index b5239c2..49d8f87 100644
+--- a/src/kosmickrisp/compiler/nir_to_msl.c
++++ b/src/kosmickrisp/compiler/nir_to_msl.c
+@@ -254,6 +254,21 @@ alu_funclike_precise(struct nir_to_msl_ctx *ctx, nir_alu_instr *instr,
+       alu_src_to_msl(ctx, instr, 1);                                           \
+    } while (0)
+ 
++/* KK_WORKAROUND_14: Metal folds NaN * 0.0 to 0.0 under relaxed math, so a
++ * multiplication that preserves NaN or Inf is guarded. With
++ * nir_to_msl_options::fp_precise_only not a precise one, which is compiled
++ * safe (alu_fp_math_mode_pragma). */
++static bool
++alu_needs_fmul_guard(const struct nir_to_msl_ctx *ctx,
++                     const nir_alu_instr *instr)
++{
++   return !(ctx->disabled_workarounds & BITFIELD64_BIT(14)) &&
++          (nir_alu_instr_is_inf_preserve(instr) ||
++           nir_alu_instr_is_nan_preserve(instr)) &&
++          !(ctx->fp_precise_only &&
++            (instr->fp_math_ctrl & (nir_fp_no_contract | nir_fp_no_reassoc)));
++}
++
+ static void
+ alu_fcmp_to_msl(struct nir_to_msl_ctx *ctx, nir_alu_instr *instr,
+                 const char *op)
+@@ -296,9 +311,7 @@ alu_to_msl(struct nir_to_msl_ctx *ctx, nir_alu_instr *instr)
+       break;
+    case nir_op_imul:
+    case nir_op_fmul:
+-      if (!(ctx->disabled_workarounds & BITFIELD64_BIT(14)) &&
+-          (nir_alu_instr_is_inf_preserve(instr) ||
+-           nir_alu_instr_is_nan_preserve(instr)))
++      if (alu_needs_fmul_guard(ctx, instr))
+          P(ctx, "!&buf0.contents[0] ? 1 : ")
+       ALU_BINOP("*");
+       break;
+@@ -475,9 +488,7 @@ alu_to_msl(struct nir_to_msl_ctx *ctx, nir_alu_instr *instr)
+          P(ctx, " - ");
+          alu_src_to_msl(ctx, instr, 0);
+          P(ctx, ") * (");
+-         if (!(ctx->disabled_workarounds & BITFIELD64_BIT(14)) &&
+-             (nir_alu_instr_is_inf_preserve(instr) ||
+-              nir_alu_instr_is_nan_preserve(instr)))
++         if (alu_needs_fmul_guard(ctx, instr))
+             P(ctx, "!&buf0.contents[0] ? 1 : ")
+          alu_src_to_msl(ctx, instr, 2);
+          P(ctx, ")");
+@@ -2085,13 +2096,44 @@ alu_fp_math_mode_pragma(struct nir_to_msl_ctx *ctx, const nir_alu_instr *alu)
+    return NULL;
+ }
+ 
++/* nir_to_msl_options::fp_precise_only: end the math mode block that
++ * consecutive ALU instructions share, if one is open */
++static void
++close_fp_math_mode(struct nir_to_msl_ctx *ctx)
++{
++   if (ctx->open_fp_math_mode) {
++      P_IND(ctx, "}\n");
++      ctx->open_fp_math_mode = NULL;
++   }
++}
++
+ static void
+ instr_to_msl(struct nir_to_msl_ctx *ctx, nir_instr *instr)
+ {
++   if (instr->type != nir_instr_type_alu &&
++       instr->type != nir_instr_type_load_const &&
++       instr->type != nir_instr_type_undef)
++      close_fp_math_mode(ctx);
++
+    switch (instr->type) {
+    case nir_instr_type_alu: {
+       nir_alu_instr *alu = nir_instr_as_alu(instr);
+       const char *math_mode = alu_fp_math_mode_pragma(ctx, alu);
++      if (ctx->fp_precise_only) {
++         if (!math_mode || !ctx->open_fp_math_mode ||
++             strcmp(math_mode, ctx->open_fp_math_mode)) {
++            close_fp_math_mode(ctx);
++            if (math_mode) {
++               P_IND(ctx, "{\n");
++               P_IND(ctx, "#pragma METAL fp math_mode(%s)\n", math_mode);
++               ctx->open_fp_math_mode = math_mode;
++            }
++         }
++         P_IND(ctx, "t%d = ", alu->def.index);
++         alu_to_msl(ctx, alu);
++         P(ctx, ";\n");
++         break;
++      }
+       if (math_mode) {
+          P_IND(ctx, "{\n");
+          P_IND(ctx, "#pragma METAL fp math_mode(%s)\n", math_mode);
+@@ -2140,6 +2182,7 @@ cf_node_to_metal(struct nir_to_msl_ctx *ctx, nir_cf_node *node)
+       nir_foreach_instr(instr, block) {
+          instr_to_msl(ctx, instr);
+       }
++      close_fp_math_mode(ctx);
+       break;
+    }
+    case nir_cf_node_if: {
+@@ -2518,6 +2561,7 @@ nir_to_msl(nir_shader *shader, struct nir_to_msl_options *options)
+       .text = _mesa_string_buffer_create(options->mem_ctx, 1024),
+       .disabled_workarounds = options->disabled_workarounds,
+       .dual_source_blend = options->dual_source_blend,
++      .fp_precise_only = options->fp_precise_only,
+    };
+    nir_function_impl *impl = nir_shader_get_entrypoint(shader);
+    msl_gather_info(&ctx, options);
+diff --git a/src/kosmickrisp/compiler/nir_to_msl.h b/src/kosmickrisp/compiler/nir_to_msl.h
+index 9cdbdf6..abae6d2 100644
+--- a/src/kosmickrisp/compiler/nir_to_msl.h
++++ b/src/kosmickrisp/compiler/nir_to_msl.h
+@@ -34,6 +34,14 @@ struct nir_to_msl_options {
+     * shader compiled for a pipeline library blends in Metal's fixed
+     * function. */
+    bool dual_source_blend;
++
++   /* Playport (PLA-72), with msl_nir_fp_precise_only: consecutive ALU
++    * instructions of a block with the same math mode share one
++    * "#pragma METAL fp math_mode" block rather than each having its own, and
++    * a precise (exact) multiplication, which is compiled safe, is not guarded
++    * against folding NaN * 0 (KK_WORKAROUND_14), which only relaxed math
++    * does. */
++   bool fp_precise_only;
+ };
+ 
+ /* Assumes nir_shader_gather_info has been called beforehand. */
+@@ -108,6 +116,7 @@ bool msl_nir_lower_multisample_alpha(nir_shader *s, bool alpha_to_coverage,
+                                      bool alpha_to_one);
+ 
+ bool msl_gather_uses_per_draw_data(nir_shader *nir);
++bool msl_nir_fp_precise_only(nir_shader *nir);
+ 
+ static const nir_shader_compiler_options kk_nir_options = {
+    .lower_fdph = true,
+diff --git a/src/kosmickrisp/vulkan/kk_debug.c b/src/kosmickrisp/vulkan/kk_debug.c
+index 9dc1746..82dfce4 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.c
++++ b/src/kosmickrisp/vulkan/kk_debug.c
+@@ -47,6 +47,7 @@ const struct debug_named_value experimental_flags[] = {
+    {"gpl", KK_EXPERIMENTAL_GPL},
+    {"msl41", KK_EXPERIMENTAL_MSL41},
+    {"no_fp_preserve", KK_EXPERIMENTAL_NO_FP_PRESERVE},
++   {"fp_precise_only", KK_EXPERIMENTAL_FP_PRECISE_ONLY},
+    {NULL, 0},
+ };
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_debug.h b/src/kosmickrisp/vulkan/kk_debug.h
+index 426fe3c..f1e3093 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.h
++++ b/src/kosmickrisp/vulkan/kk_debug.h
+@@ -117,6 +117,11 @@ enum kk_experimental {
+     * workaround 14 guards, no precise:: functions. Below Vulkan 1.4's
+     * required features. */
+    KK_EXPERIMENTAL_NO_FP_PRESERVE = 1ull << 8,
++   /* Playport (PLA-72): keep signed zero, Inf and NaN preservation only on
++    * precise operations, comparisons, min, max and saturate
++    * (msl_nir_fp_precise_only), and let consecutive operations with the same
++    * math mode share one pragma block */
++   KK_EXPERIMENTAL_FP_PRECISE_ONLY = 1ull << 9,
+ };
+ 
+ extern enum kk_experimental kk_mesa_experimental_flags;
+diff --git a/src/kosmickrisp/vulkan/kk_physical_device.c b/src/kosmickrisp/vulkan/kk_physical_device.c
+index a307f13..085839f 100644
+--- a/src/kosmickrisp/vulkan/kk_physical_device.c
++++ b/src/kosmickrisp/vulkan/kk_physical_device.c
+@@ -1062,6 +1062,13 @@ kk_physical_device_init_pipeline_cache(struct kk_physical_device *pdev)
+    const uint64_t compiler_flags =
+       kk_mesa_debug_flags & KK_DEBUG_FORCE_ROBUSTNESS;
+    _mesa_blake3_update(&blake3_ctx, &compiler_flags, sizeof(compiler_flags));
++   /* Playport (PLA-72): the experimental switches that change the MSL, only
++    * when one is set, so that the UUID without them is unchanged */
++   const uint64_t msl_experimental =
++      kk_mesa_experimental_flags & KK_EXPERIMENTAL_FP_PRECISE_ONLY;
++   if (msl_experimental)
++      _mesa_blake3_update(&blake3_ctx, &msl_experimental,
++                          sizeof(msl_experimental));
+ 
+    unsigned char blake3[BLAKE3_KEY_LEN];
+    _mesa_blake3_final(&blake3_ctx, blake3);
+diff --git a/src/kosmickrisp/vulkan/kk_shader.c b/src/kosmickrisp/vulkan/kk_shader.c
+index 6dcbbf2..ec5d287 100644
+--- a/src/kosmickrisp/vulkan/kk_shader.c
++++ b/src/kosmickrisp/vulkan/kk_shader.c
+@@ -118,6 +118,9 @@ kk_preprocess_nir(UNUSED struct vk_physical_device *vk_pdev, nir_shader *nir,
+     * image's variable or descriptor. */
+    NIR_PASS(_, nir, kk_nir_remove_undef_textures);
+ 
++   if (KK_EXPERIMENTAL(FP_PRECISE_ONLY))
++      NIR_PASS(_, nir, msl_nir_fp_precise_only);
++
+    /* Gather info before preprocess_nir but after some general lowering, so
+     * inputs_read and system_values_read are accurately set.
+     */
+@@ -1357,6 +1360,7 @@ kk_compile_gs_compute(struct kk_physical_device *pdev, nir_shader *nir,
+    struct nir_to_msl_options options = {
+       .mem_ctx = NULL,
+       .disabled_workarounds = pdev->settings.disabled_workarounds,
++      .fp_precise_only = KK_EXPERIMENTAL(FP_PRECISE_ONLY),
+    };
+    out->code = nir_to_msl(nir, &options);
+    const char *entrypoint = nir_shader_get_entrypoint(nir)->function->name;
+@@ -1635,6 +1639,7 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
+       .disabled_workarounds = pdev->settings.disabled_workarounds,
+       .vec4_user_varyings = gpl != KK_GPL_WHOLE,
+       .dual_source_blend = dual_source,
++      .fp_precise_only = KK_EXPERIMENTAL(FP_PRECISE_ONLY),
+    };
+    if (gpl == KK_GPL_LIBRARY && stage == MESA_SHADER_VERTEX)
+       kk_gpl_note_vertex_outputs(shader, nir);
