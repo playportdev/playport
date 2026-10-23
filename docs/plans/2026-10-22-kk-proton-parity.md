@@ -196,14 +196,14 @@ The supervisor keeps this section.
      restored, explicitly captured black, lock released; no gameplay or save navigation.
      [Device blocker evidence](../evidence/2026-10-23-descriptor-probe-device-prep.md);
      report `.work/agent-notes/kk-parity/reports/a0-device-prep.md` in the build area.
-     **Host-only wire-emission correction implemented** (`68e5eab`), independent review **BLOCK**
+     **Host-only wire-emission correction implemented** (`68e5eab`), initial review **BLOCK**
      (child `7ca57dde`, report left in the build area at
      `.work/agent-notes/kk-parity/reports/a0-emission-review.md`). Parent emitter-matrix rerun
      passed (log `supervisor-emission.log` under those notes), but lacked unsupported sink cases.
-     **Minimal sink correction0123 implemented** (`cdaff3c`), independent re-review running
+     **Minimal sink correction0123 ACCEPT** (`cdaff3c`), independent re-review passed
      (revived reviewer `3fc82a56`, report left in the build area at
-     `.work/agent-notes/kk-parity/reports/a0-emission-sink-rereview.md`). Parent matrix rerun
-     also running (log `supervisor-emission-sink.log` under those notes). (PLA-431,
+     `.work/agent-notes/kk-parity/reports/a0-emission-sink-rereview.md`), P1 closed.
+     Parent expanded matrix rerun passed (log `supervisor-emission-sink.log` under those notes). (PLA-431,
      starting HEAD `2c15869`). Supports only regular files with successful F_GETFL/O_APPEND or
      FIFO rows within known positive PIPE_BUF; other types/flag failures use the existing latch
      and best-effort poison. Four actual-emitter sink tests red before production edit:37 record
@@ -215,7 +215,7 @@ The supervisor keeps this section.
      source; no build-record changes. No phone commands or parser/schema/client/bridge changes.
      [Sink-fix host evidence](../evidence/2026-10-23-descriptor-emission-sink-fix-host.md);
      report `.work/agent-notes/kk-parity/reports/a0-emission-sink-fix.md` in the build area.
-     No self-clearance of the BLOCK verdict: re-review before separately authorizing any prep.
+     Accepted for a separately bounded device-prep retry only, not device or performance proof.
      Branch unmerged/unpushed; stable-fd2 and approved terminal-loss limits retained.
      Mesa0122 changes only KK diagnostic
      emission: checked2048-byte complete-row formatting and one raw write to the confirmed normal
@@ -229,10 +229,15 @@ The supervisor keeps this section.
      guarantee detection of a newline-only short (explicitly tested/accepted limitation).
      [Host evidence](../evidence/2026-10-23-descriptor-emission-fix-host.md); report
      `.work/agent-notes/kk-parity/reports/a0-emission-fix.md` in the build area.
-     Next: independent review, then separately authorized bounded prep retry, before owner
-     scene/activity/window/budget coordination. Original raw log remains bad and unchanged.
-     No performance or perturbation claim from this menu prep.
-  No further phone plays authorized by this checkpoint; human gameplay waits for owner handoff.
+     **Running: separately authorized menu-only prep retry**, exact IPA `689b9479…`.
+     Maximum four plays, DXVK off/on first; proceed to D3D12 off/on only if full raw DXVK
+     telemetry passes strict parsing. Stop on setup/wire failure, no parser loosening or extra
+     retries. Capture later live menus without game input; no save navigation. Report left in
+     the build area at `.work/agent-notes/kk-parity/reports/a0-device-prep-retry.md`.
+     Original bad raw log remains immutable. Owner scene/activity/window/budget coordination
+     and human gameplay follow only after prep passes; no menu performance/perturbation claim.
+  Phone authority here is only that bounded retry under the owner's earlier prepare-now approval;
+  human gameplay still waits for owner handoff.
   No save automation/new slot authorized. No sampler
   redesign, CPU-clock bridge or descriptor implementation approved. Checkpoint `cdaff3c`;
   no merge or push. A2–A4 remain **not started**, gated on evidence that descriptor cost matters.
