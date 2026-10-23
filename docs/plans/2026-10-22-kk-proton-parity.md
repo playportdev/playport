@@ -167,11 +167,18 @@ The supervisor keeps this section.
      report left in the build area at
      `.work/agent-notes/kk-parity/reports/a0-vkd3d-probe-host.md`.
      Accepted for parser/integration only; A2 and phone gates remain gated.
-  4. **Running: offline parser/integration**, strict integer schemas and complete row identities,
-     valid boundary/error deltas, per-layer nesting/coverage and clock uncertainty. No cross-layer
-     sum/subtraction or unsupported presented-frame/CPU-time attribution. Report left in the build
-     area at `.work/agent-notes/kk-parity/reports/a0-descriptor-parser.md`; independent review
-     follows before device work.
+  4. **Offline parser/integration host checked; independent review pending.**
+     `python3 tools/descriptorprof.py [--json] saved.log ...` enforces v1 integer schemas,
+     complete 10/36/54-row identities, conservative quiescent/error-free boundaries and
+     cumulative deltas; preserves brackets, raw calibration/coverage and rejected evidence.
+     Historical errors reject boundaries; reset/saturation cannot invent recovery epochs.
+     Prep exclusives partition Vulkan/non-Vulkan elapsed, standalone/excluded remain separate.
+     No cross-layer join/sum/subtraction, CPU attribution or presented-frame normalization.
+     18 focused tests, quick730 and read-only real-helper parsing pass (11 usable KK intervals,
+     5 rejected helper windows; DXVK single capture and partial vkd3d output insufficient).
+     [Host evidence](../evidence/2026-10-23-descriptor-prof-parser-host.md); report in the build
+     area at `.work/agent-notes/kk-parity/reports/a0-descriptor-parser.md`.
+     **Next independent review**, before owner scene/load/window coordination or device work.
   5. Coordinate owner-chosen save/room/activity, load/measurement window and worthwhile budget;
      device calibration, controls and bounded controller measurements after review.
   No phone runs until that coordination. No save automation/new slot authorized. No sampler
