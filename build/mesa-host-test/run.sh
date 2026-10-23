@@ -8,7 +8,7 @@
 # and GLSL 1.20 draws and a glBlitFramebuffer. The GPU work is not run; see
 # make-mock-bridge.py for what the mock does and checks.
 #
-#   build/mesa-host-test/run.sh MESA_TREE HOST_TOOLS_BUILD [ROOT]
+#   build/mesa-host-test/run.sh MESA_TREE HOST_TOOLS_BUILD [ROOT] [--msl40-only]
 #
 # MESA_TREE         a Mesa tree with patches/mesa applied (build/stages/mesa.sh src)
 # HOST_TOOLS_BUILD  build/stages/mesa.sh's ROOT/host (mesa_clc, vtn_bindgen2, kk_clc)
@@ -24,6 +24,12 @@ TREE=$(realpath "${1:?usage: $0 MESA_TREE HOST_TOOLS_BUILD [ROOT]}")
 TOOLS=$(realpath "${2:?usage: $0 MESA_TREE HOST_TOOLS_BUILD [ROOT]}")
 ROOT=$(realpath -m "${3:-$PLAYPORT_BUILD/run/mesa-host-test}")
 mkdir -p "$ROOT"
+MSL40_ONLY=false
+case ${4:-} in
+    "") ;;
+    --msl40-only) MSL40_ONLY=true ;;
+    *) echo "unknown option: $4" >&2; exit 2 ;;
+esac
 
 # A copy of the tree with the stubs replaced by the mock.
 rsync -a --delete --exclude .git "$TREE/" "$ROOT/mesa/"
@@ -57,6 +63,7 @@ NATIVE
         -Dllvm=disabled -Dzstd=disabled -Dbuildtype=debug -Dwrap_mode=nofallback \
         -Dmesa-clc=system -Dprecomp-compiler=system >/dev/null
 ninja -C "$ROOT/build" src/kosmickrisp/vulkan/libvulkan_kosmickrisp.so >/dev/null
+python3 "$HERE/run-nir-tests.py" "$ROOT/build"
 
 mkdir -p "$ROOT/spv"
 for s in "$HERE"/shaders/*; do
@@ -77,6 +84,7 @@ echo "MSL libraries: $(ls "$ROOT/msl" | wc -l) in $ROOT/msl"
 # MESA_KK_EXPERIMENTAL=msl41 the mock, iOS 27, gives 4.1 (0x40001) to every
 # one, with the same MSL, and kk-host-test checks shaderSharedFloat32AtomicAdd
 # is on only then.
+if ! "$MSL40_ONLY"; then
 rm -rf "$ROOT/msl-msl41" "$ROOT/msl41-versions"; mkdir -p "$ROOT/msl-msl41"
 MESA_KK_EXPERIMENTAL=msl41 KK_MOCK_MSL_DIR="$ROOT/msl-msl41" KK_MOCK_MSL_VERSIONS="$ROOT/msl41-versions" \
     MESA_SHADER_CACHE_DISABLE=true \
@@ -88,6 +96,11 @@ MESA_KK_EXPERIMENTAL=msl41 KK_MOCK_MSL_DIR="$ROOT/msl-msl41" KK_MOCK_MSL_VERSION
 diff -rq "$ROOT/msl" "$ROOT/msl-msl41" >/dev/null ||
     { echo "MESA_KK_EXPERIMENTAL=msl41: not the MSL made without it" >&2; exit 1; }
 echo "MSL 4.0: $(wc -l <"$ROOT/msl-versions") libraries, as 4.1 with MESA_KK_EXPERIMENTAL=msl41 with the same MSL"
+
+else
+    [ "$(sort -u "$ROOT/msl-versions")" = 0x40000 ]
+    echo "MSL 4.0 only: MSL 4.1 arm explicitly skipped"
+fi
 
 # Float maths and root table loads (PLA-72), each behind a switch:
 # dxvk-fp.frag is a fragment shader as DXVK's dxbc-spirv gives KosmicKrisp,
@@ -161,7 +174,12 @@ ubo_run() {
 }
 ubo_spaces() { for f in "$1"/*.metal; do sed 's/(device packed_/(constant packed_/g' "$f" | md5sum; done; }
 bounded=$(ubo_run ubo-robust MESA_KK_EXPERIMENTAL=gpl)
-unbounded=$(ubo_run ubo-unbounded MESA_KK_EXPERIMENTAL=gpl,ubo_unbounded)
+# A named request without independent consent must preserve the actual MSL.
+no_consent=$(ubo_run ubo-no-consent MESA_KK_EXPERIMENTAL=gpl,ubo_unbounded MESA_KK_UNSAFE=)
+[ "$no_consent" = "$bounded" ] &&
+    diff -rq "$ROOT/msl-ubo-robust" "$ROOT/msl-ubo-no-consent" >/dev/null ||
+    { echo "ubo_unbounded without unsafe consent changed robust MSL" >&2; exit 1; }
+unbounded=$(ubo_run ubo-unbounded MESA_KK_EXPERIMENTAL=gpl,ubo_unbounded MESA_KK_UNSAFE=ubo_unbounded)
 const_bounded=$(ubo_run ubo-const MESA_KK_EXPERIMENTAL=gpl,const_offset_loads)
 const_changed=$(diff -rq "$ROOT/msl-ubo-robust" "$ROOT/msl-ubo-const" | grep -c . || true)
 [ "$bounded" -gt 0 ] && [ "$unbounded" = 0 ] && [ "$const_bounded" = "$bounded" ] && [ "$const_changed" -gt 0 ] &&

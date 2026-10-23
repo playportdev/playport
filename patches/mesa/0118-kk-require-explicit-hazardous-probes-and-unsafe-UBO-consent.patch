@@ -1,0 +1,82 @@
+From 99899806887432f6c04cc174c8f6e82e9d611b8e Mon Sep 17 00:00:00 2001
+From: Playport authors <playport@users.noreply.github.com>
+Date: Fri, 23 Oct 2026 05:27:07 +0200
+Subject: [PATCH] kk: require explicit hazardous probes and independent
+ unchecked UBO consent
+
+Wildcard experiments must not silently relax float, synchronization or robustness contracts. Unchecked UBOs need both a named experimental token and MESA_KK_UNSAFE=ubo_unbounded. Only effective flags enter shader lowering and the existing cache key; defaults and all other named flags are unchanged.
+
+Linear: PLA-72
+Class: diagnostics
+Evidence: docs/evidence/2026-10-22-vulkan-perf-resume.md
+Offered-upstream: no
+---
+ src/kosmickrisp/vulkan/kk_debug.c | 38 +++++++++++++++++++++++++++++++
+ 1 file changed, 38 insertions(+)
+
+diff --git a/src/kosmickrisp/vulkan/kk_debug.c b/src/kosmickrisp/vulkan/kk_debug.c
+index efd5782..5eeae2d 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.c
++++ b/src/kosmickrisp/vulkan/kk_debug.c
+@@ -9,6 +9,8 @@
+ #include "util/simple_mtx.h"
+ 
+ #include <stdio.h>
++#include <ctype.h>
++#include <string.h>
+ 
+ enum kk_debug kk_mesa_debug_flags = 0;
+ 
+@@ -76,6 +78,25 @@ static const struct debug_named_value batch2_items[] = {
+    {NULL, 0},
+ };
+ 
++/* Match Mesa's token delimiters, but never its wildcard semantics. */
++static bool
++has_named_experiment(const char *str, const char *name)
++{
++   if (!str)
++      return false;
++   const size_t len = strlen(name);
++   while (*str) {
++      const char *start = str;
++      while (isalnum((unsigned char)*str) || *str == '_')
++         str++;
++      if ((size_t)(str - start) == len && !memcmp(start, name, len))
++         return true;
++      if (*str)
++         str++;
++   }
++   return false;
++}
++
+ void
+ kk_process_debug_variable(void)
+ {
+@@ -91,6 +112,23 @@ kk_process_debug_variable(void)
+    }
+    kk_mesa_debug_flags = debug_get_option_mesa_kk_debug();
+    kk_mesa_experimental_flags = debug_get_option_mesa_kk_experimental();
++   /* These diagnostics change correctness contracts. Mesa's flags parser
++    * treats literal "all" as every flag, independently of the all entry.
++    * Require each hazardous choice to be named, even alongside a wildcard.
++    * Unchecked UBOs additionally need independent, exact unsafe consent. */
++   const char *experiments = os_get_option("MESA_KK_EXPERIMENTAL");
++   const char *unsafe = os_get_option("MESA_KK_UNSAFE");
++   const uint64_t explicit_only =
++      KK_EXPERIMENTAL_NO_FP_PRESERVE | KK_EXPERIMENTAL_FP_PRECISE_ONLY |
++      KK_EXPERIMENTAL_UBO_UNBOUNDED | KK_EXPERIMENTAL_NARROW_BARRIERS |
++      KK_EXPERIMENTAL_DS_DONT_CARE;
++   for (const struct debug_named_value *f = experimental_flags; f->name; f++) {
++      if (f->value != UINT64_MAX && (f->value & explicit_only) &&
++          !has_named_experiment(experiments, f->name))
++         kk_mesa_experimental_flags &= ~f->value;
++   }
++   if (!unsafe || strcmp(unsafe, "ubo_unbounded"))
++      kk_mesa_experimental_flags &= ~KK_EXPERIMENTAL_UBO_UNBOUNDED;
+    kk_dump_msl_min_kb = debug_get_num_option("MESA_KK_DUMP_MSL_MIN_KB", -1);
+    kk_frame_probe_s = debug_get_num_option("MESA_KK_FRAME_PROBE_S", 0);
+ }
+-- 
+2.56.0
+

@@ -174,9 +174,13 @@ better (and the float arm's spread is large); the thermal onset still varies.
 At `15:40`, GPU ms is 6.35–6.36 off and 6.36–6.38 on; tiler ms/frame is
 6.92–6.95 off and 6.95–7.12 on. This does not close the original DXMT energy gap.
 
-All g2/g3 screenshots show the same opening chamber, Knight, grass and lighting,
-with small position/animation differences; no obvious corruption. Original
-route screens were inspected too, including the route divergences noted above.
+The g2 screenshots show the same opening chamber, but nofp/combo have more
+remaining health and different Knight positions than the controls. Low-health
+darkening differs too: **g2 hot windows are uncontrolled**, not same-lighting
+comparisons. The g3 ABBA screenshots are substantially better matched in health,
+position and lighting; no obvious corruption was seen. Original route screens
+were inspected too, including the route divergences noted above. This correction
+does not change the no-safe-winner conclusion or establish a bisect trigger.
 No command-buffer/GPU-fault or shader compile failure was found. These image
 checks do not prove NaN semantics, robustness or general barrier correctness.
 Screenshots and raw logs remain in their run directories, not in this document.
@@ -209,7 +213,7 @@ Experimental IPA 315cee09:
 `pla72r-g-nb-count`. Every producer completed exit 0. The old experimental smoke
 is listed above. Final committed-main installation and gate are recorded below.
 
-## Final committed-main installation
+## Previous committed-main installation (before review fixes)
 
 Code/tests/probes/evidence committed as `ecd6c15`; no default switch changed.
 Rebuilt its committed app sources, **excluding the foreign SettingsView edit**:
@@ -249,3 +253,60 @@ are left to the supervisor, with a machine-readable run/IPA inventory in
 **Remaining limits:** no Portal 2 gate (kept uninstalled by this handoff), no
 Vulkan float-controls CTS, no general proof of the experimental barrier or
 robust-vector pass, no D3D12 parity/exit runs. Unsafe switches must remain opt-in.
+
+## Review fixes (PLA-72)
+
+Mesa 0118 keeps defaults unchanged and makes hazardous diagnostics explicitly
+named-only: `no_fp_preserve`, `fp_precise_only`, `narrow_barriers`,
+`ds_dont_care` and `ubo_unbounded` are masked when selected only by `all`.
+This is applied **after** Mesa's parser, which treats literal `all` as matching
+every flag, not just the table's wildcard entry. Explicitly named float/sync
+probes retain their old behavior; this is not a correctness endorsement.
+
+Unchecked UBO reproduction now requires **both**
+`MESA_KK_EXPERIMENTAL=ubo_unbounded` and
+`MESA_KK_UNSAFE=ubo_unbounded` in UI Graphics options (with any other experiments
+named as needed). Unsafe consent is an exact, independent token: neither `all`
+nor `1` is consent; consent alone and `EXPERIMENTAL=all` plus consent do not
+remove robustness. `all,ubo_unbounded` requires consent too. The effective
+experimental bit is cleared without these conditions, so the existing MSL cache
+UUID hashing continues to distinguish robust and unbounded lowering correctly;
+no new cache-key input is necessary. Other flags retain their behavior. Do not
+use `all` to reproduce MSL 4.0 tests: it still enables unrelated experiments,
+including MSL 4.1.
+
+The historical unbounded measurements above used the old 315cee09 IPA and only
+the old experimental switch; independent unsafe consent did **not** exist then.
+They remain historical screens, not evidence of consent or safe robustness.
+
+Host review-fix validation, all emitted libraries at **MSL 4.0 only**:
+
+- `build/mesa-host-test/run.sh .work/run/mesa/mesa .work/run/mesa/host
+  .work/run/mesa/hosttest --msl40-only` passed. The new selection skips only the
+  MSL 4.1 arm; the normal invocation retains that existing coverage.
+- Real once-only parser: 17 fresh-child cases cover wildcard alone/with consent,
+  named UBO without/with/invalid consent, wildcard plus named hazards, and token
+  boundaries. Parser-only `all` cases generate no MSL.
+- Actual emitted robust GPL MSL is byte-identical when `ubo_unbounded` is named
+  without consent; with both switches, 16 checked reads become zero. Checked
+  vector lowering still gives four vector reads; other flag checks and Zink pass.
+- `kk-nir-merge-ubo-loads-test.c`: 12 focused cases validate NIR before/after,
+  per-store source base, bound, lane mapping, alignment and chunk span. Cases
+  include reversed/sparse lanes, zero and interior bounds (including a bound
+  before the selected lanes), adjacent chunks, the final uint32 chunk, differing
+  bases/bounds and duplicate offsets. 64-bit host span arithmetic asserts admitted
+  reads remain within the reported 64-byte robust granularity. These are NIR/
+  host legality checks, **not GPU-execution proof**; no vectorization defect was
+  found and no vector-lowering patch was needed.
+- Default MSL: **168/168 byte-identical** to the prior unpatched-probe baseline
+  (`agent-notes/pla72r/F/ht-base/msl`). This proves no shader-text change, **not**
+  zero CPU or memory overhead. The retained probes add unconditional
+  command-buffer diagnostic/deferred-render bookkeeping and disabled branches/
+  calls. No material flags-off regression has been demonstrated.
+- `./pp test --quick`, `./pp names`, `./pp secrets`, non-patch diff whitespace
+  and the generated patch's source whitespace check passed. The first quick
+  invocation rejected an invalid patch Class trailer; it was corrected to
+  `diagnostics` before the successful run.
+- Raw logs: `$PLAYPORT_BUILD/agent-notes/pla72r/review-fixes/` (`hosttest.log`,
+  `nir-tests.log`, `default-msl.diff`). No MSL 4.1 execution, Portal 2 installation,
+  RDR2 play or new performance matrix was run for these fixes.

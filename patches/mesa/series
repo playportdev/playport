@@ -91,3 +91,4 @@
 0115-kk-MESA_KK_EXPERIMENTAL-ds_dont_care-drops-a-depth-s.patch
 0116-kk-MESA_KK_DEBUG-vertex_stats-counts-draws-vertices-.patch
 0117-kk-MESA_KK_EXPERIMENTAL-ubo_vec4_bounds-checks-a-rob.patch
+0118-kk-require-explicit-hazardous-probes-and-unsafe-UBO-consent.patch
