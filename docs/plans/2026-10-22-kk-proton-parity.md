@@ -118,10 +118,14 @@ The supervisor keeps this section.
      Parent reviewed correction `1846ca5` and independently reran the full host suite:
      exit 0, replay counts and 236 off/on MSL identity confirmed. Log left in the build
      area at `.work/agent-notes/kk-parity/supervisor-replay-host.log`.
-  2. **DXVK 0006 implemented** (`cea547f`), host checked; independent review running
+  2. **DXVK 0006 implemented** (`cea547f`), host checked; independent review **BLOCK**
      (child `6cbf8167`, report left in the build area at
-     `.work/agent-notes/kk-parity/reports/a0-dxvk-probe-review.md`), before vkd3d writer.
-     Parent helper rerun also running (log `supervisor-dxvk-helper.log` under those notes).
+     `.work/agent-notes/kk-parity/reports/a0-dxvk-probe-review.md`). Parent helper rerun
+     passed (log `supervisor-dxvk-helper.log` under those notes), but lacked the failing trace.
+     **Next correction before vkd3d:** reject child starts earlier than the previous sibling's
+     end, invalidate ancestry and preserve explicit errors. Regression: prep 10, child
+     150..200, sibling 30..40, prep end 100 must not yield valid exclusive 30; also test
+     overlapping siblings. Reconstruct, retest, rebuild and focused re-review before acceptance.
      Default-off
      `PLAYPORT_DESCRIPTOR_STATS=1`, per-device checked elapsed scopes, same-thread fixed
      TLS nesting, client inclusive/exclusive and summed-thread outermost attribution;
