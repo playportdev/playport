@@ -78,15 +78,18 @@ The supervisor keeps this section.
   Rebased host suite: 185/185 identical. **Phone runtime gate passed** on both routes,
   with vkd3d-specific client-log verification limited;
   [phone evidence](../evidence/2026-10-23-kk-memory-priority-phone.md).
-- **B3 done** (`12d113b` → `2a76219`, mesa 0120, bit 17, flag `module_identifier`): common-runtime identifiers, `MESA-BLAKE3` algorithm UUID kept (supervisor, spec's "should"); identifier pipelines only from a cache, else `VK_PIPELINE_COMPILE_REQUIRED`. Host test 62 ok (supervisor reran), MSL 181/234 identical; side-copy IPA `c88649a7…` 89/89; [evidence](../evidence/2026-10-22-kk-module-identifier-host.md). Phone gate queued.
+- **B3 done** (`12d113b` → `2a76219`, mesa 0120, bit 17, flag `module_identifier`): common-runtime identifiers, `MESA-BLAKE3` algorithm UUID kept (supervisor, spec's "should"); identifier pipelines only from a cache, else `VK_PIPELINE_COMPILE_REQUIRED`. Host test 62 ok (supervisor reran), MSL 181/234 identical; side-copy IPA `c88649a7…` 89/89; [historical host evidence](../evidence/2026-10-22-kk-module-identifier-host.md).
+  **Phone smoke and disk-cache hit proof passed** (25 warm graphics identifier hits);
+  [phone evidence](../evidence/2026-10-23-kk-module-identifier-phone.md). Phone identifier
+  miss/fallback unobserved; no performance claim.
 - **Integration (2026-10-23):** append conflicts in host runner/series and wanted-helper
   definitions resolved by retaining both sides. Mesa patches regenerated against 0118;
   main bits 0–15 retained, parity moved to 16/17 (supervisor approved). Range-diff inspected;
   no other semantic change. Fresh main IPA `5e3fc6a8…` verified 89/89; no build-record
   changes. Owner edit included, not committed. Full host suite, combined parity/GPL run,
   `pp test --quick`, names and secrets passed. B3 MSL comparison now 185/239.
-- **Next:** separate **B3 phone gate**, then **A0 CPU profile** workers.
-  A2–A4 remain gated on A0. No merge or push.
+- **Next:** separate **A0 CPU profile** worker. A2–A4 remain gated on A0.
+  No merge or push.
 - **B1 phone (2026-10-23):** both flag-off routes and memory_priority DXVK/D3D12 reached
   first-frame+10. DXVK features 0 off / 1 on; priority counts 14/14 and 28/13.
   vkd3d's extension-name TRACE is compiled out; its initial priority allocation is behavioral
@@ -94,8 +97,15 @@ The supervisor keeps this section.
   Runtime gate accepted with that explicit limit, not literal fulfillment of the original
   vkd3d client-log criterion. No gameplay/performance claim. Settings restored; battery 80%
   external, existing unattended setting unchanged.
-- **Phone queue** (PLA-431, main checkout; B3 and A0 unrun):
-  - B3: Hollow Knight `-force-d3d12` with `MESA_KK_EXPERIMENTAL=module_identifier VKD3D_CONFIG=pipeline_library_log`, twice (second run hits vkd3d's cache), and DXVK with `gpl,module_identifier` (commands in the evidence record);
+- **B3 phone (2026-10-23):** same installed IPA `5e3fc6a8…`, owner edit included.
+  D3D12 first/warm and GPL+identifier DXVK reached first-frame+10; warm D3D12 loaded a
+  7448-byte disk library with 25 PSOs and created 25 graphics pipelines from identifiers.
+  INFO logs survive compiled-out TRACE. First run compiled without identifiers; no phone
+  identifier miss/fallback observed. Original warm/DXVK stop shots were black; one approved
+  visual follow-up per route reached first-frame+20 and captured matching menus before stop.
+  Settings/arguments/graphics options restored; 80% external power, unattended state unchanged.
+  No gameplay/performance claim; GPL and module_identifier remain default off.
+- **Phone queue** (PLA-431, main checkout; A0 unrun):
   - A0: baseline CPU profile (Hollow Knight DXVK and `-force-d3d12`);
   - A's gates after A2–A4.
 - **Phone:** installed titles are Hollow Knight (`app-367520`) and RDR2. The D3D12 route is Hollow
@@ -595,7 +605,7 @@ in the Runner state's queue.
 | 0 | Side copy `.work/worktrees/kkparity` on `dev/kk-proton-parity` (0117 rewrite, marker); baseline `run.sh` and its MSL saved as the byte-identity baseline | S | — | Marker in place. `pp build` verified in the side copy. Baseline host test passes and its `msl/` is kept under the side copy's `.work` |
 | A0 | Phone baseline (queued, main checkout): `pp perf --cpu-prof` on Hollow Knight DXVK and `-force-d3d12`. How much CPU goes to `vkUpdateDescriptorSets*`/`kk_*Descriptor*` and vkd3d's `CopyDescriptors` | S | — | Evidence file with the share per thread. It decides whether A2 is worth L |
 | B1 | `memory_priority` | S | `memory_priority` | Mesa 0119. Host test: extensions only with flag, the calls accepted, MSL identical. Phone runtime gate passed with vkd3d logging limit (evidence above) |
-| B3 | `shader_module_identifier` | S | `module_identifier` | Mesa 0120. Host test: identifier, UUID, `FAIL_ON_PIPELINE_COMPILE_REQUIRED` miss/hit, cache, GPL library, MSL identical. Committed; gate queued |
+| B3 | `shader_module_identifier` | S | `module_identifier` | Mesa 0120. Host tests passed. Phone smoke on both routes and 25 warm disk-cache identifier hits passed; phone miss/fallback unobserved, no performance claim (evidence above) |
 | A2 | **Gated on A0.** Descriptor buffer core with the vkd3d 4-byte SSBO alignment (A1 folded in): properties, layout size and offset, `vkGetDescriptorEXT`, bind and offsets, push descriptors, meta save/restore | L | `descriptor_buffer` | Next free Mesa number (split if large; A1's alignment may be its own patch under the same flag). Host test: bytes equal to `vkUpdateDescriptorSets`; draws and clear-between-draws restore set 0; flag-off MSL byte-identical; vkd3d-engine MSL with 4-byte alignment compiles with `msl-compile.sh`; cache key hashes the alignment. Committed |
 | A3 | Embedded immutable samplers (`vkCmdBindDescriptorBufferEmbeddedSamplers2EXT`) | S–M | `descriptor_buffer` | Next free Mesa number. Host test: a layout with embedded samplers draws; MSL identical |
 | A4 | GPL with descriptor buffers (`gpl,descriptor_buffer`) | S | both | Host test: a DXVK-style library set with the flag links and draws |
