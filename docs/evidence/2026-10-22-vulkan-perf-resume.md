@@ -310,3 +310,46 @@ Host review-fix validation, all emitted libraries at **MSL 4.0 only**:
 - Raw logs: `$PLAYPORT_BUILD/agent-notes/pla72r/review-fixes/` (`hosttest.log`,
   `nir-tests.log`, `default-msl.diff`). No MSL 4.1 execution, Portal 2 installation,
   RDR2 play or new performance matrix was run for these fixes.
+
+### Final review-fixed committed-main installation
+
+Code/tests/review corrections committed as `b997f78` **before** rebuild. Built
+committed app sources only, saving/restoring the foreign SettingsView exact bytes
+(sha256 `14f47ed236724bf1250e2d7447f4fa9f16f4c93eb305c5fe5f8ee4d863b3a3fe`).
+No generated build-record rows changed. Final dev IPA:
+`99ec480a8b488ebadb8aff5287f8713dff219b497f6e8d5c0eba6fc66c2f32c8`,
+`$PLAYPORT_BUILD/out/20261023-053837-99ec480a/Playport-26.5-99ec480a.ipa`.
+Build verification: **89 passed, 0 failed**. Independent `pp verify` with this
+full SHA256 also passed. Installation upgraded in place with container retained
+(`install-runs/20261023-053907`). Provenance and installed record name `b997f78`.
+
+| operation | run directory beneath build area | result |
+| --- | --- | --- |
+| HK Vulkan, 720/60, experiments off | ui-runs/20261023T053944 | passed first-frame+10, exit 0 |
+| optional HK DXMT smoke | ui-runs/20261023T054038 | setup-blocked before game launch, exit 1 |
+| HUD off / cleanup | ui-runs/20261023T054146 | exit 0 |
+| inspect restored game options, then black screen | ui-runs/20261023T054317 | exit 0; left running |
+
+The Vulkan launch log confirms `graphicsOptions=[]`; first frame was +13.12 s.
+Its screenshot shows the expected HK title/menu, no obvious corruption. This is
+a launch smoke, not a performance or broad gameplay claim. The optional DXMT
+attempt failed while enabling JIT: built-in helper `Socket` / `channel recv
+timeout` (idevice code 1/0). It never reached game code; this is **not** a DXMT
+regression result. No retry was made in the unattended session. The combined
+phone sequence's exit 1 belongs to that optional attempt after the successful
+installation and required Vulkan gate.
+
+Final game-options screenshot shows restored inherited defaults (720p/60/Vulkan,
+no launch arguments); controller overrides were retained. HUD is off; no unsafe
+options were made persistent. Unattended mode was renewed, with the black-screen
+page left in front. Phone status confirms the final full IPA/head, 80% external
+power; HK remains installed, Portal 2 absent and RDR2 untouched. No push. Final
+names/secrets and whitespace checks passed; only the foreign SettingsView edit
+remains outside commits and the index is empty. A documentation-only commit
+records this installed state; no runtime source changed after the build.
+
+Logs, exact commands, outcomes, unrun gates and the successful HK run plus the
+setup-blocked DXMT attempt for parent Linear/compatibility posts are in
+`$PLAYPORT_BUILD/agent-notes/pla72r/reports/review-fixes.md`. The prior 39 played
+runs remain in the earlier inventory; the review fixes add one successful HK
+launch, not a new benchmark matrix. Independent review is still required.
