@@ -34,6 +34,8 @@ CRATES=$PLAYPORT_REPO/build/idevice-crates.py
 TARGET=$(python3 "$CRATES" target)
 FEATURES=$(python3 "$CRATES" features)
 EXPORTS=(_rp_pairing_file_from_bytes _tunnel_create_rppairing _app_service_connect_rsd _app_service_launch_app
+    _app_service_list_apps _app_service_free_app_list _app_service_free_launch_response _app_service_free
+    _rsd_handshake_free _adapter_free _rp_pairing_file_free
     _pairable_host_accept_bonjour _pairable_host_cancel_new _pairable_host_cancel_signal _pairable_host_cancel_free _idevice_error_free)
 LICENSE_SHA256=131488ce7e302b9f62e3236793e57c86a208d3dfaf03e6d7d03ddc0fc82392ed
 commit=$(pin idevice)

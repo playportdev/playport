@@ -1,0 +1,4 @@
+*.xcodeproj/
+Info.plist
+Tunnel-Info.plist
+Helper-Info.plist
