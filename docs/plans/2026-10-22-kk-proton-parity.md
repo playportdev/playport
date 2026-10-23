@@ -171,7 +171,10 @@ The supervisor keeps this section.
      **BLOCK** (child `349f2b57`, report left in the build area at
      `.work/agent-notes/kk-parity/reports/a0-parser-review.md`). Parent focused rerun passed
      (log `supervisor-parser.log` under those notes), but omitted the review counterexamples.
-     **Bounded correction implemented, independent re-review pending:** retain last-seen
+     **Bounded correction implemented** (`bafeced`), independent re-review running
+     (revived reviewer `caf88b04`, report left in the build area at
+     `.work/agent-notes/kk-parity/reports/a0-parser-rereview.md`). Parent 28-test rerun also
+     running (log `supervisor-parser-fixes.log` under those notes). Retain last-seen
      per-operation/category cumulative/error history across partial captures; reject infeasible
      interval timing/max and client outer deltas; make any observed final terminal even with
      partial/conflicting metadata; retain raw calibration with producer-specific invalid reasons.
@@ -188,7 +191,7 @@ The supervisor keeps this section.
   5. Coordinate owner-chosen save/room/activity, load/measurement window and worthwhile budget;
      device calibration, controls and bounded controller measurements after review.
   No phone runs until that coordination. No save automation/new slot authorized. No sampler
-  redesign, CPU-clock bridge or descriptor implementation approved. Checkpoint `496547c`;
+  redesign, CPU-clock bridge or descriptor implementation approved. Checkpoint `bafeced`;
   no merge or push. A2–A4 remain **not started**, gated on evidence that descriptor cost matters.
 - **B1 phone (2026-10-23):** both flag-off routes and memory_priority DXVK/D3D12 reached
   first-frame+10. DXVK features 0 off / 1 on; priority counts 14/14 and 28/13.
