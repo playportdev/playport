@@ -176,7 +176,11 @@ The supervisor keeps this section.
      `.work/agent-notes/kk-parity/reports/a0-parser-rereview.md`). Parent 28-test rerun passed
      (log `supervisor-parser-fixes.log` under those notes). Three findings closed; remaining
      duplicate-row overwrite can erase observed errors and falsely permit later recovery.
-     **Duplicate correction implemented; independent re-review pending/BLOCK:** any duplicate
+     **Duplicate correction implemented** (`5a46a4a`), independent re-review running
+     (revived reviewer `e5bf2014`, report left in the build area at
+     `.work/agent-notes/kk-parity/reports/a0-parser-final-review.md`). Parent 33-test rerun
+     also running (log `supervisor-parser-duplicate.log` under those notes); BLOCK remains.
+     Any duplicate
      operation/category row (including identical) quarantines its capture and every later capture
      under the same input/stream identity. First rows and full duplicate values/exact lines remain
      inspectable; no conflicting-value history reconstruction. Earlier clean windows and unrelated
@@ -201,7 +205,7 @@ The supervisor keeps this section.
   5. Coordinate owner-chosen save/room/activity, load/measurement window and worthwhile budget;
      device calibration, controls and bounded controller measurements after review.
   No phone runs until that coordination. No save automation/new slot authorized. No sampler
-  redesign, CPU-clock bridge or descriptor implementation approved. Checkpoint `bafeced`;
+  redesign, CPU-clock bridge or descriptor implementation approved. Checkpoint `5a46a4a`;
   no merge or push. A2–A4 remain **not started**, gated on evidence that descriptor cost matters.
 - **B1 phone (2026-10-23):** both flag-off routes and memory_priority DXVK/D3D12 reached
   first-frame+10. DXVK features 0 off / 1 on; priority counts 14/14 and 28/13.
