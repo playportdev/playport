@@ -171,10 +171,14 @@ The supervisor keeps this section.
      **BLOCK** (child `349f2b57`, report left in the build area at
      `.work/agent-notes/kk-parity/reports/a0-parser-review.md`). Parent focused rerun passed
      (log `supervisor-parser.log` under those notes), but omitted the review counterexamples.
-     **Bounded correction implemented** (`bafeced`), independent re-review running
+     **Bounded correction implemented** (`bafeced`), independent re-review **BLOCK**
      (revived reviewer `caf88b04`, report left in the build area at
-     `.work/agent-notes/kk-parity/reports/a0-parser-rereview.md`). Parent 28-test rerun also
-     running (log `supervisor-parser-fixes.log` under those notes). Retain last-seen
+     `.work/agent-notes/kk-parity/reports/a0-parser-rereview.md`). Parent 28-test rerun passed
+     (log `supervisor-parser-fixes.log` under those notes). Three findings closed; remaining
+     duplicate-row overwrite can erase observed errors and falsely permit later recovery.
+     **Next minimal correction:** quarantine duplicate captures and all later captures of the
+     same identity, preserving earlier clean windows; test KK and client clock/nesting errors.
+     No producer change or device work. Retain last-seen
      per-operation/category cumulative/error history across partial captures; reject infeasible
      interval timing/max and client outer deltas; make any observed final terminal even with
      partial/conflicting metadata; retain raw calibration with producer-specific invalid reasons.
