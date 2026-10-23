@@ -88,8 +88,8 @@ The supervisor keeps this section.
   no other semantic change. Fresh main IPA `5e3fc6a8…` verified 89/89; no build-record
   changes. Owner edit included, not committed. Full host suite, combined parity/GPL run,
   `pp test --quick`, names and secrets passed. B3 MSL comparison now 185/239.
-- **Next:** separate **A0 CPU profile** worker. A2–A4 remain gated on A0.
-  No merge or push.
+- **Next:** supervisor decision on A0's attribution/workload limit (below). A2–A4 remain
+  **not started**, gated on evidence that descriptor cost matters. No merge or push.
 - **B1 phone (2026-10-23):** both flag-off routes and memory_priority DXVK/D3D12 reached
   first-frame+10. DXVK features 0 off / 1 on; priority counts 14/14 and 28/13.
   vkd3d's extension-name TRACE is compiled out; its initial priority allocation is behavioral
@@ -105,9 +105,20 @@ The supervisor keeps this section.
   visual follow-up per route reached first-frame+20 and captured matching menus before stop.
   Settings/arguments/graphics options restored; 80% external power, unattended state unchanged.
   No gameplay/performance claim; GPL and module_identifier remain default off.
-- **Phone queue** (PLA-431, main checkout; A0 unrun):
-  - A0: baseline CPU profile (Hollow Knight DXVK and `-force-d3d12`);
-  - A's gates after A2–A4.
+- **A0 preliminary (2026-10-23):** [descriptor CPU baseline](../evidence/2026-10-23-kk-descriptor-cpu-baseline.md).
+  Two 180 s flag-off, HUD-off Vulkan/720p/60 main-menu profiles on the same `5e3fc6a8…`
+  IPA (owner edit included), no gameplay/save progress. Steady denominators 8,840 DXVK /
+  8,385 vkd3d running samples. Definite printed descriptor leaves ≈0.086% / 0.050% of
+  those samples, ≈0.46% CS / 0.17% render worker; not complete cost estimates. JIT share
+  55.3% / 60.6%, top-N omissions and limited unwinding; CopyDescriptors unobserved,
+  not proven zero. Two quantized PC bins straddle function boundaries and are excluded.
+  **Recommendation INSUFFICIENT for A2**, not an A0 justification-gate pass. Supervisor
+  decides defer versus separately authorized representative workload/attribution work.
+  No runtime/profiler changes or extra plays. Settings/diagnostics restored; last captured
+  page black, 80% external power, inherited unattended unchanged.
+- **Phone queue** (PLA-431, main checkout):
+  - A0 follow-up only after supervisor decision; preliminary menu artifacts retained;
+  - A's gates after an authorized A2–A4, which have not started.
 - **Phone:** installed titles are Hollow Knight (`app-367520`) and RDR2. The D3D12 route is Hollow
   Knight with `-force-d3d12` (vkd3d-proton). No installed title is known to use depth bias.
 - **Notes:** reports under `.work/agent-notes/kk-parity/reports/`, research scratch under
@@ -603,7 +614,7 @@ in the Runner state's queue.
 | # | Chunk | Size | Flag | Done when |
 | --- | --- | --- | --- | --- |
 | 0 | Side copy `.work/worktrees/kkparity` on `dev/kk-proton-parity` (0117 rewrite, marker); baseline `run.sh` and its MSL saved as the byte-identity baseline | S | — | Marker in place. `pp build` verified in the side copy. Baseline host test passes and its `msl/` is kept under the side copy's `.work` |
-| A0 | Phone baseline (queued, main checkout): `pp perf --cpu-prof` on Hollow Knight DXVK and `-force-d3d12`. How much CPU goes to `vkUpdateDescriptorSets*`/`kk_*Descriptor*` and vkd3d's `CopyDescriptors` | S | — | Evidence file with the share per thread. It decides whether A2 is worth L |
+| A0 | Phone baseline: `pp perf --cpu-prof` on Hollow Knight DXVK and `-force-d3d12`; [preliminary menu evidence](../evidence/2026-10-23-kk-descriptor-cpu-baseline.md) collected | S | — | **Gate not satisfied:** per-thread printed leaves quantified, but JIT/top-N/stack gaps and menu-only scope cannot establish total descriptor/CopyDescriptors cost. Recommendation INSUFFICIENT; supervisor decides next action, A2 not started |
 | B1 | `memory_priority` | S | `memory_priority` | Mesa 0119. Host test: extensions only with flag, the calls accepted, MSL identical. Phone runtime gate passed with vkd3d logging limit (evidence above) |
 | B3 | `shader_module_identifier` | S | `module_identifier` | Mesa 0120. Host tests passed. Phone smoke on both routes and 25 warm disk-cache identifier hits passed; phone miss/fallback unobserved, no performance claim (evidence above) |
 | A2 | **Gated on A0.** Descriptor buffer core with the vkd3d 4-byte SSBO alignment (A1 folded in): properties, layout size and offset, `vkGetDescriptorEXT`, bind and offsets, push descriptors, meta save/restore | L | `descriptor_buffer` | Next free Mesa number (split if large; A1's alignment may be its own patch under the same flag). Host test: bytes equal to `vkUpdateDescriptorSets`; draws and clear-between-draws restore set 0; flag-off MSL byte-identical; vkd3d-engine MSL with 4-byte alignment compiles with `msl-compile.sh`; cache key hashes the alignment. Committed |
