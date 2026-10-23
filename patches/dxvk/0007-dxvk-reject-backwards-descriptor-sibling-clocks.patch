@@ -1,0 +1,41 @@
+From 78e7eba1f3df0dc423e64e9930961a6a07fb4b7b Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kamil=20Postro=C5=BCny?= <kamil@postrozny.pl>
+Date: Fri, 23 Oct 2026 11:06:19 +0200
+Subject: [PATCH] dxvk: reject backwards descriptor sibling clocks
+
+Reject child starts before the previous sibling end and keep the greatest child end for final containment. Invalid child scopes explicitly invalidate ancestor timings through the existing unwind path.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-10-23-dxvk-descriptor-clock-fix-host.md
+Offered-upstream: no
+---
+ src/dxvk/dxvk_descriptor_stats.cpp | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/src/dxvk/dxvk_descriptor_stats.cpp b/src/dxvk/dxvk_descriptor_stats.cpp
+index b01c519..2979eee 100644
+--- a/src/dxvk/dxvk_descriptor_stats.cpp
++++ b/src/dxvk/dxvk_descriptor_stats.cpp
+@@ -25,7 +25,8 @@ namespace dxvk {
+     auto* state = &s_stack[depth];
+     *state = {stats, parent, row, 0, 0, 0, std::uncaught_exceptions(), false, !parent, excluded};
+     state->valid = stats->read(state->start);
+-    if (parent && (parent->stats != stats || state->start < parent->start)) {
++    if (parent && (parent->stats != stats || state->start < parent->start
++               || state->start < parent->lastChildEnd)) {
+       state->valid = false;
+       stats->work(row, DescriptorStats::NestErrors, 1);
+       parent->valid = false;
+@@ -62,7 +63,8 @@ namespace dxvk {
+           parent->valid = false;
+         else {
+           parent->children += elapsed;
+-          parent->lastChildEnd = end;
++          if (end > parent->lastChildEnd)
++            parent->lastChildEnd = end;
+         }
+       }
+       s_top = parent;
+-- 
+2.56.0
+

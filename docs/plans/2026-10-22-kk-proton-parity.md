@@ -122,10 +122,18 @@ The supervisor keeps this section.
      (child `6cbf8167`, report left in the build area at
      `.work/agent-notes/kk-parity/reports/a0-dxvk-probe-review.md`). Parent helper rerun
      passed (log `supervisor-dxvk-helper.log` under those notes), but lacked the failing trace.
-     **Next correction before vkd3d:** reject child starts earlier than the previous sibling's
-     end, invalidate ancestry and preserve explicit errors. Regression: prep 10, child
-     150..200, sibling 30..40, prep end 100 must not yield valid exclusive 30; also test
-     overlapping siblings. Reconstruct, retest, rebuild and focused re-review before acceptance.
+     **Clock correction 0007 implemented, independent re-review pending:** child starts
+     before the previous sibling end are rejected; child-end bookkeeping is monotonic,
+     with explicit errors and ancestor invalidation. Real-helper regressions first failed
+     against 0006: reviewer trace yielded exclusive 30, overlapping siblings 40, no errors.
+     Both now publish zero valid parent/second-child timing and clock/nest errors;
+     deeper invalidation, failed/backwards reads, recovery and equal timestamps pass.
+     Reconstructed tree equals the source commit; helper and ASan/UBSan pass. Fresh dev
+     IPA `a1e362fa…` verified 89/89; six actual DXVK artifact rows changed, protected owner
+     UI edit included/uncommitted. Quick 712 Python/26 C groups pass; names/secrets clean.
+     [Clock-fix host evidence](../evidence/2026-10-23-dxvk-descriptor-clock-fix-host.md).
+     No Mesa/ARM64EC inspection suite or phone rerun. **Focused independent re-review
+     before acceptance or next-client reference use; vkd3d not started, A2 still gated.**
      Default-off
      `PLAYPORT_DESCRIPTOR_STATS=1`, per-device checked elapsed scopes, same-thread fixed
      TLS nesting, client inclusive/exclusive and summed-thread outermost attribution;

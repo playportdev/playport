@@ -1,7 +1,7 @@
 # DXVK descriptor diagnostics host fixture
 
 PLA-431; [host evidence](../../docs/evidence/2026-10-23-dxvk-descriptor-cost-probe-host.md).
-After reconstructing DXVK with patch 0006:
+After reconstructing DXVK with patches 0006–0007:
 
 ```sh
 export PLAYPORT_BUILD=$PWD/.work
@@ -14,6 +14,14 @@ executes the **real** `src/dxvk/dxvk_descriptor_stats.cpp`/header at `-O2`, with
 30-second producer bound. Fake clocks are injected only by this C++ fixture, not
 by any production environment switch. Assertions exercise timing, work, nesting,
 exclusions, failure/unwind, concurrency, saturation, reporting and raw calibration.
+Sibling-clock regressions include the reviewer's 150..200 then 30..40 trace,
+overlapping siblings, deeper ancestor invalidation, failed/backwards child reads,
+recovery, and valid equal/nonoverlapping timestamps. Rejection is asserted through
+operation `clock_errors`/`nest_errors` and absent valid parent timing, not capture
+`clock_ok=0`. Both bad traces print their actual fields before assertions so the
+fixture against 0006 shows both failures. See the
+[clock-fix evidence](../../docs/evidence/2026-10-23-dxvk-descriptor-clock-fix-host.md)
+for before/after results and sanitizer flags.
 It also writes `disabled-path.asm` for optimized host guard inspection.
 
 `cmdlist-disabled-path.cpp` is a compile-only ARM64EC inspection seam for the real

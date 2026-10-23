@@ -116,6 +116,96 @@ static void invalidClocks() {
   assert(!s.clockOk && field(s, DescriptorOp::Prep, DescriptorStats::ClockErrors) == 1);
 }
 
+static void siblingClocks() {
+  std::vector<DescriptorStats::Snapshot> snapshots;
+  // Reviewer trace hides an earlier child outside the parent; overlapping siblings
+  // have individually valid durations and also fit the old summed-child check.
+  for (auto seq : {std::vector<int64_t>{1, 10, 150, 200, 30, 40, 100},
+                   {1, 10, 20, 50, 40, 60, 100}}) {
+    ticks = seq; cursor = 0;
+    DescriptorStats stats(true, nullptr, clockSource(), false);
+    {
+      DescriptorScope prep(stats.enabled(), DescriptorOp::Prep);
+      { DescriptorScope first(stats.enabled(), DescriptorOp::VkUpdate); }
+      { DescriptorScope second(stats.enabled(), DescriptorOp::VkBind); }
+    }
+    auto s = capture(stats);
+    std::cout << "sibling-clock " << (snapshots.empty() ? "reviewer" : "overlap")
+      << " parent_timed_calls=" << field(s, DescriptorOp::Prep, DescriptorStats::TimedCalls)
+      << " parent_exclusive=" << field(s, DescriptorOp::Prep, DescriptorStats::Exclusive)
+      << " parent_clock_errors=" << field(s, DescriptorOp::Prep, DescriptorStats::ClockErrors)
+      << " parent_nest_errors=" << field(s, DescriptorOp::Prep, DescriptorStats::NestErrors)
+      << " child_clock_errors=" << field(s, DescriptorOp::VkBind, DescriptorStats::ClockErrors)
+      << " child_nest_errors=" << field(s, DescriptorOp::VkBind, DescriptorStats::NestErrors)
+      << std::endl;
+    snapshots.push_back(s);
+  }
+  for (const auto& s : snapshots) {
+    assert(s.quiescent && s.clockOk && !s.overflow); // Capture clocks are valid.
+    for (auto op : {DescriptorOp::Prep, DescriptorOp::VkBind}) {
+      assert(field(s, op, DescriptorStats::ClockErrors) == 1);
+      assert(field(s, op, DescriptorStats::NestErrors) == 1);
+      assert(field(s, op, DescriptorStats::TimedCalls) == 0);
+      assert(field(s, op, DescriptorStats::Exclusive) == 0);
+    }
+  }
+}
+
+static void childClockPropagation() {
+  // Errors must propagate beyond the immediate parent. A later independent root
+  // still times normally; rejected scopes must not corrupt TLS or its counters.
+  for (auto seq : {std::vector<int64_t>{1, 5, 10, 150, 200, 30, 40, 100, 300},
+                   {1, 5, 10, 20, 50, 40, 60, 100, 300},
+                   {1, 5, 10, 20, 30, -1, 40, 100, 300},
+                   {1, 5, 10, 20, 30, 40, -1, 100, 300},
+                   {1, 5, 10, 20, 30, 40, 35, 100, 300}}) {
+    ticks = seq; cursor = 0;
+    DescriptorStats stats(true, nullptr, clockSource(), false);
+    {
+      DescriptorScope root(stats.enabled(), DescriptorOp::PoolRecycle);
+      {
+        DescriptorScope prep(stats.enabled(), DescriptorOp::Prep);
+        { DescriptorScope first(stats.enabled(), DescriptorOp::VkUpdate); }
+        { DescriptorScope second(stats.enabled(), DescriptorOp::VkBind); }
+      }
+    }
+    auto s = capture(stats);
+    for (auto op : {DescriptorOp::PoolRecycle, DescriptorOp::Prep, DescriptorOp::VkBind}) {
+      size_t category = op == DescriptorOp::PoolRecycle ? 1 : 0;
+      assert(field(s, op, DescriptorStats::ClockErrors, category) == 1);
+      assert(field(s, op, DescriptorStats::TimedCalls, category) == 0);
+      assert(field(s, op, DescriptorStats::Exclusive, category) == 0);
+    }
+    clockValues({1100, 1200});
+    { DescriptorScope recovered(stats.enabled(), DescriptorOp::Prep); }
+    s = capture(stats);
+    assert(field(s, DescriptorOp::Prep, DescriptorStats::TimedCalls) == 1);
+    assert(field(s, DescriptorOp::Prep, DescriptorStats::Exclusive) == 100);
+    assert(field(s, DescriptorOp::Prep, DescriptorStats::ClockErrors) == 1);
+  }
+}
+
+static void orderedSiblingClocks() {
+  for (auto seq : {std::vector<int64_t>{1, 10, 20, 30, 30, 40, 100},
+                   {1, 10, 20, 30, 40, 50, 100},
+                   {1, 10, 10, 10, 10, 10, 10}}) {
+    ticks = seq; cursor = 0;
+    DescriptorStats stats(true, nullptr, clockSource(), false);
+    {
+      DescriptorScope prep(stats.enabled(), DescriptorOp::Prep);
+      { DescriptorScope first(stats.enabled(), DescriptorOp::VkUpdate); }
+      { DescriptorScope second(stats.enabled(), DescriptorOp::VkBind); }
+    }
+    auto s = capture(stats);
+    for (auto op : {DescriptorOp::Prep, DescriptorOp::VkUpdate, DescriptorOp::VkBind}) {
+      assert(field(s, op, DescriptorStats::TimedCalls) == 1);
+      assert(field(s, op, DescriptorStats::ClockErrors) == 0);
+      assert(field(s, op, DescriptorStats::NestErrors) == 0);
+    }
+    assert(field(s, DescriptorOp::Prep, DescriptorStats::Exclusive) == (seq.back() == 10 ? 0 : 70));
+  }
+}
+
 static void lifetimeAndIdentity() {
   clockValues({1, 10, 20, 30, 40, 50, 60});
   DescriptorStats stats(true, nullptr, clockSource(), false);
@@ -308,6 +398,7 @@ static void reports() {
 }
 
 int main() {
+  siblingClocks(); childClockPropagation(); orderedSiblingClocks();
   exactNested(); exclusionAndRecursion(); invalidClocks(); lifetimeAndIdentity();
   saturationAndDisabled(); threads(); concurrentCaptureAndDepth(); overflowingElapsedAndBoundaries(); reports();
   std::cout << "descriptor-stats: all real-helper assertions passed\n";
