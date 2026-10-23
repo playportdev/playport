@@ -88,8 +88,13 @@ The supervisor keeps this section.
   no other semantic change. Fresh main IPA `5e3fc6a8…` verified 89/89; no build-record
   changes. Owner edit included, not committed. Full host suite, combined parity/GPL run,
   `pp test --quick`, names and secrets passed. B3 MSL comparison now 185/239.
-- **Next:** supervisor decision on A0's attribution/workload limit (below). A2–A4 remain
-  **not started**, gated on evidence that descriptor cost matters. No merge or push.
+- **Next (owner, 2026-10-23):** improve measurement; do not waive A0. A bounded
+  read-only investigator will propose the smallest representative-workload/descriptor-cost
+  attribution improvement from existing sources and artifacts (PLA-431). No new phone runs
+  or profiler implementation in that investigation. Report left in the build area at
+  `.work/agent-notes/kk-parity/reports/a0-measurement-design.md`; supervisor reviews before
+  commissioning the measurement chunk. Current checkpoint `c2d1fb3`; no merge or push.
+  A2–A4 remain **not started**, gated on evidence that descriptor cost matters.
 - **B1 phone (2026-10-23):** both flag-off routes and memory_priority DXVK/D3D12 reached
   first-frame+10. DXVK features 0 off / 1 on; priority counts 14/14 and 28/13.
   vkd3d's extension-name TRACE is compiled out; its initial priority allocation is behavioral
@@ -117,7 +122,8 @@ The supervisor keeps this section.
   No runtime/profiler changes or extra plays. Settings/diagnostics restored; last captured
   page black, 80% external power, inherited unattended unchanged.
 - **Phone queue** (PLA-431, main checkout):
-  - A0 follow-up only after supervisor decision; preliminary menu artifacts retained;
+  - A0 measurement-design investigation, then supervisor-reviewed improvement and representative
+    phone measurement; preliminary menu artifacts retained;
   - A's gates after an authorized A2–A4, which have not started.
 - **Phone:** installed titles are Hollow Knight (`app-367520`) and RDR2. The D3D12 route is Hollow
   Knight with `-force-d3d12` (vkd3d-proton). No installed title is known to use depth bias.
