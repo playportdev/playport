@@ -5,3 +5,4 @@
 0003-dxvk-open-a-D3DKMT-adapter-for-a-device-that-can-sha.patch
 0004-d3d11-log-shared-textures-the-requests-for-their-han.patch
 0005-d3d11-share-a-texture-made-unshared-when-its-handle-.patch
+0006-dxvk-descriptor-cost-diagnostics.patch

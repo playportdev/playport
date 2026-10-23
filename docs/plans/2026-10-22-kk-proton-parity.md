@@ -118,10 +118,21 @@ The supervisor keeps this section.
      Parent reviewed correction `1846ca5` and independently reran the full host suite:
      exit 0, replay counts and 236 off/on MSL identity confirmed. Log left in the build
      area at `.work/agent-notes/kk-parity/supervisor-replay-host.log`.
-  2. **Running: DXVK only**, scoped client accounting, preserve default/disabled behavior
-     (host only); retain client-exclusive/inclusive attribution and separate uncovered
-     native replay rather than assume parity/containment or subtract cross-layer windows.
-  3. vkd3d scoped client accounting, preserve optimized copy selection (host only).
+  2. **DXVK 0006 implemented, host checked; independent review pending.** Default-off
+     `PLAYPORT_DESCRIPTOR_STATS=1`, per-device checked elapsed scopes, same-thread fixed
+     TLS nesting, client inclusive/exclusive and summed-thread outermost attribution;
+     standalone pool work and specification-data exclusions separate. No cross-layer
+     subtraction or native replay containment assumption. Real-helper deterministic/
+     two-thread/error/calibration tests and ASan/UBSan pass; optimized host/ARM64EC
+     disabled paths inspected. Full Mesa host runner passes (236 off/on MSL unchanged),
+     quick 712 Python/26 C groups, names/secrets clean. Dev IPA `0bc7e996…` verified
+     89/89; seven actual DXVK artifact rows changed, owner UI edit included/uncommitted.
+     [DXVK host evidence](../evidence/2026-10-23-dxvk-descriptor-cost-probe-host.md).
+     No DXVK Vulkan execution, phone calibration/smoke or gameplay. Denominator is
+     client submission requests, not frames. Per-thread rows withdrawn by supervisor;
+     aggregates are thread sums, not wall union/CPU time. A2 remains gated.
+  3. **Next, separately authorized:** vkd3d scoped client accounting, preserve optimized
+     copy selection (host only); not started by the DXVK writer.
   4. Parser/integration and independent validation of nesting/coverage/clock error handling.
   5. Coordinate owner-chosen save/room/activity, load/measurement window and worthwhile budget;
      device calibration, controls and bounded controller measurements after review.
