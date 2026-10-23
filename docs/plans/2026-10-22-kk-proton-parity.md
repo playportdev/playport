@@ -184,12 +184,22 @@ The supervisor keeps this section.
      Accepted for owner coordination and separately gated device calibration/smoke only, not A2.
      **Owner approved prepare-now:** dev upgrade in place and short menu-only probe checks.
      Later the owner will load their existing save/room personally; normal autosaves allowed.
-  5. **Running: menu-only device prep** (PLA-431): verified probe IPA `74c0d54e…`, flag-off/on
-     smoke on both routes, actual-platform clock/calibration and complete-snapshot viability.
-     Report left in the build area at `.work/agent-notes/kk-parity/reports/a0-device-prep.md`.
-     No save navigation or automated gameplay. Then coordinate owner scene/activity/window and
-     worthwhile budget, controls and bounded controller measurements; no performance claim from menu prep.
-  Phone use authorized only for that bounded prep; human gameplay waits for owner handoff.
+  5. **Menu-only device prep BLOCKED** (PLA-431): exact verified probe IPA `74c0d54e…`
+     upgraded in place, container retained. DXVK off/on both reached first-frame+30 and
+     visibly rendered menus; actual native/QPC calibration retained. Strict full-log parser
+     exit1: **0 usable intervals, 17 malformed interleaved records**, incomplete KK/client
+     captures. KK multi-write snapshot lines interrupted by DXVK and other logging;
+     no runtime/parser edits or reconstructed evidence. Supervisor stopped further plays:
+     **D3D12 off/on and actual selected Simple path unrun**. Fixed pre-stop shots showed
+     startup/splash/black; stop shots show menus. Product automatically cleared81.8/80.8MB
+     FEX caches under its low-disk policy; worker requested no deletion. Settings/diagnostics
+     restored, explicitly captured black, lock released; no gameplay or save navigation.
+     [Device blocker evidence](../evidence/2026-10-23-descriptor-probe-device-prep.md);
+     report `.work/agent-notes/kk-parity/reports/a0-device-prep.md` in the build area.
+     Next: separately authorized focused wire-emission correction/review, then bounded
+     prep rerun authorization before owner scene/activity/window/budget coordination.
+     No performance or perturbation claim from this menu prep.
+  No further phone plays authorized by this checkpoint; human gameplay waits for owner handoff.
   No save automation/new slot authorized. No sampler
   redesign, CPU-clock bridge or descriptor implementation approved. Checkpoint `5a46a4a`;
   no merge or push. A2–A4 remain **not started**, gated on evidence that descriptor cost matters.
@@ -220,8 +230,10 @@ The supervisor keeps this section.
   No runtime/profiler changes or extra plays. Settings/diagnostics restored; last captured
   page black, 80% external power, inherited unattended unchanged.
 - **Phone queue** (PLA-431, main checkout):
-  - A0 scoped diagnostics host queue approved; phone calibration/measurement waits for reviewed
-    probe and owner-coordinated existing-save controller workload; preliminary menu artifacts retained;
+  - A0 scoped diagnostics host queue accepted; device prep blocked by actual interleaved
+    telemetry (evidence above). Correct/review emission in a separate authorized chunk,
+    then authorize renewed calibration/smoke; owner existing-save workload coordination
+    and human measurement remain pending. No save automation or automatic measurement;
   - A's gates after an authorized A2–A4, which have not started.
 - **Phone:** installed titles are Hollow Knight (`app-367520`) and RDR2. The D3D12 route is Hollow
   Knight with `-force-d3d12` (vkd3d-proton). No installed title is known to use depth bias.
