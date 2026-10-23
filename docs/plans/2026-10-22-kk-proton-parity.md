@@ -99,9 +99,13 @@ The supervisor keeps this section.
   **Owner approved scoped diagnostics and existing-save human-controller gameplay.**
   Ordered measurement queue (PLA-431), one writer each:
   1. KK `MESA_KK_DEBUG=descriptor_stats` counters/elapsed timing and host coverage:
-     **implemented** (`8b6a20e`), host checks passed; independent review running
+     **implemented** (`8b6a20e`), host checks passed; independent review ACCEPT
      (child `31c95ed3`, report left in the build area at
-     `.work/agent-notes/kk-parity/reports/a0-kk-probe-review.md`), before DXVK writer.
+     `.work/agent-notes/kk-parity/reports/a0-kk-probe-review.md`). Before DXVK, a bounded
+     documentation/replay-test correction closes its P2 finding: bind/push counts measure
+     driver executions including secondary/reusable-primary replay, not application-call
+     counts. Preserve replay costs as potentially uncovered by client scopes; no client/native
+     count-parity or containment assumption. No blocking API-behavior defect established.
      Mesa 0121; [host evidence](../evidence/2026-10-23-kk-descriptor-cost-probe-host.md).
      Dev IPA `1a7935b2…` verified 89/89, owner UI edit included/uncommitted;
      185 established MSL files unchanged, 219 diagnostic off/on identical.
