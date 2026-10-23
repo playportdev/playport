@@ -73,7 +73,7 @@ for s in "$HERE"/shaders/*; do
     *) glslangValidator -V --target-env vulkan1.3 -o "$ROOT/spv/$(basename "$s").spv" "$s" >/dev/null ;;
     esac
 done
-cc -O1 -g -Wall -o "$ROOT/kk-host-test" "$HERE/kk-host-test.c" -ldl
+cc -O1 -g -Wall -pthread -o "$ROOT/kk-host-test" "$HERE/kk-host-test.c" -ldl
 
 rm -rf "$ROOT/msl" "$ROOT/msl-versions"; mkdir -p "$ROOT/msl"
 KK_MOCK_MSL_DIR="$ROOT/msl" KK_MOCK_MSL_VERSIONS="$ROOT/msl-versions" MESA_SHADER_CACHE_DISABLE=true \
@@ -444,6 +444,89 @@ fi
 known_fail env MESA_KK_DEBUG=no_known_fail >"$ROOT/known-fail-4.log" 2>&1 ||
     { echo "known-fail: MESA_KK_DEBUG=no_known_fail did not build msl=$msl" >&2; exit 1; }
 echo "known-fail list: msl=$msl skipped after 2 interrupted builds"
+
+# PLA-431: diagnostics never renumber the established MSL prefix. The extra
+# devices and failure/rollback tests run only after all existing flag checks.
+for mode in off on; do
+    debug=; [ "$mode" = off ] || debug=descriptor_stats,vertex_stats
+    rm -rf "$ROOT/msl-descriptor-$mode"; mkdir -p "$ROOT/msl-descriptor-$mode"
+    KK_HOST_DESCRIPTOR_TEST=1 MESA_KK_DEBUG="$debug" \
+        KK_MOCK_MSL_DIR="$ROOT/msl-descriptor-$mode" MESA_SHADER_CACHE_DISABLE=true \
+        "$ROOT/kk-host-test" "$ROOT/build/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.so" "$ROOT/spv" \
+        >"$ROOT/descriptor-$mode.log" 2>&1 || { tail -60 "$ROOT/descriptor-$mode.log" >&2; exit 1; }
+    for f in "$ROOT/msl/"*.metal; do
+        cmp -s "$f" "$ROOT/msl-descriptor-$mode/${f##*/}" ||
+            { echo "descriptor-$mode changed ${f##*/}" >&2; exit 1; }
+    done
+done
+! grep -q '^\[kk-descriptor\]' "$ROOT/descriptor-off.log"
+grep -q '^\[kk-vertex\]' "$ROOT/descriptor-on.log"
+diff -rq "$ROOT/msl-descriptor-off" "$ROOT/msl-descriptor-on" >/dev/null
+python3 - "$ROOT" "$HERE" <<'PY'
+import json, pathlib, shlex, subprocess, sys
+root, here = map(pathlib.Path, sys.argv[1:])
+build = root / 'build'
+entry = next(e for e in json.loads((build / 'compile_commands.json').read_text())
+             if e['file'].endswith('/kk_debug.c'))
+args = shlex.split(entry['command'])
+args = args[:args.index('-MD')]
+obj = root / 'kk-descriptor-stats-test.o'
+subprocess.run(args + ['-O2', '-UNDEBUG', '-c', str(here / 'kk-descriptor-stats-test.c'),
+                      '-o', str(obj)], cwd=build, check=True)
+exe = root / 'kk-descriptor-stats-test'
+subprocess.run(['cc', '-pthread', '-Wl,--gc-sections', '-o', str(exe), str(obj),
+                str(build / entry['output']),
+                str(build / 'src/c11/impl/libmesa_util_c11.a')], check=True)
+with (root / 'descriptor-helper.log').open('w') as log:
+    subprocess.run([str(exe)], stdout=log, stderr=log, check=True)
+
+# This is a known-count fixture assertion, NOT the future interval parser.
+text = (root / 'descriptor-on.log').read_text().split('descriptor-fixture begin\n')[1]
+rows = [dict(token.split('=', 1) for token in line.split()[1:])
+        for line in text.splitlines() if line.startswith('[kk-descriptor] ')]
+enabled = [r for r in rows if r['kind'] == 'enabled']
+assert len(enabled) == 3, enabled # initialized failure + two live devices
+assert len({r['device'] for r in enabled}) == 3
+finals = [r for r in rows if r['kind'] == 'snapshot' and r['final'] == '1']
+assert len(finals) == 30
+expected = {
+    'pool_create': dict(calls=3, sets=5, pool_entries=7, pool_elements=4104, pool_bytes=64, failures=1),
+    'allocate': dict(calls=3, sets=5, failures=1),
+    'free': dict(calls=1, sets=1),
+    'pool_reset': dict(calls=1, sets=1),
+    'pool_destroy': dict(calls=2, sets=1),
+    'update': dict(calls=2001, write_records=3, write_elements=2, write_bytes=16,
+                   copy_records=2, copy_elements=1, copy_bytes=16),
+    'template_update': dict(calls=1, write_records=2, write_elements=1, write_bytes=16),
+    'bind': dict(calls=1, sets=1, dynamic_offsets=1),
+    'push': dict(calls=1, write_records=1, write_elements=1),
+    'push_template': dict(calls=1, write_records=1, write_elements=1),
+}
+for row in finals:
+    assert row['v'] == '1' and row['component'] == 'kk'
+    assert row['clock_ok'] == row['quiescent'] == '1' and row['overflow'] == row['active'] == '0'
+    assert int(row['ts_end']) >= int(row['ts_begin']) > 0
+    assert row['timed_calls'] == row['calls'] and row['clock_errors'] == '0'
+    assert int(row['elapsed_ticks']) >= int(row['max_ticks'])
+    assert row['entered_before'] == row['completed_before'] == row['entered_after'] == row['completed_after']
+    if row['device'] != enabled[1]['device']:
+        assert row['calls'] == '0', row # init failure and second device cannot inherit counts
+        continue
+    want = expected[row['op']]
+    for field in ('calls', 'sets', 'write_records', 'write_elements', 'write_bytes',
+                  'copy_records', 'copy_elements', 'copy_bytes', 'dynamic_offsets',
+                  'pool_entries', 'pool_elements', 'pool_bytes', 'failures'):
+        assert int(row[field]) == want.get(field, 0), (row, field, want)
+assert len([r for r in rows if r['kind'] == 'calibration']) == 48
+for r in rows:
+    if r['kind'] == 'calibration':
+        assert r['adjacent_ok'] == r['empty_ok'] == '1' and r['reads'] == '6'
+helper = (root / 'descriptor-helper.log').read_text()
+assert 'quiescent=0' in helper and 'active=1' in helper and 'overflow=1' in helper
+assert 'clock_errors=3' in helper and 'ok descriptor helper:' in helper
+assert 'clock_ok=0 report_clock_errors=3' in helper
+print('descriptor_stats: exact 10-operation counts, two-device/init-failure separation, rollback, threads, clock errors and overflow; MSL off/on identical')
+PY
 
 # Zink and EGL on the same mock driver: a second build of the tree. Zink loads
 # the Vulkan loader (libvulkan.so.1), limited to the mock by VK_DRIVER_FILES.

@@ -94,3 +94,4 @@
 0118-kk-require-explicit-hazardous-probes-and-unsafe-UBO-consent.patch
 0119-kk-MESA_KK_EXPERIMENTAL-memory_priority-VK_EXT_memor.patch
 0120-kk-MESA_KK_EXPERIMENTAL-module_identifier-VK_EXT_sha.patch
+0121-kk-descriptor-cost-diagnostics.patch

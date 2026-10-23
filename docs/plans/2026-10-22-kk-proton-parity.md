@@ -98,7 +98,13 @@ The supervisor keeps this section.
   workload established; New Game/King's Pass scripts need owner permission and assumptions.
   **Owner approved scoped diagnostics and existing-save human-controller gameplay.**
   Ordered measurement queue (PLA-431), one writer each:
-  1. KK `MESA_KK_DEBUG=descriptor_stats` counters/elapsed timing and host coverage (host only).
+  1. KK `MESA_KK_DEBUG=descriptor_stats` counters/elapsed timing and host coverage:
+     **implemented, host checks passed; independent review pending** (Mesa 0121;
+     [host evidence](../evidence/2026-10-23-kk-descriptor-cost-probe-host.md)).
+     Dev IPA `1a7935b2…` verified 89/89, owner UI edit included/uncommitted;
+     185 established MSL files unchanged, 219 diagnostic off/on identical.
+     Per-device disjoint scopes use checked monotonic elapsed time, not CPU time.
+     No phone calibration/smoke or gameplay; A0 justification remains insufficient.
   2. DXVK scoped client accounting, preserve default/disabled behavior (host only).
   3. vkd3d scoped client accounting, preserve optimized copy selection (host only).
   4. Parser/integration and independent validation of nesting/coverage/clock error handling.

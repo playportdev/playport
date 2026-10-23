@@ -17,6 +17,8 @@
  */
 #define _GNU_SOURCE /* memmem */
 #include <dirent.h>
+#include <pthread.h>
+#include <stddef.h>
 #include <dlfcn.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -1668,6 +1670,225 @@ check_linear_images(VkPhysicalDevice pd, VkQueue queue, VkCommandPool pool)
    return 0;
 }
 
+/* Only at the end of main: extra devices must not renumber old MSL files. */
+static void *
+descriptor_empty_updates(void *arg)
+{
+   PFN_vkUpdateDescriptorSets update = (PFN_vkUpdateDescriptorSets)gipa(inst, "vkUpdateDescriptorSets");
+   VkDevice device = *(VkDevice *)arg;
+   for (int i = 0; i < 1000; i++)
+      update(device, 0, NULL, 0, NULL);
+   return NULL;
+}
+
+static void *VKAPI_PTR
+descriptor_fail_alloc(void *data, size_t size, size_t alignment, VkSystemAllocationScope scope)
+{
+   (void)data; (void)size; (void)alignment; (void)scope;
+   return NULL;
+}
+static void *VKAPI_PTR
+descriptor_fail_realloc(void *data, void *old, size_t size, size_t alignment,
+                         VkSystemAllocationScope scope)
+{
+   (void)old;
+   return descriptor_fail_alloc(data, size, alignment, scope);
+}
+static void VKAPI_PTR descriptor_fail_free(void *data, void *ptr) { (void)data; free(ptr); }
+
+/* Permit the device allocation, then fail common-runtime initialization. */
+static void *VKAPI_PTR
+descriptor_init_fail_alloc(void *data, size_t size, size_t alignment,
+                           VkSystemAllocationScope scope)
+{
+   (void)scope;
+   if (!*(unsigned *)data) return NULL;
+   --*(unsigned *)data;
+   void *ptr = NULL;
+   return posix_memalign(&ptr, alignment < sizeof(void *) ? sizeof(void *) : alignment,
+                         size) ? NULL : ptr;
+}
+
+static int
+check_descriptor_stats(VkPhysicalDevice pd)
+{
+   if (!getenv("KK_HOST_DESCRIPTOR_TEST"))
+      return 0;
+   fprintf(stderr, "descriptor-fixture begin\n");
+   DPROC(vkCreateDevice); DPROC(vkDestroyDevice); DPROC(vkGetDeviceQueue);
+   DPROC(vkQueueSubmit); DPROC(vkQueueWaitIdle);
+   DPROC(vkCreateDescriptorSetLayout); DPROC(vkDestroyDescriptorSetLayout);
+   DPROC(vkCreateDescriptorPool); DPROC(vkDestroyDescriptorPool);
+   DPROC(vkAllocateDescriptorSets); DPROC(vkFreeDescriptorSets); DPROC(vkResetDescriptorPool);
+   DPROC(vkUpdateDescriptorSets); DPROC(vkUpdateDescriptorSetWithTemplate);
+   DPROC(vkCreateDescriptorUpdateTemplate); DPROC(vkDestroyDescriptorUpdateTemplate);
+   DPROC(vkCreatePipelineLayout); DPROC(vkDestroyPipelineLayout);
+   DPROC(vkCreateCommandPool); DPROC(vkDestroyCommandPool); DPROC(vkAllocateCommandBuffers);
+   DPROC(vkBeginCommandBuffer); DPROC(vkEndCommandBuffer);
+   DPROC(vkCmdBindDescriptorSets); DPROC(vkCmdPushDescriptorSetKHR);
+   DPROC(vkCmdPushDescriptorSetWithTemplateKHR);
+   float priority = 1;
+   VkDeviceQueueCreateInfo qci = {.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+      .queueCount = 1, .pQueuePriorities = &priority};
+   const char *exts[] = {"VK_KHR_push_descriptor", "VK_EXT_robustness2"};
+   VkPhysicalDeviceRobustness2FeaturesEXT robustness = {
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT,
+      .nullDescriptor = VK_TRUE};
+   VkPhysicalDeviceInlineUniformBlockFeatures inline_features = {
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_INLINE_UNIFORM_BLOCK_FEATURES,
+      .pNext = &robustness, .inlineUniformBlock = VK_TRUE};
+   VkDeviceCreateInfo dci = {.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+      .pNext = &inline_features, .queueCreateInfoCount = 1, .pQueueCreateInfos = &qci,
+      .enabledExtensionCount = 2, .ppEnabledExtensionNames = exts};
+   VkAllocationCallbacks fail = {.pfnAllocation = descriptor_fail_alloc,
+      .pfnReallocation = descriptor_fail_realloc, .pfnFree = descriptor_fail_free};
+   VkDevice failed_device = VK_NULL_HANDLE;
+   if (vkCreateDevice(pd, &dci, &fail, &failed_device) != VK_ERROR_OUT_OF_HOST_MEMORY)
+      return 1;
+   unsigned remaining = 1;
+   VkAllocationCallbacks init_fail = fail;
+   init_fail.pUserData = &remaining;
+   init_fail.pfnAllocation = descriptor_init_fail_alloc;
+   if (vkCreateDevice(pd, &dci, &init_fail, &failed_device) != VK_ERROR_OUT_OF_HOST_MEMORY)
+      return 1;
+   VkDevice devices[2];
+   CHECK(vkCreateDevice(pd, &dci, NULL, &devices[0]));
+   CHECK(vkCreateDevice(pd, &dci, NULL, &devices[1]));
+   for (int index = 0; index < 2; index++) {
+      VkDevice d = devices[index];
+      VkQueue queue;
+      vkGetDeviceQueue(d, 0, 0, &queue);
+      CHECK(vkQueueSubmit(queue, 0, NULL, VK_NULL_HANDLE));
+      CHECK(vkQueueWaitIdle(queue));
+      if (index) { vkDestroyDevice(d, NULL); continue; }
+      VkDescriptorSetLayoutBinding bindings[] = {
+         {.binding = 0, .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+          .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_ALL},
+         {.binding = 1, .descriptorType = VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK,
+          .descriptorCount = 16, .stageFlags = VK_SHADER_STAGE_ALL},
+         {.binding = 2, .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+          .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_ALL}};
+      VkDescriptorSetLayoutCreateInfo lci = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+         .bindingCount = 3, .pBindings = bindings};
+      VkDescriptorSetLayout layouts[2];
+      CHECK(vkCreateDescriptorSetLayout(d, &lci, NULL, &layouts[0]));
+      layouts[1] = layouts[0];
+      VkDescriptorPoolSize sizes[] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2},
+         {VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK, 32},
+         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 2}};
+      VkDescriptorPoolInlineUniformBlockCreateInfo inline_pool = {
+         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_INLINE_UNIFORM_BLOCK_CREATE_INFO,
+         .maxInlineUniformBlockBindings = 2};
+      VkDescriptorPoolCreateInfo pci = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+         .pNext = &inline_pool, .flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT,
+         .maxSets = 2, .poolSizeCount = 3, .pPoolSizes = sizes};
+      VkDescriptorPool pool, failed_pool;
+      if (vkCreateDescriptorPool(d, &pci, &fail, &failed_pool) != VK_ERROR_OUT_OF_HOST_MEMORY)
+         return 1;
+      CHECK(vkCreateDescriptorPool(d, &pci, NULL, &pool));
+      VkDescriptorSetAllocateInfo ai = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+         .descriptorPool = pool, .descriptorSetCount = 2, .pSetLayouts = layouts};
+      VkDescriptorSet sets[2];
+      CHECK(vkAllocateDescriptorSets(d, &ai, sets));
+      VkDescriptorBufferInfo buffer = {.range = VK_WHOLE_SIZE}; /* null descriptor */
+      unsigned data[4] = {1,2,3,4};
+      VkWriteDescriptorSetInlineUniformBlock in = {
+         .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_INLINE_UNIFORM_BLOCK,
+         .dataSize = sizeof(data), .pData = data};
+      VkWriteDescriptorSet writes[3];
+      for (int i = 0; i < 3; i++) writes[i] = (VkWriteDescriptorSet){
+         .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = sets[0],
+         .dstBinding = i, .descriptorType = bindings[i].descriptorType,
+         .descriptorCount = bindings[i].descriptorCount, .pBufferInfo = &buffer};
+      writes[1].pNext = &in;
+      VkCopyDescriptorSet copies[2];
+      for (int i = 0; i < 2; i++) copies[i] = (VkCopyDescriptorSet){
+         .sType = VK_STRUCTURE_TYPE_COPY_DESCRIPTOR_SET,
+         .srcSet = sets[0], .dstSet = sets[1], .srcBinding = i, .dstBinding = i,
+         .descriptorCount = bindings[i].descriptorCount};
+      vkUpdateDescriptorSets(d, 3, writes, 2, copies);
+      pthread_t a, b;
+      if (pthread_create(&a, NULL, descriptor_empty_updates, &d) ||
+          pthread_create(&b, NULL, descriptor_empty_updates, &d) ||
+          pthread_join(a, NULL) || pthread_join(b, NULL)) return 1;
+      struct {VkDescriptorBufferInfo buffer; unsigned data[4];} payload = {buffer, {1,2,3,4}};
+      VkDescriptorUpdateTemplateEntry entries[] = {
+         {.dstBinding = 0, .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+          .offset = 0, .stride = sizeof(buffer)},
+         {.dstBinding = 1, .descriptorCount = 16, .descriptorType = VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK,
+          .offset = offsetof(__typeof__(payload), data), .stride = 1}};
+      VkDescriptorUpdateTemplateCreateInfo ti = {
+         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_UPDATE_TEMPLATE_CREATE_INFO,
+         .descriptorUpdateEntryCount = 2, .pDescriptorUpdateEntries = entries,
+         .templateType = VK_DESCRIPTOR_UPDATE_TEMPLATE_TYPE_DESCRIPTOR_SET,
+         .descriptorSetLayout = layouts[0]};
+      VkDescriptorUpdateTemplate t;
+      CHECK(vkCreateDescriptorUpdateTemplate(d, &ti, NULL, &t));
+      vkUpdateDescriptorSetWithTemplate(d, sets[0], t, &payload);
+      vkDestroyDescriptorUpdateTemplate(d, t, NULL);
+      VkPipelineLayoutCreateInfo plci = {.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+         .setLayoutCount = 1, .pSetLayouts = layouts};
+      VkPipelineLayout pl;
+      CHECK(vkCreatePipelineLayout(d, &plci, NULL, &pl));
+      VkCommandPoolCreateInfo cpci = {.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+      VkCommandPool cp;
+      CHECK(vkCreateCommandPool(d, &cpci, NULL, &cp));
+      VkCommandBufferAllocateInfo cbai = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+         .commandPool = cp, .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY, .commandBufferCount = 1};
+      VkCommandBuffer cb;
+      CHECK(vkAllocateCommandBuffers(d, &cbai, &cb));
+      VkCommandBufferBeginInfo bi = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+      CHECK(vkBeginCommandBuffer(cb, &bi));
+      uint32_t offset = 16;
+      vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pl, 0, 1, sets, 1, &offset);
+      lci.bindingCount = 1;
+      lci.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
+      VkDescriptorSetLayout push_layout;
+      CHECK(vkCreateDescriptorSetLayout(d, &lci, NULL, &push_layout));
+      plci.pSetLayouts = &push_layout;
+      VkPipelineLayout push_pl;
+      CHECK(vkCreatePipelineLayout(d, &plci, NULL, &push_pl));
+      writes[0].dstSet = VK_NULL_HANDLE;
+      vkCmdPushDescriptorSetKHR(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, push_pl, 0, 1, writes);
+      ti.descriptorUpdateEntryCount = 1;
+      ti.templateType = VK_DESCRIPTOR_UPDATE_TEMPLATE_TYPE_PUSH_DESCRIPTORS_KHR;
+      ti.pipelineLayout = push_pl;
+      ti.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+      CHECK(vkCreateDescriptorUpdateTemplate(d, &ti, NULL, &t));
+      vkCmdPushDescriptorSetWithTemplateKHR(cb, t, push_pl, 0, &payload);
+      CHECK(vkEndCommandBuffer(cb));
+      vkDestroyDescriptorUpdateTemplate(d, t, NULL);
+      vkDestroyCommandPool(d, cp, NULL);
+      vkDestroyPipelineLayout(d, pl, NULL);
+      vkDestroyPipelineLayout(d, push_pl, NULL);
+      vkDestroyDescriptorSetLayout(d, push_layout, NULL);
+      CHECK(vkFreeDescriptorSets(d, pool, 1, sets));
+      CHECK(vkResetDescriptorPool(d, pool, 0));
+      vkDestroyDescriptorPool(d, pool, NULL);
+      vkDestroyDescriptorSetLayout(d, layouts[0], NULL);
+      /* First large set succeeds, second fails: rollback is inside allocate,
+       * never a spurious external free call. A later allocation proves rollback. */
+      bindings[0].descriptorCount = 4096;
+      lci.flags = 0;
+      CHECK(vkCreateDescriptorSetLayout(d, &lci, NULL, &layouts[0]));
+      layouts[1] = layouts[0];
+      VkDescriptorPoolSize large_size = {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 4096};
+      pci.pNext = NULL; pci.maxSets = 1; pci.poolSizeCount = 1; pci.pPoolSizes = &large_size;
+      CHECK(vkCreateDescriptorPool(d, &pci, NULL, &pool));
+      ai.descriptorPool = pool;
+      VkResult result = vkAllocateDescriptorSets(d, &ai, sets);
+      if (result != VK_ERROR_OUT_OF_POOL_MEMORY || sets[0] || sets[1]) return 1;
+      ai.descriptorSetCount = 1;
+      CHECK(vkAllocateDescriptorSets(d, &ai, sets));
+      vkDestroyDescriptorPool(d, pool, NULL); /* destroys the live recovered set */
+      vkDestroyDescriptorSetLayout(d, layouts[0], NULL);
+      vkDestroyDevice(d, NULL);
+   }
+   fprintf(stderr, "descriptor-fixture end\n");
+   puts("ok descriptor_stats API: mixed writes/copies, inline bytes, template/bind/push, rollback, threads, two devices");
+   return 0;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -2854,6 +3075,8 @@ main(int argc, char **argv)
    if (gpl_wanted() && check_gpl(pd, queue, pool, buf))
       return 1;
    if (check_module_identifier(pd, queue, pool, buf))
+      return 1;
+   if (check_descriptor_stats(pd))
       return 1;
    return 0;
 }
