@@ -151,9 +151,18 @@ The supervisor keeps this section.
      No DXVK Vulkan execution, phone calibration/smoke or gameplay. Denominator is
      client submission requests, not frames. Per-thread rows withdrawn by supervisor;
      aggregates are thread sums, not wall union/CPU time. A2 remains gated.
-  3. **Running: vkd3d-only host writer**, scoped client accounting, preserve optimized
-     copy selection. Report left in the build area at
+  3. **vkd3d 0005 implemented, host checked; independent review pending.** Default-off
+     scoped elapsed/thread-sum diagnostics preserve all eight Simple implementations
+     and vtable selection; RTV/DSV/constants exclusions remain separate. Real-helper
+     regressions, GCC/clang, ASan/UBSan and full ARM64EC/i386 builds pass. Actual
+     disabled guards inspected; distro GCC/clang scope locals add compiler-canary TLS
+     prologue overhead, not diagnostic TLS (no zero-overhead claim). Dev IPA `74c0d54e…`
+     verified 89/89, one d3d12core artifact row changed; owner UI edit included/uncommitted.
+     Quick/names/secrets pass. No Vulkan execution, device calibration/smoke or gameplay.
+     [Host evidence](../evidence/2026-10-23-vkd3d-descriptor-cost-probe-host.md);
+     report left in the build area at
      `.work/agent-notes/kk-parity/reports/a0-vkd3d-probe-host.md`.
+     **Next: independent review**, then parser/integration; A2 remains gated.
   4. Parser/integration and independent validation of nesting/coverage/clock error handling.
   5. Coordinate owner-chosen save/room/activity, load/measurement window and worthwhile budget;
      device calibration, controls and bounded controller measurements after review.
