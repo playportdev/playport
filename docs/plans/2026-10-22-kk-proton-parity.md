@@ -62,8 +62,8 @@ e5ffd0f + `patches/dxvk` 0001–0005 (tree head d942d78); `vkd3d-proton` 31d1f89
    and low latency (PLA-435). Their research stays below for those issues.
 4. **A2 is gated on A0.** The descriptor-buffer core (L) starts only after the phone CPU profile
    (A0, main checkout) shows descriptor cost matters.
-5. Models: hard tasks `anthropic/claude-opus-5-5` (medium), easy tasks
-   `anthropic/claude-sonnet-5-5` (medium).
+5. Models (owner reconfirmed 2026-10-23): both hard and easy tasks use
+   `openai-codex/gpt-6.1-sol` (high); Opus usage is exhausted.
 
 ## Runner state
 
@@ -73,11 +73,15 @@ The supervisor keeps this section.
 - **Done:** research; side copy S0 (2026-10-22: two `pp build`s exit 0, IPA `29cfa508…` 89/89 checks, host test and `pp test --quick` pass, nothing committed; report left in the build area at `.work/agent-notes/kk-parity/reports/s0-side-copy.md`). S0 found that meson's binary `coredata.dat` in a copied `run/mesa` names main and writes into main's `meson-private`: delete those meson dirs before a copy's first build (PLA-436).
 - **B1 done** (`a2fba62`, mesa 0104, flag `memory_priority`): host test 59 ok, flag MSL 181/181 identical, side-copy IPA `3393f48f…` 89/89; [evidence](../evidence/2026-10-22-kk-memory-priority-host.md). Phone gate queued.
 - **B3 done** (`12d113b`, mesa 0105, flag `module_identifier`): common-runtime identifiers, `MESA-BLAKE3` algorithm UUID kept (supervisor, spec's "should"); identifier pipelines only from a cache, else `VK_PIPELINE_COMPILE_REQUIRED`. Host test 62 ok (supervisor reran), MSL 181/234 identical; side-copy IPA `c88649a7…` 89/89; [evidence](../evidence/2026-10-22-kk-module-identifier-host.md). Phone gate queued.
-- **Next:** nothing in the side copy. A2–A4 wait for A0 on the phone (main checkout).
-- **Phone queue** (main checkout, after the branch moves there; none run):
-  - A0: baseline CPU profile (Hollow Knight DXVK and `-force-d3d12`);
+- **Next (owner handoff 2026-10-23):** rebase onto current main (observed `26699f6`),
+  transfer the branch to main checkout, preserving the owner's uncommitted
+  `app/Sources/S1Probe/UI/SettingsView.swift` edit without committing it. Stop on conflict.
+  Then build/install and B1 phone gate; separate workers follow for B3 and A0.
+  A2–A4 remain gated on A0. Branch not merged or pushed; pre-handoff HEAD `fc7f3f8`.
+- **Phone queue** (PLA-431, main checkout; owner released phone and checkout; none run):
   - B1: Hollow Knight first frame+10 with `graphicsOptions` `MESA_KK_EXPERIMENTAL=memory_priority MESA_KK_DEBUG=memory`, DXVK and `-force-d3d12` (commands in the evidence record); pass = both extensions in the DXVK/vkd3d logs, `[kk-mem]` priority counts > 0;
   - B3: Hollow Knight `-force-d3d12` with `MESA_KK_EXPERIMENTAL=module_identifier VKD3D_CONFIG=pipeline_library_log`, twice (second run hits vkd3d's cache), and DXVK with `gpl,module_identifier` (commands in the evidence record);
+  - A0: baseline CPU profile (Hollow Knight DXVK and `-force-d3d12`);
   - A's gates after A2–A4.
 - **Phone:** installed titles are Hollow Knight (`app-367520`) and RDR2. The D3D12 route is Hollow
   Knight with `-force-d3d12` (vkd3d-proton). No installed title is known to use depth bias.
