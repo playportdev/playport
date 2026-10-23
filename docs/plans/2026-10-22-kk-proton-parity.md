@@ -196,8 +196,11 @@ The supervisor keeps this section.
      restored, explicitly captured black, lock released; no gameplay or save navigation.
      [Device blocker evidence](../evidence/2026-10-23-descriptor-probe-device-prep.md);
      report `.work/agent-notes/kk-parity/reports/a0-device-prep.md` in the build area.
-     **Host-only wire-emission correction implemented; independent review pending** (PLA-431,
-     starting HEAD `4a8197a`, branch still unmerged/unpushed). Mesa0122 changes only KK diagnostic
+     **Host-only wire-emission correction implemented** (`68e5eab`), independent review running
+     (child `7ca57dde`, report left in the build area at
+     `.work/agent-notes/kk-parity/reports/a0-emission-review.md`). Parent emitter-matrix rerun
+     also running (log `supervisor-emission.log` under those notes). Branch unmerged/unpushed.
+     Mesa0122 changes only KK diagnostic
      emission: checked2048-byte complete-row formatting and one raw write to the confirmed normal
      O_APPEND file sink. Actual committed emitter regression red before fix; deterministic
      `write_records=0info:` splice reproduced with an independent raw appender, then strict-parser
@@ -214,7 +217,7 @@ The supervisor keeps this section.
      No performance or perturbation claim from this menu prep.
   No further phone plays authorized by this checkpoint; human gameplay waits for owner handoff.
   No save automation/new slot authorized. No sampler
-  redesign, CPU-clock bridge or descriptor implementation approved. Checkpoint `93d81a2`;
+  redesign, CPU-clock bridge or descriptor implementation approved. Checkpoint `68e5eab`;
   no merge or push. A2–A4 remain **not started**, gated on evidence that descriptor cost matters.
 - **B1 phone (2026-10-23):** both flag-off routes and memory_priority DXVK/D3D12 reached
   first-frame+10. DXVK features 0 off / 1 on; priority counts 14/14 and 28/13.
