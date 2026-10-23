@@ -171,21 +171,20 @@ The supervisor keeps this section.
      **BLOCK** (child `349f2b57`, report left in the build area at
      `.work/agent-notes/kk-parity/reports/a0-parser-review.md`). Parent focused rerun passed
      (log `supervisor-parser.log` under those notes), but omitted the review counterexamples.
-     **Next correction:** preserve per-row cumulative history across partial captures, reject
-     infeasible timing deltas, make orderly-final state terminal, and validate calibration
-     containment/flags. Add before/after regressions, then focused re-review. Device work blocked.
-     `python3 tools/descriptorprof.py [--json] saved.log ...` enforces v1 integer schemas,
-     complete 10/36/54-row identities, conservative quiescent/error-free boundaries and
-     cumulative deltas; preserves brackets, raw calibration/coverage and rejected evidence.
-     Intended contract: historical errors reject boundaries and reset/saturation cannot invent
-     recovery epochs; the review found gaps in history/interval/lifetime checks, not yet fixed.
-     Prep exclusives partition Vulkan/non-Vulkan elapsed, standalone/excluded remain separate.
-     No cross-layer join/sum/subtraction, CPU attribution or presented-frame normalization.
-     18 focused tests, quick730 and read-only real-helper parsing pass (11 usable KK intervals,
-     5 rejected helper windows; DXVK single capture and partial vkd3d output insufficient).
-     [Host evidence](../evidence/2026-10-23-descriptor-prof-parser-host.md); report in the build
-     area at `.work/agent-notes/kk-parity/reports/a0-descriptor-parser.md`.
-     **Fix and independent re-review required**, before owner coordination or device work.
+     **Bounded correction implemented, independent re-review pending:** retain last-seen
+     per-operation/category cumulative/error history across partial captures; reject infeasible
+     interval timing/max and client outer deltas; make any observed final terminal even with
+     partial/conflicting metadata; retain raw calibration with producer-specific invalid reasons.
+     No native/schema/runtime/Swift/default/pin/descriptor-buffer changes or new IPA/phone work.
+     Earlier clean windows, valid quantized calls and feasible maximum growth remain usable.
+     Test-first regressions reproduced all four findings: corrected 28 focused tests pass
+     (initial 18 are historical); quick740/26, names/secrets pass. Four unchanged real logs
+     remain exit2/mixed: 11 usable KK intervals, 5 rejected helper windows; DXVK single capture
+     and partial vkd3d output insufficient. No cross-layer join/sum/subtraction, CPU attribution
+     or presented-frame normalization. [Host evidence](../evidence/2026-10-23-descriptor-prof-parser-host.md).
+     Correction report `.work/agent-notes/kk-parity/reports/a0-parser-fixes.md`; the original
+     review BLOCK stays in force until independent re-review clears. Supervisor owns Linear
+     synchronization. Device coordination and A2 remain blocked; no merge or push.
   5. Coordinate owner-chosen save/room/activity, load/measurement window and worthwhile budget;
      device calibration, controls and bounded controller measurements after review.
   No phone runs until that coordination. No save automation/new slot authorized. No sampler

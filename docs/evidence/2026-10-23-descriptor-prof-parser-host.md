@@ -2,7 +2,7 @@
 
 **Linear:** [PLA-431](https://linear.app/playportdev/issue/PLA-431).
 **Plan:** [A0 Runner item 4](../plans/2026-10-22-kk-proton-parity.md).
-**Independent parser review pending.** No native/client/runtime/Swift/profiler,
+**Correction implemented; independent re-review pending. Device gate BLOCK.** No native/client/runtime/Swift/profiler,
 producer schema, defaults, pins or descriptor-buffer changes. No build, new IPA,
 phone/install/UI/perf/game/network commands. This is log analysis, not another app
 entrypoint or a new `pp` capability. A2 remains gated.
@@ -94,7 +94,7 @@ beside numeric zeros, not silently treated as known zero cardinality/bytes.
 Native elapsed remains a separate driver-execution sum: never sum/subtract layers,
 assume count parity/containment or invent a shared epoch because frequencies match.
 
-## Checks and retained examples
+## Initial checks and retained examples (`496547c`)
 
 All commands used `PLAYPORT_BUILD=$PWD/.work` and repository-local
 `TMPDIR=$PLAYPORT_BUILD/agent-notes/kk-parity/tmp`; foreground commands bounded
@@ -143,6 +143,75 @@ Retained under `$PLAYPORT_BUILD/agent-notes/kk-parity/`:
 `a0-parser-real-summary.txt`, `a0-parser-inputs.sha256`, synthetic examples and
 `a0-parser-validation.log`. Committed tests generate only scrubbed synthetic IDs;
 no raw private logs/PIDs/home paths are committed.
+
+## Review correction (PLA-431, after `cea46f6`)
+
+The initial 18-test results above are historical, **not** evidence that the initial
+parser passed the subsequent independent review. That review blocked three P1
+history/timing/lifetime defects and one P2 calibration diagnostic defect. All four
+were reproduced offline before the correction; no producer or schema was changed.
+
+- **History across partial captures:** retain last-seen cumulative fields for each
+  operation/category, including clock/nesting errors, even when intervening captures
+  omit that row. On reappearance, any decrease makes reset rejection sticky from
+  that capture onward. Missing data never establishes a recovery baseline. Earlier
+  clean intervals remain usable; the parser does not infer a reset before evidence.
+- **Interval feasibility:** using Python integers, zero new timed calls cannot add
+  elapsed or increase maximum; new elapsed cannot exceed new timed calls × ending
+  cumulative maximum. A newly increased maximum must fit within contributed new
+  elapsed (not the difference of maxima). Client deltas also check inclusive =
+  direct-child + exclusive and outer-thread elapsed ≤ inclusive. All cumulative
+  fields still require monotonicity. These interval failures reject the affected
+  window, not unrelated earlier clean windows. Quantized zero-duration calls and
+  feasible maximum growth remain usable, including tests above 2^53.
+- **Terminal final:** any observed final row marks that capture terminal, including
+  partial captures or conflicting metadata. Every later capture under the identity
+  is rejected even if final returns to zero; a valid interval ending at the first
+  final remains usable. Raw metadata is not rewritten to resolve conflicts.
+- **Calibration:** raw records now retain per-sample reasons, counted once per
+  invalid sample and printed in text. vkd3d `empty_ok` implies `scope_ok` and
+  containment of scope within empty bracket. DXVK's emitted implication is
+  `empty_ok` → `scope_ok` plus its already-checked ordered brackets; unlike vkd3d,
+  its emitter does not promise cross-bracket containment. KK exposes durations,
+  not client brackets, and must print zero duration for a failed bracket. No
+  sample is normalized, subtracted from timings, or used to certify precision.
+  Invalid calibration remains diagnostic, not a replacement for interval checks.
+
+Executed bad traces (each component shape, with full logs retained):
+
+| Trace | Original outcome | Corrected outcome / actual reason |
+| --- | --- | --- |
+| update 1/1/100/max100; missing row; 3/3/50/max50; 4/4/100/max50 | 3→4 usable | rejected: `cumulative reset/order/units violation; no recovery within this identity` at captures 3 and 4 |
+| nonzero clock/nesting errors; one or multiple missing captures; zero errors | later window usable | same sticky reset reason on first reappearance; no error recovery |
+| calls/timed2/2 elapsed100/max100 → same calls elapsed150/max100 | usable 50 ticks without calls | `zero timed calls with timing additions/maximum increase` and `interval elapsed exceeds timed calls times ending maximum` |
+| calls1 elapsed100/max100 → calls2 elapsed200/max200 | usable impossible new maximum | `increased maximum exceeds new elapsed` |
+| final flags 0,1,0,0 | validity true,false,true | true,false,false; later captures: `snapshot after orderly final; terminal within this identity` |
+| vkd3d flags all1, scope110..120, empty112..113 | invalid samples 0 | invalid samples 1: `empty_ok contradicts scope containment`; raw values preserved |
+
+Validation, using the same repository-local environment as above:
+
+- Test-first expanded suite against the unmodified parser: **27 tests, 35 failing
+  assertions** after fixture corrections; original attempt also retained. Final
+  28-test suite replayed against `cea46f6` parser: **41 failing assertions**, no
+  errors. This replay did not replace the corrected source.
+- Corrected focused unittest: **28 passed** (10 new methods). Includes every
+  component, client category gaps, error counters/multiple gaps, earlier clean
+  windows, impossible/valid timing growth, exact large integers, quantized calls,
+  partial/conflicting finals and calibration raw reasons.
+- `./pp test --quick`: **740 Python tests and 26 C groups passed**, Swift omitted.
+  `./pp names` and `./pp secrets`: clean.
+- Read-only real CLI in text and JSON: **exit 2, mixed, 11 usable intervals, zero
+  schema issues**. The four named inputs in the initial table retain exactly their
+  valid-capture and usable/rejected counts (19 and 11/0; 1 and 0/5; 1 and 0/0;
+  0 and 0/0 respectively). None of these real logs exhibits the new contradictions,
+  so no prior valid real interval was lost. All input SHA256 checks pass unchanged.
+
+Retained under `$PLAYPORT_BUILD/agent-notes/kk-parity/`:
+`a0-parser-fixes-before{,-corrected,-final}.log`, `a0-parser-fixes-after.log`,
+`a0-parser-fixes-traces.txt`, `a0-parser-fixes-{quick,names,secrets}.log`,
+`a0-parser-fixes-real.{json,txt}` and `a0-parser-fixes-real-summary.txt`.
+Correction report: `reports/a0-parser-fixes.md`. Independent re-review is pending;
+the previous BLOCK remains in force for parser acceptance/device coordination.
 
 ## Protected state and next gate
 

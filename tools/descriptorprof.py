@@ -16,8 +16,10 @@ and CPU attribution are unsupported. No A2 decision or threshold is implemented.
 
 Policy: both complete boundaries must be quiescent with fully matching counts;
 ANY historical operation/report error rejects that boundary, including otherwise
-clock_ok captures. No recovery correction or interval max subtraction. Capture
-brackets bound observation separation, NOT exact workload event boundaries.
+clock_ok captures. Per-row history survives partial captures; resets and final
+are terminal within an identity. Timing deltas must be feasible for new calls.
+No recovery correction or interval max subtraction. Capture brackets bound
+observation separation, NOT exact workload event boundaries.
 Missing banners reject snapshots; missing calibration/tails stay explicit, never
 zero-filled. Calibration is retained raw, never subtracted from elapsed values.
 """
@@ -158,6 +160,26 @@ def parse_record(line):
     return values
 
 
+def calibration_reasons(record):
+    """Check emitted flag implications without correcting or subtracting samples."""
+    reasons = [key + '=0' for key in ('adjacent_ok', 'scope_ok', 'empty_ok')
+               if record.get(key, 1) == 0]
+    if record['component'] == 'kk':
+        # KK exposes durations only, and emits zero for each failed bracket.
+        for prefix in ('adjacent', 'empty'):
+            if not record[prefix + '_ok'] and record[prefix + '_ticks']:
+                reasons.append('failed ' + prefix + ' sample has nonzero ticks')
+    elif record['empty_ok']:
+        if not record['scope_ok']:
+            reasons.append('empty_ok requires scope_ok')
+        # Unlike DXVK, vkd3d explicitly includes containment in empty_ok.
+        if record['component'] == 'vkd3d' and not (
+                record['empty_begin'] <= record['scope_begin']
+                <= record['scope_end'] <= record['empty_end']):
+            reasons.append('empty_ok contradicts scope containment')
+    return reasons
+
+
 def stream_key(record):
     return tuple(record.get(k) for k in ('component', 'pid', 'module', 'device', 'init_ticks'))
 
@@ -250,8 +272,19 @@ def summarize_interval(component, first, last):
                 reasons.append('/'.join(key) + ': decreasing ' + field)
         delta = {field: new[field] - old[field] for field in FIELDS[component] if field not in ('max_ticks', 'active')}
         delta.update(op=key[0], category=key[1], cumulative_max_ticks_bound=new['max_ticks'])
+        tag = '/'.join(key) + ': '
         if delta['timed_calls'] != delta['calls'] or delta.get('completed', delta['calls']) != delta['calls']:
-            reasons.append('/'.join(key) + ': interval timing/completion mismatch')
+            reasons.append(tag + 'interval timing/completion mismatch')
+        elapsed = delta['inclusive_ticks' if component == 'dxvk' else 'elapsed_ticks']
+        if not delta['timed_calls'] and (elapsed or new['max_ticks'] > old['max_ticks']):
+            reasons.append(tag + 'zero timed calls with timing additions/maximum increase')
+        if elapsed > delta['timed_calls'] * new['max_ticks']:
+            reasons.append(tag + 'interval elapsed exceeds timed calls times ending maximum')
+        if new['max_ticks'] > old['max_ticks'] and new['max_ticks'] > elapsed:
+            reasons.append(tag + 'increased maximum exceeds new elapsed')
+        if component != 'kk' and (elapsed != delta['direct_child_ticks'] + delta['exclusive_ticks']
+                or delta['thread_sum_outer_elapsed_ticks'] > elapsed):
+            reasons.append(tag + 'interval nesting identity/outer sum invalid')
         deltas.append(delta)
     if reasons:
         return result
@@ -314,16 +347,17 @@ def analyze_sources(sources):
                         stream['issues'].append({'line': number, 'reason': 'duplicate calibration sample'})
                     if stream['banner'] and any(record.get(k) != stream['banner'].get(k) for k in ('hz', 'init_ok', 'clock_kind') if k in record):
                         stream['issues'].append({'line': number, 'reason': 'changed calibration identity/units'})
-                    stream['calibration'].append({'line': number, 'values': record})
+                    stream['calibration'].append({'line': number, 'values': record, 'reasons': calibration_reasons(record)})
                 else:
                     snapshots = stream['snapshots']
                     serial = record['snapshot']
                     found = next((s for s in snapshots if s['metadata']['snapshot'] == serial), None)
                     if found is None:
-                        found = {'metadata': snapshot_metadata(record), 'rows': {}, 'lines': [], 'reasons': []}
+                        found = {'metadata': snapshot_metadata(record), 'rows': {}, 'lines': [], 'reasons': [], 'final_observed': False}
                         snapshots.append(found)
                     elif found is not snapshots[-1]:
                         found['reasons'].append('out-of-order snapshot row')
+                    found['final_observed'] |= bool(record['final'])
                     row_key = (record['op'], record.get('category', 'native'))
                     if row_key in found['rows']:
                         found['reasons'].append('duplicate operation/category row')
@@ -337,8 +371,8 @@ def analyze_sources(sources):
         for stream in streams.values():
             component = stream['identity']['component']
             stream['calibration_status'] = 'complete raw 16 samples' if len(stream['calibration']) == 16 else 'missing/incomplete calibration (%d/16)' % len(stream['calibration'])
-            stream['calibration_invalid_samples'] = sum(any(c['values'].get(k, 1) == 0 for k in ('adjacent_ok', 'scope_ok', 'empty_ok')) for c in stream['calibration'])
-            stream['tail_status'] = 'orderly final observed (does not override errors)' if stream['snapshots'] and stream['snapshots'][-1]['metadata']['final'] else 'missing orderly tail; later work unknown'
+            stream['calibration_invalid_samples'] = sum(bool(c['reasons']) for c in stream['calibration'])
+            stream['tail_status'] = 'orderly final observed (does not override errors)' if any(s['final_observed'] for s in stream['snapshots']) else 'missing orderly tail; later work unknown'
             if stream['banner'] and stream['banner'].get('uncovered_selected_copy'):
                 stream['coverage_status'] = 'selected Simple path uncovered; no complete copy coverage assertion'
             else:
@@ -351,6 +385,8 @@ def analyze_sources(sources):
             # clean intervals remain visible, but this identity never recovers.
             broken_sequence = False
             previous = None
+            last_seen_rows = {}
+            final_seen = False
             for snapshot in stream['snapshots']:
                 meta = snapshot['metadata']
                 if previous:
@@ -358,10 +394,17 @@ def analyze_sources(sources):
                     broken_sequence |= (meta['snapshot'] <= old['snapshot'] or meta['ts_begin'] < old['ts_end']
                         or any(meta.get(k) != old.get(k) for k in ('hz', 'init_ok', 'clock_kind'))
                         or any(meta[k] < old[k] for k in (DENOM[component], error_field(component),
-                            'entered_before', 'completed_before', 'entered_after', 'completed_after'))
-                        or any(snapshot['rows'][key][field] < previous['rows'][key][field]
-                            for key in snapshot['rows'].keys() & previous['rows'].keys()
-                            for field in FIELDS[component] if field != 'active'))
+                            'entered_before', 'completed_before', 'entered_after', 'completed_after')))
+                # Missing rows never erase evidence or establish a fresh baseline.
+                for key, row in snapshot['rows'].items():
+                    old_row = last_seen_rows.get(key)
+                    if old_row and any(row[field] < old_row[field] for field in FIELDS[component] if field != 'active'):
+                        broken_sequence = True
+                    last_seen_rows[key] = row
+                if final_seen:
+                    snapshot['reasons'].append('snapshot after orderly final; terminal within this identity')
+                    snapshot['valid'] = False
+                final_seen |= snapshot['final_observed']
                 if broken_sequence:
                     snapshot['reasons'].append('cumulative reset/order/units violation; no recovery within this identity')
                     snapshot['valid'] = False
@@ -395,6 +438,9 @@ def text_report(report):
             lines.append('  coverage=%s exclusions=%s clock=%s selected_copy=%s' % (
                 stream['banner']['coverage'], stream['banner'].get('exclusions', stream['banner'].get('excluded')),
                 stream['banner'].get('clock_kind', stream['banner'].get('clock')), stream['banner'].get('copy_simple_path', 'not applicable')))
+        for sample in stream['calibration']:
+            if sample['reasons']:
+                lines.append('  calibration line %d: INVALID %s' % (sample['line'], '; '.join(sample['reasons'])))
         for issue in stream['issues']:
             lines.append('  line %d: %s' % (issue['line'], issue['reason']))
         for snapshot in stream['snapshots']:

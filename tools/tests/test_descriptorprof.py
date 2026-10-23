@@ -94,6 +94,27 @@ def snapshot(component, serial, *, changes=None, meta=None, **identity):
             for (op, cat), row in values.items()]
 
 
+def single_scope_snapshot(component, serial, calls=None, elapsed=None, maximum=100,
+                          category=None, timing=None, meta=None, other_rows=None):
+    """One independently specified completed scope; other wire rows are zero."""
+    cat = category or ('native' if component == 'kk' else 'standalone')
+    op = 'update' if component == 'kk' else 'vk_update'
+    changes = {(name, c): dict.fromkeys(WIRE_FIELDS[component].split(), 0)
+               for c in (('native',) if component == 'kk' else ('prep', 'standalone', 'excluded'))
+               for name in OPERATIONS[component].split()}
+    ticks = serial * 100 if elapsed is None else elapsed
+    count = serial if calls is None else calls
+    row = changes[op, cat]
+    row.update(calls=count, timed_calls=count, max_ticks=maximum,
+               **{('inclusive_ticks' if component == 'dxvk' else 'elapsed_ticks'): ticks})
+    if component != 'kk':
+        row.update(completed=count, exclusive_ticks=ticks, thread_sum_outer_elapsed_ticks=ticks)
+    row.update(timing or {})
+    for key, fields in (other_rows or {}).items():
+        changes[key].update(fields)
+    return snapshot(component, serial, changes=changes, meta=meta)
+
+
 def fixture(component, count=2, **identity):
     return [banner(component, **identity)] + calibration(component, **identity) + [line for n in range(1, count + 1) for line in snapshot(component, n, **identity)]
 
@@ -361,6 +382,138 @@ class DescriptorProf(unittest.TestCase):
             bad = snapshot(component, 1)[0] + ' ' + rng.choice(['?', 'calls=00', 'pid=-1', 'v=9', '=1'])
             with self.assertRaises(ValueError):
                 dp.parse_record(bad)
+
+    def test_last_seen_cumulative_reset_across_partial_captures(self):
+        for component in OPERATIONS:
+            for cat in (('native',) if component == 'kk' else ('prep', 'standalone', 'excluded')):
+                with self.subTest(component=component, category=cat):
+                    op = 'update' if component == 'kk' else 'vk_update'
+                    gap = [l for l in single_scope_snapshot(component, 2, category=cat)
+                           if (' op=' + op + ' ' + ('' if component == 'kk' else 'category=' + cat + ' ')) not in l]
+                    report = analyze([banner(component)] + single_scope_snapshot(component, 1, category=cat)
+                        + gap + single_scope_snapshot(component, 3, elapsed=50, maximum=50, category=cat)
+                        + single_scope_snapshot(component, 4, elapsed=100, maximum=50, category=cat))
+                    stream = report['streams'][0]
+                    self.assertEqual([i['valid'] for i in stream['intervals']], [False, False, False])
+                    self.assertIn('no recovery', '; '.join(stream['snapshots'][2]['reasons']))
+
+    def test_last_seen_error_counters_across_multiple_gaps(self):
+        for component in OPERATIONS:
+            for error in (('clock_errors',) if component == 'kk' else ('clock_errors', 'nest_errors')):
+                with self.subTest(component=component, error=error):
+                    op = 'update' if component == 'kk' else 'vk_update'
+                    lines = [banner(component)] + single_scope_snapshot(component, 1, timing={error: 1})
+                    for n in (2, 3):
+                        lines += [l for l in single_scope_snapshot(component, n) if not (' op=' + op + ' ') in l]
+                    lines += single_scope_snapshot(component, 4) + single_scope_snapshot(component, 5)
+                    stream = analyze(lines)['streams'][0]
+                    self.assertFalse(stream['intervals'][-1]['valid'])
+                    self.assertIn('no recovery', '; '.join(stream['snapshots'][3]['reasons']))
+
+    def test_reset_discovery_does_not_invalidate_earlier_clean_window(self):
+        for component in OPERATIONS:
+            op = 'update' if component == 'kk' else 'vk_update'
+            lines = [banner(component)] + single_scope_snapshot(component, 1) + single_scope_snapshot(component, 2)
+            lines += [l for l in single_scope_snapshot(component, 3) if not (' op=' + op + ' ') in l]
+            lines += single_scope_snapshot(component, 4, elapsed=50, maximum=50)
+            lines += single_scope_snapshot(component, 5, elapsed=100, maximum=50)
+            self.assertEqual([i['valid'] for i in analyze(lines)['streams'][0]['intervals']], [True, False, False, False])
+
+    def test_interval_timing_feasibility(self):
+        cases = [((2, 100, 100), (2, 150, 100), 'zero timed calls'),
+                 ((1, 100, 100), (2, 200, 200), 'increased maximum exceeds new elapsed'),
+                 ((2, 100, 100), (3, 250, 100), 'elapsed exceeds timed calls times ending maximum'),
+                 ((2, 100, 50), (2, 100, 100), 'zero timed calls')]
+        for component in OPERATIONS:
+            for a, b, reason in cases:
+                with self.subTest(component=component, a=a, b=b):
+                    report = analyze([banner(component)] + single_scope_snapshot(component, 1, *a)
+                        + single_scope_snapshot(component, 2, *b))
+                    stream = report['streams'][0]
+                    self.assertTrue(all(s['valid'] for s in stream['snapshots']))
+                    self.assertFalse(stream['intervals'][0]['valid'])
+                    self.assertIn(reason, '; '.join(stream['intervals'][0]['reasons']))
+
+    def test_interval_client_outer_delta_bound(self):
+        for component in ('dxvk', 'vkd3d'):
+            # Both snapshots satisfy cumulative nesting and total outer=exclusive.
+            # A direct-child decrease is already invalid; a nonnegative outer delta
+            # greater than inclusive delta is not caught by cumulative algebra.
+            elapsed = 'inclusive_ticks' if component == 'dxvk' else 'elapsed_ticks'
+            a = single_scope_snapshot(component, 1,
+                timing=dict(direct_child_ticks=50, exclusive_ticks=50, thread_sum_outer_elapsed_ticks=50),
+                other_rows={('vk_bind', 'prep'): dict(calls=1, completed=1, timed_calls=1, max_ticks=50,
+                    exclusive_ticks=50, thread_sum_outer_elapsed_ticks=50, **{elapsed: 50})})
+            b = single_scope_snapshot(component, 2,
+                timing=dict(direct_child_ticks=50, exclusive_ticks=150, thread_sum_outer_elapsed_ticks=200),
+                other_rows={('vk_bind', 'prep'): dict(calls=2, completed=2, timed_calls=2, max_ticks=50,
+                    exclusive_ticks=100, thread_sum_outer_elapsed_ticks=50, **{elapsed: 100})})
+            stream = analyze([banner(component)] + a + b)['streams'][0]
+            self.assertTrue(all(s['valid'] for s in stream['snapshots']))
+            self.assertFalse(stream['intervals'][0]['valid'])
+            self.assertIn('interval nesting identity/outer sum invalid', '; '.join(stream['intervals'][0]['reasons']))
+
+    def test_interval_rejection_is_local_and_zero_duration_calls_remain_valid(self):
+        for component in OPERATIONS:
+            lines = [banner(component)] + single_scope_snapshot(component, 1, calls=2, elapsed=100)
+            lines += single_scope_snapshot(component, 2, calls=3, elapsed=150)
+            lines += single_scope_snapshot(component, 3, calls=3, elapsed=200)
+            lines += single_scope_snapshot(component, 4, calls=4, elapsed=200)
+            self.assertEqual([i['valid'] for i in analyze(lines)['streams'][0]['intervals']], [True, False, True])
+
+    def test_interval_integer_bounds_and_feasible_maximum_growth(self):
+        huge = (1 << 53) + 1
+        for component in OPERATIONS:
+            for a, b, valid in [((1, 100, 100), (2, 300, 200), True),
+                                ((3, 2 * huge, huge), (4, 3 * huge, huge), True),
+                                ((3, 2 * huge, huge), (4, 3 * huge + 1, huge), False)]:
+                with self.subTest(component=component, b=b):
+                    stream = analyze([banner(component)] + single_scope_snapshot(component, 1, *a)
+                        + single_scope_snapshot(component, 2, *b))['streams'][0]
+                    self.assertTrue(all(s['valid'] for s in stream['snapshots']))
+                    self.assertEqual(stream['intervals'][0]['valid'], valid)
+
+    def test_orderly_final_is_sticky_for_each_component(self):
+        for component in OPERATIONS:
+            lines = [banner(component)]
+            for n, final in enumerate((0, 1, 0, 0), 1):
+                lines += snapshot(component, n, meta={'final': final})
+            stream = analyze(lines)['streams'][0]
+            self.assertEqual([i['valid'] for i in stream['intervals']], [True, False, False])
+            self.assertIn('after orderly final', '; '.join(stream['snapshots'][-1]['reasons']))
+            self.assertIn('orderly final observed', analyze(lines)['streams'][0]['tail_status'])
+
+    def test_partial_and_conflicting_final_metadata_cannot_revive(self):
+        for component in OPERATIONS:
+            for mode in ('partial', 'conflict'):
+                with self.subTest(component=component, mode=mode):
+                    terminal = snapshot(component, 2, meta={'final': 1})
+                    if mode == 'partial':
+                        terminal = terminal[:1]
+                    else:
+                        terminal = [terminal[0].replace('final=1', 'final=0')] + terminal[1:]
+                    lines = [banner(component)] + snapshot(component, 1) + terminal + snapshot(component, 3) + snapshot(component, 4)
+                    stream = analyze(lines)['streams'][0]
+                    self.assertFalse(stream['intervals'][-1]['valid'])
+                    self.assertIn('after orderly final', '; '.join(stream['snapshots'][-1]['reasons']))
+
+    def test_calibration_producer_flag_implications_preserve_raw_records(self):
+        cases = [('vkd3d', 'scope_begin=112 scope_end=113', 'scope_begin=110 scope_end=120', 'scope containment'),
+                 ('vkd3d', 'scope_ok=1', 'scope_ok=0', 'empty_ok requires scope_ok'),
+                 ('dxvk', 'scope_ok=1', 'scope_ok=0', 'empty_ok requires scope_ok'),
+                 ('kk', 'empty_ok=1', 'empty_ok=0', 'failed empty sample has nonzero ticks')]
+        for component, old, new, reason in cases:
+            with self.subTest(component=component, reason=reason):
+                raw = calibration(component)[0].replace(old, new)
+                if reason == 'scope containment':
+                    raw = raw.replace('empty_begin=111 empty_end=114', 'empty_begin=112 empty_end=113')
+                report = analyze([banner(component), raw] + snapshot(component, 1) + snapshot(component, 2))
+                stream = report['streams'][0]
+                self.assertEqual(stream['calibration_invalid_samples'], 1)
+                sample = stream['calibration'][0]
+                self.assertIn(reason, '; '.join(sample.get('reasons', [])))
+                self.assertEqual(sample['values'], dp.parse_record(raw))
+                self.assertEqual(report['usable_intervals'], 1)  # calibration is not a timing correction
 
     def test_cli_json_text_and_no_data_exit(self):
         root = Path(__file__).resolve().parents[2]
