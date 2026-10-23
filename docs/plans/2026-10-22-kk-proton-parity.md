@@ -151,10 +151,10 @@ The supervisor keeps this section.
      No DXVK Vulkan execution, phone calibration/smoke or gameplay. Denominator is
      client submission requests, not frames. Per-thread rows withdrawn by supervisor;
      aggregates are thread sums, not wall union/CPU time. A2 remains gated.
-  3. **vkd3d 0005 implemented** (`147ebbc`), host checked; independent review running
+  3. **vkd3d 0005 implemented** (`147ebbc`), host checked; independent review **ACCEPT**
      (child `d845db51`, report left in the build area at
-     `.work/agent-notes/kk-parity/reports/a0-vkd3d-probe-review.md`), before parser writer.
-     Parent helper rerun also running (log `supervisor-vkd3d-helper.log` under those notes).
+     `.work/agent-notes/kk-parity/reports/a0-vkd3d-probe-review.md`), no issues found.
+     Parent real-helper rerun passed (log `supervisor-vkd3d-helper.log` under those notes).
      Default-off
      scoped elapsed/thread-sum diagnostics preserve all eight Simple implementations
      and vtable selection; RTV/DSV/constants exclusions remain separate. Real-helper
@@ -166,8 +166,12 @@ The supervisor keeps this section.
      [Host evidence](../evidence/2026-10-23-vkd3d-descriptor-cost-probe-host.md);
      report left in the build area at
      `.work/agent-notes/kk-parity/reports/a0-vkd3d-probe-host.md`.
-     **Next: independent review**, then parser/integration; A2 remains gated.
-  4. Parser/integration and independent validation of nesting/coverage/clock error handling.
+     Accepted for parser/integration only; A2 and phone gates remain gated.
+  4. **Running: offline parser/integration**, strict integer schemas and complete row identities,
+     valid boundary/error deltas, per-layer nesting/coverage and clock uncertainty. No cross-layer
+     sum/subtraction or unsupported presented-frame/CPU-time attribution. Report left in the build
+     area at `.work/agent-notes/kk-parity/reports/a0-descriptor-parser.md`; independent review
+     follows before device work.
   5. Coordinate owner-chosen save/room/activity, load/measurement window and worthwhile budget;
      device calibration, controls and bounded controller measurements after review.
   No phone runs until that coordination. No save automation/new slot authorized. No sampler
