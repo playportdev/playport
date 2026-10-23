@@ -122,7 +122,10 @@ The supervisor keeps this section.
      (child `6cbf8167`, report left in the build area at
      `.work/agent-notes/kk-parity/reports/a0-dxvk-probe-review.md`). Parent helper rerun
      passed (log `supervisor-dxvk-helper.log` under those notes), but lacked the failing trace.
-     **Clock correction 0007 implemented, independent re-review pending:** child starts
+     **Clock correction 0007 implemented** (`9edfd9b`), independent re-review running
+     (revived reviewer `f466bbe4`, report left in the build area at
+     `.work/agent-notes/kk-parity/reports/a0-dxvk-clock-rereview.md`). Parent regression
+     rerun also running (log `supervisor-dxvk-clock.log` under those notes). Child starts
      before the previous sibling end are rejected; child-end bookkeeping is monotonic,
      with explicit errors and ancestor invalidation. Real-helper regressions first failed
      against 0006: reviewer trace yielded exclusive 30, overlapping siblings 40, no errors.
@@ -153,7 +156,7 @@ The supervisor keeps this section.
   5. Coordinate owner-chosen save/room/activity, load/measurement window and worthwhile budget;
      device calibration, controls and bounded controller measurements after review.
   No phone runs until that coordination. No save automation/new slot authorized. No sampler
-  redesign, CPU-clock bridge or descriptor implementation approved. Checkpoint `cea547f`;
+  redesign, CPU-clock bridge or descriptor implementation approved. Checkpoint `9edfd9b`;
   no merge or push. A2–A4 remain **not started**, gated on evidence that descriptor cost matters.
 - **B1 phone (2026-10-23):** both flag-off routes and memory_priority DXVK/D3D12 reached
   first-frame+10. DXVK features 0 off / 1 on; priority counts 14/14 and 28/13.
