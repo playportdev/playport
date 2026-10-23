@@ -229,15 +229,19 @@ The supervisor keeps this section.
      guarantee detection of a newline-only short (explicitly tested/accepted limitation).
      [Host evidence](../evidence/2026-10-23-descriptor-emission-fix-host.md); report
      `.work/agent-notes/kk-parity/reports/a0-emission-fix.md` in the build area.
-     **Running: separately authorized menu-only prep retry**, exact IPA `689b9479…`.
-     Maximum four plays, DXVK off/on first; proceed to D3D12 off/on only if full raw DXVK
-     telemetry passes strict parsing. Stop on setup/wire failure, no parser loosening or extra
-     retries. Capture later live menus without game input; no save navigation. Report left in
-     the build area at `.work/agent-notes/kk-parity/reports/a0-device-prep-retry.md`.
-     Original bad raw log remains immutable. Owner scene/activity/window/budget coordination
-     and human gameplay follow only after prep passes; no menu performance/perturbation claim.
-  Phone authority here is only that bounded retry under the owner's earlier prepare-now approval;
-  human gameplay still waits for owner handoff.
+     **Menu-only prep retry BLOCKED (2026-10-23)**: exact IPA `689b9479…` upgraded in
+     place, container kept. DXVK off/on reached first-frame+50 with live45/55s menus,
+     but full raw strict parser exit1:0 usable,60 rejected intervals,2 native failure-poison
+     records; no KK banner/calibration/10-row capture. Native activation confirmed; emitter
+     latches before banner, exact failing branch UNKNOWN. DXVK61 complete36-row captures
+     remain rejected on source poisoning, not selectively reparsed. Supervisor STOP after
+     two plays; D3D12 off/on UNRUN, no extra retry/fix. Settings/diagnostics restored, explicit
+     black,73% not charging/5.9GB, lock released; unattended unchanged/null.
+     [Retry evidence](../evidence/2026-10-23-descriptor-probe-device-prep-retry.md); report
+     `.work/agent-notes/kk-parity/reports/a0-device-prep-retry.md` in the build area.
+     Original bad raw log remains immutable. No gameplay/performance/perturbation proof.
+  The bounded retry is stopped; no further phone play/fix authorization here.
+  Human gameplay still waits for owner handoff.
   No save automation/new slot authorized. No sampler
   redesign, CPU-clock bridge or descriptor implementation approved. Checkpoint `cdaff3c`;
   no merge or push. A2–A4 remain **not started**, gated on evidence that descriptor cost matters.
@@ -268,10 +272,10 @@ The supervisor keeps this section.
   No runtime/profiler changes or extra plays. Settings/diagnostics restored; last captured
   page black, 80% external power, inherited unattended unchanged.
 - **Phone queue** (PLA-431, main checkout):
-  - A0 scoped diagnostics host queue accepted; device prep blocked by actual interleaved
-    telemetry (evidence above). KK0122 review BLOCK/P1 addressed by host-checked0123 supported-sink
-    correction; independent re-review pending, no device reenactment. Re-review first, then
-    separately authorize renewed calibration/smoke;
+  - A0 scoped diagnostics host queue and KK0122/0123 independent re-review accepted.
+    Menu-only device retry now BLOCKED by two native emission-failure poison records before
+    banner (exact failure branch unknown),0 strict usable intervals; DXVK live menus render.
+    D3D12 remains unrun, no further play/fix authorized. Supervisor diagnosis/review first;
     owner existing-save workload coordination
     and human measurement remain pending. No save automation or automatic measurement;
   - A's gates after an authorized A2–A4, which have not started.
