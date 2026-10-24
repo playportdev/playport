@@ -278,7 +278,9 @@ The supervisor keeps this section.
   **PLA-440:** preserve AGENTS.md's quick, announced, focused UI-only session rules, no
   arbitrary time cap or gameplay limit. No black interlude then input, improvised scrolling,
   direct input or automatic relaunch on foreground loss/owner reclaim.
-  **Running next: host-only deterministic route/safety implementation (PLA-440)**:
+  **Running: host-only deterministic route/safety implementation (PLA-440)**,
+  child `9bb1e145` (`openai-codex/gpt-6.1-sol:high`), report left in the build area at
+  `.work/agent-notes/kk-parity/reports/ui-session-safety-host.md`:
   `#runtime`/`#graphicsoptions` focus/scroll targets in GameDetailView, plus active-state/
   latched queue cancellation checks and test-first host regressions; independent review
   before a later announced UI batch. No phone command, resumed old script, extra gameplay,
