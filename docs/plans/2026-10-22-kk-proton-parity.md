@@ -244,8 +244,12 @@ The supervisor keeps this section.
   imports match the iOS target, first banner fits483 bytes maximum; recorded stamp/cap
   explanations contradicted, but actual failed syscall/branch remains unknown. Report left
   in the build area at `.work/agent-notes/kk-parity/reports/a0-native-emission-diagnosis.md`.
-  **Host-only reason-coded native failure poison implemented; independent review PENDING,
-  not device verified** (child `2f0adb90`, PLA-431): Mesa0124 changes only kk_debug.c,
+  **Host-only reason-coded native failure poison implemented** (`634e70d`); independent
+  reviewer `91b0b6eb` running, not device verified (writer `2f0adb90`, PLA-431).
+  Review report left in the build area at
+  `.work/agent-notes/kk-parity/reports/a0-emission-reasons-review.md`;
+  parent matrix rerun running (`supervisor-emission-reasons.log` under those notes).
+  Mesa0124 changes only kk_debug.c,
   preserves0121–0123, sink rules/latch/one best-effort poison and unchanged strict parser.
   Actual0123 RED missing stage; expanded actual-emitter GREEN/full host suite,
   236 MSL identity/replay,33 parser tests and quick745 Python/26 C groups pass.
@@ -257,7 +261,7 @@ The supervisor keeps this section.
   The bounded retry is stopped; a future single diagnostic capture needs separate clearance.
   Human gameplay still waits for owner handoff.
   No save automation/new slot authorized. No sampler
-  redesign, CPU-clock bridge or descriptor implementation approved. Checkpoint `c7d458f`;
+  redesign, CPU-clock bridge or descriptor implementation approved. Checkpoint `634e70d`;
   no merge or push. A2–A4 remain **not started**, gated on evidence that descriptor cost matters.
 - **B1 phone (2026-10-23):** both flag-off routes and memory_priority DXVK/D3D12 reached
   first-frame+10. DXVK features 0 off / 1 on; priority counts 14/14 and 28/13.
