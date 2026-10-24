@@ -21,9 +21,21 @@ import HostIOKit
 import PlayportKit
 import UIKit
 
+@MainActor
+private enum DriverTouches {
+    static var held: [Int] = []
+}
+
 extension OnScreenControls {
+    func cancelDriverTouches() {
+        for touch in DriverTouches.held { ended(touch) }
+        DriverTouches.held.removeAll()
+    }
+
     /// Presses `spec`; nil when it was pressed, else why not.
-    func driverPress(_ spec: String) async -> String? {
+    func driverPress(_ spec: String) async throws -> String? {
+        try UIDriver.checkpoint()
+        defer { cancelDriverTouches() }
         let parts = spec.split(separator: "@", maxSplits: 1).map(String.init)
         var ms = 200
         if parts.count == 2 {
@@ -62,6 +74,8 @@ extension OnScreenControls {
             fingers.append((-1 - i, at, to))
         }
         for f in fingers {
+            try UIDriver.checkpoint()
+            DriverTouches.held.append(f.touch)
             guard began(f.touch, at: f.at) else {
                 for g in fingers { ended(g.touch) }
                 return "nothing took a finger at \(f.at)"
@@ -72,8 +86,7 @@ extension OnScreenControls {
         HostIO.log("controls: driver holds \(controls.held.sorted().joined(separator: "+")) for \(ms) ms: "
                    + String(format: "buttons=0x%04x lt=%d rt=%d lx=%d ly=%d rx=%d ry=%d", pad.buttons, pad.leftTrigger,
                             pad.rightTrigger, pad.lx, pad.ly, pad.rx, pad.ry))
-        try? await Task.sleep(for: .milliseconds(ms))
-        for f in fingers { ended(f.touch) }
+        try await UIDriver.pause(.milliseconds(ms))
         return nil
     }
 

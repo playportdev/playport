@@ -278,7 +278,7 @@ The supervisor keeps this section.
   **PLA-440:** preserve AGENTS.md's quick, announced, focused UI-only session rules, no
   arbitrary time cap or gameplay limit. No black interlude then input, improvised scrolling,
   direct input or automatic relaunch on foreground loss/owner reclaim.
-  **HOST WORK IN PROGRESS, uncommitted; review PENDING; not phone verified (PLA-440)**: first writer
+  **HOST IMPLEMENTED in one commit, review PENDING; not phone verified (PLA-440)**: first writer
   `9bb1e145` was interrupted by a provider usage limit before commit; continued from its
   staged worktree by child `0738ad93`, after the owner switched the confirmed model to
   `deepseek/deepseek-flash:high`. Report left in the build area at
@@ -288,12 +288,15 @@ The supervisor keeps this section.
   fail. Root lifecycle/active-state/Task/nonce-cancel gates terminally drop the driver queue,
   including each pad/menu press, waits and step acks. Host interruption has one bounded,
   nonce-bound cancellation request (delivery explicitly unconfirmed); no automatic background/
-  JIT-Settings return or reactivation/resume. Planned replacement keeps revocation armed:
-  observed loss/cancel drops saved driver continuation, even on normal replacement; product
-  restart/game behavior unchanged. App-local gate, NOT OS recipient/cross-process proof.
-  RED/GREEN production-seam regressions; focused99, PlayportKit364, quick753 Python/26 C
-  groups pass. Dev IPA `e422c39b…` verified89/89; owner edit included/uncommitted, not exact
-  committed-source; no build-record changes. Owner file/diff hashes unchanged/unstaged.
+  JIT-Settings return or reactivation/resume: `background:S`, `jit:open-settings` and an
+  opened `probe:settings-url-N` each cancel the batch as a handoff. Planned replacement keeps
+  revocation armed: observed loss/cancel drops saved driver continuation, even on normal
+  replacement; product restart/game behavior unchanged. App-local gate, NOT OS recipient/
+  cross-process proof.
+  RED/GREEN production-seam regressions; focused53, PlayportKit364, quick753 Python/26 C
+  groups pass. Dev IPA `071ef6b0…` verified89/89 from the final source; owner edit included/
+  uncommitted, not exact committed-source; no build-record changes. Owner file/diff hashes
+  unchanged/unstaged.
   No device commands or games observed; no old script/native append-flag fix/measurement.
   Independent review first; ONLY if separately approved, a newly announced focused UI-only
   batch for both target rows/cancellation proof. No phone authority in this host chunk.

@@ -20,12 +20,16 @@ import HostIOKit
 import PlayportKit
 
 extension GyroSensors {
+    func cancelDriverScript() { feed.cancelScript() }
+
     /// Plays `spec`; nil when it played (moving something or not), else why it could not.
-    func driverPlay(_ spec: String) async -> String? {
+    func driverPlay(_ spec: String) async throws -> String? {
+        try UIDriver.checkpoint()
         let script: GyroScript
         do { script = try GyroScript.parse(spec) } catch { return "\(error)" }
         let before = run
         let r = await feed.play(script)
+        try UIDriver.checkpoint()
         let state = switch before {
         case .running(let d, let o): "source \(d.rawValue), output \(o.rawValue)"
         case .previewing(let d, let o): "test area: source \(d.rawValue), output \(o.rawValue)"

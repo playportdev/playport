@@ -11,14 +11,26 @@ The app starts as a Home Screen launch does, shows the
 library, and does what a person would do with its buttons, through the same
 model calls: each --action in order, then --controls, --settings, --verify, --play, regardless
 of argv order. Use --settings with --play, not --action play:ID, to save settings
-before playing. --dry-run prints UI_ACTIONS without accessing the phone:
+before playing. UI batches require Playport active before each action/press and after waits.
+After initial launch readiness, inactive/background or cancellation permanently drops the queue;
+reactivation never resumes it. Planned process replacement keeps revocation armed too: an
+observed loss/cancel drops saved DRIVER continuation (even during normal replacement), not
+product restart/game behavior. Prepare and announce a short focused UI-only batch first (no
+arbitrary session timer, black interlude then input, or improvised navigation). Action success
+and whole-device screenshots are NOT proof of the OS's foreground recipient. The gate is
+app-local, not OS-wide input containment. SIGTERM/SIGHUP/Ctrl-C request nonce-bound UI queue
+cancellation even with --leave-running (no gameplay kill in that mode). Delivery is bounded,
+best-effort and reported as unconfirmed; transport loss/SIGKILL can leave cancellation uncertain.
+--dry-run prints UI_ACTIONS without accessing the phone:
 
   open:SCREEN | open:ID  show a screen (home, library, games: the Library on Steam, downloads,
                          settings, account: Settings' Accounts section, setup: the first-run checklist as
                          Settings › Setup check's first row opens it, signin: Sign in to Steam, a preview
                          that sends nothing to Steam while Steam is signed in) or a title's page;
                          open:ID#SECTION opens its Game options at a section (graphics, controls, game,
-                         files, developer, ordering, steam); open:ID#gyro opens its Controls › Gyro aim
+                         files, developer, ordering, steam); open:ID#runtime and open:ID#graphicsoptions
+                         ring/scroll the existing Runtime keys/Graphics options rows without opening
+                         a keyboard or changing values. Unknown game sections fail. open:ID#gyro opens its Controls › Gyro aim
                          page, whose test area runs the gyro for its dot while it is up (no game);
                          open:ID#controller opens its Controller page (the game's controller map: the
                          mode ctl:mode, Look speed ctl:lookSpeed, Edit a copy ctl:copy, Reset all
@@ -198,15 +210,17 @@ before playing. --dry-run prints UI_ACTIONS without accessing the phone:
                          no-copy shared Metal buffers the GPU writes and the CPU reads back, a
                          64 MiB range view's buffer, then four ordinary buffers as the control, with
                          the footprint and graphics ledger at each step (`pool-gpu ...` lines)
-  background:S           the app opens iOS Settings (Playport goes to the background); S seconds
-                         (10-600) later pp ui checks the app's process is still there and brings it
-                         back to the front without ending it (a background-return event)
+  background:S           opens iOS Settings (S=10-600 retained grammar), then cancels the batch.
+                         No automatic return or queued continuation; returning requires a NEW,
+                         explicitly announced session. This also applies to JIT/Settings handoffs.
   probe:helper-report    read that probe's report back into s1-host.log (a later run, --keep-log)
   probe:native-auth      Settings' synthetic native GSS probe (no game or store credentials)
   jit:setup | jit:pair   Open the product setup (Pair again keeps old credentials until verified)
   jit:continue | jit:open-settings | jit:cancel | jit:wait
-                         Resume/open Settings/cancel/wait in the SAME run; system Settings needs the person
-  probe:settings-url-N   open Settings link N (OnDevicePairing's candidates); screenshot with pp phone shot
+                         Resume/cancel/wait while active; opening system Settings needs the person
+                         and terminally cancels this batch, not automatic reactivation.
+  probe:settings-url-N   open Settings link N (OnDevicePairing's candidates), which leaves Playport:
+                         the batch is cancelled as a handoff; screenshot with pp phone shot
   probe:pairing          Settings' on-device pairing experiment (iOS 27); use --leave-running
   probe:pairing-cancel | probe:pairing-use
                          Cancel, or wait for pairing, store it and check readiness
@@ -384,26 +398,60 @@ class Terminated(Exception):
     """SIGTERM or SIGHUP: end the run as its result line says."""
 
 
-class EndOnTerm:
-    """Inside the device lock: a Terminated from the block ends the app (unless leave)
-    while the lock is still held, and is kept in .signal instead of propagating."""
+def request_batch_cancel(phone, out, nonce, events):
+    """One bounded, nonce-bound cancellation request, not proof the app consumed it."""
+    if not re.fullmatch(r"[0-9a-f]{8}", nonce):
+        raise ValueError("invalid active UI nonce")
+    marker = os.path.join(out, "ui-cancel")
+    with open(marker, "w") as f:
+        f.write(nonce)
+    phone.pmd("cancel-ui", "apps", "push", phone.bundle_id(), marker,
+              f"Documents/ui-cancel-{nonce}", secs=10)
+    result = {"delivery": "pushed", "confirmed": False}
+    events("ui-cancel-request", **result)
+    return result
 
-    def __init__(self, phone, leave):
+
+class EndOnTerm:
+    """Interruptions revoke the UI queue inside the lock, even with --leave-running.
+
+    Cancellation delivery is best-effort, not an app acknowledgement. Only the
+    existing non-leave behavior ends the app/game. No activation or retries.
+    """
+    def __init__(self, phone, leave, cancel=None):
         self.phone, self.leave, self.signal, self.app_ended = phone, leave, None, False
+        self.cancel = cancel
+        self.cancellation = {"delivery": "not-requested", "confirmed": False}
 
     def __enter__(self):
         return self
 
     def __exit__(self, kind, e, _tb):
-        if kind is not Terminated:
+        if kind not in (Terminated, KeyboardInterrupt):
             return False
-        signal.signal(signal.SIGTERM, signal.SIG_IGN)   # a second one must not cut this short
-        self.signal = str(e)
-        if not self.leave:
-            with contextlib.suppress(phonelib.PhoneError):
-                self.app_ended = self.phone.kill()
+        signals = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
+        handlers = {sig: signal.getsignal(sig) for sig in signals}
+        try:
+            for sig in signals:
+                signal.signal(sig, signal.SIG_IGN)
+            self.signal = "SIGINT" if kind is KeyboardInterrupt else str(e)
+            if self.cancel:
+                try:
+                    self.cancellation = self.cancel()
+                except (phonelib.PhoneError, OSError) as error:
+                    self.cancellation = {"delivery": "failed", "confirmed": False, "error": str(error)}
+            if not self.leave:
+                with contextlib.suppress(phonelib.PhoneError):
+                    self.app_ended = self.phone.kill()
+        finally:
+            for sig, handler in handlers.items():
+                signal.signal(sig, handler)
         return True
 
+
+# Dev/UIDriverGameSection.swift: per-game destinations, independent of title/store ID grammar.
+GAME_SECTIONS = ("graphics", "controls", "game", "files", "developer", "ordering", "steam",
+                 "gyro", "controller", "runtime", "graphicsoptions")
 
 # A control of an on-screen layout, with a direction for a stick or the d-pad (Dev/TouchDriver.swift).
 TOUCH_CONTROL = r"[A-Za-z0-9_-]+(?:\.(?:up|down|left|right))?"
@@ -419,18 +467,10 @@ ACTION_RE = re.compile((r"^(?:(?:install|pause-resume|queue|downloading):[0-9]+|
                        .replace("{g}", GYRO_STEP))
 
 
-def return_from_background(phone, e, now=time.time, sleep=time.sleep):
-    """The workstation's half of background:S (UIDriver): S seconds after the app's
-    ui-background event, whether the app's process is still the one that left, and if so
-    bring it to the front again without ending it (Phone.activate)."""
-    secs = int(e.get("seconds", 0))
-    sleep(min(secs, max(0, e.get("t", now()) + secs - now())))
-    before, seen = e.get("pid"), phone.pid()
-    out = {"seconds": secs, "pid": before, "pid_seen": seen, "alive": seen is not None and seen == before}
-    if out["alive"]:
-        after = phone.activate()
-        out.update(pid_after=after, same_process=after == before)
-    return out
+def background_handoff(e):
+    """Legacy diagnostic grammar, but never activate/resume an old UI batch."""
+    return {"seconds": int(e.get("seconds", 0)), "pid": e.get("pid"), "automatic_return": False,
+            "reason": "foreground handoff cancels the batch; new session required"}
 
 
 def in_game(actions, start):
@@ -551,7 +591,7 @@ def ui_env(nonce, verify=None, play=None, extra=(), settings=None, step=False, p
            session=None, keep_settings=False, controls=None):
     """settings: (title id, LaunchSettings JSON) or None; controls: (title id, GameControls
     JSON) or None. step: the app waits after each
-    action until the driver pushes Documents/ui-step-<n> (--shot-each-action). session:
+    action until the driver pushes Documents/ui-step-<nonce>-<n> (--shot-each-action). session:
     the device lock hold this launch is part of (the app undoes an earlier session's
     driven settings, and records this one's); keep_settings: record nothing to undo."""
     actions = (list(extra) + ([f"controls:{controls[0]}"] if controls else [])
@@ -683,6 +723,10 @@ def parse(argv=None):
                                       and x[5:].split("#")[0] not in SCREENS + ("licences", "black")):
             p.error(f"{x!r} is not open:SCREEN|ID, pad:BUTTON[+BUTTON...], wait:S, menu:open|ROW, touch:CONTROL[+CONTROL...][@MS], gyro:STEP[/STEP...], gesture:three-finger-tap, set:KEY=VALUE, hud:on|off, install:APP, pause-resume:APP, "
                     "queue:APP, downloading:APP, import:PATH, uninstall:ID, verify:ID, repair:ID, play:ID, open-launcher:ID, forget-launcher-window:ID, probe:helper-exit|kill|report, probe:relaunch or probe:pairing[-cancel|-use]")
+        if x.startswith("open:") and "#" in x:
+            target, section = x[5:].split("#", 1)
+            if target not in ("settings", "licences") and section not in GAME_SECTIONS:
+                p.error(f"{x!r}: unknown Game options section; choose " + ", ".join(GAME_SECTIONS))
     seq = a.action + [f"play:{a.play}"] * bool(a.play)
     pad = pad_after_play(seq)
     if pad:
@@ -774,16 +818,28 @@ def main(argv=None, launched=None):
         if e.get("event") == "title-done":
             title_end.update(e)
         if a.shot_each_action and e.get("event") == "ui-action":
+            def cancelled_step():
+                # These are app-local events, NOT proof of the OS foreground recipient.
+                # A late marker can never revive UIDriver's latched cancelled queue.
+                return e.get("result") != "ok" or any(
+                    item.get("event") == "ui-done" and not item.get("outcome", "").startswith("ok")
+                    for item in phone.run_events(nonce))
+            if cancelled_step():
+                ev("step-cancelled", action=e.get("action"), reason="batch failed/cancelled; no screenshot or ack")
+                return
             shots_taken["n"] += 1
             name = re.sub(r"[^A-Za-z0-9._=-]+", "_", e.get("action", "action"))
             path = phone.screenshot(os.path.join(out, f"action-{shots_taken['n']:02d}-{name}.png"))
             ev("screenshot", path=path, action=e.get("action"))
+            if cancelled_step():
+                ev("step-cancelled", action=e.get("action"), reason="batch cancelled during screenshot; no ack")
+                return
             # The app holds the next action until this file appears (UIDriver.waitForStep).
             marker = os.path.join(out, "cmd", "ui-step")
             open(marker, "w").close()
-            phone.push(marker, f"Documents/ui-step-{e.get('index', shots_taken['n'])}")
+            phone.push(marker, f"Documents/ui-step-{nonce}-{e.get('index', shots_taken['n'])}")
         if e.get("event") == "ui-background":
-            ev("background-return", **return_from_background(phone, e))
+            ev("background-handoff", **background_handoff(e))
         if e.get("event") == "ui-done" and any(x.split(":")[0] in ("install", "pause-resume", "queue", "downloading") for x in a.action):
             phone.pull("Documents/steam-drive.log", os.path.join(out, "pull"))
 
@@ -814,6 +870,9 @@ def main(argv=None, launched=None):
                 phone.rotate_log()
             envs = ui_env(nonce, a.verify, a.play, a.action, a.settings_pair, a.shot_each_action, a.pad,
                           phonelib.session(), a.keep_settings, a.controls_pair)
+            if not a.dry_run:
+                # Captured current nonce only; no callback while merely waiting for the lock.
+                term.cancel = lambda: request_batch_cancel(phone, out, nonce, ev)
             pid = phone.launch(envs)
             t0 = time.monotonic()
             t_wall = time.time()
@@ -892,9 +951,11 @@ def main(argv=None, launched=None):
             return ev.result(True, 0, why=f"until {a.until}", **end)
     except phonelib.PhoneError as e:
         return phonelib.fail(ev, str(e))
-    except Terminated as e:   # while waiting for the lock: nothing ran
-        return ev.result(False, 143, why="terminated", signal=str(e), out=out)
-    return ev.result(False, 143, why="terminated", signal=term.signal, app_ended=term.app_ended, out=out)
+    except (Terminated, KeyboardInterrupt) as e:   # while waiting for the lock: nothing ran
+        return ev.result(False, 130 if isinstance(e, KeyboardInterrupt) else 143,
+                         why="terminated", signal="SIGINT" if isinstance(e, KeyboardInterrupt) else str(e), out=out)
+    return ev.result(False, 130 if term.signal == "SIGINT" else 143, why="terminated", signal=term.signal,
+                     app_ended=term.app_ended, cancellation=term.cancellation, out=out)
 
 
 def title_failed(log, nonce):

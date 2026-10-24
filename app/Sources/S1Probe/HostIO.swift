@@ -999,13 +999,14 @@ final class GameSurfaceView: UIView {
     #if !PLAYPORT_RELEASE
     /// The UI driver's tap: a finger down and up at (fx, fy), fractions of the view, 0.1 s apart,
     /// when it is the game's (not with the on-screen controls shown: those take `touch:`).
-    func tap(fx: Double, fy: Double) async -> TouchRoute {
+    func tap(fx: Double, fy: Double) async throws -> TouchRoute {
+        try UIDriver.checkpoint()
         let p = CGPoint(x: fx * bounds.width, y: fy * bounds.height)
         let to = OnScreenControls.shared.route(convert(p, to: controls))
         guard to == .game else { return to }
         route(p, phase: .began)
-        try? await Task.sleep(for: .milliseconds(100))
-        route(p, phase: .ended)
+        defer { route(p, phase: .ended) }
+        try await UIDriver.pause(.milliseconds(100))
         return to
     }
     #endif
