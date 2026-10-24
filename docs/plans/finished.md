@@ -397,7 +397,7 @@ off by default.
 
 ## KosmicKrisp Proton parity
 
-`plans/2026-10-22-kk-proton-parity.md`
+the removed plan `2026-10-22-kk-proton-parity.md` (this section is its outcome)
 ([PLA-431](https://linear.app/playportdev/issue/PLA-431);
 [decision 0160](../decisions/0160-kk-proton-parity-stays-opt-in.md)). Closed by the
 owner on 2026-10-24 on `dev/kk-proton-parity`, **unmerged/unpushed at close-out**.
