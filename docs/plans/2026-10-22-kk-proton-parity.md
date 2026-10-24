@@ -179,13 +179,49 @@ nonce. Report `.work/agent-notes/kk-parity/reports/gate-phone-review.md`.
   settings revert at the next launch outside the session; the app was stopped,
   the lock released, nothing left running (battery 42 %, not charging, 4.1 GB
   free). A0 still needs an owner played representative workload.
-- **Branch now:** `dev/kk-proton-parity`, recording follows `aa5736c`,
-unmerged/unpushed. **Next in the queue: A0 interpretation** (earlier menu profile
-said descriptor cost ≈0.086 %/0.050 % of samples, judged INSUFFICIENT), then
-decide defer versus owner-authorized representative workload; the emission gate
-does not waive that decision. A2–A4 remain unstarted and gated. No new phone
-session or A2 work in this recording chunk. PLA-440 leftovers (release variant,
-marker-path app confirmation, abrupt-death gaps) are the independent alternative.
+- **A0 owner-played decision input (2026-10-24), host-only recording after
+`be6fdc7`:** [human-run evidence](../evidence/2026-10-24-a0-descriptor-human-run.md),
+report `.work/agent-notes/kk-parity/reports/a0-human-run.md`. Supersedes the
+pending human-workload status above, not the historical failed/menu attempts.
+Hollow Knight DXVK, Vulkan/720p/60, HUD off, diagnostics on; owner played their
+save throughout `.work/perf-runs/a0-descriptor-human-dxvk-20261024-r2/`, same dev
+IPA `31430e9639275c6df96aa70c9905bd6f5f398dbd80b2d7d28355bbcfa50b1122`.
+Perf: 17,877 frames/302.6 s, FPS mean/median/p10/min 59.4/60.0/58.9/44.4,
+no recorded ≥25/50/100 ms hitches, nominal thermal, battery 29→28% off charger.
+Whole measured raw 14,893,006 bytes, enabled/calibration/snapshot 4/64/14,122,
+no poison. Both strict CLI modes once each: **mixed, exit2, 612 usable/0 rejected**;
+KK device1 and DXVK device1 each 307 complete captures/306 intervals; KK device2
+and DXVK device3 calibration-only (not zero), all four final tails unknown.
+Fixed interior snapshots31→290: KK **15,569 drawable-submit signals** over
+260.790434–260.790435 s; bind/push/template-push **173.751493/1/0 executions per
+signal**, all native operations **466.217933/signal**, attributed elapsed
+**78.212281 µs/signal**, numerically **0.468337% of 16.7 ms per signal**.
+DXVK **62,116 submission requests** over 260.1281858–260.1281876 s;
+vk-bind **43.456630/request**, prep **59.259543 µs/request**, standalone
+**10.014925**, total **69.274469 µs/request**, NOT per frame (0.414817% of
+16.7 ms **per request only**). Driver executions include replay, not app calls;
+elapsed is not CPU, client thread sums are not wall union/removable savings,
+replay may be uncovered. No cross-layer sum/subtraction, frame alignment or
+D3D12 cost inference; no all-stream total. Calibration is quantized, not an
+overhead bound; no flag-off control. Earlier menu sample fractions cannot be
+compared to these elapsed units. **A0: covered native looks small / total NOT
+DECISIVE; A2 gate not satisfied.** Provisional relevance screen **167 µs
+recoverable CPU/presented frame (1% of 16.7 ms)** is not owner-agreed; these
+denominators/coverage cannot settle it. No compatibility verdict; supervisor files.
+- **Branch now:** `dev/kk-proton-parity`, recording follows `be6fdc7`,
+unmerged/unpushed. **Next in the queue: owner-approved A0 frame-aligned
+thread-CPU and perturbation measurement, including the D3D12 selected-Simple
+path**: first agree CPU/frame budget/error tolerance and repeatable owner-save
+scene; design actual CPU attribution plus uncovered replay, independently
+frame-aligned per-stream boundaries with requests kept distinct, warm same-IPA
+off/on/off controls and a repeated window. No aligning clocks by frequency or
+changing optimized copy-vtable selection for profiling. Supervisor/owner may
+instead defer A2; another menu/count-only run does not decide it. This is a
+measurement-design/authorization decision, not approval to implement a CPU clock
+bridge/profiler or launch another phone session. A2–A4 remain unstarted/gated.
+No new phone session or A2 work in this recording chunk. PLA-440 leftovers
+(release variant, marker-path app confirmation, abrupt-death gaps) are the
+independent alternative.
 Model pair for this invocation, reconfirmed 2026-10-24: hard and easy both
 `openai-codex/gpt-6.1-sol:high` (one transient "usage limit reached" was retried
 successfully, not replaced by a fallback).
