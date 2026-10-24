@@ -121,10 +121,27 @@ whole raw and strict-parser result, and observe the native banner, **16
 calibration rows and complete 10-row native captures**, or retain the new
 sink-identifying poison as diagnostic failure evidence (never a measurement
 pass). Old native absence stays unobserved, never zero.
-- **Branch now:** `dev/kk-proton-parity`, HEAD `a887a69` (after the P2 closure),
-clean, unmerged/unpushed. **Next in the queue: the device gate, which waits for
-the owner to hand back the phone** — nothing installed, played or measured until
-then. After it: interpret A0 (menu profile said descriptor cost ≈0.086 %/0.050 %
+- **A0 sink/append device attempt interrupted (2026-10-24):** supervisor ran one
+announced, share-free single-lock session on `1c8534e`: dev IPA
+`31430e9639275c6df96aa70c9905bd6f5f398dbd80b2d7d28355bbcfa50b1122`
+installed in place (33 s, container kept), then Hollow Knight DXVK with
+`MESA_KK_DEBUG=descriptor_stats PLAYPORT_DESCRIPTOR_STATS=1`, until first-frame+10.
+Result `ok:false`, exit1, `cancelled: Playport left foreground (inactive/background)`;
+last mark +6.59 s game started, no first frame. Whole raw 1,590,760 bytes has **0
+`kk-descriptor` lines**, not zero native activity. Owner reclaimed/plugged in the
+phone (30 % not charging → 32 % charging); exact foreground-loss cause not
+established. No gameplay or persistent settings; input stopped, lock released,
+no automatic relaunch. [Interruption evidence](../evidence/2026-10-24-descriptor-gate-interrupted.md)
+retains hashes/result/status and the bounded PLA-440 note (one occurrence, not
+marker-path confirmation). **Gate not passed, not failed — interrupted; the
+required full device gate is still unrun**, device emission unverified. No native
+banner/calibration/captures/poison observed; old absence stays unobserved, never
+zero. A0 justification/A2 remain gated. This recording chunk is host-only.
+- **Branch now:** `dev/kk-proton-parity`, recording follows `1c8534e`,
+unmerged/unpushed. **Next in the queue: retry the device gate, pending the owner
+handing back the phone and leaving it untouched for a few minutes**, with Playport
+kept visible in a fresh authorized session. No retry in this recording chunk.
+After it: interpret A0 (menu profile said descriptor cost ≈0.086 %/0.050 %
 of samples, INSUFFICIENT) and decide defer versus representative workload; A2–A4
 remain unstarted and gated. PLA-440 leftovers (release variant, marker-path app
 confirmation, abrupt-death gaps) are the independent alternative.
