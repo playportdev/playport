@@ -89,12 +89,26 @@ secrets and the 34 parser tests: pass. Independent review **ACCEPT, no P1**
 was not written because the provider hit a usage limit, so the post-P2 reviewer
 writes the consolidated `reports/a0-sink-append-review.md`). One P2: a failed
 `F_GETFL` now leaves the imported fd blocking under iOS busy-polling.
-- **Running now (2026-10-24):** P2 hardening of 0221 (on `F_GETFL` failure keep
-the old `F_SETFL(O_NONBLOCK)`), focused regression, rebuild the IPA so the device
-gate runs the final binary. Writer child (prompt
-`.work/agent-notes/kk-parity/prompts/a0-sink-append-p2.md`), then an independent
-reviewer that also writes the consolidated review report. **Device gate deferred:
-owner needs the phone**; no install, play or measurement until they say it is free.
+- **A0 sink/append P2 closed (2026-10-24), `1e62c4c`:** on `F_GETFL` failure the
+wineserver now keeps the old `F_SETFL(O_NONBLOCK)` fallback, so busy-polling
+still gets a non-blocking fd; unknown flags including append cannot be preserved
+there, and the emitter still rejects such a sink (fail-closed). The old test had
+encoded the P2 as expected behaviour — it aborted on the real `SCM_RIGHTS` seam
+before the hunk. Supervisor reruns: 26 pipelines, replay `0/1/2/2` and `3/3/4/5`,
+236/236 MSL, 34 parser fixtures, 761 quick tests, names/secrets clean, dev IPA
+`31430e96…` 89/89 **uninstalled**; only the `lib/libwineserver.a` artifact row
+changed again. The P2 writer ended its turn after launching background suite and
+build (killed), its resume refused on a harness-rule conflict, so the supervisor
+ran the checks and committed — report
+`.work/agent-notes/kk-parity/reports/a0-sink-append-p2.md`. Evidence page updated
+with the P2 closure section.
+- **Running now:** independent review of `1e62c4c` that also writes the missing
+consolidated review report `reports/a0-sink-append-review.md` (the first
+reviewer's verdict — ACCEPT, no P1, the single P2 above — is in
+`logs/review-a0-sink-append.jsonl`; its report file was never written because the
+provider hit a usage limit). **Device gate deferred: the owner needs the phone.**
+No install, play or measurement until they say it is free; A0 justification and
+A2 remain gated.
 Model pair for this invocation, reconfirmed 2026-10-24: hard and easy both
 `openai-codex/gpt-6.1-sol:high` (one transient "usage limit reached" was retried
 successfully, not replaced by a fallback).
