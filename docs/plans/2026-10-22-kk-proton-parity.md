@@ -244,10 +244,15 @@ The supervisor keeps this section.
   imports match the iOS target, first banner fits483 bytes maximum; recorded stamp/cap
   explanations contradicted, but actual failed syscall/branch remains unknown. Report left
   in the build area at `.work/agent-notes/kk-parity/reports/a0-native-emission-diagnosis.md`.
-  **Running: host-only reason-coded native failure poison**, child `2f0adb90`
-  (`openai-codex/gpt-6.1-sol:high`), minimal Mesa follow-up,
-  actual-emitter RED/GREEN tests, unchanged strict-parser rejection, build and independent
-  review. No sink bypass, runtime fix inferred, schema loosening or phone command authorized.
+  **Host-only reason-coded native failure poison implemented; independent review PENDING,
+  not device verified** (child `2f0adb90`, PLA-431): Mesa0124 changes only kk_debug.c,
+  preserves0121–0123, sink rules/latch/one best-effort poison and unchanged strict parser.
+  Actual0123 RED missing stage; expanded actual-emitter GREEN/full host suite,
+  236 MSL identity/replay,33 parser tests and quick745 Python/26 C groups pass.
+  Real Darwin compilation bounds poison376<=512 bytes. Verified unsigned dev IPA
+  `aa32a361…`89/89, not installed; no build-record changes, owner UI included/uncommitted.
+  [Host evidence](../evidence/2026-10-24-descriptor-emission-reasons-host.md).
+  No sink bypass, runtime fix inferred, schema loosening or phone command authorized.
   Report left in the build area at `.work/agent-notes/kk-parity/reports/a0-emission-reasons.md`.
   The bounded retry is stopped; a future single diagnostic capture needs separate clearance.
   Human gameplay still waits for owner handoff.

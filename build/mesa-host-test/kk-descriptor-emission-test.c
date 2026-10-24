@@ -5,6 +5,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <pthread.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -29,7 +30,9 @@ static pthread_cond_t changed = PTHREAD_COND_INITIALIZER;
 static int requested, completed, done, peer_fd, handshakes;
 static const char peer[] = "info:  [client-like] independent raw writer\n";
 static int armed, calls, target, injected, format_calls;
-static int record_writes, poison_writes, stat_calls, flag_calls;
+static int record_writes, poison_writes, stat_calls, flag_calls, pipe_calls;
+static int poison_formats;
+static size_t row_length, poison_length;
 static const char *mode;
 static unsigned seed;
 
@@ -84,8 +87,17 @@ int __wrap_fprintf(FILE *file, const char *fmt, ...)
 ssize_t __wrap_write(int fd, const void *buf, size_t len)
 {
    if (fd != STDERR_FILENO) return __real_write(fd, buf, len);
-   if (len >= 15 && !memcmp(buf, "[kk-descriptor]", 15)) record_writes++;
-   if (len >= 16 && !memcmp(buf, "\n[kk-descriptor]", 16)) poison_writes++;
+   if (len >= 15 && !memcmp(buf, "[kk-descriptor]", 15)) {
+      record_writes++;
+      row_length = len;
+   }
+   if (len >= 16 && !memcmp(buf, "\n[kk-descriptor]", 16)) {
+      poison_writes++;
+      poison_length = len;
+      poison_formats = format_calls;
+      assert(len <= 512 && ((const char *)buf)[len - 1] == '\n');
+      if (!strcmp(mode, "poison-error")) { errno = ENOSPC; return -1; }
+   }
    if (armed) {
       calls++;
       if ((!strcmp(mode, "eintr") && calls <= 2) ||
@@ -95,7 +107,10 @@ ssize_t __wrap_write(int fd, const void *buf, size_t len)
          return -1;
       }
       if (calls == target) {
-         if (!strcmp(mode, "write-error")) {
+         if (!strcmp(mode, "write-zero")) { injected++; errno = EDOM; return 0; }
+         if (!strcmp(mode, "write-max")) { injected++; errno = EDOM; return SSIZE_MAX; }
+         if (!strcmp(mode, "write-error") || !strcmp(mode, "poison-error") ||
+             !strcmp(mode, "pipe-write-error")) {
             injected++;
             errno = EIO;
             return -1;
@@ -103,7 +118,9 @@ ssize_t __wrap_write(int fd, const void *buf, size_t len)
          if (!strcmp(mode, "short") || !strcmp(mode, "newline-short")) {
             injected++;
             size_t n = !strcmp(mode, "short") ? len / 2 : len - 1;
-            return __real_write(fd, buf, n);
+            ssize_t written = __real_write(fd, buf, n);
+            errno = EDOM; /* Positive short is not an errno failure. */
+            return written;
          }
       }
       /* Terminal sink failure: even best-effort poison cannot be delivered. */
@@ -119,17 +136,34 @@ ssize_t __wrap_write(int fd, const void *buf, size_t len)
 
 int __wrap_vsnprintf(char *buf, size_t size, const char *fmt, va_list ap)
 {
-   if (armed && ++format_calls == 2) {
+   if (armed) format_calls++;
+   if (armed && !strcmp(mode, "format-empty")) { injected++; return 0; }
+   if (armed && format_calls == 2) {
       if (!strcmp(mode, "format-error")) { injected++; return -1; }
       if (!strcmp(mode, "format-overflow")) { injected++; return (int)size; }
    }
-   return __real_vsnprintf(buf, size, fmt, ap);
+   int result = __real_vsnprintf(buf, size, fmt, ap);
+   if (armed && result > 0 && (size_t)result < size) {
+      /* Fixture row size only; the real emitter has a 2048-byte row buffer. */
+      row_length = 2048 - size + result;
+   }
+   return result;
 }
 
 long __wrap_fpathconf(int fd, int name)
 {
-   if (armed && !strcmp(mode, "pipe-small") && name == _PC_PIPE_BUF)
-      return 512;
+   pipe_calls++;
+   if (armed && name == _PC_PIPE_BUF) {
+      assert(errno == 0); /* Required to distinguish indeterminate -1. */
+      if (!strcmp(mode, "pipe-error")) { errno = EIO; return -1; }
+      if (!strcmp(mode, "pipe-indeterminate")) return -1;
+      if (!strcmp(mode, "pipe-invalid")) return LONG_MIN;
+      if (!strcmp(mode, "pipe-zero")) return 0;
+      if (!strcmp(mode, "pipe-exact")) return row_length;
+      if (!strcmp(mode, "pipe-too-small")) { errno = EDOM; return row_length - 1; }
+      if (!strcmp(mode, "pipe-small")) return 512;
+      if (!strcmp(mode, "pipe-max")) return LONG_MAX;
+   }
    return __real_fpathconf(fd, name);
 }
 
@@ -143,7 +177,9 @@ int __wrap_fcntl64(int fd, int command, ...)
       errno = EIO;
       return -1;
    }
-   return __real_fcntl64(fd, command);
+   int flags = __real_fcntl64(fd, command);
+   if (armed && !strcmp(mode, "flags-max")) return INT_MAX & ~O_APPEND;
+   return flags;
 }
 
 int __wrap_fstat64(int fd, struct stat64 *st)
@@ -151,6 +187,7 @@ int __wrap_fstat64(int fd, struct stat64 *st)
    int result = __real_fstat64(fd, st);
    if (fd == STDERR_FILENO) {
       stat_calls++;
+      if (armed && !strcmp(mode, "fstat-error")) { errno = EBADF; return -1; }
       if (!result && armed && !strcmp(mode, "unsupported-type"))
          st->st_mode = (st->st_mode & ~S_IFMT) | S_IFSOCK;
    }
@@ -170,9 +207,12 @@ static void test_rejected_sink(void)
       calls = format_calls = record_writes = poison_writes = stat_calls = flag_calls = 0;
    }
    armed = 1;
+   errno = EDOM;
    if (after_init) kk_descriptor_stats_log(&s, 0, true);
    else kk_descriptor_stats_init(&s);
+   assert(errno == EDOM);
    int init_calls = calls, init_formats = format_calls;
+   int init_stats = stat_calls, init_flags = flag_calls, init_pipes = pipe_calls;
    kk_descriptor_stats_log(&s, 0, true);
    kk_descriptor_stats_log(&s, 0, true);
    printf("sink=%s latch=%u record_writes=%d poison_writes=%d writes=%d "
@@ -182,9 +222,11 @@ static void test_rejected_sink(void)
    fflush(stdout);
    assert(s.emission_failed && record_writes == 0 && poison_writes == 1);
    assert(calls == 1 && calls == init_calls && format_calls == init_formats);
-   assert(stat_calls == 1);
+   assert(poison_formats == init_formats && errno == EDOM);
+   assert(stat_calls == init_stats && flag_calls == init_flags && pipe_calls == init_pipes);
+   assert(stat_calls == (strcmp(mode, "format-empty") ? 1 : 0));
    assert(flag_calls == ((!strcmp(mode, "nonappend") || after_init ||
-                          !strcmp(mode, "getfl-error")) ? 1 : 0));
+                          !strcmp(mode, "getfl-error") || !strcmp(mode, "flags-max")) ? 1 : 0));
 }
 
 /* Free-running competition, with a pinned PRNG determining bounded burst
@@ -226,7 +268,8 @@ int main(int argc, char **argv)
    setbuf(stderr, NULL); /* Same unbuffered native stderr as Wine init_options. */
    if (!strcmp(mode, "nonappend") || !strcmp(mode, "nonappend-after-init") ||
        !strcmp(mode, "unsupported-null") || !strcmp(mode, "unsupported-type") ||
-       !strcmp(mode, "getfl-error")) {
+       !strcmp(mode, "getfl-error") || !strcmp(mode, "fstat-error") ||
+       !strcmp(mode, "flags-max") || !strcmp(mode, "format-empty")) {
       if (!strcmp(mode, "nonappend"))
          assert(!(__real_fcntl64(STDERR_FILENO, F_GETFL) & O_APPEND));
       if (!strcmp(mode, "unsupported-null")) {
@@ -239,7 +282,7 @@ int main(int argc, char **argv)
    }
    int p[2];
    pthread_t drain, client;
-   bool pipe_mode = !strcmp(mode, "pipe") || !strcmp(mode, "pipe-small");
+   bool pipe_mode = !strncmp(mode, "pipe", 4);
    if (pipe_mode) {
       assert(!pipe(p));
       assert(dup2(p[1], STDERR_FILENO) == STDERR_FILENO);
@@ -269,7 +312,9 @@ int main(int argc, char **argv)
    }
    armed = 1;
    target = !strcmp(mode, "newline-short") ? 10 : 1;
+   errno = EDOM;
    kk_descriptor_stats_log(&s, 0, !nominal);
+   assert(errno == EDOM);
    if (nominal) {
       s.last_log_ns = 0;
       kk_descriptor_stats_log(&s, 1, true);
@@ -281,16 +326,23 @@ int main(int argc, char **argv)
    } else if (!strcmp(mode, "stress")) {
       for (unsigned i = 0; i < 400; i++) kk_descriptor_stats_log(&s, 0, true);
       assert(!pthread_join(client, NULL));
-   } else if (strcmp(mode, "max") && strcmp(mode, "eintr")) {
+   } else if (strcmp(mode, "max") && strcmp(mode, "eintr") &&
+              strcmp(mode, "pipe-exact") && strcmp(mode, "pipe-max")) {
       int before = calls, formats_before = format_calls;
+      int stats_before = stat_calls, flags_before = flag_calls, pipes_before = pipe_calls;
       kk_descriptor_stats_log(&s, 0, true);
       /* A failed device never retries a suffix or emits another snapshot. */
       assert(calls == before && format_calls == formats_before);
-      if (strcmp(mode, "pipe-small")) assert(injected);
+      assert(stat_calls == stats_before && flag_calls == flags_before && pipe_calls == pipes_before);
+      if (strncmp(mode, "pipe", 4)) assert(injected);
+      assert(s.emission_failed && poison_writes == 1);
+      assert(poison_formats == formats_before && errno == EDOM);
       if (!strcmp(mode, "eintr-limit")) assert(injected == 3 && calls == 4);
    } else if (!strcmp(mode, "eintr")) {
       assert(injected == 2 && calls == 12);
    }
+   if (!pipe_mode) printf("reason-case=%s rowlen=%zu poisonlen=%zu formats=%d stat=%d flags=%d pipe=%d\n",
+          mode, row_length, poison_length, format_calls, stat_calls, flag_calls, pipe_calls);
    close(peer_fd);
    if (pipe_mode) {
       close(STDERR_FILENO);

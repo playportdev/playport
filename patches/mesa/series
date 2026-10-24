@@ -97,3 +97,4 @@
 0121-kk-descriptor-cost-diagnostics.patch
 0122-kk-descriptor-single-write-records.patch
 0123-kk-descriptor-supported-sinks.patch
+0124-kk-descriptor-emission-failure-reasons.patch
