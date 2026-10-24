@@ -258,7 +258,8 @@ The supervisor keeps this section.
   [Host evidence](../evidence/2026-10-24-descriptor-emission-reasons-host.md).
   No sink bypass, runtime fix inferred or schema loosening.
   Report left in the build area at `.work/agent-notes/kk-parity/reports/a0-emission-reasons.md`.
-  **Running: ONE separately authorized DXVK-on diagnostic capture**, exact `aa32a361…`
+  **Running: ONE separately authorized DXVK-on diagnostic capture**, child `a093a577`
+  (`openai-codex/gpt-6.1-sol:high`), exact `aa32a361…`
   upgraded in place, first-frame+10 maximum. Check current setup, stop on person-needed
   failure; no repeat, second route, save input, measurement or implementation. Preserve full
   raw failure reasons/strict parse, restore diagnostics/settings and explicit black/release.
