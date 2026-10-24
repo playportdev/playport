@@ -240,11 +240,15 @@ The supervisor keeps this section.
      [Retry evidence](../evidence/2026-10-23-descriptor-probe-device-prep-retry.md); report
      `.work/agent-notes/kk-parity/reports/a0-device-prep-retry.md` in the build area.
      Original bad raw log remains immutable. No gameplay/performance/perturbation proof.
-  **Running next: read-only source/binary/saved-artifact diagnosis** (PLA-431), before any
-  further patch/build or phone play. Identify the failing sink/format/write branch if provable;
-  otherwise propose the smallest reason-coded failure evidence, not a sink bypass. Report left
+  **Read-only diagnosis complete** (PLA-431): actual IPA constants/stat layout/libSystem
+  imports match the iOS target, first banner fits483 bytes maximum; recorded stamp/cap
+  explanations contradicted, but actual failed syscall/branch remains unknown. Report left
   in the build area at `.work/agent-notes/kk-parity/reports/a0-native-emission-diagnosis.md`.
-  The bounded retry is stopped; no further phone play or implementation in that investigation.
+  **Running next: host-only reason-coded native failure poison**, minimal Mesa follow-up,
+  actual-emitter RED/GREEN tests, unchanged strict-parser rejection, build and independent
+  review. No sink bypass, runtime fix inferred, schema loosening or phone command authorized.
+  Report left in the build area at `.work/agent-notes/kk-parity/reports/a0-emission-reasons.md`.
+  The bounded retry is stopped; a future single diagnostic capture needs separate clearance.
   Human gameplay still waits for owner handoff.
   No save automation/new slot authorized. No sampler
   redesign, CPU-clock bridge or descriptor implementation approved. Checkpoint `c7d458f`;
