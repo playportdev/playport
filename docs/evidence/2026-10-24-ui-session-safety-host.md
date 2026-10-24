@@ -1,7 +1,8 @@
 # UI session safety: host implementation, not phone verification
 
 **Linear:** [PLA-440](https://linear.app/playportdev/issue/PLA-440).
-**Status:** HOST IMPLEMENTED / independent review PENDING / not phone verified.
+**Status:** HOST IMPLEMENTED / independent review ACCEPTED, P2 follow-up below / not
+phone verified.
 2026-10-24, `dev/kk-proton-parity`, starting source `6d576a3`; parent documentation
 checkpoints `b553886`/`5c33866` preserved. One workstation-only chunk. No phone, UI, status,
 install, perf, gameplay, save, controller or cache operation was performed. No games observed.
@@ -122,7 +123,70 @@ claimed. Process death before an observable loss/marker consumption is an unobse
 gap, not guaranteed cross-process containment. Pending iOS gates and independent review
 prevent any phone-verified safety claim.
 
-Next: independent review. Only if separately approved, prepare and announce one short focused
+Next: independent review of the host implementation, then of the P2 closure below. Only if
+separately approved, prepare and announce one short focused
 UI-only batch showing both exact target rows and cancellation proof; finish/cancel every queued
 input before releasing the session. No old restore script, black interlude followed by input,
 improvised taps/pad scrolling or automatic relaunch. This evidence grants no device authority.
+
+## P2 closure (2026-10-24, host-only follow-up)
+
+The independent review of `e2a62de` (report `.work/agent-notes/kk-parity/reports/ui-session-safety-review.md`)
+accepted it with four report-only P2s. This follow-up closes three; the fourth stays report-only.
+Commit on `dev/kk-proton-parity` on top of the review-record commit `ca2299c`. Nothing was
+sent to the phone.
+
+- **The black screen is terminal in a batch.** `open:black` ends the batch: the dev queue
+  (`Dev/UIDriverBatch.run`, its `terminal` predicate) refuses it before it runs unless it is
+  the last action, and when it is last `Dev/UIDriver.swift` shows the screen and cancels the
+  batch as a deliberate handoff. No action, pad press or step acknowledgement can follow it.
+  `pp ui` refuses `open:black` before launch when any action, `--controls`, `--settings`,
+  `--verify` or `--play` would follow it. A black-last run reports the terminal outcome
+  `cancelled: black screen shown; the batch ended and no input follows (new session required)`
+  and exits nonzero: it is a handoff, not a successful action. `BlackScreen`'s own product
+  behaviour is unchanged, and black-last stays usable (`pp phone rest`/unattended launches it
+  alone).
+- **A watcher exit cannot orphan queued input.** With `--leave-running`, when the watch stops
+  (`--until`/`--idle`/`--wait` timeout/JIT timeout/alert) without a `ui-done` for this nonce,
+  `pp ui` emits a warning, pushes ONE best-effort `Documents/ui-cancel-<nonce>` through the
+  existing `request_batch_cancel` transport (10 s bound) and reports
+  `cancellation: {delivery: pushed|failed, confirmed: false}` on the result. A `ui-done` exit
+  (including a `--play` smoke check whose finished queue's `ui-done` is not the stop event),
+  an exited app, and runs without `--leave-running` push nothing. No daemon, lease, retry or
+  extra device cleanup was added and gameplay is not killed.
+- **The three section vocabularies are locked by a host test.** `tools/tests/test_ui.py`
+  reads the dev enum (`Dev/UIDriverGameSection.swift`), the release copy in
+  `GameDetailView.firstRow(ofSection:)` and `tools/ui.py`'s `GAME_SECTIONS`, and fails on any
+  membership or row-target drift. The release copy had really drifted: 7 of the dev enum's
+  11 sections, with no `runtime`, `graphicsoptions`, `gyro` or `controller`. It is unreachable
+  in both variants (only `Dev/UIDriver.swift` sets `pageSection`, and `Dev/` is not in a
+  release build), so it now names the dev enum's sections and rows exactly without changing
+  release behaviour.
+- **Deferred (perf note only):** every checkpoint does a synchronous marker read and waits are
+  sliced at 100 ms, so a long pad wait costs about 16 failed opens/s on the main actor.
+  Closing the queue paths does not remove that poll; no timing was redesigned.
+
+RED (old source): `p2-red-python.log` — the old host accepted `open:black` followed by
+another action, a `--leave-running` `--until` exit had no cancellation in its result, and the
+release copy named 7 sections against the dev enum's 11; `p2-red-batch.log` — the queue had no
+terminal seam (`extra argument 'terminal' in call`). GREEN: `p2-focused-ui.log` (58 tests),
+`p2-focused-batch.log` (2), `p2-playportkit.log` (`swift test --package-path app/PlayportKit`,
+364), `p2-quick.log` (`./pp test --quick`, 760 Python tests and 26 host C groups),
+`p2-names-final.log`, `p2-secrets-final.log`, `p2-release-parse.log` (empty, exit 0,
+`swiftc -parse -D PLAYPORT_RELEASE` on the touched non-Dev file and the driver) — all under
+`.work/agent-notes/kk-parity/`. `.work/agent-notes/kk-parity/reports/ui-session-safety-p2.md`
+is the run report.
+
+Verified dev IPAs from the final source (identical app source; the only later change is this
+documentation, and dev IPA packaging is not byte-reproducible): `.work/out/20261024-124310-5346e740/Playport-26.5-5346e740.ipa`,
+SHA256 `5346e7400d10e578bbb85df2fca6979a8422e04e28477052651c2d7fb037cc0c` (built from the
+committed tree, after the commit), and the pre-commit build `.work/out/20261024-124115-a2488a2a/Playport-26.5-a2488a2a.ipa`,
+SHA256 `a2488a2a9ab2ab98a1018aa8366a91611eae20cc6bc16f4c2bca1db02f9a4e3e`; both verify 89/89, and
+both ran `app` and `verify` with every dependency/staging/notices stamp unchanged. No build-record rows
+changed (`app/artifacts.tsv`, `build/generated/wine-pe-*.tsv` unchanged). The owner's
+uncommitted `SettingsView.swift` is inside this dev IPA, so it is not exact
+committed-source provenance. Owner file/diff hashes are unchanged and unstaged; main remains
+`26699f6`.
+
+Still host-only: the app's `open:black`/handoff cancellation and marker consumption were not
+executed on iOS, no release archive was built, and nothing here is phone verified.

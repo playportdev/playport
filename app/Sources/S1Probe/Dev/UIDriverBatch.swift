@@ -119,11 +119,18 @@ final class UIDriverBatch {
         try checkpoint()
     }
 
-    func run(_ actions: [String], perform: (Int, String) async throws -> Void,
+    func run(_ actions: [String], terminal: (String) -> Bool = { _ in false },
+             perform: (Int, String) async throws -> Void,
              acknowledge: (Int, String) -> Void, step: (Int) async throws -> Void) async throws {
         for (i, action) in actions.enumerated() {
             try checkpoint()
             if handingOff { return }
+            // A terminal handoff (open:black) is the last thing a batch may run: anything
+            // after it would run with the screen handed over, so it is refused unrun.
+            if terminal(action), i + 1 != actions.count {
+                cancel("\(action) ends the batch; it must be the last action")
+                throw Stopped(description: failure!)
+            }
             try await perform(i, action)
             if ended && failure == nil { return }
             try checkpoint()

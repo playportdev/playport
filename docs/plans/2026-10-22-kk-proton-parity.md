@@ -300,10 +300,21 @@ The supervisor keeps this section.
   No device commands or games observed; no old script/native append-flag fix/measurement.
   **Independent review ACCEPT** (`801119ae`, report left in the build area at
   `.work/agent-notes/kk-parity/reports/ui-session-safety-review.md`) with four report-only P2s.
-  **Running host-only P2 closure** (`cb5f2390`, `deepseek/deepseek-flash:high`): make
-  `open:black` terminal within a batch, cancel leftovers when the watcher exits without
-  `ui-done` under `--leave-running`, and lock the three section vocabularies with a test;
-  marker-polling cost deferred. No phone use in that chunk. Report left in the build area at
+  **P2 closure HOST IMPLEMENTED in one commit on `ca2299c`, review PENDING; not phone
+  verified** (`cb5f2390`, `deepseek/deepseek-flash:high`): closes the review's first three
+  P2s host-only. `open:black` now ends the batch: the dev queue's terminal predicate refuses
+  it unless it is the last action, the driver shows it there and cancels as a handoff, and
+  `pp ui` refuses it before launch when any action, `--controls`, `--settings`, `--verify` or
+  `--play` would follow it; black-last reports `cancelled: black screen shown…` and exits
+  nonzero, so no action, press or step ack can follow the screen. A `--leave-running`
+  watcher exit without `ui-done` emits a warning, pushes one bounded nonce-bound cancel
+  marker and reports `confirmed: false`; a `ui-done` exit pushes none, and gameplay is not
+  killed. A host test compares the dev enum, the release copy and `GAME_SECTIONS`: the
+  release copy had really drifted (7 of 11 sections), and it now names the same sections and
+  rows (unreachable dead code, no release behaviour change). Deferred: the per-checkpoint
+  main-actor marker-poll perf note. Focused60, PlayportKit364, quick760 Python/26 C groups,
+  names/secrets clean; dev IPA `5346e740…` verified89/89, no build-record changes, owner
+  edit included/uncommitted. Nothing device-verified. Report at
   `.work/agent-notes/kk-parity/reports/ui-session-safety-p2.md`.
   After its review, ONLY a newly announced quick UI-only batch on the phone: install in
   place, screenshot both target rows, prove cancellation stops input, finish/release, and

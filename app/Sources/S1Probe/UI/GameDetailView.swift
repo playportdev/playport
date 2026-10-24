@@ -643,6 +643,9 @@ private struct GameDetailPage: View {
         #if !PLAYPORT_RELEASE
         return UIDriverGameSection(rawValue: s)?.row(firstOrdering: MemoryOrdering.Setting.allCases[0].rawValue)
         #else
+        // Release has no driver (Dev/ is not in it), so nothing sets pageSection: this copy
+        // is unreachable. It still names the dev enum's sections and rows exactly, so a
+        // section added there is added here too (tools/tests/test_ui.py compares them).
         switch s {
         case "graphics": "opt:aspect"
         case "controls": "opt:layout"
@@ -650,6 +653,9 @@ private struct GameDetailPage: View {
         case "files": "opt:files"
         case "developer", "ordering": "opt:ordering-\(MemoryOrdering.Setting.allCases[0].rawValue)"
         case "steam": "opt:steamAPI"
+        case "gyro", "controller": nil
+        case "runtime": "opt:runtime"
+        case "graphicsoptions": "opt:graphicsOptions"
         default: nil
         }
         #endif

@@ -53,6 +53,8 @@ best-effort and reported as unconfirmed; transport loss/SIGKILL can leave cancel
                          the ringed one, pad:b goes back a page.
                          open:black shows Settings › Developer › Black screen (pure black, lowest
                          brightness; a tap or any button wakes it; pp phone unattended).
+                         open:black ends the batch: the black screen is a handoff, so no
+                         action, press or step follows it, and it must be the last action.
                          In Settings up and down move along its list and show each section, right
                          goes into it, left and B come back, B on the list closes Settings;
                          pad:left/right change a Graphics value.
@@ -727,6 +729,12 @@ def parse(argv=None):
             target, section = x[5:].split("#", 1)
             if target not in ("settings", "licences") and section not in GAME_SECTIONS:
                 p.error(f"{x!r}: unknown Game options section; choose " + ", ".join(GAME_SECTIONS))
+    # The black screen hands the screen over: the app ends the batch there, so no action,
+    # press or step may follow it (and --controls/--settings/--verify/--play append actions).
+    black = [i for i, x in enumerate(a.action) if x == "open:black"]
+    if black and (black != [len(a.action) - 1] or a.controls or a.settings or a.verify or a.play):
+        p.error("open:black ends the batch: no action, press or step follows the black screen, "
+                "so it must be the last action")
     seq = a.action + [f"play:{a.play}"] * bool(a.play)
     pad = pad_after_play(seq)
     if pad:
@@ -811,12 +819,15 @@ def main(argv=None, launched=None):
     phone = phonelib.Phone(out, dry=a.dry_run, events=ev)
     nonce = secrets.token_hex(4)
     shots_taken = {"n": 0}
+    ui_done = {"seen": None}
 
     def on_event(e):
         if phonelib.until_matches(a.until_spec, e):
             until_hit["seen"] = True
         if e.get("event") == "title-done":
             title_end.update(e)
+        if e.get("event") == "ui-done":
+            ui_done["seen"] = e
         if a.shot_each_action and e.get("event") == "ui-action":
             def cancelled_step():
                 # These are app-local events, NOT proof of the OS foreground recipient.
@@ -896,6 +907,19 @@ def main(argv=None, launched=None):
                                               None if a.dry_run else phone.system_alert)
             ev("stop", why=why, after_s=round(time.monotonic() - t0, 1),
                **({"bound": STOP_BOUND[why]} if why in STOP_BOUND else {}))
+            # --leave-running with no finished batch would let the app run the queued actions
+            # unsupervised. Request ONE bounded, nonce-bound cancellation (best-effort: not
+            # proof the app consumed it); a ui-done exit is left exactly as it was.
+            cancellation = None
+            if a.leave_running and why not in ("done", "exited") and ui_done["seen"] is None:
+                ev("warning", message="the run stopped with queued input unfinished and the app left "
+                                      "running; requesting one best-effort cancellation for this batch "
+                                      "(unconfirmed)")
+                try:
+                    cancellation = request_batch_cancel(phone, out, nonce, ev)
+                except (phonelib.PhoneError, OSError) as error:
+                    cancellation = {"delivery": "failed", "confirmed": False, "error": str(error)}
+                    ev("warning", message=f"the cancellation request could not be delivered: {error}")
             if a.shot and why in ("until", "done", "alert"):
                 p = phone.screenshot(os.path.join(out, "screen-stop.png"))
                 ev("screenshot", path=p, at="stop")
@@ -920,6 +944,7 @@ def main(argv=None, launched=None):
             band = band_of(timeline)
             reached = (why == "done") if a.until_spec[0] == "done" else (until_hit["seen"] or why == "until")
             end = dict(out=out, until=a.until, until_reached=reached, timeline=marks, ipa_sha256=(rec or {}).get("ipa_sha256"),
+                       **({"cancellation": cancellation} if cancellation else {}),
                        **({"selfcheck": check} if check else {}),
                        **({"pool": pool} if pool else {}),
                        **({"limits": limits} if limits else {}),

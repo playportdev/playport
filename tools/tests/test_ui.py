@@ -8,6 +8,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -69,6 +70,71 @@ class UiEnvTest(unittest.TestCase):
             m.parse(["--action", "open:app-367520#nope"])
         self.assertIn("open:ID#runtime", m.__doc__)
         self.assertIn("open:ID#graphicsoptions", m.__doc__)
+
+    def test_open_black_is_the_last_action_only(self):
+        """The black screen is a terminal handoff: no action, press or step follows it."""
+        m = load()
+        for argv, expected in ((["--action", "open:black"], ["open:black"]),
+                               (["--action", "open:home", "--action", "open:black"],
+                                ["open:home", "open:black"])):
+            self.assertEqual(m.parse(argv).action, expected)
+        for argv in (["--action", "open:black", "--action", "open:home"],
+                     ["--action", "open:black", "--action", "open:black"],
+                     ["--action", "open:black", "--play", "app-367520"],
+                     ["--action", "open:black", "--verify", "app-367520"],
+                     ["--action", "open:black", "--settings", 'app-367520:{"frameLimit":30}']):
+            with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+                m.parse(argv)
+        self.assertIn("open:black ends the batch", m.__doc__)
+
+    @staticmethod
+    def normalize_row(target):
+        # Both copies interpolate the ordering row's first setting; compare the shape.
+        return re.sub(r"\\\([^)]*\)", "{first}", target.strip())
+
+    def dev_sections(self):
+        """The dev-only enum's real case list and each case's row target."""
+        path = os.path.join(TOOLS, "..", "app", "Sources", "S1Probe", "Dev", "UIDriverGameSection.swift")
+        with open(path) as f:
+            text = f.read()
+        declared = re.search(r"enum UIDriverGameSection: String, CaseIterable \{\n\s*case ([a-z, ]+)\n", text)
+        self.assertIsNotNone(declared, "the dev enum's case list moved: update this test")
+        cases = [n.strip() for n in declared.group(1).split(",")]
+        rows = {}
+        for case in re.finditer(r"^\s*case ((?:\.\w+)(?:, \.\w+)*): (.+)$", text, re.M):
+            for name in case.group(1).split(","):
+                rows[name.strip().lstrip(".")] = self.normalize_row(case.group(2))
+        return cases, rows
+
+    def release_sections(self):
+        """The `firstRow(ofSection:)` release copy's real section names and row targets."""
+        path = os.path.join(TOOLS, "..", "app", "Sources", "S1Probe", "UI", "GameDetailView.swift")
+        with open(path) as f:
+            text = f.read()
+        function = re.search(r"private static func firstRow\(ofSection s: String\) -> String\? \{\n(.*?)\n    \}\n",
+                             text, re.S)
+        self.assertIsNotNone(function, "firstRow(ofSection:) moved or was removed: update this test")
+        guarded = function.group(1).split("#else")
+        self.assertEqual(len(guarded), 2, "firstRow lost its #if !PLAYPORT_RELEASE / #else split")
+        rows = {}
+        for case in re.finditer(r'^\s*case ((?:"[^"]+"(?:, "[^"]+")*)): (.+)$', guarded[1], re.M):
+            for name in re.findall(r'"([^"]+)"', case.group(1)):
+                rows[name] = self.normalize_row(case.group(2))
+        return rows
+
+    def test_the_three_section_vocabularies_agree(self):
+        """Dev enum, release copy and pp ui's set: same members, same row per section."""
+        m = load()
+        cases, dev = self.dev_sections()
+        release = self.release_sections()
+        self.assertGreaterEqual(len(cases), 7, "the dev enum parse found too few sections")
+        self.assertEqual(len(cases), len(set(cases)), "duplicate section in the dev enum")
+        self.assertEqual(set(cases), set(dev), "a dev case has no row target")
+        self.assertEqual(len(dev), len(release), "the release copy names different sections than the dev enum")
+        self.assertEqual(dev, release, "a section's target row drifted between the dev enum and the release copy")
+        self.assertEqual(len(m.GAME_SECTIONS), len(set(m.GAME_SECTIONS)),
+                         "duplicate section in pp ui's GAME_SECTIONS")
+        self.assertEqual(set(m.GAME_SECTIONS), set(cases), "pp ui and the dev enum name different sections")
 
     def test_open_names_the_gamepad_screens_and_pad_presses_buttons(self):
         m = load()
@@ -703,7 +769,8 @@ class UntilReached(unittest.TestCase):
         def crashes(self, *a, **k): return []
 
     def run_ui(self, argv, events, why="done", interrupt=None):
-        """main_recorded's result event and exit code with the app events replayed."""
+        """main_recorded's result event and exit code with the app events replayed.
+        self.last_events holds every JSON event line, for warnings and cancel requests."""
         m = load()
         import phonelib
         done = next((e for e in events if e.get("event") in ("title-done", "ui-done")), None)
@@ -714,7 +781,10 @@ class UntilReached(unittest.TestCase):
             for e in events:
                 on_event(e)
                 is_done(e)
-            return (why, done) if done else ("until", None)
+            # A stop other than "done" leaves no terminal app event (a play-last run's
+            # ui-done is seen but does not end the watch).
+            terminal = done if done and why == "done" else None
+            return (why, terminal) if terminal else (why if why != "done" else "until", None)
         saved = (phonelib.Phone, phonelib.watch_launch, phonelib.installed_check, phonelib.device_lock, m.LAST_PLAY)
         out = io.StringIO()
         with tempfile.TemporaryDirectory() as d:
@@ -729,7 +799,8 @@ class UntilReached(unittest.TestCase):
             finally:
                 phonelib.Phone, phonelib.watch_launch, phonelib.installed_check, phonelib.device_lock = saved[:4]
             recorded = os.path.exists(m.LAST_PLAY)
-        result = json.loads(out.getvalue().strip().splitlines()[-1])
+        self.last_events = [json.loads(line) for line in out.getvalue().splitlines() if line.strip()]
+        result = self.last_events[-1]
         return code, result, recorded
 
     CLEAN = {"event": "title-done", "outcome": "ok exit=0x00000000"}
@@ -800,6 +871,85 @@ class UntilReached(unittest.TestCase):
             self.assertEqual(phone.step_remotes, ["Documents/ui-step-" + phone.nonce + "-1"])
         finally:
             phone.current_events = []; phone.calls = []; phone.cancel_on_shot = False
+
+    def test_watcher_exit_with_an_unfinished_batch_requests_one_cancel(self):
+        """--leave-running with queued input left: one bounded, unconfirmed cancel request."""
+        phone = self.FakePhone
+        try:
+            phone.calls = []
+            code, result, _ = self.run_ui(["--action", "open:home", "--leave-running",
+                                           "--until", "first-frame+10"], [self.FRAME], why="until")
+            self.assertEqual((code, result["ok"]), (0, True))
+            self.assertEqual(result["cancellation"], {"delivery": "pushed", "confirmed": False})
+            # The one device call is the marker; no action, screenshot or step was added.
+            self.assertEqual(phone.calls, [("Documents/ui-cancel-" + phone.nonce, 10)])
+            requests = [e for e in self.last_events if e.get("event") == "ui-cancel-request"]
+            self.assertEqual(len(requests), 1)
+            self.assertEqual((requests[0]["delivery"], requests[0]["confirmed"]), ("pushed", False))
+            warnings = [e for e in self.last_events if e.get("event") == "warning"
+                        and "queued input" in e["message"]]
+            self.assertEqual(len(warnings), 1)
+            self.assertIn("unfinished", warnings[0]["message"])
+        finally:
+            phone.calls = []
+
+    def test_watcher_exit_after_ui_done_pushes_no_cancel(self):
+        phone = self.FakePhone
+        try:
+            phone.calls = []
+            code, result, _ = self.run_ui(["--action", "open:home", "--leave-running"],
+                                          [{"event": "ui-done", "outcome": "ok actions=1"}])
+            self.assertEqual((code, result["ok"]), (0, True))
+            self.assertNotIn("cancellation", result)
+            self.assertEqual(phone.calls, [])
+            self.assertFalse(any(e.get("event") == "ui-cancel-request" for e in self.last_events))
+        finally:
+            phone.calls = []
+
+    def test_watcher_exit_after_a_play_last_ui_done_pushes_no_cancel(self):
+        """A --play smoke check leaves the game running; its finished queue gets no marker."""
+        phone = self.FakePhone
+        try:
+            phone.calls = []
+            code, result, _ = self.run_ui(["--play", "app-1", "--leave-running",
+                                           "--until", "first-frame+10"],
+                                          [{"event": "mark", "what": "first frame"},
+                                           {"event": "ui-done", "outcome": "ok actions=1"}], why="until")
+            self.assertEqual((code, result["ok"]), (0, True))
+            self.assertNotIn("cancellation", result)
+            self.assertEqual(phone.calls, [])
+        finally:
+            phone.calls = []
+
+    def test_watcher_cancel_delivery_failure_is_reported_unconfirmed(self):
+        phone = self.FakePhone
+        try:
+            phone.calls = []
+            phone.cancel_push_failed = True
+            code, result, _ = self.run_ui(["--action", "open:home", "--leave-running",
+                                           "--until", "first-frame+10"], [self.FRAME], why="until")
+            self.assertEqual(code, 0)
+            self.assertEqual(result["cancellation"]["delivery"], "failed")
+            self.assertFalse(result["cancellation"]["confirmed"])
+            self.assertEqual(len(phone.calls), 1)
+            warnings = [e for e in self.last_events if e.get("event") == "warning"]
+            self.assertEqual(len([e for e in warnings if "queued input" in e["message"]]), 1)
+            self.assertEqual(len([e for e in warnings if "could not be delivered" in e["message"]]), 1)
+        finally:
+            phone.calls = []
+            phone.cancel_push_failed = False
+
+    def test_watcher_exit_without_leave_running_pushes_no_cancel(self):
+        phone = self.FakePhone
+        try:
+            phone.calls = []
+            code, result, _ = self.run_ui(["--action", "open:home", "--until", "first-frame+10"],
+                                          [self.FRAME], why="until")
+            self.assertEqual(code, 0)
+            self.assertNotIn("cancellation", result)
+            self.assertEqual(phone.calls, [])
+        finally:
+            phone.calls = []
 
     def test_last_play_needs_a_launched_play(self):
         _, _, recorded = self.run_ui(["--action", "open:settings"], [{"event": "ui-done", "outcome": "ok"}])

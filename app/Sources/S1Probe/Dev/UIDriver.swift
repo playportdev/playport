@@ -84,7 +84,8 @@
 //                              whose name starts with it, ignoring case (`open:licences#wine`;
 //                              UI/LicencesView.swift)
 //                              `open:black` shows Settings › Developer › Black screen
-//                              (BlackScreen.swift), as its row does
+//                              (BlackScreen.swift), as its row does; it is a terminal
+//                              handoff, so it must be the last action (nothing follows it)
 //   probe:native-auth           Settings' synthetic native GSS probe, no real credentials
 //   probe:helper-exit | probe:helper-kill [-hold]
 //                              Settings' helper-lifetime probe (HelperLifetimeProbe.swift):
@@ -307,7 +308,7 @@ enum UIDriver {
                     }
                 }
             }
-            try await batch.run(actions, perform: { i, action in
+            try await batch.run(actions, terminal: { $0 == "open:black" }, perform: { i, action in
                 let done = i
                 remaining = Array(actions[(i + 1)...])
                 let parts = action.split(separator: ":", maxSplits: 1).map(String.init)
@@ -415,7 +416,12 @@ enum UIDriver {
                         return finish("action=\(action) refused: unknown Game options section \(parts[1])")
                     }
                     if parts.first == "black" {
+                        // The black screen is a terminal handoff: it ends the batch, so no
+                        // action, press or step ack can follow the screen the owner left.
                         BlackScreen.shared.show()
+                        batch.cancel("black screen shown; the batch ended and no input follows "
+                                     + "(new session required)")
+                        return
                     } else if parts.first == "licences" {
                         var pages: [LicencePage] = []
                         if parts.count > 1 {

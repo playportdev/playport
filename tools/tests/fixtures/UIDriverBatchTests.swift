@@ -107,6 +107,42 @@ struct UIDriverBatchTests {
             }, acknowledge: { n, _ in acks.append(n) }, step: { _ in })
         } catch { failures.append("explicit end") }
         check(actions == ["refused"] && acks.isEmpty, "explicit end drops queue")
+        // A terminal handoff action (open:black) must be the last: before anything runs,
+        // and with no action, press, ack or step after the screen is handed over.
+        active = true; ticks = 0; batch = make(); batch.sceneChanged(active: true); wake = {}
+        actions = []; acks = []; var cancels = 0
+        batch.onCancel = { _ in cancels += 1 }
+        do {
+            try await batch.run(["open:black", "open:home"], terminal: { $0 == "open:black" },
+                                perform: { _, action in actions.append(action) },
+                                acknowledge: { n, _ in acks.append(n) }, step: { _ in })
+            failures.append("a terminal action before the last one did not end the batch")
+        } catch {}
+        check(actions.isEmpty, "terminal action refused before it ran")
+        check(acks.isEmpty && cancels == 1 && batch.ended && batch.failure?.contains("last action") == true,
+              "terminal action not last is one terminal refusal")
+        batch = make(); ticks = 0; batch.sceneChanged(active: true)
+        actions = []; acks = []; cancels = 0
+        batch.onCancel = { _ in cancels += 1 }
+        do {
+            try await batch.run(["open:home", "open:black"], terminal: { $0 == "open:black" },
+                                perform: { _, action in
+                                    actions.append(action)
+                                    if action == "open:black" { batch.cancel("black screen shown") }
+                                },
+                                acknowledge: { n, _ in acks.append(n) }, step: { _ in })
+        } catch {}   // the terminal cancel ends the run by throwing
+        check(actions == ["open:home", "open:black"] && acks == [1], "terminal last: earlier actions only")
+        check(cancels == 1 && batch.ended && batch.failure == "black screen shown",
+              "terminal last is one handoff, with no ack or step after it")
+        batch = make(); ticks = 0; batch.sceneChanged(active: true)
+        actions = []; acks = []
+        do {
+            try await batch.run(["open:home"], terminal: { $0 == "open:black" },
+                                perform: { _, action in actions.append(action) },
+                                acknowledge: { n, _ in acks.append(n) }, step: { _ in })
+        } catch { failures.append("terminal-free batch: \(error)") }
+        check(actions == ["open:home"] && acks == [1], "a batch without a terminal action is unaffected")
         // Real DriverContinuation save/drop, with a simulated process-replacement window.
         let continuation = WineHostRuntime.documents.appendingPathComponent("ui-continue.json")
         for loss in ["none", "inactive", "host-cancel"] {
