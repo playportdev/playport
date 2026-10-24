@@ -150,7 +150,8 @@ all numbers below are the supervisor's own reruns on this working tree.
   `F_SETFL, flags | O_NONBLOCK` on success and `F_SETFL, O_NONBLOCK` on failure.
   Unknown flags (including append) cannot be preserved on that fallback, and the
   emitter still rejects a non-append regular sink, so the diagnostic stays
-  fail-closed. The patch body and `Subject` describe both paths; the tree
+  fail-closed. The patch body and code comment describe both paths (the `Subject` is
+  unchanged and still accurate); the tree
   reconstructs from the series (`madeira-unix: 189 patches on c3b84da17ae2` →
   `f5dc1468`).
 - **Red before, green after.** The old test had encoded the P2 as expected
