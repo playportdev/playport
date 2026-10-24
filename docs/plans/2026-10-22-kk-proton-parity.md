@@ -298,8 +298,16 @@ The supervisor keeps this section.
   uncommitted, not exact committed-source; no build-record changes. Owner file/diff hashes
   unchanged/unstaged.
   No device commands or games observed; no old script/native append-flag fix/measurement.
-  Independent review first; ONLY if separately approved, a newly announced focused UI-only
-  batch for both target rows/cancellation proof. No phone authority in this host chunk.
+  **Independent review ACCEPT** (`801119ae`, report left in the build area at
+  `.work/agent-notes/kk-parity/reports/ui-session-safety-review.md`) with four report-only P2s.
+  **Running host-only P2 closure** (`cb5f2390`, `deepseek/deepseek-flash:high`): make
+  `open:black` terminal within a batch, cancel leftovers when the watcher exits without
+  `ui-done` under `--leave-running`, and lock the three section vocabularies with a test;
+  marker-polling cost deferred. No phone use in that chunk. Report left in the build area at
+  `.work/agent-notes/kk-parity/reports/ui-session-safety-p2.md`.
+  After its review, ONLY a newly announced quick UI-only batch on the phone: install in
+  place, screenshot both target rows, prove cancellation stops input, finish/release, and
+  never black-then-input. No gameplay or measurement.
   Supervisor independently checked saved producer0 and both raw missing-append markers;
   checkpoint accepted for host preparation only. Report left in the build area at
   `.work/agent-notes/kk-parity/reports/a0-emission-reason-device.md`.
