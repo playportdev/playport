@@ -258,11 +258,17 @@ The supervisor keeps this section.
   [Host evidence](../evidence/2026-10-24-descriptor-emission-reasons-host.md).
   No sink bypass, runtime fix inferred or schema loosening.
   Report left in the build area at `.work/agent-notes/kk-parity/reports/a0-emission-reasons.md`.
-  **Running: ONE separately authorized DXVK-on diagnostic capture**, child `a093a577`
-  (`openai-codex/gpt-6.1-sol:high`), exact `aa32a361…`
-  upgraded in place, first-frame+10 maximum. Check current setup, stop on person-needed
-  failure; no repeat, second route, save input, measurement or implementation. Preserve full
-  raw failure reasons/strict parse, restore diagnostics/settings and explicit black/release.
+  **Diagnostic worker PAUSED on owner reclaim**, child `a093a577`
+  (`openai-codex/gpt-6.1-sol:high`), exact `aa32a361…`. Interrupted during UI restoration;
+  saved capture/results under `.work/agent-notes/kk-parity/emission-device-*` await a host-only
+  checkpoint. Host lock verified available after interruption; final screen/lower controls
+  not reconfirmed. Do not resume the queued restoration script.
+  **Owner returned the phone with new UI-session rules (PLA-440):** follow AGENTS.md's
+  UI-session procedure. Prepare missing semantic `pp ui` paths host-side before UI work;
+  no generic pad scrolling, direct input scripts or black-screen interlude followed by input.
+  Quick, announced UI-only sessions have no arbitrary time cap; this is not a gameplay limit.
+  Next: host-only saved-result checkpoint and deterministic-route preparation, then an
+  explicitly announced UI batch if needed. No extra game play/save/human measurement.
   Report left in the build area at `.work/agent-notes/kk-parity/reports/a0-emission-reason-device.md`.
   Human gameplay still waits for owner handoff.
   No save automation/new slot authorized. No sampler
