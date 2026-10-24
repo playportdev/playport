@@ -244,7 +244,8 @@ The supervisor keeps this section.
   imports match the iOS target, first banner fits483 bytes maximum; recorded stamp/cap
   explanations contradicted, but actual failed syscall/branch remains unknown. Report left
   in the build area at `.work/agent-notes/kk-parity/reports/a0-native-emission-diagnosis.md`.
-  **Running next: host-only reason-coded native failure poison**, minimal Mesa follow-up,
+  **Running: host-only reason-coded native failure poison**, child `2f0adb90`
+  (`openai-codex/gpt-6.1-sol:high`), minimal Mesa follow-up,
   actual-emitter RED/GREEN tests, unchanged strict-parser rejection, build and independent
   review. No sink bypass, runtime fix inferred, schema loosening or phone command authorized.
   Report left in the build area at `.work/agent-notes/kk-parity/reports/a0-emission-reasons.md`.
