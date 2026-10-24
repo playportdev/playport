@@ -244,11 +244,11 @@ The supervisor keeps this section.
   imports match the iOS target, first banner fits483 bytes maximum; recorded stamp/cap
   explanations contradicted, but actual failed syscall/branch remains unknown. Report left
   in the build area at `.work/agent-notes/kk-parity/reports/a0-native-emission-diagnosis.md`.
-  **Host-only reason-coded native failure poison implemented** (`634e70d`); independent
-  reviewer `91b0b6eb` running, not device verified (writer `2f0adb90`, PLA-431).
+  **Host-only reason-coded native failure poison ACCEPT** (`634e70d`), independent
+  reviewer `91b0b6eb` found no issues (writer `2f0adb90`, PLA-431).
   Review report left in the build area at
   `.work/agent-notes/kk-parity/reports/a0-emission-reasons-review.md`;
-  parent matrix rerun running (`supervisor-emission-reasons.log` under those notes).
+  parent matrix rerun passed (`supervisor-emission-reasons.log` under those notes).
   Mesa0124 changes only kk_debug.c,
   preserves0121–0123, sink rules/latch/one best-effort poison and unchanged strict parser.
   Actual0123 RED missing stage; expanded actual-emitter GREEN/full host suite,
@@ -256,9 +256,13 @@ The supervisor keeps this section.
   Real Darwin compilation bounds poison376<=512 bytes. Verified unsigned dev IPA
   `aa32a361…`89/89, not installed; no build-record changes, owner UI included/uncommitted.
   [Host evidence](../evidence/2026-10-24-descriptor-emission-reasons-host.md).
-  No sink bypass, runtime fix inferred, schema loosening or phone command authorized.
+  No sink bypass, runtime fix inferred or schema loosening.
   Report left in the build area at `.work/agent-notes/kk-parity/reports/a0-emission-reasons.md`.
-  The bounded retry is stopped; a future single diagnostic capture needs separate clearance.
+  **Running: ONE separately authorized DXVK-on diagnostic capture**, exact `aa32a361…`
+  upgraded in place, first-frame+10 maximum. Check current setup, stop on person-needed
+  failure; no repeat, second route, save input, measurement or implementation. Preserve full
+  raw failure reasons/strict parse, restore diagnostics/settings and explicit black/release.
+  Report left in the build area at `.work/agent-notes/kk-parity/reports/a0-emission-reason-device.md`.
   Human gameplay still waits for owner handoff.
   No save automation/new slot authorized. No sampler
   redesign, CPU-clock bridge or descriptor implementation approved. Checkpoint `634e70d`;
