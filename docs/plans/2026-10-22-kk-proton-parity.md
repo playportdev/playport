@@ -170,6 +170,15 @@ supervisor-sourced, and the record does not certify a clean-source build at
 either run HEAD. Note for later: the D3D12 `pull/run-events.jsonl` is cumulative
 (two nonces; its own begins at line 23), so later event reading must filter by
 nonce. Report `.work/agent-notes/kk-parity/reports/gate-phone-review.md`.
+- **A0 human run not taken (2026-10-24):** the owner could not play, so the
+  `pp perf --secs 300` run started for A0 ended as a **menu-only** profile
+  (`.work/perf-runs/a0-descriptor-human-dxvk-20261024`, `ok:true`, screenshot at
+  `first-frame+290`; ~25 s of rendered frames, `fps_mean` 55.1 over 7 buckets, no
+  gameplay, no save). It is **not** A0 evidence and is not cited as one; no
+  comparison, attribution or A2 justification follows from it. Session-scoped
+  settings revert at the next launch outside the session; the app was stopped,
+  the lock released, nothing left running (battery 42 %, not charging, 4.1 GB
+  free). A0 still needs an owner played representative workload.
 - **Branch now:** `dev/kk-proton-parity`, recording follows `aa5736c`,
 unmerged/unpushed. **Next in the queue: A0 interpretation** (earlier menu profile
 said descriptor cost ≈0.086 %/0.050 % of samples, judged INSUFFICIENT), then
