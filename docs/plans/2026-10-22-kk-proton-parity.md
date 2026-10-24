@@ -300,8 +300,10 @@ The supervisor keeps this section.
   No device commands or games observed; no old script/native append-flag fix/measurement.
   **Independent review ACCEPT** (`801119ae`, report left in the build area at
   `.work/agent-notes/kk-parity/reports/ui-session-safety-review.md`) with four report-only P2s.
-  **P2 closure HOST IMPLEMENTED in one commit on `ca2299c`, review PENDING; not phone
-  verified** (`cb5f2390`, `deepseek/deepseek-flash:high`): closes the review's first three
+  **P2 closure HOST IMPLEMENTED in one commit on `ca2299c`, independent re-review ACCEPT
+  (`5df1c978`, report left in the build area at
+  `.work/agent-notes/kk-parity/reports/ui-session-safety-p2-review.md`), PHONE VERIFIED
+  for the routes** (`cb5f2390`, `deepseek/deepseek-flash:high`): closes the review's first three
   P2s host-only. `open:black` now ends the batch: the dev queue's terminal predicate refuses
   it unless it is the last action, the driver shows it there and cancels as a handoff, and
   `pp ui` refuses it before launch when any action, `--controls`, `--settings`, `--verify` or
@@ -314,8 +316,21 @@ The supervisor keeps this section.
   rows (unreachable dead code, no release behaviour change). Deferred: the per-checkpoint
   main-actor marker-poll perf note. Focused60, PlayportKit364, quick760 Python/26 C groups,
   names/secrets clean; dev IPA `5346e740…` verified89/89, no build-record changes, owner
-  edit included/uncommitted. Nothing device-verified. Report at
+  edit included/uncommitted. Report at
   `.work/agent-notes/kk-parity/reports/ui-session-safety-p2.md`.
+  **Phone, 2026-10-24** (IPA `5346e740…`, installed in place, verified89/89): one announced
+  UI-only session, no game and no black screen. `open:app-367520#runtime` and
+  `open:app-367520#graphicsoptions` each ring their existing read-only row
+  (`opt:runtime`, `opt:graphicsOptions`) with the value still `None`, no keyboard, page
+  scrolled to the row; `#graphics` still works; unknown sections still refused. An
+  interrupted `--leave-running` batch pushed exactly one cancel marker carrying that run's
+  nonce and the host reported `confirmed: false`, so the app-side stop is still
+  request-not-confirmed (`ui-verify-cancel-20261024`). One first batch ended
+  `cancelled: task cancelled` before its first action and did not reproduce in four later
+  batches, including a repeat of the same two-action batch; unexplained, recorded, not
+  fixed. Evidence [phone](../evidence/2026-10-24-ui-session-safety-phone.md). Still open:
+  marker-path app confirmation, release variant unbuilt, abrupt-death gaps, deferred
+  marker-poll perf note.
   After its review, ONLY a newly announced quick UI-only batch on the phone: install in
   place, screenshot both target rows, prove cancellation stops input, finish/release, and
   never black-then-input. No gameplay or measurement.
