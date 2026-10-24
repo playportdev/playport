@@ -158,6 +158,18 @@ status above and the old Phone queue emission blocker below. Menu-only launch,
 no gameplay, performance, CPU attribution,
 savings/perturbation or descriptor-buffer benefit claim. A0 justification/A2
 remain gated; old native absence remains unobserved, never zero.
+- **Gate review ACCEPT (2026-10-24):** `9fa5c96` accepted with **no P1/P2**. The
+reviewer reran both parser modes once per current raw (`mixed, exit 2`; 46/49
+usable, 0 rejected; outputs byte-identical to the saved ones), recounted every
+kind directly from the raws, enumerated and rehashed all 42 run files (21 per run,
+including screenshots), rehashed the 559,143,632-byte IPA to `31430e96…`, and
+confirmed the honesty of the limits: mixed comes from the five no-interval
+streams (not a hidden rejection), all nine tails are unknown, the native stream
+has no module field, screenshots show the menu not gameplay, phone state is
+supervisor-sourced, and the record does not certify a clean-source build at
+either run HEAD. Note for later: the D3D12 `pull/run-events.jsonl` is cumulative
+(two nonces; its own begins at line 23), so later event reading must filter by
+nonce. Report `.work/agent-notes/kk-parity/reports/gate-phone-review.md`.
 - **Branch now:** `dev/kk-proton-parity`, recording follows `aa5736c`,
 unmerged/unpushed. **Next in the queue: A0 interpretation** (earlier menu profile
 said descriptor cost ≈0.086 %/0.050 % of samples, judged INSUFFICIENT), then
