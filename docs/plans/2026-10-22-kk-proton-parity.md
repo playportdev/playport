@@ -102,13 +102,32 @@ build (killed), its resume refused on a harness-rule conflict, so the supervisor
 ran the checks and committed — report
 `.work/agent-notes/kk-parity/reports/a0-sink-append-p2.md`. Evidence page updated
 with the P2 closure section.
-- **Running now:** independent review of `1e62c4c` that also writes the missing
-consolidated review report `reports/a0-sink-append-review.md` (the first
-reviewer's verdict — ACCEPT, no P1, the single P2 above — is in
-`logs/review-a0-sink-append.jsonl`; its report file was never written because the
-provider hit a usage limit). **Device gate deferred: the owner needs the phone.**
-No install, play or measurement until they say it is free; A0 justification and
-A2 remain gated.
+- **A0 sink/append independent review ACCEPT (2026-10-24):** `1e62c4c` accepted,
+no new P1/P2; the earlier P2 is closed. Consolidated report
+`.work/agent-notes/kk-parity/reports/a0-sink-append-review.md` (the first
+reviewer's verdict recovered from `logs/review-a0-sink-append.jsonl`, as its own
+report file was lost to a provider usage limit). The reviewer reproduced the
+red-before/green-after itself (red aborts at `assert(current & O_NONBLOCK)` with
+`append=1 nonblock=0 setfl_calls=0`; green has one SETFL per path, latch 1, 0
+record writes, 1 poison, 0 future writes), reran the **38 seeded** focused cases
+and the **34** parser fixtures (140 subtests), replayed every series diff from the
+pinned blobs into scratch (server `f5dc1468`, mesa `960d4ec`) and rehashed both
+retained IPAs and the archive row, and audit-found no stray files, modes,
+gitlinks, home paths or pin movement. Its only finding was editorial (the 0221
+`Subject` did not change; body/comments did) — corrected in `a887a69`. Full
+suite, quick suite and build are corroborated from the supervisor's logs, not
+rerun by the reviewer. **Device gate acceptance criteria** it endorses: retain the
+whole raw and strict-parser result, and observe the native banner, **16
+calibration rows and complete 10-row native captures**, or retain the new
+sink-identifying poison as diagnostic failure evidence (never a measurement
+pass). Old native absence stays unobserved, never zero.
+- **Branch now:** `dev/kk-proton-parity`, HEAD `a887a69` (after the P2 closure),
+clean, unmerged/unpushed. **Next in the queue: the device gate, which waits for
+the owner to hand back the phone** — nothing installed, played or measured until
+then. After it: interpret A0 (menu profile said descriptor cost ≈0.086 %/0.050 %
+of samples, INSUFFICIENT) and decide defer versus representative workload; A2–A4
+remain unstarted and gated. PLA-440 leftovers (release variant, marker-path app
+confirmation, abrupt-death gaps) are the independent alternative.
 Model pair for this invocation, reconfirmed 2026-10-24: hard and easy both
 `openai-codex/gpt-6.1-sol:high` (one transient "usage limit reached" was retried
 successfully, not replaced by a fallback).
