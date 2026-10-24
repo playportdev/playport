@@ -258,20 +258,32 @@ The supervisor keeps this section.
   [Host evidence](../evidence/2026-10-24-descriptor-emission-reasons-host.md).
   No sink bypass, runtime fix inferred or schema loosening.
   Report left in the build area at `.work/agent-notes/kk-parity/reports/a0-emission-reasons.md`.
-  **Diagnostic worker PAUSED on owner reclaim**, child `a093a577`
-  (`openai-codex/gpt-6.1-sol:high`), exact `aa32a361…`. Interrupted during UI restoration;
-  saved capture/results under `.work/agent-notes/kk-parity/emission-device-*` await a host-only
-  checkpoint. Host lock verified available after interruption; final screen/lower controls
-  not reconfirmed. Do not resume the queued restoration script.
-  **Owner returned the phone with new UI-session rules (PLA-440):** follow AGENTS.md's
-  UI-session procedure. Prepare missing semantic `pp ui` paths host-side before UI work;
-  no generic pad scrolling, direct input scripts or black-screen interlude followed by input.
-  Quick, announced UI-only sessions have no arbitrary time cap; this is not a gameplay limit.
-  **Running host-only checkpoint**, resumed child `8fae9cc2` (same confirmed model):
-  saved results, interrupted-restoration limits and missing semantic-route identification.
-  No device commands or old-script resume authorized. Next: deterministic-route preparation,
-  then an explicitly announced UI batch if needed. No extra game play/save/human measurement.
-  Report left in the build area at `.work/agent-notes/kk-parity/reports/a0-emission-reason-device.md`.
+  **ONE diagnostic capture completed before restoration interruption**, child `a093a577`
+  (`openai-codex/gpt-6.1-sol:high`); host-only checkpoint by resumed child `8fae9cc2`.
+  Exact `aa32a361…` upgraded in place/container kept, first-frame+10 finalok/exit0; saved
+  shot black, not menu proof. Raw14705/18583: **stage=missing-append**, rowlen454,
+  mode33188 (regular0100644), flags65541 (0x10005 lacks Darwin O_APPEND0x8).
+  Successful fstat/F_GETFL, rejection before banner write/calibration; no syscall errno,
+  pipe query or write attempt available. Underlying fd/flag cause NOT established or fixed.
+  Strict JSON/text exit1:0 usable,20 rejected intervals,21 complete36-row DXVK captures
+  rejected,2 malformed source poisons; native banner/calibration/work UNOBSERVED, not zero.
+  [Diagnostic evidence](../evidence/2026-10-24-descriptor-emission-reason-device.md).
+  Saved undo/options/diagnostics confirm args/options/runtime own valuesNone, default
+  Vulkan720/60, sampling/pass/capture/validationoff, countersnormal/HUDoff at those instants.
+  **Restoration INTERRUPTED on owner reclaim:** confirmation lacks final result; its last
+  screenshot shows another foreground app, not black. Earlier black followed by input was
+  not a safe handoff; owner reported cross-app input, specific recipient not independently
+  established. Host lock subsequently verified free by supervisor; final screen/settings/
+  power/free-space unconfirmed. No worker UI session active or device command on resumption.
+  **PLA-440:** preserve AGENTS.md's quick, announced, focused UI-only session rules, no
+  arbitrary time cap or gameplay limit. No black interlude then input, improvised scrolling,
+  direct input or automatic relaunch on foreground loss/owner reclaim. Next is host-only
+  deterministic route/safety preparation: proposed `#runtime`/`#graphicsoptions` focus/scroll
+  targets in GameDetailView, plus active-state/queue cancellation checks and host tests;
+  not implemented here. No device commands, resumed old script, extra play/save/human
+  measurement or fix authorized. Any later UI batch needs explicit announced authorization.
+  Independent checkpoint review pending; report left in the build area at
+  `.work/agent-notes/kk-parity/reports/a0-emission-reason-device.md`.
   Human gameplay still waits for owner handoff.
   No save automation/new slot authorized. No sampler
   redesign, CPU-clock bridge or descriptor implementation approved. Checkpoint `634e70d`;
