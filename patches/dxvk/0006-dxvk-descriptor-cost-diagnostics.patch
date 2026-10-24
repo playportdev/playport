@@ -1,0 +1,772 @@
+From 94967e6d581ecd6c08c4ad4e1ae0f82cc6a0a917 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kamil=20Postro=C5=BCny?= <kamil@postrozny.pl>
+Date: Fri, 23 Oct 2026 10:37:55 +0200
+Subject: [PATCH] dxvk: scoped descriptor elapsed diagnostics, default off
+
+Track same-thread inclusive/exclusive descriptor regions and separate standalone pool work. Checked raw elapsed clocks and full per-device cumulative snapshots are diagnostics, not CPU attribution or descriptor-buffer enablement.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-10-23-dxvk-descriptor-cost-probe-host.md
+Offered-upstream: no
+---
+ src/dxvk/dxvk_cmdlist.cpp          |   1 +
+ src/dxvk/dxvk_cmdlist.h            |  32 ++-
+ src/dxvk/dxvk_context.cpp          |  13 +-
+ src/dxvk/dxvk_descriptor_pool.cpp  |  45 +++-
+ src/dxvk/dxvk_descriptor_stats.cpp |  76 +++++++
+ src/dxvk/dxvk_descriptor_stats.h   | 344 +++++++++++++++++++++++++++++
+ src/dxvk/dxvk_device.cpp           |  10 +-
+ src/dxvk/dxvk_device.h             |   5 +
+ src/dxvk/meson.build               |   1 +
+ 9 files changed, 517 insertions(+), 10 deletions(-)
+ create mode 100644 src/dxvk/dxvk_descriptor_stats.cpp
+ create mode 100644 src/dxvk/dxvk_descriptor_stats.h
+
+diff --git a/src/dxvk/dxvk_cmdlist.cpp b/src/dxvk/dxvk_cmdlist.cpp
+index 108ce64..a153e4e 100644
+--- a/src/dxvk/dxvk_cmdlist.cpp
++++ b/src/dxvk/dxvk_cmdlist.cpp
+@@ -230,6 +230,7 @@ namespace dxvk {
+ 
+   DxvkCommandList::DxvkCommandList(DxvkDevice* device)
+   : m_device        (device),
++    m_descriptorStats(device->descriptorStats()),
+     m_vkd           (device->vkd()),
+     m_vki           (device->vki()),
+     m_checkpoints   (device->getCheckpointBuffer()) {
+diff --git a/src/dxvk/dxvk_cmdlist.h b/src/dxvk/dxvk_cmdlist.h
+index 38891eb..d629744 100644
+--- a/src/dxvk/dxvk_cmdlist.h
++++ b/src/dxvk/dxvk_cmdlist.h
+@@ -5,6 +5,7 @@
+ #include "dxvk_bind_mask.h"
+ #include "dxvk_buffer.h"
+ #include "dxvk_descriptor.h"
++#include "dxvk_descriptor_stats.h"
+ #include "dxvk_descriptor_heap.h"
+ #include "dxvk_descriptor_pool.h"
+ #include "dxvk_descriptor_worker.h"
+@@ -557,6 +558,17 @@ namespace dxvk {
+     void updateDescriptorSets(
+             uint32_t                      descriptorWriteCount,
+       const VkWriteDescriptorSet*         pDescriptorWrites) {
++      DescriptorScope scope(m_descriptorStats, DescriptorOp::VkUpdate);
++      if (scope) {
++        scope.writes(descriptorWriteCount, 0);
++        for (uint32_t i = 0; i < descriptorWriteCount; i++) {
++          const auto& write = pDescriptorWrites[i];
++          if (write.descriptorType == VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK)
++            scope.writes(0, 0, write.descriptorCount);
++          else
++            scope.writes(0, write.descriptorCount);
++        }
++      }
+       m_vkd->vkUpdateDescriptorSets(m_vkd->device(),
+         descriptorWriteCount, pDescriptorWrites,
+         0, nullptr);
+@@ -566,7 +578,19 @@ namespace dxvk {
+     void updateDescriptorSetWithTemplate(
+             VkDescriptorSet               descriptorSet,
+             VkDescriptorUpdateTemplate    descriptorTemplate,
+-      const void*                         data) {
++      const void*                         data,
++            uint32_t                      descriptorCount = UINT32_MAX) {
++      DescriptorScope scope(m_descriptorStats, DescriptorOp::VkTemplate);
++      if (scope) {
++        scope.sets(1);
++        if (descriptorCount == UINT32_MAX)
++          scope.unknown();
++        else {
++          // Element count is known; template entry count is not retained here.
++          scope.writes(0, descriptorCount);
++          scope.unknown();
++        }
++      }
+       m_vkd->vkUpdateDescriptorSetWithTemplate(m_vkd->device(),
+         descriptorSet, descriptorTemplate, data);
+     }
+@@ -622,6 +646,11 @@ namespace dxvk {
+     void cmdBindDescriptorSets(
+             DxvkCmdBuffer             cmdBuffer,
+       const VkBindDescriptorSetsInfo* info) {
++      DescriptorScope scope(m_descriptorStats, DescriptorOp::VkBind);
++      if (scope) {
++        scope.sets(info->descriptorSetCount);
++        scope.dynamicOffsets(info->dynamicOffsetCount);
++      }
+       m_vkd->vkCmdBindDescriptorSets2KHR(getCmdBuffer(cmdBuffer), info);
+     }
+ 
+@@ -1355,6 +1384,7 @@ namespace dxvk {
+   private:
+     
+     DxvkDevice*               m_device;
++    DescriptorStats*          m_descriptorStats;
+     Rc<vk::DeviceFn>          m_vkd;
+     Rc<vk::InstanceFn>        m_vki;
+ 
+diff --git a/src/dxvk/dxvk_context.cpp b/src/dxvk/dxvk_context.cpp
+index 0939eba..59eb9ca 100644
+--- a/src/dxvk/dxvk_context.cpp
++++ b/src/dxvk/dxvk_context.cpp
+@@ -7112,6 +7112,7 @@ namespace dxvk {
+ 
+   template<VkPipelineBindPoint BindPoint, bool AlwaysTrack>
+   void DxvkContext::updateDescriptorSetsBindings(const DxvkPipelineBindings* layout) {
++    DescriptorScope descriptorScope(m_device->descriptorStats(), DescriptorOp::Prep);
+     constexpr bool TrackBindings = AlwaysTrack || BindPoint == VK_PIPELINE_BIND_POINT_COMPUTE;
+ 
+     DxvkPipelineLayoutType pipelineLayoutType = getActivePipelineLayoutType(BindPoint);
+@@ -7127,6 +7128,12 @@ namespace dxvk {
+     uint32_t baseSetIndex = uint32_t(pipelineLayout->usesSamplerHeap());
+     uint32_t dirtySetMask = layout->getDirtySetMask(pipelineLayoutType, m_descriptorState);
+ 
++    if (descriptorScope) {
++      if (!dirtySetMask)
++        descriptorScope.emptyDirtyMask();
++      descriptorScope.sets(bit::popcnt(dirtySetMask));
++    }
++
+     if (likely(dirtySetMask)) {
+       std::array<VkDescriptorSet, DxvkDescriptorSets::SetCount> sets = { };
+       m_descriptorPool->alloc(m_trackingId, pipelineLayout, dirtySetMask, sets.data());
+@@ -7147,6 +7154,8 @@ namespace dxvk {
+             descriptorWrite.descriptorType = binding.getDescriptorType();
+           }
+ 
++          if (descriptorScope)
++            descriptorScope.prepared(1);
+           auto& descriptorInfo = m_legacyDescriptors.infos[descriptorCount++];
+ 
+           if (binding.isUniformBuffer()) {
+@@ -7290,7 +7299,7 @@ namespace dxvk {
+         if (m_features.test(DxvkContextFeature::DescriptorTemplates)) {
+           m_cmd->updateDescriptorSetWithTemplate(sets[setIndex],
+             pipelineLayout->getDescriptorSetLayout(setIndex)->getSetUpdateTemplate(),
+-            m_legacyDescriptors.infos.data());
++            m_legacyDescriptors.infos.data(), descriptorCount);
+           descriptorCount = 0;
+         }
+       }
+@@ -7326,6 +7335,8 @@ namespace dxvk {
+ 
+     if (BindPoint == VK_PIPELINE_BIND_POINT_GRAPHICS
+      && unlikely(m_flags.all(DxvkContextFlag::GpIndependentSets, DxvkContextFlag::GpDirtySpecDataBlock))) {
++      // Constants and their descriptor plumbing are not a removable opportunity.
++      DescriptorScope excludedScope(m_device->descriptorStats(), DescriptorOp::SpecDataExcluded);
+       DxvkResourceBufferInfo specData = allocateSpecDataBuffer(pipelineLayout);
+       pipelineLayout->writeSpecData(specData.mapPtr, m_state.gp.state.sc.specConstants);
+ 
+diff --git a/src/dxvk/dxvk_descriptor_pool.cpp b/src/dxvk/dxvk_descriptor_pool.cpp
+index 9fb418a..f166eb8 100644
+--- a/src/dxvk/dxvk_descriptor_pool.cpp
++++ b/src/dxvk/dxvk_descriptor_pool.cpp
+@@ -11,10 +11,13 @@ namespace dxvk {
+ 
+ 
+   DxvkDescriptorPool::~DxvkDescriptorPool() {
++    DescriptorScope scope(m_device->descriptorStats(), DescriptorOp::PoolDestroy);
+     auto vk = m_device->vkd();
+ 
+-    for (auto pool : m_pools)
++    for (auto pool : m_pools) {
++      DescriptorScope direct(m_device->descriptorStats(), DescriptorOp::VkPoolDestroy);
+       vk->vkDestroyDescriptorPool(vk->device(), pool.pool, nullptr);
++    }
+ 
+     m_device->addStatCtr(DxvkStatCounter::DescriptorPoolCount,
+       uint64_t(-int64_t(m_pools.size())));
+@@ -41,6 +44,10 @@ namespace dxvk {
+   VkDescriptorSet DxvkDescriptorPool::alloc(
+           uint64_t                  trackingId,
+           VkDescriptorSetLayout     layout) {
++    // Only the leaf overload is timed: callers/overloads do not multiply work.
++    DescriptorScope scope(m_device->descriptorStats(), DescriptorOp::PoolAlloc);
++    if (scope)
++      scope.sets(1);
+     auto vk = m_device->vkd();
+ 
+     VkResult vr = VK_ERROR_OUT_OF_POOL_MEMORY;
+@@ -51,14 +58,27 @@ namespace dxvk {
+     info.descriptorSetCount = 1u;
+     info.pSetLayouts = &layout;
+ 
+-    if (likely(info.descriptorPool))
++    if (likely(info.descriptorPool)) {
++      DescriptorScope direct(m_device->descriptorStats(), DescriptorOp::VkAllocate);
++      if (direct)
++        direct.sets(info.descriptorSetCount);
+       vr = vk->vkAllocateDescriptorSets(vk->device(), &info, &set);
++      if (direct && vr != VK_SUCCESS)
++        direct.failure();
++    }
+ 
+     if (unlikely(vr != VK_SUCCESS)) {
+       m_pool = getNextPool();
+ 
+       info.descriptorPool = m_pool.second.pool;
+-      vr = vk->vkAllocateDescriptorSets(vk->device(), &info, &set);
++      {
++        DescriptorScope direct(m_device->descriptorStats(), DescriptorOp::VkAllocate);
++        if (direct)
++          direct.sets(info.descriptorSetCount);
++        vr = vk->vkAllocateDescriptorSets(vk->device(), &info, &set);
++        if (direct && vr != VK_SUCCESS)
++          direct.failure();
++      }
+ 
+       if (vr != VK_SUCCESS)
+         throw DxvkError(str::format("Failed to allocate descriptor set: ", vr));
+@@ -73,6 +93,7 @@ namespace dxvk {
+ 
+   void DxvkDescriptorPool::notifyCompletion(
+           uint64_t                    trackingId) {
++    DescriptorScope scope(m_device->descriptorStats(), DescriptorOp::PoolRecycle);
+     small_vector<std::pair<size_t, VkDescriptorPool>, 16u> pools;
+ 
+     { std::lock_guard lock(m_mutex);
+@@ -88,8 +109,12 @@ namespace dxvk {
+     if (!pools.empty()) {
+       auto vk = m_device->vkd();
+ 
+-      for (const auto& pool : pools)
+-        vk->vkResetDescriptorPool(vk->device(), pool.second, 0u);
++      for (const auto& pool : pools) {
++        DescriptorScope direct(m_device->descriptorStats(), DescriptorOp::VkReset);
++        VkResult result = vk->vkResetDescriptorPool(vk->device(), pool.second, 0u);
++        if (direct && result != VK_SUCCESS)
++          direct.failure();
++      }
+ 
+       std::lock_guard lock(m_mutex);
+ 
+@@ -158,7 +183,15 @@ namespace dxvk {
+ 
+     VkDescriptorPool pool = VK_NULL_HANDLE;
+ 
+-    VkResult vr = vk->vkCreateDescriptorPool(vk->device(), &info, nullptr, &pool);
++    VkResult vr;
++    {
++      DescriptorScope direct(m_device->descriptorStats(), DescriptorOp::VkPoolCreate);
++      if (direct)
++        direct.sets(info.maxSets);
++      vr = vk->vkCreateDescriptorPool(vk->device(), &info, nullptr, &pool);
++      if (direct && vr != VK_SUCCESS)
++        direct.failure();
++    }
+ 
+     if (vr)
+       throw DxvkError(str::format("Failed create descriptor pool: ", vr));
+diff --git a/src/dxvk/dxvk_descriptor_stats.cpp b/src/dxvk/dxvk_descriptor_stats.cpp
+new file mode 100644
+index 0000000..b01c519
+--- /dev/null
++++ b/src/dxvk/dxvk_descriptor_stats.cpp
+@@ -0,0 +1,76 @@
++#include "dxvk_descriptor_stats.h"
++
++namespace dxvk {
++
++  thread_local std::array<DescriptorScope::State, 32> DescriptorScope::s_stack = {};
++  thread_local DescriptorScope::State* DescriptorScope::s_top = nullptr;
++  thread_local uint64_t DescriptorScope::s_depth = 0;
++
++  DescriptorScope::Entry DescriptorScope::begin(DescriptorStats* stats, DescriptorOp op) noexcept {
++    auto* parent = s_top;
++    bool excluded = op == DescriptorOp::SpecDataExcluded || (parent && parent->excluded);
++    size_t category = excluded ? 2 : (op == DescriptorOp::Prep
++      || (parent && parent->row / DescriptorStats::OpCount == 0) ? 0 : 1);
++    size_t row = DescriptorStats::row(op, category);
++    stats->add(stats->m_entered, 1);
++    stats->work(row, DescriptorStats::Calls, 1);
++    auto depth = s_depth++;
++    if (depth >= s_stack.size()) {
++      stats->work(row, DescriptorStats::NestErrors, 1);
++      if (parent)
++        parent->valid = false;
++      return {nullptr, row};
++    }
++
++    auto* state = &s_stack[depth];
++    *state = {stats, parent, row, 0, 0, 0, std::uncaught_exceptions(), false, !parent, excluded};
++    state->valid = stats->read(state->start);
++    if (parent && (parent->stats != stats || state->start < parent->start)) {
++      state->valid = false;
++      stats->work(row, DescriptorStats::NestErrors, 1);
++      parent->valid = false;
++      parent->stats->work(parent->row, DescriptorStats::NestErrors, 1);
++    }
++    s_top = state;
++    return {state, row};
++  }
++
++  DescriptorScope::EndResult DescriptorScope::end(DescriptorStats* stats, State* state, size_t row) noexcept {
++    uint64_t end = 0;
++    bool ok = state && stats->read(end) && state->valid && end >= state->start;
++    uint64_t elapsed = ok ? end - state->start : 0;
++    ok = ok && state->children <= elapsed && end >= state->lastChildEnd;
++    if (state && std::uncaught_exceptions() > state->exceptions)
++      stats->work(row, DescriptorStats::Failures, 1);
++    if (ok) {
++      stats->work(row, DescriptorStats::TimedCalls, 1);
++      stats->work(row, DescriptorStats::Inclusive, elapsed);
++      stats->work(row, DescriptorStats::Children, state->children);
++      stats->work(row, DescriptorStats::Exclusive, elapsed - state->children);
++      if (state->root)
++        stats->work(row, DescriptorStats::ThreadSumOuter, elapsed);
++      auto& maximum = stats->m_rows[row][DescriptorStats::Max];
++      auto old = maximum.load(std::memory_order_relaxed);
++      while (elapsed > old && !maximum.compare_exchange_weak(old, elapsed, std::memory_order_relaxed)) { }
++    } else {
++      stats->work(row, DescriptorStats::ClockErrors, 1);
++    }
++    if (state) {
++      auto* parent = state->parent;
++      if (parent) {
++        if (!ok || parent->stats != stats || elapsed > UINT64_MAX - parent->children)
++          parent->valid = false;
++        else {
++          parent->children += elapsed;
++          parent->lastChildEnd = end;
++        }
++      }
++      s_top = parent;
++    }
++    --s_depth;
++    stats->work(row, DescriptorStats::Completed, 1);
++    stats->add(stats->m_completed, 1);
++    return {end, ok};
++  }
++
++}
+diff --git a/src/dxvk/dxvk_descriptor_stats.h b/src/dxvk/dxvk_descriptor_stats.h
+new file mode 100644
+index 0000000..c03ffc6
+--- /dev/null
++++ b/src/dxvk/dxvk_descriptor_stats.h
+@@ -0,0 +1,344 @@
++#pragma once
++
++#include "../util/util_time.h"
++
++#include <array>
++#include <atomic>
++#include <limits>
++#include <exception>
++#include <mutex>
++#include <sstream>
++#include <string>
++#if !defined(_WIN32) || defined(__WINE__)
++#include <time.h>
++#include <unistd.h>
++#endif
++
++namespace dxvk {
++
++  // Elapsed diagnostic regions only. These are not CPU clocks or cache inputs.
++  enum class DescriptorOp : uint32_t {
++    Prep, SpecDataExcluded, PoolAlloc, PoolRecycle, PoolDestroy,
++    VkAllocate, VkPoolCreate, VkReset, VkPoolDestroy, VkUpdate, VkTemplate, VkBind, Count
++  };
++
++  struct DescriptorClock {
++    bool (*read)(uint64_t&) noexcept;
++    uint64_t hz;
++    const char* kind;
++
++    static bool monotonicTicks(int64_t seconds, int64_t nanos, uint64_t& ticks) noexcept {
++      if (seconds < 0 || nanos < 0 || nanos >= 1000000000
++       || uint64_t(seconds) > (UINT64_MAX - uint64_t(nanos)) / 1000000000)
++        return false;
++      ticks = uint64_t(seconds) * 1000000000 + uint64_t(nanos);
++      return true;
++    }
++
++    static DescriptorClock platform() noexcept {
++#if defined(_WIN32) && !defined(__WINE__)
++      // Same primitive as util_time.h, but check both Windows return values.
++      static const uint64_t hz = [] {
++        LARGE_INTEGER value = {};
++        return QueryPerformanceFrequency(&value) && value.QuadPart > 0
++          ? uint64_t(value.QuadPart) : uint64_t(0);
++      }();
++      return { [] (uint64_t& ticks) noexcept {
++        LARGE_INTEGER value = {};
++        if (!QueryPerformanceCounter(&value) || value.QuadPart < 0)
++          return false;
++        ticks = uint64_t(value.QuadPart);
++        return true;
++      }, hz, "qpc" };
++#else
++      return { [] (uint64_t& ticks) noexcept {
++        timespec value = {};
++        return !clock_gettime(CLOCK_MONOTONIC, &value)
++          && monotonicTicks(value.tv_sec, value.tv_nsec, ticks);
++      }, 1000000000, "clock_monotonic" };
++#endif
++    }
++  };
++
++  class DescriptorStats;
++
++  class DescriptorScope {
++  public:
++    explicit DescriptorScope(DescriptorStats* stats, DescriptorOp op) noexcept {
++      // The disabled path does not touch diagnostic TLS, clocks or atomics.
++      if (stats) {
++        auto entry = begin(stats, op);
++        m_stats = stats;
++        m_state = entry.state;
++        m_row = entry.row;
++      }
++    }
++    ~DescriptorScope() { finish(); }
++    void finish() noexcept {
++      if (m_stats) {
++        auto result = end(m_stats, m_state, m_row);
++        m_end = result.ticks;
++        m_finishedValid = result.valid;
++        m_stats = nullptr;
++      }
++    }
++    DescriptorScope(const DescriptorScope&) = delete;
++    DescriptorScope& operator=(const DescriptorScope&) = delete;
++
++    explicit operator bool() const noexcept { return m_stats != nullptr; }
++    void sets(uint64_t n) noexcept;
++    void writes(uint64_t records, uint64_t elements, uint64_t bytes = 0) noexcept;
++    void prepared(uint64_t n) noexcept;
++    void dynamicOffsets(uint64_t n) noexcept;
++    void failure() noexcept;
++    void emptyDirtyMask() noexcept;
++    void unknown() noexcept;
++
++  private:
++    friend class DescriptorStats;
++    struct State {
++      DescriptorStats* stats;
++      State* parent;
++      size_t row;
++      uint64_t start, children, lastChildEnd;
++      int exceptions;
++      bool valid, root, excluded;
++    };
++    struct Entry { State* state; size_t row; };
++    struct EndResult { uint64_t ticks; bool valid; };
++    DescriptorStats* m_stats = nullptr;
++    State* m_state = nullptr;
++    size_t m_row = 0;
++    uint64_t m_end = 0;
++    bool m_finishedValid = false;
++    static thread_local std::array<State, 32> s_stack;
++    static thread_local State* s_top;
++    static thread_local uint64_t s_depth;
++
++    static Entry begin(DescriptorStats* stats, DescriptorOp op) noexcept;
++    static EndResult end(DescriptorStats* stats, State* state, size_t row) noexcept;
++  };
++
++  class DescriptorStats {
++  public:
++    using Emit = void (*)(const std::string&);
++    static constexpr size_t OpCount = size_t(DescriptorOp::Count);
++    static constexpr size_t RowCount = OpCount * 3;
++    enum Field : size_t {
++      Calls, Completed, Sets, WriteRecords, WriteElements, WriteBytes, PreparedSlots, DynamicOffsets,
++      Failures, EmptyDirtyMask, WorkUnknown, TimedCalls, Inclusive, Children, Exclusive,
++      Max, ThreadSumOuter, ClockErrors, NestErrors, FieldCount
++    };
++    using Values = std::array<uint64_t, FieldCount>;
++    struct Snapshot {
++      std::array<Values, RowCount> rows = {};
++      uint64_t id = 0, begin = 0, end = 0, submissions = 0;
++      uint64_t enteredBefore = 0, completedBefore = 0, enteredAfter = 0, completedAfter = 0;
++      uint64_t reportErrors = 0;
++      bool clockOk = false, quiescent = false, overflow = false;
++    };
++
++    // A null clock selects the checked platform primitive, only when enabled.
++    DescriptorStats(bool enabled, Emit emit = nullptr, DescriptorClock clock = {}, bool calibrate = true)
++    : m_enabled(enabled), m_emit(emit) {
++      if (!enabled)
++        return;
++      m_clock = clock.read ? clock : DescriptorClock::platform();
++      m_device = increment(s_generation);
++      m_initOk = read(m_init);
++      if (m_emit) {
++        try {
++          m_emit(prefix("enabled") + " schema=1 coverage=legacy_sets clock_kind=" + m_clock.kind
++            + " cpu_clock=unsupported thread_model=summed_same_thread_scopes"
++              " union=outermost_thread_sum exclusive=inclusive_minus_direct_children"
++              " categories=prep,standalone,excluded candidate=sum_prep_category_exclusives_broad_not_fully_removable"
++              " exclusions=spec_data_constants,renderpass,shader,layout_template_lifetime,heap_buffer_paths"
++              " native=separate_uncovered_replay_no_cross_layer_subtraction"
++              " capture=nontransactional active_or_invalid=reject killed_tail=missing"
++              " denominator=client_submission_requests elapsed_includes=waiting,preemption,diagnostics");
++          if (calibrate)
++            calibration();
++        } catch (...) { add(m_reportErrors, 1); }
++      }
++    }
++
++    ~DescriptorStats() { if (m_enabled && m_emit && !m_abandoned) report(true); }
++    DescriptorStats(const DescriptorStats&) = delete;
++    DescriptorStats& operator=(const DescriptorStats&) = delete;
++    DescriptorStats* enabled() noexcept { return m_enabled ? this : nullptr; }
++    void abandon() noexcept { m_abandoned = true; }
++
++    void submission() noexcept {
++      if (!m_enabled)
++        return;
++      add(m_submissions, 1);
++      report(false);
++    }
++
++    // Reports are serialized per device; descriptor scopes never acquire this lock.
++    void report(bool final) noexcept {
++      if (!m_enabled || !m_emit)
++        return;
++      try {
++        std::lock_guard<std::mutex> lock(m_reportMutex);
++        uint64_t now = 0;
++        bool ok = read(now);
++        if (!ok || (m_haveReport && now < m_lastReport)) {
++          add(m_reportErrors, 1);
++          if (m_reportFailed && !final)
++            return;
++          m_reportFailed = true;
++        } else {
++          if (!final && m_haveReport && !m_reportFailed && now - m_lastReport < m_clock.hz)
++            return;
++          m_lastReport = now;
++          m_haveReport = true;
++          m_reportFailed = false;
++        }
++        auto snapshot = capture();
++        if (!ok || m_reportFailed)
++          snapshot.clockOk = false;
++        for (size_t i = 0; i < RowCount; i++) {
++          std::ostringstream out;
++          out << prefix("snapshot") << " snapshot=" << snapshot.id
++              << " ts_begin=" << snapshot.begin << " ts_end=" << snapshot.end
++              << " client_submission_requests=" << snapshot.submissions
++              << " final=" << final << " clock_ok=" << snapshot.clockOk
++              << " report_clock_errors=" << snapshot.reportErrors
++              << " overflow=" << snapshot.overflow << " quiescent=" << snapshot.quiescent
++              << " entered_before=" << snapshot.enteredBefore << " completed_before=" << snapshot.completedBefore
++              << " entered_after=" << snapshot.enteredAfter << " completed_after=" << snapshot.completedAfter
++              << " op=" << names[i % OpCount] << " category=" << categories[i / OpCount];
++          for (size_t f = 0; f < FieldCount; f++)
++            out << ' ' << fields[f] << '=' << snapshot.rows[i][f];
++          const auto& row = snapshot.rows[i];
++          out << " active=" << (row[Calls] >= row[Completed] ? row[Calls] - row[Completed] : UINT64_MAX);
++          m_emit(out.str());
++        }
++      } catch (...) { add(m_reportErrors, 1); }
++    }
++
++    // A quiescent capture is not an event-time transaction. All rows are required.
++    Snapshot capture() noexcept {
++      Snapshot s;
++      if (!m_enabled)
++        return s;
++      s.id = increment(m_snapshot);
++      bool beginOk = read(s.begin);
++      s.enteredBefore = m_entered.load(std::memory_order_seq_cst);
++      s.completedBefore = m_completed.load(std::memory_order_seq_cst);
++      for (size_t i = 0; i < RowCount; i++)
++        for (size_t j = 0; j < FieldCount; j++)
++          s.rows[i][j] = m_rows[i][j].load(std::memory_order_relaxed);
++      s.submissions = m_submissions.load(std::memory_order_relaxed);
++      std::atomic_thread_fence(std::memory_order_seq_cst);
++      s.enteredAfter = m_entered.load(std::memory_order_seq_cst);
++      s.completedAfter = m_completed.load(std::memory_order_seq_cst);
++      bool endOk = read(s.end);
++      s.clockOk = beginOk && endOk && s.end >= s.begin && m_initOk;
++      if (!s.clockOk)
++        add(m_reportErrors, 1);
++      s.reportErrors = m_reportErrors.load(std::memory_order_relaxed);
++      s.overflow = m_overflow.load(std::memory_order_relaxed);
++      s.quiescent = s.enteredBefore == s.completedBefore
++        && s.enteredBefore == s.enteredAfter && s.completedBefore == s.completedAfter && !s.overflow;
++      return s;
++    }
++
++    static constexpr size_t row(DescriptorOp op, size_t category = 1) { return category * OpCount + size_t(op); }
++
++  private:
++    friend class DescriptorScope;
++    const bool m_enabled;
++    Emit m_emit;
++    DescriptorClock m_clock = {};
++    uint64_t m_device = 0, m_init = 0, m_lastReport = 0;
++    bool m_initOk = false, m_abandoned = false, m_haveReport = false, m_reportFailed = false;
++    std::mutex m_reportMutex;
++    std::array<std::array<std::atomic<uint64_t>, FieldCount>, RowCount> m_rows = {};
++    std::atomic<uint64_t> m_entered{0}, m_completed{0}, m_snapshot{0}, m_submissions{0}, m_reportErrors{0};
++    std::atomic<bool> m_overflow{false};
++    inline static std::atomic<uint64_t> s_generation{0};
++    static constexpr const char* names[] = { "prep", "spec_data_excluded", "pool_alloc", "pool_recycle", "pool_destroy",
++      "vk_allocate", "vk_pool_create", "vk_reset", "vk_pool_destroy", "vk_update", "vk_template", "vk_bind" };
++    static constexpr const char* categories[] = { "prep", "standalone", "excluded" };
++    static constexpr const char* fields[] = { "calls", "completed", "sets", "write_records", "write_elements", "write_bytes",
++      "prepared_slots", "dynamic_offsets", "failures", "empty_dirty_mask", "work_unknown", "timed_calls", "inclusive_ticks", "direct_child_ticks", "exclusive_ticks",
++      "max_ticks", "thread_sum_outer_elapsed_ticks", "clock_errors", "nest_errors" };
++
++    static_assert(sizeof(names) / sizeof(*names) == OpCount);
++    static_assert(sizeof(fields) / sizeof(*fields) == FieldCount);
++
++    bool read(uint64_t& value) const noexcept { return m_clock.hz && m_clock.read(value); }
++
++    uint64_t add(std::atomic<uint64_t>& target, uint64_t value) noexcept {
++      auto old = target.load(std::memory_order_seq_cst);
++      for (;;) {
++        bool overflow = value > UINT64_MAX - old;
++        uint64_t next = overflow ? UINT64_MAX : old + value;
++        if (target.compare_exchange_weak(old, next, std::memory_order_seq_cst)) {
++          if (overflow || next == UINT64_MAX)
++            m_overflow.store(true, std::memory_order_relaxed);
++          return old;
++        }
++      }
++    }
++    uint64_t increment(std::atomic<uint64_t>& target) noexcept {
++      auto old = add(target, 1);
++      return old == UINT64_MAX ? UINT64_MAX : old + 1;
++    }
++    void work(size_t row, Field field, uint64_t n) noexcept { add(m_rows[row][field], n); }
++
++    std::string prefix(const char* kind) const {
++#if defined(_WIN32) && !defined(__WINE__)
++      uint64_t pid = GetCurrentProcessId();
++#else
++      uint64_t pid = getpid();
++#endif
++      std::ostringstream out;
++      out << "[dxvk-descriptor] v=1 component=dxvk kind=" << kind << " pid=" << pid
++          << " module=" << reinterpret_cast<uintptr_t>(&s_generation) << " device=" << m_device << " init_ticks=" << m_init << " init_ok=" << m_initOk
++          << " hz=" << m_clock.hz;
++      return out.str();
++    }
++
++    void calibration() {
++      DescriptorStats scratch(true, nullptr, m_clock, false);
++      for (unsigned i = 0; i < 16; i++) {
++        uint64_t a = 0, b = 0, c = 0, d = 0;
++        bool aOk = read(a), bOk = read(b), cOk = read(c);
++        bool scopeOk;
++        uint64_t start, end;
++        DescriptorScope scope(&scratch, DescriptorOp::Prep);
++        start = scope.m_state ? scope.m_state->start : 0;
++        scope.finish();
++        // Same enabled RAII path, including TLS, checked reads and publication.
++        end = scope.m_end;
++        scopeOk = scope.m_finishedValid;
++        bool dOk = read(d);
++        std::ostringstream out;
++        out << prefix("calibration") << " sample=" << i << " adjacent_begin=" << a << " adjacent_end=" << b
++            << " adjacent_ok=" << (aOk && bOk && b >= a)
++            << " scope_begin=" << start << " scope_end=" << end << " scope_ok=" << scopeOk
++            << " empty_begin=" << c << " empty_end=" << d << " empty_ok=" << (cOk && dOk && d >= c && scopeOk)
++            << " clock_reads=6";
++        m_emit(out.str());
++      }
++    }
++  };
++
++  inline void DescriptorScope::sets(uint64_t n) noexcept { if (m_stats) m_stats->work(m_row, DescriptorStats::Sets, n); }
++  inline void DescriptorScope::writes(uint64_t r, uint64_t e, uint64_t b) noexcept {
++    if (m_stats) {
++      m_stats->work(m_row, DescriptorStats::WriteRecords, r);
++      m_stats->work(m_row, DescriptorStats::WriteElements, e);
++      m_stats->work(m_row, DescriptorStats::WriteBytes, b);
++    }
++  }
++  inline void DescriptorScope::prepared(uint64_t n) noexcept { if (m_stats) m_stats->work(m_row, DescriptorStats::PreparedSlots, n); }
++  inline void DescriptorScope::dynamicOffsets(uint64_t n) noexcept { if (m_stats) m_stats->work(m_row, DescriptorStats::DynamicOffsets, n); }
++  inline void DescriptorScope::failure() noexcept { if (m_stats) m_stats->work(m_row, DescriptorStats::Failures, 1); }
++  inline void DescriptorScope::emptyDirtyMask() noexcept { if (m_stats) m_stats->work(m_row, DescriptorStats::EmptyDirtyMask, 1); }
++  inline void DescriptorScope::unknown() noexcept { if (m_stats) m_stats->work(m_row, DescriptorStats::WorkUnknown, 1); }
++
++}
+diff --git a/src/dxvk/dxvk_device.cpp b/src/dxvk/dxvk_device.cpp
+index 0221825..0aa69bf 100644
+--- a/src/dxvk/dxvk_device.cpp
++++ b/src/dxvk/dxvk_device.cpp
+@@ -14,7 +14,8 @@ namespace dxvk {
+     const DxvkDeviceCapabilities&   caps,
+     const DxvkDeviceQueueSet&       queues,
+     const DxvkQueueCallback&        queueCallback)
+-  : m_options           (instance->options()),
++  : m_descriptorStats   (env::getEnvVar("PLAYPORT_DESCRIPTOR_STATS") == "1", Logger::info),
++    m_options           (instance->options()),
+     m_instance          (instance),
+     m_adapter           (adapter),
+     m_vkd               (vkd),
+@@ -56,8 +57,10 @@ namespace dxvk {
+     // from TerminateProcess, etc, our CS threads are already destroyed
+     // and we cannot synchronize against them.
+     // The best we can do is just wait for the Vulkan device to be idle.
+-    if (this_thread::isInModuleDetachment())
++    if (this_thread::isInModuleDetachment()) {
++      m_descriptorStats.abandon();
+       return;
++    }
+ 
+     // Wait for all pending Vulkan commands to be
+     // executed before we destroy any resources.
+@@ -640,6 +643,9 @@ namespace dxvk {
+ 
+     m_submissionQueue.submit(submitInfo, latencyInfo, status);
+ 
++    if (auto* stats = descriptorStats())
++      stats->submission();
++
+     std::lock_guard<sync::Spinlock> statLock(m_statLock);
+     m_statCounters.merge(commandList->statCounters());
+   }
+diff --git a/src/dxvk/dxvk_device.h b/src/dxvk/dxvk_device.h
+index 7fb070d..27338f3 100644
+--- a/src/dxvk/dxvk_device.h
++++ b/src/dxvk/dxvk_device.h
+@@ -1,6 +1,7 @@
+ #pragma once
+ 
+ #include "dxvk_adapter.h"
++#include "dxvk_descriptor_stats.h"
+ #include "dxvk_buffer.h"
+ #include "dxvk_compute.h"
+ #include "dxvk_constant_state.h"
+@@ -94,6 +95,8 @@ namespace dxvk {
+       const DxvkQueueCallback&        queueCallback);
+       
+     ~DxvkDevice();
++
++    DescriptorStats* descriptorStats() { return m_descriptorStats.enabled(); }
+     
+     /**
+      * \brief Vulkan device functions
+@@ -750,6 +753,8 @@ namespace dxvk {
+     
+   private:
+     
++    // Declared first so final diagnostics run after resource/pool destruction.
++    DescriptorStats             m_descriptorStats;
+     DxvkOptions                 m_options;
+ 
+     Rc<DxvkInstance>            m_instance;
+diff --git a/src/dxvk/meson.build b/src/dxvk/meson.build
+index 6b12f95..1f955d3 100644
+--- a/src/dxvk/meson.build
++++ b/src/dxvk/meson.build
+@@ -40,6 +40,7 @@ dxvk_src = [
+   'dxvk_descriptor_heap.cpp',
+   'dxvk_descriptor_info.cpp',
+   'dxvk_descriptor_pool.cpp',
++  'dxvk_descriptor_stats.cpp',
+   'dxvk_descriptor_worker.cpp',
+   'dxvk_device.cpp',
+   'dxvk_device_filter.cpp',
+-- 
+2.56.0
+

@@ -395,6 +395,123 @@ off by default.
 - **Evidence:** [host](../evidence/2026-10-21-kk-gpl-host.md),
   [phone](../evidence/2026-10-22-kk-gpl-phone.md).
 
+## KosmicKrisp Proton parity
+
+the removed plan `2026-10-22-kk-proton-parity.md` (this section is its outcome)
+([PLA-431](https://linear.app/playportdev/issue/PLA-431);
+[decision 0160](../decisions/0160-kk-proton-parity-stays-opt-in.md)). Closed by the
+owner on 2026-10-24 on `dev/kk-proton-parity`, **unmerged/unpushed at close-out**.
+Goal: close the useful Vulkan-extension gaps used by DXVK and vkd3d-proton,
+behind default-off flags, with host and phone evidence before defaults change.
+The delivered work is done; the owner deferred descriptor buffers for
+prioritization, **not because A0 proved a negative result**.
+
+- **What ships on the branch:** Mesa **0119** (`memory_priority`: memory priority
+  + pageable device-local memory, no-op hints on Metal's device-wide residency),
+  **0120** (`module_identifier`: Mesa common-runtime identifiers/cache behavior),
+  **0121–0125** (descriptor counters/elapsed scopes, complete-row fail-closed
+  emission, reason-coded poison and sink identity), DXVK **0006/0007**,
+  vkd3d-proton **0005**, and strict offline `tools/descriptorprof.py`.
+  `memory_priority`, `module_identifier` and `gpl` stay off by default behind
+  `MESA_KK_EXPERIMENTAL`; diagnostics stay opt-in via
+  `MESA_KK_DEBUG=descriptor_stats` / `PLAYPORT_DESCRIPTOR_STATS=1`.
+  Madeira-unix **0221 ships unconditionally as a bug fix**, preserving fd-status
+  flags (notably `O_APPEND`) when the wineserver imports a shared description and
+  adds `O_NONBLOCK`; a failed `F_GETFL` retains the old non-blocking fallback.
+- **B1/B3 result:** both-route Hollow Knight launch smoke passed; B1 retains the
+  vkd3d-specific pageable-enablement logging limit. B3's warm D3D12 launch loads
+  a 7,448-byte disk library and creates **25 graphics pipelines from identifiers**;
+  phone identifier miss/fallback remains unobserved. No performance/default
+  promotion follows. Host [B1](../evidence/2026-10-22-kk-memory-priority-host.md)
+  and [B3](../evidence/2026-10-22-kk-module-identifier-host.md) are historical
+  side-copy records (original 0104/0105 became 0119/0120); current integration
+  and phone proofs are [B1](../evidence/2026-10-23-kk-memory-priority-phone.md)
+  and [B3](../evidence/2026-10-23-kk-module-identifier-phone.md).
+- **IPAs that prove the bounded results:** B1/B3 use dev SHA256
+  `5e3fc6a89019ef10f054d3ce47f4191e0354ff5df66c73d65814d7fd0241da7d`
+  (`.work/out/20261023-071927-5e3fc6a8/Playport-26.5-5e3fc6a8.ipa`). The final
+  append repair, two-route emission gate and owner-played A0 use dev SHA256
+  `31430e9639275c6df96aa70c9905bd6f5f398dbd80b2d7d28355bbcfa50b1122`
+  (`.work/out/20261024-205911-31430e96/Playport-26.5-31430e96.ipa`). Both verified
+  **89/89**. These are retained historical archives including local owner UI
+  edits, **not certified clean-source builds at the run HEADs**. The final repair
+  changes only `app/artifacts.tsv`'s `lib/libwineserver.a` row (1,214,432 bytes,
+  SHA256 `78f505018ee5ac887b8d8f7f77e9716662e28108cb17feeb432f0c273865399f`);
+  Wine PE records do not change in that repair.
+- **Append/emission result:** [host cause and P2 repair](../evidence/2026-10-24-descriptor-append-cause-host.md),
+  commits `1a2c06d` / **`1e62c4c`**, reproduce loss of append through the shared
+  `SCM_RIGHTS` description and preserve the non-blocking fallback. After the
+  [interrupted attempt](../evidence/2026-10-24-descriptor-gate-interrupted.md),
+  the [phone gate](../evidence/2026-10-24-descriptor-gate-phone.md) observes native
+  banner + 16 calibration samples + complete captures on both routes:
+  **46/49 usable, 0 rejected intervals, 0 malformed/poison records**. Both strict
+  results are **mixed exit 2**, due five calibration-only streams; all nine final
+  tails unknown. Menu-only emission/smoke proof, not complete-lifetime measurement.
+  Runs: `.work/ui-runs/descriptor-gate-retry-{dxvk,d3d12}-20261024/`.
+- **A0 permanent decision input:** [owner-played record](../evidence/2026-10-24-a0-descriptor-human-run.md),
+  **`e5a6e65`**, and review/hitch-data correction **`8d412d2`** are the two
+  closing measurement records. Run
+  `.work/perf-runs/a0-descriptor-human-dxvk-20261024-r2/`: 17,877 frames / 302.6 s
+  owner-save DXVK play, Vulkan/720/60; FPS mean/median/p10/min
+  **59.4/60.0/58.9/44.4**. HUD off means reported 0/0/0 hitches are unavailable
+  detection, **not hitch-free proof**. Whole-input strict parse: **mixed exit 2,
+  612 usable / 0 rejected**, two calibration-only streams, all four tails unknown.
+  Fixed interior snapshots 31→290: KK **15,569 drawable-submit signals** over
+  about 260.790435 s, bind/push/template-push **173.751493/1/0 executions per
+  signal**, all operations **466.217933/signal**, attributed elapsed
+  **78.212281 µs/signal** (numerically **0.468337% of 16.7 ms per signal**, not
+  CPU/frame share). DXVK **62,116 submission requests** over about 260.128187 s:
+  vk-bind **43.456630/request**, prep **59.259543**, standalone **10.014925**,
+  total **69.274469 µs elapsed/request**, **not per frame**. Elapsed is not CPU;
+  thread sums are not wall union/removable savings, native includes replay, no
+  cross-layer arithmetic/frame alignment/all-stream total or D3D12 cost inference
+  is valid. Quantized calibration is not an overhead bound; no off/on control.
+  **Covered native looks small / total NOT DECISIVE; A2 gate unsatisfied.** The
+  [earlier menu sampler](../evidence/2026-10-23-kk-descriptor-cpu-baseline.md)
+  (printed leaves ~0.086%/0.050%, JIT/top-N/unwind gaps) remains insufficient,
+  not comparable elapsed/CPU evidence.
+- **Deferred, with owners in Linear:** [PLA-441](https://linear.app/playportdev/issue/PLA-441)
+  carries **A2–A4**: properties/layout queries/descriptor bytes/binds/offsets/push
+  descriptors/meta save-restore, folded vkd3d 4-byte SSBO alignment under the one
+  `descriptor_buffer` flag, embedded immutable samplers and GPL interaction,
+  preserved source research and later host/phone gates. No descriptor-buffer
+  implementation or separate alignment flag ships. Reopen only for an
+  owner-approved bounded **real thread-CPU attribution** design, or an
+  owner-chosen workload-specific **threshold B (ms/presented frame), acceptable
+  error/perturbation tolerance and perturbation design agreed in advance**.
+  Decision 0160 gives the required frame alignment, uncovered-replay coverage,
+  selected D3D12 Simple path, warm same-IPA off/on/off controls and repeat.
+  **167 µs/frame (1% of 16.7 ms) was provisional, not owner-agreed.** A repeated,
+  covered, credibly removable CPU opportunity above B may justify A2; an adequate
+  uncertainty-inclusive bound below B may defer it for that workload. A menu or
+  count-only run does not decide it; no new profiler, session or implementation
+  is authorized by closing the plan.
+  B2 depth bias stays [PLA-433](https://linear.app/playportdev/issue/PLA-433), B4
+  int64 atomics [PLA-434](https://linear.app/playportdev/issue/PLA-434), C1–C3
+  present wait/low latency [PLA-435](https://linear.app/playportdev/issue/PLA-435).
+  Present wait remains off on iOS; depth-bias-control/int64-atomic extensions
+  remain absent. GPL's default gate is still PLA-429 / decision 0158.
+- **Diagnostic implementation evidence:** [KK/replay](../evidence/2026-10-23-kk-descriptor-cost-probe-host.md),
+  [DXVK](../evidence/2026-10-23-dxvk-descriptor-cost-probe-host.md),
+  [sibling-clock correction](../evidence/2026-10-23-dxvk-descriptor-clock-fix-host.md),
+  [vkd3d](../evidence/2026-10-23-vkd3d-descriptor-cost-probe-host.md),
+  [strict parser/history corrections](../evidence/2026-10-23-descriptor-prof-parser-host.md).
+  Historical failed captures remain failed: [interleaved prep](../evidence/2026-10-23-descriptor-probe-device-prep.md),
+  [whole-row correction](../evidence/2026-10-23-descriptor-emission-fix-host.md),
+  [sink enforcement](../evidence/2026-10-23-descriptor-emission-sink-fix-host.md),
+  [prep retry](../evidence/2026-10-23-descriptor-probe-device-prep-retry.md),
+  [reason-coded poison](../evidence/2026-10-24-descriptor-emission-reasons-host.md),
+  [missing-append observation](../evidence/2026-10-24-descriptor-emission-reason-device.md).
+  UI-session safety is independent [PLA-440](https://linear.app/playportdev/issue/PLA-440):
+  [host/P2](../evidence/2026-10-24-ui-session-safety-host.md),
+  [phone routes](../evidence/2026-10-24-ui-session-safety-phone.md); marker-path
+  app confirmation, release variant, abrupt-death gaps and marker-poll cost stay
+  there. This close-out changes no evidence conclusions or PLA-440 scope.
+
+No new build, raw reparse, phone command, game observation, merge or push was
+performed for this documentation/tracking close-out. Removal does not assert
+Proton parity in full, descriptor-buffer benefit, conformance or a release sign-off.
+
 ## Removed without being carried out
 
 These plans were removed on 2026-10-06 without being carried out. Their open

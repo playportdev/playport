@@ -1,0 +1,223 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kamil=20Postro=C5=BCny?= <kamil@postrozny.pl>
+Date: Sat, 24 Oct 2026 10:14:04 +0200
+Subject: [PATCH] kk: explain descriptor emission failures without formatter
+ recursion
+
+Preserve the malformed poison, sink rules and permanent latch. Record initialized failure-stage details only; never rely on vsnprintf for this best-effort diagnostic.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-10-24-descriptor-emission-reasons-host.md
+Offered-upstream: no
+---
+ src/kosmickrisp/vulkan/kk_debug.c | 166 ++++++++++++++++++++++++++----
+ 1 file changed, 148 insertions(+), 18 deletions(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_debug.c b/src/kosmickrisp/vulkan/kk_debug.c
+index 06dbb00..c56bd20 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.c
++++ b/src/kosmickrisp/vulkan/kk_debug.c
+@@ -285,6 +285,7 @@ kk_vertex_stats_log(uint32_t frames, bool final)
+ #include <errno.h>
+ #include <fcntl.h>
+ #include <inttypes.h>
++#include <limits.h>
+ #include <stdarg.h>
+ #include <sys/stat.h>
+ #include <unistd.h>
+@@ -330,6 +331,55 @@ descriptor_record_append(struct descriptor_record *r, const char *fmt, ...)
+    r->length += n;
+ }
+ 
++/* Failure-only formatting must not depend on the row's failed vsnprintf.
++ * 192 literal bytes plus eight worst-case integers conservatively cover every
++ * branch below. Decimal digits need less than one character per three bits.
++ * Keep runtime checks too: an unexpected future expansion falls back to the
++ * original marker, never an incomplete diagnostic or a second poison write. */
++#define DESCRIPTOR_FAILURE_DIGITS ((sizeof(uintmax_t) * CHAR_BIT + 2) / 3)
++struct descriptor_failure {
++   char text[512];
++   size_t length;
++   bool overflow;
++};
++_Static_assert(192 + 8 * (DESCRIPTOR_FAILURE_DIGITS + 1) <= 512,
++               "descriptor failure diagnostic bound");
++
++static void
++descriptor_failure_text(struct descriptor_failure *f, const char *text)
++{
++   size_t n = strlen(text);
++   if (n > sizeof(f->text) - f->length) {
++      f->overflow = true;
++      return;
++   }
++   memcpy(f->text + f->length, text, n);
++   f->length += n;
++}
++
++static void
++descriptor_failure_uint(struct descriptor_failure *f, uintmax_t value)
++{
++   char digits[DESCRIPTOR_FAILURE_DIGITS + 1] = {0};
++   size_t i = sizeof(digits) - 1;
++   do {
++      digits[--i] = '0' + value % 10;
++      value /= 10;
++   } while (value);
++   descriptor_failure_text(f, digits + i);
++}
++
++static void
++descriptor_failure_int(struct descriptor_failure *f, intmax_t value)
++{
++   if (value < 0) {
++      descriptor_failure_text(f, "-");
++      descriptor_failure_uint(f, (uintmax_t)(-(value + 1)) + 1);
++   } else {
++      descriptor_failure_uint(f, value);
++   }
++}
++
+ static bool
+ descriptor_record_emit(struct kk_descriptor_stats *s,
+                        const struct descriptor_record *r)
+@@ -337,41 +387,121 @@ descriptor_record_emit(struct kk_descriptor_stats *s,
+    if (s->emission_failed)
+       return false;
+    int saved_errno = errno;
++   const char *stage;
++   int error = 0, flags = -1;
++   bool error_valid = false, stat_valid = false, pipe_valid = false;
++   bool write_valid = false;
+    struct stat st;
+-   bool valid = !r->failed && r->length && !fstat(STDERR_FILENO, &st);
+-   if (valid && S_ISREG(st.st_mode)) {
+-      int flags = fcntl(STDERR_FILENO, F_GETFL);
+-      valid = flags >= 0 && (flags & O_APPEND);
+-   } else if (valid && S_ISFIFO(st.st_mode)) {
+-      long pipe_buf = fpathconf(STDERR_FILENO, _PC_PIPE_BUF);
+-      valid = pipe_buf > 0 && r->length <= (size_t)pipe_buf;
++   long pipe_buf = 0;
++   ssize_t written = 0;
++   unsigned attempts = 0;
++   if (r->failed) {
++      stage = "format";
++      goto failed;
++   }
++   if (!r->length) {
++      stage = "empty";
++      goto failed;
++   }
++   if (fstat(STDERR_FILENO, &st)) {
++      error = errno;
++      error_valid = true;
++      stage = "fstat";
++      goto failed;
++   }
++   stat_valid = true;
++   if (S_ISREG(st.st_mode)) {
++      flags = fcntl(STDERR_FILENO, F_GETFL);
++      if (flags < 0) {
++         error = errno;
++         error_valid = true;
++         stage = "getfl";
++         goto failed;
++      }
++      if (!(flags & O_APPEND)) {
++         stage = "missing-append";
++         goto failed;
++      }
++   } else if (S_ISFIFO(st.st_mode)) {
++      /* -1 with errno still zero means indeterminate, not a syscall error. */
++      errno = 0;
++      pipe_buf = fpathconf(STDERR_FILENO, _PC_PIPE_BUF);
++      error = errno;
++      pipe_valid = true;
++      if (pipe_buf <= 0) {
++         error_valid = pipe_buf < 0 && error != 0;
++         stage = error_valid ? "pipe-query" : pipe_buf == -1
++                    ? "pipe-indeterminate" : "pipe-bound";
++         goto failed;
++      }
++      if (r->length > (size_t)pipe_buf) {
++         stage = "pipe-too-large";
++         goto failed;
++      }
+    } else {
+-      valid = false;
++      stage = "type";
++      goto failed;
+    }
+    /* The app's normal sink is an O_APPEND regular file. One write, not one
+     * stdio call, prevents another appender from entering this record. For a
+     * pipe this only holds up to its actual PIPE_BUF, checked above. Other sink
+     * types and non-append files are rejected. Downstream relays have no such
+     * guarantee. This does not serialize other writers' own partial records. */
+-   if (valid) {
+-      for (unsigned attempt = 0; attempt < 3; attempt++) {
+-         ssize_t n = write(STDERR_FILENO, r->text, r->length);
+-         if (n == (ssize_t)r->length) {
+-            errno = saved_errno;
+-            return true;
+-         }
+-         if (n >= 0 || errno != EINTR)
+-            break;
++   for (unsigned attempt = 0; attempt < 3; attempt++) {
++      written = write(STDERR_FILENO, r->text, r->length);
++      error = errno;
++      write_valid = true;
++      attempts = attempt + 1;
++      if (written == (ssize_t)r->length) {
++         errno = saved_errno;
++         return true;
+       }
++      error_valid = written < 0;
++      stage = written >= 0 ? "write-short" : error != EINTR
++                 ? "write-error" : "write-eintr-limit";
++      if (written >= 0 || error != EINTR)
++         break;
+    }
++failed:
+    /* Never continue a positive short write: another writer may already have
+     * appended after its prefix. Stop this device's reports permanently. The
+     * malformed marker invalidates strict consumers if the sink still works;
+     * unrecoverable loss (even just the final newline) cannot be made reliably
+     * detectable without changing the transport/schema. */
+    s->emission_failed = true;
++   struct descriptor_failure failure = {0};
++   descriptor_failure_text(&failure, "\n[kk-descriptor] emission failed stage=");
++   descriptor_failure_text(&failure, stage);
++   if (error_valid) {
++      descriptor_failure_text(&failure, " errno=");
++      descriptor_failure_int(&failure, error);
++   }
++   if (!r->failed) {
++      descriptor_failure_text(&failure, " rowlen=");
++      descriptor_failure_uint(&failure, r->length);
++   }
++   if (stat_valid) {
++      descriptor_failure_text(&failure, " mode=");
++      descriptor_failure_uint(&failure, st.st_mode);
++   }
++   if (flags >= 0) {
++      descriptor_failure_text(&failure, " flags=");
++      descriptor_failure_uint(&failure, flags);
++   }
++   if (pipe_valid) {
++      descriptor_failure_text(&failure, " pipe_buf=");
++      descriptor_failure_int(&failure, pipe_buf);
++   }
++   if (write_valid) {
++      descriptor_failure_text(&failure, " written=");
++      descriptor_failure_int(&failure, written);
++      descriptor_failure_text(&failure, " attempts=");
++      descriptor_failure_uint(&failure, attempts);
++   }
++   descriptor_failure_text(&failure, "\n");
+    static const char poison[] = "\n[kk-descriptor] emission failed\n";
+-   (void)!write(STDERR_FILENO, poison, sizeof(poison) - 1);
++   (void)!write(STDERR_FILENO, failure.overflow ? poison : failure.text,
++               failure.overflow ? sizeof(poison) - 1 : failure.length);
+    errno = saved_errno;
+    return false;
+ }

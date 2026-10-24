@@ -17,6 +17,8 @@
  */
 #define _GNU_SOURCE /* memmem */
 #include <dirent.h>
+#include <pthread.h>
+#include <stddef.h>
 #include <dlfcn.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -149,9 +151,9 @@ msl_count_text(int first, int last, const char *text)
    return count;
 }
 
-static VkShaderModule load_module(const char *name);
-static VkShaderModule
-load_module(const char *name)
+/* SPV_DIR's name.spv, for a VkShaderModuleCreateInfo; free pCode */
+static VkShaderModuleCreateInfo
+read_spv(const char *name)
 {
    char path[4096];
    snprintf(path, sizeof(path), "%s/%s.spv", spv_dir, name);
@@ -167,13 +169,20 @@ load_module(const char *name)
    if (fread(code, 1, n, f) != (size_t)n)
       exit(1);
    fclose(f);
-
-   DPROC(vkCreateShaderModule);
-   VkShaderModuleCreateInfo ci = {
+   return (VkShaderModuleCreateInfo){
       .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
       .codeSize = n,
       .pCode = code,
    };
+}
+
+static VkShaderModule load_module(const char *name);
+static VkShaderModule
+load_module(const char *name)
+{
+   DPROC(vkCreateShaderModule);
+   VkShaderModuleCreateInfo ci = read_spv(name);
+   uint32_t *code = (uint32_t *)ci.pCode;
    VkShaderModule m;
    CHECK(vkCreateShaderModule(dev, &ci, NULL, &m));
    free(code);
@@ -207,6 +216,15 @@ no_fp_preserve_wanted(void)
    return e && strstr(e, "no_fp_preserve");
 }
 
+/* Whether this run asks for VK_EXT_shader_module_identifier (PLA-431):
+ * MESA_KK_EXPERIMENTAL names module_identifier. */
+static bool
+module_identifier_wanted(void)
+{
+   const char *e = getenv("MESA_KK_EXPERIMENTAL");
+   return e && strstr(e, "module_identifier");
+}
+
 static bool
 has_device_extension(VkPhysicalDevice pd, const char *name)
 {
@@ -224,6 +242,8 @@ has_device_extension(VkPhysicalDevice pd, const char *name)
 
 static int check_gpl(VkPhysicalDevice pd, VkQueue queue, VkCommandPool pool,
                      VkBuffer buf);
+static int check_module_identifier(VkPhysicalDevice pd, VkQueue queue,
+                                   VkCommandPool pool, VkBuffer buf);
 
 struct pipe_desc {
    const char *name;
@@ -375,6 +395,118 @@ find_memory(VkPhysicalDevice pd, uint32_t bits)
           (mp.memoryTypes[i].propertyFlags &
            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT))
          return i;
+   return 0;
+}
+
+/* VK_EXT_memory_priority and VK_EXT_pageable_device_local_memory (PLA-431),
+ * on a device of its own: exposed, with their features, only when
+ * MESA_KK_EXPERIMENTAL names memory_priority, and without them the device has
+ * no vkSetDeviceMemoryPriorityEXT. With them, as DXVK and vkd3d-proton use
+ * them: an allocation with a priority, then vkSetDeviceMemoryPriorityEXT on
+ * it twice, through the device's dispatch. It runs after the checks that
+ * fork and before this process submits, so this process's first [kk-mem]
+ * line (MESA_KK_DEBUG=memory) counts 1 allocation and 2 calls. */
+static int
+check_memory_priority(const VkInstanceCreateInfo *ici)
+{
+   const char *experimental = getenv("MESA_KK_EXPERIMENTAL");
+   const bool wanted = experimental && strstr(experimental, "memory_priority");
+   VkInstance i;
+   CHECK(((PFN_vkCreateInstance)gipa(NULL, "vkCreateInstance"))(ici, NULL, &i));
+   uint32_t count = 1;
+   VkPhysicalDevice pd;
+   CHECK(((PFN_vkEnumeratePhysicalDevices)gipa(i, "vkEnumeratePhysicalDevices"))(
+      i, &count, &pd));
+   PFN_vkEnumerateDeviceExtensionProperties enumerate =
+      (PFN_vkEnumerateDeviceExtensionProperties)gipa(
+         i, "vkEnumerateDeviceExtensionProperties");
+   uint32_t n = 0;
+   CHECK(enumerate(pd, NULL, &n, NULL));
+   VkExtensionProperties *props = calloc(n, sizeof(*props));
+   CHECK(enumerate(pd, NULL, &n, props));
+   bool priority_ext = false, pageable_ext = false;
+   for (uint32_t e = 0; e < n; e++) {
+      priority_ext |= !strcmp(props[e].extensionName, "VK_EXT_memory_priority");
+      pageable_ext |=
+         !strcmp(props[e].extensionName, "VK_EXT_pageable_device_local_memory");
+   }
+   free(props);
+   VkPhysicalDeviceMemoryPriorityFeaturesEXT priority_feat = {
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PRIORITY_FEATURES_EXT,
+   };
+   VkPhysicalDevicePageableDeviceLocalMemoryFeaturesEXT pageable_feat = {
+      .sType =
+         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PAGEABLE_DEVICE_LOCAL_MEMORY_FEATURES_EXT,
+      .pNext = &priority_feat,
+   };
+   VkPhysicalDeviceFeatures2 f2 = {
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+      .pNext = &pageable_feat,
+   };
+   ((PFN_vkGetPhysicalDeviceFeatures2)gipa(i, "vkGetPhysicalDeviceFeatures2"))(
+      pd, &f2);
+   if (priority_ext != wanted || pageable_ext != wanted ||
+       priority_feat.memoryPriority != wanted ||
+       pageable_feat.pageableDeviceLocalMemory != wanted) {
+      fprintf(stderr, "VK_EXT_memory_priority %d, "
+                      "VK_EXT_pageable_device_local_memory %d, memoryPriority %d, "
+                      "pageableDeviceLocalMemory %d with MESA_KK_EXPERIMENTAL=%s\n",
+              priority_ext, pageable_ext, priority_feat.memoryPriority,
+              pageable_feat.pageableDeviceLocalMemory,
+              experimental ? experimental : "");
+      return 1;
+   }
+
+   float prio = 1.0f;
+   VkDeviceQueueCreateInfo qci = {
+      .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+      .queueCount = 1,
+      .pQueuePriorities = &prio,
+   };
+   const char *exts[] = {"VK_EXT_memory_priority",
+                         "VK_EXT_pageable_device_local_memory"};
+   VkDeviceCreateInfo dci = {
+      .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+      .pNext = wanted ? &f2 : NULL,
+      .queueCreateInfoCount = 1,
+      .pQueueCreateInfos = &qci,
+      .enabledExtensionCount = wanted ? 2 : 0,
+      .ppEnabledExtensionNames = exts,
+   };
+   VkDevice d;
+   CHECK(((PFN_vkCreateDevice)gipa(i, "vkCreateDevice"))(pd, &dci, NULL, &d));
+   PFN_vkSetDeviceMemoryPriorityEXT set_priority =
+      (PFN_vkSetDeviceMemoryPriorityEXT)((PFN_vkGetDeviceProcAddr)gipa(
+         i, "vkGetDeviceProcAddr"))(d, "vkSetDeviceMemoryPriorityEXT");
+   if (!set_priority != !wanted) {
+      fprintf(stderr, "memory_priority: vkSetDeviceMemoryPriorityEXT %s\n",
+              set_priority ? "without the extensions" : "missing");
+      return 1;
+   }
+   if (wanted) {
+      PFN_vkAllocateMemory alloc =
+         (PFN_vkAllocateMemory)gipa(i, "vkAllocateMemory");
+      PFN_vkFreeMemory release = (PFN_vkFreeMemory)gipa(i, "vkFreeMemory");
+      VkMemoryPriorityAllocateInfoEXT priority = {
+         .sType = VK_STRUCTURE_TYPE_MEMORY_PRIORITY_ALLOCATE_INFO_EXT,
+         .priority = 1.0f,
+      };
+      VkMemoryAllocateInfo mai = {
+         .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+         .pNext = &priority,
+         .allocationSize = 65536,
+         .memoryTypeIndex = 0,
+      };
+      VkDeviceMemory mem;
+      CHECK(alloc(d, &mai, NULL, &mem));
+      set_priority(d, mem, 0.0f);
+      set_priority(d, mem, 0.5f);
+      release(d, mem, NULL);
+      printf("ok memory_priority: an allocation with priority 1.0, then "
+             "vkSetDeviceMemoryPriorityEXT 0.0 and 0.5\n");
+   }
+   ((PFN_vkDestroyDevice)gipa(i, "vkDestroyDevice"))(d, NULL);
+   ((PFN_vkDestroyInstance)gipa(i, "vkDestroyInstance"))(i, NULL);
    return 0;
 }
 
@@ -1538,6 +1670,387 @@ check_linear_images(VkPhysicalDevice pd, VkQueue queue, VkCommandPool pool)
    return 0;
 }
 
+/* Only at the end of main: extra devices must not renumber old MSL files. */
+static void *
+descriptor_empty_updates(void *arg)
+{
+   PFN_vkUpdateDescriptorSets update = (PFN_vkUpdateDescriptorSets)gipa(inst, "vkUpdateDescriptorSets");
+   VkDevice device = *(VkDevice *)arg;
+   for (int i = 0; i < 1000; i++)
+      update(device, 0, NULL, 0, NULL);
+   return NULL;
+}
+
+static void *VKAPI_PTR
+descriptor_fail_alloc(void *data, size_t size, size_t alignment, VkSystemAllocationScope scope)
+{
+   (void)data; (void)size; (void)alignment; (void)scope;
+   return NULL;
+}
+static void *VKAPI_PTR
+descriptor_fail_realloc(void *data, void *old, size_t size, size_t alignment,
+                         VkSystemAllocationScope scope)
+{
+   (void)old;
+   return descriptor_fail_alloc(data, size, alignment, scope);
+}
+static void VKAPI_PTR descriptor_fail_free(void *data, void *ptr) { (void)data; free(ptr); }
+
+/* Permit the device allocation, then fail common-runtime initialization. */
+static void *VKAPI_PTR
+descriptor_init_fail_alloc(void *data, size_t size, size_t alignment,
+                           VkSystemAllocationScope scope)
+{
+   (void)scope;
+   if (!*(unsigned *)data) return NULL;
+   --*(unsigned *)data;
+   void *ptr = NULL;
+   return posix_memalign(&ptr, alignment < sizeof(void *) ? sizeof(void *) : alignment,
+                         size) ? NULL : ptr;
+}
+
+static int
+check_descriptor_stats(VkPhysicalDevice pd)
+{
+   if (!getenv("KK_HOST_DESCRIPTOR_TEST"))
+      return 0;
+   fprintf(stderr, "descriptor-fixture begin\n");
+   DPROC(vkCreateDevice); DPROC(vkDestroyDevice); DPROC(vkGetDeviceQueue);
+   DPROC(vkQueueSubmit); DPROC(vkQueueWaitIdle);
+   DPROC(vkCreateDescriptorSetLayout); DPROC(vkDestroyDescriptorSetLayout);
+   DPROC(vkCreateDescriptorPool); DPROC(vkDestroyDescriptorPool);
+   DPROC(vkAllocateDescriptorSets); DPROC(vkFreeDescriptorSets); DPROC(vkResetDescriptorPool);
+   DPROC(vkUpdateDescriptorSets); DPROC(vkUpdateDescriptorSetWithTemplate);
+   DPROC(vkCreateDescriptorUpdateTemplate); DPROC(vkDestroyDescriptorUpdateTemplate);
+   DPROC(vkCreatePipelineLayout); DPROC(vkDestroyPipelineLayout);
+   DPROC(vkCreateCommandPool); DPROC(vkDestroyCommandPool); DPROC(vkAllocateCommandBuffers);
+   DPROC(vkBeginCommandBuffer); DPROC(vkEndCommandBuffer);
+   DPROC(vkCmdBindDescriptorSets); DPROC(vkCmdPushDescriptorSetKHR);
+   DPROC(vkCmdPushDescriptorSetWithTemplateKHR);
+   float priority = 1;
+   VkDeviceQueueCreateInfo qci = {.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+      .queueCount = 1, .pQueuePriorities = &priority};
+   const char *exts[] = {"VK_KHR_push_descriptor", "VK_EXT_robustness2"};
+   VkPhysicalDeviceRobustness2FeaturesEXT robustness = {
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT,
+      .nullDescriptor = VK_TRUE};
+   VkPhysicalDeviceInlineUniformBlockFeatures inline_features = {
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_INLINE_UNIFORM_BLOCK_FEATURES,
+      .pNext = &robustness, .inlineUniformBlock = VK_TRUE};
+   VkDeviceCreateInfo dci = {.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+      .pNext = &inline_features, .queueCreateInfoCount = 1, .pQueueCreateInfos = &qci,
+      .enabledExtensionCount = 2, .ppEnabledExtensionNames = exts};
+   VkAllocationCallbacks fail = {.pfnAllocation = descriptor_fail_alloc,
+      .pfnReallocation = descriptor_fail_realloc, .pfnFree = descriptor_fail_free};
+   VkDevice failed_device = VK_NULL_HANDLE;
+   if (vkCreateDevice(pd, &dci, &fail, &failed_device) != VK_ERROR_OUT_OF_HOST_MEMORY)
+      return 1;
+   unsigned remaining = 1;
+   VkAllocationCallbacks init_fail = fail;
+   init_fail.pUserData = &remaining;
+   init_fail.pfnAllocation = descriptor_init_fail_alloc;
+   if (vkCreateDevice(pd, &dci, &init_fail, &failed_device) != VK_ERROR_OUT_OF_HOST_MEMORY)
+      return 1;
+   VkDevice devices[2];
+   CHECK(vkCreateDevice(pd, &dci, NULL, &devices[0]));
+   CHECK(vkCreateDevice(pd, &dci, NULL, &devices[1]));
+   for (int index = 0; index < 2; index++) {
+      VkDevice d = devices[index];
+      VkQueue queue;
+      vkGetDeviceQueue(d, 0, 0, &queue);
+      CHECK(vkQueueSubmit(queue, 0, NULL, VK_NULL_HANDLE));
+      CHECK(vkQueueWaitIdle(queue));
+      if (index) { vkDestroyDevice(d, NULL); continue; }
+      VkDescriptorSetLayoutBinding bindings[] = {
+         {.binding = 0, .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+          .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_ALL},
+         {.binding = 1, .descriptorType = VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK,
+          .descriptorCount = 16, .stageFlags = VK_SHADER_STAGE_ALL},
+         {.binding = 2, .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+          .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_ALL}};
+      VkDescriptorSetLayoutCreateInfo lci = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+         .bindingCount = 3, .pBindings = bindings};
+      VkDescriptorSetLayout layouts[2];
+      CHECK(vkCreateDescriptorSetLayout(d, &lci, NULL, &layouts[0]));
+      layouts[1] = layouts[0];
+      VkDescriptorPoolSize sizes[] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2},
+         {VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK, 32},
+         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 2}};
+      VkDescriptorPoolInlineUniformBlockCreateInfo inline_pool = {
+         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_INLINE_UNIFORM_BLOCK_CREATE_INFO,
+         .maxInlineUniformBlockBindings = 2};
+      VkDescriptorPoolCreateInfo pci = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+         .pNext = &inline_pool, .flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT,
+         .maxSets = 2, .poolSizeCount = 3, .pPoolSizes = sizes};
+      VkDescriptorPool pool, failed_pool;
+      if (vkCreateDescriptorPool(d, &pci, &fail, &failed_pool) != VK_ERROR_OUT_OF_HOST_MEMORY)
+         return 1;
+      CHECK(vkCreateDescriptorPool(d, &pci, NULL, &pool));
+      VkDescriptorSetAllocateInfo ai = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+         .descriptorPool = pool, .descriptorSetCount = 2, .pSetLayouts = layouts};
+      VkDescriptorSet sets[2];
+      CHECK(vkAllocateDescriptorSets(d, &ai, sets));
+      VkDescriptorBufferInfo buffer = {.range = VK_WHOLE_SIZE}; /* null descriptor */
+      unsigned data[4] = {1,2,3,4};
+      VkWriteDescriptorSetInlineUniformBlock in = {
+         .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_INLINE_UNIFORM_BLOCK,
+         .dataSize = sizeof(data), .pData = data};
+      VkWriteDescriptorSet writes[3];
+      for (int i = 0; i < 3; i++) writes[i] = (VkWriteDescriptorSet){
+         .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = sets[0],
+         .dstBinding = i, .descriptorType = bindings[i].descriptorType,
+         .descriptorCount = bindings[i].descriptorCount, .pBufferInfo = &buffer};
+      writes[1].pNext = &in;
+      VkCopyDescriptorSet copies[2];
+      for (int i = 0; i < 2; i++) copies[i] = (VkCopyDescriptorSet){
+         .sType = VK_STRUCTURE_TYPE_COPY_DESCRIPTOR_SET,
+         .srcSet = sets[0], .dstSet = sets[1], .srcBinding = i, .dstBinding = i,
+         .descriptorCount = bindings[i].descriptorCount};
+      vkUpdateDescriptorSets(d, 3, writes, 2, copies);
+      pthread_t a, b;
+      if (pthread_create(&a, NULL, descriptor_empty_updates, &d) ||
+          pthread_create(&b, NULL, descriptor_empty_updates, &d) ||
+          pthread_join(a, NULL) || pthread_join(b, NULL)) return 1;
+      struct {VkDescriptorBufferInfo buffer; unsigned data[4];} payload = {buffer, {1,2,3,4}};
+      VkDescriptorUpdateTemplateEntry entries[] = {
+         {.dstBinding = 0, .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+          .offset = 0, .stride = sizeof(buffer)},
+         {.dstBinding = 1, .descriptorCount = 16, .descriptorType = VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK,
+          .offset = offsetof(__typeof__(payload), data), .stride = 1}};
+      VkDescriptorUpdateTemplateCreateInfo ti = {
+         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_UPDATE_TEMPLATE_CREATE_INFO,
+         .descriptorUpdateEntryCount = 2, .pDescriptorUpdateEntries = entries,
+         .templateType = VK_DESCRIPTOR_UPDATE_TEMPLATE_TYPE_DESCRIPTOR_SET,
+         .descriptorSetLayout = layouts[0]};
+      VkDescriptorUpdateTemplate t;
+      CHECK(vkCreateDescriptorUpdateTemplate(d, &ti, NULL, &t));
+      vkUpdateDescriptorSetWithTemplate(d, sets[0], t, &payload);
+      vkDestroyDescriptorUpdateTemplate(d, t, NULL);
+      VkPipelineLayoutCreateInfo plci = {.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+         .setLayoutCount = 1, .pSetLayouts = layouts};
+      VkPipelineLayout pl;
+      CHECK(vkCreatePipelineLayout(d, &plci, NULL, &pl));
+      VkCommandPoolCreateInfo cpci = {.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+      VkCommandPool cp;
+      CHECK(vkCreateCommandPool(d, &cpci, NULL, &cp));
+      VkCommandBufferAllocateInfo cbai = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+         .commandPool = cp, .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY, .commandBufferCount = 1};
+      VkCommandBuffer cb;
+      CHECK(vkAllocateCommandBuffers(d, &cbai, &cb));
+      VkCommandBufferBeginInfo bi = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+      CHECK(vkBeginCommandBuffer(cb, &bi));
+      uint32_t offset = 16;
+      vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pl, 0, 1, sets, 1, &offset);
+      lci.bindingCount = 1;
+      lci.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
+      VkDescriptorSetLayout push_layout;
+      CHECK(vkCreateDescriptorSetLayout(d, &lci, NULL, &push_layout));
+      plci.pSetLayouts = &push_layout;
+      VkPipelineLayout push_pl;
+      CHECK(vkCreatePipelineLayout(d, &plci, NULL, &push_pl));
+      writes[0].dstSet = VK_NULL_HANDLE;
+      vkCmdPushDescriptorSetKHR(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, push_pl, 0, 1, writes);
+      ti.descriptorUpdateEntryCount = 1;
+      ti.templateType = VK_DESCRIPTOR_UPDATE_TEMPLATE_TYPE_PUSH_DESCRIPTORS_KHR;
+      ti.pipelineLayout = push_pl;
+      ti.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+      CHECK(vkCreateDescriptorUpdateTemplate(d, &ti, NULL, &t));
+      vkCmdPushDescriptorSetWithTemplateKHR(cb, t, push_pl, 0, &payload);
+      CHECK(vkEndCommandBuffer(cb));
+      vkDestroyDescriptorUpdateTemplate(d, t, NULL);
+      vkDestroyCommandPool(d, cp, NULL);
+      vkDestroyPipelineLayout(d, pl, NULL);
+      vkDestroyPipelineLayout(d, push_pl, NULL);
+      vkDestroyDescriptorSetLayout(d, push_layout, NULL);
+      CHECK(vkFreeDescriptorSets(d, pool, 1, sets));
+      CHECK(vkResetDescriptorPool(d, pool, 0));
+      vkDestroyDescriptorPool(d, pool, NULL);
+      vkDestroyDescriptorSetLayout(d, layouts[0], NULL);
+      /* First large set succeeds, second fails: rollback is inside allocate,
+       * never a spurious external free call. A later allocation proves rollback. */
+      bindings[0].descriptorCount = 4096;
+      lci.flags = 0;
+      CHECK(vkCreateDescriptorSetLayout(d, &lci, NULL, &layouts[0]));
+      layouts[1] = layouts[0];
+      VkDescriptorPoolSize large_size = {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 4096};
+      pci.pNext = NULL; pci.maxSets = 1; pci.poolSizeCount = 1; pci.pPoolSizes = &large_size;
+      CHECK(vkCreateDescriptorPool(d, &pci, NULL, &pool));
+      ai.descriptorPool = pool;
+      VkResult result = vkAllocateDescriptorSets(d, &ai, sets);
+      if (result != VK_ERROR_OUT_OF_POOL_MEMORY || sets[0] || sets[1]) return 1;
+      ai.descriptorSetCount = 1;
+      CHECK(vkAllocateDescriptorSets(d, &ai, sets));
+      vkDestroyDescriptorPool(d, pool, NULL); /* destroys the live recovered set */
+      vkDestroyDescriptorSetLayout(d, layouts[0], NULL);
+      vkDestroyDevice(d, NULL);
+   }
+   fprintf(stderr, "descriptor-fixture end\n");
+   puts("ok descriptor_stats API: mixed writes/copies, inline bytes, template/bind/push, rollback, threads, two devices");
+   return 0;
+}
+
+/* A fence forces the mock's opt-in deferred feedback to drain before host
+ * observation and before any referenced resources can be destroyed. */
+static void
+descriptor_replay_submit(VkDevice d, VkQueue queue, const VkSubmitInfo *submit)
+{
+   DPROC(vkCreateFence); DPROC(vkDestroyFence); DPROC(vkWaitForFences);
+   DPROC(vkQueueSubmit);
+   VkFenceCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+   VkFence fence;
+   CHECK(vkCreateFence(d, &ci, NULL, &fence));
+   CHECK(vkQueueSubmit(queue, 1, submit, fence));
+   CHECK(vkWaitForFences(d, 1, &fence, VK_TRUE, 30000000000ull));
+   vkDestroyFence(d, fence, NULL);
+}
+
+/* Capture real native telemetry only after all host/mock work is idle. An empty
+ * submit invokes the normal reporter; waiting past its one-second throttle
+ * avoids modifying production state or parsing a live stderr stream. */
+static void
+descriptor_replay_snapshot(VkDevice d, VkQueue queue, const char *phase)
+{
+   DPROC(vkQueueWaitIdle);
+   CHECK(vkQueueWaitIdle(queue));
+   sleep(2);
+   fprintf(stderr, "descriptor-replay phase=%s begin\n", phase);
+   VkSubmitInfo empty = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO};
+   descriptor_replay_submit(d, queue, &empty);
+   CHECK(vkQueueWaitIdle(queue));
+   fprintf(stderr, "descriptor-replay phase=%s end\n", phase);
+}
+
+static int
+check_descriptor_replay(VkPhysicalDevice pd)
+{
+   if (!getenv("KK_HOST_DESCRIPTOR_TEST"))
+      return 0;
+   fprintf(stderr, "descriptor-replay begin\n");
+   if (setenv("KK_MOCK_DEFER_FEEDBACK", "1", 1))
+      return 1;
+   DPROC(vkCreateDevice); DPROC(vkDestroyDevice); DPROC(vkGetDeviceQueue);
+   DPROC(vkCreateDescriptorSetLayout); DPROC(vkDestroyDescriptorSetLayout);
+   DPROC(vkCreateDescriptorPool); DPROC(vkDestroyDescriptorPool);
+   DPROC(vkAllocateDescriptorSets); DPROC(vkUpdateDescriptorSets);
+   DPROC(vkCreatePipelineLayout); DPROC(vkDestroyPipelineLayout);
+   DPROC(vkCreateDescriptorUpdateTemplate); DPROC(vkDestroyDescriptorUpdateTemplate);
+   DPROC(vkCreateCommandPool); DPROC(vkDestroyCommandPool); DPROC(vkAllocateCommandBuffers);
+   DPROC(vkBeginCommandBuffer); DPROC(vkEndCommandBuffer); DPROC(vkCmdExecuteCommands);
+   DPROC(vkCmdBindDescriptorSets); DPROC(vkCmdPushDescriptorSetKHR);
+   DPROC(vkCmdPushDescriptorSetWithTemplateKHR); DPROC(vkQueueWaitIdle);
+   float priority = 1;
+   VkDeviceQueueCreateInfo qci = {.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+      .queueCount = 1, .pQueuePriorities = &priority};
+   const char *exts[] = {"VK_KHR_push_descriptor", "VK_EXT_robustness2"};
+   VkPhysicalDeviceRobustness2FeaturesEXT robustness = {
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT,
+      .nullDescriptor = VK_TRUE};
+   VkDeviceCreateInfo dci = {.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+      .pNext = &robustness, .queueCreateInfoCount = 1, .pQueueCreateInfos = &qci,
+      .enabledExtensionCount = 2, .ppEnabledExtensionNames = exts};
+   VkDevice d;
+   CHECK(vkCreateDevice(pd, &dci, NULL, &d));
+   VkQueue queue;
+   vkGetDeviceQueue(d, 0, 0, &queue);
+   VkDescriptorSetLayoutBinding binding = {.binding = 0,
+      .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .descriptorCount = 1,
+      .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT};
+   VkDescriptorSetLayoutCreateInfo lci = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+      .bindingCount = 1, .pBindings = &binding};
+   VkDescriptorSetLayout layout, push_layout;
+   CHECK(vkCreateDescriptorSetLayout(d, &lci, NULL, &layout));
+   lci.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
+   CHECK(vkCreateDescriptorSetLayout(d, &lci, NULL, &push_layout));
+   VkPipelineLayoutCreateInfo plci = {.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+      .setLayoutCount = 1, .pSetLayouts = &layout};
+   VkPipelineLayout pl, push_pl;
+   CHECK(vkCreatePipelineLayout(d, &plci, NULL, &pl));
+   plci.pSetLayouts = &push_layout;
+   CHECK(vkCreatePipelineLayout(d, &plci, NULL, &push_pl));
+   VkDescriptorPoolSize size = {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1};
+   VkDescriptorPoolCreateInfo pci = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+      .maxSets = 1, .poolSizeCount = 1, .pPoolSizes = &size};
+   VkDescriptorPool pool;
+   CHECK(vkCreateDescriptorPool(d, &pci, NULL, &pool));
+   VkDescriptorSetAllocateInfo ai = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+      .descriptorPool = pool, .descriptorSetCount = 1, .pSetLayouts = &layout};
+   VkDescriptorSet set;
+   CHECK(vkAllocateDescriptorSets(d, &ai, &set));
+   VkDescriptorBufferInfo buffer = {.range = VK_WHOLE_SIZE}; /* enabled nullDescriptor */
+   VkWriteDescriptorSet write = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+      .dstSet = set, .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+      .descriptorCount = 1, .pBufferInfo = &buffer};
+   vkUpdateDescriptorSets(d, 1, &write, 0, NULL);
+   write.dstSet = VK_NULL_HANDLE;
+   VkDescriptorUpdateTemplateEntry entry = {.descriptorCount = 1,
+      .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .stride = sizeof(buffer)};
+   VkDescriptorUpdateTemplateCreateInfo ti = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_UPDATE_TEMPLATE_CREATE_INFO,
+      .descriptorUpdateEntryCount = 1, .pDescriptorUpdateEntries = &entry,
+      .templateType = VK_DESCRIPTOR_UPDATE_TEMPLATE_TYPE_PUSH_DESCRIPTORS_KHR,
+      .pipelineBindPoint = VK_PIPELINE_BIND_POINT_COMPUTE, .pipelineLayout = push_pl};
+   VkDescriptorUpdateTemplate t;
+   CHECK(vkCreateDescriptorUpdateTemplate(d, &ti, NULL, &t));
+   VkCommandPoolCreateInfo cpci = {.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+   VkCommandPool cp;
+   CHECK(vkCreateCommandPool(d, &cpci, NULL, &cp));
+   VkCommandBufferAllocateInfo cbai = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+      .commandPool = cp, .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY, .commandBufferCount = 2};
+   VkCommandBuffer primary[2], secondary;
+   CHECK(vkAllocateCommandBuffers(d, &cbai, primary));
+   cbai.level = VK_COMMAND_BUFFER_LEVEL_SECONDARY;
+   cbai.commandBufferCount = 1;
+   CHECK(vkAllocateCommandBuffers(d, &cbai, &secondary));
+   VkCommandBufferInheritanceInfo inheritance = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_INFO};
+   VkCommandBufferBeginInfo bi = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+      .flags = VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT, .pInheritanceInfo = &inheritance};
+   CHECK(vkBeginCommandBuffer(secondary, &bi));
+   vkCmdBindDescriptorSets(secondary, VK_PIPELINE_BIND_POINT_COMPUTE, pl, 0, 1, &set, 0, NULL);
+   vkCmdPushDescriptorSetKHR(secondary, VK_PIPELINE_BIND_POINT_COMPUTE, push_pl, 0, 1, &write);
+   vkCmdPushDescriptorSetWithTemplateKHR(secondary, t, push_pl, 0, &buffer);
+   CHECK(vkEndCommandBuffer(secondary));
+   descriptor_replay_snapshot(d, queue, "secondary-recorded");
+   bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+   bi.pInheritanceInfo = NULL;
+   CHECK(vkBeginCommandBuffer(primary[0], &bi));
+   vkCmdExecuteCommands(primary[0], 1, &secondary);
+   descriptor_replay_snapshot(d, queue, "secondary-executed-once");
+   vkCmdExecuteCommands(primary[0], 1, &secondary);
+   CHECK(vkEndCommandBuffer(primary[0]));
+   descriptor_replay_snapshot(d, queue, "secondary-executed-twice");
+   VkSubmitInfo submit = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+      .commandBufferCount = 1, .pCommandBuffers = &primary[0]};
+   descriptor_replay_submit(d, queue, &submit);
+   descriptor_replay_snapshot(d, queue, "secondary-primary-submitted");
+   /* No ONE_TIME_SUBMIT: valid to resubmit after each wait. Keep every set,
+    * layout, template and secondary alive until all submissions complete. */
+   bi.flags = 0;
+   CHECK(vkBeginCommandBuffer(primary[1], &bi));
+   vkCmdBindDescriptorSets(primary[1], VK_PIPELINE_BIND_POINT_COMPUTE, pl, 0, 1, &set, 0, NULL);
+   vkCmdPushDescriptorSetKHR(primary[1], VK_PIPELINE_BIND_POINT_COMPUTE, push_pl, 0, 1, &write);
+   vkCmdPushDescriptorSetWithTemplateKHR(primary[1], t, push_pl, 0, &buffer);
+   CHECK(vkEndCommandBuffer(primary[1]));
+   descriptor_replay_snapshot(d, queue, "reusable-recorded");
+   submit.pCommandBuffers = &primary[1];
+   const char *phases[] = {"reusable-submit-1", "reusable-submit-2", "reusable-submit-3"};
+   for (unsigned i = 0; i < 3; i++) {
+      descriptor_replay_submit(d, queue, &submit);
+      descriptor_replay_snapshot(d, queue, phases[i]);
+   }
+   CHECK(vkQueueWaitIdle(queue));
+   vkDestroyCommandPool(d, cp, NULL);
+   vkDestroyDescriptorUpdateTemplate(d, t, NULL);
+   vkDestroyPipelineLayout(d, pl, NULL);
+   vkDestroyPipelineLayout(d, push_pl, NULL);
+   vkDestroyDescriptorPool(d, pool, NULL);
+   vkDestroyDescriptorSetLayout(d, layout, NULL);
+   vkDestroyDescriptorSetLayout(d, push_layout, NULL);
+   vkDestroyDevice(d, NULL);
+   unsetenv("KK_MOCK_DEFER_FEEDBACK");
+   fprintf(stderr, "descriptor-replay end\n");
+   puts("ok descriptor replay: deferred secondary bind/push/template-push, repeated execution and reusable-primary resubmission");
+   return 0;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -1571,6 +2084,8 @@ main(int argc, char **argv)
    if (check_budget_cap(&ici))
       return 1;
    if (check_heap_cap(&ici))
+      return 1;
+   if (check_memory_priority(&ici))
       return 1;
    CHECK(vkCreateInstance(&ici, NULL, &inst));
 
@@ -1694,9 +2209,33 @@ main(int argc, char **argv)
               getenv("MESA_KK_EXPERIMENTAL") ? getenv("MESA_KK_EXPERIMENTAL") : "");
       return 1;
    }
+   /* PLA-431: VK_EXT_shader_module_identifier, and its feature, only with
+    * MESA_KK_EXPERIMENTAL=module_identifier. */
+   VkPhysicalDeviceShaderModuleIdentifierFeaturesEXT module_id_feat = {
+      .sType =
+         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_MODULE_IDENTIFIER_FEATURES_EXT,
+   };
+   VkPhysicalDeviceFeatures2 module_id_f2 = {
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+      .pNext = &module_id_feat,
+   };
+   vkGetPhysicalDeviceFeatures2(pd, &module_id_f2);
+   const bool module_id =
+      has_device_extension(pd, "VK_EXT_shader_module_identifier");
+   if (module_id != module_identifier_wanted() ||
+       module_id_feat.shaderModuleIdentifier != module_id) {
+      fprintf(stderr, "VK_EXT_shader_module_identifier %d, shaderModuleIdentifier "
+              "%d with MESA_KK_EXPERIMENTAL=%s\n",
+              module_id, module_id_feat.shaderModuleIdentifier,
+              getenv("MESA_KK_EXPERIMENTAL") ? getenv("MESA_KK_EXPERIMENTAL") : "");
+      return 1;
+   }
+   module_id_feat.pNext = gpl ? (void *)&gpl_enable : (void *)&v13;
    VkPhysicalDeviceTransformFeedbackFeaturesEXT xfb_enable = {
       .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TRANSFORM_FEEDBACK_FEATURES_EXT,
-      .pNext = gpl ? (void *)&gpl_enable : (void *)&v13,
+      .pNext = module_id ? (void *)&module_id_feat
+               : gpl     ? (void *)&gpl_enable
+                         : (void *)&v13,
       .transformFeedback = VK_TRUE,
       .geometryStreams = VK_TRUE,
    };
@@ -1715,7 +2254,7 @@ main(int argc, char **argv)
       .dualSrcBlend = gpl,
       .logicOp = gpl,
    };
-   const char *exts[4] = {"VK_EXT_transform_feedback"};
+   const char *exts[5] = {"VK_EXT_transform_feedback"};
    uint32_t next = 1;
    if (pv_feat.provokingVertexLast)
       exts[next++] = "VK_EXT_provoking_vertex";
@@ -1723,6 +2262,8 @@ main(int argc, char **argv)
       exts[next++] = "VK_KHR_pipeline_library";
       exts[next++] = "VK_EXT_graphics_pipeline_library";
    }
+   if (module_id)
+      exts[next++] = "VK_EXT_shader_module_identifier";
    VkDeviceCreateInfo dci = {
       .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
       .pNext = &pv_enable,
@@ -2695,6 +3236,12 @@ main(int argc, char **argv)
       return 1;
    if (gpl_wanted() && check_gpl(pd, queue, pool, buf))
       return 1;
+   if (check_module_identifier(pd, queue, pool, buf))
+      return 1;
+   if (check_descriptor_stats(pd))
+      return 1;
+   if (check_descriptor_replay(pd))
+      return 1;
    return 0;
 }
 
@@ -2712,6 +3259,11 @@ main(int argc, char **argv)
 struct gpl_libs {
    VkPipelineLayout layout;
    VkShaderModule vs, fs;
+   /* The vertex shader by identifier instead of vs, with
+    * VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT
+    * (check_module_identifier): gpl_library returns VK_NULL_HANDLE for
+    * VK_PIPELINE_COMPILE_REQUIRED */
+   const VkPipelineShaderStageModuleIdentifierCreateInfoEXT *vs_id;
 };
 
 /* The pipeline cache libraries are made with (gpl_round_trip) */
@@ -2852,6 +3404,10 @@ gpl_library(const struct gpl_libs *g, VkGraphicsPipelineLibraryFlagsEXT part,
    case VK_GRAPHICS_PIPELINE_LIBRARY_PRE_RASTERIZATION_SHADERS_BIT_EXT:
       stage.stage = VK_SHADER_STAGE_VERTEX_BIT;
       stage.module = g->vs;
+      if (g->vs_id) {
+         stage.pNext = g->vs_id;
+         ci.flags |= VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT;
+      }
       ci.stageCount = 1;
       ci.pStages = &stage;
       ci.pViewportState = &vp;
@@ -2876,7 +3432,11 @@ gpl_library(const struct gpl_libs *g, VkGraphicsPipelineLibraryFlagsEXT part,
       break;
    }
    VkPipeline p;
-   CHECK(vkCreateGraphicsPipelines(dev, gpl_pipeline_cache, 1, &ci, NULL, &p));
+   VkResult r =
+      vkCreateGraphicsPipelines(dev, gpl_pipeline_cache, 1, &ci, NULL, &p);
+   if (g->vs_id && r == VK_PIPELINE_COMPILE_REQUIRED && p == VK_NULL_HANDLE)
+      return VK_NULL_HANDLE;
+   CHECK(r);
    return p;
 }
 
@@ -3460,5 +4020,356 @@ check_gpl(VkPhysicalDevice pd, VkQueue queue, VkCommandPool pool, VkBuffer buf)
    if (gpl_round_trip(pd))
       return 1;
    printf("ok gpl: libraries, fast and optimized links drawn\n");
+   return 0;
+}
+
+/* texel.comp's pipeline in layout, from module or, with
+ * VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT, from id */
+static VkResult
+identifier_compute(VkPipelineCache cache, VkPipelineLayout layout,
+                   VkShaderModule module,
+                   const VkPipelineShaderStageModuleIdentifierCreateInfoEXT *id,
+                   VkPipeline *p)
+{
+   DPROC(vkCreateComputePipelines);
+   VkComputePipelineCreateInfo ci = {
+      .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
+      .flags = id ? VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT : 0,
+      .stage = {
+         .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+         .pNext = id,
+         .stage = VK_SHADER_STAGE_COMPUTE_BIT,
+         .module = id ? VK_NULL_HANDLE : module,
+         .pName = "main",
+      },
+      .layout = layout,
+   };
+   *p = (VkPipeline)(uintptr_t)1;
+   VkResult r = vkCreateComputePipelines(dev, cache, 1, &ci, NULL, p);
+   if (r == VK_PIPELINE_COMPILE_REQUIRED && *p != VK_NULL_HANDLE) {
+      fprintf(stderr, "module_identifier: VK_PIPELINE_COMPILE_REQUIRED with "
+              "a pipeline\n");
+      exit(1);
+   }
+   return r;
+}
+
+/* Whether the MSL libraries [first, first + n) are each the same as those
+ * from like on; true without KK_MOCK_MSL_DIR */
+static bool
+msl_same_run(int first, int like, int n)
+{
+   for (int i = 0; first >= 0 && i < n; i++)
+      if (!msl_same(first + i, like + i))
+         return false;
+   return true;
+}
+
+/* VK_EXT_shader_module_identifier (PLA-431), as vkd3d-proton's pipeline
+ * cache and DXVK's pipeline libraries use it. Without
+ * MESA_KK_EXPERIMENTAL=module_identifier, main's device has no
+ * vkGetShaderModuleIdentifierEXT. Either way the algorithm UUID is the
+ * common runtime's "MESA-BLAKE3". With it, on devices of their own (as main
+ * made dev, which enables it):
+ * - a module's identifier is the one of its create info, the same for the
+ *   same SPIR-V and another for other SPIR-V;
+ * - texel.comp's pipeline from its identifier fails with
+ *   VK_PIPELINE_COMPILE_REQUIRED, compiling nothing, without a pipeline
+ *   cache, from an empty one, and with an identifier no module has;
+ * - once built from its module into a pipeline cache, it is made from the
+ *   identifier through that cache, and on a second device through a cache
+ *   made from the first's data (but still not without one), any MSL library
+ *   it makes the same as its module's;
+ * - with gpl, on main's device, a vertex shader library from an identifier
+ *   fails the same way
+ *   in an empty pipeline cache, is made once the cache has it, and links
+ *   fast and draws. */
+static int
+check_module_identifier(VkPhysicalDevice pd, VkQueue queue, VkCommandPool pool,
+                        VkBuffer buf)
+{
+   IPROC(vkGetPhysicalDeviceProperties2);
+   IPROC(vkGetDeviceProcAddr);
+   VkPhysicalDeviceShaderModuleIdentifierPropertiesEXT id_props = {
+      .sType =
+         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_MODULE_IDENTIFIER_PROPERTIES_EXT,
+   };
+   VkPhysicalDeviceProperties2 props = {
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
+      .pNext = &id_props,
+   };
+   vkGetPhysicalDeviceProperties2(pd, &props);
+   const uint8_t uuid[VK_UUID_SIZE] = "MESA-BLAKE3";
+   if (memcmp(id_props.shaderModuleIdentifierAlgorithmUUID, uuid,
+              VK_UUID_SIZE) != 0) {
+      fprintf(stderr, "module_identifier: the algorithm UUID is not "
+              "MESA-BLAKE3\n");
+      return 1;
+   }
+   PFN_vkGetShaderModuleIdentifierEXT get_id =
+      (PFN_vkGetShaderModuleIdentifierEXT)vkGetDeviceProcAddr(
+         dev, "vkGetShaderModuleIdentifierEXT");
+   PFN_vkGetShaderModuleCreateInfoIdentifierEXT get_info_id =
+      (PFN_vkGetShaderModuleCreateInfoIdentifierEXT)vkGetDeviceProcAddr(
+         dev, "vkGetShaderModuleCreateInfoIdentifierEXT");
+   if (!get_id != !module_identifier_wanted() ||
+       !get_info_id != !module_identifier_wanted()) {
+      fprintf(stderr, "module_identifier: vkGetShaderModuleIdentifierEXT %s\n",
+              get_id ? "without the extension" : "missing");
+      return 1;
+   }
+   if (!module_identifier_wanted())
+      return 0;
+
+   IPROC(vkCreateDevice);
+   DPROC(vkDestroyDevice);
+   DPROC(vkDestroyShaderModule);
+   DPROC(vkCreateDescriptorSetLayout);
+   DPROC(vkDestroyDescriptorSetLayout);
+   DPROC(vkCreatePipelineLayout);
+   DPROC(vkDestroyPipelineLayout);
+   DPROC(vkCreatePipelineCache);
+   DPROC(vkGetPipelineCacheData);
+   DPROC(vkDestroyPipelineCache);
+   DPROC(vkDestroyPipeline);
+
+   /* Identifiers, on main's device */
+   VkShaderModuleCreateInfo comp_info = read_spv("texel.comp");
+   VkShaderModule comp = load_module("texel.comp");
+   VkShaderModule comp_again = load_module("texel.comp");
+   VkShaderModule frag = load_module("color.frag");
+   VkShaderModuleIdentifierEXT id_comp = {
+      .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_IDENTIFIER_EXT};
+   VkShaderModuleIdentifierEXT id_info = id_comp, id_again = id_comp,
+                               id_frag = id_comp;
+   get_id(dev, comp, &id_comp);
+   get_id(dev, comp_again, &id_again);
+   get_id(dev, frag, &id_frag);
+   get_info_id(dev, &comp_info, &id_info);
+   if (id_comp.identifierSize == 0 ||
+       id_comp.identifierSize > VK_MAX_SHADER_MODULE_IDENTIFIER_SIZE_EXT ||
+       id_info.identifierSize != id_comp.identifierSize ||
+       memcmp(id_info.identifier, id_comp.identifier, id_comp.identifierSize) ||
+       id_again.identifierSize != id_comp.identifierSize ||
+       memcmp(id_again.identifier, id_comp.identifier, id_comp.identifierSize) ||
+       id_frag.identifierSize != id_comp.identifierSize ||
+       !memcmp(id_frag.identifier, id_comp.identifier, id_comp.identifierSize)) {
+      fprintf(stderr, "module_identifier: identifiers of %u bytes; the create "
+              "info's the same %d, the same SPIR-V's %d, other SPIR-V's other %d\n",
+              id_comp.identifierSize,
+              !memcmp(id_info.identifier, id_comp.identifier, 32),
+              !memcmp(id_again.identifier, id_comp.identifier, 32),
+              !!memcmp(id_frag.identifier, id_comp.identifier, 32));
+      return 1;
+   }
+   free((void *)comp_info.pCode);
+   vkDestroyShaderModule(dev, comp_again, NULL);
+   vkDestroyShaderModule(dev, frag, NULL);
+   const VkPipelineShaderStageModuleIdentifierCreateInfoEXT by_id = {
+      .sType =
+         VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_MODULE_IDENTIFIER_CREATE_INFO_EXT,
+      .identifierSize = id_comp.identifierSize,
+      .pIdentifier = id_comp.identifier,
+   };
+   uint8_t no_module[32];
+   memset(no_module, 0xab, sizeof(no_module));
+   const VkPipelineShaderStageModuleIdentifierCreateInfoEXT by_bad_id = {
+      .sType =
+         VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_MODULE_IDENTIFIER_CREATE_INFO_EXT,
+      .identifierSize = sizeof(no_module),
+      .pIdentifier = no_module,
+   };
+
+   /* texel.comp's layout */
+   const VkDescriptorSetLayoutBinding bindings[] = {
+      {0, VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, 1,
+       VK_SHADER_STAGE_COMPUTE_BIT, NULL},
+      {1, VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER, 1,
+       VK_SHADER_STAGE_COMPUTE_BIT, NULL},
+      {2, VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER, 1,
+       VK_SHADER_STAGE_COMPUTE_BIT, NULL},
+   };
+   const VkDescriptorSetLayoutCreateInfo dslci = {
+      .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+      .bindingCount = 3,
+      .pBindings = bindings,
+   };
+
+   const VkDevice main_dev = dev;
+   void *data = NULL;
+   size_t size = 0;
+   /* MSL libraries: [0] before the module's build, [1] after it, [2] after
+    * the first device's identifier build, [3] before the second device's,
+    * [4] after it */
+   int at[5] = {0};
+   for (int device = 0; device < 2; device++) {
+      CHECK(vkCreateDevice(pd, device_info, NULL, &dev));
+      VkDescriptorSetLayout dsl;
+      CHECK(vkCreateDescriptorSetLayout(dev, &dslci, NULL, &dsl));
+      VkPipelineLayoutCreateInfo plci = {
+         .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+         .setLayoutCount = 1,
+         .pSetLayouts = &dsl,
+      };
+      VkPipelineLayout layout;
+      CHECK(vkCreatePipelineLayout(dev, &plci, NULL, &layout));
+      VkPipelineCacheCreateInfo pcci = {
+         .sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO,
+         .initialDataSize = device ? size : 0,
+         .pInitialData = device ? data : NULL,
+      };
+      VkPipelineCache cache;
+      CHECK(vkCreatePipelineCache(dev, &pcci, NULL, &cache));
+      VkPipelineCache empty;
+      pcci.initialDataSize = 0;
+      pcci.pInitialData = NULL;
+      CHECK(vkCreatePipelineCache(dev, &pcci, NULL, &empty));
+
+      /* Not in any cache of this device */
+      const int before_miss = msl_count();
+      VkPipeline p;
+      VkResult no_cache = identifier_compute(VK_NULL_HANDLE, layout,
+                                             VK_NULL_HANDLE, &by_id, &p);
+      VkResult empty_cache =
+         identifier_compute(empty, layout, VK_NULL_HANDLE, &by_id, &p);
+      VkResult bad_id = identifier_compute(device ? cache : empty, layout,
+                                           VK_NULL_HANDLE, &by_bad_id, &p);
+      if (no_cache != VK_PIPELINE_COMPILE_REQUIRED ||
+          empty_cache != VK_PIPELINE_COMPILE_REQUIRED ||
+          bad_id != VK_PIPELINE_COMPILE_REQUIRED || msl_count() != before_miss) {
+         fprintf(stderr, "module_identifier device %d: without a cache %d, "
+                 "an empty cache %d, an unknown identifier %d, %d MSL "
+                 "libraries made\n",
+                 device, no_cache, empty_cache, bad_id,
+                 msl_count() - before_miss);
+         return 1;
+      }
+
+      if (device == 0) {
+         VkShaderModule module = load_module("texel.comp");
+         at[0] = msl_count();
+         CHECK(identifier_compute(cache, layout, module, NULL, &p));
+         at[1] = msl_count();
+         vkDestroyPipeline(dev, p, NULL);
+         vkDestroyShaderModule(dev, module, NULL);
+         CHECK(identifier_compute(cache, layout, VK_NULL_HANDLE, &by_id, &p));
+         at[2] = msl_count();
+         vkDestroyPipeline(dev, p, NULL);
+         CHECK(vkGetPipelineCacheData(dev, cache, &size, NULL));
+         data = malloc(size);
+         CHECK(vkGetPipelineCacheData(dev, cache, &size, data));
+      } else {
+         at[3] = msl_count();
+         CHECK(identifier_compute(cache, layout, VK_NULL_HANDLE, &by_id, &p));
+         at[4] = msl_count();
+         vkDestroyPipeline(dev, p, NULL);
+      }
+      vkDestroyPipelineCache(dev, cache, NULL);
+      vkDestroyPipelineCache(dev, empty, NULL);
+      vkDestroyPipelineLayout(dev, layout, NULL);
+      vkDestroyDescriptorSetLayout(dev, dsl, NULL);
+      vkDestroyDevice(dev, NULL);
+      dev = main_dev;
+   }
+   free(data);
+   if (at[0] >= 0) {
+      const int built = at[1] - at[0], again = at[2] - at[1],
+                second = at[4] - at[3];
+      if (built < 1 || again > built || second > built ||
+          !msl_same_run(at[1], at[0], again) ||
+          !msl_same_run(at[3], at[0], second)) {
+         fprintf(stderr, "module_identifier: the module's build made %d MSL "
+                 "libraries, the identifier's %d, the second device's %d, "
+                 "not the same\n", built, again, second);
+         return 1;
+      }
+   }
+   printf("ok module_identifier: identifiers stable, VK_PIPELINE_COMPILE_REQUIRED "
+          "without a cache, from an empty one and for an unknown identifier; "
+          "from the cache the module was built into %d MSL libraries, on a "
+          "second device from its data %d, as the module's %d\n",
+          at[2] - at[1], at[4] - at[3], at[1] - at[0]);
+
+   if (gpl_wanted()) {
+      VkPipelineLayoutCreateInfo plci = {
+         .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+         .flags = VK_PIPELINE_LAYOUT_CREATE_INDEPENDENT_SETS_BIT_EXT,
+      };
+      struct gpl_libs g = {.vs = load_module("pass.vert"),
+                           .fs = load_module("color.frag")};
+      CHECK(vkCreatePipelineLayout(dev, &plci, NULL, &g.layout));
+      VkShaderModuleIdentifierEXT id_vs = {
+         .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_IDENTIFIER_EXT};
+      get_id(dev, g.vs, &id_vs);
+      const VkPipelineShaderStageModuleIdentifierCreateInfoEXT vs_by_id = {
+         .sType =
+            VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_MODULE_IDENTIFIER_CREATE_INFO_EXT,
+         .identifierSize = id_vs.identifierSize,
+         .pIdentifier = id_vs.identifier,
+      };
+      struct gpl_libs g_id = {.layout = g.layout, .vs_id = &vs_by_id};
+      VkPipelineCacheCreateInfo pcci = {
+         .sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO,
+      };
+      CHECK(vkCreatePipelineCache(dev, &pcci, NULL, &gpl_pipeline_cache));
+      const VkFormat RGBA8 = VK_FORMAT_R8G8B8A8_UNORM;
+      const VkFormat RGBA32F = VK_FORMAT_R32G32B32A32_SFLOAT;
+      const VkPolygonMode FILL = VK_POLYGON_MODE_FILL;
+      const VkGraphicsPipelineLibraryFlagsEXT PRE =
+         VK_GRAPHICS_PIPELINE_LIBRARY_PRE_RASTERIZATION_SHADERS_BIT_EXT;
+      const int before_miss = msl_count();
+      VkPipeline miss = gpl_library(&g_id, PRE, RGBA32F, RGBA8, GPL_PLAIN, true, FILL);
+      const int after_miss = msl_count();
+      VkPipeline pre = gpl_library(&g, PRE, RGBA32F, RGBA8, GPL_PLAIN, true, FILL);
+      const int built = msl_count();
+      VkPipeline pre_id = gpl_library(&g_id, PRE, RGBA32F, RGBA8, GPL_PLAIN, true, FILL);
+      const int again = msl_count();
+      if (miss != VK_NULL_HANDLE || after_miss != before_miss ||
+          pre_id == VK_NULL_HANDLE || again - built > built - after_miss ||
+          !msl_same_run(built, after_miss, again - built)) {
+         fprintf(stderr, "module_identifier gpl: a vertex library from an "
+                 "identifier before the build %s (%d MSL libraries), after it "
+                 "%s (%d MSL libraries, the build %d)\n",
+                 miss ? "made" : "not made", after_miss - before_miss,
+                 pre_id ? "made" : "not made", again - built,
+                 built - after_miss);
+         return 1;
+      }
+      VkPipeline libs[4] = {
+         gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_VERTEX_INPUT_INTERFACE_BIT_EXT,
+                     RGBA32F, RGBA8, GPL_PLAIN, true, FILL),
+         pre_id,
+         gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT,
+                     RGBA32F, RGBA8, GPL_PLAIN, true, FILL),
+         gpl_library(&g, VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_OUTPUT_INTERFACE_BIT_EXT,
+                     RGBA32F, RGBA8, GPL_PLAIN, true, FILL),
+      };
+      VkImage image;
+      VkDeviceMemory image_mem;
+      VkImageView view = gpl_target(pd, RGBA8, VK_SAMPLE_COUNT_1_BIT, &image,
+                                    &image_mem);
+      VkPipeline linked = gpl_link(&g, libs, false);
+      gpl_draw(queue, pool, buf, view, linked);
+      printf("ok module_identifier gpl: a vertex library from an identifier: "
+             "VK_PIPELINE_COMPILE_REQUIRED in an empty cache, made from the "
+             "cache with %d MSL libraries (the build %d), linked fast and "
+             "drawn\n", again - built, built - after_miss);
+      DPROC(vkDestroyImageView);
+      DPROC(vkDestroyImage);
+      DPROC(vkFreeMemory);
+      vkDestroyPipeline(dev, linked, NULL);
+      vkDestroyPipeline(dev, pre, NULL);
+      for (int i = 0; i < 4; i++)
+         vkDestroyPipeline(dev, libs[i], NULL);
+      vkDestroyPipelineCache(dev, gpl_pipeline_cache, NULL);
+      gpl_pipeline_cache = VK_NULL_HANDLE;
+      vkDestroyImageView(dev, view, NULL);
+      vkDestroyImage(dev, image, NULL);
+      vkFreeMemory(dev, image_mem, NULL);
+      vkDestroyPipelineLayout(dev, g.layout, NULL);
+      vkDestroyShaderModule(dev, g.vs, NULL);
+      vkDestroyShaderModule(dev, g.fs, NULL);
+   }
+   vkDestroyShaderModule(dev, comp, NULL);
    return 0;
 }

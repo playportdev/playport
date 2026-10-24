@@ -295,6 +295,7 @@ final class GyroFeed: @unchecked Sendable {
         #if !PLAYPORT_RELEASE
         /// A dev build's `gyro:` script runs: its samples replace the sensors'.
         var scripted = false
+        var scriptCancelled = false
         #endif
     }
     private let control = OSAllocatedUnfairLock(initialState: Control())
@@ -573,15 +574,35 @@ final class GyroFeed: @unchecked Sendable {
 
     /// Plays `script` from now, each sample at its time, on the queue; returns once the last is fed.
     func play(_ script: GyroScript) async -> ScriptResult {
-        await withCheckedContinuation { done in
-            dispatch.async { [self] in
-                control.withLock { $0.scripted = true }
-                let timer = DispatchSource.makeTimerSource(queue: dispatch)
-                playing = Playing(samples: script.samples(from: ProcessInfo.processInfo.systemUptime), timer: timer, done: done)
-                timer.schedule(deadline: .now(), repeating: .milliseconds(2), leeway: .milliseconds(1))
-                timer.setEventHandler { [self] in scriptTick() }
-                timer.resume()
+        control.withLock { $0.scriptCancelled = false }
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { done in
+                dispatch.async { [self] in
+                    guard !control.withLock({ $0.scriptCancelled }) else {
+                        done.resume(returning: ScriptResult())
+                        return
+                    }
+                    control.withLock { $0.scripted = true }
+                    let timer = DispatchSource.makeTimerSource(queue: dispatch)
+                    playing = Playing(samples: script.samples(from: ProcessInfo.processInfo.systemUptime), timer: timer, done: done)
+                    timer.schedule(deadline: .now(), repeating: .milliseconds(2), leeway: .milliseconds(1))
+                    timer.setEventHandler { [self] in scriptTick() }
+                    timer.resume()
+                }
             }
+        } onCancel: { [self] in cancelScript() }
+    }
+
+    func cancelScript() {
+        control.withLock { $0.scriptCancelled = true }
+        dispatch.async { [self] in
+            guard let p = playing else { return }
+            p.timer.cancel()
+            playing = nil
+            let guest = control.withLock { c in c.scripted = false; return c.toGuest }
+            coalescer.reset()
+            if guest { HostIO.pads.withLock { p in HostIO.apply(p.mixer.gyro(.none).slot0, slot: 0, &p.gate) } }
+            p.done.resume(returning: p.result)
         }
     }
 
@@ -593,7 +614,7 @@ final class GyroFeed: @unchecked Sendable {
             p.next += 1
             p.result.samples += 1
             let c = control.withLock { $0 }
-            guard c.running != nil else { continue }
+            guard c.running != nil, !c.scriptCancelled else { continue }
             p.result.taken += 1
             switch process(s, c.settings, toGuest: c.toGuest) {
             case .none: break

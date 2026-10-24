@@ -126,6 +126,10 @@ struct RootView: View {
         .sheet(isPresented: Binding(get: { setup.presented }, set: { if !$0 && setup.phase != .ready && setup.phase != .cancelled { setup.cancel() } }),
                onDismiss: { setup.dismissed() }) { JitSetupSheet() }
         .onChange(of: scenePhase) { _, phase in
+            #if !PLAYPORT_RELEASE
+            // AppShell is removed during play; the root must revoke driver input too.
+            UIDriver.sceneChanged(active: phase == .active)
+            #endif
             if phase == .active {
                 restart.sceneBecameActive()
                 setup.sceneBecameActive()

@@ -88,20 +88,34 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 3) {
             Text("Settings").font(PP.display(26)).foregroundStyle(PP.text)
                 .padding(.horizontal, 14).padding(.bottom, 10)
-            ForEach(SettingsSection.shown, id: \.self) { s in
-                let on = navigation.settingsSection == s
-                Text(s.title)
-                    .font(.system(size: 15, weight: on ? .semibold : .medium))
-                    .foregroundStyle(on ? PP.background : PP.soft)
-                    .padding(.horizontal, 14)
-                    .frame(maxWidth: .infinity, minHeight: 37, alignment: .leading)
-                    .background(on ? PP.text : .clear, in: RoundedRectangle(cornerRadius: 10))
-                    .padItem(s.navItem, hint: "Open", cornerRadius: 10) {
-                        navigation.settingsSection = s
-                        SettingsRing.enter()
+            // The list scrolls when the sections outgrow the height (a landscape phone
+            // with the developer section); the ring keeps its entry in view.
+            ScrollViewReader { proxy in
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        ForEach(SettingsSection.shown, id: \.self) { s in
+                            let on = navigation.settingsSection == s
+                            Text(s.title)
+                                .font(.system(size: 15, weight: on ? .semibold : .medium))
+                                .foregroundStyle(on ? PP.background : PP.soft)
+                                .padding(.horizontal, 14)
+                                .frame(maxWidth: .infinity, minHeight: 37, alignment: .leading)
+                                .background(on ? PP.text : .clear, in: RoundedRectangle(cornerRadius: 10))
+                                .padItem(s.navItem, hint: "Open", cornerRadius: 10) {
+                                    navigation.settingsSection = s
+                                    SettingsRing.enter()
+                                }
+                                .id(s.navItem)
+                        }
                     }
+                    // Room for the ring, 6 pt outside a row, which the scroll view would clip.
+                    .padding(8).padding(.bottom, 12)
+                }
+                .padding(-8)
+                .onChange(of: navigation.settingsSection) { _, s in
+                    withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(s.navItem) }
+                }
             }
-            Spacer(minLength: 0)
         }
     }
 

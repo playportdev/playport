@@ -1,0 +1,955 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kamil=20Postro=C5=BCny?= <kamil@postrozny.pl>
+Date: Fri, 23 Oct 2026 09:26:43 +0200
+Subject: [PATCH] kk: descriptor cost diagnostics
+
+Opt-in disjoint legacy descriptor entrypoint counts and checked monotonic elapsed scopes. Per-device cumulative snapshots and bounded raw calibration; never CPU time.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-10-23-kk-descriptor-cost-probe-host.md
+Offered-upstream: no
+---
+ src/kosmickrisp/vulkan/kk_cmd_buffer.c       |  94 +++++-
+ src/kosmickrisp/vulkan/kk_debug.c            | 225 +++++++++++++++
+ src/kosmickrisp/vulkan/kk_debug.h            |   2 +
+ src/kosmickrisp/vulkan/kk_descriptor_set.c   | 284 ++++++++++++++++---
+ src/kosmickrisp/vulkan/kk_descriptor_stats.h |  97 +++++++
+ src/kosmickrisp/vulkan/kk_device.c           |   7 +
+ src/kosmickrisp/vulkan/kk_device.h           |   3 +
+ src/kosmickrisp/vulkan/kk_queue.c            |   2 +
+ 8 files changed, 673 insertions(+), 41 deletions(-)
+ create mode 100644 src/kosmickrisp/vulkan/kk_descriptor_stats.h
+
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.c b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+index f1d6577..4a665c1 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_buffer.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+@@ -717,8 +717,8 @@ kk_bind_descriptor_sets(struct kk_descriptor_state *desc,
+    desc->root_dirty = true;
+ }
+ 
+-VKAPI_ATTR void VKAPI_CALL
+-kk_CmdBindDescriptorSets2KHR(
++static void
++kk_CmdBindDescriptorSets2KHR_impl(
+    VkCommandBuffer commandBuffer,
+    const VkBindDescriptorSetsInfoKHR *pBindDescriptorSetsInfo)
+ {
+@@ -735,6 +735,34 @@ kk_CmdBindDescriptorSets2KHR(
+    }
+ }
+ 
++static void ATTRIBUTE_NOINLINE
++kk_CmdBindDescriptorSets2KHR_diagnostic(
++   VkCommandBuffer commandBuffer,
++   const VkBindDescriptorSetsInfoKHR *pBindDescriptorSetsInfo)
++{
++   VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
++   struct kk_device *dev = kk_cmd_buffer_device(cmd);
++   struct kk_descriptor_scope scope =
++      kk_descriptor_begin(&dev->descriptor_stats, KK_DESCRIPTOR_BIND);
++   kk_descriptor_add(scope.stats, scope.op, KK_DESCRIPTOR_SETS,
++                     pBindDescriptorSetsInfo->descriptorSetCount);
++   kk_descriptor_add(scope.stats, scope.op, KK_DESCRIPTOR_DYNAMIC_OFFSETS,
++                     pBindDescriptorSetsInfo->dynamicOffsetCount);
++   kk_CmdBindDescriptorSets2KHR_impl(commandBuffer, pBindDescriptorSetsInfo);
++   kk_descriptor_end(scope, false);
++}
++
++VKAPI_ATTR void VKAPI_CALL
++kk_CmdBindDescriptorSets2KHR(
++   VkCommandBuffer commandBuffer,
++   const VkBindDescriptorSetsInfoKHR *pBindDescriptorSetsInfo)
++{
++   if (KK_DEBUG(DESCRIPTOR_STATS))
++      kk_CmdBindDescriptorSets2KHR_diagnostic(commandBuffer, pBindDescriptorSetsInfo);
++   else
++      kk_CmdBindDescriptorSets2KHR_impl(commandBuffer, pBindDescriptorSetsInfo);
++}
++
+ static struct kk_push_descriptor_set *
+ kk_cmd_push_descriptors(struct kk_cmd_buffer *cmd,
+                         struct kk_descriptor_state *desc,
+@@ -779,8 +807,8 @@ kk_push_descriptor_set(struct kk_cmd_buffer *cmd,
+                                  info->pDescriptorWrites);
+ }
+ 
+-VKAPI_ATTR void VKAPI_CALL
+-kk_CmdPushDescriptorSet2KHR(
++static void
++kk_CmdPushDescriptorSet2KHR_impl(
+    VkCommandBuffer commandBuffer,
+    const VkPushDescriptorSetInfoKHR *pPushDescriptorSetInfo)
+ {
+@@ -797,6 +825,32 @@ kk_CmdPushDescriptorSet2KHR(
+    }
+ }
+ 
++static void ATTRIBUTE_NOINLINE
++kk_CmdPushDescriptorSet2KHR_diagnostic(
++   VkCommandBuffer commandBuffer,
++   const VkPushDescriptorSetInfoKHR *pPushDescriptorSetInfo)
++{
++   VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
++   struct kk_device *dev = kk_cmd_buffer_device(cmd);
++   struct kk_descriptor_scope scope =
++      kk_descriptor_begin(&dev->descriptor_stats, KK_DESCRIPTOR_PUSH);
++   kk_descriptor_writes(scope, pPushDescriptorSetInfo->descriptorWriteCount,
++                        pPushDescriptorSetInfo->pDescriptorWrites);
++   kk_CmdPushDescriptorSet2KHR_impl(commandBuffer, pPushDescriptorSetInfo);
++   kk_descriptor_end(scope, cmd->vk.record_result != VK_SUCCESS);
++}
++
++VKAPI_ATTR void VKAPI_CALL
++kk_CmdPushDescriptorSet2KHR(
++   VkCommandBuffer commandBuffer,
++   const VkPushDescriptorSetInfoKHR *pPushDescriptorSetInfo)
++{
++   if (KK_DEBUG(DESCRIPTOR_STATS))
++      kk_CmdPushDescriptorSet2KHR_diagnostic(commandBuffer, pPushDescriptorSetInfo);
++   else
++      kk_CmdPushDescriptorSet2KHR_impl(commandBuffer, pPushDescriptorSetInfo);
++}
++
+ static void
+ kk_push_constants(UNUSED struct kk_cmd_buffer *cmd,
+                   struct kk_descriptor_state *desc,
+@@ -1021,8 +1075,8 @@ kk_cmd_write(struct kk_cmd_buffer *cmd, struct libkk_imm_write write)
+       libkk_write_u32(cmd, kk_grid_1d(1), true, write.address, write.value);
+ }
+ 
+-VKAPI_ATTR void VKAPI_CALL
+-kk_CmdPushDescriptorSetWithTemplate2KHR(
++static void
++kk_CmdPushDescriptorSetWithTemplate2KHR_impl(
+    VkCommandBuffer commandBuffer, const VkPushDescriptorSetWithTemplateInfoKHR
+                                      *pPushDescriptorSetWithTemplateInfo)
+ {
+@@ -1046,6 +1100,34 @@ kk_CmdPushDescriptorSetWithTemplate2KHR(
+       pPushDescriptorSetWithTemplateInfo->pData);
+ }
+ 
++static void ATTRIBUTE_NOINLINE
++kk_CmdPushDescriptorSetWithTemplate2KHR_diagnostic(
++   VkCommandBuffer commandBuffer, const VkPushDescriptorSetWithTemplateInfoKHR
++                                     *pPushDescriptorSetWithTemplateInfo)
++{
++   VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
++   struct kk_device *dev = kk_cmd_buffer_device(cmd);
++   struct kk_descriptor_scope scope =
++      kk_descriptor_begin(&dev->descriptor_stats, KK_DESCRIPTOR_PUSH_TEMPLATE);
++   VK_FROM_HANDLE(vk_descriptor_update_template, template,
++                  pPushDescriptorSetWithTemplateInfo->descriptorUpdateTemplate);
++   kk_descriptor_template(scope, template);
++   kk_CmdPushDescriptorSetWithTemplate2KHR_impl(
++      commandBuffer, pPushDescriptorSetWithTemplateInfo);
++   kk_descriptor_end(scope, cmd->vk.record_result != VK_SUCCESS);
++}
++
++VKAPI_ATTR void VKAPI_CALL
++kk_CmdPushDescriptorSetWithTemplate2KHR(
++   VkCommandBuffer commandBuffer, const VkPushDescriptorSetWithTemplateInfoKHR
++                                     *pPushDescriptorSetWithTemplateInfo)
++{
++   if (KK_DEBUG(DESCRIPTOR_STATS))
++      kk_CmdPushDescriptorSetWithTemplate2KHR_diagnostic(commandBuffer, pPushDescriptorSetWithTemplateInfo);
++   else
++      kk_CmdPushDescriptorSetWithTemplate2KHR_impl(commandBuffer, pPushDescriptorSetWithTemplateInfo);
++}
++
+ VKAPI_ATTR void VKAPI_CALL
+ kk_CmdBeginConditionalRendering2EXT(
+    VkCommandBuffer commandBuffer,
+diff --git a/src/kosmickrisp/vulkan/kk_debug.c b/src/kosmickrisp/vulkan/kk_debug.c
+index 07d7f11..b224c60 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.c
++++ b/src/kosmickrisp/vulkan/kk_debug.c
+@@ -31,6 +31,7 @@ const struct debug_named_value debug_flags[] = {
+    {"serial_libraries", KK_DEBUG_SERIAL_LIBRARIES},
+    {"passes", KK_DEBUG_PASSES},
+    {"vertex_stats", KK_DEBUG_VERTEX_STATS},
++   {"descriptor_stats", KK_DEBUG_DESCRIPTOR_STATS},
+    {NULL, 0},
+ };
+ 
+@@ -279,3 +280,227 @@ kk_vertex_stats_log(uint32_t frames, bool final)
+    kk_vertex_log.frames = 0;
+    simple_mtx_unlock(&kk_vertex_log.lock);
+ }
++
++/* PLA-431: fixed per-device aggregates, no thread registry or hot-path lock. */
++#include <inttypes.h>
++#include <unistd.h>
++#include "kk_descriptor_stats.h"
++
++static const char *const descriptor_ops[KK_DESCRIPTOR_OP_COUNT] = {
++   "pool_create", "allocate",        "free", "pool_reset", "pool_destroy",
++   "update",      "template_update", "bind", "push",       "push_template",
++};
++static const char *const descriptor_fields[KK_DESCRIPTOR_FIELD_COUNT] = {
++   "calls",           "sets",         "write_records", "write_elements",
++   "write_bytes",     "copy_records", "copy_elements", "copy_bytes",
++   "dynamic_offsets", "pool_entries", "pool_elements", "pool_bytes",
++   "failures",        "timed_calls",  "elapsed_ticks", "max_ticks",
++   "clock_errors",    "active",
++};
++
++/* Saturate, rather than silently wrap. Once overflow is sticky the entire
++ * device sequence is unsuitable for interval subtraction, including frames. */
++static void
++descriptor_add_checked(struct kk_descriptor_stats *s, uint64_t *dst, uint64_t n)
++{
++   uint64_t old = __atomic_load_n(dst, __ATOMIC_RELAXED);
++   for (;;) {
++      bool overflow = n > UINT64_MAX - old;
++      uint64_t next = overflow ? UINT64_MAX : old + n;
++      if (overflow)
++         __atomic_store_n(&s->overflow, 1, __ATOMIC_RELAXED);
++      if (__atomic_compare_exchange_n(dst, &old, next, false, __ATOMIC_RELAXED,
++                                      __ATOMIC_RELAXED))
++         return;
++   }
++}
++
++void
++kk_descriptor_add(struct kk_descriptor_stats *s, enum kk_descriptor_op op,
++                  enum kk_descriptor_field field, uint64_t n)
++{
++   descriptor_add_checked(s, &s->values[op][field], n);
++}
++
++struct kk_descriptor_scope
++kk_descriptor_begin(struct kk_descriptor_stats *s, enum kk_descriptor_op op)
++{
++   /* Publication brackets are seq_cst, the payload counters relaxed. This
++    * does NOT turn a live snapshot into an event-time transaction. */
++   if (!__atomic_add_fetch(&s->entered, 1, __ATOMIC_SEQ_CST))
++      __atomic_store_n(&s->overflow, 1, __ATOMIC_RELAXED);
++   kk_descriptor_add(s, op, KK_DESCRIPTOR_ACTIVE, 1);
++   kk_descriptor_add(s, op, KK_DESCRIPTOR_CALLS, 1);
++   return (struct kk_descriptor_scope){s, op, kk_descriptor_clock()};
++}
++
++void
++kk_descriptor_end_at(struct kk_descriptor_scope scope, bool failed,
++                     uint64_t end)
++{
++   struct kk_descriptor_stats *s = scope.stats;
++   uint64_t *values = s->values[scope.op];
++   if (failed)
++      kk_descriptor_add(s, scope.op, KK_DESCRIPTOR_FAILURES, 1);
++   if (!scope.start || !end || end < scope.start) {
++      kk_descriptor_add(s, scope.op, KK_DESCRIPTOR_CLOCK_ERRORS, 1);
++   } else {
++      uint64_t elapsed = end - scope.start;
++      kk_descriptor_add(s, scope.op, KK_DESCRIPTOR_TIMED_CALLS, 1);
++      kk_descriptor_add(s, scope.op, KK_DESCRIPTOR_ELAPSED, elapsed);
++      uint64_t old =
++         __atomic_load_n(&values[KK_DESCRIPTOR_MAX], __ATOMIC_RELAXED);
++      while (old < elapsed && !__atomic_compare_exchange_n(
++                                 &values[KK_DESCRIPTOR_MAX], &old, elapsed,
++                                 false, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
++      }
++   }
++   __atomic_sub_fetch(&values[KK_DESCRIPTOR_ACTIVE], 1, __ATOMIC_RELAXED);
++   if (!__atomic_add_fetch(&s->completed, 1, __ATOMIC_SEQ_CST))
++      __atomic_store_n(&s->overflow, 1, __ATOMIC_RELAXED);
++}
++
++void
++kk_descriptor_end(struct kk_descriptor_scope scope, bool failed)
++{
++   kk_descriptor_end_at(scope, failed, kk_descriptor_clock());
++}
++
++void
++kk_descriptor_writes(struct kk_descriptor_scope scope, uint32_t count,
++                     const VkWriteDescriptorSet *writes)
++{
++   kk_descriptor_add(scope.stats, scope.op, KK_DESCRIPTOR_WRITE_RECORDS, count);
++   for (uint32_t i = 0; i < count; i++)
++      kk_descriptor_add(
++         scope.stats, scope.op,
++         writes[i].descriptorType == VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK
++            ? KK_DESCRIPTOR_WRITE_BYTES
++            : KK_DESCRIPTOR_WRITE_ELEMENTS,
++         writes[i].descriptorCount);
++}
++
++void
++kk_descriptor_template(struct kk_descriptor_scope scope,
++                       const struct vk_descriptor_update_template *t)
++{
++   kk_descriptor_add(scope.stats, scope.op, KK_DESCRIPTOR_WRITE_RECORDS,
++                     t->entry_count);
++   for (uint32_t i = 0; i < t->entry_count; i++)
++      kk_descriptor_add(
++         scope.stats, scope.op,
++         t->entries[i].type == VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK
++            ? KK_DESCRIPTOR_WRITE_BYTES
++            : KK_DESCRIPTOR_WRITE_ELEMENTS,
++         t->entries[i].array_count);
++}
++
++void
++kk_descriptor_stats_init(struct kk_descriptor_stats *s)
++{
++   static uint64_t generation;
++   s->generation = __atomic_add_fetch(&generation, 1, __ATOMIC_RELAXED);
++   s->init_ns = kk_descriptor_clock();
++   s->overflow = !s->generation;
++   fprintf(
++      stderr,
++      "[kk-descriptor] v=1 component=kk kind=enabled pid=%ld device=%" PRIu64
++      " init_ticks=%" PRIu64
++      " hz=1000000000 clock=monotonic_elapsed cpu_clock=unsupported"
++      " coverage=legacy_entrypoints scopes=disjoint rollback=allocate"
++      " work=requested inline=bytes push=api_records failures=vk_result_or_command_error_at_exit"
++      " excluded=layout_template_lifecycle_constants_attachments_shader_loads"
++      " publication=relaxed_bracketed boundary=timestamp_range final_may_be_incomplete=1\n",
++      (long)getpid(), s->generation, s->init_ns);
++   /* Bounded raw samples, not a correction to operation durations. The outer
++    * empty measurement includes both checked reads and atomic publication.
++    * Calibration uses scratch counters, never contaminates operation totals. */
++   struct kk_descriptor_stats scratch = {0};
++   for (unsigned i = 0; i < 16; i++) {
++      scratch.values[KK_DESCRIPTOR_UPDATE][KK_DESCRIPTOR_CLOCK_ERRORS] = 0;
++      uint64_t a = kk_descriptor_clock(), b = kk_descriptor_clock();
++      uint64_t c = kk_descriptor_clock();
++      struct kk_descriptor_scope scope =
++         kk_descriptor_begin(&scratch, KK_DESCRIPTOR_UPDATE);
++      kk_descriptor_end(scope, false);
++      uint64_t d = kk_descriptor_clock();
++      bool adjacent_ok = a && b && b >= a;
++      bool empty_ok =
++         c && d && d >= c &&
++         scratch.values[KK_DESCRIPTOR_UPDATE][KK_DESCRIPTOR_CLOCK_ERRORS] == 0;
++      fprintf(
++         stderr,
++         "[kk-descriptor] v=1 component=kk kind=calibration pid=%ld device=%" PRIu64
++         " sample=%u hz=1000000000 reads=6 adjacent_ok=%u adjacent_ticks=%" PRIu64
++         " empty_ok=%u empty_ticks=%" PRIu64 "\n",
++         (long)getpid(), s->generation, i, adjacent_ok, adjacent_ok ? b - a : 0,
++         empty_ok, empty_ok ? d - c : 0);
++   }
++}
++
++void
++kk_descriptor_stats_log(struct kk_descriptor_stats *s, uint32_t frames,
++                        bool final)
++{
++   descriptor_add_checked(s, &s->frames, frames);
++   /* Serializes reports only. Never blocks an instrumented operation. */
++   if (__atomic_exchange_n(&s->logging, 1, __ATOMIC_ACQUIRE))
++      return;
++   uint64_t a = kk_descriptor_clock();
++   bool start_ok = s->init_ns && a &&
++                   (!s->last_log_ns || a >= s->last_log_ns);
++   if (!start_ok) {
++      descriptor_add_checked(s, &s->report_clock_errors, 1);
++      /* With no usable clock, emit one failure report rather than one per
++       * submit. The final report still exposes all failed report attempts. */
++      if (!final && s->reported_clock_failure) {
++         __atomic_store_n(&s->logging, 0, __ATOMIC_RELEASE);
++         return;
++      }
++   }
++   s->reported_clock_failure = !start_ok;
++   if (!final && start_ok && s->last_log_ns &&
++       a - s->last_log_ns < 1000000000) {
++      __atomic_store_n(&s->logging, 0, __ATOMIC_RELEASE);
++      return;
++   }
++   descriptor_add_checked(s, &s->snapshot, 1);
++   uint64_t entered0 = __atomic_load_n(&s->entered, __ATOMIC_SEQ_CST);
++   uint64_t completed0 = __atomic_load_n(&s->completed, __ATOMIC_SEQ_CST);
++   __atomic_thread_fence(__ATOMIC_SEQ_CST);
++   uint64_t values[KK_DESCRIPTOR_OP_COUNT][KK_DESCRIPTOR_FIELD_COUNT];
++   for (unsigned op = 0; op < KK_DESCRIPTOR_OP_COUNT; op++)
++      for (unsigned f = 0; f < KK_DESCRIPTOR_FIELD_COUNT; f++)
++         values[op][f] = __atomic_load_n(&s->values[op][f], __ATOMIC_RELAXED);
++   uint64_t presented = __atomic_load_n(&s->frames, __ATOMIC_RELAXED);
++   uint32_t overflow = __atomic_load_n(&s->overflow, __ATOMIC_RELAXED);
++   __atomic_thread_fence(__ATOMIC_SEQ_CST);
++   uint64_t entered1 = __atomic_load_n(&s->entered, __ATOMIC_SEQ_CST);
++   uint64_t completed1 = __atomic_load_n(&s->completed, __ATOMIC_SEQ_CST);
++   uint64_t b = kk_descriptor_clock();
++   bool quiet = entered0 == completed0 && entered0 == entered1 &&
++                entered0 == completed1 && !overflow;
++   bool clock_ok = start_ok && b && b >= a;
++   if (!b || (a && b < a))
++      descriptor_add_checked(s, &s->report_clock_errors, 1);
++   flockfile(stderr);
++   for (unsigned op = 0; op < KK_DESCRIPTOR_OP_COUNT; op++) {
++      fprintf(
++         stderr,
++         "[kk-descriptor] v=1 component=kk kind=snapshot pid=%ld device=%" PRIu64
++         " init_ticks=%" PRIu64 " ts_begin=%" PRIu64 " ts_end=%" PRIu64
++         " hz=1000000000 snapshot=%" PRIu64 " frames=%" PRIu64
++         " final=%u clock_ok=%u report_clock_errors=%" PRIu64 " overflow=%u"
++         " quiescent=%u entered_before=%" PRIu64 " completed_before=%" PRIu64
++         " entered_after=%" PRIu64 " completed_after=%" PRIu64 " op=%s",
++         (long)getpid(), s->generation, s->init_ns, a, b, s->snapshot,
++         presented, final, clock_ok, s->report_clock_errors, overflow, quiet, entered0, completed0,
++         entered1, completed1, descriptor_ops[op]);
++      for (unsigned f = 0; f < KK_DESCRIPTOR_FIELD_COUNT; f++)
++         fprintf(stderr, " %s=%" PRIu64, descriptor_fields[f], values[op][f]);
++      fputc('\n', stderr);
++   }
++   funlockfile(stderr);
++   s->last_log_ns = a;
++   __atomic_store_n(&s->logging, 0, __ATOMIC_RELEASE);
++}
+diff --git a/src/kosmickrisp/vulkan/kk_debug.h b/src/kosmickrisp/vulkan/kk_debug.h
+index 54f5e9b..5a6c865 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.h
++++ b/src/kosmickrisp/vulkan/kk_debug.h
+@@ -66,6 +66,8 @@ enum kk_debug {
+     * slots they write, a presented frame (kk_vertex_stats_log,
+     * kk_vertex_stats_note_draw) */
+    KK_DEBUG_VERTEX_STATS = 1ull << 15,
++   /* PLA-431: cumulative legacy resource descriptor counts/elapsed time. */
++   KK_DEBUG_DESCRIPTOR_STATS = 1ull << 16,
+ };
+ 
+ extern enum kk_debug kk_mesa_debug_flags;
+diff --git a/src/kosmickrisp/vulkan/kk_descriptor_set.c b/src/kosmickrisp/vulkan/kk_descriptor_set.c
+index 07d37d8..aceb819 100644
+--- a/src/kosmickrisp/vulkan/kk_descriptor_set.c
++++ b/src/kosmickrisp/vulkan/kk_descriptor_set.c
+@@ -274,11 +274,11 @@ write_inline_uniform_data(struct kk_descriptor_set *set,
+    write_desc(set, binding, offset, info->pData, info->dataSize);
+ }
+ 
+-VKAPI_ATTR void VKAPI_CALL
+-kk_UpdateDescriptorSets(VkDevice device, uint32_t descriptorWriteCount,
+-                        const VkWriteDescriptorSet *pDescriptorWrites,
+-                        uint32_t descriptorCopyCount,
+-                        const VkCopyDescriptorSet *pDescriptorCopies)
++static void
++kk_UpdateDescriptorSets_impl(VkDevice device, uint32_t descriptorWriteCount,
++                             const VkWriteDescriptorSet *pDescriptorWrites,
++                             uint32_t descriptorCopyCount,
++                             const VkCopyDescriptorSet *pDescriptorCopies)
+ {
+    for (uint32_t w = 0; w < descriptorWriteCount; w++) {
+       const VkWriteDescriptorSet *write = &pDescriptorWrites[w];
+@@ -387,6 +387,45 @@ kk_UpdateDescriptorSets(VkDevice device, uint32_t descriptorWriteCount,
+    }
+ }
+ 
++static void ATTRIBUTE_NOINLINE
++kk_UpdateDescriptorSets_diagnostic(VkDevice device, uint32_t descriptorWriteCount,
++                        const VkWriteDescriptorSet *pDescriptorWrites,
++                        uint32_t descriptorCopyCount,
++                        const VkCopyDescriptorSet *pDescriptorCopies)
++{
++   VK_FROM_HANDLE(kk_device, dev, device);
++   struct kk_descriptor_scope scope =
++      kk_descriptor_begin(&dev->descriptor_stats, KK_DESCRIPTOR_UPDATE);
++   kk_descriptor_writes(scope, descriptorWriteCount, pDescriptorWrites);
++   kk_descriptor_add(scope.stats, scope.op, KK_DESCRIPTOR_COPY_RECORDS,
++                     descriptorCopyCount);
++   for (uint32_t i = 0; i < descriptorCopyCount; i++) {
++      const VkCopyDescriptorSet *copy = &pDescriptorCopies[i];
++      VK_FROM_HANDLE(kk_descriptor_set, src, copy->srcSet);
++      bool bytes = src->layout->binding[copy->srcBinding].type ==
++                   VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK;
++      kk_descriptor_add(
++         scope.stats, scope.op,
++         bytes ? KK_DESCRIPTOR_COPY_BYTES : KK_DESCRIPTOR_COPY_ELEMENTS,
++         copy->descriptorCount);
++   }
++   kk_UpdateDescriptorSets_impl(device, descriptorWriteCount, pDescriptorWrites,
++                                descriptorCopyCount, pDescriptorCopies);
++   kk_descriptor_end(scope, false);
++}
++
++VKAPI_ATTR void VKAPI_CALL
++kk_UpdateDescriptorSets(VkDevice device, uint32_t descriptorWriteCount,
++                        const VkWriteDescriptorSet *pDescriptorWrites,
++                        uint32_t descriptorCopyCount,
++                        const VkCopyDescriptorSet *pDescriptorCopies)
++{
++   if (KK_DEBUG(DESCRIPTOR_STATS))
++      kk_UpdateDescriptorSets_diagnostic(device, descriptorWriteCount, pDescriptorWrites, descriptorCopyCount, pDescriptorCopies);
++   else
++      kk_UpdateDescriptorSets_impl(device, descriptorWriteCount, pDescriptorWrites, descriptorCopyCount, pDescriptorCopies);
++}
++
+ void
+ kk_push_descriptor_set_update(struct kk_push_descriptor_set *push_set,
+                               uint32_t write_count,
+@@ -486,11 +525,11 @@ kk_destroy_descriptor_pool(struct kk_device *dev,
+    vk_object_free(&dev->vk, pAllocator, pool);
+ }
+ 
+-VKAPI_ATTR VkResult VKAPI_CALL
+-kk_CreateDescriptorPool(VkDevice _device,
+-                        const VkDescriptorPoolCreateInfo *pCreateInfo,
+-                        const VkAllocationCallbacks *pAllocator,
+-                        VkDescriptorPool *pDescriptorPool)
++static VkResult
++kk_CreateDescriptorPool_impl(VkDevice _device,
++                             const VkDescriptorPoolCreateInfo *pCreateInfo,
++                             const VkAllocationCallbacks *pAllocator,
++                             VkDescriptorPool *pDescriptorPool)
+ {
+    VK_FROM_HANDLE(kk_device, dev, _device);
+    struct kk_descriptor_pool *pool;
+@@ -565,6 +604,44 @@ kk_CreateDescriptorPool(VkDevice _device,
+    return result;
+ }
+ 
++static VkResult ATTRIBUTE_NOINLINE
++kk_CreateDescriptorPool_diagnostic(VkDevice _device,
++                        const VkDescriptorPoolCreateInfo *pCreateInfo,
++                        const VkAllocationCallbacks *pAllocator,
++                        VkDescriptorPool *pDescriptorPool)
++{
++   VK_FROM_HANDLE(kk_device, dev, _device);
++   struct kk_descriptor_scope scope =
++      kk_descriptor_begin(&dev->descriptor_stats, KK_DESCRIPTOR_POOL_CREATE);
++   kk_descriptor_add(scope.stats, scope.op, KK_DESCRIPTOR_SETS,
++                     pCreateInfo->maxSets);
++   kk_descriptor_add(scope.stats, scope.op, KK_DESCRIPTOR_POOL_ENTRIES,
++                     pCreateInfo->poolSizeCount);
++   for (uint32_t i = 0; i < pCreateInfo->poolSizeCount; i++)
++      kk_descriptor_add(scope.stats, scope.op,
++                        pCreateInfo->pPoolSizes[i].type ==
++                              VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK
++                           ? KK_DESCRIPTOR_POOL_BYTES
++                           : KK_DESCRIPTOR_POOL_ELEMENTS,
++                        pCreateInfo->pPoolSizes[i].descriptorCount);
++
++   VkResult result = kk_CreateDescriptorPool_impl(_device, pCreateInfo,
++                                                  pAllocator, pDescriptorPool);
++   kk_descriptor_end(scope, result != VK_SUCCESS);
++   return result;
++}
++
++VKAPI_ATTR VkResult VKAPI_CALL
++kk_CreateDescriptorPool(VkDevice _device,
++                        const VkDescriptorPoolCreateInfo *pCreateInfo,
++                        const VkAllocationCallbacks *pAllocator,
++                        VkDescriptorPool *pDescriptorPool)
++{
++   if (KK_DEBUG(DESCRIPTOR_STATS))
++      return kk_CreateDescriptorPool_diagnostic(_device, pCreateInfo, pAllocator, pDescriptorPool);
++   return kk_CreateDescriptorPool_impl(_device, pCreateInfo, pAllocator, pDescriptorPool);
++}
++
+ static VkResult
+ kk_descriptor_pool_alloc(struct kk_descriptor_pool *pool, uint64_t size,
+                          uint64_t alignment, uint64_t *addr_out, void **map_out)
+@@ -666,10 +743,53 @@ kk_descriptor_set_create(struct kk_device *dev, struct kk_descriptor_pool *pool,
+    return result;
+ }
+ 
++static VkResult
++kk_FreeDescriptorSets_impl(VkDevice device, VkDescriptorPool descriptorPool,
++                           uint32_t descriptorSetCount,
++                           const VkDescriptorSet *pDescriptorSets)
++{
++   VK_FROM_HANDLE(kk_device, dev, device);
++   VK_FROM_HANDLE(kk_descriptor_pool, pool, descriptorPool);
++
++   for (uint32_t i = 0; i < descriptorSetCount; i++) {
++      VK_FROM_HANDLE(kk_descriptor_set, set, pDescriptorSets[i]);
++
++      if (set)
++         kk_descriptor_set_destroy(dev, pool, set);
++   }
++   return VK_SUCCESS;
++}
++
++static VkResult ATTRIBUTE_NOINLINE
++kk_FreeDescriptorSets_diagnostic(VkDevice device, VkDescriptorPool descriptorPool,
++                      uint32_t descriptorSetCount,
++                      const VkDescriptorSet *pDescriptorSets)
++{
++   VK_FROM_HANDLE(kk_device, dev, device);
++   struct kk_descriptor_scope scope =
++      kk_descriptor_begin(&dev->descriptor_stats, KK_DESCRIPTOR_FREE);
++   kk_descriptor_add(scope.stats, scope.op, KK_DESCRIPTOR_SETS,
++                     descriptorSetCount);
++   VkResult result = kk_FreeDescriptorSets_impl(
++      device, descriptorPool, descriptorSetCount, pDescriptorSets);
++   kk_descriptor_end(scope, result != VK_SUCCESS);
++   return result;
++}
++
+ VKAPI_ATTR VkResult VKAPI_CALL
+-kk_AllocateDescriptorSets(VkDevice device,
+-                          const VkDescriptorSetAllocateInfo *pAllocateInfo,
+-                          VkDescriptorSet *pDescriptorSets)
++kk_FreeDescriptorSets(VkDevice device, VkDescriptorPool descriptorPool,
++                      uint32_t descriptorSetCount,
++                      const VkDescriptorSet *pDescriptorSets)
++{
++   if (KK_DEBUG(DESCRIPTOR_STATS))
++      return kk_FreeDescriptorSets_diagnostic(device, descriptorPool, descriptorSetCount, pDescriptorSets);
++   return kk_FreeDescriptorSets_impl(device, descriptorPool, descriptorSetCount, pDescriptorSets);
++}
++
++static VkResult
++kk_AllocateDescriptorSets_impl(VkDevice device,
++                               const VkDescriptorSetAllocateInfo *pAllocateInfo,
++                               VkDescriptorSet *pDescriptorSets)
+ {
+    VK_FROM_HANDLE(kk_device, dev, device);
+    VK_FROM_HANDLE(kk_descriptor_pool, pool, pAllocateInfo->descriptorPool);
+@@ -705,8 +825,8 @@ kk_AllocateDescriptorSets(VkDevice device,
+    }
+ 
+    if (result != VK_SUCCESS) {
+-      kk_FreeDescriptorSets(device, pAllocateInfo->descriptorPool, i,
+-                            pDescriptorSets);
++      kk_FreeDescriptorSets_impl(device, pAllocateInfo->descriptorPool, i,
++                                 pDescriptorSets);
+       for (i = 0; i < pAllocateInfo->descriptorSetCount; i++) {
+          pDescriptorSets[i] = VK_NULL_HANDLE;
+       }
+@@ -714,26 +834,35 @@ kk_AllocateDescriptorSets(VkDevice device,
+    return result;
+ }
+ 
+-VKAPI_ATTR VkResult VKAPI_CALL
+-kk_FreeDescriptorSets(VkDevice device, VkDescriptorPool descriptorPool,
+-                      uint32_t descriptorSetCount,
+-                      const VkDescriptorSet *pDescriptorSets)
++static VkResult ATTRIBUTE_NOINLINE
++kk_AllocateDescriptorSets_diagnostic(VkDevice device,
++                          const VkDescriptorSetAllocateInfo *pAllocateInfo,
++                          VkDescriptorSet *pDescriptorSets)
+ {
+    VK_FROM_HANDLE(kk_device, dev, device);
+-   VK_FROM_HANDLE(kk_descriptor_pool, pool, descriptorPool);
+-
+-   for (uint32_t i = 0; i < descriptorSetCount; i++) {
+-      VK_FROM_HANDLE(kk_descriptor_set, set, pDescriptorSets[i]);
++   struct kk_descriptor_scope scope =
++      kk_descriptor_begin(&dev->descriptor_stats, KK_DESCRIPTOR_ALLOCATE);
++   kk_descriptor_add(scope.stats, scope.op, KK_DESCRIPTOR_SETS,
++                     pAllocateInfo->descriptorSetCount);
++   VkResult result =
++      kk_AllocateDescriptorSets_impl(device, pAllocateInfo, pDescriptorSets);
++   kk_descriptor_end(scope, result != VK_SUCCESS);
++   return result;
++}
+ 
+-      if (set)
+-         kk_descriptor_set_destroy(dev, pool, set);
+-   }
+-   return VK_SUCCESS;
++VKAPI_ATTR VkResult VKAPI_CALL
++kk_AllocateDescriptorSets(VkDevice device,
++                          const VkDescriptorSetAllocateInfo *pAllocateInfo,
++                          VkDescriptorSet *pDescriptorSets)
++{
++   if (KK_DEBUG(DESCRIPTOR_STATS))
++      return kk_AllocateDescriptorSets_diagnostic(device, pAllocateInfo, pDescriptorSets);
++   return kk_AllocateDescriptorSets_impl(device, pAllocateInfo, pDescriptorSets);
+ }
+ 
+-VKAPI_ATTR void VKAPI_CALL
+-kk_DestroyDescriptorPool(VkDevice device, VkDescriptorPool _pool,
+-                         const VkAllocationCallbacks *pAllocator)
++static void
++kk_DestroyDescriptorPool_impl(VkDevice device, VkDescriptorPool _pool,
++                              const VkAllocationCallbacks *pAllocator)
+ {
+    VK_FROM_HANDLE(kk_device, dev, device);
+    VK_FROM_HANDLE(kk_descriptor_pool, pool, _pool);
+@@ -744,9 +873,38 @@ kk_DestroyDescriptorPool(VkDevice device, VkDescriptorPool _pool,
+    kk_destroy_descriptor_pool(dev, pAllocator, pool);
+ }
+ 
+-VKAPI_ATTR VkResult VKAPI_CALL
+-kk_ResetDescriptorPool(VkDevice device, VkDescriptorPool descriptorPool,
+-                       VkDescriptorPoolResetFlags flags)
++static void ATTRIBUTE_NOINLINE
++kk_DestroyDescriptorPool_diagnostic(VkDevice device, VkDescriptorPool _pool,
++                         const VkAllocationCallbacks *pAllocator)
++{
++   VK_FROM_HANDLE(kk_device, dev, device);
++   struct kk_descriptor_scope scope =
++      kk_descriptor_begin(&dev->descriptor_stats, KK_DESCRIPTOR_POOL_DESTROY);
++   VK_FROM_HANDLE(kk_descriptor_pool, pool, _pool);
++   if (pool) {
++      uint64_t sets = 0;
++      list_for_each_entry(struct kk_descriptor_set, set, &pool->sets, link)
++         sets++;
++      kk_descriptor_add(scope.stats, scope.op, KK_DESCRIPTOR_SETS, sets);
++   }
++
++   kk_DestroyDescriptorPool_impl(device, _pool, pAllocator);
++   kk_descriptor_end(scope, false);
++}
++
++VKAPI_ATTR void VKAPI_CALL
++kk_DestroyDescriptorPool(VkDevice device, VkDescriptorPool _pool,
++                         const VkAllocationCallbacks *pAllocator)
++{
++   if (KK_DEBUG(DESCRIPTOR_STATS))
++      kk_DestroyDescriptorPool_diagnostic(device, _pool, pAllocator);
++   else
++      kk_DestroyDescriptorPool_impl(device, _pool, pAllocator);
++}
++
++static VkResult
++kk_ResetDescriptorPool_impl(VkDevice device, VkDescriptorPool descriptorPool,
++                            VkDescriptorPoolResetFlags flags)
+ {
+    VK_FROM_HANDLE(kk_device, dev, device);
+    VK_FROM_HANDLE(kk_descriptor_pool, pool, descriptorPool);
+@@ -757,6 +915,35 @@ kk_ResetDescriptorPool(VkDevice device, VkDescriptorPool descriptorPool,
+    return VK_SUCCESS;
+ }
+ 
++static VkResult ATTRIBUTE_NOINLINE
++kk_ResetDescriptorPool_diagnostic(VkDevice device, VkDescriptorPool descriptorPool,
++                       VkDescriptorPoolResetFlags flags)
++{
++   VK_FROM_HANDLE(kk_device, dev, device);
++   struct kk_descriptor_scope scope =
++      kk_descriptor_begin(&dev->descriptor_stats, KK_DESCRIPTOR_POOL_RESET);
++   VK_FROM_HANDLE(kk_descriptor_pool, pool, descriptorPool);
++   if (pool) {
++      uint64_t sets = 0;
++      list_for_each_entry(struct kk_descriptor_set, set, &pool->sets, link)
++         sets++;
++      kk_descriptor_add(scope.stats, scope.op, KK_DESCRIPTOR_SETS, sets);
++   }
++
++   VkResult result = kk_ResetDescriptorPool_impl(device, descriptorPool, flags);
++   kk_descriptor_end(scope, result != VK_SUCCESS);
++   return result;
++}
++
++VKAPI_ATTR VkResult VKAPI_CALL
++kk_ResetDescriptorPool(VkDevice device, VkDescriptorPool descriptorPool,
++                       VkDescriptorPoolResetFlags flags)
++{
++   if (KK_DEBUG(DESCRIPTOR_STATS))
++      return kk_ResetDescriptorPool_diagnostic(device, descriptorPool, flags);
++   return kk_ResetDescriptorPool_impl(device, descriptorPool, flags);
++}
++
+ static void
+ kk_descriptor_set_write_template(
+    struct kk_descriptor_set *set,
+@@ -834,8 +1021,8 @@ kk_descriptor_set_write_template(
+    }
+ }
+ 
+-VKAPI_ATTR void VKAPI_CALL
+-kk_UpdateDescriptorSetWithTemplate(
++static void
++kk_UpdateDescriptorSetWithTemplate_impl(
+    VkDevice device, VkDescriptorSet descriptorSet,
+    VkDescriptorUpdateTemplate descriptorUpdateTemplate, const void *pData)
+ {
+@@ -846,6 +1033,33 @@ kk_UpdateDescriptorSetWithTemplate(
+    kk_descriptor_set_write_template(set, template, pData);
+ }
+ 
++static void ATTRIBUTE_NOINLINE
++kk_UpdateDescriptorSetWithTemplate_diagnostic(
++   VkDevice device, VkDescriptorSet descriptorSet,
++   VkDescriptorUpdateTemplate descriptorUpdateTemplate, const void *pData)
++{
++   VK_FROM_HANDLE(kk_device, dev, device);
++   struct kk_descriptor_scope scope = kk_descriptor_begin(
++      &dev->descriptor_stats, KK_DESCRIPTOR_TEMPLATE_UPDATE);
++   VK_FROM_HANDLE(vk_descriptor_update_template, template,
++                  descriptorUpdateTemplate);
++   kk_descriptor_template(scope, template);
++   kk_UpdateDescriptorSetWithTemplate_impl(device, descriptorSet,
++                                           descriptorUpdateTemplate, pData);
++   kk_descriptor_end(scope, false);
++}
++
++VKAPI_ATTR void VKAPI_CALL
++kk_UpdateDescriptorSetWithTemplate(
++   VkDevice device, VkDescriptorSet descriptorSet,
++   VkDescriptorUpdateTemplate descriptorUpdateTemplate, const void *pData)
++{
++   if (KK_DEBUG(DESCRIPTOR_STATS))
++      kk_UpdateDescriptorSetWithTemplate_diagnostic(device, descriptorSet, descriptorUpdateTemplate, pData);
++   else
++      kk_UpdateDescriptorSetWithTemplate_impl(device, descriptorSet, descriptorUpdateTemplate, pData);
++}
++
+ void
+ kk_push_descriptor_set_update_template(
+    struct kk_push_descriptor_set *push_set,
+diff --git a/src/kosmickrisp/vulkan/kk_descriptor_stats.h b/src/kosmickrisp/vulkan/kk_descriptor_stats.h
+new file mode 100644
+index 0000000..77a4aa3
+--- /dev/null
++++ b/src/kosmickrisp/vulkan/kk_descriptor_stats.h
+@@ -0,0 +1,97 @@
++/* SPDX-License-Identifier: MIT */
++#ifndef KK_DESCRIPTOR_STATS_H
++#define KK_DESCRIPTOR_STATS_H
++
++#include <stdbool.h>
++#include <stdint.h>
++#include "c11/time.h"
++#include "vulkan/vulkan_core.h"
++#include "vk_descriptor_update_template.h"
++
++/* Disjoint Vulkan entrypoint scopes. Common-runtime wrappers aren't timed;
++ * allocation rollback uses the untimed free implementation. These elapsed
++ * sums overlap client Vulkan envelopes and must never be added to them. */
++enum kk_descriptor_op {
++   KK_DESCRIPTOR_POOL_CREATE,
++   KK_DESCRIPTOR_ALLOCATE,
++   KK_DESCRIPTOR_FREE,
++   KK_DESCRIPTOR_POOL_RESET,
++   KK_DESCRIPTOR_POOL_DESTROY,
++   KK_DESCRIPTOR_UPDATE,
++   KK_DESCRIPTOR_TEMPLATE_UPDATE,
++   KK_DESCRIPTOR_BIND,
++   KK_DESCRIPTOR_PUSH,
++   KK_DESCRIPTOR_PUSH_TEMPLATE,
++   KK_DESCRIPTOR_OP_COUNT,
++};
++
++enum kk_descriptor_field {
++   KK_DESCRIPTOR_CALLS,
++   KK_DESCRIPTOR_SETS,
++   KK_DESCRIPTOR_WRITE_RECORDS,
++   KK_DESCRIPTOR_WRITE_ELEMENTS,
++   KK_DESCRIPTOR_WRITE_BYTES,
++   KK_DESCRIPTOR_COPY_RECORDS,
++   KK_DESCRIPTOR_COPY_ELEMENTS,
++   KK_DESCRIPTOR_COPY_BYTES,
++   KK_DESCRIPTOR_DYNAMIC_OFFSETS,
++   KK_DESCRIPTOR_POOL_ENTRIES,
++   KK_DESCRIPTOR_POOL_ELEMENTS,
++   KK_DESCRIPTOR_POOL_BYTES,
++   KK_DESCRIPTOR_FAILURES,
++   KK_DESCRIPTOR_TIMED_CALLS,
++   KK_DESCRIPTOR_ELAPSED,
++   KK_DESCRIPTOR_MAX,
++   KK_DESCRIPTOR_CLOCK_ERRORS,
++   KK_DESCRIPTOR_ACTIVE,
++   KK_DESCRIPTOR_FIELD_COUNT,
++};
++
++struct kk_descriptor_stats {
++   uint64_t values[KK_DESCRIPTOR_OP_COUNT][KK_DESCRIPTOR_FIELD_COUNT];
++   uint64_t generation, init_ns, frames, last_log_ns, snapshot;
++   uint64_t entered, completed, report_clock_errors;
++   bool reported_clock_failure;
++   uint32_t overflow, logging;
++};
++
++struct kk_descriptor_scope {
++   struct kk_descriptor_stats *stats;
++   enum kk_descriptor_op op;
++   uint64_t start;
++};
++
++/* Unlike os_time_get_nano, check EVERY primitive read. Zero is an invalid
++ * timestamp, never a valid failed-clock duration. No CPU clock is available. */
++static inline uint64_t
++kk_descriptor_clock_value(int status, int64_t sec, int64_t nsec)
++{
++   if (status != TIME_MONOTONIC || sec < 0 || nsec < 0 || nsec >= 1000000000 ||
++       (uint64_t)sec > (UINT64_MAX - (uint64_t)nsec) / 1000000000)
++      return 0;
++   return (uint64_t)sec * 1000000000 + nsec;
++}
++
++static inline uint64_t
++kk_descriptor_clock(void)
++{
++   struct timespec ts = {0};
++   int status = timespec_get(&ts, TIME_MONOTONIC);
++   return kk_descriptor_clock_value(status, ts.tv_sec, ts.tv_nsec);
++}
++
++void kk_descriptor_add(struct kk_descriptor_stats *s, enum kk_descriptor_op op,
++                       enum kk_descriptor_field field, uint64_t n);
++struct kk_descriptor_scope kk_descriptor_begin(struct kk_descriptor_stats *s,
++                                               enum kk_descriptor_op op);
++void kk_descriptor_end_at(struct kk_descriptor_scope scope, bool failed,
++                          uint64_t end);
++void kk_descriptor_end(struct kk_descriptor_scope scope, bool failed);
++void kk_descriptor_writes(struct kk_descriptor_scope scope, uint32_t count,
++                          const VkWriteDescriptorSet *writes);
++void kk_descriptor_template(struct kk_descriptor_scope scope,
++                            const struct vk_descriptor_update_template *t);
++void kk_descriptor_stats_init(struct kk_descriptor_stats *s);
++void kk_descriptor_stats_log(struct kk_descriptor_stats *s, uint32_t frames,
++                             bool final);
++#endif
+diff --git a/src/kosmickrisp/vulkan/kk_device.c b/src/kosmickrisp/vulkan/kk_device.c
+index 9bba758..6ba4423 100644
+--- a/src/kosmickrisp/vulkan/kk_device.c
++++ b/src/kosmickrisp/vulkan/kk_device.c
+@@ -268,6 +268,9 @@ kk_CreateDevice(VkPhysicalDevice physicalDevice,
+    if (!dev)
+       return vk_error(pdev, VK_ERROR_OUT_OF_HOST_MEMORY);
+ 
++   if (KK_DEBUG(DESCRIPTOR_STATS))
++      kk_descriptor_stats_init(&dev->descriptor_stats);
++
+    /* Fill the dispatch table we will expose to the users */
+    dev->exposed_dispatch_table = kk_device_cmd_trampolines;
+    vk_device_dispatch_table_from_entrypoints(&dev->exposed_dispatch_table,
+@@ -396,6 +399,8 @@ fail_compiler:
+ fail_init:
+    vk_device_finish(&dev->vk);
+ fail_alloc:
++   if (KK_DEBUG(DESCRIPTOR_STATS))
++      kk_descriptor_stats_log(&dev->descriptor_stats, 0, true);
+    vk_free(&dev->vk.alloc, dev);
+    return result;
+ }
+@@ -447,6 +452,8 @@ kk_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
+ 
+    vk_device_finish(&dev->vk);
+ 
++   if (KK_DEBUG(DESCRIPTOR_STATS))
++      kk_descriptor_stats_log(&dev->descriptor_stats, 0, true);
+    vk_free(&dev->vk.alloc, dev);
+ }
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_device.h b/src/kosmickrisp/vulkan/kk_device.h
+index f72b1ad..86b90cb 100644
+--- a/src/kosmickrisp/vulkan/kk_device.h
++++ b/src/kosmickrisp/vulkan/kk_device.h
+@@ -10,6 +10,7 @@
+ 
+ #include "kk_private.h"
+ 
++#include "kk_descriptor_stats.h"
+ #include "kk_query_table.h"
+ #include "kk_queue.h"
+ 
+@@ -85,6 +86,8 @@ struct kk_precompiled_cache {
+ struct kk_device {
+    struct vk_device vk;
+ 
++   struct kk_descriptor_stats descriptor_stats;
++
+    mtl_device *mtl_handle;
+    mtl_compiler *mtl_compiler_handle;
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_queue.c b/src/kosmickrisp/vulkan/kk_queue.c
+index 628845c..b2e3d45 100644
+--- a/src/kosmickrisp/vulkan/kk_queue.c
++++ b/src/kosmickrisp/vulkan/kk_queue.c
+@@ -409,6 +409,8 @@ kk_queue_submit(struct vk_queue *vk_queue, struct vk_queue_submit *submit)
+       kk_pass_stats_log(frames, false);
+    if (KK_DEBUG(VERTEX_STATS))
+       kk_vertex_stats_log(frames, false);
++   if (KK_DEBUG(DESCRIPTOR_STATS))
++      kk_descriptor_stats_log(&dev->descriptor_stats, frames, false);
+ 
+    return VK_SUCCESS;
+ }

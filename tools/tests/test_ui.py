@@ -8,6 +8,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -53,6 +54,88 @@ class UiEnvTest(unittest.TestCase):
                     "open:licences#Wine", "open:licences#"):
             self.assertFalse(m.ACTION_RE.match(bad), bad)
 
+    def test_read_only_game_option_targets(self):
+        m = load()
+        actions = ["open:app-367520#runtime", "open:app-367520#graphicsoptions"]
+        for action in actions:
+            self.assertEqual(m.parse(["--action", action]).action, [action])
+            text = self.dry("--action", action)
+            self.assertIn("UI_ACTIONS=" + action, text)
+            self.assertNotIn("pad:", text)
+            self.assertNotIn("UI_SETTINGS=", text)
+        for section in ("graphics", "controls", "game", "files", "developer", "ordering", "steam", "gyro", "controller"):
+            self.assertEqual(m.parse(["--action", "open:dir-my game#" + section]).action,
+                             ["open:dir-my game#" + section])
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+            m.parse(["--action", "open:app-367520#nope"])
+        self.assertIn("open:ID#runtime", m.__doc__)
+        self.assertIn("open:ID#graphicsoptions", m.__doc__)
+
+    def test_open_black_is_the_last_action_only(self):
+        """The black screen is a terminal handoff: no action, press or step follows it."""
+        m = load()
+        for argv, expected in ((["--action", "open:black"], ["open:black"]),
+                               (["--action", "open:home", "--action", "open:black"],
+                                ["open:home", "open:black"])):
+            self.assertEqual(m.parse(argv).action, expected)
+        for argv in (["--action", "open:black", "--action", "open:home"],
+                     ["--action", "open:black", "--action", "open:black"],
+                     ["--action", "open:black", "--play", "app-367520"],
+                     ["--action", "open:black", "--verify", "app-367520"],
+                     ["--action", "open:black", "--settings", 'app-367520:{"frameLimit":30}']):
+            with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+                m.parse(argv)
+        self.assertIn("open:black ends the batch", m.__doc__)
+
+    @staticmethod
+    def normalize_row(target):
+        # Both copies interpolate the ordering row's first setting; compare the shape.
+        return re.sub(r"\\\([^)]*\)", "{first}", target.strip())
+
+    def dev_sections(self):
+        """The dev-only enum's real case list and each case's row target."""
+        path = os.path.join(TOOLS, "..", "app", "Sources", "S1Probe", "Dev", "UIDriverGameSection.swift")
+        with open(path) as f:
+            text = f.read()
+        declared = re.search(r"enum UIDriverGameSection: String, CaseIterable \{\n\s*case ([a-z, ]+)\n", text)
+        self.assertIsNotNone(declared, "the dev enum's case list moved: update this test")
+        cases = [n.strip() for n in declared.group(1).split(",")]
+        rows = {}
+        for case in re.finditer(r"^\s*case ((?:\.\w+)(?:, \.\w+)*): (.+)$", text, re.M):
+            for name in case.group(1).split(","):
+                rows[name.strip().lstrip(".")] = self.normalize_row(case.group(2))
+        return cases, rows
+
+    def release_sections(self):
+        """The `firstRow(ofSection:)` release copy's real section names and row targets."""
+        path = os.path.join(TOOLS, "..", "app", "Sources", "S1Probe", "UI", "GameDetailView.swift")
+        with open(path) as f:
+            text = f.read()
+        function = re.search(r"private static func firstRow\(ofSection s: String\) -> String\? \{\n(.*?)\n    \}\n",
+                             text, re.S)
+        self.assertIsNotNone(function, "firstRow(ofSection:) moved or was removed: update this test")
+        guarded = function.group(1).split("#else")
+        self.assertEqual(len(guarded), 2, "firstRow lost its #if !PLAYPORT_RELEASE / #else split")
+        rows = {}
+        for case in re.finditer(r'^\s*case ((?:"[^"]+"(?:, "[^"]+")*)): (.+)$', guarded[1], re.M):
+            for name in re.findall(r'"([^"]+)"', case.group(1)):
+                rows[name] = self.normalize_row(case.group(2))
+        return rows
+
+    def test_the_three_section_vocabularies_agree(self):
+        """Dev enum, release copy and pp ui's set: same members, same row per section."""
+        m = load()
+        cases, dev = self.dev_sections()
+        release = self.release_sections()
+        self.assertGreaterEqual(len(cases), 7, "the dev enum parse found too few sections")
+        self.assertEqual(len(cases), len(set(cases)), "duplicate section in the dev enum")
+        self.assertEqual(set(cases), set(dev), "a dev case has no row target")
+        self.assertEqual(len(dev), len(release), "the release copy names different sections than the dev enum")
+        self.assertEqual(dev, release, "a section's target row drifted between the dev enum and the release copy")
+        self.assertEqual(len(m.GAME_SECTIONS), len(set(m.GAME_SECTIONS)),
+                         "duplicate section in pp ui's GAME_SECTIONS")
+        self.assertEqual(set(m.GAME_SECTIONS), set(cases), "pp ui and the dev enum name different sections")
+
     def test_open_names_the_gamepad_screens_and_pad_presses_buttons(self):
         m = load()
         for screen in m.SCREENS:
@@ -94,34 +177,14 @@ class UiEnvTest(unittest.TestCase):
                        "background:9", "background:601", "background:060", "background:1000"):
             self.assertFalse(m.ACTION_RE.match(action), action)
 
-    def test_return_from_background(self):
+    def test_background_handoff_never_reactivates(self):
         m = load()
-
-        class Phone:
-            def __init__(self, pid):
-                self.running, self.activated = pid, 0
-
-            def pid(self):
-                return self.running
-
-            def activate(self):
-                self.activated += 1
-                return self.running
-
-        slept = []
-        alive = Phone(42)
-        out = m.return_from_background(alive, {"seconds": 60, "pid": 42, "t": 100.0}, now=lambda: 103.0, sleep=slept.append)
-        self.assertEqual(slept, [57.0])
-        self.assertEqual(out, {"seconds": 60, "pid": 42, "pid_seen": 42, "alive": True, "pid_after": 42, "same_process": True})
-        self.assertEqual(alive.activated, 1)
-        gone = Phone(None)
-        out = m.return_from_background(gone, {"seconds": 60, "pid": 42, "t": 100.0}, now=lambda: 300.0, sleep=slept.append)
-        self.assertEqual(slept[-1], 0)
-        self.assertEqual((out["alive"], gone.activated), (False, 0))
-        self.assertNotIn("pid_after", out)
-        replaced = Phone(43)
-        out = m.return_from_background(replaced, {"seconds": 10, "pid": 42}, sleep=slept.append)
-        self.assertEqual((out["alive"], replaced.activated), (False, 0))
+        self.assertEqual(m.background_handoff({"seconds": 60, "pid": 42}),
+                         {"seconds": 60, "pid": 42, "automatic_return": False,
+                          "reason": "foreground handoff cancels the batch; new session required"})
+        # Canonical help must state the terminal handoff contract for both Settings leaves.
+        self.assertIn("then cancels the batch", m.__doc__)
+        self.assertIn("the batch is cancelled as a handoff", m.__doc__)
 
     def test_queue_and_downloading_take_an_app_id(self):
         m = load()
@@ -529,6 +592,47 @@ class UiEnvTest(unittest.TestCase):
         self.assertFalse(m.title_ok({"outcome": "pool=exhausted:head exit=0x00000000 after_s=12"}))
         self.assertFalse(m.title_ok({"outcome": "band=exhausted exit=0x00000000 after_s=12"}))
 
+    def test_interruption_cancels_batch_even_when_leaving_game_running(self):
+        m = load()
+        import signal
+        saved = {s: signal.getsignal(s) for s in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)}
+        try:
+            for leave in (False, True):
+                for exception in (m.Terminated("SIGTERM"), KeyboardInterrupt()):
+                    calls = []
+                    class Phone:
+                        def kill(self): calls.append("kill"); return True
+                    term = m.EndOnTerm(Phone(), leave, cancel=lambda: calls.append("cancel") or {"delivery": "pushed", "confirmed": False})
+                    with term:
+                        raise exception
+                    self.assertEqual(calls, ["cancel"] + ([] if leave else ["kill"]))
+                    self.assertEqual(term.signal, "SIGINT" if isinstance(exception, KeyboardInterrupt) else "SIGTERM")
+                    self.assertFalse(term.cancellation["confirmed"])
+            calls = []
+            def failed(): raise m.phonelib.PhoneError("transport lost")
+            term = m.EndOnTerm(Phone(), True, cancel=failed)
+            with term: raise m.Terminated("SIGTERM")
+            self.assertEqual(term.cancellation["delivery"], "failed")
+            self.assertFalse(term.cancellation["confirmed"])
+        finally:
+            for s, handler in saved.items(): signal.signal(s, handler)
+
+    def test_cancel_marker_is_bounded_and_nonce_bound(self):
+        m = load()
+        calls, events = [], []
+        class Phone:
+            def bundle_id(self): return "test.bundle"
+            def pmd(self, *args, **kwargs):
+                with open(args[-2]) as f: payload = f.read()
+                calls.append((args[-1], payload, kwargs))
+        with tempfile.TemporaryDirectory() as d:
+            result = m.request_batch_cancel(Phone(), d, "a123bc45", lambda *a, **k: events.append((a, k)))
+            self.assertEqual(calls, [("Documents/ui-cancel-a123bc45", "a123bc45", {"secs": 10})])
+            self.assertEqual(result, {"delivery": "pushed", "confirmed": False})
+            with self.assertRaises(ValueError):
+                m.request_batch_cancel(Phone(), d, "../stale", lambda *a, **k: None)
+            self.assertEqual(len(calls), 1)
+
     def test_sigterm_ends_the_app_inside_the_lock(self):
         m = load()
         calls = []
@@ -636,27 +740,55 @@ class UntilReached(unittest.TestCase):
         def bundle_id(self): return "x"
         def kill(self): return False
         def rotate_log(self): pass
-        def launch(self, envs): return 1
+        nonce = None
+        def launch(self, envs):
+            self.__class__.nonce = next(e.split("=", 1)[1] for e in envs if e.startswith("TITLE_NONCE="))
+            return 1
         def pid(self): return None
         def pull(self, *a, **k): return None
-        def run_events(self, nonce): return []
-        def screenshot(self, path): return path
+        current_events = []
+        calls = []
+        cancel_on_shot = False
+        def run_events(self, nonce): return self.current_events
+        def screenshot(self, path):
+            self.calls.append("screenshot")
+            if self.cancel_on_shot:
+                self.current_events.append({"event": "ui-done", "outcome": "cancelled: foreground loss"})
+            return path
+        step_remotes = []
+        def push(self, *args):
+            self.calls.append("push")
+            self.step_remotes.append(args[-1])
+        cancel_push_failed = False
+        def pmd(self, *args, **kwargs):
+            self.calls.append((args[-1], kwargs["secs"]))
+            if self.cancel_push_failed:
+                import phonelib
+                raise phonelib.PhoneError("cancel transport lost")
         def system_alert(self): return None
+        def crashes(self, *a, **k): return []
 
-    def run_ui(self, argv, events, why="done"):
-        """main_recorded's result event and exit code with the app events replayed."""
-        import phonelib
+    def run_ui(self, argv, events, why="done", interrupt=None):
+        """main_recorded's result event and exit code with the app events replayed.
+        self.last_events holds every JSON event line, for warnings and cancel requests."""
         m = load()
-        done = next((e for e in events if e.get("event") == "title-done"), None)
+        import phonelib
+        done = next((e for e in events if e.get("event") in ("title-done", "ui-done")), None)
 
         def watch(phone, ev, nonce, pid, until, wait, poll, done_events, is_done, quiet, on_event, *rest):
+            if interrupt:
+                raise m.Terminated(interrupt) if isinstance(interrupt, str) else interrupt
             for e in events:
                 on_event(e)
                 is_done(e)
-            return (why, done) if done else ("until", None)
+            # A stop other than "done" leaves no terminal app event (a play-last run's
+            # ui-done is seen but does not end the watch).
+            terminal = done if done and why == "done" else None
+            return (why, terminal) if terminal else (why if why != "done" else "until", None)
         saved = (phonelib.Phone, phonelib.watch_launch, phonelib.installed_check, phonelib.device_lock, m.LAST_PLAY)
         out = io.StringIO()
         with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "cmd"))
             phonelib.Phone, phonelib.watch_launch = self.FakePhone, watch
             phonelib.installed_check = lambda *a: (True, None, None)
             phonelib.device_lock = lambda *a, **k: contextlib.nullcontext()
@@ -667,7 +799,8 @@ class UntilReached(unittest.TestCase):
             finally:
                 phonelib.Phone, phonelib.watch_launch, phonelib.installed_check, phonelib.device_lock = saved[:4]
             recorded = os.path.exists(m.LAST_PLAY)
-        result = json.loads(out.getvalue().strip().splitlines()[-1])
+        self.last_events = [json.loads(line) for line in out.getvalue().splitlines() if line.strip()]
+        result = self.last_events[-1]
         return code, result, recorded
 
     CLEAN = {"event": "title-done", "outcome": "ok exit=0x00000000"}
@@ -690,6 +823,133 @@ class UntilReached(unittest.TestCase):
     def test_checkpoint_reached_before_the_watch_ends(self):
         code, r, _ = self.run_ui(["--play", "app-1", "--until", "first-frame+10"], [self.FRAME])
         self.assertEqual((code, r["ok"], r["until_reached"]), (0, True, True))
+
+    def test_producer_interruption_wires_captured_nonce_to_cancel_transport(self):
+        m = load()
+        import signal
+        saved = {s: signal.getsignal(s) for s in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)}
+        try:
+            for leave in (False, True):
+                for interrupt, expected in (("SIGTERM", 143), (KeyboardInterrupt(), 130)):
+                    for failed in (False, True):
+                        self.FakePhone.calls = []
+                        self.FakePhone.cancel_push_failed = failed
+                        args = ["--action", "open:home"] + (["--leave-running"] if leave else [])
+                        code, result, _ = self.run_ui(args, [], interrupt=interrupt)
+                        self.assertEqual((code, result["ok"]), (expected, False))
+                        self.assertEqual(result["cancellation"]["delivery"], "failed" if failed else "pushed")
+                        self.assertFalse(result["cancellation"]["confirmed"])
+                        self.assertEqual(len(self.FakePhone.calls), 1)
+                        remote, timeout = self.FakePhone.calls[0]
+                        self.assertEqual(remote, "Documents/ui-cancel-" + self.FakePhone.nonce)
+                        self.assertEqual(timeout, 10)
+        finally:
+            self.FakePhone.calls = []; self.FakePhone.cancel_push_failed = False
+            for s, handler in saved.items(): signal.signal(s, handler)
+
+    def test_cancelled_batch_surfaces_failure_even_with_play_last(self):
+        code, result, _ = self.run_ui(["--play", "app-1"],
+                                    [{"event": "ui-done", "outcome": "cancelled: foreground loss"}], "done")
+        self.assertEqual((code, result["ok"]), (1, False))
+        self.assertIn("cancelled", result["done"])
+
+    def test_step_does_not_acknowledge_observed_cancellation(self):
+        event = {"event": "ui-action", "action": "open:home", "result": "ok", "index": 1}
+        cancel = {"event": "ui-done", "outcome": "cancelled: foreground loss"}
+        phone = self.FakePhone
+        try:
+            for during_shot in (False, True):
+                phone.calls = []
+                phone.current_events = [] if during_shot else [cancel]
+                phone.cancel_on_shot = during_shot
+                self.run_ui(["--action", "open:home", "--shot-each-action"], [event, cancel], "done")
+                self.assertEqual(phone.calls, ["screenshot"] if during_shot else [])
+            phone.calls = []; phone.current_events = []; phone.cancel_on_shot = False; phone.step_remotes = []
+            self.run_ui(["--action", "open:home", "--shot-each-action"],
+                        [event, {"event": "ui-done", "outcome": "ok"}], "done")
+            self.assertEqual(phone.calls, ["screenshot", "push"])
+            self.assertEqual(phone.step_remotes, ["Documents/ui-step-" + phone.nonce + "-1"])
+        finally:
+            phone.current_events = []; phone.calls = []; phone.cancel_on_shot = False
+
+    def test_watcher_exit_with_an_unfinished_batch_requests_one_cancel(self):
+        """--leave-running with queued input left: one bounded, unconfirmed cancel request."""
+        phone = self.FakePhone
+        try:
+            phone.calls = []
+            code, result, _ = self.run_ui(["--action", "open:home", "--leave-running",
+                                           "--until", "first-frame+10"], [self.FRAME], why="until")
+            self.assertEqual((code, result["ok"]), (0, True))
+            self.assertEqual(result["cancellation"], {"delivery": "pushed", "confirmed": False})
+            # The one device call is the marker; no action, screenshot or step was added.
+            self.assertEqual(phone.calls, [("Documents/ui-cancel-" + phone.nonce, 10)])
+            requests = [e for e in self.last_events if e.get("event") == "ui-cancel-request"]
+            self.assertEqual(len(requests), 1)
+            self.assertEqual((requests[0]["delivery"], requests[0]["confirmed"]), ("pushed", False))
+            warnings = [e for e in self.last_events if e.get("event") == "warning"
+                        and "queued input" in e["message"]]
+            self.assertEqual(len(warnings), 1)
+            self.assertIn("unfinished", warnings[0]["message"])
+        finally:
+            phone.calls = []
+
+    def test_watcher_exit_after_ui_done_pushes_no_cancel(self):
+        phone = self.FakePhone
+        try:
+            phone.calls = []
+            code, result, _ = self.run_ui(["--action", "open:home", "--leave-running"],
+                                          [{"event": "ui-done", "outcome": "ok actions=1"}])
+            self.assertEqual((code, result["ok"]), (0, True))
+            self.assertNotIn("cancellation", result)
+            self.assertEqual(phone.calls, [])
+            self.assertFalse(any(e.get("event") == "ui-cancel-request" for e in self.last_events))
+        finally:
+            phone.calls = []
+
+    def test_watcher_exit_after_a_play_last_ui_done_pushes_no_cancel(self):
+        """A --play smoke check leaves the game running; its finished queue gets no marker."""
+        phone = self.FakePhone
+        try:
+            phone.calls = []
+            code, result, _ = self.run_ui(["--play", "app-1", "--leave-running",
+                                           "--until", "first-frame+10"],
+                                          [{"event": "mark", "what": "first frame"},
+                                           {"event": "ui-done", "outcome": "ok actions=1"}], why="until")
+            self.assertEqual((code, result["ok"]), (0, True))
+            self.assertNotIn("cancellation", result)
+            self.assertEqual(phone.calls, [])
+        finally:
+            phone.calls = []
+
+    def test_watcher_cancel_delivery_failure_is_reported_unconfirmed(self):
+        phone = self.FakePhone
+        try:
+            phone.calls = []
+            phone.cancel_push_failed = True
+            code, result, _ = self.run_ui(["--action", "open:home", "--leave-running",
+                                           "--until", "first-frame+10"], [self.FRAME], why="until")
+            self.assertEqual(code, 0)
+            self.assertEqual(result["cancellation"]["delivery"], "failed")
+            self.assertFalse(result["cancellation"]["confirmed"])
+            self.assertEqual(len(phone.calls), 1)
+            warnings = [e for e in self.last_events if e.get("event") == "warning"]
+            self.assertEqual(len([e for e in warnings if "queued input" in e["message"]]), 1)
+            self.assertEqual(len([e for e in warnings if "could not be delivered" in e["message"]]), 1)
+        finally:
+            phone.calls = []
+            phone.cancel_push_failed = False
+
+    def test_watcher_exit_without_leave_running_pushes_no_cancel(self):
+        phone = self.FakePhone
+        try:
+            phone.calls = []
+            code, result, _ = self.run_ui(["--action", "open:home", "--until", "first-frame+10"],
+                                          [self.FRAME], why="until")
+            self.assertEqual(code, 0)
+            self.assertNotIn("cancellation", result)
+            self.assertEqual(phone.calls, [])
+        finally:
+            phone.calls = []
 
     def test_last_play_needs_a_launched_play(self):
         _, _, recorded = self.run_ui(["--action", "open:settings"], [{"event": "ui-done", "outcome": "ok"}])

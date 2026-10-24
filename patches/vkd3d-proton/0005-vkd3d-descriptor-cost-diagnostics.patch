@@ -1,0 +1,1319 @@
+From 856e24c50b18e41630ae0cfaef7cd592bd638f6c Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kamil=20Postro=C5=BCny?= <kamil@postrozny.pl>
+Date: Fri, 23 Oct 2026 14:56:49 +0200
+Subject: [PATCH] vkd3d: descriptor cost diagnostics
+
+Default-off checked same-thread elapsed scopes preserve descriptor copy vtable selection and copy shapes. Separate constants/redzone and RTV/DSV exclusions; retain raw counters, validity and nontransactional capture boundaries. Elapsed is not CPU time; native driver replay is independently covered.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-10-23-vkd3d-descriptor-cost-probe-host.md
+Offered-upstream: no
+---
+ libs/vkd3d/command.c                | 133 +++++++++--
+ libs/vkd3d/device.c                 | 224 +++++++++++++++++++
+ libs/vkd3d/meson.build              |   1 +
+ libs/vkd3d/resource.c               |  45 ++++
+ libs/vkd3d/vkd3d_descriptor_stats.c | 328 ++++++++++++++++++++++++++++
+ libs/vkd3d/vkd3d_descriptor_stats.h | 100 +++++++++
+ libs/vkd3d/vkd3d_private.h          |   4 +
+ 7 files changed, 820 insertions(+), 15 deletions(-)
+ create mode 100644 libs/vkd3d/vkd3d_descriptor_stats.c
+ create mode 100644 libs/vkd3d/vkd3d_descriptor_stats.h
+
+diff --git a/libs/vkd3d/command.c b/libs/vkd3d/command.c
+index ea1e8a0..8ba5eec 100644
+--- a/libs/vkd3d/command.c
++++ b/libs/vkd3d/command.c
+@@ -7664,7 +7664,12 @@ static void d3d12_command_list_update_inline_redzone(struct d3d12_command_list *
+     info.offset = bindings->root_signature->heap.redzone_inline_heap_offset;
+     info.data.address = &push;
+     info.data.size = offsetof(struct Push, count) + sizeof(uint32_t); /* Don't include padding. */
+-    VK_CALL(vkCmdPushDataEXT(list->cmd.vk_command_buffer, &info));
++    {
++        struct vkd3d_descriptor_scope vk_scope = vkd3d_descriptor_begin(list->device->descriptor_stats_enabled, VKD3D_DS_VK_OTHER);
++        vkd3d_descriptor_add(&vk_scope, VKD3D_DS_WORK_UNKNOWN, 1);
++        VK_CALL(vkCmdPushDataEXT(list->cmd.vk_command_buffer, &info));
++        vkd3d_descriptor_end(&vk_scope);
++    }
+ 
+     bindings->dirty_flags &= ~VKD3D_PIPELINE_DIRTY_INLINE_REDZONE;
+ }
+@@ -7727,15 +7732,25 @@ static void d3d12_command_list_update_descriptor_table_offsets(struct d3d12_comm
+         info.offset = root_signature->descriptor_table_offset;
+         info.data.address = table_offsets;
+         info.data.size = root_signature->descriptor_table_count * sizeof(uint32_t);
+-        VK_CALL(vkCmdPushDataEXT(list->cmd.vk_command_buffer, &info));
++        {
++            struct vkd3d_descriptor_scope vk_scope = vkd3d_descriptor_begin(list->device->descriptor_stats_enabled, VKD3D_DS_VK_OTHER);
++            vkd3d_descriptor_add(&vk_scope, VKD3D_DS_WORK_UNKNOWN, 1);
++            VK_CALL(vkCmdPushDataEXT(list->cmd.vk_command_buffer, &info));
++            vkd3d_descriptor_end(&vk_scope);
++        }
+     }
+     else if (push_stages)
+     {
+-        VK_CALL(vkCmdPushConstants(list->cmd.vk_command_buffer,
++        {
++            struct vkd3d_descriptor_scope vk_scope = vkd3d_descriptor_begin(list->device->descriptor_stats_enabled, VKD3D_DS_VK_OTHER);
++            vkd3d_descriptor_add(&vk_scope, VKD3D_DS_WORK_UNKNOWN, 1);
++            VK_CALL(vkCmdPushConstants(list->cmd.vk_command_buffer,
+                 layout, push_stages,
+                 root_signature->descriptor_table_offset,
+                 root_signature->descriptor_table_count * sizeof(uint32_t),
+                 table_offsets));
++            vkd3d_descriptor_end(&vk_scope);
++        }
+     }
+ 
+     bindings->dirty_flags &= ~VKD3D_PIPELINE_DIRTY_DESCRIPTOR_TABLE_OFFSETS;
+@@ -7802,7 +7817,12 @@ void d3d12_command_list_update_global_descriptor_heap(struct d3d12_command_list
+             resource_heap_info.reservedRangeOffset = list->descriptor_heap.buffers.resource.reserved_offset;
+             resource_heap_info.reservedRangeSize =
+                     list->device->device_info.descriptor_heap_properties.minResourceHeapReservedRange;
+-            VK_CALL(vkCmdBindResourceHeapEXT(list->cmd.vk_command_buffer, &resource_heap_info));
++            {
++                struct vkd3d_descriptor_scope vk_scope = vkd3d_descriptor_begin(list->device->descriptor_stats_enabled, VKD3D_DS_VK_OTHER);
++                vkd3d_descriptor_add(&vk_scope, VKD3D_DS_WORK_UNKNOWN, 1);
++                VK_CALL(vkCmdBindResourceHeapEXT(list->cmd.vk_command_buffer, &resource_heap_info));
++                vkd3d_descriptor_end(&vk_scope);
++            }
+         }
+ 
+         if (list->descriptor_heap.buffers.sampler.va)
+@@ -7812,7 +7832,12 @@ void d3d12_command_list_update_global_descriptor_heap(struct d3d12_command_list
+             resource_heap_info.reservedRangeOffset = list->descriptor_heap.buffers.sampler.reserved_offset;
+             resource_heap_info.reservedRangeSize =
+                     list->device->device_info.descriptor_heap_properties.minSamplerHeapReservedRangeWithEmbedded;
+-            VK_CALL(vkCmdBindSamplerHeapEXT(list->cmd.vk_command_buffer, &resource_heap_info));
++            {
++                struct vkd3d_descriptor_scope vk_scope = vkd3d_descriptor_begin(list->device->descriptor_stats_enabled, VKD3D_DS_VK_OTHER);
++                vkd3d_descriptor_add(&vk_scope, VKD3D_DS_WORK_UNKNOWN, 1);
++                VK_CALL(vkCmdBindSamplerHeapEXT(list->cmd.vk_command_buffer, &resource_heap_info));
++                vkd3d_descriptor_end(&vk_scope);
++            }
+         }
+ 
+         list->descriptor_heap.buffers.global_heap_dirty = false;
+@@ -7838,8 +7863,13 @@ void d3d12_command_list_update_global_descriptor_heap(struct d3d12_command_list
+         global_buffers[1].usage = list->device->global_descriptor_buffer.sampler.usage;
+         global_buffers[1].address = list->descriptor_heap.buffers.db.heap_va_sampler;
+ 
+-        VK_CALL(vkCmdBindDescriptorBuffersEXT(list->cmd.vk_command_buffer,
++        {
++            struct vkd3d_descriptor_scope vk_scope = vkd3d_descriptor_begin(list->device->descriptor_stats_enabled, VKD3D_DS_VK_OTHER);
++            vkd3d_descriptor_add(&vk_scope, VKD3D_DS_WORK_UNKNOWN, 1);
++            VK_CALL(vkCmdBindDescriptorBuffersEXT(list->cmd.vk_command_buffer,
+                 ARRAY_SIZE(global_buffers), global_buffers));
++            vkd3d_descriptor_end(&vk_scope);
++        }
+ 
+         list->descriptor_heap.buffers.global_heap_dirty = false;
+     }
+@@ -7876,10 +7906,15 @@ static void d3d12_command_list_update_descriptor_heaps(struct d3d12_command_list
+         /* Prefer binding everything in one go. There is no risk of null descriptor sets here. */
+         if (bindings->legacy_descriptor_set_dirty_mask)
+         {
+-            VK_CALL(vkCmdSetDescriptorBufferOffsetsEXT(list->cmd.vk_command_buffer, vk_bind_point,
++            {
++                struct vkd3d_descriptor_scope vk_scope = vkd3d_descriptor_begin(list->device->descriptor_stats_enabled, VKD3D_DS_VK_OTHER);
++                vkd3d_descriptor_add(&vk_scope, VKD3D_DS_WORK_UNKNOWN, 1);
++                VK_CALL(vkCmdSetDescriptorBufferOffsetsEXT(list->cmd.vk_command_buffer, vk_bind_point,
+                     layout, 0, bindless_state->legacy.set_count,
+                     bindless_state->legacy.vk_descriptor_buffer_indices,
+                     list->descriptor_heap.buffers.db.vk_offsets));
++                vkd3d_descriptor_end(&vk_scope);
++            }
+             bindings->legacy_descriptor_set_dirty_mask = 0;
+         }
+     }
+@@ -7891,9 +7926,14 @@ static void d3d12_command_list_update_descriptor_heaps(struct d3d12_command_list
+ 
+             if (list->descriptor_heap.sets.vk_sets[heap_index])
+             {
+-                VK_CALL(vkCmdBindDescriptorSets(list->cmd.vk_command_buffer, vk_bind_point,
++                {
++                    struct vkd3d_descriptor_scope vk_scope = vkd3d_descriptor_begin(list->device->descriptor_stats_enabled, VKD3D_DS_VK_BIND);
++                    vkd3d_descriptor_add(&vk_scope, VKD3D_DS_SETS, 1);
++                    VK_CALL(vkCmdBindDescriptorSets(list->cmd.vk_command_buffer, vk_bind_point,
+                         layout, heap_index, 1,
+                         &list->descriptor_heap.sets.vk_sets[heap_index], 0, NULL));
++                    vkd3d_descriptor_end(&vk_scope);
++                }
+             }
+         }
+     }
+@@ -7908,15 +7948,25 @@ static void d3d12_command_list_update_static_samplers(struct d3d12_command_list
+ 
+     if (bindings->static_sampler_set)
+     {
+-        VK_CALL(vkCmdBindDescriptorSets(list->cmd.vk_command_buffer, vk_bind_point,
++        {
++            struct vkd3d_descriptor_scope vk_scope = vkd3d_descriptor_begin(list->device->descriptor_stats_enabled, VKD3D_DS_VK_BIND);
++            vkd3d_descriptor_add(&vk_scope, VKD3D_DS_SETS, 1);
++            VK_CALL(vkCmdBindDescriptorSets(list->cmd.vk_command_buffer, vk_bind_point,
+                 layout,
+                 root_signature->sampler_descriptor_set,
+                 1, &bindings->static_sampler_set, 0, NULL));
++            vkd3d_descriptor_end(&vk_scope);
++        }
+     }
+     else if (root_signature->vk_sampler_descriptor_layout)
+     {
+-        VK_CALL(vkCmdBindDescriptorBufferEmbeddedSamplersEXT(list->cmd.vk_command_buffer, vk_bind_point,
++        {
++            struct vkd3d_descriptor_scope vk_scope = vkd3d_descriptor_begin(list->device->descriptor_stats_enabled, VKD3D_DS_VK_OTHER);
++            vkd3d_descriptor_add(&vk_scope, VKD3D_DS_WORK_UNKNOWN, 1);
++            VK_CALL(vkCmdBindDescriptorBufferEmbeddedSamplersEXT(list->cmd.vk_command_buffer, vk_bind_point,
+                 layout, root_signature->sampler_descriptor_set));
++            vkd3d_descriptor_end(&vk_scope);
++        }
+     }
+ 
+     bindings->dirty_flags &= ~VKD3D_PIPELINE_DIRTY_STATIC_SAMPLER_SET;
+@@ -7950,7 +8000,12 @@ static void d3d12_command_list_update_root_constants(struct d3d12_command_list *
+             info.data.address = &bindings->root_constants[root_constant->constant_index];
+             info.offset = root_constant->constant_index * sizeof(uint32_t);
+             info.data.size = root_constant->constant_count * sizeof(uint32_t);
+-            VK_CALL(vkCmdPushDataEXT(list->cmd.vk_command_buffer, &info));
++            {
++                struct vkd3d_descriptor_scope vk_scope = vkd3d_descriptor_begin(list->device->descriptor_stats_enabled, VKD3D_DS_VK_OTHER);
++                vkd3d_descriptor_add(&vk_scope, VKD3D_DS_WORK_UNKNOWN, 1);
++                VK_CALL(vkCmdPushDataEXT(list->cmd.vk_command_buffer, &info));
++                vkd3d_descriptor_end(&vk_scope);
++            }
+         }
+     }
+     else
+@@ -7959,11 +8014,16 @@ static void d3d12_command_list_update_root_constants(struct d3d12_command_list *
+         {
+             root_parameter_index = vkd3d_bitmask_iter64(&bindings->root_constant_dirty_mask);
+             root_constant = root_signature_get_32bit_constants(root_signature, root_parameter_index);
+-            VK_CALL(vkCmdPushConstants(list->cmd.vk_command_buffer,
++            {
++                struct vkd3d_descriptor_scope vk_scope = vkd3d_descriptor_begin(list->device->descriptor_stats_enabled, VKD3D_DS_VK_OTHER);
++                vkd3d_descriptor_add(&vk_scope, VKD3D_DS_WORK_UNKNOWN, 1);
++                VK_CALL(vkCmdPushConstants(list->cmd.vk_command_buffer,
+                     layout, push_stages,
+                     root_constant->constant_index * sizeof(uint32_t),
+                     root_constant->constant_count * sizeof(uint32_t),
+                     &bindings->root_constants[root_constant->constant_index]));
++                vkd3d_descriptor_end(&vk_scope);
++            }
+         }
+     }
+ }
+@@ -8113,14 +8173,24 @@ static void d3d12_command_list_update_root_descriptors(struct d3d12_command_list
+             info.sType = VK_STRUCTURE_TYPE_PUSH_DATA_INFO_EXT;
+             info.data.address = root_parameter_data.root_descriptor_vas;
+             info.data.size = va_count * sizeof(*root_parameter_data.root_descriptor_vas);
+-            VK_CALL(vkCmdPushDataEXT(list->cmd.vk_command_buffer, &info));
++            {
++                struct vkd3d_descriptor_scope vk_scope = vkd3d_descriptor_begin(list->device->descriptor_stats_enabled, VKD3D_DS_VK_OTHER);
++                vkd3d_descriptor_add(&vk_scope, VKD3D_DS_WORK_UNKNOWN, 1);
++                VK_CALL(vkCmdPushDataEXT(list->cmd.vk_command_buffer, &info));
++                vkd3d_descriptor_end(&vk_scope);
++            }
+         }
+         else if (push_stages)
+         {
+-            VK_CALL(vkCmdPushConstants(list->cmd.vk_command_buffer,
++            {
++                struct vkd3d_descriptor_scope vk_scope = vkd3d_descriptor_begin(list->device->descriptor_stats_enabled, VKD3D_DS_VK_OTHER);
++                vkd3d_descriptor_add(&vk_scope, VKD3D_DS_WORK_UNKNOWN, 1);
++                VK_CALL(vkCmdPushConstants(list->cmd.vk_command_buffer,
+                     layout, push_stages,
+                     0, va_count * sizeof(*root_parameter_data.root_descriptor_vas),
+                     root_parameter_data.root_descriptor_vas));
++                vkd3d_descriptor_end(&vk_scope);
++            }
+         }
+     }
+ 
+@@ -8147,9 +8217,15 @@ static void d3d12_command_list_update_root_descriptors(struct d3d12_command_list
+ 
+     if (descriptor_write_count)
+     {
+-        VK_CALL(vkCmdPushDescriptorSetKHR(list->cmd.vk_command_buffer, vk_bind_point,
++        {
++            struct vkd3d_descriptor_scope vk_scope = vkd3d_descriptor_begin(list->device->descriptor_stats_enabled, VKD3D_DS_VK_PUSH);
++            vkd3d_descriptor_add(&vk_scope, VKD3D_DS_RECORDS, descriptor_write_count);
++            vkd3d_descriptor_add(&vk_scope, VKD3D_DS_VK_ELEMENTS, descriptor_write_count);
++            VK_CALL(vkCmdPushDescriptorSetKHR(list->cmd.vk_command_buffer, vk_bind_point,
+                 layout, root_signature->root_descriptor_set,
+                 descriptor_write_count, descriptor_writes));
++            vkd3d_descriptor_end(&vk_scope);
++        }
+     }
+ }
+ 
+@@ -8217,9 +8293,24 @@ static void d3d12_command_list_update_descriptors(struct d3d12_command_list *lis
+     VkPipelineBindPoint vk_bind_point;
+     VkShaderStageFlags push_stages;
+     VkPipelineLayout layout;
++    struct vkd3d_descriptor_scope scope = {0};
++    if (list->device->descriptor_stats_enabled)
++    {
++        enum vkd3d_descriptor_op op = list->active_pipeline_type == VKD3D_PIPELINE_TYPE_GRAPHICS
++                ? VKD3D_DS_PREP_GRAPHICS : list->active_pipeline_type == VKD3D_PIPELINE_TYPE_COMPUTE
++                ? VKD3D_DS_PREP_COMPUTE : VKD3D_DS_PREP_OTHER;
++        scope = vkd3d_descriptor_begin(list->device->descriptor_stats_enabled, op);
++        vkd3d_descriptor_add(&scope, VKD3D_DS_DIRTY_ROOTS, vkd3d_popcount((uint32_t)bindings->root_descriptor_dirty_mask)
++                + vkd3d_popcount((uint32_t)(bindings->root_descriptor_dirty_mask >> 32)));
++        vkd3d_descriptor_add(&scope, VKD3D_DS_TABLE_SLOTS, rs ? rs->descriptor_table_count : 0);
++        vkd3d_descriptor_add(&scope, VKD3D_DS_WORK_UNKNOWN, 1); /* Slots are not descriptor cardinality. */
++    }
+ 
+     if (!rs)
++    {
++        vkd3d_descriptor_end(&scope);
+         return;
++    }
+ 
+     bind_point_layout = d3d12_root_signature_get_layout(rs, list->active_pipeline_type);
+     layout = bind_point_layout->vk_pipeline_layout;
+@@ -8255,14 +8346,23 @@ static void d3d12_command_list_update_descriptors(struct d3d12_command_list *lis
+         }
+ 
+         if (bindings->root_constant_dirty_mask)
++        {
++            struct vkd3d_descriptor_scope excluded = vkd3d_descriptor_begin(list->device->descriptor_stats_enabled, VKD3D_DS_SPEC_DATA);
+             d3d12_command_list_update_root_constants(list, bindings, layout, push_stages);
++            vkd3d_descriptor_end(&excluded);
++        }
+ 
+         if (bindings->dirty_flags & VKD3D_PIPELINE_DIRTY_DESCRIPTOR_TABLE_OFFSETS)
+             d3d12_command_list_update_descriptor_table_offsets(list, bindings, layout, push_stages);
+ 
+         if (bindings->dirty_flags & VKD3D_PIPELINE_DIRTY_INLINE_REDZONE)
++        {
++            struct vkd3d_descriptor_scope excluded = vkd3d_descriptor_begin(list->device->descriptor_stats_enabled, VKD3D_DS_SPEC_DATA);
+             d3d12_command_list_update_inline_redzone(list, bindings);
++            vkd3d_descriptor_end(&excluded);
++        }
+     }
++    vkd3d_descriptor_end(&scope);
+ }
+ 
+ static void d3d12_command_list_check_pre_compute_barrier(
+@@ -23722,6 +23822,9 @@ VKD3D_METHODENTRY(void) d3d12_command_queue_ExecuteCommandLists(ID3D12CommandQue
+     TRACE("iface %p, command_list_count %u, command_lists %p.\n",
+             iface, command_list_count, command_lists);
+ 
++    if (command_queue->device->descriptor_stats_enabled)
++        vkd3d_descriptor_execute(command_queue->device->descriptor_stats_enabled);
++
+     if (!command_list_count)
+         return;
+ 
+diff --git a/libs/vkd3d/device.c b/libs/vkd3d/device.c
+index fe8039b..b49e858 100644
+--- a/libs/vkd3d/device.c
++++ b/libs/vkd3d/device.c
+@@ -3969,6 +3969,8 @@ static void d3d12_device_destroy(struct d3d12_device *device)
+     d3d12_device_close_kmt(device);
+     if (device->parent)
+         IUnknown_Release(device->parent);
++    vkd3d_descriptor_report(device->descriptor_stats_enabled, true);
++    device->descriptor_stats_enabled = NULL;
+     vkd3d_instance_decref(device->vkd3d_instance);
+ }
+ 
+@@ -5962,6 +5964,8 @@ static inline void d3d12_device_copy_descriptors(struct d3d12_device *device,
+         dst = d3d12_advance_cpu_descriptor_handle(dst_start, increment, dst_idx);
+         src = d3d12_advance_cpu_descriptor_handle(src_start, increment, src_idx);
+ 
++        vkd3d_descriptor_current_add(device->descriptor_stats_enabled, VKD3D_DS_PROCESSED_ELEMENTS, copy_count);
++
+         switch (descriptor_heap_type)
+         {
+             case D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER:
+@@ -5971,11 +5975,14 @@ static inline void d3d12_device_copy_descriptors(struct d3d12_device *device,
+                 break;
+             case D3D12_DESCRIPTOR_HEAP_TYPE_RTV:
+             case D3D12_DESCRIPTOR_HEAP_TYPE_DSV:
++                vkd3d_descriptor_current_add(device->descriptor_stats_enabled, VKD3D_DS_METADATA_BYTES,
++                        (uint64_t)copy_count * sizeof(struct d3d12_rtv_desc));
+                 d3d12_rtv_desc_copy(d3d12_rtv_desc_from_cpu_handle(dst),
+                         d3d12_rtv_desc_from_cpu_handle(src), copy_count);
+                 break;
+             default:
+                 ERR("Unhandled descriptor heap type %u.\n", descriptor_heap_type);
++                vkd3d_descriptor_current_add(device->descriptor_stats_enabled, VKD3D_DS_FAILURES, 1);
+                 return;
+         }
+ 
+@@ -5995,6 +6002,23 @@ static inline void d3d12_device_copy_descriptors(struct d3d12_device *device,
+     }
+ }
+ 
++static struct vkd3d_descriptor_scope d3d12_device_descriptor_copy_begin(struct d3d12_device *device,
++        D3D12_DESCRIPTOR_HEAP_TYPE heap_type, bool simple, UINT dst_ranges, UINT src_ranges, UINT elements)
++{
++    enum vkd3d_descriptor_op op = simple ? VKD3D_DS_SIMPLE_RESOURCE : VKD3D_DS_COPY_RESOURCE;
++    struct vkd3d_descriptor_scope scope;
++    /* Heap enums 0..3 are CBV/SRV/UAV, sampler, RTV, DSV. Unknown inputs stay explicit. */
++    op += (unsigned int)heap_type <= 3 ? (unsigned int)heap_type : 4;
++    scope = vkd3d_descriptor_begin(device->descriptor_stats_enabled, op);
++    vkd3d_descriptor_add(&scope, VKD3D_DS_DST_RANGES, dst_ranges);
++    vkd3d_descriptor_add(&scope, VKD3D_DS_SRC_RANGES, src_ranges);
++    if (simple)
++        vkd3d_descriptor_add(&scope, VKD3D_DS_REQUESTED_ELEMENTS, elements);
++    else
++        vkd3d_descriptor_add(&scope, VKD3D_DS_WORK_UNKNOWN, 1); /* No unused-range traversal. */
++    return scope;
++}
++
+ static void STDMETHODCALLTYPE d3d12_device_CopyDescriptors(d3d12_device_iface *iface,
+         UINT dst_descriptor_range_count, const D3D12_CPU_DESCRIPTOR_HANDLE *dst_descriptor_range_offsets,
+         const UINT *dst_descriptor_range_sizes,
+@@ -6002,6 +6026,12 @@ static void STDMETHODCALLTYPE d3d12_device_CopyDescriptors(d3d12_device_iface *i
+         const UINT *src_descriptor_range_sizes,
+         D3D12_DESCRIPTOR_HEAP_TYPE descriptor_heap_type)
+ {
++    struct d3d12_device *stats_device = impl_from_ID3D12Device(iface);
++    struct vkd3d_descriptor_scope scope = {0};
++    if (stats_device->descriptor_stats_enabled)
++        scope = d3d12_device_descriptor_copy_begin(stats_device, descriptor_heap_type, false,
++                dst_descriptor_range_count, src_descriptor_range_count, 0);
++
+     TRACE("iface %p, dst_descriptor_range_count %u, dst_descriptor_range_offsets %p, "
+             "dst_descriptor_range_sizes %p, src_descriptor_range_count %u, "
+             "src_descriptor_range_offsets %p, src_descriptor_range_sizes %p, "
+@@ -6016,6 +6046,7 @@ static void STDMETHODCALLTYPE d3d12_device_CopyDescriptors(d3d12_device_iface *i
+             src_descriptor_range_count, src_descriptor_range_offsets,
+             src_descriptor_range_sizes,
+             descriptor_heap_type);
++    vkd3d_descriptor_end(&scope);
+ }
+ 
+ static void STDMETHODCALLTYPE d3d12_device_CopyDescriptorsSimple_descriptor_buffer_16_16_4(d3d12_device_iface *iface,
+@@ -6023,6 +6054,9 @@ static void STDMETHODCALLTYPE d3d12_device_CopyDescriptorsSimple_descriptor_buff
+         const D3D12_CPU_DESCRIPTOR_HANDLE src_descriptor_range_offset,
+         D3D12_DESCRIPTOR_HEAP_TYPE descriptor_heap_type)
+ {
++    struct d3d12_device *stats_device = unsafe_impl_from_ID3D12Device(iface);
++    struct vkd3d_descriptor_scope scope = {0};
++
+     /* Optimized NVIDIA path. Buffers are 16 byte, but images and samplers are just 4 byte indices,
+      * so we cannot use embedded mutable style copies. */
+ 
+@@ -6031,6 +6065,23 @@ static void STDMETHODCALLTYPE d3d12_device_CopyDescriptorsSimple_descriptor_buff
+     struct d3d12_desc_split src;
+     size_t i, n;
+ 
++    if (stats_device->descriptor_stats_enabled)
++    {
++        scope = d3d12_device_descriptor_copy_begin(stats_device, descriptor_heap_type, true, 1, 1, descriptor_count);
++        if (descriptor_heap_type == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV ||
++                descriptor_heap_type == D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER)
++        {
++            uint64_t bytes;
++            vkd3d_descriptor_add(&scope, VKD3D_DS_PROCESSED_ELEMENTS, descriptor_count);
++            bytes = descriptor_heap_type == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV ? 32 : 4;
++            vkd3d_descriptor_add(&scope, VKD3D_DS_PAYLOAD_BYTES, bytes * descriptor_count);
++            bytes = sizeof(struct vkd3d_descriptor_metadata_view) + sizeof(struct vkd3d_descriptor_metadata_types);
++            if (descriptor_heap_type == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV)
++                bytes += sizeof(VkDeviceAddress);
++            vkd3d_descriptor_add(&scope, VKD3D_DS_METADATA_BYTES, bytes * descriptor_count);
++        }
++    }
++
+     TRACE("iface %p, descriptor_count %u, dst_descriptor_range_offset %#zx, "
+           "src_descriptor_range_offset %#zx, descriptor_heap_type %#x.\n",
+             iface, descriptor_count, dst_descriptor_range_offset.ptr, src_descriptor_range_offset.ptr,
+@@ -6121,6 +6172,7 @@ static void STDMETHODCALLTYPE d3d12_device_CopyDescriptorsSimple_descriptor_buff
+                 1, &src_descriptor_range_offset, &descriptor_count,
+                 descriptor_heap_type);
+     }
++    vkd3d_descriptor_end(&scope);
+ }
+ 
+ static void STDMETHODCALLTYPE d3d12_device_CopyDescriptorsSimple_descriptor_buffer_64_64_32(d3d12_device_iface *iface,
+@@ -6128,6 +6180,9 @@ static void STDMETHODCALLTYPE d3d12_device_CopyDescriptorsSimple_descriptor_buff
+         const D3D12_CPU_DESCRIPTOR_HANDLE src_descriptor_range_offset,
+         D3D12_DESCRIPTOR_HEAP_TYPE descriptor_heap_type)
+ {
++    struct d3d12_device *stats_device = unsafe_impl_from_ID3D12Device(iface);
++    struct vkd3d_descriptor_scope scope = {0};
++
+     /* Optimized Intel Arc path. */
+ 
+     struct d3d12_device *device;
+@@ -6135,6 +6190,23 @@ static void STDMETHODCALLTYPE d3d12_device_CopyDescriptorsSimple_descriptor_buff
+     struct d3d12_desc_split src;
+     size_t i, n;
+ 
++    if (stats_device->descriptor_stats_enabled)
++    {
++        scope = d3d12_device_descriptor_copy_begin(stats_device, descriptor_heap_type, true, 1, 1, descriptor_count);
++        if (descriptor_heap_type == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV ||
++                descriptor_heap_type == D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER)
++        {
++            uint64_t bytes;
++            vkd3d_descriptor_add(&scope, VKD3D_DS_PROCESSED_ELEMENTS, descriptor_count);
++            bytes = descriptor_heap_type == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV ? 128 : 32;
++            vkd3d_descriptor_add(&scope, VKD3D_DS_PAYLOAD_BYTES, bytes * descriptor_count);
++            bytes = sizeof(struct vkd3d_descriptor_metadata_view) + sizeof(struct vkd3d_descriptor_metadata_types);
++            if (descriptor_heap_type == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV)
++                bytes += sizeof(VkDeviceAddress);
++            vkd3d_descriptor_add(&scope, VKD3D_DS_METADATA_BYTES, bytes * descriptor_count);
++        }
++    }
++
+     TRACE("iface %p, descriptor_count %u, dst_descriptor_range_offset %#zx, "
+           "src_descriptor_range_offset %#zx, descriptor_heap_type %#x.\n",
+             iface, descriptor_count, dst_descriptor_range_offset.ptr, src_descriptor_range_offset.ptr,
+@@ -6225,6 +6297,7 @@ static void STDMETHODCALLTYPE d3d12_device_CopyDescriptorsSimple_descriptor_buff
+                 1, &src_descriptor_range_offset, &descriptor_count,
+                 descriptor_heap_type);
+     }
++    vkd3d_descriptor_end(&scope);
+ }
+ 
+ static void STDMETHODCALLTYPE d3d12_device_CopyDescriptorsSimple_embedded_64_16_packed(d3d12_device_iface *iface,
+@@ -6232,7 +6305,23 @@ static void STDMETHODCALLTYPE d3d12_device_CopyDescriptorsSimple_embedded_64_16_
+         const D3D12_CPU_DESCRIPTOR_HANDLE src_descriptor_range_offset,
+         D3D12_DESCRIPTOR_HEAP_TYPE descriptor_heap_type)
+ {
++    struct d3d12_device *stats_device = unsafe_impl_from_ID3D12Device(iface);
++    struct vkd3d_descriptor_scope scope = {0};
+     struct d3d12_device *device;
++    if (stats_device->descriptor_stats_enabled)
++    {
++        scope = d3d12_device_descriptor_copy_begin(stats_device, descriptor_heap_type, true, 1, 1, descriptor_count);
++        if (descriptor_heap_type == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV ||
++                descriptor_heap_type == D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER)
++        {
++            uint64_t bytes;
++            vkd3d_descriptor_add(&scope, VKD3D_DS_PROCESSED_ELEMENTS, descriptor_count);
++            /* Resource bytes contain packed metadata, not a second disjoint copy. */
++            bytes = descriptor_heap_type == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV ? 64 : 16;
++            vkd3d_descriptor_add(&scope, VKD3D_DS_PAYLOAD_BYTES, bytes * descriptor_count);
++        }
++    }
++
+     TRACE("iface %p, descriptor_count %u, dst_descriptor_range_offset %#zx, "
+           "src_descriptor_range_offset %#zx, descriptor_heap_type %#x.\n",
+             iface, descriptor_count, dst_descriptor_range_offset.ptr, src_descriptor_range_offset.ptr,
+@@ -6318,6 +6407,7 @@ static void STDMETHODCALLTYPE d3d12_device_CopyDescriptorsSimple_embedded_64_16_
+                 1, &src_descriptor_range_offset, &descriptor_count,
+                 descriptor_heap_type);
+     }
++    vkd3d_descriptor_end(&scope);
+ }
+ 
+ static void STDMETHODCALLTYPE d3d12_device_CopyDescriptorsSimple_embedded_32_16_planar(d3d12_device_iface *iface,
+@@ -6325,7 +6415,28 @@ static void STDMETHODCALLTYPE d3d12_device_CopyDescriptorsSimple_embedded_32_16_
+         const D3D12_CPU_DESCRIPTOR_HANDLE src_descriptor_range_offset,
+         D3D12_DESCRIPTOR_HEAP_TYPE descriptor_heap_type)
+ {
++    struct d3d12_device *stats_device = unsafe_impl_from_ID3D12Device(iface);
++    struct vkd3d_descriptor_scope scope = {0};
+     struct d3d12_device *device;
++    if (stats_device->descriptor_stats_enabled)
++    {
++        scope = d3d12_device_descriptor_copy_begin(stats_device, descriptor_heap_type, true, 1, 1, descriptor_count);
++        if (descriptor_heap_type == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV ||
++                descriptor_heap_type == D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER)
++        {
++            uint64_t bytes;
++            vkd3d_descriptor_add(&scope, VKD3D_DS_PROCESSED_ELEMENTS, descriptor_count);
++            bytes = descriptor_heap_type == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV ? 32 : 16;
++            vkd3d_descriptor_add(&scope, VKD3D_DS_PAYLOAD_BYTES, bytes * descriptor_count);
++            if (descriptor_heap_type == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV)
++            {
++                struct d3d12_desc_split_embedded dst = d3d12_desc_decode_embedded_resource_va(dst_descriptor_range_offset.ptr);
++                if (dst.metadata)
++                    vkd3d_descriptor_add(&scope, VKD3D_DS_METADATA_BYTES, bytes * descriptor_count);
++            }
++        }
++    }
++
+     TRACE("iface %p, descriptor_count %u, dst_descriptor_range_offset %#zx, "
+           "src_descriptor_range_offset %#zx, descriptor_heap_type %#x.\n",
+             iface, descriptor_count, dst_descriptor_range_offset.ptr, src_descriptor_range_offset.ptr,
+@@ -6375,6 +6486,7 @@ static void STDMETHODCALLTYPE d3d12_device_CopyDescriptorsSimple_embedded_32_16_
+                 1, &src_descriptor_range_offset, &descriptor_count,
+                 descriptor_heap_type);
+     }
++    vkd3d_descriptor_end(&scope);
+ }
+ 
+ static void STDMETHODCALLTYPE d3d12_device_CopyDescriptorsSimple_embedded_32_32_planar(d3d12_device_iface *iface,
+@@ -6382,7 +6494,28 @@ static void STDMETHODCALLTYPE d3d12_device_CopyDescriptorsSimple_embedded_32_32_
+         const D3D12_CPU_DESCRIPTOR_HANDLE src_descriptor_range_offset,
+         D3D12_DESCRIPTOR_HEAP_TYPE descriptor_heap_type)
+ {
++    struct d3d12_device *stats_device = unsafe_impl_from_ID3D12Device(iface);
++    struct vkd3d_descriptor_scope scope = {0};
+     struct d3d12_device *device;
++    if (stats_device->descriptor_stats_enabled)
++    {
++        scope = d3d12_device_descriptor_copy_begin(stats_device, descriptor_heap_type, true, 1, 1, descriptor_count);
++        if (descriptor_heap_type == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV ||
++                descriptor_heap_type == D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER)
++        {
++            uint64_t bytes;
++            vkd3d_descriptor_add(&scope, VKD3D_DS_PROCESSED_ELEMENTS, descriptor_count);
++            bytes = descriptor_heap_type == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV ? 32 : 32;
++            vkd3d_descriptor_add(&scope, VKD3D_DS_PAYLOAD_BYTES, bytes * descriptor_count);
++            if (true)
++            {
++                struct d3d12_desc_split_embedded dst = d3d12_desc_decode_embedded_resource_va(dst_descriptor_range_offset.ptr);
++                if (dst.metadata)
++                    vkd3d_descriptor_add(&scope, VKD3D_DS_METADATA_BYTES, bytes * descriptor_count);
++            }
++        }
++    }
++
+     TRACE("iface %p, descriptor_count %u, dst_descriptor_range_offset %#zx, "
+           "src_descriptor_range_offset %#zx, descriptor_heap_type %#x.\n",
+             iface, descriptor_count, dst_descriptor_range_offset.ptr, src_descriptor_range_offset.ptr,
+@@ -6415,6 +6548,7 @@ static void STDMETHODCALLTYPE d3d12_device_CopyDescriptorsSimple_embedded_32_32_
+                 1, &src_descriptor_range_offset, &descriptor_count,
+                 descriptor_heap_type);
+     }
++    vkd3d_descriptor_end(&scope);
+ }
+ 
+ static void STDMETHODCALLTYPE d3d12_device_CopyDescriptorsSimple_embedded_128_32_planar(d3d12_device_iface *iface,
+@@ -6422,7 +6556,28 @@ static void STDMETHODCALLTYPE d3d12_device_CopyDescriptorsSimple_embedded_128_32
+         const D3D12_CPU_DESCRIPTOR_HANDLE src_descriptor_range_offset,
+         D3D12_DESCRIPTOR_HEAP_TYPE descriptor_heap_type)
+ {
++    struct d3d12_device *stats_device = unsafe_impl_from_ID3D12Device(iface);
++    struct vkd3d_descriptor_scope scope = {0};
+     struct d3d12_device *device;
++    if (stats_device->descriptor_stats_enabled)
++    {
++        scope = d3d12_device_descriptor_copy_begin(stats_device, descriptor_heap_type, true, 1, 1, descriptor_count);
++        if (descriptor_heap_type == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV ||
++                descriptor_heap_type == D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER)
++        {
++            uint64_t bytes;
++            vkd3d_descriptor_add(&scope, VKD3D_DS_PROCESSED_ELEMENTS, descriptor_count);
++            bytes = descriptor_heap_type == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV ? 128 : 32;
++            vkd3d_descriptor_add(&scope, VKD3D_DS_PAYLOAD_BYTES, bytes * descriptor_count);
++            if (descriptor_heap_type == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV)
++            {
++                struct d3d12_desc_split_embedded dst = d3d12_desc_decode_embedded_resource_va(dst_descriptor_range_offset.ptr);
++                if (dst.metadata)
++                    vkd3d_descriptor_add(&scope, VKD3D_DS_METADATA_BYTES, bytes * descriptor_count);
++            }
++        }
++    }
++
+     TRACE("iface %p, descriptor_count %u, dst_descriptor_range_offset %#zx, "
+           "src_descriptor_range_offset %#zx, descriptor_heap_type %#x.\n",
+             iface, descriptor_count, dst_descriptor_range_offset.ptr, src_descriptor_range_offset.ptr,
+@@ -6461,6 +6616,7 @@ static void STDMETHODCALLTYPE d3d12_device_CopyDescriptorsSimple_embedded_128_32
+                 1, &src_descriptor_range_offset, &descriptor_count,
+                 descriptor_heap_type);
+     }
++    vkd3d_descriptor_end(&scope);
+ }
+ 
+ static void STDMETHODCALLTYPE d3d12_device_CopyDescriptorsSimple_embedded_generic(d3d12_device_iface *iface,
+@@ -6468,7 +6624,28 @@ static void STDMETHODCALLTYPE d3d12_device_CopyDescriptorsSimple_embedded_generi
+         const D3D12_CPU_DESCRIPTOR_HANDLE src_descriptor_range_offset,
+         D3D12_DESCRIPTOR_HEAP_TYPE descriptor_heap_type)
+ {
++    struct d3d12_device *stats_device = unsafe_impl_from_ID3D12Device(iface);
++    struct vkd3d_descriptor_scope scope = {0};
+     struct d3d12_device *device;
++    if (stats_device->descriptor_stats_enabled)
++    {
++        scope = d3d12_device_descriptor_copy_begin(stats_device, descriptor_heap_type, true, 1, 1, descriptor_count);
++        if (descriptor_heap_type == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV ||
++                descriptor_heap_type == D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER)
++        {
++            uint64_t bytes;
++            vkd3d_descriptor_add(&scope, VKD3D_DS_PROCESSED_ELEMENTS, descriptor_count);
++            bytes = descriptor_heap_type == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV ? stats_device->bindless_state.cbv_srv_uav_size : stats_device->bindless_state.sampler_size;
++            vkd3d_descriptor_add(&scope, VKD3D_DS_PAYLOAD_BYTES, bytes * descriptor_count);
++            if (descriptor_heap_type == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV)
++            {
++                struct d3d12_desc_split_embedded dst = d3d12_desc_decode_embedded_resource_va(dst_descriptor_range_offset.ptr);
++                if (dst.metadata)
++                    vkd3d_descriptor_add(&scope, VKD3D_DS_METADATA_BYTES, bytes * descriptor_count);
++            }
++        }
++    }
++
+     TRACE("iface %p, descriptor_count %u, dst_descriptor_range_offset %#zx, "
+           "src_descriptor_range_offset %#zx, descriptor_heap_type %#x.\n",
+             iface, descriptor_count, dst_descriptor_range_offset.ptr, src_descriptor_range_offset.ptr,
+@@ -6497,6 +6674,7 @@ static void STDMETHODCALLTYPE d3d12_device_CopyDescriptorsSimple_embedded_generi
+                 1, &src_descriptor_range_offset, &descriptor_count,
+                 descriptor_heap_type);
+     }
++    vkd3d_descriptor_end(&scope);
+ }
+ 
+ static void STDMETHODCALLTYPE d3d12_device_CopyDescriptorsSimple_default(d3d12_device_iface *iface,
+@@ -6504,7 +6682,14 @@ static void STDMETHODCALLTYPE d3d12_device_CopyDescriptorsSimple_default(d3d12_d
+         const D3D12_CPU_DESCRIPTOR_HANDLE src_descriptor_range_offset,
+         D3D12_DESCRIPTOR_HEAP_TYPE descriptor_heap_type)
+ {
++    struct d3d12_device *stats_device = unsafe_impl_from_ID3D12Device(iface);
++    struct vkd3d_descriptor_scope scope = {0};
+     struct d3d12_device *device;
++    if (stats_device->descriptor_stats_enabled)
++    {
++        scope = d3d12_device_descriptor_copy_begin(stats_device, descriptor_heap_type, true, 1, 1, descriptor_count);
++    }
++
+     TRACE("iface %p, descriptor_count %u, dst_descriptor_range_offset %#zx, "
+             "src_descriptor_range_offset %#zx, descriptor_heap_type %#x.\n",
+             iface, descriptor_count, dst_descriptor_range_offset.ptr, src_descriptor_range_offset.ptr,
+@@ -6515,6 +6700,7 @@ static void STDMETHODCALLTYPE d3d12_device_CopyDescriptorsSimple_default(d3d12_d
+     if (VKD3D_EXPECT_TRUE(descriptor_heap_type == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV ||
+             descriptor_heap_type == D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER))
+     {
++        vkd3d_descriptor_add(&scope, VKD3D_DS_PROCESSED_ELEMENTS, descriptor_count);
+         /* Not quite as fast as embedded, but still not bad. */
+         d3d12_device_copy_descriptors_cbv_srv_uav_sampler(device,
+                 dst_descriptor_range_offset, src_descriptor_range_offset,
+@@ -6528,6 +6714,7 @@ static void STDMETHODCALLTYPE d3d12_device_CopyDescriptorsSimple_default(d3d12_d
+                 1, &src_descriptor_range_offset, &descriptor_count,
+                 descriptor_heap_type);
+     }
++    vkd3d_descriptor_end(&scope);
+ }
+ 
+ static D3D12_RESOURCE_ALLOCATION_INFO* STDMETHODCALLTYPE d3d12_device_GetResourceAllocationInfo1(d3d12_device_iface *iface,
+@@ -10524,6 +10711,42 @@ static void d3d12_device_reserve_internal_sparse_queue(struct d3d12_device *devi
+     }
+ }
+ 
++static bool d3d12_device_descriptor_emit(void *context, const char *line)
++{
++    (void)context;
++    if (vkd3d_dbg_get_level(VKD3D_DBG_CHANNEL_API) < VKD3D_DBG_LEVEL_INFO)
++        return false;
++    INFO("%s\n", line);
++    /* The existing void logger cannot acknowledge buffered/file I/O failure. */
++    return true;
++}
++
++static void d3d12_device_descriptor_stats_init(struct d3d12_device *device)
++{
++    char value[8];
++    const char *path = "unrecognized";
++    if (!vkd3d_get_env_var("PLAYPORT_DESCRIPTOR_STATS", value, sizeof(value)) || strcmp(value, "1"))
++        return;
++    if (device->ID3D12Device_iface.lpVtbl->CopyDescriptorsSimple == d3d12_device_CopyDescriptorsSimple_descriptor_buffer_16_16_4)
++        path = "descriptor_buffer_16_16_4";
++    if (device->ID3D12Device_iface.lpVtbl->CopyDescriptorsSimple == d3d12_device_CopyDescriptorsSimple_descriptor_buffer_64_64_32)
++        path = "descriptor_buffer_64_64_32";
++    if (device->ID3D12Device_iface.lpVtbl->CopyDescriptorsSimple == d3d12_device_CopyDescriptorsSimple_embedded_64_16_packed)
++        path = "embedded_64_16_packed";
++    if (device->ID3D12Device_iface.lpVtbl->CopyDescriptorsSimple == d3d12_device_CopyDescriptorsSimple_embedded_32_16_planar)
++        path = "embedded_32_16_planar";
++    if (device->ID3D12Device_iface.lpVtbl->CopyDescriptorsSimple == d3d12_device_CopyDescriptorsSimple_embedded_32_32_planar)
++        path = "embedded_32_32_planar";
++    if (device->ID3D12Device_iface.lpVtbl->CopyDescriptorsSimple == d3d12_device_CopyDescriptorsSimple_embedded_128_32_planar)
++        path = "embedded_128_32_planar";
++    if (device->ID3D12Device_iface.lpVtbl->CopyDescriptorsSimple == d3d12_device_CopyDescriptorsSimple_embedded_generic)
++        path = "embedded_generic";
++    if (device->ID3D12Device_iface.lpVtbl->CopyDescriptorsSimple == d3d12_device_CopyDescriptorsSimple_default)
++        path = "default";
++    vkd3d_descriptor_stats_init(&device->descriptor_stats, d3d12_device_descriptor_emit, NULL, path, NULL, true);
++    device->descriptor_stats_enabled = &device->descriptor_stats;
++}
++
+ static HRESULT d3d12_device_init(struct d3d12_device *device,
+         struct vkd3d_instance *instance, const struct vkd3d_device_create_info *create_info)
+ {
+@@ -10675,6 +10898,7 @@ static HRESULT d3d12_device_init(struct d3d12_device *device,
+         goto out_cleanup_descriptor_qa_global_info;
+ 
+     d3d12_device_replace_vtable(device);
++    d3d12_device_descriptor_stats_init(device);
+ 
+ #ifdef VKD3D_ENABLE_RENDERDOC
+     if (vkd3d_renderdoc_active() && vkd3d_renderdoc_global_capture_enabled())
+diff --git a/libs/vkd3d/meson.build b/libs/vkd3d/meson.build
+index 873a89f..f3c1dd3 100644
+--- a/libs/vkd3d/meson.build
++++ b/libs/vkd3d/meson.build
+@@ -74,6 +74,7 @@ vkd3d_src = [
+   'command_queue_vkd3d_ext.c',
+   'd3dkmt.c',
+   'device.c',
++  'vkd3d_descriptor_stats.c',
+   'device_workarounds.c',
+   'device_vkd3d_ext.c',
+   'heap.c',
+diff --git a/libs/vkd3d/resource.c b/libs/vkd3d/resource.c
+index 8623936..5e2dece 100644
+--- a/libs/vkd3d/resource.c
++++ b/libs/vkd3d/resource.c
+@@ -5117,6 +5117,8 @@ void d3d12_desc_copy_single(vkd3d_cpu_descriptor_va_t dst_va, vkd3d_cpu_descript
+ 
+         if (src.heap->sets[binding.set].copy_template_single)
+         {
++            vkd3d_descriptor_current_add(device->descriptor_stats_enabled, VKD3D_DS_MAPPED_COPIES, 1);
++            vkd3d_descriptor_current_add(device->descriptor_stats_enabled, VKD3D_DS_WORK_UNKNOWN, 1);
+             src.heap->sets[binding.set].copy_template_single(
+                     dst.heap->sets[binding.set].mapped_set,
+                     src.heap->sets[binding.set].mapped_set,
+@@ -5146,6 +5148,8 @@ void d3d12_desc_copy_single(vkd3d_cpu_descriptor_va_t dst_va, vkd3d_cpu_descript
+ 
+             if (set_info->host_copy_template_single)
+             {
++                vkd3d_descriptor_current_add(device->descriptor_stats_enabled, VKD3D_DS_MAPPED_COPIES, 1);
++                vkd3d_descriptor_current_add(device->descriptor_stats_enabled, VKD3D_DS_WORK_UNKNOWN, 1);
+                 set_info->host_copy_template_single(
+                         dst.heap->sets[set_info->set_index].mapped_set,
+                         src.heap->sets[set_info->set_index].mapped_set,
+@@ -5177,7 +5181,13 @@ void d3d12_desc_copy_single(vkd3d_cpu_descriptor_va_t dst_va, vkd3d_cpu_descript
+     }
+ 
+     if (copy_count)
++    {
++        struct vkd3d_descriptor_scope vk_scope = vkd3d_descriptor_begin(device->descriptor_stats_enabled, VKD3D_DS_VK_UPDATE);
++        vkd3d_descriptor_add(&vk_scope, VKD3D_DS_RECORDS, copy_count);
++        vkd3d_descriptor_add(&vk_scope, VKD3D_DS_VK_ELEMENTS, (uint64_t)copy_count * 1);
+         VK_CALL(vkUpdateDescriptorSets(device->vk_device, 0, NULL, copy_count, vk_copies));
++        vkd3d_descriptor_end(&vk_scope);
++    }
+ 
+     if (flags & VKD3D_DESCRIPTOR_FLAG_BUFFER_OFFSET)
+     {
+@@ -5186,6 +5196,10 @@ void d3d12_desc_copy_single(vkd3d_cpu_descriptor_va_t dst_va, vkd3d_cpu_descript
+         dst_buffer_ranges[dst.offset] = src_buffer_ranges[src.offset];
+     }
+ 
++    vkd3d_descriptor_current_add(device->descriptor_stats_enabled, VKD3D_DS_METADATA_BYTES,
++            sizeof(*dst.types) + sizeof(*dst.view)
++            + ((flags & VKD3D_DESCRIPTOR_FLAG_RAW_VA_AUX_BUFFER) ? sizeof(VkDeviceAddress) : 0)
++            + ((flags & VKD3D_DESCRIPTOR_FLAG_BUFFER_OFFSET) ? sizeof(struct vkd3d_bound_buffer_range) : 0));
+     *dst.types = *src.types;
+     *dst.view = *src.view;
+ }
+@@ -5210,6 +5224,17 @@ void d3d12_desc_copy_range(vkd3d_cpu_descriptor_va_t dst_va, vkd3d_cpu_descripto
+     for (i = 0; i < count; i++)
+         set_info_mask |= src.types[i].set_info_mask;
+ 
++    if (device->descriptor_stats_enabled)
++    {
++        uint64_t bytes = sizeof(*dst.view) + sizeof(*dst.types);
++        if (heap_type == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV)
++        {
++            bytes += sizeof(VkDeviceAddress);
++            if (device->bindless_state.flags & (VKD3D_TYPED_OFFSET_BUFFER | VKD3D_SSBO_OFFSET_BUFFER))
++                bytes += sizeof(struct vkd3d_bound_buffer_range);
++        }
++        vkd3d_descriptor_current_add(device->descriptor_stats_enabled, VKD3D_DS_METADATA_BYTES, bytes * count);
++    }
+     memcpy(dst.view, src.view, sizeof(*dst.view) * count);
+     memcpy(dst.types, src.types, sizeof(*dst.types) * count);
+ 
+@@ -5220,6 +5245,8 @@ void d3d12_desc_copy_range(vkd3d_cpu_descriptor_va_t dst_va, vkd3d_cpu_descripto
+ 
+         if (set_info->host_copy_template)
+         {
++            vkd3d_descriptor_current_add(device->descriptor_stats_enabled, VKD3D_DS_MAPPED_COPIES, 1);
++            vkd3d_descriptor_current_add(device->descriptor_stats_enabled, VKD3D_DS_WORK_UNKNOWN, 1);
+             set_info->host_copy_template(
+                     dst.heap->sets[set_info->set_index].mapped_set,
+                     src.heap->sets[set_info->set_index].mapped_set,
+@@ -5257,7 +5284,13 @@ void d3d12_desc_copy_range(vkd3d_cpu_descriptor_va_t dst_va, vkd3d_cpu_descripto
+     }
+ 
+     if (copy_count)
++    {
++        struct vkd3d_descriptor_scope vk_scope = vkd3d_descriptor_begin(device->descriptor_stats_enabled, VKD3D_DS_VK_UPDATE);
++        vkd3d_descriptor_add(&vk_scope, VKD3D_DS_RECORDS, copy_count);
++        vkd3d_descriptor_add(&vk_scope, VKD3D_DS_VK_ELEMENTS, (uint64_t)copy_count * count);
+         VK_CALL(vkUpdateDescriptorSets(device->vk_device, 0, NULL, copy_count, vk_copies));
++        vkd3d_descriptor_end(&vk_scope);
++    }
+ }
+ 
+ void d3d12_desc_copy(vkd3d_cpu_descriptor_va_t dst_va, vkd3d_cpu_descriptor_va_t src_va,
+@@ -5283,6 +5316,18 @@ void d3d12_desc_copy(vkd3d_cpu_descriptor_va_t dst_va, vkd3d_cpu_descriptor_va_t
+ 
+     if (d3d12_device_use_embedded_mutable_descriptors(device))
+     {
++        if (device->descriptor_stats_enabled)
++        {
++            uint64_t bytes = (uint64_t)count * (heap_type == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV
++                    ? device->bindless_state.cbv_srv_uav_size : device->bindless_state.sampler_size);
++            vkd3d_descriptor_current_add(device->descriptor_stats_enabled, VKD3D_DS_PAYLOAD_BYTES, bytes);
++            if (heap_type == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV)
++            {
++                struct d3d12_desc_split_embedded dst = d3d12_desc_decode_embedded_resource_va(dst_va);
++                if (dst.metadata)
++                    vkd3d_descriptor_current_add(device->descriptor_stats_enabled, VKD3D_DS_METADATA_BYTES, bytes);
++            }
++        }
+         /* Rare path. */
+         if (heap_type == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV)
+         {
+diff --git a/libs/vkd3d/vkd3d_descriptor_stats.c b/libs/vkd3d/vkd3d_descriptor_stats.c
+new file mode 100644
+index 0000000..745c8b3
+--- /dev/null
++++ b/libs/vkd3d/vkd3d_descriptor_stats.c
+@@ -0,0 +1,328 @@
++/* Checked elapsed scopes. A thread sum can exceed wall time; never subtract native windows. */
++#include "vkd3d_descriptor_stats.h"
++#include <inttypes.h>
++#include <stdio.h>
++#include <string.h>
++#include <pthread.h>
++#ifdef _WIN32
++#include <windows.h>
++#else
++#include <time.h>
++#include <unistd.h>
++#endif
++
++struct descriptor_state
++{
++    struct vkd3d_descriptor_stats *stats;
++    struct descriptor_state *parent;
++    unsigned int row;
++    uint64_t start, children, last_child_end;
++    bool valid, excluded;
++};
++static _Thread_local struct descriptor_state stack[32];
++static _Thread_local struct descriptor_state *top;
++static _Thread_local uint64_t depth;
++static _Atomic uint64_t generation;
++static const char *const ops[] = {"prep_graphics", "prep_compute", "prep_other",
++    "copy_resource", "copy_sampler", "copy_rtv", "copy_dsv", "copy_unknown",
++    "simple_resource", "simple_sampler", "simple_rtv", "simple_dsv", "simple_unknown",
++    "spec_data_excluded", "vk_update", "vk_bind", "vk_push", "vk_other"};
++static const char *const categories[] = {"prep", "standalone", "excluded"};
++static const char *const fields[] = {"calls", "completed", "dst_ranges", "src_ranges",
++    "requested_elements", "processed_elements", "metadata_bytes", "payload_bytes", "mapped_copy_calls",
++    "sets", "records", "vk_elements", "dirty_root_slots", "table_slots", "work_unknown",
++    "failures", "timed_calls", "elapsed_ticks", "direct_child_ticks", "exclusive_ticks", "max_ticks",
++    "thread_sum_outer_elapsed_ticks", "clock_errors", "nest_errors"};
++_Static_assert(sizeof(ops) / sizeof(*ops) == VKD3D_DS_OP_COUNT, "operation names");
++_Static_assert(sizeof(fields) / sizeof(*fields) == VKD3D_DS_FIELD_COUNT, "field names");
++
++static uint64_t add(struct vkd3d_descriptor_stats *s, _Atomic uint64_t *value, uint64_t n)
++{
++    uint64_t old = atomic_load_explicit(value, memory_order_relaxed), next;
++    do
++    {
++        next = n > UINT64_MAX - old ? UINT64_MAX : old + n;
++    } while (!atomic_compare_exchange_weak_explicit(value, &old, next, memory_order_seq_cst, memory_order_relaxed));
++    if (next == UINT64_MAX)
++        atomic_store_explicit(&s->overflow, true, memory_order_relaxed);
++    return next;
++}
++static void work(struct vkd3d_descriptor_stats *s, unsigned int row, enum vkd3d_descriptor_field f, uint64_t n)
++{
++    add(s, &s->rows[row][f], n);
++}
++static bool read_clock(struct vkd3d_descriptor_stats *s, uint64_t *ticks)
++{
++    return s->clock.hz && s->clock.read && s->clock.read(s->clock.context, ticks);
++}
++static bool platform_read(void *context, uint64_t *ticks)
++{
++#ifdef _WIN32
++    LARGE_INTEGER value;
++    (void)context;
++    if (!QueryPerformanceCounter(&value) || value.QuadPart < 0)
++        return false;
++    *ticks = value.QuadPart;
++#else
++    struct timespec value;
++    (void)context;
++    if (clock_gettime(CLOCK_MONOTONIC, &value) || value.tv_sec < 0 || value.tv_nsec < 0
++            || value.tv_nsec >= 1000000000 || (uint64_t)value.tv_sec > (UINT64_MAX - value.tv_nsec) / 1000000000)
++        return false;
++    *ticks = (uint64_t)value.tv_sec * 1000000000 + value.tv_nsec;
++#endif
++    return true;
++}
++#ifdef _WIN32
++static pthread_once_t frequency_once = PTHREAD_ONCE_INIT;
++static uint64_t frequency;
++static void init_frequency(void)
++{
++    LARGE_INTEGER value;
++    if (QueryPerformanceFrequency(&value) && value.QuadPart > 0)
++        frequency = value.QuadPart;
++}
++#endif
++void vkd3d_descriptor_begin_enabled(struct vkd3d_descriptor_scope *scope, struct vkd3d_descriptor_stats *s,
++        enum vkd3d_descriptor_op op)
++{
++    struct descriptor_state *parent = top, *state;
++    bool excluded = op == VKD3D_DS_SPEC_DATA || op == VKD3D_DS_COPY_RTV || op == VKD3D_DS_COPY_DSV
++            || op == VKD3D_DS_SIMPLE_RTV || op == VKD3D_DS_SIMPLE_DSV || (parent && parent->excluded);
++    unsigned int category = excluded ? 2 : (op <= VKD3D_DS_PREP_OTHER
++            || (parent && parent->row / VKD3D_DS_OP_COUNT == 0) ? 0 : 1);
++    scope->stats = s;
++    scope->row = category * VKD3D_DS_OP_COUNT + op;
++    add(s, &s->entered, 1);
++    work(s, scope->row, VKD3D_DS_CALLS, 1);
++    if (depth++ >= sizeof(stack) / sizeof(*stack))
++    {
++        work(s, scope->row, VKD3D_DS_NEST_ERRORS, 1);
++        if (parent)
++        {
++            parent->valid = false;
++            work(parent->stats, parent->row, VKD3D_DS_NEST_ERRORS, 1);
++        }
++        return;
++    }
++    state = &stack[depth - 1];
++    *state = (struct descriptor_state){.stats = s, .parent = parent, .row = scope->row, .excluded = excluded};
++    state->valid = read_clock(s, &state->start);
++    if (parent && (parent->stats != s || !state->valid || state->start < parent->start
++            || state->start < parent->last_child_end))
++    {
++        state->valid = parent->valid = false;
++        work(s, scope->row, VKD3D_DS_NEST_ERRORS, 1);
++        work(parent->stats, parent->row, VKD3D_DS_NEST_ERRORS, 1);
++    }
++    scope->state = top = state;
++}
++void vkd3d_descriptor_end_enabled(struct vkd3d_descriptor_scope *scope)
++{
++    struct vkd3d_descriptor_stats *s = scope->stats;
++    struct descriptor_state *state = scope->state, *parent;
++    uint64_t end = 0, elapsed = 0, old;
++    bool read_ok = state && read_clock(s, &end);
++    bool ok = read_ok && state->valid && top == state && end >= state->start;
++    if (ok)
++    {
++        elapsed = end - state->start;
++        ok = state->children <= elapsed && end >= state->last_child_end;
++    }
++    if (ok)
++    {
++        work(s, scope->row, VKD3D_DS_TIMED, 1);
++        work(s, scope->row, VKD3D_DS_ELAPSED, elapsed);
++        work(s, scope->row, VKD3D_DS_CHILDREN, state->children);
++        work(s, scope->row, VKD3D_DS_EXCLUSIVE, elapsed - state->children);
++        if (!state->parent)
++            work(s, scope->row, VKD3D_DS_OUTER, elapsed);
++        old = atomic_load_explicit(&s->rows[scope->row][VKD3D_DS_MAX], memory_order_relaxed);
++        while (old < elapsed && !atomic_compare_exchange_weak_explicit(&s->rows[scope->row][VKD3D_DS_MAX],
++                &old, elapsed, memory_order_relaxed, memory_order_relaxed)) {}
++    }
++    else
++    {
++        work(s, scope->row, VKD3D_DS_CLOCK_ERRORS, 1);
++        work(s, scope->row, VKD3D_DS_NEST_ERRORS, 1);
++    }
++    if (state)
++    {
++        parent = state->parent;
++        if (parent)
++        {
++            if (!ok || parent->stats != s || elapsed > UINT64_MAX - parent->children)
++            {
++                parent->valid = false;
++                work(parent->stats, parent->row, VKD3D_DS_NEST_ERRORS, 1);
++            }
++            else
++            {
++                parent->children += elapsed;
++                if (end > parent->last_child_end)
++                    parent->last_child_end = end;
++            }
++        }
++        top = parent;
++    }
++    --depth;
++    work(s, scope->row, VKD3D_DS_COMPLETED, 1);
++    add(s, &s->completed, 1);
++    scope->end_ticks = end;
++    scope->valid = ok;
++    scope->stats = NULL;
++}
++void vkd3d_descriptor_add_enabled(struct vkd3d_descriptor_scope *scope, enum vkd3d_descriptor_field field, uint64_t n)
++{
++    work(scope->stats, scope->row, field, n);
++}
++void vkd3d_descriptor_current_add_enabled(struct vkd3d_descriptor_stats *s, enum vkd3d_descriptor_field field, uint64_t n)
++{
++    if (top && top->stats == s && depth <= sizeof(stack) / sizeof(*stack))
++        work(s, top->row, field, n);
++}
++void vkd3d_descriptor_capture(struct vkd3d_descriptor_stats *s, struct vkd3d_descriptor_snapshot *v)
++{
++    unsigned int i, f;
++    bool begin_ok;
++    memset(v, 0, sizeof(*v));
++    v->sequence = add(s, &s->snapshot, 1);
++    begin_ok = read_clock(s, &v->begin);
++    v->entered_before = atomic_load_explicit(&s->entered, memory_order_seq_cst);
++    v->completed_before = atomic_load_explicit(&s->completed, memory_order_seq_cst);
++    for (i = 0; i < VKD3D_DS_ROW_COUNT; ++i)
++        for (f = 0; f < VKD3D_DS_FIELD_COUNT; ++f)
++            v->rows[i][f] = atomic_load_explicit(&s->rows[i][f], memory_order_relaxed);
++    v->entered_after = atomic_load_explicit(&s->entered, memory_order_seq_cst);
++    v->completed_after = atomic_load_explicit(&s->completed, memory_order_seq_cst);
++    v->clock_ok = read_clock(s, &v->end) && begin_ok && v->end >= v->begin;
++    v->quiescent = v->entered_before == v->entered_after && v->completed_before == v->completed_after
++            && v->entered_before == v->completed_before;
++    v->executions = atomic_load_explicit(&s->executions, memory_order_relaxed);
++    v->overflow = atomic_load_explicit(&s->overflow, memory_order_relaxed);
++    v->report_errors = atomic_load_explicit(&s->report_errors, memory_order_relaxed);
++}
++static int prefix(struct vkd3d_descriptor_stats *s, char *line, size_t size, const char *kind)
++{
++#ifdef _WIN32
++    uint64_t pid = GetCurrentProcessId();
++#else
++    uint64_t pid = getpid();
++#endif
++    return snprintf(line, size, "[vkd3d-descriptor] v=1 component=vkd3d kind=%s pid=%"PRIu64
++            " module=%"PRIuPTR" device=%"PRIu64" init_ticks=%"PRIu64" init_ok=%u hz=%"PRIu64" clock_kind=%s",
++            kind, pid, (uintptr_t)&generation, s->device, s->init_ticks, s->init_ok, s->clock.hz, s->clock.kind);
++}
++static void emit(struct vkd3d_descriptor_stats *s, const char *line)
++{
++    if (s->emit && !s->emit(s->emit_context, line))
++        add(s, &s->report_errors, 1);
++}
++void vkd3d_descriptor_report(struct vkd3d_descriptor_stats *s, bool final)
++{
++    struct vkd3d_descriptor_snapshot v;
++    uint64_t now = 0, previous;
++    unsigned int i, f;
++    int n;
++    bool ok;
++    char line[4096];
++    if (!s || !s->emit || atomic_flag_test_and_set_explicit(&s->reporting, memory_order_acquire))
++        return;
++    ok = read_clock(s, &now);
++    previous = atomic_load_explicit(&s->last_report, memory_order_relaxed);
++    if (!ok || now < previous)
++        add(s, &s->report_errors, 1);
++    if (!final && previous && (!ok || now < previous || now - previous < s->clock.hz))
++        goto done;
++    if (ok)
++        atomic_store_explicit(&s->last_report, now, memory_order_relaxed);
++    vkd3d_descriptor_capture(s, &v);
++    v.clock_ok = v.clock_ok && ok && now >= previous;
++    for (i = 0; i < VKD3D_DS_ROW_COUNT; ++i)
++    {
++        n = prefix(s, line, sizeof(line), "snapshot");
++        n += snprintf(line + n, sizeof(line) - n,
++                " snapshot=%"PRIu64" ts_begin=%"PRIu64" ts_end=%"PRIu64" client_execute_requests=%"PRIu64
++                " final=%u clock_ok=%u quiescent=%u overflow=%u report_errors=%"PRIu64
++                " entered_before=%"PRIu64" completed_before=%"PRIu64" entered_after=%"PRIu64" completed_after=%"PRIu64
++                " op=%s category=%s", v.sequence, v.begin, v.end, v.executions, final, v.clock_ok, v.quiescent,
++                v.overflow, v.report_errors, v.entered_before, v.completed_before, v.entered_after, v.completed_after,
++                ops[i % VKD3D_DS_OP_COUNT], categories[i / VKD3D_DS_OP_COUNT]);
++        for (f = 0; f < VKD3D_DS_FIELD_COUNT; ++f)
++            n += snprintf(line + n, sizeof(line) - n, " %s=%"PRIu64, fields[f], v.rows[i][f]);
++        snprintf(line + n, sizeof(line) - n, " active=%"PRIu64, v.rows[i][VKD3D_DS_CALLS] >= v.rows[i][VKD3D_DS_COMPLETED]
++                ? v.rows[i][VKD3D_DS_CALLS] - v.rows[i][VKD3D_DS_COMPLETED] : UINT64_MAX);
++        emit(s, line);
++    }
++done:
++    atomic_flag_clear_explicit(&s->reporting, memory_order_release);
++}
++void vkd3d_descriptor_execute(struct vkd3d_descriptor_stats *s)
++{
++    if (s)
++    {
++        add(s, &s->executions, 1);
++        vkd3d_descriptor_report(s, false);
++    }
++}
++void vkd3d_descriptor_stats_init(struct vkd3d_descriptor_stats *s, vkd3d_descriptor_emit output,
++        void *context, const char *copy_path, const struct vkd3d_descriptor_clock *clock, bool calibrate)
++{
++    unsigned int i, f;
++    char line[4096];
++    int n;
++    memset(s, 0, sizeof(*s));
++    for (i = 0; i < VKD3D_DS_ROW_COUNT; ++i)
++        for (f = 0; f < VKD3D_DS_FIELD_COUNT; ++f)
++            atomic_init(&s->rows[i][f], 0);
++    atomic_init(&s->entered, 0); atomic_init(&s->completed, 0); atomic_init(&s->snapshot, 0);
++    atomic_init(&s->executions, 0); atomic_init(&s->report_errors, 0); atomic_init(&s->last_report, 0);
++    atomic_init(&s->overflow, false); atomic_flag_clear(&s->reporting);
++    if (clock)
++        s->clock = *clock;
++    else
++    {
++#ifdef _WIN32
++        pthread_once(&frequency_once, init_frequency);
++        s->clock = (struct vkd3d_descriptor_clock){platform_read, NULL, frequency, "qpc"};
++#else
++        s->clock = (struct vkd3d_descriptor_clock){platform_read, NULL, 1000000000, "host_clock_monotonic"};
++#endif
++    }
++    s->emit = output;
++    s->emit_context = context;
++    s->device = add(s, &generation, 1);
++    s->init_ok = read_clock(s, &s->init_ticks);
++    n = prefix(s, line, sizeof(line), "enabled");
++    snprintf(line + n, sizeof(line) - n, " copy_simple_path=%s uncovered_selected_copy=%u"
++            " coverage=prep_broad_ambiguous_constants_ubo_tracking,copy_cpu_metadata,selected_simple,direct_vk"
++            " exclusions=separate_constants_redzone,rtv,dsv native=separate_uncovered_replay_no_subtraction"
++            " capture=nontransactional_all_rows_required errors=override_quiescent killed_tail=missing"
++            " thread_model=same_thread_nesting_summed_elapsed_no_registry cpu_clock=unsupported"
++            " denominator=client_execute_requests_not_frames_or_gpu_completions byte_counts=source_copy_assignments_not_memory_traffic"
++            " additive=sum_exclusive_by_category parent_inclusive=overlapping elapsed_includes=waiting,preemption,diagnostics",
++            copy_path, !strcmp(copy_path, "unrecognized"));
++    emit(s, line);
++    if (calibrate && output)
++    {
++        struct vkd3d_descriptor_stats scratch;
++        vkd3d_descriptor_stats_init(&scratch, NULL, NULL, copy_path, &s->clock, false);
++        for (i = 0; i < 16; ++i)
++        {
++            struct vkd3d_descriptor_scope scope;
++            uint64_t a = 0, b = 0, c = 0, d = 0, start;
++            bool a_ok = read_clock(s, &a), b_ok = read_clock(s, &b), c_ok = read_clock(s, &c), d_ok;
++            scope = vkd3d_descriptor_begin(&scratch, VKD3D_DS_PREP_GRAPHICS);
++            start = scope.state ? ((struct descriptor_state *)scope.state)->start : 0;
++            vkd3d_descriptor_end(&scope);
++            d_ok = read_clock(s, &d);
++            n = prefix(s, line, sizeof(line), "calibration");
++            snprintf(line + n, sizeof(line) - n, " sample=%u adjacent_begin=%"PRIu64" adjacent_end=%"PRIu64
++                    " adjacent_ok=%u scope_begin=%"PRIu64" scope_end=%"PRIu64" scope_ok=%u"
++                    " empty_begin=%"PRIu64" empty_end=%"PRIu64" empty_ok=%u clock_reads=6 subtraction=none",
++                    i, a, b, a_ok && b_ok && b >= a, start, scope.end_ticks, scope.valid,
++                    c, d, c_ok && d_ok && scope.valid && d >= scope.end_ticks && start >= c && d >= c);
++            emit(s, line);
++        }
++    }
++}
+diff --git a/libs/vkd3d/vkd3d_descriptor_stats.h b/libs/vkd3d/vkd3d_descriptor_stats.h
+new file mode 100644
+index 0000000..2711278
+--- /dev/null
++++ b/libs/vkd3d/vkd3d_descriptor_stats.h
+@@ -0,0 +1,100 @@
++/* Optional elapsed diagnostics, never CPU time or a shader/cache input. */
++#ifndef VKD3D_DESCRIPTOR_STATS_H
++#define VKD3D_DESCRIPTOR_STATS_H
++#include <stdbool.h>
++#include <stddef.h>
++#include <stdint.h>
++#include <stdatomic.h>
++
++enum vkd3d_descriptor_op
++{
++    VKD3D_DS_PREP_GRAPHICS, VKD3D_DS_PREP_COMPUTE, VKD3D_DS_PREP_OTHER,
++    VKD3D_DS_COPY_RESOURCE, VKD3D_DS_COPY_SAMPLER, VKD3D_DS_COPY_RTV, VKD3D_DS_COPY_DSV, VKD3D_DS_COPY_UNKNOWN,
++    VKD3D_DS_SIMPLE_RESOURCE, VKD3D_DS_SIMPLE_SAMPLER, VKD3D_DS_SIMPLE_RTV, VKD3D_DS_SIMPLE_DSV, VKD3D_DS_SIMPLE_UNKNOWN,
++    VKD3D_DS_SPEC_DATA, VKD3D_DS_VK_UPDATE, VKD3D_DS_VK_BIND, VKD3D_DS_VK_PUSH, VKD3D_DS_VK_OTHER,
++    VKD3D_DS_OP_COUNT
++};
++enum vkd3d_descriptor_field
++{
++    VKD3D_DS_CALLS, VKD3D_DS_COMPLETED, VKD3D_DS_DST_RANGES, VKD3D_DS_SRC_RANGES,
++    VKD3D_DS_REQUESTED_ELEMENTS, VKD3D_DS_PROCESSED_ELEMENTS, VKD3D_DS_METADATA_BYTES, VKD3D_DS_PAYLOAD_BYTES,
++    VKD3D_DS_MAPPED_COPIES, VKD3D_DS_SETS, VKD3D_DS_RECORDS, VKD3D_DS_VK_ELEMENTS,
++    VKD3D_DS_DIRTY_ROOTS, VKD3D_DS_TABLE_SLOTS, VKD3D_DS_WORK_UNKNOWN,
++    VKD3D_DS_FAILURES, VKD3D_DS_TIMED, VKD3D_DS_ELAPSED, VKD3D_DS_CHILDREN, VKD3D_DS_EXCLUSIVE,
++    VKD3D_DS_MAX, VKD3D_DS_OUTER, VKD3D_DS_CLOCK_ERRORS, VKD3D_DS_NEST_ERRORS, VKD3D_DS_FIELD_COUNT
++};
++#define VKD3D_DS_ROW_COUNT (VKD3D_DS_OP_COUNT * 3)
++struct vkd3d_descriptor_clock
++{
++    bool (*read)(void *context, uint64_t *ticks);
++    void *context;
++    uint64_t hz;
++    const char *kind;
++};
++typedef bool (*vkd3d_descriptor_emit)(void *context, const char *line);
++struct vkd3d_descriptor_stats
++{
++    _Atomic uint64_t rows[VKD3D_DS_ROW_COUNT][VKD3D_DS_FIELD_COUNT];
++    _Atomic uint64_t entered, completed, snapshot, executions, report_errors, last_report;
++    _Atomic bool overflow;
++    atomic_flag reporting;
++    struct vkd3d_descriptor_clock clock;
++    vkd3d_descriptor_emit emit;
++    void *emit_context;
++    uint64_t device, init_ticks;
++    bool init_ok;
++};
++struct vkd3d_descriptor_scope
++{
++    struct vkd3d_descriptor_stats *stats;
++    void *state;
++    unsigned int row;
++    uint64_t end_ticks;
++    bool valid;
++};
++struct vkd3d_descriptor_snapshot
++{
++    uint64_t rows[VKD3D_DS_ROW_COUNT][VKD3D_DS_FIELD_COUNT];
++    uint64_t sequence, begin, end, entered_before, entered_after, completed_before, completed_after;
++    uint64_t executions, report_errors;
++    bool clock_ok, quiescent, overflow;
++};
++void vkd3d_descriptor_stats_init(struct vkd3d_descriptor_stats *stats, vkd3d_descriptor_emit emit,
++        void *context, const char *copy_path, const struct vkd3d_descriptor_clock *clock, bool calibrate);
++void vkd3d_descriptor_begin_enabled(struct vkd3d_descriptor_scope *scope, struct vkd3d_descriptor_stats *stats,
++        enum vkd3d_descriptor_op op);
++void vkd3d_descriptor_end_enabled(struct vkd3d_descriptor_scope *scope);
++void vkd3d_descriptor_add_enabled(struct vkd3d_descriptor_scope *scope, enum vkd3d_descriptor_field field, uint64_t n);
++void vkd3d_descriptor_current_add_enabled(struct vkd3d_descriptor_stats *stats,
++        enum vkd3d_descriptor_field field, uint64_t n);
++void vkd3d_descriptor_capture(struct vkd3d_descriptor_stats *stats, struct vkd3d_descriptor_snapshot *snapshot);
++void vkd3d_descriptor_report(struct vkd3d_descriptor_stats *stats, bool final);
++void vkd3d_descriptor_execute(struct vkd3d_descriptor_stats *stats);
++
++/* Callsite guards precede diagnostic TLS, clocks, atomics and work traversals. */
++static inline struct vkd3d_descriptor_scope vkd3d_descriptor_begin(struct vkd3d_descriptor_stats *stats,
++        enum vkd3d_descriptor_op op)
++{
++    struct vkd3d_descriptor_scope scope = {0};
++    if (stats)
++        vkd3d_descriptor_begin_enabled(&scope, stats, op);
++    return scope;
++}
++static inline void vkd3d_descriptor_end(struct vkd3d_descriptor_scope *scope)
++{
++    if (scope->stats)
++        vkd3d_descriptor_end_enabled(scope);
++}
++static inline void vkd3d_descriptor_add(struct vkd3d_descriptor_scope *scope,
++        enum vkd3d_descriptor_field field, uint64_t n)
++{
++    if (scope->stats)
++        vkd3d_descriptor_add_enabled(scope, field, n);
++}
++static inline void vkd3d_descriptor_current_add(struct vkd3d_descriptor_stats *stats,
++        enum vkd3d_descriptor_field field, uint64_t n)
++{
++    if (stats)
++        vkd3d_descriptor_current_add_enabled(stats, field, n);
++}
++#endif
+diff --git a/libs/vkd3d/vkd3d_private.h b/libs/vkd3d/vkd3d_private.h
+index 3e71f89..72f58f0 100644
+--- a/libs/vkd3d/vkd3d_private.h
++++ b/libs/vkd3d/vkd3d_private.h
+@@ -23,6 +23,7 @@
+ #define VK_NO_PROTOTYPES
+ 
+ #include "vkd3d_common.h"
++#include "vkd3d_descriptor_stats.h"
+ #include "vkd3d_memory.h"
+ #include "vkd3d_utf8.h"
+ #include "hashmap.h"
+@@ -5830,6 +5831,9 @@ struct d3d12_device
+     ID3D12DeviceConfiguration1 ID3D12DeviceConfiguration1_iface;
+     LONG refcount;
+ 
++    struct vkd3d_descriptor_stats descriptor_stats;
++    struct vkd3d_descriptor_stats *descriptor_stats_enabled;
++
+     VkDevice vk_device;
+     uint32_t api_version;
+     VkPhysicalDevice vk_physical_device;
+-- 
+2.56.0
+

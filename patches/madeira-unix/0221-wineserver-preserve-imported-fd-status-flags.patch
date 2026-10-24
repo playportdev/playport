@@ -1,0 +1,42 @@
+From 279de1391345bef91196ccbf7a4a74bbf43948ec Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kamil=20Postro=C5=BCny?= <kamil@postrozny.pl>
+Date: Sat, 24 Oct 2026 15:19:33 +0200
+Subject: [PATCH] wineserver: preserve status flags when importing stdio fds
+
+SCM_RIGHTS shares the open file description with fd2. Replacing its flags with
+O_NONBLOCK cleared the app log O_APPEND and poisoned native descriptor records.
+Preserve existing flags when F_GETFL succeeds. If it fails, retain the previous
+F_SETFL(O_NONBLOCK) behavior so busy-polling does not inherit a blocking fd;
+unknown status flags, including append, cannot be preserved on that fallback.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-24-descriptor-append-cause-host.md
+Offered-upstream: no
+---
+ build/wineserver/fd_ios.c | 10 ++++++++--
+ 1 file changed, 8 insertions(+), 2 deletions(-)
+
+diff --git a/build/wineserver/fd_ios.c b/build/wineserver/fd_ios.c
+index 4798dc9..f5dc146 100644
+--- a/build/wineserver/fd_ios.c
++++ b/build/wineserver/fd_ios.c
+@@ -2884,8 +2884,14 @@ struct fd *create_anonymous_fd( const struct fd_ops *fd_user_ops, int unix_fd, s
+         fd->options = options;
+ #ifdef WINE_IOS
+         /* iOS: all fds must be non-blocking since we use busy-polling
+-         * instead of epoll/kqueue. Handlers already handle EWOULDBLOCK. */
+-        fcntl( unix_fd, F_SETFL, O_NONBLOCK );
++         * instead of epoll/kqueue. Handlers already handle EWOULDBLOCK.
++         * SCM_RIGHTS aliases the sender's open file description: importing
++         * stderr must not clear wine_host_init's O_APPEND on the shared log.
++         * Preserve existing flags when queried; on query failure, fall back
++         * to O_NONBLOCK alone for the busy-polling non-blocking requirement. */
++        int flags = fcntl( unix_fd, F_GETFL );
++        if (flags != -1) fcntl( unix_fd, F_SETFL, flags | O_NONBLOCK );
++        else fcntl( unix_fd, F_SETFL, O_NONBLOCK );
+ #endif
+         return fd;
+     }
+-- 
+2.56.0
+

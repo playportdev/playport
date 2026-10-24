@@ -245,6 +245,9 @@ private struct GameDetailPage: View {
         }
         .task(id: navigation.pageSection) {
             // A dev build's `open:ID#SECTION`: the options, at that section.
+            #if !PLAYPORT_RELEASE
+            guard UIDriver.allowsDeferredNavigation else { return }
+            #endif
             guard navigation.onGamePage, navigation.pageSection != nil, t != nil else { return }
             if let page = ["gyro": AppNavigation.GamePanel.gyro, "controller": .controller][navigation.pageSection ?? ""] {
                 // Its Controls › Gyro aim or Controller page, over Game options.
@@ -637,6 +640,12 @@ private struct GameDetailPage: View {
 
     /// Where `open:ID#SECTION` rings the options.
     private static func firstRow(ofSection s: String) -> String? {
+        #if !PLAYPORT_RELEASE
+        return UIDriverGameSection(rawValue: s)?.row(firstOrdering: MemoryOrdering.Setting.allCases[0].rawValue)
+        #else
+        // Release has no driver (Dev/ is not in it), so nothing sets pageSection: this copy
+        // is unreachable. It still names the dev enum's sections and rows exactly, so a
+        // section added there is added here too (tools/tests/test_ui.py compares them).
         switch s {
         case "graphics": "opt:aspect"
         case "controls": "opt:layout"
@@ -644,8 +653,12 @@ private struct GameDetailPage: View {
         case "files": "opt:files"
         case "developer", "ordering": "opt:ordering-\(MemoryOrdering.Setting.allCases[0].rawValue)"
         case "steam": "opt:steamAPI"
+        case "gyro", "controller": nil
+        case "runtime": "opt:runtime"
+        case "graphicsoptions": "opt:graphicsOptions"
         default: nil
         }
+        #endif
     }
 
     // MARK: Game options
@@ -672,7 +685,12 @@ private struct GameDetailPage: View {
                 }
                 .task(id: navigation.pageSection) {
                     guard let s = navigation.pageSection, navigation.onGamePage else { return }
+                    #if !PLAYPORT_RELEASE
+                    do { try await Task.sleep(for: .milliseconds(300)) } catch { return }
+                    guard navigation.pageSection == s, UIDriver.allowsDeferredNavigation else { return }
+                    #else
                     try? await Task.sleep(for: .milliseconds(300))
+                    #endif
                     if let row = Self.firstRow(ofSection: s) {
                         focus.ring(row)
                         proxy.scrollTo(row, anchor: .top)

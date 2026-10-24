@@ -19,6 +19,7 @@ and account inventories stay in `.work`, not in the plan or Linear.
 | [KosmicKrisp default](2026-10-06-kosmickrisp-default.md) | [PLA-77](https://linear.app/playportdev/issue/PLA-77) | Partly done (step 3): i386 DXVK d3d9/10/11 ship; i386 d3d8 and vkd3d-proton are missing. 0100 sets the direction; the x86-64 default is still DXMT. |
 | [Madeira audit](2026-10-06-madeira-audit.md) | [PLA-75](https://linear.app/playportdev/issue/PLA-75) | Reconciled 2026-10-13 against madeira-unix 0143: T3 done, T12 and T13 partly done, 11 topics open. Not re-checked against 0144–0162: the donor pool (0148–0150), 0154, 0155, 0157 and 0160–0162 touch the same files (note in the plan). |
 | [Vulkan performance](2026-10-06-vulkan-performance.md) | [PLA-72](https://linear.app/playportdev/issue/PLA-72) | Paused since 2026-10-08 and merged; six fixes kept; not at its exit criteria. The plan's last Progress entry is the handoff. |
+| [KosmicKrisp GPU work against DXMT's](2026-10-23-kk-vs-dxmt-gpu-work.md) | [PLA-439](https://linear.app/playportdev/issue/PLA-439) | Written 2026-10-23 from desk research only: no build, no phone run, no capture. Ranks nine places where KosmicKrisp asks the GPU for work DXMT does not (memory backing, copies, load/store bookkeeping, sync, blending, shader precision, present path, per-pass Metal state, Vulkan-only robustness), with the queue and the gate for each. Not executed; PLA-72 keeps the exit criteria. |
 | [Compatibility speedrun](2026-10-08-compat-speedrun.md) | [PLA-112](https://linear.app/playportdev/issue/PLA-112) | Phase 1 and the issue sweep are done and merged (decisions 0075–0104). What remains is the owner's library A–Z, from 9 Years of Shadows. |
 | [On-screen controls, mapping and gyro](2026-10-09-touch-controls.md) | [PLA-13](https://linear.app/playportdev/issue/PLA-13) | Phases 1–3 done, signed off and merged (`631bd7f`); phases 4+ not started. Follow-ups: PLA-338, PLA-339, PLA-340. Design: `docs/design/2026-10-09-touch-controls/`. |
 | [Steam client bridge](2026-10-12-steamclient-bridge.md) | [PLA-253](https://linear.app/playportdev/issue/PLA-253); phases PLA-255–266 | Decided 2026-10-13; no phase has started. One slice has shipped: the x86-64 `steamclient64.dll` and mode `client` for RDR2 alone (0115, PLA-398, [finished](finished.md#steam-bridge-for-rdr2)). Next: Phase 1 (PLA-257). |
@@ -72,6 +73,12 @@ removed after review; raw private FL12_2 research remains in `.work/scratch/fl12
   (mesa 0096–0101, to be merged); decision 0158 keeps `MESA_KK_EXPERIMENTAL=gpl` off by default.
   PLA-429 measures an uncached title, D3D12 and GPU time; PLA-428, PLA-430 and PLA-425 stay
   open. See [outcome](finished.md#kosmickrisp-graphics-pipeline-library).
+
+- **KosmicKrisp Proton parity** (2026-10-24): delivered B1/B3, opt-in descriptor
+  diagnostics and unconditional wineserver fd-status repair; owner deferred A2–A4
+  to PLA-441, not a measured negative result. Decision 0160 and the bounded A0
+  outcome are in [finished](finished.md#kosmickrisp-proton-parity). PLA-431 closed;
+  branch unmerged at close-out. PLA-433/434/435/440 retain their scope.
 
 - **OpenGL through Zink:** chunks 1a–5 done 2026-10-11 (decisions 0087–0089); see
   [outcome and evidence](finished.md#opengl-through-zink). Remaining work is in

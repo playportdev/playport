@@ -130,6 +130,15 @@ for the session and are undone at the app's next launch outside it (`--keep-sett
 The lock is released between commands, so a sequence that must not be split runs as one session:
 `./pp phone lock -- sh -c './pp install --no-build && ./pp ui --play app-367520 --until first-frame+10'`.
 
+**UI sessions.** Prepare explicit `pp ui` actions on the workstation, announce the start,
+then run one short, focused batch. Finish or cancel every queued input, release the lock and
+announce completion before doing offline analysis. Keep Playport visible throughout UI work;
+no black-screen interludes followed by more input. App navigation and settings use semantic
+`pp ui` paths: add a missing path first, rather than improvising taps, pad scrolling or direct
+input scripts. If the owner reclaims the phone or another app takes foreground, stop input;
+do not automatically relaunch and continue. These quick sessions apply to UI work, not
+gameplay, and have no arbitrary hard time limit.
+
 Long commands print JSON events, one per line: read only the final `"event": "result"` line
 (step events carry a `result` field). It gives the run directory and timeline — retain those logs,
 screenshots and crashes; ordering, bounded waits, pads and measurement: `pp ui --help`.

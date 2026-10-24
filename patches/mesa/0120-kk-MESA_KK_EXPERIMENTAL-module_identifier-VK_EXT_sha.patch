@@ -1,0 +1,84 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 23 Oct 2026 07:13:34 +0200
+Subject: [PATCH] kk: MESA_KK_EXPERIMENTAL=module_identifier,
+ VK_EXT_shader_module_identifier
+
+With MESA_KK_EXPERIMENTAL=module_identifier, KosmicKrisp advertises
+VK_EXT_shader_module_identifier and its shaderModuleIdentifier feature,
+as vkd3d-proton's pipeline cache and DXVK's pipeline libraries use them.
+Without the flag nothing changes.
+
+Everything else is the common runtime's, as on Honeykrisp: the
+identifier is the SPIR-V's BLAKE3 (vk_common_GetShaderModuleIdentifierEXT
+and vk_common_GetShaderModuleCreateInfoIdentifierEXT), the algorithm UUID
+the "MESA-BLAKE3" KosmicKrisp already reports, and vk_pipeline.c hashes
+an identifier in place of the module. A pipeline created from an
+identifier, which must carry
+VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT, is made only
+when its compiled shaders are in the pipeline cache, the device's cache
+or Mesa's disk cache; otherwise it returns VK_PIPELINE_COMPILE_REQUIRED
+and compiles nothing, and the caller compiles from SPIR-V. No shader or
+cache key changes.
+
+Linear: PLA-431
+Class: feature
+Evidence: docs/evidence/2026-10-22-kk-module-identifier-host.md
+Offered-upstream: not yet
+---
+ src/kosmickrisp/vulkan/kk_debug.c           | 1 +
+ src/kosmickrisp/vulkan/kk_debug.h           | 5 +++++
+ src/kosmickrisp/vulkan/kk_physical_device.c | 5 +++++
+ 3 files changed, 11 insertions(+)
+
+diff --git a/src/kosmickrisp/vulkan/kk_debug.c b/src/kosmickrisp/vulkan/kk_debug.c
+index 6671be9..07d7f11 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.c
++++ b/src/kosmickrisp/vulkan/kk_debug.c
+@@ -61,6 +61,7 @@ const struct debug_named_value experimental_flags[] = {
+    {"ds_dont_care", KK_EXPERIMENTAL_DS_DONT_CARE},
+    {"ubo_vec4_bounds", KK_EXPERIMENTAL_UBO_VEC4_BOUNDS},
+    {"memory_priority", KK_EXPERIMENTAL_MEMORY_PRIORITY},
++   {"module_identifier", KK_EXPERIMENTAL_MODULE_IDENTIFIER},
+    {NULL, 0},
+ };
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_debug.h b/src/kosmickrisp/vulkan/kk_debug.h
+index e61b2e7..54f5e9b 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.h
++++ b/src/kosmickrisp/vulkan/kk_debug.h
+@@ -242,6 +242,11 @@ enum kk_experimental {
+     * VK_EXT_pageable_device_local_memory. Their priorities are accepted and
+     * change nothing: every heap stays in the device's one residency set */
+    KK_EXPERIMENTAL_MEMORY_PRIORITY = 1ull << 16,
++   /* Playport (PLA-431): advertise VK_EXT_shader_module_identifier. The
++    * common runtime's identifier is the SPIR-V's BLAKE3; a pipeline made from
++    * one finds its shaders in a pipeline cache or the disk cache, or fails
++    * with VK_PIPELINE_COMPILE_REQUIRED */
++   KK_EXPERIMENTAL_MODULE_IDENTIFIER = 1ull << 17,
+ };
+ 
+ extern enum kk_experimental kk_mesa_experimental_flags;
+diff --git a/src/kosmickrisp/vulkan/kk_physical_device.c b/src/kosmickrisp/vulkan/kk_physical_device.c
+index 5b0ab8e..5e0b9cb 100644
+--- a/src/kosmickrisp/vulkan/kk_physical_device.c
++++ b/src/kosmickrisp/vulkan/kk_physical_device.c
+@@ -235,6 +235,8 @@ kk_get_device_extensions(const struct kk_instance *instance,
+       .EXT_robustness2 = true,
+       .EXT_sample_locations = true,
+       .EXT_shader_atomic_float = true,
++      /* Playport: only with MESA_KK_EXPERIMENTAL=module_identifier (PLA-431) */
++      .EXT_shader_module_identifier = KK_EXPERIMENTAL(MODULE_IDENTIFIER),
+       .EXT_shader_replicated_composites = true,
+       .EXT_shader_subgroup_ballot = true,
+       .EXT_shader_subgroup_vote = true,
+@@ -551,6 +553,9 @@ kk_get_device_features(
+       /* VK_EXT_provoking_vertex */
+       .provokingVertexLast = true,
+ 
++      /* VK_EXT_shader_module_identifier, Playport (PLA-431) */
++      .shaderModuleIdentifier = KK_EXPERIMENTAL(MODULE_IDENTIFIER),
++
+       /* VK_EXT_shader_replicated_composites */
+       .shaderReplicatedComposites = true,
+ 

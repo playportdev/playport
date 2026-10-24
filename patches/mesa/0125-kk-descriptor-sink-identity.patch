@@ -1,0 +1,102 @@
+From 3fab8df9a7ab7e4831b83a495625956f452e1486 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kamil=20Postro=C5=BCny?= <kamil@postrozny.pl>
+Date: Sat, 24 Oct 2026 15:19:33 +0200
+Subject: [PATCH] kk: identify a rejected descriptor sink without relaxing
+ append
+
+Keep reason-coded poison backward compatible and add fstat identity. On Darwin a missing-append poison also identifies the path tail (hex, explicitly truncated) or the F_GETPATH error. Explain the shared-open-description contract repaired in the iOS Wine server.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-10-24-descriptor-append-cause-host.md
+Offered-upstream: no
+---
+ src/kosmickrisp/vulkan/kk_debug.c | 44 ++++++++++++++++++++++++++++---
+ 1 file changed, 41 insertions(+), 3 deletions(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_debug.c b/src/kosmickrisp/vulkan/kk_debug.c
+index c56bd20..960d4ec 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.c
++++ b/src/kosmickrisp/vulkan/kk_debug.c
+@@ -332,7 +332,7 @@ descriptor_record_append(struct descriptor_record *r, const char *fmt, ...)
+ }
+ 
+ /* Failure-only formatting must not depend on the row's failed vsnprintf.
+- * 192 literal bytes plus eight worst-case integers conservatively cover every
++ * 192 literal bytes plus ten worst-case integers conservatively cover every
+  * branch below. Decimal digits need less than one character per three bits.
+  * Keep runtime checks too: an unexpected future expansion falls back to the
+  * original marker, never an incomplete diagnostic or a second poison write. */
+@@ -342,8 +342,12 @@ struct descriptor_failure {
+    size_t length;
+    bool overflow;
+ };
+-_Static_assert(192 + 8 * (DESCRIPTOR_FAILURE_DIGITS + 1) <= 512,
++_Static_assert(192 + 10 * (DESCRIPTOR_FAILURE_DIGITS + 1) <= 512,
+                "descriptor failure diagnostic bound");
++/* Only missing-append adds the Darwin path tail: five integers, at most 64
++ * path bytes in hex, and the path labels. Never claim a suffix is a full path. */
++_Static_assert(192 + 5 * (DESCRIPTOR_FAILURE_DIGITS + 1) + 128 + 64 <= 512,
++               "descriptor missing-append path diagnostic bound");
+ 
+ static void
+ descriptor_failure_text(struct descriptor_failure *f, const char *text)
+@@ -442,7 +446,12 @@ descriptor_record_emit(struct kk_descriptor_stats *s,
+       stage = "type";
+       goto failed;
+    }
+-   /* The app's normal sink is an O_APPEND regular file. One write, not one
++   /* The app's normal sink is an O_APPEND regular file. Wine's iOS server
++    * must preserve that bit when it adds O_NONBLOCK to an SCM_RIGHTS alias
++    * (create_anonymous_fd); F_SETFL with O_NONBLOCK alone clears append on
++    * the shared open file description, including fd2. Never relax this check
++    * or seek to EOF: independently opened appenders could then overwrite rows.
++    * One write, not one
+     * stdio call, prevents another appender from entering this record. For a
+     * pipe this only holds up to its actual PIPE_BUF, checked above. Other sink
+     * types and non-append files are rejected. Downstream relays have no such
+@@ -483,6 +492,10 @@ failed:
+    if (stat_valid) {
+       descriptor_failure_text(&failure, " mode=");
+       descriptor_failure_uint(&failure, st.st_mode);
++      descriptor_failure_text(&failure, " sink_dev=");
++      descriptor_failure_uint(&failure, (uintmax_t)st.st_dev);
++      descriptor_failure_text(&failure, " sink_ino=");
++      descriptor_failure_uint(&failure, (uintmax_t)st.st_ino);
+    }
+    if (flags >= 0) {
+       descriptor_failure_text(&failure, " flags=");
+@@ -498,6 +511,31 @@ failed:
+       descriptor_failure_text(&failure, " attempts=");
+       descriptor_failure_uint(&failure, attempts);
+    }
++#ifdef F_GETPATH
++   if (flags >= 0 && S_ISREG(st.st_mode) && !(flags & O_APPEND)) {
++      /* Failure-only, Darwin-only sink identification. Hex avoids whitespace
++       * and diagnostic-marker injection. Keep the filename end of long paths
++       * and explicitly label truncation; dev/ino remain the exact identity. */
++      char path[1024] = {0};
++      if (fcntl(STDERR_FILENO, F_GETPATH, path) == -1) {
++         int path_errno = errno;
++         descriptor_failure_text(&failure, " sink_path=unavailable sink_path_errno=");
++         descriptor_failure_int(&failure, path_errno);
++      } else {
++         size_t n = strnlen(path, sizeof(path));
++         size_t begin = n > 64 ? n - 64 : 0;
++         static const char hex[] = "0123456789abcdef";
++         descriptor_failure_text(&failure, " sink_path_tail_hex=");
++         for (size_t i = begin; i < n; i++) {
++            char pair[3] = {hex[(unsigned char)path[i] >> 4],
++                            hex[(unsigned char)path[i] & 15], 0};
++            descriptor_failure_text(&failure, pair);
++         }
++         descriptor_failure_text(&failure, " sink_path_truncated=");
++         descriptor_failure_uint(&failure, begin != 0);
++      }
++   }
++#endif
+    descriptor_failure_text(&failure, "\n");
+    static const char poison[] = "\n[kk-descriptor] emission failed\n";
+    (void)!write(STDERR_FILENO, failure.overflow ? poison : failure.text,
+-- 
+2.56.0
+

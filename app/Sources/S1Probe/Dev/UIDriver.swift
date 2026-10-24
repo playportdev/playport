@@ -8,7 +8,8 @@
 //   verify:<title id>          Verify files; the next action waits for its result
 //   play:<title id>            Play; the launch ends with its `title-done` event. Playport
 //                              then restarts itself (AppRestart), and the actions after it
-//                              run in the new process, under this run (DriverContinuation);
+//                              run in the new process, under this run (DriverContinuation),
+//                              only if no loss/cancel was observed during replacement;
 //                              a Play refused before the runtime started (its alert shows)
 //                              goes on here
 //   open-launcher:<id>         Settings › Launchers' Open for a publisher's launcher
@@ -63,7 +64,9 @@
 //                              Library, then waits 1.5 s so a
 //                              screenshot sees it drawn; `open:<title id>#<section>`
 //                              opens the page's Game options at a section (graphics, controls,
-//                              game, files, developer, ordering, steam),
+//                              game, files, developer, ordering, steam, runtime, graphicsoptions).
+//                              runtime/graphicsoptions only ring/scroll existing rows: no edit,
+//                              keyboard or value mutation. Unknown game sections are refused.
 //                              `open:<title id>#gyro` its Controls › Gyro aim page, and
 //                              `open:<title id>#controller` its Controller page
 //                              (UI/ControllerMapView.swift: ctl:mode, ctl:lookSpeed,
@@ -81,7 +84,8 @@
 //                              whose name starts with it, ignoring case (`open:licences#wine`;
 //                              UI/LicencesView.swift)
 //                              `open:black` shows Settings › Developer › Black screen
-//                              (BlackScreen.swift), as its row does
+//                              (BlackScreen.swift), as its row does; it is a terminal
+//                              handoff, so it must be the last action (nothing follows it)
 //   probe:native-auth           Settings' synthetic native GSS probe, no real credentials
 //   probe:helper-exit | probe:helper-kill [-hold]
 //                              Settings' helper-lifetime probe (HelperLifetimeProbe.swift):
@@ -104,9 +108,9 @@
 //   probe:memory-pool-gpu      Settings' Donor pool: Metal buffers: 1 GiB from a donor that ends, as
 //                              four no-copy shared Metal buffers written by the GPU and read back,
 //                              a range view's buffer, then four ordinary buffers (`pool-gpu` lines)
-//   background:<seconds>       Opens iOS Settings (10-600 s), so Playport goes to the background,
-//                              and waits until it is in front again: pp ui brings it back after
-//                              that long, unless iOS ended it (the ui-background event)
+//   background:<seconds>       Opens iOS Settings (10-600 retained grammar), then terminally
+//                              cancels this batch: no automatic return or continuation.
+//                              A return needs a new explicitly announced session.
 //   probe:pairing              Settings' on-device pairing experiment (iOS 27)
 //   probe:pairing-cancel | probe:pairing-use
 //                              Cancel, or use the completed pairing and check readiness
@@ -174,8 +178,16 @@
 //                              true/false a Bool, an integer an Int, else a String
 //                              (`set:metalHUD=true`)
 //
-// Each action ends with a `ui-action` event and the run with `ui-done` in
-// run-events.jsonl (RunEvents.swift), which the driver reads.
+// Each successful action ends with a `ui-action` event and the run with `ui-done` in
+// run-events.jsonl (RunEvents.swift), which the driver reads. After bounded initial
+// active/library/opening readiness, any inactive/background transition terminally
+// cancels the batch, including intentional JIT/Settings handoffs. No reactivation
+// resumes it. Planned restart handoffs keep revocation armed until process termination;
+// an observed loss drops saved driver continuation, not the product's restart request.
+// Checkpoints guard actions, individual presses and both sides of waits;
+// host interruption requests cancellation via ui-cancel-<nonce> containing that nonce.
+// A failed marker delivery/SIGKILL cannot guarantee host interruption reached the app.
+// These are app-local gates, not proof of the OS foreground input recipient.
 //
 // What settings:, hud: and set: change lasts for the driver's session
 // (UI_SESSION) and is undone at the first launch outside it (DriverUndo.swift),
@@ -201,6 +213,30 @@ enum UIDriver {
     private static var started = false
     /// The actions after the one running: what a restart after a play hands on.
     private static var remaining: [String] = []
+    private static let batch = UIDriverBatch(active: { UIApplication.shared.applicationState == .active })
+    private static var task: Task<Void, Never>?
+    private static var finished = false
+    private static var heldMenuHome = false
+
+    static func sceneChanged(active: Bool) {
+        guard requested, started else { return }
+        batch.sceneChanged(active: active)
+    }
+
+    static func checkpoint() throws { try batch.checkpoint() }
+    static func pause(_ duration: Duration) async throws { try await batch.pause(duration) }
+
+    static var allowsDeferredNavigation: Bool {
+        guard requested else { return true }
+        do { try checkpoint(); return true } catch { return false }
+    }
+
+    static func checked<T>(_ operation: () async throws -> T) async throws -> T {
+        try checkpoint()
+        let value = try await operation()
+        try checkpoint()
+        return value
+    }
 
     private static func log(_ line: String) { WineHostRuntime.appendLog("ui: " + line) }
 
@@ -210,8 +246,20 @@ enum UIDriver {
         started = true
         let actions = (env["UI_ACTIONS"] ?? "").split(separator: ",").map(String.init)
         log("S1_MODE=ui nonce=\(TitleMode.nonce) UI_ACTIONS=\(env["UI_ACTIONS"] ?? "unset")")
-        AppRestart.shared.willRestart = { DriverContinuation.save(remaining: remaining, continuesPlay: $0) }
-        AppRestart.shared.restartFailed = { DriverContinuation.drop() }
+        AppRestart.shared.willRestart = { continuesPlay in
+            guard batch.failure == nil else { DriverContinuation.drop(); return }
+            DriverContinuation.save(remaining: remaining, continuesPlay: continuesPlay)
+            if !remaining.isEmpty || continuesPlay { batch.handoff() }
+        }
+        batch.cancelRequested = {
+            UIDriverBatch.cancellationRequested(nonce: env["TITLE_NONCE"] ?? "") { name in
+                try? String(contentsOf: WineHostRuntime.documents.appendingPathComponent(name), encoding: .utf8)
+            }
+        }
+        AppRestart.shared.restartFailed = {
+            DriverContinuation.drop()
+            batch.cancel("restart failed; driver continuation dropped")
+        }
         // A marker a run pushed as the app was ended (its last action's) would let this run's
         // action of the same number go on before its screenshot: none is this run's yet.
         if stepped, let names = try? FileManager.default.contentsOfDirectory(atPath: WineHostRuntime.documents.path) {
@@ -219,31 +267,49 @@ enum UIDriver {
                 try? FileManager.default.removeItem(at: WineHostRuntime.documents.appendingPathComponent(n))
             }
         }
-        Task { @MainActor in
+        batch.onCancel = { reason in
+            remaining.removeAll()
+            DriverContinuation.drop()
+            task?.cancel()
+            if heldMenuHome {
+                heldMenuHome = false
+                HostIO.shared.menuInput(PadInput())
+            }
+            OnScreenControls.shared.cancelDriverTouches()
+            GyroSensors.shared.cancelDriverScript()
+            finish("cancelled: \(reason)")
+        }
+        task = Task { @MainActor in await run(actions) }
+    }
+
+    private static func run(_ actions: [String]) async {
+        do {
             let library = LibraryModel.shared
-            // The first scan: the one AppShell starts on appear.
-            while library.scanning || !library.scannedOnce { try? await Task.sleep(for: .milliseconds(100)) }
-            // The opening animation (UI/AppOpening.swift) covers the shell until Home is drawn whole.
-            while AppOpening.shared.covering { try? await Task.sleep(for: .milliseconds(100)) }
+            // Initial launch may be inactive; wait boundedly for the first active,
+            // scanned, uncovered shell, but latch any subsequent foreground loss.
+            try await batch.ready { !library.scanning && library.scannedOnce && !AppOpening.shared.covering }
             log("library: " + library.catalog.titles.map { "\($0.id) \($0.name) [\($0.badge.rawValue)]" }.joined(separator: ", "))
             // The Play the restart after its prerequisites continues (AppRestart.continuePlay,
             // decision 0084) is the earlier process's play: the actions left follow it as they
             // follow a play: action.
             if AppRestart.shared.continuing != nil {
                 let launch = TitleLaunch.shared
-                while AppRestart.shared.continuing != nil { try? await Task.sleep(for: .milliseconds(100)) }
+                while AppRestart.shared.continuing != nil { try await pause(.milliseconds(100)) }
                 log("the Play continued after its prerequisites: " + (launch.running ? "started" : "did not start"))
                 if launch.running, actions.first.map({ !inGame($0) }) ?? false {
                     remaining = actions
-                    while launch.running { try? await Task.sleep(for: .milliseconds(250)) }
+                    while launch.running { try await pause(.milliseconds(250)) }
                     if AppRestart.shared.restarting {
+                        try checkpoint()
+                        batch.handoff()
                         log("the continued Play ended; Playport restarts, and the new process goes on")
+                        try await batch.waitForHandoff()
                         return
                     }
                 }
             }
-            var done = 0
-            for (i, action) in actions.enumerated() {
+            try await batch.run(actions, terminal: { $0 == "open:black" }, perform: { i, action in
+                let done = i
                 remaining = Array(actions[(i + 1)...])
                 let parts = action.split(separator: ":", maxSplits: 1).map(String.init)
                 guard parts.count == 2 else { return finish("action=\(action) refused: not <verb>:<id>") }
@@ -256,19 +322,19 @@ enum UIDriver {
                 }
                 switch parts[0] {
                 case "install" where id.hasPrefix("epic-"):
-                    if let failure = await installEpic(String(id.dropFirst(5))) { return finish("action=\(action) failed: \(failure)") }
+                    if let failure = try await installEpic(String(id.dropFirst(5))) { return finish("action=\(action) failed: \(failure)") }
                 case "install" where id.hasPrefix("gog-"):
-                    if let failure = await installGOG(String(id.dropFirst(4))) { return finish("action=\(action) failed: \(failure)") }
+                    if let failure = try await installGOG(String(id.dropFirst(4))) { return finish("action=\(action) failed: \(failure)") }
                 case "install", "pause-resume":
                     guard let app = UInt32(id) else { return finish("action=\(action) refused: \(id) is not a Steam app id") }
-                    if let failure = await install(app, pauseAt: parts[0] == "pause-resume" ? 0.25 : nil) {
+                    if let failure = try await install(app, pauseAt: parts[0] == "pause-resume" ? 0.25 : nil) {
                         return finish("action=\(action) failed: \(failure)")
                     }
                 case "import":
-                    if let failure = await importGame(id) { return finish("action=\(action) failed: \(failure)") }
+                    if let failure = try await importGame(id) { return finish("action=\(action) failed: \(failure)") }
                 case "queue", "downloading":
                     guard let app = UInt32(id) else { return finish("action=\(action) refused: \(id) is not a Steam app id") }
-                    if let failure = await (parts[0] == "queue" ? queue(app) : downloading(app)) {
+                    if let failure = try await (parts[0] == "queue" ? queue(app) : downloading(app)) {
                         return finish("action=\(action) failed: \(failure)")
                     }
                 case "settings":
@@ -304,36 +370,36 @@ enum UIDriver {
                     guard launch.running else { return finish("action=\(action) refused: no game is running") }
                     let deadline = Date().addingTimeInterval(180)
                     while launch.running, !launch.acceptsMenu || launch.step != .drawing, Date() < deadline {
-                        try? await Task.sleep(for: .milliseconds(250))
+                        try await pause(.milliseconds(250))
                     }
-                    try? await Task.sleep(for: .milliseconds(300))   // the controls drawn after the first frame
-                    if let failure = await OnScreenControls.shared.driverPress(id) { return finish("action=\(action) failed: \(failure)") }
-                    try? await Task.sleep(for: .milliseconds(500))
+                    try await pause(.milliseconds(300))   // the controls drawn after the first frame
+                    if let failure = try await OnScreenControls.shared.driverPress(id) { return finish("action=\(action) failed: \(failure)") }
+                    try await pause(.milliseconds(500))
                     log("touch \(id): \(OnScreenControls.shared.summary)" + (InGameMenu.shared.isOpen ? "; \(InGameMenu.shared.summary)" : ""))
-                    if let failure = await afterInGame(action, index: done + 1, next: actions[(i + 1)...]) { return finish(failure) }
+                    if let failure = try await afterInGame(action, index: done + 1, next: actions[(i + 1)...]) { return finish(failure) }
                     if AppRestart.shared.restarting { return }
                 case "gyro":
                     let launch = TitleLaunch.shared
-                    do { _ = try GyroScript.parse(id) } catch { return finish("action=\(action) refused: \(error)") }
+                      do { _ = try GyroScript.parse(id) } catch { return finish("action=\(action) refused: \(error)") }
                     if !launch.running {
                         // The Gyro aim page's test area (open:<title id>#gyro): its dot, nothing to a guest.
                         guard case .previewing = GyroSensors.shared.run else {
                             return finish("action=\(action) refused: no game is running and no Gyro aim test area runs "
                                           + "(\(GyroSensors.shared.summary))")
                         }
-                        if let failure = await GyroSensors.shared.driverPlay(id) { return finish("action=\(action) failed: \(failure)") }
-                        try? await Task.sleep(for: .milliseconds(500))   // the dot drawn, for a screenshot
+                        if let failure = try await GyroSensors.shared.driverPlay(id) { return finish("action=\(action) failed: \(failure)") }
+                        try await pause(.milliseconds(500))   // the dot drawn, for a screenshot
                         log("gyro \(id): \(GyroSensors.shared.summary)")
                         break
                     }
                     let deadline = Date().addingTimeInterval(180)
                     while launch.running, !launch.acceptsMenu || launch.step != .drawing, Date() < deadline {
-                        try? await Task.sleep(for: .milliseconds(250))
+                        try await pause(.milliseconds(250))
                     }
-                    try? await Task.sleep(for: .milliseconds(300))   // the sensors started after the first frame
-                    if let failure = await GyroSensors.shared.driverPlay(id) { return finish("action=\(action) failed: \(failure)") }
+                    try await pause(.milliseconds(300))   // the sensors started after the first frame
+                    if let failure = try await GyroSensors.shared.driverPlay(id) { return finish("action=\(action) failed: \(failure)") }
                     log("gyro \(id): \(GyroSensors.shared.summary)" + (InGameMenu.shared.isOpen ? "; \(InGameMenu.shared.summary)" : ""))
-                    if let failure = await afterInGame(action, index: done + 1, next: actions[(i + 1)...]) { return finish(failure) }
+                    if let failure = try await afterInGame(action, index: done + 1, next: actions[(i + 1)...]) { return finish(failure) }
                     if AppRestart.shared.restarting { return }
                 case "hud":
                     guard ["on", "off"].contains(id) else { return finish("action=\(action) refused: not hud:on or hud:off") }
@@ -342,9 +408,20 @@ enum UIDriver {
                     log("hud: \(id)")
                 case "open":
                     let nav = AppNavigation.shared
-                    let parts = id.split(separator: "#", maxSplits: 1).map(String.init)
+                    let parts = id.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
+                    // Validate game destinations before changing navigation. Settings/licences
+                    // retain their own section/alias handling; generic game IDs stay generic.
+                    if parts.count > 1, !["settings", "licences"].contains(parts[0]),
+                       UIDriverGameSection(rawValue: parts[1]) == nil {
+                        return finish("action=\(action) refused: unknown Game options section \(parts[1])")
+                    }
                     if parts.first == "black" {
+                        // The black screen is a terminal handoff: it ends the batch, so no
+                        // action, press or step ack can follow the screen the owner left.
                         BlackScreen.shared.show()
+                        batch.cancel("black screen shown; the batch ended and no input follows "
+                                     + "(new session required)")
+                        return
                     } else if parts.first == "licences" {
                         var pages: [LicencePage] = []
                         if parts.count > 1 {
@@ -364,10 +441,11 @@ enum UIDriver {
                                 || (key.store == .epic && EpicAccount.shared.game(key.id) != nil) {
                         // A store's game not installed: its page, as its library tile opens it.
                         nav.openGame(.store(key))
+                        nav.pageSection = parts.count > 1 ? parts[1] : nil
                     } else {
                         return finish("action=\(action) refused: \(id) is not a screen or a catalogued title")
                     }
-                    try? await Task.sleep(for: .milliseconds(1500))
+                    try await pause(.milliseconds(1500))
                     log("open \(id)")
                 case "pad":
                     // The presses a controller makes, into the same router (UI/Pad/PadRouter.swift),
@@ -378,23 +456,17 @@ enum UIDriver {
                                       + NavButton.allCases.map(\.rawValue).joined(separator: " "))
                     }
                     if InGameMenu.shared.isOpen {
-                        for p in presses {
-                            InGameMenu.shared.press(NavButton(rawValue: p)!)
-                            try? await Task.sleep(for: .milliseconds(250))
-                        }
-                        try? await Task.sleep(for: .milliseconds(1000))
+                        try await batch.presses(presses) { InGameMenu.shared.press(NavButton(rawValue: $0)!) }
+                        try await pause(.milliseconds(1000))
                         log("pad \(id): \(InGameMenu.shared.summary)")
-                        if let failure = await afterInGame(action, index: done + 1, next: actions[(i + 1)...]) {
+                        if let failure = try await afterInGame(action, index: done + 1, next: actions[(i + 1)...]) {
                             return finish(failure)
                         }
                         if AppRestart.shared.restarting { return }
                         break
                     }
-                    for p in presses {
-                        PadRouter.shared.send(NavButton(rawValue: p)!)
-                        try? await Task.sleep(for: .milliseconds(250))
-                    }
-                    try? await Task.sleep(for: .milliseconds(1000))
+                    try await batch.presses(presses) { PadRouter.shared.send(NavButton(rawValue: $0)!) }
+                    try await pause(.milliseconds(1000))
                     log("pad \(id): focus \(PadFocus.shared.focused ?? "none"), page \(AppNavigation.shared.page.rawValue)"
                         + (AppNavigation.shared.settings ? " (settings, \(AppNavigation.shared.settingsSection.rawValue))" : "")
                         + (AppNavigation.shared.setup && !AppNavigation.shared.settings ? " (setup\(SetupState.shared.preview == nil ? "" : " preview"), \(SetupChecklist.summary(SetupState.shared.shown)))" : "")
@@ -406,21 +478,23 @@ enum UIDriver {
                     let launch = TitleLaunch.shared
                     if launch.running {
                         log("pad \(id): a Play started")
-                        while launch.running { try? await Task.sleep(for: .milliseconds(250)) }
+                        while launch.running { try await pause(.milliseconds(250)) }
                         if AppRestart.shared.restarting {
+                            try checkpoint()
+                            batch.handoff()
                             RunEvents.emit("ui-action", ["action": action, "result": "ok", "index": done + 1, "restart": true])
                             log("pad \(id): the game ended; Playport restarts, and the actions after it do not run")
                             return
                         }
-                        try? await Task.sleep(for: .milliseconds(1500))   // the alert drawn, for a screenshot
+                        try await pause(.milliseconds(1500))   // the alert drawn, for a screenshot
                         log("pad \(id): the game ended without starting the runtime: \(launch.message?.title ?? "no message")"
                             + (launch.message?.step.map { " (failed at \(LaunchProgress.stepName($0)))" } ?? ""))
                     }
                 case "wait":
                     guard let s = Int(id), (0...600).contains(s) else { return finish("action=\(action) refused: not wait:<seconds 0-600>") }
-                    try? await Task.sleep(for: .seconds(s))
+                    try await pause(.seconds(s))
                     log("waited \(s) s" + (TitleLaunch.shared.running ? " (the game runs)" : ""))
-                    if let failure = await afterInGame(action, index: done + 1, next: actions[(i + 1)...]) { return finish(failure) }
+                    if let failure = try await afterInGame(action, index: done + 1, next: actions[(i + 1)...]) { return finish(failure) }
                     if AppRestart.shared.restarting { return }
                 case "tap":
                     let f = id.split(separator: ":").compactMap { Double($0) }
@@ -431,12 +505,12 @@ enum UIDriver {
                         return finish("action=\(action) refused: no game is running")
                     }
                     let window = GuestWindows.shown
-                    let to = await view.tap(fx: f[0], fy: f[1])
-                    try? await Task.sleep(for: .milliseconds(1000))
+                    let to = try await view.tap(fx: f[0], fy: f[1])
+                    try await pause(.milliseconds(1000))
                     log("tap \(id): " + (to == .ignored ? "ignored: outside the on-screen controls"
                                          : to == .controls ? "on an on-screen control: nothing sent (touch: presses them)"
                                          : window ? "on a guest window" : "on the game"))
-                    if let failure = await afterInGame(action, index: done + 1, next: actions[(i + 1)...]) { return finish(failure) }
+                    if let failure = try await afterInGame(action, index: done + 1, next: actions[(i + 1)...]) { return finish(failure) }
                     if AppRestart.shared.restarting { return }
                 case "gesture":
                     let launch = TitleLaunch.shared
@@ -444,14 +518,14 @@ enum UIDriver {
                     guard launch.running else { return finish("action=\(action) refused: no game is running") }
                     let deadline = Date().addingTimeInterval(180)
                     while launch.running, !launch.acceptsMenu || launch.step != .drawing, Date() < deadline {
-                        try? await Task.sleep(for: .milliseconds(250))
+                        try await pause(.milliseconds(250))
                     }
                     guard launch.acceptsMenu else { return finish("action=\(action) failed: the game did not draw a frame") }
                     HostIO.shared.menuGesture()
-                    try? await Task.sleep(for: .milliseconds(1000))
+                    try await pause(.milliseconds(1000))
                     guard InGameMenu.shared.isOpen else { return finish("action=\(action) failed: the menu did not open") }
                     log("gesture \(id): \(InGameMenu.shared.summary)")
-                    if let failure = await afterInGame(action, index: done + 1, next: actions[(i + 1)...]) { return finish(failure) }
+                    if let failure = try await afterInGame(action, index: done + 1, next: actions[(i + 1)...]) { return finish(failure) }
                     if AppRestart.shared.restarting { return }
                 case "menu":
                     let launch = TitleLaunch.shared, menu = InGameMenu.shared
@@ -459,16 +533,19 @@ enum UIDriver {
                         guard launch.running else { return finish("action=\(action) refused: no game is running") }
                         let deadline = Date().addingTimeInterval(180)
                         while launch.running, !launch.acceptsMenu || launch.step != .drawing, Date() < deadline {
-                            try? await Task.sleep(for: .milliseconds(250))
+                            try await pause(.milliseconds(250))
                         }
                         guard launch.acceptsMenu else { return finish("action=\(action) failed: the game did not draw a frame") }
                         // Home held, as a controller holds it, into HostIO's pad handling.
+                        try checkpoint()
                         var home = PadInput()
                         home.home = true
+                        heldMenuHome = true
                         HostIO.shared.menuInput(home)
-                        try? await Task.sleep(for: .milliseconds(800))
+                        try await pause(.milliseconds(800))
+                        heldMenuHome = false
                         HostIO.shared.menuInput(PadInput())
-                        try? await Task.sleep(for: .milliseconds(1000))
+                        try await pause(.milliseconds(1000))
                         guard menu.isOpen else { return finish("action=\(action) failed: the menu did not open") }
                     } else {
                         guard let item = QuickMenuItem(rawValue: id) else {
@@ -476,23 +553,23 @@ enum UIDriver {
                                           + QuickMenuItem.allCases.map(\.rawValue).joined(separator: " "))
                         }
                         guard menu.isOpen else { return finish("action=\(action) refused: the in-game menu is not open") }
-                        for down in QuickMenu.steps(from: menu.menu.ring, to: item) {
-                            menu.press(down ? .down : .up)
-                            try? await Task.sleep(for: .milliseconds(250))
+                        try await batch.presses(QuickMenu.steps(from: menu.menu.ring, to: item)) {
+                            menu.press($0 ? .down : .up)
                         }
+                        try checkpoint()
                         menu.press(.a)
-                        try? await Task.sleep(for: .milliseconds(item == .screenshot ? 2500 : 1000))
+                        try await pause(.milliseconds(item == .screenshot ? 2500 : 1000))
                     }
                     log("menu \(id): \(menu.summary)")
-                    if let failure = await afterInGame(action, index: done + 1, next: actions[(i + 1)...]) { return finish(failure) }
+                    if let failure = try await afterInGame(action, index: done + 1, next: actions[(i + 1)...]) { return finish(failure) }
                     if AppRestart.shared.restarting { return }
                 case "web":
                     // A web page the running game opened (Dev/WebSheetDriver.swift).
                     guard TitleLaunch.shared.running || GameWebSheet.shared.isUp else {
                         return finish("action=\(action) refused: no game is running")
                     }
-                    if let failure = await WebSheetDriver.run(id, log: log) { return finish("action=\(action) failed: \(failure)") }
-                    if let failure = await afterInGame(action, index: done + 1, next: actions[(i + 1)...]) { return finish(failure) }
+                    if let failure = try await WebSheetDriver.run(id, log: log) { return finish("action=\(action) failed: \(failure)") }
+                    if let failure = try await afterInGame(action, index: done + 1, next: actions[(i + 1)...]) { return finish(failure) }
                     if AppRestart.shared.restarting { return }
                 case "set":
                     let kv = id.split(separator: "=", maxSplits: 1).map(String.init)
@@ -510,23 +587,27 @@ enum UIDriver {
                     case "open-settings":
                         // The code appears once Bonjour starts (after any readiness check).
                         for _ in 0..<120 where OnDevicePairing.shared.code == nil {
-                            try? await Task.sleep(for: .milliseconds(250))
+                            try await pause(.milliseconds(250))
                         }
                         guard OnDevicePairing.shared.code != nil else { return finish("action=\(action) failed: no pairing code") }
+                        // The pairing code window floats over iOS Settings: Playport leaves.
+                        // An intentional handoff ends this batch; it never comes back on its own.
                         OnDevicePairing.shared.openSettings()
+                        batch.cancel("intentional handoff to iOS Settings for the pairing code; new session required")
+                        return
                     case "cancel": setup.cancel()
                     case "wait":
-                        while setup.isActive { try? await Task.sleep(for: .milliseconds(250)) }
+                        while setup.isActive { try await pause(.milliseconds(250)) }
                         guard setup.phase == .ready else { return finish("action=\(action) failed: setup did not complete") }
                     default: return finish("action=\(action) refused: unknown JIT setup action")
                     }
-                    if id == "setup" || id == "pair" { try? await Task.sleep(for: .seconds(3)) }
+                    if id == "setup" || id == "pair" { try await pause(.seconds(3)) }
                 case "probe":
                     let probe = HelperLifetimeProbe.shared
                     switch id {
                     case "helper-exit", "helper-kill", "helper-exit-hold", "helper-kill-hold":
                         guard done + 1 == actions.count else { return finish("action=\(action) refused: it must be the last action") }
-                        if let failure = await probe.run(id.hasPrefix("helper-exit") ? .exit : .kill, hold: id.hasSuffix("-hold")) {
+                        if let failure = try await checked({ await probe.run(id.hasPrefix("helper-exit") ? .exit : .kill, hold: id.hasSuffix("-hold")) }) {
                             return finish("action=\(action) failed: \(failure)")
                         }
                     case "relaunch":
@@ -541,12 +622,12 @@ enum UIDriver {
                         AppNavigation.shared.pageSection = "pairing"
                         // Existing credentials trigger a readiness check at launch.
                         // Wait for it rather than silently refusing the probe.
-                        while BuiltInJitStatus.shared.busy { try? await Task.sleep(for: .milliseconds(250)) }
+                        while BuiltInJitStatus.shared.busy { try await pause(.milliseconds(250)) }
                         OnDevicePairing.shared.start()
                         guard OnDevicePairing.shared.busy else {
                             return finish("action=\(action) failed: \(OnDevicePairing.shared.status)")
                         }
-                        try? await Task.sleep(for: .seconds(3))
+                        try await pause(.seconds(3))
                         log("on-device pairing probe: \(OnDevicePairing.shared.status)")
                     case "pairing-cancel":
                         OnDevicePairing.shared.stop()
@@ -554,12 +635,12 @@ enum UIDriver {
                         // pp ui relaunches the app. Keep pairing and use in this
                         // same run: credentials intentionally exist only in memory.
                         let pairing = OnDevicePairing.shared
-                        while pairing.busy { try? await Task.sleep(for: .milliseconds(250)) }
+                        while pairing.busy { try await pause(.milliseconds(250)) }
                         guard pairing.hasNewPairing else {
                             return finish("action=\(action) failed: no completed pairing in this run")
                         }
                         pairing.useNewPairing()
-                        while BuiltInJitStatus.shared.busy { try? await Task.sleep(for: .milliseconds(250)) }
+                        while BuiltInJitStatus.shared.busy { try await pause(.milliseconds(250)) }
                         guard BuiltInJitStatus.shared.status == "ready" else {
                             return finish("action=\(action) failed: generated pairing is not ready")
                         }
@@ -567,20 +648,24 @@ enum UIDriver {
                         guard let n = Int(s.dropFirst("settings-url-".count)), SettingsLink.probed.indices.contains(n) else {
                             return finish("action=\(action) refused: no such Settings link")
                         }
-                        let opened = await UIApplication.shared.open(SettingsLink.probed[n])
+                        let opened = try await checked({ await UIApplication.shared.open(SettingsLink.probed[n]) })
                         log("settings link \(n) \(SettingsLink.probed[n].absoluteString): opened=\(opened)")
+                        guard opened else { return finish("action=\(action) failed: Settings did not open link \(n)") }
+                        // A Settings link leaves Playport: an intentional handoff, not a resumable pause.
+                        batch.cancel("intentional handoff to iOS Settings (link \(n)); new session required")
+                        return
                     case "native-auth":
                         _ = AppNavigation.shared.open("settings")
                         AppNavigation.shared.pageSection = "probes"
-                        if let failure = await NativeAuthProbe.shared.run() {
+                        if let failure = try await checked({ await NativeAuthProbe.shared.run() }) {
                             return finish("action=\(action) failed: \(failure)")
                         }
                     case "helper-report":
-                        log("probe report: \(await probe.report())")
+                        log("probe report: \(try await checked({ await probe.report() }))")
                     case "memory-64", "memory-2048", "memory-4096":
                         _ = AppNavigation.shared.open("settings")
                         AppNavigation.shared.pageSection = "probes"
-                        guard let mb = Int(id.dropFirst("memory-".count)), await SharedMemoryProbe.shared.run(mb: mb) else {
+                        guard let mb = Int(id.dropFirst("memory-".count)), try await checked({ await SharedMemoryProbe.shared.run(mb: mb) }) else {
                             return finish("action=\(action) failed: \(SharedMemoryProbe.shared.status)")
                         }
                         log("shared RAM probe: \(SharedMemoryProbe.shared.status)")
@@ -590,7 +675,7 @@ enum UIDriver {
                         AppNavigation.shared.pageSection = "probes"
                         let purgeable = id.hasPrefix("memory-donor-purgeable-")
                         guard let mb = Int(id.split(separator: "-").last ?? ""),
-                              await SharedMemoryProbe.shared.runDonor(mb: mb, purgeable: purgeable) else {
+                              try await checked({ await SharedMemoryProbe.shared.runDonor(mb: mb, purgeable: purgeable) }) else {
                             return finish("action=\(action) failed: \(SharedMemoryProbe.shared.status)")
                         }
                         log("donor RAM probe: \(SharedMemoryProbe.shared.status)")
@@ -600,26 +685,26 @@ enum UIDriver {
                         guard let mb = Int(s.dropFirst("memory-donors-".count)), SharedMemoryProbe.donorTotals.contains(mb) else {
                             return finish("action=\(action) refused: not a donor pool total")
                         }
-                        guard await SharedMemoryProbe.shared.runDonors(mb: mb) else {
+                        guard try await checked({ await SharedMemoryProbe.shared.runDonors(mb: mb) }) else {
                             return finish("action=\(action) failed: \(SharedMemoryProbe.shared.status)")
                         }
                         log("donor RAM pool probe: \(SharedMemoryProbe.shared.status)")
                     case "memory-pool-zero":
                         _ = AppNavigation.shared.open("settings")
                         AppNavigation.shared.pageSection = "probes"
-                        guard await SharedMemoryProbe.shared.runPoolZero() else {
+                        guard try await checked({ await SharedMemoryProbe.shared.runPoolZero() }) else {
                             return finish("action=\(action) failed: \(SharedMemoryProbe.shared.status)")
                         }
                         log("donor pool zeroing: \(SharedMemoryProbe.shared.status)")
                     case "memory-pool-gpu":
                         _ = AppNavigation.shared.open("settings")
                         AppNavigation.shared.pageSection = "probes"
-                        guard await SharedMemoryProbe.shared.runPoolGPU() else {
+                        guard try await checked({ await SharedMemoryProbe.shared.runPoolGPU() }) else {
                             return finish("action=\(action) failed: \(SharedMemoryProbe.shared.status)")
                         }
                         log("donor pool Metal buffers: \(SharedMemoryProbe.shared.status)")
                     case "memory-pool-verify":
-                        guard await SharedMemoryProbe.shared.verifyPool() else {
+                        guard try await checked({ await SharedMemoryProbe.shared.verifyPool() }) else {
                             return finish("action=\(action) failed: \(SharedMemoryProbe.shared.status)")
                         }
                         log("donor RAM pool: \(SharedMemoryProbe.shared.status)")
@@ -631,24 +716,14 @@ enum UIDriver {
                         return finish("action=\(action) refused: not background:<seconds 10-600>")
                     }
                     let app = UIApplication.shared
-                    // pp ui reads this, waits, and brings the app back (tools/ui.py return_from_background).
+                    // Intentional handoff, not permission to reactivate or resume this queue.
                     RunEvents.emit("ui-background", ["seconds": seconds, "pid": Int(getpid())])
                     log("background \(seconds) s: opening Settings")
                     guard await app.open(URL(string: UIApplication.openSettingsURLString)!) else {
                         return finish("action=\(action) failed: Settings did not open")
                     }
-                    let left = Date()
-                    while app.applicationState == .active, Date().timeIntervalSince(left) < 10 {
-                        try? await Task.sleep(for: .milliseconds(100))
-                    }
-                    guard app.applicationState != .active else { return finish("action=\(action) failed: Playport stayed in front") }
-                    while app.applicationState != .active, Date().timeIntervalSince(left) < Double(seconds + 180) {
-                        try? await Task.sleep(for: .milliseconds(250))
-                    }
-                    guard app.applicationState == .active else {
-                        return finish("action=\(action) failed: not in front again \(seconds + 180) s after leaving")
-                    }
-                    log("background: in front again after \(Int(Date().timeIntervalSince(left))) s")
+                    batch.cancel("intentional background handoff to Settings; new session required")
+                    return
                 case "forget-launcher-window":
                     guard let launcher = PublisherLauncher.named(id), launcher.windowSettingsFile != nil else {
                         return finish("action=\(action) refused: \(id) is not a launcher with window settings")
@@ -656,62 +731,74 @@ enum UIDriver {
                     guard !TitleLaunch.shared.running else { return finish("action=\(action) refused: a launch is running") }
                     if let failure = LauncherOpen.forgetWindowSettings(launcher) { return finish("action=\(action) failed: \(failure)") }
                 case "uninstall":
-                    if let failure = await uninstall(id) { return finish("action=\(action) failed: \(failure)") }
+                    if let failure = try await uninstall(id) { return finish("action=\(action) failed: \(failure)") }
                 case "verify":
                     library.verify(id)
-                    while library.verifying.contains(id) { try? await Task.sleep(for: .milliseconds(250)) }
+                    while library.verifying.contains(id) { try await pause(.milliseconds(250)) }
                     if let v = library.title(id)?.lastVerification, library.verifyErrors[id] == nil {
                         log("verify \(id): \(v.files - v.bad)/\(v.files) OK, \(v.unlisted) unlisted")
                     } else {
                         return finish("action=\(action) failed: \(library.verifyErrors[id] ?? "no result")")
                     }
                 case "repair":
-                    if let failure = await repair(id) { return finish("action=\(action) failed: \(failure)") }
+                    if let failure = try await repair(id) { return finish("action=\(action) failed: \(failure)") }
                 case "play", "open-launcher":
                     // open-launcher:ID is Settings › Launchers' Open (UI/LaunchersSettings.swift), followed as a play.
                     let launcher = parts[0] == "open-launcher" ? PublisherLauncher.named(id) : nil
                     if parts[0] == "open-launcher", launcher == nil {
                         return finish("action=\(action) refused: \(id) is not a launcher (\(PublisherLauncher.all.map(\.id).joined(separator: ", ")))")
                     }
-                    do {
-                        let started = if let launcher { await LauncherOpen.open(launcher) } else { try await library.play(id) }
+                      do {
+                        let started = try await checked {
+                            if let launcher { await LauncherOpen.open(launcher) } else { try await library.play(id) }
+                        }
                         guard started else {
                             if launcher != nil {
                                 return finish("action=\(action) refused: not installed, or a launch is running or Playport needs a restart")
                             }
-                            if case .cloud = PadModal.shared.content {
-                                try? await Task.sleep(for: .milliseconds(1000))   // the screen drawn, for a screenshot
+                            try checkpoint()
+                        if case .cloud = PadModal.shared.content {
+                                try await pause(.milliseconds(1000))   // the screen drawn, for a screenshot
                                 return finish("action=\(action) refused: \(PadModal.shared.summary ?? "cloud conflict"): "
                                               + "the Cloud save conflict screen asks which saves to keep")
                             }
                             return finish("action=\(action) refused: a launch is running or Playport needs a restart")
                         }
-                        log("\(parts[0]) \(id): started")
-                    } catch {
+                        try checkpoint()
+                    log("\(parts[0]) \(id): started")
+                      } catch {
                         return finish("action=\(action) failed: \(error)")
                     }
                     // Actions for the running game (wait:, menu:) go on while it runs.
                     if done + 1 < actions.count, !inGame(actions[i + 1]) {
                         let launch = TitleLaunch.shared
-                        while launch.running { try? await Task.sleep(for: .milliseconds(250)) }
+                        while launch.running { try await pause(.milliseconds(250)) }
                         if AppRestart.shared.restarting {
+                            try checkpoint()
+                            batch.handoff()
                             // The restarted process runs the rest (DriverContinuation, saved as it asks).
                             RunEvents.emit("ui-action", ["action": action, "result": "ok", "index": done + 1, "restart": true])
                             log("\(parts[0]) \(id): ended; Playport restarts, and the new process goes on")
                             return
                         }
-                        try? await Task.sleep(for: .milliseconds(1500))   // the alert drawn, for a screenshot
+                        try await pause(.milliseconds(1500))   // the alert drawn, for a screenshot
                         log("\(parts[0]) \(id): ended without starting the runtime: \(launch.message?.title ?? "no message")"
                             + (launch.message?.step.map { " (failed at \(LaunchProgress.stepName($0)))" } ?? ""))
                     }
                 default:
                     return finish("action=\(action) refused: unknown action")
                 }
-                done += 1
-                RunEvents.emit("ui-action", ["action": action, "result": "ok", "index": done])
-                if stepped { await waitForStep(done) }
-            }
-            finish("ok actions=\(actions.count)")
+            }, acknowledge: { index, action in
+                RunEvents.emit("ui-action", ["action": action, "result": "ok", "index": index])
+            }, step: { index in
+                if stepped { try await waitForStep(index) }
+            })
+            // A planned replacement may still lose foreground before it exits.
+            // Stay cancellation-responsive; never disarm the saved queue's revocation.
+            try await batch.waitForHandoff()
+            if !batch.ended { finish("ok actions=\(actions.count)") }
+        } catch {
+            batch.cancel("\(error)")
         }
     }
 
@@ -726,51 +813,54 @@ enum UIDriver {
     /// for the game (or menu:quit ended it), wait for the game's end as play:
     /// does. At a restart, the ui-action is sent here and the caller returns;
     /// nil to go on, else the run's failure.
-    private static func afterInGame(_ action: String, index: Int, next: ArraySlice<String>) async -> String? {
+    private static func afterInGame(_ action: String, index: Int, next: ArraySlice<String>) async throws -> String? {
         let launch = TitleLaunch.shared
         let quit = action == "menu:quit"
         guard launch.running, quit || (next.first.map { !inGame($0) } ?? false) else { return nil }
-        while launch.running { try? await Task.sleep(for: .milliseconds(250)) }
+        while launch.running { try await pause(.milliseconds(250)) }
         if AppRestart.shared.restarting {
+            try checkpoint()
+            batch.handoff()
             RunEvents.emit("ui-action", ["action": action, "result": "ok", "index": index, "restart": true])
             log("\(action): the game ended; Playport restarts, and the new process goes on")
             return nil
         }
-        try? await Task.sleep(for: .milliseconds(1500))
+        try await pause(.milliseconds(1500))
         log("\(action): the game ended without a restart: \(launch.message?.title ?? "no message")")
         return nil
     }
 
     /// The UI's install (and, with `pauseAt`, its Pause and Resume); nil when
     /// the title reached the library, else why not.
-    private static func install(_ app: UInt32, pauseAt: Double?) async -> String? {
+    private static func install(_ app: UInt32, pauseAt: Double?) async throws -> String? {
         guard let steam = SteamAccountModel.current else { return "no Steam model" }
         for _ in 0..<600 where steam.state.account == nil || { if case .restoring = steam.state { return true }; return false }() {
-            try? await Task.sleep(for: .milliseconds(100))
+            try await pause(.milliseconds(100))
         }
         guard case .signedIn = steam.state else { return "Steam is not signed in (\(steam.state))" }
         let installs = steam.installs
         // An app outside the owned list (Half-Life 70, reached through another package's depots)
         // is named from its PICS record.
         var name = steam.games.first { $0.id == app }?.info.name ?? "app \(app)"
-        if steam.games.first(where: { $0.id == app }) == nil, let info = try? await steam.appInfo(app) { name = info.name }
+        if steam.games.first(where: { $0.id == app }) == nil,
+           let info = try await checked({ try? await steam.appInfo(app) }) { name = info.name }
         let started = Date()
         log("install \(app) \(name): started")
         installs.install(app, name: name)
         if let pauseAt {
             while let j = installs.jobs[.steam(app)], j.isRunning || j.phase == .queued, (j.fraction ?? 0) < pauseAt {
-                try? await Task.sleep(for: .milliseconds(100))
+                try await pause(.milliseconds(100))
             }
             guard let j = installs.jobs[.steam(app)], j.isRunning else { return "ended before \(Int(pauseAt * 100))% (\(phase(installs.jobs[.steam(app)])))" }
             installs.pause(app)
-            while installs.jobs[.steam(app)]?.isRunning == true { try? await Task.sleep(for: .milliseconds(100)) }
+            while installs.jobs[.steam(app)]?.isRunning == true { try await pause(.milliseconds(100)) }
             let staged = TitleInstaller(layout: installs.layout, session: nil, log: .silent).hasStage(appID: app)
             log("install \(app): paused at \(j.detail ?? "?"); phase=\(phase(installs.jobs[.steam(app)])) stage kept=\(staged)")
             guard staged, installs.jobs[.steam(app)]?.phase == .paused(nil) else { return "pause did not keep a resumable stage" }
             installs.resume(app)
             // Until the resumed run's first progress: where the kept stage put it.
             while let p = installs.jobs[.steam(app)]?.phase, p == .queued || p == .preparing {
-                try? await Task.sleep(for: .milliseconds(100))
+                try await pause(.milliseconds(100))
             }
             log("install \(app): resumed at \(installs.jobs[.steam(app)]?.detail ?? "?") (\(phase(installs.jobs[.steam(app)])))")
         }
@@ -781,11 +871,11 @@ enum UIDriver {
                 lastLog = Date()
                 log("install \(app): \(j.status) \(j.detail ?? "")")
             }
-            try? await Task.sleep(for: .milliseconds(250))
+            try await pause(.milliseconds(250))
         }
         let library = LibraryModel.shared
         for _ in 0..<600 where library.catalog.titles.first(where: { $0.appID == app }) == nil {
-            try? await Task.sleep(for: .milliseconds(100))
+            try await pause(.milliseconds(100))
         }
         guard let t = library.catalog.titles.first(where: { $0.appID == app }) else { return "done, but not in the library" }
         log(String(format: "install \(app): in the library as \(t.id) [\(t.badge.rawValue)] build=\(t.buildID.map(String.init) ?? "?") "
@@ -795,13 +885,13 @@ enum UIDriver {
 
     /// The game page's Repair from Steam, which it offers after a check that did not pass (a
     /// verify: first); nil once the repair's job ended with the files checked OK, else why not.
-    private static func repair(_ id: String) async -> String? {
+    private static func repair(_ id: String) async throws -> String? {
         let library = LibraryModel.shared
         guard let t = library.title(id), t.source == .installed, let app = t.appID else { return "\(id) is not a Steam install" }
         guard let v = t.lastVerification, !v.ok else { return "the page offers no Repair: its last check passed or there is none" }
         guard let steam = SteamAccountModel.current else { return "no Steam model" }
         for _ in 0..<600 where steam.state.account == nil || { if case .restoring = steam.state { return true }; return false }() {
-            try? await Task.sleep(for: .milliseconds(100))
+            try await pause(.milliseconds(100))
         }
         guard case .signedIn = steam.state else { return "Steam is not signed in (\(steam.state))" }
         let installs = steam.installs
@@ -815,7 +905,7 @@ enum UIDriver {
                 lastLog = Date()
                 log("repair \(id): \(j.status) \(j.detail ?? "")")
             }
-            try? await Task.sleep(for: .milliseconds(250))
+            try await pause(.milliseconds(250))
         }
         guard let after = library.title(id)?.lastVerification, after.ok, after.date > started else {
             return "the repair ended without a passing check"
@@ -825,7 +915,7 @@ enum UIDriver {
     }
 
     /// Add a game with `path` (under Documents) as the picked item; nil once it is in the library.
-    private static func importGame(_ path: String) async -> String? {
+    private static func importGame(_ path: String) async throws -> String? {
         guard !path.split(separator: "/").contains(".."), let installs = SteamAccountModel.current?.installs else {
             return "not a path under Documents, or no download queue"
         }
@@ -833,7 +923,7 @@ enum UIDriver {
         guard FileManager.default.fileExists(atPath: url.path) else { return "Documents/\(path) is not there" }
         let started = Date()
         log("import \(path): picked")
-        if let refusal = await GameImports.shared.picked(url) { return "refused: \(refusal)" }
+        if let refusal = try await checked({ await GameImports.shared.picked(url) }) { return "refused: \(refusal)" }
         guard let job = installs.order.first(where: { $0.kind == .import && $0.record.source == url.lastPathComponent }) else {
             return "no import job queued"
         }
@@ -845,11 +935,11 @@ enum UIDriver {
                 lastLog = Date()
                 log("import \(path): \(j.status) \(j.detail ?? "")")
             }
-            try? await Task.sleep(for: .milliseconds(250))
+            try await pause(.milliseconds(250))
         }
         let library = LibraryModel.shared
         let find = { library.catalog.titles.first { $0.installDir.lowercased() == folder.lowercased() } }
-        for _ in 0..<600 where find() == nil { try? await Task.sleep(for: .milliseconds(100)) }
+        for _ in 0..<600 where find() == nil { try await pause(.milliseconds(100)) }
         guard let t = find() else { return "done, but C:\\Games\\\(folder) is not in the library" }
         log(String(format: "import \(path): in the library as \(t.id) [\(t.badge.rawValue)] source=\(t.source.rawValue) "
                     + "store=\(t.store.rawValue) size=\(t.sizeBytes ?? 0) exe=\(t.executable ?? "none") after %.1f s",
@@ -858,11 +948,11 @@ enum UIDriver {
     }
 
     /// The Epic page's Install (or Update) of `app`; nil once the live build is in the library.
-    private static func installEpic(_ app: String) async -> String? {
+    private static func installEpic(_ app: String) async throws -> String? {
         let epic = EpicAccount.shared
-        for _ in 0..<300 where epic.state == .unknown { try? await Task.sleep(for: .milliseconds(100)) }
+        for _ in 0..<300 where epic.state == .unknown { try await pause(.milliseconds(100)) }
         guard epic.state == .signedIn else { return "Epic Games is not signed in" }
-        if epic.games.isEmpty { await epic.loadGames() }
+        if epic.games.isEmpty { try await checked({ await epic.loadGames() }) }
         guard let installs = SteamAccountModel.current?.installs else { return "no download queue" }
         guard let g = epic.game(app) else { return "Epic does not list \(app) in this account" }
         if let why = epic.refusal(app) { return "refused: \(why)" }
@@ -878,12 +968,12 @@ enum UIDriver {
                 lastLog = Date()
                 log("install epic-\(app): \(j.status) \(j.detail ?? "")")
             }
-            try? await Task.sleep(for: .milliseconds(250))
+            try await pause(.milliseconds(250))
         }
         let library = LibraryModel.shared
         // The job set the build it installed as the newest; adoption names it once the receipt is read.
         for _ in 0..<600 where library.title(key.titleID).map({ $0.storeVersion != epic.newest[app] }) ?? true {
-            try? await Task.sleep(for: .milliseconds(100))
+            try await pause(.milliseconds(100))
         }
         guard let t = library.title(key.titleID) else { return "done, but not in the library" }
         log(String(format: "install epic-\(app): in the library as \(t.id) [\(t.badge.rawValue)] build=\(t.storeVersion ?? "?") "
@@ -893,13 +983,13 @@ enum UIDriver {
     }
 
     /// The GOG page's Install (or Update) of `spec` (`<id>` or `<id>@<build>`); nil once the build is in the library.
-    private static func installGOG(_ spec: String) async -> String? {
+    private static func installGOG(_ spec: String) async throws -> String? {
         let parts = spec.split(separator: "@", maxSplits: 1).map(String.init)
         let pid = parts[0], build = parts.count > 1 ? parts[1] : nil
         let gog = GOGAccount.shared
-        for _ in 0..<300 where gog.state == .unknown { try? await Task.sleep(for: .milliseconds(100)) }
+        for _ in 0..<300 where gog.state == .unknown { try await pause(.milliseconds(100)) }
         guard gog.state == .signedIn else { return "GOG is not signed in" }
-        if gog.games.isEmpty { await gog.loadGames() }
+        if gog.games.isEmpty { try await checked({ await gog.loadGames() }) }
         guard let installs = SteamAccountModel.current?.installs else { return "no download queue" }
         let key = StoreGameKey(store: .gog, id: pid)
         let name = gog.game(pid)?.title ?? "GOG \(pid)"
@@ -915,7 +1005,7 @@ enum UIDriver {
                 lastLog = Date()
                 log("install gog-\(pid): \(j.status) \(j.detail ?? "")")
             }
-            try? await Task.sleep(for: .milliseconds(250))
+            try await pause(.milliseconds(250))
         }
         let library = LibraryModel.shared
         let ready = {
@@ -923,11 +1013,11 @@ enum UIDriver {
                                         requestedBuild: build, scanning: library.scanning)
         }
         for _ in 0..<600 where !ready() {
-            try? await Task.sleep(for: .milliseconds(100))
+            try await pause(.milliseconds(100))
         }
         guard let t = library.title(key.titleID) else { return "done, but not in the library" }
         guard ready() else { return "done, but library adoption did not finish for build \(build ?? "latest") (found \(t.storeVersion ?? "none"))" }
-        await gog.checkUpdate(pid)
+        try await checked({ await gog.checkUpdate(pid) })
         log(String(format: "install gog-\(pid): in the library as \(t.id) [\(t.badge.rawValue)] build=\(t.storeVersion ?? "?") "
                     + "newest=\(gog.newest[pid] ?? "?") size=\(t.sizeBytes ?? 0) exe=\(t.executable ?? "none") after %.0f s",
                    Date().timeIntervalSince(started)))
@@ -935,14 +1025,15 @@ enum UIDriver {
     }
 
     /// The Install button's call, then on at once; nil when the job is in the queue.
-    private static func queue(_ app: UInt32) async -> String? {
+    private static func queue(_ app: UInt32) async throws -> String? {
         guard let steam = SteamAccountModel.current else { return "no Steam model" }
-        for _ in 0..<600 where steam.games.isEmpty { try? await Task.sleep(for: .milliseconds(100)) }
+        for _ in 0..<600 where steam.games.isEmpty { try await pause(.milliseconds(100)) }
         let installs = steam.installs
         // An app outside the owned list (Half-Life 70, reached through another package's depots)
         // is named from its PICS record.
         var name = steam.games.first { $0.id == app }?.info.name ?? "app \(app)"
-        if steam.games.first(where: { $0.id == app }) == nil, let info = try? await steam.appInfo(app) { name = info.name }
+        if steam.games.first(where: { $0.id == app }) == nil,
+           let info = try await checked({ try? await steam.appInfo(app) }) { name = info.name }
         installs.install(app, name: name)
         guard installs.jobs[.steam(app)] != nil else { return "no job queued" }
         log("queue \(app) \(name): \(queueLine(installs))")
@@ -950,7 +1041,7 @@ enum UIDriver {
     }
 
     /// Until the queue runs `app` with progress; nil when it does.
-    private static func downloading(_ app: UInt32) async -> String? {
+    private static func downloading(_ app: UInt32) async throws -> String? {
         guard let installs = SteamAccountModel.current?.installs else { return "no Steam model" }
         let started = Date()
         while Date().timeIntervalSince(started) < 120 {
@@ -960,7 +1051,7 @@ enum UIDriver {
                 return nil
             }
             if installs.jobs[.steam(app)] == nil { return "no job for \(app) (\(queueLine(installs)))" }
-            try? await Task.sleep(for: .milliseconds(250))
+            try await pause(.milliseconds(250))
         }
         return "not downloading after 120 s (\(queueLine(installs)))"
     }
@@ -991,11 +1082,11 @@ enum UIDriver {
     private static func phase(_ j: Downloads.Job?) -> String { j.map { "\($0.phase)" } ?? "none" }
 
     /// The Uninstall button's call; nil when the folder, record and catalogue entry are gone.
-    private static func uninstall(_ id: String) async -> String? {
+    private static func uninstall(_ id: String) async throws -> String? {
         let library = LibraryModel.shared
         guard let t = library.title(id) else { return "not catalogued" }
         library.uninstall(id)
-        while library.removing.contains(id) { try? await Task.sleep(for: .milliseconds(100)) }
+        while library.removing.contains(id) { try await pause(.milliseconds(100)) }
         if let e = library.removeErrors[id] { return e }
         let layout = LibraryModel.paths.layout
         let folder = FileManager.default.fileExists(atPath: layout.gamesRoot.appendingPathComponent(t.installDir).path)
@@ -1009,19 +1100,20 @@ enum UIDriver {
     }
 
     /// UI_STEP=1 (the driver's --shot-each-action): after action n, wait until the
-    /// driver has taken its screenshot and pushed Documents/ui-step-<n>, at most 90 s.
+    /// driver has taken its screenshot and pushed Documents/ui-step-<nonce>-<n>, at most 90 s.
     private static let stepped = env["UI_STEP"] == "1"
 
-    private static func waitForStep(_ n: Int) async {
-        let url = WineHostRuntime.documents.appendingPathComponent("ui-step-\(n)")
-        let deadline = Date().addingTimeInterval(90)
-        while !FileManager.default.fileExists(atPath: url.path), Date() < deadline {
-            try? await Task.sleep(for: .milliseconds(200))
-        }
+    private static func waitForStep(_ n: Int) async throws {
+        let url = WineHostRuntime.documents.appendingPathComponent("ui-step-\(TitleMode.nonce)-\(n)")
+        try await batch.step { FileManager.default.fileExists(atPath: url.path) }
         try? FileManager.default.removeItem(at: url)
     }
 
     private static func finish(_ outcome: String) {
+        guard !finished else { return }
+        finished = true
+        batch.end()
+        remaining.removeAll()
         log("done nonce=\(TitleMode.nonce) \(outcome)")
         RunEvents.emit("ui-done", ["outcome": outcome])
     }

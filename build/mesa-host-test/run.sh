@@ -73,7 +73,7 @@ for s in "$HERE"/shaders/*; do
     *) glslangValidator -V --target-env vulkan1.3 -o "$ROOT/spv/$(basename "$s").spv" "$s" >/dev/null ;;
     esac
 done
-cc -O1 -g -Wall -o "$ROOT/kk-host-test" "$HERE/kk-host-test.c" -ldl
+cc -O1 -g -Wall -pthread -o "$ROOT/kk-host-test" "$HERE/kk-host-test.c" -ldl
 
 rm -rf "$ROOT/msl" "$ROOT/msl-versions"; mkdir -p "$ROOT/msl"
 KK_MOCK_MSL_DIR="$ROOT/msl" KK_MOCK_MSL_VERSIONS="$ROOT/msl-versions" MESA_SHADER_CACHE_DISABLE=true \
@@ -324,6 +324,62 @@ msl_sums() { for f in "$ROOT/msl/"*.metal; do md5sum <"$1/${f##*/}"; done | sort
 serial=$(grep -c '^\[kk-compile\] gpl-phases .* libraries_inflight=1 ' "$ROOT/serial.log" || true)
 [ "$serial" = 17 ] || { echo "MESA_KK_DEBUG=serial_libraries: $serial of 17 gpl-phases lines with one library in flight" >&2; exit 1; }
 echo "MESA_KK_DEBUG=compile,serial_libraries: 17 gpl-phases lines, the same MSL"
+# VK_EXT_memory_priority and VK_EXT_pageable_device_local_memory (PLA-431):
+# exposed, with their features, only with MESA_KK_EXPERIMENTAL=memory_priority
+# (the runs above check they are not exposed, and that the device has no
+# vkSetDeviceMemoryPriorityEXT, without it). With it, an allocation with a
+# priority and two vkSetDeviceMemoryPriorityEXT calls are accepted and counted
+# in the [kk-mem] line (the forked checks' lines count none), and every
+# pipeline builds the same MSL: a priority changes nothing.
+rm -rf "$ROOT/msl-memory-priority"; mkdir -p "$ROOT/msl-memory-priority"
+MESA_KK_EXPERIMENTAL=memory_priority MESA_KK_DEBUG=memory KK_MOCK_MSL_DIR="$ROOT/msl-memory-priority" \
+    MESA_SHADER_CACHE_DISABLE=true \
+    "$ROOT/kk-host-test" "$ROOT/build/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.so" "$ROOT/spv" \
+    >"$ROOT/memory-priority.log" 2>&1 || { cat "$ROOT/memory-priority.log" >&2; exit 1; }
+grep -q '^ok memory_priority: ' "$ROOT/memory-priority.log" ||
+    { echo "MESA_KK_EXPERIMENTAL=memory_priority: the memory priority case did not run" >&2; exit 1; }
+grep -q '^\[kk-mem\] .* | priority allocations=1 sets=2$' "$ROOT/memory-priority.log" ||
+    { grep '^\[kk-mem\] ' "$ROOT/memory-priority.log" >&2
+      echo "MESA_KK_EXPERIMENTAL=memory_priority: no [kk-mem] line counts 1 allocation and 2 calls" >&2; exit 1; }
+[ "$(ls "$ROOT/msl-memory-priority" | wc -l)" = "$(ls "$ROOT/msl" | wc -l)" ] ||
+    { echo "MESA_KK_EXPERIMENTAL=memory_priority: not as many MSL libraries as without it" >&2; exit 1; }
+for f in "$ROOT/msl/"*.metal; do
+    cmp -s "$f" "$ROOT/msl-memory-priority/${f##*/}" ||
+        { echo "MESA_KK_EXPERIMENTAL=memory_priority: ${f##*/} is not the MSL made without it" >&2; exit 1; }
+done
+grep '^ok memory_priority: ' "$ROOT/memory-priority.log"
+grep -m1 '^\[kk-mem\] .* | priority allocations=1 sets=2$' "$ROOT/memory-priority.log"
+echo "MESA_KK_EXPERIMENTAL=memory_priority: $(ls "$ROOT/msl-memory-priority" | wc -l) MSL libraries, each the one made without it"
+
+# VK_EXT_shader_module_identifier (PLA-431): exposed, with its feature, only
+# with MESA_KK_EXPERIMENTAL=module_identifier (the runs above check it is not,
+# and that the device has no vkGetShaderModuleIdentifierEXT, without it; the
+# algorithm UUID is MESA-BLAKE3 either way). With it, identifiers are the
+# SPIR-V's; a pipeline from an identifier fails with
+# VK_PIPELINE_COMPILE_REQUIRED unless a pipeline cache has its shader, and is
+# made from one, also on a second device; with gpl as well, a vertex shader
+# library from an identifier, linked fast and drawn. Every pipeline above
+# builds the same MSL; the identifier checks' own libraries come after them.
+for flags in module_identifier gpl,module_identifier; do
+    case $flags in
+    gpl,*) name=module-identifier-gpl like=msl-gpl ;;
+    *) name=module-identifier like=msl ;;
+    esac
+    rm -rf "$ROOT/msl-$name"; mkdir -p "$ROOT/msl-$name"
+    MESA_KK_EXPERIMENTAL=$flags KK_MOCK_MSL_DIR="$ROOT/msl-$name" MESA_SHADER_CACHE_DISABLE=true \
+        "$ROOT/kk-host-test" "$ROOT/build/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.so" "$ROOT/spv" \
+        >"$ROOT/$name.log" 2>&1 || { cat "$ROOT/$name.log" >&2; exit 1; }
+    grep -q '^ok module_identifier: ' "$ROOT/$name.log" ||
+        { echo "MESA_KK_EXPERIMENTAL=$flags: the module identifier case did not run" >&2; exit 1; }
+    [ "$flags" = module_identifier ] || grep -q '^ok module_identifier gpl: ' "$ROOT/$name.log" ||
+        { echo "MESA_KK_EXPERIMENTAL=$flags: the module identifier library case did not run" >&2; exit 1; }
+    for f in "$ROOT/$like/"*.metal; do
+        cmp -s "$f" "$ROOT/msl-$name/${f##*/}" ||
+            { echo "MESA_KK_EXPERIMENTAL=$flags: ${f##*/} is not the MSL made without it" >&2; exit 1; }
+    done
+    grep '^ok module_identifier' "$ROOT/$name.log"
+    echo "MESA_KK_EXPERIMENTAL=$flags: $(ls "$ROOT/$like" | wc -l) MSL libraries, each the one made without it, then $(( $(ls "$ROOT/msl-$name" | wc -l) - $(ls "$ROOT/$like" | wc -l) )) of the identifier checks"
+done
 
 # The same pipelines with the vertex and fragment libraries built at once and
 # the first two library builds failing as if Metal's compiler service had
@@ -388,6 +444,178 @@ fi
 known_fail env MESA_KK_DEBUG=no_known_fail >"$ROOT/known-fail-4.log" 2>&1 ||
     { echo "known-fail: MESA_KK_DEBUG=no_known_fail did not build msl=$msl" >&2; exit 1; }
 echo "known-fail list: msl=$msl skipped after 2 interrupted builds"
+
+# PLA-431: diagnostics never renumber the established MSL prefix. The extra
+# devices and failure/rollback tests run only after all existing flag checks.
+for mode in off on; do
+    debug=; [ "$mode" = off ] || debug=descriptor_stats,vertex_stats
+    rm -rf "$ROOT/msl-descriptor-$mode"; mkdir -p "$ROOT/msl-descriptor-$mode"
+    # Truncate once; the real emitter requires an O_APPEND regular-file sink.
+    : >"$ROOT/descriptor-$mode.log"
+    KK_HOST_DESCRIPTOR_TEST=1 MESA_KK_DEBUG="$debug" \
+        KK_MOCK_MSL_DIR="$ROOT/msl-descriptor-$mode" MESA_SHADER_CACHE_DISABLE=true \
+        timeout --kill-after=5s 90s "$ROOT/kk-host-test" "$ROOT/build/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.so" "$ROOT/spv" \
+        >>"$ROOT/descriptor-$mode.log" 2>&1 || { tail -60 "$ROOT/descriptor-$mode.log" >&2; exit 1; }
+    for f in "$ROOT/msl/"*.metal; do
+        cmp -s "$f" "$ROOT/msl-descriptor-$mode/${f##*/}" ||
+            { echo "descriptor-$mode changed ${f##*/}" >&2; exit 1; }
+    done
+done
+! grep -q '^\[kk-descriptor\]' "$ROOT/descriptor-off.log"
+grep -q '^\[kk-vertex\]' "$ROOT/descriptor-on.log"
+diff -rq "$ROOT/msl-descriptor-off" "$ROOT/msl-descriptor-on" >/dev/null
+python3 - "$ROOT" "$HERE" <<'PY'
+import json, pathlib, shlex, subprocess, sys
+root, here = map(pathlib.Path, sys.argv[1:])
+build = root / 'build'
+entry = next(e for e in json.loads((build / 'compile_commands.json').read_text())
+             if e['file'].endswith('/kk_debug.c'))
+args = shlex.split(entry['command'])
+args = args[:args.index('-MD')]
+obj = root / 'kk-descriptor-stats-test.o'
+subprocess.run(args + ['-O2', '-UNDEBUG', '-c', str(here / 'kk-descriptor-stats-test.c'),
+                      '-o', str(obj)], cwd=build, check=True)
+exe = root / 'kk-descriptor-stats-test'
+subprocess.run(['cc', '-pthread', '-Wl,--gc-sections', '-o', str(exe), str(obj),
+                str(build / entry['output']),
+                str(build / 'src/c11/impl/libmesa_util_c11.a')], check=True)
+helper_log = root / 'descriptor-helper.log'
+helper_log.write_text('')
+with helper_log.open('a') as log:
+    subprocess.run([str(exe)], stdout=log, stderr=log, check=True)
+
+# Exercise the generated mock itself. The old inline completion fails the
+# committing assertion; timeout also bounds future synchronization regressions.
+mock_exe = root / 'kk-mock-feedback-test'
+bridge = build / 'src/kosmickrisp/bridge/libmtl_bridge.a.p'
+subprocess.run(['cc', '-UNDEBUG', '-I' + str(root / 'mesa/src'),
+                '-o', str(mock_exe), str(here / 'kk-mock-feedback-test.c'),
+                str(bridge / 'stubs_mtl_command_queue.c.o'),
+                str(bridge / 'stubs_mtl_bridge.c.o'),
+                str(bridge / 'stubs_mtl_sync.c.o')], check=True)
+with (root / 'mock-feedback.log').open('w') as log:
+    subprocess.run([str(mock_exe)], stdout=log, stderr=log, check=True, timeout=10)
+
+# This is a known-count fixture assertion, NOT the future interval parser.
+text = (root / 'descriptor-on.log').read_text().split('descriptor-fixture begin\n')[1].split('descriptor-fixture end\n')[0]
+rows = [dict(token.split('=', 1) for token in line.split()[1:])
+        for line in text.splitlines() if line.startswith('[kk-descriptor] ')]
+enabled = [r for r in rows if r['kind'] == 'enabled']
+assert len(enabled) == 3, enabled # initialized failure + two live devices
+assert len({r['device'] for r in enabled}) == 3
+finals = [r for r in rows if r['kind'] == 'snapshot' and r['final'] == '1']
+assert len(finals) == 30
+expected = {
+    'pool_create': dict(calls=3, sets=5, pool_entries=7, pool_elements=4104, pool_bytes=64, failures=1),
+    'allocate': dict(calls=3, sets=5, failures=1),
+    'free': dict(calls=1, sets=1),
+    'pool_reset': dict(calls=1, sets=1),
+    'pool_destroy': dict(calls=2, sets=1),
+    'update': dict(calls=2001, write_records=3, write_elements=2, write_bytes=16,
+                   copy_records=2, copy_elements=1, copy_bytes=16),
+    'template_update': dict(calls=1, write_records=2, write_elements=1, write_bytes=16),
+    'bind': dict(calls=1, sets=1, dynamic_offsets=1),
+    'push': dict(calls=1, write_records=1, write_elements=1),
+    'push_template': dict(calls=1, write_records=1, write_elements=1),
+}
+for row in finals:
+    assert row['v'] == '1' and row['component'] == 'kk'
+    assert row['clock_ok'] == row['quiescent'] == '1' and row['overflow'] == row['active'] == '0'
+    assert int(row['ts_end']) >= int(row['ts_begin']) > 0
+    assert row['timed_calls'] == row['calls'] and row['clock_errors'] == '0'
+    assert int(row['elapsed_ticks']) >= int(row['max_ticks'])
+    assert row['entered_before'] == row['completed_before'] == row['entered_after'] == row['completed_after']
+    if row['device'] != enabled[1]['device']:
+        assert row['calls'] == '0', row # init failure and second device cannot inherit counts
+        continue
+    want = expected[row['op']]
+    for field in ('calls', 'sets', 'write_records', 'write_elements', 'write_bytes',
+                  'copy_records', 'copy_elements', 'copy_bytes', 'dynamic_offsets',
+                  'pool_entries', 'pool_elements', 'pool_bytes', 'failures'):
+        assert int(row[field]) == want.get(field, 0), (row, field, want)
+assert len([r for r in rows if r['kind'] == 'calibration']) == 48
+for r in rows:
+    if r['kind'] == 'calibration':
+        assert r['adjacent_ok'] == r['empty_ok'] == '1' and r['reads'] == '6'
+helper = (root / 'descriptor-helper.log').read_text()
+assert 'quiescent=0' in helper and 'active=1' in helper and 'overflow=1' in helper
+assert 'clock_errors=3' in helper and 'ok descriptor helper:' in helper
+assert 'clock_ok=0 report_clock_errors=3' in helper
+# Completed logs only: each phase is bracketed after idle and contains the
+# normal native reporter's ten rows, not synthetic test counter copies.
+replay = (root / 'descriptor-on.log').read_text().split('descriptor-replay begin\n')[1]
+phases = [('secondary-recorded', 0), ('secondary-executed-once', 1),
+          ('secondary-executed-twice', 2), ('secondary-primary-submitted', 2),
+          ('reusable-recorded', 3), ('reusable-submit-1', 3),
+          ('reusable-submit-2', 4), ('reusable-submit-3', 5)]
+previous = None
+identity = None
+for phase, calls in phases:
+    section = replay.split(f'descriptor-replay phase={phase} begin\n')[1].split(
+        f'descriptor-replay phase={phase} end\n')[0]
+    snapshot = [dict(token.split('=', 1) for token in line.split()[1:])
+                for line in section.splitlines() if line.startswith('[kk-descriptor] ')]
+    assert len(snapshot) == 10 and {r['op'] for r in snapshot} == set(expected), (phase, snapshot)
+    for field in ('snapshot', 'ts_begin', 'ts_end', 'hz', 'frames',
+                  'entered_before', 'completed_before', 'entered_after', 'completed_after'):
+        assert len({r[field] for r in snapshot}) == 1, (phase, field)
+    assert snapshot[0]['hz'] == '1000000000' and snapshot[0]['frames'] == '0'
+    current_identity = {(r['pid'], r['device'], r['init_ticks']) for r in snapshot}
+    assert len(current_identity) == 1
+    assert all(r['device'] not in {e['device'] for e in enabled} for r in snapshot)
+    if identity is not None:
+        assert current_identity == identity
+    identity = current_identity
+    current = {r['op']: r for r in snapshot}
+    for op, row in current.items():
+        assert row['kind'] == 'snapshot' and row['v'] == '1' and row['component'] == 'kk'
+        assert row['final'] == row['active'] == row['overflow'] == row['clock_errors'] == row['report_clock_errors'] == '0'
+        assert row['clock_ok'] == row['quiescent'] == '1'
+        assert int(row['ts_end']) >= int(row['ts_begin']) > 0
+        assert row['entered_before'] == row['completed_before'] == row['entered_after'] == row['completed_after']
+        assert row['timed_calls'] == row['calls'] and int(row['elapsed_ticks']) >= int(row['max_ticks'])
+        if previous:
+            assert int(row['snapshot']) > int(previous[op]['snapshot'])
+            for field in ('calls', 'timed_calls', 'elapsed_ticks', 'max_ticks'):
+                assert int(row[field]) >= int(previous[op][field]), (phase, row)
+        want = {}
+        if op == 'bind':
+            want = dict(calls=calls, sets=calls)
+        elif op in ('push', 'push_template'):
+            want = dict(calls=calls, write_records=calls, write_elements=calls)
+        elif op == 'pool_create':
+            want = dict(calls=1, sets=1, pool_entries=1, pool_elements=1)
+        elif op == 'allocate':
+            want = dict(calls=1, sets=1)
+        elif op == 'update':
+            want = dict(calls=1, write_records=1, write_elements=1)
+        for field in ('calls', 'sets', 'write_records', 'write_elements', 'write_bytes',
+                      'copy_records', 'copy_elements', 'copy_bytes', 'dynamic_offsets',
+                      'pool_entries', 'pool_elements', 'pool_bytes', 'failures'):
+            assert int(row[field]) == want.get(field, 0), (phase, op, field, row, want)
+    previous = current
+print('descriptor replay: secondary recorded/executed1/executed2/submitted=0/1/2/2; '
+      'reusable recorded/submit1/submit2/submit3=3/3/4/5 (bind, push, push_template each)')
+print(f'descriptor MSL: {len(list((root / "msl-descriptor-on").glob("*.metal")))} off/on identical files')
+print('descriptor_stats: exact 10-operation counts, two-device/init-failure separation, rollback, threads, clock errors and overflow; MSL off/on identical')
+PY
+
+# Compile the actual emitter, not a printf model. Independent raw appenders,
+# strict schema/interval checks and bounded fault injection need no GPU mock.
+SERVER_SOURCE=${KK_DESCRIPTOR_SERVER_SOURCE:-$PLAYPORT_BUILD/run/unix/mythic/build/wineserver/fd_ios.c}
+EMISSION_ARGS=()
+if [ -f "$SERVER_SOURCE" ]; then
+    EMISSION_ARGS+=(--server-source "$SERVER_SOURCE")
+else
+    echo "descriptor SCM_RIGHTS regression: skipped (set KK_DESCRIPTOR_SERVER_SOURCE to patched fd_ios.c)"
+fi
+python3 "$HERE/kk-descriptor-emission-test.py" "${EMISSION_ARGS[@]}" "$ROOT/build" \
+    "$TREE/src/kosmickrisp/vulkan/kk_debug.c" "$ROOT/descriptor-emission"
+# Linux cannot perform Darwin F_GETPATH. Simulate only that query, retaining
+# actual fd2/open/dup2/fstat/getfl/write and the production formatter/latch.
+python3 "$HERE/kk-descriptor-emission-test.py" --getpath-seam "$ROOT/build" \
+    "$TREE/src/kosmickrisp/vulkan/kk_debug.c" "$ROOT/descriptor-emission-path" \
+    nonappend path-short path-max path-error
 
 # Zink and EGL on the same mock driver: a second build of the tree. Zink loads
 # the Vulkan loader (libvulkan.so.1), limited to the mock by VK_DRIVER_FILES.

@@ -20,32 +20,33 @@ import WebKit
 @MainActor
 enum WebSheetDriver {
     /// nil when the action did what it says, else why not.
-    static func run(_ id: String, log: (String) -> Void) async -> String? {
+    static func run(_ id: String, log: (String) -> Void) async throws -> String? {
+        try UIDriver.checkpoint()
         let sheet = GameWebSheet.shared
         if id == "wait" {
             let deadline = Date().addingTimeInterval(180)
             while !sheet.isUp, TitleLaunch.shared.running, Date() < deadline {
-                try? await Task.sleep(for: .milliseconds(250))
+                try await UIDriver.pause(.milliseconds(250))
             }
             guard let s = sheet.shown else { return "no web page was opened" }
             if !s.confirmed {
-                try? await Task.sleep(for: .milliseconds(1000))   // the card drawn, for a screenshot
+                try await UIDriver.pause(.milliseconds(1000))   // the card drawn, for a screenshot
                 sheet.press(.a)
             }
             while sheet.isUp, Date() < deadline, !ready(sheet) {
-                try? await Task.sleep(for: .milliseconds(250))
+                try await UIDriver.pause(.milliseconds(250))
             }
             guard sheet.isUp else { return "the page was closed while loading" }
             guard ready(sheet) else { return "the page did not finish loading" }
-            try? await Task.sleep(for: .seconds(2))
-            log("web: \(where_(sheet)) (\(sheet.signInNote ?? "not signed in"); \(await probe(sheet)))")
+            try await UIDriver.pause(.seconds(2))
+            log("web: \(where_(sheet)) (\(sheet.signInNote ?? "not signed in"); \(try await probe(sheet)))")
             return nil
         }
         if id == "close" {
             guard sheet.isUp else { return "no web page is up" }
             log("web: close on \(where_(sheet))")
             sheet.close("the driver")
-            try? await Task.sleep(for: .milliseconds(500))
+            try await UIDriver.pause(.milliseconds(500))
             return nil
         }
         guard id.hasPrefix("click:") else { return "not web:wait, web:click:<label> or web:close" }
@@ -54,24 +55,26 @@ enum WebSheetDriver {
         var candidates = 0
         while Date() < deadline {
             guard sheet.isUp, let view = sheet.webView else { return "no web page is up" }
-            let result = try? await view.callAsyncJavaScript(click, arguments: ["label": label.lowercased()],
-                                                             in: nil, contentWorld: .defaultClient)
+            let result = try await UIDriver.checked {
+                try? await view.callAsyncJavaScript(click, arguments: ["label": label.lowercased()],
+                                                   in: nil, contentWorld: .defaultClient)
+            }
             let r = result as? [String: Any]
             candidates = (r?["candidates"] as? NSNumber)?.intValue ?? 0
             if (r?["clicked"] as? NSNumber)?.boolValue == true {
                 log("web: clicked \"\(label)\" on \(where_(sheet))")
-                try? await Task.sleep(for: .seconds(2))
+                try await UIDriver.pause(.seconds(2))
                 log("web: now \(where_(sheet))")
                 return nil
             }
-            try? await Task.sleep(for: .milliseconds(500))
+            try await UIDriver.pause(.milliseconds(500))
         }
-        return "no \"\(label)\" to click on \(where_(sheet)) (\(candidates) buttons and links; \(await probe(sheet)))"
+        return "no \"\(label)\" to click on \(where_(sheet)) (\(candidates) buttons and links; \(try await probe(sheet)))"
     }
 
     /// Whether the page's site has a signed-in session: Epic's /id/api/account status
     /// (on an Epic page), the page's first heading and its cookie count. No value is logged.
-    private static func probe(_ sheet: GameWebSheet) async -> String {
+    private static func probe(_ sheet: GameWebSheet) async throws -> String {
         guard let view = sheet.webView else { return "no page" }
         let js = """
             let account = 'n/a';
@@ -83,7 +86,9 @@ enum WebSheetDriver {
             return 'account ' + account + ', heading "' + (h ? h.innerText.trim().slice(0, 60) : '') + '", '
                 + document.cookie.split(';').filter(c => c.trim()).length + ' script cookies';
             """
-        let r = try? await view.callAsyncJavaScript(js, arguments: [:], in: nil, contentWorld: .page)
+        let r = try await UIDriver.checked {
+            try? await view.callAsyncJavaScript(js, arguments: [:], in: nil, contentWorld: .page)
+        }
         return (r as? String) ?? "probe failed"
     }
 

@@ -152,6 +152,7 @@ struct AppShell: View {
             #if !PLAYPORT_RELEASE
             BlackScreen.restoreAtStart()
             UIDriver.startIfRequested()
+            UIDriver.sceneChanged(active: scenePhase == .active)
             #endif
         }
         .onChange(of: scenePhase) { _, phase in

@@ -92,3 +92,10 @@
 0116-kk-MESA_KK_DEBUG-vertex_stats-counts-draws-vertices-.patch
 0117-kk-MESA_KK_EXPERIMENTAL-ubo_vec4_bounds-checks-a-rob.patch
 0118-kk-require-explicit-hazardous-probes-and-unsafe-UBO-consent.patch
+0119-kk-MESA_KK_EXPERIMENTAL-memory_priority-VK_EXT_memor.patch
+0120-kk-MESA_KK_EXPERIMENTAL-module_identifier-VK_EXT_sha.patch
+0121-kk-descriptor-cost-diagnostics.patch
+0122-kk-descriptor-single-write-records.patch
+0123-kk-descriptor-supported-sinks.patch
+0124-kk-descriptor-emission-failure-reasons.patch
+0125-kk-descriptor-sink-identity.patch
