@@ -69,17 +69,35 @@ e5ffd0f + `patches/dxvk` 0001–0005 (tree head d942d78); `vkd3d-proton` 31d1f89
 
 The supervisor keeps this section.
 
-- **Running now (2026-10-24):** A0 device-prep unblock, chunk "missing `O_APPEND`
-sink": why the KK diagnostic sink sees a regular fd2 without Darwin `O_APPEND`
-(`flags 0x10005`, `mode 33188`), plus a sink that emits reliably, strict-parser
-fixtures, a dev IPA (uninstalled) and one Mesa patch at 0125. Host-only, no phone
-command. Writer child `ba688951c` (`openai-codex/gpt-6.1-sol:high`, prompt
-`.work/agent-notes/kk-parity/prompts/a0-sink-append-cause.md`, log
-`.work/agent-notes/kk-parity/logs/writer-a0-sink-append.jsonl`, report to
-`.work/agent-notes/kk-parity/reports/a0-sink-append-cause.md`). Model pair
-reconfirmed 2026-10-24: hard and easy both `openai-codex/gpt-6.1-sol:high`.
-  Next after it: independent review, then (owner's call) the one authorized
-device capture or the PLA-440 leftovers.
+- **A0 sink/append cause done (2026-10-24), `1a2c06d`** (`Preserve log append across Wine
+fd imports`, 10 files): patches `madeira-unix` 0221 + `mesa` 0125, evidence
+[host](../evidence/2026-10-24-descriptor-append-cause-host.md), `app/artifacts.tsv`
+`lib/libwineserver.a` row (1214392→1214424). Cause: `wine_host_init` append-opens
+the log and dup2s it to fd2, ntdll-unix exports fd2 over `SCM_RIGHTS`, and the iOS
+wineserver's `create_anonymous_fd` did `F_SETFL(O_NONBLOCK)` on that shared open
+file description, clearing `O_APPEND`; with XNU's `FWASWRITTEN 0x10000` that is
+exactly the device's `flags 0x10005`. 0221 preserves the queried flags; 0125 only
+adds failure-time sink identity (`sink_dev`/`sink_ino`, bounded hex `F_GETPATH`
+tail with truncation/error fields, 512-byte poison bound, append/FIFO rules
+unchanged). Host: 26 pipelines, replay 0/1/2/2 and 3/3/4/5, 236/236 MSL, 38
+emitter cases, 34 parser fixtures, 12 saved raws still rejected byte-identically,
+761 quick tests, dev IPA `eff44cd0…` 89/89 **uninstalled**. Supervisor reran the
+focused emitter (`server-import`: 20 strict-schema rows, 0 malformed), names,
+secrets and the 34 parser tests: pass. Independent review **ACCEPT, no P1**
+(child `01a16e21`, verdict and P2 in
+`.work/agent-notes/kk-parity/logs/review-a0-sink-append.jsonl`; its report file
+was not written because the provider hit a usage limit, so the post-P2 reviewer
+writes the consolidated `reports/a0-sink-append-review.md`). One P2: a failed
+`F_GETFL` now leaves the imported fd blocking under iOS busy-polling.
+- **Running now (2026-10-24):** P2 hardening of 0221 (on `F_GETFL` failure keep
+the old `F_SETFL(O_NONBLOCK)`), focused regression, rebuild the IPA so the device
+gate runs the final binary. Writer child (prompt
+`.work/agent-notes/kk-parity/prompts/a0-sink-append-p2.md`), then an independent
+reviewer that also writes the consolidated review report. **Device gate deferred:
+owner needs the phone**; no install, play or measurement until they say it is free.
+Model pair for this invocation, reconfirmed 2026-10-24: hard and easy both
+`openai-codex/gpt-6.1-sol:high` (one transient "usage limit reached" was retried
+successfully, not replaced by a fallback).
 
 - **Branch:** `dev/kk-proton-parity` in the main checkout, rebased from `7103952` onto
   main `26699f6`; transfer HEAD `4fa1e73`. Side copy detached; main branch untouched.
