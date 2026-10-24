@@ -69,6 +69,18 @@ e5ffd0f + `patches/dxvk` 0001–0005 (tree head d942d78); `vkd3d-proton` 31d1f89
 
 The supervisor keeps this section.
 
+- **Running now (2026-10-24):** A0 device-prep unblock, chunk "missing `O_APPEND`
+sink": why the KK diagnostic sink sees a regular fd2 without Darwin `O_APPEND`
+(`flags 0x10005`, `mode 33188`), plus a sink that emits reliably, strict-parser
+fixtures, a dev IPA (uninstalled) and one Mesa patch at 0125. Host-only, no phone
+command. Writer child `ba688951c` (`openai-codex/gpt-6.1-sol:high`, prompt
+`.work/agent-notes/kk-parity/prompts/a0-sink-append-cause.md`, log
+`.work/agent-notes/kk-parity/logs/writer-a0-sink-append.jsonl`, report to
+`.work/agent-notes/kk-parity/reports/a0-sink-append-cause.md`). Model pair
+reconfirmed 2026-10-24: hard and easy both `openai-codex/gpt-6.1-sol:high`.
+  Next after it: independent review, then (owner's call) the one authorized
+device capture or the PLA-440 leftovers.
+
 - **Branch:** `dev/kk-proton-parity` in the main checkout, rebased from `7103952` onto
   main `26699f6`; transfer HEAD `4fa1e73`. Side copy detached; main branch untouched.
   Owner SettingsView edit preserved byte-for-byte and uncommitted (SHA256
