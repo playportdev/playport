@@ -277,16 +277,18 @@ The supervisor keeps this section.
   power/free-space unconfirmed. No worker UI session active or device command on resumption.
   **PLA-440:** preserve AGENTS.md's quick, announced, focused UI-only session rules, no
   arbitrary time cap or gameplay limit. No black interlude then input, improvised scrolling,
-  direct input or automatic relaunch on foreground loss/owner reclaim. Next is host-only
-  deterministic route/safety preparation: proposed `#runtime`/`#graphicsoptions` focus/scroll
-  targets in GameDetailView, plus active-state/queue cancellation checks and host tests;
-  not implemented here. No device commands, resumed old script, extra play/save/human
-  measurement or fix authorized. Any later UI batch needs explicit announced authorization.
-  Independent checkpoint review pending; report left in the build area at
+  direct input or automatic relaunch on foreground loss/owner reclaim.
+  **Running next: host-only deterministic route/safety implementation (PLA-440)**:
+  `#runtime`/`#graphicsoptions` focus/scroll targets in GameDetailView, plus active-state/
+  latched queue cancellation checks and test-first host regressions; independent review
+  before a later announced UI batch. No phone command, resumed old script, extra gameplay,
+  native append-flag fix or human measurement authorized in this host chunk.
+  Supervisor independently checked saved producer0 and both raw missing-append markers;
+  checkpoint accepted for host preparation only. Report left in the build area at
   `.work/agent-notes/kk-parity/reports/a0-emission-reason-device.md`.
   Human gameplay still waits for owner handoff.
   No save automation/new slot authorized. No sampler
-  redesign, CPU-clock bridge or descriptor implementation approved. Checkpoint `634e70d`;
+  redesign, CPU-clock bridge or descriptor implementation approved. Checkpoint `f5f38fd`;
   no merge or push. A2–A4 remain **not started**, gated on evidence that descriptor cost matters.
 - **B1 phone (2026-10-23):** both flag-off routes and memory_priority DXVK/D3D12 reached
   first-frame+10. DXVK features 0 off / 1 on; priority counts 14/14 and 28/13.
