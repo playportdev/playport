@@ -267,8 +267,10 @@ The supervisor keeps this section.
   UI-session procedure. Prepare missing semantic `pp ui` paths host-side before UI work;
   no generic pad scrolling, direct input scripts or black-screen interlude followed by input.
   Quick, announced UI-only sessions have no arbitrary time cap; this is not a gameplay limit.
-  Next: host-only saved-result checkpoint and deterministic-route preparation, then an
-  explicitly announced UI batch if needed. No extra game play/save/human measurement.
+  **Running host-only checkpoint**, resumed child `8fae9cc2` (same confirmed model):
+  saved results, interrupted-restoration limits and missing semantic-route identification.
+  No device commands or old-script resume authorized. Next: deterministic-route preparation,
+  then an explicitly announced UI batch if needed. No extra game play/save/human measurement.
   Report left in the build area at `.work/agent-notes/kk-parity/reports/a0-emission-reason-device.md`.
   Human gameplay still waits for owner handoff.
   No save automation/new slot authorized. No sampler
