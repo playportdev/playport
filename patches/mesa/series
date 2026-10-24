@@ -98,3 +98,4 @@
 0122-kk-descriptor-single-write-records.patch
 0123-kk-descriptor-supported-sinks.patch
 0124-kk-descriptor-emission-failure-reasons.patch
+0125-kk-descriptor-sink-identity.patch

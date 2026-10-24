@@ -19,30 +19,59 @@ spec = importlib.util.spec_from_file_location('emission_parser_fixture', repo / 
 fixture = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(fixture)
 
-build, source, out = map(lambda p: Path(p).resolve(), sys.argv[1:4])
+# Optional real wineserver source: compile the exact iOS setter from
+# create_anonymous_fd, with real host fcntl and SCM_RIGHTS, not a model of it.
+argv = sys.argv[1:]
+server_source = None
+getpath_seam = '--getpath-seam' in argv
+if getpath_seam:
+    argv.remove('--getpath-seam')
+if argv[:1] == ['--server-source']:
+    server_source = Path(argv[1]).resolve()
+    argv = argv[2:]
+build, source, out = map(lambda p: Path(p).resolve(), argv[:3])
 out.mkdir(parents=True, exist_ok=True)
 entry = next(e for e in json.loads((build / 'compile_commands.json').read_text())
              if e['file'].endswith('/kk_debug.c'))
 args = shlex.split(entry['command'])
 args = (args[:1] + ['-I' + str(source.parent)] + args[1:args.index('-MD')]
         + ['-O2', '-UNDEBUG', '-ffunction-sections', '-fdata-sections'])
+if getpath_seam:
+    # Only the Darwin path query is simulated; fds/stat/getfl/writes stay real.
+    args += ['-DF_GETPATH=50', '-DTEST_GETPATH=1']
+objects = [out / 'fixture.o', out / 'emitter.o']
+if server_source:
+    text = server_source.read_text()
+    function = text.split('struct fd *create_anonymous_fd(', 1)[1]
+    block = function.split('#ifdef WINE_IOS\n', 1)[1].split('#endif', 1)[0]
+    helper = out / 'server-import.c'
+    helper.write_text('#include <fcntl.h>\nvoid test_server_import(int unix_fd);\nvoid test_server_import(int unix_fd) {\n' + block + '\n}\n')
+    subprocess.run(args + ['-c', str(helper), '-o', str(out / 'server-import.o')], cwd=build, check=True)
+    objects.append(out / 'server-import.o')
+    args += ['-DTEST_SERVER_IMPORT=1']
 for name, path in [('emitter', source), ('fixture', here / 'kk-descriptor-emission-test.c')]:
     subprocess.run(args + ['-c', str(path), '-o', str(out / (name + '.o'))], cwd=build, check=True)
 exe = out / 'kk-descriptor-emission-test'
 subprocess.run(['cc', '-pthread', '-Wl,--gc-sections',
                 '-Wl,--wrap=write,--wrap=fprintf,--wrap=vsnprintf,--wrap=fpathconf,'
                 '--wrap=fstat64,--wrap=fcntl64',
-                '-o', str(exe), str(out / 'fixture.o'), str(out / 'emitter.o'),
+                '-o', str(exe), *map(str, objects),
                 str(build / 'src/c11/impl/libmesa_util_c11.a')], check=True)
 
-modes = sys.argv[4:] or ['append', 'pipe', 'max', 'format-error', 'format-overflow',
+modes = argv[3:] or ['append', 'pipe', 'max', 'format-error', 'format-overflow',
                          'eintr', 'eintr-limit', 'short', 'newline-short', 'write-error',
                          'pipe-small', 'stress', 'nonappend', 'unsupported-null',
                          'unsupported-type', 'getfl-error', 'nonappend-after-init', 'fstat-error',
                          'flags-max', 'format-empty', 'pipe-error', 'pipe-indeterminate',
                          'pipe-invalid', 'pipe-zero', 'pipe-exact', 'pipe-too-small', 'pipe-max',
                          'write-zero', 'write-max', 'poison-error', 'pipe-write-error']
+if server_source and not argv[3:]:
+    modes += ['server-import', 'server-import-getfl-error']
+if getpath_seam and not argv[3:]:
+    modes += ['path-short', 'path-max', 'path-error']
 for mode in modes:
+    if mode.startswith('server-import'):
+        assert server_source, 'server-import requires --server-source (no model fallback)'
     seeds = [1, 431, 0xdeadbeef] if mode == 'stress' else [1]
     for seed in seeds:
         log = out / f'{mode}-{seed}.log'
@@ -61,14 +90,14 @@ for mode in modes:
             except ValueError as error:
                 malformed.append((line, str(error)))
         snapshots = [r for r in records if r['kind'] == 'snapshot']
-        if mode in ('append', 'pipe', 'max', 'eintr', 'stress', 'pipe-exact', 'pipe-max'):
+        if mode in ('append', 'pipe', 'server-import', 'server-import-getfl-error', 'max', 'eintr', 'stress', 'pipe-exact', 'pipe-max'):
             assert not malformed, (mode, malformed[:2])
-            expected = 20 if mode in ('append', 'pipe') else 4010 if mode == 'stress' else 10
+            expected = 20 if mode in ('append', 'pipe', 'server-import', 'server-import-getfl-error') else 4010 if mode == 'stress' else 10
             assert len(snapshots) == expected, (mode, len(snapshots), expected)
             assert text.endswith('\n')
             assert len([r for r in records if r['kind'] == 'enabled']) == 1
             assert len([r for r in records if r['kind'] == 'calibration']) == 16
-            if mode in ('append', 'pipe'):
+            if mode in ('append', 'pipe', 'server-import', 'server-import-getfl-error'):
                 # Real production banner, calibration and two snapshots form a usable interval.
                 result = subprocess.run([sys.executable, str(repo / 'tools/descriptorprof.py'),
                                          '--json', str(log)], capture_output=True, text=True)
@@ -87,7 +116,8 @@ for mode in modes:
                 print(f'max u64 payload: observed {max(lengths)} bytes; '
                       f'v1 snapshot conservative bound {bound} bytes including newline')
         elif mode in ('nonappend', 'unsupported-null', 'unsupported-type', 'getfl-error',
-                       'nonappend-after-init', 'fstat-error', 'flags-max', 'format-empty'):
+                       'nonappend-after-init', 'fstat-error', 'flags-max', 'format-empty',
+                       'path-short', 'path-max', 'path-error'):
             assert not snapshots, (mode, snapshots[:1])
             assert len(records) == (17 if mode == 'nonappend-after-init' else 0), mode
             assert len(malformed) == (0 if mode == 'unsupported-null' else 1), (mode, malformed)
@@ -108,6 +138,8 @@ for mode in modes:
             'fstat-error': ('fstat', {'errno': errno.EBADF}),
             'unsupported-type': ('type', {}), 'getfl-error': ('getfl', {'errno': errno.EIO}),
             'nonappend': ('missing-append', {}), 'nonappend-after-init': ('missing-append', {}),
+            'path-short': ('missing-append', {}), 'path-max': ('missing-append', {}),
+            'path-error': ('missing-append', {}),
             'flags-max': ('missing-append', {'flags': 2147483647 & ~os.O_APPEND}),
             'pipe-error': ('pipe-query', {'errno': errno.EIO, 'pipe_buf': -1}),
             'pipe-indeterminate': ('pipe-indeterminate', {'pipe_buf': -1}),
@@ -133,13 +165,30 @@ for mode in modes:
                 assert fields.get(key) == str(value), (mode, fields, key, value)
             keys = {'stage'}
             if stage != 'format': keys.add('rowlen')
-            if stage not in ('format', 'empty', 'fstat'): keys.add('mode')
+            if stage not in ('format', 'empty', 'fstat'):
+                keys.update(('mode', 'sink_dev', 'sink_ino'))
+                # Compare identity with the actual open file, not mocked values.
+                if not mode.startswith('pipe'):
+                    observed = os.stat(log)
+                    assert int(fields['sink_dev']) == observed.st_dev
+                    assert int(fields['sink_ino']) == observed.st_ino
             if stage in ('missing-append', 'write-error', 'write-short', 'write-eintr-limit'):
                 keys.add('pipe_buf' if mode.startswith('pipe') else 'flags')
             if stage.startswith('pipe-'): keys.add('pipe_buf')
             if stage in ('fstat', 'getfl', 'pipe-query', 'write-error', 'write-eintr-limit'):
                 keys.add('errno')
             if stage.startswith('write-'): keys.update(('written', 'attempts'))
+            if getpath_seam and stage == 'missing-append':
+                if mode == 'path-error':
+                    keys.update(('sink_path', 'sink_path_errno'))
+                    assert fields['sink_path'] == 'unavailable'
+                    assert int(fields['sink_path_errno']) == errno.ENOENT
+                else:
+                    keys.update(('sink_path_tail_hex', 'sink_path_truncated'))
+                    path = ('s1 host\n.log' if mode == 'path-short' else
+                            'a' * 1023 if mode == 'path-max' else str(log)).encode()
+                    assert fields['sink_path_tail_hex'] == path[-64:].hex()
+                    assert int(fields['sink_path_truncated']) == (len(path) > 64)
             assert set(fields) == keys, (mode, fields, keys)
             if mode == 'pipe-too-small': assert int(fields['pipe_buf']) + 1 == int(fields['rowlen'])
             if mode == 'short': assert int(fields['written']) == int(fields['rowlen']) // 2

@@ -5373,7 +5373,7 @@ resource	Runtime/mono/wine-mono-11.3.0/support/winemono-support.cab	1395918	857c
 resource	Runtime/mono/wine-mono-11.3.0/support/winemono-support.msi	22528	0567d9569c9ca7f678c7ccd4a5ccffbd9dc7bdd3c632ce204afaf7068bf9c2db	wine-mono	support/winemono-support.msi	wine-mono
 link	lib/libntdll_unix.a	4794312	7ab291b3cdb07f9e244bc7bd563f9de551bad34f6f3028bffda256bbd6919411	unix	mythic/app/Madeira/libntdll_unix.a	P3
 link	lib/libwin32u_unix.a	4136368	e8ded8744079e7dcd3cba9b69dc427b80ed7e2132a8d82aa2ecab8a158687f64	unix	mythic/app/Madeira/libwin32u_unix.a	P4-win32u
-link	lib/libwineserver.a	1214392	a8a8ccfe5574f26eb32dbde9d9490790ec42db6882a1b3ad58b9d3adb8a77059	unix	mythic/app/Madeira/libwineserver.a	P4-server
+link	lib/libwineserver.a	1214424	2491374215256cf862f03b95915df34dc5f32df0d9777b536f7ee30f35d28294	unix	mythic/app/Madeira/libwineserver.a	P4-server
 link	lib/libgnutls.a	3603280	e9fb697d624bb63d1c89e8569f1a8e0e69e576175407853bf34a6279fa1673b3	unix	mythic/toolchains/gnutls-ios/lib/libgnutls.a	P4-crypto
 link	lib/libhogweed.a	1105792	247e869163901151301d2ff3c930a68c3742fbbb263a33b8bc10a98dfbd65b9f	unix	mythic/toolchains/gnutls-ios/lib/libhogweed.a	P4-crypto
 link	lib/libnettle.a	1705864	ff2ecf070899ab728cf21dc13bb9463fdf5a79775a34c5f87e7d861fed2d9543	unix	mythic/toolchains/gnutls-ios/lib/libnettle.a	P4-crypto

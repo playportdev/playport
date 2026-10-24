@@ -12,7 +12,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/socket.h>
 #include <unistd.h>
+
+#ifdef TEST_SERVER_IMPORT
+void test_server_import(int fd);
+#endif
 
 ssize_t __real_write(int, const void *, size_t);
 int __real_vsnprintf(char *, size_t, const char *, va_list);
@@ -35,6 +40,9 @@ static int poison_formats;
 static size_t row_length, poison_length;
 static const char *mode;
 static unsigned seed;
+#ifdef TEST_SERVER_IMPORT
+static int imported_fd = -1, server_sets;
+#endif
 
 static void rendezvous(void)
 {
@@ -170,8 +178,41 @@ long __wrap_fpathconf(int fd, int name)
 /* Mesa's Linux host flags select the large-file syscall symbols. */
 int __wrap_fcntl64(int fd, int command, ...)
 {
-   /* Only production F_GETFL is wrapped; setup uses __real_fcntl64. */
-   assert(fd == STDERR_FILENO && command == F_GETFL);
+#ifdef TEST_GETPATH
+   if (command == F_GETPATH) {
+      va_list ap;
+      va_start(ap, command);
+      char *path = va_arg(ap, char *);
+      va_end(ap);
+      if (!strcmp(mode, "path-error")) { errno = ENOENT; return -1; }
+      if (!strcmp(mode, "path-short")) strcpy(path, "s1 host\n.log");
+      else if (!strcmp(mode, "path-max")) { memset(path, 'a', 1023); path[1023] = 0; }
+      else {
+         ssize_t n = readlink("/proc/self/fd/2", path, 1023);
+         assert(n > 0);
+         path[n] = 0;
+      }
+      return 0;
+   }
+#endif
+   if (command != F_GETFL) {
+      va_list ap;
+      va_start(ap, command);
+      int flags = va_arg(ap, int);
+      va_end(ap);
+      assert(command == F_SETFL);
+#ifdef TEST_SERVER_IMPORT
+      if (fd == imported_fd) server_sets++;
+#endif
+      return __real_fcntl64(fd, command, flags);
+   }
+#ifdef TEST_SERVER_IMPORT
+   if (fd == imported_fd && !strcmp(mode, "server-import-getfl-error")) {
+      errno = EIO;
+      return -1;
+   }
+#endif
+   if (fd != STDERR_FILENO) return __real_fcntl64(fd, command);
    flag_calls++;
    if (armed && !strcmp(mode, "getfl-error")) {
       errno = EIO;
@@ -226,7 +267,8 @@ static void test_rejected_sink(void)
    assert(stat_calls == init_stats && flag_calls == init_flags && pipe_calls == init_pipes);
    assert(stat_calls == (strcmp(mode, "format-empty") ? 1 : 0));
    assert(flag_calls == ((!strcmp(mode, "nonappend") || after_init ||
-                          !strcmp(mode, "getfl-error") || !strcmp(mode, "flags-max")) ? 1 : 0));
+                          !strcmp(mode, "getfl-error") || !strcmp(mode, "flags-max") ||
+                          !strncmp(mode, "path-", 5)) ? 1 : 0));
 }
 
 /* Free-running competition, with a pinned PRNG determining bounded burst
@@ -260,16 +302,62 @@ int main(int argc, char **argv)
    mode = argv[1];
    seed = argc > 3 ? strtoul(argv[3], NULL, 0) : 1;
    int flags = O_WRONLY | O_CREAT | O_TRUNC;
-   if (strcmp(mode, "nonappend")) flags |= O_APPEND;
+   if (strcmp(mode, "nonappend") && strncmp(mode, "path-", 5)) flags |= O_APPEND;
    int log = open(argv[2], flags, 0600);
    assert(log >= 0);
    assert(dup2(log, STDERR_FILENO) == STDERR_FILENO);
    close(log);
    setbuf(stderr, NULL); /* Same unbuffered native stderr as Wine init_options. */
+#ifdef TEST_SERVER_IMPORT
+   if (!strncmp(mode, "server-import", 13)) {
+      /* Wine's SCM_RIGHTS transfer shares the open file description, not just
+       * the inode. Run the real iOS create_anonymous_fd flag-setting block on
+       * the received alias, then exercise the real native record emitter. */
+      int sockets[2];
+      assert(!socketpair(AF_UNIX, SOCK_STREAM, 0, sockets));
+      char byte = 0;
+      union {
+         struct cmsghdr alignment;
+         char bytes[CMSG_SPACE(sizeof(int))];
+      } control = {0};
+      struct iovec iov = {&byte, 1};
+      struct msghdr msg = {.msg_iov = &iov, .msg_iovlen = 1,
+                          .msg_control = control.bytes, .msg_controllen = sizeof(control.bytes)};
+      struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
+      cmsg->cmsg_level = SOL_SOCKET;
+      cmsg->cmsg_type = SCM_RIGHTS;
+      cmsg->cmsg_len = CMSG_LEN(sizeof(int));
+      int stderr_fd = STDERR_FILENO;
+      memcpy(CMSG_DATA(cmsg), &stderr_fd, sizeof(stderr_fd));
+      assert(sendmsg(sockets[0], &msg, 0) == 1);
+      memset(&control, 0, sizeof(control));
+      assert(recvmsg(sockets[1], &msg, 0) == 1 && !(msg.msg_flags & MSG_CTRUNC));
+      assert(CMSG_FIRSTHDR(&msg) && CMSG_FIRSTHDR(&msg)->cmsg_type == SCM_RIGHTS);
+      int imported;
+      memcpy(&imported, CMSG_DATA(CMSG_FIRSTHDR(&msg)), sizeof(imported));
+      assert(imported > STDERR_FILENO);
+      struct stat a, b;
+      assert(!fstat(imported, &a) && !fstat(STDERR_FILENO, &b));
+      assert(a.st_dev == b.st_dev && a.st_ino == b.st_ino);
+      imported_fd = imported;
+      test_server_import(imported);
+      int current = __real_fcntl64(STDERR_FILENO, F_GETFL);
+      printf("server-import: shared fd2 append=%d nonblock=%d\n",
+             !!(current & O_APPEND), !!(current & O_NONBLOCK));
+      fflush(stdout);
+      assert(current & O_APPEND);
+      bool query_failed = !strcmp(mode, "server-import-getfl-error");
+      assert(!!(current & O_NONBLOCK) == !query_failed);
+      assert(server_sets == !query_failed);
+      imported_fd = -1;
+      assert(!close(imported) && !close(sockets[0]) && !close(sockets[1]));
+   }
+#endif
    if (!strcmp(mode, "nonappend") || !strcmp(mode, "nonappend-after-init") ||
        !strcmp(mode, "unsupported-null") || !strcmp(mode, "unsupported-type") ||
        !strcmp(mode, "getfl-error") || !strcmp(mode, "fstat-error") ||
-       !strcmp(mode, "flags-max") || !strcmp(mode, "format-empty")) {
+       !strcmp(mode, "flags-max") || !strcmp(mode, "format-empty") ||
+       !strncmp(mode, "path-", 5)) {
       if (!strcmp(mode, "nonappend"))
          assert(!(__real_fcntl64(STDERR_FILENO, F_GETFL) & O_APPEND));
       if (!strcmp(mode, "unsupported-null")) {
@@ -294,7 +382,8 @@ int main(int argc, char **argv)
       peer_fd = open(argv[2], O_WRONLY | O_APPEND);
    }
    assert(peer_fd >= 0);
-   bool nominal = !strcmp(mode, "append") || !strcmp(mode, "pipe");
+   bool nominal = !strcmp(mode, "append") || !strcmp(mode, "pipe") ||
+                  !strncmp(mode, "server-import", 13);
    handshakes = nominal;
    if (nominal) assert(!pthread_create(&client, NULL, client_writer, NULL));
    struct kk_descriptor_stats s = {0};

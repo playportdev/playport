@@ -602,8 +602,20 @@ PY
 
 # Compile the actual emitter, not a printf model. Independent raw appenders,
 # strict schema/interval checks and bounded fault injection need no GPU mock.
-python3 "$HERE/kk-descriptor-emission-test.py" "$ROOT/build" \
+SERVER_SOURCE=${KK_DESCRIPTOR_SERVER_SOURCE:-$PLAYPORT_BUILD/run/unix/mythic/build/wineserver/fd_ios.c}
+EMISSION_ARGS=()
+if [ -f "$SERVER_SOURCE" ]; then
+    EMISSION_ARGS+=(--server-source "$SERVER_SOURCE")
+else
+    echo "descriptor SCM_RIGHTS regression: skipped (set KK_DESCRIPTOR_SERVER_SOURCE to patched fd_ios.c)"
+fi
+python3 "$HERE/kk-descriptor-emission-test.py" "${EMISSION_ARGS[@]}" "$ROOT/build" \
     "$TREE/src/kosmickrisp/vulkan/kk_debug.c" "$ROOT/descriptor-emission"
+# Linux cannot perform Darwin F_GETPATH. Simulate only that query, retaining
+# actual fd2/open/dup2/fstat/getfl/write and the production formatter/latch.
+python3 "$HERE/kk-descriptor-emission-test.py" --getpath-seam "$ROOT/build" \
+    "$TREE/src/kosmickrisp/vulkan/kk_debug.c" "$ROOT/descriptor-emission-path" \
+    nonappend path-short path-max path-error
 
 # Zink and EGL on the same mock driver: a second build of the tree. Zink loads
 # the Vulkan loader (libvulkan.so.1), limited to the mock by VK_DRIVER_FILES.

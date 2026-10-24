@@ -128,6 +128,23 @@ def reasons(report):
 
 
 class DescriptorProf(unittest.TestCase):
+    def test_sink_identity_poisons_remain_fail_closed(self):
+        # 0124's vocabulary and saved raw remain malformed, not a new schema.
+        old = '[kk-descriptor] emission failed stage=missing-append rowlen=454 mode=33188 flags=65541'
+        tails = ['', ' sink_dev=7 sink_ino=42',
+                 ' sink_dev=7 sink_ino=42 sink_path_tail_hex=73312d686f73742e6c6f67 sink_path_truncated=0',
+                 ' sink_dev=7 sink_ino=42 sink_path_tail_hex=73312d686f73742e6c6f67 sink_path_truncated=1',
+                 ' sink_dev=7 sink_ino=42 sink_path=unavailable sink_path_errno=9']
+        for tail in tails:
+            with self.subTest(tail=tail):
+                poison = old + tail
+                with self.assertRaises(ValueError):
+                    dp.parse_record(poison)
+                full = fixture('kk')
+                report = analyze(full[:18] + [poison] + full[18:])
+                self.assertNotEqual(report['status'], 'ok')
+                self.assertEqual(report['usable_intervals'], 0)
+
     def test_complete_cardinality_and_partition_not_inclusive_double_count(self):
         for component, size in [('kk', 10), ('dxvk', 36), ('vkd3d', 54)]:
             with self.subTest(component=component):

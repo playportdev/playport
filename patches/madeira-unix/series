@@ -187,3 +187,4 @@
 0212-ntdll-PLAYPORT_SC_BLOCK_CRASHPAD-1-refuses-crash-rep.patch
 0213-ntdll-the-app-allows-RDR2-s-Social-Club-helper-resta.patch
 0220-ntdll-unix-wineserver-build-Playport-s-ppsync-in-pla.patch
+0221-wineserver-preserve-imported-fd-status-flags.patch
