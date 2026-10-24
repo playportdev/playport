@@ -51,8 +51,10 @@ The previously established full-log stamp/cap contradictions remain unchanged.
 
 ## Repair and retained fail-closed transport
 
-Madeira-unix **0221** preserves queried flags when adding NONBLOCK. On failed
-F_GETFL it does not replace unknown flags. This tightly related second patch is
+Madeira-unix **0221** preserves queried flags when adding NONBLOCK. Its P2
+hardening retains the legacy SETFL(NONBLOCK) fallback if GETFL fails, prioritizing
+non-blocking busy-polling over unknown flags (including append). The emitter
+still rejects a non-append regular sink. This tightly related second patch is
 necessary because the proven setter lives in Madeira, not Mesa; the upstream
 pin and vendored checkout are unchanged. Mesa **0125** keeps the regular-file
 append requirement, FIFO PIPE_BUF bound, single whole-row write, EINTR limit,
@@ -76,9 +78,10 @@ shared description restores the app's intended append contract for all aliases.
 Other writers can still split their own records; arbitrary future fd rebinding
 or concurrent status-flag mutation is not made safe by a GETFL check.
 
-## Verification
+## Initial verification (before P2 hardening)
 
-All retained check logs are under `.work/agent-notes/kk-parity/sink-append/`.
+The GETFL-error behavior below is historical; the P2 closure supersedes it.
+All retained initial check logs are under `.work/agent-notes/kk-parity/sink-append/`.
 
 - **Red before repair:** `red/server-import-1.stdout` reports
   `server-import: shared fd2 append=0 nonblock=1`; actual source setter + real
@@ -133,3 +136,48 @@ values in old logs remain unobserved, never zero. Failure-time stat/flags/path
 queries do not form an atomic snapshot against arbitrary concurrent rebinding;
 path suffixes are not full paths. A0 justification/A2 remain gated.
 **Games observed: none.**
+
+## P2 closure: GETFL failure keeps the fd non-blocking
+
+The independent review of `1a2c06d` accepted the chunk with one P2: on a failed
+`F_GETFL` the imported fd kept its blocking status, losing the one guarantee the
+old unconditional `F_SETFL(O_NONBLOCK)` provided under iOS busy-polling (no
+epoll/kqueue). The writer's continuation of that session ended before it could
+finish its checks, so the supervisor completed the verification and committed it;
+all numbers below are the supervisor's own reruns on this working tree.
+
+- **Patch.** `madeira-unix` 0221 now reads `flags = F_GETFL(unix_fd);` then
+  `F_SETFL, flags | O_NONBLOCK` on success and `F_SETFL, O_NONBLOCK` on failure.
+  Unknown flags (including append) cannot be preserved on that fallback, and the
+  emitter still rejects a non-append regular sink, so the diagnostic stays
+  fail-closed. The patch body and `Subject` describe both paths; the tree
+  reconstructs from the series (`madeira-unix: 189 patches on c3b84da17ae2` →
+  `f5dc1468`).
+- **Red before, green after.** The old test had encoded the P2 as expected
+  behaviour: `assert(!!(current & O_NONBLOCK) == !query_failed)` and
+  `assert(server_sets == !query_failed)`. Against the unhardened 0221 the real
+  `SCM_RIGHTS` seam aborts (`p2-append/red.log`, `SIGABRT` in
+  `server-import-getfl-error`). After the hunk the same case asserts
+  `current & O_NONBLOCK`, `append` only when the query succeeded, and exactly one
+  `SETFL` on either path, and the full suite passes.
+- **Full Mesa host suite** (`p2-append/mesa-host-final.log`, producer exit0):
+  `all 26 pipelines built and drawn`; `descriptor replay: secondary
+  recorded/executed1/executed2/submitted=0/1/2/2; reusable
+  recorded/submit1/submit2/submit3=3/3/4/5 (bind, push, push_template each)`;
+  `descriptor MSL: 236 off/on identical files`; `zink-host-test: ok`. Imported
+  aliases emit 20 strict-schema rows with 0 malformed; the rejected
+  `server-import-getfl-error` sink poisons once with `sink_dev`/`sink_ino`.
+- **Parser and repository gates:** 34 fixture tests pass; `pp test --quick` exit0
+  with **761 tools tests** and the host C tests (`p2-append/quick-final.log`);
+  `pp names: clean`; `pp secrets: clean`.
+- **Dev IPA:** `.work/out/20261024-205911-31430e96/Playport-26.5-31430e96.ipa`,
+  SHA256 **`31430e9639275c6df96aa70c9905bd6f5f398dbd80b2d7d28355bbcfa50b1122`**,
+  `verify-ipa: 89 checks passed, 0 failed` (`p2-append/build-final.log`). Build
+  record: only `app/artifacts.tsv`'s libwineserver row changed again
+  (1,214,432 bytes, SHA256
+  `78f505018ee5ac887b8d8f7f77e9716662e28108cb17feeb432f0c273865399f`); Wine PE
+  rows unchanged. **Uninstalled.**
+
+Still unverified: everything device-side. A fresh authorized capture must show the
+native banner, 16 calibration rows and complete 10-row captures, or retain the
+new sink-identifying poison; A0 justification and A2 remain gated.

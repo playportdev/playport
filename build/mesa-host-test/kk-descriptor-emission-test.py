@@ -90,14 +90,20 @@ for mode in modes:
             except ValueError as error:
                 malformed.append((line, str(error)))
         snapshots = [r for r in records if r['kind'] == 'snapshot']
-        if mode in ('append', 'pipe', 'server-import', 'server-import-getfl-error', 'max', 'eintr', 'stress', 'pipe-exact', 'pipe-max'):
+        if mode.startswith('server-import'):
+            # Observe the real shared description, including the legacy fallback.
+            append = 0 if mode == 'server-import-getfl-error' else 1
+            status = f'server-import: shared fd2 append={append} nonblock=1 setfl_calls=1'
+            assert status in (out / f'{mode}-{seed}.stdout').read_text()
+            print(status)
+        if mode in ('append', 'pipe', 'server-import', 'max', 'eintr', 'stress', 'pipe-exact', 'pipe-max'):
             assert not malformed, (mode, malformed[:2])
-            expected = 20 if mode in ('append', 'pipe', 'server-import', 'server-import-getfl-error') else 4010 if mode == 'stress' else 10
+            expected = 20 if mode in ('append', 'pipe', 'server-import') else 4010 if mode == 'stress' else 10
             assert len(snapshots) == expected, (mode, len(snapshots), expected)
             assert text.endswith('\n')
             assert len([r for r in records if r['kind'] == 'enabled']) == 1
             assert len([r for r in records if r['kind'] == 'calibration']) == 16
-            if mode in ('append', 'pipe', 'server-import', 'server-import-getfl-error'):
+            if mode in ('append', 'pipe', 'server-import'):
                 # Real production banner, calibration and two snapshots form a usable interval.
                 result = subprocess.run([sys.executable, str(repo / 'tools/descriptorprof.py'),
                                          '--json', str(log)], capture_output=True, text=True)
@@ -117,7 +123,7 @@ for mode in modes:
                       f'v1 snapshot conservative bound {bound} bytes including newline')
         elif mode in ('nonappend', 'unsupported-null', 'unsupported-type', 'getfl-error',
                        'nonappend-after-init', 'fstat-error', 'flags-max', 'format-empty',
-                       'path-short', 'path-max', 'path-error'):
+                       'path-short', 'path-max', 'path-error', 'server-import-getfl-error'):
             assert not snapshots, (mode, snapshots[:1])
             assert len(records) == (17 if mode == 'nonappend-after-init' else 0), mode
             assert len(malformed) == (0 if mode == 'unsupported-null' else 1), (mode, malformed)
@@ -138,6 +144,7 @@ for mode in modes:
             'fstat-error': ('fstat', {'errno': errno.EBADF}),
             'unsupported-type': ('type', {}), 'getfl-error': ('getfl', {'errno': errno.EIO}),
             'nonappend': ('missing-append', {}), 'nonappend-after-init': ('missing-append', {}),
+            'server-import-getfl-error': ('missing-append', {}),
             'path-short': ('missing-append', {}), 'path-max': ('missing-append', {}),
             'path-error': ('missing-append', {}),
             'flags-max': ('missing-append', {'flags': 2147483647 & ~os.O_APPEND}),

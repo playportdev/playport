@@ -268,7 +268,8 @@ static void test_rejected_sink(void)
    assert(stat_calls == (strcmp(mode, "format-empty") ? 1 : 0));
    assert(flag_calls == ((!strcmp(mode, "nonappend") || after_init ||
                           !strcmp(mode, "getfl-error") || !strcmp(mode, "flags-max") ||
-                          !strncmp(mode, "path-", 5)) ? 1 : 0));
+                          !strncmp(mode, "path-", 5) ||
+                          !strcmp(mode, "server-import-getfl-error")) ? 1 : 0));
 }
 
 /* Free-running competition, with a pinned PRNG determining bounded burst
@@ -339,25 +340,32 @@ int main(int argc, char **argv)
       struct stat a, b;
       assert(!fstat(imported, &a) && !fstat(STDERR_FILENO, &b));
       assert(a.st_dev == b.st_dev && a.st_ino == b.st_ino);
+      int before = __real_fcntl64(imported, F_GETFL);
+      assert(before >= 0 && (before & O_APPEND) && !(before & O_NONBLOCK));
       imported_fd = imported;
       test_server_import(imported);
       int current = __real_fcntl64(STDERR_FILENO, F_GETFL);
-      printf("server-import: shared fd2 append=%d nonblock=%d\n",
-             !!(current & O_APPEND), !!(current & O_NONBLOCK));
+      assert(current >= 0 && current == __real_fcntl64(imported, F_GETFL));
+      printf("server-import: shared fd2 append=%d nonblock=%d setfl_calls=%d\n",
+             !!(current & O_APPEND), !!(current & O_NONBLOCK), server_sets);
       fflush(stdout);
-      assert(current & O_APPEND);
+      /* Busy-polling needs NONBLOCK even when GETFL fails. The legacy
+       * fallback then clears unknown flags; the emitter must reject that sink. */
+      assert(current & O_NONBLOCK);
       bool query_failed = !strcmp(mode, "server-import-getfl-error");
-      assert(!!(current & O_NONBLOCK) == !query_failed);
-      assert(server_sets == !query_failed);
+      assert(!!(current & O_APPEND) == !query_failed);
+      assert(server_sets == 1);
       imported_fd = -1;
       assert(!close(imported) && !close(sockets[0]) && !close(sockets[1]));
+      /* The identity check above is setup, not an emitter stat query. */
+      stat_calls = 0;
    }
 #endif
    if (!strcmp(mode, "nonappend") || !strcmp(mode, "nonappend-after-init") ||
        !strcmp(mode, "unsupported-null") || !strcmp(mode, "unsupported-type") ||
        !strcmp(mode, "getfl-error") || !strcmp(mode, "fstat-error") ||
        !strcmp(mode, "flags-max") || !strcmp(mode, "format-empty") ||
-       !strncmp(mode, "path-", 5)) {
+       !strncmp(mode, "path-", 5) || !strcmp(mode, "server-import-getfl-error")) {
       if (!strcmp(mode, "nonappend"))
          assert(!(__real_fcntl64(STDERR_FILENO, F_GETFL) & O_APPEND));
       if (!strcmp(mode, "unsupported-null")) {
