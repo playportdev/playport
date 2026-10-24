@@ -400,7 +400,11 @@ off by default.
 the removed plan `2026-10-22-kk-proton-parity.md` (this section is its outcome)
 ([PLA-431](https://linear.app/playportdev/issue/PLA-431);
 [decision 0160](../decisions/0160-kk-proton-parity-stays-opt-in.md)). Closed by the
-owner on 2026-10-24 on `dev/kk-proton-parity`, **unmerged/unpushed at close-out**.
+owner on 2026-10-24 on `dev/kk-proton-parity`. **Merged into local `main` as
+`e26fb4c` (`--no-ff`) after `pp test --quick` passed (761 tests); the push to
+`origin` was skipped because the workstation's GitHub credentials lack write
+access, so `main` is ahead of `origin/main` by the whole backlog (617 commits at
+merge time). Re-push when the credentials are fixed.**
 Goal: close the useful Vulkan-extension gaps used by DXVK and vkd3d-proton,
 behind default-off flags, with host and phone evidence before defaults change.
 The delivered work is done; the owner deferred descriptor buffers for
