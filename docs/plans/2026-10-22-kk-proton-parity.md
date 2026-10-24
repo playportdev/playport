@@ -208,6 +208,13 @@ compared to these elapsed units. **A0: covered native looks small / total NOT
 DECISIVE; A2 gate not satisfied.** Provisional relevance screen **167 µs
 recoverable CPU/presented frame (1% of 16.7 ms)** is not owner-agreed; these
 denominators/coverage cannot settle it. No compatibility verdict; supervisor files.
+- **A0 review ACCEPT (2026-10-24), one P2:** `e5a6e65` accepted as a bounded
+  observation/decision input (reviewer reran both parser modes with byte-identical
+  output, recounted 4/64/14,122/0 rows, re-derived the arithmetic, rehashed all 57
+  run files). **P2:** `pp perf` reports hitches `0/0/0`, but with the HUD off
+  per-frame hitch detection is unavailable, so that is **not** evidence of
+  hitch-free play; the supervisor corrected the plan and the Hollow Knight comment.
+  Report `.work/agent-notes/kk-parity/reports/a0-human-review.md`.
 - **Branch now:** `dev/kk-proton-parity`, recording follows `be6fdc7`,
 unmerged/unpushed. **Next in the queue: owner-approved A0 frame-aligned
 thread-CPU and perturbation measurement, including the D3D12 selected-Simple
