@@ -47,7 +47,11 @@ static void native(void *addr, int r, int w)
     assert(faults(addr, WRITE) == !w);
     assert(faults(addr, EXEC)); /* never native EXEC, whatever the logical bits */
 }
+#if defined(__aarch64__)
+static const unsigned char ret_insn[] = {0xc0, 0x03, 0x5f, 0xd6}; /* AArch64 ret */
+#else
 static const unsigned char ret_insn[] = {0xc3}; /* x86-64 ret */
+#endif
 /* Native permissions one Win32 protection gives a whole host page. */
 static void expect_native(void *addr, ULONG prot)
 {
@@ -126,6 +130,7 @@ int main(int argc, char **argv)
     void *rx = mmap(NULL, 0x4000, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     assert(rx != MAP_FAILED);
     memcpy(rx, ret_insn, sizeof(ret_insn));
+    __builtin___clear_cache(rx, (char *)rx + sizeof(ret_insn));
     assert(!mprotect(rx, 0x4000, PROT_READ | PROT_EXEC));
     assert(!faults(rx, EXEC) && faults(rx, WRITE));
     assert(!munmap(rx, 0x4000));

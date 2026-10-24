@@ -22,6 +22,16 @@ version=$(pin rust)
 
 export RUSTUP_HOME=$ROOT/rustup CARGO_HOME=$ROOT/cargo
 mkdir -p "$ROOT"
+if [ "$(uname -s)" = Darwin ]; then
+    # Use the installed native rustup proxy; retain a private pinned toolchain
+    # and cargo home just as on Linux. Do not download a Linux bootstrap binary.
+    proxy=$(command -v rustup) || { echo "install rustup before building on macOS" >&2; exit 1; }
+    mkdir -p "$CARGO_HOME/bin"
+    for tool in rustup rustc cargo rustdoc; do ln -sf "$proxy" "$CARGO_HOME/bin/$tool"; done
+    "$CARGO_HOME/bin/rustup" toolchain install --profile minimal "$version" --target "$TARGET"
+    "$CARGO_HOME/bin/rustup" default "$version"
+    exit 0
+fi
 init=$ROOT/rustup-init-$RUSTUP_VERSION
 if ! echo "$RUSTUP_SHA256  $init" | sha256sum -c --status 2>/dev/null; then
     part=$(mktemp "$ROOT/rustup-init.XXXXXX")

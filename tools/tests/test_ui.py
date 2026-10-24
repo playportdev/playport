@@ -150,6 +150,17 @@ class UiEnvTest(unittest.TestCase):
         self.assertEqual(m.in_game(["play:app-367520", "pad:a"], 1), 0)
         self.assertTrue(m.after_play(["play:app-367520", "pad:a"]))
 
+    def test_touch_controls_run_during_play(self):
+        m = load()
+        for action in ("touch:A", "touch:A+ls-left@500", "touch:RT+Back@10000"):
+            self.assertTrue(m.ACTION_RE.match(action), action)
+        for action in ("touch:", "touch:A@0", "touch:A@10001", "touch:A++B", "touch:nope"):
+            self.assertFalse(m.ACTION_RE.match(action), action)
+        actions = ["play:app-367520", "wait:10", "touch:A+ls-left@500", "menu:open", "menu:quit"]
+        self.assertEqual(m.in_game(actions, 1), 4)
+        self.assertIsNone(m.pad_after_play(actions))
+        m.parse(["--action", actions[0], "--action", actions[1], "--action", actions[2]])
+
     def test_pad_after_play_is_refused_and_settings_arguments_may_be_a_list(self):
         m = load()
         self.assertEqual(m.pad_after_play(["play:app-367520", "wait:10", "pad:a"]), "pad:a")

@@ -823,7 +823,8 @@ class RustNotices(unittest.TestCase):
 
     def test_cargo_resolution_uses_offline_locked_pinned_target_features(self):
         def run(command, **kwargs):
-            self.assertEqual(kwargs["env"]["RUSTUP_TOOLCHAIN"], "1.98.1-x86_64-unknown-linux-gnu")
+            self.assertEqual(kwargs["env"]["RUSTUP_TOOLCHAIN"], "1.98.1")
+            self.assertEqual(kwargs["env"]["RUSTUP_AUTO_INSTALL"], "0")
             if command[0].endswith("rustc"):
                 return subprocess.CompletedProcess(command, 0, "rustc 1.98.1 (fixture)\n", "")
             self.assertIn("--locked", command)

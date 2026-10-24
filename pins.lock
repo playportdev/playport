@@ -65,7 +65,7 @@ freetype     VER-2-14-3                                https://github.com/freety
 llvm-project llvmorg-15.0.7                            https://github.com/llvm/llvm-project.git      -
 # the Abseil release gbe's protobuf (third-party/deps/common) names in cmake/dependencies.cmake
 abseil-cpp   20250512.1                                https://github.com/abseil/abseil-cpp.git      -
-xtool        1.20.1                                    https://github.com/xtool-org/xtool.git        -
+xtool        1.23.0                                    https://github.com/xtool-org/xtool.git        -
 #
 # A prebuilt release asset the app embeds, fetched by tag; its sha256 is in
 # build/stages/stikjit.sh.

@@ -100,15 +100,17 @@ stage_ios() {
     local cc="'--target=$TARGET', '-isysroot', '$IOSSDK', '-ffile-prefix-map=$ROOT/=', '-ffile-prefix-map=$DARWIN_SDK=darwin-sdk'"
     # C++ takes the SDK's libc++ headers, not the host's (stages/dxmt-base.sh, PLA-5).
     local cxx="'-stdlib++-isystem', '$IOSSDK/usr/include/c++/v1'"
-    local ld="'--target=$TARGET', '-isysroot', '$IOSSDK', '-fuse-ld=lld'"
+    local linker=lld
+    [ "$(uname -s)" != Darwin ] || linker=$LD64
+    local ld="'--target=$TARGET', '-isysroot', '$IOSSDK', '-fuse-ld=$linker'"
     cat > "$ROOT/ios.cross" <<EOF
 [binaries]
 c = ['clang', $cc]
 cpp = ['clang++', $cc, $cxx]
 objc = ['clang', $cc]
-c_ld = 'lld'
-cpp_ld = 'lld'
-objc_ld = 'lld'
+c_ld = '$linker'
+cpp_ld = '$linker'
+objc_ld = '$linker'
 ar = 'llvm-ar'
 strip = 'llvm-strip'
 pkg-config = 'false'

@@ -30,6 +30,7 @@ import SwiftUI
 /// guest's from Play on (TitleLaunch.begin), so this screen takes no presses.
 /// A step that fails shows on LaunchFailureView once the launch has ended.
 struct LaunchScreen: View {
+    @AppStorage("touchGamepadEnabled") private var touchGamepad = true
     @ObservedObject private var launch = TitleLaunch.shared
     @ObservedObject private var setup = SetupState.shared
     @ObservedObject private var router = PadRouter.shared
@@ -96,7 +97,7 @@ struct LaunchScreen: View {
 extension LaunchScreen {
     /// No controller (until one connects) and Steam signed out.
     private var notes: [String] {
-        setup.launchNotes.filter { router.controller == nil || $0 != SetupChecklist.noController }
+        setup.launchNotes.filter { (!touchGamepad && router.controller == nil) || $0 != SetupChecklist.noController }
     }
 }
 
@@ -258,7 +259,7 @@ struct LaunchBar: View {
 struct LaunchTip: View {
     var body: some View {
         HStack(spacing: 6) {
-            Text("Tip: hold")
+            Text("Tip: tap ☰ or hold")
             Text("⌂").font(.system(size: 11, weight: .bold)).foregroundStyle(PP.background)
                 .padding(.horizontal, 5).frame(minWidth: 20, minHeight: 20).background(PP.text, in: Capsule())
             Text("on your controller for the Playport menu")

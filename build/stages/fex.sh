@@ -66,6 +66,12 @@ MAP="-ffile-prefix-map=$F=fex -ffile-prefix-map=$M=llvm-mingw"
 # The epoch is in the flags too, so objects built before it are compiled again.
 export SOURCE_DATE_EPOCH=$(git -C "$F" log -1 --format=%ct "$PIN")
 MAP="$MAP -DPLAYPORT_SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH"
+# The native CPU probe reads Linux /proc; these DLLs target the phone.
+# The app's iOS 26 device baseline supports LSE. Keep native backpatch locks on CASAL:
+# generic ARMv8 emits STLXR into the RX pool, whose Mach store path cannot
+# preserve an exclusive monitor across exception delivery.
+host_tune=()
+[ "$(uname -s)" != Darwin ] || host_tune=(-DTUNE_CPU=none -DTUNE_ARCH=armv8-a+lse)
 for mode in arm64ec wow64; do
     target=arm64ec; dllname=arm64ecfex; machine=ARM64EC; ios_flags=-DFEX_IOS_HOST=1
     # The WoW64 module runs on the iOS host too (fex 0016: JIT pool write
@@ -90,7 +96,7 @@ cmake -S "$F" -B "$F/build-$mode" -G Ninja \
     -DCMAKE_ASM_FLAGS="$ios_flags" \
     -DCMAKE_EXE_LINKER_FLAGS="-fuse-ld=lld" -DCMAKE_SHARED_LINKER_FLAGS="-fuse-ld=lld -Wl,--no-insert-timestamp" \
     -DFEX_IOS_HOST_BUILD=ON -DENABLE_LTO=FALSE -DCMAKE_BUILD_TYPE=Release \
-    -DBUILD_TESTING=OFF -DBUILD_FEXCONFIG=OFF \
+    -DBUILD_TESTING=OFF -DBUILD_FEXCONFIG=OFF "${host_tune[@]}" \
     > "$ROOT/fex-$mode-configure.log"
 # Build the module only: the aarch64 configuration also defines host tools.
 cmake --build "$F/build-$mode" --target "$dllname" -j "$JOBS" > "$ROOT/fex-$mode-build.log"

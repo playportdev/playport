@@ -15,7 +15,7 @@ FEATURES = "ring,tcp,core_device,core_device_proxy,tunnel_tcp_stack,rsd"
 def resolve(src, rust, version, cache=None):
     home = rust / "cargo"
     env = dict(os.environ, CARGO_HOME=str(cache or home), RUSTUP_HOME=str(rust / "rustup"),
-               RUSTUP_TOOLCHAIN=f"{version}-x86_64-unknown-linux-gnu",
+               RUSTUP_TOOLCHAIN=version, RUSTUP_AUTO_INSTALL="0",
                PATH=str(home / "bin") + os.pathsep + os.environ["PATH"])
     cargo = home / "bin/cargo"
 

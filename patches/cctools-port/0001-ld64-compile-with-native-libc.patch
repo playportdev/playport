@@ -1,0 +1,44 @@
+From daefa480262cbc7a738fd7f2391fd9f20f76eb9f Mon Sep 17 00:00:00 2001
+From: Playport contributors <contributors@example.invalid>
+Date: Fri, 23 Oct 2026 17:09:17 +0300
+Subject: [PATCH] ld64: compile with native libc++
+
+Include the declaration of std::free directly and use vector data instead
+of a libstdc++-specific iterator member.
+
+Class: build-fix
+Evidence: docs/evidence/2026-10-23-native-macos-host.md
+Offered-upstream: no; pending native macOS build validation
+---
+ cctools/ld64/src/ld/parsers/generic_dylib_file.cpp | 1 +
+ cctools/ld64/src/ld/passes/order.cpp               | 2 +-
+ 2 files changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/cctools/ld64/src/ld/parsers/generic_dylib_file.cpp b/cctools/ld64/src/ld/parsers/generic_dylib_file.cpp
+index 4cdb110..816b507 100644
+--- a/cctools/ld64/src/ld/parsers/generic_dylib_file.cpp
++++ b/cctools/ld64/src/ld/parsers/generic_dylib_file.cpp
+@@ -26,6 +26,7 @@
+ #include <sys/stat.h>
+ 
+ #include "generic_dylib_file.hpp"
++#include <cstdlib>
+ #include <unordered_map>
+ #include <unordered_set>
+ 
+diff --git a/cctools/ld64/src/ld/passes/order.cpp b/cctools/ld64/src/ld/passes/order.cpp
+index c4d4c66..ad422e2 100644
+--- a/cctools/ld64/src/ld/passes/order.cpp
++++ b/cctools/ld64/src/ld/passes/order.cpp
+@@ -694,7 +694,7 @@ void Layout::doPass()
+ 			std::sort(sect->atoms.begin(), aliasIt, _comparer);
+ 
+ 			if ( aliasIt != sect->atoms.end() ) {
+-				AliasComparer aliasCmp(_comparer, _state, std::span(aliasIt.base(), sect->atoms.end().base()));
++				AliasComparer aliasCmp(_comparer, _state, std::span(sect->atoms.data() + (aliasIt - sect->atoms.begin()), sect->atoms.data() + sect->atoms.size()));
+ 				// sort aliases relatively to each other
+ 				std::sort(aliasIt, sect->atoms.end(), aliasCmp);
+ 				// use inplace merge to merge sorted ranges of regular and alias atoms
+-- 
+2.54.0 (Apple Git-157)
+

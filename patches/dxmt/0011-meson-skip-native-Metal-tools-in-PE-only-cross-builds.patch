@@ -1,0 +1,35 @@
+From c0a0b3f0b2a2eb0a09ce28e6a72c51722e5c8e9c Mon Sep 17 00:00:00 2001
+From: Playport contributors <contributors@example.invalid>
+Date: Fri, 23 Oct 2026 20:10:12 +0300
+Subject: [PATCH] meson: skip native Metal tools in PE-only cross builds
+
+The iOS shader converter is built separately. Finding Xcode on the host
+must not add native macOS airconv targets to Windows PE-only builds.
+
+Class: build-fix
+Evidence: docs/evidence/2026-10-23-native-macos-host.md
+Offered-upstream: no; pending native macOS build verification
+---
+ meson.build | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/meson.build b/meson.build
+index 3728101..2f3b2ac 100644
+--- a/meson.build
++++ b/meson.build
+@@ -122,7 +122,11 @@ else
+   wrc_generator = generator(wrc, output : [ '@BASENAME@_ignored.h' ], arguments : [ '@OUTPUT@' ] )
+ endif
+ 
+-xcrun = find_program('xcrun', required : false)
++if dxmt_crossbuild and not get_option('build_airconv_for_windows')
++  xcrun = disabler()
++else
++  xcrun = find_program('xcrun', required : false)
++endif
+ 
+ if xcrun.found()
+ metalir_generator = generator(xcrun,
+-- 
+2.54.0 (Apple Git-157)
+

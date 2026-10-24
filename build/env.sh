@@ -15,7 +15,7 @@
 #                   (docs/BUILDING.md, "llvm-mingw")
 #   DARWIN_SDK      xtool's darwin SDK bundle (iPhoneOS26.5.sdk, MacOSX26.5.sdk)
 #   LD64            Apple ld64-956.6 built for Linux (build/toolchain/ld64.sh)
-#   XTOOL           xtool 1.20.1 with build/toolchain/xtool-1.20.1-increased-memory-limit.diff
+#   XTOOL           the pins.lock xtool with build/toolchain/xtool-1.20.1-increased-memory-limit.diff
 #   RUST_ROOT       the pins.lock rust release with the aarch64-apple-ios std, installed
 #                   by build/toolchain/rust.sh (RUST_ROOT/rustup, RUST_ROOT/cargo)
 #
@@ -38,10 +38,15 @@ if [ -f "$_inputs_local" ]; then
     unset _env_llvm _env_sdk _env_sock
 fi
 unset _inputs_local
+[ "$(uname -s)" != Darwin ] || . "$PLAYPORT_REPO/build/macos-env.sh"
 : "${LLVM_MINGW:=}" "${DARWIN_SDK:=}"
 : "${LD64:=$PLAYPORT_BUILD/inputs/apple-linker/prefix/bin/arm64-apple-darwin-ld}"
 : "${XTOOL:=$PLAYPORT_BUILD/inputs/xtool-src/.build/release/xtool}"
 : "${RUST_ROOT:=$PLAYPORT_BUILD/inputs/rust}"
 IOSSDK=$DARWIN_SDK/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.5.sdk
 MACSDK=$DARWIN_SDK/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk
+if [ "$(uname -s)" = Darwin ]; then
+    IOSSDK=$(DEVELOPER_DIR="$DARWIN_SDK" xcrun --sdk iphoneos --show-sdk-path)
+    MACSDK=$(DEVELOPER_DIR="$DARWIN_SDK" xcrun --sdk macosx --show-sdk-path)
+fi
 export PLAYPORT_BUILD PLAYPORT_DEVICE_DIR LLVM_MINGW DARWIN_SDK LD64 XTOOL RUST_ROOT

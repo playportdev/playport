@@ -93,7 +93,7 @@ C
     } > "$out/plugins.c"
     # The flags of Madeira's compile_unixlib (build/ntdll-unix/build.sh), with
     # GStreamer's headers; the tree and the SDK are mapped out of the object.
-    cc=(/usr/bin/clang --target=arm64-apple-ios17.0 -isysroot "$IOSSDK"
+    cc=("${HOST_CLANG:-/usr/bin/clang}" --target=arm64-apple-ios17.0 -isysroot "$IOSSDK"
         -O2 -fPIC -fvisibility=hidden -fno-stack-protector -fno-strict-aliasing
         -Wno-implicit-function-declaration -Wno-int-conversion -Wno-unused-command-line-argument
         "-ffile-prefix-map=$root=unix" "-ffile-prefix-map=$DARWIN_SDK=darwin-sdk"
@@ -117,10 +117,11 @@ C
     # references are by name, so it stays global (the app's other Rust, idevice's
     # FFI, keeps its copy private to its own object: build/stages/idevice.sh;
     # StikJIT's is inside its own framework).
-    "$LD64" -r -d -arch arm64 -platform_version ios 17.0 26.5 -syslibroot "$IOSSDK" -u _rust_eh_personality \
+    local linker=${PRELINK_LD64:-$LD64}
+    "$linker" -r -d -arch arm64 -platform_version ios 17.0 26.5 -syslibroot "$IOSSDK" -u _rust_eh_personality \
         -o "$obj/prelinked.o" "$obj"/*.o "$GST/libGStreamer.a"
     # -S: no debug map, whose entries would name each member by its path on this machine.
-    "$LD64" -r -S -arch arm64 -platform_version ios 17.0 26.5 -syslibroot "$IOSSDK" \
+    "$linker" -r -S -arch arm64 -platform_version ios 17.0 26.5 -syslibroot "$IOSSDK" \
         -exported_symbol _winegstreamer_unix_call_funcs -exported_symbol _rust_eh_personality \
         -o "$obj/winegstreamer_unix.o" "$obj/prelinked.o"
     rm "$obj/prelinked.o"

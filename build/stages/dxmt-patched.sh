@@ -73,10 +73,12 @@ stage_unix() {
 }
 
 stage_pe() {
-    if command -v xcrun metal metallib; then echo "an Apple tool is on PATH"; return 1; fi
+    if [ "$(uname -s)" != Darwin ] && command -v xcrun metal metallib; then
+        echo "an Apple tool is on PATH"; return 1
+    fi
     local arch tree
     # upstream dropped its native file (build-osx.txt) with the same content
-    printf "[binaries]\nc = 'clang'\ncpp = 'clang++'\n" > "$ROOT/native-clang.txt"
+    printf "[binaries]\nc = '%s'\ncpp = '%s'\n" "${HOST_CLANG:-clang}" "${HOST_CLANGXX:-clang++}" > "$ROOT/native-clang.txt"
     for arch in aarch64 arm64ec; do
         tree=$([ $arch = aarch64 ] && echo build-macos || echo build-arm64ec)
         # Wine's layout for -Dwine_build_path: PE libraries plus build-tools/tools

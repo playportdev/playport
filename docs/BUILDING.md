@@ -1,12 +1,52 @@
 # Build reference
 
-Playport builds on one x86-64 Linux workstation with no Mac and no Apple
-tools, from `pins.lock`, `patches/` and a few cached inputs, into one signed
-IPA. Running it is in [AGENTS.md](../AGENTS.md#build). This page is what the
+Playport builds from `pins.lock`, `patches/` and a few cached inputs into a
+signed IPA. The Linux path needs no Mac or Apple tools; this fork also builds
+natively on macOS using Xcode's SDKs. Running it is in [AGENTS.md](../AGENTS.md#build). This page is what the
 build needs and what is not obvious about it; each stage script's header
 says what the stage does, and `pp verify --help` lists the IPA checks.
 
 ## Prerequisites
+
+### Native macOS host
+
+The same `pp setup`, `pp check`, `pp build` and `pp install` commands are used
+on macOS. Xcode supplies the iPhoneOS/macOS SDKs and Apple linker; the SDK
+version is discovered with `xcrun`, rather than requiring the Linux SDK bundle's
+26.5 directory names. The inputs stage also builds the pinned classic ld64 for
+GStreamer archive prelinking: current Xcode ld removed the required `-d` flag.
+The final app link uses Xcode. This extends upstream's analysis-only Mac workflow
+([0031](decisions/0031-a-mac-for-analysis-only.md)). Linux keeps its existing
+cross-toolchain, slim SDK and netmuxd setup.
+
+Install the native host tools with Homebrew (no shell profile changes needed):
+
+```sh
+brew install bash coreutils llvm lld gnu-sed gnu-tar findutils make gawk \
+  bison flex gettext cmake ninja p7zip flock jq pkgconf premake \
+  libclc spirv-llvm-translator glslang spirv-tools
+```
+
+Use a Python environment with `pefile`, `meson`, `mako`, `pyyaml`, `packaging`,
+`jinja2`, `ply` and `pymobiledevice3` on PATH, and install native `rustup`.
+The build installs the pinned Rust and iOS std into its own build area.
+Keep this environment and scratch under `.work/` when preparing it locally.
+
+Use `llvm-mingw-20260922-ucrt-macos-universal.tar.xz` (sha256
+`52e5f5a7b131021d0c39a37a38fa380a1da7885cd04bd61afd0cd4ecfb8bc1f3`),
+and apply the **same arm64ec CRT preparation below**. Record its location with
+`pp setup --llvm-mingw DIR`. The native premake is used for Steam API DLLs;
+the upstream bundled premake executable is Linux-only.
+
+The build compiles xtool 1.23.0 with the existing increased-memory-limit patch
+for signing. This pin includes the upstream Apple login fixes (#337/#380);
+Apple ID users must log in again after upgrading. Sign in with
+`$PLAYPORT_BUILD/inputs/xtool-src/.build/release/xtool auth login` before installing.
+On Mac the phone uses Apple's system usbmuxd and USB; no netmuxd/systemd service
+is needed. USB selection prevents a cabled phone's Wi-Fi record from being
+counted as a second phone. The app is upgraded in place, as on Linux.
+
+### Linux host
 
 **Host tools.** The `inputs` stage checks for `clang`, `clang++`, `ld64.lld`,
 `llvm-ar`, `llvm-nm`, `llvm-objdump`, `llvm-objcopy`, `llvm-lipo` (host LLVM
@@ -30,7 +70,7 @@ socket, in `$PLAYPORT_BUILD/inputs.local` (gitignored; `build/env.sh` and
 | `LLVM_MINGW` | llvm-mingw 20260922 UCRT, with its aarch64 CRT rebuilt for arm64ec | below |
 | `DARWIN_SDK` | xtool's SDK bundle (`iPhoneOS26.5.sdk`, `MacOSX26.5.sdk`) | `xtool sdk install <Xcode 26.6 .xip> --slim` |
 | `LD64` | Apple ld64-956.6 for Linux | `build/toolchain/ld64.sh` ("Linking") |
-| `XTOOL` | xtool 1.20.1 with the increased-memory-limit patch | `build/toolchain/xtool.sh` ("Signing") |
+| `XTOOL` | xtool 1.23.0 with the increased-memory-limit patch | `build/toolchain/xtool.sh` ("Signing") |
 | `RUST_ROOT` | the `pins.lock` `rust` release with the `aarch64-apple-ios` standard library, through rustup (`rustup-init` checked by sha256), with its crate cache | `build/toolchain/rust.sh` (the `idevice` stage) |
 
 Apple's Metal developer tools are not an input: the AIR helpers are
@@ -119,7 +159,10 @@ not a failure, and what must hold:
 - **fex.** `-stdlib=libc++` is mandatory (the `-gnu` default `-lstdc++` does
   not exist in llvm-mingw); the DLLs must read back as ARM64EC (`xtajit64`)
   and ARM64 (`xtajit`). Debug info is stripped. ARM64EC's build date is its
-  pin's commit time. Both define `FEX_IOS_HOST`; WoW64 links FEX's own CRT
+  pin's commit time. On macOS, CPU probing is disabled and the target is
+  ARMv8 with LSE (supported by the app's iOS 26 device baseline), so native
+  backpatch locks use CASAL instead of exclusive stores into the RX pool.
+  Both define `FEX_IOS_HOST`; WoW64 links FEX's own CRT
   (`-nostdlib`, as upstream), so `xtajit.dll` imports only `ntdll.dll` and
   `wow64.dll` (`pp verify` checks it: a CRT import loads `kernelbase.dll` into
   a WoW64 process before its NLS tables exist). The stage takes each

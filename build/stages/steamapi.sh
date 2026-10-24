@@ -61,7 +61,14 @@ stage_src() {
     git -C "$G" -c protocol.file.allow=always submodule update -q --init third-party/deps/common third-party/common/linux
     # A copy, so the chmod leaves the submodule clean (ensure_series checks the tree).
     mkdir -p "$ROOT/tools"
-    install -m 755 "$G/third-party/common/linux/premake/premake5" "$ROOT/tools/premake5"
+    if [ "$(uname -s)" = Darwin ]; then
+        # The pinned submodule ships an ELF executable. Use native premake on Mac.
+        local premake_bin
+        premake_bin=$(command -v premake5) || { echo "missing premake5 (brew install premake)" >&2; exit 1; }
+        install -m 755 "$premake_bin" "$ROOT/tools/premake5"
+    else
+        install -m 755 "$G/third-party/common/linux/premake/premake5" "$ROOT/tools/premake5"
+    fi
     echo "gbe $(git -C "$G" rev-parse HEAD) ($(series gbe | wc -l) patches on $PIN)"
     # The Abseil release the protobuf archive asks for.
     local want tag

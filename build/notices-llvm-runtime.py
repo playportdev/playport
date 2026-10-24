@@ -248,12 +248,18 @@ def verify(repo, source, llvm_mingw, out):
 
 
 def publish(stage, out):
-    """Linux atomic no-replace publication, including a racing empty directory."""
+    """Atomic no-replace publication, including a racing empty directory."""
     libc = ctypes.CDLL(None, use_errno=True)
-    rename = libc.renameat2
-    rename.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint)
+    if sys.platform == "darwin":
+        rename = libc.renamex_np
+        rename.argtypes = (ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint)
+        args = (os.fsencode(stage), os.fsencode(out), 4)  # RENAME_EXCL
+    else:
+        rename = libc.renameat2
+        rename.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint)
+        args = (-100, os.fsencode(stage), -100, os.fsencode(out), 1)  # RENAME_NOREPLACE
     rename.restype = ctypes.c_int
-    if rename(-100, os.fsencode(stage), -100, os.fsencode(out), 1):
+    if rename(*args):
         error = ctypes.get_errno()
         raise OSError(error, os.strerror(error))
 

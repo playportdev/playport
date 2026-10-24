@@ -32,7 +32,24 @@ const SECTION_IMAGE_INFORMATION *ios_cur_image_info(void)
  * Wine's is_wow64(), including the WINE_IOS/non-iOS branches. */
 #include "owner_api.h"
 
-static pthread_barrier_t barrier;
+/* macOS has mutexes and condition variables, but no pthread barriers. */
+static pthread_mutex_t barrier_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t barrier_cond = PTHREAD_COND_INITIALIZER;
+static unsigned arrived, generation;
+
+static void rendezvous(void)
+{
+    assert(!pthread_mutex_lock(&barrier_mutex));
+    unsigned before = generation;
+    if (++arrived == 3) {
+        arrived = 0;
+        generation++;
+        assert(!pthread_cond_broadcast(&barrier_cond));
+    } else {
+        while (before == generation) assert(!pthread_cond_wait(&barrier_cond, &barrier_mutex));
+    }
+    assert(!pthread_mutex_unlock(&barrier_mutex));
+}
 static int owners[2];
 
 static void *child(void *arg)
@@ -54,8 +71,8 @@ static void *child(void *arg)
     ios_main_image_info_slot()->TransferAddress = owner;
     *ios_main_module_slot() = owner;
     assert(is_wow64());
-    pthread_barrier_wait(&barrier);
-    pthread_barrier_wait(&barrier);
+    rendezvous();
+    rendezvous();
     assert(ios_cur_image_info()->Machine == 0x14c);
     assert(ios_cur_image_info()->TransferAddress == owner);
     assert(*ios_main_module_slot() == owner);
@@ -75,19 +92,19 @@ int main(void)
     assert(ios_main_image_info_slot() == &main_image_info);
     assert(ios_main_module_slot() == &main_module);
     assert(!is_wow64());
-    assert(!pthread_barrier_init(&barrier, NULL, 3));
     for (int i = 0; i < 2; i++) assert(!pthread_create(&threads[i], NULL, child, &owners[i]));
-    pthread_barrier_wait(&barrier);
+    rendezvous();
     /* Two i386 startups must not flip an ARM64EC session's identity. */
     assert(!is_wow64());
     assert(main_image_info.Machine == 0x8664);
     assert(main_image_info.TransferAddress == (void *)(uintptr_t)0x140001000);
     assert(main_module == (void *)(uintptr_t)0x140000000);
     assert(!ios_startup_image_for_owner(&owners[0]));
-    pthread_barrier_wait(&barrier);
+    rendezvous();
     for (int i = 0; i < 2; i++) assert(!pthread_join(threads[i], NULL));
     assert(!is_wow64());
-    assert(!pthread_barrier_destroy(&barrier));
+    assert(!pthread_cond_destroy(&barrier_cond));
+    assert(!pthread_mutex_destroy(&barrier_mutex));
     puts("WoW64 owner: private slots, concurrent startups, NULL/wrong owner, nesting and failed-startup isolation");
     return 0;
 }

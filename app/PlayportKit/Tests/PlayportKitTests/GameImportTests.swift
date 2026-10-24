@@ -81,7 +81,9 @@ final class GameImportTests: XCTestCase {
         try file("big.bin", String(repeating: "z", count: 1000))
         let plan = try GameImporter.plan(.folder(src))
         do {
-            _ = try await importer(free: 1000).run(plan, folder: "Celeste")
+            var copy = importer(free: 1000)
+            copy.cloneFile = { _, _ in false } // Test the copying path even on APFS.
+            _ = try await copy.run(plan, folder: "Celeste")
             XCTFail("expected a refusal")
         } catch let ImportError.insufficientSpace(needed, available) {
             XCTAssertEqual(needed, 1050)
@@ -136,9 +138,16 @@ final class GameImportTests: XCTestCase {
         try file("Data/aux.dat")
         XCTAssertThrowsError(try GameImporter.plan(.folder(src))) { XCTAssertTrue("\($0)".contains("reserved"), "\($0)") }
         try FileManager.default.removeItem(at: src.appendingPathComponent("Data/aux.dat"))
+        #if os(macOS)
+        // A stored ZIP can express colliding names on case-insensitive APFS too.
+        let collision = root.appendingPathComponent("names.zip")
+        try Data(base64Encoded: "UEsDBBQAAAAAAAaEV10AAAAAAAAAAAAAAAAIAAAAZ2FtZS5leGVQSwMEFAAAAAAABoRXXQAAAAAAAAAAAAAAAAoAAABEYXRhL0EuYmluUEsDBBQAAAAAAAaEV10AAAAAAAAAAAAAAAAKAAAAZGF0YS9hLmJpblBLAQIUAxQAAAAAAAaEV10AAAAAAAAAAAAAAAAIAAAAAAAAAAAAAACAAQAAAABnYW1lLmV4ZVBLAQIUAxQAAAAAAAaEV10AAAAAAAAAAAAAAAAKAAAAAAAAAAAAAACAASYAAABEYXRhL0EuYmluUEsBAhQDFAAAAAAABoRXXQAAAAAAAAAAAAAAAAoAAAAAAAAAAAAAAIABTgAAAGRhdGEvYS5iaW5QSwUGAAAAAAMAAwCmAAAAdgAAAAAA")!.write(to: collision)
+        XCTAssertThrowsError(try GameImporter.plan(.zip(collision))) { XCTAssertTrue("\($0)".contains("case"), "\($0)") }
+        #else
         try file("Data/A.bin")
         try file("data/a.bin")
         XCTAssertThrowsError(try GameImporter.plan(.folder(src))) { XCTAssertTrue("\($0)".contains("case"), "\($0)") }
+        #endif
     }
 
     func testICloudPlaceholdersAskForADownload() throws {

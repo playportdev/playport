@@ -61,6 +61,9 @@ before playing. --dry-run prints UI_ACTIONS without accessing the phone:
                          its first one is the `first window` mark, --until mark:first window+S;
                          or a dialog it opens after it, decision 0076, --until mark:dialog shown+S)
                          while one is shown, else on the game
+  touch:A+ls-left@500     while playing: hold on-screen controls for 1–10000 ms (default 250).
+                         ABXY, LB/RB/LT/RT, L3/R3, Back/Start, up/down/left/right;
+                         ls-/rs-left/right/up/down move a stick. Requires the visible on-screen pad.
   menu:open              after a play: (the actions after it then run while the game runs): wait for
                          the game's first frame, then hold the controller's Home button 0.8 s through
                          HostIO's pad handling, which opens Playport's in-game menu over the paused
@@ -285,19 +288,21 @@ class EndOnTerm:
         return True
 
 
+TOUCH_CONTROL = r"(?i:[abxy]|[lr][bt3]|back|start|(?:[lr]s-)?(?:up|down|left|right))"
 ACTION_RE = re.compile((r"^(?:(?:install|pause-resume|queue|downloading):[0-9]+|install:gog-[0-9]+(?:@[0-9]+)?|install:epic-[A-Za-z0-9._-]+|(?:uninstall|verify|play):[a-z]+-[A-Za-z0-9 ._-]+"
                         r"|import:[A-Za-z0-9 ._()'+-]+(?:/[A-Za-z0-9 ._()'+-]+)*"
                        r"|hud:(?:on|off)|open:[a-z]+(?:-[A-Za-z0-9 ._-]+(?:#[a-z]+)?)?|open:settings#(?:accounts|steam|graphics|downloads|controllers|storage|setup|about|developer|account|jit|memory|diagnostics|pairing|probes|logs)|open:licences(?:#[a-z0-9 ._-]+)?|pad:(?:{b})(?:\+(?:{b}))*|set:[A-Za-z0-9._-]+=[^,]*"
                        r"|wait:[0-9]{1,3}|tap:(?:0(?:\.[0-9]+)?|1(?:\.0+)?):(?:0(?:\.[0-9]+)?|1(?:\.0+)?)|menu:(?:open|resume|screenshot|overlay|controller|quit)|web:(?:wait|close)|web:click:[A-Za-z0-9 ._-]+"
-                       r"|jit:(?:setup|pair|continue|open-settings|cancel|wait)|probe:settings-url-[0-9]|probe:helper-(?:(?:exit|kill)(?:-hold)?|report)|probe:relaunch|probe:native-auth|probe:pairing(?:-cancel|-use)?)$").replace("{b}", PAD_BUTTONS))
+                       r"|touch:{t}(?:\+{t})*(?:@(?:[1-9][0-9]{0,3}|10000))?"
+                       r"|jit:(?:setup|pair|continue|open-settings|cancel|wait)|probe:settings-url-[0-9]|probe:helper-(?:(?:exit|kill)(?:-hold)?|report)|probe:relaunch|probe:native-auth|probe:pairing(?:-cancel|-use)?)$").replace("{b}", PAD_BUTTONS).replace("{t}", TOUCH_CONTROL))
 
 
 def in_game(actions, start):
-    """How many actions from start act on the running game (UIDriver.inGame): wait:, tap:,
+    """How many actions from start act on the running game (UIDriver.inGame): wait:, tap:, touch:,
     menu: and web:, and pad: once a menu:open has opened the in-game menu."""
     n, menu = 0, False
     for x in actions[start:]:
-        if x.startswith(("wait:", "tap:", "menu:", "web:")) or (menu and x.startswith("pad:")):
+        if x.startswith(("wait:", "tap:", "touch:", "menu:", "web:")) or (menu and x.startswith("pad:")):
             menu = menu or x == "menu:open"
             n += 1
         else:
@@ -424,7 +429,7 @@ def band_of(timeline):
 def parse(argv=None):
     p = argparse.ArgumentParser(prog="pp ui", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--action", action="append", default=[], metavar="VERB:ARG",
-                   help="open:SCREEN|ID[#SECTION], pad:BUTTON[+BUTTON...], wait:S, menu:open|ROW, set:KEY=VALUE, hud:on|off, install:APP, pause-resume:APP, queue:APP, downloading:APP, import:PATH, uninstall:ID, "
+                   help="open:SCREEN|ID[#SECTION], pad:BUTTON[+BUTTON...], touch:CONTROL[+CONTROL...][@MS], wait:S, menu:open|ROW, set:KEY=VALUE, hud:on|off, install:APP, pause-resume:APP, queue:APP, downloading:APP, import:PATH, uninstall:ID, "
                         "verify:ID, play:ID, probe:helper-exit|kill|report, probe:relaunch, probe:pairing[-cancel|-use]; in order, before --settings/--verify/--play")
     p.add_argument("--settings", metavar="ID:JSON",
                    help='save these launch settings for the title first ({"frameLimit":30,"screen":"720",'
@@ -463,7 +468,7 @@ def parse(argv=None):
     for x in a.action:
         if not ACTION_RE.match(x) or (x.startswith("open:") and "-" not in x.split("#")[0]
                                       and x[5:].split("#")[0] not in SCREENS + ("licences", "black")):
-            p.error(f"{x!r} is not open:SCREEN|ID, pad:BUTTON[+BUTTON...], wait:S, menu:open|ROW, set:KEY=VALUE, hud:on|off, install:APP, pause-resume:APP, "
+            p.error(f"{x!r} is not open:SCREEN|ID, pad:BUTTON[+BUTTON...], touch:CONTROL[+CONTROL...][@MS], wait:S, menu:open|ROW, set:KEY=VALUE, hud:on|off, install:APP, pause-resume:APP, "
                     "queue:APP, downloading:APP, import:PATH, uninstall:ID, verify:ID, play:ID, probe:helper-exit|kill|report, probe:relaunch or probe:pairing[-cancel|-use]")
     seq = a.action + [f"play:{a.play}"] * bool(a.play)
     pad = pad_after_play(seq)

@@ -235,6 +235,15 @@ enum UIDriver {
                     }
                     try? await Task.sleep(for: .milliseconds(1500))
                     log("open \(id)")
+                case "touch":
+                    guard await TouchGamepadDriver.press(id) else {
+                        return finish("action=\(action) refused: on-screen pad inactive or invalid controls/duration")
+                    }
+                    log("touch \(id)")
+                    if let failure = await afterInGame(action, index: done + 1, next: actions[(i + 1)...]) {
+                        return finish(failure)
+                    }
+                    if AppRestart.shared.restarting { return }
                 case "pad":
                     // The presses a controller makes, into the same router (UI/Pad/PadRouter.swift),
                     // or the in-game menu's while it is up (HostIO feeds it the same presses).
@@ -480,7 +489,7 @@ enum UIDriver {
 
     /// An action that acts on the running game, which a play: does not wait past.
     static func inGame(_ action: String) -> Bool {
-        action.hasPrefix("menu:") || action.hasPrefix("wait:") || action.hasPrefix("web:") || action.hasPrefix("tap:")
+        action.hasPrefix("menu:") || action.hasPrefix("wait:") || action.hasPrefix("web:") || action.hasPrefix("tap:") || action.hasPrefix("touch:")
             || (action.hasPrefix("pad:") && InGameMenu.shared.isOpen)
     }
 

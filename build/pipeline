@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 # One command from pins to a verified IPA: pins.lock + patches/ + the cached
 # external inputs (build/lib.sh) in, one IPA and its artifacts.tsv out.
@@ -163,6 +163,15 @@ stage_inputs() {
     [ -f "$LLVM_MINGW/aarch64-w64-mingw32/lib/libgcc.a" ] ||
         { say "LLVM_MINGW has no arm64ec CRT rebuild (docs/BUILDING.md, llvm-mingw)"; missing=1; }
     [ -d "$IOSSDK" ] && [ -d "$MACSDK" ] || { say "missing SDKs under DARWIN_SDK: $DARWIN_SDK"; missing=1; }
+    [ "$missing" = 0 ] || exit 1
+    if [ "$(uname -s)" = Darwin ] && [ ! -x "$PRELINK_LD64" ]; then
+        [ "$PRELINK_LD64" = "$PLAYPORT_BUILD/inputs/apple-linker/prefix/bin/arm64-apple-darwin-ld" ] || {
+            say "missing PRELINK_LD64: $PRELINK_LD64"; exit 1;
+        }
+        say "building classic archive prelinker (build/toolchain/ld64.sh; log: $RUN/logs/ld64.log)"
+        bash "$HERE/toolchain/ld64.sh" > "$RUN/logs/ld64.log" 2>&1 || { say "archive prelinker build failed"; exit 1; }
+        [ -x "$PRELINK_LD64" ] || { say "missing PRELINK_LD64: $PRELINK_LD64"; exit 1; }
+    fi
     # ld64 and the patched xtool are built on demand into their default
     # places under $PLAYPORT_BUILD/inputs; an overridden path must exist.
     if [ ! -x "$LD64" ] && [ "$LD64" = "$PLAYPORT_BUILD/inputs/apple-linker/prefix/bin/arm64-apple-darwin-ld" ]; then
@@ -183,6 +192,7 @@ stage_inputs() {
     [ "$missing" = 0 ] || exit 1
     # The Swift frontend needs the host's clang resource headers inside the SDK.
     for d in /usr/lib/swift/lib/clang/*/include; do
+        [ "$(uname -s)" != Darwin ] || break   # Xcode already supplies its own headers.
         v=$(basename "$(dirname "$d")")
         inc=$DARWIN_SDK/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/$v/include
         [ -f "$inc/arm_neon.h" ] ||
@@ -440,7 +450,11 @@ parts() { local PARTS=1; digest_inputs "$1"; }
 digest_inputs() {
     local s=$1
     {
-        case $s in unix|pe|fex|dxmt|vulkan|steamapi|idevice) toolchain; files build/lib.sh ;; esac
+        case $s in unix|pe|fex|dxmt|vulkan|steamapi|idevice)
+            toolchain; files build/lib.sh
+            [ "$(uname -s)" != Darwin ] || files build/macos-env.sh
+            ;;
+        esac
         case $s in
         unix) pins madeira wine wine-port wine-valve freetype gstreamer; series_text madeira-unix wine-port wine-valve wine-unix
               files build/stages/unix.sh build/stages/unix-gaps.sh build/stages/gstreamer.sh ;;
@@ -478,6 +492,9 @@ toolchain() {
     echo "llvm-mingw $LLVM_MINGW $("$LLVM_MINGW/bin/clang" --version 2>/dev/null | head -1)"
     echo "clang $(clang --version 2>/dev/null | head -1)"
     echo "sdk $IOSSDK $MACSDK"
+    if [ "$(uname -s)" = Darwin ]; then
+        echo "host $(uname -m) $(premake5 --version 2>/dev/null | head -1)"
+    fi
 }
 pins() {
     local n k=""

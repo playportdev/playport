@@ -3,7 +3,7 @@
 An iOS app that runs x86-64 Windows games on a non-jailbroken iPhone. It is
 built on [willfaust/Madeira](https://github.com/willfaust/Madeira): Wine
 (ARM64EC), FEX-Emu and DXMT as one Mach process. Everything builds, signs and
-installs from one Linux workstation, with no Mac. This file covers how to
+installs from Linux or natively from macOS with Xcode's SDKs. This file covers how to
 work here: build, ship, test. Reference material is in `docs/`, listed at the
 end.
 

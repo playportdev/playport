@@ -8,9 +8,9 @@
  */
 #include <stdio.h>
 #include <string.h>
-#include <uchar.h>
+#include <stdint.h>
 
-typedef char16_t WCHAR;
+typedef uint_least16_t WCHAR;
 #include "../SessionRoot/command_line.h"
 
 static int failures;

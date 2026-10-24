@@ -118,13 +118,20 @@ static void inaccessible(void *addr, int execute)
     if (!child)
     {
         signal(SIGSEGV, SIG_DFL);
+        signal(SIGBUS, SIG_DFL);
         if (execute) ((void (*)(void))addr)();
         else *(volatile char *)addr = 1;
         _exit(0);
     }
     int status;
     assert(waitpid(child, &status, 0) == child);
-    assert(WIFSIGNALED(status) && WTERMSIG(status) == SIGSEGV);
+    assert(WIFSIGNALED(status) &&
+#ifdef __APPLE__
+           (WTERMSIG(status) == SIGSEGV || WTERMSIG(status) == SIGBUS)
+#else
+           WTERMSIG(status) == SIGSEGV
+#endif
+    );
 }
 #ifdef WOW64_VM_HELPERS_ONLY
 int vm_test_main(void)

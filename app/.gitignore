@@ -10,10 +10,14 @@ DerivedData/
 /xtool
 .bsp/
 
-# Staged by build/stages/stage-artifacts.py (recorded in artifacts.tsv, never committed)
+# Staged by build/stages/stage-artifacts.py (recorded in artifacts.tsv).
+# Only WinIOS's app-owned module map is tracked; upstream staged files are not.
 /Staged/
 /Sources/S1Probe/Runtime/
-/Sources/WinIOS/
+/Sources/WinIOS/*
+!/Sources/WinIOS/include/
+/Sources/WinIOS/include/*
+!/Sources/WinIOS/include/module.modulemap
 
 # The release variant's package, made by build/stages/stage-artifacts.py release
 /.release/
