@@ -137,14 +137,34 @@ marker-path confirmation). **Gate not passed, not failed — interrupted; the
 required full device gate is still unrun**, device emission unverified. No native
 banner/calibration/captures/poison observed; old absence stays unobserved, never
 zero. A0 justification/A2 remain gated. This recording chunk is host-only.
-- **Branch now:** `dev/kk-proton-parity`, recording follows `1c8534e`,
-unmerged/unpushed. **Next in the queue: retry the device gate, pending the owner
-handing back the phone and leaving it untouched for a few minutes**, with Playport
-kept visible in a fresh authorized session. No retry in this recording chunk.
-After it: interpret A0 (menu profile said descriptor cost ≈0.086 %/0.050 %
-of samples, INSUFFICIENT) and decide defer versus representative workload; A2–A4
-remain unstarted and gated. PLA-440 leftovers (release variant, marker-path app
-confirmation, abrupt-death gaps) are the independent alternative.
+- **A0 sink/append device gate met, bounded (2026-10-24):** supervisor's fresh
+single-lock retry, no reinstall, dev IPA
+`31430e9639275c6df96aa70c9905bd6f5f398dbd80b2d7d28355bbcfa50b1122`;
+DXVK `.work/ui-runs/descriptor-gate-retry-dxvk-20261024/` and D3D12
+`.work/ui-runs/descriptor-gate-retry-d3d12-20261024/`, both exit0,
+`ok:true, until_reached:true`, first frame +11.33/+13.56 s, until first-frame+10.
+[Phone evidence](../evidence/2026-10-24-descriptor-gate-phone.md) records this
+host-only analysis (no new device commands): whole raws have enabled/calibration/
+snapshot rows **4/64/1104** and **5/80/1610**, no malformed/poison records.
+Native device1 on each route has its banner, **16 calibration samples** and
+**24/26 complete 10-row captures**, yielding **23/25 strict intervals**; active
+DXVK/vkd3d clients add **23/24**. Both unchanged CLI modes return **2 (mixed)**,
+**46/49 usable, 0 rejected intervals**: native device2 on both routes and DXVK
+client device3 (also device1 on D3D12) have banners/calibration only, no captures
+or intervals. All observed captures complete/valid; every orderly final tail
+missing, later work unknown. Review's emission/smoke criteria met for native
+device1, not all streams/lifetimes; supersedes the interrupted attempt's unrun
+status above and the old Phone queue emission blocker below. Menu-only launch,
+no gameplay, performance, CPU attribution,
+savings/perturbation or descriptor-buffer benefit claim. A0 justification/A2
+remain gated; old native absence remains unobserved, never zero.
+- **Branch now:** `dev/kk-proton-parity`, recording follows `aa5736c`,
+unmerged/unpushed. **Next in the queue: A0 interpretation** (earlier menu profile
+said descriptor cost ≈0.086 %/0.050 % of samples, judged INSUFFICIENT), then
+decide defer versus owner-authorized representative workload; the emission gate
+does not waive that decision. A2–A4 remain unstarted and gated. No new phone
+session or A2 work in this recording chunk. PLA-440 leftovers (release variant,
+marker-path app confirmation, abrupt-death gaps) are the independent alternative.
 Model pair for this invocation, reconfirmed 2026-10-24: hard and easy both
 `openai-codex/gpt-6.1-sol:high` (one transient "usage limit reached" was retried
 successfully, not replaced by a fallback).
