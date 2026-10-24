@@ -1,17 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Device-initiated RP pairing: Apple's Bonjour advertises idevice's exact
-// identity/TXT/listener. Credentials and PIN stay in memory; JitSetup verifies
-// readiness before committing credentials to the this-device-only Keychain.
+// identity/TXT/listener. The helper generates and keeps credentials; only PIN,
+// public Bonjour records and an opaque candidate token reach this process.
 import Foundation
-import Relaunch
+import os
 import SwiftUI
 import UIKit
 
 private final class PairingSession: @unchecked Sendable {
-    let cancel = pairable_host_cancel_new()!
-    // Only the single worker queue accesses this buffer.
-    var data: Data?
-    deinit { pairable_host_cancel_free(cancel) }
+    let cancel = OSAllocatedUnfairLock(initialState: false)
 }
 
 @MainActor
@@ -22,16 +19,16 @@ final class OnDevicePairing: NSObject, ObservableObject, @preconcurrency NetServ
     @Published private(set) var code: String?
     @Published private(set) var hasNewPairing = false
     @Published private(set) var storedNewPairing = false
-    private(set) var pendingData: Data?
+    private(set) var pendingToken: String?
     private var attempt: PairingSession?
     private var service: NetService?
     private var background = UIBackgroundTaskIdentifier.invalid
     private var timeout: Task<Void, Never>?
-    private var completion: (@MainActor (Data?, String?) -> Void)?
+    private var completion: (@MainActor (String?, String?) -> Void)?
     let codeWindow = PairingCodeWindow()
 
-    func start(completion: (@MainActor (Data?, String?) -> Void)? = nil) {
-        guard !busy else { return }
+    func start(completion: (@MainActor (String?, String?) -> Void)? = nil) {
+        guard !busy, BuiltInJit.mayHandleCredentials else { return }
         guard #available(iOS 27.0, *) else { status = "On-device pairing needs iOS 27."; completion?(nil, status); return }
         guard !BuiltInJitStatus.shared.busy, !TitleLaunch.shared.running else {
             status = "Wait for the readiness check or game to finish."; completion?(nil, status); return
@@ -40,7 +37,7 @@ final class OnDevicePairing: NSObject, ObservableObject, @preconcurrency NetServ
         busy = true
         hasNewPairing = false
         storedNewPairing = false
-        pendingData = nil
+        discardCredentials()
         let pin = String(format: "%06d", Int.random(in: 0..<1_000_000))
         code = pin
         codeWindow.show(pin)
@@ -59,24 +56,15 @@ final class OnDevicePairing: NSObject, ObservableObject, @preconcurrency NetServ
             stop(reason: "No pairing completed within 90 seconds. Try again.")
         }
         BuiltInJitStatus.log("on-device pairing: starting Bonjour")
-        DispatchQueue.global(qos: .userInitiated).async {
-            let context = Unmanaged.passUnretained(run).toOpaque()
-            let error = pairable_host_accept_bonjour("Playport", pin, { identifier, txt, port, context in
-                guard let identifier, let txt, let context else { return }
-                let run = Unmanaged<PairingSession>.fromOpaque(context).takeUnretainedValue()
-                let name = String(cString: identifier)
-                let records = Data(String(cString: txt).utf8)
-                DispatchQueue.main.async {
-                    OnDevicePairing.shared.advertise(run: run, name: name, records: records, port: port)
+        Task {
+            do {
+                let token = try await BuiltInJit.pair(pin: pin, cancelled: run.cancel) { name, records, port in
+                    DispatchQueue.main.async {
+                        OnDevicePairing.shared.advertise(run: run, name: name, records: records, port: port)
+                    }
                 }
-            }, { bytes, len, context in
-                guard let bytes, let context else { return }
-                Unmanaged<PairingSession>.fromOpaque(context).takeUnretainedValue().data = Data(bytes: bytes, count: len)
-            }, context, run.cancel)
-            let failure = error.map { "Pairing failed [\($0.pointee.code)/\($0.pointee.sub_code)]." }
-            if let error { idevice_error_free(error) }
-            let data = run.data
-            DispatchQueue.main.async { OnDevicePairing.shared.finished(run: run, data: data, failure: failure) }
+                finished(run: run, token: token, failure: nil)
+            } catch { finished(run: run, token: nil, failure: error.localizedDescription) }
         }
     }
 
@@ -107,17 +95,16 @@ final class OnDevicePairing: NSObject, ObservableObject, @preconcurrency NetServ
     }
 
     func stop(reason: String = "Cancelled") {
-        pendingData = nil
-        hasNewPairing = false
+        discardCredentials()
         guard let run = attempt else { return }
         status = reason
         code = nil
         stopAdvertising()
         endBackgroundTime()
-        pairable_host_cancel_signal(run.cancel)
+        run.cancel.withLock { $0 = true }
     }
 
-    private func finished(run: PairingSession, data: Data?, failure: String?) {
+    private func finished(run: PairingSession, token: String?, failure: String?) {
         guard attempt === run else { return }
         attempt = nil
         stopAdvertising()
@@ -129,14 +116,18 @@ final class OnDevicePairing: NSObject, ObservableObject, @preconcurrency NetServ
         busy = false
         let done = completion
         completion = nil
-        if cancelled { done?(nil, status); return }
+        if cancelled {
+            if let token { BuiltInJit.discardPairing(token) }
+            done?(nil, status)
+            return
+        }
         if let failure { status = failure; BuiltInJitStatus.log("on-device pairing: \(failure)"); done?(nil, failure); return }
-        guard let data else { status = "Pairing returned no credentials."; done?(nil, status); return }
-        pendingData = data
+        guard let token else { status = "Pairing returned no candidate."; done?(nil, status); return }
+        pendingToken = token
         hasNewPairing = true
         status = "Paired. Preparing game debugging…"
-        BuiltInJitStatus.log("on-device pairing: credentials received (not logged; not yet stored)")
-        done?(data, nil)
+        BuiltInJitStatus.log("on-device pairing: helper candidate ready (no credentials exported)")
+        done?(token, nil)
     }
 
     private func stopAdvertising() {
@@ -151,19 +142,26 @@ final class OnDevicePairing: NSObject, ObservableObject, @preconcurrency NetServ
         if background != .invalid { UIApplication.shared.endBackgroundTask(background); background = .invalid }
     }
 
-    func discardCredentials() { pendingData = nil; hasNewPairing = false }
+    func discardCredentials() {
+        if let token = pendingToken { BuiltInJit.discardPairing(token) }
+        pendingToken = nil
+        hasNewPairing = false
+    }
 
     #if !PLAYPORT_RELEASE
     /// The diagnostic's explicit replacement; the product instead verifies first.
     func useNewPairing() {
-        guard let data = pendingData, !busy, !BuiltInJitStatus.shared.busy else { return }
-        do {
-            try BuiltInJit.storeGeneratedPairing(data)
-            discardCredentials()
-            storedNewPairing = true
-            status = "New pairing stored in the Keychain."
-            BuiltInJitStatus.shared.refreshPairingAfterProbe()
-        } catch { status = "Could not store the pairing in the Keychain." }
+        guard let token = pendingToken, !busy, !BuiltInJitStatus.shared.busy else { return }
+        Task {
+            do {
+                let original = try await BuiltInJit.storedPairingRevision()
+                try await BuiltInJit.commitGeneratedPairing(token, replacing: original)
+                discardCredentials()
+                storedNewPairing = true
+                status = "New pairing stored in the helper Keychain."
+                BuiltInJitStatus.shared.refreshPairingAfterProbe()
+            } catch { status = "Could not store the pairing in the helper Keychain." }
+        }
     }
     #endif
 }

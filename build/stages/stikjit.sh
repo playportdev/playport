@@ -1,37 +1,15 @@
 #!/bin/bash
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Stages StikJIT's prebuilt framework (MPL-2.0, docs/LICENSING.md) for the
-# app's JIT helper extension (app/Sources/PlayportJIT, docs/ARCHITECTURE.md,
-# "Built-in JIT"): the release asset pins.lock names, checked against its
-# sha256, unpacked to app/Staged/StikJIT.xcframework.
-#
-#   build/stages/stikjit.sh
-#
-# The zip is cached under $PLAYPORT_BUILD/cache/stikjit-<tag>/, beside a
-# shallow checkout of the tag's source (src/, for build/notices-assemble.sh
-# and as the MPL source record; the tag must be the commit below). The MIT
-# notice of the idevice library inside the binary comes from a shallow
-# checkout of the pins.lock idevice commit, cached under
-# $PLAYPORT_BUILD/cache/idevice-<commit>/ (its revision is not recorded in the
-# binary). The staged copy is changed only here; the binary is not touched:
-#   - universal.js and legacy.js are deleted: they are resources, not code, and
-#     the helper runs Playport's own script instead
-#     (app/PlayportJIT/playport-universal.js, docs/LICENSING.md).
-#   - Info.plist: the release framework has none, and xtool's signer (zsign)
-#     then leaves the framework unsigned, which dyld refuses on the device.
-#   - the swiftinterface: the module and its public enum are both `StikJIT`,
-#     so `StikJIT.DDIPaths` resolves to a member of the enum and the host
-#     Swift compiler cannot build the module from its interface. The rewrite
-#     drops the module qualifier; every name resolves to the same declaration.
+# Builds StikJIT from its pinned sources and patches/stikjit, against the
+# patched idevice archive. Both the app and helper receive the security fixes;
+# no upstream prebuilt framework/Rust library is linked. Source and license
+# records remain in the cache for the notice assembly.
 set -euo pipefail
 . "$(dirname "$0")/../lib.sh"
 
-SHA256=806664393770c68e75f2b6429955bfdd88cfaad09fec2ba70f8ed615ff90c060
 COMMIT=32287268fa5824f9edce4cb359f5833ce0cf7b00
 tag=$(pin stikjit)
-url=$(pin_url stikjit); url=${url%.git}/releases/download/$tag/StikJIT.xcframework.zip
 cache=$PLAYPORT_BUILD/cache/stikjit-$tag
-zip=$cache/StikJIT.xcframework.zip
 dest=$PLAYPORT_REPO/app/Staged/StikJIT.xcframework
 IDEVICE_LICENSE_SHA256=131488ce7e302b9f62e3236793e57c86a208d3dfaf03e6d7d03ddc0fc82392ed
 idevice=$(pin idevice)
@@ -42,12 +20,6 @@ idevice_src=$PLAYPORT_BUILD/cache/idevice-$idevice
 tmps=()
 trap 'rm -rf "${tmps[@]}"' EXIT
 mkdir -p "$cache"
-if ! echo "$SHA256  $zip" | sha256sum -c --status 2>/dev/null; then
-    part=$(mktemp "$cache/zip.XXXXXX"); tmps+=("$part")
-    curl -fsSL -o "$part" "$url"
-    echo "$SHA256  $part" | sha256sum -c --status || { echo "stage-stikjit: $url is not sha256 $SHA256" >&2; exit 1; }
-    mv "$part" "$zip"
-fi
 
 if [ "$(git -C "$cache/src" rev-parse HEAD 2>/dev/null)" != "$COMMIT" ]; then
     src=$(mktemp -d "$cache/src.XXXXXX"); tmps+=("$src")
@@ -69,17 +41,66 @@ fi
 echo "$IDEVICE_LICENSE_SHA256  $idevice_src/LICENSE.txt" | sha256sum -c --status ||
     { echo "stage-stikjit: idevice LICENSE.txt is not sha256 $IDEVICE_LICENSE_SHA256" >&2; exit 1; }
 
+# Build the pinned, patched Swift backend against the same patched idevice
+# sources as the app. The upstream prebuilt carries its own unpatchable Rust copy.
+run=${PLAYPORT_RUN:-$PLAYPORT_BUILD/run}
+src=$run/stikjit-src
+rsync -a --delete "$cache/src/" "$src/"
+ensure_series "$src" stikjit "$COMMIT"
+headers=$run/stikjit-headers
+mkdir -p "$headers"
+cp "$src/idevice/module.modulemap" "$headers/module.modulemap"
+cp "$run/idevice/src/ffi/idevice.h" "$headers/idevice.h"
+lib=$run/idevice/target/aarch64-apple-ios/release/libidevice_ffi.a
+[ -f "$lib" ] || { echo "stage-stikjit: build idevice first" >&2; exit 1; }
+linkdir=$run/stikjit-link
+mkdir -p "$linkdir"
+# A unique archive name prevents an accidental link of upstream's bundled .a.
+ln -sfn "$lib" "$linkdir/libplayport_stikjit_idevice.a"
 rm -rf "$dest"
-unpack=$(mktemp -d "$cache/unpack.XXXXXX"); tmps+=("$unpack")
-mkdir -p "$(dirname "$dest")"
-unzip -q "$zip" -d "$unpack"
-mv "$unpack/StikJIT.xcframework" "$dest"
 fw=$dest/ios-arm64/StikJIT.framework
-
-rm -f "$fw/universal.js" "$fw/legacy.js"
-if [ -n "$(find "$dest" -name universal.js -o -name legacy.js)" ]; then
-    echo "stage-stikjit: StikJIT's universal.js or legacy.js is still staged" >&2; exit 1
+modules=$fw/Modules/StikJIT.swiftmodule
+mkdir -p "$modules" "$PLAYPORT_BUILD/tmp" "$PLAYPORT_BUILD/cache/stikjit-swift"
+export TMPDIR=$PLAYPORT_BUILD/tmp CLANG_MODULE_CACHE_PATH=$PLAYPORT_BUILD/cache/stikjit-swift
+swiftc=$(command -v swiftc)
+extra=()
+if [ "$(uname -s)" = Darwin ]; then
+    swiftc=$(xcrun --find swiftc)
+    extra+=(-Xlinker -no_compact_unwind)
+else
+    # Match xtool's SwiftSDK swiftResourcesPath. A Linux compiler's default
+    # resource directory contains Linux, not iPhoneOS, standard libraries.
+    resources=$DARWIN_SDK/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift
+    [ -d "$resources/iphoneos" ] || { echo "stage-stikjit: no iOS Swift resources in the Darwin SDK" >&2; exit 1; }
+    extra+=(-resource-dir "$resources")
 fi
+"$swiftc" -swift-version 5 -O -parse-as-library -enable-library-evolution \
+    -target arm64-apple-ios17.4 -sdk "$IOSSDK" -module-name StikJIT \
+    -emit-library -emit-module -emit-module-path "$modules/arm64-apple-ios.swiftmodule" \
+    -emit-module-interface-path "$modules/arm64-apple-ios.swiftinterface" \
+    -file-prefix-map "$PLAYPORT_REPO=playport" -use-ld="$LD64" \
+    -Xlinker -oso_prefix -Xlinker "$PLAYPORT_REPO/" \
+    -I "$headers" -I "$src/iokit" -L "$linkdir" \
+    -Xlinker -hidden-lplayport_stikjit_idevice -Xlinker -dead_strip \
+    -Xlinker -install_name -Xlinker @rpath/StikJIT.framework/StikJIT \
+    -framework JavaScriptCore -framework Network -framework Security \
+    -framework CFNetwork -framework SystemConfiguration -framework IOKit \
+    "${extra[@]}" "$src"/Sources/*.swift -o "$fw/StikJIT"
+# IDE source-location metadata is not needed by clients or by the device.
+rm -f "$modules"/*.swiftsourceinfo
+cat > "$dest/Info.plist" <<'XCFRAMEWORK'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundlePackageType</key><string>XFWK</string>
+<key>XCFrameworkFormatVersion</key><string>1.0</string>
+<key>AvailableLibraries</key><array><dict>
+<key>LibraryIdentifier</key><string>ios-arm64</string>
+<key>LibraryPath</key><string>StikJIT.framework</string>
+<key>SupportedArchitectures</key><array><string>arm64</string></array>
+<key>SupportedPlatform</key><string>ios</string>
+</dict></array></dict></plist>
+XCFRAMEWORK
 
 # The bundle identifier and versions are the ones StikJIT's project.yml gives the framework.
 cat > "$fw/Info.plist" <<PLIST

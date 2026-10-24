@@ -260,6 +260,29 @@ def pe_import_dlls(path):
     return {n.lower() for n in re.findall(r"DLL Name: (\S+)", out)}
 
 
+def entitlement_allowed(allowed, key, value):
+    if key not in allowed:
+        return False
+    permit = allowed[key]
+    if isinstance(permit, list):
+        values = value if isinstance(value, list) else [value]
+        return all(any(x == p or (isinstance(p, str) and p.endswith("*")
+                       and isinstance(x, str) and x.startswith(p[:-1])) for p in permit) for x in values)
+    if isinstance(permit, str) and permit.endswith("*"):
+        return isinstance(value, str) and value.startswith(permit[:-1])
+    return permit == value
+
+
+def helper_keychain_isolated(main, helper):
+    main_id, helper_id = main.get("application-identifier"), helper.get("application-identifier")
+    main_groups = main.get("keychain-access-groups", [])
+    helper_groups = helper.get("keychain-access-groups", [])
+    return bool(main_id and helper_id and main_id != helper_id
+                and main_groups and helper_groups
+                and main_groups[0] == main_id and helper_groups == [helper_id]
+                and not entitlement_allowed(main, "keychain-access-groups", helper_id))
+
+
 def signed_checks(a, app, info, m, tmp):
     """Signature and profile: only an IPA from `xtool dev build --sign` has them."""
     so, blobs = signature(m)
@@ -308,17 +331,7 @@ def signed_checks(a, app, info, m, tmp):
     check(len(devs) == 1, "profile: one provisioned device")
     allowed = prof["Entitlements"]
 
-    def allows(k, v):
-        if k not in allowed:
-            return False
-        p = allowed[k]
-        if isinstance(p, list):
-            vs = v if isinstance(v, list) else [v]
-            return all(any(x == q or (isinstance(q, str) and q.endswith("*") and x.startswith(q[:-1])) for q in p) for x in vs)
-        if isinstance(p, str) and p.endswith("*"):
-            return isinstance(v, str) and v.startswith(p[:-1])
-        return p == v
-    check(all(allows(k, v) for k, v in ents.items()), "profile: allows every entitlement the signature carries")
+    check(all(entitlement_allowed(allowed, k, v) for k, v in ents.items()), "profile: allows every entitlement the signature carries")
     if a.same_device_as:
         oz = zipfile.ZipFile(a.same_device_as)
         op = next(n for n in oz.namelist() if n.endswith(".app/embedded.mobileprovision"))
@@ -393,8 +406,10 @@ def jit_helper_checks(app, info, signed, profile=True):
         # __LINKEDIT and appends the signature; everything after the load
         # commands, up to the release's length, is the release's.
         cmds_end = 32 + struct.unpack_from("<I", got, 20)[0]
-        check(len(got) >= len(want) and got[cmds_end:len(want)] == want[cmds_end:],
-              "jit-helper: embedded StikJIT binary is the staged release's past its load commands (build/stages/stikjit.sh)")
+        payload_end = macho(staged).get("sig", (len(want), 0))[0]
+        check(32 <= cmds_end < payload_end <= min(len(got), len(want))
+              and got[cmds_end:payload_end] == want[cmds_end:payload_end],
+              "jit-helper: embedded StikJIT payload matches the source-built staged framework")
     if not signed:
         return
     for bundle, exe_name in ((ext, einfo["CFBundleExecutable"]), (fw, "StikJIT")):
@@ -408,9 +423,22 @@ def jit_helper_checks(app, info, signed, profile=True):
               f"jit-helper: {bundle.name} code directories match its code pages and special slots")
     if not profile:
         return
+    _, helper_blobs = signature(em)
+    helper_ents = plistlib.loads(helper_blobs[5][8:])
+    _, main_blobs = signature(macho(app / info["CFBundleExecutable"]))
+    main_ents = plistlib.loads(main_blobs[5][8:])
+    check(helper_keychain_isolated(main_ents, helper_ents),
+          "jit-helper: default Keychain group is separate and not granted to the main app")
+    _, framework_blobs = signature(macho(fw / "StikJIT"))
+    framework_ents = plistlib.loads(framework_blobs[5][8:]) if 5 in framework_blobs else {}
+    check(not ({"application-identifier", "keychain-access-groups", "com.apple.developer.team-identifier"} & framework_ents.keys()),
+          "jit-helper: framework carries no application identity or Keychain groups")
     prof = plistlib.loads(cms_content((ext / "embedded.mobileprovision").read_bytes()))
     check(prof["Entitlements"].get("application-identifier", "").endswith("." + einfo["CFBundleIdentifier"]),
           "jit-helper: the extension's profile names its own App ID")
+    check(helper_ents.get("application-identifier") == prof["Entitlements"].get("application-identifier")
+          and all(entitlement_allowed(prof["Entitlements"], k, v) for k, v in helper_ents.items()),
+          "jit-helper: code identity and entitlements match the extension's own profile")
 
 
 # libc++ exports newer than iOS 26.0 (the app's MinimumOSVersion), which a header

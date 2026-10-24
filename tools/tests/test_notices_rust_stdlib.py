@@ -21,6 +21,16 @@ spec.loader.exec_module(stdlib)
 
 
 class RustStdlibNotices(unittest.TestCase):
+    def test_installed_host_is_independent_of_locked_archive_host(self):
+        for system, machine, expected in (("linux", "x86_64", stdlib.HOST),
+                                           ("darwin", "arm64", "aarch64-apple-darwin"),
+                                           ("darwin", "x86_64", "x86_64-apple-darwin")):
+            with self.subTest(system=system, machine=machine), \
+                    patch.object(stdlib.sys, "platform", system), \
+                    patch.object(stdlib.platform, "machine", return_value=machine):
+                self.assertEqual(stdlib.installed_host(), expected)
+                self.assertEqual(stdlib.HOST, "x86_64-unknown-linux-gnu")
+
     def setUp(self):
         scratch = REPO / ".work/tmp"
         scratch.mkdir(parents=True, exist_ok=True)
@@ -35,7 +45,7 @@ class RustStdlibNotices(unittest.TestCase):
         self.lock = {"schema": 1, "rust": self.version, "manifest_url": "https://example.invalid/manifest",
                      "manifest_sha256": "0" * 64, "source_commit": "a" * 40,
                      "release": self.version + " (aaaaaaaaa 2026-09-01)", "components": {}}
-        self.toolchain = Path("rustup/toolchains") / f"{self.version}-{stdlib.HOST}"
+        self.toolchain = Path("rustup/toolchains") / f"{self.version}-{stdlib.installed_host()}"
         self.prefixes = {}
         self.archives = {}
         for component, target, folder, files in (

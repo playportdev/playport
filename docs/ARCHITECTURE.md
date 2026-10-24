@@ -129,7 +129,8 @@ in both variants. All three end in the same protocol, so
 The outside process is the app's own extension. `PlugIns/PlayportJIT.appex`
 (`app/Sources/PlayportJIT`, declared in `app/xtool.yml` `extensions`) is a
 second process in the same bundle. It embeds StikJIT, StikDebug's MPL-2.0
-framework, unmodified (`build/stages/stikjit.sh`, [LICENSING.md](LICENSING.md#stikjit)),
+framework, built from pinned sources with `patches/stikjit` and the patched
+idevice backend (`build/stages/stikjit.sh`, [LICENSING.md](LICENSING.md#stikjit)),
 and runs it with Playport's own universal-protocol script,
 `app/PlayportJIT/playport-universal.js` (`StikJIT.Script.custom`);
 StikJIT's bundled scripts are not staged.
@@ -141,32 +142,43 @@ Playport (S1Probe or Playport)                 PlayportJIT.appex
                 -beginExtensionRequestWithInputItems:error:  -->  started; entry.c relaxes the
                   (input item: anonymous NSXPCListener endpoint)    XPC decoder's class check
                                                         <--  connects back (JITHost / JITHelping)
-    enableJIT(pid, pairing file bytes)                  -->  StikJIT.enableJIT(targetPID:, .custom(js))
+    enableJIT(pid)                                      -->  StikJIT.enableJIT(targetPID:, .custom(js))
     wait for CS_DEBUGGED + live P_TRACED                       tunnel 10.7.0.1 (LocalDevVPN), DDI
     wine_host_jit_pool_acquire: brk x16=1, x16=0  <-- debugserver -->  prepare region, bless, detach
     reply; -_kill: the helper                           <--  reply(nil or error)
 ```
 
 - The extension point is borrowed (`com.apple.ar.viewer`) with a
-  `FALSEPREDICATE` activation rule, so nothing but the app starts it. There is
-  no public API for starting an arbitrary extension; the four NSExtension
-  methods are private and looked up at run time. An iOS update can break
-  either; that is accepted for a sideloaded app.
-- The helper cannot read the app's Documents and a free team has no App
-  Group, so the pairing file's bytes cross XPC and live in the helper's
-  temporary directory for one call. The DDI cache is in the helper's own
-  Library.
-- On iOS 27, missing credentials open a root-owned setup sheet
-  (`JitSetup.swift`, [decision 0033](decisions/0033-on-device-pairing.md)).
-  `OnDevicePairing.swift` publishes idevice's pairable-host identity with
-  Bonjour, shows a random code, and keeps the returned record in memory. Setup
-  connects LocalDevVPN, prepares the helper with that in-memory record, and
-  commits it to the Keychain only after readiness. A pending Play resumes after
-  the sheet dismisses; Pair again leaves the old record in place until the new
-  one is ready. File import remains an advanced fallback. While the code is
-  shown, it also floats in a picture-in-picture window (`PairingCodeWindow.swift`,
-  `UIBackgroundModes` audio) over Settings; Open Settings opens Settings' top
-  level, the closest link iOS 27 allows (no link reaches Developer Mode).
+  `FALSEPREDICATE` activation rule. The app passes an anonymous XPC endpoint
+  with its private NSExtension request. This is a capability, not a signing
+  identity check. The helper restricts the JIT target to the connection's
+  caller PID. Private launcher methods can change in an iOS update.
+- `patches/xtool` and `patches/zsign` preserve each bundle's own provisioned
+  entitlements. The helper's default Keychain group is not granted to the
+  main executable. `pp verify` checks this against both code signatures and
+  the extension profile; the dev UI also tests a synthetic cross-process read.
+- Pairing generation, current/pending credentials, device preparation, JIT
+  and CoreDevice relaunch run in the helper. `app/JITKit/PairingVault` keeps
+  current and pending records in one non-syncing, WhenUnlockedThisDeviceOnly
+  Keychain item. Read/compare/write holds a bounded helper-private file lock
+  across instances. No XPC operation exports a saved credential.
+- On iOS 27 the setup sheet displays a random PIN and publishes the helper's
+  public Bonjour records. The helper returns an opaque candidate token.
+  Readiness uses that candidate, and commit compares the saved revision;
+  the previous **local** record is retained until commit. Device-side trust
+  changes during repair are a separate protocol operation.
+- StikJIT is source-built with a `Data` pairing API; no temporary pairing
+  plist is created. Startup removes matching leftovers from the old API.
+  Advanced file imports and old main-process records migrate into the helper.
+  Any process that reads an imported credential must restart before Wine
+  initialization. Wine also checks for legacy storage independently of JIT
+  provider. The DDI cache stays in the helper's Library.
+- Pairing's SRP-authenticated identity is pinned for subsequent Pair Verify.
+  The client verifies encrypted M2 before signing M3; missing pins require
+  explicit re-pairing, and authentication failure never starts enrollment.
+  TLS Finished, message framing and CBC padding fail closed. Compatibility
+  and phone evidence are recorded in
+  [the security evidence](evidence/2026-10-23-pairing-hardening.md).
 - StikJIT's calls block; the helper runs them one at a time on one serial
   queue, and the app serialises its own calls (readiness check, reset, a
   title's enable). A title's enable cancels a readiness call in progress
@@ -642,8 +654,9 @@ and the JIT pool was blessed in this process, `TitleLaunch` hands over to
    `playport-session.c`, before it reports the title's end).
 2. `Documents/restart.json` records the request: its time, the PID, and the
    `LaunchMessage` for an end that was not clean.
-3. `app/Sources/Relaunch` (C, over idevice's FFI from `build/stages/idevice.sh`)
-   opens RemotePairing's tunnel at `10.7.0.1:49152` with the RP pairing file,
+3. `AppRestart` asks the helper to relaunch its containing app. The helper
+   reads its own Keychain and calls `app/Sources/Relaunch` (C, over idevice's
+   FFI from `build/stages/idevice.sh`), opening RemotePairing's tunnel at `10.7.0.1:49152` with the RP pairing file,
    connects to CoreDevice's app service through RSD, and sends
    `launchapplication` for the app's bundle with `terminateExisting`. This is
    the chain StikJIT's JIT session uses, with a different last request.

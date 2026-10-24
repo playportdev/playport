@@ -74,6 +74,7 @@ private struct GameDetailPage: View {
     @ObservedObject private var epic = EpicAccount.shared
     @State private var playError: String?
     @State private var controllers = GCController.controllers().count
+    @AppStorage("touchGamepadEnabled") private var touchGamepad = true
     @State private var stageOnDisk = false
     /// The version picker's choice; nil until the player picks one.
     @State private var pickedBranch: String?
@@ -498,7 +499,9 @@ private struct GameDetailPage: View {
 
     @ViewBuilder
     private var controllerLine: some View {
-        if controllers == 0 {
+        if controllers == 0 && touchGamepad {
+            Text("The on-screen gamepad is ready. Connect a controller to use it instead.")
+        } else if controllers == 0 {
             Text("No controller is connected. Connect it now: a game may not notice one connected later.")
                 .foregroundStyle(.orange)
         } else {

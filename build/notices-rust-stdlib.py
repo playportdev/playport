@@ -11,7 +11,9 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import platform
 import re
+import sys
 import tarfile
 import tomllib
 
@@ -23,6 +25,15 @@ HOST = "x86_64-unknown-linux-gnu"
 TARGET = rust.cargo.TARGET
 NOTICES = ("COPYRIGHT-library.html", *(f"licenses/{name}.txt" for name in
            ("MIT", "Apache-2.0", "BSD-2-Clause", "ISC")))
+
+
+def installed_host():
+    # The locked archive's notices are shared across hosts; compare their
+    # bytes with the actual native installation without changing the lock.
+    if sys.platform == "darwin":
+        arch = platform.machine()
+        return f"{'aarch64' if arch == 'arm64' else arch}-apple-darwin"
+    return HOST
 
 
 SOURCE = "rust-src/lib/rustlib/src/rust/"
@@ -194,7 +205,7 @@ def verify(repo, root, dist):
         raise ValueError("Rust release identity disagrees with source commit/pin")
     identity = {"version": lock["release"].encode(), "git-commit-hash": lock["source_commit"].encode()}
     source = verify_source(dist, lock, identity)
-    toolchain = Path("rustup/toolchains") / f"{version}-{HOST}"
+    toolchain = Path("rustup/toolchains") / f"{version}-{installed_host()}"
     rust.no_links(root, toolchain)
     components = {}
     notices = {}

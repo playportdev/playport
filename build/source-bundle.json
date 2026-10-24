@@ -152,8 +152,8 @@
     {
       "name": "xtool",
       "pin": "xtool",
-      "tag": "1.20.1",
-      "commit": "916cdffba86c7661e450a98eb76bfad5f824a4d6",
+      "tag": "1.23.0",
+      "commit": "e3ce2c402ec142d0d1bd0a0c9a20eb9c2ae8827c",
       "why": "the build and signing tool; build/toolchain/xtool-1.20.1-increased-memory-limit.diff, in the playport archive, is Playport's change to it",
       "allow_binary": {}
     }

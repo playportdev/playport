@@ -14,12 +14,9 @@
 // A private method can change in any iOS release; that risk is accepted for a
 // sideloaded app (docs/DEVICE.md, "JIT activation").
 //
-// What the user provides once per phone: the RP pairing file, imported in
-// Settings › Setup check (or dropped at Documents/StikJIT/pairingFile.plist),
-// and LocalDevVPN connected. The app keeps the file in its Keychain and deletes
-// the Documents copy, so an update or reinstall under the same team needs no
-// computer (docs/DEVICE.md, "JIT activation"). The Developer Disk Image is
-// downloaded and mounted by StikJIT itself, once per boot.
+// Pairing is generated and stored inside the helper's separate Keychain
+// group. Legacy imports migrate before runtime and require a clean restart;
+// ordinary prepare/JIT/relaunch calls return no credential bytes.
 
 import Foundation
 import JITHelperXPC
@@ -31,7 +28,7 @@ import SteamClientKit
 import SwiftUI
 
 enum BuiltInJit {
-    enum Failure: Error, CustomStringConvertible {
+    enum Failure: LocalizedError, CustomStringConvertible {
         case notBundled
         case liveContainer
         case noGetTaskAllow
@@ -41,6 +38,8 @@ enum BuiltInJit {
         case helper(String)
         case helperGone
         case cancelled
+
+        var errorDescription: String? { description }
 
         var description: String {
             switch self {
@@ -78,80 +77,150 @@ enum BuiltInJit {
         WineHostRuntime.documents.appendingPathComponent("StikJIT/pairingFile.plist")
     }
 
-    /// The pairing file's home: a this-device-only, unsynchronised Keychain item
-    /// in the app's own access group. Keychain items outlive the app's
-    /// container, so a reinstall under the same team finds it again.
-    private static let store = KeychainSecretStore(service: "dev.playport.app.jit")
+    // Legacy main-process store, read only during migration before runtime.
+    private static let legacyStore = KeychainSecretStore(service: "dev.playport.app.jit")
     private static let storeKey = "rp-pairing-file"
-    private static let storeLock = NSLock()
+    private static let revisionCacheKey = "jit.helperPairingRevision"
+    private static let credentialBoundary = OSAllocatedUnfairLock(initialState: (runtime: false, exposed: false))
+    static var needsCredentialRestart: Bool { credentialBoundary.withLock { $0.exposed } }
+    static var mayHandleCredentials: Bool { credentialBoundary.withLock { !$0.runtime } }
+    static func legacyCredentialsPresent() throws -> Bool {
+        try legacyStore.protection(storeKey) != nil || FileManager.default.fileExists(atPath: pairingFileURL.path)
+    }
+    static func beginRuntime() -> Bool {
+        // Independent of the selected JIT provider and process-local flags.
+        guard (try? legacyCredentialsPresent()) == false else { return false }
+        return credentialBoundary.withLock { state in
+            guard !state.exposed else { return false }
+            state.runtime = true
+            return true
+        }
+    }
+    private static func willReadCredentials() throws {
+        try credentialBoundary.withLock { state in
+            guard !state.runtime else { throw Failure.helper("Restart Playport before importing pairing credentials") }
+            state.exposed = true
+        }
+    }
+    static var hasPairingFile: Bool { UserDefaults.standard.string(forKey: revisionCacheKey) != nil }
 
-    /// No dropped-file adoption and no swallowed Keychain errors during setup.
-    static func storedPairingData() throws -> Data? {
-        try storeLock.withLock { try store.read(storeKey).map { Data($0.value) } }
+    private static func cacheRevision(_ revision: String?) {
+        UserDefaults.standard.set(revision, forKey: revisionCacheKey)
     }
 
-    /// Commit only the record we just verified, without replacing an intervening
-    /// import. A first setup inserts atomically; explicit repair compares its old record.
-    static func commitGeneratedPairing(_ data: Data, replacing expected: Data?) throws {
-        guard let p = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any],
-              (p["public_key"] as? Data)?.count == 32, (p["private_key"] as? Data)?.count == 32,
-              (p["alt_irk"] as? Data)?.count == 16, let identifier = p["identifier"] as? String, !identifier.isEmpty else {
-            throw Failure.helper("generated pairing record is invalid")
-        }
-        try storeLock.withLock {
-            let current = try store.read(storeKey).map { Data($0.value) }
-            guard current == expected else { throw Failure.helper("pairing changed during setup; try again") }
-            if expected != nil {
-                try store.write(storeKey, Secret([UInt8](data)))
-            } else {
-                let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
-                    kSecAttrService as String: store.service, kSecAttrAccount as String: storeKey,
-                    kSecAttrSynchronizable as String: false,
-                    kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
-                    kSecValueData as String: data]
-                guard SecItemAdd(q as CFDictionary, nil) == errSecSuccess else {
-                    throw Failure.helper("could not insert pairing in the Keychain")
+    /// Only metadata crosses back from the helper. A legacy import makes this
+    /// process permanently ineligible to initialize the game runtime.
+    static func storedPairingRevision(repair: Bool = false) async throws -> String? {
+        var revision = try await revisionOperation { helper, reply in helper.pairingStatus(reply: reply) }
+        if !repair, try legacyStore.protection(storeKey) != nil {
+            try willReadCredentials()
+            if let data = try legacyStore.read(storeKey) {
+                revision = try await revisionOperation { helper, reply in
+                    helper.adoptLegacyPairing(data: Data(data.value), reply: reply)
                 }
+                try legacyStore.delete(storeKey)
+            } else {
+                revision = try await revisionOperation { helper, reply in helper.pairingStatus(reply: reply) }
+            }
+        }
+        if !repair, FileManager.default.fileExists(atPath: pairingFileURL.path) {
+            try willReadCredentials()
+            let data = try Data(contentsOf: pairingFileURL)
+            revision = try await revisionOperation { helper, reply in
+                helper.adoptLegacyPairing(data: data, reply: reply)
+            }
+            try FileManager.default.removeItem(at: pairingFileURL)
+        }
+        cacheRevision(revision)
+        return revision
+    }
+
+    static func commitGeneratedPairing(_ token: String, replacing expected: String?) async throws {
+        let revision = try await revisionOperation { helper, reply in
+            helper.commitPairing(candidate: token, replacing: expected, reply: reply)
+        }
+        // Explicit successful repair may replace a different legacy record.
+        // No game can initialize while either old location still exists.
+        try legacyStore.delete(storeKey)
+        if FileManager.default.fileExists(atPath: pairingFileURL.path) {
+            try FileManager.default.removeItem(at: pairingFileURL)
+        }
+        cacheRevision(revision)
+    }
+
+    static func importPairingFile(from source: URL) async throws {
+        try willReadCredentials()
+        let scoped = source.startAccessingSecurityScopedResource()
+        defer { if scoped { source.stopAccessingSecurityScopedResource() } }
+        let data = try Data(contentsOf: source)
+        let expected = try await revisionOperation { helper, reply in helper.pairingStatus(reply: reply) }
+        let revision = try await revisionOperation { helper, reply in
+            helper.importPairing(data: data, replacing: expected, reply: reply)
+        }
+        cacheRevision(revision)
+    }
+
+    static func pair(pin: String, cancelled: OSAllocatedUnfairLock<Bool>,
+                     advertise: @escaping @Sendable (String, Data, UInt16) -> Void) async throws -> String {
+        guard mayHandleCredentials else { throw Failure.helper("Restart Playport before pairing") }
+        guard let token = try await revisionOperation(cancelled: { cancelled.withLock { $0 } }, advertise: advertise,
+            { helper, reply in helper.pair(pin: pin, reply: reply) }) else { throw Failure.noPairingFile }
+        return token
+    }
+
+    static func discardPairing(_ token: String) {
+        queue.async {
+            _ = withHelper(log: BuiltInJitStatus.log, cancelled: { false }) { helper, reply in
+                helper.discardPairing(candidate: token) { error in reply(error.map(Failure.helper)) }
             }
         }
     }
 
-    static var hasPairingFile: Bool { (try? pairingData()) != nil }
+    private static func revisionOperation(cancelled: @escaping @Sendable () -> Bool = { false },
+        advertise: (@Sendable (String, Data, UInt16) -> Void)? = nil,
+        _ call: @escaping @Sendable (JITHelping, @escaping @Sendable (String?, String?) -> Void) -> Void) async throws -> String? {
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async {
+                let value = OSAllocatedUnfairLock<String?>(initialState: nil)
+                let failure = withHelper(log: BuiltInJitStatus.log, cancelled: cancelled, advertise: advertise) { helper, reply in
+                    call(helper) { revision, error in
+                        value.withLock { $0 = revision }
+                        reply(error.map(Failure.helper))
+                    }
+                }
+                if let failure { continuation.resume(throwing: failure) }
+                else { continuation.resume(returning: value.withLock { $0 }) }
+            }
+        }
+    }
 
-    /// Copies a picked pairing file into the Keychain, replacing any earlier
-    /// one. It is a secret: its contents are never logged.
-    static func importPairingFile(from source: URL) throws {
-        let scoped = source.startAccessingSecurityScopedResource()
-        defer { if scoped { source.stopAccessingSecurityScopedResource() } }
-        try keep(try Data(contentsOf: source), named: source.lastPathComponent)
+    static func requestRelaunch(log: @escaping @Sendable (String) -> Void) -> String? {
+        queue.sync {
+            withHelper(log: log, cancelled: { false }) { helper, reply in
+                helper.relaunch { error in reply(error.map(Failure.helper)) }
+            }?.description
+        }
     }
 
     #if !PLAYPORT_RELEASE
-    /// The on-device probe never writes credentials to Documents or the log.
-    static func storeGeneratedPairing(_ data: Data) throws {
-        try keep(data, named: "on-device pairing")
+    static func checkIsolation() async throws {
+        _ = try await revisionOperation { helper, reply in
+            helper.isolationProbe { group, error in
+                guard let group, error == nil else { reply(nil, error ?? "No helper group"); return }
+                let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
+                    kSecAttrService as String: "dev.playport.helper.isolation-probe",
+                    kSecAttrAccount as String: "read-boundary", kSecAttrAccessGroup as String: group,
+                    kSecAttrSynchronizable as String: false, kSecReturnData as String: true]
+                var value: CFTypeRef?
+                let result = SecItemCopyMatching(query as CFDictionary, &value)
+                let denied = result == errSecMissingEntitlement || result == errSecItemNotFound
+                helper.clearIsolationProbe { cleanup in
+                    reply(nil, cleanup ?? (denied ? nil : "Main could read the helper item, or denial was inconclusive (\(result))"))
+                }
+            }
+        }
     }
     #endif
-
-    private static func keep(_ data: Data, named name: String) throws {
-        guard (try? PropertyListSerialization.propertyList(from: data, format: nil)) is [String: Any] else {
-            throw Failure.helper("\(name) is not a property list")
-        }
-        try storeLock.withLock { try store.write(storeKey, Secret([UInt8](data))) }
-    }
-
-    /// Moves a file dropped at pairingFileURL into the Keychain. A bad file is
-    /// left in place, and the Keychain copy, if any, stays in use.
-    private static func adoptDroppedFile() {
-        guard let data = try? Data(contentsOf: pairingFileURL) else { return }
-        do {
-            try keep(data, named: pairingFileURL.lastPathComponent)
-            try? FileManager.default.removeItem(at: pairingFileURL)
-            BuiltInJitStatus.log("pairing file moved from Documents to the Keychain")
-        } catch {
-            BuiltInJitStatus.log("pairing file in Documents not adopted: \(error)")
-        }
-    }
 
     /// CS_GET_TASK_ALLOW in this process's code-signing flags: without it
     /// debugserver refuses the attach, so there is no point starting the helper.
@@ -182,7 +251,7 @@ enum BuiltInJit {
         queue.async {
             pendingEnables.withLock { $0 -= 1 }
             done(withHelper(log: log, cancelled: { cancelled.withLock { $0 } }) { helper, reply in
-                helper.enableJIT(targetPID: getpid(), pairingFile: try pairingData()) { error in
+                helper.enableJIT(targetPID: getpid()) { error in
                     reply(error.map(Failure.helper))
                 }
             })
@@ -190,27 +259,28 @@ enum BuiltInJit {
     }
 
     /// StikJIT's device preparation: the readiness indicator.
-    static func prepare(pairingFile: Data? = nil, cancelled: OSAllocatedUnfairLock<Bool>? = nil,
+    static func prepare(candidate: String? = nil, cancelled: OSAllocatedUnfairLock<Bool>? = nil,
                         log: @escaping @Sendable (String) -> Void,
                         done: @escaping @Sendable (_ status: String, _ reason: String?, _ txm: String, _ helperDidNotRun: Bool) -> Void) {
         queue.async {
-            nonisolated(unsafe) var result: (String, String?, String) = ("not ready", nil, "unknown")
+            let result = OSAllocatedUnfairLock<(String, String?, String)>(initialState: ("not ready", nil, "unknown"))
             nonisolated(unsafe) var neverRan = false
-            if let failure = withHelper(log: log, pairingFileProvided: pairingFile != nil,
+            if let failure = withHelper(log: log,
                                         cancelled: { enablePending() || (cancelled?.withLock { $0 } ?? false) }, { helper, reply in
-                helper.prepare(pairingFile: try pairingFile ?? pairingData()) { status, reason, txm in
-                    result = (status, reason, txm)
+                helper.prepare(candidate: candidate) { status, reason, txm in
+                    result.withLock { $0 = (status, reason, txm) }
                     reply(nil)
                 }
             }) {
                 if case .cancelled = failure {
-                    result = ("not checked", nil, "unknown")
+                    result.withLock { $0 = ("not checked", nil, "unknown") }
                 } else {
-                    result = ("not ready", failure.description, "unknown")
+                    result.withLock { $0 = ("not ready", failure.description, "unknown") }
                     neverRan = didNotRun(failure)
                 }
             }
-            done(result.0, result.1, result.2, neverRan)
+            let final = result.withLock { $0 }
+            done(final.0, final.1, final.2, neverRan)
         }
     }
 
@@ -222,21 +292,15 @@ enum BuiltInJit {
         }
     }
 
-    static func pairingData() throws -> Data {
-        adoptDroppedFile()
-        guard let data = try? store.read(storeKey) else { throw Failure.noPairingFile }
-        return Data(data.value)
-    }
-
     /// Starts the helper, runs one call, waits for its reply, ends the helper.
     /// Returns .cancelled, ending the helper, once `cancelled` holds.
     /// Blocks the calling (serial) queue; never the main thread.
     private static func withHelper(log: @escaping @Sendable (String) -> Void,
-                                   pairingFileProvided: Bool = false, cancelled: () -> Bool,
+                                   cancelled: () -> Bool,
+                                   advertise: (@Sendable (String, Data, UInt16) -> Void)? = nil,
                                    _ call: (JITHelping, @escaping @Sendable (Failure?) -> Void) throws -> Void) -> Failure? {
         guard !JitProvider.inLiveContainer else { return .liveContainer }
         guard hasGetTaskAllow else { return .noGetTaskAllow }
-        guard pairingFileProvided || hasPairingFile else { return .noPairingFile }
         guard !cancelled() else { return .cancelled }
         let helper: JitHelper
         do {
@@ -246,18 +310,22 @@ enum BuiltInJit {
         } catch {
             return .spi("\(error)")
         }
+        helper.advertisement = advertise
         defer { helper.stop() }
         let replied = DispatchSemaphore(value: 0)
-        nonisolated(unsafe) var outcome: Failure?
-        let proxy = helper.proxy { error in
-            outcome = .helper("XPC: \(error.localizedDescription)")
-            replied.signal()
-        }
-        do {
-            try call(proxy) { failure in
-                outcome = failure
-                replied.signal()
+        let completion = OSAllocatedUnfairLock(initialState: (finished: false, outcome: Failure?.none))
+        let finish: @Sendable (Failure?) -> Void = { failure in
+            let won = completion.withLock { state in
+                guard !state.finished else { return false }
+                state.finished = true
+                state.outcome = failure
+                return true
             }
+            if won { replied.signal() }
+        }
+        let proxy = helper.proxy { error in finish(.helper("XPC: \(error.localizedDescription)")) }
+        do {
+            try call(proxy, finish)
         } catch let f as Failure {
             return f
         } catch {
@@ -271,11 +339,12 @@ enum BuiltInJit {
         while replied.wait(timeout: .now() + 0.25) == .timedOut {
             if cancelled() {
                 log("helper call cancelled; ending the helper")
-                return .cancelled
+                finish(.cancelled)
+                return completion.withLock { $0.outcome }
             }
-            if Date() >= deadline { return .helper("no reply in 600 s") }
+            if Date() >= deadline { finish(.helper("no reply in 600 s")); break }
         }
-        return outcome
+        return completion.withLock { $0.outcome }
     }
 }
 
@@ -283,6 +352,7 @@ enum BuiltInJit {
 final class JitHelper: NSObject, NSXPCListenerDelegate, JITHost, @unchecked Sendable {
     private let listener = NSXPCListener.anonymous()
     private let connected = DispatchSemaphore(value: 0)
+    var advertisement: (@Sendable (String, Data, UInt16) -> Void)?
     private let log: @Sendable (String) -> Void
     private var connection: NSXPCConnection?
     private var ext: NSObject?
@@ -399,12 +469,22 @@ final class JitHelper: NSObject, NSXPCListenerDelegate, JITHost, @unchecked Send
     }
 
     func helperLog(_ line: String) { log("helper: " + line) }
+    func pairingAdvertisement(identifier: String, records: Data, port: UInt16) {
+        advertisement?(identifier, records, port)
+    }
 }
 
 /// What Settings › Setup check shows.
 @MainActor
 final class BuiltInJitStatus: ObservableObject {
     static let shared = BuiltInJitStatus()
+
+    private init() {
+        Task {
+            do { pairingFile = try await BuiltInJit.storedPairingRevision() != nil }
+            catch { detail = String(describing: error) }
+        }
+    }
 
     #if !PLAYPORT_RELEASE
     func refreshPairingAfterProbe() {
@@ -434,7 +514,7 @@ final class BuiltInJitStatus: ObservableObject {
     }
 
     /// Generated records can be prepared in memory before replacing the Keychain.
-    func check(pairingFile data: Data? = nil, cancelled: OSAllocatedUnfairLock<Bool>? = nil,
+    func check(candidate: String? = nil, cancelled: OSAllocatedUnfairLock<Bool>? = nil,
                then: (@MainActor (String) -> Void)? = nil) {
         guard !busy else { return }
         busy = true
@@ -442,7 +522,7 @@ final class BuiltInJitStatus: ObservableObject {
         status = "checking"
         detail = nil
         failureReason = nil
-        BuiltInJit.prepare(pairingFile: data, cancelled: cancelled, log: Self.log) { status, reason, txm, neverRan in
+        BuiltInJit.prepare(candidate: candidate, cancelled: cancelled, log: Self.log) { status, reason, txm, neverRan in
             Task { @MainActor in
                 let s = BuiltInJitStatus.shared
                 let wasCancelled = cancelled?.withLock { $0 } ?? false
@@ -465,16 +545,19 @@ final class BuiltInJitStatus: ObservableObject {
     func generatedPairingCommitted() { pairingFile = true }
 
     func importPairingFile(_ result: Result<URL, Error>) {
-        do {
-            try BuiltInJit.importPairingFile(from: result.get())
-            pairingFile = true
-            readiness = "not checked"
-            status = "not checked"
-            detail = nil
-            Self.log("pairing file imported")
-            check()
-        } catch {
-            detail = "import failed: \(error)"
+        guard !busy, BuiltInJit.mayHandleCredentials else { detail = "Restart Playport before importing pairing credentials"; return }
+        busy = true
+        Task {
+            defer { busy = false }
+            do {
+                try await BuiltInJit.importPairingFile(from: result.get())
+                pairingFile = true
+                readiness = "not checked"
+                status = "not checked"
+                detail = "Restarting Playport to clear imported credentials from memory."
+                Self.log("pairing file imported into helper; clean restart required")
+                AppRestart.shared.restart(notice: nil)
+            } catch { detail = "import failed: \(error)" }
         }
     }
 

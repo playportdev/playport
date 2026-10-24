@@ -75,6 +75,10 @@ final class TitleLaunch: ObservableObject {
                memory: MemoryNeed? = nil, epic: LaunchCoordinator.Epic? = nil, galaxy: GalaxyListener? = nil,
                prerequisites: [Prerequisite] = [], epicOffline: Bool = false) -> Bool {
         guard !running, !spent else { return false }
+        guard !BuiltInJit.needsCredentialRestart else {
+            AppRestart.shared.restart(notice: nil)
+            return false
+        }
         self.title = title
         self.titleID = titleID
         appID = steamAppID

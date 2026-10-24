@@ -3,20 +3,29 @@
 // cannot attach a debugger to itself: debugserver suspends every thread of the
 // target on each stop, including the one that would answer. So the app starts
 // this extension, a second process in its own bundle, and the extension runs
-// StikJIT (MPL-2.0, embedded unmodified in its Frameworks/) against the app's
+// StikJIT (MPL-2.0, source-built with Playport patches) against the app's
 // PID through the phone's own debugserver, over LocalDevVPN's loopback tunnel.
 // StikJIT runs Playport's own protocol script, playport-universal.js (GPL-3.0-
 // or-later, app/PlayportJIT/), from the extension's bundle; the framework's
 // bundled scripts are not staged (build/stages/stikjit.sh).
 //
 // The extension is declared under a borrowed system extension point with a
-// FALSEPREDICATE activation rule (PlayportJIT-Info.plist), so nothing but the
-// app can start it. StikJIT's calls block; they run one at a time on one
+// FALSEPREDICATE activation rule (PlayportJIT-Info.plist). Its anonymous XPC
+// endpoint is passed by the app; this is not a caller-signature check. StikJIT's calls block; they run one at a time on one
 // serial queue, as its integration guide requires.
 
 import Foundation
 import JITHelperXPC
+import JITKit
+import Relaunch
 import StikJIT
+import Security
+
+private final class PairingResult {
+    let helper: JITHelper
+    var data: Data?
+    init(_ helper: JITHelper) { self.helper = helper }
+}
 
 @objc(PlayportJITHelper)
 final class JITHelper: NSObject, NSExtensionRequestHandling, JITHelping {
@@ -24,6 +33,7 @@ final class JITHelper: NSObject, NSExtensionRequestHandling, JITHelping {
     private var context: NSExtensionContext?
     private var connection: NSXPCConnection?
     private var host: JITHost?
+    private let vault = PairingVault()
 
     /// The DDI cache, in the extension's own Library: it survives app updates
     /// and needs no download again until reset.
@@ -31,6 +41,22 @@ final class JITHelper: NSObject, NSExtensionRequestHandling, JITHelping {
         in: FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0].appendingPathComponent("StikJIT"))
 
     func beginRequest(with context: NSExtensionContext) {
+        do {
+            // The previous pathname API could leave these after SIGKILL. The
+            // new backend creates no files with this prefix.
+            for url in try FileManager.default.contentsOfDirectory(at: FileManager.default.temporaryDirectory,
+                                                                   includingPropertiesForKeys: nil) {
+                let name = url.lastPathComponent
+                if name.hasPrefix("pairing-"), name.hasSuffix(".plist"),
+                   UUID(uuidString: String(name.dropFirst(8).dropLast(6))) != nil {
+                    try FileManager.default.removeItem(at: url)
+                }
+            }
+        } catch {
+            context.cancelRequest(withError: NSError(domain: "PlayportJIT", code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "Could not remove legacy temporary pairing files"]))
+            return
+        }
         guard let item = context.inputItems.first as? NSExtensionItem,
               let endpoint = item.userInfo?[jitHelperEndpointKey] as? NSXPCListenerEndpoint else {
             context.cancelRequest(withError: NSError(domain: "PlayportJIT", code: 1, userInfo: [
@@ -48,7 +74,11 @@ final class JITHelper: NSObject, NSExtensionRequestHandling, JITHelping {
         say("helper pid \(getpid()) connected")
     }
 
-    func enableJIT(targetPID: Int32, pairingFile: Data, reply: @escaping (String?) -> Void) {
+    func enableJIT(targetPID: Int32, reply: @escaping (String?) -> Void) {
+        guard let caller = connection?.processIdentifier, caller > 0, targetPID == caller else {
+            reply("JIT is restricted to the connected host process")
+            return
+        }
         queue.async { [self] in
             say("enableJIT pid \(targetPID)")
             guard let script = Bundle.main.url(forResource: "playport-universal", withExtension: "js") else {
@@ -57,11 +87,10 @@ final class JITHelper: NSObject, NSExtensionRequestHandling, JITHelping {
                 return
             }
             do {
-                try withPairingFile(pairingFile) { url in
-                    try StikJIT.enableJIT(targetPID: targetPID, pairingFile: url, ddiPaths: Self.ddi, script: .custom(script),
-                                          preparationProgress: { self.say("prepare: \(Self.describe($0))") },
-                                          progress: { self.say($0) })
-                }
+                let pairingFile = try vault.credentials()
+                try StikJIT.enableJIT(targetPID: targetPID, pairingFile: pairingFile, ddiPaths: Self.ddi, script: .custom(script),
+                                     preparationProgress: { self.say("prepare: \(Self.describe($0))") },
+                                     progress: { self.say($0) })
                 say("enableJIT done")
                 reply(nil)
             } catch {
@@ -71,11 +100,12 @@ final class JITHelper: NSObject, NSExtensionRequestHandling, JITHelping {
         }
     }
 
-    func prepare(pairingFile: Data, reply: @escaping (String, String?, String) -> Void) {
+    func prepare(candidate: String?, reply: @escaping (String, String?, String) -> Void) {
         queue.async { [self] in
             do {
-                let readiness = try withPairingFile(pairingFile) { url in
-                    StikJIT.prepareDevice(pairingFile: url, paths: Self.ddi) { self.say("prepare: \(Self.describe($0))") }
+                let pairingFile = try vault.credentials(candidate: candidate)
+                let readiness = StikJIT.prepareDevice(pairingFile: pairingFile, paths: Self.ddi) {
+                    self.say("prepare: \(Self.describe($0))")
                 }
                 switch readiness {
                 case .ready(let state):
@@ -88,10 +118,10 @@ final class JITHelper: NSObject, NSExtensionRequestHandling, JITHelping {
                 case .preparationFailed(let reason):
                     say("not ready: \(reason)")
                     reply("not ready", reason, "unknown")
+                @unknown default:
+                    reply("not ready", "Unknown device readiness response", "unknown")
                 }
-            } catch {
-                reply("not ready", error.localizedDescription, "unknown")
-            }
+            } catch { reply("not ready", error.localizedDescription, "unknown") }
         }
     }
 
@@ -107,7 +137,125 @@ final class JITHelper: NSObject, NSExtensionRequestHandling, JITHelping {
         }
     }
 
+    func pairingStatus(reply: @escaping (String?, String?) -> Void) {
+        queue.async { [self] in
+            do { reply(try vault.revision(), nil) }
+            catch { reply(nil, error.localizedDescription) }
+        }
+    }
+
+    func pair(pin: String, reply: @escaping (String?, String?) -> Void) {
+        queue.async { [self] in
+            let cancel = pairable_host_cancel_new()!
+            defer { pairable_host_cancel_free(cancel) }
+            let result = PairingResult(self)
+            let context = Unmanaged.passUnretained(result).toOpaque()
+            let error = pairable_host_accept_bonjour("Playport", pin, { identifier, records, port, context in
+                guard let identifier, let records, let context else { return }
+                let helper = Unmanaged<PairingResult>.fromOpaque(context).takeUnretainedValue().helper
+                helper.host?.pairingAdvertisement(identifier: String(cString: identifier),
+                    records: Data(String(cString: records).utf8), port: port)
+            }, { bytes, count, context in
+                guard let bytes, let context else { return }
+                Unmanaged<PairingResult>.fromOpaque(context).takeUnretainedValue().data = Data(bytes: bytes, count: count)
+            }, context, cancel)
+            if let error {
+                let message = "Pairing failed [\(error.pointee.code)/\(error.pointee.sub_code)]"
+                idevice_error_free(error)
+                reply(nil, message)
+                return
+            }
+            do {
+                guard let data = result.data else { throw PairingVault.Failure.invalid }
+                reply(try vault.stage(data), nil)
+            } catch { reply(nil, error.localizedDescription) }
+        }
+    }
+
+    func commitPairing(candidate: String, replacing revision: String?, reply: @escaping (String?, String?) -> Void) {
+        queue.async { [self] in
+            do { reply(try vault.commit(candidate: candidate, replacing: revision), nil) }
+            catch { reply(nil, error.localizedDescription) }
+        }
+    }
+
+    func discardPairing(candidate: String, reply: @escaping (String?) -> Void) {
+        queue.async { [self] in
+            do { try vault.discard(candidate: candidate); reply(nil) }
+            catch { reply(error.localizedDescription) }
+        }
+    }
+
+    func importPairing(data: Data, replacing revision: String?, reply: @escaping (String?, String?) -> Void) {
+        queue.async { [self] in
+            do { reply(try vault.importCredentials(data, replacing: revision), nil) }
+            catch { reply(nil, error.localizedDescription) }
+        }
+    }
+
+    func adoptLegacyPairing(data: Data, reply: @escaping (String?, String?) -> Void) {
+        queue.async { [self] in
+            do { reply(try vault.adoptLegacy(data), nil) }
+            catch { reply(nil, error.localizedDescription) }
+        }
+    }
+
+    func relaunch(reply: @escaping (String?) -> Void) {
+        queue.async { [self] in
+            do {
+                let data = try vault.credentials()
+                let appURL = Bundle.main.bundleURL.deletingLastPathComponent().deletingLastPathComponent()
+                guard let bundle = Bundle(url: appURL)?.bundleIdentifier else { throw PairingVault.Failure.invalid }
+                let result = data.withUnsafeBytes { bytes in
+                    playport_relaunch(bytes.bindMemory(to: UInt8.self).baseAddress, bytes.count,
+                        "10.7.0.1", bundle, { line, context in
+                            guard let line, let context else { return }
+                            Unmanaged<JITHelper>.fromOpaque(context).takeUnretainedValue().say(String(cString: line))
+                        }, Unmanaged.passUnretained(self).toOpaque())
+                }
+                reply(result == 0 ? nil : "Relaunch failed (step \(result))")
+            } catch { reply(error.localizedDescription) }
+        }
+    }
+
     #if !PLAYPORT_RELEASE
+    private static var isolationQuery: [String: Any] {
+        [kSecClass as String: kSecClassGenericPassword,
+         kSecAttrService as String: "dev.playport.helper.isolation-probe",
+         kSecAttrAccount as String: "read-boundary", kSecAttrSynchronizable as String: false]
+    }
+
+    func isolationProbe(reply: @escaping (String?, String?) -> Void) {
+        queue.async {
+            let query = Self.isolationQuery
+            SecItemDelete(query as CFDictionary)
+            let test = Data(UUID().uuidString.utf8)
+            let attributes = query.merging([kSecValueData as String: test,
+                kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly]) { $1 }
+            guard SecItemAdd(attributes as CFDictionary, nil) == errSecSuccess else {
+                reply(nil, "Could not create synthetic helper item"); return
+            }
+            var request = query
+            request[kSecReturnData as String] = true
+            request[kSecReturnAttributes as String] = true
+            var result: CFTypeRef?
+            guard SecItemCopyMatching(request as CFDictionary, &result) == errSecSuccess,
+                  let value = result as? [String: Any], value[kSecValueData as String] as? Data == test,
+                  let group = value[kSecAttrAccessGroup as String] as? String else {
+                SecItemDelete(query as CFDictionary)
+                reply(nil, "Helper could not read its synthetic item"); return
+            }
+            reply(group, nil)
+        }
+    }
+
+    func clearIsolationProbe(reply: @escaping (String?) -> Void) {
+        queue.async {
+            let result = SecItemDelete(Self.isolationQuery as CFDictionary)
+            reply(result == errSecSuccess || result == errSecItemNotFound ? nil : "Could not delete synthetic item")
+        }
+    }
+
     // The helper-lifetime probe (JITHelping.lifetimeProbe). Timestamps are the
     // wall clock in ms since 1970, the same clock the app logs its exit with.
     private static let probeURL = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
@@ -148,7 +296,7 @@ final class JITHelper: NSObject, NSExtensionRequestHandling, JITHelping {
     private var sigterm: DispatchSourceSignal?
     private var probeTransaction: AnyObject?
 
-    func lifetimeProbe(intervalMs: Int, capS: Int, hold: Bool, pairingFile: Data, reply: @escaping (Int32) -> Void) {
+    func lifetimeProbe(intervalMs: Int, capS: Int, hold: Bool, reply: @escaping (Int32) -> Void) {
         FileManager.default.createFile(atPath: Self.probeURL.path, contents: nil)
         probeLock.lock()
         probeFile = try? FileHandle(forWritingTo: Self.probeURL)
@@ -182,19 +330,18 @@ final class JITHelper: NSObject, NSExtensionRequestHandling, JITHelping {
             self.queue.async {
                 self.probe("prepareDevice start")
                 let result: String
-                do {
-                    let r = try self.withPairingFile(pairingFile) { url in
-                        StikJIT.prepareDevice(pairingFile: url, paths: Self.ddi) { stage in
-                            self.probe("prepareDevice: \(Self.describe(stage))")
-                        }
-                    }
-                    switch r {
-                    case .ready: result = "ready"
-                    case .unreachable(let why): result = "unreachable: \(why)"
-                    case .preparationFailed(let why): result = "not ready: \(why)"
-                    }
-                } catch {
-                    result = "error: \(error.localizedDescription)"
+                guard let pairingFile = try? self.vault.credentials() else {
+                    self.probe("prepareDevice: no pairing in helper")
+                    return
+                }
+                let r = StikJIT.prepareDevice(pairingFile: pairingFile, paths: Self.ddi) { stage in
+                    self.probe("prepareDevice: \(Self.describe(stage))")
+                }
+                switch r {
+                case .ready: result = "ready"
+                case .unreachable(let why): result = "unreachable: \(why)"
+                case .preparationFailed(let why): result = "not ready: \(why)"
+                @unknown default: result = "unknown readiness response"
                 }
                 self.probe("prepareDevice done: \(result)")
             }
@@ -233,14 +380,6 @@ final class JITHelper: NSObject, NSExtensionRequestHandling, JITHelping {
     }
     #endif
 
-    /// The pairing file lives only for the call, in the extension's temporary directory.
-    private func withPairingFile<T>(_ data: Data, _ body: (URL) throws -> T) throws -> T {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("pairing-\(UUID().uuidString).plist")
-        try data.write(to: url, options: [.atomic, .completeFileProtection])
-        defer { try? FileManager.default.removeItem(at: url) }
-        return try body(url)
-    }
-
     private func say(_ line: String) {
         NSLog("PlayportJIT: %@", line)
         host?.helperLog(line)
@@ -254,6 +393,7 @@ final class JITHelper: NSObject, NSExtensionRequestHandling, JITHelping {
         case .mountingDDI(let fraction): String(format: "mounting the DDI %.0f%%", fraction * 100)
         case .verifyingDDI: "verifying the DDI mount"
         case .ready: "device ready"
+        @unknown default: "unknown preparation step"
         }
     }
 }

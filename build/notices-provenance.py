@@ -299,7 +299,7 @@ def collect(repo, scratch):
         ("LLVM", "llvm-project", ""), ("FREETYPE", "freetype", ""),
         ("MESA", "mesa", "mesa"), ("DXVK", "dxvk", "dxvk"),
         ("VKD3D", "vkd3d-proton", "vkd3d-proton"), ("GBE", "gbe", "gbe"),
-        ("ABSL", "abseil-cpp", ""), ("STIKJIT", "stikjit", ""),
+        ("ABSL", "abseil-cpp", ""), ("STIKJIT", "stikjit", "stikjit"),
         ("IDEVICE", "idevice", ""),
     ]
     required = {"fex": ("External/rpmalloc", "External/fmt", "External/xxhash", "External/unordered_dense"),

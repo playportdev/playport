@@ -43,6 +43,9 @@ final class WineHostRuntime: @unchecked Sendable {
     /// names the failed assumption when the pool's self-check stopped the start.
     func start(poolMB mb: Int, wait: TimeInterval, pooled: () -> Void = {})
         -> (ok: Bool, activationSeconds: Double, detail: String, selfcheck: String?) {
+        guard BuiltInJit.beginRuntime() else {
+            return (false, 0, "Restart Playport after importing or migrating pairing credentials", nil)
+        }
         precondition(!poolAcquired, "the session starts once per process")
         guard let runtime = Manifest.runtime else { return (false, 0, "no Runtime in bundle", nil) }
         #if PLAYPORT_RELEASE

@@ -115,7 +115,7 @@ contributions, not the right to use or distribute the code under its licence.
 | Linked statically into those DLLs: curl, libssq, Mbed TLS, Opus, PortAudio, Protocol Buffers with utf8_range and Abseil (the pins.lock `abseil-cpp` tag), SDL 3, zlib, and the header libraries in gbe_fork's `libs/` (nlohmann json and fifo_map, SimpleIni, stb, utfcpp, libgamepad, sha1) | `Runtime/steamapi/` DLLs | curl's MIT-style licence, MIT, Apache-2.0 (Mbed TLS's other option is GPL-2.0-or-later), BSD-3-Clause, MIT, BSD-3-Clause and MIT, Apache-2.0, zlib, zlib; MIT, MIT, MIT, MIT or public domain, BSL-1.0, MIT, public domain |
 | GStreamer 1.28.7, GStreamer's own iOS binary release (the pins.lock `gstreamer` version, sha256 in `build/stages/gstreamer.sh`; built by GStreamer's Cerbero from the `1.28.7` tag of <https://gitlab.freedesktop.org/gstreamer/gstreamer>): core, base, good and bad plugin libraries and the plugins `build/stages/gstreamer.sh` registers | executable (in `libwinegstreamer_unix.a`, statically), with Wine's winegstreamer unix side | LGPL-2.1-or-later; see "GStreamer" below for the libraries it carries |
 | JavaSteam protocol schemas (field tables in `app/SteamClient`) | executable | MIT; pinned by commit `433f2ad15c36d5e690a4fe77401ec3f6b960641e` in the [joshuatam/JavaSteam](https://github.com/joshuatam/JavaSteam) fork of [Longi94/JavaSteam](https://github.com/Longi94/JavaSteam) |
-| StikJIT 1.9.0 framework (the prebuilt `StikJIT.xcframework` release asset; tag `1.9.0`, commit `32287268fa5824f9edce4cb359f5833ce0cf7b00`, source at <https://github.com/StikDebug/StikJIT>) | the JIT helper extension (`PlugIns/PlayportJIT.appex/Frameworks/StikJIT.framework`), unmodified | MPL-2.0; see "StikJIT" below for what it carries inside |
+| StikJIT 1.9.0 framework (built from source with `patches/stikjit`; tag `1.9.0`, commit `32287268fa5824f9edce4cb359f5833ce0cf7b00`, source at <https://github.com/StikDebug/StikJIT>) | the JIT helper extension (`PlugIns/PlayportJIT.appex/Frameworks/StikJIT.framework`), modified | MPL-2.0; see "StikJIT" below for what it carries inside |
 | Mozilla's trusted root certificates, as published in curl's CA extract (the dated file the pins.lock `ca-bundle` row names, sha256 in `build/stages/ca-bundle.sh`) | `Runtime/certs/cacert.pem`, unmodified: the roots crypt32 imports into the prefix's ROOT store | MPL-2.0 (the PEM file is its own source form; the app carries the MPL-2.0 text as `StikJIT-LICENSE.txt`) |
 | Wine Mono 11.3.0, WineHQ's binary release (the pins.lock `wine-mono` version, `wine-mono-11.3.0-x86.tar.xz`, sha256 in `build/stages/wine-mono.sh`; decision [0077](decisions/0077-ship-wine-mono.md)): Mono's runtime (`libmono-2.0-x86_64.dll`, `libmono-2.0-x86.dll`) and class libraries, FNA with FAudio, FNA3D and SDL, winforms, wpf, monoDX, System.Speech and Wine Mono's support files | `Runtime/mono/wine-mono-11.3.0/`, unmodified (a link staged as a copy of its target) | the licences its `COPYING` lists: Mono's parts MIT X11 or LGPL (SharpZipLib GPL with an exception), FNA MS-PL and MIT, its libraries zlib, winforms, wpf, monoDX and System.Speech MIT, Wine Mono's own code MIT. Source: the release's `wine-mono-11.3.0-src.tar.xz` (sha256 `SRC_SHA256` in the same script), which the source bundle carries and the notices come from |
 | idevice (jkcoxson/idevice) at the `pins.lock` `idevice` commit plus `patches/idevice` (Bonjour advertising for on-device pairing), its C FFI with the features the restart after a game and pairing use (decisions 0029, 0033), built by `build/stages/idevice.sh` with the `pins.lock` Rust | executable (in `libidevice_ffi.a`, one prelinked object) | MIT; see "idevice in the executable" below for the crates it carries |
@@ -135,54 +135,48 @@ duties for the statically linked LGPL code still apply.
 
 ### StikJIT
 
-The JIT helper extension embeds StikJIT's prebuilt framework
+The JIT helper extension embeds StikJIT's source-built framework
 (`build/stages/stikjit.sh`, docs/ARCHITECTURE.md "Built-in JIT").
 
 - **MPL-2.0** is file-level copyleft and names the GPL family as Secondary
-  Licenses (MPL-2.0 section 3.3), so shipping the unmodified framework inside
+  Licenses (MPL-2.0 section 3.3), so shipping the modified framework inside
   a GPL-3.0-or-later app is permitted. The duties: ship the MPL text with the
   binary (`StikJIT-LICENSE.txt`, docs/NOTICES.md), say where its source is
-  (the row above identifies the reviewed release tag/commit association, not
-  independently verified binary build derivation), and
+  (the pinned source and `patches/stikjit` identify the covered source), and
   make the exact MPL-covered source, including changes to covered files,
   available to recipients under MPL. Unmodified binaries also have this duty;
   it does not require a public development repository.
-- **No MPL file is changed.** The framework binary is copied byte for byte
-  (its sha256 is pinned in `build/stages/stikjit.sh`). The staging adds an
-  `Info.plist` the release lacks and rewrites module-qualified names in the
-  generated `.swiftinterface` so the Linux Swift compiler can read it; the
-  interface is a compiler input that is not shipped as source, and the
-  rewrite is the published sed in `build/stages/stikjit.sh`, so it is public in
-  any case.
+- **Covered source changes.** `patches/stikjit` changes the pairing API to
+  accept `Data`, avoiding plaintext temporary files. The stage builds these
+  sources with the generated header and raw archive from the patched idevice
+  stage. The source and patch series must accompany a source handoff; the
+  changed Swift files remain under MPL-2.0.
 - **What the framework carries that is not MPL.** StikJIT's README says the
   bundled idevice (in the binary) and the `universal.js` and `legacy.js`
   scripts (framework resources) keep their own licences.
-  - The scripts are removed from the staged framework (`build/stages/stikjit.sh`
-    deletes them; they are resources, not code) and are not shipped. The
+  - The scripts are not copied into the source-built framework and are not shipped. The
     helper runs Playport's own GPL-3.0-or-later script instead,
     `app/PlayportJIT/playport-universal.js`, written from Playport's former
     workstation activation tool (removed by decision 0011; in the git
     history) and StikJIT's documented protocol.
-  - The embedded idevice library also carries Rust/native dependencies.
-    The committed archive contains AWS-LC, stdlib and other crate candidates;
-    archive presence and embedded strings do not establish final linked members
-    or exact source versions. The [StikJIT audit](release-audits/stikjit-rust.md)
-    found no verified embedded idevice revision, Cargo lock or build derivation.
-    `idevice-LICENSE.txt` is copied from Playport's pinned idevice source
-    (`d32c8189c51c2789496b0768039419c3705498c3`). Its bytes are verified for
-    that donor source only. idevice and its crates are MIT/Apache-2.0: their
-    notices are owed, not their source ([decision 0042](decisions/0042-the-source-bundle-is-complete.md)).
+  - The embedded idevice library is built by the same patched source stage as
+    the executable, with the features in `build/idevice-crates.py`. It uses ring,
+    not the AWS-LC archive included in the upstream source checkout. The generated
+    Cargo inventory and locked-source notices cover both outputs; this is a normal
+    dependency inventory, not an exact list of final linked members. The older
+    [StikJIT audit](release-audits/stikjit-rust.md) describes the retired prebuilt.
 - The StikDebug app itself (AGPL-3.0) is not bundled: Built-in JIT does not
   need it. The helper's launcher and XPC code are Playport's own
   (`app/Sources/S1Probe/BuiltInJit.swift`, `app/Sources/PlayportJIT`),
   written from StikJIT's integration guide; no other project's code is copied.
 
-### idevice in the executable
+### idevice in the helper
 
 `build/stages/idevice.sh` builds idevice's C FFI from the pinned commit and
 prelinks it, with the Rust standard library and every crate it links, into one
-object in the executable. The stage writes `crates.tsv` beside the object
-(149 entries at the pin: the normal dependencies resolved for iOS with the
+object in the helper executable. StikJIT links the raw archive built from
+those same patched sources. The stage writes `crates.tsv` beside the object
+(150 entries with the helper features: the normal dependencies resolved for iOS with the
 stage's features). This is not a complete build/proc-macro/native dependency
 or linked-member inventory. Package metadata declares these licence options;
 it does not establish all copied-file terms or complete attribution:

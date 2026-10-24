@@ -236,7 +236,7 @@
   "gstreamer_tag_commit": "070125524a8422e29d3b69a372ed4f62fd343ffa",
   "release": "1.28.7",
   "schema": 1,
-  "stage_sha256": "be9b77fd24c0f7948d85c64a864fca9a95eda9590bfedf71bfb4b87fedbc12ef",
+  "stage_sha256": "c548996772f2fdbd8910e3810f63caccdf8519bb23b9421b33f7abc5e7704a9d",
   "status": "preparatory-source-review-not-binary-build-lock",
   "unresolved": [
     "Exact Cerbero build commit/configuration/manifest associated with binary archive",

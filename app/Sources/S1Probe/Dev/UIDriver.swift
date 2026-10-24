@@ -235,6 +235,15 @@ enum UIDriver {
                     }
                     try? await Task.sleep(for: .milliseconds(1500))
                     log("open \(id)")
+                case "touch":
+                    guard await TouchGamepadDriver.press(id) else {
+                        return finish("action=\(action) refused: on-screen pad inactive or invalid controls/duration")
+                    }
+                    log("touch \(id)")
+                    if let failure = await afterInGame(action, index: done + 1, next: actions[(i + 1)...]) {
+                        return finish(failure)
+                    }
+                    if AppRestart.shared.restarting { return }
                 case "pad":
                     // The presses a controller makes, into the same router (UI/Pad/PadRouter.swift),
                     // or the in-game menu's while it is up (HostIO feeds it the same presses).
@@ -373,6 +382,12 @@ enum UIDriver {
                 case "probe":
                     let probe = HelperLifetimeProbe.shared
                     switch id {
+                    case "pairing-isolation":
+                        _ = AppNavigation.shared.open("settings")
+                        AppNavigation.shared.pageSection = "probes"
+                        do { try await BuiltInJit.checkIsolation() }
+                        catch { return finish("action=\(action) failed: \(error)") }
+                        log("keychain isolation: helper read passed; main read denied")
                     case "helper-exit", "helper-kill", "helper-exit-hold", "helper-kill-hold":
                         guard done + 1 == actions.count else { return finish("action=\(action) refused: it must be the last action") }
                         if let failure = await probe.run(id.hasPrefix("helper-exit") ? .exit : .kill, hold: id.hasSuffix("-hold")) {
@@ -480,7 +495,7 @@ enum UIDriver {
 
     /// An action that acts on the running game, which a play: does not wait past.
     static func inGame(_ action: String) -> Bool {
-        action.hasPrefix("menu:") || action.hasPrefix("wait:") || action.hasPrefix("web:") || action.hasPrefix("tap:")
+        action.hasPrefix("menu:") || action.hasPrefix("wait:") || action.hasPrefix("web:") || action.hasPrefix("tap:") || action.hasPrefix("touch:")
             || (action.hasPrefix("pad:") && InGameMenu.shared.isOpen)
     }
 

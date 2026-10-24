@@ -75,8 +75,6 @@ final class HelperLifetimeProbe: ObservableObject {
 
     private nonisolated static func startTicker(hold: Bool) -> String? {
         guard BuiltInJit.hasGetTaskAllow else { return BuiltInJit.Failure.noGetTaskAllow.description }
-        let pairing: Data
-        do { pairing = try BuiltInJit.pairingData() } catch { return "\(error)" }
         let h: JitHelper
         do { h = try JitHelper.start(log: BuiltInJitStatus.log) } catch { return "\(error)" }
         helper = h
@@ -87,7 +85,7 @@ final class HelperLifetimeProbe: ObservableObject {
             xpcError = error.localizedDescription
             replied.signal()
         }
-        proxy.lifetimeProbe(intervalMs: interval, capS: cap, hold: hold, pairingFile: pairing) { p in
+        proxy.lifetimeProbe(intervalMs: interval, capS: cap, hold: hold) { p in
             pid = p
             replied.signal()
         }

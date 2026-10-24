@@ -84,12 +84,19 @@ static void check_inaccessible(void *host, int execute)
     if (!pid)
     {
         signal(SIGSEGV, SIG_DFL);
+        signal(SIGBUS, SIG_DFL);
         if (execute) ((void (*)(void))host)();
         else *(volatile char *)host = 0;
         _exit(0);
     }
     int status;
-    assert(waitpid(pid, &status, 0) == pid && WIFSIGNALED(status) && WTERMSIG(status) == SIGSEGV);
+    assert(waitpid(pid, &status, 0) == pid && WIFSIGNALED(status) &&
+#ifdef __APPLE__
+           (WTERMSIG(status) == SIGSEGV || WTERMSIG(status) == SIGBUS)
+#else
+           WTERMSIG(status) == SIGSEGV
+#endif
+    );
 }
 #ifndef IMAGE_TEST_ENTRY
 #define IMAGE_TEST_ENTRY main
@@ -155,7 +162,14 @@ int IMAGE_TEST_ENTRY(void)
     assert(ios_wow64_image_guest(a, va->base, va->size, &guest) && guest == 0x400000);
     image.map_addr = 0x10000000;
     assert(!ios_wow64_claim_image(b, &image, 0x5000, &vb));
+#ifdef __APPLE__
+    char path[1024];
+    snprintf(path, sizeof(path), "%s/wow64-image.XXXXXX", getenv("TMPDIR") ? getenv("TMPDIR") : ".");
+    int fd = mkstemp(path);
+    if (fd >= 0) assert(!unlink(path));
+#else
     int fd = memfd_create("wow64-image-test", 0);
+#endif
     assert(fd >= 0 && !ftruncate(fd, va->size));
     assert(mmap(va->base, va->size, PROT_READ | PROT_WRITE,
                 MAP_FIXED | MAP_PRIVATE, fd, 0) == va->base);

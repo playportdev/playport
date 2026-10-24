@@ -44,12 +44,16 @@ def find_llvm_mingw():
 
 
 def find_darwin_sdk():
+    if sys.platform == "darwin":
+        return os.environ.get("DEVELOPER_DIR") or out(["xcode-select", "-p"]).strip() or None
     m = re.search(r'toolsetPaths: \["([^"]+)"', out(["swift", "sdk", "configure", "--show-configuration",
                                                      "darwin", "arm64-apple-ios"]))
     return os.path.dirname(m.group(1)) if m else None
 
 
 def find_socket():
+    if sys.platform == "darwin":
+        return "/var/run/usbmuxd"
     return phonelib.netmuxd_unit_socket()
 
 
@@ -66,6 +70,16 @@ def problem(key, v):
         if not os.path.isfile(os.path.join(v, "aarch64-w64-mingw32/lib/libgcc.a")):
             return "no arm64ec CRT rebuild (docs/BUILDING.md, llvm-mingw)"
     elif key == "DARWIN_SDK":
+        if sys.platform == "darwin":
+            env = dict(os.environ, DEVELOPER_DIR=v)
+            try:
+                sdk = subprocess.run(["xcrun", "--sdk", "iphoneos", "--show-sdk-path"],
+                                     env=env, capture_output=True, text=True, timeout=30)
+            except (OSError, subprocess.TimeoutExpired):
+                return "Xcode's iPhoneOS SDK is unavailable"
+            if sdk.returncode or not os.path.isdir(sdk.stdout.strip()):
+                return "no iPhoneOS SDK in the selected Xcode"
+            return None
         if not os.path.isdir(os.path.join(v, IOS_SDK)):
             return f"no {os.path.basename(IOS_SDK)} (xtool sdk install; docs/BUILDING.md)"
     elif key == "PLAYPORT_USBMUX_SOCKET":

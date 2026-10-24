@@ -123,7 +123,7 @@ a signed-out Steam only shows a line on the launch screen.
 On iOS 27, the checklist's pairing step (or a Play with no pairing) opens setup. Setup shows a code,
 the person pairs in iOS Settings, Privacy & Security, Developer Mode, **Pair
 with Playport**, then returns. Playport connects LocalDevVPN, checks readiness,
-and saves the record in its this-device-only Keychain item. Settings › Setup
+and saves the record in the helper's separate this-device-only Keychain item. Settings › Setup
 check's **Pair again** repairs a stale record without deleting the old one first. A driven
 run can open or resume the product flow with `jit:setup`, `jit:pair`,
 `jit:continue`, `jit:cancel` and `jit:wait`; iOS Settings still needs the
@@ -141,9 +141,14 @@ socat TCP-LISTEN:19231,bind=127.0.0.1,fork,reuseaddr UNIX:$SOCK &
     rppairing pair playport-workstation $PLAYPORT_BUILD/stikdebug/rp_pairing_file.plist)
 ```
 
-- The pairing file is a secret: keep it under `$PLAYPORT_BUILD` and get it to
-  the phone as a player would (AirDrop or Files). Playport keeps it in its
-  Keychain, so an update or reinstall under the same team finds it again.
+- Use the Playport-patched idevice source (`.work/run/idevice/src`) for this
+  enrollment command: an unpinned upstream record lacks the peer identity that
+  subsequent connections now require. The on-device flow also creates that pin.
+- The pairing file is a secret: keep it under `$PLAYPORT_BUILD` and import it
+  through Setup check. It moves to the helper's separate Keychain. After an
+  import or legacy migration, Playport restarts before any game can run.
+  Missing peer identity requires explicit new pairing; a failed verification
+  never silently replaces trust.
 - StikJIT mounts the Developer Disk Image once per boot. **Reset Developer
   Disk Image** in Settings › Setup check clears its cache if mounting keeps failing. If
   readiness says unreachable, press the *LocalDevVPN* row there.

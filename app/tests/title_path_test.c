@@ -12,10 +12,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
 static int failures;
+static int case_insensitive_fs;
 
 #define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d %s\n", __FILE__, __LINE__, #c); failures++; } } while (0)
 
@@ -44,8 +46,8 @@ static void expect(const char *prefix, const char *path, int want_rc, const char
     CHECK(rc == want_rc);
     CHECK(msg[0]);
     if (rc || !want_dos) return;
-    CHECK(!strcmp(tp.dos, want_dos));
-    CHECK(!strcmp(tp.dos_dir, want_dir));
+    CHECK(!(case_insensitive_fs ? strcasecmp(tp.dos, want_dos) : strcmp(tp.dos, want_dos)));
+    CHECK(!(case_insensitive_fs ? strcasecmp(tp.dos_dir, want_dir) : strcmp(tp.dos_dir, want_dir)));
     char unix_want[2048];
     snprintf(unix_want, sizeof(unix_want), "%s/drive_c/", prefix);
     CHECK(!strncmp(tp.unix_path, unix_want, strlen(unix_want)));
@@ -87,6 +89,13 @@ int main(int argc, char **argv)
     snprintf(link, sizeof(link), "%s/drive_c/Linked", prefix);
     CHECK(symlink("Games/Hollow Knight", link) == 0);
 
+    /* A case-insensitive host cannot represent the two-file ambiguity fixture. */
+    char upper[2048], lower[2048];
+    struct stat upper_st, lower_st;
+    snprintf(upper, sizeof(upper), "%s/drive_c/Games/Twin/A.EXE", prefix);
+    snprintf(lower, sizeof(lower), "%s/drive_c/Games/Twin/a.exe", prefix);
+    case_insensitive_fs = !stat(upper, &upper_st) && !stat(lower, &lower_st) && upper_st.st_ino == lower_st.st_ino;
+
     const char *hk = "C:\\Games\\Hollow Knight\\hollow_knight.exe", *hk_dir = "C:\\Games\\Hollow Knight";
     /* the three spellings and both separators name the same file */
     expect(prefix, "Games\\Hollow Knight\\hollow_knight.exe", 0, hk, hk_dir);
@@ -97,7 +106,7 @@ int main(int argc, char **argv)
     expect(prefix, "GAMES\\hollow knight\\HOLLOW_KNIGHT.EXE", 0, hk, hk_dir);
     /* an exact match wins over a case variant; two variants and no exact one is ambiguous */
     expect(prefix, "Games\\Twin\\A.EXE", 0, "C:\\Games\\Twin\\A.EXE", "C:\\Games\\Twin");
-    expect(prefix, "Games\\Twin\\a.Exe", -1, NULL, NULL);
+    expect(prefix, "Games\\Twin\\a.Exe", case_insensitive_fs ? 0 : -1, NULL, NULL);
     expect(prefix, "games\\twin\\ONLY.EXE", 0, "C:\\Games\\Twin\\Only.exe", "C:\\Games\\Twin");
     /* the drive root is a working directory too */
     expect(prefix, "root.exe", 0, "C:\\root.exe", "C:\\");

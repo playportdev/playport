@@ -1,0 +1,179 @@
+From a26908d77e68191f6224120a03c08333e9095152 Mon Sep 17 00:00:00 2001
+From: CircuitSerein <263436322+CircuitSerein@users.noreply.github.com>
+Date: Fri, 23 Oct 2026 23:26:00 +0300
+Subject: [PATCH] feat: accept pairing credentials from memory
+
+Avoid plaintext temporary files and parse credentials through the byte FFI.
+
+Class: feature
+Evidence: docs/evidence/2026-10-23-pairing-hardening.md
+Offered-upstream: not yet; local security verification in progress
+---
+ Sources/DDISession.swift | 17 ++++++++---------
+ Sources/JITSession.swift | 17 ++++++++---------
+ Sources/StikJIT.swift    | 20 ++++++++++----------
+ 3 files changed, 26 insertions(+), 28 deletions(-)
+
+diff --git a/Sources/DDISession.swift b/Sources/DDISession.swift
+index 8b9777c..74763a4 100644
+--- a/Sources/DDISession.swift
++++ b/Sources/DDISession.swift
+@@ -24,11 +24,11 @@ final class DDISession {
+         }
+     }
+ 
+-    private let pairingFilePath: String
++    private let pairingData: Data
+     private let configuration: StikJIT.Configuration
+ 
+-    init(pairingFilePath: String, configuration: StikJIT.Configuration) {
+-        self.pairingFilePath = pairingFilePath
++    init(pairingData: Data, configuration: StikJIT.Configuration) {
++        self.pairingData = pairingData
+         self.configuration = configuration
+     }
+ 
+@@ -190,14 +190,13 @@ final class DDISession {
+     }
+ 
+     private func openPairingFile() throws -> OpaquePointer {
+-        guard !pairingFilePath.isEmpty, FileManager.default.fileExists(atPath: pairingFilePath) else {
+-            throw StikJITError.pairingFile("not found at \(pairingFilePath)")
+-        }
+         var handle: OpaquePointer?
+-        try IdeviceFFI.check("failed to read pairing file") {
+-            pairingFilePath.withCString { rp_pairing_file_read($0, &handle) }
++        try IdeviceFFI.check("failed to parse pairing credentials") {
++            pairingData.withUnsafeBytes { buffer in
++                rp_pairing_file_from_bytes(buffer.bindMemory(to: UInt8.self).baseAddress, UInt(buffer.count), &handle)
++            }
+         }
+-        guard let handle else { throw StikJITError.pairingFile("unreadable at \(pairingFilePath)") }
++        guard let handle else { throw StikJITError.pairingFile("invalid credentials") }
+         return handle
+     }
+ 
+diff --git a/Sources/JITSession.swift b/Sources/JITSession.swift
+index e845a80..ab246dd 100644
+--- a/Sources/JITSession.swift
++++ b/Sources/JITSession.swift
+@@ -21,11 +21,11 @@ final class JITSession {
+         }
+     }
+ 
+-    private let pairingFilePath: String
++    private let pairingData: Data
+     private let configuration: StikJIT.Configuration
+ 
+-    init(pairingFilePath: String, configuration: StikJIT.Configuration) {
+-        self.pairingFilePath = pairingFilePath
++    init(pairingData: Data, configuration: StikJIT.Configuration) {
++        self.pairingData = pairingData
+         self.configuration = configuration
+     }
+ 
+@@ -64,14 +64,13 @@ final class JITSession {
+     }
+ 
+     private func openPairingFile() throws -> OpaquePointer {
+-        guard !pairingFilePath.isEmpty, FileManager.default.fileExists(atPath: pairingFilePath) else {
+-            throw StikJITError.pairingFile("not found at \(pairingFilePath)")
+-        }
+         var handle: OpaquePointer?
+-        try IdeviceFFI.check("failed to read pairing file") {
+-            pairingFilePath.withCString { rp_pairing_file_read($0, &handle) }
++        try IdeviceFFI.check("failed to parse pairing credentials") {
++            pairingData.withUnsafeBytes { buffer in
++                rp_pairing_file_from_bytes(buffer.bindMemory(to: UInt8.self).baseAddress, UInt(buffer.count), &handle)
++            }
+         }
+-        guard let handle else { throw StikJITError.pairingFile("unreadable at \(pairingFilePath)") }
++        guard let handle else { throw StikJITError.pairingFile("invalid credentials") }
+         return handle
+     }
+ 
+diff --git a/Sources/StikJIT.swift b/Sources/StikJIT.swift
+index 0e44372..55b0def 100644
+--- a/Sources/StikJIT.swift
++++ b/Sources/StikJIT.swift
+@@ -81,13 +81,13 @@ public enum StikJIT {
+ 
+     @available(*, deprecated, message: "Use enableJIT with ddiPaths to prepare the device before enabling JIT.")
+     public static func enableJIT(targetPID: Int32,
+-                                 pairingFile: URL,
++                                 pairingFile: Data,
+                                  configuration: Configuration = .default,
+                                  script: Script = .universal,
+                                  forceScript: Bool = false,
+                                  progress: @escaping (String) -> Void = { _ in }) throws {
+         let txmPresence = ProcessInfo.processInfo.txmPresence
+-        let session = JITSession(pairingFilePath: pairingFile.path, configuration: configuration)
++        let session = JITSession(pairingData: pairingFile, configuration: configuration)
+         try session.enableJIT(targetPID: targetPID,
+                               script: script,
+                               forceScript: forceScript,
+@@ -96,7 +96,7 @@ public enum StikJIT {
+     }
+ 
+     public static func enableJIT(targetPID: Int32,
+-                                 pairingFile: URL,
++                                 pairingFile: Data,
+                                  ddiPaths: DDIPaths,
+                                  configuration: Configuration = .default,
+                                  script: Script = .universal,
+@@ -115,7 +115,7 @@ public enum StikJIT {
+             throw StikJITError.deviceNotReady(reason)
+         }
+ 
+-        let session = JITSession(pairingFilePath: pairingFile.path, configuration: configuration)
++        let session = JITSession(pairingData: pairingFile, configuration: configuration)
+         try session.enableJIT(targetPID: targetPID,
+                               script: script,
+                               forceScript: forceScript,
+@@ -127,7 +127,7 @@ public enum StikJIT {
+         ProcessInfo.processInfo.txmPresence.isPresent
+     }
+ 
+-    public static func prepareDevice(pairingFile: URL,
++    public static func prepareDevice(pairingFile: Data,
+                                      paths: DDIPaths,
+                                      configuration: Configuration = .default,
+                                      progress: @escaping (PreparationStage) -> Void = { _ in }) -> JITReadiness {
+@@ -140,7 +140,7 @@ public enum StikJIT {
+ 
+         do {
+             progress(.checkingDDI)
+-            let session = DDISession(pairingFilePath: pairingFile.path, configuration: configuration)
++            let session = DDISession(pairingData: pairingFile, configuration: configuration)
+             if try !session.isMounted() {
+                 if !paths.allFilesUsable {
+                     try SynchronousDDIDownloader.download(to: paths) { fraction, status in
+@@ -168,9 +168,9 @@ public enum StikJIT {
+         try paths.removeCachedFiles()
+     }
+ 
+-    public static func isDDIMounted(pairingFile: URL,
++    public static func isDDIMounted(pairingFile: Data,
+                                     configuration: Configuration = .default) throws -> Bool {
+-        try DDISession(pairingFilePath: pairingFile.path, configuration: configuration).isMounted()
++        try DDISession(pairingData: pairingFile, configuration: configuration).isMounted()
+     }
+ 
+     @available(iOS 17.4, *)
+@@ -179,11 +179,11 @@ public enum StikJIT {
+         try await DeveloperDiskImageService.shared.downloadIfNeeded(to: paths, progress: progress)
+     }
+ 
+-    public static func mountDDI(pairingFile: URL,
++    public static func mountDDI(pairingFile: Data,
+                                 configuration: Configuration = .default,
+                                 paths: DDIPaths,
+                                 progress: @escaping (Double) -> Void = { _ in }) throws {
+-        let session = DDISession(pairingFilePath: pairingFile.path, configuration: configuration)
++        let session = DDISession(pairingData: pairingFile, configuration: configuration)
+         try session.mountDDI(paths: paths, progress: progress)
+     }
+ }
+-- 
+2.54.0 (Apple Git-157)
+

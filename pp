@@ -226,6 +226,16 @@ def swift_package(name):
 
 def cmd_test(args):
     failed = []
+    if sys.platform == "darwin":
+        # Tests spawn GNU mv/sed/realpath as the build recipes do. Use the same
+        # host selection instead of the BSD tools from the interactive shell.
+        native = subprocess.run(["bash", "-c", '. "$1"; printf "%s" "$PATH"',
+                                 "host-path", os.path.join(REPO, "build/lib.sh")],
+                                capture_output=True, text=True, timeout=30)
+        if native.returncode:
+            sys.stderr.write(native.stderr)
+            return native.returncode
+        os.environ["PATH"] = native.stdout
     # Every test's scratch (tempfile, mkstemp) goes to the build area, not /tmp.
     os.environ["TMPDIR"] = os.path.join(phonelib.BUILD, "tmp")
     os.makedirs(os.environ["TMPDIR"], exist_ok=True)
@@ -252,6 +262,8 @@ def cmd_test(args):
     scratch = os.path.join(phonelib.BUILD, "c-test")
     os.makedirs(scratch, exist_ok=True)
     for name, sources, flags in C_TESTS:
+        if sys.platform == "darwin":
+            flags = [*flags, "-D_DARWIN_C_SOURCE"]
         missing = [s for s in sources if not os.path.exists(os.path.join(REPO, s))]
         if missing and all(s.startswith("upstream/") for s in missing):
             print(f"pp test: C test {name}: skipped (not checked out: {', '.join(missing)})", flush=True)
@@ -403,7 +415,7 @@ def phone_status():
             s["app"] = phone.bundle_id().split(".", 1)[1]
             s["app_pid"] = phone.pid()
             s["battery"] = phone.battery()
-            text = phone.pmd("disk", "lockdown", "get", "--domain", "com.apple.disk_usage", check=False)
+            text = phone.pmd("disk", "lockdown", "get", *phonelib.lockdown_domain_args("com.apple.disk_usage"), check=False)
             try:
                 s["free_gb"] = round(json.loads(text[text.index("{"):text.rindex("}") + 1])["AmountDataAvailable"] / 1e9, 1)
             except (ValueError, KeyError):

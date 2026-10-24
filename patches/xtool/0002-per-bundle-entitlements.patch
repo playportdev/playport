@@ -1,0 +1,29 @@
+From ec03f708b3860300373cf22ec77ad08aec461186 Mon Sep 17 00:00:00 2001
+From: CircuitSerein <263436322+CircuitSerein@users.noreply.github.com>
+Date: Fri, 23 Oct 2026 23:36:24 +0300
+Subject: [PATCH] fix: pass every bundle entitlement to the signer
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-23-pairing-hardening.md
+Offered-upstream: not yet; local verification in progress
+---
+ Sources/XKit/Signer/SignerImpl.swift | 3 ---
+ 1 file changed, 3 deletions(-)
+
+diff --git a/Sources/XKit/Signer/SignerImpl.swift b/Sources/XKit/Signer/SignerImpl.swift
+index 3217a95..6dda1e9 100644
+--- a/Sources/XKit/Signer/SignerImpl.swift
++++ b/Sources/XKit/Signer/SignerImpl.swift
+@@ -152,9 +152,6 @@ public actor Signer {
+         entitlementMapping: [URL: Entitlements],
+         progress: @escaping (Double?) -> Void
+     ) async throws {
+-        // TODO: #131: update Zupersign to handle multiple entitlements files
+-        // this is a temp hack to just pass along the root app entitlements
+-        let entitlementMapping = entitlementMapping.filter { $0.key.path == app.path }
+         try self._sign(
+             app: app,
+             identity: identity,
+-- 
+2.54.0 (Apple Git-157)
+

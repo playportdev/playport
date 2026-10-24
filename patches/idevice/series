@@ -1,1 +1,3 @@
 0001-remote-pairing-allow-caller-Bonjour-advertising-and-.patch
+0002-harden-pairing-and-tls.patch
+0003-authenticate-pairing-peer.patch

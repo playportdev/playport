@@ -82,7 +82,7 @@ stage_llvm() {
     mkdir -p "$hb"
     cmake -G Ninja -B "$ROOT/llvm-host-build" -S "$ROOT/llvm-project/llvm" \
         -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
-        -DCMAKE_CXX_FLAGS="-include cstdint" \
+        -DCMAKE_CXX_FLAGS="-include cstdint -include type_traits" \
         -DLLVM_TARGETS_TO_BUILD="" -DLLVM_ENABLE_ASSERTIONS=On \
         -DLLVM_ENABLE_ZSTD=Off -DLLVM_ENABLE_ZLIB=Off -DLLVM_ENABLE_TERMINFO=Off -DLLVM_ENABLE_LIBXML2=Off \
         -DLLVM_BUILD_TOOLS=Off -DLLVM_INCLUDE_TESTS=Off -DLLVM_INCLUDE_BENCHMARKS=Off -DLLVM_INCLUDE_EXAMPLES=Off \

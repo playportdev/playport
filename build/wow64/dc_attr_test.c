@@ -1,8 +1,8 @@
 /* The shared DC_ATTR arena (madeira-unix 0065) and i386 gdi32's mapping of a
  * host UserPointer into its window alias (wine-pe 0019), compiled from the
  * patches, with real 4 GiB windows and a mocked Wine view tree.
- * vm_remap is Mach-only: here a shared anonymous arena and Linux mremap with
- * old size 0 stand in for it (both alias the same pages).
+ * A shared arena and Linux mremap (or a shared file on macOS) stand in for
+ * vm_remap: both mappings alias the same pages.
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 #define _GNU_SOURCE
@@ -117,6 +117,11 @@ typedef int vm_prot_t, kern_return_t;
 #define VM_PROT_WRITE PROT_WRITE
 static int mach_task_self(void) { return 1; }
 static int fail_remap;
+#ifdef __APPLE__
+static int arena_fd = -1;
+static off_t arena_offset;
+static uintptr_t arena_source;
+#endif
 static kern_return_t vm_remap(int task, vm_address_t *target, size_t size, size_t mask, int flags,
                               int src_task, vm_address_t src, int copy, vm_prot_t *cur,
                               vm_prot_t *max, int inherit)
@@ -124,7 +129,12 @@ static kern_return_t vm_remap(int task, vm_address_t *target, size_t size, size_
     assert(task == 1 && src_task == 1 && !mask && !copy && inherit == VM_INHERIT_NONE &&
            flags == (VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE));
     if (fail_remap) return KERN_FAILURE;
+#ifdef __APPLE__
+    assert(src == arena_source);
+    void *p = mmap((void *)*target, size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, arena_fd, arena_offset);
+#else
     void *p = mremap((void *)src, 0, size, MREMAP_MAYMOVE | MREMAP_FIXED, (void *)*target);
+#endif
     assert(p == (void *)*target);
     *cur = *max = PROT_READ | PROT_WRITE;
     return KERN_SUCCESS;
@@ -158,9 +168,21 @@ static NTSTATUS map_view(struct file_view **ret, void *base, size_t size, unsign
     assert(!base && !type && !low && !high && !align);
     assert(vprot == (VPROT_READ | VPROT_WRITE | VPROT_COMMITTED));
     if (fail_map) return STATUS_NO_MEMORY;
+#ifdef __APPLE__
+    char path[1024];
+    snprintf(path, sizeof(path), "%s/wow64-arena.XXXXXX", getenv("TMPDIR") ? getenv("TMPDIR") : ".");
+    arena_fd = mkstemp(path);
+    assert(arena_fd >= 0 && !unlink(path) && !ftruncate(arena_fd, size + granularity_mask));
+    char *raw = mmap(NULL, size + granularity_mask, PROT_READ | PROT_WRITE, MAP_SHARED, arena_fd, 0);
+#else
     char *raw = mmap(NULL, size + granularity_mask, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+#endif
     assert(raw != MAP_FAILED);
     char *p = (char *)(((uintptr_t)raw + granularity_mask) & ~(uintptr_t)granularity_mask);
+#ifdef __APPLE__
+    arena_offset = p - raw;
+    arena_source = (uintptr_t)p;
+#endif
     if (p != raw) assert(!munmap(raw, p - raw));
     if (granularity_mask - (size_t)(p - raw)) assert(!munmap(p + size, granularity_mask - (p - raw)));
     struct file_view *v = alloc_view();
@@ -202,11 +224,18 @@ static void faults(uintptr_t addr)
     if (!pid)
     {
         signal(SIGSEGV, SIG_DFL);
+        signal(SIGBUS, SIG_DFL);
         (void)*(volatile char *)addr;
         _exit(0);
     }
     int status;
-    assert(waitpid(pid, &status, 0) == pid && WIFSIGNALED(status) && WTERMSIG(status) == SIGSEGV);
+    assert(waitpid(pid, &status, 0) == pid && WIFSIGNALED(status) &&
+#ifdef __APPLE__
+           (WTERMSIG(status) == SIGSEGV || WTERMSIG(status) == SIGBUS)
+#else
+           WTERMSIG(status) == SIGSEGV
+#endif
+    );
 }
 
 int main(void)
@@ -297,5 +326,8 @@ int main(void)
     assert(!memcmp(buckets + 0x200, "later", 6) && header->host == (uintptr_t)arena);
     assert(find_view(arena, IOS_WOW64_DC_ATTR_SIZE)->arena);
     puts("WoW64 DC_ATTR arena: PASS (one arena, aliases in disjoint windows, coherence, gdi32 mapping, rollback, teardown)");
+#ifdef __APPLE__
+    assert(!close(arena_fd));
+#endif
     return 0;
 }

@@ -1,0 +1,551 @@
+From c508feed3ad0539c41c376d13c082a080e1cac46 Mon Sep 17 00:00:00 2001
+From: CircuitSerein <263436322+CircuitSerein@users.noreply.github.com>
+Date: Sat, 24 Oct 2026 00:19:50 +0300
+Subject: [PATCH] fix: authenticate pinned remote-pairing peers before client
+ proof
+
+Pin SRP-authenticated peer identity, verify M2 before signing M3, reject non-contributory key exchange, and never silently enroll on verification failure. Legacy records require explicit re-pairing.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-23-pairing-hardening.md
+Offered-upstream: not yet; iOS compatibility verification in progress
+---
+ idevice/src/remote_pairing/errors.rs          |   6 +
+ idevice/src/remote_pairing/mod.rs             |  47 +++-
+ idevice/src/remote_pairing/peer_auth.rs       | 225 ++++++++++++++++++
+ idevice/src/remote_pairing/responder.rs       |   1 +
+ idevice/src/remote_pairing/rp_pairing_file.rs |  32 ++-
+ tools/src/rppairing.rs                        |   8 +-
+ 6 files changed, 307 insertions(+), 12 deletions(-)
+ create mode 100644 idevice/src/remote_pairing/peer_auth.rs
+
+diff --git a/idevice/src/remote_pairing/errors.rs b/idevice/src/remote_pairing/errors.rs
+index a7dd00b..956f521 100644
+--- a/idevice/src/remote_pairing/errors.rs
++++ b/idevice/src/remote_pairing/errors.rs
+@@ -15,6 +15,10 @@ pub enum RemotePairingError {
+     Base64DecodeError(#[from] base64::DecodeError),
+     #[error("Pair verify failed")]
+     PairVerifyFailed,
++    #[error("Peer identity is not pinned; pair this iPhone again")]
++    PeerIdentityMissing,
++    #[error("Peer authentication failed")]
++    PeerAuthenticationFailed,
+     #[error("SRP auth failed")]
+     SrpAuthFailed,
+     #[cfg(feature = "remote_pairing")]
+@@ -31,6 +35,8 @@ impl RemotePairingError {
+             #[cfg(feature = "remote_pairing")]
+             Self::Base64DecodeError(_) => 4,
+             Self::PairVerifyFailed => 5,
++            Self::PeerIdentityMissing => 8,
++            Self::PeerAuthenticationFailed => 9,
+             Self::SrpAuthFailed => 6,
+             #[cfg(feature = "remote_pairing")]
+             Self::ChachaEncryption(_) => 7,
+diff --git a/idevice/src/remote_pairing/mod.rs b/idevice/src/remote_pairing/mod.rs
+index d7eccef..2165e45 100644
+--- a/idevice/src/remote_pairing/mod.rs
++++ b/idevice/src/remote_pairing/mod.rs
+@@ -24,6 +24,7 @@ pub mod errors;
+ mod lockdown;
+ mod opack;
+ mod peer_device;
++mod peer_auth;
+ mod responder;
+ mod rp_pairing_file;
+ mod socket;
+@@ -58,6 +59,7 @@ pub struct RemotePairingClient<R: RpPairingSocketProvider> {
+     server_cipher: ChaCha20Poly1305,
+ 
+     paired_peer_device: Option<PeerDevice>,
++    authenticated: bool,
+ }
+ 
+ impl<R: RpPairingSocketProvider> RemotePairingClient<R> {
+@@ -76,6 +78,7 @@ impl<R: RpPairingSocketProvider> RemotePairingClient<R> {
+             client_cipher,
+             server_cipher,
+             paired_peer_device: None,
++            authenticated: false,
+         }
+     }
+ 
+@@ -99,8 +102,8 @@ impl<R: RpPairingSocketProvider> RemotePairingClient<R> {
+         &self.encryption_key
+     }
+ 
+-    /// Performs the RPPairing handshake, then pair-verify, falling back to a full
+-    /// pair-setup if verification fails.
++    /// Authenticates a pinned peer. Enrollment is explicit: an authentication
++    /// failure must never silently fall back to pair-setup.
+     ///
+     /// Both halves work against either of the services tvOS advertises. A
+     /// successful return does not mean the connection can carry a tunnel, though:
+@@ -109,17 +112,15 @@ impl<R: RpPairingSocketProvider> RemotePairingClient<R> {
+     pub async fn connect<Fut>(
+         &mut self,
+         pairing_file: &mut RpPairingFile,
+-        pin_callback: impl Fn() -> Fut,
++        _pin_callback: impl Fn() -> Fut,
+     ) -> Result<(), IdeviceError>
+     where
+         Fut: std::future::Future<Output = String>,
+     {
++        self.authenticated = false;
+         self.attempt_pair_verify().await?;
+ 
+-        if self.validate_pairing(pairing_file).await.is_err() {
+-            self.pair(pairing_file, pin_callback).await?;
+-        }
+-        Ok(())
++        self.validate_pairing(pairing_file).await
+     }
+ 
+     /// Returns peer device info captured during this client's successful `pair()` flow.
+@@ -135,6 +136,11 @@ impl<R: RpPairingSocketProvider> RemotePairingClient<R> {
+         &mut self,
+         pairing_file: &mut RpPairingFile,
+     ) -> Result<(), IdeviceError> {
++        self.authenticated = false;
++        self.encryption_key.clear();
++        if pairing_file.peer_identifier.is_none() || pairing_file.peer_public_key.is_none() {
++            return Err(RemotePairingError::PeerIdentityMissing.into());
++        }
+         let x_private_key = EphemeralSecret::random_from_rng(OsRng);
+         let x_public_key = X25519PublicKey::from(&x_private_key);
+ 
+@@ -169,6 +175,9 @@ impl<R: RpPairingSocketProvider> RemotePairingClient<R> {
+         };
+ 
+         let data = tlv::deserialize_tlv8(&data)?;
++        if tlv::collect_component_data(&data, tlv::PairingDataComponentType::State) != [2] {
++            return Err(RemotePairingError::PeerAuthenticationFailed.into());
++        }
+ 
+         if data
+             .iter()
+@@ -203,8 +212,9 @@ impl<R: RpPairingSocketProvider> RemotePairingClient<R> {
+         let device_public_key = x25519_dalek::PublicKey::from(peer_pub_bytes);
+         let shared_secret = x_private_key.diffie_hellman(&device_public_key);
+ 
+-        // Save the raw shared secret as the encryption key for tunnel PSK
+-        self.encryption_key = shared_secret.as_bytes().to_vec();
++        if !shared_secret.was_contributory() {
++            return Err(RemotePairingError::PeerAuthenticationFailed.into());
++        }
+ 
+         // Derive encryption key with HKDF-SHA512
+         let hk =
+@@ -216,6 +226,13 @@ impl<R: RpPairingSocketProvider> RemotePairingClient<R> {
+         // ChaCha20Poly1305 AEAD cipher
+         let cipher = ChaCha20Poly1305::new(chacha20poly1305::Key::from_slice(&okm));
+ 
++        let encrypted = tlv::collect_component_data(&data, tlv::PairingDataComponentType::EncryptedData);
++        let plaintext = cipher.decrypt(Nonce::from_slice(b"\x00\x00\x00\x00PV-Msg02"), encrypted.as_slice())
++            .map_err(|_| RemotePairingError::PeerAuthenticationFailed)?;
++        let identity = tlv::deserialize_tlv8(&plaintext)?;
++        peer_auth::verify_pair_peer(&identity, pairing_file, device_public_key.as_bytes(), x_public_key.as_bytes())?;
++        self.encryption_key = shared_secret.as_bytes().to_vec();
++
+         let ed25519_signing_key = &mut pairing_file.e_private_key;
+ 
+         let mut signbuf = Vec::with_capacity(32 + pairing_file.identifier.len() + 32);
+@@ -276,6 +293,9 @@ impl<R: RpPairingSocketProvider> RemotePairingClient<R> {
+             }
+         };
+         let data = tlv::deserialize_tlv8(&data)?;
++        if tlv::collect_component_data(&data, tlv::PairingDataComponentType::State) != [4] {
++            return Err(RemotePairingError::PeerAuthenticationFailed.into());
++        }
+ 
+         // Check if the device responded with an error (which is expected for a new pairing)
+         if data
+@@ -294,6 +314,7 @@ impl<R: RpPairingSocketProvider> RemotePairingClient<R> {
+         let (cc, sc) = Self::derive_main_ciphers(&self.encryption_key);
+         self.client_cipher = cc;
+         self.server_cipher = sc;
++        self.authenticated = true;
+ 
+         Ok(())
+     }
+@@ -367,9 +388,14 @@ impl<R: RpPairingSocketProvider> RemotePairingClient<R> {
+     where
+         Fut: std::future::Future<Output = String>,
+     {
++        // Enrollment alone does not authorize a tunnel. Reconnect and run
++        // pair-verify with the newly pinned peer before requesting one.
++        self.authenticated = false;
++        self.paired_peer_device = None;
+         let (salt, public_key, pin) = self.request_pair_consent(pin_callback).await?;
+         let key = self.init_srp_context(&salt, &public_key, &pin).await?;
+         let tlv = self.save_pair_record_on_peer(pairing_file, &key).await?;
++        peer_auth::pin_setup_peer(&tlv, &key, true, pairing_file)?;
+         let peer_device = peer_device::parse_peer_device_from_tlv(&tlv)?;
+ 
+         pairing_file.alt_irk = Some(peer_device.alt_irk.clone());
+@@ -742,7 +768,7 @@ impl<R: RpPairingSocketProvider> RemotePairingClient<R> {
+                     aad: b"",
+                 },
+             )
+-            .expect("decryption failure!");
++            .map_err(|_| RemotePairingError::PeerAuthenticationFailed)?;
+ 
+         let tlv = tlv::deserialize_tlv8(&plaintext)?;
+ 
+@@ -832,6 +858,7 @@ impl<R: RpPairingSocketProvider> RemotePairingClient<R> {
+     /// paired over that service must be reconnected over `_remotepairing._tcp`
+     /// before a tunnel can be requested.
+     pub async fn create_tcp_listener(&mut self) -> Result<u16, IdeviceError> {
++        if !self.authenticated { return Err(RemotePairingError::PeerAuthenticationFailed.into()); }
+         let request = plist!({
+             "request": {
+                 "_0": {
+diff --git a/idevice/src/remote_pairing/peer_auth.rs b/idevice/src/remote_pairing/peer_auth.rs
+new file mode 100644
+index 0000000..f4c1034
+--- /dev/null
++++ b/idevice/src/remote_pairing/peer_auth.rs
+@@ -0,0 +1,225 @@
++//! Peer identity pinned only by an authenticated SRP setup; never by reconnect.
++use ed25519_dalek::{Signature, VerifyingKey};
++use hkdf::Hkdf;
++use sha2::Sha512;
++use super::{RpPairingFile, errors::RemotePairingError, tlv::{self, TLV8Entry, PairingDataComponentType as T}};
++use crate::IdeviceError;
++
++fn reject() -> IdeviceError { RemotePairingError::PeerAuthenticationFailed.into() }
++
++pub(super) fn pin_setup_peer(entries: &[TLV8Entry], session_key: &[u8], accessory: bool,
++                            record: &mut RpPairingFile) -> Result<(), IdeviceError> {
++    let id = tlv::collect_component_data(entries, T::Identifier);
++    let public = tlv::collect_component_data(entries, T::PublicKey);
++    let signature = tlv::collect_component_data(entries, T::Signature);
++    if id.is_empty() { return Err(reject()); }
++    let public: [u8; 32] = public.as_slice().try_into().map_err(|_| reject())?;
++    let public = VerifyingKey::from_bytes(&public).map_err(|_| reject())?;
++    if public.is_weak() { return Err(reject()); }
++    let signature = Signature::from_slice(&signature).map_err(|_| reject())?;
++    let (salt, info): (&[u8], &[u8]) = if accessory {
++        (b"Pair-Setup-Accessory-Sign-Salt", b"Pair-Setup-Accessory-Sign-Info")
++    } else {
++        (b"Pair-Setup-Controller-Sign-Salt", b"Pair-Setup-Controller-Sign-Info")
++    };
++    let mut x = [0u8; 32];
++    Hkdf::<Sha512>::new(Some(salt), session_key).expand(info, &mut x).map_err(|_| reject())?;
++    let mut signed = x.to_vec();
++    signed.extend_from_slice(&id);
++    signed.extend_from_slice(public.as_bytes());
++    public.verify_strict(&signed, &signature).map_err(|_| reject())?;
++    record.peer_identifier = Some(id);
++    record.peer_public_key = Some(public);
++    Ok(())
++}
++
++pub(super) fn verify_pair_peer(entries: &[TLV8Entry], record: &RpPairingFile,
++                              peer_ephemeral: &[u8; 32], client_ephemeral: &[u8; 32]) -> Result<(), IdeviceError> {
++    let id = tlv::collect_component_data(entries, T::Identifier);
++    let signature = Signature::from_slice(&tlv::collect_component_data(entries, T::Signature)).map_err(|_| reject())?;
++    let expected = record.peer_identifier.as_ref().ok_or(RemotePairingError::PeerIdentityMissing)?;
++    let public = record.peer_public_key.as_ref().ok_or(RemotePairingError::PeerIdentityMissing)?;
++    if &id != expected || id.is_empty() || public.is_weak() { return Err(reject()); }
++    let mut signed = peer_ephemeral.to_vec();
++    signed.extend_from_slice(&id);
++    signed.extend_from_slice(client_ephemeral);
++    public.verify_strict(&signed, &signature).map_err(|_| reject())
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use ed25519_dalek::{Signer, SigningKey};
++
++    fn setup(key: &SigningKey, session: &[u8], accessory: bool) -> Vec<TLV8Entry> {
++        let (salt, info): (&[u8], &[u8]) = if accessory {
++            (b"Pair-Setup-Accessory-Sign-Salt", b"Pair-Setup-Accessory-Sign-Info")
++        } else { (b"Pair-Setup-Controller-Sign-Salt", b"Pair-Setup-Controller-Sign-Info") };
++        let id = b"test-peer";
++        let mut x = [0; 32];
++        Hkdf::<Sha512>::new(Some(salt), session).expand(info, &mut x).unwrap();
++        let mut message = x.to_vec();
++        message.extend_from_slice(id);
++        message.extend_from_slice(key.verifying_key().as_bytes());
++        vec![TLV8Entry { tlv_type: T::Identifier, data: id.to_vec() },
++             TLV8Entry { tlv_type: T::PublicKey, data: key.verifying_key().to_bytes().to_vec() },
++             TLV8Entry { tlv_type: T::Signature, data: key.sign(&message).to_bytes().to_vec() }]
++    }
++
++    #[test]
++    fn setup_pins_only_verified_identity_and_round_trips() {
++        let key = SigningKey::from_bytes(&[7; 32]);
++        for accessory in [false, true] {
++            let entries = setup(&key, b"authenticated srp session", accessory);
++            let mut record = RpPairingFile::generate("test");
++            pin_setup_peer(&entries, b"authenticated srp session", accessory, &mut record).unwrap();
++            let loaded = RpPairingFile::from_bytes(&record.to_bytes()).unwrap();
++            assert_eq!(loaded.peer_identifier.as_deref(), Some(b"test-peer".as_slice()));
++            assert_eq!(loaded.peer_public_key.unwrap(), key.verifying_key());
++            assert!(pin_setup_peer(&entries, b"wrong session", accessory, &mut record).is_err());
++            assert!(pin_setup_peer(&entries, b"authenticated srp session", !accessory, &mut record).is_err());
++            for missing in 0..entries.len() {
++                let mut bad = entries.clone(); bad.remove(missing);
++                assert!(pin_setup_peer(&bad, b"authenticated srp session", accessory, &mut record).is_err());
++            }
++            let mut bad = entries.clone(); bad[2].data[0] ^= 1;
++            assert!(pin_setup_peer(&bad, b"authenticated srp session", accessory, &mut record).is_err());
++        }
++    }
++
++    #[test]
++    fn verify_binds_both_ephemerals_identity_and_pinned_key() {
++        let key = SigningKey::from_bytes(&[7; 32]);
++        let mut record = RpPairingFile::generate("test");
++        let peer = [1; 32]; let client = [2; 32];
++        record.peer_identifier = Some(b"test-peer".to_vec());
++        record.peer_public_key = Some(key.verifying_key());
++        let mut message = peer.to_vec(); message.extend_from_slice(b"test-peer"); message.extend(client);
++        let entries = vec![TLV8Entry { tlv_type: T::Identifier, data: b"test-peer".to_vec() },
++            TLV8Entry { tlv_type: T::Signature, data: key.sign(&message).to_bytes().to_vec() }];
++        verify_pair_peer(&entries, &record, &peer, &client).unwrap();
++        assert!(verify_pair_peer(&entries, &record, &[3; 32], &client).is_err());
++        assert!(verify_pair_peer(&entries, &record, &peer, &[3; 32]).is_err());
++        record.peer_identifier = Some(b"other-peer".to_vec());
++        assert!(verify_pair_peer(&entries, &record, &peer, &client).is_err());
++        record.peer_identifier = Some(b"test-peer".to_vec());
++        record.peer_public_key = Some(SigningKey::from_bytes(&[8; 32]).verifying_key());
++        assert!(verify_pair_peer(&entries, &record, &peer, &client).is_err());
++        record.peer_public_key = None;
++        assert!(verify_pair_peer(&entries, &record, &peer, &client).is_err());
++    }
++    use super::super::{RemotePairingClient, RpPairingSocketProvider};
++    use chacha20poly1305::{ChaCha20Poly1305, KeyInit, Nonce, aead::Aead};
++    use std::{collections::VecDeque, future::Future, pin::Pin, sync::atomic::{AtomicUsize, Ordering}};
++    use serde::Serialize;
++    use base64::{Engine, engine::general_purpose::STANDARD};
++    use plist_macro::plist;
++    use rsa::rand_core::OsRng;
++    use x25519_dalek::{EphemeralSecret, PublicKey};
++
++    #[derive(Debug, Clone, Copy, PartialEq)]
++    enum Mode { Valid, BadSignature, WrongIdentifier, BadCiphertext, ZeroEphemeral }
++    #[derive(Debug)]
++    struct Peer {
++        key: SigningKey,
++        mode: Mode,
++        responses: VecDeque<plist::Value>,
++        m1: usize,
++        m3: usize,
++        setup: usize,
++    }
++    impl Peer {
++        fn new(mode: Mode) -> Self { Self { key: SigningKey::from_bytes(&[7; 32]), mode,
++            responses: VecDeque::new(), m1: 0, m3: 0, setup: 0 } }
++        fn respond(&mut self, tlv: Vec<u8>) {
++            self.responses.push_back(plist!({"event": {"_0": {"pairingData": {"_0": {
++                "data": Self::serialize_bytes(&tlv)
++            }}}}}));
++        }
++    }
++    impl RpPairingSocketProvider for Peer {
++        fn serialize_bytes(bytes: &[u8]) -> plist::Value { plist::Value::String(STANDARD.encode(bytes)) }
++        fn deserialize_bytes(value: plist::Value) -> Option<Vec<u8>> { STANDARD.decode(value.as_string()?).ok() }
++        fn recv_plain<'a>(&'a mut self) -> Pin<Box<dyn Future<Output=Result<plist::Value,IdeviceError>> + Send + 'a>> {
++            let next = self.responses.pop_front().ok_or_else(reject);
++            Box::pin(async move { next })
++        }
++        fn send_encrypted(&mut self, _: Vec<u8>, _: usize) -> Pin<Box<dyn Future<Output=Result<(),IdeviceError>> + Send + '_>> {
++            panic!("unauthenticated client must not request a tunnel")
++        }
++        fn send_plain(&mut self, value: impl Serialize, _: usize) -> Pin<Box<dyn Future<Output=Result<(),IdeviceError>> + Send + '_>> {
++            let value = serde_json::to_value(value).unwrap();
++            if value.get("request").is_some() {
++                self.responses.push_back(plist!({"response": {"_1": {"handshake": {"_0": {"accepted": true}}}}}));
++            } else if let Some(data) = value.pointer("/event/_0/pairingData/_0") {
++                if data["kind"] == "setupManualPairing" { self.setup += 1; }
++                let entries = tlv::deserialize_tlv8(&STANDARD.decode(data["data"].as_str().unwrap()).unwrap()).unwrap();
++                let state = tlv::collect_component_data(&entries, T::State);
++                if state == [1] {
++                    self.m1 += 1;
++                    let client: [u8; 32] = tlv::collect_component_data(&entries, T::PublicKey).try_into().unwrap();
++                    let private = EphemeralSecret::random_from_rng(OsRng);
++                    let mut ephemeral = PublicKey::from(&private).to_bytes();
++                    let shared = private.diffie_hellman(&PublicKey::from(client));
++                    let id = if self.mode == Mode::WrongIdentifier { b"wrong-peer".as_slice() } else { b"test-peer".as_slice() };
++                    let mut signed = ephemeral.to_vec(); signed.extend_from_slice(id); signed.extend(client);
++                    let mut signature = self.key.sign(&signed).to_bytes().to_vec();
++                    if self.mode == Mode::BadSignature { signature[0] ^= 1; }
++                    let identity = tlv::serialize_tlv8(&[
++                        TLV8Entry { tlv_type: T::Identifier, data: id.to_vec() },
++                        TLV8Entry { tlv_type: T::Signature, data: signature },
++                    ]);
++                    let mut key = [0; 32];
++                    Hkdf::<Sha512>::new(Some(b"Pair-Verify-Encrypt-Salt"), shared.as_bytes())
++                        .expand(b"Pair-Verify-Encrypt-Info", &mut key).unwrap();
++                    let mut encrypted = ChaCha20Poly1305::new((&key).into())
++                        .encrypt(Nonce::from_slice(b"\x00\x00\x00\x00PV-Msg02"), identity.as_slice()).unwrap();
++                    if self.mode == Mode::BadCiphertext { encrypted[0] ^= 1; }
++                    if self.mode == Mode::ZeroEphemeral { ephemeral = [0; 32]; }
++                    self.respond(tlv::serialize_tlv8(&[
++                        TLV8Entry { tlv_type: T::State, data: vec![2] },
++                        TLV8Entry { tlv_type: T::PublicKey, data: ephemeral.to_vec() },
++                        TLV8Entry { tlv_type: T::EncryptedData, data: encrypted },
++                    ]));
++                } else if state == [3] {
++                    self.m3 += 1;
++                    self.respond(tlv::serialize_tlv8(&[TLV8Entry { tlv_type: T::State, data: vec![4] }]));
++                }
++            }
++            Box::pin(async { Ok(()) })
++        }
++    }
++
++    #[tokio::test]
++    async fn invalid_peer_never_gets_m3_tunnel_or_implicit_enrollment() {
++        for mode in [Mode::Valid, Mode::BadSignature, Mode::WrongIdentifier, Mode::BadCiphertext, Mode::ZeroEphemeral] {
++            let mut record = RpPairingFile::generate("test");
++            record.peer_identifier = Some(b"test-peer".to_vec());
++            record.peer_public_key = Some(SigningKey::from_bytes(&[7; 32]).verifying_key());
++            let mut client = RemotePairingClient::new(Peer::new(mode), "test");
++            let enrollment = AtomicUsize::new(0);
++            let result = client.connect(&mut record, || async { enrollment.fetch_add(1, Ordering::SeqCst); "000000".into() }).await;
++            assert_eq!(result.is_ok(), mode == Mode::Valid);
++            assert_eq!(client.inner.m3, usize::from(mode == Mode::Valid));
++            assert_eq!(client.inner.setup, 0);
++            assert_eq!(enrollment.load(Ordering::SeqCst), 0);
++            if mode != Mode::Valid {
++                assert!(!client.authenticated);
++                assert!(client.create_tcp_listener().await.is_err());
++            }
++        }
++        for wrong in [false, true] {
++            let mut record = RpPairingFile::generate("test");
++            if wrong {
++                record.peer_identifier = Some(b"test-peer".to_vec());
++                record.peer_public_key = Some(SigningKey::from_bytes(&[8; 32]).verifying_key());
++            }
++            let mut client = RemotePairingClient::new(Peer::new(Mode::Valid), "test");
++            assert!(client.connect(&mut record, || async { panic!("no enrollment fallback") }).await.is_err());
++            assert_eq!(client.inner.m3, 0);
++            assert_eq!(client.inner.setup, 0);
++            assert!(client.create_tcp_listener().await.is_err());
++        }
++    }
++
++}
+diff --git a/idevice/src/remote_pairing/responder.rs b/idevice/src/remote_pairing/responder.rs
+index 001f0b1..db5c972 100644
+--- a/idevice/src/remote_pairing/responder.rs
++++ b/idevice/src/remote_pairing/responder.rs
+@@ -397,6 +397,7 @@ impl<R: super::RpPairingSocketProvider> PairableHost<R> {
+             })?;
+ 
+         let device_tlv = tlv::deserialize_tlv8(&plaintext)?;
++        super::peer_auth::pin_setup_peer(&device_tlv, &session_key, false, pairing_file)?;
+         let peer_device = peer_device::parse_peer_device_from_tlv(&device_tlv)?;
+ 
+         // m6
+diff --git a/idevice/src/remote_pairing/rp_pairing_file.rs b/idevice/src/remote_pairing/rp_pairing_file.rs
+index 9538493..ab3eab8 100644
+--- a/idevice/src/remote_pairing/rp_pairing_file.rs
++++ b/idevice/src/remote_pairing/rp_pairing_file.rs
+@@ -18,6 +18,8 @@ pub struct RpPairingFile {
+     pub e_public_key: VerifyingKey,
+     pub identifier: String,
+     pub alt_irk: Option<Vec<u8>>,
++    pub peer_identifier: Option<Vec<u8>>,
++    pub peer_public_key: Option<VerifyingKey>,
+ }
+ 
+ impl RpPairingFile {
+@@ -54,6 +56,8 @@ impl RpPairingFile {
+             e_public_key: ed25519_public_key,
+             identifier,
+             alt_irk: None,
++            peer_identifier: None,
++            peer_public_key: None,
+         }
+     }
+ 
+@@ -63,6 +67,8 @@ impl RpPairingFile {
+         self.e_public_key = ed25519_public_key;
+         self.e_private_key = ed25519_private_key;
+         self.alt_irk = None;
++        self.peer_identifier = None;
++        self.peer_public_key = None;
+     }
+ 
+     /// Serialize to XML plist bytes.
+@@ -83,6 +89,10 @@ impl RpPairingFile {
+         if let Some(irk) = &self.alt_irk {
+             dict.insert("alt_irk".into(), plist::Value::Data(irk.clone()));
+         }
++        if let (Some(identifier), Some(key)) = (&self.peer_identifier, &self.peer_public_key) {
++            dict.insert("peer_identifier".into(), plist::Value::Data(identifier.clone()));
++            dict.insert("peer_public_key".into(), plist::Value::Data(key.to_bytes().to_vec()));
++        }
+         plist_to_xml_bytes(&dict)
+     }
+ 
+@@ -137,11 +147,31 @@ impl RpPairingFile {
+             }
+         };
+ 
++        let peer_identifier = p.remove("peer_identifier").and_then(|v| v.into_data());
++        let peer_bytes = p.remove("peer_public_key").and_then(|v| v.into_data());
++        let peer_public_key = match peer_bytes {
++            Some(bytes) => {
++                let array: [u8; 32] = bytes.as_slice().try_into()
++                    .map_err(|_| IdeviceError::UnexpectedResponse("Invalid pinned peer key".into()))?;
++                let key = VerifyingKey::from_bytes(&array)
++                    .map_err(|_| IdeviceError::UnexpectedResponse("Invalid pinned peer key".into()))?;
++                if key.is_weak() { return Err(IdeviceError::UnexpectedResponse("Weak pinned peer key".into())); }
++                Some(key)
++            }
++            None => None,
++        };
++        if peer_identifier.as_ref().is_some_and(|id| id.is_empty())
++            || peer_identifier.is_some() != peer_public_key.is_some() {
++            return Err(IdeviceError::UnexpectedResponse("Incomplete pinned peer identity".into()));
++        }
++
+         Ok(Self {
+             e_private_key: private_key,
+             e_public_key: public_key,
+             identifier,
+             alt_irk,
++            peer_identifier,
++            peer_public_key,
+         })
+     }
+ 
+@@ -163,7 +193,7 @@ impl std::fmt::Debug for RpPairingFile {
+         f.debug_struct("RpPairingFile")
+             .field("e_public_key", &self.e_public_key)
+             .field("identifier", &self.identifier)
+-            .field("alt_irk", &self.alt_irk)
++            .field("alt_irk", &self.alt_irk.as_ref().map(|_| "redacted"))
+             .finish()
+     }
+ }
+diff --git a/tools/src/rppairing.rs b/tools/src/rppairing.rs
+index ebe8a54..a057f1d 100644
+--- a/tools/src/rppairing.rs
++++ b/tools/src/rppairing.rs
+@@ -142,7 +142,13 @@ async fn pair_via_usb(provider: &dyn IdeviceProvider, hostname: &str, output_pat
+     let mut rpf = RpPairingFile::generate(hostname);
+     let mut rpc = RemotePairingClient::new(conn, hostname);
+ 
+-    match rpc.connect(&mut rpf, async || "000000".to_string()).await {
++    // This is the explicit enrollment command. Ordinary tunnel connections
++    // must never turn an authentication error into enrollment.
++    let enrollment = async {
++        rpc.attempt_pair_verify().await?;
++        rpc.pair(&mut rpf, async || "000000".to_string()).await
++    }.await;
++    match enrollment {
+         Ok(()) => match rpf.write_to_file(output_path).await {
+             Ok(()) => println!("Paired! Saved to {output_path}"),
+             Err(e) => eprintln!("Failed to save pairing file: {e}"),
+-- 
+2.54.0 (Apple Git-157)
+

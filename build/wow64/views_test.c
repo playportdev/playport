@@ -172,11 +172,18 @@ static void check_guard(uintptr_t base)
         /* UBSan installs a diagnostic SEGV handler; this child tests the
          * kernel guard, so restore the default signal disposition. */
         signal(SIGSEGV, SIG_DFL);
+        signal(SIGBUS, SIG_DFL);
         *(volatile char *)(base + 0xffff) = 1;
         _exit(0);
     }
     int status;
-    assert(waitpid(pid, &status, 0) == pid && WIFSIGNALED(status) && WTERMSIG(status) == SIGSEGV);
+    assert(waitpid(pid, &status, 0) == pid && WIFSIGNALED(status));
+    /* Darwin reports a guard-page write as SIGBUS; Linux uses SIGSEGV. */
+#ifdef __APPLE__
+    assert(WTERMSIG(status) == SIGSEGV || WTERMSIG(status) == SIGBUS);
+#else
+    assert(WTERMSIG(status) == SIGSEGV);
+#endif
 }
 static void rejected(uintptr_t base, uint32_t guest, size_t size, unsigned int prot, int code)
 {

@@ -1,0 +1,59 @@
+From c07a2d4a2f9458e166c4d71cb1b919f356828c8b Mon Sep 17 00:00:00 2001
+From: CircuitSerein <263436322+CircuitSerein@users.noreply.github.com>
+Date: Fri, 23 Oct 2026 23:36:24 +0300
+Subject: [PATCH] fix: retain increased memory entitlement for free teams
+
+Class: host-app
+Evidence: docs/evidence/2026-10-23-native-macos-host.md
+Offered-upstream: not yet
+---
+ .../Entitlements/DeveloperServicesCapability.swift        | 7 +++++++
+ Sources/XKit/Model/Entitlements/EntitlementTypes.swift    | 8 ++++++++
+ 2 files changed, 15 insertions(+)
+
+diff --git a/Sources/XKit/DeveloperServices/App IDs/Entitlements/DeveloperServicesCapability.swift b/Sources/XKit/DeveloperServices/App IDs/Entitlements/DeveloperServicesCapability.swift
+index 2dca463..1ff49bb 100644
+--- a/Sources/XKit/DeveloperServices/App IDs/Entitlements/DeveloperServicesCapability.swift	
++++ b/Sources/XKit/DeveloperServices/App IDs/Entitlements/DeveloperServicesCapability.swift	
+@@ -139,6 +139,13 @@ extension WirelessAccessoryEntitlement: EntitlementWithCapability {
+     }
+ }
+ 
++extension IncreasedMemoryLimitEntitlement: EntitlementWithCapability {
++    var capability: DeveloperServicesCapability {
++        // Playport local patch: the reference Madeira app signs with this entitlement.
++        DeveloperServicesCapability(rawName: "INCREASED_MEMORY_LIMIT", isFree: true)
++    }
++}
++
+ extension WiFiAwareEntitlement: EntitlementWithCapability {
+     var capability: DeveloperServicesCapability {
+         DeveloperServicesCapability(rawName: "WIFI_AWARE", isFree: false)
+diff --git a/Sources/XKit/Model/Entitlements/EntitlementTypes.swift b/Sources/XKit/Model/Entitlements/EntitlementTypes.swift
+index 1d65a04..d67e40d 100644
+--- a/Sources/XKit/Model/Entitlements/EntitlementTypes.swift
++++ b/Sources/XKit/Model/Entitlements/EntitlementTypes.swift
+@@ -27,6 +27,7 @@ extension EntitlementContainer {
+         InterAppAudioEntitlement.self,
+         WirelessAccessoryEntitlement.self,
+         WiFiAwareEntitlement.self,
++        IncreasedMemoryLimitEntitlement.self,
+         HomeKitEntitlement.self,
+         HealthKitEntitlement.self,
+     ]
+@@ -156,6 +157,13 @@ public struct WirelessAccessoryEntitlement: Entitlement, RawRepresentable {
+     public init(rawValue: Bool) { self.rawValue = rawValue }
+ }
+ 
++public struct IncreasedMemoryLimitEntitlement: Entitlement, RawRepresentable {
++    public static let identifier = "com.apple.developer.kernel.increased-memory-limit"
++
++    public var rawValue: Bool
++    public init(rawValue: Bool) { self.rawValue = rawValue }
++}
++
+ public struct WiFiAwareEntitlement: Entitlement, RawRepresentable {
+     public static let identifier = "com.apple.developer.wifi-aware"
+ 
+-- 
+2.54.0 (Apple Git-157)

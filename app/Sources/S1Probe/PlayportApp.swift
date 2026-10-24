@@ -74,6 +74,7 @@ struct RootView: View {
                         }
                         .animation(LaunchMotion.sheetOut, value: launch.showsSheet)
                     }
+                    .overlay { TouchGamepadOverlay().ignoresSafeArea() }
                     // Playport's menu over the paused game, on a long press of Home (UI/InGameMenuView.swift).
                     .overlay { if menu.isOpen || menu.quitting { InGameMenuView() } }
                     // A web page the game opened, over the running game (UI/GameWebSheet.swift).

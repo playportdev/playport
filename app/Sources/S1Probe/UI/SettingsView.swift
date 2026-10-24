@@ -323,8 +323,13 @@ private struct DownloadSettings: View {
 
 private struct ControllerSettings: View {
     @ObservedObject private var router = PadRouter.shared
+    @AppStorage("touchGamepadEnabled") private var touchGamepad = true
 
     var body: some View {
+        PadRow(id: "set:touch-gamepad", title: "On-screen gamepad",
+               subtitle: "Shown in games when no controller is connected", accessory: .toggle(touchGamepad), hint: "Change") {
+            touchGamepad.toggle()
+        }
         SettingsNote(text: "Connect a controller in iOS Settings › Bluetooth. Playport and its games use the one you "
                      + "pressed last.")
         if router.controllers.isEmpty {

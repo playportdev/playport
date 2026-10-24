@@ -63,6 +63,41 @@ stage_clones() {
 
 stage_shims() {
     mkdir -p "$SHIMS"
+    if [ "$(uname -s)" = Darwin ]; then
+        # Madeira's recipes already use xcrun on Apple hosts. Wrap only its compiler
+        # for reproducible paths; Xcode supplies ar/libtool/sysctl and the real SDK.
+        local tool compiler
+        for tool in clang clang++; do
+            compiler=$HOST_CLANG
+            [ "$tool" != clang++ ] || compiler=$HOST_CLANGXX
+            printf '#!/bin/sh\nexec "%s" "-ffile-prefix-map=%s=unix" "-ffile-prefix-map=%s=darwin-sdk" "$@"\n' \
+                "$compiler" "$ROOT" "$DARWIN_SDK" > "$SHIMS/$tool"
+        done
+        # Keep the path maps when Madeira invokes clang through xcrun too.
+        cat > "$SHIMS/xcrun" <<EOF
+#!/bin/sh
+sdk=macosx
+find=0
+while [ \$# -gt 0 ]; do
+    case \$1 in
+    -sdk|--sdk) sdk=\$2; shift 2 ;;
+    -f|--find) find=1; shift ;;
+    --show-sdk-path) exec /usr/bin/xcrun --sdk "\$sdk" --show-sdk-path ;;
+    clang|clang++)
+        tool=\$1; shift
+        if [ \$find = 1 ]; then echo "$SHIMS/\$tool"; exit 0; fi
+        export SDKROOT=\$(/usr/bin/xcrun --sdk "\$sdk" --show-sdk-path)
+        exec "$SHIMS/\$tool" "\$@" ;;
+    *)
+        if [ \$find = 1 ]; then exec /usr/bin/xcrun --sdk "\$sdk" --find "\$@"; fi
+        exec /usr/bin/xcrun --sdk "\$sdk" "\$@" ;;
+    esac
+done
+EOF
+        chmod +x "$SHIMS/xcrun"
+        chmod +x "$SHIMS/clang" "$SHIMS/clang++"
+        return
+    fi
     # clang: an Apple-target compile (-arch/-miphoneos-version-min/-isysroot SDK)
     # gets --target=arm64-apple-ios and ld64.lld; anything else is the host
     # compiler (configure's CC_FOR_BUILD, which the scripts derive from `xcrun -f clang`).
@@ -137,9 +172,13 @@ stage_gnutls() {
 # output is arch-independent. build-tools' own config.h is the Linux one and
 # must not reach build-macos.
 stage_widl() {
+    local mingw=(--without-mingw)
+    # Wine requires a PE compiler when configured natively on ARM64 macOS,
+    # even when only the host widl/headers are built.
+    [ "$(uname -s)" != Darwin ] || mingw=(--with-mingw="$LLVM_MINGW/bin/clang" --enable-archs=aarch64)
     mkdir -p "$W/build-tools" "$W/build-arm64ec/include"
     ( cd "$W/build-tools" &&
-      ../configure --without-x --without-freetype --without-mingw --enable-win64 \
+      ../configure --without-x --without-freetype "${mingw[@]}" --enable-win64 \
           > "$ROOT/tools-configure.log" 2>&1 &&
       make -j"$(nproc)" include/all > "$ROOT/widl.log" 2>&1 &&
       for h in $(cd include && ls *.h); do

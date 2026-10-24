@@ -31,7 +31,6 @@
 
 import Foundation
 import PlayportKit
-import Relaunch
 import SwiftUI
 
 @MainActor
@@ -160,27 +159,8 @@ final class AppRestart: ObservableObject {
     }
 
     private nonisolated static func request(started: Int64) -> String? {
-        let pairing: Data
-        do { pairing = try BuiltInJit.pairingData() } catch { return "\(error)" }
-        guard let bundle = Bundle.main.bundleIdentifier else { return "no bundle identifier" }
-        let sink = Sink(start: started)
-        let rc = pairing.withUnsafeBytes { raw in
-            playport_relaunch(raw.bindMemory(to: UInt8.self).baseAddress, raw.count, host, bundle, { line, ctx in
-                guard let line, let ctx else { return }
-                Unmanaged<Sink>.fromOpaque(ctx).takeUnretainedValue().say(String(cString: line))
-            }, Unmanaged.passUnretained(sink).toOpaque())
-        }
-        return rc == 0 ? nil : (sink.last ?? "step \(rc) failed")
-    }
-
-    /// Each step of the request, with its time since the game's end.
-    private final class Sink: @unchecked Sendable {
-        let start: Int64
-        var last: String?
-        init(start: Int64) { self.start = start }
-        func say(_ line: String) {
-            last = line
-            AppRestart.log("+\(AppRestart.nowMs - start) ms \(line)")
+        BuiltInJit.requestRelaunch { line in
+            AppRestart.log("+\(AppRestart.nowMs - started) ms \(line)")
         }
     }
 

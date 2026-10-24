@@ -1,0 +1,124 @@
+From ab08727bb474816dace6ad145c9bc9babcb13ded Mon Sep 17 00:00:00 2001
+From: CircuitSerein <263436322+CircuitSerein@users.noreply.github.com>
+Date: Fri, 23 Oct 2026 23:44:33 +0300
+Subject: [PATCH] fix: sign each bundle with its own entitlements
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-23-pairing-hardening.md
+Offered-upstream: not yet; local verification in progress
+---
+ src/bundle.cpp        | 21 +++++++++++++++++----
+ src/bundle.h          |  4 ++++
+ src/lib/Zupersign.cpp | 20 ++++++++++++++++++--
+ 3 files changed, 39 insertions(+), 6 deletions(-)
+
+diff --git a/src/bundle.cpp b/src/bundle.cpp
+index ef4542c..ef5a79e 100644
+--- a/src/bundle.cpp
++++ b/src/bundle.cpp
+@@ -466,11 +466,24 @@ bool ZBundle::SignNode(jvalue& jvNode)
+ 		return false;
+ 	}
+ 
+-	if (!macho.Sign(m_pSignAsset, bForceSign, strBundleId, strInfoSHA1, strInfoSHA256, strCodeResData)) {
+-		return false;
++	// Select by exact canonical bundle path after nested bundles have been
++	// signed. A framework must never inherit application entitlements.
++	string savedEntitlements = m_pSignAsset->m_strEntitleData;
++	if (!m_bundleEntitlements.empty()) {
++		const auto entry = m_bundleEntitlements.find(ZFile::GetFullPath(strBaseFolder.c_str()));
++		if (ZFile::IsPathSuffix(strBaseFolder, ".app") || ZFile::IsPathSuffix(strBaseFolder, ".appex")) {
++			if (entry == m_bundleEntitlements.end() && m_requireBundleEntitlements) {
++				ZLog::ErrorV("Missing entitlements for bundle: %s\n", strBaseFolder.c_str());
++				return false;
++			}
++			m_pSignAsset->m_strEntitleData = entry == m_bundleEntitlements.end() ? "" : entry->second;
++		} else {
++			m_pSignAsset->m_strEntitleData.clear();
++		}
+ 	}
+-
+-	return true;
++	const bool signedOK = macho.Sign(m_pSignAsset, bForceSign, strBundleId, strInfoSHA1, strInfoSHA256, strCodeResData);
++	m_pSignAsset->m_strEntitleData = savedEntitlements;
++	return signedOK;
+ }
+ 
+ bool ZBundle::ModifyPluginsBundleId(const string& strOldBundleId, const string& strNewBundleId)
+diff --git a/src/bundle.h b/src/bundle.h
+index ce16c79..06e720a 100644
+--- a/src/bundle.h
++++ b/src/bundle.h
+@@ -5,11 +5,13 @@
+ #include <vector>
+ #include <list>
+ #include <set>
++#include <map>
+ 
+ class ZBundle
+ {
+ public:
+ 	ZBundle();
++	void SetBundleEntitlements(const std::map<string, string>& entries, bool requireAll = true) { m_bundleEntitlements = entries; m_requireBundleEntitlements = requireAll; }
+ 
+ public:
+ 	bool SignFolder(ZSignAsset* pSignAsset,
+@@ -56,6 +58,8 @@ private:
+ 	bool			m_bForceSign;
+ 	bool			m_bWeakInject;
+ 	bool			m_bRemoveProvision;
++	std::map<string, string> m_bundleEntitlements;
++	bool m_requireBundleEntitlements = true;
+ 	ZSignAsset*		m_pSignAsset;
+ 	list<ZSignAsset>*	m_pSignAssets;
+ 	vector<string>	m_arrInjectDylibs;
+diff --git a/src/lib/Zupersign.cpp b/src/lib/Zupersign.cpp
+index 7b941e1..92361b0 100644
+--- a/src/lib/Zupersign.cpp
++++ b/src/lib/Zupersign.cpp
+@@ -38,6 +38,22 @@ int zsign_sign(
+         return -1;
+     }
+ 
++    std::map<string, string> bundleEntitlements;
++    for (size_t i = 0; i < num_entitlements; ++i) {
++        const auto &entry = entitlements[i];
++        if (!entry.bundle_path || !entry.data || entry.len == 0 ||
++            !bundleEntitlements.emplace(ZFile::GetFullPath(entry.bundle_path),
++                string(static_cast<const char *>(entry.data), entry.len)).second) {
++            *exception = strdup("Invalid or duplicate bundle entitlements mapping");
++            return -1;
++        }
++    }
++    const auto root = bundleEntitlements.find(ZFile::GetFullPath(app_directory));
++    if (root == bundleEntitlements.end()) {
++        *exception = strdup("Missing root bundle entitlements");
++        return -1;
++    }
++
+     progress(progressContext, -1);
+ 
+     EVP_PKEY *pkey = NULL;
+@@ -68,10 +84,9 @@ int zsign_sign(
+     }
+ 
+     ZSignAsset asset;
+-    // TODO: Use diff ents for diff products
+     success = asset.Init(
+         cert, pkey, "",
+-        string(static_cast<const char *>(entitlements[0].data), entitlements[0].len),
++        root->second,
+         is_adhoc, false, false
+     );
+     if (!success) {
+@@ -82,6 +97,7 @@ int zsign_sign(
+     }
+ 
+     ZBundle bundle;
++    bundle.SetBundleEntitlements(bundleEntitlements, !is_adhoc);
+     success = bundle.SignFolder(
+         &asset,
+         app_directory,
+-- 
+2.54.0 (Apple Git-157)
+

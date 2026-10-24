@@ -9,3 +9,4 @@
 0008-winemetal-per-render-pass-GPU-profile-with-DXMT_PASS.patch
 0009-d3d11-keep-lossless-compression-on-colour-typeless-t.patch
 0010-d3d11-share-textures-within-the-process.patch
+0011-meson-skip-native-Metal-tools-in-PE-only-cross-builds.patch

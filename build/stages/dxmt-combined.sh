@@ -25,8 +25,8 @@
 # prefix maps).
 set -euo pipefail
 
-ROOT=$(realpath -m "${1:?usage: $0 ROOT}")
 . "$(dirname "$0")/../lib.sh"
+ROOT=$(realpath -m "${1:?usage: $0 ROOT}")
 DXMT_UNIX=$(realpath "${DXMT_UNIX:?set DXMT_UNIX to a stages/dxmt-patched.sh ROOT}")
 TBLGEN=${TBLGEN:?set TBLGEN to an LLVM 15.0.7 llvm-tblgen}
 LLVM_TAG=$(pin llvm-project)
@@ -54,7 +54,7 @@ cmake -G Ninja -S "$LLVM_PROJECT/llvm" -B "$LLVM_IOS" \
     -DCMAKE_C_COMPILER_TARGET=$TARGET -DCMAKE_CXX_COMPILER_TARGET=$TARGET -DCMAKE_ASM_COMPILER_TARGET=$TARGET \
     -DCMAKE_AR="$(command -v llvm-ar)" -DCMAKE_RANLIB="$(command -v llvm-ranlib)" \
     -DCMAKE_EXE_LINKER_FLAGS="--ld-path=$LD64" -DCMAKE_SHARED_LINKER_FLAGS="--ld-path=$LD64" \
-    -DCMAKE_C_FLAGS="$MAP" -DCMAKE_CXX_FLAGS="$MAP -stdlib++-isystem $SDK/usr/include/c++/v1" \
+    -DCMAKE_C_FLAGS="$MAP" -DCMAKE_CXX_FLAGS="$MAP -stdlib++-isystem $SDK/usr/include/c++/v1 -include cstdint -include type_traits" \
     -DLLVM_HOST_TRIPLE=$TARGET -DLLVM_TABLEGEN="$TBLGEN" \
     -DLLVM_TARGETS_TO_BUILD="" -DLLVM_ENABLE_ASSERTIONS=On \
     -DLLVM_ENABLE_ZSTD=Off -DLLVM_ENABLE_ZLIB=Off -DLLVM_ENABLE_TERMINFO=Off -DLLVM_ENABLE_LIBXML2=Off \

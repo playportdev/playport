@@ -79,7 +79,7 @@ class UiEnvTest(unittest.TestCase):
         not end the run, the UI's does."""
         m = load()
         for ok in ("play:app-367520", "probe:relaunch", "probe:helper-kill-hold", "probe:helper-report", "probe:native-auth",
-                   "probe:pairing", "probe:pairing-cancel", "probe:pairing-use",
+                   "probe:pairing", "probe:pairing-cancel", "probe:pairing-use", "probe:pairing-isolation",
                    "jit:setup", "jit:pair", "jit:continue", "jit:open-settings", "jit:cancel", "jit:wait",
                    "probe:settings-url-0", "probe:settings-url-5"):
             self.assertTrue(m.ACTION_RE.match(ok), ok)
@@ -149,6 +149,17 @@ class UiEnvTest(unittest.TestCase):
         # pad: after a play: without the menu is an action for the restarted process, as before
         self.assertEqual(m.in_game(["play:app-367520", "pad:a"], 1), 0)
         self.assertTrue(m.after_play(["play:app-367520", "pad:a"]))
+
+    def test_touch_controls_run_during_play(self):
+        m = load()
+        for action in ("touch:A", "touch:A+ls-left@500", "touch:RT+Back@10000"):
+            self.assertTrue(m.ACTION_RE.match(action), action)
+        for action in ("touch:", "touch:A@0", "touch:A@10001", "touch:A++B", "touch:nope"):
+            self.assertFalse(m.ACTION_RE.match(action), action)
+        actions = ["play:app-367520", "wait:10", "touch:A+ls-left@500", "menu:open", "menu:quit"]
+        self.assertEqual(m.in_game(actions, 1), 4)
+        self.assertIsNone(m.pad_after_play(actions))
+        m.parse(["--action", actions[0], "--action", actions[1], "--action", actions[2]])
 
     def test_pad_after_play_is_refused_and_settings_arguments_may_be_a_list(self):
         m = load()

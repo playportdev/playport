@@ -599,7 +599,7 @@ class UpstreamSync(unittest.TestCase):
               "echo ipa > \"$PLAYPORT_OUT/x/Playport-26.5-0.ipa\"\necho rebuilt > app/artifacts.tsv\n"
               "echo \"12:00:00  IPA $PLAYPORT_OUT/x/Playport-26.5-0.ipa\"\n"
               "echo \"12:00:00  sha256 $(printf '0%.0s' $(seq 64))\"\n")
-        for d in ("app/HostIOKit", "app/ContentKit", "app/GOGClient", "app/EpicClient", "app/SteamClient", "app/PlayportKit", "build/generated"):
+        for d in ("app/HostIOKit", "app/ContentKit", "app/GOGClient", "app/EpicClient", "app/SteamClient", "app/PlayportKit", "app/JITKit", "build/generated"):
             write(pp, f"{d}/.keep", "")
         write(pp, "app/artifacts.tsv", "old\n")
         commit(pp, "a buildable stand-in", links=[("upstream/madeira", self.m0)])
@@ -613,6 +613,7 @@ class UpstreamSync(unittest.TestCase):
         self.assertEqual(r["outcome"], "paused")
         self.assertTrue(all(g["ok"] for g in r["gates"].values()), r["gates"])
         self.assertIn("swift-test PlayportKit", r["gates"])
+        self.assertIn("swift-test JITKit", r["gates"])
         branch = f"sync/{self.m2[:8]}"
         self.assertEqual(git(pp, "show", f"{branch}:app/artifacts.tsv"), "rebuilt")
         self.assertIn("build outputs", git(pp, "log", "-1", "--format=%s", branch))

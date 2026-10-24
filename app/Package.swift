@@ -53,6 +53,7 @@ let package = Package(
     dependencies: [
         // The host I/O decisions (key map, pads, lifecycle order), tested on the Linux host.
         .package(path: "HostIOKit"),
+        .package(path: "JITKit"),
         // The native Steam protocol client (app/SteamClient). The app uses SteamClientKit only;
         // its Linux-only CCurlWS target is conditioned out on Apple platforms.
         .package(path: "SteamClient"),
@@ -146,7 +147,7 @@ let package = Package(
         .target(name: "PlayportJITEntry"),
         .target(
             name: "PlayportJIT",
-            dependencies: ["StikJIT", "JITHelperXPC", "PlayportJITEntry"],
+            dependencies: ["StikJIT", "JITHelperXPC", "PlayportJITEntry", "Relaunch", .product(name: "JITKit", package: "JITKit")],
             swiftSettings: [.swiftLanguageMode(.v5)] + (release ? [.define("PLAYPORT_RELEASE")] : []),
             linkerSettings: [
                 // Nothing references the principal class but the Objective-C
@@ -163,7 +164,7 @@ let package = Package(
                            .product(name: "GOGClientKit", package: "GOGClient"),
                            .product(name: "EpicClientKit", package: "EpicClient"),
                            .product(name: "PlayportKit", package: "PlayportKit")]
-                + ["Relaunch"] + (release ? [] : ["AuthProbe"]),
+                + (release ? [] : ["AuthProbe"]),
             path: "Sources/S1Probe",
             // Runtime/ ships at the app root through xtool.yml `resources`, not
             // as a SwiftPM resource bundle: ntdll resolves nls/ and <arch>-windows/

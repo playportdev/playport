@@ -21,12 +21,12 @@
 # first use. Nothing is installed; all output stays under ROOT.
 set -euo pipefail
 
+. "$(dirname "$0")/../lib.sh"
 ROOT=$(realpath -m "${1:?usage: $0 ROOT [stage...]}")
 shift
 STAGES=${*:-llvm air}
 HERE=$(dirname "$(realpath "$0")")
 PROBE=$HERE/probe
-. "$HERE/../lib.sh"
 DXB=${DXMT_BUILD_ROOT:-$ROOT/dxmt-build}
 B=$ROOT/llvm15/bin
 HELPERS="air_msad air_samplepos air_tessellation"
@@ -49,7 +49,7 @@ stage_llvm() {
     if [ -n "$ok" ]; then echo "llvm15: tools present, not reconfigured"; return 0; fi
     need_dxb
     cmake -G Ninja -B "$ROOT/llvm15" -S "$DXB/llvm-project/llvm" -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_CXX_FLAGS="-include cstdint" \
+        -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_CXX_FLAGS="-include cstdint -include type_traits" \
         -DLLVM_TARGETS_TO_BUILD=X86 -DLLVM_ENABLE_ASSERTIONS=On \
         -DLLVM_ENABLE_ZSTD=Off -DLLVM_ENABLE_ZLIB=Off -DLLVM_ENABLE_TERMINFO=Off -DLLVM_ENABLE_LIBXML2=Off \
         -DLLVM_INCLUDE_TESTS=Off -DLLVM_INCLUDE_BENCHMARKS=Off -DLLVM_INCLUDE_EXAMPLES=Off \

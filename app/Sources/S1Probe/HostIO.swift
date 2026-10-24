@@ -79,7 +79,7 @@ final class HostIO {
     /// What the guest's pads get (HostIOKit.GuestPadGate), from the main thread
     /// and the scripted pad's queue; host_pad_set is called under it, so a
     /// stale value never overtakes the rest the menu put there.
-    nonisolated static let gate = OSAllocatedUnfairLock(initialState: GuestPadGate())
+    nonisolated static let gate = OSAllocatedUnfairLock(initialState: (guest: GuestPadGate(), sources: TouchPadMixer()))
     /// The in-game menu's controls to the session root, in order (pauseGame).
     private nonisolated static let sessionQueue = DispatchQueue(label: "hostio.session", qos: .userInitiated)
     private var observers: [NSObjectProtocol] = []
@@ -178,6 +178,8 @@ final class HostIO {
             HostIO.log("hostio: keyboard disconnected")
         })
         if let k = GCKeyboard.coalesced { HostIO.log("hostio: keyboard connected \"\(k.vendorName ?? "?")\"") }
+        // Connect player one before Unity enumerates XInput devices.
+        Self.publish(PadValues(), slot: 0, touch: true)
         GCController.controllers().forEach(attach(controller:))
         GCMouse.mice().forEach(attach(mouse:))
         #if !PLAYPORT_RELEASE
@@ -344,8 +346,16 @@ final class HostIO {
         HostIO.log("hostio: controller disconnected \"\(c.vendorName ?? "?")\"")
         guard let slot = slots.disconnect(ObjectIdentifier(c)) else { return }
         HostIO.trace.update { $0.pads[slot] = nil }
-        Self.gate.withLock { $0.disconnect(slot: slot) }
-        host_pad_disconnect(Int32(slot))
+        Self.gate.withLock { g in
+            g.sources.disconnect(slot: slot)
+            g.guest.disconnect(slot: slot)
+            if slot == 0 {
+                // Player one remains available to touch after unplugging a controller.
+                Self.set(0, g.guest.input(slot: 0, g.sources.combined) ?? PadValues())
+            } else {
+                host_pad_disconnect(Int32(slot))
+            }
+        }
     }
 
     private func padChanged(_ gp: GCExtendedGamepad, slot: Int) {
@@ -354,11 +364,17 @@ final class HostIO {
         Self.publish(PadMapping.values(input), slot: slot)
     }
 
+    func touchPadChanged(_ input: PadInput) {
+        menuInput(input)
+        Self.publish(PadMapping.values(input), slot: 0, changesOnly: true, touch: true)
+    }
+
     /// A pad's values toward the guest's slot, through the menu's gate.
     /// `changesOnly`: the trace counts only a change (the scripted pad, which sends every 8 ms).
-    nonisolated static func publish(_ v: PadValues, slot: Int, changesOnly: Bool = false) {
+    nonisolated static func publish(_ v: PadValues, slot: Int, changesOnly: Bool = false, touch: Bool = false) {
         gate.withLock { g in
-            guard let out = g.input(slot: slot, v) else { return }
+            let mixed = touch ? g.sources.input(touch: v) : g.sources.input(slot: slot, v)
+            guard let out = g.guest.input(slot: slot, mixed) else { return }
             set(slot, out)
         }
         #if !PLAYPORT_RELEASE
@@ -429,7 +445,7 @@ final class HostIO {
     func holdGuest() {
         guard !menuUp else { return }
         menuUp = true
-        Self.gate.withLock { g in for s in g.hold(.menu) { Self.set(s, PadValues()) } }
+        Self.gate.withLock { g in for s in g.guest.hold(.menu) { Self.set(s, PadValues()) } }
         handle(.menuOpened)
     }
 
@@ -440,7 +456,7 @@ final class HostIO {
         menuEvents([])
         guard menuUp else { return }
         menuUp = false
-        Self.gate.withLock { g in for (s, v) in g.release(.menu) { Self.set(s, v) } }
+        Self.gate.withLock { g in for (s, v) in g.guest.release(.menu) { Self.set(s, v) } }
         handle(.menuClosed)
     }
 
@@ -449,9 +465,9 @@ final class HostIO {
     /// rest, and their presses are the dialog's keys (WindowKeys).
     func dialogOverGame(_ up: Bool) {
         if up {
-            Self.gate.withLock { g in for s in g.hold(.dialog) { Self.set(s, PadValues()) } }
+            Self.gate.withLock { g in for s in g.guest.hold(.dialog) { Self.set(s, PadValues()) } }
         } else {
-            Self.gate.withLock { g in for (s, v) in g.release(.dialog) { Self.set(s, v) } }
+            Self.gate.withLock { g in for (s, v) in g.guest.release(.dialog) { Self.set(s, v) } }
         }
     }
 

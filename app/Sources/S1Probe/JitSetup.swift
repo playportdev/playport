@@ -19,8 +19,8 @@ final class JitSetup: ObservableObject {
     private var visible = false
     private var generation = 0
     private var repair = false
-    private var original: Data?
-    private var candidate: Data?
+    private var original: String?
+    private var candidate: String?
     private var cancellation = OSAllocatedUnfairLock(initialState: false)
     private var waiter: CheckedContinuation<Bool, Never>?
     private var preparation: Task<Void, Never>?
@@ -42,9 +42,24 @@ final class JitSetup: ObservableObject {
         }
         guard waiter == nil else { return false }
         // JIT from another app (JitMethod): that app has its own pairing and tunnel.
-        guard JitProvider.method.usesPairing else { return true }
+        if !JitProvider.method.usesPairing {
+            do {
+                if try BuiltInJit.legacyCredentialsPresent() {
+                    _ = try await BuiltInJit.storedPairingRevision()
+                }
+                if BuiltInJit.needsCredentialRestart { AppRestart.shared.restart(notice: nil); return false }
+                return true
+            } catch {
+                TitleLaunch.shared.message = LaunchMessage(title: "Pairing needs attention",
+                    text: "Finish moving or repairing pairing in Setup check before playing. Your previous pairing was preserved.")
+                return false
+            }
+        }
         do {
-            if try BuiltInJit.storedPairingData() != nil, LocalDevVPN.tunnelUp { return true }
+            if try await BuiltInJit.storedPairingRevision() != nil, LocalDevVPN.tunnelUp {
+                if BuiltInJit.needsCredentialRestart { AppRestart.shared.restart(notice: nil); return false }
+                return true
+            }
         } catch { /* Present a recoverable Keychain error, not an automatic replacement. */ }
         return await withCheckedContinuation { continuation in
             waiter = continuation
@@ -91,9 +106,13 @@ final class JitSetup: ObservableObject {
                     fail("This install cannot enable game debugging. Re-sign Playport with a development signature."); return
                 }
                 if candidate == nil {
-                    do { original = try BuiltInJit.storedPairingData() }
-                    catch { fail("The Keychain could not be read. Unlock this iPhone and try again. Your pairing was not replaced."); return }
+                    do { original = try await BuiltInJit.storedPairingRevision(repair: repair) }
+                    catch {
+                        guard id == generation, presented, !Task.isCancelled else { return }
+                        fail("The Keychain could not be read. Unlock this iPhone and try again. Your pairing was not replaced."); return }
                 }
+                guard id == generation, presented, visible, !Task.isCancelled,
+                      UIApplication.shared.applicationState == .active else { return }
                 if candidate == nil && (original == nil || repair) {
                     phase = .pairing
                     message = "Pair this iPhone"
@@ -147,7 +166,7 @@ final class JitSetup: ObservableObject {
         phase = .checking
         message = "Preparing game debugging… The disk image downloads and mounts automatically."
         let id = generation
-        BuiltInJitStatus.shared.check(pairingFile: candidate, cancelled: cancellation) { status in
+        BuiltInJitStatus.shared.check(candidate: candidate, cancelled: cancellation) { status in
             guard id == self.generation, self.presented else { return }
             guard status == "ready" else {
                 self.fail(status == "unreachable"
@@ -156,30 +175,39 @@ final class JitSetup: ObservableObject {
                         + " Tap Continue to try again.")
                 return
             }
-            do {
-                if let data = self.candidate {
-                    try BuiltInJit.commitGeneratedPairing(data, replacing: self.original)
-                    BuiltInJitStatus.shared.generatedPairingCommitted()
-                    OnDevicePairing.shared.discardCredentials()
-                    self.candidate = nil
-                    BuiltInJitStatus.log("on-device setup: verified pairing committed to Keychain")
+            Task { @MainActor in
+                guard id == self.generation, self.presented else { return }
+                do {
+                    if let token = self.candidate {
+                        try await BuiltInJit.commitGeneratedPairing(token, replacing: self.original)
+                        guard id == self.generation, self.presented else { return }
+                        BuiltInJitStatus.shared.generatedPairingCommitted()
+                        OnDevicePairing.shared.discardCredentials()
+                        self.candidate = nil
+                        BuiltInJitStatus.log("on-device setup: verified pairing committed to Keychain")
+                    }
+                } catch {
+                    if case BuiltInJit.Failure.helper(let why) = error, why.contains("changed during setup") {
+                        self.replacementConflict = true
+                        self.candidate = nil
+                        self.repair = false
+                        OnDevicePairing.shared.discardCredentials()
+                        self.fail("Another pairing was saved during setup. Tap Continue to use it; it was not replaced.")
+                    } else {
+                        self.fail("The pairing could not be saved. Your existing pairing was not replaced.")
+                    }
+                    return
                 }
-            } catch {
-                if case BuiltInJit.Failure.helper(let why) = error, why.contains("changed during setup") {
-                    self.replacementConflict = true
-                    self.candidate = nil
-                    self.repair = false
-                    OnDevicePairing.shared.discardCredentials()
-                    self.fail("Another pairing was saved during setup. Tap Continue to use it; it was not replaced.")
-                } else {
-                    self.fail("The pairing could not be saved. Your existing pairing was not replaced.")
+                self.phase = .ready
+                self.message = "Ready"
+                // Never launch/dismiss over system Settings or another app.
+                if BuiltInJit.needsCredentialRestart {
+                    self.message = "Restarting Playport to finish moving pairing credentials."
+                    AppRestart.shared.restart(notice: nil)
+                    return
                 }
-                return
+                if UIApplication.shared.applicationState == .active { self.finishPresentation() }
             }
-            self.phase = .ready
-            self.message = "Ready"
-            // Never launch/dismiss over system Settings or another app.
-            if UIApplication.shared.applicationState == .active { self.finishPresentation() }
         }
     }
 

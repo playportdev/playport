@@ -26,6 +26,7 @@ struct DeveloperSettings: View {
     @ObservedObject private var pairing = OnDevicePairing.shared
     @ObservedObject private var builtIn = BuiltInJitStatus.shared
     @State private var hold = false
+    @State private var isolation = "Not checked"
 
     var body: some View {
         diagnostics
@@ -101,6 +102,16 @@ struct DeveloperSettings: View {
 
     @ViewBuilder private var probes: some View {
         PadSectionHeader(text: "Probes").id("probes")
+        PadRow(id: "set:dev:pairingIsolation", title: "Pairing Keychain isolation", subtitle: isolation, hint: "Check") {
+            Task {
+                isolation = "Checking…"
+                do {
+                    try await BuiltInJit.checkIsolation()
+                    isolation = "Helper read passed; main read denied"
+                    BuiltInJitStatus.log("keychain isolation: helper read passed; main read denied")
+                } catch { isolation = String(describing: error) }
+            }
+        }
         PadRow(id: "set:dev:nativeAuth", title: "Native authentication", subtitle: authProbe.status,
                hint: "Run") {
             if !authProbe.busy { Task { _ = await authProbe.run() } }

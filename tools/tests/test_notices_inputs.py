@@ -208,6 +208,12 @@ class Pipeline(unittest.TestCase):
     def test_verify_compares_the_ipa_with_the_staged_bundle(self):
         self.assertIn('--notices "$APP/Staged/Licenses"', self.text)
 
+    def test_release_links_every_local_swift_package(self):
+        manifest = (REPO / "app/Package.swift").read_text()
+        packages = re.findall(r'\.package\(path:\s*"([^"]+)"\)', manifest)
+        self.assertTrue(packages)
+        self.assertLessEqual(set(packages), set(stage_artifacts.RELEASE_LINKS))
+
 
 if __name__ == "__main__":
     unittest.main()
