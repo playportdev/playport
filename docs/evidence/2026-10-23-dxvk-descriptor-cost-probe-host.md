@@ -1,7 +1,7 @@
 # DXVK descriptor elapsed probe — host only
 
 **Linear:** [PLA-431](https://linear.app/playportdev/issue/PLA-431). **Plan:**
-[Proton parity](../plans/2026-10-22-kk-proton-parity.md), A0 queue item 2.
+[Proton parity](../plans/finished.md#kosmickrisp-proton-parity), A0 queue item 2.
 DXVK **0006**, `Class: diagnostics`, default disabled. Independent review pending.
 No phone/install/UI/perf commands, game runs, CPU attribution or A2 authorization.
 

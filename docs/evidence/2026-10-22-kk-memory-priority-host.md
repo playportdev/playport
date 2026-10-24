@@ -1,7 +1,7 @@
 # KosmicKrisp memory priority: host results
 
 **Linear:** [PLA-431](https://linear.app/playportdev/issue/PLA-431). **Plan:**
-[kk-proton-parity](../plans/2026-10-22-kk-proton-parity.md#b1-vk_ext_memory_priority-and-vk_ext_pageable_device_local_memory),
+[kk-proton-parity](../plans/finished.md#kosmickrisp-proton-parity),
 chunk B1. **Where:** the workstation's host mock of KosmicKrisp (`build/mesa-host-test`), from
 the side copy `.work/worktrees/kkparity` (decision 0117). **Not run on the phone.**
 

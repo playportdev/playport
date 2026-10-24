@@ -1,7 +1,7 @@
 # Descriptor diagnostic parser — offline host only
 
 **Linear:** [PLA-431](https://linear.app/playportdev/issue/PLA-431).
-**Plan:** [A0 Runner item 4](../plans/2026-10-22-kk-proton-parity.md).
+**Plan:** [A0 Runner item 4](../plans/finished.md#kosmickrisp-proton-parity).
 **Correction implemented; independent re-review pending. Device gate BLOCK.** No native/client/runtime/Swift/profiler,
 producer schema, defaults, pins or descriptor-buffer changes. No build, new IPA,
 phone/install/UI/perf/game/network commands. This is log analysis, not another app

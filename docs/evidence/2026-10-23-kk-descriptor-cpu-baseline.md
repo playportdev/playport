@@ -1,7 +1,7 @@
 # KosmicKrisp descriptor CPU baseline: preliminary menu observation
 
 **Linear:** [PLA-431](https://linear.app/playportdev/issue/PLA-431). **Plan:**
-[Proton parity](../plans/2026-10-22-kk-proton-parity.md), A0.
+[Proton parity](../plans/finished.md#kosmickrisp-proton-parity), A0.
 **Recommendation: INSUFFICIENT to authorize A2.** Two baseline profiles were collected,
 but they do not establish descriptor cost in gameplay or resolve total descriptor CPU time.
 A2–A4 remain **not started**, subject to the supervisor's decision. No implementation,

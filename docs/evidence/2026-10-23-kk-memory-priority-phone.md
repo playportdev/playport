@@ -1,7 +1,7 @@
 # KosmicKrisp memory priority: main-checkout phone gate
 
 **Linear:** [PLA-431](https://linear.app/playportdev/issue/PLA-431). **Plan:**
-[Proton parity](../plans/2026-10-22-kk-proton-parity.md). B1 runtime smoke passed on
+[Proton parity](../plans/finished.md#kosmickrisp-proton-parity). B1 runtime smoke passed on
 DXVK and vkd3d-proton, with the client-log limitation below. No gameplay or performance claim.
 
 ## Integration and build

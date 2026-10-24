@@ -1,7 +1,7 @@
 # KosmicKrisp shader module identifier: host results
 
 **Linear:** [PLA-431](https://linear.app/playportdev/issue/PLA-431). **Plan:**
-[kk-proton-parity](../plans/2026-10-22-kk-proton-parity.md#b3-vk_ext_shader_module_identifier),
+[kk-proton-parity](../plans/finished.md#kosmickrisp-proton-parity),
 chunk B3. **Where:** the workstation's host mock of KosmicKrisp (`build/mesa-host-test`), from
 the side copy `.work/worktrees/kkparity` (decision 0117). **Not run on the phone.**
 

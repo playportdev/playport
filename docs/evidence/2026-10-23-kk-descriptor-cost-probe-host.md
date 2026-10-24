@@ -1,7 +1,7 @@
 # KK descriptor-cost probe: host validation only
 
 **Linear:** [PLA-431](https://linear.app/playportdev/issue/PLA-431). **Plan:**
-[Proton parity](../plans/2026-10-22-kk-proton-parity.md), A0 measurement queue item 1.
+[Proton parity](../plans/finished.md#kosmickrisp-proton-parity), A0 measurement queue item 1.
 Mesa **0121**, diagnostics only, default off. **No phone commands, game launches,
 CPU-cost conclusion or A2 authorization.** Independent review of `8b6a20e` ACCEPT
 with a P2 replay-interpretation note; the host-only correction below addresses that note,

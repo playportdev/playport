@@ -1,7 +1,7 @@
 # DXVK descriptor sibling clocks — host correction
 
 **Linear:** [PLA-431](https://linear.app/playportdev/issue/PLA-431).
-**Plan:** [Proton parity](../plans/2026-10-22-kk-proton-parity.md), A0 item 2.
+**Plan:** [Proton parity](../plans/finished.md#kosmickrisp-proton-parity), A0 item 2.
 Follow-up DXVK **0007**, `Class: diagnostics`; independent re-review pending.
 [Original probe evidence](2026-10-23-dxvk-descriptor-cost-probe-host.md) describes
 coverage and earlier gates; it is not acceptance of the clock bug below.
