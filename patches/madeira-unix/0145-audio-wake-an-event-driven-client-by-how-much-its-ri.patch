@@ -1,0 +1,73 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Mon, 26 Oct 2026 17:13:21 +0000
+Subject: [PATCH] audio: wake an event-driven client by how much its ring holds
+
+The iOS driver's timer thread slept usleep(10000) between wakes: each
+period was 10 ms plus the sleep's overshoot, about 11 ms on an iPhone Duo.
+A client that writes one period per event then falls behind the device.
+Mewgenics (480 frames per event at 48 kHz) delivered about 43,600 frames a
+second for the 48,000 played ([ios_audio] ml1065 counts both channels:
+870,000 a 10 s window); the ring ran dry several times a second and the
+player heard it. Exact 10 ms deadlines alone brought it to 45,000: when
+the client's thread runs late, two wakes fall on one wait.
+
+Look every 2 ms to deadlines (mach_wait_until). While the ring holds less
+than four periods, signal, so a client that fell behind is woken until it
+has caught up; signal at least every period as before, so a client that
+fills the whole ring each time is woken as it was. After a stall the next
+deadline starts from now, with no burst.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-26-mewgenics.md
+Offered-upstream: no
+---
+ build/ntdll-unix/audio_null_ios.c | 32 +++++++++++++++++++++++++++++--
+ 1 file changed, 30 insertions(+), 2 deletions(-)
+
+diff --git a/build/ntdll-unix/audio_null_ios.c b/build/ntdll-unix/audio_null_ios.c
+index b085eaa..781d6c0 100644
+--- a/build/ntdll-unix/audio_null_ios.c
++++ b/build/ntdll-unix/audio_null_ios.c
+@@ -982,11 +982,39 @@ static void ios_timer_loop(void *arg) {
+      * event-driven client every device period so it refills the ring; exit
+      * when release_stream marks the stream dead (it then joins us). */
+     struct ios_stream *s = arg;
++    /* Playport: wake by how much the ring holds, on a clock that does not drift.
++     *
++     * usleep(10000) in a loop woke about every 11 ms on the phone, and a client
++     * that writes one period per event (Mewgenics: 480 frames at 48 kHz) then
++     * delivered about 43,600 frames a second for the 48,000 played; the ring ran
++     * dry several times a second and the gaps were heard. Waking to exact 10 ms
++     * deadlines still left it at 45,000: when the client's thread runs late, two
++     * wakes fall on one wait and a period is lost.
++     *
++     * So look every 2 ms, to deadlines (mach_wait_until): while the ring holds
++     * less than four periods, signal, so a client that fell behind is woken again
++     * until it has caught up; and signal at least every period, as before, so a
++     * client that fills the whole ring each time is woken as it was. */
++    mach_timebase_info_data_t tb;
++    uint64_t tick, period, next, now, last = 0, padding;
++    UINT32 period_frames = s->sample_rate / 100 ? s->sample_rate / 100 : 480;
++    mach_timebase_info(&tb);
++    tick = 2000000ull * tb.denom / tb.numer;      /* look every 2 ms */
++    period = 10000000ull * tb.denom / tb.numer;   /* device period, 10 ms */
++    next = mach_absolute_time() + tick;
+     LOG_FN_CALL(9, "timer_loop");
+     while (s->valid) {
+-        usleep(10000); /* device period, 10 ms */
+-        if (s->event && s->started)
++        mach_wait_until(next);
++        now = mach_absolute_time();
++        next += tick;
++        if (now > next + tick) next = now + tick;   /* after a stall, no burst */
++        if (!s->event || !s->started) continue;
++        padding = atomic_load_explicit(&s->write_pos, memory_order_acquire)
++                - atomic_load_explicit(&s->play_pos, memory_order_acquire);
++        if (padding < 4ull * period_frames || now - last >= period) {
+             NtSetEvent(s->event, NULL);
++            last = now;
++        }
+     }
+ }
+ 

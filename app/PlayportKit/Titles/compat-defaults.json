@@ -3,6 +3,10 @@
     "epic-Buffalo": {
       "settings": {"aspect": "16:9"},
       "reason": "This game draws nothing on a screen wider than 16:9."
+    },
+    "app-686060": {
+      "settings": {"runtime": "lean-reserve-mb=128"},
+      "reason": "This game reserves a gigabyte of address space for each of its memory pools and uses a few megabytes of each; Playport gives each pool less."
     }
   }
 }

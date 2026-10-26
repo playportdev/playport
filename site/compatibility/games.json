@@ -1,6 +1,6 @@
 {
   "comment": "Playport's public compatibility list, shown by site/compatibility/index.html: each title's status from Linear project Compatibility (team PLA). Keep entries sorted by name; tools/tests/test_compat_site.py checks the format.",
-  "updated": "2026-10-13",
+  "updated": "2026-10-26",
   "games": [
     {
       "name": "#DRIVE Rally",
@@ -158,6 +158,12 @@
       "store": "steam",
       "id": "3405340",
       "status": "broken"
+    },
+    {
+      "name": "Mewgenics",
+      "store": "steam",
+      "id": "686060",
+      "status": "issues"
     },
     {
       "name": "Monster Train",

@@ -1,0 +1,133 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Mon, 26 Oct 2026 16:57:05 +0000
+Subject: [PATCH] ntdll: serve a reserve-only pool ask smaller when a title
+ asks for it
+
+Mewgenics reserves 1 GB for each of its pools (VirtualAlloc MEM_RESERVE,
+then MEM_COMMIT at a cursor as the pool grows) and commits 0 to 6 MB of
+each; a new pool comes with each part of the game. The guest's whole
+window is about 64 GB, so the 43rd such reserve finds no room (with
+arena-mb = 4096, the 54th), and the game, which does not check, stores
+through the NULL.
+
+A title's madeira.cfg lean-reserve-mb = N (lean-guard-mb = M, 32 when
+unset) serves a reserve-only ask of 512 MB or more with no address and no
+zero_bits with N + M MB. The view is marked; a commit that reaches past
+its first N MB is refused and logged ([lean-reserve] OVERFLOW). The last
+M MB stay reserved and inaccessible, so a pool that outgrows N faults at
+its own guard rather than writing into the next pool. Without the key
+nothing changes.
+
+Class: feature
+Evidence: docs/evidence/2026-10-26-mewgenics.md
+Offered-upstream: no
+---
+ build/ntdll-unix/virtual_ios.c | 66 ++++++++++++++++++++++++++++++++++
+ 1 file changed, 66 insertions(+)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 685f656..836515e 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -120,6 +120,7 @@ extern kern_return_t vm_protect(mach_port_t target_task, vm_address_t address,
+ #define VPROT_WOW64_VM 0x4000 /* anonymous i386 storage, logical EXEC only */
+ #define VPROT_WOW64_DATA 0x8000 /* a data section's view (file or pagefile backed) */
+ #define VPROT_X64_IMAGE 0x10000 /* pure x86-64 image: logical EXEC only, no pool copy */
++#define VPROT_LEAN_RESERVE 0x20000 /* Playport: a reserve-only ask served smaller (lean-reserve-mb) */
+ #include "ios_process_image.h"
+ #include "wine/debug.h"
+ 
+@@ -5306,6 +5307,36 @@ static struct list reserved_areas = LIST_INIT(reserved_areas);
+  *        4 vprot table, 5 view struct, 6 fixed-map */
+ struct ios_af_rec { int stage; int err; unsigned long long addr, size; };
+ static __thread struct ios_af_rec ios_af;
++
++/* Playport: lean reserves, madeira.cfg lean-reserve-mb = N (lean-guard-mb = M, 32
++ * when unset). Off unless a title's config sets N.
++ *
++ * Some engines reserve a large range per pool and commit it from the bottom as the
++ * pool grows: Mewgenics reserves 1 GB for each of its pools (VirtualAlloc
++ * MEM_RESERVE, then MEM_COMMIT at a cursor) and commits 0 to 6 MB of each. With
++ * the guest's whole window at about 64 GB, the 43rd to 54th such reserve finds no
++ * room, and the game uses the NULL. Here a reserve-only ask of 512 MB or more with
++ * no address and no zero_bits gets N + M MB instead: the first N MB commit as
++ * usual, and a commit reaching into the last M MB is refused and logged
++ * ([lean-reserve] OVERFLOW). Those M MB stay reserved and inaccessible, so a pool
++ * that outgrows N faults at its own guard instead of writing into the next pool's
++ * memory (a game that does not check its commit writes on regardless). */
++static __thread int ios_lean_pending;
++static unsigned long ios_lean_count, ios_lean_overflows;
++
++static SIZE_T ios_lean_usable( void )
++{
++    static long long mb = -1;
++    if (mb < 0) { long long v = madeira_cfg_int( "lean-reserve-mb", 0 ); mb = v > 0 ? v : 0; }
++    return (SIZE_T)mb << 20;
++}
++
++static SIZE_T ios_lean_guard( void )
++{
++    static long long mb = -1;
++    if (mb < 0) { long long v = madeira_cfg_int( "lean-guard-mb", 32 ); mb = v > 0 ? v : 32; }
++    return (SIZE_T)mb << 20;
++}
+ static const char * const ios_af_stage_name[] = {
+     "none", "limits/params", "placement-scan", "anon-mmap",
+     "vprot-table", "view-struct", "fixed-map" };
+@@ -18480,6 +18511,15 @@ static NTSTATUS allocate_virtual_memory( void **ret, SIZE_T *size_ptr, ULONG typ
+             if (status == STATUS_SUCCESS)
+             {
+                 base = view->base;
++                /* Playport: a lean reserve (ios_lean_usable). */
++                if (ios_lean_pending && !(type & MEM_COMMIT) && size == ios_lean_usable() + ios_lean_guard())
++                {
++                    view->protect |= VPROT_LEAN_RESERVE;
++                    ios_lean_pending = 0;
++                    if (ios_lean_count++ < 64)
++                        dprintf( 2, "[lean-reserve] #%lu %p: %lu MB usable, guard to %p\n", ios_lean_count,
++                                 base, (unsigned long)(ios_lean_usable() >> 20), (char *)base + size );
++                }
+                 if (vprot & VPROT_EXEC || force_exec_prot) mprotect_range( base, size, 0, 0 );
+                 ios_swap_init();
+                 if ((type & MEM_COMMIT) && ios_swap_eligible( base, size, vprot, view )) ios_swap_back( base, size, vprot );   /* ml1077 */
+@@ -18572,6 +18612,17 @@ static NTSTATUS allocate_virtual_memory( void **ret, SIZE_T *size_ptr, ULONG typ
+         int any_committed = 0;   /* ml1077: only FRESH commits may be file-backed (a hole reads as zero) */
+         { const char *pg; for (pg = base; pg < (const char *)base + size; pg += page_size) if (get_page_vprot( pg ) & VPROT_COMMITTED) { any_committed = 1; break; } }
+         if (!(view = find_view( base, size ))) status = STATUS_NOT_MAPPED_VIEW;
++        else if ((view->protect & VPROT_LEAN_RESERVE) &&
++                 (char *)base + size > (char *)view->base + ios_lean_usable())
++        {
++            /* Playport: a lean reserve's pool outgrew lean-reserve-mb (ios_lean_usable). */
++            status = STATUS_NO_MEMORY;
++            if (ios_lean_overflows++ < 16)
++                dprintf( 2, "[lean-reserve] OVERFLOW: commit %p+0x%lx ends %lu MB into the reserve at %p, "
++                            "past its %lu MB (raise lean-reserve-mb)\n", base, (unsigned long)size,
++                         (unsigned long)(((char *)base + size - (char *)view->base) >> 20), view->base,
++                         (unsigned long)(ios_lean_usable() >> 20) );
++        }
+         else if (view->protect & SEC_FILE) status = STATUS_ALREADY_COMMITTED;
+         else if (view->protect & VPROT_FREE_PLACEHOLDER) status = STATUS_CONFLICTING_ADDRESSES;
+         else if (!(status = set_protection( view, base, size, protect )))
+@@ -19159,6 +19210,21 @@ NTSTATUS WINAPI NtAllocateVirtualMemory( HANDLE process, PVOID *ret, ULONG_PTR z
+     /* ml959: the VALUE too, not just whether one was supplied -- *ret is
+      * overwritten with the result. */
+     const UINT64 ios_req_hint = (ret && *ret) ? (UINT64)(ULONG_PTR)*ret : 0;
++
++    /* Playport: a lean reserve (ios_lean_usable). allocate_virtual_memory marks the
++     * view when this thread's reserve of exactly the lean size succeeds. */
++    ios_lean_pending = 0;
++    if (process == NtCurrentProcess() && ret && !*ret && size_ptr && type == MEM_RESERVE && !zero_bits &&
++        *size_ptr >= 0x20000000 && ios_lean_usable() &&
++        *size_ptr > ios_lean_usable() + ios_lean_guard())
++    {
++        if (ios_lean_count < 64)
++            dprintf( 2, "[lean-reserve] asked %lu MB, serving %lu MB usable + %lu MB guard\n",
++                     (unsigned long)(*size_ptr >> 20), (unsigned long)(ios_lean_usable() >> 20),
++                     (unsigned long)(ios_lean_guard() >> 20) );
++        *size_ptr = ios_lean_usable() + ios_lean_guard();
++        ios_lean_pending = 1;
++    }
+ #endif
+ 
+     TRACE("%p %p %08lx %x %08x\n", process, *ret, *size_ptr, type, protect );
