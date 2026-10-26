@@ -99,6 +99,7 @@ struct LibraryView: View {
     var body: some View {
         NavigationStack(path: $nav.gamePath) {
             LibraryGridView(installs: installs)
+                .panelSides()
                 // Under a game page the stack keeps the grid: its tiles leave the ring.
                 .transformPreference(PadItemsKey.self) { if !nav.gamePath.isEmpty { $0 = [:] } }
                 .toolbar(.hidden, for: .navigationBar)
@@ -106,7 +107,7 @@ struct LibraryView: View {
                 .containerBackground(PP.background, for: .navigation)
                 .navigationDestination(for: GameRef.self) {
                     // Clear: the shell draws the game's art behind the page (PageArt).
-                    GameDetailView(ref: $0).containerBackground(.clear, for: .navigation)
+                    GameDetailView(ref: $0).panelSides().containerBackground(.clear, for: .navigation)
                 }
         }
     }

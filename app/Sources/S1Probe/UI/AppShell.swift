@@ -38,6 +38,8 @@ struct AppShell: View {
     @Environment(\.launchingFromPage) private var launchingFromPage
     @Environment(\.scenePhase) private var scenePhase
     @State private var importing = false
+    /// The footer is too narrow for its notes beside the hints (UI/PanelFit.swift).
+    @State private var narrow = false
     /// What the one Files picker is open for: a pairing file, or a game (UI/Import.swift).
     @State private var importingGame = false
     @ObservedObject private var gog = GOGAccount.shared
@@ -49,10 +51,12 @@ struct AppShell: View {
             content.frame(maxWidth: .infinity, maxHeight: .infinity)
             if !panelUp {
                 PadFooter(hints: hints).overlay(alignment: .leading) {
-                    // The checklist's grey note at the left (Setup.dc.html).
-                    if onSetup, !modal.isUp { Text(SetupView.footerNote).font(.system(size: 12)).foregroundStyle(PP.muted).padding(.leading, 44) }
-                    if nav.signIn, !modal.isUp { Text(SignInView.footerNote).font(.system(size: 12)).foregroundStyle(PP.muted).padding(.leading, 44) }
+                    // The checklist's grey note at the left (Setup.dc.html). A narrow shell (an
+                    // iPhone Duo's cover panel, UI/PanelFit.swift) has no room beside the hints.
+                    if !narrow, onSetup, !modal.isUp { Text(SetupView.footerNote).font(.system(size: 12)).foregroundStyle(PP.muted).padding(.leading, 44) }
+                    if !narrow, nav.signIn, !modal.isUp { Text(SignInView.footerNote).font(.system(size: 12)).foregroundStyle(PP.muted).padding(.leading, 44) }
                 }
+                .onGeometryChange(for: Bool.self) { $0.size.width < 800 } action: { narrow = $0 }
                 // A picker or the keyboard draws its own footer; this one would show
                 // through its scrim beside it. Hidden, not removed, so the page keeps its height.
                 .opacity(modal.isUp ? 0 : 1)
@@ -291,6 +295,15 @@ struct AppShell: View {
 }
 
 /// LB, the three pages, RB; the controller and its battery; the gear.
+private extension View {
+    /// A top bar control takes touches over the bar's whole height, gaps and all: a
+    /// plain button otherwise answers only where it draws (a tab's letters), which on a
+    /// small panel (an iPhone Duo's cover, scaled by UI/PanelFit.swift) misses often.
+    func topBarTarget() -> some View {
+        frame(maxHeight: .infinity).contentShape(Rectangle())
+    }
+}
+
 private struct TopBar: View {
     @ObservedObject var installs: Downloads
     @ObservedObject private var nav = AppNavigation.shared
@@ -298,7 +311,7 @@ private struct TopBar: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Button { router.send(.lb) } label: { PadGlyph(button: .lb) }.buttonStyle(.plain)
+            Button { router.send(.lb) } label: { PadGlyph(button: .lb).topBarTarget() }.buttonStyle(.plain)
             ForEach(AppNavigation.Page.allCases, id: \.self) { p in
                 Button { nav.show(p) } label: {
                     // The Downloads count sits in the page's pill, highlighted with it.
@@ -315,11 +328,12 @@ private struct TopBar: View {
                     }
                     .padding(.horizontal, 12).padding(.vertical, 5)
                     .background(nav.page == p ? PP.text : .clear, in: RoundedRectangle(cornerRadius: 8))
+                    .topBarTarget()
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("page-\(p.rawValue)")
             }
-            Button { router.send(.rb) } label: { PadGlyph(button: .rb) }.buttonStyle(.plain)
+            Button { router.send(.rb) } label: { PadGlyph(button: .rb).topBarTarget() }.buttonStyle(.plain)
             Spacer(minLength: 8)
             if nav.page == .downloads {
                 StorageBar()
@@ -335,9 +349,11 @@ private struct TopBar: View {
                     .foregroundStyle(PP.soft)
                     .frame(width: 30, height: 30)
                     .background(PP.raised, in: Circle())
+                    .padding(.horizontal, 7)
+                    .topBarTarget()
             }
             .buttonStyle(.plain)
-            .padding(.leading, 10)
+            .padding(.leading, 3)
             .accessibilityLabel("Settings")
         }
         .frame(height: 48)

@@ -32,9 +32,12 @@ enum TitleScreen {
     /// `frameLimit` the player's limit, 0 for none.
     @MainActor
     static func configure(title: String? = nil, frameLimit: Int = 0) {
-        let px = UIScreen.main.nativeBounds.size
+        // The panel the app is on now (Panel.swift): a foldable has two. Its long side is
+        // the guest's width even when a foldable's inner panel is held upright (VirtualGamepad).
+        let px = Panel.pixels
         let screen: String
-        if let (w, h) = Display.guestSize(panelLong: Int(px.width), panelShort: Int(px.height), spec: title) {
+        if let (w, h) = Display.guestSize(panelLong: Int(max(px.width, px.height)),
+                                             panelShort: Int(min(px.width, px.height)), spec: title) {
             setenv("MADEIRA_SCREEN_W", String(w), 1)
             setenv("MADEIRA_SCREEN_H", String(h), 1)
             screen = "\(w)x\(h)" + (title.map { " (the title's screen \($0))" } ?? "")
@@ -44,13 +47,13 @@ enum TitleScreen {
         madeira_set_vsync_locked(0)
         PacedMetalLayer.limit(fps: frameLimit)
         // The refresh the guest's monitor reports (patches/madeira-unix/0011-win32u-report-the-host-panel-s-refresh-rate-for-the-.patch).
-        let hz = UIScreen.main.maximumFramesPerSecond
+        let hz = Panel.maximumFramesPerSecond
         setenv("MADEIRA_SCREEN_HZ", String(hz), 0)
         if !linked {
             linked = true
             startDisplayLink()
         }
-        summary = "screen \(screen) (panel \(Int(px.width))x\(Int(px.height)) px), landscape, swap chain aspect-fitted, "
+        summary = "screen \(screen) (\(Panel.summary)), landscape, swap chain aspect-fitted, "
             + "presents free-running, display link asks for up to \(hz) Hz"
             + (frameLimit > 0 ? ", frames limited to \(frameLimit) FPS" : ", no frame rate limit")
             + ", guest monitor \(ProcessInfo.processInfo.environment["MADEIRA_SCREEN_HZ"] ?? "60") Hz"
@@ -62,7 +65,7 @@ enum TitleScreen {
     @MainActor
     private static func startDisplayLink() {
         let link = CADisplayLink(target: Tick.shared, selector: #selector(Tick.tick))
-        let top = Float(UIScreen.main.maximumFramesPerSecond)
+        let top = Float(Panel.maximumFramesPerSecond)
         link.preferredFrameRateRange = CAFrameRateRange(minimum: min(60, top), maximum: top, preferred: top)
         link.add(to: .main, forMode: .common)
     }

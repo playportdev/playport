@@ -46,6 +46,7 @@ struct RootView: View {
     @ObservedObject private var web = GameWebSheet.shared
     @ObservedObject private var restart = AppRestart.shared
     @ObservedObject private var setup = JitSetup.shared
+    @ObservedObject private var padEditor = PadLayoutEditor.shared
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// The page has dived away after Play (0.7 s): the shell leaves the hierarchy.
@@ -54,8 +55,9 @@ struct RootView: View {
     var body: some View {
         ZStack {
             if launch.running {
-                // A title started from the library: the whole screen is the guest's swap chain (HostIO.swift).
-                GameSurface().ignoresSafeArea()
+                // A title started from the library: the whole screen is the guest's swap chain (HostIO.swift),
+                // or its top half over the virtual gamepad (VirtualGamepad.swift).
+                GameArea().ignoresSafeArea()
                     // Under the launch screen, covered black; on the first frame it fades in at its
                     // own size as the launch screen flies off (UI/LaunchTransition.swift). A cover,
                     // not the Metal layer's own opacity: the game presents into it all along.
@@ -89,7 +91,9 @@ struct RootView: View {
             if !restart.restarting && (!launch.running || !pageGone) {
                 // On Play the page dives away over the launch screen, live (it drops its art and
                 // background at once), then goes (UI/LaunchTransition.swift).
-                AppShell()
+                // Scaled down whole on a panel narrower than it is laid out for (an iPhone Duo's
+                // cover panel; UI/PanelFit.swift).
+                PanelFit { AppShell() }
                     .environment(\.launchingFromPage, launch.running)
                     .animation(LaunchMotion.pageOut) { page in
                         page.modifier(launch.running
@@ -108,6 +112,10 @@ struct RootView: View {
                     .zIndex(2)
                     .transition(.identity)
             }
+            if padEditor.isOpen {
+                // A virtual gamepad layout being edited, from Settings or a game's menu (UI/PadLayoutEditor.swift).
+                PadLayoutEditorView().zIndex(3).transition(.identity)
+            }
         }
         .onChange(of: launch.running) { _, running in
             pageGone = false
@@ -118,6 +126,9 @@ struct RootView: View {
             }
         }
         .background(Color.black.ignoresSafeArea())
+        // No status bar over the gamepad UI either: an iPhone hides it in landscape by
+        // itself, a foldable's inner panel (iPhone Duo) does not.
+        .statusBarHidden()
         .sheet(isPresented: Binding(get: { setup.presented }, set: { if !$0 && setup.phase != .ready && setup.phase != .cancelled { setup.cancel() } }),
                onDismiss: { setup.dismissed() }) { JitSetupSheet() }
         .onChange(of: scenePhase) { _, phase in
@@ -144,18 +155,36 @@ struct RootView: View {
 /// alike (UI/AppShell.swift), whichever way the phone is held; except while a
 /// store's sign-in page is up (UI/GOGAccount.swift), when portrait is allowed
 /// too: a password manager's AutoFill sheet draws only grey in a landscape-only app.
+/// On a foldable's inner panel (Panel.isLarge: an iPhone Duo open) it turns with the
+/// phone: there iOS would show a landscape-only app in a letterboxed window.
 final class AppDelegate: NSObject, UIApplicationDelegate {
     @MainActor static var allowsPortrait = false {
         didSet {
             guard allowsPortrait != oldValue else { return }
             for case let scene as UIWindowScene in UIApplication.shared.connectedScenes {
                 for w in scene.windows { w.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations() }
-                if !allowsPortrait { scene.requestGeometryUpdate(.iOS(interfaceOrientations: .landscape)) { _ in } }
+                if !allowsPortrait { scene.requestGeometryUpdate(.iOS(interfaceOrientations: .landscape), errorHandler: ignore) }
             }
         }
     }
 
     func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
-        MainActor.assumeIsolated { Self.allowsPortrait } ? .allButUpsideDown : .landscape
+        MainActor.assumeIsolated { Self.allowsPortrait || Panel.isLarge(window?.windowScene?.screen) }
+            ? .allButUpsideDown : .landscape
+    }
+
+    /// A geometry request's error handler: iOS calls it off the main thread, where a
+    /// closure written here (isolated to the main actor) would stop the app.
+    private static let ignore: @Sendable (Error) -> Void = { _ in }
+
+    /// The app moved to another panel (a foldable folded or opened): iOS asks for
+    /// the orientations again.
+    @MainActor static func panelChanged() {
+        for case let scene as UIWindowScene in UIApplication.shared.connectedScenes {
+            for w in scene.windows { w.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations() }
+            if !allowsPortrait && !Panel.isLarge(scene.screen) {
+                scene.requestGeometryUpdate(.iOS(interfaceOrientations: .landscape), errorHandler: ignore)
+            }
+        }
     }
 }

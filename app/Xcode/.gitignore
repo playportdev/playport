@@ -1,0 +1,3 @@
+Local.xcconfig
+*.xcodeproj/
+build/

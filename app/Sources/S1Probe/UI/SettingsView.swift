@@ -14,6 +14,8 @@
 // - Downloads: PlayportKit DownloadPreferences (the download queue reads
 //   them) and Steam Cloud's switch (SteamAccountModel.cloudKey).
 // - Controllers: every controller connected, with its battery (PadRouter).
+// - Virtual gamepad, a foldable's only: its layouts, each opening the editor
+//   (VirtualGamepad.swift, PadLayoutEditor.swift).
 // - Storage: free space and each game's size; A opens the game's page. Steamworks Shared
 //   (Steam's redistributables) with its size and Remove, and the emulator cache with Clear.
 // - Setup check: JIT, LocalDevVPN and memory (SetupCheckSettings.swift).
@@ -36,11 +38,11 @@ extension SettingsSection {
     static func isNavItem(_ id: String) -> Bool { id.hasPrefix("set:nav:") }
 
     /// The sections this build shows.
-    static var shown: [SettingsSection] {
+    @MainActor static var shown: [SettingsSection] {
         #if PLAYPORT_RELEASE
-        all(developer: false)
+        all(developer: false, foldable: Panel.isFoldable)
         #else
-        all(developer: true)
+        all(developer: true, foldable: Panel.isFoldable)
         #endif
     }
 }
@@ -51,12 +53,19 @@ struct SettingsView: View {
     @State private var scrollPosition = ScrollPosition()
     @State private var scrollOffset: CGFloat = 0
 
+    /// The page's width, for the narrow layout below.
+    @State private var width: CGFloat = 0
+
     var body: some View {
-        HStack(alignment: .top, spacing: 22) {
-            sidebar.frame(width: 190)
+        // A narrow page (an iPhone Duo's cover panel, UI/PanelFit.swift) keeps more of its
+        // width for the section: a slimmer list and margins.
+        let narrow = width > 0 && width < 760
+        HStack(alignment: .top, spacing: narrow ? 16 : 22) {
+            sidebar.frame(width: narrow ? 150 : 190)
             content.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
-        .padding(.horizontal, 44).padding(.top, 12)
+        .padding(.horizontal, narrow ? 20 : 44).padding(.top, 12)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         // The height the shell offers, from the top: a sidebar a few points taller must
         // not push the shell's footer off its place.
         .frame(maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .top)
@@ -148,6 +157,7 @@ struct SettingsView: View {
         case .graphics: GraphicsSettings()
         case .downloads: DownloadSettings()
         case .controllers: ControllerSettings()
+        case .virtualPad: VirtualPadSettings()
         case .storage: StorageSettings()
         case .setup: SetupCheckSettings()
         case .about:
@@ -176,7 +186,8 @@ enum SettingsRing {
         switch b {
         case .up, .down:
             if onList {
-                let s = nav.settingsSection.step(b == .up ? -1 : 1, developer: SettingsSection.shown.contains(.developer))
+                let s = nav.settingsSection.step(b == .up ? -1 : 1, developer: SettingsSection.shown.contains(.developer),
+                                                 foldable: SettingsSection.shown.contains(.virtualPad))
                 nav.settingsSection = s
                 focus.ring(s.navItem)
             } else {

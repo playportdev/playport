@@ -61,7 +61,9 @@ stage_src() {
     git -C "$G" -c protocol.file.allow=always submodule update -q --init third-party/deps/common third-party/common/linux
     # A copy, so the chmod leaves the submodule clean (ensure_series checks the tree).
     mkdir -p "$ROOT/tools"
-    install -m 755 "$G/third-party/common/linux/premake/premake5" "$ROOT/tools/premake5"
+    # gbe_fork's premake5 is an x86-64 binary; an arm64 host (the Mac's build
+    # container, build/docker/README.md) names its own build of the same release.
+    install -m 755 "${PREMAKE5:-$G/third-party/common/linux/premake/premake5}" "$ROOT/tools/premake5"
     echo "gbe $(git -C "$G" rev-parse HEAD) ($(series gbe | wc -l) patches on $PIN)"
     # The Abseil release the protobuf archive asks for.
     local want tag

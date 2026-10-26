@@ -35,7 +35,7 @@ class RustStdlibNotices(unittest.TestCase):
         self.lock = {"schema": 1, "rust": self.version, "manifest_url": "https://example.invalid/manifest",
                      "manifest_sha256": "0" * 64, "source_commit": "a" * 40,
                      "release": self.version + " (aaaaaaaaa 2026-09-01)", "components": {}}
-        self.toolchain = Path("rustup/toolchains") / f"{self.version}-{stdlib.HOST}"
+        self.toolchain = Path("rustup/toolchains") / f"{self.version}-{stdlib.INSTALLED}"
         self.prefixes = {}
         self.archives = {}
         for component, target, folder, files in (

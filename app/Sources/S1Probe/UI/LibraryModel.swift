@@ -334,6 +334,8 @@ final class LibraryModel: ObservableObject {
         let galaxy = t.store == .gog ? await GOGAccount.shared.galaxyListener(t.key.id, name: t.name) : nil
         // FEX's disk cache stays under its budget (decision 0056): cleared before this launch when over it.
         await Task.detached(priority: .userInitiated) { EmulatorCache.keepWithinBudget { Self.log($0) } }.value
+        // The on-screen controller under the game, on a foldable only (VirtualGamepad.swift).
+        VirtualGamepad.shared.prepare(settings.virtualPad && Panel.isFoldable, layout: settings.virtualPadLayout, titleID: t.id)
         let fex = FEXProfile.launch(appID: t.appID, exe: plan.exe, ordering: settings.ordering, maxInst: settings.maxInst,
                                     x87Reduced: settings.x87Reduced, diskCache: settings.diskCache)
         guard TitleLaunch.shared.start(title: t.name, titleID: t.id, exe: plan.exe, args: plan.args + settings.arguments + epicArgs,

@@ -171,6 +171,8 @@ struct PadValueRow: View {
                 arrow("‹", by: -1)
                 Text(values.indices.contains(index) ? values[index] : "–")
                     .font(.system(size: 14, weight: .semibold)).foregroundStyle(PP.text)
+                    // One line: on a narrow page the title gives way, not the value.
+                    .lineLimit(1).fixedSize()
                 arrow("›", by: 1)
             }
         }

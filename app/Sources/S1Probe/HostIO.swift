@@ -186,10 +186,9 @@ final class HostIO {
         #endif
     }
 
-    #if !PLAYPORT_RELEASE
-    /// A pad slot for something other than a GameController pad (Dev/VirtualPad.swift).
+    /// A pad slot for something other than a GameController pad (VirtualGamepad.swift,
+    /// Dev/VirtualPad.swift).
     func connectSlot(_ id: ObjectIdentifier) -> Int? { slots.connect(id) }
-    #endif
 
     // MARK: lifecycle
 
@@ -627,6 +626,8 @@ final class PacedMetalLayer: CAMetalLayer {
         #if !PLAYPORT_RELEASE
         if drawable != nil { Self.countDrawable() }
         #endif
+        // The simulator's Metal has no presented handlers (the UI-only build, app/Xcode).
+        #if !targetEnvironment(simulator)
         drawable?.addPresentedHandler { d in
             if d.presentedTime > 0,
                let then = Self.firstPresent.withLockUnchecked({ h in defer { h = nil }; return h }) { then() }
@@ -634,6 +635,7 @@ final class PacedMetalLayer: CAMetalLayer {
             let readable = Self.readable(t)
             Self.shown.withLockUnchecked { $0 = readable }
         }
+        #endif
         if let then = Self.firstFrame.withLockUnchecked({ h in defer { h = nil }; return h }) { then() }
         return drawable
     }
@@ -678,7 +680,18 @@ final class GameSurfaceView: UIView {
         windows.frame = bounds
         windows.setNeedsLayout()
         CATransaction.commit()
+        // A foldable (Panel.swift) moves the app between its panels without a
+        // rotation: follow the new panel's scale, and its safe area for the
+        // views over the game (WindowInsets reads it only on a rotation).
+        if bounds.size != laidOutSize {
+            laidOutSize = bounds.size
+            if let screen = window?.screen, contentScaleFactor != screen.nativeScale {
+                contentScaleFactor = screen.nativeScale
+            }
+            WindowInsets.shared.read()
+        }
     }
+    private var laidOutSize = CGSize.zero
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
@@ -688,9 +701,13 @@ final class GameSurfaceView: UIView {
         // leaving it at 1 makes a native-pixel swapchain permanently suboptimal
         // (912x420 points versus 2736x1260 pixels on a 3x screen).
         contentScaleFactor = window.screen.nativeScale
-        // Landscape before the runtime starts, so the swap chain is made at the final size.
+        // Landscape before the runtime starts, so the swap chain is made at the final size;
+        // a foldable's inner panel stays as it is held when the virtual gamepad can go under
+        // the game (VirtualGamepad.swift: the guest's screen is the panel's long side wide).
         window.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
-        window.windowScene?.requestGeometryUpdate(.iOS(interfaceOrientations: .landscape))
+        if !(VirtualGamepad.shared.enabled && Panel.isLarge(window.screen)) {
+            window.windowScene?.requestGeometryUpdate(.iOS(interfaceOrientations: .landscape))
+        }
         if !registered, let layer = layer as? CAMetalLayer {
             registered = true
             HostIO.shared.gameLayer = layer

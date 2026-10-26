@@ -215,6 +215,7 @@ final class TitleLaunch: ObservableObject {
         } else {
             HostIO.shared.attachPads()
         }
+        VirtualGamepad.shared.connect()
     }
 
     /// Back to the app's screens. A launch that used the runtime (the JIT pool was

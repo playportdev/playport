@@ -16,17 +16,23 @@ set -euo pipefail
 ROOT=${1:-$RUST_ROOT}
 # rustup-init itself, by version (static.rust-lang.org/rustup/archive), checked by hash.
 RUSTUP_VERSION=1.29.1
-RUSTUP_SHA256=dda7234360b7f578ca8b0ddcb80145646fa61a67c1720a5abc7051b35c9fcb71
+# The host's own rustup-init: x86-64 on the workstation, aarch64 in the Mac's
+# build container (build/docker/README.md).
+case $(uname -m) in
+x86_64) HOST=x86_64-unknown-linux-gnu RUSTUP_SHA256=dda7234360b7f578ca8b0ddcb80145646fa61a67c1720a5abc7051b35c9fcb71 ;;
+aarch64) HOST=aarch64-unknown-linux-gnu RUSTUP_SHA256=15f6e4ce9f583b929c996c91562bad6d4454f3281de858b02cdfdef615fac433 ;;
+*) echo "toolchain-rust: no rustup-init for $(uname -m)" >&2; exit 1 ;;
+esac
 TARGET=aarch64-apple-ios
 version=$(pin rust)
 
 export RUSTUP_HOME=$ROOT/rustup CARGO_HOME=$ROOT/cargo
 mkdir -p "$ROOT"
-init=$ROOT/rustup-init-$RUSTUP_VERSION
+init=$ROOT/rustup-init-$RUSTUP_VERSION-$HOST
 if ! echo "$RUSTUP_SHA256  $init" | sha256sum -c --status 2>/dev/null; then
     part=$(mktemp "$ROOT/rustup-init.XXXXXX")
     trap 'rm -f "$part"' EXIT
-    curl -fsSL -o "$part" "https://static.rust-lang.org/rustup/archive/$RUSTUP_VERSION/x86_64-unknown-linux-gnu/rustup-init"
+    curl -fsSL -o "$part" "https://static.rust-lang.org/rustup/archive/$RUSTUP_VERSION/$HOST/rustup-init"
     echo "$RUSTUP_SHA256  $part" | sha256sum -c --status ||
         { echo "toolchain-rust: rustup-init $RUSTUP_VERSION is not sha256 $RUSTUP_SHA256" >&2; exit 1; }
     chmod +x "$part"

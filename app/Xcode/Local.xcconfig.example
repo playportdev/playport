@@ -1,0 +1,5 @@
+// Copy to Local.xcconfig (gitignored) and fill in.
+// The Apple team that signs the app (Xcode › Settings › Accounts; a free Personal Team works).
+DEVELOPMENT_TEAM = XXXXXXXXXX
+// A bundle ID no other team has registered; the JIT helper gets <this>.PlayportJIT.
+PLAYPORT_BUNDLE_ID = com.example.playport

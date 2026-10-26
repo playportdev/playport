@@ -325,7 +325,10 @@ enum UIDriver {
                                           + QuickMenuItem.allCases.map(\.rawValue).joined(separator: " "))
                         }
                         guard menu.isOpen else { return finish("action=\(action) refused: the in-game menu is not open") }
-                        for down in QuickMenu.steps(from: menu.menu.ring, to: item) {
+                        guard let steps = menu.menu.steps(to: item) else {
+                            return finish("action=\(action) refused: the menu has no \(id) row now")
+                        }
+                        for down in steps {
                             menu.press(down ? .down : .up)
                             try? await Task.sleep(for: .milliseconds(250))
                         }

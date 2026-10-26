@@ -72,6 +72,8 @@ private struct GameDetailPage: View {
     @ObservedObject private var focus = PadFocus.shared
     @ObservedObject private var gog = GOGAccount.shared
     @ObservedObject private var epic = EpicAccount.shared
+    /// The page's width, for the narrow layout (page()).
+    @State private var pageWidth: CGFloat = 0
     @State private var playError: String?
     @State private var controllers = GCController.controllers().count
     @State private var stageOnDisk = false
@@ -259,6 +261,9 @@ private struct GameDetailPage: View {
     /// The page; under a panel only its art and name show (GameOptions.dc.html).
     private func page(_ t: InstalledTitle?, _ g: SteamGame?) -> some View {
         let under = !navigation.gamePanels.isEmpty
+        // A narrow page (an iPhone Duo's cover panel, UI/PanelFit.swift) gives the buttons
+        // the width the facts beside them would take: a slimmer facts column, closer.
+        let narrow = pageWidth > 0 && pageWidth < 760
         return ZStack(alignment: .topLeading) {
             // The hero art fills the screen behind the page and its footer: the shell draws
             // it (PageArt), as the launch screen does, so on Play it does not change.
@@ -270,7 +275,7 @@ private struct GameDetailPage: View {
                                 ?? gogGame.map { PageArt(appID: nil, name: $0.title, info: nil, storeKey: StoreGameKey(store: .gog, id: $0.id)) }
                                 ?? epicGame.map { PageArt(appID: nil, name: $0.title, info: nil, storeKey: StoreGameKey(store: .epic, id: $0.id)) })
 
-            HStack(alignment: .top, spacing: 24) {
+            HStack(alignment: .top, spacing: narrow ? 16 : 24) {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(name).font(PP.display(48)).foregroundStyle(PP.text)
                         .lineLimit(1).minimumScaleFactor(0.5)
@@ -292,13 +297,14 @@ private struct GameDetailPage: View {
                 .frame(maxWidth: 500, alignment: .leading)
                 Spacer(minLength: 0)
                 facts(t, g)
-                    .frame(width: 270)
+                    .frame(width: narrow ? 220 : 270)
                     .padding(.top, 94)
                     .opacity(under ? 0 : 1)
             }
             .padding(.top, 76)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { pageWidth = $0 }
     }
 
     private func subtitle(_ t: InstalledTitle?, _ g: SteamGame?) -> String? {
@@ -485,7 +491,7 @@ private struct GameDetailPage: View {
                 } else {
                     MemoryWarning(need: MemoryNeed.of(t, cohort: LibraryModel.cohort))
                     if installs.isBusy { Text("Starting a game pauses the download. It goes on when Playport reopens after the game.") }
-                    controllerLine
+                    controllerLine(t)
                 }
             } else if let g {
                 installNote(g)
@@ -497,8 +503,11 @@ private struct GameDetailPage: View {
     }
 
     @ViewBuilder
-    private var controllerLine: some View {
-        if controllers == 0 {
+    private func controllerLine(_ t: InstalledTitle) -> some View {
+        if Panel.isFoldable, launchSettings.settings(for: t.id).virtualPad == true {
+            // The on-screen controller is a pad of its own (VirtualGamepad.swift).
+            Text("The virtual gamepad is on for this game.")
+        } else if controllers == 0 {
             Text("No controller is connected. Connect it now: a game may not notice one connected later.")
                 .foregroundStyle(.orange)
         } else {
@@ -659,7 +668,8 @@ private struct GameDetailPage: View {
 
     private var context: String { name }
 
-    // Graphics: aspect ratio, resolution, frame rate limit, Direct3D, launch arguments.
+    // Graphics: aspect ratio, resolution, frame rate limit, Direct3D, launch arguments,
+    // and on a foldable the virtual gamepad.
     @ViewBuilder
     private func graphicsRows(_ t: InstalledTitle) -> some View {
         let settings = launchSettings.binding(for: t.id)
@@ -741,6 +751,34 @@ private struct GameDetailPage: View {
                reset: args.isEmpty ? nil : { settings.wrappedValue.arguments = "" }) {
             PadModal.shared.keyboard(title: "Launch arguments", text: own.arguments, placeholder: "For example -DX12",
                                      maxLength: 200) { settings.wrappedValue.arguments = $0 }
+        }
+        // A foldable's open panel held upright: the game above, a controller under it (VirtualGamepad.swift).
+        if Panel.isFoldable {
+            let padOn = own.virtualPad ?? false
+            let layouts = PadLayoutStore.shared.all
+            let off = { settings.wrappedValue.virtualPad = nil; settings.wrappedValue.virtualPadLayout = nil }
+            PadRow(id: "opt:virtualPad", title: "Virtual gamepad",
+                   subtitle: "Phone open and upright: the game above, a controller below",
+                   accessory: .toggle(padOn), changed: padOn, style: .plain, hint: padOn ? "Turn off" : "Turn on",
+                   reset: padOn ? off : nil) {
+                // Turned on, the game keeps the default layout of now (Settings › Virtual gamepad).
+                if padOn { off() } else {
+                    settings.wrappedValue.virtualPad = true
+                    settings.wrappedValue.virtualPadLayout = layouts.defaultID
+                }
+            }
+            if padOn {
+                let current = layouts.layout(own.virtualPadLayout)
+                PadRow(id: "opt:virtualPadLayout", title: "Gamepad layout", value: current.name, accessory: .chevron,
+                       style: .plain) {
+                    PadModal.shared.picker(
+                        title: "Gamepad layout", context: "\(context) · Graphics",
+                        note: "Settings › Virtual gamepad edits them; in the game, hold ⌂.",
+                        options: layouts.layouts.map { PadOption(id: $0.id, label: $0.name,
+                                                                 detail: $0.id == layouts.defaultID ? "Default" : nil) },
+                        selected: current.id) { settings.wrappedValue.virtualPadLayout = $0 }
+                }
+            }
         }
     }
 
@@ -1177,7 +1215,7 @@ private struct PrimaryButton: View {
     var body: some View {
         HStack(spacing: 10) {
             PadGlyph(button: .a, inverted: enabled)
-            Text(title).font(PP.display(20)).lineLimit(1)
+            Text(title).font(PP.display(20)).lineLimit(1).fixedSize()
         }
         .foregroundStyle(enabled ? PP.onAccent : PP.muted)
         .padding(.leading, 14).padding(.trailing, 26)
@@ -1200,7 +1238,7 @@ private struct SecondaryButton: View {
     var body: some View {
         HStack(spacing: 8) {
             if let systemImage { Image(systemName: systemImage).font(.system(size: 14)) }
-            Text(title).font(.system(size: 14, weight: .semibold)).lineLimit(1)
+            Text(title).font(.system(size: 14, weight: .semibold)).lineLimit(1).fixedSize()
             if let glyph { PadGlyph(button: glyph).padding(.leading, 2) }
         }
         .foregroundStyle(enabled ? PP.text : PP.muted)

@@ -15,7 +15,9 @@
 //
 // Its rows: Resume (also B, ≡ and Home), Screenshot (the frame on screen to
 // Photos; a dev build also keeps a PNG in Documents/Screenshots), Performance
-// overlay (the Metal HUD on the game layer, now and for this game only), the
+// overlay (the Metal HUD on the game layer, now and for this game only), with
+// the virtual gamepad its layout (A takes the next one) and its editor
+// (UI/PadLayoutEditor.swift), the
 // controller with its battery, and Quit game (TitleLaunch.quit: WM_CLOSE to
 // the game's windows, so it saves as when its window is closed, then the
 // restart after the game, decision 0029, returns to Home).
@@ -60,7 +62,7 @@ final class InGameMenu: ObservableObject {
             return false
         }
         isOpen = true
-        menu = QuickMenu()
+        menu = QuickMenu(virtualPad: VirtualGamepad.shared.enabled)
         shot = nil
         HostIO.shared.holdGuest()
         Self.log("open over \(launch.title); \(WindowInsets.shared.read())")
@@ -72,7 +74,8 @@ final class InGameMenu: ObservableObject {
 
     /// A press from a pad (HostIO) or, in a dev build, the driver.
     func press(_ b: NavButton) {
-        guard isOpen, !quitting else { return }
+        // The layout editor over the menu is touch only.
+        guard isOpen, !quitting, !PadLayoutEditor.shared.isOpen else { return }
         switch b {
         case .up: menu.move(down: false)
         case .down: menu.move(down: true)
@@ -93,6 +96,8 @@ final class InGameMenu: ObservableObject {
         case .resume: resume()
         case .screenshot: screenshot()
         case .overlay: toggleOverlay()
+        case .padLayout: VirtualGamepad.shared.cycle()
+        case .padEdit: PadLayoutEditor.shared.open(VirtualGamepad.shared.layout.id, fromGame: true)
         case .controller: PadRouter.shared.refreshControllers()
         case .quit: quit()
         }
@@ -101,6 +106,7 @@ final class InGameMenu: ObservableObject {
     /// Back to the game: its threads go on first, then its input and audio.
     func resume() {
         guard isOpen, !quitting else { return }
+        PadLayoutEditor.shared.close()
         isOpen = false
         paused = false
         HostIO.sessionControl(Int(PP_CONTROL_RESUME), "resume")
@@ -253,6 +259,7 @@ struct InGameMenuView: View {
     @ObservedObject private var launch = TitleLaunch.shared
     @ObservedObject private var router = PadRouter.shared
     @ObservedObject private var safe = WindowInsets.shared
+    @ObservedObject private var pad = VirtualGamepad.shared
 
     var body: some View {
         let lead = safe.side(44, safe.insets.leading), trail = safe.side(44, safe.insets.trailing)
@@ -266,7 +273,7 @@ struct InGameMenuView: View {
                     .padding(.horizontal, 14)
                 Text(launch.title).font(PP.display(24)).lineLimit(1).minimumScaleFactor(0.6)
                     .padding(.horizontal, 14).padding(.bottom, 10)
-                ForEach(QuickMenuItem.allCases, id: \.self) { item in
+                ForEach(model.menu.items, id: \.self) { item in
                     row(item)
                 }
                 Spacer(minLength: 0)
@@ -337,6 +344,8 @@ struct InGameMenuView: View {
         case .resume: nil
         case .screenshot: model.shot ?? "Saved to Photos"
         case .overlay: model.overlay ? "On" : "Off"
+        case .padLayout: pad.layout.name
+        case .padEdit: nil
         case .controller: QuickMenu.controller(name: router.controller?.name, battery: router.controller?.battery)
         case .quit: model.quitting ? "Closing…" : "Saves first"
         }

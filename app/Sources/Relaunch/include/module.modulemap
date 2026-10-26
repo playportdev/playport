@@ -1,0 +1,8 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Both headers, explicitly: on a case-insensitive file system (a Mac) SwiftPM
+// would otherwise take relaunch.h as the umbrella and leave pairing.h out.
+module Relaunch {
+    header "relaunch.h"
+    header "pairing.h"
+    export *
+}

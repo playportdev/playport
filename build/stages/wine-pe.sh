@@ -58,8 +58,12 @@ if configured build-tools; then
     echo "build-tools: configured as before; make rebuilds what changed"
 else
     rm -rf "${WINE:?}/build-tools"; mkdir "$WINE/build-tools"
-    ( cd "$WINE/build-tools" &&
-      ../configure --enable-win64 --without-x --without-freetype --without-mingw --disable-tests \
+    # Wine refuses --without-mingw on an aarch64 host (the Mac's build container,
+    # build/docker/README.md): there it finds llvm-mingw; only the tools are built.
+    mingw=--without-mingw
+    [ "$(uname -m)" = aarch64 ] && mingw="--with-mingw"
+    ( cd "$WINE/build-tools" && export PATH="$LLVM_MINGW/bin:$PATH" &&
+      ../configure --enable-win64 --without-x --without-freetype $mingw --disable-tests \
           > "$OUT/config-build-tools.log" 2>&1 ) && echo "$KEY" > "$WINE/build-tools/.pp-configured"
 fi
 ( cd "$WINE/build-tools" &&

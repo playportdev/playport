@@ -64,7 +64,9 @@ RUST_NOTICE_CARGO_HOME=${RUST_NOTICE_CARGO_HOME:-$RUST_ROOT/cargo}
 export RUST_NOTICE_CARGO_HOME
 IDEVICE_RUN=${IDEVICE_RUN:-$RUN/idevice}
 RUST_NOTICE_DIST=${RUST_NOTICE_DIST:-$PLAYPORT_BUILD/cache/rust-dist}
-RUST_DOC=$RUST_ROOT/rustup/toolchains/$(pin rust)-x86_64-unknown-linux-gnu/share/doc/rust
+# The toolchain build/toolchain/rust.sh installed for this machine (x86_64 or aarch64 Linux);
+# notices-rust-stdlib.py checks its notices against the locked archive's.
+RUST_DOC=$RUST_ROOT/rustup/toolchains/$(pin rust)-$(uname -m)-unknown-linux-gnu/share/doc/rust
 MINGW_SOURCE=${MINGW_SOURCE:-$PLAYPORT_BUILD/cache/mingw-w64-notices}
 LLVM_MINGW_SOURCE=${LLVM_MINGW_SOURCE:-$PLAYPORT_BUILD/cache/llvm-mingw-notices}
 REPO=$PLAYPORT_REPO

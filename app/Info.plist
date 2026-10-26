@@ -26,11 +26,18 @@
 	<string>Playport</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
-	<!-- The app delegate narrows these per launch: landscape for a title, portrait otherwise. -->
+	<!-- A game keeps the whole panel: no Split View beside another app on a
+	     foldable's inner panel (iPhone Duo; Sources/S1Probe/Panel.swift). -->
+	<key>UIRequiresFullScreen</key>
+	<true/>
+	<!-- The app delegate narrows these (PlayportApp.swift's AppDelegate): landscape, except on a
+	     foldable's inner panel, which turns with the phone. Portrait is here so that an iPhone Duo
+	     opened and held upright starts upright: iOS starts an app only in an orientation listed here. -->
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
+		<string>UIInterfaceOrientationPortrait</string>
 	</array>
 	<!-- iOS Game Mode (Metal HUD "Game Mode"): the system engages it for an app in the games category. -->
 	<key>LSApplicationCategoryType</key>

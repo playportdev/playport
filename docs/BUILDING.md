@@ -2,7 +2,8 @@
 
 Playport builds on one x86-64 Linux workstation with no Mac and no Apple
 tools, from `pins.lock`, `patches/` and a few cached inputs, into one signed
-IPA. Running it is in [AGENTS.md](../AGENTS.md#build). This page is what the
+IPA. On an Apple silicon Mac the trees build in an arm64 Linux container
+and Xcode builds and signs the app: [build/docker/README.md](../build/docker/README.md). Running it is in [AGENTS.md](../AGENTS.md#build). This page is what the
 build needs and what is not obvious about it; each stage script's header
 says what the stage does, and `pp verify --help` lists the IPA checks.
 

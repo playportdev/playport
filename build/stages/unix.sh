@@ -138,8 +138,12 @@ stage_gnutls() {
 # must not reach build-macos.
 stage_widl() {
     mkdir -p "$W/build-tools" "$W/build-arm64ec/include"
-    ( cd "$W/build-tools" &&
-      ../configure --without-x --without-freetype --without-mingw --enable-win64 \
+    # Wine refuses --without-mingw on an aarch64 host (the Mac's build container,
+    # build/docker/README.md): there it finds llvm-mingw, which only headers need.
+    local mingw=--without-mingw
+    [ "$(uname -m)" = aarch64 ] && mingw="--with-mingw"
+    ( cd "$W/build-tools" && export PATH="$LLVM_MINGW/bin:$PATH" &&
+      ../configure --without-x --without-freetype $mingw --enable-win64 \
           > "$ROOT/tools-configure.log" 2>&1 &&
       make -j"$(nproc)" include/all > "$ROOT/widl.log" 2>&1 &&
       for h in $(cd include && ls *.h); do

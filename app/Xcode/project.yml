@@ -1,0 +1,146 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# The app built and signed with Xcode on a Mac instead of xtool (build/docker/README.md):
+# the same Swift package (app/Package.swift, dev variant), the same Info.plists and
+# entitlements, the staged Runtime/ at the app root as xtool.yml ships it, and the
+# JIT helper as PlugIns/PlayportJIT.appex. Generate with `xcodegen` in this directory
+# after the Linux build host has staged app/Staged and app/Sources/S1Probe/Runtime.
+#
+# Signing: Local.xcconfig (gitignored, copied from Local.xcconfig.example) names the
+# team and a bundle ID that is unique for it.
+name: Playport
+configFiles:
+  Debug: Local.xcconfig
+  Release: Local.xcconfig
+options:
+  deploymentTarget:
+    iOS: "26.0"
+  createIntermediateGroups: true
+packages:
+  Playport:
+    path: ..
+settings:
+  base:
+    CODE_SIGN_STYLE: Automatic
+    SWIFT_VERSION: "6.0"
+    TARGETED_DEVICE_FAMILY: "1"
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+    ENABLE_DEBUG_DYLIB: NO
+    DEAD_CODE_STRIPPING: NO
+    # The versions Info.plist and PlayportJIT-Info.plist give (keep them equal);
+    # the generated Info.plist would otherwise leave CFBundleVersion empty.
+    MARKETING_VERSION: "0.4.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  Playport:
+    type: application
+    platform: iOS
+    sources:
+      - path: Stub
+      - path: Assets.xcassets
+      # The staged runtime at the app root (xtool.yml `resources`).
+      - path: ../Sources/S1Probe/Runtime/arm64ec-windows
+        type: folder
+        buildPhase: resources
+      - path: ../Sources/S1Probe/Runtime/aarch64-windows
+        type: folder
+        buildPhase: resources
+      - path: ../Sources/S1Probe/Runtime/i386-windows
+        type: folder
+        buildPhase: resources
+      - path: ../Sources/S1Probe/Runtime/nls
+        type: folder
+        buildPhase: resources
+      - path: ../Sources/S1Probe/Runtime/fonts
+        type: folder
+        buildPhase: resources
+      - path: ../Sources/S1Probe/Runtime/etc
+        type: folder
+        buildPhase: resources
+      - path: ../Sources/S1Probe/Runtime/winsxs
+        type: folder
+        buildPhase: resources
+      - path: ../Sources/S1Probe/Runtime/registry
+        type: folder
+        buildPhase: resources
+      - path: ../Sources/S1Probe/Runtime/certs
+        type: folder
+        buildPhase: resources
+      - path: ../Sources/S1Probe/Runtime/mono
+        type: folder
+        buildPhase: resources
+      - path: ../Sources/S1Probe/Runtime/vulkan
+        type: folder
+        buildPhase: resources
+      - path: ../Sources/S1Probe/Runtime/steamapi
+        type: folder
+        buildPhase: resources
+      - path: ../Sources/S1Probe/Runtime/artifacts.tsv
+        buildPhase: resources
+      - path: ../PlayportKit/Titles
+        type: folder
+        buildPhase: resources
+      - path: ../Staged/Licenses
+        type: folder
+        buildPhase: resources
+    # prebuild.sh: idevice's FFI as a framework of its own (compact unwind's limit of
+    # personality routines) and, for the simulator (the UI only: no game runs there),
+    # the device archives rewritten for it and a MetalFX stand-in.
+    preBuildScripts:
+      - name: Archives and frameworks
+        script: '"$SRCROOT/prebuild.sh"'
+        basedOnDependencyAnalysis: false
+    postBuildScripts:
+      - name: Embed prebuild frameworks
+        script: |
+          dst="$TARGET_BUILD_DIR/$FRAMEWORKS_FOLDER_PATH"
+          mkdir -p "$dst"
+          for n in IdeviceFFI MetalFX; do
+              [ -d "$BUILT_PRODUCTS_DIR/$n.framework" ] || continue
+              [ "$n" = MetalFX ] && [ "$PLATFORM_NAME" != iphonesimulator ] && continue
+              rm -rf "$dst/$n.framework" && cp -R "$BUILT_PRODUCTS_DIR/$n.framework" "$dst/"
+              codesign -f -s "${EXPANDED_CODE_SIGN_IDENTITY:--}" "$dst/$n.framework"
+          done
+        basedOnDependencyAnalysis: false
+    dependencies:
+      - package: Playport
+        product: S1Probe
+      - target: PlayportJIT
+        embed: true
+    settings:
+      base:
+        PRODUCT_NAME: S1Probe
+        PRODUCT_BUNDLE_IDENTIFIER: $(PLAYPORT_BUNDLE_ID)
+        INFOPLIST_FILE: ../Info.plist
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIStatusBarHidden: YES
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_ENTITLEMENTS: ../S1Probe.entitlements
+        OTHER_LDFLAGS: ["$(inherited)", "-framework", "IdeviceFFI"]
+  PlayportJIT:
+    type: app-extension
+    platform: iOS
+    # StikJIT's framework in the helper's own Frameworks/, as xtool embeds it: Xcode
+    # does not embed a package's binary framework in an app extension.
+    postBuildScripts:
+      - name: Embed StikJIT
+        script: |
+          dst="$TARGET_BUILD_DIR/$FRAMEWORKS_FOLDER_PATH"
+          mkdir -p "$dst" && rm -rf "$dst/StikJIT.framework"
+          cp -R "$BUILT_PRODUCTS_DIR/StikJIT.framework" "$dst/"
+          codesign -f -s "${EXPANDED_CODE_SIGN_IDENTITY:--}" "$dst/StikJIT.framework"
+        basedOnDependencyAnalysis: false
+    sources:
+      - path: JITStub
+      - path: ../PlayportJIT/playport-universal.js
+        buildPhase: resources
+    dependencies:
+      - package: Playport
+        product: PlayportJIT
+    settings:
+      base:
+        PRODUCT_NAME: PlayportJIT
+        PRODUCT_BUNDLE_IDENTIFIER: $(PLAYPORT_BUNDLE_ID).PlayportJIT
+        INFOPLIST_FILE: ../PlayportJIT-Info.plist
+        GENERATE_INFOPLIST_FILE: YES
+        APPLICATION_EXTENSION_API_ONLY: YES

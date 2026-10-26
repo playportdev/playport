@@ -68,6 +68,7 @@ final class LaunchSettingsStore: ObservableObject {
 }
 
 /// How the pickers name a screen spec and a limit on this phone.
+@MainActor
 enum LaunchSettingsText {
     /// The resolutions this panel can show in a shape, largest first.
     static func screens(_ aspect: ScreenAspect = .phone) -> [String] {
@@ -86,7 +87,7 @@ enum LaunchSettingsText {
         }
     }
 
-    static var frameLimits: [Int] { LaunchSettings.frameLimits(maxRate: UIScreen.main.maximumFramesPerSecond) }
+    static var frameLimits: [Int] { LaunchSettings.frameLimits(maxRate: Panel.maximumFramesPerSecond) }
 
     /// `pixels` adds the size the guest gets on this phone.
     static func screen(_ spec: String?, pixels: Bool = true, aspect: ScreenAspect = .phone) -> String {
@@ -171,7 +172,7 @@ enum LaunchSettingsText {
         + "Changes apply from the game's next launch."
 
     private static func size(_ spec: String, _ aspect: ScreenAspect = .phone) -> (Int, Int)? {
-        let px = UIScreen.main.nativeBounds.size
+        let px = Panel.pixels
         return Display.guestSize(panelLong: Int(px.width), panelShort: Int(px.height), spec: aspect.spec(level: spec))
     }
 }

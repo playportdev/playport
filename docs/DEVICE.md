@@ -174,6 +174,7 @@ version (`gh-axi issue list -R StikDebug/StikDebug`).
 | iOS (build) | Phone | StikJIT | Last checked | Evidence |
 | --- | --- | --- | --- | --- |
 | 27.0 (24A437) | iPhone18,4 (A19 Pro, TXM present) | 1.6.0; 1.9.0 (the pin from 2026-10-05) in a trial IPA | 2026-09-28 | [stikjit-pin-cost](evidence/2026-09-28-stikjit-pin-cost.md): JIT in 3.19 s, first frame at +8.92 s |
+| 27.1 (24A94425) | iPhone19,4 (iPhone Duo, A20 Pro, TXM present) | 1.9.0 (Cryptex DDI) | 2026-10-26 | [iphone-duo](evidence/2026-10-26-iphone-duo.md): built-in JIT, Hollow Knight plays |
 
 - Not known good: iOS 27.2 (StikDebug issue #471, open: the tunnel fails with
   `missing field public_key`), and every iOS 26 version. The app installs from

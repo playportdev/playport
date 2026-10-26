@@ -11,6 +11,7 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import platform
 import re
 import tarfile
 import tomllib
@@ -19,7 +20,11 @@ import tomllib
 spec = importlib.util.spec_from_file_location("notices_rust", Path(__file__).with_name("notices-rust.py"))
 rust = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(rust)
+# The locked rustc archive's host. The toolchain installed here is this machine's
+# (build/toolchain/rust.sh: an arm64 build container installs aarch64's); its notices
+# are the same bytes in every host's archive, and they are checked against the locked one.
 HOST = "x86_64-unknown-linux-gnu"
+INSTALLED = f"{platform.machine()}-unknown-linux-gnu"
 TARGET = rust.cargo.TARGET
 NOTICES = ("COPYRIGHT-library.html", *(f"licenses/{name}.txt" for name in
            ("MIT", "Apache-2.0", "BSD-2-Clause", "ISC")))
@@ -194,7 +199,7 @@ def verify(repo, root, dist):
         raise ValueError("Rust release identity disagrees with source commit/pin")
     identity = {"version": lock["release"].encode(), "git-commit-hash": lock["source_commit"].encode()}
     source = verify_source(dist, lock, identity)
-    toolchain = Path("rustup/toolchains") / f"{version}-{HOST}"
+    toolchain = Path("rustup/toolchains") / f"{version}-{INSTALLED}"
     rust.no_links(root, toolchain)
     components = {}
     notices = {}
