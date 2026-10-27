@@ -28,16 +28,20 @@
   the supervisor after the chunk-1b child's connection to the local model dropped
   mid-way (its edits, build and tests had finished; only its commit was missing).
 
-**Running now:** chunk 2a — `patches/fex-port/0065-*` (diagnostics) prints
+**Running now:** chunk 2a — `patches/fex/0082-*` (diagnostics) prints
 `FEX: iOS host AVX=` and replaces the ml538 sentence with `rev=ml538b`; one
-writer child, then `pp test` + `pp build`.
+writer child, then `pp test` + `pp build`. The patch belongs in `patches/fex`
+(Playport's own FEX series), not `fex-port`: the `FEX: iOS host …` line is
+created by `patches/fex/0005`, `0008` and `0023`, and `0034` rewrites the
+neighbouring ml538 block, so an edit at the fex-port tip would neither apply nor
+survive.
 
 **Queue, in order** (one writer at a time; each item is one child):
 
 1. ~~Chunk 1~~ done (`7c93589`).
 2. ~~Chunk 1b~~ done (`a7f48f2`).
-3. Chunk 2a — honest runtime marker (`0065`, diagnostics): `FEX: iOS host AVX=`
-   and `rev=ml538b`. PLA-451. Check: `pp test`, `pp build`.
+3. Chunk 2a — honest runtime marker (`patches/fex/0082`, diagnostics):
+   `FEX: iOS host AVX=` and `rev=ml538b`. PLA-451. Check: `pp test`, `pp build`.
 4. Chunk 2b — phone: install the 2a IPA, Hollow Knight `--until
    first-frame+10 --shot` (runtime smoke gate), The Witcher 3 `app-292030` play
    with the page's settings, then `docs/evidence/2026-10-27-witcher3-avx.md`.
