@@ -12,32 +12,37 @@
 
 ## Runner state (2026-10-27)
 
-**HEAD:** `2c4e79f` (the plan commit) on `dev/pla-451-fex-ios-host-avx`; `main` is at
-`5317c13`. Not merged, not pushed.
+**HEAD:** `7c93589`; `main` is at `5317c13`. Not merged, not pushed.
 
-**Finished:** nothing yet.
+**Finished:** chunk 1 — commit `7c93589`, `patches/fex-port/0064-*` sets
+`SupportsAVX` in the iOS host's hand-built `HostFeatures` (64-entry series).
+`pp test` and `pp build` passed; IPA `63b69178`
+(`63b691782f14bc850643ae2fead33272d3964740a95565b6b5fe6acf3f665114`) is built
+but **not installed**, and no phone gate ran. Report:
+`.work/agent-notes/witcher3-avx/reports/chunk1.md`. Both FEX DLL rows in
+`app/artifacts.tsv` moved.
 
-**Running now:** chunk 1 (writer child, hard model). If a new session finds no
-chunk-1 report in `.work/agent-notes/witcher3-avx/reports/`, check
-`git log --oneline main..HEAD` and `patches/fex-port/series` before launching
-anything — a committed `0064-*` patch means chunk 1 landed.
+**Running now:** chunk 1b — narrowing `0064` so only the ARM64EC host gets AVX
+and the Wow64 (i386) module keeps upstream's `false`; one writer child, then
+`pp test` + `pp build`.
 
 **Queue, in order** (one writer at a time; each item is one child):
 
-1. Chunk 1 — `patches/fex-port/0064-*` sets `SupportsAVX = true` on the iOS
-   host. PLA-451. Check: `pp test`, `pp build`.
-2. Chunk 2 — honest runtime marker rev, then Hollow Knight `--until
+1. ~~Chunk 1~~ done (`7c93589`).
+2. Chunk 1b — `0064` narrowed to the ARM64EC host (AVX stays off for Wow64, as
+   upstream keeps it). PLA-451. Check: `pp test`, `pp build`.
+3. Chunk 2 — honest runtime marker rev, then Hollow Knight `--until
    first-frame+10 --shot` (the runtime smoke gate) and one Witcher 3 play
-   (`app-292030`, page settings). PLA-451. Writes the first
-   `docs/evidence/2026-10-27-witcher3-avx*.md`.
-3. Chunk 3 — 256-bit (ymm) state correctness across the ARM64EC context and the
+   (`app-292030`, page settings). PLA-451. Installs the chunk-1b IPA and writes
+   the first `docs/evidence/2026-10-27-witcher3-avx*.md`.
+4. Chunk 3 — 256-bit (ymm) state correctness across the ARM64EC context and the
    `CONTEXT_XSTATE`/`XSTATE_AVX` host→guest path; host round-trip check, no play.
    PLA-451.
-4. Chunk 4 — per-title FEX features in the cohort entry (PLA-269) and Witcher 3's
+5. Chunk 4 — per-title FEX features in the cohort entry (PLA-269) and Witcher 3's
    entry in `app/PlayportKit/Titles/compat-defaults.json`. PLA-451, PLA-269.
-5. Chunk 5 — AVX on/off cost on a shipped vector-heavy title: Hollow Knight
+6. Chunk 5 — AVX on/off cost on a shipped vector-heavy title: Hollow Knight
    `pp perf`, plus a Witcher 3 play. PLA-451.
-6. Chunk 6 — Witcher 3 play gates and the PLA-43 comparison; a human play moves
+7. Chunk 6 — Witcher 3 play gates and the PLA-43 comparison; a human play moves
    PLA-43's status and `site/compatibility/games.json`. PLA-43.
 
 The performance numbers that decide anything come from a human `pp perf` run the
@@ -107,7 +112,8 @@ the decode tables and their `AVX128_*` handlers are already in the tree.
 
 One writer at a time, each chunk built, committed and used on the phone before the next starts.
 
-1. **Give the iOS host AVX128** ✅ started 2026-10-27 — a Playport patch `patches/fex-port/0064-*` (next free
+1. **Give the iOS host AVX128** ✅ `7c93589` (`0064`), narrowed to the ARM64EC
+   host in chunk 1b; not yet checked on the phone. — a Playport patch `patches/fex-port/0064-*` (next free
    number) that sets `SupportsAVX = true` in the `FEX_IOS_HOST` branch of
    `Source/Windows/Common/CPUFeatures.cpp`, with `Class:`, `Evidence:` and
    `Offered-upstream:` trailers and a `series` entry. Pins stay: Madeira is frozen at
