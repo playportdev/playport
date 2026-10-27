@@ -188,3 +188,4 @@
 0213-ntdll-the-app-allows-RDR2-s-Social-Club-helper-resta.patch
 0220-ntdll-unix-wineserver-build-Playport-s-ppsync-in-pla.patch
 0221-wineserver-preserve-imported-fd-status-flags.patch
+0222-virtual-short-reserve-mb-grants-an-unplaceable-reser.patch
