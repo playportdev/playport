@@ -1,0 +1,96 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 27 Oct 2026 23:20:16 +0100
+Subject: [PATCH] kk: say what ran out when Metal gives no heap
+
+kk_alloc_bo reported a nil newHeapWithDescriptor or newBuffer as
+VK_ERROR_OUT_OF_DEVICE_MEMORY with no reason. The Witcher 3's D3D12
+renderer hit it about 120 s in, while the world streamed in, with the
+app's footprint at 4.75 GB of its 6,144 MB limit: 1,269 vkd3d-proton
+"Committed resource failed" and then the game's own fatal 0x80000101.
+Log, at most 16 times, `[kk-bo] newHeap failed for N MiB` with what the
+driver holds, os_proc_available_memory() and the largest free stretch of
+the task's address space, so the next failure names whether memory or
+address space ran out. No change to what the driver does.
+
+Linear: PLA-452
+Class: diagnostics
+Evidence: docs/evidence/2026-10-27-witcher3-short-reserve.md
+Offered-upstream: no
+---
+ src/kosmickrisp/vulkan/kk_bo.c | 49 ++++++++++++++++++++++++++++++++++
+ 1 file changed, 49 insertions(+)
+
+diff --git a/src/kosmickrisp/vulkan/kk_bo.c b/src/kosmickrisp/vulkan/kk_bo.c
+index a83c86b..dd84840 100644
+--- a/src/kosmickrisp/vulkan/kk_bo.c
++++ b/src/kosmickrisp/vulkan/kk_bo.c
+@@ -41,6 +41,53 @@ typedef mach_vm_address_t kk_vm_address_t;
+ #endif
+ #endif /* DETECT_OS_APPLE */
+ 
++/* Playport (PLA-452): Metal gave no heap, which vk_errorf reports with no
++ * reason. Name the size, what the driver already holds, what iOS still lets
++ * the app have, and the largest free stretch of the task's address space, so
++ * the log says which ran out. At most 16 lines. */
++#if DETECT_OS_APPLE && TARGET_OS_IPHONE
++#include <os/proc.h>
++#endif
++static void
++kk_bo_report_failure(uint64_t size_B, const char *stage)
++{
++   static uint32_t reported;
++   if (p_atomic_inc_return(&reported) > 16)
++      return;
++
++   int64_t held_B = 0;
++   for (unsigned k = 0; k < KK_BO_KIND_COUNT; k++)
++      held_B += p_atomic_read(&kk_memory_stats.bo_bytes[k]);
++
++   unsigned long long avail_MB = 0, gap_MB = 0, gap_at = 0;
++#if DETECT_OS_APPLE && TARGET_OS_IPHONE
++   avail_MB = (unsigned long long)os_proc_available_memory() >> 20;
++   vm_address_t addr = 0, prev_end = 0;
++   for (unsigned n = 0; n < 1u << 20; n++) {
++      vm_size_t size = 0;
++      vm_region_basic_info_data_64_t info;
++      mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT_64;
++      mach_port_t object = MACH_PORT_NULL;
++      if (vm_region_64(mach_task_self(), &addr, &size, VM_REGION_BASIC_INFO_64,
++                       (vm_region_info_t)&info, &count, &object) != KERN_SUCCESS)
++         break;
++      if (addr > prev_end && ((addr - prev_end) >> 20) > gap_MB) {
++         gap_MB = (addr - prev_end) >> 20;
++         gap_at = prev_end;
++      }
++      prev_end = addr + size;
++      addr = prev_end;
++   }
++#endif
++   fprintf(stderr,
++           "[kk-bo] %s failed for %llu MiB: driver holds %lld MiB in %d device "
++           "allocations; iOS allows %llu MiB more; largest free address range "
++           "%llu MiB at 0x%llx\n",
++           stage, (unsigned long long)(size_B >> 20), (long long)(held_B >> 20),
++           p_atomic_read(&kk_memory_stats.bo_count[KK_BO_KIND_DEVICE_MEMORY]),
++           avail_MB, gap_MB, gap_at);
++}
++
+ VkResult
+ kk_alloc_bo(struct kk_device *dev, struct vk_object_base *log_obj,
+             uint64_t size_B, uint64_t align_B, struct kk_bo **bo_out)
+@@ -65,12 +112,14 @@ kk_alloc_bo(struct kk_device *dev, struct vk_object_base *log_obj,
+    mtl_heap *handle =
+       mtl_new_heap(dev->mtl_handle, size_B, KK_MTL_RESOURCE_OPTIONS);
+    if (handle == NULL) {
++      kk_bo_report_failure(size_B, "newHeap");
+       result = vk_errorf(log_obj, VK_ERROR_OUT_OF_DEVICE_MEMORY, "%m");
+       goto fail_heap;
+    }
+ 
+    mtl_buffer *map = mtl_new_buffer_with_length(handle, size_B, 0u);
+    if (map == NULL) {
++      kk_bo_report_failure(size_B, "newBuffer");
+       result = vk_errorf(log_obj, VK_ERROR_OUT_OF_DEVICE_MEMORY, "%m");
+       goto fail_map;
+    }
