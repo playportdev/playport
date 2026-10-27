@@ -67,3 +67,4 @@
 0061-ARM64EC-transition-counters-last-hit-alias-cache-L1-.patch
 0062-Licensing-the-converter-exception-is-adopted-2026-09.patch
 0063-iOS-adapt-to-FEX-2609-guest-exception-delivery-disk-.patch
+0064-iOS-the-hand-built-HostFeatures-sets-SupportsAVX-as-.patch

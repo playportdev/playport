@@ -1,0 +1,59 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 27 Oct 2026 16:01:45 +0100
+Subject: [PATCH] iOS: the hand-built HostFeatures sets SupportsAVX as well
+
+CPUFeatures.cpp's FEX_IOS_HOST branch builds its HostFeatures and returns
+there, so FEX::FetchHostFeatures and OverrideFeatures never run: FEX_HOSTFEATURES
+gets read (the TSO config line prints it) and ignored, and SupportsAVX ships
+false. The decoder takes the VEX tables only with SupportsAVX (Frontend.cpp:82),
+so without it the VEX group stays the invalid table and a VEX opcode at a block's
+entry decodes INVALID_INST: The Witcher 3's installed 4.x build ends 1 s after it
+starts at its first prologue store, vmovaps [rsp+0x50], xmm6 (witcher3.exe rva
+0x27e8fef), with exit 0xc000001d, and its SSE fallback is never reached. The
+enableavx experiment showed the switch cannot help: the launch carried it and the
+ml538 marker's HostFeatures moved 288 -> 292, and the same store still decoded
+invalid.
+
+Setting the flag on the hand-built list instead takes the AVX128 tables
+(VEXTableOps_AVX128 and VEXTableGroupOps_AVX128, whose AVX128_* handlers -
+AVX128_VMOVAPS among them - are already in the tree): SupportsSVE256 stays false,
+so nothing reaches the 256-bit SVE path and no SVE context save/restore is
+claimed. The ARM64EC context already carries the ymm high halves in V[16..31], so
+both transition directions now move them: host -> guest always through
+ReconstructXMMRegisters, guest -> host when the request carries CONTEXT_XSTATE
+with XSTATE_AVX. Guest CPUID reports AVX and AVX2 and the XSAVE leaves grow,
+which is what the flag means.
+
+Only 128-bit host code is reached, so nothing here turns on 256-bit vectors; the
+high halves' round trip through the EC context still needs its own check before a
+title's compatibility status moves on them.
+
+Linear: PLA-451
+Class: feature
+Evidence: docs/evidence/2026-10-27-boot-regression.md
+          docs/plans/2026-10-27-witcher3-avx.md
+Offered-upstream: no; the iOS host's hand-rolled feature list is Playport's
+---
+ Source/Windows/Common/CPUFeatures.cpp | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/Source/Windows/Common/CPUFeatures.cpp b/Source/Windows/Common/CPUFeatures.cpp
+index 3a61b45..57b71c6 100644
+--- a/Source/Windows/Common/CPUFeatures.cpp
++++ b/Source/Windows/Common/CPUFeatures.cpp
+@@ -71,6 +71,14 @@ FEXCore::HostFeatures CPUFeatures::FetchHostFeatures(bool IsWine, FEXCore::HostF
+   HostFeatures.SupportsSHA = true;
+   HostFeatures.SupportsPMULL_128Bit = true;
+   HostFeatures.SupportsFCMA = true;
++  /* Playport: AVX128 too. This branch returns before FEX::FetchHostFeatures, so
++   * OverrideFeatures never runs and FEX_HOSTFEATURES' enableavx cannot set the
++   * flag: the decoder takes the VEX tables only when SupportsAVX is set, and
++   * without it a VEX opcode is INVALID_INST — The Witcher 3's installed 4.x
++   * build faults 1 s in at its first vmovaps with 0xc000001d. SupportsSVE256
++   * stays false, so the decoder takes VEXTableOps_AVX128 and its AVX128_*
++   * handlers, already in the tree; no SVE state is claimed here. */
++  HostFeatures.SupportsAVX = true;
+   HostFeatures.SupportsFlagM = true;
+   HostFeatures.SupportsFlagM2 = true;
+   HostFeatures.SupportsAFP = true;

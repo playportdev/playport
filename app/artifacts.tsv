@@ -781,7 +781,7 @@ resource	Runtime/arm64ec-windows/xmllite.dll	278528	d757caee62880f8a8db3b19cfd18
 resource	Runtime/arm64ec-windows/xolehlp.dll	376832	88ef43a83812a0ba05eac585b602a046d9a5e57cb06b9ef428e683e2ab2c32b5	wine-build	build-arm64ec/dlls/xolehlp/arm64ec-windows/xolehlp.dll	P2
 resource	Runtime/arm64ec-windows/xpsprint.dll	180224	a7a277a30949807610da1e619a29ee1dd149cf8fc6b8824518201437d241190e	wine-build	build-arm64ec/dlls/xpsprint/arm64ec-windows/xpsprint.dll	P2
 resource	Runtime/arm64ec-windows/xpssvcs.dll	163840	fcedd8362256f64364cfce83fd74f9d36e39ac56651faf070ae29d2ac4bbc77b	wine-build	build-arm64ec/dlls/xpssvcs/arm64ec-windows/xpssvcs.dll	P2
-resource	Runtime/arm64ec-windows/xtajit64.dll	5756928	737cd51c5d379403dc8f0e593cef6f7b521a17baf4713f9d65cea4465ba4711b	fex	libarm64ecfex.dll	P1-de
+resource	Runtime/arm64ec-windows/xtajit64.dll	5756928	d83aaca3ce58f7391653975f88c4801b633238a8f143fcaacb5e8c1277580def	fex	libarm64ecfex.dll	P1-de
 resource	Runtime/aarch64-windows/acledit.dll	114688	65b4ed3b901dcec7cc425bbb4e7d4835f8e014be7a322e0f350fb40e54ad40ff	wine-build	build-macos/dlls/acledit/aarch64-windows/acledit.dll	P2
 resource	Runtime/aarch64-windows/aclui.dll	147456	2972a2b2b3956c32d5c9e889a603624cac10e7e13cb7ad8aadc817b0a8a12da2	wine-build	build-macos/dlls/aclui/aarch64-windows/aclui.dll	P2
 resource	Runtime/aarch64-windows/activeds.dll	327680	27d0eb07e839736dd6aec6462ba8e53ef8243f1e8dd8017ee0de8083e85ca589	wine-build	build-macos/dlls/activeds/aarch64-windows/activeds.dll	P2
@@ -2362,7 +2362,7 @@ resource	Runtime/i386-windows/xmllite.dll	131072	eaa00dc52b17e1c4631452c588df70c
 resource	Runtime/i386-windows/xolehlp.dll	217088	47fa34ba3f9181434a79a2c38b699b8a021ecb17c544761623b5cc559ca3aaf2	wine-build	build-macos/dlls/xolehlp/i386-windows/xolehlp.dll	P2
 resource	Runtime/i386-windows/xpsprint.dll	32768	03bef0b4be2f453fdfb84785064698f18af0aad90f86285e53e9b7146f137dd8	wine-build	build-macos/dlls/xpsprint/i386-windows/xpsprint.dll	P2
 resource	Runtime/i386-windows/xpssvcs.dll	28672	20c72fb4fe690da091985162961d3ecf2440faae6223fd8f9cc678ffb39b811b	wine-build	build-macos/dlls/xpssvcs/i386-windows/xpssvcs.dll	P2
-resource	Runtime/aarch64-windows/xtajit.dll	5121024	b01801d6c5db875d3e0d7738bb93a35000bcf6b9845d2e0f35903196c501facb	fex-wow64	libwow64fex.dll	P1-de
+resource	Runtime/aarch64-windows/xtajit.dll	5121024	d1545a534ac8421acc68a41cbc979bacc8e8ec4da413d38143310a3c7caed80a	fex-wow64	libwow64fex.dll	P1-de
 resource	Runtime/vulkan/arm64ec-windows/d3d8.dll	1830912	e30267cc8f28188359d492da799f294980d5f78c2703992398bdab35bb167cdf	vulkan-pe	arm64ec-windows/d3d8.dll	P6-vulkan-pe
 resource	Runtime/vulkan/arm64ec-windows/d3d9.dll	7426048	16132abcdcac51a735d71ae4ea06535aae82878b3bb86e63ce23978a213f13ab	vulkan-pe	arm64ec-windows/d3d9.dll	P6-vulkan-pe
 resource	Runtime/vulkan/arm64ec-windows/d3d10core.dll	430080	bd784fc0f7da1724374bdeeb14a771eb5101938c6c23a3e893b5b8c316a0c6fd	vulkan-pe	arm64ec-windows/d3d10core.dll	P6-vulkan-pe
