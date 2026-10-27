@@ -58,9 +58,24 @@
 - chunk 3 writer (Opus 5.5) — the ymm high-half / `CONTEXT_XSTATE` correctness
   gate, host check, no phone; report
   `.work/agent-notes/witcher3-avx/reports/chunk3.md`.
-- a read-only researcher (Opus 5.5) on **PLA-452**, the Witcher 3's new
-  reservation/null-read fault; report `.work/agent-notes/pla-452/report.md`.
-  The writer is the only child that edits tracked files.
+- a read-only investigation (Opus 5.5) of **PLA-452**: the first pass is done
+  (`.work/agent-notes/pla-452/report.md`); the second, now running, pulls
+  `bin/x64_dx12/witcher3.exe` off the phone and classifies it statically
+  (`.work/agent-notes/pla-452/static-report.md`). It is a phone *pull* only: no
+  play, no build, no tracked-file edit.
+
+**PLA-452 so far (corrects the first filing).** The sizes are **64 GiB**, **32 GiB**
+and **500 MiB**; only the 64 and 32 GiB reservations are refused to the guest, and
+`[big-reserve]` is a *success* line. The game's own 16 GiB reservation is granted
+and only ~3% committed. Refusal is Wine's `virtual_ios.c` `map_view` returning
+`STATUS_NO_MEMORY` — address space, not RAM: `[mmap-place] … NO GAP FITS
+size=0x1000010000`, ~446 GB of the 512 GiB ceiling held by iOS, and the remaining
+64 GiB window split into four ~16 GiB slots, one of them the game's own 16 GiB.
+**64 GiB is unservable on this phone by construction.** The crash is not a failed
+allocation's NULL: it is a keyed search whose key missed in a zero-filled static
+container at RVA `0x5c8bb00`. Whether that container stays empty *because* the
+arena was refused is unproven — that is what the static reading is for. So the
+Witcher 3's blocker is now memory/start-up, not AVX.
 
 **Linear:** PLA-452 filed for the new Witcher 3 fault (refused 4 GiB / 2 GiB /
 500 MB reservations, then `mov rax, [rbx+0x10]` with `RBX=0` at RVA `0x27eeff4`),
