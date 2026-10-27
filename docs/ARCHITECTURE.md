@@ -29,7 +29,7 @@ do not apply on iOS:
 | `-marm64x` for DXVK/vkd3d-proton | ARM64X serves native ARM64 callers. All guests are x86. Revisit only if native ARM64 Windows games come into scope. |
 | fsync/ntsync, the Steam runtime, `PROTON_USE_ARM64` paths, `SilentLog`/`PROTON_LOG`, NVAPI | Linux launcher, driver or GPU specifics. In-process sync is ppsync, Playport's userspace ntsync driver ([below](#in-process-sync), 0157, proposed). |
 | FEX `client.json`/`steamwebhelper.json` app configs | These target the Linux Steam client. Playport's Steam client is native Swift. |
-| Valve Wine AVX/YMM contexts, SVE state | FEX on iOS advertises no AVX (`patches/fex-port` 0009), and Apple CPUs have no SVE (0018). |
+| Valve Wine AVX/YMM contexts, SVE state | Not carried yet: since `patches/fex-port` 0064 the ARM64EC host has AVX128, which keeps the ymm high halves only in FEX's thread state; Wine's ARM64EC contexts drop them and never set `CONTEXT_XSTATE`, so a guest's handler cannot see them and its own AVX writes reach the code it resumes (`build/ymm-context/test.py` checks this convention). Apple CPUs have no SVE (0018). |
 | `MIMALLOC_DISABLE_REDIRECT` for Teardown (1167630) | Per-game data, not an ARM default. Carry it only if Teardown is played. |
 | Valve's FEX DLL names (`libarm64ecfex.dll`, `libwow64fex.dll`) | Playport ships `xtajit64.dll`/`xtajit.dll`, the names Windows uses and Madeira's loader expects (0018). |
 

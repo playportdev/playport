@@ -370,6 +370,8 @@ Python tests and available host C tests) and checks the exception's adoption
 marker. A host compiler is needed, but no iOS SDK, signing account or phone is
 used. Swift tests are omitted. Host C tests that require an unpopulated Madeira
 submodule are explicitly skipped; the default CI checkout does not populate it.
+`build/ymm-context/test.py` compiles FEX's and Wine's own context code from the
+run trees (`$PLAYPORT_RUN/fex`, `$PLAYPORT_RUN/pe/wine`), so CI reports it skipped.
 An adoption marker is a source check, not a legal-clearance decision.
 
 The workflow uses hosted Linux runners, a commit-pinned checkout with persisted

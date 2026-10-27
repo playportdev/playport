@@ -270,10 +270,14 @@ def cmd_test(args):
             return 2
         return run(swift_test(pkg, rest), cwd=os.path.join(REPO, pkg))
 
-    def step(name, argv, **kw):
-        """argv: a command, or a function that returns its exit status."""
+    def step(name, argv, skip_status=None, **kw):
+        """argv: a command, or a function that returns its exit status; a check that
+        cannot run here exits SKIP_STATUS and the step says so."""
         t0 = time.monotonic()
         st = argv() if callable(argv) else run(argv, **kw)
+        if skip_status is not None and st == skip_status:
+            print(f"pp test: {name}: skipped ({time.monotonic() - t0:.0f} s)", flush=True)
+            return
         print(f"pp test: {name}: {'ok' if st == 0 else 'FAILED'} ({time.monotonic() - t0:.0f} s)", flush=True)
         if st:
             failed.append(name)
@@ -293,6 +297,9 @@ def cmd_test(args):
                                 "-Iapp/Sources/HostIO/include", "-Iapp/Sources/WineHost/include", *flags, "-o", exe,
                                 *sources], env=dict(os.environ, T=scratch, X=exe))
     step("C test WoW64 window", [sys.executable, os.path.join(REPO, "build/wow64/test.py")])
+    # The ymm high halves through the ARM64EC context: FEX's and Wine's own functions from
+    # the run trees, so a checkout without them (CI) skips it (exit 77).
+    step("C test ymm context", [sys.executable, os.path.join(REPO, "build/ymm-context/test.py")], skip_status=77)
     if "--quick" not in args:
         for pkg in SWIFT_PACKAGES:
             step(f"swift test {pkg}", swift_test(pkg), cwd=os.path.join(REPO, pkg))
