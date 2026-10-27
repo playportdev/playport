@@ -262,16 +262,21 @@ final class LibraryModel: ObservableObject {
         // The game's auth session and web API tickets, on by default (decision 0062): armed now, and
         // the CM session stays logged on for them alone through the play.
         var tickets: SteamTicketBroker?
+        // Steam refused the app's ownership ticket (AccessDenied): no licence grants it, and Playport's
+        // Steam client says so (decision 0115). Unknown (no session) counts as owned, as before.
+        var owned = true
         if let app = t.appID, settings.steamAPI == .emulated || settings.steamAPI == .client, let service {
             await ticketSweep?.value
             ticket = await service.encryptedAppTicket(appID: app)
-            tickets = await service.prepareTicketSession(appID: app, playLog: SteamTicketHost.log)
+            let session = await service.prepareTicketSession(appID: app, playLog: SteamTicketHost.log)
+            tickets = session.broker
+            if case .notOwned = session { owned = false }
         }
         let steamAPI = t.appID.map { app in
             LaunchCoordinator.SteamAPI(appID: app, root: Self.paths.games.appendingPathComponent(t.installDir, isDirectory: true),
                                        mode: settings.steamAPI,
                                        settings: { await service?.emulatorSettings(appID: app) ?? .init(appID: app) },
-                                       ticket: ticket, tickets: tickets)
+                                       ticket: ticket, tickets: tickets, owned: owned)
         }
         let endTickets = { if tickets != nil { Task { await service?.endPlay() } } }
         // An Epic game's sign-in (decision 0059), fetched now: the code lives five minutes.

@@ -25,6 +25,9 @@ enum SteamClientHost {
         /// The play's ticket broker: the CM session stays logged on for it (LibraryModel.play);
         /// nil when the session is not up, and then the client says it is not logged on.
         var tickets: SteamTicketBroker?
+        /// False when Steam refused the app's ownership ticket (AccessDenied): no licence the
+        /// account holds grants it, so BIsSubscribedApp and the rest answer false, as Steam's would.
+        var owned: Bool = true
         var appTicket: Secret<[UInt8]>?
     }
 
@@ -75,7 +78,7 @@ enum SteamClientHost {
         h.pointee.steam_id = p.steamID ?? 0
         h.pointee.app_id = p.appID
         h.pointee.logged_on = loggedOn ? 1 : 0
-        h.pointee.owns_app = 1   // a Play from the Steam library is of an app the account owns
+        h.pointee.owns_app = p.owned ? 1 : 0
         h.pointee.tickets = loggedOn ? 1 : 0
         #if !PLAYPORT_RELEASE
         // A dev app has the shim trace every call (steamclient_trace.h: no secrets, bounded); a release app never does.
@@ -85,7 +88,8 @@ enum SteamClientHost {
         SteamClientHost.copy(p.language, into: &h.pointee.language)
         SteamClientHost.log("client connected (protocol \(PP_SC_PROTOCOL)) for app \(p.appID): "
                             + "steamid \(p.steamID == nil ? "none" : "set"), persona \(p.personaName == nil ? "none" : "set"), "
-                            + "\(loggedOn ? "logged on, tickets armed" : "not logged on"), language \(p.language), "
+                            + "\(loggedOn ? "logged on, tickets armed" : "not logged on"), "
+                            + "\(p.owned ? "owned" : "not owned (Steam refused its ownership ticket: AccessDenied)"), language \(p.language), "
                             + "encrypted app ticket \(p.appTicket == nil ? "none" : "held")")
         return 1
     }

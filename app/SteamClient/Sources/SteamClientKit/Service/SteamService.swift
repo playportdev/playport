@@ -1025,15 +1025,17 @@ public actor SteamService {
     /// or when Steam refuses or does not answer; the game then gets the
     /// emulator's made-up tickets. The broker logs the play's tickets to
     /// `playLog` (the app: the runtime's log), or else to the service's.
-    public func prepareTicketSession(appID: UInt32, timeout: Double = 5, playLog: Logger? = nil) async -> SteamTicketBroker? {
+    /// `.notOwned` when Steam refuses the ownership ticket with AccessDenied: the
+    /// account has no licence for the app, which the game's client then reports.
+    public func prepareTicketSession(appID: UInt32, timeout: Double = 5, playLog: Logger? = nil) async -> TicketSession {
         guard !suspended, case .signedIn = state else {
             log.info("ticket", "app \(appID): tickets off (\(suspended ? "suspended" : "not signed in"))")
-            return nil
+            return .off
         }
         let s = await backend.isLoggedOn()
         guard s.loggedOn, !s.anonymous, s.connected else {
             log.info("ticket", "app \(appID): tickets off (the session is not connected)")
-            return nil
+            return .off
         }
         if ticketBroker != nil { await endPlay() }
         let started = Date()
@@ -1046,7 +1048,7 @@ public actor SteamService {
             for _ in 0..<20 where tokens.count == 0 { try await Task.sleep(nanoseconds: 100_000_000) }
             guard tokens.count > 0 else {
                 log.warn("ticket", "app \(appID): tickets off (Steam has given no game connect token)")
-                return nil
+                return .off
             }
             let broker = SteamTicketBroker(
                 appID: appID, ownershipTicket: ownership, tokens: tokens, traffic: backend.traffic, log: playLog ?? log,
@@ -1061,11 +1063,26 @@ public actor SteamService {
             do { try await backend.setGamesPlayed([appID]) } catch { log.warn("ticket", "app \(appID): games played not set: \(error)") }
             log.info("ticket", "app \(appID): tickets armed: ownership ticket \(ownership.value.count) bytes, "
                      + "\(tokens.count) game connect token(s), in " + String(format: "%.2f", Date().timeIntervalSince(started)) + " s")
-            return broker
+            return .armed(broker)
+        } catch SteamError.eresult(.accessDenied, let context) {
+            log.warn("ticket", "app \(appID): tickets off: the account does not own it (\(context): AccessDenied)")
+            return .notOwned
         } catch {
             log.warn("ticket", "app \(appID): tickets off: \(error)")
-            return nil
+            return .off
         }
+    }
+
+    /// What `prepareTicketSession` got for a play.
+    public enum TicketSession: Sendable {
+        /// The play's tickets, the CM kept logged on for them.
+        case armed(SteamTicketBroker)
+        /// None: not signed in, not connected, no token, or Steam did not answer.
+        case off
+        /// Steam refused the app's ownership ticket (AccessDenied): no licence grants it.
+        case notOwned
+
+        public var broker: SteamTicketBroker? { if case let .armed(b) = self { return b }; return nil }
     }
 
     /// A play's dropped CM connection, again (decision 0062): the stored

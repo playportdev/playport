@@ -130,6 +130,9 @@ enum LaunchCoordinator {
         /// The play's auth session and web API tickets (decision 0062), armed after
         /// Play; nil leaves the emulator's made-up ones.
         var tickets: SteamTicketBroker? = nil
+        /// False when Steam refused the app's ownership ticket with AccessDenied: the
+        /// account has no licence for it, and Playport's Steam client answers so.
+        var owned: Bool = true
     }
 
     enum Step: Equatable {
@@ -260,7 +263,8 @@ enum LaunchCoordinator {
             log("steamclient: not placed (\(error)); the game's steam_api finds no Steam client")
         }
         return SteamClientHost.Play(appID: s.appID, steamID: settings?.steamID, personaName: settings?.personaName,
-                                    language: settings?.language ?? "english", tickets: s.tickets, appTicket: s.ticket)
+                                    language: settings?.language ?? "english", tickets: s.tickets, owned: s.owned,
+                                    appTicket: s.ticket)
     }
 
     /// Takes the encrypted app ticket out of the game's emulator settings
