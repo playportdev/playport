@@ -54,8 +54,18 @@
   written the record; the supervisor verified its claims against the run logs and
   committed it. The engine gap is now memory/start-up, not AVX decode.
 
-**Running now:** nothing. Next launch is chunk 3 (ymm state correctness) unless
-the owner reorders it — see below.
+**Running now (owner chose both in parallel, 2026-10-27):**
+- chunk 3 writer (Opus 5.5) — the ymm high-half / `CONTEXT_XSTATE` correctness
+  gate, host check, no phone; report
+  `.work/agent-notes/witcher3-avx/reports/chunk3.md`.
+- a read-only researcher (Opus 5.5) on **PLA-452**, the Witcher 3's new
+  reservation/null-read fault; report `.work/agent-notes/pla-452/report.md`.
+  The writer is the only child that edits tracked files.
+
+**Linear:** PLA-452 filed for the new Witcher 3 fault (refused 4 GiB / 2 GiB /
+500 MB reservations, then `mov rax, [rbx+0x10]` with `RBX=0` at RVA `0x27eeff4`),
+related to PLA-43 and PLA-451. PLA-43 and PLA-42 (`Hollow Knight (367520)`) each
+carry a comment with this IPA's result; neither status moved.
 
 **Queue, in order** (one writer at a time; each item is one child):
 
@@ -63,10 +73,10 @@ the owner reorders it — see below.
 2. ~~Chunk 1b~~ done (`a7f48f2`).
 3. ~~Chunk 2a~~ done (`28a323c`).
 4. ~~Chunk 2b~~ done (`48c26f1`).
-5. **Next:** the Witcher 3's new fault — read the three failed huge
-   reservations and the null `[rbx+0x10]` read at RVA `0x27eeff4` (Linear filed
-   for it). Owner's call whether this runs before chunk 3.
-6. Chunk 3 — 256-bit (ymm) state correctness across the ARM64EC context and the
+5. **PLA-452** (running, parallel, read-only researcher) — the Witcher 3's new
+   fault: which layer refuses the three huge reservations, whether the null read
+   is downstream, ranked fixes and the next phone experiment.
+6. Chunk 3 (running) — 256-bit (ymm) state correctness across the ARM64EC context and the
    `CONTEXT_XSTATE`/`XSTATE_AVX` host→guest path; host round-trip check, no play.
    PLA-451.
 7. Chunk 4 — per-title FEX features in the cohort entry (PLA-269) and Witcher 3's
