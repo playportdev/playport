@@ -64,3 +64,4 @@
 0071-ARM64EC-MADEIRA_FEX_BATCH2-1-four-transition-and-bac.patch
 0080-ARM64EC-MADEIRA_FEX_AFPOFF_FPCR-FPCR.FIZ-and-FPCR.AH.patch
 0081-DiskCache-key-the-iOS-process-bucket-on-every-codege.patch
+0082-iOS-the-runtime-marker-says-which-way-AVX-shipped.patch

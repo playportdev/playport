@@ -1,0 +1,68 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kamil=20Postro=C5=BCny?= <kamil@postrozny.pl>
+Date: Tue, 27 Oct 2026 16:43:08 +0100
+Subject: [PATCH] iOS: the runtime marker says which way AVX shipped
+
+ml538's marker prints "FEX: HostFeatures={} (ml538: DISABLEAVX expected; AVX
+off => Skia takes SSE paths) rev=ml538", which is only the FEX_HOSTFEATURES
+mask. Since 0064 the iOS host decides AVX itself in CPUFeatures.cpp - that
+branch returns before FEX::FetchHostFeatures, so OverrideFeatures never runs
+and the mask never sets SupportsAVX - so the line still reads as if DISABLEAVX
+were the shipped state and a later grep of a phone log cannot tell which way
+AVX shipped (the ml513/ml538 lesson).
+
+The iOS host's own startup line now prints AVX={} first, so "FEX: iOS host
+AVX=" answers the question directly, and the mask line gets a new rev
+(ml538b) that says what it still proves: the FEX_HOSTFEATURES mask only, with
+the AVX answer on the host's line.
+
+Diagnostics only: no behaviour change, no feature decision moves.
+
+Linear: PLA-451
+Class: diagnostics
+Evidence: docs/plans/2026-10-27-witcher3-avx.md
+Offered-upstream: no; iOS-host diagnostics for Playport's port
+---
+ Source/Windows/Common/CPUFeatures.cpp    |  4 ++--
+ Source/Windows/Common/TSOHandlerConfig.h | 12 +++++++-----
+ 2 files changed, 9 insertions(+), 7 deletions(-)
+
+diff --git a/Source/Windows/Common/CPUFeatures.cpp b/Source/Windows/Common/CPUFeatures.cpp
+index 58cf15a..fd1b3a5 100644
+--- a/Source/Windows/Common/CPUFeatures.cpp
++++ b/Source/Windows/Common/CPUFeatures.cpp
+@@ -139,8 +139,8 @@ FEXCore::HostFeatures CPUFeatures::FetchHostFeatures(bool IsWine, FEXCore::HostF
+       HostFeatures.SupportsSHA = false;
+       HostFeatures.SupportsPMULL_128Bit = false;
+     }
+-    LogMan::Msg::IFmt("FEX: iOS host AFP={} LRCPC2={} RCPC={} atomics={} FlagM={} FlagM2={} FCMA={} crypto={} (FEX_HOSTFEATURES={})",
+-                      HostFeatures.SupportsAFP, HostFeatures.SupportsTSOImm9, HostFeatures.SupportsRCPC,
++    LogMan::Msg::IFmt("FEX: iOS host AVX={} AFP={} LRCPC2={} RCPC={} atomics={} FlagM={} FlagM2={} FCMA={} crypto={} (FEX_HOSTFEATURES={})",
++                      HostFeatures.SupportsAVX, HostFeatures.SupportsAFP, HostFeatures.SupportsTSOImm9, HostFeatures.SupportsRCPC,
+                       HostFeatures.SupportsAtomics, HostFeatures.SupportsFlagM, HostFeatures.SupportsFlagM2,
+                       HostFeatures.SupportsFCMA, HostFeatures.SupportsAES, HostFeatureControl());
+   }
+diff --git a/Source/Windows/Common/TSOHandlerConfig.h b/Source/Windows/Common/TSOHandlerConfig.h
+index 6dc2fb0..bc0a8ec 100644
+--- a/Source/Windows/Common/TSOHandlerConfig.h
++++ b/Source/Windows/Common/TSOHandlerConfig.h
+@@ -46,12 +46,14 @@ public:
+       FEX_CONFIG_OPT(MemcpyTSO, MEMCPYSETTSOENABLED);
+       LogMan::Msg::IFmt("FEX: TSO config tso={} halfbar={} vector={} memcpyset={} strictsplitlocks={} rev=ml513",
+                         TSOEnabled(), HalfBarrierTSOEnabled(), VecTSO(), MemcpyTSO(), StrictInProcessSplitLocks());
+-      /* ml538: and the EFFECTIVE host-feature set. A compiled-in default is
+-       * invisible to binary greps, and the whole AVX experiment is worthless
+-       * without proof of which way it shipped. */
++      /* ml538 printed the HOSTFEATURES mask and expected DISABLEAVX. Since
++       * PLA-451 the iOS host sets AVX in CPUFeatures.cpp, so the mask no
++       * longer answers it: the AVX answer is that line's "FEX: iOS host
++       * AVX=" field. This one still proves what the page asked for. */
+       FEX_CONFIG_OPT(HostFeat, HOSTFEATURES);
+-      LogMan::Msg::IFmt("FEX: HostFeatures={} (ml538: DISABLEAVX expected; "
+-                        "AVX off => Skia takes SSE paths) rev=ml538", HostFeat());
++      LogMan::Msg::IFmt("FEX: HostFeatures={} (ml538b: the FEX_HOSTFEATURES mask "
++                        "only; the iOS host's AVX answer is on its \"FEX: iOS host\" "
++                        "line) rev=ml538b", HostFeat());
+     }
+   }
+ 
