@@ -7,118 +7,69 @@
 [PLA-269](https://linear.app/playportdev/issue/PLA-269) (cohort FEX features),
 [PLA-81](https://linear.app/playportdev/issue/PLA-81) (the Witcher 3 DX12 candidate waits on this).
 
-**Status:** started 2026-10-27; chunk 1 in progress.
-**Branch:** `dev/pla-451-fex-ios-host-avx`, from `main` at `5317c13`, not pushed.
+**Status:** **stopped 2026-10-27** and handed to the owner for review. Chunks 1,
+1b, 2a, 2b and 3 landed on the branch; chunks 4–6 did not run. The owner's
+decision: leave `dev/pla-451-fex-ios-host-avx` unmerged for review.
+**Branch:** `dev/pla-451-fex-ios-host-avx`, from `main` at `5317c13`, **not
+pushed, not merged**. HEAD `3670c47`.
 
-## Runner state (2026-10-27)
+## Runner state (2026-10-27, stopped)
 
-**HEAD:** `48c26f1`; `main` is at `5317c13`. Not merged, not pushed.
+**The AVX128 gap is closed and gated; it is necessary but not sufficient for The
+Witcher 3.** Its installed 4.x build now decodes and executes the AVX instruction
+that used to kill it, reaches its own memory initialiser, and dies in its own
+out-of-memory handler because it needs a 64 GiB contiguous reservation that this
+phone cannot serve (PLA-452 — Linux VA ceiling, not RAM, not FEX).
 
-**Finished:**
-- Chunk 1, `7c93589` — `patches/fex-port/0064-*` sets `SupportsAVX` in the iOS
-  host's hand-built `HostFeatures`; `pp test` + `pp build` passed (IPA
-  `63b69178`); no phone gate. Report `.work/agent-notes/witcher3-avx/reports/chunk1.md`.
-- Chunk 1b, `a7f48f2` — `0064` narrowed to
-  `SupportsAVX = HostType != HostTypeEnum::Wow64`, so the i386 module keeps
-  upstream's `false` and only x86-64 guests gain AVX. `pp test` and `pp build`
-  passed (IPA `f8f69e31`,
-  `f8f69e3140ca224c97938362db0f16495da103e570166ce128d6f3bd358e486a`, 90 verify
-  checks), `pp build --plan` clean, both FEX DLL rows of `app/artifacts.tsv`
-  moved. Still **not installed** and no phone gate: chunk 2b plays it. Written by
-  the supervisor after the chunk-1b child's connection to the local model dropped
-  mid-way (its edits, build and tests had finished; only its commit was missing).
+**What landed** (each with `pp test` + `pp build` where a build was involved):
 
-- Chunk 2a, `28a323c` — `patches/fex/0082-*` (`Class: diagnostics`) prints
-  `FEX: iOS host AVX=` and replaces the ml538 sentence with `rev=ml538b`, which
-  now quotes the mask only. `pp test` and `pp build` passed (IPA `097bb2cc`,
-  `097bb2ccb5626a108524ad3a9861d84f15f21edc4489645c49032d1057bf4831`, 90 verify
-  checks), `pp build --plan` clean, both FEX DLL rows moved. It belongs in
-  `patches/fex`, not `fex-port`: the `FEX: iOS host …` line is created by
-  `patches/fex/0005`, `0008` and `0023`, and `0034` rewrites the neighbouring
-  ml538 block, so an edit at the fex-port tip would neither apply nor survive.
-  Report `.work/agent-notes/witcher3-avx/reports/chunk2a.md`.
+| Chunk | Commit | What |
+|---|---|---|
+| 1 | `7c93589` | `patches/fex-port/0064`: the iOS host's hand-built `HostFeatures` sets `SupportsAVX` — that branch returns before `OverrideFeatures`, which is why `enableavx` could never reach it. |
+| 1b | `a7f48f2` | `0064` narrowed to `SupportsAVX = HostType != HostTypeEnum::Wow64`: the FEX_IOS_HOST branch compiles into both modules and upstream keeps AVX off for WOW64. No i386 title gains a code path. |
+| 2a | `28a323c` | `patches/fex/0082` (`Class: diagnostics`): startup prints `FEX: iOS host AVX=`, the ml538 sentence becomes `rev=ml538b`. Belongs in `patches/fex`, not `fex-port` (the line is created by `patches/fex/0005`/`0008`/`0023`, and `0034` owns the neighbouring block). |
+| 2b | `48c26f1` | Phone on IPA `097bb2cc`; `docs/evidence/2026-10-27-witcher3-avx.md`. Hollow Knight first frame +11.80 s (the runtime smoke gate); The Witcher 3 past the `vmovaps`, dead at 1480 ms in its OOM handler. |
+| 3 | `3670c47` | `build/ymm-context/test.py` (`pp test`: `C test ymm context`) compiles FEX's and Wine's own context code from the run trees and round-trips known ymm bytes. Verdict: the copy conditions are right, the high halves never travel through a context; two gaps filed (PLA-453, PLA-454). Report `.work/agent-notes/witcher3-avx/reports/chunk3.md`. |
 
-- Chunk 2b, `48c26f1` — the phone on the `097bb2cc` IPA (installed in place over
-  `0107f809`, profile to 2026-11-03), recorded in
-  `docs/evidence/2026-10-27-witcher3-avx.md`. Both FEX modules print
-  `FEX: iOS host AVX=1` and `rev=ml538b`; no invalid-instruction and no
-  generated-fault-window line in either run. **Hollow Knight** (the runtime smoke
-  gate) reached its first frame at +11.80 s. **The Witcher 3** is no longer
-  stopped by the `vmovaps` at `witcher3.exe` RVA `0x27e8fef`: it runs 0x2005 bytes
-  further and ends 1480 ms in with `0xc0000005`, a read of `[rbx+0x10]` with
-  `RBX=0` at RVA `0x27eeff4`, after three failed large `NtAllocateVirtualMemory`
-  reservations (1 GB, 2 GB, 500 MB). No first frame, no guest window, nothing
-  played by a person. Run directories:
-  `.work/ui-runs/avx-2026-10-27-witcher3-avx/{hollow-knight,witcher-3}`.
-  The child was stopped by the owner for running out of context after it had
-  written the record; the supervisor verified its claims against the run logs and
-  committed it. The engine gap is now memory/start-up, not AVX decode.
+**Not landed — the open queue, in the order it should resume.** Each item is one
+writer child; the numbers continue this plan's chunk list below.
 
-**Running now (owner chose both in parallel, 2026-10-27):**
-- chunk 3 writer (Opus 5.5) — the ymm high-half / `CONTEXT_XSTATE` correctness
-  gate, host check, no phone; report
-  `.work/agent-notes/witcher3-avx/reports/chunk3.md`.
-- a read-only investigation (Opus 5.5) of **PLA-452**: the first pass is done
-  (`.work/agent-notes/pla-452/report.md`); the second, now running, pulls
-  `bin/x64_dx12/witcher3.exe` off the phone and classifies it statically
-  (`.work/agent-notes/pla-452/static-report.md`). It is a phone *pull* only: no
-  play, no build, no tracked-file edit.
+1. **Chunk 4 — per-title FEX features (PLA-269).** AVX is global today. Let a
+   cohort entry carry FEX features so only titles that need AVX get it, and give
+   The Witcher 3 its compatibility default only if 4.x ever boots. This is now the
+   most valuable remaining item: the AVX change's blast radius is every x86-64
+   title until it lands. PLA-451, PLA-269.
+2. **Chunk 5 — measure what AVX costs.** `pp perf` on Hollow Knight with AVX on
+   and off (the runtime marker names the state), plus PLA-454's flush-cost
+   question once that issue is worked. Decide whether AVX stays default-on.
+3. **Chunk 6 — the play gates.** Hollow Knight's own frame times and the
+   compatibility ledger must stay clean for the AVX change to be called verified;
+   The Witcher 3's gates are blocked on PLA-452/PLA-450 and cannot be met by AVX
+   work alone.
 
-**PLA-452 so far (corrects the first filing).** The sizes are **64 GiB**, **32 GiB**
-and **500 MiB**; only the 64 and 32 GiB reservations are refused to the guest, and
-`[big-reserve]` is a *success* line. The game's own 16 GiB reservation is granted
-and only ~3% committed. Refusal is Wine's `virtual_ios.c` `map_view` returning
-`STATUS_NO_MEMORY` — address space, not RAM: `[mmap-place] … NO GAP FITS
-size=0x1000010000`, ~446 GB of the 512 GiB ceiling held by iOS, and the remaining
-64 GiB window split into four ~16 GiB slots, one of them the game's own 16 GiB.
-**64 GiB is unservable on this phone by construction.** The crash is not a failed
-allocation's NULL: it is a keyed search whose key missed in a zero-filled static
-container at RVA `0x5c8bb00`. Whether that container stays empty *because* the
-arena was refused is unproven — that is what the static reading is for. So the
-Witcher 3's blocker is now memory/start-up, not AVX.
+**Open Linear from this plan:** [PLA-452](https://linear.app/playportdev/issue/PLA-452)
+(the Witcher 3's 64 GiB reservation and its OOM handler; the analysis and the
+static classification are both recorded there, next steps ranked),
+[PLA-453](https://linear.app/playportdev/issue/PLA-453) (Wine: no XSTATE reaches an
+x64 guest), [PLA-454](https://linear.app/playportdev/issue/PLA-454) (FEX: a
+high-half write can sit in the register cache past a guest fault),
+[PLA-450](https://linear.app/playportdev/issue/PLA-450) (branch selection, the only
+route to the classic 1.32 art this title's Best known names), and
+[PLA-269](https://linear.app/playportdev/issue/PLA-269) (cohort FEX features).
 
-**Linear:** PLA-452 filed for the new Witcher 3 fault (refused 4 GiB / 2 GiB /
-500 MB reservations, then `mov rax, [rbx+0x10]` with `RBX=0` at RVA `0x27eeff4`),
-related to PLA-43 and PLA-451. PLA-43 and PLA-42 (`Hollow Knight (367520)`) each
-carry a comment with this IPA's result; neither status moved.
+**Reports and scratch** (not in the branch, by design):
+`.work/agent-notes/witcher3-avx/reports/{chunk1,chunk2a,chunk3}.md`, the build and
+test logs beside them, and `.work/agent-notes/pla-452/{report,static-report}.md`
+with the pulled `witcher3.exe` in `.work/agent-notes/pla-452/pull/`.
 
-**Queue, in order** (one writer at a time; each item is one child):
-
-1. ~~Chunk 1~~ done (`7c93589`).
-2. ~~Chunk 1b~~ done (`a7f48f2`).
-3. ~~Chunk 2a~~ done (`28a323c`).
-4. ~~Chunk 2b~~ done (`48c26f1`).
-5. **PLA-452** (running, parallel, read-only researcher) — the Witcher 3's new
-   fault: which layer refuses the three huge reservations, whether the null read
-   is downstream, ranked fixes and the next phone experiment.
-6. Chunk 3 (running) — 256-bit (ymm) state correctness across the ARM64EC context and the
-   `CONTEXT_XSTATE`/`XSTATE_AVX` host→guest path; host round-trip check, no play.
-   PLA-451.
-7. Chunk 4 — per-title FEX features in the cohort entry (PLA-269) and Witcher 3's
-   entry in `app/PlayportKit/Titles/compat-defaults.json`. PLA-451, PLA-269.
-8. Chunk 5 — AVX on/off cost on a shipped vector-heavy title: Hollow Knight
-   `pp perf`, plus a Witcher 3 play. PLA-451.
-9. Chunk 6 — Witcher 3 play gates and the PLA-43 comparison; a human play moves
-   PLA-43's status and `site/compatibility/games.json`. PLA-43.
-
-The performance numbers that decide anything come from a human `pp perf` run the
-supervisor starts, not from a child's scripted run.
-
-**Phone state (2026-10-27 17:2x, `pp phone status`):** installed dev IPA
+**Phone state (2026-10-27 17:4x, `pp phone status`):** installed dev IPA
 `097bb2cc` (`097bb2ccb5626a108524ad3a9861d84f15f21edc4489645c49032d1057bf4831`),
 recorded against checkout `833a172`, iPhone18,4 iOS 27.0.1, profile expires
-2026-11-03 15:47, battery 78% unplugged, free space 14.3 GB, no lock held, no app
+2026-11-03 15:47, battery ~77% unplugged, free space 14.3 GB, no lock held, no app
 running, unattended mode off. The Witcher 3 4.x payload (68.8 GB) is installed;
-the classic 1.32 branch is not, and `install:APP` still cannot ask for it
-(PLA-450).
+the classic 1.32 branch is not. A 0-byte `oom_report_*.json` sits in
+`Documents/prefix/drive_c/Games/The Witcher 3/bin/x64_dx12/` from the run.
 
-**Scratch:** `.work/agent-notes/witcher3-avx/` — `reports/` (child reports, one
-per chunk), `queue.md` (build-area copy of the order above).
-
-**Owner, 2026-10-27:** after the boot-regression sweep left Witcher 3 as the only title
-without a first frame, the diagnosis asked whether AVX is the only blocker. One short
-phone experiment answered it (below), and the owner chose to plan the runtime work rather
-than execute it.
 
 ## What the phone runs proved (2026-10-27, IPA `0107f809`)
 
@@ -170,36 +121,27 @@ the decode tables and their `AVX128_*` handlers are already in the tree.
 
 One writer at a time, each chunk built, committed and used on the phone before the next starts.
 
-1. **Give the iOS host AVX128** ✅ `7c93589` (`0064`), narrowed to the ARM64EC
-   host by `a7f48f2` (chunk 1b); not yet checked on the phone. — a Playport patch `patches/fex-port/0064-*` (next free
-   number) that sets `SupportsAVX = true` in the `FEX_IOS_HOST` branch of
-   `Source/Windows/Common/CPUFeatures.cpp`, with `Class:`, `Evidence:` and
-   `Offered-upstream:` trailers and a `series` entry. Pins stay: Madeira is frozen at
-   `8c050d0` (decision 0054), this is a Playport patch on the existing tree.
-   Check: `pp test` (name gate, secrets, pin and series checks), then `pp build`.
-2. **Make the marker honest and the gate decisive** — the ml538 line says
-   `DISABLEAVX expected`, so it must carry a new rev saying AVX is on; otherwise a later
-   grep cannot tell which way it shipped (the ml513/ml538 lesson). Then one Witcher 3 play
-   on the phone with the page's saved settings, `--until first-frame+10 --shot`: the run
-   either reaches a first frame (the VEX store decoded) or names the next faulting guest
-   RIP, which is the next thing to fix.
-3. **256-bit state correctness** — read the EC context's `V[16]` high halves against FEX's
-   ARM64EC convention, the `CONTEXT_XSTATE`/`XSTATE_AVX` path for host→guest, and Wine's
-   save/restore of ymm across exceptions and signals; the guest exception work in
-   `patches/fex-port/0063` and the ARM64EC transition machinery is the place to check.
-   A wrong high half is silent corruption, not a crash, so this chunk needs a host check
-   (a round-trip of known ymm bytes through the EC context) rather than a play.
-4. **Make it per-title, not global (PLA-269)** — let the cohort entry carry FEX features, so
-   only titles that need AVX get it; and give Witcher 3 its compatibility default in
-   `app/PlayportKit/Titles/compat-defaults.json` (there is no Witcher entry today) if the
-   title needs it shipped rather than set by hand.
-5. **Measure what AVX costs** — `pp perf` on a vector-heavy title with AVX on and off
-   (ml538 measured the webhelper spawn only). Hollow Knight is the required regression play
-   for any FEX series move; its own frame times answer whether AVX128 taxes the shipped games.
-6. **Witcher 3 play gates** — first frame, then the PLA-43 comparison: gameplay in Kaer
-   Morhen at 720 rows on the DX12 path, and `pp perf --compare` against the classic 1.32
-   record (first frame +17.73 s, GPU 32–34 ms, IPA `965b7f27`). PLA-43's status, **Best
-   known** and `site/compatibility/games.json` move only with a human play behind them.
+1. ~~**Give the iOS host AVX128**~~ ✅ `7c93589`, narrowed to the ARM64EC host by
+   `a7f48f2` (chunk 1b): `patches/fex-port/0064` sets `SupportsAVX` in the
+   `FEX_IOS_HOST` branch of `Source/Windows/Common/CPUFeatures.cpp`.
+2. ~~**Make the marker honest and the gate decisive**~~ ✅ `28a323c`
+   (`patches/fex/0082`) and `48c26f1` (the phone): the VEX store decoded, and the
+   next faulting guest RIP was named — which turned out not to be AVX at all.
+3. ~~**256-bit state correctness**~~ ✅ `3670c47`: the copy conditions are right and
+   the high halves never travel through a context; the two real gaps are PLA-453 and
+   PLA-454. Residual risk stays as that report states it.
+4. **Make it per-title, not global (PLA-269)** — *open, next.* Let the cohort entry
+   carry FEX features, so only titles that need AVX get it; and give Witcher 3 its
+   compatibility default in `app/PlayportKit/Titles/compat-defaults.json` only if 4.x
+   ever boots. Until this lands the AVX change is global to every x86-64 title.
+5. **Measure what AVX costs** — *open.* `pp perf` on a vector-heavy title with AVX on
+   and off (ml538 measured the webhelper spawn only). Hollow Knight's own frame times
+   answer whether AVX128 taxes the shipped games, and PLA-454's flush would be measured
+   the same way.
+6. **Witcher 3 play gates** — *blocked, not by AVX.* The 4.x build needs a 64 GiB
+   contiguous guest reservation this phone cannot serve (PLA-452), so its first frame
+   cannot come from this plan's work; the classic 1.32 build that PLA-43's Best known
+   names is unreachable through the UI (PLA-450).
 
 ## Exit criteria
 
@@ -207,6 +149,15 @@ The plan is done when Witcher 3's installed 4.x build reaches a first frame and 
 shows gameplay, AVX is recorded in the runtime marker, its cost is measured on a shipped
 title, and titles that do not need it are unchanged (Hollow Knight and the compatibility
 ledger still pass).
+
+**Rewritten 2026-10-27 after the evidence: the first clause cannot be met by AVX work.**
+The 4.x build reaches its own `red::memory` initialiser and dies in its own OOM handler on a
+64 GiB reservation the phone cannot serve (PLA-452). So this plan's own goal is now: **AVX128
+lands and is honest** (marker says which way it shipped — done), **its blast radius is
+contained** (chunk 4, per-title, open), **its cost is measured on a shipped title** (chunk 5,
+open), and **nothing that did not need it changed** (Hollow Knight's first frame and the
+compatibility ledger — partially shown: one HK boot on `097bb2cc`; the measurement is chunk
+5). The Witcher 3's own gates move to PLA-452 and PLA-450.
 
 ## Risks, open questions and what this does not cover
 
