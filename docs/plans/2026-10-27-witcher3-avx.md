@@ -12,7 +12,7 @@
 
 ## Runner state (2026-10-27)
 
-**HEAD:** `a7f48f2`; `main` is at `5317c13`. Not merged, not pushed.
+**HEAD:** `28a323c`; `main` is at `5317c13`. Not merged, not pushed.
 
 **Finished:**
 - Chunk 1, `7c93589` — `patches/fex-port/0064-*` sets `SupportsAVX` in the iOS
@@ -28,24 +28,32 @@
   the supervisor after the chunk-1b child's connection to the local model dropped
   mid-way (its edits, build and tests had finished; only its commit was missing).
 
-**Running now:** chunk 2a — `patches/fex/0082-*` (diagnostics) prints
-`FEX: iOS host AVX=` and replaces the ml538 sentence with `rev=ml538b`; one
-writer child, then `pp test` + `pp build`. The patch belongs in `patches/fex`
-(Playport's own FEX series), not `fex-port`: the `FEX: iOS host …` line is
-created by `patches/fex/0005`, `0008` and `0023`, and `0034` rewrites the
-neighbouring ml538 block, so an edit at the fex-port tip would neither apply nor
-survive.
+- Chunk 2a, `28a323c` — `patches/fex/0082-*` (`Class: diagnostics`) prints
+  `FEX: iOS host AVX=` and replaces the ml538 sentence with `rev=ml538b`, which
+  now quotes the mask only. `pp test` and `pp build` passed (IPA `097bb2cc`,
+  `097bb2ccb5626a108524ad3a9861d84f15f21edc4489645c49032d1057bf4831`, 90 verify
+  checks), `pp build --plan` clean, both FEX DLL rows moved. It belongs in
+  `patches/fex`, not `fex-port`: the `FEX: iOS host …` line is created by
+  `patches/fex/0005`, `0008` and `0023`, and `0034` rewrites the neighbouring
+  ml538 block, so an edit at the fex-port tip would neither apply nor survive.
+  Report `.work/agent-notes/witcher3-avx/reports/chunk2a.md`.
+
+**Running now:** chunk 2b — the phone: `pp install --no-build` the `097bb2cc`
+IPA, Hollow Knight `--until first-frame+10 --shot` as the runtime smoke gate, the
+The Witcher 3 `app-292030` play, then `docs/evidence/2026-10-27-witcher3-avx.md`.
+If it is still running, the phone is busy; wait for the report in
+`.work/agent-notes/witcher3-avx/reports/chunk2b.md`.
 
 **Queue, in order** (one writer at a time; each item is one child):
 
 1. ~~Chunk 1~~ done (`7c93589`).
 2. ~~Chunk 1b~~ done (`a7f48f2`).
-3. Chunk 2a — honest runtime marker (`patches/fex/0082`, diagnostics):
-   `FEX: iOS host AVX=` and `rev=ml538b`. PLA-451. Check: `pp test`, `pp build`.
-4. Chunk 2b — phone: install the 2a IPA, Hollow Knight `--until
-   first-frame+10 --shot` (runtime smoke gate), The Witcher 3 `app-292030` play
-   with the page's settings, then `docs/evidence/2026-10-27-witcher3-avx.md`.
-   PLA-451, PLA-43 comment.
+3. ~~Chunk 2a~~ done (`28a323c`).
+4. Chunk 2b (running) — phone: install the `097bb2cc` IPA, Hollow Knight
+   `--until first-frame+10 --shot` (runtime smoke gate), The Witcher 3
+   `app-292030` play with the page's settings, then
+   `docs/evidence/2026-10-27-witcher3-avx.md`. PLA-451, PLA-43 comment. The
+   supervisor files the two games in Linear from its report.
 5. Chunk 3 — 256-bit (ymm) state correctness across the ARM64EC context and the
    `CONTEXT_XSTATE`/`XSTATE_AVX` host→guest path; host round-trip check, no play.
    PLA-451.
