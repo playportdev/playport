@@ -14,24 +14,30 @@ PoolOOMHandlerBreak 1.48 s in.
 
 With madeira.cfg short-reserve-mb = N, an unhinted reserve-only ask
 larger than N MiB that the kernel pick, the cage and the jumbo hold
-could not place gets a view of N MiB plus a 256 MiB guard, above the
-guest window and below FEX's band when it fits there, and the caller is
-told it got its full size (pp_short_reserve.h). A commit inside the
-claim is served within the real part and refused with STATUS_NO_MEMORY
-in the guard or where no view is, as a full pool's would be; past the
-guard, where the VA may be another view's, it is served as that view's
-and counted. Every grant and the first commits, refusals and foreign
-commits are logged as `[short-reserve]`. Without the key nothing
-changes.
+could not place gets a view of N MiB plus a 256 MiB guard, and the
+caller is told it got its full size (pp_short_reserve.h). The view goes
+top-down above the guest window and below FEX's band when it fits there:
+the game's free finds a pointer's pool by address range, the earlier
+pool first, so each later grant must sit below the earlier ones, whose
+claims then never cover it. Placed bottom-up, the 32 GiB grant sat
+inside the 64 GiB grant's claim and a block of it was freed into the
+64 GiB pool's free lists, a NULL unlink 6 s in.
+
+A commit is matched to the grant whose own view holds it first, then to
+a claim that covers it. Within the real part it is served; in the guard,
+or in a claim where no view is, it returns STATUS_NO_MEMORY, a full
+pool's failure; another view's commit inside a claim is that view's and
+is counted. `[short-reserve]` logs every grant and the first commits,
+refusals and foreign commits. Without the key nothing changes.
 
 Linear: PLA-452
 Class: feature
 Evidence: docs/evidence/2026-10-27-witcher3-avx.md
 Offered-upstream: no; the address-space layout is the iOS port's
 ---
- build/ntdll-unix/pp_short_reserve.h |  50 ++++++++++++++
- build/ntdll-unix/virtual_ios.c      | 102 ++++++++++++++++++++++++++++
- 2 files changed, 152 insertions(+)
+ build/ntdll-unix/pp_short_reserve.h |  50 ++++++++++++
+ build/ntdll-unix/virtual_ios.c      | 114 ++++++++++++++++++++++++++++
+ 2 files changed, 164 insertions(+)
  create mode 100644 build/ntdll-unix/pp_short_reserve.h
 
 diff --git a/build/ntdll-unix/pp_short_reserve.h b/build/ntdll-unix/pp_short_reserve.h
@@ -91,7 +97,7 @@ index 0000000..ad8c7be
 +
 +#endif
 diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
-index e72b45d..2b69d6b 100644
+index e72b45d..c6805b2 100644
 --- a/build/ntdll-unix/virtual_ios.c
 +++ b/build/ntdll-unix/virtual_ios.c
 @@ -1470,6 +1470,13 @@ static void ios_pool_owner_search( const uint64_t *wanted, unsigned nwanted )
@@ -108,32 +114,38 @@ index e72b45d..2b69d6b 100644
  /* ml433 (#72): the V8/cppgc cage holdback.
   *
   * Single-process CEF means exactly ONE process-wide cppgc/V8 cage: an 8GB
-@@ -20734,6 +20741,64 @@ NTSTATUS WINAPI NtAllocateVirtualMemory( HANDLE process, PVOID *ret, ULONG_PTR z
+@@ -20734,6 +20741,71 @@ NTSTATUS WINAPI NtAllocateVirtualMemory( HANDLE process, PVOID *ret, ULONG_PTR z
           * would have been wasted work. */
          if ((type & MEM_COMMIT) && ios_bigres_cnt && *ret)
              ios_bigres_commit( *ret, *size_ptr );
-+        /* Playport (PLA-452): a commit inside a short grant's claim. Within
-+         * the real part it is served as usual; past it, in the grant's own
-+         * guard or where no view is, it is refused as a full pool would be.
-+         * Past the guard the VA may be another view's, whose own commits
-+         * these are as far as anything here can tell: those are counted and
-+         * served. */
++        /* Playport (PLA-452): a commit inside a short grant's claim. Claims
++         * overlap other views (each later grant sits below the earlier ones,
++         * see the grant), so the grant whose own view holds the address
++         * answers first. Within its real part a commit is served as usual; in
++         * its guard, or in a claim where no view is, it is refused as a full
++         * pool's would be. Another view's commit inside a claim is that
++         * view's: counted and served. */
 +        if ((type & MEM_COMMIT) && ios_short_n && *ret)
 +        {
 +            uint64_t a = (uint64_t)(uintptr_t)*ret;
-+            unsigned i;
++            struct file_view *v = find_view( *ret, 0 );
++            unsigned i, pick = ios_short_n;
 +
-+            for (i = 0; i < ios_short_n; i++)
++            for (i = 0; i < ios_short_n && v; i++)
++                if ((uint64_t)(uintptr_t)v->base == ios_short[i].base) pick = i;
++            for (i = 0; i < ios_short_n && pick == ios_short_n; i++)
 +            {
-+                struct file_view *own, *v;
-+                uint64_t off;
++                struct file_view *own = find_view( (void *)(uintptr_t)ios_short[i].base, 0 );
++                if (own && (uint64_t)(uintptr_t)own->base == ios_short[i].base
++                    && a >= ios_short[i].base && a < ios_short[i].base + ios_short[i].claimed)
++                    pick = i;
++            }
++            if (pick < ios_short_n)
++            {
++                uint64_t off = a - ios_short[pick].base;
 +
-+                if (a < ios_short[i].base || a >= ios_short[i].base + ios_short[i].claimed) continue;
-+                own = find_view( (void *)(uintptr_t)ios_short[i].base, 0 );
-+                if (!own || (uint64_t)(uintptr_t)own->base != ios_short[i].base) continue;   /* released */
-+                v = find_view( *ret, 0 );
-+                off = a - ios_short[i].base;
-+                if (v && v != own)
++                i = pick;
++                if (v && (uint64_t)(uintptr_t)v->base != ios_short[i].base)
 +                {
 +                    if (ios_short[i].foreign++ < 8)
 +                        dprintf( 2, "[short-reserve] commit 0x%llx+0x%lx in grant 0x%llx's claim at +%llu MB "
@@ -141,10 +153,9 @@ index e72b45d..2b69d6b 100644
 +                                 (unsigned long long)a, (unsigned long)*size_ptr,
 +                                 (unsigned long long)ios_short[i].base,
 +                                 (unsigned long long)(off >> 20), v->base );
-+                    break;
 +                }
-+                if (ppsr_commit_overruns( ios_short[i].base, ios_short[i].real, ios_short[i].claimed,
-+                                          a, *size_ptr ))
++                else if (ppsr_commit_overruns( ios_short[i].base, ios_short[i].real, ios_short[i].claimed,
++                                               a, *size_ptr ))
 +                {
 +                    if (ios_short[i].refused++ < 16)
 +                        dprintf( 2, "[short-reserve] REFUSED commit 0x%llx+0x%lx at +%llu MB of grant 0x%llx: "
@@ -156,31 +167,38 @@ index e72b45d..2b69d6b 100644
 +                                 (unsigned long long)(ios_short[i].high >> 20) );
 +                    return STATUS_NO_MEMORY;
 +                }
-+                ios_short[i].commits++;
-+                ios_short[i].committed += *size_ptr;
-+                if (off + *size_ptr > ios_short[i].high) ios_short[i].high = off + *size_ptr;
-+                if (ios_short[i].commits <= 12 || !(ios_short[i].commits & 255))
-+                    dprintf( 2, "[short-reserve] commit #%u 0x%llx+0x%lx at +%llu MB of grant 0x%llx "
-+                                "(committed %llu MB, high +%llu MB of %llu MB real)\n",
-+                             ios_short[i].commits, (unsigned long long)a, (unsigned long)*size_ptr,
-+                             (unsigned long long)(off >> 20), (unsigned long long)ios_short[i].base,
-+                             (unsigned long long)(ios_short[i].committed >> 20),
-+                             (unsigned long long)(ios_short[i].high >> 20),
-+                             (unsigned long long)(ios_short[i].real >> 20) );
-+                break;
++                else
++                {
++                    ios_short[i].commits++;
++                    ios_short[i].committed += *size_ptr;
++                    if (off + *size_ptr > ios_short[i].high) ios_short[i].high = off + *size_ptr;
++                    if (ios_short[i].commits <= 12 || !(ios_short[i].commits & 255))
++                        dprintf( 2, "[short-reserve] commit #%u 0x%llx+0x%lx at +%llu MB of grant 0x%llx "
++                                    "(committed %llu MB, high +%llu MB of %llu MB real)\n",
++                                 ios_short[i].commits, (unsigned long long)a, (unsigned long)*size_ptr,
++                                 (unsigned long long)(off >> 20), (unsigned long long)ios_short[i].base,
++                                 (unsigned long long)(ios_short[i].committed >> 20),
++                                 (unsigned long long)(ios_short[i].high >> 20),
++                                 (unsigned long long)(ios_short[i].real >> 20) );
++                }
 +            }
 +        }
          /* ml151: a commit landing in a SOFT pool range — see ios_soft. The range
           * was never backed, so materialise exactly this sub-range now. Check the
           * kernel map first: if something already owns the VA (furniture, most
-@@ -21061,6 +21126,43 @@ NTSTATUS WINAPI NtAllocateVirtualMemory( HANDLE process, PVOID *ret, ULONG_PTR z
+@@ -21061,6 +21133,48 @@ NTSTATUS WINAPI NtAllocateVirtualMemory( HANDLE process, PVOID *ret, ULONG_PTR z
                      ios_bigres_report( "jumbo reserve failed" );
                      ios_soft_report( "jumbo reserve failed" );
                  }
 +                /* Playport (PLA-452): madeira.cfg short-reserve-mb = N grants
 +                 * N MiB of real view plus a guard and reports the full size;
 +                 * commits past the real part are refused above. Above the
-+                 * guest window first, below FEX's band, then anywhere. */
++                 * guest window first, below FEX's band, then anywhere, and
++                 * top-down: The Witcher 3's free finds a pointer's pool by
++                 * address range, the earlier pool first, so each later grant
++                 * goes below the earlier ones, whose claims then never cover
++                 * it. Placed bottom-up, its 32 GiB grant sat inside the 64 GiB
++                 * one's claim and its blocks were freed into the wrong pool. */
 +                if (!(type & MEM_COMMIT) && ios_short_n < IOS_SHORT_MAX)
 +                {
 +                    uint64_t real = ppsr_real_size( *size_ptr, madeira_cfg_int( "short-reserve-mb", 0 ) );
@@ -189,13 +207,13 @@ index e72b45d..2b69d6b 100644
 +                    {
 +                        void *p = NULL;
 +                        SIZE_T psz = real + PPSR_GUARD;
-+                        unsigned int st3 = allocate_virtual_memory( &p, &psz, type, protect,
++                        unsigned int st3 = allocate_virtual_memory( &p, &psz, type | MEM_TOP_DOWN, protect,
 +                                                                    0x7400000000ULL, 0x7c00000000ULL, 0, 0 );
 +                        if (st3)
 +                        {
 +                            p = NULL;
 +                            psz = real + PPSR_GUARD;
-+                            st3 = allocate_virtual_memory( &p, &psz, type, protect, 0, 0, 0, 0 );
++                            st3 = allocate_virtual_memory( &p, &psz, type | MEM_TOP_DOWN, protect, 0, 0, 0, 0 );
 +                        }
 +                        dprintf( 2, "[short-reserve] ask 0x%lx (%lu MB): real %llu MB + %llu MB guard -> %p "
 +                                    "st=0x%x; the caller is told it got the full size\n",
