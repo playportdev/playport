@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Generate the slot table of Playport's steamclient64.dll shim (decision 0115).
+"""Generate the slot table of Playport's Steam client (steamclient64.dll and steamclient.dll,
+decision 0115).
 
-A game's genuine steam_api calls the client's interfaces through MSVC's x64 vtables. This
-compiles a probe of each interface version the shim serves from the public Steamworks SDK
+A game's genuine steam_api calls the client's interfaces through MSVC vtables. This compiles a
+probe of every interface version a Steam client answers for from the public Steamworks SDK
 headers pinned as gbe's `sdk/` (the bridge plan's D3), dumps clang's MSVC layout, and writes a C
-header of slot numbers, method names and which methods return a class through MSVC's hidden
-return pointer. Only that generated header is committed, not Valve's headers.
+header of each version's slots: method names, which return a class through MSVC's hidden return
+pointer, and for i386 how many 4-byte stack words each method's arguments take (a thiscall
+callee pops them, so a slot must know) and which return a float on the x87 stack. Which
+version string names which class comes from the same pinned tree's getters (gbe's
+`dll/steam_client_interface_getter.cpp` and `dll/dll.cpp`). Only that generated header is
+committed, not Valve's headers.
 
     build/steamclient-vtables.py CLANG SDK_DIR SCRATCH_DIR OUT_HEADER [--check]
 
@@ -18,23 +23,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-TARGET = "x86_64-pc-windows-msvc"
-# (C prefix, class names): every version the shim answers for.
-INTERFACES = (
-    [f"ISteamClient{v:03d}" for v in range(17, 23)] + ["ISteamClient"] +
-    [f"ISteamUser{v:03d}" for v in range(17, 23)] + ["ISteamUser"] +
-    [f"ISteamUtils{v:03d}" for v in range(7, 11)] + ["ISteamUtils"] +
-    [f"ISteamApps{v:03d}" for v in range(7, 9)] + ["ISteamApps"] +
-    [f"ISteamFriends{v:03d}" for v in range(15, 18)]
-)
-# The version string each unversioned class (the newest) answers to, from its header.
-NEWEST = {"ISteamClient": ("isteamclient.h", "STEAMCLIENT_INTERFACE_VERSION"),
-          "ISteamUser": ("isteamuser.h", "STEAMUSER_INTERFACE_VERSION"),
-          "ISteamUtils": ("isteamutils.h", "STEAMUTILS_INTERFACE_VERSION"),
-          "ISteamApps": ("isteamapps.h", "STEAMAPPS_INTERFACE_VERSION")}
-# The version string of a numbered class.
-VERSION = {"ISteamClient": "SteamClient{}", "ISteamUser": "SteamUser{}", "ISteamUtils": "SteamUtils{}",
-           "ISteamApps": "STEAMAPPS_INTERFACE_VERSION{}", "ISteamFriends": "SteamFriends{}"}
+X64 = "x86_64-pc-windows-msvc"
+I386 = "i686-pc-windows-msvc"
+# The getters that name a class per version string, relative to the SDK's parent (gbe's tree).
+GETTERS = ("dll/steam_client_interface_getter.cpp", "dll/dll.cpp")
 STUB = """typedef __SIZE_TYPE__ size_t;
 #define NULL 0
 extern "C" {
@@ -46,24 +38,53 @@ int strcmp(const char *, const char *);
 """
 
 
-def run(clang, sdk, scratch, source, extra):
+def run(clang, sdk, scratch, source, target, extra):
     path = scratch / "probe.cpp"
     path.write_text('#include "steam/steam_api.h"\n' + source)
-    out = subprocess.run([clang, "-target", TARGET, "-ffreestanding", "-nostdlibinc", "-I", str(scratch / "stub"),
+    out = subprocess.run([clang, "-target", target, "-ffreestanding", "-nostdlibinc", "-I", str(scratch / "stub"),
                           "-I", str(sdk), "-w", "-S", "-o", "-"] + extra + [str(path)], capture_output=True, text=True)
     if out.returncode:
         sys.exit(out.stderr[:4000])
     return out.stdout
 
 
-def layouts(clang, sdk, scratch):
-    probes = "".join(f"struct P_{c} : {c} {{ P_{c}(); }}; P_{c}::P_{c}() {{}}\n" for c in INTERFACES)
-    out = run(clang, sdk, scratch, probes, ["-Xclang", "-fdump-vtable-layouts", "-emit-llvm"])
+def versions(sdk):
+    """{version string: class} from gbe's getters: each `strcmp(v, "X") == 0` (or a version
+    macro) and the one class its branch returns. A branch that returns none (Steam's client
+    answers NULL) or picks between an `_old` and a current class (SteamUser002/004, by the
+    client version) takes the current one."""
+    text = "".join((sdk.parent / g).read_text(encoding="latin-1") for g in GETTERS)
+    macros = {}
+    for h in (sdk / "steam").glob("*.h"):
+        for name, value in re.findall(r'#define\s+(\w+_INTERFACE_VERSION\w*)\s+"([^"]+)"', h.read_text(encoding="latin-1")):
+            macros.setdefault(name, value)
+    result = {}
+    for chunk in re.split(r"strcmp\(\s*\w+\s*,\s*", text)[1:]:
+        m = re.match(r'(?:"([^"]+)"|(\w+))\s*\)\s*==\s*0', chunk)
+        if not m:
+            continue
+        version = m.group(1) or macros.get(m.group(2))
+        if not version:
+            sys.exit(f"steamclient vtables: no version string for {m.group(2)}")
+        branch = re.split(r"strcmp\(|report_missing_impl", chunk)[0]
+        classes = {c for c in re.findall(r"static_cast<\s*(ISteam\w+)\s*\*\s*>", branch) if not c.endswith("_old")}
+        if len(classes) > 1:
+            sys.exit(f"steamclient vtables: {version} names {sorted(classes)}")
+        if classes and version not in result:
+            result[version] = classes.pop()
+    return result
+
+
+def layouts(clang, sdk, scratch, classes, target):
+    # steam_api.h includes most interfaces; a few (ISteamAppTicket) only their own header.
+    probes = "".join(f'#include "steam/{c.lower()}.h"\n' for c in classes if (sdk / "steam" / f"{c.lower()}.h").exists())
+    probes += "".join(f"struct P_{c} : {c} {{ P_{c}(); }}; P_{c}::P_{c}() {{}}\n" for c in classes)
+    out = run(clang, sdk, scratch, probes, target, ["-Xclang", "-fdump-vtable-layouts", "-emit-llvm"])
     result, base, current = {}, {}, None
     for line in out.splitlines():
         m = re.match(r"VFTable for '(\w+)' \(", line)
         if m:
-            current = m.group(1) if m.group(1) in INTERFACES and m.group(1) not in result else None
+            current = m.group(1) if m.group(1) in classes and m.group(1) not in result else None
             if current:
                 result[current] = []
             continue
@@ -78,80 +99,114 @@ def layouts(clang, sdk, scratch):
             result[current].append(sig)
         elif not line.startswith(" "):
             current = None
-    missing = [c for c in INTERFACES if c not in result]
+    missing = [c for c in classes if c not in result]
     if missing:
-        sys.exit(f"steamclient vtables: no layout for {missing}")
+        sys.exit(f"steamclient vtables: no {target} layout for {missing}")
     return result
 
 
 def split(sig, cls):
-    """(return type, method name) of a dumped signature."""
+    """(return type, method name, parameter list text) of a dumped signature."""
     m = re.match(r"(.*?)\s*\b" + cls + r"::(~?\w+)\(", sig)
     if not m:
         sys.exit(f"steamclient vtables: cannot read {sig!r}")
-    return m.group(1).strip(), m.group(2)
+    rest, depth = sig[m.end():], 1
+    for i, ch in enumerate(rest):
+        depth += {"(": 1, ")": -1}.get(ch, 0)
+        if depth == 0:
+            return m.group(1).strip(), m.group(2), rest[:i].strip()
+    sys.exit(f"steamclient vtables: unbalanced {sig!r}")
 
 
 def class_returns(clang, sdk, scratch, types):
     """Which return types MSVC returns from a member function through a hidden pointer: every class,
-    struct or union (x64: member functions never return a user-defined type in RAX)."""
+    struct or union (x64 and i386 alike: member functions never return a user-defined type in
+    registers)."""
     types = sorted(types)
     source = "".join(f"char probe_{i}[(__is_class({t}) || __is_union({t})) ? 2 : 1];\n" for i, t in enumerate(types))
-    ir = run(clang, sdk, scratch, source, ["-emit-llvm"])
+    ir = run(clang, sdk, scratch, source, X64, ["-emit-llvm"])
     sizes = {int(i): int(n) for i, n in re.findall(r"@\"?\??probe_(\d+)\S*\"? = .*\[(\d) x i8\]", ir)}
     if len(sizes) != len(types):
         sys.exit(f"steamclient vtables: classified {len(sizes)} of {len(types)} return types")
     return {t for i, t in enumerate(types) if sizes[i] == 2}
 
 
-def version_of(sdk, cls):
-    base = re.sub(r"\d+$", "", cls)
-    if cls in NEWEST:
-        header, macro = NEWEST[cls]
-        text = (sdk / "steam" / header).read_text(encoding="latin-1")
-        return re.search(r"#define\s+" + macro + r"\s+\"([^\"]+)\"", text).group(1)
-    return VERSION[base].format(cls[len(base):])
+def stack_words(clang, sdk, scratch, params):
+    """How many bytes each parameter list takes on MSVC i386's stack, as clang decorates an
+    `extern "C" __stdcall` function with them (`_f@N`): the same push rules thiscall uses
+    after `this`."""
+    params = sorted(params)
+    source = "".join(f'extern "C" void __stdcall pp_w{i}({p}); void *pp_r{i} = (void *)pp_w{i};\n'
+                     for i, p in enumerate(params))
+    asm = run(clang, sdk, scratch, source, I386, [])
+    got = {int(i): int(n) for i, n in re.findall(r"_pp_w(\d+)@(\d+)", asm)}
+    if len(got) != len(params):
+        sys.exit(f"steamclient vtables: sized {len(got)} of {len(params)} parameter lists")
+    return {p: got[i] for i, p in enumerate(params)}
 
 
 def generate(clang, sdk, scratch):
-    lay = layouts(clang, sdk, scratch)
-    rets = set()
-    for c, sigs in lay.items():
-        for s in sigs:
-            r, _ = split(s, c)
+    names = versions(sdk)
+    classes = sorted(set(names.values()))
+    lay = layouts(clang, sdk, scratch, classes, X64)
+    lay32 = layouts(clang, sdk, scratch, classes, I386)
+    rets, params = set(), set()
+    parsed = {}
+    for c in classes:
+        if [split(s, c)[1] for s in lay[c]] != [split(s, c)[1] for s in lay32[c]]:
+            sys.exit(f"steamclient vtables: {c}'s i386 slots are not its x64 slots")
+        parsed[c] = [split(s, c) for s in lay[c]]
+        for r, _, p in parsed[c]:
+            params.add("" if p == "void" else p)
             if r and r != "void" and not r.endswith("*") and not r.endswith("&"):
                 rets.add(r.replace("const ", ""))
     hidden = class_returns(clang, sdk, scratch, rets)
+    sized = stack_words(clang, sdk, scratch, params)
     out = ["/* SPDX-License-Identifier: GPL-3.0-or-later */",
            "/* Generated by build/steamclient-vtables.py from the public Steamworks SDK headers pinned",
-           " * as gbe's sdk/ (decision 0115, D3): each interface version's MSVC x64 slot order. Do not edit. */",
+           " * as gbe's sdk/ and its getters' version strings (decision 0115, D3): each interface",
+           " * version's MSVC slot order (the same for x86-64 and i386). Do not edit. */",
            "", "#ifndef STEAMCLIENT_SLOTS_H", "#define STEAMCLIENT_SLOTS_H", ""]
-    table = []
-    for c in INTERFACES:
-        sigs = lay[c]
-        name = c if c not in NEWEST else c + version_of(sdk, c)[-3:]
-        names, seen = [], {}
-        for i, s in enumerate(sigs):
-            r, m = split(s, c)
+    most = 0
+    for c in classes:
+        sigs = parsed[c]
+        most = max(most, len(sigs))
+        method_names, seen = [], {}
+        for r, m, _ in sigs:
             seen[m] = seen.get(m, 0) + 1
-            names.append((m if seen[m] == 1 else f"{m}_{seen[m]}", r.replace("const ", "") in hidden))
-        out.append(f"/* {c}: \"{version_of(sdk, c)}\" */")
-        out.append(f"#define PP_SLOTS_{name} {len(sigs)}")
-        for i, (m, _) in enumerate(names):
-            out.append(f"#define PP_SLOT_{name}_{m} {i}")
-        out.append(f"static const char *const pp_names_{name}[{len(sigs)}] = {{")
-        out += [f"    \"{m}\"," for m, _ in names]
+            method_names.append(m if seen[m] == 1 else f"{m}_{seen[m]}")
+        flags = "".join("1" if r.replace("const ", "") in hidden else "0" for r, _, _ in sigs)
+        words = []
+        for (r, m, p), h in zip(sigs, flags):
+            n = sized["" if p == "void" else p]
+            assert n % 4 == 0, (c, p, n)
+            # A virtual destructor's slot is MSVC's deleting destructor: it takes its flags.
+            words.append(n // 4 + (h == "1") + m.startswith("~"))
+        floats = "".join("1" if r in ("float", "double") else "0" for r, _, _ in sigs)
+        out.append(f"/* {c} */")
+        out.append(f"#define PP_SLOTS_{c} {len(sigs)}")
+        out.append(f"static const char *const pp_names_{c}[{len(sigs)}] = {{")
+        out += [f"    \"{m}\"," for m in method_names]
         out.append("};")
-        flags = "".join("1" if h else "0" for _, h in names)
-        out.append(f"/* 1: returns a class through MSVC's hidden pointer (after this). */")
-        out.append(f"static const char pp_hidden_{name}[] = \"{flags}\";")
+        out.append("/* 1: returns a class through MSVC's hidden pointer (after this). */")
+        out.append(f"static const char pp_hidden_{c}[] = \"{flags}\";")
+        out.append("/* i386: the 4-byte stack words of the arguments after this (the hidden pointer's included). */")
+        out.append(f"static const unsigned char pp_words_{c}[{len(sigs)}] = {{ {', '.join(map(str, words))} }};")
+        out.append("/* i386: 1 returns a float or double (in st0). */")
+        out.append(f"static const char pp_float_{c}[] = \"{floats}\";")
         out.append("")
-        table.append((version_of(sdk, c), name))
+    out.append(f"#define PP_MAX_SLOTS {most}")
+    out.append("")
+    out.append("/* Every interface class, then every version string a Steam client answers for and its class. */")
+    out.append("#define PP_SLOT_CLASSES(X) \\")
+    out += [f"    X({c}) \\" for c in classes]
+    out[-1] = out[-1][:-2]
+    out.append("")
     out.append("#define PP_SLOT_INTERFACES(X) \\")
-    out += [f"    X({n}, \"{v}\") \\" for v, n in table]
+    out += [f"    X({names[v]}, \"{v}\") \\" for v in sorted(names, key=lambda v: (names[v], v))]
     out[-1] = out[-1][:-2]
     out += ["", "#endif /* STEAMCLIENT_SLOTS_H */", ""]
-    return "\n".join(out)
+    return "\n".join(out), len(names), len(classes)
 
 
 def main():
@@ -160,15 +215,16 @@ def main():
     (scratch / "stub").mkdir(parents=True, exist_ok=True)
     for name in ("string.h", "stdio.h", "stdlib.h"):
         (scratch / "stub" / name).write_text(STUB)
-    text = generate(clang, sdk, scratch)
+    text, nversions, nclasses = generate(clang, sdk, scratch)
+    what = f"{nversions} versions, {nclasses} interfaces"
     if check:
         if not header.exists() or header.read_text() != text:
             (scratch / header.name).write_text(text)
             sys.exit(f"steamclient vtables: {header} is not the pinned SDK's; regenerated: {scratch / header.name}")
-        print(f"steamclient vtables: {header.name} matches the pinned SDK ({len(INTERFACES)} interfaces)")
+        print(f"steamclient vtables: {header.name} matches the pinned SDK ({what})")
     else:
         header.write_text(text)
-        print(f"steamclient vtables: wrote {header} ({len(INTERFACES)} interfaces)")
+        print(f"steamclient vtables: wrote {header} ({what})")
 
 
 if __name__ == "__main__":

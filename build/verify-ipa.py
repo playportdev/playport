@@ -59,8 +59,9 @@ any mismatch:
                 wow64.dll, wow64win.dll and xtajit.dll are ARM64 PE32+
                 builtins; xtajit exports FEX's WoW64 CPU interface.
                 Build scaffolding only: does not claim 32-bit execution works.
-  steamclient   Playport's Steam client (P9-steamclient): steamclient64.dll, a native
-                x86-64 DLL exporting what a genuine steam_api resolves
+  steamclient   Playport's Steam client (P9-steamclient): steamclient64.dll and
+                steamclient.dll, native x86-64 and i386 DLLs exporting what a
+                genuine steam_api resolves
   steamapi      the Steam API emulator (P8-steamapi): steam_api64.dll (x86-64)
                 and steam_api.dll (i386) under Runtime/steamapi, native (not
                 marked Wine builtins) and exporting SteamAPI_Init,
@@ -494,23 +495,28 @@ def steamapi_checks(rt, rows):
 
 
 def steamclient_checks(rt, rows):
-    """Playport's Steam client (P9-steamclient, decision 0115): a native x86-64 DLL whose export
-    name holds `steamclient` (the runtime gives it its unix table by that name) and that exports
-    what a genuine steam_api resolves."""
-    k = "Runtime/steamclient/x86_64-windows/steamclient64.dll"
+    """Playport's Steam client (P9-steamclient, decision 0115): native x86-64 and i386 DLLs whose
+    export names hold `steamclient` (the runtime gives them its unix table by that name) and that
+    export what a genuine steam_api resolves."""
+    want_rows = {"Runtime/steamclient/x86_64-windows/steamclient64.dll": ("steamclient64.dll", (0x8664, 0x20b), "x86-64"),
+                 "Runtime/steamclient/i386-windows/steamclient.dll": ("steamclient.dll", (0x14c, 0x10b), "i386")}
     got = {r[1] for r in rows if r[0] == "resource" and r[6] == "P9-steamclient"}
     if not got:
         print("      steamclient: no P9-steamclient rows (an IPA from before Playport's Steam client)")
         return
-    check(got == {k}, f"steamclient: the one row is {k}")
-    body = rt(k).read_bytes()
-    ex = pe_table(rt(k), "export")
+    if got == {"Runtime/steamclient/x86_64-windows/steamclient64.dll"}:
+        print("      steamclient: no i386 steamclient.dll (an IPA from before the i386 Steam client)")
+    else:
+        check(got == set(want_rows), "steamclient: the rows are " + " and ".join(sorted(want_rows)))
     want = {"CreateInterface", "Steam_BGetCallback", "Steam_FreeLastCallback", "Steam_GetAPICallResult",
             "Steam_ReleaseThreadLocalMemory", "Steam_IsKnownInterface", "Steam_NotifyMissingInterface"}
-    check(pe_machine_magic(body) == (0x8664, 0x20b) and b"Wine builtin DLL" not in body[:0x200]
-          and b"steamclient64.dll\0" in body and want <= ex,
-          "steamclient: steamclient64.dll is a native x86-64 DLL named steamclient64.dll exporting "
-          + ", ".join(sorted(want)))
+    for k in sorted(got & set(want_rows)):
+        name, machine, label = want_rows[k]
+        body = rt(k).read_bytes()
+        ex = pe_table(rt(k), "export")
+        check(pe_machine_magic(body) == machine and b"Wine builtin DLL" not in body[:0x200]
+              and name.encode() + b"\0" in body and want <= ex,
+              f"steamclient: {name} is a native {label} DLL named {name} exporting " + ", ".join(sorted(want)))
 
 
 def pe_machine_magic(body):

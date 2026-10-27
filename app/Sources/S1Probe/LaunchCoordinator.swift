@@ -236,20 +236,23 @@ enum LaunchCoordinator {
     }
 
     /// The prefix's Steam client for a play in client mode (decision 0115): Playport's
-    /// steamclient64.dll in `C:\Program Files (x86)\Steam\` and the `Valve\Steam` keys a genuine
-    /// steam_api reads to find it (top-ups, written before wineserver starts; the session root
-    /// writes ActiveProcess's pid once it runs). Returns what the client answers with.
+    /// steamclient64.dll and steamclient.dll in `C:\Program Files (x86)\Steam\`, as Steam installs
+    /// both (an i386 game's steam_api.dll loads the second, an x86-64 one's steam_api64.dll the
+    /// first, whatever the title's executable), and the `Valve\Steam` keys a genuine steam_api reads
+    /// to find them (top-ups, written before wineserver starts; the session root writes
+    /// ActiveProcess's pid once it runs). Returns what the client answers with.
     private static func prepareSteamClient(_ s: SteamAPI, settings: SteamAPISwap.Settings?, runtime: URL) -> SteamClientHost.Play {
         let prefix = WineHostRuntime.shared.prefixURL
-        let source = runtime.appendingPathComponent("steamclient/x86_64-windows/steamclient64.dll")
         let folder = prefix.appendingPathComponent("drive_c/Program Files (x86)/Steam", isDirectory: true)
-        let dest = folder.appendingPathComponent("steamclient64.dll")
         do {
-            let shim = try Data(contentsOf: source)
-            if (try? Data(contentsOf: dest)) != shim {
-                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-                try shim.write(to: dest, options: .atomic)
-                log("steamclient: Playport's steamclient64.dll (\(shim.count) bytes) placed in C:\\Program Files (x86)\\Steam")
+            for (arch, name) in [("x86_64", "steamclient64.dll"), ("i386", "steamclient.dll")] {
+                let shim = try Data(contentsOf: runtime.appendingPathComponent("steamclient/\(arch)-windows/\(name)"))
+                let dest = folder.appendingPathComponent(name)
+                if (try? Data(contentsOf: dest)) != shim {
+                    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                    try shim.write(to: dest, options: .atomic)
+                    log("steamclient: Playport's \(name) (\(shim.count) bytes) placed in C:\\Program Files (x86)\\Steam")
+                }
             }
             try PrefixRegistryFile(prefix: prefix).add(SteamClientKeys.values)
             log("steamclient: Valve\\Steam keys topped up in the prefix")

@@ -104,6 +104,10 @@ static const struct { const char *method; char kind; } pp_tr_kinds[] = {
 
 static inline char pp_tr_kind_of(const char *method)
 {
+    static const char deprecated[] = "DEPRECATED_";
+    unsigned d = 0;
+    while (method && d < sizeof(deprecated) - 1 && method[d] == deprecated[d]) d++;
+    if (d == sizeof(deprecated) - 1) method += d;   /* DEPRECATED_GetISteamUnifiedMessages: a getter */
     if (method && method[0] == 'G' && method[1] == 'e' && method[2] == 't' && method[3] == 'I' && method[4] == 'S'
         && method[5] == 't' && method[6] == 'e' && method[7] == 'a' && method[8] == 'm') return 'p';   /* GetISteam* */
     for (unsigned i = 0; i < sizeof(pp_tr_kinds) / sizeof(*pp_tr_kinds); i++)

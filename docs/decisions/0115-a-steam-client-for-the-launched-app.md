@@ -77,7 +77,9 @@ launcher Open reaches the sign-in page (decisions 0112, 0114, 0116).
 
 - Titles in `emulated` mode are unchanged; the emulator ignores the `Valve\Steam` keys, and the
   root writes `pid` only for a `client` play.
-- The shim is x86-64 only; an i386 client is the bridge plan's phase 1b.
+- The shim is x86-64 only; an i386 client is the bridge plan's phase 1b. (Amended by
+  [0161](0161-steam-client-for-i386-and-every-interface.md): an i386 `steamclient.dll` too, and every
+  interface version in the slot table.)
 - The slot table covers `ISteamClient` 017–023, `ISteamUser` 017–023, `ISteamUtils` 007–011 and
   `ISteamApps` 007–009; anything else a run asks for is logged and found from the logs.
 - The encrypted app ticket carries no `userdata` until the bridge's phase 2.
