@@ -4,6 +4,10 @@
       "settings": {"graphics": "vulkan"},
       "reason": "This game draws through Vulkan or Direct3D 12, which only the Vulkan layer runs, so it keeps Vulkan even when Settings chooses DXMT for every game."
     },
+    "app-292030": {
+      "settings": {"runtime": "short-reserve-mb=6144"},
+      "reason": "The current build reserves 64 GB and 32 GB of address space at start, more than an iPhone app has, so it gets the first 6 GB of each and is told it got all of it."
+    },
     "epic-Buffalo": {
       "settings": {"aspect": "16:9"},
       "reason": "This game draws nothing on a screen wider than 16:9."

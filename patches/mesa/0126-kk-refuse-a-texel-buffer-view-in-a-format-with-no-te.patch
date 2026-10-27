@@ -15,7 +15,7 @@ VK_ERROR_FORMAT_NOT_SUPPORTED.
 
 Linear: PLA-452
 Class: upstream-bug
-Evidence: docs/evidence/2026-10-27-witcher3-avx.md
+Evidence: docs/evidence/2026-10-27-witcher3-short-reserve.md
 Offered-upstream: no
 ---
  src/kosmickrisp/vulkan/kk_buffer_view.c | 24 ++++++++++++++++++++++++

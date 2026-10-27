@@ -71,6 +71,20 @@ final class CompatDefaultsTests: XCTestCase {
         XCTAssertEqual(LaunchSettings.overEveryGame(LaunchSettings(endLauncherAfterSignIn: false)).endLauncherAfterSignIn, false)
     }
 
+    /// The Witcher 3's current build gets short reservations (patches/madeira-unix 0222); its
+    /// classic branch's cohort hold (jumbo-mb=32768) stays, since the entry names no jumbo-mb.
+    func testTheWitcher3GetsShortReservationsAndKeepsItsCohortHold() throws {
+        let entry = try XCTUnwrap(CompatDefaults.load(directory: Self.shipped).entry(for: "app-292030"))
+        XCTAssertEqual(entry.settings.runtime, "short-reserve-mb=6144")
+        let game = LaunchSettings.overEveryGame(entry.settings)
+        let effective = LaunchSettings.resolve(game: game, global: LaunchSettings())
+        XCTAssertEqual(effective.config(over: [:])["short-reserve-mb"], "6144")
+        XCTAssertEqual(effective.config(over: [:])["jumbo-mb"], "8960")
+        let classic = effective.config(over: ["jumbo-mb": "32768", "cage-hold": "1"])
+        XCTAssertEqual(classic["jumbo-mb"], "32768")
+        XCTAssertEqual(classic["cage-hold"], "1")
+    }
+
     /// The table reaches players: no issue id or tracker address anywhere in it.
     func testTheShippedTableNamesNothingInternal() throws {
         let text = try String(contentsOf: Self.shipped.appendingPathComponent(CompatDefaults.fileName), encoding: .utf8)
