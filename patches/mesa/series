@@ -99,3 +99,4 @@
 0123-kk-descriptor-supported-sinks.patch
 0124-kk-descriptor-emission-failure-reasons.patch
 0125-kk-descriptor-sink-identity.patch
+0126-kk-refuse-a-texel-buffer-view-in-a-format-with-no-te.patch
