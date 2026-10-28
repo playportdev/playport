@@ -1,0 +1,72 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kamil=20Postro=C5=BCny?= <kamil@postrozny.pl>
+Date: Wed, 28 Oct 2026 18:05:36 +0100
+Subject: [PATCH] nsi: remember a missing device when the in-process fallback
+ is available
+
+W3's MainThread opens \\.\Nsi 25,533 times in 60 seconds of gameplay on
+iOS. There is no such device: each failed probe stats dosdevices/nsi and
+makes a server open request before using the already-working unixlib.
+This explains the get_dos_device samples attributed to drive resolution.
+
+Remember FILE_NOT_FOUND/PATH_NOT_FOUND separately for synchronous and
+asynchronous probes, but only when the in-process unixlib is available.
+Restore the original error on each lookup, including after initializing
+the unixlib, so unsupported tables and notifications retain their errors.
+Do not cache access or transient failures. Without the unixlib a desktop
+NSI driver may still appear later; keep retrying, and prefer an existing
+real device even when the fallback is available. Concurrent first probes
+may race; publish their missing-device error atomically.
+
+This does not cache drive mappings or filenames. The other repeated path
+in the trace is the session root's missing control file, tracked in PLA-468.
+
+Class: host-app
+Evidence: docs/evidence/2026-10-28-nsi-device-probes.md
+Offered-upstream: no; in-process iOS NSI transport
+---
+ dlls/nsi/nsi.c | 24 ++++++++++++++++++++++--
+ 1 file changed, 22 insertions(+), 2 deletions(-)
+
+diff --git a/dlls/nsi/nsi.c b/dlls/nsi/nsi.c
+index bf81fbe..8d11255 100644
+--- a/dlls/nsi/nsi.c
++++ b/dlls/nsi/nsi.c
+@@ -68,15 +68,35 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, void *reserved)
+ 
+ static inline HANDLE get_nsi_device( BOOL async )
+ {
++    static LONG missing_error[2];
+     HANDLE *cached_device = async ? &nsi_device_async : &nsi_device;
++    LONG *cached_error = &missing_error[!!async];
+     HANDLE device;
++    DWORD error;
++
++    /* The in-process unixlib replaces a device that is not provided on iOS.
++     * Once selected, do not probe dosdevices/Nsi and the server on every read.
++     * No unixlib means a desktop driver can still appear after a failed open. */
++    if ((error = InterlockedCompareExchange( cached_error, 0, 0 )))
++    {
++        SetLastError( error );
++        return INVALID_HANDLE_VALUE;
++    }
+ 
+     if (*cached_device == INVALID_HANDLE_VALUE)
+     {
+         device = CreateFileW( L"\\\\.\\Nsi", 0, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
+                               async ? FILE_FLAG_OVERLAPPED : 0, NULL );
+-        if (device != INVALID_HANDLE_VALUE
+-            && InterlockedCompareExchangePointer( cached_device, device, INVALID_HANDLE_VALUE ) != INVALID_HANDLE_VALUE)
++        if (device == INVALID_HANDLE_VALUE)
++        {
++            error = GetLastError();
++            if ((error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) && nsi_unix_fallback())
++                InterlockedCompareExchange( cached_error, error, 0 );
++            /* Initializing the unixlib must not change the original device error,
++             * including the error returned for tables the fallback cannot serve. */
++            SetLastError( error );
++        }
++        else if (InterlockedCompareExchangePointer( cached_device, device, INVALID_HANDLE_VALUE ) != INVALID_HANDLE_VALUE)
+             CloseHandle( device );
+     }
+     return *cached_device;

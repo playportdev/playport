@@ -50,3 +50,4 @@
 0051-ntdll-make-the-process-heap-s-first-region-HeapSegme.patch
 0052-ntdll-MADEIRA_X64_QPC_FASTPATH-1-answers-an-x64-modu.patch
 0053-ntdll-MADEIRA_X64_ONCE_FASTPATH-1-answers-an-x64-mod.patch
+0054-nsi-remember-a-missing-device-when-the-in-process-fa.patch

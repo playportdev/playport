@@ -89,6 +89,13 @@ full `getifaddrs` calls. Which guest caller does it, and how often, is not known
 (`get_dir_case_sensitivity`). That is the scan for a name whose case differs from the file's: the
 container's file system is case-sensitive.
 
+**Later correction (PLA-461):** those stacks did not identify the paths, and the
+interpretation above was wrong. Ordinary drive paths already skip the prefix
+`stat`. A [60 s gameplay file trace](2026-10-28-nsi-device-probes.md) instead finds
+25,533 probes of the absent `\\.\Nsi` device on MainThread and 1,066 opens of
+Playport's missing session `control` file. Missing files also trigger the
+case-insensitive search; the trace did not establish a wrong-case game asset.
+
 **Spinning.** RenderThread is the busiest thread (0.71 cores) while every core is busy. The Linux
 `--cpu-prof` run attributes its time to the command-ring wait loop at `witcher3.exe+0x1c69ae0`, which
 calls QPC and `pause` ([witcher3-perf § 1](2026-10-28-witcher3-perf.md#1-what-limits-it)). This trace
