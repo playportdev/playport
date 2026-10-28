@@ -3,7 +3,7 @@
  * Metal. Linked to the driver's archives (run-cmd-pool-test.py) to read the
  * set's private state and the [kk-mem] counters. The mock's residency set
  * does nothing, so this checks KosmicKrisp's scheduling of commits, not what
- * Metal does with them (docs/evidence/2026-10-29-kk-residency-commits.md has
+ * Metal does with them (docs/evidence/2026-10-28-kk-residency-commits.md has
  * the Metal behaviour this relies on, measured on a Mac).
  */
 #include "kk_bo.h"

@@ -27,17 +27,17 @@ removals, which releases them, and tries once more.
 
 MESA_KK_RESIDENCY=submit restores the commit at every submit, and with
 MESA_KK_BATCH2's residency item the commit only after a change
-(patches/mesa 0091), to compare. MESA_KK_DEBUG=memory logs
-[kk-residency] about once a second: additions, removals and commits in
-the interval, their total and longest time, those over 1 ms, and the
-removals waiting.
+(patches/mesa 0091), to compare. MESA_KK_DEBUG=memory (on in dev
+builds) logs [kk-residency] about once a second when the set changed or
+was committed: additions, removals and commits in the interval, their
+total and longest time, those over 1 ms, and the removals waiting.
 
 Linear: PLA-465
 Class: feature
-Evidence: docs/evidence/2026-10-29-kk-residency-commits.md
+Evidence: docs/evidence/2026-10-28-kk-residency-commits.md
 Offered-upstream: not yet
 ---
- src/kosmickrisp/vulkan/kk_bo.c            |  59 ++++++++++-
+ src/kosmickrisp/vulkan/kk_bo.c            |  66 +++++++++++-
  src/kosmickrisp/vulkan/kk_bo.h            |  12 +++
  src/kosmickrisp/vulkan/kk_debug.c         |   6 ++
  src/kosmickrisp/vulkan/kk_debug.h         |  11 +-
@@ -45,10 +45,10 @@ Offered-upstream: not yet
  src/kosmickrisp/vulkan/kk_device.h        |  27 ++++-
  src/kosmickrisp/vulkan/kk_device_memory.c |   6 +-
  src/kosmickrisp/vulkan/kk_queue.c         |   4 +-
- 8 files changed, 220 insertions(+), 27 deletions(-)
+ 8 files changed, 227 insertions(+), 27 deletions(-)
 
 diff --git a/src/kosmickrisp/vulkan/kk_bo.c b/src/kosmickrisp/vulkan/kk_bo.c
-index 545e446..9961091 100644
+index 545e446..323ee6a 100644
 --- a/src/kosmickrisp/vulkan/kk_bo.c
 +++ b/src/kosmickrisp/vulkan/kk_bo.c
 @@ -111,6 +111,10 @@ kk_alloc_bo(struct kk_device *dev, struct vk_object_base *log_obj,
@@ -71,13 +71,13 @@ index 545e446..9961091 100644
  
     *bo_out = bo;
     return result;
-@@ -231,6 +235,55 @@ kk_memory_log(struct kk_device *dev)
+@@ -231,6 +235,62 @@ kk_memory_log(struct kk_device *dev)
  #undef KK_BO_FIELD
  }
  
 +/* Playport (PLA-465): about once a second, from queue submits, log
-+ * [kk-residency]: the device residency set's additions, removals and commits
-+ * in the interval, the commits' total and longest time, those over 1 ms, and
++ * [kk-residency] when the device residency set changed or was committed: its
++ * additions, removals and commits in the interval (s=, since the last check), the commits' total and longest time, those over 1 ms, and
 + * the removals not yet committed. */
 +void
 +kk_residency_log(struct kk_device *dev)
@@ -104,6 +104,13 @@ index 545e446..9961091 100644
 +   const uint64_t pending_B = dev->residency_set.removed_B;
 +   simple_mtx_unlock(&dev->residency_set.mutex);
 +
++   /* A dev build sets MESA_KK_DEBUG=memory: an interval in which nothing
++    * changed and nothing waits prints nothing (its counts carry over) */
++   if (adds == last.residency_adds && removes == last.residency_removes &&
++       commits == last.residency_commits &&
++       removal_commits == last.residency_removal_commits && pending == 0u)
++      return;
++
 +   fprintf(stderr,
 +           "[kk-residency] s=%.2f mode=%s adds=%" PRId64 " removes=%" PRId64
 +           " commits=%" PRId64 " removal-commits=%" PRId64
@@ -127,7 +134,7 @@ index 545e446..9961091 100644
  void
  kk_destroy_bo(struct kk_device *dev, struct kk_bo *bo)
  {
-@@ -242,9 +295,9 @@ kk_destroy_bo(struct kk_device *dev, struct kk_bo *bo)
+@@ -242,9 +302,9 @@ kk_destroy_bo(struct kk_device *dev, struct kk_bo *bo)
     /* We may only have a mapped buffer, for example if the memory was imported
      * from a host pointer */
     if (bo->mtl_handle)
