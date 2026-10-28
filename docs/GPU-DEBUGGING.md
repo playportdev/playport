@@ -343,10 +343,23 @@ iOS 27.0. If Instruments' Game Performance Overview recorded a play, try
 
 ### Open questions
 
-Answer these in the session and record the answers here:
-- Can Xcode, Instruments or `gpucapture` attach to Playport after the JIT
-  helper's turn?
-- Can the workstation drive `pp ui` while the phone is cabled to the Mac?
-- Does `gpudebug -d` replay on the phone, or only Xcode?
-- Does Settings' GPU capture (`MTL_CAPTURE_ENABLED` at start) suffice for
-  Xcode's capture button?
+Answered in the first session
+([evidence](evidence/2026-10-28-mac-tools-and-w3-frame.md)):
+- **Can the tools attach after the JIT helper's turn?** Xcode's Attach to Process attaches, but the app
+  stays stopped until Continue, and Xcode offers no GPU capture there. `xctrace --attach` cannot find the
+  process. `xctrace --all-processes` records Time Profiler and Metal System Trace with Playport's threads
+  and GPU work: use that, with `--device-name`, not `--device`.
+- **Can `pp ui` drive the phone cabled to the Mac?** Yes, from the Mac
+  ([0164](decisions/0164-pp-ui-from-the-mac.md)), with `PLAYPORT_USBMUX_SOCKET=/var/run/usbmuxd` and
+  `pymobiledevice3`. Put `wait:5` after a `set:` whose value the next launch must read.
+- **Does replay work on the phone?** Xcode replays and profiles a `pp gpu capture` trace there. A full
+  W3 frame profiles in Lite mode only: encoder times, no limiters. `gpudebug` sees the phone only while
+  Xcode has a replay connection to it. Never run `gpudebug` against the phone at the same time: an
+  abandoned `gpudebug` session left a profiling session on the phone that only a phone restart cleared.
+  Export from Xcode, then read the exported trace with `gpudebug --oneshot … profile load`, which needs no
+  phone.
+- **Does Settings' GPU capture suffice for Xcode's capture button?** No, not in an attached process.
+
+Still open:
+- Does the System Trace template give per-thread run states system-wide (PLA-457 item 1)?
+- How do we get full counters for one heavy pass: a smaller capture, or a replay restricted to it?
