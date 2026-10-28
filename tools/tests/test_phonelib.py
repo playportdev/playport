@@ -276,6 +276,14 @@ class PhonelibTest(unittest.TestCase):
         self.assertEqual([(l["event"], l["newest"]) for l in lines], [("installed-stale", newest)])
 
 
+    def test_one_per_phone_keeps_the_usb_entry(self):
+        listed = [{"Identifier": "a", "ConnectionType": "Network"},
+                  {"Identifier": "a", "ConnectionType": "USB"},
+                  {"Identifier": "b", "ConnectionType": "Network"}]
+        got = self.pl.one_per_phone(listed)
+        self.assertEqual([(d["Identifier"], d["ConnectionType"]) for d in got],
+                         [("a", "USB"), ("b", "Network")])
+
 class WatchLaunchTest(unittest.TestCase):
     """watch_launch's bounds, on a fake phone and a fake clock: --wait counts from
     JIT ready, --idle ends a quiet started game, --until still wins."""

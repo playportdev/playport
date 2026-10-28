@@ -95,6 +95,12 @@ def pmd_python():
     exe = shutil.which("pymobiledevice3")
     if not exe:
         raise PhoneError("pymobiledevice3 is not on PATH (docs/DEVICE.md)")
+    exe = os.path.realpath(exe)
+    # A venv whose path has a space (pipx on macOS: Application Support) starts its launcher with
+    # a /bin/sh trampoline, not the interpreter: the venv's python beside it is the one.
+    beside = os.path.join(os.path.dirname(exe), "python")
+    if os.access(beside, os.X_OK):
+        return beside
     with open(exe, "rb") as f:
         line = f.readline()
     if not line.startswith(b"#!"):
@@ -386,6 +392,17 @@ def netmuxd_restart():
     return True, "no phone listed"
 
 
+def one_per_phone(listed):
+    """usbmux's list with one entry per phone: macOS's usbmuxd lists a cabled phone twice, over
+    USB and over the network, under one Identifier; the USB entry is kept."""
+    seen = {}
+    for d in listed:
+        key = d.get("Identifier") or id(d)
+        if key not in seen or (d.get("ConnectionType") == "USB" and seen[key].get("ConnectionType") != "USB"):
+            seen[key] = d
+    return list(seen.values())
+
+
 class Phone:
     """One paired phone over netmuxd, and the Playport app on it."""
 
@@ -437,9 +454,10 @@ class Phone:
         with contextlib.suppress(OSError):
             os.remove(os.path.join(self.cmd_dir, "usbmux.out"))  # it carries the UDID
         try:
-            return json.loads(text[text.index("["):text.rindex("]") + 1])
+            listed = json.loads(text[text.index("["):text.rindex("]") + 1])
         except ValueError:
             return []
+        return one_per_phone(listed)
 
     def ensure(self):
         """Exactly one phone answers; when none does, restarts netmuxd once if netmuxd_restart
