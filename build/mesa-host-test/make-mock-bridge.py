@@ -248,7 +248,13 @@ body("mtl_heap_texture_size_and_align_with_descriptor", r'''
    if (size_B) *size_B = layout->layers * ((px * 16u * 2u + 16383u) & ~16383ull);
    if (align_B) *align_B = 16384u;''')
 body("mtl_sparse_tile_size_in_bytes", "return 16384u;")
-body("mtl_new_heap", "return kk_mock_new(2, size);")
+body("mtl_new_heap", r'''
+   /* One-shot, single-threaded command-pool regression fault injection. */
+   if (getenv("KK_MOCK_FAIL_NEXT_HEAP")) {
+      unsetenv("KK_MOCK_FAIL_NEXT_HEAP");
+      return NULL;
+   }
+   return kk_mock_new(2, size);''')
 body("mtl_heap_get_size", "return ((struct kk_mock_obj *)heap)->size;")
 body("mtl_new_buffer_with_length", r'''
    struct kk_mock_obj *h = heap;

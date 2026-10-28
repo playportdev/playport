@@ -250,6 +250,19 @@ Zink loads the workstation's Vulkan loader (`libvulkan.so.1`), limited to the
 mock by `VK_DRIVER_FILES`; the stage fails on a GL error, a renderer that is
 not Zink, or an untranslated MSL library (`run/mesa/hosttest/msl-zink/`).
 
+The host test also links `kk-cmd-pool-test.c` to the mock driver's own archives:
+large command BOs survive reset and reuse without residency changes, remain
+exclusive to live recordings, and are released by trim, release-resources pool
+reset and destruction. It checks the 256 KiB–16 MiB classes, oversize bypass,
+64 MiB per-pool idle-byte cap, LRU eviction and allocation-error handling.
+After rebuilding the mock driver, rerun just this check with
+`python3 build/mesa-host-test/run-cmd-pool-test.py .work/run/mesa/hosttest/build`.
+This is a CPU-side lifetime regression, not Vulkan CTS or a GPU/performance test.
+The `MESA_KK_DEBUG=memory` census separates idle large BOs as
+`command-pooled=COUNT/MiB` (included once in `bos`); `large-new` and
+`large-reuse` are cumulative successful large-BO allocations and cache hits.
+The 64 MiB cap is per pool, not a device-wide or active-command-buffer limit.
+
 The pipeline's `vulkan` stage leaves the host test out. Run it on the build's
 tree, edits included, with `build/stages/mesa.sh .work/run/mesa hosttest`
 (after a `pp build` has made `run/mesa/mesa` and `run/mesa/host`); the MSL

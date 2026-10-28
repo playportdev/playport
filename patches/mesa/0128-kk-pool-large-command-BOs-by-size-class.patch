@@ -1,0 +1,402 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Wed, 28 Oct 2026 18:45:30 +0100
+Subject: [PATCH] kk: pool large command BOs by size class
+
+The Witcher 3 trace creates 74 command heaps/s because every upload above 128 KiB is destroyed at command-buffer reset. Retain idle large BOs in seven power-of-two classes, 256 KiB through 16 MiB, with a 64 MiB actual-byte cap per pool and oldest-returned-first eviction. Keep their residency membership until eviction, trim or destruction. Requests above the largest class bypass the cache. On device-memory allocation failure, empty idle large BOs and retry once.
+
+Reset/free/implicit Begin return resources only after the recording is no longer needed. Release-resources pool reset and trim empty the idle cache. Initialize/reset the existing small-BO free count and enforce its exact 32-BO cap. Count pooled command bytes separately in the memory census and report cumulative new/reused large BOs.
+
+Linear: PLA-464
+Class: feature
+Evidence: docs/evidence/2026-10-28-kk-large-command-bo-pool.md
+Offered-upstream: no
+---
+ src/kosmickrisp/vulkan/kk_bo.c         |   9 ++-
+ src/kosmickrisp/vulkan/kk_bo.h         |   3 +
+ src/kosmickrisp/vulkan/kk_cmd_buffer.c |  30 +++----
+ src/kosmickrisp/vulkan/kk_cmd_buffer.h |   2 +-
+ src/kosmickrisp/vulkan/kk_cmd_pool.c   | 105 +++++++++++++++++++++++--
+ src/kosmickrisp/vulkan/kk_cmd_pool.h   |  22 ++++++
+ 6 files changed, 143 insertions(+), 28 deletions(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_bo.c b/src/kosmickrisp/vulkan/kk_bo.c
+index dd84840..545e446 100644
+--- a/src/kosmickrisp/vulkan/kk_bo.c
++++ b/src/kosmickrisp/vulkan/kk_bo.c
+@@ -209,13 +209,18 @@ kk_memory_log(struct kk_device *dev)
+       p_atomic_read(&kk_memory_stats.bo_bytes[KK_BO_KIND_##kind]) / mib
+    fprintf(stderr,
+            "[kk-mem] metal=%.0f bos=%.0f memory=%d/%.0f internal=%d/%.0f "
+-           "descriptor=%d/%.0f query=%d/%.0f command=%d/%.0f | shaders=%d "
++           "descriptor=%d/%.0f query=%d/%.0f command=%d/%.0f "
++           "command-pooled=%d/%.0f large-new=%" PRId64 " large-reuse=%" PRId64
++           " | shaders=%d "
+            "pipelines=%d msl=%.1f | cache raw=%d/%.1f precomp=%d/%.1f | "
+            "allocators=%u/%.1f MiB%s%s\n",
+            mtl_device_current_allocated_size(dev->mtl_handle) / mib,
+            bo_total / mib, KK_BO_FIELD(DEVICE_MEMORY), KK_BO_FIELD(INTERNAL),
+            KK_BO_FIELD(DESCRIPTOR_POOL), KK_BO_FIELD(QUERY),
+-           KK_BO_FIELD(COMMAND), p_atomic_read(&kk_memory_stats.shaders),
++           KK_BO_FIELD(COMMAND), KK_BO_FIELD(COMMAND_POOL),
++           p_atomic_read(&kk_memory_stats.command_large_allocations),
++           p_atomic_read(&kk_memory_stats.command_large_reuses),
++           p_atomic_read(&kk_memory_stats.shaders),
+            p_atomic_read(&kk_memory_stats.pipelines),
+            p_atomic_read(&kk_memory_stats.msl_bytes) / mib,
+            p_atomic_read(&vk_pipeline_cache_stats.raw_count),
+diff --git a/src/kosmickrisp/vulkan/kk_bo.h b/src/kosmickrisp/vulkan/kk_bo.h
+index b23705a..c247bb2 100644
+--- a/src/kosmickrisp/vulkan/kk_bo.h
++++ b/src/kosmickrisp/vulkan/kk_bo.h
+@@ -26,6 +26,7 @@ enum kk_bo_kind {
+    KK_BO_KIND_DESCRIPTOR_POOL,
+    KK_BO_KIND_QUERY,
+    KK_BO_KIND_COMMAND,
++   KK_BO_KIND_COMMAND_POOL, /* idle large command BOs, still resident */
+    KK_BO_KIND_COUNT,
+ };
+ 
+@@ -33,6 +34,8 @@ enum kk_bo_kind {
+ struct kk_memory_stats {
+    int64_t bo_bytes[KK_BO_KIND_COUNT];
+    int32_t bo_count[KK_BO_KIND_COUNT];
++   int64_t command_large_allocations;
++   int64_t command_large_reuses;
+    /* Live kk_shader objects, the pipelines among them that hold Metal
+     * pipeline states, and the MSL source they keep for serialization */
+    int32_t shaders;
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.c b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+index 4a665c1..202309e 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_buffer.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+@@ -42,7 +42,7 @@ kk_descriptor_state_fini(struct kk_cmd_buffer *cmd,
+ }
+ 
+ static void
+-kk_cmd_release_resources(struct kk_device *dev, struct kk_cmd_buffer *cmd)
++kk_cmd_release_resources(struct kk_cmd_buffer *cmd)
+ {
+    struct kk_cmd_pool *pool = kk_cmd_buffer_pool(cmd);
+ 
+@@ -52,11 +52,7 @@ kk_cmd_release_resources(struct kk_device *dev, struct kk_cmd_buffer *cmd)
+ 
+    kk_cmd_pool_free_bo_list(pool, &cmd->uploader.bos);
+ 
+-   /* Release all BOs used as descriptor buffers for submissions */
+-   util_dynarray_foreach(&cmd->large_bos, struct kk_bo *, bo) {
+-      kk_destroy_bo(dev, *bo);
+-   }
+-   util_dynarray_clear(&cmd->large_bos);
++   kk_cmd_pool_free_large_bo_list(pool, &cmd->large_bos);
+    util_dynarray_clear(&cmd->post_render_writes);
+    util_dynarray_clear(&cmd->ts_resolves);
+    util_dynarray_clear(&cmd->ts_stage_map);
+@@ -109,10 +105,7 @@ kk_destroy_cmd_buffer(struct vk_command_buffer *vk_cmd_buffer)
+       mtl_release(cmd->ts_fence);
+ 
+    vk_command_buffer_finish(&cmd->vk);
+-   struct kk_device *dev = kk_cmd_buffer_device(cmd);
+-
+-   kk_cmd_release_resources(dev, cmd);
+-   util_dynarray_fini(&cmd->large_bos);
++   kk_cmd_release_resources(cmd);
+    util_dynarray_fini(&cmd->post_render_writes);
+    util_dynarray_fini(&cmd->ts_resolves);
+    util_dynarray_fini(&cmd->ts_stage_map);
+@@ -158,7 +151,7 @@ kk_create_cmd_buffer(struct vk_command_pool *vk_pool,
+       mtl_release(desc);
+    }
+ 
+-   cmd->large_bos = UTIL_DYNARRAY_INIT;
++   list_inithead(&cmd->large_bos);
+ 
+    cmd->vk.dynamic_graphics_state.vi = &cmd->state.gfx._dynamic_vi;
+    cmd->vk.dynamic_graphics_state.ms.sample_locations =
+@@ -178,12 +171,10 @@ alloc_fail:
+ static void
+ kk_reset_cmd_buffer_internal(struct kk_cmd_buffer *cmd)
+ {
+-   struct kk_device *dev = kk_cmd_buffer_device(cmd);
+-
+    /* Ensure closed command buffer so we can start it again */
+    end_recording(cmd);
+    kk_cmd_release_allocator(cmd);
+-   kk_cmd_release_resources(dev, cmd);
++   kk_cmd_release_resources(cmd);
+ 
+    cmd->uploader.bo = NULL;
+    cmd->uploader.offset = 0;
+@@ -896,22 +887,21 @@ kk_cmd_buffer_alloc_bo(struct kk_cmd_buffer *cmd, struct kk_cmd_bo **bo_out)
+ struct kk_ptr
+ kk_pool_alloc(struct kk_cmd_buffer *cmd, uint32_t size_B, uint32_t alignment_B)
+ {
+-   struct kk_device *dev = kk_cmd_buffer_device(cmd);
+    struct kk_uploader *uploader = &cmd->uploader;
+ 
+    /* Specially handle large allocations owned by the command buffer, e.g. used
+     * for statically allocated vertex output buffers with geometry shaders.
+     */
+    if (size_B > KK_CMD_BO_SIZE) {
+-      struct kk_bo *buffer = NULL;
+-      const VkResult result =
+-         kk_alloc_bo(dev, &cmd->vk.base, size_B, alignment_B, &buffer);
++      struct kk_cmd_bo *bo;
++      const VkResult result = kk_cmd_pool_alloc_large_bo(
++         kk_cmd_buffer_pool(cmd), size_B, alignment_B, &bo);
+       if (result != VK_SUCCESS) {
+          vk_command_buffer_set_error(&cmd->vk, result);
+          return (struct kk_ptr){0};
+       }
+-      kk_bo_set_kind(buffer, KK_BO_KIND_COMMAND);
+-      util_dynarray_append(&cmd->large_bos, buffer);
++      list_addtail(&bo->link, &cmd->large_bos);
++      struct kk_bo *buffer = bo->bo;
+ 
+       return (struct kk_ptr){
+          .gpu = buffer->gpu,
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.h b/src/kosmickrisp/vulkan/kk_cmd_buffer.h
+index 6f952ce..8b58db8 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_buffer.h
++++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.h
+@@ -364,7 +364,7 @@ struct kk_cmd_buffer {
+    struct kk_uploader uploader;
+ 
+    /* Owned large BOs */
+-   struct util_dynarray large_bos;
++   struct list_head large_bos; /* kk_cmd_bo, exclusively owned until reset */
+ 
+    /* Does the command buffer use the geometry heap? */
+    bool uses_heap;
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_pool.c b/src/kosmickrisp/vulkan/kk_cmd_pool.c
+index 6ce76a8..5c60278 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_pool.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_pool.c
+@@ -17,6 +17,7 @@
+ #include "vk_common_entrypoints.h"
+ 
+ #include "c11/threads.h"
++#include "util/u_atomic.h"
+ 
+ /* Every live Metal command allocator, for kk_cmd_pool_allocators_size */
+ static struct util_dynarray kk_allocators = UTIL_DYNARRAY_INIT;
+@@ -62,7 +63,8 @@ kk_cmd_pool_allocators_size(uint32_t *count)
+ }
+ 
+ static VkResult
+-kk_cmd_bo_create(struct kk_cmd_pool *pool, struct kk_cmd_bo **bo_out)
++kk_cmd_bo_create(struct kk_cmd_pool *pool, uint32_t size_B,
++                  uint32_t alignment_B, struct kk_cmd_bo **bo_out)
+ {
+    struct kk_device *dev = kk_cmd_pool_device(pool);
+ 
+@@ -72,10 +74,10 @@ kk_cmd_bo_create(struct kk_cmd_pool *pool, struct kk_cmd_bo **bo_out)
+       return vk_error(pool, VK_ERROR_OUT_OF_HOST_MEMORY);
+ 
+    const VkResult result =
+-      kk_alloc_bo(dev, &pool->vk.base, KK_CMD_BO_SIZE, 0, &bo->bo);
++      kk_alloc_bo(dev, &pool->vk.base, size_B, alignment_B, &bo->bo);
+    if (result != VK_SUCCESS) {
+       vk_free(&pool->vk.alloc, bo);
+-      return vk_error(pool, VK_ERROR_OUT_OF_DEVICE_MEMORY);
++      return result;
+    }
+    kk_bo_set_kind(bo->bo, KK_BO_KIND_COMMAND);
+ 
+@@ -91,6 +93,89 @@ kk_cmd_bo_destroy(struct kk_cmd_pool *pool, struct kk_cmd_bo *bo)
+    vk_free(&pool->vk.alloc, bo);
+ }
+ 
++/* Command pools are externally synchronized, including recording into any
++ * of their command buffers. No queue lock or global cache is needed. The
++ * caller returns BOs only at reset/free/begin, never at End or submission. */
++static void
++kk_cmd_pool_remove_large_bo(struct kk_cmd_pool *pool, struct kk_cmd_bo *bo)
++{
++   list_del(&bo->link);
++   list_del(&bo->lru_link);
++   assert(pool->large_free_bytes >= bo->bo->size_B);
++   pool->large_free_bytes -= bo->bo->size_B;
++}
++
++static void
++kk_cmd_pool_trim_large_bos(struct kk_cmd_pool *pool, uint64_t limit)
++{
++   while (pool->large_free_bytes > limit) {
++      struct kk_cmd_bo *bo =
++         list_first_entry(&pool->large_lru, struct kk_cmd_bo, lru_link);
++      kk_cmd_pool_remove_large_bo(pool, bo);
++      kk_cmd_bo_destroy(pool, bo);
++   }
++}
++
++VkResult
++kk_cmd_pool_alloc_large_bo(struct kk_cmd_pool *pool, uint32_t size_B,
++                            uint32_t alignment_B, struct kk_cmd_bo **bo_out)
++{
++   unsigned size_class = KK_CMD_LARGE_BO_CLASSES;
++   uint32_t allocation_size = size_B;
++   const uint32_t required = MAX2(size_B, alignment_B);
++   if (required <= KK_CMD_LARGE_BO_MAX) {
++      size_class = 0;
++      allocation_size = 1u << KK_CMD_LARGE_BO_MIN_LOG2;
++      while (allocation_size < required) {
++         allocation_size <<= 1;
++         size_class++;
++      }
++      /* Best fit: prefer the smallest available class that meets the ask. */
++      for (unsigned i = size_class; i < KK_CMD_LARGE_BO_CLASSES; i++) {
++         if (list_is_empty(&pool->large_free_bos[i]))
++            continue;
++         struct kk_cmd_bo *bo =
++            list_first_entry(&pool->large_free_bos[i], struct kk_cmd_bo, link);
++         kk_cmd_pool_remove_large_bo(pool, bo);
++         kk_bo_set_kind(bo->bo, KK_BO_KIND_COMMAND);
++         p_atomic_inc(&kk_memory_stats.command_large_reuses);
++         *bo_out = bo;
++         return VK_SUCCESS;
++      }
++   }
++
++   VkResult result =
++      kk_cmd_bo_create(pool, allocation_size, alignment_B, bo_out);
++   /* Idle cached heaps must not turn a fresh allocation into an OOM. */
++   if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY && pool->large_free_bytes) {
++      kk_cmd_pool_trim_large_bos(pool, 0);
++      result = kk_cmd_bo_create(pool, allocation_size, alignment_B, bo_out);
++   }
++   if (result == VK_SUCCESS) {
++      (*bo_out)->size_class = size_class;
++      p_atomic_inc(&kk_memory_stats.command_large_allocations);
++   }
++   return result;
++}
++
++void
++kk_cmd_pool_free_large_bo_list(struct kk_cmd_pool *pool, struct list_head *bos)
++{
++   list_for_each_entry_safe(struct kk_cmd_bo, bo, bos, link) {
++      list_del(&bo->link);
++      if (bo->size_class >= KK_CMD_LARGE_BO_CLASSES ||
++          bo->bo->size_B > KK_CMD_LARGE_BO_MAX) {
++         kk_cmd_bo_destroy(pool, bo);
++         continue;
++      }
++      kk_bo_set_kind(bo->bo, KK_BO_KIND_COMMAND_POOL);
++      list_addtail(&bo->link, &pool->large_free_bos[bo->size_class]);
++      list_addtail(&bo->lru_link, &pool->large_lru);
++      pool->large_free_bytes += bo->bo->size_B;
++      kk_cmd_pool_trim_large_bos(pool, KK_CMD_LARGE_BO_CACHE_MAX);
++   }
++}
++
+ static void
+ kk_cmd_pool_destroy_bos(struct kk_cmd_pool *pool)
+ {
+@@ -98,6 +183,8 @@ kk_cmd_pool_destroy_bos(struct kk_cmd_pool *pool)
+       kk_cmd_bo_destroy(pool, bo);
+ 
+    list_inithead(&pool->free_bos);
++   pool->num_free_bos = 0;
++   kk_cmd_pool_trim_large_bos(pool, 0);
+ }
+ 
+ VkResult
+@@ -115,7 +202,7 @@ kk_cmd_pool_alloc_bo(struct kk_cmd_pool *pool, struct kk_cmd_bo **bo_out)
+       return VK_SUCCESS;
+    }
+ 
+-   return kk_cmd_bo_create(pool, bo_out);
++   return kk_cmd_bo_create(pool, KK_CMD_BO_SIZE, 0, bo_out);
+ }
+ 
+ void
+@@ -123,7 +210,7 @@ kk_cmd_pool_free_bo_list(struct kk_cmd_pool *pool, struct list_head *bos)
+ {
+    list_for_each_entry_safe(struct kk_cmd_bo, bo, bos, link) {
+       list_del(&bo->link);
+-      if (pool->num_free_bos > KK_CMD_POOL_BO_MAX) {
++      if (pool->num_free_bos >= KK_CMD_POOL_BO_MAX) {
+          kk_cmd_bo_destroy(pool, bo);
+       } else {
+          list_addtail(&bo->link, &pool->free_bos);
+@@ -237,6 +324,11 @@ kk_CreateCommandPool(VkDevice _device,
+    pool->metal.free_cmd_bufs = UTIL_DYNARRAY_INIT;
+ 
+    list_inithead(&pool->free_bos);
++   pool->num_free_bos = 0;
++   for (unsigned i = 0; i < KK_CMD_LARGE_BO_CLASSES; i++)
++      list_inithead(&pool->large_free_bos[i]);
++   list_inithead(&pool->large_lru);
++   pool->large_free_bytes = 0;
+ 
+    *pCmdPool = kk_cmd_pool_to_handle(pool);
+ 
+@@ -292,6 +384,7 @@ kk_ResetCommandPool(VkDevice _device, VkCommandPool commandPool,
+       return result;
+ 
+    if (flags & VK_COMMAND_POOL_RESET_RELEASE_RESOURCES_BIT) {
++      kk_cmd_pool_destroy_bos(pool);
+       kk_cmd_pool_release_mtl_objects(pool);
+    }
+ 
+@@ -313,4 +406,6 @@ kk_cmd_pool_set_label(struct kk_cmd_pool *pool, const char *label)
+ {
+    list_for_each_entry(struct kk_cmd_bo, bo, &pool->free_bos, link)
+       kk_bo_set_label(bo->bo, label);
++   list_for_each_entry(struct kk_cmd_bo, bo, &pool->large_lru, lru_link)
++      kk_bo_set_label(bo->bo, label);
+ }
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_pool.h b/src/kosmickrisp/vulkan/kk_cmd_pool.h
+index 2f3e80c..06e0c20 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_pool.h
++++ b/src/kosmickrisp/vulkan/kk_cmd_pool.h
+@@ -17,12 +17,24 @@
+ #define KK_CMD_BO_SIZE     (1024 * 128)
+ #define KK_CMD_POOL_BO_MAX 32
+ 
++/* Large command BOs: 256 KiB through 16 MiB, capped per pool, not per
++ * command buffer. Only idle BOs count against this limit. */
++#define KK_CMD_LARGE_BO_MIN_LOG2 18
++#define KK_CMD_LARGE_BO_CLASSES 7
++#define KK_CMD_LARGE_BO_MAX (1u << 24)
++#define KK_CMD_LARGE_BO_CACHE_MAX (64u * 1024 * 1024)
++
+ /* Recyclable command buffer BO, used for both push buffers and upload */
+ struct kk_cmd_bo {
+    struct kk_bo *bo;
+ 
+    /** Link in kk_cmd_pool::free_bos or kk_cmd_buffer::bos */
+    struct list_head link;
++
++   /* Large BOs only: second link in the pool's oldest-returned-first LRU.
++    * size_class == KK_CMD_LARGE_BO_CLASSES means uncacheable. */
++   struct list_head lru_link;
++   unsigned size_class;
+ };
+ 
+ struct kk_cmd_pool {
+@@ -32,6 +44,10 @@ struct kk_cmd_pool {
+    struct list_head free_bos;
+    uint32_t num_free_bos;
+ 
++   struct list_head large_free_bos[KK_CMD_LARGE_BO_CLASSES];
++   struct list_head large_lru;
++   uint64_t large_free_bytes;
++
+    struct {
+       /* struct kk_cmd_allocator *: not recording now */
+       struct util_dynarray free_allocators;
+@@ -68,6 +84,12 @@ VkResult kk_cmd_pool_alloc_bo(struct kk_cmd_pool *pool,
+ 
+ void kk_cmd_pool_free_bo_list(struct kk_cmd_pool *pool, struct list_head *bos);
+ 
++VkResult kk_cmd_pool_alloc_large_bo(struct kk_cmd_pool *pool, uint32_t size_B,
++                                    uint32_t alignment_B,
++                                    struct kk_cmd_bo **bo_out);
++void kk_cmd_pool_free_large_bo_list(struct kk_cmd_pool *pool,
++                                    struct list_head *bos);
++
+ struct kk_cmd_allocator *kk_cmd_pool_get_allocator(struct kk_cmd_pool *pool);
+ 
+ /* The live Metal command allocators and the memory they hold, for the
