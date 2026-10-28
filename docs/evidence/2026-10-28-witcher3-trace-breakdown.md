@@ -135,7 +135,10 @@ fresh `kk_alloc_bo` appended to `cmd->large_bos`, and destroys it at reset. Only
 **The callers.**
 - `kk_CmdCopyImage2` takes the copy-through-buffer path when `can_do_image_to_image_copy` fails (source and
   destination formats differ, or the sample counts differ). Its buffer is one 1300x600 surface at 8 bytes a
-  texel (6,240,000 B = 5.95 MiB), allocated once a frame.
+  texel (6,240,000 B = 5.95 MiB), allocated once a frame. **Later (PLA-463):** the copy is the depth of
+  the `D32FS8` depth/stencil target into an `R32F` image, which no texture view can do; the buffer is sized
+  from the 8-byte format but filled at 4 bytes a texel
+  ([kk-depth-copy-staging-size](2026-10-28-kk-depth-copy-staging-size.md)).
 - In `kk_draw`, the allocations that size with draws are the tessellation/geometry emulation's output
   buffers (`poly_tcs_in_size`, the tessellation `alloc`).
 
