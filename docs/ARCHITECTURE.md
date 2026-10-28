@@ -1225,8 +1225,8 @@ madsync, which was off because system APCs never ran in its waits (decisions
 There is no `nsiproxy.sys` device in the one-process runtime. `nsi.dll` falls
 back to the in-process unix table for enumeration and keyed reads (wine-pe
 0030, madeira-unix 0095). Wine's NDIS/IP providers read interface/link metadata
-and IPv4/IPv6 addresses with `getifaddrs` and ioctls; wine-unix 0019 reads both
-families' routes through a bounded Darwin routing-message decoder (cloned
+and IPv4/IPv6 addresses with `getifaddrs`; wine-unix 0019 reads both families'
+routes through a bounded Darwin routing-message decoder (cloned
 ARP/ND and host entries are skipped, as Windows lists none; a denied routing
 sysctl gives an empty table, so adapters still list without gateways). LUIDs use
 Wine's interface-index convention, and i386 calls translate owner-local guest
@@ -1235,6 +1235,14 @@ comes from these tables, as upstream's wininet answers it; the former
 unconditional LAN fallback (wine-pe 0029) is dropped from the series (PLA-71).
 Change notifications and unavailable kernel statistics remain unsupported.
 [Checks and limits](evidence/2026-10-07-nsi-adapters.md).
+
+Wine-unix 0201 reuses one iOS `AF_LINK` snapshot for one second under the
+interface-table lock: topology, flags, MTU and counters need no per-row socket,
+ioctl or `getifaddrs`, and the link rows' indices replace `if_nameindex`.
+Enumeration and keyed/name/index/LUID reads refresh before lookup, so removal
+and replacement also expire. Each family's route dump has the same TTL under
+a separate lock; empty and failed reads are cached too. IPv4/IPv6 unicast
+address reads remain uncached. [Snapshot checks and performance](evidence/2026-10-28-nsi-snapshot.md).
 
 ### Native Steam client
 

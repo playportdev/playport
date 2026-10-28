@@ -1,0 +1,503 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Wed, 28 Oct 2026 16:05:10 +0100
+Subject: [PATCH] nsiproxy: iOS: reuse one interface snapshot for a second
+
+The Witcher 3 profile spends 27 percent of its main thread in interface
+queries. Its sampled call site is witcher3.exe+2546470, a call to
+InternetGetConnectedState in the services::Galaxy vtable. Wine answers
+that API with GetAdaptersAddresses; wine-unix 0019 filled each adapter
+with a fresh getifaddrs and a socket/two ioctls, including when the IP
+interface provider asks for individual NDIS rows.
+
+Refresh one getifaddrs snapshot under if_list_lock at the start of the
+read, shared by enumeration, keyed reads and name/index/LUID conversion.
+AF_LINK carries flags, index, name, type, physical address, MTU and
+counters: derive topology from it too, dropping if_nameindex on iOS and
+all per-row socket/ioctl/getifaddrs calls. Keep row fillers on that same
+list even across a TTL boundary. Refresh before successful keyed
+lookups as well as misses, so removed/replaced identities expire too.
+
+Bound staleness to one second between reads. Failed and successful empty
+snapshots expire on the same schedule, without replaying stale data or
+retrying per row. Cache each family's route dump (including empty,
+denied and failed results) for that period under its own lock; keep the
+existing decoder, retry bound and interface identity checks.
+
+Class: ios-port
+Evidence: docs/evidence/2026-10-28-nsi-snapshot.md
+Offered-upstream: no; iOS one-process runtime integration
+---
+ dlls/nsiproxy.sys/ios_forward.h |  80 ++++++++++++----
+ dlls/nsiproxy.sys/ios_ifaddrs.h |  58 ++++++++++++
+ dlls/nsiproxy.sys/ndis.c        | 157 +++++++++++++++++++-------------
+ 3 files changed, 217 insertions(+), 78 deletions(-)
+ create mode 100644 dlls/nsiproxy.sys/ios_ifaddrs.h
+
+diff --git a/dlls/nsiproxy.sys/ios_forward.h b/dlls/nsiproxy.sys/ios_forward.h
+index 7fb3665ddca..658f05e5042 100644
+--- a/dlls/nsiproxy.sys/ios_forward.h
++++ b/dlls/nsiproxy.sys/ios_forward.h
+@@ -1,37 +1,50 @@
+ /* iOS NSI forwarding tables. SPDX-License-Identifier: LGPL-2.1-or-later */
+ #include <errno.h>
++#include <pthread.h>
++#include "ios_ifaddrs.h"
+ #include "ios_routes.h"
+ 
++/* The last NET_RT_DUMP per family, reused for IOS_IF_SNAPSHOT_MS: each
++ * adapter-table read dumps both families' routes. Rows are still decoded
++ * (and their interfaces looked up) per read. */
++static pthread_mutex_t ios_route_lock = PTHREAD_MUTEX_INITIALIZER;
++static struct
++{
++    unsigned char *buffer;
++    size_t size;
++    unsigned long long taken;
++    int valid;
++    NTSTATUS status;
++} ios_route_cache[2];
++
+ /* A sandbox that denies the routing sysctl yields an empty table, so
+  * GetAdaptersAddresses still lists adapters and addresses (with no gateways)
+  * instead of failing outright. Other failures are reported as upstream's BSD
+  * path does. One line per family; no addresses. */
+-static NTSTATUS ios_forward_unavailable( int family, int error, UINT_PTR *count )
++static NTSTATUS ios_forward_unavailable( int family, int error )
+ {
+     static int logged[2];
+     int denied = error == EPERM || error == EACCES;
+     if (!__atomic_exchange_n( &logged[family == AF_INET6], 1, __ATOMIC_RELAXED ))
+         ERR( "route table (family %d) unavailable: errno %d%s\n", family, error,
+              denied ? ", serving an empty table" : "" );
+-    if (!denied) return STATUS_NOT_SUPPORTED;
+-    *count = 0;
+-    return STATUS_SUCCESS;
++    return denied ? STATUS_SUCCESS : STATUS_NOT_SUPPORTED;
+ }
+ 
+-static NTSTATUS ios_forward_enumerate_all( int family, void *key_data, UINT key_size,
+-                                           void *rw_data, UINT rw_size, void *dynamic_data, UINT dynamic_size,
+-                                           void *static_data, UINT static_size, UINT_PTR *count )
++/* A fresh NET_RT_DUMP of `family` in *buffer (malloc'd). Empty and denied
++ * snapshots succeed with NULL/0; callers cache those too, not just data. */
++static NTSTATUS ios_forward_dump( int family, unsigned char **buffer_out, size_t *size_out )
+ {
+     int mib[] = { CTL_NET, PF_ROUTE, 0, family, 1 /* NET_RT_DUMP */, 0 };
+-    size_t size = 0, offset;
+-    unsigned int attempt, num = 0;
+-    BOOL want_data = key_size || rw_size || dynamic_size || static_size;
++    size_t size = 0;
++    unsigned int attempt;
+     unsigned char *buffer = NULL;
+-    NTSTATUS status = STATUS_SUCCESS;
++    *buffer_out = NULL;
++    *size_out = 0;
+     for (attempt = 0; attempt < 3; ++attempt)
+     {
+-        if (sysctl( mib, ARRAY_SIZE(mib), NULL, &size, NULL, 0 )) return ios_forward_unavailable( family, errno, count );
+-        if (!size) { *count = 0; return STATUS_SUCCESS; }
++        if (sysctl( mib, ARRAY_SIZE(mib), NULL, &size, NULL, 0 )) return ios_forward_unavailable( family, errno );
++        if (!size) return STATUS_SUCCESS;
+         if (size > 16 * 1024 * 1024) return STATUS_NO_MEMORY;
+         /* Slack for routes added between the two calls. */
+         size += size / 4 + 4096;
+@@ -41,11 +54,46 @@ static NTSTATUS ios_forward_enumerate_all( int family, void *key_data, UINT key_
+             int error = errno;
+             free( buffer );
+             buffer = NULL;
+-            if (error != ENOMEM) return ios_forward_unavailable( family, error, count );
++            if (error != ENOMEM) return ios_forward_unavailable( family, error );
+         }
+     }
+     /* Still racing a growing table: a failed read, not a short caller buffer. */
+-    if (!buffer) return ios_forward_unavailable( family, ENOMEM, count );
++    if (!buffer) return ios_forward_unavailable( family, ENOMEM );
++    *buffer_out = buffer;
++    *size_out = size;
++    return STATUS_SUCCESS;
++}
++
++static NTSTATUS ios_forward_enumerate_all( int family, void *key_data, UINT key_size,
++                                           void *rw_data, UINT rw_size, void *dynamic_data, UINT dynamic_size,
++                                           void *static_data, UINT static_size, UINT_PTR *count )
++{
++    unsigned long long now;
++    unsigned int num = 0, slot = family == AF_INET6;
++    BOOL want_data = key_size || rw_size || dynamic_size || static_size;
++    unsigned char *buffer;
++    size_t size, offset;
++    NTSTATUS status = STATUS_SUCCESS;
++
++    /* No NDIS path takes this lock: route -> if_list is the only order. */
++    pthread_mutex_lock( &ios_route_lock );
++    now = ios_if_now_ms();
++    if (!ios_if_fresh( ios_route_cache[slot].valid, ios_route_cache[slot].taken, now ))
++    {
++        free( ios_route_cache[slot].buffer );
++        ios_route_cache[slot].status = ios_forward_dump( family, &ios_route_cache[slot].buffer,
++                                                        &ios_route_cache[slot].size );
++        ios_route_cache[slot].taken = now;
++        ios_route_cache[slot].valid = 1;
++    }
++    status = ios_route_cache[slot].status;
++    if (status)
++    {
++        pthread_mutex_unlock( &ios_route_lock );
++        return status;
++    }
++    buffer = ios_route_cache[slot].buffer;
++    size = ios_route_cache[slot].size;
+     for (offset = 0; offset < size;)
+     {
+         struct ios_route_header header;
+@@ -111,7 +159,7 @@ static NTSTATUS ios_forward_enumerate_all( int family, void *key_data, UINT key_
+         }
+         ++num;
+     }
+-    free( buffer );
++    pthread_mutex_unlock( &ios_route_lock );
+     if (status) return status;
+     if (!want_data || num <= *count) *count = num;
+     else status = STATUS_BUFFER_OVERFLOW;
+diff --git a/dlls/nsiproxy.sys/ios_ifaddrs.h b/dlls/nsiproxy.sys/ios_ifaddrs.h
+new file mode 100644
+index 00000000000..f8a83f7ac09
+--- /dev/null
++++ b/dlls/nsiproxy.sys/ios_ifaddrs.h
+@@ -0,0 +1,58 @@
++/* iOS NSI interface snapshots. SPDX-License-Identifier: LGPL-2.1-or-later */
++#ifndef __WINE_IOS_IFADDRS_H
++#define __WINE_IOS_IFADDRS_H
++#include <errno.h>
++#include <ifaddrs.h>
++#include <string.h>
++#include <time.h>
++
++/* Bound stale topology and counters, and repeated failed/empty reads too. */
++#define IOS_IF_SNAPSHOT_MS 1000
++
++static inline unsigned long long ios_if_now_ms( void )
++{
++    struct timespec ts;
++    clock_gettime( CLOCK_MONOTONIC, &ts );
++    return (unsigned long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
++}
++
++static inline int ios_if_fresh( int valid, unsigned long long taken, unsigned long long now )
++{
++    return valid && now >= taken && now - taken < IOS_IF_SNAPSHOT_MS;
++}
++
++struct ios_if_snapshot
++{
++    struct ifaddrs *addrs;
++    unsigned long long taken;
++    int valid, error;
++};
++
++/* Refresh once at the start of a read, not per row: one enumeration must
++ * keep the same list even if its walk crosses the TTL boundary. Its caller
++ * holds the owning table lock until it has finished using all the rows.
++ * Failures discard the old list, and are retried after the TTL, not N times
++ * while filling N interfaces. A successful empty list is valid too. */
++static inline void ios_if_snapshot_refresh( struct ios_if_snapshot *snap, unsigned long long now )
++{
++    if (ios_if_fresh( snap->valid, snap->taken, now )) return;
++    if (snap->addrs) freeifaddrs( snap->addrs );
++    snap->addrs = NULL;
++    snap->taken = now;
++    snap->valid = 1;
++    snap->error = 0;
++    if (getifaddrs( &snap->addrs ))
++    {
++        snap->error = errno;
++        snap->addrs = NULL;
++    }
++}
++
++static inline const struct ifaddrs *ios_if_find( const struct ifaddrs *list, const char *name, int family )
++{
++    for (; list; list = list->ifa_next)
++        if (list->ifa_addr && list->ifa_addr->sa_family == family && !strcmp( list->ifa_name, name ))
++            return list;
++    return NULL;
++}
++#endif
+diff --git a/dlls/nsiproxy.sys/ndis.c b/dlls/nsiproxy.sys/ndis.c
+index aaf00d975d3..a83ad59d393 100644
+--- a/dlls/nsiproxy.sys/ndis.c
++++ b/dlls/nsiproxy.sys/ndis.c
+@@ -31,7 +31,7 @@
+ #include <unistd.h>
+ #include <errno.h>
+ #ifdef WINE_IOS
+-#include <ifaddrs.h>
++#include "ios_ifaddrs.h"
+ #endif
+ 
+ #ifdef HAVE_NET_IF_H
+@@ -112,10 +112,14 @@ static struct list if_list = LIST_INIT( if_list );
+ static pthread_mutex_t if_list_lock = PTHREAD_MUTEX_INITIALIZER;
+ 
+ #ifdef WINE_IOS
+-/* Present in the last if_nameindex snapshot under the same index and name.
+- * Entries are never freed (callers keep if_unix_name pointers), so a removed
+- * or renamed interface stays listed but is skipped. No syscall per lookup:
+- * update_if_table refreshes the flag on each enumeration and on a miss. */
++/* Under if_list_lock: update_if_table refreshes this once per read; row
++ * fillers borrow it until the lock is released. AF_LINK includes both name
++ * and index, so no separate if_nameindex sysctl is needed on iOS. */
++static struct ios_if_snapshot if_snapshot;
++
++/* Present in the last snapshot under the same index and name. Entries are
++ * never freed (callers keep if_unix_name pointers), so removed or renamed
++ * interfaces stay allocated but are skipped, including by keyed lookups. */
+ static BOOL if_entry_is_current( const struct if_entry *entry )
+ {
+     return entry->present;
+@@ -159,15 +163,12 @@ static struct if_entry *find_entry_from_luid( const NET_LUID *luid )
+  * Keep the system's address (possibly privacy-masked), never invent one. */
+ static NTSTATUS if_get_physical( const char *name, UINT *type, IF_PHYSICAL_ADDRESS *phys_addr )
+ {
+-    struct ifaddrs *addrs, *cur;
++    const struct ifaddrs *cur = ios_if_find( if_snapshot.addrs, name, AF_LINK );
+     *type = MIB_IF_TYPE_OTHER;
+     memset( phys_addr, 0, sizeof(*phys_addr) );
+-    if (getifaddrs( &addrs )) return STATUS_DEVICE_DATA_ERROR;
+-    for (cur = addrs; cur; cur = cur->ifa_next)
++    if (cur)
+     {
+-        const struct sockaddr_dl *sdl;
+-        if (!cur->ifa_addr || cur->ifa_addr->sa_family != AF_LINK || strcmp( name, cur->ifa_name )) continue;
+-        sdl = (const struct sockaddr_dl *)cur->ifa_addr;
++        const struct sockaddr_dl *sdl = (const struct sockaddr_dl *)cur->ifa_addr;
+         if (cur->ifa_flags & IFF_LOOPBACK) *type = MIB_IF_TYPE_LOOPBACK;
+         else if (cur->ifa_flags & IFF_POINTOPOINT) *type = MIB_IF_TYPE_PPP;
+         else if (sdl->sdl_type == IFT_ETHER) *type = MIB_IF_TYPE_ETHERNET;
+@@ -177,9 +178,7 @@ static NTSTATUS if_get_physical( const char *name, UINT *type, IF_PHYSICAL_ADDRE
+             phys_addr->Length = sdl->sdl_alen;
+             memcpy( phys_addr->Address, LLADDR(sdl), phys_addr->Length );
+         }
+-        break;
+     }
+-    freeifaddrs( addrs );
+     return STATUS_SUCCESS;
+ }
+ #elif defined (SIOCGIFHWADDR) && defined (HAVE_STRUCT_IFREQ_IFR_HWADDR)
+@@ -369,8 +368,33 @@ static struct if_entry *add_entry( UINT index, char *name )
+ 
+ static unsigned int update_if_table( void )
+ {
+-    struct if_nameindex *indices, *entry;
+     unsigned int append_count = 0;
++#ifdef WINE_IOS
++    const struct ifaddrs *link;
++    struct if_entry *cached, *found;
++    unsigned long long now = ios_if_now_ms();
++
++    if (ios_if_fresh( if_snapshot.valid, if_snapshot.taken, now )) return 0;
++    ios_if_snapshot_refresh( &if_snapshot, now );
++    LIST_FOR_EACH_ENTRY( cached, &if_list, struct if_entry, entry ) cached->present = FALSE;
++    for (link = if_snapshot.addrs; link; link = link->ifa_next)
++    {
++        const struct sockaddr_dl *sdl;
++        if (!link->ifa_addr || link->ifa_addr->sa_family != AF_LINK) continue;
++        sdl = (const struct sockaddr_dl *)link->ifa_addr;
++        if (!sdl->sdl_index) continue;
++        found = NULL;
++        LIST_FOR_EACH_ENTRY( cached, &if_list, struct if_entry, entry )
++            if (cached->if_index == sdl->sdl_index && !strcmp( cached->if_unix_name, link->ifa_name ))
++            {
++                found = cached;
++                break;
++            }
++        if (!found && (found = add_entry( sdl->sdl_index, link->ifa_name ))) ++append_count;
++        if (found) found->present = TRUE;
++    }
++#else
++    struct if_nameindex *indices, *entry;
+ 
+     indices = if_nameindex();
+     if (!indices)
+@@ -379,33 +403,13 @@ static unsigned int update_if_table( void )
+         return 0;
+     }
+ 
+-#ifdef WINE_IOS
+-    {
+-        struct if_entry *cached;
+-        struct if_entry *found;
+-        LIST_FOR_EACH_ENTRY( cached, &if_list, struct if_entry, entry ) cached->present = FALSE;
+-        for (entry = indices; entry->if_index; entry++)
+-        {
+-            found = NULL;
+-            LIST_FOR_EACH_ENTRY( cached, &if_list, struct if_entry, entry )
+-                if (cached->if_index == entry->if_index && !strcmp( cached->if_unix_name, entry->if_name ))
+-                {
+-                    found = cached;
+-                    break;
+-                }
+-            if (!found && (found = add_entry( entry->if_index, entry->if_name ))) ++append_count;
+-            if (found) found->present = TRUE;
+-        }
+-    }
+-#else
+     for (entry = indices; entry->if_index; entry++)
+     {
+         if (!find_entry_from_index( entry->if_index ) && add_entry( entry->if_index, entry->if_name ))
+             ++append_count;
+     }
+-#endif
+-
+     if_freenameindex( indices );
++#endif
+     return append_count;
+ }
+ 
+@@ -416,6 +420,39 @@ static void if_counted_string_init( IF_COUNTED_STRING *str, const WCHAR *value )
+     memset( (char *)str->String + str->Length, 0, sizeof(str->String) - str->Length );
+ }
+ 
++#ifdef WINE_IOS
++/* Under if_list_lock. Flags, MTU and counters come from the table read's
++ * getifaddrs snapshot (AF_LINK rows carry struct if_data): no socket, ioctl
++ * or getifaddrs per row. */
++static void ifinfo_fill_dynamic( struct if_entry *entry, struct nsi_ndis_ifinfo_dynamic *data )
++{
++    const struct ifaddrs *link = ios_if_find( if_snapshot.addrs, entry->if_unix_name, AF_LINK );
++    const struct if_data *info;
++
++    memset( data, 0, sizeof(*data) );
++    data->media_conn_state = MediaConnectStateConnected;
++    if (!link)
++    {
++        data->oper_status = IfOperStatusUnknown;
++        return;
++    }
++    data->oper_status = (link->ifa_flags & IFF_UP) ? IfOperStatusUp : IfOperStatusDown;
++    data->media_conn_state = (link->ifa_flags & IFF_RUNNING) ?
++                             MediaConnectStateConnected : MediaConnectStateDisconnected;
++    if (!(info = link->ifa_data)) return;
++    data->mtu = info->ifi_mtu;
++    data->xmit_speed = data->rcv_speed = info->ifi_baudrate;
++    data->in_octets = info->ifi_ibytes;
++    data->out_octets = info->ifi_obytes;
++    data->in_errors = info->ifi_ierrors;
++    data->out_errors = info->ifi_oerrors;
++    data->in_discards = info->ifi_iqdrops;
++    data->in_ucast_pkts = info->ifi_ipackets;
++    data->out_ucast_pkts = info->ifi_opackets;
++    data->in_mcast_pkts = info->ifi_imcasts;
++    data->out_mcast_pkts = info->ifi_omcasts;
++}
++#else
+ static void ifinfo_fill_dynamic( struct if_entry *entry, struct nsi_ndis_ifinfo_dynamic *data )
+ {
+     int fd, name_len = strlen( entry->if_unix_name );
+@@ -500,33 +537,6 @@ static void ifinfo_fill_dynamic( struct if_entry *entry, struct nsi_ndis_ifinfo_
+             fclose( fp );
+         }
+     }
+-#elif defined(WINE_IOS)
+-    {
+-        struct ifaddrs *addrs, *cur;
+-        if (getifaddrs( &addrs )) return;
+-        for (cur = addrs; cur; cur = cur->ifa_next)
+-        {
+-            const struct if_data *info;
+-            if (!cur->ifa_addr || cur->ifa_addr->sa_family != AF_LINK ||
+-                strcmp( cur->ifa_name, entry->if_unix_name )) continue;
+-            data->media_conn_state = (cur->ifa_flags & IFF_RUNNING) ?
+-                                     MediaConnectStateConnected : MediaConnectStateDisconnected;
+-            if (!(info = cur->ifa_data)) break;
+-            data->mtu = info->ifi_mtu;
+-            data->xmit_speed = data->rcv_speed = info->ifi_baudrate;
+-            data->in_octets = info->ifi_ibytes;
+-            data->out_octets = info->ifi_obytes;
+-            data->in_errors = info->ifi_ierrors;
+-            data->out_errors = info->ifi_oerrors;
+-            data->in_discards = info->ifi_iqdrops;
+-            data->in_ucast_pkts = info->ifi_ipackets;
+-            data->out_ucast_pkts = info->ifi_opackets;
+-            data->in_mcast_pkts = info->ifi_imcasts;
+-            data->out_mcast_pkts = info->ifi_omcasts;
+-            break;
+-        }
+-        freeifaddrs( addrs );
+-    }
+ #elif defined(HAVE_SYS_SYSCTL_H) && defined(NET_RT_IFLIST)
+     {
+         int mib[] = { CTL_NET, PF_ROUTE, 0, AF_INET, NET_RT_IFLIST, entry->if_index };
+@@ -563,6 +573,7 @@ static void ifinfo_fill_dynamic( struct if_entry *entry, struct nsi_ndis_ifinfo_
+     }
+ #endif
+ }
++#endif
+ 
+ static void ifinfo_fill_entry( struct if_entry *entry, NET_LUID *key, struct nsi_ndis_ifinfo_rw *rw,
+                                struct nsi_ndis_ifinfo_dynamic *dyn, struct nsi_ndis_ifinfo_static *stat )
+@@ -616,6 +627,13 @@ static NTSTATUS ifinfo_enumerate_all( void *key_data, UINT key_size, void *rw_da
+     pthread_mutex_lock( &if_list_lock );
+ 
+     update_if_table();
++#ifdef WINE_IOS
++    if (if_snapshot.error)
++    {
++        pthread_mutex_unlock( &if_list_lock );
++        return STATUS_NO_MORE_ENTRIES;
++    }
++#endif
+ 
+     LIST_FOR_EACH_ENTRY( entry, &if_list, struct if_entry, entry )
+     {
+@@ -652,6 +670,9 @@ static NTSTATUS ifinfo_get_all_parameters( const void *key, UINT key_size, void
+            dynamic_data, dynamic_size, static_data, static_size );
+ 
+     pthread_mutex_lock( &if_list_lock );
++#ifdef WINE_IOS
++    update_if_table();
++#endif
+ 
+     if (!(entry = find_entry_from_luid( (const NET_LUID *)key )))
+     {
+@@ -716,6 +737,9 @@ static NTSTATUS ifinfo_get_parameter( const void *key, UINT key_size, UINT param
+     TRACE( "%p %d %d %p %d %d\n", key, key_size, param_type, data, data_size, data_offset );
+ 
+     pthread_mutex_lock( &if_list_lock );
++#ifdef WINE_IOS
++    update_if_table();
++#endif
+ 
+     if (!(entry = find_entry_from_luid( (const NET_LUID *)key )))
+     {
+@@ -752,6 +776,9 @@ static NTSTATUS index_luid_get_parameter( const void *key, UINT key_size, UINT p
+         return STATUS_INVALID_PARAMETER;
+ 
+     pthread_mutex_lock( &if_list_lock );
++#ifdef WINE_IOS
++    update_if_table();
++#endif
+ 
+     if (!(entry = find_entry_from_index( *(UINT *)key )))
+     {
+@@ -774,6 +801,9 @@ BOOL convert_unix_name_to_luid( const char *unix_name, NET_LUID *luid )
+     int updated = 0;
+ 
+     pthread_mutex_lock( &if_list_lock );
++#ifdef WINE_IOS
++    update_if_table();
++#endif
+ 
+     do
+     {
+@@ -804,6 +834,9 @@ BOOL convert_luid_to_unix_name( const NET_LUID *luid, const char **unix_name )
+     int updated = 0;
+ 
+     pthread_mutex_lock( &if_list_lock );
++#ifdef WINE_IOS
++    update_if_table();
++#endif
+ 
+     do
+     {

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Exercise the exact Darwin decoder shipped by the Wine unix patch."""
+"""Exercise the iOS NSI dispatcher, snapshots and Darwin decoder shipped in patches."""
 from pathlib import Path
 import subprocess
 import tempfile
@@ -127,7 +127,7 @@ int main(void) {
             subprocess.run([str(root / "test")], check=True, capture_output=True)
 
     def test_darwin_route_decoder(self):
-        patches = sorted((REPO / "patches/wine-unix").glob("*-nsiproxy*.patch"))
+        patches = sorted((REPO / "patches/wine-unix").glob("*-nsiproxy-serve-iOS-adapter*.patch"))
         self.assertEqual(len(patches), 1)
         work = REPO / ".work"
         work.mkdir(exist_ok=True)
@@ -218,6 +218,54 @@ int main(void)
 ''')
             subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror",
                             "-fsanitize=undefined,address", str(source), "-o", str(root / "test")], check=True)
+            subprocess.run([str(root / "test")], check=True)
+
+    def test_interface_snapshot(self):
+        """One getifaddrs serves a whole table read (PLA-460)."""
+        patches = sorted((REPO / "patches/wine-unix").glob("*-nsiproxy-iOS-one-interface-snapshot*.patch"))
+        self.assertEqual(len(patches), 1)
+        # Compile the actual iOS NDIS filler added by this patch as well as
+        # the snapshot helper. This catches putting a syscall back per row.
+        diff = patches[0].read_text().split("diff --git a/dlls/nsiproxy.sys/ndis.c", 1)[1]
+        added = "\n".join(line[1:] for line in diff.splitlines()
+                          if line.startswith("+") and not line.startswith("+++"))
+        filler = "static void ifinfo_fill_dynamic(" + added.split(
+            "static void ifinfo_fill_dynamic(", 1)[1].split("#else", 1)[0]
+        self.assertNotIn("socket(", filler)
+        self.assertNotIn("ioctl(", filler)
+        self.assertNotIn("ios_if_snapshot_refresh(", filler)
+        work = REPO / ".work"
+        work.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="nsi-snap-", dir=work) as tmp:
+            root = Path(tmp)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            subprocess.run(["git", "apply", "--include=dlls/nsiproxy.sys/ios_ifaddrs.h", str(patches[0])],
+                           cwd=root, check=True)
+            (root / "ndis_dynamic.h").write_text(filler)
+            source = Path(__file__).with_name("nsi_snapshot_test.c")
+            subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-I", str(root),
+                            "-fsanitize=undefined,address", str(source), "-o", str(root / "test")], check=True)
+            subprocess.run([str(root / "test")], check=True)
+
+    def test_forward_snapshot(self):
+        """Exercise the real route enumerator, not just its decoder."""
+        work = REPO / ".work"
+        work.mkdir(exist_ok=True)
+        series = REPO / "patches/wine-unix"
+        with tempfile.TemporaryDirectory(prefix="nsi-forward-", dir=work) as tmp:
+            root = Path(tmp)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            for name in (series / "series").read_text().splitlines():
+                if not name or name.startswith("#"):
+                    continue
+                subprocess.run(["git", "apply", "--allow-empty",
+                                "--include=dlls/nsiproxy.sys/ios_routes.h",
+                                "--include=dlls/nsiproxy.sys/ios_forward.h",
+                                "--include=dlls/nsiproxy.sys/ios_ifaddrs.h", str(series / name)],
+                               cwd=root, check=True)
+            subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-pthread", "-I", str(root),
+                            "-fsanitize=undefined,address", str(Path(__file__).with_name("nsi_forward_test.c")),
+                            "-o", str(root / "test")], check=True)
             subprocess.run([str(root / "test")], check=True)
 
 
