@@ -688,6 +688,12 @@ class UiEnvTest(unittest.TestCase):
         self.assertIn("UI_KEEP_SETTINGS=1", env)
         self.assertFalse(any(e.startswith(("UI_SESSION", "UI_KEEP")) for e in load().ui_env("n1")))
 
+    def test_capture_layer_is_a_launch_variable(self):
+        # Metal loads its capture layer only from the launch environment (decision 0165).
+        self.assertIn("MTL_CAPTURE_ENABLED=1", load().ui_env("n1", play="app-292030", capture_layer=True))
+        self.assertNotIn("MTL_CAPTURE_ENABLED=1", load().ui_env("n1", play="app-292030"))
+        self.assertIn("--env MTL_CAPTURE_ENABLED=1", self.dry("--play", "app-292030", "--capture-layer"))
+
     def test_refuses_an_ipa_another_checkout_installed(self):
         import json
         import subprocess

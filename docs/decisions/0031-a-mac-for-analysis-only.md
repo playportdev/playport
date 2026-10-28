@@ -2,7 +2,8 @@
 
 **Status:** proposed 2026-09-29; accepted 2026-10-28 by the owner for the
 Mac session of PLA-457. Amended by [0164](0164-pp-ui-from-the-mac.md): `pp ui`
-may drive the phone from the Mac.
+may drive the phone from the Mac; by [0165](0165-pp-drives-apples-gpu-tools-on-a-mac.md):
+`pp gpu` drives Apple's GPU tools there.
 
 ## Decision
 

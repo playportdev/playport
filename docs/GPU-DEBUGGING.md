@@ -25,7 +25,7 @@ before it is needed.
 | What one frame asks of the GPU: passes, targets, load/store, pipelines, draws, shader statistics | GPU capture: `pp gpu capture`, `pp gpu read` | [below](#a-frames-capture) |
 | Does the runtime misuse Metal, or does a shader read or write out of bounds or produce NaN | Metal validation: `pp gpu validate` | [below](#metal-validation) |
 | What the right picture is (D3D12, D3D11, Vulkan games) | the same game under Proton on this PC, captured with RenderDoc | [below](#the-reference-on-this-pc) |
-| Why a pass is slow (bandwidth, ALU, occupancy) | a Mac: Xcode's replay with counters | [On a Mac](#on-a-mac) |
+| Why a pass is slow (bandwidth, ALU, occupancy, limiters) | a Mac: `pp gpu live --capture … --profile`, `pp gpu profile` | [Scripted](#scripted-pp-gpu-on-the-mac) |
 | Where a hitch comes from (compiles, driver, CPU and GPU overlap) | our logs (`hitches.txt`); a Mac: Metal System Trace | [On a Mac](#on-a-mac) |
 | Which draw makes the picture wrong | a Mac: replay between draws, the shader debugger | [On a Mac](#on-a-mac) |
 | Is a Vulkan game's world stretched by its viewport or its camera, and what display values did it read | a dev build's game Graphics options `MESA_KK_FRAME_PROBE_S=N`: every N s after the first draw, ten times at most, the next 2500 draws' `[kk-draw]` lines and a scan of host-visible memory for view-projection matrices, `[kk-proj] P00 P11 aspect hits` (`patches/mesa` 0063); runtime key `env.MADEIRA_DISPLAY_QUERY_LOG=1`: each distinct answer of the display queries (metrics, monitor, modes, display config, device caps) per process as `[disp-q]` lines and the Vulkan surface extents as `[vk-surf]` (`patches/madeira-unix` 0178, `patches/wine-unix` 0044) | [rdr2-aspect](evidence/2026-10-20-rdr2-aspect.md) |
@@ -208,12 +208,57 @@ Notes:
 
 ## On a Mac
 
-**Status:** first session under way (PLA-457).
+**Status:** second session (PLA-457, PLA-458): capture, replay, profile and Instruments run from
+`pp gpu` with no Xcode window ([0165](decisions/0165-pp-drives-apples-gpu-tools-on-a-mac.md)).
 [Decision 0031](decisions/0031-a-mac-for-analysis-only.md) (accepted) bounds
 it; [0164](decisions/0164-pp-ui-from-the-mac.md) lets `pp ui` drive the phone
 from the Mac. When the person says "we are on a Mac", start
-with [Arrival checks](#arrival-checks). Then offer the [agenda](#agenda) in
-order, skipping what [Open questions](#open-questions) already answers.
+with [Arrival checks](#arrival-checks), then [Scripted](#scripted-pp-gpu-on-the-mac). Then offer the
+[agenda](#agenda) in order, skipping what [Open questions](#open-questions) already answers.
+
+### Scripted: `pp gpu` on the Mac
+
+```sh
+# a running W3 frame, captured live at first frame +85, replayed and profiled on the phone
+./pp gpu live --title app-292030 --secs 110 \
+  --pad first-frame+10:witcher3-continue --pad first-frame+60:witcher3-walk \
+  --capture first-frame+85 --profile
+./pp gpu profile TRACE [--exec serial|overlapping] [--read]  # profile (again) a .gputrace
+./pp gpu live ... --trace 'Metal System Trace' --trace-at first-frame+70 --trace-secs 15
+```
+
+- **Setup:** `pymobiledevice3` on PATH and `PLAYPORT_USBMUX_SOCKET=/var/run/usbmuxd` in
+  `.work/inputs.local` (as for `pp ui`, [0164](decisions/0164-pp-ui-from-the-mac.md)); `--any-build`
+  while the Mac's `.work` has no install record.
+- **The capture layer:** `pp gpu live --capture` launches the app with `MTL_CAPTURE_ENABLED=1`
+  (`pp ui --capture-layer`). Only then does `gpucapture list` show `S1Probe`: Settings' GPU capture
+  `setenv()`s the variable inside the process, too late for Metal's capture layer, which is why Xcode's
+  capture button stayed grey in the first session.
+- **Counter heaps:** Metal's capture layer refuses a device with a Metal 4 counter heap
+  ("Capturing Metal 4 Counter Heap is not supported"). KosmicKrisp makes none while its own capture is
+  armed (`patches/mesa` 0044), so `live` also sets Settings' GPU capture to frame 999999, which no play
+  reaches.
+- **What is captured:** `--boundary layer` (default) is one presented frame, from the running game at
+  `--capture`'s time: no frame number to guess. Only the resources the frame uses are recorded (`-du`):
+  with every resource gpucapture downloaded about 10 GB of vkd3d-proton's heaps and the game ended mid-capture.
+  A W3 frame is about 4 GB and takes about 70 s.
+- **Replay and profile:** `gpudebug -d <phone>` replays the trace on the phone (about a minute to
+  ready) and `profile run --exec serial --embed` profiles it with every counter (about 40 s); the
+  phone is a replay device only while Xcode's GPU tools agent runs, and `pp` starts Xcode hidden
+  (`open -gj`) when it does not. An overlapping replay (`--exec overlapping`) left the 161 encoders
+  of W3's main command buffer untimed (each reported the whole frame); serial timed all of them.
+- **What comes back:** `profile.txt` ranks encoders by GPU time with each counter's mean over the
+  encoder's interval (occupancy, ALU, F32/F16, instruction, control flow, texture read/filter/write,
+  LLC, L1, MMU, vertex/fragment/compute shader launch limiters, bandwidth); `profile.json`;
+  `profile/*.json` the raw series (~33 µs a sample). `gpudebug --oneshot -t TRACE -c "profile load"
+  -c "go /performance/timeline/encoders/ascN" -c "go :d"` leads from an encoder to its dispatch
+  or draws, pipeline and shader source, with no phone. The cost rankings
+  (`performance/encoders`, `commands`, `shaders`) stay empty in these profiles.
+- **Instruments:** `--trace TEMPLATE` records the whole phone with `xctrace --all-processes
+  --device-name`, at `--trace-at` for `--trace-secs`; `<name>-toc.xml` beside it is its table of
+  contents (`xctrace export --toc`). Without `--capture` the play has no capture layer.
+- **Never** run a `gpudebug` session against the phone outside `pp`: an abandoned one left a
+  profiling session there that only a phone restart cleared. `pp` terminates its sessions.
 
 ### What only a Mac adds
 
@@ -358,8 +403,11 @@ Answered in the first session
   abandoned `gpudebug` session left a profiling session on the phone that only a phone restart cleared.
   Export from Xcode, then read the exported trace with `gpudebug --oneshot … profile load`, which needs no
   phone.
-- **Does Settings' GPU capture suffice for Xcode's capture button?** No, not in an attached process.
+- **Does Settings' GPU capture suffice for Xcode's capture button?** No: the capture layer needs
+  `MTL_CAPTURE_ENABLED=1` at launch, which `pp ui --capture-layer` gives (second session, above).
+- **How do we get full counters for one heavy pass?** A live capture (`pp gpu live --capture`) of only
+  the used resources profiles with every counter, serially; the first session's Lite mode came from
+  Xcode's profile of a full `pp gpu capture` trace.
 
 Still open:
 - Does the System Trace template give per-thread run states system-wide (PLA-457 item 1)?
-- How do we get full counters for one heavy pass: a smaller capture, or a replay restricted to it?

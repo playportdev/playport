@@ -34,6 +34,9 @@ Drive the phone (dev app)
   pp gpu capture --frame N | validate | read BUNDLE | passes RUN | names [--fetch]
                                   GPU debugging: a frame as a Metal capture, read here; Metal
                                   validation; GPU time per pass (docs/GPU-DEBUGGING.md)
+  pp gpu live --capture WHEN [--profile] [--trace TEMPLATE] | profile TRACE
+                                  on a Mac: Apple's gpucapture, gpudebug, xctrace on a play
+                                  (a running frame captured, replayed and profiled on the phone)
   pp pad send STEP... | push SCRIPT | rest [--shot FILE]
                                   press buttons on the scripted pad of a running title
   pp phone status | kill | log [DIR] | ls REMOTE | pull REMOTE [DIR] | rm Documents/NAME.zip | shot [FILE] | crashes [DIR] [--since T]

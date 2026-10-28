@@ -5,7 +5,7 @@
   pp ui [--action VERB:ARG ...] [--controls ID:JSON] [--settings ID:JSON] [--verify ID] [--play ID]
         [--shot-each-action] [--pad] [--out DIR] [--until SPEC] [--wait S] [--idle N] [--quiet]
         [--shot] [--screenshot-after S ...] [--leave-running] [--keep-log] [--lock-wait S]
-        [--expect-ipa IPA|SHA256] [--any-build] [--keep-settings] [--dry-run]
+        [--expect-ipa IPA|SHA256] [--any-build] [--keep-settings] [--capture-layer] [--dry-run]
 
 The app starts as a Home Screen launch does, shows the
 library, and does what a person would do with its buttons, through the same
@@ -590,7 +590,7 @@ def controller_map_ok(c):
 
 
 def ui_env(nonce, verify=None, play=None, extra=(), settings=None, step=False, pad=False,
-           session=None, keep_settings=False, controls=None):
+           session=None, keep_settings=False, controls=None, capture_layer=False):
     """settings: (title id, LaunchSettings JSON) or None; controls: (title id, GameControls
     JSON) or None. step: the app waits after each
     action until the driver pushes Documents/ui-step-<nonce>-<n> (--shot-each-action). session:
@@ -614,6 +614,10 @@ def ui_env(nonce, verify=None, play=None, extra=(), settings=None, step=False, p
         envs.append("UI_SESSION=" + session)
     if keep_settings:
         envs.append("UI_KEEP_SETTINGS=1")
+    if capture_layer:
+        # Metal loads its capture layer, which connects to Apple's GPU tools, only from the
+        # launch environment: Settings' GPU capture setenv()s it too late (decision 0165).
+        envs.append("MTL_CAPTURE_ENABLED=1")
     return envs
 
 
@@ -707,6 +711,9 @@ def parse(argv=None):
     p.add_argument("--screenshot-after", type=int, action="append", default=[], metavar="S",
                    help="a screenshot S seconds after the launch (repeatable)")
     p.add_argument("--leave-running", action="store_true", help="do not end the app at the end of the run")
+    p.add_argument("--capture-layer", action="store_true",
+                   help="start the app with Metal's capture layer (MTL_CAPTURE_ENABLED=1 at launch), so a "
+                        "Mac's gpucapture, gpudebug and Xcode see it (pp gpu live; costs every frame)")
     p.add_argument("--keep-log", action="store_true", help="do not move s1-host.log aside before the launch")
     p.add_argument("--lock-wait", type=int, help="seconds to wait for the device lock (default: as long as it takes)")
     p.add_argument("--expect-ipa", metavar="IPA|SHA256",
@@ -880,7 +887,7 @@ def main(argv=None, launched=None):
             if not a.keep_log:
                 phone.rotate_log()
             envs = ui_env(nonce, a.verify, a.play, a.action, a.settings_pair, a.shot_each_action, a.pad,
-                          phonelib.session(), a.keep_settings, a.controls_pair)
+                          phonelib.session(), a.keep_settings, a.controls_pair, a.capture_layer)
             if not a.dry_run:
                 # Captured current nonce only; no callback while merely waiting for the lock.
                 term.cancel = lambda: request_batch_cancel(phone, out, nonce, ev)

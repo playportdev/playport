@@ -32,6 +32,27 @@
       --fetch downloads it into $PLAYPORT_BUILD/cache/dsc-<phone>-<iOS> (7.5 GB for
       iOS 27.0) first; needed once per iOS version
 
+On a Mac (decision 0165, tools/apple.py; docs/GPU-DEBUGGING.md#on-a-mac):
+
+  pp gpu live --capture [first-frame+]SECS [--boundary layer|queue|device|ID] [--count N]
+              [--profile [--gpu-state S]] [--trace TEMPLATE [--trace-at WHEN] [--trace-secs S]]
+              [--title ID] [--secs S] [--pad ...] [--settings JSON] [--any-build] [--out DIR]
+      a play started with Metal's capture layer (pp ui --capture-layer); at --capture,
+      gpucapture takes N iterations of the boundary (layer: one presented frame) of the
+      running game into the run directory as live-*.gputrace, with no frame number to
+      guess; --profile then replays it on the phone and profiles it (pp gpu profile).
+      --trace records the whole phone with an Instruments template (xctrace
+      --all-processes, e.g. 'Metal System Trace', 'Time Profiler') at --trace-at,
+      without the capture layer when no --capture is asked for
+  pp gpu profile TRACE [--exec serial|overlapping] [--gpu-state S] [--read] [--out DIR]
+      gpudebug replays TRACE on the phone and profiles it with every counter (the profile
+      is embedded in the trace), then reads it back without the phone: profile.txt ranks
+      the frame's encoders by GPU time, each with its counters' means over its interval
+      (occupancy, ALU, F32, instruction, texture, cache, shader launch limiters,
+      bandwidth); profile.json and profile/*.json hold the rows and the raw series.
+      --read only reads a trace's embedded profile. Starts Xcode hidden for its GPU tools
+      agent when the phone is not yet a replay device; no Xcode window is used
+
 Every play goes through the app's UI (pp ui), under one hold of the device lock.
 The Diagnostics switches last for that session and are undone at the app's next
 launch outside it, as any driven setting is. A capture or validation run costs
@@ -39,6 +60,7 @@ every frame: its frame figures are not a measurement (pp perf is).
 """
 
 import argparse
+import contextlib
 import glob
 import json
 import os
@@ -241,30 +263,35 @@ def when_of(v):
     return (bool(m[1]), float(m[2])) if m else None
 
 
-def play(a, ev, out, settings):
+def play(a, ev, out, settings, hooks=(), ui_args=()):
     """The settings launch, then the play, with pad scripts pushed at their times (as
-    pp perf's --pad); the play's result."""
+    pp perf's --pad) and each hook (when, name, fn) called at its time on its own thread
+    with the app's pid; the play's result."""
     import pad
     acts = []
     for k, v in settings.items():
         acts += ["--action", f"set:{k}={v}"]
-    r = ui(os.path.join(out, "set"), *acts)
-    if not r.get("ok"):
-        raise phonelib.PhoneError(f"setting Diagnostics failed: {r.get('why') or r} ({out}/set)")
-    ev("diagnostics", **settings)
-    pads = []
+    anyb = ["--any-build"] if getattr(a, "any_build", False) else []
+    if acts:
+        r = ui(os.path.join(out, "set"), *acts, "--action", "wait:5", *anyb)   # wait: the value reaches disk
+        if not r.get("ok"):
+            raise phonelib.PhoneError(f"setting Diagnostics failed: {r.get('why') or r} ({out}/set)")
+        ev("diagnostics", **settings)
+    timed = []
     for v in a.pad:
         when, _, name = v.partition(":")
         if when_of(when) is None:
             raise phonelib.PhoneError(f"--pad {v}: want [first-frame+]SECS:SCRIPT")
-        pads.append((when_of(when), name, pad.script(name)))
+        text = pad.script(name)
+        timed.append((when_of(when), "pad:" + name, lambda pid, text=text: pad.push(phone, text)))
     phone = phonelib.Phone(out, events=ev)
-    if pads:   # a script left from an earlier run would play from the launch
+    if timed:   # a script left from an earlier run would play from the launch
         pad.push(phone, pad.REST)
+    timed += list(hooks)
     t_launch, t_first, first = time.monotonic(), [None], threading.Event()
-    done = threading.Event()
+    done, pid = threading.Event(), [None]
 
-    def pusher(when, name, text):
+    def runner(when, name, fn):
         ff, secs = when
         if ff:
             while not first.wait(1):
@@ -274,24 +301,31 @@ def play(a, ev, out, settings):
         if done.wait(max(0, base + secs - time.monotonic())):
             return
         try:
-            pad.push(phone, text)
+            said = fn(pid[0])
             ok = True
         except phonelib.PhoneError as e:
-            ok = str(e)
-        ev("pad", script=name, after_s=round(time.monotonic() - t_launch, 1), ok=ok)
+            said, ok = None, str(e)
+        ev("hook" if not name.startswith("pad:") else "pad", what=name.removeprefix("pad:"),
+           after_s=round(time.monotonic() - t_launch, 1), ok=ok, **({"said": said} if said else {}))
 
     def on_line(line):
+        if pid[0] is None and '"event": "launched"' in line:
+            with contextlib.suppress(ValueError):
+                pid[0] = json.loads(line).get("pid")
         if not first.is_set() and '"app:mark"' in line and '"first frame"' in line:
             t_first[0] = time.monotonic()
             first.set()
-    for p in pads:
-        threading.Thread(target=pusher, args=p, daemon=True).start()
-    args = ["--play", a.title, "--until", f"first-frame+{a.secs}", "--quiet", "--wait", str(a.secs + 300)]
-    args += ["--pad"] if pads else []
+    threads = [threading.Thread(target=runner, args=t, daemon=True) for t in timed]
+    for t in threads:
+        t.start()
+    args = ["--play", a.title, "--until", f"first-frame+{a.secs}", "--quiet", "--wait", str(a.secs + 300), *ui_args, *anyb]
+    args += ["--pad"] if any(n.startswith("pad:") for _, n, _ in timed) else []
     args += ["--settings", f"{a.title}:{a.settings}"] if a.settings else []
     follow = device_log(out, a.secs + 400) if settings.get("metalValidation") else None
     r = ui(os.path.join(out, "run"), *args, on_line=on_line)
     done.set()
+    for t in threads:   # a hook still running (a capture, a trace) finishes before the result
+        t.join(timeout=900)
     if follow:
         time.sleep(3)
         follow.terminate()
@@ -340,6 +374,145 @@ def cmd_capture(a):
                          report=os.path.join(a.out, "capture.txt"), **extra)
     return ev.result(bool(r.get("ok")), 0, out=a.out, capture=local, report=os.path.join(a.out, "capture.txt"),
                      bundle_gb=round(pulled[1] / 1e9, 2), **extra)
+
+
+NEVER_FRAME = 999999
+
+
+def cmd_live(a):
+    """A play with Metal's capture layer from launch; at --capture, gpucapture takes the frame
+    (or the command buffers) from the running game into this Mac's run directory; at
+    --trace, xctrace records the phone. Then pp gpu profile of the capture with --profile."""
+    import apple
+    why = apple.require()
+    if why:
+        return phonelib.fail(phonelib.Events(a.out), "pp gpu live: " + why)
+    ev = phonelib.Events(a.out)
+    log = os.path.join(a.out, "apple-tools.txt")
+    hooks, made = [], {}
+    with phonelib.device_lock("pp gpu live", events=ev, expect_s=a.secs + 300):
+        device = None
+        if a.capture:
+            device, name = apple.ensure_agent(ev)
+
+            def take(_pid):
+                pid = None
+                for _ in range(20):
+                    pid = apple.capturable(device)
+                    if pid:
+                        break
+                    time.sleep(3)
+                if not pid:
+                    raise phonelib.PhoneError("Playport is not capturable (gpucapture list): did it start with "
+                                              "the capture layer?")
+                rows = apple.boundaries(pid, device, log)
+                b = apple.pick_boundary(rows, a.boundary)
+                ev("boundary", pid=pid, **b, of=[(r["id"], r["type"], r["label"]) for r in rows])
+                path = os.path.join(a.out, f"live-{b['type'].lower()}{b['id']}-x{a.count}.gputrace")
+                t = time.monotonic()
+                made["capture"] = apple.capture(pid, device, b["id"], a.count, path, log, unused=a.unused)
+                return {"capture": path, "secs": round(time.monotonic() - t, 1)}
+            hooks.append((when_of(a.capture), "capture", take))
+        if a.trace:
+            def trace(_pid):
+                slug = re.sub(r"[^a-z0-9]+", "-", a.trace.lower()).strip("-")
+                path = os.path.join(a.out, f"{slug}.trace")
+                made["trace"] = apple.xctrace_record(a.trace, a.trace_secs, path, log)
+                return {"trace": path}
+            hooks.append((when_of(a.trace_at), "trace", trace))
+        # Metal's capture layer refuses a device with a Metal 4 counter heap; KosmicKrisp makes
+        # none while its own capture is armed (patches/mesa 0044), so arm it at a frame no play
+        # reaches. DXMT then waits for that frame too.
+        settings = {"gpuCaptureFrame": NEVER_FRAME, "passProfile": "false", "metalValidation": "off"} \
+            if a.capture else {}
+        r = play(a, ev, a.out, settings, hooks=hooks, ui_args=["--capture-layer"] if a.capture else [])
+    extra = {}
+    if a.trace and made.get("trace"):
+        extra["trace_toc"] = trace_toc(made["trace"], a.out, log)
+    if a.capture and made.get("capture") and a.profile:
+        with phonelib.device_lock("pp gpu live: profile", events=ev, expect_s=1800):
+            extra.update(profile(made["capture"], device, a.out, ev, a.gpu_state, execution=a.execution))
+    missing = [k for k in ("capture", "trace") if getattr(a, k) and not made.get(k)]
+    ok = bool(r.get("ok")) and not missing
+    return ev.result(ok, 0 if ok else 1, out=a.out, **made, **extra,
+                     **({"why": f"no {' or '.join(missing)} was made ({log})"} if missing else {}))
+
+
+def trace_toc(path, out, log):
+    """The trace's table of contents (xctrace export --toc), beside it."""
+    toc = os.path.join(out, os.path.basename(path)[:-6] + "-toc.xml")
+    import apple
+    with open(toc, "w") as f:
+        f.write(apple.run(["xcrun", "xctrace", "export", "--input", path, "--toc"], 600, check=False, log=None))
+    return toc
+
+
+def profile(trace, device, out, ev, gpu_state="default", wait=1800, execution="serial"):
+    """gpudebug replays TRACE on the phone and profiles it, embedding the profile in the trace;
+    then reads it back without the phone: profile.txt (the frame's encoders by GPU time, each
+    with its counters' means: occupancy, ALU, limiters, bandwidth), profile.json and the raw
+    series under profile/."""
+    import apple
+    log = os.path.join(out, "apple-tools.txt")
+    t0 = time.monotonic()
+    with apple.Session(trace, device, os.path.join(out, "fetched"), log) as s:
+        st = {}
+        while time.monotonic() - t0 < wait:
+            st = s.status()
+            if (st.get("replayer") or {}).get("state") not in ("loading", "preparing", None):
+                break
+            time.sleep(10)
+        ev("replayer", session=s.id, status=st, after_s=round(time.monotonic() - t0))
+        opts = (f" --gpu-state {gpu_state}" if gpu_state != "default" else "") \
+            + f" --exec {execution}"
+        said = apple.json_lines(s.cmd(f"profile run{opts} --embed", secs=wait))
+        ev("profiled", said=said[-1:], after_s=round(time.monotonic() - t0))
+    return read(trace, out, ev)
+
+
+def read(trace, out, ev):
+    """profile.txt and profile.json from TRACE's embedded profile (no phone)."""
+    import apple
+    log = os.path.join(out, "apple-tools.txt")
+    encoders, series = apple.read_profile(trace, out, log)
+    if not encoders:
+        raise phonelib.PhoneError(f"{trace} has no embedded profile with an encoder timeline ({log})")
+    text, rows = apple.profile_report(trace, encoders, series)
+    with open(os.path.join(out, "profile.txt"), "w") as f:
+        f.write(text)
+    with open(os.path.join(out, "profile.json"), "w") as f:
+        json.dump(rows, f, indent=1)
+    ev("profile", encoders=len(rows), counters=len(series))
+    return {"profile": os.path.join(out, "profile.txt"), "encoders": len(rows), "counters": len(series)}
+
+
+def cmd_profile(argv):
+    p = argparse.ArgumentParser(prog="pp gpu profile",
+                                description="replay a .gputrace on the phone and profile it (a Mac: gpudebug)")
+    p.add_argument("trace")
+    p.add_argument("--gpu-state", default="default", choices=("default", "low", "medium", "high"))
+    p.add_argument("--exec", dest="execution", default="serial", choices=("serial", "overlapping"),
+                   help="replay the encoders one at a time (default: an overlapping replay of The Witcher 3's "
+                        "frame left its 161-encoder command buffer untimed) or overlapping")
+    p.add_argument("--read", action="store_true",
+                   help="only read the profile already embedded in TRACE (no phone, no replay)")
+    p.add_argument("--out", help="the run directory (default $PLAYPORT_BUILD/gpu-runs/<time>)")
+    a = p.parse_args(argv)
+    import apple
+    a.out = phonelib.run_dir("gpu-runs", a.out)
+    ev = phonelib.Events(a.out)
+    why = apple.require()
+    if why:
+        return phonelib.fail(ev, "pp gpu profile: " + why)
+    try:
+        if a.read:
+            return ev.result(True, 0, out=a.out, **read(os.path.abspath(a.trace), a.out, ev))
+        with phonelib.device_lock("pp gpu profile", events=ev, expect_s=1800):
+            device, _ = apple.ensure_agent(ev)
+            extra = profile(os.path.abspath(a.trace), device, a.out, ev, a.gpu_state, execution=a.execution)
+    except phonelib.PhoneError as e:
+        return phonelib.fail(ev, str(e))
+    return ev.result(True, 0, out=a.out, **extra)
 
 
 def finish(out, log, validation, pass_prof):
@@ -401,6 +574,7 @@ def common(p):
     p.add_argument("--pad", action="append", default=[], metavar="[first-frame+]SECS:SCRIPT",
                    help="push SCRIPT (a tools/pad/ name or file) this long after launch or the first frame")
     p.add_argument("--out", help="the run directory (default $PLAYPORT_BUILD/gpu-runs/<time>)")
+    p.add_argument("--any-build", action="store_true", help="drive whatever the phone has installed (pp ui)")
     p.add_argument("--settings", metavar="JSON",
                    help="the title's launch settings for this play, as pp ui --settings: "
                         "'{\"graphics\":\"vulkan\"}' captures KosmicKrisp's frame (patches/mesa 0017)")
@@ -422,7 +596,9 @@ def main(argv):
         return passprof.main(rest)
     if sub == "names":
         return cmd_names(rest)
-    if sub not in ("capture", "validate"):
+    if sub == "profile":
+        return cmd_profile(rest)
+    if sub not in ("capture", "validate", "live"):
         print(f"pp gpu: no subcommand {sub} (pp gpu --help)", file=sys.stderr)
         return 2
     p = argparse.ArgumentParser(prog=f"pp gpu {sub}")
@@ -432,6 +608,23 @@ def main(argv):
         p.add_argument("--pass-prof", action="store_true", help="GPU time per pass during the same play")
         p.add_argument("--expect-gb", type=float, default=1.0,
                        help=f"the bundle's expected size: the phone must have this much free above {RESERVE_GB:g} GB")
+    elif sub == "live":
+        p.add_argument("--capture", metavar="[first-frame+]SECS", help="when gpucapture takes the capture")
+        p.add_argument("--boundary", default="layer",
+                       help="what one capture iteration is: layer (a present to the next: one frame; "
+                            "default), queue (one command buffer of the busiest queue), device, or a "
+                            "boundary id gpucapture boundaries lists")
+        p.add_argument("--count", type=int, default=1, help="iterations of the boundary (default 1)")
+        p.add_argument("--unused", action="store_true",
+                       help="record every resource, not only those the frame uses (large; may end the game)")
+        p.add_argument("--profile", action="store_true", help="then replay and profile it on the phone")
+        p.add_argument("--gpu-state", default="default", choices=("default", "low", "medium", "high"),
+                       help="the GPU performance state the profile holds (default: the tool's)")
+        p.add_argument("--exec", dest="execution", default="serial", choices=("serial", "overlapping"),
+                       help="the profile's replay: encoders one at a time (default) or overlapping")
+        p.add_argument("--trace", metavar="TEMPLATE", help="an Instruments template to record (xctrace)")
+        p.add_argument("--trace-at", default="first-frame+30", metavar="[first-frame+]SECS")
+        p.add_argument("--trace-secs", type=int, default=20)
     else:
         p.add_argument("--shaders", action="store_true", help="shader validation too")
         p.add_argument("--stop", action="store_true",
@@ -439,10 +632,16 @@ def main(argv):
     a = p.parse_args(rest)
     if sub == "capture" and a.frame <= 0:
         p.error("--frame must be positive")
+    if sub == "live":
+        if not (a.capture or a.trace):
+            p.error("--capture WHEN, --trace TEMPLATE or both")
+        for w in (a.capture, a.trace_at if a.trace else None):
+            if w and when_of(w) is None:
+                p.error(f"{w!r}: want [first-frame+]SECS")
     a.secs = a.secs if a.secs is not None else (0 if sub == "capture" else 60)
     a.out = phonelib.run_dir("gpu-runs", a.out)
     try:
-        return cmd_capture(a) if sub == "capture" else cmd_validate(a)
+        return {"capture": cmd_capture, "validate": cmd_validate, "live": cmd_live}[sub](a)
     except phonelib.PhoneError as e:
         return phonelib.fail(phonelib.Events(a.out), str(e))
 

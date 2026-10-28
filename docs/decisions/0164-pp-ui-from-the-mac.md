@@ -1,7 +1,8 @@
 # 0164: `pp ui` may drive the phone from the Mac
 
 **Status:** accepted, 2026-10-28, by the owner at the start of the Mac session
-(PLA-457). Amends [0031](0031-a-mac-for-analysis-only.md).
+(PLA-457). Amends [0031](0031-a-mac-for-analysis-only.md). Amended by
+[0165](0165-pp-drives-apples-gpu-tools-on-a-mac.md): `pp gpu live` and `pp gpu profile` run on the Mac too.
 
 ## Decision
 
