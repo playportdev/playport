@@ -208,9 +208,10 @@ Notes:
 
 ## On a Mac
 
-**Status:** plan; nothing here has been tried on a Mac.
-[Decision 0031](decisions/0031-a-mac-for-analysis-only.md) (proposed) bounds
-it and must be accepted first. When the person says "we are on a Mac", start
+**Status:** first session under way (PLA-457).
+[Decision 0031](decisions/0031-a-mac-for-analysis-only.md) (accepted) bounds
+it; [0164](decisions/0164-pp-ui-from-the-mac.md) lets `pp ui` drive the phone
+from the Mac. When the person says "we are on a Mac", start
 with [Arrival checks](#arrival-checks). Then offer the [agenda](#agenda) in
 order, skipping what [Open questions](#open-questions) already answers.
 
@@ -255,9 +256,9 @@ Apple's command-line tools need macOS 27:
   `which gpucapture gpudebug metalperftrace`).
 - **The phone:** cabled and trusted (`xcrun devicectl list devices`).
   Xcode may mount its own developer disk image; the phone stays on its iOS.
-- **Playport:** the build `pp phone status` reports on Linux. The phone keeps
-  its network connection to the workstation, so `pp ui` can still drive Play
-  (untested with a cable to the Mac); otherwise the person taps Play.
+- **Playport:** the build `pp phone status` reports. `pp ui` drives Play from
+  the Mac ([0164](decisions/0164-pp-ui-from-the-mac.md)); otherwise the person
+  taps Play.
 - **Never Run, Install, Profile-from-scheme or Uninstall Playport from
   Xcode.** They replace the app or delete its container: the Wine prefix,
   the Steam session and the games. Only attach, record and replay; launches

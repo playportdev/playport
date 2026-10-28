@@ -1,9 +1,10 @@
 # 0031: A Mac may be used to analyse, never to build or install
 
-**Status:** proposed, 2026-09-29. Not accepted. Until it is,
-[0002](0002-linux-only-build.md) holds unchanged and no Mac is used.
+**Status:** proposed 2026-09-29; accepted 2026-10-28 by the owner for the
+Mac session of PLA-457. Amended by [0164](0164-pp-ui-from-the-mac.md): `pp ui`
+may drive the phone from the Mac.
 
-## Decision (proposed)
+## Decision
 
 A Mac borrowed for a session, Apple silicon with macOS 27 and Xcode 27, may
 analyse what Playport does on the phone, with Apple's tools:
