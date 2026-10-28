@@ -254,7 +254,10 @@ The host test also links `kk-cmd-pool-test.c` to the mock driver's own archives:
 large command BOs survive reset and reuse without residency changes, remain
 exclusive to live recordings, and are released by trim, release-resources pool
 reset and destruction. It checks the 256 KiB–16 MiB classes, oversize bypass,
-64 MiB per-pool idle-byte cap, LRU eviction and allocation-error handling.
+64 MiB per-pool idle-byte cap, LRU eviction and allocation-error handling. It
+also records a depth and a stencil `vkCmdCopyImage2` from a 1300x600
+`D32_SFLOAT_S8_UINT` image into colour, and checks that the staging BO is sized
+by the copied aspect (4 MiB and 1 MiB classes, PLA-463).
 After rebuilding the mock driver, rerun just this check with
 `python3 build/mesa-host-test/run-cmd-pool-test.py .work/run/mesa/hosttest/build`.
 This is a CPU-side lifetime regression, not Vulkan CTS or a GPU/performance test.

@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Exercise real kk_pool_alloc and Vulkan command-buffer/pool lifetimes on
- * mock Metal. Link the driver's archives to observe private state. No copy
+ * mock Metal, and the staging size of a depth/stencil-to-colour image copy. Link the driver's archives to observe private state. No copy
  * of the pooling algorithm, and no GPU execution is claimed.
  */
 #include "kk_cmd_buffer.h"
@@ -79,6 +79,93 @@ expect_pooled(uint64_t bytes, unsigned count)
    assert(p->large_free_bytes == bytes);
    assert(p_atomic_read(&kk_memory_stats.bo_bytes[KK_BO_KIND_COMMAND_POOL]) == bytes);
    assert(p_atomic_read(&kk_memory_stats.bo_count[KK_BO_KIND_COMMAND_POOL]) == count);
+}
+
+static VkImage
+image(VkFormat format, VkImageUsageFlags usage, VkDeviceMemory *memory)
+{
+   const VkImageCreateInfo ci = {
+      .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+      .imageType = VK_IMAGE_TYPE_2D, .format = format,
+      .extent = {1300, 600, 1}, .mipLevels = 1, .arrayLayers = 1,
+      .samples = VK_SAMPLE_COUNT_1_BIT, .tiling = VK_IMAGE_TILING_OPTIMAL,
+      .usage = usage | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+   };
+   VkImage handle;
+   CHECK(kk_CreateImage(device, &ci, NULL, &handle));
+   const VkImageMemoryRequirementsInfo2 ri = {
+      .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_REQUIREMENTS_INFO_2,
+      .image = handle,
+   };
+   VkMemoryRequirements2 mr = {.sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2};
+   kk_GetImageMemoryRequirements2(device, &ri, &mr);
+   const VkMemoryAllocateInfo mai = {
+      .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+      .allocationSize = mr.memoryRequirements.size,
+      .memoryTypeIndex = __builtin_ctz(mr.memoryRequirements.memoryTypeBits),
+   };
+   CHECK(kk_AllocateMemory(device, &mai, NULL, memory));
+   const VkBindImageMemoryInfo bi = {
+      .sType = VK_STRUCTURE_TYPE_BIND_IMAGE_MEMORY_INFO,
+      .image = handle, .memory = *memory,
+   };
+   CHECK(kk_BindImageMemory2(device, 1, &bi));
+   return handle;
+}
+
+/* The Witcher 3 copies the depth of its 1300x600 D32_SFLOAT_S8_UINT target
+ * into an R32_SFLOAT image every frame. Metal has no colour view of a depth
+ * texture, so it goes through a buffer, which holds the depth alone (4 bytes
+ * a texel, 3,120,000 B): a 4 MiB command BO, not the 8 MiB the 8-byte
+ * depth/stencil format would size. A stencil aspect is 1 byte a texel. */
+static void
+check_depth_to_colour_copy(void)
+{
+   VkDeviceMemory memory[3];
+   VkImage ds = image(VK_FORMAT_D32_SFLOAT_S8_UINT,
+                      VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, &memory[0]);
+   VkImage r32 = image(VK_FORMAT_R32_SFLOAT, VK_IMAGE_USAGE_SAMPLED_BIT, &memory[1]);
+   VkImage r8 = image(VK_FORMAT_R8_UINT, VK_IMAGE_USAGE_SAMPLED_BIT, &memory[2]);
+   const struct {
+      VkImage dst;
+      VkImageAspectFlags aspect;
+      uint64_t bo_size;
+   } cases[] = {
+      {r32, VK_IMAGE_ASPECT_DEPTH_BIT, 4u << 20},
+      {r8, VK_IMAGE_ASPECT_STENCIL_BIT, 1u << 20},
+   };
+   for (unsigned i = 0; i < 2; i++) {
+      const VkImageCopy2 region = {
+         .sType = VK_STRUCTURE_TYPE_IMAGE_COPY_2,
+         .srcSubresource = {cases[i].aspect, 0, 0, 1},
+         .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+         .extent = {1300, 600, 1},
+      };
+      const VkCopyImageInfo2 info = {
+         .sType = VK_STRUCTURE_TYPE_COPY_IMAGE_INFO_2,
+         .srcImage = ds, .srcImageLayout = VK_IMAGE_LAYOUT_GENERAL,
+         .dstImage = cases[i].dst, .dstImageLayout = VK_IMAGE_LAYOUT_GENERAL,
+         .regionCount = 1, .pRegions = &region,
+      };
+      begin(1);
+      kk_CmdCopyImage2(commands[1], &info);
+      struct kk_cmd_buffer *cmd = kk_cmd_buffer_from_handle(commands[1]);
+      assert(!list_is_empty(&cmd->large_bos));
+      if (last_bo(1)->bo->size_B != cases[i].bo_size) {
+         fprintf(stderr, "copy aspect 0x%x: staging BO %" PRIu64 ", expected %" PRIu64 "\n",
+                 cases[i].aspect, last_bo(1)->bo->size_B, cases[i].bo_size);
+         abort();
+      }
+      CHECK(kk_EndCommandBuffer(commands[1]));
+      reset(1);
+      trim(); /* the next case must not reuse this BO */
+   }
+   kk_DestroyImage(device, ds, NULL);
+   kk_DestroyImage(device, r32, NULL);
+   kk_DestroyImage(device, r8, NULL);
+   for (unsigned i = 0; i < 3; i++)
+      kk_FreeMemory(device, memory[i], NULL);
+   puts("ok copy image: a depth or stencil aspect into colour stages in its own format's size");
 }
 
 int
@@ -286,6 +373,9 @@ main(void)
    assert(kk_EndCommandBuffer(commands[1]) == VK_ERROR_OUT_OF_DEVICE_MEMORY);
    reset(1);
    puts("ok command pool: implicit Begin reset, free/reallocate, best fit, OOM cache eviction/retry and error latch");
+
+   trim();
+   check_depth_to_colour_copy();
 
    /* Destruction includes both active and already pooled allocations. */
    begin(1);
