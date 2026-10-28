@@ -1,6 +1,7 @@
 # 0162: The Witcher 3's compatibility default compiles x86 PAUSE to WFE
 
-**Status:** accepted, 2026-10-28, in an unattended session the owner asked to raise The Witcher 3's
+**Status:** superseded by [0163](0163-the-witcher-3-keeps-yield.md) the same day: WFE's frame rate came with
+five times the frames over 150 ms. Was accepted, 2026-10-28, in an unattended session the owner asked to raise The Witcher 3's
 frame rate (PLA-455). Amends the `app-292030` entry of [0074](0074-per-title-compatibility-defaults.md)'s
 table. Revisit if a person's play shows input lag or a stall, or if another title is measured with it.
 

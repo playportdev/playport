@@ -1,16 +1,29 @@
-# The Witcher 3 4.x: PAUSE as WFE gives about 9 % more frames once the phone is warm (PLA-455)
+# The Witcher 3 4.x: PAUSE as WFE raises the mean frame rate 4–9 % but multiplies long frames; resolution is the lever on a hot phone (PLA-455)
 
 **Linear:** [PLA-455](https://linear.app/playportdev/issue/PLA-455) (this work);
 [PLA-43](https://linear.app/playportdev/issue/PLA-43) (the title); [PLA-452](https://linear.app/playportdev/issue/PLA-452)
 (the short reservations that let the 4.x build reach gameplay).
 **Question:** what limits The Witcher 3's 4.x build (D3D12 through vkd3d-proton and KosmicKrisp) in sustained
 play, and what can Playport change to raise its frame rate?
-**Result:** after about 55 s of play the SoC's power clamp parks the P cores, and the game runs on E cores at
-1.2–1.3 GHz. The busiest thread spins: it waits for work with `pause` and QueryPerformanceCounter. `patches/fex`
-0083 adds `MADEIRA_FEX_PAUSE=wfe`, which compiles x86 PAUSE to WFE rather than YIELD. With it the steady frame rate
-rises from **22.4 to 24.4 fps (+8.7 %)**, and the whole run's p10 from 21.6 to 23.2 fps. It comes with a higher E-core
-clock: 1.23 → 1.56 GHz. It is now The Witcher 3's compatibility default (decision
-[0162](../decisions/0162-the-witcher-3-pause-as-wfe.md)).
+**Result:**
+- **The clamp.** After about 55 s of play the SoC's power clamp parks the P cores, and the game runs on E cores
+  at 1.2–1.3 GHz.
+- **The spinning thread.** The busiest thread waits for work with `pause` and QueryPerformanceCounter.
+- **WFE raises the mean, not the tail.** `patches/fex` 0083 adds `MADEIRA_FEX_PAUSE=wfe`, which compiles x86
+  PAUSE to WFE rather than YIELD.
+  - Rested: the steady mean rises from 22.4 to 24.4 fps (+8.7 %).
+  - Hot: +4 % at 1564x720 and +9 % at 1302x600.
+  - But frames over 150 ms rise about five-fold, and p99 from 100–117 to 150–183 ms on a hot phone
+    ([§ 6](#6-hitches-wfe-trades-them-for-frame-rate)).
+  - Decision [0162](../decisions/0162-the-witcher-3-pause-as-wfe.md) made WFE the default on the mean.
+    [0163](../decisions/0163-the-witcher-3-keeps-yield.md) withdrew it the same day on the tail.
+- **Resolution helps on a hot phone.** 1302x600 against 1564x720 gives +15 % fps (GPU 44 → 32 ms), but no fewer
+  hitches ([§ 7](#7-a-hot-phone-and-the-games-resolution)).
+
+**Resolution caveat.** From the `w3-s600` experiment on, the game kept the 1302x600 it chose under Playport's
+600-row screen: it saves its own resolution (`dx12user.settings`). So every run in §§ 3–4 rendered at 1302x600,
+not 1564x720 (`[kk-wsi] create chain` in each run's `this-launch.log`). Comparisons within a table hold; the
+screen-600 arm of § 4 is void.
 
 Phone: iPhone18,4, iOS 27.0.1, `dev.playport.app`, unattended. Nobody played; every run is `pp perf`:
 
@@ -93,13 +106,80 @@ wait. Even so:
 - the clamp lets the E cluster run 27 % faster;
 - the GPU is busier (83–84 % against 77–79 %).
 
-## 4. What this does not show
+## 4. GPU levers under WFE (no gain)
+
+Same method, IPA `dd35dc62` (WFE by default), interleaved S, N, D twice, all at the game's saved 1302x600:
+
+| Arm | Runs | fps | GPU ms |
+| --- | --- | --- | --- |
+| Defaults (WFE) | D1 23.93, D2 24.57 | 24.25 | 29.7 |
+| Screen 600 rows (`{"screen":"600"}`, drawable 1302x600) | S1 23.44, S2 24.22 | 23.83 | 30.0 |
+| `MESA_KK_EXPERIMENTAL=no_fp_preserve` | N1 23.64, N2 24.59 | 24.12 | 29.9 |
+
+**`no_fp_preserve` moves nothing.** The screen arm compares 1302x600 with 1302x600 (the caveat above), so it
+says nothing about resolution: § 7 measures that.
+
+**Where the CPU time goes now.** A `--cpu-prof` run under WFE (`w3y-D2prof`) shows where the threads spend it:
+- RenderDispatcher1/2 spend about 21 % of all samples each waiting on D3D12 fences (WFE time counts as samples);
+- their own command recording is 6–9 % each;
+- the main thread is 12 %.
+
+With the GPU 83 % busy at about 30 ms of a 41 ms frame, the frame is now mostly the throttled GPU's.
+
+## 5. A capture of the frame
+
+`pp gpu capture --frame 3600` (`.work/perf/w3-capture`, 3.5 GB, IPA `dd35dc62`) shows the frame's shape:
+- 20 command buffers, 200 passes and 1,822 draws.
+- In the main 1300x600 pass, about 40 render passes of one draw each are split by 15 KB buffer copies.
+  `CopyBufferRegion` ends the Vulkan rendering, so each split stores and reloads colour and depth.
+- The copies cycle through an 8-slot ring.
+
+Filed as PLA-456, which has research on what could merge them. The pass costs need a Mac replay (PLA-457).
+
+## 6. Hitches: WFE trades them for frame rate
+
+Frame intervals from `hitches.txt`, +60 to +150 s. The hot runs are back to back with no rest
+(`w3h-*`, `w3h6-*`), the arms alternating after one unscored warm-up run, on external power at 80 % (not charging):
+
+| Condition | Arm | Runs | fps | > 100 ms | > 150 ms | p99 ms | max ms |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Rested, battery, 1302x600 | YIELD | A2–A4, Y2, Y3, YC1 | 22.43 | 17–24 | 1–6 | | |
+| | WFE | W1–W4, D1, D3, DC1 | 24.38 | 45–73 | 6–16 | | |
+| Hot, 1564x720 | YIELD | w3h-Y1–Y3 | 17.07 | 34–99 | 3–4 | 108–117 | 167–325 |
+| | WFE | w3h-D1–D3 | 17.76 | 105–128 | 18–26 | 158–175 | 367–600 |
+| Hot, 1302x600 | YIELD | w3h6-Y1, Y2 | 18.78 | 52–149 | 4–8 | 100–117 | 183–450 |
+| | WFE | w3h6-D1, D2 | 20.45 | 124–145 | 23–27 | 150–183 | 417–458 |
+
+**What it shows.**
+- **WFE multiplies the worst frames.** It gives about five times the frames over 150 ms in every condition, and
+  a p99 about 50 ms longer.
+- **A likely cause, not confirmed.** A thread waiting in WFE counts as running: RenderDispatcher1/2 go from 25 %
+  to 78 % CPU. With the P cores parked, the main thread probably waits for one of the four E cores. A
+  thread-placement trace in Instruments (PLA-457) would show it.
+- **YIELD's own tail is poor too.** On a hot phone it is still 34–149 frames over 100 ms per 90 s.
+
+## 7. A hot phone and the game's resolution
+
+Hot, back to back, WFE (the default then), IPA `dd35dc62`:
+
+| Resolution | Runs | fps | GPU ms | > 100 ms | > 150 ms |
+| --- | --- | --- | --- | --- | --- |
+| 1564x720 | w3h-D1–D3 | 17.76 | 44 | 105–128 | 18–26 |
+| 1302x600 (`{"screen":"600"}`, then the game keeps it) | w3h-S1–S3, D4 | 20.47 | 32–33 | 109–143 | 9–27 |
+
+- **Resolution is a real lever on a hot phone:** +15 % fps and 12 ms less GPU time a frame.
+- **It does not reduce the hitches.** So the long frames are not the GPU's.
+- **Not ordered.** The 1302x600 runs came after the 1564x720 ones, not interleaved; the phone was already hot for
+  both.
+
+## 8. What this does not show
 
 - **Other places.** It was measured only in the Kaer Morhen bedroom, about 150 s a run, with no fights and no
   outdoor scenes.
 - **Other titles.** Every other title keeps YIELD. RDR2, Hollow Knight and the DXMT titles are not measured
   with WFE.
 - **ISB.** It does not help: it keeps the core awake.
+- **Hitches by eye.** The interval counts are the app's present intervals; nobody judged the stutter in play.
 - **Graphics memory.** The owner's earlier play ended at +128 s with vkd3d-proton
   `Committed resource failed` (E_OUTOFMEMORY) and the game's own fatal exit (`.work/agent-notes/pla-452/owner-log2`).
   None of these stationary runs hit it. `patches/mesa` 0127 logs its cause the next time.
