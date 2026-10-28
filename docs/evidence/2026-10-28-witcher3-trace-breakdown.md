@@ -8,8 +8,8 @@ sub-issues); [PLA-459](https://linear.app/playportdev/issue/PLA-459) (the lighti
 Witcher 3's (app-292030) CPU threads, its graphics memory and the GPU, beyond the per-encoder profile? Which
 of those can Playport change?
 **Result:**
-- **CPU-bound under the trace.** All four E cores ran 100 % of the window, and the S cores took no samples
-  (5 % of a sample). The GPU was busy 39 % of the time (21.6 ms of GPU work per 53.7 ms frame, 18.7 fps).
+- **CPU-bound under the trace.** All four E cores ran 100 % of the window, and the S cores took 0.1 % of
+  the samples (62). The GPU was busy 39 % of the time (21.6 ms of GPU work per 53.7 ms frame, 18.7 fps).
   The tools themselves took about 13 % of the CPU (`DTServiceHub`, `remotepairingdeviced`), so the CPU has
   little headroom. Without them, `pp perf` shows the GPU 77–84 % busy ([witcher3-perf](2026-10-28-witcher3-perf.md)).
 - **The game's main thread spends 38 % of its samples in Wine host code it does not need.** 27 % goes to
