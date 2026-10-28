@@ -1,0 +1,125 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 27 Oct 2026 23:52:46 +0100
+Subject: [PATCH] ARM64EC: MADEIRA_FEX_PAUSE=wfe or isb, what x86 PAUSE
+ compiles to on iOS
+
+FEX compiles PAUSE (REP NOP) to YIELD, which Apple's cores treat as a
+NOP, so a guest spin-wait loop runs at full rate. The Witcher 3's
+4.x render thread waits for the main thread's commands in such a loop
+(up to 5 ms of PAUSE and QueryPerformanceCounter per wait,
+witcher3.exe+0x1c69ae0): in a throttled play it is the busiest thread,
+a whole E core, 26 % of all CPU samples inside
+RtlQueryPerformanceCounter, power the GPU and the main thread could use.
+
+MADEIRA_FEX_PAUSE=wfe compiles PAUSE to WFE, which lets the core wait
+for the next event; =isb to ISB, a short pipeline flush. Unset or
+anything else keeps YIELD. The frontend sets IosPauseMode at process
+init, before any code is compiled, and logs "FEX: pause mode=";
+IosCodegenSwitches.h keys the disk cache on the variable, so a block
+cached under one mode never runs under another.
+
+Linear: PLA-455
+Class: feature
+Evidence: docs/evidence/2026-10-28-witcher3-perf.md
+Offered-upstream: no; the switch is Playport's iOS host's
+---
+ .../Interface/Core/ArchHelpers/Arm64Emitter.cpp       |  1 +
+ .../Source/Interface/Core/ArchHelpers/Arm64Emitter.h  | 11 +++++++++++
+ FEXCore/Source/Interface/Core/IosCodegenSwitches.h    |  1 +
+ FEXCore/Source/Interface/Core/JIT/MiscOps.cpp         | 11 +++++++++++
+ Source/Windows/ARM64EC/Module.cpp                     |  6 ++++++
+ 5 files changed, 30 insertions(+)
+
+diff --git a/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.cpp b/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.cpp
+index d6932ae..9d158c4 100644
+--- a/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.cpp
++++ b/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.cpp
+@@ -28,6 +28,7 @@
+ extern "C" uint32_t IosEcReturnWithRet = 0;
+ extern "C" uint32_t IosEcCallRetPop = 0;
+ extern "C" uint32_t IosRdtscSelfSync = 0;
++extern "C" uint32_t IosPauseMode = 0;
+ extern "C" uint32_t IosFexBatch2 = 0;
+ extern "C" uint32_t IosAfpOffFpcr = 0;
+ #endif
+diff --git a/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.h b/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.h
+index 968f433..cd82bb3 100644
+--- a/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.h
++++ b/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.h
+@@ -123,6 +123,17 @@ extern "C" uint32_t IosEcCallRetPop;
+ // thread's reads never go back (MADEIRA_X64_QPC_FASTPATH=1, whose x64 QueryPerformanceCounter stub in
+ // ntdll's loader.c counts with RDTSC). Set by the frontend before any code is compiled; 0 is FEX's RDTSC.
+ extern "C" uint32_t IosRdtscSelfSync;
++// Playport: what x86 PAUSE (REP NOP) compiles to (MADEIRA_FEX_PAUSE, set by the frontend before any code is
++// compiled; the disk cache keys on the variable, IosCodegenSwitches.h). 0 is FEX's YIELD, which Apple's cores
++// treat as a NOP, so a guest spin-wait loop runs flat out; 1 is WFE, which lets the core wait for the next
++// event (another core's SEV or store to a monitored line, an interrupt, the generic timer's event stream);
++// 2 is ISB, a pipeline flush, as a short delay that keeps the core awake.
++enum IosPauseMode : uint32_t {
++  IOS_PAUSE_YIELD = 0,
++  IOS_PAUSE_WFE = 1,
++  IOS_PAUSE_ISB = 2,
++};
++extern "C" uint32_t IosPauseMode;
+ // Playport: the MADEIRA_FEX_BATCH2=1 items, one bit each, set by the frontend at process init (Module.cpp),
+ // less those named in MADEIRA_FEX_BATCH2_SKIP; 0 is the behaviour without them.
+ enum IosFexBatch2Bits : uint32_t {
+diff --git a/FEXCore/Source/Interface/Core/IosCodegenSwitches.h b/FEXCore/Source/Interface/Core/IosCodegenSwitches.h
+index 6a7458e..a59c815 100644
+--- a/FEXCore/Source/Interface/Core/IosCodegenSwitches.h
++++ b/FEXCore/Source/Interface/Core/IosCodegenSwitches.h
+@@ -16,6 +16,7 @@ inline constexpr const char* IosCodegenSwitchNames[] = {
+   "MADEIRA_FEX_AFPOFF_FPCR",  // IosAfpOffFpcr: SetRoundingMode, FillStaticRegs
+   "MADEIRA_NO_DFE",           // PassManager: no DeadFlagCalculationElimination
+   "FEX_TRACE_RIP",            // CompileBlock: a Print at each listed 32-bit address
++  "MADEIRA_FEX_PAUSE",        // IosPauseMode: what x86 PAUSE compiles to
+ };
+ 
+ // Appends "name=value" and a NUL for each switch GetEnv(name) finds set, in IosCodegenSwitchNames
+diff --git a/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp b/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp
+index 4a89468..c756cfd 100644
+--- a/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp
++++ b/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp
+@@ -363,6 +363,17 @@ DEF_OP(RDRAND) {
+ }
+ 
+ DEF_OP(Yield) {
++#if defined(FEX_IOS_HOST) && defined(ARCHITECTURE_arm64ec)
++  // Playport: MADEIRA_FEX_PAUSE (IosPauseMode in Arm64Emitter.h).
++  if (IosPauseMode == IOS_PAUSE_WFE) {
++    wfe();
++    return;
++  }
++  if (IosPauseMode == IOS_PAUSE_ISB) {
++    isb();
++    return;
++  }
++#endif
+   yield();
+ }
+ 
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index 3a95eed..cb8487e 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -96,6 +96,7 @@ extern "C" uint64_t IosFfsBypassLog[4];
+ extern "C" uint32_t IosEcReturnWithRet;
+ extern "C" uint32_t IosEcCallRetPop;
+ extern "C" uint32_t IosRdtscSelfSync;
++extern "C" uint32_t IosPauseMode;
+ extern "C" uint32_t IosFexBatch2;
+ extern "C" uint32_t IosAfpOffFpcr; // Arm64Emitter.h: 0 none, 1 fiz, 2 ah, 3 ahx
+ extern "C" int IosAliasGranulesEnable(void);
+@@ -1452,6 +1453,11 @@ NTSTATUS ProcessInit() {
+     const char* QpcOpt = getenv("MADEIRA_X64_QPC_FASTPATH");
+     IosRdtscSelfSync = QpcOpt && strcmp(QpcOpt, "1") == 0;
+     LogMan::Msg::IFmt("FEX: rdtsc-self-sync enabled={}", IosRdtscSelfSync != 0);
++    /* Playport: MADEIRA_FEX_PAUSE=wfe or isb: what x86 PAUSE compiles to (IosPauseMode in Arm64Emitter.h);
++     * unset or anything else keeps FEX's YIELD. Set before any code is compiled. */
++    const char* PauseOpt = getenv("MADEIRA_FEX_PAUSE");
++    IosPauseMode = PauseOpt && strcmp(PauseOpt, "wfe") == 0 ? 1 : PauseOpt && strcmp(PauseOpt, "isb") == 0 ? 2 : 0;
++    LogMan::Msg::IFmt("FEX: pause mode={} ({})", IosPauseMode, PauseOpt ? PauseOpt : "yield");
+     /* Playport: MADEIRA_FEX_BATCH2=1 turns on the IosFexBatch2 items (Arm64Emitter.h), less the ones
+      * MADEIRA_FEX_BATCH2_SKIP names (comma-separated: alias, ffs, dmb, uabp). Off by default. */
+     const char* Batch2Opt = getenv("MADEIRA_FEX_BATCH2");

@@ -46,6 +46,19 @@ class FexCodegenSwitches(unittest.TestCase):
         self.header = new_file(PATCH.read_text(), HEADER)
         listing = self.header.split("IosCodegenSwitchNames[] = {", 1)[1].split("};", 1)[0]
         self.keyed = re.findall(r'"([A-Z0-9_]+)"', listing)
+        # Later patches add their switches to the list as one-line hunks (fex 0083, MADEIRA_FEX_PAUSE).
+        for patch in sorted(PATCHES.glob("*.patch")):
+            if patch == PATCH:
+                continue
+            text = patch.read_text(errors="replace")
+            if f"+++ b/{HEADER}\n" not in text:
+                continue
+            for line in text.split(f"+++ b/{HEADER}\n", 1)[1].splitlines():
+                if line.startswith("diff --git") or line.startswith("-- "):
+                    break
+                m = re.match(r'\+\s*"([A-Z0-9_]+)",', line)
+                if m:
+                    self.keyed.append(m.group(1))
 
     def test_every_patch_variable_is_keyed_or_named(self):
         read = set()
@@ -61,7 +74,7 @@ class FexCodegenSwitches(unittest.TestCase):
 
     def test_append(self):
         self.assertEqual(self.keyed, ["MADEIRA_FEX_EC_RET", "MADEIRA_X64_QPC_FASTPATH", "MADEIRA_FEX_AFPOFF_FPCR",
-                                      "MADEIRA_NO_DFE", "FEX_TRACE_RIP"])
+                                      "MADEIRA_NO_DFE", "FEX_TRACE_RIP", "MADEIRA_FEX_PAUSE"])
         work = REPO / ".work"
         work.mkdir(exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="fex-codegen-switches-", dir=work) as tmp:
