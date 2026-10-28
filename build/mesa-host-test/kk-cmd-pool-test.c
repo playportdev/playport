@@ -269,17 +269,21 @@ main(void)
    trim();
 
    /* An allocation failure discards idle heaps and retries, and a failure
-    * without idle heaps is still latched into vkEndCommandBuffer. */
+    * without idle heaps is still latched into vkEndCommandBuffer. kk_alloc_bo
+    * itself retries once after committing removals the residency set still
+    * holds (PLA-465, kk-residency-test.c), so commit them first. */
    begin(1);
    allocate(1, 200 * 1024, 256 * 1024);
    reset(1);
    begin(1);
+   kk_device_commit_residency_removals(d);
    setenv("KK_MOCK_FAIL_NEXT_HEAP", "1", 1);
    allocate(1, 1u << 20, 1u << 20);
    expect_pooled(0, 0);
    reset(1);
    trim();
    begin(1);
+   kk_device_commit_residency_removals(d);
    setenv("KK_MOCK_FAIL_NEXT_HEAP", "1", 1);
    struct kk_ptr failed = kk_pool_alloc(kk_cmd_buffer_from_handle(commands[1]), 1u << 20, 8);
    assert(!failed.cpu && !failed.gpu);

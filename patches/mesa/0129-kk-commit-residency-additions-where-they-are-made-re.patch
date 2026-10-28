@@ -1,0 +1,486 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Wed, 28 Oct 2026 22:02:01 +0100
+Subject: [PATCH] kk: commit residency additions where they are made, removals
+ in batches
+
+KosmicKrisp committed its one device residency set, and requested its
+residency, at every queue submit. In The Witcher 3's Metal System Trace
+that is 4,666 commits in 15.8 s (16 a frame) on the vkd3d queue threads,
+236 of them over 1 ms, and two of 212 and 229 ms are its two worst
+frames.
+
+On a Mac (M1 Pro, macOS 27.2, a 500-allocation set) a commit after an
+addition costs about 28 us per MiB added, a commit after removals or
+without a change under 3 us, and a removed allocation stays alive, held
+by the set, until the next commit.
+
+So an addition is now committed (and residency requested) where it is
+made, before kk_alloc_bo or an import returns, on the thread that
+allocates. A submit that uses the allocation was called after that, so it
+needs no commit. Removals wait: a submit commits them once they hold
+64 MiB or the oldest is 1 s old, and any addition's commit takes them
+too. That keeps freed memory resident and alive a little longer, never
+an allocation in use too short. A submit does not wait for another
+thread's commit. When Metal gives no heap, kk_alloc_bo commits waiting
+removals, which releases them, and tries once more.
+
+MESA_KK_RESIDENCY=submit restores the commit at every submit, and with
+MESA_KK_BATCH2's residency item the commit only after a change
+(patches/mesa 0091), to compare. MESA_KK_DEBUG=memory logs
+[kk-residency] about once a second: additions, removals and commits in
+the interval, their total and longest time, those over 1 ms, and the
+removals waiting.
+
+Linear: PLA-465
+Class: feature
+Evidence: docs/evidence/2026-10-29-kk-residency-commits.md
+Offered-upstream: not yet
+---
+ src/kosmickrisp/vulkan/kk_bo.c            |  59 ++++++++++-
+ src/kosmickrisp/vulkan/kk_bo.h            |  12 +++
+ src/kosmickrisp/vulkan/kk_debug.c         |   6 ++
+ src/kosmickrisp/vulkan/kk_debug.h         |  11 +-
+ src/kosmickrisp/vulkan/kk_device.c        | 122 +++++++++++++++++++---
+ src/kosmickrisp/vulkan/kk_device.h        |  27 ++++-
+ src/kosmickrisp/vulkan/kk_device_memory.c |   6 +-
+ src/kosmickrisp/vulkan/kk_queue.c         |   4 +-
+ 8 files changed, 220 insertions(+), 27 deletions(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_bo.c b/src/kosmickrisp/vulkan/kk_bo.c
+index 545e446..9961091 100644
+--- a/src/kosmickrisp/vulkan/kk_bo.c
++++ b/src/kosmickrisp/vulkan/kk_bo.c
+@@ -111,6 +111,10 @@ kk_alloc_bo(struct kk_device *dev, struct vk_object_base *log_obj,
+    size_B = align64(size_B, minimum_alignment);
+    mtl_heap *handle =
+       mtl_new_heap(dev->mtl_handle, size_B, KK_MTL_RESOURCE_OPTIONS);
++   /* Playport (PLA-465): freed allocations the residency set still keeps
++    * alive are released by a commit; then try once more */
++   if (handle == NULL && kk_device_commit_residency_removals(dev))
++      handle = mtl_new_heap(dev->mtl_handle, size_B, KK_MTL_RESOURCE_OPTIONS);
+    if (handle == NULL) {
+       kk_bo_report_failure(size_B, "newHeap");
+       result = vk_errorf(log_obj, VK_ERROR_OUT_OF_DEVICE_MEMORY, "%m");
+@@ -140,7 +144,7 @@ kk_alloc_bo(struct kk_device *dev, struct vk_object_base *log_obj,
+    bo->gpu = mtl_buffer_get_gpu_address(map);
+    bo->cpu = mtl_get_contents(map);
+ 
+-   kk_device_add_heap_to_residency_set(dev, handle);
++   kk_device_add_heap_to_residency_set(dev, handle, size_B);
+ 
+    *bo_out = bo;
+    return result;
+@@ -231,6 +235,55 @@ kk_memory_log(struct kk_device *dev)
+ #undef KK_BO_FIELD
+ }
+ 
++/* Playport (PLA-465): about once a second, from queue submits, log
++ * [kk-residency]: the device residency set's additions, removals and commits
++ * in the interval, the commits' total and longest time, those over 1 ms, and
++ * the removals not yet committed. */
++void
++kk_residency_log(struct kk_device *dev)
++{
++   static int64_t last_ns;
++   static struct kk_memory_stats last;
++   const int64_t now = os_time_get_nano();
++   const int64_t then = p_atomic_read(&last_ns);
++   if (then != 0 && now - then < INT64_C(1000000000))
++      return;
++   if (p_atomic_cmpxchg(&last_ns, then, now) != then)
++      return;
++
++   struct kk_memory_stats *s = &kk_memory_stats;
++   simple_mtx_lock(&dev->residency_set.mutex);
++   const int64_t adds = s->residency_adds, removes = s->residency_removes,
++                 commits = s->residency_commits,
++                 removal_commits = s->residency_removal_commits,
++                 commit_ns = s->residency_commit_ns,
++                 max_ns = s->residency_commit_max_ns,
++                 slow = s->residency_slow_commits;
++   s->residency_commit_max_ns = 0;
++   const uint32_t pending = dev->residency_set.removed_count;
++   const uint64_t pending_B = dev->residency_set.removed_B;
++   simple_mtx_unlock(&dev->residency_set.mutex);
++
++   fprintf(stderr,
++           "[kk-residency] s=%.2f mode=%s adds=%" PRId64 " removes=%" PRId64
++           " commits=%" PRId64 " removal-commits=%" PRId64
++           " commit-ms=%.3f max-ms=%.3f over-1ms=%" PRId64
++           " pending=%u/%.1f MiB\n",
++           then ? (now - then) / 1e9 : 0.0,
++           kk_residency_at_submit ? "submit" : "alloc", adds - last.residency_adds,
++           removes - last.residency_removes, commits - last.residency_commits,
++           removal_commits - last.residency_removal_commits,
++           (commit_ns - last.residency_commit_ns) / 1e6, max_ns / 1e6,
++           slow - last.residency_slow_commits, pending,
++           pending_B / (1024.0 * 1024.0));
++   last.residency_adds = adds;
++   last.residency_removes = removes;
++   last.residency_commits = commits;
++   last.residency_removal_commits = removal_commits;
++   last.residency_commit_ns = commit_ns;
++   last.residency_slow_commits = slow;
++}
++
+ void
+ kk_destroy_bo(struct kk_device *dev, struct kk_bo *bo)
+ {
+@@ -242,9 +295,9 @@ kk_destroy_bo(struct kk_device *dev, struct kk_bo *bo)
+    /* We may only have a mapped buffer, for example if the memory was imported
+     * from a host pointer */
+    if (bo->mtl_handle)
+-      kk_device_remove_heap_from_residency_set(dev, bo->mtl_handle);
++      kk_device_remove_heap_from_residency_set(dev, bo->mtl_handle, bo->size_B);
+    else
+-      kk_device_remove_buffer_from_residency_set(dev, bo->map);
++      kk_device_remove_buffer_from_residency_set(dev, bo->map, bo->size_B);
+ 
+    mtl_release(bo->map);
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_bo.h b/src/kosmickrisp/vulkan/kk_bo.h
+index c247bb2..bb15fa5 100644
+--- a/src/kosmickrisp/vulkan/kk_bo.h
++++ b/src/kosmickrisp/vulkan/kk_bo.h
+@@ -36,6 +36,17 @@ struct kk_memory_stats {
+    int32_t bo_count[KK_BO_KIND_COUNT];
+    int64_t command_large_allocations;
+    int64_t command_large_reuses;
++   /* Playport (PLA-465): device residency set additions and removals,
++    * commits made for additions (or, with MESA_KK_RESIDENCY=submit, at
++    * submits) and for removals alone, their total and longest time, and
++    * those over 1 ms; cumulative */
++   int64_t residency_adds;
++   int64_t residency_removes;
++   int64_t residency_commits;
++   int64_t residency_removal_commits;
++   int64_t residency_commit_ns;
++   int64_t residency_commit_max_ns;
++   int64_t residency_slow_commits;
+    /* Live kk_shader objects, the pipelines among them that hold Metal
+     * pipeline states, and the MSL source they keep for serialization */
+    int32_t shaders;
+@@ -84,5 +95,6 @@ void kk_bo_set_kind(struct kk_bo *bo, enum kk_bo_kind kind);
+ /* One [kk-mem] line when MESA_KK_DEBUG has memory and 10 s have passed since
+  * the last one. */
+ void kk_memory_log(struct kk_device *dev);
++void kk_residency_log(struct kk_device *dev);
+ 
+ #endif /* KK_BO_H */
+diff --git a/src/kosmickrisp/vulkan/kk_debug.c b/src/kosmickrisp/vulkan/kk_debug.c
+index 960d4ec..823fd01 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.c
++++ b/src/kosmickrisp/vulkan/kk_debug.c
+@@ -71,6 +71,8 @@ DEBUG_GET_ONCE_FLAGS_OPTION(mesa_kk_experimental, "MESA_KK_EXPERIMENTAL",
+ 
+ uint32_t kk_batch2_flags = 0;
+ 
++bool kk_residency_at_submit = false;
++
+ static const struct debug_named_value batch2_items[] = {
+    {"root", KK_BATCH2_ROOT},
+    {"map", KK_BATCH2_MAP},
+@@ -113,6 +115,10 @@ kk_process_debug_variable(void)
+       fprintf(stderr, "[kk-batch2] items=%#x (root 1, map 2, residency 4, alloc 8, ampl 16, oq 32)\n",
+               kk_batch2_flags);
+    }
++   {
++      const char *residency = os_get_option("MESA_KK_RESIDENCY");
++      kk_residency_at_submit = residency && !strcmp(residency, "submit");
++   }
+    kk_mesa_debug_flags = debug_get_option_mesa_kk_debug();
+    kk_mesa_experimental_flags = debug_get_option_mesa_kk_experimental();
+    /* These diagnostics change correctness contracts. Mesa's flags parser
+diff --git a/src/kosmickrisp/vulkan/kk_debug.h b/src/kosmickrisp/vulkan/kk_debug.h
+index 5a6c865..3d10a7c 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.h
++++ b/src/kosmickrisp/vulkan/kk_debug.h
+@@ -163,7 +163,9 @@ enum kk_batch2 {
+    KK_BATCH2_ROOT = 1u << 0,
+    /* "map": a vkMapMemory that is not placed returns Metal's own mapping */
+    KK_BATCH2_MAP = 1u << 1,
+-   /* "residency": a submit commits the residency set only after it changed */
++   /* "residency": with MESA_KK_RESIDENCY=submit, a submit commits the
++    * residency set only after it changed (otherwise additions are committed
++    * where they are made, so this item changes nothing) */
+    KK_BATCH2_RESIDENCY = 1u << 2,
+    /* "alloc": a command allocator without users is reset before it records */
+    KK_BATCH2_ALLOC = 1u << 3,
+@@ -175,6 +177,13 @@ enum kk_batch2 {
+ 
+ extern uint32_t kk_batch2_flags;
+ 
++/* Playport (PLA-465): MESA_KK_RESIDENCY=submit commits the device residency
++ * set at every queue submit, as upstream does (with MESA_KK_BATCH2's
++ * "residency" item, only after it changed). Unset, an addition is committed
++ * where it is made, before the allocation is returned, and removals are
++ * committed later, in batches (kk_device_make_resources_resident). */
++extern bool kk_residency_at_submit;
++
+ #define KK_BATCH2(item) unlikely(kk_batch2_flags &KK_BATCH2_##item)
+ 
+ enum kk_experimental {
+diff --git a/src/kosmickrisp/vulkan/kk_device.c b/src/kosmickrisp/vulkan/kk_device.c
+index 6ba4423..3d9de82 100644
+--- a/src/kosmickrisp/vulkan/kk_device.c
++++ b/src/kosmickrisp/vulkan/kk_device.c
+@@ -31,6 +31,7 @@
+ #include "vk_pipeline_cache.h"
+ 
+ #include <time.h>
++#include "util/os_time.h"
+ 
+ struct kk_mtl_compiler {
+    mtl_compiler *handle;
+@@ -478,55 +479,144 @@ kk_GetDeviceProcAddr(VkDevice _device, const char *pName)
+    return kk_device_get_proc_addr(device, pName);
+ }
+ 
++/* Playport (PLA-465): commit the set and request its residency, timed for
++ * the [kk-mem] census. Under the set's mutex. */
++static void
++kk_residency_commit_locked(struct kk_device *dev, bool removals_only)
++{
++   p_atomic_set(&dev->residency_set.committing, 1u);
++   const int64_t start = os_time_get_nano();
++   mtl_residency_set_commit(dev->residency_set.handle);
++   /* A paging hint; once the set is resident it returns at once. */
++   if (!removals_only)
++      mtl_residency_set_request_residency(dev->residency_set.handle);
++   const int64_t ns = os_time_get_nano() - start;
++   p_atomic_set(&dev->residency_set.committing, 0u);
++
++   dev->residency_set.dirty = false;
++   p_atomic_set(&dev->residency_set.removed_count, 0u);
++   dev->residency_set.removed_B = 0u;
++   dev->residency_set.removed_since_ns = 0;
++
++   struct kk_memory_stats *s = &kk_memory_stats;
++   p_atomic_inc(removals_only ? &s->residency_removal_commits
++                              : &s->residency_commits);
++   p_atomic_add(&s->residency_commit_ns, ns);
++   if (ns > INT64_C(1000000))
++      p_atomic_inc(&s->residency_slow_commits);
++   if (ns > s->residency_commit_max_ns)
++      s->residency_commit_max_ns = ns; /* under the mutex */
++}
++
++/* Playport (PLA-465): an allocation was added. Upstream committed the set at
++ * the next submit, on the queue thread; it is committed here instead, before
++ * the allocation is returned, so a submit that uses it needs no commit and
++ * the commit's cost (it grows with the bytes added) falls on the thread that
++ * allocates. MESA_KK_RESIDENCY=submit keeps upstream's way. */
++static void
++kk_residency_added_locked(struct kk_device *dev)
++{
++   p_atomic_inc(&kk_memory_stats.residency_adds);
++   dev->residency_set.dirty = true;
++   if (!kk_residency_at_submit)
++      kk_residency_commit_locked(dev, false);
++}
++
++/* Playport (PLA-465): an allocation was removed. The set keeps it alive until
++ * the next commit, which an addition or a submit makes
++ * (kk_device_make_resources_resident). */
++static void
++kk_residency_removed_locked(struct kk_device *dev, uint64_t size_B)
++{
++   p_atomic_inc(&kk_memory_stats.residency_removes);
++   dev->residency_set.dirty = true;
++   if (dev->residency_set.removed_count == 0u)
++      dev->residency_set.removed_since_ns = os_time_get_nano();
++   p_atomic_inc(&dev->residency_set.removed_count);
++   dev->residency_set.removed_B += size_B;
++}
++
+ void
+-kk_device_add_heap_to_residency_set(struct kk_device *dev, mtl_heap *heap)
++kk_device_add_heap_to_residency_set(struct kk_device *dev, mtl_heap *heap,
++                                    uint64_t size_B)
+ {
+    simple_mtx_lock(&dev->residency_set.mutex);
+    mtl_residency_set_add_allocation(dev->residency_set.handle, heap);
+-   dev->residency_set.dirty = true;
++   kk_residency_added_locked(dev);
+    simple_mtx_unlock(&dev->residency_set.mutex);
+ }
+ 
+ void
+-kk_device_remove_heap_from_residency_set(struct kk_device *dev, mtl_heap *heap)
++kk_device_remove_heap_from_residency_set(struct kk_device *dev, mtl_heap *heap,
++                                         uint64_t size_B)
+ {
+    simple_mtx_lock(&dev->residency_set.mutex);
+    mtl_residency_set_remove_allocation(dev->residency_set.handle, heap);
+-   dev->residency_set.dirty = true;
++   kk_residency_removed_locked(dev, size_B);
+    simple_mtx_unlock(&dev->residency_set.mutex);
+ }
+ 
+ void
+-kk_device_add_buffer_to_residency_set(struct kk_device *dev, mtl_buffer *buffer)
++kk_device_add_buffer_to_residency_set(struct kk_device *dev, mtl_buffer *buffer,
++                                      uint64_t size_B)
+ {
+    simple_mtx_lock(&dev->residency_set.mutex);
+    mtl_residency_set_add_allocation(dev->residency_set.handle, buffer);
+-   dev->residency_set.dirty = true;
++   kk_residency_added_locked(dev);
+    simple_mtx_unlock(&dev->residency_set.mutex);
+ }
+ 
+ void
+ kk_device_remove_buffer_from_residency_set(struct kk_device *dev,
+-                                           mtl_buffer *buffer)
++                                           mtl_buffer *buffer, uint64_t size_B)
+ {
+    simple_mtx_lock(&dev->residency_set.mutex);
+    mtl_residency_set_remove_allocation(dev->residency_set.handle, buffer);
+-   dev->residency_set.dirty = true;
++   kk_residency_removed_locked(dev, size_B);
+    simple_mtx_unlock(&dev->residency_set.mutex);
+ }
+ 
++bool
++kk_device_commit_residency_removals(struct kk_device *dev)
++{
++   simple_mtx_lock(&dev->residency_set.mutex);
++   const bool any = dev->residency_set.removed_count != 0u;
++   if (any)
++      kk_residency_commit_locked(dev, true);
++   simple_mtx_unlock(&dev->residency_set.mutex);
++   return any;
++}
++
+ void
+ kk_device_make_resources_resident(struct kk_device *dev)
+ {
+-   simple_mtx_lock(&dev->residency_set.mutex);
+-   /* Playport, MESA_KK_BATCH2 "residency": commit and request residency only
+-    * after the set changed. The set is attached to the queue, so a committed
+-    * set needs no commit at every submit; requestResidency is a paging hint. */
+-   if (!KK_BATCH2(RESIDENCY) || dev->residency_set.dirty) {
+-      mtl_residency_set_commit(dev->residency_set.handle);
+-      mtl_residency_set_request_residency(dev->residency_set.handle);
+-      dev->residency_set.dirty = false;
++   if (kk_residency_at_submit) {
++      simple_mtx_lock(&dev->residency_set.mutex);
++      /* Playport, MESA_KK_BATCH2 "residency": commit and request residency
++       * only after the set changed. The set is attached to the queue, so a
++       * committed set needs no commit at every submit; requestResidency is a
++       * paging hint. */
++      if (!KK_BATCH2(RESIDENCY) || dev->residency_set.dirty)
++         kk_residency_commit_locked(dev, false);
++      simple_mtx_unlock(&dev->residency_set.mutex);
++      return;
+    }
++
++   /* Playport (PLA-465): every addition is already committed. Removals wait
++    * until they hold KK_RESIDENCY_REMOVED_MAX_B or the oldest is
++    * KK_RESIDENCY_REMOVED_MAX_NS old, which costs memory only: a removed
++    * allocation stays resident and alive a little longer. The submit does
++    * not wait for a commit another thread is making (which commits the
++    * removals too); the unlocked reads are only a hint. */
++   if (p_atomic_read(&dev->residency_set.removed_count) == 0u ||
++       p_atomic_read(&dev->residency_set.committing))
++      return;
++   simple_mtx_lock(&dev->residency_set.mutex);
++   if (dev->residency_set.removed_count != 0u &&
++       (dev->residency_set.removed_B >= KK_RESIDENCY_REMOVED_MAX_B ||
++        os_time_get_nano() - dev->residency_set.removed_since_ns >=
++           KK_RESIDENCY_REMOVED_MAX_NS))
++      kk_residency_commit_locked(dev, true);
+    simple_mtx_unlock(&dev->residency_set.mutex);
+ }
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_device.h b/src/kosmickrisp/vulkan/kk_device.h
+index 86b90cb..bed91cb 100644
+--- a/src/kosmickrisp/vulkan/kk_device.h
++++ b/src/kosmickrisp/vulkan/kk_device.h
+@@ -36,8 +36,22 @@ struct kk_residency_set {
+    /* Playport, MESA_KK_BATCH2 "residency": an allocation was added or removed
+     * since the last commit (under mutex). */
+    bool dirty;
++   /* Playport (PLA-465): allocations removed since the last commit, their
++    * bytes, and when the oldest of them was removed (under mutex). The set
++    * keeps a removed allocation alive until the commit. */
++   uint32_t removed_count;
++   uint64_t removed_B;
++   int64_t removed_since_ns;
++   /* Playport (PLA-465): a commit is running (set under mutex, read without
++    * it, so a submit does not wait for another thread's commit) */
++   uint32_t committing;
+ };
+ 
++/* Playport (PLA-465): removals wait for a commit until they hold this many
++ * bytes or the oldest is this old; a submit then commits them. */
++#define KK_RESIDENCY_REMOVED_MAX_B (64ull << 20)
++#define KK_RESIDENCY_REMOVED_MAX_NS INT64_C(1000000000)
++
+ struct mtl_sampler_packed {
+    enum mtl_sampler_address_mode mode_u;
+    enum mtl_sampler_address_mode mode_v;
+@@ -151,14 +165,19 @@ VkResult kk_device_init_meta(struct kk_device *dev);
+ void kk_device_finish_meta(struct kk_device *dev);
+ VkResult kk_device_init_lib(struct kk_device *dev);
+ void kk_device_finish_lib(struct kk_device *dev);
+-void kk_device_add_heap_to_residency_set(struct kk_device *dev, mtl_heap *heap);
++void kk_device_add_heap_to_residency_set(struct kk_device *dev, mtl_heap *heap,
++                                         uint64_t size_B);
+ void kk_device_remove_heap_from_residency_set(struct kk_device *dev,
+-                                              mtl_heap *heap);
++                                              mtl_heap *heap, uint64_t size_B);
+ void kk_device_add_buffer_to_residency_set(struct kk_device *dev,
+-                                           mtl_buffer *buffer);
++                                           mtl_buffer *buffer, uint64_t size_B);
+ void kk_device_remove_buffer_from_residency_set(struct kk_device *dev,
+-                                                mtl_buffer *buffer);
++                                                mtl_buffer *buffer,
++                                                uint64_t size_B);
+ void kk_device_make_resources_resident(struct kk_device *dev);
++/* Playport (PLA-465): commit removals still waiting; true if there were any
++ * (their memory is released by the commit) */
++bool kk_device_commit_residency_removals(struct kk_device *dev);
+ 
+ /* Required to create a sampler */
+ mtl_sampler *kk_sampler_create(struct kk_device *dev,
+diff --git a/src/kosmickrisp/vulkan/kk_device_memory.c b/src/kosmickrisp/vulkan/kk_device_memory.c
+index c1e78b9..d426c16 100644
+--- a/src/kosmickrisp/vulkan/kk_device_memory.c
++++ b/src/kosmickrisp/vulkan/kk_device_memory.c
+@@ -138,14 +138,16 @@ kk_AllocateMemory(VkDevice device, const VkMemoryAllocateInfo *pAllocateInfo,
+          mem->bo->map =
+             mtl_new_buffer_with_length(mem->bo->mtl_handle, mem->vk.size, 0u);
+          mem->bo->size_B = mtl_heap_get_size(mem->bo->mtl_handle);
+-         kk_device_add_heap_to_residency_set(dev, mem->bo->mtl_handle);
++         kk_device_add_heap_to_residency_set(dev, mem->bo->mtl_handle,
++                                             mem->bo->size_B);
+       } else if (import_host) {
+          /* We can't create a heap from a host pointer. The imported memory will
+           * only be usable for buffers */
+          mem->bo->map = mtl_new_buffer_with_bytes_no_copy(
+             dev->mtl_handle, host_info->pHostPointer, mem->vk.size);
+          mem->bo->size_B = mtl_buffer_get_length(mem->bo->map);
+-         kk_device_add_buffer_to_residency_set(dev, mem->bo->map);
++         kk_device_add_buffer_to_residency_set(dev, mem->bo->map,
++                                               mem->bo->size_B);
+       }
+ 
+       mem->bo->gpu = mtl_buffer_get_gpu_address(mem->bo->map);
+diff --git a/src/kosmickrisp/vulkan/kk_queue.c b/src/kosmickrisp/vulkan/kk_queue.c
+index b2e3d45..a20bf99 100644
+--- a/src/kosmickrisp/vulkan/kk_queue.c
++++ b/src/kosmickrisp/vulkan/kk_queue.c
+@@ -348,8 +348,10 @@ kk_queue_submit(struct vk_queue *vk_queue, struct vk_queue_submit *submit)
+    uint32_t frames = 0u;
+    kk_queue_capture_frame(queue, false);
+ 
+-   if (KK_DEBUG(MEMORY))
++   if (KK_DEBUG(MEMORY)) {
+       kk_memory_log(dev);
++      kk_residency_log(dev);
++   }
+ 
+    for (struct vk_sync_wait *wait = submit->waits,
+                             *end = submit->waits + submit->wait_count;
