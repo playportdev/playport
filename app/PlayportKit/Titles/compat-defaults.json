@@ -5,8 +5,8 @@
       "reason": "This game draws through Vulkan or Direct3D 12, which only the Vulkan layer runs, so it keeps Vulkan even when Settings chooses DXMT for every game."
     },
     "app-292030": {
-      "settings": {"runtime": "short-reserve-mb=6144"},
-      "reason": "The current build reserves 64 GB and 32 GB of address space at start, more than an iPhone app has, so it gets the first 6 GB of each and is told it got all of it."
+      "settings": {"runtime": "short-reserve-mb=6144 env.MADEIRA_FEX_PAUSE=wfe"},
+      "reason": "The current build reserves 64 GB and 32 GB of address space at start, more than an iPhone app has, so it gets the first 6 GB of each and is told it got all of it. Its render thread waits for work in a busy loop; here that loop lets the core rest, which leaves more of the phone's power for the game (about 9 % more frames per second once the phone is warm)."
     },
     "epic-Buffalo": {
       "settings": {"aspect": "16:9"},

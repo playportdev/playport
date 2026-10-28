@@ -71,14 +71,16 @@ final class CompatDefaultsTests: XCTestCase {
         XCTAssertEqual(LaunchSettings.overEveryGame(LaunchSettings(endLauncherAfterSignIn: false)).endLauncherAfterSignIn, false)
     }
 
-    /// The Witcher 3's current build gets short reservations (patches/madeira-unix 0222); its
+    /// The Witcher 3's current build gets short reservations (patches/madeira-unix 0222) and PAUSE as
+    /// WFE (patches/fex 0083, decision 0162); its
     /// classic branch's cohort hold (jumbo-mb=32768) stays, since the entry names no jumbo-mb.
     func testTheWitcher3GetsShortReservationsAndKeepsItsCohortHold() throws {
         let entry = try XCTUnwrap(CompatDefaults.load(directory: Self.shipped).entry(for: "app-292030"))
-        XCTAssertEqual(entry.settings.runtime, "short-reserve-mb=6144")
+        XCTAssertEqual(entry.settings.runtime, "short-reserve-mb=6144 env.MADEIRA_FEX_PAUSE=wfe")
         let game = LaunchSettings.overEveryGame(entry.settings)
         let effective = LaunchSettings.resolve(game: game, global: LaunchSettings())
         XCTAssertEqual(effective.config(over: [:])["short-reserve-mb"], "6144")
+        XCTAssertEqual(effective.config(over: [:])["env.MADEIRA_FEX_PAUSE"], "wfe")
         XCTAssertEqual(effective.config(over: [:])["jumbo-mb"], "8960")
         let classic = effective.config(over: ["jumbo-mb": "32768", "cage-hold": "1"])
         XCTAssertEqual(classic["jumbo-mb"], "32768")
