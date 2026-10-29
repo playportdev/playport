@@ -237,7 +237,10 @@ public enum Adoption {
             // are one title each.
             let steam = receipts.filter { $0.installDir.lowercased() == folder.lowercased() }
             for r in steam {
+                // Steam names an Unreal game's bootstrap (`SHProto.exe`); start its shipping
+                // executable instead, as `pick` does, since the bootstrap can quit before starting it.
                 let launch = r.executable.flatMap { isPrelauncher($0) ? nil : locate($0, in: dir) }
+                    .map { unrealShipping(for: $0, in: dir) ?? $0 }
                 var t = InstalledTitle(id: "app-\(r.appID)", appID: r.appID, name: r.name, developer: nil, installDir: folder,
                                        executable: launch ?? pick(exes, folder: folder, in: dir),
                                        buildID: r.buildID,
@@ -372,11 +375,16 @@ public enum Adoption {
         guard let exe = exes.first(where: { key(String($0.dropLast(4))) == key(folder) }) ?? exes.first else {
             return dir.flatMap { nested(in: $0, folder: folder) }
         }
-        let project = String(exe.dropLast(4))
-        if let dir, let shipping = locate("\(project)/Binaries/Win64/\(project)-Win64-Shipping.exe", in: dir) {
-            return shipping
-        }
+        if let dir, let shipping = unrealShipping(for: exe, in: dir) { return shipping }
         return exe
+    }
+
+    /// For an Unreal Engine bootstrap at a game folder's top (`<Project>.exe`), the
+    /// `<Project>\Binaries\Win64\<Project>-Win64-Shipping.exe` it starts, when that is there.
+    static func unrealShipping(for exe: String, in dir: URL) -> String? {
+        guard !exe.contains("\\"), !exe.contains("/"), exe.lowercased().hasSuffix(".exe") else { return nil }
+        let project = String(exe.dropLast(4))
+        return locate("\(project)/Binaries/Win64/\(project)-Win64-Shipping.exe", in: dir)
     }
 
     /// Names, lowercased, of executables and folders that are not the game:
