@@ -74,3 +74,35 @@ needed to keep the low slot free remains to be tested; the probes did not establ
 
 The game's own helper never started, so nothing here shows whether two helpers (the launcher's and the game's,
 alive together until the game's sign-in, decision 0130) can share one such layout.
+
+## l1: the Social Club layout (chunk 2)
+
+- **IPA (dev):** `2da3ea8ac26a463b5d64f16cc75eab90f012ff583770c26ddfcb9e39ffa461e7` (`1a7bd2f`).
+- **Hollow Knight gate** (`.work/ui-runs/20261029T184335`): first frame +12.81 s; `rw=0x7000000000` (the JIT RW
+  alias at its exec-held home, was `0x7007130000`).
+- **RDR2 l1** (`.work/ui-runs/20261029T184429-rdr2-p476l1`): runtime keys `env.PLAYPORT_CEF_SWAP=0
+  env.PLAYPORT_SC_SINGLE=1 env.PLAYPORT_SC_LAYOUT=1`, RDR2's defaults otherwise; run to first frame +300 s (+390 s
+  from launch), no press.
+
+| | a2 (no layout) | l1 (layout) |
+| --- | --- | --- |
+| `SocialClubHelper.exe` starts | 51, 50 × `0x80000003` | **1, alive to the end** |
+| layout grants | — | all six: chrome_elf.dll's pools and metadata, libcef.dll's pools and metadata, Oilpan, V8's 8 GB step |
+| soft-pool grants | 2 | **0** |
+| launcher | Error window | **Sign In page; signed in online; cloud saves synced; RDR2.exe launched at +78 s** |
+| RDR2.exe | — | 8960 MiB reserve served from the layout's hold; window and loading bar (≈30 % at +124 s, ≈80 % at +344 s) |
+| game's Social Club | — | not initialised by +390 s: `socialclub.dll` never loaded in the game, no game helper, no sign-in |
+
+- **The game was slow, not refused.** Its main thread runs Rockstar's self-modifying-code protector (FEX
+  `[inv-census]`). In xs1 that thread passed ≈21,500 invalidations within a second and loaded `socialclub.dll`; in
+  l1 it reached 16,384 at 18:46:37, 21,504 at 18:47:35 and ≈23,500 at the end. No layout refusal, no failed
+  reservation and no fault is logged for the game.
+- **CPU.** The single-process helper's `Chrome_InProcRendererThread` and its network and thread-pool workers were
+  hot in l1 (576 % summed over 16 samples of the renderer thread, against 17 % over 1 in xs1, where Playport's
+  CEF ran). Thermal went `nominal` → `fair`; P-core use fell from ≈5 cores at +100 s to ≈1 core at the end, E cores
+  carried the rest at 2.11 GHz.
+- **A 32-bit COM surrogate cannot start.** From +101 s the helper's thread activates CLSID
+  `{4991D34B-80A1-4291-83B6-3328366B9097}` (BITS); rpcss starts `syswow64\dllhost.exe` ten times in 4 s, and each
+  exits `0xC0000017`: its WoW64 4 GiB window does not fit (`NO GAP FITS size=0x100010000`). xs1 never activated it.
+- **Open:** whether the game reaches its sign-in given more time, and whether the helper's CPU use or the failed COM
+  activation delays it.
