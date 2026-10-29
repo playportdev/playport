@@ -29,6 +29,13 @@ below.
   sync; split follow-ups into linked issues, not prose. Delete a plan only once its outcome
   is in decisions/evidence and `docs/plans/finished.md`, with leftover work in open issues.
   [Plans](docs/plans/README.md) indexes documents; it is not a backlog.
+  The Linear MCP server declares `mcp__linear__get_issue` (pass `fields`, `includeRelations`),
+  `mcp__linear__list_issues` and `mcp__linear__save_comment` directly; everything else is
+  deferred, so `tool_search` its exact name instead of guessing — `mcp__linear__save_issue`
+  both creates and updates (state, title, labels, `relatedTo`, and `patch` ops that edit part
+  of a description), `mcp__linear__list_comments` reads a thread. There is no `create_issue`,
+  `update_issue` or `create_comment` tool; a bare `tool_search` for those names matches
+  nothing.
 - **Commit each completed chunk** once its checks pass, before the next chunk or reporting
   done: code, its documentation and changed build records — never unrelated changes or
   private data. A check that blocks it is a blocker to report, not a chunk to commit as
