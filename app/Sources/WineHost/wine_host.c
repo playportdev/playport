@@ -1101,11 +1101,64 @@ static vm_address_t largest_gap(vm_address_t lo, vm_address_t hi, vm_address_t *
     return best;
 }
 
+/* PLA-476: the bottom of the guest window, held from exec. At pool time iOS
+ * has already put a system region (tag 87, ~74 MiB) at 0x7000000000, so a hold
+ * taken then can never get the address. A Social Club layout play keeps its
+ * bottom 256 MiB for libcef.dll's PartitionAlloc pools; every other play gets
+ * the JIT pool's RW alias there, where Madeira put it and where ntdll's floor
+ * (0x7000000000 + pool size, ios_usable_va_floor_get) expects it. Untouched
+ * PROT_NONE costs no footprint. */
+#define LOW_HOLD_BASE 0x7000000000ull
+#define LOW_HOLD_SIZE 0x60000000ull   /* 1.5 GiB: the largest JIT pool's alias */
+#define SC_LOW_SIZE   0x10000000ull   /* 256 MiB: pp_sc_layout.h PPSC_CEF */
+static vm_address_t g_low_hold;
+static vm_size_t g_low_hold_size;
+
+__attribute__((constructor)) static void low_hold_at_exec(void)
+{
+    vm_address_t a = LOW_HOLD_BASE;
+    if (vm_allocate(mach_task_self(), &a, LOW_HOLD_SIZE, VM_FLAGS_FIXED) != KERN_SUCCESS) return;
+    if (vm_protect(mach_task_self(), a, LOW_HOLD_SIZE, FALSE, VM_PROT_NONE) != KERN_SUCCESS) {
+        vm_deallocate(mach_task_self(), a, LOW_HOLD_SIZE);
+        return;
+    }
+    g_low_hold = a;
+    g_low_hold_size = LOW_HOLD_SIZE;
+}
+
+static void low_hold_release(vm_address_t from)
+{
+    if (!g_low_hold || from >= g_low_hold + g_low_hold_size) return;
+    if (from < g_low_hold) from = g_low_hold;
+    vm_deallocate(mach_task_self(), from, g_low_hold + g_low_hold_size - from);
+    g_low_hold_size = from - g_low_hold;
+    if (!g_low_hold_size) g_low_hold = 0;
+}
+
 int wine_host_jit_pool_acquire(const char *log_path, size_t size, int wait_ms, void **rx_out, void **rw_out)
 {
     if (!rx_out || !rw_out || !size || (size & 0x3fff)) return -1;
     *rx_out = *rw_out = NULL;
     if (log_path && !g_log) g_log = fopen(log_path, "a");
+
+    /* PLA-476: opt-in stock Social Club layout. Never overwrite a mapping to
+     * make the low PartitionAlloc slot fit. Wine takes ownership of this exact
+     * native hold only after the RW alias has also been placed successfully. */
+    const char *sc = getenv("PLAYPORT_SC_LAYOUT");
+    const int sc_layout = sc && !strcmp(sc, "1");
+    vm_address_t sc_hold = 0;
+    unsetenv("WINE_IOS_SC_LOW_HELD");
+    host_log("low hold: %s", g_low_hold ? "0x7000000000 held since exec" : "not taken at exec");
+    if (sc_layout) {
+        if (!g_low_hold || g_low_hold_size < SC_LOW_SIZE) {
+            host_log("sc-layout: 0x7000000000 was not held at exec; launch refused, no mapping overwritten");
+            return -5;
+        }
+        low_hold_release(g_low_hold + SC_LOW_SIZE);   /* the rest goes back; the slot stays */
+        sc_hold = g_low_hold;
+        g_low_hold = 0;
+        g_low_hold_size = 0;
+    }
 
     for (int waited = 0;; waited += 50) {
         int state = wine_host_jit_debugger_state();
@@ -1113,6 +1166,7 @@ int wine_host_jit_pool_acquire(const char *log_path, size_t size, int wait_ms, v
         if (state == JIT_DEBUGGER_UNKNOWN || waited >= wait_ms) {
             int rc = jit_debugger_gate(state);
             host_log("JIT pool: no live debugger after %d ms (state=%d rc=%d); no brk issued", waited, state, rc);
+            if (sc_hold) vm_deallocate(mach_task_self(), sc_hold, 0x10000000ull);
             return rc;
         }
         usleep(50 * 1000);
@@ -1149,7 +1203,10 @@ int wine_host_jit_pool_acquire(const char *log_path, size_t size, int wait_ms, v
     struct timeval t0, t1;
     gettimeofday(&t0, NULL);
     int gate = jit_breakpoint_gate("prepare");
-    if (gate) return gate;
+    if (gate) {
+        if (sc_hold) vm_deallocate(mach_task_self(), sc_hold, 0x10000000ull);
+        return gate;
+    }
     void *rx = jit26_prepare_region(NULL, size);
     gettimeofday(&t1, NULL);
     double bless_s = (t1.tv_sec - t0.tv_sec) + (t1.tv_usec - t0.tv_usec) / 1e6;
@@ -1188,11 +1245,27 @@ int wine_host_jit_pool_acquire(const char *log_path, size_t size, int wait_ms, v
                      (unsigned long)freed_hi, (unsigned long)res_hi);
         }
     }
-    vm_address_t rw = 0;
+    vm_address_t rw = sc_layout ? 0x7900000000ull : 0;
+    if (!rc && sc_layout && size > 0x100000000ull) rc = -5;
+    int rw_fixed = sc_layout;
+    if (!rc && !sc_layout && g_low_hold) {
+        /* The alias's own home, freed just before it is mapped there. */
+        int fits = size <= g_low_hold_size;
+        rw = fits ? g_low_hold : 0;
+        rw_fixed = fits;
+        low_hold_release(g_low_hold);
+    }
     if (!rc) {
         vm_prot_t cur = VM_PROT_NONE, max = VM_PROT_NONE;
-        kern_return_t kr = mach_vm_remap(mach_task_self(), &rw, size, 0, VM_FLAGS_ANYWHERE, mach_task_self(), a,
+        kern_return_t kr = mach_vm_remap(mach_task_self(), &rw, size, 0,
+                                         rw_fixed ? VM_FLAGS_FIXED : VM_FLAGS_ANYWHERE, mach_task_self(), a,
                                          FALSE, &cur, &max, VM_INHERIT_NONE);
+        if (kr != KERN_SUCCESS && rw_fixed && !sc_layout) {
+            host_log("JIT pool: RW alias at 0x%lx failed kr=%d; anywhere", (unsigned long)rw, kr);
+            rw = 0;
+            kr = mach_vm_remap(mach_task_self(), &rw, size, 0, VM_FLAGS_ANYWHERE, mach_task_self(), a,
+                               FALSE, &cur, &max, VM_INHERIT_NONE);
+        }
         if (kr == KERN_SUCCESS) kr = mach_vm_protect(mach_task_self(), rw, size, FALSE, VM_PROT_READ | VM_PROT_WRITE);
         if (kr != KERN_SUCCESS) {
             host_log("JIT pool: RW alias failed kr=%d", kr);
@@ -1203,9 +1276,19 @@ int wine_host_jit_pool_acquire(const char *log_path, size_t size, int wait_ms, v
      * pool stays executable, and ntdll's trap handler skips any later stray
      * brk #0xf00d (signal_arm64_ios.c trap_handler). */
     gate = jit_breakpoint_gate("detach");
-    if (gate) return gate;
+    if (gate) {
+        if (sc_hold) vm_deallocate(mach_task_self(), sc_hold, 0x10000000ull);
+        return gate;
+    }
     jit26_detach();
-    if (rc) return rc;
+    if (rc) {
+        if (sc_hold) vm_deallocate(mach_task_self(), sc_hold, 0x10000000ull);
+        return rc;
+    }
+    if (sc_hold) {
+        setenv("WINE_IOS_SC_LOW_HELD", "1", 1);
+        host_log("sc-layout: low 256 MiB held, RW alias fixed at 0x%lx", (unsigned long)rw);
+    }
     *rx_out = rx;
     *rw_out = (void *)rw;
     host_log("JIT pool: rx=%p rw=%p size=0x%zx; debugger detached", rx, (void *)rw, size);

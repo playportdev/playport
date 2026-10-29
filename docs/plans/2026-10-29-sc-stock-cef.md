@@ -120,8 +120,29 @@ runtime change gets a Hollow Knight first frame+10 (`app-367520`).
 header, with host tests in `tools/tests/test_sc_layout.py`. It allocates nothing and is not yet
 connected to the runtime. Tests cover disjoint real ranges, the 8960 MiB game hold, the 15 GiB FEX
 arena, overflow-safe bounds, reservation ordering and refusal to give one helper another helper's
-remaining slots. Startup holds, RW alias placement, allocation/free/exit integration and phone
-validation remain outstanding. Reported Chromium ranges overlap intentionally; only owned **real**
+remaining slots. madeira-unix 0225 adds the boot holds (all-or-nothing, only with the host's ownership marker and the
+RW alias at `0x7900000000`) and 0226 routes the verified helper's reservations into the slots:
+chrome_elf.dll's and libcef.dll's PartitionAlloc pools, their metadata, Oilpan's cage and V8's 8 GB
+sandbox step (`NtAllocateVirtualMemoryEx`). Any other reservation of 16 GB or more from the helper
+fails instead of reaching the soft-pool grant. Commits, protects and frees inside a slot's real range
+are allowed only for its owner. A grant is released whole, by its owner or at its owner's exit through
+the existing process teardown, and the slot is held again. The helper is told a 2 TB
+`HighestUserAddress` (report only) so V8 takes its partial sandbox.
+
+The host (`wine_host.c`) holds `[0x7000000000, +1.5 GiB)` from exec. In a2's log iOS had already put
+a 74 MiB tag-87 region at `0x7000000000` by pool time, so a hold taken then can never get the
+address. A layout play keeps the bottom 256 MiB; every other play gets the JIT RW alias mapped fixed
+at `0x7000000000`, where Madeira put it and where ntdll's floor formula expects it. This changes every
+game's placement slightly (the alias was at `0x7007130000` before), so the Hollow Knight gate covers it.
+
+Opt-in: runtime key `env.PLAYPORT_SC_LAYOUT=1` (with `env.PLAYPORT_SC_SINGLE=1`; the probe key
+`env.PLAYPORT_CEF_SWAP=0` until chunk 4).
+
+**Open risk: two helpers.** The slots serve one helper at a time; a second helper is refused while
+the first owns them. In xs1 the game's helper started about 4 s before the launcher's helper was
+ended at the game's sign-in. If the sign-in needs the game's helper, the launcher's end must move
+earlier (when the game starts its helper) or the game's helper must retry after the launcher's
+helper ends. The first phone run shows which. Reported Chromium ranges overlap intentionally; only owned **real**
 ranges may be committed or released. Upstream's diagnostic-only overflow warnings are not sufficient
 ownership enforcement for this port.
 

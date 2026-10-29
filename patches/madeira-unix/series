@@ -191,3 +191,5 @@
 0222-virtual-short-reserve-mb-grants-an-unplaceable-reser.patch
 0223-ntdll-log-each-guest-thread-s-yield-os-traps-as-xp-p.patch
 0224-ntdll-social-club-layout-geometry.patch
+0225-ntdll-social-club-boot-layout.patch
+0226-ntdll-route-social-club-helper-reservations.patch
