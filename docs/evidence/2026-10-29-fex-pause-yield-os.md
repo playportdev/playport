@@ -2,7 +2,7 @@
 
 **Linear:** [PLA-462](https://linear.app/playportdev/issue/PLA-462), parent
 [PLA-455](https://linear.app/playportdev/issue/PLA-455).
-**Change:** `patches/fex` 0084, commit `be544a8`.
+**Change:** `patches/fex` 0084, commit `be544a8`; follow-ups § 5 (fex 0085, 0086, madeira-unix 0223).
 **Dev IPA:** `Playport-26.5-df7b13bc.ipa`, sha256
 `df7b13bc8c960de306c5cbe4638378a9805ac7cead1fb27512e8fa8f6ef91b5e`.
 Built on Linux; the Mac was used only for host execution of the emitter test and a Mach-trap probe.
@@ -175,13 +175,49 @@ The guest's x64→ARM64EC call, ISB, conversions and optional diagnostic counter
 may be scope to make these cheaper, but there is no steady-state QPC syscall to remove, and a
 cheaper busy loop alone would not give the core back. No QPC option was changed in this pilot.
 
-## 5. Remaining gates
+## 5. Follow-up on the workstation: trap telemetry and `wait-os`
+
+Built on Linux only; **neither change has run on the phone** yet.
+
+**Telemetry** (`patches/fex` 0085, `patches/madeira-unix` 0223). The trap path now reads `CNTVCT_EL0`
+before and after the trap and adds to three per-thread frame counters: traps, traps under 48 ticks
+(2 µs at 24 MHz), and ticks inside them. It uses only x0/x16, which are already saved, and SUB/LSR
+rather than a compare, so NZCV is still untouched. The YIELD path is unchanged. Under a `yield-os` or
+`wait-os` setting, the `[xp]` sampler reads them through TEB+0x1788 → CPU area+0x30 (offsets pinned by
+static_asserts in FEX's `Module.cpp`) and logs `[xp-pause] HH:MM:SS.mmm -TID:traps/short/ms` per tick.
+`pp perf` adds `yield-os N/s long P% in-trap Q%` to each thread's `threads.txt` row (`yield_os` in
+`summary.json`). "Long" means the kernel took the thread off its core for 2 µs or more. This is the
+scheduler evidence § 3 lacked.
+
+**`wait-os[:K[:U]]`** (`patches/fex` 0086), mode 4. Every K-th PAUSE (default 128) is the raw Mach
+trap `thread_switch(MACH_PORT_NULL, SWITCH_OPTION_DISPATCH_CONTENTION, U)`: `svc #0x80`, x16 = −61,
+x1 = 3, x2 = U µs (default 50, range 1–5000). In XNU's
+[`syscall_subr.c`](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/kern/syscall_subr.c)
+that option does `assert_wait_timeout(..., U, NSEC_PER_USEC)` and blocks, whether or not anything
+else is runnable. It is libdispatch's contention back-off. Unlike `swtch_pri`, it frees (or idles)
+the core for U µs. The cost is up to U µs of extra latency when the awaited store arrives
+mid-wait. x1/x2 (guest registers) are saved in TMP3/TMP4. The same counters time the wait, so in
+`[xp-pause]` every `wait-os` trap should be long.
+
+**Host checks.** `tools/tests/test_fex_pause_yield_os.py` reconstructs each header through every
+later patch in the series. It checks the parser (now including `wait-os` defaults, bounds and
+malformed values) and disassembles the emitted sequences for `yield-os` K = 1/64/4095 and `wait-os`
+(1,1), (128,50), (4095,5000), (64,65535). The arm64-Mac execution test now also checks x1/x2 and that
+a wait is never short and averages at least U, but **it was not run**: no Mac took part in this
+step. `./pp test --quick` and `./pp build` passed: dev IPA `Playport-26.5-f7f28f40.ipa`, sha256
+`f7f28f407eea7bc4790e655b598b677d6f8454b95ca744381957ed874e5347f7`, not installed.
+
+## 6. Remaining gates
 
 - The full alternating rested/hot matrix, with repeated baselines and matched scene/battery
   conditions, is **not run**. K=256 is only a candidate for that comparison, not a winner; even its
   p99.9 is longer than YIELD's in this pilot, despite its better p99 and fewer >150 ms frames.
 - Actual phone scheduler/block-time evidence is still needed to establish the mechanism and
-  explain why RenderThread's CPU use stayed high.
+  explain why RenderThread's CPU use stayed high. § 5's `[xp-pause]` provides it on the next
+  `yield-os` run. `wait-os` is the candidate if the yields turn out mostly short.
+- `wait-os` needs the Darwin execution test on a Mac, then a Hollow Knight smoke and Witcher 3
+  arms (for example `wait-os:128:50` and `wait-os:128:200`) in the same matrix, against 0163's tail
+  criterion.
 - The Witcher 3 keeps `short-reserve-mb=6144` with ordinary YIELD (decision 0163). No compatibility
   default or public compatibility status changes: Hollow Knight remains Works; The Witcher 3
   remains Playable with issues.

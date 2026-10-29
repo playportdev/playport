@@ -781,7 +781,7 @@ resource	Runtime/arm64ec-windows/xmllite.dll	278528	d757caee62880f8a8db3b19cfd18
 resource	Runtime/arm64ec-windows/xolehlp.dll	376832	88ef43a83812a0ba05eac585b602a046d9a5e57cb06b9ef428e683e2ab2c32b5	wine-build	build-arm64ec/dlls/xolehlp/arm64ec-windows/xolehlp.dll	P2
 resource	Runtime/arm64ec-windows/xpsprint.dll	180224	a7a277a30949807610da1e619a29ee1dd149cf8fc6b8824518201437d241190e	wine-build	build-arm64ec/dlls/xpsprint/arm64ec-windows/xpsprint.dll	P2
 resource	Runtime/arm64ec-windows/xpssvcs.dll	163840	fcedd8362256f64364cfce83fd74f9d36e39ac56651faf070ae29d2ac4bbc77b	wine-build	build-arm64ec/dlls/xpssvcs/arm64ec-windows/xpssvcs.dll	P2
-resource	Runtime/arm64ec-windows/xtajit64.dll	5761536	82debeb29f3717f6b2febb31e7ab7b52891806323c018607df2fde915cabd557	fex	libarm64ecfex.dll	P1-de
+resource	Runtime/arm64ec-windows/xtajit64.dll	5761536	e685ae07aca527fb08ebec3014b93beb289ff6161ee3cee5ee11be42532aed3f	fex	libarm64ecfex.dll	P1-de
 resource	Runtime/aarch64-windows/acledit.dll	114688	65b4ed3b901dcec7cc425bbb4e7d4835f8e014be7a322e0f350fb40e54ad40ff	wine-build	build-macos/dlls/acledit/aarch64-windows/acledit.dll	P2
 resource	Runtime/aarch64-windows/aclui.dll	147456	2972a2b2b3956c32d5c9e889a603624cac10e7e13cb7ad8aadc817b0a8a12da2	wine-build	build-macos/dlls/aclui/aarch64-windows/aclui.dll	P2
 resource	Runtime/aarch64-windows/activeds.dll	327680	27d0eb07e839736dd6aec6462ba8e53ef8243f1e8dd8017ee0de8083e85ca589	wine-build	build-macos/dlls/activeds/aarch64-windows/activeds.dll	P2
@@ -2362,7 +2362,7 @@ resource	Runtime/i386-windows/xmllite.dll	131072	eaa00dc52b17e1c4631452c588df70c
 resource	Runtime/i386-windows/xolehlp.dll	217088	47fa34ba3f9181434a79a2c38b699b8a021ecb17c544761623b5cc559ca3aaf2	wine-build	build-macos/dlls/xolehlp/i386-windows/xolehlp.dll	P2
 resource	Runtime/i386-windows/xpsprint.dll	32768	03bef0b4be2f453fdfb84785064698f18af0aad90f86285e53e9b7146f137dd8	wine-build	build-macos/dlls/xpsprint/i386-windows/xpsprint.dll	P2
 resource	Runtime/i386-windows/xpssvcs.dll	28672	20c72fb4fe690da091985162961d3ecf2440faae6223fd8f9cc678ffb39b811b	wine-build	build-macos/dlls/xpssvcs/i386-windows/xpssvcs.dll	P2
-resource	Runtime/aarch64-windows/xtajit.dll	5121024	8aad7a58f143518cec140b4c5bd3e3828ad1a6f3537ecacf38036992fed039a9	fex-wow64	libwow64fex.dll	P1-de
+resource	Runtime/aarch64-windows/xtajit.dll	5121024	837755571283cefc3133e7c59d9091fe8a8d4dddbef8c2efba9ebe70e8a359e8	fex-wow64	libwow64fex.dll	P1-de
 resource	Runtime/vulkan/arm64ec-windows/d3d8.dll	1830912	e30267cc8f28188359d492da799f294980d5f78c2703992398bdab35bb167cdf	vulkan-pe	arm64ec-windows/d3d8.dll	P6-vulkan-pe
 resource	Runtime/vulkan/arm64ec-windows/d3d9.dll	7426048	16132abcdcac51a735d71ae4ea06535aae82878b3bb86e63ce23978a213f13ab	vulkan-pe	arm64ec-windows/d3d9.dll	P6-vulkan-pe
 resource	Runtime/vulkan/arm64ec-windows/d3d10core.dll	430080	bd784fc0f7da1724374bdeeb14a771eb5101938c6c23a3e893b5b8c316a0c6fd	vulkan-pe	arm64ec-windows/d3d10core.dll	P6-vulkan-pe
@@ -5372,7 +5372,7 @@ resource	Runtime/mono/wine-mono-11.3.0/support/removeuserinstalls-x86.exe	12288	
 resource	Runtime/mono/wine-mono-11.3.0/support/removeuserinstalls-x86_64.exe	14848	716081b9913e005f0e1261f2c2a9d88da970fbe579c7dfd083774b228bd71675	wine-mono	support/removeuserinstalls-x86_64.exe	wine-mono
 resource	Runtime/mono/wine-mono-11.3.0/support/winemono-support.cab	1395918	857cb2bc7001aa6b94a90560a6996f7cf9fe3ebff72ac39e73ed5d05f83b78f4	wine-mono	support/winemono-support.cab	wine-mono
 resource	Runtime/mono/wine-mono-11.3.0/support/winemono-support.msi	22528	0567d9569c9ca7f678c7ccd4a5ccffbd9dc7bdd3c632ce204afaf7068bf9c2db	wine-mono	support/winemono-support.msi	wine-mono
-link	lib/libntdll_unix.a	4798832	ad2f12827594edf35b0e6e9e93cd685730ed0e832e1201fbb21fc39590822673	unix	mythic/app/Madeira/libntdll_unix.a	P3
+link	lib/libntdll_unix.a	4798944	827379ab48fee456d19d2d7448100eb10648738f41b69798616630645d4d9b81	unix	mythic/app/Madeira/libntdll_unix.a	P3
 link	lib/libwin32u_unix.a	4136368	e8ded8744079e7dcd3cba9b69dc427b80ed7e2132a8d82aa2ecab8a158687f64	unix	mythic/app/Madeira/libwin32u_unix.a	P4-win32u
 link	lib/libwineserver.a	1214432	78f505018ee5ac887b8d8f7f77e9716662e28108cb17feeb432f0c273865399f	unix	mythic/app/Madeira/libwineserver.a	P4-server
 link	lib/libgnutls.a	3603280	e9fb697d624bb63d1c89e8569f1a8e0e69e576175407853bf34a6279fa1673b3	unix	mythic/toolchains/gnutls-ios/lib/libgnutls.a	P4-crypto

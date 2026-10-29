@@ -1,0 +1,309 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 29 Oct 2026 07:53:20 +0100
+Subject: [PATCH] ARM64EC: MADEIRA_FEX_PAUSE=wait-os[:K[:U]], a PAUSE that
+ blocks U us
+
+yield-os (0084) gives a spinning thread's core to a thread already
+waiting for it, and returns at once when there is none; under the power
+clamp The Witcher 3's RenderThread still used about 70% of a core with
+it. wait-os makes every K-th PAUSE of a thread a raw thread_switch Mach
+trap (svc #0x80, x16 = -61) with MACH_PORT_NULL and
+SWITCH_OPTION_DISPATCH_CONTENTION, libdispatch's contention back-off:
+the kernel blocks the thread for U microseconds (assert_wait_timeout
+in usec, osfmk/kern/syscall_subr.c) whether or not anything else is
+runnable, so the core is free, or idle, for that long. The cost is up
+to U us of extra latency when the awaited store lands mid-wait.
+
+K is as for yield-os (default 128, 1 to 4095); U defaults to 50, 1 to
+5000. x1 and x2, guest registers like x0, are saved in TMP3/TMP4
+around the trap; the counters 0085 added time it the same way, so
+[xp-pause] reports the waits. The disk-cache key already holds the
+whole variable.
+
+Linear: PLA-462
+Class: feature
+Evidence: tools/tests/test_fex_pause_yield_os.py
+Offered-upstream: no; the switch is Playport's iOS host's
+---
+ .../Core/ArchHelpers/Arm64Emitter.cpp         |  1 +
+ .../Interface/Core/ArchHelpers/Arm64Emitter.h |  5 +-
+ .../Interface/Core/JIT/IosPauseYieldOs.h      | 38 +++++++--
+ FEXCore/Source/Interface/Core/JIT/MiscOps.cpp |  5 +-
+ .../include/FEXCore/Utils/IosPauseOption.h    | 79 ++++++++++++-------
+ Source/Windows/ARM64EC/Module.cpp             |  7 +-
+ 6 files changed, 97 insertions(+), 38 deletions(-)
+
+diff --git a/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.cpp b/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.cpp
+index 0f69229..e348750 100644
+--- a/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.cpp
++++ b/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.cpp
+@@ -30,6 +30,7 @@ extern "C" uint32_t IosEcCallRetPop = 0;
+ extern "C" uint32_t IosRdtscSelfSync = 0;
+ extern "C" uint32_t IosPauseMode = 0;
+ extern "C" uint32_t IosPauseYieldOsAfter = 0;
++extern "C" uint32_t IosPauseWaitOsUsec = 0;
+ extern "C" uint32_t IosFexBatch2 = 0;
+ extern "C" uint32_t IosAfpOffFpcr = 0;
+ #endif
+diff --git a/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.h b/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.h
+index 7e3c840..849433d 100644
+--- a/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.h
++++ b/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.h
+@@ -129,15 +129,18 @@ extern "C" uint32_t IosRdtscSelfSync;
+ // event (another core's SEV or store to a monitored line, an interrupt, the generic timer's event stream);
+ // 2 is ISB, a pipeline flush, as a short delay that keeps the core awake; 3 is YIELD, and every
+ // IosPauseYieldOsAfter-th PAUSE of a thread a swtch_pri Mach trap that lets another thread have the core
+-// (JIT/IosPauseYieldOs.h). The values are FEX::Ios::ParsePauseOption's (FEXCore/Utils/IosPauseOption.h).
++// (JIT/IosPauseYieldOs.h); 4 is 3 with, instead of swtch_pri, a thread_switch that blocks the thread for
++// IosPauseWaitOsUsec microseconds. The values are FEX::Ios::ParsePauseOption's (FEXCore/Utils/IosPauseOption.h).
+ enum IosPauseMode : uint32_t {
+   IOS_PAUSE_YIELD = 0,
+   IOS_PAUSE_WFE = 1,
+   IOS_PAUSE_ISB = 2,
+   IOS_PAUSE_YIELD_OS = 3,
++  IOS_PAUSE_WAIT_OS = 4,
+ };
+ extern "C" uint32_t IosPauseMode;
+ extern "C" uint32_t IosPauseYieldOsAfter;
++extern "C" uint32_t IosPauseWaitOsUsec;
+ // Playport: the MADEIRA_FEX_BATCH2=1 items, one bit each, set by the frontend at process init (Module.cpp),
+ // less those named in MADEIRA_FEX_BATCH2_SKIP; 0 is the behaviour without them.
+ enum IosFexBatch2Bits : uint32_t {
+diff --git a/FEXCore/Source/Interface/Core/JIT/IosPauseYieldOs.h b/FEXCore/Source/Interface/Core/JIT/IosPauseYieldOs.h
+index 12597a0..b3aab9c 100644
+--- a/FEXCore/Source/Interface/Core/JIT/IosPauseYieldOs.h
++++ b/FEXCore/Source/Interface/Core/JIT/IosPauseYieldOs.h
+@@ -11,6 +11,11 @@
+ // NZCV, which holds the guest's flags; the sequence saves and restores x0 (a guest register on ARM64EC) and
+ // x16 and sets no flags. A header of its own so a host test can emit it with FEX's CodeEmitter.
+ //
++// MADEIRA_FEX_PAUSE=wait-os[:K[:U]] (IOS_PAUSE_WAIT_OS) makes the K-th PAUSE a thread_switch Mach trap with
++// SWITCH_OPTION_DISPATCH_CONTENTION instead, libdispatch's contention back-off: the thread blocks for U us
++// whatever else is runnable, so its core is free (or can idle) for that long. swtch_pri gives the core up only
++// to a thread already waiting for it, and returns at once when there is none.
++//
+ // The trap path also counts, in the same frame, what the trap did (PLA-462: whether the yields actually took
+ // the thread off its core): the traps, those that came back within IosPauseYieldOsShortTicks of the generic
+ // timer (the kernel found nothing else to run), and the timer ticks spent in all of them. ntdll's [xp] sampler
+@@ -29,6 +34,13 @@ inline constexpr uint32_t IosPauseYieldOsMaxAfter = 4095;
+ // Darwin's Mach trap number of swtch_pri, as libsystem_kernel loads it (movn x16, #0x3a).
+ inline constexpr int32_t IosSwtchPriTrap = -59;
+ 
++// thread_switch's (movn x16, #0x3c), with x0 = MACH_PORT_NULL, x1 = SWITCH_OPTION_DISPATCH_CONTENTION, x2 = the
++// wait in microseconds (osfmk/kern/syscall_subr.c).
++inline constexpr int32_t IosThreadSwitchTrap = -61;
++inline constexpr uint32_t IosSwitchOptionDispatchContention = 3;
++// WaitUsec's limit: one MOVZ.
++inline constexpr uint32_t IosPauseWaitOsMaxUsec = 65535;
++
+ // A trap shorter than this many generic-timer ticks counts as short: 2 us at Apple's 24 MHz timer, where an
+ // idle swtch_pri takes about 0.3 us and a context switch away and back takes several.
+ inline constexpr uint32_t IosPauseYieldOsShortTicks = 48;
+@@ -42,12 +54,15 @@ struct IosPauseYieldOsOffsets {
+   uint32_t Start;  // the timer when the current trap began
+ };
+ 
+-// Emits PAUSE as: Count = Count + 1; if Count == After { Count = 0; Start = CNTVCT; swtch_pri; D = CNTVCT -
+-// Start; Ticks += D; Short += D < IosPauseYieldOsShortTicks; Traps += 1 } else YIELD, with After in
+-// 1..IosPauseYieldOsMaxAfter. Tmp1 and Tmp2 are scratch; neither may be x0, x16 or State.
++// Emits PAUSE as: Count = Count + 1; if Count == After { Count = 0; Start = CNTVCT; TRAP; D = CNTVCT - Start;
++// Ticks += D; Short += D < IosPauseYieldOsShortTicks; Traps += 1 } else YIELD, with After in
++// 1..IosPauseYieldOsMaxAfter. TRAP is swtch_pri, or with WaitUsec (1..IosPauseWaitOsMaxUsec) thread_switch
++// waiting that long. Tmp1..Tmp4 are scratch; none may be x0, x1, x2, x16 or State. Tmp3 and Tmp4 hold x1 and
++// x2 across the wait and are not touched without one.
+ template<typename EmitterT>
+ void IosEmitPauseYieldOs(EmitterT& E, ARMEmitter::XRegister State, const IosPauseYieldOsOffsets& Off, uint32_t After,
+-                         ARMEmitter::XRegister Tmp1, ARMEmitter::XRegister Tmp2) {
++                         uint32_t WaitUsec, ARMEmitter::XRegister Tmp1, ARMEmitter::XRegister Tmp2,
++                         ARMEmitter::XRegister Tmp3, ARMEmitter::XRegister Tmp4) {
+   const auto CountOffset = Off.Count;
+   ARMEmitter::ForwardLabel Trap;
+   ARMEmitter::ForwardLabel Done;
+@@ -67,7 +82,16 @@ void IosEmitPauseYieldOs(EmitterT& E, ARMEmitter::XRegister State, const IosPaus
+   E.mov(ARMEmitter::Size::i64Bit, Tmp2, ARMEmitter::XReg::x16);
+   E.mrs(ARMEmitter::XReg::x16, ARMEmitter::SystemRegister::CNTVCT_EL0);
+   E.str(ARMEmitter::XReg::x16, State, Off.Start);
+-  E.movn(ARMEmitter::Size::i64Bit, ARMEmitter::XReg::x16, static_cast<uint32_t>(-IosSwtchPriTrap - 1));
++  if (WaitUsec) {
++    E.mov(ARMEmitter::Size::i64Bit, Tmp3, ARMEmitter::XReg::x1);
++    E.mov(ARMEmitter::Size::i64Bit, Tmp4, ARMEmitter::XReg::x2);
++    E.movz(ARMEmitter::Size::i64Bit, ARMEmitter::XReg::x0, 0);
++    E.movz(ARMEmitter::Size::i64Bit, ARMEmitter::XReg::x1, IosSwitchOptionDispatchContention);
++    E.movz(ARMEmitter::Size::i64Bit, ARMEmitter::XReg::x2, WaitUsec);
++    E.movn(ARMEmitter::Size::i64Bit, ARMEmitter::XReg::x16, static_cast<uint32_t>(-IosThreadSwitchTrap - 1));
++  } else {
++    E.movn(ARMEmitter::Size::i64Bit, ARMEmitter::XReg::x16, static_cast<uint32_t>(-IosSwtchPriTrap - 1));
++  }
+   E.svc(0x80);
+   // x0 (the trap's result, unused) and x16 are free until they are restored. The exception return is
+   // context-synchronising, so the second timer read is not taken before the trap.
+@@ -88,6 +112,10 @@ void IosEmitPauseYieldOs(EmitterT& E, ARMEmitter::XRegister State, const IosPaus
+   E.str(ARMEmitter::XReg::x0, State, Off.Traps);
+   E.mov(ARMEmitter::Size::i64Bit, ARMEmitter::XReg::x0, Tmp1);
+   E.mov(ARMEmitter::Size::i64Bit, ARMEmitter::XReg::x16, Tmp2);
++  if (WaitUsec) {
++    E.mov(ARMEmitter::Size::i64Bit, ARMEmitter::XReg::x1, Tmp3);
++    E.mov(ARMEmitter::Size::i64Bit, ARMEmitter::XReg::x2, Tmp4);
++  }
+ 
+   (void)E.Bind(&Done);
+ }
+diff --git a/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp b/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp
+index ce903c1..1375663 100644
+--- a/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp
++++ b/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp
+@@ -376,12 +376,13 @@ DEF_OP(Yield) {
+     isb();
+     return;
+   }
+-  if (IosPauseMode == IOS_PAUSE_YIELD_OS) {
++  if (IosPauseMode == IOS_PAUSE_YIELD_OS || IosPauseMode == IOS_PAUSE_WAIT_OS) {
+     using Frame = FEXCore::Core::CpuStateFrame;
+     IosEmitPauseYieldOs(*this, STATE,
+                         {offsetof(Frame, IosPauseCount), offsetof(Frame, IosPauseTraps), offsetof(Frame, IosPauseShort),
+                          offsetof(Frame, IosPauseTicks), offsetof(Frame, IosPauseStart)},
+-                        IosPauseYieldOsAfter, TMP1, TMP2);
++                        IosPauseYieldOsAfter, IosPauseMode == IOS_PAUSE_WAIT_OS ? IosPauseWaitOsUsec : 0, TMP1, TMP2,
++                        TMP3, TMP4);
+     return;
+   }
+ #endif
+diff --git a/FEXCore/include/FEXCore/Utils/IosPauseOption.h b/FEXCore/include/FEXCore/Utils/IosPauseOption.h
+index 36e10c9..81bd197 100644
+--- a/FEXCore/include/FEXCore/Utils/IosPauseOption.h
++++ b/FEXCore/include/FEXCore/Utils/IosPauseOption.h
+@@ -9,51 +9,74 @@
+ namespace FEX::Ios {
+ 
+ struct PauseOption {
+-  uint32_t Mode;  // Arm64Emitter.h's IosPauseMode: 0 YIELD, 1 WFE, 2 ISB, 3 YIELD then swtch_pri every After
+-  uint32_t After; // PAUSEs per swtch_pri, mode 3 only
++  uint32_t Mode;  // Arm64Emitter.h's IosPauseMode: 0 YIELD, 1 WFE, 2 ISB, 3 YIELD then swtch_pri every After,
++                  // 4 YIELD then a Usec wait every After
++  uint32_t After; // PAUSEs per trap, modes 3 and 4
++  uint32_t Usec;  // the wait, mode 4 only
+ };
+ 
+ inline constexpr uint32_t PauseYieldOsDefaultAfter = 128;
+ inline constexpr uint32_t PauseYieldOsMaxAfter = 4095; // IosPauseYieldOs.h: a 12-bit immediate
++inline constexpr uint32_t PauseWaitOsDefaultUsec = 50;
++inline constexpr uint32_t PauseWaitOsMaxUsec = 5000;   // the guest's spin waits for up to 5 ms; more is a hang
+ 
+-// "wfe", "isb", "yield-os" or "yield-os:K" with K a decimal in 1..PauseYieldOsMaxAfter; unset or anything else
+-// is FEX's YIELD.
++// A decimal in 1..Max from P up to End ('\0' or ':'), into Out; P is left at End.
++inline bool ParsePauseNumber(const char*& P, uint32_t Max, uint32_t& Out) {
++  uint32_t V = 0;
++  const char* Start = P;
++  for (; *P && *P != ':'; ++P) {
++    if (*P < '0' || *P > '9') {
++      return false;
++    }
++    V = V * 10 + static_cast<uint32_t>(*P - '0');
++    if (V > Max) {
++      return false;
++    }
++  }
++  if (P == Start || V == 0) {
++    return false;
++  }
++  Out = V;
++  return true;
++}
++
++// "wfe", "isb", "yield-os[:K]" or "wait-os[:K[:U]]" with K a decimal in 1..PauseYieldOsMaxAfter and U in
++// 1..PauseWaitOsMaxUsec; unset or anything else is FEX's YIELD.
+ inline PauseOption ParsePauseOption(const char* Opt) {
+   if (!Opt) {
+-    return {0, 0};
++    return {0, 0, 0};
+   }
+   if (strcmp(Opt, "wfe") == 0) {
+-    return {1, 0};
++    return {1, 0, 0};
+   }
+   if (strcmp(Opt, "isb") == 0) {
+-    return {2, 0};
++    return {2, 0, 0};
+   }
+-  constexpr char YieldOs[] = "yield-os";
+-  constexpr size_t YieldOsLen = sizeof(YieldOs) - 1;
+-  if (strncmp(Opt, YieldOs, YieldOsLen) != 0) {
+-    return {0, 0};
++  uint32_t Mode;
++  const char* P;
++  if (strncmp(Opt, "yield-os", 8) == 0) {
++    Mode = 3;
++    P = Opt + 8;
++  } else if (strncmp(Opt, "wait-os", 7) == 0) {
++    Mode = 4;
++    P = Opt + 7;
++  } else {
++    return {0, 0, 0};
+   }
+-  const char* Rest = Opt + YieldOsLen;
+-  if (*Rest == '\0') {
+-    return {3, PauseYieldOsDefaultAfter};
++  PauseOption R {Mode, PauseYieldOsDefaultAfter, Mode == 4 ? PauseWaitOsDefaultUsec : 0};
++  if (*P == '\0') {
++    return R;
+   }
+-  if (*Rest != ':' || Rest[1] == '\0') {
+-    return {0, 0};
++  if (*P != ':' || !ParsePauseNumber(++P, PauseYieldOsMaxAfter, R.After)) {
++    return {0, 0, 0};
+   }
+-  uint32_t After = 0;
+-  for (const char* c = Rest + 1; *c; ++c) {
+-    if (*c < '0' || *c > '9') {
+-      return {0, 0};
+-    }
+-    After = After * 10 + static_cast<uint32_t>(*c - '0');
+-    if (After > PauseYieldOsMaxAfter) {
+-      return {0, 0};
+-    }
++  if (*P == '\0') {
++    return R;
+   }
+-  if (After == 0) {
+-    return {0, 0};
++  if (Mode != 4 || *P != ':' || !ParsePauseNumber(++P, PauseWaitOsMaxUsec, R.Usec) || *P != '\0') {
++    return {0, 0, 0};
+   }
+-  return {3, After};
++  return R;
+ }
+ 
+ } // namespace FEX::Ios
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index 9fd8d9d..1a0d332 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -99,6 +99,7 @@ extern "C" uint32_t IosEcCallRetPop;
+ extern "C" uint32_t IosRdtscSelfSync;
+ extern "C" uint32_t IosPauseMode;
+ extern "C" uint32_t IosPauseYieldOsAfter;
++extern "C" uint32_t IosPauseWaitOsUsec;
+ extern "C" uint32_t IosFexBatch2;
+ extern "C" uint32_t IosAfpOffFpcr; // Arm64Emitter.h: 0 none, 1 fiz, 2 ah, 3 ahx
+ extern "C" int IosAliasGranulesEnable(void);
+@@ -1455,14 +1456,16 @@ NTSTATUS ProcessInit() {
+     const char* QpcOpt = getenv("MADEIRA_X64_QPC_FASTPATH");
+     IosRdtscSelfSync = QpcOpt && strcmp(QpcOpt, "1") == 0;
+     LogMan::Msg::IFmt("FEX: rdtsc-self-sync enabled={}", IosRdtscSelfSync != 0);
+-    /* Playport: MADEIRA_FEX_PAUSE=wfe, isb or yield-os[:K]: what x86 PAUSE compiles to (IosPauseMode in
++    /* Playport: MADEIRA_FEX_PAUSE=wfe, isb, yield-os[:K] or wait-os[:K[:U]]: what x86 PAUSE compiles to (IosPauseMode in
+      * Arm64Emitter.h, FEX::Ios::ParsePauseOption); unset or anything else keeps FEX's YIELD. Set before any
+      * code is compiled. */
+     const char* PauseOpt = getenv("MADEIRA_FEX_PAUSE");
+     const auto Pause = FEX::Ios::ParsePauseOption(PauseOpt);
+     IosPauseMode = Pause.Mode;
+     IosPauseYieldOsAfter = Pause.After;
+-    LogMan::Msg::IFmt("FEX: pause mode={} after={} ({})", IosPauseMode, IosPauseYieldOsAfter, PauseOpt ? PauseOpt : "yield");
++    IosPauseWaitOsUsec = Pause.Usec;
++    LogMan::Msg::IFmt("FEX: pause mode={} after={} usec={} ({})", IosPauseMode, IosPauseYieldOsAfter, IosPauseWaitOsUsec,
++                      PauseOpt ? PauseOpt : "yield");
+     /* Playport: MADEIRA_FEX_BATCH2=1 turns on the IosFexBatch2 items (Arm64Emitter.h), less the ones
+      * MADEIRA_FEX_BATCH2_SKIP names (comma-separated: alias, ffs, dmb, uabp). Off by default. */
+     const char* Batch2Opt = getenv("MADEIRA_FEX_BATCH2");

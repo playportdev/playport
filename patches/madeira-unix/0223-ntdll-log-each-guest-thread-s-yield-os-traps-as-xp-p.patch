@@ -3,17 +3,18 @@ From: The Playport authors <dev@playport.dev>
 Date: Thu, 29 Oct 2026 07:45:28 +0100
 Subject: [PATCH] ntdll: log each guest thread's yield-os traps as [xp-pause]
 
-Under MADEIRA_FEX_PAUSE=yield-os FEX now counts, in each guest thread's
-CpuStateFrame, its swtch_pri traps, those under 2 us and the timer
-ticks spent in them (patches/fex 0085). Whether the traps took The
+Under MADEIRA_FEX_PAUSE=yield-os or wait-os FEX now counts, in each
+guest thread's CpuStateFrame, its traps (swtch_pri, or wait-os's
+thread_switch wait), those under 2 us and the timer ticks spent in
+them (patches/fex 0085, 0086). Whether the traps took The
 Witcher 3's RenderThread off its core was the open question of PLA-462.
 
-Under that mode only, the [xp] sampler reads the three counters every
+Under those modes only, the [xp] sampler reads the three counters every
 250 ms tick through TEB+0x1788 (ChpeV2CpuAreaInfo) and +0x30 (the
 frame) with ios_ts_read, and logs [xp-pause]: each thread with traps
 this tick, by Windows TID as in [xp-t], with traps / short traps / ms
-inside them. Nothing a thread does changes; without the mode nothing
-is read or logged.
+inside them. Nothing a thread does changes; without either mode
+nothing is read or logged.
 
 Linear: PLA-462
 Class: diagnostics
@@ -24,7 +25,7 @@ Offered-upstream: no
  1 file changed, 56 insertions(+), 5 deletions(-)
 
 diff --git a/build/ntdll-unix/server_ios.c b/build/ntdll-unix/server_ios.c
-index ff601c9..d821631 100644
+index ff601c9..3df2eaa 100644
 --- a/build/ntdll-unix/server_ios.c
 +++ b/build/ntdll-unix/server_ios.c
 @@ -1073,10 +1073,32 @@ struct ios_xp_pe { int64_t magic, qpf, pres_enq, pres_done, t_thr, n_ecl, t_ecl,
@@ -38,9 +39,9 @@ index ff601c9..d821631 100644
 +                    uint64_t pause_traps, pause_short; double pause_ms; };
  static struct ios_xp_prev ios_xp_tab[2048];
  
-+/* Playport (PLA-462): under MADEIRA_FEX_PAUSE=yield-os FEX counts, in each guest thread's CpuStateFrame,
++/* Playport (PLA-462): under MADEIRA_FEX_PAUSE=yield-os or wait-os FEX counts, in each guest thread's CpuStateFrame,
 + * its swtch_pri traps, those under 2 us, and the generic-timer ticks (mach_absolute_time's) spent in
-+ * them (patches/fex 0085, IosPauseYieldOs.h). The frame is TEB+0x1788 (ChpeV2CpuAreaInfo) -> +0x30
++ * them (patches/fex 0085 and 0086, IosPauseYieldOs.h). The frame is TEB+0x1788 (ChpeV2CpuAreaInfo) -> +0x30
 + * (EmulatorData[0]); the counters' offsets are pinned by static_asserts in FEX's ARM64EC Module.cpp.
 + * Read only under that mode, every [xp] tick, and logged as [xp-pause]. */
 +#define IOS_XP_PAUSE_TRAPS 3888   /* IosPauseTraps, IosPauseShort, IosPauseTicks follow */
@@ -51,7 +52,7 @@ index ff601c9..d821631 100644
 +    if (ios_xp_pause_on < 0)
 +    {
 +        const char *v = getenv( "MADEIRA_FEX_PAUSE" );
-+        ios_xp_pause_on = v && !strncmp( v, "yield-os", 8 );
++        ios_xp_pause_on = v && (!strncmp( v, "yield-os", 8 ) || !strncmp( v, "wait-os", 7 ));
 +    }
 +    if (!ios_xp_pause_on || !teb) return 0;
 +    if (!ios_ts_read( teb + 0x1788, &area, 8 ) || !area) return 0;

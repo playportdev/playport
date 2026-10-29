@@ -62,17 +62,23 @@ PARSE = r'''
 #include "IosPauseOption.h"
 #include <cstdio>
 int main() {
-  struct { const char* In; uint32_t Mode, After; } Cases[] = {
+  struct { const char* In; uint32_t Mode, After, Usec; } Cases[] = {
     {nullptr, 0, 0}, {"", 0, 0}, {"yield", 0, 0}, {"wfe", 1, 0}, {"isb", 2, 0}, {"WFE", 0, 0},
     {"yield-os", 3, 128}, {"yield-os:1", 3, 1}, {"yield-os:64", 3, 64}, {"yield-os:256", 3, 256},
     {"yield-os:4095", 3, 4095}, {"yield-os:4096", 0, 0}, {"yield-os:99999999999", 0, 0}, {"yield-os:0", 0, 0},
     {"yield-os:", 0, 0}, {"yield-os:12x", 0, 0}, {"yield-os:-1", 0, 0}, {"yield-osx", 0, 0}, {"yield-os 64", 0, 0},
+    {"yield-os:64:50", 0, 0},
+    {"wait-os", 4, 128, 50}, {"wait-os:64", 4, 64, 50}, {"wait-os:64:200", 4, 64, 200}, {"wait-os:1:1", 4, 1, 1},
+    {"wait-os:4095:5000", 4, 4095, 5000}, {"wait-os:64:5001", 0, 0}, {"wait-os:64:0", 0, 0}, {"wait-os:64:", 0, 0},
+    {"wait-os::50", 0, 0}, {"wait-os:4096:50", 0, 0}, {"wait-os:64:50:1", 0, 0}, {"wait-os:64:5x", 0, 0},
+    {"wait-osx", 0, 0}, {"wait-os:", 0, 0},
   };
   int Bad = 0;
   for (auto& C : Cases) {
     auto P = FEX::Ios::ParsePauseOption(C.In);
-    if (P.Mode != C.Mode || P.After != C.After) {
-      printf("%s: mode %u after %u, want %u %u\n", C.In ? C.In : "(unset)", P.Mode, P.After, C.Mode, C.After);
+    if (P.Mode != C.Mode || P.After != C.After || P.Usec != C.Usec) {
+      printf("%s: mode %u after %u usec %u, want %u %u %u\n", C.In ? C.In : "(unset)", P.Mode, P.After, P.Usec,
+             C.Mode, C.After, C.Usec);
       Bad++;
     }
   }
@@ -80,8 +86,9 @@ int main() {
 }
 '''
 
-# Emits the sequence for State x28, the counters from 4096, After K = argv[1], TMP1/TMP2 as ARM64EC's (x10, x11), then
-# RET. Prints the words; on arm64 Darwin with argv[2] == "run" also runs them.
+# Emits the sequence for State x28, the counters from 4096, After K = argv[1], a wait of argv[2] us (0: swtch_pri),
+# TMP1..TMP4 as ARM64EC's (x10..x13), then RET. Prints the words; on arm64 Darwin with argv[3] == "run" also runs
+# them.
 EMIT = r'''
 #include "IosPauseYieldOs.h"
 #include <cstdio>
@@ -107,30 +114,34 @@ constexpr FEXCore::CPU::IosPauseYieldOsOffsets Off {CountOffset, CountOffset + 8
                                                     CountOffset + 32};
 
 #if defined(__APPLE__) && defined(__aarch64__)
-struct Regs { uint64_t X0, X10, X16, Nzcv; };
-// Calls Code with x28 = State, x0/x16/NZCV as given; returns x0, x10, x16, NZCV after.
-static Regs Call(void* Code, void* State, uint64_t X0, uint64_t X16, uint64_t Nzcv) {
+struct Regs { uint64_t X0, X1, X2, X10, X16, Nzcv; };
+// Calls Code with x28 = State, x0/x1/x2/x16/NZCV as given; returns them and x10 after.
+static Regs Call(void* Code, void* State, uint64_t X0, uint64_t X1, uint64_t X2, uint64_t X16, uint64_t Nzcv) {
   Regs R;
   register uint64_t r0 __asm__("x0") = X0;
+  register uint64_t r1 __asm__("x1") = X1;
+  register uint64_t r2 __asm__("x2") = X2;
   register uint64_t r16 __asm__("x16") = X16;
   register uint64_t r9 __asm__("x9") = Nzcv;
   register void* r28 __asm__("x28") = State;
-  register void* r12 __asm__("x12") = Code;
+  register void* r15 __asm__("x15") = Code;
   register uint64_t r10 __asm__("x10");
-  __asm__ volatile("msr nzcv, x9\n blr x12\n mrs x9, nzcv\n"
-                   : "+r"(r0), "+r"(r16), "+r"(r9), "=r"(r10)
-                   : "r"(r28), "r"(r12)
-                   : "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x11", "x13", "x14", "x15", "x17", "x30", "memory", "cc");
-  R.X0 = r0; R.X10 = r10; R.X16 = r16; R.Nzcv = r9;
+  __asm__ volatile("msr nzcv, x9\n blr x15\n mrs x9, nzcv\n"
+                   : "+r"(r0), "+r"(r1), "+r"(r2), "+r"(r16), "+r"(r9), "=r"(r10)
+                   : "r"(r28), "r"(r15)
+                   : "x3", "x4", "x5", "x6", "x7", "x8", "x11", "x12", "x13", "x14", "x17", "x30", "memory", "cc");
+  R.X0 = r0; R.X1 = r1; R.X2 = r2; R.X10 = r10; R.X16 = r16; R.Nzcv = r9;
   return R;
 }
 #endif
 
 int main(int argc, char** argv) {
   const uint32_t After = strtoul(argv[1], nullptr, 10);
+  const uint32_t Usec = strtoul(argv[2], nullptr, 10);
   alignas(16) static uint8_t Buf[4096];
   ARMEmitter::Emitter E(Buf, sizeof Buf);
-  FEXCore::CPU::IosEmitPauseYieldOs(E, ARMEmitter::XReg::x28, Off, After, ARMEmitter::XReg::x10, ARMEmitter::XReg::x11);
+  FEXCore::CPU::IosEmitPauseYieldOs(E, ARMEmitter::XReg::x28, Off, After, Usec, ARMEmitter::XReg::x10, ARMEmitter::XReg::x11,
+                                    ARMEmitter::XReg::x12, ARMEmitter::XReg::x13);
   E.ret();
   const size_t Size = E.GetCursorOffset();
   for (size_t i = 0; i < Size; i += 4) {
@@ -138,7 +149,7 @@ int main(int argc, char** argv) {
     memcpy(&W, Buf + i, 4);
     printf("%08x\n", W);
   }
-  if (argc < 3 || strcmp(argv[2], "run") != 0) return 0;
+  if (argc < 4 || strcmp(argv[3], "run") != 0) return 0;
 #if defined(__APPLE__) && defined(__aarch64__)
   void* Code = mmap(nullptr, 16384, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
   if (Code == MAP_FAILED) { perror("mmap"); return 2; }
@@ -155,12 +166,12 @@ int main(int argc, char** argv) {
   int Bad = 0, Traps = 0;
   const int Pauses = After * 50 + 7;
   for (int i = 1; i <= Pauses; i++) {
-    const uint64_t X0 = 0x1000 + i, X16 = 0x2000 + i, Nzcv = uint64_t(i & 15) << 28;
+    const uint64_t X0 = 0x1000 + i, X1 = 0x3000 + i, X2 = 0x4000 + i, X16 = 0x2000 + i, Nzcv = uint64_t(i & 15) << 28;
     const uint64_t Before = Count;
-    Regs R = Call(Code, State, X0, X16, Nzcv);
+    Regs R = Call(Code, State, X0, X1, X2, X16, Nzcv);
     const bool Trap = i % After == 0;
     Traps += R.X10 == X0; // the trap path keeps x0 in x10, the YIELD path the count
-    if (R.X0 != X0 || R.X16 != X16 || R.Nzcv != Nzcv || Count != (Trap ? 0 : Before + 1) || (R.X10 == X0) != Trap) {
+    if (R.X0 != X0 || R.X1 != X1 || R.X2 != X2 || R.X16 != X16 || R.Nzcv != Nzcv || Count != (Trap ? 0 : Before + 1) || (R.X10 == X0) != Trap) {
       if (Bad++ < 5)
         printf("pause %d: x0 %llx x16 %llx nzcv %llx count %llu x10 %llx\n", i, (unsigned long long)R.X0,
                (unsigned long long)R.X16, (unsigned long long)R.Nzcv, (unsigned long long)Count, (unsigned long long)R.X10);
@@ -171,8 +182,10 @@ int main(int argc, char** argv) {
   printf("ran %d pauses, %d traps; counted %llu, %llu short, %.2f us each (timer %llu Hz)\n", Pauses, Traps,
          (unsigned long long)TrapCount, (unsigned long long)ShortCount,
          TrapCount ? TickCount * 1e6 / Freq / TrapCount : 0.0, (unsigned long long)Freq);
+  // A wait of Usec blocks at least that long: none of them short, and on average no less than Usec.
+  const bool WaitOk = !Usec || (ShortCount == 0 && TickCount * 1e6 / Freq >= double(Usec) * TrapCount);
   return Bad != 0 || Traps != Pauses / int(After) || TrapCount != uint64_t(Traps) || ShortCount > TrapCount ||
-         (Traps && !TickCount);
+         (Traps && !TickCount) || !WaitOk;
 #else
   return 3;
 #endif
@@ -180,21 +193,22 @@ int main(int argc, char** argv) {
 '''
 
 
-def expected(after):
-    return [
-        "ldr x10, [x28, #4096]",
-        "add x10, x10, #1",
-        f"sub x11, x10, #{after}",
-        "cbz x11, #16",  # to the trap
-        "str x10, [x28, #4096]",
-        "yield",
-        "b #96",  # past it
+def expected(after, usec=0):
+    if usec:
+        trap = ["mov x12, x1", "mov x13, x2", "mov x0, #0", "mov x1, #3", f"mov x2, #{usec}",
+                "mov x16, #-61",  # thread_switch(MACH_PORT_NULL, SWITCH_OPTION_DISPATCH_CONTENTION, usec)
+                ]
+        restore = ["mov x1, x12", "mov x2, x13"]
+    else:
+        trap = ["mov x16, #-59"]  # swtch_pri
+        restore = []
+    tail = [
         "str xzr, [x28, #4096]",
         "mov x10, x0",
         "mov x11, x16",
         "mrs x16, CNTVCT_EL0",
         "str x16, [x28, #4128]",  # Start
-        "mov x16, #-59",  # swtch_pri
+        *trap,
         "svc #0x80",
         "mrs x16, CNTVCT_EL0",
         "ldr x0, [x28, #4128]",
@@ -212,6 +226,17 @@ def expected(after):
         "str x0, [x28, #4104]",
         "mov x0, x10",
         "mov x16, x11",
+        *restore,
+    ]
+    return [
+        "ldr x10, [x28, #4096]",
+        "add x10, x10, #1",
+        f"sub x11, x10, #{after}",
+        "cbz x11, #16",  # to the trap
+        "str x10, [x28, #4096]",
+        "yield",
+        f"b #{4 * (len(tail) + 1)}",  # past it
+        *tail,
         "ret",
     ]
 
@@ -256,22 +281,23 @@ class PauseYieldOs(unittest.TestCase):
         if not mc:
             self.skipTest("no llvm-mc")
         exe = self.emitter()
-        for after in (1, 64, 4095):
-            words = subprocess.run([str(exe), str(after)], capture_output=True, text=True, check=True).stdout.split()
+        for after, usec in ((1, 0), (64, 0), (4095, 0), (1, 1), (128, 50), (4095, 5000), (64, 65535)):
+            words = subprocess.run([str(exe), str(after), str(usec)], capture_output=True, text=True,
+                                   check=True).stdout.split()
             hexbytes = " ".join(f"{b:#04x}" for w in words for b in int(w, 16).to_bytes(4, "little"))
             dis = subprocess.run([mc, "--disassemble", "-triple=aarch64"], input=hexbytes, capture_output=True,
                                  text=True, check=True).stdout
             insns = [re.sub(r"\s+", " ", re.sub(r"//.*$", "", l)).strip() for l in dis.splitlines()]
             insns = [i for i in insns if i and not i.startswith(".")]
-            self.assertEqual(insns, expected(after), dis)
+            self.assertEqual(insns, expected(after, usec), dis)
             flag_setters = [i for i in insns if re.match(r"(adds|subs|cmp|cmn|tst|ands|msr nzcv)\b", i)]
             self.assertEqual(flag_setters, [])
 
     @unittest.skipUnless(platform.system() == "Darwin" and platform.machine() == "arm64", "runs on an arm64 Mac")
     def test_runs_on_darwin(self):
         exe = self.emitter()
-        for after in ("1", "3", "128"):
-            run = subprocess.run([str(exe), after, "run"], capture_output=True, text=True, timeout=120)
+        for after, usec in (("1", "0"), ("3", "0"), ("128", "0"), ("1", "50"), ("128", "200")):
+            run = subprocess.run([str(exe), after, usec, "run"], capture_output=True, text=True, timeout=120)
             self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
 
 

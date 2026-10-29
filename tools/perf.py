@@ -165,7 +165,7 @@ XP_RE = re.compile(r"^\[xp\] (\d\d):(\d\d):([\d.]+) \S+ dt=([\d.]+) cpu=(\d+) \(
 # before the wine tid), then P ms / E ms : P GHz / E GHz : M instructions
 XPT_RE = re.compile(r"^\[xp-t\] (\d\d):(\d\d):([\d.]+) (.*)")
 XPT_ENT = re.compile(r"^(m\d+|[A-Z]*-?[0-9a-f]{4,}):([\d.]+)/([\d.]+):[\d.]+/[\d.]+:([\d.]+)$")
-# madeira-unix 0223, under MADEIRA_FEX_PAUSE=yield-os: per guest thread, its swtch_pri
+# madeira-unix 0223, under MADEIRA_FEX_PAUSE=yield-os or wait-os: per guest thread, its
 # traps in the tick / those under 2 us / ms inside them (PLA-462)
 XPAUSE_RE = re.compile(r"^\[xp-pause\] (\d\d):(\d\d):([\d.]+) (.*)")
 XPAUSE_ENT = re.compile(r"^-([0-9a-f]{4,}):(\d+)/(\d+)/([\d.]+)$")
@@ -898,9 +898,10 @@ def thread_table(d, hud, xp, xpt, names, t0, window, top=8, xpause=()):
     cpu% is of one core; Mi/f (million instructions per presented frame) does
     not depend on the cluster or clock the scheduler gave the thread, so it is
     the measure of work to compare between runs and phases. Under
-    MADEIRA_FEX_PAUSE=yield-os ([xp-pause] lines) a thread's row also has its
-    swtch_pri traps per second, the share of them that took 2 us or more (the
-    kernel ran something else), and the time inside them as % of one core."""
+    MADEIRA_FEX_PAUSE=yield-os or wait-os ([xp-pause]) a thread's row also has its
+    PAUSE traps per second, the share of them that took 2 us or more (for
+    yield-os: the kernel ran something else), and the time inside them as % of
+    one core."""
     dts = {round(r[0], 3): r[1] for r in xp}   # [xp] and [xp-t] of one tick share the wall time
     out, res = [], []
     w = 0
