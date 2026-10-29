@@ -40,9 +40,8 @@ struct AppShell: View {
     @ObservedObject private var opening = AppOpening.shared
     @Environment(\.launchingFromPage) private var launchingFromPage
     @Environment(\.scenePhase) private var scenePhase
+    /// The pairing file's Files picker (Add a game has its own: GamePicker, UI/Import.swift).
     @State private var importing = false
-    /// What the one Files picker is open for: a pairing file, or a game (UI/Import.swift).
-    @State private var importingGame = false
     @ObservedObject private var gog = GOGAccount.shared
     @ObservedObject private var epic = EpicAccount.shared
 
@@ -101,34 +100,17 @@ struct AppShell: View {
         }
         .padFocusRoot()
         .onReceive(PadRouter.shared.presses) { press($0) }
-        // Choosing a pairing file (the checklist's step on iOS 26, Setup check's import), or a
-        // game to import (Library › Add a game): touch only, as Files is. One picker for both:
-        // SwiftUI presents only one fileImporter per hierarchy reliably.
-        .fileImporter(isPresented: $importing,
-                      allowedContentTypes: importingGame ? GameImports.contentTypes : [.propertyList, .xml, .data]) { result in
-            if importingGame {
-                guard case let .success(url) = result else { return }
-                Task {
-                    if let refusal = await GameImports.shared.picked(url) {
-                        PadModal.shared.picker(title: "Can't import \(url.lastPathComponent)", note: refusal,
-                                               options: [PadOption(id: "ok", label: "OK")], selected: "ok") { _ in }
-                    }
-                }
-            } else {
-                BuiltInJitStatus.shared.importPairingFile(result)
-            }
+        // Choosing a pairing file (the checklist's step on iOS 26, Setup check's import): touch
+        // only, as Files is. A game to import (Library › Add a game) has its own UIKit picker
+        // (GamePicker, issue #39).
+        .fileImporter(isPresented: $importing, allowedContentTypes: [.propertyList, .xml, .data]) { result in
+            BuiltInJitStatus.shared.importPairingFile(result)
         }
-        .onReceive(SettingsImport.requests) {
-            importingGame = false
-            importing = true
-        }
+        .onReceive(SettingsImport.requests) { importing = true }
         // GOG's and Epic's sign-in pages (touch: a web page, as iOS draws it; decision 0058).
         .sheet(isPresented: $gog.signingIn) { GOGSignInSheet() }
         .sheet(isPresented: $epic.signingIn) { EpicSignInSheet() }
-        .onReceive(GameImports.requests) {
-            importingGame = true
-            importing = true
-        }
+        .onReceive(GameImports.requests) { GamePicker.present() }
         .environmentObject(model)
         .preferredColorScheme(.dark)
         .tint(PP.accent)
