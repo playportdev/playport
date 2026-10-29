@@ -165,6 +165,10 @@ XP_RE = re.compile(r"^\[xp\] (\d\d):(\d\d):([\d.]+) \S+ dt=([\d.]+) cpu=(\d+) \(
 # before the wine tid), then P ms / E ms : P GHz / E GHz : M instructions
 XPT_RE = re.compile(r"^\[xp-t\] (\d\d):(\d\d):([\d.]+) (.*)")
 XPT_ENT = re.compile(r"^(m\d+|[A-Z]*-?[0-9a-f]{4,}):([\d.]+)/([\d.]+):[\d.]+/[\d.]+:([\d.]+)$")
+# madeira-unix 0223, under MADEIRA_FEX_PAUSE=yield-os: per guest thread, its swtch_pri
+# traps in the tick / those under 2 us / ms inside them (PLA-462)
+XPAUSE_RE = re.compile(r"^\[xp-pause\] (\d\d):(\d\d):([\d.]+) (.*)")
+XPAUSE_ENT = re.compile(r"^-([0-9a-f]{4,}):(\d+)/(\d+)/([\d.]+)$")
 # FEX's lookup-cache summary (every 16384 lookups): real_compiles counts guest
 # blocks translated so far; DXMT's per-16-present line counts mach exceptions
 CB_RE = re.compile(r"\[CB_SUMMARY\] total=\d+ real_compiles=(\d+)")
@@ -348,6 +352,7 @@ def analyze(d, bucket=5.0, frames_from="auto", echo=True):
     with open(this, errors="replace") as f:
         lines = f.read().splitlines()
     hud, xp, budget, xpt, names, vpad, pres, srv, srvt, lay = [], [], [], [], {}, [], [], [], [], []
+    xpause = []
     # (t, kind, n): lines without a time of their own take the last time seen
     # in the log, which runs at least four times a second ([xp], [xp-t])
     ev, cur_t, last_cb = [], None, None
@@ -400,6 +405,16 @@ def analyze(d, bucket=5.0, frames_from="auto", echo=True):
                         k = me[1] if me[1].startswith("m") else me[1].lstrip("ABCDEFGHIJKLMNOPQRSTUVWXYZ-")
                         ents[k] = (float(me[2]), float(me[3]), float(me[4]))
                 xpt.append((secs_of(m[1], m[2], m[3]), ents))
+            continue
+        if l.startswith("[xp-pause] "):
+            m = XPAUSE_RE.match(l)
+            if m:
+                ents = {}
+                for e in m[4].split():
+                    me = XPAUSE_ENT.match(e)
+                    if me:
+                        ents[me[1]] = (int(me[2]), int(me[3]), float(me[4]))
+                xpause.append((secs_of(m[1], m[2], m[3]), ents))
             continue
         if l.startswith("[srv"):
             m = SRV_RE.match(l)
@@ -610,7 +625,7 @@ def analyze(d, bucket=5.0, frames_from="auto", echo=True):
     out.append("summary " + json.dumps(summ))
     with open(os.path.join(d, "summary.txt"), "w") as f:
         f.write("\n".join(out) + "\n")
-    threads = thread_table(d, hud, xp, xpt, names, t0, bucket * 3)
+    threads = thread_table(d, hud, xp, xpt, names, t0, bucket * 3, xpause=xpause)
     server = server_table(d, hud, srv, srvt, xpt, names, t0, bucket * 3)
     import sampleprof
     prof = sampleprof.report(lines)   # a launch with WINE_IOS_PROF=1
@@ -878,11 +893,14 @@ def hitch_table(d, hud, vpad, ev, t0, slack=0.3):
     return res
 
 
-def thread_table(d, hud, xp, xpt, names, t0, window, top=8):
+def thread_table(d, hud, xp, xpt, names, t0, window, top=8, xpause=()):
     """threads.txt: per window, the busiest threads by instructions retired.
     cpu% is of one core; Mi/f (million instructions per presented frame) does
     not depend on the cluster or clock the scheduler gave the thread, so it is
-    the measure of work to compare between runs and phases."""
+    the measure of work to compare between runs and phases. Under
+    MADEIRA_FEX_PAUSE=yield-os ([xp-pause] lines) a thread's row also has its
+    swtch_pri traps per second, the share of them that took 2 us or more (the
+    kernel ran something else), and the time inside them as % of one core."""
     dts = {round(r[0], 3): r[1] for r in xp}   # [xp] and [xp-t] of one tick share the wall time
     out, res = [], []
     w = 0
@@ -891,6 +909,13 @@ def thread_table(d, hud, xp, xpt, names, t0, window, top=8):
         if lo > (hud[-1][0] if hud else 0):
             break
         seg = [e for e in xpt if lo <= e[0] < hi]
+        pz = {}
+        for t, ents in xpause:
+            if lo <= t < hi:
+                for k, v in ents.items():
+                    a = pz.setdefault(k, [0, 0, 0.0])
+                    for i in range(3):
+                        a[i] += v[i]
         fr = [h for h in hud if lo <= h[0] < hi]
         w += 1
         if not seg or len(fr) < 2:
@@ -910,14 +935,20 @@ def thread_table(d, hud, xp, xpt, names, t0, window, top=8):
             rows.append({"thread": k, "name": names.get(k, ""), "cpu_pct": round(100 * (p + e) / wall),
                          "p_share": round(p / (p + e), 2) if p + e else 0.0,
                          "minst_per_frame": round(mi / frames, 2) if frames else None})
+            if k in pz and pz[k][0]:
+                traps, short, ms = pz[k]
+                rows[-1]["yield_os"] = {"traps_ps": round(1000 * traps / wall), "long_pct": round(100 * (traps - short) / traps),
+                                        "in_trap_pct": round(100 * ms / wall, 1)}
         res.append({"t": round(lo - t0), "fps": round(frames / (fr[-1][0] - fr[0][0]), 1),
                     "cpu_pct": round(100 * (tot[0] + tot[1]) / wall),
                     "minst_per_frame": round(tot[2] / frames, 1) if frames else None, "top": rows})
         r = res[-1]
         out.append(f"t={r['t']:>4} fps={r['fps']:>6} cpu={r['cpu_pct']:>4}% all threads {r['minst_per_frame']} Mi/f")
         for x in rows:
+            y = x.get("yield_os")
             out.append(f"    {x['thread']:>9} {x['name'][:28]:28} cpu {x['cpu_pct']:>4}%  P {x['p_share']:>4.2f}  "
-                       f"{x['minst_per_frame']:>6} Mi/f")
+                       f"{x['minst_per_frame']:>6} Mi/f"
+                       + (f"  yield-os {y['traps_ps']}/s long {y['long_pct']}% in-trap {y['in_trap_pct']}%" if y else ""))
     with open(os.path.join(d, "threads.txt"), "w") as f:
         f.write("\n".join(out) + "\n")
     return res

@@ -92,6 +92,28 @@ class Analyze(unittest.TestCase):
         with open(os.path.join(self.d, "this-launch.log")) as f:
             self.assertNotIn("nonce=older", f.read())
 
+    def test_yield_os_traps(self):
+        """madeira-unix 0223's [xp-pause] lines (MADEIRA_FEX_PAUSE=yield-os, PLA-462): a thread's
+        swtch_pri traps per second, the share that took 2 us or more, the time in them."""
+        log = [f"ui: launch nonce={NONCE}", '[thr-name] ml810 tid=90ee teb=0x1 name="RenderThread"']
+        for k in range(21):   # 60 fps
+            log.append(f"{hms(k)} S1Probe[1:2] metal-HUD: {1000 + 60 * k},512.0,300.0,16.6,4.0")
+            log.append(f"[xp] {hms(k + 0.5)} w dt=1000 cpu=800 (thr 4.0) P=0 E=800 run=5 pgw=1.0 GHz "
+                       f"P=0.00 E=2.10 Minst=5000 IPC=1.5 mJ=2000")
+            log.append(f"[xp-t] {hms(k + 0.5)} -90ee:0.0/700.0:0.0/2.1:4000 -0024:0.0/100.0:0.0/2.1:1000")
+            log.append(f"[xp-pause] {hms(k + 0.5)} -90ee:2000/1500/50.00")
+        self.write("run/pull/s1-host.log", log)
+
+        perf.analyze(self.d, echo=False)
+
+        with open(os.path.join(self.d, "summary.json")) as f:
+            top = json.load(f)["threads"][0]["top"]
+        self.assertEqual((top[0]["thread"], top[0]["name"]), ("90ee", "RenderThread"))
+        self.assertEqual(top[0]["yield_os"], {"traps_ps": 2000, "long_pct": 25, "in_trap_pct": 5.0})
+        self.assertNotIn("yield_os", top[1])
+        with open(os.path.join(self.d, "threads.txt")) as f:
+            self.assertIn("yield-os 2000/s long 25% in-trap 5.0%", f.read())
+
     def test_server_census(self):
         """madeira-unix 0037's [srv] and [srv-t] lines: requests per frame by kind
         and type over the played buckets, and the busiest thread's share."""

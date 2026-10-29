@@ -67,3 +67,4 @@
 0082-iOS-the-runtime-marker-says-which-way-AVX-shipped.patch
 0083-ARM64EC-MADEIRA_FEX_PAUSE-wfe-or-isb-what-x86-PAUSE-.patch
 0084-ARM64EC-MADEIRA_FEX_PAUSE-yield-os-K-a-PAUSE-that-gi.patch
+0085-ARM64EC-yield-os-counts-its-traps-the-short-ones-and.patch

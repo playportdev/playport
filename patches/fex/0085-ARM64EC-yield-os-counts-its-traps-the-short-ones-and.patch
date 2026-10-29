@@ -1,0 +1,167 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 29 Oct 2026 07:43:46 +0100
+Subject: [PATCH] ARM64EC: yield-os counts its traps, the short ones and their
+ time
+
+Under MADEIRA_FEX_PAUSE=yield-os (0084) The Witcher 3's RenderThread
+still used about 70% of a core, and nothing said whether its swtch_pri
+traps ever took it off the core: swtch_pri returns at once when the
+kernel has nothing else to run, and its result says only whether some
+thread is runnable.
+
+The trap path now reads the generic timer before and after the trap
+and adds, in the thread's frame, one to IosPauseTraps, one to
+IosPauseShort if the trap took under 48 ticks (2 us at Apple's 24 MHz
+timer; an idle trap is about 0.3 us), and the ticks to IosPauseTicks.
+It uses x0 and x16, already saved around the trap, and SUB/LSR rather
+than a compare, so the guest's NZCV is still untouched. The YIELD path
+is unchanged. ntdll's [xp] sampler reads the counters per thread at the
+offsets Module.cpp pins (madeira-unix 0223).
+
+Linear: PLA-462
+Class: diagnostics
+Evidence: tools/tests/test_fex_pause_yield_os.py
+Offered-upstream: no; the switch is Playport's iOS host's
+---
+ .../Interface/Core/JIT/IosPauseYieldOs.h      | 47 +++++++++++++++++--
+ FEXCore/Source/Interface/Core/JIT/MiscOps.cpp |  6 ++-
+ FEXCore/include/FEXCore/Core/CoreState.h      |  9 ++++
+ Source/Windows/ARM64EC/Module.cpp             |  4 ++
+ 4 files changed, 61 insertions(+), 5 deletions(-)
+
+diff --git a/FEXCore/Source/Interface/Core/JIT/IosPauseYieldOs.h b/FEXCore/Source/Interface/Core/JIT/IosPauseYieldOs.h
+index 1d87834..12597a0 100644
+--- a/FEXCore/Source/Interface/Core/JIT/IosPauseYieldOs.h
++++ b/FEXCore/Source/Interface/Core/JIT/IosPauseYieldOs.h
+@@ -10,6 +10,12 @@
+ // Wine and FEX it is one more JIT instruction. Darwin's Mach traps keep every register but x0 (the result) and
+ // NZCV, which holds the guest's flags; the sequence saves and restores x0 (a guest register on ARM64EC) and
+ // x16 and sets no flags. A header of its own so a host test can emit it with FEX's CodeEmitter.
++//
++// The trap path also counts, in the same frame, what the trap did (PLA-462: whether the yields actually took
++// the thread off its core): the traps, those that came back within IosPauseYieldOsShortTicks of the generic
++// timer (the kernel found nothing else to run), and the timer ticks spent in all of them. ntdll's [xp] sampler
++// reads them per thread as [xp-pause]. Plain stores: only the thread itself writes them, and the sampler's
++// 64-bit reads of each word need no more.
+ 
+ #include <CodeEmitter/Emitter.h>
+ 
+@@ -23,12 +29,26 @@ inline constexpr uint32_t IosPauseYieldOsMaxAfter = 4095;
+ // Darwin's Mach trap number of swtch_pri, as libsystem_kernel loads it (movn x16, #0x3a).
+ inline constexpr int32_t IosSwtchPriTrap = -59;
+ 
+-// Emits PAUSE as: Count = *(State + CountOffset) + 1; if Count == After { *(...) = 0; swtch_pri } else
+-// { *(...) = Count; YIELD }, with After in 1..IosPauseYieldOsMaxAfter. Tmp1 and Tmp2 are scratch; neither may
+-// be x0, x16 or State.
++// A trap shorter than this many generic-timer ticks counts as short: 2 us at Apple's 24 MHz timer, where an
++// idle swtch_pri takes about 0.3 us and a context switch away and back takes several.
++inline constexpr uint32_t IosPauseYieldOsShortTicks = 48;
++
++// Where the frame keeps the counters, as byte offsets from State.
++struct IosPauseYieldOsOffsets {
++  uint32_t Count;  // PAUSEs since the last trap
++  uint32_t Traps;  // traps taken
++  uint32_t Short;  // of them, shorter than IosPauseYieldOsShortTicks
++  uint32_t Ticks;  // generic-timer ticks inside all of them
++  uint32_t Start;  // the timer when the current trap began
++};
++
++// Emits PAUSE as: Count = Count + 1; if Count == After { Count = 0; Start = CNTVCT; swtch_pri; D = CNTVCT -
++// Start; Ticks += D; Short += D < IosPauseYieldOsShortTicks; Traps += 1 } else YIELD, with After in
++// 1..IosPauseYieldOsMaxAfter. Tmp1 and Tmp2 are scratch; neither may be x0, x16 or State.
+ template<typename EmitterT>
+-void IosEmitPauseYieldOs(EmitterT& E, ARMEmitter::XRegister State, uint32_t CountOffset, uint32_t After,
++void IosEmitPauseYieldOs(EmitterT& E, ARMEmitter::XRegister State, const IosPauseYieldOsOffsets& Off, uint32_t After,
+                          ARMEmitter::XRegister Tmp1, ARMEmitter::XRegister Tmp2) {
++  const auto CountOffset = Off.Count;
+   ARMEmitter::ForwardLabel Trap;
+   ARMEmitter::ForwardLabel Done;
+ 
+@@ -45,8 +65,27 @@ void IosEmitPauseYieldOs(EmitterT& E, ARMEmitter::XRegister State, uint32_t Coun
+   E.str(ARMEmitter::XReg::zr, State, CountOffset);
+   E.mov(ARMEmitter::Size::i64Bit, Tmp1, ARMEmitter::XReg::x0);
+   E.mov(ARMEmitter::Size::i64Bit, Tmp2, ARMEmitter::XReg::x16);
++  E.mrs(ARMEmitter::XReg::x16, ARMEmitter::SystemRegister::CNTVCT_EL0);
++  E.str(ARMEmitter::XReg::x16, State, Off.Start);
+   E.movn(ARMEmitter::Size::i64Bit, ARMEmitter::XReg::x16, static_cast<uint32_t>(-IosSwtchPriTrap - 1));
+   E.svc(0x80);
++  // x0 (the trap's result, unused) and x16 are free until they are restored. The exception return is
++  // context-synchronising, so the second timer read is not taken before the trap.
++  E.mrs(ARMEmitter::XReg::x16, ARMEmitter::SystemRegister::CNTVCT_EL0);
++  E.ldr(ARMEmitter::XReg::x0, State, Off.Start);
++  E.sub(ARMEmitter::Size::i64Bit, ARMEmitter::XReg::x16, ARMEmitter::XReg::x16, ARMEmitter::XReg::x0);
++  E.ldr(ARMEmitter::XReg::x0, State, Off.Ticks);
++  E.add(ARMEmitter::Size::i64Bit, ARMEmitter::XReg::x0, ARMEmitter::XReg::x0, ARMEmitter::XReg::x16);
++  E.str(ARMEmitter::XReg::x0, State, Off.Ticks);
++  // D - limit is negative, bit 63 set, for a short trap: add that bit, again with no flags set.
++  E.sub(ARMEmitter::Size::i64Bit, ARMEmitter::XReg::x16, ARMEmitter::XReg::x16, IosPauseYieldOsShortTicks);
++  E.lsr(ARMEmitter::Size::i64Bit, ARMEmitter::XReg::x16, ARMEmitter::XReg::x16, 63);
++  E.ldr(ARMEmitter::XReg::x0, State, Off.Short);
++  E.add(ARMEmitter::Size::i64Bit, ARMEmitter::XReg::x0, ARMEmitter::XReg::x0, ARMEmitter::XReg::x16);
++  E.str(ARMEmitter::XReg::x0, State, Off.Short);
++  E.ldr(ARMEmitter::XReg::x0, State, Off.Traps);
++  E.add(ARMEmitter::Size::i64Bit, ARMEmitter::XReg::x0, ARMEmitter::XReg::x0, 1);
++  E.str(ARMEmitter::XReg::x0, State, Off.Traps);
+   E.mov(ARMEmitter::Size::i64Bit, ARMEmitter::XReg::x0, Tmp1);
+   E.mov(ARMEmitter::Size::i64Bit, ARMEmitter::XReg::x16, Tmp2);
+ 
+diff --git a/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp b/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp
+index 28fe82e..ce903c1 100644
+--- a/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp
++++ b/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp
+@@ -377,7 +377,11 @@ DEF_OP(Yield) {
+     return;
+   }
+   if (IosPauseMode == IOS_PAUSE_YIELD_OS) {
+-    IosEmitPauseYieldOs(*this, STATE, offsetof(FEXCore::Core::CpuStateFrame, IosPauseCount), IosPauseYieldOsAfter, TMP1, TMP2);
++    using Frame = FEXCore::Core::CpuStateFrame;
++    IosEmitPauseYieldOs(*this, STATE,
++                        {offsetof(Frame, IosPauseCount), offsetof(Frame, IosPauseTraps), offsetof(Frame, IosPauseShort),
++                         offsetof(Frame, IosPauseTicks), offsetof(Frame, IosPauseStart)},
++                        IosPauseYieldOsAfter, TMP1, TMP2);
+     return;
+   }
+ #endif
+diff --git a/FEXCore/include/FEXCore/Core/CoreState.h b/FEXCore/include/FEXCore/Core/CoreState.h
+index 4834467..1c52b7d 100644
+--- a/FEXCore/include/FEXCore/Core/CoreState.h
++++ b/FEXCore/include/FEXCore/Core/CoreState.h
+@@ -504,6 +504,13 @@ struct CpuStateFrame {
+   uint64_t IosAliasHint {};
+   // Playport: this thread's PAUSEs since its last swtch_pri, under MADEIRA_FEX_PAUSE=yield-os (JIT/IosPauseYieldOs.h).
+   uint64_t IosPauseCount {};
++  // Playport: the same thread's swtch_pri traps, those under 2 us, the generic-timer ticks in them, and when the
++  // current one began (JIT/IosPauseYieldOs.h). ntdll's [xp] sampler reads the first three at these fixed offsets
++  // (checked in ARM64EC/Module.cpp) as [xp-pause].
++  uint64_t IosPauseTraps {};
++  uint64_t IosPauseShort {};
++  uint64_t IosPauseTicks {};
++  uint64_t IosPauseStart {};
+ #endif
+ };
+ #if defined(FEX_IOS_HOST) && defined(ARCHITECTURE_arm64ec)
+@@ -511,6 +518,8 @@ static_assert(offsetof(CpuStateFrame, IosEcCodeBitMap) % 8 == 0 && offsetof(CpuS
+               "IosEcCodeBitMap is loaded with a scaled LDR");
+ static_assert(offsetof(CpuStateFrame, IosPauseCount) % 8 == 0 && offsetof(CpuStateFrame, IosPauseCount) <= 32760,
+               "IosPauseCount is loaded with a scaled LDR");
++static_assert(offsetof(CpuStateFrame, IosPauseStart) % 8 == 0 && offsetof(CpuStateFrame, IosPauseStart) <= 32760,
++              "the IosPause counters are loaded with a scaled LDR");
+ #endif
+ static_assert(offsetof(CpuStateFrame, State) == 0, "CPUState must be first member in CpuStateFrame");
+ static_assert(offsetof(CpuStateFrame, Pointers) % 8 == 0, "JITPointers need to be aligned to 8 bytes");
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index 145b78b..9fd8d9d 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -2646,6 +2646,10 @@ NTSTATUS ThreadInit() {
+   static_assert(offsetof(FEXCore::Core::CpuStateFrame, IosCpuArea) == 3856, "IOS_FRAME_CPU_AREA in Module.S");
+   static_assert(offsetof(FEXCore::Core::CpuStateFrame, IosXpCallCount) == 3864, "IOS_FRAME_XP_COUNT in Module.S");
+   static_assert(offsetof(FEXCore::Core::CpuStateFrame, IosAliasHint) == 3872, "IOS_FRAME_ALIAS_HINT in Module.S");
++  // ntdll's [xp] sampler (server_ios.c, ios_xp_pause_*) reads these through TEB+0x1788 -> CPU area+0x30.
++  static_assert(offsetof(FEXCore::Core::CpuStateFrame, IosPauseTraps) == 3888, "ios_xp_pause_* in server_ios.c");
++  static_assert(offsetof(FEXCore::Core::CpuStateFrame, IosPauseShort) == 3896, "ios_xp_pause_* in server_ios.c");
++  static_assert(offsetof(FEXCore::Core::CpuStateFrame, IosPauseTicks) == 3904, "ios_xp_pause_* in server_ios.c");
+   // ExitFunctionECJit reads the CPU area from the frame; the doorbell it reads is the frame's own
+   // SuspendDoorbell, which CPUArea.Area->SuspendDoorbell points at (set below).
+   Thread->CurrentFrame->IosCpuArea = reinterpret_cast<uint64_t>(CPUArea.Area);

@@ -6,8 +6,10 @@ The two headers the patch adds are taken from it as written and compiled on this
 parser is checked as is; IosPauseYieldOs.h is run through FEX's own CodeEmitter (from the build's FEX tree,
 $PLAYPORT_BUILD/run/fex; skipped without one), and the emitted words are disassembled and compared with the
 expected sequence: no flag-setting instruction, x0 and x16 saved and restored around svc #0x80 with x16 = -59.
-On an arm64 Mac the emitted code is also run: the count goes up by one per PAUSE and resets at K, the trap is
-taken exactly every K-th PAUSE, and x0, x16 and NZCV (the guest's flags) come back unchanged."""
+The trap path also counts what the trap did (fex 0085): the traps, the short ones and the generic-timer ticks
+spent in them, in the frame, with no flag set. On an arm64 Mac the emitted code is also run: the count goes up
+by one per PAUSE and resets at K, the trap is taken exactly every K-th PAUSE and counted, and x0, x16 and NZCV
+(the guest's flags) come back unchanged."""
 import os
 import pathlib
 import platform
@@ -25,21 +27,35 @@ BUILD = pathlib.Path(os.environ.get("PLAYPORT_BUILD", ROOT / ".work"))
 FEX = BUILD / "run/fex"
 
 
-def new_file(path):
-    """The content a fex patch gives a file it creates."""
-    for patch in sorted(PATCHES.glob("*.patch")):
-        text = patch.read_text(errors="replace")
-        marker = f"--- /dev/null\n+++ b/{path}\n"
-        if marker not in text:
+def new_file(path, scratch):
+    """The content the fex series gives a file one of its patches creates: that patch's, with each later patch
+    that changes the file applied to it (git apply, in scratch)."""
+    text = None
+    for name in (l.strip() for l in (PATCHES / "series").read_text().splitlines()):
+        if not name or name.startswith("#"):
             continue
-        lines = []
-        for line in text.split(marker, 1)[1].splitlines()[1:]:  # past the @@ line
-            if line.startswith("diff --git") or line == "-- ":
-                break
-            assert line.startswith("+"), line
-            lines.append(line[1:])
-        return "\n".join(lines) + "\n"
-    raise AssertionError(f"no fex patch creates {path}")
+        patch = PATCHES / name
+        body = patch.read_text(errors="replace")
+        marker = f"--- /dev/null\n+++ b/{path}\n"
+        if marker in body:
+            lines = []
+            for line in body.split(marker, 1)[1].splitlines()[1:]:  # past the @@ line
+                if line.startswith("diff --git") or line == "-- ":
+                    break
+                assert line.startswith("+"), line
+                lines.append(line[1:])
+            text = "\n".join(lines) + "\n"
+        elif text is not None and f"+++ b/{path}\n" in body:
+            tree = scratch / "apply"
+            (tree / path).parent.mkdir(parents=True, exist_ok=True)
+            (tree / path).write_text(text)
+            # Not inside this repository's work tree, where git apply would take paths from its top.
+            subprocess.run(["git", "apply", f"--include={path}", str(patch)], cwd=tree, check=True,
+                           env={**os.environ, "GIT_CEILING_DIRECTORIES": str(scratch)})
+            text = (tree / path).read_text()
+    if text is None:
+        raise AssertionError(f"no fex patch creates {path}")
+    return text
 
 
 PARSE = r'''
@@ -64,7 +80,7 @@ int main() {
 }
 '''
 
-# Emits the sequence for State x28, the count at 4096, After K = argv[1], TMP1/TMP2 as ARM64EC's (x10, x11), then
+# Emits the sequence for State x28, the counters from 4096, After K = argv[1], TMP1/TMP2 as ARM64EC's (x10, x11), then
 # RET. Prints the words; on arm64 Darwin with argv[2] == "run" also runs them.
 EMIT = r'''
 #include "IosPauseYieldOs.h"
@@ -87,6 +103,8 @@ void ReportAllocationFailure(size_t, size_t) { abort(); }
 }
 
 constexpr uint32_t CountOffset = 4096;
+constexpr FEXCore::CPU::IosPauseYieldOsOffsets Off {CountOffset, CountOffset + 8, CountOffset + 16, CountOffset + 24,
+                                                    CountOffset + 32};
 
 #if defined(__APPLE__) && defined(__aarch64__)
 struct Regs { uint64_t X0, X10, X16, Nzcv; };
@@ -112,7 +130,7 @@ int main(int argc, char** argv) {
   const uint32_t After = strtoul(argv[1], nullptr, 10);
   alignas(16) static uint8_t Buf[4096];
   ARMEmitter::Emitter E(Buf, sizeof Buf);
-  FEXCore::CPU::IosEmitPauseYieldOs(E, ARMEmitter::XReg::x28, CountOffset, After, ARMEmitter::XReg::x10, ARMEmitter::XReg::x11);
+  FEXCore::CPU::IosEmitPauseYieldOs(E, ARMEmitter::XReg::x28, Off, After, ARMEmitter::XReg::x10, ARMEmitter::XReg::x11);
   E.ret();
   const size_t Size = E.GetCursorOffset();
   for (size_t i = 0; i < Size; i += 4) {
@@ -129,8 +147,11 @@ int main(int argc, char** argv) {
   pthread_jit_write_protect_np(1);
   sys_icache_invalidate(Code, Size);
 
-  alignas(8) static uint8_t State[CountOffset + 8];
-  uint64_t& Count = *reinterpret_cast<uint64_t*>(State + CountOffset);
+  alignas(8) static uint8_t State[CountOffset + 40];
+  uint64_t& Count = *reinterpret_cast<uint64_t*>(State + Off.Count);
+  uint64_t& TrapCount = *reinterpret_cast<uint64_t*>(State + Off.Traps);
+  uint64_t& ShortCount = *reinterpret_cast<uint64_t*>(State + Off.Short);
+  uint64_t& TickCount = *reinterpret_cast<uint64_t*>(State + Off.Ticks);
   int Bad = 0, Traps = 0;
   const int Pauses = After * 50 + 7;
   for (int i = 1; i <= Pauses; i++) {
@@ -145,8 +166,13 @@ int main(int argc, char** argv) {
                (unsigned long long)R.X16, (unsigned long long)R.Nzcv, (unsigned long long)Count, (unsigned long long)R.X10);
     }
   }
-  printf("ran %d pauses, %d traps\n", Pauses, Traps);
-  return Bad != 0 || Traps != Pauses / int(After);
+  uint64_t Freq;
+  __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(Freq));
+  printf("ran %d pauses, %d traps; counted %llu, %llu short, %.2f us each (timer %llu Hz)\n", Pauses, Traps,
+         (unsigned long long)TrapCount, (unsigned long long)ShortCount,
+         TrapCount ? TickCount * 1e6 / Freq / TrapCount : 0.0, (unsigned long long)Freq);
+  return Bad != 0 || Traps != Pauses / int(After) || TrapCount != uint64_t(Traps) || ShortCount > TrapCount ||
+         (Traps && !TickCount);
 #else
   return 3;
 #endif
@@ -162,12 +188,28 @@ def expected(after):
         "cbz x11, #16",  # to the trap
         "str x10, [x28, #4096]",
         "yield",
-        "b #32",  # past it
+        "b #96",  # past it
         "str xzr, [x28, #4096]",
         "mov x10, x0",
         "mov x11, x16",
+        "mrs x16, CNTVCT_EL0",
+        "str x16, [x28, #4128]",  # Start
         "mov x16, #-59",  # swtch_pri
         "svc #0x80",
+        "mrs x16, CNTVCT_EL0",
+        "ldr x0, [x28, #4128]",
+        "sub x16, x16, x0",
+        "ldr x0, [x28, #4120]",  # Ticks += D
+        "add x0, x0, x16",
+        "str x0, [x28, #4120]",
+        "sub x16, x16, #48",  # Short += D < 48
+        "lsr x16, x16, #63",
+        "ldr x0, [x28, #4112]",
+        "add x0, x0, x16",
+        "str x0, [x28, #4112]",
+        "ldr x0, [x28, #4104]",  # Traps += 1
+        "add x0, x0, #1",
+        "str x0, [x28, #4104]",
         "mov x0, x10",
         "mov x16, x11",
         "ret",
@@ -192,7 +234,7 @@ class PauseYieldOs(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_parse(self):
-        (self.d / "IosPauseOption.h").write_text(new_file(OPTION_H))
+        (self.d / "IosPauseOption.h").write_text(new_file(OPTION_H, self.d))
         (self.d / "t.cpp").write_text(PARSE)
         compile_(self.cxx, self.d, self.d / "t.cpp", self.d / "t")
         run = subprocess.run([str(self.d / "t")], capture_output=True, text=True, timeout=60)
@@ -201,7 +243,7 @@ class PauseYieldOs(unittest.TestCase):
     def emitter(self):
         if not (FEX / "CodeEmitter/CodeEmitter/Emitter.h").is_file():
             self.skipTest(f"no FEX tree at {FEX} (pp build)")
-        (self.d / "IosPauseYieldOs.h").write_text(new_file(EMIT_H))
+        (self.d / "IosPauseYieldOs.h").write_text(new_file(EMIT_H, self.d))
         (self.d / "e.cpp").write_text(EMIT)
         exe = self.d / "e"
         compile_(self.cxx, self.d, self.d / "e.cpp", exe,
