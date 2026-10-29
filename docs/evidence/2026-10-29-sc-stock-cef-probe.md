@@ -189,11 +189,12 @@ not explain l1's earlier stall.
   with eight context lines while the series checker compares default-three-context patch IDs. Re-exporting the
   identical source with default context made the applied and shipped patch IDs match; no build-tree source was
   edited or reset by hand. Logs/proof are retained under `$PLAYPORT_BUILD/agent-notes/pla476/build-series-failure/`.
-- **Device gates UNRUN:** the supervisor's preflight `pp phone status` exited 3 with zero phones on netmuxd.
-  Charge/VPN could not be checked. No install, launch or input was issued; no retry. Owner reconnection is a
-  prerequisite. `$PLAYPORT_BUILD/agent-notes/pla476/l4.sh` is ready for one locked, exact-IPA in-place install,
+- **Historical preflight blocker (resolved before l4 below):** device gates were unrun when the supervisor's
+  preflight `pp phone status` exited 3 with zero phones on netmuxd. Charge/VPN could not be checked.
+  No install, launch or input was issued then; no retry. Reconnection was sought and
+  `$PLAYPORT_BUILD/agent-notes/pla476/l4.sh` was prepared for one locked, exact-IPA in-place install,
   HK first-frame+10 and a bounded stock-CEF RDR2 run using the existing `arm.sh`/landing watcher.
-  The startup increment is **not yet phone-verified or committed as finished**.
+  This was the host-only checkpoint; l4 below supersedes its unrun startup-gate status.
 
 ### Why the dead-owner slots cannot simply be reclaimed
 
@@ -219,7 +220,57 @@ there is no obvious second full layout. Copying a kept view elsewhere while free
 leave saved addresses dangling. These are constraints for an owner-approved design, not proof that every possible
 geometry is impossible. No sign-in, helper termination/restart, game libcef refusal or payload policy was changed.
 
-**Remaining gate:** demonstrate the startup fix on the phone, then resolve safe slot reuse under an approved
-design. Chunk 2 is **not complete**: helper restart into a working browser, Story cabin, no Social Club/launcher
-`NO GAP FITS`/soft grant, and the comparable **7343 MB ±10%** peak remain unpassed. No new gameplay or memory result
-is claimed by these host checks.
+**Remaining gate after l4:** resolve safe subsequent-helper allocation under an owner-approved
+design, preserving all retained views. The bounded startup fix is accepted below. Chunk 2 is **not complete**:
+helper restart into a working browser, Story cabin, no Social Club/launcher `NO GAP FITS`/soft grant, and the
+comparable **7343 MB ±10%** peak remain unpassed. No new gameplay or memory result is claimed by these host checks.
+
+## l4: early-image startup accepted; chunk 2 still blocked
+
+- **Exact dev IPA SHA-256:** `3fd1145d5b6e59db874083a716ee5d10af685eb476fa4e1ff03c866129348a5e`.
+  The initial no-phone preflight was resolved by guarded `python3 tools/phonelib.py netmuxd-restart`:
+  the stale workstation service was restarted, discovery returned one network phone (80% battery, 3 GB free).
+  There is no current prerequisite blocker. The parent's locked l4 session completed exit 0; lock released.
+- **HK:** `.work/ui-runs/20261029T220635-hk-p476l4`, first-frame+10 **passed**; first frame +10.58 s.
+- **RDR2:** `.work/ui-runs/20261029T220726-rdr2-p476l4`, same stock-CEF/layout keys as l1–l3,
+  completed the wait condition first-frame+420. This is not a Story/gameplay success assertion.
+
+Line references below are to RDR2 l4's `pull/s1-host.log`:
+
+- The **game's** helper is PID `0528`, main TID `052c`, PEB `0x701af34000`, executable tracker
+  `0x11a5b4d80` (132725–132757, 133410). After ProcessInit/ThreadInit, replay inserts kernel32 intervals
+  `[0x73fba14000, 0x73fba47766)` and `[0x73fba48000, 0x73fba49780)` into that tracker (133466–133489).
+  The first covers l3's missing `LoadLibraryExW` address **`0x73fba465e0`**.
+- Its chrome_elf TLS callback progresses through bcryptprimitives loading to allocator reservations
+  (137056–137129). Kind 1 is granted; five 16-GiB metadata attempts are refused with `c0000017`, then an
+  **actual guest breakpoint** at chrome_elf RVA `0x13a534` ends it with `0x80000003` (137117–137170).
+  There are **zero NOEXEC/NoExec occurrences**. Positive interval coverage and allocator entry, not just
+  diagnostic absence, establish the narrowly fixed startup gap; this helper still cannot initialise fully.
+- The prior launcher helper (PEB `0x146cc0000`) retains kind 3's real metadata view
+  `[0x7400000000, 0x7590000000)` (45346, 132085–132090). Parked TID `0204` waits at **`0x740002c3e0`**,
+  inside it (131391). Later game-helper restarts are refused by existing decision-0138 policy
+  (137727–155879), not successfully initialised. Decisions 0132/0143 still require the whole view unchanged.
+- `NO GAP FITS` remains in the **launcher helper's renderer** attempts (54667–55357), separately from the
+  game's 8960-MiB reservation/hold fallback (77355–77361, then served at `0x75d0000000`). No `[soft-pool]`
+  lines occur. The no-Social-Club/launcher-`NO GAP FITS` gate therefore has not passed.
+- Story was pressed at **22:10:00** (`p476l4/press.log:3`); final `screen-stop.png` is black with a spinner,
+  not the cabin. No comparable cabin/gameplay memory acceptance against **7343 MB ±10%** is established.
+
+**Acceptance:** independent read-only review found no issues and positively established both bounded startup
+gates (HK first-frame+10; the game's helper beyond the missing-kernel32 NOEXEC into allocator startup).
+Accept wine-pe 0055, its startup regression, series entry and associated build records as this increment only.
+Existing full `pp test` and dev build passed (90/90 IPA checks); finalization reran only focused host tests and
+name/secret/diff checks, with no new runtime implementation, build or phone input.
+
+Finalization normalized only format-patch packaging (blank context/signature/EOF whitespace): stable patch-id
+`66deface37bae9f2b9808d4d6b0b59c768445d14` is unchanged, isolated-scratch `git am` yields byte-identical source/tree,
+and read-only `check_series` passes. The startup test's hunk parser now preserves valid empty context strictly
+within counted hunks, not metadata; conventional and normalized blank context reconstruct identical source.
+The baseline startup still fails the coverage assertion and the candidate passes. All **five** final focused
+host tests, names, secrets and unstaged/staged diff checks pass; no configured build source was changed.
+
+**Not accepted:** overall chunk 2, successful subsequent-helper/browser startup, Story cabin or memory gates.
+No safe replacement slot geometry is established. The next gate is an **owner-approved design** for safe
+subsequent-helper allocation; all existing slots/views, retention, termination and restart policies remain
+unchanged. No chunks 3–6 were entered. Parent owns compatibility/Linear updates; no games were played during
+this documentation/commit finalization.

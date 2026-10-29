@@ -6,9 +6,15 @@
 [PLA-372](https://linear.app/playportdev/issue/PLA-372) (CEF payload distribution, to be cancelled),
 [PLA-254](https://linear.app/playportdev/issue/PLA-254) (publisher launchers).
 
-**Status:** chunks 0 and 1 done 2026-10-29 ([probe evidence](../evidence/2026-10-29-sc-stock-cef-probe.md)): single-process runs on Rockstar's helper, which still dies at its PartitionAlloc reservations, so chunk 2 is needed and means moving the band's layout (the evidence's last section). Owner approved the full layout port and said to continue. Chunk 2 is in progress; its initial layout port was approved, but safe reuse of retained slots now needs an owner-approved design. Its l1–l3 phone runs (dev IPA `2da3ea8a`, [evidence](../evidence/2026-10-29-sc-stock-cef-probe.md#l2-l3-longer-runs-on-the-same-ipa-the-loading-screen-question)) sign in on the launcher's helper but cannot run a second helper: a dead helper's slot can stay owned (`view kept`), and the game's own helper hits FEX NOEXEC at an unregistered kernel32 export before its pools (the logged NULL read is FEX's synthetic fault). RDR2 then waits at a black spinner. The host-tested early-image replay candidate is built as dev IPA `3fd1145d`; its phone gates are **unrun** because preflight found no phone. **Next:** reconnect the phone and run the prepared HK/second-helper startup check; slot reuse separately needs an owner-approved design that preserves the parked references (0132/0143). **Runner checkpoint:** resuming from clean `241990e` on branch `dev/pla-476-sc-stock-cef` in the main checkout; no merge or push performed by this continuation. The previously recorded writer is not active and left no report or tracked changes. Models confirmed for this invocation: hard `openai-codex/gpt-6.1-sol:high`, easy `openai-codex/gpt-6.1-sol:medium`. **Running:** finalization writer `b64e1c09-bb78-497a-bc56-123991c02f4c`, model `openai-codex/gpt-6.1-sol:high`, from `7439797`; documentation, focused checks and commit of accepted startup increment only, no more phone input. Report `.work/agent-notes/pla476/reports/startup-finalize.md`. Read-only reviewer `b341b1bf-a6cb-4ad6-b8ce-4427ef7449a3` finished with no findings and accepts the startup increment only: l4's game helper registers kernel32 and reaches allocator startup, then fails metadata allocation. Review copied to `.work/agent-notes/pla476/reports/startup-candidate-review.md`. Next writer must reconcile stale unrun-gate text and commit the independently passing startup increment, not overall chunk 2. Writer `05e6db69-1b5d-4260-9ae6-ab86f5423693` finished blocked at phone preflight. Its documentation/retention-test checkpoint is `31bd282`; its early-image runtime patch (`wine-pe/0055`), startup test, series entry and four build-record files remain unstaged pending device gates. Full tests and dev build passed (90/90 IPA checks). Report copied into `.work/agent-notes/pla476/reports/chunk2-helper-restart.md`. Next execution uses `.work/agent-notes/pla476/l4.sh` on exact IPA SHA-256 `3fd1145d5b6e59db874083a716ee5d10af685eb476fa4e1ff03c866129348a5e`; independent review and phone gates remain required before accepting the runtime increment.
+**Status:** chunks 0 and 1 done 2026-10-29; chunk 2 remains **not passed** ([evidence](../evidence/2026-10-29-sc-stock-cef-probe.md)). Owner approved the initial layout port, not a change to retained-view policy. The early-image startup increment (wine-pe 0055) is independently accepted on dev IPA `3fd1145d`: l4 passes HK first-frame+10 and positively shows the game's helper registering kernel32 and reaching allocator startup beyond l3's NOEXEC. It then fails metadata allocation because the launcher's helper left a referenced view retained. Story ends at a black spinner, not the cabin; no gameplay/memory acceptance or safe replacement geometry is established. **Next:** obtain an owner-approved design for safe subsequent-helper allocation while preserving retained references under 0132/0143; do not clear, free or overwrite kept slots. No new runtime work or phone input is queued.
 
-**Ordered queue:** (1) PLA-476 chunk 2: safely reclaim dead-helper slots, explain the second helper's startup crash, and run HK/RDR2 gates; (2) complete the remaining chunk-2 gate before considering chunks 3–6 in their documented order, all under PLA-476. Chunk 3 still requires owner approval if needed. **Phone checkpoint:** latest recorded dev IPA is `2da3ea8a…`; HK and RDR2 were run. Latest recorded battery is 80% on power, thermal nominal at l3's end. Follow-up: owner confirmed phone was on LAN; guarded `python3 tools/phonelib.py netmuxd-restart` restored discovery (stale workstation service). Preflight then found one network phone, battery 80%, 3 GB free. Exact-IPA l4 session completed exit 0 with lock released: in-place install, HK first-frame+10 passed (`.work/ui-runs/20261029T220635-hk-p476l4`), RDR2 first-frame+420 (`.work/ui-runs/20261029T220726-rdr2-p476l4`). RDR2 logs have no NOEXEC but retain kind 3 and refuse helper restarts; startup acceptance awaits analysis, overall chunk 2 remains unpassed. No more phone input is queued.
+**Runner checkpoint (history):** resuming from clean `241990e` on branch `dev/pla-476-sc-stock-cef` in the main checkout; no merge or push performed by this continuation. The previously recorded writer is not active and left no report or tracked changes. Models confirmed for this invocation: hard `openai-codex/gpt-6.1-sol:high`, easy `openai-codex/gpt-6.1-sol:medium`.
+
+**Finished startup checkpoint:** finalization writer `b64e1c09-bb78-497a-bc56-123991c02f4c`, model `openai-codex/gpt-6.1-sol:high`, from `7439797` (supervisor metadata added in `5ac72f8`); documentation reconciliation, focused checks and commit of the accepted startup increment only, no new implementation, build or phone input. Report `.work/agent-notes/pla476/reports/startup-finalize.md`. Read-only reviewer `b341b1bf-a6cb-4ad6-b8ce-4427ef7449a3` finished with no findings and accepts the startup increment only: l4's game helper registers kernel32 and reaches allocator startup, then fails metadata allocation. Review copied to `.work/agent-notes/pla476/reports/startup-candidate-review.md`. Writer `05e6db69-1b5d-4260-9ae6-ab86f5423693` previously finished blocked at phone preflight; its documentation/retention-test checkpoint is `31bd282`, report `.work/agent-notes/pla476/reports/chunk2-helper-restart.md`. Its early-image patch, startup test, series entry and four build records are now accepted together with the l4 evidence, not as overall chunk 2. Full tests and dev build already passed (90/90 IPA checks).
+
+**Ordered queue:** (1) owner design gate for retained-view-safe subsequent-helper allocation; (2) only after approval, resolve the remaining chunk-2 allocator/browser, Story cabin, no-Social-Club/launcher-`NO GAP FITS`/soft-grant and 7343 MB ±10% memory gates; (3) consider chunks 3–6 in their documented order, all under PLA-476. Chunk 3 still requires owner approval if needed; 0.5.0 remains held.
+
+**Phone checkpoint:** connected discovery was restored by guarded `python3 tools/phonelib.py netmuxd-restart` (stale workstation service); preflight then found one network phone, battery 80%, 3 GB free. There is no current prerequisite blocker. The exact-IPA l4 session (`.work/agent-notes/pla476/l4.sh`, SHA-256 `3fd1145d5b6e59db874083a716ee5d10af685eb476fa4e1ff03c866129348a5e`) completed exit 0 with lock released: in-place install, HK first-frame+10 passed (`.work/ui-runs/20261029T220635-hk-p476l4`, first frame +10.58 s), RDR2 first-frame+420 (`.work/ui-runs/20261029T220726-rdr2-p476l4`). Independent analysis accepted only the bounded startup gates; the RDR2 wait-condition success is not Story success. No more phone input is queued.
 
 ## Why
 
@@ -78,9 +84,9 @@ out what upstream relies on for a *stock* CEF
    keeps it). The game's overlay then runs only in the helper.
 3. **On by default.** `MADEIRA_SC_CEF` defaults to 1. The single-process run is not opt-in.
 
-None of the single-process A/B runs (scA1, x3, x4, xs1) ran Rockstar's CEF. Every one had
-`[cef-swap] … matches`. So the single-process page bridge on stock CEF has not yet run on this
-phone.
+At plan opening, none of the single-process A/B runs (scA1, x3, x4, xs1) had run Rockstar's CEF:
+every one had `[cef-swap] … matches`. The a2 and l1–l4 probes below now exercise stock CEF; their
+results do not yet satisfy chunk 2.
 
 The soft-pool fallback releasing a range other processes still use
 ([audit](2026-10-06-madeira-audit.md), the `[soft-pool] GRANTED soft` topic) is a separate
@@ -131,18 +137,22 @@ are allowed only for its owner. A grant is released whole, by its owner or at it
 the existing process teardown, and the slot is held again. The helper is told a 2 TB
 `HighestUserAddress` (report only) so V8 takes its partial sandbox.
 
-**Next bounded increment (host checks passed; phone blocked):** wine-pe 0055 replays already-loaded images through
-ntdll's existing guarded, intervals-only notification after successful emulator initialisation. In l3,
-`kernel32.dll!LoadLibraryExW` (`+0x365e0`) was never registered in the helper's FEX tracker; the decoder's NOEXEC
-trampoline caused the reported NULL read. `tools/tests/test_arm64ec_early_images.py` covers early dependencies,
-main/ntdll/queued maps, duplicates and failed init. `test_sc_layout.py` now also locks down the existing refusal
-to reclaim kept or foreign views. Full `pp test` and the dev build passed (IPA `3fd1145d`, 90 verification checks).
-No install or phone input followed: preflight reported zero phones. The exact session is ready in
-`$PLAYPORT_BUILD/agent-notes/pla476/l4.sh`; do not call the runtime increment verified or commit it as finished
-until HK first-frame+10 and the second helper's post-kernel32 startup are shown on this IPA.
+**Accepted bounded startup increment:** wine-pe 0055 replays already-loaded images through ntdll's existing
+guarded notification after successful emulator initialisation, bypassing ImageTracker's exclusive code-lock
+path. In l3, `kernel32.dll!LoadLibraryExW` (`+0x365e0`) was never registered in the helper's FEX tracker;
+the decoder's NOEXEC trampoline caused the reported NULL read. `tools/tests/test_arm64ec_early_images.py`
+covers early dependencies, main/ntdll/queued maps, duplicates and failed init. `test_sc_layout.py` also locks
+down the existing refusal to reclaim kept or foreign views. Full `pp test` and the dev build passed (IPA
+`3fd1145d`, 90 verification checks). Initial no-phone preflight was a historical blocker, since resolved by
+the guarded netmuxd restart. On that exact IPA, l4 passes HK first-frame+10 and positively shows the game's
+helper (PID `0528`, PEB `0x701af34000`, tracker `0x11a5b4d80`) registering kernel32 intervals covering
+`0x73fba465e0`, advancing through TLS into allocator startup, then receiving five metadata refusals and a
+guest `0x80000003` breakpoint. No NOEXEC remains. Independent review found no issues and accepted these two
+bounded startup gates; this does **not** accept allocator/browser startup or overall chunk 2.
 
 **Slot reuse is blocked, not fixed:** l3's parked tid `0204` waits at `0x740007c3e0` inside the retained metadata
-view; l2's tid `0208` waits at `0x74000483e0`. Decisions 0132/0143 keep the whole view unchanged, even after its
+view; l2's tid `0208` waits at `0x74000483e0`; l4 again retains kind 3 with parked tid `0204` waiting at
+`0x740002c3e0` inside its real metadata view. Decisions 0132/0143 keep the whole view unchanged, even after its
 process exits and teardown takes its view ownership for the runtime. Clearing the slot ledger or overwriting
 that range would violate the retention rule. No retention, termination, sign-in or launcher policy was changed;
 no alternate geometry was selected. The [evidence](../evidence/2026-10-29-sc-stock-cef-probe.md#host-follow-up-early-images-and-the-retained-slot-blocker)
@@ -157,13 +167,13 @@ game's placement slightly (the alias was at `0x7007130000` before), so the Hollo
 Opt-in: runtime key `env.PLAYPORT_SC_LAYOUT=1` (with `env.PLAYPORT_SC_SINGLE=1`; the probe key
 `env.PLAYPORT_CEF_SWAP=0` until chunk 4).
 
-**Open risk: two helpers.** The slots serve one helper at a time; a second helper is refused while
-the first owns them. In xs1 the game's helper started about 4 s before the launcher's helper was
-ended at the game's sign-in. If the sign-in needs the game's helper, the launcher's end must move
-earlier (when the game starts its helper) or the game's helper must retry after the launcher's
-helper ends. The first phone run shows which. Reported Chromium ranges overlap intentionally; only owned **real**
-ranges may be committed or released. Upstream's diagnostic-only overflow warnings are not sufficient
-ownership enforcement for this port.
+**Established blocker: subsequent helpers.** The slots serve one helper at a time; a second helper is refused
+while the first owns them, including when teardown preserves a referenced view. l4's game's helper now reaches
+its pools but cannot acquire metadata; later restarts are refused by existing 0138 policy. Moving the launcher's
+end or changing restart/retention policy is not authorised by the startup acceptance. No safe replacement
+geometry is established. Reported Chromium ranges overlap intentionally; only owned **real** ranges may be
+committed or released. Upstream's diagnostic-only overflow warnings are not sufficient ownership enforcement
+for this port.
 
 - Port upstream's layout from `0f40502` (and `e50981f` for the RDR2 hold) as madeira-unix patches,
   each with `Class:`, `Evidence:` and `Offered-upstream:` trailers.
