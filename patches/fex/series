@@ -69,3 +69,4 @@
 0084-ARM64EC-MADEIRA_FEX_PAUSE-yield-os-K-a-PAUSE-that-gi.patch
 0085-ARM64EC-yield-os-counts-its-traps-the-short-ones-and.patch
 0086-ARM64EC-MADEIRA_FEX_PAUSE-wait-os-K-U-a-PAUSE-that-b.patch
+0087-ARM64EC-yield-os-wait-os-time-their-traps-at-CNTFRQ_.patch

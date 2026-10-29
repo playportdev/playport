@@ -1,8 +1,9 @@
-# FEX's `yield-os` PAUSE: implementation and a Witcher 3 pilot (PLA-462)
+# FEX's `yield-os`/`wait-os` PAUSE: Witcher 3's spinners are its dispatchers, not RenderThread (PLA-462)
 
 **Linear:** [PLA-462](https://linear.app/playportdev/issue/PLA-462), parent
 [PLA-455](https://linear.app/playportdev/issue/PLA-455).
-**Change:** `patches/fex` 0084, commit `be544a8`; follow-ups § 5 (fex 0085, 0086, madeira-unix 0223).
+**Change:** `patches/fex` 0084, commit `be544a8`; follow-ups § 5 (fex 0085–0087, madeira-unix 0223;
+matrix IPA `f7f28f40`).
 **Dev IPA:** `Playport-26.5-df7b13bc.ipa`, sha256
 `df7b13bc8c960de306c5cbe4638378a9805ac7cead1fb27512e8fa8f6ef91b5e`.
 Built on Linux; the Mac was used only for host execution of the emitter test and a Mach-trap probe.
@@ -17,6 +18,11 @@ Built on Linux; the Mac was used only for host execution of the emitter test and
   tighter clamp. This is a pilot, not the rested/hot interleaved acceptance matrix of PLA-462/0163.
 - **The core-use goal is not established.** RenderThread still uses 65–71% of a core in the
   sustained windows, against 68% under YIELD. This does not demonstrate that it gave up its E core.
+- **Matrix (§ 5.1), with trap telemetry:** `yield-os` traps average 47–133 µs, so they really do
+  leave the core. But the threads that spin are RenderDispatcher1/2, which spend 61–78% of their
+  time in traps. RenderThread spends 7–26% there and still uses about 63–73% of a core in every arm.
+  `yield-os:256` and `wait-os:128:200` keep the tail no worse than YIELD with no FPS gain;
+  `wait-os:128:50` is worse. No default change.
 - The ARM64EC ntdll's QPC already reads the generic timer inline on its steady-state path; no QPC
   change was made.
 
@@ -181,7 +187,7 @@ Built on Linux only; **neither change has run on the phone** yet.
 
 **Telemetry** (`patches/fex` 0085, `patches/madeira-unix` 0223). The trap path now reads `CNTVCT_EL0`
 before and after the trap and adds to three per-thread frame counters: traps, traps under 48 ticks
-(2 µs at 24 MHz), and ticks inside them. It uses only x0/x16, which are already saved, and SUB/LSR
+(meant as 2 µs at 24 MHz, but see § 5.2), and ticks inside them. It uses only x0/x16, which are already saved, and SUB/LSR
 rather than a compare, so NZCV is still untouched. The YIELD path is unchanged. Under a `yield-os` or
 `wait-os` setting, the `[xp]` sampler reads them through TEB+0x1788 → CPU area+0x30 (offsets pinned by
 static_asserts in FEX's `Module.cpp`) and logs `[xp-pause] HH:MM:SS.mmm -TID:traps/short/ms` per tick.
@@ -196,8 +202,7 @@ x1 = 3, x2 = U µs (default 50, range 1–5000). In XNU's
 that option does `assert_wait_timeout(..., U, NSEC_PER_USEC)` and blocks, whether or not anything
 else is runnable. It is libdispatch's contention back-off. Unlike `swtch_pri`, it frees (or idles)
 the core for U µs. The cost is up to U µs of extra latency when the awaited store arrives
-mid-wait. x1/x2 (guest registers) are saved in TMP3/TMP4. The same counters time the wait, so in
-`[xp-pause]` every `wait-os` trap should be long.
+mid-wait. x1/x2 (guest registers) are saved in TMP3/TMP4. The same counters time the wait.
 
 **Host checks.** `tools/tests/test_fex_pause_yield_os.py` reconstructs each header through every
 later patch in the series. It checks the parser (now including `wait-os` defaults, bounds and
@@ -207,17 +212,106 @@ a wait is never short and averages at least U, but **it was not run**: no Mac to
 step. `./pp test --quick` and `./pp build` passed: dev IPA `Playport-26.5-f7f28f40.ipa`, sha256
 `f7f28f407eea7bc4790e655b598b677d6f8454b95ca744381957ed874e5347f7`, not installed.
 
+### Phone: Hollow Knight smoke
+
+Upgraded in place to `f7f28f40` (charger connected, 68%). `.work/pla462/hk-waitos`, with
+`env.MADEIRA_FEX_PAUSE=wait-os:128:50` and the scripted pad: first frame +12.31 s, completed
+first-frame+30. Its stop screenshot shows the normal title menu, and the log has
+`FEX: pause mode=4 after=128 usec=50`. This is a smoke check, not gameplay.
+
+The telemetry works on the phone: 136 `[xp-pause]` lines, 9,524 traps. As logged, they averaged
+3.44 ms each, but that figure is wrong by a unit: see § 5.2. Read at the phone's timer rate, each is
+about 83 µs, at least the 50 µs asked for.
+
+### 5.1 The Witcher 3 matrix
+
+Same IPA `f7f28f40`, same command as § 3 with `--out .work/perf/pla462m-SUFFIX`, under one
+`pp phone lock` (`.work/pla462/matrix.sh`). **Charger connected throughout** (battery 80% at every
+run), unlike § 3. Nobody played manually; the § 3 pad script ran in every run.
+
+- **Rested:** each run waited `--cool 8 --cool-max 20` and had `--cpu-prof`. Order: YIELD,
+  `yield-os:256`, `wait-os:128:50`, `wait-os:128:200`. All launched at Nominal.
+- **Hot:** straight after, back to back, no `--cpu-prof`, reverse order. All launched at Serious.
+
+Every run reached gameplay (`1564x720`; first frame +21.1…+23.1 s), and the FEX log confirms each
+run's mode. One sample, the hot `wait-os:50` +140 s screenshot, shows Kaer Morhen gameplay.
+
++60..150 s (`pp perf --compare … --window 60:150`; >100/>150 and max from `hitches.txt`):
+
+| Run | FPS | p99 ms | p99.9 ms | >100 ms | >150 ms | max ms | GPU ms | CPU mW |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| rested YIELD `r-yield` | 24.5 | 66.69 | 358.46 | 7 | 6 | 400.1 | 32.85 | 321 |
+| rested `yield-os:256` `r-os256` | 23.7 | 75.03 | 350.13 | 3 | 3 | 375.1 | 32.98 | 312 |
+| rested `wait-os:128:50` `r-w50` | 22.3 | 83.36 | 325.12 | 15 | 6 | 383.5 | 27.91 | 278 |
+| rested `wait-os:128:200` `r-w200` | 24.0 | 75.03 | 375.13 | 5 | 3 | 425.1 | 33.92 | 291 |
+| hot `wait-os:128:200` `h-w200` | 24.4 | 75.03 | 358.46 | 5 | 3 | 483.5 | 33.40 | 330 |
+| hot `wait-os:128:50` `h-w50` | 19.3 | 108.37 | 483.51 | 27 | 9 | 741.9 | 30.68 | 480 |
+| hot `yield-os:256` `h-os256` | 20.6 | 75.03 | 433.49 | 4 | 4 | 616.9 | 40.03 | 189 |
+| hot YIELD `h-yield` | 21.3 | 75.03 | 516.85 | 12 | 6 | 541.9 | 38.55 | 202 |
+
+Each arm has one run per condition, and the hot block's order confounds heat with mode: `h-w200`
+ran first, with the most budget left. **Read it as:**
+
+- `wait-os:128:50` is worse on both phones: lower FPS and the most long frames (15 and 27 over
+  100 ms).
+- `yield-os:256` and `wait-os:128:200` have **tails no worse than YIELD** (3–5 frames over 100 ms
+  against 7–12; 3–4 over 150 ms against 6). Their means are within 0.5–0.9 fps of YIELD's, except
+  hot `wait-os:200` (+3.1), which ran first.
+- Neither is a mean-FPS win, and none of this is enough to change a default.
+
+**Where the traps go** (`[xp-pause]` re-read at 1 GHz by `.work/pla462/xpause-fix.py`, +60..150 s;
+traps/s, mean time per trap, % of one core inside traps):
+
+| Run | RenderDispatcher1 | RenderDispatcher2 | RenderThread |
+| --- | --- | --- | --- |
+| r-os256 | 8116/s, 76 µs, 62% | 7974/s, 78 µs, 62% | 4252/s, 47 µs, 20% |
+| h-os256 | 5570/s, 110 µs, 61% | 5621/s, 108 µs, 61% | 1991/s, 133 µs, 26% |
+| r-w50 | 5755/s, 121 µs, 70% | 5784/s, 121 µs, 70% | 648/s, 110 µs, 7% |
+| r-w200 | 2115/s, 353 µs, 75% | 2117/s, 352 µs, 75% | 265/s, 294 µs, 8% |
+| h-w200 | 2176/s, 356 µs, 78% | 2173/s, 351 µs, 76% | 257/s, 307 µs, 8% |
+| h-w50 | 5554/s, 128 µs, 71% | 5607/s, 128 µs, 72% | 768/s, 109 µs, 8% |
+
+- **`yield-os` does leave the core.** An idle `swtch_pri` returns in about 0.3 µs; here the mean is
+  47–133 µs, so the kernel ran something else. `wait-os` waits are longer than U, as expected:
+  50 µs → about 120 µs, 200 µs → about 350 µs.
+- **The spinners are RenderDispatcher1/2, not RenderThread.** The dispatchers spend 61–78% of their
+  time in traps. RenderThread spends only 7–26%, yet uses about 63–73% of a core in every arm:
+
+| Thread CPU % of a core (`threads.txt`) | r-yield | r-os256 | r-w50 | r-w200 | h-w200 | h-w50 | h-os256 | h-yield |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| RenderThread | 68.2 | 65.5 | 70.8 | 69.5 | 68.0 | 72.5 | 63.3 | 68.2 |
+| RenderDispatcher1 | 25.8 | 21.5 | 24.8 | 22.8 | 20.7 | 23.5 | 24.7 | 31.5 |
+
+So the RenderThread core use that PLA-462 set out to cut is mostly not its PAUSE spin. The
+dispatchers' fence polling does yield, but freeing that time did not raise FPS: the frame stays
+bounded by RenderThread's own work and the GPU (GPU busy 74–89%).
+
+### 5.2 A unit bug in 0085/0223, fixed in fex 0087
+
+`[xp-pause]` as logged said a thread spent 13 s inside its traps in a 0.3 s tick, and that a
+`wait-os:128:200` trap lasted 14.5 ms. 0085 timed traps with `CNTVCT_EL0`, while 0223 converted the
+ticks at `mach_absolute_time`'s 24 MHz (timebase 125/3). The phone's generic timer runs about 41.67×
+faster, consistent with the 1 GHz Armv8.6 fixes. That factor puts every `wait-os` trap at or above
+its U, and the busiest dispatcher at about 100% of a tick. The same mismatch made the 48-tick "short"
+threshold 48 ns, so no trap ever counted as short: the logged long/short split is meaningless and is
+not used above. The 1 GHz figure is inferred from these runs, not read from the phone.
+
+- **fex 0087:** ProcessInit reads `CNTFRQ_EL0`, sets the threshold to 2 µs of it
+  (`FEX::Ios::PauseShortTicks`, clamped to 1–4095), and logs `short-ticks=` and `cntfrq=`.
+- **madeira-unix 0223 (amended):** converts at `CNTFRQ_EL0`, logs `[xp-pause] armed: …, cntfrq N Hz`,
+  and skips a thread's delta after a failed read.
+
+Built as dev IPA `3a1133c2` (not installed). The next phone run's log will show the actual `cntfrq`.
+
 ## 6. Remaining gates
 
-- The full alternating rested/hot matrix, with repeated baselines and matched scene/battery
-  conditions, is **not run**. K=256 is only a candidate for that comparison, not a winner; even its
-  p99.9 is longer than YIELD's in this pilot, despite its better p99 and fewer >150 ms frames.
-- Actual phone scheduler/block-time evidence is still needed to establish the mechanism and
-  explain why RenderThread's CPU use stayed high. § 5's `[xp-pause]` provides it on the next
-  `yield-os` run. `wait-os` is the candidate if the yields turn out mostly short.
-- `wait-os` needs the Darwin execution test on a Mac, then a Hollow Knight smoke and Witcher 3
-  arms (for example `wait-os:128:50` and `wait-os:128:200`) in the same matrix, against 0163's tail
-  criterion.
-- The Witcher 3 keeps `short-reserve-mb=6144` with ordinary YIELD (decision 0163). No compatibility
-  default or public compatibility status changes: Hollow Knight remains Works; The Witcher 3
-  remains Playable with issues.
+- **No default change.** The Witcher 3 keeps `short-reserve-mb=6144` with ordinary YIELD
+  (decision 0163). Hollow Knight remains Works; The Witcher 3 remains Playable with issues.
+- `yield-os:256` and `wait-os:128:200` passed 0163's tail criterion in single runs per condition.
+  They gave no FPS gain, and the matrix showed RenderThread's core use is mostly not its spin. A
+  per-title default would need repeated, order-balanced runs and a reason to want it, such as power.
+  The `CPU mW` column is not comparable across the hot block's order.
+- RenderThread's own work (`kk_UpdateDescriptorSets_impl`, AGX encoding, `kk_draw`, per the
+  2026-10-28 trace breakdown) is the lever for its core, not PAUSE.
+- The fixed telemetry (fex 0087) and the `wait-os` Darwin execution test have not yet run on the
+  phone or a Mac respectively.

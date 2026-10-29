@@ -6,7 +6,7 @@ The two headers the patch adds are taken from it as written and compiled on this
 parser is checked as is; IosPauseYieldOs.h is run through FEX's own CodeEmitter (from the build's FEX tree,
 $PLAYPORT_BUILD/run/fex; skipped without one), and the emitted words are disassembled and compared with the
 expected sequence: no flag-setting instruction, x0 and x16 saved and restored around svc #0x80 with x16 = -59.
-The trap path also counts what the trap did (fex 0085): the traps, the short ones and the generic-timer ticks
+The trap path also counts what the trap did (fex 0085, 0087): the traps, those under 2 us at CNTFRQ_EL0 and the ticks
 spent in them, in the frame, with no flag set. On an arm64 Mac the emitted code is also run: the count goes up
 by one per PAUSE and resets at K, the trap is taken exactly every K-th PAUSE and counted, and x0, x16 and NZCV
 (the guest's flags) come back unchanged."""
@@ -82,13 +82,22 @@ int main() {
       Bad++;
     }
   }
+  struct { uint64_t Freq; uint32_t Ticks; } Short[] = {
+    {24000000, 48}, {1000000000, 2000}, {0, 1}, {100000, 1}, {3000000000ull, 4095},
+  };
+  for (auto& C : Short) {
+    if (FEX::Ios::PauseShortTicks(C.Freq) != C.Ticks) {
+      printf("short ticks at %llu Hz: %u, want %u\n", (unsigned long long)C.Freq, FEX::Ios::PauseShortTicks(C.Freq), C.Ticks);
+      Bad++;
+    }
+  }
   return Bad != 0;
 }
 '''
 
 # Emits the sequence for State x28, the counters from 4096, After K = argv[1], a wait of argv[2] us (0: swtch_pri),
-# TMP1..TMP4 as ARM64EC's (x10..x13), then RET. Prints the words; on arm64 Darwin with argv[3] == "run" also runs
-# them.
+# short below argv[3] ticks, TMP1..TMP4 as ARM64EC's (x10..x13), then RET. Prints the words; on arm64 Darwin with
+# argv[4] == "run" also runs them, with short at this host's CNTFRQ_EL0 instead.
 EMIT = r'''
 #include "IosPauseYieldOs.h"
 #include <cstdio>
@@ -138,9 +147,18 @@ static Regs Call(void* Code, void* State, uint64_t X0, uint64_t X1, uint64_t X2,
 int main(int argc, char** argv) {
   const uint32_t After = strtoul(argv[1], nullptr, 10);
   const uint32_t Usec = strtoul(argv[2], nullptr, 10);
+  uint32_t ShortTicks = strtoul(argv[3], nullptr, 10);
+  const bool Run = argc >= 5 && strcmp(argv[4], "run") == 0;
+#if defined(__APPLE__) && defined(__aarch64__)
+  if (Run) {
+    uint64_t F;
+    __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(F));
+    ShortTicks = F / 500000 > 4095 ? 4095 : F / 500000;
+  }
+#endif
   alignas(16) static uint8_t Buf[4096];
   ARMEmitter::Emitter E(Buf, sizeof Buf);
-  FEXCore::CPU::IosEmitPauseYieldOs(E, ARMEmitter::XReg::x28, Off, After, Usec, ARMEmitter::XReg::x10, ARMEmitter::XReg::x11,
+  FEXCore::CPU::IosEmitPauseYieldOs(E, ARMEmitter::XReg::x28, Off, After, Usec, ShortTicks, ARMEmitter::XReg::x10, ARMEmitter::XReg::x11,
                                     ARMEmitter::XReg::x12, ARMEmitter::XReg::x13);
   E.ret();
   const size_t Size = E.GetCursorOffset();
@@ -149,7 +167,7 @@ int main(int argc, char** argv) {
     memcpy(&W, Buf + i, 4);
     printf("%08x\n", W);
   }
-  if (argc < 4 || strcmp(argv[3], "run") != 0) return 0;
+  if (!Run) return 0;
 #if defined(__APPLE__) && defined(__aarch64__)
   void* Code = mmap(nullptr, 16384, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
   if (Code == MAP_FAILED) { perror("mmap"); return 2; }
@@ -193,7 +211,7 @@ int main(int argc, char** argv) {
 '''
 
 
-def expected(after, usec=0):
+def expected(after, usec=0, short=48):
     if usec:
         trap = ["mov x12, x1", "mov x13, x2", "mov x0, #0", "mov x1, #3", f"mov x2, #{usec}",
                 "mov x16, #-61",  # thread_switch(MACH_PORT_NULL, SWITCH_OPTION_DISPATCH_CONTENTION, usec)
@@ -216,7 +234,7 @@ def expected(after, usec=0):
         "ldr x0, [x28, #4120]",  # Ticks += D
         "add x0, x0, x16",
         "str x0, [x28, #4120]",
-        "sub x16, x16, #48",  # Short += D < 48
+        f"sub x16, x16, #{short}",  # Short += D < short
         "lsr x16, x16, #63",
         "ldr x0, [x28, #4112]",
         "add x0, x0, x16",
@@ -281,15 +299,16 @@ class PauseYieldOs(unittest.TestCase):
         if not mc:
             self.skipTest("no llvm-mc")
         exe = self.emitter()
-        for after, usec in ((1, 0), (64, 0), (4095, 0), (1, 1), (128, 50), (4095, 5000), (64, 65535)):
-            words = subprocess.run([str(exe), str(after), str(usec)], capture_output=True, text=True,
+        for after, usec, short in ((1, 0, 48), (64, 0, 2000), (4095, 0, 4095), (1, 1, 1), (128, 50, 48),
+                                   (4095, 5000, 2000), (64, 65535, 48)):
+            words = subprocess.run([str(exe), str(after), str(usec), str(short)], capture_output=True, text=True,
                                    check=True).stdout.split()
             hexbytes = " ".join(f"{b:#04x}" for w in words for b in int(w, 16).to_bytes(4, "little"))
             dis = subprocess.run([mc, "--disassemble", "-triple=aarch64"], input=hexbytes, capture_output=True,
                                  text=True, check=True).stdout
             insns = [re.sub(r"\s+", " ", re.sub(r"//.*$", "", l)).strip() for l in dis.splitlines()]
             insns = [i for i in insns if i and not i.startswith(".")]
-            self.assertEqual(insns, expected(after, usec), dis)
+            self.assertEqual(insns, expected(after, usec, short), dis)
             flag_setters = [i for i in insns if re.match(r"(adds|subs|cmp|cmn|tst|ands|msr nzcv)\b", i)]
             self.assertEqual(flag_setters, [])
 
@@ -297,7 +316,7 @@ class PauseYieldOs(unittest.TestCase):
     def test_runs_on_darwin(self):
         exe = self.emitter()
         for after, usec in (("1", "0"), ("3", "0"), ("128", "0"), ("1", "50"), ("128", "200")):
-            run = subprocess.run([str(exe), after, usec, "run"], capture_output=True, text=True, timeout=120)
+            run = subprocess.run([str(exe), after, usec, "0", "run"], capture_output=True, text=True, timeout=120)
             self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
 
 
