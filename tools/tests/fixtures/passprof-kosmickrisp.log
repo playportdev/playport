@@ -1,0 +1,14 @@
+# Recorded Hollow Knight Vulkan sample, 2026-10-29, .work/pla466/hk-on.
+# IPA a13eeb0b704ea82980bc97807b353d8460068f3dd75f978db7ed154602a6cf5d.
+# Only pass-prof records and the pipelines referenced by this complete frame.
+[pass-prof] pipeline 0x16d13fb80 kind=compute msl=bd8d4d7323248236 max_threads=1 static_tg_bytes=0 requested_threads=1
+[pass-prof] pipeline 0x145d08000 kind=render msl=898f4cc3cddcab8d max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x145d0b000 kind=render msl=fa818d63763fb442 max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x145d5c000 kind=render msl=d0eea2869ba0d386 max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] report 1 at present 600: KosmicKrisp, 5 encoders, 4 command buffers, frequency=24000000 Hz
+[pass-prof]  f0 p0 cb2 render 1564x720 x1 c0=70/1:1 d=260/1:1 st=260/1:1 draws=9 gpu=1.017417 at=0.000000..1.017417 pipeline=mixed
+[pass-prof]  f0 p1 cb2 render 1564x720 x1 c0=70/1:1 draws=1 gpu=0.197708 at=1.020875..1.218583 pipeline=0x145d0b000
+[pass-prof]  f0 p2 cb2 compute gpu=0.007208 at=1.222167..1.229375 pipeline=0x16d13fb80
+[pass-prof]  f0 p3 cb3 render 1564x720 x1 c0=81/0:1 draws=1 gpu=0.204417 at=1.231833..1.436250 pipeline=0x145d5c000
+[pass-prof]  f0 p4 cb4 render 1564x720 x1 c0=80/0:1 draws=1 gpu=0.198250 at=1.575250..1.773500 pipeline=0x145d08000
+[pass-prof] frame 0: 5 passes, 12 draws, sum gpu 1.625000 ms, span 1.773500 ms

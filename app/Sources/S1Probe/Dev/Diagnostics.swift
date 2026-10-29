@@ -15,10 +15,11 @@
 //                       is set at start and only while this is on: a change
 //                       takes effect at Playport's next start (after a game it
 //                       restarts by itself, AppRestart).
-//   GPU time per pass   winemetal samples the GPU timestamps of every encoder
-//                       of two frames in every 1200 presents and logs them as
-//                       [pass-prof] lines (DXMT_PASS_PROF, patches/dxmt 0008;
-//                       `pp perf` tables them in passes.txt).
+//   GPU time per pass   DXMT and KosmicKrisp sample every encoder of two
+//                       frames in every 1200 presents as [pass-prof] lines
+//                       (DXMT_PASS_PROF / MESA_KK_PASS_PROF). `pp perf` tables
+//                       them in passes.txt. KosmicKrisp refuses this while
+//                       GPU capture is armed (Metal cannot capture counter heaps).
 //   CPU sampling        the runtime samples the busiest threads' PCs at about
 //                       1 kHz, 3 s in every 15 s, as [wprof] lines (WINE_IOS_PROF,
 //                       patches/madeira-unix 0028; `pp perf` writes profile.txt).
@@ -147,7 +148,11 @@ enum Diagnostics {
         MetalValidation.log(log)
         RuntimeCounters.log(log)
         let d = UserDefaults.standard
-        if d.bool(forKey: passProfileKey) { env["DXMT_PASS_PROF"] = "1"; log("diagnostics: GPU time per pass") }
+        if d.bool(forKey: passProfileKey) {
+            env["DXMT_PASS_PROF"] = "1"
+            env["MESA_KK_PASS_PROF"] = "1"
+            log("diagnostics: GPU time per pass")
+        }
         if d.bool(forKey: cpuProfileKey) { env["WINE_IOS_PROF"] = "1"; log("diagnostics: CPU sampling") }
         return env
     }

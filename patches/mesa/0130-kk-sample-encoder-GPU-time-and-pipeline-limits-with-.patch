@@ -1,0 +1,1115 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 29 Oct 2026 10:04:51 +0100
+Subject: [PATCH] kk: sample encoder GPU time and pipeline limits with
+ MESA_KK_PASS_PROF
+
+Sample two submitted frames every 1200 presents (first 600). Keep one-shot commands only while profiling and replay selected submissions, including the WSI blit. Resolve after present and every completion; discard incomplete/overflow/error frames. Capture disables allocation entirely.
+
+Compute profiling uses precise samples; Vulkan queries retain relaxed sampling. Native-copy/empty and mixed copy+dispatch costs are unavailable, not zero (owner-approved scope; PLA-474). Assemble each pass before one fd write because Wine logging bypasses the stdio stream lock.
+
+Log pipeline MSL hashes, Metal thread limits, static threadgroup bytes and the descriptor thread cap. These are not register or spill counts; no compile hints are changed.
+
+Linear: PLA-466
+Class: diagnostics
+Evidence: docs/evidence/2026-10-29-kk-pass-prof.md
+Offered-upstream: no
+---
+ src/kosmickrisp/bridge/mtl_compiler.h         |   5 +
+ src/kosmickrisp/bridge/mtl_compiler.m         |  17 +
+ src/kosmickrisp/bridge/mtl_device.h           |   4 +
+ src/kosmickrisp/bridge/mtl_device.m           |  13 +
+ src/kosmickrisp/bridge/mtl_encoder.h          |   5 +
+ src/kosmickrisp/bridge/mtl_encoder.m          |  12 +
+ src/kosmickrisp/bridge/mtl_render_state.h     |   8 +
+ src/kosmickrisp/bridge/mtl_render_state.m     |  18 +
+ src/kosmickrisp/bridge/stubs/mtl_compiler.c   |   7 +
+ src/kosmickrisp/bridge/stubs/mtl_device.c     |   7 +
+ src/kosmickrisp/bridge/stubs/mtl_encoder.c    |   6 +
+ .../bridge/stubs/mtl_render_state.c           |   7 +
+ src/kosmickrisp/util/kk_dispatch_cmd_gen.py   |   7 +-
+ src/kosmickrisp/vulkan/kk_cmd_buffer.c        |   8 +
+ src/kosmickrisp/vulkan/kk_cmd_buffer.h        |   5 +
+ src/kosmickrisp/vulkan/kk_cmd_copy.c          |   5 +
+ src/kosmickrisp/vulkan/kk_cmd_dispatch.c      |   1 +
+ src/kosmickrisp/vulkan/kk_cmd_draw.c          |   8 +
+ src/kosmickrisp/vulkan/kk_device_lib.c        |  10 +
+ src/kosmickrisp/vulkan/kk_pass_prof.c         | 323 ++++++++++++++++++
+ src/kosmickrisp/vulkan/kk_pass_prof.h         |  33 ++
+ src/kosmickrisp/vulkan/kk_physical_device.c   |   6 +
+ src/kosmickrisp/vulkan/kk_physical_device.h   |   1 +
+ src/kosmickrisp/vulkan/kk_queue.c             |  21 +-
+ src/kosmickrisp/vulkan/kk_queue.h             |   4 +
+ src/kosmickrisp/vulkan/kk_shader.c            |   4 +
+ src/kosmickrisp/vulkan/kk_wsi.c               |   6 +-
+ src/kosmickrisp/vulkan/meson.build            |   2 +
+ 28 files changed, 547 insertions(+), 6 deletions(-)
+ create mode 100644 src/kosmickrisp/vulkan/kk_pass_prof.c
+ create mode 100644 src/kosmickrisp/vulkan/kk_pass_prof.h
+
+diff --git a/src/kosmickrisp/bridge/mtl_compiler.h b/src/kosmickrisp/bridge/mtl_compiler.h
+index a623639..be03365 100644
+--- a/src/kosmickrisp/bridge/mtl_compiler.h
++++ b/src/kosmickrisp/bridge/mtl_compiler.h
+@@ -45,6 +45,11 @@ mtl_function_descriptor *
+ mtl_new_library_function_descriptor(mtl_library *library,
+                                     const char *entry_point);
+ 
++/* Diagnostics; render's threadgroup memory is not reported (0), and a 0
++ * max_threads means unavailable, not zero occupancy. */
++void mtl_pipeline_profile_limits(void *pipeline, bool render,
++                                  uint64_t *max_threads, uint64_t *static_bytes);
++
+ /* Compute pipeline */
+ mtl_compute_pipeline_state *
+ mtl_new_compute_pipeline_state(mtl_compiler *compiler,
+diff --git a/src/kosmickrisp/bridge/mtl_compiler.m b/src/kosmickrisp/bridge/mtl_compiler.m
+index e366532..b464446 100644
+--- a/src/kosmickrisp/bridge/mtl_compiler.m
++++ b/src/kosmickrisp/bridge/mtl_compiler.m
+@@ -105,6 +105,23 @@ mtl_new_library_function_descriptor(mtl_library *library, const char *entry_poin
+    }
+ }
+ 
++void
++mtl_pipeline_profile_limits(void *pipeline, bool render,
++                             uint64_t *max_threads, uint64_t *static_bytes)
++{
++   @autoreleasepool {
++      if (render) {
++         id<MTLRenderPipelineState> p = (id<MTLRenderPipelineState>)pipeline;
++         *max_threads = p.maxTotalThreadsPerThreadgroup;
++         *static_bytes = 0;
++      } else {
++         id<MTLComputePipelineState> p = (id<MTLComputePipelineState>)pipeline;
++         *max_threads = p.maxTotalThreadsPerThreadgroup;
++         *static_bytes = p.staticThreadgroupMemoryLength;
++      }
++   }
++}
++
+ /* Compute pipeline */
+ mtl_compute_pipeline_state *
+ mtl_new_compute_pipeline_state(mtl_compiler *compiler,
+diff --git a/src/kosmickrisp/bridge/mtl_device.h b/src/kosmickrisp/bridge/mtl_device.h
+index 573a9b9..120cd02 100644
+--- a/src/kosmickrisp/bridge/mtl_device.h
++++ b/src/kosmickrisp/bridge/mtl_device.h
+@@ -47,6 +47,10 @@ uint64_t mtl_device_timestamp_frequency(mtl_device *dev);
+ mtl_counter_heap *mtl_new_timestamp_counter_heap(mtl_device *dev,
+                                                  uint32_t count);
+ 
++/* CPU timeline resolve, only after all writes completed. One uint64_t per entry. */
++bool mtl_timestamp_counter_heap_read(mtl_counter_heap *heap, uint32_t count,
++                                      uint64_t *timestamps);
++
+ /* Resource queries */
+ void mtl_heap_buffer_size_and_align_with_length(mtl_device *device,
+                                                 uint64_t *size_B,
+diff --git a/src/kosmickrisp/bridge/mtl_device.m b/src/kosmickrisp/bridge/mtl_device.m
+index 07fdf6d..fde20a4 100644
+--- a/src/kosmickrisp/bridge/mtl_device.m
++++ b/src/kosmickrisp/bridge/mtl_device.m
+@@ -250,6 +250,19 @@ mtl_new_timestamp_counter_heap(mtl_device *dev, uint32_t count)
+    }
+ }
+ 
++bool
++mtl_timestamp_counter_heap_read(mtl_counter_heap *heap, uint32_t count,
++                                 uint64_t *timestamps)
++{
++   @autoreleasepool {
++      NSData *data = [(id<MTL4CounterHeap>)heap resolveCounterRange:NSMakeRange(0, count)];
++      if (!data || data.length != count * sizeof(MTL4TimestampHeapEntry))
++         return false;
++      memcpy(timestamps, data.bytes, data.length);
++      return true;
++   }
++}
++
+ /* Resource queries */
+ /* TODO_KOSMICKRISP Return a struct */
+ void
+diff --git a/src/kosmickrisp/bridge/mtl_encoder.h b/src/kosmickrisp/bridge/mtl_encoder.h
+index 8e4dd8f..d8cf009 100644
+--- a/src/kosmickrisp/bridge/mtl_encoder.h
++++ b/src/kosmickrisp/bridge/mtl_encoder.h
+@@ -153,6 +153,11 @@ void mtl_draw_indexed_primitives_indirect(mtl_render_encoder *encoder,
+ void mtl_compute_write_timestamp(mtl_compute_encoder *encoder,
+                                  mtl_counter_heap *heap, uint32_t index);
+ 
++/* Profiling boundaries cannot use relaxed compute sampling: Metal may group
++ * all timestamps of the pass. Vulkan queries retain their relaxed path. */
++void mtl_compute_write_timestamp_precise(mtl_compute_encoder *encoder,
++                                         mtl_counter_heap *heap, uint32_t index);
++
+ void mtl_render_write_timestamp(mtl_render_encoder *encoder,
+                                 enum mtl_render_stages stage,
+                                 mtl_counter_heap *heap, uint32_t index);
+diff --git a/src/kosmickrisp/bridge/mtl_encoder.m b/src/kosmickrisp/bridge/mtl_encoder.m
+index bcd07ed..310c873 100644
+--- a/src/kosmickrisp/bridge/mtl_encoder.m
++++ b/src/kosmickrisp/bridge/mtl_encoder.m
+@@ -530,6 +530,18 @@ mtl_compute_write_timestamp(mtl_compute_encoder *encoder,
+    }
+ }
+ 
++void
++mtl_compute_write_timestamp_precise(mtl_compute_encoder *encoder,
++                                    mtl_counter_heap *heap, uint32_t index)
++{
++   @autoreleasepool {
++      id<MTL4ComputeCommandEncoder> enc = (id<MTL4ComputeCommandEncoder>)encoder;
++      [enc writeTimestampWithGranularity:MTL4TimestampGranularityPrecise
++                                intoHeap:(id<MTL4CounterHeap>)heap
++                                 atIndex:index];
++   }
++}
++
+ void
+ mtl_render_write_timestamp(mtl_render_encoder *encoder,
+                            enum mtl_render_stages stage, mtl_counter_heap *heap,
+diff --git a/src/kosmickrisp/bridge/mtl_render_state.h b/src/kosmickrisp/bridge/mtl_render_state.h
+index f5998dd..9b1f229 100644
+--- a/src/kosmickrisp/bridge/mtl_render_state.h
++++ b/src/kosmickrisp/bridge/mtl_render_state.h
+@@ -19,6 +19,14 @@ enum mtl_pixel_format;
+ enum VkCompareOp;
+ enum VkStencilOp;
+ 
++/* Diagnostics: actual Metal formats and load/store enums, c0..c7, depth,
++ * stencil. Store actions changed on the encoder are tracked by the caller. */
++struct mtl_profile_attachments {
++   uint32_t formats[10], loads[10], stores[10];
++};
++void mtl_render_pass_profile_attachments(mtl_render_pass_descriptor *descriptor,
++                                         struct mtl_profile_attachments *info);
++
+ /* Render pass descriptor */
+ mtl_render_pass_descriptor *mtl_new_render_pass_descriptor(void);
+ 
+diff --git a/src/kosmickrisp/bridge/mtl_render_state.m b/src/kosmickrisp/bridge/mtl_render_state.m
+index e5a20be..afedf1a 100644
+--- a/src/kosmickrisp/bridge/mtl_render_state.m
++++ b/src/kosmickrisp/bridge/mtl_render_state.m
+@@ -7,6 +7,24 @@
+ #include "mtl_render_state.h"
+ 
+ #include "mtl_format.h"
++#include <Metal/MTL4RenderPass.h>
++#include <Metal/MTLTexture.h>
++
++void
++mtl_render_pass_profile_attachments(mtl_render_pass_descriptor *descriptor,
++                                    struct mtl_profile_attachments *info)
++{
++   @autoreleasepool {
++      MTL4RenderPassDescriptor *desc = (MTL4RenderPassDescriptor *)descriptor;
++      for (unsigned i = 0; i < 10; i++) {
++         MTLRenderPassAttachmentDescriptor *att = i < 8 ? desc.colorAttachments[i]
++            : i == 8 ? desc.depthAttachment : desc.stencilAttachment;
++         info->formats[i] = (uint32_t)att.texture.pixelFormat;
++         info->loads[i] = (uint32_t)att.loadAction;
++         info->stores[i] = (uint32_t)att.storeAction;
++      }
++   }
++}
+ 
+ /* TODO_KOSMICKRISP Remove */
+ #include "vk_to_mtl_map.h"
+diff --git a/src/kosmickrisp/bridge/stubs/mtl_compiler.c b/src/kosmickrisp/bridge/stubs/mtl_compiler.c
+index 9759fc0..e3ce5c8 100644
+--- a/src/kosmickrisp/bridge/stubs/mtl_compiler.c
++++ b/src/kosmickrisp/bridge/stubs/mtl_compiler.c
+@@ -36,6 +36,13 @@ mtl_new_library_function_descriptor(mtl_library *library,
+    return NULL;
+ }
+ 
++void
++mtl_pipeline_profile_limits(void *pipeline, bool render,
++                             uint64_t *max_threads, uint64_t *static_bytes)
++{
++   *max_threads = *static_bytes = 0;
++}
++
+ /* Compute pipeline */
+ mtl_compute_pipeline_state *
+ mtl_new_compute_pipeline_state(mtl_compiler *compiler,
+diff --git a/src/kosmickrisp/bridge/stubs/mtl_device.c b/src/kosmickrisp/bridge/stubs/mtl_device.c
+index 9e9ea28..2ad0e2d 100644
+--- a/src/kosmickrisp/bridge/stubs/mtl_device.c
++++ b/src/kosmickrisp/bridge/stubs/mtl_device.c
+@@ -114,6 +114,13 @@ mtl_new_timestamp_counter_heap(mtl_device *dev, uint32_t count)
+    return NULL;
+ }
+ 
++bool
++mtl_timestamp_counter_heap_read(mtl_counter_heap *heap, uint32_t count,
++                                 uint64_t *timestamps)
++{
++   return false;
++}
++
+ /* Resource queries */
+ void
+ mtl_heap_buffer_size_and_align_with_length(mtl_device *device, uint64_t *size_B,
+diff --git a/src/kosmickrisp/bridge/stubs/mtl_encoder.c b/src/kosmickrisp/bridge/stubs/mtl_encoder.c
+index 8d35b9f..f945664 100644
+--- a/src/kosmickrisp/bridge/stubs/mtl_encoder.c
++++ b/src/kosmickrisp/bridge/stubs/mtl_encoder.c
+@@ -277,6 +277,12 @@ mtl_compute_write_timestamp(mtl_compute_encoder *encoder,
+ {
+ }
+ 
++void
++mtl_compute_write_timestamp_precise(mtl_compute_encoder *encoder,
++                                    mtl_counter_heap *heap, uint32_t index)
++{
++}
++
+ void
+ mtl_render_set_color_store_action(mtl_render_encoder *encoder,
+                                   enum mtl_store_action action, uint32_t index)
+diff --git a/src/kosmickrisp/bridge/stubs/mtl_render_state.c b/src/kosmickrisp/bridge/stubs/mtl_render_state.c
+index 0108c9a..5248dd5 100644
+--- a/src/kosmickrisp/bridge/stubs/mtl_render_state.c
++++ b/src/kosmickrisp/bridge/stubs/mtl_render_state.c
+@@ -11,6 +11,13 @@
+ /* TODO_KOSMICKRISP Remove */
+ #include "vulkan/vulkan.h"
+ 
++void
++mtl_render_pass_profile_attachments(mtl_render_pass_descriptor *descriptor,
++                                    struct mtl_profile_attachments *info)
++{
++   *info = (struct mtl_profile_attachments){0};
++}
++
+ /* Render pass descriptor */
+ mtl_render_pass_descriptor *
+ mtl_new_render_pass_descriptor(void)
+diff --git a/src/kosmickrisp/util/kk_dispatch_cmd_gen.py b/src/kosmickrisp/util/kk_dispatch_cmd_gen.py
+index 562e277..e72f644 100644
+--- a/src/kosmickrisp/util/kk_dispatch_cmd_gen.py
++++ b/src/kosmickrisp/util/kk_dispatch_cmd_gen.py
+@@ -61,6 +61,7 @@ TEMPLATE_C = Template(COPYRIGHT + """\
+ 
+ #include "kk_device.h"
+ #include "kk_cmd_buffer.h"
++#include "kk_physical_device.h"
+ #include "kk_dispatch_cmd.h"
+ #include "vk_cmd_enqueue_entrypoints.h"
+ 
+@@ -84,7 +85,8 @@ ${e.prefixed_name('kk_cmd_tramp')}(${e.decl_params()})
+     }
+ 
+     dev->vk.dispatch_table.${e.name}(${e.call_params()});
+-    if (!cmd->one_time_submit) {
++    if (!cmd->one_time_submit ||
++        (kk_device_physical(dev)->settings.pass_prof && !cmd->pass_prof)) {
+       vk_cmd_enqueue_device_entrypoints.${e.name}(${e.call_params()});
+     }
+     % else:
+@@ -96,7 +98,8 @@ ${e.prefixed_name('kk_cmd_tramp')}(${e.decl_params()})
+     if (result != VK_SUCCESS)
+       return result;
+ 
+-    if (!cmd->one_time_submit) {
++    if (!cmd->one_time_submit ||
++        (kk_device_physical(dev)->settings.pass_prof && !cmd->pass_prof)) {
+       result = vk_cmd_enqueue_device_entrypoints.${e.name}(${e.call_params()});
+     }
+     return result;
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.c b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+index 202309e..4ae1e1f 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_buffer.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+@@ -303,6 +303,7 @@ cs_start_render(struct kk_cmd_buffer *cmd)
+       cmd->pass_debug.encoder_draws = 0u;
+    }
+ 
++   kk_pass_prof_begin(cmd, true);
+    kk_encoder_update_debug(cmd, cmd->metal.render);
+    if (cmd->vertex_wait) {
+       KK_PASS_STAT(VERTEX_WAITS);
+@@ -374,6 +375,7 @@ cs_get_compute(struct kk_cmd_buffer *cmd)
+          KK_PASS_STAT(COMPUTE_ENCODERS);
+          cmd->pass_debug.encoders++;
+       }
++      kk_pass_prof_begin(cmd, false);
+       mtl_compute_set_argument_table(cmd->metal.compute, cmd->argument_table);
+       kk_encoder_update_debug(cmd, cmd->metal.compute);
+       if (cmd->ts_fence_pending) {
+@@ -400,6 +402,7 @@ end_encoder(struct kk_cmd_buffer *cmd, mtl_command_encoder *encoder,
+     * marker writes) is compute, whose end barrier stays whole; so do render
+     * encoders inside transform feedback, whose vertex stage advances the
+     * counters the next one reads. */
++   kk_pass_prof_end(cmd, render);
+    const bool narrow = render && KK_EXPERIMENTAL(NARROW_BARRIERS) &&
+                        !cmd->state.gfx.xfb.enabled;
+    /* TODO_KOSMICKRISP This is probably overkill */
+@@ -1033,6 +1036,7 @@ kk_dispatch_precomp(struct kk_cmd_buffer *cmd, struct kk_grid grid,
+       return;
+ 
+    mtl_set_address(cmd->argument_table, data_gpu.gpu, 0u);
++   kk_pass_prof_pipeline(cmd, prog->pipeline);
+    mtl_compute_set_pipeline_state(encoder, prog->pipeline);
+ 
+    struct mtl_size local_size = {
+@@ -1193,6 +1197,7 @@ kk_apply_store_ops(struct kk_cmd_buffer *cmd, bool force_store,
+             &render->color_att[i], force_store,
+             render->rendering_to_whole_framebuffer, VK_IMAGE_ASPECT_COLOR_BIT);
+ 
++         kk_pass_prof_store(cmd, logical_index, store_action);
+          mtl_render_set_color_store_action(encoder, store_action,
+                                            logical_index);
+       }
+@@ -1227,6 +1232,7 @@ kk_apply_store_ops(struct kk_cmd_buffer *cmd, bool force_store,
+           ds_force_ms_store)
+          depth_store_action = MTL_STORE_ACTION_STORE_AND_MULTISAMPLE_RESOLVE;
+ 
++      kk_pass_prof_store(cmd, 8, depth_store_action);
+       mtl_render_set_depth_store_action(encoder, depth_store_action);
+    }
+    if (render->stencil_att.iview) {
+@@ -1234,6 +1240,7 @@ kk_apply_store_ops(struct kk_cmd_buffer *cmd, bool force_store,
+           ds_force_ms_store)
+          stencil_store_action = MTL_STORE_ACTION_STORE_AND_MULTISAMPLE_RESOLVE;
+ 
++      kk_pass_prof_store(cmd, 9, stencil_store_action);
+       mtl_render_set_stencil_store_action(encoder, stencil_store_action);
+    }
+ }
+@@ -1345,6 +1352,7 @@ kk_end_deferred_render(struct kk_cmd_buffer *cmd,
+          store = MTL_STORE_ACTION_DONT_CARE;
+          KK_PASS_STAT(DS_DONT_CARE);
+       }
++      kk_pass_prof_store(cmd, i ? 9 : 8, store);
+       if (i)
+          mtl_render_set_stencil_store_action(encoder, store);
+       else
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.h b/src/kosmickrisp/vulkan/kk_cmd_buffer.h
+index 8b58db8..72ec2ed 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_buffer.h
++++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.h
+@@ -14,6 +14,7 @@
+ #include "kk_gpl.h"
+ #include "kk_image.h"
+ #include "kk_nir_lower_vbo.h"
++#include "kk_pass_prof.h"
+ #include "kk_shader.h"
+ 
+ #include "kosmickrisp/bridge/mtl_types.h"
+@@ -383,6 +384,10 @@ struct kk_cmd_buffer {
+    /* Playport (PLA-72): MESA_KK_DEBUG=passes bookkeeping, reset at
+     * vkBeginCommandBuffer */
+    struct kk_pass_debug pass_debug;
++
++   /* Non-owning, attached only to a queue-owned profiling replay. */
++   struct kk_pass_prof *pass_prof;
++   uint32_t pass_prof_cb, pass_prof_index;
+ };
+ 
+ VK_DEFINE_HANDLE_CASTS(kk_cmd_buffer, vk.base, VkCommandBuffer,
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_copy.c b/src/kosmickrisp/vulkan/kk_cmd_copy.c
+index 67bb33f..a521df7 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_copy.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_copy.c
+@@ -27,6 +27,7 @@ kk_CmdCopyBuffer2(VkCommandBuffer commandBuffer,
+    VK_FROM_HANDLE(kk_buffer, dst, pCopyBufferInfo->dstBuffer);
+ 
+    mtl_compute_encoder *encoder = cs_get_compute(cmd);
++   kk_pass_prof_copy(cmd);
+    for (uint32_t i = 0; i < pCopyBufferInfo->regionCount; i++) {
+       const VkBufferCopy2 *region = &pCopyBufferInfo->pRegions[i];
+       mtl_copy_from_buffer_to_buffer(
+@@ -92,6 +93,7 @@ kk_CmdCopyBufferToImage2(VkCommandBuffer commandBuffer,
+    VK_FROM_HANDLE(kk_image, image, pCopyBufferToImageInfo->dstImage);
+ 
+    mtl_compute_encoder *encoder = cs_get_compute(cmd);
++   kk_pass_prof_copy(cmd);
+    for (int r = 0; r < pCopyBufferToImageInfo->regionCount; r++) {
+       const VkBufferImageCopy2 *region = &pCopyBufferToImageInfo->pRegions[r];
+       const uint8_t plane_index = kk_image_memory_aspects_to_plane(
+@@ -122,6 +124,7 @@ kk_CmdCopyImageToBuffer2(VkCommandBuffer commandBuffer,
+    VK_FROM_HANDLE(kk_buffer, buffer, pCopyImageToBufferInfo->dstBuffer);
+ 
+    mtl_compute_encoder *encoder = cs_get_compute(cmd);
++   kk_pass_prof_copy(cmd);
+    for (unsigned r = 0; r < pCopyImageToBufferInfo->regionCount; r++) {
+       const VkBufferImageCopy2 *region = &pCopyImageToBufferInfo->pRegions[r];
+       const uint8_t plane_index = kk_image_memory_aspects_to_plane(
+@@ -181,6 +184,7 @@ copy_through_buffer(struct kk_cmd_buffer *cmd, struct kk_image *src,
+    bool is_dst_compressed = util_format_is_compressed(dst_format);
+ 
+    mtl_compute_encoder *encoder = cs_get_compute(cmd);
++   kk_pass_prof_copy(cmd);
+ 
+    const uint32_t buffer_stride_B =
+       util_format_get_stride(src_format, region->extent.width);
+@@ -298,6 +302,7 @@ copy_image(struct kk_cmd_buffer *cmd, struct kk_image *src, uint32_t src_index,
+            struct kk_image *dst, uint32_t dst_index, const VkImageCopy2 *region)
+ {
+    mtl_compute_encoder *encoder = cs_get_compute(cmd);
++   kk_pass_prof_copy(cmd);
+    struct kk_image_plane *src_plane = &src->planes[src_index];
+    struct kk_image_plane *dst_plane = &dst->planes[dst_index];
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_dispatch.c b/src/kosmickrisp/vulkan/kk_cmd_dispatch.c
+index 91cfcca..af50a40 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_dispatch.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_dispatch.c
+@@ -33,6 +33,7 @@ kk_flush_compute_state(struct kk_cmd_buffer *cmd)
+    if (desc->root.addr)
+       kk_cmd_bind_root_to_argument_table(cmd, desc->root.addr);
+ 
++   kk_pass_prof_pipeline(cmd, cmd->state.shaders[MESA_SHADER_COMPUTE]->pipeline.cs);
+    mtl_compute_set_pipeline_state(
+       encoder, cmd->state.shaders[MESA_SHADER_COMPUTE]->pipeline.cs);
+ }
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_draw.c b/src/kosmickrisp/vulkan/kk_cmd_draw.c
+index ee00d2d..529f715 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_draw.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_draw.c
+@@ -1047,6 +1047,7 @@ kk_flush_pipeline(struct kk_cmd_buffer *cmd)
+ 
+    if (IS_SHADER_DIRTY(VERTEX)) {
+       struct kk_shader *vs = cmd->state.shaders[MESA_SHADER_VERTEX];
++      kk_pass_prof_pipeline(cmd, vs->pipeline.gfx.render);
+       mtl_render_set_pipeline_state(enc, vs->pipeline.gfx.render);
+       if (gfx->depth_stencil_state)
+          mtl_set_depth_stencil_state(enc, gfx->depth_stencil_state);
+@@ -1787,6 +1788,7 @@ static void
+ kk_dispatch_draw(struct kk_cmd_buffer *cmd, struct kk_draw_data data)
+ {
+    mtl_render_encoder *enc = cs_get_render(cmd);
++   kk_pass_prof_draw(cmd);
+ 
+    if (KK_DEBUG(PASSES)) {
+       KK_PASS_STAT(DRAWS);
+@@ -2162,6 +2164,7 @@ kk_launch_tess(struct kk_cmd_buffer *cmd, struct kk_draw_data draw)
+       struct mtl_size local_size = {64, 1, 1};
+       mtl_barrier_after_encoder_stages(enc, MTL_STAGE_DISPATCH,
+                                        MTL_STAGE_DISPATCH);
++      kk_pass_prof_pipeline(cmd, pipeline);
+       mtl_compute_set_pipeline_state(enc, pipeline);
+       kk_dispatch_compute(enc, grid_vs, local_size);
+    }
+@@ -2174,6 +2177,7 @@ kk_launch_tess(struct kk_cmd_buffer *cmd, struct kk_draw_data draw)
+          return (struct kk_draw_data){.grid = kk_grid_1d(0u)};
+       mtl_barrier_after_encoder_stages(enc, MTL_STAGE_DISPATCH,
+                                        MTL_STAGE_DISPATCH);
++      kk_pass_prof_pipeline(cmd, pipeline);
+       mtl_compute_set_pipeline_state(enc, pipeline);
+       kk_dispatch_compute(enc, grid_tcs, local_size);
+    }
+@@ -2368,6 +2372,7 @@ kk_launch_gs(struct kk_cmd_buffer *cmd, struct kk_draw_data draw,
+ 
+    mtl_barrier_after_encoder_stages(enc, MTL_STAGE_DISPATCH,
+                                     MTL_STAGE_DISPATCH);
++   kk_pass_prof_pipeline(cmd, prev_pipeline);
+    mtl_compute_set_pipeline_state(enc, prev_pipeline);
+    kk_dispatch_compute(enc, grid_vs, local_size);
+ 
+@@ -2377,6 +2382,7 @@ kk_launch_gs(struct kk_cmd_buffer *cmd, struct kk_draw_data draw,
+       if (vs->pipeline.gfx.gs_count) {
+          mtl_barrier_after_encoder_stages(enc, MTL_STAGE_DISPATCH,
+                                           MTL_STAGE_DISPATCH);
++         kk_pass_prof_pipeline(cmd, vs->pipeline.gfx.gs_count);
+          mtl_compute_set_pipeline_state(enc, vs->pipeline.gfx.gs_count);
+          kk_dispatch_compute(enc, grid_gs, local_size);
+       }
+@@ -2390,12 +2396,14 @@ kk_launch_gs(struct kk_cmd_buffer *cmd, struct kk_draw_data draw,
+        * for this draw, advances their offsets and updates the queries. */
+       mtl_barrier_after_encoder_stages(enc, MTL_STAGE_DISPATCH,
+                                        MTL_STAGE_DISPATCH);
++      kk_pass_prof_pipeline(cmd, vs->pipeline.gfx.gs_pre);
+       mtl_compute_set_pipeline_state(enc, vs->pipeline.gfx.gs_pre);
+       kk_dispatch_compute(enc, kk_grid_1d(1u), (struct mtl_size){1, 1, 1});
+    }
+ 
+    mtl_barrier_after_encoder_stages(enc, MTL_STAGE_DISPATCH,
+                                     MTL_STAGE_DISPATCH);
++   kk_pass_prof_pipeline(cmd, vs->pipeline.gfx.gs);
+    mtl_compute_set_pipeline_state(enc, vs->pipeline.gfx.gs);
+    kk_dispatch_compute(enc, grid_gs, local_size);
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_device_lib.c b/src/kosmickrisp/vulkan/kk_device_lib.c
+index 00aab42..8397861 100644
+--- a/src/kosmickrisp/vulkan/kk_device_lib.c
++++ b/src/kosmickrisp/vulkan/kk_device_lib.c
+@@ -7,6 +7,8 @@
+ #include "kk_device.h"
+ #include "kk_physical_device.h"
+ #include "kk_shader.h"
++#include "kk_pass_prof.h"
++#include "util/mesa-blake3.h"
+ 
+ #include "kosmickrisp/clc/kk_precompiled_shader.h"
+ 
+@@ -51,6 +53,14 @@ build_precompiled_shaders(struct kk_device *dev)
+       if (!shader->pipeline)
+          goto fail;
+ 
++      if (pdev->settings.pass_prof) {
++         blake3_hash hash;
++         char hex[BLAKE3_HEX_LEN];
++         _mesa_blake3_compute(msl, strlen(msl) + 1u, hash);
++         _mesa_blake3_format(hex, hash);
++         kk_pass_prof_log_pipeline(dev, shader->pipeline, false, hex,
++                                   local_size_threads);
++      }
+       memcpy(&shader->info, info, sizeof(*info));
+    }
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_pass_prof.c b/src/kosmickrisp/vulkan/kk_pass_prof.c
+new file mode 100644
+index 0000000..faae0c8
+--- /dev/null
++++ b/src/kosmickrisp/vulkan/kk_pass_prof.c
+@@ -0,0 +1,323 @@
++/* SPDX-License-Identifier: MIT */
++/* Playport (PLA-466): encoder-boundary timestamps, not a register/spill counter.
++ * Sampling replays just the selected submissions so recording ahead, reusable
++ * and simultaneous-use Vulkan command buffers cannot overwrite a live sample.
++ * A frame is bounded to one heap (2048 encoders); overflow/failure discards the
++ * whole frame rather than reporting a plausible but incomplete GPU total. */
++#include "kk_pass_prof.h"
++#include "kk_cmd_buffer.h"
++#include "kk_device.h"
++#include "kk_physical_device.h"
++#include "kosmickrisp/bridge/mtl_bridge.h"
++#include "util/u_atomic.h"
++#include "util/u_debug.h"
++#include <inttypes.h>
++#include <errno.h>
++#include <unistd.h>
++#include <stdio.h>
++#include <stdlib.h>
++
++#define PP_PASSES 2048u
++#define PP_PERIOD 1200u
++#define PP_FIRST 600u
++
++struct kk_profile_pass {
++   bool render, mixed, native_copy;
++   uint32_t cb, width, height, samples, draws;
++   void *pipeline;
++   struct mtl_profile_attachments attachments;
++};
++
++struct kk_pass_prof {
++   uint32_t refs, failed;
++   uint32_t report, present, count, cbs;
++   uint64_t frequency;
++   mtl_counter_heap *heap;
++   struct kk_profile_pass passes[PP_PASSES];
++};
++
++static uint32_t reports;
++
++static bool
++kk_pass_prof_timed(const struct kk_profile_pass *pass)
++{
++   /* Metal 4's in-encoder timestamps do not time native copies, even with
++    * precise sampling and dispatch/blit barriers (PLA-474). A mixed copy +
++    * dispatch encoder is conservatively unavailable too, not a partial cost. */
++   return pass->render || (pass->pipeline && !pass->native_copy);
++}
++
++void
++kk_pass_prof_queue_init(struct kk_queue *queue)
++{
++   const struct kk_physical_device *pdev =
++      kk_device_physical(kk_queue_device(queue));
++   queue->pass_prof_enabled = pdev->settings.pass_prof;
++   if (queue->pass_prof_enabled)
++      fprintf(stderr, "[pass-prof] armed: KosmicKrisp, 2 frames every 1200 presents, first 600; encoder GPU ms\n");
++}
++
++void
++kk_pass_prof_before_submit(struct kk_queue *queue)
++{
++   if (!queue->pass_prof_enabled || queue->pass_prof)
++      return;
++   const uint32_t phase = (queue->pass_prof_presents + 1u) % PP_PERIOD;
++   if (phase != PP_FIRST && phase != PP_FIRST + 1u)
++      return;
++   struct kk_device *dev = kk_queue_device(queue);
++   /* Independent guard at the allocation site: capture must never see a heap. */
++   if (kk_device_physical(dev)->settings.gpu_capture_enabled)
++      return;
++   struct kk_pass_prof *prof = calloc(1, sizeof(*prof));
++   if (!prof)
++      goto fail;
++   prof->frequency = mtl_device_timestamp_frequency(dev->mtl_handle);
++   if (!prof->frequency) {
++      free(prof);
++      goto fail;
++   }
++   prof->heap = mtl_new_timestamp_counter_heap(dev->mtl_handle, PP_PASSES * 2u);
++   if (!prof->heap) {
++      free(prof);
++      goto fail;
++   }
++   prof->refs = 1u;
++   prof->report = p_atomic_inc_return(&reports);
++   prof->present = queue->pass_prof_presents + 1u;
++   queue->pass_prof = prof;
++   return;
++fail:
++   fprintf(stderr, "[pass-prof] KosmicKrisp: allocation/frequency failed; off\n");
++   queue->pass_prof_enabled = false;
++}
++
++void
++kk_pass_prof_ref(struct kk_pass_prof *prof)
++{
++   if (prof)
++      p_atomic_inc(&prof->refs);
++}
++
++void
++kk_pass_prof_unref(struct kk_pass_prof *prof, bool success)
++{
++   if (!prof)
++      return;
++   if (!success)
++      p_atomic_set(&prof->failed, 1u);
++   if (!p_atomic_dec_zero(&prof->refs))
++      return;
++
++   uint64_t ts[PP_PASSES * 2u];
++   bool valid = !p_atomic_read(&prof->failed) && prof->count &&
++      mtl_timestamp_counter_heap_read(prof->heap, prof->count * 2u, ts);
++   for (uint32_t i = 0; valid && i < prof->count; i++)
++      if (kk_pass_prof_timed(&prof->passes[i]))
++         valid = ts[2u * i] && ts[2u * i + 1u] >= ts[2u * i];
++
++   /* Serialize sampled frames against other stdio writers. Wine also writes
++    * directly to the fd, so each pass below is assembled before one write.
++    * No GPU wait or per-pass logging in the recording/submission hot path. */
++   flockfile(stderr);
++   if (!valid) {
++      fprintf(stderr, "[pass-prof] discarded KosmicKrisp present %u: incomplete, overflow, GPU error or invalid timestamps\n",
++              prof->present);
++   } else {
++      fprintf(stderr, "[pass-prof] report %u at present %u: KosmicKrisp, %u encoders, %u command buffers, frequency=%" PRIu64 " Hz\n",
++              prof->report, prof->present, prof->count, prof->cbs,
++              prof->frequency);
++      fflush(stderr); /* The pass records use the fd directly. */
++      double sum = 0.0;
++      uint32_t draws = 0, untimed = 0;
++      uint64_t first = UINT64_MAX, last = 0;
++      for (uint32_t i = 0; i < prof->count; i++) {
++         if (ts[2u * i] && ts[2u * i + 1u] >= ts[2u * i]) {
++            first = MIN2(first, ts[2u * i]);
++            last = MAX2(last, ts[2u * i + 1u]);
++         }
++      }
++      const double ms_per_tick = 1000.0 / prof->frequency;
++      for (uint32_t i = 0; i < prof->count; i++) {
++         struct kk_profile_pass *p = &prof->passes[i];
++         const bool timed = kk_pass_prof_timed(p);
++         double ms = timed ? (ts[2u * i + 1u] - ts[2u * i]) * ms_per_tick : 0.0;
++         if (timed)
++            sum += ms;
++         else
++            untimed++;
++         draws += p->draws;
++         /* At most ten numeric attachments, no external strings; well below
++          * this bound and PIPE_BUF. Do not split a line across fprintf calls:
++          * Wine's fd writes bypass flockfile and can splice a pass in half. */
++         char line[2048];
++         int len = snprintf(line, sizeof(line), "[pass-prof]  f0 p%u cb%u ", i, p->cb);
++         if (p->render) {
++            len += snprintf(line + len, sizeof(line) - len, "render %ux%u x%u",
++                            p->width, p->height, p->samples);
++            for (unsigned a = 0; a < 10; a++) {
++               if (!p->attachments.formats[a])
++                  continue;
++               char name[8];
++               if (a < 8)
++                  snprintf(name, sizeof(name), "c%u", a);
++               else
++                  snprintf(name, sizeof(name), "%s", a == 8 ? "d" : "st");
++               /* Numeric Metal load/store actions; unlike DXMT's letters,
++                * these also preserve resolve and unknown store actions. */
++               len += snprintf(line + len, sizeof(line) - len, " %s=%u/%u:%u",
++                               name, p->attachments.formats[a],
++                               p->attachments.loads[a], p->attachments.stores[a]);
++            }
++            len += snprintf(line + len, sizeof(line) - len, " draws=%u ", p->draws);
++         } else {
++            len += snprintf(line + len, sizeof(line) - len, "compute ");
++         }
++         if (timed)
++            len += snprintf(line + len, sizeof(line) - len, "gpu=%.6f at=%.6f..%.6f pipeline=",
++                            ms, (ts[2u * i] - first) * ms_per_tick,
++                            (ts[2u * i + 1u] - first) * ms_per_tick);
++         else
++            len += snprintf(line + len, sizeof(line) - len, "gpu=NA reason=%s pipeline=",
++                            p->native_copy ? "native-copy" : "no-dispatch");
++         if (p->mixed)
++            len += snprintf(line + len, sizeof(line) - len, "mixed\n");
++         else
++            len += snprintf(line + len, sizeof(line) - len, "%p\n", p->pipeline);
++         assert(len > 0 && len < sizeof(line));
++         ssize_t written;
++         do {
++            written = write(fileno(stderr), line, len);
++         } while (written < 0 && errno == EINTR);
++      }
++      char span[64] = "NA";
++      if (first != UINT64_MAX)
++         snprintf(span, sizeof(span), "%.6f", (last - first) * ms_per_tick);
++      fprintf(stderr, "[pass-prof] frame 0: %u passes, %u draws, sum gpu %.6f ms, span %s ms, untimed %u\n",
++              prof->count, draws, sum, span, untimed);
++   }
++   fflush(stderr);
++   funlockfile(stderr);
++   for (uint32_t i = 0; i < prof->count; i++)
++      if (prof->passes[i].pipeline)
++         mtl_release(prof->passes[i].pipeline);
++   mtl_release(prof->heap);
++   free(prof);
++}
++
++void
++kk_pass_prof_present(struct kk_queue *queue)
++{
++   if (!queue->pass_prof_enabled)
++      return;
++   queue->pass_prof_presents++;
++   struct kk_pass_prof *prof = queue->pass_prof;
++   queue->pass_prof = NULL;
++   kk_pass_prof_unref(prof, true);
++}
++
++void
++kk_pass_prof_queue_finish(struct kk_queue *queue)
++{
++   /* A tail without a present is not a complete sampled frame. */
++   kk_pass_prof_unref(queue->pass_prof, false);
++   queue->pass_prof = NULL;
++}
++
++void
++kk_pass_prof_attach(struct kk_cmd_buffer *cmd, struct kk_pass_prof *prof)
++{
++   cmd->pass_prof = prof;
++   if (prof)
++      cmd->pass_prof_cb = ++prof->cbs;
++}
++
++void
++kk_pass_prof_begin(struct kk_cmd_buffer *cmd, bool render)
++{
++   struct kk_pass_prof *prof = cmd->pass_prof;
++   if (!prof)
++      return;
++   cmd->pass_prof_index = prof->count;
++   if (prof->count == PP_PASSES) {
++      p_atomic_set(&prof->failed, 1u);
++      return;
++   }
++   uint32_t i = prof->count++;
++   struct kk_profile_pass *p = &prof->passes[i];
++   p->render = render;
++   p->cb = cmd->pass_prof_cb;
++   if (render) {
++      const struct kk_rendering_state *r = &cmd->state.gfx.render;
++      p->width = r->area.extent.width;
++      p->height = r->area.extent.height;
++      p->samples = r->samples;
++      mtl_render_pass_profile_attachments(cmd->state.gfx.render_pass_descriptor,
++                                         &p->attachments);
++      mtl_render_write_timestamp(cmd->metal.render, MTL_RENDER_STAGE_VERTEX,
++                                 prof->heap, 2u * i);
++   } else {
++      mtl_compute_write_timestamp_precise(cmd->metal.compute, prof->heap, 2u * i);
++   }
++}
++
++void
++kk_pass_prof_end(struct kk_cmd_buffer *cmd, bool render)
++{
++   struct kk_pass_prof *prof = cmd->pass_prof;
++   if (!prof || cmd->pass_prof_index == PP_PASSES)
++      return;
++   uint32_t i = cmd->pass_prof_index;
++   if (render) {
++      mtl_render_write_timestamp(cmd->metal.render, MTL_RENDER_STAGE_FRAGMENT,
++                                 prof->heap, 2u * i + 1u);
++   } else {
++      mtl_compute_write_timestamp_precise(cmd->metal.compute, prof->heap, 2u * i + 1u);
++   }
++}
++
++void
++kk_pass_prof_pipeline(struct kk_cmd_buffer *cmd, void *pipeline)
++{
++   if (!cmd->pass_prof || cmd->pass_prof_index == PP_PASSES)
++      return;
++   struct kk_profile_pass *p = &cmd->pass_prof->passes[cmd->pass_prof_index];
++   if (!p->pipeline)
++      p->pipeline = mtl_retain(pipeline);
++   else if (p->pipeline != pipeline)
++      p->mixed = true;
++}
++
++void
++kk_pass_prof_store(struct kk_cmd_buffer *cmd, unsigned index, unsigned action)
++{
++   if (cmd->pass_prof && cmd->pass_prof_index != PP_PASSES)
++      cmd->pass_prof->passes[cmd->pass_prof_index].attachments.stores[index] = action;
++}
++
++void
++kk_pass_prof_copy(struct kk_cmd_buffer *cmd)
++{
++   if (cmd->pass_prof && cmd->pass_prof_index != PP_PASSES)
++      cmd->pass_prof->passes[cmd->pass_prof_index].native_copy = true;
++}
++
++void
++kk_pass_prof_draw(struct kk_cmd_buffer *cmd)
++{
++   if (cmd->pass_prof && cmd->pass_prof_index != PP_PASSES)
++      cmd->pass_prof->passes[cmd->pass_prof_index].draws++;
++}
++
++void
++kk_pass_prof_log_pipeline(struct kk_device *dev, void *pipeline, bool render,
++                          const char *msl, uint32_t requested)
++{
++   if (!pipeline || !kk_device_physical(dev)->settings.pass_prof)
++      return;
++   uint64_t threads = 0, memory = 0;
++   mtl_pipeline_profile_limits(pipeline, render, &threads, &memory);
++   fprintf(stderr, "[pass-prof] pipeline %p kind=%s msl=%.16s max_threads=%" PRIu64
++           " static_tg_bytes=%" PRIu64 " requested_threads=%u\n", pipeline,
++           render ? "render" : "compute", msl, threads, memory, requested);
++}
+diff --git a/src/kosmickrisp/vulkan/kk_pass_prof.h b/src/kosmickrisp/vulkan/kk_pass_prof.h
+new file mode 100644
+index 0000000..6f4e8d0
+--- /dev/null
++++ b/src/kosmickrisp/vulkan/kk_pass_prof.h
+@@ -0,0 +1,33 @@
++/* SPDX-License-Identifier: MIT */
++#ifndef KK_PASS_PROF_H
++#define KK_PASS_PROF_H
++
++#include <stdbool.h>
++#include <stdint.h>
++#include "kosmickrisp/bridge/mtl_types.h"
++
++struct kk_cmd_buffer;
++struct kk_device;
++struct kk_queue;
++struct kk_pass_prof;
++
++/* Queue-owned while recording a frame; each sampled commit holds another ref.
++ * Only the queue writes metadata. The last GPU completion resolves and logs it.
++ * No heap or replay outside two frames per 1200 presents, or during capture. */
++void kk_pass_prof_queue_init(struct kk_queue *queue);
++void kk_pass_prof_before_submit(struct kk_queue *queue);
++void kk_pass_prof_present(struct kk_queue *queue);
++void kk_pass_prof_queue_finish(struct kk_queue *queue);
++void kk_pass_prof_ref(struct kk_pass_prof *prof);
++void kk_pass_prof_unref(struct kk_pass_prof *prof, bool success);
++void kk_pass_prof_attach(struct kk_cmd_buffer *cmd, struct kk_pass_prof *prof);
++void kk_pass_prof_begin(struct kk_cmd_buffer *cmd, bool render);
++void kk_pass_prof_end(struct kk_cmd_buffer *cmd, bool render);
++void kk_pass_prof_pipeline(struct kk_cmd_buffer *cmd, void *pipeline);
++void kk_pass_prof_draw(struct kk_cmd_buffer *cmd);
++void kk_pass_prof_copy(struct kk_cmd_buffer *cmd);
++void kk_pass_prof_store(struct kk_cmd_buffer *cmd, unsigned index, unsigned action);
++void kk_pass_prof_log_pipeline(struct kk_device *dev, void *pipeline,
++                               bool render, const char *msl, uint32_t requested);
++
++#endif
+diff --git a/src/kosmickrisp/vulkan/kk_physical_device.c b/src/kosmickrisp/vulkan/kk_physical_device.c
+index 5e0b9cb..ed9ec2a 100644
+--- a/src/kosmickrisp/vulkan/kk_physical_device.c
++++ b/src/kosmickrisp/vulkan/kk_physical_device.c
+@@ -1222,6 +1222,12 @@ kk_parse_environment_options(struct kk_physical_device *pdev)
+    if (settings->gpu_capture_frame)
+       settings->gpu_capture_enabled = true;
+ 
++   settings->pass_prof = debug_get_bool_option("MESA_KK_PASS_PROF", false);
++   if (settings->pass_prof && settings->gpu_capture_enabled) {
++      fprintf(stderr, "[pass-prof] KosmicKrisp: GPU capture armed; profiling off (no counter heap)\n");
++      settings->pass_prof = false;
++   }
++
+    const char *list = debug_get_option("MESA_KK_DISABLE_WORKAROUNDS", "");
+    const char *all_workarounds = "all";
+    const size_t all_len = strlen(all_workarounds);
+diff --git a/src/kosmickrisp/vulkan/kk_physical_device.h b/src/kosmickrisp/vulkan/kk_physical_device.h
+index b4f141a..4f89bb1 100644
+--- a/src/kosmickrisp/vulkan/kk_physical_device.h
++++ b/src/kosmickrisp/vulkan/kk_physical_device.h
+@@ -51,6 +51,7 @@ struct kk_device_info {
+ struct kk_env_settings {
+    bool experimental_enabled;
+    bool gpu_capture_enabled;
++   bool pass_prof; /* MESA_KK_PASS_PROF, disabled while capture is armed */
+    const char *gpu_capture_dir;
+    /* MESA_KK_GPU_CAPTURE_FRAME: capture only this present (counted from 1),
+     * not the device's whole life; 0 for the whole life. */
+diff --git a/src/kosmickrisp/vulkan/kk_queue.c b/src/kosmickrisp/vulkan/kk_queue.c
+index a20bf99..d5dc55b 100644
+--- a/src/kosmickrisp/vulkan/kk_queue.c
++++ b/src/kosmickrisp/vulkan/kk_queue.c
+@@ -191,6 +191,9 @@ rerecord_commit_callback(struct mtl_feedback_data *data)
+    struct kk_device *dev = kk_queue_device(queue);
+ 
+    check_device_lost(dev, data);
++   struct kk_pass_prof *prof = commit->cmd->pass_prof;
++   commit->cmd->pass_prof = NULL;
++   kk_pass_prof_unref(prof, data->error == MTL_COMMAND_QUEUE_ERROR_NONE);
+ 
+    /* Completion callbacks are called from multiple threads, so we need to
+     * ensure the access to queue resources is safe. */
+@@ -264,6 +267,7 @@ rerecord_and_commit_cmd_buffer(struct kk_queue *queue,
+    if (result != VK_SUCCESS)
+       goto release;
+ 
++   kk_pass_prof_attach(rerecord, queue->pass_prof);
+    vk_cmd_queue_execute(&cmd->vk.cmd_queue, rerecord_handle,
+                         &dev->vk.dispatch_table);
+ 
+@@ -287,12 +291,18 @@ rerecord_and_commit_cmd_buffer(struct kk_queue *queue,
+    kk_device_make_resources_resident(dev);
+ 
+    queue->commits_in_flight++;
++   kk_pass_prof_ref(rerecord->pass_prof);
+    kk_queue_commit(queue, rerecord, rerecord_commit_callback, commit);
+ 
+    mtx_unlock(&queue->mutex);
+    return VK_SUCCESS;
+ 
+ release:
++   rerecord->pass_prof = NULL;
++   if (result != VK_SUCCESS && queue->pass_prof) {
++      kk_pass_prof_ref(queue->pass_prof);
++      kk_pass_prof_unref(queue->pass_prof, false);
++   }
+    kk_queue_release_cmd_buffer_locked(queue, rerecord);
+ unlock:
+    mtx_unlock(&queue->mutex);
+@@ -375,9 +385,11 @@ kk_queue_submit(struct vk_queue *vk_queue, struct vk_queue_submit *submit)
+                                              cmd_buffer->drawable);
+       }
+ 
+-      /* Metal's command buffers are one time use, re-record multiple
+-       * submissions. */
+-      if (cmd_buffer->submitted) {
++      kk_pass_prof_before_submit(queue);
++      /* Metal's command buffers are one time use. Profiling also replays a
++       * selected submission, so recording ahead cannot shift sampled frames
++       * and a reusable command buffer cannot overwrite in-flight counters. */
++      if (cmd_buffer->submitted || queue->pass_prof) {
+          VkResult result = rerecord_and_commit_cmd_buffer(queue, cmd_buffer);
+          if (result != VK_SUCCESS)
+             return result;
+@@ -393,6 +405,7 @@ kk_queue_submit(struct vk_queue *vk_queue, struct vk_queue_submit *submit)
+          mtl_release(cmd_buffer->drawable);
+          cmd_buffer->drawable = NULL;
+          kk_queue_capture_frame(queue, true);
++         kk_pass_prof_present(queue);
+          frames++;
+       }
+    }
+@@ -473,6 +486,7 @@ kk_queue_init(struct kk_device *dev, struct kk_queue *queue,
+    mtl_command_queue_add_residency_set(queue->mtl_handle,
+                                        dev->residency_set.handle);
+ 
++   kk_pass_prof_queue_init(queue);
+    queue->vk.driver_submit = kk_queue_submit;
+ 
+    return VK_SUCCESS;
+@@ -483,6 +497,7 @@ kk_queue_finish(struct kk_device *dev, struct kk_queue *queue)
+ {
+    /* There may be in-flight command buffers, wait for them to finish. */
+    kk_queue_wait_for_commits(queue);
++   kk_pass_prof_queue_finish(queue);
+    kk_gpu_log(0u, 0, true);
+    kk_pass_stats_log(0u, true);
+    kk_vertex_stats_log(0u, true);
+diff --git a/src/kosmickrisp/vulkan/kk_queue.h b/src/kosmickrisp/vulkan/kk_queue.h
+index 1107482..504b542 100644
+--- a/src/kosmickrisp/vulkan/kk_queue.h
++++ b/src/kosmickrisp/vulkan/kk_queue.h
+@@ -36,6 +36,10 @@ struct kk_queue {
+     * (MESA_KK_GPU_CAPTURE_FRAME) is running. */
+    uint32_t presents;
+    bool capturing;
++
++   bool pass_prof_enabled;
++   uint32_t pass_prof_presents;
++   struct kk_pass_prof *pass_prof;
+ };
+ 
+ static inline struct kk_device *
+diff --git a/src/kosmickrisp/vulkan/kk_shader.c b/src/kosmickrisp/vulkan/kk_shader.c
+index 45f0013..4b57074 100644
+--- a/src/kosmickrisp/vulkan/kk_shader.c
++++ b/src/kosmickrisp/vulkan/kk_shader.c
+@@ -32,6 +32,7 @@
+ #include "c11/threads.h"
+ #include "util/mesa-blake3.h"
+ #include "util/hash_table.h"
++#include "kk_pass_prof.h"
+ #include "util/ralloc.h"
+ #include "util/simple_mtx.h"
+ #include "util/os_time.h"
+@@ -2509,6 +2510,8 @@ kk_compile_compute_pipeline(struct kk_device *device,
+       return VK_ERROR_INVALID_SHADER_NV;
+ 
+    *pipe = pipeline;
++   kk_pass_prof_log_pipeline(device, pipeline, false, build.msl,
++                             local_size_threads);
+ 
+    return VK_SUCCESS;
+ }
+@@ -3050,6 +3053,7 @@ kk_compile_graphics_pipeline(struct kk_device *device, struct kk_shader *vs,
+       build.failed_step = "pipeline";
+    }
+ 
++   kk_pass_prof_log_pipeline(device, pipe->gfx.render, true, build.msl, 0);
+    mtl_release(pipeline_descriptor);
+    mtl_release(fragment_function);
+    mtl_release(vertex_function);
+diff --git a/src/kosmickrisp/vulkan/kk_wsi.c b/src/kosmickrisp/vulkan/kk_wsi.c
+index cef6f96..d03a88d 100644
+--- a/src/kosmickrisp/vulkan/kk_wsi.c
++++ b/src/kosmickrisp/vulkan/kk_wsi.c
+@@ -88,7 +88,11 @@ kk_wsi_cmd_blit_image(VkCommandBuffer vk_cmd, const VkBlitImageInfo2 *blit_info,
+    mtl_drawable_texture_set_readable_source(dst->planes[0].mtl_handle,
+                                             src->planes[0].mtl_handle);
+ 
+-   kk_CmdBlitImage2(vk_cmd, blit_info);
++   /* Keep the present blit in the replay queue too: sampled submissions
++    * replay the command buffer, and must not drop its final copy. */
++   VK_FROM_HANDLE(kk_cmd_buffer, cmd, vk_cmd);
++   kk_cmd_buffer_device(cmd)->exposed_dispatch_table.CmdBlitImage2(vk_cmd,
++                                                                 blit_info);
+ }
+ 
+ static void
+diff --git a/src/kosmickrisp/vulkan/meson.build b/src/kosmickrisp/vulkan/meson.build
+index 37456c1..71e1bdc 100644
+--- a/src/kosmickrisp/vulkan/meson.build
++++ b/src/kosmickrisp/vulkan/meson.build
+@@ -99,6 +99,8 @@ kk_files = files(
+   'kk_nir_lower_vbo.h',
+   'kk_nir_lower_vbo.c',
+   'kk_nir_merge_ubo_loads.c',
++  'kk_pass_prof.c',
++  'kk_pass_prof.h',
+   'kk_physical_device.h',
+   'kk_physical_device.c',
+   'kk_query_pool.h',

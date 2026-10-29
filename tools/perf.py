@@ -60,9 +60,11 @@ without a special build:
                     patches/dxmt 0005: shader and pipeline compiles and the
                     draws that waited for one (hitches.txt)
   [pass-prof]       only with --pass-prof (Settings' Diagnostics, GPU time per
-                    pass; patches/dxmt 0008): every encoder of two frames in
-                    every 1200 presents, its GPU time, size and attachments
-                    (passes.txt, tools/passprof.py)
+                    pass; DXMT and KosmicKrisp): every encoder of two frames
+                    in every 1200 presents, its GPU time, size and attachments
+                    (passes.txt, tools/passprof.py). KosmicKrisp also logs pipeline
+                    limits keyed by MSL hash; capture must be off. Copy/empty
+                    encoder times are unavailable and GPU totals are partial
   [wprof]           only with --cpu-prof (Settings' Diagnostics, CPU sampling;
                     patches/madeira-unix 0028): the busiest threads' samples
                     (profile.txt, tools/sampleprof.py)
@@ -633,7 +635,7 @@ def analyze(d, bucket=5.0, frames_from="auto", echo=True):
         with open(os.path.join(d, "profile.txt"), "w") as f:
             f.write(prof)
     import passprof
-    passes = passprof.report(lines)   # a launch with DXMT_PASS_PROF=1
+    passes = passprof.report(lines)   # DXMT or KosmicKrisp, Diagnostics' passProfile
     if passes:
         with open(os.path.join(d, "passes.txt"), "w") as f:
             f.write(passes)
@@ -1133,8 +1135,10 @@ def parser():
                         "the game layer's [frames] lines (any backend) and the frame-time, GPU and memory columns "
                         "stay empty")
     p.add_argument("--pass-prof", action="store_true",
-                   help="turn on Settings' Diagnostics, GPU time per pass, for this run: winemetal times every "
-                        "encoder of two frames in every 1200 presents; passes.txt tables them (tools/passprof.py)")
+                   help="turn on Settings' Diagnostics, GPU time per pass, for this run: DXMT or KosmicKrisp times every "
+                        "encoder of two frames in every 1200 presents; passes.txt tables them and KosmicKrisp's "
+                        "pipeline limits (tools/passprof.py); copy/empty timings are unavailable, totals partial; "
+                        "GPU capture must be off")
     p.add_argument("--gpu-capture", type=int, metavar="FRAME",
                    help="turn on Settings' Diagnostics, GPU capture, for this run: DXMT writes frame FRAME (presents "
                         "from the game's first) as a .gputrace; it is pulled into the run directory and "

@@ -507,10 +507,28 @@ campaign-specific approval; it does not waive required regression smoke gates
     the PE function each sample runs under, symbolised against the staged DLLs
     (DXVK's and vkd3d-proton's for a Vulkan run) and KosmicKrisp's framework
     (madeira-unix 0096), and an i386 guest's module+rva by thread (`guest-thread`).
-  - GPU time per pass (`DXMT_PASS_PROF=1`, patches/dxmt 0008): every encoder
-    of two frames in every 1200 presents; `passes.txt`
-    (`tools/passprof.py LOG`) tables the sampled frames and the passes that
-    cost most GPU time a frame, alike passes (size, attachments) together.
+  - GPU time per pass (`DXMT_PASS_PROF=1` / `MESA_KK_PASS_PROF=1`): every
+    encoder of two frames in every 1200 presents, first at present 600;
+    `passes.txt` (`tools/passprof.py LOG`) tables complete sampled frames and
+    alike passes by GPU cost. DXMT reports vertex + fragment stage time
+    (the stages overlap); KosmicKrisp reports encoder elapsed time, not stage
+    time. Native-copy/empty compute encoders (also copy + dispatch mixtures)
+    report **unavailable**, never zero cost: `passes.txt` lists them separately
+    and labels GPU totals **PARTIAL**. Accurate copy timing is PLA-474. The span
+    is the extent of valid sampled timestamps, not whole-frame GPU busy time;
+    elapsed intervals can overlap and their sums can exceed that span.
+    Compute boundaries use precise timestamp sampling (which can perturb the
+    sampled passes); Vulkan query sampling is unchanged. Its
+    attachments use Metal format/load:store numbers (load 0 discard,
+    1 load, 2 clear; store 0 discard, 1 store, 2 resolve, 3 store+resolve).
+    KosmicKrisp also logs each pipeline's MSL hash, maximum threads and static
+    threadgroup bytes. These are **not register/spill counts**: the requested
+    compute workgroup size caps the reported maximum, and a render limit of
+    0 means unavailable. The profiler keeps one-shot commands for replay and
+    re-records sampled submissions, so use separate performance controls.
+    Capture must be off: with GPU capture armed KosmicKrisp disables profiling
+    before allocating any counter heap. Frames exceeding 2048 encoders, failed
+    GPU work, invalid counters and unfinished frames are discarded explicitly.
 - **One frame's GPU work**: Settings › Developer's GPU capture (dev builds) has DXMT write
   frame N of the next game as a Metal `.gputrace` into the game's folder. It
   needs a Playport started with it set (Metal allows a capture only then, and

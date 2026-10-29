@@ -34,6 +34,7 @@ stubs = os.path.join(tree, "src/kosmickrisp/bridge/stubs")
 os.makedirs(out, exist_ok=True)
 
 COMMON = r'''
+#include <assert.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -325,7 +326,25 @@ body("mtl_new_timestamp_counter_heap", r'''
               count);
       abort();
    }
-   return kk_mock_new(9, 0);''')
+   return kk_mock_new(9, count * sizeof(uint64_t));''')
+# Deliberately synthetic intervals, NOT GPU time. Exercise the documented
+# worst case of relaxed compute sampling: all timestamps of a pass grouped.
+# Only the profiler's precise compute path gets distinct boundaries.
+body("mtl_compute_write_timestamp", r'''
+   struct kk_mock_obj *h = heap;
+   assert(index < h->size / sizeof(uint64_t));
+   ((uint64_t *)h->mem)[index] = 10000u;''')
+for function in ("mtl_compute_write_timestamp_precise", "mtl_render_write_timestamp"):
+    body(function, r'''
+   struct kk_mock_obj *h = heap;
+   assert(index < h->size / sizeof(uint64_t));
+   ((uint64_t *)h->mem)[index] = (++h->value) * 10000u;''')
+body("mtl_timestamp_counter_heap_read", r'''
+   struct kk_mock_obj *h = heap;
+   assert(count <= h->size / sizeof(uint64_t));
+   memcpy(timestamps, h->mem, count * sizeof(uint64_t));
+   return !getenv("KK_MOCK_COUNTER_READ_FAIL");''')
+body("mtl_pipeline_profile_limits", "*max_threads = 256; *static_bytes = render ? 0 : 1024;")
 # With KK_MOCK_MSL_VERSIONS set, each library's MSL language version is
 # appended to that file, one hex number a line (PLA-437: MSL 4.0, msl41).
 body("mtl_new_library", r'''

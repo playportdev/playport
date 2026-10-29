@@ -65,6 +65,7 @@ NATIVE
 ninja -C "$ROOT/build" src/kosmickrisp/vulkan/libvulkan_kosmickrisp.so >/dev/null
 python3 "$HERE/run-cmd-pool-test.py" "$ROOT/build"
 python3 "$HERE/run-cmd-pool-test.py" "$ROOT/build" kk-residency-test
+python3 "$HERE/run-pass-prof-test.py" "$ROOT/build"
 python3 "$HERE/run-nir-tests.py" "$ROOT/build"
 
 mkdir -p "$ROOT/spv"

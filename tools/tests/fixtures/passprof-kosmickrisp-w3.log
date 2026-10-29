@@ -1,0 +1,275 @@
+# Recorded Witcher 3 Vulkan frame, 2026-10-29, .work/perf/pla466-w3-scoped.
+# IPA d4c896f8eeb260aed7ef4f93e0d149c8602dc83e9edd434de3de5a6192b8a3a0.
+# Complete frame; only referenced pipeline records retained. Native-copy costs explicitly unavailable.
+[pass-prof] pipeline 0x16d153b80 kind=compute msl=2a0f1684d3ad28f8 max_threads=1 static_tg_bytes=0 requested_threads=1
+[pass-prof] pipeline 0x16d153b80 kind=compute msl=7ceca20109fb56fc max_threads=32 static_tg_bytes=0 requested_threads=32
+[pass-prof] pipeline 0x16d153b80 kind=compute msl=bd8d4d7323248236 max_threads=1 static_tg_bytes=0 requested_threads=1
+[pass-prof] pipeline 0x7229681000 kind=render msl=3a9b2e04ff14d970 max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x7229682000 kind=render msl=86c24cc252351a26 max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x7219129180 kind=compute msl=2157cbf5c576a2b8 max_threads=256 static_tg_bytes=1552 requested_threads=256
+[pass-prof] pipeline 0x7229683000 kind=render msl=39137bdfc65ca239 max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x7219129500 kind=compute msl=98cdc0471b1365e7 max_threads=256 static_tg_bytes=2064 requested_threads=256
+[pass-prof] pipeline 0x7229774000 kind=render msl=3dd007f9d82f083f max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x7229775000 kind=render msl=422ff3cba2de4761 max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x7229776000 kind=render msl=9b78d63abe51b6be max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x721912a680 kind=compute msl=054f15fd8d57bae7 max_threads=1 static_tg_bytes=0 requested_threads=1
+[pass-prof] pipeline 0x7229777000 kind=render msl=15a228e481b418a0 max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x721912aa00 kind=compute msl=1b010477adf0f1c9 max_threads=64 static_tg_bytes=0 requested_threads=64
+[pass-prof] pipeline 0x72297c0000 kind=render msl=64ff43cdc984e7a1 max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x72297c2000 kind=render msl=d564afa90e95fdaa max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x72297c3000 kind=render msl=ad88f8852faf7308 max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x7230035000 kind=render msl=898f4cc3cddcab8d max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x7230301000 kind=render msl=3ed2576e3a927148 max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x7230302000 kind=render msl=4c5c02a37cbcdc2c max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x72303e3000 kind=render msl=d3b5fba23c6dc426 max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x17ff7d000 kind=render msl=bb875593ef3507ca max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x7249fbe000 kind=render msl=91dc7f7e7e32ce86 max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x7249fbf000 kind=render msl=d6092445bcc3b518 max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x721912b800 kind=compute msl=56ce98013b305935 max_threads=256 static_tg_bytes=1040 requested_threads=256
+[pass-prof] pipeline 0x7249fe4000 kind=render msl=e20095bb67b08e08 max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x7249fe7000 kind=render msl=51a8c83e1862c846 max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x725e450000 kind=render msl=d3b3c28fb43d2dfe max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x725e5ca000 kind=render msl=8d2144404df22a35 max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x725e625000 kind=render msl=5ad240ac9cd3a9c4 max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x725e627000 kind=render msl=583b9d6205fa2680 max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x725e70d000 kind=render msl=4ce206457fa206d4 max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x725e70e000 kind=render msl=e12982f0e20aecb7 max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x725e744000 kind=render msl=737ae492c4638355 max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x725e7c1000 kind=render msl=2af235b994a0f6b8 max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x72abc88000 kind=render msl=13e0dc03b256919e max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x72abc89000 kind=render msl=47031aa8739f502d max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x72abc8a000 kind=render msl=430228a48557d3ce max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x72abc8b000 kind=render msl=8d0f47746b976ca8 max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x72abd10000 kind=render msl=15b81c71657c6d02 max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x72abd11000 kind=render msl=e6ca391b40652c2f max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x72abd12000 kind=render msl=d564afa90e95fdaa max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x72abd4b000 kind=render msl=4da5c56826adca6c max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x72abdb0000 kind=render msl=d159d9a98de3b370 max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x72abdb1000 kind=render msl=19c999442e08aa68 max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x72abdb3000 kind=render msl=72097aebc858f17f max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x72abdfd000 kind=render msl=d8720ec964f0578f max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x72abdfe000 kind=render msl=a9bb4a873b8beef3 max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x72abdff000 kind=render msl=6566efedf3f63035 max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x72abe40000 kind=render msl=bb875593ef3507ca max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x72abe5c000 kind=render msl=d3b5fba23c6dc426 max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x72abe5f000 kind=render msl=3ed2576e3a927148 max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x72abe99000 kind=render msl=480c86d291031b77 max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x72abe9b000 kind=render msl=101d3f985854a12e max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x72abf21000 kind=render msl=44aa111e7a3ae296 max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x72abf22000 kind=render msl=aea91c16d97698a4 max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x72b81d8000 kind=render msl=6b2cf090ab3ff92a max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x72b81da000 kind=render msl=6566efedf3f63035 max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x72b82bc000 kind=render msl=31de3c6226e0ceee max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x72c7660000 kind=render msl=7ccb5f1f23abbf34 max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x72c768d000 kind=render msl=7fa82b571ebe3bc8 max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x72c76c0000 kind=render msl=7355a8a1376cdb47 max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x72c76c2000 kind=render msl=09e52b0ceb6e1666 max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x72c76c3000 kind=render msl=717736063c881a17 max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x72c76d8000 kind=render msl=52db87b4435487be max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x72600f5000 kind=render msl=b5a02cee78f16a60 max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x72600f6000 kind=render msl=7b190a0bb34b1326 max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x7260145000 kind=render msl=412f8510db978021 max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x7260146000 kind=render msl=6674cbe8da9fc43c max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] pipeline 0x7260147000 kind=render msl=6df75dd29e54d94e max_threads=0 static_tg_bytes=0 requested_threads=0
+[pass-prof] report 5 at present 3000: KosmicKrisp, 200 encoders, 14 command buffers, frequency=24000000 Hz
+[pass-prof]  f0 p0 cb1 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p1 cb4 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p2 cb4 render 128x128 x1 c0=70/1:1 draws=1 gpu=0.023042 at=0.287292..0.310333 pipeline=0x7249fbe000
+[pass-prof]  f0 p3 cb4 render 128x128 x1 c0=92/1:1 draws=1 gpu=0.008125 at=0.311708..0.319833 pipeline=0x7249fbf000
+[pass-prof]  f0 p4 cb4 compute gpu=0.031125 at=0.451500..0.482625 pipeline=0x721912b800
+[pass-prof]  f0 p5 cb4 render 128x128 x1 c0=92/1:1 draws=1 gpu=0.012542 at=0.484208..0.496750 pipeline=0x7249fe4000
+[pass-prof]  f0 p6 cb4 render 48x168 x1 c0=92/1:1 draws=1 gpu=0.017667 at=0.548458..0.566125 pipeline=0x7249fe7000
+[pass-prof]  f0 p7 cb4 render 24x84 x1 c0=92/1:1 draws=1 gpu=0.013083 at=0.567792..0.580875 pipeline=0x7249fe7000
+[pass-prof]  f0 p8 cb4 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p9 cb4 render 384x1344 x1 c0=92/1:1 draws=1 gpu=0.280417 at=0.811125..1.091542 pipeline=0x725e450000
+[pass-prof]  f0 p10 cb7 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p11 cb7 render 1024x1024 x1 d=250/2:1 draws=0 gpu=0.017375 at=2.372250..2.389625 pipeline=0x0
+[pass-prof]  f0 p12 cb7 render 1024x1024 x1 d=250/1:1 draws=162 gpu=0.520458 at=2.603792..3.124250 pipeline=mixed
+[pass-prof]  f0 p13 cb7 render 1024x1024 x1 d=250/1:1 draws=317 gpu=1.295875 at=3.126500..4.422375 pipeline=mixed
+[pass-prof]  f0 p14 cb7 render 1024x1024 x1 d=250/1:1 draws=121 gpu=1.307042 at=4.424500..5.731542 pipeline=mixed
+[pass-prof]  f0 p15 cb7 compute gpu=NA reason=native-copy pipeline=mixed
+[pass-prof]  f0 p16 cb8 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p17 cb8 render 1300x600 x1 c0=115/2:1 draws=1 gpu=0.138875 at=8.584208..8.723083 pipeline=0x7260146000
+[pass-prof]  f0 p18 cb8 render 650x300 x1 c0=65/2:1 d=260/2:1 st=260/1:1 draws=3 gpu=0.037708 at=8.724667..8.762375 pipeline=mixed
+[pass-prof]  f0 p19 cb8 render 650x300 x1 c0=65/1:1 draws=1 gpu=0.027208 at=8.763875..8.791083 pipeline=0x7229682000
+[pass-prof]  f0 p20 cb8 render 1300x600 x1 c0=70/1:1 c1=70/1:1 c2=70/1:1 c3=115/2:1 d=260/2:1 st=260/2:1 draws=222 gpu=1.271542 at=8.792458..10.064000 pipeline=mixed
+[pass-prof]  f0 p21 cb8 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p22 cb8 render 1x1 x1 c0=70/1:1 draws=1 gpu=0.017750 at=10.078667..10.096417 pipeline=0x725e625000
+[pass-prof]  f0 p23 cb8 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p24 cb8 render 1300x600 x1 c0=70/1:1 c1=70/1:1 c2=70/1:1 c3=115/1:1 d=260/1:1 st=260/1:1 draws=55 gpu=0.557708 at=10.101875..10.659583 pipeline=mixed
+[pass-prof]  f0 p25 cb8 render 1300x600 x1 c0=70/1:1 c1=70/1:1 c2=115/1:1 d=260/1:1 st=260/1:1 draws=12 gpu=0.176958 at=10.661042..10.838000 pipeline=mixed
+[pass-prof]  f0 p26 cb8 render 1300x600 x1 c0=70/1:1 c1=70/1:1 c2=70/1:1 c3=115/1:1 d=260/1:1 st=260/1:1 draws=140 gpu=1.487667 at=10.839417..12.327083 pipeline=mixed
+[pass-prof]  f0 p27 cb8 render 1300x600 x1 c0=70/1:1 c1=70/1:1 c2=70/1:1 c3=115/1:1 d=260/1:1 st=260/1:1 draws=10 gpu=0.604583 at=12.328958..12.933542 pipeline=0x72600f5000
+[pass-prof]  f0 p28 cb8 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p29 cb8 render 1300x600 x1 c0=70/1:1 c1=70/1:1 c2=70/1:1 c3=115/1:1 d=260/1:1 st=260/1:1 draws=0 gpu=0.190000 at=12.754625..12.944625 pipeline=0x72abc89000
+[pass-prof]  f0 p30 cb8 compute gpu=2.071542 at=12.950708..15.022250 pipeline=mixed
+[pass-prof]  f0 p31 cb8 render 1300x600 x1 c0=70/1:1 c1=70/1:1 c2=70/1:1 c3=115/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.885042 at=15.024500..15.909542 pipeline=mixed
+[pass-prof]  f0 p32 cb8 compute gpu=0.261958 at=15.911500..16.173458 pipeline=mixed
+[pass-prof]  f0 p33 cb8 render 1300x600 x1 c0=70/1:1 c1=70/1:1 c2=70/1:1 c3=115/1:1 d=260/1:1 st=260/1:1 draws=2 gpu=0.450875 at=16.175292..16.626167 pipeline=mixed
+[pass-prof]  f0 p34 cb8 render 1300x600 x1 c0=70/1:1 c1=70/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.029375 at=16.627875..16.657250 pipeline=0x7260147000
+[pass-prof]  f0 p35 cb8 render 1300x600 x1 c0=70/1:1 d=260/1:1 st=260/1:1 draws=26 gpu=0.143875 at=16.659083..16.802958 pipeline=0x72abd4b000
+[pass-prof]  f0 p36 cb8 render 1300x600 x1 c0=70/1:1 c1=70/1:1 d=260/1:1 st=260/1:1 draws=24 gpu=0.444583 at=16.804667..17.249250 pipeline=0x72abdb0000
+[pass-prof]  f0 p37 cb8 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p38 cb8 render 2048x2048 x1 d=250/2:1 draws=402 gpu=2.465208 at=17.256417..19.721625 pipeline=mixed
+[pass-prof]  f0 p39 cb8 render 2048x2048 x1 c0=25/1:1 draws=1 gpu=0.249208 at=19.725333..19.974542 pipeline=0x72abe99000
+[pass-prof]  f0 p40 cb8 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p41 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p42 cb11 render 1300x600 x1 c0=70/2:1 draws=1 gpu=1.151833 at=30.129000..31.280833 pipeline=0x7229681000
+[pass-prof]  f0 p43 cb11 render 2048x2048 x1 d=250/2:1 draws=23 gpu=0.290958 at=31.282292..31.573250 pipeline=mixed
+[pass-prof]  f0 p44 cb11 render 1300x600 x1 c0=70/1:1 d=260/1:1 st=260/1:1 draws=18 gpu=0.117667 at=31.577667..31.695333 pipeline=mixed
+[pass-prof]  f0 p45 cb11 compute gpu=0.417333 at=31.696583..32.113917 pipeline=0x7219129180
+[pass-prof]  f0 p46 cb11 render 1300x600 x1 c0=70/1:1 draws=1 gpu=0.279333 at=32.115958..32.395292 pipeline=0x7229683000
+[pass-prof]  f0 p47 cb11 compute gpu=10.212667 at=32.396750..42.609417 pipeline=0x7219129500
+[pass-prof]  f0 p48 cb11 render 1300x600 x1 c0=115/1:1 d=260/1:1 st=260/1:1 draws=2 gpu=0.022750 at=42.612042..42.634792 pipeline=mixed
+[pass-prof]  f0 p49 cb11 render 1300x600 x1 c0=115/1:1 c1=115/2:1 c2=70/1:1 c3=70/1:1 c4=70/1:1 d=260/1:1 st=260/1:1 draws=5 gpu=0.961542 at=42.636417..43.597958 pipeline=0x725e5ca000
+[pass-prof]  f0 p50 cb11 render 1300x600 x1 c0=115/2:1 draws=0 gpu=0.913375 at=42.685958..43.599333 pipeline=0x0
+[pass-prof]  f0 p51 cb11 compute gpu=0.138625 at=43.746250..43.884875 pipeline=mixed
+[pass-prof]  f0 p52 cb11 render 1300x600 x1 c0=115/1:1 d=260/1:1 st=260/1:1 draws=6 gpu=0.520000 at=43.886667..44.406667 pipeline=mixed
+[pass-prof]  f0 p53 cb11 render 1300x600 x1 c0=115/1:1 draws=1 gpu=0.489583 at=44.408417..44.898000 pipeline=0x7229774000
+[pass-prof]  f0 p54 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p55 cb11 render 1300x600 x1 c0=115/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.025333 at=45.050667..45.076000 pipeline=0x725e627000
+[pass-prof]  f0 p56 cb11 render 1300x600 x1 c0=115/1:1 d=260/1:1 st=260/1:1 draws=3 gpu=0.066042 at=45.077667..45.143708 pipeline=mixed
+[pass-prof]  f0 p57 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p58 cb11 render 1300x600 x1 c0=115/1:1 d=260/1:1 st=260/1:1 draws=2 gpu=0.013375 at=45.158458..45.171833 pipeline=0x72abf21000
+[pass-prof]  f0 p59 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p60 cb11 render 1300x600 x1 c0=115/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.047833 at=45.178375..45.226208 pipeline=0x72abf22000
+[pass-prof]  f0 p61 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p62 cb11 render 1300x600 x1 c0=115/1:1 d=260/1:1 st=260/1:1 draws=56 gpu=0.554875 at=45.232875..45.787750 pipeline=mixed
+[pass-prof]  f0 p63 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p64 cb11 render 1300x600 x1 c0=115/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.080083 at=45.929875..46.009958 pipeline=0x7260145000
+[pass-prof]  f0 p65 cb11 render 325x150 x1 c0=115/1:1 draws=1 gpu=0.064875 at=46.011542..46.076417 pipeline=0x725e70d000
+[pass-prof]  f0 p66 cb11 render 325x150 x1 c0=55/1:1 draws=1 gpu=0.040125 at=46.077833..46.117958 pipeline=0x725e70e000
+[pass-prof]  f0 p67 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p68 cb11 render 1300x600 x1 c0=115/1:1 c1=115/2:1 d=260/1:1 st=260/1:1 draws=0 gpu=0.046250 at=46.082750..46.129000 pipeline=0x72b81d8000
+[pass-prof]  f0 p69 cb11 compute gpu=1.095875 at=46.334792..47.430667 pipeline=mixed
+[pass-prof]  f0 p70 cb11 render 1300x600 x1 c0=115/1:1 c1=115/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.244417 at=47.432250..47.676667 pipeline=0x72b81d8000
+[pass-prof]  f0 p71 cb11 render 1300x600 x1 c0=115/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.016042 at=47.678083..47.694125 pipeline=0x72600f6000
+[pass-prof]  f0 p72 cb11 render 1300x600 x1 d=260/1:1 st=260/1:1 draws=34 gpu=0.014792 at=47.695292..47.710083 pipeline=0x725e744000
+[pass-prof]  f0 p73 cb11 compute gpu=0.055875 at=47.711583..47.767458 pipeline=0x16d153b80
+[pass-prof]  f0 p74 cb11 compute gpu=NA reason=native-copy pipeline=mixed
+[pass-prof]  f0 p75 cb11 render 1300x600 x1 c0=115/1:1 d=260/1:1 st=260/1:1 draws=6 gpu=0.434958 at=47.794583..48.229542 pipeline=mixed
+[pass-prof]  f0 p76 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p77 cb11 render 1300x600 x1 c0=70/2:1 d=260/1:1 st=260/1:1 draws=3 gpu=0.132958 at=48.475750..48.608708 pipeline=mixed
+[pass-prof]  f0 p78 cb11 render 1300x600 x1 c0=115/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.137875 at=48.610083..48.747958 pipeline=0x725e7c1000
+[pass-prof]  f0 p79 cb11 render 1300x600 x1 c0=115/1:1 c1=10/2:1 d=260/1:1 st=260/1:1 draws=70 gpu=0.971458 at=48.749583..49.721042 pipeline=mixed
+[pass-prof]  f0 p80 cb11 render 64x64 x1 c0=115/1:1 draws=1 gpu=0.027083 at=49.722708..49.749792 pipeline=0x72abc88000
+[pass-prof]  f0 p81 cb11 render 1300x600 x1 c0=115/1:1 c1=115/1:1 draws=1 gpu=0.247792 at=49.751333..49.999125 pipeline=0x72abc8a000
+[pass-prof]  f0 p82 cb11 render 162x75 x1 c0=115/1:1 draws=1 gpu=0.021125 at=50.000708..50.021833 pipeline=0x72abc8b000
+[pass-prof]  f0 p83 cb11 render 81x37 x1 c0=115/1:1 draws=1 gpu=0.017917 at=50.023458..50.041375 pipeline=0x72abc8b000
+[pass-prof]  f0 p84 cb11 render 40x18 x1 c0=115/1:1 draws=1 gpu=0.015958 at=50.043042..50.059000 pipeline=0x72abc8b000
+[pass-prof]  f0 p85 cb11 render 20x9 x1 c0=115/1:1 draws=1 gpu=0.015250 at=50.060542..50.075792 pipeline=0x72abc8b000
+[pass-prof]  f0 p86 cb11 render 10x4 x1 c0=115/1:1 draws=1 gpu=0.015458 at=50.077333..50.092792 pipeline=0x72abc8b000
+[pass-prof]  f0 p87 cb11 render 5x2 x1 c0=115/1:1 draws=1 gpu=0.015667 at=50.094292..50.109958 pipeline=0x72abc8b000
+[pass-prof]  f0 p88 cb11 render 2x1 x1 c0=115/1:1 draws=1 gpu=0.015875 at=50.111417..50.127292 pipeline=0x72abc8b000
+[pass-prof]  f0 p89 cb11 render 1300x600 x1 c0=115/1:1 draws=1 gpu=0.072083 at=50.128792..50.200875 pipeline=0x72abd10000
+[pass-prof]  f0 p90 cb11 render 325x150 x1 c0=115/1:1 draws=1 gpu=0.063625 at=50.202500..50.266125 pipeline=0x72abd11000
+[pass-prof]  f0 p91 cb11 render 162x75 x1 c0=115/1:1 draws=1 gpu=0.020167 at=50.267667..50.287833 pipeline=0x72abd12000
+[pass-prof]  f0 p92 cb11 render 81x37 x1 c0=115/1:1 draws=1 gpu=0.017208 at=50.289500..50.306708 pipeline=0x72abd12000
+[pass-prof]  f0 p93 cb11 render 40x18 x1 c0=115/1:1 draws=1 gpu=0.015208 at=50.308333..50.323542 pipeline=0x72abd12000
+[pass-prof]  f0 p94 cb11 render 20x9 x1 c0=115/1:1 draws=1 gpu=0.015083 at=50.325083..50.340167 pipeline=0x72abd12000
+[pass-prof]  f0 p95 cb11 render 10x4 x1 c0=115/1:1 draws=1 gpu=0.015583 at=50.341708..50.357292 pipeline=0x72abd12000
+[pass-prof]  f0 p96 cb11 render 5x2 x1 c0=115/1:1 draws=1 gpu=0.015708 at=50.358833..50.374542 pipeline=0x72abd12000
+[pass-prof]  f0 p97 cb11 render 2x1 x1 c0=115/1:1 draws=1 gpu=0.015750 at=50.376042..50.391792 pipeline=0x72abd12000
+[pass-prof]  f0 p98 cb11 render 1300x600 x1 c0=115/1:1 draws=18 gpu=0.275542 at=50.393292..50.668833 pipeline=mixed
+[pass-prof]  f0 p99 cb11 render 650x300 x1 c0=92/1:1 draws=1 gpu=0.122750 at=50.670542..50.793292 pipeline=0x7229775000
+[pass-prof]  f0 p100 cb11 render 650x300 x1 c0=92/1:1 draws=1 gpu=0.026375 at=50.794917..50.821292 pipeline=0x7229775000
+[pass-prof]  f0 p101 cb11 compute gpu=0.054000 at=50.822667..50.876667 pipeline=mixed
+[pass-prof]  f0 p102 cb11 render 1x1 x1 c0=55/1:1 draws=1 gpu=0.029000 at=51.666583..51.695583 pipeline=0x7229776000
+[pass-prof]  f0 p103 cb11 compute gpu=NA reason=native-copy pipeline=0x721912a680
+[pass-prof]  f0 p104 cb11 render 1300x600 x1 c0=115/1:1 draws=1 gpu=0.337542 at=51.840958..52.178500 pipeline=0x7229777000
+[pass-prof]  f0 p105 cb11 compute gpu=NA reason=native-copy pipeline=0x721912aa00
+[pass-prof]  f0 p106 cb11 render 650x300 x1 c0=92/2:1 draws=0 gpu=0.459292 at=52.002792..52.462083 pipeline=0x0
+[pass-prof]  f0 p107 cb11 render 1300x600 x1 c0=115/1:1 draws=1 gpu=0.146083 at=52.483250..52.629333 pipeline=0x72297c0000
+[pass-prof]  f0 p108 cb11 render 1300x600 x1 c0=115/1:1 draws=1 gpu=0.280875 at=52.631042..52.911917 pipeline=0x72abdb1000
+[pass-prof]  f0 p109 cb11 render 1300x600 x1 c0=70/1:1 draws=1 gpu=0.169792 at=52.913542..53.083333 pipeline=0x72abdb3000
+[pass-prof]  f0 p110 cb11 render 228x128 x1 c0=70/1:1 draws=1 gpu=0.053000 at=53.085000..53.138000 pipeline=0x72297c2000
+[pass-prof]  f0 p111 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p112 cb11 render 1300x600 x1 c0=70/2:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.110667 at=53.145917..53.256583 pipeline=0x72b81da000
+[pass-prof]  f0 p113 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p114 cb11 render 1300x600 x1 c0=70/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.014458 at=53.264583..53.279042 pipeline=0x72303e3000
+[pass-prof]  f0 p115 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p116 cb11 render 1300x600 x1 c0=70/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.016958 at=53.286958..53.303917 pipeline=0x17ff7d000
+[pass-prof]  f0 p117 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p118 cb11 render 1300x600 x1 c0=70/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.017167 at=53.311500..53.328667 pipeline=0x17ff7d000
+[pass-prof]  f0 p119 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p120 cb11 render 1300x600 x1 c0=70/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.012292 at=53.336583..53.348875 pipeline=0x72303e3000
+[pass-prof]  f0 p121 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p122 cb11 render 1300x600 x1 c0=70/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.019333 at=53.356708..53.376042 pipeline=0x7230302000
+[pass-prof]  f0 p123 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p124 cb11 render 1300x600 x1 c0=70/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.021292 at=53.399167..53.420458 pipeline=0x72c7660000
+[pass-prof]  f0 p125 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p126 cb11 render 1300x600 x1 c0=70/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.016625 at=53.448708..53.465333 pipeline=0x17ff7d000
+[pass-prof]  f0 p127 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p128 cb11 render 1300x600 x1 c0=70/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.022292 at=53.746000..53.768292 pipeline=0x7230302000
+[pass-prof]  f0 p129 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p130 cb11 render 1300x600 x1 c0=70/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.021583 at=53.775958..53.797542 pipeline=0x7230302000
+[pass-prof]  f0 p131 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p132 cb11 render 1300x600 x1 c0=70/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.017708 at=53.944917..53.962625 pipeline=0x7230302000
+[pass-prof]  f0 p133 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p134 cb11 render 1300x600 x1 c0=70/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.018792 at=53.978917..53.997708 pipeline=0x7230302000
+[pass-prof]  f0 p135 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p136 cb11 render 1300x600 x1 c0=70/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.017542 at=54.137042..54.154583 pipeline=0x72b81da000
+[pass-prof]  f0 p137 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p138 cb11 render 1300x600 x1 c0=70/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.017958 at=54.278667..54.296625 pipeline=0x7230302000
+[pass-prof]  f0 p139 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p140 cb11 render 1300x600 x1 c0=70/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.014750 at=54.395667..54.410417 pipeline=0x7230302000
+[pass-prof]  f0 p141 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p142 cb11 render 1300x600 x1 c0=70/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.012500 at=54.516875..54.529375 pipeline=0x7230301000
+[pass-prof]  f0 p143 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p144 cb11 render 1300x600 x1 c0=70/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.011750 at=54.645625..54.657375 pipeline=0x72abdfd000
+[pass-prof]  f0 p145 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p146 cb11 render 1300x600 x1 c0=70/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.010417 at=54.755458..54.765875 pipeline=0x72abdfe000
+[pass-prof]  f0 p147 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p148 cb11 render 1300x600 x1 c0=70/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.011958 at=54.875208..54.887167 pipeline=0x72abdff000
+[pass-prof]  f0 p149 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p150 cb11 render 1300x600 x1 c0=70/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.012542 at=55.071917..55.084458 pipeline=0x17ff7d000
+[pass-prof]  f0 p151 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p152 cb11 render 1300x600 x1 c0=70/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.012292 at=55.201750..55.214042 pipeline=0x7230302000
+[pass-prof]  f0 p153 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p154 cb11 render 1300x600 x1 c0=70/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.010125 at=55.312667..55.322792 pipeline=0x72abdfd000
+[pass-prof]  f0 p155 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p156 cb11 render 1300x600 x1 c0=70/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.017958 at=55.938500..55.956458 pipeline=0x72abdfd000
+[pass-prof]  f0 p157 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p158 cb11 render 1300x600 x1 c0=70/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.014000 at=56.129083..56.143083 pipeline=0x72abe40000
+[pass-prof]  f0 p159 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p160 cb11 render 1300x600 x1 c0=70/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.016292 at=56.195917..56.212208 pipeline=0x17ff7d000
+[pass-prof]  f0 p161 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p162 cb11 render 1300x600 x1 c0=70/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.020583 at=56.338833..56.359417 pipeline=0x72abdfd000
+[pass-prof]  f0 p163 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p164 cb11 render 1300x600 x1 c0=70/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.012375 at=56.497458..56.509833 pipeline=0x72abdfe000
+[pass-prof]  f0 p165 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p166 cb11 render 1300x600 x1 c0=70/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.013375 at=56.682208..56.695583 pipeline=0x72abe5c000
+[pass-prof]  f0 p167 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p168 cb11 render 1300x600 x1 c0=70/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.015667 at=56.745958..56.761625 pipeline=0x72abe40000
+[pass-prof]  f0 p169 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p170 cb11 render 1300x600 x1 c0=70/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.014833 at=56.932542..56.947375 pipeline=0x72abe40000
+[pass-prof]  f0 p171 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p172 cb11 render 1300x600 x1 c0=70/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.013708 at=56.989000..57.002708 pipeline=0x72abdfd000
+[pass-prof]  f0 p173 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p174 cb11 render 1300x600 x1 c0=70/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.012458 at=57.178292..57.190750 pipeline=0x72abdfe000
+[pass-prof]  f0 p175 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p176 cb11 render 1300x600 x1 c0=70/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.014958 at=57.232667..57.247625 pipeline=0x72abe5f000
+[pass-prof]  f0 p177 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p178 cb11 render 1300x600 x1 c0=70/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.013208 at=57.465583..57.478792 pipeline=0x72b82bc000
+[pass-prof]  f0 p179 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p180 cb11 render 1300x600 x1 c0=70/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.016042 at=57.486542..57.502583 pipeline=0x72abe9b000
+[pass-prof]  f0 p181 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p182 cb11 render 1300x600 x1 c0=70/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.014292 at=57.731458..57.745750 pipeline=0x17ff7d000
+[pass-prof]  f0 p183 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p184 cb11 render 1300x600 x1 c0=70/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.028833 at=57.770292..57.799125 pipeline=0x72abdfd000
+[pass-prof]  f0 p185 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p186 cb11 render 1300x600 x1 c0=70/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.024750 at=57.825833..57.850583 pipeline=0x72c768d000
+[pass-prof]  f0 p187 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p188 cb11 render 1300x600 x1 c0=70/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.026833 at=58.075625..58.102458 pipeline=0x72c76c2000
+[pass-prof]  f0 p189 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p190 cb11 render 1300x600 x1 c0=70/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.014917 at=58.110125..58.125042 pipeline=0x72c76c3000
+[pass-prof]  f0 p191 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p192 cb11 render 1300x600 x1 c0=70/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.022375 at=58.342667..58.365042 pipeline=0x72c76c0000
+[pass-prof]  f0 p193 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p194 cb11 render 1300x600 x1 c0=70/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.017083 at=58.390167..58.407250 pipeline=0x72c76c2000
+[pass-prof]  f0 p195 cb11 compute gpu=NA reason=native-copy pipeline=0x0
+[pass-prof]  f0 p196 cb11 render 1300x600 x1 c0=70/1:1 d=260/1:1 st=260/1:1 draws=1 gpu=0.018917 at=58.435333..58.454250 pipeline=0x72c76d8000
+[pass-prof]  f0 p197 cb11 render 1302x600 x1 c0=70/1:1 draws=1 gpu=0.171792 at=58.631250..58.803042 pipeline=0x72297c3000
+[pass-prof]  f0 p198 cb13 render 1564x720 x1 c0=80/0:1 draws=1 gpu=0.107417 at=59.648917..59.756333 pipeline=0x7230035000
+[pass-prof]  f0 p199 cb14 render 1564x720 x1 c0=80/0:1 draws=1 gpu=0.107542 at=60.530083..60.637625 pipeline=0x7230035000
+[pass-prof] frame 0: 200 passes, 1837 draws, sum gpu 38.385125 ms, span 60.637625 ms, untimed 65
