@@ -6,7 +6,7 @@
 [PLA-372](https://linear.app/playportdev/issue/PLA-372) (CEF payload distribution, to be cancelled),
 [PLA-254](https://linear.app/playportdev/issue/PLA-254) (publisher launchers).
 
-**Status:** chunks 0 and 1 done 2026-10-29 ([probe evidence](../evidence/2026-10-29-sc-stock-cef-probe.md)): single-process runs on Rockstar's helper, which still dies at its PartitionAlloc reservations, so chunk 2 is needed and means moving the band's layout (the evidence's last section). Owner approved the full layout port and said to continue. Chunk 2 is in progress; no further design approval is pending. Its l1–l3 phone runs (dev IPA `2da3ea8a`, [evidence](../evidence/2026-10-29-sc-stock-cef-probe.md#l2-l3-longer-runs-on-the-same-ipa-the-loading-screen-question)) sign in on the launcher's helper but cannot run a second helper: a dead helper's slot can stay owned (`view kept`), and the game's own helper crashes at start (NULL read from chrome_elf.dll). RDR2 then waits at a black spinner. **Next:** release a dead owner's slots (or move the kept views out), then explain the game helper's crash. **Runner checkpoint:** resuming from clean `241990e` on branch `dev/pla-476-sc-stock-cef` in the main checkout; no merge or push performed by this continuation. The previously recorded writer is not active and left no report or tracked changes. Models confirmed for this invocation: hard `openai-codex/gpt-6.1-sol:high`, easy `openai-codex/gpt-6.1-sol:medium`. **Running:** replacement writer `05e6db69-1b5d-4260-9ae6-ab86f5423693`, starting from `3bd5a87`, for the bounded chunk-2 step below. Report: `.work/agent-notes/pla476/reports/chunk2-helper-restart.md`. No second writer may start while it is active.
+**Status:** chunks 0 and 1 done 2026-10-29 ([probe evidence](../evidence/2026-10-29-sc-stock-cef-probe.md)): single-process runs on Rockstar's helper, which still dies at its PartitionAlloc reservations, so chunk 2 is needed and means moving the band's layout (the evidence's last section). Owner approved the full layout port and said to continue. Chunk 2 is in progress; its initial layout port was approved, but safe reuse of retained slots now needs an owner-approved design. Its l1–l3 phone runs (dev IPA `2da3ea8a`, [evidence](../evidence/2026-10-29-sc-stock-cef-probe.md#l2-l3-longer-runs-on-the-same-ipa-the-loading-screen-question)) sign in on the launcher's helper but cannot run a second helper: a dead helper's slot can stay owned (`view kept`), and the game's own helper hits FEX NOEXEC at an unregistered kernel32 export before its pools (the logged NULL read is FEX's synthetic fault). RDR2 then waits at a black spinner. The host-tested early-image replay candidate is built as dev IPA `3fd1145d`; its phone gates are **unrun** because preflight found no phone. **Next:** reconnect the phone and run the prepared HK/second-helper startup check; slot reuse separately needs an owner-approved design that preserves the parked references (0132/0143). **Runner checkpoint:** resuming from clean `241990e` on branch `dev/pla-476-sc-stock-cef` in the main checkout; no merge or push performed by this continuation. The previously recorded writer is not active and left no report or tracked changes. Models confirmed for this invocation: hard `openai-codex/gpt-6.1-sol:high`, easy `openai-codex/gpt-6.1-sol:medium`. **Running:** replacement writer `05e6db69-1b5d-4260-9ae6-ab86f5423693`, starting from `3bd5a87`, for the bounded chunk-2 step below. Report: `.work/agent-notes/pla476/reports/chunk2-helper-restart.md`. No second writer may start while it is active.
 
 **Ordered queue:** (1) PLA-476 chunk 2: safely reclaim dead-helper slots, explain the second helper's startup crash, and run HK/RDR2 gates; (2) complete the remaining chunk-2 gate before considering chunks 3–6 in their documented order, all under PLA-476. Chunk 3 still requires owner approval if needed. **Phone checkpoint:** latest recorded dev IPA is `2da3ea8a…`; HK and RDR2 were run. Latest recorded battery is 80% on power, thermal nominal at l3's end. Installed-title inventory, free space and unattended mode have not been refreshed; no recorded LocalDevVPN prerequisite failure in these runs.
 
@@ -130,6 +130,23 @@ fails instead of reaching the soft-pool grant. Commits, protects and frees insid
 are allowed only for its owner. A grant is released whole, by its owner or at its owner's exit through
 the existing process teardown, and the slot is held again. The helper is told a 2 TB
 `HighestUserAddress` (report only) so V8 takes its partial sandbox.
+
+**Next bounded increment (host checks passed; phone blocked):** wine-pe 0055 replays already-loaded images through
+ntdll's existing guarded, intervals-only notification after successful emulator initialisation. In l3,
+`kernel32.dll!LoadLibraryExW` (`+0x365e0`) was never registered in the helper's FEX tracker; the decoder's NOEXEC
+trampoline caused the reported NULL read. `tools/tests/test_arm64ec_early_images.py` covers early dependencies,
+main/ntdll/queued maps, duplicates and failed init. `test_sc_layout.py` now also locks down the existing refusal
+to reclaim kept or foreign views. Full `pp test` and the dev build passed (IPA `3fd1145d`, 90 verification checks).
+No install or phone input followed: preflight reported zero phones. The exact session is ready in
+`$PLAYPORT_BUILD/agent-notes/pla476/l4.sh`; do not call the runtime increment verified or commit it as finished
+until HK first-frame+10 and the second helper's post-kernel32 startup are shown on this IPA.
+
+**Slot reuse is blocked, not fixed:** l3's parked tid `0204` waits at `0x740007c3e0` inside the retained metadata
+view; l2's tid `0208` waits at `0x74000483e0`. Decisions 0132/0143 keep the whole view unchanged, even after its
+process exits and teardown takes its view ownership for the runtime. Clearing the slot ledger or overwriting
+that range would violate the retention rule. No retention, termination, sign-in or launcher policy was changed;
+no alternate geometry was selected. The [evidence](../evidence/2026-10-29-sc-stock-cef-probe.md#host-follow-up-early-images-and-the-retained-slot-blocker)
+records the design constraints. The overall cabin/7343 MB ±10% gate remains **not passed**.
 
 The host (`wine_host.c`) holds `[0x7000000000, +1.5 GiB)` from exec. In a2's log iOS had already put
 a 74 MiB tag-87 region at `0x7000000000` by pool time, so a hold taken then can never get the

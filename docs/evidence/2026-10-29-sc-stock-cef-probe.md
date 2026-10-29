@@ -140,3 +140,86 @@ at first frame +600 s.
   1. a dead helper's slot can stay owned when its views are kept (0226 by design), so a later helper is refused;
   2. the game's helper crashes on stock CEF before it asks for its pools (not yet explained).
   l1's earlier stall (before `socialclub.dll`, with the launcher's helper alive) is not explained by these.
+
+## Host follow-up: early images and the retained-slot blocker
+
+### The l3 crash is a generated NOEXEC fault, not a chrome_elf NULL dereference
+
+Offline re-read of l3's `pull/s1-host.log` (same `2da3ea8a…` IPA, no new play):
+
+- Lines 133385–133434: kernel32 maps at `0x73fba10000`; its syscall map notification has `pfn=0`.
+  This is before emulator initialisation. The loader fallback cannot notify an export that has not been resolved.
+- At FEX startup the helper's tracker `0x116cc8d80` registers its main image and ntdll, but **never kernel32**.
+  Before the first miss it logs 181 executable-section inserts, none for kernel32; there is no kernel32 insert
+  for a later removal to explain. The offline replay script exits 1 on this missing coverage.
+- Lines 137359–137427: chrome_elf's TLS callback reaches `0x73fba465e0`, **kernel32!LoadLibraryExW**, RVA `0x365e0`
+  (the shipped PE export table identifies it). Its bytes are an x64 `ff 25` import jump. Wine reports a committed
+  image at `PAGE_EXECUTE_READ` (`0x20`), but FEX logs `[iOS-xquery] MISS` and `NoExec instruction in entry block`.
+- FEX's decoder emits `NoExecOp` → `FAULT_SIGSEGV` → `GuestSignal_SIGSEGV`. Its dispatcher deliberately emits a
+  load from zero to raise the fault. The logged host instructions `52800001 f9400021` are that trampoline
+  (`mov w1,#0; ldr x1,[x1]`), not a NULL data load in chrome_elf or LoadLibraryExW. The helper then fails TLS init
+  with `0xc0000005`, before its large reserves.
+
+The source agrees: `load_arm64ec_module` loads the emulator and its kernel32/kernelbase dependencies before
+resolving its notification exports. The loader fallback drops those early notifications. FEX `ProcessInit`
+registers main, ntdll and queued syscall maps only; the missing syscall callback never queued these dependencies.
+There was no post-init loader-list replay. This is a supported startup fix, independent of slot reuse; it does
+not explain l1's earlier stall.
+
+### Startup candidate and host checks
+
+- **Candidate dev IPA:** `3fd1145d5b6e59db874083a716ee5d10af685eb476fa4e1ff03c866129348a5e`, at
+  `$PLAYPORT_BUILD/out/20261029-215002-3fd1145d/Playport-26.5-3fd1145d.ipa`.
+- **Change:** wine-pe 0055 replays the loader list after successful emulator `ProcessInit`/`ThreadInit`, before
+  guest TLS callbacks, through the existing guarded `arm64ec_notify_image_map`/`NotifyImageMap` path.
+  `loader_section` remains held, pinning the list and every image. This path takes the interval lock with the
+  syscall-callback guard, **not** ImageTracker's exclusive code-invalidation lock. It inserts the image's existing
+  executable sections only; no `NtProtectVirtualMemory`, map side effects or broader permissions are replayed.
+  Main/ntdll/queued-map duplicates are harmless interval inserts. Off iOS the optional export is absent and this
+  remains a no-op.
+- **Regression:** `python3 -m unittest tools.tests.test_arm64ec_early_images tools.tests.test_sc_layout
+  tools.tests.test_proc_end -v`: four tests pass. The startup harness compiles the shipped init phase, replays
+  early dependencies and already-covered main/ntdll/queued images, checks duplicate/empty-list behaviour and
+  that failed init terminates before notification. Its original phase fails `registered == 31`; the replay passes.
+  The ownership harness compiles shipped 0224/0226 headers: kept views remain byte-for-byte unchanged and owned,
+  another process cannot take them, an overlapping foreign live view defeats a native hold, and a subsequent
+  helper is refused rather than soft-granted memory.
+- **Full checks:** `./pp test` passed (including PlayportKit's 365 tests); `./pp build --variant dev` passed,
+  **90/90 IPA verification checks**. The first build stopped before compilation because the patch was exported
+  with eight context lines while the series checker compares default-three-context patch IDs. Re-exporting the
+  identical source with default context made the applied and shipped patch IDs match; no build-tree source was
+  edited or reset by hand. Logs/proof are retained under `$PLAYPORT_BUILD/agent-notes/pla476/build-series-failure/`.
+- **Device gates UNRUN:** the supervisor's preflight `pp phone status` exited 3 with zero phones on netmuxd.
+  Charge/VPN could not be checked. No install, launch or input was issued; no retry. Owner reconnection is a
+  prerequisite. `$PLAYPORT_BUILD/agent-notes/pla476/l4.sh` is ready for one locked, exact-IPA in-place install,
+  HK first-frame+10 and a bounded stock-CEF RDR2 run using the existing `arm.sh`/landing watcher.
+  The startup increment is **not yet phone-verified or committed as finished**.
+
+### Why the dead-owner slots cannot simply be reclaimed
+
+- In l3, parked tid `0204` waits at `0x740007c3e0`; in l2, tid `0208` waits at `0x74000483e0`.
+  Both addresses lie in kind 3's real metadata range `[0x7400000000, 0x7590000000)` (6400 MiB).
+- `ios_proc_end_note_parked` records host/guest registers, TPIDRRO, TEB and wait address. The teardown gathers these
+  saved addresses and `ppe_view_fate` keeps any entire view they reference. `ppe_take_view` first transfers that
+  view to the runtime (`ios_owner_peb=NULL`); this does **not** make its address free. 0226 then sees the retained
+  view and intentionally leaves the slot owned. l2 additionally retains kinds 1 and 5; the slot log does not
+  identify their exact saved register/view shape, so no claim is made that their bases alone prove a parked ref.
+- Decisions **0132/0143** require these views stay wholly unchanged. 0134 releases a parked thread's exception
+  registry/trampoline entries, not these retained views. No later accepted amendment found in this review removes
+  the whole-view rule. Merely clearing the ledger, remapping the same address for a new helper, or shrinking to
+  just referenced pages would violate that rule. A native hold must also fail rather than overwrite any other
+  process's mapping. The new tests preserve these refusals; no slot/retention runtime code changed.
+
+**Options, not decisions:** retain old views and design genuinely disjoint replacement slots, with fresh boot
+holds and verified allocator placement; or obtain owner approval for a separately justified change to parked-thread
+lifetime/retention. Neither is implemented. The current metadata view already occupies all 6400 MiB of its slot;
+moving a future metadata grant into the free 8 GiB V8 slot consumes the space V8 later needs. For core pools the
+only 32 GiB-aligned bases in this task's address band are `0x7000000000` and `0x7800000000`, both already assigned;
+there is no obvious second full layout. Copying a kept view elsewhere while freeing its original address would
+leave saved addresses dangling. These are constraints for an owner-approved design, not proof that every possible
+geometry is impossible. No sign-in, helper termination/restart, game libcef refusal or payload policy was changed.
+
+**Remaining gate:** demonstrate the startup fix on the phone, then resolve safe slot reuse under an approved
+design. Chunk 2 is **not complete**: helper restart into a working browser, Story cabin, no Social Club/launcher
+`NO GAP FITS`/soft grant, and the comparable **7343 MB ±10%** peak remain unpassed. No new gameplay or memory result
+is claimed by these host checks.
