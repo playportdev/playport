@@ -6,7 +6,7 @@
 [PLA-372](https://linear.app/playportdev/issue/PLA-372) (CEF payload distribution, to be cancelled),
 [PLA-254](https://linear.app/playportdev/issue/PLA-254) (publisher launchers).
 
-**Status:** written 2026-10-29. No chunk run yet. Branch `dev/pla-476-sc-stock-cef` in the main checkout.
+**Status:** chunks 0 and 1 done 2026-10-29 ([probe evidence](../evidence/2026-10-29-sc-stock-cef-probe.md)): single-process runs on Rockstar's helper, which still dies at its PartitionAlloc reservations, so chunk 2 is needed and means moving the band's layout (the evidence's last section). Waiting on the owner. Branch `dev/pla-476-sc-stock-cef` in the main checkout.
 
 ## Why
 
