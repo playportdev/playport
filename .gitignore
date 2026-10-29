@@ -5,6 +5,7 @@
 # Local agent and tool state
 /.backpass/
 /.pi/
+/.omp/
 /.*/settings.local.json
 
 __pycache__/
