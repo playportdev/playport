@@ -282,12 +282,17 @@ char *playport_cef_swap_path(const char *unix_name, unsigned int access, unsigne
     pthread_mutex_lock(&lock);
     if (!payload_state) {
         char *probe;
+        const char *off = getenv("PLAYPORT_CEF_SWAP");
         payload_state = -1;
-        if (asprintf(&probe, "%s/libcef.dll", payload) >= 0) {
+        /* PLA-476 chunk 1: a dev Play's env.PLAYPORT_CEF_SWAP=0 runs the client's own CEF, as a
+         * release build without the payload does. Removed with the swap. */
+        if (off && !strcmp(off, "0")) {
+            dprintf(2, "[cef-swap] PLAYPORT_CEF_SWAP=0: every client's CEF is left alone\n");
+        } else if (asprintf(&probe, "%s/libcef.dll", payload) >= 0) {
             if (!stat(probe, &st) && S_ISREG(st.st_mode)) payload_state = 1;
             free(probe);
         }
-        if (payload_state < 0)
+        if (payload_state < 0 && !(off && !strcmp(off, "0")))
             dprintf(2, "[cef-swap] Playport's CEF %s is not in this build (%s); every client's CEF is left alone\n",
                     CEF_SWAP_VERSION, payload);
     }

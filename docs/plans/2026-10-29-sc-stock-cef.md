@@ -82,7 +82,7 @@ phone.
 
 The soft-pool fallback releasing a range other processes still use
 ([audit](2026-10-06-madeira-audit.md), the `[soft-pool] GRANTED soft` topic) is a separate
-runtime bug. It gets its own issue (chunk 0). This plan only stops Social Club from reaching it.
+runtime bug: [PLA-477](https://linear.app/playportdev/issue/PLA-477). This plan only stops Social Club from reaching it.
 
 ## Chunks
 
@@ -91,9 +91,7 @@ runtime change gets a Hollow Knight first frame+10 (`app-367520`).
 
 ### 0. Bookkeeping (no build)
 
-- File the soft-pool bug as its own issue, with the release log's lines above.
-- Comment on PLA-364 and PLA-475 with the cause.
-- Put a "held for PLA-476" note in PLA-475. Do not publish the 0.5.0 draft.
+**Done 2026-10-29:** PLA-477 filed (the soft-pool bug); PLA-364 and PLA-475 commented, 0.5.0 held.
 
 ### 1. Dev probe: single-process on Rockstar's CEF, nothing else changed
 

@@ -224,6 +224,17 @@ int main(void)
     /* The payload's own files are never swapped for themselves. */
     CHECK(swapped_to(bundle, payload, "icudtl.dat", NULL));
 
+    /* PLA-476: env PLAYPORT_CEF_SWAP=0 leaves even a matching client alone; other values do not. */
+    make_pe(strcat(strcpy(path, client), "/libcef.dll"), 143u << 16, 14u << 16, GOOD);
+    setenv("PLAYPORT_CEF_SWAP", "0", 1);
+    cef_swap_reset();
+    CHECK(swapped_to(bundle, client, "icudtl.dat", NULL));
+    CHECK(swapped_to(bundle, client, "libcef.dll", NULL));
+    setenv("PLAYPORT_CEF_SWAP", "1", 1);
+    cef_swap_reset();
+    CHECK(swapped_to(bundle, client, "icudtl.dat", "icudtl.dat"));
+    unsetenv("PLAYPORT_CEF_SWAP");
+
     if (failures) { printf("%d failure(s); scratch left in %s\n", failures, root); return 1; }
     printf("cef swap: name set, read-only filter, exact 143.0.14.0 guard, near and malformed versions, missing payload\n");
     {
