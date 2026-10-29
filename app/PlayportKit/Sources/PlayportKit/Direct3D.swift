@@ -67,6 +67,7 @@ public enum Direct3D {
         // Bound catalogue refresh cost, including for hostile or enormous PEs.
         let maxModules = 32, maxDepth = 4, maxFileBytes = 128 * 1024 * 1024, maxTotalBytes = 256 * 1024 * 1024
         var queue = [(executable, 0)], seen = Set<String>(), bytes = 0, index = 0
+        let executableModule = String(executable.path.dropFirst(root.path.count + 1))
         while index < queue.count {
             let (url, depth) = queue[index]
             index += 1
@@ -90,6 +91,15 @@ public enum Direct3D {
                 guard depth < maxDepth else { result.limited = true; continue }
                 queue.append((child, depth + 1))
             }
+        }
+        // The executable's own static Direct3D import names its renderer. A dependency
+        // that only loads another version by name is that library's option, not the
+        // game's: SDL2 looks up d3d9, d3d11 and d3d12 for its own 2D renderer, and a
+        // Direct3D 11 game shipping it is no Direct3D 12 game, as an unused renderer
+        // DLL beside the executable does not count either.
+        let own = Set(result.evidence.filter { $0.module == executableModule && $0.kind != .dynamicReference }.map(\.api))
+        if !own.isEmpty {
+            result.evidence.removeAll { $0.module != executableModule && $0.kind == .dynamicReference && !own.contains($0.api) }
         }
         return result
     }
