@@ -820,7 +820,8 @@ private struct GameDetailPage: View {
                 }
             }
         }
-        if t.store != .steam, t.source != .cohort { localRows(t) }
+        if t.source != .cohort { executableRow(t) }
+        if t.store != .steam, t.source != .cohort { nameRow(t) }
         filesRows(t)
         if let s = stats, !s.schema.achievements.isEmpty {
             PadRow(id: "opt:achievements", title: "Achievements", value: "\(s.unlockedCount) of \(s.schema.achievements.count)",
@@ -831,10 +832,11 @@ private struct GameDetailPage: View {
         uninstallRow(t)
     }
 
-    /// A game that came without a store's launch record (imported, found, or another
-    /// store's copy): which executable Play starts, and the name it shows.
+    /// Which executable Play starts. A Steam game starts its launch entry by default; picking
+    /// another one skips a launcher that cannot run here (Baldur's Gate 3's Larian launcher
+    /// needs .NET), and the pick starts without the entry's arguments.
     @ViewBuilder
-    private func localRows(_ t: InstalledTitle) -> some View {
+    private func executableRow(_ t: InstalledTitle) -> some View {
         let machine = t.executableMachine.map(Self.machineName)
         PadRow(id: "opt:executable", title: "Executable",
                subtitle: [machine, t.direct3D.flatMap { $0.apis.isEmpty ? nil : $0.summary }].compactMap { $0 }.joined(separator: " · "),
@@ -846,10 +848,17 @@ private struct GameDetailPage: View {
             PadModal.shared.picker(
                 title: "Executable", context: "\(context) · Game",
                 note: "What Play starts. The first is Playport's own pick; installers, tools and crash reporters are last.",
-                options: [PadOption(id: "", label: "Default", detail: found.first.map { "\($0), Playport's pick" })]
+                options: [PadOption(id: "", label: "Default",
+                                    detail: t.store == .steam ? "Steam's launch entry" : found.first.map { "\($0), Playport's pick" })]
                     + found.map { PadOption(id: $0, label: $0) },
                 selected: t.chosenExecutable ?? "") { library.setExecutable(t.id, $0.isEmpty ? nil : $0) }
         }
+    }
+
+    /// A game that came without a store's launch record (imported, found, or another
+    /// store's copy): the name it shows.
+    @ViewBuilder
+    private func nameRow(_ t: InstalledTitle) -> some View {
         PadRow(id: "opt:name", title: "Name", value: t.name, accessory: .chevron, changed: t.displayName != nil, style: .plain,
                hint: "Edit", reset: t.displayName == nil ? nil : { library.rename(t.id, nil) }) {
             PadModal.shared.keyboard(title: "Name", text: t.name, placeholder: t.installDir, maxLength: 80) { library.rename(t.id, $0) }

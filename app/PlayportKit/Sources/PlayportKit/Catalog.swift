@@ -296,7 +296,12 @@ public enum Adoption {
                     if t.source == .found, old.source == .found { t.sizeBytes = old.sizeBytes }
                     if old.storeVersion != t.storeVersion { t.lastVerification = nil }
                     t.chosenExecutable = old.chosenExecutable
-                    if let chosen = old.chosenExecutable, let there = locate(chosen, in: dir) { t.executable = there }
+                    if let chosen = old.chosenExecutable, let there = locate(chosen, in: dir) {
+                        // A Steam launch entry's arguments are its executable's: another one picked
+                        // in its place (a game past its launcher) starts without them.
+                        if t.store == .steam, there != t.executable { t.storeArguments = nil }
+                        t.executable = there
+                    }
                     t.displayName = old.displayName
                     if let name = old.displayName, !name.isEmpty { t.name = name }
                 }
