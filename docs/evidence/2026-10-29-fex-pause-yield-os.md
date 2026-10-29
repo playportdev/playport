@@ -311,7 +311,8 @@ Built as dev IPA `3a1133c2` (not installed). The next phone run's log will show 
   They gave no FPS gain, and the matrix showed RenderThread's core use is mostly not its spin. A
   per-title default would need repeated, order-balanced runs and a reason to want it, such as power.
   The `CPU mW` column is not comparable across the hot block's order.
-- RenderThread's own work (`kk_UpdateDescriptorSets_impl`, AGX encoding, `kk_draw`, per the
-  2026-10-28 trace breakdown) is the lever for its core, not PAUSE.
+- RenderThread's core goes on its own translated work, not PAUSE. The 2026-10-28 trace breakdown has it
+  77% JIT, with the `kk_*` driver functions at ≤1% each. Which guest functions besides the
+  command-ring wait take that JIT time is the next question.
 - The fixed telemetry (fex 0087) and the `wait-os` Darwin execution test have not yet run on the
   phone or a Mac respectively.
