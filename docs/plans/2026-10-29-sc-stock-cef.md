@@ -6,7 +6,7 @@
 [PLA-372](https://linear.app/playportdev/issue/PLA-372) (CEF payload distribution, to be cancelled),
 [PLA-254](https://linear.app/playportdev/issue/PLA-254) (publisher launchers).
 
-**Status:** chunks 0 and 1 done 2026-10-29 ([probe evidence](../evidence/2026-10-29-sc-stock-cef-probe.md)): single-process runs on Rockstar's helper, which still dies at its PartitionAlloc reservations, so chunk 2 is needed and means moving the band's layout (the evidence's last section). Owner approved the full layout port and said to continue. Chunk 2 is in progress; no further design approval is pending. Branch `dev/pla-476-sc-stock-cef` in the main checkout.
+**Status:** chunks 0 and 1 done 2026-10-29 ([probe evidence](../evidence/2026-10-29-sc-stock-cef-probe.md)): single-process runs on Rockstar's helper, which still dies at its PartitionAlloc reservations, so chunk 2 is needed and means moving the band's layout (the evidence's last section). Owner approved the full layout port and said to continue. Chunk 2 is in progress; no further design approval is pending. Its l1–l3 phone runs (dev IPA `2da3ea8a`, [evidence](../evidence/2026-10-29-sc-stock-cef-probe.md#l2-l3-longer-runs-on-the-same-ipa-the-loading-screen-question)) sign in on the launcher's helper but cannot run a second helper: a dead helper's slot can stay owned (`view kept`), and the game's own helper crashes at start (NULL read from chrome_elf.dll). RDR2 then waits at a black spinner. **Next:** release a dead owner's slots (or move the kept views out), then explain the game helper's crash. Branch `dev/pla-476-sc-stock-cef` in the main checkout.
 
 ## Why
 

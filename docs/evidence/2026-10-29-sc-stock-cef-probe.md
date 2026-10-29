@@ -106,3 +106,37 @@ alive together until the game's sign-in, decision 0130) can share one such layou
   exits `0xC0000017`: its WoW64 4 GiB window does not fit (`NO GAP FITS size=0x100010000`). xs1 never activated it.
 - **Open:** whether the game reaches its sign-in given more time, and whether the helper's CPU use or the failed COM
   activation delays it.
+
+## l2, l3: longer runs on the same IPA (the loading-screen question)
+
+Same IPA (`2da3ea8a…`), keys and defaults as l1; the runner ends a run with no Story press by +1500 s, otherwise
+at first frame +600 s.
+
+- **l1 re-read.** After about +105 s the sampled task CPU sums to about 60 % of one core. RDR2.exe's main thread
+  (tid 35C) creates the same threads, in the same order, as in xs1, up to dsound's thread (18:46:34). It is not
+  seen running afterwards, and logs nothing after 18:48:20. In xs1 the next steps were 7 more game threads,
+  `Nsi`/`BCryptGenRandom`, a signature check of `socialclub.dll` and its load. So l1's long first loading bar is
+  the game waiting before its Social Club, not a CPU-bound load. The "protector ≈60× slower" above came from sparse
+  timestamps (xs1's log has no per-line times) and does not hold.
+- **l2** (`.work/ui-runs/20261029T190705-rdr2-p476l2`): the launcher's helper took all six grants, then died at
+  about +34 s with `0xE0000008`. `[chromium-oom]` names a 0x80-byte request. Just before that, a series of 512 MB
+  reservations found no gap in `0x7c00000000..0x8000000000` (`[va-scan] FAILED`). l1's helper made the same series
+  and lived, so this is nondeterministic. At its exit, kinds 1, 3 and 5 logged `view kept, slot stays owned`. Every
+  restarted helper was refused (`[sc-layout] refused reserve … kind=7 c0000017`) and exited `0x80000003`. The launcher
+  showed its "timed out loading" Error and the title ended at +54 s.
+- **l3** (`.work/ui-runs/20261029T191039-rdr2-p476l3`): the launcher's helper lived. RDR2.exe started at 19:12:12,
+  loaded `socialclub.dll` at 19:13:05 and signed in at +141 s. The launcher was ended (decision 0130), and Story was
+  pressed at 19:13:40.
+  - At the launcher helper's exit (19:13:25) kind 3 (`0x7400000000`, chrome_elf.dll's metadata) logged `view kept,
+    slot stays owned`.
+  - The game's own helper started at 19:13:27, passed the `[sc-single]` preflight and died 0.6 s later with
+    `0xC0000005`: a NULL read (`SEGV … addr=0x0`) in kernel32 code called from chrome_elf.dll, before any 16 GB+
+    reservation. No further game helper started.
+  - The screen showed the Story loading painting (+198 s), then black with only the spinner from about +250 s to
+    the run's end (+655 s). From 19:15:17 the task was idle (2–18 % of one core summed). Thermal went fair, then
+    back to nominal; battery 80 % on power.
+- **So the long loading in l3 is RDR2 waiting for its own Social Club,** whose helper crashed at start. Two
+  problems in chunk 2's layout keep a helper from working after the first one:
+  1. a dead helper's slot can stay owned when its views are kept (0226 by design), so a later helper is refused;
+  2. the game's helper crashes on stock CEF before it asks for its pools (not yet explained).
+  l1's earlier stall (before `socialclub.dll`, with the launcher's helper alive) is not explained by these.
