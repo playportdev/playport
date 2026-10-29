@@ -30,8 +30,9 @@
 | launcher | its Error window; alive | the same |
 | game | never started | never started |
 
-- **Single-process works on Rockstar's helper.** The exact-build guard, `--single-process` and the page bridge
-  applied at every start of the helper on the stock CEF. madeira-unix 0190's part works.
+- **The single-process patch applied to Rockstar's helper.** The exact-build guard, `--single-process` and
+  page-bridge installation logged at every helper start on stock CEF. This does not prove the bridge works:
+  the helper failed during allocator startup, before a page or successful sign-in could exercise it.
 - **Each helper still dies at its PartitionAlloc reservations.** In a2's second helper:
   - `jumbo#2`: chrome_elf.dll's glued pools, 32 GB at a 32 GB-aligned hint, "granted" as a soft pool at
     `0x7800000000` (PLA-477);
@@ -65,7 +66,9 @@ reserving only the bottom of each block for real and laying out the band for it:
 - the metadata regions and RDR2.exe's 8960 MB hold sit in `[0x7400000000, 0x7800000000)`;
 - V8's sandbox is a partial 8 GB reservation.
 
-In Playport each of these is a change to the layout every game runs with.
+These touch shared placement code, but the new layout need not be enabled for every game. The port must
+keep the existing layout when the Social Club layout is not selected. Whether an earlier app-wide hold is
+needed to keep the low slot free remains to be tested; the probes did not establish that requirement.
 
 ## Not shown
 

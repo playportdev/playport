@@ -190,3 +190,4 @@
 0221-wineserver-preserve-imported-fd-status-flags.patch
 0222-virtual-short-reserve-mb-grants-an-unplaceable-reser.patch
 0223-ntdll-log-each-guest-thread-s-yield-os-traps-as-xp-p.patch
+0224-ntdll-social-club-layout-geometry.patch

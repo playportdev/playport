@@ -6,7 +6,7 @@
 [PLA-372](https://linear.app/playportdev/issue/PLA-372) (CEF payload distribution, to be cancelled),
 [PLA-254](https://linear.app/playportdev/issue/PLA-254) (publisher launchers).
 
-**Status:** chunks 0 and 1 done 2026-10-29 ([probe evidence](../evidence/2026-10-29-sc-stock-cef-probe.md)): single-process runs on Rockstar's helper, which still dies at its PartitionAlloc reservations, so chunk 2 is needed and means moving the band's layout (the evidence's last section). Waiting on the owner. Branch `dev/pla-476-sc-stock-cef` in the main checkout.
+**Status:** chunks 0 and 1 done 2026-10-29 ([probe evidence](../evidence/2026-10-29-sc-stock-cef-probe.md)): single-process runs on Rockstar's helper, which still dies at its PartitionAlloc reservations, so chunk 2 is needed and means moving the band's layout (the evidence's last section). Owner approved the full layout port and said to continue. Chunk 2 is in progress; no further design approval is pending. Branch `dev/pla-476-sc-stock-cef` in the main checkout.
 
 ## Why
 
@@ -115,6 +115,15 @@ runtime change gets a Hollow Knight first frame+10 (`app-367520`).
   - Otherwise port the layout.
 
 ### 2. PartitionAlloc room for Rockstar's CEF (likely the hard chunk)
+
+**Implementation progress:** madeira-unix 0224 introduces a pure geometry and request-classification
+header, with host tests in `tools/tests/test_sc_layout.py`. It allocates nothing and is not yet
+connected to the runtime. Tests cover disjoint real ranges, the 8960 MiB game hold, the 15 GiB FEX
+arena, overflow-safe bounds, reservation ordering and refusal to give one helper another helper's
+remaining slots. Startup holds, RW alias placement, allocation/free/exit integration and phone
+validation remain outstanding. Reported Chromium ranges overlap intentionally; only owned **real**
+ranges may be committed or released. Upstream's diagnostic-only overflow warnings are not sufficient
+ownership enforcement for this port.
 
 - Port upstream's layout from `0f40502` (and `e50981f` for the RDR2 hold) as madeira-unix patches,
   each with `Class:`, `Evidence:` and `Offered-upstream:` trailers.
