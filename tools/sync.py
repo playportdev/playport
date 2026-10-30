@@ -131,8 +131,8 @@ COMPONENTS = ["madeira", "wine", "wine-port", "fex", "fex-port", "dxmt", "dxmt-p
 PORT_ROWS = ["wine-port", "fex-port", "dxmt-port", "rpmalloc-port"]
 # Which component each patches/<target> series applies to.
 TARGET_COMPONENT = {"madeira-unix": "madeira", "madeira-winios": "madeira", "wine-port": "wine", "wine-valve": "wine",
-                    "wine-unix": "wine", "wine-pe": "wine", "fex-port": "fex", "fex": "fex", "dxmt-port": "dxmt",
-                    "dxmt": "dxmt", "rpmalloc-port": "rpmalloc", "rpmalloc": "rpmalloc"}
+                    "wine-unix": "wine", "wine-pe": "wine", "wine-gdk": "wine", "fex-port": "fex", "fex": "fex",
+                    "dxmt-port": "dxmt", "dxmt": "dxmt", "rpmalloc-port": "rpmalloc", "rpmalloc": "rpmalloc"}
 # Series on pins no Madeira commit moves (their own upstreams, outside COMPONENTS):
 # a sync does not replay them.
 # CEF/Chromium are built separately (build/cef/README.md), not by pp sync.
@@ -140,6 +140,7 @@ NOT_REPLAYED = {"mesa", "dxvk", "vkd3d-proton", "gbe", "idevice", "xgameruntime"
 # Series applied under a target's own, in order, as build/stages/unix.sh,
 # build/stages/wine-pe.sh, build/stages/dxmt-patched.sh and build/stages/fex.sh do.
 BELOW = {"wine-valve": ["wine-port"], "wine-unix": ["wine-port", "wine-valve"], "wine-pe": ["wine-port", "wine-valve"],
+         "wine-gdk": ["wine-port", "wine-valve", "wine-pe"],
          "dxmt": ["dxmt-port"], "fex": ["fex-port"], "rpmalloc": ["rpmalloc-port"]}
 # Madeira is small and needs full history for the candidate's submodule; the
 # forks are fetched without blobs, which are read on demand.
@@ -152,7 +153,7 @@ MADEIRA_BUILT = ("build/ntdll-unix/", "build/wineserver/", "build/win32u-unix/",
                  "build/madeira_cfg.h", "build/gnutls-ios/", "build/freetype-ios/", "app/Madeira/Winios/")
 # The series whose files make a watched commit "owned", per row.
 OWNED_SERIES = {"madeira": ["madeira-unix", "madeira-winios"], "wine-port": ["wine-port", "wine-valve", "wine-unix",
-                "wine-pe"], "fex-port": ["fex-port", "fex"], "dxmt-port": ["dxmt-port", "dxmt"],
+                "wine-pe", "wine-gdk"], "fex-port": ["fex-port", "fex"], "dxmt-port": ["dxmt-port", "dxmt"],
                 "rpmalloc-port": ["rpmalloc-port", "rpmalloc"]}
 LICENCE_RE = re.compile(r"(^|/)(LICEN[CS]E|COPYING|COPYRIGHT|NOTICE|UNLICENSE)[^/]*$", re.I)
 BOT = {"GIT_COMMITTER_NAME": "upstream-sync", "GIT_COMMITTER_EMAIL": "upstream-sync@localhost"}

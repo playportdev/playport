@@ -293,7 +293,7 @@ def collect(repo, scratch):
             name, pin, *_ = line.split()
             pins[name] = pin
     specs = [
-        ("WINE", "wine", "wine-port wine-valve wine-pe"),
+        ("WINE", "wine", "wine-port wine-valve wine-pe wine-gdk"),
         ("FEX", "fex", "fex-port fex"),
         ("MYTHIC", "madeira", "madeira-unix"),
         ("DXMT", "dxmt", "dxmt-port dxmt"),

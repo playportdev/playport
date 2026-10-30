@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: domsvoboda <domsvoboda@users.noreply.github.com>
+Date: Fri, 23 Oct 2026 08:51:17 +0200
+Subject: [PATCH] winhttp: Never open the HTTP/2 body diagnostics log.
+
+The HTTP/2 transport could write a scan of response bodies to a file
+named by XUSER_WINHTTP_BODY_LOG. Its identifier-shaped whitelist can let
+token fragments through, so it is not opened in a shared runtime; the
+writers stay inert with no file.
+
+Ported from Xodus Nexus unchanged.
+
+Ported-from: https://github.com/domsvoboda/nexus-wine/commit/a58b93d3eb3b6261404776394c92fd93150c860f
+Ported: clean
+Class: diagnostics
+Evidence: docs/evidence/2026-10-30-wine-gdk-port.md
+Offered-upstream: no
+---
+ dlls/winhttp/http2.c | 12 ++++--------
+ 1 file changed, 4 insertions(+), 8 deletions(-)
+
+diff --git a/dlls/winhttp/http2.c b/dlls/winhttp/http2.c
+index 01c4e29..bc2cf6f 100644
+--- a/dlls/winhttp/http2.c
++++ b/dlls/winhttp/http2.c
+@@ -67,14 +67,10 @@ static HANDLE diag_file;
+ 
+ static void diag_init( void )
+ {
+-    char path[MAX_PATH];
+-    AcquireSRWLockExclusive( &diag_lock );
+-    if (!diag_file)
+-    {
+-        if (GetEnvironmentVariableA( "XUSER_WINHTTP_BODY_LOG", path, MAX_PATH ) && *path)
+-            diag_file = CreateFileA( path, GENERIC_WRITE, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL );
+-    }
+-    ReleaseSRWLockExclusive( &diag_lock );
++    /* Do not activate the legacy printable-run body scanner in a shared
++     * runtime. Token fragments can match its identifier-shaped whitelist.
++     * Keep transport tracing numerical; schema-aware diagnostics belong in
++     * a separately audited opt-in tool, not the distributed DLL. */
+ }
+ 
+ static void diag_emit( char *out, size_t size, size_t *pos, const char *text )

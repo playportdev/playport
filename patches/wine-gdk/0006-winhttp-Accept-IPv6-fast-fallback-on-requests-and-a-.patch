@@ -1,0 +1,67 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: domsvoboda <domsvoboda@users.noreply.github.com>
+Date: Fri, 23 Oct 2026 08:51:17 +0200
+Subject: [PATCH] winhttp: Accept IPv6 fast fallback on requests and a
+ WebSocket close timeout.
+
+GDK titles set WINHTTP_OPTION_IPV6_FAST_FALLBACK on request handles and
+WINHTTP_OPTION_WEB_SOCKET_CLOSE_TIMEOUT on WebSocket handles and treat a
+refused option as fatal. Accept both as WineHQ already does the former
+on session handles: netconn connects to one address family at a time,
+and a close waits as before.
+
+Ported from Xodus Nexus: WineHQ since took the session-handle option,
+and the WebSocket code moved to socket.c; the close timeout is accepted
+without the field Nexus stored and nothing read.
+
+Ported-from: https://github.com/domsvoboda/nexus-wine/commit/8aa7f701d2fa2014a1b70adfbede4d0a7944575a
+Ported: adapted
+Class: feature
+Evidence: docs/evidence/2026-10-30-wine-gdk-port.md
+Offered-upstream: no
+---
+ dlls/winhttp/session.c | 10 ++++++++++
+ dlls/winhttp/socket.c  |  9 +++++++++
+ 2 files changed, 19 insertions(+)
+
+diff --git a/dlls/winhttp/session.c b/dlls/winhttp/session.c
+index f202662..a0f7e0b 100644
+--- a/dlls/winhttp/session.c
++++ b/dlls/winhttp/session.c
+@@ -1258,6 +1258,16 @@ static BOOL request_set_option( struct object_header *hdr, DWORD option, void *b
+         TRACE( "receive_response_timeout %u\n", request->receive_response_timeout );
+         return TRUE;
+ 
++    case WINHTTP_OPTION_IPV6_FAST_FALLBACK:
++        /* The same connection hint as on the session handle; netconn connects to one address family at a time. */
++        if (buflen != sizeof(BOOL))
++        {
++            SetLastError( ERROR_INSUFFICIENT_BUFFER );
++            return FALSE;
++        }
++        FIXME( "WINHTTP_OPTION_IPV6_FAST_FALLBACK: %d\n", *(BOOL *)buffer );
++        return TRUE;
++
+     case WINHTTP_OPTION_USERNAME:
+     {
+         struct connect *connect = request->connect;
+diff --git a/dlls/winhttp/socket.c b/dlls/winhttp/socket.c
+index 03be9cd..499b3fc 100644
+--- a/dlls/winhttp/socket.c
++++ b/dlls/winhttp/socket.c
+@@ -98,6 +98,15 @@ static BOOL socket_set_option( struct object_header *hdr, DWORD option, void *bu
+         TRACE( "WINHTTP_OPTION_WEB_SOCKET_KEEPALIVE_INTERVAL %lu\n", interval);
+         return TRUE;
+     }
++    case WINHTTP_OPTION_WEB_SOCKET_CLOSE_TIMEOUT:
++        if (buflen != sizeof(DWORD))
++        {
++            WARN( "invalid parameters for WINHTTP_OPTION_WEB_SOCKET_CLOSE_TIMEOUT\n" );
++            SetLastError( ERROR_INSUFFICIENT_BUFFER );
++            return FALSE;
++        }
++        FIXME( "WINHTTP_OPTION_WEB_SOCKET_CLOSE_TIMEOUT %lu\n", *(DWORD *)buffer );
++        return TRUE;
+     default:
+         break;
+     }

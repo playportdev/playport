@@ -259,7 +259,7 @@ stage_pe() {
     # The wine pin is a WineHQ commit, from a mirror in the cache (build/lib.sh).
     src=$(mirror wine "$(pin wine)")
     # stages/wine-pe.sh checks out the pin and applies patches/wine-port,
-    # patches/wine-valve and patches/wine-pe when the tree is not already that.
+    # patches/wine-valve, patches/wine-pe and patches/wine-gdk when the tree is not already that.
     [ -e "$w/.git" ] || run pe git clone -q --no-checkout "$src" "$w"
     # A moved pin is not in a clone made before the move.
     git -C "$w" cat-file -e "$(pin wine)^{commit}" 2>/dev/null || run pe git -C "$w" fetch -q "$src" "$(pin wine)"
@@ -454,8 +454,9 @@ digest_inputs() {
         case $s in
         unix) pins madeira wine wine-port wine-valve freetype gstreamer; series_text madeira-unix wine-port wine-valve wine-unix
               files build/stages/unix.sh build/stages/unix-gaps.sh build/stages/gstreamer.sh build/ppsync ;;
-        pe) pins wine wine-port wine-valve gstreamer; series_text wine-port wine-valve wine-pe
-            files build/stages/wine-pe.sh build/stages/wine-pe-manifest.py build/stages/wine-pe-strip.py
+        pe) pins wine wine-port wine-valve gstreamer nghttp2; series_text wine-port wine-valve wine-pe wine-gdk
+            files build/stages/wine-pe.sh build/stages/wine-pe-manifest.py build/stages/wine-pe-strip.py \
+                  build/stages/nghttp2-headers.sh
             gst_release ;;
         fex) pins fex fex-port rpmalloc rpmalloc-port; series_text fex-port fex rpmalloc-port rpmalloc
              files build/stages/fex.sh ;;
