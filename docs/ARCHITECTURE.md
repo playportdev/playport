@@ -583,14 +583,18 @@ holds every job, and the process after the restart
 Each job waits for its driver's conditions (its store signed in, permitted network;
 an unfinished import needs its source picked again); the player's Pause stays.
 A release build compiles none of `Dev/`
-([decision 0009](decisions/0009-dev-and-release-builds.md)).
+([decision 0009](decisions/0009-dev-and-release-builds.md)). The Xbox store is the dev
+app's only ([decision 0166](decisions/0166-the-xbox-store.md)): its chip and empty
+Library (`Dev/XboxLibrary.swift`), and `pp verify --variant release` fails an executable
+with a Swift `Xbox…` identifier or the Xbox Library's text (`verify-ipa.py` `XBOX_STRINGS`).
 
 - **Catalogue** (`app/PlayportKit`, tested on Linux): rebuilt by *adoption*
   each time the app comes to the front, from the prefix's `C:\Games`. A folder
   with a Playport install receipt is that store's copy and build/version, even
   if its name matches the bundled cohort list (`Titles/titles.json`). Identity is
-  `(store, store game ID)` (ContentKit `StoreGameKey`), for Local, Steam, GOG and
-  Epic; library joins, downloads, art and navigation use it, never the name
+  `(store, store game ID)` (ContentKit `StoreGameKey`), for Local, Steam, GOG,
+  Epic and Xbox (its Product ID, `xbox-<ProductId>`, decision 0166); library joins,
+  downloads, art and navigation use it, never the name
   ([decision 0057](decisions/0057-store-identity.md)). Files imports are Local,
   with their own receipts; store markers in imported or found files supply only
   launch hints, not store identity. Without a receipt, a folder named as a cohort
