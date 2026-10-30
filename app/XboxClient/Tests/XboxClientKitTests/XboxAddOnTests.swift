@@ -40,6 +40,18 @@ final class XboxAddOnTests: XCTestCase, @unchecked Sendable {
                           allowed: [], related: related, languages: [])
     }
 
+    /// The library keeps every licensed product's access, so a game's add-ons are found
+    /// among its non-game products (here AoE IV's 4K pack) without reading the entitlements again.
+    func testTheLibraryKeepsTheAccessOfEveryLicensedProductForItsAddOns() async throws {
+        let http = try XboxLibraryHTTP(entitlements: [xboxFixture("entitlements.json")])
+        let snapshot = try await XboxStoreLibrary(tickets: XboxStaticTickets(), http: http, now: { Date(timeIntervalSince1970: 1_793_361_600) }).refresh()
+        let access = try XCTUnwrap(snapshot.access)
+        XCTAssertTrue(Set(snapshot.products.keys).isSubset(of: access.keys))
+        XCTAssertEqual(snapshot.products["9P4P1LPN4VZQ"]?.delivery, .notAGame)
+        XCTAssertEqual(access["9P4P1LPN4VZQ"], .gamePass)
+        XCTAssertEqual(access["9MW9469V91LM"], .gamePass)
+    }
+
     /// Nexus's scope: an add-on of this game (its addOnParent, its package's main package,
     /// or the game's RelatedProducts), licensed by the account; never another game's.
     func testTheLicensedAddOnsOfAGameAreItsOwnWithTheirPackage() throws {

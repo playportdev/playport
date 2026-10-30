@@ -104,8 +104,23 @@ final class XboxAddOnInstallTests: XCTestCase, @unchecked Sendable {
         XCTAssertFalse(FileManager.default.fileExists(atPath: dir.appendingPathComponent("stale.bin").path))
         XCTAssertEqual(try i.verifyAddOn(addOn, base: base).bad, [])
 
-        i.forget(base, keepSaves: true, localAppData: root.appendingPathComponent("AppData"))
+        // The game's folder gone (Remove, or a reinstall into a new folder): its add-ons are no longer there.
+        let folder = root.appendingPathComponent("Games/Test Game Edition")
+        let aside = root.appendingPathComponent("Games/aside")
+        try FileManager.default.moveItem(at: folder, to: aside)
         XCTAssertEqual(i.addOnRecords(base: base), [])
+        XCTAssertEqual(i.addOnRoots(base: base), [])
+        try FileManager.default.moveItem(at: aside, to: folder)
+        XCTAssertEqual(i.addOnRecords(base: base).count, 1)
+
+        // An interrupted add-on stage goes with the game's Remove too.
+        let stage = i.layout.stagingRoot.appendingPathComponent("xbox-\(addOn)_1.0.0.0")
+        try FileManager.default.createDirectory(at: stage, withIntermediateDirectories: true)
+        XCTAssertTrue(i.hasStage(addOn))
+        try FileManager.default.removeItem(at: folder)
+        i.forget(base, keepSaves: true, localAppData: root.appendingPathComponent("AppData"))
+        XCTAssertFalse(i.hasStage(addOn))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: i.layout.manifestsDir.appendingPathComponent("xbox-\(base).addons").path))
         XCTAssertNil(i.loadRecord(base))
     }
 

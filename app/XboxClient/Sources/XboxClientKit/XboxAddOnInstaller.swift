@@ -45,8 +45,19 @@ extension XboxInstaller {
     func addOnsDir(_ base: String) -> URL { layout.manifestsDir.appendingPathComponent(stem(base) + ".addons", isDirectory: true) }
     func addOnRecordFile(_ addOn: String, base: String) -> URL { addOnsDir(base).appendingPathComponent(stem(addOn) + ".json") }
 
-    /// The game's installed add-ons, by Product ID.
+    /// The game's installed add-ons, by Product ID: those whose folder is in the game's
+    /// folder now (a game installed again into a new folder left its add-ons behind).
     public func addOnRecords(base: String) -> [XboxInstalledAddOn] {
+        guard let folder = gameFolder(base) else { return [] }
+        return storedAddOns(base).filter { a in
+            guard let at = try? InstallFS.resolveInside(folder, a.installed.installDir, createParents: false) else { return false }
+            var isDir: ObjCBool = false
+            return FileManager.default.fileExists(atPath: at.path, isDirectory: &isDir) && isDir.boolValue
+        }
+    }
+
+    /// Every add-on record kept for the game, its folder there or not.
+    func storedAddOns(_ base: String) -> [XboxInstalledAddOn] {
         let dir = addOnsDir(base)
         let names = ((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []).filter { $0.hasSuffix(".json") }.sorted()
         return names.compactMap { name in
@@ -150,7 +161,7 @@ extension XboxInstaller {
 
     /// The game's Remove: its add-ons' records and stages (their files go with its folder).
     func forgetAddOns(_ base: String) {
-        for a in addOnRecords(base: base) { discardStages(a.installed.productID) }
+        for a in storedAddOns(base) { discardStages(a.installed.productID) }
         try? FileManager.default.removeItem(at: addOnsDir(base))
     }
 }

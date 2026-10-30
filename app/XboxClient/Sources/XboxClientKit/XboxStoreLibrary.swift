@@ -33,6 +33,9 @@ public struct XboxLibrarySnapshot: Codable, Sendable, Equatable {
     public var checkedAt: Date
     /// Licensed products not listed: other packages, other launchers, add-ons, duplicate editions.
     public var leftOut: Int
+    /// Every licensed product's access, games or not (add-ons are found among them);
+    /// nil in a cache from before PLA-502.
+    public var access: [String: XboxAccess]? = nil
 }
 
 /// The account's Xbox PC library: its own copies plus the PC Game Pass
@@ -76,7 +79,8 @@ public struct XboxStoreLibrary: Sendable {
         }.sorted { ($0.title.localizedLowercase, $0.id) < ($1.title.localizedLowercase, $1.id) }
         let owned = copies.filter { $0.access == .owned }.count
         log.info("xbox", "library: \(copies.count) copies (\(owned) owned, \(copies.count - owned) PC Game Pass); \(licensed.count - copies.count) licensed products left out")
-        return XboxLibrarySnapshot(copies: copies, products: products, checkedAt: checked, leftOut: licensed.count - copies.count)
+        return XboxLibrarySnapshot(copies: copies, products: products, checkedAt: checked, leftOut: licensed.count - copies.count,
+                                   access: licensed)
     }
 
     /// Every page of the account's entitlements (the `x-ms-ct` continuation).
