@@ -2,9 +2,9 @@
 import Foundation
 
 /// A value that must never reach a log, error or transcript: refresh and access
-/// tokens (Steam's, GOG's, Epic's), the QR challenge URL, login and exchange
-/// codes, machine secrets, depot keys, CDN tokens, Steam's encrypted app tickets
-/// and Epic's ownership tokens.
+/// tokens (Steam's, GOG's, Epic's, Microsoft's), the QR challenge URL, login and exchange
+/// codes, machine secrets, depot keys, CDN tokens, Steam's encrypted app tickets,
+/// Epic's ownership tokens, Xbox tokens and tickets, Store licences and content keys.
 /// `description` and `debugDescription` both print a fixed placeholder, so a
 /// stray `print(secret)` or string interpolation cannot leak it.
 public struct Secret<Value: Sendable>: Sendable, CustomStringConvertible, CustomDebugStringConvertible {
@@ -22,10 +22,35 @@ extension Secret: Equatable where Value: Equatable {}
 public enum Redactor {
     private static let rules: [(NSRegularExpression, String)] = {
         let patterns: [(String, String)] = [
+            // Xbox Live's authorization header, `XBL3.0 x=<user hash>;<XSTS token>`, whole,
+            // before the authorization and JWT rules take its parts.
+            (#"XBL3\.0\s+x=[^;\s"']+;[^\s"',]+"#, "XBL3.0 x=<uhs:redacted>;<xsts:redacted>"),
+            // A Store licence (decision 0166): its XML on one line, or base64 holding
+            // `<License ` or `<License>` at any of base64's three alignments (not <LicenseInfo>).
+            (#"<License[\s>].*?(?:</License>|$)"#, "<license:redacted>"),
+            (#"[A-Za-z0-9+/]*(?:PExpY2Vuc2U[g+]|xMaWNlbnNl[IP]|8TGljZW5zZ[ST])[A-Za-z0-9+/]*={0,2}"#, "<license:redacted>"),
+            // A legacy (SOAP) Microsoft account ticket's encrypted body, its session key, a
+            // licence's signed block, the bridge's ticket replies (decision 0167).
+            (#"(?i)(<(?:[A-Za-z]+:)?(?:BinarySecret|CipherValue|SPLicenseBlock|BinarySecurityToken|Token|DeviceRps)\b[^>]*>)[^<]+"#,
+             "$1<redacted>"),
             // Epic's ownership token (`egoc1~<JWT>`, decision 0059), before the JWT rule takes its tail.
             (#"egoc1~[A-Za-z0-9._~+/=\-]+"#, "<ovt:redacted>"),
-            // JWTs (Steam refresh and access tokens are eyJ... three-part JWTs).
-            (#"eyJ[A-Za-z0-9_\-]{4,}\.[A-Za-z0-9_\-]{4,}\.[A-Za-z0-9_\-]*"#, "<jwt:redacted>"),
+            // JWTs (Steam refresh and access tokens are eyJ... three-part JWTs) and JWEs (Xbox's
+            // device, user, title and XSTS tokens have five parts).
+            (#"eyJ[A-Za-z0-9_\-]{4,}(?:\.[A-Za-z0-9_\-]*){2,4}"#, "<jwt:redacted>"),
+            // A Microsoft account refresh token (M.C507_BAY.0.U.-C…, M.R3_BAY.-C…).
+            (#"\bM\.[CR][0-9]+_[A-Za-z0-9]+\.[A-Za-z0-9!*$%._\-]{20,}"#, "<msa:redacted>"),
+            // A Microsoft account compact ticket or access token (t=EwA…, d=EwA…): Ew at the
+            // start of a base64 run.
+            (#"(?<![A-Za-z0-9+/])Ew[A-Za-z0-9+/%]{40,}={0,2}"#, "<msa:redacted>"),
+            (#"(?i)((?:rps_?ticket|device_?rps)(?:["']?\s*[:=]\s*["']?))[^\s"',&}<]+"#, "$1<redacted>"),
+            // The account's identifiers in an Xbox token's DisplayClaims.
+            (#"(?i)("(?:uhs|xid|gtg)"\s*:\s*")[^"]*"#, "$1<redacted>"),
+            // A package's content key (a CIK), a device or session key, a proof secret.
+            (#"(?i)([A-Za-z]*(?:content|device|session|tweak|data)_?key|\bcik|binary_?secret)(["']?\s*[:=]\s*["']?)(?:[0-9A-Fa-f]{32,}|[A-Za-z0-9+/_\-]{22,}={0,2})"#,
+             "$1$2<redacted>"),
+            // The per-play key of the Xbox runtime's bridge (decision 0167).
+            (#"(XODUS_BRIDGE_KEY["']?\s*[:=]\s*["']?)[^\s"',&}]+"#, "$1<redacted>"),
             // QR challenge URLs: https://s.team/q/<version>/<client id>.
             (#"https?://s\.team/q/[^\s"']+"#, "<qr-challenge:redacted>"),
             // Query strings and bearer-bearing URL tails.
