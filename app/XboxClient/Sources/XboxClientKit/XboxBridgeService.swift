@@ -70,12 +70,16 @@ public actor XboxBridgeService {
     nonisolated let account: any XboxBridgeAccount
     private let copy: XboxBridgeCopy
     private let updates: (any XboxPackageUpdates)?
+    private let saves: (any XboxSaveConflictAsker)?
     private let log: Logger
     private nonisolated let fence = Fence()
     private(set) var served = 0, refused = 0
 
-    public init(copy: XboxBridgeCopy, account: any XboxBridgeAccount, updates: (any XboxPackageUpdates)?, log: Logger) {
-        self.copy = copy; self.account = account; self.updates = updates; self.log = log
+    /// `saves` answers the runtime's save conflict question (the player's choice); without
+    /// it every conflict keeps both sides and the play uses the phone's saves.
+    public init(copy: XboxBridgeCopy, account: any XboxBridgeAccount, updates: (any XboxPackageUpdates)?,
+                saves: (any XboxSaveConflictAsker)? = nil, log: Logger) {
+        self.copy = copy; self.account = account; self.updates = updates; self.saves = saves; self.log = log
         key = Self.newKey()
     }
 
@@ -98,6 +102,7 @@ public actor XboxBridgeService {
         case .msaTokenRequest: outcome = await msaTickets(frame.body)
         case .storeLicenseTokenRequest: outcome = await licenceToken(frame.body)
         case .storePackageUpdatesRequest: outcome = await packageUpdates(frame.body)
+        case .saveConflictRequest: outcome = await saveConflict(frame.body)
         default: outcome = Outcome(body: [], status: "refused: not served")
         }
         guard !revoked else { return nil }
@@ -105,7 +110,7 @@ public actor XboxBridgeService {
             outcome = XboxBridgeMessage(rawValue: reply) == .storeLicenseTokenResponse
                 ? Self.licenceReply(Self.fail, status: "refused: over 64 KiB") : Outcome(body: [], status: "refused: over 64 KiB")
         }
-        if outcome.status == "served" { served += 1 } else { refused += 1 }
+        if outcome.status.hasPrefix("served") { served += 1 } else { refused += 1 }
         log.info("xbox", "bridge: \(XboxBridgeMessage.name(frame.type)) (\(frame.body.count) bytes) -> "
                  + "\(XboxBridgeMessage.name(reply)) \(outcome.status) (\(outcome.body.count) bytes)")
         return XboxBridgeFrame(type: reply, body: outcome.body)
@@ -237,6 +242,24 @@ public actor XboxBridgeService {
     static func version(_ text: String) -> Bool {
         let parts = text.split(separator: ".", omittingEmptySubsequences: false)
         return parts.count == 4 && parts.allSatisfy { !$0.isEmpty && $0.utf8.allSatisfy { (48...57).contains($0) } && UInt16($0) != nil }
+    }
+
+    // MARK: SAVE_CONFLICT_REQUEST (Playport's, patches/xgameruntime/0002)
+
+    /// The player's choice for the runtime's save conflict, asked of `saves` and waited
+    /// for as long as the player takes. Signed out, malformed or with nobody to ask, the
+    /// answer is `none`: both sides kept, this play on the phone's saves. The log names the
+    /// choice, never the save's name, times or device.
+    private func saveConflict(_ body: [UInt8]) async -> Outcome {
+        guard await signedIn else { return Self.conflictReply(.none, status: "refused: signed out") }
+        guard let conflict = XboxSaveConflict(body: body) else { return Self.conflictReply(.none, status: "refused: malformed") }
+        guard let saves else { return Self.conflictReply(.none, status: "refused: nobody to ask") }
+        let choice = await saves.choose(conflict, productID: copy.productID)
+        return Self.conflictReply(choice, status: "served: \(choice.rawValue)")
+    }
+
+    static func conflictReply(_ choice: XboxSaveChoice, status: String) -> Outcome {
+        Outcome(body: xml("SaveConflictResponse", [("Choice", choice.rawValue)]), status: status)
     }
 
     // MARK: XML
