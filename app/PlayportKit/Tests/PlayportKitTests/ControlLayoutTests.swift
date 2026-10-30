@@ -309,8 +309,8 @@ final class ControlsSettingsTests: XCTestCase {
                        .gamepad())
     }
 
-    /// A compatibility default's layout (decision 0074) is the game's starting layout; the game's own
-    /// choice wins, and Never still makes Off every game's start.
+    /// A compatibility default's layout (decision 0074) is the game's starting layout over Settings'
+    /// Starting layout; the game's own choice wins, and Never still makes Off every game's start.
     func testTheCompatibilityLayoutStartsTheGameAndTheGamesOwnWins() {
         let d = ControlsDefaults()
         let kbm = ControlsState.resolve(game: nil, defaults: d, controllerConnected: false, compat: .keyboardMouse)
@@ -323,6 +323,11 @@ final class ControlsSettingsTests: XCTestCase {
         XCTAssertEqual(ControlsState.resolve(game: nil, defaults: ControlsDefaults(show: .never), controllerConnected: false,
                                              compat: .keyboardMouse).layout, .off)
         XCTAssertEqual(ControlsState.resolve(game: nil, defaults: d, controllerConnected: false, compat: nil).layout, .gamepad)
+        // Over Settings' Starting layout: game, then compat, then Settings (decision 0074).
+        XCTAssertEqual(ControlsState.resolve(game: nil, defaults: ControlsDefaults(startingLayout: .gamepad),
+                                             controllerConnected: false, compat: .keyboardMouse).layout, .keyboardMouse)
+        XCTAssertEqual(ControlsState.resolve(game: nil, defaults: ControlsDefaults(startingLayout: .pointClick),
+                                             controllerConnected: false, compat: nil).layout, .pointClick)
     }
 
     /// The controls' pad is player 1 whenever no controller is connected, Off too,
@@ -358,8 +363,8 @@ final class ControlsSettingsTests: XCTestCase {
         XCTAssertEqual(OnScreenDpad.allCases.map(\.title), ["Off", "On"])
     }
 
-    /// Settings › Controls › Starting layout: every game's first choice unless it has its own;
-    /// "Suggested for the game" (nil) leaves it to the game (Gamepad), and Never still starts Off.
+    /// Settings › Controls › Starting layout: every game's first choice unless it has its own (or a
+    /// compatibility default); "Suggested for the game" (nil) leaves it to the game (Gamepad), and Never still starts Off.
     func testTheStartingLayoutIsEveryGamesFirstChoiceAndAGamesOwnWins() {
         let kbm = ControlsDefaults(startingLayout: .keyboardMouse)
         let s = ControlsState.resolve(game: nil, defaults: kbm, controllerConnected: false)

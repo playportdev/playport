@@ -156,7 +156,8 @@ public struct ControlsDefaults: Equatable, Sendable {
     public var rightStick = OnScreenRightStick.off
     public var controllerMap = ControllerMap()
     public var lookSpeed = LookSpeed.defaultValue
-    /// Every game's layout unless it has its own; nil: the game's suggestion (Gamepad).
+    /// Every game's layout unless it has its own or a compatibility default; nil: the game's
+    /// suggestion (its compatibility default, else Gamepad).
     public var startingLayout: OnScreenLayout?
 
     public init(show: ControlsShow = .automatic, opacity: Double = ControlsOpacity.defaultValue, haptics: Bool = true,
@@ -298,11 +299,11 @@ public struct ControlsState: Equatable, Sendable {
     /// What is drawn: the game's copy of the layout or the preset, or nothing.
     public var drawnLayout: ControlLayout? { visible ? edited ?? layout.layout(dpad: dpad, rightStick: rightStick) : nil }
 
-    /// The game's own layout, else Off under Never, else Settings' Starting layout, else the game's
-    /// compatibility default (`compat`, CompatDefaults.Entry.controls), else Gamepad.
+    /// The game's own layout, else Off under Never, else the game's compatibility default (`compat`,
+    /// CompatDefaults.Entry.controls), else Settings' Starting layout, else Gamepad (decision 0074).
     public static func resolve(game: GameControls?, defaults: ControlsDefaults, controllerConnected: Bool,
                                compat: OnScreenLayout? = nil) -> ControlsState {
-        let layout = game?.layout ?? (defaults.show == .never ? .off : defaults.startingLayout ?? compat ?? .gamepad)
+        let layout = game?.layout ?? (defaults.show == .never ? .off : compat ?? defaults.startingLayout ?? .gamepad)
         let shown = layout != .off && (defaults.show == .always || !controllerConnected)
         return ControlsState(layout: layout, visible: shown, opacity: game?.opacity ?? defaults.opacity,
                              dpad: game?.dpad ?? defaults.dpad, rightStick: game?.rightStick ?? defaults.rightStick,

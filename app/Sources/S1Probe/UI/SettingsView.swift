@@ -408,7 +408,7 @@ private struct ControlsSettings: View {
         let current = ControlsShow(rawValue: show) ?? .automatic
         PadValueRow(id: "set:controlsShow", title: "On-screen controls", subtitle: Self.showSubtitle(current),
                     values: shows.map(\.title), index: shows.firstIndex(of: current) ?? 0) { show = shows[$0].rawValue }
-        // Every game's layout unless it has its own (SettingsControls.dc.html).
+        // Every game's layout unless it has its own or a compatibility default (SettingsControls.dc.html).
         let starts = OnScreenLayout.startingChoices
         PadValueRow(id: "set:controlsStartingLayout", title: "Starting layout", subtitle: "Each game can pick its own",
                     values: starts.map(OnScreenLayout.startingTitle),
