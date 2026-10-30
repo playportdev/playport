@@ -741,6 +741,7 @@ final class LibraryModel: ObservableObject {
                 if t.store != .steam { LibraryModel.paths.layout.removeReceipt(t.key) }
                 if t.store == .gog { await GOGAccount.shared.installer.forget(productID: t.key.id) }
                 if t.store == .epic { await EpicAccount.shared.installer.forget(t.key.id) }
+                if t.store == .battlenet { BattleNetStore.forget(t.key) }
             } catch {
                 LibraryModel.log("uninstall \(t.name) failed: \(error)")
                 failure = "\(error)"

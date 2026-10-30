@@ -598,7 +598,7 @@ where Y puts a setting back to its default (`PadFocus.resetFocused`). Settings
 shown one beside it; its Graphics values change with left and right, and its Downloads
 switches are PlayportKit `DownloadPreferences`, which the download queue reads.
 Downloads (`UI/DownloadsView.swift`) shows PlayportKit's `DownloadQueue`, run by
-`UI/Downloads.swift` through Steam, GOG, Epic and Files-import drivers: installs,
+`UI/Downloads.swift` through Steam, GOG, Epic, Battle.net and Files-import drivers: installs,
 updates, repairs and imports, one at a time, in an order Y changes. Jobs use the
 store/game key, not a name; Steam's newer builds are queued automatically when
 Settings allows. The queue is written to the container after every change; a launch
@@ -608,13 +608,22 @@ Each job waits for its driver's conditions (its store signed in, permitted netwo
 an unfinished import needs its source picked again); the player's Pause stays.
 A release build compiles none of `Dev/`
 ([decision 0009](decisions/0009-dev-and-release-builds.md)).
+The Battle.net store (`UI/BattleNetStore.swift`, PlayportKit `BattleNet`;
+[decision 0168](decisions/0168-battle-net-store-client.md), proposed) has no sign-in: its
+chip is always shown and lists the World of Warcraft products whose current build carries
+an ARM64 client (BattleNetClientKit's offer, cached), All only once one is installed or
+downloading. A product's page picks the store region (from the phone's region) and the
+locale (the phone's language as a WoW locale, enUS as fallback), shows the download size
+and the space needed, and refuses an Install that does not fit, saying how much it needs.
+The install stages under the staging root (nothing in `C:\Games`, so no Play, until it is
+complete) and becomes `C:\Games\<product>` with a store receipt naming the ARM64 client.
 
 - **Catalogue** (`app/PlayportKit`, tested on Linux): rebuilt by *adoption*
   each time the app comes to the front, from the prefix's `C:\Games`. A folder
   with a Playport install receipt is that store's copy and build/version, even
   if its name matches the bundled cohort list (`Titles/titles.json`). Identity is
-  `(store, store game ID)` (ContentKit `StoreGameKey`), for Local, Steam, GOG and
-  Epic; library joins, downloads, art and navigation use it, never the name
+  `(store, store game ID)` (ContentKit `StoreGameKey`), for Local, Steam, GOG,
+  Epic and Battle.net (`bnet-<TACT product code>`); library joins, downloads, art and navigation use it, never the name
   ([decision 0057](decisions/0057-store-identity.md)). Files imports are Local,
   with their own receipts; store markers in imported or found files supply only
   launch hints, not store identity. Without a receipt, a folder named as a cohort

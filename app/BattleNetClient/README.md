@@ -6,7 +6,8 @@
 offered, what an install of one is, and the install itself in the layout the game reads. No
 Battle.net session; everything it reads is public. Foundation and
 [ContentKit](../ContentKit/README.md) (MD5, zlib, the install engine) only; `pp test` runs its
-offline tests on the Linux host. The app does not use it yet (PLA-519).
+offline tests on the Linux host. The app's Battle.net store (`UI/BattleNetStore.swift`, PlayportKit
+`BattleNet`, PLA-519) lists the offers and runs installs through it.
 
 - **Products and regions** (`BattleNetProduct`, `StoreRegion`): the fixed list `wow`,
   `wow_classic`, `wow_classic_era`, `wow_anniversary`; the store regions us, eu, kr, tw (each

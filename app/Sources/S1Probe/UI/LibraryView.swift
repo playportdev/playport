@@ -74,8 +74,8 @@ final class LibraryGrid: ObservableObject {
         filter.label
     }
 
-    /// The chips: Steam's always, GOG's and Epic's once a copy is in the catalogue
-    /// or the store is signed in (decision 0045).
+    /// The chips: Steam's and Battle.net's always (Battle.net has no sign-in), GOG's and Epic's
+    /// once a copy is in the catalogue or the store is signed in (decision 0045).
     static var filters: [LibraryFilter] {
         var stores = Set(LibraryModel.shared.catalog.titles.map(\.store))
         if GOGAccount.shared.state == .signedIn { stores.insert(.gog) }
@@ -122,6 +122,7 @@ private struct LibraryGridView: View {
     @ObservedObject private var imports = GameImports.shared
     @ObservedObject private var gog = GOGAccount.shared
     @ObservedObject private var epic = EpicAccount.shared
+    @ObservedObject private var bnet = BattleNetStore.shared
     /// The scroll view on screen, how far its content is scrolled and how far it can be.
     @State private var viewport = CGRect.zero
     @State private var offset = CGFloat.zero
@@ -137,7 +138,7 @@ private struct LibraryGridView: View {
     private static let inset: CGFloat = 8
 
     var body: some View {
-        let all = LibraryList.entries(titles: library.catalog.titles, owned: LibraryOwned.all(model.games, gog.games, epic.games))
+        let all = LibraryList.entries(titles: library.catalog.titles, owned: LibraryOwned.all(model.games, gog.games, epic.games, bnet.shown))
         let downloading = Set(installs.jobs.keys)
         let shown = LibraryList.shown(all, filter: grid.filter, sort: grid.sort, search: grid.search, downloading: downloading)
         VStack(alignment: .leading, spacing: 0) {
@@ -152,6 +153,8 @@ private struct LibraryGridView: View {
         // The ring starts on the first tile, on arrival and after the chip, sort or search changes.
         // Back from a game page the ring is still on its tile, and stays there.
         .onAppear { if focus.focused?.hasPrefix("lib:") != true { PadFocus.shared.reset(start: nav.focusStart ?? firstTile()) } }
+        // The Battle.net chip lists what Blizzard offers now (cached for six hours).
+        .task(id: grid.filter) { if grid.filter == .battlenet { await bnet.refresh() } }
         .onChange(of: grid.filter) { _, _ in PadFocus.shared.reset(start: firstTile()) }
         .onChange(of: grid.sort) { _, _ in PadFocus.shared.reset(start: firstTile()) }
         .onChange(of: grid.search) { _, _ in PadFocus.shared.reset(start: firstTile()) }
@@ -159,7 +162,7 @@ private struct LibraryGridView: View {
 
     /// The first tile the grid shows now, read afresh (an onChange's closure holds the old body's values).
     private func firstTile() -> String? {
-        let all = LibraryList.entries(titles: library.catalog.titles, owned: LibraryOwned.all(model.games, gog.games, epic.games))
+        let all = LibraryList.entries(titles: library.catalog.titles, owned: LibraryOwned.all(model.games, gog.games, epic.games, bnet.shown))
         return LibraryList.shown(all, filter: grid.filter, sort: grid.sort, search: grid.search,
                                  downloading: Set(installs.jobs.keys)).first.map { "lib:\($0.id)" }
     }
@@ -201,7 +204,7 @@ private struct LibraryGridView: View {
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("library-search")
             }
-            if library.scanning || model.gamesLoading { ProgressView().controlSize(.small) }
+            if library.scanning || model.gamesLoading || (grid.filter == .battlenet && bnet.loading) { ProgressView().controlSize(.small) }
             // Not in the ring (it leaves the tiles alone): X does it; a tap here.
             Button { GameImports.requests.send() } label: {
                 HStack(spacing: 5) {
@@ -358,6 +361,7 @@ private struct LibraryGridView: View {
         case .installed: return "No games installed"
         case .steam: return needsSignIn ? "Sign in to Steam" : (model.gamesLoading ? "Loading your games…" : "No Steam games")
         case .gog, .epic: return "No \(grid.filter.label) games"
+        case .battlenet: return bnet.loading ? "Asking Blizzard…" : "No Battle.net games offered"
         }
     }
 
@@ -373,6 +377,8 @@ private struct LibraryGridView: View {
             return model.gamesError ?? "Your Steam account owns no games."
         case .gog, .epic:
             return "Games from \(grid.filter.label) appear here."
+        case .battlenet:
+            return bnet.error ?? "World of Warcraft products appear here while their builds carry an ARM64 client."
         }
     }
 }
@@ -531,21 +537,23 @@ struct GameSourceBadge: View {
 /// The owned games of every signed-in store, as the library joins them.
 enum LibraryOwned {
     @MainActor
-    static func all(_ steam: [SteamGame], _ gog: [GOGGame], _ epic: [EpicGame]) -> [LibraryList.Owned] {
+    static func all(_ steam: [SteamGame], _ gog: [GOGGame], _ epic: [EpicGame], _ battlenet: [LibraryList.Owned]) -> [LibraryList.Owned] {
         steam.map { LibraryList.Owned(appID: $0.id, name: $0.info.name, installSize: $0.info.installSize) }
             + gog.map { LibraryList.Owned(key: StoreGameKey(store: .gog, id: $0.id), name: $0.title) }
             + epic.map { LibraryList.Owned(key: StoreGameKey(store: .epic, id: $0.id), name: $0.title) }
+            + battlenet
     }
 }
 
-/// Whether a GOG or Epic game has its store's art (which carries its name, so no name is drawn over it).
+/// Whether a GOG or Epic game has its store's art (which carries its name, so no name is drawn
+/// over it). Battle.net products have none: their colour tile with the name drawn over it.
 enum StoreArt {
     @MainActor
     static func has(_ key: StoreGameKey) -> Bool {
         switch key.store {
         case .gog: GOGAccount.shared.game(key.id)?.image != nil
         case .epic: EpicAccount.shared.game(key.id).map { $0.wideArt ?? $0.tallArt } != nil
-        case .steam, .local: false
+        case .steam, .local, .battlenet: false
         }
     }
 }

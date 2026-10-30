@@ -8,7 +8,10 @@
 //   Steam has a newer build on the install's branch; a running update or
 //   repair takes Play's place with its progress, Pause and Cancel;
 // - not installed: Install with the size (Resume or Discard a stopped
-//   download), and Version (X) when Steam lists betas.
+//   download), and Version (X) when Steam lists betas; a Battle.net product
+//   (PLA-519) Install with its download size and Region (X), the store
+//   region picker, its Install refused up front when the space it needs is
+//   not free.
 //
 // At the right a card of facts: last played, cloud saves and the size on the
 // phone, or the download size, the version and the achievements. Under the
@@ -32,6 +35,7 @@
 // (decision 0009). A dev build's `open:ID#SECTION` opens the options at a
 // section (graphics, game, files, developer, ordering, steam).
 
+import BattleNetClientKit
 import GameController
 import HostIOKit
 import GOGClientKit
@@ -72,6 +76,7 @@ private struct GameDetailPage: View {
     @ObservedObject private var focus = PadFocus.shared
     @ObservedObject private var gog = GOGAccount.shared
     @ObservedObject private var epic = EpicAccount.shared
+    @ObservedObject private var bnet = BattleNetStore.shared
     @State private var playError: String?
     @State private var controllers = GCController.controllers().count
     @State private var stageOnDisk = false
@@ -135,7 +140,7 @@ private struct GameDetailPage: View {
         pickedBranch ?? installed?.branch ?? (installed == nil ? cohortBranch : nil) ?? Branch.publicName
     }
 
-    private var name: String { installed?.name ?? game?.info.name ?? gogGame?.title ?? epicGame?.title ?? "" }
+    private var name: String { installed?.name ?? game?.info.name ?? gogGame?.title ?? epicGame?.title ?? bnetProduct?.name ?? "" }
 
     /// The GOG listing of this game, when GOG is signed in and owns it.
     private var gogGame: GOGGame? { key.flatMap { $0.store == .gog ? gog.game($0.id) : nil } }
@@ -147,12 +152,15 @@ private struct GameDetailPage: View {
 
     private var canDownloadEpic: Bool { epic.state == .signedIn && !installs.suspended }
 
+    /// A Battle.net product not installed: the store offers it (no sign-in).
+    private var bnetProduct: BattleNetProduct? { installed == nil ? key.flatMap { bnet.offered($0) } : nil }
+
     private var stats: UserStatsSnapshot? { appID.flatMap { model.userStats[$0]?.steam } }
 
     var body: some View {
         let t = installed, g = game
         Group {
-            if t == nil, g == nil, gogGame == nil, epicGame == nil {
+            if t == nil, g == nil, gogGame == nil, epicGame == nil, bnetProduct == nil {
                 VStack(spacing: 8) {
                     Text("Not installed").font(PP.display(28)).foregroundStyle(PP.text)
                     #if PLAYPORT_RELEASE
@@ -243,6 +251,10 @@ private struct GameDetailPage: View {
             if let t, t.store == .gog, t.source == .installed { await gog.checkUpdate(t.key.id) }
             if let t, t.store == .epic, t.source == .installed { await epic.checkUpdate(t.key.id) }
         }
+        // A Battle.net product's sizes in its region and locale (again after the region picker).
+        .task(id: bnetProduct.map { "\($0.code)/\(bnet.region($0).rawValue)" }) {
+            if let p = bnetProduct { await bnet.loadSizes(p) }
+        }
         .task(id: navigation.pageSection) {
             // A dev build's `open:ID#SECTION`: the options, at that section.
             #if !PLAYPORT_RELEASE
@@ -298,7 +310,8 @@ private struct GameDetailPage: View {
                                 ?? t.map { PageArt(appID: $0.appID, name: $0.name, info: nil, titleID: $0.id,
                                                    storeKey: $0.key) }
                                 ?? gogGame.map { PageArt(appID: nil, name: $0.title, info: nil, storeKey: StoreGameKey(store: .gog, id: $0.id)) }
-                                ?? epicGame.map { PageArt(appID: nil, name: $0.title, info: nil, storeKey: StoreGameKey(store: .epic, id: $0.id)) })
+                                ?? epicGame.map { PageArt(appID: nil, name: $0.title, info: nil, storeKey: StoreGameKey(store: .epic, id: $0.id)) }
+                                ?? bnetProduct.map { PageArt(appID: nil, name: $0.name, info: nil, storeKey: BattleNet.key($0)) })
 
             HStack(alignment: .top, spacing: 24) {
                 VStack(alignment: .leading, spacing: 8) {
@@ -309,7 +322,7 @@ private struct GameDetailPage: View {
                             Text(line).font(.system(size: 13)).foregroundStyle(PP.soft)
                         }
                         HStack(spacing: 12) {
-                            if let t { installedButtons(t, g) } else if let g { installButtons(g) } else if let gg = gogGame { gogInstallButtons(gg) } else if let eg = epicGame { epicInstallButtons(eg) }
+                            if let t { installedButtons(t, g) } else if let g { installButtons(g) } else if let gg = gogGame { gogInstallButtons(gg) } else if let eg = epicGame { epicInstallButtons(eg) } else if let p = bnetProduct { bnetInstallButtons(p) }
                         }
                         .padding(.top, 14)
                         notes(t, g)
@@ -426,6 +439,21 @@ private struct GameDetailPage: View {
         }
     }
 
+    /// A Battle.net product not installed: Install with its download size (refused up front when
+    /// it does not fit) and Region, or its download's controls.
+    @ViewBuilder
+    private func bnetInstallButtons(_ p: BattleNetProduct) -> some View {
+        if let job {
+            jobControls(job)
+        } else {
+            let size = bnet.listing(p)?.sizes.map { " · " + ByteCount.format($0.download) } ?? ""
+            PrimaryButton(id: "game:install", title: bnet.hasStage(p) ? "Resume download" : "Install" + size,
+                          enabled: !installs.suspended && !bnet.sizing.contains(p), hint: "Install") { bnet.install(p) }
+            SecondaryButton(id: "game:region", systemImage: nil, title: "Region · \(bnet.region(p).rawValue)", glyph: .x,
+                            hint: "Store region") { bnet.pickRegion(p) }
+        }
+    }
+
     /// A download, update or repair of this game: its progress, Pause or Resume, and Cancel.
     @ViewBuilder
     private func jobControls(_ job: Downloads.Job) -> some View {
@@ -521,6 +549,8 @@ private struct GameDetailPage: View {
                 installNote(g)
             } else if let eg = epicGame, let why = epic.refusal(eg.id) {
                 Text(why).foregroundStyle(.orange)
+            } else if let p = bnetProduct {
+                bnetNote(p)
             }
         }
         .fixedSize(horizontal: false, vertical: true)
@@ -555,6 +585,29 @@ private struct GameDetailPage: View {
         }
     }
 
+    @ViewBuilder
+    private func bnetNote(_ p: BattleNetProduct) -> some View {
+        if installs.suspended {
+            Text(InstallCopy.afterLaunch)
+        } else if let job {
+            if case let .paused(reason?) = job.phase { Text(reason).foregroundStyle(.orange) }
+            if job.isRunning { Text("Keep Playport open: the download pauses when it leaves the screen.") }
+            Text("Play is available once the download finishes.")
+        } else {
+            if let why = bnet.refusals[p] ?? bnet.spaceRefusal(p) { Text(why).foregroundStyle(.orange) }
+            if let why = bnet.sizeErrors[p] ?? bnet.error { Text(why).foregroundStyle(.orange) }
+            if bnet.sizing.contains(p) {
+                Text("Asking Blizzard for the size in \(BattleNetStore.label(bnet.region(p)))…")
+            } else {
+                let need = bnet.needed(p).map { "Needs \(ByteCount.format($0))" }
+                let free = library.freeBytes.map { "\(ByteCount.format($0)) free" }
+                let parts = [need, free].compactMap { $0 }
+                if !parts.isEmpty { Text(parts.joined(separator: " · ") + " · keep Playport open while it downloads") }
+            }
+            Text("No Battle.net account is needed to install. World of Warcraft asks you to sign in when it starts.")
+        }
+    }
+
     private func facts(_ t: InstalledTitle?, _ g: SteamGame?) -> some View {
         let source: LibrarySource = key?.store ?? (appID == nil ? .local : .steam)
         var rows: [(String, String, Color?)] = [("Store", source.label, nil)]
@@ -573,6 +626,13 @@ private struct GameDetailPage: View {
             if let s = stats, !s.schema.achievements.isEmpty {
                 rows.append(("Achievements", "\(s.unlockedCount) of \(s.schema.achievements.count)", nil))
             }
+        } else if let p = bnetProduct {
+            let l = bnet.listing(p)
+            if let s = l?.sizes { rows.append(("Download", ByteCount.format(s.download), nil)) }
+            if let n = bnet.needed(p) { rows.append(("Space needed", ByteCount.format(n), nil)) }
+            rows.append(("Region", BattleNetStore.label(bnet.region(p)), nil))
+            rows.append(("Language", bnet.locale(p), nil))
+            if let v = l?.version { rows.append(("Version", v, nil)) }
         }
         return VStack(spacing: 0) {
             ForEach(rows.indices, id: \.self) { i in
@@ -614,6 +674,7 @@ private struct GameDetailPage: View {
 
     private func xKey(_ t: InstalledTitle?) -> String {
         if t != nil { return "options" }
+        if t == nil, bnetProduct != nil, job == nil { return "region" }
         return game != nil && job == nil && !stageOnDisk && branches.count > 1 ? "version" : "none"
     }
 
@@ -623,6 +684,8 @@ private struct GameDetailPage: View {
             GamePageState.shared.x = .init(label: "Game options") { navigation.gamePanels = [.options] }
         case "version":
             GamePageState.shared.x = .init(label: "Version") { if let g = game { pickVersion(g) } }
+        case "region":
+            GamePageState.shared.x = .init(label: "Store region") { if let p = bnetProduct { bnet.pickRegion(p) } }
         default:
             GamePageState.shared.x = nil
         }

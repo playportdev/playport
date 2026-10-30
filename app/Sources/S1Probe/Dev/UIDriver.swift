@@ -24,8 +24,17 @@
 //   install:epic-<app name>    Install from Epic (signed in on the phone), the live build; an
 //                              installed game's install is its update; a refused game fails
 //                              with the page's reason
+//   install:bnet-<code>        Install a Battle.net product (bnet-wow_classic_era) from its
+//                              page, in the page's store region and language; waits until it is
+//                              in the library with Play. A product not offered, or one that
+//                              does not fit, fails with the page's reason
 //   pause-resume:<app id>      Install, Pause once a quarter is staged, check the
-//                              stage is kept, then Resume and wait as install does
+//                              stage is kept, then Resume and wait as install does;
+//                              pause-resume:bnet-<code> also checks Play stays hidden until
+//                              the install is complete
+//   region:bnet-<code>[=<r>]   A Battle.net product's page with its store region picker
+//                              open (UI/BattleNetStore.swift); =<r> (us, eu, kr, tw) picks it
+//                              as the picker does and waits for its sizes
 //   queue:<app id>             Install from Steam, as a game page's Install does, and go on
 //                              at once: the download runs in the queue (SteamInstalls)
 //   downloading:<app id>       Waits (2 min at most) until the queue runs that app's download
@@ -62,10 +71,12 @@
 //                              preset name), drawn when their preset is the layout; a record
 //                              with a copy this build cannot read is refused
 //   hud:on | hud:off           Sets Settings' Metal HUD, as its toggle does
-//   open:<screen | title id>   Shows a screen (home, library, games, downloads, settings,
+//   open:<screen | title id>   Shows a screen (home, library, games, battlenet: the Library on
+//                              Battle.net's chip, downloads, settings,
 //                              account, setup: the first-run checklist, signin: Sign in to
 //                              Steam, a preview while Steam is signed in; AppNavigation.screens)
-//                              or a title's page over the
+//                              or a title's page (a Battle.net product offered and not
+//                              installed: open:bnet-<code>) over the
 //                              Library, then waits 1.5 s so a
 //                              screenshot sees it drawn; `open:<title id>#<section>`
 //                              opens the page's Game options at a section (graphics, controls,
@@ -219,6 +230,7 @@
 // action has run (a play's own end is its `title: done` line). JIT comes from
 // the built-in helper (JitProvider), as for any Play.
 
+import BattleNetClientKit
 import Foundation
 import HostIOKit
 import GOGClientKit
@@ -341,6 +353,12 @@ enum UIDriver {
                     return finish("action=\(action) refused: \(id) is not a catalogued title")
                 }
                 switch parts[0] {
+                case "install" where id.hasPrefix("bnet-"), "pause-resume" where id.hasPrefix("bnet-"):
+                    if let failure = try await installBattleNet(String(id.dropFirst(5)), pauseAt: parts[0] == "pause-resume" ? 0.25 : nil) {
+                        return finish("action=\(action) failed: \(failure)")
+                    }
+                case "region":
+                    if let failure = try await battleNetRegion(id) { return finish("action=\(action) failed: \(failure)") }
                 case "install" where id.hasPrefix("epic-"):
                     if let failure = try await installEpic(String(id.dropFirst(5))) { return finish("action=\(action) failed: \(failure)") }
                 case "install" where id.hasPrefix("gog-"):
@@ -436,6 +454,11 @@ enum UIDriver {
                        UIDriverGameSection(rawValue: parts[1]) == nil {
                         return finish("action=\(action) refused: unknown Game options section \(parts[1])")
                     }
+                    // A Battle.net product's page: offered now (asked of Blizzard when nothing is known yet).
+                    var bnetOffered = false
+                    if let title = parts.first, let key = StoreGameKey(titleID: title), key.store == .battlenet, library.title(title) == nil {
+                        bnetOffered = try await battleNetOffered(key)
+                    }
                     if parts.first == "black" {
                         // The black screen is a terminal handoff: it ends the batch, so no
                         // action, press or step ack can follow the screen the owner left.
@@ -459,7 +482,8 @@ enum UIDriver {
                         nav.pageSection = parts.count > 1 ? parts[1] : nil
                     } else if let title = parts.first, let key = StoreGameKey(titleID: title),
                               (key.store == .gog && GOGAccount.shared.game(key.id) != nil)
-                                || (key.store == .epic && EpicAccount.shared.game(key.id) != nil) {
+                                || (key.store == .epic && EpicAccount.shared.game(key.id) != nil)
+                                || (key.store == .battlenet && bnetOffered) {
                         // A store's game not installed: its page, as its library tile opens it.
                         nav.openGame(.store(key))
                         nav.pageSection = parts.count > 1 ? parts[1] : nil
@@ -1037,6 +1061,87 @@ enum UIDriver {
         return nil
     }
 
+    /// Whether the Battle.net store offers `key`'s product, asking Blizzard when nothing is known yet.
+    private static func battleNetOffered(_ key: StoreGameKey) async throws -> Bool {
+        let store = BattleNetStore.shared
+        if let p = BattleNet.product(key), store.listing(p) == nil { try await checked({ await store.refresh(force: true) }) }
+        return store.offered(key) != nil
+    }
+
+    /// `bnet-<code>[=<region>]`: the product's page and its region picker, or the picker's choice.
+    private static func battleNetRegion(_ spec: String) async throws -> String? {
+        let parts = spec.split(separator: "=", maxSplits: 1).map(String.init)
+        guard let key = StoreGameKey(titleID: parts[0]), let p = BattleNet.product(key) else { return "\(parts[0]) is not a Battle.net product" }
+        guard try await battleNetOffered(key) else { return "\(key.id) is not offered (\(BattleNetStore.shared.error ?? "no ARM64 client"))" }
+        let store = BattleNetStore.shared
+        AppNavigation.shared.openGame(.store(key))
+        try await pause(.milliseconds(500))
+        if parts.count > 1 {
+            guard let r = StoreRegion(rawValue: parts[1]) else { return "\(parts[1]) is not a store region" }
+            store.pick(p, region: r)
+            try await checked({ await store.loadSizes(p) })
+            log("region \(key.titleID): \(store.region(p).rawValue) (phone: \(store.phoneRegion.rawValue)), language \(store.locale(p)), "
+                + "download \(store.listing(p)?.sizes?.download ?? 0), needs \(store.needed(p) ?? 0)")
+        } else {
+            store.pickRegion(p)
+            log("region \(key.titleID): picker open at \(store.region(p).rawValue) (phone: \(store.phoneRegion.rawValue))")
+        }
+        try await pause(.milliseconds(1000))
+        return nil
+    }
+
+    /// The Battle.net page's Install of `code`, with a Pause and Resume at `pauseAt`; nil once it
+    /// is in the library with Play. Play must not show before the install is complete.
+    private static func installBattleNet(_ code: String, pauseAt: Double?) async throws -> String? {
+        let store = BattleNetStore.shared, library = LibraryModel.shared
+        let key = StoreGameKey(store: .battlenet, id: code)
+        guard let p = BattleNet.product(key) else { return "\(code) is not a Battle.net product" }
+        guard try await battleNetOffered(key) else { return "\(code) is not offered (\(store.error ?? "no ARM64 client"))" }
+        guard let installs = SteamAccountModel.current?.installs else { return "no download queue" }
+        guard library.title(key.titleID) == nil else { return "\(key.titleID) is already installed" }
+        AppNavigation.shared.openGame(.store(key))
+        try await checked({ await store.loadSizes(p) })
+        log("install \(key.titleID): region \(store.region(p).rawValue), language \(store.locale(p)), download "
+            + "\(store.listing(p)?.sizes?.download ?? 0), needs \(store.needed(p) ?? 0), free \(library.freeBytes ?? 0)")
+        if let why = store.install(p) { return "refused: \(why)" }
+        let started = Date()
+        // Play shows on the page only for a catalogued title with no job.
+        func playShown() -> Bool { library.title(key.titleID) != nil && installs.jobs[key] == nil }
+        if let pauseAt {
+            while let j = installs.jobs[key], j.isRunning || j.phase == .queued, (j.fraction ?? 0) < pauseAt {
+                if playShown() { return "Play showed during the download" }
+                try await pause(.milliseconds(100))
+            }
+            guard let j = installs.jobs[key], j.isRunning else { return "ended before \(Int(pauseAt * 100))% (\(phase(installs.jobs[key])))" }
+            installs.pause(key)
+            while installs.jobs[key]?.isRunning == true { try await pause(.milliseconds(100)) }
+            let staged = store.hasStage(p)
+            log("install \(key.titleID): paused at \(j.detail ?? "?"); phase=\(phase(installs.jobs[key])) stage kept=\(staged) "
+                + "play=\(playShown() ? "shown" : "hidden")")
+            guard staged, installs.jobs[key]?.phase == .paused(nil) else { return "pause did not keep a resumable stage" }
+            if playShown() { return "Play showed while paused" }
+            installs.resume(key)
+            while let ph = installs.jobs[key]?.phase, ph == .queued || ph == .preparing { try await pause(.milliseconds(100)) }
+            log("install \(key.titleID): resumed at \(installs.jobs[key]?.detail ?? "?") (\(phase(installs.jobs[key])))")
+        }
+        var lastLog = Date()
+        while let j = installs.jobs[key] {
+            if case let .paused(reason) = j.phase { return "paused: \(reason ?? "no reason")" }
+            if playShown() { return "Play showed during the download" }
+            if Date().timeIntervalSince(lastLog) > 30 {
+                lastLog = Date()
+                log("install \(key.titleID): \(j.status) \(j.detail ?? "")")
+            }
+            try await pause(.milliseconds(250))
+        }
+        for _ in 0..<600 where library.title(key.titleID) == nil { try await pause(.milliseconds(100)) }
+        guard let t = library.title(key.titleID) else { return "done, but not in the library" }
+        let machine = String(t.executableMachine ?? 0, radix: 16)
+        log("install \(key.titleID): in the library as \(t.id) [\(t.badge.rawValue)] version=\(t.storeVersion ?? "?") size=\(t.sizeBytes ?? 0) "
+            + "exe=\(t.executable ?? "none") machine=0x\(machine) play=\(playShown() ? "shown" : "hidden") after \(Int(Date().timeIntervalSince(started))) s")
+        return nil
+    }
+
     /// The GOG page's Install (or Update) of `spec` (`<id>` or `<id>@<build>`); nil once the build is in the library.
     private static func installGOG(_ spec: String) async throws -> String? {
         let parts = spec.split(separator: "@", maxSplits: 1).map(String.init)
@@ -1145,8 +1250,10 @@ enum UIDriver {
         if let e = library.removeErrors[id] { return e }
         let layout = LibraryModel.paths.layout
         let folder = FileManager.default.fileExists(atPath: layout.gamesRoot.appendingPathComponent(t.installDir).path)
-        let record = t.appID.map { FileManager.default.fileExists(atPath: layout.receiptFile(appID: $0).path) } ?? false
-        let stage = t.appID.map { TitleInstaller(layout: layout, session: nil, log: .silent).hasStage(appID: $0) } ?? false
+        let record = t.appID.map { FileManager.default.fileExists(atPath: layout.receiptFile(appID: $0).path) }
+            ?? FileManager.default.fileExists(atPath: layout.receiptFile(t.key).path)
+        let stage = t.appID.map { TitleInstaller(layout: layout, session: nil, log: .silent).hasStage(appID: $0) }
+            ?? BattleNet.product(t.key).map(BattleNetStore.shared.hasStage) ?? false
         // A folder another title shares (Steam's shared installdir) stays with that title's files.
         let shared = library.catalog.titles.contains { $0.id != id && $0.installDir.lowercased() == t.installDir.lowercased() }
         log("uninstall \(id): folder present=\(folder)\(shared ? " (shared)" : "") record present=\(record) stage present=\(stage) "

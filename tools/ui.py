@@ -23,7 +23,8 @@ cancellation even with --leave-running (no gameplay kill in that mode). Delivery
 best-effort and reported as unconfirmed; transport loss/SIGKILL can leave cancellation uncertain.
 --dry-run prints UI_ACTIONS without accessing the phone:
 
-  open:SCREEN | open:ID  show a screen (home, library, games: the Library on Steam, downloads,
+  open:SCREEN | open:ID  show a screen (home, library, games: the Library on Steam, battlenet: the Library
+                         on Battle.net, the store's offered products (open:bnet-CODE a product's page), downloads,
                          settings, account: Settings' Accounts section, setup: the first-run checklist as
                          Settings › Setup check's first row opens it, signin: Sign in to Steam, a preview
                          that sends nothing to Steam while Steam is signed in) or a title's page;
@@ -196,14 +197,22 @@ best-effort and reported as unconfirmed; transport loss/SIGKILL can leave cancel
                          set:donorPoolMB=0|auto|2048|4096|6144: Settings › Graphics › Donor memory, next Play,
                          Auto when unset; auto sizes it from the phone's tier and the app's limit;
                          set:endGameSocialClubAfterSignIn=, set:refuseGameSocialClubRestart=: on when unset,
-                         the end off under the Social Club layout unless set, decision 0169)
+                         the end off under the Social Club layout unless set, decision 0169;
+                         set:battlenetInstallBytes=N, dev builds: a Battle.net product needs N bytes, so a
+                         size larger than free space shows the page's refusal; 0 or unset: the real size)
   hud:on | hud:off       Settings' Metal HUD
   queue:APP              queue a download from Steam, as a game page's Install does, and go on at once
   downloading:APP        wait (2 min at most) until the queue runs APP's download with progress (after
                          the restart after a game, too), and log the queue
   install:APP            install from Steam with the paired session; pause-resume:APP pauses at a
                          quarter and resumes; install:gog-ID[@BUILD] installs or updates from GOG;
-                         install:epic-APPNAME from Epic Games
+                         install:epic-APPNAME from Epic Games; install:bnet-CODE installs a Battle.net
+                         product (bnet-wow_classic_era) in its page's region and language, refused with the
+                         page's reason when it does not fit; pause-resume:bnet-CODE pauses it at a quarter,
+                         checks Play stays hidden and the stage is kept, resumes, and checks Play shows
+                         once it is complete
+  region:bnet-CODE[=R]   a Battle.net product's page with its store region picker open (us, eu, kr, tw);
+                         =R picks R as the picker does
   uninstall:ID, verify:ID
   repair:ID              the game page's Repair from Steam, which it offers after a verify: that did
                          not pass (bad files, or depots to check with Steam again); waits for the job
@@ -417,7 +426,7 @@ STOP_WHY = {"timeout": "no stop condition within --wait",
 # A catalogue title id: a lower-case store prefix, then its own id (an Epic app name can
 # have capitals: epic-Buffalo).
 ID_RE = re.compile(r"^[a-z]+-[A-Za-z0-9 ._-]+$")
-SCREENS = ("home", "library", "games", "downloads", "settings", "account", "setup", "signin")   # AppNavigation.screens
+SCREENS = ("home", "library", "games", "battlenet", "downloads", "settings", "account", "setup", "signin")   # AppNavigation.screens
 PAD_BUTTONS = "a|b|x|y|lb|rb|menu|view|up|down|left|right"   # HostIOKit NavButton
 # the app's launch failure when its JIT helper cannot reach LocalDevVPN's address
 JIT_UNREACHABLE_RE = re.compile(r"Timed out connecting to 10\.7\.0\.1")  # "not ready for JIT: X" has other X too
@@ -522,7 +531,7 @@ TOUCH_CONTROL = r"[A-Za-z0-9_-]+(?:\.(?:up|down|left|right)|:(?:0(?:\.[0-9]+)?|1
 # A gyro: script's step (HostIOKit GyroScript): axis=deg/s terms joined by +, or rest, then @ms.
 GYRO_TERM = r"(?:yaw|pitch|roll)=-?[0-9]{1,4}(?:\.[0-9]+)?"
 GYRO_STEP = rf"(?:rest|{GYRO_TERM}(?:\+{GYRO_TERM})*)@[0-9]{{1,5}}"
-ACTION_RE = re.compile((r"^(?:(?:install|pause-resume|queue|downloading):[0-9]+|install:gog-[0-9]+(?:@[0-9]+)?|install:epic-[A-Za-z0-9._-]+|(?:uninstall|verify|repair|play):[a-z]+-[A-Za-z0-9 ._-]+|(?:open-launcher|forget-launcher-window):[a-z]+"
+ACTION_RE = re.compile((r"^(?:(?:install|pause-resume|queue|downloading):[0-9]+|install:gog-[0-9]+(?:@[0-9]+)?|install:epic-[A-Za-z0-9._-]+|(?:install|pause-resume):bnet-[a-z0-9_]+|region:bnet-[a-z0-9_]+(?:=(?:us|eu|kr|tw))?|(?:uninstall|verify|repair|play):[a-z]+-[A-Za-z0-9 ._-]+|(?:open-launcher|forget-launcher-window):[a-z]+"
                         r"|import:[A-Za-z0-9 ._()'+-]+(?:/[A-Za-z0-9 ._()'+-]+)*"
                        r"|hud:(?:on|off)|open:[a-z]+(?:-[A-Za-z0-9 ._-]+(?:#[a-z]+)?)?|open:settings#(?:accounts|steam|graphics|downloads|controls|controllers|gyro|controller|storage|setup|about|launchers|developer|account|jit|memory|diagnostics|pairing|probes|logs)|open:licences(?:#[a-z0-9 ._-]+)?|pad:(?:{b})(?:\+(?:{b}))*|set:[A-Za-z0-9._-]+=[^,]*"
                        r"|wait:[0-9]{1,3}|tap:(?:0(?:\.[0-9]+)?|1(?:\.0+)?):(?:0(?:\.[0-9]+)?|1(?:\.0+)?)|menu:(?:open|resume|controls|layout|keyboard|screenshot|overlay|controller|quit)"
@@ -815,7 +824,7 @@ def band_of(timeline):
 def parse(argv=None):
     p = argparse.ArgumentParser(prog="pp ui", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--action", action="append", default=[], metavar="VERB:ARG",
-                   help="open:SCREEN|ID[#SECTION], pad:BUTTON[+BUTTON...], wait:S, menu:open|ROW, touch:CONTROL[+CONTROL...][@MS], gyro:STEP[/STEP...], gesture:three-finger-tap, suggest:accept|dismiss, set:KEY=VALUE, hud:on|off, install:APP, pause-resume:APP, queue:APP, downloading:APP, import:PATH, uninstall:ID, "
+                   help="open:SCREEN|ID[#SECTION], pad:BUTTON[+BUTTON...], wait:S, menu:open|ROW, touch:CONTROL[+CONTROL...][@MS], gyro:STEP[/STEP...], gesture:three-finger-tap, suggest:accept|dismiss, set:KEY=VALUE, hud:on|off, install:APP, pause-resume:APP, region:bnet-CODE[=R], queue:APP, downloading:APP, import:PATH, uninstall:ID, "
                         "verify:ID, repair:ID, play:ID, probe:helper-exit|kill|report, probe:relaunch, probe:pairing[-cancel|-use]; in order, before --settings/--verify/--play")
     p.add_argument("--controls", metavar="ID:JSON",
                    help='save these on-screen controls for the title first ({"layout":"off"}, '
@@ -864,7 +873,7 @@ def parse(argv=None):
     for x in a.action:
         if not ACTION_RE.match(x) or (x.startswith("open:") and "-" not in x.split("#")[0]
                                       and x[5:].split("#")[0] not in SCREENS + ("licences", "black")):
-            p.error(f"{x!r} is not open:SCREEN|ID, pad:BUTTON[+BUTTON...], wait:S, menu:open|ROW, touch:CONTROL[+CONTROL...][@MS], gyro:STEP[/STEP...], gesture:three-finger-tap, suggest:accept|dismiss, set:KEY=VALUE, hud:on|off, install:APP, pause-resume:APP, "
+            p.error(f"{x!r} is not open:SCREEN|ID, pad:BUTTON[+BUTTON...], wait:S, menu:open|ROW, touch:CONTROL[+CONTROL...][@MS], gyro:STEP[/STEP...], gesture:three-finger-tap, suggest:accept|dismiss, set:KEY=VALUE, hud:on|off, install:APP, pause-resume:APP, region:bnet-CODE[=R], "
                     "queue:APP, downloading:APP, import:PATH, uninstall:ID, verify:ID, repair:ID, play:ID, open-launcher:ID, forget-launcher-window:ID, probe:helper-exit|kill|report, probe:relaunch or probe:pairing[-cancel|-use]")
         if x.startswith("open:") and "#" in x:
             target, section = x[5:].split("#", 1)

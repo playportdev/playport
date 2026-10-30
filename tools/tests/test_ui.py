@@ -203,6 +203,18 @@ class UiEnvTest(unittest.TestCase):
         for bad in ("queue:app-2494780", "downloading:", "queue:12a", "install:epic-", "install:epic-a/b", "install:gog-x", "repair:1174180"):
             self.assertFalse(m.ACTION_RE.match(bad), bad)
 
+    def test_battlenet_store_paths(self):
+        """PLA-519: the Battle.net store, a product page, its region picker, install with pause and
+        resume, removal, and a size larger than free space for the refusal."""
+        m = load()
+        for ok in ("open:battlenet", "open:bnet-wow_classic_era", "region:bnet-wow_classic_era", "region:bnet-wow=eu",
+                   "install:bnet-wow_classic_era", "pause-resume:bnet-wow_classic_era", "uninstall:bnet-wow_classic_era",
+                   "set:battlenetInstallBytes=999000000000", "set:battlenetInstallBytes=0"):
+            self.assertEqual(m.parse(["--action", ok]).action, [ok])
+        for bad in ("install:bnet-", "install:bnet-WoW", "install:bnet-a/b", "region:bnet-wow=cn", "region:bnet-wow=",
+                    "region:wow", "pause-resume:bnet-", "region:epic-Hazelnut"):
+            self.assertFalse(m.ACTION_RE.match(bad), bad)
+
     def test_actions_after_a_play_run_after_the_restart(self):
         """play: with actions after it: they run in the restarted process; the title's end does
         not end the run, the UI's does."""

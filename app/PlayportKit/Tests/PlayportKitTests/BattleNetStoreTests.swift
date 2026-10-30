@@ -26,6 +26,24 @@ final class BattleNetStoreTests: XCTestCase {
         XCTAssertEqual(LibraryList.shown(entries, filter: .battlenet, sort: .name).map(\.id), ["bnet-wow_classic_era"])
     }
 
+    func testOfferedProductsShowUnderTheBattleNetChipUntilOneIsInstalledOrDownloading() {
+        var installed = InstalledTitle(id: "bnet-wow", appID: nil, name: "World of Warcraft", developer: nil, installDir: "World of Warcraft",
+                                       executable: #"_retail_\Wow-ARM64.exe"#, buildID: nil, depots: [], sizeBytes: 1, source: .installed,
+                                       checksums: nil, note: nil, addedAt: Date(), lastPlayed: nil, lastVerification: nil)
+        installed.store = .battlenet
+        installed.storeID = "wow"
+        let offered = BattleNet.shown([BattleNetListing(product: .wow, region: .us, version: "12", offered: true),
+                                       BattleNetListing(product: .wowClassic, region: .us, version: "5", offered: true),
+                                       BattleNetListing(product: .wowClassicEra, region: .us, version: "1", offered: true)])
+        let entries = LibraryList.entries(titles: [installed], owned: offered)
+        XCTAssertEqual(LibraryList.shown(entries, filter: .battlenet, sort: .name).map(\.id),
+                       ["bnet-wow", "bnet-wow_classic", "bnet-wow_classic_era"])
+        XCTAssertEqual(LibraryList.shown(entries, filter: .all, sort: .name).map(\.id), ["bnet-wow"],
+                       "All lists the player's games: an offered product only once installed")
+        XCTAssertEqual(LibraryList.shown(entries, filter: .all, sort: .name, downloading: [BattleNet.key(.wowClassicEra)]).map(\.id),
+                       ["bnet-wow", "bnet-wow_classic_era"], "or downloading")
+    }
+
     func testTheStoreRegionStartsFromThePhonesRegion() {
         // Americas → us, Europe → eu, Korea → kr, Taiwan → tw (the spec's four).
         for phone in ["US", "CA", "MX", "BR", "AR", "CL"] { XCTAssertEqual(BattleNet.region(phoneRegion: phone), .us, phone) }

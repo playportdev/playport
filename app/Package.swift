@@ -60,6 +60,8 @@ let package = Package(
         .package(path: "GOGClient"),
         // The Epic Games client (app/EpicClient): sign-in, library and content (decision 0058).
         .package(path: "EpicClient"),
+        // The Battle.net store client (app/BattleNetClient): offered WoW products and their installs (decision 0168).
+        .package(path: "BattleNetClient"),
         // The product UI's catalogue, adoption and launch options, tested on the Linux host.
         .package(path: "PlayportKit"),
     ],
@@ -167,6 +169,7 @@ let package = Package(
                            .product(name: "SteamClientKit", package: "SteamClient"),
                            .product(name: "GOGClientKit", package: "GOGClient"),
                            .product(name: "EpicClientKit", package: "EpicClient"),
+                           .product(name: "BattleNetClientKit", package: "BattleNetClient"),
                            .product(name: "PlayportKit", package: "PlayportKit")]
                 + ["Relaunch", "SharedMemory"] + (release ? [] : ["AuthProbe", "MemoryLedger"]),
             path: "Sources/S1Probe",

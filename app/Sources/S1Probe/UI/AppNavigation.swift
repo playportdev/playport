@@ -52,7 +52,7 @@ final class AppNavigation: ObservableObject {
         }
     }
 
-    static let screens = ["home", "library", "games", "downloads", "settings", "account", "setup", "signin"]
+    static let screens = ["home", "library", "games", "battlenet", "downloads", "settings", "account", "setup", "signin"]
 
     @discardableResult
     func open(_ screen: String) -> Bool {
@@ -60,6 +60,10 @@ final class AppNavigation: ObservableObject {
         case "games":
             show(.library)
             LibraryGrid.shared.filter = .steam
+        case "battlenet":
+            // The Battle.net store: the Library on its chip.
+            show(.library)
+            LibraryGrid.shared.filter = .battlenet
         case "settings", "account":
             openSettings(section: screen == "account" ? .accounts : nil)
         case "setup":
