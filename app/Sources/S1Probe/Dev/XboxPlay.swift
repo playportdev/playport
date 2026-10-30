@@ -61,8 +61,7 @@ enum XboxPlay {
         //    verdict also starts or cancels the copy's lapse (Dev/XboxLapse.swift).
         let licence: XboxLicence
         do {
-            let market = Locale.current.region?.identifier ?? "US"
-            let result = try await account.session.licence(contentID: rec.contentID, market: market)
+            let result = try await account.session.licence(contentID: rec.contentID, market: XboxMarket.current)
             XboxLapses.shared.record(t.key, result)
             switch XboxPlayRefusal.check(result) {
             case .success(let l): licence = l

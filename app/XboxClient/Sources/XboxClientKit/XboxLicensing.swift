@@ -204,12 +204,9 @@ enum XboxLicensing {
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         return XboxHTTPRequest(url: endpoint, headers: [
             "from": Secret("XboxLicenseManager"), "Authorization": device.token, "user-agent": Secret(userAgent),
-            "MS-CV": Secret(correlationVector()), "Content-Type": Secret("application/json"), "Accept": Secret("*/*"),
+            "MS-CV": Secret(XboxCrypto.correlationVector()), "Content-Type": Secret("application/json"), "Accept": Secret("*/*"),
         ], body: Secret(Array(try encoder.encode(body))))
     }
-    /// A version-2 correlation vector: 22 base64 characters (128 random bits) and ".0".
-    static func correlationVector() -> String { String(XboxCrypto.base64(XboxCrypto.random(16)).prefix(22)) + ".0" }
-
     static func result(_ response: XboxHTTPResponse, content: String, deviceLicence: String) -> XboxLicenceResult {
         switch response.status {
         case 200..<300: break

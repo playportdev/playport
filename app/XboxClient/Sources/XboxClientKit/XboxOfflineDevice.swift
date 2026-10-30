@@ -126,7 +126,7 @@ extension XboxSession {
         let response = try await XboxLive.send(http, XboxHTTPRequest(url: url, method: set == nil ? "GET" : "POST", headers: [
             "Authorization": Secret("XBL3.0 x=\(xsts.userHash.value);\(xsts.token.value)"), "Accept": Secret("application/json"),
             "Accept-Language": Secret("en-US"), "X-MS-API-Version": Secret("1.0"), "x-xbl-contract-version": Secret("1"),
-            "MS-CV": Secret(XboxLicensing.correlationVector())], body: Secret([])))
+            "MS-CV": Secret(XboxCrypto.correlationVector())], body: Secret([])))
         try check(epoch)
         if response.status == 401 || response.status == 403 { throw XboxSessionError.signInRequired }
         guard (200..<300).contains(response.status) else { throw ClientError.transport("Xbox offline device returned HTTP \(response.status)") }

@@ -55,7 +55,7 @@ final class XboxLapses: ObservableObject {
         guard t.store == .xbox, account.state == .signedIn,
               let rec = XboxInstalls.shared.installer.loadRecord(t.key.id) else { return nil }
         do {
-            let result = try await account.session.licence(contentID: rec.contentID, market: Locale.current.region?.identifier ?? "US")
+            let result = try await account.session.licence(contentID: rec.contentID, market: XboxMarket.current)
             record(t.key, result)
             return result
         } catch {

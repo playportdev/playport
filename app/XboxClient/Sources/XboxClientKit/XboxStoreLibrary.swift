@@ -51,7 +51,7 @@ public struct XboxStoreLibrary: Sendable {
     public init(tickets: any XboxStoreTickets, http: any XboxHTTP = XboxURLSessionHTTP(limit: 8 << 20), log: Logger = .silent,
                 market: String = "US", now: @escaping @Sendable () -> Date = { Date() }) {
         self.tickets = tickets; self.http = http; self.log = log; self.now = now
-        self.market = market.utf8.count == 2 && market.utf8.allSatisfy({ (0x41...0x5A).contains($0) }) ? market : "US"
+        self.market = XboxMarket.valid(market)
     }
 
     /// Reads the entitlements again; looks up only products the previous snapshot lacks.
@@ -88,8 +88,7 @@ public struct XboxStoreLibrary: Sendable {
         var all: [String: XboxEntitlement] = [:], cursor: String?, seen = Set<String>()
         for _ in 0..<20 {
             var headers = ["Authorization": ticket, "X-MS-API-Version": Secret("1.1"), "Calling-App-Name": Secret("Xodus-Nexus"),
-                           "MS-CV": Secret(Data((0..<16).map { _ in UInt8.random(in: 0...255) }).base64EncodedString()
-                                .replacingOccurrences(of: "=", with: "") + ".0"),
+                           "MS-CV": Secret(XboxCrypto.correlationVector()),
                            "Accept": Secret("application/json"), "User-Agent": Secret("Xodus-Nexus-membership/0.2.3")]
             if let cursor { headers["x-ms-ct"] = Secret(cursor) }
             let response = try await send(XboxEntitlements.url(market: market), headers: headers)

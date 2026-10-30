@@ -67,7 +67,7 @@ final class XboxGames: ObservableObject {
     private init() {
         let account = XboxAccount.shared
         library = XboxStoreLibrary(tickets: account.session, log: ContentKit.Logger { AppLog.append("xbox: " + $0) },
-                                   market: Locale.current.region?.identifier ?? "US")
+                                   market: XboxMarket.current)
         if let data = try? Data(contentsOf: Self.cache) { snapshot = try? JSONDecoder().decode(XboxLibrarySnapshot.self, from: data) }
         // Signed out: the account's list goes (no cache of it is kept); signed in: it is read.
         watch = account.$state.removeDuplicates().sink { [weak self] state in

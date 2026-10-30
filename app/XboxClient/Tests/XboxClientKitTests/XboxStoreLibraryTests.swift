@@ -181,6 +181,12 @@ final class XboxStoreLibraryTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(looked.filter { $0 == "9NB6BVL3MTG4" }.count, 2)
     }
 
+    func testTheMarketIsATwoLetterRegionElseUS() {
+        XCTAssertEqual(XboxMarket.valid("GB"), "GB")
+        for bad in [nil, "gb", "GBR", "", "419", "G1"] { XCTAssertEqual(XboxMarket.valid(bad), "US", bad ?? "nil") }
+        XCTAssertEqual(XboxMarket.valid(XboxMarket.current), XboxMarket.current)
+    }
+
     func testEntitlementPagesFollowTheContinuationAndARepeatedPageIsRefused() async throws {
         let http = try XboxLibraryHTTP(entitlements: [try rows([pilot: row()]), try rows(["9PP5G1F0C2B6": row(nil)])],
                                        continuation: ["page-two"])

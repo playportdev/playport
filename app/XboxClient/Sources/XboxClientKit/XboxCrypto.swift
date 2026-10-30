@@ -28,6 +28,8 @@ internal enum XboxCrypto {
         for (x, y) in zip(a, b) { difference |= x ^ y }
         return difference == 0
     }
+    /// A version-2 correlation vector (every request's MS-CV): 22 base64 characters (128 random bits) and ".0".
+    static func correlationVector() -> String { String(base64(random(16)).prefix(22)) + ".0" }
     static func derived(_ key: [UInt8], nonce: [UInt8]) -> [UInt8] {
         // SP800-108 counter mode, L=256; no TPM second derivation (Xodus omits TPMInfo).
         hmac(key, [0, 0, 0, 1] + Array("WS-SecureConversationWS-SecureConversation".utf8) + [0] + nonce + [0, 0, 1, 0])

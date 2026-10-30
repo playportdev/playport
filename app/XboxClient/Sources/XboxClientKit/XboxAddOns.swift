@@ -191,7 +191,7 @@ public struct XboxAddOnFinder: Sendable {
 
     public init(http: any XboxHTTP = XboxURLSessionHTTP(limit: 8 << 20), log: Logger = .silent, market: String = "US") {
         self.http = http; self.log = log
-        self.market = market.utf8.count == 2 && market.utf8.allSatisfy({ (0x41...0x5A).contains($0) }) ? market : "US"
+        self.market = XboxMarket.valid(market)
     }
 
     /// `licensed`: the account's licensed products that may be add-ons (its library's

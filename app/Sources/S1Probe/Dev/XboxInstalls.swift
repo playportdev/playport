@@ -24,7 +24,7 @@ final class XboxInstalls: ObservableObject, DownloadDriver {
 
     var installer: XboxInstaller {
         XboxInstaller(layout: LibraryModel.paths.layout, services: XboxAccount.shared.session, log: Self.log,
-                      market: Locale.current.region?.identifier ?? "US")
+                      market: XboxMarket.current)
     }
 
     func attach(_ downloads: Downloads) {

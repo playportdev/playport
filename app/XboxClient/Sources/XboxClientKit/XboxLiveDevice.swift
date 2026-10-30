@@ -108,7 +108,7 @@ enum XboxLiveDevice {
     private static func signed(_ http: any XboxHTTP, _ signer: any XboxLiveSigner, _ url: URL, _ body: [UInt8],
                                contract: Bool, now: Date) async throws -> XboxHTTPResponse {
         var headers = ["Content-Type": Secret("application/json"), "Accept": Secret("application/json"),
-                       "MS-CV": Secret(XboxLicensing.correlationVector()),
+                       "MS-CV": Secret(XboxCrypto.correlationVector()),
                        "Signature": Secret(try XboxLiveSignature.header(signer, method: "POST", url: url, body: body, at: now))]
         if contract { headers["x-xbl-contract-version"] = Secret("1") }
         let response = try await XboxLive.send(http, XboxHTTPRequest(url: url, headers: headers, body: Secret(body)))

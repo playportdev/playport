@@ -60,7 +60,7 @@ final class XboxGameAddOns: ObservableObject {
             id != base && (snapshot.products[id].map { $0.delivery == .notAGame } ?? true)
         }
         let config = folder(base).flatMap { try? XboxPackageConfig.load(folder: $0) }
-        let finder = XboxAddOnFinder(log: XboxInstalls.log, market: Locale.current.region?.identifier ?? "US")
+        let finder = XboxAddOnFinder(log: XboxInstalls.log, market: XboxMarket.current)
         do {
             let list = try await finder.addOns(of: base, config: config, licensed: licensed)
             guard XboxAccount.shared.state == .signedIn else { return nil }
