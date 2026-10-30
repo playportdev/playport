@@ -198,3 +198,4 @@
 0229-ntdll-detach-a-parked-thread-s-alert-wait-then-free-a-view.patch
 0230-ntdll-count-finished-teardowns-for-a-post-teardown-m.patch
 0231-ntdll-hold-a-dead-owner-s-Social-Club-slot-in-place-.patch
+0232-virtual-split-proc-mem-resident-pages-into-a-file-s-.patch

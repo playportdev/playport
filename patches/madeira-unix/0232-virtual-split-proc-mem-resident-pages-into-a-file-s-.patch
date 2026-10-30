@@ -1,0 +1,125 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: playportdev <dev@playport.dev>
+Date: Fri, 30 Oct 2026 17:00:00 +0100
+Subject: [PATCH] virtual: split [proc-mem] resident pages into a file's and
+ anonymous
+
+mincore's INCORE counts a clean page of a section mapped from its file as
+resident, the same as a page read into the view. The first is an external
+page the kernel can drop and is not in the task's footprint; the second is
+anonymous and is. An image whose sections are not 16 KiB-aligned in its
+file (Rockstar's libcef) is read whole, one that is (Playport's libcef) is
+mapped, so the image row's resident column compared the two wrongly.
+
+Each resident page is now also sorted by mincore's MINCORE_ANONYMOUS and
+MINCORE_COPIED bits, as the guest census already does: neither set is a
+file's clean page; either is anonymous (read in, or a written copy such as
+a relocated page). Every row keeps its committed/resident/compressed
+columns and gains `res_file=I/P/F res_anon=I/P/F` (MiB, image/private/
+fex), and the `all` line `res_file=N res_anon=N`. FEX's views are
+anonymous, so a fex res_file near zero shows the bit is read. It changes
+no mapping. pp_proc_mem.h's ppm_count_page holds the rule for the host
+test.
+
+Linear: PLA-476
+Class: diagnostics
+Evidence: docs/evidence/2026-10-29-sc-stock-cef-probe.md
+Offered-upstream: no; pseudo-processes and the 16 KiB host page are the iOS port's
+---
+ build/ntdll-unix/pp_proc_mem.h | 32 +++++++++++++++++++++++++++++---
+ build/ntdll-unix/virtual_ios.c | 11 +++++------
+ 2 files changed, 34 insertions(+), 9 deletions(-)
+
+diff --git a/build/ntdll-unix/pp_proc_mem.h b/build/ntdll-unix/pp_proc_mem.h
+index 47ae5e2..bc2cdeb 100644
+--- a/build/ntdll-unix/pp_proc_mem.h
++++ b/build/ntdll-unix/pp_proc_mem.h
+@@ -15,7 +15,11 @@
+ #include <string.h>
+ 
+ enum { PPM_IMAGE, PPM_PRIVATE, PPM_FEX, PPM_KINDS };
+-enum { PPM_COMMITTED, PPM_RESIDENT, PPM_COMPRESSED, PPM_MEASURES };
++/* PPM_RESIDENT_FILE is the part of PPM_RESIDENT that is a file's clean page
++ * (a section mapped from its file and not yet written): the kernel can drop
++ * it, and it is not in the task's footprint. The rest of PPM_RESIDENT is
++ * anonymous: pages read into the view, or a file page written (copied). */
++enum { PPM_COMMITTED, PPM_RESIDENT, PPM_COMPRESSED, PPM_RESIDENT_FILE, PPM_MEASURES };
+ enum { PPM_FEX_SPAN, PPM_FEX_CALLRET, PPM_FEX_L1, PPM_FEX_OTHER };
+ #define PPM_OWNERS 64                 /* the runtime and 63 processes; more are counted as dropped */
+ #define PPM_SPAN 0x100000ull          /* rpmalloc's span: 1 MiB, 1 MiB-aligned */
+@@ -82,6 +86,20 @@ static inline int ppm_range_readable( int view, unsigned long pages, unsigned lo
+     return view == PPM_RANGE_SYSTEM_VIEW || (view == PPM_RANGE_VIEW && pages && committed_pages == pages);
+ }
+ 
++/* One host page of a view of `kind`, from its mincore flags: resident (and
++ * then a file's or anonymous) or compressed; neither counts nothing. A page
++ * the kernel calls anonymous or copied is anonymous (the guest census's rule). */
++static inline void ppm_count_page( struct ppm_owner *o, int kind, int in_core, int paged_out, int anonymous,
++                                   unsigned long long bytes )
++{
++    if (in_core)
++    {
++        o->bytes[kind][PPM_RESIDENT] += bytes;
++        if (!anonymous) o->bytes[kind][PPM_RESIDENT_FILE] += bytes;
++    }
++    else if (paged_out) o->bytes[kind][PPM_COMPRESSED] += bytes;
++}
++
+ static inline unsigned long long ppm_sum( const struct ppm_owner *o, int measure )
+ {
+     return o->bytes[PPM_IMAGE][measure] + o->bytes[PPM_PRIVATE][measure] + o->bytes[PPM_FEX][measure];
+@@ -109,8 +127,9 @@ static inline int ppm_moved( const struct ppm_table *now, const struct ppm_table
+     return 0;
+ }
+ 
+-/* One owner's row, in MiB committed/resident/compressed:
+- * `pid=0074 RDR2.exe threads=62 image=… private=… fex=… spans=… callret=… l1=… fex_other=…` */
++/* One owner's row, in MiB committed/resident/compressed, then the resident
++ * MiB split into a file's clean pages and anonymous ones, image/private/fex:
++ * `pid=0074 RDR2.exe threads=62 image=… private=… fex=… spans=… callret=… l1=… res_file=… res_anon=…` */
+ static inline int ppm_row( const struct ppm_owner *o, char *buf, size_t size )
+ {
+     static const char *const kind[PPM_KINDS] = { "image", "private", "fex" };
+@@ -124,6 +143,13 @@ static inline int ppm_row( const struct ppm_owner *o, char *buf, size_t size )
+     if (n >= 0 && (size_t)n < size)
+         n += snprintf( buf + n, size - n, " spans=%u callret=%u l1=%u", o->fex_views[PPM_FEX_SPAN],
+                        o->fex_views[PPM_FEX_CALLRET], o->fex_views[PPM_FEX_L1] );
++    if (n >= 0 && (size_t)n < size)
++        n += snprintf( buf + n, size - n, " res_file=%llu/%llu/%llu res_anon=%llu/%llu/%llu",
++                       o->bytes[PPM_IMAGE][PPM_RESIDENT_FILE] >> 20, o->bytes[PPM_PRIVATE][PPM_RESIDENT_FILE] >> 20,
++                       o->bytes[PPM_FEX][PPM_RESIDENT_FILE] >> 20,
++                       (o->bytes[PPM_IMAGE][PPM_RESIDENT] - o->bytes[PPM_IMAGE][PPM_RESIDENT_FILE]) >> 20,
++                       (o->bytes[PPM_PRIVATE][PPM_RESIDENT] - o->bytes[PPM_PRIVATE][PPM_RESIDENT_FILE]) >> 20,
++                       (o->bytes[PPM_FEX][PPM_RESIDENT] - o->bytes[PPM_FEX][PPM_RESIDENT_FILE]) >> 20 );
+     return n;
+ }
+ #endif
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 1464709..c83b5eb 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -18586,10 +18586,8 @@ void ios_process_memory_log( const char *why, int force )
+             if (pages > sizeof(vec)) pages = sizeof(vec);
+             if (mincore( (void *)hp, pages * host_page_size, vec )) memset( vec, 0, pages );
+             for (k = 0; k < pages; k++, hp += host_page_size)
+-            {
+-                if (vec[k] & MINCORE_INCORE) o->bytes[runs[i].kind][PPM_RESIDENT] += host_page_size;
+-                else if (vec[k] & MINCORE_PAGED_OUT) o->bytes[runs[i].kind][PPM_COMPRESSED] += host_page_size;
+-            }
++                ppm_count_page( o, runs[i].kind, !!(vec[k] & MINCORE_INCORE), !!(vec[k] & MINCORE_PAGED_OUT),
++                                !!(vec[k] & (MINCORE_ANONYMOUS | MINCORE_COPIED)), host_page_size );
+         }
+         if (hp > last_hp) last_hp = hp;
+     }
+@@ -18615,8 +18613,9 @@ void ios_process_memory_log( const char *why, int force )
+             dprintf( 2, "[proc-mem]   %s\n", row );
+             for (m = 0; m < PPM_MEASURES; m++) sum[m] += ppm_sum( &t->owner[i], m );
+         }
+-        dprintf( 2, "[proc-mem]   all=%llu/%llu/%llu unmeasured=%llu dropped_views=%u\n", sum[PPM_COMMITTED] >> 20,
+-                 sum[PPM_RESIDENT] >> 20, sum[PPM_COMPRESSED] >> 20, unmeasured >> 20, t->dropped_views );
++        dprintf( 2, "[proc-mem]   all=%llu/%llu/%llu unmeasured=%llu dropped_views=%u res_file=%llu res_anon=%llu\n",
++                 sum[PPM_COMMITTED] >> 20, sum[PPM_RESIDENT] >> 20, sum[PPM_COMPRESSED] >> 20, unmeasured >> 20,
++                 t->dropped_views, sum[PPM_RESIDENT_FILE] >> 20, (sum[PPM_RESIDENT] - sum[PPM_RESIDENT_FILE]) >> 20 );
+         ios_proc_mem_last = *t;
+         ios_proc_mem_printed = 1;
+     }
