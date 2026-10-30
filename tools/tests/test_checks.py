@@ -265,6 +265,20 @@ class Patches(unittest.TestCase):
         self.assertIn("patches/wine-valve/0002-w.patch has no Picked: trailer", bad)
         self.assertIn("0003-x.patch: patches/wine-valve holds class valve, and only it", bad)
 
+    def test_wine_gdk_names_its_origin(self):
+        self.d = os.path.join(self.repo, "patches", "wine-gdk")
+        os.makedirs(self.d)
+        ported = PATCH.replace("Class: build-fix", "Ported-from: https://example.invalid/commit/" + "4" * 40 +
+                               "\nPorted: adapted\nClass: feature")
+        self.add("0001-p.patch", ported)
+        self.add("0002-q.patch", ported.replace("Ported: adapted\n", ""))
+        self.add("0003-r.patch", PATCH)
+        self.series("0001-p.patch", "0002-q.patch", "0003-r.patch")
+        bad = "\n".join(checks.patch_problems(self.repo))
+        self.assertNotIn("0001-p.patch", bad)
+        self.assertIn("patches/wine-gdk/0002-q.patch has no Ported: trailer", bad)
+        self.assertIn("patches/wine-gdk/0003-r.patch has no Ported-from: trailer", bad)
+
     def test_a_trailer_in_the_diff_does_not_count(self):
         self.add("0001-a.patch", PATCH.replace("Evidence: docs/evidence/x.md\n", "") + "+Evidence: x\n")
         self.assertIn("has no Evidence: trailer", "\n".join(checks.patch_problems(self.repo)))

@@ -1,0 +1,10 @@
+# wine-gdk: applied in this order with `git am -3` onto the wine pin in pins.lock plus patches/wine-port, wine-valve and wine-pe
+0001-windows.web-Implement-JsonArray.-Size-Append.patch
+0002-windows.ui.core.textinput-Create-a-CoreTextEditConte.patch
+0003-advapi32-Keep-the-registry-s-credentials-when-the-ho.patch
+0004-winhttp-Speak-HTTP-2-over-TLS-through-nghttp2.patch
+0005-winhttp-Never-open-the-HTTP-2-body-diagnostics-log.patch
+0006-winhttp-Accept-IPv6-fast-fallback-on-requests-and-a-.patch
+0007-mscoree-Refuse-a-Mono-path-too-long-for-the-caller-s.patch
+0008-twinapi.appcore-Register-app-state-and-app-constrain.patch
+0009-kernelbase-Give-a-process-the-package-identity-of-th.patch

@@ -37,7 +37,7 @@
     {
       "name": "wine",
       "pin": "wine",
-      "why": "WineHQ's release commit; patches/wine-port, wine-valve, wine-unix and wine-pe are in the playport archive",
+      "why": "WineHQ's release commit; patches/wine-port, wine-valve, wine-unix, wine-pe and wine-gdk are in the playport archive",
       "local": ["cache:wine.git", "run:pe/wine", "run:unix/wine"],
       "allow_binary": {
         "nls/*.nls": "Wine's committed codepage, locale, normalization and sorting data, not executable code; nls/Makefile.in installs it and tools/make_unicode generates it; preserve these build/runtime inputs with their generator"

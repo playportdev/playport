@@ -109,7 +109,7 @@ HEADER = """\
 #   root   build root the source path is relative to (see the script docstring for defaults)
 # Provenance keys (pins: pins.lock; patch series: patches/<target>/series; recipes: docs/BUILDING.md):
 #   P1-de     FEX pin + patches/fex, llvm-mingw 20260922 (build/stages/fex.sh); shipped as xtajit64.dll and aarch64 xtajit.dll (WoW64; build-only until Portal 2 milestone 1 step 3); the ARM64EC [build-id] line carries the pin's commit time: SOURCE_DATE_EPOCH
-#   P2        wine pin + patches/wine-pe, build/stages/wine-pe.sh, without DWARF (build/stages/wine-pe-strip.py); row hash equals build/generated/wine-pe-*.tsv
+#   P2        wine pin + patches/wine-port, wine-valve, wine-pe and wine-gdk, build/stages/wine-pe.sh, without DWARF (build/stages/wine-pe-strip.py); row hash equals build/generated/wine-pe-*.tsv
 #   P2-ec     arm64ec ntdll.dll of the same P2 tree (the arm64ec patches only change it); row hash equals build/generated/wine-pe-arm64ec-windows.tsv
 #   P3        Madeira pin build/ntdll-unix/build.sh via build/stages/unix.sh + stages/unix-gaps.sh gnutls-config, with patches/madeira-unix and patches/wine-unix applied
 #   P4-win32u Madeira pin build/win32u-unix/build.sh via build/stages/unix.sh (patches/madeira-unix virtual-monitor-refresh: MADEIRA_SCREEN_HZ)

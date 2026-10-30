@@ -1395,7 +1395,13 @@ the trailers `Class:`, `Evidence:` and `Offered-upstream:`. The classes are:
   Which of Valve's commits are taken, and why the others are not, is in
   decision [0018](decisions/0018-valve-wine-as-a-series.md) and its evidence
   record. The Wine trees apply `wine-port`, then `wine-valve`, then
-  `wine-unix` or `wine-pe`.
+  `wine-unix` or `wine-pe`; the PE tree then applies `patches/wine-gdk`.
+- In `patches/wine-gdk` (any class): Xodus's and Xodus Nexus's Wine patches
+  for GDK titles and their runtime, ported onto the PE tree (decision
+  [0166](decisions/0166-the-xbox-store.md)), each keeping its author, with the
+  trailers `Ported-from:` (the original commit's URL) and `Ported: clean` or
+  `Ported: adapted`; what was ported, left out or found upstream is in
+  [the port's record](evidence/2026-10-30-wine-gdk-port.md).
 
 To make one, commit the change in the build's tree for its target (the pin
 plus the series as commits, under `.work/run/`) and write it out as the next

@@ -6,12 +6,13 @@
 #   OUT=<dir> stages/wine-pe.sh
 #
 # OUT/wine is a clone of the wine pin in pins.lock; the script applies
-# patches/wine-port, patches/wine-valve and patches/wine-pe to it when it is
-# not exactly the pin plus those series. OUT/build must reach a Madeira checkout's build/
+# patches/wine-port, patches/wine-valve, patches/wine-pe and patches/wine-gdk to
+# it when it is not exactly the pin plus those series. OUT/build must reach a Madeira checkout's build/
 # (the wine tree includes ../../../../build/madeira_cfg.h). Inputs: LLVM_MINGW
 # and DARWIN_SDK (build/lib.sh); host clang/ld64.lld/llvm-ar 22.x, gcc, bison,
-# flex, msgfmt. Writes only inside OUT/wine (build-tools, build-macos,
-# build-arm64ec) and OUT/*.log, OUT/manifest-*.tsv.
+# flex, msgfmt; nghttp2's headers at the nghttp2 pin (stages/nghttp2-headers.sh,
+# for winhttp). Writes only inside OUT/wine (build-tools, build-macos,
+# build-arm64ec), OUT/nghttp2-include and OUT/*.log, OUT/manifest-*.tsv.
 #
 # make runs with -k: a failing target does not stop the rest. The per-tree
 # exit status is printed at the end; docs/BUILDING.md lists the expected
@@ -43,7 +44,19 @@ test -f "$OUT/build/madeira_cfg.h" || { echo "link $OUT/build to a Madeira check
 #    slot into the module's JIT-pool copy as well, walk RtlWalkFrameChain in PE
 #    space and run FEX's image-map notification as a syscall callback (arm64ec
 #    ntdll.dll only); guard the iOS-only srcwatch probe so the darwin win32u.so links.
-ensure_series "$WINE" "wine-port wine-valve wine-pe" "$PIN"
+#    Last patches/wine-gdk: what Xbox PC (GDK) titles and their runtime need of
+#    Wine (Xodus's and Xodus Nexus's Wine patches, ported; decision 0166).
+ensure_series "$WINE" "wine-port wine-valve wine-pe wine-gdk" "$PIN"
+
+# winhttp's HTTP/2 (patches/wine-gdk) compiles against nghttp2's header; the
+# library itself is libnghttp2.dll, loaded at run time (build/stages/xbox-pe.sh
+# builds it). Written only when it differs, so a kept tree does not rebuild.
+bash "$HERE/nghttp2-headers.sh" "$OUT/nghttp2-include.new" > /dev/null
+if diff -r -q "$OUT/nghttp2-include.new" "$OUT/nghttp2-include" > /dev/null 2>&1; then
+    rm -rf "$OUT/nghttp2-include.new"
+else
+    rm -rf "$OUT/nghttp2-include"; mv "$OUT/nghttp2-include.new" "$OUT/nghttp2-include"
+fi
 
 # configured TREE: TREE was configured with KEY (below) and can be kept.
 configured() { [ -f "$WINE/$1/Makefile" ] && [ "$(cat "$WINE/$1/.pp-configured" 2>/dev/null)" = "$KEY" ]; }
@@ -72,8 +85,9 @@ fi
 #    path -> -target <cpu>-windows); host code by /usr/bin/clang for darwin.
 #    CROSSLDFLAGS=-Wl,-Brepro makes lld-link write a content-hash timestamp
 #    instead of the link time, and CROSSCFLAGS (configure's default -g -O2)
-#    maps the tree and llvm-mingw out of the debug info, so the PE checksums
-#    are reproducible and name no workstation path.
+#    maps the tree, llvm-mingw and nghttp2's headers (on the include path for
+#    winhttp) out of the debug info, so the PE checksums are reproducible and
+#    name no workstation path.
 export PATH="$M/bin:$PATH"
 # winegstreamer.dll is built only when configure finds GStreamer. Its PE side
 # needs no GStreamer at all; the darwin winegstreamer.so the trees also build
@@ -132,7 +146,7 @@ configure_tree() {
       AR=/usr/bin/llvm-ar RANLIB=/usr/bin/llvm-ranlib STRIP=/usr/bin/llvm-strip \
       LDFLAGS="-fuse-ld=lld" CROSSLDFLAGS="-Wl,-Brepro" \
       GSTREAMER_CFLAGS="-I$OUT/gst-macos -I$GST/Headers" GSTREAMER_LIBS="-Wl,-undefined,dynamic_lookup" \
-      CROSSCFLAGS="-g -O2 -ffile-prefix-map=$WINE=wine -ffile-prefix-map=$M=llvm-mingw" \
+      CROSSCFLAGS="-g -O2 -ffile-prefix-map=$WINE=wine -ffile-prefix-map=$M=llvm-mingw -I$OUT/nghttp2-include -ffile-prefix-map=$OUT/nghttp2-include=nghttp2-include" \
       ../configure --host=aarch64-apple-darwin --without-x --without-freetype \
           --with-wine-tools="$WINE/build-tools" \
           --with-mingw="$M/bin/clang" --enable-archs="$2" $3 \

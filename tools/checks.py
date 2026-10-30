@@ -101,6 +101,10 @@ PORT_FOLLOWUPS = {"madeira-unix"}
 # The one series that carries Valve's Wine commits (class valve, decision 0018).
 VALVE_SERIES = "wine-valve"
 VALVE_TRAILERS = ("Valve-commit:", "Picked:")
+# The series of Xodus's and Xodus Nexus's Wine patches ported onto the PE tree (decision 0166):
+# each names the commit it was ported from and how.
+PORTED_SERIES = "wine-gdk"
+PORTED_TRAILERS = ("Ported-from:", "Ported:")
 
 
 def patch_problems(repo):
@@ -143,6 +147,10 @@ def patch_problems(repo):
                 bad.append(f"patches/{target}/{name}: patches/{VALVE_SERIES} holds class valve, and only it")
             if target == VALVE_SERIES:
                 for t in VALVE_TRAILERS:
+                    if not any(line.startswith(t + " ") for line in head):
+                        bad.append(f"patches/{target}/{name} has no {t} trailer")
+            if target == PORTED_SERIES:
+                for t in PORTED_TRAILERS:
                     if not any(line.startswith(t + " ") for line in head):
                         bad.append(f"patches/{target}/{name} has no {t} trailer")
     return bad

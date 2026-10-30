@@ -1,0 +1,37 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: domsvoboda <domsvoboda@users.noreply.github.com>
+Date: Fri, 23 Oct 2026 08:51:17 +0200
+Subject: [PATCH] mscoree: Refuse a Mono path too long for the caller's buffer.
+
+find_mono_dll copies the Mono base path and the architecture's
+libmono DLL name into the caller's MAX_PATH buffer without a bound. A
+Mono installed under a long directory overflowed the caller's stack;
+it now fails discovery instead.
+
+Ported from Xodus Nexus unchanged.
+
+Ported-from: https://github.com/domsvoboda/nexus-wine/commit/793332fe6630c3bb4e589f3ee0573d3b5ff02f31
+Ported: clean
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-30-wine-gdk-port.md
+Offered-upstream: no
+---
+ dlls/mscoree/metahost.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/dlls/mscoree/metahost.c b/dlls/mscoree/metahost.c
+index 0177452..69d0b13 100644
+--- a/dlls/mscoree/metahost.c
++++ b/dlls/mscoree/metahost.c
+@@ -742,6 +742,11 @@ static BOOL find_mono_dll(LPCWSTR path, LPWSTR dll_path)
+     static const WCHAR libmono2_dll[] = {'\\','b','i','n','\\','l','i','b','m','o','n','o','-','2','.','0','.','d','l','l',0};
+     DWORD attributes=INVALID_FILE_ATTRIBUTES;
+ 
++    /* Callers supply MAX_PATH buffers. A managed runtime installed under a
++     * long release directory must fail discovery, not overwrite their stack
++     * with the base path plus the architecture-specific DLL suffix. */
++    if (lstrlenW(path) + ARRAY_SIZE(libmono2_arch_dll) > MAX_PATH) return FALSE;
++
+     lstrcpyW(dll_path, path);
+     lstrcatW(dll_path, libmono2_arch_dll);
+     attributes = GetFileAttributesW(dll_path);

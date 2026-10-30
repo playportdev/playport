@@ -1,0 +1,679 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: domsvoboda <domsvoboda@users.noreply.github.com>
+Date: Sat, 24 Oct 2026 10:36:26 +0200
+Subject: [PATCH] kernelbase: Give a process the package identity of the
+ AppxManifest.xml above its image.
+
+GetCurrentPackageFullName, GetCurrentPackageFamilyName,
+GetCurrentPackagePath, GetCurrentApplicationUserModelId,
+GetCurrentPackageId and GetCurrentPackageInfo (the head package only)
+answered APPMODEL_ERROR_NO_PACKAGE for every process. An unpacked
+Store/GDK install keeps its AppxManifest.xml at the package root: look
+for it in up to 16 directories above the main image, resolved through
+its Unix name so a symlinked helper does not take the package of the
+link's directory, parse its Identity and Applications, and derive the
+publisher id (SHA-256 of the publisher, Crockford base32) and the
+family, full name and AUMID from them. A process with no such manifest
+still has no package.
+
+Ported from Xodus Nexus (its wine-appmodel-identity.patch) onto
+WineHQ, which replaced libtomcrypt with SymCrypt: the publisher id's
+SHA-256 is SymCrypt's, with the SymCrypt environment ntdll also
+defines.
+
+Ported-from: https://github.com/domsvoboda/nexus-wine/commit/873e6a633d29dc62b8ffb59b5fa598545d28986a
+Ported: adapted
+Class: feature
+Evidence: docs/evidence/2026-10-30-xbox-ground-truth-nexus.md
+Offered-upstream: no
+---
+ dlls/kernelbase/Makefile.in         |   3 +-
+ dlls/kernelbase/appmodel-identity.h | 551 ++++++++++++++++++++++++++++
+ dlls/kernelbase/version.c           |  22 +-
+ 3 files changed, 563 insertions(+), 13 deletions(-)
+ create mode 100644 dlls/kernelbase/appmodel-identity.h
+
+diff --git a/dlls/kernelbase/Makefile.in b/dlls/kernelbase/Makefile.in
+index 2e33b6b..10a8827 100644
+--- a/dlls/kernelbase/Makefile.in
++++ b/dlls/kernelbase/Makefile.in
+@@ -1,7 +1,8 @@
+ EXTRADEFS = -DWINBASEAPI= -DWINADVAPI= -DWINUSERAPI= -DWINSHLWAPI=
+ MODULE    = kernelbase.dll
+ IMPORTLIB = kernelbase
+-IMPORTS   = uuid ntdll
++IMPORTS   = $(SYMCRYPT_PE_LIBS) uuid ntdll
++EXTRAINCL = $(SYMCRYPT_PE_CFLAGS)
+ 
+ EXTRADLLFLAGS = -nodefaultlibs -nostartfiles
+ i386_EXTRADLLFLAGS = -Wl,--image-base,0x7b000000
+diff --git a/dlls/kernelbase/appmodel-identity.h b/dlls/kernelbase/appmodel-identity.h
+new file mode 100644
+index 0000000..aed9090
+--- /dev/null
++++ b/dlls/kernelbase/appmodel-identity.h
+@@ -0,0 +1,551 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later
++ * AppModel identity for unpacked package trees. Metadata describes the image's
++ * package, not a Store account, receipt, entitlement or security capability.
++ * No registry, environment or current-directory identity is manufactured. */
++#include "symcrypt.h"
++
++/* The SymCrypt environment kernelbase links, as ntdll's: no CPU features, no error injection. */
++SYMCRYPT_CPU_FEATURES SYMCRYPT_CALL SymCryptCpuFeaturesNeverPresent(void) { return 0; }
++void SYMCRYPT_CALL SymCryptFatal( UINT32 fatalCode ) { }
++void SYMCRYPT_CALL SymCryptInjectError( PBYTE pbBuf, SIZE_T cbBuf ) { }
++#if SYMCRYPT_CPU_X86 | SYMCRYPT_CPU_AMD64
++SYMCRYPT_ERROR SYMCRYPT_CALL SymCryptSaveXmm( PSYMCRYPT_EXTENDED_SAVE_DATA pSaveArea ) { return SYMCRYPT_NO_ERROR; }
++void SYMCRYPT_CALL SymCryptRestoreXmm( PSYMCRYPT_EXTENDED_SAVE_DATA pSaveArea ) { }
++#endif
++
++#define PACKAGE_XML_LIMIT (1024 * 1024)
++#define PACKAGE_PATH_LIMIT 32768
++#define PACKAGE_XML_DEPTH 64
++#define PACKAGE_XML_ATTRS 64
++#define PACKAGE_XML_NS 128
++
++static void *package_alloc( SIZE_T size ) { return HeapAlloc( GetProcessHeap(), 0, size ); }
++static void package_free( void *p ) { if (p) HeapFree( GetProcessHeap(), 0, p ); }
++
++struct package_span { const WCHAR *p; unsigned int n; };
++struct package_attribute { struct package_span name, value; };
++struct package_namespace { struct package_span prefix, uri; };
++struct package_element { struct package_span name; unsigned int namespaces, kind; };
++struct package_identity
++{
++    WCHAR root[PACKAGE_PATH_LIMIT], name[51], publisher[8193], resource[31];
++    WCHAR publisher_id[14], family[66], full[160], application[65], aumid[132];
++    PACKAGE_VERSION version;
++    UINT32 architecture;
++    BOOL valid;
++};
++
++static BOOL package_space( WCHAR c ) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; }
++static const WCHAR *package_find( const WCHAR *p, WCHAR c, unsigned int count )
++{
++    while (count--) { if (*p == c) return p; p++; }
++    return NULL;
++}
++static BOOL package_span_equal( struct package_span a, struct package_span b )
++{
++    return a.n == b.n && (!a.n || !wcsncmp( a.p, b.p, a.n ));
++}
++static BOOL package_span_is( struct package_span a, const WCHAR *b )
++{
++    return a.n == wcslen( b ) && !wcsncmp( a.p, b, a.n );
++}
++static BOOL package_name_char( WCHAR c )
++{
++    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
++            c == '.' || c == '-' || c == '_' || c == ':';
++}
++static BOOL package_xml_character( unsigned int c )
++{
++    return c == 9 || c == 10 || c == 13 || (c >= 0x20 && c <= 0xd7ff) ||
++            (c >= 0xe000 && c <= 0xfffd) || (c >= 0x10000 && c <= 0x10ffff);
++}
++
++/* Only XML's five predefined entities and numeric references. Never fetch a
++ * DTD/entity or resolve external data. Attribute normalization follows XML. */
++static BOOL package_decode( struct package_span value, WCHAR *out, unsigned int size )
++{
++    unsigned int i = 0, n = 0, c, digit, base;
++    const WCHAR *end, *p;
++    while (i < value.n)
++    {
++        c = value.p[i++];
++        if (c == '&')
++        {
++            p = value.p + i;
++            end = package_find( p, ';', value.n - i );
++            if (!end || end - p > 16) return FALSE;
++            if (end - p == 3 && !wcsncmp( p, L"amp", 3 )) c = '&';
++            else if (end - p == 2 && !wcsncmp( p, L"lt", 2 )) c = '<';
++            else if (end - p == 2 && !wcsncmp( p, L"gt", 2 )) c = '>';
++            else if (end - p == 4 && !wcsncmp( p, L"quot", 4 )) c = '"';
++            else if (end - p == 4 && !wcsncmp( p, L"apos", 4 )) c = '\'';
++            else if (*p == '#')
++            {
++                p++; base = 10; c = 0;
++                if (p < end && *p == 'x') { base = 16; p++; }
++                if (p == end) return FALSE;
++                while (p < end)
++                {
++                    if (*p >= '0' && *p <= '9') digit = *p - '0';
++                    else if (*p >= 'a' && *p <= 'f') digit = *p - 'a' + 10;
++                    else if (*p >= 'A' && *p <= 'F') digit = *p - 'A' + 10;
++                    else return FALSE;
++                    if (digit >= base || c > (0x10ffff - digit) / base) return FALSE;
++                    c = c * base + digit; p++;
++                }
++            }
++            else return FALSE;
++            i = end - value.p + 1;
++        }
++        else
++        {
++            if (c == '<') return FALSE;
++            if (package_space( c )) c = ' ';
++            if (c >= 0xd800 && c <= 0xdbff)
++            {
++                if (i == value.n || value.p[i] < 0xdc00 || value.p[i] > 0xdfff) return FALSE;
++                c = 0x10000 + ((c - 0xd800) << 10) + value.p[i++] - 0xdc00;
++            }
++        }
++        if (!package_xml_character( c )) return FALSE;
++        if (c > 0xffff)
++        {
++            if (n + 2 >= size) return FALSE;
++            c -= 0x10000;
++            if (out) { out[n] = 0xd800 + (c >> 10); out[n + 1] = 0xdc00 + (c & 1023); }
++            n += 2;
++        }
++        else { if (n + 1 >= size) return FALSE; if (out) out[n] = c; n++; }
++    }
++    if (out) out[n] = 0;
++    return TRUE;
++}
++
++static BOOL package_string( const WCHAR *s, unsigned int minimum, unsigned int maximum )
++{
++    unsigned int n = 0;
++    while (*s)
++    {
++        if (!((*s >= 'a' && *s <= 'z') || (*s >= 'A' && *s <= 'Z') ||
++                (*s >= '0' && *s <= '9') || *s == '.' || *s == '-')) return FALSE;
++        n++; s++;
++    }
++    return n >= minimum && n <= maximum;
++}
++static BOOL package_version( const WCHAR *s, PACKAGE_VERSION *version )
++{
++    USHORT values[4];
++    unsigned int i, n;
++    for (i = 0; i < 4; i++)
++    {
++        if (*s < '0' || *s > '9') return FALSE;
++        n = 0;
++        while (*s >= '0' && *s <= '9') { n = n * 10 + *s++ - '0'; if (n > 65535) return FALSE; }
++        values[i] = n;
++        if (i != 3) { if (*s++ != '.') return FALSE; }
++    }
++    if (*s) return FALSE;
++    version->Major = values[0]; version->Minor = values[1];
++    version->Build = values[2]; version->Revision = values[3];
++    return TRUE;
++}
++static BOOL package_relative_path( const WCHAR *s )
++{
++    const WCHAR *part = s;
++    unsigned int n;
++    if (!*s || *s == '\\' || *s == '/' || wcschr( s, ':' )) return FALSE;
++    for (;; s++)
++    {
++        if (*s && *s != '/' && *s != '\\') { if (*s < 32 || wcschr( L"*?\"<>|", *s )) return FALSE; continue; }
++        n = s - part;
++        if (!n || (n == 1 && *part == '.') || (n == 2 && part[0] == '.' && part[1] == '.')) return FALSE;
++        if (!*s) return TRUE;
++        part = s + 1;
++    }
++}
++static BOOL package_get_attribute( struct package_attribute *attrs, unsigned int count,
++        const WCHAR *name, WCHAR *out, unsigned int size, BOOL required )
++{
++    unsigned int i;
++    for (i = 0; i < count; i++) if (package_span_is( attrs[i].name, name ))
++        return package_decode( attrs[i].value, out, size );
++    *out = 0;
++    return !required;
++}
++static struct package_span package_namespace( struct package_span name, struct package_namespace *ns,
++        unsigned int count, struct package_span *local )
++{
++    struct package_span prefix = {name.p, 0}, none = {NULL, 0};
++    const WCHAR *colon = package_find( name.p, ':', name.n );
++    unsigned int i;
++    *local = name;
++    if (colon) { prefix.n = colon - name.p; local->p = colon + 1; local->n = name.n - prefix.n - 1; }
++    for (i = count; i; i--) if (package_span_equal( prefix, ns[i - 1].prefix )) return ns[i - 1].uri;
++    return none;
++}
++
++/* A bounded well-formed XML reader. Namespaces apply at each element, spoofed
++ * nested Identity elements, comments and prefixed extension elements are inert. */
++static BOOL package_parse_manifest( const WCHAR *text, struct package_identity *id, const WCHAR *relative )
++{
++    struct package_element stack[PACKAGE_XML_DEPTH];
++    struct package_namespace ns[PACKAGE_XML_NS];
++    struct package_attribute attrs[PACKAGE_XML_ATTRS];
++    struct package_span name, local, uri, foundation = {NULL, 0}, value;
++    const WCHAR *p = text, *start, *end;
++    WCHAR version[32], architecture[16], app[65], executable[PACKAGE_PATH_LIMIT];
++    WCHAR first_app[65] = {0}, matching_app[65] = {0};
++    unsigned int depth = 0, bindings = 0, before, count, i, j, kind, identities = 0, applications = 0;
++    BOOL empty, closing, root_closed = FALSE;
++
++    while (*p)
++    {
++        if (*p != '<')
++        {
++            start = p;
++            while (*p && *p != '<') { if (!depth && !package_space( *p )) return FALSE; p++; }
++            value.p = start; value.n = p - start;
++            if (!package_decode( value, NULL, ~0u )) return FALSE;
++            continue;
++        }
++        if (!wcsncmp( p, L"<!--", 4 ))
++        {
++            if (!(end = wcsstr( p + 4, L"--" )) || wcsncmp( end, L"-->", 3 )) return FALSE;
++            p = end + 3; continue;
++        }
++        if (!wcsncmp( p, L"<?", 2 ))
++        {
++            if (!(end = wcsstr( p + 2, L"?>" ))) return FALSE;
++            p = end + 2; continue;
++        }
++        if (!wcsncmp( p, L"<![CDATA[", 9 ))
++        {
++            if (!depth || !(end = wcsstr( p + 9, L"]]>" ))) return FALSE;
++            p = end + 3; continue;
++        }
++        if (p[1] == '!') return FALSE;
++        p++; closing = *p == '/'; if (closing) p++;
++        start = p;
++        if (!((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || *p == '_')) return FALSE;
++        while (package_name_char( *p )) p++;
++        name.p = start; name.n = p - start;
++        if (name.n > 127) return FALSE;
++        if (closing)
++        {
++            while (package_space( *p )) p++;
++            if (*p++ != '>' || !depth || !package_span_equal( name, stack[depth - 1].name )) return FALSE;
++            bindings = stack[--depth].namespaces;
++            if (!depth) root_closed = TRUE;
++            continue;
++        }
++        if (root_closed || depth == PACKAGE_XML_DEPTH) return FALSE;
++        before = bindings; count = 0;
++        for (;;)
++        {
++            empty = FALSE;
++            if (*p == '/' && p[1] == '>') { empty = TRUE; p += 2; break; }
++            if (*p == '>') { p++; break; }
++            if (!package_space( *p )) return FALSE;
++            while (package_space( *p )) p++;
++            if (*p == '>' || (*p == '/' && p[1] == '>')) continue;
++            if (count == PACKAGE_XML_ATTRS) return FALSE;
++            start = p;
++            if (!((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || *p == '_')) return FALSE;
++            while (package_name_char( *p )) p++;
++            attrs[count].name.p = start; attrs[count].name.n = p - start;
++            for (i = 0; i < count; i++) if (package_span_equal( attrs[i].name, attrs[count].name )) return FALSE;
++            while (package_space( *p )) p++;
++            if (*p++ != '=') return FALSE;
++            while (package_space( *p )) p++;
++            if (*p != '\'' && *p != '"') return FALSE;
++            j = *p++;
++            start = p;
++            while (*p && *p != j) p++;
++            if (!*p) return FALSE;
++            attrs[count].value.p = start; attrs[count].value.n = p - start; p++;
++            if (package_span_is( attrs[count].name, L"xmlns" ) ||
++                    (attrs[count].name.n > 6 && !wcsncmp( attrs[count].name.p, L"xmlns:", 6 )))
++            {
++                if (bindings == PACKAGE_XML_NS) return FALSE;
++                ns[bindings].prefix = attrs[count].name;
++                if (package_span_is( attrs[count].name, L"xmlns" )) ns[bindings].prefix.n = 0;
++                else { ns[bindings].prefix.p += 6; ns[bindings].prefix.n -= 6; }
++                ns[bindings++].uri = attrs[count].value;
++            }
++            count++;
++        }
++        uri = package_namespace( name, ns, bindings, &local ); kind = 0;
++        if (!depth)
++        {
++            if (!package_span_is( local, L"Package" ) ||
++                    !(package_span_is( uri, L"http://schemas.microsoft.com/appx/manifest/foundation/windows10" ) ||
++                      package_span_is( uri, L"http://schemas.microsoft.com/appx/2010/manifest" ) ||
++                      package_span_is( uri, L"http://schemas.microsoft.com/appx/2013/manifest" ))) return FALSE;
++            foundation = uri; kind = 1;
++        }
++        else if (package_span_equal( uri, foundation ))
++        {
++            if (depth == 1 && package_span_is( local, L"Identity" ))
++            {
++                if (++identities != 1 || !package_get_attribute( attrs, count, L"Name", id->name, ARRAY_SIZE(id->name), TRUE ) ||
++                    !package_get_attribute( attrs, count, L"Publisher", id->publisher, ARRAY_SIZE(id->publisher), TRUE ) ||
++                    !package_get_attribute( attrs, count, L"Version", version, ARRAY_SIZE(version), TRUE ) ||
++                    !package_get_attribute( attrs, count, L"ProcessorArchitecture", architecture, ARRAY_SIZE(architecture), TRUE ) ||
++                    !package_get_attribute( attrs, count, L"ResourceId", id->resource, ARRAY_SIZE(id->resource), FALSE ) ||
++                    !package_string( id->name, 3, 50 ) || !*id->publisher ||
++                    !package_string( id->resource, 0, 30 ) || !package_version( version, &id->version )) return FALSE;
++                id->architecture = processor_arch_from_string( architecture, wcslen( architecture ) );
++                if (id->architecture == ~0u) return FALSE;
++            }
++            else if (depth == 1 && package_span_is( local, L"Applications" )) kind = 2;
++            else if (depth == 2 && stack[depth - 1].kind == 2 && package_span_is( local, L"Application" ))
++            {
++                if (++applications > 100 || !package_get_attribute( attrs, count, L"Id", app, ARRAY_SIZE(app), TRUE ) ||
++                    !package_string( app, 1, 64 ) || !package_get_attribute( attrs, count, L"Executable", executable, ARRAY_SIZE(executable), TRUE ) ||
++                    !package_relative_path( executable )) return FALSE;
++                for (i = 0; executable[i]; i++) if (executable[i] == '/') executable[i] = '\\';
++                if (applications == 1) wcscpy( first_app, app );
++                if (!wcsicmp( executable, relative ))
++                {
++                    if (*matching_app) return FALSE;
++                    wcscpy( matching_app, app );
++                }
++            }
++        }
++        /* Invalid entities in ignored metadata still invalidate the document. */
++        for (i = 0; i < count; i++)
++        {
++            if (attrs[i].value.n > 32767 || !package_decode( attrs[i].value, NULL, ~0u )) return FALSE;
++        }
++        stack[depth].name = name; stack[depth].namespaces = before; stack[depth].kind = kind;
++        if (!empty) depth++;
++        else { bindings = before; if (!depth) root_closed = TRUE; }
++    }
++    if (depth || !root_closed || identities != 1) return FALSE;
++    if (*matching_app) wcscpy( id->application, matching_app );
++    else if (applications == 1) wcscpy( id->application, first_app );
++    return TRUE;
++}
++
++static BOOL package_publisher_id( struct package_identity *id )
++{
++    static const WCHAR alphabet[] = L"0123456789abcdefghjkmnpqrstvwxyz";
++    unsigned char hash[SYMCRYPT_SHA256_RESULT_SIZE];
++    unsigned int i, j, bit, value;
++    SymCryptSha256( (const BYTE *)id->publisher, wcslen( id->publisher ) * sizeof(WCHAR), hash );
++    for (i = 0; i < 13; i++)
++    {
++        value = 0;
++        for (j = 0; j < 5; j++) { bit = i * 5 + j; value = (value << 1) | (bit < 64 ? (hash[bit / 8] >> (7 - bit % 8)) & 1 : 0); }
++        id->publisher_id[i] = alphabet[value];
++    }
++    id->publisher_id[13] = 0;
++    return TRUE;
++}
++
++static WCHAR *package_read_manifest( HANDLE file )
++{
++    LARGE_INTEGER size;
++    DWORD count, error;
++    unsigned int n, i;
++    BYTE *bytes;
++    WCHAR *text = NULL;
++    if (!GetFileSizeEx( file, &size ) || size.QuadPart < 1 || size.QuadPart > PACKAGE_XML_LIMIT) return NULL;
++    if (!(bytes = package_alloc( size.QuadPart ))) return NULL;
++    if (!ReadFile( file, bytes, size.QuadPart, &count, NULL ) || count != size.QuadPart) goto done;
++    if (count >= 2 && bytes[0] == 0xff && bytes[1] == 0xfe)
++    {
++        if (count & 1) goto done;
++        n = (count - 2) / 2;
++        if (!(text = package_alloc( (n + 1) * sizeof(WCHAR) ))) goto done;
++        memcpy( text, bytes + 2, n * sizeof(WCHAR) ); text[n] = 0;
++    }
++    else
++    {
++        i = count >= 3 && bytes[0] == 0xef && bytes[1] == 0xbb && bytes[2] == 0xbf ? 3 : 0;
++        n = MultiByteToWideChar( CP_UTF8, MB_ERR_INVALID_CHARS, (char *)bytes + i, count - i, NULL, 0 );
++        if (!n || !(text = package_alloc( (n + 1) * sizeof(WCHAR) ))) goto done;
++        if (!MultiByteToWideChar( CP_UTF8, MB_ERR_INVALID_CHARS, (char *)bytes + i, count - i, text, n ))
++        { package_free( text ); text = NULL; goto done; }
++        text[n] = 0;
++    }
++    for (i = 0; i < n; i++) if (!text[i]) { package_free( text ); text = NULL; break; }
++done:
++    error = GetLastError(); package_free( bytes ); SetLastError( error ); return text;
++}
++
++static struct package_identity *package_identity;
++static INIT_ONCE package_identity_once = INIT_ONCE_STATIC_INIT;
++/* Wine's ObjectNameInformation preserves the opened alias. Query the server's
++ * realpath-backed Unix file name instead, then reopen that exact canonical path
++ * through the existing Unix namespace to recover its DOS drive mapping. */
++static DWORD package_image_path( HANDLE file, WCHAR *out )
++{
++    const unsigned int bytes = PACKAGE_PATH_LIMIT * 4;
++    WINE_FILE_UNIX_NAME_INFORMATION *info;
++    WCHAR *name;
++    UNICODE_STRING nt_name;
++    OBJECT_ATTRIBUTES attr;
++    IO_STATUS_BLOCK io;
++    HANDLE canonical;
++    NTSTATUS status;
++    unsigned int i, length;
++    DWORD result = 0;
++
++    if (!(info = package_alloc( sizeof(*info) + bytes ))) return 0;
++    status = NtQueryInformationFile( file, &io, info, sizeof(*info) + bytes, WineFileUnixNameInformation );
++    if (status || !info->Length || info->Length >= bytes || info->Name[0] != '/' ||
++        memchr( info->Name, 0, info->Length )) goto done;
++    if (!(name = package_alloc( PACKAGE_PATH_LIMIT * sizeof(WCHAR) ))) goto done;
++    wcscpy( name, L"\\??\\unix" );
++    length = MultiByteToWideChar( CP_UNIXCP, 0, info->Name, info->Length, name + 8, PACKAGE_PATH_LIMIT - 9 );
++    if (!length) goto free_name;
++    name[length + 8] = 0;
++    for (i = 8; name[i]; i++) if (name[i] == '/') name[i] = '\\';
++    RtlInitUnicodeString( &nt_name, name );
++    InitializeObjectAttributes( &attr, &nt_name, OBJ_CASE_INSENSITIVE, NULL, NULL );
++    status = NtOpenFile( &canonical, FILE_READ_ATTRIBUTES | SYNCHRONIZE, &attr, &io,
++                        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, FILE_SYNCHRONOUS_IO_NONALERT );
++    if (!status)
++    {
++        result = GetFinalPathNameByHandleW( canonical, out, PACKAGE_PATH_LIMIT, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS );
++        NtClose( canonical );
++    }
++free_name:
++    package_free( name );
++done:
++    package_free( info );
++    return result;
++}
++static BOOL CALLBACK package_initialize( INIT_ONCE *once, void *parameter, void **context )
++{
++    struct package_identity *id;
++    WCHAR *image, *candidate, *sep, *text;
++    HANDLE file;
++    unsigned int depth, length, root_length;
++    BOOL parsed;
++    (void)once; (void)parameter; (void)context;
++    if (!(id = HeapAlloc( GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*id) ))) return FALSE;
++    if (!(image = package_alloc( PACKAGE_PATH_LIMIT * sizeof(WCHAR) )) ||
++        !(candidate = package_alloc( PACKAGE_PATH_LIMIT * sizeof(WCHAR) )))
++    { package_free( image ); package_free( id ); return FALSE; }
++    length = GetModuleFileNameW( NULL, image, PACKAGE_PATH_LIMIT );
++    if (!length || length == PACKAGE_PATH_LIMIT) goto done;
++    /* Resolve image aliases before discovery: a symlink to an unrelated helper
++     * does not acquire the package of the link's parent directory. */
++    file = CreateFileW( image, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, 0, NULL );
++    if (file == INVALID_HANDLE_VALUE) goto done;
++    length = package_image_path( file, candidate );
++    CloseHandle( file );
++    if (!length || length >= PACKAGE_PATH_LIMIT) goto done;
++    if (!wcsncmp( candidate, L"\\\\?\\", 4 )) memmove( candidate, candidate + 4, (length - 3) * sizeof(WCHAR) );
++    wcscpy( image, candidate );
++    for (depth = 0; depth < 16; depth++)
++    {
++        if (!(sep = wcsrchr( candidate, '\\' )) || sep <= candidate + 2) break;
++        *sep = 0; root_length = wcslen( candidate );
++        if (root_length + ARRAY_SIZE(L"\\AppxManifest.xml") >= PACKAGE_PATH_LIMIT) break;
++        wcscpy( id->root, candidate ); wcscat( candidate, L"\\AppxManifest.xml" );
++        file = CreateFileW( candidate, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL );
++        candidate[root_length] = 0;
++        if (file == INVALID_HANDLE_VALUE)
++        {
++            if (GetLastError() != ERROR_FILE_NOT_FOUND && GetLastError() != ERROR_PATH_NOT_FOUND) break;
++            continue;
++        }
++        text = package_read_manifest( file ); CloseHandle( file );
++        if (!text) break;
++        parsed = package_parse_manifest( text, id, image + root_length + 1 ); package_free( text );
++        if (!parsed || !package_publisher_id( id )) break;
++        swprintf( id->family, ARRAY_SIZE(id->family), L"%s_%s", id->name, id->publisher_id );
++        swprintf( id->full, ARRAY_SIZE(id->full), L"%s_%u.%u.%u.%u_%s_%s_%s", id->name,
++                id->version.Major, id->version.Minor, id->version.Build, id->version.Revision,
++                processor_arch_from_code( id->architecture ), id->resource, id->publisher_id );
++        if (*id->application) swprintf( id->aumid, ARRAY_SIZE(id->aumid), L"%s!%s", id->family, id->application );
++        id->valid = TRUE; break;
++    }
++done:
++    package_free( candidate ); package_free( image );
++    if (id->valid) package_identity = id;
++    else package_free( id );
++    return TRUE;
++}
++static struct package_identity *package_current(void)
++{
++    DWORD error = GetLastError();
++    InitOnceExecuteOnce( &package_identity_once, package_initialize, NULL, NULL );
++    SetLastError( error );
++    return package_identity;
++}
++static LONG package_copy_string( const WCHAR *value, UINT32 *length, WCHAR *out )
++{
++    UINT32 required, available;
++    if (!length || (*length && !out)) return ERROR_INVALID_PARAMETER;
++    required = wcslen( value ) + 1; available = *length; *length = required;
++    if (available < required) return ERROR_INSUFFICIENT_BUFFER;
++    memcpy( out, value, required * sizeof(WCHAR) ); return ERROR_SUCCESS;
++}
++static LONG package_current_string( unsigned int field, UINT32 *length, WCHAR *out )
++{
++    struct package_identity *id;
++    if (!length || (*length && !out)) return ERROR_INVALID_PARAMETER;
++    if (!(id = package_current())) return field == 3 ? APPMODEL_ERROR_NO_APPLICATION : APPMODEL_ERROR_NO_PACKAGE;
++    if (field == 3 && !*id->aumid) return APPMODEL_ERROR_NO_APPLICATION;
++    return package_copy_string( field == 0 ? id->full : field == 1 ? id->family : field == 2 ? id->root : id->aumid, length, out );
++}
++static LONG package_current_id( UINT32 *length, BYTE *buffer )
++{
++    struct package_identity *id;
++    PACKAGE_ID *out = (PACKAGE_ID *)buffer;
++    const WCHAR *values[4];
++    WCHAR **fields[4];
++    UINT32 required = sizeof(*out), available, i;
++    BYTE *cursor;
++    if (!length || (*length && !buffer)) return ERROR_INVALID_PARAMETER;
++    if (!(id = package_current())) return APPMODEL_ERROR_NO_PACKAGE;
++    values[0] = id->name; values[1] = id->publisher; values[2] = id->resource; values[3] = id->publisher_id;
++    for (i = 0; i < 4; i++) required += (wcslen( values[i] ) + 1) * sizeof(WCHAR);
++    available = *length; *length = required;
++    if (available < required) return ERROR_INSUFFICIENT_BUFFER;
++    memset( out, 0, sizeof(*out) ); out->version = id->version; out->processorArchitecture = id->architecture;
++    fields[0] = &out->name; fields[1] = &out->publisher; fields[2] = &out->resourceId; fields[3] = &out->publisherId;
++    cursor = buffer + sizeof(*out);
++    for (i = 0; i < 4; i++) { required = (wcslen( values[i] ) + 1) * sizeof(WCHAR); *fields[i] = (WCHAR *)cursor; memcpy( cursor, values[i], required ); cursor += required; }
++    return ERROR_SUCCESS;
++}
++
++#include "pshpack4.h"
++struct package_info_buffer
++{
++    UINT32 reserved, flags;
++    WCHAR *path, *full, *family;
++    PACKAGE_ID id;
++};
++#include "poppack.h"
++
++/* This implements the head package only. Do not invent a dependency graph or
++ * claim that framework/DLC packages are installed. Unsupported graph requests
++ * are explicit rather than an incomplete successful enumeration. */
++static LONG package_current_info( UINT32 flags, UINT32 *length, BYTE *buffer, UINT32 *count )
++{
++    struct package_identity *id;
++    struct package_info_buffer *out = (void *)buffer;
++    const WCHAR *values[7];
++    WCHAR **fields[7];
++    UINT32 required = sizeof(*out), available, i, bytes;
++    BYTE *cursor;
++    if (!length || !count || (*length && !buffer)) return ERROR_INVALID_PARAMETER;
++    if (!(id = package_current())) return APPMODEL_ERROR_NO_PACKAGE;
++    if (!(flags & 0x10) || (flags & ~(0x10 | 0x100 | 0x80000))) return ERROR_NOT_SUPPORTED;
++    values[0] = id->root; values[1] = id->full; values[2] = id->family; values[3] = id->name;
++    values[4] = id->publisher; values[5] = id->resource; values[6] = id->publisher_id;
++    for (i = 0; i < 7; i++) required += (wcslen( values[i] ) + 1) * sizeof(WCHAR);
++    available = *length; *length = required; *count = 1;
++    if (available < required) return ERROR_INSUFFICIENT_BUFFER;
++    memset( out, 0, sizeof(*out) ); out->id.version = id->version; out->id.processorArchitecture = id->architecture;
++    fields[0] = &out->path; fields[1] = &out->full; fields[2] = &out->family;
++    fields[3] = &out->id.name; fields[4] = &out->id.publisher; fields[5] = &out->id.resourceId; fields[6] = &out->id.publisherId;
++    cursor = buffer + sizeof(*out);
++    for (i = 0; i < 7; i++) { bytes = (wcslen( values[i] ) + 1) * sizeof(WCHAR); *fields[i] = (WCHAR *)cursor; memcpy( cursor, values[i], bytes ); cursor += bytes; }
++    return ERROR_SUCCESS;
++}
+diff --git a/dlls/kernelbase/version.c b/dlls/kernelbase/version.c
+index 631fd27..a880307 100644
+--- a/dlls/kernelbase/version.c
++++ b/dlls/kernelbase/version.c
+@@ -1582,13 +1582,16 @@ BOOL WINAPI GetVersionExW( OSVERSIONINFOW *info )
+     return TRUE;
+ }
+ 
++static UINT32 processor_arch_from_string(const WCHAR *, unsigned int);
++static const WCHAR *processor_arch_from_code(UINT32);
++#include "appmodel-identity.h"
++
+ /***********************************************************************
+  *         GetCurrentApplicationUserModelId   (kernelbase.@)
+  */
+ LONG WINAPI /* DECLSPEC_HOTPATCH */ GetCurrentApplicationUserModelId( UINT32 *length, WCHAR *id )
+ {
+-    FIXME( "(%p %p): stub\n", length, id );
+-    return APPMODEL_ERROR_NO_APPLICATION;
++    return package_current_string( 3, length, id );
+ }
+ 
+ /***********************************************************************
+@@ -1596,8 +1599,7 @@ LONG WINAPI /* DECLSPEC_HOTPATCH */ GetCurrentApplicationUserModelId( UINT32 *le
+  */
+ LONG WINAPI /* DECLSPEC_HOTPATCH */ GetCurrentPackageFamilyName( UINT32 *length, WCHAR *name )
+ {
+-    FIXME( "(%p %p): stub\n", length, name );
+-    return APPMODEL_ERROR_NO_PACKAGE;
++    return package_current_string( 1, length, name );
+ }
+ 
+ 
+@@ -1606,8 +1608,7 @@ LONG WINAPI /* DECLSPEC_HOTPATCH */ GetCurrentPackageFamilyName( UINT32 *length,
+  */
+ LONG WINAPI /* DECLSPEC_HOTPATCH */ GetCurrentPackageFullName( UINT32 *length, WCHAR *name )
+ {
+-    FIXME( "(%p %p): stub\n", length, name );
+-    return APPMODEL_ERROR_NO_PACKAGE;
++    return package_current_string( 0, length, name );
+ }
+ 
+ 
+@@ -1616,8 +1617,7 @@ LONG WINAPI /* DECLSPEC_HOTPATCH */ GetCurrentPackageFullName( UINT32 *length, W
+  */
+ LONG WINAPI /* DECLSPEC_HOTPATCH */ GetCurrentPackageId( UINT32 *len, BYTE *buffer )
+ {
+-    FIXME( "(%p %p): stub\n", len, buffer );
+-    return APPMODEL_ERROR_NO_PACKAGE;
++    return package_current_id( len, buffer );
+ }
+ 
+ /***********************************************************************
+@@ -1625,8 +1625,7 @@ LONG WINAPI /* DECLSPEC_HOTPATCH */ GetCurrentPackageId( UINT32 *len, BYTE *buff
+  */
+ LONG WINAPI GetCurrentPackageInfo( const UINT32 flags, UINT32 *buffer_size, BYTE *buffer, UINT32 *count )
+ {
+-    FIXME( "(%#x %p %p %p): stub\n", flags, buffer_size, buffer, count );
+-    return APPMODEL_ERROR_NO_PACKAGE;
++    return package_current_info( flags, buffer_size, buffer, count );
+ }
+ 
+ /***********************************************************************
+@@ -1634,8 +1633,7 @@ LONG WINAPI GetCurrentPackageInfo( const UINT32 flags, UINT32 *buffer_size, BYTE
+  */
+ LONG WINAPI /* DECLSPEC_HOTPATCH */ GetCurrentPackagePath( UINT32 *length, WCHAR *path )
+ {
+-    FIXME( "(%p %p): stub\n", length, path );
+-    return APPMODEL_ERROR_NO_PACKAGE;
++    return package_current_string( 2, length, path );
+ }
+ 
+ 
