@@ -86,11 +86,12 @@ final class LayoutEditorSession: ObservableObject {
     }
 
     /// Game options › Controls › Edit on-screen layout, no game running: the layout the game
-    /// would start on, over its art.
+    /// would start on (its compatibility default too, as OnScreenControls resolves it), over its art.
     func openOverArt(titleID: String, title: String) {
         let store = ControlsStore.shared
         open(titleID: titleID, title: title, host: .gameOptions,
-             state: ControlsState.resolve(game: store.game(titleID), defaults: store.defaults, controllerConnected: false))
+             state: ControlsState.resolve(game: store.game(titleID), defaults: store.defaults, controllerConnected: false,
+                                          compat: LaunchSettingsStore.compat.entry(for: titleID)?.controls))
     }
 
     /// Done: the game's own copy saved (none when it is the preset), and back.
