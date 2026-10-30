@@ -35,6 +35,18 @@ final class MemoryChunks: ContentChunkSource, @unchecked Sendable {
     }
 }
 
+/// Chunks whose plan carries no hash: the source knows each one's bytes and checks them itself.
+final class SelfCheckingChunks: ContentChunkSource, @unchecked Sendable {
+    var data: [[UInt8]: [UInt8]] = [:]
+
+    func chunk(_ c: ContentChunk) async throws -> [UInt8] {
+        guard let plain = data[c.key] else { throw ClientError.verificationFailed("chunk") }
+        return plain
+    }
+
+    func matches(_ c: ContentChunk, _ plain: [UInt8]) -> Bool { data[c.key] == plain }
+}
+
 final class SlicedPlanTests: XCTestCase {
     var root: URL!
 
@@ -121,6 +133,43 @@ final class SlicedPlanTests: XCTestCase {
             _ = try await engine(src).run(plan)
             XCTFail("expected a refusal")
         } catch ClientError.verificationFailed {}
+    }
+
+    /// A chunk only its source can check (`check: .none`, as a store whose chunks carry their
+    /// own hashes): a resume asks the source about each journalled whole chunk, so one damaged
+    /// on disk after the interruption is fetched again rather than trusted.
+    func testAResumeAsksTheSourceAboutChunksWithoutAHash() async throws {
+        let c0 = Array("0123456789abcdef".utf8), c1 = Array("ABCDEFGHIJKLMNOP".utf8)
+        let src = SelfCheckingChunks()
+        src.data = [Array("k0".utf8): c0, Array("k1".utf8): c1]
+        let chunks = [ContentChunk(key: Array("k0".utf8), size: 16, compressedSize: 16, check: .none),
+                      ContentChunk(key: Array("k1".utf8), size: 16, compressedSize: 16, check: .none)]
+        let plan = ContentPlan(files: [ContentFile(path: "store.bin", size: 32, hash: .none,
+                                                   parts: [ContentPart(chunk: 0, length: 16, fileOffset: 0),
+                                                           ContentPart(chunk: 1, length: 16, fileOffset: 16)])],
+                               directories: [], chunks: chunks, identity: SHA1.hash(Array("self-checked".utf8)))
+        func run(_ configure: (inout InstallEngine.Options) -> Void = { _ in }) async throws -> InstallEngine.Result {
+            var o = InstallEngine.Options()
+            o.concurrency = 1
+            o.flushEveryChunks = 1
+            configure(&o)
+            var e = InstallEngine(tree: root.appendingPathComponent("tree"), journal: root.appendingPathComponent("j.journal"),
+                                  source: src, log: .silent, options: o)
+            e.freeSpace = { _ in 1 << 40 }
+            return try await e.run(plan)
+        }
+        do {
+            _ = try await run { $0.cancelAfterChunks = 1 }
+            XCTFail("expected a pause")
+        } catch ClientError.cancelled {}
+        let file = root.appendingPathComponent("tree/store.bin")
+        var bytes = [UInt8](try Data(contentsOf: file))
+        bytes[3] ^= 0x01
+        try Data(bytes).write(to: file)
+        let r = try await run()
+        XCTAssertEqual(r.chunksRejected, 1)
+        XCTAssertEqual(r.chunksDownloaded, 2)
+        XCTAssertEqual([UInt8](try Data(contentsOf: file)), c0 + c1)
     }
 
     func testJournalKeysAreTwentyBytes() {

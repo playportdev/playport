@@ -191,7 +191,7 @@ public struct InstallEngine: Sendable {
                         let (k, url, part, c) = jobs[next]
                         next += 1
                         running += 1
-                        group.addTask { .rehashed(k, Self.partOnDisk(url, part, c)) }
+                        group.addTask { .rehashed(k, Self.partOnDisk(url, part, c, source: source)) }
                     }
                     guard case let .rehashed(k, ok)? = try await group.next() else { continue }
                     running -= 1
@@ -367,16 +367,16 @@ public struct InstallEngine: Sendable {
         }
     }
 
-    /// A journalled part on disk: a whole chunk is re-hashed; a slice is
+    /// A journalled part on disk: a whole chunk is re-checked by its source; a slice is
     /// trusted from the journal (its data was synced first) and the file's hash checks it.
-    static func partOnDisk(_ url: URL, _ p: ContentPart, _ c: ContentChunk) -> Bool {
+    static func partOnDisk(_ url: URL, _ p: ContentPart, _ c: ContentChunk, source: any ContentChunkSource) -> Bool {
         guard p.offsetInChunk == 0, p.length == c.size else { return true }
         let fd = sysOpen(url.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC, 0)
         guard fd >= 0 else { return false }
         defer { _ = sysClose(fd) }
         var buf = [UInt8](repeating: 0, count: Int(p.length))
         let n = buf.withUnsafeMutableBytes { pread(fd, $0.baseAddress, Int(p.length), off_t(p.fileOffset)) }
-        return n == Int(p.length) && c.matches(buf)
+        return n == Int(p.length) && source.matches(c, buf)
     }
 
     /// Size, then content: an empty file carries no meaningful hash.
