@@ -260,7 +260,8 @@
     builds, Playport's CEF removed) is still open.
   - Phone gates next: HK first-frame+10; RDR2 on l12's keys with the game-SC end left unset, to the cabin
     held to first-frame+600, with no game-SC end, no restart refusal, every V8 code range on an aligned base.
-- **KosmicKrisp command memory, owner decision 2026-10-30 after l19 (PLA-364), built, not yet on the phone**
+- **KosmicKrisp command memory, owner decision 2026-10-30 after l19 (PLA-364), built; phone gate l22–l23 not passed
+  (below)**
   (`d64b623`; dev IPA `6f1751c7…`, `.work/out/20261030-230828-6f1751c7/`, 90 checks):
   design 2A (release reusable primaries' holds) is dropped: l19 shows they hold under 1 MiB. The retire path
   is chosen instead: mesa 0132 `MESA_KK_EXPERIMENTAL=cmd_retire` (named only, not in `all`) gives a ONE_TIME
@@ -272,6 +273,16 @@
   `.work/agent-notes/pla476/reports/kk-retire-impl.md`; host test `kk-cmd-retire-test.c`. Phone gates next: HK on
   Vulkan with and without the option (first-frame+10 and `pp perf`), then RDR2 on l19's protocol with the option,
   compared with l19's `[kk-cmd-census]`, `[kk-upload]`, `[kk-mem]` and peak.
+- **Measured (l22–l23, 2026-10-31, IPA `6f1751c7…` with `MESA_KK_EXPERIMENTAL=cmd_retire,cmd_bo_classes`, against
+  l20–l21 on `6b5be569…`; `.work/ui-runs/20261031T002951-rdr2-p476l22`, `…/20261031T003826-rdr2-p476l23`;
+  [evidence](../evidence/2026-10-30-rdr2-kk-audio-diagnostics.md#l22l23-kosmickrisp-cmd_retire-gate)):**
+  **not passed.** The option applied and the ONE_TIME buckets hold 0 upload (held upload 1.6–1.8 MiB; command
+  BOs at the load step 0.28–0.34 GB, from 0.97–1.0). But allocators grow to 190–252 and **1.2–1.9 GB** in the
+  cabin's load step (l20–l21: 45, 0.69–0.77 GB; design 0.1–0.25). Graphics +460–510 MB, peak 7980 / 8084 MB.
+  Both runs ended 6–12 s into the step (l22 jetsam per-process-limit; l23 inferred), before the cabin. No GPU fault.
+  HK: smoke passed off and on. The gameplay pair has equal fps, −110 MiB and CPU +25 points (guest threads `00fc`
+  and `dxvk-cs`, not the completion threads), with one allocator tainted and replaced per frame; a repeat pair is
+  needed. The option stays opt-in, with no title default. Bounding allocator growth needs an owner decision.
 - **Measured (l20–l21, 2026-10-30, IPA `6b5be569…`, `.work/ui-runs/20261030T225818-rdr2-p476l20`,
   `…/20261030T231556-rdr2-p476l21`; [evidence](../evidence/2026-10-29-sc-stock-cef-probe.md#l20l21-decision-0169-gate)):**
   decision 0169's gate **passed** in both runs. HK first-frame+10 passed (`20261030T225730-hk-p476l20`, +11.33 s).

@@ -204,3 +204,182 @@ stays rejected.
   42 s at 17–20 fps with audio at 44–47 %. Then a black spinner followed to first-frame+600, after 0155 refused a
   Social Club re-sign-in. Peak 7631 MB, no jetsam. A dev experiment, no change to the compatibility status.
 - Hollow Knight (367520): first-frame+10 smoke passed (+10.44 s).
+
+## l22–l23: KosmicKrisp cmd_retire gate
+
+**Linear:** [PLA-364](https://linear.app/playportdev/issue/PLA-364), [PLA-476](https://linear.app/playportdev/issue/PLA-476).
+M = measured, I = inferred, U = unknown. Times are on the `[xp]` clock (≈ launch clock) unless a wall time is given.
+
+**IPAs.** The gate: `6f1751c75fc731cd0f90ab779a70b2f899520d22dc060545ac85ee0239af4a2f` (dev, mesa 0132
+`cmd_retire` and 0133 `cmd_bo_classes`, both opt-in). The baseline without the option:
+`6b5be56936ad84eed375304e65f937ecfacf662c135ce50ee3124b26b924841d` (l20–l21, the same runtime without mesa
+0132–0133; [probe evidence](2026-10-29-sc-stock-cef-probe.md#l20l21-decision-0169-gate)). l19's census above is the
+earlier reference (`5db127bd…`).
+
+**Runs.**
+
+- **HK** on Vulkan, two locked sessions (`agent-notes/pla476/kkb/`):
+  - Smoke off `$PLAYPORT_BUILD/ui-runs/20261030T233830-hk-kkb-off`: `ok:true`, first frame +11.49 s.
+  - Smoke on `$PLAYPORT_BUILD/ui-runs/20261030T233918-hk-kkb-on`: `ok:true`, first frame +10.78 s; the log has
+    `graphics options: MESA_KK_EXPERIMENTAL=cmd_retire,cmd_bo_classes` and a `[kk-cmd-retire]` line.
+  - Title menu only, no pads: `$PLAYPORT_BUILD/perf/kkr-hk-before` (23:40) and `…/kkr-hk-after` (00:06). The after
+    run's per-frame columns (frame time, GPU ms, MiB) are empty in its summary, so only fps (60.0 both) and CPU
+    (100 → 104 %) compare.
+  - Gameplay pair (new game, then walking; pads at first-frame+25 and +80): `$PLAYPORT_BUILD/perf/kkr-hk-before-play`
+    (00:14, off) then `…/kkr-hk-after-play` (00:19, on), 120 s each, thermal nominal in both.
+- **RDR2** (`agent-notes/pla476/l22.sh`, lock session `a6d7333fb817`, rc 0, output `l22-lock.out`): `arm22.sh` = l20's
+  `arm20.sh` (keys `env.PLAYPORT_CEF_SWAP=0 env.PLAYPORT_SC_SINGLE=1 env.PLAYPORT_SC_LAYOUT=1`, the game-SC end left
+  unset under decision 0169, `STORY_BY=420 UNTIL=600 WAIT=900`) plus the title's Graphics options row
+  `MESA_KK_EXPERIMENTAL=cmd_retire,cmd_bo_classes`. 180 s idle between the runs. `pp phone status` at the lock:
+  80 %, on power, 3.8 GB free.
+  - **l22** `$PLAYPORT_BUILD/ui-runs/20261031T002951-rdr2-p476l22` (host log pulled by `pp ui`, `pull/s1-host.log`).
+  - **l23** `$PLAYPORT_BUILD/ui-runs/20261031T003826-rdr2-p476l23` (`pp ui` pulled nothing; `pp phone log` put the
+    host log in the same run's `pull/s1-host.log`).
+
+### The option applied (M)
+
+- l22 (log line 2537) and l23 (line 2535): `graphics options: DXVK_CONFIG=… MESA_KK_EXPERIMENTAL=cmd_retire,cmd_bo_classes
+  VKD3D_SHADER_CACHE_PATH=0`. l20 has the same line without the option and no `[kk-cmd-retire]` line.
+- Every `[kk-cmd-census]` block in l22 and l23 has its `[kk-cmd-retire]` line: 7 of 7 in each (+4 to +218).
+
+### Census and memory (M)
+
+l22 time series (l23 follows the same course: allocators 107–177 MiB before the step). l20 (no option) beside it. Story was pressed at
++131 (l22), +125 (l23), +124 (l20); the cabin's load step starts when `fpMB` passes 7000: +236 (l22), +229 (l23),
++223 (l20), +238 (l21).
+
+| `[xp]` | l22 held upload | l22 allocators (n / MiB, largest) | l22 `command=` (n/MiB) | l22 retired (cum.) | l22 tainted / destroyed | l20 held upload | l20 allocators | l20 `command=` |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| +66 (title) | 0.0 | 26 / 19.1, 2.9 | 6/1 | 3294 (85.9 MiB) | 198 / 188 | 0.0 | 26 / 38.6 | 6/1 |
+| +96 | 1.8 | 64 / 77.7, 12.5 | 22/3 | 5820 | 204 / 188 | – | – | – |
+| +126 (Story) | 1.8 | 74 / 98.8, 12.5 | 25/3 | 9411 | 390 / 374 | – | – | – |
+| +156 | 1.6 | 74 / 100.0 | 25/3 | 12867 | 390 / 374 | – | – | – |
+| +186–188 | 1.6 | 74 / 140.1 | 25/3 | 17572 | 390 / 374 | 65.4 | 40 / 143.4, largest 16.4 | 533/67 |
+| +216–218 (last census) | 1.8 | 74 / 171.8, 12.5 | 25/3 | 23439 (2069.8 MiB) | 390 / 374 | 65.5 | 40 / 143.4 | 533/67 |
+| load step, `[kk-mem]` only | – | **190 / 1223.4** (+235); l23 152 / 865.2 (+228), **252 / 1911.5** (+240) | 287/80; l23 305/83 (+ pooled 198 / 260 MiB) | – | – | 856.8 (+247) | 45 / 766.5 (+237) | 1758/784 (+ pooled 214) |
+
+- **Submitted-once buckets.** `app primary once pool=-+reset submitted-once` n=1022, `upload=0.0 alloc-added=0.0` in
+  every census of l22 and l23 (+96 to +218). Baseline at +218: n=1023, 63.9 MiB; at +247 n=1545, 753.1 MiB; l19 1016.6.
+  The ONE_TIME recordings' upload BOs are returned at completion, as designed.
+- **Held upload** stays 1.6–1.8 MiB to +218 (l20 65.5, l19 900–1018 in the cabin). No census fell inside the load
+  step (the census runs every 30 s; the runs died 6 s (l22) and 12 s (l23) into the step), so held upload *in the cabin* is not
+  measured. `[kk-mem]` shows the command BOs instead: `command=` 80–83 MiB plus 198–260 MiB pooled, against 772–784
+  plus 196–214 in l20–l21 at the same point (−0.6 to −0.7 GB).
+- **Allocators.** Before the step: 74 allocators, 172–177 MiB, largest 12.5 MiB (l20 40 / 143 MiB, largest 16.4).
+  In the step's first 6–12 s they grow to 190–252 allocators and **1.2–1.9 GB**: l20–l21 had 45 allocators and
+  0.69–0.77 GB at the same point, l19 0.75 GB at its end. The design expected 0.1–0.25 GB. Net, command BOs plus
+  allocators at the step: l23 2.25 GB against l20 1.77 GB and l21 1.66 GB.
+- **I:** the retire path frees the BOs, but each sealed or tainted allocator is replaced by a new one, and a reset
+  `MTL4CommandAllocator` keeps its backing memory. In the load burst the pools hold far more allocators (74 → 252),
+  each near the 8 MiB seal, so allocator memory replaces the BO memory and adds to it. The largest allocator and the
+  per-pool split in the step are U (no census there).
+- **`[kk-upload]` rounding** on `kk_upload_vertex_params` / `kk_upload_tess_params` (the 0133 classes' target):
+  **not measured**. Neither site ran before +218, and no census came after.
+- `large-new` / `large-reuse` (l23 +240): 497 / 6983 in 12 s; not comparable with l20's cumulative counts.
+
+### Faults (M)
+
+- No `commit done error=` other than 0 (40 `commit done` lines each), no `MTLCommandBufferErrorDomain`, no GPU
+  restart in either host log or in the captured syslog (l22 to 00:34:17, l23 to 00:42:45 wall). The only `IOGPU`
+  strings are `[thread-sample]` stack frames (`IOGPUCommandQueueSubmitCommandBuffers`), as in l21.
+- Tainted / destroyed in RDR2: 198 / 188 by the title, 390 / 374 by Story, then unchanged: no steady churn.
+- HK on: tainted / destroyed grow to 6841 / 6837 in 120 s (about 57 a second). That equals the reusable-primary
+  direct submits (6856) and the off run's `unsubmitted=` releases (6808): one allocator destroyed and replaced per
+  frame. The design expected HK's taints near 0.
+
+### Footprint and the graphics ledger (M)
+
+| | l20 (off) | l21 (off) | **l22 (on)** | **l23 (on)** |
+| --- | --- | --- | --- | --- |
+| first frame / sign-in / Story | +76 / +96 / +124 | +80 / +100 / +128 | +75 / +112 / +131 | +77 / +96 / +125 |
+| load step onset (`fpMB` ≥ 7000) | +223 | +238 | +236 | +229 |
+| first 15 s of the step: `fpMB` max | 7718 | 7704 | 7783 | 8084 |
+| first 15 s: `[footprint]` phys max | 7562 | 7683 | **7980** | **8084** (`fast` 8173) |
+| first 15 s: graphics max | 3801 | 3833 | **4295** | **4311** |
+| graphics, Story → +241: median / max | 1845 / 3832 | 1739 / 3833 | 1672 / 4295 | 1766 / 4311 |
+| whole run: peak of 8192 | 7960 @+793 | 8006 @+651 | 7980 (died +242) | 8084 (died +241) |
+| end | cabin to first-frame+600 | cabin to ≈ff+680 | **jetsam** | **app gone** (I: jetsam) |
+
+- **Headroom gained: negative.** In the step's first 15 s the option costs +460–510 MB of graphics ledger and
+  +300–520 MB of `[footprint]` phys against l20–l21. l23 passed l20–l21's whole-run peaks (7960 / 8006) 6 s into
+  the step.
+
+### Cabin: not reached; both runs ended by memory
+
+- **l22 (M).** Footprint 7620 MB at +237.5 (`[fp-sample]` jump), `[footprint]` 7980 MB. The scene was invalidated at
+  00:34:25.8 wall (≈ +242); syslog: `Process S1Probe [13761] killed by jetsam reason per-process-limit`
+  (ReportSystemMemory, 00:34:56), `CORPSE: Capture Complete` at 00:34:59. `pp phone status` after: `app_pid` null.
+- **l23 (M + I).** `fpMB` 8018 from +236.75, `[footprint]` peak 8084, `fast` 8173; the log stops at +239.7 with CPU
+  near idle. The scene was invalidated at 00:42:57.2 wall (≈ +241). The syslog stream broke and restarted from
+  00:42:45 and ended at 00:43:06, before iOS's memory report would come (l22's came 30 s after its exit); from
+  00:43:08 the phone was not connected, and the crash listing failed. No jetsam line was captured. I: a
+  per-process-limit jetsam like l22.
+- **The screenshots (described, not published):** both runs show RDR2's black loading screen with the R★ spinner at
+  +231/+232 s after launch, and the phone's Home Screen at +249/+250 s. Neither reached the cabin, so there is no
+  cabin fps (l20–l21: 17.8 / 16.2).
+- **Why `ok:false`, exit 1, "the app exited before the stop condition" with `until_reached: true` (M, code).**
+  `tools/ui.py` sets `until_reached` when the until's anchor event matches (`until_hit["seen"]`, line 834); for
+  `first-frame+600` that is the first frame, not first frame +600 s. Both runs saw the first frame, then the app
+  exited at `after_s` 270.8 / 262.2, before the 600 s delay. This is not PLA-540 (l22: jetsam line and no app pid;
+  l23: SpringBoard ended the app's scene, logged in the syslog, 11 s before the phone disconnected).
+  Thermal reached serious in both (timeline).
+
+### HK (M)
+
+| Gameplay pair, window 85–120 s | fps | p99.9 ms | 25 ms hitches | GPU ms | CPU % | P % | CPU mW | MiB |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| off (`kkr-hk-before-play`) | 59.1 | 70.9 | 45 | 8.72 | 95 | 66 | 532 | 3158 |
+| on (`kkr-hk-after-play`) | 59.2 | 58.4 | 64 | 6.96 | 120 | 86 | 691 | 3048 |
+
+- **Whole runs** (120 s each): fps mean 58.7 both; 25 / 50 / 100 ms hitches 321 / 17 / 3 off, 337 / 13 / 4 on; GPU
+  mean 7.84 → 6.62 ms.
+- **The extra 25 ms hitches are one burst (M).** On has 31 of its 59 window hitches in the 115–120 s bucket; off has
+  15 in 105–110. The other buckets match (16/17, 1/1, 6/5, 3/3). Over 0–120 s the difference is +5 %. I: noise
+  (scene events), not a per-frame cost.
+- **The CPU rise is real and is not on Metal's completion threads (M).** `threads.txt` at 90 / 105 / 120 s:
+  - off 94 / 82 / 88 %; on 113 / 109 / 103 %;
+  - guest thread `00fc` (started by `0068`): on 10–11 %, 15–17 Mi/f; off, below the top 8 (≤ 2–3 %);
+  - `00ec dxvk-cs`: 8–9 % → 15–16 %;
+  - `0068` and `00f0 UnityGfxDeviceWorker` unchanged;
+  - the native `m…` threads (where Metal runs completion handlers) stay at 3–6 % in both.
+  The menu pair shows the same direction (100 → 104 %).
+  I: the cost is on the recording side. The likeliest source is the per-frame allocator taint, destroy and
+  replacement above. `retired` grows ~12.6 k per 30 s (45060 by the end, 3107 MiB) and frees nothing HK holds long.
+- **Memory:** allocators 44 / 181 MiB off → 32 / 58–80 MiB on; process MiB −110 (M).
+- **Repeat: needed** before any HK or all-title default. Run an interleaved pair (off, on, off, on) with the same
+  pads, and read `threads.txt` for `00fc` and `00ec`. One sequential pair cannot separate order from effect.
+
+### Verdict
+
+- **The design's estimate is half met (M).** Held upload under 100 MiB: met before the step, and the command BOs at
+  the step are 0.28–0.34 GB (from 0.97–1.0). Allocators 0.1–0.25 GB: **not met**. They reach 1.2–1.9 GB in the
+  first seconds of the step, more than the BOs freed. The `[kk-upload]` rounding was not measured.
+- **RDR2:** `cmd_retire,cmd_bo_classes` makes the cabin's load step **jetsam in both runs**, where l20–l21 without it
+  held the cabin to first-frame+600. It is **not safe** as RDR2's per-title default, and not useful even opt-in for
+  RDR2 until allocator growth is bounded. No GPU fault was seen, so the two untested Metal behaviours did not show a
+  failure in ≈240 s.
+- **Keep it opt-in, named only, default off (as built).** No title default changes. A 0152-style amendment is not
+  proposed on this evidence; the owner decides.
+- **Next (I):** bound the allocators, which needs an owner decision. Options:
+  - reuse instead of replacing tainted allocators;
+  - destroy, not reset, an allocator over a size, or cap allocators per pool;
+  - shorten the census interval during the load step, to measure largest, pooled and rounding there.
+  Then repeat l22 on the same protocol.
+
+### Not shown
+
+- Held upload, the largest allocator and `[kk-upload]` rounding inside the load step.
+- A jetsam line for l23.
+- Whether HK's CPU rise repeats.
+- RDR2 gameplay with the option.
+
+### Games observed (l22–l23)
+
+- Red Dead Redemption 2 (1174180), dev `6f1751c7…` with `MESA_KK_EXPERIMENTAL=cmd_retire,cmd_bo_classes`:
+  - signed in and Story was pressed in both runs;
+  - jetsam 6–12 s into the cabin's load step (l22 per-process-limit; l23 inferred), at 7980 / 8084 MB;
+  - an opt-in dev experiment: no change to the compatibility status (the best known stays l20–l21 on `6b5be569…`
+    without the option).
+- Hollow Knight (367520), `6f1751c7…` on Vulkan:
+  - the first-frame+10 smoke passed without the option (+11.49 s) and with it (+10.78 s);
+  - the gameplay pair ran at 59 fps both ways, with CPU +25 points and 110 MiB less with the option.
