@@ -50,26 +50,13 @@ extension BattleNetInstaller {
                                              + "the language can change after an update")
         }
         let r = try await read(build, work: work)
-        let installedTags = Set(info.tags.split(separator: ":").first.map { $0.split(separator: " ").map(String.init) } ?? [])
-        func options(_ locale: String) -> BattleNetInstallOptions {
-            var o = BattleNetInstallOptions(locale: locale)
-            o.x64Client = build.productConfig.x64Tags.contains(where: installedTags.contains)
-            return o
-        }
+        func options(_ locale: String) -> BattleNetInstallOptions { Self.options(locale, build: build, installed: info) }
         let installed = try BattleNetSelection(build: build, download: r.download, install: r.install, encoding: r.encoding, options: options(old))
         let have = Set(installed.files.map { "\($0.path)|\($0.ckey)" })
         let selection = try BattleNetSelection(build: build, download: r.download, install: r.install, encoding: r.encoding, options: options(locale))
             .without { have.contains("\($0.path)|\($0.ckey)") && InstallFS.fileSize(root.appendingPathComponent($0.path)) == $0.size }
 
-        // What the store holds: its journals' keys (9 bytes) and data files.
-        let dataDir = root.appendingPathComponent("Data/data")
-        var stored = Set<PackedKey>(), lastDataFile = -1
-        for (_, j) in try Self.latestJournals(dataDir) {
-            for l in try CASC.readJournal([UInt8](try Data(contentsOf: dataDir.appendingPathComponent(j.name)))).locations {
-                stored.insert(l.key)
-                lastDataFile = max(lastDataFile, l.dataFile)
-            }
-        }
+        let (stored, lastDataFile) = try Self.stored(root)
         let present = Set(selection.objects.map(\.key).filter { stored.contains(Self.key9($0)) })
         let locations = try await locate(selection.wanted.subtracting(present), r.cdnConfig.archives, meta: r.meta, build: build, installed: root)
         let plan = try BattleNetInstallPlan(build: build, archives: r.cdnConfig.archives, selection: selection, locations: locations,
@@ -81,13 +68,56 @@ extension BattleNetInstaller {
     /// A key as a journal names it: its first 9 bytes.
     static func key9(_ key: PackedKey) -> PackedKey { PackedKey(Array(key.bytes.prefix(9)) + [UInt8](repeating: 0, count: 7)) }
 
-    /// Adds `prepared` (from `prepareLocaleChange`) to the install at `root`: stages it through
-    /// ContentKit in `work` (resumable), moves the new data files and product folder files in,
-    /// writes the next generation of journals naming the store's objects and the new ones, then
+    /// Adds `prepared` (from `prepareLocaleChange`) to the install at `root` (`add`), then writes
     /// the locale into `.build.info` and into the game's `Config.wtf` when it has one.
     public func changeLocale(_ prepared: Prepared, root: URL, work: URL,
                              progress: @escaping @Sendable (InstallEngine.Progress) -> Void = { _ in }) async throws -> Result {
         let started = Date()
+        let plan = prepared.plan, product = plan.build.product
+        let staged = try await add(prepared, root: root, work: work, progress: progress)
+        var info = try Self.readBuildInfo(root, product)
+        let old = info.locale
+        info.tags = info.retagged(locale: plan.options.locale)
+        try InstallFS.writeAtomically(root.appendingPathComponent(".build.info"), Data(info.text.utf8))
+        let wtf = root.appendingPathComponent("\(plan.build.productConfig.folder)/WTF/Config.wtf")
+        if let text = try? String(contentsOf: wtf, encoding: .utf8) {
+            try InstallFS.writeAtomically(wtf, Data(Self.config(text, locale: plan.options.locale).utf8))
+        }
+        try? FileManager.default.removeItem(at: work)
+        log.info("battlenet", "\(product.code): language \(old ?? "?") → \(plan.options.locale), \(staged.downloadedBytes) bytes fetched")
+        return Result(engine: staged, archiveGroup: false, seconds: Date().timeIntervalSince(started))
+    }
+
+    // MARK: adding to an installed store
+
+    /// The install's options in `locale` for `build`: the x64 client too when the install's tags
+    /// name its machine.
+    static func options(_ locale: String, build: BattleNetBuild, installed info: BuildInfo) -> BattleNetInstallOptions {
+        let tags = Set(info.tags.split(separator: ":").first.map { $0.split(separator: " ").map(String.init) } ?? [])
+        var o = BattleNetInstallOptions(locale: locale)
+        o.x64Client = build.productConfig.x64Tags.contains(where: tags.contains)
+        return o
+    }
+
+    /// What the store at `root` holds: its journals' keys (9 bytes, `key9`) and its last data
+    /// file's number (-1 for none).
+    static func stored(_ root: URL) throws -> (keys: Set<PackedKey>, lastDataFile: Int) {
+        let dataDir = root.appendingPathComponent("Data/data")
+        var keys = Set<PackedKey>(), last = -1
+        for (_, j) in try latestJournals(dataDir) {
+            for l in try CASC.readJournal([UInt8](try Data(contentsOf: dataDir.appendingPathComponent(j.name)))).locations {
+                keys.insert(l.key)
+                last = max(last, l.dataFile)
+            }
+        }
+        return (keys, last)
+    }
+
+    /// Stages `prepared`'s plan through ContentKit in `work` (resumable), moves its data files and
+    /// product folder files into the install at `root`, and writes the next generation of
+    /// journals naming the store's objects and the new ones.
+    func add(_ prepared: Prepared, root: URL, work: URL,
+             progress: @escaping @Sendable (InstallEngine.Progress) -> Void) async throws -> InstallEngine.Result {
         let plan = prepared.plan, product = plan.build.product
         let tree = work.appendingPathComponent("tree")
         var engine = InstallEngine(tree: tree, journal: work.appendingPathComponent("stage.journal"),
@@ -115,17 +145,7 @@ extension BattleNetInstaller {
             }
             for (_, old) in latest { try fm.removeItem(at: dataDir.appendingPathComponent(old.name)) }
         }
-        var info = try Self.readBuildInfo(root, product)
-        let old = info.locale
-        info.tags = info.retagged(locale: plan.options.locale)
-        try InstallFS.writeAtomically(root.appendingPathComponent(".build.info"), Data(info.text.utf8))
-        let wtf = root.appendingPathComponent("\(plan.build.productConfig.folder)/WTF/Config.wtf")
-        if let text = try? String(contentsOf: wtf, encoding: .utf8) {
-            try InstallFS.writeAtomically(wtf, Data(Self.config(text, locale: plan.options.locale).utf8))
-        }
-        try? fm.removeItem(at: work)
-        log.info("battlenet", "\(product.code): language \(old ?? "?") → \(plan.options.locale), \(staged.downloadedBytes) bytes fetched")
-        return Result(engine: staged, archiveGroup: false, seconds: Date().timeIntervalSince(started))
+        return staged
     }
 
     /// The game's settings with its text and voice locales set to `locale` (other lines kept).

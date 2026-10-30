@@ -102,13 +102,14 @@ struct FakeProduct {
 
     static func data(_ key: TACTHash) -> String { "\(cdnPath)/data/\(key.cdnPath)" }
 
-    /// Lays the product out on `cdn`.
-    static func make(on cdn: FakeCDN, productConfig: [UInt8]) -> FakeProduct {
+    /// Lays the product out on `cdn`. Build 2 (an update, PLA-521) changes objects 9, 19, 29 and 39
+    /// and `Utils\a-arm64.dll`, adds objects 40..<44 (loose), and is the version endpoint's build.
+    static func make(on cdn: FakeCDN, productConfig: [UInt8], build: Int = 1) -> FakeProduct {
         typealias S = Synthetic
         var p = FakeProduct()
         // Stored objects: most for every locale and region, some for one locale, one region,
         // the Alternate data or the x64 client only.
-        for i in 0..<40 {
+        for i in 0..<(build == 1 ? 40 : 44) {
             var tags = everywhere
             switch i % 8 {
             case 3: tags.removeAll { $0 == "enUS" }                                  // deDE only
@@ -117,13 +118,14 @@ struct FakeProduct {
             case 7: tags.removeAll { $0 == "arm64" }                                  // x64 only
             default: break
             }
-            let (blte, keys) = S.blte(bytes(i, 300 + 97 * i), blocks: 1 + i % 3)
+            let seed = build > 1 && i % 10 == 9 ? 1000 * build + i : i
+            let (blte, keys) = S.blte(bytes(seed, 300 + 97 * i), blocks: 1 + i % 3)
             p.objects.append(Object(blte: blte, keys: keys, tags: tags))
         }
         // Product folder files (two directories spelled two ways, as Blizzard's manifests do).
         p.files = [("WowClassic-arm64.exe", bytes(100, 5000), ["Windows", "arm64"] + everywhere.suffix(8)),
                    ("WoWClassic.exe", bytes(101, 4000), ["Windows", "x86_64"] + everywhere.suffix(8)),
-                   ("Utils\\a-arm64.dll", bytes(102, 1500), ["Windows", "arm64"] + everywhere.suffix(8)),
+                   ("Utils\\a-arm64.dll", bytes(build == 1 ? 102 : 202, 1500), ["Windows", "arm64"] + everywhere.suffix(8)),
                    ("UTILS\\b-arm64.dll", bytes(103, 700), ["Windows", "arm64"] + everywhere.suffix(8))]
         let fileObjects = p.files.map { S.blte($0.content, blocks: 2) }
 
@@ -151,7 +153,7 @@ struct FakeProduct {
             archiveIndexes.append(entries)
             groupEntries += entries
         }
-        for i in 34..<40 {
+        for i in 34..<p.objects.count {
             cdn.set(data(p.objects[i].keys.ekey), p.objects[i].blte)
             looseKeys.append(ArchiveIndex.Entry(key: PackedKey(p.objects[i].keys.ekey), size: UInt32(p.objects[i].blte.count), archive: nil, offset: 0))
         }
@@ -182,7 +184,7 @@ struct FakeProduct {
             cdn.set(data(keys.ekey), blte)
             config += "\(name) = \(keys.ckey) \(keys.ekey)\n\(name)-size = \(plain.count) \(blte.count)\n"
         }
-        config += "build-name = WOW-1patch1.0_Test\nbuild-uid = wow_classic_era\n"
+        config += "build-name = WOW-\(build)patch1.0_Test\nbuild-uid = wow_classic_era\n"
         p.buildConfig = TACTHash(bytes: MD5.hash(Array(config.utf8)))
         cdn.set("\(cdnPath)/config/\(p.buildConfig.cdnPath)", Array(config.utf8))
         let cdnText = "# CDN Configuration\n\narchives = \(p.archives.map(\.hex).joined(separator: " "))\n"
@@ -191,8 +193,8 @@ struct FakeProduct {
         cdn.set("\(cdnPath)/config/\(p.cdnConfig.cdnPath)", Array(cdnText.utf8))
         let pc = TACTHash(bytes: MD5.hash(productConfig))
         cdn.set("/tpr/configs/data/\(pc.cdnPath)", productConfig)
-        cdn.set("/v2/products/wow_classic_era/versions", Array(("Region!STRING:0|BuildConfig!HEX:16|CDNConfig!HEX:16|KeyRing!HEX:16|BuildId!DEC:4|VersionsName!String:0|ProductConfig!HEX:16\n## seqn = 1\n"
-            + "us|\(p.buildConfig)|\(p.cdnConfig)||1|1.0.0.1|\(pc)\neu|\(p.buildConfig)|\(p.cdnConfig)||1|1.0.0.1|\(pc)\n").utf8))
+        cdn.set("/v2/products/wow_classic_era/versions", Array(("Region!STRING:0|BuildConfig!HEX:16|CDNConfig!HEX:16|KeyRing!HEX:16|BuildId!DEC:4|VersionsName!String:0|ProductConfig!HEX:16\n## seqn = \(build)\n"
+            + "us|\(p.buildConfig)|\(p.cdnConfig)||\(build)|1.0.0.\(build)|\(pc)\neu|\(p.buildConfig)|\(p.cdnConfig)||\(build)|1.0.0.\(build)|\(pc)\n").utf8))
         cdn.set("/v2/products/wow_classic_era/cdns", Array(("Name!STRING:0|Path!STRING:0|Hosts!STRING:0|Servers!STRING:0|ConfigPath!STRING:0\n## seqn = 1\n"
             + "us|tpr/wow|level3.blizzard.com us.cdn.blizzard.com|https://us.cdn.blizzard.com/?maxhosts=4 http://level3.blizzard.com/?maxhosts=4|tpr/configs/data\n"
             + "eu|tpr/wow|level3.blizzard.com eu.cdn.blizzard.com|https://eu.cdn.blizzard.com/?maxhosts=4 http://level3.blizzard.com/?maxhosts=4|tpr/configs/data\n").utf8))

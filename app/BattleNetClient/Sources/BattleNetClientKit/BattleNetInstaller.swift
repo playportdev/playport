@@ -138,19 +138,30 @@ public struct BattleNetInstaller: Sendable {
 
         log.info("battlenet", "\(cdnConfig.archives.count) archive indexes")
         let locations = try await locate(selection.wanted, cdnConfig.archives, meta: meta, build: build)
+        let others = try await otherIndexes(cdnConfig, meta: meta, build: build)
+        let plan = try BattleNetInstallPlan(build: build, archives: cdnConfig.archives, selection: selection, locations: locations,
+                                            options: options)
+        return Prepared(plan: plan, cdnConfig: cdnConfig, configs: r.configs, indexes: cdnConfig.archives + others,
+                        installSize: Self.installSize(build), client: r.client)
+    }
+
+    /// The build's patch archive indexes and its file and patch file indexes, which the store
+    /// keeps beside the archive indexes: fetched into `meta` unless `installed` has them.
+    func otherIndexes(_ cdnConfig: CDNConfig, meta: URL, build: BattleNetBuild, installed: URL? = nil) async throws -> [TACTHash] {
         let patchArchives = (cdnConfig.config["patch-archives"] ?? []).compactMap { TACTHash(hex: $0) }
-        try await forEachIndex(patchArchives, patch: true, meta: meta, build: build) { _, _ in }
+        try await forEachIndex(patchArchives, patch: true, meta: meta, build: build, installed: installed) { _, _ in }
         var others = [TACTHash]()
         for (name, patch) in [("file-index", false), ("patch-file-index", true)] {
             guard let key = cdnConfig.config[name]?.first.flatMap({ TACTHash(hex: $0) }) else { continue }
-            try await forEachIndex([key], patch: patch, meta: meta, build: build) { _, _ in }
+            try await forEachIndex([key], patch: patch, meta: meta, build: build, installed: installed) { _, _ in }
             others.append(key)
         }
-        let plan = try BattleNetInstallPlan(build: build, archives: cdnConfig.archives, selection: selection, locations: locations,
-                                            options: options)
-        let installSize = build.config.config["install-size"].flatMap { $0.count >= 2 ? UInt64($0[1]) : nil } ?? 0
-        return Prepared(plan: plan, cdnConfig: cdnConfig, configs: r.configs, indexes: cdnConfig.archives + patchArchives + others,
-                        installSize: installSize, client: r.client)
+        return patchArchives + others
+    }
+
+    /// The install size the build config names (`IM Size` in `.build.info`).
+    static func installSize(_ build: BattleNetBuild) -> UInt64 {
+        build.config.config["install-size"].flatMap { $0.count >= 2 ? UInt64($0[1]) : nil } ?? 0
     }
 
     /// What a plan is made from: the build's configs (kept in `meta`), the client with its key
@@ -332,11 +343,14 @@ public struct BattleNetInstaller: Sendable {
     }
 
     /// The archive group: every archive index's entries merged in key order, each with its
-    /// archive's place in the CDN config's list (the first archive listing a key keeps it).
-    static func archiveGroup(_ archives: [TACTHash], meta: URL) throws -> [UInt8] {
+    /// archive's place in the CDN config's list (the first archive listing a key keeps it). Each
+    /// index is read from `meta`, else from the `installed` store's `Data/indices`.
+    static func archiveGroup(_ archives: [TACTHash], meta: URL, installed: URL? = nil) throws -> [UInt8] {
         var entries = [ArchiveIndex.Entry]()
         for (i, key) in archives.enumerated() {
-            let index = try ArchiveIndex([UInt8](try Data(contentsOf: meta.appendingPathComponent(key.hex + ".index"))), name: key)
+            var url = meta.appendingPathComponent(key.hex + ".index")
+            if let installed, InstallFS.fileSize(url) == nil { url = installed.appendingPathComponent("Data/indices/\(key.hex).index") }
+            let index = try ArchiveIndex([UInt8](try Data(contentsOf: url)), name: key)
             index.forEach(archive: i) { entries.append($0) }
         }
         entries.sort { ($0.key, $0.archive ?? 0) < ($1.key, $1.archive ?? 0) }
