@@ -10,6 +10,9 @@ Amends [0138](0138-refuse-rdr2s-social-club-restarts-at-process-creation.md),
 **Amended 2026-10-30 (owner, PLA-476, run `20261030T141431-rdr2-p476d1`):** the reload ends
 on the title menu, and an allow needs headroom ([below](#amendment-2026-10-30-an-allow-needs-headroom)).
 
+**Amended again 2026-10-30 (owner, PLA-476, run `20261030T184300-rdr2-p476l13`):** an allow lets
+one helper start through ([below](#amendment-2-2026-10-30-one-start-per-allow)).
+
 ## Context
 
 - **The end is the same in the runs that play on and in the runs that do not.** Nine RDR2 runs
@@ -112,3 +115,43 @@ By the owner, 2026-10-30 (PLA-476), from run d1
 - A release build still has no working detector (follow-up: count GetCurrentGameLanguage in
   the steamclient provider without the trace).
 
+## Amendment 2, 2026-10-30: one start per allow
+
+By the owner, 2026-10-30 (PLA-476), from run l13 (`.work/ui-runs/20261030T184300-rdr2-p476l13`,
+stock CEF with the Social Club layout, [evidence](../evidence/2026-10-29-sc-stock-cef-probe.md)).
+
+### What l13 showed
+
+- The game's Social Club was ended at +280.6 s, in Story's cabin. The steam-language detector fired at
+  +314.1 s (end+33.5), at a footprint of 6793 MB, so the headroom check passed, and the app allowed.
+- **The game left Story before the restarts, as in d1.** Cabin frames ran to +318.6 s, empty 60 fps frames
+  started at +319.5 s, and a new DirectSound mixer thread followed at +320.0 s. The black spinner showed
+  from then on.
+  - The sequence matches d1: language burst, then the DirectSound device, then empty frames, all 31–39 s
+    after the end.
+  - d1's leave came before its allow, so the allow is not what sends the game out of Story (inferred).
+- **That one allow let five helper starts through** (starts 9–13, +318.6 to +362.2 s):
+  - each helper got its layout slots;
+  - each died 10–15 s later in Chromium's out-of-memory exit (`0xE0000008`, request 0 bytes) before it
+    signed in. V8's 5 GiB reservation found no gap: at Story, the layout's window had a 515 MB largest
+    hole;
+  - the game started the next one 0.3 s after each exit.
+- The allow lasts until a sign-in line or 90 s. No sign-in line came, so every start went ahead.
+- The footprint rose from 6.9 to 7.6 GB, with compressed memory from 2.4 to 3.9 GB. The app was ended at
+  +374.7 s at 7461 MB, with no crash file.
+
+### Amended decision
+
+- **An allow lets one helper start through.** ntdll refuses the game's later starts again as soon as one
+  allowed start has gone ahead (`ppgsc_take_allow`, madeira-unix 0239). The line reads
+  `[game-sc] restart allowed start N; the allow is used, later starts are refused`.
+- A further restart needs a new re-sign-in, its own allow and its own headroom check.
+- The cap of two allows a Play, the headroom rule, the allow's end at the next sign-in line or 90 s, and
+  the re-end rule are unchanged. The app's own steps are unchanged.
+
+### Costs
+
+- If an allowed helper fails before it signs in, the game stays on its loading spinner, as it does without
+  0155.
+- In a stock-CEF layout play the allowed helper itself may not fit at Story (l13). The allow then costs one
+  failed start, not a cascade.

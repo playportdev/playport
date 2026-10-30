@@ -21,6 +21,8 @@
 // reload they let finish ended on the game's title menu, not in Story. So a re-sign-in allows
 // only when the footprint plus `restartNeedMB` is under the limit less `restartMarginMB`;
 // otherwise the restarts stay refused for the rest of the Play, as when the root does not stop.
+// Amended again (run l13): ntdll lets one start through per allow (madeira-unix 0239), so a helper
+// that dies before its sign-in is not restarted again and again within the allow.
 
 import Foundation
 
