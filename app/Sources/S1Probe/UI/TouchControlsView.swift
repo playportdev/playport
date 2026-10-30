@@ -617,7 +617,7 @@ private final class ControlView: UIView {
             }
             for (i, r) in rings.enumerated() {
                 r.isHidden = i >= points.count
-                if i < points.count { r.center = CGPoint(x: points[i].x - home.minX, y: points[i].y - home.minY) }
+                if i < points.count { r.center = CGPoint(x: CGFloat(points[i].x) - home.minX, y: CGFloat(points[i].y) - home.minY) }
             }
         case .pointer, .tool:
             break
