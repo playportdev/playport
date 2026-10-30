@@ -48,10 +48,15 @@ struct GameControlsOptionRows: View {
         }
         choiceRow("opt:layout", "On-screen controls", \.layout, all: OnScreenLayout.allCases, inherited: inherited.layout,
                   compat: compat, name: \.title, detail: "Shown while no controller is connected")
-        choiceRow("opt:dpad", "D-pad", \.dpad, all: OnScreenDpad.allCases, inherited: inherited.dpad, name: \.title,
-                  detail: "Above the left stick")
-        choiceRow("opt:rightStick", "Right stick", \.rightStick, all: OnScreenRightStick.allCases,
-                  inherited: inherited.rightStick, name: \.title, detail: "Beside A/B/X/Y")
+        // The Gamepad preset's d-pad and right stick: only while the game plays that preset itself
+        // (no copy of its own, not another layout), where they change what is drawn.
+        let plays = ControlsState.resolve(game: own, defaults: store.defaults, controllerConnected: false, compat: entry?.controls)
+        if plays.hasGamepadOptions {
+            choiceRow("opt:dpad", "D-pad", \.dpad, all: OnScreenDpad.allCases, inherited: inherited.dpad, name: \.title,
+                      detail: "Above the left stick")
+            choiceRow("opt:rightStick", "Right stick", \.rightStick, all: OnScreenRightStick.allCases,
+                      inherited: inherited.rightStick, name: \.title, detail: "Beside A/B/X/Y")
+        }
         let opacity = OptionValue.of(own: own.opacity, inherited: inherited.opacity, name: ControlsOpacity.label)
         PadRow(id: "opt:opacity", title: "Opacity", value: opacity.text, accessory: .chevron, changed: opacity.changed,
                style: .plain, reset: opacity.changed ? { set { $0.opacity = nil } } : nil) {

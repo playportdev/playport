@@ -14,8 +14,9 @@
 //     server call: patches/madeira-unix 0010), and resumes them on Resume.
 //
 // Its rows: Resume (also B, ≡ and Home), Controls (a panel beside the rows,
-// QuickMenuControls.dc.html: the game's on-screen controls, Off or Gamepad, the
-// Gamepad layout's d-pad and right stick, their opacity, gyro aim's output
+// QuickMenuControls.dc.html: the game's on-screen layout, the Gamepad layout's
+// d-pad and right stick (while it plays that preset with no copy of its own:
+// QuickMenuControlsRow.shown), their opacity, gyro aim's output
 // and sensitivity, and with a controller connected its controller map's mode,
 // saved for the game and applied at once; UI/TouchControlsView.swift,
 // GyroSensors.swift, ControllerMapView.swift; A on the Controller row, a tap on
@@ -105,7 +106,8 @@ final class InGameMenu: ObservableObject {
             return
         }
         if let row = menu.panel {
-            let rows = QuickMenuControlsRow.shown(controller: OnScreenControls.shared.controllers > 0)
+            let controls = OnScreenControls.shared
+            let rows = QuickMenuControlsRow.shown(controller: controls.controllers > 0, state: controls.state)
             switch b {
             case .up: menu.move(down: false, rows: rows)
             case .down: menu.move(down: true, rows: rows)
@@ -459,7 +461,7 @@ struct InGameMenuView: View {
                 ControlsPanel(ring: row, state: controls.state,
                               gyro: launch.titleID.map { store.gyro($0) } ?? store.gyroDefaults,
                               map: launch.titleID.map { store.game($0).controllerMap(over: store.defaults) } ?? store.defaults.controllerMap,
-                              rows: QuickMenuControlsRow.shown(controller: controls.controllers > 0))
+                              rows: QuickMenuControlsRow.shown(controller: controls.controllers > 0, state: controls.state))
                     .padding(.leading, 330 + lead - 44 + 24).padding(.top, 22)
                     // Clear of the footer: past this the rows scroll (ControlsPanel).
                     .padding(.bottom, safe.insets.bottom + 36 + 8)

@@ -162,8 +162,9 @@ best-effort and reported as unconfirmed; transport loss/SIGKILL can leave cancel
                          menu:keyboard goes back to the game with the touch keyboard open over it.
                          menu:controls opens its Controls panel: pad:left/right change the ringed row
                          (On-screen controls: Off, Pad, Keys (Keyboard & mouse), Point (Point & click);
-                         D-pad: Off, On; Right stick: Off, Below, Above
-                         A/B/X/Y; Opacity; Gyro aim: Off, Mouse, Right stick; Sensitivity; and, while a
+                         D-pad: Off, On; Right stick: Off, Below, Above A/B/X/Y, these two only on the
+                         Gamepad layout with no copy of the game's own; Opacity;
+                         Gyro aim: Off, Mouse, Right stick; Sensitivity; and, while a
                          controller is connected, --pad's scripted pad too, Controller: Pad, Keys &
                          mouse, Custom), pad:down/up move, pad:b goes back. pad:a on Controller (or
                          choosing Custom there) opens the Controller page over the paused game, which

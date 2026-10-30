@@ -35,9 +35,16 @@ public enum QuickMenuControlsRow: String, CaseIterable, Sendable {
     /// The controller map's mode (Pad, Keys & mouse, Custom): only while a controller is connected.
     case controllerMap
 
-    /// The rows shown: the controller map's only with a controller connected.
-    public static func shown(controller: Bool) -> [QuickMenuControlsRow] {
-        controller ? allCases : allCases.filter { $0 != .controllerMap }
+    /// The rows shown: the D-pad's and Right stick's only while they change what is drawn
+    /// (`ControlsState.hasGamepadOptions`), the controller map's only with a controller connected.
+    public static func shown(controller: Bool, state: ControlsState) -> [QuickMenuControlsRow] {
+        allCases.filter { r in
+            switch r {
+            case .dpad, .rightStick: state.hasGamepadOptions
+            case .controllerMap: controller
+            default: true
+            }
+        }
     }
 
     public var title: String {

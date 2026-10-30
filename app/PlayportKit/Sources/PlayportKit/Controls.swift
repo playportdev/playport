@@ -299,6 +299,10 @@ public struct ControlsState: Equatable, Sendable {
     /// What is drawn: the game's copy of the layout or the preset, or nothing.
     public var drawnLayout: ControlLayout? { visible ? edited ?? layout.layout(dpad: dpad, rightStick: rightStick) : nil }
 
+    /// The d-pad and right stick options place something: the layout is the Gamepad preset itself, not
+    /// the game's copy of it (which has its own) or another layout (which has none).
+    public var hasGamepadOptions: Bool { layout == .gamepad && edited == nil }
+
     /// The game's own layout, else Off under Never, else the game's compatibility default (`compat`,
     /// CompatDefaults.Entry.controls), else Settings' Starting layout, else Gamepad (decision 0074).
     public static func resolve(game: GameControls?, defaults: ControlsDefaults, controllerConnected: Bool,

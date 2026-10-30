@@ -179,7 +179,8 @@
 //                              screenshot, overlay, controller, quit) and presses A, as a
 //                              controller does (controls opens its panel: pad:left/right
 //                              change the ringed row, pad:down moves along On-screen controls,
-//                              D-pad, Right stick, Opacity, Gyro aim, Sensitivity and, while a
+//                              D-pad and Right stick (only on the Gamepad layout with no copy of
+//                              the game's own), Opacity, Gyro aim, Sensitivity and, while a
 //                              controller is connected (--pad's scripted pad counts), Controller:
 //                              Pad, Keys & mouse, Custom; pad:b back);
 //                              menu:layout opens the Controls panel and its Edit layout…, the
