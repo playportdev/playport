@@ -219,16 +219,28 @@
   - HK first-frame+10 passed (`20261030T202011-hk-p476l15`). Peaks were 5564 and 5737 MB, with no jetsam.
   - Whether 0236–0238 or the owner's preceding play caused the two helper deaths is not determined (I: neither
     death follows from the refused sizes).
-- **Chunk-2 gates after l16:**
+- **Measured (l17–l18, 2026-10-30, the same installed IPA `b1a239f2…`, no hand play before;
+  [evidence](../evidence/2026-10-29-sc-stock-cef-probe.md#l17l18-repeat-on-b1a239f2)):** l12's keys,
+  `arm15.sh`.
+  - **Both runs reached and held the cabin:** l17 (`…/20261030T204959-rdr2-p476l17`) to first-frame+600, and l18
+    (`…T210408-rdr2-p476l18`) to `[xp]` +717. In l18, `pp ui` stopped at +361.5 on a dropped network link (`exited`)
+    while the app ran on; a second session pulled the log and ended it.
+  - **l15–l16's helper OOM deaths did not repeat:** no `0xE0000008` and no `[chromium-oom]`. Each of the four helpers
+    refused 26 impossible probes, and 0 V8 `NO GAP FITS` were logged (the game's 8960 MiB walk is the only line).
+  - Each helper's V8 1 GiB code range took `cand guard` (hint offsets 8 or 12 GiB). In l12–l18, only l16's B had an
+    offset-0 hint, took `cand plain` and died (I: the trigger). l15's A death remains unexplained.
+  - Peaks were 7407 MB to +400 and 7468 / 7645 MB late in the run, with no jetsam. The game-SC end fired at the step
+    (7063 / 7170 MB). 0155/0239 were not exercised.
+- **Chunk-2 gates after l18:**
 
-  | Gate | l7 | l8 | l9 | l10 | l11 | l12 | l13 | l14 | l15 | l16 |
-  | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-  | HK first-frame+10 | passed | passed | passed | passed | passed | passed | not run (HK `pp perf` ran) | not run (HK `pp perf` ran) | passed (+11.78 s) | not run (same session as l15) |
-  | The game's helper reaches allocator/browser startup | passed | **not passed** (kind 2 not held again; no grant, refused, died in init) | passed (kinds 1–6, no refusal) | passed (kinds 1–6, no refusal) | passed (kinds 1–6, no refusal) | passed (kinds 1–6, no refusal) | passed | passed | not reached (no sign-in) | passed (kinds 1–6), then died: V8 code range |
-  | The game signs in, Story is pressed | passed | passed | passed | passed | passed | passed (GPU off) | passed | passed | **not passed** (the launcher's helper died) | signs in; **Story not pressed** |
-  | Story reaches the cabin | **not passed** (jetsam at 8192 MB) | **not passed** (black loading screen without the game's Social Club) | **not passed** (jetsam at 8192 MB in the load step) | **not passed** (8185 MB in the load step, then the app ended) | **not passed** (8169 MB in the load step, then SIGKILL) | **passed** (peak 7200 MB, held to first-frame+600) | **passed** (cabin, then the app was killed at +374 s: 0155 restarts) | **passed** (peak 7058 MB, held to first-frame+600) | **not passed** | **not passed** (spinner) |
-  | No SC/launcher `NO GAP FITS` or soft grant | **not passed** (26 V8 lines each from A and B, 36 `dllhost.exe`) | **not passed** (26 V8 lines from A; 0 `dllhost.exe`; no soft grant) | **not passed** (26 V8 lines each from A and B; 0 `dllhost.exe`; no soft grant) | **not passed** (26 V8 lines each from A and B; 0 `dllhost.exe`; no soft grant) | **not passed** (26 V8 lines each from A and B; 0 `dllhost.exe`; no soft grant) | **not passed** (26 V8 lines each from A and B; 0 `dllhost.exe`; no soft grant) | **not passed** (103 lines) | **not passed** (53 lines) | A: 0 (26 refused); no soft grant | A: 0 (26 refused); B: 4 (V8's code-range fallback, `0x140000000`) |
-  | Peak within 7343 MB ±10 % | **not passed** (8192 MB limit) | **not comparable** (6496 MB, no Story step) | **not passed** (≥ 8106 MB, the limit) | **not passed** (8185 MB) | **not passed** (8169 MB) | **passed** (7200 MB) | **passed** by the band (7627 MB after the 0155 restarts, then the app was killed; 6885–7010 at the step) | **passed** (7058 MB) | not comparable (5564 MB, no Story) | not comparable (5737 MB, no Story) |
+  | Gate | l7 | l8 | l9 | l10 | l11 | l12 | l13 | l14 | l15 | l16 | l17 | l18 |
+  | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+  | HK first-frame+10 | passed | passed | passed | passed | passed | passed | not run (HK `pp perf` ran) | not run (HK `pp perf` ran) | passed (+11.78 s) | not run (same session as l15) | not run (installed IPA, HK passed in l15) | not run |
+  | The game's helper reaches allocator/browser startup | passed | **not passed** (kind 2 not held again; no grant, refused, died in init) | passed (kinds 1–6, no refusal) | passed (kinds 1–6, no refusal) | passed (kinds 1–6, no refusal) | passed (kinds 1–6, no refusal) | passed | passed | not reached (no sign-in) | passed (kinds 1–6), then died: V8 code range | passed (kinds 1–6) | passed (kinds 1–6) |
+  | The game signs in, Story is pressed | passed | passed | passed | passed | passed | passed (GPU off) | passed | passed | **not passed** (the launcher's helper died) | signs in; **Story not pressed** | passed | passed |
+  | Story reaches the cabin | **not passed** (jetsam at 8192 MB) | **not passed** (black loading screen without the game's Social Club) | **not passed** (jetsam at 8192 MB in the load step) | **not passed** (8185 MB in the load step, then the app ended) | **not passed** (8169 MB in the load step, then SIGKILL) | **passed** (peak 7200 MB, held to first-frame+600) | **passed** (cabin, then the app was killed at +374 s: 0155 restarts) | **passed** (peak 7058 MB, held to first-frame+600) | **not passed** | **not passed** (spinner) | **passed** (held to first-frame+600) | **passed** (held to `[xp]` +717) |
+  | No SC/launcher `NO GAP FITS` or soft grant | **not passed** (26 V8 lines each from A and B, 36 `dllhost.exe`) | **not passed** (26 V8 lines from A; 0 `dllhost.exe`; no soft grant) | **not passed** (26 V8 lines each from A and B; 0 `dllhost.exe`; no soft grant) | **not passed** (26 V8 lines each from A and B; 0 `dllhost.exe`; no soft grant) | **not passed** (26 V8 lines each from A and B; 0 `dllhost.exe`; no soft grant) | **not passed** (26 V8 lines each from A and B; 0 `dllhost.exe`; no soft grant) | **not passed** (103 lines) | **not passed** (53 lines) | A: 0 (26 refused); no soft grant | A: 0 (26 refused); B: 4 (V8's code-range fallback, `0x140000000`) | **passed** (A 0, B 0; 26 refused each) | **passed** (A 0, B 0; 26 refused each) |
+  | Peak within 7343 MB ±10 % | **not passed** (8192 MB limit) | **not comparable** (6496 MB, no Story step) | **not passed** (≥ 8106 MB, the limit) | **not passed** (8185 MB) | **not passed** (8169 MB) | **passed** (7200 MB) | **passed** by the band (7627 MB after the 0155 restarts, then the app was killed; 6885–7010 at the step) | **passed** (7058 MB) | not comparable (5564 MB, no Story) | not comparable (5737 MB, no Story) | **passed** (7407 MB to +400, 7468 MB at +769) | **passed** (7407 MB to +400, 7645 MB at +669) |
 
 - **Ordered queue now (after l16):** first, find why l15's launcher helper and l16's game helper died in Chromium's
   out-of-memory exit. The V8 1 GiB code range's placement is a candidate (`[jumbo] cand plain`/`guard` by the hint's

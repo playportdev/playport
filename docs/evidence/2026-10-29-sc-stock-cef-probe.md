@@ -1646,3 +1646,96 @@ I = inferred.
 - Red Dead Redemption 2 (1174180): dev stock-CEF probe on `b1a239f2…`; neither run reached Story. In l15 the
   launcher's Social Club helper died before the sign-in; in l16 the game's helper died after the sign-in and the
   game stayed on its loading spinner. A dev experiment, no change to the compatibility status.
+
+## l17–l18: repeat on b1a239f2
+
+The same installed IPA as l15–l16, `b1a239f2717c8fa6b0f0d4810d2d2862b858f6534cf1b875febd827292ff3451` (HEAD
+`1413ed9`). There was no code change, no build, no install and no HK run. `pp phone status`: installed `b1a239f2…`,
+80 %, on power, no JIT timeout. Nobody played by hand before the session. The session was
+`agent-notes/pla476/l17.sh` under one `pp phone lock`: a 300 s idle gap (the phone was warm), then l17 and l18 with
+`arm15.sh`, l12's keys (`env.PLAYPORT_CEF_SWAP=0 env.PLAYPORT_SC_SINGLE=1 env.PLAYPORT_SC_LAYOUT=1`) and
+`STORY_BY=420 UNTIL=600 WAIT=900`. Each run's host log was pulled before the next launch. M = measured, I = inferred.
+The `[xp]` clock is the log's.
+
+- **l17** (`$PLAYPORT_BUILD/ui-runs/20261030T204959-rdr2-p476l17`): `ok:true`, `until first-frame+600`; `pp ui`
+  pulled the log.
+- **l18** (`…/20261030T210408-rdr2-p476l18`): `pp ui` returned `ok:false`, `the app exited before the stop
+  condition`, at +361.5 s after its launch. **The app had not exited (M).** The phone's network link dropped:
+  `pymobiledevice3` gave `Device is not connected` from 21:10:20 to 21:10:33, and `pp phone status` after the run
+  and again three minutes later showed the same app pid alive. `pp ui` pulled no log, so the session pulled it with
+  `pp phone log` (`pull/`). A second locked session (`agent-notes/pla476/l18-tail.sh`) then let the game run to the
+  planned first-frame+600 (`[xp]` +717), took a shot, pulled the log again (`pull2/`, a superset of `pull/`), and
+  ended the app with `pp phone kill`. The figures below come from `pull2/`.
+
+**Against l12, l14, l15 and l16 (M unless marked).**
+
+| | l12 | l14 | l15 | l16 | l17 | l18 |
+| --- | --- | --- | --- | --- | --- | --- |
+| result | cabin, ff+600 | cabin, ff+600 | no sign-in | no Story (B died) | **cabin, ff+600** | **cabin**; `pp ui` stopped at +361.5 on a link drop; the game ran on to `[xp]` +717 |
+| thermal at launch | nominal | serious | — | — | nominal (serious later) | serious |
+| first frame (title clock) | 92.8 | 96.7 | 83.7 | 87.8 | 80.7 | 112.3 |
+| game signed in `[xp]` | +110.3 | +116.1 | none | +104.5 | +96.2 | +130.2 |
+| Story pressed `[xp]` / after sign-in | +152.8 / 42.5 s | +149.3 / 33.2 s | — | — | +123.6 / 27.4 s | +160.8 / 30.6 s |
+| `0xE0000008` / `[chromium-oom]` | none | none | A, `request 0x3c0` | B, `request 0` | **none** | **none** |
+| A's fate | ended at sign-in | ended at sign-in | OOM exit +89.7 | ended at sign-in | ended at sign-in (+96.2) | ended at sign-in (+130.5) |
+| B's fate | game-SC end | game-SC end | never started | OOM exit +115.6 | game-SC end (+224.7) | game-SC end (+285.6) |
+| refusal counter (exit line) A / B | — | — | 26 / — | 26 / 6 | **26 / 26** | **26 / 26** |
+| logged refusals A / B | — | — | 2 / — | 2 / 2 | 2 / 2 (512, 256 GiB) | 2 / 2 (512, 256 GiB) |
+| `NO GAP FITS` A / B / game | 26 / 26 / 1 | 26 / 26 / 1 | 0 / — / 1 | 0 / 4 / 1 | **0 / 0 / 1** | **0 / 0 / 1** |
+| V8 1 GiB code range A | guard → `0x7300000000` | guard → `0x7100000000` | guard → `0x7200000000` | guard → `0x7300000000` | guard → `0x7200000000` | guard → `0x7300000000` |
+| V8 1 GiB code range B | guard → `0x7300000000` | guard → `0x7100000000` | — | **plain ×6 → kernel pick `0x72b0370000`** | guard → `0x7300000000` | guard → `0x7300000000` |
+| the Story step `[xp]` (`fpMB`) | press+76.5 (→ 7190) | press+103 (→ 7056) | — | — | +224.3–224.7, press+101 (5929 → 7058) | +283.8–284.1, press+123 (5848 → 7167) |
+| game-SC end `[xp]` | +229.9, 7185 MB | +268.3, 7051 MB | none | none | +224.3, 7063 MB, press+101 | +285.6, 7170 MB, press+125 |
+| 0138 refusals after the end (highest start) | 18 | 100 | — | 60+ | 110 | 90 |
+| 0155 / 0239 lines | none | none | none | none | **none** (no allow, no `restart allowed start`) | **none** |
+| peak `fpMB` (to +400) | 7200 | 7058 | 5564 | 5737 | 7407 (+310.8) | 7407 (+380.5) |
+| peak `fpMB` (whole run) | 7200 | 7058 | 5564 | 5737 | **7468** (+768.9) | **7645** (+668.9) |
+| jetsam | none | none | none | none | none | none |
+
+- **The code range (M).** Each helper's 1 GiB ask follows its kind-6 grant within milliseconds: `[jumbo] hinted
+  reserve <hint> … failed (0xc000000d) — offset-preserving retry`. V8's hints are 4 GiB aligned. Of the 12 asks from
+  l12 to l18, the 11 whose hint had an offset of 4, 8 or 12 GiB within 16 GiB took `cand guard
+  slot=0x7400000000` and got `0x7000000000` plus that offset on the first try. l17's hints were `0x55e600000000` (A, 8 GiB) and
+  `0x574f00000000` (B, 12 GiB); l18's were `0x582700000000` (A, 12 GiB) and `0x2fd700000000` (B, 12 GiB). The only
+  offset-0 hint (l16's B, `0x60800000000`) took `cand plain` and failed, and that helper died. I: a code-range hint
+  at offset 0 within 16 GiB is the trigger for l16's death. If V8's hint offset is uniform, about one helper in four
+  would take that path. l15's A death is not explained by the code range: its ask got the guard slot
+  `0x7200000000`.
+- **The OOM deaths did not repeat (M).** Neither run logged `0xE0000008` or `[chromium-oom]`. Both helpers signed in
+  and ended by policy: A at the game's sign-in, B by the game-SC end. Each refused 26 impossible probes, and the only
+  `NO GAP FITS` line in each run is the game's own 8960 MiB jumbo walk (`ml1027 size=0x230010000`, the game's
+  thread). avail-phys logged four answers per helper, each reported as 300 MB.
+- **The cabin (screenshots, described only).**
+  - l17: the launcher's "Connecting to Rockstar Games Services" card and the dark R★ window, then the legal text and
+    the title screen (snowy mountains, Story/Online). Sepia loading art follows from +140 (a river, a camp, a
+    locomotive, a Valentine sign), then a white fade at +232. **Arthur stands on a snowy log cabin's porch** in a
+    blue coat and black hat, beside a window, with snow-covered pines behind, from +354 to the last shot (+756).
+    The view changes slightly between shots, and `[kk-gpu]` ran at 10–17 fps at the end.
+  - l18: the same launcher cards, a red R★ tile, then the title screen (a snowy camp) at +147–166. Loading art
+    follows (a rider, a camp, a cabin), then black with a spinner from +258. After the link drop the arm took no more
+    shots. The tail session's shot at `[xp]` +717 shows **the same porch view of Arthur**, and `[kk-gpu]` was
+    17–21 fps.
+  - l12 and l14 showed Arthur sitting on a bed inside the cabin. These runs show the porch; I: a different moment of
+    the same opening, not a different place.
+- **Peaks (M).** The Story step was 1100–1300 MB tall, as in l12 and l14. The game-SC end fired at the step in both
+  runs (7063 and 7170 MB). After it, the footprint settled at 7.1–7.4 GB, and it kept rising slowly late in the run:
+  7468 MB at +769 (l17) and 7645 MB at +669 (l18), both after the l12 and l14 window ends. Both stay inside the
+  7343 MB ±10 % band and under the 8192 MB limit. I: the late growth is the game's (B was gone); not analysed.
+- **0155 / 0239:** no re-sign-in allow happened, so 0239's one-start rule is still unexercised on the phone.
+- **Jetsam (M):** none. The system log has no kill of the app, and no JetsamEvent report from the day was pulled.
+  The only kills were of system daemons, for being idle or over their own limits.
+
+**Verdict.**
+- l15–l16's helper OOM deaths **did not repeat** on the same IPA: 0 of 4 helpers, against 2 of 3 in l15–l16.
+- Story reached and held the cabin in both runs: l17 to first-frame+600, and l18 to `[xp]` +717.
+- 0236's refusal held for all four helpers (26 each), with 0 V8 `NO GAP FITS`, so the chunk-2 `NO GAP FITS` gate is met
+  for A and B in both runs.
+- I: l16's B death fits the offset-0 code-range path, which neither run hit. l15's A death (`request 0x3c0`)
+  remains unexplained. It came after the owner's hand play, which is a confounder that l17–l18 did not have.
+- **Tooling:** a dropped network link makes `pp ui` report `exited` while the app keeps running, and it then pulls
+  no log.
+
+## Games observed (l17, l18)
+
+- Red Dead Redemption 2 (1174180): dev stock-CEF probe on `b1a239f2…`. Story reached the cabin in both runs: peaks
+  7468 and 7645 MB, 10–21 fps at the end, no jetsam. A dev experiment, no change to the compatibility status.
