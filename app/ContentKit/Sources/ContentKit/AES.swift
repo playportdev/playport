@@ -52,12 +52,25 @@ public struct AES256Decryptor: Sendable {
 
     /// CBC decryption with PKCS#7 padding removal.
     public func decryptCBC(_ data: ArraySlice<UInt8>, iv: [UInt8]) throws -> [UInt8] {
-        guard data.count % 16 == 0, !data.isEmpty else {
-            throw ClientError.verificationFailed("ciphertext length \(data.count) is not a positive multiple of 16")
+        guard !data.isEmpty else { throw ClientError.verificationFailed("ciphertext length 0 is not a positive multiple of 16") }
+        var out = Array(data)
+        try decryptCBCInPlace(&out, iv: iv)
+        let pad = Int(out.last!)
+        guard pad >= 1, pad <= 16, out.suffix(pad).allSatisfy({ Int($0) == pad }) else {
+            throw ClientError.verificationFailed("bad PKCS#7 padding (wrong depot key?)")
+        }
+        out.removeLast(pad)
+        return out
+    }
+
+    /// CBC decryption in place, no padding: `data` is whole blocks.
+    public func decryptCBCInPlace(_ data: inout [UInt8], iv: [UInt8]) throws {
+        guard data.count % 16 == 0 else {
+            throw ClientError.verificationFailed("ciphertext length \(data.count) is not a multiple of 16")
         }
         precondition(iv.count == 16)
-        var out = Array(data)
-        out.withUnsafeMutableBytes { b in
+        guard !data.isEmpty else { return }
+        data.withUnsafeMutableBytes { b in
             roundKeys.withUnsafeBufferPointer { rk in
                 Self.tables.withUnsafeBufferPointer { td in
                     // Back to front, so each block's chaining value is still the
@@ -71,12 +84,6 @@ public struct AES256Decryptor: Sendable {
                 }
             }
         }
-        let pad = Int(out.last!)
-        guard pad >= 1, pad <= 16, out.suffix(pad).allSatisfy({ Int($0) == pad }) else {
-            throw ClientError.verificationFailed("bad PKCS#7 padding (wrong depot key?)")
-        }
-        out.removeLast(pad)
-        return out
     }
 
     /// Steam's symmetric scheme: the first block is the ECB-encrypted IV.

@@ -37,7 +37,7 @@ struct XboxXVDHeader: Equatable {
         guard b.count >= size else { throw XboxXVD.damaged("its header is cut short") }
         guard Array(b[0x200..<0x208]) == Array("msft-xvd".utf8) else {
             if b.count >= 4, Array(b[0..<4]) == [0x50, 0x4B, 0x03, 0x04] {
-                throw ClientError.unsupported("this copy's package is MSIXVC2, which Playport can't install yet")
+                throw ClientError.protocolChanged("Xbox package is an MSIXVC2 ZIP, but Microsoft named it as an MSIXVC")
             }
             throw XboxXVD.damaged("it is not an XVD")
         }

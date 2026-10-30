@@ -94,14 +94,16 @@ final class XboxPackageLocationTests: XCTestCase, @unchecked Sendable {
         }
     }
 
-    func testAnMSIXVC2PackageIsOutOfScopeAndXboxLiveRefusalAsksForSignIn() async throws {
+    /// With no .msixvc file the first .msixvc2 is the package (PLA-503).
+    func testAnMSIXVC2PackageIsFoundAndXboxLiveRefusalAsksForSignIn() async throws {
         let (session, http, _) = try await signedIn()
         await http.answer("user.auth.xboxlive.com", Self.user)
         await http.answer("xsts.auth.xboxlive.com", Self.xsts)
         await http.answer("packagespc.xboxlive.com", Self.packages(file: "Game_1.0.0.0_x64__abc.msixvc2"))
-        do { _ = try await session.packageLocation(contentID: Self.content); XCTFail("MSIXVC2") } catch let ClientError.unsupported(why) {
-            XCTAssertTrue(why.contains("MSIXVC2"))
-        }
+        let location = try await session.packageLocation(contentID: Self.content)
+        XCTAssertEqual(location.fileName, "Game_1.0.0.0_x64__abc.msixvc2")
+        XCTAssertTrue(location.isMSIXVC2)
+        XCTAssertTrue(location.urls[0].absoluteString.hasSuffix("/Game_1.0.0.0_x64__abc.msixvc2"))
         let (other, http2, _) = try await signedIn()
         await http2.answer("user.auth.xboxlive.com", Self.user)
         await http2.answer("xsts.auth.xboxlive.com", status: 401, #"{"XErr":2148916233}"#)

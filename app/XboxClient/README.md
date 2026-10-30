@@ -110,9 +110,9 @@ follows Xodus's streaming install:
    (`user.auth.xboxlive.com`, `mbi_ssl`, the Store app) at user.auth, gets an XSTS
    token for `http://update.xboxlive.com`, and asks
    `packagespc.xboxlive.com/GetBasePackage/<contentID>`. The first `.msixvc` file
-   is installed, from the `xboxlive.com` CDN roots only. No package for the account
-   (`PackageFound: false`, 403, 404) is `XboxInstallRefusal.notEntitled`; an
-   MSIXVC2 package is `unsupported` (PLA-503).
+   is installed, else the first `.msixvc2` (below), from the `xboxlive.com` CDN
+   roots only. No package for the account (`PackageFound: false`, 403, 404) is
+   `XboxInstallRefusal.notEntitled`.
 2. **Licence.** `licence(contentID:)` (the same GUID: the XVD's VDUID). A refusal
    is `XboxInstallRefusal.licence(XboxLicenseFailure)`, before any download; the
    licence must carry every key the package's regions name.
@@ -155,6 +155,58 @@ XVD header: the header's signature is not checked (as in Xodus).
 the record and stages and, unless saves are kept, the runtime's local saves for
 the copy's SCID (`XboxSaves`: `XodusGameSave`, `XodusGameSaveFiles[Cache]`, every
 account).
+
+## MSIXVC2 (PLA-503)
+
+MSIXVC2 is the PC package format Microsoft made generally available with the
+October 2026 GDK (default from April 2027). A `.msixvc2` is a ZIP:
+
+- `XboxPackage.cbor` (CBOR, self-described tag `XVCP`): content ID, fulfilment
+  content ID, version, the package's keys, its boxes and its chunks. Each chunk
+  names its content key and a *secret*: a segment holding its files' names.
+- `Chunks/<id>.cbor` (`XVCC`): the chunk's files in order, each a length, a
+  hash (SHA-256/384/512, by CBOR tag) and its *segments*.
+- `Boxes/<name>`, stored: `XBOXBOX\0`, segment bytes, a manifest (`XVCB`: the
+  box's segments), its seal (`XVCZ`: the manifest's hash), then the manifest's
+  offset (LE64) and length (LE32).
+
+A segment is variable-size (content-defined), may be Deflate-compressed, then is
+AES-256-CBC encrypted with the first 16 bytes of its plaintext hash as IV, under
+its own key wrapped by the package key. The package key is the key source's
+wrapped key unwrapped by SP800-108 HMAC-SHA256 (`MSIXVC2:PackageData:AES_256_CBC`,
+the source's KDF context) of the licence's content key (`XboxMSIXVC2Keys`).
+A wrapped key with an IV is AES-256-CBC (the source's IV; for a segment, the
+chunk's rolling IV: one step per wrapped key, file by file); without one, AES
+key wrap (RFC 3394, then RFC 5649), as Xodus's pull request unwraps every key.
+The licence key is the one whose ID is the content source's; a licence with one
+key whose ID differs uses it (Xodus's choice; a wrong key fails every hash).
+
+`XboxMSIXVC2Package.fetch` reads the metadata with HTTP ranges, never the whole
+ZIP: the end record (ZIP64 too), the directory, `XboxPackage.cbor` and every
+`Chunks/<id>.cbor` (CRC-checked), each box's header, trailer and sealed manifest,
+and each chunk's secret. Every read is kept in `<stage>.package` (records of
+offset, length, bytes), so a resumed install fetches none again. Each file's
+segments must lie in their box's segment area and be listed (hash, length) by
+the box's manifest; their lengths must make the file's.
+
+The install goes through the same engine: one ContentKit chunk per distinct
+segment (shared segments are fetched once), read by range straight into the
+stage. A segment's box bytes are checked against its box hash before they are
+decrypted (fetched once more if they fail), its plaintext against its hash; a
+good box hash with a bad plaintext is the licence's key ("Xbox licence key
+doesn't decrypt this package"). Before the commit every file is hashed whole
+against the package's hash for it. MSIXVC2 installs every file decrypted
+(Microsoft: "installed files are stored unencrypted"), so the record's
+`encrypted` is empty and MicrosoftGame.config is read from the staged file.
+`packageName` is the `.msixvc2` file name without its extension.
+
+Not supported, refused by name: Brotli-compressed segments (no decoder here
+yet), compressed boxes in the ZIP, ZIP encryption, MSIXVC2 file format other
+than 1, and key derivations or algorithms other than SP800-108 and AES-256-CBC.
+No retail MSIXVC2 title was in the PC Game Pass or console catalogues on
+2026-10-30, so the format is checked against the two references and a synthetic
+package only (below).
+
 ## The bridge
 
 During one Xbox play the host answers the guest's `xgameruntime` over Xodus's
@@ -227,7 +279,14 @@ Nexus `e0668a12f1da931aed13537ef04295599011317b` (`src/main/catalog.ts`,
 install follows Xodus `53ea781dcd073e31d7ea68e894134e9c959bff04`
 (`crates/msixvc/src/{xvd.rs,crypt.rs,hash_tree.rs,layout.rs,math.rs,streaming.rs,
 streaming_ntfs.rs,models/xvd/}`, `crates/xodus/src/api/xbox/`,
-`crates/xodus-cli/src/{package.rs,commands/streaming.rs}`).
+`crates/xodus-cli/src/{package.rs,commands/streaming.rs}`). MSIXVC2 follows
+Xodus pull request #219 (open; cyberps96/xodus `feat/msixvc2-support`) at
+`e8194a89ea372c809015952bcab255e65b2b3089` (`crates/msixvc2/src/{cbor,crypto,
+package}.rs`, `crates/xodus-cli/src/commands/extract.rs`); where it is silent or
+inconsistent (CBC key wrapping and the rolling IV, GUIDs as text, box manifests
+and seals, `Boxes/` names) the facts follow LukeFZ/XvdTool.Streaming pull request
+#3 at `99db4dd3285b80cadcd60f21a311d909121a8944` (GPL-2.0; read for the format,
+no code taken). Re-check both when #219 merges.
 
 `Tests/XboxClientKitTests/Fixtures/` contains **synthetic, redacted responses**, not
 account captures. No PLA-487 captures were present when PLA-491 began. The
@@ -258,7 +317,12 @@ page, that page, and the whole user data and XVC information (`PPCUT1`, then
 u32 count and `{u64 offset, u32 length, bytes}`, zlib). Everything else of the
 install's tests is a synthesised MSIXVC with the pilot's layout
 (`XboxTestPackage`: GPT, NTFS with 4 KiB records, three regions, XTS under a
-test key) served by a 127.0.0.1 range server.
+test key) served by a 127.0.0.1 range server. `msixvc2-synthetic.msixvc2` is a
+synthetic MSIXVC2 (31 KiB: two chunks, two boxes, six files, compressed,
+encrypted, shared and plain segments, a ZIP64 entry) written by
+`Tests/msixvc2-fixture.py` with Python's zipfile, zlib and `cryptography`,
+independently of the reader, under a test licence key (bytes 0x40…0x5f);
+running the script again gives the same bytes.
 
 `PLAYPORT_BUILD=$PWD/.work ./pp test --swift XboxClientKit` runs public session
 flows (exchange, relaunch, expiry/renewal/refusal, device reuse/replacement/reset,

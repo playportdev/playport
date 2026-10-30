@@ -3,20 +3,23 @@
 // (user.auth, XSTS) and crates/xodus-cli/src/{package.rs,commands/streaming.rs}
 // (GetBasePackage, the first .msixvc file); translated to Swift by the Playport
 // authors, 2026-10-30. Modified: injected transport; Microsoft's "no package for
-// this account" is its own typed error; only xboxlive.com CDN roots are used.
+// this account" is its own typed error; only xboxlive.com CDN roots are used; with
+// no .msixvc file, the first .msixvc2 (Xodus pull request #219, e8194a8).
 import Foundation
 import ContentKit
 
 /// Where a copy's package is: its CDN URLs and size, as `packagespc.xboxlive.com`
 /// names them for the signed-in account.
 public struct XboxPackageLocation: Sendable, Equatable {
-    /// The package's content ID (the XVD's VDUID; licensing asks for the same GUID).
+    /// The package's content ID (MSIXVC: the XVD's VDUID; licensing asks for the same GUID).
     public let contentID: String
     public let version: String
     public let fileName: String
     public let size: UInt64
     /// Every CDN root's URL for the file, in Microsoft's order.
     public let urls: [URL]
+    /// An MSIXVC2 package (a ZIP), not an MSIXVC (an XVD).
+    public var isMSIXVC2: Bool { fileName.lowercased().hasSuffix(".msixvc2") }
 }
 
 /// Why an install stopped before any download: Microsoft has no package for the
@@ -112,7 +115,8 @@ enum XboxLive {
         catch { throw ClientError.transport("Xbox request failed; check your connection") }
     }
 
-    /// The first `.msixvc` file of the base package (Xodus's choice), every CDN root's URL for it.
+    /// The first `.msixvc` file of the base package (Xodus's choice), else its first
+    /// `.msixvc2` (Xodus pull request #219), every CDN root's URL for it.
     static func location(_ response: XboxHTTPResponse, content: String) throws -> XboxPackageLocation {
         if response.status == 401 { throw XboxSessionError.signInRequired }
         if response.status == 403 || response.status == 404 { throw XboxInstallRefusal.notEntitled }
@@ -131,11 +135,9 @@ enum XboxLive {
         }
         guard reply.PackageFound else { throw XboxInstallRefusal.notEntitled }
         guard reply.ContentId?.lowercased() == content else { throw ClientError.protocolChanged("Xbox packages answered for another content ID") }
-        let files = (reply.PackageFiles ?? []).filter { $0.FileName.lowercased().hasSuffix(".msixvc") }
-        guard let file = files.first else {
-            if (reply.PackageFiles ?? []).contains(where: { $0.FileName.lowercased().hasSuffix(".msixvc2") }) {
-                throw ClientError.unsupported("this copy's package is MSIXVC2, which Playport can't install yet")
-            }
+        let files = reply.PackageFiles ?? []
+        guard let file = files.first(where: { $0.FileName.lowercased().hasSuffix(".msixvc") })
+                ?? files.first(where: { $0.FileName.lowercased().hasSuffix(".msixvc2") }) else {
             throw XboxInstallRefusal.noPackage
         }
         let relative = file.RelativeUrl

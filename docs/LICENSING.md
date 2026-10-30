@@ -295,6 +295,12 @@ The upstreams were read on 2026-10-30:
 | nexus-xgameruntime ([domsvoboda/nexus-xgameruntime](https://github.com/domsvoboda/nexus-xgameruntime)), a fork of [xodus-gaming/xgameruntime](https://github.com/xodus-gaming/xgameruntime) | main `5539e7d23d2d2c49f8547c9b9721fb7bc59139c1`, 74 commits ahead of upstream `f03484d64867c1e65d421c1aba2f290c20bd7b4d` | `LICENSE` is the LGPL-2.1 text (sha256 `108e904a8b3df6012207649af241d5261a9c000f75d025034618f53ff9485c75`); every source file is LGPL-2.1-or-later by its header or SPDX line, except the MIT material listed below |
 | nghttp2 ([nghttp2/nghttp2](https://github.com/nghttp2/nghttp2)) | tag `v1.70.0`, commit `85e300c79fb6dbcfa9c1013215c8710c1c2cd3d2` (the commit Nexus pins) | MIT (`COPYING`, sha256 `6b94f3abc1aabd0c72a7c7d92a77f79dda7c8a0cb3df839a97890b4116a2de2a`) |
 
+MSIXVC2 (PLA-503) is translated from Xodus PR #219 at the commit above. Where that PR is silent or
+inconsistent, the format's facts (CBOR labels, key wrapping with CBC and the rolling IV, box
+manifests and seals) were read from LukeFZ/XvdTool.Streaming PR #3 at
+`99db4dd3285b80cadcd60f21a311d909121a8944`, which is GPL-2.0 (`LICENSE` is the version 2 text):
+no code was taken from it, so it adds no licence to `XboxClientKit`.
+
 Rechecked at the pins (PLA-493, 2026-10-30): `xgameruntime` is `ab2fac35b500b87fefe51add26a0672a71d11576`,
 the commit the ground truth's runtime carried, three commits before the main read above. Its
 `LICENSE` and `tests/Nexus/LICENSE` have the same bytes, the same 12 `src/System/Threading`
