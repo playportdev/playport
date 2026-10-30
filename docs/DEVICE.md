@@ -374,10 +374,11 @@ not that gameplay appeared: inspect the timeline, log and screenshot.
   layout over the game's art, on the layout the game starts with; `menu:layout` opens it over
   the paused game. `pad:lb/rb` ring a control, the directions move it 8 pt, `pad:a` opens the
   bar and the inspector, `pad:x` Add, `pad:y` Reset, `pad:view` undo, `pad:menu` redo, and
-  `pad:b` on the controls is Done, which saves the game's `"layouts"` copy. The log's summary
-  line is `layout editor (...)`.
-- **The suggested layout.** A game on Gamepad that reads no XInput state in 20 s of play
-  after its first frame gets a toast offering Keyboard & mouse, once per game. After `play:`,
+  `pad:b` on the controls is Done, which saves the game's `"layouts"` copy (nothing when
+  nothing changed). The log's summary line is `layout editor (...)`.
+- **The suggested layout.** A game starting on Gamepad (Settings' Starting layout left at
+  Suggested) that reads no XInput state in 20 s of play after its first frame gets a toast
+  offering Keyboard & mouse, once per game. After `play:`,
   `suggest:accept` waits for it (3 min at most) and presses Use (the layout is saved for the
   game), `suggest:dismiss` presses Not now; either fails when the game was not offered.
   `set:controls.suggestedLayoutOffered=` forgets every game's offer:

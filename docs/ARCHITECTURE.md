@@ -896,11 +896,13 @@ pointer (`MixerOutput`), which `HostIO.send` hands to the calls above.
   decision 0074), else Settings' Starting layout, else Gamepad. `UI/ControlsStore.swift`
   keeps the defaults and each game's record in UserDefaults; a change applies at once.
 - **The suggestion counter.** win32u's `ios_gamepad_query` calls hio_pads.c's
-  `playport_gamepad_state_read` for each XInput state request (`patches/madeira-unix` 0224;
-  `host_pad_state_reads` is the total, this game's since the app restarts after each). PlayportKit
-  `LayoutSuggestion`, sampled once a second (`UI/LayoutSuggestionToast.swift`), offers Keyboard
-  & mouse to a game on Gamepad that made none in 20 s of play after its first frame, once per
-  game (`controls.suggestedLayoutOffered`).
+  `playport_gamepad_state_read` for each XInput op-0 request, which `XInputGetState` and also
+  `XInputSetState`, `XInputEnable` and the battery and DirectSound queries send
+  (`patches/madeira-unix` 0224; `host_pad_state_reads` is the total, this game's since the app
+  restarts after each). PlayportKit `LayoutSuggestion`, sampled once a second
+  (`UI/LayoutSuggestionToast.swift`), offers Keyboard & mouse to a game starting on Gamepad
+  with Settings' Starting layout left at Suggested that made none in 20 s of play after its
+  first frame, once per game (`controls.suggestedLayoutOffered`).
 
 HostIOKit's and PlayportKit's tests cover the machines, the mixer, the layouts, the editor and
 the suggestion on the host.
