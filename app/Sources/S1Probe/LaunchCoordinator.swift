@@ -80,6 +80,13 @@ enum LaunchCoordinator {
         var title: String = ""
         /// A GOG game's Galaxy service, listening since Play (decision 0063); nil for none.
         var galaxy: GalaxyListener? = nil
+        /// The play's own guest variables (an Xbox copy's bridge port and key, decision 0167):
+        /// merged into the game's environment for its launch only (GuestEnvironment), never
+        /// set in the app's process or given to the prerequisites; their names alone are logged.
+        var guestEnvironment: [String: Secret<String>] = [:]
+        /// Runs once the launch ends, however it ends (an Xbox copy's: the bridge stops and the
+        /// originals of its kept-encrypted files go back, decision 0166); nil for none.
+        var atEnd: (@Sendable () -> Void)? = nil
         /// The title's own prerequisite installers (decision 0079), each run before the
         /// game when one of its ids has not run in the prefix.
         var prerequisites: [Prerequisite] = []
@@ -341,8 +348,9 @@ enum LaunchCoordinator {
     /// thread, which keeps serving the surface, input and the JIT vehicle.
     static func run(_ r: Request, step: @escaping (Step) -> Void = { _ in }) -> Outcome {
         precondition(!Thread.isMainThread, "LaunchCoordinator.run blocks; call it off the main thread")
-        // However the launch ends, the Galaxy service ends with it (decision 0063).
-        defer { r.galaxy?.stop() }
+        // However the launch ends, the Galaxy service ends with it (decision 0063), and the play's own
+        // end runs (an Xbox copy's bridge and in-place swap, decision 0166).
+        defer { r.galaxy?.stop(); r.atEnd?() }
         let launched = Date()
         let mark = { (what: String) in
             let s = Date().timeIntervalSince(launched)
@@ -605,7 +613,8 @@ enum LaunchCoordinator {
         }
         if let use = PoolLog.read() { log("at the game's start: " + use.line) }
         step(.startingGame)
-        let rc = runtime.launch(exe: r.exe, args: args, environment: environment)
+        if let line = GuestEnvironment.logLine(r.guestEnvironment) { log(line) }
+        let rc = runtime.launch(exe: r.exe, args: args, environment: GuestEnvironment.title(environment, guest: r.guestEnvironment))
         log("wine_host_session_launch -> \(rc)")
         mark("game started")
         guard rc == 0 else {

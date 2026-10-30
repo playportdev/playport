@@ -834,6 +834,7 @@ enum UIDriver {
                         return finish("action=\(action) refused: \(id) is not a launcher (\(PublisherLauncher.all.map(\.id).joined(separator: ", ")))")
                     }
                       do {
+                        XboxPlay.lastRefusal = nil
                         let started = try await checked {
                             if let launcher { await LauncherOpen.open(launcher) } else { try await library.play(id) }
                         }
@@ -842,6 +843,11 @@ enum UIDriver {
                                 return finish("action=\(action) refused: not installed, or a launch is running or Playport needs a restart")
                             }
                             try checkpoint()
+                            // An Xbox copy's licence or sign-in stopped it: its message says which (Dev/XboxPlay.swift).
+                            if id.hasPrefix("xbox-"), let why = XboxPlay.lastRefusal {
+                                try await pause(.milliseconds(1000))   // the message drawn, for a screenshot
+                                return finish("action=\(action) refused: \(why)")
+                            }
                         if case .cloud = PadModal.shared.content {
                                 try await pause(.milliseconds(1000))   // the screen drawn, for a screenshot
                                 return finish("action=\(action) refused: \(PadModal.shared.summary ?? "cloud conflict"): "

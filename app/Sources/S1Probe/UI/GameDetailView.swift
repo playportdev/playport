@@ -472,16 +472,7 @@ private struct GameDetailPage: View {
 
     private func canPlay(_ t: InstalledTitle) -> Bool {
         t.canPlay && !launch.spent && !launch.running && !library.verifying.contains(t.id)
-            && !library.removing.contains(t.id) && job == nil && xboxPlayBlock(t) == nil
-    }
-
-    /// Why an installed Xbox copy can't be played yet (its runtime and decryption are PLA-499's); nil otherwise.
-    private func xboxPlayBlock(_ t: InstalledTitle) -> String? {
-        #if !PLAYPORT_RELEASE
-        return t.store == .xbox ? "Xbox copies can't start in this build yet: their encrypted .exe needs the Xbox runtime (dev)." : nil
-        #else
-        return nil
-        #endif
+            && !library.removing.contains(t.id) && job == nil
     }
 
     /// An uninstalled Xbox copy's download size, needed space, refusal or download state (dev only).
@@ -568,8 +559,6 @@ private struct GameDetailPage: View {
                          : "Playport cannot start another game in this session. Close it and reopen it from the Home Screen to play again.")
                 } else if !t.canPlay {
                     Text("No Windows executable in this folder.").foregroundStyle(.orange)
-                } else if let why = xboxPlayBlock(t) {
-                    Text(why).foregroundStyle(.orange)
                 } else if let job {
                     if case let .paused(reason?) = job.phase { Text(reason).foregroundStyle(.orange) }
                     // An update Playport queued by itself holds Play too: say how to play now.

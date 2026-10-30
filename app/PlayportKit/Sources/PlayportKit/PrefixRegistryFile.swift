@@ -14,6 +14,8 @@ public struct PrefixRegistryValue: Equatable, Sendable {
     public enum Data: Equatable, Sendable {
         case string(String)
         case dword(UInt32)
+        /// REG_QWORD, as wineserver saves one: `hex(b):` and its eight bytes, little-endian.
+        case qword(UInt64)
     }
 
     public var hive: Hive
@@ -101,6 +103,8 @@ public struct PrefixRegistryFile: Sendable {
                 switch v.data {
                 case .string(let s): out += "\"\(escape(s, "\"\""))\"\n"
                 case .dword(let d): out += String(format: "dword:%08x\n", d)
+                case .qword(let q): out += "hex(b):" + (0..<8).map { String(format: "%02x", UInt8(truncatingIfNeeded: q >> ($0 * 8))) }
+                    .joined(separator: ",") + "\n"
                 }
             }
             out += "\n"
@@ -120,6 +124,10 @@ public struct PrefixRegistryFile: Sendable {
             let name = rawName == "@" ? "" : unescape(String(rawName.dropFirst().dropLast()))
             if rawData.hasPrefix("dword:"), let d = UInt32(rawData.dropFirst(6), radix: 16) {
                 out.append(PrefixRegistryValue(hive: hive, key: key, name: name, data: .dword(d)))
+            } else if rawData.hasPrefix("hex(b):"), case let bytes = rawData.dropFirst(7).split(separator: ",").compactMap({ UInt8($0, radix: 16) }),
+                      bytes.count == 8 {
+                let q = bytes.enumerated().reduce(UInt64(0)) { $0 | UInt64($1.element) << ($1.offset * 8) }
+                out.append(PrefixRegistryValue(hive: hive, key: key, name: name, data: .qword(q)))
             } else if rawData.hasPrefix("\""), rawData.hasSuffix("\""), rawData.count >= 2 {
                 out.append(PrefixRegistryValue(hive: hive, key: key, name: name, data: .string(unescape(String(rawData.dropFirst().dropLast())))))
             }
