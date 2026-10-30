@@ -42,6 +42,9 @@ best-effort and reported as unconfirmed; transport loss/SIGKILL can leave cancel
                          controller "Switch to Custom?" first), pad:y resets it, pad:b goes back; in
                          the ActionPicker pad:lb/rb switch tabs, pad:x waits for a hardware key,
                          pad:b cancels);
+                         open:library#CHIP shows the Library on a chip it shows now (all,
+                         installed, steam, gog, epic, xbox: the dev app's Xbox chip), as the View
+                         button's Show list picks it; a chip not shown is refused;
                          open:settings#SECTION shows a Settings section (accounts, graphics, downloads,
                          controls, storage, setup, about, developer; also account, jit, memory,
                          diagnostics, pairing, probes, logs for the section that holds them,
@@ -360,6 +363,7 @@ STOP_WHY = {"timeout": "no stop condition within --wait",
 # have capitals: epic-Buffalo).
 ID_RE = re.compile(r"^[a-z]+-[A-Za-z0-9 ._-]+$")
 SCREENS = ("home", "library", "games", "downloads", "settings", "account", "setup", "signin")   # AppNavigation.screens
+LIBRARY_CHIPS = ("all", "installed", "steam", "gog", "epic", "xbox")   # PlayportKit LibraryFilter
 PAD_BUTTONS = "a|b|x|y|lb|rb|menu|view|up|down|left|right"   # HostIOKit NavButton
 # the app's launch failure when its JIT helper cannot reach LocalDevVPN's address
 JIT_UNREACHABLE_RE = re.compile(r"Timed out connecting to 10\.7\.0\.1")  # "not ready for JIT: X" has other X too
@@ -462,11 +466,11 @@ GYRO_TERM = r"(?:yaw|pitch|roll)=-?[0-9]{1,4}(?:\.[0-9]+)?"
 GYRO_STEP = rf"(?:rest|{GYRO_TERM}(?:\+{GYRO_TERM})*)@[0-9]{{1,5}}"
 ACTION_RE = re.compile((r"^(?:(?:install|pause-resume|queue|downloading):[0-9]+|install:gog-[0-9]+(?:@[0-9]+)?|install:epic-[A-Za-z0-9._-]+|(?:uninstall|verify|repair|play):[a-z]+-[A-Za-z0-9 ._-]+|(?:open-launcher|forget-launcher-window):[a-z]+"
                         r"|import:[A-Za-z0-9 ._()'+-]+(?:/[A-Za-z0-9 ._()'+-]+)*"
-                       r"|hud:(?:on|off)|open:[a-z]+(?:-[A-Za-z0-9 ._-]+(?:#[a-z]+)?)?|open:settings#(?:accounts|steam|graphics|downloads|controls|controllers|gyro|controller|storage|setup|about|launchers|developer|account|jit|memory|diagnostics|pairing|probes|logs)|open:licences(?:#[a-z0-9 ._-]+)?|pad:(?:{b})(?:\+(?:{b}))*|set:[A-Za-z0-9._-]+=[^,]*"
+                       r"|hud:(?:on|off)|open:[a-z]+(?:-[A-Za-z0-9 ._-]+(?:#[a-z]+)?)?|open:library#(?:{c})|open:settings#(?:accounts|steam|graphics|downloads|controls|controllers|gyro|controller|storage|setup|about|launchers|developer|account|jit|memory|diagnostics|pairing|probes|logs)|open:licences(?:#[a-z0-9 ._-]+)?|pad:(?:{b})(?:\+(?:{b}))*|set:[A-Za-z0-9._-]+=[^,]*"
                        r"|wait:[0-9]{1,3}|tap:(?:0(?:\.[0-9]+)?|1(?:\.0+)?):(?:0(?:\.[0-9]+)?|1(?:\.0+)?)|menu:(?:open|resume|controls|screenshot|overlay|controller|quit)"
                        r"|touch:{t}(?:\+{t})*(?:@[0-9]{1,5})?|gyro:{g}(?:/{g})*|gesture:three-finger-tap|web:(?:wait|close)|web:click:[A-Za-z0-9 ._-]+"
                        r"|jit:(?:setup|pair|continue|open-settings|cancel|wait)|probe:settings-url-[0-9]|probe:helper-(?:(?:exit|kill)(?:-hold)?|report)|probe:memory-(?:64|2048|4096|donor-(?:tagged|purgeable)-(?:2048|4096)|donors-(?:6144|8192|10240)|pool-verify|pool-zero|pool-gpu)|background:(?:[1-9][0-9]|[1-5][0-9]{2}|600)|probe:relaunch|probe:native-auth|probe:pairing(?:-cancel|-use)?)$").replace("{b}", PAD_BUTTONS).replace("{t}", TOUCH_CONTROL)
-                       .replace("{g}", GYRO_STEP))
+                       .replace("{g}", GYRO_STEP).replace("{c}", "|".join(LIBRARY_CHIPS)))
 
 
 def background_handoff(e):
@@ -734,7 +738,7 @@ def parse(argv=None):
                     "queue:APP, downloading:APP, import:PATH, uninstall:ID, verify:ID, repair:ID, play:ID, open-launcher:ID, forget-launcher-window:ID, probe:helper-exit|kill|report, probe:relaunch or probe:pairing[-cancel|-use]")
         if x.startswith("open:") and "#" in x:
             target, section = x[5:].split("#", 1)
-            if target not in ("settings", "licences") and section not in GAME_SECTIONS:
+            if target not in ("settings", "licences", "library") and section not in GAME_SECTIONS:
                 p.error(f"{x!r}: unknown Game options section; choose " + ", ".join(GAME_SECTIONS))
     # The black screen hands the screen over: the app ends the batch there, so no action,
     # press or step may follow it (and --controls/--settings/--verify/--play append actions).

@@ -73,6 +73,9 @@
 //                              ctl:copy, ctl:resetAll, ctl:<row> such as ctl:a, ctl:leftStick,
 //                              ctl:dpad; pad:x/lb/rb/view/menu ring their rows; A on a Custom
 //                              row opens the ActionPicker, whose presses pad: sends);
+//                              `open:library#<chip>` shows the Library on a chip it shows
+//                              now (all, installed, steam, gog, epic, xbox: LibraryFilter),
+//                              as ⧉'s Show list picks it; a chip not shown is refused;
 //                              `open:settings#<section>` shows a Settings section (accounts,
 //                              graphics, downloads, controls, storage, setup, about,
 //                              launchers, developer; PlayportKit SettingsSection.named also takes
@@ -410,8 +413,9 @@ enum UIDriver {
                     let nav = AppNavigation.shared
                     let parts = id.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
                     // Validate game destinations before changing navigation. Settings/licences
-                    // retain their own section/alias handling; generic game IDs stay generic.
-                    if parts.count > 1, !["settings", "licences"].contains(parts[0]),
+                    // retain their own section/alias handling, the Library its chips; generic
+                    // game IDs stay generic.
+                    if parts.count > 1, !["settings", "licences", "library"].contains(parts[0]),
                        UIDriverGameSection(rawValue: parts[1]) == nil {
                         return finish("action=\(action) refused: unknown Game options section \(parts[1])")
                     }
@@ -431,6 +435,11 @@ enum UIDriver {
                             pages.append(.component(c.name))
                         }
                         nav.showLicences(pages)
+                    } else if parts.first == "library", parts.count > 1 {
+                        guard let chip = LibraryFilter(rawValue: parts[1]), LibraryGrid.filters.contains(chip)
+                        else { return finish("action=\(action) refused: the Library shows no \(parts[1]) chip") }
+                        nav.open("library")
+                        LibraryGrid.shared.filter = chip
                     } else if nav.open(parts.first ?? "") {
                         nav.pageSection = parts.count > 1 ? parts[1] : nil
                     } else if let title = parts.first, library.title(title) != nil {

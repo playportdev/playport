@@ -75,11 +75,16 @@ final class LibraryGrid: ObservableObject {
     }
 
     /// The chips: Steam's always, GOG's and Epic's once a copy is in the catalogue
-    /// or the store is signed in (decision 0045).
+    /// or the store is signed in (decision 0045); Xbox's in the dev app only (0166).
     static var filters: [LibraryFilter] {
         var stores = Set(LibraryModel.shared.catalog.titles.map(\.store))
         if GOGAccount.shared.state == .signedIn { stores.insert(.gog) }
         if EpicAccount.shared.state == .signedIn { stores.insert(.epic) }
+        #if PLAYPORT_RELEASE
+        stores.remove(.xbox)
+        #else
+        XboxLibrary.addChip(to: &stores)
+        #endif
         return LibraryFilter.shown(stores: stores)
     }
 
@@ -357,7 +362,7 @@ private struct LibraryGridView: View {
         case .all: return "No games yet"
         case .installed: return "No games installed"
         case .steam: return needsSignIn ? "Sign in to Steam" : (model.gamesLoading ? "Loading your games…" : "No Steam games")
-        case .gog, .epic: return "No \(grid.filter.label) games"
+        case .gog, .epic, .xbox: return "No \(grid.filter.label) games"
         }
     }
 
@@ -373,6 +378,12 @@ private struct LibraryGridView: View {
             return model.gamesError ?? "Your Steam account owns no games."
         case .gog, .epic:
             return "Games from \(grid.filter.label) appear here."
+        case .xbox:
+            #if PLAYPORT_RELEASE
+            return "Games from \(grid.filter.label) appear here."
+            #else
+            return XboxLibrary.emptyText
+            #endif
         }
     }
 }
@@ -545,7 +556,7 @@ enum StoreArt {
         switch key.store {
         case .gog: GOGAccount.shared.game(key.id)?.image != nil
         case .epic: EpicAccount.shared.game(key.id).map { $0.wideArt ?? $0.tallArt } != nil
-        case .steam, .local: false
+        case .steam, .local, .xbox: false
         }
     }
 }

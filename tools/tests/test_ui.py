@@ -148,6 +148,23 @@ class UiEnvTest(unittest.TestCase):
         for bad in ("pad:", "pad:start", "pad:a+", "pad:a b", "pad:A"):
             self.assertFalse(m.ACTION_RE.match(bad), bad)
 
+    def test_open_library_names_each_chip_the_app_has(self):
+        """open:library#CHIP: pp ui's chips are PlayportKit's LibraryFilter cases, Xbox's too (PLA-490)."""
+        m = load()
+        path = os.path.join(TOOLS, "..", "app", "PlayportKit", "Sources", "PlayportKit", "LibraryList.swift")
+        with open(path) as f:
+            body = re.search(r"public enum LibraryFilter: String, CaseIterable, Sendable \{(.*?)\n    public var label",
+                             f.read(), re.S)
+        self.assertIsNotNone(body, "LibraryFilter's case list moved: update this test")
+        cases = re.findall(r"^\s*case (\w+)$", body.group(1), re.M)
+        self.assertIn("xbox", cases)
+        self.assertEqual(list(m.LIBRARY_CHIPS), cases)
+        for chip in m.LIBRARY_CHIPS:
+            self.assertEqual(m.parse(["--action", f"open:library#{chip}"]).action, [f"open:library#{chip}"])
+        for bad in ("open:library#Xbox", "open:library#local", "open:library#", "open:games#xbox"):
+            with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+                m.parse(["--action", bad])
+
     def test_donor_pool_setting_takes_auto_and_fixed_sizes(self):
         # Settings › Developer › Donor pool (PLA-351): set:'s generic KEY=VALUE carries auto.
         m = load()
