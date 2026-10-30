@@ -58,6 +58,14 @@
 //   (`trackpadKey`). While a finger points with tap to click, a magnifier
 //   (MagnifierOverlay, its own view over the controls) shows the picture
 //   under it.
+// - The touch keyboard (HostIOKit TouchKeyboard; TouchKeyboard.dc.html): a
+//   layout's keyboard key, its own close key (both `playport:keyboard`,
+//   HostIO.send) and the in-game menu's Touch keyboard row open and close it.
+//   While it is open its keys are the controls' targets instead of the
+//   layout's (the layout is not drawn), drawn by TouchKeyboardPanelView, fully
+//   opaque; it shows with the layout Off or a controller connected too, and its
+//   keys reach the game then without the controls' pad. A touch above it is the
+//   game's (a text field to click), as with no controls shown.
 //
 // A dev build logs `controls:` lines: shown and hidden, and each press (a tool's with the tool and trackpad after it).
 
@@ -84,6 +92,10 @@ final class OnScreenControls: ObservableObject {
     private var loggedIgnored = false
     private(set) var layout: ControlLayout?
     private(set) var controls = TouchControls()
+    /// The touch keyboard is open (it may be hidden with everything else: the menu, a dialog).
+    @Published private(set) var keyboard = false
+    /// The touch keyboard as placed now; nil while its keys are not the targets.
+    private(set) var keyboardLayout: TouchKeyboard.Layout?
     /// The controls' pad is in slot 0 (HostIO.touchControls).
     private var padOn = false
     /// padOn as last logged.
@@ -158,9 +170,18 @@ final class OnScreenControls: ObservableObject {
         chipView?.show(seconds: GyroChipCue.seconds)
     }
 
+    /// The touch keyboard opened or closed: its keys or the layout's become the targets.
+    func setKeyboard(_ open: Bool) {
+        guard open != keyboard else { return }
+        keyboard = open
+        Self.log("touch keyboard " + (open ? "open" : "closed"))
+        update()
+    }
+
     /// Where a finger at p (in the controls' view) goes: to them, nowhere while they show, else to the game.
+    /// With the touch keyboard open, a finger off it is the game's.
     func route(_ p: CGPoint) -> TouchRoute {
-        let to = TouchRoute.decide(controlsShown: drawn, onControl: takes(p))
+        let to = TouchRoute.decide(controlsShown: drawn && !keyboard, onControl: takes(p))
         if to == .ignored, !loggedIgnored {
             loggedIgnored = true
             Self.log("touches outside the controls are ignored")
@@ -192,14 +213,16 @@ final class OnScreenControls: ObservableObject {
         let defaults = ControlsStore.shared.defaults
         let s = ControlsState.resolve(game: game, defaults: defaults, controllerConnected: controllers > 0)
         let newLayout = s.drawnLayout
-        let drawNow = newLayout != nil && launch.running && launch.step == .drawing && !launch.quitting && !guestHeld && !dialog
-        let changed = s != state || drawNow != drawn || newLayout != layout
+        let drawNow = (newLayout != nil || keyboard) && launch.running && launch.step == .drawing && !launch.quitting
+            && !guestHeld && !dialog
+        let changed = s != state || drawNow != drawn || newLayout != layout || keyboard != (keyboardLayout != nil)
         guard changed || padOn != (s.padConnected && launch.running) else { return }
-        let layoutChanged = newLayout != layout
+        let layoutChanged = newLayout != layout || keyboard != (keyboardLayout != nil)
         if drawNow != drawn || (drawNow && layoutChanged) {
-            Self.log(drawNow ? "shown (\(s.layout.title), \(ControlsOpacity.label(s.opacity)), d-pad \(s.dpad.rawValue), "
-                     + "right stick \(s.rightStick.rawValue))"
-                     : "hidden (" + (newLayout == nil ? "controller connected" : guestHeld ? "menu" : dialog ? "dialog"
+            Self.log(drawNow ? (keyboard ? "shown (touch keyboard)"
+                                : "shown (\(s.layout.title), \(ControlsOpacity.label(s.opacity)), d-pad \(s.dpad.rawValue), "
+                                  + "right stick \(s.rightStick.rawValue))")
+                     : "hidden (" + (newLayout == nil && !keyboard ? "controller connected" : guestHeld ? "menu" : dialog ? "dialog"
                                      : "game not drawing") + ")")
         }
         if drawNow, !drawn, s.visible, defaults.show == .automatic, !UserDefaults.standard.bool(forKey: Self.toastKey) {
@@ -220,16 +243,24 @@ final class OnScreenControls: ObservableObject {
     }
 
     private func place() {
-        controls.setTargets(layout?.targets(width: Double(size.width), height: Double(size.height), insets: insets) ?? [])
+        if keyboard {
+            let k = TouchKeyboard.layout(in: insets.area(width: Double(size.width), height: Double(size.height)))
+            keyboardLayout = k
+            controls.setTargets(k.targets)
+        } else {
+            keyboardLayout = nil
+            controls.setTargets(layout?.targets(width: Double(size.width), height: Double(size.height), insets: insets) ?? [])
+        }
         view?.rebuild()
         publish()
     }
 
     /// The touch state to the guest (with the look area's and pointer's events since the last
-    /// time, taken every time so none waits for a later one), and the view redrawn.
+    /// time, taken every time so none waits for a later one), and the view redrawn. The touch
+    /// keyboard's keys go to the game whether or not the controls' pad is player 1.
     private func publish() {
         let out = controls.takeOutput()
-        HostIO.shared.touchControls(padOn ? out : nil)
+        HostIO.shared.touchControls(padOn || keyboard ? out : nil, padOn: padOn)
         view?.refresh()
         InputClock.shared.need(.touchControls, controls.needsClock)
     }
@@ -290,6 +321,8 @@ final class OnScreenControls: ObservableObject {
 /// The controls, drawn over GameSurfaceView and taking only the touches on them.
 final class TouchControlsView: UIView {
     private var views: [String: ControlView] = [:]
+    /// The touch keyboard while it is open, drawn instead of the layout.
+    private var keyboardView: TouchKeyboardPanelView?
     private let toast = ToastView()
     /// Point & click's tool notes, at the bottom (TouchPointer.dc.html).
     private let hint = ToastView(bottom: true)
@@ -331,12 +364,22 @@ final class TouchControlsView: UIView {
     }
 
     /// The layout changed: one view per control. A floating stick's zone and a surface are not drawn;
-    /// Point & click's side bar has a plate behind it.
+    /// Point & click's side bar has a plate behind it. With the touch keyboard open, it alone.
     func rebuild() {
         views.values.forEach { $0.removeFromSuperview() }
         views = [:]
         plates.forEach { $0.removeFromSuperview() }
-        plates = SideBar.plates(OnScreenControls.shared.controls.targets).map { r in
+        plates = []
+        keyboardView?.removeFromSuperview()
+        keyboardView = nil
+        let model = OnScreenControls.shared
+        if let k = model.keyboardLayout {
+            let v = TouchKeyboardPanelView(layout: k, frame: bounds)
+            insertSubview(v, belowSubview: toast)
+            keyboardView = v
+            return
+        }
+        plates = SideBar.plates(model.controls.targets).map { r in
             let plate = UIView(frame: CGRect(touch: r))
             plate.isUserInteractionEnabled = false
             plate.backgroundColor = Glass.fill
@@ -346,7 +389,6 @@ final class TouchControlsView: UIView {
             insertSubview(plate, at: 0)
             return plate
         }
-        let model = OnScreenControls.shared
         for (c, t) in zip(model.layout?.controls ?? [], model.controls.targets) {
             let v = ControlView(control: c, frame: CGRect(x: t.frame.x, y: t.frame.y, width: t.frame.width, height: t.frame.height))
             insertSubview(v, belowSubview: toast)
@@ -358,9 +400,13 @@ final class TouchControlsView: UIView {
     func refresh() {
         let model = OnScreenControls.shared
         isHidden = !model.drawn
-        alpha = CGFloat(model.state.opacity)
+        alpha = model.keyboard ? 1 : CGFloat(model.state.opacity)
         model.magnifierView?.show(model.drawn ? model.controls.magnifier : nil)
         guard model.drawn else { return }
+        if let k = keyboardView {
+            k.show(held: model.controls.held, sticky: model.controls.sticky)
+            return
+        }
         let held = model.controls.held, out = model.controls.output
         for (id, v) in views {
             v.show(held: held.contains(id), pad: out.pad, keys: out.keys, stick: model.controls.stick(id))

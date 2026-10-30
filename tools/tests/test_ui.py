@@ -317,6 +317,19 @@ class UiEnvTest(unittest.TestCase):
                     "touch:pointer::0.5"):
             self.assertFalse(m.ACTION_RE.match(bad), bad)
 
+    def test_the_touch_keyboard_opens_from_the_menu_and_its_keys_are_touched(self):
+        """menu:keyboard opens the touch keyboard over the game; touch: presses its kb- keys (HostIOKit TouchKeyboard)."""
+        m = load()
+        for ok in ("menu:keyboard", "touch:kb-shift", "touch:kb-a", "touch:kb-f12", "touch:kb-ctrl+kb-alt+kb-del",
+                   "touch:kb-close", "touch:kb-backspace@1000"):
+            self.assertTrue(m.ACTION_RE.match(ok), ok)
+        for bad in ("menu:keyboards", "menu:touch-keyboard", "touch:kb-a.up.down"):
+            self.assertFalse(m.ACTION_RE.match(bad), bad)
+        run = ["play:app-620", "wait:20", "menu:open", "menu:keyboard", "touch:kb-shift", "touch:kb-h", "touch:kb-close"]
+        self.assertEqual(m.in_game(run, 1), 6)
+        self.assertFalse(m.after_play(run))
+        self.assertIn("menu:keyboard", m.__doc__)
+
     def test_gyro_plays_a_scripted_gyro_while_the_game_runs(self):
         """gyro: plays HostIOKit GyroScript steps into gyro aim (Dev/GyroDriver.swift) while the game runs."""
         m = load()

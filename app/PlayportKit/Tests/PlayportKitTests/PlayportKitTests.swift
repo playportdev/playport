@@ -2121,8 +2121,9 @@ final class QuickMenuTests: XCTestCase {
         XCTAssertEqual(m.ring, .quit)
         m.move(down: false)
         XCTAssertEqual(m.ring, .controller)
-        XCTAssertEqual(QuickMenu.steps(from: .resume, to: .quit), [true, true, true, true, true])
-        XCTAssertEqual(QuickMenu.steps(from: .overlay, to: .resume), [false, false, false])
+        XCTAssertEqual(QuickMenu.steps(from: .resume, to: .quit), [true, true, true, true, true, true])
+        XCTAssertEqual(QuickMenu.steps(from: .overlay, to: .resume), [false, false, false, false])
+        XCTAssertEqual(QuickMenu.steps(from: .controls, to: .keyboard), [true])
         XCTAssertEqual(QuickMenu.steps(from: .quit, to: .quit), [])
     }
 
@@ -2136,7 +2137,7 @@ final class QuickMenuTests: XCTestCase {
         XCTAssertEqual(QuickMenu.controller(name: nil, battery: nil, scriptedPad: true), "Scripted pad")
         XCTAssertEqual(QuickMenu.controller(name: "DualSense", battery: 70, scriptedPad: true), "DualSense · 70%")
         XCTAssertEqual(QuickMenuItem.allCases.map(\.title),
-                       ["Resume", "Controls", "Screenshot", "Performance overlay", "Controller", "Quit game"])
+                       ["Resume", "Controls", "Touch keyboard", "Screenshot", "Performance overlay", "Controller", "Quit game"])
     }
 
     func testTheControlsPanelTakesTheRingAndGivesItBack() {
@@ -2163,7 +2164,7 @@ final class QuickMenuTests: XCTestCase {
         m.closePanel()
         XCTAssertNil(m.panel)
         m.move(down: true)
-        XCTAssertEqual(m.ring, .screenshot)
+        XCTAssertEqual(m.ring, .keyboard)
         m.openPanel(.opacity)
         XCTAssertEqual(m.ring, .controls)
         m.ring(.quit)                        // a tap on another row closes the panel

@@ -100,6 +100,10 @@ best-effort and reported as unconfirmed; transport loss/SIGKILL can leave cancel
                          pointer surface takes a point, fractions of the view as in tap:
                          (pointer:0.25:0.6), else the finger lands at its middle; a tool's press turns
                          it on or off (touch:hover+pointer:0.5:0.5 hovers there).
+                         With the touch keyboard open (a layout's keyboard key, menu:keyboard) its keys
+                         are the controls instead: kb-a, kb-1, kb-f1, kb-esc, kb-enter, kb-space,
+                         kb-backspace, kb-up, kb-shift, kb-ctrl, kb-alt, ... and kb-close; a tapped
+                         kb-shift (kb-ctrl, kb-alt) stays down for the next key: touch:kb-shift touch:kb-a.
                          The controls show while no controller is connected (--pad connects one).
                          Example: --action play:app-367520 --action wait:20 --action touch:a
                          --action touch:leftStick.right@2000 --action touch:leftStick.right+a@600
@@ -134,8 +138,9 @@ best-effort and reported as unconfirmed; transport loss/SIGKILL can leave cancel
                          the game's first frame, then hold the controller's Home button 0.8 s through
                          HostIO's pad handling, which opens Playport's in-game menu over the paused
                          game (UI/InGameMenuView.swift)
-  menu:ROW               in that menu, move its ring to ROW (resume, controls, screenshot, overlay,
+  menu:ROW               in that menu, move its ring to ROW (resume, controls, keyboard, screenshot, overlay,
                          controller, quit) and press A; pad:up/down/a/b press into the menu while it is up.
+                         menu:keyboard goes back to the game with the touch keyboard open over it.
                          menu:controls opens its Controls panel: pad:left/right change the ringed row
                          (On-screen controls: Off, Pad, Keys (Keyboard & mouse), Point (Point & click);
                          D-pad: Off, On; Right stick: Off, Below, Above
@@ -482,7 +487,7 @@ GYRO_STEP = rf"(?:rest|{GYRO_TERM}(?:\+{GYRO_TERM})*)@[0-9]{{1,5}}"
 ACTION_RE = re.compile((r"^(?:(?:install|pause-resume|queue|downloading):[0-9]+|install:gog-[0-9]+(?:@[0-9]+)?|install:epic-[A-Za-z0-9._-]+|(?:uninstall|verify|repair|play):[a-z]+-[A-Za-z0-9 ._-]+|(?:open-launcher|forget-launcher-window):[a-z]+"
                         r"|import:[A-Za-z0-9 ._()'+-]+(?:/[A-Za-z0-9 ._()'+-]+)*"
                        r"|hud:(?:on|off)|open:[a-z]+(?:-[A-Za-z0-9 ._-]+(?:#[a-z]+)?)?|open:settings#(?:accounts|steam|graphics|downloads|controls|controllers|gyro|controller|storage|setup|about|launchers|developer|account|jit|memory|diagnostics|pairing|probes|logs)|open:licences(?:#[a-z0-9 ._-]+)?|pad:(?:{b})(?:\+(?:{b}))*|set:[A-Za-z0-9._-]+=[^,]*"
-                       r"|wait:[0-9]{1,3}|tap:(?:0(?:\.[0-9]+)?|1(?:\.0+)?):(?:0(?:\.[0-9]+)?|1(?:\.0+)?)|menu:(?:open|resume|controls|screenshot|overlay|controller|quit)"
+                       r"|wait:[0-9]{1,3}|tap:(?:0(?:\.[0-9]+)?|1(?:\.0+)?):(?:0(?:\.[0-9]+)?|1(?:\.0+)?)|menu:(?:open|resume|controls|keyboard|screenshot|overlay|controller|quit)"
                        r"|touch:{t}(?:\+{t})*(?:@[0-9]{1,5})?|gyro:{g}(?:/{g})*|gesture:three-finger-tap|web:(?:wait|close)|web:click:[A-Za-z0-9 ._-]+"
                        r"|jit:(?:setup|pair|continue|open-settings|cancel|wait)|probe:settings-url-[0-9]|probe:helper-(?:(?:exit|kill)(?:-hold)?|report)|probe:memory-(?:64|2048|4096|donor-(?:tagged|purgeable)-(?:2048|4096)|donors-(?:6144|8192|10240)|pool-verify|pool-zero|pool-gpu)|background:(?:[1-9][0-9]|[1-5][0-9]{2}|600)|probe:relaunch|probe:native-auth|probe:pairing(?:-cancel|-use)?)$").replace("{b}", PAD_BUTTONS).replace("{t}", TOUCH_CONTROL)
                        .replace("{g}", GYRO_STEP))

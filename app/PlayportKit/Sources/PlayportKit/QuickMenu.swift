@@ -6,17 +6,19 @@
 // the game's on-screen layout, its d-pad and right stick, their opacity, its gyro aim
 // (output and sensitivity) and, while a controller is connected, its controller map's
 // mode (ControllerMap.swift), up and down between them, left and right (and A) to
-// change one, B back to the rows.
+// change one, B back to the rows. Touch keyboard goes back to the game with the
+// touch keyboard open over it (HostIOKit TouchKeyboard).
 
 import Foundation
 
 public enum QuickMenuItem: String, CaseIterable, Sendable {
-    case resume, controls, screenshot, overlay, controller, quit
+    case resume, controls, keyboard, screenshot, overlay, controller, quit
 
     public var title: String {
         switch self {
         case .resume: "Resume"
         case .controls: "Controls"
+        case .keyboard: "Touch keyboard"
         case .screenshot: "Screenshot"
         case .overlay: "Performance overlay"
         case .controller: "Controller"

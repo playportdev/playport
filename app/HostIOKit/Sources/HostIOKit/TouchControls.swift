@@ -12,6 +12,8 @@ public struct TouchRect: Equatable, Sendable {
     }
 
     public var center: TouchPoint { TouchPoint(x: x + width / 2, y: y + height / 2) }
+    public var maxX: Double { x + width }
+    public var maxY: Double { y + height }
 
     public func contains(_ p: TouchPoint) -> Bool {
         p.x >= x && p.x < x + width && p.y >= y && p.y < y + height
@@ -62,6 +64,10 @@ public struct TouchTarget: Equatable, Sendable {
         case pointer(view: TouchRect)
         /// A side-bar tool: a press turns it on or off.
         case tool(PointerTool)
+        /// A touch keyboard's key (TouchKeyboard): its VK is held while a finger is on it.
+        case key(UInt8)
+        /// A touch keyboard's Shift, Ctrl or Alt (its VK): sticky, as TouchControls has it.
+        case modifier(UInt8)
     }
 
     public var id: String
@@ -220,7 +226,25 @@ public enum TouchRoute: Equatable, Sendable {
 /// - Motion, places, trackpad clicks and wheel notches are events, handed
 ///   over once by `takeOutput` (InputMixer sends them before the holds' edges);
 ///   `output` has the holds alone.
+///
+/// The touch keyboard (TouchKeyboard; phase 4 item 2):
+///
+/// - A key holds its VK while a finger is on it.
+/// - Shift, Ctrl and Alt are sticky (`sticky`): a tap holds one down until the
+///   next key goes up (latched); a second tap within `doubleTapWindow` keeps it
+///   down until it is tapped again (locked); a later tap on a latched one lets
+///   go. Held under a finger while another key is pressed, it is a chord and
+///   goes up with the finger. A cancelled tap leaves it as it was;
+///   `releaseAll` lets go of them all.
 public struct TouchControls: Sendable {
+    /// A sticky modifier that stays down with no finger on it.
+    public enum Sticky: Equatable, Sendable {
+        /// Until the next key goes up.
+        case latched
+        /// Until it is tapped again.
+        case locked
+    }
+
     public var doubleTapWindow = 0.3
     public var repeatInterval = 0.1
     public var dpadDeadZone = 0.25
@@ -242,6 +266,8 @@ public struct TouchControls: Sendable {
     public var trackpad = false
     /// The tool on now: right click, hover or scroll (the trackpad is `trackpad`).
     public private(set) var tool: PointerTool?
+    /// The touch keyboard's modifiers down with no finger on them, by target id.
+    public private(set) var sticky: [String: Sticky] = [:]
 
     public private(set) var targets: [TouchTarget]
 
@@ -263,6 +289,10 @@ public struct TouchControls: Sendable {
         var scrolled = 0.0
         /// The tool and mode a press on a tool found, for `cancelled`.
         var before: (tool: PointerTool?, trackpad: Bool)?
+        /// A modifier's state when the finger came down, for `cancelled`.
+        var stickyBefore: Sticky?
+        /// Another key was pressed while this modifier's finger was down (a chord).
+        var chord = false
     }
 
     private var fingers: [Int: Finger] = [:]
@@ -270,6 +300,8 @@ public struct TouchControls: Sendable {
     private var toggled: Set<String> = []
     /// The last short tap on each stick: when it ended.
     private var lastTap: [String: Double] = [:]
+    /// When each latched modifier was tapped (a second tap within doubleTapWindow locks it).
+    private var latchedAt: [String: Double] = [:]
     private var now = 0.0
     /// The events `takeOutput` hands over next.
     private var events: [TouchPointerEvent] = []
@@ -329,6 +361,20 @@ public struct TouchControls: Sendable {
         case .tool(let x):
             f.before = (tool, trackpad)
             if x == .trackpad { trackpad.toggle() } else { tool = tool == x ? nil : x }
+        case .modifier:
+            f.stickyBefore = sticky[id]
+            switch sticky[id] {
+            case nil:
+                sticky[id] = .latched
+                latchedAt[id] = t
+            case .latched?:
+                sticky[id] = t - (latchedAt[id] ?? -.infinity) <= doubleTapWindow ? .locked : nil
+            case .locked?:
+                sticky[id] = nil
+            }
+        case .key:
+            // A modifier under a finger now makes a chord with this key.
+            for (n, g) in fingers { if case .modifier = targets[g.target].kind { fingers[n]?.chord = true } }
         default:
             break
         }
@@ -399,6 +445,17 @@ public struct TouchControls: Sendable {
                 if tool == .rightClick { tool = nil }
             }
         }
+        switch target.kind {
+        case .modifier where f.chord:
+            sticky[target.id] = nil
+        case .key:
+            // The key a latched modifier was down for: it goes up, unless a finger still holds it.
+            for (id, s) in sticky where s == .latched && !fingers.values.contains(where: { targets[$0.target].id == id }) {
+                sticky[id] = nil
+            }
+        default:
+            break
+        }
     }
 
     /// The system took the finger back (a gesture it was part of): what it
@@ -412,6 +469,7 @@ public struct TouchControls: Sendable {
             if toggled.contains(target.id) { toggled.remove(target.id) } else { toggled.insert(target.id) }
         }
         if case .tool = target.kind, let b = f.before { tool = b.tool; trackpad = b.trackpad }
+        if case .modifier = target.kind { sticky[target.id] = f.stickyBefore }
     }
 
     /// Between touches: a repeating button's clock.
@@ -425,6 +483,8 @@ public struct TouchControls: Sendable {
         events = []
         motion.reset()
         tool = nil
+        sticky = [:]
+        latchedAt = [:]
     }
 
     /// The output with the events since the last call (`output` has none).
@@ -443,9 +503,9 @@ public struct TouchControls: Sendable {
     /// Whether any finger is on a control.
     public var touching: Bool { !fingers.isEmpty }
 
-    /// The controls to draw as held (amber): a finger on them, toggled on, or a tool on.
+    /// The controls to draw as held (amber): a finger on them, toggled on, a tool on, or a sticky modifier down.
     public var held: Set<String> {
-        var out = Set(fingers.values.map { targets[$0.target].id }).union(toggled)
+        var out = Set(fingers.values.map { targets[$0.target].id }).union(toggled).union(sticky.keys)
         for t in targets {
             if case .tool(let x) = t.kind, x == .trackpad ? trackpad : x == tool { out.insert(t.id) }
         }
@@ -476,6 +536,9 @@ public struct TouchControls: Sendable {
         for id in toggled {
             if let t = targets.first(where: { $0.id == id }), case .button(let a, _) = t.kind { out.apply(a) }
         }
+        for t in targets where sticky[t.id] != nil {
+            if case .modifier(let vk) = t.kind { out.apply(.key(vk, [])) }
+        }
         var sticks: [PadControl: (x: Double, y: Double)] = [:]
         for touch in order {
             guard let f = fingers[touch] else { continue }
@@ -499,6 +562,8 @@ public struct TouchControls: Sendable {
                 if let b = f.button { out.apply(.mouse(b)) }
             case .look, .tool:
                 break
+            case .key(let vk), .modifier(let vk):
+                out.apply(.key(vk, []))
             }
         }
         if let l = sticks[.leftStick] { out.pad.lx = Float(l.x); out.pad.ly = Float(l.y) }

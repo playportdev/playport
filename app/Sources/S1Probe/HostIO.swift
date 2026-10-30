@@ -429,13 +429,14 @@ final class HostIO {
     }
 
     /// The on-screen controls' state (OnScreenControls), nil while they are off:
-    /// their pad into slot 0, their keys and mouse buttons through Lifecycle (a press
-    /// while the menu is up does not reach the game, a release does), the Playport
-    /// button's menu.
-    func touchControls(_ t: TouchOutput?) {
+    /// their pad into slot 0 (unless `padOn` is false: the touch keyboard over a
+    /// controller that is player 1), their keys and mouse buttons through Lifecycle
+    /// (a press while the menu is up does not reach the game, a release does), the
+    /// Playport button's menu.
+    func touchControls(_ t: TouchOutput?, padOn: Bool = true) {
         let outputs = Self.pads.withLock { p in
             let earlier = p.mixer.takeOutputs()   // the mapped pads', in the order they came
-            let r = p.mixer.touch(t)
+            let r = p.mixer.touch(t, padOn: padOn)
             Self.apply(r.slot0, slot: 0, &p.gate)
             return earlier + r.outputs
         }
@@ -466,7 +467,10 @@ final class HostIO {
         case .playport(.menu):
             InGameMenu.shared.open()
         case .playport(.keyboard):
-            break   // the touch keyboard: PLA-532
+            // The touch keyboard opens or closes on the next turn, not while the mixer's outputs are being sent.
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { OnScreenControls.shared.setKeyboard(!OnScreenControls.shared.keyboard) }
+            }
         }
     }
 

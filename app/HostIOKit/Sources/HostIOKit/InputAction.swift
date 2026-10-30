@@ -50,6 +50,9 @@ public struct KeyModifiers: OptionSet, Hashable, Sendable {
 
     /// Each modifier and its saved name, in the order they go down.
     public static let names: [(KeyModifiers, String)] = [(.shift, "shift"), (.control, "ctrl"), (.alt, "alt")]
+
+    /// Whether a VK is a Shift, Ctrl or Alt key itself (VK_SHIFT..VK_MENU, VK_LSHIFT..VK_RMENU).
+    public static func isModifier(_ vk: UInt8) -> Bool { (0x10...0x12).contains(vk) || (0xA0...0xA5).contains(vk) }
 }
 
 public enum MouseAction: String, CaseIterable, Sendable {

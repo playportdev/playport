@@ -19,7 +19,10 @@
 // Point & click's ids: pointer mode rightClick hover scroll keyboard esc; the
 // pointer surface's finger lands at the safe area's middle, or at a point
 // given as fractions of the view, `pointer:0.25:0.6` (as `tap:` gives one); a
-// tool's press turns it on or off. The
+// tool's press turns it on or off. With the touch keyboard open (a layout's
+// `keyboard` key, `menu:keyboard`), its keys are the controls instead (HostIOKit TouchKeyboard): kb-a, kb-1, kb-f1, kb-shift,
+// kb-ctrl, kb-alt, kb-space, kb-enter, kb-backspace, kb-up, ... and kb-close; a
+// tapped kb-shift stays down for the next `touch:` key. The
 // in-game menu's three-finger tap is the driver's `gesture:three-finger-tap`. Every finger goes down together, stays `ms`
 // milliseconds (200 by default, 10000 at most), and lifts together.
 
@@ -82,7 +85,7 @@ extension OnScreenControls {
                 case .dpad: reach = min(t.frame.width, t.frame.height) * 0.4
                 case .look: reach = Self.lookDrag
                 case .button: return "\(w[0]) is a button: it takes no direction"
-                case .pointer, .tool: return "\(w[0]) takes no direction"
+                case .pointer, .tool, .key, .modifier: return "\(w[0]) takes no direction"
                 }
                 let d: (Double, Double)
                 switch w[1] {
@@ -129,7 +132,7 @@ extension OnScreenControls {
     var summary: String {
         "drawn=\(drawn) layout=\(state.layout.rawValue) visible=\(state.visible) dpad=\(state.dpad.rawValue) "
             + "rightStick=\(state.rightStick.rawValue) "
-            + "opacity=\(ControlsOpacity.label(state.opacity)) "
+            + "opacity=\(ControlsOpacity.label(state.opacity)) keyboard=\(keyboard ? "open" : "closed") "
             + "held=\(controls.held.sorted().joined(separator: "+")) "
             + "trackpad=\(controls.trackpad) tool=\(controls.tool?.rawValue ?? "none")"
     }
