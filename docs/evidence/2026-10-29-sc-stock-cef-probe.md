@@ -1424,3 +1424,115 @@ footprint = graphics + `[proc-mem]` all, anonymous − donor-backed + non-view r
 | Image copies: written once, mapped after (0167) | passed (3 written, 0 failures; B's image res_anon 58) |
 | Pool: a spare resume at 15–19 % counts from 15 % | not exercised (the resume at 13 %) |
 | 0155 headroom refusal | not exercised (no re-sign-in after the game-SC end) |
+
+## l13–l14: repeat of l12, HK hitches
+
+Same IPA as l12, `f2a0c7b88e574842dd61c25442ad973bef39cf8e659c89c1959f9ce51f816ede` (HEAD `da73673`), no code
+change, no install (`pp phone status`: installed `f2a0c7b8…`, 80 %, on power, no JIT timeout). Session
+`agent-notes/pla476/l13.sh` (HK `pp perf` with the HUD, then l13), then `l13b.sh` (l13 again, l14). M = measured,
+I = inferred. The `[xp]` clock is the log's; press = the `vpad` step 1.
+
+**What went wrong first (tooling, M).**
+
+- The first session ran l13 with the Metal HUD still on from the `pp perf` that preceded it. The HUD overlays the title
+  screen's Story prompt, so `landing.py` saw no Story tab and pressed nothing (`no Story press by launch +420 s`).
+  The title screen was reached (first frame +112 s); that run (`20261030T183016-rdr2-p476l13-hudon-nopress`) is
+  kept, not analysed.
+- My tool call then timed out and killed the session during l14 (`…183820-rdr2-p476l14-killed`, no result).
+- The two runs below are a second session, with `--action hud:off` added in `arm13.sh` (l12 ran with the HUD off
+  because its HUD setting had been undone by the smoke run in between). Otherwise the same keys:
+  `env.PLAYPORT_CEF_SWAP=0 env.PLAYPORT_SC_SINGLE=1 env.PLAYPORT_SC_LAYOUT=1`, `STORY_BY=420 UNTIL=600 WAIT=900`.
+
+**Hollow Knight `pp perf` with the HUD on (M).** `pp perf --secs 120 --cool 5 --pad first-frame+25:hk-new-game --pad
+first-frame+80:hk-walk` on `f2a0c7b8…` (`$PLAYPORT_BUILD/perf/p476l13-hk-after`; its log says `hostio: Metal HUD on`),
+compared with l12's before run on `a5f40ebb…` (`p476l12-hk-before`, HUD on):
+
+| `--compare --window 0:120` | before (`a5f40ebb`, 128 MiB buffers) | after (`f2a0c7b8`, 64 MiB buffers) |
+| --- | --- | --- |
+| fps | 58.7 | 58.7 |
+| frame interval p50 / p99 / p99.9 (ms) | 16.67 / 25.01 / 66.69 | 16.67 / 25.01 / 50.02 |
+| hitches > 25 / 50 / 100 ms (window) | 177 / 11 / 4 | 203 / 11 / 4 |
+| hitches, whole run | 203 / 11 / 4 | 245 / 11 / 4 |
+| GPU ms (HUD) / GPU % | 6.2 / 46.9 | 7.1 / 51.4 |
+| fps p10 / min | 55.4 / 45.3 | 55.0 / 45.4 |
+| Mi per frame / srv per frame | 73.3 / 18.98 | 72.5 / 19.0 |
+| phone power (mW), charger | 3718, off power | 4341, **on power** |
+
+- **Gate (0116):** frame rate and the tail (> 50 ms, > 100 ms, p99, p99.9) are equal or better. The count of 25–50 ms
+  frames is 14 % higher in the window (+42 over the run). GPU time is 0.9 ms higher, but the after run was on power
+  (a different phone power state; I: not a regression of the buffers). I: the extra short hitches are the compile
+  burst of the third 64 MiB generation (l12: ≈ +20 k compiles at about +35 s). The before run has hitch data, so this
+  is a comparison of two measured runs. **Passed on the stated measures; the 25 ms count is a cost.**
+
+**RDR2 l13 and l14 against l12.** Run dirs: l13 `$PLAYPORT_BUILD/ui-runs/20261030T184300-rdr2-p476l13`, l14
+`…T185058-rdr2-p476l14`, l12 `…T171553-rdr2-p476l12`.
+
+| | l12 | l13 | l14 |
+| --- | --- | --- | --- |
+| result | `ok:true`, first-frame+600 | **`launch=failed`, the app ended at +374.7 `[xp]`** (see below) | `ok:true`, first-frame+600 |
+| first frame (title clock) | +92.76 | +108.66 | +96.66 |
+| game signed in `[xp]` | +110.3 | +127.3 | +116.1 |
+| Story pressed `[xp]` / after sign-in | +152.8 / 42.5 s | +171.3 / 44.0 s | +149.3 / 33.2 s |
+| game-SC end (0141/0153) `[xp]` | +229.9, 7185 MB, press+77 | +280.6, 7010 MB, press+109 | +268.3, 7051 MB, press+119 |
+| **peak `fpMB`** | **7200** (at the step) | **7627** (+367, after the 0155 restarts); at the step 6885–7010 (+274–281), 7282 at +322 | **7058** (at the step, +265) |
+| footprint just before the step (`[footprint]`/fast) | 5675 / 5872 | 5659 (+271) | 5638 / 5761 (+247–250) |
+| at the step | 7190 @ press+76.5 (+1318) | 6885 @ +274.7, press+103 (+1226) | 6935 @ +252.9, press+103; 7056 top (+1295) |
+| graphics before → at the step | 2166 → 3387 | 2163 → 3471 | 2123 → 3316 (3370 after) |
+| pool: first growth stop | +219.5, level 14 %, press+67 | +273.9, level 8 %, press+103 | +247.3, level 14 %, press+98 |
+| pool: spare resume | +221.5 at 13 % (stop again at 12 %) | +278.5 at **8 %** (spare 3320 ≥ 1920) | +249.5 at 14 %, stop again at 8 % at +252.9 |
+| pool live (cap) / resident+compressed at the step | 3104 / 2598 | 3290 / **2790** | 3256 / **2748** (2784 at +267) |
+| B (image/private/fex MiB) press → step −5 | 171/78/201 → 132/54/206 | 169/77/201 → 168/57/195 | 170/79/194 → 171/56/215 |
+| B image res_file / res_anon (MiB) | 112/58 → 74/58 | 110/58 → 111/53 | 112/58 → 113/58 |
+| RDR2 private+image+fex at step −5 | 2648+43+281 | ≈ 2014+57+288 at +247, 2750+57+288 at +272 | 2602+57+274 |
+| RDR2 `[gen]` | gen 2 at press−67, gen 3 at press+1.9, gen 4 at press+67 | gen 2 press−71, gen 3 +2.2, gen 4 +88 | gen 2 press−61, gen 3 +2.2, gen 4 +90 |
+| A / B `[gen]` (highest allocation number) | A 23, B 24 | A 22, B 25 (and a third at 23) | A 28, B 30 |
+| 0155 | not exercised | **exercised** (below) | not exercised |
+| `NO GAP FITS` | 53 | 103 (after the 0155 restarts) | 53 |
+| jetsam | none | **the app was killed at +374.7** (I: jetsam) | none |
+
+- **The cabin (screenshots, described only).** l14: black with a loading spinner, then Arthur sits on a bed in the log
+  cabin in a blue coat and black hat (window, shelves, a table with a tin cup behind him), unchanged through the last
+  shots (+650, +750 after the launch); `[kk-gpu]` median 19.7 / 19.9 / 20.3 fps over +255–300 / +300–450 / +450–700
+  (l12: 22.3 / 21.4 / 20.9). l13: the same cabin at +297 s after the launch (dimmed), a black screen with a spinner at
+  +345, and the Home Screen at +399 (the app was gone).
+- **Pool and peaks (M).** The pool did not stop early in either repeat: the first growth stop came at press+98 (l14)
+  and press+103 (l13), l12's at press+67. Both l13 and l14 stopped with the pool about 150–190 MiB fuller than l12
+  (resident+compressed 2748 and 2790 against 2598), yet l14's step peaked at 7058, 142 below l12's. The step began
+  25 s later after the press than in l12 (press+103 against +76.5): the load step's own start is not fixed to the
+  press. The spare resume (decision 0153/l10 rule) ran in both repeats: at 14 % in l14 (then stopped again at 8 %), at
+  8 % in l13 (spare 3320 MiB, `level 8 % < 20 %`). R = min(L, 15) at a 15–19 % level did not occur in any run
+  (levels were 14 and 8); the resume used the spare-memory rule.
+- **Donor-backed term at step −5 and its peak (M).** l12 2598 / 2598; l13 2773 (+269.6) / 2837 (+322, resident 2047 +
+  compressed 790); l14 2748 (+247.6) / 2784 (+266.9). The question "does the cabin margin hold when the pool stops
+  early" was **not tested**: the pool stopped late, not early, in both repeats.
+- **Against l12, the policy terms held (M).** Graphics at the step 3316–3471 (l12 3387). B's image stays at about
+  58 MiB anonymous (res_anon 53–58) with 110–113 MiB file-backed at the step in both repeats; l12's file part had
+  dropped to 74 by then, so B is 25–50 MiB larger in total here (421 and 442 against 392). RDR2's fex row 274–288
+  (l12 281).
+- **Time to the press (M).** The press came 33–44 s after the sign-in: l12 43 s, l13 44 s, l14 33 s. l13's sign-in
+  was 17 s later than l12's and l14's 6 s later. The highest generation number of the two launcher helpers was 23 and
+  24 (l12), 22 and 25 (l13), 28 and 30 (l14), so the count of 64 MiB rolls does not track the delay.
+- **l13: the game-SC end, 0155, and the death (M, the cause I).**
+  - The game-SC end fired at +280.6 (7010 MB) and ended one of three helper processes; 0138 refused 7 restarts.
+  - At +314.1: `re-sign-in after end (steam-language)` → `restarts allowed: the sweep stops (allow 1, decision
+    0155)`. **No `no-headroom` line.** The helper restarted five times (`restart allowed start 9`–`13`, +318.6 to
+    +362.2), 10 s apart; the footprint went to 7122 (+320.6), 7282 (+322), 7421 (+324.7), 7590 (+366), max `fpMB` 7627;
+    compressed 3.9 GB, graphics 3.6 GB, 556 threads, band 10957 MB used.
+  - The log stops at +374.69 with `fpMB=7461`, with no crash file and no result: pp ui reported `launch=failed` and the
+    app restarted. The limit is 8192 MB, so this is not a plain footprint-limit kill. I: jetsam on system memory or a
+    lower phys-footprint threshold; not determined.
+  - I: 0155's allow let Social Club come back at 7.0 GB and its restart loop cost the 600 MB that ended the run.
+    (In l14 the sweep refused every restart (100 of them in the run) and the game stayed in the cabin to
+    first-frame+600; in l12 18.)
+
+**Verdict.** Story reaches and holds the cabin in two of two runs that kept the game's Social Club ended (l12, l14:
+peaks 7200 and 7058). l13 reached it too, but the allowed re-sign-in's helper restarts then lost the app at 7.5–7.6 GB.
+The cabin margin without the pool's early stop is **not shown** to be a problem (l14's pool stopped at the step, with
+a step 142 MB lower), but 0155's allow path is a hazard at that footprint.
+
+## Games observed (l13, l14)
+
+- Hollow Knight (367520): works; `pp perf` 58.7 fps on the HUD run (`p476l13-hk-after`).
+- Red Dead Redemption 2 (1174180): dev stock-CEF probe, Story cabin reached and held in l14 (peak 7058 MB, 20 fps),
+  l13 reached the cabin and then ended (app killed at +374 s after Social Club restarts). A dev experiment, no
+  change to the compatibility status.

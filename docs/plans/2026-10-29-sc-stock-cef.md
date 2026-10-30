@@ -186,22 +186,33 @@
     B 13 times (I: likely why Story was pressed 21 s later than in l11).
   - **HK:** first-frame+10 passed (`20261030T170711-hk-p476l12`). `pp perf` before/after: 58.7/58.7 fps, compiles
     +30 % from one 64 MiB roll; the after run's hitches were not recorded (Metal HUD off).
-- **Chunk-2 gates after l12:**
+- **Measured (l13–l14, 2026-10-30, same IPA `f2a0c7b8…`; no code change;
+  [evidence](../evidence/2026-10-29-sc-stock-cef-probe.md#l13l14-repeat-of-l12-hk-hitches)):** l12's keys, HUD off.
+  - **l14 reached the cabin and held it** to first-frame+600 (peak **7058 MB**, step from 5638–5761 MB, 20 fps,
+    `.work/ui-runs/20261030T185058-rdr2-p476l14`). **l13 reached it, then the app was killed at +374 s** (peak
+    7627 MB, `launch=failed`; `.work/ui-runs/20261030T184300-rdr2-p476l13`): 0155 allowed a re-sign-in's Social Club
+    restarts at +314 s and five restarts took the footprint from 6.9 to 7.6 GB (cause of the kill: I).
+  - The pool stopped **late** in both repeats (press+98 and +103; l12 +67), so "the margin without the pool's early
+    stop" was not tested; the policy terms held (graphics 3316–3471 at the step, B's image anonymous 53–58).
+  - **HK `pp perf` with the HUD on:** 58.7 fps both; p99.9 66.7 → 50.0 ms; hitches > 25 ms 203 → 245 (> 50 ms and
+    > 100 ms unchanged at 11 and 4); GPU 6.4 → 7.2 ms with the after run on power.
+- **Chunk-2 gates after l14:**
 
-  | Gate | l7 | l8 | l9 | l10 | l11 | l12 |
-  | --- | --- | --- | --- | --- | --- | --- |
-  | HK first-frame+10 | passed | passed | passed | passed | passed | passed |
-  | The game's helper reaches allocator/browser startup | passed | **not passed** (kind 2 not held again; no grant, refused, died in init) | passed (kinds 1–6, no refusal) | passed (kinds 1–6, no refusal) | passed (kinds 1–6, no refusal) | passed (kinds 1–6, no refusal) |
-  | The game signs in, Story is pressed | passed | passed | passed | passed | passed | passed (GPU off) |
-  | Story reaches the cabin | **not passed** (jetsam at 8192 MB) | **not passed** (black loading screen without the game's Social Club) | **not passed** (jetsam at 8192 MB in the load step) | **not passed** (8185 MB in the load step, then the app ended) | **not passed** (8169 MB in the load step, then SIGKILL) | **passed** (peak 7200 MB, held to first-frame+600) |
-  | No SC/launcher `NO GAP FITS` or soft grant | **not passed** (26 V8 lines each from A and B, 36 `dllhost.exe`) | **not passed** (26 V8 lines from A; 0 `dllhost.exe`; no soft grant) | **not passed** (26 V8 lines each from A and B; 0 `dllhost.exe`; no soft grant) | **not passed** (26 V8 lines each from A and B; 0 `dllhost.exe`; no soft grant) | **not passed** (26 V8 lines each from A and B; 0 `dllhost.exe`; no soft grant) | **not passed** (26 V8 lines each from A and B; 0 `dllhost.exe`; no soft grant) |
-  | Peak within 7343 MB ±10 % | **not passed** (8192 MB limit) | **not comparable** (6496 MB, no Story step) | **not passed** (≥ 8106 MB, the limit) | **not passed** (8185 MB) | **not passed** (8169 MB) | **passed** (7200 MB) |
+  | Gate | l7 | l8 | l9 | l10 | l11 | l12 | l13 | l14 |
+  | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+  | HK first-frame+10 | passed | passed | passed | passed | passed | passed | not run (HK `pp perf` ran) | not run (HK `pp perf` ran) |
+  | The game's helper reaches allocator/browser startup | passed | **not passed** (kind 2 not held again; no grant, refused, died in init) | passed (kinds 1–6, no refusal) | passed (kinds 1–6, no refusal) | passed (kinds 1–6, no refusal) | passed (kinds 1–6, no refusal) | passed | passed |
+  | The game signs in, Story is pressed | passed | passed | passed | passed | passed | passed (GPU off) | passed | passed |
+  | Story reaches the cabin | **not passed** (jetsam at 8192 MB) | **not passed** (black loading screen without the game's Social Club) | **not passed** (jetsam at 8192 MB in the load step) | **not passed** (8185 MB in the load step, then the app ended) | **not passed** (8169 MB in the load step, then SIGKILL) | **passed** (peak 7200 MB, held to first-frame+600) | **passed** (cabin, then the app was killed at +374 s: 0155 restarts) | **passed** (peak 7058 MB, held to first-frame+600) |
+  | No SC/launcher `NO GAP FITS` or soft grant | **not passed** (26 V8 lines each from A and B, 36 `dllhost.exe`) | **not passed** (26 V8 lines from A; 0 `dllhost.exe`; no soft grant) | **not passed** (26 V8 lines each from A and B; 0 `dllhost.exe`; no soft grant) | **not passed** (26 V8 lines each from A and B; 0 `dllhost.exe`; no soft grant) | **not passed** (26 V8 lines each from A and B; 0 `dllhost.exe`; no soft grant) | **not passed** (26 V8 lines each from A and B; 0 `dllhost.exe`; no soft grant) | **not passed** (103 lines) | **not passed** (53 lines) |
+  | Peak within 7343 MB ±10 % | **not passed** (8192 MB limit) | **not comparable** (6496 MB, no Story step) | **not passed** (≥ 8106 MB, the limit) | **not passed** (8185 MB) | **not passed** (8169 MB) | **passed** (7200 MB) | **passed** by the band (7627 MB after the 0155 restarts, then the app was killed; 6885–7010 at the step) | **passed** (7058 MB) |
 
 - **Ordered queue now:** (1) done in `2df65fe` (slots held in place); (2) Story's load with the game's own Social
-  Club running is under the limit since l12 (peak 7200 MB). It needs a repeat to show that the margin does not
-  hang on the pool's late stop (−274 of the −888). Open on the way:
-  - the 64 MiB cap's cost in the Social Club helpers (24 and 13 rolls), and an HK `pp perf` hitch comparison with
-    the HUD on;
+  Club running is under the limit in l12 and l14 (7200, 7058 MB); l13 was killed at +374 s after 0155 allowed Social
+  Club restarts (7627 MB): the allow path needs a look before Story is called safe. The early-stop case is still
+  untested (both repeats stopped late). Open on the way:
+  - the 64 MiB cap's cost in the Social Club helpers (24 and 13 rolls); the HK hitch comparison with the HUD on is
+    done (above: 25–50 ms hitches +21 %, nothing worse);
   - which libraries B still loads with GPU off.
 
   Then the V8 probes (the last `NO GAP FITS` gate); (3) chunks 3–6,
