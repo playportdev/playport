@@ -34,8 +34,10 @@ final class SuggestedLayout {
     weak var view: LayoutSuggestionToast?
     /// The toast is up.
     private(set) var showing = false
+    #if !PLAYPORT_RELEASE
     /// Why the game will not be offered, once that is known (the driver's refusal).
     private(set) var outcome: String?
+    #endif
 
     private static func log(_ line: String) {
         #if !PLAYPORT_RELEASE
@@ -84,10 +86,12 @@ final class SuggestedLayout {
         }
     }
 
-    /// Ruled out: logged, and no more sampling.
-    private func finish(_ why: String) {
-        outcome = why
-        Self.log("not offered for \(id ?? "?"): \(why)")
+    /// Ruled out: no more sampling; a dev build logs why and keeps it for the driver.
+    private func finish(_ why: @autoclosure () -> String) {
+        #if !PLAYPORT_RELEASE
+        outcome = why()
+        Self.log("not offered for \(id ?? "?"): \(outcome ?? "")")
+        #endif
         timer?.invalidate()
     }
 
