@@ -13,7 +13,7 @@ import unittest
 REPO = Path(__file__).resolve().parents[2]
 SITE = REPO / "site" / "compatibility"
 STATUSES = {"works", "issues", "broken"}
-STORES = {"steam", "gog", "epic", "other"}
+STORES = {"steam", "gog", "epic", "xbox", "other"}
 REPORT = "issues/new?template=problem.yml"
 
 
@@ -33,7 +33,8 @@ class GamesJson(unittest.TestCase):
                 self.assertIn(g["status"], STATUSES)
                 self.assertIn(g["store"], STORES)
                 if "id" in g:
-                    self.assertRegex(g["id"], r"^\d+$")
+                    # An Xbox copy's ID is its 12-character Store Product ID.
+                    self.assertRegex(g["id"], r"^[0-9A-Z]{12}$" if g["store"] == "xbox" else r"^\d+$")
                 if g["store"] == "steam":
                     self.assertIn("id", g, "a Steam entry needs its app ID")
 
@@ -50,6 +51,9 @@ class Links(unittest.TestCase):
         page = (SITE / "index.html").read_text(encoding="utf-8")
         self.assertIn('fetch("games.json"', page)
         self.assertIn(REPORT, page)
+        # Every store games.json may name has a label on the page (else it shows "undefined").
+        stores = re.search(r"var STORE = \{([^}]*)\}", page).group(1)
+        self.assertEqual(set(re.findall(r"(\w+):", stores)), STORES)
         template = (REPO / ".github" / "ISSUE_TEMPLATE" / "problem.yml").read_text(encoding="utf-8")
         for status in ("Works", "Playable with issues", "Broken"):
             self.assertRegex(template, rf"(?m)^\s+- {re.escape(status)}$")
