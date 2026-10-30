@@ -53,6 +53,9 @@ public protocol XboxPackageUpdates: Sendable {
 /// the licence token only for its Product ID and declared related products, update
 /// queries only for its package. Before sign-in everything is refused; after
 /// `revoke()` (sign-out) nothing is answered and a reply minted meanwhile is dropped.
+/// A play's tickets are kept for it until a minute before they expire, and what reaches
+/// Microsoft is limited per play (a bucket of `burst` requests, one more every `refill`
+/// seconds), so guest code looping requests can't flood the account's sign-in.
 /// Logs name each request and reply with sizes and status, never a payload.
 public actor XboxBridgeService {
     /// The runtime's MSA client ID for a title without an MSAAppId
@@ -72,19 +75,43 @@ public actor XboxBridgeService {
     private let updates: (any XboxPackageUpdates)?
     private let saves: (any XboxSaveConflictAsker)?
     private let log: Logger
+    private let now: @Sendable () -> Date
     private nonisolated let fence = Fence()
     private(set) var served = 0, refused = 0
+    /// The play's tickets by what they were minted for.
+    private var tickets: [String: XboxTicket] = [:]
+    /// Requests that may still reach Microsoft now, and when the bucket was last topped up.
+    private var bucket: Double = Double(burst)
+    private var toppedUp: Date
+    public static let burst = 10
+    public static let refill: TimeInterval = 10
 
     /// `saves` answers the runtime's save conflict question (the player's choice); without
     /// it every conflict keeps both sides and the play uses the phone's saves.
     public init(copy: XboxBridgeCopy, account: any XboxBridgeAccount, updates: (any XboxPackageUpdates)?,
-                saves: (any XboxSaveConflictAsker)? = nil, log: Logger) {
-        self.copy = copy; self.account = account; self.updates = updates; self.saves = saves; self.log = log
+                saves: (any XboxSaveConflictAsker)? = nil, log: Logger, now: @escaping @Sendable () -> Date = Date.init) {
+        self.copy = copy; self.account = account; self.updates = updates; self.saves = saves; self.log = log; self.now = now
+        toppedUp = now()
         key = Self.newKey()
     }
 
+    /// One request's worth from the play's bucket, or false when it is empty.
+    private func take() -> Bool {
+        let at = now()
+        bucket = min(Double(Self.burst), bucket + max(0, at.timeIntervalSince(toppedUp)) / Self.refill)
+        toppedUp = at
+        guard bucket >= 1 else { return false }
+        bucket -= 1
+        return true
+    }
+
+    /// A ticket kept for this play, unless it has less than a minute left.
+    private func kept(_ key: String) -> XboxTicket? {
+        tickets[key].flatMap { $0.expiresAt > now().addingTimeInterval(60) ? $0 : nil }
+    }
+
     static func newKey() -> Secret<String> {
-        Secret(XboxCrypto.random(32).map { String(format: "%02x", $0) }.joined())
+        Secret(XboxCrypto.random(32).hex)
     }
 
     /// Sign-out: nothing more is answered, including a request in flight.
@@ -136,13 +163,19 @@ public actor XboxBridgeService {
             return Outcome(body: [], status: "refused: full trust not declared")
         }
         let scope = fullTrust ? "service::user.auth.xboxlive.com::MBI_SSL" : "xboxlive.signin"
-        let user: XboxTicket, device: XboxTicket
-        do {
-            user = try await account.userTicket(scope: "scope=\(scope)&api-version=2.0&clientid=\(expected)", clientID: expected)
-            device = try await account.deviceTicket(scope: Self.deviceScope, clientID: Self.deviceApp, policy: "TOKEN_BROKER")
-        } catch {
-            return Outcome(body: [], status: "refused: tickets unavailable")
+        let userKey = "user \(expected) \(scope)", deviceKey = "device \(Self.deviceApp) \(Self.deviceScope)"
+        var user = kept(userKey), device = kept(deviceKey)
+        if user == nil || device == nil {
+            guard take() else { return Outcome(body: [], status: "refused: rate limited") }
+            do {
+                if user == nil { user = try await account.userTicket(scope: "scope=\(scope)&api-version=2.0&clientid=\(expected)", clientID: expected) }
+                if device == nil { device = try await account.deviceTicket(scope: Self.deviceScope, clientID: Self.deviceApp, policy: "TOKEN_BROKER") }
+            } catch {
+                return Outcome(body: [], status: "refused: tickets unavailable")
+            }
+            tickets[userKey] = user; tickets[deviceKey] = device
         }
+        guard let user, let device else { return Outcome(body: [], status: "refused: tickets unavailable") }
         return Outcome(body: Self.xml("MSATokenResponse", [
             ("Token", user.token.value), ("Expiry", String(Int64(user.expiresAt.timeIntervalSince1970))),
             ("DeviceRps", device.token.value), ("DeviceExpiry", String(Int64(device.expiresAt.timeIntervalSince1970))),
@@ -167,6 +200,7 @@ public actor XboxBridgeService {
             return Self.licenceReply(Self.denied, status: "refused: another product")
         }
         do {
+            guard take() else { return Self.licenceReply(Self.fail, status: "refused: rate limited") }
             let token = try await account.licenceToken(parentProductID: parent, productIDs: ids, nonce: nonce)
             guard !token.value.isEmpty else { return Self.licenceReply(Self.fail, status: "refused: no token") }
             return Outcome(body: Self.xml("StoreLicenseTokenResponse", [("Hresult", "0"), ("Token", token.value)]), status: "served")
@@ -222,6 +256,7 @@ public actor XboxBridgeService {
         guard product.caseInsensitiveCompare(copy.productID) == .orderedSame else {
             return Self.updatesReply(Self.denied, stage: "product-id", status: "refused: another product")
         }
+        guard take() else { return Self.updatesReply(Self.fail, stage: "package-query", status: "refused: rate limited") }
         switch await updates?.check(productID: copy.productID, installedVersion: version) ?? .unknown {
         case .current(let latest):
             return Self.updatesReply(0, checked: true, latest: latest, stage: "", status: "served")

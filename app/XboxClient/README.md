@@ -507,11 +507,14 @@ local saves for the session), so patches/xgameruntime/0002 sends Playport's
 `SAVE_CONFLICT_REQUEST` (0x5001, reply 0x5002) on the bridge: `Scid`, `Container`,
 `DisplayName`, `LocalTime`, `CloudTime`, `CloudDevice` (the listing's `deviceName`,
 not seen in captures). `XboxBridgeService` passes it to its `XboxSaveConflictAsker`
-as `XboxSaveConflict` and answers `<Choice>local|cloud|none</Choice>`: local uploads
-the phone's containers over the cloud's, cloud downloads the cloud's (the phone's
-kept as the runtime's `.recovery-` copy), none (signed out, nobody to ask, malformed,
-Decide later) keeps both and asks again next time. One question settles every
-conflicting container of that sync. `XboxSaves.unsynced(scid:localAppData:)` is a
+as `XboxSaveConflict` and answers `<Choice>local|cloud|none</Choice>`, for that one
+container: each conflicting container is its own question. Local uploads the phone's
+container over the cloud's once the runtime has kept the cloud's as a
+`.recovery-cloud-` copy (no copy, no upload); cloud downloads the cloud's (the phone's
+kept as the runtime's `.recovery-` copy); none (signed out, nobody to ask, malformed,
+Decide later) keeps both and asks again next time. The dev app's card defaults to
+Decide later (A and B) and takes Y twice for local; a sign-out closes it.
+`XboxSaves.unsynced(scid:localAppData:)` is a
 copy's unsynced state: any container `dirty` or never uploaded; recovery and
 download trees (leading dot) don't count; nil when an index can't be read.
 

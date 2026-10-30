@@ -88,9 +88,7 @@ struct XboxBridgeReader {
         if !authenticated {
             guard buffer.count >= key.count else { return [] }
             // Constant time, as Nexus's timingSafeEqual.
-            var difference: UInt8 = 0
-            for (a, b) in zip(buffer.prefix(key.count), key) { difference |= a ^ b }
-            guard difference == 0 else { throw XboxBridgeWireError.wrongKey }
+            guard XboxCrypto.same(Array(buffer.prefix(key.count)), key) else { throw XboxBridgeWireError.wrongKey }
             buffer.removeFirst(key.count)
             authenticated = true
         }

@@ -126,8 +126,8 @@ public actor XboxSession {
             app: clientID, scopes: [(scope, "TOKEN_BROKER"), (XboxSOAP.tb, nil)], silent: true)
         let reply = try XboxSOAP.reply(await send(XboxSOAP.endpoint, body: request, epoch: epoch), device: device)
         if reply.fault {
-            try clearSession()
-            log.info("xbox", "sign-in required")
+            // As a sign-out: a play's bridge closes and the app asks for sign-in again.
+            try signOut(why: "sign-in required")
             throw XboxSessionError.signInRequired
         }
         guard let ticket = reply.tokens.first(where: { !$0.legacy && $0.scope == scope }),
@@ -156,13 +156,16 @@ public actor XboxSession {
         return XboxTicket(token: Secret(token.value), expiresAt: token.expires)
     }
     public func signOut() throws {
+        try signOut(why: "signed out")
+    }
+    private func signOut(why: String) throws {
         generation &+= 1; deviceFlight?.cancel(); deviceFlight = nil
         for action in signOutHandlers.values { action() }
         try clearSession()
-        log.info("xbox", "signed out; session secrets deleted, synthetic device kept")
+        log.info("xbox", "\(why); session secrets deleted, synthetic device kept")
     }
-    /// Runs `action` at each sign-out (and device reset), before the session's
-    /// secrets are deleted: a play's bridge closes its channel with it (0167).
+    /// Runs `action` at each sign-out (and device reset, and a renewal Microsoft refuses),
+    /// before the session's secrets are deleted: a play's bridge closes its channel with it (0167).
     public func onSignOut(_ action: @escaping @Sendable () -> Void) -> UInt64 {
         lastSignOutHandler &+= 1
         signOutHandlers[lastSignOutHandler] = action

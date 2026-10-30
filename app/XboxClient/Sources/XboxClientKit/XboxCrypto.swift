@@ -21,6 +21,13 @@ internal enum XboxCrypto {
         let padded = k + [UInt8](repeating: 0, count: 64 - k.count)
         return SHA256Stream.hash(padded.map { $0 ^ 0x5c } + SHA256Stream.hash(padded.map { $0 ^ 0x36 } + value))
     }
+    /// Whether `a` and `b` are equal, in time that depends on their lengths only.
+    static func same(_ a: [UInt8], _ b: [UInt8]) -> Bool {
+        guard a.count == b.count else { return false }
+        var difference: UInt8 = 0
+        for (x, y) in zip(a, b) { difference |= x ^ y }
+        return difference == 0
+    }
     static func derived(_ key: [UInt8], nonce: [UInt8]) -> [UInt8] {
         // SP800-108 counter mode, L=256; no TPM second derivation (Xodus omits TPMInfo).
         hmac(key, [0, 0, 0, 1] + Array("WS-SecureConversationWS-SecureConversation".utf8) + [0] + nonce + [0, 0, 1, 0])

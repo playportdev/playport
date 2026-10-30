@@ -89,7 +89,7 @@ public enum XboxOfflineIdentity {
     /// first 32 hex digits of SHA-256 of its trimmed, lower-cased sign-in name).
     static func account(_ username: String) -> String {
         let name = username.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return SHA256Stream.hash(Array(name.utf8)).prefix(16).map { String(format: "%02x", $0) }.joined()
+        return Array(SHA256Stream.hash(Array(name.utf8)).prefix(16)).hex
     }
 
     /// Deletes every account's cached identity in the prefix (each Wine user's

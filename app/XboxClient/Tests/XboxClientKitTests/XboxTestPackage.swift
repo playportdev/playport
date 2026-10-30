@@ -434,3 +434,36 @@ actor XboxTestServices: XboxInstallServices {
     }
     func licence(contentID: String, market: String) async throws -> XboxLicenceResult { licences += 1; return licenceResult }
 }
+
+/// A synthetic SOAP reply to a device-keyed request written unsigned (`<wsse:Security/>`,
+/// a plain token response) gets the HMAC signature Microsoft puts on it, over its body,
+/// under the synthetic device's proof key (bytes 0...31, as the signed fixtures' sealing).
+enum XboxSignedFixture {
+    static let nonce = [UInt8](repeating: 0x5A, count: 32)
+
+    static func security(digest: String, signature: String) -> String {
+        let key = "<wssc:DerivedKeyToken wsu:Id=\"ResponseKey\" Algorithm=\"urn:liveid:SP800108_CTR_HMAC_SHA256_DOUBLEDERIVED\">"
+            + "<wssc:Nonce>" + XboxCrypto.base64(nonce) + "</wssc:Nonce></wssc:DerivedKeyToken>"
+        let reference = "<Reference URI=\"#ResponseBody\"><Transforms><Transform Algorithm=\"" + XboxSOAP.c14n + "\"/></Transforms>"
+            + "<DigestMethod Algorithm=\"" + XboxSOAP.sha + "\"/><DigestValue>" + digest + "</DigestValue></Reference>"
+        let info = "<SignedInfo><CanonicalizationMethod Algorithm=\"" + XboxSOAP.c14n + "\"/><SignatureMethod Algorithm=\""
+            + XboxSOAP.hmac + "\"/>" + reference + "</SignedInfo>"
+        let keyInfo = "<KeyInfo><wsse:SecurityTokenReference><wsse:Reference URI=\"#ResponseKey\"/></wsse:SecurityTokenReference></KeyInfo>"
+        return "<wsse:Security>" + key + "<Signature xmlns=\"" + XboxSOAP.ds + "\">" + info + "<SignatureValue>" + signature
+            + "</SignatureValue>" + keyInfo + "</Signature></wsse:Security>"
+    }
+
+    static func sign(_ bytes: [UInt8]) throws -> [UInt8] {
+        let original = String(decoding: bytes, as: UTF8.self)
+        guard original.contains("<wsse:Security/>"), original.contains("<s:Body><wst:RequestSecurityTokenResponse"),
+              !original.contains("EncryptedData"), !original.contains("xmlns:wssc") else { return bytes }
+        let base = original.replacingOccurrences(of: "<s:Envelope ", with: "<s:Envelope xmlns:wssc=\"http://schemas.xmlsoap.org/ws/2005/02/sc\" ")
+            .replacingOccurrences(of: "<s:Body>", with: "<s:Body wsu:Id=\"ResponseBody\">")
+        let body = try XboxXML.parse(Array(base.utf8)).child("Body")!
+        let digest = XboxCrypto.base64(SHA256Stream.hash(Array(body.canonical().utf8)))
+        let unsigned = base.replacingOccurrences(of: "<wsse:Security/>", with: security(digest: digest, signature: ""))
+        let info = try XboxXML.parse(Array(unsigned.utf8)).child("Header")!.child("Security")!.child("Signature")!.child("SignedInfo")!
+        let signature = XboxCrypto.hmac(XboxCrypto.derived(Array(0...31), nonce: nonce), Array(info.canonical().utf8))
+        return Array(base.replacingOccurrences(of: "<wsse:Security/>", with: security(digest: digest, signature: XboxCrypto.base64(signature))).utf8)
+    }
+}

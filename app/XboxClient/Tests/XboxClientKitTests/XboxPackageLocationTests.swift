@@ -46,9 +46,9 @@ final class XboxPackageLocationTests: XCTestCase, @unchecked Sendable {
         let session = XboxSession(store: MemorySecretStore(), http: http, log: lines.logger, now: { [date] in date })
         _ = try await session.prepareSignIn()
         _ = try await session.signIn(xboxSignInToken())
-        let ticket = String(decoding: try xboxFixture("store-ticket.xml"), as: UTF8.self)
-            .replacingOccurrences(of: "www.microsoft.com", with: "user.auth.xboxlive.com")
-        await http.tickets.reply("renew", body: Array(ticket.utf8))
+        let raw = try Data(contentsOf: Bundle.module.url(forResource: "Fixtures/store-ticket.xml", withExtension: nil)!)
+        let ticket = String(decoding: raw, as: UTF8.self).replacingOccurrences(of: "www.microsoft.com", with: "user.auth.xboxlive.com")
+        await http.tickets.reply("renew", body: try XboxSignedFixture.sign(Array(ticket.utf8)))
         return (session, http, lines)
     }
 

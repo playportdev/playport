@@ -5,7 +5,8 @@ import ContentKit
 import XboxClientKit
 
 func xboxFixture(_ name: String) throws -> [UInt8] {
-    Array(try Data(contentsOf: Bundle.module.url(forResource: "Fixtures/" + name, withExtension: nil)!))
+    let bytes = Array(try Data(contentsOf: Bundle.module.url(forResource: "Fixtures/" + name, withExtension: nil)!))
+    return name.hasSuffix(".xml") ? try XboxSignedFixture.sign(bytes) : bytes
 }
 func xboxSignInToken() throws -> XboxSignInToken {
     let message = Secret(String(decoding: try xboxFixture("signin.json"), as: UTF8.self))
@@ -84,12 +85,16 @@ final class XboxSessionTests: XCTestCase, @unchecked Sendable {
         let store = MemorySecretStore(), http = XboxFixtureHTTP(), s = session(store, http)
         try await signIn(s)
         let before = await s.deviceIdentity
+        // A play's bridge and the app's account both hear of it, as at a sign-out.
+        let heard = XboxCounter()
+        _ = await s.onSignOut { heard.add() }
         try await http.reply("renew", "renewal-refused.xml", status: 500)
         do { _ = try await s.renew(); XCTFail("refusal accepted") }
         catch { XCTAssertEqual(error as? XboxSessionError, .signInRequired); XCTAssertTrue(String(describing: error).contains("Sign in again")) }
         let state = await s.state, after = await s.deviceIdentity
         XCTAssertEqual(state, .signedOut); XCTAssertEqual(before, after)
         XCTAssertNil(try store.read("session")); XCTAssertNil(try store.read("device-token"))
+        XCTAssertEqual(heard.value, 1, "the sign-out handlers ran")
     }
     func testOnlyMicrosoftsDeviceAuthenticationRefusalReplacesARegisteredDevice() async throws {
         let store = MemorySecretStore(), http = XboxFixtureHTTP(), s = session(store, http)
@@ -148,6 +153,21 @@ final class XboxSessionTests: XCTestCase, @unchecked Sendable {
         await http.set("signin", XboxHTTPResponse(status: 200, body: Array(damaged.utf8)))
         _ = try await s.prepareSignIn()
         do { _ = try await s.signIn(xboxSignInToken()); XCTFail("tampered response accepted") } catch {}
+        let state = await s.state
+        XCTAssertEqual(state, .signedOut)
+    }
+    /// A reply to a device-keyed request must carry Microsoft's signature: one with it
+    /// stripped is refused, though its encrypted body would still decrypt.
+    func testAnUnsignedResponseNeverCreatesASession() async throws {
+        let store = MemorySecretStore(), http = XboxFixtureHTTP(), s = session(store, http)
+        let original = String(decoding: try xboxFixture("user-issued.xml"), as: UTF8.self)
+        let start = try XCTUnwrap(original.range(of: "<Signature")), end = try XCTUnwrap(original.range(of: "</Signature>"))
+        let unsigned = original.replacingCharacters(in: start.lowerBound..<end.upperBound, with: "")
+        await http.set("signin", XboxHTTPResponse(status: 200, body: Array(unsigned.utf8)))
+        _ = try await s.prepareSignIn()
+        do { _ = try await s.signIn(xboxSignInToken()); XCTFail("unsigned response accepted") } catch {
+            XCTAssertTrue("\(error)".contains("signature"), "\(error)")
+        }
         let state = await s.state
         XCTAssertEqual(state, .signedOut)
     }
@@ -224,4 +244,12 @@ actor XboxHeldHTTP: XboxHTTP {
         }
         return try await fixtures.send(request)
     }
+}
+
+/// A count a `@Sendable` closure bumps.
+final class XboxCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var n = 0
+    func add() { lock.withLock { n += 1 } }
+    var value: Int { lock.withLock { n } }
 }

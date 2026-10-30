@@ -154,6 +154,59 @@ final class XboxBridgeTests: XCTestCase, @unchecked Sendable {
                                "device {28C08266-F973-4AE6-FFE4-409B249F138F} scope=service::user.auth.xboxlive.com::MBI_SSL TOKEN_BROKER"])
     }
 
+    /// A play's tickets are minted once and served again until a minute before they expire.
+    func testAPlaysTicketsAreReusedUntilAMinuteBeforeTheyExpire() async throws {
+        let account = XboxBridgeFakeAccount(), clock = XboxClock()
+        let s = XboxBridgeService(copy: Self.pilot, account: account, updates: nil, log: XboxLines().logger, now: { clock.now })
+        for _ in 0..<5 {
+            let r = try await ask(s, msa("000000004823914A"), type: 4)
+            XCTAssertEqual(r?.value("Token"), "t=synthetic-bridge-user&p=")
+            XCTAssertEqual(r?.value("DeviceRps"), "t=synthetic-bridge-device&p=")
+        }
+        var calls = await account.calls
+        XCTAssertEqual(calls.count, 2, "one user and one device ticket for five requests")
+        // The user ticket's last minute: it is minted again; the device ticket still has one more.
+        clock.now = XboxBridgeFakeAccount.expiry.addingTimeInterval(-59)
+        _ = try await ask(s, msa("000000004823914A"), type: 4)
+        calls = await account.calls
+        XCTAssertEqual(calls.count, 3, "the user ticket minted again, the device ticket kept")
+        // Another play mints its own.
+        let other = XboxBridgeService(copy: Self.pilot, account: account, updates: nil, log: XboxLines().logger, now: { clock.now })
+        _ = try await ask(other, msa("000000004823914A"), type: 4)
+        calls = await account.calls
+        XCTAssertEqual(calls.count, 5)
+    }
+
+    /// Requests that reach Microsoft are limited per play: a burst past the bucket is refused
+    /// without minting anything, and the bucket refills with time. Cached tickets are free.
+    func testRequestsThatReachMicrosoftAreRateLimitedPerPlay() async throws {
+        let account = XboxBridgeFakeAccount(), clock = XboxClock(), lines = XboxLines()
+        let s = XboxBridgeService(copy: Self.pilot, account: account, updates: XboxBridgeFakeUpdates(answer: .current(latest: "1.5.12620.0")),
+                                  log: lines.logger, now: { clock.now })
+        var served = 0
+        for _ in 0..<(XboxBridgeService.burst + 5) {
+            if try await ask(s, licence(["9MW9469V91LM"]), type: 6)?.value("Hresult") == "0" { served += 1 }
+        }
+        XCTAssertEqual(served, XboxBridgeService.burst)
+        var calls = await account.calls
+        XCTAssertEqual(calls.count, XboxBridgeService.burst, "nothing minted past the limit")
+        let limited = try await ask(s, licence(["9MW9469V91LM"]), type: 6)
+        XCTAssertEqual(limited?.value("Hresult"), Self.fail)
+        let ticket = try await ask(s, msa("000000004823914A"), type: 4)
+        XCTAssertNil(ticket, "a ticket not yet minted waits for the bucket too")
+        let update = try await ask(s, updates(), type: 10)
+        XCTAssertEqual(update?.value("HResult"), Self.fail)
+        XCTAssertTrue(lines.text.contains("refused: rate limited"))
+        // One request's worth back after its interval.
+        clock.now = clock.now.addingTimeInterval(XboxBridgeService.refill)
+        let minted = try await ask(s, msa("000000004823914A"), type: 4)
+        XCTAssertNotNil(minted)
+        let cached = try await ask(s, msa("000000004823914A"), type: 4)
+        XCTAssertNotNil(cached, "cached: no token taken")
+        calls = await account.calls
+        XCTAssertEqual(calls.count, XboxBridgeService.burst + 2)
+    }
+
     func testOnlyTheCopysClientIDIsServedAndXboxsPlatformIDOnlyForACopyWithoutOne() async throws {
         let account = XboxBridgeFakeAccount(), s = service(account)
         let r2 = try await ask(s, msa(XboxBridgeService.platformClientID), type: 4)
@@ -417,6 +470,27 @@ final class XboxBridgeTests: XCTestCase, @unchecked Sendable {
         XCTAssertTrue(closed(wrong), "the wrong key ends the connection")
         let calls = await account.calls.filter { $0.hasPrefix("user") }
         XCTAssertEqual(calls.count, 1)
+    }
+
+    /// A keyed connection that sends nothing for the idle limit is closed: it no longer
+    /// holds one of the play's connection slots for the rest of the play.
+    func testAnIdleKeyedConnectionIsClosed() async throws {
+        let account = XboxBridgeFakeAccount(), lines = XboxLines(), s = service(account)
+        let listener = XboxBridgeListener(service: s, log: lines.logger, idleLimit: 0.6)
+        try await listener.start()
+        defer { listener.stop() }
+        let key = Array(s.key.value.utf8)
+        let busy = try XCTUnwrap(dial(listener.port)), idle = try XCTUnwrap(dial(listener.port))
+        defer { close(busy); close(idle) }
+        put(idle, key)
+        put(busy, key)
+        for _ in 0..<3 {
+            usleep(300_000)
+            put(busy, msa("000000004823914A").encoded)
+            XCTAssertNotNil(answer(busy), "a connection in use stays open")
+        }
+        XCTAssertTrue(closed(idle), "idle past its limit")
+        XCTAssertTrue(lines.text.contains("bridge: idle"), lines.text)
     }
 
     func testSignOutClosesTheChannelAndTheHostKeepsNoTicketItIssued() async throws {

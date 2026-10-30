@@ -126,22 +126,32 @@ enum XboxSOAP {
                   id.hasPrefix("#"), let nonce = nonces[String(id.dropFirst())], let hmacKey else { throw XboxXML.invalid() }
             return XboxCrypto.derived(hmacKey, nonce: nonce)
         }
-        // Check the server's HMAC signature when present, before accepting or
-        // decrypting anything. Reference IDs must resolve uniquely (no wrapping).
-        if let sig = header.child("Security")?.child("Signature") {
+        // Check the server's HMAC signature before accepting or decrypting anything. A reply
+        // to a request signed with the device's proof key (`device`) must carry one over its
+        // body, unless it is a fault (which grants nothing). Reference IDs must resolve
+        // uniquely (no wrapping). Comparisons are constant time.
+        let sig = header.child("Security")?.child("Signature")
+        if hmacKey != nil, content.local != "Fault", sig == nil {
+            throw ClientError.verificationFailed("Microsoft response has no signature")
+        }
+        if let sig {
             guard let si = sig.child("SignedInfo"), si.child("SignatureMethod")?.attributes["Algorithm"] == hmac,
                   si.child("CanonicalizationMethod")?.attributes["Algorithm"] == c14n,
                   let value = sig.value("SignatureValue") else { throw XboxXML.invalid() }
             let expected = XboxCrypto.hmac(try key(sig), Array(si.canonical().utf8))
-            guard try XboxCrypto.decode(value) == expected else { throw ClientError.verificationFailed("Microsoft response signature") }
+            guard XboxCrypto.same(try XboxCrypto.decode(value), expected) else { throw ClientError.verificationFailed("Microsoft response signature") }
             func nodes(_ root: XboxXML) -> [XboxXML] { [root] + root.children.flatMap(nodes) }
-            for reference in si.children where reference.local == "Reference" {
+            let references = si.children.filter { $0.local == "Reference" }
+            guard let bodyID = body.attr("Id"), references.contains(where: { $0.attributes["URI"] == "#" + bodyID }) else {
+                throw ClientError.verificationFailed("Microsoft response signature doesn't cover its body")
+            }
+            for reference in references {
                 guard let uri = reference.attributes["URI"], uri.hasPrefix("#"),
                       reference.child("DigestMethod")?.attributes["Algorithm"] == sha,
                       reference.child("Transforms")?.children.allSatisfy({ $0.attributes["Algorithm"] == c14n }) == true,
                       let digest = reference.value("DigestValue") else { throw XboxXML.invalid() }
                 let targets = nodes(envelope).filter { $0.attr("Id") == String(uri.dropFirst()) }
-                guard targets.count == 1, try XboxCrypto.decode(digest) == SHA256Stream.hash(Array(targets[0].canonical().utf8)) else {
+                guard targets.count == 1, XboxCrypto.same(try XboxCrypto.decode(digest), SHA256Stream.hash(Array(targets[0].canonical().utf8))) else {
                     throw ClientError.verificationFailed("Microsoft response digest")
                 }
             }

@@ -15,13 +15,16 @@ import ContentKit
 /// The bridge's socket for one Xbox play (decision 0167): 127.0.0.1 on a free port,
 /// from the play's start to its end. A connection must send the play's key before
 /// anything else; each frame then goes to the service in order and its reply is
-/// written back. A wrong key, a malformed or oversized frame ends that connection.
-/// The account's sign-out ends the service and closes every connection and the
-/// port. Connections are logged, their bytes never are.
+/// written back. A wrong key, a malformed or oversized frame ends that connection, and
+/// so does sending nothing for `idleLimit` once keyed (a reply being waited for, such
+/// as the player's save choice, doesn't count). The account's sign-out ends the service
+/// and closes every connection and the port. Connections are logged, their bytes never are.
 public final class XboxBridgeListener: @unchecked Sendable {
     static let maxConnections = 8
     /// Nexus closes a connection that has not sent the key in 10 s.
     static let keyDeadline: TimeInterval = 10
+    /// A keyed connection quiet this long is closed, so idle ones can't hold every slot.
+    public static let idleDefault: TimeInterval = 300
 
     let service: XboxBridgeService
     let log: Logger
@@ -33,9 +36,12 @@ public final class XboxBridgeListener: @unchecked Sendable {
     private var boundPort: UInt16 = 0
     private var signOutHandler: UInt64?
 
-    public init(service: XboxBridgeService, log: Logger) {
+    let idleLimit: TimeInterval
+
+    public init(service: XboxBridgeService, log: Logger, idleLimit: TimeInterval = XboxBridgeListener.idleDefault) {
         self.service = service
         self.log = log
+        self.idleLimit = idleLimit
     }
 
     public enum StartError: Error, CustomStringConvertible {
@@ -174,10 +180,15 @@ public final class XboxBridgeListener: @unchecked Sendable {
         var reader = XboxBridgeReader(key: Array(service.key.value.utf8))
         var chunk = [UInt8](repeating: 0, count: 16 << 10)
         let opened = Date()
+        var active = opened
         var received = 0, frames = 0
         while !isStopped {
             if !reader.authenticated, Date().timeIntervalSince(opened) > Self.keyDeadline {
                 log.warn("xbox", "bridge: no key in \(Int(Self.keyDeadline)) s: connection closed")
+                return
+            }
+            if reader.authenticated, Date().timeIntervalSince(active) > idleLimit {
+                log.info("xbox", "bridge: idle for \(Int(idleLimit)) s after \(frames) frame(s): connection closed")
                 return
             }
             guard readable(fd) else { continue }
@@ -188,6 +199,7 @@ public final class XboxBridgeListener: @unchecked Sendable {
                 return
             }
             received += n
+            active = Date()
             let parsed: [XboxBridgeFrame]
             do { parsed = try reader.receive(chunk[0..<n]) } catch {
                 log.warn("xbox", "bridge: \(error): connection closed")
@@ -196,6 +208,7 @@ public final class XboxBridgeListener: @unchecked Sendable {
             for frame in parsed {
                 frames += 1
                 guard let reply = handle(frame), !isStopped, write(fd, reply.encoded) else { return }
+                active = Date()
             }
         }
     }
