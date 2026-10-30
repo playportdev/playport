@@ -96,7 +96,7 @@ enum XboxPlay {
 
         // 3. The bridge: the runtime's tickets for this copy, from now to the launch's end.
         let service = XboxBridgeService(copy: XboxBridgeCopy(productID: id, manifest: manifest), account: account.session,
-                                        updates: nil, log: log)
+                                        updates: XboxUpdateChecker(installer: installer), log: log)
         let listener = XboxBridgeListener(service: service, log: log)
         do { try await listener.start() } catch {
             listener.stop()

@@ -582,6 +582,8 @@ enum UIDriver {
                     for _ in 0..<300 where account.state == .unknown { try await pause(.milliseconds(100)) }
                     if id.hasPrefix("installed:") {
                         if let failure = try await xboxInstalled(String(id.dropFirst("installed:".count))) { return finish("action=\(action) failed: \(failure)") }
+                    } else if id.hasPrefix("update:") {
+                        if let failure = try await updateXbox(String(id.dropFirst("update:".count))) { return finish("action=\(action) failed: \(failure)") }
                     } else if id == "wait" {
                         for _ in 0..<1200 where account.signingIn && account.state != .signedIn && account.error == nil {
                             try await pause(.milliseconds(250))
@@ -1122,6 +1124,45 @@ enum UIDriver {
         try await pause(.milliseconds(1500))
         log("xbox: \(t.id) installed in C:\\Games\\\(rec.installDir) version=\(rec.version) files=\(report.files - report.bad.count)/\(report.files) "
             + "verified, \(rec.encrypted.count) kept encrypted, exe=\(rec.executable ?? "none")")
+        return report.bad.isEmpty ? nil : "\(report.bad.count) files do not verify"
+    }
+
+    /// `xbox:update:<ProductId>`: the Store's latest version against the installed copy's; when newer,
+    /// the page's Update, waited for, then every file verified. Versions and counts only.
+    private static func updateXbox(_ product: String) async throws -> String? {
+        let key = StoreGameKey(store: .xbox, id: product)
+        guard XboxAccount.shared.state == .signedIn else { return "Xbox is not signed in" }
+        guard let t = LibraryModel.shared.title(key.titleID) else { return "\(key.titleID) is not in the library" }
+        guard let installs = SteamAccountModel.current?.installs else { return "no download queue" }
+        let installer = XboxInstalls.shared.installer
+        guard let before = installer.loadRecord(product) else { return "no Xbox install record" }
+        _ = AppNavigation.shared.open("library")
+        AppNavigation.shared.openGame(.title(t.id))
+        switch await XboxUpdates.shared.check(product, force: true) {
+        case nil: return "the Store's version could not be had"
+        case .unknown?: return "the Store's version is unknown"
+        case .current(let latest)?:
+            log("xbox: \(t.id) version=\(before.version) is current (the Store's \(latest)); nothing to update")
+            return nil
+        case .available(let latest)?:
+            log("xbox: \(t.id) update \(before.version) -> \(latest) started")
+        }
+        let started = Date()
+        try await pause(.milliseconds(1000))
+        XboxUpdates.shared.update(product, name: t.name)
+        var lastLog = Date()
+        while let j = installs.jobs[key] {
+            if case let .paused(reason) = j.phase { return "paused: \(reason ?? "no reason")" }
+            if Date().timeIntervalSince(lastLog) > 15 {
+                lastLog = Date()
+                log("update xbox-\(product): \(j.status) \(j.detail ?? "")")
+            }
+            try await pause(.milliseconds(250))
+        }
+        guard let rec = installer.loadRecord(product), rec.version != before.version else { return "the copy is still \(before.version)" }
+        let report = try await Task.detached(priority: .userInitiated) { try installer.verify(product) }.value
+        log(String(format: "xbox: \(t.id) updated \(before.version) -> \(rec.version) files=\(report.files - report.bad.count)/\(report.files) "
+                    + "verified, \(rec.encrypted.count) kept encrypted after %.0f s", Date().timeIntervalSince(started)))
         return report.bad.isEmpty ? nil : "\(report.bad.count) files do not verify"
     }
 

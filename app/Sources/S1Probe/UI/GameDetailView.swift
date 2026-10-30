@@ -78,6 +78,7 @@ private struct GameDetailPage: View {
     #if !PLAYPORT_RELEASE
     @ObservedObject private var xbox = XboxInstalls.shared
     @ObservedObject private var xboxGames = XboxGames.shared
+    @ObservedObject private var xboxUpdates = XboxUpdates.shared
     #endif
     @State private var playError: String?
     @State private var controllers = GCController.controllers().count
@@ -257,6 +258,9 @@ private struct GameDetailPage: View {
         .task(id: t?.id) {
             if let t, t.store == .gog, t.source == .installed { await gog.checkUpdate(t.key.id) }
             if let t, t.store == .epic, t.source == .installed { await epic.checkUpdate(t.key.id) }
+            #if !PLAYPORT_RELEASE
+            if let t, t.store == .xbox, t.source == .installed { await xboxUpdates.check(t.key.id) }
+            #endif
         }
         .task(id: navigation.pageSection) {
             // A dev build's `open:ID#SECTION`: the options, at that section.
@@ -384,6 +388,13 @@ private struct GameDetailPage: View {
             SecondaryButton(id: "game:update", systemImage: "arrow.down.circle", title: "Update", enabled: canDownloadEpic && !launch.running,
                             hint: "Update") { epic.install(t.key.id, name: t.name, kind: .update) }
         }
+        #if !PLAYPORT_RELEASE
+        if job == nil, t.store == .xbox, t.source == .installed, let newest = xboxUpdates.newest[t.key.id], newest != t.storeVersion {
+            SecondaryButton(id: "game:update", systemImage: "arrow.down.circle", title: "Update",
+                            enabled: XboxAccount.shared.state == .signedIn && !installs.suspended && !launch.running,
+                            hint: "Update") { xboxUpdates.update(t.key.id, name: t.name) }
+        }
+        #endif
         if job == nil, let g, SteamInstallStatus.updateAvailable(t, g.info) {
             SecondaryButton(id: "game:update", systemImage: "arrow.down.circle", title: "Update", enabled: canDownload && !launch.running,
                             hint: "Update") { installs.install(g.id, name: g.info.name) }
