@@ -617,6 +617,11 @@ locale (the phone's language as a WoW locale, enUS as fallback), shows the downl
 and the space needed, and refuses an Install that does not fit, saying how much it needs.
 The install stages under the staging root (nothing in `C:\Games`, so no Play, until it is
 complete) and becomes `C:\Games\<product>` with a store receipt naming the ARM64 client.
+An installed product's page (`UI/BattleNetInstalled.swift`) changes its store region in
+place (only `.build.info` is rewritten; every region's data is in the install) and its
+language as a Downloads update job that fetches only the new locale's data, after which
+Play is available again; both read what the install is in from its `.build.info`.
+
 Play for a Battle.net copy follows PlayportKit `BattleNetPlay` (PLA-514): the first Play of
 each product shows the ban-risk notice ([decision 0169](decisions/0169-anti-cheat-refusal-scope.md),
 proposed: Blizzard does not support Playport, an account action is possible, Playport stores

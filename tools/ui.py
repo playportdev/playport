@@ -212,7 +212,11 @@ best-effort and reported as unconfirmed; transport loss/SIGKILL can leave cancel
                          checks Play stays hidden and the stage is kept, resumes, and checks Play shows
                          once it is complete
   region:bnet-CODE[=R]   a Battle.net product's page with its store region picker open (us, eu, kr, tw);
-                         =R picks R as the picker does
+                         =R picks R as the picker does; on an installed product =R changes its region
+                         in place (fails if a download starts or .build.info does not say R)
+  locale:bnet-CODE[=L]   an installed Battle.net product's page with its Language picker open; =L (deDE)
+                         downloads that language through Downloads and waits until .build.info says L
+                         and Play shows again
   notice:bnet-CODE=accept|decline
                          an installed Battle.net copy's Play from its page and the ban-risk notice its
                          first Play shows (PLA-514), answered as the player does: decline checks Play
@@ -536,7 +540,7 @@ TOUCH_CONTROL = r"[A-Za-z0-9_-]+(?:\.(?:up|down|left|right)|:(?:0(?:\.[0-9]+)?|1
 # A gyro: script's step (HostIOKit GyroScript): axis=deg/s terms joined by +, or rest, then @ms.
 GYRO_TERM = r"(?:yaw|pitch|roll)=-?[0-9]{1,4}(?:\.[0-9]+)?"
 GYRO_STEP = rf"(?:rest|{GYRO_TERM}(?:\+{GYRO_TERM})*)@[0-9]{{1,5}}"
-ACTION_RE = re.compile((r"^(?:(?:install|pause-resume|queue|downloading):[0-9]+|install:gog-[0-9]+(?:@[0-9]+)?|install:epic-[A-Za-z0-9._-]+|(?:install|pause-resume):bnet-[a-z0-9_]+|region:bnet-[a-z0-9_]+(?:=(?:us|eu|kr|tw))?|(?:uninstall|verify|repair|play):[a-z]+-[A-Za-z0-9 ._-]+|(?:open-launcher|forget-launcher-window):[a-z]+"
+ACTION_RE = re.compile((r"^(?:(?:install|pause-resume|queue|downloading):[0-9]+|install:gog-[0-9]+(?:@[0-9]+)?|install:epic-[A-Za-z0-9._-]+|(?:install|pause-resume):bnet-[a-z0-9_]+|region:bnet-[a-z0-9_]+(?:=(?:us|eu|kr|tw))?|locale:bnet-[a-z0-9_]+(?:=[a-z]{2}[A-Z]{2})?|(?:uninstall|verify|repair|play):[a-z]+-[A-Za-z0-9 ._-]+|(?:open-launcher|forget-launcher-window):[a-z]+"
                         r"|import:[A-Za-z0-9 ._()'+-]+(?:/[A-Za-z0-9 ._()'+-]+)*"
                        r"|notice:bnet-[a-z0-9_]+=(?:accept|decline)"
                        r"|hud:(?:on|off)|open:[a-z]+(?:-[A-Za-z0-9 ._-]+(?:#[a-z]+)?)?|open:settings#(?:accounts|steam|graphics|downloads|controls|controllers|gyro|controller|storage|setup|about|launchers|developer|account|jit|memory|diagnostics|pairing|probes|logs)|open:licences(?:#[a-z0-9 ._-]+)?|pad:(?:{b})(?:\+(?:{b}))*|set:[A-Za-z0-9._-]+=[^,]*"
@@ -830,7 +834,7 @@ def band_of(timeline):
 def parse(argv=None):
     p = argparse.ArgumentParser(prog="pp ui", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--action", action="append", default=[], metavar="VERB:ARG",
-                   help="open:SCREEN|ID[#SECTION], pad:BUTTON[+BUTTON...], wait:S, menu:open|ROW, touch:CONTROL[+CONTROL...][@MS], gyro:STEP[/STEP...], gesture:three-finger-tap, suggest:accept|dismiss, set:KEY=VALUE, hud:on|off, install:APP, pause-resume:APP, region:bnet-CODE[=R], notice:bnet-CODE=accept|decline, queue:APP, downloading:APP, import:PATH, uninstall:ID, "
+                   help="open:SCREEN|ID[#SECTION], pad:BUTTON[+BUTTON...], wait:S, menu:open|ROW, touch:CONTROL[+CONTROL...][@MS], gyro:STEP[/STEP...], gesture:three-finger-tap, suggest:accept|dismiss, set:KEY=VALUE, hud:on|off, install:APP, pause-resume:APP, region:bnet-CODE[=R], locale:bnet-CODE[=L], notice:bnet-CODE=accept|decline, queue:APP, downloading:APP, import:PATH, uninstall:ID, "
                         "verify:ID, repair:ID, play:ID, probe:helper-exit|kill|report, probe:relaunch, probe:pairing[-cancel|-use]; in order, before --settings/--verify/--play")
     p.add_argument("--controls", metavar="ID:JSON",
                    help='save these on-screen controls for the title first ({"layout":"off"}, '
@@ -879,7 +883,7 @@ def parse(argv=None):
     for x in a.action:
         if not ACTION_RE.match(x) or (x.startswith("open:") and "-" not in x.split("#")[0]
                                       and x[5:].split("#")[0] not in SCREENS + ("licences", "black")):
-            p.error(f"{x!r} is not open:SCREEN|ID, pad:BUTTON[+BUTTON...], wait:S, menu:open|ROW, touch:CONTROL[+CONTROL...][@MS], gyro:STEP[/STEP...], gesture:three-finger-tap, suggest:accept|dismiss, set:KEY=VALUE, hud:on|off, install:APP, pause-resume:APP, region:bnet-CODE[=R], notice:bnet-CODE=accept|decline, "
+            p.error(f"{x!r} is not open:SCREEN|ID, pad:BUTTON[+BUTTON...], wait:S, menu:open|ROW, touch:CONTROL[+CONTROL...][@MS], gyro:STEP[/STEP...], gesture:three-finger-tap, suggest:accept|dismiss, set:KEY=VALUE, hud:on|off, install:APP, pause-resume:APP, region:bnet-CODE[=R], locale:bnet-CODE[=L], notice:bnet-CODE=accept|decline, "
                     "queue:APP, downloading:APP, import:PATH, uninstall:ID, verify:ID, repair:ID, play:ID, open-launcher:ID, forget-launcher-window:ID, probe:helper-exit|kill|report, probe:relaunch or probe:pairing[-cancel|-use]")
         if x.startswith("open:") and "#" in x:
             target, section = x[5:].split("#", 1)

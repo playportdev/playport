@@ -78,6 +78,7 @@ private struct GameDetailPage: View {
     @ObservedObject private var gog = GOGAccount.shared
     @ObservedObject private var epic = EpicAccount.shared
     @ObservedObject private var bnet = BattleNetStore.shared
+    @ObservedObject private var bnetInstalled = BattleNetInstalled.shared
     @State private var playError: String?
     @State private var controllers = GCController.controllers().count
     @State private var stageOnDisk = false
@@ -155,6 +156,11 @@ private struct GameDetailPage: View {
 
     /// A Battle.net product not installed: the store offers it (no sign-in).
     private var bnetProduct: BattleNetProduct? { installed == nil ? key.flatMap { bnet.offered($0) } : nil }
+
+    /// An installed Battle.net product: its region and language change on the page (PLA-520).
+    private var installedBnet: BattleNetProduct? {
+        installed.flatMap { $0.store == .battlenet && $0.source == .installed ? BattleNet.product($0.key) : nil }
+    }
 
     private var stats: UserStatsSnapshot? { appID.flatMap { model.userStats[$0]?.steam } }
 
@@ -255,6 +261,10 @@ private struct GameDetailPage: View {
         // A Battle.net product's sizes in its region and locale (again after the region picker).
         .task(id: bnetProduct.map { "\($0.code)/\(bnet.region($0).rawValue)" }) {
             if let p = bnetProduct { await bnet.loadSizes(p) }
+        }
+        // An installed Battle.net product's region and language, again after a language download.
+        .task(id: installedBnet.map { "\($0.code)/\(job == nil)" }) {
+            if let p = installedBnet { bnetInstalled.load(p) }
         }
         .task(id: navigation.pageSection) {
             // A dev build's `open:ID#SECTION`: the options, at that section.
@@ -380,6 +390,15 @@ private struct GameDetailPage: View {
         }
         SecondaryButton(id: "game:options", systemImage: "slider.horizontal.3", title: "Options", glyph: .x, hint: "Game options") {
             navigation.gamePanels = [.options]
+        }
+        if let p = installedBnet {
+            let now = bnetInstalled.current[p]
+            SecondaryButton(id: "game:region", systemImage: "globe", title: "Region · \(now?.region.rawValue ?? "…")",
+                            enabled: now != nil && job == nil && !launch.running && !bnetInstalled.changingRegion.contains(p),
+                            hint: "Store region") { bnetInstalled.pickRegion(p) }
+            SecondaryButton(id: "game:language", systemImage: "character.bubble", title: "Language · \(now?.locale ?? "…")",
+                            enabled: now != nil && job == nil && !launch.running && !installs.suspended,
+                            hint: "Language") { bnetInstalled.pickLanguage(p, downloads: installs) }
         }
         if job == nil, t.store == .gog, t.source == .installed, let newest = gog.newest[t.key.id], newest != t.storeVersion {
             SecondaryButton(id: "game:update", systemImage: "arrow.down.circle", title: "Update", enabled: canDownloadGOG && !launch.running,
@@ -528,6 +547,7 @@ private struct GameDetailPage: View {
     @ViewBuilder
     private func notes(_ t: InstalledTitle?, _ g: SteamGame?) -> some View {
         VStack(alignment: .leading, spacing: 3) {
+            if let p = installedBnet, let why = bnetInstalled.errors[p] { Text(why).foregroundStyle(.orange) }
             if let t {
                 if launch.spent {
                     Text(JitProvider.inLiveContainer
@@ -636,6 +656,10 @@ private struct GameDetailPage: View {
             }
             if t.appID != nil { rows.append(("Cloud saves", cloudStatus(t).0, cloudStatus(t).1)) }
             rows.append(("On this phone", t.sizeBytes.map(ByteCount.format) ?? "Unknown", nil))
+            if let p = installedBnet, let now = bnetInstalled.current[p] {
+                rows.append(("Region", bnetInstalled.changingRegion.contains(p) ? "Changing…" : BattleNetStore.label(now.region), nil))
+                rows.append(("Language", BattleNetInstalled.label(now.locale), nil))
+            }
         } else if let g {
             if let s = g.info.installSize(branch: selectedBranch) { rows.append(("Download", ByteCount.format(s), nil)) }
             if branches.count > 1 { rows.append(("Version", BranchLabel.text(selectedBranch, in: g.info), nil)) }

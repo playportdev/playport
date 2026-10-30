@@ -182,6 +182,44 @@ final class BattleNetStoreTests: XCTestCase {
         XCTAssertEqual(c.titles.filter { $0.store == .local }.map(\.installDir), ["world of warcraft classic era"])
     }
 
+    /// PLA-520: an installed product's region and language are its `.build.info`'s; a language
+    /// change is an update job in the installed region and the new locale, and its receipt
+    /// counts the files it added.
+    func testAnInstalledProductsRegionAndLanguageAndALanguageChange() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("bnet-\(UUID().uuidString)")
+        addTeardownBlock { try? FileManager.default.removeItem(at: folder) }
+        XCTAssertNil(BattleNet.installedChoice(.wowClassicEra, folder: folder))
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let info = "Branch!STRING:0|Active!DEC:1|Build Key!HEX:16|CDN Key!HEX:16|Install Key!HEX:16|IM Size!DEC:4|CDN Path!STRING:0|"
+            + "CDN Hosts!STRING:0|CDN Servers!STRING:0|Tags!STRING:0|Armadillo!STRING:0|Last Activated!STRING:0|Version!STRING:0|Product!STRING:0\n"
+            + "eu|1|\(String(repeating: "a", count: 32))|\(String(repeating: "b", count: 32))|\(String(repeating: "c", count: 32))|1|tpr/wow|"
+            + "eu.cdn.blizzard.com|https://eu.cdn.blizzard.com/?maxhosts=4|Windows arm64 EU? frFR speech?:Windows arm64 EU? frFR text?|||1.15.9.70576|wow_classic_era\n"
+        try Data(info.utf8).write(to: folder.appendingPathComponent(".build.info"))
+        let choice = try XCTUnwrap(BattleNet.installedChoice(.wowClassicEra, folder: folder))
+        XCTAssertEqual(choice.region, .eu)
+        XCTAssertEqual(choice.locale, "frFR")
+        XCTAssertNil(BattleNet.installedChoice(.wow, folder: folder), "another product's row")
+
+        let job = BattleNet.languageJob(.wowClassicEra, region: choice.region, locale: "deDE")
+        XCTAssertEqual(job.kind, .update)
+        XCTAssertEqual(job.key, BattleNet.key(.wowClassicEra))
+        XCTAssertTrue(BattleNet.isLanguageChange(job))
+        XCTAssertEqual(BattleNet.jobChoice(job.branch)?.region, .eu)
+        XCTAssertEqual(BattleNet.jobChoice(job.branch)?.locale, "deDE")
+        XCTAssertFalse(BattleNet.isLanguageChange(DownloadJob(key: BattleNet.key(.wowClassicEra), name: "x", kind: .update)),
+                       "an update with no locale is not a language change")
+
+        let at = Date(timeIntervalSince1970: 1_790_000_000)
+        let before = BattleNet.receipt(.wowClassicEra, folder: "World of Warcraft Classic Era", version: "1.15.9.70576",
+                                       productFolder: "_classic_era_", arm64Executable: "WowClassic-arm64.exe", files: 12, bytes: 4_959_406_050, at: at)
+        let after = BattleNet.receipt(before, adding: 2, bytes: 290_000_000)
+        XCTAssertEqual(after.files, 14)
+        XCTAssertEqual(after.bytes, 5_249_406_050)
+        XCTAssertEqual(after.version, before.version)
+        XCTAssertEqual(after.executable, before.executable)
+        XCTAssertEqual(after.installedAt, at)
+    }
+
     func testBlizzardsCDNUnreachableOrRefusingIsSaidPlainly() {
         XCTAssertEqual(BattleNet.reason(BattleNetError.unreachable("versions: us.version.battle.net: offline")),
                        "Blizzard's servers can't be reached. Check the connection, then try again.")

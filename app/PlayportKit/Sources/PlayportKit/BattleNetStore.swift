@@ -68,6 +68,33 @@ public enum BattleNet {
                      files: files, bytes: bytes, installedAt: at)
     }
 
+    // MARK: installed: region and language (PLA-520)
+
+    /// An installed product's store region and language, as its `.build.info` (in its folder
+    /// under C:\Games) says; nil when there is none or it has no row for the product.
+    public static func installedChoice(_ product: BattleNetProduct, folder: URL) -> (region: StoreRegion, locale: String)? {
+        guard let bytes = try? Data(contentsOf: folder.appendingPathComponent(".build.info")),
+              let info = try? BuildInfo.read([UInt8](bytes), product: product.code), let locale = info.locale else { return nil }
+        return (info.region, locale)
+    }
+
+    /// A language change: an update of the installed build that downloads only `locale`'s data
+    /// (the region stays the install's), run by Downloads.
+    public static func languageJob(_ product: BattleNetProduct, region: StoreRegion, locale: String, bytes: UInt64? = nil) -> DownloadJob {
+        DownloadJob(key: key(product), name: product.name, kind: .update, branch: jobBranch(region: region, locale: locale), bytes: bytes)
+    }
+
+    /// Whether `job` is a language change (an update naming a region and locale).
+    public static func isLanguageChange(_ job: DownloadJob) -> Bool { job.kind == .update && jobChoice(job.branch) != nil }
+
+    /// The receipt after a language change added `files` files of `bytes` bytes.
+    public static func receipt(_ r: StoreReceipt, adding files: Int, bytes: UInt64) -> StoreReceipt {
+        var r = r
+        r.files += files
+        r.bytes += bytes
+        return r
+    }
+
     // MARK: space
 
     /// Room for the store's CDN indexes and archive group, which the install keeps beside the

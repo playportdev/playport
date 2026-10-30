@@ -215,6 +215,17 @@ class UiEnvTest(unittest.TestCase):
                     "region:wow", "pause-resume:bnet-", "region:epic-Hazelnut"):
             self.assertFalse(m.ACTION_RE.match(bad), bad)
 
+    def test_battlenet_installed_region_and_language_paths(self):
+        """PLA-520: an installed product's region changed in place and its language through Downloads,
+        or either picker open."""
+        m = load()
+        for ok in ("region:bnet-wow_classic_era=eu", "region:bnet-wow_classic_era", "locale:bnet-wow_classic_era=deDE",
+                   "locale:bnet-wow_classic_era"):
+            self.assertEqual(m.parse(["--action", ok]).action, [ok])
+        for bad in ("locale:bnet-", "locale:bnet-wow=de", "locale:bnet-wow=dede", "locale:bnet-wow=deDE1", "locale:bnet-wow=",
+                    "locale:wow=deDE", "locale:epic-Hazelnut=deDE"):
+            self.assertFalse(m.ACTION_RE.match(bad), bad)
+
     def test_battlenet_notice_and_play_paths(self):
         """PLA-514: a Battle.net copy's ban-risk notice, accepted or declined as the player does, and
         its Play."""

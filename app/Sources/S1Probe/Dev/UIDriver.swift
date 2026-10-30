@@ -41,7 +41,12 @@
 //                              the install is complete
 //   region:bnet-<code>[=<r>]   A Battle.net product's page with its store region picker
 //                              open (UI/BattleNetStore.swift); =<r> (us, eu, kr, tw) picks it
-//                              as the picker does and waits for its sizes
+//                              as the picker does and waits for its sizes. On an installed
+//                              product (UI/BattleNetInstalled.swift), =<r> changes its region
+//                              in place and fails if a download starts or .build.info differs
+//   locale:bnet-<code>[=<l>]   An installed Battle.net product's page with its Language
+//                              picker open; =<l> (deDE) changes the language through
+//                              Downloads and waits until .build.info says <l> and Play shows
 //   queue:<app id>             Install from Steam, as a game page's Install does, and go on
 //                              at once: the download runs in the queue (SteamInstalls)
 //   downloading:<app id>       Waits (2 min at most) until the queue runs that app's download
@@ -366,6 +371,8 @@ enum UIDriver {
                     }
                 case "region":
                     if let failure = try await battleNetRegion(id) { return finish("action=\(action) failed: \(failure)") }
+                case "locale":
+                    if let failure = try await battleNetLocale(id) { return finish("action=\(action) failed: \(failure)") }
                 case "install" where id.hasPrefix("epic-"):
                     if let failure = try await installEpic(String(id.dropFirst(5))) { return finish("action=\(action) failed: \(failure)") }
                 case "install" where id.hasPrefix("gog-"):
@@ -1152,6 +1159,7 @@ enum UIDriver {
     private static func battleNetRegion(_ spec: String) async throws -> String? {
         let parts = spec.split(separator: "=", maxSplits: 1).map(String.init)
         guard let key = StoreGameKey(titleID: parts[0]), let p = BattleNet.product(key) else { return "\(parts[0]) is not a Battle.net product" }
+        if LibraryModel.shared.title(key.titleID) != nil { return try await battleNetInstalledRegion(key, p, parts.count > 1 ? parts[1] : nil) }
         guard try await battleNetOffered(key) else { return "\(key.id) is not offered (\(BattleNetStore.shared.error ?? "no ARM64 client"))" }
         let store = BattleNetStore.shared
         AppNavigation.shared.openGame(.store(key))
@@ -1167,6 +1175,87 @@ enum UIDriver {
             log("region \(key.titleID): picker open at \(store.region(p).rawValue) (phone: \(store.phoneRegion.rawValue))")
         }
         try await pause(.milliseconds(1000))
+        return nil
+    }
+
+    /// An installed product's page, its region and language read from its `.build.info`.
+    private static func openInstalledBattleNet(_ key: StoreGameKey, _ p: BattleNetProduct) async throws -> BattleNetInstalled.Choice? {
+        let model = BattleNetInstalled.shared
+        AppNavigation.shared.openTitle(key.titleID)
+        try await pause(.milliseconds(500))
+        model.load(p)
+        for _ in 0..<50 where model.current[p] == nil { try await pause(.milliseconds(100)) }
+        return model.current[p]
+    }
+
+    /// The installed install's `.build.info` region and locale, read again from C:\Games.
+    private static func installedChoice(_ key: StoreGameKey, _ p: BattleNetProduct) -> String {
+        guard let t = LibraryModel.shared.title(key.titleID),
+              let c = BattleNet.installedChoice(p, folder: LibraryModel.paths.layout.gamesRoot.appendingPathComponent(t.installDir)) else { return "unreadable" }
+        return "\(c.region.rawValue)/\(c.locale)"
+    }
+
+    /// `region:` on an installed product: its page's Region picker open, or `=<r>` changed in
+    /// place; fails when a download starts or `.build.info` does not say `<r>` afterwards.
+    private static func battleNetInstalledRegion(_ key: StoreGameKey, _ p: BattleNetProduct, _ region: String?) async throws -> String? {
+        let model = BattleNetInstalled.shared
+        guard let before = try await openInstalledBattleNet(key, p) else { return "\(key.titleID): no readable .build.info" }
+        guard let region else {
+            model.pickRegion(p)
+            log("region \(key.titleID): installed, picker open at \(before.region.rawValue)")
+            try await pause(.milliseconds(1000))
+            return nil
+        }
+        guard let r = StoreRegion(rawValue: region) else { return "\(region) is not a store region" }
+        let installs = SteamAccountModel.current?.installs
+        let started = Date()
+        if let why = await model.changeRegion(p, to: r) { return why }
+        let ms = Int(Date().timeIntervalSince(started) * 1000)
+        if let j = installs?.jobs[key] { return "a download started (\(phase(j)))" }
+        let now = installedChoice(key, p)
+        log("region \(key.titleID): installed \(before.region.rawValue) → \(r.rawValue) in \(ms) ms, no download; .build.info \(now)")
+        guard now.hasPrefix(r.rawValue + "/") else { return ".build.info says \(now)" }
+        try await pause(.milliseconds(1000))
+        return nil
+    }
+
+    /// `bnet-<code>[=<locale>]`: an installed product's page with its Language picker open, or
+    /// `<locale>` downloaded through Downloads; nil once Play shows again and `.build.info` says it.
+    private static func battleNetLocale(_ spec: String) async throws -> String? {
+        let parts = spec.split(separator: "=", maxSplits: 1).map(String.init)
+        guard let key = StoreGameKey(titleID: parts[0]), let p = BattleNet.product(key) else { return "\(parts[0]) is not a Battle.net product" }
+        let model = BattleNetInstalled.shared, library = LibraryModel.shared
+        guard library.title(key.titleID) != nil else { return "\(key.titleID) is not installed" }
+        guard let installs = SteamAccountModel.current?.installs else { return "no download queue" }
+        guard let before = try await openInstalledBattleNet(key, p) else { return "\(key.titleID): no readable .build.info" }
+        guard parts.count > 1 else {
+            model.pickLanguage(p, downloads: installs)
+            try await pause(.milliseconds(1500))
+            log("locale \(key.titleID): installed in \(before.locale), picker open")
+            return nil
+        }
+        let locale = parts[1]
+        let shipped = await model.locales(p)
+        guard shipped.contains(locale) else { return "\(p.code) does not ship \(locale) (\(shipped.joined(separator: " ")))" }
+        if let why = model.changeLanguage(p, to: locale, downloads: installs) { return why }
+        let started = Date()
+        func playShown() -> Bool { library.title(key.titleID) != nil && installs.jobs[key] == nil }
+        var lastLog = Date()
+        while let j = installs.jobs[key] {
+            if case let .paused(reason) = j.phase { return "paused: \(reason ?? "no reason")" }
+            if Date().timeIntervalSince(lastLog) > 30 {
+                lastLog = Date()
+                log("locale \(key.titleID): \(j.status) \(j.detail ?? "")")
+            }
+            try await pause(.milliseconds(250))
+        }
+        let now = installedChoice(key, p)
+        let t = library.title(key.titleID)
+        let receipt = LibraryModel.paths.layout.storeReceipts().first { $0.key == key }
+        log("locale \(key.titleID): installed \(before.locale) → \(locale) after \(Int(Date().timeIntervalSince(started))) s; .build.info \(now); "
+            + "receipt files=\(receipt?.files ?? 0) bytes=\(receipt?.bytes ?? 0); play=\(playShown() ? "shown" : "hidden")")
+        guard now.hasSuffix("/" + locale) else { return ".build.info says \(now)" }
+        guard playShown(), t?.canPlay == true else { return "Play is not available after the download" }
         return nil
     }
 
