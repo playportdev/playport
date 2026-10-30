@@ -223,8 +223,10 @@ commit is a `vm_map` of an unused range of one at Wine's address
 pool ([decision 0105](decisions/0105-memory-defaults-per-phone.md): 4 GiB on a 12 GB
 phone, 1 GiB on 8 GB, none and no setting under), at most one donor's grant
 (PlayportKit `DonorPoolSizing`). During play the pool stops taking unused pages
-when the phone's spare memory or jetsam's level falls under its floor
-(`donor-pool: pressure` lines). An earlier per-allocation
+when the phone's spare memory or jetsam's level falls under its floor, and takes them
+again with 512 MiB of spare memory over its floor, even under level 20 %; after such a
+resume the level stop counts from the level at the resume
+(`DonorPoolSizing.Growth`, 0105 as amended; `donor-pool: pressure` lines). An earlier per-allocation
 broker asked the living helper over XPC for each mapping, and a hook for FEX's
 data band (0147) moved only 30–90 MiB in Hollow Knight and Kingdom Come
 ([evidence](evidence/2026-10-03-fex-helper-memory.md),

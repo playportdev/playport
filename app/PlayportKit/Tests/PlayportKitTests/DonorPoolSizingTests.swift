@@ -63,7 +63,7 @@ final class DonorPoolSizingTests: XCTestCase {
     }
 
     /// Growth during play: stops under the spare floor (1,408 MiB on 12 GB) or level 15 %,
-    /// resumes 512 MiB and 5 points above them.
+    /// resumes 512 MiB over the floor, at level 20 % or on spare memory alone (0105 as amended).
     func testGrowthStopsAndResumes() {
         let ram = 11734
         XCTAssertNil(DonorPoolSizing.growthStop(spareMB: 2051, level: 40, physicalMB: ram))  // KCD's lowest
@@ -72,26 +72,71 @@ final class DonorPoolSizingTests: XCTestCase {
         XCTAssertEqual(DonorPoolSizing.growthStop(spareMB: 3000, level: 14, physicalMB: ram), "level 14% < 15%")
         XCTAssertNil(DonorPoolSizing.growthStop(spareMB: 3000, level: -1, physicalMB: ram))  // unread level: spare only
         XCTAssertEqual(DonorPoolSizing.growthStop(spareMB: 900, level: 40, physicalMB: 7679), "spare 900 MiB < 921")
-        XCTAssertFalse(DonorPoolSizing.growthResumes(spareMB: 1919, level: 40, physicalMB: ram))
-        XCTAssertFalse(DonorPoolSizing.growthResumes(spareMB: 1920, level: 19, physicalMB: ram))
-        XCTAssertTrue(DonorPoolSizing.growthResumes(spareMB: 1920, level: 20, physicalMB: ram))
-        XCTAssertTrue(DonorPoolSizing.growthResumes(spareMB: 1920, level: -1, physicalMB: ram))
+
+        func stopped(_ spare: Int, _ level: Int) -> DonorPoolSizing.Growth {
+            var g = DonorPoolSizing.Growth(physicalMB: ram)
+            XCTAssertNotNil(g.check(spareMB: spare, level: level))
+            XCTAssertFalse(g.growing)
+            return g
+        }
+        XCTAssertEqual(DonorPoolSizing.Growth(physicalMB: ram).resumeSpareMB, 1920)
+        var g = stopped(1407, 40)
+        XCTAssertNil(g.check(spareMB: 1919, level: 40))
+        XCTAssertEqual(g.check(spareMB: 1920, level: 20), .resumed("level 20% >= 20%, spare 1920 MiB >= 1920"))
+        XCTAssertNil(g.spareResumeLevel)
+        g = stopped(1407, 40)
+        XCTAssertEqual(g.check(spareMB: 1920, level: -1), .resumed("spare 1920 MiB >= 1920, level unread"))
+        g = stopped(1407, 40)
+        XCTAssertEqual(g.check(spareMB: 1920, level: 19),
+                       .resumed("spare 1920 MiB >= 1920, level 19% < 20%: on spare memory; the level stop now under 15%"))
+        XCTAssertEqual(g.spareResumeLevel, 19)
+        // a resume at 15-19 % keeps the 15 % stop as it was
+        XCTAssertEqual(g.check(spareMB: 3000, level: 14), .stopped("level 14% < 15%"))
     }
 
-    /// The stats line's `resume_wait` while stopped, and the `growth resumed` line's reason (l7 stopped
-    /// at level 13 % with 4059 MiB spare and never resumed, PLA-476).
-    func testGrowthResumeWaitAndReason() {
-        let ram = 11734
-        XCTAssertEqual(DonorPoolSizing.growthResumeWait(spareMB: 4059, level: 13, physicalMB: ram), "level 13% < 20%")
-        XCTAssertEqual(DonorPoolSizing.growthResumeWait(spareMB: 1919, level: 40, physicalMB: ram), "spare 1919 MiB < 1920")
-        XCTAssertEqual(DonorPoolSizing.growthResumeWait(spareMB: 900, level: 19, physicalMB: ram),
-                       "level 19% < 20%, spare 900 MiB < 1920")
-        XCTAssertNil(DonorPoolSizing.growthResumeWait(spareMB: 1920, level: 20, physicalMB: ram))
-        XCTAssertNil(DonorPoolSizing.growthResumeWait(spareMB: 1920, level: -1, physicalMB: ram))
-        XCTAssertEqual(DonorPoolSizing.growthResumeReason(spareMB: 2000, level: 21, physicalMB: ram),
-                       "level 21% >= 20%, spare 2000 MiB >= 1920")
-        XCTAssertEqual(DonorPoolSizing.growthResumeReason(spareMB: 2000, level: -1, physicalMB: ram),
-                       "spare 2000 MiB >= 1920, level unread")
+    /// Run l9's pool lines (PLA-476): stopped at level 13 % with 4,105 MiB spare, resumed at 20 %,
+    /// stopped at 13 % again, then 11-16 % with 4,064-4,434 MiB spare and never resumed. Under the
+    /// amended rule it resumes on spare at 13 %, the level stop then counts from 13 %, and it does
+    /// not flap.
+    func testL9ResumesOnSpareWithoutFlapping() {
+        var g = DonorPoolSizing.Growth(physicalMB: 11734)
+        XCTAssertEqual(g.check(spareMB: 4105, level: 13), .stopped("level 13% < 15%"))
+        XCTAssertEqual(g.check(spareMB: 4105, level: 13),
+                       .resumed("spare 4105 MiB >= 1920, level 13% < 20%: on spare memory; the level stop now under 13%"))
+        XCTAssertEqual(g.spareResumeLevel, 13)
+        // no stop at the level it resumed at: the old rule's flap
+        for _ in 0..<5 { XCTAssertNil(g.check(spareMB: 4064, level: 13)) }
+        XCTAssertNil(g.check(spareMB: 4434, level: 16))
+        XCTAssertNil(g.check(spareMB: 4200, level: 14))
+        XCTAssertEqual(g.check(spareMB: 4200, level: 12),
+                       .stopped("level 12% < 13%, the level at the resume on spare memory"))
+        // the next resume on spare waits for the level to come back to 13 %
+        XCTAssertEqual(g.resumeWait(spareMB: 4200, level: 11), "level 11% < 13% (the last resume on spare memory)")
+        XCTAssertNil(g.check(spareMB: 4200, level: 11))
+        XCTAssertNil(g.check(spareMB: 4434, level: 12))
+        XCTAssertNotNil(g.check(spareMB: 4434, level: 13))
+        XCTAssertTrue(g.growing)
+        // the run's 20 % resume: a resume on both readings, after which 13 % stops it as before
+        XCTAssertEqual(g.check(spareMB: 1900, level: 14), .stopped("level 14% < 15%, spare 1900 MiB < 1920"))
+        XCTAssertEqual(g.check(spareMB: 4770, level: 20), .resumed("level 20% >= 20%, spare 4770 MiB >= 1920"))
+        XCTAssertNil(g.spareResumeLevel)
+        XCTAssertEqual(g.check(spareMB: 4064, level: 13), .stopped("level 13% < 15%"))
+        XCTAssertNotNil(g.check(spareMB: 4064, level: 13))
+        XCTAssertEqual(g.spareResumeLevel, 13)
+    }
+
+    /// The spare floor's stop holds after a resume on spare, and the stats line's `resume_wait`.
+    func testGrowthSpareFloorAndResumeWait() {
+        var g = DonorPoolSizing.Growth(physicalMB: 11734)
+        XCTAssertNotNil(g.check(spareMB: 4059, level: 13))
+        XCTAssertNotNil(g.check(spareMB: 4059, level: 13))
+        XCTAssertEqual(g.check(spareMB: 1407, level: 13), .stopped("spare 1407 MiB < 1408"))
+        XCTAssertEqual(g.resumeWait(spareMB: 1919, level: 13), "spare 1919 MiB < 1920")
+        XCTAssertEqual(g.resumeWait(spareMB: 900, level: 12),
+                       "level 12% < 13% (the last resume on spare memory), spare 900 MiB < 1920")
+        XCTAssertNil(g.resumeWait(spareMB: 1920, level: 13))
+        XCTAssertNil(g.resumeWait(spareMB: 1920, level: -1))
+        XCTAssertNil(DonorPoolSizing.Growth(physicalMB: 11734).resumeWait(spareMB: 4059, level: 13))
     }
 
     /// The fixed sizes stay, capped by the level as before; off is off.
