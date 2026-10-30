@@ -454,3 +454,8 @@ allocator/browser startup with no refusal — **passed**. The game signs in and 
 — **not passed** (jetsam at 8192 MB during Story's loading). No SC/launcher `NO GAP FITS` or soft grant — **not
 passed** (52 V8 probe lines from A and B, 36 i386 `dllhost.exe` window failures; no soft grant). 7343 MB ±10 % —
 **not passed** (the limit was reached).
+
+Amended 2026-10-30 (owner): a band view only detached waits named is now freed, the no-parked fate, not emptied
+(l7's 3 `fate=1` views). Dev IPA sha256 `4f5f3b7cd32c6060f76e0c42188bed37ca62f72cc88c44b778d7e311f4cab4f2`, full
+`pp test` passed; Hollow Knight first-frame+10 **passed**, first frame +10.86 s
+(`$PLAYPORT_BUILD/ui-runs/20261030T125728`, no teardown in it); no RDR2 run with it yet.

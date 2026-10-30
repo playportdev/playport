@@ -5,7 +5,9 @@
 and [0143](0143-release-a-self-exited-childs-fex-band-as-a-killed-childs.md). Shown on the phone in run
 `20261030T122917-rdr2-p476l7` (IPA `5b38a50b`): 25 waits detached (24 unlinked, one absent, none busy), the
 launcher helper's kind-3 view freed and its slot held again, and the game's helper granted kind 3 with no refusal
-([evidence](../evidence/2026-10-29-sc-stock-cef-probe.md#l7-wait-detach-decision-0166)).
+([evidence](../evidence/2026-10-29-sc-stock-cef-probe.md#l7-wait-detach-decision-0166)). Amended
+2026-10-30 by the owner: a band view only a detached wait named is freed, not emptied (IPA `4f5f3b7c`,
+Hollow Knight first frame; not yet shown in a teardown on the phone).
 
 ## Context
 
@@ -56,9 +58,9 @@ launcher helper's kind-3 view freed and its slot held again, and the game's help
 - **Then the views.** A view of the dead process that only dropped wait addresses named is checked
   against **every** saved address of **every** parked thread of any process, the whole parked table.
   An entry still being written counts as naming every view.
-  - If none names it, it takes the rules of a view no parked address names: it is freed outside FEX's
-    band (a Social Club slot is then held again by the existing `ppsc_owner_died_locked`), freed if
-    an L1 cache, and emptied in place elsewhere in the band (0132).
+  - If none names it, it takes the fate a process with no parked thread gives it (0127, 0143): it is
+    freed, in FEX's band too, not emptied in place (amended by the owner, 2026-10-30). A Social Club
+    slot is then held again by the existing `ppsc_owner_died_locked`.
   - Otherwise it is kept whole, as before.
   - Each such view logs `[proc-end] wait-only peb=… view=… fate=N (decision 0166)`.
 - **Unchanged.** A view that any register, TPIDRRO or TEB ref names keeps the whole-view rule of
@@ -70,6 +72,15 @@ launcher helper's kind-3 view freed and its slot held again, and the game's help
 
 ## Costs and risks
 
+- **A freed band view's addresses go back to the band.** 0132 empties a parked process's band views
+  so that their addresses stay reserved while its parked FEX state may name them. A view only a
+  detached wait named is named by no saved address of any parked thread, and nothing that runs
+  reads the rest of that state. FEX keeps no map of the band's free space: rpmalloc and the
+  call-return stacks ask `NtAllocateVirtualMemoryEx` for a range inside the band, so Wine's view
+  tree is the band's only allocator, and the freed range is a hole it knows. The dead process's
+  own rpmalloc heaps, which may still list the range, belong to its own FEX instance, which no
+  thread runs any more and into which no other instance frees (0127). A process with no parked
+  thread already frees these views the same way.
 - **A resume would now corrupt, not read stale data.** If the suspend invariant ever broke and the
   thread got a real alert, its caller would re-read the lock word at the old address, and might CAS
   it, in memory that now belongs to another process. With the view kept it would have read zeros or

@@ -22,26 +22,26 @@ is unlinked and its address written NULL with release semantics, and its
 registry entry's address is cleared while it is still that wait. Each logs
 `[proc-end] wait-detached tid=… wait=… node=unlinked|absent|busy`. The
 release then drops the address from the thread's saved set; a view only
-dropped addresses named takes the fate of a view no parked address names
-if no saved address of any parked thread names it (`[proc-end] wait-only
-… fate=N`), and is kept whole otherwise. A view any register, TPIDRRO or
-TEB names keeps the whole-view rule. Parked threads stay suspended for
-ever; nothing resumes one. Views kept by earlier teardowns stay. The unix
-side is wine-unix 0202.
+dropped addresses named is freed, as a process with no parked thread frees
+it, in FEX's band too, if no saved address of any parked thread names it
+(`[proc-end] wait-only … fate=N`), and is kept whole otherwise. A view
+any register, TPIDRRO or TEB names keeps the whole-view rule. Parked
+threads stay suspended for ever; nothing resumes one. Views kept by
+earlier teardowns stay. The unix side is wine-unix 0202.
 
 Class: ios-port
 Evidence: docs/evidence/2026-10-29-sc-stock-cef-probe.md
 Offered-upstream: no
 ---
- build/ntdll-unix/pp_proc_end.h | 97 ++++++++++++++++++++++++++++++++++
+ build/ntdll-unix/pp_proc_end.h | 99 ++++++++++++++++++++++++++++++++++
  build/ntdll-unix/virtual_ios.c | 93 +++++++++++++++++++++++++++++---
- 2 files changed, 182 insertions(+), 8 deletions(-)
+ 2 files changed, 184 insertions(+), 8 deletions(-)
 
 diff --git a/build/ntdll-unix/pp_proc_end.h b/build/ntdll-unix/pp_proc_end.h
-index 1074e9a..eb473bd 100644
+index 1074e9a..ca37f4c 100644
 --- a/build/ntdll-unix/pp_proc_end.h
 +++ b/build/ntdll-unix/pp_proc_end.h
-@@ -13,6 +13,13 @@
+@@ -13,6 +13,14 @@
   * Mach-suspended for ever, and counted as finished. Its TEB, stacks and every
   * view its saved registers point into stay mapped.
   *
@@ -50,12 +50,13 @@ index 1074e9a..eb473bd 100644
 + * registry. Decision 0166: at the teardown, the wait of each parked thread
 + * whose whole saved set was captured is detached from both, outside
 + * virtual_mutex, and dropped from its saved set; a view then named by no
-+ * saved address of any parked thread takes the rules of a view none names.
++ * saved address of any parked thread is freed, as a process with no parked
++ * thread frees it, in FEX's band too.
 + *
   * The rest of such a process's views in FEX's band are emptied in place
   * (decision 0132): their pages are replaced by fresh zero-fill at the same
   * protection, so the view, its address range and every page's protection stay
-@@ -36,6 +43,7 @@
+@@ -36,6 +44,7 @@
  #define PPE_UL_COMPARE_AND_WAIT 1             /* x0's operation: futex_wait's */
  #define PPE_REFS                53            /* x0-x28, fp, lr, sp, pc; the guest's 16 GPRs and rip;
                                                   TPIDRRO_EL0, its TEB and its wait address */
@@ -63,7 +64,7 @@ index 1074e9a..eb473bd 100644
  
  /* What the abort read of a killed thread it has stopped. */
  struct ppe_thread_state
-@@ -185,6 +193,95 @@ static inline int ppe_take_view( void **view_owner, const void *owner )
+@@ -185,6 +194,96 @@ static inline int ppe_take_view( void **view_owner, const void *owner )
      return 1;
  }
  
@@ -145,15 +146,16 @@ index 1074e9a..eb473bd 100644
 +/* The fate of a dead process's view once its parked threads' detached wait
 + * addresses are dropped (decision 0166). fate is ppe_view_fate's over its
 + * saved addresses without them, and dropped are those this teardown dropped.
-+ * A view only they named takes that fate (a view no parked address names)
-+ * only if no saved address of any parked thread, all n of them, names it;
-+ * otherwise it is kept whole, as before. Any other view keeps its fate. */
++ * A view only they named is freed, the fate a process with no parked thread
++ * gives it (ppe_view_fate with none parked), in FEX's band too, only if no
++ * saved address of any parked thread, all n of them, names it; otherwise it
++ * is kept whole, as before. Any other view keeps its fate. */
 +static inline enum ppe_fate ppe_fate_after_detach( enum ppe_fate fate, uint64_t base, uint64_t size,
 +                                                   const uint64_t *dropped, unsigned ndropped,
 +                                                   const struct ppe_parked *all, unsigned n )
 +{
 +    if (fate == PPE_KEEP_REF || !ppe_referenced( base, size, dropped, ndropped )) return fate;
-+    return ppe_parked_names( base, size, all, n ) ? PPE_KEEP_REF : fate;
++    return ppe_parked_names( base, size, all, n ) ? PPE_KEEP_REF : PPE_FREE;
 +}
 +
  /* What a teardown did, for its `[proc-end]` line. */

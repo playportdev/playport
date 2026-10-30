@@ -284,14 +284,18 @@ int main(void)
     all[0] = full(1); all[1] = full(0); all[2] = full(0);
     assert(release(all, 2, 3, 0) == PPE_FREE && all[1].wait_detach == PPE_WAIT_DETACHED && !all[1].refs[PPE_WAIT_REF]);
     assert(all[2].wait_detach == PPE_WAIT_QUEUED && all[2].refs[PPE_WAIT_REF]);
-    /* A band view only the wait names is emptied, not freed: the parked FEX state may still name the band. */
+    /* A band view only the wait names takes the no-parked fate: freed, not emptied, whatever its class. */
     {
         struct ppe_parked u = full(1);
         uint64_t dropped;
         u.wait_detach = PPE_WAIT_DETACHED;
         assert(ppe_drop_wait(&u, &dropped) && dropped == WAIT);
-        assert(ppe_fate_after_detach(ppe_view_fate(PPE_SPAN, 1, BASE, SIZE, u.refs, u.nrefs), BASE, SIZE, &dropped, 1,
-                                     &u, 1) == PPE_EMPTY);
+        for (int cls = PPE_SPAN; cls < PPE_CLASSES; cls++) {
+            fate = ppe_view_fate((enum ppe_class)cls, 1, BASE, SIZE, u.refs, u.nrefs);
+            assert(ppe_fate_after_detach(fate, BASE, SIZE, &dropped, 1, &u, 1) ==
+                   ppe_view_fate((enum ppe_class)cls, 0, BASE, SIZE, u.refs, u.nrefs));
+            assert(ppe_fate_after_detach(fate, BASE, SIZE, &dropped, 1, &u, 1) == PPE_FREE);
+        }
         assert(!ppe_drop_wait(&u, &dropped));                       /* dropped once */
     }
 
