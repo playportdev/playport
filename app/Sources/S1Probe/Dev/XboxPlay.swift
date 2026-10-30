@@ -72,6 +72,12 @@ enum XboxPlay {
             return .failure(.failed(XboxInstalls.message(error)))
         }
         log.info("xbox", "\(t.key): licence \(licence.source == .cache ? "stored (licensing unreachable)" : "granted")")
+        // The runtime's cached identity follows the licence (PLA-504): used offline, kept
+        // fresh on the offline device; Microsoft is asked again whether this is still it.
+        let offlineDevice = await account.session.isOfflineDevice
+        let identity = XboxOfflineIdentity.environment(licence: licence, offlineDevice: offlineDevice,
+                                                       account: await account.session.offlineIdentityAccount)
+        if licence.source == .microsoft { XboxOfflineDeviceModel.shared.check() }
 
         // 2. The kept-encrypted files in plaintext under their own names for this play.
         let swap = LibraryModel.inPlaceSwap, play = t.id
@@ -122,7 +128,8 @@ enum XboxPlay {
         }
 
         let ended = Once()
-        return .success(Prepared(guestEnvironment: listener.guestEnvironment.merging(winhttpHTTP2) { own, _ in own },
+        return .success(Prepared(guestEnvironment: listener.guestEnvironment.merging(winhttpHTTP2) { own, _ in own }
+                                     .merging(identity) { own, _ in own },
                                  prerequisites: prerequisites) {
             guard ended.first() else { return }
             listener.stop()

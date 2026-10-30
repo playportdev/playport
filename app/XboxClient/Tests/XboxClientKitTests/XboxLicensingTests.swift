@@ -6,17 +6,27 @@ import ContentKit
 
 /// Licensing's transport: licensing.mp answers from a queue, the device registers
 /// with a licence that carries an EncryptedDeviceKey, the rest is XboxFixtureHTTP.
+/// Xbox Live (device, SISU, XSTS) and the offline device endpoint answer from
+/// `live`; the Xbox app's `xboxlive.signin` ticket is `xbox-app-ticket.xml`.
 /// `offline` fails every request as a dropped connection would.
 actor XboxLicensingHTTP: XboxHTTP {
     let tickets = XboxFixtureHTTP()
     var licensing: [XboxHTTPResponse] = []
     var requests: [XboxHTTPRequest] = []
+    var live: [XboxHTTPResponse] = []
+    var liveRequests: [XboxHTTPRequest] = []
+    var appTicketRequests: [XboxHTTPRequest] = []
     var offline = false
     var device = "device-add-licensing.xml"
     func answer(_ name: String, status: Int = 200, leases: [String]? = nil) throws {
         licensing.append(XboxHTTPResponse(status: status, body: try xboxLicensingFixture(name, leases: leases)))
     }
     func answer(body: [UInt8], status: Int = 200) { licensing.append(XboxHTTPResponse(status: status, body: body)) }
+    /// The SISU chain's three answers, then the offline device endpoint's `name`.
+    func answerOfflineDevice(_ name: String, status: Int = 200) throws {
+        for file in ["xbl-device.json", "xbl-sisu.json", "xbl-xsts-mp.json"] { live.append(XboxHTTPResponse(status: 200, body: try xboxFixture(file))) }
+        live.append(XboxHTTPResponse(status: status, body: try xboxFixture(name)))
+    }
     func setOffline(_ value: Bool) { offline = value }
     func registerWith(_ name: String) { device = name }
     func send(_ request: XboxHTTPRequest) async throws -> XboxHTTPResponse {
@@ -26,7 +36,16 @@ actor XboxLicensingHTTP: XboxHTTP {
             guard !licensing.isEmpty else { throw ClientError.transport("no fixture") }
             return licensing.removeFirst()
         }
+        if let host = request.url.host, host.hasSuffix("xboxlive.com") || host == "beige.xboxservices.com" {
+            liveRequests.append(request)
+            guard !live.isEmpty else { throw ClientError.transport("no fixture") }
+            return live.removeFirst()
+        }
         if request.url.path.contains("deviceaddcredential") { return XboxHTTPResponse(status: 200, body: try xboxFixture(device)) }
+        if String(decoding: request.body.value, as: UTF8.self).contains("clientid=000000004424da1f") {
+            appTicketRequests.append(request)
+            return XboxHTTPResponse(status: 200, body: try xboxFixture("xbox-app-ticket.xml"))
+        }
         return try await tickets.send(request)
     }
 }
@@ -107,8 +126,14 @@ final class XboxLicensingTests: XCTestCase, @unchecked Sendable {
         XCTAssertTrue(exchange.contains(">{d6d5a677-0872-4ab0-9442-bb792fce85c5}<"))
     }
 
+    func designate(_ session: XboxSession, _ http: XboxLicensingHTTP) async throws {
+        try await http.answerOfflineDevice("offline-device-on.json")
+        _ = try await session.offlineDevice(set: true, signer: XboxTestSigner())
+    }
+
     func testCachedKeysServeWhileMicrosoftIsUnreachableOnlyWithinTheOfflineLease() async throws {
         let http = XboxLicensingHTTP(), store = MemorySecretStore(), session = try await signedIn(http, store)
+        try await designate(session, http)
         try await http.answer("licence-content.json")
         _ = try granted(await session.licence(contentID: Self.content))
         XCTAssertNotNil(try store.read("licences"), "the keys are in the Keychain")
@@ -122,23 +147,25 @@ final class XboxLicensingTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(cached.expiresAt, Self.issued); XCTAssertEqual(cached.offlineLease?.expiresAt, Self.leaseEnds)
 
         clock.now = Self.leaseEnds
-        guard case .unavailable(.network) = try await session.licence(contentID: Self.content) else { return XCTFail("lease ended") }
+        guard case .unavailable(.connectionNeeded(.leaseEnded(Self.leaseEnds))) = try await session.licence(contentID: Self.content) else { return XCTFail("lease ended") }
         let other = "00000000-0000-4000-8000-0000000000aa"
-        guard case .unavailable(.network) = try await session.licence(contentID: other) else { return XCTFail("another copy has no keys") }
+        guard case .unavailable(.connectionNeeded(.notPlayedOnline)) = try await session.licence(contentID: other) else { return XCTFail("another copy has no keys") }
     }
 
     func testWithoutAnOfflineLeaseTheKeysLastOnlyAsLongAsTheLicence() async throws {
         let http = XboxLicensingHTTP(), session = try await signedIn(http)
+        try await designate(session, http)
         try await http.answer("licence-content.json", leases: ["licence-lease-online.xml", "licence-key.xml"])
         let licence = try granted(await session.licence(contentID: Self.content))
         XCTAssertNil(licence.offlineLease, "an online lease, or a lease without a policy, grants no offline time")
         XCTAssertEqual(licence.usableUntil, Self.issued)
         await http.setOffline(true)
-        guard case .unavailable(.network) = try await session.licence(contentID: Self.content) else { return XCTFail("expired as issued") }
+        guard case .unavailable(.connectionNeeded(.noOfflineLease)) = try await session.licence(contentID: Self.content) else { return XCTFail("expired as issued") }
     }
 
     func testServiceErrorsUseTheLeaseButNeitherIsARefusalAndHTTPRejectionsDoNot() async throws {
         let http = XboxLicensingHTTP(), session = try await signedIn(http)
+        try await designate(session, http)
         try await http.answer("licence-content.json")
         _ = try granted(await session.licence(contentID: Self.content))
         for status in [408, 429, 500, 501, 503] {
@@ -158,6 +185,7 @@ final class XboxLicensingTests: XCTestCase, @unchecked Sendable {
 
     func testOnlyMicrosoftsSatisfactionFailureIsADefinitiveRefusal() async throws {
         let http = XboxLicensingHTTP(), store = MemorySecretStore(), session = try await signedIn(http, store)
+        try await designate(session, http)
         let other = "00000000-0000-4000-8000-0000000000aa"
         try await http.answer("licence-content.json")
         _ = try granted(await session.licence(contentID: Self.content))
@@ -174,7 +202,7 @@ final class XboxLicensingTests: XCTestCase, @unchecked Sendable {
         try await http.answer("licence-refused.json")
         guard case .refused(.refused) = try await session.licence(contentID: Self.content) else { return XCTFail("reason 1") }
         await http.setOffline(true)
-        guard case .unavailable(.network) = try await session.licence(contentID: Self.content) else { return XCTFail("a refusal deletes the copy's keys") }
+        guard case .unavailable(.connectionNeeded(.notPlayedOnline)) = try await session.licence(contentID: Self.content) else { return XCTFail("a refusal deletes the copy's keys") }
         await http.setOffline(false)
 
         // Reason 501 refuses the device, not the copy: asked for another copy, it
@@ -183,7 +211,7 @@ final class XboxLicensingTests: XCTestCase, @unchecked Sendable {
         try await http.answer("device-limit.json")
         guard case .refused(.deviceLimit) = try await session.licence(contentID: other) else { return XCTFail("reason 501") }
         await http.setOffline(true)
-        guard case .unavailable(.network) = try await session.licence(contentID: Self.content) else { return XCTFail("device refused") }
+        guard case .unavailable(.connectionNeeded(.notPlayedOnline)) = try await session.licence(contentID: Self.content) else { return XCTFail("device refused") }
     }
 
     func testANetworkFailureIsNotARefusalAndAnotherDevicesLicenceIsInvalid() async throws {
@@ -192,7 +220,7 @@ final class XboxLicensingTests: XCTestCase, @unchecked Sendable {
         let session = try await signedIn(http)
         try await http.answer("licence-content.json")
         guard case .unavailable(.invalidResponse) = try await session.licence(contentID: Self.content) else { return XCTFail("no device key") }
-        guard case .unavailable(.network) = try await session.licence(contentID: Self.content) else { return XCTFail("dropped") }
+        guard case .unavailable(.connectionNeeded(.notOfflineDevice)) = try await session.licence(contentID: Self.content) else { return XCTFail("dropped") }
         do { _ = try await session.licence(contentID: "not-a-guid"); XCTFail("content IDs are GUIDs") } catch ClientError.unsupported {}
     }
 

@@ -182,6 +182,14 @@ class UiEnvTest(unittest.TestCase):
                     "xbox:update:", "xbox:update:9mw9469v91lm", "xbox:update:9MW9469V91LM@1.2.3.4"):
             self.assertFalse(m.ACTION_RE.match(bad), bad)
 
+    def test_the_xbox_offline_device_row_turns_on_off_or_reads(self):
+        # Settings › Accounts › Xbox's Offline device through its confirmation (PLA-504).
+        m = load()
+        for action in ("xbox:offline-device:on", "xbox:offline-device:off", "xbox:offline-device:status"):
+            self.assertEqual(m.parse(["--action", action]).action, [action])
+        for bad in ("xbox:offline-device", "xbox:offline-device:", "xbox:offline-device:true", "xbox:offline-device:on:x"):
+            self.assertFalse(m.ACTION_RE.match(bad), bad)
+
     def test_an_xbox_copy_s_licence_lapse_is_checked_and_shown_by_its_product_id(self):
         m = load()
         for action in ("xbox:licence:9MW9469V91LM", "xbox:lapse:9MW9469V91LM", "xbox:lapse:9MW9469V91LM@0",

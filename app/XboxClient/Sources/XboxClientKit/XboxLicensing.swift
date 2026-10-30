@@ -54,6 +54,8 @@ public enum XboxLicenceProblem: Error, Sendable, Equatable, CustomStringConverti
     case invalidResponse
     /// The account or device tickets the request needs are unavailable.
     case session(XboxSessionError)
+    /// Licensing can't be reached and the offline launch rule keeps the stored keys out.
+    case connectionNeeded(XboxOfflineRefusal)
     public var description: String {
         switch self {
         case .network: "Microsoft's licensing service couldn't be reached. Check your connection and try again."
@@ -61,13 +63,14 @@ public enum XboxLicenceProblem: Error, Sendable, Equatable, CustomStringConverti
         case .rejected(let status): "Microsoft's licensing service rejected the request (HTTP \(status)). Try again later."
         case .invalidResponse: "Microsoft's licensing service returned a response Playport doesn't recognise."
         case .session(let error): error.description
+        case .connectionNeeded(let why): why.description
         }
     }
     /// The service could not be reached or is failing: a stored licence may stand in.
     var offlineCovers: Bool {
         switch self {
         case .network, .service: true
-        case .rejected, .invalidResponse, .session: false
+        case .rejected, .invalidResponse, .session, .connectionNeeded: false
         }
     }
 }
@@ -87,10 +90,13 @@ extension XboxSession {
     /// The licence for a copy's content ID, with its content keys unwrapped by the
     /// synthetic device's key. Microsoft is asked every time (its policies say
     /// `refreshOnStartup`). A granted licence's keys go to the Keychain with its
-    /// expiry and offline lease; while licensing can't be reached (`network`,
-    /// `service`) a stored licence within those is returned as `.cache`. A refusal
-    /// deletes the copy's stored keys (a device-limit refusal, every copy's). Throws
-    /// only for cancellation (sign-out included) and Keychain failures.
+    /// expiry, offline lease and when they were stored. While licensing can't be
+    /// reached (`network`, `service`) the stored keys are returned as `.cache` under
+    /// the offline launch rule (XboxOfflineLaunch): on the offline device, from a
+    /// licence issued since the designation, within its offline lease. Otherwise a
+    /// `network` failure is `.connectionNeeded` with the reason. A refusal deletes the
+    /// copy's stored keys (a device-limit refusal, every copy's). Throws only for
+    /// cancellation (sign-out included) and Keychain failures.
     public func licence(contentID: String, market: String = "US") async throws -> XboxLicenceResult {
         guard let id = UUID(uuidString: contentID) else { throw ClientError.unsupported("Xbox content ID is not a GUID") }
         let content = id.uuidString.lowercased()
@@ -101,7 +107,7 @@ extension XboxSession {
         switch result {
         case .licensed(let licence):
             stored = stored.filter { $0.value.usableUntil > now() }
-            stored[content] = XboxStoredLicence(licence)
+            stored[content] = XboxStoredLicence(licence, storedAt: now())
             try write(stored, "licences")
             log.info("xbox", "licence granted; " + (licence.offlineLease == nil ? "no offline lease" : "offline lease granted"))
         case .refused(let failure):
@@ -109,11 +115,16 @@ extension XboxSession {
             try write(stored, "licences")
             log.info("xbox", failure == .deviceLimit ? "licence refused: device limit" : "licence refused")
         case .unavailable(let problem):
-            if problem.offlineCovers, let cached = stored[content], cached.usableUntil > now() {
-                log.info("xbox", "licensing unavailable; using the stored licence")
+            guard problem.offlineCovers else { log.info("xbox", "licensing unavailable"); break }
+            let designation = try read(XboxOfflineDesignation.self, "offline-device")
+            switch XboxOfflineLaunch.check(stored[content], designation: designation, now: now()) {
+            case .success(let cached):
+                log.info("xbox", "licensing unavailable; using the stored licence (offline lease)")
                 return .licensed(cached.licence(content))
+            case .failure(let refusal):
+                log.info("xbox", "licensing unavailable; offline start refused: \(refusal.label)")
+                if problem == .network { return .unavailable(.connectionNeeded(refusal)) }
             }
-            log.info("xbox", "licensing unavailable")
         }
         return result
     }
@@ -141,6 +152,7 @@ extension XboxSession {
         catch ClientError.cancelled { throw ClientError.cancelled }
         catch { return .unavailable(.network) }
         try check(epoch)
+        if (200..<300).contains(response.status), let usage = XboxLicensing.usage(response.body.value) { log.info("xbox", "licence usage: \(usage)") }
         return XboxLicensing.result(response, content: content, deviceLicence: deviceLicence)
     }
 }
@@ -150,9 +162,11 @@ struct XboxStoredLicence: Codable {
     let keys: [Key]
     let expiresAt: Date
     let offlineLease: XboxLicenceLease?
-    init(_ licence: XboxLicence) {
+    /// When Microsoft issued it to this app (an online play); nil in entries from before PLA-504.
+    let storedAt: Date?
+    init(_ licence: XboxLicence, storedAt: Date) {
         keys = licence.keys.map { Key(id: $0.id, key: $0.key.value) }
-        expiresAt = licence.expiresAt; offlineLease = licence.offlineLease
+        expiresAt = licence.expiresAt; offlineLease = licence.offlineLease; self.storedAt = storedAt
     }
     var usableUntil: Date { max(expiresAt, offlineLease?.expiresAt ?? .distantPast) }
     func licence(_ content: String) -> XboxLicence {
@@ -275,6 +289,37 @@ enum XboxLicensing {
         return r.flatMap { $0 }
     }
     static var invalid: ClientError { .protocolChanged("Microsoft returned an invalid licence") }
+
+    /// What a granted licence says about its use, for the log (PLA-504 compares it on
+    /// and off the offline device): the key licence's binding and `LicenseUsage`, and
+    /// each lease's binding, `LicenseUsage`, `isOffline` and its lease URI's
+    /// `policyType`/`policyKind`. Short words only; no IDs, dates or tickets.
+    static func usage(_ body: [UInt8]) -> String? {
+        guard let envelope = try? JSONDecoder().decode(Envelope.self, from: Data(body)) else { return nil }
+        func word(_ value: String?) -> String {
+            guard let value, (1...24).contains(value.count), value.allSatisfy({ $0.isASCII && $0.isLetter }) else { return "?" }
+            return value
+        }
+        func describe(_ value: String) -> (XboxXML, String)? {
+            guard let bytes = try? XboxCrypto.decode(value), let xml = try? XboxXML.parse(bytes), xml.local == "License" else { return nil }
+            return (xml, word(xml.child("Binding")?.attr("Binding_Type")) + "/" + word(xml.child("LicenseInfo")?.attr("LicenseUsage")))
+        }
+        var parts = envelope.license.keys.prefix(1).compactMap { describe($0.value) }.map { "key " + $0.1 }
+        for lease in envelope.license.leases ?? [] {
+            guard let (xml, text) = describe(lease.value) else { continue }
+            var line = "lease " + text
+            if let encoded = xml.value("CustomPolicies"), let bytes = try? XboxCrypto.decode(encoded),
+               let policy = try? JSONSerialization.jsonObject(with: Data(bytes)) as? [String: Any] {
+                line += " isOffline=" + ((policy["isOffline"] as? Bool).map { $0 ? "true" : "false" } ?? "?")
+                let query = (policy["leaseUri"] as? String).flatMap { URLComponents(string: $0)?.queryItems } ?? []
+                for name in ["policyType", "policyKind"] {
+                    line += " \(name)=" + word(query.first { $0.name == name }?.value)
+                }
+            }
+            parts.append(line)
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: "; ")
+    }
 }
 
 /// The blocks of an SPLicense (tag, length, value; little-endian) this client reads.

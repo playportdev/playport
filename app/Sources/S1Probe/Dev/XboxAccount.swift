@@ -66,12 +66,12 @@ final class XboxAccount: ObservableObject {
     func closeSignIn() { exchange?.cancel(); page = nil }
     func signOut() async {
         exchange?.cancel()
-        do { try await session.signOut(); state = .signedOut; error = nil; signingIn = false; page = nil }
+        do { try await session.signOut(); state = .signedOut; error = nil; signingIn = false; page = nil; XboxOfflineDeviceModel.removeIdentities() }
         catch { self.error = Self.message(error) }
     }
     func resetDevice() async {
         exchange?.cancel()
-        do { try await session.resetDevice(); state = .signedOut; error = nil; signingIn = false; page = nil }
+        do { try await session.resetDevice(); state = .signedOut; error = nil; signingIn = false; page = nil; XboxOfflineDeviceModel.removeIdentities() }
         catch { self.error = Self.message(error) }
     }
     private static func message(_ error: Error) -> String {
@@ -102,6 +102,7 @@ struct XboxAccountSettings: View {
                     if $0 == "out" { Task { await account.signOut() } }
                 }
             }
+            XboxOfflineDeviceSettings()
         }
     }
 }

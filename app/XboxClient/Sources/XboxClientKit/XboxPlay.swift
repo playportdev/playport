@@ -158,6 +158,7 @@ public enum XboxPlayRefusal: Error, Equatable, Sendable, CustomStringConvertible
         case .signedOut, .signIn: "Xbox sign-in needed"
         case .refused(.deviceLimit): "Xbox licence refused for this device"
         case .refused: "Xbox licence refused"
+        case .unavailable(.connectionNeeded): "Connection needed"
         case .unavailable, .noKey: "Xbox licence not available"
         }
     }
@@ -168,6 +169,7 @@ public enum XboxPlayRefusal: Error, Equatable, Sendable, CustomStringConvertible
         case .signIn(.signInRequired): "Microsoft couldn't renew your Xbox sign-in. Sign in again under Settings › Accounts › Xbox, then play again."
         case .signIn(.deviceRejected): "Microsoft rejected the Xbox device. Sign in again under Settings › Accounts › Xbox, then play again."
         case .refused(let f): f.description
+        case .unavailable(.connectionNeeded(let why)): why.description
         case .unavailable(let p): "The game needs its licence to start. " + p.description
         case .noKey: "Microsoft's licence for this game has no key for the installed version. Install the game again."
         }
