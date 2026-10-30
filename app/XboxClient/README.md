@@ -434,14 +434,21 @@ A Play of an installed copy (the dev app's `Dev/XboxPlay.swift`) goes through, i
   hints the runtime adds to the config's RelatedProducts, never rights),
   `XODUS_CONTENT_ROOTS` (`C:\Games\<folder>\DLC`, once an add-on is installed) and
   `XODUS_PACKAGE_LOCALE` (`locale(preferred:declared:)`: the phone's language as
-  the package's `Resources` declare it, else the phone's). `XboxBridgeCopy.adding(related:)`
+  the package's `Resources` declare it, else the phone's), with Nexus's
+  `WINEUSERLOCALE` beside it and, for a tag with a region, `LANG`, `LANGUAGE` and
+  `LC_*` (`pl_PL.UTF-8`). `XboxBridgeCopy.adding(related:)`
   lets the bridge mint the licence token for those add-ons; Microsoft's signed
   token, checked by the runtime, decides what is owned.
 - The runtime (nexus-xgameruntime ab2fac35) answers `XStoreQueryAddOnLicenses`,
   `XStoreQueryEntitledProducts`, `XStoreAcquireLicenseForPackage`/`ForDurables`
-  and `XPackageEnumeratePackages(Content)` from these. It does **not** implement
-  `XPackageMount*`/`XPackageGetMountPath*` or `XStoreQueryAssociatedProducts`
-  (`E_NOTIMPL`): a game that mounts its add-on's package to read it still fails.
+  and `XPackageEnumeratePackages(Content)` from these. `patches/xgameruntime` 0003
+  adds what it answered `E_NOTIMPL` for:
+  - `XPackageMount*`/`XPackageGetMountPath*`, for the game's own folder and an
+    installed add-on's, the latter only with the same signed Durable licence;
+  - `XStoreQueryAssociatedProducts` (the related products, owned or not) and
+    `XStoreQueryProducts`, with unowned products from public metadata only.
+
+  Evidence: `docs/evidence/2026-10-30-xbox-addons-runtime.md`.
 
 ## A licence lapse (PLA-505)
 

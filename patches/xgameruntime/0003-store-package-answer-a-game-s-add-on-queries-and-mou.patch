@@ -1,0 +1,1492 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 30 Oct 2026 17:00:00 +0100
+Subject: [PATCH] store, package: answer a game's add-on queries and mount its
+ add-ons
+
+XPackageMount, XPackageGetMountPath and XStoreQueryAssociatedProducts /
+XStoreQueryProducts answered E_NOTIMPL, so a game that reads its DLC from a
+mounted package, or lists its add-ons from the Store, saw none even with
+them installed and licensed.
+
+XPackageMountWithUiAsync/Result and XPackageMountLegacy (Package/Mount.h)
+now mount packages already extracted on disk: the current game's own folder
+(the one holding its MicrosoftGame.config), and an installed content
+package of it or of a related game, found exactly as
+XPackageEnumeratePackages(Content) finds it (XODUS_CONTENT_ROOTS, the game's
+DLC folder). A content package is mounted only with the account's signed
+Durable licence for it, the same request XStoreAcquireLicenseForPackage
+sends (xstore_content_license in Store/PackageLicense.h): being on disk is
+never a licence. The mount path is the package's folder; nothing is copied.
+An unknown or unrelated identifier fails at once with
+E_GAMEPACKAGE_NO_PACKAGE_IDENTIFIER, a missing licence with E_ACCESSDENIED.
+XPackageGetMountPathSize/GetMountPath/CloseMountHandle work on the handles.
+
+XStoreQueryAssociatedProducts (and ...ForStoreId for the current game)
+answers for the game's related products (MicrosoftGame.config's
+RelatedProducts plus the launcher's NEXUS_RELATED_PRODUCT_IDS), owned or
+not; XStoreQueryProducts for the products asked. Both go through the
+entitled-products path with a catalog request (<Catalog>, <Describe>): the
+game and its related products are sent for the signed licence as before,
+an owned product keeps every receipt check, and a product the account does
+not own is described from the public display catalogue only, out of the
+collection, its full SKUs (four at most) with no end date. A catalog never
+feeds the game-licence observer and never yields a licence
+(store_license_until). Products not related are never sent for a licence.
+
+tests/Nexus/package-content.cpp covers the mounts (licensed, unlicensed,
+related game's add-on, unrelated, unknown, malformed, handle lifetime, the
+async form) and the DLL's mount without a licence;
+tests/Nexus/package-legacy{,-32}-probe.c the own-package mount;
+tests/Nexus/store-entitlements.cpp the catalog request, the public
+description, catalog parsing and its ownership rules, the products and
+associated queries' argument checks and bridge failures, and the mount's
+licence. Required check counts rise to 363 (package-content) and 153
+(package-legacy).
+
+Playport's lines in this patch are offered under LGPL-2.1-or-later.
+
+Class: feature
+Evidence: docs/evidence/2026-10-30-xbox-addons-runtime.md
+Offered-upstream: no
+---
+ scripts/test-component.mjs            |   4 +-
+ src/System/Package/Mount.h            | 298 ++++++++++++++++++++++++++
+ src/System/Store/Entitled.h           | 116 +++++++---
+ src/System/Store/PackageLicense.h     |  62 ++++--
+ src/System/Store/Receipts.h           | 192 ++++++++++++++++-
+ src/System/XPackage.cpp               |  31 +--
+ src/System/XStore.cpp                 |  30 +--
+ tests/Nexus/package-content.cpp       | 131 +++++++++++
+ tests/Nexus/package-legacy-32-probe.c |  21 +-
+ tests/Nexus/package-legacy-probe.c    |  21 +-
+ tests/Nexus/store-entitlements.cpp    | 169 +++++++++++++++
+ 11 files changed, 998 insertions(+), 77 deletions(-)
+ create mode 100644 src/System/Package/Mount.h
+
+diff --git a/scripts/test-component.mjs b/scripts/test-component.mjs
+index 280e322..13ca5e6 100644
+--- a/scripts/test-component.mjs
++++ b/scripts/test-component.mjs
+@@ -13,8 +13,8 @@ const probes = [
+     ['nexus_game-relaunch',64], ['nexus_game-relaunch-search', 116], ['nexus_async-provider-contract',116], ['nexus_system_device_id', 332], ['nexus_async-schedule', 16],
+     ['nexus_async-completion-lifetime', 2805], ['nexus_taskqueue-teardown', 20],
+     ['nexus_taskqueue-close', 1137], ['nexus_taskqueue-contract', 1374],
+-    ['nexus_package-identity', 15], ['nexus_package-legacy', 139], ['nexus_package-chunks', 312],
+-    ['nexus_package-content',332], ['nexus_package-monitors', 362], ['nexus_package-progress-bytes', 115],
++    ['nexus_package-identity', 15], ['nexus_package-legacy', 153], ['nexus_package-chunks', 312],
++    ['nexus_package-content',363], ['nexus_package-monitors', 362], ['nexus_package-progress-bytes', 115],
+     ['nexus_package-selection', 750],
+     ['nexus_gamesave-sync', 315], ['nexus_gamesave-transfer', 263], ['nexus_gamesave-files', 25],
+     ['nexus_gamesave-file-paths', 55],
+diff --git a/src/System/Package/Mount.h b/src/System/Package/Mount.h
+new file mode 100644
+index 0000000..f35e0d6
+--- /dev/null
++++ b/src/System/Package/Mount.h
+@@ -0,0 +1,298 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later
++ * XPackageMount for packages already extracted on disk: the current game's own
++ * folder, and an installed add-on (content) package of it or a related game,
++ * found as XPackageEnumeratePackages finds it (Content.h). A content package is
++ * mounted only with the account's signed Durable licence for it, the same one
++ * XStoreAcquireLicenseForPackage asks for (Store/PackageLicense.h,
++ * xstore_content_license): being on disk is never a licence. The mount path is
++ * the package's folder; nothing is copied or unpacked. */
++
++HRESULT xstore_content_license( const char *store, LONG *canceled );
++/* An account-free test executable names its own decision (tests/Nexus/package-content.cpp). */
++#ifndef PACKAGE_MOUNT_LICENSE
++#define PACKAGE_MOUNT_LICENSE xstore_content_license
++#endif
++
++#define PACKAGE_MOUNT_PATH ( MAX_PATH * 3 )
++
++struct package_mount
++{
++    char identifier[33], store[13], path[PACKAGE_MOUNT_PATH];
++    BOOL content;
++    struct package_mount *next;
++};
++static SRWLOCK package_mount_lock = SRWLOCK_INIT;
++static struct package_mount *package_mounts;
++
++static BOOL package_mount_id( const char *identifier )
++{
++    UINT i;
++    if ( !identifier || strlen( identifier ) != 32 ) return FALSE;
++    for ( i = 0; i < 32; i++ )
++        if ( !( ( identifier[i] >= '0' && identifier[i] <= '9' ) || ( identifier[i] >= 'a' && identifier[i] <= 'f' ) ) )
++            return FALSE;
++    return TRUE;
++}
++
++static BOOL package_mount_utf8( const WCHAR *path, char *out )
++{
++    return WideCharToMultiByte( CP_UTF8, WC_ERR_INVALID_CHARS, path, -1, out, PACKAGE_MOUNT_PATH, NULL, NULL ) > 1;
++}
++
++/* An installed content package of the current game or a related one, by identifier. */
++static HRESULT package_mount_content( const char *identifier, struct package_mount *mount )
++{
++    struct content_snapshot *snapshot;
++    HRESULT hr;
++    UINT i, found = 0;
++    if ( !( snapshot = static_cast<std::remove_reference_t<decltype( snapshot )>>( calloc( 1, sizeof( *snapshot ) ) ) ) )
++        return E_OUTOFMEMORY;
++    snapshot->current = GetContentConfiguration();
++    hr = E_GAMEPACKAGE_NO_PACKAGE_IDENTIFIER;
++    if ( content_id( snapshot->current.store ) && snapshot->current.identity[0] &&
++         SUCCEEDED( content_discover( snapshot ) ) )
++    {
++        for ( i = 0; i < snapshot->count; i++ )
++        {
++            const struct content_package *package = &snapshot->packages[i];
++            if ( strcmp( package->identifier, identifier ) ||
++                 !content_matches( snapshot, package, XPackageEnumerationScope::ThisAndRelated ) )
++                continue;
++            if ( found++ ) break;
++            memcpy( mount->store, package->store, sizeof( mount->store ) );
++            if ( !package_mount_utf8( package->path, mount->path ) ) found = 2;
++        }
++        if ( found == 1 )
++        {
++            mount->content = TRUE;
++            hr = S_OK;
++        }
++    }
++    free( snapshot );
++    return hr;
++}
++
++/* The current game's own package: the folder holding its MicrosoftGame.config, the
++ * one its executable lives in or under, when the identifier is its own. */
++static HRESULT package_mount_current( const char *identifier, struct package_mount *mount )
++{
++    WCHAR path[MAX_PATH], file[MAX_PATH], *sep;
++    char own[33];
++    if ( FAILED( package_identifier( own, sizeof( own ) ) ) || strcmp( own, identifier ) )
++        return E_GAMEPACKAGE_NO_PACKAGE_IDENTIFIER;
++    if ( !GetModuleFileNameW( NULL, path, ARRAY_SIZE( path ) ) || !( sep = wcsrchr( path, '\\' ) ) )
++        return E_GAMEPACKAGE_NO_PACKAGE_IDENTIFIER;
++    *sep = 0;
++    while ( content_join( path, L"MicrosoftGame.config", file ) )
++    {
++        if ( GetFileAttributesW( file ) != INVALID_FILE_ATTRIBUTES )
++        {
++            if ( !package_mount_utf8( path, mount->path ) ) break;
++            mount->content = FALSE;
++            return S_OK;
++        }
++        if ( !( sep = wcsrchr( path, '\\' ) ) || sep <= path + 2 ) break;
++        *sep = 0;
++    }
++    return E_GAMEPACKAGE_NO_PACKAGE_IDENTIFIER;
++}
++
++/* What `identifier` names on disk, without any licence: installation lookup only. */
++static HRESULT package_mount_resolve( const char *identifier, struct package_mount *mount )
++{
++    HRESULT hr;
++    memset( mount, 0, sizeof( *mount ) );
++    if ( !package_mount_id( identifier ) ) return E_INVALIDARG;
++    memcpy( mount->identifier, identifier, sizeof( mount->identifier ) );
++    if ( ( hr = package_mount_content( identifier, mount ) ) != E_GAMEPACKAGE_NO_PACKAGE_IDENTIFIER ) return hr;
++    return package_mount_current( identifier, mount );
++}
++
++/* Licence (content packages), then a registered handle. */
++static HRESULT package_mount_finish( struct package_mount *resolved, LONG *canceled, struct package_mount **out )
++{
++    struct package_mount *mount;
++    HRESULT hr;
++    *out = NULL;
++    if ( resolved->content && FAILED( hr = PACKAGE_MOUNT_LICENSE( resolved->store, canceled ) ) ) return hr;
++    if ( InterlockedCompareExchange( canceled, 0, 0 ) ) return E_ABORT;
++    if ( !( mount = static_cast<std::remove_reference_t<decltype( mount )>>( malloc( sizeof( *mount ) ) ) ) )
++        return E_OUTOFMEMORY;
++    *mount = *resolved;
++    *out = mount;
++    return S_OK;
++}
++
++static void package_mount_publish( struct package_mount *mount )
++{
++    AcquireSRWLockExclusive( &package_mount_lock );
++    mount->next = package_mounts;
++    package_mounts = mount;
++    ReleaseSRWLockExclusive( &package_mount_lock );
++}
++
++static HRESULT package_mount_sync( const char *identifier, XPackageMountHandle *out )
++{
++    struct package_mount resolved, *mount;
++    LONG canceled = 0;
++    HRESULT hr;
++    if ( !out ) return E_INVALIDARG;
++    *out = NULL;
++    if ( FAILED( hr = package_mount_resolve( identifier, &resolved ) ) ) return hr;
++    if ( FAILED( hr = package_mount_finish( &resolved, &canceled, &mount ) ) ) return hr;
++    package_mount_publish( mount );
++    *out = reinterpret_cast<XPackageMountHandle>( mount );
++    return S_OK;
++}
++
++static HRESULT package_mount_path( XPackageMountHandle handle, SIZE_T size, char *path, SIZE_T *needed )
++{
++    struct package_mount *mount;
++    HRESULT hr = E_INVALIDARG;
++    AcquireSRWLockShared( &package_mount_lock );
++    for ( mount = package_mounts; mount && mount != reinterpret_cast<struct package_mount *>( handle ); mount = mount->next )
++        ;
++    if ( mount )
++    {
++        SIZE_T length = strlen( mount->path ) + 1;
++        hr = S_OK;
++        if ( needed ) *needed = length;
++        if ( path )
++        {
++            if ( size < length )
++                hr = E_NOT_SUFFICIENT_BUFFER;
++            else
++                memcpy( path, mount->path, length );
++        }
++    }
++    ReleaseSRWLockShared( &package_mount_lock );
++    return hr;
++}
++
++static void package_mount_close( XPackageMountHandle handle )
++{
++    struct package_mount **link, *mount;
++    AcquireSRWLockExclusive( &package_mount_lock );
++    for ( link = &package_mounts; *link && *link != reinterpret_cast<struct package_mount *>( handle );
++          link = &( *link )->next )
++        ;
++    mount = *link;
++    if ( mount ) *link = mount->next;
++    ReleaseSRWLockExclusive( &package_mount_lock );
++    free( mount );
++}
++
++/* The runtime's own XAsync implementation, with a reference; not through QueryApiImpl,
++ * which would tie package code to the DLL's entry points. */
++static HRESULT package_mount_threading( IXThreadingImpl **out )
++{
++    *out = x_threading_impl;
++    if ( !*out ) return E_UNEXPECTED;
++    ( *out )->AddRef();
++    return S_OK;
++}
++
++struct package_mount_async
++{
++    LONG refs, canceled, started;
++    struct package_mount resolved;
++    struct package_mount *mount;
++    IXThreadingImpl *threading;
++    XAsyncBlock *async;
++};
++static const char package_mount_identity{};
++
++static void package_mount_async_release( struct package_mount_async *context )
++{
++    if ( InterlockedDecrement( &context->refs ) ) return;
++    free( context->mount );
++    ( context->threading )->Release();
++    free( context );
++}
++
++static DWORD WINAPI package_mount_worker( void *arg )
++{
++    package_mount_async *context = static_cast<package_mount_async *>( arg );
++    HRESULT hr = E_ABORT;
++    if ( !InterlockedCompareExchange( &context->canceled, 0, 0 ) )
++        hr = package_mount_finish( &context->resolved, &context->canceled, &context->mount );
++    if ( InterlockedCompareExchange( &context->canceled, 0, 0 ) ) hr = E_ABORT;
++    ( context->threading )->XAsyncComplete( context->async, hr, SUCCEEDED( hr ) ? sizeof( void * ) : 0 );
++    package_mount_async_release( context );
++    return 0;
++}
++
++static HRESULT WINAPI package_mount_provider( XAsyncOp op, const XAsyncProviderData *data )
++{
++    package_mount_async *context = static_cast<package_mount_async *>( data->context );
++    HANDLE worker;
++    HRESULT hr;
++    switch ( op )
++    {
++    case XAsyncOp::Begin:
++        return ( context->threading )->XAsyncSchedule( data->async, 0 );
++    case XAsyncOp::DoWork:
++        if ( InterlockedCompareExchange( &context->started, 1, 0 ) ) return E_PENDING;
++        if ( InterlockedCompareExchange( &context->canceled, 0, 0 ) ) return E_ABORT;
++        context->async = data->async;
++        InterlockedIncrement( &context->refs );
++        if ( !( worker = CreateThread( NULL, 0, package_mount_worker, context, 0, NULL ) ) )
++        {
++            hr = HRESULT_FROM_WIN32( GetLastError() );
++            package_mount_async_release( context );
++            return hr;
++        }
++        CloseHandle( worker );
++        return E_PENDING;
++    case XAsyncOp::GetResult:
++        if ( !data->buffer || data->bufferSize < sizeof( void * ) || !context->mount ) return E_INVALIDARG;
++        package_mount_publish( context->mount );
++        memcpy( data->buffer, &context->mount, sizeof( void * ) );
++        context->mount = NULL;
++        break;
++    case XAsyncOp::Cancel:
++        InterlockedExchange( &context->canceled, TRUE );
++        break;
++    case XAsyncOp::Cleanup:
++        package_mount_async_release( context );
++        break;
++    default:
++        break;
++    }
++    return S_OK;
++}
++
++/* The package is resolved now (an unknown one fails at once); its licence and the
++ * handle come from the async work. There is no UI: a missing licence is
++ * E_ACCESSDENIED, as the Store's own licence calls answer. */
++static HRESULT package_mount_begin( const char *identifier, XAsyncBlock *async )
++{
++    struct package_mount_async *context;
++    HRESULT hr;
++    if ( !async ) return E_INVALIDARG;
++    if ( !( context = static_cast<std::remove_reference_t<decltype( context )>>( calloc( 1, sizeof( *context ) ) ) ) )
++        return E_OUTOFMEMORY;
++    context->refs = 1;
++    if ( FAILED( hr = package_mount_resolve( identifier, &context->resolved ) ) ||
++         FAILED( hr = package_mount_threading( &context->threading ) ) )
++    {
++        free( context );
++        return hr;
++    }
++    hr = ( context->threading )
++             ->XAsyncBegin( async, context, &package_mount_identity, "XPackageMountWithUiAsync", package_mount_provider );
++    if ( FAILED( hr ) ) package_mount_async_release( context );
++    return hr;
++}
++
++static HRESULT package_mount_result( XAsyncBlock *async, XPackageMountHandle *out )
++{
++    IXThreadingImpl *threading;
++    HRESULT hr;
++    if ( !async || !out ) return E_INVALIDARG;
++    *out = NULL;
++    if ( FAILED( hr = package_mount_threading( &threading ) ) ) return hr;
++    hr = ( threading )->XAsyncGetResult( async, &package_mount_identity, sizeof( void * ), out, NULL );
++    ( threading )->Release();
++    return hr;
++}
+diff --git a/src/System/Store/Entitled.h b/src/System/Store/Entitled.h
+index edc021c..58a038b 100644
+--- a/src/System/Store/Entitled.h
++++ b/src/System/Store/Entitled.h
+@@ -282,7 +282,10 @@ static HRESULT entitled_bool( xmlNodePtr root, const char *name, BOOLEAN *out )
+     return hr;
+ }
+ 
+-static HRESULT entitled_parse( const char *response, UINT16 size, struct entitled_snapshot **out )
++/* `catalog` (XStoreQueryAssociatedProducts, XStoreQueryProducts): a product the
++ * account does not own is described too, marked out of the collection with every
++ * SKU out of it and no end date. An owned one keeps every check below. */
++static HRESULT entitled_parse( const char *response, UINT16 size, struct entitled_snapshot **out, BOOL catalog = FALSE )
+ {
+     xmlDocPtr doc;
+     xmlNodePtr root, node, sku_node;
+@@ -368,7 +371,7 @@ static HRESULT entitled_parse( const char *response, UINT16 size, struct entitle
+         if ( FAILED( hr = entitled_bool( node, "HasDigitalDownload", &p->hasDigitalDownload ) ) ||
+              FAILED( hr = entitled_bool( node, "IsInUserCollection", &p->isInUserCollection ) ) )
+             goto done;
+-        if ( !p->isInUserCollection )
++        if ( !p->isInUserCollection && !catalog )
+         {
+             hr = E_UNEXPECTED;
+             goto done;
+@@ -412,15 +415,20 @@ static HRESULT entitled_parse( const char *response, UINT16 size, struct entitle
+             if ( FAILED( hr = entitled_bool( sku_node, "IsTrial", &s->isTrial ) ) ||
+                  FAILED( hr = entitled_bool( sku_node, "IsInUserCollection", &s->isInUserCollection ) ) )
+                 goto done;
+-            if ( !s->isInUserCollection )
++            if ( !s->isInUserCollection && ( !catalog || p->isInUserCollection ) )
++            {
++                hr = E_UNEXPECTED;
++                goto done;
++            }
++            if ( s->isInUserCollection && !p->isInUserCollection )
+             {
+                 hr = E_UNEXPECTED;
+                 goto done;
+             }
+             if ( FAILED( hr = entitled_uint( sku_node, "EndDate", &value ) ) ) goto done;
+-            if ( value <= ( UINT64 )time( NULL ) || value > INT64_MAX )
++            if ( !s->isInUserCollection ? value != 0 : ( value <= ( UINT64 )time( NULL ) || value > INT64_MAX ) )
+             {
+-                hr = E_ACCESSDENIED;
++                hr = s->isInUserCollection ? E_ACCESSDENIED : E_UNEXPECTED;
+                 goto done;
+             }
+             s->collectionData.endDate = value;
+@@ -439,7 +447,7 @@ done:
+ struct entitled_async
+ {
+     LONG refs, canceled, started, terminal;
+-    BOOL game;
++    BOOL game, catalog;
+     XStoreContextHandle store;
+     UINT64 store_serial, refresh;
+     char *request;
+@@ -480,7 +488,8 @@ static DWORD WINAPI entitled_worker( void *arg )
+         hr = entitled_fetch( context->request, &context->canceled, &snapshot );
+     if ( SUCCEEDED( hr ) )
+     {
+-        if ( !InterlockedCompareExchange( &context->canceled, 0, 0 ) )
++        /* A catalog lists products the account may not own: it never says whether the game is licensed. */
++        if ( !InterlockedCompareExchange( &context->canceled, 0, 0 ) && !context->catalog )
+             game_license_observe( context->store_serial, context->refresh, snapshot );
+         if ( !( context->page = static_cast<std::remove_reference_t<decltype( context->page )>>(
+                     calloc( 1, sizeof( *context->page ) ) ) ) )
+@@ -591,23 +600,24 @@ static HRESULT entitled_start( struct entitled_async *context, XAsyncBlock *asyn
+     return hr;
+ }
+ 
+-static HRESULT entitled_begin( XStoreContextHandle store, UINT32 kinds, UINT32 page_size, XAsyncBlock *async,
+-                               BOOL game = FALSE, BOOL current_only = FALSE )
++/* The bridge request: the current game and its related products for the signed
++ * licence, the kinds, the user's market and language. `describe` (a catalog query)
++ * lists the products to answer for, owned or not; those not related are described
++ * from public metadata only and never sent for a licence. */
++static HRESULT entitled_request( UINT32 kinds, BOOL current_only, BOOL catalog, const char *const *describe,
++                                 UINT32 describe_count, char **out )
+ {
+-    struct entitled_async *context;
+     xmlDocPtr doc;
+     xmlNodePtr root;
+     xmlChar *bytes = NULL;
+     char kind[16], language[128] = "en-US", market[16] = "US";
+     WCHAR locale[85], country[16];
+-    UINT64 xuid, serial;
+-    UINT32 i;
++    UINT32 i, j;
+     int size;
+-    HRESULT hr;
+-    if ( !async || !kinds || ( kinds & ~31 ) || !page_size ) return E_INVALIDARG;
+-    page_size = std::min<UINT32>( page_size, ENTITLED_MAX_PRODUCTS );
+-    if ( FAILED( hr = entitled_store_identity( store, &xuid, &serial ) ) ) return hr;
+-    if ( !entitled_id( GetStoreProductId() ) ) return E_GAME_MISSING_GAME_CONFIG;
++    *out = NULL;
++    if ( describe_count > ENTITLED_MAX_PRODUCTS || ( describe_count && !describe ) ) return E_INVALIDARG;
++    for ( i = 0; i < describe_count; i++ )
++        if ( !entitled_id( describe[i] ) ) return E_INVALIDARG;
+     if ( GetUserDefaultLocaleName( locale, ARRAY_SIZE( locale ) ) )
+         WideCharToMultiByte( CP_UTF8, 0, locale, -1, language, sizeof( language ), NULL, NULL );
+     if ( GetLocaleInfoEx( LOCALE_NAME_USER_DEFAULT, LOCALE_SISO3166CTRYNAME, country, ARRAY_SIZE( country ) ) )
+@@ -624,6 +634,13 @@ static HRESULT entitled_begin( XStoreContextHandle store, UINT32 kinds, UINT32 p
+     for ( i = 0; !current_only && i < entitled_related_count; i++ )
+         if ( strcmp( GetStoreProductId(), entitled_related[i] ) )
+             xmlNewTextChild( root, NULL, BAD_CAST "ProductId", BAD_CAST entitled_related[i] );
++    for ( i = 0; i < describe_count; i++ )
++    {
++        for ( j = 0; j < i && strcmp( describe[i], describe[j] ); j++ )
++            ;
++        if ( j == i ) xmlNewTextChild( root, NULL, BAD_CAST "Describe", BAD_CAST describe[i] );
++    }
++    if ( catalog ) xmlNewTextChild( root, NULL, BAD_CAST "Catalog", BAD_CAST "true" );
+     xmlNewTextChild( root, NULL, BAD_CAST "ProductKinds", BAD_CAST kind );
+     xmlNewTextChild( root, NULL, BAD_CAST "Market", BAD_CAST market );
+     xmlNewTextChild( root, NULL, BAD_CAST "Language", BAD_CAST language );
+@@ -635,26 +652,73 @@ static HRESULT entitled_begin( XStoreContextHandle store, UINT32 kinds, UINT32 p
+         xmlFree( bytes );
+         return E_INVALIDARG;
+     }
+-    context = static_cast<std::remove_reference_t<decltype( context )>>( calloc( 1, sizeof( *context ) ) );
+-    if ( context )
+-    {
+-        context->request = strdup( ( char * )bytes );
+-        context->page_size = page_size;
+-    }
++    *out = strdup( ( char * )bytes );
+     xmlFree( bytes );
+-    if ( !context ) return E_OUTOFMEMORY;
+-    if ( !context->request )
++    return *out ? S_OK : E_OUTOFMEMORY;
++}
++
++/* `catalog`/`describe`: answer for these products whether owned or not (see entitled_request). */
++static HRESULT entitled_begin( XStoreContextHandle store, UINT32 kinds, UINT32 page_size, XAsyncBlock *async,
++                               BOOL game = FALSE, BOOL current_only = FALSE, BOOL catalog = FALSE,
++                               const char *const *describe = NULL, UINT32 describe_count = 0 )
++{
++    struct entitled_async *context;
++    UINT64 xuid, serial;
++    char *request;
++    HRESULT hr;
++    if ( !async || !kinds || ( kinds & ~31 ) || !page_size ) return E_INVALIDARG;
++    page_size = std::min<UINT32>( page_size, ENTITLED_MAX_PRODUCTS );
++    if ( FAILED( hr = entitled_store_identity( store, &xuid, &serial ) ) ) return hr;
++    if ( !entitled_id( GetStoreProductId() ) ) return E_GAME_MISSING_GAME_CONFIG;
++    if ( !catalog && describe_count ) return E_INVALIDARG;
++    if ( FAILED( hr = entitled_request( kinds, current_only, catalog, describe, describe_count, &request ) ) ) return hr;
++    if ( !( context = static_cast<std::remove_reference_t<decltype( context )>>( calloc( 1, sizeof( *context ) ) ) ) )
+     {
+-        free( context );
++        free( request );
+         return E_OUTOFMEMORY;
+     }
++    context->request = request;
++    context->page_size = page_size;
+     context->store_serial = serial;
+     context->store = store;
+     context->game = game;
++    context->catalog = catalog;
+     context->refresh = InterlockedIncrement64( &entitled_next_refresh );
+     return entitled_start( context, async, FALSE );
+ }
+ 
++/* XStoreQueryAssociatedProducts: the game's related products (MicrosoftGame.config's
++ * RelatedProducts and the launcher's NEXUS_RELATED_PRODUCT_IDS), owned or not. With
++ * none, an empty answer; the game itself is not among them. */
++static HRESULT entitled_associated_begin( XStoreContextHandle store, UINT32 kinds, UINT32 page_size, XAsyncBlock *async )
++{
++    const char *ids[256];
++    UINT32 i, count = 0;
++    if ( !GetStoreProductId() ) return E_GAME_MISSING_GAME_CONFIG;
++    for ( i = 0; i < entitled_related_count && count < ARRAY_SIZE( ids ); i++ )
++        if ( strcmp( GetStoreProductId(), entitled_related[i] ) ) ids[count++] = entitled_related[i];
++    if ( !count ) /* Nothing to describe: one valid, empty page. */
++        return entitled_begin( store, kinds, page_size, async, FALSE, TRUE, TRUE, NULL, 0 );
++    return entitled_begin( store, kinds, page_size, async, FALSE, FALSE, TRUE, ids, count );
++}
++
++/* XStoreQueryProducts: the products asked for, owned or not, in one result. Only
++ * the game and its related products are sent for a licence; any other is described
++ * from public metadata as not owned. Action filters narrow purchase actions this
++ * runtime never offers, so they change nothing. */
++static HRESULT entitled_products_begin( XStoreContextHandle store, UINT32 kinds, const char **ids, SIZE_T count,
++                                        const char **filters, SIZE_T filter_count, XAsyncBlock *async )
++{
++    SIZE_T i;
++    if ( !ids || !count || count > ENTITLED_MAX_PRODUCTS || ( filter_count && !filters ) ) return E_INVALIDARG;
++    for ( i = 0; i < count; i++ )
++        if ( !entitled_id( ids[i] ) ) return E_INVALIDARG;
++    for ( i = 0; i < filter_count; i++ )
++        if ( !filters[i] ) return E_INVALIDARG;
++    return entitled_begin( store, kinds, ENTITLED_MAX_PRODUCTS, async, FALSE, FALSE, TRUE, ids,
++                           static_cast<UINT32>( count ) );
++}
++
+ static HRESULT entitled_result( XAsyncBlock *async, XStoreProductQueryHandle *out, BOOL next )
+ {
+     IXThreadingImpl *threading;
+diff --git a/src/System/Store/PackageLicense.h b/src/System/Store/PackageLicense.h
+index 9de0a3c..c510198 100644
+--- a/src/System/Store/PackageLicense.h
++++ b/src/System/Store/PackageLicense.h
+@@ -315,14 +315,12 @@ static void package_license_async_release( struct package_license_async *context
+     free( context );
+ }
+ 
+-static HRESULT store_license_from_snapshot( struct entitled_snapshot *snapshot, const char *store,
+-                                            IXThreadingImpl *threading, BOOL require_package,
+-                                            struct package_license **out )
++/* The end of the signed, unexpired, non-trial Durable licence for `store` in a
++ * verified snapshot, or 0 when it grants none. */
++static UINT64 store_license_until( struct entitled_snapshot *snapshot, const char *store, BOOL require_package )
+ {
+     UINT i, j;
+-    UINT64 until;
+-    *out = NULL;
+-    if ( !snapshot || snapshot->proof_until <= ( UINT64 )time( NULL ) ) return E_ACCESSDENIED;
++    if ( !snapshot || snapshot->proof_until <= ( UINT64 )time( NULL ) ) return 0;
+     for ( i = 0; i < snapshot->count; i++ )
+     {
+         XStoreProduct *product = &snapshot->products[i];
+@@ -333,11 +331,47 @@ static HRESULT store_license_from_snapshot( struct entitled_snapshot *snapshot,
+         {
+             XStoreSku *sku = &product->skus[j];
+             if ( !sku->isInUserCollection || sku->isTrial || sku->collectionData.endDate <= time( NULL ) ) continue;
+-            until = std::min( snapshot->proof_until, ( UINT64 )sku->collectionData.endDate );
+-            return package_license_create( threading, until, out );
++            return std::min( snapshot->proof_until, ( UINT64 )sku->collectionData.endDate );
+         }
+     }
+-    return E_ACCESSDENIED;
++    return 0;
++}
++
++static HRESULT store_license_from_snapshot( struct entitled_snapshot *snapshot, const char *store,
++                                            IXThreadingImpl *threading, BOOL require_package,
++                                            struct package_license **out )
++{
++    UINT64 until = store_license_until( snapshot, store, require_package );
++    *out = NULL;
++    return until ? package_license_create( threading, until, out ) : E_ACCESSDENIED;
++}
++
++/* The request a package licence sends: the current game as parent, `store` as the Durable asked for. */
++static void store_license_request( const char *store, char *request, SIZE_T size )
++{
++    snprintf( request, size,
++              "<Request><ParentProductId>%s</ParentProductId><ProductId>%s</ProductId>"
++              "<ProductKinds>2</ProductKinds><Market>US</Market><Language>en-US</Language></Request>",
++              GetStoreProductId(), store );
++}
++
++/* XPackageMount's licence (XPackage.cpp): the add-on package `store` needs the same
++ * signed Durable licence with a package as XStoreAcquireLicenseForPackage. An
++ * installation found on disk is never a licence. Blocks; `canceled` ends it early. */
++HRESULT xstore_content_license( const char *store, LONG *canceled )
++{
++    struct entitled_snapshot *snapshot = NULL;
++    char request[1024];
++    HRESULT hr;
++    if ( !entitled_id( store ) || !canceled ) return E_INVALIDARG;
++    if ( !entitled_id( GetStoreProductId() ) ) return E_GAME_MISSING_GAME_CONFIG;
++    store_license_request( store, request, sizeof( request ) );
++    hr = entitled_fetch( request, canceled, &snapshot );
++    if ( SUCCEEDED( hr ) && !store_license_until( snapshot, store, TRUE ) ) hr = E_ACCESSDENIED;
++    if ( snapshot ) entitled_snapshot_release( snapshot );
++    if ( InterlockedCompareExchange( canceled, 0, 0 ) ) hr = E_ABORT;
++    xodus_store_license_note( "store-mount-license-result", hr );
++    return hr;
+ }
+ 
+ static HRESULT package_license_from_snapshot( struct entitled_snapshot *snapshot, const char *store,
+@@ -440,10 +474,7 @@ static HRESULT package_license_begin( XStoreContextHandle store, const char *ide
+         free( context );
+         return hr;
+     }
+-    snprintf( context->request, sizeof( context->request ),
+-              "<Request><ParentProductId>%s</ParentProductId><ProductId>%s</ProductId>"
+-              "<ProductKinds>2</ProductKinds><Market>US</Market><Language>en-US</Language></Request>",
+-              GetStoreProductId(), context->store );
++    store_license_request( context->store, context->request, sizeof( context->request ) );
+     if ( FAILED( hr = QueryApiImpl( CLSID_XThreadingImpl, IID_IXThreadingImpl, ( void ** )&context->threading ) ) )
+     {
+         free( context );
+@@ -483,10 +514,7 @@ static HRESULT durable_license_begin( XStoreContextHandle store, const char *ide
+     context->store_context = store;
+     context->store_serial = serial;
+     memcpy( context->store, identifier, sizeof( context->store ) );
+-    snprintf( context->request, sizeof( context->request ),
+-              "<Request><ParentProductId>%s</ParentProductId><ProductId>%s</ProductId>"
+-              "<ProductKinds>2</ProductKinds><Market>US</Market><Language>en-US</Language></Request>",
+-              GetStoreProductId(), identifier );
++    store_license_request( identifier, context->request, sizeof( context->request ) );
+     if ( FAILED( hr = QueryApiImpl( CLSID_XThreadingImpl, IID_IXThreadingImpl, ( void ** )&context->threading ) ) )
+     {
+         free( context );
+diff --git a/src/System/Store/Receipts.h b/src/System/Store/Receipts.h
+index 44ce25c..eba4d74 100644
+--- a/src/System/Store/Receipts.h
++++ b/src/System/Store/Receipts.h
+@@ -613,11 +613,155 @@ static HRESULT receipt_metadata( struct receipt_license *license, UINT32 kinds,
+     return hr;
+ }
+ 
++#define RECEIPT_CATALOG_SKUS 4
++
++/* A product the account does not own, for a catalog query: public metadata only,
++ * out of the collection, its first non-trial SKUs (at most four) with no end date.
++ * A product the catalogue does not know, or of a kind not asked for, is left out. */
++static HRESULT receipt_catalog_parse( const char *store, UINT32 kinds, const BYTE *bytes, SIZE_T size, xmlNodePtr root )
++{
++    IJsonObject *document = NULL, *product = NULL, *localized = NULL, *product_properties = NULL;
++    IJsonArray *products = NULL, *locals = NULL, *skus = NULL;
++    char *id = NULL, *type = NULL, *title = NULL, *lang = NULL, *offer = NULL, kind_text[8];
++    UINT32 kind = 0, count, i, added = 0;
++    BOOL download = FALSE;
++    xmlNodePtr node = NULL;
++    HRESULT hr = E_UNEXPECTED;
++    if ( FAILED( receipt_json( bytes, size, &document ) ) ||
++         FAILED( receipt_get_array( document, L"Products", &products ) ) ||
++         FAILED( receipt_array_size( products, &count ) ) || count > 1 )
++        goto done;
++    hr = S_OK;
++    if ( !count ) goto done;
++    hr = E_UNEXPECTED;
++    if ( FAILED( ( products )->GetObjectAt( 0, &product ) ) ) goto done;
++    id = receipt_string( product, L"ProductId", 12 );
++    type = receipt_string( product, L"ProductType", 32 );
++    if ( !id || strcmp( id, store ) || !type ) goto done;
++    if ( !strcmp( type, "Consumable" ) )
++        kind = 1;
++    else if ( !strcmp( type, "Durable" ) )
++        kind = 2;
++    else if ( !strcmp( type, "Game" ) )
++        kind = 4;
++    else if ( !strcmp( type, "Pass" ) )
++        kind = 8;
++    else if ( !strcmp( type, "UnmanagedConsumable" ) )
++        kind = 16;
++    hr = S_OK;
++    if ( !( kind & kinds ) ) goto done;
++    hr = E_UNEXPECTED;
++    if ( SUCCEEDED( receipt_get_object( product, L"Properties", &product_properties ) ) )
++        offer = receipt_string( product_properties, L"InAppOfferToken", 256 );
++    if ( FAILED( receipt_get_array( product, L"LocalizedProperties", &locals ) ) ||
++         FAILED( ( locals )->GetObjectAt( 0, &localized ) ) ||
++         !( title = receipt_string( localized, L"ProductTitle", 1024 ) ) ||
++         !( lang = receipt_string( localized, L"Language", 35 ) ) ||
++         FAILED( receipt_get_array( product, L"DisplaySkuAvailabilities", &skus ) ) ||
++         FAILED( receipt_array_size( skus, &count ) ) || count > 100 )
++        goto done;
++    snprintf( kind_text, sizeof( kind_text ), "%u", kind );
++    if ( !( node = xmlNewNode( NULL, BAD_CAST "Product" ) ) )
++    {
++        hr = E_OUTOFMEMORY;
++        goto done;
++    }
++    xmlNewTextChild( node, NULL, BAD_CAST "StoreId", BAD_CAST id );
++    xmlNewTextChild( node, NULL, BAD_CAST "Title", BAD_CAST title );
++    xmlNewTextChild( node, NULL, BAD_CAST "Description", BAD_CAST "" );
++    xmlNewTextChild( node, NULL, BAD_CAST "Language", BAD_CAST lang );
++    xmlNewTextChild( node, NULL, BAD_CAST "InAppOfferToken", BAD_CAST( offer ? offer : "" ) );
++    xmlNewTextChild( node, NULL, BAD_CAST "ProductKind", BAD_CAST kind_text );
++    xmlNewTextChild( node, NULL, BAD_CAST "HasDigitalDownload", BAD_CAST "false" );
++    xmlNewTextChild( node, NULL, BAD_CAST "IsInUserCollection", BAD_CAST "false" );
++    for ( i = 0; i < count && added < RECEIPT_CATALOG_SKUS; i++ )
++    {
++        IJsonObject *entry = NULL, *sku = NULL, *properties = NULL;
++        IJsonArray *packages = NULL;
++        UINT32 packages_count = 0;
++        boolean trial = TRUE;
++        char *sku_id = NULL;
++        xmlNodePtr sku_node;
++        if ( SUCCEEDED( ( skus )->GetObjectAt( i, &entry ) ) && SUCCEEDED( receipt_get_object( entry, L"Sku", &sku ) ) &&
++             ( sku_id = receipt_string( sku, L"SkuId", 4 ) ) && entitled_sku_id( sku_id ) &&
++             SUCCEEDED( receipt_get_object( sku, L"Properties", &properties ) ) &&
++             SUCCEEDED( receipt_get_boolean( properties, L"IsTrial", &trial ) ) && !trial )
++        {
++            if ( SUCCEEDED( receipt_get_array( properties, L"Packages", &packages ) ) )
++            {
++                receipt_array_size( packages, &packages_count );
++                ( packages )->Release();
++            }
++            download = download || packages_count;
++            if ( ( sku_node = xmlNewTextChild( node, NULL, BAD_CAST "Sku", NULL ) ) )
++            {
++                xmlNewTextChild( sku_node, NULL, BAD_CAST "SkuId", BAD_CAST sku_id );
++                xmlNewTextChild( sku_node, NULL, BAD_CAST "Title", BAD_CAST title );
++                xmlNewTextChild( sku_node, NULL, BAD_CAST "Description", BAD_CAST "" );
++                xmlNewTextChild( sku_node, NULL, BAD_CAST "Language", BAD_CAST lang );
++                xmlNewTextChild( sku_node, NULL, BAD_CAST "IsTrial", BAD_CAST "false" );
++                xmlNewTextChild( sku_node, NULL, BAD_CAST "IsInUserCollection", BAD_CAST "false" );
++                xmlNewTextChild( sku_node, NULL, BAD_CAST "EndDate", BAD_CAST "0" );
++                added++;
++            }
++        }
++        free( sku_id );
++        if ( properties ) ( properties )->Release();
++        if ( sku ) ( sku )->Release();
++        if ( entry ) ( entry )->Release();
++    }
++    hr = S_OK;
++    /* With no full SKU on sale there is nothing to describe. */
++    if ( !added ) goto done;
++    if ( download ) xmlNodeSetContent( entitled_child( node, "HasDigitalDownload" ), BAD_CAST "true" );
++    if ( !xmlAddChild( root, node ) )
++    {
++        hr = E_OUTOFMEMORY;
++        goto done;
++    }
++    node = NULL;
++done:
++    if ( node ) xmlFreeNode( node );
++    if ( document ) ( document )->Release();
++    if ( product ) ( product )->Release();
++    if ( localized ) ( localized )->Release();
++    if ( product_properties ) ( product_properties )->Release();
++    if ( products ) ( products )->Release();
++    if ( locals ) ( locals )->Release();
++    if ( skus ) ( skus )->Release();
++    free( id );
++    free( type );
++    free( title );
++    free( lang );
++    free( offer );
++    return hr;
++}
++
++static HRESULT receipt_catalog( const char *store, UINT32 kinds, const char *market, const char *language,
++                                xmlNodePtr root )
++{
++    WCHAR path[256];
++    BYTE *bytes = NULL;
++    SIZE_T size;
++    HRESULT hr;
++    if ( swprintf( path, ARRAY_SIZE( path ), L"/v7.0/products?bigIds=%hs&market=%hs&languages=%hs", store, market,
++                   language ) < 0 )
++        return E_UNEXPECTED;
++    hr = receipt_public_get( L"displaycatalog.mp.microsoft.com", path, 4 * 1024 * 1024, &bytes, &size );
++    if ( SUCCEEDED( hr ) ) hr = receipt_catalog_parse( store, kinds, bytes, size, root );
++    free( bytes );
++    return hr;
++}
++
+ static HRESULT entitled_fetch( const char *request, LONG *canceled, struct entitled_snapshot **out )
+ {
+     xmlDocPtr doc = NULL, result = NULL;
+     xmlNodePtr root, node, response_root;
+     char *ids[ENTITLED_MAX_PRODUCTS] = { 0 }, *market = NULL, *language = NULL;
++    /* A catalog request answers for exactly its Describe products, owned or not. */
++    char *describe[ENTITLED_MAX_PRODUCTS] = { 0 };
++    UINT32 describe_count = 0;
++    BOOL catalog = FALSE;
+     struct receipt_license licenses[ENTITLED_MAX_PRODUCTS];
+     UINT32 count = 0, license_count = 0, i, j, batch;
+     UINT64 kinds, expiry = UINT64_MAX, proof_until = 0;
+@@ -637,6 +781,25 @@ static HRESULT entitled_fetch( const char *request, LONG *canceled, struct entit
+         }
+     for ( i = 0; i < count; i++ )
+         if ( !entitled_id( ids[i] ) ) goto done;
++    if ( ( node = entitled_child( root, "Catalog" ) ) )
++    {
++        xmlChar *value = xmlNodeGetContent( node );
++        catalog = value && !strcmp( ( char * )value, "true" );
++        xmlFree( value );
++        if ( !catalog ) goto done;
++    }
++    for ( node = root->children; node; node = node->next )
++        if ( node->type == XML_ELEMENT_NODE && !strcmp( ( char * )node->name, "Describe" ) )
++        {
++            if ( !catalog || describe_count == ENTITLED_MAX_PRODUCTS ) goto done;
++            describe[describe_count++] = ( char * )xmlNodeGetContent( node );
++        }
++    for ( i = 0; i < describe_count; i++ )
++    {
++        if ( !entitled_id( describe[i] ) ) goto done;
++        for ( j = 0; j < i; j++ )
++            if ( !strcmp( describe[i], describe[j] ) ) goto done;
++    }
+     market = entitled_text( root, "Market" );
+     language = entitled_text( root, "Language" );
+     if ( !market || strlen( market ) != 2 || !language || strlen( language ) > 35 ||
+@@ -715,10 +878,35 @@ static HRESULT entitled_fetch( const char *request, LONG *canceled, struct entit
+             hr = HRESULT_FROM_WIN32( ERROR_TIMEOUT );
+             goto done;
+         }
++        if ( catalog )
++        {
++            for ( j = 0; j < describe_count && strcmp( describe[j], licenses[i].id ); j++ )
++                ;
++            if ( j == describe_count ) continue;
++        }
+         hr = receipt_metadata( &licenses[i], kinds, market, language, response_root );
+         xodus_store_license_note( "store-entitled-metadata", hr );
+         if ( FAILED( hr ) ) goto done;
+     }
++    for ( i = 0; i < describe_count; i++ )
++    {
++        for ( j = 0; j < license_count && strcmp( describe[i], licenses[j].id ); j++ )
++            ;
++        if ( j < license_count ) continue;
++        if ( InterlockedCompareExchange( canceled, 0, 0 ) )
++        {
++            hr = E_ABORT;
++            goto done;
++        }
++        if ( GetTickCount64() >= deadline )
++        {
++            hr = HRESULT_FROM_WIN32( ERROR_TIMEOUT );
++            goto done;
++        }
++        hr = receipt_catalog( describe[i], kinds, market, language, response_root );
++        xodus_store_license_note( "store-catalog-metadata", hr );
++        if ( FAILED( hr ) ) goto done;
++    }
+     proof_until = expiry;
+     if ( expiry > ( UINT64 )time( NULL ) + 60 ) expiry = ( UINT64 )time( NULL ) + 60;
+     snprintf( number, sizeof( number ), "%llu", ( unsigned long long )expiry );
+@@ -732,7 +920,7 @@ static HRESULT entitled_fetch( const char *request, LONG *canceled, struct entit
+             hr = E_OUTOFMEMORY;
+             goto done;
+         }
+-        hr = size <= 60000 ? entitled_parse( ( char * )bytes, size, out )
++        hr = size <= 60000 ? entitled_parse( ( char * )bytes, size, out, catalog )
+                            : HRESULT_FROM_WIN32( ERROR_INSUFFICIENT_BUFFER );
+         if ( SUCCEEDED( hr ) ) ( *out )->proof_until = proof_until;
+         xmlFree( bytes );
+@@ -740,6 +928,8 @@ static HRESULT entitled_fetch( const char *request, LONG *canceled, struct entit
+ done:
+     for ( i = 0; i < count; i++ )
+         free( ids[i] );
++    for ( i = 0; i < describe_count; i++ )
++        free( describe[i] );
+     free( market );
+     free( language );
+     if ( doc ) xmlFreeDoc( doc );
+diff --git a/src/System/XPackage.cpp b/src/System/XPackage.cpp
+index 2119ab8..c998be2 100644
+--- a/src/System/XPackage.cpp
++++ b/src/System/XPackage.cpp
+@@ -87,6 +87,8 @@ static HRESULT package_identifier( char *buffer, SIZE_T bufferSize )
+     }
+ }
+ 
++#include "Package/Mount.h"
++
+ HRESULT WINAPI XPackageImpl::XPackageGetCurrentProcessPackageIdentifier( SIZE_T bufferSize, char *buffer )
+ {
+     if ( !buffer || !bufferSize ) return E_INVALIDARG;
+@@ -349,29 +351,30 @@ BOOLEAN WINAPI XPackageImpl::XPackageUnregisterPackageInstalled( XTaskQueueRegis
+     return TRUE;
+ }
+ 
++/* The game's own folder, or an installed add-on's with the account's licence for it (Package/Mount.h). */
+ HRESULT WINAPI XPackageImpl::XPackageMountLegacy( const char *identifier, XPackageMountHandle *mount )
+ {
+-
+-    if ( !mount ) return E_INVALIDARG;
+-    *mount = NULL;
+-    if ( !identifier || !identifier[0] ) return E_INVALIDARG;
+-    /* Do not turn an installation lookup into a licensed mount. */
+-    return E_NOTIMPL;
++    return package_mount_sync( identifier, mount );
+ }
+ 
+ HRESULT WINAPI XPackageImpl::XPackageGetMountPathSize( XPackageMountHandle mount, SIZE_T *pathSize )
+ {
+-
+-    return E_NOTIMPL;
++    if ( !pathSize ) return E_INVALIDARG;
++    *pathSize = 0;
++    return package_mount_path( mount, 0, NULL, pathSize );
+ }
+ 
+ HRESULT WINAPI XPackageImpl::XPackageGetMountPath( XPackageMountHandle mount, SIZE_T pathSize, char *path )
+ {
+-
+-    return E_NOTIMPL;
++    if ( !path || !pathSize ) return E_INVALIDARG;
++    path[0] = 0;
++    return package_mount_path( mount, pathSize, path, NULL );
+ }
+ 
+-void WINAPI XPackageImpl::XPackageCloseMountHandle( XPackageMountHandle mount ) {}
++void WINAPI XPackageImpl::XPackageCloseMountHandle( XPackageMountHandle mount )
++{
++    package_mount_close( mount );
++}
+ 
+ HRESULT WINAPI XPackageImpl::XPackageGetIdentifierLegacy( const char *store, SIZE_T size, char *identifier )
+ {
+@@ -576,14 +579,12 @@ HRESULT WINAPI XPackageImpl::XPackageRegisterPackageInstalled2( XTaskQueueHandle
+ 
+ HRESULT WINAPI XPackageImpl::XPackageMountWithUiAsync( const char *packageIdentifier, XAsyncBlock *async )
+ {
+-
+-    return E_NOTIMPL;
++    return package_mount_begin( packageIdentifier, async );
+ }
+ 
+ HRESULT WINAPI XPackageImpl::XPackageMountWithUiResult( XAsyncBlock *async, XPackageMountHandle *mount )
+ {
+-
+-    return E_NOTIMPL;
++    return package_mount_result( async, mount );
+ }
+ 
+ HRESULT WINAPI XPackageImpl::XPackageEnumeratePackages3( XPackageKind kind, XPackageEnumerationScope scope,
+diff --git a/src/System/XStore.cpp b/src/System/XStore.cpp
+index d2bef94..476bb4a 100644
+--- a/src/System/XStore.cpp
++++ b/src/System/XStore.cpp
+@@ -50,16 +50,16 @@ HRESULT WINAPI XStoreImpl::XStoreQueryAssociatedProductsAsync( const XStoreConte
+                                                                XStoreProductKind productKinds,
+                                                                UINT32 maxItemsToRetrievePerPage, XAsyncBlock *async )
+ {
+-    ( void )0;
+-    NEXUS_STORE_META( 32, E_NOTIMPL, 0, NULL );
+-    return E_NOTIMPL;
++    HRESULT hr = entitled_associated_begin( storeContextHandle, static_cast<UINT32>( productKinds ),
++                                            maxItemsToRetrievePerPage, async );
++    NEXUS_STORE_META( 32, hr, 0, NULL );
++    return hr;
+ }
+ 
+ HRESULT WINAPI XStoreImpl::XStoreQueryAssociatedProductsResult( XAsyncBlock *async,
+                                                                 XStoreProductQueryHandle *productQueryHandle )
+ {
+-    ( void )0;
+-    return E_NOTIMPL;
++    return entitled_result( async, productQueryHandle, FALSE );
+ }
+ 
+ HRESULT WINAPI XStoreImpl::XStoreQueryProductsAsync( const XStoreContextHandle storeContextHandle,
+@@ -67,15 +67,15 @@ HRESULT WINAPI XStoreImpl::XStoreQueryProductsAsync( const XStoreContextHandle s
+                                                      SIZE_T storeIdsCount, const char **actionFilters,
+                                                      SIZE_T actionFiltersCount, XAsyncBlock *async )
+ {
+-    ( void )0;
+-    NEXUS_STORE_META( 33, E_NOTIMPL, 0, NULL );
+-    return E_NOTIMPL;
++    HRESULT hr = entitled_products_begin( storeContextHandle, static_cast<UINT32>( productKinds ), storeIds,
++                                          storeIdsCount, actionFilters, actionFiltersCount, async );
++    NEXUS_STORE_META( 33, hr, 0, NULL );
++    return hr;
+ }
+ 
+ HRESULT WINAPI XStoreImpl::XStoreQueryProductsResult( XAsyncBlock *async, XStoreProductQueryHandle *productQueryHandle )
+ {
+-    ( void )0;
+-    return E_NOTIMPL;
++    return entitled_result( async, productQueryHandle, FALSE );
+ }
+ 
+ HRESULT WINAPI XStoreImpl::XStoreQueryEntitledProductsAsync( const XStoreContextHandle storeContextHandle,
+@@ -798,15 +798,17 @@ HRESULT WINAPI XStoreImpl::XStoreQueryAssociatedProductsForStoreIdAsync( const X
+                                                                          UINT32 maxItemsToRetrievePerPage,
+                                                                          XAsyncBlock *async )
+ {
+-    ( void )0;
+-    return E_NOTIMPL;
++    /* The current game's associated products; another product's are not known here. */
++    if ( !entitled_id( productId ) ) return E_INVALIDARG;
++    if ( !GetStoreProductId() || strcmp( productId, GetStoreProductId() ) ) return E_NOTIMPL;
++    return entitled_associated_begin( storeContextHandle, static_cast<UINT32>( productKinds ),
++                                      maxItemsToRetrievePerPage, async );
+ }
+ 
+ HRESULT WINAPI XStoreImpl::XStoreQueryAssociatedProductsForStoreIdResult( XAsyncBlock *async,
+                                                                           XStoreProductQueryHandle *productQueryHandle )
+ {
+-    ( void )0;
+-    return E_NOTIMPL;
++    return entitled_result( async, productQueryHandle, FALSE );
+ }
+ 
+ HRESULT WINAPI XStoreImpl::XStoreQueryPackageUpdatesAsync( XStoreContextHandle storeContextHandle,
+diff --git a/tests/Nexus/package-content.cpp b/tests/Nexus/package-content.cpp
+index cefd186..349ca71 100644
+--- a/tests/Nexus/package-content.cpp
++++ b/tests/Nexus/package-content.cpp
+@@ -5,6 +5,19 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include <windows.h>
++/* This executable's licence decision for XPackageMount (Package/Mount.h); the DLL's
++ * own asks the bridge, which these fixtures never reach. */
++static HRESULT content_license_answer = E_ACCESSDENIED;
++static char content_license_store[13];
++static unsigned content_license_calls;
++static HRESULT fixture_content_license( const char *store, LONG *canceled )
++{
++    ++content_license_calls;
++    snprintf( content_license_store, sizeof( content_license_store ), "%s", store );
++    return InterlockedCompareExchange( canceled, 0, 0 ) ? E_ABORT : content_license_answer;
++}
++#define PACKAGE_MOUNT_LICENSE fixture_content_license
+ #include "../../src/System/XPackage.cpp"
+ #include <xstore.h>
+ 
+@@ -252,6 +265,99 @@ static void chunk_order( IXPackageImpl *package, const char *id, HRESULT install
+     CHECK( "chunks-null-language", ( package )->XPackageChangeChunkInstallOrder( id, 1, &bad ) == E_INVALIDARG );
+ }
+ 
++static void CALLBACK mount_complete( XAsyncBlock *async )
++{
++    ( void )async;
++}
++
++/* XPackageMount (Package/Mount.h): an installed add-on of this game or a related one
++ * mounts as its own folder, only with its licence; anything else is refused. */
++static void mounts( void )
++{
++    const char *own = "00000001111122223333444444444444", *related = "00000004111122223333444444444444";
++    XPackageMountHandle mount = NULL;
++    WCHAR root[MAX_PATH];
++    char expected[MAX_PATH * 3], path[MAX_PATH * 3];
++    SIZE_T size = 0;
++    content_join( folder, L"own-one", root );
++    WideCharToMultiByte( CP_UTF8, 0, root, -1, expected, sizeof( expected ), NULL, NULL );
++
++    content_license_answer = E_ACCESSDENIED;
++    content_license_calls = 0;
++    mount = ( XPackageMountHandle )1;
++    CHECK( "mount-unlicensed", package_mount_sync( own, &mount ) == E_ACCESSDENIED && !mount );
++    CHECK( "mount-licence-asked-for-the-add-on",
++           content_license_calls == 1 && !strcmp( content_license_store, "D00000000001" ) );
++
++    content_license_answer = S_OK;
++    CHECK( "mount-licensed", package_mount_sync( own, &mount ) == S_OK && mount );
++    CHECK( "mount-path-size", package_mount_path( mount, 0, NULL, &size ) == S_OK && size == strlen( expected ) + 1 );
++    CHECK( "mount-path-short", package_mount_path( mount, size - 1, path, NULL ) == E_NOT_SUFFICIENT_BUFFER );
++    CHECK( "mount-path", package_mount_path( mount, sizeof( path ), path, NULL ) == S_OK && !strcmp( path, expected ) );
++    package_mount_close( mount );
++    CHECK( "mount-closed", package_mount_path( mount, sizeof( path ), path, NULL ) == E_INVALIDARG );
++
++    content_license_calls = 0;
++    CHECK( "mount-related-game-add-on", package_mount_sync( related, &mount ) == S_OK && mount &&
++                                            !strcmp( content_license_store, "D00000000003" ) );
++    package_mount_close( mount );
++    mount = ( XPackageMountHandle )1;
++    CHECK( "mount-unrelated-add-on",
++           package_mount_sync( "00000006111122223333444444444444", &mount ) == E_GAMEPACKAGE_NO_PACKAGE_IDENTIFIER &&
++               !mount );
++    CHECK( "mount-unknown", package_mount_sync( "00000099111122223333444444444444", &mount ) ==
++                                E_GAMEPACKAGE_NO_PACKAGE_IDENTIFIER );
++    CHECK( "mount-no-licence-for-what-is-not-there", content_license_calls == 1 );
++    CHECK( "mount-invalid-id", package_mount_sync( "0000000111112222333344444444444G", &mount ) == E_INVALIDARG );
++    CHECK( "mount-upper-case-id", package_mount_sync( "0000000111112222333344444444444A", &mount ) == E_INVALIDARG );
++    CHECK( "mount-null-id", package_mount_sync( NULL, &mount ) == E_INVALIDARG );
++    CHECK( "mount-null-out", package_mount_sync( own, NULL ) == E_INVALIDARG );
++    CHECK( "mount-foreign-handle-size", package_mount_path( ( XPackageMountHandle )1, 0, NULL, &size ) == E_INVALIDARG );
++    package_mount_close( ( XPackageMountHandle )1 );
++
++    /* The async form: resolved at once, licensed in the work, the handle in the result. */
++    {
++        IXThreadingImpl *threads = NULL;
++        XTaskQueueHandle queue = NULL;
++        XAsyncBlock block = { 0 };
++        ULONGLONG start;
++        CHECK( "mount-async-threading", package_mount_threading( &threads ) == S_OK && threads );
++        if ( !threads ) return;
++        CHECK( "mount-async-queue", threads->XTaskQueueCreate( XTaskQueueDispatchMode::Manual,
++                                                               XTaskQueueDispatchMode::Manual, &queue ) == S_OK );
++        for ( HRESULT answer : { S_OK, E_ACCESSDENIED } )
++        {
++            content_license_answer = answer;
++            memset( &block, 0, sizeof( block ) );
++            block.queue = queue;
++            block.callback = mount_complete;
++            CHECK( "mount-async-begin", package_mount_begin( own, &block ) == S_OK );
++            start = GetTickCount64();
++            while ( threads->XAsyncGetStatus( &block, FALSE ) == E_PENDING && GetTickCount64() - start < 5000 )
++            {
++                threads->XTaskQueueDispatch( queue, XTaskQueuePort::Work, 0 );
++                threads->XTaskQueueDispatch( queue, XTaskQueuePort::Completion, 0 );
++                Sleep( 1 );
++            }
++            mount = ( XPackageMountHandle )1;
++            CHECK( "mount-async-result", package_mount_result( &block, &mount ) == answer &&
++                                             ( SUCCEEDED( answer ) ? mount != NULL : !mount ) );
++            if ( SUCCEEDED( answer ) )
++            {
++                CHECK( "mount-async-path",
++                       package_mount_path( mount, sizeof( path ), path, NULL ) == S_OK && !strcmp( path, expected ) );
++                package_mount_close( mount );
++            }
++        }
++        CHECK( "mount-async-unknown-at-once",
++               package_mount_begin( "00000099111122223333444444444444", &block ) == E_GAMEPACKAGE_NO_PACKAGE_IDENTIFIER );
++        CHECK( "mount-async-null-block", package_mount_begin( own, NULL ) == E_INVALIDARG );
++        CHECK( "mount-async-null-out", package_mount_result( &block, NULL ) == E_INVALIDARG );
++        threads->XTaskQueueCloseHandle( queue );
++        threads->Release();
++    }
++}
++
+ static void current_child( const WCHAR *executable, BOOL missing, BOOL knownGame = TRUE )
+ {
+     STARTUPINFOW startup = { 0 };
+@@ -390,6 +496,30 @@ static void actual_runtime( const char *child, BOOL knownGame = TRUE )
+     CHECK( "runtime-invalid-scope",
+            ( package )->XPackageEnumeratePackages( XPackageKind::Content, ( XPackageEnumerationScope )99, NULL,
+                                                    visit ) == E_INVALIDARG );
++    /* The DLL's mount asks the bridge for the add-on's licence; there is none here. */
++    {
++        XPackageMountHandle mount = ( XPackageMountHandle )1;
++        const HRESULT hr = ( package )->XPackageMountLegacy( "00000001111122223333444444444444", &mount );
++        CHECK( "runtime-mount-needs-licence", FAILED( hr ) && hr != E_NOTIMPL && !mount );
++        mount = ( XPackageMountHandle )1;
++        CHECK( "runtime-mount-unknown", ( package )->XPackageMountLegacy( "00000099111122223333444444444444", &mount ) ==
++                                                E_GAMEPACKAGE_NO_PACKAGE_IDENTIFIER &&
++                                            !mount );
++        XAsyncBlock block{};
++        IXPackageImpl4 *latest = nullptr;
++        CHECK( "runtime-mount-async-interface",
++               package->QueryInterface( __uuidof( IXPackageImpl4 ), reinterpret_cast<void **>( &latest ) ) == S_OK &&
++                   latest );
++        if ( latest )
++        {
++            CHECK( "runtime-mount-async-unknown",
++                   latest->XPackageMountWithUiAsync( "00000099111122223333444444444444", &block ) ==
++                       E_GAMEPACKAGE_NO_PACKAGE_IDENTIFIER );
++            latest->Release();
++        }
++        CHECK( "runtime-mount-path-foreign", ( package )->XPackageGetMountPath( ( XPackageMountHandle )1, 8, identifier ) ==
++                                                 E_INVALIDARG );
++    }
+     ( package )->Release();
+     CHECK( "runtime-store-query", query( CLSID_XStoreImpl, IID_IXStoreImpl, ( void ** )&store ) == S_OK && store );
+     if ( store )
+@@ -425,6 +555,7 @@ int main( int argc, char **argv )
+     swprintf( folder, MAX_PATH, L"%lsnexus-content-%lu-%lu", temporary, GetCurrentProcessId(), GetTickCount() );
+     CHECK( "fixture-directory", CreateDirectoryW( folder, NULL ) );
+     helpers();
++    mounts();
+     actual_runtime( NULL );
+     current_fixtures();
+     printf( "CHECKS %u FAILURES %u\n", checks, failures );
+diff --git a/tests/Nexus/package-legacy-32-probe.c b/tests/Nexus/package-legacy-32-probe.c
+index d92c771..33e82c9 100644
+--- a/tests/Nexus/package-legacy-32-probe.c
++++ b/tests/Nexus/package-legacy-32-probe.c
+@@ -28,6 +28,9 @@ typedef HRESULT (WINAPI *Query)(Package *, const GUID *, void **);
+ typedef ULONG (WINAPI *Ref)(Package *);
+ typedef HRESULT (WINAPI *Identifier)(Package *, const char *, SIZE_T, char *);
+ typedef HRESULT (WINAPI *Mount)(Package *, const char *, void **);
++typedef HRESULT (WINAPI *MountSize)(Package *, void *, SIZE_T *);
++typedef HRESULT (WINAPI *MountPath)(Package *, void *, SIZE_T, char *);
++typedef void (WINAPI *MountClose)(Package *, void *);
+ typedef HRESULT (WINAPI *Register)(Package *, void *, void *, void *, int64_t *);
+ typedef HRESULT (WINAPI *Features)(Package *, const char *, void *, void *);
+ static const GUID package_class = {0xaf406016,0xe850,0x4aa8,{0xa8,0x8d,0x2f,0x3d,0xcb,0x9d,0xac,0x7e}};
+@@ -93,7 +96,23 @@ static void exercise(Package *package)
+     CHECK(identifier(package, "B00000000002", 33, buffer + 1) == E_INVALIDARG);
+     CHECK(identifier(package, NULL, 33, buffer + 1) == E_INVALIDARG);
+     CHECK(identifier(package, "B00000000001", 33, NULL) == E_INVALIDARG);
+-    CHECK(((Mount)package->vtable[23])(package, id, &mount) == E_NOTIMPL && !mount);
++    /* The game's own package mounts as its folder (here the probe's working directory). */
++    {
++        char root[MAX_PATH * 3], path[MAX_PATH * 3];
++        SIZE_T size = 0;
++        CHECK(GetCurrentDirectoryA(sizeof(root), root) > 0);
++        CHECK(((Mount)package->vtable[23])(package, id, &mount) == S_OK && mount);
++        CHECK(((MountSize)package->vtable[24])(package, mount, &size) == S_OK && size == strlen(root) + 1);
++        CHECK(((MountPath)package->vtable[25])(package, mount, 2, path) == E_NOT_SUFFICIENT_BUFFER);
++        CHECK(((MountPath)package->vtable[25])(package, mount, sizeof(path), path) == S_OK && !strcmp(path, root));
++        ((MountClose)package->vtable[26])(package, mount);
++        CHECK(((MountSize)package->vtable[24])(package, mount, &size) == E_INVALIDARG);
++        mount = (void *)(uintptr_t)1;
++        CHECK(((Mount)package->vtable[23])(package, "fedcba9876543210fedcba9876543210", &mount) ==
++              (HRESULT)0x89245208L && !mount);
++        mount = (void *)(uintptr_t)1;
++        CHECK(((Mount)package->vtable[23])(package, "not-an-identifier", &mount) == E_INVALIDARG && !mount);
++    }
+     CHECK(((Mount)package->vtable[23])(package, id, NULL) == E_INVALIDARG);
+     CHECK(((Register)package->vtable[21])(package, NULL, NULL, (void *)visit, &token) == E_NOTIMPL && !token);
+     CHECK(((Register)package->vtable[21])(package, NULL, NULL, NULL, &token) == E_INVALIDARG);
+diff --git a/tests/Nexus/package-legacy-probe.c b/tests/Nexus/package-legacy-probe.c
+index 6aea50f..9650448 100644
+--- a/tests/Nexus/package-legacy-probe.c
++++ b/tests/Nexus/package-legacy-probe.c
+@@ -27,6 +27,9 @@ typedef HRESULT (WINAPI *Query)(Package *, const GUID *, void **);
+ typedef ULONG (WINAPI *Ref)(Package *);
+ typedef HRESULT (WINAPI *Identifier)(Package *, const char *, SIZE_T, char *);
+ typedef HRESULT (WINAPI *Mount)(Package *, const char *, void **);
++typedef HRESULT (WINAPI *MountSize)(Package *, void *, SIZE_T *);
++typedef HRESULT (WINAPI *MountPath)(Package *, void *, SIZE_T, char *);
++typedef void (WINAPI *MountClose)(Package *, void *);
+ typedef HRESULT (WINAPI *Register)(Package *, void *, void *, void *, int64_t *);
+ typedef HRESULT (WINAPI *Features)(Package *, const char *, void *, void *);
+ static const GUID package_class = {0xaf406016,0xe850,0x4aa8,{0xa8,0x8d,0x2f,0x3d,0xcb,0x9d,0xac,0x7e}};
+@@ -92,7 +95,23 @@ static void exercise(Package *package)
+     CHECK(identifier(package, "B00000000002", 33, buffer + 1) == E_INVALIDARG);
+     CHECK(identifier(package, NULL, 33, buffer + 1) == E_INVALIDARG);
+     CHECK(identifier(package, "B00000000001", 33, NULL) == E_INVALIDARG);
+-    CHECK(((Mount)package->vtable[23])(package, id, &mount) == E_NOTIMPL && !mount);
++    /* The game's own package mounts as its folder (here the probe's working directory). */
++    {
++        char root[MAX_PATH * 3], path[MAX_PATH * 3];
++        SIZE_T size = 0;
++        CHECK(GetCurrentDirectoryA(sizeof(root), root) > 0);
++        CHECK(((Mount)package->vtable[23])(package, id, &mount) == S_OK && mount);
++        CHECK(((MountSize)package->vtable[24])(package, mount, &size) == S_OK && size == strlen(root) + 1);
++        CHECK(((MountPath)package->vtable[25])(package, mount, 2, path) == E_NOT_SUFFICIENT_BUFFER);
++        CHECK(((MountPath)package->vtable[25])(package, mount, sizeof(path), path) == S_OK && !strcmp(path, root));
++        ((MountClose)package->vtable[26])(package, mount);
++        CHECK(((MountSize)package->vtable[24])(package, mount, &size) == E_INVALIDARG);
++        mount = (void *)(uintptr_t)1;
++        CHECK(((Mount)package->vtable[23])(package, "fedcba9876543210fedcba9876543210", &mount) ==
++              (HRESULT)0x89245208L && !mount);
++        mount = (void *)(uintptr_t)1;
++        CHECK(((Mount)package->vtable[23])(package, "not-an-identifier", &mount) == E_INVALIDARG && !mount);
++    }
+     CHECK(((Mount)package->vtable[23])(package, id, NULL) == E_INVALIDARG);
+     CHECK(((Register)package->vtable[21])(package, NULL, NULL, (void *)visit, &token) == E_NOTIMPL && !token);
+     CHECK(((Register)package->vtable[21])(package, NULL, NULL, NULL, &token) == E_INVALIDARG);
+diff --git a/tests/Nexus/store-entitlements.cpp b/tests/Nexus/store-entitlements.cpp
+index d92dc32..18d82ce 100644
+--- a/tests/Nexus/store-entitlements.cpp
++++ b/tests/Nexus/store-entitlements.cpp
+@@ -1625,6 +1625,173 @@ static void test_cancel_can_free_async_block_before_network_finishes()
+     threads->Release();
+ }
+ 
++/* XStoreQueryAssociatedProducts / XStoreQueryProducts: catalog requests and answers,
++ * products the account does not own described from public metadata only. */
++static void test_catalog( void )
++{
++    const char *describe[] = { "B00000000003", "C00000000009", "C00000000009" }, *bad[] = { "bad" };
++    const char *json = "{\"Products\":[{\"ProductId\":\"C00000000009\",\"ProductType\":\"Durable\",\"Properties\":{"
++                       "\"InAppOfferToken\":\"Offer\"},\"LocalizedProperties\":[{\"ProductTitle\":\"Not owned\","
++                       "\"Language\":\"en-US\"}],\"DisplaySkuAvailabilities\":["
++                       "{\"Sku\":{\"SkuId\":\"0010\",\"Properties\":{\"IsTrial\":false,\"Packages\":[{}]}}},"
++                       "{\"Sku\":{\"SkuId\":\"0011\",\"Properties\":{\"IsTrial\":true}}},"
++                       "{\"Sku\":{\"SkuId\":\"0012\",\"Properties\":{\"IsTrial\":false}}}]}]}";
++    char *request = NULL, until[32];
++    struct entitled_snapshot *snapshot = NULL;
++    xmlDocPtr doc;
++    xmlNodePtr root;
++    xmlChar *bytes;
++    int size;
++    UINT32 saved_count = entitled_related_count;
++    char saved[2][13];
++    memcpy( saved, entitled_related, sizeof( saved ) );
++    strcpy( entitled_related[0], "B00000000002" );
++    strcpy( entitled_related[1], "B00000000003" );
++    entitled_related_count = 2;
++    CHECK( "catalog-request", entitled_request( 2, FALSE, TRUE, describe, 3, &request ) == S_OK && request );
++    if ( request )
++    {
++        CHECK( "catalog-request-parent", strstr( request, "<ParentProductId>B00000000001</ParentProductId>" ) != NULL );
++        CHECK( "catalog-request-licence-for-related",
++               strstr( request, "<ProductId>B00000000002</ProductId>" ) &&
++                   strstr( request, "<ProductId>B00000000003</ProductId>" ) );
++        CHECK( "catalog-request-unrelated-never-licensed", !strstr( request, "<ProductId>C00000000009</ProductId>" ) );
++        CHECK( "catalog-request-describe-once", strstr( request, "<Describe>C00000000009</Describe>" ) &&
++                                                    !strstr( strstr( request, "<Describe>C00000000009</Describe>" ) + 1,
++                                                             "<Describe>C00000000009</Describe>" ) );
++        CHECK( "catalog-request-marked", strstr( request, "<Catalog>true</Catalog>" ) != NULL );
++        free( request );
++    }
++    CHECK( "catalog-request-bad-id", entitled_request( 2, FALSE, TRUE, bad, 1, &request ) == E_INVALIDARG && !request );
++    CHECK( "catalog-request-null-ids", entitled_request( 2, FALSE, TRUE, NULL, 1, &request ) == E_INVALIDARG );
++    CHECK( "owned-request-unmarked", entitled_request( 2, FALSE, FALSE, NULL, 0, &request ) == S_OK && request &&
++                                         !strstr( request, "<Catalog>" ) && !strstr( request, "<Describe>" ) );
++    free( request );
++
++    doc = xmlNewDoc( BAD_CAST "1.0" );
++    root = xmlNewNode( NULL, BAD_CAST "Response" );
++    xmlDocSetRootElement( doc, root );
++    xmlNewTextChild( root, NULL, BAD_CAST "HResult", BAD_CAST "0" );
++    snprintf( until, sizeof( until ), "%llu", ( unsigned long long )time( NULL ) + 60 );
++    xmlNewTextChild( root, NULL, BAD_CAST "ValidUntil", BAD_CAST until );
++    CHECK( "catalog-kind-filtered",
++           receipt_catalog_parse( "C00000000009", 4, ( BYTE * )json, strlen( json ), root ) == S_OK );
++    CHECK( "catalog-unknown-product",
++           receipt_catalog_parse( "C00000000009", 31, ( BYTE * )"{\"Products\":[]}", 15, root ) == S_OK );
++    CHECK( "catalog-other-product-rejected",
++           FAILED( receipt_catalog_parse( "C00000000008", 31, ( BYTE * )json, strlen( json ), root ) ) );
++    CHECK( "catalog-malformed-rejected", FAILED( receipt_catalog_parse( "C00000000009", 31, ( BYTE * )"{}", 2, root ) ) );
++    xmlDocDumpMemory( doc, &bytes, &size );
++    CHECK( "catalog-nothing-added", entitled_parse( ( char * )bytes, size, &snapshot, TRUE ) == S_OK && snapshot &&
++                                        !snapshot->count );
++    if ( snapshot ) entitled_snapshot_release( snapshot );
++    snapshot = NULL;
++    xmlFree( bytes );
++    CHECK( "catalog-described", receipt_catalog_parse( "C00000000009", 31, ( BYTE * )json, strlen( json ), root ) == S_OK );
++    xmlDocDumpMemory( doc, &bytes, &size );
++    CHECK( "owned-query-refuses-unowned", entitled_parse( ( char * )bytes, size, &snapshot ) == E_UNEXPECTED && !snapshot );
++    CHECK( "catalog-parsed", entitled_parse( ( char * )bytes, size, &snapshot, TRUE ) == S_OK && snapshot &&
++                                 snapshot->count == 1 );
++    if ( snapshot && snapshot->count == 1 )
++    {
++        XStoreProduct *p = &snapshot->products[0];
++        CHECK( "catalog-not-owned", !p->isInUserCollection && p->productKind == XStoreProductKind::Durable );
++        CHECK( "catalog-public-metadata", !strcmp( p->title, "Not owned" ) && !strcmp( p->inAppOfferToken, "Offer" ) &&
++                                              p->hasDigitalDownload );
++        CHECK( "catalog-full-skus-only", p->skusCount == 2 && !strcmp( p->skus[0].skuId, "0010" ) &&
++                                             !strcmp( p->skus[1].skuId, "0012" ) );
++        CHECK( "catalog-skus-not-owned", !p->skus[0].isInUserCollection && !p->skus[0].collectionData.endDate &&
++                                             !p->skus[1].isInUserCollection );
++        snapshot->proof_until = time( NULL ) + 60;
++        CHECK( "catalog-never-a-licence", !store_license_until( snapshot, "C00000000009", FALSE ) );
++        entitled_snapshot_release( snapshot );
++    }
++    xmlFree( bytes );
++    xmlFreeDoc( doc );
++    snapshot = NULL;
++    {
++        /* An unowned product cannot carry an owned SKU, nor an owned one an unowned SKU. */
++        char text[2048];
++        const char *shapes[][2] = { { "false", "true" }, { "true", "false" } };
++        for ( UINT k = 0; k < 2; k++ )
++        {
++            snprintf( text, sizeof( text ),
++                      "<Response><HResult>0</HResult><Product><StoreId>C00000000009</StoreId><Title>t</Title>"
++                      "<Description/><Language>en-US</Language><InAppOfferToken/><ProductKind>2</ProductKind>"
++                      "<HasDigitalDownload>false</HasDigitalDownload><IsInUserCollection>%s</IsInUserCollection>"
++                      "<Sku><SkuId>0010</SkuId><Title>t</Title><Description/><Language>en-US</Language>"
++                      "<IsTrial>false</IsTrial><IsInUserCollection>%s</IsInUserCollection><EndDate>%s</EndDate></Sku>"
++                      "</Product><ValidUntil>%s</ValidUntil></Response>",
++                      shapes[k][0], shapes[k][1], k ? "0" : until, until );
++            CHECK( "catalog-mixed-ownership-rejected", FAILED( entitled_parse( text, strlen( text ), &snapshot, TRUE ) ) &&
++                                                           !snapshot );
++        }
++    }
++    entitled_related_count = saved_count;
++    memcpy( entitled_related, saved, sizeof( saved ) );
++}
++
++static void test_catalog_queries( void )
++{
++    IXThreadingImpl *threads = NULL;
++    XTaskQueueHandle queue = NULL;
++    XStoreContextHandle store = NULL;
++    XStoreProductQueryHandle page = NULL;
++    XAsyncBlock block = { 0 };
++    const char *ids[] = { "B00000000002", "C00000000009" }, *bad[] = { "bad<" }, *filters[] = { NULL };
++    LONG canceled = 0;
++    CHECK( "catalog-threading",
++           FixtureQueryApiImpl( CLSID_XThreadingImpl, IID_IXThreadingImpl, ( void ** )&threads ) == S_OK && threads );
++    if ( !threads ) return;
++    CHECK( "catalog-queue", ( threads )->XTaskQueueCreate( XTaskQueueDispatchMode::Manual,
++                                                           XTaskQueueDispatchMode::Manual, &queue ) == S_OK );
++    CHECK( "products-invalid-context",
++           entitled_products_begin( ( void * )1, 2, ids, 2, NULL, 0, &block ) == E_INVALIDARG );
++    CHECK( "catalog-store", entitled_store_create( NULL, &store ) == S_OK );
++    CHECK( "products-null-ids", entitled_products_begin( store, 2, NULL, 2, NULL, 0, &block ) == E_INVALIDARG );
++    CHECK( "products-no-ids", entitled_products_begin( store, 2, ids, 0, NULL, 0, &block ) == E_INVALIDARG );
++    CHECK( "products-bad-id", entitled_products_begin( store, 2, bad, 1, NULL, 0, &block ) == E_INVALIDARG );
++    CHECK( "products-null-filter", entitled_products_begin( store, 2, ids, 2, filters, 1, &block ) == E_INVALIDARG );
++    CHECK( "products-filter-array", entitled_products_begin( store, 2, ids, 2, NULL, 1, &block ) == E_INVALIDARG );
++    CHECK( "products-too-many", entitled_products_begin( store, 2, ids, ENTITLED_MAX_PRODUCTS + 1, NULL, 0, &block ) ==
++                                    E_INVALIDARG );
++    CHECK( "associated-bad-kinds", entitled_associated_begin( store, 64, 10, &block ) == E_INVALIDARG );
++    CHECK( "associated-null-block", entitled_associated_begin( store, 2, 10, NULL ) == E_INVALIDARG );
++    for ( UINT mode = 0; mode < 2; mode++ )
++    {
++        ResetEvent( bridge_started );
++        SetEvent( bridge_gate );
++        callbacks = 0;
++        memset( &block, 0, sizeof( block ) );
++        block.queue = queue;
++        block.callback = complete;
++        CHECK( "catalog-begin", ( mode ? entitled_products_begin( store, 2, ids, 2, NULL, 0, &block )
++                                       : entitled_associated_begin( store, 2, 10, &block ) ) == S_OK );
++        CHECK( "catalog-work", ( threads )->XTaskQueueDispatch( queue, XTaskQueuePort::Work, 0 ) );
++        dispatch_until_complete( threads, queue, &block );
++        /* The licence bridge here always fails: the failure is the answer, never an empty success. */
++        CHECK( "catalog-bridge-failure-preserved", ( threads )->XAsyncGetStatus( &block, FALSE ) == E_FAIL );
++        CHECK( "catalog-callback-once", callbacks == 1 );
++        page = ( void * )1;
++        CHECK( "catalog-failed-no-page", FAILED( entitled_result( &block, &page, FALSE ) ) && !page );
++    }
++    ResetEvent( bridge_gate );
++    entitled_store_close( store );
++    ULONGLONG start = GetTickCount64();
++    while ( bridge_active && GetTickCount64() - start < 2000 )
++        Sleep( 1 );
++    /* XPackageMount's licence: the same signed Durable licence, through the same failing bridge here. */
++    SetEvent( bridge_gate );
++    CHECK( "mount-licence-bridge-failure", xstore_content_license( "B00000000002", &canceled ) == E_FAIL );
++    CHECK( "mount-licence-bad-id", xstore_content_license( "bad", &canceled ) == E_INVALIDARG );
++    CHECK( "mount-licence-no-cancel-flag", xstore_content_license( "B00000000002", NULL ) == E_INVALIDARG );
++    canceled = TRUE;
++    CHECK( "mount-licence-canceled", xstore_content_license( "B00000000002", &canceled ) == E_ABORT );
++    ResetEvent( bridge_gate );
++    ( threads )->XTaskQueueCloseHandle( queue );
++    ( threads )->Release();
++}
++
+ int main( void )
+ {
+     HMODULE dll = LoadLibraryA( "xgameruntime.dll" );
+@@ -1732,6 +1899,8 @@ int main( void )
+     test_game_licenses();
+     test_current_game_result_lifetime();
+     test_cancel_can_free_async_block_before_network_finishes();
++    test_catalog();
++    test_catalog_queries();
+     CloseHandle( bridge_started );
+     CloseHandle( bridge_gate );
+     if ( SUCCEEDED( hr ) ) RoUninitialize();

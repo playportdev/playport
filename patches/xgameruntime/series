@@ -2,3 +2,4 @@
 # nexus-xgameruntime's xgameruntime.dll for arm64ec, a Wine builtin (build/stages/xbox-pe.sh).
 0001-cmake-build-libxml2-and-the-WinRT-header-from-any-pi.patch
 0002-gamesave-ask-the-host-at-a-save-conflict-file-saves-.patch
+0003-store-package-answer-a-game-s-add-on-queries-and-mou.patch
