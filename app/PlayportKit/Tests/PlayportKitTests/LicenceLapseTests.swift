@@ -85,6 +85,25 @@ final class LicenceLapseTests: XCTestCase {
         XCTAssertEqual(lapses.due(at: days(9), saves: synced), [copy, other])
     }
 
+    /// A store's own answer (the dev app's Xbox one: XboxCloudSaves.unsynced(productID:),
+    /// the runtime's save index): removal waits while the copy has unsynced saves and runs
+    /// once they are synced; another store's copies stay unknown, so held.
+    func testAStoresUnsyncedSavesHoldTheRemovalUntilTheyAreSynced() {
+        final class Index: @unchecked Sendable { var unsynced: [String: Bool?] = [:] }
+        let index = Index()
+        let saves = StoreUnsyncedSaves(.xbox) { index.unsynced[$0] ?? false }
+        var lapses = LicenceLapses()
+        lapses.record(.refused, for: copy, at: start)
+        index.unsynced[copy.id] = true
+        XCTAssertEqual(lapses.due(at: days(9), saves: saves), [], "a play left saves unsynced")
+        XCTAssertEqual(lapses.state(copy, at: days(9), saves: saves), .held(removeAt: days(7)))
+        index.unsynced[copy.id] = .some(nil)
+        XCTAssertEqual(lapses.due(at: days(9), saves: saves), [], "an index that can't be read")
+        index.unsynced[copy.id] = false
+        XCTAssertEqual(lapses.due(at: days(9), saves: saves), [copy], "synced at the next play: the removal runs")
+        XCTAssertNil(saves.unsynced(StoreGameKey(store: .epic, id: "9MW9469V91LM")))
+    }
+
     func testThePlayerMayRemoveTheCopyEarlier() {
         var lapses = LicenceLapses()
         lapses.record(.refused, for: copy, at: start)

@@ -78,6 +78,10 @@ struct RootView: View {
                     .overlay { if menu.isOpen || menu.quitting { InGameMenuView() } }
                     // A web page the game opened, over the running game (UI/GameWebSheet.swift).
                     .overlay { if web.isUp { GameWebSheetView() } }
+                    #if !PLAYPORT_RELEASE
+                    // An Xbox game's save conflict, asked by its runtime (Dev/XboxCloudSaves.swift).
+                    .overlay { XboxSaveConflictView() }
+                    #endif
                     .statusBarHidden().persistentSystemOverlays(.hidden)
                     // A swipe from the top or bottom edge reaches the game and its on-screen controls
                     // first; a second swipe opens Control Centre or goes Home. SwiftUI sets the hosting

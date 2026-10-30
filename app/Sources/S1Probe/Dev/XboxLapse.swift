@@ -19,9 +19,9 @@ import XboxClientKit
 final class XboxLapses: ObservableObject {
     static let shared = XboxLapses()
     @Published private(set) var ledger: LicenceLapses
-    /// Whether a copy's saves are in the cloud. Until PLA-500's cloud saves are in this branch
-    /// (`XboxCloudSaves.unsynced(productID:)`), no one can tell, so every due removal waits.
-    var saves: UnsyncedSaves = UnknownSaves()
+    /// Whether a copy's saves are in the cloud: the runtime's save index, by the copy's SCID
+    /// (Dev/XboxCloudSaves.swift); unknown or unsynced, the due removal waits.
+    var saves: UnsyncedSaves = XboxCloudSaves.lapseSaves
     nonisolated static let file = LibraryModel.paths.layout.stateRoot.appendingPathComponent("lapses.json")
     private var watch: AnyCancellable?
     private var log: ContentKit.Logger { XboxInstalls.log }

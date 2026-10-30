@@ -97,9 +97,10 @@ enum XboxPlay {
                      + String(format: " in %.2f s", Date().timeIntervalSince(started)))
         }
 
-        // 3. The bridge: the runtime's tickets for this copy, from now to the launch's end.
+        // 3. The bridge: the runtime's tickets for this copy, and the player's choice at a save
+        //    conflict (Dev/XboxCloudSaves.swift), from now to the launch's end.
         let service = XboxBridgeService(copy: XboxBridgeCopy(productID: id, manifest: manifest), account: account.session,
-                                        updates: nil, log: log)
+                                        updates: nil, saves: XboxSavePromptAsker(), log: log)
         let listener = XboxBridgeListener(service: service, log: log)
         do { try await listener.start() } catch {
             listener.stop()
@@ -122,9 +123,13 @@ enum XboxPlay {
         }
 
         let ended = Once()
-        return .success(Prepared(guestEnvironment: listener.guestEnvironment.merging(winhttpHTTP2) { own, _ in own },
-                                 prerequisites: prerequisites) {
+        // XODUS_SAVE_SYNC=auto (the runtime's default, as Nexus sets it) also writes the runtime's
+        // `xodus-savesync:` lines to the game log: downloaded, uploaded, cloud on or off.
+        let environment = listener.guestEnvironment.merging(winhttpHTTP2) { own, _ in own }
+            .merging(["XODUS_SAVE_SYNC": Secret("auto")]) { own, _ in own }
+        return .success(Prepared(guestEnvironment: environment, prerequisites: prerequisites) {
             guard ended.first() else { return }
+            XboxSaveConflictPrompt.gameEnded()
             listener.stop()
             do {
                 try swap.restore(play: play)

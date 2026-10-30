@@ -191,6 +191,16 @@ class UiEnvTest(unittest.TestCase):
                     "xbox:lapse:9MW9469V91LM@8,play:xbox-9MW9469V91LM"):
             self.assertFalse(m.ACTION_RE.match(bad), bad)
 
+    def test_an_xbox_save_conflict_is_answered_in_game_and_unsynced_saves_are_checked(self):
+        m = load()
+        for action in ("xbox:saves:9MW9469V91LM", "xbox-save:wait", "xbox-save:local", "xbox-save:cloud", "xbox-save:later"):
+            self.assertEqual(m.parse(["--action", action]).action, [action])
+        for bad in ("xbox:saves:", "xbox:saves:9mw9469v91lm", "xbox-save:", "xbox-save:both", "xbox-save:cloud,wait:1"):
+            self.assertFalse(m.ACTION_RE.match(bad), bad)
+        play = ["play:xbox-9MW9469V91LM", "xbox-save:cloud", "wait:30"]
+        self.assertEqual(m.in_game(play, 1), 2)
+        self.assertFalse(m.after_play(play))
+
     def test_donor_pool_setting_takes_auto_and_fixed_sizes(self):
         # Settings › Developer › Donor pool (PLA-351): set:'s generic KEY=VALUE carries auto.
         m = load()

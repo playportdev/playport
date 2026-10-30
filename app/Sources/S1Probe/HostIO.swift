@@ -558,6 +558,13 @@ final class HostIO {
             GameWebSheet.shared.padInput(p)
             return
         }
+        #if !PLAYPORT_RELEASE
+        // An Xbox game's save conflict card takes them while it is up (Dev/XboxCloudSaves.swift).
+        if XboxSaveConflictPrompt.shared.isUp {
+            XboxSaveConflictPrompt.shared.padInput(p)
+            return
+        }
+        #endif
         // The guest's GDI windows on screen (a launcher, a dialog) get the presses as keys too,
         // and the mapped pads hold nothing meanwhile (before publish reads this snapshot).
         let windows = WindowKeys.takesPads(windowsShown: GuestWindows.shown, menuUp: menuUp)
