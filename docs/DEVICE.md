@@ -325,7 +325,7 @@ not that gameplay appeared: inspect the timeline, log and screenshot.
   the screen (Kingdom Come's Continue above New Game: `--crop 0.70,0.33,0.92,0.80
   --highlight-above "New Game" "New Game"`) before that A.
 - **The in-game menu.** Holding the controller's Home button half a second over
-  a running game opens Playport's menu (`UI/InGameMenuView.swift`): the game is
+  a running game, or a three-finger tap on it, opens Playport's menu (`UI/InGameMenuView.swift`): the game is
   paused behind it (its pads at rest, audio stopped, its threads suspended by
   the session root) until Resume, B or Home. The driver reaches it through
   the same pad handling: after `play:`, `wait:S` and `menu:` actions run while
@@ -339,6 +339,58 @@ not that gameplay appeared: inspect the timeline, log and screenshot.
   10 s later, and the run follows the restart to Home:
   `pp ui --action play:app-367520 --action wait:10 --action menu:open --action menu:resume
   --action wait:5 --action menu:open --action menu:quit --action open:home --shot-each-action`.
+  `gesture:three-finger-tap` opens it through the tap's own handler, with the controls
+  on or off and with a controller connected. `menu:keyboard` goes back to the game with
+  the touch keyboard open; `menu:controls` opens the Controls panel (`pad:left/right`
+  change the ringed row) and `menu:layout` its layout editor over the paused game.
+- **The on-screen controls** ([decision 0171](decisions/0171-on-screen-controls-input-mapping-and-gyro.md);
+  [ARCHITECTURE.md](ARCHITECTURE.md#input-sources-and-the-mixer)). They show while no
+  controller is connected (`--pad` connects one). `--controls ID:JSON` saves a game's
+  controls as its in-game Controls panel does (the app's internal `controls:`, run after the
+  `--action`s and before `--settings`; `ID:{}` clears): `"layout"` (`off`, `gamepad`,
+  `keyboardMouse`, `pointClick`; left out, the title's compatibility default, else Settings'
+  Starting layout, `set:controls.startingLayout=keyboardMouse`, else
+  Gamepad), `"opacity"`, Gamepad's `"dpad"` and `"rightStick"`, `"gyro"`, `"controllerMap"`,
+  `"lookSpeed"` and `"layouts"`, the game's own copies of the presets as the layout editor
+  saves them (version 3 `ControlLayout`s by preset name); `pp ui --help` has every key. The
+  log's `controls ID:` line shows what was saved. After `play:`, `touch:CONTROL[+CONTROL...][@MS]`
+  waits for the first frame and puts fingers on controls by id, held MS ms (200 by default),
+  through the view's own calls (`Dev/TouchDriver.swift`):
+  - Gamepad: `view menu lt lb rt rb leftStick y x b a`, `dpad` and `rightStick` when on; a
+    stick or the d-pad takes a direction (`leftStick.up`, `dpad.right`).
+  - Keyboard & mouse: `look esc tab keyboard 1 2 3 4 move use reload jump fire`; `move.up`
+    holds W, `look.left` drags 100 pt across the look area at once (300 mouse counts).
+  - Point & click: `pointer mode rightClick hover scroll keyboard esc`; the pointer takes a
+    point as fractions of the view (`pointer:0.25:0.6`), and a tool's press turns it on or off
+    (`touch:hover+pointer:0.5:0.5`).
+  - The touch keyboard, while open (a layout's `keyboard`, `menu:keyboard`): `kb-a`, `kb-1`,
+    `kb-f1`, `kb-esc`, `kb-enter`, `kb-space`, `kb-up`, `kb-close`, ...; a tapped `kb-shift`
+    (`kb-ctrl`, `kb-alt`) stays down for the next key.
+  - While the controls show, `tap:` sends nothing (a touch off them is ignored; the log says
+    `tap …: ignored`), except above the open touch keyboard. Portal 2 on Keyboard & mouse:
+    `pp ui --controls 'app-620:{"layout":"keyboardMouse"}' --action play:app-620 --action
+    wait:30 --action touch:move.up@1500 --action touch:look.left+fire@400`.
+- **The layout editor.** `open:ID#layout` opens Game options › Controls › Edit on-screen
+  layout over the game's art, on the layout the game starts with; `menu:layout` opens it over
+  the paused game. `pad:lb/rb` ring a control, the directions move it 8 pt, `pad:a` opens the
+  bar and the inspector, `pad:x` Add, `pad:y` Reset, `pad:view` undo, `pad:menu` redo, and
+  `pad:b` on the controls is Done, which saves the game's `"layouts"` copy. The log's summary
+  line is `layout editor (...)`.
+- **The suggested layout.** A game on Gamepad that reads no XInput state in 20 s of play
+  after its first frame gets a toast offering Keyboard & mouse, once per game. After `play:`,
+  `suggest:accept` waits for it (3 min at most) and presses Use (the layout is saved for the
+  game), `suggest:dismiss` presses Not now; either fails when the game was not offered.
+  `set:controls.suggestedLayoutOffered=` forgets every game's offer:
+  `pp ui --action play:ID --action suggest:accept --action touch:fire`.
+- **Gyro aim.** After `play:`, `gyro:STEP[/STEP...]` waits for the first frame and plays a
+  scripted gyro where the sensors' samples enter gyro aim, at 100 Hz (`Dev/GyroDriver.swift`,
+  HostIOKit `GyroScript`). A STEP is `AXIS=DEG_PER_S[+...]@MS` or `rest@MS` (`yaw` + right,
+  `pitch` + up, `roll` + clockwise). It moves the aim only while the game's gyro output is on
+  (`--controls 'ID:{"gyro":{"output":"mouse"}}'` or `"rightStick"`) and no menu is up; the
+  log's `gyro: driver` line gives the mouse counts (20 a degree at sensitivity 1; 1.5 by
+  default) or the right stick's peak. With no game running and `open:ID#gyro` up, it moves the
+  Gyro aim page's test dot instead: `pp ui --controls 'app-620:{"gyro":{"output":"mouse"}}'
+  --action play:app-620 --action wait:30 --action gyro:yaw=90@500/rest@300`.
 - **A game's web page.** A page the game opens (an Epic game's EOS sign-in) comes up in
   Playport's panel over the running game (decision [0064](decisions/0064-game-web-sheet.md)),
   logged as `url: … open <host><path> (<kind>) for <title>` and `url: … [sheet]` lines. After

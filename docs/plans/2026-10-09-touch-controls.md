@@ -4,11 +4,14 @@
 [`docs/design/2026-10-09-touch-controls/`](../design/2026-10-09-touch-controls/)
 (boards and README).
 
-**Date:** 2026-10-09. **Kind:** plan. **Status (2026-10-19):** phases 1–3 are done, signed off
-by the owner and merged to `main` (`631bd7f`, 2026-10-13), and that run has stopped. Phases 4+
-are not started; the next run starts on a new branch from `main`. Open follow-ups: PLA-338,
-PLA-339 and PLA-340. The Run state below is the 2026-10-13 run's record (started over from
-`main` at `412de5f`; the branch was `dev/pla-13-touch-controls`). The four items under [To confirm](#to-confirm) take the
+**Date:** 2026-10-09. **Kind:** plan. **Status (2026-10-30):** phases 1–3 are done, signed off
+by the owner and merged to `main` (`631bd7f`, 2026-10-13). Phases 4–5 are implemented host-side
+on `dev/pla-13-touch-controls-4-6` (from `main` at `70384b2`; PLA-529..PLA-537, commits under
+"Phases 4–5" below), with host tests and no phone run; their phone gates and the owner's
+sign-off are [PLA-538](https://linear.app/playportdev/issue/PLA-538), then phase 6's release
+and `finished.md`. Open follow-ups: PLA-338, PLA-339 and PLA-340. The Run state below is the
+2026-10-13 run's record (started over from `main` at `412de5f`; the branch was
+`dev/pla-13-touch-controls`) plus the phases 4–5 run. The four items under [To confirm](#to-confirm) take the
 proposed answer unless the owner says otherwise before the phase that needs them.
 
 ## Run state
@@ -17,8 +20,9 @@ proposed answer unless the owner says otherwise before the phase that needs them
   testing:** host tests and `pp check` for each chunk; one batched phone session per
   phase (`pp phone lock -- …`: install, Hollow Knight `first-frame+10`, the phase's
   driven checks), and the overlay `pp perf` A/B only if the blur is suspected.
-- **Decision number:** 0075 is taken; the record this plan calls "0075" takes the next
-  free number, **0105** as of 2026-10-13 (0104 is the last), when phase 6 writes it.
+- **Decision number:** 0075 is taken; the record this plan calls "0075" is
+  [0171](../decisions/0171-on-screen-controls-input-mapping-and-gyro.md) (0170 was the last on
+  `main` and the open branches, 2026-10-30).
 - **Done:** phase 1 (`b784617`; [evidence](../evidence/2026-10-13-touch-controls-phase1.md),
   IPA `3911e0fa…`). Choices made there: Off for a game keeps the Playport button while no
   controller is connected, so the menu stays in reach by touch; Never makes Off every game's
@@ -284,7 +288,33 @@ proposed answer unless the owner says otherwise before the phase that needs them
   truncated; the ActionPicker's footer hints overlapped the page while it waited for a key; the
   in-game Controller row said "None" with the scripted pad (now "Scripted pad" in dev, PlayportKit
   `QuickMenu.controller(scriptedPad:)`); the 3c script lost the pad steps' app log (U kept it).
-- **Notes and reports:** `.work/agent-notes/pla-13-v2/`.
+- **Notes and reports:** `.work/agent-notes/pla-13-v2/` (phases 1–3),
+  `.work/agent-notes/pla-13-p4/` (phases 4–5).
+- **Phases 4–5, implemented host-side (2026-10-30)** on `dev/pla-13-touch-controls-4-6`, one
+  branch per ticket merged in, with HostIOKit and PlayportKit host tests and no phone run.
+  Phone gates and the owner's sign-off: PLA-538.
+  - **4a** (PLA-529): `f52cf92` look area, W A S D stick, pointer surface and tools as touch
+    machines through the mixer; `f85db2d` the Keyboard & mouse and Point & click layouts,
+    layout format 3.
+  - **4b** (PLA-530): `7be24a8`, `fe27b48`, `5b17d0f` Keyboard & mouse drawn and played,
+    Settings › Controls › Starting layout, `touch:look.DIR`.
+  - **4c** (PLA-531): `164f27a` Point & click drawn and routed (trackpad switch, side bar,
+    magnifier, `touch:pointer:FX:FY`).
+  - **4d** (PLA-532): `7571986`, `d6e5e19` the touch keyboard (sticky Shift, Ctrl, Alt; `kb-`
+    ids; `menu:keyboard`).
+  - **4e** (PLA-533): `1aa81be` a compatibility default's `controls` (Assassin's Creed starts on
+    Keyboard & mouse); `4d06a33` win32u counts XInput state reads (madeira-unix 0224);
+    `9b7e8ac` the Keyboard & mouse offer and `suggest:`.
+  - **5a** (PLA-534): `bcb101e` the layout editor's model and `GameControls.layouts`.
+  - **5b** (PLA-536): `3f3e1db`, `580b553`, `a4b9699` the editor by touch and controller, over
+    the paused game and from Game options; `open:ID#layout`, `menu:layout`, `--controls`
+    `"layouts"`.
+  - **3c cosmetic** (PLA-535): `eed97da`.
+  - **6a** (PLA-537): decision 0171 (amends 0034, 0074), ARCHITECTURE.md, DEVICE.md,
+    `pp ui --help`.
+  - **Review (supervisor, 2026-10-30):** the starting layout takes 0074's order, the title's
+    compatibility default before Settings' Starting layout (a fix chunk); the touch keyboard's
+    touches above its panel reach the game, the one exception to 2e's ignored touches.
 
 ## Goal
 
@@ -514,6 +544,8 @@ result. Phases 1–3 make a releasable first cut.
 
 ### Phase 4: Keyboard & mouse and Point & click layouts, the touch keyboard
 
+**Status:** implemented host-side 2026-10-30 (Run state, "Phases 4–5"); the gate is PLA-538.
+
 1. **Presets.**
    - Keyboard & mouse: a WASD stick, a look area (drag anywhere free to look), Fire,
      Jump, Reload, Use, Esc, Tab, 1–4 and the keyboard key. There is no Aim button.
@@ -536,6 +568,8 @@ result. Phases 1–3 make a releasable first cut.
    - Hollow Knight regression.
 
 ### Phase 5: the layout editor
+
+**Status:** implemented host-side 2026-10-30 (Run state, "Phases 4–5"); the gate is PLA-538.
 
 1. **The editor, over the paused game.**
    - Add, move, resize, duplicate and remove controls.
