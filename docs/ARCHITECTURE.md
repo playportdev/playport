@@ -390,7 +390,9 @@ pages are anonymous memory of the process. An x86-64 image of 64 MiB or more
 whose sections are not (Rockstar's libcef, RDR2.exe) maps whole from a copy laid
 out at its RVAs in the app's `Library/Caches/images`, written once in the
 background after its first load, so its clean pages stay the file's, shared and
-outside the footprint (`patches/madeira-unix` 0235, logged `[img-cache]`,
+outside the footprint. A copy is keyed by the file's identity with its ctime and
+checked on each use against the file at 16 sampled points (`patches/madeira-unix`
+0235 and 0238, logged `[img-cache]`,
 decision [0167](decisions/0167-large-x86-64-images-map-from-a-cache-copy.md)).
 
 - Madeira-unix 0034 counts them (`ios_jit_pool_stats`), and

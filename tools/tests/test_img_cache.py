@@ -1,10 +1,12 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Compile and exercise the image cache copy's rules shipped in madeira-unix 0235 (decision 0167, PLA-476).
+"""Compile and exercise the image cache copy's rules shipped in madeira-unix 0235 and 0238 (decision 0167,
+PLA-476).
 
 The layout must give the bytes map_image_into_view gives the view before any write: the test replays
 Wine's steps (map_pe_header's mmap and read, its zeroes to the aligned header end, each section's
 sector-rounded read and the zeroes after it) on a synthetic file, assembles the copy as the writer thread
 does (ppic_overlap over 1 MiB blocks), and compares the two byte for byte."""
+import os
 import pathlib
 import shutil
 import subprocess
@@ -14,6 +16,8 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 PATCH = ROOT / "patches/madeira-unix/0235-virtual-map-a-large-x86-64-image-from-a-re-laid-out-.patch"
+# Later hunks to the header: the ctime in the name and the sampled check (0238).
+LATER = [ROOT / "patches/madeira-unix/0238-virtual-key-an-image-s-cache-copy-by-its-ctime-too-a.patch"]
 
 
 def added_header():
@@ -86,13 +90,27 @@ static void copy(unsigned char *out, uint64_t out_size, const unsigned char *fil
     }
 }
 
+/* The sampled check (0238) as ios_img_cache_map makes it: the file's bytes at each point (a read short
+ * at its end compares what was read) against the copy's at the point's rva. */
+static int samples_equal(const unsigned char *out, const unsigned char *file, uint64_t fsize,
+                         const struct ppic_run *p, unsigned m)
+{
+    unsigned k;
+    for (k = 0; k < m; k++) {
+        uint64_t got = p[k].off >= fsize ? 0 : (p[k].off + p[k].len > fsize ? fsize - p[k].off : p[k].len);
+        if (got && memcmp(out + p[k].rva, file + p[k].off, got)) return 0;
+    }
+    return 1;
+}
+
 static void check(const struct ppic_section *s, unsigned n, uint64_t fsize, uint64_t total, uint64_t header_size,
                   uint64_t header_map_size, uint64_t align_mask)
 {
     unsigned char *file = malloc(fsize), *view = malloc(total), *out;
     uint64_t out_size = ppic_file_size(total, HOST_MASK), i;
-    struct ppic_run r[64];
-    int nruns = ppic_layout(s, n, fsize, total, header_size, header_map_size, align_mask, HOST_MASK, r, 64);
+    struct ppic_run r[64], p[PPIC_SAMPLES];
+    int nruns = ppic_layout(s, n, fsize, total, header_size, header_map_size, align_mask, HOST_MASK, r, 64), k, l;
+    unsigned m;
     for (i = 0; i < fsize; i++) file[i] = (unsigned char)(i * 2654435761u >> 13) | 1;   /* never zero */
     assert(nruns > 0);
     assert(wine_view(view, total, file, fsize, s, n, header_size, header_map_size, align_mask) == 0);
@@ -102,6 +120,31 @@ static void check(const struct ppic_section *s, unsigned n, uint64_t fsize, uint
     for (i = total; i < out_size; i++) assert(!out[i]);
     copy(out, out_size, file, fsize, r, nruns, 0x3000);
     assert(!memcmp(out, view, total));
+
+    /* The sample points: in a file run, at most 4 KiB, under no later run, in rva order; a right copy
+     * passes, and a byte rewritten at any point fails. */
+    m = ppic_samples(r, (unsigned)nruns, PPIC_SAMPLES, p);
+    assert(m >= 1 && m <= PPIC_SAMPLES);
+    for (k = 0; k < (int)m; k++) {
+        int in_run = 0, later = 0;
+        assert(p[k].len && p[k].len <= PPIC_SAMPLE_SIZE && !p[k].zero);
+        assert(!k || p[k].rva > p[k - 1].rva);
+        for (l = 0; l < nruns; l++) {
+            if (!r[l].zero && p[k].rva >= r[l].rva && p[k].rva + p[k].len <= r[l].rva + r[l].len &&
+                p[k].off - r[l].off == p[k].rva - r[l].rva) in_run = l + 1;
+        }
+        assert(in_run);
+        for (l = in_run; l < nruns; l++)
+            if (r[l].rva < p[k].rva + p[k].len && p[k].rva < r[l].rva + r[l].len) later = 1;
+        assert(!later);
+    }
+    assert(samples_equal(out, file, fsize, p, m));
+    for (k = 0; k < (int)m; k++) {
+        if (p[k].off >= fsize) continue;
+        file[p[k].off] ^= 0x80;                         /* rewritten in place */
+        assert(!samples_equal(out, file, fsize, p, m));
+        file[p[k].off] ^= 0x80;
+    }
     free(file); free(view); free(out);
 }
 
@@ -152,9 +195,37 @@ int main(void) {
     assert(!ppic_eligible(1, 0xefbe000, 0x1000, 0x200, HOST_MASK, 1, cef, 6));           /* removable */
     assert(!ppic_eligible(1, 0xefbe000, 0x1000, 0x200, HOST_MASK, 0, &shared, 1));
 
-    /* The name: the file's identity and the view size; the copy's size: whole host pages. */
-    ppic_name(name, sizeof name, 0x1000002, 0x2a5f1, 0xedcd000, 1761000000, 123456789, 0xefbe000);
-    assert(!strcmp(name, "v1-1000002-2a5f1-edcd000-1761000000.123456789-efbe000.img"));
+    /* The name: the file's identity with its ctime (0238) and the view size; the copy's size: whole
+     * host pages. A v1 name is an older version's copy. */
+    assert(ppic_name(name, sizeof name, 0x1000002, 0x2a5f1, 0xedcd000, 1761000000, 123456789, 1761000100, 5,
+                     0xefbe000) < (int)sizeof name);
+    assert(!strcmp(name, "v2-1000002-2a5f1-edcd000-1761000000.123456789-1761000100.000000005-efbe000.img"));
+    assert(ppic_current(name) && !ppic_current("v1-1000002-2a5f1-edcd000-1761000000.123456789-efbe000.img"));
+    assert(!ppic_current("v") && !ppic_current(""));
+    /* The longest identity still fits the 128-byte names the runtime keeps. */
+    assert(ppic_name(name, sizeof name, UINT64_MAX, UINT64_MAX, UINT64_MAX, INT64_MAX, 999999999, INT64_MAX,
+                     999999999, UINT64_MAX) >= (int)sizeof name);
+    assert(ppic_name(name, sizeof name, 0xffffffffu, 0xffffffffffffull, 0xffffffffull, 4102444800ll, 999999999,
+                     4102444800ll, 999999999, 0xffffffffull) < (int)sizeof name);
+
+    /* Sample points on libcef's runs: 16, spread over the whole image; the header run (its mmapped page
+     * past SizeOfHeaders is zeroed by a later run) gives none there. */
+    {
+        struct ppic_run p[PPIC_SAMPLES + 4];
+        int nr = ppic_layout(cef, 6, fsize, 0x9d4000, 0x400, 0x8000, PAGE_MASK, HOST_MASK, r, 64);
+        unsigned m = ppic_samples(r, (unsigned)nr, PPIC_SAMPLES, p), k;
+        assert(nr > 0 && m == PPIC_SAMPLES);
+        assert(p[0].rva < 0x100000 && p[m - 1].rva > 0x900000);
+        for (k = 0; k < m; k++) assert(p[k].rva >= 0x1000);
+        assert(ppic_samples(r, (unsigned)nr, 40, p) == PPIC_SAMPLES);     /* at most PPIC_SAMPLES */
+        assert(ppic_samples(r, (unsigned)nr, 0, p) == 0);
+        assert(ppic_samples(r, 0, PPIC_SAMPLES, p) == 0);
+        r[0] = (struct ppic_run){ 0, 0, 0x1000, 1 };                      /* zeroes only: nothing to sample */
+        assert(ppic_samples(r, 1, PPIC_SAMPLES, p) == 0);
+        r[0] = (struct ppic_run){ 0x2000, 0x400, 0x300, 0 };              /* a tiny run: one point */
+        assert(ppic_samples(r, 1, PPIC_SAMPLES, p) == 1 && p[0].rva == 0x2000 && p[0].off == 0x400 &&
+               p[0].len == 0x300);
+    }
     assert(ppic_file_size(0xefbe000, HOST_MASK) == 0xefc0000 && ppic_file_size(0xefc0000, HOST_MASK) == 0xefc0000);
 
     /* Eviction: least recently used first, until the new copy fits the budget. */
@@ -177,9 +248,19 @@ class ImageCacheTests(unittest.TestCase):
     def test_shipped_header(self):
         cc = shutil.which("cc")
         self.assertIsNotNone(cc)
-        with tempfile.TemporaryDirectory() as td:
+        scratch = ROOT / ".work/tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=scratch) as td:
             d = pathlib.Path(td)
-            (d / "pp_img_cache.h").write_text(added_header())
+            unix = d / "build/ntdll-unix"
+            unix.mkdir(parents=True)
+            (unix / "pp_img_cache.h").write_text(added_header())
+            # The header as the series leaves it; d is inside this repository's .work.
+            env = dict(os.environ, GIT_CEILING_DIRECTORIES=str(d.parent))
+            for later in LATER:
+                subprocess.run(["git", "apply", "--include=build/ntdll-unix/pp_img_cache.h", str(later)],
+                               cwd=d, env=env, check=True)
+            (d / "pp_img_cache.h").write_text((unix / "pp_img_cache.h").read_text())
             (d / "test.c").write_text(TEST_C)
             args = [cc, "-std=c11", "-Wall", "-Wextra", "-Werror", "-o", str(d / "t"), str(d / "test.c")]
             if sys.platform.startswith("linux"):

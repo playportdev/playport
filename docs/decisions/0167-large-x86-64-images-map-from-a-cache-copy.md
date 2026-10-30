@@ -6,6 +6,9 @@ images, and it keeps [0150](0150-dev-single-process-social-club.md)'s "no instal
 changed on disk": only a separate copy in the app's caches is written.
 [Plan](../plans/2026-10-29-sc-stock-cef.md), [evidence](../evidence/2026-10-29-sc-stock-cef-probe.md).
 
+**As built 2026-10-30 (owner, PLA-476):** the key carries the file's ctime, and each use checks 16
+sampled points ([below](#as-built-2026-10-30-the-ctime-in-the-key-and-a-sampled-check-madeira-unix-0238)).
+
 ## Context
 
 - **When an image's section is copied (M, code).** madeira-unix's `map_file_into_view_ex` mmaps an image
@@ -148,6 +151,35 @@ changed on disk": only a separate copy in the app's caches is written.
 - Proof owed: Hollow Knight first-frame+10; in the next RDR2 layout run, the write and its time, the game's
   helper's libcef mapped from the copy, and its `[proc-mem]` image `res_file/res_anon` (madeira-unix 0232)
   against l11.
+
+### As built, 2026-10-30: the ctime in the key and a sampled check (madeira-unix 0238)
+
+By the owner (PLA-476, hardening 2 of the V8-probe research), against the gap above: an in-place
+rewrite that keeps size, mtime and inode.
+
+- **The name** is `v2-<dev>-<ino>-<size>-<mtime s.ns>-<ctime s.ns>-<view size>.img`. No one can set a
+  file's status change time, and any write changes it; a chmod or a new link only costs a miss. A name
+  that does not fit the runtime's 128 bytes takes the `pread` path.
+- **A sampled content check on each use**, after the header compare, with no stored hash.
+  - `pp_img_cache.h`'s `ppic_samples` picks 16 points:
+    - spread evenly over the bytes the file's runs put in the copy;
+    - each 4 KiB, starting on a 4 KiB boundary of its run;
+    - none under a later run (the header page past SizeOfHeaders is zeroed after the header is
+      mapped).
+  - At each point, `pread` the image file at the run's offset and the copy at the rva, and compare.
+    This costs about 128 KiB of reads per map, under `virtual_mutex`.
+  - A difference deletes the copy. The image is read as before and its copy is written again.
+- **Older copies.** The writer deletes `.img` copies of another name version (the `v1-…` copies)
+  before it writes.
+- **Lines:** the use line ends `(N MiB; 16 sampled points equal the file)`. A difference logs
+  `[img-cache] <image>: copy <name> differs from the file at rva 0x… (sampled check); deleted, read
+  as before`, and an old copy logs `[img-cache] deleted <name> (an older version's copy)`.
+- **What it still misses:** a rewrite between points whose ctime stays the same, which no userspace
+  write can produce.
+- **Host test:** `tools/tests/test_img_cache.py` covers:
+  - the name and its length bound;
+  - the points on libcef's layout (count, spread, inside a run, never under a later run);
+  - a right copy passing, and a byte rewritten at any point failing.
 
 ## Consequences
 
