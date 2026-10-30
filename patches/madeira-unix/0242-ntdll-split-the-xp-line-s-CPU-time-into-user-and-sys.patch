@@ -1,0 +1,49 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: playportdev <dev@playport.dev>
+Date: Fri, 30 Oct 2026 21:35:19 +0100
+Subject: [PATCH 242/242] ntdll: split the [xp] line's CPU time into user and
+ system
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The [xp] census's cpu= is ri_user_time plus ri_system_time. In RDR2's
+cabin, compressed memory grows from 1.1 to 4.2 GB as the P cores park,
+and the time the faulting threads spend in the kernel (page faults,
+decompression) hides inside E= (PLA-364, rdr2-cpu-cores §5).
+
+The line now ends with usr= and sys=, the two parts of cpu= in ms over
+the tick. Nothing else changes; a release build runs no [xp] sampler
+(MADEIRA_NO_DIAGNOSTICS, madeira-unix 0018).
+
+Linear: PLA-364
+Class: diagnostics
+Evidence: docs/evidence/2026-10-30-rdr2-kk-audio-diagnostics.md
+Offered-upstream: no
+---
+ build/ntdll-unix/server_ios.c | 7 +++++--
+ 1 file changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/build/ntdll-unix/server_ios.c b/build/ntdll-unix/server_ios.c
+index 397f917..d6e77f4 100644
+--- a/build/ntdll-unix/server_ios.c
++++ b/build/ntdll-unix/server_ios.c
+@@ -1947,13 +1947,16 @@ static void ios_xprobe_main( void )
+             gettimeofday( &tv, NULL ); localtime_r( &tv.tv_sec, &tmv );
+             snprintf( wall, sizeof(wall), "%02d:%02d:%02d.%03d", tmv.tm_hour, tmv.tm_min, tmv.tm_sec, (int)(tv.tv_usec / 1000) );
+             n = snprintf( line, sizeof(line),
+-                          "[xp] %s +%.2f dt=%.0f cpu=%.0f (thr %.0f) P=%.0f E=%.0f run=%.0f pgw=%.1f GHz P=%.2f E=%.2f Minst=%.0f IPC=%.2f mJ=%.0f pin=%llu rdKB=%llu fpMB=%llu",
++                          "[xp] %s +%.2f dt=%.0f cpu=%.0f (thr %.0f) P=%.0f E=%.0f run=%.0f pgw=%.1f GHz P=%.2f E=%.2f Minst=%.0f IPC=%.2f mJ=%.0f pin=%llu rdKB=%llu fpMB=%llu usr=%.0f sys=%.0f",
+                           wall, XP_MS( now - t_start ) / 1000.0, dt_ms, cpu, sum_thr_ms, pms, ems,
+                           XP_MS( ru.ri_runnable_time - pru.ri_runnable_time ), 0.0 /* Playport: ri_page_wait_time_mach is not in the iOS 26.5 SDK's rusage_info_v6 */,
+                           pms > 0 ? pcy / (pms * 1e6) : 0, ems > 0 ? (cy - pcy) / (ems * 1e6) : 0, ins / 1e6, cy > 0 ? ins / cy : 0,
+                           (double)(ru.ri_energy_nj - pru.ri_energy_nj) / 1e6,
+                           (unsigned long long)(ru.ri_pageins - pru.ri_pageins), (unsigned long long)((ru.ri_diskio_bytesread - pru.ri_diskio_bytesread) >> 10),
+-                          (unsigned long long)(ru.ri_phys_footprint >> 20) );
++                          (unsigned long long)(ru.ri_phys_footprint >> 20),
++                          /* Playport (PLA-364): cpu split into user and system time (system: the
++                           * kernel's work for the process, page faults and decompression included) */
++                          XP_MS( ru.ri_user_time - pru.ri_user_time ), XP_MS( ru.ri_system_time - pru.ri_system_time ) );
+             if (qf && n < (int)sizeof(line))
+                 snprintf( line + n, sizeof(line) - n,
+                           " | pres %lld/%lld thr=%.1f ecl %lld/%.1f sig %lld/%.1f wait %lld/%.1f prs=%.1f (flush %.1f lat %lld/%.1f draw %.1f cmt %.1f) pool=%.1f caller-ecl %lld/%.1f",
