@@ -9,9 +9,13 @@
 //
 // A control is a layout control's id (UI/TouchControlsView.swift,
 // PlayportKit ControlLayout: view menu lt lb rt rb leftStick y x b a in the
-// Gamepad layout, with dpad and rightStick when the game's options have them); a stick or the d-pad takes a direction after
-// a dot (`dpad.right`, `leftStick.up`: the stick fully over, the d-pad near
-// its edge). A floating stick's finger lands at its home, in its zone. The
+// Gamepad layout, with dpad and rightStick when the game's options have them;
+// look esc tab keyboard 1 2 3 4 move use reload jump fire in Keyboard & mouse);
+// a stick or the d-pad takes a direction after
+// a dot (`dpad.right`, `leftStick.up`, `move.up`: the stick fully over, the d-pad near
+// its edge). A floating stick's finger lands at its home, in its zone. The look
+// area takes a direction too: a finger lands in its middle and drags `lookDrag`
+// points that way at once (`look.left`: the view turns left), then rests. The
 // in-game menu's three-finger tap is the driver's `gesture:three-finger-tap`. Every finger goes down together, stays `ms`
 // milliseconds (200 by default, 10000 at most), and lifts together.
 
@@ -57,8 +61,9 @@ extension OnScreenControls {
                 switch t.kind {
                 case .stick, .keyStick: reach = t.frame.width / 2
                 case .dpad: reach = min(t.frame.width, t.frame.height) * 0.4
+                case .look: reach = Self.lookDrag
                 case .button: return "\(w[0]) is a button: it takes no direction"
-                case .look, .pointer, .tool: return "\(w[0]) takes no direction"
+                case .pointer, .tool: return "\(w[0]) takes no direction"
                 }
                 let d: (Double, Double)
                 switch w[1] {
@@ -83,6 +88,13 @@ extension OnScreenControls {
             }
         }
         for f in fingers where f.to != f.at { moved(f.touch, at: f.to) }
+        for f in fingers where f.to != f.at {
+            guard let n = controls.target(at: TouchPoint(x: Double(f.at.x), y: Double(f.at.y))),
+                  case .look = controls.targets[n].kind else { continue }
+            let dx = Double(f.to.x - f.at.x), dy = Double(f.to.y - f.at.y)
+            HostIO.log("controls: driver drags \(controls.targets[n].id) \(Int(dx)),\(Int(dy)) pt: mouse "
+                       + "\(Int(dx * controls.lookScale)),\(Int(dy * controls.lookScale)) counts")
+        }
         let pad = PadMapping.values(controls.output.pad)
         HostIO.log("controls: driver holds \(controls.held.sorted().joined(separator: "+")) for \(ms) ms: "
                    + String(format: "buttons=0x%04x lt=%d rt=%d lx=%d ly=%d rx=%d ry=%d", pad.buttons, pad.leftTrigger,
@@ -90,6 +102,9 @@ extension OnScreenControls {
         try await UIDriver.pause(.milliseconds(ms))
         return nil
     }
+
+    /// How far a driver's `look.<direction>` drags, in points.
+    static let lookDrag = 100.0
 
     /// The driver's summary line.
     var summary: String {

@@ -99,6 +99,13 @@ best-effort and reported as unconfirmed; transport loss/SIGKILL can leave cancel
                          The controls show while no controller is connected (--pad connects one).
                          Example: --action play:app-367520 --action wait:20 --action touch:a
                          --action touch:leftStick.right@2000 --action touch:leftStick.right+a@600
+                         The Keyboard & mouse layout's ids ("layout":"keyboardMouse"): look esc tab
+                         keyboard 1 2 3 4 move use reload jump fire; move (the W A S D stick) takes a
+                         direction (move.up holds W), and so does look: a finger lands in the look
+                         area's middle and drags 100 pt that way at once (look.left turns the view left,
+                         300 mouse counts; the log's `controls: driver drags look` line), then rests.
+                         Example: --controls 'app-620:{"layout":"keyboardMouse"}' --action play:app-620
+                         --action wait:30 --action touch:move.up@1500 --action touch:look.left+fire@400
   gyro:STEP[/STEP...]    after a play: (it runs while the game runs): wait for the game's first frame,
                          then play a scripted gyro into gyro aim where the sensors' samples enter it
                          (Dev/GyroDriver.swift, HostIOKit GyroScript), at 100 Hz, the device upright.
@@ -126,7 +133,8 @@ best-effort and reported as unconfirmed; transport loss/SIGKILL can leave cancel
   menu:ROW               in that menu, move its ring to ROW (resume, controls, screenshot, overlay,
                          controller, quit) and press A; pad:up/down/a/b press into the menu while it is up.
                          menu:controls opens its Controls panel: pad:left/right change the ringed row
-                         (On-screen controls: Off, Gamepad; D-pad: Off, On; Right stick: Off, Below, Above
+                         (On-screen controls: Off, Pad, Keys (Keyboard & mouse), Point (Point & click);
+                         D-pad: Off, On; Right stick: Off, Below, Above
                          A/B/X/Y; Opacity; Gyro aim: Off, Mouse, Right stick; Sensitivity; and, while a
                          controller is connected, --pad's scripted pad too, Controller: Pad, Keys &
                          mouse, Custom), pad:down/up move, pad:b goes back. pad:a on Controller (or
@@ -232,9 +240,11 @@ best-effort and reported as unconfirmed; transport loss/SIGKILL can leave cancel
                          with no game; the run is done as it asks (use --leave-running); must be
                          the last action
   --controls ID:JSON     a game's own on-screen controls, as the in-game menu's Controls saves them
-                         (PlayportKit GameControls: {"layout":"off"|"gamepad","opacity":0.1-1,
-                         "dpad":"off"|"on","rightStick":"off"|"below"|"above","gyro":{...}}; a key left out
-                         follows Settings › Controls, where the d-pad and right stick are off by default;
+                         (PlayportKit GameControls: {"layout":"off"|"gamepad"|"keyboardMouse"|"pointClick",
+                         "opacity":0.1-1,"dpad":"off"|"on","rightStick":"off"|"below"|"above","gyro":{...}}; a
+                         key left out follows Settings › Controls, where the layout is its Starting layout
+                         (set:controls.startingLayout=keyboardMouse; Gamepad by default) and the d-pad and
+                         right stick are off by default;
                          `ID:{}` clears). "gyro" is the game's own gyro aim (PlayportKit GameGyro), each key
                          left out following the gyro.* defaults (output off): "output":"off"|"mouse"|
                          "rightStick", "source":"auto"|"phone"|"controller", "sensitivity":0.05-20 (1.5 by default),
@@ -451,6 +461,9 @@ class EndOnTerm:
                 signal.signal(sig, handler)
         return True
 
+
+# PlayportKit OnScreenLayout's names: --controls' "layout".
+LAYOUTS = ("off", "gamepad", "keyboardMouse", "pointClick")
 
 # Dev/UIDriverGameSection.swift: per-game destinations, independent of title/store ID grammar.
 GAME_SECTIONS = ("graphics", "controls", "game", "files", "developer", "ordering", "steam",
@@ -687,7 +700,8 @@ def parse(argv=None):
                    help="open:SCREEN|ID[#SECTION], pad:BUTTON[+BUTTON...], wait:S, menu:open|ROW, touch:CONTROL[+CONTROL...][@MS], gyro:STEP[/STEP...], gesture:three-finger-tap, set:KEY=VALUE, hud:on|off, install:APP, pause-resume:APP, queue:APP, downloading:APP, import:PATH, uninstall:ID, "
                         "verify:ID, repair:ID, play:ID, probe:helper-exit|kill|report, probe:relaunch, probe:pairing[-cancel|-use]; in order, before --settings/--verify/--play")
     p.add_argument("--controls", metavar="ID:JSON",
-                   help='save these on-screen controls for the title first ({"layout":"off"} or '
+                   help='save these on-screen controls for the title first ({"layout":"off"}, '
+                        '{"layout":"keyboardMouse"}, {"layout":"pointClick"} or '
                         '{"layout":"gamepad","opacity":0.8,"dpad":"on","rightStick":"below"}, with "gyro":'
                         '{"output":"mouse","sensitivity":1.5} for its gyro aim, "controllerMap":{"mode":"keyboardMouse"} for its '
                         'controller map, "lookSpeed":2 for its mouse look; {} clears them)')
@@ -757,7 +771,7 @@ def parse(argv=None):
             cobj = json.loads(cjs)
             ok = ID_RE.match(cid) and isinstance(cobj, dict) \
                 and set(cobj) <= {"layout", "opacity", "dpad", "rightStick", "gyro", "controllerMap", "lookSpeed"} \
-                and cobj.get("layout", "off") in ("off", "gamepad") \
+                and cobj.get("layout", "off") in LAYOUTS \
                 and number(cobj.get("opacity", 0.5), 0.1, 1) \
                 and cobj.get("dpad", "off") in ("off", "on") \
                 and cobj.get("rightStick", "off") in ("off", "below", "above") \
@@ -767,7 +781,7 @@ def parse(argv=None):
         except ValueError:
             ok = False
         if not ok:
-            p.error(f"{a.controls!r} is not ID:JSON with layout (off, gamepad), opacity (0.1-1), dpad (off, on), "
+            p.error(f"{a.controls!r} is not ID:JSON with layout ({', '.join(LAYOUTS)}), opacity (0.1-1), dpad (off, on), "
                     "rightStick (off, below, above) and gyro (an object: output off|mouse|rightStick, source "
                     "auto|phone|controller, sensitivity 0.05-20, verticalRatio 0-4, turnAxis playerSpace|yaw|roll, "
                     "invertX/invertY true|false, pauseButton none|pad:BUTTON, antiDeadZone 0-0.9, smoothing auto|off|light|normal) "

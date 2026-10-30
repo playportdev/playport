@@ -567,7 +567,7 @@ private struct ControlsPanel: View {
     @ViewBuilder
     private func rowView(_ r: QuickMenuControlsRow) -> some View {
         switch r {
-        case .layout: row(.layout) { choices(.layout, OnScreenLayout.allCases, state.layout, title: \.title) }
+        case .layout: row(.layout) { choices(.layout, OnScreenLayout.allCases, state.layout, title: \.shortTitle, compact: true) }
         case .dpad: row(.dpad) { choices(.dpad, OnScreenDpad.allCases, state.dpad, title: \.title) }
         case .rightStick: row(.rightStick) { choices(.rightStick, OnScreenRightStick.allCases, state.rightStick, title: \.shortTitle) }
         case .opacity: row(.opacity) { stepper(.opacity, ControlsOpacity.label(state.opacity)) }
@@ -614,7 +614,8 @@ private struct ControlsPanel: View {
     }
 
     /// A row's values side by side, the current one filled; a tap chooses one.
-    /// `compact`: narrower, so a long title fits beside three of them (the Controller row).
+    /// `compact`: narrower, so a long title fits beside them (the Controller row's three, the
+    /// On-screen controls row's four layouts).
     private func choices<T: Hashable & RawRepresentable>(_ r: QuickMenuControlsRow, _ all: [T], _ current: T,
                                                           title: KeyPath<T, String>, compact: Bool = false) -> some View
     where T.RawValue == String {

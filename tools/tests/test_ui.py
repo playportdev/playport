@@ -299,6 +299,8 @@ class UiEnvTest(unittest.TestCase):
         m = load()
         for ok in ("touch:a", "touch:dpad.right@2000", "touch:dpad.right+a@600",
                    "touch:leftStick.up+rightStick.left@10000", "menu:controls", "open:settings#controls",
+                   # Keyboard & mouse: the W A S D stick, a look drag while firing, a number key.
+                   "touch:move.up@1500", "touch:look.left+fire@400", "touch:1",
                    "open:settings#controllers"):
             self.assertTrue(m.ACTION_RE.match(ok), ok)
         for bad in ("touch:", "touch:a@", "touch:a.b", "touch:a@123456", "touch:a+", "touch:a,b", "menu:control"):
@@ -395,7 +397,11 @@ class UiEnvTest(unittest.TestCase):
             self.assertEqual(a.controls_pair,
                              ("app-367520", f'{{"layout":"gamepad","dpad":"on","rightStick":"{stick}"}}'))
         self.assertEqual(m.parse(["--controls", 'app-367520:{"dpad":"off"}']).controls_pair, ("app-367520", '{"dpad":"off"}'))
-        for bad in ('app-367520:{"layout":"tank"}', 'app-367520:{"opacity":3}', 'app-367520:{"x":1}', "app-367520:[]",
+        # Every layout (PlayportKit OnScreenLayout).
+        for layout in ("off", "gamepad", "keyboardMouse", "pointClick"):
+            self.assertEqual(m.parse(["--controls", f'app-620:{{"layout":"{layout}"}}']).controls_pair,
+                             ("app-620", f'{{"layout":"{layout}"}}'))
+        for bad in ('app-367520:{"layout":"tank"}', 'app-367520:{"layout":"Keyboard & mouse"}', 'app-367520:{"opacity":3}', 'app-367520:{"x":1}', "app-367520:[]",
                     'nope:{}', 'app-367520:{"dpad":"yes"}', 'app-367520:{"dpad":true}', 'app-367520:{"rightStick":"left"}',
                     'app-367520:{"rightStick":"Below A/B/X/Y"}'):
             with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
