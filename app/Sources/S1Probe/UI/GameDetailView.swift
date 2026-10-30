@@ -736,8 +736,9 @@ private struct GameDetailPage: View {
         let inheritedGraphics = launchSettings.effective(for: t, inheritingGraphics: true).graphics
         let d3d = OptionValue.of(own: own.graphics, compat: cs?.graphics, inherited: inheritedGraphics, name: LaunchSettingsText.graphics)
         PadSectionHeader(text: "Graphics").id("graphics")
-        if let compat {
-            // On the page for touch and in the ring for a controller: what the marker means.
+        if let compat, compat.settings != LaunchSettings() {
+            // On the page for touch and in the ring for a controller: what the marker means. An entry
+            // that sets only the on-screen layout says so in Controls (GameControlsOptionRows).
             PadRow(id: "opt:compat", title: "\(OptionValue.compatMarker) Set for this game's compatibility",
                    subtitle: compat.reason + " Your own choice on a row below wins; Y on that row comes back to this.",
                    subtitleLines: nil, style: .plain, hint: "Info") {}

@@ -28,6 +28,16 @@ void host_pad_set(int slot, const hio_pad_state *st);
 void host_pad_disconnect(int slot);
 int host_pads_release_all(void);
 
+/* The game's XInput state reads (hio_pads.c). win32u's ios_gamepad_query calls
+ * playport_gamepad_state_read once for each XInputGetState, any slot, connected
+ * or not (patches/madeira-unix/0224, a weak reference: a runtime without the
+ * patch never calls it); the app's own snapshot reads do not count.
+ * host_pad_state_reads is the total since the process started, i.e. this
+ * game's (decision 0029): the suggested layout (PlayportKit LayoutSuggestion)
+ * offers Keyboard & mouse to a game on Gamepad that made none. Lock-free. */
+void playport_gamepad_state_read(void);
+uint64_t host_pad_state_reads(void);
+
 /* Winios.m + patches/madeira-winios/0002-Winios-accept-pointer-and-focus-events-posted-by-the.patch.
  * fx, fy: 0..65535 across the foreground window's client area; flags are
  * MOUSEEVENTF_* (ABSOLUTE is implied). active: 0 when the app leaves the

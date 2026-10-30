@@ -138,6 +138,9 @@ final class CompatDefaultsTests: XCTestCase {
             (#"{"titles":{"epic-A":{"settings":{"screen":"wide"},"reason":"Why."}}}"#, .badSetting("epic-A.screen")),
             (#"{"titles":{"epic-A":{"settings":{"frameLimit":-1},"reason":"Why."}}}"#, .badSetting("epic-A.frameLimit")),
             (#"{"titles":{"epic-A":{"settings":{},"reason":"Why."}}}"#, .notAnObject("epic-A.settings")),
+            (#"{"titles":{"epic-A":{"reason":"Why."}}}"#, .notAnObject("epic-A.settings")),
+            (#"{"titles":{"epic-A":{"controls":"mouse","reason":"Why."}}}"#, .badSetting("epic-A.controls")),
+            (#"{"titles":{"epic-A":{"controls":["keyboardMouse"],"reason":"Why."}}}"#, .badSetting("epic-A.controls")),
         ]
         for (json, error) in bad {
             XCTAssertThrowsError(try parse(json), json) { XCTAssertEqual($0 as? CompatDefaultsError, error, json) }
@@ -145,6 +148,29 @@ final class CompatDefaultsTests: XCTestCase {
         // Any launch setting may be a default, in the --settings JSON form.
         XCTAssertEqual(try parse(#"{"titles":{"app-1":{"settings":{"frameLimit":30,"graphics":"vulkan","arguments":"-dx9"},"reason":"Why."}}}"#)
             .entry(for: "app-1")?.settings, LaunchSettings(frameLimit: 30, graphics: .vulkan, arguments: "-dx9"))
+    }
+
+    /// An entry may set the game's starting on-screen layout (`controls`), with or without launch
+    /// settings (touch controls phase 4).
+    func testAnEntryMaySetTheStartingLayout() throws {
+        let only = try XCTUnwrap(parse(#"{"titles":{"app-1":{"controls":"keyboardMouse","reason":"Why."}}}"#).entry(for: "app-1"))
+        XCTAssertEqual(only.controls, .keyboardMouse)
+        XCTAssertEqual(only.settings, LaunchSettings())
+        let both = try XCTUnwrap(parse(#"{"titles":{"app-1":{"settings":{"frameLimit":30},"controls":"pointClick","reason":"Why."}}}"#)
+            .entry(for: "app-1"))
+        XCTAssertEqual(both.controls, .pointClick)
+        XCTAssertEqual(both.settings, LaunchSettings(frameLimit: 30))
+        XCTAssertNil(try XCTUnwrap(parse(#"{"titles":{"app-1":{"settings":{"frameLimit":30},"reason":"Why."}}}"#).entry(for: "app-1")).controls)
+    }
+
+    /// Assassin's Creed takes no controller without a third-party fix (its Options list only keyboard
+    /// layouts): it starts on Keyboard & mouse, and its launch settings are Playport's.
+    func testTheShippedTableStartsAssassinsCreedOnKeyboardAndMouse() throws {
+        let table = try CompatDefaults.load(directory: Self.shipped)
+        let ac = try XCTUnwrap(table.entry(for: "app-15100"))
+        XCTAssertEqual(ac.controls, .keyboardMouse)
+        XCTAssertEqual(ac.settings, LaunchSettings())
+        XCTAssertNil(table.entry(for: "epic-Buffalo")?.controls)
     }
 
     /// The person's own choice, then the compatibility default, then Settings, then Playport's.

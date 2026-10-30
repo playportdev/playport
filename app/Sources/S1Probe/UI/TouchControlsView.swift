@@ -137,6 +137,7 @@ final class OnScreenControls: ObservableObject {
         TitleLaunch.shared.objectWillChange.sink { _ in later() }.store(in: &subscriptions)
         update()
         Self.log("start: \(n) controller(s) connected; \(state.summary), " + (padOn ? "player 1 is the controls' pad" : "no controls' pad"))
+        SuggestedLayout.shared.start()
     }
 
     func controllersChanged(_ n: Int) {
@@ -211,7 +212,8 @@ final class OnScreenControls: ObservableObject {
         let launch = TitleLaunch.shared
         let game = launch.titleID.map { ControlsStore.shared.game($0) }
         let defaults = ControlsStore.shared.defaults
-        let s = ControlsState.resolve(game: game, defaults: defaults, controllerConnected: controllers > 0)
+        let compat = launch.titleID.flatMap { LaunchSettingsStore.compat.entry(for: $0)?.controls }
+        let s = ControlsState.resolve(game: game, defaults: defaults, controllerConnected: controllers > 0, compat: compat)
         let newLayout = s.drawnLayout
         let drawNow = (newLayout != nil || keyboard) && launch.running && launch.step == .drawing && !launch.quitting
             && !guestHeld && !dialog
@@ -694,7 +696,7 @@ private enum PointerIcons {
     }
 }
 
-private extension UIView {
+extension UIView {
     /// The safe area over the game. The game view ignores the safe area and
     /// fills the window: the window's insets are taken too, whichever is larger.
     var gameSafeInsets: UIEdgeInsets {

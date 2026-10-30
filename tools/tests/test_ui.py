@@ -406,6 +406,16 @@ class UiEnvTest(unittest.TestCase):
         self.assertEqual(m.in_game(["play:app-367520", "touch:playport", "pad:a"], 1), 1)
         self.assertEqual(m.pad_after_play(["play:app-367520", "touch:playport", "pad:a"]), "pad:a")
 
+    def test_suggest_answers_the_suggested_layouts_toast_while_the_game_runs(self):
+        """suggest:accept|dismiss waits for the Keyboard & mouse offer (PlayportKit LayoutSuggestion)
+        and answers it as its buttons do; it runs while the game runs."""
+        m = load()
+        for ok in ("suggest:accept", "suggest:dismiss"):
+            self.assertTrue(m.ACTION_RE.match(ok), ok)
+        for bad in ("suggest:", "suggest:yes", "suggest:accept@100"):
+            self.assertFalse(m.ACTION_RE.match(bad), bad)
+        self.assertEqual(m.in_game(["play:app-15100", "suggest:accept", "touch:fire"], 1), 2)
+
     def test_controls_saves_a_games_on_screen_controls_before_play(self):
         m = load()
         env = m.ui_env("n1", play="app-367520", controls=("app-367520", '{"layout":"off"}'),
