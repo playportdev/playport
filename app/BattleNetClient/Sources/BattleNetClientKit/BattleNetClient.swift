@@ -63,10 +63,20 @@ public struct BattleNetClient: Sendable {
     let gate: RequestGate
 
     public init(transport: any BattleNetTransport, keys: TACTKeyring = TACTKeyring(), manners: BattleNetManners = BattleNetManners()) {
+        self.init(transport: transport, keys: keys, manners: manners, gate: RequestGate(limit: manners.maxConcurrent))
+    }
+
+    private init(transport: any BattleNetTransport, keys: TACTKeyring, manners: BattleNetManners, gate: RequestGate) {
         self.transport = transport
         self.keys = keys
         self.manners = manners
-        gate = RequestGate(limit: manners.maxConcurrent)
+        self.gate = gate
+    }
+
+    /// This client with `more` keys: the same transport, request limit and paused hosts, so a
+    /// download with a build's key ring and the store's own requests share one set of manners.
+    public func adding(keys more: TACTKeyring) -> BattleNetClient {
+        BattleNetClient(transport: transport, keys: keys.merging(more), manners: manners, gate: gate)
     }
 
     // MARK: discovery
@@ -235,8 +245,11 @@ public struct BattleNetClient: Sendable {
                 throw BattleNetError.unreachable("\(what): \(host): \(error.localizedDescription)")
             }
             if response.status == 429, attempt < manners.retries {
+                let backoff = min(manners.maxBackoff, manners.backoff * Double(1 << attempt))
+                // A Retry-After that is not a finite, non-negative number of seconds is ignored;
+                // a huge one waits at most `maxBackoff`.
                 let wait = response.headers["retry-after"].flatMap { Double($0.trimmingCharacters(in: .whitespaces)) }
-                    ?? min(manners.maxBackoff, manners.backoff * Double(1 << attempt))
+                    .flatMap { $0.isFinite && $0 >= 0 ? min($0, manners.maxBackoff) : nil } ?? backoff
                 attempt += 1
                 await gate.pause(host, for: wait)
                 try await manners.sleep(wait)
@@ -268,7 +281,7 @@ public struct BattleNetClient: Sendable {
                 switch e {
                 case .unreachable, .refused: network = network ?? e
                 case .damaged: damaged = damaged ?? e
-                case .missingKey, .unsupported: throw e
+                case .missingKey, .unsupported, .outdated: throw e
                 }
             }
         }

@@ -87,28 +87,36 @@ public struct ArchiveIndex: Sendable {
         }
         self.bytes = bytes
         var seen = 0
-        forEach { _ in seen += 1 }
+        try walk { _, _, field in
+            // An archive's offset is 32 bits; a 5-byte field past that would be cut short.
+            guard offsetBytes != 5 || field <= UInt64(UInt32.max) else { throw BattleNetError.damaged("\(what): offset \(field) past 32 bits") }
+            seen += 1
+        }
         guard seen == count else { throw BattleNetError.damaged("\(what): \(seen) entries, the footer says \(count)") }
     }
 
-    /// Every entry, in key order. `archive` is the entry's own (archive group) or `archive`.
-    public func forEach(archive: Int? = nil, _ body: (Entry) throws -> Void) rethrows {
+    /// Every entry's key, size and offset field (the archive number and offset for 6 bytes), in
+    /// key order.
+    private func walk(_ body: (PackedKey, UInt32, UInt64) throws -> Void) rethrows {
         let entrySize = 20 + offsetBytes
         for b in 0..<blocks {
             var at = b * Self.blockSize
             let end = at + Self.blockSize - entrySize
             while at <= end {
                 if bytes[at..<(at + 16)].allSatisfy({ $0 == 0 }) { break }
-                let key = PackedKey(bytes[at..<(at + 16)])
-                let size = UInt32(bytes[at + 16]) << 24 | UInt32(bytes[at + 17]) << 16 | UInt32(bytes[at + 18]) << 8 | UInt32(bytes[at + 19])
-                var field: UInt64 = 0
-                for i in 0..<offsetBytes { field = field << 8 | UInt64(bytes[at + 20 + i]) }
-                switch offsetBytes {
-                case 0: try body(Entry(key: key, size: size, archive: nil, offset: 0))
-                case 6: try body(Entry(key: key, size: size, archive: Int(field >> 32), offset: UInt32(truncatingIfNeeded: field)))
-                default: try body(Entry(key: key, size: size, archive: archive, offset: UInt32(truncatingIfNeeded: field)))
-                }
+                try body(PackedKey(bytes[at..<(at + 16)]), UInt32(ByteReader.be(bytes, at: at + 16, 4)), ByteReader.be(bytes, at: at + 20, offsetBytes))
                 at += entrySize
+            }
+        }
+    }
+
+    /// Every entry, in key order. `archive` is the entry's own (archive group) or `archive`.
+    public func forEach(archive: Int? = nil, _ body: (Entry) throws -> Void) rethrows {
+        try walk { key, size, field in
+            switch offsetBytes {
+            case 0: try body(Entry(key: key, size: size, archive: nil, offset: 0))
+            case 6: try body(Entry(key: key, size: size, archive: Int(field >> 32), offset: UInt32(truncatingIfNeeded: field)))
+            default: try body(Entry(key: key, size: size, archive: archive, offset: UInt32(field)))
             }
         }
     }

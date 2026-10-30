@@ -71,16 +71,7 @@ extension BattleNetInstaller {
             let from = meta.appendingPathComponent(key.hex + ".index")
             if InstallFS.fileSize(to) == nil, InstallFS.fileSize(from) != nil { try place(from, at: to) }
         }
-        var groupWritten = false
-        if let name = prepared.cdnConfig.archiveGroup {
-            let group = try Self.archiveGroup(prepared.cdnConfig.archives, meta: meta, installed: root)
-            if MD5.hash(Array(group.suffix(ArchiveIndex.footerSize))) == name.bytes {
-                try InstallFS.writeAtomically(try InstallFS.resolveInside(root, "Data/indices/\(name.hex).index", createParents: true), Data(group))
-                groupWritten = true
-            } else {
-                log.warn("battlenet", "the archive group built here does not hash to \(name); left for the game to build")
-            }
-        }
+        let groupWritten = try writeArchiveGroup(prepared.cdnConfig, meta: meta, into: root, installed: root)
 
         var info = try Self.readBuildInfo(root, b.product)
         let old = info.version

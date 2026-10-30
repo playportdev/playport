@@ -116,6 +116,30 @@ final class BattleNetClientKitTests: XCTestCase {
         XCTAssertEqual(cdn.fileIndex, hash("fa4469b6b0d31810a6ea07bfddffe1e9"))
     }
 
+    /// Archive index sizes that add up past 64 bits are a damaged config, not a trap.
+    func testArchiveIndexSizesThatOverflowAreDamaged() {
+        let text = "archives = \(String(repeating: "ab", count: 16))\narchives-index-size = 18446744073709551615 1\n"
+        XCTAssertThrowsError(try CDNConfig(Array(text.utf8))) { error in
+            guard case BattleNetError.damaged = error else { return XCTFail("\(error)") }
+        }
+    }
+
+    /// A 5-byte archive offset past 32 bits would be cut short; the index is refused instead.
+    func testAFiveByteOffsetThatDoesNotFitIsRefused() throws {
+        let key = PackedKey([UInt8](repeating: 0x11, count: 16))
+        var index = ArchiveIndex.build([ArchiveIndex.Entry(key: key, size: 10, archive: nil, offset: 5)], offsetBytes: 5)
+        XCTAssertEqual(try ArchiveIndex(index, name: nil).count, 1)
+        // The offset's high byte set, and the block, table of contents and footer hashes made to match.
+        index[20] = 1
+        let body = index.count - ArchiveIndex.footerSize, blocks = body / (ArchiveIndex.blockSize + 24)
+        index.replaceSubrange((blocks * ArchiveIndex.blockSize + blocks * 16)..<(blocks * ArchiveIndex.blockSize + blocks * 16 + 8),
+                              with: MD5.hash(Array(index[0..<ArchiveIndex.blockSize])).prefix(8))
+        index.replaceSubrange(body..<(body + 8), with: MD5.hash(Array(index[(blocks * ArchiveIndex.blockSize)..<body])).prefix(8))
+        XCTAssertThrowsError(try ArchiveIndex(index, name: nil)) { error in
+            guard case BattleNetError.damaged = error else { return XCTFail("\(error)") }
+        }
+    }
+
     func testTheKeyRingConfigNamesKeysInTheirBytesOrder() throws {
         let ring = try TACTKeyring(keyRingConfig: try fixture("wow-keyring.txt"))
         XCTAssertEqual(ring.keys.count, 1)
@@ -458,7 +482,9 @@ final class BattleNetClientKitTests: XCTestCase {
         }
         try (rows.joined(separator: "\n") + "\n").write(toFile: out, atomically: true, encoding: .utf8)
     }
+}
 
+extension XCTestCase {
     func assertThrows<T>(_ body: @autoclosure () async throws -> T, file: StaticString = #filePath, line: UInt = #line,
                          _ check: (BattleNetError) -> Void) async {
         do {

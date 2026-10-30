@@ -63,9 +63,11 @@ struct BattleNetChunkSource: ContentChunkSource {
                 return try await client.archiveRange(plan.archives[Int(run.archive)], offset: UInt64(run.offset), length: Int(run.length),
                                                      from: plan.build.cdn)
             } catch let e as BattleNetError {
-                // A missing key or an unsupported format is the same on every try.
-                if case .missingKey = e { throw e }
-                if case .unsupported = e { throw e }
+                // A missing key, an unsupported format or an outdated install is the same on every try.
+                switch e {
+                case .missingKey, .unsupported, .outdated: throw e
+                case .unreachable, .refused, .damaged: break
+                }
                 attempt += 1
                 guard attempt < attempts else { throw e }
                 try await client.manners.sleep(Double(attempt) * client.manners.backoff)
@@ -134,6 +136,12 @@ public struct BattleNetInstaller: Sendable {
         let build = try await client.build(product, region)
         let r = try await read(build, work: work)
         let selection = try BattleNetSelection(build: build, download: r.download, install: r.install, encoding: r.encoding, options: options)
+        // Play starts only the ARM64 client (decision 0168): a build whose selection lacks it is
+        // refused here, before any of it is downloaded.
+        guard selection.arm64Client(build.productConfig) != nil else {
+            throw BattleNetError.unsupported("\(product.code) \(build.version.versionsName): the install has no ARM64 client "
+                                             + "(\(build.productConfig.arm64Executable ?? "none named"))")
+        }
         let cdnConfig = r.cdnConfig, meta = r.meta
 
         log.info("battlenet", "\(cdnConfig.archives.count) archive indexes")
@@ -193,8 +201,7 @@ public struct BattleNetInstaller: Sendable {
             let bytes = try await client.config(ring, from: build.cdn)
             try save(meta, ring, bytes)
             configs.append(ring)
-            client = BattleNetClient(transport: client.transport, keys: client.keys.merging(try TACTKeyring(keyRingConfig: bytes)),
-                                     manners: client.manners)
+            client = client.adding(keys: try TACTKeyring(keyRingConfig: bytes))
         }
 
         let config = build.config.config
@@ -298,16 +305,7 @@ public struct BattleNetInstaller: Sendable {
             let to = try InstallFS.resolveInside(tree, "Data/indices/\(key.hex).index", createParents: true)
             try place(meta.appendingPathComponent(key.hex + ".index"), at: to)
         }
-        var groupWritten = false
-        if let name = prepared.cdnConfig.archiveGroup {
-            let group = try Self.archiveGroup(prepared.cdnConfig.archives, meta: meta)
-            if MD5.hash(Array(group.suffix(ArchiveIndex.footerSize))) == name.bytes {
-                try InstallFS.writeAtomically(try InstallFS.resolveInside(tree, "Data/indices/\(name.hex).index", createParents: true), Data(group))
-                groupWritten = true
-            } else {
-                log.warn("battlenet", "the archive group built here does not hash to \(name); left for the game to build")
-            }
-        }
+        let groupWritten = try writeArchiveGroup(prepared.cdnConfig, meta: meta, into: tree)
         for (bucket, journal) in plan.journals().enumerated() {
             let url = try InstallFS.resolveInside(tree, "Data/data/" + CASC.journalName(bucket: bucket, generation: 1), createParents: true)
             try InstallFS.writeAtomically(url, Data(journal))
@@ -342,6 +340,19 @@ public struct BattleNetInstaller: Sendable {
         do { try fm.linkItem(at: from, to: to) } catch { try fm.copyItem(at: from, to: to) }
     }
 
+    /// Writes the archive group into `dest`'s `Data/indices` when the CDN config names one and
+    /// the group built here hashes to that name; whether it was written.
+    func writeArchiveGroup(_ cdnConfig: CDNConfig, meta: URL, into dest: URL, installed: URL? = nil) throws -> Bool {
+        guard let name = cdnConfig.archiveGroup else { return false }
+        let group = try Self.archiveGroup(cdnConfig.archives, meta: meta, installed: installed)
+        guard MD5.hash(Array(group.suffix(ArchiveIndex.footerSize))) == name.bytes else {
+            log.warn("battlenet", "the archive group built here does not hash to \(name); left for the game to build")
+            return false
+        }
+        try InstallFS.writeAtomically(try InstallFS.resolveInside(dest, "Data/indices/\(name.hex).index", createParents: true), Data(group))
+        return true
+    }
+
     /// The archive group: every archive index's entries merged in key order, each with its
     /// archive's place in the CDN config's list (the first archive listing a key keeps it). Each
     /// index is read from `meta`, else from the `installed` store's `Data/indices`.
@@ -373,11 +384,13 @@ public struct BattleNetInstaller: Sendable {
         public var isIntact: Bool { damaged.isEmpty && missing.isEmpty }
     }
 
-    /// Each bucket's newest journal in a store's `Data/data`: its generation and name.
+    /// Each bucket's newest journal in a store's `Data/data`: its generation and name. A name of
+    /// a bucket the store does not have is not a journal.
     static func latestJournals(_ dataDir: URL) throws -> [Int: (generation: UInt32, name: String)] {
         var latest = [Int: (generation: UInt32, name: String)]()
         for name in try FileManager.default.contentsOfDirectory(atPath: dataDir.path) where name.hasSuffix(".idx") && name.count == 14 {
-            guard let bucket = Int(name.prefix(2), radix: 16), let gen = UInt32(name.dropFirst(2).prefix(8), radix: 16) else { continue }
+            guard let bucket = Int(name.prefix(2), radix: 16), bucket < CASC.buckets,
+                  let gen = UInt32(name.dropFirst(2).prefix(8), radix: 16) else { continue }
             if gen >= latest[bucket]?.generation ?? 0 { latest[bucket] = (gen, name) }
         }
         return latest

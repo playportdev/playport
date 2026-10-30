@@ -140,7 +140,7 @@ public struct SizeManifest: Sendable {
     /// The encoded size of entry `i`.
     public func encodedSize(_ i: Int) -> UInt64 {
         let at = i * (keySize + 4) + keySize
-        return UInt64(entries[at]) << 24 | UInt64(entries[at + 1]) << 16 | UInt64(entries[at + 2]) << 8 | UInt64(entries[at + 3])
+        return ByteReader.be(entries, at: at, 4)
     }
 
     /// The bytes to download for `query`, and how many objects.
@@ -239,7 +239,7 @@ public struct EncodingTable: Sendable {
             let next = at + 6 + ckeySize + keys * ekeySize
             guard next <= end else { break }
             if bytes[(at + 6)..<(at + 6 + ckeySize)].elementsEqual(ckey.bytes) {
-                let size = (1...5).reduce(UInt64(0)) { $0 << 8 | UInt64(bytes[at + $1]) }
+                let size = ByteReader.be(bytes, at: at + 1, 5)
                 let ekeys = (0..<keys).map { k in
                     TACTHash(bytes: Array(bytes[(at + 6 + ckeySize + k * ekeySize)..<(at + 6 + ckeySize + (k + 1) * ekeySize)]))
                 }
@@ -258,8 +258,8 @@ public struct EncodingTable: Sendable {
             let key = bytes[at..<(at + ekeySize)]
             if key.allSatisfy({ $0 == 0 }) { break }
             if key.elementsEqual(ekey.bytes) {
-                let spec = Int((0..<4).reduce(UInt32(0)) { $0 << 8 | UInt32(bytes[at + ekeySize + $1]) })
-                let size = (0..<5).reduce(UInt64(0)) { $0 << 8 | UInt64(bytes[at + ekeySize + 4 + $1]) }
+                let spec = Int(ByteReader.be(bytes, at: at + ekeySize, 4))
+                let size = ByteReader.be(bytes, at: at + ekeySize + 4, 5)
                 guard spec < specs.count else { return nil }
                 return Encoded(spec: specs[spec], encodedSize: size)
             }

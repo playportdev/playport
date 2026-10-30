@@ -50,6 +50,14 @@ public struct BattleNetSelection: Sendable {
     public let objects: [Object]
     public let files: [File]
 
+    /// The product config's ARM64 client among the files (`_retail_/Wow-ARM64.exe`); nil when
+    /// the selection does not hold it.
+    public func arm64Client(_ product: ProductConfig) -> File? {
+        guard let exe = product.arm64Executable else { return nil }
+        let want = (product.folder + "/" + exe.replacingOccurrences(of: "\\", with: "/")).lowercased()
+        return files.first { $0.path.lowercased() == want }
+    }
+
     public init(build: BattleNetBuild, download: DownloadManifest, install: InstallManifest, encoding: EncodingTable,
                 options: BattleNetInstallOptions) throws {
         let config = build.config.config
@@ -208,6 +216,8 @@ public struct BattleNetInstallPlan: Sendable {
     public let fetchBytes: UInt64
 
     public var files: [BattleNetSelection.File] { selection.files }
+    /// The ARM64 client Play starts, when the plan installs it.
+    public var arm64Client: BattleNetSelection.File? { selection.arm64Client(build.productConfig) }
 
     /// `present` objects are already in the store and are left out; data files are numbered
     /// from `firstDataFile` (an update appends to a store, PLA-521).

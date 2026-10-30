@@ -251,7 +251,9 @@ public struct CDNConfig: Sendable, Equatable {
         guard !archives.isEmpty else { throw BattleNetError.damaged("\(what): no archives") }
         archiveIndexBytes = try (config["archives-index-size"] ?? []).reduce(0) {
             guard let n = UInt64($1) else { throw BattleNetError.damaged("\(what): archive index size '\($1.prefix(20))'") }
-            return $0 + n
+            let (sum, overflow) = $0.addingReportingOverflow(n)
+            guard !overflow else { throw BattleNetError.damaged("\(what): archive index sizes add up past 64 bits") }
+            return sum
         }
         archiveGroup = config["archive-group"]?.first.flatMap { TACTHash(hex: $0) }
         fileIndex = config["file-index"]?.first.flatMap { TACTHash(hex: $0) }

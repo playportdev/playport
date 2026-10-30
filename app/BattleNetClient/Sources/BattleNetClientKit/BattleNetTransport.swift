@@ -76,7 +76,7 @@ public protocol BattleNetTransport: Sendable {
 
 /// Every failure the client reports. `unreachable` and `refused` are the network's (no answer,
 /// or an answer that is not the content: 404, 403, 429, 5xx); `damaged`, `missingKey` and
-/// `unsupported` are about content that did arrive.
+/// `unsupported` are about content that did arrive; `outdated` is the install's.
 public enum BattleNetError: Error, Equatable, Sendable, CustomStringConvertible {
     /// No answer: the transport threw (offline, DNS, refused connection, timeout).
     case unreachable(String)
@@ -88,12 +88,15 @@ public enum BattleNetError: Error, Equatable, Sendable, CustomStringConvertible 
     case missingKey(String)
     /// A well-formed format this client does not read (LZ4 or nested BLTE blocks, ARC4).
     case unsupported(String)
+    /// A region or language change asked of an install on another build than the region's
+    /// current one (`installed`, `current`: version names): it changes after an update.
+    case outdated(installed: String, current: String)
 
     /// Whether the failure is the network's (try later) rather than the content's.
     public var isNetwork: Bool {
         switch self {
         case .unreachable, .refused: return true
-        case .damaged, .missingKey, .unsupported: return false
+        case .damaged, .missingKey, .unsupported, .outdated: return false
         }
     }
 
@@ -104,6 +107,7 @@ public enum BattleNetError: Error, Equatable, Sendable, CustomStringConvertible 
         case let .damaged(s): return "damaged: \(s)"
         case let .missingKey(k): return "missing decryption key \(k)"
         case let .unsupported(s): return "unsupported: \(s)"
+        case let .outdated(installed, current): return "outdated: the install is on \(installed), the region on \(current)"
         }
     }
 }

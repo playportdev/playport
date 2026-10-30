@@ -2,43 +2,6 @@
 import Foundation
 import ContentKit
 
-/// A bounds-checked big-endian reader: every read past the end is a damaged-content error.
-struct ByteReader {
-    let bytes: [UInt8]
-    var pos: Int
-    let what: String
-
-    init(_ bytes: [UInt8], at pos: Int = 0, what: String) {
-        self.bytes = bytes
-        self.pos = pos
-        self.what = what
-    }
-
-    var remaining: Int { bytes.count - pos }
-
-    func need(_ n: Int) throws {
-        guard n >= 0, n <= bytes.count - pos else { throw BattleNetError.damaged("\(what): truncated at byte \(pos) (needs \(n) more)") }
-    }
-
-    mutating func u8() throws -> UInt8 { try need(1); defer { pos += 1 }; return bytes[pos] }
-    mutating func be(_ n: Int) throws -> UInt64 {
-        try need(n)
-        var v: UInt64 = 0
-        for i in 0..<n { v = v << 8 | UInt64(bytes[pos + i]) }
-        pos += n
-        return v
-    }
-    mutating func take(_ n: Int) throws -> ArraySlice<UInt8> { try need(n); defer { pos += n }; return bytes[pos..<(pos + n)] }
-    mutating func skip(_ n: Int) throws { try need(n); pos += n }
-    /// A NUL-terminated string.
-    mutating func cString() throws -> String {
-        guard let end = bytes[pos...].firstIndex(of: 0) else { throw BattleNetError.damaged("\(what): unterminated string at byte \(pos)") }
-        guard let s = String(validating: bytes[pos..<end], as: UTF8.self) else { throw BattleNetError.damaged("\(what): string at byte \(pos) is not UTF-8") }
-        pos = end + 1
-        return s
-    }
-}
-
 /// Decryption keys for BLTE's encrypted blocks, by their 64-bit lookup (the key name read as a
 /// little-endian integer, written as 16 hex digits in key lists). The installer itself needs
 /// none (no manifest is encrypted); content that is gets decoded only with a known key.

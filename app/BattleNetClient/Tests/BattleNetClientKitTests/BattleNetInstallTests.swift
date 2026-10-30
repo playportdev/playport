@@ -621,6 +621,57 @@ final class BattleNetInstallTests: XCTestCase {
         XCTAssertEqual(always.requests.filter { $0.url.path.hasSuffix("/versions") }.count, 6)
     }
 
+    /// A Retry-After that is negative, infinite, not a number or huge never traps: the pause is
+    /// the back-off for an unreadable one and at most `maxBackoff` for a huge one.
+    func testADamagedRetryAfterWaitsABoundedTime() async throws {
+        for (value, pause) in [("-1", 2.0), ("inf", 2), ("nan", 2), ("1e20", 120), ("abc", 2), ("30", 30)] {
+            let cdn = FakeCDN()
+            _ = FakeProduct.make(on: cdn, productConfig: try fixture("wow_classic_era-productconfig.json"))
+            cdn.throttle("/v2/products/wow_classic_era/versions", times: 1, retryAfter: value)
+            let pauses = Pauses()
+            _ = try await client(cdn, pauses: pauses, limit: 1).version(.wowClassicEra, .us)
+            XCTAssertEqual(pauses.all, [pause], value)
+        }
+    }
+
+    /// A client given a build's key ring keeps the store client's manners: the same request
+    /// limit and the same hosts paused by a 429.
+    func testAClientWithAKeyRingSharesTheRequestLimitAndPauses() async throws {
+        let cdn = FakeCDN()
+        _ = FakeProduct.make(on: cdn, productConfig: try fixture("wow_classic_era-productconfig.json"))
+        cdn.throttle("/v2/products/wow_classic_era/versions", times: 1, retryAfter: "30")
+        let pauses = Pauses()
+        let store = client(cdn, pauses: pauses, limit: 1)
+        _ = try await store.version(.wowClassicEra, .us)
+        let keyed = store.adding(keys: TACTKeyring(keys: [1: [UInt8](repeating: 7, count: 16)]))
+        XCTAssertEqual(keyed.keys.keys[1], [UInt8](repeating: 7, count: 16))
+        _ = try await keyed.cdn(.wowClassicEra, .us)
+        // The store client's own pause, then the keyed client waits out what is left of it.
+        XCTAssertEqual(pauses.all.count, 2, "\(pauses.all)")
+        XCTAssertGreaterThan(pauses.all.last ?? 0, 25)
+    }
+
+    /// A build whose plan lacks the ARM64 client the product config names is refused while it
+    /// is planned, before anything is downloaded; the plan names the client otherwise.
+    func testAPlanWithoutItsARM64ClientIsRefusedBeforeTheDownload() async throws {
+        let config = try fixture("wow_classic_era-productconfig.json")
+        let cdn = FakeCDN()
+        _ = FakeProduct.make(on: cdn, productConfig: config)
+        let dir = try temp()
+        let prepared = try await installer(client(cdn)).prepare(.wowClassicEra, .us, options: BattleNetInstallOptions(locale: "enUS"),
+                                                                 work: dir.appendingPathComponent(".ok"))
+        XCTAssertEqual(prepared.plan.arm64Client?.path, "_classic_era_/WowClassic-arm64.exe")
+
+        let other = FakeCDN()
+        let renamed = String(decoding: config, as: UTF8.self).replacingOccurrences(of: "WowClassic-arm64.exe", with: "Elsewhere-arm64.exe")
+        _ = FakeProduct.make(on: other, productConfig: Array(renamed.utf8))
+        await assertThrows(try await installer(client(other)).prepare(.wowClassicEra, .us, options: BattleNetInstallOptions(locale: "enUS"),
+                                                                      work: dir.appendingPathComponent(".no"))) {
+            guard case .unsupported = $0 else { return XCTFail("\($0)") }
+        }
+        XCTAssertFalse(other.requests.contains { $0.status == 206 })
+    }
+
     // MARK: live (workstation)
 
     /// Installs a product from Blizzard's CDN on the workstation and writes what it took to a
