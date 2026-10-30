@@ -49,6 +49,11 @@ The one device an account designates for playing Xbox copies without a connectio
 while their licences remain valid.
 _Avoid_: offline PC, home console
 
+**Offline lease**:
+Microsoft's grant, with a licence, that lets the offline device keep using the
+copy's content key without a connection until the lease expires.
+_Avoid_: offline licence, licence cache
+
 ### Saves
 
 **Cloud save**:

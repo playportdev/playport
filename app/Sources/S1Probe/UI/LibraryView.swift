@@ -127,6 +127,9 @@ private struct LibraryGridView: View {
     @ObservedObject private var imports = GameImports.shared
     @ObservedObject private var gog = GOGAccount.shared
     @ObservedObject private var epic = EpicAccount.shared
+    #if !PLAYPORT_RELEASE
+    @ObservedObject private var xbox = XboxGames.shared
+    #endif
     /// The scroll view on screen, how far its content is scrolled and how far it can be.
     @State private var viewport = CGRect.zero
     @State private var offset = CGFloat.zero
@@ -156,7 +159,12 @@ private struct LibraryGridView: View {
         }
         // The ring starts on the first tile, on arrival and after the chip, sort or search changes.
         // Back from a game page the ring is still on its tile, and stays there.
-        .onAppear { if focus.focused?.hasPrefix("lib:") != true { PadFocus.shared.reset(start: nav.focusStart ?? firstTile()) } }
+        .onAppear {
+            if focus.focused?.hasPrefix("lib:") != true { PadFocus.shared.reset(start: nav.focusStart ?? firstTile()) }
+            #if !PLAYPORT_RELEASE
+            XboxLibrary.opened()
+            #endif
+        }
         .onChange(of: grid.filter) { _, _ in PadFocus.shared.reset(start: firstTile()) }
         .onChange(of: grid.sort) { _, _ in PadFocus.shared.reset(start: firstTile()) }
         .onChange(of: grid.search) { _, _ in PadFocus.shared.reset(start: firstTile()) }
@@ -275,6 +283,9 @@ private struct LibraryGridView: View {
                            hint: "Open")
                 .refreshable {
                     library.refresh()
+                    #if !PLAYPORT_RELEASE
+                    XboxLibrary.opened()
+                    #endif
                     await model.loadGames(refresh: true)
                 }
                 .onChange(of: focus.focused) { _, id in
@@ -382,7 +393,7 @@ private struct LibraryGridView: View {
             #if PLAYPORT_RELEASE
             return "Games from \(grid.filter.label) appear here."
             #else
-            return XboxLibrary.emptyText
+            return XboxLibrary.emptyMessage
             #endif
         }
     }
@@ -543,9 +554,13 @@ struct GameSourceBadge: View {
 enum LibraryOwned {
     @MainActor
     static func all(_ steam: [SteamGame], _ gog: [GOGGame], _ epic: [EpicGame]) -> [LibraryList.Owned] {
-        steam.map { LibraryList.Owned(appID: $0.id, name: $0.info.name, installSize: $0.info.installSize) }
+        var owned = steam.map { LibraryList.Owned(appID: $0.id, name: $0.info.name, installSize: $0.info.installSize) }
             + gog.map { LibraryList.Owned(key: StoreGameKey(store: .gog, id: $0.id), name: $0.title) }
             + epic.map { LibraryList.Owned(key: StoreGameKey(store: .epic, id: $0.id), name: $0.title) }
+        #if !PLAYPORT_RELEASE
+        owned += XboxLibrary.owned // dev only (0166)
+        #endif
+        return owned
     }
 }
 
@@ -556,7 +571,13 @@ enum StoreArt {
         switch key.store {
         case .gog: GOGAccount.shared.game(key.id)?.image != nil
         case .epic: EpicAccount.shared.game(key.id).map { $0.wideArt ?? $0.tallArt } != nil
-        case .steam, .local, .xbox: false
+        case .steam, .local: false
+        case .xbox:
+            #if PLAYPORT_RELEASE
+            false
+            #else
+            XboxLibrary.hasArt(key.id)
+            #endif
         }
     }
 }
@@ -581,12 +602,21 @@ struct GameArt: View {
             GOGArtView(game: g, wide: kind == .hero)
         } else if let key = storeKey, key.store == .epic, let g = EpicAccount.shared.game(key.id) {
             EpicArtView(game: g, wide: kind == .hero)
+        } else if let art = xboxArt {
+            art
         } else if let id = titleID, let t = library.title(id), t.executable != nil {
             LocalGameArt(title: t)
         } else {
             PP.tile(for: name)
         }
     }
+
+    #if PLAYPORT_RELEASE
+    private var xboxArt: Never? { nil }
+    #else
+    /// Microsoft's art for the account's Xbox copy (dev only, 0166).
+    private var xboxArt: XboxArtView? { storeKey.flatMap { XboxLibrary.art($0, wide: kind == .hero) } }
+    #endif
 }
 
 /// Store art for one app, from the art cache; the placeholder until it loads.

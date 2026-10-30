@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<License xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" ID="3e4f5a6b-7c8d-4e9f-8a0b-1c2d3e4f5a6b" LicenseID="5f6a7b8c-9d0e-4f1a-8b2c-3d4e5f6a7b8c" Version="5" xmlns="urn:schemas-microsoft-com:windows:store:licensing:ls">
+  <Binding Binding_Type="Machine"><DeviceID>00000000synthdev</DeviceID><USID>S-1-5-21-0000000000-0000000000-0000000000-1001</USID><AssociatedPFNs>Synthetic.PilotGame_8wekyb3d8bbwe</AssociatedPFNs><LeaseRenewalPeriod>2880</LeaseRenewalPeriod></Binding>
+  <LicenseInfo Type="Lease" LicenseUsage="Online" LicenseCategory="Retail"><IssuedDate>2026-10-30T11:41:58.4277144Z</IssuedDate><LastUpdateDate>2026-10-30T11:41:58.4277144Z</LastUpdateDate><ExpirationDate>2026-11-29T11:41:58.4221143</ExpirationDate></LicenseInfo>
+  <CustomPolicies>
+eyJlbmZvcmNlQ29uY3VycmVuY3kiOnRydWUsImVudGl0bGVtZW50SWQiOiIwMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZiIsImVudGl0bGVtZW50
+U2F0aXNmYWN0aW9uIjoiU3Vic2NyaXB0aW9uRGV2aWNlIiwiZXhwaXJlc0F0IjoiMjAyNi0xMS0yOVQxMTo0MTo1OC40MjIxMTQzKzAwOjAwIiwiaXNPZmZs
+aW5lIjpmYWxzZSwibGVhc2VFbmZvcmNlbWVudCI6IkVuZm9yY2VDb25jdXJyZW5jeSIsImxlYXNlVXJpIjoiaHR0cHM6Ly9saWNlbnNpbmcuZXhhbXBsZS5p
+bnZhbGlkL3Y3LjAvbGVhc2VzL3N5bnRoZXRpYyIsImtleUlkcyI6WyI3YTJiM2M0ZC01ZTZmLTRhMWItOGMyZC0zZTRmNWE2YjdjOGQiXSwia2luZCI6IkNv
+bnRlbnQiLCJwYWNrYWdlcyI6WyJTeW50aGV0aWMuUGlsb3RHYW1lXzEuMC4wLjBfeDY0X184d2VreWIzZDhiYndlIl0sInBvbGxBdCI6IjIwMjYtMTEtMDFU
+MTE6NDE6NTguNDIyMTIwNyswMDowMCIsInJlZnJlc2hPblN0YXJ0dXAiOnRydWUsInN1YnNjcmlwdGlvblByb2R1Y3RJZCI6IkNGUTdUVEMwU1lOVCIsInVz
+ZXJTaWQiOiJTLTEtNS0yMS0wMDAwMDAwMDAwLTAwMDAwMDAwMDAtMDAwMDAwMDAwMC0xMDAxIiwidmVyc2lvbiI6N30=
+</CustomPolicies>
+  <SPLicenseBlock>
+FAAAAMgAAADJAAAACgAAAAUAAgCGguRqaADLAAAAEAAAANtSvrS4GdI6JxBcKDFLhT3OAAAARAAAAFMAeQBuAHQAaABlAHQAaQBjAC4AUABpAGwAbwB0AEcA
+YQBtAGUAXwA4AHcAZQBrAHkAYgAzAGQAOABiAGIAdwBlAAAA0gAAAAgAAABr7p3GM0FGAs0AAAAiAAAAAQCedx530OVF9NyyW/t5RRESREoZPaELa0wtMnpQ
+D8A1kB8AAAAEAAAAhg8Ma9MAAAAEAAAAhiXnaswAAABEAAAAAQACAF5jXXdjeh24PUgDLA94k+82dAnyGrQLSQAQtZR4RjFYmxixxaum5L5Cnim/AbQcZ3Ae
+d/ERy502BDnMMlfkqQA=
+</SPLicenseBlock>
+  <Signature xmlns="http://www.w3.org/2000/09/xmldsig#">
+    <SignedInfo><CanonicalizationMethod Algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315"/><SignatureMethod Algorithm="http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"/><Reference URI=""><Transforms><Transform Algorithm="http://www.w3.org/2000/09/xmldsig#enveloped-signature"/></Transforms><DigestMethod Algorithm="http://www.w3.org/2001/04/xmlenc#sha256"/><DigestValue>
+dR0jKqdKy1YNG+4yvGbf8vqTTeKpbmY6KaGRtimVXvw=
+</DigestValue></Reference></SignedInfo>
+    <SignatureValue>
+YrhGQdLermNYcTJ/KThQ7bug2X53TtxszyuUBGtCSauRORZ6U0UQo7Cc+osRyVODD/1PcYc2+dNds8ahsLqJehNe94TaKk9l5Iogdn2fY8UAujAiVIaOi8a0
+gip1EaZUB/sd4BpMh8pT86EiydojoeG8JmTG4nSsc+6UASlFFrK7K6W9Ceqam6dR0anjCZFvHdrSAvOe+nkfNcs7psAFvPJ3esAmG139yqp4+iXRNnmAqebL
+64Miy2kwa5wC56zuOFlrDq6MMGSJnYI4NQ2IgnGUnzCbhIx+XHtaT7waRMm68mXuMb633PNK7ZgGFPM5EoycQDQYaUBT7G8ybBQvGA==
+</SignatureValue>
+    <KeyInfo Id="synthetic-key-info"><KeyValue><RSAKeyValue><Modulus>
+/5X1epm+9YAX6LNqTkNzRlgo18NxHVzjk9vVFxgFpqblsYQ0yD48ZX4H7qoluJSBQAuzcpBLrzs+fe/b3nMoFp4U51cCEgRE5lOPXe8sue+lrTvhbFqqJ3hk
+24OYcIWKbaGqHEmmCV2949tMKwIK0kRTs+RM6TGOZvt7x3Hxm4SBRDOkGcjivGJxgJK7UgTN38qjqCA7aHmrHYUFR87waY+2F/liocActnH7HIYZiKcCYlGS
+7RZNNRnaAMXQkcICCXet2VHPzQghfMBAIoFrc97WIDmSg6+svre7KI9a563J7ioJ5iXA/CGbW4nZvbkvy7D1+fOOn+XOvoUv52jSJw==
+</Modulus><Exponent>AQAB</Exponent></RSAKeyValue></KeyValue></KeyInfo>
+  </Signature>
+</License>
