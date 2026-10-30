@@ -15,7 +15,7 @@ final class XboxInstalls: ObservableObject, DownloadDriver {
     static let shared = XboxInstalls()
     /// Microsoft's refusal of a copy (no entitlement, no licence), by Product ID, until the next Install.
     @Published private(set) var refused: [String: String] = [:]
-    private weak var downloads: Downloads?
+    private(set) weak var downloads: Downloads?
     private var watch: AnyCancellable?
     nonisolated static let log = ContentKit.Logger { AppLog.append("xbox: " + $0) }
     /// The prefix's `%LOCALAPPDATA%`: where the Xbox runtime keeps a game's local saves.
@@ -61,6 +61,7 @@ final class XboxInstalls: ObservableObject, DownloadDriver {
 
     func run(_ job: DownloadJob, progress: @escaping @Sendable (InstallEngine.Progress) -> Void) async throws -> UInt64? {
         let id = job.key.id
+        if job.kind == .update { return try await XboxUpdates.shared.run(job, progress: progress) }
         guard job.kind == .install else { throw ClientError.unsupported("Xbox copies are installed again from their page.") }
         if XboxGames.shared.snapshot == nil { await XboxGames.shared.refresh() }
         guard let package = package(id) else { throw XboxInstallRefusal.noPackage }

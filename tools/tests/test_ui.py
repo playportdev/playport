@@ -174,11 +174,22 @@ class UiEnvTest(unittest.TestCase):
 
     def test_an_xbox_copy_installs_and_is_checked_by_its_product_id(self):
         m = load()
-        for action in ("install:xbox-9MW9469V91LM", "xbox:installed:9MW9469V91LM", "open:xbox-9MW9469V91LM",
+        for action in ("install:xbox-9MW9469V91LM", "xbox:installed:9MW9469V91LM", "xbox:update:9MW9469V91LM", "open:xbox-9MW9469V91LM",
                        "uninstall:xbox-9MW9469V91LM"):
             self.assertEqual(m.parse(["--action", action]).action, [action])
         for bad in ("install:xbox-", "install:xbox-9mw9469v91lm", "install:xbox-9MW9469V91L", "install:xbox-9MW9469V91LMX",
-                    "xbox:installed:", "xbox:installed", "xbox:installed:9MW9469V91LM:x", "install:xbox-../x"):
+                    "xbox:installed:", "xbox:installed", "xbox:installed:9MW9469V91LM:x", "install:xbox-../x",
+                    "xbox:update:", "xbox:update:9mw9469v91lm", "xbox:update:9MW9469V91LM@1.2.3.4"):
+            self.assertFalse(m.ACTION_RE.match(bad), bad)
+
+    def test_an_xbox_copy_s_licence_lapse_is_checked_and_shown_by_its_product_id(self):
+        m = load()
+        for action in ("xbox:licence:9MW9469V91LM", "xbox:lapse:9MW9469V91LM", "xbox:lapse:9MW9469V91LM@0",
+                       "xbox:lapse:9MW9469V91LM@8"):
+            self.assertEqual(m.parse(["--action", action]).action, [action])
+        for bad in ("xbox:licence:", "xbox:licence:9mw9469v91lm", "xbox:licence:9MW9469V91LM@8", "xbox:lapse:",
+                    "xbox:lapse:9MW9469V91LM@", "xbox:lapse:9MW9469V91LM@-1", "xbox:lapse:9MW9469V91LM@100",
+                    "xbox:lapse:9MW9469V91LM@8,play:xbox-9MW9469V91LM"):
             self.assertFalse(m.ACTION_RE.match(bad), bad)
 
     def test_donor_pool_setting_takes_auto_and_fixed_sizes(self):
