@@ -104,20 +104,54 @@
        Amends 0105.
     5. Trim B's stock-CEF cost: at most −115 MB, not enough alone.
     6. The unexplained +120 MB and +200 MB need a footprint breakdown at the press and the step first.
-- **Chunk-2 gates after l9:**
+- **Owner decisions 2026-10-30, done** (`b94a9eb`, `9289d2e`, `c45af90`):
+  - [0155](../decisions/0155-allow-rdr2s-social-club-restart-after-a-re-sign-in.md) amended: an allow needs
+    footprint + 600 MB < limit − 400 MB.
+  - A dev footprint-jump sampler with a task-ledger reader.
+  - [0105](../decisions/0105-memory-defaults-per-phone.md) amended: the pool resumes on spare memory, and the
+    level stop then counts from the resume's level.
+  - The FEX code-buffer roll before the load was **not** changed. RDR2 asks for 128 MiB at its second generation
+    in every run; d1 got 64 MiB only because the tail room was short. A 64 MiB cap for every game (0116's rule)
+    or a forced roll is not small; it needs a decision.
+- **Measured (l10, 2026-10-30, IPA `c635f8c0…`, `.work/ui-runs/20261030T152516-rdr2-p476l10`;
+  [evidence](../evidence/2026-10-29-sc-stock-cef-probe.md#l10-headroom-for-0155-the-footprint-sampler-the-pools-spare-resume)):**
+  l9's keys.
+  - **The game's helper** got kinds 1–6 with no refusal. Story was pressed (+148.6).
+  - **The step** came at press+71.9 from 6985 MB (the step's first move at 7172, as l9's 7174). It reached
+    8185 MB, then jetsam (I; the syslog dropped). No cabin.
+  - **The sampler.** The ledger reads on iOS (rc=0) and closes phys_footprint to 14 MB. Page tables are 9–11 MB,
+    so the layout costs none worth counting. Samples came at step −8.3 and −3.2; none landed inside the step,
+    because its walk did not finish before the kill.
+  - **The pool** resumed on spare twice without flapping and held 2687 MB live (l9 2587, d1 2809). A resume at
+    17 % then made it wait for 17 % for the rest of the run: a flaw in the amended rule, since R should count as
+    at most 15 %.
+  - **l10 is +473 MB above d1 just before the step** (+515 at the step):
+    - FEX row +164 (no third generation; d1 rolled at press+2.1);
+    - B's stock CEF +131;
+    - pool +105;
+    - host-side residual +127, flat from the press;
+    - graphics −21, RDR2 private −74, services and the rest +41.
 
-  | Gate | l7 | l8 | l9 |
-  | --- | --- | --- | --- |
-  | HK first-frame+10 | passed | passed | passed |
-  | The game's helper reaches allocator/browser startup | passed | **not passed** (kind 2 not held again; no grant, refused, died in init) | passed (kinds 1–6, no refusal) |
-  | The game signs in, Story is pressed | passed | passed | passed |
-  | Story reaches the cabin | **not passed** (jetsam at 8192 MB) | **not passed** (black loading screen without the game's Social Club) | **not passed** (jetsam at 8192 MB in the load step) |
-  | No SC/launcher `NO GAP FITS` or soft grant | **not passed** (26 V8 lines each from A and B, 36 `dllhost.exe`) | **not passed** (26 V8 lines from A; 0 `dllhost.exe`; no soft grant) | **not passed** (26 V8 lines each from A and B; 0 `dllhost.exe`; no soft grant) |
-  | Peak within 7343 MB ±10 % | **not passed** (8192 MB limit) | **not comparable** (6496 MB, no Story step) | **not passed** (≥ 8106 MB, the limit) |
+    d1's "+320 not explained" is closed: the load growth is views, not host memory. l10 needed ≥210 MB less to
+    fit (l9 ≥306). HK first-frame+10 passed (`20261030T152425-hk-p476l10`).
+- **Chunk-2 gates after l10:**
+
+  | Gate | l7 | l8 | l9 | l10 |
+  | --- | --- | --- | --- | --- |
+  | HK first-frame+10 | passed | passed | passed | passed |
+  | The game's helper reaches allocator/browser startup | passed | **not passed** (kind 2 not held again; no grant, refused, died in init) | passed (kinds 1–6, no refusal) | passed (kinds 1–6, no refusal) |
+  | The game signs in, Story is pressed | passed | passed | passed | passed |
+  | Story reaches the cabin | **not passed** (jetsam at 8192 MB) | **not passed** (black loading screen without the game's Social Club) | **not passed** (jetsam at 8192 MB in the load step) | **not passed** (8185 MB in the load step, then the app ended) |
+  | No SC/launcher `NO GAP FITS` or soft grant | **not passed** (26 V8 lines each from A and B, 36 `dllhost.exe`) | **not passed** (26 V8 lines from A; 0 `dllhost.exe`; no soft grant) | **not passed** (26 V8 lines each from A and B; 0 `dllhost.exe`; no soft grant) | **not passed** (26 V8 lines each from A and B; 0 `dllhost.exe`; no soft grant) |
+  | Peak within 7343 MB ±10 % | **not passed** (8192 MB limit) | **not comparable** (6496 MB, no Story step) | **not passed** (≥ 8106 MB, the limit) | **not passed** (8185 MB) |
 
 - **Ordered queue now:** (1) done in `2df65fe` (slots held in place); (2) the memory of Story's load with the game's
-  own Social Club running (d1: l9 starts its step 602 MB above the same-IPA baseline, ≥306 MB too many; the
-  owner picks from d1's ranked options above), then the V8 probes; (3) chunks 3–6,
+  own Social Club running (l10: 473 MB above d1 just before the step, ≥210 MB too many). Next:
+  - the pool's R flaw (R counts as at most 15 %, ≈−100 MB);
+  - the sampler's cheap line before its walk;
+  - an owner decision on the FEX roll (≈−164) and on B's stock-CEF cost (≈−131) or ending B before the step;
+
+  then the V8 probes; (3) chunks 3–6,
   all under PLA-476. Chunk 5's decision is now partly covered by
   [0166](../decisions/0166-detach-a-parked-threads-wait-then-unpin-its-view.md) (the retention part of the layout);
   the rest of chunk 5 stays. 0.5.0 held.

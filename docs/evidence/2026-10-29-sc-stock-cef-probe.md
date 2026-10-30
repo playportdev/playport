@@ -817,3 +817,188 @@ Inferred:
 | Run without jetsam | **not passed**: jetsam at +446 after 0155's second allowed restart, from the title menu the game returned to after the first end |
 
 Hollow Knight was not run in this session.
+
+## l10: headroom for 0155, the footprint sampler, the pool's spare resume
+
+The owner's decisions of 2026-10-30, as three commits, then one layout run with l9's keys:
+
+- `b94a9eb`: [0155](../decisions/0155-allow-rdr2s-social-club-restart-after-a-re-sign-in.md) amended: a
+  re-sign-in allows the helper's restart only when footprint + 600 MB < limit − 400 MB.
+- `9289d2e`: a dev footprint-jump sampler (`Dev/FootprintJumpSampler.swift`, PlayportKit `FootprintJumpTrigger`,
+  the dev-only `MemoryLedger` target). From limit − 2000 MB, at +300 MB over its last sample (5 s apart) or
+  +300 MB in one 250 ms tick, it forces a `[proc-mem]` walk, a `donor-pool: stats` line and a `[fp-sample]` line
+  (TASK_VM_INFO's other fields and the task's memory ledger).
+- `c45af90`: [0105](../decisions/0105-memory-defaults-per-phone.md) amended: the donor pool also resumes on spare
+  memory alone (≥ 1,920 MiB) under level 20 %; after such a resume at level R the level stop fires under R.
+
+The FEX code-buffer roll (unexplained-320's reduction #3) was not changed: RDR2 asks for 128 MiB at its second
+generation in every run, and d1 got 64 only because the pool's tail room was short then (`tail CAP: refusing
+0x8000000 (cap 0x4000000 …)`, +73.82). Capping every game's buffer at 64 MiB is a runtime policy with a
+measured cost (ml1052: retranslation churn when hot code does not fit), and a forced roll needs a new FEX request.
+Neither is small; it is left for a decision.
+
+- **IPA (dev):** `c635f8c00c3bcb55cf1618ef46a27ce16a0818e0532b7247492c47940481613e`, verify-ipa 90 passed.
+- **Session:** `agent-notes/pla476/l10.sh`, one `pp phone lock` session. `pp phone status` before: 1 phone, 80 % on
+  power, 3.1 GB free, no holder. In-place install (28 s, container kept).
+- **HK first-frame+10: passed**, first frame +10.53 s (`$PLAYPORT_BUILD/ui-runs/20261030T152425-hk-p476l10`).
+- **RDR2 l10:** `$PLAYPORT_BUILD/ui-runs/20261030T152516-rdr2-p476l10`, keys `env.PLAYPORT_CEF_SWAP=0
+  env.PLAYPORT_SC_SINGLE=1 env.PLAYPORT_SC_LAYOUT=1`, `STORY_BY=420 UNTIL=600 WAIT=900`. Result `ok:false`, `the app
+  exited before the stop condition`. First frame +43.82 s (title clock). The game signed in at +110.5 s. Story was
+  pressed at `[xp]` **+148.6** (`vpad` step 1, 154735).
+
+Times are on the `[xp]` clock and lines are in `pull/s1-host.log`. Values are measured (M) unless marked inferred (I).
+
+**The sampler (M).**
+
+- The ledger probe at the launch returned **rc=0**: the iOS sandbox lets a dev app read its own task ledger (2520).
+- It armed and fired at the sign-in peak, +107.25 (6227 MB). It fired on the level rule at **+212.00** (6531,
+  step −8.3) and **+217.01** (6912, step −3.2), with walks of 1394 and 696 ms.
+- **No sample landed inside the step.** The one-tick jump (7172 → 7721 at +220.49) came 2.4 s before the log
+  ends. Its forced walk prints only when it finishes, and the app was ended first (I). The next version should
+  log the cheap `[fp-sample]` line before the walk.
+- **The ledger closes phys_footprint** at each sample:
+  phys = internal + internal_compressed − alternate_accounting(+compressed) + graphics + page_table + iokit +
+  purgeable + media. At +217.01 that is 5966 + 1480 − 2486 − 485 + 2399 + 11 + 1 + 20 + 10 = 6916, against
+  6930 (14 MB not in the listed entries).
+  - **page_table is 9–11 MB and iokit_mapped 0–1 MB** at all three samples. The layout's holds cost no page
+    tables worth counting; the X term of unexplained-320 is alternate accounting alone.
+  - alternate_accounting(+compressed): 2175 at +107, 2879 at +212, 2971 at +217. The donor pool's
+    resident+compressed was 1935, 2180 and 2187. So **240 → 699 → 784 MB of alternate-accounted pages are not the
+    pool's**, and they grew during the load. What they are is not shown (I: GPU-shared or other entries).
+  - wired_mem 1473 → 1730 → 1854.
+
+**Per process at the samples** (`[proc-mem]` resident+compressed MB; image/private/fex):
+
+| Point (line, `[xp]`) | phys | graphics | RDR2.exe 0368 | B 0508 | runtime | child 0378 | services | all |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| press, `after teardown 6` (154752, +149.24) | 5641 | 1786 | 2274 (57/1713/504) | 601 (293/84/224) | 261 | 111 | 110 | 3382 |
+| step −8.3, `footprint 6531 MB` (158782) | 6662 | 2271 | 3023 (57/2499/467) | 585 (293/62/230) | 259 | 111 | 110 | 4111 |
+| step −3.2, `footprint 6912 MB` (158961) | 6930 | 2399 | 3219 (57/2695/467) | 580 (293/59/228) | 258 | 111 | 110 | 4304 |
+
+The non-view residual (phys − graphics − `all` + donor-backed) is 2412 at the press and 2414 at step −3.2. **From
+the press to the step the growth is all in views and graphics** (graphics +613, RDR2.exe private +982, its fex
+−37), not host memory (M).
+
+**The donor pool (M).**
+
+- The launch state was `sys_free_mb=2614`.
+- **Stop:** +100.10, `growth stopped (level 14% < 15%)`, spare 4238.
+- **Resumed on spare** at +103.29 (`spare 4149 MiB >= 1920, level 13% < 20%: on spare memory; the level stop now
+  under 13%`).
+- **Stopped** at +107.37 (`level 12% < 13%, the level at the resume on spare memory`). There was no flap between.
+- After the teardowns, **resumed on spare** at +111.55 (level 17 %). **Stopped** at +115.49 (level 13 % < 15 %).
+- It never resumed again. Every later line reads `resume_wait="level 11–15% < 17% (the last resume on spare
+  memory)"` with spare 3764–4545.
+- Live at the cap: **2687 MB**, against l9's 2587 and d1's 2809. Resident+compressed at step −3.2 was 2187,
+  against l9's 2074 and d1's 2292 (install+180).
+- **I: a flaw in the amended rule.** A spare resume at level 15–19 % sets R to that level, so the next spare resume
+  waited for 17 %. Under 15 % the stop is the old rule anyway, so R should count as at most 15 %. With that, the
+  pool would have resumed at +179.63 (level 15 %, spare 4545).
+
+**FEX (M).**
+
+- RDR2's second code generation was granted 128 MiB at +86.50 (`tail BIG: granting 0x8000000`).
+- **There was no third generation before the step**, as in l9; d1 rolled at press+2.1.
+- RDR2's fex row was 504 at the press and 467 at the step, against d1's 524 → 303.
+
+**B, the game's helper (M).**
+
+- PEB `0x16fbb4000`, pid 0508; `[sc-single] verified browser` at 137632.
+- Grants kinds 1, 3, 2, 4 at 142041–142097, then 5 (148854) and 6 (149143). There was no refusal.
+- `Chrome_IOThread`, `CrBrowserMain` and `CompositorTileWorker1` started (143480–145247).
+- Story's load ran to its step: the game's SC was up (I, as l9).
+- New in l10: an earlier helper, pid 0188 (PEB `0x13d854000`), died in its init (`chrome_elf.dll failed to
+  initialize`, 45689). Its kinds 1 and 3 were held in place (46052, 46054). The next helper, A (0198), verified and
+  ran.
+
+**The step (M).**
+
+- Before it: 6973/2431/1479 at +218.68 (ml358), then `fast` 6985 at +219.84.
+- The step: 7172 at +220.16 and **7721** at +220.49, at press+71.9 and sign-in+110. Then `[footprint]` **8185 MB**
+  (graphics 3560, compressed 2003) at +220.84; the launcher line says 8179 MB at +222.4 (title).
+- The host log ends at 15:29:22.95. The syslog shows `IOGPUCommandDescriptor::prepare` wiring faults (≈2.1 GB) at
+  15:29:21.2. The stream dropped at 15:29:23, so no `ActiveHard` or `killed by jetsam` line was captured, and there
+  is no JetsamEvent or crash report.
+- **I:** jetsam at the per-process limit, as l9.
+
+**Footprint aligned on the press:**
+
+| press+ | l10 (press +148.6) | l9 (press +130.9) | d1 (press +123.5) |
+| --- | --- | --- | --- |
+| ≈0 | +1.2: 5642/1786 | +1.0: 5769/1849 | +1.2: 5348/1794 |
+| ≈+20 | +19.4: 5623/1787 | +21.1: 5711/1851 | +19.2: 5044/1795 |
+| ≈+46 | +45.7: 5980/2026 | +47.4: 6019/2048 | +45.8: 5388/2022 |
+| ≈+60 | +59.9: 6386/2177 | +61.4: 6160/2143 | +60.1: 5680/2132 |
+| ≈+68 | +68.3: 6874/2367 | +69.6: 6585/2269 | +68.2: 6260/2356 |
+| just before the step | +70.1: **6973**/2431; `fast` 6985 | +77.8: **7072**/2494; `fast` 7062 | +74.3: **6470**/2454; `fast` 6457 |
+| the step's first move | 7172 (press+71.6) | 7174 (+77.8) | 6882 (+74.6) |
+| peak | **8185** (limit), jetsam | ≥ 8106 (limit), jetsam | 7896 |
+
+**The cabin (screenshots in `agent-notes/pla476/p476l10/shots/`, `[xp]` ≈ shot − 9 s; described only):**
+
+- ≈+152: a sepia tintype of wolves in the snow.
+- ≈+170: black.
+- ≈+189: a sepia tintype of snowy cliffs over a frozen lake, with a small cabin.
+- ≈+208: black with the loading icon at the bottom right.
+- ≈+226 and +246: the iPhone Home Screen.
+
+**The cabin was not reached.**
+
+**The rest (M):**
+
+- **Game-SC end:** none. Sign-in+120 s is +230.5, after the step. There were no `[game-sc]` lines, so no 0155
+  allow and no headroom refusal.
+- **NO GAP FITS:** 53. 26 come from A's V8 probes (60k), 1 from the game's 8960 MiB ask, 26 from B's (140k–150k).
+  There were 0 `dllhost`.
+- **Slots:** A's teardown held kinds 2, 4, 6, 5, 1, 3 in place (136838–136855); 0 `held again`/`NOT held`.
+  Teardown footprints were `6270->5970` (launcher) and `6270->5019` (A).
+- **Waits:** 17 `wait-detached` (16 `node=unlinked`, 1 `absent`) and 7 `wait-only`, all `fate=0`.
+- 54 `c0000005` lines, 31 of them RDR2's own (036c).
+
+**l10 against d1, just before the step.** As in d1's split:
+footprint = graphics + `[proc-mem]` all − donor-backed + non-view residual.
+The rows are l10's step −3.2 sample against d1's step −1.0 (144530).
+
+| Component | d1 | l10 | l10 − d1 | M/I | Whose |
+| --- | --- | --- | --- | --- | --- |
+| phys | 6457 | 6930 | **+473** | M | |
+| graphics | 2420 | 2399 | −21 | M | shared |
+| RDR2.exe fex | 303 | 467 | **+164** | M | no third FEX generation before the step (d1 rolled at press+2.1 only because its tail room was short) |
+| RDR2.exe image+private | 2826 | 2752 | −74 | M | game |
+| B | 449 | 580 | **+131** | M | stock CEF (image +98, fex +41, private −8) |
+| runtime, child, services, rounding | 464 | 505 | +41 | M | services +56 (0028's fex) |
+| donor-backed (subtracted) | −2292 | −2187 | **+105** | M for l10; d1 is install+180 (I) | pool cap 2687 against 2809 (the R flaw above) |
+| non-view residual | 2287 | 2414 | **+127** | M for l10 (ledger-closed); d1 by difference | host side: not page tables (≤ 11 MB); flat from the press (+80 there) |
+| **sum** | | | **+473** | | −21 + 164 − 74 + 131 + 41 + 105 + 127 |
+
+- Then l10 grew 55 MB more to its step and d1 13, so the excess at the step is ≈ +515.
+- **d1's "+320 not explained" is closed:**
+  - the 200 MB of unsampled load growth is the FEX row (+164 at the step, M), not host memory;
+  - the non-view residual difference is 80–127 MB of host-side anonymous memory, with page tables and IOKit ruled
+    out (M) and the rest not attributable without a host-region walk.
+  - The new unknown is the 784 MB of non-pool alternate accounting, which offsets the residual.
+- **l10 against l9 (I, phases differ):**
+  - the pool held about 110 MB more (donor-backed 2187 against 2074);
+  - the pre-step plateau was ≈90 MB lower (6973–6985 against 7062–7072);
+  - but the step's first move started at the same 7172–7174 MB, and the peak again reached the limit.
+- **What fits:**
+  - d1's step rose 1426 MB from its pre-step value. On l10's 6973 that gives ≈8400, so l10 needed **≥210 MB** less
+    (l9 ≥306).
+  - The remaining owners are the FEX row (−164 if the third generation came before the step), B's stock CEF
+    (−131), and the pool's R flaw (≈−100 if it had resumed at 15 %): ≈−395 together (I), enough for d1's margin
+    less ≈100.
+  - Ending B before the step (≈−580) remains the single largest lever.
+
+**Gates:**
+
+| Gate | Result |
+| --- | --- |
+| HK first-frame+10 | passed (+10.53 s) |
+| The game's helper reaches allocator/browser startup | passed (kinds 1–6, no refusal, browser threads) |
+| The game signs in, Story is pressed | passed |
+| Story reaches the cabin | **not passed** (jetsam at the limit in the load step) |
+| No SC/launcher `NO GAP FITS` or soft grant | **not passed** (26 V8 lines each from A and B; 0 `dllhost`; no soft grant) |
+| Peak within 7343 MB ±10 % | **not passed** (8185 MB) |
+| Slot release keeps the range held | passed (A's 6/6 and the dead early helper's 2 held in place) |
+| Sampler: a sample inside the step | **not passed** (the walk did not finish before the kill) |
+| Ledger self-probe | passed (rc=0, phys_footprint closed to 14 MB) |
