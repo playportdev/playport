@@ -3,8 +3,12 @@ From: domsvoboda <domsvoboda@users.noreply.github.com>
 Date: Fri, 23 Oct 2026 08:51:17 +0200
 Subject: [PATCH] winhttp: Speak HTTP/2 over TLS through nghttp2.
 
-A session offers h2 in TLS ALPN by default and per
-WINHTTP_OPTION_ENABLE_HTTP_PROTOCOL; when the server picks h2, the
+Only where it is asked for: a session offers h2 in TLS ALPN when the
+process environment has WINE_WINHTTP_HTTP2=1 (an Xbox title's launch
+sets it) or the caller enables it with
+WINHTTP_OPTION_ENABLE_HTTP_PROTOCOL. Otherwise nothing changes: no ALPN,
+no HTTP/2 state, Schannel's SECBUFFER_EXTRA left as before, the same
+HTTP/1.1 requests on the wire. When the server picks h2, the
 request goes out as one nghttp2 stream on its own connection (never
 pooled), its HEADERS frame built from the request headers without the
 hop-by-hop ones, its body from the optional data and WinHttpWriteData.
@@ -12,10 +16,11 @@ The reply's status and headers are installed as an HTTP/2.0 response,
 and the body reaches the data streams (gzip/deflate included) through
 the connection stream's buffer. WINHTTP_OPTION_HTTP_PROTOCOL_USED reports
 it. nghttp2 is loaded at run time as libnghttp2.dll from system32;
-closing the request handle cancels a pending HTTP/2 wait. Schannel's
-SECBUFFER_EXTRA after the handshake is kept for the first read.
+closing the request handle cancels a pending HTTP/2 wait. On a
+connection that may speak h2, Schannel's SECBUFFER_EXTRA after the
+handshake is kept for the first read.
 
-Ported from Xodus Nexus onto WineHQ's reworked reading (struct
+Ported from Xodus Nexus, which offers h2 for every session, onto WineHQ's reworked reading (struct
 read_buffer and the data streams) and request states: the reply is read
 by WinHttpReceiveResponse as for HTTP/1.1 instead of early in
 send_request; h2 is offered only when libnghttp2.dll loads
@@ -32,11 +37,11 @@ Offered-upstream: no
 ---
  dlls/winhttp/Makefile.in       |   1 +
  dlls/winhttp/http2.c           | 725 +++++++++++++++++++++++++++++++++
- dlls/winhttp/net.c             |  20 +-
+ dlls/winhttp/net.c             |  26 +-
  dlls/winhttp/request.c         |  67 ++-
- dlls/winhttp/session.c         |  25 +-
+ dlls/winhttp/session.c         |  30 +-
  dlls/winhttp/winhttp_private.h |  15 +-
- 6 files changed, 839 insertions(+), 14 deletions(-)
+ 6 files changed, 850 insertions(+), 14 deletions(-)
  create mode 100644 dlls/winhttp/http2.c
 
 diff --git a/dlls/winhttp/Makefile.in b/dlls/winhttp/Makefile.in
@@ -783,7 +788,7 @@ index 0000000..1c936b1
 +    return ret;
 +}
 diff --git a/dlls/winhttp/net.c b/dlls/winhttp/net.c
-index 4d7a203..f5ab689 100644
+index 4d7a203..6297d96 100644
 --- a/dlls/winhttp/net.c
 +++ b/dlls/winhttp/net.c
 @@ -291,6 +291,7 @@ void netconn_addref( struct netconn *conn )
@@ -794,20 +799,26 @@ index 4d7a203..f5ab689 100644
      TRACE( "Closing connection %p.\n", conn );
      if (conn->secure)
      {
-@@ -388,7 +389,11 @@ static DWORD netconn_negotiate( struct netconn *conn, WCHAR *hostname, CredHandl
+@@ -388,7 +389,17 @@ static DWORD netconn_negotiate( struct netconn *conn, WCHAR *hostname, CredHandl
                  0, NULL, &out_desc, &attrs, NULL);
          TRACE( "InitializeSecurityContext ret %#lx\n", status );
          if(status == SEC_E_OK && in_bufs[1].BufferType == SECBUFFER_EXTRA)
 -            FIXME("SECBUFFER_EXTRA not supported\n");
 +        {
-+            conn->extra_len = in_bufs[1].cbBuffer;
-+            if (!(conn->extra_buf = malloc( conn->extra_len ))) status = SEC_E_INSUFFICIENT_MEMORY;
-+            else memcpy( conn->extra_buf, read_buf + in_bufs[0].cbBuffer - conn->extra_len, conn->extra_len );
++            /* Kept only on a connection that may speak HTTP/2 (an h2 server's
++             * SETTINGS can share the handshake's last read); HTTP/1.1 as before. */
++            if (!conn->http_protocols) FIXME("SECBUFFER_EXTRA not supported\n");
++            else
++            {
++                conn->extra_len = in_bufs[1].cbBuffer;
++                if (!(conn->extra_buf = malloc( conn->extra_len ))) status = SEC_E_INSUFFICIENT_MEMORY;
++                else memcpy( conn->extra_buf, read_buf + in_bufs[0].cbBuffer - conn->extra_len, conn->extra_len );
++            }
 +        }
      }
  
      free(read_buf);
-@@ -397,14 +402,19 @@ static DWORD netconn_negotiate( struct netconn *conn, WCHAR *hostname, CredHandl
+@@ -397,14 +408,19 @@ static DWORD netconn_negotiate( struct netconn *conn, WCHAR *hostname, CredHandl
  }
  
  DWORD netconn_secure_connect( struct netconn *conn, WCHAR *hostname, DWORD security_flags, CredHandle *cred_handle,
@@ -829,7 +840,7 @@ index 4d7a203..f5ab689 100644
      if(status != SEC_E_OK || res != ERROR_SUCCESS)
          goto failed;
  
-@@ -427,6 +437,10 @@ DWORD netconn_secure_connect( struct netconn *conn, WCHAR *hostname, DWORD secur
+@@ -427,6 +443,10 @@ DWORD netconn_secure_connect( struct netconn *conn, WCHAR *hostname, DWORD secur
          goto failed;
      }
  
@@ -975,7 +986,7 @@ index 1691d05..12dd168 100644
      if (async)
      {
 diff --git a/dlls/winhttp/session.c b/dlls/winhttp/session.c
-index 68f8ee9..f202662 100644
+index 68f8ee9..857a297 100644
 --- a/dlls/winhttp/session.c
 +++ b/dlls/winhttp/session.c
 @@ -102,6 +102,11 @@ static BOOL session_query_option( struct object_header *hdr, DWORD option, void
@@ -1001,15 +1012,20 @@ index 68f8ee9..f202662 100644
          return TRUE;
  
      case WINHTTP_OPTION_IPV6_FAST_FALLBACK:
-@@ -410,6 +417,7 @@ HINTERNET WINAPI WinHttpOpen( LPCWSTR agent, DWORD access, LPCWSTR proxy, LPCWST
+@@ -410,6 +417,12 @@ HINTERNET WINAPI WinHttpOpen( LPCWSTR agent, DWORD access, LPCWSTR proxy, LPCWST
      session->receive_response_timeout = DEFAULT_RECEIVE_RESPONSE_TIMEOUT;
      session->websocket_receive_buffer_size = 32768;
      session->websocket_send_buffer_size = 32768;
-+    session->http_protocols = WINHTTP_PROTOCOL_FLAG_HTTP2;
++    /* HTTP/2 only where the launch asks for it (WINE_WINHTTP_HTTP2=1, an Xbox title's) or the
++     * caller enables it with WINHTTP_OPTION_ENABLE_HTTP_PROTOCOL; otherwise HTTP/1.1 as before. */
++    {
++        const WCHAR *http2 = _wgetenv( L"WINE_WINHTTP_HTTP2" );
++        session->http_protocols = http2 && !wcscmp( http2, L"1" ) ? WINHTTP_PROTOCOL_FLAG_HTTP2 : 0;
++    }
      list_init( &session->cookie_cache );
      InitializeCriticalSectionEx( &session->cs, 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO );
      session->cs.DebugInfo->Spare[0] = (DWORD_PTR)(__FILE__ ": session.cs");
-@@ -1076,8 +1084,7 @@ static BOOL request_query_option( struct object_header *hdr, DWORD option, void
+@@ -1076,8 +1089,7 @@ static BOOL request_query_option( struct object_header *hdr, DWORD option, void
      case WINHTTP_OPTION_HTTP_PROTOCOL_USED:
          if (!validate_buffer( buffer, buflen, sizeof(DWORD) )) return FALSE;
  
@@ -1019,7 +1035,7 @@ index 68f8ee9..f202662 100644
          *buflen = sizeof(DWORD);
          return TRUE;
  
-@@ -1381,7 +1388,9 @@ static BOOL request_set_option( struct object_header *hdr, DWORD option, void *b
+@@ -1381,7 +1393,9 @@ static BOOL request_set_option( struct object_header *hdr, DWORD option, void *b
              SetLastError( ERROR_INVALID_PARAMETER );
              return FALSE;
          }
@@ -1030,7 +1046,7 @@ index 68f8ee9..f202662 100644
          return TRUE;
  
      case WINHTTP_OPTION_WEB_SOCKET_RECEIVE_BUFFER_SIZE:
-@@ -1433,9 +1442,14 @@ static BOOL request_set_option( struct object_header *hdr, DWORD option, void *b
+@@ -1433,9 +1447,14 @@ static BOOL request_set_option( struct object_header *hdr, DWORD option, void *b
      }
  }
  
@@ -1046,7 +1062,7 @@ index 68f8ee9..f202662 100644
      request_destroy,
      request_query_option,
      request_set_option
-@@ -1526,6 +1540,7 @@ HINTERNET WINAPI WinHttpOpenRequest( HINTERNET hconnect, const WCHAR *verb, cons
+@@ -1526,6 +1545,7 @@ HINTERNET WINAPI WinHttpOpenRequest( HINTERNET hconnect, const WCHAR *verb, cons
      request->send_timeout = connect->session->send_timeout;
      request->receive_timeout = connect->session->receive_timeout;
      request->receive_response_timeout = connect->session->receive_response_timeout;

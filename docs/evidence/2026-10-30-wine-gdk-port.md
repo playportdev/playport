@@ -21,7 +21,7 @@
 | 0001 windows.web JsonArray Size/Append | xodus-gaming/wine 83aba5c4 (Olivia Ryan) | clean. The other 13 windows.web JSON commits are already in WineHQ at the pin (b3c2cc15 … eb0fffa7): nothing to port |
 | 0002 windows.ui.core.textinput edit context, TryShow/TryHide | xodus-gaming/wine f7331a3e (ChristopherHX) | adapted: WineHQ has the CoreTextServicesManager, input-view stubs and the IDL (Alistair Leslie-Hughes); only the edit context and the Try* successes remain |
 | 0003 advapi32 CredEnumerateW host ERROR_NOT_FOUND | same | adapted: the fix without the added traces of credential names |
-| 0004 winhttp HTTP/2 through nghttp2 | nexus-wine e2789976 (domsvoboda) | adapted to WineHQ's read_buffer/data-stream reading and request states; h2 offered only when libnghttp2.dll loads; origin-form :path through a proxy |
+| 0004 winhttp HTTP/2 through nghttp2 | nexus-wine e2789976 (domsvoboda) | adapted to WineHQ's read_buffer/data-stream reading and request states; h2 offered only when libnghttp2.dll loads; origin-form :path through a proxy; off unless asked for (below) |
 | 0005 winhttp body diagnostics never opened | nexus-wine a58b93d3 | clean |
 | 0006 winhttp IPv6 fast fallback (request), WebSocket close timeout | nexus-wine 8aa7f701 | adapted: WineHQ has the session option; WebSocket code is in socket.c |
 | 0007 mscoree Mono path bound | nexus-wine 793332fe | clean |
@@ -42,7 +42,12 @@
 
 ## Open
 
-- HTTP/2 is on by default for every session (as in Nexus), so every title's WinHTTP over TLS
-  uses h2 wherever libnghttp2.dll is staged.
+- HTTP/2 is off unless asked for, unlike Nexus (on for every session there): a session offers
+  h2 only when the process environment has `WINE_WINHTTP_HTTP2=1` (PLA-499's Xbox launch sets
+  it) or the caller sets `WINHTTP_OPTION_ENABLE_HTTP_PROTOCOL` with the HTTP/2 flag. Unset, a
+  Steam, GOG or Epic title keeps the HTTP/1.1 path: no ALPN list, no HTTP/2 state, Schannel's
+  `SECBUFFER_EXTRA` ignored as before. The one visible difference is that
+  `WinHttpQueryOption(session, WINHTTP_OPTION_ENABLE_HTTP_PROTOCOL)` now answers 0 where it
+  failed.
 - No run exercised the patches: the desktop proof and the Hollow Knight (Steam) phone smoke are
   unrun.
