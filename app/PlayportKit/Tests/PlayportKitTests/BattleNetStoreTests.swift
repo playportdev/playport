@@ -220,6 +220,26 @@ final class BattleNetStoreTests: XCTestCase {
         XCTAssertEqual(after.installedAt, at)
     }
 
+    /// PLA-521: an update is an update job with no locale, which Downloads shows as Updating, apart
+    /// from a language change; its receipt names the new version and counts the files it added.
+    func testAnUpdateJobIsShownApartFromALanguageChange() {
+        let update = BattleNet.updateJob(.wow, bytes: 300_000_000)
+        XCTAssertEqual(update.kind, .update)
+        XCTAssertEqual(update.key, BattleNet.key(.wow))
+        XCTAssertEqual(update.bytes, 300_000_000)
+        XCTAssertFalse(BattleNet.isLanguageChange(update))
+        XCTAssertNil(BattleNet.jobVerb(update), "Downloads' own Updating")
+        XCTAssertEqual(BattleNet.jobVerb(BattleNet.languageJob(.wow, region: .eu, locale: "deDE")), "Changing language")
+
+        let before = BattleNet.receipt(.wow, folder: "World of Warcraft", version: "12.0.1.1", productFolder: "_retail_",
+                                       arm64Executable: "Wow-ARM64.exe", files: 12, bytes: 1000, at: Date(timeIntervalSince1970: 1_790_000_000))
+        let after = BattleNet.receipt(before, adding: 3, bytes: 200, version: "12.0.1.2")
+        XCTAssertEqual(after.version, "12.0.1.2")
+        XCTAssertEqual(after.files, 15)
+        XCTAssertEqual(after.bytes, 1200)
+        XCTAssertEqual(after.executable, before.executable)
+    }
+
     func testBlizzardsCDNUnreachableOrRefusingIsSaidPlainly() {
         XCTAssertEqual(BattleNet.reason(BattleNetError.unreachable("versions: us.version.battle.net: offline")),
                        "Blizzard's servers can't be reached. Check the connection, then try again.")

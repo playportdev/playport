@@ -87,11 +87,25 @@ public enum BattleNet {
     /// Whether `job` is a language change (an update naming a region and locale).
     public static func isLanguageChange(_ job: DownloadJob) -> Bool { job.kind == .update && jobChoice(job.branch) != nil }
 
-    /// The receipt after a language change added `files` files of `bytes` bytes.
-    public static func receipt(_ r: StoreReceipt, adding files: Int, bytes: UInt64) -> StoreReceipt {
+    /// An update to the install region's current build (PLA-521): an update job naming no locale,
+    /// run by Downloads; `bytes` is what its plan writes.
+    public static func updateJob(_ product: BattleNetProduct, bytes: UInt64? = nil) -> DownloadJob {
+        DownloadJob(key: key(product), name: product.name, kind: .update, bytes: bytes)
+    }
+
+    /// What Downloads shows a running Battle.net job doing when it is not its kind's own verb
+    /// (Updating): a language change; nil for any other job.
+    public static func jobVerb(_ job: DownloadJob) -> String? {
+        job.key.store == .battlenet && isLanguageChange(job) ? "Changing language" : nil
+    }
+
+    /// The receipt after a language change or an update (to `version`) added `files` files of
+    /// `bytes` bytes.
+    public static func receipt(_ r: StoreReceipt, adding files: Int, bytes: UInt64, version: String? = nil) -> StoreReceipt {
         var r = r
         r.files += files
         r.bytes += bytes
+        if let version { r.version = version }
         return r
     }
 
@@ -111,6 +125,13 @@ public enum BattleNet {
     public static func spaceNeeded(_ sizes: BattleNetListing.Sizes) -> UInt64 {
         let files = sizes.install + UInt64(sizes.objects) * localHeader
         return files + UInt64(Double(files) * marginFraction) + indexAllowance
+    }
+
+    /// The free space an update needs before it starts: the `bytes` its plan writes (data files
+    /// with their local headers, and product folder files), the engine's margin over them, and
+    /// the new build's CDN indexes.
+    public static func spaceNeeded(update bytes: UInt64) -> UInt64 {
+        bytes + UInt64(Double(bytes) * marginFraction) + indexAllowance
     }
 
     /// What the page says instead of installing, or nil when it fits.

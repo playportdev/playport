@@ -71,9 +71,54 @@ final class BattleNetPlayTests: XCTestCase {
     func testPlayShowsTheNoticeUntilItIsAcceptedThenStartsTheARM64ClientOnDirect3D12OverVulkan() {
         XCTAssertEqual(BattleNetPlay.decide(.init(copy: copy(.wow))), .notice(.wow), "first Play: the notice, nothing starts")
         XCTAssertEqual(BattleNetPlay.decide(.init(copy: copy(.wowClassicEra))), .notice(.wowClassicEra))
-        let launch = BattleNetPlay.decide(.init(copy: copy(.wow, accepted: Date())))
+        let launch = BattleNetPlay.decide(.init(copy: copy(.wow, accepted: Date()), update: .current))
         XCTAssertEqual(launch, .launch(.init(graphics: .vulkan, arguments: ["-d3d12"])),
                        "accepted: the client as a native ARM64 child, Direct3D 12 through vkd3d-proton on Vulkan")
+    }
+
+    // MARK: the update check (PLA-521)
+
+    func testEveryPlayChecksForAnUpdateAfterTheNotice() {
+        // The notice still comes first, whatever the check would say.
+        XCTAssertEqual(BattleNetPlay.decide(.init(copy: copy(.wow))), .notice(.wow))
+        XCTAssertEqual(BattleNetPlay.decide(.init(copy: copy(.wow), update: .available(version: "12.0.1.2", bytes: 1))), .notice(.wow))
+        // Accepted, not asked yet: the version endpoint is asked before anything starts.
+        XCTAssertEqual(BattleNetPlay.decide(.init(copy: copy(.wow, accepted: Date()))), .checkUpdate(.wow))
+        XCTAssertEqual(BattleNetPlay.decide(.init(copy: copy(.wowClassicEra, accepted: Date()))), .checkUpdate(.wowClassicEra))
+    }
+
+    func testAnAvailableUpdateThatFitsIsDownloadedThenTheGameStarts() {
+        let t = copy(.wow, accepted: Date())
+        // 1 GB to write: with the engine's 5 % and the CDN indexes' 256 MB, 1.306 GB is needed.
+        let update = BattleNetPlay.Update.available(version: "12.0.1.2", bytes: 1_000_000_000)
+        XCTAssertEqual(BattleNetPlay.decide(.init(copy: t, update: update, freeBytes: 1_400_000_000)), .update(.wow, version: "12.0.1.2"))
+        // Free space unknown: the update goes on, and Downloads stops it if the phone fills.
+        XCTAssertEqual(BattleNetPlay.decide(.init(copy: t, update: update)), .update(.wow, version: "12.0.1.2"))
+        // Once it is done, the game starts, with nothing to report.
+        XCTAssertEqual(BattleNetPlay.decide(.init(copy: t, update: .updated, freeBytes: 0)),
+                       .launch(.init(graphics: .vulkan, arguments: ["-d3d12"])))
+    }
+
+    func testAnUpdateThatDoesNotFitIsRefusedBeforeItStarts() {
+        let t = copy(.wow, accepted: Date())
+        let step = BattleNetPlay.decide(.init(copy: t, update: .available(version: "12.0.1.2", bytes: 1_000_000_000), freeBytes: 1_200_000_000))
+        guard case let .refuse(why) = step else { return XCTFail("\(String(describing: step))") }
+        XCTAssertTrue(why.contains("Not enough free space"), why)
+        XCTAssertTrue(why.contains("12.0.1.2"), why)
+    }
+
+    func testAnUnreachableVersionCheckIsReportedAndTheGameStarts() {
+        let t = copy(.wow, accepted: Date())
+        let why = "Blizzard's servers can't be reached. Check the connection, then try again."
+        guard case let .launch(launch)? = BattleNetPlay.decide(.init(copy: t, update: .unreachable(why))) else {
+            return XCTFail("the game did not start")
+        }
+        XCTAssertEqual(launch.graphics, .vulkan)
+        XCTAssertEqual(launch.arguments, ["-d3d12"])
+        let report = launch.report ?? ""
+        XCTAssertTrue(report.hasPrefix("Couldn't check for an update"), report)
+        XCTAssertTrue(report.contains(why), report)
+        XCTAssertTrue(report.contains("starts the installed version"), report)
     }
 
     func testAClientThatIsNotTheARM64OneIsNotStarted() {

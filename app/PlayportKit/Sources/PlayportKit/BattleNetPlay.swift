@@ -1,32 +1,53 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Play for a Battle.net copy (PLA-514, decisions 0169 and 0170): the ban-risk notice before the
-// first Play of each product, then the product's ARM64 client as a native ARM64 child of the
-// x86-64 session, drawing with Direct3D 12 through ARM64 vkd3d-proton on Vulkan. World of
-// Warcraft shows its own login; Playport passes it no sign-in and keeps no Battle.net
-// credential or session. The app (LibraryModel.play) asks `decide`, does the step, and asks
-// again with what it learned, until the step is `launch`.
+// first Play of each product, then the update check (PLA-521), then the product's ARM64 client as
+// a native ARM64 child of the x86-64 session, drawing with Direct3D 12 through ARM64 vkd3d-proton
+// on Vulkan. World of Warcraft shows its own login; Playport passes it no sign-in and keeps no
+// Battle.net credential or session. The app (LibraryModel.play) asks `decide`, does the step, and
+// asks again with what it learned, until the step is `launch`.
 
 import BattleNetClientKit
 import Foundation
 
 public enum BattleNetPlay {
-    /// What Play knows when it decides. The update check (PLA-521) adds its result here, with a
-    /// default that means not asked, so callers that do not check go on unchanged.
+    /// What Play knows when it decides.
     public struct Facts: Equatable, Sendable {
         /// The installed copy, as adoption left it (its client's PE machine, the notice's acceptance).
         public var copy: InstalledTitle
+        /// What the update check found; nil while it has not been asked.
+        public var update: Update?
+        /// The phone's free space, for an update's space check; nil when unknown.
+        public var freeBytes: UInt64?
 
-        public init(copy: InstalledTitle) {
+        public init(copy: InstalledTitle, update: Update? = nil, freeBytes: UInt64? = nil) {
             self.copy = copy
+            self.update = update
+            self.freeBytes = freeBytes
         }
     }
 
-    /// Play's next step. The gates run in this order: the notice, then (PLA-521) the update
-    /// check, its space and its download, then the launch.
+    /// The update check's answer: the region's version endpoint against the install's build.
+    public enum Update: Equatable, Sendable {
+        /// The install is on the region's current build.
+        case current
+        /// A newer build, and the bytes its update writes (BattleNetClientKit's update plan).
+        case available(version: String, bytes: UInt64)
+        /// The check failed (no connection, Blizzard's servers): why, worded for the player.
+        case unreachable(String)
+        /// The update ran through Downloads.
+        case updated
+    }
+
+    /// Play's next step. The gates run in this order: the notice, the client, the update check
+    /// with its space and its download, then the launch.
     public enum Step: Equatable, Sendable {
         /// The ban-risk notice (`notice(_:)`); Play starts only once the player accepts it, and the
         /// acceptance is kept with the copy (InstalledTitle.riskNoticeAccepted).
         case notice(BattleNetProduct)
+        /// Ask the version endpoint whether the region has a newer build than the install.
+        case checkUpdate(BattleNetProduct)
+        /// Update to `version` through Downloads, with its progress; Play goes on once it is done.
+        case update(BattleNetProduct, version: String)
         /// Play does not start; the reason is the player's.
         case refuse(String)
         case launch(Launch)
@@ -41,10 +62,14 @@ public enum BattleNetPlay {
         /// After the receipt's arguments: WoW's own switch for its Direct3D 12 renderer, so it
         /// never falls back to Direct3D 11. No sign-in argument: WoW shows its login.
         public var arguments: [String]
+        /// What the player is told as the game starts: a failed update check, after which the
+        /// installed version plays and the game itself decides whether it may.
+        public var report: String?
 
-        public init(graphics: GraphicsBackend, arguments: [String]) {
+        public init(graphics: GraphicsBackend, arguments: [String], report: String? = nil) {
             self.graphics = graphics
             self.arguments = arguments
+            self.report = report
         }
     }
 
@@ -58,7 +83,21 @@ public enum BattleNetPlay {
             return .refuse("\(product.name) starts only from its ARM64 client, and \(t.executable ?? "no client") is not it. "
                            + "Pick the ARM64 client on the game's page, or reinstall.")
         }
-        return .launch(Launch(graphics: .vulkan, arguments: ["-d3d12"]))
+        var report: String?
+        switch facts.update {
+        case nil:
+            return .checkUpdate(product)
+        case let .available(version, bytes):
+            if let free = facts.freeBytes, let why = BattleNet.refusal(needed: BattleNet.spaceNeeded(update: bytes), free: free) {
+                return .refuse("\(product.name) \(version) is out, and its update does not fit. \(why)")
+            }
+            return .update(product, version: version)
+        case let .unreachable(why):
+            report = "Couldn't check for an update: \(why) \(product.name) starts the installed version."
+        case .current, .updated:
+            break
+        }
+        return .launch(Launch(graphics: .vulkan, arguments: ["-d3d12"], report: report))
     }
 
     /// The PE machine of an ARM64 Windows executable.
