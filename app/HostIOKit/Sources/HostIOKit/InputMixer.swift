@@ -14,7 +14,8 @@
 ///   merge and clamped to XInput's range; it connects no pad by itself. Gyro
 ///   aim as a mouse is relative motion (`move`).
 /// - Keys and mouse buttons: what the controls hold now against what they held,
-///   as downs (a chord's modifiers first) and ups (its key first); a chord
+///   as downs (a chord's modifiers first, then Shift, Ctrl or Alt held as keys
+///   themselves, as the touch keyboard's are) and ups (its key first); a chord
 ///   newly held while its key is already down (held alone by another control)
 ///   sends that key up, the modifiers down, then the key down again. HostIO sends
 ///   them through Lifecycle, which releases them on focus loss as it does a
@@ -244,10 +245,12 @@ public struct InputMixer: Sendable {
     private mutating func sendEdges() { pending += edges() }
 
     /// The controls' new state, nil when they are off (hidden): slot 0's
-    /// update and the keys, pointer and Playport actions to send.
-    public mutating func touch(_ t: TouchOutput?) -> (slot0: SlotUpdate, outputs: [MixerOutput]) {
+    /// update and the keys, pointer and Playport actions to send. With
+    /// `padOn` false (a controller is player 1; the touch keyboard is open over
+    /// it) their keys, pointer and actions go through but their pad is not in slot 0.
+    public mutating func touch(_ t: TouchOutput?, padOn: Bool = true) -> (slot0: SlotUpdate, outputs: [MixerOutput]) {
         let before = slot0
-        touchPad = t.map { PadMapping.values($0.pad) }
+        touchPad = padOn ? t.map { PadMapping.values($0.pad) } : nil
         let after = slot0
         let slot: SlotUpdate = after == before ? .unchanged : after.map { .set($0) } ?? .disconnect
         let mouse = t?.mouse ?? []
@@ -305,14 +308,17 @@ public struct InputMixer: Sendable {
         return out
     }
 
-    /// The VKs a set of key actions holds: every chord's modifiers, then the keys, each once.
+    /// The VKs a set of key actions holds: every chord's modifiers, then the
+    /// modifier keys held as keys (the touch keyboard's Shift, Ctrl, Alt), then
+    /// the other keys, each once.
     static func virtualKeys(_ keys: Set<InputAction>) -> [UInt8] {
         var mods: [UInt8] = [], main: [UInt8] = []
         for case let .key(vk, m) in keys.sorted(by: { $0.name < $1.name }) {
             for v in m.virtualKeys where !mods.contains(v) { mods.append(v) }
             if !main.contains(vk) { main.append(vk) }
         }
-        return mods.sorted() + main.filter { !mods.contains($0) }
+        main.removeAll { mods.contains($0) }
+        return mods.sorted() + main.filter(KeyModifiers.isModifier) + main.filter { !KeyModifiers.isModifier($0) }
     }
 
     public static func merge(physical p: PadValues, touch t: PadValues) -> PadValues {
