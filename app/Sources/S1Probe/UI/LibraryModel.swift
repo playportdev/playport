@@ -21,6 +21,10 @@ final class LibraryModel: ObservableObject {
     /// The app container, the parent of Documents.
     nonisolated static let home = WineHostRuntime.documents.deletingLastPathComponent()
     nonisolated static let paths = PlayportPaths.container(home: home)
+    /// A play's in-place swap of a copy's kept-encrypted files (an Xbox copy's, decision 0166),
+    /// its markers beside the catalogue.
+    nonisolated static let inPlaceSwap = InPlaceSwap(games: paths.games,
+                                                     markers: paths.layout.stateRoot.appendingPathComponent("plays", isDirectory: true))
     /// Where the Steam API emulator saves each game's achievements and stats
     /// (`%APPDATA%\GSE Saves\<appid>` in the prefix; EmulatorStats).
     nonisolated static let emulatorSaves = WineHostRuntime.documents
@@ -73,6 +77,15 @@ final class LibraryModel: ObservableObject {
         }
         removeSteamTickets("at app start")
         removeEpicOwnershipFiles("at app start")
+        // A play's plaintext a crash left in a copy's folder: the originals back first (decision 0166).
+        for play in Self.inPlaceSwap.pending {
+            do {
+                try Self.inPlaceSwap.restore(play: play)
+                Self.log("play \(play): the plaintext the last process left is deleted and the originals are back")
+            } catch {
+                Self.log("play \(play): the originals the last process left aside are not all back (\(error)); tried again at the next start")
+            }
+        }
         // Cloud saves a sync replaced are kept 30 days (Cloud.Backups): once per process, which
         // after decision 0029 is once per game played.
         Task.detached(priority: .utility) {
@@ -346,6 +359,25 @@ final class LibraryModel: ObservableObject {
             storePrerequisites += await gogSupportSetups(t)
             gogInstallScripts(t)
         }
+        // An Xbox copy (dev only, decisions 0166, 0167): its licence, its kept-encrypted files in
+        // plaintext in place for this play, the bridge for the runtime's tickets and the prefix keys
+        // the runtime reads; the launch's end undoes the files and stops the bridge.
+        var guestEnvironment: [String: Secret<String>] = [:]
+        var atEnd: (@Sendable () -> Void)?
+        #if !PLAYPORT_RELEASE
+        if t.store == .xbox {
+            switch await XboxPlay.prepare(t, continuing: continuing) {
+            case .success(let xbox):
+                guestEnvironment = xbox.guestEnvironment
+                atEnd = xbox.atEnd
+                storePrerequisites += xbox.prerequisites
+            case .failure(let failure):
+                XboxPlay.ask(t, failure)
+                endTickets()
+                return false
+            }
+        }
+        #endif
         let prerequisites = Prerequisite.merge(store: storePrerequisites, unrealEngine: unrealEngine)
         // Windows services (decision 0107): COM's RpcSs entry, which the prefix seed lacks, and the SCM's
         // start timeout, for the SCM this play starts; a top-up, so a prefix that has them keeps its own.
@@ -370,6 +402,7 @@ final class LibraryModel: ObservableObject {
                                        graphics: settings.graphics, graphicsEnvironment: settings.graphicsEnvironment,
                                        steamAppID: t.appID, fex: fex, steamAPI: steamAPI,
                                        memory: MemoryNeed.of(t, cohort: Self.cohort), epic: epic, galaxy: galaxy,
+                                       guestEnvironment: guestEnvironment, atEnd: atEnd,
                                        prerequisites: prerequisites, windowsServices: settings.windowsServices,
                                        khronosVulkanLoader: settings.khronosVulkanLoader,
                                        jitPoolMB: settings.jitPoolMB,
@@ -380,6 +413,7 @@ final class LibraryModel: ObservableObject {
                                        exhaustionGrace: exhaustionGrace) else {
             endTickets()
             galaxy?.stop()
+            atEnd?()
             return false
         }
         catalog.update(id) { $0.lastPlayed = Date() }
