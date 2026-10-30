@@ -25,9 +25,12 @@
 //   button's behaviour (hold, toggle, repeat). A button whose label was its
 //   action's name follows a new action's name.
 // - Undo and redo: each operation, and each whole gesture, is one step.
-// - `saved(into:)` is what Done stores: the game's layout becomes the preset,
-//   with this copy when it differs from the preset (none when it does not, so
-//   Reset then Done drops the copy).
+// - `saved(into:)` is what Done stores. Nothing changed since it opened
+//   (`changed`: the same preset and layout, an edit undone too): the game as
+//   it was, so Done neither picks a layout for a game following Off, Settings
+//   or the suggestion nor ends that suggestion. Else the game's layout becomes
+//   the preset, with this copy when it differs from the preset (none when it
+//   does not, so Reset then Done drops the copy).
 
 import Foundation
 import HostIOKit
@@ -126,6 +129,8 @@ public struct LayoutEditor: Equatable, Sendable {
         var zone: TouchRect?
     }
     var gesture: Gesture?
+    /// What it opened on, for `changed`.
+    let opened: Snapshot
 
     /// Edits `preset` (Off edits Gamepad): the game's copy of it from `copies`, else the preset.
     public init(preset: OnScreenLayout, copies: [OnScreenLayout: ControlLayout] = [:], dpad: OnScreenDpad = .off,
@@ -136,6 +141,7 @@ public struct LayoutEditor: Equatable, Sendable {
         self.dpad = dpad; self.rightStick = rightStick
         self.width = width; self.height = height; self.insets = insets
         layout = copies[p] ?? p.layout(dpad: dpad, rightStick: rightStick) ?? .gamepad(dpad: dpad, rightStick: rightStick)
+        opened = Snapshot(preset: p, layout: layout)
     }
 
     /// Edits what a game plays with: its layout (Off: Gamepad) and its copies, with its Gamepad options.
@@ -153,6 +159,9 @@ public struct LayoutEditor: Equatable, Sendable {
 
     /// The layout is not the bare preset.
     public var isEdited: Bool { layout != presetLayout(preset) }
+
+    /// Another preset or layout than it opened on (a gesture going on not counted until it ends).
+    public var changed: Bool { snapshot != opened }
 
     /// Where a control is in the view.
     public func frame(of id: String) -> TouchRect? {
@@ -435,9 +444,11 @@ public struct LayoutEditor: Equatable, Sendable {
         restore(s)
     }
 
-    /// Done: the game's controls with this preset chosen and this layout as its copy (no copy when it is the preset).
+    /// Done: unchanged, the game as it was; else its controls with this preset chosen and this layout
+    /// as its copy (no copy when it is the preset).
     public func saved(into game: GameControls?) -> GameControls {
         var g = game ?? GameControls()
+        guard changed else { return g }
         g.layout = preset
         g.layouts[preset] = isEdited ? layout : nil
         return g

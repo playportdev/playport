@@ -94,17 +94,20 @@ final class LayoutEditorSession: ObservableObject {
                                           compat: LaunchSettingsStore.compat.entry(for: titleID)?.controls))
     }
 
-    /// Done: the game's own copy saved (none when it is the preset), and back.
+    /// Done: what changed saved (the layout and the game's own copy, none when it is the preset; the
+    /// opacity), nothing when nothing did, and back.
     func done() {
         guard let o = opened else { return }
         var e = editor
         e.endGesture()
         let store = ControlsStore.shared
-        var g = e.saved(into: store.game(o.titleID))
+        let before = store.game(o.titleID)
+        var g = e.saved(into: before)
         if opacity != openedOpacity { g.opacity = opacity }
-        store.setGame(o.titleID, g)
-        Self.log("done for \(o.titleID): \(e.preset.title)"
-                 + (e.isEdited ? ", the game's own copy (\(e.layout.controls.count) controls)" : ", as the preset")
+        if g != before { store.setGame(o.titleID, g) }
+        Self.log("done for \(o.titleID): "
+                 + (!e.changed ? "layout unchanged" : e.preset.title
+                    + (e.isEdited ? ", the game's own copy (\(e.layout.controls.count) controls)" : ", as the preset"))
                  + ", opacity \(ControlsOpacity.label(g.opacity ?? opacity))")
         close()
     }

@@ -317,12 +317,35 @@ final class LayoutEditorTests: XCTestCase {
         XCTAssertEqual(GameControlsRecords(json: try records.json())?["app-1"], saved)
 
         // A game with nothing set, its controls Off by default: the editor starts from Gamepad with the
-        // default options, and Done unedited saves the preset choice alone.
+        // default options, and Done unedited changes nothing (the game stays Off).
         let never = ControlsState.resolve(game: nil, defaults: ControlsDefaults(show: .never, dpad: .on), controllerConnected: false)
-        let fresh = LayoutEditor(game: nil, state: never, width: 800, height: 400)
+        var fresh = LayoutEditor(game: nil, state: never, width: 800, height: 400)
         XCTAssertEqual(fresh.preset, .gamepad)
         XCTAssertEqual(fresh.layout, .gamepad(dpad: .on))
         XCTAssertFalse(fresh.isEdited)
-        XCTAssertEqual(fresh.saved(into: nil), GameControls(layout: .gamepad))
+        XCTAssertFalse(fresh.changed)
+        XCTAssertEqual(fresh.saved(into: nil), GameControls())
+        // An edit chooses the preset; undone, nothing is saved again.
+        fresh.remove("menu")
+        XCTAssertTrue(fresh.changed)
+        XCTAssertEqual(fresh.saved(into: nil).layout, .gamepad)
+        fresh.undo()
+        XCTAssertEqual(fresh.saved(into: nil), GameControls())
+    }
+
+    /// Done with nothing changed leaves the game as it was: not pinned to the layout it was following
+    /// (Settings' or the suggestion's), its copies as they were. Another preset chosen is saved.
+    func testDoneWithNothingChangedLeavesTheGameAsItWas() {
+        let game = GameControls(opacity: 0.5)
+        let kbm = ControlsState.resolve(game: game, defaults: ControlsDefaults(startingLayout: .keyboardMouse),
+                                        controllerConnected: false)
+        var e = LayoutEditor(game: game, state: kbm, width: 800, height: 400)
+        XCTAssertEqual(e.saved(into: game), game)
+        e.start(from: .pointClick)
+        e.start(from: .keyboardMouse)                            // back where it began: nothing chosen
+        XCTAssertFalse(e.changed)
+        XCTAssertEqual(e.saved(into: game), game)
+        e.start(from: .pointClick)
+        XCTAssertEqual(e.saved(into: game), GameControls(layout: .pointClick, opacity: 0.5))
     }
 }
