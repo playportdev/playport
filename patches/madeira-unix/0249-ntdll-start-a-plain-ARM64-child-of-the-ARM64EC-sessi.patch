@@ -24,16 +24,20 @@ x18 patching); an ARM64 child of an aarch64 session keeps the S1 copy.
 Every check of the session's machine in the forked loader files was
 reviewed for this child; the table is in the evidence file.
 
+The aarch64 build has no hybrid metadata, so "no CHPE metadata -- EC
+redirect skipped!" is logged for the EC build only, not for every WoW64
+or ARM64 child that starts well.
+
 Linear: PLA-512
 Class: feature
 Evidence: docs/evidence/2026-10-30-native-arm64-child.md
 Offered-upstream: no; the pseudo-process loader is specific to the iOS port
 ---
- build/ntdll-unix/loader_ios.c | 49 +++++++++++++++++++++++++++++------
- 1 file changed, 41 insertions(+), 8 deletions(-)
+ build/ntdll-unix/loader_ios.c | 53 +++++++++++++++++++++++++++++++++++++++++--------
+ 1 file changed, 44 insertions(+), 9 deletions(-)
 
 diff --git a/build/ntdll-unix/loader_ios.c b/build/ntdll-unix/loader_ios.c
-index dc95381..e1d9e42 100644
+index dc95381..e626750 100644
 --- a/build/ntdll-unix/loader_ios.c
 +++ b/build/ntdll-unix/loader_ios.c
 @@ -2354,18 +2354,29 @@ static void redirect_ntdll_functions( HMODULE module )
@@ -70,7 +74,16 @@ index dc95381..e1d9e42 100644
      const char *pe_dir = get_pe_dir( machine );
      unsigned int status;
      SECTION_IMAGE_INFORMATION info;
-@@ -2543,8 +2554,9 @@ static int ios_load_child_ec_ntdll( PEB *child_peb, BOOL wow64 )
+@@ -2538,13 +2549,17 @@ static int ios_load_child_ec_ntdll( PEB *child_peb, BOOL wow64 )
+             EC_REDIRECT( DbgUiRemoteBreakin );
+ #undef EC_REDIRECT
+         }
+-        else dprintf(2, "[ec-child-ntdll] no CHPE metadata — EC redirect skipped!\n");
++        /* The aarch64 build (a WoW64 or plain ARM64 child) has no hybrid
++         * metadata and nothing to redirect: only the EC build lacking it is news. */
++        else if (kind == IOS_CHILD_NTDLL_EC)
++            dprintf(2, "[ec-child-ntdll] no CHPE metadata — EC redirect skipped!\n");
+     }
  
      /* The EC code bitmap is lazily created by the first hybrid AMD64 map;
       * only the creating PEB gets EcCodeBitMap set. Every EC child needs it
@@ -82,7 +95,7 @@ index dc95381..e1d9e42 100644
      dprintf(2, "[ec-child-ntdll] EcCodeBitMap=%p LdrInitializeThunk=%p (pool %p)\n",
              child_peb->EcCodeBitMap, funcs.LdrInitializeThunk,
              ios_jit_translate_addr( funcs.LdrInitializeThunk ));
-@@ -3386,7 +3398,7 @@ DECLSPEC_EXPORT void wine_ios_child_main( int argc, char *argv[], int child_fd_s
+@@ -3386,7 +3401,7 @@ DECLSPEC_EXPORT void wine_ios_child_main( int argc, char *argv[], int child_fd_s
           * 32-bit stack is in the owner's window (init_thread_stack). */
          if (ios_cur_image_info()->Machine == IMAGE_FILE_MACHINE_I386)
          {
@@ -91,7 +104,7 @@ index dc95381..e1d9e42 100644
              {
                  dprintf(STDERR_FILENO, "[wow64-loader] native ntdll, i386 ntdll or stack FAILED "
                          "(stack status %x) -- the WoW64 child cannot start\n", (unsigned int)status);
-@@ -3395,6 +3407,27 @@ DECLSPEC_EXPORT void wine_ios_child_main( int argc, char *argv[], int child_fd_s
+@@ -3395,6 +3410,27 @@ DECLSPEC_EXPORT void wine_ios_child_main( int argc, char *argv[], int child_fd_s
              }
          }
          else
@@ -119,7 +132,7 @@ index dc95381..e1d9e42 100644
          /* X3c: a cross-arch child (AMD64 exe, non-EC session) cannot run on
           * the session's aarch64 ntdll at all — load the ARM64EC build as a
           * private second image instead of copying the session image. The
-@@ -3402,7 +3435,7 @@ DECLSPEC_EXPORT void wine_ios_child_main( int argc, char *argv[], int child_fd_s
+@@ -3402,7 +3438,7 @@ DECLSPEC_EXPORT void wine_ios_child_main( int argc, char *argv[], int child_fd_s
           * the standard map pipeline gave it pool/EC/x18 treatment. */
          if (ios_cur_image_info()->Machine == IMAGE_FILE_MACHINE_AMD64 && !is_arm64ec())
          {
