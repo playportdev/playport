@@ -31,12 +31,12 @@ Evidence: docs/evidence/2026-10-30-wine-gdk-port.md
 Offered-upstream: no
 ---
  dlls/winhttp/Makefile.in       |   1 +
- dlls/winhttp/http2.c           | 723 +++++++++++++++++++++++++++++++++
+ dlls/winhttp/http2.c           | 725 +++++++++++++++++++++++++++++++++
  dlls/winhttp/net.c             |  20 +-
  dlls/winhttp/request.c         |  67 ++-
  dlls/winhttp/session.c         |  25 +-
  dlls/winhttp/winhttp_private.h |  15 +-
- 6 files changed, 837 insertions(+), 14 deletions(-)
+ 6 files changed, 839 insertions(+), 14 deletions(-)
  create mode 100644 dlls/winhttp/http2.c
 
 diff --git a/dlls/winhttp/Makefile.in b/dlls/winhttp/Makefile.in
@@ -53,10 +53,10 @@ index 814766a..d557f3e 100644
  	request.c \
 diff --git a/dlls/winhttp/http2.c b/dlls/winhttp/http2.c
 new file mode 100644
-index 0000000..01c4e29
+index 0000000..1c936b1
 --- /dev/null
 +++ b/dlls/winhttp/http2.c
-@@ -0,0 +1,723 @@
+@@ -0,0 +1,725 @@
 +/*
 + * Generic HTTP/2 transport for Wine WinHTTP. LGPL-2.1-or-later.
 + * Uses nghttp2 (MIT) for HTTP/2 parsing, HPACK and flow control, and Wine's
@@ -73,8 +73,10 @@ index 0000000..01c4e29
 +#include "winhttp.h"
 +#include "winhttp_private.h"
 +#include "wine/debug.h"
++/* nghttp2.h takes ssize_t from the platform; msvcrt has none. */
++typedef SSIZE_T ssize_t;
 +#define NGHTTP2_STATICLIB
-+#include "nghttp2/nghttp2.h"
++#include <nghttp2/nghttp2.h>
 +
 +WINE_DEFAULT_DEBUG_CHANNEL(winhttp);
 +
@@ -157,7 +159,7 @@ index 0000000..01c4e29
 +        if (!((c >= '0' && c <= '9') || c == '-')) break;
 +    }
 +    if (i == len) return TRUE;
-+    if (len > 5 && !strncasecmp( value, "TCCL-", 5 ))
++    if (len > 5 && !_strnicmp( value, "TCCL-", 5 ))
 +    {
 +        for (i = 5; i < len; i++)
 +        {
@@ -167,7 +169,7 @@ index 0000000..01c4e29
 +        return TRUE;
 +    }
 +    for (i = 0; enums[i]; i++)
-+        if (len == strlen( enums[i] ) && !strncasecmp( value, enums[i], len )) return TRUE;
++        if (len == strlen( enums[i] ) && !_strnicmp( value, enums[i], len )) return TRUE;
 +    /* Identifier-shaped runs (msgpack keys, JSON keys, enum-ish words) are
 +     * structural metadata. Credential/token material is longer than 48
 +     * characters and never reaches this check. */

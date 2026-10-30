@@ -20,10 +20,10 @@ Offered-upstream: no
  1 file changed, 4 insertions(+), 8 deletions(-)
 
 diff --git a/dlls/winhttp/http2.c b/dlls/winhttp/http2.c
-index 01c4e29..bc2cf6f 100644
+index 1c936b1..73e69f3 100644
 --- a/dlls/winhttp/http2.c
 +++ b/dlls/winhttp/http2.c
-@@ -67,14 +67,10 @@ static HANDLE diag_file;
+@@ -69,14 +69,10 @@ static HANDLE diag_file;
  
  static void diag_init( void )
  {

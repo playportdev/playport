@@ -49,7 +49,7 @@ index 2e33b6b..10a8827 100644
  i386_EXTRADLLFLAGS = -Wl,--image-base,0x7b000000
 diff --git a/dlls/kernelbase/appmodel-identity.h b/dlls/kernelbase/appmodel-identity.h
 new file mode 100644
-index 0000000..b1c5ff5
+index 0000000..aed9090
 --- /dev/null
 +++ b/dlls/kernelbase/appmodel-identity.h
 @@ -0,0 +1,551 @@
@@ -515,7 +515,7 @@ index 0000000..b1c5ff5
 +        swprintf( id->family, ARRAY_SIZE(id->family), L"%s_%s", id->name, id->publisher_id );
 +        swprintf( id->full, ARRAY_SIZE(id->full), L"%s_%u.%u.%u.%u_%s_%s_%s", id->name,
 +                id->version.Major, id->version.Minor, id->version.Build, id->version.Revision,
-+                string_from_processor_arch( id->architecture ), id->resource, id->publisher_id );
++                processor_arch_from_code( id->architecture ), id->resource, id->publisher_id );
 +        if (*id->application) swprintf( id->aumid, ARRAY_SIZE(id->aumid), L"%s!%s", id->family, id->application );
 +        id->valid = TRUE; break;
 +    }
@@ -605,7 +605,7 @@ index 0000000..b1c5ff5
 +    return ERROR_SUCCESS;
 +}
 diff --git a/dlls/kernelbase/version.c b/dlls/kernelbase/version.c
-index 631fd27..a1d2615 100644
+index 631fd27..a880307 100644
 --- a/dlls/kernelbase/version.c
 +++ b/dlls/kernelbase/version.c
 @@ -1582,13 +1582,16 @@ BOOL WINAPI GetVersionExW( OSVERSIONINFOW *info )
@@ -613,7 +613,7 @@ index 631fd27..a1d2615 100644
  }
  
 +static UINT32 processor_arch_from_string(const WCHAR *, unsigned int);
-+const WCHAR *string_from_processor_arch(UINT32);
++static const WCHAR *processor_arch_from_code(UINT32);
 +#include "appmodel-identity.h"
 +
  /***********************************************************************
