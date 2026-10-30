@@ -66,7 +66,9 @@ character select; the compatibility issue records the run.
    Phone gate: a small aarch64 test exe runs from the session root and exits with its code; Hollow
    Knight still reaches first frame+10.
 4. **aarch64 Vulkan** ([PLA-513](https://linear.app/playportdev/issue/PLA-513)): vkd3d-proton and
-   `vulkan-1` for aarch64 in `vulkan-pe.sh`, staged into `sysarm64`, checked by `pp verify`.
+   `vulkan-1` for aarch64 in `vulkan-pe.sh`, staged under `Runtime/vulkan/aarch64-windows` and
+   `Runtime/vulkan-loader/aarch64-windows` and linked over `sysarm64` only for a launch that uses
+   them (`wine_host.c`), checked by `pp verify`.
 5. **App** ([PLA-514](https://linear.app/playportdev/issue/PLA-514)): the Battle.net store page, the
    ban-risk notice, Play of the ARM64 client, `pp ui` paths. Phone gate: the Done-when run.
 

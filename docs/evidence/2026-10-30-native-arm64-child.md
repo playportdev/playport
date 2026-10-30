@@ -132,6 +132,15 @@ test program, WoW's client) has 4 KiB sections. The pool copy is per image, and 
   pe stage, rebuilt in the copy's path, kept main's value. Kept at main's values: the six i386
   media DLLs (`colorcnv`, `iyuv_32`, `msvproc`, `quartz`, `resampledmo`, `vidreszr`),
   `lib/libdxmt_combined.a` and `lib/libidevice_ffi.a`, which differ in any copy's build.
+- **The aarch64 Vulkan rows (PLA-513, 0117).** `Runtime/vulkan/aarch64-windows/` `d3d12.dll`
+  (`f2ca5f41…`), `d3d12core.dll` (`b57db18f…`), `dxgi.dll` (`e9afd4b9…`) and
+  `Runtime/vulkan-loader/aarch64-windows/` `vulkan-1.dll` (`1be90a18…`) and `winevulkan.json`
+  (`0947fde3…`) are path-independent: `build/stages/vulkan-pe.sh` run again from scratch in a
+  second root (`$PLAYPORT_BUILD/vkpe-alt`, stages `dxgi-aarch64 vkd3d loader`, the same
+  sources) gave the same five files byte for byte, and none of the DLLs names the build's path
+  (the only absolute paths in `d3d12core.dll` and `dxgi.dll` are llvm-mingw's own libc++abi and
+  libunwind sources, which the committed arm64ec `dxgi.dll` carries too). The cross files link
+  with `--no-insert-timestamp`.
 - **`pp test` (full)**, side copy: all passed (names, secrets, patches with the 0224 and 0055
   trailers, `tools/tests`, every C host test, every Swift package). `pp slots` was not run: no
   DXMT tree changed (its stage reran only because it follows `pe`).
