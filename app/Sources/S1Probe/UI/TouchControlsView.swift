@@ -167,7 +167,8 @@ final class OnScreenControls: ObservableObject {
         let launch = TitleLaunch.shared
         let game = launch.titleID.map { ControlsStore.shared.game($0) }
         let defaults = ControlsStore.shared.defaults
-        let s = ControlsState.resolve(game: game, defaults: defaults, controllerConnected: controllers > 0)
+        let compat = launch.titleID.flatMap { LaunchSettingsStore.compat.entry(for: $0)?.controls }
+        let s = ControlsState.resolve(game: game, defaults: defaults, controllerConnected: controllers > 0, compat: compat)
         let newLayout = s.drawnLayout
         let drawNow = newLayout != nil && launch.running && launch.step == .drawing && !launch.quitting && !guestHeld && !dialog
         let changed = s != state || drawNow != drawn || newLayout != layout

@@ -8,8 +8,10 @@
 //   hidden as soon as one connects, back when it goes. Always shows them with a
 //   controller too; Never makes Off every game's starting choice.
 // - A game's layout is Off, Gamepad, Keyboard & mouse or Point & click; with
-//   none set it is Gamepad, or Off when the default is Never. Off hides them
-//   for that game whatever else.
+//   none set it is Off when the default is Never, else the game's compatibility
+//   default's (CompatDefaults `controls`), else Gamepad. Off hides them
+//   for that game whatever else. LayoutSuggestion offers Keyboard & mouse once
+//   for a game on Gamepad that reads no XInput state.
 // - The controls' pad is player 1 whenever no controller is connected, at rest
 //   while the layout is Off (ControlsState.padConnected): a game that looks for
 //   pads only now and then, or only at its start, already has it when the
@@ -237,8 +239,11 @@ public struct ControlsState: Equatable, Sendable {
     /// What is drawn: the layout, or nothing.
     public var drawnLayout: ControlLayout? { visible ? layout.layout(dpad: dpad, rightStick: rightStick) : nil }
 
-    public static func resolve(game: GameControls?, defaults: ControlsDefaults, controllerConnected: Bool) -> ControlsState {
-        let layout = game?.layout ?? (defaults.show == .never ? .off : .gamepad)
+    /// The game's own layout, else Off under Never, else the game's compatibility default (`compat`,
+    /// CompatDefaults.Entry.controls), else Gamepad.
+    public static func resolve(game: GameControls?, defaults: ControlsDefaults, controllerConnected: Bool,
+                               compat: OnScreenLayout? = nil) -> ControlsState {
+        let layout = game?.layout ?? (defaults.show == .never ? .off : compat ?? .gamepad)
         let shown = layout != .off && (defaults.show == .always || !controllerConnected)
         return ControlsState(layout: layout, visible: shown, opacity: game?.opacity ?? defaults.opacity,
                              dpad: game?.dpad ?? defaults.dpad, rightStick: game?.rightStick ?? defaults.rightStick,

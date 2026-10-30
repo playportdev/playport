@@ -33,9 +33,20 @@ struct GameControlsOptionRows: View {
     var body: some View {
         let own = store.game(titleID)
         let inherited = ControlsState.resolve(game: nil, defaults: store.defaults, controllerConnected: false)
+        // The game's compatibility default (decision 0074), where it is the layout the game starts on.
+        let entry = LaunchSettingsStore.compat.entry(for: titleID)
+        let suggested = ControlsState.resolve(game: nil, defaults: store.defaults, controllerConnected: false,
+                                              compat: entry?.controls).layout
+        let compat = suggested == inherited.layout ? nil : suggested
         PadSectionHeader(text: "Controls").id("controls")
+        if let entry, compat != nil {
+            // What the marker means, as Graphics' row says it for launch settings (GameDetailView).
+            PadRow(id: "opt:compatControls", title: "\(OptionValue.compatMarker) Set for this game's compatibility",
+                   subtitle: entry.reason + " Your own choice on the row below wins; Y on it comes back to this.",
+                   subtitleLines: nil, style: .plain, hint: "Info") {}
+        }
         choiceRow("opt:layout", "On-screen controls", \.layout, all: OnScreenLayout.allCases, inherited: inherited.layout,
-                  name: \.title, detail: "Shown while no controller is connected")
+                  compat: compat, name: \.title, detail: "Shown while no controller is connected")
         choiceRow("opt:dpad", "D-pad", \.dpad, all: OnScreenDpad.allCases, inherited: inherited.dpad, name: \.title,
                   detail: "Above the left stick")
         choiceRow("opt:rightStick", "Right stick", \.rightStick, all: OnScreenRightStick.allCases,
@@ -77,17 +88,19 @@ struct GameControlsOptionRows: View {
         store.setGame(titleID, c)
     }
 
+    /// `compat`: the game's compatibility default, when it is not `inherited`.
     private func choiceRow<T: RawRepresentable & CaseIterable & Equatable>(
-        _ id: String, _ title: String, _ key: WritableKeyPath<GameControls, T?>, all: [T], inherited: T,
+        _ id: String, _ title: String, _ key: WritableKeyPath<GameControls, T?>, all: [T], inherited: T, compat: T? = nil,
         name: KeyPath<T, String>, detail: String
     ) -> some View where T.RawValue == String {
         let own = store.game(titleID)[keyPath: key]
-        let v = OptionValue.of(own: own, inherited: inherited, name: { $0[keyPath: name] })
+        let v = OptionValue.of(own: own, compat: compat, inherited: inherited, name: { $0[keyPath: name] })
+        let fallback = compat.map { $0[keyPath: name] + ", for this game's compatibility" } ?? inherited[keyPath: name] + ", from Settings"
         return PadRow(id: id, title: title, value: v.text, accessory: .chevron, changed: v.changed, style: .plain,
                       reset: v.changed ? { set { $0[keyPath: key] = nil } } : nil) {
             PadModal.shared.picker(
                 title: title, context: "\(context) · Controls", note: detail + ". " + Self.note,
-                options: [PadOption(id: "", label: "Default", detail: inherited[keyPath: name] + ", from Settings")]
+                options: [PadOption(id: "", label: "Default", detail: fallback)]
                     + all.map { PadOption(id: $0.rawValue, label: $0[keyPath: name]) },
                 selected: own?.rawValue ?? "") { choice in set { $0[keyPath: key] = T(rawValue: choice) } }
         }
