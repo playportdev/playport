@@ -12,6 +12,9 @@
 //   default's (CompatDefaults `controls`), else Gamepad. Off hides them
 //   for that game whatever else. LayoutSuggestion offers Keyboard & mouse once
 //   for a game on Gamepad that reads no XInput state.
+// - A game's own copy of a preset, saved by the layout editor
+//   (LayoutEditor.swift; GameControls.layouts), is drawn instead of the preset
+//   whenever that preset is the game's layout.
 // - The controls' pad is player 1 whenever no controller is connected, at rest
 //   while the layout is Off (ControlsState.padConnected): a game that looks for
 //   pads only now and then, or only at its start, already has it when the
@@ -163,6 +166,14 @@ public struct ControlsDefaults: Equatable, Sendable {
 /// `lookSpeed` its mouse look's speed (LookSpeed), over Settings'. JSON
 /// saved before either reads as none; a map this build cannot read (another
 /// version) reads as none too, so the rest of the record still loads.
+///
+/// `layouts` are the game's own copies of presets, saved by the layout editor
+/// (LayoutEditor.swift) under `layouts` as `{"keyboardMouse": <layout>}`: one
+/// is drawn whenever its preset is the game's layout, and kept while another
+/// is chosen. A copy this build cannot read (another layout version, a preset
+/// it lacks, Off) makes the whole record unreadable rather than reading as
+/// none, so GameControlsRecords writes it back as it came instead of dropping
+/// the person's edits.
 public struct GameControls: Codable, Equatable, Sendable {
     public var layout: OnScreenLayout?
     public var opacity: Double?
@@ -171,15 +182,16 @@ public struct GameControls: Codable, Equatable, Sendable {
     public var gyro: GameGyro?
     public var controllerMap: ControllerMap?
     public var lookSpeed: Double?
+    public var layouts: [OnScreenLayout: ControlLayout]
 
     public init(layout: OnScreenLayout? = nil, opacity: Double? = nil, dpad: OnScreenDpad? = nil,
                 rightStick: OnScreenRightStick? = nil, gyro: GameGyro? = nil, controllerMap: ControllerMap? = nil,
-                lookSpeed: Double? = nil) {
+                lookSpeed: Double? = nil, layouts: [OnScreenLayout: ControlLayout] = [:]) {
         self.layout = layout; self.opacity = opacity; self.dpad = dpad; self.rightStick = rightStick; self.gyro = gyro
-        self.controllerMap = controllerMap; self.lookSpeed = lookSpeed
+        self.controllerMap = controllerMap; self.lookSpeed = lookSpeed; self.layouts = layouts
     }
 
-    enum CodingKeys: String, CodingKey { case layout, opacity, dpad, rightStick, gyro, controllerMap, lookSpeed }
+    enum CodingKeys: String, CodingKey { case layout, opacity, dpad, rightStick, gyro, controllerMap, lookSpeed, layouts }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -190,11 +202,32 @@ public struct GameControls: Codable, Equatable, Sendable {
         gyro = try c.decodeIfPresent(GameGyro.self, forKey: .gyro)
         controllerMap = (try? c.decodeIfPresent(ControllerMap.self, forKey: .controllerMap)) ?? nil
         lookSpeed = try c.decodeIfPresent(Double.self, forKey: .lookSpeed)
+        layouts = [:]
+        for (name, l) in try c.decodeIfPresent([String: ControlLayout].self, forKey: .layouts) ?? [:] {
+            guard let preset = OnScreenLayout(rawValue: name), preset != .off else {
+                throw DecodingError.dataCorruptedError(forKey: .layouts, in: c, debugDescription: "no preset \"\(name)\" to copy")
+            }
+            layouts[preset] = l
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encodeIfPresent(layout, forKey: .layout)
+        try c.encodeIfPresent(opacity, forKey: .opacity)
+        try c.encodeIfPresent(dpad, forKey: .dpad)
+        try c.encodeIfPresent(rightStick, forKey: .rightStick)
+        try c.encodeIfPresent(gyro, forKey: .gyro)
+        try c.encodeIfPresent(controllerMap, forKey: .controllerMap)
+        try c.encodeIfPresent(lookSpeed, forKey: .lookSpeed)
+        if !layouts.isEmpty {
+            try c.encode(Dictionary(uniqueKeysWithValues: layouts.map { ($0.key.rawValue, $0.value) }), forKey: .layouts)
+        }
     }
 
     public var isEmpty: Bool {
         layout == nil && opacity == nil && dpad == nil && rightStick == nil && (gyro?.isEmpty ?? true) && controllerMap == nil
-            && lookSpeed == nil
+            && lookSpeed == nil && layouts.isEmpty
     }
 
     /// The game's controller map, else the default.
@@ -229,15 +262,18 @@ public struct ControlsState: Equatable, Sendable {
     /// in-game only draws them and a game that notices a pad connecting late
     /// (or never) already has it.
     public var padConnected: Bool
+    /// The game's own copy of `layout` (GameControls.layouts), drawn instead of the preset.
+    public var edited: ControlLayout?
 
     public init(layout: OnScreenLayout, visible: Bool, opacity: Double, dpad: OnScreenDpad = .off,
-                rightStick: OnScreenRightStick = .off, padConnected: Bool? = nil) {
+                rightStick: OnScreenRightStick = .off, padConnected: Bool? = nil, edited: ControlLayout? = nil) {
         self.layout = layout; self.visible = visible; self.opacity = opacity; self.dpad = dpad; self.rightStick = rightStick
         self.padConnected = padConnected ?? visible
+        self.edited = edited
     }
 
-    /// What is drawn: the layout, or nothing.
-    public var drawnLayout: ControlLayout? { visible ? layout.layout(dpad: dpad, rightStick: rightStick) : nil }
+    /// What is drawn: the game's copy of the layout or the preset, or nothing.
+    public var drawnLayout: ControlLayout? { visible ? edited ?? layout.layout(dpad: dpad, rightStick: rightStick) : nil }
 
     /// The game's own layout, else Off under Never, else the game's compatibility default (`compat`,
     /// CompatDefaults.Entry.controls), else Gamepad.
@@ -247,7 +283,7 @@ public struct ControlsState: Equatable, Sendable {
         let shown = layout != .off && (defaults.show == .always || !controllerConnected)
         return ControlsState(layout: layout, visible: shown, opacity: game?.opacity ?? defaults.opacity,
                              dpad: game?.dpad ?? defaults.dpad, rightStick: game?.rightStick ?? defaults.rightStick,
-                             padConnected: shown || !controllerConnected)
+                             padConnected: shown || !controllerConnected, edited: game?.layouts[layout])
     }
 
     /// The in-game menu's Controls row: `Gamepad · 60%`, `Off`, `Gamepad · hidden` while a controller
