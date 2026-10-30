@@ -145,10 +145,13 @@ public enum DonorPoolSizing {
     /// Decision 0105 as amended 2026-10-30: it also grows again on spare memory alone, at a level
     /// under 20 % (run l9 stopped at level 13 % with 4,105 MiB spare and stayed stopped with
     /// 4,064-4,434). A level stop right after such a resume would flap, so after it the level
-    /// stop counts from the level at that resume (`spareResumeLevel`): it fires under that level,
-    /// or under levelFloor once the spare memory is back under the resume threshold; and the
-    /// next resume on spare waits for the level to come back to it. The spare floor's stop is
-    /// unchanged. A resume on both readings ends this.
+    /// stop counts from the level at that resume, at most levelFloor (`spareResumeLevel`): it
+    /// fires under that level, or under levelFloor once the spare memory is back under the
+    /// resume threshold; and the next resume on spare waits for the level to come back to it.
+    /// At or over levelFloor the level stop is the plain rule, so a resume there (15-19 %) counts
+    /// from levelFloor: run l10 resumed at 17 %, and counting from 17 % it did not resume at 15 %
+    /// with 4,545 MiB spare. The spare floor's stop is unchanged. A resume on both readings ends
+    /// this.
     public struct Growth: Equatable, Sendable {
         public enum Change: Equatable, Sendable {
             case stopped(String)
@@ -157,7 +160,8 @@ public enum DonorPoolSizing {
 
         public let physicalMB: Int
         public private(set) var growing = true
-        /// The level at the last resume on spare memory alone, until a resume on both readings.
+        /// The level at the last resume on spare memory alone, at most levelFloor, until a resume
+        /// on both readings.
         public private(set) var spareResumeLevel: Int?
 
         public init(physicalMB: Int) { self.physicalMB = physicalMB }
@@ -184,7 +188,7 @@ public enum DonorPoolSizing {
                 spareResumeLevel = nil
                 return .resumed("level \(level)% >= \(Self.resumeLevel)%, " + spare)
             }
-            spareResumeLevel = level
+            spareResumeLevel = min(level, levelFloor)
             return .resumed(spare + ", level \(level)% < \(Self.resumeLevel)%: on spare memory; the level stop "
                             + "now under \(min(level, levelFloor))%")
         }

@@ -89,9 +89,33 @@ final class DonorPoolSizingTests: XCTestCase {
         g = stopped(1407, 40)
         XCTAssertEqual(g.check(spareMB: 1920, level: 19),
                        .resumed("spare 1920 MiB >= 1920, level 19% < 20%: on spare memory; the level stop now under 15%"))
-        XCTAssertEqual(g.spareResumeLevel, 19)
+        XCTAssertEqual(g.spareResumeLevel, 15)
         // a resume at 15-19 % keeps the 15 % stop as it was
         XCTAssertEqual(g.check(spareMB: 3000, level: 14), .stopped("level 14% < 15%"))
+    }
+
+    /// Run l10's pool lines (PLA-476): a resume on spare at 13 %, a stop at 12 %, a resume on
+    /// spare at 17 % after the teardowns, a stop at 13 %; then level 15 % with 4,545 MiB spare at
+    /// +179.63, where the pool waited for 17 %. A resume at 15-19 % counts from 15 %, so it resumes.
+    func testL10ResumeOnSpareOverTheFloorCountsFromTheFloor() {
+        var g = DonorPoolSizing.Growth(physicalMB: 11734)
+        XCTAssertEqual(g.check(spareMB: 4238, level: 14), .stopped("level 14% < 15%"))
+        XCTAssertNotNil(g.check(spareMB: 4149, level: 13))
+        XCTAssertEqual(g.spareResumeLevel, 13)
+        XCTAssertEqual(g.check(spareMB: 4001, level: 12),
+                       .stopped("level 12% < 13%, the level at the resume on spare memory"))
+        XCTAssertEqual(g.check(spareMB: 4549, level: 17),
+                       .resumed("spare 4549 MiB >= 1920, level 17% < 20%: on spare memory; the level stop now under 15%"))
+        XCTAssertEqual(g.spareResumeLevel, 15)
+        XCTAssertEqual(g.check(spareMB: 4229, level: 13), .stopped("level 13% < 15%"))
+        XCTAssertEqual(g.resumeWait(spareMB: 4261, level: 13), "level 13% < 15% (the last resume on spare memory)")
+        XCTAssertNil(g.check(spareMB: 4285, level: 13))
+        // +179.63: level 15 %, spare 4,545 MiB
+        XCTAssertNil(g.resumeWait(spareMB: 4545, level: 15))
+        XCTAssertEqual(g.check(spareMB: 4545, level: 15),
+                       .resumed("spare 4545 MiB >= 1920, level 15% < 20%: on spare memory; the level stop now under 15%"))
+        XCTAssertEqual(g.spareResumeLevel, 15)
+        XCTAssertEqual(g.check(spareMB: 4024, level: 11), .stopped("level 11% < 15%"))
     }
 
     /// Run l9's pool lines (PLA-476): stopped at level 13 % with 4,105 MiB spare, resumed at 20 %,

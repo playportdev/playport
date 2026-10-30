@@ -106,8 +106,9 @@ By the owner, 2026-10-30 (PLA-476), from runs l9 and d1
 - **The stop rules stay:** under the spare floor, or under level 15 %. Their hard caps (Auto's
   tier pool, one donor's grant) are unchanged.
 - **The hysteresis.** Resuming on spare at a level under 15 % and then stopping on that level
-  at the next check would flap every 2 s. So after a resume on spare at level R:
-  - the level stop fires only when the level falls under R (under 15 % when R is 15–19), or
+  at the next check would flap every 2 s. So after a resume on spare at level L, with
+  R = min(L, 15 %):
+  - the level stop fires only when the level falls under R, or
     when it is under 15 % and the spare memory is back under the resume threshold;
   - the next resume on spare waits for the level to come back to R (and the spare memory to
     the threshold).
@@ -116,8 +117,13 @@ By the owner, 2026-10-30 (PLA-476), from runs l9 and d1
   ratchets down, since every later resume on spare happens at R or above. The alternative,
   stopping only on spare once resumed, would let the level fall without bound while spare
   memory stays high, and the level is jetsam's own measure.
+
+  *Corrected the same day (owner, 2026-10-30, run l10):* R was first the resume's level L
+  itself, so a resume at 15–19 % made the next resume on spare wait for that level; l10
+  resumed at 17 % and stayed stopped at 15 % with 4,545 MiB spare. At or over 15 % the level
+  stop is the plain rule anyway, so R is at most 15 %.
 - **Lines:** `donor-pool: pressure: growth resumed (spare N MiB >= 1920, level L% < 20%: on
-  spare memory; the level stop now under L%)`, the stop's `level L% < R%, the level at the
+  spare memory; the level stop now under R%)`, the stop's `level L% < R%, the level at the
   resume on spare memory`, and the stats lines' `spare_resume_level=R` and
   `resume_wait="level L% < R% (the last resume on spare memory)"`.
 
