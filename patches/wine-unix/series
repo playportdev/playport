@@ -43,3 +43,4 @@
 0045-ntdll-server-iOS-in-process-sync-through-ppsync-with.patch
 0200-win32u-a-thread-that-presents-through-Vulkan-takes-t.patch
 0201-nsiproxy-iOS-one-interface-snapshot-per-table-read-k.patch
+0202-ntdll-detach-a-parked-thread-s-alert-wait-from-the-shared-queue.patch

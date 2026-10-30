@@ -4,7 +4,9 @@
 [0127](0127-end-a-terminated-pseudo-process.md) and madeira-unix 0154 (PLA-368). Shown on the
 phone in runs `20261020T211148` and `20261020T211703`: each self-exited renderer emptied 593–617 MB,
 and the runtime's FEX row stayed at 23 MB resident+compressed at Story +63 s
-([evidence](../evidence/2026-10-20-rdr2-self-exit-band.md)).
+([evidence](../evidence/2026-10-20-rdr2-self-exit-band.md)). Amended by
+[0166](0166-detach-a-parked-threads-wait-then-unpin-its-view.md): a self-exit detaches its parked
+threads' waits too, and a view only a detached wait named is released.
 
 ## Context
 

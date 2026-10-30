@@ -3,7 +3,9 @@
 **Status:** accepted, 2026-10-19, design approved by the supervisor for the owner (PLA-416
 follow-up). Amends [0127](0127-end-a-terminated-pseudo-process.md). Shown on the phone in run
 `20261019T215954`: the launcher's end emptied 2,324 MB and the footprint fell 1,021 MB, with no
-fault after it ([evidence](../evidence/2026-10-19-rdr2-proc-end-band-emptied.md)).
+fault after it ([evidence](../evidence/2026-10-19-rdr2-proc-end-band-emptied.md)). Amended by
+[0166](0166-detach-a-parked-threads-wait-then-unpin-its-view.md): the wait address is no longer kept
+whole once the teardown has detached the wait; the other addresses below still are.
 
 ## Context
 

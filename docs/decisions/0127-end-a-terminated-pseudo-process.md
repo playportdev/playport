@@ -7,7 +7,10 @@ thread parked, the band views kept below are emptied in place. Amended by
 [0134](0134-a-thread-gives-back-its-exception-registry-entry-when-it-ends.md): a parked thread gives
 back its exception registry entry and trampoline slot. Amended by
 [0143](0143-release-a-self-exited-childs-fex-band-as-a-killed-childs.md): a child that exits by
-itself has its band views released by the same rules.
+itself has its band views released by the same rules. Amended by
+[0166](0166-detach-a-parked-threads-wait-then-unpin-its-view.md): a parked thread's alert wait is
+detached from the shared queue and the waiter registry, and a view only its wait address named is
+released.
 
 ## Context
 

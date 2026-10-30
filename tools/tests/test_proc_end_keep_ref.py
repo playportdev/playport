@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """madeira-unix 0227's [proc-end] keep-ref logger (PLA-476), compiled from the patch against the shipped
-pp_proc_end.h: which parked ref it names for a kept view, its 64-line cap, and that the release app
-(MADEIRA_NO_DIAGNOSTICS, ios_no_diagnostics()) gets none of its lines."""
+pp_proc_end.h: every parked ref of every thread it names for a kept view, on one line, its 64-line cap, and that
+the release app (MADEIRA_NO_DIAGNOSTICS, ios_no_diagnostics()) gets none of its lines."""
 import os
 import pathlib
 import shutil
@@ -44,7 +44,7 @@ TEST_C = r'''
 #define IOS_PROC_END_PARKED_MAX 256
 static uint64_t ios_proc_end_refs[IOS_PROC_END_PARKED_MAX * PPE_REFS];
 static int no_diagnostics, lines;
-static char last[512];
+static char last[4096];
 static int ios_no_diagnostics(void) { return no_diagnostics; }
 __attribute__((format(printf, 2, 3)))
 static int test_dprintf(int fd, const char *fmt, ...)
@@ -94,6 +94,31 @@ int main(int argc, char **argv)
         for (int i = 0; i < 100; i++)
             ios_proc_end_log_keep_ref((void *)0x1234, BASE, SIZE, PPE_KEEP_REF, setup(i & 1 ? -1 : 31));
         assert(lines == 64);
+        return 0;
+    }
+    if (!strcmp(argv[1], "every")) {          /* the older thread's sp and the newer one's wait, in teb_list order */
+        setup(PPE_REFS - 1);
+        ios_proc_end_refs[31] = BASE + 0x40;
+        ios_proc_end_log_keep_ref((void *)0x1234, BASE, SIZE, PPE_KEEP_REF, 2);
+        snprintf(want, sizeof want, "[proc-end] keep-ref peb=%p view=%p+0x%llx fate=%d tid=0020 ref#31/50=0x%llx "
+                 "tid=0044 ref#52/53=0x%llx (PLA-476)\n", (void *)0x1234, (void *)(uintptr_t)BASE, SIZE, PPE_KEEP_REF,
+                 BASE + 0x40, BASE + SIZE - 8);
+        assert(lines == 1);
+        if (strcmp(last, want)) { fprintf(stderr, "got  %swant %s", last, want); return 1; }
+        return 0;
+    }
+    if (!strcmp(argv[1], "more")) {           /* all 103 refs in the view: what one line cannot hold is counted */
+        unsigned i, shown = 0;
+        const char *p;
+        setup(-1);
+        for (i = 0; i < 50 + PPE_REFS; i++) ios_proc_end_refs[i] = BASE + 0x100000 * i;
+        ios_proc_end_log_keep_ref((void *)0x1234, BASE, 0x100000ull * (50 + PPE_REFS), PPE_KEEP_REF, 2);
+        assert(lines == 1 && strlen(last) < 2048);
+        for (p = last; (p = strstr(p, " ref#")); p++) shown++;
+        snprintf(want, sizeof want, " +%u more (PLA-476)\n", 50 + PPE_REFS - shown);
+        assert(shown > 40 && shown < 50 + PPE_REFS);
+        assert(!strcmp(last + strlen(last) - strlen(want), want));
+        assert(strstr(last, " tid=0020 ref#0/50=0x7a00000000 tid=0020 ref#1/50=0x7a00100000 "));
         return 0;
     }
     if (!strcmp(argv[1], "none")) {           /* a slot view no ref lies in, freed anyway */
@@ -152,6 +177,12 @@ class ProcEndKeepRefTests(unittest.TestCase):
                      "tpidrro_el0", "teb", "wait"):
             with self.subTest(register=name):
                 self.run_case(str(REF_NAMES.index(name)))
+
+    def test_names_every_ref_of_every_thread(self):
+        self.run_case("every")
+
+    def test_counts_what_a_line_cannot_hold(self):
+        self.run_case("more")
 
     def test_slot_view_without_ref(self):
         self.run_case("none")

@@ -195,3 +195,4 @@
 0226-ntdll-route-social-club-helper-reservations.patch
 0227-ntdll-name-the-parked-register-that-keeps-a-view.patch
 0228-ntdll-second-social-club-elf-metadata-slot.patch
+0229-ntdll-detach-a-parked-thread-s-alert-wait-then-free-a-view.patch
