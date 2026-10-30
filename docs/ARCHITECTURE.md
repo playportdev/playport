@@ -847,14 +847,75 @@ them to UIKit, GameController and AVFAudio.
 HostIOKit's tests and the controller block's C test (`pp test`) check these
 decisions without a phone.
 
+### Input sources and the mixer
+
+Every input source maps through one model, HostIOKit `InputAction` (`pad:a`,
+`key:shift+0x31`, `mouse:left`, `mouse:move`, `playport:menu`, `playport:keyboard`;
+decision [0171](decisions/0171-on-screen-controls-input-mapping-and-gyro.md)), and
+HostIOKit `InputMixer` turns what the sources hold into the guest's pad slots, keys and
+pointer (`MixerOutput`), which `HostIO.send` hands to the calls above.
+
+- **Sources.**
+  - The on-screen controls (`UI/TouchControlsView.swift`, `OnScreenControls`): HostIOKit
+    `TouchControls` holds the fingers on each control of the layout and hands over its holds
+    and events (`takeOutput`). Their pad is player 1: slot 0, merged with a physical pad in
+    slot 0 by Madeira's rule (buttons combine, each trigger takes the larger value, a physical
+    stick outside XInput's dead zone wins).
+  - The touch keyboard (HostIOKit `TouchKeyboard`, `UI/TouchKeyboardView.swift`): while it
+    is open its keys are `TouchControls`' targets instead of the layout's; Shift, Ctrl and Alt
+    are sticky. Its keys reach the game with the layout Off or a controller connected too.
+  - Physical pads (`PadInput`, slots 0–3) pass through, or, with a controller map other than
+    `controller` (PlayportKit `ControllerMap`, HostIOKit `ControllerBindings`), play through
+    HostIOKit `MappedPad`: the slot rests and the pad's keys, buttons and mouse motion join the
+    controls'. The controls' pad is never mapped.
+  - Gyro aim (HostIOKit `GyroAim`, `GyroSensors.swift`): the iPhone's CoreMotion device motion
+    or a controller's `GCController.motion`, as mouse counts (coalesced to at most 125 moves a
+    second for Winios's 256-event ring) or added to slot 0's right stick and clamped.
+- **Order.** The controls' events (look-area and trackpad motion, Point & click's places
+  through the aspect-fitted picture, clicks, wheel notches) go out in order before the holds'
+  key and button edges, and a chord's modifiers go down before its key. Keys and mouse buttons
+  go through `Lifecycle`, so focus loss, the background and the in-game menu release every
+  source's. The pad side runs under HostIO's pad lock beside `GuestPadGate`, the rest on the
+  main thread. `InputClock.swift` is one `CADisplayLink` while a source needs a tick (a
+  button's repeat, a mapped stick's mouse motion); gyro aim runs on its sensors' clock.
+- **Touch** (HostIOKit `TouchRoute`, `GameSurfaceView`). A guest window before the first
+  frame or a dialog takes a finger first. While the controls show, a finger off them is
+  ignored; with none shown (Off, a controller connected) it is the left mouse button where it
+  lands. The open touch keyboard is the exception: a finger above its panel is the game's, for
+  a text field. A three-finger tap (`HostIO.menuGesture`) opens the in-game menu with any
+  layout and takes its fingers back from the controls.
+- **Layouts** (PlayportKit `Controls.swift`, `ControlLayout.swift`, format version 3): Off,
+  Gamepad, Keyboard & mouse (a look area under everything, a W A S D key stick, keys) and
+  Point & click (a pointer surface, tap to click or trackpad, the side bar's tools, a magnifier
+  from a GPU copy of the frame on screen); each control placed by an anchor, an offset and a
+  size in the safe area. They show while no extended controller is connected (Settings ›
+  Controls: Automatic, Always, Never). A game's own copy of a preset (`GameControls.layouts`,
+  saved by the layout editor: PlayportKit `LayoutEditor` and `LayoutEditorPad`,
+  `UI/LayoutEditorView.swift`) is drawn while that preset is its layout. The starting layout is
+  the game's own, else Off under Never, else the title's compatibility default (`controls`,
+  decision 0074), else Settings' Starting layout, else Gamepad. `UI/ControlsStore.swift`
+  keeps the defaults and each game's record in UserDefaults; a change applies at once.
+- **The suggestion counter.** win32u's `ios_gamepad_query` calls hio_pads.c's
+  `playport_gamepad_state_read` for each XInput state request (`patches/madeira-unix` 0224;
+  `host_pad_state_reads` is the total, this game's since the app restarts after each). PlayportKit
+  `LayoutSuggestion`, sampled once a second (`UI/LayoutSuggestionToast.swift`), offers Keyboard
+  & mouse to a game on Gamepad that made none in 20 s of play after its first frame, once per
+  game (`controls.suggestedLayoutOffered`).
+
+HostIOKit's and PlayportKit's tests cover the machines, the mixer, the layouts, the editor and
+the suggestion on the host.
+
 ### The in-game menu
 
-Holding the controller's Home button half a second over a running game opens
-Playport's menu (`UI/InGameMenuView.swift`, decision 0034). HostIO reads Home
+Holding the controller's Home button half a second over a running game, or a
+three-finger tap anywhere on it, opens Playport's menu
+(`UI/InGameMenuView.swift`, decisions 0034, 0171). HostIO reads Home
 on every pad (its system gesture is off while a game runs) and on the dev
 build's scripted pad (`HOME`); `HostIOKit.QuickMenuControl` turns the
-snapshots into the open, the menu's presses and the close. Behind the menu
-the game is paused:
+snapshots into the open, the menu's presses and the close. Its Controls panel
+sets the game's layout, gyro aim and controller map and opens the layout editor
+and the Controller page over the paused game; its Touch keyboard row resumes with
+the keyboard open. Behind the menu the game is paused:
 
 - **Input.** Every pad source reaches the guest's slots through one gate
   (`HostIOKit.GuestPadGate`, `HostIO.publish`): while the menu is up the slots

@@ -98,6 +98,7 @@ best-effort and reported as unconfirmed; transport loss/SIGKILL can leave cancel
                          or a dialog it opens after it, decision 0076, --until mark:dialog shown+S)
                          while one is shown, else on the game. While the on-screen controls show it
                          sends nothing: a touch outside them is ignored, and the app logs `tap …: ignored`
+                         (above the open touch keyboard it is the game's, for a text field)
   touch:CONTROL[+CONTROL...][@MS]
                          after a play: (it runs while the game runs): wait for the game's first frame,
                          then fingers on the on-screen controls by id, held MS ms (200 by default,
@@ -157,8 +158,8 @@ best-effort and reported as unconfirmed; transport loss/SIGKILL can leave cancel
                          the game's first frame, then hold the controller's Home button 0.8 s through
                          HostIO's pad handling, which opens Playport's in-game menu over the paused
                          game (UI/InGameMenuView.swift)
-  menu:ROW               in that menu, move its ring to ROW (resume, controls, keyboard, screenshot, overlay,
-                         controller, quit) and press A; pad:up/down/a/b press into the menu while it is up.
+  menu:ROW               in that menu, move its ring to ROW (resume, controls, layout, keyboard, screenshot,
+                         overlay, controller, quit) and press A; pad:up/down/a/b press into the menu while it is up.
                          menu:keyboard goes back to the game with the touch keyboard open over it.
                          menu:controls opens its Controls panel: pad:left/right change the ringed row
                          (On-screen controls: Off, Pad, Keys (Keyboard & mouse), Point (Point & click);
@@ -274,8 +275,8 @@ best-effort and reported as unconfirmed; transport loss/SIGKILL can leave cancel
   --controls ID:JSON     a game's own on-screen controls, as the in-game menu's Controls saves them
                          (PlayportKit GameControls: {"layout":"off"|"gamepad"|"keyboardMouse"|"pointClick",
                          "opacity":0.1-1,"dpad":"off"|"on","rightStick":"off"|"below"|"above","gyro":{...}}; a
-                         key left out follows Settings › Controls, where the layout is its Starting layout
-                         (set:controls.startingLayout=keyboardMouse; Gamepad by default) and the d-pad and
+                         key left out follows Settings › Controls, where the layout is the title's compatibility
+                         default, else its Starting layout (set:controls.startingLayout=keyboardMouse; Gamepad by default), and the d-pad and
                          right stick are off by default;
                          `ID:{}` clears). "gyro" is the game's own gyro aim (PlayportKit GameGyro), each key
                          left out following the gyro.* defaults (output off): "output":"off"|"mouse"|
@@ -814,7 +815,7 @@ def band_of(timeline):
 def parse(argv=None):
     p = argparse.ArgumentParser(prog="pp ui", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--action", action="append", default=[], metavar="VERB:ARG",
-                   help="open:SCREEN|ID[#SECTION], pad:BUTTON[+BUTTON...], wait:S, menu:open|ROW, touch:CONTROL[+CONTROL...][@MS], gyro:STEP[/STEP...], gesture:three-finger-tap, set:KEY=VALUE, hud:on|off, install:APP, pause-resume:APP, queue:APP, downloading:APP, import:PATH, uninstall:ID, "
+                   help="open:SCREEN|ID[#SECTION], pad:BUTTON[+BUTTON...], wait:S, menu:open|ROW, touch:CONTROL[+CONTROL...][@MS], gyro:STEP[/STEP...], gesture:three-finger-tap, suggest:accept|dismiss, set:KEY=VALUE, hud:on|off, install:APP, pause-resume:APP, queue:APP, downloading:APP, import:PATH, uninstall:ID, "
                         "verify:ID, repair:ID, play:ID, probe:helper-exit|kill|report, probe:relaunch, probe:pairing[-cancel|-use]; in order, before --settings/--verify/--play")
     p.add_argument("--controls", metavar="ID:JSON",
                    help='save these on-screen controls for the title first ({"layout":"off"}, '
@@ -863,7 +864,7 @@ def parse(argv=None):
     for x in a.action:
         if not ACTION_RE.match(x) or (x.startswith("open:") and "-" not in x.split("#")[0]
                                       and x[5:].split("#")[0] not in SCREENS + ("licences", "black")):
-            p.error(f"{x!r} is not open:SCREEN|ID, pad:BUTTON[+BUTTON...], wait:S, menu:open|ROW, touch:CONTROL[+CONTROL...][@MS], gyro:STEP[/STEP...], gesture:three-finger-tap, set:KEY=VALUE, hud:on|off, install:APP, pause-resume:APP, "
+            p.error(f"{x!r} is not open:SCREEN|ID, pad:BUTTON[+BUTTON...], wait:S, menu:open|ROW, touch:CONTROL[+CONTROL...][@MS], gyro:STEP[/STEP...], gesture:three-finger-tap, suggest:accept|dismiss, set:KEY=VALUE, hud:on|off, install:APP, pause-resume:APP, "
                     "queue:APP, downloading:APP, import:PATH, uninstall:ID, verify:ID, repair:ID, play:ID, open-launcher:ID, forget-launcher-window:ID, probe:helper-exit|kill|report, probe:relaunch or probe:pairing[-cancel|-use]")
         if x.startswith("open:") and "#" in x:
             target, section = x[5:].split("#", 1)
