@@ -209,3 +209,4 @@
 0240-ntdll-limit-the-thr-prio-lines-per-process-not-per-a.patch
 0241-ntdll-count-audio-underruns-and-name-a-stream-s-prod.patch
 0242-ntdll-split-the-xp-line-s-CPU-time-into-user-and-sys.patch
+0243-ntdll-place-the-Social-Club-helper-s-V8-code-range-o.patch

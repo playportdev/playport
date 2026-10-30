@@ -21,7 +21,8 @@ HEADERS = [('0224-ntdll-social-club-layout-geometry.patch', 'pp_sc_layout.h'),
            ('0226-ntdll-route-social-club-helper-reservations.patch', 'pp_sc_access.h')]
 LATER = ['0228-ntdll-second-social-club-elf-metadata-slot.patch',
          '0231-ntdll-hold-a-dead-owner-s-Social-Club-slot-in-place-.patch',
-         '0236-ntdll-refuse-the-Social-Club-helper-s-impossible-V8-.patch']
+         '0236-ntdll-refuse-the-Social-Club-helper-s-impossible-V8-.patch',
+         '0243-ntdll-place-the-Social-Club-helper-s-V8-code-range-o.patch']
 
 
 def header(patch, name):
@@ -453,6 +454,38 @@ static void t_route_impossible_probes(void)
     assert(count_msg("impossible probes refused") == 1);
     teardown_views(&pebs[3]);                                                        /* no cage: its own line */
     assert(count_msg("owner") && count_msg("exited without kind=6; 2 impossible probes refused") == 1);
+    check_holds();
+}
+
+/* 0243: l16 B's V8 code-range asks (hinted 1 GiB, offsets 0 and 4 GiB) and its
+ * padded fallback are never routed, so Wine's hinted retry gets them. Every base
+ * that retry tries lies outside every slot's real range, and the helper may commit
+ * there; as the guard walk's 0x7100000000-0x7300000000 always did, it lies in
+ * kind 2's reported tail, which is noted, not refused. */
+static void t_route_code_range(void)
+{
+    NTSTATUS st; void *ret; SIZE_T sz;
+    uint64_t hints[] = {0x60800000000ULL, 0xbf000000000ULL, 0x4c7d00000000ULL};
+    unsigned bases = 0;
+    int calls;
+    reset();
+    cur = &pebs[1];
+    grant_sequence();
+    grant_ok(0, GiB(8), 1, PPSC_CAGE);
+    calls = alloc_calls;
+    memset(all_msgs, 0, sizeof all_msgs);
+    for (unsigned i = 0; i < 3; i++) {
+        assert(!reserve(hints[i], GiB(1), MEM_RESERVE, PAGE_NOACCESS, 0, &st, &ret, &sz));
+        assert(!reserve(hints[i], GiB(1), MEM_RESERVE, PAGE_NOACCESS, 1, &st, &ret, &sz));
+        for (uint64_t b = 0; (b = ppsc_code_range_next(GiB(1), hints[i], b)); bases++) {
+            assert(!ppsc_in_slot(b, GiB(1)));
+            assert(ppsc_access((void *)(uintptr_t)b, 0x1000, PPSC_OP_COMMIT));
+        }
+    }
+    assert(bases == 9);
+    assert(!reserve(0, 0x13fff0000ULL, MEM_RESERVE, PAGE_NOACCESS, 0, &st, &ret, &sz));
+    assert(alloc_calls == calls);
+    assert(!count_msg("refused") && !count_msg("probe") && count_msg("in reported tail of kind=2"));
     check_holds();
 }
 
@@ -1052,7 +1085,7 @@ static void t_meta_overflow_core_kinds(void)
 static const struct { const char *name; void (*fn)(void); } tests[] = {
     {"route_not_routed", t_route_not_routed}, {"route_giant_unknown", t_route_giant_unknown},
     {"route_sequence", t_route_sequence}, {"route_cage", t_route_cage},
-    {"route_impossible_probes", t_route_impossible_probes},
+    {"route_impossible_probes", t_route_impossible_probes}, {"route_code_range", t_route_code_range},
     {"route_second_helper", t_route_second_helper}, {"grant_failures", t_grant_failures},
     {"grant_reserved_area", t_grant_reserved_area}, {"grant_intruder", t_grant_intruder},
     {"reported_tail", t_reported_tail}, {"reported_oilpan_low", t_reported_oilpan_low},
@@ -1075,7 +1108,7 @@ int main(int argc, char **argv)
 '''
 
 
-NAMES = ['route_not_routed', 'route_giant_unknown', 'route_sequence', 'route_cage', 'route_impossible_probes',
+NAMES = ['route_not_routed', 'route_giant_unknown', 'route_sequence', 'route_cage', 'route_impossible_probes', 'route_code_range',
          'route_second_helper', 'grant_failures', 'grant_reserved_area', 'grant_intruder',
          'free_whole', 'free_refusals', 'free_null_owner', 'access', 'reported_tail',
          'reported_oilpan_low', 'reported_cross_slot', 'owner_died', 'owner_held_in_place', 'meta2_second_helper',

@@ -13,7 +13,8 @@ PATCH = UNIX / '0224-ntdll-social-club-layout-geometry.patch'
 OWNER_PATCH = UNIX / '0226-ntdll-route-social-club-helper-reservations.patch'
 LATER = [UNIX / '0228-ntdll-second-social-club-elf-metadata-slot.patch',
          UNIX / '0231-ntdll-hold-a-dead-owner-s-Social-Club-slot-in-place-.patch',
-         UNIX / '0236-ntdll-refuse-the-Social-Club-helper-s-impossible-V8-.patch']
+         UNIX / '0236-ntdll-refuse-the-Social-Club-helper-s-impossible-V8-.patch',
+         UNIX / '0243-ntdll-place-the-Social-Club-helper-s-V8-code-range-o.patch']
 
 
 def added_header(patch, name):
@@ -39,6 +40,17 @@ def series_headers(d, headers):
 TEST = r'''
 #include "pp_sc_layout.h"
 #include <assert.h>
+
+/* The retry's walk over ppsc_code_range_next against a window whose only free
+ * space is holes[]: the first base whose [b, b + size) lies inside one hole. */
+static uint64_t code_range_fit(uint64_t size, uint64_t hint, const uint64_t (*holes)[2], unsigned n)
+{
+    uint64_t b = 0;
+    while ((b = ppsc_code_range_next(size, hint, b)))
+        for (unsigned i = 0; i < n; i++)
+            if (b >= holes[i][0] && b + size <= holes[i][1]) return b;
+    return 0;
+}
 
 int main(void) {
     unsigned held = 0, mine = 0;
@@ -161,6 +173,53 @@ int main(void) {
         assert(ppsc_impossible(0x3efff0001ULL, 0, before) == PPSC_PROBE_NO_GAP);
         assert(ppsc_impossible(UINT64_MAX, 0, 0) == PPSC_PROBE_NO_GAP);
         assert(ppsc_impossible(0x1ffffffffULL, 0, before | cage) == PPSC_PROBE_NONE);
+    }
+
+    /* ppsc_code_range_next (madeira-unix 0243): the 4 GiB-aligned bases of the window. */
+    {
+        uint64_t gib = 0x40000000ULL, want[] = {0x7100000000ULL, 0x7200000000ULL, 0x7300000000ULL};
+        uint64_t b = 0;
+        unsigned n = 0;
+        while ((b = ppsc_code_range_next(gib, 0x60800000000ULL, b))) {
+            assert(n < 3 && b == want[n]);
+            assert(b >= PPSC_FLOOR && b + gib <= PPSC_CEILING && !(b & (PPSC_CODE_RANGE_ALIGN - 1)));
+            n++;
+        }
+        assert(n == 3);
+        /* l16 B's largest hole [0x72b0364000, 0x73b6ef4000): the first base inside it,
+         * for its off-0 hint (cand plain) and its off-4 GiB one (cand guard). */
+        {
+            const uint64_t l16[][2] = {{0x72b0364000ULL, 0x73b6ef4000ULL}};
+            assert(code_range_fit(gib, 0x60800000000ULL, l16, 1) == 0x7300000000ULL);
+            assert(code_range_fit(gib, 0x4c7d00000000ULL, l16, 1) == 0x7300000000ULL);
+        }
+        /* A fully occupied window (l13's restarts: largest hole 515 MB): none, so
+         * the kernel's pick follows as before. */
+        {
+            const uint64_t l13[][2] = {{0x7100000000ULL - 0x10000000ULL, 0x7100000000ULL + 0x20300000ULL},
+                                       {0x7280000000ULL, 0x72a0300000ULL}};
+            assert(!code_range_fit(gib, 0x60800000000ULL, l13, 2));
+            assert(!code_range_fit(gib, 0x60800000000ULL, l13, 0));
+        }
+        /* Every hint offset l1-l16 logged (0, 4, 8, 12 GiB) gets the same bases. */
+        for (uint64_t off = 0; off < 0x400000000ULL; off += 0x100000000ULL)
+            assert(ppsc_code_range_next(gib, 0x4c7000000000ULL + off, 0) == 0x7100000000ULL);
+        /* Not 4 GiB-aligned, unhinted or empty: not this rule. */
+        assert(!ppsc_code_range_next(gib, 0x4c7d00010000ULL, 0));
+        assert(!ppsc_code_range_next(gib, 0x4c7cffff0000ULL, 0));
+        assert(!ppsc_code_range_next(gib, 0, 0));
+        assert(!ppsc_code_range_next(0, 0x60800000000ULL, 0));
+        /* Larger asks fit fewer bases; one no base can hold gets none. */
+        assert(ppsc_code_range_next(0x200000000ULL, 0x60800000000ULL, 0) == 0x7100000000ULL);
+        assert(!ppsc_code_range_next(0x200000000ULL, 0x60800000000ULL, 0x7100000000ULL));
+        assert(ppsc_code_range_next(0x80000000ULL, 0x60800000000ULL, 0x7200000000ULL) == 0x7300000000ULL);
+        assert(ppsc_code_range_next(PPSC_CEILING - 0x7100000000ULL, 0x60800000000ULL, 0) == 0x7100000000ULL);
+        assert(!ppsc_code_range_next(PPSC_CEILING - 0x7100000000ULL + 1, 0x60800000000ULL, 0));
+        assert(!ppsc_code_range_next(UINT64_MAX, 0x60800000000ULL, 0));
+        /* prev past the window, or not a base: no wrap, the next base above it. */
+        assert(!ppsc_code_range_next(gib, 0x60800000000ULL, PPSC_CEILING));
+        assert(!ppsc_code_range_next(gib, 0x60800000000ULL, UINT64_MAX));
+        assert(ppsc_code_range_next(gib, 0x60800000000ULL, 0x7180000000ULL) == 0x7200000000ULL);
     }
     return 0;
 }
