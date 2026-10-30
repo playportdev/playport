@@ -55,9 +55,10 @@ extension OnScreenControls {
             if w.count == 2 {
                 let reach: Double
                 switch t.kind {
-                case .stick: reach = t.frame.width / 2
+                case .stick, .keyStick: reach = t.frame.width / 2
                 case .dpad: reach = min(t.frame.width, t.frame.height) * 0.4
                 case .button: return "\(w[0]) is a button: it takes no direction"
+                case .look, .pointer, .tool: return "\(w[0]) takes no direction"
                 }
                 let d: (Double, Double)
                 switch w[1] {

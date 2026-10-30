@@ -6,7 +6,7 @@
 ///
 /// Saved layouts (PlayportKit ControlLayout) keep an action as its `name`:
 /// `pad:a`, `pad:leftStick`, `key:0x20`, `key:shift+0x31`, `mouse:left`,
-/// `mouse:wheelUp`, `mouse:move`, `playport:menu`.
+/// `mouse:wheelUp`, `mouse:move`, `playport:menu`, `playport:keyboard`.
 public enum InputAction: Hashable, Sendable {
     /// A control of the XInput pad in slot 0.
     case pad(PadControl)
@@ -14,7 +14,7 @@ public enum InputAction: Hashable, Sendable {
     case key(UInt8, KeyModifiers)
     /// A mouse button, one notch of the wheel, or a stick's motion.
     case mouse(MouseAction)
-    /// Playport's own: the in-game menu.
+    /// Playport's own: the in-game menu, the touch keyboard.
     case playport(PlayportAction)
 }
 
@@ -62,6 +62,8 @@ public enum MouseAction: String, CaseIterable, Sendable {
 public enum PlayportAction: String, CaseIterable, Sendable {
     /// Playport's in-game menu (InGameMenu.swift), as holding a controller's Home opens it.
     case menu
+    /// Playport's touch keyboard (the Keyboard & mouse and Point & click layouts' keyboard key).
+    case keyboard
 }
 
 extension InputAction {

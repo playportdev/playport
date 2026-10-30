@@ -461,8 +461,12 @@ final class HostIO {
             }
         case .move(let dx, let dy):
             if !menuUp && lifecycle.active { winios_pointer(dx, dy, Pointer.move, 0) }
+        case .place(let x, let y):
+            if !menuUp && lifecycle.active { winios_post_client_pointer(x, y, Pointer.move, 0) }
         case .playport(.menu):
             InGameMenu.shared.open()
+        case .playport(.keyboard):
+            break   // the touch keyboard: PLA-532
         }
     }
 

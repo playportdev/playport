@@ -20,6 +20,11 @@
 ///   them through Lifecycle, which releases them on focus loss as it does a
 ///   hardware keyboard's.
 /// - The wheel and Playport's actions happen once, as their control goes down.
+/// - The controls' events (TouchOutput.events: a look area's or a trackpad's
+///   motion, tap to click's places, a trackpad tap's click, scroll's wheel
+///   notches) go out in order before the holds' edges, so a press lands where
+///   its place put the pointer. A click on a button the controls already hold
+///   sends nothing.
 /// - Controller maps (phase 3): with a table set (`setMap`; nil is the
 ///   `controller` mode), every physical pad plays through it (MappedPad): its
 ///   slot gets only its `pad:` actions (at rest with none, so the game sees no
@@ -42,6 +47,9 @@ public enum MixerOutput: Equatable, Sendable {
     case pointer(flags: UInt32, data: UInt32)
     /// winios_pointer(dx, dy, MOUSEEVENTF_MOVE, 0): relative motion, +y down.
     case move(dx: Int32, dy: Int32)
+    /// winios_post_client_pointer(x, y, MOUSEEVENTF_MOVE, 0): the pointer to
+    /// this place in the client area, 0...65535 each way (HostIO.touch's mapping).
+    case place(x: Int32, y: Int32)
     case playport(PlayportAction)
 }
 
@@ -216,15 +224,21 @@ public struct InputMixer: Sendable {
         keysDown = kept + new   // in press order: ups go last pressed first
         for m in [MouseAction.left, .right, .middle] {
             let was = buttonsDown.contains(m), now = mouse.contains(m)
-            guard was != now else { continue }
-            switch m {
-            case .left: out.append(.pointer(flags: now ? Pointer.leftDown : Pointer.leftUp, data: 0))
-            case .right: out.append(.pointer(flags: now ? Pointer.rightDown : Pointer.rightUp, data: 0))
-            default: out.append(.pointer(flags: now ? Pointer.middleDown : Pointer.middleUp, data: 0))
-            }
+            guard was != now, let flags = Self.buttonFlags(m) else { continue }
+            out.append(.pointer(flags: now ? flags.down : flags.up, data: 0))
         }
         buttonsDown = mouse.intersection([.left, .right, .middle])
         return out
+    }
+
+    /// A mouse button's MOUSEEVENTF_*DOWN and *UP; nil for the wheel and motion.
+    static func buttonFlags(_ m: MouseAction) -> (down: UInt32, up: UInt32)? {
+        switch m {
+        case .left: (Pointer.leftDown, Pointer.leftUp)
+        case .right: (Pointer.rightDown, Pointer.rightUp)
+        case .middle: (Pointer.middleDown, Pointer.middleUp)
+        case .wheelUp, .wheelDown, .move: nil
+        }
     }
 
     private mutating func sendEdges() { pending += edges() }
@@ -238,9 +252,20 @@ public struct InputMixer: Sendable {
         let slot: SlotUpdate = after == before ? .unchanged : after.map { .set($0) } ?? .disconnect
         let mouse = t?.mouse ?? []
         let wheel = mouse.subtracting(touchMouse)
+        var out: [MixerOutput] = []
+        for e in t?.events ?? [] {
+            switch e {
+            case .move(let dx, let dy): out.append(.move(dx: dx, dy: dy))
+            case .place(let x, let y): out.append(.place(x: x, y: y))
+            case .wheel(let n): out.append(.pointer(flags: Pointer.wheel, data: UInt32(bitPattern: Int32(clamping: n * 120))))
+            case .click(let m):
+                guard !buttonsDown.contains(m), let flags = Self.buttonFlags(m) else { continue }
+                out += [.pointer(flags: flags.down, data: 0), .pointer(flags: flags.up, data: 0)]
+            }
+        }
         touchKeys = t?.keys ?? []
         touchMouse = mouse
-        var out = edges()
+        out += edges()
         if wheel.contains(.wheelUp) { out.append(.pointer(flags: Pointer.wheel, data: 120)) }
         if wheel.contains(.wheelDown) { out.append(.pointer(flags: Pointer.wheel, data: UInt32(bitPattern: -120))) }
 
