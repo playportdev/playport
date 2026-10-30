@@ -58,7 +58,7 @@ final class XboxPlayTests: XCTestCase, @unchecked Sendable {
         XCTAssertThrowsError(try files.plaintext("Not/Listed.exe", original: short, out: root.appendingPathComponent("out")))
     }
 
-    func testTheBridgeServesTheCopyItsGameConfigDeclares() throws {
+    func testTheGameConfigDeclaresClientIDFullTrustAndRelatedProducts() throws {
         let dir = root.appendingPathComponent("Game", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         // Its own spelling of the name, as the pilot's MicrosoftGame.Config.
@@ -66,15 +66,14 @@ final class XboxPlayTests: XCTestCase, @unchecked Sendable {
             of: "</Game>", with: "  <MSAFullTrust>true</MSAFullTrust>\n  <RelatedProducts><RelatedProduct>9NDLCPRODUCT</RelatedProduct>"
                 + "<RelatedProduct>9NSECONDDLC1</RelatedProduct></RelatedProducts>\n</Game>")
         try Data(config.utf8).write(to: dir.appendingPathComponent("MicrosoftGame.Config"))
-        let copy = XboxBridgeCopy(productID: product, manifest: try XboxGameManifest.load(folder: dir))
-        XCTAssertEqual(copy.productID, product)
+        let copy = try XboxGameManifest.load(folder: dir)
         XCTAssertEqual(copy.msaAppID, "0000000040ABCDEF")
         XCTAssertTrue(copy.msaFullTrust)
         XCTAssertEqual(copy.relatedProductIDs, ["9NDLCPRODUCT", "9NSECONDDLC1"])
 
         // The pilot's shape: no related products, no full trust.
         try XboxTestPackage.config().withUnsafeBytes { try Data($0).write(to: dir.appendingPathComponent("MicrosoftGame.Config")) }
-        let plain = XboxBridgeCopy(productID: product, manifest: try XboxGameManifest.load(folder: dir))
+        let plain = try XboxGameManifest.load(folder: dir)
         XCTAssertEqual(plain.relatedProductIDs, [])
         XCTAssertFalse(plain.msaFullTrust)
         // A malformed related product is not served.
@@ -84,6 +83,49 @@ final class XboxPlayTests: XCTestCase, @unchecked Sendable {
         // No config: the copy cannot play with the runtime.
         try FileManager.default.removeItem(at: dir.appendingPathComponent("MicrosoftGame.Config"))
         XCTAssertThrowsError(try XboxGameManifest.load(folder: dir))
+    }
+
+    /// The bridge serves what the hash-checked package declared at install, not what the
+    /// folder's config says now: any title can rewrite a file in C:\Games.
+    func testTheBridgeCopyIsTheInstallRecordsAndAChangedConfigRefusesThePlay() async throws {
+        let declared = String(decoding: XboxTestPackage.config(), as: UTF8.self).replacingOccurrences(
+            of: "</Game>", with: "  <MSAFullTrust>true</MSAFullTrust>\n  <RelatedProducts><RelatedProduct>9NDLCPRODUCT</RelatedProduct>"
+                + "</RelatedProducts>\n</Game>")
+        var files = XboxTestPackage.standard().files.filter { $0.path != "MicrosoftGame.Config" }
+        files.append(.init(path: "MicrosoftGame.Config", data: Array(declared.utf8), encrypted: false))
+        package = XboxTestPackage.build(files, gameConfig: Array(declared.utf8))
+        cdn.stop()
+        cdn = try XboxTestCDN(package.bytes)
+        let rec = try await install()
+        XCTAssertEqual(rec.msaAppID, "0000000040ABCDEF")
+        XCTAssertEqual(rec.msaFullTrust, true)
+        XCTAssertEqual(rec.relatedProductIDs, ["9NDLCPRODUCT"])
+
+        let dir = root.appendingPathComponent("Games/\(rec.installDir)", isDirectory: true)
+        let copy = try XboxBridgeCopy(productID: product, installed: rec, folder: dir)
+        XCTAssertEqual(copy.msaAppID, "0000000040ABCDEF")
+        XCTAssertTrue(copy.msaFullTrust)
+        XCTAssertEqual(copy.relatedProductIDs, ["9NDLCPRODUCT"])
+
+        let config = dir.appendingPathComponent("MicrosoftGame.Config")
+        for changed in [declared.replacingOccurrences(of: "0000000040ABCDEF", with: "0000000048239999"),
+                        declared.replacingOccurrences(of: "9NDLCPRODUCT", with: "9WZDNCRFJ3TJ"),
+                        declared.replacingOccurrences(of: "<MSAFullTrust>true</MSAFullTrust>", with: "")] {
+            try Data(changed.utf8).write(to: config)
+            XCTAssertThrowsError(try XboxBridgeCopy(productID: product, installed: rec, folder: dir)) {
+                XCTAssertTrue("\($0)".contains("Verify the game"), "\($0)")
+            }
+        }
+        // A record written before these were kept declares neither: a config adding them is refused.
+        try XboxTestPackage.config().withUnsafeBytes { try Data($0).write(to: config) }
+        let old = try JSONDecoder().decode(XboxInstalled.self, from: JSONSerialization.data(withJSONObject:
+            (try JSONSerialization.jsonObject(with: JSONEncoder().encode(rec)) as! [String: Any])
+                .filter { !["msaFullTrust", "relatedProductIDs"].contains($0.key) }))
+        let plain = try XboxBridgeCopy(productID: product, installed: old, folder: dir)
+        XCTAssertFalse(plain.msaFullTrust)
+        XCTAssertEqual(plain.relatedProductIDs, [])
+        try Data(declared.utf8).write(to: config)
+        XCTAssertThrowsError(try XboxBridgeCopy(productID: product, installed: old, folder: dir))
     }
 
     /// VC14 is run from the installer the package carries (an Unreal Engine layout), else

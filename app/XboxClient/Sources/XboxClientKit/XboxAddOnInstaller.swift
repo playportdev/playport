@@ -104,7 +104,7 @@ extension XboxInstaller {
         let installed = XboxInstalled(
             productID: addOn, contentID: s.contentID, version: s.version, packageName: s.packageName,
             installDir: Self.addOnsFolder + "/" + addOn, executable: nil, titleID: nil, msaAppID: nil, scid: nil,
-            files: s.files, encrypted: [], bytes: s.bytes)
+            msaFullTrust: nil, relatedProductIDs: nil, files: s.files, encrypted: [], bytes: s.bytes)
         try InstallFS.makeDirectory(addOnsDir(base))
         try InstallFS.writeAtomically(addOnRecordFile(addOn, base: base),
                                       StoreReceipt.encoder.encode(XboxInstalledAddOn(baseProductID: base, installed: installed)))

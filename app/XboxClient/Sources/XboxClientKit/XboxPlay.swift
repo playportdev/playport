@@ -90,6 +90,10 @@ public struct XboxGameManifest: Sendable, Equatable {
               let bytes = try? [UInt8](Data(contentsOf: url)) else {
             throw ClientError.notFound("the game has no MicrosoftGame.config")
         }
+        return try parse(bytes)
+    }
+
+    static func parse(_ bytes: [UInt8]) throws -> XboxGameManifest {
         let root = try XboxXML.parse(bytes.starts(with: [0xEF, 0xBB, 0xBF]) ? Array(bytes.dropFirst(3)) : bytes)
         let related = (root.child("RelatedProducts")?.children ?? []).filter { $0.local == "RelatedProduct" }
             .map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }.filter(StoreGameKey.isProductID)
@@ -123,10 +127,20 @@ public struct XboxGameManifest: Sendable, Equatable {
 }
 
 extension XboxBridgeCopy {
-    /// The copy the bridge serves a play: the Product ID and what its game config declares.
-    public init(productID: String, manifest: XboxGameManifest) {
-        self.init(productID: productID, relatedProductIDs: manifest.relatedProductIDs, msaAppID: manifest.msaAppID,
-                  msaFullTrust: manifest.msaFullTrust)
+    /// The copy the bridge serves a play: what the package's config declared when it was
+    /// installed or updated (the install record), never what the folder says now. The
+    /// folder's config must still declare the same client ID, full trust and related
+    /// products, or the play is refused: any title can rewrite a file in C:\Games.
+    /// A record from before full trust and related products were kept declares neither.
+    public init(productID: String, installed rec: XboxInstalled, folder: URL) throws {
+        let now = try XboxGameManifest.load(folder: folder)
+        let related = rec.relatedProductIDs ?? [], fullTrust = rec.msaFullTrust ?? false
+        let app = rec.msaAppID.flatMap { $0.count == 16 ? $0 : nil }
+        guard now.msaAppID?.uppercased() == app?.uppercased(), now.msaFullTrust == fullTrust,
+              Set(now.relatedProductIDs.map { $0.uppercased() }) == Set(related.map { $0.uppercased() }) else {
+            throw ClientError.verificationFailed("The game's MicrosoftGame.config is not the one Playport installed. Verify the game.")
+        }
+        self.init(productID: productID, relatedProductIDs: related, msaAppID: app, msaFullTrust: fullTrust)
     }
 }
 

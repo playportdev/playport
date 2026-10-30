@@ -87,19 +87,10 @@ extension XboxInstaller {
             log.info("xbox", "\(product): \(old.version) is the Store's latest (\(location.version)); nothing to update")
             return UpdateResult(installed: old, downloadedBytes: 0, bytesWritten: 0, reusedBytes: 0, filesChanged: 0, filesRemoved: 0, reinstalled: false)
         }
-        let keys: [UUID: [UInt8]]
-        switch try await services.licence(contentID: location.contentID, market: market) {
-        case .licensed(let licence): keys = Dictionary(licence.keys.map { ($0.id, $0.key.value) }, uniquingKeysWith: { a, _ in a })
-        case .refused(let failure): throw XboxInstallRefusal.licence(failure)
-        case .unavailable(let problem): throw problem
-        }
+        let keys = try await contentKeys(location.contentID)
         let name = stageName(product, location.version.isEmpty ? "0" : location.version) + "-update"
         let remote = bytes(location)
-        let started = Date()
-        let metadata: @Sendable (UInt64) -> Void = { done in
-            progress(InstallEngine.Progress(bytesDone: 0, bytesTotal: location.size, downloadedBytes: done, chunksDownloaded: 0,
-                                            chunksToDownload: 0, filesVerified: 0, filesTotal: 0, seconds: Date().timeIntervalSince(started)))
-        }
+        let metadata = Self.metadataProgress(location, progress)
         let installed = XboxInstalledCopy(record: old, folder: folder)
         let delta = location.isMSIXVC2
             ? try await deltaMSIXVC2(location, remote: remote, name: name, keys: keys, from: installed, metadata: metadata)
@@ -133,17 +124,12 @@ extension XboxInstaller {
            let size = try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber, size.intValue <= 4 << 20 {
             staged.config = (try? Data(contentsOf: url)).map(Array.init)
         }
-        let config = staged.config.flatMap { try? XboxGameConfig.parse($0) }
         var byPath: [String: XboxInstalledFile] = [:]
         for f in delta.unchanged + staged.files { byPath[f.path] = f }
-        let files = delta.paths.compactMap { byPath[$0] }
-        let record = XboxInstalled(
-            productID: product, contentID: location.contentID, version: delta.version, packageName: delta.packageName,
-            installDir: old.installDir, executable: config?.executable, titleID: config?.titleID, msaAppID: config?.msaAppID, scid: config?.scid,
-            files: files, encrypted: staged.encrypted, bytes: files.reduce(0) { $0 + $1.size })
-        try InstallFS.makeDirectory(layout.manifestsDir)
-        try InstallFS.writeAtomically(recordFile(product), StoreReceipt.encoder.encode(record))
-        discardStages(product)
+        let record = XboxInstalled(productID: product, contentID: location.contentID, version: delta.version, packageName: delta.packageName,
+                                   installDir: old.installDir, config: staged.config, files: delta.paths.compactMap { byPath[$0] },
+                                   encrypted: staged.encrypted)
+        try writeRecord(record)
         log.info("xbox", "\(product) updated to \(delta.version): \(plan.files.count) files written, \(dropped.count) removed, "
                  + "\(delta.source.fetchedBytes) bytes fetched, \(delta.source.localBytes) reused")
         return UpdateResult(installed: record, downloadedBytes: delta.source.fetchedBytes + delta.metadataBytes, bytesWritten: written,
@@ -169,10 +155,7 @@ extension XboxInstaller {
     /// as the package stores it (a decrypted page is encrypted again with its data unit).
     func deltaMSIXVC(_ location: XboxPackageLocation, remote: any XboxPackageBytes, name: String, keys: [UUID: [UInt8]],
                      from copy: XboxInstalledCopy, metadata: @escaping @Sendable (UInt64) -> Void) async throws -> Delta {
-        let package = try await XboxPackage.fetch(remote, into: prefixFile(name), log: log) { done, _ in metadata(done) }
-        guard package.contentID.uuidString.lowercased() == location.contentID else {
-            throw ClientError.verificationFailed("Xbox package is for another content ID")
-        }
+        let package = try await fetchMSIXVC(location, remote: remote, name: name, metadata: metadata)
         let source = try XboxPackageSource(package: package, prefix: prefixFile(name), remote: remote, keys: keys, log: log)
         let page = UInt64(XboxXVD.page)
         var files: [ContentFile] = [], chunks: [ContentChunk] = [], local: [[UInt8]: XboxDeltaSource.Local] = [:]
@@ -236,16 +219,7 @@ extension XboxInstaller {
                                identity: XboxDeltaSource.identity(package.plan().identity, files: files, chunks: chunks))
         return Delta(plan: plan, source: delta, unchanged: unchanged, paths: package.files.map(\.path), version: package.version,
                      packageName: package.packageName, metadataBytes: package.prefixBytes, configPath: nil) { tree in
-            var out: [XboxInstalledFile] = []
-            for f in staged {
-                try Task.checkCancellation()
-                let url = try InstallFS.resolveInside(tree, f.path, createParents: false)
-                guard let sha = InstallFS.sha1(url, expectedSize: f.installedSize) else {
-                    throw ClientError.verificationFailed("\(f.path) changed after it was checked")
-                }
-                out.append(XboxInstalledFile(path: f.path, size: f.installedSize, sha1: sha.hex))
-            }
-            return (out, package.gameConfig, try package.encryptedLayout(source))
+            (try Self.checked(staged, in: tree), package.gameConfig, try package.encryptedLayout(source))
         }
     }
 
@@ -253,10 +227,7 @@ extension XboxInstaller {
     /// offset, by the segment's own hash.
     func deltaMSIXVC2(_ location: XboxPackageLocation, remote: any XboxPackageBytes, name: String, keys: [UUID: [UInt8]],
                       from copy: XboxInstalledCopy, metadata: @escaping @Sendable (UInt64) -> Void) async throws -> Delta {
-        let package = try await XboxMSIXVC2Package.fetch(remote, into: prefixFile(name), licence: keys, log: log, progress: metadata)
-        guard [package.contentID, package.fulfillmentContentID].contains(where: { $0?.uuidString.lowercased() == location.contentID }) else {
-            throw ClientError.verificationFailed("Xbox package is for another content ID")
-        }
+        let package = try await fetchMSIXVC2(location, remote: remote, name: name, keys: keys, metadata: metadata)
         let source = XboxMSIXVC2Source(package: package, remote: remote, log: log)
         var files: [ContentFile] = [], chunks: [ContentChunk] = [], index: [[UInt8]: Int] = [:], local: [[UInt8]: XboxDeltaSource.Local] = [:]
         var unchanged: [XboxInstalledFile] = [], directories = Set<String>(), staged: [XboxMSIXVC2File] = []
@@ -314,17 +285,10 @@ extension XboxInstaller {
         let delta = XboxDeltaSource(remote: source, local: local, log: log)
         let plan = ContentPlan(files: files, directories: directories.sorted(), chunks: chunks,
                                identity: XboxDeltaSource.identity(package.plan().identity, files: files, chunks: chunks))
-        let packageName = location.fileName.lowercased().hasSuffix(".msixvc2") ? String(location.fileName.dropLast(".msixvc2".count)) : location.fileName
         return Delta(plan: plan, source: delta, unchanged: unchanged, paths: package.files.map(\.path), version: package.version,
-                     packageName: packageName, metadataBytes: package.metadataBytes, configPath: package.gameConfigPath) { tree in
-            var out: [XboxInstalledFile] = [], config: [UInt8]?
-            for f in staged {
-                try Task.checkCancellation()
-                let url = try InstallFS.resolveInside(tree, f.path, createParents: false)
-                out.append(XboxInstalledFile(path: f.path, size: f.size, sha1: try package.verify(f, at: url).hex))
-                if f.path == package.gameConfigPath, f.size <= 4 << 20 { config = Array(try Data(contentsOf: url)) }
-            }
-            return (out, config, [])
+                     packageName: Self.packageName(location), metadataBytes: package.metadataBytes, configPath: package.gameConfigPath) { tree in
+            let (files, config) = try Self.checked(staged, of: package, in: tree)
+            return (files, config, [])
         }
     }
 }

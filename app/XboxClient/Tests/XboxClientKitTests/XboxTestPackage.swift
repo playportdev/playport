@@ -64,7 +64,9 @@ struct XboxTestPackage {
     }
 
     /// `version`: major, minor, build, revision (the header's, the package name's and MicrosoftGame.config's).
-    static func build(_ files: [File], segmentMetadata: Bool = true, version: [UInt16] = [1, 2, 3, 0]) -> XboxTestPackage {
+    /// `gameConfig`: the user data's MicrosoftGame.config, else `config(version:)`.
+    static func build(_ files: [File], segmentMetadata: Bool = true, version: [UInt16] = [1, 2, 3, 0],
+                      gameConfig: [UInt8]? = nil) -> XboxTestPackage {
         let versionText = version.map(String.init).joined(separator: ".")
         let page = Self.page
         func pages(_ n: Int) -> Int { (n + page - 1) / page }
@@ -159,7 +161,7 @@ struct XboxTestPackage {
         }
 
         // User data: MicrosoftGame.config and (optionally) SegmentMetadata.bin.
-        var packaged: [(String, [UInt8])] = [("MicrosoftGame.config", config(version: versionText))]
+        var packaged: [(String, [UInt8])] = [("MicrosoftGame.config", gameConfig ?? config(version: versionText))]
         if segmentMetadata {
             let ordered = files.filter { !$0.encrypted } + files.filter(\.encrypted)
             var paths = [UInt8](), segs = [UInt8]()

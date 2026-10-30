@@ -390,11 +390,16 @@ A Play of an installed copy (the dev app's `Dev/XboxPlay.swift`) goes through, i
   go back over the plaintext. A per-play marker in the state root lets the next
   app start finish that after a crash.
 - `XboxGameManifest.load(folder:)` reads the copy's MicrosoftGame.config:
-  `MSAAppId`, `MSAFullTrust`, `RelatedProducts` (for `XboxBridgeCopy`) and the
-  `KnownDependency` names. `prerequisites(files:)` gives `VC14`'s installer when
-  the package carries one at `Engine/Extras/Redist/en-us/vc_redist.x64.exe`
-  (Nexus's one case). Otherwise Wine's own VC++ runtime stands in, as for the
-  pilot. It runs through the app's prerequisites mechanism (decision 0079).
+  `MSAAppId`, `MSAFullTrust`, `RelatedProducts` and the `KnownDependency` names.
+  `prerequisites(files:)` gives `VC14`'s installer when the package carries one at
+  `Engine/Extras/Redist/en-us/vc_redist.x64.exe` (Nexus's one case). Otherwise
+  Wine's own VC++ runtime stands in, as for the pilot. It runs through the app's
+  prerequisites mechanism (decision 0079).
+- `XboxBridgeCopy(productID:installed:folder:)`: what the bridge serves comes from
+  the install record (`msaAppID`, `msaFullTrust`, `relatedProductIDs`, taken from
+  the hash-checked package at install or update), never from the folder. Any title
+  can rewrite a file in `C:\Games`, so a folder config that names another client
+  ID, full trust or other related products refuses the Play ("Verify the game").
 - The bridge's listener for the play. Its `guestEnvironment`, plus
   `WINE_WINHTTP_HTTP2=1` (patches/wine-gdk offers HTTP/2 only when asked), goes into
   `LaunchCoordinator.Request.guestEnvironment`: the game's environment only.

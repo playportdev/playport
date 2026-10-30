@@ -52,9 +52,13 @@ enum XboxPlay {
             return .failure(.failed("Playport has no install record for this Xbox copy. Remove it and install it again."))
         }
         let folder = LibraryModel.paths.games.appendingPathComponent(rec.installDir, isDirectory: true)
-        let manifest: XboxGameManifest
-        do { manifest = try XboxGameManifest.load(folder: folder) } catch {
-            return .failure(.failed("The game's MicrosoftGame.config is missing from its folder; Verify the game."))
+        let manifest: XboxGameManifest, copy: XboxBridgeCopy
+        do {
+            manifest = try XboxGameManifest.load(folder: folder)
+            copy = try XboxBridgeCopy(productID: id, installed: rec, folder: folder)
+        } catch {
+            return .failure(.failed("The game's MicrosoftGame.config is missing from its folder or is not the one Playport installed. "
+                                    + "Verify the game."))
         }
 
         // 1. The licence: Microsoft's verdict, or the stored one while it can't be reached. A
@@ -106,7 +110,7 @@ enum XboxPlay {
         // 3. The bridge: the runtime's tickets for this copy and its add-ons (PLA-502), and the player's choice at a
         //    save conflict (Dev/XboxCloudSaves.swift), from now to the launch's end.
         let addOns = XboxGameAddOns.play(base: id, folder: folder, found: XboxGameAddOns.shared.found[id] ?? [], installer: installer)
-        let service = XboxBridgeService(copy: XboxBridgeCopy(productID: id, manifest: manifest).adding(related: addOns.related),
+        let service = XboxBridgeService(copy: copy.adding(related: addOns.related),
                                         account: account.session, updates: XboxUpdateChecker(installer: installer),
                                         saves: XboxSavePromptAsker(), log: log)
         let listener = XboxBridgeListener(service: service, log: log)

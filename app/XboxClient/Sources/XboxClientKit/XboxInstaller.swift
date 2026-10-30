@@ -49,9 +49,26 @@ public struct XboxInstalled: Codable, Sendable, Equatable {
     public let titleID: String?
     public let msaAppID: String?
     public let scid: String?
+    /// MicrosoftGame.config's MSAFullTrust and RelatedProducts, which the bridge serves a
+    /// play (`XboxBridgeCopy(productID:installed:folder:)`); nil in a record written
+    /// before they were kept.
+    public let msaFullTrust: Bool?
+    public let relatedProductIDs: [String]?
     public let files: [XboxInstalledFile]
     public let encrypted: [XboxEncryptedFile]
     public let bytes: UInt64
+}
+
+extension XboxInstalled {
+    /// A game's record: the package's files and MicrosoftGame.config's fields (`config`, its bytes).
+    init(productID: String, contentID: String, version: String, packageName: String, installDir: String, config: [UInt8]?,
+         files: [XboxInstalledFile], encrypted: [XboxEncryptedFile]) {
+        let c = config.flatMap { try? XboxGameConfig.parse($0) }
+        self.init(productID: productID, contentID: contentID, version: version, packageName: packageName, installDir: installDir,
+                  executable: c?.executable, titleID: c?.titleID, msaAppID: c?.msaAppID, scid: c?.scid,
+                  msaFullTrust: c?.msaFullTrust ?? false, relatedProductIDs: c?.relatedProductIDs ?? [],
+                  files: files, encrypted: encrypted, bytes: files.reduce(0) { $0 + $1.size })
+    }
 }
 
 /// Installs an Xbox copy's MSIXVC or MSIXVC2 into C:\Games through ContentKit's
@@ -93,21 +110,23 @@ public struct XboxInstaller: Sendable {
     public func install(product: String, contentID: String, title: String, options: InstallEngine.Options = .init(),
                         progress: @escaping @Sendable (InstallEngine.Progress) -> Void = { _ in }) async throws -> Result {
         let s = try await stage(product: product, contentID: contentID, options: options, progress: progress)
-        let config = s.config.flatMap { try? XboxGameConfig.parse($0) }
         let folder = Self.unique(Self.folderName(title, fallback: product), in: layout.gamesRoot)
         try InstallFS.makeDirectory(layout.gamesRoot)
         guard rename(s.tree.path, layout.gamesRoot.appendingPathComponent(folder, isDirectory: true).path) == 0 else {
             throw ClientError.transport("cannot move the Xbox install into C:\\Games (errno \(errno))")
         }
-        let installed = XboxInstalled(
-            productID: product, contentID: s.contentID, version: s.version, packageName: s.packageName,
-            installDir: folder, executable: config?.executable, titleID: config?.titleID, msaAppID: config?.msaAppID, scid: config?.scid,
-            files: s.files, encrypted: s.encrypted, bytes: s.bytes)
-        try InstallFS.makeDirectory(layout.manifestsDir)
-        try InstallFS.writeAtomically(recordFile(product), StoreReceipt.encoder.encode(installed))
-        discardStages(product)
+        let installed = XboxInstalled(productID: product, contentID: s.contentID, version: s.version, packageName: s.packageName,
+                                      installDir: folder, config: s.config, files: s.files, encrypted: s.encrypted)
+        try writeRecord(installed)
         log.info("xbox", "\(product) installed in C:\\Games\\\(folder): \(s.files.count) files, \(installed.encrypted.count) kept encrypted")
         return Result(installed: installed, bytesWritten: s.bytesWritten, downloadedBytes: s.downloadedBytes)
+    }
+
+    /// Writes the copy's record, then drops its stages.
+    func writeRecord(_ installed: XboxInstalled) throws {
+        try InstallFS.makeDirectory(layout.manifestsDir)
+        try InstallFS.writeAtomically(recordFile(installed.productID), StoreReceipt.encoder.encode(installed))
+        discardStages(installed.productID)
     }
 
     /// A package staged and checked, its stage tree not yet moved into place.
@@ -130,24 +149,13 @@ public struct XboxInstaller: Sendable {
                progress: @escaping @Sendable (InstallEngine.Progress) -> Void) async throws -> StagedPackage {
         guard StoreGameKey.isProductID(product) else { throw ClientError.unsupported("not an Xbox Product ID") }
         let location = try await services.packageLocation(contentID: contentID)
-        let keys: [XboxContentKey]
-        switch try await services.licence(contentID: location.contentID, market: market) {
-        case .licensed(let licence): keys = licence.keys
-        case .refused(let failure): throw XboxInstallRefusal.licence(failure)
-        case .unavailable(let problem): throw problem
-        }
+        let keys = try await contentKeys(location.contentID)
         let name = stageName(product, location.version.isEmpty ? "0" : location.version)
         let remote = bytes(location)
-        let started = Date()
-        let metadata: @Sendable (UInt64) -> Void = { done in
-            progress(InstallEngine.Progress(bytesDone: 0, bytesTotal: location.size, downloadedBytes: done, chunksDownloaded: 0,
-                                            chunksToDownload: 0, filesVerified: 0, filesTotal: 0, seconds: Date().timeIntervalSince(started)))
-        }
-        var byID: [UUID: [UInt8]] = [:]
-        for k in keys { byID[k.id] = k.key.value }
+        let metadata = Self.metadataProgress(location, progress)
         let staged = location.isMSIXVC2
-            ? try await stageMSIXVC2(location, remote: remote, name: name, keys: byID, metadata: metadata)
-            : try await stageMSIXVC(location, remote: remote, name: name, keys: byID, metadata: metadata)
+            ? try await stageMSIXVC2(location, remote: remote, name: name, keys: keys, metadata: metadata)
+            : try await stageMSIXVC(location, remote: remote, name: name, keys: keys, metadata: metadata)
         let plan = staged.plan
         let engine = InstallEngine(tree: layout.stagingTree(name: name), journal: layout.journal(name: name), source: staged.source,
                                    log: log, options: options)
@@ -178,26 +186,14 @@ public struct XboxInstaller: Sendable {
     /// MSIXVC: the XVD's metadata prefix, then pages checked against its hash tree.
     func stageMSIXVC(_ location: XboxPackageLocation, remote: any XboxPackageBytes, name: String, keys: [UUID: [UInt8]],
                      metadata: @escaping @Sendable (UInt64) -> Void) async throws -> Staged {
-        let package = try await XboxPackage.fetch(remote, into: prefixFile(name), log: log) { done, _ in metadata(done) }
-        guard package.contentID.uuidString.lowercased() == location.contentID else {
-            throw ClientError.verificationFailed("Xbox package is for another content ID")
-        }
+        let package = try await fetchMSIXVC(location, remote: remote, name: name, metadata: metadata)
         for id in package.keyIDs where keys[id] == nil {
             throw ClientError.verificationFailed("Xbox licence has no key for this package")
         }
         let source = try XboxPackageSource(package: package, prefix: prefixFile(name), remote: remote, keys: keys, log: log)
         return Staged(plan: package.plan(), source: source, version: package.version, packageName: package.packageName,
                       metadataBytes: package.prefixBytes, keptEncrypted: package.files.filter(\.keepEncrypted).count) { tree in
-            var files: [XboxInstalledFile] = []
-            for f in package.files {
-                try Task.checkCancellation()
-                let url = try InstallFS.resolveInside(tree, f.path, createParents: false)
-                guard let sha = InstallFS.sha1(url, expectedSize: f.installedSize) else {
-                    throw ClientError.verificationFailed("\(f.path) changed after it was checked")
-                }
-                files.append(XboxInstalledFile(path: f.path, size: f.installedSize, sha1: sha.hex))
-            }
-            return (files, package.gameConfig, try package.encryptedLayout(source))
+            (try Self.checked(package.files, in: tree), package.gameConfig, try package.encryptedLayout(source))
         }
     }
 
@@ -205,24 +201,87 @@ public struct XboxInstaller: Sendable {
     /// every file is installed decrypted and checked whole against its hash.
     func stageMSIXVC2(_ location: XboxPackageLocation, remote: any XboxPackageBytes, name: String, keys: [UUID: [UInt8]],
                       metadata: @escaping @Sendable (UInt64) -> Void) async throws -> Staged {
-        let package = try await XboxMSIXVC2Package.fetch(remote, into: prefixFile(name), licence: keys, log: log, progress: metadata)
-        guard [package.contentID, package.fulfillmentContentID].contains(where: { $0?.uuidString.lowercased() == location.contentID }) else {
-            throw ClientError.verificationFailed("Xbox package is for another content ID")
-        }
+        let package = try await fetchMSIXVC2(location, remote: remote, name: name, keys: keys, metadata: metadata)
         let source = XboxMSIXVC2Source(package: package, remote: remote, log: log)
-        let packageName = location.fileName.lowercased().hasSuffix(".msixvc2")
-            ? String(location.fileName.dropLast(".msixvc2".count)) : location.fileName
-        return Staged(plan: package.plan(), source: source, version: package.version, packageName: packageName,
+        return Staged(plan: package.plan(), source: source, version: package.version, packageName: Self.packageName(location),
                       metadataBytes: package.metadataBytes, keptEncrypted: 0) { tree in
-            var files: [XboxInstalledFile] = [], config: [UInt8]?
-            for f in package.files {
-                try Task.checkCancellation()
-                let url = try InstallFS.resolveInside(tree, f.path, createParents: false)
-                files.append(XboxInstalledFile(path: f.path, size: f.size, sha1: try package.verify(f, at: url).hex))
-                if f.path == package.gameConfigPath, f.size <= 4 << 20 { config = Array(try Data(contentsOf: url)) }
-            }
+            let (files, config) = try Self.checked(package.files, of: package, in: tree)
             return (files, config, [])
         }
+    }
+
+    // MARK: Steps an install and an update share
+
+    /// The licence's content keys for the package `contentID`, by key ID, or why there are none.
+    func contentKeys(_ contentID: String) async throws -> [UUID: [UInt8]] {
+        switch try await services.licence(contentID: contentID, market: market) {
+        case .licensed(let licence): Dictionary(licence.keys.map { ($0.id, $0.key.value) }, uniquingKeysWith: { a, _ in a })
+        case .refused(let failure): throw XboxInstallRefusal.licence(failure)
+        case .unavailable(let problem): throw problem
+        }
+    }
+
+    /// Progress while a package's metadata downloads: bytes fetched, nothing staged yet.
+    static func metadataProgress(_ location: XboxPackageLocation, _ progress: @escaping @Sendable (InstallEngine.Progress) -> Void)
+        -> @Sendable (UInt64) -> Void {
+        let started = Date()
+        return { done in
+            progress(InstallEngine.Progress(bytesDone: 0, bytesTotal: location.size, downloadedBytes: done, chunksDownloaded: 0,
+                                            chunksToDownload: 0, filesVerified: 0, filesTotal: 0, seconds: Date().timeIntervalSince(started)))
+        }
+    }
+
+    /// An MSIXVC's metadata prefix, checked to be the package `location` names.
+    func fetchMSIXVC(_ location: XboxPackageLocation, remote: any XboxPackageBytes, name: String,
+                     metadata: @escaping @Sendable (UInt64) -> Void) async throws -> XboxPackage {
+        let package = try await XboxPackage.fetch(remote, into: prefixFile(name), log: log) { done, _ in metadata(done) }
+        try Self.requireContentID([package.contentID], location)
+        return package
+    }
+
+    /// An MSIXVC2's metadata, checked to be the package `location` names.
+    func fetchMSIXVC2(_ location: XboxPackageLocation, remote: any XboxPackageBytes, name: String, keys: [UUID: [UInt8]],
+                      metadata: @escaping @Sendable (UInt64) -> Void) async throws -> XboxMSIXVC2Package {
+        let package = try await XboxMSIXVC2Package.fetch(remote, into: prefixFile(name), licence: keys, log: log, progress: metadata)
+        try Self.requireContentID([package.contentID, package.fulfillmentContentID], location)
+        return package
+    }
+
+    static func requireContentID(_ ids: [UUID?], _ location: XboxPackageLocation) throws {
+        guard ids.contains(where: { $0?.uuidString.lowercased() == location.contentID }) else {
+            throw ClientError.verificationFailed("Xbox package is for another content ID")
+        }
+    }
+
+    /// An MSIXVC2's package name: its file name without the extension.
+    static func packageName(_ location: XboxPackageLocation) -> String {
+        location.fileName.lowercased().hasSuffix(".msixvc2") ? String(location.fileName.dropLast(".msixvc2".count)) : location.fileName
+    }
+
+    /// MSIXVC files the engine staged in `tree`, read back for the record.
+    static func checked(_ files: [XboxPackageFile], in tree: URL) throws -> [XboxInstalledFile] {
+        try files.map { f in
+            try Task.checkCancellation()
+            let url = try InstallFS.resolveInside(tree, f.path, createParents: false)
+            guard let sha = InstallFS.sha1(url, expectedSize: f.installedSize) else {
+                throw ClientError.verificationFailed("\(f.path) changed after it was checked")
+            }
+            return XboxInstalledFile(path: f.path, size: f.installedSize, sha1: sha.hex)
+        }
+    }
+
+    /// MSIXVC2 files the engine staged in `tree`, each checked whole against its hash, and
+    /// MicrosoftGame.config's bytes when it is one of them.
+    static func checked(_ files: [XboxMSIXVC2File], of package: XboxMSIXVC2Package, in tree: URL) throws
+        -> (files: [XboxInstalledFile], config: [UInt8]?) {
+        var out: [XboxInstalledFile] = [], config: [UInt8]?
+        for f in files {
+            try Task.checkCancellation()
+            let url = try InstallFS.resolveInside(tree, f.path, createParents: false)
+            out.append(XboxInstalledFile(path: f.path, size: f.size, sha1: try package.verify(f, at: url).hex))
+            if f.path == package.gameConfigPath, f.size <= 4 << 20 { config = Array(try Data(contentsOf: url)) }
+        }
+        return (out, config)
     }
 
     public struct VerifyReport: Sendable {
@@ -313,6 +372,8 @@ struct XboxGameConfig: Equatable {
     var titleID: String?
     var msaAppID: String?
     var scid: String?
+    var msaFullTrust = false
+    var relatedProductIDs: [String] = []
 
     static func parse(_ bytes: [UInt8]) throws -> XboxGameConfig {
         let root = try XboxXML.parse(bytes.starts(with: [0xEF, 0xBB, 0xBF]) ? Array(bytes.dropFirst(3)) : bytes)
@@ -324,9 +385,11 @@ struct XboxGameConfig: Equatable {
             guard let s = s?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty, s.count <= max, s.allSatisfy(ok) else { return nil }
             return s
         }
+        let manifest = try XboxGameManifest.parse(bytes)
         return XboxGameConfig(executable: exe, titleID: id(root.value("TitleId"), \.isHexDigit, max: 8),
                               msaAppID: id(root.value("MSAAppId"), \.isHexDigit, max: 16),
-                              scid: id(scid, { $0.isHexDigit || $0 == "-" }, max: 36))
+                              scid: id(scid, { $0.isHexDigit || $0 == "-" }, max: 36),
+                              msaFullTrust: manifest.msaFullTrust, relatedProductIDs: manifest.relatedProductIDs)
     }
 }
 
