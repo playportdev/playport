@@ -518,9 +518,13 @@ def xbox_checks(rt, rows):
         print("      xbox: no P11 rows (an IPA from before the Xbox runtime)")
         return
     check(got == {k: v[0] for k, v in want.items()}, f"xbox: rows are {', '.join(sorted(want))}")
+    readobj = Path(os.environ.get("MINGW") or inputs.need("LLVM_MINGW")) / "bin/llvm-readobj"
     for k, (_, exports) in want.items():
         body = rt(k).read_bytes() if rt(k).is_file() else b""
-        check(pe_machine_magic(body) == (0xa641, 0x20b) and b"Wine builtin DLL" in body[:0x200]
+        # An ARM64EC image's COFF machine is x86-64's; llvm-readobj names it from its hybrid metadata.
+        ec = body and "IMAGE_FILE_MACHINE_ARM64EC" in subprocess.run(
+            [str(readobj), "--file-headers", str(rt(k))], capture_output=True, text=True).stdout
+        check(pe_machine_magic(body) == (0x8664, 0x20b) and ec and b"Wine builtin DLL" in body[:0x200]
               and exports <= pe_table(rt(k), "export"),
               f"xbox: {k.split('/')[-1]} is an arm64ec Wine builtin exporting {', '.join(sorted(exports))}")
 
