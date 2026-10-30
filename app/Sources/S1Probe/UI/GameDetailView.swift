@@ -79,6 +79,7 @@ private struct GameDetailPage: View {
     @ObservedObject private var xbox = XboxInstalls.shared
     @ObservedObject private var xboxGames = XboxGames.shared
     @ObservedObject private var xboxUpdates = XboxUpdates.shared
+    @ObservedObject private var xboxLapses = XboxLapses.shared
     #endif
     @State private var playError: String?
     @State private var controllers = GCController.controllers().count
@@ -372,6 +373,15 @@ private struct GameDetailPage: View {
         } else {
             PrimaryButton(id: "game:play", title: library.preparing[t.id] ?? "Play",
                           enabled: canPlay(t) && library.preparing[t.id] == nil, hint: "Play") { start(t) }
+            #if !PLAYPORT_RELEASE
+            // An Xbox copy whose licence lapsed (PLA-505): ask Microsoft again, or uninstall it before its date.
+            if t.store == .xbox, xboxLapses.state(t.key).isLapsed {
+                SecondaryButton(id: "game:xboxLicence", systemImage: "arrow.clockwise", title: "Check licence",
+                                enabled: !launch.running, hint: "Check licence") { Task { await xboxLapses.check(t) } }
+                SecondaryButton(id: "game:xboxUninstall", systemImage: "trash", title: "Uninstall now",
+                                enabled: !launch.running && !library.removing.contains(t.id), hint: "Uninstall") { xboxLapses.askRemove(t) }
+            }
+            #endif
         }
         if let s = stats, !s.schema.achievements.isEmpty {
             SecondaryButton(id: "game:achievements", systemImage: "trophy", title: "\(s.unlockedCount) / \(s.schema.achievements.count)",
@@ -482,7 +492,10 @@ private struct GameDetailPage: View {
     }
 
     private func canPlay(_ t: InstalledTitle) -> Bool {
-        t.canPlay && !launch.spent && !launch.running && !library.verifying.contains(t.id)
+        #if !PLAYPORT_RELEASE
+        if xboxLapses.state(t.key).isLapsed { return false }  // its licence lapsed (dev Xbox, PLA-505)
+        #endif
+        return t.canPlay && !launch.spent && !launch.running && !library.verifying.contains(t.id)
             && !library.removing.contains(t.id) && job == nil
     }
 
@@ -577,6 +590,9 @@ private struct GameDetailPage: View {
                          : job.record.automatic ? "Playport queued this update by itself. Play is available once it finishes, or after Cancel: it waits for Steam's next version then."
                          : "Play is available once the update finishes, or after Cancel.")
                 } else {
+                    #if !PLAYPORT_RELEASE
+                    if let lapse = xboxLapses.notice(t.key) { Text(lapse).foregroundStyle(.orange) }
+                    #endif
                     MemoryWarning(need: MemoryNeed.of(t, cohort: LibraryModel.cohort))
                     if installs.isBusy { Text("Starting a game pauses the download. It goes on when Playport reopens after the game.") }
                     controllerLine
