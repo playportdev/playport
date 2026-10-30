@@ -41,9 +41,10 @@ mouse could not be played with a controller.
 - **The starting layout** is the game's own, else Off under Never, else the title's
   compatibility default (`controls` in `Titles/compat-defaults.json`, an `OnScreenLayout`
   name; an entry may now have it without `settings`), else Settings' Starting layout, else
-  Gamepad: 0074's order, a title's default before Settings'. A game on Gamepad that asks for no XInput state in 20 s of play
-  after its first frame is offered Keyboard & mouse once (a toast; accepting saves it as the
-  game's own). Win32u counts the reads for the app (`patches/madeira-unix` 0224).
+  Gamepad: 0074's order, a title's default before Settings'. A game that starts on Gamepad
+  with Settings' Starting layout left at Suggested and asks for no XInput state in 20 s of
+  play after its first frame is offered Keyboard & mouse once (a toast; accepting saves it as
+  the game's own). Win32u counts the reads for the app (`patches/madeira-unix` 0224).
 - **Touches outside the shown controls are ignored:** no cursor, no click (a stray touch
   flicked a mouse-look game's view). With no controls shown (Off, a controller connected) a
   touch is the left mouse button as before; Point & click's surface is the whole safe area.
