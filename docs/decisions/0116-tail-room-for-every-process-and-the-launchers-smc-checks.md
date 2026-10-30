@@ -7,6 +7,10 @@ bridge record. [PLA-394](https://linear.app/playportdev/issue/PLA-394),
 [plan](../plans/finished.md#own-low-address-space-cef),
 [evidence](../evidence/2026-10-18-pool-tail.md).
 
+**Amended 2026-10-30 (owner, PLA-476):** the cap's largest grant is 64 MiB, not 128, for every
+process and title (madeira-unix 0233); the room rule is unchanged
+([below](#amendment-2026-10-30-the-largest-grant-is-64-mib)).
+
 ## Context
 
 Every process of a session shares the one JIT pool (896 MiB for the launcher, decision 0108):
@@ -54,3 +58,39 @@ so clearing them dropped it.
   Opens showed the Sign In form with its text; Hollow Knight still got its 128 MiB buffer. The
   head grew into the room (512–533 MiB), so the pool still ends nearly full: the head (images) is
   not changed by this record and is the next lever.
+
+## Amendment 2026-10-30: the largest grant is 64 MiB
+
+**Approved by the owner, 2026-10-30 (PLA-476).**
+
+- **The change.** The tail cap's largest grant (`TAIL_MAX`) is 64 MiB, not 128, for every process
+  and title (madeira-unix 0233, `pp_jit_tail_cap.h`). A process that fills its first 16 MiB buffer
+  and asks for 128 MiB gets 64 MiB at most; FEX halves its ask on the refusal, as it already did when
+  the room was short. The room rule (48 MiB, plus 16 MiB for each other process with a live carve) is
+  unchanged. A lone game now keeps a 64 MiB buffer, not 128.
+- **Why 128 was chosen (ml1052, Madeira's comment).** The cap had been 32 MB (16 MB once the tail
+  passed 160 MB). FEX keeps one code buffer per process and discards every translation when it fills;
+  one run measured 12.5 M block lookups, 5.5 M real compiles (a 56 % hit rate), 390 rotations and a
+  quarter of the running CPU samples in the compiler. 128 MiB is FEX's branch range.
+- **Why 64 now** ([evidence](../evidence/2026-10-29-sc-stock-cef-probe.md)). Red Dead Redemption 2
+  asks for 128 MiB at its second generation in every run; what it got depended on the tail's room
+  at that moment:
+  - d1 and l11 got 64 (`tail CAP … cap 0x4000000`, 8 other processes), filled it and rolled to a
+    third generation at press+2.1 and press+2.0 s (`[gen] alloc#3 … prev_size=0x4000000`). A roll
+    discards the code cache and the per-thread lookup caches in FEX's band: RDR2's `[proc-mem]` fex
+    row fell 524 → 239 MB (d1) and 561 → 237 MB (l11), and was 303 and 298 at Story's load step.
+  - l9 and l10 got 128 and did not roll: l10's fex row was 467 at the step, 169 MB more than l11's,
+    against a margin l10 lacked by ≥210 MB and l11 by ≥10–30 MB.
+
+  A 64 MiB cap makes the roll the rule rather than tail-room luck.
+- **Costs.** A process that outgrows 64 MiB rolls more often and retranslates after each roll. The
+  launcher's Social Club helper already rolled four to six 128 MiB generations during the sign-in
+  (l10, l11); RDR2's later generations stay 64 MiB (d1's third got 128). Hollow Knight gets 64.
+- **Proof required.** A Hollow Knight `pp perf` pair on one phone session, before (the installed IPA)
+  and after, on the October 8 route (`--pad first-frame+25:hk-new-game --pad first-frame+80:hk-walk`,
+  compared over 85–120 s): frame rate, hitches, FEX compiles and `[gen]` rolls; and RDR2's load in the
+  next layout run against l11 (`[gen]` rolls, the fex row, compiles). No RDR2 Story-world `pp perf`
+  pair is required; gameplay speed in the Story world with 64 MiB generations stays unmeasured until
+  one is run. If a gate fails, the fallback is a 64 MiB cap only when the footprint is within 2.5 GB of
+  the limit at the ask.
+

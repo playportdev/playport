@@ -353,10 +353,10 @@ whose title needs more (PlayportKit `MemoryNeed`) before the pool is acquired.
 The pool never grows. PE images with native code (a copy of each ARM64EC,
 ARM64X or ARM64 image, x18 trampolines included), guest JIT blocks (Mono's, V8's) and each pseudo-process's private
 ntdll copy take its **head**, from the bottom up; FEX's code buffers take its
-**tail**, from the top down, up to 128 MiB each while the room between them
+**tail**, from the top down, up to 64 MiB each while the room between them
 allows, less 48 MiB and 16 MiB for each other process holding a code buffer
-(`patches/madeira-unix` 0157, decision
-[0116](decisions/0116-tail-room-for-every-process-and-the-launchers-smc-checks.md)). A guest JIT region's writes are routed through the **anonymous-alias
+(`patches/madeira-unix` 0157 and 0233, decision
+[0116](decisions/0116-tail-room-for-every-process-and-the-launchers-smc-checks.md) as amended). A guest JIT region's writes are routed through the **anonymous-alias
 table** (4096 entries); an entry ends when its memory is released
 (`MEM_RELEASE`, [evidence](evidence/2026-10-12-jit-alias-release.md)), and its pool
 range stays used. A dead process's code buffers are reused, and so are its
