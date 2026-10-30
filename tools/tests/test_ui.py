@@ -172,6 +172,15 @@ class UiEnvTest(unittest.TestCase):
         for bad in ("xbox:", "xbox:password=secret", "xbox:signin:secret", "xbox:reset", "xbox:SignIn"):
             self.assertFalse(m.ACTION_RE.match(bad), bad)
 
+    def test_an_xbox_copy_installs_and_is_checked_by_its_product_id(self):
+        m = load()
+        for action in ("install:xbox-9MW9469V91LM", "xbox:installed:9MW9469V91LM", "open:xbox-9MW9469V91LM",
+                       "uninstall:xbox-9MW9469V91LM"):
+            self.assertEqual(m.parse(["--action", action]).action, [action])
+        for bad in ("install:xbox-", "install:xbox-9mw9469v91lm", "install:xbox-9MW9469V91L", "install:xbox-9MW9469V91LMX",
+                    "xbox:installed:", "xbox:installed", "xbox:installed:9MW9469V91LM:x", "install:xbox-../x"):
+            self.assertFalse(m.ACTION_RE.match(bad), bad)
+
     def test_donor_pool_setting_takes_auto_and_fixed_sizes(self):
         # Settings › Developer › Donor pool (PLA-351): set:'s generic KEY=VALUE carries auto.
         m = load()

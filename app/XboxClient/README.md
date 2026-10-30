@@ -230,3 +230,10 @@ finding is claimed. `pp ui` paths: `xbox:signin`, `xbox:wait`, `xbox:status`,
 
 The library's phone gate is deferred too: `./pp ui --action xbox:library --shot`
 (signed in) shows the Xbox chip's copies with Microsoft's art and logs counts only.
+
+The install's phone gate is deferred as well (signed in, the pilot in the library):
+`./pp ui --action install:xbox-9MW9469V91LM --action xbox:installed:9MW9469V91LM --shot`
+installs the copy from its page and checks it is adopted and every file verifies;
+`uninstall:xbox-9MW9469V91LM` removes it keeping its saves (the page's Remove also
+offers deleting them). In the dev app an installed Xbox copy can't be played yet: its
+`.exe` stays encrypted until PLA-499's runtime decrypts it at play.

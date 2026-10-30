@@ -45,6 +45,9 @@ public struct XboxProductPackage: Codable, Sendable, Equatable {
     public let format: String
     /// MaxDownloadSizeInBytes: about what the install needs on the phone.
     public let downloadSize: UInt64
+    /// What Install needs free: the download plus the install engine's margin (the
+    /// stream-extract keeps no copy of the package, only its metadata).
+    public var neededBytes: UInt64 { downloadSize + UInt64(Double(downloadSize) * InstallEngine.Options().marginFraction) }
 }
 
 enum XboxCatalog {

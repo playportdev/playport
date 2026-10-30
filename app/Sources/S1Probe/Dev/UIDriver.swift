@@ -329,6 +329,8 @@ enum UIDriver {
                     if let failure = try await installEpic(String(id.dropFirst(5))) { return finish("action=\(action) failed: \(failure)") }
                 case "install" where id.hasPrefix("gog-"):
                     if let failure = try await installGOG(String(id.dropFirst(4))) { return finish("action=\(action) failed: \(failure)") }
+                case "install" where id.hasPrefix("xbox-"):
+                    if let failure = try await installXbox(String(id.dropFirst(5))) { return finish("action=\(action) failed: \(failure)") }
                 case "install", "pause-resume":
                     guard let app = UInt32(id) else { return finish("action=\(action) refused: \(id) is not a Steam app id") }
                     if let failure = try await install(app, pauseAt: parts[0] == "pause-resume" ? 0.25 : nil) {
@@ -448,7 +450,8 @@ enum UIDriver {
                         nav.pageSection = parts.count > 1 ? parts[1] : nil
                     } else if let title = parts.first, let key = StoreGameKey(titleID: title),
                               (key.store == .gog && GOGAccount.shared.game(key.id) != nil)
-                                || (key.store == .epic && EpicAccount.shared.game(key.id) != nil) {
+                                || (key.store == .epic && EpicAccount.shared.game(key.id) != nil)
+                                || (key.store == .xbox && XboxGames.shared.game(key.id) != nil) {
                         // A store's game not installed: its page, as its library tile opens it.
                         nav.openGame(.store(key))
                         nav.pageSection = parts.count > 1 ? parts[1] : nil
@@ -577,7 +580,9 @@ enum UIDriver {
                     guard !TitleLaunch.shared.running else { return finish("action=\(action) refused: a game is running") }
                     let account = XboxAccount.shared
                     for _ in 0..<300 where account.state == .unknown { try await pause(.milliseconds(100)) }
-                    if id == "wait" {
+                    if id.hasPrefix("installed:") {
+                        if let failure = try await xboxInstalled(String(id.dropFirst("installed:".count))) { return finish("action=\(action) failed: \(failure)") }
+                    } else if id == "wait" {
                         for _ in 0..<1200 where account.signingIn && account.state != .signedIn && account.error == nil {
                             try await pause(.milliseconds(250))
                         }
@@ -1060,6 +1065,58 @@ enum UIDriver {
                     + "size=\(t.sizeBytes ?? 0) exe=\(t.executable ?? "none") args=\(t.storeArguments ?? []) after %.0f s",
                    Date().timeIntervalSince(started)))
         return nil
+    }
+
+    /// The Xbox page's Install of copy `product` (dev only); nil once the copy is in the library.
+    private static func installXbox(_ product: String) async throws -> String? {
+        let account = XboxAccount.shared, games = XboxGames.shared, xbox = XboxInstalls.shared
+        for _ in 0..<300 where account.state == .unknown { try await pause(.milliseconds(100)) }
+        guard account.state == .signedIn else { return "Xbox is not signed in" }
+        if games.snapshot == nil { await games.refresh() }
+        for _ in 0..<1200 where games.loading { try await pause(.milliseconds(250)) }
+        guard let installs = SteamAccountModel.current?.installs else { return "no download queue" }
+        guard let copy = games.game(product) else { return "Xbox does not list \(product) for this account" }
+        guard let package = xbox.package(product) else { return "Microsoft lists no package for \(product)" }
+        guard xbox.canInstall(product) else { return "refused: the package is \(package.format)" }
+        let key = StoreGameKey(store: .xbox, id: product)
+        guard LibraryModel.shared.title(key.titleID) == nil else { return "\(key.titleID) is installed already" }
+        let started = Date()
+        _ = AppNavigation.shared.open("library")
+        AppNavigation.shared.openGame(.store(key))
+        log("install xbox-\(product): started; download \(package.downloadSize) bytes, needs \(package.neededBytes)")
+        xbox.install(copy)
+        var lastLog = Date()
+        while let j = installs.jobs[key] {
+            if case let .paused(reason) = j.phase { return "paused: \(reason ?? "no reason")" }
+            if Date().timeIntervalSince(lastLog) > 15 {
+                lastLog = Date()
+                log("install xbox-\(product): \(j.status) \(j.detail ?? "")")
+            }
+            try await pause(.milliseconds(250))
+        }
+        if let why = xbox.refused[product] { return "refused: \(why)" }
+        let library = LibraryModel.shared
+        for _ in 0..<600 where library.title(key.titleID) == nil { try await pause(.milliseconds(100)) }
+        guard let t = library.title(key.titleID) else { return "done, but not in the library" }
+        log(String(format: "install xbox-\(product): in the library as \(t.id) [\(t.badge.rawValue)] version=\(t.storeVersion ?? "?") "
+                    + "size=\(t.sizeBytes ?? 0) exe=\(t.executable ?? "none") after %.0f s", Date().timeIntervalSince(started)))
+        return nil
+    }
+
+    /// `xbox:installed:<ProductId>`: the copy is catalogued, its folder and record are there and every file
+    /// verifies; its page is shown. Counts and versions only.
+    private static func xboxInstalled(_ product: String) async throws -> String? {
+        let key = StoreGameKey(store: .xbox, id: product)
+        guard let t = LibraryModel.shared.title(key.titleID) else { return "\(key.titleID) is not in the library" }
+        let installer = XboxInstalls.shared.installer
+        guard let rec = installer.loadRecord(product) else { return "no Xbox install record" }
+        let report = try await Task.detached(priority: .userInitiated) { try installer.verify(product) }.value
+        _ = AppNavigation.shared.open("library")
+        AppNavigation.shared.openGame(.title(t.id))
+        try await pause(.milliseconds(1500))
+        log("xbox: \(t.id) installed in C:\\Games\\\(rec.installDir) version=\(rec.version) files=\(report.files - report.bad.count)/\(report.files) "
+            + "verified, \(rec.encrypted.count) kept encrypted, exe=\(rec.executable ?? "none")")
+        return report.bad.isEmpty ? nil : "\(report.bad.count) files do not verify"
     }
 
     /// The GOG page's Install (or Update) of `spec` (`<id>` or `<id>@<build>`); nil once the build is in the library.
