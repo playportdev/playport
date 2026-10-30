@@ -8,6 +8,17 @@ Amends [0109](0109-chromium-switches-for-a-cef-browser.md) and
 rule covers only the installed `SocialClubHelper.exe` page bridge described here.
 It does not permit patching any other Rockstar component or build.
 
+**Amended 2026-10-30 (owner, PLA-476):** a verified browser also gets
+`--disable-component-update` unless its command line has it, as
+[0114](0114-trim-social-clubs-chromium-and-the-launchers-threads.md)'s amendment
+(`patches/cef` 0002) gives Playport's CEF. The stock helper's component updater asks
+for BITS about 63 s after each helper starts. Wine's COM then starts an i386
+`syswow64\dllhost.exe` surrogate, which finds no 4 GiB WoW64 window under the Social
+Club layout (36 `NO GAP FITS size=0x100010000` failures in l7). BITS is absent from
+the prefix, so the activation can never succeed. When a window did fit (l3–l6), the
+dllhost crashed in its own init and its 4 GiB window was kept for the rest of the run
+([evidence, l7](../evidence/2026-10-29-sc-stock-cef-probe.md#l7-wait-detach-decision-0166)).
+
 ## Decision
 
 - **Off by default, dev only.** The existing title Runtime options UI accepts
@@ -26,7 +37,8 @@ It does not permit patching any other Rockstar component or build.
 - **One helper process per browser.** A verified browser gets `--single-process`,
   BackupRefPtr disabled (merged into its existing feature list), `--js-flags=--jitless`
   unless it already supplies its own JS flags, and `--no-proxy-server` unless
-  it supplies a proxy. Every verified `--type=` helper child is refused with
+  it supplies a proxy. *(Amended 2026-10-30: and `--disable-component-update` unless
+  present.)* Every verified `--type=` helper child is refused with
   `STATUS_ACCESS_DENIED`. Other executables and unverified helper children keep
   today's policy. No generic child blocklist or stock-CEF address-space changes.
 - **The in-memory compatibility change.** Port the helper adapter from

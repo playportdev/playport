@@ -1027,15 +1027,24 @@ enum LaunchCoordinator {
 
         /// The samples since the last `[proc-mem]` walk (a dev build's).
         private var processMemorySamples = 0
+        /// The runtime's finished teardowns at the last sample (wine_host_process_teardowns).
+        private var processTeardowns: UInt32 = 0
 
         func sample() {
             sampleLimits()
             sampleBand()
             #if !PLAYPORT_RELEASE
             // Memory by pseudo-process (PLA-414), every other sample (about 4 s); the runtime
-            // prints it only when a process came, went or moved by 32 MiB.
+            // prints it only when a process came, went or moved by 32 MiB. A teardown that
+            // finished since the last sample gets a forced walk at once, so its effect on each
+            // process shows next to its `[proc-end]` line (PLA-476).
+            let teardowns = wine_host_process_teardowns()
             processMemorySamples += 1
-            if processMemorySamples >= 2 {
+            if teardowns != processTeardowns {
+                processTeardowns = teardowns
+                processMemorySamples = 0
+                wine_host_process_memory_log("after teardown \(teardowns)", 1)
+            } else if processMemorySamples >= 2 {
                 processMemorySamples = 0
                 wine_host_process_memory_log("sample", 0)
             }

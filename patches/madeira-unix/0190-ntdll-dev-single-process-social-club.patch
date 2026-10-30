@@ -3,7 +3,7 @@ From: The Playport authors <dev@playport.dev>
 Date: Tue, 20 Oct 2026 16:09:35 +0200
 Subject: [PATCH] ntdll: opt in to build-locked single-process Social Club
 
-Port the page bridge, renderer loop and IPC split from willfaust/Madeira (61dce1d, 293cd39). The app permits this only in dev with PLAYPORT_SC_SINGLE=1. Preflight the exact opened helper before changing the process policy; a mismatch retains the multi-process policy. Carry the successful decision on the child thread and recheck before writing, failing the load closed on a changed image.
+Port the page bridge, renderer loop and IPC split from willfaust/Madeira (61dce1d, 293cd39). The app permits this only in dev with PLAYPORT_SC_SINGLE=1. Preflight the exact opened helper before changing the process policy; a mismatch retains the multi-process policy. Carry the successful decision on the child thread and recheck before writing, failing the load closed on a changed image. A verified browser also gets --disable-component-update unless its command line has it (decision 0150 as amended 2026-10-30): its component updater asks for BITS, which starts an i386 dllhost that finds no WoW64 window under the Social Club layout.
 
 Class: host-app
 Evidence: docs/decisions/0150-dev-single-process-social-club.md
@@ -11,11 +11,11 @@ Offered-upstream: no
 ---
  build/ntdll-unix/ios_sc_runstate_diag.h | 130 +++++
  build/ntdll-unix/pp_sc_single.h         | 640 ++++++++++++++++++++++++
- build/ntdll-unix/pp_sc_single_cmdline.h | 134 +++++
+ build/ntdll-unix/pp_sc_single_cmdline.h | 142 ++++++
  build/ntdll-unix/process_ios.c          |  62 ++-
  build/ntdll-unix/signal_arm64_ios.c     |   7 +
  build/ntdll-unix/virtual_ios.c          |  99 ++++
- 6 files changed, 1069 insertions(+), 3 deletions(-)
+ 6 files changed, 1077 insertions(+), 3 deletions(-)
  create mode 100644 build/ntdll-unix/ios_sc_runstate_diag.h
  create mode 100644 build/ntdll-unix/pp_sc_single.h
  create mode 100644 build/ntdll-unix/pp_sc_single_cmdline.h
@@ -804,10 +804,10 @@ index 0000000..cdfeae0
 +#endif /* PP_SC_SINGLE_H */
 diff --git a/build/ntdll-unix/pp_sc_single_cmdline.h b/build/ntdll-unix/pp_sc_single_cmdline.h
 new file mode 100644
-index 0000000..b897cbb
+index 0000000..f83adb5
 --- /dev/null
 +++ b/build/ntdll-unix/pp_sc_single_cmdline.h
-@@ -0,0 +1,134 @@
+@@ -0,0 +1,142 @@
 +/* SPDX-License-Identifier: LGPL-2.1-or-later
 + * willfaust/Madeira's single-process switches, used only after file preflight.
 + */
@@ -815,7 +815,8 @@ index 0000000..b897cbb
 +#define PP_SC_SINGLE_CMDLINE_H
 +enum { SC_NOT_HELPER = 0, SC_BROWSER = 1, SC_CHILD = 2 };
 +enum { SC_BRP_SPLICED = 1, SC_BRP_NEW = 2, SC_SINGLE_ADDED = 4, SC_JITLESS_ADDED = 8,
-+       SC_OWN_JS_FLAGS = 16, SC_EXTRA_ADDED = 32, SC_NOPROXY_ADDED = 64, SC_JITLESS_MERGED = 128 };
++       SC_OWN_JS_FLAGS = 16, SC_EXTRA_ADDED = 32, SC_NOPROXY_ADDED = 64, SC_JITLESS_MERGED = 128,
++       SC_NOUPDATE_ADDED = 256 };
 +
 +/* Index of the first character after the LAST `sw` (an ASCII switch such as
 + * "--disable-features=") in `cl` that starts an argument, or -1. A switch
@@ -866,9 +867,11 @@ index 0000000..b897cbb
 + * --disable-features= list (Chromium uses only the last one; a second switch
 + * would drop the app's own list), or a new --disable-features= when it has
 + * none; then --single-process unless present, --js-flags=--jitless when
-+ * `jitless` and neither `cl` nor `extra` has a --js-flags= of its own, and
-+ * ` extra` when non-empty. With `jitless` and a --js-flags= in `extra`,
-+ * "--jitless" becomes the first flag of extra's last one, the same argument
++ * `jitless` and neither `cl` nor `extra` has a --js-flags= of its own,
++ * --no-proxy-server unless `cl` has a proxy, --disable-component-update unless
++ * present (decision 0150 as amended: the component updater asks for BITS, an
++ * i386 dllhost activation), and ` extra` when non-empty. With `jitless` and
++ * a --js-flags= in `extra`, "--jitless" becomes the first flag of extra's last one, the same argument
 + * however Windows splits it: --js-flags="--a --b" -> --js-flags="--jitless --a
 + * --b", and --js-flags=--a -> --js-flags=--jitless" "--a (CommandLineToArgvW
 + * reads "--jitless --a"). Returns the length and the SC_* bits in *how, or -1
@@ -878,7 +881,7 @@ index 0000000..b897cbb
 +{
 +    static const char brp[] = "PartitionAllocBackupRefPtr";
 +    int df = sc_switch_end( cl, cl_len, "--disable-features=" ), o = 0, k;
-+    int need = cl_len + 1 + 64 + 24 + 24 + 20 + (extra ? 1 + (int)strlen( extra ) : 0);
++    int need = cl_len + 1 + 64 + 24 + 24 + 20 + 28 + (extra ? 1 + (int)strlen( extra ) : 0);
 +    int xj = (jitless && extra) ? sc_extra_js_flags( extra ) : -1;   /* madeira-bcd: see sc_extra_js_flags */
 +    const char *add;
 +
@@ -916,6 +919,11 @@ index 0000000..b897cbb
 +        for (add = " --no-proxy-server"; *add; add++) out[o++] = (WCHAR)*add;
 +        *how |= SC_NOPROXY_ADDED;
 +    }
++    if (sc_switch_end( cl, cl_len, "--disable-component-update" ) < 0)
++    {
++        for (add = " --disable-component-update"; *add; add++) out[o++] = (WCHAR)*add;
++        *how |= SC_NOUPDATE_ADDED;
++    }
 +    if (extra && *extra)
 +    {
 +        out[o++] = ' ';
@@ -943,7 +951,7 @@ index 0000000..b897cbb
 +
 +#endif
 diff --git a/build/ntdll-unix/process_ios.c b/build/ntdll-unix/process_ios.c
-index 0919213..753c5c2 100644
+index 0919213..e9c0060 100644
 --- a/build/ntdll-unix/process_ios.c
 +++ b/build/ntdll-unix/process_ios.c
 @@ -75,6 +75,7 @@
@@ -1053,7 +1061,7 @@ index 0919213..753c5c2 100644
 +                    params->CommandLine.Length = n * sizeof(WCHAR);
 +                    params->CommandLine.MaximumLength = (n + 1) * sizeof(WCHAR);
 +                    sc_single = 1;
-+                    dprintf( 2, "[sc-single] verified browser: single-process, BackupRefPtr off, jitless, no proxy unless supplied\n" );
++                    dprintf( 2, "[sc-single] verified browser: single-process, BackupRefPtr off, jitless, no proxy unless supplied, component update off\n" );
 +                }
 +            }
 +        }

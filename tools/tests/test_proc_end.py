@@ -2,7 +2,8 @@
 """Compile and exercise the rules for ending a terminated pseudo-process: madeira-unix 0169 (PLA-416), 0172,
 which empties a parked process's FEX band views in place (decision 0132), 0203, which gives a child that exits by
 itself the same rules for its views, FEX's band included (decision 0143, PLA-413), and 0229 with wine-unix 0202,
-which detach a parked thread's alert wait and free a view only it named (decision 0166, PLA-476)."""
+which detach a parked thread's alert wait and free a view only it named (decision 0166, PLA-476), and 0230, which
+counts finished teardowns for the dev host's post-teardown `[proc-mem]` sample (PLA-476)."""
 import pathlib
 import shutil
 import subprocess
@@ -444,6 +445,23 @@ class ProcessEndTests(unittest.TestCase):
         self.assertIn("server_leave_uninterrupted_section( &virtual_mutex, &sigset );\n"
                       "        for (i = 0; i < n; i++)\n        {\n            int node = ios_detach_parked_wait(", added)
         self.assertNotIn("thread_resume", added)
+
+    def test_teardown_count_follows_each_teardown_line(self):
+        """madeira-unix 0230 (PLA-476): each finished teardown, killed or self-exited, counts after its line; the
+        dev host forces a `[proc-mem]` walk when the count moves, on its own thread and never in a release build."""
+        lines = next(SERIES.glob("0230-*.patch")).read_text().splitlines()
+        after = "\n".join(line[1:] for line in lines if line[:1] in " +" and not line.startswith("+++"))
+        bump = "        __atomic_add_fetch( &ios_proc_end_teardown_count, 1, __ATOMIC_RELEASE );"
+        self.assertIn('dprintf( 2, "[view-owner] %s (PLA-413)\\n", row );\n    ' + bump.strip(), after)
+        self.assertIn('dprintf( 2, "[proc-end] %s (PLA-416)\\n", row );\n' + bump, after)
+        self.assertEqual(after.count("__atomic_add_fetch( &ios_proc_end_teardown_count"), 2)
+        self.assertIn("unsigned int ios_proc_end_teardowns(void)", after)
+        self.assertNotIn("ios_process_memory_log(", after)
+        host = (ROOT / "app/Sources/S1Probe/LaunchCoordinator.swift").read_text()
+        call = host.index('wine_host_process_memory_log("after teardown')
+        self.assertGreater(call, host.rindex("#if !PLAYPORT_RELEASE", 0, call))
+        self.assertLess(host.rindex("#if !PLAYPORT_RELEASE", 0, call), host.rindex("let teardowns = wine_host_process_teardowns()", 0, call))
+        self.assertNotIn("#endif", host[host.rindex("#if !PLAYPORT_RELEASE", 0, call):call])
 
 if __name__ == "__main__":
     unittest.main()

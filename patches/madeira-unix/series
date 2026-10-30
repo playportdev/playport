@@ -196,3 +196,4 @@
 0227-ntdll-name-the-parked-register-that-keeps-a-view.patch
 0228-ntdll-second-social-club-elf-metadata-slot.patch
 0229-ntdll-detach-a-parked-thread-s-alert-wait-then-free-a-view.patch
+0230-ntdll-count-finished-teardowns-for-a-post-teardown-m.patch

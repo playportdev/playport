@@ -78,6 +78,22 @@ final class DonorPoolSizingTests: XCTestCase {
         XCTAssertTrue(DonorPoolSizing.growthResumes(spareMB: 1920, level: -1, physicalMB: ram))
     }
 
+    /// The stats line's `resume_wait` while stopped, and the `growth resumed` line's reason (l7 stopped
+    /// at level 13 % with 4059 MiB spare and never resumed, PLA-476).
+    func testGrowthResumeWaitAndReason() {
+        let ram = 11734
+        XCTAssertEqual(DonorPoolSizing.growthResumeWait(spareMB: 4059, level: 13, physicalMB: ram), "level 13% < 20%")
+        XCTAssertEqual(DonorPoolSizing.growthResumeWait(spareMB: 1919, level: 40, physicalMB: ram), "spare 1919 MiB < 1920")
+        XCTAssertEqual(DonorPoolSizing.growthResumeWait(spareMB: 900, level: 19, physicalMB: ram),
+                       "level 19% < 20%, spare 900 MiB < 1920")
+        XCTAssertNil(DonorPoolSizing.growthResumeWait(spareMB: 1920, level: 20, physicalMB: ram))
+        XCTAssertNil(DonorPoolSizing.growthResumeWait(spareMB: 1920, level: -1, physicalMB: ram))
+        XCTAssertEqual(DonorPoolSizing.growthResumeReason(spareMB: 2000, level: 21, physicalMB: ram),
+                       "level 21% >= 20%, spare 2000 MiB >= 1920")
+        XCTAssertEqual(DonorPoolSizing.growthResumeReason(spareMB: 2000, level: -1, physicalMB: ram),
+                       "spare 2000 MiB >= 1920, level unread")
+    }
+
     /// The fixed sizes stay, capped by the level as before; off is off.
     func testFixedAndOff() {
         let r = reading(ram: 11734, limit: 8192)

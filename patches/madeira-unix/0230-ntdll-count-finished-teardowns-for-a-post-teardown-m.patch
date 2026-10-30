@@ -1,0 +1,64 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: playportdev <dev@playport.dev>
+Date: Fri, 30 Oct 2026 13:30:00 +0100
+Subject: [PATCH] ntdll: count finished teardowns for a post-teardown memory
+ sample
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A teardown's `[proc-end] … killed: freed` or `[view-owner] … exited: freed`
+line gives the task footprint before and after, but no per-process split:
+the next `[proc-mem]` sample came at the host's ~4 s cadence or much later
+(l7: 12 s after the launcher helper's teardown, none after the game
+helper's), so a teardown's effect on each owner was not measurable. Count
+each finished teardown after its line; ios_proc_end_teardowns reads the
+count, and a dev host forces a `[proc-mem]` walk when it moves. Nothing
+else changes: the walk stays on the host's thread, never the teardown's.
+
+Linear: PLA-476
+Class: diagnostics
+Evidence: docs/evidence/2026-10-29-sc-stock-cef-probe.md
+Offered-upstream: no; pseudo-processes are the iOS port's
+---
+ build/ntdll-unix/virtual_ios.c | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index a3bbc63..21d3dc1 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -18179,6 +18179,17 @@ static unsigned long long ios_proc_end_empty_view_locked( struct file_view *view
+     return emptied;
+ }
+ 
++/* PLA-476 diagnostic: the teardowns finished so far, a killed process's
++ * `[proc-end] … killed: freed` line or a self-exited child's `[view-owner]
++ * … exited: freed` one each. A dev host reads it (ios_proc_end_teardowns)
++ * and takes a `[proc-mem]` sample after each. */
++static unsigned int ios_proc_end_teardown_count;
++
++unsigned int ios_proc_end_teardowns(void)
++{
++    return __atomic_load_n( &ios_proc_end_teardown_count, __ATOMIC_ACQUIRE );
++}
++
+ static unsigned long long ios_proc_end_footprint(void)
+ {
+     task_vm_info_data_t info;
+@@ -18358,6 +18369,7 @@ static void ios_view_owner_release_exited_locked( void *peb )
+     result.footprint_after = ios_proc_end_footprint();
+     ppe_exit_row( row, sizeof(row), peb, &result, &census );
+     dprintf( 2, "[view-owner] %s (PLA-413)\n", row );
++    __atomic_add_fetch( &ios_proc_end_teardown_count, 1, __ATOMIC_RELEASE );
+ }
+ 
+ /* At each thread creation and reclamation (ios_view_owner_sweep), outside
+@@ -18411,6 +18423,7 @@ static void ios_proc_end_sweep( void *self )
+         result.footprint_after = ios_proc_end_footprint();
+         ppe_row( row, sizeof(row), peb, pid, &result, &census );
+         dprintf( 2, "[proc-end] %s (PLA-416)\n", row );
++        __atomic_add_fetch( &ios_proc_end_teardown_count, 1, __ATOMIC_RELEASE );
+     }
+ }
+ 

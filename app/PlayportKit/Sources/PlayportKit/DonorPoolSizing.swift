@@ -140,8 +140,24 @@ public enum DonorPoolSizing {
 
     /// Whether a stopped pool may grow again: both readings back over their floors with a margin.
     public static func growthResumes(spareMB: Int, level: Int, physicalMB: Int) -> Bool {
-        spareMB >= spareFloorMB(physicalMB: physicalMB) + resumeMarginMB
-            && (level < 0 || level >= levelFloor + levelResumeMargin)
+        growthResumeWait(spareMB: spareMB, level: level, physicalMB: physicalMB) == nil
+    }
+
+    /// What a stopped pool still waits for before it grows again (the readings under
+    /// growthResumes' thresholds, as the stats line prints them), or nil when it resumes.
+    public static func growthResumeWait(spareMB: Int, level: Int, physicalMB: Int) -> String? {
+        let spareNeed = spareFloorMB(physicalMB: physicalMB) + resumeMarginMB, levelNeed = levelFloor + levelResumeMargin
+        var short: [String] = []
+        if level >= 0, level < levelNeed { short.append("level \(level)% < \(levelNeed)%") }
+        if spareMB < spareNeed { short.append("spare \(spareMB) MiB < \(spareNeed)") }
+        return short.isEmpty ? nil : short.joined(separator: ", ")
+    }
+
+    /// Why a stopped pool grows again, for its `growth resumed` line: both readings at or over
+    /// growthResumes' thresholds.
+    public static func growthResumeReason(spareMB: Int, level: Int, physicalMB: Int) -> String {
+        let spare = "spare \(spareMB) MiB >= \(spareFloorMB(physicalMB: physicalMB) + resumeMarginMB)"
+        return level < 0 ? spare + ", level unread" : "level \(level)% >= \(levelFloor + levelResumeMargin)%, " + spare
     }
 
     /// Why the first donor's own limit stops the pool, or nil.

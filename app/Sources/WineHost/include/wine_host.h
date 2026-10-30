@@ -26,7 +26,7 @@
 extern "C" {
 #endif
 
-#define WINE_HOST_ABI_VERSION 11
+#define WINE_HOST_ABI_VERSION 12
 
 typedef void (*wine_host_log_fn)(const char *line);
 
@@ -229,6 +229,12 @@ void wine_host_band_dump(const char *why);
  * the last walk's cost after it does nothing. Added in ABI 10 without changing any
  * existing call. */
 void wine_host_process_memory_log(const char *why, int force);
+
+/* How many guest-process teardowns have finished (each a `[proc-end] …
+ * killed: freed` or `[view-owner] … exited: freed` line), so a dev host can
+ * take a `[proc-mem]` sample after each. Any thread. Added in ABI 12 without
+ * changing any existing call. */
+unsigned int wine_host_process_teardowns(void);
 
 /* Allow (on nonzero) or refuse again (0) the game's later Social Club helper
  * starts that ntdll refuses under PLAYPORT_REFUSE_GAME_SC_RESTART=1 (decision

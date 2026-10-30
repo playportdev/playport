@@ -131,7 +131,8 @@ enum DonorPool {
             } else if !growing, DonorPoolSizing.growthResumes(spareMB: spare, level: level, physicalMB: physicalMB) {
                 growing = true
                 pp_guest_pool_set_growth(true)
-                log("pressure: growth resumed " + readings)
+                log("pressure: growth resumed (\(DonorPoolSizing.growthResumeReason(spareMB: spare, level: level, physicalMB: physicalMB))) "
+                    + readings)
             }
         }
         growthTimer = timer
@@ -188,7 +189,22 @@ enum DonorPool {
             "madv_zeroed_mb=\(mb("madv_zeroed_bytes"))", "madv_zero_ms_total=\(n("madv_zero_ms_total"))",
             "madv_failures=\(n("madv_failures"))", "growing=\(n("growing"))", "growth_refused=\(n("growth_refused"))",
             "app_footprint_mb=\(footprint)", "app_available_mb=\(available)",
-        ]
+        ] + growthLevelFields(stopped: n("growing") == 0)
         log("stats at \(when): " + fields.joined(separator: " ") + " " + DonorRounds.system())
+    }
+
+    /// The level and spare memory the growth check compares (watchGrowth), with its thresholds, and
+    /// while the pool is stopped what it still waits for (`resume_wait`, DonorPoolSizing.growthResumeWait).
+    private static func growthLevelFields(stopped: Bool) -> [String] {
+        let s = pp_memory_system(), physicalMB = Int(ProcessInfo.processInfo.physicalMemory >> 20)
+        func mb(_ k: String) -> Int { Int((s[k]?.uint64Value ?? 0) >> 20) }
+        let spare = mb("free") + mb("inactive") + mb("speculative") + mb("purgeable")
+        let level = s["level"]?.intValue ?? -1
+        var fields = ["level=\(level)", "level_floor=\(DonorPoolSizing.levelFloor)",
+                      "level_resume=\(DonorPoolSizing.levelFloor + DonorPoolSizing.levelResumeMargin)", "spare_mb=\(spare)"]
+        if stopped, let wait = DonorPoolSizing.growthResumeWait(spareMB: spare, level: level, physicalMB: physicalMB) {
+            fields.append("resume_wait=\"\(wait)\"")
+        }
+        return fields
     }
 }

@@ -1916,6 +1916,13 @@ void wine_host_process_memory_log(const char *why, int force)
     ios_process_memory_log(why, force);
 }
 
+extern unsigned int ios_proc_end_teardowns(void);
+
+unsigned int wine_host_process_teardowns(void)
+{
+    return ios_proc_end_teardowns();
+}
+
 extern void ios_game_sc_allow_restarts(int on);
 
 void wine_host_game_sc_allow_restarts(int on)
