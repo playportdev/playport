@@ -66,6 +66,14 @@ with its own PEB and private ntdll copy:
   audited guest-pointer thunks (wow64win's `window_audited.h` in
   `patches/wine-pe`), not every i386 title or API
   ([decision 0047](decisions/0047-i386-titles-on-vulkan.md)).
+- **A plain ARM64 program runs as a native ARM64 child** (decision
+  [0170](decisions/0170-native-arm64-guests.md), proposed; not yet run on the phone).
+  The x86-64 session starts it with its own aarch64 ntdll (`patches/madeira-unix` 0224,
+  the image a WoW64 child's native side uses), no WoW64 window and no FEX; its system
+  DLLs come from `sysarm64` (`patches/wine-pe` 0015, 0055). Its image and DLLs take the
+  JIT pool copy and x18 patching like any ARM64 image; code it writes runs through the
+  anonymous executable path. `tools/compat/probes` `arm64`, `arm64-fault` and
+  `arm64-min` test it ([evidence](evidence/2026-10-30-native-arm64-child.md)).
 - **A crashing child is isolated only in part.** A fault in any pseudo-process is a
   fault in the app's one task. Orderly `TerminateProcess` of live children works and is
   tested. Two host-fault cases end the child, not the app (`patches/madeira-unix`

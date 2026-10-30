@@ -215,3 +215,4 @@
 0246-ntdll-after-repeated-underruns-play-whole-callbacks-.patch
 0247-win32u-count-the-game-s-XInput-state-reads-for-the-h.patch
 0248-win32u-post-the-nav-cluster-s-keys-with-E0-from-the-.patch
+0249-ntdll-start-a-plain-ARM64-child-of-the-ARM64EC-sessi.patch

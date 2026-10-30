@@ -52,3 +52,4 @@
 0053-ntdll-MADEIRA_X64_ONCE_FASTPATH-1-answers-an-x64-mod.patch
 0054-nsi-remember-a-missing-device-when-the-in-process-fa.patch
 0055-ntdll-replay-early-images-after-the-emulator-starts.patch
+0056-ntdll-take-a-plain-ARM64-process-s-system-DLLs-from-.patch
