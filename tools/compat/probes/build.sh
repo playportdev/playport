@@ -66,6 +66,16 @@
 #          processor, which tells the fast cluster from the slow one
 #          (cputopo.c, PLA-392)
 #   cputopo-i386  the same for i386 (WoW64): cputopo-i386.exe
+#   arm64  a plain ARM64 program (aarch64), started as a native ARM64 child
+#          with no FEX: its machine, a sysarm64 DLL, code it writes (RWX and
+#          RW made executable), a thread and an ARM64 child of its own; exit
+#          42 when every check passes (arm64.c, PLA-512, decision 0170)
+#   arm64-fault  the same program writing through a null pointer: the play
+#          must end as a failed one (arm64-fault.exe)
+#   arm64-min  aarch64 with no C runtime: kernel32 only, ExitProcess(42)
+#          (arm64-min.exe, a loader-only start)
+#   arm64-x86_64  arm64.c for x86-64, to check the program itself under
+#          desktop Wine (not a phone probe)
 #
 #   tools/compat/probes/build.sh
 set -euo pipefail
@@ -74,6 +84,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/../../../build/lib.sh"
 CC=${LLVM_MINGW:?set LLVM_MINGW (pp setup)}/bin/x86_64-w64-mingw32-clang
 CC32=$LLVM_MINGW/bin/i686-w64-mingw32-clang
+CCA64=$LLVM_MINGW/bin/aarch64-w64-mingw32-clang
 OUT=$PLAYPORT_BUILD/compat/probes
 
 mkdir -p "$OUT/gl21" "$OUT/gl21-i386"
@@ -123,6 +134,15 @@ mkdir -p "$OUT/cputopo" "$OUT/cputopo-i386"
     -o "$OUT/cputopo/cputopo.exe" "$HERE/cputopo.c"
 "$CC32" -O2 -Wall -Wextra -Werror -Wno-unused-parameter -mwindows -Wl,--no-insert-timestamp \
     -o "$OUT/cputopo-i386/cputopo-i386.exe" "$HERE/cputopo.c"
+mkdir -p "$OUT/arm64" "$OUT/arm64-fault" "$OUT/arm64-min" "$OUT/arm64-x86_64"
+"$CCA64" -O2 -Wall -Wextra -Werror -Wno-unused-parameter -mwindows -Wl,--no-insert-timestamp \
+    -o "$OUT/arm64/arm64.exe" "$HERE/arm64.c"
+"$CCA64" -O2 -Wall -Wextra -Werror -Wno-unused-parameter -mwindows -Wl,--no-insert-timestamp -DPROBE_FAULT \
+    -o "$OUT/arm64-fault/arm64-fault.exe" "$HERE/arm64.c"
+"$CCA64" -O2 -Wall -Wextra -Werror -Wno-unused-parameter -mwindows -Wl,--no-insert-timestamp -DPROBE_MIN \
+    -nostdlib -Wl,-e,entry -o "$OUT/arm64-min/arm64-min.exe" "$HERE/arm64.c" -lkernel32
+"$CC" -O2 -Wall -Wextra -Werror -Wno-unused-parameter -mwindows -Wl,--no-insert-timestamp \
+    -o "$OUT/arm64-x86_64/arm64-x86_64.exe" "$HERE/arm64.c"
 # xaudio2_9redist.dll's import library: llvm-mingw has none (the EOS SDK
 # links Microsoft's), so it is made from its one export here.
 DLLTOOL=$LLVM_MINGW/bin/llvm-dlltool
@@ -144,6 +164,6 @@ for probe in machine machine-i386; do
     mkdir -p "$OUT/$probe/redist"
     cp "$OUT/$probe/xaudio2redist.exe" "$OUT/$probe/redist/"
 done
-for probe in gl21 gl21-i386 wgl childabort childabort-i386 x87m64-i386 protect machine machine-i386 splitlock splitlock-i386 threadctx threadctx-i386 shmap shmap-i386 poolstress console cputopo cputopo-i386; do
+for probe in gl21 gl21-i386 wgl childabort childabort-i386 x87m64-i386 protect machine machine-i386 splitlock splitlock-i386 threadctx threadctx-i386 shmap shmap-i386 poolstress console cputopo cputopo-i386 arm64 arm64-fault arm64-min arm64-x86_64; do
     echo "$(sha256sum "$OUT/$probe/$probe.exe" | cut -c1-16)  $probe.exe ($(stat -c %s "$OUT/$probe/$probe.exe") bytes) in $OUT/$probe"
 done
