@@ -12,9 +12,11 @@
 - Chunks 0 and 1 done. Chunk 2 **not passed** ([evidence](../evidence/2026-10-29-sc-stock-cef-probe.md)):
   0224–0226 give the opt-in layout; wine-pe 0055 (early-image replay,
   [PLA-481](https://linear.app/playportdev/issue/PLA-481), Done) is an accepted increment (HK first-frame+10,
-  game helper reaches allocator startup). **Blocker:** the launcher helper's retained kind-3 view under 0132/0143
-  refused the game's helper metadata (l4, l5); with 0228 that goes to the spare slot, but the game's libcef still
-  commits at the kept view's address (l6). Do not clear, free or overwrite kept slots.
+  game helper reaches allocator startup). The launcher helper's retained kind-3 view (l2–l6) is no longer kept:
+  [decision 0166](../decisions/0166-detach-a-parked-threads-wait-then-unpin-its-view.md) (owner, 2026-10-30)
+  detaches a parked thread's alert wait at teardown and frees a view only that wait named (l7). Kept views are still
+  never cleared, freed or overwritten by any other path. **Blocker now:** memory: l7 reached Story's loading and
+  was ended by iOS at the 8192 MB limit.
 - **Measured (l5, 2026-10-30, IPA `b5ee00eb…`, `.work/ui-runs/20261030T104925-rdr2-p476l5`):** only kind 3
   (ELF_META) is kept, as its whole 6400 MiB view, pinned by one parked thread's wait address. It has 72.4 MiB
   committed, highest end 170.5 MiB. Kinds 1, 2, 4, 5 and 6 are freed and held again. The game's helper gets
@@ -40,13 +42,37 @@
   `pp_sc_access.h` were integrated in `29dfb45`, and review-2 fixes landed in `e3334ec` (IPA `fc42b29e…`, HK
   `.work/ui-runs/20261030T112027`); (2) **done** in `6213817`: madeira-unix 0228, the second ELF_META slot and
   slot-aware access, HK first-frame+10 passed (`.work/ui-runs/20261030T113629-hk-p476l6`) and RDR2 l6;
-  (3) **next:** find on the workstation where libcef's `0x7400000000` comes from (libcef RVA `0x1ea580b` and
+  (3) superseded by decision 0166 and l7 (the game's helper now gets kind 3 itself); it was: find on the workstation where libcef's `0x7400000000` comes from (libcef RVA `0x1ea580b` and
   the code that sets `R14`) before any new slot geometry, then the remaining chunk-2 gates. Chunk-2 gates after
   l6: the game's helper reaches allocator/browser startup — **partly** (chrome_elf initialises, libcef does not);
   Story cabin — **not passed** (SC error 17, no Story tab); no SC/launcher `NO GAP FITS` or soft grant — **not
   passed** (none from the game's helper and no soft grant, but the launcher helper's 26 V8 `NO GAP FITS` remain);
   7343 MB ±10 % — **not comparable** (peak 6328 MB without the cabin); (4) chunks 3–6, all under PLA-476.
   Chunk 3 needs owner approval if required; 0.5.0 held.
+- **Measured (l7, 2026-10-30, IPA `5b38a50b…`, `.work/ui-runs/20261030T122917-rdr2-p476l7`;
+  [evidence](../evidence/2026-10-29-sc-stock-cef-probe.md#l7-wait-detach-decision-0166)):** decision 0166 in
+  `9611a34` (madeira-unix 0229, wine-unix 0202). A's teardown detached tid 0200's wait (`node=unlinked`) and freed
+  kind 3; no other parked address named it (the older-thread gap is closed for this run); kinds 1–6 held again. The
+  game's helper got kind 3 itself and kinds 1, 2, 4–6, with no refusal; its browser ran; the Story tab came and was
+  pressed (+134 s). Story's loading then grew the footprint to the 8192 MB limit and iOS ended the app at +238 s
+  (jetsam, no crash). HK first-frame+10 passed (`20261030T122623-hk-p476l7`); The Witcher 2 unchanged
+  (`20261030T122712-w2-p476l7`).
+- **Chunk-2 gates after l7:**
+
+  | Gate | l7 |
+  | --- | --- |
+  | HK first-frame+10 | passed |
+  | The game's helper reaches allocator/browser startup | passed (kind 3 granted, no refusal, compositor running) |
+  | The game signs in, Story is pressed | passed |
+  | Story reaches the cabin | **not passed** (jetsam at 8192 MB in Story's loading) |
+  | No SC/launcher `NO GAP FITS` or soft grant | **not passed** (26 V8 probe lines each from A and B, 36 i386 `dllhost.exe` WoW64-window failures; no soft grant) |
+  | Peak within 7343 MB ±10 % | **not passed** (the 8192 MB limit) |
+
+- **Ordered queue now:** (1) the memory of Story's load with the game's own Social Club running (the 0133/0153
+  end came at +224.4 s, 120 s after sign-in, too late), then the `dllhost.exe` window failures and the V8 probes;
+  (2) chunks 3–6, all under PLA-476. Chunk 5's decision is now partly covered by
+  [0166](../decisions/0166-detach-a-parked-threads-wait-then-unpin-its-view.md) (the retention part of the layout);
+  the rest of chunk 5 stays. 0.5.0 held.
 - Phone: no session active. Reports: `.work/agent-notes/pla476/reports/`.
 
 ## Why
@@ -265,7 +291,8 @@ owner first:** it is a refused DLL load in the game, and 0150 excluded it. Other
 
 ### 5. Decision record
 
-A new decision (next free number; 0165 is the last). It:
+A new decision (next free number; 0166 is the last). The retention of a launcher helper's slot view is already
+decided by [0166](../decisions/0166-detach-a-parked-threads-wait-then-unpin-its-view.md). It:
 - supersedes 0110;
 - amends 0150: on by default, in release; the page-bridge exception unchanged;
 - amends 0153: what RDR2 runs with in both builds, and the layout from chunk 2;

@@ -380,3 +380,77 @@ Gates: HK first-frame+10 passed. The game's helper gets past l5's ELF_META refus
 but the browser does not start (libcef CHECK) and the game shows Social Club error 17: no Story, no cabin. No
 `NO GAP FITS` or soft grant from B, but A's 26 V8 `NO GAP FITS` remain (as in l1–l5). Memory ±10 % of 7343 MB is
 not comparable without the cabin.
+
+## l7: wait detach (decision 0166)
+
+Commit `9611a34` ([decision 0166](../decisions/0166-detach-a-parked-threads-wait-then-unpin-its-view.md),
+madeira-unix 0229, wine-unix 0202, 0227 now listing every parked ref): at a teardown each fully captured parked
+thread's alert wait leaves the shared `RtlWaitOnAddress` queue and the waiter registry, and a view only such waits
+named takes an unnamed view's fate. Dev IPA sha256 `5b38a50b857856f0c9f75f7badfe8682911a2764c7023712f377b6401f77d27e`
+(90 IPA checks); full `pp test` passed (tools/tests 826, PlayportKit 365).
+
+One locked session, in-place install (`.work/agent-notes/pla476/l7.sh`):
+
+- Hollow Knight (`app-367520`) first-frame+10 **passed**: first frame +11.61 s
+  (`$PLAYPORT_BUILD/ui-runs/20261030T122623-hk-p476l7`).
+- The Witcher 2 (`app-20920`, i386): launcher first window +12.33 s, then the pad's A started `bin\witcher2.exe`,
+  which faulted exactly as in the [2026-10-29 evidence](2026-10-29-witcher2-launch.md) (`i386 exception c0000005 at
+  eip 02926f76`, `ecx 81625776`, `ebx 7ff00000`) and the "Program Error" box showed over the launcher, 60 s later
+  too. Same outcome, no new crash. Its processes are i386, so their views are kept (`[view-owner] … i386, its views
+  are kept`) and no `wait-detached` line appears (`$PLAYPORT_BUILD/ui-runs/20261030T122712-w2-p476l7`, log in
+  `pull2/`).
+- RDR2 (`app-1174180`), keys `PLAYPORT_CEF_SWAP=0 PLAYPORT_SC_SINGLE=1 PLAYPORT_SC_LAYOUT=1`, STORY_BY=420
+  UNTIL=600 WAIT=900, run `$PLAYPORT_BUILD/ui-runs/20261030T122917-rdr2-p476l7`: first frame +39.60 s, the Story tab
+  shown and pressed, then iOS ended the app at the 8192 MB limit during Story's loading (below). The run's own pull
+  holds the log.
+
+Measured, line numbers in that `pull/s1-host.log`:
+
+- **Detaches:** 25 `wait-detached` lines in five teardowns, 24 `node=unlinked` and one `node=absent` (tid 018c,
+  whose wait was in FEX's band), no `busy`. The launcher helper A (PEB `0x145048000`, pid 0x184), ended with the
+  launcher at the game's sign-in (+104.2 s): its 10 parked threads at 132319–132328, among them **tid 0200
+  `CompositorTileWorker1` (48670), `wait=0x7402240b30 node=unlinked`** (132326; parked at 131816 with
+  `futex=0x141a401fc`), and the older threads 01a0 (`wine_threadpool_worker`, `0x70334dc938`) and 018c.
+- **Kind 3 freed:** 132340 `wait-only peb=0x145048000 view=0x7400000000+0x190000000 fate=0`, then 132341
+  `slot-view … fate=0 no parked ref`: with the waits dropped, no saved address of any parked thread, of any process,
+  lies in kind 3. That closes l5/l6's older-thread gap for this run: 01a0 and 018c have no ref in it, and the 0227
+  lines now list every parked ref (for example 132331 `keep-ref … 0x706f160000+0xfd0000` names three threads).
+  132348–132353 **kinds 1–6 all held again**, kind 3 included. 132354 `kept 2124 MB (5 view(s) …)`; l6's A kept
+  8418 MB. All 10 `wait-only` lines: 7 freed (fate 0, both kind-3 views among them) and 3 band views emptied (fate
+  1), in A, Launcher.exe (`0x1407dc000`), an early exited child (`0x141a0c000`, 25196) and B.
+- **The registry was cleared:** the last `[waiters] tid=0200` dump is at 130971 (9 in all, before the teardown);
+  l6 had 168 dumps of tid 0208 up to 400 s.
+- **The game's helper B** (PEB `0x15fdf0000`, pid 0x550, child of RDR2): 137540 `grant kind=1`, **137542
+  `grant kind=3 … real=0x7400000000+0x190000000`** (the kind itself, not kind 7), then kinds 2, 4 (137585, 137588),
+  5 (144768) and 6 (145056), as A got them. No `refused memory operation`, no `refused reserve`, no `chrome_elf.dll
+  failed to initialize`, no `Unhandled exception` and no `generated-fault-window` in B. B ran its own compositor
+  (tid 05e0 `CompositorTileWorker1`, 140402). The game's session root ended B at +224.4 s by the footprint rule
+  (160594, decisions 0133/0153). Its teardown detached 7 waits (05e0's `0x7400013fd0` in kind 3), freed its kind 3
+  (161113) and held kinds 1–6 again; 161127 `footprint 7623->7073 MB`.
+- `[lock-orphan]`: three `SKIP 0x7c88fab2a0 … incoherent-as-SRW` lines at 55258–55260, in A's V8 probe, before
+  any detach; none after. No hang: the game went on to Story.
+- **Story:** the Story/Online menu was shown at about +121 s and A was pressed on Story at +134 s
+  (`landing-123144.png`: the black menu with "Story" underlined and "Online" beside it). The 15-second screenshots
+  then show the Story loading screen, a sepia tintype of snowy pines and cliffs with the loading spinner, at +220 s;
+  the last one, at +258 s, is the phone's Home Screen. The cabin was not reached.
+- **Memory:** footprint 6406 MB at +182 s, 7584 MB at +220 s, `fpMB=8030` at +229 s (161499); the phone's log:
+  `memorystatus: S1Probe … exceeded mem limit: ActiveHard 8192 MB (fatal)` and `per-process-limit … 238s
+  8387538KB` at 12:33:36, so the peak was the 8192 MB limit. xs1's peak was 7343 MB: at least +11.5 %, outside
+  ±10 %. No crash report.
+- `NO GAP FITS`: 89 lines. 26 from A's V8 sandbox probes (tid 0270, as in l6), 26 from B's (tid 0634, with B's
+  `[jumbo#…] peb=0x15fdf0000` lines), one for the game's 8960 MiB ask (77697, served by the holdback at
+  `0x75d0000000`), and 36 from i386 `dllhost.exe` (COM surrogate) starts whose WoW64 window found no 4 GiB gap
+  (`[wow64-window] no fixed slot free: first fit failed`; requested by A's tid 01c8, 7, and B's tid 0594, 30). In l6
+  the one such start fitted (123620). No `[soft-pool]` line.
+
+Inferred, not shown: the extra memory is RDR2's Story load with the game's own Social Club now fully running
+alongside (B was ended only at +224.4 s, after the 120 s rule, and freed 550 MB); the kept and freed views of the
+teardowns are not it (A's teardown lowered the footprint 6649→5886 MB). The `dllhost.exe` window failures are the
+map at that time, not decision 0166: a release only gives address space back, and the first failure (126074) comes
+before the launcher's end.
+
+Gates: HK first-frame+10 passed; The Witcher 2 unchanged. The game's helper gets kind 3 and reaches
+allocator/browser startup with no refusal — **passed**. The game signs in and Story is pressed — **passed**; the cabin
+— **not passed** (jetsam at 8192 MB during Story's loading). No SC/launcher `NO GAP FITS` or soft grant — **not
+passed** (52 V8 probe lines from A and B, 36 i386 `dllhost.exe` window failures; no soft grant). 7343 MB ±10 % —
+**not passed** (the limit was reached).

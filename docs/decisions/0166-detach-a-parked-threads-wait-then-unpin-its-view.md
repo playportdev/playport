@@ -2,8 +2,10 @@
 
 **Status:** accepted, 2026-10-30, approved by the owner (PLA-476). Amends
 [0127](0127-end-a-terminated-pseudo-process.md), [0132](0132-empty-a-parked-processs-fex-band-in-place.md)
-and [0143](0143-release-a-self-exited-childs-fex-band-as-a-killed-childs.md). Not yet shown on the
-phone ([evidence](../evidence/2026-10-29-sc-stock-cef-probe.md)).
+and [0143](0143-release-a-self-exited-childs-fex-band-as-a-killed-childs.md). Shown on the phone in run
+`20261030T122917-rdr2-p476l7` (IPA `5b38a50b`): 25 waits detached (24 unlinked, one absent, none busy), the
+launcher helper's kind-3 view freed and its slot held again, and the game's helper granted kind 3 with no refusal
+([evidence](../evidence/2026-10-29-sc-stock-cef-probe.md#l7-wait-detach-decision-0166)).
 
 ## Context
 
