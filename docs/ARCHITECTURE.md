@@ -877,11 +877,12 @@ the game is paused:
   Settings › Graphics turns them off (`GameSocialClubEnd.swift`; decisions 0133, 0138, 0141,
   [0153](decisions/0153-rdr2s-settings-are-every-games-defaults.md)). If the game signs in again
   after the end (a new sign-in line in its Social Club log, or a GetCurrentGameLanguage burst within
-  60 s), the app sends `PP_CONTROL_ALLOW_GAME_SOCIAL_CLUB` (the root's sweep stops) and then
+  60 s) and the footprint plus 600 MB is under the limit less 400 MB, the app sends
+  `PP_CONTROL_ALLOW_GAME_SOCIAL_CLUB` (the root's sweep stops) and then
   `wine_host_game_sc_allow_restarts(1)` (ntdll lets the restarts go ahead), until the next sign-in
-  line or 90 s. The end may run again 120 s after that sign-in, at most twice a Play
-  (`GameSocialClubReSignIn`; decision
-  [0155](decisions/0155-allow-rdr2s-social-club-restart-after-a-re-sign-in.md)).
+  line or 90 s; without that headroom the restarts stay refused. The end may run again 120 s after
+  that sign-in, at most twice a Play (`GameSocialClubReSignIn`; decision
+  [0155](decisions/0155-allow-rdr2s-social-club-restart-after-a-re-sign-in.md), amended).
 
 The rows: Resume (also B, ≡ and Home); Screenshot, the last presented
 drawable's texture (`PacedMetalLayer.lastPresented`; DXMT's layer is not

@@ -790,7 +790,8 @@ enum LaunchCoordinator {
     /// log, or a GetCurrentGameLanguage burst. At one they send the root
     /// PP_CONTROL_ALLOW_GAME_SOCIAL_CLUB (its sweep stops) and then allow ntdll's restarts, until
     /// the next sign-in line or 90 s; the end may then run again 120 s after that sign-in, at
-    /// most twice a Play. A run with no re-sign-in logs nothing of it.
+    /// most twice a Play. An allow needs headroom (0155 as amended): without it the restarts stay
+    /// refused. A run with no re-sign-in logs nothing of it.
     private final class LauncherEnd {
         let file: URL
         let watch: GameSignIn.Watch
@@ -913,9 +914,18 @@ enum LaunchCoordinator {
         private func watchReSignIn(elapsed: TimeInterval) {
             guard var r = reSignIn, r.watching else { return }
             defer { reSignIn = r }
-            switch r.slice(at: elapsed, signIns: signIns, languageCalls: GameSocialClubEnd.takeLanguageCalls()) {
+            let m = MemoryLimit.read()
+            switch r.slice(at: elapsed, signIns: signIns, languageCalls: GameSocialClubEnd.takeLanguageCalls(),
+                           footprintMB: m.footprintMB, limitMB: m.limitMB) {
             case nil:
                 return
+            case .noHeadroom(let detector, let footprint):
+                log("[game-sc] re-sign-in after end (\(detector.rawValue))")
+                log("[game-sc] re-sign-in after end: no headroom (\(footprint) MB), restart stays refused")
+                #if !PLAYPORT_RELEASE
+                RunEvents.emit("launcher", ["state": "game-social-club-no-headroom", "after_s": Int(elapsed),
+                                            "detector": detector.rawValue, "footprint_mb": footprint])
+                #endif
             case .allow(let detector):
                 log("[game-sc] re-sign-in after end (\(detector.rawValue))")
                 var n: UInt32 = 0

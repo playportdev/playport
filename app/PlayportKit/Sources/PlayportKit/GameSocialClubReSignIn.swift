@@ -15,6 +15,12 @@
 // Once allowed, the allow lasts until a sign-in line beyond those the log held at the allow,
 // or `allowCapS`, whichever comes first. The steps are pure; LaunchCoordinator.LauncherEnd
 // sends the session root its ALLOW and calls ntdll's allow (wine_host_game_sc_allow_restarts).
+//
+// 0155 as amended 2026-10-30 (run d1): an allow needs headroom. A restarted helper with its
+// sign-in took 400-530 MB, and two allows at 7.6-7.8 GB ended the Play at the limit, while the
+// reload they let finish ended on the game's title menu, not in Story. So a re-sign-in allows
+// only when the footprint plus `restartNeedMB` is under the limit less `restartMarginMB`;
+// otherwise the restarts stay refused for the rest of the Play, as when the root does not stop.
 
 import Foundation
 
@@ -30,6 +36,8 @@ public struct GameSocialClubReSignIn: Equatable, Sendable {
         case allow(Detector)
         /// A re-sign-in after the last allow: restarts stay refused.
         case noAllowLeft(Detector)
+        /// A re-sign-in without the headroom for a restarted helper: restarts stay refused.
+        case noHeadroom(Detector, footprintMB: Int)
         /// Refuse restarts again: at a new sign-in line (`signedIn`), or at the cap.
         case refuseAgain(signedIn: Bool)
     }
@@ -57,6 +65,17 @@ public struct GameSocialClubReSignIn: Equatable, Sendable {
     public static let languageWindowS: Double = 60
     /// The longest an allow lasts without a new sign-in line.
     public static let allowCapS: Double = 90
+    /// What an allowed helper takes with its sign-in, as measured (run d1: +400-530 MB each).
+    public static let restartNeedMB = 600
+    /// The margin under the limit an allow keeps, 0140's (LauncherEndTrigger.beforeSignInHeadroomMB).
+    public static let restartMarginMB = LauncherEndTrigger.beforeSignInHeadroomMB
+
+    /// Whether a restarted helper fits: footprint + `restartNeedMB` < limit − `restartMarginMB`.
+    /// No limit read means no headroom.
+    public static func hasRestartHeadroom(footprintMB: Int, limitMB: Int?) -> Bool {
+        guard let limitMB else { return false }
+        return footprintMB + restartNeedMB < limitMB - restartMarginMB
+    }
 
     public private(set) var phase: Phase = .beforeEnd
     public private(set) var allows = 0
@@ -92,8 +111,10 @@ public struct GameSocialClubReSignIn: Equatable, Sendable {
     }
 
     /// One slice after the end: `signIns` the log's sign-in lines now, `languageCalls` the
-    /// GetCurrentGameLanguage calls since the last slice.
-    public mutating func slice(at elapsed: Double, signIns: Int, languageCalls: Int) -> Step? {
+    /// GetCurrentGameLanguage calls since the last slice, `footprintMB` and `limitMB` the app's
+    /// memory now (for the headroom an allow needs).
+    public mutating func slice(at elapsed: Double, signIns: Int, languageCalls: Int,
+                               footprintMB: Int, limitMB: Int?) -> Step? {
         switch phase {
         case .beforeEnd, .finished:
             return nil
@@ -112,6 +133,10 @@ public struct GameSocialClubReSignIn: Equatable, Sendable {
             guard allows < Self.maxAllows else {
                 phase = .finished
                 return .noAllowLeft(detector)
+            }
+            guard Self.hasRestartHeadroom(footprintMB: footprintMB, limitMB: limitMB) else {
+                phase = .finished
+                return .noHeadroom(detector, footprintMB: footprintMB)
             }
             allows += 1
             phase = .allowed(at: elapsed, signIns: signIns, signedInAt: detector == .socialClubLog ? elapsed : nil)
