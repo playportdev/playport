@@ -24,6 +24,17 @@ public enum Redactor {
         let patterns: [(String, String)] = [
             // Epic's ownership token (`egoc1~<JWT>`, decision 0059), before the JWT rule takes its tail.
             (#"egoc1~[A-Za-z0-9._~+/=\-]+"#, "<ovt:redacted>"),
+            // Battle.net and World of Warcraft sessions (PLA-514), before the JWT and generic
+            // token rules take part of them: the login ticket Battle.net's web login hands back
+            // (`ST=US-<32 hex>-<digits>`, also bare), the launcher login's WEB_TOKEN and game
+            // account, the client's login ticket, session key, auth and reconnect tokens, realm
+            // join and list tickets, and the account name and list a login URL or Config.wtf names.
+            // WoW's own switches (-d3d12, -config <file>, -launcherlogin) carry none.
+            (#"\b(ST=)[^\s"'&]+"#, "$1<redacted>"),
+            (#"\b(?:US|EU|KR|TW|CN)-[0-9A-Fa-f]{32}-[0-9]{5,}\b"#, "<bnet-ticket:redacted>"),
+            (#"(?i)(WEB_TOKEN|GAME_ACCOUNT|login_?ticket|session_?key|realm_?(?:join|list)_?ticket|reconnect_?token|auth_?token)(["']?\s*[:=]\s*["']?)[^\s"',&}]+"#,
+             "$1$2<redacted>"),
+            (#"(?i)(account_?(?:name|list))(\s+"|["']?\s*[:=]\s*["']?)[^\s"',&}]+"#, "$1$2<redacted>"),
             // JWTs (Steam refresh and access tokens are eyJ... three-part JWTs).
             (#"eyJ[A-Za-z0-9_\-]{4,}\.[A-Za-z0-9_\-]{4,}\.[A-Za-z0-9_\-]*"#, "<jwt:redacted>"),
             // QR challenge URLs: https://s.team/q/<version>/<client id>.

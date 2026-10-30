@@ -32,6 +32,13 @@ SECRETS = [
     # token. Appended for the same reason.
     ("Epic exchange code argument", r"AUTH_PASSWORD=[0-9A-Fa-f]{32}"),
     ("Epic ownership token", r"egoc1~[A-Za-z0-9_-]{20,}"),
+    # A Battle.net or World of Warcraft session (PLA-514): the web login's ticket
+    # (`US-<32 hex>-<digits>`), the client's session values in a log line, and the account name
+    # WoW's Config.wtf keeps. Appended for the same reason.
+    ("Battle.net login ticket", r"\b(US|EU|KR|TW|CN)-[0-9A-Fa-f]{32}-[0-9]{5,}\b"),
+    ("WoW session value", r"""(WEB_TOKEN|[Ll]ogin_?[Tt]icket|[Ss]ession_?[Kk]ey|[Rr]ealm_?([Jj]oin|[Ll]ist)_?[Tt]icket|"""
+                          r"""[Rr]econnect_?[Tt]oken)["']? *[:=] *["']?[A-Za-z0-9+/_-]{16,}"""),
+    ("WoW account name", r'SET account(Name|List) "[^"]+"'),
 ]
 # Made-up or public values the tests use; a line holding one is not a hit.
 SECRET_FIXTURES = ("XTL-TEAMIDXXXX.", "XTL-A1B2C3D4E5.", "eyJhbGciOiJFZERTQSJ9.", "76561197960287930",

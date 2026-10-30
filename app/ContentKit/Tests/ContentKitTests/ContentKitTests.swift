@@ -197,4 +197,36 @@ final class RedactorTests: XCTestCase {
         XCTAssertTrue(out.contains("expires_in"), "a non-secret field stays")
         XCTAssertTrue(out.contains("https://embed.gog.com/on_login_success?<query:redacted>"))
     }
+
+    /// What World of Warcraft and Battle.net carry for a session (PLA-514), as a log line or a
+    /// command line could show it: the login ticket Battle.net's web login hands back
+    /// (`ST=US-<32 hex>-<digits>`), the launcher login's WEB_TOKEN and game account, the
+    /// client's login ticket, session key, auth and reconnect tokens, realm join and list
+    /// tickets, a single sign-on URL's token, and the account name a login URL or Config.wtf names.
+    func testBattleNetAndWorldOfWarcraftSessionValuesAreScrubbed() {
+        // Made up, and split so that pp secrets does not find them in this file.
+        let ticket = "EU-" + "0123456789abcdef0123456789abcdef" + "-123456789"
+        let lines = [
+            "Wow-ARM64.exe -d3d12 -config Config.wtf ST=\(ticket)",
+            "redirect to http://localhost:0/?ST=\(ticket)",
+            "login ticket \(ticket) accepted",
+            "WEB_TOKEN=WTOK0123456789 GAME_ACCOUNT=WoW1",
+            #"{"login_ticket":"LT0123456789","session_key":"SK0123456789","auth_token":"AT0123456789"}"#,
+            "Param_BnetSessionKey: BSK0123456789 Param_RealmJoinTicket=RJT0123456789 Param_RealmListTicket = RLT0123456789",
+            "reconnect_token=RCT0123456789",
+            "open https://account.battle.net/login/sso?token=SSO0123456789&ref=x",
+            "SET account" + #"Name "player@example.com""#,
+            "SET account" + #"List "!WoW1|WoW2|""#,
+            "https://us.account.battle.net/login/en/?app=bam&accountName=player2@example.com",
+        ]
+        let out = lines.map(Redactor.scrub).joined(separator: "\n")
+        for secret in ["0123456789abcdef0123456789abcdef", "WTOK0123456789", "LT0123456789", "SK0123456789",
+                       "AT0123456789", "BSK0123456789", "RJT0123456789", "RLT0123456789", "RCT0123456789", "SSO0123456789",
+                       "player@example.com", "player2@example.com", "WoW2"] {
+            XCTAssertFalse(out.contains(secret), "\(secret) leaked: \(out)")
+        }
+        // WoW's own switches stay: they say how it started, and name no session.
+        XCTAssertTrue(out.contains("Wow-ARM64.exe -d3d12 -config Config.wtf ST=<redacted>"), out)
+        XCTAssertTrue(out.contains("login ticket <bnet-ticket:redacted> accepted"), out)
+    }
 }

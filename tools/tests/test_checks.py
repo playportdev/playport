@@ -44,6 +44,20 @@ class Secrets(unittest.TestCase):
         self.assertIn("Epic ownership token", [w for w, _ in checks.secret_hits("egoc1~" + "A" * 30)])
         self.assertEqual(checks.secret_hits("-AUTH_PASSWORD=<redacted> <ovt:redacted> egoc1~short"), [])
 
+    def test_battle_net_session_values(self):
+        # Made up, and split so that pp secrets does not find them in this file.
+        ticket = "US-" + "0123456789abcdef" * 2 + "-123456789"
+        self.assertEqual([w for w, _ in checks.secret_hits(f"ST={ticket}")], ["Battle.net login ticket"])
+        for line in ("WEB_" + "TOKEN=" + "A1b2C3d4" * 3, '"login_' + 'ticket":"' + "Zz09" * 5 + '"',
+                     "Param_Bnet" + "SessionKey: " + "0f" * 16, "session_" + "key=" + "AbCdEf012345" * 2,
+                     "realm_join_" + "ticket = " + "x1Y2" * 5):
+            self.assertEqual([w for w, _ in checks.secret_hits(line)], ["WoW session value"], line)
+        self.assertEqual([w for w, _ in checks.secret_hits('SET account' + 'Name "player@example.com"')],
+                         ["WoW account name"])
+        # Redacted, empty, and WoW's own switches are no hit.
+        self.assertEqual(checks.secret_hits('ST=<redacted> <bnet-ticket:redacted> WEB_TOKEN=<redacted> session_key: short '
+                                            'SET accountName "" Wow-ARM64.exe -d3d12 -config Config.wtf -launcherlogin'), [])
+
     def test_home_paths(self):
         home = "/ho" + "me/alice/"   # split, as above
         self.assertEqual([w for w, _ in checks.secret_hits(f"IPA {home}x.ipa")], ["a workstation's home path"])
