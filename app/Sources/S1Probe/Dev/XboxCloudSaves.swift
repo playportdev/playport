@@ -21,14 +21,14 @@ import UIKit
 import XboxClientKit
 
 enum XboxCloudSaves {
-    /// Whether the installed copy `productID` has saves not yet in the account's cloud: nil
-    /// with no install record, no SCID in its MicrosoftGame.config or an unreadable index.
+    /// Whether the installed copy `productID` has saves not yet in the account's cloud:
+    /// false with no install record or no SCID in its MicrosoftGame.config (no cloud-save
+    /// identity, so nothing to sync), nil with an unreadable index.
     nonisolated static func unsynced(productID: String) -> Bool? {
         let record = LibraryModel.paths.layout.manifestsDir
             .appendingPathComponent(StoreGameKey(store: .xbox, id: productID).fileStem + ".json")
-        guard let data = try? Data(contentsOf: record), let rec = try? JSONDecoder().decode(XboxInstalled.self, from: data),
-              let scid = rec.scid else { return nil }
-        return XboxSaves.unsynced(scid: scid, localAppData: XboxInstalls.localAppData)
+        let rec = (try? Data(contentsOf: record)).flatMap { try? JSONDecoder().decode(XboxInstalled.self, from: $0) }
+        return XboxSaves.unsynced(scid: rec?.scid, localAppData: XboxInstalls.localAppData)
     }
 
     /// The lapse rule's view (PLA-505): an Xbox copy's removal waits while this is not false.

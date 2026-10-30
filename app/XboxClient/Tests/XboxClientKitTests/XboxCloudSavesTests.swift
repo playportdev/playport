@@ -169,6 +169,16 @@ final class XboxCloudSavesTests: XCTestCase, @unchecked Sendable {
         try FileManager.default.removeItem(at: broken)
         XCTAssertEqual(XboxSaves.unsynced(scid: Self.scid, localAppData: local), false)
     }
+
+    /// A copy with no cloud-save identity (no install record, or no SCID in its
+    /// MicrosoftGame.config) has nothing the cloud could lack: false, never unknown, so a
+    /// lapse's removal (PlayportKit LicenceLapses, held while this isn't false) isn't held.
+    func testACopyWithoutACloudSaveIdentityHasNothingUnsynced() throws {
+        let local = try scratch()
+        try container(local, dirty: 1, remote: "-")
+        XCTAssertEqual(XboxSaves.unsynced(scid: nil, localAppData: local), false)
+        XCTAssertEqual(XboxSaves.unsynced(scid: Self.scid, localAppData: local), true)
+    }
 }
 
 extension XboxFakeConflictAsker {

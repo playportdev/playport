@@ -57,7 +57,7 @@ enum XboxSaveDriver {
         guard StoreGameKey.isProductID(product) else { return "not a Product ID" }
         let unsynced = XboxCloudSaves.unsynced(productID: product)
         log("xbox: \(StoreGameKey(store: .xbox, id: product)) saves "
-            + (unsynced.map { $0 ? "unsynced (the game page says so)" : "synced" } ?? "unknown (no record, no SCID or an unreadable index)"))
+            + (unsynced.map { $0 ? "unsynced (the game page says so)" : "synced" } ?? "unknown (an unreadable index)"))
         return nil
     }
 }

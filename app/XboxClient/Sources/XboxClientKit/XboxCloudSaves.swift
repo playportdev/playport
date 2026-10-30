@@ -67,8 +67,11 @@ extension XboxSaves {
     /// (`dirty 1`) or never uploaded (`remote -`), for any account on this phone. Kept
     /// that way by a play with the cloud unreachable, a conflict left undecided or an
     /// upload that failed; the next connected play syncs them. False with no saves at
-    /// all; nil when an index cannot be read. Synchronous, for the lapse rule (PLA-505).
-    public static func unsynced(scid: String, localAppData: URL) -> Bool? {
+    /// all, and for a copy with no cloud-save identity (`scid` nil: no install record or
+    /// no SCID), which has nothing the cloud could lack; nil when an index cannot be read.
+    /// Synchronous, for the lapse rule (PLA-505).
+    public static func unsynced(scid: String?, localAppData: URL) -> Bool? {
+        guard let scid else { return false }
         let fm = FileManager.default
         // XodusGameSaveFiles is the game's own view of file saves; their index is in the cache.
         let roots = folders(scid: scid, localAppData: localAppData).filter {
