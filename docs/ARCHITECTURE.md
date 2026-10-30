@@ -617,6 +617,14 @@ locale (the phone's language as a WoW locale, enUS as fallback), shows the downl
 and the space needed, and refuses an Install that does not fit, saying how much it needs.
 The install stages under the staging root (nothing in `C:\Games`, so no Play, until it is
 complete) and becomes `C:\Games\<product>` with a store receipt naming the ARM64 client.
+Play for a Battle.net copy follows PlayportKit `BattleNetPlay` (PLA-514): the first Play of
+each product shows the ban-risk notice ([decision 0169](decisions/0169-anti-cheat-refusal-scope.md),
+proposed: Blizzard does not support Playport, an account action is possible, Playport stores
+no Battle.net credential); declining starts nothing, accepting is kept with the copy
+(`InstalledTitle.riskNoticeAccepted`, gone with it) and the page keeps the notice's text.
+The Play then starts the receipt's ARM64 client as a native ARM64 child
+([decision 0170](decisions/0170-native-arm64-guests.md)) on the Vulkan backend with `-d3d12`,
+whatever the graphics settings say, and passes no sign-in: WoW shows its own login.
 
 - **Catalogue** (`app/PlayportKit`, tested on Linux): rebuilt by *adoption*
   each time the app comes to the front, from the prefix's `C:\Games`. A folder

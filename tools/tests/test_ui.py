@@ -215,6 +215,16 @@ class UiEnvTest(unittest.TestCase):
                     "region:wow", "pause-resume:bnet-", "region:epic-Hazelnut"):
             self.assertFalse(m.ACTION_RE.match(bad), bad)
 
+    def test_battlenet_notice_and_play_paths(self):
+        """PLA-514: a Battle.net copy's ban-risk notice, accepted or declined as the player does, and
+        its Play."""
+        m = load()
+        for ok in ("notice:bnet-wow=accept", "notice:bnet-wow_classic_era=decline", "play:bnet-wow"):
+            self.assertEqual(m.parse(["--action", ok]).action, [ok])
+        for bad in ("notice:bnet-wow", "notice:bnet-wow=yes", "notice:bnet-=accept", "notice:app-367520=accept",
+                    "notice:bnet-WoW=accept"):
+            self.assertFalse(m.ACTION_RE.match(bad), bad)
+
     def test_actions_after_a_play_run_after_the_restart(self):
         """play: with actions after it: they run in the restarted process; the title's end does
         not end the run, the UI's does."""

@@ -17,7 +17,8 @@
 // phone, or the download size, the version and the achievements. Under the
 // buttons one or two lines say what stands in the way of a Play (another game
 // ran in this process, the memory limit, a download that pauses) and whether a
-// controller is connected.
+// controller is connected; an installed Battle.net copy's ban-risk notice
+// (PLA-514), which its first Play asks the player to accept.
 //
 // Game options (GameOptions.dc.html) is a panel over the dimmed page: the
 // game's resolution, frame rate limit and Direct3D, each "Default · X" until
@@ -545,6 +546,7 @@ private struct GameDetailPage: View {
                     if installs.isBusy { Text("Starting a game pauses the download. It goes on when Playport reopens after the game.") }
                     controllerLine
                 }
+                riskNotice(t)
             } else if let g {
                 installNote(g)
             } else if let eg = epicGame, let why = epic.refusal(eg.id) {
@@ -554,6 +556,20 @@ private struct GameDetailPage: View {
             }
         }
         .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// A Battle.net copy's ban-risk notice (PLA-514, decision 0169): its text stays on the page, before
+    /// the first Play asks and after it was accepted.
+    @ViewBuilder
+    private func riskNotice(_ t: InstalledTitle) -> some View {
+        if let p = BattleNet.product(t.key) {
+            Text(BattleNetPlay.notice(p).text).foregroundStyle(.orange)
+            if let at = t.riskNoticeAccepted {
+                Text("You accepted this on \(at.formatted(date: .abbreviated, time: .omitted)).")
+            } else {
+                Text("Play asks you to accept it first.")
+            }
+        }
     }
 
     @ViewBuilder

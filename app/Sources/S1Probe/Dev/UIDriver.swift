@@ -11,7 +11,14 @@
 //                              run in the new process, under this run (DriverContinuation),
 //                              only if no loss/cancel was observed during replacement;
 //                              a Play refused before the runtime started (its alert shows)
-//                              goes on here
+//                              goes on here. A Battle.net copy's first Play (bnet-wow) is
+//                              refused while its ban-risk notice asks: notice: answers it
+//   notice:<title id>=accept|decline
+//                              An installed Battle.net copy's Play from its page and the
+//                              ban-risk notice it shows first (PLA-514), answered as the
+//                              player does: decline checks Play does not start and the copy
+//                              keeps no acceptance; accept keeps it with the copy and the
+//                              Play goes on, followed as play:. Fails once it was accepted
 //   open-launcher:<id>         Settings › Launchers' Open for a publisher's launcher
 //                              (PlayportKit PublisherLauncher: rockstar), followed as play:
 //   forget-launcher-window:<id> Settings › Launchers' Forget the launcher's saved window
@@ -841,6 +848,17 @@ enum UIDriver {
                                 return finish("action=\(action) refused: \(PadModal.shared.summary ?? "cloud conflict"): "
                                               + "the Cloud save conflict screen asks which saves to keep")
                             }
+                            // A Battle.net copy's first Play: the notice is up (notice: answers it).
+                            if case .notice? = library.title(id).flatMap({ BattleNetPlay.decide(.init(copy: $0)) }) {
+                                try await pause(.milliseconds(1000))   // the notice drawn, for a screenshot
+                                return finish("action=\(action) refused: the ban-risk notice asks first; "
+                                              + "notice:\(id)=accept or notice:\(id)=decline answers it as the player does")
+                            }
+                            // A Battle.net copy whose client is not the ARM64 one: its refusal is up.
+                            if case .picker = PadModal.shared.content {
+                                try await pause(.milliseconds(1000))
+                                return finish("action=\(action) refused: \(PadModal.shared.summary ?? "a picker")")
+                            }
                             return finish("action=\(action) refused: a launch is running or Playport needs a restart")
                         }
                         try checkpoint()
@@ -849,20 +867,13 @@ enum UIDriver {
                         return finish("action=\(action) failed: \(error)")
                     }
                     // Actions for the running game (wait:, menu:) go on while it runs.
-                    if done + 1 < actions.count, !inGame(actions[i + 1]) {
-                        let launch = TitleLaunch.shared
-                        while launch.running { try await pause(.milliseconds(250)) }
-                        if AppRestart.shared.restarting {
-                            try checkpoint()
-                            batch.handoff()
-                            // The restarted process runs the rest (DriverContinuation, saved as it asks).
-                            RunEvents.emit("ui-action", ["action": action, "result": "ok", "index": done + 1, "restart": true])
-                            log("\(parts[0]) \(id): ended; Playport restarts, and the new process goes on")
-                            return
-                        }
-                        try await pause(.milliseconds(1500))   // the alert drawn, for a screenshot
-                        log("\(parts[0]) \(id): ended without starting the runtime: \(launch.message?.title ?? "no message")"
-                            + (launch.message?.step.map { " (failed at \(LaunchProgress.stepName($0)))" } ?? ""))
+                    if try await followPlay(action, "\(parts[0]) \(id)", index: done, next: actions[(i + 1)...]) { return }
+                case "notice":
+                    switch try await riskNotice(id) {
+                    case let .failed(why): return finish("action=\(action) failed: \(why)")
+                    case .declined: break
+                    case .started:
+                        if try await followPlay(action, "notice \(id)", index: done, next: actions[(i + 1)...]) { return }
                     }
                 default:
                     return finish("action=\(action) refused: unknown action")
@@ -886,6 +897,75 @@ enum UIDriver {
         action.hasPrefix("menu:") || action.hasPrefix("wait:") || action.hasPrefix("web:") || action.hasPrefix("tap:")
             || action.hasPrefix("touch:") || action.hasPrefix("gesture:") || action.hasPrefix("gyro:") || action.hasPrefix("suggest:")
             || (action.hasPrefix("pad:") && InGameMenu.shared.isOpen)
+    }
+
+    /// After a Play started: unless the next action is for the running game, waits for the game's
+    /// end. True once Playport restarts after it (the ui-action is sent here; the new process runs
+    /// the rest), so the caller returns.
+    private static func followPlay(_ action: String, _ label: String, index: Int, next: ArraySlice<String>) async throws -> Bool {
+        guard let first = next.first, !inGame(first) else { return false }
+        let launch = TitleLaunch.shared
+        while launch.running { try await pause(.milliseconds(250)) }
+        if AppRestart.shared.restarting {
+            try checkpoint()
+            batch.handoff()
+            // The restarted process runs the rest (DriverContinuation, saved as it asks).
+            RunEvents.emit("ui-action", ["action": action, "result": "ok", "index": index + 1, "restart": true])
+            log("\(label): ended; Playport restarts, and the new process goes on")
+            return true
+        }
+        try await pause(.milliseconds(1500))   // the alert drawn, for a screenshot
+        log("\(label): ended without starting the runtime: \(launch.message?.title ?? "no message")"
+            + (launch.message?.step.map { " (failed at \(LaunchProgress.stepName($0)))" } ?? ""))
+        return false
+    }
+
+    private enum NoticeOutcome {
+        case declined, started
+        case failed(String)
+    }
+
+    /// `<title id>=accept|decline`: an installed Battle.net copy's Play from its page, and the
+    /// ban-risk notice it shows answered as the player does (LibraryModel.askRiskNotice, PLA-514).
+    /// Declined: nothing starts, the copy keeps no acceptance, the page shows the notice's text.
+    /// Accepted: kept with the copy, and the Play goes on (followed as play:).
+    private static func riskNotice(_ spec: String) async throws -> NoticeOutcome {
+        let parts = spec.split(separator: "=", maxSplits: 1).map(String.init)
+        guard parts.count == 2, [LibraryModel.noticeAccept, LibraryModel.noticeDecline].contains(parts[1]) else {
+            return .failed("not notice:<title id>=\(LibraryModel.noticeAccept)|\(LibraryModel.noticeDecline)")
+        }
+        let library = LibraryModel.shared, id = parts[0], accept = parts[1] == LibraryModel.noticeAccept
+        guard let t = library.title(id), let product = BattleNet.product(t.key) else { return .failed("\(id) is not an installed Battle.net copy") }
+        guard case .notice? = BattleNetPlay.decide(.init(copy: t)) else {
+            return .failed("\(id)'s notice was accepted on \(t.riskNoticeAccepted.map { "\($0)" } ?? "?"); its Play does not ask again (play: starts it)")
+        }
+        AppNavigation.shared.openTitle(id)
+        try await pause(.milliseconds(500))
+        guard try await checked({ try await library.play(id) }) == false else { return .failed("Play started without the notice") }
+        let notice = BattleNetPlay.notice(product)
+        guard case let .picker(session) = PadModal.shared.content, session.title == notice.title,
+              let choice = session.options.firstIndex(where: { $0.id == parts[1] }) else {
+            return .failed("no notice showed: \(PadModal.shared.summary ?? "nothing up")")
+        }
+        try await pause(.milliseconds(1000))   // the notice drawn, for a screenshot
+        log("notice \(id): shown, \"\(notice.title)\", cursor on \(session.options[session.cursor].id): \(notice.text)")
+        session.pick(choice)
+        if !accept {
+            try await pause(.milliseconds(1500))   // the page drawn again, for a screenshot
+            if TitleLaunch.shared.running || library.title(id)?.riskNoticeAccepted != nil { return .failed("declined, yet Play started") }
+            log("notice \(id): declined; Play did not start and the copy keeps no acceptance; the page shows the notice's text")
+            return .declined
+        }
+        guard let at = library.title(id)?.riskNoticeAccepted, let play = library.noticePlay else {
+            return .failed("accepted, yet not kept with the copy")
+        }
+        log("notice \(id): accepted at \(at); the Play goes on")
+        guard try await checked({ await play.value }) else {
+            try await pause(.milliseconds(1500))   // its alert drawn, for a screenshot
+            return .failed("accepted, then the Play did not start: \(PadModal.shared.summary ?? TitleLaunch.shared.message?.title ?? "no message")")
+        }
+        log("notice \(id): started")
+        return .started
     }
 
     /// After an action for the running game: when the actions after it are not

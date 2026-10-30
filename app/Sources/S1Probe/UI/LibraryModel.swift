@@ -7,6 +7,7 @@
 // are logged to the app log (AppLog) as `library:` lines. None needs Steam:
 // a Steam install is verified against its retained manifests.
 
+import BattleNetClientKit
 import EpicClientKit
 import GOGClientKit
 import Foundation
@@ -55,6 +56,9 @@ final class LibraryModel: ObservableObject {
     /// What a Play does before the game starts, by title id, for its Play button (a Steam game's
     /// redistributables download).
     @Published private(set) var preparing: [String: String] = [:]
+    /// The Play an accepted ban-risk notice went on with (PLA-514): what it returned, for a dev
+    /// build's UIDriver to follow as it follows a play:.
+    private(set) var noticePlay: Task<Bool, Never>?
     /// A refresh asked for while a scan ran: its scan may predate the change.
     private var rescan = false
     private let store = CatalogStore(url: LibraryModel.paths.catalog)
@@ -200,12 +204,31 @@ final class LibraryModel: ObservableObject {
     /// asks, an ownership token. When they cannot be had it does not start; the player gets Try again,
     /// and for a game that may run offline Play offline (`epicOffline`), which starts it as before
     /// step 1 of the store game sign-in plan, with no sign-in arguments.
+    /// A Battle.net copy follows PlayportKit's BattleNetPlay (PLA-514): the ban-risk notice first (false
+    /// while it is up; accepted, the Play goes on as `noticePlay`), then its ARM64 client on Vulkan.
     /// `continuing`: the Play goes on after Playport's restart that followed its prerequisites
     /// (AppRestart.continuePlay, decision 0084): no cloud save check (the Play passed it a few
     /// seconds ago) and no prerequisites, so it cannot restart again.
     @discardableResult
     func play(_ id: String, epicOffline: Bool = false, continuing: Bool = false) async throws -> Bool {
         guard catalog.title(id: id)?.canPlay == true, !TitleLaunch.shared.running, !TitleLaunch.shared.spent else { return false }
+        // A Battle.net copy (PLA-514, decision 0169): the ban-risk notice before its first Play, which
+        // goes on once accepted; declined, nothing starts. A client that is not the ARM64 one is refused.
+        if let t = catalog.title(id: id), let step = BattleNetPlay.decide(.init(copy: t)) {
+            switch step {
+            case let .notice(product):
+                Self.log("play \(t.name) (\(id)): the ban-risk notice asks first")
+                askRiskNotice(t, product)
+                return false
+            case let .refuse(why):
+                Self.log("play \(t.name) (\(id)) refused: \(why)")
+                PadModal.shared.picker(title: "Can't start \(t.name)", context: nil, note: why,
+                                       options: [PadOption(id: "ok", label: "OK")], selected: nil) { _ in }
+                return false
+            case .launch:
+                break
+            }
+        }
         // A game whose saves changed on the phone and on Steam asks which to keep first; the
         // choice starts it, Decide later does not (UI/CloudConflictView.swift).
         if !continuing, let t = catalog.title(id: id), let app = t.appID, let steam = SteamAccountModel.current {
@@ -245,6 +268,14 @@ final class LibraryModel: ObservableObject {
         #else
         var settings = LaunchSettingsStore.shared.effective(for: t)
         #endif
+        // A Battle.net copy's client: a native ARM64 child (decision 0170) drawing with Direct3D 12 through
+        // vkd3d-proton on Vulkan, whatever the graphics settings say.
+        if case let .launch(bnet)? = BattleNetPlay.decide(.init(copy: t)) {
+            settings.graphics = bnet.graphics
+            plan.args += bnet.arguments.filter { arg in !plan.args.contains { $0.caseInsensitiveCompare(arg) == .orderedSame } }
+            Self.log("play \(t.name): Battle.net's ARM64 client as a native ARM64 child on \(bnet.graphics.rawValue), "
+                     + "\(bnet.arguments.joined(separator: " ")); WoW asks for its own sign-in")
+        }
         // A game whose Play starts a publisher's launcher runs with its Open's grace, graphics
         // environment and runtime keys under its own (decision 0115).
         var exhaustionGrace = JitPool.exhaustionGrace
@@ -627,6 +658,33 @@ final class LibraryModel: ObservableObject {
             default: break
             }
         }
+    }
+
+    /// The ban-risk notice before a Battle.net product's first Play (PLA-514, decision 0169). The
+    /// cursor starts on Don't play; Don't play, B or a tap outside start nothing, and the notice asks
+    /// again at the next Play. Accepting keeps the acceptance with the copy and goes on with the Play.
+    func askRiskNotice(_ t: InstalledTitle, _ product: BattleNetProduct) {
+        let notice = BattleNetPlay.notice(product)
+        PadModal.shared.picker(title: notice.title, context: t.name, note: notice.text,
+                               options: [PadOption(id: Self.noticeDecline, label: "Don't play"),
+                                         PadOption(id: Self.noticeAccept, label: "I understand, play")],
+                               selected: nil) { choice in
+            guard choice == Self.noticeAccept else {
+                Self.log("play \(t.name) (\(t.id)): ban-risk notice declined; Play not started")
+                return
+            }
+            LibraryModel.shared.acceptRiskNotice(t.id)
+        }
+    }
+
+    /// The notice's choices, which a dev build's UIDriver picks as the player does.
+    static let noticeAccept = "accept", noticeDecline = "decline"
+
+    private func acceptRiskNotice(_ id: String) {
+        catalog.update(id) { $0.riskNoticeAccepted = Date() }
+        save()
+        Self.log("play \(id): ban-risk notice accepted; kept with the copy, the Play goes on")
+        noticePlay = Task { (try? await self.play(id)) ?? false }
     }
 
     /// The Cloud save conflict screen for the game's open conflicts; `thenPlay` starts it once settled.
