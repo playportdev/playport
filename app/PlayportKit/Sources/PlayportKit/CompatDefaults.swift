@@ -3,10 +3,13 @@
 // work, its default for everyone. The app ships them as Titles/compat-defaults.json:
 //
 //   {"titles": {"epic-Buffalo": {"settings": {"aspect": "16:9"},
-//                                "reason": "This game draws nothing on a screen wider than 16:9."}}}
+//                                "reason": "This game draws nothing on a screen wider than 16:9."},
+//               "app-15100": {"controls": "keyboardMouse", "reason": "..."}}}
 //
 // keyed by catalogue id (case-sensitive: Epic app names have capitals), each entry a
-// LaunchSettings object in the --settings JSON form and a short player-facing reason. The
+// LaunchSettings object in the --settings JSON form, the game's starting on-screen layout
+// (`controls`, an OnScreenLayout; ControlsState.resolve), or both, and a short player-facing
+// reason. The
 // file reaches players: it names no issue, run or build; where an entry comes from is in
 // the decision and evidence records. Precedence for one launch setting: the person's own
 // choice on the game's page, then the title's compatibility default, then Settings, then
@@ -17,7 +20,10 @@ import Foundation
 
 public struct CompatDefaults: Equatable, Sendable {
     public struct Entry: Equatable, Sendable {
+        /// Empty when the entry sets only `controls`.
         public let settings: LaunchSettings
+        /// The game's starting on-screen layout, under the person's own for the game.
+        public let controls: OnScreenLayout?
         /// Shown on the game's page, after "Set for this game's compatibility".
         public let reason: String
     }
@@ -36,8 +42,9 @@ public struct CompatDefaults: Equatable, Sendable {
         try parse(Data(contentsOf: directory.appendingPathComponent(fileName)))
     }
 
-    /// The table, checked: only `titles`; ids as the catalogue writes them; only `settings`
-    /// and `reason` in an entry; each setting a LaunchSettings key whose value reads back as
+    /// The table, checked: only `titles`; ids as the catalogue writes them; only `settings`,
+    /// `controls` and `reason` in an entry, with `settings` or `controls`; `controls` a layout's
+    /// name; each setting a LaunchSettings key whose value reads back as
     /// written and a launch takes; a reason with no project-internal reference.
     public static func parse(_ data: Data) throws -> CompatDefaults {
         guard let top = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -51,17 +58,25 @@ public struct CompatDefaults: Equatable, Sendable {
                 throw CompatDefaultsError.badTitle(id)
             }
             guard let entry = value as? [String: Any] else { throw CompatDefaultsError.notAnObject(id) }
-            if let k = entry.keys.first(where: { $0 != "settings" && $0 != "reason" }) {
+            if let k = entry.keys.first(where: { !["settings", "controls", "reason"].contains($0) }) {
                 throw CompatDefaultsError.unknownKey("\(id).\(k)")
             }
             guard let reason = (entry["reason"] as? String)?.trimmingCharacters(in: .whitespaces), !reason.isEmpty else {
                 throw CompatDefaultsError.noReason(id)
             }
             if containsInternalReference(reason) { throw CompatDefaultsError.internalReference(id) }
-            guard let raw = entry["settings"] as? [String: Any], !raw.isEmpty else {
+            var controls: OnScreenLayout?
+            if let value = entry["controls"] {
+                guard let name = value as? String, let layout = OnScreenLayout(rawValue: name) else {
+                    throw CompatDefaultsError.badSetting("\(id).controls")
+                }
+                controls = layout
+            }
+            let raw = entry["settings"] as? [String: Any]
+            guard raw.map({ !$0.isEmpty }) ?? (controls != nil && entry["settings"] == nil) else {
                 throw CompatDefaultsError.notAnObject("\(id).settings")
             }
-            entries[id] = Entry(settings: try settings(raw, id: id), reason: reason)
+            entries[id] = Entry(settings: try raw.map { try settings($0, id: id) } ?? LaunchSettings(), controls: controls, reason: reason)
         }
         return CompatDefaults(entries: entries)
     }

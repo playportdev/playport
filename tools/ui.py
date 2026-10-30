@@ -134,6 +134,15 @@ best-effort and reported as unconfirmed; transport loss/SIGKILL can leave cancel
                          then fire the three-finger tap through the handler the app's recognizer calls,
                          which opens the in-game menu with the on-screen controls on or off and with a
                          controller connected too (pad: and menu: then act on it)
+  suggest:accept|dismiss
+                         after a play: (it runs while the game runs): wait (3 min at most) for the toast
+                         that offers Keyboard & mouse to a game on Gamepad that asked for no XInput state
+                         in 20 s of play after its first frame (PlayportKit LayoutSuggestion), then press
+                         its Use button (saves the layout for the game; `controls:` logs the new layout)
+                         or its Not now. Fails when the game was not offered (it read a pad, it is not
+                         on the starting Gamepad layout, or it was offered before: once per game;
+                         --action set:controls.suggestedLayoutOffered= forgets every game's).
+                         Example: --action play:ID --action suggest:accept --action touch:fire
   menu:open              after a play: (the actions after it then run while the game runs): wait for
                          the game's first frame, then hold the controller's Home button 0.8 s through
                          HostIO's pad handling, which opens Playport's in-game menu over the paused
@@ -489,6 +498,7 @@ ACTION_RE = re.compile((r"^(?:(?:install|pause-resume|queue|downloading):[0-9]+|
                        r"|hud:(?:on|off)|open:[a-z]+(?:-[A-Za-z0-9 ._-]+(?:#[a-z]+)?)?|open:settings#(?:accounts|steam|graphics|downloads|controls|controllers|gyro|controller|storage|setup|about|launchers|developer|account|jit|memory|diagnostics|pairing|probes|logs)|open:licences(?:#[a-z0-9 ._-]+)?|pad:(?:{b})(?:\+(?:{b}))*|set:[A-Za-z0-9._-]+=[^,]*"
                        r"|wait:[0-9]{1,3}|tap:(?:0(?:\.[0-9]+)?|1(?:\.0+)?):(?:0(?:\.[0-9]+)?|1(?:\.0+)?)|menu:(?:open|resume|controls|keyboard|screenshot|overlay|controller|quit)"
                        r"|touch:{t}(?:\+{t})*(?:@[0-9]{1,5})?|gyro:{g}(?:/{g})*|gesture:three-finger-tap|web:(?:wait|close)|web:click:[A-Za-z0-9 ._-]+"
+                       r"|suggest:(?:accept|dismiss)"
                        r"|jit:(?:setup|pair|continue|open-settings|cancel|wait)|probe:settings-url-[0-9]|probe:helper-(?:(?:exit|kill)(?:-hold)?|report)|probe:memory-(?:64|2048|4096|donor-(?:tagged|purgeable)-(?:2048|4096)|donors-(?:6144|8192|10240)|pool-verify|pool-zero|pool-gpu)|background:(?:[1-9][0-9]|[1-5][0-9]{2}|600)|probe:relaunch|probe:native-auth|probe:pairing(?:-cancel|-use)?)$").replace("{b}", PAD_BUTTONS).replace("{t}", TOUCH_CONTROL)
                        .replace("{g}", GYRO_STEP))
 
@@ -501,11 +511,11 @@ def background_handoff(e):
 
 def in_game(actions, start):
     """How many actions from start act on the running game (UIDriver.inGame): wait:, tap:,
-    touch:, gyro:, gesture:, menu: and web:, and pad: once a menu:open or gesture:three-finger-tap
+    touch:, gyro:, gesture:, menu:, web: and suggest:, and pad: once a menu:open or gesture:three-finger-tap
     has opened the in-game menu."""
     n, menu = 0, False
     for x in actions[start:]:
-        if x.startswith(("wait:", "tap:", "touch:", "gyro:", "gesture:", "menu:", "web:")) or (menu and x.startswith("pad:")):
+        if x.startswith(("wait:", "tap:", "touch:", "gyro:", "gesture:", "menu:", "web:", "suggest:")) or (menu and x.startswith("pad:")):
             menu = menu or x in ("menu:open", "gesture:three-finger-tap")
             n += 1
         else:

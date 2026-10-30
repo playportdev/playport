@@ -309,6 +309,22 @@ final class ControlsSettingsTests: XCTestCase {
                        .gamepad())
     }
 
+    /// A compatibility default's layout (decision 0074) is the game's starting layout; the game's own
+    /// choice wins, and Never still makes Off every game's start.
+    func testTheCompatibilityLayoutStartsTheGameAndTheGamesOwnWins() {
+        let d = ControlsDefaults()
+        let kbm = ControlsState.resolve(game: nil, defaults: d, controllerConnected: false, compat: .keyboardMouse)
+        XCTAssertEqual(kbm.layout, .keyboardMouse)
+        XCTAssertEqual(kbm.drawnLayout, .keyboardMouse())
+        XCTAssertEqual(ControlsState.resolve(game: GameControls(opacity: 0.9), defaults: d, controllerConnected: false,
+                                             compat: .pointClick).layout, .pointClick)
+        XCTAssertEqual(ControlsState.resolve(game: GameControls(layout: .gamepad), defaults: d, controllerConnected: false,
+                                             compat: .keyboardMouse).layout, .gamepad)
+        XCTAssertEqual(ControlsState.resolve(game: nil, defaults: ControlsDefaults(show: .never), controllerConnected: false,
+                                             compat: .keyboardMouse).layout, .off)
+        XCTAssertEqual(ControlsState.resolve(game: nil, defaults: d, controllerConnected: false, compat: nil).layout, .gamepad)
+    }
+
     /// The controls' pad is player 1 whenever no controller is connected, Off too,
     /// so turning the controls on in-game connects nothing new (1c).
     func testTheControlsPadIsConnectedWhileNoControllerIs() {

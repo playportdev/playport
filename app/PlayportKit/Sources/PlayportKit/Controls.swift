@@ -8,9 +8,11 @@
 //   hidden as soon as one connects, back when it goes. Always shows them with a
 //   controller too; Never makes Off every game's starting choice.
 // - A game's layout is Off, Gamepad, Keyboard & mouse or Point & click; with
-//   none set it is Settings' Starting layout, else Gamepad (the Starting
-//   layout's "Suggested for the game"), or Off when the default is Never. Off
-//   hides them for that game whatever else.
+//   none set it is Off when the default is Never, else Settings' Starting
+//   layout, else the game's compatibility default's (CompatDefaults
+//   `controls`; the Starting layout's "Suggested for the game"), else Gamepad.
+//   Off hides them for that game whatever else. LayoutSuggestion offers
+//   Keyboard & mouse once for a game on Gamepad that reads no XInput state.
 // - A game's own copy of a preset, saved by the layout editor
 //   (LayoutEditor.swift; GameControls.layouts), is drawn instead of the preset
 //   whenever that preset is the game's layout.
@@ -296,8 +298,11 @@ public struct ControlsState: Equatable, Sendable {
     /// What is drawn: the game's copy of the layout or the preset, or nothing.
     public var drawnLayout: ControlLayout? { visible ? edited ?? layout.layout(dpad: dpad, rightStick: rightStick) : nil }
 
-    public static func resolve(game: GameControls?, defaults: ControlsDefaults, controllerConnected: Bool) -> ControlsState {
-        let layout = game?.layout ?? (defaults.show == .never ? .off : defaults.startingLayout ?? .gamepad)
+    /// The game's own layout, else Off under Never, else Settings' Starting layout, else the game's
+    /// compatibility default (`compat`, CompatDefaults.Entry.controls), else Gamepad.
+    public static func resolve(game: GameControls?, defaults: ControlsDefaults, controllerConnected: Bool,
+                               compat: OnScreenLayout? = nil) -> ControlsState {
+        let layout = game?.layout ?? (defaults.show == .never ? .off : defaults.startingLayout ?? compat ?? .gamepad)
         let shown = layout != .off && (defaults.show == .always || !controllerConnected)
         return ControlsState(layout: layout, visible: shown, opacity: game?.opacity ?? defaults.opacity,
                              dpad: game?.dpad ?? defaults.dpad, rightStick: game?.rightStick ?? defaults.rightStick,

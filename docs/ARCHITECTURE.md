@@ -993,7 +993,9 @@ window surfaces `patches/madeira-unix` 0109 gives every mode, decision 0075, and
 after it the windows made since, 0005, decision 0076).
 `Sources/WinIOS/WiniosGamepad.c`, unmodified, defines the host-controller
 snapshot `libwin32u_unix.a` reads for Wine's XInput; the app writes it through
-`Sources/HostIO/hio_pads.c` (see HostIO above).
+`Sources/HostIO/hio_pads.c` (see HostIO above). Each XInput state request also
+calls hio_pads.c's `playport_gamepad_state_read` (`patches/madeira-unix` 0224),
+the count the suggested on-screen layout reads (PlayportKit `LayoutSuggestion`).
 
 Two parts of Madeira's reference app are not used. `wineios.drv` has no build
 recipe at the pin and is not in wine's configure; audio does not need it,
