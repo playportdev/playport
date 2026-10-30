@@ -30,10 +30,11 @@ public enum XboxSessionError: Error, Sendable, Equatable, CustomStringConvertibl
 public actor XboxSession {
     public static let keychainService = "dev.playport.app.xbox"
     private let store: any SecretStore
-    private let http: any XboxHTTP
-    private let log: Logger
-    private let now: @Sendable () -> Date
-    private var generation: UInt64 = 0
+    // Internal, not private: XboxLicensing.swift extends the session.
+    let http: any XboxHTTP
+    let log: Logger
+    let now: @Sendable () -> Date
+    private(set) var generation: UInt64 = 0
     private var deviceFlight: Task<XboxToken, Error>?
 
     public init(store: any SecretStore, http: any XboxHTTP = XboxURLSessionHTTP(), log: Logger = .silent,
@@ -44,6 +45,8 @@ public actor XboxSession {
     /// Synthetic identity, not a phone identifier. Secret-wrapped even in tests;
     /// never expose the registration's Microsoft/account identifiers in logs.
     public var deviceIdentity: Secret<String>? { (try? read(XboxDevice.self, "device"))?.identity.mapSecret }
+    /// The account's PUID: licensing's `localTicketReference`. Never logged.
+    var ticketReference: String? { get throws { try read(XboxStoredSession.self, "session")?.puid } }
 
     public func prepareSignIn(market: String = "en-US") async throws -> XboxLoginPage {
         _ = try await deviceToken()
@@ -136,11 +139,14 @@ public actor XboxSession {
         log.info("xbox", "session renewed silently")
         return XboxTicket(token: Secret(ticket.value), expiresAt: ticket.expires)
     }
+    /// `policy` is the RST PolicyReference: content licensing asks for `www.microsoft.com`
+    /// under the Store app with `mbi_ssl`, as Xodus's exchange_device_token does.
     public func deviceTicket(scope: String = "scope=service::user.auth.xboxlive.com::MBI_SSL&api-version=2.0",
-                             clientID: String = "{28C08266-F973-4AE6-FFE4-409B249F138F}") async throws -> XboxTicket {
+                             clientID: String = "{28C08266-F973-4AE6-FFE4-409B249F138F}",
+                             policy: String = "TOKEN_BROKER") async throws -> XboxTicket {
         guard state == .signedIn else { throw XboxSessionError.signInRequired }
         let epoch = generation, device = try await deviceToken()
-        let request = try XboxSOAP.request(now: now(), device: device, username: "", app: clientID, scopes: [(scope, "TOKEN_BROKER")])
+        let request = try XboxSOAP.request(now: now(), device: device, username: "", app: clientID, scopes: [(scope, policy)])
         let reply = try XboxSOAP.reply(await send(XboxSOAP.endpoint, body: request, epoch: epoch), device: device)
         guard !reply.fault else { throw XboxSessionError.deviceRejected }
         guard reply.tokens.count == 1, let token = reply.tokens.first, !token.legacy else { throw XboxXML.invalid() }
@@ -160,10 +166,10 @@ public actor XboxSession {
         log.info("xbox", "synthetic device reset")
     }
     private func clearSession() throws {
-        // Keep all issued/user secrets in these two items. Later key/lease stores
-        // must join this deletion boundary, never the persistent device item.
+        // All issued/user secrets live in these items: tickets, account information and
+        // licences' content keys. Never the persistent device item.
         var failure: Error?
-        for key in ["session", "device-token"] { do { try store.delete(key) } catch { failure = error } }
+        for key in ["session", "device-token", "licences"] { do { try store.delete(key) } catch { failure = error } }
         if failure != nil { throw ClientError.credentialStore("Xbox session could not be deleted") }
     }
     private func deviceToken() async throws -> XboxToken {
@@ -220,14 +226,14 @@ public actor XboxSession {
         guard (200..<300).contains(response.status) else { throw ClientError.transport("Xbox service returned HTTP \(response.status)") }
         return response.body.value
     }
-    private func check(_ epoch: UInt64) throws { if generation != epoch || Task.isCancelled { throw ClientError.cancelled } }
-    private func read<T: Decodable>(_ type: T.Type, _ key: String) throws -> T? {
+    func check(_ epoch: UInt64) throws { if generation != epoch || Task.isCancelled { throw ClientError.cancelled } }
+    func read<T: Decodable>(_ type: T.Type, _ key: String) throws -> T? {
         do {
             guard let bytes = try store.read(key) else { return nil }
             return try JSONDecoder().decode(type, from: Data(bytes.value))
         } catch { throw ClientError.credentialStore("Xbox credentials could not be read") }
     }
-    private func write<T: Encodable>(_ value: T, _ key: String) throws {
+    func write<T: Encodable>(_ value: T, _ key: String) throws {
         do { try store.write(key, Secret(Array(JSONEncoder().encode(value)))) }
         catch { throw ClientError.credentialStore("Xbox credentials could not be saved") }
     }

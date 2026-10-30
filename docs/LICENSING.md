@@ -331,7 +331,8 @@ The upstreams were read on 2026-10-30:
     notice too (`LICENSE-XodusNexus.txt`). Code written from Nexus's Xodus
     patches owes both;
   - Xodus's `licensing/splicense.rs` retains LukeFZ's 2022 CikExtractor MIT
-    notice. The translated CLEP state decoding in `XboxCrypto.swift` keeps it
+    notice. The translated CLEP state decoding in `XboxCrypto.swift` and the
+    SPLicense, device-key and content-key code in `XboxLicensing.swift` keep it
     as `LICENSE-CikExtractor.txt`; the app's Xodus component carries it too;
   - Xodus's other files carry no copyright notice to keep; the derived files
     are in Playport's own source.

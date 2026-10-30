@@ -1,0 +1,10 @@
+{
+  "satisfactionFailure": {
+    "code": 1,
+    "description": "synthetic-private-provider-text-do-not-log",
+    "alternateContentIds": [
+      "00000000-0000-4000-8000-0000000a1700"
+    ],
+    "remediationAction": "https://untrusted.invalid/"
+  }
+}
