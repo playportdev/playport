@@ -7,7 +7,7 @@
 import ContentKit
 
 enum XboxLibrary {
-    /// The Library's chips name the Xbox store: before its sign-in exists (PLA-491), always.
+    /// Keep the dev Xbox chip visible even while the account is signed out.
     static func addChip(to stores: inout Set<Store>) {
         stores.insert(.xbox)
     }

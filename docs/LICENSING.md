@@ -94,6 +94,7 @@ contributions, not the right to use or distribute the code under its licence.
 | Component | Where it ends up | Licence |
 | --- | --- | --- |
 | Playport (app, HostIOKit, SteamClientKit, build and tooling code) | executable | GPL-3.0-or-later with the converter exception |
+| XboxClientKit and the Xbox sign-in sheet | dev executable only (0166); absent from release | Xodus-derived files GPL-3.0-only, without the converter exception; Nexus's Xodus patches also retain their MIT notice, CLEP decoding retains CikExtractor's MIT notice (below) |
 | Madeira host layer: `build/ntdll-unix`, `build/wineserver`, `build/win32u-unix`, `madeira_cfg.h`, Winios, `IOSDisplayShim` | executable | GPL-3.0-or-later with Madeira's own converter exception; many `build/*-unix` files carry Wine's LGPL header, and some carry none (see "Open items") |
 | Wine: WineHQ plus Madeira's fork (`patches/wine-port`, decision 0013) | executable (unix side), both PE DLL sets, `nls/` | LGPL-2.1-or-later (`COPYING.LIB`, `LICENSE`, `LICENSE-MADEIRA.md`; `NOTICES.md` records current third-party notices) |
 | Valve's Wine: the commits of ValveSoftware/wine `proton_11.0` (the Wine Proton ships) that Playport carries as `patches/wine-valve` (decision 0018) | both PE DLL sets, and the Wine headers the unix side compiles against | LGPL-2.1-or-later, as upstream Wine; each commit keeps its author, and notices are collected from the actual patched Wine tree |
@@ -278,10 +279,10 @@ beside it (docs/plans/finished.md#steam-for-games).
 ### Xbox (planned)
 
 The Xbox store ([plan](plans/2026-10-30-xbox-game-pass.md), [decision 0166](decisions/0166-the-xbox-store.md))
-adds three things that are not built yet: a Swift client, `XboxClientKit`,
-written from Xodus's and Xodus Nexus's code and docs; `xgameruntime` as an
-ARM64EC Wine builtin; and `nghttp2`. This section answers the plan's question
-before any of them lands. The Components table gets their rows when they land.
+adds a Swift client, `XboxClientKit`, written from Xodus's and Xodus Nexus's
+code and docs (its session and synthetic device land in PLA-491); `xgameruntime`
+as an ARM64EC Wine builtin; and `nghttp2`. This section answers the plan's
+licensing question; the Components table gains each component when it lands.
 The upstreams were read on 2026-10-30:
 
 | Upstream | Read at | Licence as published |
@@ -329,8 +330,11 @@ The upstreams were read on 2026-10-30:
   - code written from Nexus's own code (its launcher, MIT) keeps Nexus's
     notice too (`LICENSE-XodusNexus.txt`). Code written from Nexus's Xodus
     patches owes both;
-  - nothing else. Xodus's files carry no copyright notice to keep, and the
-    derived files are in Playport's own source.
+  - Xodus's `licensing/splicense.rs` retains LukeFZ's 2022 CikExtractor MIT
+    notice. The translated CLEP state decoding in `XboxCrypto.swift` keeps it
+    as `LICENSE-CikExtractor.txt`; the app's Xodus component carries it too;
+  - Xodus's other files carry no copyright notice to keep; the derived files
+    are in Playport's own source.
 - **The converter exception does not cover it.** The exception covers only
   code whose copyright Playport's holder owns. The Xodus-derived files are
   third-party material in `app/`, which `LICENSE-EXCEPTION.md` already leaves

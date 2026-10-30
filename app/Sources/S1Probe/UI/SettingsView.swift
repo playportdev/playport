@@ -171,6 +171,9 @@ struct SettingsView: View {
             SteamAccountSettings()
             GOGAccountSettings()
             EpicAccountSettings()
+            #if !PLAYPORT_RELEASE
+            XboxAccountSettings()
+            #endif
         case .graphics: GraphicsSettings()
         case .downloads: DownloadSettings()
         case .controls: ControlsSettings()

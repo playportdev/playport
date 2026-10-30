@@ -123,6 +123,10 @@ cp_ Playport-LICENSE.txt "$REPO/LICENSE"
 cp_ Playport-LICENSE-EXCEPTION.md "$REPO/LICENSE-EXCEPTION.md"
 # JavaSteam (MIT): the protocol schema tables in app/SteamClient
 cp_ JavaSteam-LICENSE.txt "$REPO/app/SteamClient/LICENSE-JavaSteam.txt"
+# XboxClientKit's translated Swift (dev app only; LICENSING.md, Xbox).
+cp_ Xodus-LICENSE.txt "$REPO/app/XboxClient/LICENSE-Xodus.txt"
+cp_ XodusNexus-LICENSE.txt "$REPO/app/XboxClient/LICENSE-XodusNexus.txt"
+cp_ CikExtractor-LICENSE.txt "$REPO/app/XboxClient/LICENSE-CikExtractor.txt"
 tar_ GPL-2.0.txt gmp-6.3.0.tar.xz gmp-6.3.0/COPYINGv2
 tar_ LGPL-3.0.txt gmp-6.3.0.tar.xz gmp-6.3.0/COPYING.LESSERv3
 cp_ LGPL-2.1.txt "$WINE/COPYING.LIB"

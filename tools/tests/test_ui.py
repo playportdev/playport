@@ -165,6 +165,13 @@ class UiEnvTest(unittest.TestCase):
             with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
                 m.parse(["--action", bad])
 
+    def test_xbox_sign_in_and_out_use_only_the_semantic_dev_paths(self):
+        m = load()
+        for action in ("xbox:signin", "xbox:wait", "xbox:signout", "xbox:status", "xbox:reset-device"):
+            self.assertEqual(m.parse(["--action", action]).action, [action])
+        for bad in ("xbox:", "xbox:password=secret", "xbox:signin:secret", "xbox:reset", "xbox:SignIn"):
+            self.assertFalse(m.ACTION_RE.match(bad), bad)
+
     def test_donor_pool_setting_takes_auto_and_fixed_sizes(self):
         # Settings › Developer › Donor pool (PLA-351): set:'s generic KEY=VALUE carries auto.
         m = load()

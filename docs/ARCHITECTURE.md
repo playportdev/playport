@@ -1261,6 +1261,20 @@ The per-game channels below are explicit exceptions, not transfers of the
 host account session. GOG and Epic's host sessions use separate Keychain
 services ([0058](decisions/0058-store-sessions.md)).
 
+The dev app also uses `XboxClientKit` (`app/XboxClient`, [0166](decisions/0166-the-xbox-store.md)):
+an injected `XboxHTTP` (request in, status/body out), on ContentKit's `SecretStore`.
+`XboxSession` registers a random synthetic Windows device without probing the phone, exchanges
+Microsoft's inline sign-in result through signed SOAP, and silently renews the user session.
+The non-persistent `XboxSignInSheet` (`Dev/XboxAccount.swift`) presents as CloudExperienceHost
+to Microsoft's own page and bridges only main-frame messages from `https://login.live.com`.
+The Xbox Keychain service (`dev.playport.app.xbox`, this-device-only) separates the device
+from issued session tickets/proofs: sign-out deletes the latter, retaining the same device
+for the next sign-in. Microsoft's device-auth rejection or Developer's Reset Xbox device
+replaces it; a network/service error does not. The Store's 10-device limit is a licensing
+reason (501), not HTTP 501; its message points to `account.microsoft.com/devices/content`.
+The release package has no XboxClientKit dependency and no `Dev/`; verification also rejects
+any Swift `Xbox…` type that reaches a release executable.
+
 - **One service.** `SteamService` (`Sources/SteamClientKit/Service/`) owns
   the session: pairing, silent restore, token renewal (daily), the owned-games
   list, PICS metadata and sign-out; the UI is its only caller.
