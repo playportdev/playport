@@ -327,6 +327,7 @@ stage_vulkan() {
     run vulkan env WINEBUILD="$RUN/pe/wine/build-tools/tools/winebuild/winebuild" WINE_SRC="$RUN/pe/wine" \
         bash "$HERE/stages/vulkan-pe.sh" "$RUN/vulkan-pe"
     say "  $(grep -c ' arm64ec-windows/.*\.dll$' "$RUN/logs/vulkan.log") vulkan-pe DLLs"
+    say "  $(grep -c ' aarch64-windows/.*\.dll$' "$RUN/logs/vulkan.log") vulkan-pe aarch64 DLLs"
 }
 
 stage_stage() {

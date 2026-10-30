@@ -62,6 +62,12 @@ any mismatch:
                 wow64.dll, wow64win.dll and xtajit.dll are ARM64 PE32+
                 builtins; xtajit exports FEX's WoW64 CPU interface.
                 Build scaffolding only: does not claim 32-bit execution works.
+  arm64-vulkan  the Vulkan backend's aarch64 set a native ARM64 child loads
+                (PLA-513): vkd3d-proton's d3d12.dll and d3d12core.dll and
+                DXVK's dxgi.dll under Runtime/vulkan/aarch64-windows, the
+                Khronos vulkan-1.dll and winevulkan.json under
+                Runtime/vulkan-loader/aarch64-windows; each DLL a PE32+
+                ARM64 (0xAA64) Wine builtin
   steamclient   Playport's Steam client (P9-steamclient): steamclient64.dll and
                 steamclient.dll, native x86-64 and i386 DLLs exporting what a
                 genuine steam_api resolves
@@ -559,6 +565,22 @@ def wow64_checks(rt, rows):
                   f"wow64: xtajit.dll imports only ntdll.dll and wow64.dll (imports {', '.join(sorted(dlls))})")
 
 
+def arm64_vulkan_checks(rt, rows):
+    """The Vulkan backend's aarch64 set for a native ARM64 child (PLA-513, decision 0170):
+    vkd3d-proton's d3d12 and d3d12core and DXVK's dxgi under Runtime/vulkan, the Khronos loader and
+    winevulkan's ICD manifest under Runtime/vulkan-loader, each DLL an ARM64 PE32+ Wine builtin.
+    An ARM64EC build (machine AMD64) is the wrong machine here."""
+    staged = {r[1] for r in rows if r[0] == "resource"}
+    for name in ("Runtime/vulkan/aarch64-windows/d3d12.dll", "Runtime/vulkan/aarch64-windows/d3d12core.dll",
+                 "Runtime/vulkan/aarch64-windows/dxgi.dll", "Runtime/vulkan-loader/aarch64-windows/vulkan-1.dll"):
+        path = rt(name)
+        body = path.read_bytes() if name in staged and path.is_file() else b""
+        check(pe_machine_magic(body) == (0xaa64, 0x20b) and b"Wine builtin DLL" in body[:0x200],
+              f"arm64-vulkan: {name} bundled, a PE32+ ARM64 (0xAA64) Wine builtin")
+    name = "Runtime/vulkan-loader/aarch64-windows/winevulkan.json"
+    check(name in staged and rt(name).is_file(), f"arm64-vulkan: {name} bundled")
+
+
 def host_io_checks(exe, rt, rows):
     """The host I/O app pieces (docs/ARCHITECTURE.md)."""
     trie = subprocess.run(["llvm-objdump", "--macho", "--exports-trie", str(exe)], capture_output=True,
@@ -852,6 +874,7 @@ def main():
         steamapi_checks(rt, rows)
         steamclient_checks(rt, rows)
         wow64_checks(rt, rows)
+        arm64_vulkan_checks(rt, rows)
         steam_checks(exe)
         workstation_path_checks(app)
         jit_helper_checks(app, info, not a.app, profile=not a.unsigned)

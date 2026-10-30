@@ -15,7 +15,13 @@ runs on the phone and Hollow Knight still reaches first frame+10
   (`sysarm64`), with its own aarch64 ntdll and no WoW64 window and no FEX.
 - **Two Wine trees stay** (arm64ec, and i386 with aarch64). Wine is not built ARM64X.
 - **Its Direct3D 12 is vkd3d-proton built for aarch64,** with an aarch64 `vulkan-1.dll`, on
-  Wine's aarch64 `winevulkan` and KosmicKrisp.
+  Wine's aarch64 `winevulkan` and KosmicKrisp. Its `dxgi.dll` is DXVK's, built for aarch64
+  ([PLA-513](https://linear.app/playportdev/issue/PLA-513)): the arm64ec Vulkan backend already
+  pairs vkd3d-proton with DXVK's `dxgi`, whose adapters are Vulkan devices on the same
+  `winevulkan`; the aarch64 `dxgi.dll` Playport already shipped is DXMT's, whose adapters are
+  Metal devices for DXMT's `d3d11`, over Wine's wined3d one. The set lives under
+  `Runtime/vulkan/aarch64-windows` and `Runtime/vulkan-loader/aarch64-windows`, linked over
+  `sysarm64` by a Vulkan launch, so other plays keep DXMT's and Wine's aarch64 DLLs.
 
 ## Why
 
