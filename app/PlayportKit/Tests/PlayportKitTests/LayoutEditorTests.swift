@@ -236,6 +236,41 @@ final class LayoutEditorTests: XCTestCase {
         XCTAssertEqual(kbm.duplicate("move"), "move-2")
     }
 
+    /// Add, Duplicate, Remove, Reset and another preset during a drag end the drag first: the drag is
+    /// its own undo step, and the next drag starts from where the control is, not the old frame.
+    func testAnOperationDuringADragEndsItFirst() throws {
+        var e = LayoutEditor(preset: .keyboardMouse, width: 800, height: 400)
+        e.drag("jump", dx: -40, dy: 0)
+        let moved = try XCTUnwrap(e.frame(of: "jump"))
+        e.remove("esc")
+        e.drag("jump", dx: 0, dy: 0)
+        XCTAssertEqual(e.frame(of: "jump"), moved)
+        e.endGesture()
+        e.undo()                                                 // the remove
+        XCTAssertNotNil(e.layout.control("esc"))
+        XCTAssertEqual(e.frame(of: "jump"), moved)
+        e.undo()                                                 // the drag
+        XCTAssertEqual(e.layout, .keyboardMouse())
+
+        // Reset during a drag: the reset layout, the drag undone after the reset.
+        e.drag("jump", dx: -40, dy: 0)
+        e.reset()
+        XCTAssertNil(e.gesture)
+        XCTAssertEqual(e.layout, .keyboardMouse())
+        e.undo()
+        XCTAssertEqual(e.frame(of: "jump"), moved)
+        let ops: [(inout LayoutEditor) -> Void] = [{ _ = $0.add(.button) }, { _ = $0.duplicate("fire") }, { $0.start(from: .pointClick) }]
+        for op in ops {
+            var o = LayoutEditor(preset: .keyboardMouse, width: 800, height: 400)
+            o.drag("jump", dx: -40, dy: 0)
+            op(&o)
+            XCTAssertNil(o.gesture)
+            o.undo(); o.undo()
+            XCTAssertEqual(o.layout, .keyboardMouse())
+            XCTAssertFalse(o.canUndo)
+        }
+    }
+
     func testTheInspectorEditsWhatAControlPressesItsLabelAndBehaviour() throws {
         var e = LayoutEditor(preset: .keyboardMouse, width: 800, height: 400)
         XCTAssertEqual(e.details("jump"), ControlDetails(id: "jump", label: "Jump", subtitle: "Button · right side", slots: ["Presses"],

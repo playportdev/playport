@@ -24,7 +24,8 @@
 //   directions, or a stick's whole-pad stick), its label, its size and a
 //   button's behaviour (hold, toggle, repeat). A button whose label was its
 //   action's name follows a new action's name.
-// - Undo and redo: each operation, and each whole gesture, is one step.
+// - Undo and redo: each operation, and each whole gesture, is one step; an
+//   operation during a gesture ends the gesture first.
 // - `saved(into:)` is what Done stores. Nothing changed since it opened
 //   (`changed`: the same preset and layout, an edit undone too): the game as
 //   it was, so Done neither picks a layout for a game following Off, Settings
@@ -356,6 +357,7 @@ public struct LayoutEditor: Equatable, Sendable {
                         tool: n.tool)
         }
         c.id = unusedID(c.id)
+        endGesture()
         let before = snapshot
         if c.isSurface {
             layout.controls.insert(c, at: 0)
@@ -381,6 +383,7 @@ public struct LayoutEditor: Equatable, Sendable {
             z.x += Self.duplicateOffset; z.y += Self.duplicateOffset
             c.placeZone(at: z.kept(in: a), in: a)
         }
+        endGesture()
         let before = snapshot
         layout.controls.insert(c, at: index(id)! + 1)
         record(before)
@@ -390,6 +393,7 @@ public struct LayoutEditor: Equatable, Sendable {
 
     public mutating func remove(_ id: String) {
         guard let i = index(id) else { return }
+        endGesture()
         let before = snapshot
         layout.controls.remove(at: i)
         record(before)
@@ -417,6 +421,7 @@ public struct LayoutEditor: Equatable, Sendable {
 
     /// The bare preset back (one undo step).
     public mutating func reset() {
+        endGesture()
         let before = snapshot
         layout = presetLayout(preset)
         record(before)
@@ -426,6 +431,7 @@ public struct LayoutEditor: Equatable, Sendable {
     /// Another preset as the starting point: the game's copy of it, else the preset (one undo step).
     public mutating func start(from p: OnScreenLayout) {
         guard p != .off, p != preset else { return }
+        endGesture()
         let before = snapshot
         preset = p
         layout = copies[p] ?? presetLayout(p)
