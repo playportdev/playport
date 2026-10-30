@@ -500,6 +500,16 @@ final class GyroChipOverlay: UIView {
 /// the backdrop blur that flickered pink over the game did (phase 1). The frame
 /// read is the last one presented while the game draws the next, so the loupe
 /// may lag the screen by a frame.
+///
+/// It can also tear: unlike the Screenshot, which reads with the game paused,
+/// the copy runs on its own queue with nothing shared with the game's, while the
+/// game may already be drawing into that texture again (DXMT's drawable once its
+/// successor is on screen and the presented handler has not yet moved
+/// lastPresented; KosmicKrisp's swap chain image as soon as its blit into the
+/// drawable is done). No cheap sync closes that: copying from the presented
+/// handler would narrow DXMT's window but not KosmicKrisp's, and would leave the
+/// loupe empty for a game that presents rarely. A torn copy shows in the loupe
+/// alone, until the next copy (a fifteenth of a second at most).
 final class MagnifierOverlay: UIView {
     private let halo = UIView(), ring = UIView()
     /// The loupe's shadow; `lens`, inside it, is clipped round.
