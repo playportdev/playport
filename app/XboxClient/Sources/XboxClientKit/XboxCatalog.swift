@@ -32,6 +32,19 @@ public struct XboxProduct: Codable, Sendable, Equatable {
     public let delivery: XboxDelivery
     /// The games with a GDK package the product installs (itself, or its bundle's).
     public let games: [String]
+    /// The Windows.Desktop MSIXVC package a copy installs (its own, else its first game's).
+    /// Nil in a cache from before PLA-497 (looked up again) or for anything not GDK.
+    public var package: XboxProductPackage? = nil
+}
+
+/// A Windows.Desktop GDK package as the display catalogue lists it.
+public struct XboxProductPackage: Codable, Sendable, Equatable {
+    /// The package's content ID (the XVD's VDUID): GetBasePackage's and licensing's.
+    public let contentID: String
+    /// MSIXVC or MSIXVC2.
+    public let format: String
+    /// MaxDownloadSizeInBytes: about what the install needs on the phone.
+    public let downloadSize: UInt64
 }
 
 enum XboxCatalog {
@@ -67,14 +80,32 @@ enum XboxCatalog {
     /// Package formats on Windows.Desktop, upper-cased; and whether the product has any package at all.
     static func formats(_ record: Record) -> (desktop: Set<String>, any: Bool) {
         var desktop = Set<String>(), any = false
-        for properties in skuProperties(record) {
-            for case let package as Record in (properties["Packages"] as? [Any]) ?? [] {
-                any = true
-                let platforms = ((package["PlatformDependencies"] as? [Any]) ?? []).compactMap { ($0 as? Record)?["PlatformName"] as? String }
-                if platforms.contains("Windows.Desktop") { desktop.insert(((package["PackageFormat"] as? String) ?? "UNKNOWN").uppercased()) }
-            }
+        for package in packages(record) {
+            any = true
+            if package.desktop { desktop.insert(package.format) }
         }
         return (desktop, any)
+    }
+
+    private static func packages(_ record: Record) -> [(format: String, desktop: Bool, record: Record)] {
+        var out: [(format: String, desktop: Bool, record: Record)] = []
+        for properties in skuProperties(record) {
+            for case let package as Record in (properties["Packages"] as? [Any]) ?? [] {
+                let platforms = ((package["PlatformDependencies"] as? [Any]) ?? []).compactMap { ($0 as? Record)?["PlatformName"] as? String }
+                out.append((((package["PackageFormat"] as? String) ?? "UNKNOWN").uppercased(), platforms.contains("Windows.Desktop"), package))
+            }
+        }
+        return out
+    }
+
+    /// The first Windows.Desktop MSIXVC/MSIXVC2 package with a GUID content ID (Xodus's choice).
+    static func gdkPackage(_ record: Record) -> XboxProductPackage? {
+        for p in packages(record) where p.desktop && gdkFormats.contains(p.format) {
+            guard let id = p.record["ContentId"] as? String, let uuid = UUID(uuidString: id) else { continue }
+            let size = (p.record["MaxDownloadSizeInBytes"] as? NSNumber)?.uint64Value ?? 0
+            return XboxProductPackage(contentID: uuid.uuidString.lowercased(), format: p.format, downloadSize: size)
+        }
+        return nil
     }
 
     /// A bundle's products, primary when any SKU marks it so.
@@ -143,8 +174,9 @@ enum XboxCatalog {
                 games = found.filter { records[$0]?["ProductType"] as? String == "Game" }.sorted()
             }
         }
+        let package = delivery == .gdk ? gdkPackage(record) ?? games.lazy.compactMap({ records[$0].flatMap(gdkPackage) }).first : nil
         return XboxProduct(productID: id, title: String(title.prefix(512)), tileArt: art(["TitledHeroArt", "BoxArt"]),
-                           heroArt: art(["SuperHeroArt", "TitledHeroArt", "Hero"]), delivery: delivery, games: games)
+                           heroArt: art(["SuperHeroArt", "TitledHeroArt", "Hero"]), delivery: delivery, games: games, package: package)
     }
 
     /// Microsoft's image hosts over HTTPS only; protocol-relative URIs become HTTPS.

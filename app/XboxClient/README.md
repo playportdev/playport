@@ -98,6 +98,64 @@ Microsoft's offline grant. The result is typed:
 Logs say granted/refused/unavailable only: no content ID, licence, key, ticket
 or provider text.
 
+## Installing a copy (PLA-497)
+
+The pilot's package format is **MSIXVC**: an XVD (format 3, fixed, integrity
+protected) whose drive is NTFS. `XboxInstaller.install(product:contentID:title:)`
+follows Xodus's streaming install:
+
+1. **Package and entitlement.** The catalogue names each copy's Windows.Desktop
+   GDK package (`XboxProduct.package`: content ID, format, MaxDownloadSize).
+   `XboxSession.packageLocation(contentID:)` exchanges the account's RPS ticket
+   (`user.auth.xboxlive.com`, `mbi_ssl`, the Store app) at user.auth, gets an XSTS
+   token for `http://update.xboxlive.com`, and asks
+   `packagespc.xboxlive.com/GetBasePackage/<contentID>`. The first `.msixvc` file
+   is installed, from the `xboxlive.com` CDN roots only. No package for the account
+   (`PackageFound: false`, 403, 404) is `XboxInstallRefusal.notEntitled`; an
+   MSIXVC2 package is `unsupported` (PLA-503).
+2. **Licence.** `licence(contentID:)` (the same GUID: the XVD's VDUID). A refusal
+   is `XboxInstallRefusal.licence(XboxLicenseFailure)`, before any download; the
+   licence must carry every key the package's regions name.
+3. **Metadata prefix.** Every byte before the first encrypted region (header, hash
+   tree, user data, XVC information, the drive's GPT and NTFS metadata: 44 MB for
+   the pilot, as Nexus keeps) is fetched into `<stage>.package` beside the stage,
+   resuming a partial one. `XboxPackage.load` checks the hash tree from the
+   header's top hash down and every metadata page it reads against it.
+4. **Files.** The NTFS drive's `$MFT` (walked linearly, paths from `$FILE_NAME`
+   parents) gives every file and its pages; a file Xodus would silently skip
+   (resident data, fragments, sparse runs, attribute lists) is refused by name.
+   `SegmentMetadata.bin` (the pilot has one: exactly its two `.exe`s are
+   `KEEP_ENCRYPTED_ON_DISK`) chooses the kept-encrypted files; without it every
+   `.exe` is (Xodus's NTFS fallback).
+5. **Stream-extract.** ContentKit's install engine stages the files in 1 MiB
+   chunks of one file's pages, read with HTTP ranges straight into the stage: no
+   copy of the package is kept, so the install needs about the game's size plus
+   the metadata prefix. Each page is checked against its level-0 hash entry
+   (SHA-256 of the ciphertext, 20 bytes and the page's XTS data unit in an
+   encrypted region) and fetched once more if it fails; then plain files are
+   XTS-AES-128 decrypted (`XboxXTS`: tweak key = the content key's first half;
+   tweak = data unit, region ID, VDUID) and cut to size, and kept-encrypted files
+   written as their whole encrypted pages. A stop resumes from the engine's
+   journal; the prefix is not fetched again.
+6. **Commit.** Every file's SHA-1 is taken, the stage moves into `C:\Games` with
+   one rename, and `manifests/xbox-<ProductId>.json` (`XboxInstalled`) keeps the
+   files and hashes, MicrosoftGame.config's executable, Title ID, MSA app ID and
+   SCID, and for each kept-encrypted file what a play needs to decrypt it
+   (`XboxEncryptedFile`: size, region, key ID, data units; the tweak's VDUID is
+   the content ID). No key, ticket or account identifier.
+
+The CDN roots are plain HTTP (`assets1/assets2.xboxlive.com` have no certificate
+for their names), which App Transport Security refuses in URLSession: ranges go
+over `XboxRangeClient`, an HTTP/1.1 keep-alive client on sockets (no redirects,
+compression or chunked bodies; Content-Range must be the range asked). The bytes
+are trusted only through the hash tree, which is anchored in the unsigned-here
+XVD header: the header's signature is not checked (as in Xodus).
+
+`verify` re-hashes the installed files; `forget(_:keepSaves:localAppData:)` drops
+the record and stages and, unless saves are kept, the runtime's local saves for
+the copy's SCID (`XboxSaves`: `XodusGameSave`, `XodusGameSaveFiles[Cache]`, every
+account).
+
 ## Provenance and offline checks
 
 Written from Xodus `514dd56f360a4bdf12f4acde5148bac5ce5f957f`:
@@ -115,7 +173,11 @@ headers; `LICENSE-Xodus.txt`, `LICENSE-XodusNexus.txt` and
 `LICENSE-CikExtractor.txt` preserve the applicable notices. See
 [LICENSING.md](../../docs/LICENSING.md#xbox-planned). The library follows Xodus
 Nexus `e0668a12f1da931aed13537ef04295599011317b` (`src/main/catalog.ts`,
-`src/main/account-library.ts`, `assets/xodus-subscription-login.patch`).
+`src/main/account-library.ts`, `assets/xodus-subscription-login.patch`). The
+install follows Xodus `53ea781dcd073e31d7ea68e894134e9c959bff04`
+(`crates/msixvc/src/{xvd.rs,crypt.rs,hash_tree.rs,layout.rs,math.rs,streaming.rs,
+streaming_ntfs.rs,models/xvd/}`, `crates/xodus/src/api/xbox/`,
+`crates/xodus-cli/src/{package.rs,commands/streaming.rs}`).
 
 `Tests/XboxClientKitTests/Fixtures/` contains **synthetic, redacted responses**, not
 account captures. No PLA-487 captures were present when PLA-491 began. The
@@ -139,12 +201,26 @@ keeps the capture's redacted key, which the parser skips), and
 and their bundles' products (the pilot's from the ground-truth capture, the rest
 from the public endpoint, which needs no account), trimmed to the fields read.
 `store-ticket.xml` is a synthetic, unsealed broker reply.
+`pilot-metadata.cut.zlib` is **real**: pieces of the pilot's package as the CDN
+served it (no account data is in a package): its three header pages, the hash
+tree's top page, the level-1 and level-0 pages down to MicrosoftGame.Config's
+page, that page, and the whole user data and XVC information (`PPCUT1`, then
+u32 count and `{u64 offset, u32 length, bytes}`, zlib). Everything else of the
+install's tests is a synthesised MSIXVC with the pilot's layout
+(`XboxTestPackage`: GPT, NTFS with 4 KiB records, three regions, XTS under a
+test key) served by a 127.0.0.1 range server.
 
 `PLAYPORT_BUILD=$PWD/.work ./pp test --swift XboxClientKit` runs public session
 flows (exchange, relaunch, expiry/renewal/refusal, device reuse/replacement/reset,
 sign-out during renewal, device limit, tampered response and logs), licensing
 (content key, cache and expiry, offline lease, refusal versus network/service
-error, logs), plus the independent FIPS-197/RFC-4231/RFC-3394/RSA vectors.
+error, logs), plus the independent FIPS-197/RFC-4231/RFC-3394/RSA vectors, and the
+install: the pilot's real header, layout, regions, segment metadata and hash tree
+(a flipped byte at each level found), IEEE 1619 and OpenSSL XTS vectors, cut and
+damaged metadata (throw, never trap), stream-extract over HTTP ranges, resume
+after a stop and a dropped connection, a byte flipped on the wire and on disk,
+the NTFS fallback without SegmentMetadata.bin, licence and entitlement refusals,
+and remove with and without saves.
 
 The phone is a deferred gate: Microsoft sign-in/2FA, relaunch, sign-out/reuse,
 and the passkey finding. The sheet assumes passkeys are unavailable in a

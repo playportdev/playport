@@ -95,6 +95,27 @@ final class XboxStoreLibraryTests: XCTestCase, @unchecked Sendable {
         for call in calls { XCTAssertEqual(call.headers["Authorization"] != nil, call.url.host == "beige.xboxservices.com") }
         XCTAssertFalse(lines.text.contains("sssssssss"))
         XCTAssertTrue(lines.text.contains("library: 5 copies (1 owned, 4 PC Game Pass); 9 licensed products left out"))
+        // Each copy names the package it installs: the pilot's Windows.Desktop MSIXVC (the console's XVC is not it).
+        let package = try XCTUnwrap(snapshot.products[pilot]?.package)
+        XCTAssertEqual([package.contentID, package.format, String(package.downloadSize)], ["31f3afa5-02a7-4cd9-ac6e-4f4be4604ab8", "MSIXVC", "5281849344"])
+        for copy in snapshot.copies { XCTAssertNotNil(snapshot.products[copy.id]?.package, copy.id) }
+        XCTAssertNil(snapshot.products["9NNLBL0T2Z43"]?.package, "EAppx is no package Playport installs")
+    }
+
+    /// A cache from before copies carried their package looks the GDK products up again, once.
+    func testACachedCopyWithoutItsPackageIsLookedUpAgain() async throws {
+        let body = try rows([pilot: row()])
+        let http = try XboxLibraryHTTP(entitlements: [body, body, body])
+        let library = library(http)
+        var old = try await library.refresh()
+        old.products[pilot]?.package = nil
+        let lookedBefore = await http.looked().count
+        let renewed = try await library.refresh(old)
+        XCTAssertEqual(renewed.products[pilot]?.package?.contentID, "31f3afa5-02a7-4cd9-ac6e-4f4be4604ab8")
+        let again = try await library.refresh(renewed)
+        XCTAssertEqual(again.products[pilot], renewed.products[pilot])
+        let looked = await http.looked()
+        XCTAssertEqual(Array(looked[lookedBefore...]), [pilot])
     }
 
     func testOnlyActiveLicencesOfTheAccountGiveACopyAndABundleLicenceIsOwnership() async throws {

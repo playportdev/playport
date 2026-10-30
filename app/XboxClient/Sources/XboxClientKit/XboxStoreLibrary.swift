@@ -57,7 +57,8 @@ public struct XboxStoreLibrary: Sendable {
         let entries = try await entitlements(tickets.storeAuthorization())
         var licensed: [String: XboxAccess] = [:]
         for id in entries.keys { if let access = XboxEntitlements.access(id, in: entries, now: checked) { licensed[id] = access } }
-        var products = (previous?.products ?? [:]).filter { licensed[$0.key] != nil }
+        // A GDK product cached before it carried its package is looked up again.
+        var products = (previous?.products ?? [:]).filter { licensed[$0.key] != nil && ($0.value.delivery != .gdk || $0.value.package != nil) }
         let missing = licensed.keys.filter { products[$0] == nil }.sorted()
         if !missing.isEmpty {
             let records = try await lookUp(missing)
