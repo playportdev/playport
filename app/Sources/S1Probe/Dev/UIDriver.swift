@@ -582,6 +582,11 @@ enum UIDriver {
                     for _ in 0..<300 where account.state == .unknown { try await pause(.milliseconds(100)) }
                     if id.hasPrefix("installed:") {
                         if let failure = try await xboxInstalled(String(id.dropFirst("installed:".count))) { return finish("action=\(action) failed: \(failure)") }
+                    } else if id.hasPrefix("offline-device:") {
+                        guard account.state == .signedIn else { return finish("action=\(action) refused: Xbox is not signed in") }
+                        if let failure = try await xboxOfflineDevice(String(id.dropFirst("offline-device:".count))) {
+                            return finish("action=\(action) failed: \(failure)")
+                        }
                     } else if id == "wait" {
                         for _ in 0..<1200 where account.signingIn && account.state != .signedIn && account.error == nil {
                             try await pause(.milliseconds(250))
@@ -1123,6 +1128,38 @@ enum UIDriver {
         log("xbox: \(t.id) installed in C:\\Games\\\(rec.installDir) version=\(rec.version) files=\(report.files - report.bad.count)/\(report.files) "
             + "verified, \(rec.encrypted.count) kept encrypted, exe=\(rec.executable ?? "none")")
         return report.bad.isEmpty ? nil : "\(report.bad.count) files do not verify"
+    }
+
+    /// `xbox:offline-device:on|off|status`: Settings › Accounts › Xbox's Offline device row.
+    /// on/off goes through its confirmation (Microsoft's change, one of its yearly ones);
+    /// status only reads Microsoft's answer. Logs the state and the changes left only.
+    private static func xboxOfflineDevice(_ arg: String) async throws -> String? {
+        guard ["on", "off", "status"].contains(arg) else { return "not on, off or status" }
+        let model = XboxOfflineDeviceModel.shared, row = "set:xbox:offline"
+        _ = AppNavigation.shared.open("account")
+        for _ in 0..<50 where PadFocus.shared.items[row] == nil { try await pause(.milliseconds(100)) }
+        guard PadFocus.shared.items[row] != nil else { return "the Offline device row is not shown" }
+        PadFocus.shared.focused = row
+        // The row's own read of Microsoft's answer.
+        for _ in 0..<600 where model.busy || (model.status == nil && model.error == nil) { try await pause(.milliseconds(100)) }
+        if arg != "status" {
+            guard model.isOn != (arg == "on") else { return "already \(arg)" }
+            PadFocus.shared.activate()
+            try await pause(.milliseconds(250))
+            guard case let .picker(picker) = PadModal.shared.content,
+                  let index = picker.options.firstIndex(where: { $0.id == "confirm" }) else { return "the confirmation is not shown" }
+            try await pause(.milliseconds(1000))  // a screenshot sees the confirmation
+            picker.pick(index)
+            try await pause(.milliseconds(250))
+            for _ in 0..<600 where model.busy { try await pause(.milliseconds(100)) }
+        }
+        if let error = model.error { return error }
+        guard let status = model.status else { return "Microsoft did not answer" }
+        log("xbox: offline device \(model.isOn ? "on" : "off")"
+            + (status.changesLeft.map { "; \($0) change(s) left of \(status.changesPerPeriod.map(String.init) ?? "?")" } ?? ""))
+        if arg != "status", model.isOn != (arg == "on") { return "Microsoft did not apply the change" }
+        try await pause(.milliseconds(1000))
+        return nil
     }
 
     /// The GOG page's Install (or Update) of `spec` (`<id>` or `<id>@<build>`); nil once the build is in the library.

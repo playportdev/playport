@@ -181,6 +181,14 @@ class UiEnvTest(unittest.TestCase):
                     "xbox:installed:", "xbox:installed", "xbox:installed:9MW9469V91LM:x", "install:xbox-../x"):
             self.assertFalse(m.ACTION_RE.match(bad), bad)
 
+    def test_the_xbox_offline_device_row_turns_on_off_or_reads(self):
+        # Settings › Accounts › Xbox's Offline device through its confirmation (PLA-504).
+        m = load()
+        for action in ("xbox:offline-device:on", "xbox:offline-device:off", "xbox:offline-device:status"):
+            self.assertEqual(m.parse(["--action", action]).action, [action])
+        for bad in ("xbox:offline-device", "xbox:offline-device:", "xbox:offline-device:true", "xbox:offline-device:on:x"):
+            self.assertFalse(m.ACTION_RE.match(bad), bad)
+
     def test_donor_pool_setting_takes_auto_and_fixed_sizes(self):
         # Settings › Developer › Donor pool (PLA-351): set:'s generic KEY=VALUE carries auto.
         m = load()
