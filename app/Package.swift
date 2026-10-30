@@ -130,6 +130,8 @@ let package = Package(
         .target(name: "HostIO", dependencies: ["WinIOS"]),
         // Only the dev app depends on this synthetic native-authentication probe.
         .target(name: "AuthProbe", linkerSettings: [.linkedFramework("GSS")]),
+        // Only the dev app depends on this: the task's memory ledger for the footprint-jump sampler.
+        .target(name: "MemoryLedger"),
         // The JIT helper extension: StikJIT's prebuilt framework (MPL-2.0,
         // embedded unmodified in the extension's Frameworks/), the XPC contract
         // it shares with the app, and its entry point (PlayportJITEntry/entry.c).
@@ -166,7 +168,7 @@ let package = Package(
                            .product(name: "GOGClientKit", package: "GOGClient"),
                            .product(name: "EpicClientKit", package: "EpicClient"),
                            .product(name: "PlayportKit", package: "PlayportKit")]
-                + ["Relaunch", "SharedMemory"] + (release ? [] : ["AuthProbe"]),
+                + ["Relaunch", "SharedMemory"] + (release ? [] : ["AuthProbe", "MemoryLedger"]),
             path: "Sources/S1Probe",
             // Runtime/ ships at the app root through xtool.yml `resources`, not
             // as a SwiftPM resource bundle: ntdll resolves nls/ and <arch>-windows/

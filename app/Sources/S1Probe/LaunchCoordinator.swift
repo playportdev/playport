@@ -962,7 +962,8 @@ enum LaunchCoordinator {
     /// and a `limits:` mark at the end; reaching one does not change the outcome.
     /// So does the FEX arena's use (FexBand), as `band:` lines and a `band:` mark;
     /// a dev build also writes the arena's map into the log at the end, and memory by
-    /// pseudo-process (`[proc-mem]` lines) as it moves and at the end. An arena
+    /// pseudo-process (`[proc-mem]` lines) as it moves, near the limit as it climbs
+    /// (FootprintJumpSampler) and at the end. An arena
     /// that refused a request ends the launch as a pool that ran out does, after the
     /// same grace, and turns the outcome into `.outOfEmulatorMemory` (decision 0120).
     private final class PoolLog {
@@ -977,6 +978,11 @@ enum LaunchCoordinator {
         private(set) var exhaustedAt: Date?
         /// What ran out first, for the log line at the grace's end.
         private(set) var exhaustedWhat = "JIT memory"
+
+        #if !PLAYPORT_RELEASE
+        /// A dev build's samples near the limit, from the launch's start to its end (PLA-476).
+        private let footprintSampler = FootprintJumpSampler.start()
+        #endif
 
         init(grace: TimeInterval) { self.grace = grace }
 
@@ -1076,6 +1082,7 @@ enum LaunchCoordinator {
             let band = Self.readBand()
             if let band { mark(band.line) }
             #if !PLAYPORT_RELEASE
+            footprintSampler.stop()
             wine_host_band_dump("launch end")
             wine_host_process_memory_log("launch end", 1)
             #endif
