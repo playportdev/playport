@@ -376,9 +376,12 @@ final class XboxBridgeTests: XCTestCase, @unchecked Sendable {
             got += chunk[0..<n]
         }
     }
+    /// Closed by the bridge: an orderly end, or a reset for a connection still
+    /// waiting to be accepted when the port closed. Not a 5 s timeout.
     func closed(_ fd: Int32) -> Bool {
         var b = [UInt8](repeating: 0, count: 16)
-        return b.withUnsafeMutableBytes { recv(fd, $0.baseAddress, $0.count, 0) } == 0
+        let n = b.withUnsafeMutableBytes { recv(fd, $0.baseAddress, $0.count, 0) }
+        return n == 0 || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK)
     }
 
     func testTheSocketAnswersAKeyedFrameSplitAcrossWritesAndEndsAnOversizedOne() async throws {
