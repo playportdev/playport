@@ -215,7 +215,7 @@ def cmd_check(args):
     pipeline = os.path.join(REPO, "build", "pipeline")
     plan = subprocess.run([pipeline, "--plan", "--variant", variant, "--to", "notices"],
                           capture_output=True, text=True).stdout.splitlines()
-    trees = [line[len("plan: "):] for line in plan if re.match(r"plan: (unix|pe|fex|dxmt|vulkan|steamapi) runs", line)]
+    trees = [line[len("plan: "):] for line in plan if re.match(r"plan: (unix|pe|fex|dxmt|vulkan|steamapi|xbox) runs", line)]
     if trees:
         print("pp check: building the trees whose inputs changed first (minutes, not seconds; a first"
               " build is 10 to 15 minutes):\n  " + "\n  ".join(t.replace(" runs", "", 1) for t in trees), flush=True)

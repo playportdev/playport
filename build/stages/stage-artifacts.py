@@ -39,6 +39,8 @@ under $PLAYPORT_RUN, default $PLAYPORT_BUILD/run):
   VULKAN_LOADER_ROOT  vulkan-pe/loader   stages/vulkan-pe.sh loader (P6-vulkan-loader): the Khronos
                                          Vulkan-Loader and winevulkan.json
   STEAMAPI_ROOT       steamapi/pe        stages/steamapi.sh (P8-steamapi): gbe_fork's steam_api DLLs
+  XBOX_PE_ROOT        xbox/pe            stages/xbox-pe.sh (P11-xgameruntime, P11-nghttp2): the Xbox
+                                         runtime's xgameruntime.dll and libnghttp2.dll
   session             session            stages/session-root.sh (P9-session, P9-url-opener): the session
                                          root and the URL opener
   steamclient         steamclient        stages/steamclient.sh (P9-steamclient): Playport's steamclient64.dll and steamclient.dll
@@ -85,6 +87,7 @@ ROOTS = {
     "vulkan-pe": Path(os.environ.get("VULKAN_PE_ROOT", RUN / "vulkan-pe" / "pe")),
     "vulkan-loader": Path(os.environ.get("VULKAN_LOADER_ROOT", RUN / "vulkan-pe" / "loader")),
     "steamapi": Path(os.environ.get("STEAMAPI_ROOT", RUN / "steamapi" / "pe")),
+    "xbox": Path(os.environ.get("XBOX_PE_ROOT", RUN / "xbox" / "pe")),
     "session": RUN / "session",
     "steamclient": RUN / "steamclient",
     "idevice": RUN / "idevice",
@@ -128,6 +131,8 @@ HEADER = """\
 #   P9-steamclient app/SteamClientShim/steamclient.c (Playport's own; its generated slot table from the Steamworks SDK headers pinned as gbe's sdk/) compiled by build/stages/steamclient.sh (llvm-mingw 20260922) as freestanding x86-64 and i386 DLLs (i386 with compiler-rt's builtins): Playport's Steam client for a game's genuine steam_api (decision 0115), which the app copies to the prefix's C:\Program Files (x86)\Steam\ for a play in client mode
 #   P9-url-opener app/UrlOpener/playport-url-opener.c (Playport's own) compiled by build/stages/session-root.sh (llvm-mingw 20260922) as a freestanding x86-64 program: the prefix's http and https handler, which hands a URL a game opens to the host app (decision 0064); in arm64ec-windows so the prefix's system32 has it
 #   P10-idevice idevice (MIT) at the idevice pin, its C FFI with the features the app's restart uses, built for aarch64-apple-ios with the pins.lock Rust (build/stages/idevice.sh) and prelinked into one object that exports four calls (app/Sources/Relaunch); its crates are in the run's idevice/crates.tsv
+#   P11-xgameruntime nexus-xgameruntime (LGPL-2.1-or-later) at the xgameruntime pin + patches/xgameruntime, with libxml2 and the WinRT JSON header from the P2 tree (build/stages/xbox-pe.sh, llvm-mingw 20260922, -D_WIN32_WINNT=0x0A00), its C++ runtime linked statically; an arm64ec Wine builtin in arm64ec-windows, the GDK runtime an Xbox title loads
+#   P11-nghttp2 nghttp2 (MIT) at the nghttp2 pin (v1.70.0), library only, unmodified (build/stages/xbox-pe.sh, llvm-mingw 20260922, -D_WIN32_WINNT=0x0A00); an arm64ec Wine builtin in arm64ec-windows, which Wine's winhttp loads for HTTP/2
 #   P7-reg    app/registry/{system,user}.reg (committed): app/tools/prefix-registry.py applies the WINE_REGISTRY scripts of the staged arm64ec-windows DLLs as wineboot's register_fake_dll would; wine_host.c appends the sections a prefix lacks before the wineserver starts
 #   ca-bundle Mozilla's root store (MPL-2.0) as curl's CA extract, the dated file pins.lock's ca-bundle row names, unmodified (build/stages/ca-bundle.sh checks its sha256): wine_host.c names it in MADEIRA_CA_BUNDLE, and crypt32's unix side imports it into the prefix's ROOT store (docs/ARCHITECTURE.md, "Trusted roots")
 #   wine-mono WineHQ's Wine Mono release (MIT, LGPL and others; build/notices-wine-mono.py) at the wine-mono pin, the shared-directory tarball unmodified (build/stages/wine-mono.sh checks its sha256), a symbolic link staged as a copy of its target; under Runtime/mono/wine-mono-<pin>/, where the wine pin's mscoree finds it from WINEDATADIR, as in Proton's share/wine/mono (decision 0077)
@@ -230,6 +235,9 @@ def wine_mono_files():
 # The Steam API emulator (build/stages/steamapi.sh), per game architecture.
 STEAMAPI = [("x86_64", "steam_api64.dll"), ("i386", "steam_api.dll")]
 
+# The Xbox runtime's DLLs (build/stages/xbox-pe.sh), with Wine's own arm64ec set.
+XBOX_PE = [("xgameruntime.dll", "P11-xgameruntime"), ("libnghttp2.dll", "P11-nghttp2")]
+
 GAPS = [  # kind-of-thing, dest, reason
     ("resource", "Runtime/arm64ec-windows/wineios.drv", "Madeira build/wineios-drv/wineios.c has no build recipe at the Madeira pin, and the wine-port tree's dlls/wineios.drv is not in its configure, so stages/wine-pe.sh does not build it; audio does not need it: mmdevapi loads winepulse.drv by name and virtual_ios.c answers with the linked audio_null_ios table"),
     ("resource", "Runtime/prefix-template.tar.gz", "reference seeds the whole prefix from an untracked-recipe template; the app seeds only the builtins' own registrations (Runtime/registry, P7-reg), so the rest of wine.inf (font registry, services, file associations) is not applied"),
@@ -323,6 +331,8 @@ def record():
             "P6-vulkan-loader")
     for arch, name in STEAMAPI:
         add("resource", f"Runtime/steamapi/{arch}-windows/{name}", "steamapi", f"{arch}-windows/{name}", "P8-steamapi")
+    for name, prov in XBOX_PE:
+        add("resource", f"Runtime/arm64ec-windows/{name}", "xbox", f"arm64ec-windows/{name}", prov)
     add("resource", "Runtime/arm64ec-windows/playport-session.exe", "session", "playport-session.exe", "P9-session")
     add("resource", "Runtime/arm64ec-windows/playport-url-opener.exe", "session", "playport-url-opener.exe", "P9-url-opener")
     add("resource", "Runtime/steamclient/x86_64-windows/steamclient64.dll", "steamclient", "steamclient64.dll", "P9-steamclient")

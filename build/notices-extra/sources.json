@@ -15,6 +15,13 @@
       "path": "LICENSE",
       "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
     },
+    "libHttpClient-LICENSE.md": {
+      "for": "xgameruntime's src/System/Threading (12 files that say 'From https://github.com/microsoft/libHttpClient' under an LGPL header, the MIT notice dropped; the revision they came from is not recorded, and the LICENSE.md text has not changed since the first commit, which this is; docs/LICENSING.md, Xbox)",
+      "repository": "https://github.com/microsoft/libHttpClient",
+      "commit": "256d1cc9b3ed9310b41a3da9a2d2de354efe22da",
+      "path": "LICENSE.md",
+      "sha256": "d889d2995fd80a7eddc656e5e782d4755c4344cd2f80a6c7cc4529177829bc5f"
+    },
     "ns-keyed-archive-NOTICE-from-metadata": {
       "for": "the ns-keyed-archive 0.1.5 crate, which has no licence file anywhere (docs/release-audits/stikjit-rust.md, 2026-09-30); owner's decision 0039",
       "derived_from": "the crate's Cargo.toml license and authors fields",

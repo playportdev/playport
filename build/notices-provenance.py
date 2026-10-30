@@ -131,7 +131,7 @@ def tracked_file(tree, source):
 def source_roots(repo):
     roots = {"playport": repo, **{key.lower(): Path(os.environ[key]) for key in
              ("WINE", "FEX", "MYTHIC", "DXMT", "LLVM", "FREETYPE", "MESA", "DXVK", "VKD3D", "VULKAN_LOADER",
-              "VULKAN_HEADERS", "GBE", "ABSL", "STIKJIT", "IDEVICE")}}
+              "VULKAN_HEADERS", "GBE", "ABSL", "XGAMERUNTIME", "NGHTTP2", "STIKJIT", "IDEVICE")}}
     # Resolve each source's actual Git root too: notices in initialized
     # submodules must be checked against that child, not the parent gitlink.
     return sorted(((name, root.resolve()) for name, root in roots.items()),
@@ -302,7 +302,9 @@ def collect(repo, scratch):
         ("VKD3D", "vkd3d-proton", "vkd3d-proton"),
         ("VULKAN_LOADER", "vulkan-loader", ""), ("VULKAN_HEADERS", "vulkan-headers", ""),
         ("GBE", "gbe", "gbe"),
-        ("ABSL", "abseil-cpp", ""), ("STIKJIT", "stikjit", ""),
+        ("ABSL", "abseil-cpp", ""),
+        ("XGAMERUNTIME", "xgameruntime", "xgameruntime"), ("NGHTTP2", "nghttp2", ""),
+        ("STIKJIT", "stikjit", ""),
         ("IDEVICE", "idevice", ""),
     ]
     required = {"fex": ("External/rpmalloc", "External/fmt", "External/xxhash", "External/unordered_dense"),
