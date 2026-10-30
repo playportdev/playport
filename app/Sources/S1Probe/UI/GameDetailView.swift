@@ -255,6 +255,13 @@ private struct GameDetailPage: View {
                 navigation.pageSection = nil
                 return
             }
+            if navigation.pageSection == "layout", let t {
+                // Its Controls › Edit on-screen layout: the layout editor over the game's art.
+                if navigation.gamePanels != [.options] { navigation.gamePanels = [.options] }
+                navigation.pageSection = nil
+                LayoutEditorSession.shared.openOverArt(titleID: t.id, title: name)
+                return
+            }
             if navigation.gamePanels != [.options] { navigation.gamePanels = [.options] }
         }
         // Again once a restore signs in: a page opened while it ran fetched nothing.
@@ -653,7 +660,7 @@ private struct GameDetailPage: View {
         case "files": "opt:files"
         case "developer", "ordering": "opt:ordering-\(MemoryOrdering.Setting.allCases[0].rawValue)"
         case "steam": "opt:steamAPI"
-        case "gyro", "controller": nil
+        case "gyro", "controller", "layout": nil
         case "runtime": "opt:runtime"
         case "graphicsoptions": "opt:graphicsOptions"
         default: nil

@@ -824,8 +824,9 @@ private final class GlassView: UIView {
 /// (ControlLayout.gamepad). A button shows its PlayportKit ControlFace: a key's
 /// cap over its label, the mouse, the keyboard. A W A S D stick is a stick with
 /// its keys' letters inside the ring, each amber while it is pressed. The look
-/// area draws a faint hint and a ring under each finger looking.
-private final class ControlView: UIView {
+/// area draws a faint hint and a ring under each finger looking. The layout editor
+/// (LayoutEditorView.swift) draws its controls with it too, at rest.
+final class ControlView: UIView {
     private let control: Control
     private var parts: [GlassView] = []
     private var base: GlassView?

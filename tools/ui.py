@@ -42,6 +42,15 @@ best-effort and reported as unconfirmed; transport loss/SIGKILL can leave cancel
                          controller "Switch to Custom?" first), pad:y resets it, pad:b goes back; in
                          the ActionPicker pad:lb/rb switch tabs, pad:x waits for a hardware key,
                          pad:b cancels);
+                         open:ID#layout opens its Controls › Edit on-screen layout: the layout editor
+                         (no game running: over the game's art, dimmed) on the layout the game starts
+                         with; pad:lb/rb ring a control (the selection), pad:up/down/left/right move it
+                         one 8 pt grid step, pad:a opens the bar (Add, preset, Opacity, undo, redo,
+                         Reset, Done) and the inspector (what it presses through the ActionPicker,
+                         Label, Size, Hold/Toggle/Repeat, Duplicate, Remove) to the ring, whose
+                         pad:directions and pad:a then work it and pad:b comes back; pad:x Add,
+                         pad:y Reset, pad:view undo, pad:menu redo; pad:b on the controls is Done,
+                         which saves the game's own copy ("layouts" below) and goes back;
                          open:settings#SECTION shows a Settings section (accounts, graphics, downloads,
                          controls, storage, setup, about, developer; also account, jit, memory,
                          diagnostics, pairing, probes, logs for the section that holds them,
@@ -149,7 +158,10 @@ best-effort and reported as unconfirmed; transport loss/SIGKILL can leave cancel
                          mouse, Custom), pad:down/up move, pad:b goes back. pad:a on Controller (or
                          choosing Custom there) opens the Controller page over the paused game, which
                          pad: then drives as on a game page (the ActionPicker too); pad:b comes back
-                         to the panel. The menu keeps the pads from the game all along.
+                         to the panel. pad:a on On-screen controls (or menu:layout, its Edit layout…) opens
+                         the layout editor over the paused game, which pad: then drives as on
+                         open:ID#layout; its Done (pad:b on the controls) saves and comes back to the panel.
+                         The menu keeps the pads from the game all along.
                          menu:screenshot saves the frame to Photos (the first time iOS asks a person
                          to allow it) and, in a dev build, to Documents/Screenshots; menu:quit closes
                          the game's windows, and the run follows Playport's restart as for play:.
@@ -278,6 +290,20 @@ best-effort and reported as unconfirmed; transport loss/SIGKILL can leave cancel
                          "lookSpeed" (0.1-8, Settings' controls.lookSpeed, 1 by default) is how fast a
                          stick bound to mouse:move turns the view, a multiple of 2000 counts/s (the
                          Controller page's Look speed row); a change logs `controls: look speed 2.0×`
+                         "layouts" is the game's own copies of the presets, as the layout editor saves
+                         them (GameControls.layouts): {"keyboardMouse":{"version":3,"controls":[...]},...},
+                         keyed by gamepad, keyboardMouse or pointClick (not off), each a PlayportKit
+                         ControlLayout version 3 whose controls have "id" (letters, digits, - and _, each
+                         once), "kind" (button, the default, stick, dpad, lookArea, pointer, tool),
+                         "actions" (a button one, a stick pad:leftStick|pad:rightStick or four up, down,
+                         left, right, a d-pad four, a look area mouse:move, a pointer mouse:left, a tool
+                         none and a "tool": rightClick|hover|scroll|trackpad; ACTION as above, also
+                         playport:keyboard), "anchor" (topLeading ... bottomTrailing), "x", "y" (the
+                         centre from the anchor, pt), "width", "height" (> 0), optional "label",
+                         "behaviour" (hold|toggle|repeat) and, for a stick, "floatingZone" ({"anchor",
+                         "width", "height", optional "x", "y"}). A copy is drawn while its preset is the
+                         layout (choose it with "layout"); the log's `controls ID:` line says
+                         layouts=keyboardMouse(N controls)
   --settings ID:JSON     a game's own launch settings, as its page saves them (PlayportKit
                          LaunchSettings: frame limit, screen, launch arguments; `ID:{}` clears);
                          `launcher-rockstar:JSON` is the runtime keys and FEX inputs open-launcher:rockstar
@@ -476,7 +502,7 @@ LAYOUTS = ("off", "gamepad", "keyboardMouse", "pointClick")
 
 # Dev/UIDriverGameSection.swift: per-game destinations, independent of title/store ID grammar.
 GAME_SECTIONS = ("graphics", "controls", "game", "files", "developer", "ordering", "steam",
-                 "gyro", "controller", "runtime", "graphicsoptions")
+                 "gyro", "controller", "layout", "runtime", "graphicsoptions")
 
 # A control of an on-screen layout, with a direction for a stick or the d-pad, or a point FX:FY (0-1 of the
 # view) for Point & click's pointer surface (Dev/TouchDriver.swift).
@@ -487,7 +513,7 @@ GYRO_STEP = rf"(?:rest|{GYRO_TERM}(?:\+{GYRO_TERM})*)@[0-9]{{1,5}}"
 ACTION_RE = re.compile((r"^(?:(?:install|pause-resume|queue|downloading):[0-9]+|install:gog-[0-9]+(?:@[0-9]+)?|install:epic-[A-Za-z0-9._-]+|(?:uninstall|verify|repair|play):[a-z]+-[A-Za-z0-9 ._-]+|(?:open-launcher|forget-launcher-window):[a-z]+"
                         r"|import:[A-Za-z0-9 ._()'+-]+(?:/[A-Za-z0-9 ._()'+-]+)*"
                        r"|hud:(?:on|off)|open:[a-z]+(?:-[A-Za-z0-9 ._-]+(?:#[a-z]+)?)?|open:settings#(?:accounts|steam|graphics|downloads|controls|controllers|gyro|controller|storage|setup|about|launchers|developer|account|jit|memory|diagnostics|pairing|probes|logs)|open:licences(?:#[a-z0-9 ._-]+)?|pad:(?:{b})(?:\+(?:{b}))*|set:[A-Za-z0-9._-]+=[^,]*"
-                       r"|wait:[0-9]{1,3}|tap:(?:0(?:\.[0-9]+)?|1(?:\.0+)?):(?:0(?:\.[0-9]+)?|1(?:\.0+)?)|menu:(?:open|resume|controls|keyboard|screenshot|overlay|controller|quit)"
+                       r"|wait:[0-9]{1,3}|tap:(?:0(?:\.[0-9]+)?|1(?:\.0+)?):(?:0(?:\.[0-9]+)?|1(?:\.0+)?)|menu:(?:open|resume|controls|layout|keyboard|screenshot|overlay|controller|quit)"
                        r"|touch:{t}(?:\+{t})*(?:@[0-9]{1,5})?|gyro:{g}(?:/{g})*|gesture:three-finger-tap|web:(?:wait|close)|web:click:[A-Za-z0-9 ._-]+"
                        r"|jit:(?:setup|pair|continue|open-settings|cancel|wait)|probe:settings-url-[0-9]|probe:helper-(?:(?:exit|kill)(?:-hold)?|report)|probe:memory-(?:64|2048|4096|donor-(?:tagged|purgeable)-(?:2048|4096)|donors-(?:6144|8192|10240)|pool-verify|pool-zero|pool-gpu)|background:(?:[1-9][0-9]|[1-5][0-9]{2}|600)|probe:relaunch|probe:native-auth|probe:pairing(?:-cancel|-use)?)$").replace("{b}", PAD_BUTTONS).replace("{t}", TOUCH_CONTROL)
                        .replace("{g}", GYRO_STEP))
@@ -613,6 +639,75 @@ def controller_map_ok(c):
     return not any(s in table and any(k.startswith(s + ".") for k in table) for s in ("leftStick", "rightStick"))
 
 
+# PlayportKit ControlLayout as JSON (--controls' "layouts": the game's own copies of the presets, as the
+# layout editor saves them). This build reads version 3 only; Off has no layout.
+LAYOUT_VERSION = 3
+CONTROL_KINDS = ("button", "stick", "dpad", "lookArea", "pointer", "tool")   # PlayportKit ControlKind
+ANCHORS = ("topLeading", "top", "topTrailing", "leading", "center", "trailing", "bottomLeading", "bottom",
+           "bottomTrailing")                                                 # PlayportKit ControlAnchor
+BEHAVIOURS = ("hold", "toggle", "repeat")                                    # HostIOKit TouchBehaviour
+POINTER_TOOLS = ("rightClick", "hover", "scroll", "trackpad")                # HostIOKit PointerTool
+# HostIOKit InputAction's saved names.
+INPUT_ACTION_RE = re.compile(r"pad:(?:" + "|".join(PAD_CONTROLS) + r")|mouse:(?:left|right|middle|wheelUp|wheelDown|move)"
+                             r"|playport:(?:menu|keyboard)|key:(?:(?:shift|ctrl|alt)\+)*(?:0[xX][0-9a-fA-F]{1,2}|[0-9]{1,3})")
+CONTROL_ID_RE = re.compile(r"[A-Za-z0-9_-]+")
+INF = float("inf")
+
+
+def zone_ok(z):
+    """Whether z is a PlayportKit ControlZone (a floating stick's): an anchor, a size, an optional offset."""
+    return isinstance(z, dict) and set(z) <= {"anchor", "x", "y", "width", "height"} and z.get("anchor") in ANCHORS \
+        and all(number(z.get(k, 0), -INF, INF) for k in ("x", "y")) \
+        and all(number(z.get(k), 0, INF) and z[k] > 0 for k in ("width", "height"))
+
+
+def control_ok(c):
+    """Whether c is a PlayportKit Control as JSON, usable as ControlLayout.problem has it: its keys, an id of
+    letters, digits, - and _, a size over 0, and the actions its kind takes."""
+    if not isinstance(c, dict) or not set(c) <= {"id", "kind", "actions", "label", "behaviour", "anchor", "x", "y",
+                                                 "width", "height", "floatingZone", "tool"}:
+        return False
+    kind, actions = c.get("kind", "button"), c.get("actions")
+    if not (isinstance(c.get("id"), str) and CONTROL_ID_RE.fullmatch(c["id"]) and kind in CONTROL_KINDS
+            and isinstance(c.get("label", ""), str) and c.get("behaviour", "hold") in BEHAVIOURS
+            and c.get("anchor") in ANCHORS and all(number(c.get(k), -INF, INF) for k in ("x", "y"))
+            and all(number(c.get(k), 0, INF) and c[k] > 0 for k in ("width", "height"))
+            and isinstance(actions, list)
+            and all(isinstance(a, str) and INPUT_ACTION_RE.fullmatch(a) and (not a.startswith("key:") or key_ok(a))
+                    for a in actions)):
+        return False
+    sticks = [a in ("pad:leftStick", "pad:rightStick") for a in actions]
+    if kind == "button":
+        ok = len(actions) == 1 and not sticks[0]
+    elif kind == "stick":
+        ok = (len(actions) == 1 and sticks[0]) or (len(actions) == 4 and not any(sticks))
+    elif kind == "dpad":
+        ok = len(actions) == 4
+    elif kind == "lookArea":
+        ok = actions == ["mouse:move"]
+    elif kind == "pointer":
+        ok = actions == ["mouse:left"]
+    else:
+        ok = c.get("tool") in POINTER_TOOLS and actions == []
+    return ok and ("tool" not in c or kind == "tool") and ("floatingZone" not in c or (kind == "stick" and zone_ok(c["floatingZone"])))
+
+
+def layouts_ok(ls):
+    """Whether ls is GameControls.layouts as JSON: preset name (not off) -> a version 3 ControlLayout whose
+    controls are each usable and have different ids."""
+    if not isinstance(ls, dict):
+        return False
+    for preset, layout in ls.items():
+        if preset not in LAYOUTS or preset == "off" or not isinstance(layout, dict) \
+                or set(layout) != {"version", "controls"} or layout["version"] != LAYOUT_VERSION \
+                or not isinstance(layout["controls"], list) or not all(control_ok(c) for c in layout["controls"]):
+            return False
+        ids = [c["id"] for c in layout["controls"]]
+        if len(ids) != len(set(ids)):
+            return False
+    return True
+
+
 def ui_env(nonce, verify=None, play=None, extra=(), settings=None, step=False, pad=False,
            session=None, keep_settings=False, controls=None, capture_layer=False):
     """settings: (title id, LaunchSettings JSON) or None; controls: (title id, GameControls
@@ -714,7 +809,8 @@ def parse(argv=None):
                         '{"layout":"keyboardMouse"}, {"layout":"pointClick"} or '
                         '{"layout":"gamepad","opacity":0.8,"dpad":"on","rightStick":"below"}, with "gyro":'
                         '{"output":"mouse","sensitivity":1.5} for its gyro aim, "controllerMap":{"mode":"keyboardMouse"} for its '
-                        'controller map, "lookSpeed":2 for its mouse look; {} clears them)')
+                        'controller map, "lookSpeed":2 for its mouse look, "layouts":{"keyboardMouse":{"version":3,'
+                        '"controls":[...]}} for its own copies of the presets; {} clears them)')
     p.add_argument("--settings", metavar="ID:JSON",
                    help='save these launch settings for the title first ({"frameLimit":30,"screen":"720",'
                         '"arguments":"-DX12"}; "arguments" may also be a list of strings; {} clears them)')
@@ -780,14 +876,15 @@ def parse(argv=None):
         try:
             cobj = json.loads(cjs)
             ok = ID_RE.match(cid) and isinstance(cobj, dict) \
-                and set(cobj) <= {"layout", "opacity", "dpad", "rightStick", "gyro", "controllerMap", "lookSpeed"} \
+                and set(cobj) <= {"layout", "opacity", "dpad", "rightStick", "gyro", "controllerMap", "lookSpeed", "layouts"} \
                 and cobj.get("layout", "off") in LAYOUTS \
                 and number(cobj.get("opacity", 0.5), 0.1, 1) \
                 and cobj.get("dpad", "off") in ("off", "on") \
                 and cobj.get("rightStick", "off") in ("off", "below", "above") \
                 and gyro_ok(cobj.get("gyro", {})) \
                 and ("controllerMap" not in cobj or controller_map_ok(cobj["controllerMap"])) \
-                and number(cobj.get("lookSpeed", 1), 0.1, 8)
+                and number(cobj.get("lookSpeed", 1), 0.1, 8) \
+                and layouts_ok(cobj.get("layouts", {}))
         except ValueError:
             ok = False
         if not ok:
@@ -796,7 +893,9 @@ def parse(argv=None):
                     "auto|phone|controller, sensitivity 0.05-20, verticalRatio 0-4, turnAxis playerSpace|yaw|roll, "
                     "invertX/invertY true|false, pauseButton none|pad:BUTTON, antiDeadZone 0-0.9, smoothing auto|off|light|normal) "
                     "and controllerMap "
-                    "(an object: mode controller|keyboardMouse|custom, table INPUT:ACTION) and lookSpeed (0.1-8) only")
+                    "(an object: mode controller|keyboardMouse|custom, table INPUT:ACTION) and lookSpeed (0.1-8) "
+                    "and layouts (an object: PRESET (gamepad, keyboardMouse, pointClick): a ControlLayout, version 3, "
+                    "whose controls each have an id, kind, actions, anchor, x, y, width and height) only")
         a.controls_pair = (cid, json.dumps(cobj, separators=(",", ":")))
     a.settings_pair = None
     if a.settings:

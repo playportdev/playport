@@ -497,6 +497,67 @@ class UiEnvTest(unittest.TestCase):
                 m.parse(["--controls", "app-620:" + bad])
         self.assertIn("lookSpeed", m.__doc__)
 
+    def test_controls_carries_a_games_own_layouts(self):
+        """--controls' "layouts" is GameControls.layouts: the game's own copies of the presets, as the
+        layout editor saves them (PlayportKit ControlLayout version 3, keyed by preset name)."""
+        m = load()
+        jump = {"id": "jump", "actions": ["key:0x20"], "label": "Jump", "anchor": "bottomTrailing", "x": -71, "y": -166,
+                "width": 56, "height": 56}
+        wasd = {"id": "move", "kind": "stick", "actions": ["key:0x57", "key:0x53", "key:0x41", "key:0x44"],
+                "anchor": "bottomLeading", "x": 120, "y": -90, "width": 132, "height": 132,
+                "floatingZone": {"anchor": "bottomLeading", "width": 210, "height": 126}}
+        look = {"id": "look", "kind": "lookArea", "actions": ["mouse:move"], "anchor": "center", "x": 0, "y": 0,
+                "width": 10000, "height": 10000}
+        tool = {"id": "rc", "kind": "tool", "actions": [], "tool": "rightClick", "anchor": "leading", "x": 30, "y": 0,
+                "width": 44, "height": 44}
+        pad = {"id": "a", "actions": ["pad:a"], "behaviour": "toggle", "anchor": "bottomTrailing", "x": -60, "y": -60,
+               "width": 52, "height": 52}
+        stick = {"id": "leftStick", "kind": "stick", "actions": ["pad:leftStick"], "anchor": "bottomLeading", "x": 100,
+                 "y": -100, "width": 120, "height": 120}
+        for ok in ({"keyboardMouse": {"version": 3, "controls": [look, jump, wasd, {**jump, "id": "jump-2", "x": -140}]}},
+                   {"gamepad": {"version": 3, "controls": [pad, stick]}, "pointClick": {"version": 3, "controls": [tool]}},
+                   {"keyboardMouse": {"version": 3, "controls": []}}, {}):
+            js = json.dumps({"layout": "keyboardMouse", "layouts": ok}, separators=(",", ":"))
+            self.assertEqual(m.parse(["--controls", "app-620:" + js]).controls_pair, ("app-620", js), js)
+        for bad in ({"off": {"version": 3, "controls": []}},                       # Off has no layout
+                    {"racingWheel": {"version": 3, "controls": []}},
+                    {"gamepad": {"version": 2, "controls": []}},                   # this build reads version 3
+                    {"gamepad": {"controls": []}}, {"gamepad": []}, [],
+                    {"gamepad": {"version": 3, "controls": [jump, jump]}},         # two controls with one id
+                    {"gamepad": {"version": 3, "controls": [{**jump, "id": "a b"}]}},
+                    {"gamepad": {"version": 3, "controls": [{**jump, "width": 0}]}},
+                    {"gamepad": {"version": 3, "controls": [{**jump, "anchor": "middle"}]}},
+                    {"gamepad": {"version": 3, "controls": [{**jump, "kind": "slider"}]}},
+                    {"gamepad": {"version": 3, "controls": [{**jump, "behaviour": "turbo"}]}},
+                    {"gamepad": {"version": 3, "controls": [{**jump, "actions": ["key:0x20", "key:0x21"]}]}},
+                    {"gamepad": {"version": 3, "controls": [{**jump, "actions": ["pad:leftStick"]}]}},
+                    {"gamepad": {"version": 3, "controls": [{**jump, "actions": ["key:0x0"]}]}},
+                    {"gamepad": {"version": 3, "controls": [{**jump, "actions": ["mouse:hover"]}]}},
+                    {"gamepad": {"version": 3, "controls": [{**jump, "floatingZone": wasd["floatingZone"]}]}},
+                    {"gamepad": {"version": 3, "controls": [{**jump, "tool": "hover"}]}},
+                    {"gamepad": {"version": 3, "controls": [{**jump, "colour": "red"}]}},
+                    {"gamepad": {"version": 3, "controls": [{**wasd, "actions": ["key:0x57"]}]}},
+                    {"gamepad": {"version": 3, "controls": [{**look, "actions": ["mouse:left"]}]}},
+                    {"gamepad": {"version": 3, "controls": [{**tool, "tool": "lasso"}]}},
+                    {"gamepad": {"version": 3, "controls": [{**tool, "actions": ["mouse:left"]}]}}):
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                m.parse(["--controls", "app-620:" + json.dumps({"layouts": bad})])
+        self.assertIn('"layouts"', m.__doc__)
+
+    def test_the_layout_editor_opens_from_game_options_and_over_the_paused_game(self):
+        """open:ID#layout: Game options › Controls › Edit on-screen layout, the editor over the game's art;
+        menu:layout: the in-game Controls panel's Edit layout…; pad: drives either."""
+        m = load()
+        self.assertIn("layout", m.GAME_SECTIONS)
+        self.assertEqual(m.parse(["--action", "open:app-620#layout", "--action", "pad:rb+right+right+a"]).action,
+                         ["open:app-620#layout", "pad:rb+right+right+a"])
+        a = m.parse(["--action", "play:app-620", "--action", "menu:open", "--action", "menu:layout",
+                     "--action", "pad:rb+up+b", "--action", "menu:resume"])
+        self.assertIsNone(m.pad_after_play(a.action))
+        self.assertEqual(m.in_game(a.action, 1), 4)
+        for text in ("open:ID#layout", "menu:layout", "the layout editor"):
+            self.assertIn(text, m.__doc__)
+
     def test_pad_after_play_is_refused_and_settings_arguments_may_be_a_list(self):
         m = load()
         self.assertEqual(m.pad_after_play(["play:app-367520", "wait:10", "pad:a"]), "pad:a")

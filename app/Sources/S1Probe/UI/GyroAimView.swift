@@ -3,7 +3,8 @@
 // GameOptionsControls.dc.html, GyroAim.dc.html):
 //
 // - GameControlsOptionRows: Game options' Controls section, the game's own
-//   on-screen controls (layout, d-pad, right stick, opacity) and the entries to
+//   on-screen controls (layout, d-pad, right stick, opacity), the layout editor
+//   (Edit on-screen layout, UI/LayoutEditorView.swift, over the game's art) and the entries to
 //   its Controller page (UI/ControllerMapView.swift) and its Gyro aim page. Each shows "Default · X" while it follows Settings ›
 //   Controls, the amber dot while the game sets it, and Y puts it back.
 // - GyroAimPanel: Game options › Controls › Gyro aim (AppRoutes.GamePanel.gyro),
@@ -48,6 +49,14 @@ struct GameControlsOptionRows: View {
                 options: [PadOption(id: "", label: "Default", detail: ControlsOpacity.label(inherited.opacity) + ", from Settings")]
                     + ControlsOpacity.steps.map { PadOption(id: String($0), label: ControlsOpacity.label($0)) },
                 selected: own.opacity.map { String(ControlsOpacity.step($0, by: 0)) } ?? "") { id in set { $0.opacity = Double(id) } }
+        }
+        // The layout editor (UI/LayoutEditorView.swift) over the game's art; the dot and Y for the game's own copies.
+        PadRow(id: LayoutEditorSession.gameRowID, title: "Edit on-screen layout",
+               value: own.layouts.isEmpty ? "Over the game"
+                   : "Your " + OnScreenLayout.allCases.filter { own.layouts[$0] != nil }.map(\.title).joined(separator: ", "),
+               accessory: .chevron, changed: !own.layouts.isEmpty, style: .plain, hint: "Open",
+               reset: own.layouts.isEmpty ? nil : { set { $0.layouts = [:] } }) {
+            LayoutEditorSession.shared.openOverArt(titleID: titleID, title: context)
         }
         // The Controller page (UI/ControllerMapView.swift): the game's controller map and its look speed.
         // The dot and Y for its own map or look speed; "Default ·" while the mode is Settings'.

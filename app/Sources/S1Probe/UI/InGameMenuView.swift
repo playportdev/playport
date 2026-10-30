@@ -21,7 +21,9 @@
 // GyroSensors.swift, ControllerMapView.swift; A on the Controller row, a tap on
 // its "Edit controller…", or choosing Custom there opens the full Controller
 // page and its ActionPicker over the paused game, InGameControllerPage, B back
-// to the panel), Touch keyboard (back to the game with the touch keyboard open
+// to the panel; A on the On-screen controls row, or a tap on its "Edit
+// layout…", opens the layout editor over the paused game in the menu's place,
+// UI/LayoutEditorView.swift, Done back to the panel), Touch keyboard (back to the game with the touch keyboard open
 // over it, OnScreenControls.setKeyboard; its own close key closes it),
 // Screenshot (the frame on screen to
 // Photos; a dev build also keeps a PNG in Documents/Screenshots), Performance
@@ -88,6 +90,13 @@ final class InGameMenu: ObservableObject {
     /// A press from a pad (HostIO) or, in a dev build, the driver.
     func press(_ b: NavButton) {
         guard isOpen, !quitting else { return }
+        if LayoutEditorSession.shared.isUp(.inGame) {
+            LayoutEditorSession.shared.press(b)
+            #if !PLAYPORT_RELEASE
+            Self.log("pad \(b.rawValue): \(LayoutEditorSession.shared.summary)")
+            #endif
+            return
+        }
         if editor {
             editorPress(b)
             #if !PLAYPORT_RELEASE
@@ -103,6 +112,7 @@ final class InGameMenu: ObservableObject {
             case .left: changeControls(row, by: -1)
             case .right: changeControls(row, by: 1)
             case .a where row == .controllerMap: openEditor()
+            case .a where row == .layout: openLayoutEditor()
             case .a: changeControls(row, by: 1, wrapping: true)
             case .b: menu.closePanel()
             case .menu: resume()
@@ -184,6 +194,26 @@ final class InGameMenu: ObservableObject {
         if intoEditor { openEditor() }
     }
 
+    // MARK: the layout editor over the paused game
+
+    /// Edit layout… (or A on the On-screen controls row): the editor over the paused game
+    /// (UI/LayoutEditorView.swift), on the layout the game plays with. The menu already holds
+    /// the game's input (holdGuest: every key, button and touch let go, Lifecycle).
+    func openLayoutEditor() {
+        guard isOpen, !quitting, !editor, let id = TitleLaunch.shared.titleID else { return }
+        menu.openPanel(.layout)
+        OnScreenControls.shared.releaseAll()
+        LayoutEditorSession.shared.open(titleID: id, title: TitleLaunch.shared.title, host: .inGame,
+                                        state: OnScreenControls.shared.state)
+    }
+
+    /// Done (or the game ending): back to the panel's On-screen controls row.
+    func layoutEditorClosed() {
+        guard isOpen else { return }
+        menu.openPanel(.layout)
+        Self.log("layout editor closed; back to the controls panel, \(OnScreenControls.shared.state.summary)")
+    }
+
     // MARK: the Controller page over the paused game
 
     /// Edit controller…: the game's Controller page over the panel, its ring on the mode switch.
@@ -228,6 +258,8 @@ final class InGameMenu: ObservableObject {
     /// Back to the game: its threads go on first, then its input and audio.
     func resume() {
         guard isOpen, !quitting else { return }
+        // The layout editor's work is kept, as Done keeps it.
+        if LayoutEditorSession.shared.isUp(.inGame) { LayoutEditorSession.shared.done() }
         if editor {
             PadModal.shared.close()
             editor = false
@@ -248,6 +280,8 @@ final class InGameMenu: ObservableObject {
     /// The launch ended (TitleLaunch.end): nothing is left to resume.
     func gameEnded() {
         if editor { PadModal.shared.close() }
+        // The game ended under the layout editor: it closes, unsaved.
+        if LayoutEditorSession.shared.isUp(.inGame) { LayoutEditorSession.shared.close() }
         editor = false
         isOpen = false
         paused = false
@@ -373,6 +407,7 @@ final class InGameMenu: ObservableObject {
     var summary: String {
         "menu \(isOpen ? "open" : "closed"), ring \(menu.ring.rawValue)" + (menu.panel.map { " (panel \($0.rawValue))" } ?? "")
             + (editor ? " (controller page: \(editorSummary))" : "")
+            + (LayoutEditorSession.shared.isUp(.inGame) ? " (\(LayoutEditorSession.shared.summary))" : "")
             + ", paused=\(paused) overlay=\(overlay), controls \(OnScreenControls.shared.state.summary)"
             + ", gyro \(TitleLaunch.shared.titleID.map { GyroText.summary(ControlsStore.shared.gyro($0)) } ?? "none")"
             + ", controller map \(TitleLaunch.shared.titleID.map { ControlsStore.shared.game($0).controllerMap(over: ControlsStore.shared.defaults).summary } ?? "none")"
@@ -395,6 +430,7 @@ struct InGameMenuView: View {
     @ObservedObject private var safe = WindowInsets.shared
     @ObservedObject private var controls = OnScreenControls.shared
     @ObservedObject private var store = ControlsStore.shared
+    @ObservedObject private var layoutEditor = LayoutEditorSession.shared
 
     var body: some View {
         let lead = safe.side(44, safe.insets.leading), trail = safe.side(44, safe.insets.trailing)
@@ -447,7 +483,8 @@ struct InGameMenuView: View {
                         PadHint(button: .a, label: "Choose") { model.press(.a) },
                         PadHint(button: .b, label: "Back to game") { model.resume() },
                     ] : [
-                        PadHint(button: .a, label: model.menu.panel == .controllerMap ? "Edit controller…" : "Change") { model.press(.a) },
+                        PadHint(button: .a, label: model.menu.panel == .controllerMap ? "Edit controller…"
+                                : model.menu.panel == .layout ? "Edit layout…" : "Change") { model.press(.a) },
                         PadHint(button: .b, label: "Back") { model.press(.b) },
                     ], leading: true)
                     .fixedSize()
@@ -459,6 +496,9 @@ struct InGameMenuView: View {
                 InGameControllerPage(titleID: id, title: launch.title)
             }
         }
+        // The layout editor over the paused game, in the menu's place (UI/LayoutEditorView.swift).
+        .opacity(layoutEditor.isUp(.inGame) ? 0 : 1)
+        .overlay { if layoutEditor.isUp(.inGame) { LayoutEditorView(inGame: true) } }
         // The margins above come from the window's insets themselves: laid out over the
         // whole screen, or the note and the footer would be inset twice (the overlay
         // keeps the safe area although the game surface under it ignores it).
@@ -573,7 +613,11 @@ private struct ControlsPanel: View {
     @ViewBuilder
     private func rowView(_ r: QuickMenuControlsRow) -> some View {
         switch r {
-        case .layout: row(.layout) { choices(.layout, OnScreenLayout.allCases, state.layout, title: \.shortTitle, compact: true) }
+        case .layout:
+            // "Edit layout…" under the title: the layout editor over the paused game (A on the row too).
+            row(.layout, subtitle: "Edit layout…", edit: { model.openLayoutEditor() }) {
+                choices(.layout, OnScreenLayout.allCases, state.layout, title: \.shortTitle, compact: true)
+            }
         case .dpad: row(.dpad) { choices(.dpad, OnScreenDpad.allCases, state.dpad, title: \.title) }
         case .rightStick: row(.rightStick) { choices(.rightStick, OnScreenRightStick.allCases, state.rightStick, title: \.shortTitle) }
         case .opacity: row(.opacity) { stepper(.opacity, ControlsOpacity.label(state.opacity)) }
