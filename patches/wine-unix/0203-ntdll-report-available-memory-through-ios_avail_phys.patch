@@ -1,0 +1,39 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 30 Oct 2026 18:30:00 +0100
+Subject: [PATCH] ntdll: report available memory through ios_avail_phys on iOS
+
+Decision 0168 (PLA-476), the Wine side of the avail-phys hand-port from
+willfaust/Madeira (855bef4 with willfaust/wine pr/wine-avail-phys):
+get_performance_info's AvailablePages, GlobalMemoryStatusEx's
+ullAvailPhys, is what madeira-unix 0234's ios_avail_phys returns for the
+phone's free and inactive pages: at most madeira.cfg avail-phys-cef-mb
+for Social Club's helper, unchanged for every other process. The commit
+figures keep the phone's.
+
+Class: ios-port
+Evidence: docs/decisions/0168-social-clubs-helper-is-told-little-available-memory.md
+Offered-upstream: no; iOS one-process runtime integration
+---
+ dlls/ntdll/unix/system.c | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/ntdll/unix/system.c b/dlls/ntdll/unix/system.c
+index 4ae29a9..0ccd9c7 100644
+--- a/dlls/ntdll/unix/system.c
++++ b/dlls/ntdll/unix/system.c
+@@ -2886,7 +2886,13 @@ static void get_performance_info( SYSTEM_PERFORMANCE_INFORMATION *info )
+     /* Titan Quest refuses to run if TotalPageFile <= TotalPhys */
+     if (!totalswap) totalswap = page_size;
+ 
+-    info->AvailablePages      = freeram / page_size;
++    {
++        /* Playport (PLA-476, decision 0168): Social Club's helper sees at most
++         * madeira.cfg avail-phys-cef-mb of available memory, so Chromium's own
++         * memory-pressure evaluator purges; every other process sees the phone's. */
++        extern unsigned long long ios_avail_phys( unsigned long long host_free );
++        info->AvailablePages  = ios_avail_phys( freeram ) / page_size;
++    }
+     info->TotalCommittedPages = (totalram + totalswap - freeram - freeswap) / page_size;
+     info->TotalCommitLimit    = (totalram + totalswap) / page_size;
+ }

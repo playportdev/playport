@@ -200,3 +200,4 @@
 0231-ntdll-hold-a-dead-owner-s-Social-Club-slot-in-place-.patch
 0232-virtual-split-proc-mem-resident-pages-into-a-file-s-.patch
 0233-ntdll-cap-a-JIT-code-buffer-grant-at-64-MiB-not-128.patch
+0234-ntdll-tell-Social-Club-s-helper-little-available-mem.patch

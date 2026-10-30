@@ -106,3 +106,10 @@ This is a per-title value against this record's "as little per-game settings as 
 video figure trades texture streaming for memory, which is RDR2's need, not a setting that makes
 games work.
 
+## Amendment 2026-10-30: Social Club's helper sees little available memory
+
+**Approved by the owner, 2026-10-30 (PLA-476).** everyGame's runtime keys add
+`avail-phys-cef-mb=300` ([0168](0168-social-clubs-helper-is-told-little-available-memory.md)): only
+a `SocialClubHelper.exe` process is told 300 MB of available memory, so its Chromium purges; every
+other process keeps the phone's figure.
+

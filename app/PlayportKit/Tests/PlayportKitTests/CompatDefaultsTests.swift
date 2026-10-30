@@ -35,10 +35,11 @@ final class CompatDefaultsTests: XCTestCase {
     /// the crash-reporter refusal): the address-space holdback, a 3,072 MiB heap, the x64
     /// critical-section stubs and FEX's batch 2; and FEX without AFP, with FPCR.FIZ from
     /// MXCSR.DAZ (decision 0154, from RDR2's of 0142). Its fastsync semaphores went with fastsync
-    /// (decision 0157): ppsync takes every semaphore in process.
+    /// (decision 0157): ppsync takes every semaphore in process. Social Club's helper is told
+    /// 300 MB of available memory (decision 0168).
     static let everyGameRuntime = "jumbo-mb=8960 env.PLAYPORT_VK_HEAP_MB=3072 "
         + "env.MADEIRA_X64_CS_FASTPATH=1 env.MADEIRA_FEX_BATCH2=1 env.PLAYPORT_SC_BLOCK_CRASHPAD=1 "
-        + "env.FEX_HOSTFEATURES=disableafp env.MADEIRA_FEX_AFPOFF_FPCR=fiz"
+        + "env.FEX_HOSTFEATURES=disableafp env.MADEIRA_FEX_AFPOFF_FPCR=fiz avail-phys-cef-mb=300"
 
     /// Each default is a madeira.cfg key at the lowest level of a launch's config (Effective.config):
     /// a title's cohort keys, then its compatibility entry's and a person's Runtime keys override it
@@ -48,7 +49,7 @@ final class CompatDefaultsTests: XCTestCase {
         let every: [String: String] = ["jumbo-mb": "8960", "env.PLAYPORT_VK_HEAP_MB": "3072",
                                        "env.MADEIRA_X64_CS_FASTPATH": "1", "env.MADEIRA_FEX_BATCH2": "1",
                                        "env.PLAYPORT_SC_BLOCK_CRASHPAD": "1", "env.FEX_HOSTFEATURES": "disableafp",
-                                       "env.MADEIRA_FEX_AFPOFF_FPCR": "fiz"]
+                                       "env.MADEIRA_FEX_AFPOFF_FPCR": "fiz", "avail-phys-cef-mb": "300"]
         XCTAssertEqual(LaunchSettings.everyGameKeys, every)
         let plain = LaunchSettings.resolve(game: LaunchSettings.overEveryGame(nil), global: LaunchSettings())
         XCTAssertEqual(plain.runtime, [:])
@@ -62,7 +63,7 @@ final class CompatDefaultsTests: XCTestCase {
         XCTAssertEqual(config, ["jumbo-mb": "32768", "env.PLAYPORT_VK_HEAP_MB": "0", "inproc-sync": "0",
                                 "env.MADEIRA_X64_CS_FASTPATH": "1", "env.MADEIRA_FEX_BATCH2": "0",
                                 "env.PLAYPORT_SC_BLOCK_CRASHPAD": "1", "env.FEX_HOSTFEATURES": "disableafp",
-                                "env.MADEIRA_FEX_AFPOFF_FPCR": "fiz"])
+                                "env.MADEIRA_FEX_AFPOFF_FPCR": "fiz", "avail-phys-cef-mb": "300"])
         // A title's entry keeps its own runtime keys and takes everyGame's other settings.
         let titled = LaunchSettings.overEveryGame(LaunchSettings(runtime: "jumbo-mb=4096"))
         XCTAssertEqual(titled.runtime, "jumbo-mb=4096")

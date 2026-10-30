@@ -1,0 +1,120 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: playportdev <dev@playport.dev>
+Date: Fri, 30 Oct 2026 18:30:00 +0100
+Subject: [PATCH] ntdll: tell Social Club's helper little available memory
+ (avail-phys-cef-mb)
+
+Hand-ported from willfaust/Madeira 855bef4 (decision 0054). Wine's
+get_performance_info reports the phone's free and inactive pages as
+AvailablePages (GlobalMemoryStatusEx's ullAvailPhys), while this app ends
+at its own memory limit, so the memory-pressure evaluator of Chromium in
+SocialClubHelper.exe, which purges below 1000 MB available and harder
+below 400 MB, never fires.
+
+ios_avail_phys(host_free), which wine-unix's get_performance_info now
+calls, returns at most madeira.cfg avail-phys-cef-mb MB when the calling
+process's image is SocialClubHelper.exe, and host_free for every other
+process (the game and the launcher keep the phone's figure). Madeira's
+avail-phys = 1 for every process and its steamwebhelper.exe match are not
+ported: RDR2 reads the figure too, and Playport runs no Windows Steam
+client. The key is read once; `[avail-phys]` lines give the setting and
+the first answers. pp_avail_phys.h holds the rule for the host test.
+
+Linear: PLA-476
+Class: feature
+Evidence: docs/decisions/0168-social-clubs-helper-is-told-little-available-memory.md
+Offered-upstream: no; hand-ported from willfaust/Madeira for the iOS one-process runtime
+---
+ build/ntdll-unix/pp_avail_phys.h | 34 +++++++++++++++++++++++++++++
+ build/ntdll-unix/virtual_ios.c   | 37 ++++++++++++++++++++++++++++++++
+ 2 files changed, 71 insertions(+)
+ create mode 100644 build/ntdll-unix/pp_avail_phys.h
+
+diff --git a/build/ntdll-unix/pp_avail_phys.h b/build/ntdll-unix/pp_avail_phys.h
+new file mode 100644
+index 0000000..240a284
+--- /dev/null
++++ b/build/ntdll-unix/pp_avail_phys.h
+@@ -0,0 +1,34 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later
++ * The available memory Social Club's helper is told (Playport, PLA-476,
++ * decision 0168; hand-ported from willfaust/Madeira 855bef4 avail-phys-cef-mb).
++ *
++ * Wine's get_performance_info reports the phone's free and inactive pages as
++ * AvailablePages, which is GlobalMemoryStatusEx's ullAvailPhys, while this app
++ * ends at its own limit: Chromium's memory-pressure evaluator, which purges
++ * below 1000 MB available (moderate, every 10 s) and below 400 MB (critical,
++ * every 5 s), never fires in Social Club's browser. With madeira.cfg
++ * `avail-phys-cef-mb = N` (MB, 1 to 65536; 0 or unset: off) a calling process
++ * whose image is SocialClubHelper.exe sees at most N MB; 300 is the critical
++ * level. Every other process, the game and the launcher included, keeps the
++ * phone's figure. Pure arithmetic and name matching (pp_game_sc_refuse.h), so a
++ * host test compiles this header as is. */
++#ifndef PP_AVAIL_PHYS_H
++#define PP_AVAIL_PHYS_H
++
++#include "pp_game_sc_refuse.h"
++
++/* The cap in bytes for avail-phys-cef-mb = mb, 0 when off or out of range. */
++static inline unsigned long long ppap_cap( long long mb )
++{
++    return mb > 0 && mb <= 65536 ? (unsigned long long)mb << 20 : 0;
++}
++
++/* What the caller with image path image[0..len) is told for host_free bytes. */
++static inline unsigned long long ppap_available( unsigned long long host_free, unsigned long long cap,
++                                                 const pp_wchar *image, size_t len )
++{
++    if (!cap || host_free <= cap || !image || !ppgsc_basename_is( image, len, "SocialClubHelper.exe" ))
++        return host_free;
++    return cap;
++}
++#endif
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index f869246..e03fe8f 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -4485,6 +4485,43 @@ void *ios_jit_current_peb(void)
+     return ((TEB *)cur_teb)->Peb;
+ }
+ 
++/* Playport (PLA-476, decision 0168): the available memory Wine's
++ * get_performance_info reports to the calling process (pp_avail_phys.h):
++ * SocialClubHelper.exe sees at most madeira.cfg avail-phys-cef-mb, every other
++ * process host_free. The key is read once; a few `[avail-phys]` lines say
++ * what was reported. The caller is a thread of the process asking, so its PEB's
++ * parameters are written. */
++#include "pp_avail_phys.h"
++unsigned long long ios_avail_phys( unsigned long long host_free )
++{
++    static long long cap_mb = -1;
++    static unsigned said;
++    const PEB *peb;
++    const RTL_USER_PROCESS_PARAMETERS *params;
++    unsigned long long cap, value;
++
++    if (__atomic_load_n( &cap_mb, __ATOMIC_ACQUIRE ) < 0)
++    {
++        long long mb = madeira_cfg_int( "avail-phys-cef-mb", 0 );
++        if (!ppap_cap( mb )) mb = 0;
++        if (mb) dprintf( 2, "[avail-phys] SocialClubHelper.exe sees at most %lld MB available: %s "
++                            "(madeira.cfg avail-phys-cef-mb)\n", mb,
++                         mb < 400 ? "Chromium's critical level" : mb < 1000 ? "Chromium's moderate level"
++                                                                         : "no pressure level" );
++        __atomic_store_n( &cap_mb, mb, __ATOMIC_RELEASE );
++    }
++    if (!(cap = ppap_cap( __atomic_load_n( &cap_mb, __ATOMIC_ACQUIRE ) ))) return host_free;
++    peb = ios_jit_current_peb();
++    params = peb ? peb->ProcessParameters : NULL;
++    if (!params || !params->ImagePathName.Buffer) return host_free;
++    value = ppap_available( host_free, cap, (const pp_wchar *)params->ImagePathName.Buffer,
++                            params->ImagePathName.Length / sizeof(WCHAR) );
++    if (value != host_free && __atomic_fetch_add( &said, 1, __ATOMIC_RELAXED ) < 4)
++        dprintf( 2, "[avail-phys] SocialClubHelper.exe (PEB %p) asked: %llu MB reported instead of %llu MB\n",
++                 peb, value >> 20, host_free >> 20 );
++    return value;
++}
++
+ /* Owner-aware main-image machine (X3 mixed-mode); registry in loader_ios.c. */
+ USHORT ios_cur_image_info_machine(void)
+ {
