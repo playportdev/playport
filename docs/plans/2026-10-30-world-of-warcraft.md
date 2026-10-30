@@ -2,7 +2,8 @@
 
 **Linear:** [PLA-508](https://linear.app/playportdev/issue/PLA-508) (under
 [PLA-254](https://linear.app/playportdev/issue/PLA-254); related to
-[PLA-298](https://linear.app/playportdev/issue/PLA-298)). Compatibility:
+[PLA-298](https://linear.app/playportdev/issue/PLA-298)). Spec:
+[PLA-516](https://linear.app/playportdev/issue/PLA-516). Compatibility:
 [PLA-515](https://linear.app/playportdev/issue/PLA-515).
 
 **Date:** 2026-10-30. **Kind:** design and execution plan, decided by the owner the same day.
