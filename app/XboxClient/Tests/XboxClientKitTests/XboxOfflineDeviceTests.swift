@@ -92,7 +92,7 @@ final class XboxOfflineDeviceTests: XCTestCase, @unchecked Sendable {
         // The PC Game App Front Door, as the recorded GET.
         let get = sent[3]
         XCTAssertEqual(get.method, "GET")
-        XCTAssertEqual(get.headers["Authorization"]?.value, "XBL3.0 x=22222222222222222222;synthetic.mp.xsts")
+        XCTAssertEqual(get.headers["Authorization"]?.value, "XBL3.0 x=uhs4567;synthetic.mp.xsts")
         XCTAssertEqual(get.headers["X-MS-API-Version"]?.value, "1.0")
         XCTAssertEqual(get.headers["x-xbl-contract-version"]?.value, "1")
         XCTAssertEqual(get.headers["Accept-Language"]?.value, "en-US")
@@ -291,7 +291,7 @@ final class XboxOfflineDeviceTests: XCTestCase, @unchecked Sendable {
         XCTAssertTrue(text.contains("offline device: this device (changed); 2 change(s) left"), text)
         // The synthetic lease's URI has no query; the recorded one says policyType=Online, policyKind=Device.
         XCTAssertTrue(text.contains("licence usage: key Machine/Online; lease Machine/Online isOffline=true policyType=? policyKind=?"), text)
-        for secret in ["synthetic.device.jwt", "synthetic.title.jwt", "synthetic.user.jwt", "synthetic.mp.xsts", "22222222222222222222",
+        for secret in ["synthetic.device.jwt", "synthetic.title.jwt", "synthetic.user.jwt", "synthetic.mp.xsts", "uhs4567",
                        "synthetic-xbox-app-ticket", "synthetic-compact-device"] {
             XCTAssertFalse(text.contains(secret), "log holds \(secret)")
         }
