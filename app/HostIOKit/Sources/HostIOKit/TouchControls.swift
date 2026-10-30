@@ -56,7 +56,8 @@ public struct TouchTarget: Equatable, Sendable {
         /// where the finger is and the left button is down while it is; as a
         /// trackpad a drag moves the pointer and a short tap clicks. The tools
         /// change both. `view` is the rectangle the game's picture fills (the
-        /// whole view): a point's place in it is its place in the client area.
+        /// whole view from a layout; `setPicture` gives the aspect-fitted picture):
+        /// a point's place in it is its place in the client area.
         /// It takes what no other control does.
         case pointer(view: TouchRect)
         /// A side-bar tool: a press turns it on or off.
@@ -281,6 +282,15 @@ public struct TouchControls: Sendable {
     public mutating func setTargets(_ t: [TouchTarget]) {
         releaseAll()
         targets = t
+    }
+
+    /// Where the game's picture is in the view (the swap chain aspect-fitted, as
+    /// GameSurfaceView routes a game touch): the pointer surface places the
+    /// pointer through it. Nothing is let go; a finger down maps to it from its next move.
+    public mutating func setPicture(_ picture: TouchRect) {
+        for i in targets.indices {
+            if case .pointer = targets[i].kind { targets[i].kind = .pointer(view: picture) }
+        }
     }
 
     /// The control a touch at p would take: fixed controls first, then floating
