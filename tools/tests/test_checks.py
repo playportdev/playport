@@ -50,13 +50,21 @@ class Secrets(unittest.TestCase):
         self.assertEqual([w for w, _ in checks.secret_hits(f"ST={ticket}")], ["Battle.net login ticket"])
         for line in ("WEB_" + "TOKEN=" + "A1b2C3d4" * 3, '"login_' + 'ticket":"' + "Zz09" * 5 + '"',
                      "Param_Bnet" + "SessionKey: " + "0f" * 16, "session_" + "key=" + "AbCdEf012345" * 2,
-                     "realm_join_" + "ticket = " + "x1Y2" * 5):
+                     "realm_join_" + "ticket = " + "x1Y2" * 5, '"auth_' + 'token":"' + "Qq12" * 5 + '"'):
             self.assertEqual([w for w, _ in checks.secret_hits(line)], ["WoW session value"], line)
         self.assertEqual([w for w, _ in checks.secret_hits('SET account' + 'Name "player@example.com"')],
                          ["WoW account name"])
+        self.assertEqual([w for w, _ in checks.secret_hits("https://us.account.battle.net/login/en/?app=bam&account" + "Name=player2")],
+                         ["WoW account name"])
+        self.assertEqual([w for w, _ in checks.secret_hits("GAME_" + "ACCOUNT=WoW1")], ["Battle.net game account"])
         # Redacted, empty, and WoW's own switches are no hit.
         self.assertEqual(checks.secret_hits('ST=<redacted> <bnet-ticket:redacted> WEB_TOKEN=<redacted> session_key: short '
                                             'SET accountName "" Wow-ARM64.exe -d3d12 -config Config.wtf -launcherlogin'), [])
+        # The Redactor's own output (ContentKit Redaction.swift) for each of them is no hit either.
+        for line in ('SET accountName "<redacted>"', 'SET accountList "<redacted>"', "GAME_ACCOUNT=<redacted>",
+                     '"auth_token":"<redacted>"', "https://us.account.battle.net/login/en/?<query:redacted>",
+                     "/login/en/?app=bam&accountName=<redacted>"):
+            self.assertEqual(checks.secret_hits(line), [], line)
 
     def test_home_paths(self):
         home = "/ho" + "me/alice/"   # split, as above

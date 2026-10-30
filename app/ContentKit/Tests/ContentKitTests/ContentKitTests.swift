@@ -210,14 +210,14 @@ final class RedactorTests: XCTestCase {
             "Wow-ARM64.exe -d3d12 -config Config.wtf ST=\(ticket)",
             "redirect to http://localhost:0/?ST=\(ticket)",
             "login ticket \(ticket) accepted",
-            "WEB_TOKEN=WTOK0123456789 GAME_ACCOUNT=WoW1",
+            "WEB_TOKEN=WTOK0123456789 GAME_" + "ACCOUNT=WoW1",
             #"{"login_ticket":"LT0123456789","session_key":"SK0123456789","auth_token":"AT0123456789"}"#,
             "Param_BnetSessionKey: BSK0123456789 Param_RealmJoinTicket=RJT0123456789 Param_RealmListTicket = RLT0123456789",
             "reconnect_token=RCT0123456789",
             "open https://account.battle.net/login/sso?token=SSO0123456789&ref=x",
             "SET account" + #"Name "player@example.com""#,
             "SET account" + #"List "!WoW1|WoW2|""#,
-            "https://us.account.battle.net/login/en/?app=bam&accountName=player2@example.com",
+            "https://us.account.battle.net/login/en/?app=bam&account" + "Name=player2@example.com",
         ]
         let out = lines.map(Redactor.scrub).joined(separator: "\n")
         for secret in ["0123456789abcdef0123456789abcdef", "WTOK0123456789", "LT0123456789", "SK0123456789",
