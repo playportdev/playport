@@ -178,10 +178,11 @@ public actor XboxSession {
         log.info("xbox", "synthetic device reset")
     }
     private func clearSession() throws {
-        // All issued/user secrets live in these items: tickets, account information and
-        // licences' content keys. Never the persistent device item.
+        // All issued/user secrets live in these items: tickets, account information,
+        // licences' content keys and the offline device designation. Never the
+        // persistent device item.
         var failure: Error?
-        for key in ["session", "device-token", "licences"] { do { try store.delete(key) } catch { failure = error } }
+        for key in ["session", "device-token", "licences", "offline-device"] { do { try store.delete(key) } catch { failure = error } }
         if failure != nil { throw ClientError.credentialStore("Xbox session could not be deleted") }
     }
     private func deviceToken() async throws -> XboxToken {

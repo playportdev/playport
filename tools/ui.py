@@ -177,6 +177,9 @@ best-effort and reported as unconfirmed; transport loss/SIGKILL can leave cancel
   xbox:addon-remove:PRODUCTID/ADDONID   remove that add-on; the copy stays
   xbox:update:PRODUCTID  the Store's version against the installed copy's (GetBasePackage); when newer,
                          the page's Update, waited for, then every file verified; logs versions and counts
+  xbox:offline-device:on|off  Accounts' Offline device row through its confirmation (one offline
+                         device per account; Microsoft allows a few changes a year, each counts);
+                         logs on/off and the changes left. :status only reads Microsoft's answer
   xbox:licence:PRODUCTID  Microsoft's verdict on the installed copy's licence now, as a Library refresh
                          asks it (signed in): logs granted/refused/no verdict, then its lapse; a
                          definitive refusal starts the lapse (notice, Play off, removal in 7 days)
@@ -184,6 +187,12 @@ best-effort and reported as unconfirmed; transport loss/SIGKILL can leave cancel
                          @DAYS (dev) simulates Microsoft's refusal DAYS days ago in its place: @0 the
                          notice, @8 past the grace (removal held while its saves aren't in the cloud,
                          else uninstalled, saves kept); xbox:licence:ID puts Microsoft's verdict back
+  xbox:saves:PRODUCTID  log whether the installed copy has saves not yet in the Xbox cloud (synced,
+                         unsynced: its page says so, or unknown), from the runtime's save index
+  xbox-save:wait|local|cloud|later  after a play: (it runs while the game runs): wait (3 min at most)
+                         for the game's save conflict card and log both sides' times and devices;
+                         then local (A, keep this phone's), cloud (X, keep the cloud's) or later (B)
+                         Example: --play xbox-9MW9469V91LM --action xbox-save:cloud --action wait:30
   set:KEY=VALUE          a UserDefaults key, as a Settings control sets it (set:metalHUD=true;
                          set:donorPoolMB=0|auto|2048|4096|6144: Settings › Graphics › Donor memory, next Play,
                          Auto when unset; auto sizes it from the phone's tier and the app's limit;
@@ -499,7 +508,8 @@ ACTION_RE = re.compile((r"^(?:(?:install|pause-resume|queue|downloading):[0-9]+|
                        r"|hud:(?:on|off)|open:[a-z]+(?:-[A-Za-z0-9 ._-]+(?:#[a-z]+)?)?|open:library#(?:{c})|open:settings#(?:accounts|steam|graphics|downloads|controls|controllers|gyro|controller|storage|setup|about|launchers|developer|account|jit|memory|diagnostics|pairing|probes|logs)|open:licences(?:#[a-z0-9 ._-]+)?|pad:(?:{b})(?:\+(?:{b}))*|set:[A-Za-z0-9._-]+=[^,]*"
                        r"|wait:[0-9]{1,3}|tap:(?:0(?:\.[0-9]+)?|1(?:\.0+)?):(?:0(?:\.[0-9]+)?|1(?:\.0+)?)|menu:(?:open|resume|controls|screenshot|overlay|controller|quit)"
                        r"|touch:{t}(?:\+{t})*(?:@[0-9]{1,5})?|gyro:{g}(?:/{g})*|gesture:three-finger-tap|web:(?:wait|close)|web:click:[A-Za-z0-9 ._-]+"
-                       r"|xbox:(?:signin|wait|signout|status|library|reset-device|(?:installed|licence|update):[0-9A-Z]{12}|lapse:[0-9A-Z]{12}(?:@[0-9]{1,2})?|addons:[0-9A-Z]{12}|addon-(?:install|remove):[0-9A-Z]{12}/[0-9A-Z]{12})"
+                       r"|xbox:(?:signin|wait|signout|status|library|reset-device|(?:installed|licence|update|saves):[0-9A-Z]{12}|lapse:[0-9A-Z]{12}(?:@[0-9]{1,2})?|offline-device:(?:on|off|status)|addons:[0-9A-Z]{12}|addon-(?:install|remove):[0-9A-Z]{12}/[0-9A-Z]{12})"
+                       r"|xbox-save:(?:wait|local|cloud|later)"
                        r"|jit:(?:setup|pair|continue|open-settings|cancel|wait)|probe:settings-url-[0-9]|probe:helper-(?:(?:exit|kill)(?:-hold)?|report)|probe:memory-(?:64|2048|4096|donor-(?:tagged|purgeable)-(?:2048|4096)|donors-(?:6144|8192|10240)|pool-verify|pool-zero|pool-gpu)|background:(?:[1-9][0-9]|[1-5][0-9]{2}|600)|probe:relaunch|probe:native-auth|probe:pairing(?:-cancel|-use)?)$").replace("{b}", PAD_BUTTONS).replace("{t}", TOUCH_CONTROL)
                        .replace("{g}", GYRO_STEP).replace("{c}", "|".join(LIBRARY_CHIPS)))
 
@@ -512,11 +522,11 @@ def background_handoff(e):
 
 def in_game(actions, start):
     """How many actions from start act on the running game (UIDriver.inGame): wait:, tap:,
-    touch:, gyro:, gesture:, menu: and web:, and pad: once a menu:open or gesture:three-finger-tap
-    has opened the in-game menu."""
+    touch:, gyro:, gesture:, menu:, web: and xbox-save:, and pad: once a menu:open or
+    gesture:three-finger-tap has opened the in-game menu."""
     n, menu = 0, False
     for x in actions[start:]:
-        if x.startswith(("wait:", "tap:", "touch:", "gyro:", "gesture:", "menu:", "web:")) or (menu and x.startswith("pad:")):
+        if x.startswith(("wait:", "tap:", "touch:", "gyro:", "gesture:", "menu:", "web:", "xbox-save:")) or (menu and x.startswith("pad:")):
             menu = menu or x in ("menu:open", "gesture:three-finger-tap")
             n += 1
         else:

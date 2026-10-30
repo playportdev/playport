@@ -35,6 +35,15 @@ public struct UnknownSaves: UnsyncedSaves {
     public func unsynced(_ key: StoreGameKey) -> Bool? { nil }
 }
 
+/// One store's answer by the copy's store ID (the dev app's Xbox one reads the runtime's
+/// save index); another store's copies can't be told, so they wait.
+public struct StoreUnsyncedSaves: UnsyncedSaves {
+    public let store: Store
+    private let answer: (String) -> Bool?
+    public init(_ store: Store, _ answer: @escaping (String) -> Bool?) { self.store = store; self.answer = answer }
+    public func unsynced(_ key: StoreGameKey) -> Bool? { key.store == store ? answer(key.id) : nil }
+}
+
 /// One copy's lapse: when the store first refused its licence.
 public struct LicenceLapse: Codable, Equatable, Sendable {
     public var refusedAt: Date

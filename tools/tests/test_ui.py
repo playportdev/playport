@@ -182,6 +182,14 @@ class UiEnvTest(unittest.TestCase):
                     "xbox:update:", "xbox:update:9mw9469v91lm", "xbox:update:9MW9469V91LM@1.2.3.4"):
             self.assertFalse(m.ACTION_RE.match(bad), bad)
 
+    def test_the_xbox_offline_device_row_turns_on_off_or_reads(self):
+        # Settings › Accounts › Xbox's Offline device through its confirmation (PLA-504).
+        m = load()
+        for action in ("xbox:offline-device:on", "xbox:offline-device:off", "xbox:offline-device:status"):
+            self.assertEqual(m.parse(["--action", action]).action, [action])
+        for bad in ("xbox:offline-device", "xbox:offline-device:", "xbox:offline-device:true", "xbox:offline-device:on:x"):
+            self.assertFalse(m.ACTION_RE.match(bad), bad)
+
     def test_an_xbox_copy_s_licence_lapse_is_checked_and_shown_by_its_product_id(self):
         m = load()
         for action in ("xbox:licence:9MW9469V91LM", "xbox:lapse:9MW9469V91LM", "xbox:lapse:9MW9469V91LM@0",
@@ -200,6 +208,16 @@ class UiEnvTest(unittest.TestCase):
         for bad in ("xbox:addons:", "xbox:addons:9n1wk33qnsrj", "xbox:addon-install:9N1WK33QNSRJ", "xbox:addon-install:9N1WK33QNSRJ/",
                     "xbox:addon-install:9N1WK33QNSRJ/9NBL11JLNLMV/x", "xbox:addon-remove:9N1WK33QNSRJ/../x", "xbox:addon-update:9N1WK33QNSRJ/9NBL11JLNLMV"):
             self.assertFalse(m.ACTION_RE.match(bad), bad)
+
+    def test_an_xbox_save_conflict_is_answered_in_game_and_unsynced_saves_are_checked(self):
+        m = load()
+        for action in ("xbox:saves:9MW9469V91LM", "xbox-save:wait", "xbox-save:local", "xbox-save:cloud", "xbox-save:later"):
+            self.assertEqual(m.parse(["--action", action]).action, [action])
+        for bad in ("xbox:saves:", "xbox:saves:9mw9469v91lm", "xbox-save:", "xbox-save:both", "xbox-save:cloud,wait:1"):
+            self.assertFalse(m.ACTION_RE.match(bad), bad)
+        play = ["play:xbox-9MW9469V91LM", "xbox-save:cloud", "wait:30"]
+        self.assertEqual(m.in_game(play, 1), 2)
+        self.assertFalse(m.after_play(play))
 
     def test_donor_pool_setting_takes_auto_and_fixed_sizes(self):
         # Settings › Developer › Donor pool (PLA-351): set:'s generic KEY=VALUE carries auto.

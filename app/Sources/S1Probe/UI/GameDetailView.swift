@@ -599,6 +599,10 @@ private struct GameDetailPage: View {
                 } else {
                     #if !PLAYPORT_RELEASE
                     if let lapse = xboxLapses.notice(t.key) { Text(lapse).foregroundStyle(.orange) }
+                    // Saves the Xbox cloud doesn't have yet (Dev/XboxCloudSaves.swift, PLA-500).
+                    if t.store == .xbox, let saves = XboxCloudSaves.note(productID: t.key.id) {
+                        Text(saves).foregroundStyle(.orange).accessibilityIdentifier("xbox-unsynced-saves")
+                    }
                     #endif
                     MemoryWarning(need: MemoryNeed.of(t, cohort: LibraryModel.cohort))
                     if installs.isBusy { Text("Starting a game pauses the download. It goes on when Playport reopens after the game.") }
