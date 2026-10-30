@@ -148,4 +148,77 @@ final class RedactorTests: XCTestCase {
         XCTAssertTrue(out.contains("expires_in"), "a non-secret field stays")
         XCTAssertTrue(out.contains("https://embed.gog.com/on_login_success?<query:redacted>"))
     }
+
+    /// One made-up example of each Microsoft account, Xbox and licence form, built from
+    /// pieces so that `pp secrets` does not find them in this file: (a log line, what of it
+    /// must not survive).
+    private static func microsoftForms() -> [(String, [String])] {
+        let b64 = Data((0..<84).map { UInt8(truncatingIfNeeded: 7 + 3 * $0) }).base64EncodedString()
+        let compact = "Ew" + "DoA+" + b64 + "/" + b64
+        let deviceCompact = "Ew" + "CQA/" + String(b64.reversed())
+        let refresh = "M.C" + "507_BAY.0.U.-Cq!x*y$z" + String(repeating: "Kd9", count: 10)
+        let jweTail = String(repeating: "C", count: 60) + "." + String(repeating: "T", count: 22)
+        let jwe = "ey" + "JlbmMiOiJBMTI4Q0JDK0hTMjU2IiwiYWxnIjoiUlNBLU9BRVAifQ." + String(repeating: "K", count: 40)
+            + "." + String(repeating: "iv", count: 8) + "." + jweTail
+        let uhs = "3192390212393254869", xuid = "2535412345678901"
+        let block = String(b64.prefix(60))
+        let licence = #"<?xml version="1.0" encoding="utf-8"?><License xmlns="urn:schemas-microsoft-com:windows:"#
+            + #"store:licensing:ls">"# + #"<LicenseInfo Type="Full"/><SPLicenseBlock>"# + block
+            + "</SPLicenseBlock></License>"
+        let licence64 = Data(licence.utf8).base64EncodedString()
+        let hexKey = String(repeating: "0f", count: 32), cik = String(b64.suffix(44))
+        let sessionKey = String(b64.dropFirst(10).prefix(44)), bridgeKey = String(repeating: "a1", count: 32)
+        return [
+            (#"{"refresh_token":""# + refresh + #"","expires_in":3600}"#, [refresh]),
+            ("POST /token refresh=" + refresh, [refresh]),
+            ("ticket t=" + compact + "&p=", [compact]),
+            (#"{"Properties":{"AuthMethod":"RPS","RpsTicket":"d="# + compact + #""}}"#, [compact]),
+            (#"{"RpsTicket":"t="# + String(b64.prefix(50)) + #""}"#, [String(b64.prefix(50))]),
+            (#"{"Token":""# + jwe + #"","DisplayClaims":{"xui":[{"uhs":""# + uhs + #"","xid":""# + xuid + #""}]}}"#,
+             [jwe, jweTail, uhs, xuid]),
+            ("device token " + jwe, [jweTail]),
+            ("Authorization: XBL3.0 x=" + uhs + ";" + jwe, [uhs, jweTail]),
+            ("<MSATokenResponse><Token>" + compact + "</Token><Expiry>1</Expiry><DeviceRps>" + deviceCompact
+             + "</DeviceRps></MSATokenResponse>", [compact, deviceCompact]),
+            ("<wst:RequestedProofToken><wst:BinarySecret>" + sessionKey + "</wst:BinarySecret>", [sessionKey]),
+            ("<CipherData><CipherValue>" + b64 + "</CipherValue></CipherData>", [b64]),
+            (licence, [block, "Type=\"Full\""]),
+            (#"{"license":{"keys":[{"value":""# + licence64 + #""}],"leases":[]}}"#, [String(licence64.dropFirst(40).prefix(40))]),
+            (#"{"licenseToken":""# + b64 + #""}"#, [b64]),
+            (#"content key {"contentKey": ""# + hexKey + #""}"#, [hexKey]),
+            ("cik=" + cik + " sDASessionKey=" + sessionKey, [cik, sessionKey]),
+            ("launch env XODUS_BRIDGE_PORT=50123 XODUS_BRIDGE_KEY=" + bridgeKey, [bridgeKey]),
+        ]
+    }
+
+    func testMicrosoftXboxAndLicenceFormsAreScrubbed() {
+        for (line, secrets) in Self.microsoftForms() {
+            let out = Redactor.scrub(line)
+            for secret in secrets {
+                XCTAssertFalse(out.contains(secret), "\(secret.prefix(24))… leaked: \(out)")
+                XCTAssertFalse(out.contains(secret.suffix(16)), "the tail of \(secret.prefix(24))… leaked: \(out)")
+            }
+        }
+        let launch = Redactor.scrub("launch env XODUS_BRIDGE_PORT=50123 XODUS_BRIDGE_KEY=" + String(repeating: "a1", count: 32))
+        XCTAssertTrue(launch.contains("XODUS_BRIDGE_PORT=50123"), "the port is not a secret: \(launch)")
+        let header = Redactor.scrub("x-xbl-contract-version: 1 Authorization: XBL3.0 x=" + "1234567890;" + "eyJ" + "abcd.efgh.ijkl")
+        XCTAssertTrue(header.contains("x-xbl-contract-version: 1"), header)
+    }
+
+    func testTheLoggerScrubsMicrosoftForms() {
+        final class Lines: @unchecked Sendable {
+            private let lock = NSLock()
+            private var lines: [String] = []
+            func append(_ line: String) { lock.lock(); lines.append(line); lock.unlock() }
+            var all: [String] { lock.lock(); defer { lock.unlock() }; return lines }
+        }
+        let lines = Lines()
+        let log = Logger(verbose: true) { lines.append($0) }
+        for (line, _) in Self.microsoftForms() { log.debug("xbox", line) }
+        let out = lines.all.joined(separator: "\n")
+        XCTAssertEqual(lines.all.count, Self.microsoftForms().count)
+        for (_, secrets) in Self.microsoftForms() {
+            for secret in secrets { XCTAssertFalse(out.contains(secret.suffix(16)), "\(secret.prefix(24))… leaked") }
+        }
+    }
 }
