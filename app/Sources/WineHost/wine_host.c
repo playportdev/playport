@@ -1113,6 +1113,7 @@ static vm_address_t largest_gap(vm_address_t lo, vm_address_t hi, vm_address_t *
 #define SC_LOW_SIZE   0x10000000ull   /* 256 MiB: pp_sc_layout.h PPSC_CEF */
 static vm_address_t g_low_hold;
 static vm_size_t g_low_hold_size;
+static int g_low_hold_taken;   /* held at exec; g_low_hold is 0 once handed over or released */
 
 __attribute__((constructor)) static void low_hold_at_exec(void)
 {
@@ -1124,6 +1125,7 @@ __attribute__((constructor)) static void low_hold_at_exec(void)
     }
     g_low_hold = a;
     g_low_hold_size = LOW_HOLD_SIZE;
+    g_low_hold_taken = 1;
 }
 
 static void low_hold_release(vm_address_t from)
@@ -1148,10 +1150,13 @@ int wine_host_jit_pool_acquire(const char *log_path, size_t size, int wait_ms, v
     const int sc_layout = sc && !strcmp(sc, "1");
     vm_address_t sc_hold = 0;
     unsetenv("WINE_IOS_SC_LOW_HELD");
-    host_log("low hold: %s", g_low_hold ? "0x7000000000 held since exec" : "not taken at exec");
+    host_log("low hold: %s", g_low_hold ? "0x7000000000 held since exec"
+                             : g_low_hold_taken ? "released or handed over by an earlier attempt"
+                             : "not taken at exec");
     if (sc_layout) {
         if (!g_low_hold || g_low_hold_size < SC_LOW_SIZE) {
-            host_log("sc-layout: 0x7000000000 was not held at exec; launch refused, no mapping overwritten");
+            host_log(g_low_hold_taken ? "sc-layout: the low hold went with an earlier attempt; launch refused, no mapping overwritten"
+                                      : "sc-layout: 0x7000000000 was not held at exec; launch refused, no mapping overwritten");
             return -5;
         }
         low_hold_release(g_low_hold + SC_LOW_SIZE);   /* the rest goes back; the slot stays */
@@ -1166,7 +1171,7 @@ int wine_host_jit_pool_acquire(const char *log_path, size_t size, int wait_ms, v
         if (state == JIT_DEBUGGER_UNKNOWN || waited >= wait_ms) {
             int rc = jit_debugger_gate(state);
             host_log("JIT pool: no live debugger after %d ms (state=%d rc=%d); no brk issued", waited, state, rc);
-            if (sc_hold) vm_deallocate(mach_task_self(), sc_hold, 0x10000000ull);
+            if (sc_hold) vm_deallocate(mach_task_self(), sc_hold, SC_LOW_SIZE);
             return rc;
         }
         usleep(50 * 1000);
@@ -1204,7 +1209,7 @@ int wine_host_jit_pool_acquire(const char *log_path, size_t size, int wait_ms, v
     gettimeofday(&t0, NULL);
     int gate = jit_breakpoint_gate("prepare");
     if (gate) {
-        if (sc_hold) vm_deallocate(mach_task_self(), sc_hold, 0x10000000ull);
+        if (sc_hold) vm_deallocate(mach_task_self(), sc_hold, SC_LOW_SIZE);
         return gate;
     }
     void *rx = jit26_prepare_region(NULL, size);
@@ -1277,12 +1282,12 @@ int wine_host_jit_pool_acquire(const char *log_path, size_t size, int wait_ms, v
      * brk #0xf00d (signal_arm64_ios.c trap_handler). */
     gate = jit_breakpoint_gate("detach");
     if (gate) {
-        if (sc_hold) vm_deallocate(mach_task_self(), sc_hold, 0x10000000ull);
+        if (sc_hold) vm_deallocate(mach_task_self(), sc_hold, SC_LOW_SIZE);
         return gate;
     }
     jit26_detach();
     if (rc) {
-        if (sc_hold) vm_deallocate(mach_task_self(), sc_hold, 0x10000000ull);
+        if (sc_hold) vm_deallocate(mach_task_self(), sc_hold, SC_LOW_SIZE);
         return rc;
     }
     if (sc_hold) {

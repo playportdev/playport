@@ -63,20 +63,23 @@ static void configure(void) {
     setenv("WINE_IOS_JIT_SIZE", "38000000", 1);
 }
 int main(void) {
-    reset(); ppsc_boot(); assert(!calls && !freed && !ppsc_ready);
+    reset(); ppsc_boot(); assert(!calls && !freed && !ppsc_ready && !ppsc_requested);
+    reset(); configure(); setenv("PLAYPORT_SC_LAYOUT", "0", 1);
+    ppsc_boot(); assert(!calls && !freed && !ppsc_ready && !ppsc_requested);
+    /* Requested but not ready: virtual_init refuses the launch. */
     reset(); configure(); unsetenv("WINE_IOS_SC_LOW_HELD");
-    ppsc_boot(); assert(!calls && !freed && !ppsc_ready);
+    ppsc_boot(); assert(!calls && !freed && !ppsc_ready && ppsc_requested);
     reset(); configure(); setenv("WINE_IOS_JIT_RW", "7000000000", 1);
     ppsc_boot(); assert(!calls && !freed && !ppsc_ready);
     reset(); configure(); setenv("WINE_IOS_JIT_SIZE", "100000001", 1);
     ppsc_boot(); assert(!calls && !freed && !ppsc_ready);
     reset(); configure(); ppsc_boot();
-    assert(ppsc_ready && calls == 6 && !freed);
+    assert(ppsc_ready && ppsc_requested && calls == 6 && !freed);
     assert(ios_jumbo_hold_base == PPSC_GAME_BASE && ios_jumbo_hold_size == PPSC_GAME_SIZE);
     assert(!getenv("WINE_IOS_SC_LOW_HELD"));
     for (int failure = 1; failure <= 6; failure++) {
         reset(); configure(); fail_at = failure; ppsc_boot();
-        assert(!ppsc_ready && !ppsc_held && !ios_jumbo_hold_size);
+        assert(!ppsc_ready && ppsc_requested && !ppsc_held && !ios_jumbo_hold_size);
         /* Successful calls plus the one host-owned slot, never the failed slot. */
         assert(calls == failure && freed == failure);
         int low = 0;
@@ -103,3 +106,10 @@ class SocialClubBootTests(unittest.TestCase):
             subprocess.run([shutil.which('cc'), '-D_GNU_SOURCE', '-std=c11', '-Wall', '-Wextra',
                             '-Werror', '-fsanitize=undefined', str(d / 'test.c'), '-o', str(d / 'test')], check=True)
             subprocess.run([str(d / 'test')], check=True)
+
+    def test_incomplete_boot_refuses_launch(self):
+        text = (ROOT / 'patches/madeira-unix/0225-ntdll-social-club-boot-layout.patch').read_text()
+        hunk = text.split('+    ppsc_boot();', 1)[1].split('\n@@', 1)[0]
+        self.assertIn('+    if (ppsc_requested && !ppsc_ready)', hunk)
+        self.assertIn('launch refused', hunk)
+        self.assertIn('+        exit(1);', hunk)

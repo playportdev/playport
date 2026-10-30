@@ -117,6 +117,13 @@ static int ppsc_native_hold(uint64_t base, uint64_t size)
     return 1;
 }
 #include "pp_sc_owner.h"
+static unsigned noted;
+/* pp_sc_vm.h's logger only reads the kept view. */
+static void ppsc_note_kept_view_locked(int k, void *peb, struct file_view *v)
+{
+    assert(peb && v == &views[k]);
+    noted++;
+}
 int main(void)
 {
     assert(!ppsc_helper());
@@ -140,7 +147,7 @@ int main(void)
     ppsc_owner_died_locked(&pebs[1]); /* another owner's exit cannot take these */
     assert(!holds && !ppsc_held);
     ppsc_owner_died_locked(&pebs[0]);
-    assert(holds == 3);
+    assert(holds == 3 && noted == 3);
     for (int k = PPSC_ELF; k <= PPSC_CAGE; k++) {
         if (views[k].size) {
             assert(ppsc_owner[k] == &pebs[0] && !(ppsc_held & PPSC_BIT(k)));

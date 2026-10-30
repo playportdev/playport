@@ -5,7 +5,7 @@ Subject: [PATCH] ntdll: replay early images after the emulator starts
 
 PLA-476: kernel32 is loaded as an emulator dependency before the image-notification exports or executable tracker exist. The game's stock helper calls its LoadLibraryExW x64 stub from chrome_elf TLS initialization; with no tracked interval FEX emits NOEXEC and its deliberate NULL-read trampoline, not a genuine NULL dereference in chrome_elf. Replay the loader list through the existing guarded intervals-only entry after successful ProcessInit/ThreadInit and before guest callbacks. The loader lock pins every image; duplicate section inserts are idempotent. Do not replay ImageTracker or map side effects, and do not change retained-slot ownership or parked threads.
 
-Class: upstream-bug
+Class: ios-port
 Evidence: docs/evidence/2026-10-29-sc-stock-cef-probe.md
 Offered-upstream: no; iOS pseudo-process notification gap
 ---

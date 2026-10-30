@@ -1,89 +1,140 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: playportdev <dev@playport.dev>
 Date: Thu, 29 Oct 2026 18:32:57 +0100
-Subject: [PATCH] ntdll: route the verified helper's large reservations into
+Subject: [PATCH] ntdll: route SocialClubHelper.exe's large reservations into
  the Social Club layout
 
 PLA-476, active only with PLAYPORT_SC_LAYOUT=1 and a complete boot layout.
-SocialClubHelper.exe's chrome_elf/libcef PartitionAlloc pools, their
-metadata regions, Oilpan's cage and V8's 8 GB sandbox step get fixed real
-slots and report what was asked. Every other giant reserve from the helper
-fails with STATUS_NO_MEMORY instead of reaching the soft-pool grant
-(PLA-477). Commits, protects and frees inside a slot's real range are
-allowed only for its owner; a grant is released as a whole by its owner or
-at its owner's exit through the existing process teardown, and the slot is
-held again. Reported tails beyond the real ranges are logged, not enforced.
-The helper is told a 2 TB HighestUserAddress so V8 takes its partial
-sandbox (report only). One helper owns the slots at a time.
+The helper is recognised by its image name only, not by 0150's exact-build
+check: that verdict is a thread-local of the child's first thread, cleared
+once its image is mapped, so no allocating thread can read it, and carrying
+it per process is a change of its own. SocialClubHelper.exe's
+chrome_elf/libcef PartitionAlloc pools, their metadata regions, Oilpan's
+cage and V8's 8 GB sandbox step get fixed real slots and report what was
+asked; Oilpan's slot and the V8 cage go only to the helper that holds both
+core pools. Every other giant reserve from the helper fails with
+STATUS_NO_MEMORY instead of reaching the soft-pool grant (PLA-477).
+
+A grant gives back its native hold and places a Wine view in the slot with
+no-replace semantics: the slots lie in no Wine reserved area (checked), so
+map_fixed_area maps with VM_FLAGS_FIXED, and a native mapping that took the
+slot in between makes the grant fail with STATUS_NO_MEMORY, untouched.
+
+Commits, protects and frees inside a slot's real range are allowed only for
+its owner; a grant is released as a whole by its owner or at its owner's
+exit through the existing process teardown, and the slot is held again.
+Operations in reported extents outside the real ranges are logged, not
+refused (PLA-482): a commit in a reported tail, one in the lower half of
+Oilpan's report (chrome_elf's), one that lands in another slot the same
+helper owns, and one on another owner's view, each limited per kind. At an
+owner's exit a kept slot view is logged with its owner and committed
+extent. The helper is told a 2 TB HighestUserAddress so V8 takes its
+partial sandbox (report only). One helper owns the slots at a time.
 
 Class: feature
 Evidence: docs/evidence/2026-10-29-sc-stock-cef-probe.md
 Offered-upstream: no
 ---
- build/ntdll-unix/pp_sc_access.h |  43 +++++++++++++
- build/ntdll-unix/pp_sc_owner.h  |  59 +++++++++++++++++
- build/ntdll-unix/pp_sc_vm.h     | 109 ++++++++++++++++++++++++++++++++
- build/ntdll-unix/virtual_ios.c  |  37 ++++++++++-
- 4 files changed, 246 insertions(+), 2 deletions(-)
+ build/ntdll-unix/pp_sc_access.h |  79 ++++++++++++++++
+ build/ntdll-unix/pp_sc_owner.h  |  61 ++++++++++++
+ build/ntdll-unix/pp_sc_vm.h     | 162 ++++++++++++++++++++++++++++++++
+ build/ntdll-unix/virtual_ios.c  |  37 +++++++-
+ 4 files changed, 337 insertions(+), 2 deletions(-)
  create mode 100644 build/ntdll-unix/pp_sc_access.h
  create mode 100644 build/ntdll-unix/pp_sc_owner.h
  create mode 100644 build/ntdll-unix/pp_sc_vm.h
 
 diff --git a/build/ntdll-unix/pp_sc_access.h b/build/ntdll-unix/pp_sc_access.h
 new file mode 100644
-index 0000000..8ab715e
+index 0000000..86793bb
 --- /dev/null
 +++ b/build/ntdll-unix/pp_sc_access.h
-@@ -0,0 +1,43 @@
+@@ -0,0 +1,79 @@
 +/* SPDX-License-Identifier: LGPL-2.1-or-later */
 +/* Reported extents are not ownership. Call before commits/decommits/protects
 + * and non-grant frees, including extended-API commits. */
-+static int ppsc_access(const void *address, SIZE_T size)
++enum ppsc_op { PPSC_OP_COMMIT, PPSC_OP_FREE, PPSC_OP_PROTECT };
++
++/* The slot whose real range [a, a + n) overlaps, or PPSC_NONE. */
++static enum ppsc_slot ppsc_real_slot(uint64_t a, uint64_t n)
++{
++    int k;
++    for (k = PPSC_ELF; k <= PPSC_CAGE; k++) {
++        struct ppsc_range r = ppsc_range(k);
++        if (a < r.base + r.size && a + n > r.base) return k;
++    }
++    return PPSC_NONE;
++}
++
++/* virtual_mutex held. PLA-482, diagnostic only: no operation is refused here.
++ * For each grant k this helper owns whose reported extent covers [a, a + n)
++ * outside k's real range, say what is underneath: another slot it also owns
++ * (the reported extents alias real slots), a commit in a reported tail, an
++ * Oilpan commit in the lower half of its report (chrome_elf's), or a view of
++ * another owner. Each message has its own per-kind limit. */
++static void ppsc_note_reported_locked(void *owner, const void *address, uint64_t a, uint64_t n,
++                                      enum ppsc_op op)
++{
++    static unsigned said_view[PPSC_CAGE + 1], said_alias[PPSC_CAGE + 1], said_tail[PPSC_CAGE + 1];
++    static unsigned said_oilpan_low;
++    enum ppsc_slot j = ppsc_real_slot(a, n);
++    int k;
++    for (k = PPSC_ELF; k <= PPSC_CAGE; k++) {
++        struct ppsc_range r = ppsc_range(k);
++        struct file_view *v;
++        uint64_t off;
++        if (ppsc_owner[k] != owner || a >= r.report + r.asked || a + n <= r.report) continue;
++        if (ppsc_contains(r, a, n)) continue;
++        off = a > r.report ? a - r.report : 0;
++        if (k == PPSC_OILPAN && op == PPSC_OP_COMMIT && off < 0x400000000ULL) {
++            if (said_oilpan_low++ < 16)
++                dprintf(2, "[sc-layout] helper %p commit %p+0x%llx in Oilpan's reported lower half off=0x%llx (real slot kind=%d)\n",
++                        owner, address, (unsigned long long)n, (unsigned long long)off, j);
++            continue;
++        }
++        if (j && ppsc_owner[j] == owner) {
++            if (said_alias[k]++ < 16)
++                dprintf(2, "[sc-layout] helper %p op=%d %p+0x%llx in reported extent of kind=%d off=0x%llx lands in its own kind=%d real range\n",
++                        owner, op, address, (unsigned long long)n, k, (unsigned long long)off, j);
++            continue;
++        }
++        v = j ? NULL : find_view(address, n);
++        if (op == PPSC_OP_COMMIT && said_tail[k]++ < 16)
++            dprintf(2, "[sc-layout] helper %p commit %p+0x%llx in reported tail of kind=%d off=0x%llx: real slot kind=%d owner=%p, view owner=%p\n",
++                    owner, address, (unsigned long long)n, k, (unsigned long long)off, j,
++                    j ? ppsc_owner[j] : NULL, v ? v->ios_owner_peb : NULL);
++        /* FEX and thread views here may be tagged with another owner
++         * legitimately; that is not yet proven safe to refuse. */
++        if (v && v->ios_owner_peb != owner && said_view[k]++ < 16)
++            dprintf(2, "[sc-layout] helper %p operation %p+0x%llx in reported tail of kind=%d lands on view owned by %p\n",
++                    owner, address, (unsigned long long)n, k, v->ios_owner_peb);
++    }
++}
++
++static int ppsc_access(const void *address, SIZE_T size, enum ppsc_op op)
 +{
 +    uint64_t a = (uintptr_t)address, n = size ? size : 1;
 +    void *owner;
 +    sigset_t sigset;
-+    int k, ok = 1;
++    enum ppsc_slot k;
++    int ok = 1;
 +    if (!ppsc_ready) return 1;
 +    if (n > UINT64_MAX - a) return 0;
 +    owner = ios_jit_current_peb();
 +    server_enter_uninterrupted_section(&virtual_mutex, &sigset);
-+    for (k = PPSC_ELF; k <= PPSC_CAGE; k++) {
-+        struct ppsc_range r = ppsc_range(k);
-+        if (a < r.base + r.size && a + n > r.base) {
-+            ok = owner && ppsc_owner[k] == owner && ppsc_contains(r, a, n);
-+            goto done;
-+        }
-+    }
-+    if (ppsc_helper()) {
-+        for (k = PPSC_ELF; k <= PPSC_CAGE; k++) {
-+            struct ppsc_range r = ppsc_range(k);
-+            struct file_view *v;
-+            if (ppsc_owner[k] != owner || a >= r.report + r.asked || a + n <= r.report) continue;
-+            /* A reported tail is never ownership; ordinary views there keep their own rules. */
-+            v = find_view(address, n);
-+            if (v && v->ios_owner_peb != owner) {
-+                static unsigned said;
-+                /* Diagnostic only: FEX and thread views here may be tagged with
-+                 * another owner legitimately; that is not yet proven safe to refuse. */
-+                if (said++ < 16)
-+                    dprintf(2, "[sc-layout] helper %p operation %p+0x%llx in reported tail of kind=%d lands on view owned by %p\n",
-+                            owner, address, (unsigned long long)size, k, v->ios_owner_peb);
-+            }
-+        }
-+    }
-+done:
++    if ((k = ppsc_real_slot(a, n))) ok = owner && ppsc_owner[k] == owner && ppsc_contains(ppsc_range(k), a, n);
 +    if (!ok) dprintf(2, "[sc-layout] refused memory operation owner=%p addr=%p size=0x%llx: outside owned real range\n",
 +                     owner, address, (unsigned long long)size);
++    else if (owner && ppsc_helper()) ppsc_note_reported_locked(owner, address, a, n, op);
 +    server_leave_uninterrupted_section(&virtual_mutex, &sigset);
 +    return ok;
 +}
 diff --git a/build/ntdll-unix/pp_sc_owner.h b/build/ntdll-unix/pp_sc_owner.h
 new file mode 100644
-index 0000000..446c027
+index 0000000..99c103b
 --- /dev/null
 +++ b/build/ntdll-unix/pp_sc_owner.h
-@@ -0,0 +1,59 @@
+@@ -0,0 +1,61 @@
 +/* SPDX-License-Identifier: LGPL-2.1-or-later */
 +/* Shared by the layout router and the existing safe process teardown. */
 +static void *ppsc_owner[PPSC_CAGE + 1]; /* virtual_mutex protects grants and holds */
@@ -112,16 +163,18 @@ index 0000000..446c027
 + * (kept for a parked register) stays owned; nothing else may take it. */
 +struct file_view;
 +static struct file_view *find_view( const void *addr, size_t size );
++static void ppsc_note_kept_view_locked(int k, void *peb, struct file_view *v); /* pp_sc_vm.h */
 +static void ppsc_owner_died_locked(void *peb)
 +{
 +    int k;
 +    if (!peb || !ppsc_ready) return;
 +    for (k = PPSC_ELF; k <= PPSC_CAGE; k++) {
 +        struct ppsc_range r;
++        struct file_view *v;
 +        if (ppsc_owner[k] != peb) continue;
 +        r = ppsc_range(k);
-+        if (find_view((void *)(uintptr_t)r.base, 0)) {
-+            dprintf(2, "[sc-layout] owner %p exited; kind=%d view kept, slot stays owned\n", peb, k);
++        if ((v = find_view((void *)(uintptr_t)r.base, 0))) {
++            ppsc_note_kept_view_locked(k, peb, v);
 +            continue;
 +        }
 +        ppsc_owner[k] = NULL;
@@ -145,10 +198,10 @@ index 0000000..446c027
 +}
 diff --git a/build/ntdll-unix/pp_sc_vm.h b/build/ntdll-unix/pp_sc_vm.h
 new file mode 100644
-index 0000000..b95137c
+index 0000000..eb9ef2f
 --- /dev/null
 +++ b/build/ntdll-unix/pp_sc_vm.h
-@@ -0,0 +1,109 @@
+@@ -0,0 +1,162 @@
 +/* SPDX-License-Identifier: LGPL-2.1-or-later */
 +/* Included after allocate_virtual_memory: the runtime router for layout 2.
 + * Lock order is virtual_mutex only (recursive, with signals blocked). */
@@ -160,7 +213,50 @@ index 0000000..b95137c
 +    return bits;
 +}
 +
-+/* A real view is never made for the overlapping reported tail. */
++/* virtual_mutex held, from the existing process teardown: what kept a dead
++ * owner's slot view (PLA-476 retained-extent diagnostic, no policy). */
++static void ppsc_note_kept_view_locked(int k, void *peb, struct file_view *v)
++{
++    char *p = v->base, *end = (char *)v->base + v->size;
++    unsigned long long bytes = 0, high = 0;
++    unsigned runs = 0;
++    dprintf(2, "[sc-layout] owner %p exited; kind=%d view kept (view %p+0x%llx owner=%p), slot stays owned\n",
++            peb, k, v->base, (unsigned long long)v->size, v->ios_owner_peb);
++    while (p < end) {
++        BYTE vprot;
++        SIZE_T len = get_vprot_range_size(p, end - p, VPROT_COMMITTED, &vprot);
++        if (!len) break;
++        if (vprot & VPROT_COMMITTED) {
++            runs++;
++            bytes += len;
++            high = (unsigned long long)(p + len - (char *)v->base);
++        }
++        p += len;
++    }
++    dprintf(2, "[sc-layout] kind=%d committed runs=%u bytes=0x%llx highest_end_off=0x%llx\n", k, runs, bytes, high);
++}
++
++/* Whether any of Wine's reserved areas overlaps slot r. */
++static int ppsc_in_reserved_area_locked(struct ppsc_range r)
++{
++    struct reserved_area *area;
++    LIST_FOR_EACH_ENTRY(area, &reserved_areas, struct reserved_area, entry)
++        if ((uintptr_t)area->base < r.base + r.size && (uintptr_t)area->base + area->size > r.base) return 1;
++    return 0;
++}
++
++/* A real view is never made for the overlapping reported tail.
++ *
++ * Between giving back our native hold and placing the view, a native
++ * allocation from outside Wine (virtual_mutex is held, so not Wine's own) can
++ * take part of the slot. The view is then placed by map_fixed_area, which
++ * replaces mappings (anon_mmap_fixed) only inside a Wine reserved area and
++ * elsewhere maps with mach_vm_map VM_FLAGS_FIXED, which fails on any overlap
++ * and replaces nothing. No slot lies in a reserved area (iOS reserves only
++ * below 0x68000000, 0x7f000000..0x7fff0000, from 0x7ffffe000000 and above the
++ * user limit; FEX's arena starts at PPSC_FEX_BASE), and this is checked, not
++ * assumed: a slot in one is refused rather than mapped over. So an intruder
++ * makes the grant fail with STATUS_NO_MEMORY and keeps its memory. */
 +static NTSTATUS ppsc_grant(enum ppsc_slot k, SIZE_T asked, void **ret, SIZE_T *size_ptr, ULONG protect)
 +{
 +    struct ppsc_range r = ppsc_range(k);
@@ -168,12 +264,18 @@ index 0000000..b95137c
 +    SIZE_T n = r.size;
 +    NTSTATUS st;
 +    if (!(ppsc_held & PPSC_BIT(k)) || ppsc_owner[k]) return STATUS_NO_MEMORY;
++    if (ppsc_in_reserved_area_locked(r)) {
++        dprintf(2, "[sc-layout] kind=%d slot overlaps a reserved area; not granted, hold kept\n", k);
++        return STATUS_NO_MEMORY;
++    }
 +    if (mach_vm_deallocate(mach_task_self(), r.base, r.size) != KERN_SUCCESS) return STATUS_NO_MEMORY;
 +    ppsc_held &= ~PPSC_BIT(k);
 +    st = allocate_virtual_memory(&p, &n, MEM_RESERVE, protect, 0, 0, 0, 0);
 +    if (st) {
 +        if (ppsc_native_hold(r.base, r.size)) ppsc_held |= PPSC_BIT(k);
-+        return st;
++        dprintf(2, "[sc-layout] kind=%d view not placed (status=%x): something mapped the slot; it was left alone, slot %s\n",
++                k, (unsigned)st, (ppsc_held & PPSC_BIT(k)) ? "held again" : "NOT held again");
++        return STATUS_NO_MEMORY;
 +    }
 +    /* Fixed allocate_virtual_memory does not relocate. Do not silently accept
 +     * a different shape if its contract changes. */
@@ -198,11 +300,15 @@ index 0000000..b95137c
 +{
 +    enum ppsc_slot k;
 +    sigset_t sigset;
-+    if (!ppsc_requested() || !ppsc_helper() || type != MEM_RESERVE || limit) return 0;
++    unsigned both = PPSC_BIT(PPSC_ELF) | PPSC_BIT(PPSC_CEF);
++    /* ppsc_ready first: off-layout plays never reach the helper's name check. */
++    if (!ppsc_ready || type != MEM_RESERVE || limit || !ppsc_helper()) return 0;
 +    server_enter_uninterrupted_section(&virtual_mutex, &sigset);
 +    if (extended) {
++        /* As Oilpan's: only the helper that holds both core pools takes the
++         * cage (every logged play asks for it after both). */
 +        if (*size != 0x200000000ULL || protect != PAGE_NOACCESS ||
-+            !(ppsc_held & PPSC_BIT(PPSC_CAGE))) {
++            !(ppsc_held & PPSC_BIT(PPSC_CAGE)) || (ppsc_mine(ios_jit_current_peb()) & both) != both) {
 +            server_leave_uninterrupted_section(&virtual_mutex, &sigset);
 +            return 0;
 +        }
@@ -219,7 +325,7 @@ index 0000000..b95137c
 +            k = PPSC_REFUSE;
 +        }
 +    }
-+    *status = !ppsc_ready || k == PPSC_REFUSE ? STATUS_NO_MEMORY : ppsc_grant(k, *size, ret, size, protect);
++    *status = k == PPSC_REFUSE ? STATUS_NO_MEMORY : ppsc_grant(k, *size, ret, size, protect);
 +    if (*status) dprintf(2, "[sc-layout] refused reserve owner=%p size=0x%llx kind=%d status=%x\n",
 +                        ios_jit_current_peb(), (unsigned long long)*size, k, (unsigned)*status);
 +    server_leave_uninterrupted_section(&virtual_mutex, &sigset);
@@ -239,7 +345,7 @@ index 0000000..b95137c
 +    server_enter_uninterrupted_section(&virtual_mutex, &sigset);
 +    for (k = PPSC_CAGE; k >= PPSC_ELF; k--) {
 +        struct ppsc_range r = ppsc_range(k);
-+        if (r.report == (uintptr_t)*addr && ppsc_owner[k] == owner) { chosen = k; break; }
++        if (owner && r.report == (uintptr_t)*addr && ppsc_owner[k] == owner) { chosen = k; break; }
 +    }
 +    if (chosen) {
 +        struct ppsc_range r = ppsc_range(chosen);
@@ -259,7 +365,7 @@ index 0000000..b95137c
 +    return chosen != 0;
 +}
 diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
-index 002353c..ed32947 100644
+index ffcaebf..5275323 100644
 --- a/build/ntdll-unix/virtual_ios.c
 +++ b/build/ntdll-unix/virtual_ios.c
 @@ -2023,6 +2023,7 @@ static size_t    ios_jumbo_hold_size;
@@ -270,7 +376,7 @@ index 002353c..ed32947 100644
  
  static void *anon_mmap_tryfixed( void *start, size_t size, int prot, int flags );
  
-@@ -16166,6 +16167,11 @@ void virtual_get_system_info( SYSTEM_BASIC_INFORMATION *info, BOOL wow64 )
+@@ -16173,6 +16174,11 @@ void virtual_get_system_info( SYSTEM_BASIC_INFORMATION *info, BOOL wow64 )
      info->NumberOfProcessors      = cpu_count;
      if (wow64) info->HighestUserAddress = (char *)get_wow_user_space_limit() - 1;
      else info->HighestUserAddress = (char *)user_space_limit - 1;
@@ -282,7 +388,7 @@ index 002353c..ed32947 100644
  
      /* ml991: report, once, exactly what an application is told about memory.
       *
-@@ -17883,7 +17889,8 @@ static BOOL ios_view_owner_kept_range( const struct file_view *view )
+@@ -17890,7 +17896,8 @@ static BOOL ios_view_owner_kept_range( const struct file_view *view )
      uintptr_t pool = (uintptr_t)ios_jit_rx_base_global;
      unsigned int i;
  
@@ -292,7 +398,7 @@ index 002353c..ed32947 100644
      if (pool && end > pool && base < pool + ios_jit_pool_size_global) return TRUE;
      pool = (uintptr_t)ios_jit_rw_base_global;
      if (pool && end > pool && base < pool + ios_jit_pool_size_global) return TRUE;
-@@ -18134,7 +18141,8 @@ static void ios_proc_end_release_views_locked( void *peb, const struct ppe_censu
+@@ -18141,7 +18148,8 @@ static void ios_proc_end_release_views_locked( void *peb, const struct ppe_censu
      WINE_RB_FOR_EACH_ENTRY_DESTRUCTOR( view, next, &views_tree, struct file_view, entry )
      {
          uintptr_t base = (uintptr_t)view->base;
@@ -302,7 +408,7 @@ index 002353c..ed32947 100644
          enum ppe_class cls = (view->protect & SEC_IMAGE) ? PPE_IMAGE : PPE_PRIVATE;
          enum ppe_fate fate;
  
-@@ -18167,6 +18175,7 @@ static void ios_proc_end_release_views_locked( void *peb, const struct ppe_censu
+@@ -18174,6 +18182,7 @@ static void ios_proc_end_release_views_locked( void *peb, const struct ppe_censu
          view->wow64_mapping = 0;   /* the server closed the dead process's handles (0139) */
          delete_view( view );
      }
@@ -310,7 +416,7 @@ index 002353c..ed32947 100644
  }
  
  /* virtual_mutex held. The killed peb's views, then its TEBs. */
-@@ -19844,6 +19853,9 @@ static NTSTATUS allocate_virtual_memory( void **ret, SIZE_T *size_ptr, ULONG typ
+@@ -19851,6 +19860,9 @@ static NTSTATUS allocate_virtual_memory( void **ret, SIZE_T *size_ptr, ULONG typ
      ios_view_owner_scope = saved;
      return status;
  }
@@ -320,19 +426,19 @@ index 002353c..ed32947 100644
  
  static NTSTATUS allocate_virtual_memory_body( void **ret, SIZE_T *size_ptr, ULONG type, ULONG protect,
                                                ULONG_PTR limit_low, ULONG_PTR limit_high,
-@@ -20720,6 +20732,11 @@ NTSTATUS WINAPI NtAllocateVirtualMemory( HANDLE process, PVOID *ret, ULONG_PTR z
+@@ -20727,6 +20739,11 @@ NTSTATUS WINAPI NtAllocateVirtualMemory( HANDLE process, PVOID *ret, ULONG_PTR z
          limit = 0;
  
  #ifdef WINE_IOS
 +    {
 +        NTSTATUS sc_status;
 +        if (ppsc_route( ret, size_ptr, type, protect, limit, 0, &sc_status )) return sc_status;
-+        if ((type & MEM_COMMIT) && *ret && !ppsc_access( *ret, *size_ptr )) return STATUS_CONFLICTING_ADDRESSES;
++        if ((type & MEM_COMMIT) && *ret && !ppsc_access( *ret, *size_ptr, PPSC_OP_COMMIT )) return STATUS_CONFLICTING_ADDRESSES;
 +    }
      {
          NTSTATUS st;
          /* task #35 DEMAND CENSUS: is CEF's ~144GB real, or is it retries?
-@@ -22294,6 +22311,15 @@ NTSTATUS WINAPI NtAllocateVirtualMemoryEx( HANDLE process, PVOID *ret, SIZE_T *s
+@@ -22301,6 +22318,15 @@ NTSTATUS WINAPI NtAllocateVirtualMemoryEx( HANDLE process, PVOID *ret, SIZE_T *s
      if (type & ~type_mask) return STATUS_INVALID_PARAMETER;
      if (*ret && (align || limit_low || limit_high)) return STATUS_INVALID_PARAMETER;
      if (!*size_ptr) return STATUS_INVALID_PARAMETER;
@@ -342,13 +448,13 @@ index 002353c..ed32947 100644
 +        NTSTATUS sc_status;
 +        if (!limit_low && !limit_high && !align && !attributes &&
 +            ppsc_route( ret, size_ptr, type, protect, 0, 1, &sc_status )) return sc_status;
-+        if ((type & MEM_COMMIT) && *ret && !ppsc_access( *ret, *size_ptr )) return STATUS_CONFLICTING_ADDRESSES;
++        if ((type & MEM_COMMIT) && *ret && !ppsc_access( *ret, *size_ptr, PPSC_OP_COMMIT )) return STATUS_CONFLICTING_ADDRESSES;
 +    }
 +#endif
  
  #ifdef WINE_IOS
      /* iOS-Madeira: For FEX-style EC_CODE RWX allocations, allocate from the
-@@ -22881,6 +22907,12 @@ NTSTATUS WINAPI NtFreeVirtualMemory( HANDLE process, PVOID *addr_ptr, SIZE_T *si
+@@ -22888,6 +22914,12 @@ NTSTATUS WINAPI NtFreeVirtualMemory( HANDLE process, PVOID *addr_ptr, SIZE_T *si
      NTSTATUS wow64_status;
      if (ios_wow64_route_vm( 1, process, addr_ptr, size_ptr, type, 0, 0, NULL, &wow64_status ))
          return wow64_status;
@@ -356,16 +462,16 @@ index 002353c..ed32947 100644
 +    {
 +        NTSTATUS sc_status;
 +        if (ppsc_free( addr_ptr, size_ptr, type, &sc_status )) return sc_status;
-+        if (!ppsc_access( addr, size )) return STATUS_MEMORY_NOT_ALLOCATED;
++        if (!ppsc_access( addr, size, PPSC_OP_FREE )) return STATUS_MEMORY_NOT_ALLOCATED;
 +    }
      ios_vm_note_free( addr, size, type );
      /* ml966: a low guest allocation must be freed through its backing, and the
       * translation retired so nothing can resolve through it afterwards.
-@@ -23112,6 +23144,7 @@ NTSTATUS WINAPI NtProtectVirtualMemory( HANDLE process, PVOID *addr_ptr, SIZE_T
+@@ -23119,6 +23151,7 @@ NTSTATUS WINAPI NtProtectVirtualMemory( HANDLE process, PVOID *addr_ptr, SIZE_T
      NTSTATUS wow64_status;
      if (ios_wow64_route_vm( 2, process, addr_ptr, size_ptr, 0, new_prot, 0, old_prot, &wow64_status ))
          return wow64_status;
-+    if (process == NtCurrentProcess() && !ppsc_access( addr, size )) return STATUS_CONFLICTING_ADDRESSES;
++    if (process == NtCurrentProcess() && !ppsc_access( addr, size, PPSC_OP_PROTECT )) return STATUS_CONFLICTING_ADDRESSES;
      /* ml966: a protection change on a low guest allocation applies to the
       * backing. The whole span is bounds-checked, so a request that runs off
       * the end of the allocation is left alone rather than silently clipped. */
