@@ -1739,3 +1739,14 @@ The `[xp]` clock is the log's.
 
 - Red Dead Redemption 2 (1174180): dev stock-CEF probe on `b1a239f2…`. Story reached the cabin in both runs: peaks
   7468 and 7645 MB, 10–21 fps at the end, no jetsam. A dev experiment, no change to the compatibility status.
+
+## l19: diagnostics
+
+l19 (IPA `5db127bd…`, `$PLAYPORT_BUILD/ui-runs/20261030T215326-rdr2-p476l19`, l12's keys) ran the PLA-364
+log-only diagnostics, recorded in [2026-10-30-rdr2-kk-audio-diagnostics](2026-10-30-rdr2-kk-audio-diagnostics.md).
+For this plan's gates it adds the following.
+
+- HK first-frame+10 passed (`…/20261030T215237-hk-p476l19`). The game's helper got kinds 1–6. Story was pressed.
+  No SC or launcher `NO GAP FITS` was logged. Peak 7631 MB, no jetsam.
+- The heavy scene (I: the cabin) ran 42 s. Then the game stayed on a black spinner to the end, after
+  `[game-sc] re-sign-in after end: no headroom (7585 MB), restart stays refused`. l17 and l18 logged no re-sign-in.
