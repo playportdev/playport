@@ -32,7 +32,7 @@ character select; the compatibility issue records the run.
 | Retail is about 131 GB; minimum 8 GB RAM, DX12-capable GPU, 6 cores at 4 GHz | AMD Midnight page |
 | Playport ships Wine's aarch64 set (`sysarm64`) and runs aarch64 images from the JIT pool; an x86-64 session starts no pure ARM64 process | 0071, 0082, `ARCHITECTURE.md` |
 | vkd3d-proton, DXVK and `vulkan-1` are built arm64ec and i386 only | `build/stages/vulkan-pe.sh` |
-| Android (GameNative: ARM64EC Proton + FEX) runs WoW, installed by Battle.net | GameNative guide 2026 |
+| An Android launcher (ARM64EC Proton + FEX) runs WoW, installed by Battle.net | that launcher's guide, 2026 |
 
 ## Decisions (owner, 2026-10-30)
 
