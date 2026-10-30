@@ -1272,6 +1272,11 @@ from issued session tickets/proofs: sign-out deletes the latter, retaining the s
 for the next sign-in. Microsoft's device-auth rejection or Developer's Reset Xbox device
 replaces it; a network/service error does not. The Store's 10-device limit is a licensing
 reason (501), not HTTP 501; its message points to `account.microsoft.com/devices/content`.
+During an Xbox play, `XboxBridgeListener` answers the guest runtime on 127.0.0.1, on a free port
+with a per-play 64-character key (`XODUS_BRIDGE_PORT`/`XODUS_BRIDGE_KEY`, title environment only,
+[0167](decisions/0167-xbox-guest-tickets.md)). It speaks Xodus's framed XML. `XboxBridgeService`
+hands out only the copy's own client ID's user and device tickets, the licence token for its
+Product ID and related products, and update answers. Sign-out closes it.
 The release package has no XboxClientKit dependency and no `Dev/`; verification also rejects
 any Swift `Xbox…` type that reaches a release executable.
 
