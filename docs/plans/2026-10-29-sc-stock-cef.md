@@ -272,6 +272,15 @@
   `.work/agent-notes/pla476/reports/kk-retire-impl.md`; host test `kk-cmd-retire-test.c`. Phone gates next: HK on
   Vulkan with and without the option (first-frame+10 and `pp perf`), then RDR2 on l19's protocol with the option,
   compared with l19's `[kk-cmd-census]`, `[kk-upload]`, `[kk-mem]` and peak.
+- **Measured (l20–l21, 2026-10-30, IPA `6b5be569…`, `.work/ui-runs/20261030T225818-rdr2-p476l20`,
+  `…/20261030T231556-rdr2-p476l21`; [evidence](../evidence/2026-10-29-sc-stock-cef-probe.md#l20l21-decision-0169-gate)):**
+  decision 0169's gate **passed** in both runs. HK first-frame+10 passed (`20261030T225730-hk-p476l20`, +11.33 s).
+  `arm20.sh` (l15's keys without the two stored SC switches). Each run logs the 0169 line once; no game-SC end, no
+  0138 refusal, no third helper. B lived through Story (≈315 MiB). The cabin held to first-frame+600 (l21 to
+  ≈ff+680 by its tail shot after a PLA-540 link drop) at 16–18 fps. Every V8 code range landed on `0x7100000000`
+  (l21's B through 0243's `sc-aligned` candidate after the plain ladder failed); helpers 0 `NO GAP FITS`, no
+  helper OOM, no re-sign-in, no jetsam. **Headroom is thin:** peak 7960 / 8006 MB of 8192 (l17–l19 had 560–730 MB
+  more), since nothing ends B; the KosmicKrisp retire path is the planned offset.
 - **Chunk-2 gates after l19:**
 
   | Gate | l7 | l8 | l9 | l10 | l11 | l12 | l13 | l14 | l15 | l16 | l17 | l18 | l19 |

@@ -1750,3 +1750,205 @@ For this plan's gates it adds the following.
   No SC or launcher `NO GAP FITS` was logged. Peak 7631 MB, no jetsam.
 - The heavy scene (I: the cabin) ran 42 s. Then the game stayed on a black spinner to the end, after
   `[game-sc] re-sign-in after end: no headroom (7585 MB), restart stays refused`. l17 and l18 logged no re-sign-in.
+
+## l20–l21: decision 0169 gate
+
+M = measured, I = inferred. Chunk A's phone gate on decision 0169 (madeira-unix 0243; the game's own helper is not ended).
+IPA `$PLAYPORT_BUILD/out/20261030-223218-6b5be569/Playport-26.5-6b5be569.ipa`, sha256
+`6b5be56936ad84eed375304e65f937ecfacf662c135ce50ee3124b26b924841d` (dev, head `dc73497`: 0243 `211070e`,
+app `6bae711`, decision 0169 `dc73497`).
+
+### Session
+
+One locked session, `$PLAYPORT_BUILD/agent-notes/pla476/l20.sh` (lock session `c9ccc3508fb9`, rc 0;
+output `$PLAYPORT_BUILD/agent-notes/pla476/l20-lock.out`).
+
+- `pp phone status` before: 80 %, on power, Network connection, unattended on, 2.9 GB free. No JIT timeout.
+- In-place install of 6b5be569 (container kept); the status after it shows the hash.
+- **HK** `$PLAYPORT_BUILD/ui-runs/20261030T225730-hk-p476l20`: ok, first frame +11.33 s.
+- **RDR2** through `$PLAYPORT_BUILD/agent-notes/pla476/arm20.sh`: arm15 without `set:endGameSocialClubAfterSignIn` and
+  `set:refuseGameSocialClubRestart`. hud:off and donorPoolMB=auto are kept. Keys
+  `env.PLAYPORT_CEF_SWAP=0 env.PLAYPORT_SC_SINGLE=1 env.PLAYPORT_SC_LAYOUT=1`, STORY_BY=420,
+  until first-frame+600, wait 900. There was a 180 s idle between the two runs.
+  - **l20** `$PLAYPORT_BUILD/ui-runs/20261030T225818-rdr2-p476l20`: ok, until first-frame+600. `pp ui` pulled the host log.
+  - **l21** `$PLAYPORT_BUILD/ui-runs/20261030T231556-rdr2-p476l21`:
+    - `pp ui` ended at +337 s with "the app exited before the stop condition" (`ok:false`). The phone's syslog
+      capture logged `Device is not connected` at 23:21:53, the same second. This is a PLA-540 network drop: the
+      app was still running (`app_pid` 13013).
+    - The script let the app run to launch +760 s, took a tail shot, pulled the host log again into `pull2/`
+      (170547 lines; its `[frames]` run to +772), then ended the app.
+    - The analysis uses `pull2/s1-host.log`.
+- No pp perf was run. Shot sheets: `$PLAYPORT_BUILD/agent-notes/pla476/l20-sheet.png`, `l21-sheet.png` (not for
+  publication). Analysis scripts: `$PLAYPORT_BUILD/agent-notes/pla476/l20-analysis/` (`summ.py`, `cabin.py`, `bproc.py`,
+  `lang.py`, `sheet.py`).
+
+### The switches: how the stored value was cleared
+
+- There is no unset action. `set:KEY=` stores an empty string, which reads as `false`: stored, but not unset
+  (UIDriver `set`, `GameSocialClubEnd.stored`). The arm therefore sets neither key.
+- l19 set both keys without `--keep-settings`, so its session recorded them for undo. The app's first launch outside
+  that session put them back. The same mechanism is on record at l17's start: an `app:settings-restored` event
+  listing both keys (session `94ef06adff01`, in l17's `events.jsonl`). None of this session's `events.jsonl`
+  files has that event. `pp phone status` showed the app already running (pid 12416) before this session, so I
+  infer that launch did l19's undo.
+- The launch line confirms the state (M). Both runs log
+  `launcher: the game's own Social Club is not ended under the Social Club layout (decision 0169)`
+  (l20 line 35, l21 line 40). Neither run logs `ends too` or `helper starts after the first are refused
+  (decision 0138)`, nor any `[game-sc]` line.
+
+### Per run
+
+Times are on the `[xp]` clock (≈ launch clock). fps, phys, graphics and compressed are min/median/max from Story
++150 s to the log's end. Peak is the `[xp]` fpMB maximum and the `[footprint]` peak.
+
+| | l12 | l14 | l17 | l18 | l19 | **l20** | **l21** |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| IPA | earlier | earlier | b1a239f2 | b1a239f2 | 5db127bd | 6b5be569 | 6b5be569 |
+| game-SC end (B) | +230 | +265 | +224 | +286 | +248 | **none (0169)** | **none (0169)** |
+| restarts refused | ≥100 | ≥100 | ≥110 | ≥30 | ≥80 | **0** | **0** |
+| sign-in / Story press | +110 / +153 | +116 / +149 | +96 / +123 | +130 / +160 | +112 / +140 | +96 / +124 | +100 / +128 |
+| Story to ff+600 | cabin | cabin | cabin | cabin (log to +436) | **left Story ≈+290, spinner** | **cabin** | **cabin** |
+| cabin fps | 20.3 | 19.8 | 16.5 | 15.1 | (59: spinner) | 17.8 | 16.2 |
+| phys median / max MB | 7083 / 7161 | 6939 / 7004 | 7272 / 7468 | 7359 / 7461 | 7539 / 7614 | **7742 / 7930** | **7811 / 7996** |
+| fpMB max (of 8192) | 7200 | 7058 | 7468 | 7438 | 7622 | **7960 @+793** | **8006 @+651** |
+| graphics median / max MB | 3509 / 3588 | 3501 / 3574 | 3870 / 4052 | 3899 / 4001 | 3963 / 3994 | 3947 / 4130 | 3918 / 4116 |
+| compressed median MB | 3907 | 1936 | 4057 | 3786 | 4434 | 4338 | 4238 |
+| NO GAP FITS lines | 53 | 53 | 1 | 1 | 1 | 1 (game) | 1 (game) |
+| B code range | guard → 0x7300000000 | guard → 0x7100000000 | guard → 0x7300000000 | guard → 0x7300000000 | guard ×3 fail → retry 0x7100000000 | guard → 0x7100000000 | **plain ×6 fail → sc-aligned 0x7100000000** |
+| helper OOM 0xE0000008 | none | none | none | none | none | none | none |
+| Playport jetsam | none | none | none | none | none | none | none |
+
+### Gates
+
+#### The 0169 line; no game-SC end; no restart refusal (M): passed
+
+- l20 and l21 each log the 0169 line once at launch.
+- Neither logs a `[game-sc]` line, a 0138 refusal line or a `game-social-club-ended` event.
+- There are exactly two `[sc-rph]` helper starts per run (A at +25, B at +97 / +101) and two kind-6 grants. The
+  game started no third helper.
+
+#### B alive through Story, and what it costs (M, with the delta inferred)
+
+- B is pid 04fc (1276), the pid that 0153 ended in l17–l19. It ran from +97 / +101 to the end in both runs: 59–60
+  threads at the last `[proc-mem]` sample (+658 / +712). It had no exit line.
+- B's resident + compressed in `[proc-mem]` (image + private + FEX):
+  - l20: 447 MiB at +159, then 326 / 332 / 315.
+  - l21: 444 at +163, then 402 / 313 / 315.
+  - In l17–l19, B held 362–438 MiB at its last sample before the end.
+- Footprint against l17/l18 (same graphics profile): phys median +380 to +540 MB and max +460 to +530 MB.
+  - I: most of this is B's ≈315 MiB staying resident. Run-to-run and IPA differences account for the rest:
+    graphics max is +80–110 MB, and compressed is similar.
+  - l19 sat on a spinner, so its numbers are not comparable.
+
+#### Story cabin to ff+600 (M; shots described, not published): passed in both
+
+- **l20.** Shots:
+  - menu at 0124;
+  - sepia loading art 0142–0196;
+  - black with a loading glyph at 0215;
+  - Arthur at the snowy cabin's window/porch from 0282, unchanged in framing through 0382, 0427, 0562, 0638,
+    0710, 0788 and `screen-stop.png` (ff+600).
+- **l21.** Shots:
+  - menu at 0123;
+  - loading art 0141–0196;
+  - black with a loading glyph 0214–0234;
+  - the cabin at 0284, 0339 and 0382;
+  - shots stop at the network drop. The tail shot `tail-232840.png` (launch +760 s ≈ ff+680) shows the same cabin
+    view.
+- `[frames]` advance steadily to the end in both runs: 17.8 and 16.2 fps in the cabin. l21's frames go on past the
+  drop to +772, so I infer the cabin held throughout.
+- There was no black spinner (l19's failure), no overlay and no sign-in card.
+
+#### Peak against 8192, and jetsam (M)
+
+- **Peaks:** l20 fpMB 7960 ([footprint] peak 7930), 232 MB under the limit. l21 fpMB 8006 (peak 7996), 186 MB
+  under; `fp-sample` limit_remaining min 362.
+  - These are the highest of the series: +340 to +570 over l17–l19. The decision-0153 headroom no longer applies,
+    because nothing ends B.
+- **Jetsam:**
+  - No JetsamEvent report for 2026-10-30 (`crash ls` lists none newer than 2026-10-20).
+  - The syslog shows no Playport kill, only system daemons: `killing_idle_process` at +100 s, and
+    `nanoprefsyncd` highwater.
+  - l21's syslog capture ends at 23:23:10, when `pp ui` ended. The 6 min after that are covered only by the app
+    log, which ran on with frames and was ended by the script.
+- **Thermal:** l20 fair at +182, then serious at +414. l21 fair at +43, then serious at +68.
+- **Donor pool:** 4096, growth stopped at +191 / +203 (pressure level). No pool failures.
+
+#### V8 1 GiB code range, per helper (M)
+
+| run | A (launcher SC) | B (game SC) |
+| --- | --- | --- |
+| l20 | `cand guard slot=0x7400000000 -> 0x7100000000 st=0` | `cand guard slot=0x7400000000 -> 0x7100000000 st=0` (hint 0x5cb900000000, retry → 0x7100000000) |
+| l21 | `cand guard … -> 0x7100000000 st=0` | `cand plain` 0x7c/0x78/0x74/0x70/0x6c/0x68 00000000 all `st=0xc0000018`, then **`cand sc-aligned base=0x7100000000 st=0`** (hint 0x88800000000, offset 0 in 16 GiB → plain path; retry → 0x7100000000) |
+
+- Every result base is 0x7100000000, which is 4 GiB-aligned.
+- l21's B is l16's failing case: a hint at offset 0 takes the plain path and every slot is taken. In l16 that
+  path fell to the kernel's unaligned `0x72b0370000`, then 4 NO GAP FITS, then an OOM exit. Here 0243's sc-aligned
+  candidate landed on the first try. V8 asked for no second code range (no further `[jumbo]` lines).
+- **NO GAP FITS per PEB:** A 0, B 0 in both runs. The single line per run is
+  `[mmap-place] ml1027 NO GAP FITS size=0x230010000`, followed by `0360:err … size 230000000`: the game's own
+  8960 MiB walk (RDR2 thread 0360, pid 035c), as in l15–l19.
+- **Refusal counters (0236):** A logged 2 refusals, and its exit line reads `26 impossible probes refused`. B logged
+  2 refusals (512 GiB, 256 GiB); it never exited, so it has no count line.
+- B's `allocate_virtual_memory_body out of memory … size 20000000` (22 per run) are the same count as l17–l19 (I:
+  V8 probe asks Wine reports, not failures of the helper).
+
+#### Helper OOM 0xE0000008 (M): none
+
+- No `code=e0000008` or `exit_code=0xe0000008` in either run.
+- The only SocialClubHelper end is the launcher's (A, pid 388, exit 1067 at the sign-in end, as in every run).
+
+#### Re-sign-in (M, with one inference)
+
+- The game never asked. There is no sign-in card or overlay in any shot after Story, and no third helper start.
+- After +150, GetCurrentGameLanguage was called once (at +690), in both l20 and l21. That is the same as l17.
+  - l19's re-sign-in came with a burst (4 calls at +270), after its end.
+  - I: with B alive the game has no reason to sign in again. 0155's watch is not armed, because the end is off.
+
+#### Graphics ledger (M)
+
+- `[footprint]` graphics in the cabin:
+  - l20: median 3947, max 4130, end 3992.
+  - l21: median 3918, max 4116, end 3913.
+  - l17/l18: 3870 / 3899, max 4052 / 4001.
+- `[kk-mem]` in the cabin:
+  - metal 3020–3255 MB (l17 2979–3083);
+  - memory=118/1694 (l17 117/1662);
+  - command 1806–2044 / 804–1026 MiB (l17 1730–1940);
+  - allocators 45 / 781 → 870 MiB, flat from +690 (l17 735 → 825).
+- The same profile as l17–l19. KosmicKrisp's command memory (PLA-364) is unchanged by chunk A, as expected.
+
+### Verdicts
+
+| Gate | l20 | l21 |
+| --- | --- | --- |
+| HK first-frame+10 | passed (+11.33 s) | — |
+| 0169 line, no game-SC end, no refusal line | **passed** | **passed** |
+| B alive through Story | **passed** (≈315 MiB) | **passed** (≈315 MiB) |
+| Story cabin held to ff+600 | **passed** | **passed** (shots to +382 and tail ≈ff+680; frames throughout) |
+| Peak under 8192 / no jetsam | **passed, thin**: 7960 (232 MB headroom) | **passed, thin**: 8006 (186 MB headroom) |
+| V8 code range aligned, helpers 0 NO GAP FITS | **passed** (guard/guard) | **passed** (guard / plain → sc-aligned) |
+| No helper OOM | **passed** | **passed** |
+| No re-sign-in | **passed** | **passed** |
+
+### Residual risks
+
+- **Headroom.** With B alive, the cabin peaks at 7960–8006 of 8192 MB, 186–232 MB under the limit, against
+  560–730 MB in l17–l19.
+  - A heavier scene than the opening cabin, or longer play, is untested and may reach jetsam.
+  - The KosmicKrisp retire path (mesa 0132–0133, opt-in) is the planned offset.
+- l21's 0243 sc-aligned path ran once, in one shape: the plain ladder full, then the first aligned base free.
+  The case where every aligned base is taken was not exercised on the phone.
+- l21 lost its `pp ui` connection at +337 s (PLA-540). Shots between +382 and the tail are missing, and the
+  syslog jetsam coverage ends at 23:23:10. The app log covers the rest.
+- Thermal serious early in l21 (+68 s).
+
+### Games observed (l20, l21)
+
+- Hollow Knight (367520): works, first-frame+10 at +11.33 s, IPA 6b5be569…,
+  `$PLAYPORT_BUILD/ui-runs/20261030T225730-hk-p476l20`.
+- Red Dead Redemption 2 (1174180), dev stock-CEF probe under decision 0169 (no game-SC end), IPA 6b5be569…:
+  - l20 (`$PLAYPORT_BUILD/ui-runs/20261030T225818-rdr2-p476l20`) and l21 (`$PLAYPORT_BUILD/ui-runs/20261030T231556-rdr2-p476l21`):
+    signed in, Story, the cabin held to first-frame+600 at 16–18 fps;
+  - peak 7960 / 8006 MB of 8192, no jetsam.
+  - Dev experiment; no status change.
