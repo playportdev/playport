@@ -58,7 +58,10 @@ extension BattleNetInstallTests {
         do {
             _ = try await installer(client(cdn)).changeRegion(.wowClassicEra, root: root, to: .eu)
             XCTFail("expected a refusal")
-        } catch BattleNetError.unsupported {}
+        } catch let e as BattleNetError {
+            // Its own kind, so the player is told to update first (PlayportKit BattleNet.reason).
+            XCTAssertEqual(e, .outdated(installed: "1.0.0.1", current: "1.0.0.2"))
+        }
         XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent(".build.info")), info)
     }
 
@@ -108,5 +111,78 @@ extension BattleNetInstallTests {
         let back = try await i.prepareLocaleChange(.wowClassicEra, root: root, to: "enUS", work: work)
         XCTAssertEqual(back.plan.objects, 0)
         XCTAssertEqual(back.plan.files, [])
+    }
+
+    /// A region change rewrites the game's `portal` too once the game has a `Config.wtf` (WoW
+    /// signs in to the portal's region); every other line stays.
+    func testARegionChangeRewritesTheGamesPortal() async throws {
+        let cdn = FakeCDN()
+        _ = FakeProduct.make(on: cdn, productConfig: try fixture("wow_classic_era-productconfig.json"))
+        let dir = try temp()
+        _ = try await install(cdn, in: dir)
+        let root = dir.appendingPathComponent("wow")
+        let wtf = root.appendingPathComponent("_classic_era_/WTF/Config.wtf")
+        try FileManager.default.createDirectory(at: wtf.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("SET portal \"US\"\r\nSET gxWindow \"1\"\r\n".utf8).write(to: wtf)
+        try await installer(client(cdn)).changeRegion(.wowClassicEra, root: root, to: .eu)
+        XCTAssertEqual(try String(contentsOf: wtf, encoding: .utf8), "SET portal \"EU\"\r\nSET gxWindow \"1\"\r\n")
+    }
+
+    /// Before Play the game's `Config.wtf` gets the install's locale and region where it names
+    /// none (else WoW asks in a Win32 box first) and Direct3D 12 always (WoW saves Direct3D 11
+    /// after one failed start). The file and its folder are made when missing; other lines stay.
+    func testPlayWritesTheMissingLocaleAndRegionAndPinsDirect3D12() async throws {
+        let cdn = FakeCDN()
+        _ = FakeProduct.make(on: cdn, productConfig: try fixture("wow_classic_era-productconfig.json"))
+        let dir = try temp()
+        _ = try await install(cdn, in: dir)
+        let root = dir.appendingPathComponent("wow")
+        let wtf = root.appendingPathComponent("_classic_era_/WTF/Config.wtf")
+        try WoWConfig.prepareForPlay(.wowClassicEra, root: root)
+        XCTAssertEqual(try String(contentsOf: wtf, encoding: .utf8),
+                       "SET textLocale \"enUS\"\nSET audioLocale \"enUS\"\nSET portal \"US\"\nSET GxApi \"D3D12\"\n")
+
+        try Data("SET textLocale \"deDE\"\nSET gxApi \"D3D11\"\nSET hwDetect \"0\"\n".utf8).write(to: wtf)
+        try WoWConfig.prepareForPlay(.wowClassicEra, root: root)
+        XCTAssertEqual(try String(contentsOf: wtf, encoding: .utf8),
+                       "SET textLocale \"deDE\"\nSET gxApi \"D3D12\"\nSET hwDetect \"0\"\nSET audioLocale \"enUS\"\nSET portal \"US\"\n")
+    }
+
+    /// A language change adds the text and voice locales to a `Config.wtf` that names neither.
+    func testALocaleChangeAddsTheLocalesTheConfigLacks() {
+        XCTAssertEqual(WoWConfig.locale("SET gxWindow \"1\"\n", "frFR"),
+                       "SET gxWindow \"1\"\nSET textLocale \"frFR\"\nSET audioLocale \"frFR\"\n")
+    }
+
+    /// A journal of a bucket the store does not have, or a generation with no next one, is a
+    /// damaged store: the language change says so and changes nothing.
+    func testAStrayJournalOrTheLastGenerationIsDamagedNotATrap() async throws {
+        let cdn = FakeCDN()
+        _ = FakeProduct.make(on: cdn, productConfig: try fixture("wow_classic_era-productconfig.json"))
+        let dir = try temp()
+        _ = try await install(cdn, in: dir)
+        let root = dir.appendingPathComponent("wow"), work = dir.appendingPathComponent(".wow.locale")
+        let data = root.appendingPathComponent("Data/data")
+        let fm = FileManager.default
+        let i = installer(client(cdn))
+        // Bucket 3's journal renamed as a bucket 0x1f one: still sixteen journals, one missing.
+        try fm.moveItem(at: data.appendingPathComponent(CASC.journalName(bucket: 3, generation: 1)),
+                        to: data.appendingPathComponent("1f0000000" + "1.idx"))
+        let stray = try await i.prepareLocaleChange(.wowClassicEra, root: root, to: "deDE", work: work)
+        await assertThrows(try await i.changeLocale(stray, root: root, work: work)) {
+            guard case .damaged = $0 else { return XCTFail("\($0)") }
+        }
+        try fm.moveItem(at: data.appendingPathComponent("1f0000000" + "1.idx"),
+                        to: data.appendingPathComponent(CASC.journalName(bucket: 3, generation: 1)))
+
+        for bucket in 0..<CASC.buckets {
+            try fm.moveItem(at: data.appendingPathComponent(CASC.journalName(bucket: bucket, generation: 1)),
+                            to: data.appendingPathComponent(CASC.journalName(bucket: bucket, generation: .max)))
+        }
+        let fresh = dir.appendingPathComponent(".wow.locale2")
+        let last = try await i.prepareLocaleChange(.wowClassicEra, root: root, to: "deDE", work: fresh)
+        await assertThrows(try await i.changeLocale(last, root: root, work: fresh)) {
+            guard case .damaged = $0 else { return XCTFail("\($0)") }
+        }
     }
 }

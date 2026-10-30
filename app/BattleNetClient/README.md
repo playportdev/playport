@@ -17,12 +17,16 @@ offline tests on the Linux host. The app's Battle.net store (`UI/BattleNetStore.
   answers through it.
 - **Manners** (`BattleNetManners`, decision 0168): every request carries `User-Agent: Playport`;
   at most `maxConcurrent` (8) are in flight; an HTTP 429 pauses that host for its `Retry-After`
-  (else 2 s, doubling, up to 120 s) and asks again, five times, before the host counts as
-  refusing. Only the hosts the version and CDN endpoints name are asked; no mirrors.
+  (at most 120 s; one that is not a finite, non-negative number of seconds counts as none: 2 s,
+  doubling, up to 120 s) and asks again, five times, before the host counts as refusing. Only the
+  hosts the version and CDN endpoints name are asked; no mirrors. `adding(keys:)` (a build's key
+  ring, for its download) keeps the same limit and paused hosts.
 - **Errors** (`BattleNetError`): `unreachable` (no answer) and `refused` (an HTTP status other than
   the one asked for) are the network's (`isNetwork`); `damaged` (truncated, wrong magic, a hash
-  that does not match, a missing field), `missingKey` and `unsupported` are the content's. Every
-  parser bounds-checks before each read.
+  that does not match, a missing field, a number out of range), `missingKey` and `unsupported`
+  are the content's; `outdated` is a region or language change of an install on another build
+  than the region's (it changes after an update). Every parser bounds-checks before each read
+  (`ByteReader`).
 - **Discovery** (`BattleNetClient.version`, `cdn`, `build`): Ribbit v2 over HTTPS
   (`https://{region}.version.battle.net/v2/products/{code}/versions|cdns`), pipe-separated tables
   read by column name (`PSVTable`, `VersionRow`, `CDNEndpoint`). CDN bases are only the hosts the
@@ -74,7 +78,8 @@ offline tests on the Linux host. The app's Battle.net store (`UI/BattleNetStore.
   lacks (PLA-521). A ContentKit `ContentPlan`: data files (`check: .none`, the source checks every
   object) and product folder files (`md5` = CKey).
 - **Installer** (`BattleNetInstaller`): `prepare` reads the build's configs, manifests and every
-  CDN index into a work area beside the install (kept for a resume) and plans; `install` stages
+  CDN index into a work area beside the install (kept for a resume) and plans, refusing a build
+  whose selection lacks the product config's ARM64 client (`arm64Client`); `install` stages
   the plan through ContentKit's engine (the chunk source checks each object's EKey and block
   hashes before writing it with its header, and re-checks journalled runs on resume), then writes
   `Data/config`, `Data/indices` (with the archive group, when the one built here hashes to the
@@ -85,13 +90,26 @@ offline tests on the Linux host. The app's Battle.net store (`UI/BattleNetStore.
   the game fetches it).
 - **Region and language of an install** (`BattleNetInstallChange.swift`, PLA-520):
   `changeRegion` asks only the region's version and CDN endpoints and rewrites `.build.info`
-  (branch, CDN hosts and servers, the region tag); a region on another build is refused (an
-  update). `prepareLocaleChange` plans the new locale's selection of the installed build minus
-  the objects the store's journals name and the product folder files already there, numbering
-  data files after the store's and reading the CDN indexes from `Data/indices`; `changeLocale`
-  stages it through the engine, moves the new files in, writes the next journal generation
-  (old entries plus new), then the locale into `.build.info` and an existing `WTF/Config.wtf`
-  (`textLocale`, `audioLocale`). The old locale's data stays.
+  (branch, CDN hosts and servers, the region tag) and an existing `WTF/Config.wtf`'s `portal`; a
+  region on another build is `outdated`. `prepareLocaleChange` plans the new locale's selection
+  of the installed build minus the objects the store's journals name and the product folder files
+  already there, numbering data files after the store's and reading the CDN indexes from
+  `Data/indices`; `changeLocale` stages it through the engine, renames the new files in (each
+  replacing its old one at once), writes the next journal generation (old entries plus new)
+  before removing the old one, then the locale into `.build.info` and an existing
+  `WTF/Config.wtf` (`textLocale`, `audioLocale`, replaced or added). The old locale's data stays.
+- **Updates** (`BattleNetUpdate.swift`, PLA-521): `checkUpdate` asks the install region's version
+  endpoint for its current build (`BattleNetUpdateCheck`); `prepareUpdate` plans the new build's
+  selection in the install's locale and machines minus the objects the store holds and the
+  product folder files already on disk as the new build has them, fetching only the manifests
+  and CDN indexes the install lacks; `update` adds it as a language change does, then the new
+  build's configs, the missing indexes and the archive group, and `.build.info` last. Never a
+  reinstall; run again after an interruption, it resumes.
+- **The game's settings** (`WoWConfig`): `prepareForPlay`, before each Play, writes into
+  `<product folder>/WTF/Config.wtf` (made when missing) the install's `textLocale`,
+  `audioLocale` and `portal` where it names none (without them WoW opens a Win32 language and
+  region box first) and pins `GxApi` to `D3D12` (after one failed Direct3D 12 start WoW saves
+  Direct3D 11); every other line stays.
 - **Live runs**: `BATTLENET_LIVE_REPORT=$PLAYPORT_BUILD/bnet-live.md ./pp test --swift
   BattleNetClient --filter testLiveOffersAndSizes` asks Blizzard for every product and region and
   writes the table in [the offer evidence](../../docs/evidence/2026-10-30-battlenet-offer.md).

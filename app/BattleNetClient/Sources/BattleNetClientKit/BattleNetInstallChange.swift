@@ -11,19 +11,17 @@ extension BattleNetInstaller {
     // MARK: region
 
     /// Moves the install at `root` to `region`: its `.build.info` names the region, its CDN and
-    /// its tag, and nothing else changes. Every region's data is in the store already (the
-    /// install takes them all), so nothing is downloaded; only the region's version and CDN
-    /// endpoints are asked. A region whose current build is another is an update, refused here.
+    /// its tag, and the game's `Config.wtf`, when it has one, the region's portal (WoW signs in
+    /// to it). Every region's data is in the store already (the install takes them all), so
+    /// nothing is downloaded; only the region's version and CDN endpoints are asked. A region
+    /// whose current build is another is `outdated`: it changes after an update.
     @discardableResult
     public func changeRegion(_ product: BattleNetProduct, root: URL, to region: StoreRegion) async throws -> BuildInfo {
         let info = try Self.readBuildInfo(root, product)
         async let v = client.version(product, region)
         async let c = client.cdn(product, region)
         let (version, cdn) = try await (v, c)
-        guard version.buildConfig == info.buildKey else {
-            throw BattleNetError.unsupported("\(product.code) \(region.rawValue) is on \(version.versionsName), the install on \(info.version): "
-                                             + "the region can change after an update")
-        }
+        guard version.buildConfig == info.buildKey else { throw BattleNetError.outdated(installed: info.version, current: version.versionsName) }
         var changed = info
         changed.region = region
         changed.cdnPath = cdn.path
@@ -31,6 +29,9 @@ extension BattleNetInstaller {
         changed.cdnServers = cdn.serverText
         changed.tags = info.retagged(region: region)
         try InstallFS.writeAtomically(root.appendingPathComponent(".build.info"), Data(changed.text.utf8))
+        if let wtf = WoWConfig.file(product, root: root), let text = try? String(contentsOf: wtf, encoding: .utf8) {
+            try InstallFS.writeAtomically(wtf, Data(WoWConfig.portal(text, region).utf8))
+        }
         log.info("battlenet", "\(product.code): store region \(info.region.rawValue) → \(region.rawValue)")
         return changed
     }
@@ -45,10 +46,7 @@ extension BattleNetInstaller {
         let info = try Self.readBuildInfo(root, product)
         guard let old = info.locale else { throw BattleNetError.damaged(".build.info: no locale in \(info.tags)") }
         let build = try await client.build(product, info.region)
-        guard build.version.buildConfig == info.buildKey else {
-            throw BattleNetError.unsupported("\(product.code) \(info.region.rawValue) is on \(build.version.versionsName), the install on \(info.version): "
-                                             + "the language can change after an update")
-        }
+        guard build.version.buildConfig == info.buildKey else { throw BattleNetError.outdated(installed: info.version, current: build.version.versionsName) }
         let r = try await read(build, work: work)
         func options(_ locale: String) -> BattleNetInstallOptions { Self.options(locale, build: build, installed: info) }
         let installed = try BattleNetSelection(build: build, download: r.download, install: r.install, encoding: r.encoding, options: options(old))
@@ -69,7 +67,8 @@ extension BattleNetInstaller {
     static func key9(_ key: PackedKey) -> PackedKey { PackedKey(Array(key.bytes.prefix(9)) + [UInt8](repeating: 0, count: 7)) }
 
     /// Adds `prepared` (from `prepareLocaleChange`) to the install at `root` (`add`), then writes
-    /// the locale into `.build.info` and into the game's `Config.wtf` when it has one.
+    /// the locale into `.build.info` and into the game's `Config.wtf` when it has one (the text
+    /// and voice locales replaced, or added).
     public func changeLocale(_ prepared: Prepared, root: URL, work: URL,
                              progress: @escaping @Sendable (InstallEngine.Progress) -> Void = { _ in }) async throws -> Result {
         let started = Date()
@@ -81,7 +80,7 @@ extension BattleNetInstaller {
         try InstallFS.writeAtomically(root.appendingPathComponent(".build.info"), Data(info.text.utf8))
         let wtf = root.appendingPathComponent("\(plan.build.productConfig.folder)/WTF/Config.wtf")
         if let text = try? String(contentsOf: wtf, encoding: .utf8) {
-            try InstallFS.writeAtomically(wtf, Data(Self.config(text, locale: plan.options.locale).utf8))
+            try InstallFS.writeAtomically(wtf, Data(WoWConfig.locale(text, plan.options.locale).utf8))
         }
         try? FileManager.default.removeItem(at: work)
         log.info("battlenet", "\(product.code): language \(old ?? "?") → \(plan.options.locale), \(staged.downloadedBytes) bytes fetched")
@@ -114,8 +113,10 @@ extension BattleNetInstaller {
     }
 
     /// Stages `prepared`'s plan through ContentKit in `work` (resumable), moves its data files and
-    /// product folder files into the install at `root`, and writes the next generation of
-    /// journals naming the store's objects and the new ones.
+    /// product folder files into the install at `root`, each by one rename that replaces the old
+    /// file, and writes the next generation of journals naming the store's objects and the new
+    /// ones before the old generation goes. Interrupted, every file is whole, and the store's
+    /// newest journals name only objects that are in it.
     func add(_ prepared: Prepared, root: URL, work: URL,
              progress: @escaping @Sendable (InstallEngine.Progress) -> Void) async throws -> InstallEngine.Result {
         let plan = prepared.plan, product = plan.build.product
@@ -128,32 +129,28 @@ extension BattleNetInstaller {
         let fm = FileManager.default
         for f in plan.content.files {
             let to = try InstallFS.resolveInside(root, f.path, createParents: true)
-            if fm.fileExists(atPath: to.path) { try fm.removeItem(at: to) }
-            try fm.moveItem(at: try InstallFS.resolveInside(tree, f.path, createParents: false), to: to)
+            let from = try InstallFS.resolveInside(tree, f.path, createParents: false)
+            guard rename(from.path, to.path) == 0 else { throw ClientError.transport("rename \(f.path) errno \(errno)") }
         }
         if !plan.dataFiles.isEmpty {
             let dataDir = root.appendingPathComponent("Data/data")
             let latest = try Self.latestJournals(dataDir)
-            guard latest.count == CASC.buckets else { throw BattleNetError.damaged("\(product.code): the store has \(latest.count) journals") }
+            guard (0..<CASC.buckets).allSatisfy({ latest[$0] != nil }) else {
+                throw BattleNetError.damaged("\(product.code): the store has \(latest.count) of its \(CASC.buckets) journals")
+            }
             var existing = [[CASC.Location]]()
             for bucket in 0..<CASC.buckets {
                 existing.append(try CASC.readJournal([UInt8](try Data(contentsOf: dataDir.appendingPathComponent(latest[bucket]!.name)))).locations)
             }
-            let generation = latest.values.map(\.generation).max()! + 1
+            let newest = latest.values.map(\.generation).max() ?? 0
+            guard newest < UInt32.max else { throw BattleNetError.damaged("\(product.code): the store's journals are at their last generation") }
+            let generation = newest + 1
             for (bucket, journal) in CASC.journals(objects: plan.locations, dataFiles: plan.dataFiles, existing: existing).enumerated() {
                 try InstallFS.writeAtomically(dataDir.appendingPathComponent(CASC.journalName(bucket: bucket, generation: generation)), Data(journal))
             }
             for (_, old) in latest { try fm.removeItem(at: dataDir.appendingPathComponent(old.name)) }
         }
         return staged
-    }
-
-    /// The game's settings with its text and voice locales set to `locale` (other lines kept).
-    static func config(_ text: String, locale: String) -> String {
-        text.split(separator: "\n", omittingEmptySubsequences: false).map { line in
-            for name in ["textLocale", "audioLocale"] where line.hasPrefix("SET \(name) ") { return "SET \(name) \"\(locale)\"" }
-            return String(line)
-        }.joined(separator: "\n")
     }
 }
 
