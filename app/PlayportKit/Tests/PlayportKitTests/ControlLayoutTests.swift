@@ -12,7 +12,7 @@ final class ControlLayoutTests: XCTestCase {
         for o in Self.options {
             let g = ControlLayout.gamepad(dpad: o.dpad, rightStick: o.rightStick)
             XCTAssertNil(g.problem)
-            XCTAssertEqual(g.version, 2)
+            XCTAssertEqual(g.version, 3)
             let data = try JSONEncoder().encode(g)
             XCTAssertEqual(try JSONDecoder().decode(ControlLayout.self, from: data), g)
             XCTAssertFalse(g.controls.contains { $0.actions.contains(.playport(.menu)) })   // the menu is a three-finger tap
@@ -222,27 +222,29 @@ final class ControlLayoutTests: XCTestCase {
     func testANewerOlderOrBrokenLayoutIsRefused() {
         func decode(_ s: String) -> ControlLayout? { try? JSONDecoder().decode(ControlLayout.self, from: Data(s.utf8)) }
         let button = #"{"id":"jump","actions":["key:0x20"],"anchor":"bottomTrailing","x":-60,"y":-60,"width":50,"height":50}"#
-        let ok = decode(#"{"version":2,"controls":[\#(button)]}"#)
+        let ok = decode(#"{"version":3,"controls":[\#(button)]}"#)
         XCTAssertEqual(ok?.controls.first?.label, "jump")          // label and behaviour may be left out
         XCTAssertEqual(ok?.controls.first?.behaviour, .hold)
         XCTAssertEqual(ok?.controls.first?.kind, .button)
         let stick = #"{"id":"s","kind":"stick","actions":["pad:leftStick"],"anchor":"bottomLeading","x":100,"y":-80,"width":100,"height":100"#
-        XCTAssertEqual(decode(#"{"version":2,"controls":[\#(stick),"floatingZone":{"anchor":"bottomLeading","width":200,"height":150}}]}"#)?
+        XCTAssertEqual(decode(#"{"version":3,"controls":[\#(stick),"floatingZone":{"anchor":"bottomLeading","width":200,"height":150}}]}"#)?
             .controls.first?.floatingZone, ControlZone(anchor: .bottomLeading, width: 200, height: 150))
         // A zone's offset (1c) may be left out: 0, as a layout saved before it reads.
-        XCTAssertEqual(decode(#"{"version":2,"controls":[\#(stick),"floatingZone":{"anchor":"bottomTrailing","y":-132,"width":210,"height":120}}]}"#)?
+        XCTAssertEqual(decode(#"{"version":3,"controls":[\#(stick),"floatingZone":{"anchor":"bottomTrailing","y":-132,"width":210,"height":120}}]}"#)?
             .controls.first?.floatingZone, ControlZone(anchor: .bottomTrailing, y: -132, width: 210, height: 120))
-        // Version 1 (before the safe area; zones as fractions of the view): refused, so the preset is used.
+        // Version 1 (before the safe area; zones as fractions of the view) and 2 (before phase 4's
+        // kinds): refused, so the preset is used.
         XCTAssertNil(decode(#"{"version":1,"controls":[\#(button)]}"#))
-        XCTAssertNil(decode(#"{"version":2,"controls":[\#(stick),"floatingZone":{"x":0,"y":0.33,"width":0.33,"height":0.67}}]}"#))
-        XCTAssertNil(decode(#"{"version":2,"controls":[\#(stick),"floatingZone":{"anchor":"bottomLeading","width":0,"height":150}}]}"#))
-        XCTAssertNil(decode(#"{"version":3,"controls":[\#(button)]}"#))
+        XCTAssertNil(decode(#"{"version":2,"controls":[\#(button)]}"#))
+        XCTAssertNil(decode(#"{"version":3,"controls":[\#(stick),"floatingZone":{"x":0,"y":0.33,"width":0.33,"height":0.67}}]}"#))
+        XCTAssertNil(decode(#"{"version":3,"controls":[\#(stick),"floatingZone":{"anchor":"bottomLeading","width":0,"height":150}}]}"#))
+        XCTAssertNil(decode(#"{"version":4,"controls":[\#(button)]}"#))
         XCTAssertNil(decode(#"{"controls":[\#(button)]}"#))
-        XCTAssertNil(decode(#"{"version":2,"controls":[\#(button),\#(button)]}"#))   // one id twice
-        XCTAssertNil(decode(#"{"version":2,"controls":[{"id":"s","kind":"stick","actions":["pad:a"],"anchor":"center","x":0,"y":0,"width":50,"height":50}]}"#))
-        XCTAssertNil(decode(#"{"version":2,"controls":[{"id":"d","kind":"dpad","actions":["pad:up"],"anchor":"center","x":0,"y":0,"width":50,"height":50}]}"#))
-        XCTAssertNil(decode(#"{"version":2,"controls":[{"id":"z","actions":["pad:a"],"anchor":"center","x":0,"y":0,"width":0,"height":50}]}"#))
-        XCTAssertNil(decode(#"{"version":2,"controls":[{"id":"a b","actions":["pad:a"],"anchor":"center","x":0,"y":0,"width":5,"height":50}]}"#))
+        XCTAssertNil(decode(#"{"version":3,"controls":[\#(button),\#(button)]}"#))   // one id twice
+        XCTAssertNil(decode(#"{"version":3,"controls":[{"id":"s","kind":"stick","actions":["pad:a"],"anchor":"center","x":0,"y":0,"width":50,"height":50}]}"#))
+        XCTAssertNil(decode(#"{"version":3,"controls":[{"id":"d","kind":"dpad","actions":["pad:up"],"anchor":"center","x":0,"y":0,"width":50,"height":50}]}"#))
+        XCTAssertNil(decode(#"{"version":3,"controls":[{"id":"z","actions":["pad:a"],"anchor":"center","x":0,"y":0,"width":0,"height":50}]}"#))
+        XCTAssertNil(decode(#"{"version":3,"controls":[{"id":"a b","actions":["pad:a"],"anchor":"center","x":0,"y":0,"width":5,"height":50}]}"#))
     }
 }
 

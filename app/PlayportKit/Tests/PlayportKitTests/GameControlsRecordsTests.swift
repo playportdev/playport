@@ -7,7 +7,7 @@ final class GameControlsRecordsTests: XCTestCase {
     /// A later build's layout (unknown here) and a typo beside two good records.
     let stored = Data(#"""
     {"app-367520":{"layout":"off","opacity":0.5},
-     "app-620":{"layout":"keyboardMouse","gyro":{"output":"mouse"},"extra":[1,true,null,"x"]},
+     "app-620":{"layout":"racingWheel","gyro":{"output":"mouse"},"extra":[1,true,null,"x"]},
      "app-400":{"rightStick":"sideways"},
      "app-70":{"controllerMap":{"mode":"keyboardMouse"},"lookSpeed":1.5}}
     """#.utf8)
@@ -32,7 +32,7 @@ final class GameControlsRecordsTests: XCTestCase {
         XCTAssertEqual(again, r)
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: again.json()) as? [String: Any])
         let kept = try XCTUnwrap(object["app-620"] as? [String: Any])
-        XCTAssertEqual(kept["layout"] as? String, "keyboardMouse")
+        XCTAssertEqual(kept["layout"] as? String, "racingWheel")
         XCTAssertEqual((kept["extra"] as? [Any])?.count, 4)
 
         // A change to that game itself is the player's: it replaces the record.

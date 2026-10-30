@@ -7,8 +7,9 @@
 // - Automatic (the default): shown while no extended controller is connected,
 //   hidden as soon as one connects, back when it goes. Always shows them with a
 //   controller too; Never makes Off every game's starting choice.
-// - A game's layout is Off or Gamepad; with none set it is Gamepad, or Off
-//   when the default is Never. Off hides them for that game whatever else.
+// - A game's layout is Off, Gamepad, Keyboard & mouse or Point & click; with
+//   none set it is Gamepad, or Off when the default is Never. Off hides them
+//   for that game whatever else.
 // - The controls' pad is player 1 whenever no controller is connected, at rest
 //   while the layout is Off (ControlsState.padConnected): a game that looks for
 //   pads only now and then, or only at its start, already has it when the
@@ -37,23 +38,26 @@ public enum ControlsShow: String, Codable, CaseIterable, Sendable {
         }
     }
 }
-
-/// A game's on-screen layout: none, or a preset (phase 4 adds Keyboard & mouse and Point & click).
+/// A game's on-screen layout: none, or a preset (ControlLayout.swift).
 public enum OnScreenLayout: String, Codable, CaseIterable, Sendable {
-    case off, gamepad
+    case off, gamepad, keyboardMouse, pointClick
 
     public var title: String {
         switch self {
         case .off: "Off"
         case .gamepad: "Gamepad"
+        case .keyboardMouse: "Keyboard & mouse"
+        case .pointClick: "Point & click"
         }
     }
 
-    /// The layout with these options.
+    /// The layout with these options (the d-pad and right stick are Gamepad's).
     public func layout(dpad: OnScreenDpad, rightStick: OnScreenRightStick) -> ControlLayout? {
         switch self {
         case .off: nil
         case .gamepad: .gamepad(dpad: dpad, rightStick: rightStick)
+        case .keyboardMouse: .keyboardMouse()
+        case .pointClick: .pointClick()
         }
     }
 }

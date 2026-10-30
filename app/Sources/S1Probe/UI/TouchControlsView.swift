@@ -480,6 +480,8 @@ private final class ControlView: UIView {
             n.layer.shadowOffset = CGSize(width: 0, height: 6)
             addSubview(n)
             nub = n
+        case .lookArea, .pointer, .tool:
+            break   // drawn by PLA-530 (look area) and PLA-531 (pointer, tools)
         }
     }
 
@@ -503,6 +505,8 @@ private final class ControlView: UIView {
             nub?.backgroundColor = held ? Glass.amber : Glass.nub
             let dx = CGFloat(stick?.x ?? 0) * r, dy = -CGFloat(stick?.y ?? 0) * r
             nub?.center = CGPoint(x: bounds.midX + dx, y: bounds.midY + dy)
+        case .lookArea, .pointer, .tool:
+            break
         }
     }
 }
