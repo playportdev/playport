@@ -540,3 +540,85 @@ A only). The game's helper reaches allocator/browser startup — **not passed** 
 dead in init). The game signs in, Story is pressed — **passed**. The cabin — **not passed** (black loading screen
 without the game's Social Club). 7343 MB ±10 % — **not comparable** (peak 6496 MB without the cabin or Story's
 step).
+
+## l9: slots held in place
+
+What took kind 2 in l8 (its `pull/s1-host.log`): the release (129134 `slot-view … 0x7000000000+0x10000000
+fate=0`) and the re-hold (129151) run in one `virtual_mutex` hold (`ios_proc_end_release_views_locked` deletes the
+views, then calls `ppsc_owner_died_locked`), so no Wine allocation fits between them; B's PEB came much later
+(129894). No log line names the mapping. Measured: once kind 2 was free, the kernel's anywhere placement used it,
+as the dev `[ca-shmem-probe]`'s plain `mach_vm_allocate` got `0x7000b74000` (131286) and later `0x7000e5c000`…;
+before the teardown the same probe got `0x14…`/`0x15…` addresses. Inferred: a native anywhere allocation from
+another thread (not Wine's allocator) took the start of the range, `0x7000000000`…`0x7000924000`, in the
+≈70 ms between the munmap and the re-hold; Wine then placed B's PEB and image above it.
+
+Commit `2df65fe`: madeira-unix 0231. A freed view that is a whole slot view of the dead owner is released and held
+in one step: the slot's PROT_NONE hold is mapped over it (`mach_vm_map` with `VM_FLAGS_FIXED |
+VM_FLAGS_OVERWRITE`, which discards the pages), then the view is deleted without an unmap (`[sc-layout] owner …
+exited; kind=N slot held in place`). Both teardowns (killed, and exited by itself, 0143) and 0166's wait-only views
+go through the one view walk that does it; an owner's whole-grant release (`ppsc_free`) does it too. If the hold
+cannot be mapped over, the old free-then-hold path runs, with its `held again`/`NOT held again` line. Host tests:
+`tools/tests/test_sc_vm.py` `owner_held_in_place` (in place for slot views only, never unmapped, a second helper
+gets the same kinds, the fallback) and the free cases. Dev IPA sha256
+`9cdc96353899291d7e3fddca1e89551d7d900d1d6e8fe5d06255fe2cba352846` (90 IPA checks); full `pp test` passed
+(tools/tests 828, PlayportKit 366).
+
+One locked session, in-place install (`.work/agent-notes/pla476/l9.sh`):
+
+- Hollow Knight (`app-367520`) first-frame+10 **passed**: first frame +10.32 s
+  (`$PLAYPORT_BUILD/ui-runs/20261030T135842-hk-p476l9`).
+- RDR2 (`app-1174180`), keys as l8, run `$PLAYPORT_BUILD/ui-runs/20261030T135937-rdr2-p476l9`: first frame
+  +38.38 s, sign-in +101.8 s, Story pressed at 14:02:24.1 on the phone (`vpad` 146856, +130.9 on the `[xp]`
+  clock), then iOS ended the app at the 8192 MB limit in Story's load step (below). The run's own pull holds the
+  log; its result is `the app exited before the stop condition`.
+
+Measured, line numbers in that `pull/s1-host.log`, times on the `[xp]` clock:
+
+- **Slots:** at A's teardown (+103.3) six `owner 0x13fdd0000 exited; kind=N slot held in place` lines
+  (129461–129478: kinds 2, 4, 6, 5, 1, 3), each right after its `slot-view … fate=0` line; kind 3 came through 0166's
+  `wait-only … 0x7400000000+0x190000000 fate=0` (129474). No `held again`, no `NOT held` anywhere.
+  A's teardown: `footprint 6353->5165 MB` (129483), so the pages were discarded. The dev probe's later plain
+  anywhere allocations landed above the slots (`0x7015878000` at 145210, `0x703ae24000` at 149971).
+- **The game's helper B** (PEB `0x1791f8000`, pid 04fc, 130255): `grant` kinds 1, 3, 2, 4 (134588–134633), 5
+  (141553) and 6 (141886), each at its real range; no kind 7 (nothing was kept). 0 `refused memory operation`, 0
+  `refused reserve`. `[sc-single] verified browser … component update off` (130212), libcef mapped (132134),
+  chrome_elf (133427), no `failed to initialize` or unhandled exception; its `Chrome_IOThread` (135762),
+  `CrBrowserMain` (135909) and `CompositorTileWorker1` (137463) started. B was alive to the end (no teardown; the
+  `[proc-mem]` sample at +199.2 gives it 579 MB resident+compressed).
+- **Story:** the screenshots (`.work/agent-notes/pla476/p476l9/`, seconds on the `[xp]` clock, ±2 s) show the
+  Story/Online menu with Story underlined (the landing shot before the press), the sepia tintype loading screens of
+  a snowy ridge (+141) and snowy pines (+161), a darkened blurred frame (+180), black with a small loading icon at
+  the bottom right (+199), then the Home Screen (+225). The cabin was not reached.
+- **The load step and jetsam:** `fast phys` 7174 (+208.7, 151719) → 7744 → **8106 MB** (+209.1, 151729/151739),
+  with the phone's `IOGPUCommandDescriptor::prepare` faults for S1Probe (required ≈2.2 GB wired) at 14:03:43.02–.06;
+  the host log ends there. The phone's log stream dropped at 14:03:43 and resumed 2 s later, so no `ActiveHard` line
+  was captured; ReportSystemMemory then lists `Process S1Probe [7314] killed by jetsam reason per-process-limit`.
+  No crash report.
+- **Footprint aligned on the press (+130.9), `[footprint]` phys/graphics:** press−29.6 6307/1753; −27.3 (after the
+  teardowns) 5149/1798; 0 5769/1849; +21 5711/1851; +47 6019/2048; +61 6160/2143; +70 6585/2269; +76 7054/2494;
+  +78 7072/2494, then the step above at **press+78.2** (sign-in+107.3). l7's step came at press+94.2, xs1's at
+  press+102.2 (sign-in+132.8). Peak at least 8106 MB, the limit: **≥ +10.4 %** against xs1's 7343 MB.
+- **The game-SC end** (decisions 0133/0153: 120 s after the sign-in and 6992 MB) could not fire: the footprint passed
+  6992 at +205.2 (title line), but sign-in+120 s is +221.8, after the step. In l7 it ended B before the step (−550
+  MB), in xs1 inside it (−250 MB).
+- **Donor pool:** `growth stopped (level 13% < 15%)` at +93.8 (127216, spare 4105 MB), `growth resumed (level 20% >=
+  20%, spare 4770 MiB >= 1920)` at +103.6 after the teardowns (129877), stopped again at +107.4 (141747, level 13 %);
+  never resumed after (`resume_wait="level 11–16% < 20%"`, spare 4064–4434 MB). Live 2327–2502 MB; resident+compressed
+  2074 MB at install+180s (l8 2544 at +210, xs1 2733).
+- **Post-teardown `[proc-mem]`:** `after teardown 4` (129650, +103.3) against the sample at +100.3 (128145),
+  resident+compressed: A (pid 0184) 1102 MB, the launcher (0070) 341 MB and a child (0064) 22 MB gone; the runtime
+  row 183 → 235 (+52; image unchanged, so no image view kept); RDR2.exe 2246 → 2250; all 4184 → 2762 (−1422).
+  `after teardown 5` (147536) follows a small child's exit (`5749->5732`).
+- **`NO GAP FITS`:** 53. 26 are A's V8 sandbox probes (54735–55295, `[jumbo#…] peb=0x13fdd0000`), 26 are B's
+  (141713–143037, `peb=0x1791f8000`), one is the game's 8960 MiB ask (78008, served by the holdback). 0 `dllhost`.
+- **Teardowns:** 17 `wait-detached` (16 `node=unlinked`, 1 `absent`); 8 `wait-only`, all `fate=0`; no `fate=1`.
+
+Inferred, not shown: with its Social Club up, Story's load reaches the same step as xs1 and l7 (≈1 GB in under a
+second, its graphics wiring) but from a baseline about 1.1 GB above xs1's (7174 against 6072 MB) and before 0153's
+end can take B off; the step then crosses 8192 MB. The baseline gap is not split per process here (no `[proc-mem]`
+for xs1).
+
+Gates: HK first-frame+10 **passed**. The game's helper reaches allocator/browser startup — **passed** (all six
+kinds, no refusal). The game signs in, Story is pressed — **passed**. The cabin — **not passed** (jetsam at the
+8192 MB limit in Story's load step). No SC/launcher `NO GAP FITS` or soft grant — **not passed** (26 V8 lines each
+from A and B; 0 `dllhost`; no soft grant). 7343 MB ±10 % — **not passed** (≥ 8106 MB, the limit).
