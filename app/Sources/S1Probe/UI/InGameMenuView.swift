@@ -333,12 +333,9 @@ final class InGameMenu: ObservableObject {
         Self.log("screenshot: " + line)
     }
 
-    /// The texture as the player sees it: Core Image reads a Metal texture
-    /// upside down, and the layer is opaque, so whatever alpha the game left
-    /// in it is not the picture's (a PNG with it came out washed grey).
-    /// A texture Core Image does not read (KosmicKrisp's swap chain images are
-    /// render targets only, with no shader read usage) is read through a plain 2D
-    /// copy of its first slice.
+    /// The texture as the player sees it (FramePicture). A texture Core Image does not read
+    /// (KosmicKrisp's swap chain images are render targets only, with no shader read usage)
+    /// is read through a plain 2D copy of its first slice.
     private static func image(of texture: any MTLTexture) -> UIImage? {
         if let image = coreImage(of: texture) { return image }
         log("screenshot: Core Image did not read \(describe(texture)); trying a 2D copy")
@@ -350,11 +347,7 @@ final class InGameMenu: ObservableObject {
     }
 
     private static func coreImage(of texture: any MTLTexture) -> UIImage? {
-        guard let ci = CIImage(mtlTexture: texture, options: [.colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!]) else { return nil }
-        let context = CIContext(mtlDevice: texture.device)
-        let flipped = ci.settingAlphaOne(in: ci.extent).oriented(.downMirrored)
-        guard let cg = context.createCGImage(flipped, from: flipped.extent) else { return nil }
-        return UIImage(cgImage: cg)
+        FramePicture.image(of: texture, context: CIContext(mtlDevice: texture.device)).map { UIImage(cgImage: $0) }
     }
 
     /// Slice 0, level 0 of texture as a 2D, shader-readable texture of the same format,
@@ -416,6 +409,19 @@ final class InGameMenu: ObservableObject {
             + (shot.map { ", screenshot: \($0)" } ?? "") + (quitting ? ", quitting" : "")
     }
     #endif
+}
+
+/// A frame's texture (PacedMetalLayer.lastPresented, or a copy of part of it) as the player
+/// sees it, for the in-game menu's Screenshot and the magnifier's loupe (MagnifierOverlay):
+/// Core Image reads a Metal texture upside down, and the layer is opaque, so whatever alpha
+/// the game left in it is not the picture's (a PNG with it came out washed grey). Nil for a
+/// texture Core Image does not read.
+enum FramePicture {
+    static func image(of texture: any MTLTexture, context: CIContext) -> CGImage? {
+        guard let ci = CIImage(mtlTexture: texture, options: [.colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!]) else { return nil }
+        let flipped = ci.settingAlphaOne(in: ci.extent).oriented(.downMirrored)
+        return context.createCGImage(flipped, from: flipped.extent)
+    }
 }
 
 /// The menu over the paused game (QuickMenu.dc.html): the game dimmed, a

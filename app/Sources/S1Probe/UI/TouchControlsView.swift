@@ -643,11 +643,7 @@ private final class LoupeReader {
         commands.addCompletedHandler { buffer in
             let copied = buffer.status == .completed
             LoupeJob.render.async {
-                // Core Image reads a Metal texture upside down; the layer is opaque (InGameMenu's screenshot).
-                if copied, let ci = CIImage(mtlTexture: job.copy, options: [.colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!]) {
-                    let flipped = ci.settingAlphaOne(in: ci.extent).oriented(.downMirrored)
-                    job.image = job.context.createCGImage(flipped, from: flipped.extent)
-                }
+                if copied { job.image = FramePicture.image(of: job.copy, context: job.context) }
                 DispatchQueue.main.async { MainActor.assumeIsolated { self.done(job) } }
             }
         }
