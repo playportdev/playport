@@ -1,0 +1,7 @@
+Name!STRING:0|Path!STRING:0|Hosts!STRING:0|Servers!STRING:0|ConfigPath!STRING:0
+## seqn = 4019526
+us|tpr/wow|level3.blizzard.com us.cdn.blizzard.com|http://level3.blizzard.com/?maxhosts=8 http://us.cdn.blizzard.com/?maxhosts=4&fallback=1 https://level3.ssl.blizzard.com/?maxhosts=4&fallback=1 https://us.cdn.blizzard.com/?maxhosts=4&fallback=1|tpr/configs/data
+eu|tpr/wow|level3.blizzard.com|http://level3.blizzard.com/?maxhosts=8 https://level3.ssl.blizzard.com/?maxhosts=8&fallback=1|tpr/configs/data
+cn|tpr/wow|blzdist-wow.necdn.leihuo.netease.com|http://blzdist-wow.necdn.leihuo.netease.com/?maxhosts=6 https://blzdist-wow.necdn.leihuo.netease.com/?maxhosts=4&fallback=1|tpr/configs/data
+kr|tpr/wow|level3.blizzard.com kr.cdn.blizzard.com blizzard.gcdn.cloudn.co.kr|http://blizzard.gcdn.cloudn.co.kr/?fallback=1 http://kr.cdn.blizzard.com/?maxhosts=2 http://level3.blizzard.com/?maxhosts=4 https://blizzard.gcdn.cloudn.co.kr/?maxhosts=4&fallback=1 https://kr.cdn.blizzard.com/?maxhosts=4&fallback=1 https://level3.ssl.blizzard.com/?maxhosts=4&fallback=1|tpr/configs/data
+tw|tpr/wow|level3.blizzard.com us.cdn.blizzard.com|http://level3.blizzard.com/?maxhosts=8 http://us.cdn.blizzard.com/?maxhosts=4&fallback=1 https://level3.ssl.blizzard.com/?maxhosts=4&fallback=1 https://us.cdn.blizzard.com/?maxhosts=4&fallback=1|tpr/configs/data
