@@ -48,11 +48,11 @@ SECRETS = [
     # A legacy (SOAP) ticket's encrypted body, its session key, a licence's signed block.
     ("Microsoft account session secret or licence block",
      r"<([A-Za-z]+:)?(BinarySecret|CipherValue|SPLicenseBlock)>[A-Za-z0-9+/=]{20,}"),
-    # A Store licence, as XML on one line or base64 (`<License ` or `<License>` at any of
+    # An Xbox licence, as XML on one line or base64 (`<License ` or `<License>` at any of
     # base64's three alignments; not <LicenseInfo>).
-    ("Store licence", r"<License( [^>]*)?><[A-Z]"),
-    ("Store licence (base64)", r"(PExpY2Vuc2U[g+]|xMaWNlbnNl[IP]|8TGljZW5zZ[ST])[A-Za-z0-9+/]{20,}"),
-    # A package's content key (a CIK), a device key or a session key, as hex or base64.
+    ("Xbox licence", r"<License( [^>]*)?><[A-Z]"),
+    ("Xbox licence (base64)", r"(PExpY2Vuc2U[g+]|xMaWNlbnNl[IP]|8TGljZW5zZ[ST])[A-Za-z0-9+/]{20,}"),
+    # A copy's content key (Xodus's `cik`), a device key or a session key, as hex or base64.
     ("content key", r'''([Cc]ontent_?[Kk]ey|\b[Cc][Ii][Kk]|[Dd]evice_?[Kk]ey|[Ss]ession_?[Kk]ey|[Bb]inary_?[Ss]ecret)'''
                     r'''["']? *[:=] *["']?([0-9A-Fa-f]{32,}|[A-Za-z0-9+/]{22,})'''),
     # The per-play key of the runtime's bridge (0167).

@@ -4,7 +4,7 @@ import Foundation
 /// A value that must never reach a log, error or transcript: refresh and access
 /// tokens (Steam's, GOG's, Epic's, Microsoft's), the QR challenge URL, login and exchange
 /// codes, machine secrets, depot keys, CDN tokens, Steam's encrypted app tickets,
-/// Epic's ownership tokens, Xbox tokens and tickets, Store licences and content keys.
+/// Epic's ownership tokens, Xbox tokens and tickets, Xbox licences and content keys.
 /// `description` and `debugDescription` both print a fixed placeholder, so a
 /// stray `print(secret)` or string interpolation cannot leak it.
 public struct Secret<Value: Sendable>: Sendable, CustomStringConvertible, CustomDebugStringConvertible {
@@ -25,7 +25,7 @@ public enum Redactor {
             // Xbox Live's authorization header, `XBL3.0 x=<user hash>;<XSTS token>`, whole,
             // before the authorization and JWT rules take its parts.
             (#"XBL3\.0\s+x=[^;\s"']+;[^\s"',]+"#, "XBL3.0 x=<uhs:redacted>;<xsts:redacted>"),
-            // A Store licence (decision 0166): its XML on one line, or base64 holding
+            // An Xbox licence (decision 0166): its XML on one line, or base64 holding
             // `<License ` or `<License>` at any of base64's three alignments (not <LicenseInfo>).
             (#"<License[\s>].*?(?:</License>|$)"#, "<license:redacted>"),
             (#"[A-Za-z0-9+/]*(?:PExpY2Vuc2U[g+]|xMaWNlbnNl[IP]|8TGljZW5zZ[ST])[A-Za-z0-9+/]*={0,2}"#, "<license:redacted>"),
@@ -46,7 +46,7 @@ public enum Redactor {
             (#"(?i)((?:rps_?ticket|device_?rps)(?:["']?\s*[:=]\s*["']?))[^\s"',&}<]+"#, "$1<redacted>"),
             // The account's identifiers in an Xbox token's DisplayClaims.
             (#"(?i)("(?:uhs|xid|gtg)"\s*:\s*")[^"]*"#, "$1<redacted>"),
-            // A package's content key (a CIK), a device or session key, a proof secret.
+            // A copy's content key (Xodus's `cik`), a device or session key, a proof secret.
             (#"(?i)([A-Za-z]*(?:content|device|session|tweak|data)_?key|\bcik|binary_?secret)(["']?\s*[:=]\s*["']?)(?:[0-9A-Fa-f]{32,}|[A-Za-z0-9+/_\-]{22,}={0,2})"#,
              "$1$2<redacted>"),
             // The per-play key of the Xbox runtime's bridge (decision 0167).
