@@ -75,6 +75,35 @@
   press+78 (sign-in+107, before 0153's 120 s end could take B off) from 7174 MB; `fast phys` 8106 MB, then jetsam
   (per-process-limit). The pool stopped on the level (13 %) at +93.8, resumed once after the teardowns, stopped
   again at +107.4. HK first-frame+10 passed (`20261030T135842-hk-p476l9`).
+- **Measured (d1, 2026-10-30, the same IPA `9cdc9635…`, `.work/ui-runs/20261030T141431-rdr2-p476d1`;
+  [evidence](../evidence/2026-10-29-sc-stock-cef-probe.md#d1-same-ipa-default-baseline)):** the owner's baseline
+  before any change to the game-SC end.
+  - **Keys:** `env.PLAYPORT_SC_SINGLE=1` only. That is xs1's configuration: Playport's CEF, single-process, no
+    layout. The no-key dev default would be multi-process.
+  - **Story reached the cabin** (≈+201). The load step came at press+74.6, sign-in+102.7: 6470 → 7689 MB, nearly
+    all of it graphics. The step peaked at 7896 MB, +7.5 % against xs1.
+  - **The game-SC end** fired after the step, at 7834 MB (−248). The game went back to its title menu. 0155 then
+    allowed two restarts, each at ≈7.6–7.8 GB. Jetsam came at +446 (ActiveHard 8192 MB).
+  - **l9 against d1:** l9 was **+602 MB** just before the step (7072 against 6470) and +452 at the press:
+    - B on stock CEF/layout: +115 (M);
+    - JIT pool: +48 (I);
+    - donor-backed pages, from l9's pool stopping 45 s sooner: +207 (I);
+    - not explained: +120 (I);
+    - load growth no sample covers: +200 (M total);
+    - shared graphics, process noise, services and drift: −88 (M).
+
+    d1's step rose 1426 MB, so l9 needed ≥306 MB less to fit.
+  - **Ranked options at the step** (each needs an owner decision):
+    1. In a layout play, end the game's SC at the Story press, or at the threshold without the 120 s wait: ≈−550
+       to −580 MB (B 579 resident+compressed; l7's end −550). Amends 0141/0153. It must come with option 2,
+       because the end sent d1's game back to its title.
+    2. Allow 0155's restart only when footprint plus ≈550 MB fits under the limit: 0 MB at the step, but it removes
+       d1's late jetsam. Amends 0155.
+    3. A lower threshold alone: 0 MB, because the 120 s wait still lands after the step. Only useful with 1.
+    4. A pool resume or stop rule that kept l9's pool growing like d1's: up to ≈−200 MB (I), not enough alone.
+       Amends 0105.
+    5. Trim B's stock-CEF cost: at most −115 MB, not enough alone.
+    6. The unexplained +120 MB and +200 MB need a footprint breakdown at the press and the step first.
 - **Chunk-2 gates after l9:**
 
   | Gate | l7 | l8 | l9 |
@@ -87,8 +116,8 @@
   | Peak within 7343 MB ±10 % | **not passed** (8192 MB limit) | **not comparable** (6496 MB, no Story step) | **not passed** (≥ 8106 MB, the limit) |
 
 - **Ordered queue now:** (1) done in `2df65fe` (slots held in place); (2) the memory of Story's load with the game's
-  own Social Club running (l9: the step starts 1.1 GB above xs1's and before 0153's end can fire; l7: 550–750 MB
-  short at the step; the pool stops on the system level, not spare memory), then the V8 probes; (3) chunks 3–6,
+  own Social Club running (d1: l9 starts its step 602 MB above the same-IPA baseline, ≥306 MB too many; the
+  owner picks from d1's ranked options above), then the V8 probes; (3) chunks 3–6,
   all under PLA-476. Chunk 5's decision is now partly covered by
   [0166](../decisions/0166-detach-a-parked-threads-wait-then-unpin-its-view.md) (the retention part of the layout);
   the rest of chunk 5 stays. 0.5.0 held.

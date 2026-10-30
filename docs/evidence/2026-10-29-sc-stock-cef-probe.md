@@ -622,3 +622,198 @@ Gates: HK first-frame+10 **passed**. The game's helper reaches allocator/browser
 kinds, no refusal). The game signs in, Story is pressed — **passed**. The cabin — **not passed** (jetsam at the
 8192 MB limit in Story's load step). No SC/launcher `NO GAP FITS` or soft grant — **not passed** (26 V8 lines each
 from A and B; 0 `dllhost`; no soft grant). 7343 MB ±10 % — **not passed** (≥ 8106 MB, the limit).
+
+## d1: same-IPA default baseline
+
+The owner (2026-10-30) asked for a baseline before any change to the game-SC end (0141/0153): RDR2 on l9's IPA
+with the dev default Social Club, so that l9's memory can be split per process against a run of the same shape.
+
+- **IPA:** the installed `9cdc96353899291d7e3fddca1e89551d7d900d1d6e8fe5d06255fe2cba352846` (l9's), no reinstall.
+- **Keys: `env.PLAYPORT_SC_SINGLE=1` only.** That is xs1's configuration (RDR2's defaults plus single-process), not
+  the no-key dev default. Single-process is not a default: `pp_sc_single_enabled` takes only `PLAYPORT_SC_SINGLE=1`
+  and is compiled out of release (0150, 0153; the plan's chunk 4 that would make it default is not done).
+  `compat-defaults.json` gives RDR2 only `graphics: vulkan`. With no keys at all, the helper runs multi-process
+  (7 helpers, as d2–d5/nd1), which is not l9's or xs1's process shape. The supervisor chose xs1's configuration so
+  that the split against l9 compares the same shape. With `PLAYPORT_CEF_SWAP` and `PLAYPORT_SC_LAYOUT` unset,
+  Playport's CEF is used (`[cef-swap] … libcef.dll file version 143.0.14.0 matches; its CEF files come from
+  Playport's build`, 39120) and no layout runs (0 `[sc-layout]` lines). The other settings are the defaults: donor
+  pool Auto, the launcher's end at the sign-in, the game-SC end at sign-in+120 s and limit−1200 MB, 0138's
+  refusals and 0155's re-sign-in restarts.
+- **Run:** `$PLAYPORT_BUILD/ui-runs/20261030T141431-rdr2-p476d1`. The script is `agent-notes/pla476/d1.sh`, which
+  is l9's arm with `STORY_BY=420 UNTIL=600 WAIT=900` and one locked session. Before it, `pp phone status`: 80 % on
+  power, 3.2 GB free, no holder. The result was `ok:false`, `the app exited before the stop condition`.
+- First frame +33.31 s. The game signed in at +95.4 s (title clock; the log line is at `[xp]` +96.4). Story was
+  pressed at `[xp]` **+123.5** (`vpad` 139809). Thermal went nominal → fair → serious.
+
+Measured below, with line numbers in `pull/s1-host.log` and times on the `[xp]` clock. Footprints are
+`[footprint]` phys/graphics/compressed MB, or `[xp]` `fpMB` where marked. `[proc-mem]` values are
+resident+compressed MB.
+
+**Footprint aligned on the press:**
+
+| press+ | d1 (press +123.5) | l9 (press +130.9) | xs1 (press +120.9) |
+| --- | --- | --- | --- |
+| before the teardowns | −27.2: 5863/1732/842 (123351) | −29.4: 6307/1753/1067 (128268) | — |
+| after the teardowns | −25.2: 5111/1740/535 (129485) | −27.3: 5149/1798/575 (129841) | — |
+| ≈0 | +1.2: 5348/1794/515 (139865) | −1.1: 5772/1849/679 (146813) | −1.8: 5232/1827/923 (119687) |
+| ≈+20 | +19.2: 5044/1795/504 | +21.1: 5711/1851 | — |
+| ≈+46 | +45.8: 5388/2022/518 | +47.4: 6019/2048 | — |
+| ≈+60 | +60.1: 5680/2132/843 | +61.4: 6160/2143 | — |
+| just before the step | +74.3: **6470**/2454/1163 (144572) | +77.8: **7072**/2494/1417 (151694) | +99.8: **6071**/2409/1091 (126170) |
+| the step | +74.8: 7689/3617/1492 (144651) | +78.2: fast 8106, then jetsam | +104.4: fast 6478 → 7169 (126407–126425) |
+| after the step | peak `fpMB` **7896** at +86.3 (145106) | — | peak 7343 at +145.1 (129630) |
+
+- **The step's timing:**
+
+  | Run | Step | press+ | sign-in+ |
+  | --- | --- | --- | --- |
+  | d1 | +198.1 (`fpMB` 6469 → 6622 → 7689) | 74.6 | 102.7 |
+  | l9 | — | 78.2 | 107.3 |
+  | xs1 | — | 104.4 (l9's section gives 102.2 from another press reference) | 132.8 |
+
+  The sign-in is on the title clock, the step on `[xp]`: ±1 s.
+- **The step is graphics:** +1219 MB in under 0.5 s, of which graphics is +1163 (2454 → 3617).
+- **Peak in the step: 7896 MB, +7.5 % against xs1's 7343** (inside ±10 %), 296 MB under the limit.
+
+**The game-SC end (0141/0153):**
+
+- **First end:** at +221.6 (145329: `the footprint reached 7834 MB … at +221.2 s`, sign-in+125.8), after the step.
+  B (pid 04c4) was killed: `footprint 7872->7624 MB` (145828, −248). The phone then showed 7570–7610 MB.
+- **What followed:**
+  - 0138 refused B's restarts 2–9.
+  - 0155's steam-language detector saw a re-sign-in at +258.1 (148357) and allowed restart 10 (+263.1, 148613).
+  - The new helper (05b8) signed in at +283.9 (162404). The footprint rose 7621 → 8152 (+284.1, 162620) and stayed
+    at 8123–8155.
+  - **Second end** at +404.8 (169356, `8132 MB`): `8124->7809 MB` (169816).
+  - A second re-sign-in came at +435.3 (172539). Restart 18 was allowed at +440.1 (172772).
+  - Its helper (pid 0690) had 399 MB at +445.2 (183428). `fpMB` reached 8191 at +446.1.
+- **Jetsam:** `memorystatus: S1Probe [7676] exceeded mem limit: ActiveHard 8192 MB (fatal)` at 14:22:34.78 (syslog
+  79786), then `killed by jetsam reason per-process-limit` (81590). There is no crash report.
+
+**The cabin, from the screenshots** (`.work/agent-notes/pla476/p476d1/shots/`; `[xp]` ≈ shot − 10 s, ±2 s;
+described only):
+
+- ≈+142 to ≈+162: sepia loading tintypes (mountains, then a barn).
+- ≈+181: a dark sepia frame of a man by the cabin, with the loading icon.
+- **≈+201: the cabin, rendered.** Arthur sits at a table inside the log cabin, by the window, with snow outside.
+- ≈+248: black. ≈+280: black, with the game's spinner at the bottom right.
+- ≈+299 to ≈+423: the title menu again (RDR2 logo, the snowy range, `Story`/`Online`, `Settings · Social Club ·
+  Story · Quit Game`).
+- ≈+441: black with the spinner. ≈+458: the Home Screen.
+
+So Story reached the cabin. After the first game-SC end, the game left the cabin for its title menu.
+
+**Per process at the same phases** (`[proc-mem]`, resident+compressed MB; RDR2.exe as image/private/fex):
+
+| Phase | Run (line, `[xp]`) | `fpMB` | graphics | RDR2.exe | A | launcher | B | runtime | child | services+PlayRDR2 | all |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| before A's teardown | d1 121417, +86.2 (sign-in −10) | 5500 | 1379 | 895 (57/341/497) | 1023 | 327 | — | 184 | 119 | 112 | 2685 |
+| | l9 128145, +100.3 (sign-in −2.6) | 6373 | 1777 | 2246 (57/1718/471) | 1102 | 341 | — | 183 | 115 | 169 | 4184 |
+| `after teardown 4` | d1 126843, +97.6 | 5097 | 1740 | 2264 (57/1724/483) | gone | gone | 11 | 263 | 118 | 88 | 2772 |
+| | l9 129650, +103.3 | 5132 | 1798 | 2250 (57/1732/461) | gone | gone | — | 235 | 115 | 142 | 2762 |
+| at the press | d1 139754, press −1.7 | 5355 | 1794 | 2314 (57/1733/524) | | | 481 | 277 | 118 | 95 | 3312 |
+| | l9 144632, press −12.3 | 5807 | 1768 | 2288 (57/1732/499) | | | 596 | 251 | 115 | 145 | 3415 |
+| just before the step | d1 144530, step −1.0 | 6457 | 2420 | 3129 (55/2771/303) | | | 449 | 265 | 118 | 54 | 4042 |
+| | l9 151258, step −9.9 | 6499 | 2240 | 2904 (47/2413/444) | | | 579 | 239 | 109 | 95 | 3944 |
+| after the step | d1 145282, +217.9 | 7858 | 3728 | 3164 (52/2790/322) | | | 338 | 259 | 118 | 53 | 3958 |
+| | l9: none (jetsam) | | | | | | | | | | |
+
+Notes on the table:
+
+- **A and B:**
+  - A: d1 202/304/517 (image/private/fex); l9 296/276/530.
+  - B at the press: d1 196/89/196; l9 293/50/253.
+- **Teardowns** (the launcher, then A):
+  - d1: `5870->5602` (124215) and `5868->4998` (124239), −872 in all.
+  - l9: `6354->6075` and `6353->5165`, −1189 in all.
+- **After the teardowns the two runs are 35 MB apart** (5097 against 5132).
+- **The runtime row** went up by +79 in d1 and +52 in l9. Its image is unchanged in both, so no image view was
+  kept.
+- **The pre-teardown row is out of phase.** d1's last sample is 10 s before its sign-in, while RDR2.exe was still
+  growing (429 → 640 → 895 over +76.7 to +86.2).
+
+**Donor pool at the same phases** (live MB / resident+compressed MB, from the nearest `stats` line):
+
+| Phase | d1 | l9 |
+| --- | --- | --- |
+| before A's teardown | growing; install+90 (+90.1): 2706 / 1915 | stopped at +96.3 (level 13 %); stats at the stop: 2587 / 1803 |
+| after the teardown | growing; 2706 / 1915 | resumed at +103.6 (level 20 %), stopped at +107.4 (13 %): 2327 / 1867 |
+| the press | growing; install+120 (+119.4): 2493 / 2083 | stopped; install+120: 2333 / 1876 |
+| stop/resume | stopped at **+141.2, press+17.7** (140958, level 14 % < 15 %, spare 4260 MB): 2915 / 2529; no resume line in the run | (above) never resumed |
+| just before the step | install+180 (+179.3): 2777 / 2292 | install+180: 2502 / 2074 |
+| after the step | install+210 (+215.3): 2808 / 2327; `refused` 1 → 4627 | — |
+
+Launch state of the phone (`donor-pool: setting=auto` line):
+
+- d1: `sys_free_mb=1412`, `sys_level=43`.
+- l9: `sys_free_mb=2530`, `sys_level=48`.
+
+So l9 started with more free memory, yet its pool stopped 45 s earlier.
+
+**The pre-step excess split.** l9 was 602 MB above d1 just before the step (7072 against 6470). Donor pages are
+charged to the ended donor, not the app (ARCHITECTURE, donor pool). So:
+
+```
+footprint = graphics + [proc-mem] all − donor-backed (pool resident+compressed) + non-view memory
+```
+
+The last term (JIT pool, host and Metal heaps) is the residual.
+
+| Component | d1 | l9 | l9 − d1 | M/I | Whose |
+| --- | --- | --- | --- | --- | --- |
+| `fpMB` at the press samples | 5355 | 5807 | **+452** | M | |
+| graphics | 1794 | 1768 | −26 | M | game/phone, shared |
+| B, the game's helper | 481 | 596 | **+115** | M | **stock CEF/layout** (image +97, fex +57, private −39) |
+| RDR2.exe | 2314 | 2288 | −26 | M | game, noise |
+| runtime row | 277 | 251 | −26 | M | noise |
+| RDR2's child | 118 | 115 | −3 | M | noise |
+| services (0020, 0028, 0034, 00e8) | 95 | 145 | +50 | M | not explained |
+| exited rows + per-field rounding | 27 | 20 | −7 | M | |
+| donor-backed (subtracted) | −2083 | −1876 | **+207** | I | pool state (l9 stopped at +96.3, d1 at +141.2) |
+| non-view residual: JIT pool mapped (head+tail) | | | +48 | I | stock CEF/layout (more translated code: 777 against 729 MB, live 514 against 446) |
+| non-view residual: the rest | | | +120 | I | not explained |
+| **sum at the press samples** | | | **+452** | | |
+| l9's drift from its sample (+118.6, `fpMB` 5807) to the press (`[footprint]` 5772; d1 5355 at both) | | | −35 | M | |
+| load growth to the step: graphics (d1 +660, l9 +645) | | | −15 | M | shared |
+| load growth to the step: non-graphics (d1 +455, l9 +655) | | | +200 | M total; split not measured | l9's last sample is 9.9 s before its step, and l9 grew 573 MB (graphics +254) in those seconds |
+| **sum: excess just before the step** | | | **+602** | | |
+
+How the residual and the sums work out:
+
+- **Residual:** d1 5355 − 1794 − 3312 + 2083 = 2332; l9 5807 − 1768 − 3415 + 1876 = 2500, a difference of +168.
+- **At the press samples:** −26 + 115 − 26 − 26 − 3 + 50 − 7 + 207 + 48 + 120 = 452.
+- **Just before the step:** 452 − 35 − 15 + 200 = 602.
+- **By owner:**
+  - stock CEF/layout: 115 (M) + 48 (I) = **163**;
+  - pool state: **207** (I);
+  - shared graphics: −26 − 15 = −41;
+  - process noise: −62;
+  - services: +50;
+  - not explained: +120 + 200 = **320**, of which 200 is load growth that no sample covers.
+  - Sum: 163 + 207 − 41 − 62 + 50 + 320 − 35 = 602.
+
+Inferred:
+
+- **l9's step would have needed about 306 MB less.** d1's step rose 1426 MB from its pre-step 6470 to the 7896 peak.
+  On l9's 7072 the same rise gives ≈8498, so l9 needed ≥306 MB less to fit, and ≈600 MB less for d1's 296 MB margin.
+- **The pool part is phone and pool state, but not independent of l9.** The level rule is phone-wide, and l9
+  started with more free memory. l9's own higher pre-sign-in footprint (6373 against d1's 5500–5863) plausibly
+  pulled the level under 15 % sooner.
+- **d1's whole-run jetsam is not the step.** 0155's allowed restarts brought a helper back at ≈7600–7800 MB twice,
+  and each took about 400–530 MB.
+
+**Other measured points:**
+
+- 0 `NO GAP FITS`.
+- 4 `[sc-single] verified browser` lines (A, B and the two restarted helpers).
+- 34 `c0000005` lines.
+
+**Gates:**
+
+| Gate | Result |
+| --- | --- |
+| Story reaches the cabin | **passed**, on xs1's configuration and this IPA |
+| Peak in the load step within 7343 MB ±10 % | **passed** (7896, +7.5 %) |
+| Run without jetsam | **not passed**: jetsam at +446 after 0155's second allowed restart, from the title menu the game returned to after the first end |
+
+Hollow Knight was not run in this session.
