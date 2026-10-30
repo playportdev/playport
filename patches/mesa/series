@@ -105,3 +105,5 @@
 0129-kk-commit-residency-additions-where-they-are-made-re.patch
 0130-kk-sample-encoder-GPU-time-and-pipeline-limits-with-.patch
 0131-kk-count-what-each-command-buffer-holds-and-each-upl.patch
+0132-kk-MESA_KK_EXPERIMENTAL-cmd_retire-gives-a-ONE_TIME-.patch
+0133-kk-MESA_KK_EXPERIMENTAL-cmd_bo_classes-gives-large-c.patch

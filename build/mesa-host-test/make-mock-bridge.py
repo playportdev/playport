@@ -224,6 +224,8 @@ kk_mock_record_msl(const char *src)
 
 # Command allocators keep a size a test sets (kk_mock_set_size), 0 by default.
 body("mtl_command_allocator_allocated_size", "return allocator ? ((struct kk_mock_obj *)allocator)->size : 0u;")
+# A reset empties it (kk-cmd-retire-test reads the size back).
+body("mtl_command_allocator_reset", "((struct kk_mock_obj *)allocator)->size = 0u;")
 body("mtl_retain", "return handle;")
 body("mtl_release", "kk_mock_drain_feedback(handle);")
 body("mtl_device_create", "return kk_mock_new(1, 0);")

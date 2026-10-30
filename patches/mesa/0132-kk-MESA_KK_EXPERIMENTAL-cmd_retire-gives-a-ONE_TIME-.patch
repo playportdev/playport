@@ -1,0 +1,744 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 30 Oct 2026 22:59:52 +0100
+Subject: [PATCH] kk: MESA_KK_EXPERIMENTAL=cmd_retire gives a ONE_TIME
+ recording's holds back at its commit's completion
+
+A ONE_TIME primary is committed once: a later submit re-records. Its
+upload BOs and its command allocator hold still stayed with the command
+buffer until the application reset, freed or began it again, which RDR2
+does seconds or minutes later for about 1000-1660 buffers at once
+(1018 MiB of upload BOs, 751 MiB of allocators nothing reset).
+
+With MESA_KK_EXPERIMENTAL=cmd_retire (named only, not part of "all"):
+
+- At a ONE_TIME primary's first, direct submit, before its commit,
+  kk_cmd_detach_retire moves its upload BOs, its large BOs and its
+  allocator hold into a kk_cmd_retire record, and the commit's feedback
+  handler is retire_commit_callback. The command buffer then owns
+  nothing pending, so its later reset, free or Begin finds empty lists:
+  a Vulkan fence can signal before Metal runs the handler. The handler
+  never reads the command buffer.
+- At completion, on a Metal thread, kk_cmd_pool_retire drops the
+  allocator hold, returns the BOs to the pool's caches through the same
+  code as a reset, under the pool's new retire.lock, and counts the
+  pool's retirements in flight down. A pool destroy, and a pool reset
+  with RELEASE_RESOURCES, wait for none to be in flight. Without the
+  switch the lock is never taken.
+- Allocator users are atomic. Allocators are reset, sealed and destroyed
+  only on the pool's thread, at Begin (kk_cmd_pool_get_allocator), never
+  at completion: a free allocator with no users is reset and taken; one
+  a recording was released from without a commit is tainted and is
+  destroyed instead, never reset (the IOGPU fault of resetting an
+  allocator an ended, uncommitted command buffer still names); past
+  8 MiB at an End it is sealed and takes no new recording until its
+  reset; a pool makes new allocators up to four unsealed, then shares
+  the least-filled free one.
+- [kk-cmd-retire] (with MESA_KK_DEBUG=memory, after [kk-cmd-census])
+  counts retirements in flight and done, and allocator resets, seals,
+  taints, destroys and shares.
+
+Reusable and simultaneous primaries, secondaries, the queue's
+re-records and a failed record allocation keep today's holds. Without
+the switch, allocation, release and reset are unchanged.
+kk-cmd-retire-test.c checks it on the mock.
+
+Linear: PLA-364
+Class: feature
+Evidence: docs/evidence/2026-10-30-rdr2-kk-audio-diagnostics.md
+Offered-upstream: no
+---
+ src/kosmickrisp/vulkan/kk_cmd_buffer.c |  73 ++++++++-
+ src/kosmickrisp/vulkan/kk_cmd_buffer.h |  11 ++
+ src/kosmickrisp/vulkan/kk_cmd_pool.c   | 216 +++++++++++++++++++++++--
+ src/kosmickrisp/vulkan/kk_cmd_pool.h   |  63 ++++++++
+ src/kosmickrisp/vulkan/kk_debug.c      |   3 +-
+ src/kosmickrisp/vulkan/kk_debug.h      |   7 +
+ src/kosmickrisp/vulkan/kk_queue.c      |  24 ++-
+ 7 files changed, 381 insertions(+), 16 deletions(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.c b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+index ec12393..a3a6a21 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_buffer.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+@@ -248,6 +248,20 @@ kk_cmd_census_log(void)
+            p_atomic_read(&kk_census_totals.bytes[3]) / mib,
+            p_atomic_read(&kk_census_totals.unsubmitted),
+            p_atomic_read(&kk_census_totals.unsubmitted_bytes) / mib);
++   if (KK_EXPERIMENTAL(CMD_RETIRE)) {
++      const struct kk_cmd_retire_stats *r = &kk_cmd_retire_stats;
++      fprintf(stderr,
++              "[kk-cmd-retire] in-flight=%" PRId64 " (%.1f MiB) retired=%" PRId64
++              " (%.1f MiB) | allocators reset=%" PRId64 " sealed=%" PRId64
++              " tainted=%" PRId64 " destroyed=%" PRId64 " shared=%" PRId64 "\n",
++              p_atomic_read(&r->in_flight), p_atomic_read(&r->in_flight_B) / mib,
++              p_atomic_read(&r->retired), p_atomic_read(&r->retired_B) / mib,
++              p_atomic_read(&r->allocator_resets),
++              p_atomic_read(&r->allocator_seals),
++              p_atomic_read(&r->allocator_taints),
++              p_atomic_read(&r->allocator_destroys),
++              p_atomic_read(&r->allocator_shares));
++   }
+ 
+    /* The twelve buckets holding the most, largest first */
+    for (unsigned n = 0u; n < 12u; n++) {
+@@ -385,20 +399,69 @@ end_recording(struct kk_cmd_buffer *cmd)
+          size > cmd->census.alloc_begin_B ? size - cmd->census.alloc_begin_B
+                                           : 0u;
+    }
++   if (KK_EXPERIMENTAL(CMD_RETIRE))
++      kk_cmd_pool_end_allocator(kk_cmd_buffer_pool(cmd), cmd->metal.encoded_in);
+    kk_cmd_pool_return_allocator(kk_cmd_buffer_pool(cmd), cmd->metal.encoded_in);
+    cmd->metal.allocator = NULL;
+ }
+ 
+ /* Playport: the recording this command buffer encoded is no longer needed
+- * (it is reset, freed or begins again, so not pending). */
++ * (it is reset, freed or begins again, so not pending). With
++ * MESA_KK_EXPERIMENTAL=cmd_retire a recording released without a commit
++ * taints its allocator. */
+ static void
+ kk_cmd_release_allocator(struct kk_cmd_buffer *cmd)
+ {
+-   if (cmd->metal.encoded_in) {
+-      assert(cmd->metal.encoded_in->users > 0u);
+-      cmd->metal.encoded_in->users--;
++   struct kk_cmd_allocator *allocator = cmd->metal.encoded_in;
++   if (allocator) {
++      assert(p_atomic_read(&allocator->users) > 0u);
++      if (KK_EXPERIMENTAL(CMD_RETIRE) && !cmd->metal.committed &&
++          !allocator->tainted) {
++         allocator->tainted = true;
++         p_atomic_inc(&kk_cmd_retire_stats.allocator_taints);
++      }
++      p_atomic_dec(&allocator->users);
+       cmd->metal.encoded_in = NULL;
+    }
++   /* The next recording is uncommitted until kk_queue_commit */
++   cmd->metal.committed = false;
++}
++
++struct kk_cmd_retire *
++kk_cmd_detach_retire(struct kk_cmd_buffer *cmd)
++{
++   struct kk_cmd_pool *pool = kk_cmd_buffer_pool(cmd);
++   struct kk_device *dev = kk_cmd_pool_device(pool);
++   struct kk_cmd_retire *retire =
++      vk_zalloc(&dev->vk.alloc, sizeof(*retire), 8,
++                VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
++   if (retire == NULL)
++      return NULL;
++
++   retire->dev = dev;
++   retire->pool = pool;
++   list_inithead(&retire->bos);
++   list_inithead(&retire->large_bos);
++   list_splicetail(&cmd->uploader.bos, &retire->bos);
++   list_inithead(&cmd->uploader.bos);
++   list_splicetail(&cmd->large_bos, &retire->large_bos);
++   list_inithead(&cmd->large_bos);
++   list_for_each_entry(struct kk_cmd_bo, bo, &retire->bos, link)
++      retire->bytes += bo->bo->size_B;
++   list_for_each_entry(struct kk_cmd_bo, bo, &retire->large_bos, link)
++      retire->bytes += bo->bo->size_B;
++   retire->allocator = cmd->metal.encoded_in;
++   cmd->metal.encoded_in = NULL;
++   /* Its BOs may be another recording's once the commit completes */
++   cmd->uploader.bo = NULL;
++   cmd->uploader.offset = 0;
++
++   /* The census: the buffer holds none of it now */
++   cmd->census.upload_B = 0u;
++   cmd->census.alloc_added_B = 0u;
++
++   kk_cmd_pool_retire_add(pool, retire->bytes);
++   return retire;
+ }
+ 
+ static void
+@@ -569,7 +632,7 @@ kk_BeginCommandBuffer(VkCommandBuffer commandBuffer,
+ 
+       if (allocator == NULL)
+          goto fail_allocator;
+-      allocator->users++;
++      p_atomic_inc(&allocator->users);
+       cmd->metal.encoded_in = allocator;
+       cmd->metal.allocator = allocator->handle;
+    }
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.h b/src/kosmickrisp/vulkan/kk_cmd_buffer.h
+index 2075182..a0e4071 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_buffer.h
++++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.h
+@@ -351,6 +351,10 @@ struct kk_cmd_buffer {
+       /* Playport: the allocator the current recording encoded into, held
+        * past End until reset, free or the next Begin (kk_cmd_pool.h) */
+       struct kk_cmd_allocator *encoded_in;
++      /* Playport (PLA-364): cmd_buf was committed since encoded_in was
++       * taken, so releasing encoded_in does not taint it
++       * (kk_cmd_allocator::tainted) */
++      bool committed;
+       mtl_command_buffer *cmd_buf;
+       mtl_render_encoder *render;
+       mtl_compute_encoder *compute;
+@@ -510,6 +514,13 @@ struct kk_ptr kk_pool_upload_at(struct kk_cmd_buffer *cmd, const void *data,
+ void kk_cmd_census_submitted(struct kk_cmd_buffer *cmd, bool replayed);
+ void kk_cmd_census_log(void);
+ 
++/* Playport (PLA-364), MESA_KK_EXPERIMENTAL=cmd_retire: at a ONE_TIME
++ * primary's first submit, before its commit, moves its upload BOs and its
++ * allocator hold into a retire record for the commit's completion
++ * (kk_cmd_pool_retire). NULL when out of memory: the buffer keeps them until
++ * its reset, free or next Begin, as without cmd_retire. */
++struct kk_cmd_retire *kk_cmd_detach_retire(struct kk_cmd_buffer *cmd);
++
+ uint64_t kk_upload_descriptor_root(struct kk_cmd_buffer *cmd,
+                                    VkPipelineBindPoint bind_point);
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_pool.c b/src/kosmickrisp/vulkan/kk_cmd_pool.c
+index 2987d68..c13a8e0 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_pool.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_pool.c
+@@ -19,6 +19,25 @@
+ #include "c11/threads.h"
+ #include "util/u_atomic.h"
+ 
++struct kk_cmd_retire_stats kk_cmd_retire_stats;
++
++/* Playport (PLA-364): with MESA_KK_EXPERIMENTAL=cmd_retire a completion
++ * thread also returns BOs to a pool (kk_cmd_pool_retire), so the BO lists
++ * are locked; without it only the pool's own thread touches them. */
++static inline void
++kk_cmd_pool_lock(struct kk_cmd_pool *pool)
++{
++   if (KK_EXPERIMENTAL(CMD_RETIRE))
++      mtx_lock(&pool->retire.lock);
++}
++
++static inline void
++kk_cmd_pool_unlock(struct kk_cmd_pool *pool)
++{
++   if (KK_EXPERIMENTAL(CMD_RETIRE))
++      mtx_unlock(&pool->retire.lock);
++}
++
+ /* Every live Metal command allocator, for kk_cmd_pool_allocators_size */
+ static struct util_dynarray kk_allocators = UTIL_DYNARRAY_INIT;
+ static mtx_t kk_allocators_lock;
+@@ -111,8 +130,9 @@ kk_cmd_bo_destroy(struct kk_cmd_pool *pool, struct kk_cmd_bo *bo)
+ }
+ 
+ /* Command pools are externally synchronized, including recording into any
+- * of their command buffers. No queue lock or global cache is needed. The
+- * caller returns BOs only at reset/free/begin, never at End or submission. */
++ * of their command buffers. The caller returns BOs at reset/free/begin, never
++ * at End or submission, or with MESA_KK_EXPERIMENTAL=cmd_retire at a ONE_TIME
++ * recording's completion, under pool->retire.lock (the _locked functions). */
+ static void
+ kk_cmd_pool_remove_large_bo(struct kk_cmd_pool *pool, struct kk_cmd_bo *bo)
+ {
+@@ -148,25 +168,32 @@ kk_cmd_pool_alloc_large_bo(struct kk_cmd_pool *pool, uint32_t size_B,
+          size_class++;
+       }
+       /* Best fit: prefer the smallest available class that meets the ask. */
++      kk_cmd_pool_lock(pool);
+       for (unsigned i = size_class; i < KK_CMD_LARGE_BO_CLASSES; i++) {
+          if (list_is_empty(&pool->large_free_bos[i]))
+             continue;
+          struct kk_cmd_bo *bo =
+             list_first_entry(&pool->large_free_bos[i], struct kk_cmd_bo, link);
+          kk_cmd_pool_remove_large_bo(pool, bo);
++         kk_cmd_pool_unlock(pool);
+          kk_bo_set_kind(bo->bo, KK_BO_KIND_COMMAND);
+          p_atomic_inc(&kk_memory_stats.command_large_reuses);
+          *bo_out = bo;
+          return VK_SUCCESS;
+       }
++      kk_cmd_pool_unlock(pool);
+    }
+ 
+    VkResult result =
+       kk_cmd_bo_create(pool, allocation_size, alignment_B, bo_out);
+    /* Idle cached heaps must not turn a fresh allocation into an OOM. */
+-   if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY && pool->large_free_bytes) {
++   if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY) {
++      kk_cmd_pool_lock(pool);
++      const bool cached = pool->large_free_bytes != 0;
+       kk_cmd_pool_trim_large_bos(pool, 0);
+-      result = kk_cmd_bo_create(pool, allocation_size, alignment_B, bo_out);
++      kk_cmd_pool_unlock(pool);
++      if (cached)
++         result = kk_cmd_bo_create(pool, allocation_size, alignment_B, bo_out);
+    }
+    if (result == VK_SUCCESS) {
+       (*bo_out)->size_class = size_class;
+@@ -175,8 +202,9 @@ kk_cmd_pool_alloc_large_bo(struct kk_cmd_pool *pool, uint32_t size_B,
+    return result;
+ }
+ 
+-void
+-kk_cmd_pool_free_large_bo_list(struct kk_cmd_pool *pool, struct list_head *bos)
++static void
++kk_cmd_pool_free_large_bo_list_locked(struct kk_cmd_pool *pool,
++                                      struct list_head *bos)
+ {
+    list_for_each_entry_safe(struct kk_cmd_bo, bo, bos, link) {
+       list_del(&bo->link);
+@@ -197,28 +225,40 @@ kk_cmd_pool_free_large_bo_list(struct kk_cmd_pool *pool, struct list_head *bos)
+    }
+ }
+ 
++void
++kk_cmd_pool_free_large_bo_list(struct kk_cmd_pool *pool, struct list_head *bos)
++{
++   kk_cmd_pool_lock(pool);
++   kk_cmd_pool_free_large_bo_list_locked(pool, bos);
++   kk_cmd_pool_unlock(pool);
++}
++
+ static void
+ kk_cmd_pool_destroy_bos(struct kk_cmd_pool *pool)
+ {
++   kk_cmd_pool_lock(pool);
+    list_for_each_entry_safe(struct kk_cmd_bo, bo, &pool->free_bos, link)
+       kk_cmd_bo_destroy(pool, bo);
+ 
+    list_inithead(&pool->free_bos);
+    pool->num_free_bos = 0;
+    kk_cmd_pool_trim_large_bos(pool, 0);
++   kk_cmd_pool_unlock(pool);
+ }
+ 
+ VkResult
+ kk_cmd_pool_alloc_bo(struct kk_cmd_pool *pool, struct kk_cmd_bo **bo_out)
+ {
+    struct kk_cmd_bo *bo = NULL;
++   kk_cmd_pool_lock(pool);
+    if (!list_is_empty(&pool->free_bos)) {
+       bo = list_first_entry(&pool->free_bos, struct kk_cmd_bo, link);
+       pool->num_free_bos--;
++      list_del(&bo->link);
+    }
++   kk_cmd_pool_unlock(pool);
+ 
+    if (bo) {
+-      list_del(&bo->link);
+       *bo_out = bo;
+       return VK_SUCCESS;
+    }
+@@ -226,8 +266,9 @@ kk_cmd_pool_alloc_bo(struct kk_cmd_pool *pool, struct kk_cmd_bo **bo_out)
+    return kk_cmd_bo_create(pool, KK_CMD_BO_SIZE, 0, bo_out);
+ }
+ 
+-void
+-kk_cmd_pool_free_bo_list(struct kk_cmd_pool *pool, struct list_head *bos)
++static void
++kk_cmd_pool_free_bo_list_locked(struct kk_cmd_pool *pool,
++                                struct list_head *bos)
+ {
+    list_for_each_entry_safe(struct kk_cmd_bo, bo, bos, link) {
+       list_del(&bo->link);
+@@ -240,6 +281,65 @@ kk_cmd_pool_free_bo_list(struct kk_cmd_pool *pool, struct list_head *bos)
+    }
+ }
+ 
++void
++kk_cmd_pool_free_bo_list(struct kk_cmd_pool *pool, struct list_head *bos)
++{
++   kk_cmd_pool_lock(pool);
++   kk_cmd_pool_free_bo_list_locked(pool, bos);
++   kk_cmd_pool_unlock(pool);
++}
++
++void
++kk_cmd_pool_retire_add(struct kk_cmd_pool *pool, uint64_t bytes)
++{
++   mtx_lock(&pool->retire.lock);
++   pool->retire.in_flight++;
++   mtx_unlock(&pool->retire.lock);
++   p_atomic_inc(&kk_cmd_retire_stats.in_flight);
++   p_atomic_add(&kk_cmd_retire_stats.in_flight_B, (int64_t)bytes);
++}
++
++void
++kk_cmd_pool_retire(struct kk_cmd_retire *retire)
++{
++   struct kk_cmd_pool *pool = retire->pool;
++   struct kk_device *dev = retire->dev;
++
++   /* The only submit of this recording completed: the GPU reads none of it.
++    * The hold drops first, because once in_flight reaches 0 the pool's
++    * thread may destroy the allocator. Its reset, if any, is the pool
++    * thread's, at a later Begin (kk_cmd_pool_get_allocator). */
++   if (retire->allocator)
++      p_atomic_dec(&retire->allocator->users);
++
++   mtx_lock(&pool->retire.lock);
++   kk_cmd_pool_free_bo_list_locked(pool, &retire->bos);
++   kk_cmd_pool_free_large_bo_list_locked(pool, &retire->large_bos);
++   assert(pool->retire.in_flight > 0u);
++   if (--pool->retire.in_flight == 0u)
++      cnd_broadcast(&pool->retire.done);
++   mtx_unlock(&pool->retire.lock);
++
++   p_atomic_dec(&kk_cmd_retire_stats.in_flight);
++   p_atomic_add(&kk_cmd_retire_stats.in_flight_B, -(int64_t)retire->bytes);
++   p_atomic_inc(&kk_cmd_retire_stats.retired);
++   p_atomic_add(&kk_cmd_retire_stats.retired_B, (int64_t)retire->bytes);
++   vk_free(&dev->vk.alloc, retire);
++}
++
++/* Before the pool's allocators or the pool itself go: a retirement still
++ * to run drops a hold on one of them and returns BOs to the pool */
++static void
++kk_cmd_pool_wait_retired(struct kk_cmd_pool *pool)
++{
++   if (!KK_EXPERIMENTAL(CMD_RETIRE))
++      return;
++   mtx_lock(&pool->retire.lock);
++   while (pool->retire.in_flight > 0u)
++      cnd_wait(&pool->retire.done, &pool->retire.lock);
++   mtx_unlock(&pool->retire.lock);
++}
++
+ /* Playport, MESA_KK_BATCH2 "alloc": a pool makes up to this many allocators
+  * so that one without users is usually free to reset; past it a recording
+  * shares one that still has users, as before. Per-command-buffer allocators
+@@ -266,6 +366,90 @@ kk_cmd_pool_new_allocator(struct kk_cmd_pool *pool)
+    return allocator;
+ }
+ 
++static void
++kk_cmd_pool_destroy_allocator(struct kk_cmd_pool *pool,
++                              struct kk_cmd_allocator *allocator)
++{
++   if (KK_DEBUG(MEMORY))
++      kk_allocators_remove(allocator->handle);
++   mtl_release(allocator->handle);
++   assert(pool->metal.allocator_count > 0u);
++   pool->metal.allocator_count--;
++   if (allocator->sealed)
++      pool->metal.sealed_count--;
++   vk_free(&pool->vk.alloc, allocator);
++}
++
++void
++kk_cmd_pool_end_allocator(struct kk_cmd_pool *pool,
++                          struct kk_cmd_allocator *allocator)
++{
++   if (allocator->sealed ||
++       mtl_command_allocator_allocated_size(allocator->handle) <=
++          KK_CMD_ALLOCATOR_SEAL_B)
++      return;
++   allocator->sealed = true;
++   pool->metal.sealed_count++;
++   p_atomic_inc(&kk_cmd_retire_stats.allocator_seals);
++}
++
++/* MESA_KK_EXPERIMENTAL=cmd_retire, on the pool's thread (for the queue's
++ * pool, under the queue mutex). In order:
++ * - a free allocator with no users is reset and taken; a tainted one is
++ *   destroyed instead, never reset;
++ * - with fewer than KK_CMD_POOL_UNSEALED_MAX unsealed allocators, a new one;
++ * - else the least-filled unsealed, untainted free one, which still has
++ *   users;
++ * - else (every unsealed one records now) a new one. */
++static struct kk_cmd_allocator *
++kk_cmd_pool_get_allocator_retire(struct kk_cmd_pool *pool)
++{
++   struct util_dynarray *free_list = &pool->metal.free_allocators;
++   struct kk_cmd_allocator *share = NULL;
++   uint64_t share_B = UINT64_MAX;
++
++   unsigned i = 0u;
++   while (i < util_dynarray_num_elements(free_list, struct kk_cmd_allocator *)) {
++      struct kk_cmd_allocator **all = util_dynarray_begin(free_list);
++      struct kk_cmd_allocator *allocator = all[i];
++      if (p_atomic_read(&allocator->users) == 0u) {
++         const unsigned n =
++            util_dynarray_num_elements(free_list, struct kk_cmd_allocator *);
++         all[i] = all[n - 1u];
++         (void)util_dynarray_pop(free_list, struct kk_cmd_allocator *);
++         if (allocator->tainted) {
++            kk_cmd_pool_destroy_allocator(pool, allocator);
++            p_atomic_inc(&kk_cmd_retire_stats.allocator_destroys);
++            continue;
++         }
++         mtl_command_allocator_reset(allocator->handle);
++         if (allocator->sealed) {
++            allocator->sealed = false;
++            pool->metal.sealed_count--;
++         }
++         p_atomic_inc(&kk_cmd_retire_stats.allocator_resets);
++         return allocator;
++      }
++      if (!allocator->sealed && !allocator->tainted) {
++         const uint64_t size =
++            mtl_command_allocator_allocated_size(allocator->handle);
++         if (size < share_B) {
++            share = allocator;
++            share_B = size;
++         }
++      }
++      i++;
++   }
++
++   if (share == NULL || pool->metal.allocator_count - pool->metal.sealed_count <
++                           KK_CMD_POOL_UNSEALED_MAX)
++      return kk_cmd_pool_new_allocator(pool);
++
++   util_dynarray_delete_unordered(free_list, struct kk_cmd_allocator *, share);
++   p_atomic_inc(&kk_cmd_retire_stats.allocator_shares);
++   return share;
++}
++
+ struct kk_cmd_allocator *
+ kk_cmd_pool_get_allocator(struct kk_cmd_pool *pool)
+ {
+@@ -273,6 +457,9 @@ kk_cmd_pool_get_allocator(struct kk_cmd_pool *pool)
+    const unsigned n =
+       util_dynarray_num_elements(free_list, struct kk_cmd_allocator *);
+ 
++   if (KK_EXPERIMENTAL(CMD_RETIRE))
++      return kk_cmd_pool_get_allocator_retire(pool);
++
+    if (KK_BATCH2(ALLOC)) {
+       struct kk_cmd_allocator **all = util_dynarray_begin(free_list);
+       for (unsigned i = n; i-- > 0u;) {
+@@ -342,7 +529,11 @@ kk_CreateCommandPool(VkDevice _device,
+ 
+    pool->metal.free_allocators = UTIL_DYNARRAY_INIT;
+    pool->metal.allocator_count = 0u;
++   pool->metal.sealed_count = 0u;
+    pool->metal.free_cmd_bufs = UTIL_DYNARRAY_INIT;
++   mtx_init(&pool->retire.lock, mtx_plain);
++   cnd_init(&pool->retire.done);
++   pool->retire.in_flight = 0u;
+ 
+    list_inithead(&pool->free_bos);
+    pool->num_free_bos = 0;
+@@ -368,6 +559,7 @@ kk_cmd_pool_release_mtl_objects(struct kk_cmd_pool *pool)
+    }
+    util_dynarray_clear(&pool->metal.free_allocators);
+    pool->metal.allocator_count = 0u;
++   pool->metal.sealed_count = 0u;
+ 
+    util_dynarray_foreach(&pool->metal.free_cmd_bufs, mtl_command_buffer *,
+                          cmd_buf) {
+@@ -386,11 +578,14 @@ kk_DestroyCommandPool(VkDevice _device, VkCommandPool commandPool,
+    if (!pool)
+       return;
+ 
++   kk_cmd_pool_wait_retired(pool);
+    vk_command_pool_finish(&pool->vk);
+    kk_cmd_pool_destroy_bos(pool);
+    kk_cmd_pool_release_mtl_objects(pool);
+    util_dynarray_fini(&pool->metal.free_allocators);
+    util_dynarray_fini(&pool->metal.free_cmd_bufs);
++   cnd_destroy(&pool->retire.done);
++   mtx_destroy(&pool->retire.lock);
+    vk_free2(&device->vk.alloc, pAllocator, pool);
+ }
+ 
+@@ -405,6 +600,7 @@ kk_ResetCommandPool(VkDevice _device, VkCommandPool commandPool,
+       return result;
+ 
+    if (flags & VK_COMMAND_POOL_RESET_RELEASE_RESOURCES_BIT) {
++      kk_cmd_pool_wait_retired(pool);
+       kk_cmd_pool_destroy_bos(pool);
+       kk_cmd_pool_release_mtl_objects(pool);
+    }
+@@ -425,8 +621,10 @@ kk_TrimCommandPool(VkDevice device, VkCommandPool commandPool,
+ void
+ kk_cmd_pool_set_label(struct kk_cmd_pool *pool, const char *label)
+ {
++   kk_cmd_pool_lock(pool);
+    list_for_each_entry(struct kk_cmd_bo, bo, &pool->free_bos, link)
+       kk_bo_set_label(bo->bo, label);
+    list_for_each_entry(struct kk_cmd_bo, bo, &pool->large_lru, lru_link)
+       kk_bo_set_label(bo->bo, label);
++   kk_cmd_pool_unlock(pool);
+ }
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_pool.h b/src/kosmickrisp/vulkan/kk_cmd_pool.h
+index f934b53..b09d44b 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_pool.h
++++ b/src/kosmickrisp/vulkan/kk_cmd_pool.h
+@@ -14,6 +14,8 @@
+ 
+ #include "util/u_dynarray.h"
+ 
++#include "c11/threads.h"
++
+ #define KK_CMD_BO_SIZE     (1024 * 128)
+ #define KK_CMD_POOL_BO_MAX 32
+ 
+@@ -53,12 +55,25 @@ struct kk_cmd_pool {
+    struct list_head large_lru;
+    uint64_t large_free_bytes;
+ 
++   /* Playport (PLA-364), MESA_KK_EXPERIMENTAL=cmd_retire: a ONE_TIME
++    * recording's upload BOs come back to the BO lists above from a Metal
++    * completion thread (kk_cmd_pool_retire), so lock guards those lists, and
++    * in_flight counts the retirements not yet run, which a pool destroy and
++    * a reset with RELEASE_RESOURCES wait for. Unused without cmd_retire. */
++   struct {
++      mtx_t lock;
++      cnd_t done;
++      uint32_t in_flight;
++   } retire;
++
+    struct {
+       /* struct kk_cmd_allocator *: not recording now */
+       struct util_dynarray free_allocators;
+       struct util_dynarray free_cmd_bufs;
+       /* allocators made for this pool, free or recording */
+       uint32_t allocator_count;
++      /* cmd_retire: those of them sealed (kk_cmd_allocator::sealed) */
++      uint32_t sealed_count;
+    } metal;
+ };
+ 
+@@ -72,8 +87,56 @@ struct kk_cmd_pool {
+  * users can still be read by the GPU or be recording. */
+ struct kk_cmd_allocator {
+    mtl_command_allocator *handle;
++   /* Atomic: with MESA_KK_EXPERIMENTAL=cmd_retire a completion thread drops
++    * a retired recording's hold (kk_cmd_pool_retire); only the pool's thread
++    * adds one */
+    uint32_t users;
++   /* cmd_retire, the pool's thread only. sealed: past
++    * KK_CMD_ALLOCATOR_SEAL_B at an End, so it takes no new recording until it
++    * is reset. tainted: a recording ended in it and was released without a
++    * commit, so it is never reset (the IOGPU fault of 4bd22b36), only
++    * destroyed once it has no users. */
++   bool sealed, tainted;
++};
++
++/* Playport (PLA-364), MESA_KK_EXPERIMENTAL=cmd_retire: an allocator holding
++ * more than this at an End is sealed, and a pool shares an allocator between
++ * recordings only once it has this many unsealed ones */
++#define KK_CMD_ALLOCATOR_SEAL_B (8u << 20)
++#define KK_CMD_POOL_UNSEALED_MAX 4u
++
++/* Playport (PLA-364), MESA_KK_EXPERIMENTAL=cmd_retire: what a ONE_TIME
++ * primary's first submit holds, taken from the command buffer at submit
++ * (kk_cmd_detach_retire) and given back to its pool when the commit
++ * completes (kk_cmd_pool_retire). The command buffer may be reset, begun
++ * again or freed meanwhile: it no longer owns any of this. */
++struct kk_cmd_retire {
++   struct kk_device *dev;
++   struct kk_cmd_pool *pool;
++   struct list_head bos;       /* kk_cmd_bo of KK_CMD_BO_SIZE */
++   struct list_head large_bos; /* kk_cmd_bo */
++   struct kk_cmd_allocator *allocator; /* the hold it drops, or NULL */
++   uint64_t bytes;                     /* the BOs' sizes */
++};
++
++/* MESA_KK_EXPERIMENTAL=cmd_retire counts, atomic, for [kk-cmd-retire] */
++struct kk_cmd_retire_stats {
++   int64_t in_flight, in_flight_B, retired, retired_B;
++   int64_t allocator_resets, allocator_seals, allocator_taints;
++   int64_t allocator_destroys, allocator_shares;
+ };
++extern struct kk_cmd_retire_stats kk_cmd_retire_stats;
++
++/* Counts a retirement in flight on the pool; the submit thread, before the
++ * commit */
++void kk_cmd_pool_retire_add(struct kk_cmd_pool *pool, uint64_t bytes);
++/* The commit's completion: returns the BOs, drops the allocator hold, frees
++ * the retire record */
++void kk_cmd_pool_retire(struct kk_cmd_retire *retire);
++/* At an End, the pool's thread: seals the allocator past
++ * KK_CMD_ALLOCATOR_SEAL_B */
++void kk_cmd_pool_end_allocator(struct kk_cmd_pool *pool,
++                               struct kk_cmd_allocator *allocator);
+ 
+ VK_DEFINE_NONDISP_HANDLE_CASTS(kk_cmd_pool, vk.base, VkCommandPool,
+                                VK_OBJECT_TYPE_COMMAND_POOL)
+diff --git a/src/kosmickrisp/vulkan/kk_debug.c b/src/kosmickrisp/vulkan/kk_debug.c
+index 823fd01..109c79d 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.c
++++ b/src/kosmickrisp/vulkan/kk_debug.c
+@@ -63,6 +63,7 @@ const struct debug_named_value experimental_flags[] = {
+    {"ubo_vec4_bounds", KK_EXPERIMENTAL_UBO_VEC4_BOUNDS},
+    {"memory_priority", KK_EXPERIMENTAL_MEMORY_PRIORITY},
+    {"module_identifier", KK_EXPERIMENTAL_MODULE_IDENTIFIER},
++   {"cmd_retire", KK_EXPERIMENTAL_CMD_RETIRE},
+    {NULL, 0},
+ };
+ 
+@@ -130,7 +131,7 @@ kk_process_debug_variable(void)
+    const uint64_t explicit_only =
+       KK_EXPERIMENTAL_NO_FP_PRESERVE | KK_EXPERIMENTAL_FP_PRECISE_ONLY |
+       KK_EXPERIMENTAL_UBO_UNBOUNDED | KK_EXPERIMENTAL_NARROW_BARRIERS |
+-      KK_EXPERIMENTAL_DS_DONT_CARE;
++      KK_EXPERIMENTAL_DS_DONT_CARE | KK_EXPERIMENTAL_CMD_RETIRE;
+    for (const struct debug_named_value *f = experimental_flags; f->name; f++) {
+       if (f->value != UINT64_MAX && (f->value & explicit_only) &&
+           !has_named_experiment(experiments, f->name))
+diff --git a/src/kosmickrisp/vulkan/kk_debug.h b/src/kosmickrisp/vulkan/kk_debug.h
+index 3d10a7c..5bef200 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.h
++++ b/src/kosmickrisp/vulkan/kk_debug.h
+@@ -258,6 +258,13 @@ enum kk_experimental {
+     * one finds its shaders in a pipeline cache or the disk cache, or fails
+     * with VK_PIPELINE_COMPILE_REQUIRED */
+    KK_EXPERIMENTAL_MODULE_IDENTIFIER = 1ull << 17,
++   /* Playport (PLA-364): a ONE_TIME primary's first submit hands its upload
++    * BOs and its command allocator hold to the commit's completion, which
++    * returns them to the pool (kk_cmd_pool_retire), not the buffer's later
++    * reset, free or Begin; allocators are then reset, sealed or replaced by
++    * kk_cmd_pool_get_allocator's retire rules. Must be named: a release
++    * before the GPU is done with a BO faults */
++   KK_EXPERIMENTAL_CMD_RETIRE = 1ull << 18,
+ };
+ 
+ extern enum kk_experimental kk_mesa_experimental_flags;
+diff --git a/src/kosmickrisp/vulkan/kk_queue.c b/src/kosmickrisp/vulkan/kk_queue.c
+index f278fb0..0dfcf9c 100644
+--- a/src/kosmickrisp/vulkan/kk_queue.c
++++ b/src/kosmickrisp/vulkan/kk_queue.c
+@@ -183,6 +183,17 @@ commit_callback(struct mtl_feedback_data *data)
+    check_device_lost((struct kk_device *)data->user_data, data);
+ }
+ 
++/* Playport (PLA-364), MESA_KK_EXPERIMENTAL=cmd_retire: a ONE_TIME primary's
++ * only commit completed, so its pool gets back what the recording held */
++static void
++retire_commit_callback(struct mtl_feedback_data *data)
++{
++   struct kk_cmd_retire *retire = (struct kk_cmd_retire *)data->user_data;
++
++   check_device_lost(retire->dev, data);
++   kk_cmd_pool_retire(retire);
++}
++
+ static void
+ rerecord_commit_callback(struct mtl_feedback_data *data)
+ {
+@@ -228,6 +239,7 @@ kk_queue_commit(struct kk_queue *queue, struct kk_cmd_buffer *cmd,
+    mtl_commit_options *options = mtl_new_commit_options();
+    mtl_commit_options_add_feedback_handler(options, callback, user_data);
+ 
++   cmd->metal.committed = true;
+    mtl_command_queue_commit(queue->mtl_handle, &cmd->metal.cmd_buf, 1u,
+                             options);
+    mtl_release(options);
+@@ -397,7 +409,17 @@ kk_queue_submit(struct vk_queue *vk_queue, struct vk_queue_submit *submit)
+             return result;
+          kk_cmd_census_submitted(cmd_buffer, true);
+       } else if (kk_cmd_buffer_has_work(cmd_buffer)) {
+-         kk_queue_commit(queue, cmd_buffer, commit_callback, dev);
++         /* Playport (PLA-364): a ONE_TIME primary is never committed again
++          * (a later submit re-records), so its holds end with this commit */
++         struct kk_cmd_retire *retire =
++            KK_EXPERIMENTAL(CMD_RETIRE) && cmd_buffer->one_time_submit &&
++                  cmd_buffer->vk.level == VK_COMMAND_BUFFER_LEVEL_PRIMARY
++               ? kk_cmd_detach_retire(cmd_buffer)
++               : NULL;
++         if (retire)
++            kk_queue_commit(queue, cmd_buffer, retire_commit_callback, retire);
++         else
++            kk_queue_commit(queue, cmd_buffer, commit_callback, dev);
+          kk_cmd_census_submitted(cmd_buffer, false);
+       }
+ 

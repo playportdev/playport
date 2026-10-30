@@ -15,7 +15,8 @@ int main(void)
 {
    const uint64_t hazards = KK_EXPERIMENTAL_NO_FP_PRESERVE |
       KK_EXPERIMENTAL_FP_PRECISE_ONLY | KK_EXPERIMENTAL_UBO_UNBOUNDED |
-      KK_EXPERIMENTAL_NARROW_BARRIERS | KK_EXPERIMENTAL_DS_DONT_CARE;
+      KK_EXPERIMENTAL_NARROW_BARRIERS | KK_EXPERIMENTAL_DS_DONT_CARE |
+      KK_EXPERIMENTAL_CMD_RETIRE;
    const struct {
       const char *experimental, *unsafe;
       uint64_t expected_hazards;
@@ -35,8 +36,9 @@ int main(void)
       {"all,fp_precise_only", NULL, KK_EXPERIMENTAL_FP_PRECISE_ONLY},
       {"all,narrow_barriers", NULL, KK_EXPERIMENTAL_NARROW_BARRIERS},
       {"all,ds_dont_care", NULL, KK_EXPERIMENTAL_DS_DONT_CARE},
-      {"no_fp_preserve,fp_precise_only,narrow_barriers,ds_dont_care", NULL,
-       hazards & ~KK_EXPERIMENTAL_UBO_UNBOUNDED},
+      {"all,cmd_retire", NULL, KK_EXPERIMENTAL_CMD_RETIRE},
+      {"no_fp_preserve,fp_precise_only,narrow_barriers,ds_dont_care,cmd_retire",
+       NULL, hazards & ~KK_EXPERIMENTAL_UBO_UNBOUNDED},
       {"not_ubo_unbounded,ubo_unbounded_extra", "ubo_unbounded", 0},
    };
    for (unsigned i = 0; i < ARRAY_SIZE(cases); i++) {
@@ -63,6 +65,6 @@ int main(void)
       assert(waitpid(child, &status, 0) == child);
       assert(WIFEXITED(status) && WEXITSTATUS(status) == 0);
    }
-   puts("ok kk experimental parser: 17 cases (wildcards, explicit hazards, independent unsafe consent)");
+   puts("ok kk experimental parser: 18 cases (wildcards, explicit hazards, independent unsafe consent)");
    return 0;
 }
