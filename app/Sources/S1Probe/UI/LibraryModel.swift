@@ -303,12 +303,14 @@ final class LibraryModel: ObservableObject {
         var settings = LaunchSettingsStore.shared.effective(for: t)
         #endif
         // A Battle.net copy's client: a native ARM64 child (decision 0170) drawing with Direct3D 12 through
-        // vkd3d-proton on Vulkan, whatever the graphics settings say.
+        // vkd3d-proton on Vulkan, whatever the graphics settings say. Its Config.wtf first gets the install's
+        // language and region where it names none (else WoW asks in a Win32 box) and Direct3D 12 pinned.
         if let bnet = bnetLaunch {
+            if let product = BattleNet.product(t.key) { BattleNetInstalled.shared.prepareForPlay(product) }
             settings.graphics = bnet.graphics
             plan.args += bnet.arguments.filter { arg in !plan.args.contains { $0.caseInsensitiveCompare(arg) == .orderedSame } }
             Self.log("play \(t.name): Battle.net's ARM64 client as a native ARM64 child on \(bnet.graphics.rawValue), "
-                     + "\(bnet.arguments.joined(separator: " ")); WoW asks for its own sign-in")
+                     + "\(bnet.arguments.joined(separator: " ")), Config.wtf's GxApi D3D12; WoW asks for its own sign-in")
         }
         // A game whose Play starts a publisher's launcher runs with its Open's grace, graphics
         // environment and runtime keys under its own (decision 0115).

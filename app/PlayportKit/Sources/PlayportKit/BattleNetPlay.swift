@@ -59,8 +59,11 @@ public enum BattleNetPlay {
         /// Vulkan whatever the settings say: vkd3d-proton is the ARM64 child's Direct3D 12, and
         /// DXMT has no Direct3D 12.
         public var graphics: GraphicsBackend
-        /// After the receipt's arguments: WoW's own switch for its Direct3D 12 renderer, so it
-        /// never falls back to Direct3D 11. No sign-in argument: WoW shows its login.
+        /// After the receipt's arguments: WoW's own switch for its Direct3D 12 renderer (its
+        /// `-d3d11` was seen to force Direct3D 11; this one is not seen on its own). What keeps
+        /// WoW on Direct3D 12 is its `Config.wtf`'s `GxApi`, which Play pins to `D3D12` before every
+        /// launch (BattleNetClientKit's WoWConfig): WoW saves Direct3D 11 there after one failed
+        /// Direct3D 12 start. No sign-in argument: WoW shows its login.
         public var arguments: [String]
         /// What the player is told as the game starts: a failed update check, after which the
         /// installed version plays and the game itself decides whether it may.
