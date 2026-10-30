@@ -21,10 +21,12 @@ final class LibraryModel: ObservableObject {
     /// The app container, the parent of Documents.
     nonisolated static let home = WineHostRuntime.documents.deletingLastPathComponent()
     nonisolated static let paths = PlayportPaths.container(home: home)
-    /// A play's in-place swap of a copy's kept-encrypted files (an Xbox copy's, decision 0166),
-    /// its markers beside the catalogue.
+    #if !PLAYPORT_RELEASE
+    /// A play's in-place swap of a copy's kept-encrypted files (an Xbox copy's, decision 0166:
+    /// dev only, as everything only an Xbox play makes), its markers beside the catalogue.
     nonisolated static let inPlaceSwap = InPlaceSwap(games: paths.games,
                                                      markers: paths.layout.stateRoot.appendingPathComponent("plays", isDirectory: true))
+    #endif
     /// Where the Steam API emulator saves each game's achievements and stats
     /// (`%APPDATA%\GSE Saves\<appid>` in the prefix; EmulatorStats).
     nonisolated static let emulatorSaves = WineHostRuntime.documents
@@ -77,6 +79,7 @@ final class LibraryModel: ObservableObject {
         }
         removeSteamTickets("at app start")
         removeEpicOwnershipFiles("at app start")
+        #if !PLAYPORT_RELEASE
         // A play's plaintext a crash left in a copy's folder: the originals back first (decision 0166).
         for play in Self.inPlaceSwap.pending {
             do {
@@ -86,6 +89,7 @@ final class LibraryModel: ObservableObject {
                 Self.log("play \(play): the originals the last process left aside are not all back (\(error)); tried again at the next start")
             }
         }
+        #endif
         // Cloud saves a sync replaced are kept 30 days (Cloud.Backups): once per process, which
         // after decision 0029 is once per game played.
         Task.detached(priority: .utility) {

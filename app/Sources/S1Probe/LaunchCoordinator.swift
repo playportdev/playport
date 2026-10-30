@@ -80,12 +80,15 @@ enum LaunchCoordinator {
         var title: String = ""
         /// A GOG game's Galaxy service, listening since Play (decision 0063); nil for none.
         var galaxy: GalaxyListener? = nil
-        /// The play's own guest variables (an Xbox copy's bridge port and key, decision 0167):
-        /// merged into the game's environment for its launch only (GuestEnvironment), never
-        /// set in the app's process or given to the prerequisites; their names alone are logged.
+        /// A general launch hook, store-neutral: the play's own guest variables, merged into the
+        /// game's environment for its launch only (GuestEnvironment), never set in the app's
+        /// process or given to the prerequisites; their names alone are logged. Empty unless a
+        /// store's Play sets it (today only the dev app's Xbox Play: its bridge port and key,
+        /// decision 0167), so the release app carries no store's logic here.
         var guestEnvironment: [String: Secret<String>] = [:]
-        /// Runs once the launch ends, however it ends (an Xbox copy's: the bridge stops and the
-        /// originals of its kept-encrypted files go back, decision 0166); nil for none.
+        /// A general launch hook, store-neutral: runs once the launch ends, however it ends; nil
+        /// for none. Only a store's Play sets it (today the dev app's Xbox Play: its bridge stops
+        /// and its swapped files go back, decision 0166).
         var atEnd: (@Sendable () -> Void)? = nil
         /// The title's own prerequisite installers (decision 0079), each run before the
         /// game when one of its ids has not run in the prefix.
