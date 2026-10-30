@@ -1,0 +1,135 @@
+{
+ "entitlements": {
+  "9MW9469V91LM": {
+   "autoRenew": true,
+   "endDate": "2026-12-08T00:00:00Z",
+   "isTrial": false,
+   "recurrenceSkuId": "mdr:redacted",
+   "satisfiedByProductId": "CFQ7TTC0KGQ8",
+   "status": "Active",
+   "sharingSource": "None"
+  },
+  "9MTD9ZS1G3CC": {
+   "autoRenew": true,
+   "endDate": "2026-12-08T00:00:00Z",
+   "isTrial": false,
+   "recurrenceSkuId": "mdr:redacted",
+   "satisfiedByProductId": "CFQ7TTC0KGQ8",
+   "status": "Active",
+   "sharingSource": "None"
+  },
+  "9N0H62KZ3BXV": {
+   "autoRenew": true,
+   "endDate": "2026-12-08T00:00:00Z",
+   "isTrial": false,
+   "recurrenceSkuId": "mdr:redacted",
+   "satisfiedByProductId": "CFQ7TTC0KGQ8",
+   "status": "Active",
+   "sharingSource": "None"
+  },
+  "9NNLBL0T2Z43": {
+   "autoRenew": true,
+   "endDate": "2026-12-08T00:00:00Z",
+   "isTrial": false,
+   "recurrenceSkuId": "mdr:redacted",
+   "satisfiedByProductId": "CFQ7TTC0KGQ8",
+   "status": "Active",
+   "sharingSource": "None"
+  },
+  "9NBLGGH1Z6FB": {
+   "autoRenew": true,
+   "endDate": "2026-12-08T00:00:00Z",
+   "isTrial": false,
+   "recurrenceSkuId": "mdr:redacted",
+   "satisfiedByProductId": "CFQ7TTC0KGQ8",
+   "status": "Active",
+   "sharingSource": "None"
+  },
+  "9P4P1LPN4VZQ": {
+   "autoRenew": true,
+   "endDate": "2026-12-08T00:00:00Z",
+   "isTrial": false,
+   "recurrenceSkuId": "mdr:redacted",
+   "satisfiedByProductId": "CFQ7TTC0KGQ8",
+   "status": "Active",
+   "sharingSource": "None"
+  },
+  "9NTH1K5RT43P": {
+   "autoRenew": true,
+   "endDate": "2026-12-08T00:00:00Z",
+   "isTrial": false,
+   "recurrenceSkuId": "mdr:redacted",
+   "satisfiedByProductId": "CFQ7TTC0KGQ8",
+   "status": "Active",
+   "sharingSource": "None"
+  },
+  "9N94NCGM1Q2N": {
+   "autoRenew": true,
+   "endDate": "2026-12-08T00:00:00Z",
+   "isTrial": false,
+   "recurrenceSkuId": "mdr:redacted",
+   "satisfiedByProductId": "CFQ7TTC0KGQ8",
+   "status": "Active",
+   "sharingSource": "None"
+  },
+  "9NB6BVL3MTG4": {
+   "autoRenew": true,
+   "endDate": "2026-12-08T00:00:00Z",
+   "isTrial": false,
+   "recurrenceSkuId": "mdr:redacted",
+   "satisfiedByProductId": "CFQ7TTC0KGQ8",
+   "status": "Active",
+   "sharingSource": "None"
+  },
+  "9P8MK4NC0LJB": {
+   "autoRenew": true,
+   "endDate": "2026-12-08T00:00:00Z",
+   "isTrial": false,
+   "recurrenceSkuId": "mdr:redacted",
+   "satisfiedByProductId": "CFQ7TTC0KGQ8",
+   "status": "Active",
+   "sharingSource": "None"
+  },
+  "9NBLGGH515BD": {
+   "autoRenew": true,
+   "endDate": "2026-12-08T00:00:00Z",
+   "isTrial": false,
+   "recurrenceSkuId": "mdr:redacted",
+   "satisfiedByProductId": "CFQ7TTC0KGQ8",
+   "status": "Active",
+   "sharingSource": "None"
+  },
+  "9NBLGGH5WMKM": {
+   "autoRenew": true,
+   "endDate": "2026-12-08T00:00:00Z",
+   "isTrial": false,
+   "recurrenceSkuId": "mdr:redacted",
+   "satisfiedByProductId": "CFQ7TTC0KGQ8",
+   "status": "Active",
+   "sharingSource": "None"
+  },
+  "9NP1P1WFS0LB": {
+   "autoRenew": true,
+   "endDate": "2026-12-08T00:00:00Z",
+   "isTrial": false,
+   "recurrenceSkuId": "mdr:redacted",
+   "satisfiedByProductId": "CFQ7TTC0KGQ8",
+   "status": "Active",
+   "sharingSource": "None"
+  },
+  "9PP5G1F0C2B6": {
+   "autoRenew": false,
+   "endDate": "9999-12-31T23:59:59.997Z",
+   "isTrial": false,
+   "status": "Active",
+   "sharingSource": "None"
+  },
+  "<account-literal-4>": {
+   "autoRenew": false,
+   "endDate": "9999-12-31T23:59:59.997Z",
+   "isTrial": false,
+   "status": "Active",
+   "sharingSource": "None"
+  }
+ }
+}

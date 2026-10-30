@@ -1,0 +1,2088 @@
+{
+ "Products": [
+  {
+   "ProductId": "9MW9469V91LM",
+   "ProductType": "Game",
+   "ProductKind": "Game",
+   "LocalizedProperties": [
+    {
+     "ProductTitle": "Hollow Knight: Voidheart Edition",
+     "PublisherName": "Team Cherry",
+     "Images": [
+      {
+       "ImagePurpose": "Logo",
+       "Uri": "//store-images.s-microsoft.com/image/apps.60451.a0000000000000148.00000000-0000-4000-8000-000000000391.00000000-0000-4000-8000-000000000394",
+       "Width": 300,
+       "Height": 300
+      },
+      {
+       "ImagePurpose": "Poster",
+       "Uri": "//store-images.s-microsoft.com/image/apps.58959.a0000000000000148.00000000-0000-4000-8000-000000000391.00000000-0000-4000-8000-000000000397",
+       "Width": 1440,
+       "Height": 2160
+      },
+      {
+       "ImagePurpose": "BoxArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.54353.a0000000000000148.00000000-0000-4000-8000-000000000391.00000000-0000-4000-8000-000000000398",
+       "Width": 2160,
+       "Height": 2160
+      },
+      {
+       "ImagePurpose": "SuperHeroArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.32258.a0000000000000148.00000000-0000-4000-8000-000000000391.00000000-0000-4000-8000-000000000399",
+       "Width": 3840,
+       "Height": 2160
+      },
+      {
+       "ImagePurpose": "BrandedKeyArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.21582.a0000000000000148.00000000-0000-4000-8000-000000000391.00000000-0000-4000-8000-000000000400",
+       "Width": 584,
+       "Height": 800
+      },
+      {
+       "ImagePurpose": "TitledHeroArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.26402.a0000000000000148.00000000-0000-4000-8000-000000000391.00000000-0000-4000-8000-000000000392",
+       "Width": 1920,
+       "Height": 1080
+      },
+      {
+       "ImagePurpose": "FeaturePromotionalSquareArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.46102.a0000000000000148.00000000-0000-4000-8000-000000000391.00000000-0000-4000-8000-000000000401",
+       "Width": 1080,
+       "Height": 1080
+      }
+     ]
+    }
+   ],
+   "Properties": {
+    "PackageFamilyName": "TeamCherry.15373CD61C66B_y4jvztpgccj42"
+   },
+   "DisplaySkuAvailabilities": [
+    {
+     "Sku": {
+      "SkuId": "0010",
+      "Properties": {
+       "IsTrial": false,
+       "IsPreOrder": false,
+       "IsBundle": false,
+       "Packages": [
+        {
+         "PackageFormat": "MSIXVC",
+         "PlatformDependencies": [
+          {
+           "MaxTested": 0,
+           "MinVersion": 0,
+           "PlatformName": "Windows.Desktop"
+          }
+         ],
+         "Architectures": [
+          "x64"
+         ],
+         "ContentId": "31f3afa5-02a7-4cd9-ac6e-4f4be4604ab8",
+         "PackageFullName": "",
+         "MaxDownloadSizeInBytes": 5281849344
+        },
+        {
+         "PackageFormat": "XVC",
+         "PlatformDependencies": [
+          {
+           "MaxTested": 0,
+           "MinVersion": 0,
+           "PlatformName": "Windows.Xbox"
+          }
+         ],
+         "Architectures": [
+          "x64"
+         ],
+         "ContentId": "c5ffccd5-44da-4a56-bb3d-b283c5943d93",
+         "PackageFullName": "",
+         "MaxDownloadSizeInBytes": 5744033792
+        },
+        {
+         "PackageFormat": "XVC",
+         "PlatformDependencies": [
+          {
+           "MaxTested": 0,
+           "MinVersion": 0,
+           "PlatformName": "Windows.Xbox"
+          }
+         ],
+         "Architectures": [
+          "x64"
+         ],
+         "ContentId": "c5ffccd5-44da-4a56-bb3d-b283c5943d93",
+         "PackageFullName": "",
+         "MaxDownloadSizeInBytes": 5667209216
+        }
+       ]
+      }
+     }
+    },
+    {
+     "Sku": {
+      "SkuId": "0011",
+      "Properties": {
+       "IsTrial": true,
+       "IsPreOrder": false,
+       "IsBundle": false,
+       "Packages": [
+        {
+         "PackageFormat": "MSIXVC",
+         "PlatformDependencies": [
+          {
+           "MaxTested": 0,
+           "MinVersion": 0,
+           "PlatformName": "Windows.Desktop"
+          }
+         ],
+         "Architectures": [
+          "x64"
+         ],
+         "ContentId": "31f3afa5-02a7-4cd9-ac6e-4f4be4604ab8",
+         "PackageFullName": "",
+         "MaxDownloadSizeInBytes": 5281849344
+        },
+        {
+         "PackageFormat": "XVC",
+         "PlatformDependencies": [
+          {
+           "MaxTested": 0,
+           "MinVersion": 0,
+           "PlatformName": "Windows.Xbox"
+          }
+         ],
+         "Architectures": [
+          "x64"
+         ],
+         "ContentId": "c5ffccd5-44da-4a56-bb3d-b283c5943d93",
+         "PackageFullName": "",
+         "MaxDownloadSizeInBytes": 5744033792
+        },
+        {
+         "PackageFormat": "XVC",
+         "PlatformDependencies": [
+          {
+           "MaxTested": 0,
+           "MinVersion": 0,
+           "PlatformName": "Windows.Xbox"
+          }
+         ],
+         "Architectures": [
+          "x64"
+         ],
+         "ContentId": "c5ffccd5-44da-4a56-bb3d-b283c5943d93",
+         "PackageFullName": "",
+         "MaxDownloadSizeInBytes": 5667209216
+        }
+       ]
+      }
+     }
+    }
+   ]
+  },
+  {
+   "ProductId": "9MTD9ZS1G3CC",
+   "ProductType": "Game",
+   "ProductKind": "Game",
+   "LocalizedProperties": [
+    {
+     "ProductTitle": "Dead Space 3",
+     "PublisherName": "Electronic Arts",
+     "Images": [
+      {
+       "ImagePurpose": "BoxArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.39784.13810353560850214.761c4293-fba9-4bcb-83d8-20f5e74e3e61.ea3aa1ec-ec84-43ca-941a-6a37d338c944",
+       "Width": 2160,
+       "Height": 2160
+      },
+      {
+       "ImagePurpose": "SuperHeroArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.32104.13810353560850214.761c4293-fba9-4bcb-83d8-20f5e74e3e61.d839bef1-b85a-44f7-8efa-818b4c11f22f",
+       "Width": 3840,
+       "Height": 2160
+      },
+      {
+       "ImagePurpose": "Poster",
+       "Uri": "//store-images.s-microsoft.com/image/apps.24163.13810353560850214.761c4293-fba9-4bcb-83d8-20f5e74e3e61.ce8a4217-238d-4125-8e43-43d7947b1fb5",
+       "Width": 1440,
+       "Height": 2160
+      }
+     ]
+    }
+   ],
+   "Properties": {
+    "PackageFamilyName": "ElectronicArtsMobile.Rosebud-DeadSpace3_q5ha1ztykcgvj",
+    "ProductGroupName": "Rosebud"
+   },
+   "DisplaySkuAvailabilities": [
+    {
+     "Sku": {
+      "SkuId": "0010",
+      "Properties": {
+       "IsTrial": false,
+       "IsPreOrder": false,
+       "IsBundle": false
+      }
+     }
+    },
+    {
+     "Sku": {
+      "SkuId": "0011",
+      "Properties": {
+       "IsTrial": true,
+       "IsPreOrder": false,
+       "IsBundle": false
+      }
+     }
+    }
+   ]
+  },
+  {
+   "ProductId": "9N0H62KZ3BXV",
+   "ProductType": "Game",
+   "ProductKind": "Game",
+   "LocalizedProperties": [
+    {
+     "ProductTitle": "Diablo® IV PC",
+     "PublisherName": "Blizzard Entertainment",
+     "Images": [
+      {
+       "ImagePurpose": "Poster",
+       "Uri": "//store-images.s-microsoft.com/image/apps.50385.13791399313063391.ee2580f0-6742-4993-affa-44a6d3f6e3e6.3e483e38-333e-4b1e-b8ec-c10e60d0a9f6",
+       "Width": 1440,
+       "Height": 2160
+      },
+      {
+       "ImagePurpose": "SuperHeroArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.10864.13791399313063391.ee2580f0-6742-4993-affa-44a6d3f6e3e6.7a3d37bf-f882-4090-aff9-ac638cf95791",
+       "Width": 3840,
+       "Height": 2160
+      },
+      {
+       "ImagePurpose": "TitledHeroArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.26296.13791399313063391.ee2580f0-6742-4993-affa-44a6d3f6e3e6.84c4b8aa-e82f-4829-8bba-3f02adf674b2",
+       "Width": 1920,
+       "Height": 1080
+      },
+      {
+       "ImagePurpose": "FeaturePromotionalSquareArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.3239.13791399313063391.ee2580f0-6742-4993-affa-44a6d3f6e3e6.0f8d897f-c6df-43f9-81f4-1de1785b8534",
+       "Width": 1080,
+       "Height": 1080
+      },
+      {
+       "ImagePurpose": "BoxArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.38386.13920955783837765.f5fed44c-8ad4-4b69-a823-0e8d1693eeab.4a7d7dbe-d67f-41c5-bde1-02b1e8066c44",
+       "Width": 2160,
+       "Height": 2160
+      },
+      {
+       "ImagePurpose": "Logo",
+       "Uri": "//store-images.s-microsoft.com/image/apps.29051.13920955783837765.f5fed44c-8ad4-4b69-a823-0e8d1693eeab.afc4b690-2392-41e1-8822-48bbecdbab06",
+       "Width": 300,
+       "Height": 300
+      }
+     ]
+    }
+   ],
+   "Properties": {
+    "PackageFamilyName": "BlizzardEntertainmentInc.DiabloIVPC_kdg5n7x41qwkg",
+    "ProductGroupName": "Blizzard PC"
+   },
+   "DisplaySkuAvailabilities": [
+    {
+     "Sku": {
+      "SkuId": "0010",
+      "Properties": {
+       "IsTrial": false,
+       "IsPreOrder": false,
+       "IsBundle": false
+      }
+     }
+    },
+    {
+     "Sku": {
+      "SkuId": "0011",
+      "Properties": {
+       "IsTrial": true,
+       "IsPreOrder": false,
+       "IsBundle": false
+      }
+     }
+    }
+   ]
+  },
+  {
+   "ProductId": "9NNLBL0T2Z43",
+   "ProductType": "Game",
+   "ProductKind": "Game",
+   "LocalizedProperties": [
+    {
+     "ProductTitle": "Sunset Overdrive",
+     "PublisherName": "Xbox Game Studios",
+     "Images": [
+      {
+       "ImagePurpose": "Logo",
+       "Uri": "//store-images.s-microsoft.com/image/apps.36649.13736301732248840.1e2d854a-e5e9-4c32-b8a1-2630937d19b9.f8d37f47-d33a-4408-93f2-1aa6857e771e",
+       "Width": 50,
+       "Height": 50
+      },
+      {
+       "ImagePurpose": "Tile",
+       "Uri": "//store-images.s-microsoft.com/image/apps.55299.13736301732248840.1e2d854a-e5e9-4c32-b8a1-2630937d19b9.03244896-e61b-4b5b-b089-cb85018ff10a",
+       "Width": 300,
+       "Height": 300
+      },
+      {
+       "ImagePurpose": "Tile",
+       "Uri": "//store-images.s-microsoft.com/image/apps.9463.13736301732248840.1e2d854a-e5e9-4c32-b8a1-2630937d19b9.ee9e6394-1bce-44b9-acaf-fbff658a8b44",
+       "Width": 88,
+       "Height": 88
+      },
+      {
+       "ImagePurpose": "Tile",
+       "Uri": "//store-images.s-microsoft.com/image/apps.58258.13736301732248840.f1b3ae3b-190f-4008-9b07-c433c615c0bd.82f590c7-f524-4322-89ac-1ffedf81e898",
+       "Width": 620,
+       "Height": 300
+      },
+      {
+       "ImagePurpose": "BoxArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.19746.13736301732248840.1e2d854a-e5e9-4c32-b8a1-2630937d19b9.70b8421f-ec86-4d13-9b7a-f61055a25868",
+       "Width": 1080,
+       "Height": 1080
+      },
+      {
+       "ImagePurpose": "SuperHeroArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.5419.13736301732248840.1e2d854a-e5e9-4c32-b8a1-2630937d19b9.7e9979f0-6b9b-45eb-88ef-ebda38d47762",
+       "Width": 1920,
+       "Height": 1080
+      },
+      {
+       "ImagePurpose": "Poster",
+       "Uri": "//store-images.s-microsoft.com/image/apps.55060.13736301732248840.30b1b0f6-6f7d-4bab-b6db-4838b855187c.adf08abd-e5db-4ac3-a1b1-24688a387df9",
+       "Width": 720,
+       "Height": 1080
+      },
+      {
+       "ImagePurpose": "BrandedKeyArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.3082.13736301732248840.30b1b0f6-6f7d-4bab-b6db-4838b855187c.4ee1cee8-6e42-4cfa-bd9b-41ffc5763274",
+       "Width": 584,
+       "Height": 800
+      },
+      {
+       "ImagePurpose": "TitledHeroArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.44479.13736301732248840.30b1b0f6-6f7d-4bab-b6db-4838b855187c.688101d9-207d-4c10-8d68-0b10c75da430",
+       "Width": 1920,
+       "Height": 1080
+      },
+      {
+       "ImagePurpose": "FeaturePromotionalSquareArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.2580.13736301732248840.30b1b0f6-6f7d-4bab-b6db-4838b855187c.09023a93-c842-4531-93f0-6296c13886b2",
+       "Width": 1080,
+       "Height": 1080
+      }
+     ]
+    }
+   ],
+   "Properties": {
+    "PackageFamilyName": "Microsoft.Sunflower_8wekyb3d8bbwe"
+   },
+   "DisplaySkuAvailabilities": [
+    {
+     "Sku": {
+      "SkuId": "0010",
+      "Properties": {
+       "IsTrial": false,
+       "IsPreOrder": false,
+       "IsBundle": false,
+       "Packages": [
+        {
+         "PackageFormat": "EAppx",
+         "PlatformDependencies": [
+          {
+           "MaxTested": 2814750754275328,
+           "MinVersion": 2814750754275328,
+           "PlatformName": "Windows.Desktop"
+          }
+         ],
+         "Architectures": [
+          "x64"
+         ],
+         "ContentId": "d9af3403-72e0-ebb2-6027-5e3303ae7d4b",
+         "PackageFullName": "Microsoft.Sunflower_1.0.21.2_x64__8wekyb3d8bbwe",
+         "MaxDownloadSizeInBytes": 29771147939
+        }
+       ]
+      }
+     }
+    },
+    {
+     "Sku": {
+      "SkuId": "0011",
+      "Properties": {
+       "IsTrial": true,
+       "IsPreOrder": false,
+       "IsBundle": false,
+       "Packages": [
+        {
+         "PackageFormat": "EAppx",
+         "PlatformDependencies": [
+          {
+           "MaxTested": 2814750754275328,
+           "MinVersion": 2814750754275328,
+           "PlatformName": "Windows.Desktop"
+          }
+         ],
+         "Architectures": [
+          "x64"
+         ],
+         "ContentId": "d9af3403-72e0-ebb2-6027-5e3303ae7d4b",
+         "PackageFullName": "Microsoft.Sunflower_1.0.21.2_x64__8wekyb3d8bbwe",
+         "MaxDownloadSizeInBytes": 29771147939
+        }
+       ]
+      }
+     }
+    }
+   ]
+  },
+  {
+   "ProductId": "9NBLGGH1Z6FB",
+   "ProductType": "Game",
+   "ProductKind": "Game",
+   "LocalizedProperties": [
+    {
+     "ProductTitle": "Ori and the Blind Forest: Definitive Edition",
+     "PublisherName": "Xbox Game Studios",
+     "Images": [
+      {
+       "ImagePurpose": "Logo",
+       "Uri": "//store-images.s-microsoft.com/image/apps.27342.13510798886186647.20955cc6-ff98-4c47-a277-a39034c80e48.46c8ac27-5378-452b-a633-10a503a92d96",
+       "Width": 50,
+       "Height": 50
+      },
+      {
+       "ImagePurpose": "Tile",
+       "Uri": "//store-images.s-microsoft.com/image/apps.56463.13510798886186647.e6e27e80-a0e4-4365-a31b-5c4a7b6b91a8.9b1ed462-08c2-43bc-bf97-98ce43ad61be",
+       "Width": 300,
+       "Height": 300
+      },
+      {
+       "ImagePurpose": "Tile",
+       "Uri": "//store-images.s-microsoft.com/image/apps.23224.13510798886186647.f663b9e8-b73e-41c4-905e-2ea00441104a.2fdd5154-00e5-4c68-92bb-72f10f3b294a",
+       "Width": 88,
+       "Height": 88
+      },
+      {
+       "ImagePurpose": "Tile",
+       "Uri": "//store-images.s-microsoft.com/image/apps.11196.13510798886186647.3d19ee1b-db91-47d6-a7a1-6f296a012f46.00c5a3a3-7848-4d86-a30a-d1ea472b482d",
+       "Width": 620,
+       "Height": 300
+      },
+      {
+       "ImagePurpose": "Hero",
+       "Uri": "//store-images.s-microsoft.com/image/apps.33520.13510798886186647.c6b7630d-6f95-4775-bc5e-bf563a100818.00ccc52a-5cf8-4ae9-b01b-825ea3f9968b",
+       "Width": 358,
+       "Height": 173
+      },
+      {
+       "ImagePurpose": "Hero",
+       "Uri": "//store-images.s-microsoft.com/image/apps.11013.13510798886186647.1e430e7d-4224-41a5-a605-7cc12c8ed8e3.c355267d-9cb0-4794-8cab-f3f052e44c12",
+       "Width": 358,
+       "Height": 358
+      },
+      {
+       "ImagePurpose": "Hero",
+       "Uri": "//store-images.s-microsoft.com/image/apps.60451.13510798886186647.34d6fd13-2ce2-4dcc-84b6-109fa8e0ff81.72e9e7ed-81f2-48a8-a9d3-34157ee5bd11",
+       "Width": 414,
+       "Height": 468
+      },
+      {
+       "ImagePurpose": "Hero",
+       "Uri": "//store-images.s-microsoft.com/image/apps.37160.13510798886186647.064b8ad7-11bb-4f3f-ac92-cc9995d223c1.60c5e776-3fa3-4d49-a60c-e34719874ff7",
+       "Width": 846,
+       "Height": 468
+      },
+      {
+       "ImagePurpose": "Hero",
+       "Uri": "//store-images.s-microsoft.com/image/apps.6141.13510798886186647.9a597e53-7959-4e10-acdd-df098a98558c.3d96371d-eb1a-4feb-922f-75fdac27f263",
+       "Width": 558,
+       "Height": 756
+      },
+      {
+       "ImagePurpose": "Logo",
+       "Uri": "//store-images.s-microsoft.com/image/apps.56463.13510798886186647.e6e27e80-a0e4-4365-a31b-5c4a7b6b91a8.9b1ed462-08c2-43bc-bf97-98ce43ad61be",
+       "Width": 300,
+       "Height": 300
+      },
+      {
+       "ImagePurpose": "Hero",
+       "Uri": "//store-images.s-microsoft.com/image/apps.16585.13510798886186647.7b405a94-7dab-440d-9f72-9b4a76a64c3f.8411d537-1988-4c03-9576-64d093ad419c",
+       "Width": 1000,
+       "Height": 800
+      },
+      {
+       "ImagePurpose": "Hero",
+       "Uri": "//store-images.s-microsoft.com/image/apps.58428.13510798886186647.6ff210c1-4221-4ec5-a564-67b6ca57ec69.c063540b-03e5-461a-872d-d4561b6656d6",
+       "Width": 414,
+       "Height": 180
+      },
+      {
+       "ImagePurpose": "Hero",
+       "Uri": "//store-images.s-microsoft.com/image/apps.17224.13510798886186647.9a6936c4-2351-457e-8d47-d87bb100ec77.c8960817-50cb-4e8a-91d7-e4420f25f174",
+       "Width": 558,
+       "Height": 558
+      },
+      {
+       "ImagePurpose": "Poster",
+       "Uri": "//store-images.s-microsoft.com/image/apps.4128.13510798886186647.8c0ab761-dafd-44d5-ba8a-f32d95f7f9d6.48252971-733f-480c-b261-787206b064c1",
+       "Width": 720,
+       "Height": 1080
+      },
+      {
+       "ImagePurpose": "SuperHeroArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.3754.13510798886186647.c0e11caa-fdaa-466b-aa26-f52ce4feba84.b8c452aa-2dc1-4cec-9056-fc08b2ae404d",
+       "Width": 1920,
+       "Height": 1080
+      },
+      {
+       "ImagePurpose": "BrandedKeyArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.27018.13510798886186647.c0e11caa-fdaa-466b-aa26-f52ce4feba84.39035657-311b-430c-8490-2fbd2715095d",
+       "Width": 584,
+       "Height": 800
+      },
+      {
+       "ImagePurpose": "TitledHeroArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.3754.13510798886186647.c0e11caa-fdaa-466b-aa26-f52ce4feba84.b8c452aa-2dc1-4cec-9056-fc08b2ae404d",
+       "Width": 1920,
+       "Height": 1080
+      },
+      {
+       "ImagePurpose": "FeaturePromotionalSquareArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.3040.13510798886186647.c0e11caa-fdaa-466b-aa26-f52ce4feba84.4d7c3860-328d-43fa-ac01-73df79935159",
+       "Width": 1080,
+       "Height": 1080
+      },
+      {
+       "ImagePurpose": "BoxArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.33006.13510798886186647.c0e11caa-fdaa-466b-aa26-f52ce4feba84.a944c023-cf1b-4b73-a42c-ef8948701f81",
+       "Width": 1080,
+       "Height": 1080
+      }
+     ]
+    }
+   ],
+   "Properties": {
+    "PackageFamilyName": "Microsoft.OriandtheBlindForestDefinitiveEdition_8wekyb3d8bbwe"
+   },
+   "DisplaySkuAvailabilities": [
+    {
+     "Sku": {
+      "SkuId": "0010",
+      "Properties": {
+       "IsTrial": false,
+       "IsPreOrder": false,
+       "IsBundle": false,
+       "Packages": [
+        {
+         "PackageFormat": "AppxBundle",
+         "PlatformDependencies": [
+          {
+           "MaxTested": 2814750460870656,
+           "MinVersion": 2814750460870656,
+           "PlatformName": "Windows.Desktop"
+          }
+         ],
+         "Architectures": [
+          "x64"
+         ],
+         "ContentId": "8f336aea-e3a0-51f5-5bd1-aa4c2ce76b2b",
+         "PackageFullName": "Microsoft.OriandtheBlindForestDefinitiveEdition_1.1.29.0_neutral_~_8wekyb3d8bbwe",
+         "MaxDownloadSizeInBytes": 3869243019
+        }
+       ]
+      }
+     }
+    },
+    {
+     "Sku": {
+      "SkuId": "0011",
+      "Properties": {
+       "IsTrial": true,
+       "IsPreOrder": false,
+       "IsBundle": false,
+       "Packages": [
+        {
+         "PackageFormat": "AppxBundle",
+         "PlatformDependencies": [
+          {
+           "MaxTested": 2814750460870656,
+           "MinVersion": 2814750460870656,
+           "PlatformName": "Windows.Desktop"
+          }
+         ],
+         "Architectures": [
+          "x64"
+         ],
+         "ContentId": "8f336aea-e3a0-51f5-5bd1-aa4c2ce76b2b",
+         "PackageFullName": "Microsoft.OriandtheBlindForestDefinitiveEdition_1.1.29.0_neutral_~_8wekyb3d8bbwe",
+         "MaxDownloadSizeInBytes": 3869243019
+        }
+       ]
+      }
+     }
+    }
+   ]
+  },
+  {
+   "ProductId": "9P4P1LPN4VZQ",
+   "ProductType": "Durable",
+   "ProductKind": "Durable",
+   "LocalizedProperties": [
+    {
+     "ProductTitle": "Age of Empires IV: 4K HDR Video Pack",
+     "PublisherName": "Xbox Game Studios",
+     "Images": [
+      {
+       "ImagePurpose": "Poster",
+       "Uri": "//store-images.s-microsoft.com/image/apps.48631.14585211368734467.1b67d77a-5d71-4fe2-96c3-765e51f6c6c1.d3e66ab5-4a0b-4b6f-892b-847f6de63f2d",
+       "Width": 1440,
+       "Height": 2160
+      },
+      {
+       "ImagePurpose": "BoxArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.39316.14585211368734467.1b67d77a-5d71-4fe2-96c3-765e51f6c6c1.f8349571-ecc9-4199-a24c-17cef514ceeb",
+       "Width": 2160,
+       "Height": 2160
+      },
+      {
+       "ImagePurpose": "SuperHeroArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.9160.14585211368734467.1b67d77a-5d71-4fe2-96c3-765e51f6c6c1.5f7ec06c-dbf3-4272-9650-788b4b6b491c",
+       "Width": 3840,
+       "Height": 2160
+      },
+      {
+       "ImagePurpose": "TitledHeroArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.29112.14585211368734467.1b67d77a-5d71-4fe2-96c3-765e51f6c6c1.bfac0113-e338-4d4b-bb92-32823d0bd14f",
+       "Width": 1920,
+       "Height": 1080
+      },
+      {
+       "ImagePurpose": "FeaturePromotionalSquareArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.60115.14585211368734467.1b67d77a-5d71-4fe2-96c3-765e51f6c6c1.e94f011b-982c-40f3-ab66-c44d683a37bf",
+       "Width": 1080,
+       "Height": 1080
+      }
+     ]
+    }
+   ],
+   "Properties": {
+    "PackageFamilyName": "Microsoft.4KAssetPack_8wekyb3d8bbwe"
+   },
+   "DisplaySkuAvailabilities": [
+    {
+     "Sku": {
+      "SkuId": "0010",
+      "Properties": {
+       "IsTrial": false,
+       "IsPreOrder": false,
+       "IsBundle": false,
+       "Packages": [
+        {
+         "PackageFormat": "MSIXVC",
+         "PlatformDependencies": [
+          {
+           "MaxTested": 2814750970478592,
+           "MinVersion": 2814750970478592,
+           "PlatformName": "Windows.Desktop"
+          }
+         ],
+         "Architectures": [
+          "x64"
+         ],
+         "ContentId": "636cb3a2-7597-46b8-9b88-71067717b0f1",
+         "PackageFullName": "",
+         "MaxDownloadSizeInBytes": 139121778688
+        }
+       ]
+      }
+     }
+    },
+    {
+     "Sku": {
+      "SkuId": "0017",
+      "Properties": {
+       "IsTrial": false,
+       "IsPreOrder": true,
+       "IsBundle": false,
+       "Packages": [
+        {
+         "PackageFormat": "MSIXVC",
+         "PlatformDependencies": [
+          {
+           "MaxTested": 2814750970478592,
+           "MinVersion": 2814750970478592,
+           "PlatformName": "Windows.Desktop"
+          }
+         ],
+         "Architectures": [
+          "x64"
+         ],
+         "ContentId": "636cb3a2-7597-46b8-9b88-71067717b0f1",
+         "PackageFullName": "",
+         "MaxDownloadSizeInBytes": 139121778688
+        }
+       ]
+      }
+     }
+    }
+   ]
+  },
+  {
+   "ProductId": "9NTH1K5RT43P",
+   "ProductType": "Game",
+   "ProductKind": "Game",
+   "LocalizedProperties": [
+    {
+     "ProductTitle": "Age of Empires IV: Anniversary Edition",
+     "PublisherName": "Xbox Game Studios",
+     "Images": [
+      {
+       "ImagePurpose": "Poster",
+       "Uri": "//store-images.s-microsoft.com/image/apps.63959.14235977975261210.106699ff-5046-4540-ac72-e248ae2c3818.f61be535-d1e6-46c7-a0b3-338fd9384f08",
+       "Width": 1440,
+       "Height": 2160
+      },
+      {
+       "ImagePurpose": "BoxArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.20558.14235977975261210.592375c9-78a4-4653-8c7f-a8e510e6c26a.f4f5408e-cd13-44d7-80c1-830ab0019d3a",
+       "Width": 2160,
+       "Height": 2160
+      },
+      {
+       "ImagePurpose": "SuperHeroArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.31161.14235977975261210.592375c9-78a4-4653-8c7f-a8e510e6c26a.27f053eb-1224-45b5-aa37-0402b5789c7a",
+       "Width": 3840,
+       "Height": 2160
+      },
+      {
+       "ImagePurpose": "TitledHeroArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.32153.14235977975261210.106699ff-5046-4540-ac72-e248ae2c3818.75b0f9af-f0ea-4630-8f8e-a6815a419897",
+       "Width": 1920,
+       "Height": 1080
+      },
+      {
+       "ImagePurpose": "FeaturePromotionalSquareArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.10180.14235977975261210.106699ff-5046-4540-ac72-e248ae2c3818.562bfa0a-06d5-482e-a1bb-6d243c38bdc2",
+       "Width": 1080,
+       "Height": 1080
+      },
+      {
+       "ImagePurpose": "Logo",
+       "Uri": "//store-images.s-microsoft.com/image/apps.39795.14235977975261210.592375c9-78a4-4653-8c7f-a8e510e6c26a.3005be1d-9924-42a5-8cd9-a774a33a3387",
+       "Width": 300,
+       "Height": 300
+      }
+     ]
+    }
+   ],
+   "Properties": {
+    "PackageFamilyName": "",
+    "ProductGroupName": "Age of Empires IV: Anniversary Edition Product Group"
+   },
+   "DisplaySkuAvailabilities": [
+    {
+     "Sku": {
+      "SkuId": "0010",
+      "Properties": {
+       "IsTrial": false,
+       "IsPreOrder": false,
+       "IsBundle": true,
+       "BundledSkus": [
+        {
+         "BigId": "9N94NCGM1Q2N",
+         "IsPrimary": false
+        },
+        {
+         "BigId": "9P4P1LPN4VZQ",
+         "IsPrimary": false
+        }
+       ]
+      }
+     }
+    }
+   ]
+  },
+  {
+   "ProductId": "9N94NCGM1Q2N",
+   "ProductType": "Game",
+   "ProductKind": "Game",
+   "LocalizedProperties": [
+    {
+     "ProductTitle": "Age of Empires IV: Anniversary Edition",
+     "PublisherName": "Xbox Game Studios",
+     "Images": [
+      {
+       "ImagePurpose": "Logo",
+       "Uri": "//store-images.s-microsoft.com/image/apps.39795.14235977975261210.592375c9-78a4-4653-8c7f-a8e510e6c26a.3005be1d-9924-42a5-8cd9-a774a33a3387",
+       "Width": 300,
+       "Height": 300
+      },
+      {
+       "ImagePurpose": "Logo",
+       "Uri": "//store-images.s-microsoft.com/image/apps.44152.14235977975261210.592375c9-78a4-4653-8c7f-a8e510e6c26a.e1de87d3-0066-4302-8a56-ae186825da13",
+       "Width": 71,
+       "Height": 71
+      },
+      {
+       "ImagePurpose": "Logo",
+       "Uri": "//store-images.s-microsoft.com/image/apps.53387.14235977975261210.592375c9-78a4-4653-8c7f-a8e510e6c26a.750bc72a-72f4-48ea-8e8d-3866ddaf3683",
+       "Width": 150,
+       "Height": 150
+      },
+      {
+       "ImagePurpose": "TitledHeroArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.32153.14235977975261210.106699ff-5046-4540-ac72-e248ae2c3818.75b0f9af-f0ea-4630-8f8e-a6815a419897",
+       "Width": 1920,
+       "Height": 1080
+      },
+      {
+       "ImagePurpose": "FeaturePromotionalSquareArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.10180.14235977975261210.106699ff-5046-4540-ac72-e248ae2c3818.562bfa0a-06d5-482e-a1bb-6d243c38bdc2",
+       "Width": 1080,
+       "Height": 1080
+      },
+      {
+       "ImagePurpose": "Poster",
+       "Uri": "//store-images.s-microsoft.com/image/apps.63959.14235977975261210.106699ff-5046-4540-ac72-e248ae2c3818.f61be535-d1e6-46c7-a0b3-338fd9384f08",
+       "Width": 1440,
+       "Height": 2160
+      },
+      {
+       "ImagePurpose": "SuperHeroArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.31161.14235977975261210.592375c9-78a4-4653-8c7f-a8e510e6c26a.27f053eb-1224-45b5-aa37-0402b5789c7a",
+       "Width": 3840,
+       "Height": 2160
+      },
+      {
+       "ImagePurpose": "BoxArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.20558.14235977975261210.592375c9-78a4-4653-8c7f-a8e510e6c26a.f4f5408e-cd13-44d7-80c1-830ab0019d3a",
+       "Width": 2160,
+       "Height": 2160
+      }
+     ]
+    }
+   ],
+   "Properties": {
+    "PackageFamilyName": "Microsoft.Cardinal_8wekyb3d8bbwe"
+   },
+   "DisplaySkuAvailabilities": [
+    {
+     "Sku": {
+      "SkuId": "0010",
+      "Properties": {
+       "IsTrial": false,
+       "IsPreOrder": false,
+       "IsBundle": false,
+       "Packages": [
+        {
+         "PackageFormat": "MSIXVC",
+         "PlatformDependencies": [
+          {
+           "MaxTested": 2814750970478592,
+           "MinVersion": 2814750970478592,
+           "PlatformName": "Windows.Desktop"
+          }
+         ],
+         "Architectures": [
+          "x64"
+         ],
+         "ContentId": "8d9b5bb7-6442-4dfe-97d9-641bfb57c835",
+         "PackageFullName": "",
+         "MaxDownloadSizeInBytes": 103533793280
+        }
+       ]
+      }
+     }
+    },
+    {
+     "Sku": {
+      "SkuId": "0017",
+      "Properties": {
+       "IsTrial": false,
+       "IsPreOrder": true,
+       "IsBundle": false,
+       "Packages": [
+        {
+         "PackageFormat": "MSIXVC",
+         "PlatformDependencies": [
+          {
+           "MaxTested": 2814750970478592,
+           "MinVersion": 2814750970478592,
+           "PlatformName": "Windows.Desktop"
+          }
+         ],
+         "Architectures": [
+          "x64"
+         ],
+         "ContentId": "8d9b5bb7-6442-4dfe-97d9-641bfb57c835",
+         "PackageFullName": "",
+         "MaxDownloadSizeInBytes": 103533793280
+        }
+       ]
+      }
+     }
+    },
+    {
+     "Sku": {
+      "SkuId": "0011",
+      "Properties": {
+       "IsTrial": true,
+       "IsPreOrder": false,
+       "IsBundle": false,
+       "Packages": [
+        {
+         "PackageFormat": "MSIXVC",
+         "PlatformDependencies": [
+          {
+           "MaxTested": 2814750970478592,
+           "MinVersion": 2814750970478592,
+           "PlatformName": "Windows.Desktop"
+          }
+         ],
+         "Architectures": [
+          "x64"
+         ],
+         "ContentId": "8d9b5bb7-6442-4dfe-97d9-641bfb57c835",
+         "PackageFullName": "",
+         "MaxDownloadSizeInBytes": 103533793280
+        }
+       ]
+      }
+     }
+    }
+   ]
+  },
+  {
+   "ProductId": "9NB6BVL3MTG4",
+   "ProductType": "Game",
+   "ProductKind": "Game",
+   "LocalizedProperties": [
+    {
+     "ProductTitle": "Minecraft Dungeons for Windows + Launcher",
+     "PublisherName": "Xbox Game Studios",
+     "Images": [
+      {
+       "ImagePurpose": "Logo",
+       "Uri": "//store-images.s-microsoft.com/image/apps.45275.14089602043039621.efe46bfe-4de2-4879-a22b-f3b08650221c.11115897-ede5-444b-b624-6b01c23fcdf1",
+       "Width": 300,
+       "Height": 300
+      },
+      {
+       "ImagePurpose": "BoxArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.33021.14089602043039621.efe46bfe-4de2-4879-a22b-f3b08650221c.9dc86bae-d2cd-4b49-9d6e-dc8b128e14c8",
+       "Width": 1080,
+       "Height": 1080
+      },
+      {
+       "ImagePurpose": "SuperHeroArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.39985.14089602043039621.efe46bfe-4de2-4879-a22b-f3b08650221c.41a0976b-9c34-4589-8dc8-87b39d930f7e",
+       "Width": 1920,
+       "Height": 1080
+      },
+      {
+       "ImagePurpose": "Poster",
+       "Uri": "//store-images.s-microsoft.com/image/apps.2957.14089602043039621.efe46bfe-4de2-4879-a22b-f3b08650221c.dbf4f170-baf6-45ca-a7d8-6fadaba1e8b1",
+       "Width": 720,
+       "Height": 1080
+      },
+      {
+       "ImagePurpose": "TitledHeroArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.60739.13523218592070531.6a28c3f6-dae7-4771-b64d-dc3bdd29c9c2.f13df42d-484a-496f-8f88-fd95da2943de",
+       "Width": 1920,
+       "Height": 1080
+      }
+     ]
+    }
+   ],
+   "Properties": {
+    "PackageFamilyName": "",
+    "ProductGroupName": "Minecraft Dungeons PG"
+   },
+   "DisplaySkuAvailabilities": [
+    {
+     "Sku": {
+      "SkuId": "0010",
+      "Properties": {
+       "IsTrial": false,
+       "IsPreOrder": false,
+       "IsBundle": true,
+       "BundledSkus": [
+        {
+         "BigId": "9P8MK4NC0LJB",
+         "IsPrimary": true
+        },
+        {
+         "BigId": "9PGW18NPBZV5",
+         "IsPrimary": false
+        }
+       ]
+      }
+     }
+    }
+   ]
+  },
+  {
+   "ProductId": "9P8MK4NC0LJB",
+   "ProductType": "Game",
+   "ProductKind": "Game",
+   "LocalizedProperties": [
+    {
+     "ProductTitle": "Minecraft Dungeons for Windows",
+     "PublisherName": "Xbox Game Studios",
+     "Images": [
+      {
+       "ImagePurpose": "Logo",
+       "Uri": "//store-images.s-microsoft.com/image/apps.45275.14089602043039621.efe46bfe-4de2-4879-a22b-f3b08650221c.11115897-ede5-444b-b624-6b01c23fcdf1",
+       "Width": 300,
+       "Height": 300
+      },
+      {
+       "ImagePurpose": "TitledHeroArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.60739.14089602043039621.7604a2c4-68ae-459f-8250-7dcabfbf1d35.b6f1ca0a-6c0a-4ea3-932f-461100561eff",
+       "Width": 1920,
+       "Height": 1080
+      },
+      {
+       "ImagePurpose": "Poster",
+       "Uri": "//store-images.s-microsoft.com/image/apps.2957.14089602043039621.efe46bfe-4de2-4879-a22b-f3b08650221c.dbf4f170-baf6-45ca-a7d8-6fadaba1e8b1",
+       "Width": 720,
+       "Height": 1080
+      },
+      {
+       "ImagePurpose": "SuperHeroArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.39985.14089602043039621.efe46bfe-4de2-4879-a22b-f3b08650221c.41a0976b-9c34-4589-8dc8-87b39d930f7e",
+       "Width": 1920,
+       "Height": 1080
+      },
+      {
+       "ImagePurpose": "BoxArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.33021.14089602043039621.efe46bfe-4de2-4879-a22b-f3b08650221c.9dc86bae-d2cd-4b49-9d6e-dc8b128e14c8",
+       "Width": 1080,
+       "Height": 1080
+      },
+      {
+       "ImagePurpose": "SuperHeroArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.15805.14089602043039621.efe46bfe-4de2-4879-a22b-f3b08650221c.4f73ae78-d961-4ce5-81dc-8a9c54ab84ee",
+       "Width": 3840,
+       "Height": 2160
+      }
+     ]
+    }
+   ],
+   "Properties": {
+    "PackageFamilyName": "Microsoft.Lovika_8wekyb3d8bbwe",
+    "ProductGroupName": "Minecraft Dungeons PG"
+   },
+   "DisplaySkuAvailabilities": [
+    {
+     "Sku": {
+      "SkuId": "0017",
+      "Properties": {
+       "IsTrial": false,
+       "IsPreOrder": true,
+       "IsBundle": false,
+       "Packages": [
+        {
+         "PackageFormat": "MSIXVC",
+         "PlatformDependencies": [
+          {
+           "MaxTested": 2814750970478592,
+           "MinVersion": 2814750970478592,
+           "PlatformName": "Windows.Desktop"
+          }
+         ],
+         "Architectures": [
+          "x64"
+         ],
+         "ContentId": "911f6225-c9c8-4641-a6db-29d4ccafc666",
+         "PackageFullName": "",
+         "MaxDownloadSizeInBytes": 5856731136
+        }
+       ]
+      }
+     }
+    },
+    {
+     "Sku": {
+      "SkuId": "0010",
+      "Properties": {
+       "IsTrial": false,
+       "IsPreOrder": false,
+       "IsBundle": false,
+       "Packages": [
+        {
+         "PackageFormat": "MSIXVC",
+         "PlatformDependencies": [
+          {
+           "MaxTested": 2814750970478592,
+           "MinVersion": 2814750970478592,
+           "PlatformName": "Windows.Desktop"
+          }
+         ],
+         "Architectures": [
+          "x64"
+         ],
+         "ContentId": "911f6225-c9c8-4641-a6db-29d4ccafc666",
+         "PackageFullName": "",
+         "MaxDownloadSizeInBytes": 5856731136
+        }
+       ]
+      }
+     }
+    },
+    {
+     "Sku": {
+      "SkuId": "0011",
+      "Properties": {
+       "IsTrial": true,
+       "IsPreOrder": false,
+       "IsBundle": false,
+       "Packages": [
+        {
+         "PackageFormat": "MSIXVC",
+         "PlatformDependencies": [
+          {
+           "MaxTested": 2814750970478592,
+           "MinVersion": 2814750970478592,
+           "PlatformName": "Windows.Desktop"
+          }
+         ],
+         "Architectures": [
+          "x64"
+         ],
+         "ContentId": "911f6225-c9c8-4641-a6db-29d4ccafc666",
+         "PackageFullName": "",
+         "MaxDownloadSizeInBytes": 5856731136
+        }
+       ]
+      }
+     }
+    }
+   ]
+  },
+  {
+   "ProductId": "9NBLGGH515BD",
+   "ProductType": "Game",
+   "ProductKind": "Game",
+   "LocalizedProperties": [
+    {
+     "ProductTitle": "Halo Wars 2: Standard Edition",
+     "PublisherName": "Microsoft Studios",
+     "Images": [
+      {
+       "ImagePurpose": "Hero",
+       "Uri": "//store-images.s-microsoft.com/image/apps.54808.13510798887619155.1152921504720023590.753a5b3d-18b0-4b8a-bd22-99c0d5ba56ac",
+       "Width": 2400,
+       "Height": 1200
+      },
+      {
+       "ImagePurpose": "Logo",
+       "Uri": "//store-images.s-microsoft.com/image/apps.7936.13510798887619155.1152921504720025064.9e7079a2-4bc6-4c9a-867f-39e6b36173e5",
+       "Width": 300,
+       "Height": 300
+      },
+      {
+       "ImagePurpose": "BoxArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.6988.13510798887619155.1152921504738974806.c79207fe-4a44-4acc-81ba-2fcd916fa119",
+       "Width": 2160,
+       "Height": 2160
+      },
+      {
+       "ImagePurpose": "BrandedKeyArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.18861.13510798887619155.1152921504719980931.12fede24-749f-4738-94e5-b7b1e5c72200",
+       "Width": 584,
+       "Height": 800
+      },
+      {
+       "ImagePurpose": "Poster",
+       "Uri": "//store-images.s-microsoft.com/image/apps.53461.13510798887619155.1152921504738972017.5326d79a-5563-43b1-9249-9ae75fd10bd2",
+       "Width": 1440,
+       "Height": 2160
+      },
+      {
+       "ImagePurpose": "FeaturePromotionalSquareArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.29913.13510798887619155.1152921504719989513.7e8abe09-957e-49e8-acd0-2fec3a365d35",
+       "Width": 1080,
+       "Height": 1080
+      },
+      {
+       "ImagePurpose": "SuperHeroArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.47197.13510798887619155.1152921504719988256.112c600a-b900-4599-851f-e266a27db04a",
+       "Width": 1920,
+       "Height": 1080
+      },
+      {
+       "ImagePurpose": "TitledHeroArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.10666.13510798887619155.1152921504720020327.dbf5dea7-8c34-42d7-b2e9-4474bfdb4e7d",
+       "Width": 1920,
+       "Height": 1080
+      }
+     ]
+    }
+   ],
+   "Properties": {
+    "PackageFamilyName": "",
+    "ProductGroupName": "Halo Wars 2"
+   },
+   "DisplaySkuAvailabilities": [
+    {
+     "Sku": {
+      "SkuId": "0010",
+      "Properties": {
+       "IsTrial": false,
+       "IsPreOrder": false,
+       "IsBundle": true,
+       "BundledSkus": [
+        {
+         "BigId": "9NBLGGH5WMKM",
+         "IsPrimary": true
+        },
+        {
+         "BigId": "9NBLGGH4SX97",
+         "IsPrimary": false
+        }
+       ]
+      }
+     }
+    },
+    {
+     "Sku": {
+      "SkuId": "0017",
+      "Properties": {
+       "IsTrial": false,
+       "IsPreOrder": true,
+       "IsBundle": true,
+       "BundledSkus": [
+        {
+         "BigId": "9NBLGGH5WMKM",
+         "IsPrimary": true
+        },
+        {
+         "BigId": "9NBLGGH4SX97",
+         "IsPrimary": false
+        }
+       ]
+      }
+     }
+    }
+   ]
+  },
+  {
+   "ProductId": "9NBLGGH5WMKM",
+   "ProductType": "Game",
+   "ProductKind": "Game",
+   "LocalizedProperties": [
+    {
+     "ProductTitle": "Halo Wars 2",
+     "PublisherName": "Microsoft Studios",
+     "Images": [
+      {
+       "ImagePurpose": "Logo",
+       "Uri": "//store-images.s-microsoft.com/image/apps.7936.13510798886375954.4688894c-dc6a-463c-8168-663e9c98fa5b.f4f639b4-e921-41f7-b7d7-68cbdace89c9",
+       "Width": 300,
+       "Height": 300
+      },
+      {
+       "ImagePurpose": "BoxArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.6988.13510798886375954.7fab3417-408f-452b-bb10-612182e7a5ee.5708d7dd-59ab-411a-b732-5de746c6ee4c",
+       "Width": 2160,
+       "Height": 2160
+      },
+      {
+       "ImagePurpose": "FeaturePromotionalSquareArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.33041.13510798886375954.2f2c326f-7be5-4e16-b060-2912c2727d0f.660cd93b-5a9b-450a-a68f-5ac5d5b5b5ac",
+       "Width": 1080,
+       "Height": 1080
+      },
+      {
+       "ImagePurpose": "Poster",
+       "Uri": "//store-images.s-microsoft.com/image/apps.53461.13510798886375954.2bd17aeb-ccc6-4036-989d-32d2eba17cb4.5d2d8045-b64c-414b-be60-78bc5c7e85f2",
+       "Width": 1440,
+       "Height": 2160
+      },
+      {
+       "ImagePurpose": "Hero",
+       "Uri": "//store-images.s-microsoft.com/image/apps.54808.13510798886375954.9e2089bd-0c01-404f-a424-7accd6f4aeff.618e8379-f489-4544-bc4f-188e755ae43a",
+       "Width": 2400,
+       "Height": 1200
+      },
+      {
+       "ImagePurpose": "SuperHeroArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.25463.13510798886375954.07e17537-da95-4e91-a3df-1dedc0c43980.826f0089-fd4a-4931-a4e3-bdf7abe9d9db",
+       "Width": 3840,
+       "Height": 2160
+      },
+      {
+       "ImagePurpose": "TitledHeroArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.10666.13510798886375954.cb568a46-f0a7-437a-a184-a2826173c2e3.10036a0f-df6a-4359-9f5a-98669e4eede0",
+       "Width": 1920,
+       "Height": 1080
+      },
+      {
+       "ImagePurpose": "BrandedKeyArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.18861.13510798886375954.a173d772-ab17-41dd-8861-c169306f4cc6.b1284183-309d-45e5-b3f3-8286d4fc3dce",
+       "Width": 584,
+       "Height": 800
+      }
+     ]
+    }
+   ],
+   "Properties": {
+    "PackageFamilyName": "Microsoft.HoganThreshold_8wekyb3d8bbwe",
+    "ProductGroupName": "Halo Wars 2"
+   },
+   "DisplaySkuAvailabilities": [
+    {
+     "Sku": {
+      "SkuId": "0017",
+      "Properties": {
+       "IsTrial": false,
+       "IsPreOrder": true,
+       "IsBundle": false,
+       "Packages": [
+        {
+         "PackageFormat": "EAppxBundle",
+         "PlatformDependencies": [
+          {
+           "MaxTested": 2814750710366208,
+           "MinVersion": 2814750710366208,
+           "PlatformName": "Windows.Desktop"
+          }
+         ],
+         "Architectures": [
+          "x64"
+         ],
+         "ContentId": "04066b8e-ddd0-35b6-05f1-99f5ba086a2a",
+         "PackageFullName": "Microsoft.HoganThreshold_1.11.2931.2_neutral_~_8wekyb3d8bbwe",
+         "MaxDownloadSizeInBytes": 51997749124
+        }
+       ]
+      }
+     }
+    },
+    {
+     "Sku": {
+      "SkuId": "0010",
+      "Properties": {
+       "IsTrial": false,
+       "IsPreOrder": false,
+       "IsBundle": false,
+       "Packages": [
+        {
+         "PackageFormat": "EAppxBundle",
+         "PlatformDependencies": [
+          {
+           "MaxTested": 2814750710366208,
+           "MinVersion": 2814750710366208,
+           "PlatformName": "Windows.Desktop"
+          }
+         ],
+         "Architectures": [
+          "x64"
+         ],
+         "ContentId": "04066b8e-ddd0-35b6-05f1-99f5ba086a2a",
+         "PackageFullName": "Microsoft.HoganThreshold_1.11.2931.2_neutral_~_8wekyb3d8bbwe",
+         "MaxDownloadSizeInBytes": 51997749124
+        }
+       ]
+      }
+     }
+    },
+    {
+     "Sku": {
+      "SkuId": "0011",
+      "Properties": {
+       "IsTrial": true,
+       "IsPreOrder": false,
+       "IsBundle": false,
+       "Packages": [
+        {
+         "PackageFormat": "EAppxBundle",
+         "PlatformDependencies": [
+          {
+           "MaxTested": 2814750710366208,
+           "MinVersion": 2814750710366208,
+           "PlatformName": "Windows.Desktop"
+          }
+         ],
+         "Architectures": [
+          "x64"
+         ],
+         "ContentId": "04066b8e-ddd0-35b6-05f1-99f5ba086a2a",
+         "PackageFullName": "Microsoft.HoganThreshold_1.11.2931.2_neutral_~_8wekyb3d8bbwe",
+         "MaxDownloadSizeInBytes": 51997749124
+        }
+       ]
+      }
+     }
+    }
+   ]
+  },
+  {
+   "ProductId": "9NP1P1WFS0LB",
+   "ProductType": "Game",
+   "ProductKind": "Game",
+   "LocalizedProperties": [
+    {
+     "ProductTitle": "Halo Infinite",
+     "PublisherName": "Xbox Game Studios",
+     "Images": [
+      {
+       "ImagePurpose": "Poster",
+       "Uri": "//store-images.s-microsoft.com/image/apps.21536.13727851868390641.c9cc5f66-aff8-406c-af6b-440838730be0.68796bde-cbf5-4eaa-a299-011417041da6",
+       "Width": 1440,
+       "Height": 2160
+      },
+      {
+       "ImagePurpose": "BoxArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.30769.13727851868390641.270e98c5-0c6a-4ce0-81ab-e78c700bf4b5.092f9454-fee6-43b1-94e3-802dd0067d8b",
+       "Width": 1080,
+       "Height": 1080
+      },
+      {
+       "ImagePurpose": "Logo",
+       "Uri": "//store-images.s-microsoft.com/image/apps.54721.13727851868390641.c9cc5f66-aff8-406c-af6b-440838730be0.a80b262c-005c-4958-bb83-77411ba3d3b4",
+       "Width": 300,
+       "Height": 300
+      },
+      {
+       "ImagePurpose": "SuperHeroArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.50670.13727851868390641.c9cc5f66-aff8-406c-af6b-440838730be0.d205e025-5444-4eb1-ae46-571ae6895928",
+       "Width": 3840,
+       "Height": 2160
+      },
+      {
+       "ImagePurpose": "BrandedKeyArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.5647.13727851868390641.c9cc5f66-aff8-406c-af6b-440838730be0.27068a84-ef1c-4816-b1fd-569ccd0cc075",
+       "Width": 584,
+       "Height": 800
+      },
+      {
+       "ImagePurpose": "TitledHeroArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.24990.13727851868390641.c9cc5f66-aff8-406c-af6b-440838730be0.e136fdbb-a54f-4906-9712-e6313077f1f7",
+       "Width": 1920,
+       "Height": 1080
+      },
+      {
+       "ImagePurpose": "FeaturePromotionalSquareArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.7011.13727851868390641.270e98c5-0c6a-4ce0-81ab-e78c700bf4b5.d21db17b-24d3-43ce-b643-516889f9a9fe",
+       "Width": 1080,
+       "Height": 1080
+      }
+     ]
+    }
+   ],
+   "Properties": {
+    "PackageFamilyName": "",
+    "ProductGroupName": "Halo Infinite Partner Center"
+   },
+   "DisplaySkuAvailabilities": [
+    {
+     "Sku": {
+      "SkuId": "0010",
+      "Properties": {
+       "IsTrial": false,
+       "IsPreOrder": false,
+       "IsBundle": true,
+       "BundledSkus": [
+        {
+         "BigId": "9PD22XJDR74N",
+         "IsPrimary": false
+        },
+        {
+         "BigId": "9PP5G1F0C2B6",
+         "IsPrimary": false
+        }
+       ]
+      }
+     }
+    },
+    {
+     "Sku": {
+      "SkuId": "0017",
+      "Properties": {
+       "IsTrial": false,
+       "IsPreOrder": true,
+       "IsBundle": true,
+       "BundledSkus": [
+        {
+         "BigId": "9PD22XJDR74N",
+         "IsPrimary": false
+        },
+        {
+         "BigId": "9PP5G1F0C2B6",
+         "IsPrimary": false
+        }
+       ]
+      }
+     }
+    }
+   ]
+  },
+  {
+   "ProductId": "9PP5G1F0C2B6",
+   "ProductType": "Game",
+   "ProductKind": "Game",
+   "LocalizedProperties": [
+    {
+     "ProductTitle": "Halo Infinite",
+     "PublisherName": "Xbox Game Studios",
+     "Images": [
+      {
+       "ImagePurpose": "Poster",
+       "Uri": "//store-images.s-microsoft.com/image/apps.3823.14330850369313893.a687698c-b891-44f6-9576-fe28978ce915.5aada4fa-d850-4eb5-9100-33a81a5cde09",
+       "Width": 1440,
+       "Height": 2160
+      },
+      {
+       "ImagePurpose": "BoxArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.54714.14330850369313893.a687698c-b891-44f6-9576-fe28978ce915.27742122-f062-410c-84f4-0fcf7b89524e",
+       "Width": 1080,
+       "Height": 1080
+      },
+      {
+       "ImagePurpose": "Logo",
+       "Uri": "//store-images.s-microsoft.com/image/apps.52504.14330850369313893.a687698c-b891-44f6-9576-fe28978ce915.95e011f8-5d23-40a4-abde-4ae00a4bb6f7",
+       "Width": 300,
+       "Height": 300
+      },
+      {
+       "ImagePurpose": "BrandedKeyArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.46665.14330850369313893.a687698c-b891-44f6-9576-fe28978ce915.6769543c-29ba-4f2a-a0ea-6d530c350d7d",
+       "Width": 584,
+       "Height": 800
+      },
+      {
+       "ImagePurpose": "SuperHeroArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.47030.14330850369313893.a687698c-b891-44f6-9576-fe28978ce915.ce613c75-aac4-4721-9941-6a254d061488",
+       "Width": 3840,
+       "Height": 2160
+      },
+      {
+       "ImagePurpose": "TitledHeroArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.20857.14330850369313893.a687698c-b891-44f6-9576-fe28978ce915.8d309ca3-e6ec-47e8-8009-a65f7e2e907b",
+       "Width": 1920,
+       "Height": 1080
+      },
+      {
+       "ImagePurpose": "FeaturePromotionalSquareArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.31815.14330850369313893.a687698c-b891-44f6-9576-fe28978ce915.4af92722-204c-4a75-be62-1701d33b5c13",
+       "Width": 1080,
+       "Height": 1080
+      }
+     ]
+    }
+   ],
+   "Properties": {
+    "PackageFamilyName": "Microsoft.254428597CFE2_8wekyb3d8bbwe",
+    "ProductGroupName": "Halo Infinite Partner Center"
+   },
+   "DisplaySkuAvailabilities": [
+    {
+     "Sku": {
+      "SkuId": "0010",
+      "Properties": {
+       "IsTrial": false,
+       "IsPreOrder": false,
+       "IsBundle": false,
+       "Packages": [
+        {
+         "PackageFormat": "XVC",
+         "PlatformDependencies": [
+          {
+           "MaxTested": 0,
+           "MinVersion": 0,
+           "PlatformName": "Windows.Xbox"
+          }
+         ],
+         "Architectures": [
+          "x64"
+         ],
+         "ContentId": "0698b936-d300-4451-b9a0-0be0514bbbe5",
+         "PackageFullName": "",
+         "MaxDownloadSizeInBytes": 126834434048
+        },
+        {
+         "PackageFormat": "MSIXVC",
+         "PlatformDependencies": [
+          {
+           "MaxTested": 2814750970478592,
+           "MinVersion": 2814750970478592,
+           "PlatformName": "Windows.Desktop"
+          }
+         ],
+         "Architectures": [
+          "x64"
+         ],
+         "ContentId": "513710f5-ab8e-4d7c-9ed5-d0ba94dcfb33",
+         "PackageFullName": "",
+         "MaxDownloadSizeInBytes": 134515593216
+        },
+        {
+         "PackageFormat": "XVC",
+         "PlatformDependencies": [
+          {
+           "MaxTested": 0,
+           "MinVersion": 0,
+           "PlatformName": "Windows.Xbox"
+          }
+         ],
+         "Architectures": [
+          "x64"
+         ],
+         "ContentId": "0698b936-d300-4451-b9a0-0be0514bbbe5",
+         "PackageFullName": "",
+         "MaxDownloadSizeInBytes": 151647887360
+        }
+       ]
+      }
+     }
+    },
+    {
+     "Sku": {
+      "SkuId": "0017",
+      "Properties": {
+       "IsTrial": false,
+       "IsPreOrder": true,
+       "IsBundle": false,
+       "Packages": [
+        {
+         "PackageFormat": "XVC",
+         "PlatformDependencies": [
+          {
+           "MaxTested": 0,
+           "MinVersion": 0,
+           "PlatformName": "Windows.Xbox"
+          }
+         ],
+         "Architectures": [
+          "x64"
+         ],
+         "ContentId": "0698b936-d300-4451-b9a0-0be0514bbbe5",
+         "PackageFullName": "",
+         "MaxDownloadSizeInBytes": 126834434048
+        },
+        {
+         "PackageFormat": "MSIXVC",
+         "PlatformDependencies": [
+          {
+           "MaxTested": 2814750970478592,
+           "MinVersion": 2814750970478592,
+           "PlatformName": "Windows.Desktop"
+          }
+         ],
+         "Architectures": [
+          "x64"
+         ],
+         "ContentId": "513710f5-ab8e-4d7c-9ed5-d0ba94dcfb33",
+         "PackageFullName": "",
+         "MaxDownloadSizeInBytes": 134515593216
+        },
+        {
+         "PackageFormat": "XVC",
+         "PlatformDependencies": [
+          {
+           "MaxTested": 0,
+           "MinVersion": 0,
+           "PlatformName": "Windows.Xbox"
+          }
+         ],
+         "Architectures": [
+          "x64"
+         ],
+         "ContentId": "0698b936-d300-4451-b9a0-0be0514bbbe5",
+         "PackageFullName": "",
+         "MaxDownloadSizeInBytes": 151647887360
+        }
+       ]
+      }
+     }
+    },
+    {
+     "Sku": {
+      "SkuId": "0011",
+      "Properties": {
+       "IsTrial": true,
+       "IsPreOrder": false,
+       "IsBundle": false,
+       "Packages": [
+        {
+         "PackageFormat": "XVC",
+         "PlatformDependencies": [
+          {
+           "MaxTested": 0,
+           "MinVersion": 0,
+           "PlatformName": "Windows.Xbox"
+          }
+         ],
+         "Architectures": [
+          "x64"
+         ],
+         "ContentId": "0698b936-d300-4451-b9a0-0be0514bbbe5",
+         "PackageFullName": "",
+         "MaxDownloadSizeInBytes": 126834434048
+        },
+        {
+         "PackageFormat": "MSIXVC",
+         "PlatformDependencies": [
+          {
+           "MaxTested": 2814750970478592,
+           "MinVersion": 2814750970478592,
+           "PlatformName": "Windows.Desktop"
+          }
+         ],
+         "Architectures": [
+          "x64"
+         ],
+         "ContentId": "513710f5-ab8e-4d7c-9ed5-d0ba94dcfb33",
+         "PackageFullName": "",
+         "MaxDownloadSizeInBytes": 134515593216
+        },
+        {
+         "PackageFormat": "XVC",
+         "PlatformDependencies": [
+          {
+           "MaxTested": 0,
+           "MinVersion": 0,
+           "PlatformName": "Windows.Xbox"
+          }
+         ],
+         "Architectures": [
+          "x64"
+         ],
+         "ContentId": "0698b936-d300-4451-b9a0-0be0514bbbe5",
+         "PackageFullName": "",
+         "MaxDownloadSizeInBytes": 151647887360
+        }
+       ]
+      }
+     }
+    }
+   ]
+  },
+  {
+   "ProductId": "9PGW18NPBZV5",
+   "ProductType": "Game",
+   "ProductKind": "Game",
+   "LocalizedProperties": [
+    {
+     "ProductTitle": "Minecraft Launcher",
+     "PublisherName": "Microsoft Studios",
+     "Images": [
+      {
+       "ImagePurpose": "Logo",
+       "Uri": "//store-images.s-microsoft.com/image/apps.1815.14247769038588514.a7fa20d7-bc1c-464b-bf78-16dfcd742fe5.20b70e8c-ab2e-45b9-b8c3-2390ebb38f59",
+       "Width": 300,
+       "Height": 300
+      },
+      {
+       "ImagePurpose": "BoxArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.52476.14247769038588514.a7fa20d7-bc1c-464b-bf78-16dfcd742fe5.d7a8f421-8edd-41e0-925b-4c7dfea0483b",
+       "Width": 2160,
+       "Height": 2160
+      },
+      {
+       "ImagePurpose": "TitledHeroArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.42446.14247769038588514.a7fa20d7-bc1c-464b-bf78-16dfcd742fe5.1aa80fc8-cf92-43f6-9efb-17fa817cf339",
+       "Width": 1920,
+       "Height": 1080
+      },
+      {
+       "ImagePurpose": "BrandedKeyArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.51859.14247769038588514.16fb8346-aeb3-4939-8ef6-f5fefab5177f.ab48e6a8-bf78-49e2-b8d2-77c9772d6ccc",
+       "Width": 584,
+       "Height": 800
+      },
+      {
+       "ImagePurpose": "Poster",
+       "Uri": "//store-images.s-microsoft.com/image/apps.19881.14247769038588514.16fb8346-aeb3-4939-8ef6-f5fefab5177f.9e8fc093-2e52-4c04-86cb-a94e29ccede5",
+       "Width": 1440,
+       "Height": 2160
+      },
+      {
+       "ImagePurpose": "SuperHeroArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.43152.14247769038588514.3ce72ba0-ff44-4b91-b1ca-eef499b58987.a75b6a42-9c31-452f-b8ec-e955d3ab3d00",
+       "Width": 3840,
+       "Height": 2160
+      }
+     ]
+    }
+   ],
+   "Properties": {
+    "PackageFamilyName": "Microsoft.4297127D64EC6_8wekyb3d8bbwe",
+    "ProductGroupName": "Minecraft Bedrock PG"
+   },
+   "DisplaySkuAvailabilities": [
+    {
+     "Sku": {
+      "SkuId": "0010",
+      "Properties": {
+       "IsTrial": false,
+       "IsPreOrder": false,
+       "IsBundle": false,
+       "Packages": [
+        {
+         "PackageFormat": "MSIXVC",
+         "PlatformDependencies": [
+          {
+           "MaxTested": 2814750970478592,
+           "MinVersion": 2814750970478592,
+           "PlatformName": "Windows.Desktop"
+          }
+         ],
+         "Architectures": [
+          "x64"
+         ],
+         "ContentId": "c7d69349-36c0-45a2-b72b-8de96007332e",
+         "PackageFullName": "",
+         "MaxDownloadSizeInBytes": 10616832
+        }
+       ]
+      }
+     }
+    },
+    {
+     "Sku": {
+      "SkuId": "0017",
+      "Properties": {
+       "IsTrial": false,
+       "IsPreOrder": true,
+       "IsBundle": false,
+       "Packages": [
+        {
+         "PackageFormat": "MSIXVC",
+         "PlatformDependencies": [
+          {
+           "MaxTested": 2814750970478592,
+           "MinVersion": 2814750970478592,
+           "PlatformName": "Windows.Desktop"
+          }
+         ],
+         "Architectures": [
+          "x64"
+         ],
+         "ContentId": "c7d69349-36c0-45a2-b72b-8de96007332e",
+         "PackageFullName": "",
+         "MaxDownloadSizeInBytes": 10616832
+        }
+       ]
+      }
+     }
+    },
+    {
+     "Sku": {
+      "SkuId": "0011",
+      "Properties": {
+       "IsTrial": true,
+       "IsPreOrder": false,
+       "IsBundle": false,
+       "Packages": [
+        {
+         "PackageFormat": "MSIXVC",
+         "PlatformDependencies": [
+          {
+           "MaxTested": 2814750970478592,
+           "MinVersion": 2814750970478592,
+           "PlatformName": "Windows.Desktop"
+          }
+         ],
+         "Architectures": [
+          "x64"
+         ],
+         "ContentId": "c7d69349-36c0-45a2-b72b-8de96007332e",
+         "PackageFullName": "",
+         "MaxDownloadSizeInBytes": 10616832
+        }
+       ]
+      }
+     }
+    }
+   ]
+  },
+  {
+   "ProductId": "9NBLGGH4SX97",
+   "ProductType": "Durable",
+   "ProductKind": "Durable",
+   "LocalizedProperties": [
+    {
+     "ProductTitle": "Welcome to the Ark",
+     "PublisherName": "Microsoft Studios",
+     "Images": [
+      {
+       "ImagePurpose": "Logo",
+       "Uri": "//store-images.s-microsoft.com/image/apps.7936.13510798887590082.1bf03730-72bf-46f0-b5dc-cf78b69e6141.0c95aa4f-ffb2-4911-ba09-db8b602d413f",
+       "Width": 300,
+       "Height": 300
+      },
+      {
+       "ImagePurpose": "Poster",
+       "Uri": "//store-images.s-microsoft.com/image/apps.19940.13510798887590082.7cc340e9-7d0e-4bff-bd8a-caca4e67375c.5029f937-7e2e-436d-90a3-87594f4d9f5e",
+       "Width": 720,
+       "Height": 1080
+      },
+      {
+       "ImagePurpose": "BoxArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.32009.13510798887590082.cf336d28-8070-4740-835d-53e74c0c545f.965ff211-31ae-465f-8aa8-304fa5062f88",
+       "Width": 1080,
+       "Height": 1080
+      },
+      {
+       "ImagePurpose": "BrandedKeyArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.18861.13510798887590082.66c208b0-9d29-4964-b936-fc174eeb9e80.a2194c62-d23b-4a01-8034-da8791bf8cd1",
+       "Width": 584,
+       "Height": 800
+      },
+      {
+       "ImagePurpose": "TitledHeroArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.10666.13510798887590082.48abbeb4-95f7-448a-85f6-8fdb984c6a40.07e3df08-f073-4f49-ac78-21371a2afb72",
+       "Width": 1920,
+       "Height": 1080
+      },
+      {
+       "ImagePurpose": "FeaturePromotionalSquareArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.29913.13510798887590082.1358de22-63b8-40e8-9270-3dc582362d85.daf04d6f-9af0-4827-b290-c0be7a7ab7b5",
+       "Width": 1080,
+       "Height": 1080
+      },
+      {
+       "ImagePurpose": "Hero",
+       "Uri": "//store-images.s-microsoft.com/image/apps.54808.13510798887590082.909176ae-e0d4-43e6-a0bc-5db80a266eb8.dd9b690a-97ed-41d9-8202-951c3960e830",
+       "Width": 2400,
+       "Height": 1200
+      },
+      {
+       "ImagePurpose": "SuperHeroArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.47197.13510798887590082.29327a9c-07bb-4483-a84c-c6a0e8c36873.e6dfbecc-649a-490a-b0ff-e947496c14a6",
+       "Width": 1920,
+       "Height": 1080
+      }
+     ]
+    }
+   ],
+   "Properties": {
+    "PackageFamilyName": "Microsoft.Episode1_8wekyb3d8bbwe",
+    "ProductGroupName": "Halo Wars 2"
+   },
+   "DisplaySkuAvailabilities": [
+    {
+     "Sku": {
+      "SkuId": "0017",
+      "Properties": {
+       "IsTrial": false,
+       "IsPreOrder": true,
+       "IsBundle": false
+      }
+     }
+    },
+    {
+     "Sku": {
+      "SkuId": "0010",
+      "Properties": {
+       "IsTrial": false,
+       "IsPreOrder": false,
+       "IsBundle": false
+      }
+     }
+    }
+   ]
+  },
+  {
+   "ProductId": "9PD22XJDR74N",
+   "ProductType": "Durable",
+   "ProductKind": "Durable",
+   "LocalizedProperties": [
+    {
+     "ProductTitle": "Halo Infinite (Campaign)",
+     "PublisherName": "Xbox Game Studios",
+     "Images": [
+      {
+       "ImagePurpose": "BrandedKeyArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.5647.14158640560789719.0ace7ee4-abf5-4ad7-83ca-06d62c241bf1.4f93ce74-1601-4b9c-9cf8-64a6ac515eca",
+       "Width": 584,
+       "Height": 800
+      },
+      {
+       "ImagePurpose": "FeaturePromotionalSquareArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.7011.14158640560789719.0ace7ee4-abf5-4ad7-83ca-06d62c241bf1.fe7982ef-0c00-4ac8-821f-30a974dccda3",
+       "Width": 1080,
+       "Height": 1080
+      },
+      {
+       "ImagePurpose": "Poster",
+       "Uri": "//store-images.s-microsoft.com/image/apps.21536.14158640560789719.0ace7ee4-abf5-4ad7-83ca-06d62c241bf1.9e2fd847-8ae8-4344-8cc5-bdee7eb9ebfc",
+       "Width": 1440,
+       "Height": 2160
+      },
+      {
+       "ImagePurpose": "BoxArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.56579.14158640560789719.0ace7ee4-abf5-4ad7-83ca-06d62c241bf1.335bbd79-8495-44cf-9732-0fd940a03c17",
+       "Width": 2160,
+       "Height": 2160
+      },
+      {
+       "ImagePurpose": "Logo",
+       "Uri": "//store-images.s-microsoft.com/image/apps.54721.14158640560789719.5975ceb8-1e3a-4195-866e-b1f778e482ce.ffe37094-9d77-482b-9525-71c276ce9858",
+       "Width": 300,
+       "Height": 300
+      },
+      {
+       "ImagePurpose": "TitledHeroArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.24990.14158640560789719.5975ceb8-1e3a-4195-866e-b1f778e482ce.23b0e2e5-59e4-42b0-9aab-fe5701a436c1",
+       "Width": 1920,
+       "Height": 1080
+      },
+      {
+       "ImagePurpose": "SuperHeroArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.50670.14158640560789719.0ace7ee4-abf5-4ad7-83ca-06d62c241bf1.9e32d21a-9446-45b7-9ce7-b3df69914c54",
+       "Width": 3840,
+       "Height": 2160
+      },
+      {
+       "ImagePurpose": "SuperHeroArt",
+       "Uri": "//store-images.s-microsoft.com/image/apps.50670.14158640560789719.0ace7ee4-abf5-4ad7-83ca-06d62c241bf1.9e32d21a-9446-45b7-9ce7-b3df69914c54",
+       "Width": 3840,
+       "Height": 2160
+      }
+     ]
+    }
+   ],
+   "Properties": {
+    "PackageFamilyName": "Microsoft.HaloInfinite_8wekyb3d8bbwe",
+    "ProductGroupName": "Halo Infinite Partner Center"
+   },
+   "DisplaySkuAvailabilities": [
+    {
+     "Sku": {
+      "SkuId": "0017",
+      "Properties": {
+       "IsTrial": false,
+       "IsPreOrder": true,
+       "IsBundle": false
+      }
+     }
+    },
+    {
+     "Sku": {
+      "SkuId": "0010",
+      "Properties": {
+       "IsTrial": false,
+       "IsPreOrder": false,
+       "IsBundle": false
+      }
+     }
+    }
+   ]
+  }
+ ]
+}

@@ -160,6 +160,9 @@ best-effort and reported as unconfirmed; transport loss/SIGKILL can leave cancel
   xbox:wait             wait (5 min at most) for that sign-in to finish; a refusal ends the action
   xbox:signout          Accounts' Sign out row and its confirmation; the synthetic device stays
   xbox:status           log signed in/out only (no account or device identifiers), e.g. after relaunch
+  xbox:library          the Library on the Xbox chip once its refresh (entitlements, catalogue) ends;
+                         logs counts only: copies (owned, PC Game Pass), products left out, whether
+                         the pilot (Hollow Knight: Voidheart Edition) is listed. Signed in only
   xbox:reset-device     Developer's Reset Xbox device row and confirmation (signs out); the old
                          device must be unlinked at account.microsoft.com/devices/content
   set:KEY=VALUE          a UserDefaults key, as a Settings control sets it (set:metalHUD=true;
@@ -477,7 +480,7 @@ ACTION_RE = re.compile((r"^(?:(?:install|pause-resume|queue|downloading):[0-9]+|
                        r"|hud:(?:on|off)|open:[a-z]+(?:-[A-Za-z0-9 ._-]+(?:#[a-z]+)?)?|open:library#(?:{c})|open:settings#(?:accounts|steam|graphics|downloads|controls|controllers|gyro|controller|storage|setup|about|launchers|developer|account|jit|memory|diagnostics|pairing|probes|logs)|open:licences(?:#[a-z0-9 ._-]+)?|pad:(?:{b})(?:\+(?:{b}))*|set:[A-Za-z0-9._-]+=[^,]*"
                        r"|wait:[0-9]{1,3}|tap:(?:0(?:\.[0-9]+)?|1(?:\.0+)?):(?:0(?:\.[0-9]+)?|1(?:\.0+)?)|menu:(?:open|resume|controls|screenshot|overlay|controller|quit)"
                        r"|touch:{t}(?:\+{t})*(?:@[0-9]{1,5})?|gyro:{g}(?:/{g})*|gesture:three-finger-tap|web:(?:wait|close)|web:click:[A-Za-z0-9 ._-]+"
-                       r"|xbox:(?:signin|wait|signout|status|reset-device)"
+                       r"|xbox:(?:signin|wait|signout|status|library|reset-device)"
                        r"|jit:(?:setup|pair|continue|open-settings|cancel|wait)|probe:settings-url-[0-9]|probe:helper-(?:(?:exit|kill)(?:-hold)?|report)|probe:memory-(?:64|2048|4096|donor-(?:tagged|purgeable)-(?:2048|4096)|donors-(?:6144|8192|10240)|pool-verify|pool-zero|pool-gpu)|background:(?:[1-9][0-9]|[1-5][0-9]{2}|600)|probe:relaunch|probe:native-auth|probe:pairing(?:-cancel|-use)?)$").replace("{b}", PAD_BUTTONS).replace("{t}", TOUCH_CONTROL)
                        .replace("{g}", GYRO_STEP).replace("{c}", "|".join(LIBRARY_CHIPS)))
 

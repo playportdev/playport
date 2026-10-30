@@ -1305,6 +1305,27 @@ final class LibraryListTests: XCTestCase {
         XCTAssertEqual(LibraryFilter.xbox.next(in: LibraryFilter.shown(stores: [.xbox])), .all)
     }
 
+    /// PLA-492: Hollow Knight installed from Steam and on the account's PC Game Pass (its
+    /// Voidheart Edition, `xbox-9MW9469V91LM`) are two copies, never one merged by name;
+    /// an installed Game Pass copy joins its own Xbox listing only.
+    func testASteamCopyAndAGamePassCopyOfOneGameStayTwoCopies() {
+        let steam = title("Hollow Knight", app: 367520)
+        let gamePass = LibraryList.Owned(key: StoreGameKey(store: .xbox, id: "9MW9469V91LM"), name: "Hollow Knight")
+        let e = LibraryList.entries(titles: [steam], owned: owned + [gamePass])
+        let copies = LibraryList.shown(e, filter: .all, sort: .name, search: "Hollow")
+        XCTAssertEqual(copies.map(\.id), ["app-367520", "xbox-9MW9469V91LM"])
+        XCTAssertEqual(copies.map(\.source), [.steam, .xbox])
+        XCTAssertEqual(copies.map(\.installed), [true, false])
+        XCTAssertEqual(LibraryList.duplicateSourceIDs(e), ["app-367520", "xbox-9MW9469V91LM"], "each carries its source badge")
+
+        var installed = title("Hollow Knight", app: nil)
+        installed.id = "xbox-9MW9469V91LM"; installed.store = .xbox; installed.storeID = "9MW9469V91LM"
+        let both = LibraryList.entries(titles: [steam, installed], owned: owned + [gamePass])
+        XCTAssertEqual(LibraryList.shown(both, filter: .all, sort: .name, search: "Hollow").map(\.id), ["app-367520", "xbox-9MW9469V91LM"])
+        XCTAssertEqual(LibraryList.shown(both, filter: .xbox, sort: .name).map { "\($0.id) \($0.installed) \($0.owned)" },
+                       ["xbox-9MW9469V91LM true true"])
+    }
+
     func testStoreCopiesJoinTheirOwnStoreOnly() {
         var gog = title("Hollow Knight", app: nil, played: 10)
         gog.id = "gog-1308320804"

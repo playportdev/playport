@@ -208,6 +208,7 @@ import GOGClientKit
 import PlayportKit
 import SteamClientKit
 import SwiftUI
+import XboxClientKit
 
 @MainActor
 enum UIDriver {
@@ -583,6 +584,22 @@ enum UIDriver {
                         guard account.state == .signedIn else { return finish("action=\(action) failed: \(account.error ?? "Xbox sign-in did not finish")") }
                     } else if id == "status" {
                         log("xbox: \(account.state == .signedIn ? "signed in" : "signed out")")
+                    } else if id == "library" {
+                        // The Library on the Xbox chip, its refresh finished; counts only, no account data.
+                        guard account.state == .signedIn else { return finish("action=\(action) refused: Xbox is not signed in") }
+                        _ = AppNavigation.shared.open("library")
+                        LibraryGrid.shared.filter = .xbox
+                        let games = XboxGames.shared
+                        await games.refresh()
+                        for _ in 0..<1200 where games.loading { try await pause(.milliseconds(250)) }
+                        guard games.error == nil, let snapshot = games.snapshot else {
+                            return finish("action=\(action) failed: \(games.error ?? "the Xbox library did not load")")
+                        }
+                        let owned = snapshot.copies.filter { $0.access == .owned }.count
+                        let pilot = snapshot.copies.contains { $0.id == "9MW9469V91LM" } ? "listed" : "not listed"
+                        log("xbox: library \(snapshot.copies.count) copies (\(owned) owned, \(snapshot.copies.count - owned) PC Game Pass), "
+                            + "\(snapshot.leftOut) left out; the pilot is \(pilot)")
+                        try await pause(.milliseconds(1500)) // the tiles' art
                     } else {
                         let row: String
                         switch id {
