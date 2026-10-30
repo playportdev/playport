@@ -57,11 +57,14 @@ enum XboxPlay {
             return .failure(.failed("The game's MicrosoftGame.config is missing from its folder; Verify the game."))
         }
 
-        // 1. The licence: Microsoft's verdict, or the stored one while it can't be reached.
+        // 1. The licence: Microsoft's verdict, or the stored one while it can't be reached. A
+        //    verdict also starts or cancels the copy's lapse (Dev/XboxLapse.swift).
         let licence: XboxLicence
         do {
             let market = Locale.current.region?.identifier ?? "US"
-            switch XboxPlayRefusal.check(try await account.session.licence(contentID: rec.contentID, market: market)) {
+            let result = try await account.session.licence(contentID: rec.contentID, market: market)
+            XboxLapses.shared.record(t.key, result)
+            switch XboxPlayRefusal.check(result) {
             case .success(let l): licence = l
             case .failure(let refusal): return .failure(.refused(refusal))
             }
@@ -97,7 +100,7 @@ enum XboxPlay {
         // 3. The bridge: the runtime's tickets for this copy and its add-ons (PLA-502), from now to the launch's end.
         let addOns = XboxGameAddOns.play(base: id, folder: folder, found: XboxGameAddOns.shared.found[id] ?? [], installer: installer)
         let service = XboxBridgeService(copy: XboxBridgeCopy(productID: id, manifest: manifest).adding(related: addOns.related),
-                                        account: account.session, updates: nil, log: log)
+                                        account: account.session, updates: XboxUpdateChecker(installer: installer), log: log)
         let listener = XboxBridgeListener(service: service, log: log)
         do { try await listener.start() } catch {
             listener.stop()

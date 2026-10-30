@@ -101,6 +101,8 @@ final class XboxGames: ObservableObject {
         } catch {
             self.error = "The Xbox library can't be loaded. Try again."
         }
+        // Each installed copy's licence (its lapse, Dev/XboxLapse.swift), then the removals due.
+        await XboxLapses.shared.refreshed()
     }
 
     private func forget() {

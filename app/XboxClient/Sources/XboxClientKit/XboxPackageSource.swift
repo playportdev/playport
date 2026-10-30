@@ -73,7 +73,7 @@ final class XboxPackageSource: ContentChunkSource, @unchecked Sendable {
     let prefix: XboxLocalFile
     let remote: any XboxPackageBytes
     let log: Logger
-    private let ciphers: [UInt32: XboxXTS]
+    let ciphers: [UInt32: XboxXTS]
 
     init(package: XboxPackage, prefix: URL, remote: any XboxPackageBytes, keys: [UUID: [UInt8]], log: Logger) throws {
         self.package = package; self.prefix = try XboxLocalFile(prefix); self.remote = remote; self.log = log

@@ -35,9 +35,9 @@ struct XboxTestPackage {
     var prefixBytes: Int
     var units: [String: [UInt32]]
 
-    static func config(exe: String = "Game.exe") -> [UInt8] {
+    static func config(exe: String = "Game.exe", version: String = "1.2.3.0") -> [UInt8] {
         Array(("\u{FEFF}<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<Game configVersion=\"1\">\n"
-            + "  <Identity Name=\"Playport.TestGame\" Publisher=\"CN=Playport\" Version=\"1.2.3.0\" />\n"
+            + "  <Identity Name=\"Playport.TestGame\" Publisher=\"CN=Playport\" Version=\"\(version)\" />\n"
             + "  <ExecutableList>\n    <Executable Name=\"\(exe)\" Id=\"Game\" TargetDeviceFamily=\"PC\" />\n  </ExecutableList>\n"
             + "  <StoreId>9TESTGAME001</StoreId>\n  <MSAAppId>0000000040ABCDEF</MSAAppId>\n  <TitleId>1234ABCD</TitleId>\n"
             + "  <ExtendedAttributeList>\n    <ExtendedAttribute Name=\"Scid\" Value=\"\(scid)\" />\n  </ExtendedAttributeList>\n</Game>\n").utf8)
@@ -63,7 +63,9 @@ struct XboxTestPackage {
         ], segmentMetadata: segmentMetadata)
     }
 
-    static func build(_ files: [File], segmentMetadata: Bool = true) -> XboxTestPackage {
+    /// `version`: major, minor, build, revision (the header's, the package name's and MicrosoftGame.config's).
+    static func build(_ files: [File], segmentMetadata: Bool = true, version: [UInt16] = [1, 2, 3, 0]) -> XboxTestPackage {
+        let versionText = version.map(String.init).joined(separator: ".")
         let page = Self.page
         func pages(_ n: Int) -> Int { (n + page - 1) / page }
 
@@ -157,7 +159,7 @@ struct XboxTestPackage {
         }
 
         // User data: MicrosoftGame.config and (optionally) SegmentMetadata.bin.
-        var packaged: [(String, [UInt8])] = [("MicrosoftGame.config", config())]
+        var packaged: [(String, [UInt8])] = [("MicrosoftGame.config", config(version: versionText))]
         if segmentMetadata {
             let ordered = files.filter { !$0.encrypted } + files.filter(\.encrypted)
             var paths = [UInt8](), segs = [UInt8]()
@@ -176,7 +178,7 @@ struct XboxTestPackage {
             return b + [UInt8](repeating: 0, count: 2 * chars - b.count)
         }
         var user = le32(16) + le32(1) + le32(0) + le32(0)
-        user += le32(1) + utf16Field("Playport.TestGame_1.2.3.0_x64__test", 260) + le32(UInt32(packaged.count))
+        user += le32(1) + utf16Field("Playport.TestGame_\(versionText)_x64__test", 260) + le32(UInt32(packaged.count))
         var blob = [UInt8](), entries = [UInt8]()
         let dataStart = 528 + packaged.count * 528
         for (name, bytes) in packaged {
@@ -262,7 +264,7 @@ struct XboxTestPackage {
         hput(XboxXTS.guidBytes(contentID), 0x220)
         hput(top, 0x240)
         hput(le32(0) + le32(1) + le32(0) + le32(UInt32(user.count)) + le32(UInt32(xvcLength)) + le32(0) + le32(0xAA000), 0x280)
-        hput(le16(0) + le16(3) + le16(2) + le16(1), 0x3BC)
+        hput(le16(Int(version[3])) + le16(Int(version[2])) + le16(Int(version[1])) + le16(Int(version[0])), 0x3BC)
         header[0x470] = 1
         bytes.replaceSubrange(0..<(3 * page), with: header)
 

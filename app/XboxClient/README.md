@@ -87,7 +87,7 @@ Microsoft's offline grant. The result is typed:
   only one: an HTTP 2xx body holding `satisfactionFailure` with a numeric reason
   and no `license`. Reason 501 is `.deviceLimit` (the device, not the copy; it
   deletes every copy's keys); any other reason is `.refused` (that copy's keys
-  deleted). A licence lapse counts `.refused` only.
+  deleted). A licence lapse counts `.refused` only (`copyLicensed`, below).
 - `.unavailable(XboxLicenceProblem)` is never a verdict: network, HTTP
   408/429/5xx (`service`), any other HTTP error including 401 and 403
   (`rejected`; Nexus counts 403 as a refusal, but it carries no licensing
@@ -207,6 +207,51 @@ No retail MSIXVC2 title was in the PC Game Pass or console catalogues on
 2026-10-30, so the format is checked against the two references and a synthetic
 package only (below).
 
+## Updates (PLA-501)
+
+`XboxUpdates.swift`, after Xodus Nexus's `xodus-store-updates` patch.
+
+- **Detection.** `XboxInstaller.updateCheck(_:)` asks GetBasePackage (the
+  install's call) for the record's content ID and compares its `VersionId`'s
+  first four parts with the record's version as four 16-bit numbers
+  (`XboxPackageVersion`). It answers `.available` or `.current`, or throws
+  (no record, Microsoft unreachable, no version). The content ID is the
+  record's (the package's VDUID), not displaycatalog's as in Nexus.
+- **The bridge's checker.** `XboxUpdateChecker(installer:)` is the
+  `XboxPackageUpdates` for a play. It answers for the version the runtime
+  sends, against GetBasePackage for the running copy's record. No record, a
+  malformed version, an error or 60 s without an answer (Nexus's limit) is
+  `.unknown`, so the reply is `E_FAIL`.
+- **Install.** `XboxInstaller.update(product:title:)` fetches the new
+  package's metadata (MSIXVC: the prefix with its hash tree; MSIXVC2: the
+  ZIP's metadata by range), then compares each of its files with the
+  installed file at the same path (any case), stored the same way:
+  - MSIXVC: every installed page against the new hash tree's level-0 entry.
+    A plain or kept-encrypted page is hashed as it is. A decrypted page is
+    encrypted again with its entry's data unit and the region's key first, so
+    it still matches when its file moved in the package. A kept-encrypted page
+    that moved has new data units and ciphertext, so it is fetched.
+  - MSIXVC2: every segment against the installed bytes at the same offset in
+    the file, by the segment's own hash.
+  - A file that matches whole stays in place (its SHA-1 is taken on the way).
+    Any other file is staged whole through ContentKit's resumable engine. Its
+    matching pages or segments are read from the installed file and checked
+    again as they are copied (one that no longer matches is fetched instead).
+    The rest come from the CDN. So only changed pages or segments are fetched.
+  - Staged files are renamed over the installed ones, files the package no
+    longer has are removed, and the record is rewritten last. A stop before
+    then leaves the copy and its record as they were; the next update resumes
+    from the journal (stage `xbox-<ID>_<version>-update`).
+  - With the copy's folder gone there is nothing to compare: it is installed
+    again whole (`reinstalled`). A copy already at the latest version fetches
+    nothing.
+- GetBasePackage also lists `update-<from version>-….xsp` files beside the
+  package (Microsoft's per-version patches). Their format is not known here and
+  they are not used: the comparison above needs only the new package.
+- Cost on the device: the update reads the whole installed copy once to compare
+  it, and encrypts each decrypted page again (software AES-XTS). A changed file
+  needs room for its staged copy until it is renamed in.
+
 ## The bridge
 
 During one Xbox play the host answers the guest's `xgameruntime` over Xodus's
@@ -239,9 +284,10 @@ keyed loopback bridge (decision
     must be the copy, and every product (or `PRODUCT/SKU`) the copy or one of
     its related products.
   - `STORE_PACKAGE_UPDATES_REQUEST` (9 → 10) passes the copy's version to the
-    injected `XboxPackageUpdates`. `Checked` true with `Count` 0 is sent only
-    for a verified current package. With no checker, or an unknown answer, the
-    reply is `E_FAIL`, never an empty success.
+    injected `XboxPackageUpdates`; the dev app's is `XboxUpdateChecker`
+    (below). `Checked` true with `Count` 0 is sent only for a verified current
+    package. With no checker, or an unknown answer, the reply is `E_FAIL`,
+    never an empty success.
   - Everything is refused before sign-in, for another client or product, and for
     any other type (an empty reply of type + 1).
 - Sign-out (and device reset) runs `XboxSession.onSignOut` handlers before the
@@ -325,6 +371,24 @@ A Play of an installed copy (the dev app's `Dev/XboxPlay.swift`) goes through, i
   `XPackageMount*`/`XPackageGetMountPath*` or `XStoreQueryAssociatedProducts`
   (`E_NOTIMPL`): a game that mounts its add-on's package to read it still fails.
 
+## A licence lapse (PLA-505)
+
+`XboxLicenceResult.copyLicensed` (`XboxLicenceLapse.swift`) is Microsoft's verdict
+on the copy: `true` for a licence it granted just now (`.microsoft`), `false` for
+`.refused(.refused)`, `nil` for everything else: the stored licence standing in
+(`.cache`), the device limit (the device, not the copy) and every `.unavailable`.
+PlayportKit's `LicenceLapses` (`LicenceLapse.swift`) is the store-neutral ledger:
+the first refusal starts a lapse and its removal falls due 7 days later
+(`LicenceLapses.grace`); a grant cancels it; no verdict changes nothing; past the
+grace the removal waits while `UnsyncedSaves` says the copy has saves not in the
+cloud or can't tell (`nil`); the player may uninstall earlier. The dev app's
+`Dev/XboxLapse.swift` feeds it from every Play and every Library refresh (each
+installed copy's licence), keeps it in the state root (`lapses.json`), shows the
+notice with Play off, Check licence and Uninstall now on the copy's page, and
+uninstalls a due copy, keeping its saves, at app start or a Library refresh. Until
+PLA-500's cloud saves are wired in (`XboxCloudSaves.unsynced(productID:)`) the
+saves are unknown, so every due removal is held.
+
 ## Provenance and offline checks
 
 Written from Xodus `514dd56f360a4bdf12f4acde5148bac5ce5f957f`:
@@ -400,7 +464,10 @@ synthetic MSIXVC2 (31 KiB: two chunks, two boxes, six files, compressed,
 encrypted, shared and plain segments, a ZIP64 entry) written by
 `Tests/msixvc2-fixture.py` with Python's zipfile, zlib and `cryptography`,
 independently of the reader, under a test licence key (bytes 0x40…0x5f);
-running the script again gives the same bytes.
+running the script again gives the same bytes. `msixvc2-synthetic-v2.msixvc2`
+(`--v2`) is the same package as version 1.2.4.0 with two segments and the
+config changed, a file removed and one added: the update tests' v2. The MSIXVC
+update tests build their v2 with `XboxTestPackage.build(…, version:)`.
 
 `PLAYPORT_BUILD=$PWD/.work ./pp test --swift XboxClientKit` runs public session
 flows (exchange, relaunch, expiry/renewal/refusal, device reuse/replacement/reset,
@@ -434,3 +501,12 @@ offers deleting them).
 The play's phone gate (signed in, installed):
 `./pp ui --play xbox-9MW9469V91LM --until first-frame+10 --shot`. A refusal ends the
 run with `refused: <title>: <text>` (sign-in or licence).
+
+The lapse's phone gate (signed in, a copy installed, deferred): one real lapse, a
+Game Pass copy whose membership or catalogue entry ended,
+`./pp ui --action xbox:licence:<ID> --shot` (logs `licence refused` and
+`lapse grace, removal <date>`, the notice with Play off); the grace and the hold
+observed by relaunching after the date (`xbox:lapse:<ID>` logs `held` while the
+saves aren't known to be in the cloud). Without a real lapse,
+`xbox:lapse:<ID>@0` and `@8` simulate a refusal 0 and 8 days ago to show the notice
+and the hold; `xbox:licence:<ID>` puts Microsoft's verdict back.
