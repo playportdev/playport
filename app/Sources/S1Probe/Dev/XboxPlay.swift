@@ -36,15 +36,11 @@ enum XboxPlay {
         }
     }
 
-    /// The last Play's refusal, for `pp ui` (Dev/UIDriver.swift); nil after one that started.
-    static var lastRefusal: String?
-
     /// The game's own WinHTTP offers HTTP/2 for the runtime only when asked (patches/wine-gdk).
     static let winhttpHTTP2 = ["WINE_WINHTTP_HTTP2": Secret("1")]
 
     /// Licence, plaintext in place, bridge and prefix keys for a Play of the copy `t`.
     static func prepare(_ t: InstalledTitle, continuing: Bool) async -> Result<Prepared, Failure> {
-        lastRefusal = nil
         let account = XboxAccount.shared, log = XboxInstalls.log, id = t.key.id
         guard account.state == .signedIn else { return .failure(.refused(.signedOut)) }
         let installer = XboxInstalls.shared.installer
@@ -156,7 +152,6 @@ enum XboxPlay {
 
     /// A refused Play's message: the sign-in (Sign in) or the licence (Try again).
     static func ask(_ t: InstalledTitle, _ failure: Failure) {
-        lastRefusal = failure.description
         LibraryModel.log("play \(t.name) (\(t.id)): refused: \(failure)")
         let title: String, note: String
         var options: [PadOption] = []

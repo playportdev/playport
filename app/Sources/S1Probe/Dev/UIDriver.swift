@@ -860,7 +860,6 @@ enum UIDriver {
                         return finish("action=\(action) refused: \(id) is not a launcher (\(PublisherLauncher.all.map(\.id).joined(separator: ", ")))")
                     }
                       do {
-                        XboxPlay.lastRefusal = nil
                         let started = try await checked {
                             if let launcher { await LauncherOpen.open(launcher) } else { try await library.play(id) }
                         }
@@ -869,10 +868,10 @@ enum UIDriver {
                                 return finish("action=\(action) refused: not installed, or a launch is running or Playport needs a restart")
                             }
                             try checkpoint()
-                            // An Xbox copy's licence or sign-in stopped it: its message says which (Dev/XboxPlay.swift).
-                            if id.hasPrefix("xbox-"), let why = XboxPlay.lastRefusal {
+                            // An Xbox copy's licence or sign-in stopped it: the message it shows says which (Dev/XboxPlay.swift).
+                            if id.hasPrefix("xbox-"), case let .picker(message) = PadModal.shared.content {
                                 try await pause(.milliseconds(1000))   // the message drawn, for a screenshot
-                                return finish("action=\(action) refused: \(why)")
+                                return finish("action=\(action) refused: \(message.title): \(message.note ?? "")")
                             }
                         if case .cloud = PadModal.shared.content {
                                 try await pause(.milliseconds(1000))   // the screen drawn, for a screenshot
@@ -1152,18 +1151,30 @@ enum UIDriver {
         return report.bad.isEmpty ? nil : "\(report.bad.count) files do not verify"
     }
 
-    /// `xbox:update:<ProductId>`: the Store's latest version against the installed copy's; when newer,
-    /// the page's Update, waited for, then every file verified. Versions and counts only.
+    /// `xbox:update:<ProductId>`: the page's Check for update, pressed, the Store's latest version
+    /// against the installed copy's; when newer, the page's Update, waited for, then every file
+    /// verified. Versions and counts only.
     private static func updateXbox(_ product: String) async throws -> String? {
         let key = StoreGameKey(store: .xbox, id: product)
         guard XboxAccount.shared.state == .signedIn else { return "Xbox is not signed in" }
         guard let t = LibraryModel.shared.title(key.titleID) else { return "\(key.titleID) is not in the library" }
         guard let installs = SteamAccountModel.current?.installs else { return "no download queue" }
-        let installer = XboxInstalls.shared.installer
+        let installer = XboxInstalls.shared.installer, updates = XboxUpdates.shared
         guard let before = installer.loadRecord(product) else { return "no Xbox install record" }
         _ = AppNavigation.shared.open("library")
         AppNavigation.shared.openGame(.title(t.id))
-        switch await XboxUpdates.shared.check(product, force: true) {
+        // The page asks once by itself; then Check for update asks again, as a person would.
+        for _ in 0..<600 where updates.checking.contains(product) { try await pause(.milliseconds(100)) }
+        if updates.newest[product] == nil {
+            let row = "game:xboxCheckUpdate"
+            for _ in 0..<50 where PadFocus.shared.items[row] == nil { try await pause(.milliseconds(100)) }
+            guard PadFocus.shared.items[row] != nil else { return "Check for update is not shown" }
+            PadFocus.shared.focused = row
+            PadFocus.shared.activate()
+            for _ in 0..<20 where !updates.checking.contains(product) && updates.answers[product] == nil { try await pause(.milliseconds(50)) }
+            for _ in 0..<1200 where updates.checking.contains(product) { try await pause(.milliseconds(100)) }
+        }
+        switch updates.answers[product] {
         case nil: return "the Store's version could not be had"
         case .unknown?: return "the Store's version is unknown"
         case .current(let latest)?:
@@ -1173,8 +1184,12 @@ enum UIDriver {
             log("xbox: \(t.id) update \(before.version) -> \(latest) started")
         }
         let started = Date()
+        for _ in 0..<50 where PadFocus.shared.items["game:update"] == nil { try await pause(.milliseconds(100)) }
+        guard PadFocus.shared.items["game:update"] != nil else { return "Update is not shown" }
         try await pause(.milliseconds(1000))
-        XboxUpdates.shared.update(product, name: t.name)
+        PadFocus.shared.focused = "game:update"
+        PadFocus.shared.activate()
+        for _ in 0..<50 where installs.jobs[key] == nil { try await pause(.milliseconds(100)) }
         var lastLog = Date()
         while let j = installs.jobs[key] {
             if case let .paused(reason) = j.phase { return "paused: \(reason ?? "no reason")" }
@@ -1224,14 +1239,12 @@ enum UIDriver {
     }
 
     /// `xbox:licence:<ProductId>`: Microsoft's verdict on the installed copy's licence now, as a Library
-    /// refresh asks it (signed in); `xbox:lapse:<ProductId>`: the copy's lapse as it stands;
-    /// `xbox:lapse:<ProductId>@<days>`: a simulated refusal that many days ago in place of the copy's own
-    /// (dev; `xbox:licence:` puts Microsoft's verdict back). Each then runs the removals due, shows the
-    /// copy's page and logs its lapse and whether the notice and its buttons are shown. No account data.
+    /// refresh asks it (signed in), then the removals due; `xbox:lapse:<ProductId>`: the copy's lapse as
+    /// it stands, read only. Each shows the copy's page and logs its lapse and whether the notice and its
+    /// buttons are shown. No account data.
     private static func xboxLapse(_ spec: String) async throws -> String? {
         let checking = spec.hasPrefix("licence:")
-        let parts = spec.drop(while: { $0 != ":" }).dropFirst().split(separator: "@", maxSplits: 1).map(String.init)
-        let key = StoreGameKey(store: .xbox, id: parts[0])
+        let key = StoreGameKey(store: .xbox, id: String(spec.drop(while: { $0 != ":" }).dropFirst()))
         guard let t = LibraryModel.shared.title(key.titleID) else { return "\(key.titleID) is not in the library" }
         let lapses = XboxLapses.shared
         if checking {
@@ -1245,9 +1258,6 @@ enum UIDriver {
             }
             log("xbox: \(t.id) licence \(verdict)")
             lapses.removeDue()
-        } else if parts.count > 1 {
-            guard let days = Int(parts[1]) else { return "bad day count \(parts[1])" }
-            lapses.simulate(key, refusedDaysAgo: days)
         }
         if LibraryModel.shared.title(key.titleID) != nil {
             _ = AppNavigation.shared.open("library")

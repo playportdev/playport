@@ -127,17 +127,6 @@ final class XboxLapses: ObservableObject {
         }
     }
 
-    /// Dev (`pp ui xbox:lapse:ID@DAYS`): a refusal `days` ago in place of the copy's own,
-    /// as if Microsoft had refused it then; then the due removals.
-    func simulate(_ key: StoreGameKey, refusedDaysAgo days: Int, now: Date = Date()) {
-        update { changed in
-            ledger.removed(key)
-            changed = ledger.record(.refused, for: key, at: now.addingTimeInterval(-Double(days) * 86_400))
-        }
-        log.info("xbox", "\(key): simulated refusal \(days) day(s) ago; lapse until \(Self.stamp(ledger.lapse(key)?.removeAt))")
-        removeDue(at: now)
-    }
-
     private func keep(_ installed: Set<StoreGameKey>) {
         update { changed in changed = ledger.keep(only: installed) }
     }

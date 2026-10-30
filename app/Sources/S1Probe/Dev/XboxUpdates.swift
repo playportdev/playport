@@ -16,21 +16,28 @@ final class XboxUpdates: ObservableObject {
     static let shared = XboxUpdates()
     /// The Store's newer version per installed copy, once asked (the page shows Update).
     @Published private(set) var newest: [String: String] = [:]
+    /// The last answer per copy (the page's "Up to date" line) and the copies being asked now.
+    @Published private(set) var answers: [String: XboxPackageUpdateCheck] = [:]
+    @Published private(set) var checking = Set<String>()
     private var asked = Set<String>()
 
-    /// Asks the Store once per process (or again with `force`) for copy `id`'s latest
-    /// package. Nil when signed out or the answer couldn't be had.
+    /// Asks the Store once per process (or again with `force`: the page's Check for update)
+    /// for copy `id`'s latest package. Nil when signed out or the answer couldn't be had.
     @discardableResult
     func check(_ id: String, force: Bool = false) async -> XboxPackageUpdateCheck? {
-        guard XboxAccount.shared.state == .signedIn, force || !asked.contains(id) else { return nil }
+        guard XboxAccount.shared.state == .signedIn, force || !asked.contains(id), !checking.contains(id) else { return nil }
         asked.insert(id)
+        checking.insert(id)
+        defer { checking.remove(id) }
         let installer = XboxInstalls.shared.installer
         do {
             let check = try await installer.updateCheck(id)
             if case .available(let latest) = check { newest[id] = latest } else { newest[id] = nil }
+            answers[id] = check
             return check
         } catch {
             asked.remove(id)
+            answers[id] = nil
             XboxInstalls.log.warn("xbox", "\(StoreGameKey(store: .xbox, id: id)): update check failed: \(XboxInstalls.message(error))")
             return nil
         }

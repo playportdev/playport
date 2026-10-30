@@ -647,9 +647,8 @@ Game Pass copy whose membership or catalogue entry ended,
 `./pp ui --action xbox:licence:<ID> --shot` (logs `licence refused` and
 `lapse grace, removal <date>`, the notice with Play off); the grace and the hold
 observed by relaunching after the date (`xbox:lapse:<ID>` logs `held` while the
-saves aren't known to be in the cloud). Without a real lapse,
-`xbox:lapse:<ID>@0` and `@8` simulate a refusal 0 and 8 days ago to show the notice
-and the hold; `xbox:licence:<ID>` puts Microsoft's verdict back.
+saves aren't known to be in the cloud). The driver reads a lapse, never makes one
+up (decision 0012), so the notice and the hold need a real refusal.
 
 The cloud saves' phone gates (signed in, the pilot installed, deferred):
 - A round trip: play on the phone into a save

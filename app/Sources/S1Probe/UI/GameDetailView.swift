@@ -411,6 +411,14 @@ private struct GameDetailPage: View {
                             enabled: XboxAccount.shared.state == .signedIn && !installs.suspended && !launch.running,
                             hint: "Update") { xboxUpdates.update(t.key.id, name: t.name) }
         }
+        if job == nil, t.store == .xbox, t.source == .installed, xboxUpdates.newest[t.key.id] == nil {
+            let id = t.key.id, busy = xboxUpdates.checking.contains(id)
+            let current: String? = if case .current(let latest)? = xboxUpdates.answers[id] { latest } else { nil }
+            SecondaryButton(id: "game:xboxCheckUpdate", systemImage: "arrow.clockwise",
+                            title: busy ? "Checking…" : current.map { "Up to date (\($0)) · Check again" } ?? "Check for update",
+                            enabled: XboxAccount.shared.state == .signedIn && !busy && !launch.running,
+                            hint: "Check") { Task { await xboxUpdates.check(id, force: true) } }
+        }
         #endif
         if job == nil, let g, SteamInstallStatus.updateAvailable(t, g.info) {
             SecondaryButton(id: "game:update", systemImage: "arrow.down.circle", title: "Update", enabled: canDownload && !launch.running,
