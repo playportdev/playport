@@ -315,3 +315,68 @@ Not checked: any layout play (`PLAYPORT_SC_LAYOUT=1`), so the fail-closed boot, 
 were compiled and host-tested but did not run on the phone.
 
 Review-2 fixes (0227 quiet under `MADEIRA_NO_DIAGNOSTICS` and prints `slot-view` for a freed slot view, 0226 tail line without the always-empty real-slot fields, 0055 re-exported, patch-id unchanged): dev IPA sha256 `fc42b29eff9fb1977a36783e95ba7ea0684509b3cc22593a3d4fbc2fbf87c6a1` (90 IPA checks); Hollow Knight first-frame+10 passed, first frame +12.04 s (run `$PLAYPORT_BUILD/ui-runs/20261030T112027`).
+
+## l6: the second metadata slot
+
+Commit `6213817` (madeira-unix 0228, PLA-476, [PLA-482](https://linear.app/playportdev/issue/PLA-482)): the
+owner-approved disjoint ELF_META2 slot, real `[0x79c0000000, 0x7a00000000)` reporting the 16 GiB asked, for a
+helper that owns ELF and no ELF metadata while another PEB owns kind 3. The RW alias is capped at 3 GiB
+(`WINE_IOS_JIT_SIZE` ≤ `0xc0000000`, fail closed; the largest pool is `JitPool.maximumMB` = 896). **Kind 7 is now
+ELF_META2 and a refused reserve logs `kind=8`** (l1–l5's `kind=7` refusals are historical). Operations past a
+metadata kind's real end inside another slot the caller owns log `possible metadata overflow into kind=N`; a
+straddle across real ranges is refused. The boot line names the spare. Dev IPA sha256
+`d9612e9cb1b8fecb0dd02acd719fffd4a4cd62fe9ffc3ad4f94d011abeefd9f6` (90 IPA checks); full `pp test` passed
+(tools/tests 822, PlayportKit 365).
+
+One locked session, in-place install:
+
+- Hollow Knight (`app-367520`) first-frame+10 **passed**: first frame +10.34 s
+  (`$PLAYPORT_BUILD/ui-runs/20261030T113629-hk-p476l6`).
+- RDR2 (`app-1174180`), keys `PLAYPORT_CEF_SWAP=0 PLAYPORT_SC_SINGLE=1 PLAYPORT_SC_LAYOUT=1`, run
+  `$PLAYPORT_BUILD/ui-runs/20261030T113719-rdr2-p476l6`: first frame +39.56 s. No Story tab appeared, so the
+  arm's deadline ended the run at launch +420 s (exit 143, SIGTERM). The log was pulled afterwards with
+  `pp phone log` into the run's `pull/` (the app was not relaunched in between; nonce `ee22f009` at line 4).
+
+Measured, line numbers in that `pull/s1-host.log`:
+
+- 228: `RDR2 layout held: … FEX floor 0x7c40000000, second ELF metadata 0x79c0000000+0x40000000`.
+- Launcher helper A (PEB `0x13da50000`): `grant kind=1/3/2/4` (45651–45942), `5` (54749), `6` (55174); no
+  `grant kind=7`. Its PLA-482 lines: 16 `kind=3 … possible metadata overflow into kind=4` and 16
+  `kind=4 … into kind=1` (first 45945, 46500). A ended with the launcher at the game's sign-in (+107.8 s,
+  footprint 6341 MB): 131448 `keep-ref … view=0x7400000000+0x190000000 fate=2 tid=0208 ref#52/53=0x74000643e0`,
+  131456 `kind=3 view kept`, 131457 `kind=3 committed runs=738 bytes=0x442b000 highest_end_off=0x8520000`, kinds
+  1, 2, 4, 5 and 6 held again (131454–131460), 131461 `kept 8418 MB (5 view(s) …)`. Same shape as l5.
+- The game's helper B (PEB `0x177954000`, child at 132027): `[sc-single]` preflight and verified browser
+  (132011–132012). **136398 `grant kind=1`, 136400 `grant kind=7 … report=0x79c0000000+0x400000000
+  real=0x79c0000000+0x40000000`** where l5 refused it; then `grant kind=2` (136458) and `kind=4` (136461) from
+  libcef's TLS initialisation. No `chrome_elf.dll failed to initialize` (l5: line 138958) and no `refused
+  reserve` at all.
+- 137055: `refused memory operation owner=0x177954000 addr=0x7400002000 size=0x1000: outside owned real range`.
+  The caller is libcef: guest RIP `0x73e5bb580b` = libcef RVA `0x1ea580b` (libcef at `0x73e3d10000`, 133952),
+  `RDI=0x7400002000`, `R14=0x7400000000`, `R13` in libcef's data (137063–137065). The refused commit is followed
+  by the trap at that RIP (`int3; ud2`, `[generated-fault-window]`), then 137091 `Unhandled exception 0x80000003 in thread 528`.
+  B exits with no kept slot: `slot-view … 0x79c0000000+0x40000000 fate=0` (137240) and kinds 1, 2, 4, 7 held
+  again (137244–137247).
+- In A the same addresses were committed and accepted, because A owned kind 3:
+  `op=0 0x7400002000+0x1000 in reported extent of kind=2 off=0x400002000 lands in its own kind=3 real range`
+  (47461–47478; l5's A the same at 46596).
+- `NO GAP FITS`: 26 from A's V8 sandbox probes (`[jumbo#1–40] peb=0x13da50000`, 55090–56000) and one for the
+  game's 8960 MiB ask (78113), which the holdback then serves at `0x75d0000000` (78117–78118). l5 had 27. None from
+  B. No `[soft-pool]` line.
+- Footprint peak `fpMB=6328` (129174, the launcher's last seconds); xs1 7343 MB, l5 6307 MB. No jetsam and no
+  app crash; the app ran until the arm's SIGTERM.
+- Screenshots (`$PLAYPORT_BUILD/agent-notes/pla476/p476l6/shots/`, not committed): dark (loading) and black frames
+  until about +106 s, then from about +129 s to the end **"SOCIAL CLUB ERROR — Social Club failed to initialize. Error
+  code: 17"** with Accept/Cancel. Nothing was pressed (`landing: no Story tab seen; nothing pressed`).
+
+Inferred, not shown: B's libcef uses `0x7400000000` as a pool base although B never received that address; it
+was A's kind-3 report. Candidates: the address is derived from another pool rather than taken from the 16 GiB
+reservation's result (`0x7800000000 − 16 GiB`, kind 1's report; or `0x7000000000 + 16 GiB`, inside kind 2's
+report), or it is state B did not create. Either way a disjoint second slot is not used where libcef looks, and
+kind 3's report address is load-bearing for the next helper. Next: read libcef around RVA `0x1ea580b` and the
+code that sets `R14` on the workstation (HOST-DEBUGGING), before any new slot geometry.
+
+Gates: HK first-frame+10 passed. The game's helper gets past l5's ELF_META refusal and chrome_elf initialises,
+but the browser does not start (libcef CHECK) and the game shows Social Club error 17: no Story, no cabin. No
+`NO GAP FITS` or soft grant from B, but A's 26 V8 `NO GAP FITS` remain (as in l1–l5). Memory ±10 % of 7343 MB is
+not comparable without the cabin.

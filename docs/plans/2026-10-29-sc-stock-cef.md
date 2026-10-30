@@ -12,8 +12,9 @@
 - Chunks 0 and 1 done. Chunk 2 **not passed** ([evidence](../evidence/2026-10-29-sc-stock-cef-probe.md)):
   0224–0226 give the opt-in layout; wine-pe 0055 (early-image replay,
   [PLA-481](https://linear.app/playportdev/issue/PLA-481), Done) is an accepted increment (HK first-frame+10,
-  game helper reaches allocator startup). **Blocker:** the launcher helper's retained view under 0132/0143
-  refuses the game's helper metadata (l4). Do not clear, free or overwrite kept slots.
+  game helper reaches allocator startup). **Blocker:** the launcher helper's retained kind-3 view under 0132/0143
+  refused the game's helper metadata (l4, l5); with 0228 that goes to the spare slot, but the game's libcef still
+  commits at the kept view's address (l6). Do not clear, free or overwrite kept slots.
 - **Measured (l5, 2026-10-30, IPA `b5ee00eb…`, `.work/ui-runs/20261030T104925-rdr2-p476l5`):** only kind 3
   (ELF_META) is kept, as its whole 6400 MiB view, pinned by one parked thread's wait address. It has 72.4 MiB
   committed, highest end 170.5 MiB. Kinds 1, 2, 4, 5 and 6 are freed and held again. The game's helper gets
@@ -26,15 +27,26 @@
   lifetime/quiescence proof stays deferred.
 - The Risks stop rule is no longer near-triggered for the l3–l5 shape. 0.5.0 stays held.
 - Build-records gap found on the way: [PLA-484](https://linear.app/playportdev/issue/PLA-484).
+- **Measured (l6, 2026-10-30, IPA `d9612e9c…`, `.work/ui-runs/20261030T113719-rdr2-p476l6`;
+  [evidence](../evidence/2026-10-29-sc-stock-cef-probe.md#l6-the-second-metadata-slot)):** the game's helper gets
+  `grant kind=7` (ELF_META2) after kind 1, chrome_elf initialises, and libcef gets kinds 2 and 4. libcef then
+  commits at `0x7400002000` (A's kept kind-3 view, base `0x7400000000` in its registers), is refused, CHECKs and
+  exits; the game shows Social Club error 17. In A the same commits landed in its own kind 3. Kind 7 is now
+  ELF_META2; a refused reserve logs `kind=8`.
 - **Ordered queue:** (1) review-fix writer chunk **done** in `ad295c7` (0225–0227, `wine_host.c`, 0055 `Class:`
   `ios-port`, [PLA-482](https://linear.app/playportdev/issue/PLA-482) diagnostics, retained-extent §5 diagnostics;
   [PLA-480](https://linear.app/playportdev/issue/PLA-480) smoke on RDR2 dev defaults, Witcher 3 not installed;
   [evidence](../evidence/2026-10-29-sc-stock-cef-probe.md#review-fixes)); its host tests for `pp_sc_vm.h` and
   `pp_sc_access.h` were integrated in `29dfb45`, and review-2 fixes landed in `e3334ec` (IPA `fc42b29e…`, HK
-  `.work/ui-runs/20261030T112027`); (2) **next:** madeira-unix 0228, the second ELF_META slot and slot-aware access
-  (draft in `.work/agent-notes/pla476/second-meta/`), then HK and an RDR2 layout run; (3) remaining chunk-2 gates
-  (allocator/browser, Story cabin, no SC/launcher `NO GAP FITS` or soft grant, 7343 MB ±10 %);
-  (4) chunks 3–6, all under PLA-476. Chunk 3 needs owner approval if required; 0.5.0 held.
+  `.work/ui-runs/20261030T112027`); (2) **done** in `6213817`: madeira-unix 0228, the second ELF_META slot and
+  slot-aware access, HK first-frame+10 passed (`.work/ui-runs/20261030T113629-hk-p476l6`) and RDR2 l6;
+  (3) **next:** find on the workstation where libcef's `0x7400000000` comes from (libcef RVA `0x1ea580b` and
+  the code that sets `R14`) before any new slot geometry, then the remaining chunk-2 gates. Chunk-2 gates after
+  l6: the game's helper reaches allocator/browser startup — **partly** (chrome_elf initialises, libcef does not);
+  Story cabin — **not passed** (SC error 17, no Story tab); no SC/launcher `NO GAP FITS` or soft grant — **not
+  passed** (none from the game's helper and no soft grant, but the launcher helper's 26 V8 `NO GAP FITS` remain);
+  7343 MB ±10 % — **not comparable** (peak 6328 MB without the cabin); (4) chunks 3–6, all under PLA-476.
+  Chunk 3 needs owner approval if required; 0.5.0 held.
 - Phone: no session active. Reports: `.work/agent-notes/pla476/reports/`.
 
 ## Why
