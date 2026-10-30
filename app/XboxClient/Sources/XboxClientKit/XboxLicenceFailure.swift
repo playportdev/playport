@@ -7,7 +7,7 @@
 import Foundation
 import ContentKit
 
-public enum XboxLicenseFailure: Error, Equatable, Sendable, CustomStringConvertible {
+public enum XboxLicenceFailure: Error, Equatable, Sendable, CustomStringConvertible {
     case deviceLimit
     case refused
     public var description: String {

@@ -41,7 +41,7 @@ The release package has no XboxClientKit dependency. Every Xbox Swift type start
   A definitive device-authentication refusal replaces it once, not in a retry
   loop. HTTP/service errors do not spend a new device slot.
 - The Microsoft Store's ten-device limit is **licensing reason 501, not HTTP
-  501**. `XboxLicenseFailure.check` recognises it and points to
+  501**. `XboxLicenceFailure.check` recognises it and points to
   `account.microsoft.com/devices/content`; it never echoes provider guidance.
   Device registration is anonymous. Association with the account and that
   limit occur at licensing (PLA-496), not while displaying the sign-in page.
@@ -84,7 +84,7 @@ offline device (PLA-504 below); it is recorded as the lease. The result is typed
 - `.licensed`: fresh keys (`.microsoft`), stored in `licences`; or, only while
   licensing is unreachable (`.network`, or HTTP 408/429/5xx), the stored keys
   under the offline launch rule below (`.cache`).
-- `.refused(XboxLicenseFailure)` is Microsoft's **definitive** answer, and the
+- `.refused(XboxLicenceFailure)` is Microsoft's **definitive** answer, and the
   only one: an HTTP 2xx body holding `satisfactionFailure` with a numeric reason
   and no `license`. Reason 501 is `.deviceLimit` (the device, not the copy; it
   deletes every copy's keys); any other reason is `.refused` (that copy's keys
@@ -186,7 +186,7 @@ follows Xodus's streaming install:
    roots only. No package for the account (`PackageFound: false`, 403, 404) is
    `XboxInstallRefusal.notEntitled`.
 2. **Licence.** `licence(contentID:)` (the same GUID: the XVD's VDUID). A refusal
-   is `XboxInstallRefusal.licence(XboxLicenseFailure)`, before any download; the
+   is `XboxInstallRefusal.licence(XboxLicenceFailure)`, before any download; the
    licence must carry every key the package's regions name.
 3. **Metadata prefix.** Every byte before the first encrypted region (header, hash
    tree, user data, XVC information, the drive's GPT and NTFS metadata: 44 MB for

@@ -76,7 +76,7 @@ enum XboxMSIXVC2 {
         }
 
         struct Stream {
-            enum State { case sha256(SHA256Stream), sha512(XboxSHA512) }
+            enum State { case sha256(SHA256Stream), sha512(SHA512Stream) }
             var state: State
             init(_ kind: Kind) {
                 switch kind {

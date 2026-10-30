@@ -426,7 +426,7 @@ actor XboxTestServices: XboxInstallServices {
                                               keys: [XboxContentKey(id: XboxTestPackage.keyID, key: Secret(XboxTestPackage.key))],
                                               expiresAt: .distantFuture, offlineLease: nil, source: .microsoft))
     }
-    func refuse(_ failure: XboxLicenseFailure) { licenceResult = .refused(failure) }
+    func refuse(_ failure: XboxLicenceFailure) { licenceResult = .refused(failure) }
     func fail(_ error: Error) { locationError = error }
     func packageLocation(contentID: String) async throws -> XboxPackageLocation {
         if let locationError { throw locationError }

@@ -82,7 +82,7 @@ public enum XboxLicenceProblem: Error, Sendable, Equatable, CustomStringConverti
 /// Everything else is `unavailable`, never a verdict on the licence.
 public enum XboxLicenceResult: Sendable {
     case licensed(XboxLicence)
-    case refused(XboxLicenseFailure)
+    case refused(XboxLicenceFailure)
     case unavailable(XboxLicenceProblem)
 }
 
@@ -220,7 +220,7 @@ enum XboxLicensing {
         if present("satisfactionFailure") {
             // A licence beside a denial is ambiguous, never a grant or a verdict.
             guard !present("license") else { return .unavailable(.invalidResponse) }
-            do { try XboxLicenseFailure.check(response) } catch let failure as XboxLicenseFailure { return .refused(failure) } catch {}
+            do { try XboxLicenceFailure.check(response) } catch let failure as XboxLicenceFailure { return .refused(failure) } catch {}
             return .unavailable(.invalidResponse)
         }
         do { return .licensed(try licence(response.body.value, content: content, deviceLicence: deviceLicence)) }

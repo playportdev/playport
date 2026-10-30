@@ -94,7 +94,7 @@ final class XboxAccount: ObservableObject {
     }
     private static func message(_ error: Error) -> String {
         if let error = error as? XboxSessionError { return error.description }
-        if let error = error as? XboxLicenseFailure { return error.description }
+        if let error = error as? XboxLicenceFailure { return error.description }
         if let error = error as? ClientError { return error.description }
         return "Xbox couldn't be reached. Try again."
     }

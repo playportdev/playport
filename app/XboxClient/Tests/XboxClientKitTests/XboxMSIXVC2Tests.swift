@@ -154,16 +154,16 @@ final class XboxMSIXVC2Tests: XCTestCase {
     // Known answers from independent sources.
 
     func testSHA384AndSHA512MatchFIPS180() {
-        XCTAssertEqual(XboxSHA512.hash512(Array("abc".utf8)).hex,
+        XCTAssertEqual(SHA512Stream.hash512(Array("abc".utf8)).hex,
                        "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f")
-        XCTAssertEqual(XboxSHA512.hash384(Array("abc".utf8)).hex,
+        XCTAssertEqual(SHA512Stream.hash384(Array("abc".utf8)).hex,
                        "cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7")
         // Across block boundaries, fed in uneven pieces (Python hashlib).
         let a = [UInt8](repeating: 0x61, count: 1000)
-        var s = XboxSHA512.sha384()
+        var s = SHA512Stream.sha384()
         for piece in [a[0..<1], a[1..<130], a[130..<1000]] { s.update(Array(piece)) }
         XCTAssertEqual(s.finalize().hex, "f54480689c6b0b11d0303285d9a81b21a93bca6ba5a1b4472765dca4da45ee328082d469c650cd3b61b16d3266ab8ced")
-        XCTAssertEqual(XboxSHA512.hash512(a).hex,
+        XCTAssertEqual(SHA512Stream.hash512(a).hex,
                        "67ba5535a46e3f86dbfbed8cbbaf0125c76ed549ff8b0b9e03e0c88cf90fa634fa7b12b47d77b694de488ace8d9a65967dc96df599727d3292a8d9d447709c97")
     }
 

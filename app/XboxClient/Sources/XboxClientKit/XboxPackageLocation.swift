@@ -26,7 +26,7 @@ public struct XboxPackageLocation: Sendable, Equatable {
 /// account (no entitlement), or refused the licence. Each has its own message.
 public enum XboxInstallRefusal: Error, Sendable, Equatable, CustomStringConvertible {
     case notEntitled
-    case licence(XboxLicenseFailure)
+    case licence(XboxLicenceFailure)
     case noPackage
     public var description: String {
         switch self {

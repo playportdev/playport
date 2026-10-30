@@ -135,14 +135,14 @@ final class XboxSessionTests: XCTestCase, @unchecked Sendable {
     }
     func testStoreReason501NamesTenDevicesAndWhereToUnlinkButHTTP501IsNotThatError() throws {
         let bytes = try xboxFixture("device-limit.json")
-        XCTAssertThrowsError(try XboxLicenseFailure.check(XboxHTTPResponse(status: 200, body: bytes))) {
-            XCTAssertEqual($0 as? XboxLicenseFailure, .deviceLimit)
+        XCTAssertThrowsError(try XboxLicenceFailure.check(XboxHTTPResponse(status: 200, body: bytes))) {
+            XCTAssertEqual($0 as? XboxLicenceFailure, .deviceLimit)
             let message = String(describing: $0)
             XCTAssertTrue(message.contains("10")); XCTAssertTrue(message.contains("account.microsoft.com/devices"))
             XCTAssertFalse(message.contains("synthetic-private")); XCTAssertFalse(message.contains("untrusted.invalid"))
         }
-        XCTAssertThrowsError(try XboxLicenseFailure.check(XboxHTTPResponse(status: 501, body: bytes))) {
-            XCTAssertNil($0 as? XboxLicenseFailure)
+        XCTAssertThrowsError(try XboxLicenceFailure.check(XboxHTTPResponse(status: 501, body: bytes))) {
+            XCTAssertNil($0 as? XboxLicenceFailure)
         }
     }
     func testACorruptOrTamperedResponseNeverCreatesASession() async throws {

@@ -151,7 +151,7 @@ public enum XboxPlayRefusal: Error, Equatable, Sendable, CustomStringConvertible
     case signedOut
     case signIn(XboxSessionError)
     /// Microsoft definitively refused the licence (or the device, at the 10-device limit).
-    case refused(XboxLicenseFailure)
+    case refused(XboxLicenceFailure)
     /// Licensing gave no verdict and no stored licence stands in.
     case unavailable(XboxLicenceProblem)
     /// The licence carries no content key for this copy's files.
