@@ -2,7 +2,7 @@
 // Xodus 514dd56f360a4bdf12f4acde5148bac5ce5f957f tokens/{device,manager}.rs,
 // api/live/mod.rs and xodus-cli/commands/login.rs; translated to Swift by the
 // Playport authors, 2026-10-30. Modified: injected HTTP and SecretStore, silent
-// renewal, sign-out fencing, bounded replacement on a device-authentication fault.
+// renewal, sign-out fencing and handlers, bounded replacement on a device-authentication fault.
 import Foundation
 import ContentKit
 
@@ -36,6 +36,8 @@ public actor XboxSession {
     let now: @Sendable () -> Date
     private(set) var generation: UInt64 = 0
     private var deviceFlight: Task<XboxToken, Error>?
+    private var signOutHandlers: [UInt64: @Sendable () -> Void] = [:]
+    private var lastSignOutHandler: UInt64 = 0
 
     public init(store: any SecretStore, http: any XboxHTTP = XboxURLSessionHTTP(), log: Logger = .silent,
                 now: @escaping @Sendable () -> Date = { Date() }) {
@@ -154,9 +156,18 @@ public actor XboxSession {
     }
     public func signOut() throws {
         generation &+= 1; deviceFlight?.cancel(); deviceFlight = nil
+        for action in signOutHandlers.values { action() }
         try clearSession()
         log.info("xbox", "signed out; session secrets deleted, synthetic device kept")
     }
+    /// Runs `action` at each sign-out (and device reset), before the session's
+    /// secrets are deleted: a play's bridge closes its channel with it (0167).
+    public func onSignOut(_ action: @escaping @Sendable () -> Void) -> UInt64 {
+        lastSignOutHandler &+= 1
+        signOutHandlers[lastSignOutHandler] = action
+        return lastSignOutHandler
+    }
+    public func removeSignOutHandler(_ id: UInt64) { signOutHandlers[id] = nil }
     /// Dev UI only. Reset does not unlink the old device at Microsoft; it counts
     /// toward the Store's limit until the player removes it there.
     public func resetDevice() throws {
