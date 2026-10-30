@@ -169,6 +169,13 @@ best-effort and reported as unconfirmed; transport loss/SIGKILL can leave cancel
                          C:\Games, waits until the Library adopts it; logs sizes, version, exe only
   xbox:installed:PRODUCTID  the copy is in the Library, its record is there and every file verifies;
                          shows its page and logs file counts, kept-encrypted count and version
+  xbox:licence:PRODUCTID  Microsoft's verdict on the installed copy's licence now, as a Library refresh
+                         asks it (signed in): logs granted/refused/no verdict, then its lapse; a
+                         definitive refusal starts the lapse (notice, Play off, removal in 7 days)
+  xbox:lapse:PRODUCTID[@DAYS]  the copy's page with its lapse logged (grace/held/due, notice, buttons);
+                         @DAYS (dev) simulates Microsoft's refusal DAYS days ago in its place: @0 the
+                         notice, @8 past the grace (removal held while its saves aren't in the cloud,
+                         else uninstalled, saves kept); xbox:licence:ID puts Microsoft's verdict back
   set:KEY=VALUE          a UserDefaults key, as a Settings control sets it (set:metalHUD=true;
                          set:donorPoolMB=0|auto|2048|4096|6144: Settings › Graphics › Donor memory, next Play,
                          Auto when unset; auto sizes it from the phone's tier and the app's limit;
@@ -484,7 +491,7 @@ ACTION_RE = re.compile((r"^(?:(?:install|pause-resume|queue|downloading):[0-9]+|
                        r"|hud:(?:on|off)|open:[a-z]+(?:-[A-Za-z0-9 ._-]+(?:#[a-z]+)?)?|open:library#(?:{c})|open:settings#(?:accounts|steam|graphics|downloads|controls|controllers|gyro|controller|storage|setup|about|launchers|developer|account|jit|memory|diagnostics|pairing|probes|logs)|open:licences(?:#[a-z0-9 ._-]+)?|pad:(?:{b})(?:\+(?:{b}))*|set:[A-Za-z0-9._-]+=[^,]*"
                        r"|wait:[0-9]{1,3}|tap:(?:0(?:\.[0-9]+)?|1(?:\.0+)?):(?:0(?:\.[0-9]+)?|1(?:\.0+)?)|menu:(?:open|resume|controls|screenshot|overlay|controller|quit)"
                        r"|touch:{t}(?:\+{t})*(?:@[0-9]{1,5})?|gyro:{g}(?:/{g})*|gesture:three-finger-tap|web:(?:wait|close)|web:click:[A-Za-z0-9 ._-]+"
-                       r"|xbox:(?:signin|wait|signout|status|library|reset-device|installed:[0-9A-Z]{12})"
+                       r"|xbox:(?:signin|wait|signout|status|library|reset-device|(?:installed|licence):[0-9A-Z]{12}|lapse:[0-9A-Z]{12}(?:@[0-9]{1,2})?)"
                        r"|jit:(?:setup|pair|continue|open-settings|cancel|wait)|probe:settings-url-[0-9]|probe:helper-(?:(?:exit|kill)(?:-hold)?|report)|probe:memory-(?:64|2048|4096|donor-(?:tagged|purgeable)-(?:2048|4096)|donors-(?:6144|8192|10240)|pool-verify|pool-zero|pool-gpu)|background:(?:[1-9][0-9]|[1-5][0-9]{2}|600)|probe:relaunch|probe:native-auth|probe:pairing(?:-cancel|-use)?)$").replace("{b}", PAD_BUTTONS).replace("{t}", TOUCH_CONTROL)
                        .replace("{g}", GYRO_STEP).replace("{c}", "|".join(LIBRARY_CHIPS)))
 

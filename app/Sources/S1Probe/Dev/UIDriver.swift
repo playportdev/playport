@@ -582,6 +582,8 @@ enum UIDriver {
                     for _ in 0..<300 where account.state == .unknown { try await pause(.milliseconds(100)) }
                     if id.hasPrefix("installed:") {
                         if let failure = try await xboxInstalled(String(id.dropFirst("installed:".count))) { return finish("action=\(action) failed: \(failure)") }
+                    } else if id.hasPrefix("licence:") || id.hasPrefix("lapse:") {
+                        if let failure = try await xboxLapse(id) { return finish("action=\(action) failed: \(failure)") }
                     } else if id == "wait" {
                         for _ in 0..<1200 where account.signingIn && account.state != .signedIn && account.error == nil {
                             try await pause(.milliseconds(250))
@@ -1123,6 +1125,51 @@ enum UIDriver {
         log("xbox: \(t.id) installed in C:\\Games\\\(rec.installDir) version=\(rec.version) files=\(report.files - report.bad.count)/\(report.files) "
             + "verified, \(rec.encrypted.count) kept encrypted, exe=\(rec.executable ?? "none")")
         return report.bad.isEmpty ? nil : "\(report.bad.count) files do not verify"
+    }
+
+    /// `xbox:licence:<ProductId>`: Microsoft's verdict on the installed copy's licence now, as a Library
+    /// refresh asks it (signed in); `xbox:lapse:<ProductId>`: the copy's lapse as it stands;
+    /// `xbox:lapse:<ProductId>@<days>`: a simulated refusal that many days ago in place of the copy's own
+    /// (dev; `xbox:licence:` puts Microsoft's verdict back). Each then runs the removals due, shows the
+    /// copy's page and logs its lapse and whether the notice and its buttons are shown. No account data.
+    private static func xboxLapse(_ spec: String) async throws -> String? {
+        let checking = spec.hasPrefix("licence:")
+        let parts = spec.drop(while: { $0 != ":" }).dropFirst().split(separator: "@", maxSplits: 1).map(String.init)
+        let key = StoreGameKey(store: .xbox, id: parts[0])
+        guard let t = LibraryModel.shared.title(key.titleID) else { return "\(key.titleID) is not in the library" }
+        let lapses = XboxLapses.shared
+        if checking {
+            guard XboxAccount.shared.state == .signedIn else { return "refused: Xbox is not signed in" }
+            guard let result = await lapses.check(t) else { return "the licence could not be asked (no install record)" }
+            let verdict = switch result {
+            case .licensed(let l): l.source == .cache ? "stored licence (no verdict)" : "granted"
+            case .refused(.deviceLimit): "device limit (no verdict)"
+            case .refused: "refused"
+            case .unavailable(let p): "unavailable (no verdict): \(p)"
+            }
+            log("xbox: \(t.id) licence \(verdict)")
+            lapses.removeDue()
+        } else if parts.count > 1 {
+            guard let days = Int(parts[1]) else { return "bad day count \(parts[1])" }
+            lapses.simulate(key, refusedDaysAgo: days)
+        }
+        if LibraryModel.shared.title(key.titleID) != nil {
+            _ = AppNavigation.shared.open("library")
+            AppNavigation.shared.openGame(.title(t.id))
+            try await pause(.milliseconds(1500))
+        }
+        let state = switch lapses.state(key) {
+        case .licensed: "none"
+        case .lapsed(let at): "grace, removal \(XboxLapses.stamp(at))"
+        case .held(let at): "held (removal was due \(XboxLapses.stamp(at)); saves not known to be in the cloud)"
+        case .due: "due"
+        }
+        let removing = LibraryModel.shared.removing.contains(t.id) ? "; uninstalling" : ""
+        let shown = lapses.notice(key) == nil ? "no notice" : "notice shown"
+        let buttons = PadFocus.shared.items["game:xboxLicence"] != nil && PadFocus.shared.items["game:xboxUninstall"] != nil
+        log("xbox: \(t.id) lapse \(state)\(removing); \(shown), Play \(lapses.state(key).isLapsed ? "off" : "on"), "
+            + "Check licence/Uninstall now \(buttons ? "shown" : "not shown")")
+        return nil
     }
 
     /// The GOG page's Install (or Update) of `spec` (`<id>` or `<id>@<build>`); nil once the build is in the library.
