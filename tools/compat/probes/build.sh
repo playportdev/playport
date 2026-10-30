@@ -76,6 +76,13 @@
 #          (arm64-min.exe, a loader-only start)
 #   arm64-x86_64  arm64.c for x86-64, to check the program itself under
 #          desktop Wine (not a phone probe)
+#   d3d12  aarch64 Direct3D 12 for a native ARM64 child: DXGI, a device, a
+#          swap chain on a window, a triangle from embedded Shader Model 5.0
+#          bytecode presented for 5 seconds, the last frame read back; logs
+#          the adapter, feature level and shader model to d3d12.log, exit 0
+#          (d3d12.c, PLA-518; shaders: d3d12.hlsl, d3d12-shaders.sh)
+#   d3d12-x86_64  d3d12.c for x86-64, to check the program under desktop
+#          Wine (not a phone probe)
 #
 #   tools/compat/probes/build.sh
 set -euo pipefail
@@ -143,6 +150,11 @@ mkdir -p "$OUT/arm64" "$OUT/arm64-fault" "$OUT/arm64-min" "$OUT/arm64-x86_64"
     -nostdlib -Wl,-e,entry -o "$OUT/arm64-min/arm64-min.exe" "$HERE/arm64.c" -lkernel32
 "$CC" -O2 -Wall -Wextra -Werror -Wno-unused-parameter -mwindows -Wl,--no-insert-timestamp \
     -o "$OUT/arm64-x86_64/arm64-x86_64.exe" "$HERE/arm64.c"
+mkdir -p "$OUT/d3d12" "$OUT/d3d12-x86_64"
+"$CCA64" -O2 -Wall -Wextra -Werror -Wno-unused-parameter -mwindows -Wl,--no-insert-timestamp \
+    -o "$OUT/d3d12/d3d12.exe" "$HERE/d3d12.c" -ld3d12 -ldxgi
+"$CC" -O2 -Wall -Wextra -Werror -Wno-unused-parameter -mwindows -Wl,--no-insert-timestamp \
+    -o "$OUT/d3d12-x86_64/d3d12-x86_64.exe" "$HERE/d3d12.c" -ld3d12 -ldxgi
 # xaudio2_9redist.dll's import library: llvm-mingw has none (the EOS SDK
 # links Microsoft's), so it is made from its one export here.
 DLLTOOL=$LLVM_MINGW/bin/llvm-dlltool
@@ -164,6 +176,6 @@ for probe in machine machine-i386; do
     mkdir -p "$OUT/$probe/redist"
     cp "$OUT/$probe/xaudio2redist.exe" "$OUT/$probe/redist/"
 done
-for probe in gl21 gl21-i386 wgl childabort childabort-i386 x87m64-i386 protect machine machine-i386 splitlock splitlock-i386 threadctx threadctx-i386 shmap shmap-i386 poolstress console cputopo cputopo-i386 arm64 arm64-fault arm64-min arm64-x86_64; do
+for probe in gl21 gl21-i386 wgl childabort childabort-i386 x87m64-i386 protect machine machine-i386 splitlock splitlock-i386 threadctx threadctx-i386 shmap shmap-i386 poolstress console cputopo cputopo-i386 arm64 arm64-fault arm64-min arm64-x86_64 d3d12 d3d12-x86_64; do
     echo "$(sha256sum "$OUT/$probe/$probe.exe" | cut -c1-16)  $probe.exe ($(stat -c %s "$OUT/$probe/$probe.exe") bytes) in $OUT/$probe"
 done
