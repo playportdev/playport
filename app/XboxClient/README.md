@@ -283,6 +283,48 @@ A Play of an installed copy (the dev app's `Dev/XboxPlay.swift`) goes through, i
 - PlayportKit's `GamingRuntimeKeys` (Gaming Services' version and the Store's
   WinRT class served by `xgameruntime.dll`) are topped up in the prefix.
 
+## DLC and add-ons (PLA-502)
+
+- **Discovery** (`XboxAddOns.swift`). `XboxAddOnFinder.addOns(of:config:licensed:)`
+  asks the public display catalogue (no credentials) for the game, the
+  `RelatedProducts` its MicrosoftGame.config declares, and the licensed candidates
+  the caller names (the dev app passes the library's licensed non-game products).
+  `XboxAddOnCatalog.offers` is Nexus's rule: a `Durable` or `GameAddOn` is the
+  game's when the game declares it, its `addOnParent` is the game, or one of its
+  packages names the game's package family (`<Identity Name>_…`) as
+  `MainPackageFamilyNameForDlc`. Only non-trial, non-pre-order SKUs count. Each
+  is `available` (exactly one Windows.Desktop x64 MSIXVC/MSIXVC2 package for the
+  game), `licenceOnly` (a Durable whose SKUs declare no packages: the game checks
+  the licence through the runtime), `bundle`, `unsupported` or `unlicensed`. The
+  account's licence comes from the entitlements only, never the catalogue. Bundles
+  are not walked for the add-ons they grant (Nexus's `verify` status); an add-on
+  granted through a bundle is in the entitlements itself.
+- **Install** (`XboxAddOnInstaller.swift`). `XboxInstaller.installAddOn(_:contentID:base:)`
+  goes through the copy's own path (`stage`: GetBasePackage by content ID, a licence
+  per content ID, the resumable engine, every page checked). Before anything is
+  placed it checks what the runtime's `content_load` will: the extracted
+  MicrosoftGame.config and appxmanifest.xml name the same package, the add-on's own
+  Store ID, the game's identity as main package and the game's Store ID as allowed,
+  and there is one `layout_<id>.xml`; a kept-encrypted file is refused (add-ons
+  have no executables). The add-on goes into the game's folder as
+  `DLC\<ProductId>`, the folder the runtime scans by itself; the game's Remove takes
+  it too. Its record (`XboxInstalledAddOn`) is
+  `manifests/xbox-<game>.addons/xbox-<add-on>.json`; `forget` of the game drops
+  them. `verifyAddOn` and `removeAddOn` work per add-on.
+- **Play**. `XboxAddOnEnvironment.values` gives the runtime's variables:
+  `NEXUS_RELATED_PRODUCT_IDS` (the discovered and installed add-ons, at most 256;
+  hints the runtime adds to the config's RelatedProducts, never rights),
+  `XODUS_CONTENT_ROOTS` (`C:\Games\<folder>\DLC`, once an add-on is installed) and
+  `XODUS_PACKAGE_LOCALE` (`locale(preferred:declared:)`: the phone's language as
+  the package's `Resources` declare it, else the phone's). `XboxBridgeCopy.adding(related:)`
+  lets the bridge mint the licence token for those add-ons; Microsoft's signed
+  token, checked by the runtime, decides what is owned.
+- The runtime (nexus-xgameruntime ab2fac35) answers `XStoreQueryAddOnLicenses`,
+  `XStoreQueryEntitledProducts`, `XStoreAcquireLicenseForPackage`/`ForDurables`
+  and `XPackageEnumeratePackages(Content)` from these. It does **not** implement
+  `XPackageMount*`/`XPackageGetMountPath*` or `XStoreQueryAssociatedProducts`
+  (`E_NOTIMPL`): a game that mounts its add-on's package to read it still fails.
+
 ## Provenance and offline checks
 
 Written from Xodus `514dd56f360a4bdf12f4acde5148bac5ce5f957f`:
@@ -317,6 +359,12 @@ inconsistent (CBC key wrapping and the rolling IV, GUIDs as text, box manifests
 and seals, `Boxes/` names) the facts follow LukeFZ/XvdTool.Streaming pull request
 #3 at `99db4dd3285b80cadcd60f21a311d909121a8944` (GPL-2.0; read for the format,
 no code taken). Re-check both when #219 merges.
+Add-ons follow the same Nexus's `src/main/{content-catalog,game-content,game-locale}.ts`
+and nexus-xgameruntime `ab2fac35b500b87fefe51add26a0672a71d11576`
+(`src/System/Store/Entitled.h`, `src/System/Package/Content.h`) for the variables'
+limits. `catalog-addons.json` is the public display catalogue's records (no
+account) for Indiana Jones and the Great Circle, Gears of War: Reloaded and some
+of their add-ons, trimmed to the fields read.
 
 `Tests/XboxClientKitTests/Fixtures/` contains **synthetic, redacted responses**, not
 account captures. No PLA-487 captures were present when PLA-491 began. The

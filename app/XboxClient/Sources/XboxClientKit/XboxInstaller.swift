@@ -92,6 +92,42 @@ public struct XboxInstaller: Sendable {
     /// Installs the copy `product` from its package `contentID` into a new folder named for `title`.
     public func install(product: String, contentID: String, title: String, options: InstallEngine.Options = .init(),
                         progress: @escaping @Sendable (InstallEngine.Progress) -> Void = { _ in }) async throws -> Result {
+        let s = try await stage(product: product, contentID: contentID, options: options, progress: progress)
+        let config = s.config.flatMap { try? XboxGameConfig.parse($0) }
+        let folder = Self.unique(Self.folderName(title, fallback: product), in: layout.gamesRoot)
+        try InstallFS.makeDirectory(layout.gamesRoot)
+        guard rename(s.tree.path, layout.gamesRoot.appendingPathComponent(folder, isDirectory: true).path) == 0 else {
+            throw ClientError.transport("cannot move the Xbox install into C:\\Games (errno \(errno))")
+        }
+        let installed = XboxInstalled(
+            productID: product, contentID: s.contentID, version: s.version, packageName: s.packageName,
+            installDir: folder, executable: config?.executable, titleID: config?.titleID, msaAppID: config?.msaAppID, scid: config?.scid,
+            files: s.files, encrypted: s.encrypted, bytes: s.bytes)
+        try InstallFS.makeDirectory(layout.manifestsDir)
+        try InstallFS.writeAtomically(recordFile(product), StoreReceipt.encoder.encode(installed))
+        discardStages(product)
+        log.info("xbox", "\(product) installed in C:\\Games\\\(folder): \(s.files.count) files, \(installed.encrypted.count) kept encrypted")
+        return Result(installed: installed, bytesWritten: s.bytesWritten, downloadedBytes: s.downloadedBytes)
+    }
+
+    /// A package staged and checked, its stage tree not yet moved into place.
+    struct StagedPackage {
+        var contentID: String
+        var version: String
+        var packageName: String
+        var tree: URL
+        var files: [XboxInstalledFile]
+        var config: [UInt8]?
+        var encrypted: [XboxEncryptedFile]
+        var bytes: UInt64
+        var bytesWritten: UInt64
+        var downloadedBytes: UInt64
+    }
+
+    /// The account's package `contentID` for `product` and its licence, then every file
+    /// through the engine into the product's stage, each checked for the record.
+    func stage(product: String, contentID: String, options: InstallEngine.Options,
+               progress: @escaping @Sendable (InstallEngine.Progress) -> Void) async throws -> StagedPackage {
         guard StoreGameKey.isProductID(product) else { throw ClientError.unsupported("not an Xbox Product ID") }
         let location = try await services.packageLocation(contentID: contentID)
         let keys: [XboxContentKey]
@@ -121,21 +157,9 @@ public struct XboxInstaller: Sendable {
 
         let tree = layout.stagingTree(name: name)
         let (files, configBytes, encrypted) = try staged.finish(tree)
-        let config = configBytes.flatMap { try? XboxGameConfig.parse($0) }
-        let folder = Self.unique(Self.folderName(title, fallback: product), in: layout.gamesRoot)
-        try InstallFS.makeDirectory(layout.gamesRoot)
-        guard rename(tree.path, layout.gamesRoot.appendingPathComponent(folder, isDirectory: true).path) == 0 else {
-            throw ClientError.transport("cannot move the Xbox install into C:\\Games (errno \(errno))")
-        }
-        let installed = XboxInstalled(
-            productID: product, contentID: location.contentID, version: staged.version, packageName: staged.packageName,
-            installDir: folder, executable: config?.executable, titleID: config?.titleID, msaAppID: config?.msaAppID, scid: config?.scid,
-            files: files, encrypted: encrypted, bytes: plan.totalBytes)
-        try InstallFS.makeDirectory(layout.manifestsDir)
-        try InstallFS.writeAtomically(recordFile(product), StoreReceipt.encoder.encode(installed))
-        discardStages(product)
-        log.info("xbox", "\(product) installed in C:\\Games\\\(folder): \(files.count) files, \(installed.encrypted.count) kept encrypted")
-        return Result(installed: installed, bytesWritten: r.bytes, downloadedBytes: r.downloadedBytes + staged.metadataBytes)
+        return StagedPackage(contentID: location.contentID, version: staged.version, packageName: staged.packageName, tree: tree,
+                             files: files, config: configBytes, encrypted: encrypted, bytes: plan.totalBytes, bytesWritten: r.bytes,
+                             downloadedBytes: r.downloadedBytes + staged.metadataBytes)
     }
 
     /// One package format's install: its plan and chunk source, then, once the engine
@@ -219,13 +243,15 @@ public struct XboxInstaller: Sendable {
         return VerifyReport(files: rec.files.count, bad: bad)
     }
 
-    /// Removes the copy's record and stages, and, unless `keepSaves`, the saves its
-    /// runtime keeps for its SCID under the prefix's `%LOCALAPPDATA%` (`localAppData`).
-    /// The game's folder is the library's to delete.
+    /// Removes the copy's record and stages, its add-ons' records and stages (their files
+    /// are in its folder), and, unless `keepSaves`, the saves its runtime keeps for its
+    /// SCID under the prefix's `%LOCALAPPDATA%` (`localAppData`). The game's folder is
+    /// the library's to delete.
     public func forget(_ product: String, keepSaves: Bool, localAppData: URL) {
         if !keepSaves, let scid = loadRecord(product)?.scid {
             for dir in XboxSaves.folders(scid: scid, localAppData: localAppData) { try? FileManager.default.removeItem(at: dir) }
         }
+        forgetAddOns(product)
         try? FileManager.default.removeItem(at: recordFile(product))
         discardStages(product)
     }

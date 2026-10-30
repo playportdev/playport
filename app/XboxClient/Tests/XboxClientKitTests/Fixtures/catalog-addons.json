@@ -1,0 +1,760 @@
+{
+ "Products": [
+  {
+   "ProductId": "9N8FQ28Z6QX3",
+   "ProductType": "Game",
+   "LocalizedProperties": [
+    {
+     "ProductTitle": "Indiana Jones and the Great Circle"
+    }
+   ],
+   "MarketProperties": [
+    {
+     "RelatedProducts": [
+      {
+       "RelatedProductId": "9N2BP875PMK0",
+       "RelationshipType": "Bundle"
+      },
+      {
+       "RelatedProductId": "9PM2V43GZHN5",
+       "RelationshipType": "Bundle"
+      },
+      {
+       "RelatedProductId": "9NFB39X2Q8M4",
+       "RelationshipType": "Bundle"
+      },
+      {
+       "RelatedProductId": "9NQ516QG5Z7V",
+       "RelationshipType": "Bundle"
+      },
+      {
+       "RelatedProductId": "9P0SWLC2F1XJ",
+       "RelationshipType": "Bundle"
+      }
+     ]
+    }
+   ],
+   "DisplaySkuAvailabilities": [
+    {
+     "Sku": {
+      "SkuId": "0010",
+      "Properties": {
+       "IsTrial": false,
+       "IsPreOrder": false,
+       "BundledSkus": [],
+       "Packages": [
+        {
+         "ContentId": "cdaefbe3-7d4d-4e6b-9bd6-a25f3426318d",
+         "PackageFormat": "MSIXVC",
+         "Architectures": [
+          "x64"
+         ],
+         "PlatformDependencies": [
+          {
+           "PlatformName": "Windows.Desktop"
+          }
+         ],
+         "PackageFamilyName": "BethesdaSoftworks.ProjectRelic_3275kfvn8vcwc",
+         "MainPackageFamilyNameForDlc": null,
+         "MaxDownloadSizeInBytes": 128675557376
+        },
+        {
+         "ContentId": "a69dfaf2-00f6-42bb-b7a6-f099ba2c914d",
+         "PackageFormat": "XVC",
+         "Architectures": [
+          "x64"
+         ],
+         "PlatformDependencies": [
+          {
+           "PlatformName": "Windows.Xbox"
+          }
+         ],
+         "PackageFamilyName": null,
+         "MainPackageFamilyNameForDlc": null,
+         "MaxDownloadSizeInBytes": 148895129600
+        }
+       ]
+      }
+     }
+    },
+    {
+     "Sku": {
+      "SkuId": "0017",
+      "Properties": {
+       "IsTrial": false,
+       "IsPreOrder": true,
+       "BundledSkus": [],
+       "Packages": [
+        {
+         "ContentId": "cdaefbe3-7d4d-4e6b-9bd6-a25f3426318d",
+         "PackageFormat": "MSIXVC",
+         "Architectures": [
+          "x64"
+         ],
+         "PlatformDependencies": [
+          {
+           "PlatformName": "Windows.Desktop"
+          }
+         ],
+         "PackageFamilyName": "BethesdaSoftworks.ProjectRelic_3275kfvn8vcwc",
+         "MainPackageFamilyNameForDlc": null,
+         "MaxDownloadSizeInBytes": 128675557376
+        },
+        {
+         "ContentId": "a69dfaf2-00f6-42bb-b7a6-f099ba2c914d",
+         "PackageFormat": "XVC",
+         "Architectures": [
+          "x64"
+         ],
+         "PlatformDependencies": [
+          {
+           "PlatformName": "Windows.Xbox"
+          }
+         ],
+         "PackageFamilyName": null,
+         "MainPackageFamilyNameForDlc": null,
+         "MaxDownloadSizeInBytes": 148895129600
+        }
+       ]
+      }
+     }
+    },
+    {
+     "Sku": {
+      "SkuId": "0011",
+      "Properties": {
+       "IsTrial": true,
+       "IsPreOrder": false,
+       "BundledSkus": [],
+       "Packages": [
+        {
+         "ContentId": "cdaefbe3-7d4d-4e6b-9bd6-a25f3426318d",
+         "PackageFormat": "MSIXVC",
+         "Architectures": [
+          "x64"
+         ],
+         "PlatformDependencies": [
+          {
+           "PlatformName": "Windows.Desktop"
+          }
+         ],
+         "PackageFamilyName": "BethesdaSoftworks.ProjectRelic_3275kfvn8vcwc",
+         "MainPackageFamilyNameForDlc": null,
+         "MaxDownloadSizeInBytes": 128675557376
+        },
+        {
+         "ContentId": "a69dfaf2-00f6-42bb-b7a6-f099ba2c914d",
+         "PackageFormat": "XVC",
+         "Architectures": [
+          "x64"
+         ],
+         "PlatformDependencies": [
+          {
+           "PlatformName": "Windows.Xbox"
+          }
+         ],
+         "PackageFamilyName": null,
+         "MainPackageFamilyNameForDlc": null,
+         "MaxDownloadSizeInBytes": 148895129600
+        }
+       ]
+      }
+     }
+    }
+   ]
+  },
+  {
+   "ProductId": "9NKDMSQM0P60",
+   "ProductType": "Durable",
+   "LocalizedProperties": [
+    {
+     "ProductTitle": "Indiana Jones and the Great Circle™: The Last Crusade™ Pack - Lion Tamer Whip"
+    }
+   ],
+   "MarketProperties": [
+    {
+     "RelatedProducts": [
+      {
+       "RelatedProductId": "9N8FQ28Z6QX3",
+       "RelationshipType": "addOnParent"
+      },
+      {
+       "RelatedProductId": "9N8FQ28Z6QX3",
+       "RelationshipType": "SellableBy"
+      },
+      {
+       "RelatedProductId": "9N2BP875PMK0",
+       "RelationshipType": "Bundle"
+      },
+      {
+       "RelatedProductId": "9NP0C6C3HBQ8",
+       "RelationshipType": "Bundle"
+      },
+      {
+       "RelatedProductId": "9NFB39X2Q8M4",
+       "RelationshipType": "Bundle"
+      },
+      {
+       "RelatedProductId": "9NQ516QG5Z7V",
+       "RelationshipType": "Bundle"
+      },
+      {
+       "RelatedProductId": "9P7724PJDM6W",
+       "RelationshipType": "Bundle"
+      }
+     ]
+    }
+   ],
+   "DisplaySkuAvailabilities": [
+    {
+     "Sku": {
+      "SkuId": "0017",
+      "Properties": {
+       "IsTrial": false,
+       "IsPreOrder": true,
+       "BundledSkus": [],
+       "Packages": [
+        {
+         "ContentId": "0ff4bf32-56c8-44e4-a502-bab4bc58a6f6",
+         "PackageFormat": "XVC",
+         "Architectures": [
+          "x64"
+         ],
+         "PlatformDependencies": [
+          {
+           "PlatformName": "Windows.Xbox"
+          }
+         ],
+         "PackageFamilyName": null,
+         "MainPackageFamilyNameForDlc": "BethesdaSoftworks.ProjectRelic_3275kfvn8vcwc",
+         "MaxDownloadSizeInBytes": 10604544
+        },
+        {
+         "ContentId": "47d6d3ee-6c27-46e6-a6ff-02a6d8dbef07",
+         "PackageFormat": "MSIXVC",
+         "Architectures": [
+          "x64"
+         ],
+         "PlatformDependencies": [
+          {
+           "PlatformName": "Windows.Desktop"
+          }
+         ],
+         "PackageFamilyName": "BethesdaSoftworks.LionTamerWhip_3275kfvn8vcwc",
+         "MainPackageFamilyNameForDlc": "BethesdaSoftworks.ProjectRelic_3275kfvn8vcwc",
+         "MaxDownloadSizeInBytes": 10612736
+        }
+       ]
+      }
+     }
+    },
+    {
+     "Sku": {
+      "SkuId": "0010",
+      "Properties": {
+       "IsTrial": false,
+       "IsPreOrder": false,
+       "BundledSkus": [],
+       "Packages": [
+        {
+         "ContentId": "0ff4bf32-56c8-44e4-a502-bab4bc58a6f6",
+         "PackageFormat": "XVC",
+         "Architectures": [
+          "x64"
+         ],
+         "PlatformDependencies": [
+          {
+           "PlatformName": "Windows.Xbox"
+          }
+         ],
+         "PackageFamilyName": null,
+         "MainPackageFamilyNameForDlc": "BethesdaSoftworks.ProjectRelic_3275kfvn8vcwc",
+         "MaxDownloadSizeInBytes": 10604544
+        },
+        {
+         "ContentId": "47d6d3ee-6c27-46e6-a6ff-02a6d8dbef07",
+         "PackageFormat": "MSIXVC",
+         "Architectures": [
+          "x64"
+         ],
+         "PlatformDependencies": [
+          {
+           "PlatformName": "Windows.Desktop"
+          }
+         ],
+         "PackageFamilyName": "BethesdaSoftworks.LionTamerWhip_3275kfvn8vcwc",
+         "MainPackageFamilyNameForDlc": "BethesdaSoftworks.ProjectRelic_3275kfvn8vcwc",
+         "MaxDownloadSizeInBytes": 10612736
+        }
+       ]
+      }
+     }
+    }
+   ]
+  },
+  {
+   "ProductId": "9MWGFC01WNHS",
+   "ProductType": "Durable",
+   "LocalizedProperties": [
+    {
+     "ProductTitle": "Indiana Jones and the Great Circle™: The Last Crusade™ Pack - Traveling Suit Outfit"
+    }
+   ],
+   "MarketProperties": [
+    {
+     "RelatedProducts": [
+      {
+       "RelatedProductId": "9N8FQ28Z6QX3",
+       "RelationshipType": "addOnParent"
+      },
+      {
+       "RelatedProductId": "9N8FQ28Z6QX3",
+       "RelationshipType": "SellableBy"
+      },
+      {
+       "RelatedProductId": "9N2BP875PMK0",
+       "RelationshipType": "Bundle"
+      },
+      {
+       "RelatedProductId": "9NP0C6C3HBQ8",
+       "RelationshipType": "Bundle"
+      },
+      {
+       "RelatedProductId": "9NFB39X2Q8M4",
+       "RelationshipType": "Bundle"
+      },
+      {
+       "RelatedProductId": "9NQ516QG5Z7V",
+       "RelationshipType": "Bundle"
+      },
+      {
+       "RelatedProductId": "9P7724PJDM6W",
+       "RelationshipType": "Bundle"
+      }
+     ]
+    }
+   ],
+   "DisplaySkuAvailabilities": [
+    {
+     "Sku": {
+      "SkuId": "0017",
+      "Properties": {
+       "IsTrial": false,
+       "IsPreOrder": true,
+       "BundledSkus": [],
+       "Packages": [
+        {
+         "ContentId": "4c8cb67d-c7a6-43d9-a7f3-5ab4811f2932",
+         "PackageFormat": "XVC",
+         "Architectures": [
+          "x64"
+         ],
+         "PlatformDependencies": [
+          {
+           "PlatformName": "Windows.Xbox"
+          }
+         ],
+         "PackageFamilyName": null,
+         "MainPackageFamilyNameForDlc": "BethesdaSoftworks.ProjectRelic_3275kfvn8vcwc",
+         "MaxDownloadSizeInBytes": 10604544
+        },
+        {
+         "ContentId": "ea1cf758-1a8c-4913-b938-66dbcaea2dac",
+         "PackageFormat": "MSIXVC",
+         "Architectures": [
+          "x64"
+         ],
+         "PlatformDependencies": [
+          {
+           "PlatformName": "Windows.Desktop"
+          }
+         ],
+         "PackageFamilyName": "BethesdaSoftworks.TweedSuitOutfit_3275kfvn8vcwc",
+         "MainPackageFamilyNameForDlc": "BethesdaSoftworks.ProjectRelic_3275kfvn8vcwc",
+         "MaxDownloadSizeInBytes": 10612736
+        }
+       ]
+      }
+     }
+    },
+    {
+     "Sku": {
+      "SkuId": "0010",
+      "Properties": {
+       "IsTrial": false,
+       "IsPreOrder": false,
+       "BundledSkus": [],
+       "Packages": [
+        {
+         "ContentId": "4c8cb67d-c7a6-43d9-a7f3-5ab4811f2932",
+         "PackageFormat": "XVC",
+         "Architectures": [
+          "x64"
+         ],
+         "PlatformDependencies": [
+          {
+           "PlatformName": "Windows.Xbox"
+          }
+         ],
+         "PackageFamilyName": null,
+         "MainPackageFamilyNameForDlc": "BethesdaSoftworks.ProjectRelic_3275kfvn8vcwc",
+         "MaxDownloadSizeInBytes": 10604544
+        },
+        {
+         "ContentId": "ea1cf758-1a8c-4913-b938-66dbcaea2dac",
+         "PackageFormat": "MSIXVC",
+         "Architectures": [
+          "x64"
+         ],
+         "PlatformDependencies": [
+          {
+           "PlatformName": "Windows.Desktop"
+          }
+         ],
+         "PackageFamilyName": "BethesdaSoftworks.TweedSuitOutfit_3275kfvn8vcwc",
+         "MainPackageFamilyNameForDlc": "BethesdaSoftworks.ProjectRelic_3275kfvn8vcwc",
+         "MaxDownloadSizeInBytes": 10612736
+        }
+       ]
+      }
+     }
+    }
+   ]
+  },
+  {
+   "ProductId": "9N4DN43V59N8",
+   "ProductType": "Durable",
+   "LocalizedProperties": [
+    {
+     "ProductTitle": "DOOM: The Dark Ages Void DOOM Slayer Skin"
+    }
+   ],
+   "MarketProperties": [
+    {
+     "RelatedProducts": [
+      {
+       "RelatedProductId": "9PH9X0760B0T",
+       "RelationshipType": "addOnParent"
+      },
+      {
+       "RelatedProductId": "9PH9X0760B0T",
+       "RelationshipType": "SellableBy"
+      },
+      {
+       "RelatedProductId": "9NN2BX6QXFZH",
+       "RelationshipType": "Bundle"
+      },
+      {
+       "RelatedProductId": "9NF28NB0LX8F",
+       "RelationshipType": "Bundle"
+      },
+      {
+       "RelatedProductId": "9NK3S5DT79LT",
+       "RelationshipType": "Bundle"
+      },
+      {
+       "RelatedProductId": "9NZ06VT2ZST3",
+       "RelationshipType": "Bundle"
+      }
+     ]
+    }
+   ],
+   "DisplaySkuAvailabilities": [
+    {
+     "Sku": {
+      "SkuId": "0017",
+      "Properties": {
+       "IsTrial": false,
+       "IsPreOrder": true,
+       "BundledSkus": [],
+       "Packages": [
+        {
+         "ContentId": "f6f86cd8-eee1-4b33-b5e7-3b09d7a786aa",
+         "PackageFormat": "XVC",
+         "Architectures": [
+          "x64"
+         ],
+         "PlatformDependencies": [
+          {
+           "PlatformName": "Windows.Xbox"
+          }
+         ],
+         "PackageFamilyName": null,
+         "MainPackageFamilyNameForDlc": "BethesdaSoftworks.ProjectTitan_3275kfvn8vcwc",
+         "MaxDownloadSizeInBytes": 10604544
+        },
+        {
+         "ContentId": "f8eb1544-23d1-4729-8c35-a634a866f23d",
+         "PackageFormat": "MSIXVC",
+         "Architectures": [
+          "x64"
+         ],
+         "PlatformDependencies": [
+          {
+           "PlatformName": "Windows.Desktop"
+          }
+         ],
+         "PackageFamilyName": "BethesdaSoftworks.TitanPreorderContent_3275kfvn8vcwc",
+         "MainPackageFamilyNameForDlc": "BethesdaSoftworks.ProjectTitan_3275kfvn8vcwc",
+         "MaxDownloadSizeInBytes": 10612736
+        }
+       ]
+      }
+     }
+    },
+    {
+     "Sku": {
+      "SkuId": "0010",
+      "Properties": {
+       "IsTrial": false,
+       "IsPreOrder": false,
+       "BundledSkus": [],
+       "Packages": [
+        {
+         "ContentId": "f6f86cd8-eee1-4b33-b5e7-3b09d7a786aa",
+         "PackageFormat": "XVC",
+         "Architectures": [
+          "x64"
+         ],
+         "PlatformDependencies": [
+          {
+           "PlatformName": "Windows.Xbox"
+          }
+         ],
+         "PackageFamilyName": null,
+         "MainPackageFamilyNameForDlc": "BethesdaSoftworks.ProjectTitan_3275kfvn8vcwc",
+         "MaxDownloadSizeInBytes": 10604544
+        },
+        {
+         "ContentId": "f8eb1544-23d1-4729-8c35-a634a866f23d",
+         "PackageFormat": "MSIXVC",
+         "Architectures": [
+          "x64"
+         ],
+         "PlatformDependencies": [
+          {
+           "PlatformName": "Windows.Desktop"
+          }
+         ],
+         "PackageFamilyName": "BethesdaSoftworks.TitanPreorderContent_3275kfvn8vcwc",
+         "MainPackageFamilyNameForDlc": "BethesdaSoftworks.ProjectTitan_3275kfvn8vcwc",
+         "MaxDownloadSizeInBytes": 10612736
+        }
+       ]
+      }
+     }
+    }
+   ]
+  },
+  {
+   "ProductId": "9P8PS6993LSL",
+   "ProductType": "Game",
+   "LocalizedProperties": [
+    {
+     "ProductTitle": "Gears of War: Reloaded"
+    }
+   ],
+   "MarketProperties": [
+    {
+     "RelatedProducts": [
+      {
+       "RelatedProductId": "9NZ7KCLZ1SX1",
+       "RelationshipType": "Bundle"
+      },
+      {
+       "RelatedProductId": "9PMB14MG5SFS",
+       "RelationshipType": "Bundle"
+      },
+      {
+       "RelatedProductId": "9NRJPRVGZ7ZT",
+       "RelationshipType": "Bundle"
+      }
+     ]
+    }
+   ],
+   "DisplaySkuAvailabilities": [
+    {
+     "Sku": {
+      "SkuId": "0010",
+      "Properties": {
+       "IsTrial": false,
+       "IsPreOrder": false,
+       "BundledSkus": [],
+       "Packages": [
+        {
+         "ContentId": "2345f353-e07c-463f-8a18-a70efc6d6dea",
+         "PackageFormat": "XVC",
+         "Architectures": [
+          "x64"
+         ],
+         "PlatformDependencies": [
+          {
+           "PlatformName": "Windows.Xbox"
+          }
+         ],
+         "PackageFamilyName": null,
+         "MainPackageFamilyNameForDlc": null,
+         "MaxDownloadSizeInBytes": 73817796608
+        },
+        {
+         "ContentId": "71b868a2-dde6-45a7-8d3b-c236e2c6c546",
+         "PackageFormat": "MSIXVC",
+         "Architectures": [
+          "x64"
+         ],
+         "PlatformDependencies": [
+          {
+           "PlatformName": "Windows.Desktop"
+          }
+         ],
+         "PackageFamilyName": "Microsoft.Pender_8wekyb3d8bbwe",
+         "MainPackageFamilyNameForDlc": null,
+         "MaxDownloadSizeInBytes": 75530424320
+        }
+       ]
+      }
+     }
+    },
+    {
+     "Sku": {
+      "SkuId": "0017",
+      "Properties": {
+       "IsTrial": false,
+       "IsPreOrder": true,
+       "BundledSkus": [],
+       "Packages": [
+        {
+         "ContentId": "2345f353-e07c-463f-8a18-a70efc6d6dea",
+         "PackageFormat": "XVC",
+         "Architectures": [
+          "x64"
+         ],
+         "PlatformDependencies": [
+          {
+           "PlatformName": "Windows.Xbox"
+          }
+         ],
+         "PackageFamilyName": null,
+         "MainPackageFamilyNameForDlc": null,
+         "MaxDownloadSizeInBytes": 73817796608
+        },
+        {
+         "ContentId": "71b868a2-dde6-45a7-8d3b-c236e2c6c546",
+         "PackageFormat": "MSIXVC",
+         "Architectures": [
+          "x64"
+         ],
+         "PlatformDependencies": [
+          {
+           "PlatformName": "Windows.Desktop"
+          }
+         ],
+         "PackageFamilyName": "Microsoft.Pender_8wekyb3d8bbwe",
+         "MainPackageFamilyNameForDlc": null,
+         "MaxDownloadSizeInBytes": 75530424320
+        }
+       ]
+      }
+     }
+    },
+    {
+     "Sku": {
+      "SkuId": "0011",
+      "Properties": {
+       "IsTrial": true,
+       "IsPreOrder": false,
+       "BundledSkus": [],
+       "Packages": [
+        {
+         "ContentId": "2345f353-e07c-463f-8a18-a70efc6d6dea",
+         "PackageFormat": "XVC",
+         "Architectures": [
+          "x64"
+         ],
+         "PlatformDependencies": [
+          {
+           "PlatformName": "Windows.Xbox"
+          }
+         ],
+         "PackageFamilyName": null,
+         "MainPackageFamilyNameForDlc": null,
+         "MaxDownloadSizeInBytes": 73817796608
+        },
+        {
+         "ContentId": "71b868a2-dde6-45a7-8d3b-c236e2c6c546",
+         "PackageFormat": "MSIXVC",
+         "Architectures": [
+          "x64"
+         ],
+         "PlatformDependencies": [
+          {
+           "PlatformName": "Windows.Desktop"
+          }
+         ],
+         "PackageFamilyName": "Microsoft.Pender_8wekyb3d8bbwe",
+         "MainPackageFamilyNameForDlc": null,
+         "MaxDownloadSizeInBytes": 75530424320
+        }
+       ]
+      }
+     }
+    }
+   ]
+  },
+  {
+   "ProductId": "9N1X737FGL21",
+   "ProductType": "Durable",
+   "LocalizedProperties": [
+    {
+     "ProductTitle": "Civilian Anya Skin"
+    }
+   ],
+   "MarketProperties": [
+    {
+     "RelatedProducts": [
+      {
+       "RelatedProductId": "9P8PS6993LSL",
+       "RelationshipType": "addOnParent"
+      },
+      {
+       "RelatedProductId": "9P8PS6993LSL",
+       "RelationshipType": "SellableBy"
+      },
+      {
+       "RelatedProductId": "9NZ7KCLZ1SX1",
+       "RelationshipType": "Bundle"
+      },
+      {
+       "RelatedProductId": "9PMB14MG5SFS",
+       "RelationshipType": "Bundle"
+      }
+     ]
+    }
+   ],
+   "DisplaySkuAvailabilities": [
+    {
+     "Sku": {
+      "SkuId": "0017",
+      "Properties": {
+       "IsTrial": false,
+       "IsPreOrder": true,
+       "BundledSkus": [],
+       "Packages": []
+      }
+     }
+    },
+    {
+     "Sku": {
+      "SkuId": "0010",
+      "Properties": {
+       "IsTrial": false,
+       "IsPreOrder": false,
+       "BundledSkus": [],
+       "Packages": []
+      }
+     }
+    }
+   ]
+  }
+ ]
+}
