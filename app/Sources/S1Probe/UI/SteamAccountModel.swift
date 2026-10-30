@@ -81,6 +81,9 @@ final class SteamAccountModel: ObservableObject {
         GameImports.shared.attach(installs)
         GOGAccount.shared.attach(installs)
         EpicAccount.shared.attach(installs)
+        #if !PLAYPORT_RELEASE
+        XboxInstalls.shared.attach(installs)  // dev only (decision 0166)
+        #endif
         Self.current = self
         // A game installed or updated (the catalogue's builds) may leave an update to queue, or none.
         catalogWatch = LibraryModel.shared.$catalog.dropFirst().receive(on: DispatchQueue.main).sink { [weak self] catalog in

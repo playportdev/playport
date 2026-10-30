@@ -70,7 +70,8 @@ edited policy cannot change an older build's omissions or completeness status:
 
 - **Git trees**: Playport at the build's commit (the app, the build scripts, every
   patch series, the AIR helper port), and Madeira, Wine, FEX, DXMT, Mesa, DXVK,
-  vkd3d-proton, gbe_fork, Abseil, FreeType, idevice, StikJIT and xtool, each one
+  vkd3d-proton, gbe_fork, Abseil, nexus-xgameruntime, nghttp2, FreeType, idevice,
+  StikJIT and xtool, each one
   `tar.gz` with its submodules expanded in place. A tag-pinned tree is packed from
   the commit the catalog records for its tag, so a moved tag stops it. The patched
   trees are these plus the series in the Playport archive. Wine's committed
@@ -95,7 +96,8 @@ edited policy cannot change an older build's omissions or completeness status:
 
 What is left out is named in the catalog with its reason, and the manifest records
 it: submodules the build never checks out (FEX's test binaries, gbe_fork's prebuilt
-toolchains), Madeira's own app with its prebuilt DLLs and Apple's converter library,
+toolchains, xgameruntime's googletest, nghttp2's application and test submodules),
+Madeira's own app with its prebuilt DLLs and Apple's converter library,
 and a few prebuilt files. Any other prebuilt binary, submodule, or rule that
 matches nothing stops the packing, as do a build with local changes, a
 `pins.lock` or series that is not the build commit's, a checksum mismatch, or a

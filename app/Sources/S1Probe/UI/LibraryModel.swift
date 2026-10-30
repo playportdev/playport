@@ -720,9 +720,10 @@ final class LibraryModel: ObservableObject {
     /// Deletes the title's folder from C:\Games (and, for a Steam install, its
     /// record, manifests and any paused download); in a folder another Steam
     /// app shares, only the files that app does not list (TitleInstaller.uninstallShared).
-    /// Saves kept in the prefix's user profile stay. Not while the title is
-    /// running or being checked.
-    func uninstall(_ id: String) {
+    /// Saves kept in the prefix's user profile stay, unless `keepSaves` is false for a
+    /// store whose runtime keeps them per game (an Xbox copy's, dev only). Not while the
+    /// title is running or being checked.
+    func uninstall(_ id: String, keepSaves: Bool = true) {
         guard let t = catalog.title(id: id), !removing.contains(id), !verifying.contains(id), !TitleLaunch.shared.running
         else { return }
         removing.insert(id)
@@ -741,6 +742,9 @@ final class LibraryModel: ObservableObject {
                 if t.store != .steam { LibraryModel.paths.layout.removeReceipt(t.key) }
                 if t.store == .gog { await GOGAccount.shared.installer.forget(productID: t.key.id) }
                 if t.store == .epic { await EpicAccount.shared.installer.forget(t.key.id) }
+                #if !PLAYPORT_RELEASE
+                if t.store == .xbox { await XboxInstalls.forget(t.key.id, keepSaves: keepSaves) }
+                #endif
             } catch {
                 LibraryModel.log("uninstall \(t.name) failed: \(error)")
                 failure = "\(error)"

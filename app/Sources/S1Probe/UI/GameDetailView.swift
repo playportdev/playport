@@ -40,6 +40,9 @@ import PlayportKit
 import SteamClientKit
 import SwiftUI
 import UIKit
+#if !PLAYPORT_RELEASE
+import XboxClientKit  // the dev app's Xbox copies (decision 0166); release has no such package
+#endif
 
 /// What X does on the game page now, for the shell's footer (AppShell.gamePageHints).
 @MainActor
@@ -72,6 +75,10 @@ private struct GameDetailPage: View {
     @ObservedObject private var focus = PadFocus.shared
     @ObservedObject private var gog = GOGAccount.shared
     @ObservedObject private var epic = EpicAccount.shared
+    #if !PLAYPORT_RELEASE
+    @ObservedObject private var xbox = XboxInstalls.shared
+    @ObservedObject private var xboxGames = XboxGames.shared
+    #endif
     @State private var playError: String?
     @State private var controllers = GCController.controllers().count
     @State private var stageOnDisk = false
@@ -135,7 +142,7 @@ private struct GameDetailPage: View {
         pickedBranch ?? installed?.branch ?? (installed == nil ? cohortBranch : nil) ?? Branch.publicName
     }
 
-    private var name: String { installed?.name ?? game?.info.name ?? gogGame?.title ?? epicGame?.title ?? "" }
+    private var name: String { installed?.name ?? game?.info.name ?? gogGame?.title ?? epicGame?.title ?? xboxTitle ?? "" }
 
     /// The GOG listing of this game, when GOG is signed in and owns it.
     private var gogGame: GOGGame? { key.flatMap { $0.store == .gog ? gog.game($0.id) : nil } }
@@ -147,12 +154,20 @@ private struct GameDetailPage: View {
 
     private var canDownloadEpic: Bool { epic.state == .signedIn && !installs.suspended }
 
+    #if !PLAYPORT_RELEASE
+    /// The Xbox account's copy of this game, when Xbox is signed in and lists it (dev only).
+    private var xboxCopy: XboxLibraryCopy? { key.flatMap { $0.store == .xbox ? xboxGames.game($0.id) : nil } }
+    private var xboxTitle: String? { xboxCopy?.title }
+    #else
+    private var xboxTitle: String? { nil }
+    #endif
+
     private var stats: UserStatsSnapshot? { appID.flatMap { model.userStats[$0]?.steam } }
 
     var body: some View {
         let t = installed, g = game
         Group {
-            if t == nil, g == nil, gogGame == nil, epicGame == nil {
+            if t == nil, g == nil, gogGame == nil, epicGame == nil, xboxTitle == nil {
                 VStack(spacing: 8) {
                     Text("Not installed").font(PP.display(28)).foregroundStyle(PP.text)
                     #if PLAYPORT_RELEASE
@@ -291,7 +306,8 @@ private struct GameDetailPage: View {
                                 ?? t.map { PageArt(appID: $0.appID, name: $0.name, info: nil, titleID: $0.id,
                                                    storeKey: $0.key) }
                                 ?? gogGame.map { PageArt(appID: nil, name: $0.title, info: nil, storeKey: StoreGameKey(store: .gog, id: $0.id)) }
-                                ?? epicGame.map { PageArt(appID: nil, name: $0.title, info: nil, storeKey: StoreGameKey(store: .epic, id: $0.id)) })
+                                ?? epicGame.map { PageArt(appID: nil, name: $0.title, info: nil, storeKey: StoreGameKey(store: .epic, id: $0.id)) }
+                                ?? xboxTitle.flatMap { title in key.map { PageArt(appID: nil, name: title, info: nil, storeKey: $0) } })
 
             HStack(alignment: .top, spacing: 24) {
                 VStack(alignment: .leading, spacing: 8) {
@@ -302,7 +318,7 @@ private struct GameDetailPage: View {
                             Text(line).font(.system(size: 13)).foregroundStyle(PP.soft)
                         }
                         HStack(spacing: 12) {
-                            if let t { installedButtons(t, g) } else if let g { installButtons(g) } else if let gg = gogGame { gogInstallButtons(gg) } else if let eg = epicGame { epicInstallButtons(eg) }
+                            if let t { installedButtons(t, g) } else if let g { installButtons(g) } else if let gg = gogGame { gogInstallButtons(gg) } else if let eg = epicGame { epicInstallButtons(eg) } else if xboxTitle != nil { xboxInstallButtons }
                         }
                         .padding(.top, 14)
                         notes(t, g)
@@ -419,6 +435,19 @@ private struct GameDetailPage: View {
         }
     }
 
+    /// An Xbox copy not installed (dev only): Install with its download size, or its download's controls.
+    @ViewBuilder
+    private var xboxInstallButtons: some View {
+        #if !PLAYPORT_RELEASE
+        if let job {
+            jobControls(job)
+        } else if let copy = xboxCopy {
+            PrimaryButton(id: "game:install", title: xbox.installer.hasStage(copy.id) ? "Resume download" : "Install",
+                          enabled: xbox.canInstall(copy.id) && !installs.suspended, hint: "Install") { xbox.install(copy) }
+        }
+        #endif
+    }
+
     /// A download, update or repair of this game: its progress, Pause or Resume, and Cancel.
     @ViewBuilder
     private func jobControls(_ job: Downloads.Job) -> some View {
@@ -443,7 +472,51 @@ private struct GameDetailPage: View {
 
     private func canPlay(_ t: InstalledTitle) -> Bool {
         t.canPlay && !launch.spent && !launch.running && !library.verifying.contains(t.id)
-            && !library.removing.contains(t.id) && job == nil
+            && !library.removing.contains(t.id) && job == nil && xboxPlayBlock(t) == nil
+    }
+
+    /// Why an installed Xbox copy can't be played yet (its runtime and decryption are PLA-499's); nil otherwise.
+    private func xboxPlayBlock(_ t: InstalledTitle) -> String? {
+        #if !PLAYPORT_RELEASE
+        return t.store == .xbox ? "Xbox copies can't start in this build yet: their encrypted .exe needs the Xbox runtime (dev)." : nil
+        #else
+        return nil
+        #endif
+    }
+
+    /// An uninstalled Xbox copy's download size, needed space, refusal or download state (dev only).
+    @ViewBuilder
+    private var xboxNote: some View {
+        #if !PLAYPORT_RELEASE
+        if let copy = xboxCopy {
+            if let why = xbox.refused[copy.id] {
+                Text(why).foregroundStyle(.orange)
+            } else if let job {
+                if case let .paused(reason?) = job.phase { Text(reason).foregroundStyle(.orange) }
+                if job.isRunning { Text("Keep Playport open: the download pauses when it leaves the screen.") }
+            } else if let package = xbox.package(copy.id) {
+                if package.format != "MSIXVC" {
+                    Text("This game's package is \(package.format), which Playport can't install yet.").foregroundStyle(.orange)
+                } else {
+                    let parts = ["Download \(ByteCount.format(package.downloadSize))", "needs \(ByteCount.format(package.neededBytes))"]
+                        + [library.freeBytes.map { "\(ByteCount.format($0)) free" }].compactMap { $0 }
+                    Text(parts.joined(separator: " · ") + " · keep Playport open while it downloads")
+                }
+            } else {
+                Text("Microsoft lists no Windows package for this game that Playport can install.").foregroundStyle(.orange)
+            }
+        }
+        #endif
+    }
+
+    private var xboxFacts: [(String, String, Color?)] {
+        #if !PLAYPORT_RELEASE
+        guard let copy = xboxCopy, let package = xbox.package(copy.id) else { return [] }
+        return [("Access", copy.access == .owned ? "Owned" : "PC Game Pass", nil),
+                ("Download", ByteCount.format(package.downloadSize), nil), ("Needs", ByteCount.format(package.neededBytes), nil)]
+        #else
+        return []
+        #endif
     }
 
     private func start(_ t: InstalledTitle) {
@@ -499,6 +572,8 @@ private struct GameDetailPage: View {
                          : "Playport cannot start another game in this session. Close it and reopen it from the Home Screen to play again.")
                 } else if !t.canPlay {
                     Text("No Windows executable in this folder.").foregroundStyle(.orange)
+                } else if let why = xboxPlayBlock(t) {
+                    Text(why).foregroundStyle(.orange)
                 } else if let job {
                     if case let .paused(reason?) = job.phase { Text(reason).foregroundStyle(.orange) }
                     // An update Playport queued by itself holds Play too: say how to play now.
@@ -514,6 +589,8 @@ private struct GameDetailPage: View {
                 installNote(g)
             } else if let eg = epicGame, let why = epic.refusal(eg.id) {
                 Text(why).foregroundStyle(.orange)
+            } else if xboxTitle != nil {
+                xboxNote
             }
         }
         .fixedSize(horizontal: false, vertical: true)
@@ -566,6 +643,8 @@ private struct GameDetailPage: View {
             if let s = stats, !s.schema.achievements.isEmpty {
                 rows.append(("Achievements", "\(s.unlockedCount) of \(s.schema.achievements.count)", nil))
             }
+        } else if xboxTitle != nil {
+            rows += xboxFacts
         }
         return VStack(spacing: 0) {
             ForEach(rows.indices, id: \.self) { i in
@@ -924,15 +1003,22 @@ private struct GameDetailPage: View {
             let again = t.source == .installed
                 ? "You can install it again from the Library."
                 : "To play it again, copy it into Playport again."
-            PadModal.shared.picker(
-                title: "Uninstall \(t.name)?", context: context,
-                note: "Saves the game keeps in its own folder are deleted with it; saves in Playport's Windows user folder stay. " + again,
-                options: [PadOption(id: "keep", label: "Keep it"),
-                          PadOption(id: "uninstall", label: "Uninstall", detail: t.sizeBytes.map { "Frees \(ByteCount.format($0))" })],
-                selected: nil) { choice in
-                guard choice == "uninstall" else { return }
+            let frees = t.sizeBytes.map { "Frees \(ByteCount.format($0))" }
+            var note = "Saves the game keeps in its own folder are deleted with it; saves in Playport's Windows user folder stay. " + again
+            var options = [PadOption(id: "keep", label: "Keep it"), PadOption(id: "uninstall", label: "Uninstall", detail: frees)]
+            #if !PLAYPORT_RELEASE
+            if t.store == .xbox {
+                // An Xbox copy's runtime keeps its saves per game in the prefix: the player chooses.
+                note = "Its saves on this phone can stay for when you install it again, or go with it. " + again
+                options = [PadOption(id: "keep", label: "Keep it"),
+                           PadOption(id: "uninstall", label: "Uninstall, keep saves", detail: frees),
+                           PadOption(id: "uninstall-saves", label: "Uninstall and delete saves", detail: frees)]
+            }
+            #endif
+            PadModal.shared.picker(title: "Uninstall \(t.name)?", context: context, note: note, options: options, selected: nil) { choice in
+                guard choice == "uninstall" || choice == "uninstall-saves" else { return }
                 navigation.gamePanels = []
-                library.uninstall(t.id)
+                library.uninstall(t.id, keepSaves: choice != "uninstall-saves")
             }
         }
     }

@@ -14,7 +14,7 @@
 #
 # Tree roots (env; the defaults are a finished pp build run in
 # $PLAYPORT_RUN, default $PLAYPORT_BUILD/run): WINE FEX MYTHIC DXMT LLVM FREETYPE MESA DXVK VKD3D
-# VULKAN_LOADER VULKAN_HEADERS GBE ABSL, and STIKJIT and
+# VULKAN_LOADER VULKAN_HEADERS GBE ABSL XGAMERUNTIME NGHTTP2, and STIKJIT and
 # IDEVICE (the checkouts build/stages/stikjit.sh keeps under
 # $PLAYPORT_BUILD/cache). Each must match its exact pin-plus-series tree.
 # IDEVICE_RUN (default $RUN/idevice) is build/stages/idevice.sh's output: its
@@ -62,6 +62,8 @@ VULKAN_LOADER=${VULKAN_LOADER:-$RUN/vulkan-pe/vulkan-loader}
 VULKAN_HEADERS=${VULKAN_HEADERS:-$RUN/vulkan-pe/vulkan-headers}
 GBE=${GBE:-$RUN/steamapi/gbe}
 ABSL=${ABSL:-$RUN/steamapi/abseil-cpp}
+XGAMERUNTIME=${XGAMERUNTIME:-$RUN/xbox/xgameruntime}
+NGHTTP2=${NGHTTP2:-$RUN/xbox/nghttp2}
 STIKJIT=${STIKJIT:-$PLAYPORT_BUILD/cache/stikjit-$(pin stikjit)/src}
 RUST_NOTICE_CARGO_HOME=${RUST_NOTICE_CARGO_HOME:-$RUST_ROOT/cargo}
 export RUST_NOTICE_CARGO_HOME
@@ -81,7 +83,7 @@ export GST_NOTICE_CERBERO GST_NOTICE_SOURCES LLVM_RUNTIME_SOURCE LLVM_MINGW_SOUR
 # Work beside the destination (same filesystem), then publish only on success.
 OUT=$(mktemp -d "${FINAL_OUT}.partial.XXXXXX")
 trap 'rm -rf -- "$OUT"' EXIT
-export WINE FEX MYTHIC DXMT LLVM FREETYPE MESA DXVK VKD3D VULKAN_LOADER VULKAN_HEADERS GBE ABSL STIKJIT IDEVICE
+export WINE FEX MYTHIC DXMT LLVM FREETYPE MESA DXVK VKD3D VULKAN_LOADER VULKAN_HEADERS GBE ABSL XGAMERUNTIME NGHTTP2 STIKJIT IDEVICE
 python3 "$REPO/build/notices-provenance.py" trees "$REPO" "$PLAYPORT_BUILD/tmp" "$OUT/tree-provenance.json"
 python3 "$REPO/build/notices-rust.py" "$REPO" "$IDEVICE" "$IDEVICE_RUN" "$RUST_ROOT" \
     "$PLAYPORT_BUILD/tmp" "$OUT/rust-provenance.json" --cargo-home "$RUST_NOTICE_CARGO_HOME" --collect-notices "$OUT"
@@ -221,6 +223,23 @@ for f in curl/COPYING libssq/LICENSE mbedtls/LICENSE opus/COPYING portaudio/LICE
     archive_ "gbe_fork-deps-$(echo "${f%.txt}" | tr / -).txt" "$DEPS/${f%%/*}/${f%%/*}.tar.gz" "$f"
 done
 cp_ abseil-cpp-LICENSE.txt "$ABSL/LICENSE"
+# nexus-xgameruntime (Runtime/arm64ec-windows/xgameruntime.dll, LGPL-2.1-or-later) and the
+# MIT material in it (docs/LICENSING.md, "Xbox"): Nexus's MIT text, the whole MIT headers of
+# the Weather files (env.c's, with its "CoTaskMemFree of charge" slip, and statics.h's), the
+# licence of libHttpClient, which src/System/Threading came from (build/notices-extra/sources.json),
+# and the headers of the libxml2 files under their own notices, which it compiles from the Wine
+# tree (libxml2's COPYING is the Wine collection's wine-libs-xml2-COPYING)
+cp_ xgameruntime-LICENSE.txt "$XGAMERUNTIME/LICENSE"
+cp_ xgameruntime-tests-Nexus-LICENSE.txt "$XGAMERUNTIME/tests/Nexus/LICENSE"
+excerpt_ xgameruntime-env.c-header.txt "$XGAMERUNTIME/libs/xgameruntime-common/env.c" 1 21
+excerpt_ xgameruntime-statics.h-header.txt "$XGAMERUNTIME/include/private/statics.h" 1 21
+cp_ xgameruntime-libHttpClient-LICENSE.md "$REPO/build/notices-extra/libHttpClient-LICENSE.md"
+excerpt_ xgameruntime-libxml2-list.c-header.txt "$WINE/libs/xml2/list.c" 1 16
+excerpt_ xgameruntime-libxml2-dict.c-header.txt "$WINE/libs/xml2/dict.c" 1 17
+excerpt_ xgameruntime-libxml2-timsort.h-header.txt "$WINE/libs/xml2/timsort.h" 1 32
+# nghttp2 (Runtime/arm64ec-windows/libnghttp2.dll, MIT) and its sfparse, under its own holders
+cp_ nghttp2-COPYING.txt "$NGHTTP2/COPYING"
+excerpt_ nghttp2-sfparse-header.txt "$NGHTTP2/lib/sfparse.c" 1 26
 # MoltenVK (Apache-2.0) in GStreamer's iOS release: its licence at the SDK's MoltenVK tag
 # (build/notices-extra/sources.json, decision 0042)
 cp_ MoltenVK-LICENSE.txt "$REPO/build/notices-extra/MoltenVK-LICENSE"

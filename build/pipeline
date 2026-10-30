@@ -8,7 +8,7 @@
 #   pp build [--variant dev|release] [--unsigned] [--clean | --from STAGE] [--to STAGE] [--keep-outputs N] [--plan]
 #
 # By default only what changed is rebuilt: each tree stage (unix, pe, fex,
-# dxmt, vulkan, steamapi, idevice) records a digest of its inputs (its pins, patch series, build
+# dxmt, vulkan, steamapi, xbox, idevice) records a digest of its inputs (its pins, patch series, build
 # scripts, build/lib.sh (not env.sh) and the toolchains: llvm-mingw, host clang, the SDK)
 # in $PLAYPORT_RUN/stamps/ and runs again only when that digest
 # changes (dxmt also after pe); stage and notices likewise, per checkout
@@ -46,6 +46,9 @@
 #            (build/stages/vulkan-pe.sh; the loader: decision 0131)
 #   steamapi the Steam API emulator a game loads in place of its steam_api(64).dll:
 #            gbe_fork's steam_api for x86-64 and i386 (build/stages/steamapi.sh)
+#   xbox     the Xbox runtime's DLLs for arm64ec, Wine builtins: nexus-xgameruntime's
+#            xgameruntime.dll, with libxml2 and the WinRT IDL from the pe stage's Wine
+#            tree, and nghttp2's libnghttp2.dll for winhttp (build/stages/xbox-pe.sh)
 #   idevice  idevice's C FFI for iOS with the pins.lock Rust, prelinked into one object
 #            (build/stages/idevice.sh): how the app restarts itself after a game (decision 0029)
 #   stage    fetch the trusted roots pins.lock names (build/stages/ca-bundle.sh) and
@@ -79,7 +82,7 @@ set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/lib.sh"
-STAGES=(inputs sources unix pe fex dxmt vulkan steamapi idevice stage notices app verify)
+STAGES=(inputs sources unix pe fex dxmt vulkan steamapi xbox idevice stage notices app verify)
 FROM=auto TO=verify KEEP=3 VARIANT=${PLAYPORT_VARIANT:-dev} PLAN=0 UNSIGNED=0
 while [ $# -gt 0 ]; do
     case $1 in
@@ -283,6 +286,11 @@ stage_steamapi() {
     say "  $(grep -c -- '-windows/steam_api' "$RUN/logs/steamapi.log") steam_api DLLs"
 }
 
+stage_xbox() {
+    run xbox env WINE_SRC="$RUN/pe/wine" bash "$HERE/stages/xbox-pe.sh" "$RUN/xbox"
+    say "  $(grep -c ' arm64ec-windows/.*\.dll$' "$RUN/logs/xbox.log") xbox DLLs"
+}
+
 stage_idevice() {
     run idevice bash "$HERE/stages/idevice.sh" "$RUN/idevice"
     say "  $(tail -1 "$RUN/logs/idevice.log" | awk '{print substr($2,1,16) "  libidevice_ffi.a (" $1 " bytes)"}'), $(tail -2 "$RUN/logs/idevice.log" | head -1 | cut -d' ' -f1) crates"
@@ -450,7 +458,7 @@ parts() { local PARTS=1; digest_inputs "$1"; }
 digest_inputs() {
     local s=$1
     {
-        case $s in unix|pe|fex|dxmt|vulkan|steamapi|idevice) toolchain; files build/lib.sh ;; esac
+        case $s in unix|pe|fex|dxmt|vulkan|steamapi|xbox|idevice) toolchain; files build/lib.sh ;; esac
         case $s in
         unix) pins madeira wine wine-port wine-valve freetype gstreamer; series_text madeira-unix wine-port wine-valve wine-unix
               files build/stages/unix.sh build/stages/unix-gaps.sh build/stages/gstreamer.sh build/ppsync ;;
@@ -467,6 +475,8 @@ digest_inputs() {
                 files build/stages/mesa.sh build/stages/vulkan-pe.sh build/check-macho-imports.py
                 after pe ;;
         steamapi) pins gbe abseil-cpp; series_text gbe; files build/stages/steamapi.sh build/steamapi-vtables.py ;;
+        xbox) pins xgameruntime nghttp2; series_text xgameruntime; files build/stages/xbox-pe.sh
+              after pe ;;
         idevice) pins idevice rust; series_text idevice; files build/stages/idevice.sh build/idevice-crates.py ;;
         stage) pins stikjit idevice ca-bundle wine-mono; series_text madeira-winios
                files build/stages/stage-artifacts.py build/stages/stikjit.sh build/stages/ca-bundle.sh build/stages/wine-mono.sh \
@@ -476,12 +486,12 @@ digest_inputs() {
                      app/UrlOpener app/Sources/WineHost/include/url_opener_protocol.h \
                      build/stages/steamclient.sh build/steamclient-vtables.py app/SteamClientShim \
                      app/Sources/WineHost/include/steam_client_protocol.h
-               for t in unix pe fex dxmt vulkan steamapi idevice; do after "$t"; done ;;
+               for t in unix pe fex dxmt vulkan steamapi xbox idevice; do after "$t"; done ;;
         notices) pins stikjit idevice rust wine-mono; toolchain
                  files LICENSE LICENSE-EXCEPTION.md app/SteamClient/LICENSE-JavaSteam.txt app/artifacts.tsv build/stages/wine-mono.sh \
                        'build/notices-*.py' 'build/notices-*.sh' 'build/*.lock.json' build/gstreamer-notices.sources.json \
-                       build/app-notices.json build/lib.sh
-                 for t in unix pe fex dxmt vulkan steamapi idevice stage; do after "$t"; done ;;
+                       build/notices-extra build/app-notices.json build/lib.sh
+                 for t in unix pe fex dxmt vulkan steamapi xbox idevice stage; do after "$t"; done ;;
         esac
     }
 }
@@ -550,13 +560,13 @@ for s in "${STAGES[@]}"; do
     esac
     [ "$started" = 1 ] || continue
     want=""
-    case $s in unix|pe|fex|dxmt|vulkan|steamapi|idevice|stage|notices) want=$(digest "$s") ;; esac
+    case $s in unix|pe|fex|dxmt|vulkan|steamapi|xbox|idevice|stage|notices) want=$(digest "$s") ;; esac
     if [ "$FROM" = auto ] && [ -n "$want" ] && [ "$(stamp "$s")" = "$want" ]; then
         if [ "$PLAN" = 1 ]; then echo "plan: $s unchanged"; else say "== $s: unchanged ($want)"; fi
     elif [ "$PLAN" = 1 ]; then
         echo "plan: $s runs$(why "$s" "$want")"
         [ -z "$want" ] || PLANNED[$s]=$want
-        case $s in unix|pe|fex|dxmt|vulkan|steamapi|idevice) trees+="$s " ;; esac
+        case $s in unix|pe|fex|dxmt|vulkan|steamapi|xbox|idevice) trees+="$s " ;; esac
     else
         say "== $s"
         : > "$RUN/logs/$s.log"

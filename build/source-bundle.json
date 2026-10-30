@@ -140,6 +140,29 @@
       "allow_binary": {}
     },
     {
+      "name": "xgameruntime",
+      "pin": "xgameruntime",
+      "why": "nexus-xgameruntime, the Xbox GDK runtime (Runtime/arm64ec-windows/xgameruntime.dll, build/stages/xbox-pe.sh); patches/xgameruntime is in the playport archive; the libxml2 and WinRT IDL it compiles are the wine component's libs/xml2 and include/, with Wine's series",
+      "local": ["cache:xgameruntime.git", "run:xbox/xgameruntime"],
+      "submodules": {
+        "external/googletest": "its unit tests' framework; build/stages/xbox-pe.sh builds no tests and does not check it out"
+      },
+      "allow_binary": {}
+    },
+    {
+      "name": "nghttp2",
+      "pin": "nghttp2",
+      "why": "nghttp2's library (Runtime/arm64ec-windows/libnghttp2.dll, build/stages/xbox-pe.sh), unmodified; its headers are what Wine's winhttp compiles against",
+      "local": ["cache:nghttp2.git", "run:xbox/nghttp2"],
+      "submodules": {
+        "third-party/mruby": "the nghttpx proxy's scripting; a library-only build (ENABLE_LIB_ONLY) does not use it and build/stages/xbox-pe.sh does not check it out",
+        "third-party/neverbleed": "the nghttpx proxy's OpenSSL privilege separation; a library-only build does not use it",
+        "third-party/urlparse": "the applications' URL parser; a library-only build does not use it",
+        "tests/munit": "nghttp2's unit tests' framework; build/stages/xbox-pe.sh builds no tests"
+      },
+      "allow_binary": {}
+    },
+    {
       "name": "freetype",
       "pin": "freetype",
       "tag": "VER-2-14-3",

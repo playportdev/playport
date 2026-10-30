@@ -160,8 +160,15 @@ best-effort and reported as unconfirmed; transport loss/SIGKILL can leave cancel
   xbox:wait             wait (5 min at most) for that sign-in to finish; a refusal ends the action
   xbox:signout          Accounts' Sign out row and its confirmation; the synthetic device stays
   xbox:status           log signed in/out only (no account or device identifiers), e.g. after relaunch
+  xbox:library          the Library on the Xbox chip once its refresh (entitlements, catalogue) ends;
+                         logs counts only: copies (owned, PC Game Pass), products left out, whether
+                         the pilot (Hollow Knight: Voidheart Edition) is listed. Signed in only
   xbox:reset-device     Developer's Reset Xbox device row and confirmation (signs out); the old
                          device must be unlinked at account.microsoft.com/devices/content
+  install:xbox-PRODUCTID the Xbox copy's page and Install (dev; signed in): streams its MSIXVC into
+                         C:\Games, waits until the Library adopts it; logs sizes, version, exe only
+  xbox:installed:PRODUCTID  the copy is in the Library, its record is there and every file verifies;
+                         shows its page and logs file counts, kept-encrypted count and version
   set:KEY=VALUE          a UserDefaults key, as a Settings control sets it (set:metalHUD=true;
                          set:donorPoolMB=0|auto|2048|4096|6144: Settings › Graphics › Donor memory, next Play,
                          Auto when unset; auto sizes it from the phone's tier and the app's limit;
@@ -172,7 +179,7 @@ best-effort and reported as unconfirmed; transport loss/SIGKILL can leave cancel
                          the restart after a game, too), and log the queue
   install:APP            install from Steam with the paired session; pause-resume:APP pauses at a
                          quarter and resumes; install:gog-ID[@BUILD] installs or updates from GOG;
-                         install:epic-APPNAME from Epic Games
+                         install:epic-APPNAME from Epic Games; install:xbox-PRODUCTID from Xbox (dev)
   uninstall:ID, verify:ID
   repair:ID              the game page's Repair from Steam, which it offers after a verify: that did
                          not pass (bad files, or depots to check with Steam again); waits for the job
@@ -472,12 +479,12 @@ TOUCH_CONTROL = r"[A-Za-z0-9_-]+(?:\.(?:up|down|left|right))?"
 # A gyro: script's step (HostIOKit GyroScript): axis=deg/s terms joined by +, or rest, then @ms.
 GYRO_TERM = r"(?:yaw|pitch|roll)=-?[0-9]{1,4}(?:\.[0-9]+)?"
 GYRO_STEP = rf"(?:rest|{GYRO_TERM}(?:\+{GYRO_TERM})*)@[0-9]{{1,5}}"
-ACTION_RE = re.compile((r"^(?:(?:install|pause-resume|queue|downloading):[0-9]+|install:gog-[0-9]+(?:@[0-9]+)?|install:epic-[A-Za-z0-9._-]+|(?:uninstall|verify|repair|play):[a-z]+-[A-Za-z0-9 ._-]+|(?:open-launcher|forget-launcher-window):[a-z]+"
+ACTION_RE = re.compile((r"^(?:(?:install|pause-resume|queue|downloading):[0-9]+|install:gog-[0-9]+(?:@[0-9]+)?|install:epic-[A-Za-z0-9._-]+|install:xbox-[0-9A-Z]{12}|(?:uninstall|verify|repair|play):[a-z]+-[A-Za-z0-9 ._-]+|(?:open-launcher|forget-launcher-window):[a-z]+"
                         r"|import:[A-Za-z0-9 ._()'+-]+(?:/[A-Za-z0-9 ._()'+-]+)*"
                        r"|hud:(?:on|off)|open:[a-z]+(?:-[A-Za-z0-9 ._-]+(?:#[a-z]+)?)?|open:library#(?:{c})|open:settings#(?:accounts|steam|graphics|downloads|controls|controllers|gyro|controller|storage|setup|about|launchers|developer|account|jit|memory|diagnostics|pairing|probes|logs)|open:licences(?:#[a-z0-9 ._-]+)?|pad:(?:{b})(?:\+(?:{b}))*|set:[A-Za-z0-9._-]+=[^,]*"
                        r"|wait:[0-9]{1,3}|tap:(?:0(?:\.[0-9]+)?|1(?:\.0+)?):(?:0(?:\.[0-9]+)?|1(?:\.0+)?)|menu:(?:open|resume|controls|screenshot|overlay|controller|quit)"
                        r"|touch:{t}(?:\+{t})*(?:@[0-9]{1,5})?|gyro:{g}(?:/{g})*|gesture:three-finger-tap|web:(?:wait|close)|web:click:[A-Za-z0-9 ._-]+"
-                       r"|xbox:(?:signin|wait|signout|status|reset-device)"
+                       r"|xbox:(?:signin|wait|signout|status|library|reset-device|installed:[0-9A-Z]{12})"
                        r"|jit:(?:setup|pair|continue|open-settings|cancel|wait)|probe:settings-url-[0-9]|probe:helper-(?:(?:exit|kill)(?:-hold)?|report)|probe:memory-(?:64|2048|4096|donor-(?:tagged|purgeable)-(?:2048|4096)|donors-(?:6144|8192|10240)|pool-verify|pool-zero|pool-gpu)|background:(?:[1-9][0-9]|[1-5][0-9]{2}|600)|probe:relaunch|probe:native-auth|probe:pairing(?:-cancel|-use)?)$").replace("{b}", PAD_BUTTONS).replace("{t}", TOUCH_CONTROL)
                        .replace("{g}", GYRO_STEP).replace("{c}", "|".join(LIBRARY_CHIPS)))
 

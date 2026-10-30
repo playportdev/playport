@@ -30,11 +30,14 @@ internal enum XboxCrypto {
             throw ClientError.protocolChanged("Microsoft returned an unsupported CLEP state")
         }
         let off = 4 + keyBytes
+        return try XboxAES128(scheduleKey(data, at: off)).cbc(Array(data[4..<off]))
+    }
+    /// The AES-128 key hidden in a CLEP key schedule of 58 little-endian words at `off`.
+    static func scheduleKey(_ data: [UInt8], at off: Int) -> [UInt8] {
         let w = (0..<58).map { data.readLE32(at: off + 4 * $0) }
-        let key = [w[46] ^ w[56] ^ 0xE20DF371 ^ 0xCCB22FE6, w[36] ^ w[47] ^ 0xDF080E39,
-                   w[40] ^ w[51] ^ 0x6D09B2F5 ^ 0x2AE17AB9, w[30] ^ w[41] ^ 0x37288CEC]
+        return [w[46] ^ w[56] ^ 0xE20DF371 ^ 0xCCB22FE6, w[36] ^ w[47] ^ 0xDF080E39,
+                w[40] ^ w[51] ^ 0x6D09B2F5 ^ 0x2AE17AB9, w[30] ^ w[41] ^ 0x37288CEC]
             .flatMap { v in (0..<4).map { UInt8(truncatingIfNeeded: v >> (8 * $0)) } }
-        return try XboxAES128(key).cbc(Array(data[4..<off]))
     }
     static func privateKey(_ license: String) throws -> [UInt8] {
         let bytes = try decode(license)
