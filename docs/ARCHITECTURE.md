@@ -73,7 +73,10 @@ with its own PEB and private ntdll copy:
   DLLs come from `sysarm64` (`patches/wine-pe` 0015, 0055). Its image and DLLs take the
   JIT pool copy and x18 patching like any ARM64 image; code it writes runs through the
   anonymous executable path. `tools/compat/probes` `arm64`, `arm64-fault` and
-  `arm64-min` test it ([evidence](evidence/2026-10-30-native-arm64-child.md)).
+  `arm64-min` test it ([evidence](evidence/2026-10-30-native-arm64-child.md)). Its
+  Direct3D 12 is the Vulkan backend's aarch64 set (`Runtime/vulkan*/aarch64-windows`)
+  linked over `sysarm64` by a Vulkan launch; the `d3d12` probe tests it
+  ([evidence](evidence/2026-10-30-arm64-d3d12.md)).
 - **A crashing child is isolated only in part.** A fault in any pseudo-process is a
   fault in the app's one task. Orderly `TerminateProcess` of live children works and is
   tested. Two host-fault cases end the child, not the app (`patches/madeira-unix`
