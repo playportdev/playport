@@ -20,7 +20,11 @@ public struct XboxHTTPRequest: Sendable {
 public struct XboxHTTPResponse: Sendable {
     public let status: Int
     public let body: Secret<[UInt8]>
-    public init(status: Int, body: [UInt8]) { self.status = status; self.body = Secret(body) }
+    /// Lower-cased names. Values are provider data: never log them.
+    public let headers: [String: String]
+    public init(status: Int, body: [UInt8], headers: [String: String] = [:]) {
+        self.status = status; self.body = Secret(body); self.headers = headers
+    }
 }
 
 public protocol XboxHTTP: Sendable {
@@ -30,9 +34,12 @@ public protocol XboxHTTP: Sendable {
 /// Ephemeral (no cookies or cache), no retries and no redirects. Callers classify
 /// faults, rather than turning a provider refusal into an automatic new device.
 public final class XboxURLSessionHTTP: XboxHTTP, @unchecked Sendable {
-    private let limit = 1024 * 1024
+    private let limit: Int
     private let session: URLSession
-    public init() {
+    /// `limit` caps a response body: Microsoft's sign-in replies fit the default; a
+    /// display-catalogue page of 20 products can be several MiB.
+    public init(limit: Int = 1024 * 1024) {
+        self.limit = limit
         let config = URLSessionConfiguration.ephemeral
         config.httpCookieStorage = nil; config.urlCache = nil
         config.timeoutIntervalForRequest = 30; config.timeoutIntervalForResource = 45
@@ -42,14 +49,16 @@ public final class XboxURLSessionHTTP: XboxHTTP, @unchecked Sendable {
     public func send(_ input: XboxHTTPRequest) async throws -> XboxHTTPResponse {
         var request = URLRequest(url: input.url)
         request.httpMethod = input.method
-        request.httpBody = Data(input.body.value)
+        if !input.body.value.isEmpty { request.httpBody = Data(input.body.value) } // a GET carries none
         for (name, value) in input.headers { request.setValue(value.value, forHTTPHeaderField: name) }
         do {
             let (data, response) = try await session.data(for: request)
             guard data.count <= limit, let response = response as? HTTPURLResponse else {
                 throw ClientError.protocolChanged("Xbox HTTP response is invalid or too large")
             }
-            return XboxHTTPResponse(status: response.statusCode, body: Array(data))
+            var headers: [String: String] = [:]
+            for case let (name as String, value as String) in response.allHeaderFields { headers[name.lowercased()] = value }
+            return XboxHTTPResponse(status: response.statusCode, body: Array(data), headers: headers)
         } catch let error as ClientError { throw error }
         catch is CancellationError { throw ClientError.cancelled }
         catch { throw ClientError.transport("Xbox request failed; check your connection") }
