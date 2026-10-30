@@ -201,6 +201,36 @@ keyed loopback bridge (decision
   `refused: another product`, …). They never contain a payload, ticket, licence
   token, nonce or key.
 
+## Playing a copy (PLA-499)
+
+A Play of an installed copy (the dev app's `Dev/XboxPlay.swift`) goes through, in order:
+
+- `XboxSession.licence` on every Play. `XboxPlayRefusal.check` turns a refusal into
+  the launch's message: `kind` is `.signIn` (signed out, `signInRequired`,
+  `deviceRejected`) or `.licence` (Microsoft's refusal, the device limit, licensing
+  unreachable with no stored licence, or a licence with no key for the copy). The
+  title and text say which.
+- `XboxPlayFiles(installed:keys:)`: the record's kept-encrypted files and their
+  ciphers. `plaintext(_:original:out:)` decrypts a file's whole pages from its
+  original by their data units and cuts it to the file's size. PlayportKit's
+  `InPlaceSwap` puts that plaintext under the original's name in the copy's own
+  folder and sets the original aside beside it. A game that relaunches itself or
+  looks beside its executable finds what it expects; Wine's loader needs no
+  change (unlike Xodus's memfd launch view). At the launch's end the originals
+  go back over the plaintext. A per-play marker in the state root lets the next
+  app start finish that after a crash.
+- `XboxGameManifest.load(folder:)` reads the copy's MicrosoftGame.config:
+  `MSAAppId`, `MSAFullTrust`, `RelatedProducts` (for `XboxBridgeCopy`) and the
+  `KnownDependency` names. `prerequisites(files:)` gives `VC14`'s installer when
+  the package carries one at `Engine/Extras/Redist/en-us/vc_redist.x64.exe`
+  (Nexus's one case). Otherwise Wine's own VC++ runtime stands in, as for the
+  pilot. It runs through the app's prerequisites mechanism (decision 0079).
+- The bridge's listener for the play. Its `guestEnvironment`, plus
+  `WINE_WINHTTP_HTTP2=1` (patches/wine-gdk offers HTTP/2 only when asked), goes into
+  `LaunchCoordinator.Request.guestEnvironment`: the game's environment only.
+- PlayportKit's `GamingRuntimeKeys` (Gaming Services' version and the Store's
+  WinRT class served by `xgameruntime.dll`) are topped up in the prefix.
+
 ## Provenance and offline checks
 
 Written from Xodus `514dd56f360a4bdf12f4acde5148bac5ce5f957f`:
@@ -287,5 +317,8 @@ The install's phone gate is deferred as well (signed in, the pilot in the librar
 `./pp ui --action install:xbox-9MW9469V91LM --action xbox:installed:9MW9469V91LM --shot`
 installs the copy from its page and checks it is adopted and every file verifies;
 `uninstall:xbox-9MW9469V91LM` removes it keeping its saves (the page's Remove also
-offers deleting them). In the dev app an installed Xbox copy can't be played yet: its
-`.exe` stays encrypted until PLA-499's runtime decrypts it at play.
+offers deleting them).
+
+The play's phone gate (signed in, installed):
+`./pp ui --play xbox-9MW9469V91LM --until first-frame+10 --shot`. A refusal ends the
+run with `refused: <title>: <text>` (sign-in or licence).
