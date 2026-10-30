@@ -456,6 +456,11 @@ public struct TouchControls: Sendable {
         return (f.origin, d.x, d.y)
     }
 
+    /// Where the fingers on a control are now, in the order they went down (the look area's rings).
+    public func points(on id: String) -> [TouchPoint] {
+        order.compactMap { fingers[$0] }.filter { targets[$0.target].id == id }.map(\.at)
+    }
+
     public var output: TouchOutput {
         var out = TouchOutput()
         for id in toggled {

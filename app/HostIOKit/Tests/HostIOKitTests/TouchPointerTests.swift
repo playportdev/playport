@@ -41,10 +41,16 @@ final class TouchPointerTests: XCTestCase {
         t.moved(3, at: p(100, 110), time: 0.08)
         t.moved(1, at: p(310.4, 205), time: 0.08)
         XCTAssertEqual(t.takeOutput().events, [.move(dx: 0, dy: 30), .move(dx: 29, dy: 0)])   // 30 - 0.8
+        // Where the fingers looking are now, in the order they went down (the view rings each).
+        XCTAssertEqual(t.points(on: "look"), [p(310.4, 205), p(100, 110)])
+        XCTAssertEqual(t.points(on: "fire"), [p(710, 310)])
+        t.ended(2, time: 0.09)
+        XCTAssertEqual(t.points(on: "fire"), [])
         t.ended(1, time: 0.1)
         t.ended(3, time: 0.1)
         t.moved(1, at: p(0, 0), time: 0.2)   // a lifted finger moves nothing
         XCTAssertEqual(t.takeOutput().events, [])
+        XCTAssertEqual(t.points(on: "look"), [])
     }
 }
 

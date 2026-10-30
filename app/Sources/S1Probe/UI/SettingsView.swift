@@ -13,8 +13,9 @@
 //   Playport's default; and the Metal HUD.
 // - Downloads: PlayportKit DownloadPreferences (the download queue reads
 //   them) and Steam Cloud's switch (SteamAccountModel.cloudKey).
-// - Controls: when the on-screen controls show, their opacity, the Gamepad
-//   layout's d-pad and right stick, and haptics
+// - Controls: when the on-screen controls show, every game's starting layout
+//   (`controls.startingLayout`; Suggested for the game, else a layout), their
+//   opacity, the Gamepad layout's d-pad and right stick, and haptics
 //   (PlayportKit ControlsDefaults; UI/TouchControlsView.swift), gyro aim's
 //   defaults (UI/GyroAimView.swift, the `gyro.*` keys), every
 //   controller connected, with its battery and whether it has a gyro (PadRouter),
@@ -398,6 +399,8 @@ private struct ControlsSettings: View {
     @AppStorage(ControlsDefaults.hapticsKey) private var haptics = true
     @AppStorage(ControlsDefaults.dpadKey) private var dpad = OnScreenDpad.off.rawValue
     @AppStorage(ControlsDefaults.rightStickKey) private var rightStick = OnScreenRightStick.off.rawValue
+    /// A layout's name, or "" for Suggested for the game.
+    @AppStorage(ControlsDefaults.startingLayoutKey) private var startingLayout = ""
 
     var body: some View {
         Color.clear.frame(height: 42)
@@ -405,6 +408,13 @@ private struct ControlsSettings: View {
         let current = ControlsShow(rawValue: show) ?? .automatic
         PadValueRow(id: "set:controlsShow", title: "On-screen controls", subtitle: Self.showSubtitle(current),
                     values: shows.map(\.title), index: shows.firstIndex(of: current) ?? 0) { show = shows[$0].rawValue }
+        // Every game's layout unless it has its own (SettingsControls.dc.html).
+        let starts = OnScreenLayout.startingChoices
+        PadValueRow(id: "set:controlsStartingLayout", title: "Starting layout", subtitle: "Each game can pick its own",
+                    values: starts.map(OnScreenLayout.startingTitle),
+                    index: starts.firstIndex(of: OnScreenLayout(rawValue: startingLayout)) ?? 0) {
+            startingLayout = starts[$0]?.rawValue ?? ""
+        }
         let steps = ControlsOpacity.steps
         PadValueRow(id: "set:controlsOpacity", title: "Opacity", subtitle: "How much of the game shows through",
                     values: steps.map(ControlsOpacity.label),

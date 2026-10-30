@@ -8,8 +8,9 @@
 //   hidden as soon as one connects, back when it goes. Always shows them with a
 //   controller too; Never makes Off every game's starting choice.
 // - A game's layout is Off, Gamepad, Keyboard & mouse or Point & click; with
-//   none set it is Gamepad, or Off when the default is Never. Off hides them
-//   for that game whatever else.
+//   none set it is Settings' Starting layout, else Gamepad (the Starting
+//   layout's "Suggested for the game"), or Off when the default is Never. Off
+//   hides them for that game whatever else.
 // - A game's own copy of a preset, saved by the layout editor
 //   (LayoutEditor.swift; GameControls.layouts), is drawn instead of the preset
 //   whenever that preset is the game's layout.
@@ -53,6 +54,22 @@ public enum OnScreenLayout: String, Codable, CaseIterable, Sendable {
         case .pointClick: "Point & click"
         }
     }
+
+    /// The in-game menu's narrower panel: four beside "On-screen controls" in 330 pt.
+    public var shortTitle: String {
+        switch self {
+        case .off: "Off"
+        case .gamepad: "Pad"
+        case .keyboardMouse: "Keys"
+        case .pointClick: "Point"
+        }
+    }
+
+    /// Settings › Controls › Starting layout's values: the game's suggestion (nil), then the layouts
+    /// (Off is On-screen controls › Never).
+    public static let startingChoices: [OnScreenLayout?] = [nil, .gamepad, .keyboardMouse, .pointClick]
+
+    public static func startingTitle(_ l: OnScreenLayout?) -> String { l?.title ?? "Suggested for the game" }
 
     /// The layout with these options (the d-pad and right stick are Gamepad's).
     public func layout(dpad: OnScreenDpad, rightStick: OnScreenRightStick) -> ControlLayout? {
@@ -127,6 +144,8 @@ public struct ControlsDefaults: Equatable, Sendable {
     public static let rightStickKey = "controls.rightStick"
     public static let controllerMapKey = ControllerMap.defaultsKey
     public static let lookSpeedKey = LookSpeed.defaultsKey
+    /// A layout's name; missing, empty or not one of `OnScreenLayout.startingChoices` is Suggested.
+    public static let startingLayoutKey = "controls.startingLayout"
 
     public var show = ControlsShow.automatic
     public var opacity = ControlsOpacity.defaultValue
@@ -135,12 +154,14 @@ public struct ControlsDefaults: Equatable, Sendable {
     public var rightStick = OnScreenRightStick.off
     public var controllerMap = ControllerMap()
     public var lookSpeed = LookSpeed.defaultValue
+    /// Every game's layout unless it has its own; nil: the game's suggestion (Gamepad).
+    public var startingLayout: OnScreenLayout?
 
     public init(show: ControlsShow = .automatic, opacity: Double = ControlsOpacity.defaultValue, haptics: Bool = true,
                 dpad: OnScreenDpad = .off, rightStick: OnScreenRightStick = .off, controllerMap: ControllerMap = ControllerMap(),
-                lookSpeed: Double = LookSpeed.defaultValue) {
+                lookSpeed: Double = LookSpeed.defaultValue, startingLayout: OnScreenLayout? = nil) {
         self.show = show; self.opacity = opacity; self.haptics = haptics; self.dpad = dpad; self.rightStick = rightStick
-        self.controllerMap = controllerMap; self.lookSpeed = lookSpeed
+        self.controllerMap = controllerMap; self.lookSpeed = lookSpeed; self.startingLayout = startingLayout
     }
 
     /// What `defaults` holds, each key missing (or not understood) read as its default.
@@ -154,6 +175,8 @@ public struct ControlsDefaults: Equatable, Sendable {
         controllerMap = ControllerMap(defaults)
         // A number, or a String that reads as one (the driver's `set:controls.lookSpeed=1.5`).
         lookSpeed = LookSpeed.kept(GyroSettings.number(defaults, Self.lookSpeedKey)) ?? LookSpeed.defaultValue
+        startingLayout = defaults.string(forKey: Self.startingLayoutKey).flatMap(OnScreenLayout.init(rawValue:))
+            .flatMap { OnScreenLayout.startingChoices.contains($0) ? $0 : nil }
     }
 }
 
@@ -274,7 +297,7 @@ public struct ControlsState: Equatable, Sendable {
     public var drawnLayout: ControlLayout? { visible ? edited ?? layout.layout(dpad: dpad, rightStick: rightStick) : nil }
 
     public static func resolve(game: GameControls?, defaults: ControlsDefaults, controllerConnected: Bool) -> ControlsState {
-        let layout = game?.layout ?? (defaults.show == .never ? .off : .gamepad)
+        let layout = game?.layout ?? (defaults.show == .never ? .off : defaults.startingLayout ?? .gamepad)
         let shown = layout != .off && (defaults.show == .always || !controllerConnected)
         return ControlsState(layout: layout, visible: shown, opacity: game?.opacity ?? defaults.opacity,
                              dpad: game?.dpad ?? defaults.dpad, rightStick: game?.rightStick ?? defaults.rightStick,
