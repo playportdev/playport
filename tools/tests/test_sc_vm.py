@@ -3,7 +3,8 @@
 
 The headers are extracted from the patches at run time (created by 0224 and
 0226, then changed by LATER's hunks) and compiled against a small fake of the
-ntdll view table, native holds and process identity.
+ntdll view table, native holds and process identity. 0231's teardown call is
+replayed by teardown_views below.
 """
 import os
 import pathlib
@@ -18,7 +19,8 @@ HEADERS = [('0224-ntdll-social-club-layout-geometry.patch', 'pp_sc_layout.h'),
            ('0226-ntdll-route-social-club-helper-reservations.patch', 'pp_sc_owner.h'),
            ('0226-ntdll-route-social-club-helper-reservations.patch', 'pp_sc_vm.h'),
            ('0226-ntdll-route-social-club-helper-reservations.patch', 'pp_sc_access.h')]
-LATER = ['0228-ntdll-second-social-club-elf-metadata-slot.patch']
+LATER = ['0228-ntdll-second-social-club-elf-metadata-slot.patch',
+         '0231-ntdll-hold-a-dead-owner-s-Social-Club-slot-in-place-.patch']
 
 
 def header(patch, name):
@@ -125,7 +127,8 @@ static SIZE_T get_vprot_range_size(char *base, SIZE_T size, BYTE mask, BYTE *vpr
     return n < size ? n : size;
 }
 
-struct file_view { void *base; size_t size; void *ios_owner_peb; };
+#define VPROT_SYSTEM 0x0200
+struct file_view { void *base; size_t size; void *ios_owner_peb; unsigned protect; };
 #define MAXV 16
 static struct file_view views[MAXV];
 static struct file_view *find_view(const void *addr, size_t size)
@@ -145,7 +148,7 @@ static int overlaps_view(uint64_t base, uint64_t size)
 static struct file_view *add_view(uint64_t base, uint64_t size, void *owner)
 {
     for (int i = 0; i < MAXV; i++) if (!views[i].size) {
-        views[i] = (struct file_view){(void *)(uintptr_t)base, size, owner};
+        views[i] = (struct file_view){(void *)(uintptr_t)base, size, owner, 0};
         return &views[i];
     }
     assert(0);
@@ -183,6 +186,36 @@ static int ppsc_native_hold(uint64_t base, uint64_t size)
     return 1;
 }
 
+/* 0231's hold mapped over a live view: the view must still be there (the range
+ * was never unmapped first). */
+static int hold_over_fail, hold_over_calls;
+static int ppsc_native_hold_over(uint64_t base, uint64_t size)
+{
+    int k = slot_at(base);
+    hold_over_calls++;
+    assert(k && size == ppsc_range(k).size && !native_held[k]);
+    assert(find_view((void *)(uintptr_t)base, 0));
+    if (hold_over_fail) return 0;
+    native_held[k] = 1;
+    return 1;
+}
+/* Wine's delete_view: it unmaps unless VPROT_SYSTEM. An unmapped slot range is
+ * taken by a native mapping when intruder_on_unmap is set (l8's kind 2). */
+static int delete_calls, unmap_calls, intruder_on_unmap;
+static void unmap_range(uint64_t base)
+{
+    unmap_calls++;
+    if (intruder_on_unmap && slot_at(base)) foreign_mapping = 1;
+}
+static void delete_view(struct file_view *v)
+{
+    delete_calls++;
+    if (!(v->protect & VPROT_SYSTEM)) unmap_range((uintptr_t)v->base);
+    memset(v, 0, sizeof *v);
+}
+static int alias_release_calls;
+static void ios_jit_anon_alias_release(const void *base, size_t size) { (void)base; (void)size; alias_release_calls++; }
+
 /* Fake allocator: a fixed reserve inside a slot; options inject failures. */
 static int alloc_calls, alloc_fail, alloc_mismatch, mismatch_foreign_owner, free_fail;
 static ULONG last_protect;
@@ -206,6 +239,7 @@ static NTSTATUS free_pages(struct file_view *v, void *base, size_t size)
     free_calls++;
     assert(v->base == base && v->size == size);
     if (free_fail) return STATUS_ACCESS_DENIED;
+    unmap_range((uintptr_t)v->base);
     memset(v, 0, sizeof *v);
     return STATUS_SUCCESS;
 }
@@ -234,6 +268,7 @@ static void reset(void)
     for (int k = PPSC_ELF; k <= PPSC_LAST_SLOT; k++) { ppsc_held |= PPSC_BIT(k); native_held[k] = 1; }
     foreign_mapping = dealloc_fail = alloc_fail = alloc_mismatch = mismatch_foreign_owner = free_fail = 0;
     alloc_calls = dealloc_calls = hold_calls = free_calls = dprintf_calls = 0;
+    hold_over_fail = hold_over_calls = delete_calls = unmap_calls = intruder_on_unmap = alias_release_calls = 0;
     mutex_depth = 0;
 }
 /* The slot bookkeeping and the fake native holds must always agree. */
@@ -471,6 +506,9 @@ static void t_free_whole(void)
     addr = (void *)(uintptr_t)ppsc_range(PPSC_ELF).report; sz = 0;
     assert(ppsc_free(&addr, &sz, MEM_RELEASE, &st) && st == STATUS_SUCCESS);
     assert(sz == ppsc_range(PPSC_OILPAN).asked && !ppsc_owner[PPSC_OILPAN] && ppsc_owner[PPSC_ELF] == &pebs[0]);
+    /* 0231: held in place, never unmapped and held again. */
+    assert(hold_over_calls == 1 && !free_calls && !unmap_calls && !hold_calls && alias_release_calls == 1);
+    assert(strstr(all_msgs, "released kind=5 owner=") && strstr(all_msgs, "slot held in place"));
     assert((ppsc_held & PPSC_BIT(PPSC_OILPAN)) && !find_view((void *)(uintptr_t)ppsc_range(PPSC_OILPAN).base, 0));
     assert(find_view((void *)(uintptr_t)ppsc_range(PPSC_ELF).base, 0));
     check_holds();
@@ -508,12 +546,14 @@ static void t_free_refusals(void)
     addr = (void *)(uintptr_t)(ppsc_range(PPSC_ELF).report + 0x1000);
     assert(!ppsc_free(&addr, &sz, MEM_RELEASE, &st) && st == 0x777);
     addr = (void *)(uintptr_t)ppsc_range(PPSC_ELF).report;
+    hold_over_fail = 1;                               /* no hold over it: free_pages, then a hold */
     free_fail = 1; sz = 0;                            /* free_pages failing keeps the ledger */
     assert(ppsc_free(&addr, &sz, MEM_RELEASE, &st) && st == STATUS_ACCESS_DENIED);
     assert(ppsc_owner[PPSC_ELF] == &pebs[0] && sz == 0 && find_view((void *)(uintptr_t)ppsc_range(PPSC_ELF).base, 0));
     free_fail = 0; foreign_mapping = 1; sz = 0;       /* a foreign mapping: freed but not held again */
     assert(ppsc_free(&addr, &sz, MEM_RELEASE, &st) && st == STATUS_SUCCESS);
     assert(!ppsc_owner[PPSC_ELF] && !(ppsc_held & PPSC_BIT(PPSC_ELF)));
+    assert(strstr(all_msgs, "slot not held in place") && strstr(all_msgs, "slot NOT held again"));
     check_holds();
     ppsc_ready = 0;                                   /* layout off: nothing is ours */
     assert(!ppsc_free(&addr, &sz, MEM_RELEASE, &st));
@@ -685,6 +725,64 @@ static void t_owner_died(void)
     r = ppsc_range(PPSC_ELF);
     assert(ppsc_in_slot((uintptr_t)r.base, 0x1000) && !ppsc_in_slot(0x1000, 0x1000));
     ppsc_ready = 0; assert(!ppsc_in_slot((uintptr_t)r.base, 0x1000));
+}
+
+/* 0231: the teardown loop in virtual_ios.c, for each view a dead peb frees:
+ * the slot hook first, else delete_view; then the ledger. */
+static void teardown_views(PEB *peb)
+{
+    for (int i = 0; i < MAXV; i++)
+        if (views[i].size && views[i].ios_owner_peb == peb && !ppsc_owner_view_freed_locked(peb, &views[i]))
+            delete_view(&views[i]);
+    ppsc_owner_died_locked(peb);
+}
+
+static void t_owner_held_in_place(void)
+{
+    struct file_view *other;
+    reset(); grant_sequence();
+    other = add_view(0x10000000ULL, 0x100000, cur);       /* a non-slot view of the same owner */
+    intruder_on_unmap = 1;                                /* l8: a native mapping takes any unmapped slot */
+    memset(all_msgs, 0, sizeof all_msgs);
+    teardown_views(&pebs[0]);
+    assert(hold_over_calls == 5 && !hold_calls);          /* held in place, never re-held after */
+    assert(delete_calls == 6 && unmap_calls == 1 && !foreign_mapping);   /* only the non-slot view unmapped */
+    assert(!other->size && !view_count());
+    assert(count_msg("slot held in place") == 5 && !count_msg("NOT held") && !count_msg("held again"));
+    for (int k = PPSC_ELF; k <= PPSC_OILPAN; k++) assert(!ppsc_owner[k] && (ppsc_held & PPSC_BIT(k)));
+    check_holds();
+    cur = &pebs[1];                                       /* a second helper gets the same kinds */
+    grant_sequence();
+    for (int k = PPSC_ELF; k <= PPSC_OILPAN; k++) assert(ppsc_owner[k] == &pebs[1]);
+
+    reset(); grant_ok(GiB(64), GiB(32), 0, PPSC_ELF);     /* a view that is not a whole slot view */
+    {
+        struct file_view *v = find_view((void *)(uintptr_t)ppsc_range(PPSC_ELF).base, 0);
+        v->size /= 2;
+        assert(!ppsc_owner_view_freed_locked(&pebs[0], v) && v->size && !hold_over_calls);
+        v->size *= 2;
+        assert(!ppsc_owner_view_freed_locked(&pebs[1], v) && v->size && !hold_over_calls);   /* not the owner */
+        ppsc_ready = 0;
+        assert(!ppsc_owner_view_freed_locked(&pebs[0], v) && v->size && !hold_over_calls);
+        ppsc_ready = 1;
+    }
+    other = add_view(0x10000000ULL, 0x100000, cur); dprintf_calls = 0;
+    assert(!ppsc_owner_view_freed_locked(&pebs[0], other) && other->size && !other->protect);
+    assert(!hold_over_calls && ppsc_owner[PPSC_ELF] == &pebs[0] && !dprintf_calls);
+
+    reset(); grant_ok(GiB(64), GiB(32), 0, PPSC_ELF);     /* no hold over it: freed, then held again */
+    hold_over_fail = 1; memset(all_msgs, 0, sizeof all_msgs);
+    teardown_views(&pebs[0]);
+    assert(hold_over_calls == 1 && unmap_calls == 1 && hold_calls == 1);
+    assert(strstr(all_msgs, "kind=1 slot not held in place") && strstr(all_msgs, "kind=1 slot held again"));
+    assert(!ppsc_owner[PPSC_ELF] && (ppsc_held & PPSC_BIT(PPSC_ELF)));
+    check_holds();
+    reset(); grant_ok(GiB(64), GiB(32), 0, PPSC_ELF);     /* ...and NOT held when something took it */
+    hold_over_fail = intruder_on_unmap = 1; memset(all_msgs, 0, sizeof all_msgs);
+    teardown_views(&pebs[0]);
+    assert(strstr(all_msgs, "kind=1 slot NOT held again (something mapped it)"));
+    assert(!ppsc_owner[PPSC_ELF] && !(ppsc_held & PPSC_BIT(PPSC_ELF)));
+    check_holds();
 }
 
 /* PLA-476 second chrome_elf metadata slot (0228). */
@@ -903,6 +1001,7 @@ static const struct { const char *name; void (*fn)(void); } tests[] = {
     {"reported_cross_slot", t_reported_cross_slot},
     {"free_whole", t_free_whole}, {"free_refusals", t_free_refusals},
     {"free_null_owner", t_free_null_owner}, {"access", t_access}, {"owner_died", t_owner_died},
+    {"owner_held_in_place", t_owner_held_in_place},
     {"meta2_second_helper", t_meta2_second_helper}, {"meta2_only_for_another_owner", t_meta2_only_for_another_owner},
     {"meta2_free_and_exit", t_meta2_free_and_exit}, {"access_straddle", t_access_straddle},
     {"meta_overflow_note", t_meta_overflow_note}, {"meta_overflow_core_kinds", t_meta_overflow_core_kinds},
@@ -921,7 +1020,7 @@ int main(int argc, char **argv)
 NAMES = ['route_not_routed', 'route_giant_unknown', 'route_sequence', 'route_cage',
          'route_second_helper', 'grant_failures', 'grant_reserved_area', 'grant_intruder',
          'free_whole', 'free_refusals', 'free_null_owner', 'access', 'reported_tail',
-         'reported_oilpan_low', 'reported_cross_slot', 'owner_died', 'meta2_second_helper',
+         'reported_oilpan_low', 'reported_cross_slot', 'owner_died', 'owner_held_in_place', 'meta2_second_helper',
          'meta2_only_for_another_owner', 'meta2_free_and_exit', 'access_straddle', 'meta_overflow_note',
          'meta_overflow_core_kinds']
 
