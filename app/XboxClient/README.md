@@ -415,9 +415,39 @@ cloud or can't tell (`nil`); the player may uninstall earlier. The dev app's
 `Dev/XboxLapse.swift` feeds it from every Play and every Library refresh (each
 installed copy's licence), keeps it in the state root (`lapses.json`), shows the
 notice with Play off, Check licence and Uninstall now on the copy's page, and
-uninstalls a due copy, keeping its saves, at app start or a Library refresh. Until
-PLA-500's cloud saves are wired in (`XboxCloudSaves.unsynced(productID:)`) the
-saves are unknown, so every due removal is held.
+uninstalls a due copy, keeping its saves, at app start or a Library refresh. The
+saves' answer is the runtime's save index (`XboxCloudSaves.unsynced(productID:)`,
+PlayportKit `StoreUnsyncedSaves`): a due removal waits while it says unsynced or
+can't tell.
+
+## Cloud saves (PLA-500)
+
+The game's runtime syncs the account's Xbox cloud saves itself (connected storage on
+`titlestorage.xboxlive.com`, SCID from MicrosoftGame.config): at the save provider's
+start it lists the cloud's containers, downloads the changed ones and uploads the
+phone's, then uploads in the background as the game saves and once more at exit.
+Its local saves are in the prefix's `%LOCALAPPDATA%`: `XodusGameSave\<xuid>\<scid>\
+<hex name>\index` and `b_<hex blob>` files (XGameSave), or the game's
+`XodusGameSaveFiles\<xuid>\<hex scid>` view with the index in
+`XodusGameSaveFilesCache` (XGameSaveFiles). Each container's `index` keeps `dirty`
+(changed since the last sync) and `remote` (the cloud's `clientFileTime` last
+matched, `-` before any upload). With the cloud unreachable the runtime plays on
+local saves (`cloud_disable`; file saves too with patches/xgameruntime/0002) and
+the next connected start syncs or asks.
+
+A save conflict (a container `dirty` whose cloud time moved) is asked of the host:
+Nexus has no such message and its runtime only refused (E_GS_CONTAINER_NOT_IN_SYNC,
+local saves for the session), so patches/xgameruntime/0002 sends Playport's
+`SAVE_CONFLICT_REQUEST` (0x5001, reply 0x5002) on the bridge: `Scid`, `Container`,
+`DisplayName`, `LocalTime`, `CloudTime`, `CloudDevice` (the listing's `deviceName`,
+not seen in captures). `XboxBridgeService` passes it to its `XboxSaveConflictAsker`
+as `XboxSaveConflict` and answers `<Choice>local|cloud|none</Choice>`: local uploads
+the phone's containers over the cloud's, cloud downloads the cloud's (the phone's
+kept as the runtime's `.recovery-` copy), none (signed out, nobody to ask, malformed,
+Decide later) keeps both and asks again next time. One question settles every
+conflicting container of that sync. `XboxSaves.unsynced(scid:localAppData:)` is a
+copy's unsynced state: any container `dirty` or never uploaded; recovery and
+download trees (leading dot) don't count; nil when an index can't be read.
 
 ## Provenance and offline checks
 
@@ -544,3 +574,17 @@ observed by relaunching after the date (`xbox:lapse:<ID>` logs `held` while the
 saves aren't known to be in the cloud). Without a real lapse,
 `xbox:lapse:<ID>@0` and `@8` simulate a refusal 0 and 8 days ago to show the notice
 and the hold; `xbox:licence:<ID>` puts Microsoft's verdict back.
+
+The cloud saves' phone gates (signed in, the pilot installed, deferred):
+- A round trip: play on the phone into a save
+  (`./pp ui --play xbox-9MW9469V91LM --until first-frame+10 --action wait:120 --shot`),
+  continue on Windows or Xbox and save there, then
+  `./pp ui --play xbox-9MW9469V91LM --until first-frame+10 --shot`: the game log's
+  `xodus-savesync: cloud 1 downloaded N` and the Windows/Xbox progress in game.
+- A conflict: save on the phone with the cloud unreachable, save on Windows, then
+  `./pp ui --play xbox-9MW9469V91LM --action xbox-save:cloud --action wait:30 --shot`
+  (`xbox-save:local` the other way; `xbox-save:wait --shot` to photograph the card).
+- Unreachable cloud: play with titlestorage blocked, save, end; then
+  `./pp ui --action xbox:saves:9MW9469V91LM --action open:xbox-9MW9469V91LM --shot`
+  logs `unsynced` and the page says so; the next connected play and
+  `xbox:saves:9MW9469V91LM` log `synced`.

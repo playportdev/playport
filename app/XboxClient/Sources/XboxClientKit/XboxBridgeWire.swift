@@ -32,12 +32,14 @@ public struct XboxBridgeFrame: Sendable, Equatable {
     }
 }
 
-/// The message types Xodus's runtime and backend use.
+/// The message types Xodus's runtime and backend use, and Playport's own save conflict
+/// question (patches/xgameruntime/0002), numbered clear of Xodus's.
 enum XboxBridgeMessage: UInt16 {
     case ping = 1, pong = 2
     case msaTokenRequest = 3, msaTokenResponse = 4
     case storeLicenseTokenRequest = 5, storeLicenseTokenResponse = 6
     case storePackageUpdatesRequest = 9, storePackageUpdatesResponse = 10
+    case saveConflictRequest = 0x5001, saveConflictResponse = 0x5002
 
     static func name(_ type: UInt16) -> String {
         switch Self(rawValue: type) {
@@ -49,6 +51,8 @@ enum XboxBridgeMessage: UInt16 {
         case .storeLicenseTokenResponse: "STORE_LICENSE_TOKEN_RESPONSE"
         case .storePackageUpdatesRequest: "STORE_PACKAGE_UPDATES_REQUEST"
         case .storePackageUpdatesResponse: "STORE_PACKAGE_UPDATES_RESPONSE"
+        case .saveConflictRequest: "SAVE_CONFLICT_REQUEST"
+        case .saveConflictResponse: "SAVE_CONFLICT_RESPONSE"
         case nil: "type \(type)"
         }
     }

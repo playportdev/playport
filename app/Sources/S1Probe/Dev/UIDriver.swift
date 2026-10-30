@@ -177,6 +177,10 @@
 //                              game opened (UI/GameWebSheet.swift): wait for it (Open on its
 //                              confirm card) and its page, click a button or link by its
 //                              text, or Close it (Dev/WebSheetDriver.swift)
+//   xbox-save:wait | xbox-save:local | xbox-save:cloud | xbox-save:later
+//                              After a play: (they run while the game runs): an Xbox game's
+//                              save conflict card (Dev/XboxCloudSaves.swift): wait for it and log
+//                              both sides, then A, X or B (Dev/XboxSaveDriver.swift)
 //   set:<key>=<value>          Sets a UserDefaults key, as a Settings control does:
 //                              true/false a Bool, an integer an Int, else a String
 //                              (`set:metalHUD=true`)
@@ -582,6 +586,8 @@ enum UIDriver {
                     for _ in 0..<300 where account.state == .unknown { try await pause(.milliseconds(100)) }
                     if id.hasPrefix("installed:") {
                         if let failure = try await xboxInstalled(String(id.dropFirst("installed:".count))) { return finish("action=\(action) failed: \(failure)") }
+                    } else if id.hasPrefix("saves:") {
+                        if let failure = XboxSaveDriver.status(String(id.dropFirst("saves:".count)), log: log) { return finish("action=\(action) failed: \(failure)") }
                     } else if id.hasPrefix("update:") {
                         if let failure = try await updateXbox(String(id.dropFirst("update:".count))) { return finish("action=\(action) failed: \(failure)") }
                     } else if id.hasPrefix("offline-device:") {
@@ -657,6 +663,14 @@ enum UIDriver {
                             guard complete else { return finish("action=\(action) failed: \(account.error ?? "Xbox did not finish signing out/resetting the device")") }
                         }
                     }
+                case "xbox-save":
+                    // An Xbox game's save conflict, while the game runs (Dev/XboxSaveDriver.swift).
+                    guard TitleLaunch.shared.running || XboxSaveConflictPrompt.shared.isUp else {
+                        return finish("action=\(action) refused: no game is running")
+                    }
+                    if let failure = try await XboxSaveDriver.run(id, log: log) { return finish("action=\(action) failed: \(failure)") }
+                    if let failure = try await afterInGame(action, index: done + 1, next: actions[(i + 1)...]) { return finish(failure) }
+                    if AppRestart.shared.restarting { return }
                 case "web":
                     // A web page the running game opened (Dev/WebSheetDriver.swift).
                     guard TitleLaunch.shared.running || GameWebSheet.shared.isUp else {
@@ -905,6 +919,7 @@ enum UIDriver {
     /// An action that acts on the running game, which a play: does not wait past.
     static func inGame(_ action: String) -> Bool {
         action.hasPrefix("menu:") || action.hasPrefix("wait:") || action.hasPrefix("web:") || action.hasPrefix("tap:")
+            || action.hasPrefix("xbox-save:")
             || action.hasPrefix("touch:") || action.hasPrefix("gesture:") || action.hasPrefix("gyro:")
             || (action.hasPrefix("pad:") && InGameMenu.shared.isOpen)
     }

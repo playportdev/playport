@@ -1,0 +1,408 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 30 Oct 2026 16:00:00 +0100
+Subject: [PATCH] gamesave: ask the host at a save conflict; file saves play
+ locally offline
+
+At a sync, a container that changed here and in the cloud since the last
+sync (dirty, and the listing's clientFileTime is not the one last synced)
+failed the whole sync with E_GS_CONTAINER_NOT_IN_SYNC: the session then
+played on local saves and the conflict stayed until something forced a side
+(XODUS_SAVE_SYNC=download/upload). Nothing asked the player.
+
+cloud_sync now asks once per sync through SaveTransport::Conflict, which
+sends the host a SaveConflictRequest (Scid, Container, DisplayName,
+LocalTime, CloudTime and CloudDevice, the listing's deviceName when it has
+one) over the keyed bridge as message type 0x5001, and waits for the
+player, as a game waits on the system's dialog. The reply's
+<Choice>local</Choice> uploads the local containers whole over the cloud's
+(force_upload); <Choice>cloud</Choice> downloads the cloud's, the local tree
+kept as a .recovery- copy as for any download; anything else, or no host,
+keeps both as before: local saves this session, the dirty index kept, the
+question again at the next connected session.
+
+The file-save provider (XGameSaveFiles) failed outright when the cloud
+could not be reached or locked. Like the container provider (cloud_disable)
+it now plays on local saves for the session, its changes left dirty for the
+next connected one.
+
+tests/Nexus/gamesave-sync.cpp covers the question's fields, no host, an
+unanswered question, the local choice (an upload attempted, the local data
+still unsynced when it fails) and the cloud choice (downloaded and synced),
+for both providers; its required check count rises to 315.
+
+Playport's lines in this patch are offered under LGPL-2.1-or-later.
+
+Class: feature
+Evidence: docs/evidence/2026-10-30-xbox-ground-truth-nexus.md
+Offered-upstream: no
+---
+ scripts/test-component.mjs      |   2 +-
+ src/System/GameSave/Files.h     |  29 ++++++---
+ src/System/GameSave/Transport.h |   9 +++
+ src/System/XGameSave.cpp        | 104 ++++++++++++++++++++++++++++++--
+ src/System/XUser.cpp            |  12 ++++
+ tests/Nexus/gamesave-sync.cpp   |  56 ++++++++++++++++-
+ 6 files changed, 196 insertions(+), 16 deletions(-)
+
+diff --git a/scripts/test-component.mjs b/scripts/test-component.mjs
+index 32765c8..280e322 100644
+--- a/scripts/test-component.mjs
++++ b/scripts/test-component.mjs
+@@ -16,7 +16,7 @@ const probes = [
+     ['nexus_package-identity', 15], ['nexus_package-legacy', 139], ['nexus_package-chunks', 312],
+     ['nexus_package-content',332], ['nexus_package-monitors', 362], ['nexus_package-progress-bytes', 115],
+     ['nexus_package-selection', 750],
+-    ['nexus_gamesave-sync', 283], ['nexus_gamesave-transfer', 263], ['nexus_gamesave-files', 25],
++    ['nexus_gamesave-sync', 315], ['nexus_gamesave-transfer', 263], ['nexus_gamesave-files', 25],
+     ['nexus_gamesave-file-paths', 55],
+     ['nexus_game-invitations', 56, ['--component']],
+ ];
+diff --git a/src/System/GameSave/Files.h b/src/System/GameSave/Files.h
+index 849859c..1b49872 100644
+--- a/src/System/GameSave/Files.h
++++ b/src/System/GameSave/Files.h
+@@ -562,23 +562,34 @@ extern "C" void WINAPI XodusSaveFilesMonitor( HWND window, HINSTANCE instance, c
+         snprintf( provider->base, sizeof( provider->base ),
+                   "https://titlestorage.xboxlive.com/connectedstorage/users/xuid(%I64u)/scids/%s", ipc->xuid,
+                   ipc->scid );
++        /* The cloud unreachable, or held by another device: local saves only for this
++         * session, as the container provider does (cloud_disable). Unsynced changes keep
++         * their dirty index, and the next connected session syncs or asks. */
+         if ( FAILED( hr = GetSaveTransport( provider )
+                               .Authorization( provider->user, "http://xboxlive.com", &provider->auth ) ) )
+-            goto ready;
+-        if ( !cloud_lock( provider ) )
+-        {
+-            hr = E_GS_CONTAINER_NOT_IN_SYNC;
+-            goto ready;
+-        }
+-        provider->session_lock = TRUE;
++            cloud_disable( provider );
++        else if ( !cloud_lock( provider ) )
++            cloud_disable( provider );
++        else
++            provider->session_lock = TRUE;
++        hr = S_OK;
+     }
+     if ( view_existed && FAILED( hr = files_import( provider, ipc->folder ) ) ) goto ready;
+-    if ( provider->cloud && FAILED( hr = cloud_sync( provider ) ) ) goto ready;
++    if ( provider->cloud && FAILED( hr = cloud_sync( provider ) ) )
++    {
++        ERR( "cloud sync failed, hr %#lx.\n", hr );
++        cloud_disable( provider );
++        hr = S_OK;
++    }
+     if ( provider->cloud ) SaveStatus( "nexus-files: phase=download downloaded=%u\n", provider->downloaded );
+     if ( provider->cloud )
+     {
+         enumerate_local( provider, files_upload_visit, &hr );
+-        if ( FAILED( hr ) ) goto ready;
++        if ( FAILED( hr ) )
++        {
++            cloud_disable( provider );
++            hr = S_OK;
++        }
+     }
+     if ( FAILED( hr = files_export( provider, ipc->folder ) ) ) goto ready;
+ ready:
+diff --git a/src/System/GameSave/Transport.h b/src/System/GameSave/Transport.h
+index 948cf9f..7d6da8a 100644
+--- a/src/System/GameSave/Transport.h
++++ b/src/System/GameSave/Transport.h
+@@ -15,4 +15,13 @@ public:
+     virtual HRESULT DirectRequest( const WCHAR *method, const WCHAR *url, const WCHAR *headers, const void *body,
+                                    DWORD bodySize, DWORD *status, BYTE **output, SIZE_T *size ) = 0;
+     virtual void CloseUser( XUserHandle user ) = 0;
++    /* The player's choice for a save conflict, asked of the host over the bridge
++     * (SAVE_CONFLICT_REQUEST): a SaveConflictRequest in, a SaveConflictResponse out.
++     * Without a host to ask, nothing is chosen. */
++    virtual HRESULT Conflict( const char *request, SIZE_T requestSize, char **response, UINT16 *responseSize )
++    {
++        return E_NOTIMPL;
++    }
+ };
++
++HRESULT xodus_save_conflict_xml( const char *request, SIZE_T request_size, char **response, UINT16 *size );
+diff --git a/src/System/XGameSave.cpp b/src/System/XGameSave.cpp
+index 708b184..d8bd527 100644
+--- a/src/System/XGameSave.cpp
++++ b/src/System/XGameSave.cpp
+@@ -142,6 +142,10 @@ public:
+     {
+         x_user_impl->XUserCloseHandle( user );
+     }
++    HRESULT Conflict( const char *request, SIZE_T requestSize, char **response, UINT16 *responseSize ) override
++    {
++        return xodus_save_conflict_xml( request, requestSize, response, responseSize );
++    }
+ };
+ static SaveTransport &GetSaveTransport( XGameSaveProvider *provider )
+ {
+@@ -1247,8 +1251,86 @@ struct remote_container
+     char *name;
+     char *display;
+     char *time;
++    /* The listing's deviceName, when the service gives one (none seen in captures). */
++    char *device;
++};
++
++enum save_choice
++{
++    SAVE_CHOICE_NONE,
++    SAVE_CHOICE_LOCAL,
++    SAVE_CHOICE_CLOUD,
+ };
+ 
++/* Appends text to out, XML-escaped when escape is set; control characters become '?'.
++ * FALSE when it does not fit. */
++static BOOL save_xml_append( char *out, SIZE_T size, SIZE_T *len, const char *text, BOOL escape )
++{
++    for ( const char *p = text ? text : ""; *p; p++ )
++    {
++        char one[2] = { ( BYTE )*p < 0x20 ? '?' : *p, 0 };
++        const char *piece = one;
++        SIZE_T n;
++        if ( escape && *p == '<' ) piece = "&lt;";
++        else if ( escape && *p == '>' ) piece = "&gt;";
++        else if ( escape && *p == '&' ) piece = "&amp;";
++        else if ( escape && *p == '"' ) piece = "&quot;";
++        else if ( escape && *p == '\'' ) piece = "&apos;";
++        n = strlen( piece );
++        if ( *len + n >= size ) return FALSE;
++        memcpy( out + *len, piece, n );
++        *len += n;
++    }
++    out[*len] = 0;
++    return TRUE;
++}
++
++/* A container changed here and in the cloud since the last sync: the player chooses
++ * which to keep (Playport's SAVE_CONFLICT_REQUEST to the host, which shows each side's
++ * time and device). Anything but a clear answer chooses nothing: this session plays on
++ * the local saves, both sides kept, and the next connected session asks again. */
++static enum save_choice ask_save_conflict( struct XGameSaveProvider *provider, const struct container_state *state,
++                                           const struct remote_container *remote )
++{
++    char request[8192], localTime[40], *response = NULL;
++    const char *fields[][2] = {
++        { "Scid", provider->scid },
++        { "Container", state->name },
++        { "DisplayName", state->display && *state->display ? state->display : remote->display },
++        { "LocalTime", localTime },
++        { "CloudTime", remote->time },
++        { "CloudDevice", remote->device },
++    };
++    enum save_choice choice = SAVE_CHOICE_NONE;
++    SIZE_T len = 0;
++    UINT16 size = 0;
++    BOOL ok;
++    HRESULT hr;
++
++    format_iso_time( state->time, localTime, sizeof( localTime ) );
++    ok = save_xml_append( request, sizeof( request ), &len, "<SaveConflictRequest>", FALSE );
++    for ( UINT32 i = 0; ok && i < ARRAY_SIZE( fields ); i++ )
++        ok = save_xml_append( request, sizeof( request ), &len, "<", FALSE ) &&
++             save_xml_append( request, sizeof( request ), &len, fields[i][0], FALSE ) &&
++             save_xml_append( request, sizeof( request ), &len, ">", FALSE ) &&
++             save_xml_append( request, sizeof( request ), &len, fields[i][1], TRUE ) &&
++             save_xml_append( request, sizeof( request ), &len, "</", FALSE ) &&
++             save_xml_append( request, sizeof( request ), &len, fields[i][0], FALSE ) &&
++             save_xml_append( request, sizeof( request ), &len, ">", FALSE );
++    if ( !ok || !save_xml_append( request, sizeof( request ), &len, "</SaveConflictRequest>", FALSE ) )
++        return SAVE_CHOICE_NONE;
++    hr = GetSaveTransport( provider ).Conflict( request, len, &response, &size );
++    if ( SUCCEEDED( hr ) && response && size )
++    {
++        if ( strstr( response, "<Choice>local</Choice>" ) ) choice = SAVE_CHOICE_LOCAL;
++        else if ( strstr( response, "<Choice>cloud</Choice>" ) ) choice = SAVE_CHOICE_CLOUD;
++    }
++    free( response );
++    SaveStatus( "xodus-savesync: conflict asked, hr %#lx, keeping %s\n", hr,
++                choice == SAVE_CHOICE_LOCAL ? "local" : choice == SAVE_CHOICE_CLOUD ? "cloud" : "both (local only)" );
++    return choice;
++}
++
+ enum sync_mode
+ {
+     SYNC_AUTO,
+@@ -1326,6 +1408,9 @@ static HRESULT cloud_sync( struct XGameSaveProvider *provider )
+ {
+     struct remote_container *remote = NULL;
+     enum sync_mode mode;
++    /* One question per sync: the player's answer settles every conflicting container. */
++    enum save_choice chosen = SAVE_CHOICE_NONE;
++    BOOL asked = FALSE;
+     const char *blobs, *item;
+     UINT32 count = 0, capacity = 0;
+     SIZE_T size;
+@@ -1397,6 +1482,7 @@ static HRESULT cloud_sync( struct XGameSaveProvider *provider )
+             remote[count].name = fileName;
+             remote[count].display = json_find_string( item, "displayName" );
+             remote[count].time = json_find_string( item, "clientFileTime" );
++            remote[count].device = json_find_string( item, "deviceName" );
+             remote[++count].name = NULL;
+             fileName = NULL;
+         }
+@@ -1428,16 +1514,23 @@ static HRESULT cloud_sync( struct XGameSaveProvider *provider )
+         BOOL remoteChanged = !exists || strcmp( state.remote, remote[i].time ? remote[i].time : "" );
+         if ( exists && state.dirty && remoteChanged && mode == SYNC_AUTO )
+         {
+-            /* Never silently overwrite either side of a save conflict. */
+-            free_state( &state );
+-            hr = E_GS_CONTAINER_NOT_IN_SYNC;
+-            goto done;
++            if ( !asked ) chosen = ask_save_conflict( provider, &state, &remote[i] );
++            asked = TRUE;
++            if ( chosen == SAVE_CHOICE_NONE )
++            {
++                /* Never silently overwrite either side of a save conflict. */
++                free_state( &state );
++                hr = E_GS_CONTAINER_NOT_IN_SYNC;
++                goto done;
++            }
+         }
+-        if ( mode == SYNC_UPLOAD )
++        if ( mode == SYNC_UPLOAD || ( exists && state.dirty && remoteChanged && chosen == SAVE_CHOICE_LOCAL ) )
+         {
++            /* The cloud's side is replaced: this container's local blobs are uploaded whole. */
+             if ( exists ) hr = force_upload( provider, &state );
+         }
+         else if ( mode == SYNC_DOWNLOAD || !exists || ( remoteChanged && !state.dirty ) ||
++                  ( remoteChanged && state.dirty && chosen == SAVE_CHOICE_CLOUD ) ||
+                   ( remoteChanged && state.dirty && parse_iso_time( remote[i].time ) > state.time ) )
+         {
+             hr = provider->files ? files_cloud_download( provider, remote[i].name, remote[i].display, remote[i].time )
+@@ -1467,6 +1560,7 @@ done:
+             free( remote[i].name );
+             free( remote[i].display );
+             free( remote[i].time );
++            free( remote[i].device );
+         }
+         free( remote );
+     }
+diff --git a/src/System/XUser.cpp b/src/System/XUser.cpp
+index 7e4a263..20db7f0 100644
+--- a/src/System/XUser.cpp
++++ b/src/System/XUser.cpp
+@@ -22,6 +22,7 @@
+ #include "User/XUserImpl.h"
+ #include "User/Presence.h"
+ #include "User/OfflineIdentity.h"
++#include "GameSave/Transport.h"
+ #include "../Runtime/Configuration.h"
+ #include <afunix.h>
+ #include <libxml/parser.h>
+@@ -234,6 +235,8 @@ ULONG WINAPI XUser::Release()
+ 
+ #define XODUS_XML_MAGIC 0x58445358
+ #define XODUS_MSA_TOKEN_REQUEST 3
++/* Playport's: the player's choice for a cloud save conflict (no Xodus number). */
++#define XODUS_SAVE_CONFLICT_REQUEST 0x5001
+ 
+ static HRESULT xodus_socket_path( char *path, SIZE_T size )
+ {
+@@ -428,6 +431,15 @@ HRESULT xodus_store_package_updates_xml( const char *request, SIZE_T request_siz
+     return xodus_request( 9, request, request_size, response, size );
+ }
+ 
++/* Waits for the player: no receive timeout, as the game waits on a system dialog. */
++HRESULT xodus_save_conflict_xml( const char *request, SIZE_T request_size, char **response, UINT16 *size )
++{
++    if ( !request || !request_size || request_size > 0xffff || !response || !size ) return E_INVALIDARG;
++    *response = NULL;
++    *size = 0;
++    return xodus_request( XODUS_SAVE_CONFLICT_REQUEST, request, request_size, response, size );
++}
++
+ HRESULT xodus_store_license_body( const char **product_ids, SIZE_T count, const char *nonce, char **body )
+ {
+     xmlDocPtr doc;
+diff --git a/tests/Nexus/gamesave-sync.cpp b/tests/Nexus/gamesave-sync.cpp
+index efa8d6e..f867090 100644
+--- a/tests/Nexus/gamesave-sync.cpp
++++ b/tests/Nexus/gamesave-sync.cpp
+@@ -15,6 +15,10 @@ static BOOL fail_promote;
+ static unsigned metadata_case;
+ static unsigned listing_case;
+ static const char *remote_time = "2026-10-22T12:00:00Z";
++/* The host's answer to a save conflict (NULL: no host) and the last question asked. */
++static const char *conflict_answer;
++static unsigned conflicts_asked;
++static char conflict_request[8192];
+ #define CHECK( name, expr )                                                                                            \
+     do                                                                                                                 \
+     {                                                                                                                  \
+@@ -35,6 +39,15 @@ public:
+     HRESULT DirectRequest( const WCHAR *, const WCHAR *, const WCHAR *, const void *, DWORD, DWORD *, BYTE **,
+                            SIZE_T * ) override;
+     void CloseUser( XUserHandle ) override {}
++    HRESULT Conflict( const char *request, SIZE_T size, char **response, UINT16 *responseSize ) override
++    {
++        ++conflicts_asked;
++        snprintf( conflict_request, sizeof( conflict_request ), "%.*s", ( int )size, request );
++        if ( !conflict_answer ) return E_NOTIMPL;
++        *responseSize = ( UINT16 )strlen( conflict_answer );
++        *response = strdup( conflict_answer );
++        return *response ? S_OK : E_OUTOFMEMORY;
++    }
+ };
+ static ClosedSaveTransport closedTransport;
+ HRESULT ClosedSaveTransport::Authorization( XUserHandle user, const char *relying, char **auth )
+@@ -240,14 +253,55 @@ static void run_provider( BOOL files )
+     listing_case = 0;
+     seed( &provider, TRUE );
+     fail_second = FALSE;
+-    blob_gets = writes = 0;
++    blob_gets = writes = conflicts_asked = 0;
++    conflict_answer = NULL;
+     SetEnvironmentVariableA( "XODUS_SAVE_SYNC", "auto" );
+     hr = cloud_sync( &provider );
+     CHECK( "dirty-conflict-reported", hr == E_GS_CONTAINER_NOT_IN_SYNC );
++    CHECK( "conflict-asked-once", conflicts_asked == 1 );
++    CHECK( "conflict-question",
++           strstr( conflict_request, "<Container>Save</Container><DisplayName>Save</DisplayName>"
++                                     "<LocalTime>2026-10-20T12:00:00.0000000Z</LocalTime>"
++                                     "<CloudTime>2026-10-22T12:00:00Z</CloudTime><CloudDevice></CloudDevice>" ) != NULL );
+     CHECK( "conflict-no-payload-or-upload", !blob_gets && !writes );
+     preserved( &provider, TRUE );
+     free( provider.auth );
+     provider.auth = NULL;
++    conflict_answer = "<SaveConflictResponse><Choice>none</Choice></SaveConflictResponse>";
++    hr = cloud_sync( &provider );
++    CHECK( "conflict-unanswered-keeps-both", hr == E_GS_CONTAINER_NOT_IN_SYNC && !blob_gets && !writes );
++    preserved( &provider, TRUE );
++    free( provider.auth );
++    provider.auth = NULL;
++    /* The cloud's side replaced: the closed transport refuses the lock, so the upload
++     * fails and the local container stays unsynced, never lost. */
++    conflict_answer = "<SaveConflictResponse><Choice>local</Choice></SaveConflictResponse>";
++    provider.cloud = TRUE;
++    hr = cloud_sync( &provider );
++    provider.cloud = FALSE;
++    CHECK( "conflict-local-uploads", FAILED( hr ) && writes && !blob_gets );
++    {
++        struct container_state state;
++        CHECK( "conflict-local-state", load_state( &provider, "Save", &state ) == S_OK );
++        CHECK( "conflict-local-still-unsynced", state.dirty && !strcmp( state.remote, "2026-10-20T12:00:00Z" ) );
++        free_state( &state );
++    }
++    free( provider.auth );
++    provider.auth = NULL;
++    seed( &provider, TRUE );
++    blob_gets = writes = 0;
++    conflict_answer = "<SaveConflictResponse><Choice>cloud</Choice></SaveConflictResponse>";
++    hr = cloud_sync( &provider );
++    CHECK( "conflict-cloud-downloads", hr == S_OK && blob_gets == 2 && !writes );
++    {
++        struct container_state state;
++        CHECK( "conflict-cloud-state", load_state( &provider, "Save", &state ) == S_OK );
++        CHECK( "conflict-cloud-synced", !state.dirty && !strcmp( state.remote, remote_time ) );
++        free_state( &state );
++    }
++    conflict_answer = NULL;
++    free( provider.auth );
++    provider.auth = NULL;
+     seed( &provider, FALSE );
+     remote_time = "2026-10-20T12:00:00Z";
+     blob_gets = writes = 0;
