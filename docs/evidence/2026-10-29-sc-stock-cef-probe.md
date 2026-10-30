@@ -459,3 +459,84 @@ Amended 2026-10-30 (owner): a band view only detached waits named is now freed, 
 (l7's 3 `fate=1` views). Dev IPA sha256 `4f5f3b7cd32c6060f76e0c42188bed37ca62f72cc88c44b778d7e311f4cab4f2`, full
 `pp test` passed; Hollow Knight first-frame+10 **passed**, first frame +10.86 s
 (`$PLAYPORT_BUILD/ui-runs/20261030T125728`, no teardown in it); no RDR2 run with it yet.
+
+## l8: component update off, pool diagnostics
+
+Commit `fe20a23`: madeira-unix 0190's verified-browser rewrite appends `--disable-component-update` unless present
+([decision 0150](../decisions/0150-dev-single-process-social-club.md), amended by the owner 2026-10-30);
+madeira-unix 0230 and wine_host ABI 12 give a dev build a `[proc-mem] after teardown N` walk at the first 2 s sample
+after each finished teardown; the donor pool's stats line gives the growth check's `level=`, `level_floor=`,
+`level_resume=`, `spare_mb=` and, while stopped, `resume_wait=`; a `growth resumed` line gives its reason. Dev IPA
+sha256 `2412a5150c97e1af9ef6b56dfb8627ea7ec9e5496f28a8efd517933eb167e71c` (90 IPA checks); full `pp test` passed
+(tools/tests 827, PlayportKit 366). It also carries `7db5c9c` (a band view freed of its wait pins takes the
+no-parked fate), whose first RDR2 run this is.
+
+One locked session, in-place install (`.work/agent-notes/pla476/l8.sh`):
+
+- Hollow Knight (`app-367520`) first-frame+10 **passed**: first frame +10.69 s
+  (`$PLAYPORT_BUILD/ui-runs/20261030T132206-hk-p476l8`).
+- RDR2 (`app-1174180`), keys `PLAYPORT_CEF_SWAP=0 PLAYPORT_SC_SINGLE=1 PLAYPORT_SC_LAYOUT=1`, STORY_BY=420
+  UNTIL=600 WAIT=900, run `$PLAYPORT_BUILD/ui-runs/20261030T132255-rdr2-p476l8`: first frame +40.66 s, sign-in
+  +102.2 s, Story pressed at 13:25:22 (about +121 s on the `[xp]` clock), then the run's own end at first
+  frame+600 s with no jetsam. The cabin was not reached.
+
+Measured, line numbers in that `pull/s1-host.log`, times on the `[xp]` clock:
+
+- **No BITS activation:** 0 `dllhost`, 0 `size=0x100010000`, 0 `{4991D34B…}`, no rpcss start; RpcSs stays
+  `listed, stopped` (7201). Both `[sc-single] verified browser` lines (40262 for the launcher's helper A, 129904
+  for the game's helper B) end `… no proxy unless supplied, component update off`. A ran from +24.8 s to its end
+  at +103.1 s, past the ≈63 s at which l1/l7's updater first asked for BITS. The rewritten command line itself is
+  not logged.
+- **Other `NO GAP FITS`:** 27. 26 are A's V8 sandbox probes (the `[jumbo#…] peb=0x144f2c000` asks, 54697–55269, as
+  in l6/l7) and one is the game's 8960 MiB ask (77461, served by the holdback). None from B: it never got that far.
+- **Teardowns (7db5c9c exercised):** 16 `wait-detached`, all `node=unlinked`; 5 `wait-only`, all `fate=0`,
+  among them a FEX band view, `0x7c4df00000+0x100000` (129115, the launcher's): freed, not emptied, as `7db5c9c`
+  intends. No `fate=1`. A's kind 3 (`0x7400000000+0x190000000`) freed (129143–129144).
+- **The layout lost its kind 2:** at A's teardown (+103.1 s) all of A's slot views were freed (`slot-view … fate=0`,
+  129134–129144), then 129151 `owner 0x144f2c000 exited; kind=2 slot NOT held again (something mapped it)`.
+  Kinds 1 and 3–6 were held again. Kind 2 is the CEF slot, `0x7000000000+0x10000000`. Between its release and the
+  re-hold, something native took part of it; no Wine view there is logged. In l5–l7 the same release was always
+  followed by `held again` (5 times); this is the first miss.
+- **The game's helper B died in its init:** started at 129894 (pid 04f4), its PEB at `0x7000924000` and image at
+  `0x7000930000`, inside the lost kind-2 range. It got **no** `grant`; its six image protections were refused
+  (130026–130031 `refused memory operation owner=0x7000924000 … outside owned real range`), its first write to its
+  image's data faulted (130032 `bus-data-av … region=0x7000930000+0x1cc000 prot=1`, then `c0000005`), and it ended
+  `0xc0000005` (130058). The game's later helper starts were refused by decision 0138 (`[game-sc] refused the
+  game's Social Club helper start 2`, then more, 108 `SocialClubHelper.exe` creates from RDR2 in all); no re-sign-in
+  came, so 0155 allowed none.
+- **Story:** the screenshots show the Story/Online menu (+126 s from launch), the sepia tintype loading screen of
+  snowy pines (+145 s), a darkening frame (+164 s), then from +203 s to the end only black with Rockstar's small
+  orange loading icon in the corner; the last one is the Home Screen after the run ended. The cabin was not reached.
+  The game's Social Club end never fired (the footprint stayed under 6992 MB).
+- **Memory, aligned on the press (+121.4):** `[footprint]` phys/graphics at press−29 5823/1389, press−18 (just
+  after A's teardown) 5052/1752, press 5094/1750, +20 5035/1752, +48 5270/1923, +60 5555/2160, +70 6050/2422,
+  +80 6453/2646, then flat at 6448–6493 to the end (graphics 2642–2646). No step like xs1's or l7's (≈1.1 GB of
+  graphics in under 1 s). Peak `fpMB=6496` at +641.6 s (154101), **−11.5 %** against xs1's 7343 MB. No jetsam
+  line for S1Probe in the phone log; no crash report.
+- **Teardown footprint, now with a post-teardown sample:** the launcher, a child and A were torn down at +103.1 s
+  (129121 `6150->5957`, 129130 `5957->5943`, 129156 `6150->5055`; the two `6150` readings overlap); `fpMB` went
+  6159 → 5049 in 0.3 s. `[proc-mem] after teardown 4` (130217, +105.6 s) against the last sample (125647, +94.0 s),
+  resident+compressed: A (pid 0184) 1132 MB and the launcher (0070) 265 MB gone; the runtime row 200 → 281 MB
+  (+81: the two processes' kept views; image 154 → 156, so no image view was kept, unlike l7's 240 MB libcef);
+  RDR2.exe 758 → 2244 MB (its own load in those 11.6 s). `after teardown 5` (131671) follows B's exit (0 MB:
+  `exited: freed image=0 private=1`), `after teardown 6` (132494) a small child's (runtime private 2670 → 2666).
+- **Donor pool:** stats lines now carry `level=`. It fell from 35 % (+30 s) to 22 % (+90 s), 15 % (+180 s), and
+  135451 `pressure: growth stopped (level 14% < 15%) spare_mb=3944` at +188.0 s (press+66.6) with 2954 MB live; it
+  never resumed: every later line has `resume_wait="level N% < 20%"` with N 9–14, spare 3777–3996 MB (over the
+  1920 MB the resume needs). Pool resident+compressed at install+210s 2544 MB (l7 2096, xs1 2733); live 3025 MB from
+  then on. l7 stopped at +97.4 (level 13 %, 2582 live), xs1 at +193.2 (press+70, 3217 live).
+
+Inferred, not shown: the lost kind 2 is a host allocation landing in the freed 256 MiB between its release and the
+re-hold (the window is a few log lines long; the graphics footprint rose 1389 → 1752 MB around then); B then had
+nowhere of its own and the layout refused its image. B's death, not memory, stopped Story's load: without the
+game's Social Club the load waits on a black screen, as l5 did. The pool's stop is jetsam's system level, not the
+spare memory: the level stays under 20 % while 3.8–4 GB are spare, in this run as in l7.
+
+Correction to l1 above: the helper's own COM (combase) starts `syswow64\dllhost.exe` as a surrogate after rpcss
+reports the class not registered; rpcss does not start it.
+
+Gates: HK first-frame+10 **passed**. No `dllhost`/WoW64 `NO GAP FITS` — **passed**; V8 probe lines remain (26,
+A only). The game's helper reaches allocator/browser startup — **not passed** (kind 2 not held again, B refused and
+dead in init). The game signs in, Story is pressed — **passed**. The cabin — **not passed** (black loading screen
+without the game's Social Club). 7343 MB ±10 % — **not comparable** (peak 6496 MB without the cabin or Story's
+step).

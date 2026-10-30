@@ -15,8 +15,9 @@
   game helper reaches allocator startup). The launcher helper's retained kind-3 view (l2–l6) is no longer kept:
   [decision 0166](../decisions/0166-detach-a-parked-threads-wait-then-unpin-its-view.md) (owner, 2026-10-30)
   detaches a parked thread's alert wait at teardown and frees a view only that wait named (l7). Kept views are still
-  never cleared, freed or overwritten by any other path. **Blocker now:** memory: l7 reached Story's loading and
-  was ended by iOS at the 8192 MB limit.
+  never cleared, freed or overwritten by any other path. **Blocker now:** the layout's kind-2 (CEF slot) re-hold
+  after the launcher helper's teardown can lose to a native mapping (l8): the game's helper then gets no grant and
+  dies in its init. Memory (l7's jetsam in Story's loading) stays open behind it.
 - **Measured (l5, 2026-10-30, IPA `b5ee00eb…`, `.work/ui-runs/20261030T104925-rdr2-p476l5`):** only kind 3
   (ELF_META) is kept, as its whole 6400 MiB view, pinned by one parked thread's wait address. It has 72.4 MiB
   committed, highest end 170.5 MiB. Kinds 1, 2, 4, 5 and 6 are freed and held again. The game's helper gets
@@ -57,20 +58,31 @@
   pressed (+134 s). Story's loading then grew the footprint to the 8192 MB limit and iOS ended the app at +238 s
   (jetsam, no crash). HK first-frame+10 passed (`20261030T122623-hk-p476l7`); The Witcher 2 unchanged
   (`20261030T122712-w2-p476l7`).
-- **Chunk-2 gates after l7:**
+- **Measured (l8, 2026-10-30, IPA `2412a515…`, `.work/ui-runs/20261030T132255-rdr2-p476l8`;
+  [evidence](../evidence/2026-10-29-sc-stock-cef-probe.md#l8-component-update-off-pool-diagnostics)):** `fe20a23`
+  (decision 0150 amended: the stock browser gets `--disable-component-update`; donor-pool `level`/`resume_wait`
+  and post-teardown `[proc-mem]` diagnostics) with `7db5c9c`. No BITS activation, `dllhost` or WoW64 `NO GAP FITS`;
+  a band view freed of its wait pins took `fate=0`. At A's teardown kind 2 was **not held again** (something
+  mapped it, first time in 6 releases); the game's helper then started inside the old kind-2 range, got no grant,
+  had its image protections refused and died `c0000005` in init; 0138 refused its restarts. Story was pressed and
+  then stayed on a black loading screen to the run's end (peak 6496 MB, no jetsam). The pool stopped at press+66.6
+  (level 14 %) and never resumed (`resume_wait="level 9–14% < 20%"`, spare ≈3.9 GB). HK first-frame+10 passed
+  (`20261030T132206-hk-p476l8`).
+- **Chunk-2 gates after l8:**
 
-  | Gate | l7 |
-  | --- | --- |
-  | HK first-frame+10 | passed |
-  | The game's helper reaches allocator/browser startup | passed (kind 3 granted, no refusal, compositor running) |
-  | The game signs in, Story is pressed | passed |
-  | Story reaches the cabin | **not passed** (jetsam at 8192 MB in Story's loading) |
-  | No SC/launcher `NO GAP FITS` or soft grant | **not passed** (26 V8 probe lines each from A and B, 36 i386 `dllhost.exe` WoW64-window failures; no soft grant) |
-  | Peak within 7343 MB ±10 % | **not passed** (the 8192 MB limit) |
+  | Gate | l7 | l8 |
+  | --- | --- | --- |
+  | HK first-frame+10 | passed | passed |
+  | The game's helper reaches allocator/browser startup | passed | **not passed** (kind 2 not held again; no grant, refused, died in init) |
+  | The game signs in, Story is pressed | passed | passed |
+  | Story reaches the cabin | **not passed** (jetsam at 8192 MB) | **not passed** (black loading screen without the game's Social Club) |
+  | No SC/launcher `NO GAP FITS` or soft grant | **not passed** (26 V8 lines each from A and B, 36 `dllhost.exe`) | **not passed** (26 V8 lines from A; 0 `dllhost.exe`; no soft grant) |
+  | Peak within 7343 MB ±10 % | **not passed** (8192 MB limit) | **not comparable** (6496 MB, no Story step) |
 
-- **Ordered queue now:** (1) the memory of Story's load with the game's own Social Club running (the 0133/0153
-  end came at +224.4 s, 120 s after sign-in, too late), then the `dllhost.exe` window failures and the V8 probes;
-  (2) chunks 3–6, all under PLA-476. Chunk 5's decision is now partly covered by
+- **Ordered queue now:** (1) keep kind 2 held across a slot view's release (no window for a native mapping; a
+  decision under PLA-476's layout, not yet proposed); (2) the memory of Story's load with the game's own Social
+  Club running (l7: 550–750 MB short at the step; l8's pool stopped on the system level, not spare memory), then
+  the V8 probes; (3) chunks 3–6, all under PLA-476. Chunk 5's decision is now partly covered by
   [0166](../decisions/0166-detach-a-parked-threads-wait-then-unpin-its-view.md) (the retention part of the layout);
   the rest of chunk 5 stays. 0.5.0 held.
 - Phone: no session active. Reports: `.work/agent-notes/pla476/reports/`.
