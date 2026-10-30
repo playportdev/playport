@@ -73,6 +73,18 @@ final class LayoutSuggestionTests: XCTestCase {
         XCTAssertEqual(run(&switched, from: 12, to: 60), [])
     }
 
+    /// A layout someone chose: the game's own, or Settings' Starting layout (Gamepad too); only a
+    /// game following "Suggested for the game" is open to the offer.
+    func testALayoutChosenInSettingsOrForTheGameIsNotReplaced() {
+        XCTAssertFalse(LayoutSuggestion.chosen(nil, defaults: ControlsDefaults()))
+        XCTAssertFalse(LayoutSuggestion.chosen(GameControls(opacity: 0.5), defaults: ControlsDefaults()))
+        XCTAssertTrue(LayoutSuggestion.chosen(GameControls(layout: .gamepad), defaults: ControlsDefaults()))
+        XCTAssertTrue(LayoutSuggestion.chosen(nil, defaults: ControlsDefaults(startingLayout: .gamepad)))
+        var s = LayoutSuggestion(offered: false)
+        XCTAssertEqual(run(&s, from: 0, to: 60, chosen: LayoutSuggestion.chosen(nil, defaults: ControlsDefaults(startingLayout: .gamepad))),
+                       [])
+    }
+
     func testAGameOfferedBeforeIsNotOfferedAgain() {
         var s = LayoutSuggestion(offered: true)
         XCTAssertEqual(run(&s, from: 0, to: 60), [])

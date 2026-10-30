@@ -11,8 +11,10 @@
 // - Only play counts: from the first frame, while the game runs (not paused by the in-game menu,
 //   a guest dialog or the background) and the controls are shown (a controller hides them;
 //   then there is nothing to replace). A gap between two samples counts as `maxStep` at most.
-// - Only a starting Gamepad: the game's own layout (Gamepad too) or any other layout (a
-//   compatibility default's, Off) ends it, as does a change of layout mid-window.
+// - Only a starting Gamepad nobody chose: the game's own layout (Gamepad too), Settings'
+//   Starting layout (Gamepad too; only "Suggested for the game" is open to the offer, `chosen`)
+//   or any other layout (a compatibility default's, Off) ends it, as does a change of layout
+//   mid-window.
 // - Once per game, kept in UserDefaults by catalogue id (`offeredKey`), marked when offered:
 //   a game the person turned down is not asked again.
 
@@ -39,7 +41,7 @@ public struct LayoutSuggestion: Equatable, Sendable {
 
     /// One sample, at `now` (any monotonic seconds). `reads`: the game's XInput state reads so
     /// far; `running`: the first frame is shown and the game is not paused; `state`: its controls
-    /// now; `chosen`: the game has its own layout. True once, when the offer is due.
+    /// now; `chosen`: someone chose the layout (`chosen(_:defaults:)`). True once, when the offer is due.
     public mutating func sample(at now: TimeInterval, reads: UInt64, running: Bool, state: ControlsState,
                                 chosen: Bool) -> Bool {
         guard !done else { return false }
@@ -53,6 +55,12 @@ public struct LayoutSuggestion: Equatable, Sendable {
         guard played >= Self.window else { return false }
         done = true
         return true
+    }
+
+    /// The layout is someone's choice: the game's own, or Settings' Starting layout rather than
+    /// "Suggested for the game".
+    public static func chosen(_ game: GameControls?, defaults: ControlsDefaults) -> Bool {
+        game?.layout != nil || defaults.startingLayout != nil
     }
 
     public static func offered(_ id: String, in defaults: UserDefaults) -> Bool {

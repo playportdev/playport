@@ -149,7 +149,8 @@ best-effort and reported as unconfirmed; transport loss/SIGKILL can leave cancel
                          in 20 s of play after its first frame (PlayportKit LayoutSuggestion), then press
                          its Use button (saves the layout for the game; `controls:` logs the new layout)
                          or its Not now. Fails when the game was not offered (it read a pad, it is not
-                         on the starting Gamepad layout, or it was offered before: once per game;
+                         on the starting Gamepad layout, its layout was chosen (its own, or Settings'
+                         Starting layout rather than Suggested), or it was offered before: once per game;
                          --action set:controls.suggestedLayoutOffered= forgets every game's).
                          Example: --action play:ID --action suggest:accept --action touch:fire
   menu:open              after a play: (the actions after it then run while the game runs): wait for

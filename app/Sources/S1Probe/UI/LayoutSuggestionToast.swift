@@ -67,7 +67,8 @@ final class SuggestedLayout {
         }
         guard var s = suggestion, !s.done else { return }
         let reads = host_pad_state_reads()
-        let chosen = ControlsStore.shared.game(id).layout != nil
+        let store = ControlsStore.shared
+        let chosen = LayoutSuggestion.chosen(store.game(id), defaults: store.defaults)
         let state = controls.state
         let running = controls.drawn && UIApplication.shared.applicationState == .active
         let offer = s.sample(at: CACurrentMediaTime(), reads: reads, running: running, state: state, chosen: chosen)
@@ -78,7 +79,8 @@ final class SuggestedLayout {
             show()
         } else if s.done {
             finish(reads > 0 ? "the game read XInput state (\(reads) reads)"
-                   : chosen ? "the game has its own layout (\(state.layout.title))" : "the game starts on \(state.layout.title)")
+                   : chosen ? "its layout was chosen (\(state.layout.title), the game's own or Settings' Starting layout)"
+                   : "the game starts on \(state.layout.title)")
         }
     }
 
