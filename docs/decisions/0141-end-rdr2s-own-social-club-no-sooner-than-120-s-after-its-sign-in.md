@@ -4,6 +4,10 @@
 end and the refusal wait for the game's own sign-in. Amends
 [0133](0133-a-dev-build-may-end-rdr2s-own-social-club-after-its-sign-in.md). Dev only, like 0133.
 
+**Amended 2026-10-30 by [0169](0169-social-club-on-rockstars-cef-in-the-stock-cef-layout.md) (owner, PLA-476):** under the stock-CEF Social Club layout no end runs,
+so this wait does not either (run l19: after the end the game's re-sign-in was refused and it left Story).
+Without the layout it is unchanged.
+
 ## Context
 
 - **0133's end comes at the first one-second slice after the sign-in whose footprint is within

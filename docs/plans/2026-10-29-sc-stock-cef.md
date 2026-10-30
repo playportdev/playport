@@ -246,6 +246,20 @@
   - `[xp]` sys share 18–19 % → 20.5–21 % at the step: no kernel-time jump.
   - Recommendations (KosmicKrisp retire-serial release of ONE_TIME holds; audio Option A gated on the GetBuffer
     caller) wait for decisions; see the evidence.
+- **Owner decisions 2026-10-30 after l19, built, not yet on the phone** (`211070e`, `6bae711`, and the
+  decision commit; dev IPA `6b5be569…`, `.work/out/20261030-223218-6b5be569/`, 90 checks):
+  - madeira-unix 0243: in Wine's hinted ≥1 GiB retry, the verified helper's 4 GiB-aligned hints try
+    `0x7100000000`, `0x7200000000`, `0x7300000000` before the kernel's pick (`[jumbo] cand sc-aligned`;
+    option (a) of `.work/agent-notes/pla476/reports/helper-oom.md` §2). l16 B's hole gives `0x7300000000` on
+    the host.
+  - Under the layout the game's own Social Club helper is not ended: the end is off when never set, a dev
+    build's stored switch overrides, release ignores it; 0138's refusal and 0155's watch go with the end
+    (`GameSocialClubEndPolicy`). Without the layout the default is unchanged (0153).
+  - [Decision 0169](../decisions/0169-social-club-on-rockstars-cef-in-the-stock-cef-layout.md) is chunk 5's
+    record (amendment notes in 0110, 0133, 0141, 0150, 0153). Chunk 4's implementation (no keys, both
+    builds, Playport's CEF removed) is still open.
+  - Phone gates next: HK first-frame+10; RDR2 on l12's keys with the game-SC end left unset, to the cabin
+    held to first-frame+600, with no game-SC end, no restart refusal, every V8 code range on an aligned base.
 - **Chunk-2 gates after l19:**
 
   | Gate | l7 | l8 | l9 | l10 | l11 | l12 | l13 | l14 | l15 | l16 | l17 | l18 | l19 |
@@ -311,7 +325,8 @@ drop it, and run Rockstar's own CEF the way willfaust/Madeira does.
 
 **Unchanged.** Every other Social Club and launcher policy:
 - the launcher's end at the game's sign-in or near the limit (0124, 0130, 0140);
-- the game's Social Club end and restart refusal (0133, 0138, 0141);
+- the game's Social Club end and restart refusal (0133, 0138, 0141), except that under the layout the end
+  is off (owner, 2026-10-30, after l19; decision 0169);
 - the crash-reporter block (`PLAYPORT_SC_BLOCK_CRASHPAD`);
 - the Chromium switches (0109, 0111, 0114);
 - 0153's defaults: services, the 896 MiB pool, the Khronos loader, the Steam client,
@@ -491,6 +506,11 @@ owner first:** it is a refused DLL load in the game, and 0150 excluded it. Other
 
 ### 5. Decision record
 
+**Recorded** as [0169](../decisions/0169-social-club-on-rockstars-cef-in-the-stock-cef-layout.md) (owner,
+2026-10-30), with the code-range placement rule (0243) and no end of the game's helper under the layout.
+Still open: the doc updates below that depend on chunk 4's removal (`BUILDING.md`, `LICENSING.md`,
+`NOTICES.md`, `DISTRIBUTION.md`, `docs/plans/finished.md`).
+
 A new decision (next free number; 0166 is the last). The retention of a launcher helper's slot view is already
 decided by [0166](../decisions/0166-detach-a-parked-threads-wait-then-unpin-its-view.md). It:
 - supersedes 0110;
@@ -534,8 +554,9 @@ and `DISTRIBUTION.md` where they name the CEF payload, and `docs/plans/finished.
   - If chunk 2 cannot place the pools, stop and report. Keeping Playport's CEF in release (PLA-372)
     is then the fallback, and that is the owner's call.
 - **Single-process merges fault domains.** x4 (single-process with the game's helper alive) was
-  jetsammed at 8120 MB. The game's Social Club end (0133/0141) is what kept xs1 under the limit; it
-  stays on.
+  jetsammed at 8120 MB. The game's Social Club end (0133/0141) is what kept xs1 under the limit. Under the
+  layout it is now off (0169): l12's and l14's step began at 5,640–5,870 MB, but the cabin's margin with the helper
+  alive is not yet measured.
 - **xs1's black spinner after the helper's end** (one run). The defaults never showed it, so chunk 6
   needs three runs, not one.
 - **A Social Club update** changes the helper's hashes. 0190 then falls back to multi-process, which

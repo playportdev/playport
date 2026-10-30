@@ -7,6 +7,10 @@ which never ends the game's own `SocialClubHelper.exe`. It is not a compatibilit
 become one for RDR2 only after a run shows the game going on without a blocking Social Club error
 and without an exit.
 
+**Amended 2026-10-30 by [0169](0169-social-club-on-rockstars-cef-in-the-stock-cef-layout.md) (owner, PLA-476):** under the stock-CEF Social Club layout the game's
+helper is not ended: the end is off when never set, a dev build's stored switch still turns it on, a release
+build ignores the switch there. Without the layout this record (with 0141 and 0153) is unchanged.
+
 ## Context
 
 - **The Story load ends at the memory limit.** RDR2's Story load reaches the 8,192 MB limit

@@ -8,6 +8,10 @@ Amends [0109](0109-chromium-switches-for-a-cef-browser.md) and
 rule covers only the installed `SocialClubHelper.exe` page bridge described here.
 It does not permit patching any other Rockstar component or build.
 
+**Amended 2026-10-30 by [0169](0169-social-club-on-rockstars-cef-in-the-stock-cef-layout.md) (owner, PLA-476):** single-process is on by default, in release
+too, with the stock-CEF layout and no keys (the plan's chunk 4, still open: until it lands the keys are
+needed). The exact-build guard, the page-bridge exception and the multi-process fallback are unchanged.
+
 **Amended 2026-10-30 (owner, PLA-476):** a verified browser also gets
 `--disable-component-update` unless its command line has it, as
 [0114](0114-trim-social-clubs-chromium-and-the-launchers-threads.md)'s amendment

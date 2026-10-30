@@ -113,3 +113,9 @@ games work.
 a `SocialClubHelper.exe` process is told 300 MB of available memory, so its Chromium purges; every
 other process keeps the phone's figure.
 
+## Amendment 2026-10-30: no end of the game's Social Club under the layout
+
+**Approved by the owner, 2026-10-30 (PLA-476; [0169](0169-social-club-on-rockstars-cef-in-the-stock-cef-layout.md)).** The end of a game's own Social Club and the refusal
+of its restarts stay on in both builds when never set, except under the stock-CEF Social Club layout: there
+the end is off when never set, a dev build's stored switch still turns it on, and a release build ignores
+the switch. The refusal and 0155's re-sign-in watch go with the end (`GameSocialClubEndPolicy`).

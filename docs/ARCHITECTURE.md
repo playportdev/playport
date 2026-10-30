@@ -888,7 +888,10 @@ the game is paused:
   sign-in near the limit, ends the `SocialClubHelper.exe` processes under RDR2.exe, and ntdll refuses
   their later starts (`PLAYPORT_REFUSE_GAME_SC_RESTART`). Both are on in dev and release builds unless
   Settings › Graphics turns them off (`GameSocialClubEnd.swift`; decisions 0133, 0138, 0141,
-  [0153](decisions/0153-rdr2s-settings-are-every-games-defaults.md)). If the game signs in again
+  [0153](decisions/0153-rdr2s-settings-are-every-games-defaults.md)). Under the stock-CEF Social Club
+  layout (`PLAYPORT_SC_LAYOUT=1`) neither runs unless a dev build's stored switch turns the end on
+  (`GameSocialClubEndPolicy`; decision
+  [0169](decisions/0169-social-club-on-rockstars-cef-in-the-stock-cef-layout.md)). If the game signs in again
   after the end (a new sign-in line in its Social Club log, or a GetCurrentGameLanguage burst within
   60 s) and the footprint plus 600 MB is under the limit less 400 MB, the app sends
   `PP_CONTROL_ALLOW_GAME_SOCIAL_CLUB` (the root's sweep stops) and then
