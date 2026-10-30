@@ -83,11 +83,14 @@ public struct XboxInstaller: Sendable {
     let services: any XboxInstallServices
     let log: Logger
     let market: String
+    /// The keys an MSIXVC's header must be signed with: Microsoft's retail ones.
+    let trust: XboxXVDTrust
     let bytes: @Sendable (XboxPackageLocation) -> any XboxPackageBytes
 
     public init(layout: InstallLayout, services: any XboxInstallServices, log: Logger = .silent, market: String = "US",
+                trust: XboxXVDTrust = .retail,
                 bytes: @escaping @Sendable (XboxPackageLocation) -> any XboxPackageBytes = { XboxCDNPackage($0) }) {
-        self.layout = layout; self.services = services; self.log = log; self.market = market; self.bytes = bytes
+        self.layout = layout; self.services = services; self.log = log; self.market = market; self.trust = trust; self.bytes = bytes
     }
 
     public struct Result: Sendable {
@@ -234,7 +237,7 @@ public struct XboxInstaller: Sendable {
     /// An MSIXVC's metadata prefix, checked to be the package `location` names.
     func fetchMSIXVC(_ location: XboxPackageLocation, remote: any XboxPackageBytes, name: String,
                      metadata: @escaping @Sendable (UInt64) -> Void) async throws -> XboxPackage {
-        let package = try await XboxPackage.fetch(remote, into: prefixFile(name), log: log) { done, _ in metadata(done) }
+        let package = try await XboxPackage.fetch(remote, into: prefixFile(name), trust: trust, log: log) { done, _ in metadata(done) }
         try Self.requireContentID([package.contentID], location)
         return package
     }

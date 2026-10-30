@@ -268,6 +268,7 @@ struct XboxTestPackage {
         hput(le32(0) + le32(1) + le32(0) + le32(UInt32(user.count)) + le32(UInt32(xvcLength)) + le32(0) + le32(0xAA000), 0x280)
         hput(le16(Int(version[3])) + le16(Int(version[2])) + le16(Int(version[1])) + le16(Int(version[0])), 0x3BC)
         header[0x470] = 1
+        sign(&header)
         bytes.replaceSubrange(0..<(3 * page), with: header)
 
         var offsets: [String: Int] = [:], units: [String: [UInt32]] = [:]
@@ -278,6 +279,31 @@ struct XboxTestPackage {
             if f.encrypted { units[f.path] = (0..<pages(f.data.count)).map { unitOf[first + $0]! } }
         }
         return XboxTestPackage(bytes: bytes, files: files, offsets: offsets, prefixBytes: encryptedStart * page, units: units)
+    }
+
+    /// A synthetic 4096-bit key the test packages are signed with, in place of Microsoft's.
+    static let signingKey = try! XboxRSA(xboxFixture("synthetic-xvd-rsa.bin"))
+    /// The installer's trust for test packages: the synthetic key only.
+    static let trust = XboxXVDTrust(keys: [try! XboxRSAPublicKey(blob: publicBlob(signingKey))])
+
+    static func publicBlob(_ k: XboxRSA) -> [UInt8] {
+        var b: [UInt8] = [0x52, 0x53, 0x41, 0x31]
+        for v in [UInt32(k.n.count * 8), UInt32(k.e.count), UInt32(k.n.count), 0, 0] { b.appendLE(v) }
+        return b + k.e + k.n
+    }
+
+    /// Signs a header as Microsoft's tools do (XboxXVDSignature): RSASSA-PSS, SHA-256, a 32-byte salt.
+    static func sign(_ header: inout [UInt8], with key: XboxRSA = signingKey) {
+        let message = Array(header[XboxXVDSignature.signed])
+        let salt = (0..<32).map { _ in UInt8.random(in: 0...255) }
+        let h = SHA256Stream.hash([UInt8](repeating: 0, count: 8) + SHA256Stream.hash(message) + salt)
+        let k = key.n.count
+        var db = [UInt8](repeating: 0, count: k - 32 - 32 - 2) + [0x01] + salt
+        let mask = XboxXVDSignature.mgf1(h, count: db.count)
+        for i in db.indices { db[i] ^= mask[i] }
+        db[0] &= 0x7F
+        let signature = XboxRSA.power(db + h + [0xBC], key.d, modulus: key.n)
+        header.replaceSubrange(0..<XboxXVDSignature.size, with: signature)
     }
 }
 

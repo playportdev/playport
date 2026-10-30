@@ -191,8 +191,16 @@ follows Xodus's streaming install:
 3. **Metadata prefix.** Every byte before the first encrypted region (header, hash
    tree, user data, XVC information, the drive's GPT and NTFS metadata: 44 MB for
    the pilot, as Nexus keeps) is fetched into `<stage>.package` beside the stage,
-   resuming a partial one. `XboxPackage.load` checks the hash tree from the
-   header's top hash down and every metadata page it reads against it.
+   resuming a partial one. The header comes first: `XboxXVDSignature` checks its
+   signature (the first 0x200 bytes: RSASSA-PSS, SHA-256, MGF1-SHA-256, a 32-byte
+   salt, over bytes 0x200..<0x1000, as xvdtool checks it) against Microsoft's
+   retail keys (`XboxXVDTrust.retail`: GreenGamesPublicKey, which signs the pilot,
+   and GreenXvdPublicKey, from `xsapi.dll` in Microsoft's `Microsoft.GDK.PC` NuGet
+   package). An unsigned header, one signed with any other key (the SDK's test
+   key), or one with `EncryptionDisabled` set is refused before more is fetched.
+   The CDN is plain HTTP, and the signed header carries the hash tree's top hash:
+   `XboxPackage.load` checks the signature again, then the hash tree from that top
+   hash down and every metadata page it reads against it.
 4. **Files.** The NTFS drive's `$MFT` (walked linearly, paths from `$FILE_NAME`
    parents) gives every file and its pages; a file Xodus would silently skip
    (resident data, fragments, sparse runs, attribute lists) is refused by name.
@@ -275,6 +283,10 @@ against the package's hash for it. MSIXVC2 installs every file decrypted
 Not supported, refused by name: Brotli-compressed segments (no decoder here
 yet), compressed boxes in the ZIP, ZIP encryption, MSIXVC2 file format other
 than 1, and key derivations or algorithms other than SP800-108 and AES-256-CBC.
+Nothing public says what signs an MSIXVC2's `XboxPackage.cbor` (the references
+check hashes only), so a segment must be encrypted under a key the licence's key
+unwraps: a segment key written in the package, or a plain segment with bytes, is
+refused, since anyone on the plain HTTP path could rewrite it with its hash.
 No retail MSIXVC2 title was in the PC Game Pass or console catalogues on
 2026-10-30, so the format is checked against the two references and a synthetic
 package only (below).
@@ -583,9 +595,10 @@ page, that page, and the whole user data and XVC information (`PPCUT1`, then
 u32 count and `{u64 offset, u32 length, bytes}`, zlib). Everything else of the
 install's tests is a synthesised MSIXVC with the pilot's layout
 (`XboxTestPackage`: GPT, NTFS with 4 KiB records, three regions, XTS under a
-test key) served by a 127.0.0.1 range server. `msixvc2-synthetic.msixvc2` is a
-synthetic MSIXVC2 (31 KiB: two chunks, two boxes, six files, compressed,
-encrypted, shared and plain segments, a ZIP64 entry) written by
+test key, its header signed with a synthetic 4096-bit key, `synthetic-xvd-rsa.bin`)
+served by a 127.0.0.1 range server. `msixvc2-synthetic.msixvc2` is a
+synthetic MSIXVC2 (31 KiB: two chunks, two boxes, six files, compressed and
+stored, shared segments, every one encrypted, a ZIP64 entry) written by
 `Tests/msixvc2-fixture.py` with Python's zipfile, zlib and `cryptography`,
 independently of the reader, under a test licence key (bytes 0x40…0x5f);
 running the script again gives the same bytes. `msixvc2-synthetic-v2.msixvc2`

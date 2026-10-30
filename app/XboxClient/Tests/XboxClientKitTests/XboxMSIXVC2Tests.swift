@@ -14,7 +14,7 @@ enum XboxMSIXVC2Fixture {
     static let fulfillmentID = "7d1e2f3a-4b5c-4d6e-8f70-8192a3b4c5d6"
     /// Path, size, SHA-256 of every file as the script printed them.
     static let files: [(String, UInt64, String)] = [
-        ("Data/Sub/readme.txt", 33, "5b4614c62caf12610254560abc036ff0644abb5603313529c74adeefad38c6af"),
+        ("Data/Sub/readme.txt", 33, "865bac19c9b171b56a23c569a2cb2361163d9602e35cb63ef26346bfe59569da"),
         ("Data/Sub/shared.bin", 5000, "bb963871b9ed1a04f3ca3f8915d3f94ce7e57ab822a861dd8fe1043a52ab1a2e"),
         ("Data/empty.txt", 0, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
         ("Data/level1.bin", 28000, "b2397e74b5c0143ed7d28bd958d5ae82ae651c185a30cd51103a773ef61b9dd7"),
@@ -122,7 +122,7 @@ final class XboxMSIXVC2Tests: XCTestCase {
         await damaged(flipped(package.lowerBound + 10), "its XboxPackage.cbor doesn't inflate")
         await damaged(flipped(chunk1.lowerBound + 40), "its Chunks/1.cbor doesn't match its CRC")
         await damaged(flipped(manifestAt + 30), "box box0's manifest doesn't match its seal")
-        await damaged(flipped(box0.upperBound - 12), "its box box0 seal uses an indefinite or reserved length")
+        await damaged(flipped(box0.upperBound - 12), "its box box0 seal has a simple value 17 it shouldn't")
         await damaged(flipped(box0.lowerBound + 2), "its box box0 has no box header")
         // The chunk secrets are box0's last segments: chunk 1's ends where the manifest starts.
         await damaged(flipped(manifestAt - 5), "chunk 1's secret doesn't match its box hash")
@@ -194,6 +194,27 @@ final class XboxMSIXVC2Tests: XCTestCase {
     func testKeyDerivationMatchesSP800108() {
         XCTAssertEqual(XboxMSIXVC2Keys.derive(Array(0...31).map(UInt8.init), context: Array("context-0123".utf8)).hex,
                        "eed2d14a0069e8763b2a81505c1d120ff869a81755969ead5883595cabcc0d98")
+    }
+
+    /// Nothing signs an MSIXVC2's metadata (none is known): a segment counts only when its
+    /// key is wrapped under the licence's, so a key written in the package or a plain
+    /// segment is refused. An empty segment carries no bytes and needs no key.
+    func testASegmentMustBeEncryptedUnderTheLicencesKey() throws {
+        typealias L = XboxMSIXVC2.Label
+        func segment(_ extra: [(UInt64, XboxCBOR)], length: UInt64 = 16) -> XboxCBOR {
+            .map([(.unsigned(L.hash), .tag(XboxMSIXVC2.Tag.sha256, .bytes([UInt8](repeating: 1, count: 32)))),
+                  (.unsigned(L.length), .unsigned(length))] + extra.map { (.unsigned($0.0), $0.1) })
+        }
+        var iv: XboxMSIXVC2.IV? = nil
+        let key = XboxCBOR.bytes([UInt8](repeating: 7, count: 40))
+        XCTAssertNoThrow(try XboxMSIXVC2.Segment.parse(segment([(L.wrappedKey, key)]), iv: &iv, what: "wrapped"))
+        XCTAssertNoThrow(try XboxMSIXVC2.Segment.parse(segment([], length: 0), iv: &iv, what: "empty"))
+        for (what, s) in [("plain", segment([])), ("inline key", segment([(L.encryptionKey, .bytes([UInt8](repeating: 7, count: 32)))])),
+                          ("both", segment([(L.wrappedKey, key), (L.encryptionKey, .bytes([UInt8](repeating: 7, count: 32)))]))] {
+            XCTAssertThrowsError(try XboxMSIXVC2.Segment.parse(s, iv: &iv, what: what), what) {
+                XCTAssertTrue("\($0)".contains("not encrypted under its licence"), "\($0)")
+            }
+        }
     }
 
     /// Damaged CBOR throws, never traps or allocates what it declares.

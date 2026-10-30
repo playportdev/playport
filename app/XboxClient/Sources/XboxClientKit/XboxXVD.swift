@@ -9,7 +9,7 @@ import Foundation
 import ContentKit
 
 /// An MSIXVC's XVD header (the first three pages; the package's own signature is
-/// the first 0x200 bytes and is not checked here).
+/// the first 0x200 bytes, checked by `XboxXVDSignature`).
 struct XboxXVDHeader: Equatable {
     static let size = 3 * XboxXVD.page
     static let readOnly: UInt32 = 1 << 0

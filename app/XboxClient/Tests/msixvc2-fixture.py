@@ -231,7 +231,7 @@ c0.add("Data\\empty.txt", [])
 if V2:
     c1.add("Data\\new.bin", [(1, hashlib.sha512(b"new").digest() * 40, True, True)])
 else:
-    c1.add("Data\\Sub\\readme.txt", [(1, b"Read me: an unencrypted segment.\n", False, False)])
+    c1.add("Data\\Sub\\readme.txt", [(1, b"Read me: a small stored segment.\n", False, True)])
 c1.add("Data/Sub/shared.bin", [("again", level_refs[1], shared)])
 
 # The package's rolling IV: one step per chunk secret, in chunk order.

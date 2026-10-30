@@ -24,7 +24,7 @@ final class XboxInstallTests: XCTestCase, @unchecked Sendable {
     }
 
     func installer(_ services: XboxTestServices, log: Logger = .silent) -> XboxInstaller {
-        XboxInstaller(layout: .root(root), services: services, log: log) { location in
+        XboxInstaller(layout: .root(root), services: services, log: log, trust: XboxTestPackage.trust) { location in
             XboxCDNPackage(location, client: XboxRangeClient(allows: { $0 == "127.0.0.1" }))
         }
     }

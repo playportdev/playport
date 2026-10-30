@@ -47,7 +47,7 @@ final class XboxAddOnInstallTests: XCTestCase, @unchecked Sendable {
         let cdn = try XboxTestCDN(package.bytes)
         cdns.append(cdn)
         let services = XboxTestServices(cdn, size: package.bytes.count)
-        let i = XboxInstaller(layout: .root(root), services: services) { location in
+        let i = XboxInstaller(layout: .root(root), services: services, trust: XboxTestPackage.trust) { location in
             XboxCDNPackage(location, client: XboxRangeClient(allows: { $0 == "127.0.0.1" }))
         }
         return (i, cdn)
@@ -171,7 +171,9 @@ final class XboxAddOnInstallTests: XCTestCase, @unchecked Sendable {
         cdns.append(cdn)
         let services = XboxTestServices(cdn, size: cdn.body.count)
         await services.refuse(.refused)
-        let i = XboxInstaller(layout: .root(root), services: services) { XboxCDNPackage($0, client: XboxRangeClient(allows: { $0 == "127.0.0.1" })) }
+        let i = XboxInstaller(layout: .root(root), services: services, trust: XboxTestPackage.trust) {
+            XboxCDNPackage($0, client: XboxRangeClient(allows: { $0 == "127.0.0.1" }))
+        }
         do {
             _ = try await i.installAddOn(addOn, contentID: contentID, base: base, options: options)
             XCTFail("installed unlicensed")

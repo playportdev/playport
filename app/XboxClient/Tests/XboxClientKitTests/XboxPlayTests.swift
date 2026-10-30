@@ -26,7 +26,8 @@ final class XboxPlayTests: XCTestCase, @unchecked Sendable {
     private var key: XboxContentKey { XboxContentKey(id: XboxTestPackage.keyID, key: Secret(XboxTestPackage.key)) }
 
     private func install() async throws -> XboxInstalled {
-        let installer = XboxInstaller(layout: .root(root), services: XboxTestServices(cdn, size: package.bytes.count)) { location in
+        let installer = XboxInstaller(layout: .root(root), services: XboxTestServices(cdn, size: package.bytes.count),
+                                      trust: XboxTestPackage.trust) { location in
             XboxCDNPackage(location, client: XboxRangeClient(allows: { $0 == "127.0.0.1" }))
         }
         return try await installer.install(product: product, contentID: XboxTestPackage.contentID.uuidString, title: "Test Game").installed

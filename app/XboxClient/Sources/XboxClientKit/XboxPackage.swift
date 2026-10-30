@@ -54,16 +54,20 @@ public struct XboxPackage: Sendable {
     let regions: [XboxXVCRegion]
     let tree: XboxPackageTree
 
-    /// Reads and checks the metadata in `prefix` (the package's first `prefixBytes`).
-    public static func load(prefix: URL) throws -> XboxPackage {
+    /// Reads and checks the metadata in `prefix` (the package's first `prefixBytes`):
+    /// the header signed by one of `trust`'s keys, then the hash tree from its top hash down.
+    public static func load(prefix: URL, trust: XboxXVDTrust = .retail) throws -> XboxPackage {
         let file = try XboxLocalFile(prefix)
-        return try load(read: { try file.read($0, $1) }, available: file.size, file: file)
+        return try load(read: { try file.read($0, $1) }, available: file.size, file: file, trust: trust)
     }
 
-    static func load(read: @escaping @Sendable (UInt64, Int) throws -> [UInt8], available: UInt64, file: XboxLocalFile?) throws -> XboxPackage {
+    static func load(read: @escaping @Sendable (UInt64, Int) throws -> [UInt8], available: UInt64, file: XboxLocalFile?,
+                     trust: XboxXVDTrust) throws -> XboxPackage {
         let page = UInt64(XboxXVD.page)
         guard available >= UInt64(XboxXVDHeader.size) else { throw XboxXVD.damaged("its header is cut short") }
-        let header = try XboxXVDHeader.parse(read(0, XboxXVDHeader.size))
+        let headerBytes = try read(0, XboxXVDHeader.size)
+        let header = try XboxXVDHeader.parse(headerBytes)
+        try XboxXVDSignature.verify(headerBytes, trust: trust)
         let layout = XboxXVDLayout(header)
         guard available >= layout.drive * page else { throw XboxXVD.damaged("its metadata is cut short") }
         let tree = try XboxPackageTree(header: header, layout: layout, read: read)
@@ -214,8 +218,9 @@ final class XboxVerifiedReader: @unchecked Sendable {
 }
 
 extension XboxPackage {
-    /// Fetches the metadata prefix into `url` (resuming a partial one), then loads it.
-    public static func fetch(_ bytes: any XboxPackageBytes, into url: URL, log: Logger = .silent,
+    /// Fetches the metadata prefix into `url` (resuming a partial one), then loads it. The
+    /// header comes first and must be signed by one of `trust`'s keys before more is fetched.
+    public static func fetch(_ bytes: any XboxPackageBytes, into url: URL, trust: XboxXVDTrust = .retail, log: Logger = .silent,
                              progress: @Sendable (UInt64, UInt64) -> Void = { _, _ in }) async throws -> XboxPackage {
         let page = UInt64(XboxXVD.page)
         try InstallFS.makeDirectory(url.deletingLastPathComponent())
@@ -238,7 +243,9 @@ extension XboxPackage {
         }
         guard bytes.size >= UInt64(XboxXVDHeader.size) else { throw XboxXVD.damaged("it is smaller than its header") }
         try await fill(to: UInt64(XboxXVDHeader.size), total: UInt64(XboxXVDHeader.size))
-        let header = try XboxXVDHeader.parse(Array(try handle.readFrom(0, XboxXVDHeader.size)))
+        let headerBytes = Array(try handle.readFrom(0, XboxXVDHeader.size))
+        let header = try XboxXVDHeader.parse(headerBytes)
+        try XboxXVDSignature.verify(headerBytes, trust: trust)
         let layout = XboxXVDLayout(header)
         guard layout.end * page == bytes.size else { throw XboxXVD.damaged("its size doesn't match its header") }
         try await fill(to: layout.drive * page, total: layout.drive * page)
@@ -246,7 +253,7 @@ extension XboxPackage {
         let end = prefixPages(info, layout) * page
         log.info("xbox", "package metadata: \(end) bytes before its encrypted region")
         try await fill(to: end, total: end)
-        return try load(prefix: url)
+        return try load(prefix: url, trust: trust)
     }
 }
 

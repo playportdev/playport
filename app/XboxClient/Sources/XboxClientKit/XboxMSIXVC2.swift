@@ -162,6 +162,12 @@ enum XboxMSIXVC2 {
             guard s.boxLength >= (s.compression == Algorithm.none ? s.length : s.compressedLength) else {
                 throw XboxXVD.damaged("its \(what) is longer than its box bytes")
             }
+            // No signature over an MSIXVC2's metadata is known, so its bytes are trusted only
+            // under a key the licence wraps: one written in the package, or none, would let
+            // anyone on the (plain HTTP) path rewrite the segment and its hash.
+            guard s.encryptionKey == nil, s.wrappedKey != nil || s.length == 0 else {
+                throw ClientError.verificationFailed("Xbox package has a \(what) not encrypted under its licence")
+            }
             return s
         }
     }

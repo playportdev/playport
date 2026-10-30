@@ -163,7 +163,7 @@ final class XboxPackageTests: XCTestCase {
         }
         // The NTFS walker on a synthetic drive: cut and damaged MFT records throw or parse.
         let drive = try XboxPackage.load(read: { off, n in Array(package.bytes[Int(off)..<(Int(off) + n)]) },
-                                         available: UInt64(package.prefixBytes), file: nil)
+                                         available: UInt64(package.prefixBytes), file: nil, trust: XboxTestPackage.trust)
         let volume = Int(drive.layout.drive * 4096) + 4 * 4096
         let raw = Array(package.bytes[volume..<package.prefixBytes])
         for _ in 0..<300 {
@@ -185,7 +185,7 @@ final class XboxPackageTests: XCTestCase {
             try XboxPackage.load(read: { off, n in
                 guard off <= UInt64(bytes.count), UInt64(n) <= UInt64(bytes.count) - off else { throw XboxXVD.damaged("past the end") }
                 return Array(bytes[Int(off)..<(Int(off) + n)])
-            }, available: UInt64(available), file: nil)
+            }, available: UInt64(available), file: nil, trust: XboxTestPackage.trust)
         }
         XCTAssertNoThrow(try load(package.bytes, available: package.prefixBytes))
         for n in stride(from: 0, to: package.prefixBytes, by: 4096 * 3 + 517) {
@@ -196,8 +196,8 @@ final class XboxPackageTests: XCTestCase {
             var damaged = package.bytes
             let at = Int.random(in: 0x200..<package.prefixBytes, using: &rng)
             damaged[at] ^= UInt8.random(in: 1...255, using: &rng)
-            // Every byte of the prefix is covered by the hash tree or the header it checks,
-            // except the header's own signature and unused fields: those may still load.
+            // Every byte of the prefix is covered by the hash tree or the signed header that
+            // anchors it, except the header's pages past its signed 0x1000 bytes: those may still load.
             if let loaded = try? load(damaged, available: package.prefixBytes) {
                 XCTAssertEqual(loaded.files.map(\.path), try load(package.bytes, available: package.prefixBytes).files.map(\.path), "flip at \(at)")
             }
