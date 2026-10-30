@@ -24,10 +24,10 @@ public enum TouchKeyboard {
         public let usage: Int
         /// Its width against a letter key's (the board's flex).
         public let weight: Double
-        /// Shift, Ctrl or Alt: sticky.
-        public let modifier: Bool
+        /// Shift, Ctrl or Alt, the hint's name for it: sticky. Nil for any other key.
+        public let modifier: String?
 
-        init(_ name: String, _ label: String, _ usage: Int, _ weight: Double = 1, modifier: Bool = false) {
+        init(_ name: String, _ label: String, _ usage: Int, _ weight: Double = 1, modifier: String? = nil) {
             id = "kb-" + name
             self.label = label
             self.usage = usage
@@ -38,7 +38,7 @@ public enum TouchKeyboard {
         /// The Windows virtual key it presses (KeyMap).
         public var virtualKey: UInt8 { KeyMap.virtualKey(hidUsage: usage)! }
 
-        var kind: TouchTarget.Kind { modifier ? .modifier(virtualKey) : .key(virtualKey) }
+        var kind: TouchTarget.Kind { modifier != nil ? .modifier(virtualKey) : .key(virtualKey) }
     }
 
     /// A key laid out: what is drawn (`face`) and what a touch hits (`target`,
@@ -81,17 +81,23 @@ public enum TouchKeyboard {
             + [Key("lbracket", "[", 0x2F), Key("rbracket", "]", 0x30), Key("backslash", "\\", 0x31, 1.1)],
         [Key("caps", "Caps", 0x39, 1.8)] + letters("ASDFGHJKL")
             + [Key("semicolon", ";", 0x33), Key("quote", "'", 0x34), Key("enter", "Enter", 0x28, 1.8)],
-        [Key("shift", "⇧ Shift", 0xE1, 2.3, modifier: true)] + letters("ZXCVBNM")
+        [Key("shift", "⇧ Shift", 0xE1, 2.3, modifier: "Shift")] + letters("ZXCVBNM")
             + [Key("comma", ",", 0x36), Key("period", ".", 0x37), Key("slash", "/", 0x38),
-               Key("rshift", "⇧", 0xE5, 2.3, modifier: true)],
-        [Key("ctrl", "Ctrl", 0xE0, 1.4, modifier: true), Key("win", "Win", 0xE3, 1.2),
-         Key("alt", "Alt", 0xE2, 1.2, modifier: true), Key("space", "Space", 0x2C, 6.4),
-         Key("ralt", "Alt", 0xE6, 1.2, modifier: true),
+               Key("rshift", "⇧", 0xE5, 2.3, modifier: "Shift")],
+        [Key("ctrl", "Ctrl", 0xE0, 1.4, modifier: "Ctrl"), Key("win", "Win", 0xE3, 1.2),
+         Key("alt", "Alt", 0xE2, 1.2, modifier: "Alt"), Key("space", "Space", 0x2C, 6.4),
+         Key("ralt", "Alt", 0xE6, 1.2, modifier: "Alt"),
          Key("left", "◀", 0x50), Key("down", "▼", 0x51), Key("up", "▲", 0x52), Key("right", "▶", 0x4F)],
     ]
 
     private static func letters(_ s: String) -> [Key] {
         s.map { c in Key(c.lowercased(), String(c), 0x04 + Int(c.asciiValue! - 65)) }
+    }
+
+    /// The sticky modifiers by name, in the order the rows first have them (Shift, Ctrl, Alt), with their keys' ids.
+    static let modifiers: [(name: String, ids: Set<String>)] = rows.joined().reduce(into: []) { m, k in
+        guard let name = k.modifier else { return }
+        if let i = m.firstIndex(where: { $0.name == name }) { m[i].ids.insert(k.id) } else { m.append((name, [k.id])) }
     }
 
     /// The keyboard in `area` (the safe area): the panel across its bottom.
@@ -131,8 +137,7 @@ public enum TouchKeyboard {
     public static func hint(_ sticky: [String: TouchControls.Sticky]) -> String? {
         func names(_ s: TouchControls.Sticky) -> [String] {
             let ids = Set(sticky.filter { $0.value == s }.keys)
-            return [("Shift", ["kb-shift", "kb-rshift"]), ("Ctrl", ["kb-ctrl"]), ("Alt", ["kb-alt", "kb-ralt"])]
-                .filter { !ids.isDisjoint(with: $0.1) }.map(\.0)
+            return modifiers.filter { !ids.isDisjoint(with: $0.ids) }.map(\.name)
         }
         func list(_ n: [String]) -> String {
             n.count < 2 ? n.joined() : n.dropLast().joined(separator: ", ") + " and " + n.last!
