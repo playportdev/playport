@@ -46,11 +46,26 @@
 //   controls: it shows with the layout Off or a controller connected too, at
 //   its own opacity; gone at once when gyro aim stops.
 //
-// A dev build logs `controls:` lines: shown and hidden, and each press.
+// - Point & click (TouchPointer.dc.html; HostIOKit TouchControls has the
+//   pointer surface and the tools): the surface is the whole safe area under
+//   the rest, so every touch off the side bar and the switch points. It places
+//   the pointer through the game's picture (GameSurfaceView.picture, the swap
+//   chain aspect-fitted), as a game touch is mapped; its buttons go through
+//   HostIO's Lifecycle like every held button. Drawn: the Tap to click /
+//   Trackpad switch, the side bar's tools round on one plate (HostIOKit
+//   SideBar), lit while on, and a note at the bottom as one is pressed
+//   (PlayportKit PointerHint). The switch is kept for the next game
+//   (`trackpadKey`). While a finger points with tap to click, a magnifier
+//   (MagnifierOverlay, its own view over the controls) shows the picture
+//   under it.
+//
+// A dev build logs `controls:` lines: shown and hidden, and each press (a tool's with the tool and trackpad after it).
 
 #if canImport(UIKit)
 import Combine
+import CoreImage
 import HostIOKit
+import Metal
 import PlayportKit
 import QuartzCore
 import UIKit
@@ -85,9 +100,12 @@ final class OnScreenControls: ObservableObject {
     private let haptic = UIImpactFeedbackGenerator(style: .light)
     weak var view: TouchControlsView?
     weak var chipView: GyroChipOverlay?
+    weak var magnifierView: MagnifierOverlay?
 
     /// Set once the first-time toast (which teaches the three-finger tap) has shown.
     static let toastKey = "controls.menuGestureToastShown"
+    /// Point & click's Tap to click / Trackpad switch, kept for the next game (the app restarts after each).
+    static let trackpadKey = "controls.pointerTrackpad"
 
     private static func log(_ line: String) {
         #if !PLAYPORT_RELEASE
@@ -100,6 +118,7 @@ final class OnScreenControls: ObservableObject {
         guard !started else { return }
         started = true
         controllers = n
+        controls.trackpad = UserDefaults.standard.bool(forKey: Self.trackpadKey)
         let later = { DispatchQueue.main.async { MainActor.assumeIsolated { OnScreenControls.shared.update() } } }
         // objectWillChange and @Published fire before the change: read it on the next turn.
         ControlsStore.shared.objectWillChange.sink { _ in later() }.store(in: &subscriptions)
@@ -231,9 +250,19 @@ final class OnScreenControls: ObservableObject {
     func began(_ touch: Int, at p: CGPoint) -> Bool {
         guard drawn else { return false }
         let point = TouchPoint(x: Double(p.x), y: Double(p.y))
+        // The pointer surface places the pointer through the game's picture as it is now (a game may
+        // change its swap chain's size at any time), as GameSurfaceView.route maps a game touch.
+        if let view { controls.setPicture(TouchRect(cg: view.picture)) }
+        let before = (tool: controls.tool, trackpad: controls.trackpad)
         guard let i = controls.target(at: point), controls.began(touch, at: point, time: CACurrentMediaTime()) else { return false }
         if ControlsStore.shared.defaults.haptics { haptic.impactOccurred() }
-        Self.log("\(controls.targets[i].id) down")
+        if case .tool = controls.targets[i].kind {
+            Self.log("\(controls.targets[i].id) down: tool \(controls.tool?.rawValue ?? "none"), trackpad \(controls.trackpad ? "on" : "off")")
+            if let hint = PointerHint.text(from: before, to: (controls.tool, controls.trackpad)) { view?.showHint(hint) }
+            if controls.trackpad != before.trackpad { UserDefaults.standard.set(controls.trackpad, forKey: Self.trackpadKey) }
+        } else {
+            Self.log("\(controls.targets[i].id) down")
+        }
         publish()
         return true
     }
@@ -250,9 +279,10 @@ final class OnScreenControls: ObservableObject {
 
     /// UIKit took the finger back (the three-finger tap it was part of): as if it never came down.
     func cancelled(_ touch: Int) {
-        let held = controls.held
+        let held = controls.held, trackpad = controls.trackpad
         controls.cancelled(touch, time: CACurrentMediaTime())
         if controls.held != held { Self.log("finger cancelled; held=\(controls.held.sorted().joined(separator: "+"))") }
+        if controls.trackpad != trackpad { UserDefaults.standard.set(controls.trackpad, forKey: Self.trackpadKey) }
         publish()
     }
 }
@@ -261,6 +291,10 @@ final class OnScreenControls: ObservableObject {
 final class TouchControlsView: UIView {
     private var views: [String: ControlView] = [:]
     private let toast = ToastView()
+    /// Point & click's tool notes, at the bottom (TouchPointer.dc.html).
+    private let hint = ToastView(bottom: true)
+    /// Point & click's side-bar plates, under the controls (HostIOKit SideBar).
+    private var plates: [UIView] = []
     private var touchIDs: [ObjectIdentifier: Int] = [:]
     private var nextTouch = 1
 
@@ -270,6 +304,7 @@ final class TouchControlsView: UIView {
         backgroundColor = .clear
         isHidden = true
         addSubview(toast)
+        addSubview(hint)
         accessibilityIdentifier = "touch-controls"
         OnScreenControls.shared.view = self
     }
@@ -282,6 +317,7 @@ final class TouchControlsView: UIView {
         OnScreenControls.shared.layout(in: bounds.size, insets: ControlInsets(top: Double(i.top), left: Double(i.left),
                                                                               bottom: Double(i.bottom), right: Double(i.right)))
         toast.place(in: bounds.inset(by: i))
+        hint.place(in: bounds.inset(by: i))
     }
 
     /// The phone turned (the island to the other side) or the insets otherwise changed: laid out again.
@@ -294,10 +330,22 @@ final class TouchControlsView: UIView {
         OnScreenControls.shared.takes(point)
     }
 
-    /// The layout changed: one view per control. A floating stick's zone is not drawn.
+    /// The layout changed: one view per control. A floating stick's zone and a surface are not drawn;
+    /// Point & click's side bar has a plate behind it.
     func rebuild() {
         views.values.forEach { $0.removeFromSuperview() }
         views = [:]
+        plates.forEach { $0.removeFromSuperview() }
+        plates = SideBar.plates(OnScreenControls.shared.controls.targets).map { r in
+            let plate = UIView(frame: CGRect(touch: r))
+            plate.isUserInteractionEnabled = false
+            plate.backgroundColor = Glass.fill
+            plate.layer.cornerRadius = 18
+            plate.layer.borderWidth = 1
+            plate.layer.borderColor = Glass.edge.withAlphaComponent(0.22).cgColor
+            insertSubview(plate, at: 0)
+            return plate
+        }
         let model = OnScreenControls.shared
         for (c, t) in zip(model.layout?.controls ?? [], model.controls.targets) {
             let v = ControlView(control: c, frame: CGRect(x: t.frame.x, y: t.frame.y, width: t.frame.width, height: t.frame.height))
@@ -311,6 +359,7 @@ final class TouchControlsView: UIView {
         let model = OnScreenControls.shared
         isHidden = !model.drawn
         alpha = CGFloat(model.state.opacity)
+        model.magnifierView?.show(model.drawn ? model.controls.magnifier : nil)
         guard model.drawn else { return }
         let held = model.controls.held, out = model.controls.output
         for (id, v) in views {
@@ -319,6 +368,12 @@ final class TouchControlsView: UIView {
     }
 
     func showToast(_ text: String) { toast.show(text, seconds: 6) }
+
+    /// A side-bar tool or the trackpad switch was pressed: what a finger does now (PlayportKit PointerHint).
+    func showHint(_ text: String) { hint.show(text, seconds: 3) }
+
+    /// Where the game's picture is in this view (the same as in GameSurfaceView: it fills it).
+    var picture: CGRect { gamePicture }
 
     private func id(_ t: UITouch) -> Int {
         if let n = touchIDs[ObjectIdentifier(t)] { return n }
@@ -378,6 +433,221 @@ final class GyroChipOverlay: UIView {
     func hideNow() { chip.hideNow() }
 }
 
+/// Point & click's magnifier (TouchPointer.dc.html; HostIOKit Magnifier decides
+/// where): while a finger points with tap to click (TouchControls.magnifier), an
+/// amber ring around the finger and a round loupe above it with the game's
+/// picture around the point, twice as large, and an arrow at the point. Its own
+/// view over the game (GameSurfaceView, above the controls), so the controls'
+/// opacity does not fade it; it takes no touch.
+///
+/// The picture in the loupe is not a read back of the game's layer each frame.
+/// While it shows (at most 30 times a second: as the finger moves, and 15 times
+/// a second while it rests, so what the game draws under it shows), the loupe's
+/// square of the frame on screen (PacedMetalLayer.lastPresented, the texture the
+/// in-game menu's Screenshot reads) is copied on the GPU into a small texture of
+/// its own, about 138 × 138 pixels, and Core Image turns that into the loupe's
+/// image off the main thread; one copy at a time, a busy GPU skips a turn. A
+/// snapshot of the layer through UIKit (snapshotView, drawHierarchy) or a
+/// backdrop would read the whole layer or sample it in the render server, as
+/// the backdrop blur that flickered pink over the game did (phase 1). The frame
+/// read is the last one presented while the game draws the next, so the loupe
+/// may lag the screen by a frame.
+final class MagnifierOverlay: UIView {
+    private let halo = UIView(), ring = UIView()
+    /// The loupe's shadow; `lens`, inside it, is clipped round.
+    private let loupe = UIView(), lens = UIView()
+    private let content = CALayer()
+    private let mark = CAShapeLayer()
+    private let reader = LoupeReader()
+    private var clock: Timer?
+    private var at: TouchPoint?
+
+    init() {
+        super.init(frame: .zero)
+        isUserInteractionEnabled = false
+        backgroundColor = .clear
+        isHidden = true
+        halo.frame = CGRect(x: 0, y: 0, width: 60, height: 60)
+        halo.layer.cornerRadius = 30
+        halo.layer.borderWidth = 10
+        halo.layer.borderColor = Glass.amber.withAlphaComponent(0.12).cgColor
+        ring.frame = CGRect(x: 0, y: 0, width: 40, height: 40)
+        ring.layer.cornerRadius = 20
+        ring.layer.borderWidth = 2
+        ring.layer.borderColor = Glass.amber.withAlphaComponent(0.85).cgColor
+        let d = CGFloat(Magnifier.diameter)
+        loupe.frame = CGRect(x: 0, y: 0, width: d, height: d)
+        loupe.layer.shadowColor = UIColor.black.cgColor
+        loupe.layer.shadowOpacity = 0.5
+        loupe.layer.shadowRadius = 12
+        loupe.layer.shadowOffset = CGSize(width: 0, height: 8)
+        loupe.layer.shadowPath = UIBezierPath(ovalIn: loupe.bounds).cgPath
+        lens.frame = loupe.bounds
+        lens.backgroundColor = .black
+        lens.layer.cornerRadius = d / 2
+        lens.layer.masksToBounds = true
+        lens.layer.borderWidth = 2
+        lens.layer.borderColor = Glass.text.withAlphaComponent(0.75).cgColor
+        content.frame = lens.bounds
+        content.contentsGravity = .resize
+        lens.layer.addSublayer(content)
+        // The arrow at the point, its tip there, as the board draws it (1.6 times the hover tool's).
+        mark.path = PointerIcons.arrow.cgPath
+        mark.fillColor = UIColor.white.cgColor
+        mark.shadowColor = UIColor.black.cgColor
+        mark.shadowOpacity = 0.7
+        mark.shadowRadius = 2
+        mark.shadowOffset = CGSize(width: 0, height: 1)
+        mark.bounds = CGRect(x: 0, y: 0, width: 14, height: 18)
+        mark.anchorPoint = CGPoint(x: 1.0 / 14, y: 1.0 / 18)
+        mark.setAffineTransform(CGAffineTransform(scaleX: 1.6, y: 1.6))
+        lens.layer.addSublayer(mark)
+        loupe.addSubview(lens)
+        for v in [halo, ring, loupe] { addSubview(v) }
+        reader.onImage = { [weak self] image in self?.content.contents = image }
+        OnScreenControls.shared.magnifierView = self
+    }
+
+    required init?(coder: NSCoder) { fatalError("MagnifierOverlay is created in code") }
+
+    /// The pointing finger's point in the view, or nil: gone.
+    func show(_ point: TouchPoint?) {
+        at = point
+        guard point != nil else {
+            isHidden = true
+            clock?.invalidate()
+            clock = nil
+            content.contents = nil
+            return
+        }
+        if clock == nil {
+            clock = Timer.scheduledTimer(withTimeInterval: 1.0 / 15, repeats: true) { _ in
+                MainActor.assumeIsolated { OnScreenControls.shared.magnifierView?.place() }
+            }
+        }
+        place()
+    }
+
+    private func place() {
+        guard let at else { return }
+        let texture = PacedMetalLayer.lastPresented
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        isHidden = false
+        halo.center = CGPoint(x: at.x, y: at.y)
+        ring.center = halo.center
+        let m = Magnifier(at: at, picture: TouchRect(cg: gamePicture), texture: (texture?.width ?? 0, texture?.height ?? 0),
+                          bounds: TouchRect(cg: bounds))
+        loupe.isHidden = m == nil
+        if let m {
+            loupe.frame = CGRect(touch: m.loupe)
+            mark.position = CGPoint(x: m.mark.x * Magnifier.diameter, y: m.mark.y * Magnifier.diameter)
+        }
+        CATransaction.commit()
+        if let m, let texture { reader.read(texture, m.source) }
+    }
+}
+
+/// One copy of the magnifier's on its way: what the GPU's and Core Image's threads share.
+private final class LoupeJob: @unchecked Sendable {
+    static let render = DispatchQueue(label: "playport.magnifier", qos: .userInteractive)
+    let copy: any MTLTexture, context: CIContext
+    var image: CGImage?
+    init(copy: any MTLTexture, context: CIContext) { self.copy = copy; self.context = context }
+}
+
+/// The magnifier's copy of a square of the frame on screen: a GPU copy of just
+/// those pixels, made into an image by Core Image off the main thread. One at a
+/// time, at most 30 a second.
+@MainActor
+private final class LoupeReader {
+    var onImage: ((CGImage) -> Void)?
+    private var queue: (any MTLCommandQueue)?
+    private var context: CIContext?
+    private var copy: (any MTLTexture)?
+    private var busy = false
+    private var last = 0.0
+
+    func read(_ texture: any MTLTexture, _ s: Magnifier.Pixels) {
+        let now = CACurrentMediaTime()
+        guard !busy, now - last >= 1.0 / 30, s.x + s.width <= texture.width, s.y + s.height <= texture.height else { return }
+        let device = texture.device
+        if queue == nil || queue?.device !== device {
+            queue = device.makeCommandQueue()
+            context = CIContext(mtlDevice: device)
+            copy = nil
+        }
+        if let c = copy, c.pixelFormat == texture.pixelFormat, c.width == s.width, c.height == s.height {} else {
+            let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: texture.pixelFormat, width: s.width, height: s.height,
+                                                             mipmapped: false)
+            d.usage = .shaderRead
+            d.storageMode = .private
+            copy = device.makeTexture(descriptor: d)
+        }
+        guard let copy, let context, let commands = queue?.makeCommandBuffer(), let blit = commands.makeBlitCommandEncoder() else { return }
+        blit.copy(from: texture, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(x: s.x, y: s.y, z: 0),
+                  sourceSize: MTLSize(width: s.width, height: s.height, depth: 1),
+                  to: copy, destinationSlice: 0, destinationLevel: 0, destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
+        blit.endEncoding()
+        busy = true
+        last = now
+        let job = LoupeJob(copy: copy, context: context)
+        commands.addCompletedHandler { buffer in
+            let copied = buffer.status == .completed
+            LoupeJob.render.async {
+                // Core Image reads a Metal texture upside down; the layer is opaque (InGameMenu's screenshot).
+                if copied, let ci = CIImage(mtlTexture: job.copy, options: [.colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!]) {
+                    let flipped = ci.settingAlphaOne(in: ci.extent).oriented(.downMirrored)
+                    job.image = job.context.createCGImage(flipped, from: flipped.extent)
+                }
+                DispatchQueue.main.async { MainActor.assumeIsolated { self.done(job) } }
+            }
+        }
+        commands.commit()
+    }
+
+    private func done(_ job: LoupeJob) {
+        busy = false
+        if let image = job.image { onImage?(image) }
+    }
+}
+
+/// The side bar's icons, as TouchPointer.dc.html draws them, in their own points.
+private enum PointerIcons {
+    /// The arrow pointer (Hover; the magnifier's mark), 14 × 18, its tip at (1, 1).
+    static var arrow: UIBezierPath {
+        polygon([(1, 1), (1, 15), (4.6, 11.6), (7.2, 17), (9.6, 16), (7, 10.6), (12, 10.6)])
+    }
+
+    /// Right click, 16 × 20: a mouse, the right button filled (`fill`), the body outlined (`stroke`).
+    static var mouseRight: (fill: UIBezierPath, stroke: UIBezierPath) {
+        let fill = UIBezierPath()
+        fill.move(to: CGPoint(x: 8, y: 1))
+        fill.addLine(to: CGPoint(x: 8, y: 8))
+        fill.addLine(to: CGPoint(x: 15, y: 8))
+        fill.addArc(withCenter: CGPoint(x: 8, y: 8), radius: 7, startAngle: 0, endAngle: -.pi / 2, clockwise: false)
+        fill.close()
+        return (fill, UIBezierPath(roundedRect: CGRect(x: 1, y: 1, width: 14, height: 18), cornerRadius: 7))
+    }
+
+    /// Scroll, 14 × 18: up and down arrowheads and a dot between them.
+    static var scroll: UIBezierPath {
+        let p = polygon([(7, 1), (11, 6), (3, 6)])
+        p.append(polygon([(7, 17), (3, 12), (11, 12)]))
+        p.append(UIBezierPath(roundedRect: CGRect(x: 5.5, y: 7.5, width: 3, height: 3), cornerRadius: 1))
+        return p
+    }
+
+    private static func polygon(_ points: [(CGFloat, CGFloat)]) -> UIBezierPath {
+        let p = UIBezierPath()
+        for (i, q) in points.enumerated() {
+            if i == 0 { p.move(to: CGPoint(x: q.0, y: q.1)) } else { p.addLine(to: CGPoint(x: q.0, y: q.1)) }
+        }
+        p.close()
+        return p
+    }
+}
+
 private extension UIView {
     /// The safe area over the game. The game view ignores the safe area and
     /// fills the window: the window's insets are taken too, whichever is larger.
@@ -386,6 +656,17 @@ private extension UIView {
         return UIEdgeInsets(top: max(own.top, w.top), left: max(own.left, w.left),
                             bottom: max(own.bottom, w.bottom), right: max(own.right, w.right))
     }
+
+    /// Where the game's picture is (GameSurfaceView.picture): this view fills the game view.
+    var gamePicture: CGRect { (superview as? GameSurfaceView)?.picture ?? bounds }
+}
+
+private extension CGRect {
+    init(touch r: TouchRect) { self.init(x: r.x, y: r.y, width: r.width, height: r.height) }
+}
+
+private extension TouchRect {
+    init(cg r: CGRect) { self.init(x: Double(r.minX), y: Double(r.minY), width: Double(r.width), height: Double(r.height)) }
 }
 
 /// The design's colours (TouchGamepad.dc.html).
@@ -507,6 +788,7 @@ private final class ControlView: UIView {
     private var letters: [UILabel] = []
     /// The look area's rings, one for each finger on it.
     private var rings: [UIView] = []
+    private var face: ToolFace?
     private let home: CGRect
 
     init(control: Control, frame: CGRect) {
@@ -578,8 +860,14 @@ private final class ControlView: UIView {
             hint.numberOfLines = 2
             hint.frame = CGRect(x: max(0, w - 212), y: max(0, h - 231), width: 110, height: 28)
             addSubview(hint)
-        case .pointer, .tool:
-            break   // drawn by PLA-531
+        case .pointer:
+            break   // the whole safe area under the rest: not drawn; a finger on it shows the magnifier (MagnifierOverlay)
+        case .tool:
+            if let tool = control.tool {
+                let f = ToolFace(tool: tool, label: control.label, frame: bounds)
+                addSubview(f)
+                face = f
+            }
         }
     }
 
@@ -619,9 +907,102 @@ private final class ControlView: UIView {
                 r.isHidden = i >= points.count
                 if i < points.count { r.center = CGPoint(x: CGFloat(points[i].x) - home.minX, y: CGFloat(points[i].y) - home.minY) }
             }
-        case .pointer, .tool:
+        case .pointer:
+            break
+        case .tool:
+            // Lit by the tool's state, not by a finger on it: a press that turns it off shows it off.
+            let c = OnScreenControls.shared.controls
+            face?.show(on: control.tool == .trackpad ? c.trackpad : c.tool == control.tool)
+        }
+    }
+}
+
+/// A Point & click tool as TouchPointer.dc.html draws it: the trackpad switch
+/// as two segments, Tap to click and Trackpad, the one on white; a side-bar
+/// tool round, its icon over its caption, amber while it is on.
+private final class ToolFace: UIView {
+    private let tool: PointerTool
+    private var glass: GlassView?
+    private let fill = CAShapeLayer(), stroke = CAShapeLayer()
+    private let caption = UILabel()
+    private var segments: [UILabel] = []
+
+    init(tool: PointerTool, label: String, frame: CGRect) {
+        self.tool = tool
+        super.init(frame: frame)
+        isUserInteractionEnabled = false
+        if tool == .trackpad {
+            backgroundColor = Glass.fill.withAlphaComponent(0.55)
+            layer.cornerRadius = 12
+            layer.borderWidth = 1
+            layer.borderColor = Glass.edge.withAlphaComponent(0.2).cgColor
+            let inner = bounds.insetBy(dx: 3, dy: 3), w = (inner.width - 2) / 2
+            for (i, title) in ["Tap to click", "Trackpad"].enumerated() {
+                let s = UILabel(frame: CGRect(x: inner.minX + CGFloat(i) * (w + 2), y: inner.minY, width: w, height: inner.height))
+                s.text = title
+                s.textAlignment = .center
+                s.font = .systemFont(ofSize: 12, weight: .semibold)
+                s.adjustsFontSizeToFitWidth = true
+                s.minimumScaleFactor = 0.7
+                s.layer.cornerRadius = 9
+                s.layer.masksToBounds = true
+                addSubview(s)
+                segments.append(s)
+            }
+            return
+        }
+        let g = GlassView(frame: bounds, radius: min(bounds.width, bounds.height) / 2, text: "", font: .systemFont(ofSize: 13))
+        addSubview(g)
+        glass = g
+        var icon = CGSize(width: 14, height: 18)
+        switch tool {
+        case .rightClick:
+            let m = PointerIcons.mouseRight
+            fill.path = m.fill.cgPath
+            stroke.path = m.stroke.cgPath
+            icon = CGSize(width: 16, height: 20)
+        case .hover:
+            fill.path = PointerIcons.arrow.cgPath
+        case .scroll:
+            fill.path = PointerIcons.scroll.cgPath
+        case .trackpad:
             break
         }
+        stroke.fillColor = nil
+        stroke.lineWidth = 1.6
+        let captionHeight: CGFloat = 10, top = (bounds.height - icon.height - 3 - captionHeight) / 2
+        for l in [fill, stroke] {
+            l.frame = CGRect(x: (bounds.width - icon.width) / 2, y: top, width: icon.width, height: icon.height)
+            g.layer.addSublayer(l)
+        }
+        caption.attributedText = NSAttributedString(string: label.uppercased(), attributes: [
+            .font: UIFont.systemFont(ofSize: 8, weight: .bold), .kern: 0.7,
+        ])
+        caption.textAlignment = .center
+        caption.frame = CGRect(x: 0, y: top + icon.height + 3, width: bounds.width, height: captionHeight)
+        g.addSubview(caption)
+    }
+
+    required init?(coder: NSCoder) { fatalError("ToolFace is created in code") }
+
+    func show(on: Bool) {
+        if tool == .trackpad {
+            for (i, s) in segments.enumerated() {
+                let selected = (i == 1) == on
+                s.backgroundColor = selected ? Glass.text.withAlphaComponent(1) : .clear
+                s.textColor = selected ? UIColor(red: 11 / 255, green: 14 / 255, blue: 19 / 255, alpha: 1)
+                    : UIColor(red: 154 / 255, green: 165 / 255, blue: 180 / 255, alpha: 1)
+            }
+            return
+        }
+        glass?.lit(on)
+        let ink = on ? Glass.onAmber : Glass.text
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        fill.fillColor = ink.cgColor
+        stroke.strokeColor = ink.cgColor
+        CATransaction.commit()
+        caption.textColor = on ? Glass.onAmber.withAlphaComponent(0.72) : Glass.text.withAlphaComponent(0.62)
     }
 }
 
@@ -678,12 +1059,15 @@ private final class GyroChipView: UIView {
     }
 }
 
-/// The first-time note at the top of the screen.
+/// A note over the game: the first-time one at the top of the screen, or (`bottom`)
+/// Point & click's tool notes at the bottom, clear of the side bar and the switch.
 private final class ToastView: UIView {
     private let label = UILabel()
     private var hide: DispatchWorkItem?
+    private let bottom: Bool
 
-    init() {
+    init(bottom: Bool = false) {
+        self.bottom = bottom
         super.init(frame: .zero)
         isUserInteractionEnabled = false
         backgroundColor = UIColor(red: 21 / 255, green: 26 / 255, blue: 33 / 255, alpha: 0.86)
@@ -699,11 +1083,12 @@ private final class ToastView: UIView {
 
     required init?(coder: NSCoder) { fatalError("ToastView is created in code") }
 
-    /// Centred in `area` (the safe area), under the top row of controls.
+    /// Centred in `area` (the safe area), under the top row of controls, or 14 points over its bottom.
     func place(in area: CGRect) {
         self.area = area
         let size = label.sizeThatFits(CGSize(width: area.width - 120, height: 40))
-        frame = CGRect(x: area.midX - (size.width + 28) / 2, y: area.minY + 52, width: size.width + 28, height: 32)
+        frame = CGRect(x: area.midX - (size.width + 28) / 2, y: bottom ? area.maxY - 46 : area.minY + 52, width: size.width + 28,
+                       height: 32)
         label.frame = self.bounds
     }
 

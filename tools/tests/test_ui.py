@@ -307,6 +307,16 @@ class UiEnvTest(unittest.TestCase):
             self.assertFalse(m.ACTION_RE.match(bad), bad)
         self.assertEqual(m.in_game(["play:app-367520", "touch:a", "pad:a"], 1), 1)
 
+    def test_touch_taps_the_pointer_surface_at_a_point(self):
+        """Point & click: pointer:FX:FY is a finger on the pointer surface at that fraction of the view; tools by id."""
+        m = load()
+        for ok in ("touch:pointer", "touch:pointer:0.25:0.6", "touch:pointer:1:0", "touch:hover+pointer:0.5:0.5@400",
+                   "touch:rightClick", "touch:mode", "touch:scroll+pointer:0.5:0.5@1000"):
+            self.assertTrue(m.ACTION_RE.match(ok), ok)
+        for bad in ("touch:pointer:0.5", "touch:pointer:1.5:0.5", "touch:pointer:0.5:0.5.up", "touch:pointer:-0.1:0.5",
+                    "touch:pointer::0.5"):
+            self.assertFalse(m.ACTION_RE.match(bad), bad)
+
     def test_gyro_plays_a_scripted_gyro_while_the_game_runs(self):
         """gyro: plays HostIOKit GyroScript steps into gyro aim (Dev/GyroDriver.swift) while the game runs."""
         m = load()

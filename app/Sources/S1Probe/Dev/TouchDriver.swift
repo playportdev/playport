@@ -15,7 +15,11 @@
 // a dot (`dpad.right`, `leftStick.up`, `move.up`: the stick fully over, the d-pad near
 // its edge). A floating stick's finger lands at its home, in its zone. The look
 // area takes a direction too: a finger lands in its middle and drags `lookDrag`
-// points that way at once (`look.left`: the view turns left), then rests. The
+// points that way at once (`look.left`: the view turns left), then rests.
+// Point & click's ids: pointer mode rightClick hover scroll keyboard esc; the
+// pointer surface's finger lands at the safe area's middle, or at a point
+// given as fractions of the view, `pointer:0.25:0.6` (as `tap:` gives one); a
+// tool's press turns it on or off. The
 // in-game menu's three-finger tap is the driver's `gesture:three-finger-tap`. Every finger goes down together, stays `ms`
 // milliseconds (200 by default, 10000 at most), and lifts together.
 
@@ -49,6 +53,21 @@ extension OnScreenControls {
         guard drawn else { return "the on-screen controls are not shown (\(summary))" }
         var fingers: [(touch: Int, at: CGPoint, to: CGPoint)] = []
         for (i, word) in parts[0].split(separator: "+").map(String.init).enumerated() {
+            let point = word.split(separator: ":").map(String.init)
+            if point.count == 3 {
+                guard let n = controls.targets.firstIndex(where: { $0.id == point[0] }), case .pointer = controls.targets[n].kind else {
+                    return "\(point[0]) takes no point: only the pointer surface does (pointer:FX:FY)"
+                }
+                guard let fx = Double(point[1]), let fy = Double(point[2]), (0...1).contains(fx), (0...1).contains(fy),
+                      let size = view?.bounds.size else { return "\(point[1]):\(point[2]) is not a point FX:FY, 0-1 each" }
+                let q = CGPoint(x: fx * size.width, y: fy * size.height)
+                switch controls.target(at: TouchPoint(x: Double(q.x), y: Double(q.y))) {
+                case n?: fingers.append((-1 - i, q, q))
+                case let other?: return "\(word) is under \(controls.targets[other].id), not on the pointer surface"
+                case nil: return "\(word) is outside the safe area: no control takes it"
+                }
+                continue
+            }
             let w = word.split(separator: ".", maxSplits: 1).map(String.init)
             guard let n = controls.targets.firstIndex(where: { $0.id == w[0] }) else {
                 return "\(w[0]) is not a control of this layout (\(controls.targets.map(\.id).joined(separator: " ")))"
@@ -111,7 +130,8 @@ extension OnScreenControls {
         "drawn=\(drawn) layout=\(state.layout.rawValue) visible=\(state.visible) dpad=\(state.dpad.rawValue) "
             + "rightStick=\(state.rightStick.rawValue) "
             + "opacity=\(ControlsOpacity.label(state.opacity)) "
-            + "held=\(controls.held.sorted().joined(separator: "+"))"
+            + "held=\(controls.held.sorted().joined(separator: "+")) "
+            + "trackpad=\(controls.trackpad) tool=\(controls.tool?.rawValue ?? "none")"
     }
 }
 #endif

@@ -96,6 +96,10 @@ best-effort and reported as unconfirmed; transport loss/SIGKILL can leave cancel
                          layout's ids: view menu lt lb rt rb leftStick y x b a, and dpad and rightStick
                          when the game's controls have them ("dpad":"on", "rightStick":"below"|"above");
                          a stick or the d-pad takes a direction: dpad.right, leftStick.up.
+                         Point & click's ids: pointer mode rightClick hover scroll keyboard esc; the
+                         pointer surface takes a point, fractions of the view as in tap:
+                         (pointer:0.25:0.6), else the finger lands at its middle; a tool's press turns
+                         it on or off (touch:hover+pointer:0.5:0.5 hovers there).
                          The controls show while no controller is connected (--pad connects one).
                          Example: --action play:app-367520 --action wait:20 --action touch:a
                          --action touch:leftStick.right@2000 --action touch:leftStick.right+a@600
@@ -469,8 +473,9 @@ LAYOUTS = ("off", "gamepad", "keyboardMouse", "pointClick")
 GAME_SECTIONS = ("graphics", "controls", "game", "files", "developer", "ordering", "steam",
                  "gyro", "controller", "runtime", "graphicsoptions")
 
-# A control of an on-screen layout, with a direction for a stick or the d-pad (Dev/TouchDriver.swift).
-TOUCH_CONTROL = r"[A-Za-z0-9_-]+(?:\.(?:up|down|left|right))?"
+# A control of an on-screen layout, with a direction for a stick or the d-pad, or a point FX:FY (0-1 of the
+# view) for Point & click's pointer surface (Dev/TouchDriver.swift).
+TOUCH_CONTROL = r"[A-Za-z0-9_-]+(?:\.(?:up|down|left|right)|:(?:0(?:\.[0-9]+)?|1(?:\.0+)?):(?:0(?:\.[0-9]+)?|1(?:\.0+)?))?"
 # A gyro: script's step (HostIOKit GyroScript): axis=deg/s terms joined by +, or rest, then @ms.
 GYRO_TERM = r"(?:yaw|pitch|roll)=-?[0-9]{1,4}(?:\.[0-9]+)?"
 GYRO_STEP = rf"(?:rest|{GYRO_TERM}(?:\+{GYRO_TERM})*)@[0-9]{{1,5}}"

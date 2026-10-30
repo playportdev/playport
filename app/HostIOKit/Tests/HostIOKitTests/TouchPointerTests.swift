@@ -346,3 +346,30 @@ extension TouchPointerTests {
         XCTAssertEqual(mixer.touch(u.takeOutput()).outputs, [.pointer(flags: Pointer.leftUp, data: 0)])
     }
 }
+
+/// The game's picture inside the view: the pointer surface maps a point to the client area as
+/// GameSurfaceView.route maps a game touch, through the aspect-fitted picture, not the whole view.
+extension TouchPointerTests {
+    func testThePointerPlacesInTheGamePicture() {
+        var t = TouchControls(targets: pointerTargets)
+        // A 3:2 picture pillarboxed in the middle of the 874 × 402 view.
+        t.setPicture(TouchRect(x: 137, y: 1, width: 600, height: 400))
+        XCTAssertTrue(t.began(1, at: p(437, 201), time: 0))
+        XCTAssertEqual(t.takeOutput().events, [.place(x: 32768, y: 32768)])
+        t.moved(1, at: p(287, 101), time: 0.1)   // a quarter of the picture each way
+        XCTAssertEqual(t.takeOutput().events, [.place(x: 16384, y: 16384)])
+        t.moved(1, at: p(100, 201), time: 0.2)   // in the black bar: the picture's left edge
+        XCTAssertEqual(t.takeOutput().events, [.place(x: 0, y: 32768)])
+        // The swap chain changes size under a held finger: nothing is let go, it maps to the new picture.
+        t.setPicture(TouchRect(x: 0, y: 0, width: 874, height: 402))
+        t.moved(1, at: p(437, 201), time: 0.3)
+        let out = t.takeOutput()
+        XCTAssertEqual(out.events, [.place(x: 32768, y: 32768)])
+        XCTAssertEqual(out.mouse, [.left])
+        // Only the pointer surface changes.
+        t.setPicture(TouchRect(x: 137, y: 1, width: 600, height: 400))
+        t.ended(1, time: 0.4)
+        XCTAssertEqual(t.targets[0].kind, .pointer(view: TouchRect(x: 137, y: 1, width: 600, height: 400)))
+        XCTAssertEqual(t.targets[1].kind, .tool(.rightClick))
+    }
+}
