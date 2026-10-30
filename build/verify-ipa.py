@@ -110,7 +110,12 @@ any mismatch:
                 Info.plist queries no URL scheme; it carries
                 the quiet-runtime switch MADEIRA_NO_DIAGNOSTICS and its log,
                 playport.log, and links the donor pool (decision 0153:
-                pp_guest_pool_install, playport_guest_memory_backing)
+                pp_guest_pool_install, playport_guest_memory_backing). It
+                carries no Xbox surface (decision 0166: the dev app only): no
+                Swift identifier starting Xbox (Dev/XboxLibrary.swift's
+                XboxLibrary and every Xbox type after it) and not the Xbox
+                Library's empty text; the store's identity (Store.xbox,
+                LibraryFilter.xbox, the xbox- title prefix) is data, not a surface
 
 Identifiers (team, profile, UDID, certificate subject) are not printed.
 Needs: openssl, llvm-nm, llvm-objdump (host LLVM), and llvm-mingw's llvm-objdump
@@ -159,6 +164,11 @@ DEV_STRINGS = [b"S1_MODE", b"TITLE_NONCE", b"UI_ACTIONS", b"UI_SETTINGS", b"UI_C
 RELEASE_STRINGS = [b"MADEIRA_NO_DIAGNOSTICS", b"playport.log"]
 # The donor pool, in both builds since decision 0153: GuestPool.m's install and 0148's hook.
 RELEASE_SYMBOLS = ["_pp_guest_pool_install", "_playport_guest_memory_backing"]
+# The Xbox store is in the dev app only (decision 0166): a Swift identifier starting Xbox, as
+# Swift mangles one (<len><name>), and the dev app's empty Xbox Library text
+# (Sources/S1Probe/Dev/XboxLibrary.swift). Lower-case xbox (Store.xbox, its title prefix) is identity.
+XBOX_IDENTIFIER = re.compile(r"(?<![0-9])([1-9][0-9]*)(Xbox[A-Za-z0-9_]*)")
+XBOX_STRINGS = [b"Xbox is in the dev app only"]
 
 
 def check(ok, what):
@@ -606,6 +616,17 @@ def release_checks(exe, info):
     missing = [n for n in RELEASE_SYMBOLS if n not in syms]
     check(not missing, "variant: the donor pool is linked (decision 0153)"
           + (f" (missing {', '.join(missing)})" if missing else ""))
+    found = xbox_surfaces(body, syms)
+    check(not found, "variant: no Xbox surface (decision 0166: the dev app only)"
+          + (f" (found {', '.join(found)})" if found else ""))
+
+
+def xbox_surfaces(body, syms):
+    """The Xbox surfaces an executable carries: Swift identifiers starting Xbox in its symbols,
+    and the Xbox Library's text in its bytes."""
+    found = {m.group(2)[:int(m.group(1))] for n in syms if "$s" in n for m in XBOX_IDENTIFIER.finditer(n)
+             if int(m.group(1)) <= len(m.group(2))}
+    return sorted(found | {s.decode() for s in XBOX_STRINGS if s in body})
 
 
 def cef_checks(app, base, variant, distribution=False):

@@ -73,6 +73,9 @@
 //                              ctl:copy, ctl:resetAll, ctl:<row> such as ctl:a, ctl:leftStick,
 //                              ctl:dpad; pad:x/lb/rb/view/menu ring their rows; A on a Custom
 //                              row opens the ActionPicker, whose presses pad: sends);
+//                              `open:library#<chip>` shows the Library on a chip it shows
+//                              now (all, installed, steam, gog, epic, xbox: LibraryFilter),
+//                              as ⧉'s Show list picks it; a chip not shown is refused;
 //                              `open:settings#<section>` shows a Settings section (accounts,
 //                              graphics, downloads, controls, storage, setup, about,
 //                              launchers, developer; PlayportKit SettingsSection.named also takes
@@ -410,8 +413,9 @@ enum UIDriver {
                     let nav = AppNavigation.shared
                     let parts = id.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
                     // Validate game destinations before changing navigation. Settings/licences
-                    // retain their own section/alias handling; generic game IDs stay generic.
-                    if parts.count > 1, !["settings", "licences"].contains(parts[0]),
+                    // retain their own section/alias handling, the Library its chips; generic
+                    // game IDs stay generic.
+                    if parts.count > 1, !["settings", "licences", "library"].contains(parts[0]),
                        UIDriverGameSection(rawValue: parts[1]) == nil {
                         return finish("action=\(action) refused: unknown Game options section \(parts[1])")
                     }
@@ -431,6 +435,11 @@ enum UIDriver {
                             pages.append(.component(c.name))
                         }
                         nav.showLicences(pages)
+                    } else if parts.first == "library", parts.count > 1 {
+                        guard let chip = LibraryFilter(rawValue: parts[1]), LibraryGrid.filters.contains(chip)
+                        else { return finish("action=\(action) refused: the Library shows no \(parts[1]) chip") }
+                        nav.open("library")
+                        LibraryGrid.shared.filter = chip
                     } else if nav.open(parts.first ?? "") {
                         nav.pageSection = parts.count > 1 ? parts[1] : nil
                     } else if let title = parts.first, library.title(title) != nil {
@@ -563,6 +572,60 @@ enum UIDriver {
                     log("menu \(id): \(menu.summary)")
                     if let failure = try await afterInGame(action, index: done + 1, next: actions[(i + 1)...]) { return finish(failure) }
                     if AppRestart.shared.restarting { return }
+                case "xbox":
+                    guard !TitleLaunch.shared.running else { return finish("action=\(action) refused: a game is running") }
+                    let account = XboxAccount.shared
+                    for _ in 0..<300 where account.state == .unknown { try await pause(.milliseconds(100)) }
+                    if id == "wait" {
+                        for _ in 0..<1200 where account.signingIn && account.state != .signedIn && account.error == nil {
+                            try await pause(.milliseconds(250))
+                        }
+                        guard account.state == .signedIn else { return finish("action=\(action) failed: \(account.error ?? "Xbox sign-in did not finish")") }
+                    } else if id == "status" {
+                        log("xbox: \(account.state == .signedIn ? "signed in" : "signed out")")
+                    } else {
+                        let row: String
+                        switch id {
+                        case "signin":
+                            guard account.state != .signedIn else { return finish("action=\(action) refused: Xbox is already signed in") }
+                            row = "set:xbox:signin"
+                            _ = AppNavigation.shared.open("account")
+                        case "signout":
+                            guard account.state == .signedIn else { return finish("action=\(action) refused: Xbox is not signed in") }
+                            row = "set:xbox:signout"
+                            _ = AppNavigation.shared.open("account")
+                        case "reset-device":
+                            row = "set:xbox:resetDevice"
+                            _ = AppNavigation.shared.open("settings")
+                            AppNavigation.shared.pageSection = "developer"
+                        default: return finish("action=\(action) refused: unknown Xbox action")
+                        }
+                        for _ in 0..<50 where PadFocus.shared.items[row] == nil { try await pause(.milliseconds(100)) }
+                        guard PadFocus.shared.items[row] != nil else { return finish("action=\(action) failed: the Xbox row is not shown") }
+                        PadFocus.shared.focused = row
+                        PadFocus.shared.activate()
+                        try await pause(.milliseconds(250))
+                        if id == "signin" {
+                            for _ in 0..<300 where account.page == nil && account.error == nil { try await pause(.milliseconds(100)) }
+                            guard account.page != nil else { return finish("action=\(action) failed: \(account.error ?? "Microsoft's sign-in page did not open")") }
+                            log("xbox: Microsoft's sign-in sheet is open; complete it on the phone")
+                        } else {
+                            guard case let .picker(picker) = PadModal.shared.content,
+                                  let index = picker.options.firstIndex(where: { $0.id == (id == "signout" ? "out" : "reset") })
+                            else { return finish("action=\(action) failed: Xbox confirmation is not shown") }
+                            let previous = try await checked { await account.session.deviceIdentity }
+                            picker.pick(index)
+                            var complete = false
+                            for _ in 0..<100 {
+                                let current = try await checked { await account.session.deviceIdentity }
+                                complete = account.state == .signedOut && account.error == nil
+                                    && (id != "reset-device" || current != previous)
+                                if complete { break }
+                                try await pause(.milliseconds(100))
+                            }
+                            guard complete else { return finish("action=\(action) failed: \(account.error ?? "Xbox did not finish signing out/resetting the device")") }
+                        }
+                    }
                 case "web":
                     // A web page the running game opened (Dev/WebSheetDriver.swift).
                     guard TitleLaunch.shared.running || GameWebSheet.shared.isUp else {

@@ -58,6 +58,8 @@ public enum LibraryFilter: String, CaseIterable, Sendable {
     case gog
     /// Every Epic Games copy, likewise.
     case epic
+    /// Every Xbox copy, likewise (decision 0166: only the dev app names the store).
+    case xbox
 
     public var label: String {
         switch self {
@@ -66,6 +68,7 @@ public enum LibraryFilter: String, CaseIterable, Sendable {
         case .steam: Store.steam.label
         case .gog: Store.gog.label
         case .epic: Store.epic.label
+        case .xbox: Store.xbox.label
         }
     }
 
@@ -75,14 +78,15 @@ public enum LibraryFilter: String, CaseIterable, Sendable {
         case .steam: .steam
         case .gog: .gog
         case .epic: .epic
+        case .xbox: .xbox
         }
     }
 
     /// The chips to show (decision 0045: connected stores add their own after
-    /// Installed): Steam always, GOG and Epic when `stores` (signed in, or with
-    /// a copy in the catalogue) has them.
+    /// Installed): Steam always, GOG, Epic and Xbox when `stores` (signed in, or with
+    /// a copy in the catalogue; Xbox in the dev app only, 0166) has them.
     public static func shown(stores: Set<Store>) -> [LibraryFilter] {
-        allCases.filter { f in f == .gog ? stores.contains(.gog) : f == .epic ? stores.contains(.epic) : true }
+        allCases.filter { f in f.store.map { $0 == .steam || stores.contains($0) } ?? true }
     }
 
     /// The next chip, wrapping round.
@@ -172,7 +176,7 @@ public enum LibraryList {
         switch filter {
         case .all: true
         case .installed: entry.installed || downloading.contains(entry.key)
-        case .steam, .gog, .epic: entry.source == filter.store
+        case .steam, .gog, .epic, .xbox: entry.source == filter.store
         }
     }
 

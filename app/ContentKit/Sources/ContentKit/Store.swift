@@ -5,6 +5,7 @@
 //   steam  app-<appID>          (as before)
 //   gog    gog-<productID>
 //   epic   epic-<appName>
+//   xbox   xbox-<ProductId>     (decision 0166: the Store's twelve-character product identifier)
 //   local  dir-<lowercased folder> (as before: an imported or found folder)
 //
 // A store's install, and Playport's own import, writes a `StoreReceipt` under
@@ -13,7 +14,7 @@
 import Foundation
 
 public enum Store: String, Codable, CaseIterable, Sendable {
-    case local, steam, gog, epic
+    case local, steam, gog, epic, xbox
 
     public var label: String {
         switch self {
@@ -21,16 +22,18 @@ public enum Store: String, Codable, CaseIterable, Sendable {
         case .steam: "Steam"
         case .gog: "GOG"
         case .epic: "Epic Games"
+        case .xbox: "Xbox"
         }
     }
 
-    /// The title ID prefix (`app-`, `gog-`, `epic-`, `dir-`).
+    /// The title ID prefix (`app-`, `gog-`, `epic-`, `xbox-`, `dir-`).
     public var titlePrefix: String {
         switch self {
         case .local: "dir-"
         case .steam: "app-"
         case .gog: "gog-"
         case .epic: "epic-"
+        case .xbox: "xbox-"
         }
     }
 }
@@ -39,7 +42,7 @@ public enum Store: String, Codable, CaseIterable, Sendable {
 public struct StoreGameKey: Codable, Hashable, Sendable, CustomStringConvertible {
     public var store: Store
     /// Steam: the app ID in decimal; GOG: the product ID; Epic: the app name;
-    /// local: the folder under C:\Games, lowercased.
+    /// Xbox: the Product ID; local: the folder under C:\Games, lowercased.
     public var id: String
 
     public init(store: Store, id: String) {
@@ -52,14 +55,20 @@ public struct StoreGameKey: Codable, Hashable, Sendable, CustomStringConvertible
     /// The Steam app ID of a Steam key.
     public var steamAppID: UInt32? { store == .steam ? UInt32(id) : nil }
 
-    /// `app-367520`, `gog-1207664663`, `epic-Fortnite`, `dir-hollow knight`.
+    /// `app-367520`, `gog-1207664663`, `epic-Fortnite`, `xbox-9MW9469V91LM`, `dir-hollow knight`.
     public var titleID: String { store.titlePrefix + id }
+
+    /// Xbox's game ID: the Store's twelve-character product identifier, upper-case letters
+    /// and digits (`9NBLGGH4R315`).
+    public static func isProductID(_ id: String) -> Bool {
+        id.utf8.count == 12 && id.utf8.allSatisfy { (0x30...0x39).contains($0) || (0x41...0x5A).contains($0) }
+    }
 
     /// The key a title ID names, or nil for an ID of no known shape.
     public init?(titleID: String) {
-        for store in [Store.steam, .gog, .epic, .local] where titleID.hasPrefix(store.titlePrefix) {
+        for store in [Store.steam, .gog, .epic, .xbox, .local] where titleID.hasPrefix(store.titlePrefix) {
             let id = String(titleID.dropFirst(store.titlePrefix.count))
-            guard !id.isEmpty, store != .steam || UInt32(id) != nil else { return nil }
+            guard !id.isEmpty, store != .steam || UInt32(id) != nil, store != .xbox || Self.isProductID(id) else { return nil }
             self.init(store: store, id: id)
             return
         }
@@ -140,13 +149,15 @@ extension InstallLayout {
     /// A store receipt's file: `installs/<store>-<id>.json`.
     public func receiptFile(_ key: StoreGameKey) -> URL { installsDir.appendingPathComponent(key.fileStem + ".json") }
 
-    /// Every store receipt in installs/ (`<store>-*.json`); unreadable ones are skipped.
+    /// Every store receipt in installs/ (`<store>-*.json`); unreadable ones, and an Xbox one
+    /// naming no Product ID, are skipped.
     public func storeReceipts() -> [StoreReceipt] {
         let files = (try? FileManager.default.contentsOfDirectory(at: installsDir, includingPropertiesForKeys: nil)) ?? []
         let prefixes = Store.allCases.map { $0.rawValue + "-" }
         return files.filter { u in u.pathExtension == "json" && prefixes.contains { u.lastPathComponent.hasPrefix($0) } }
             .sorted { $0.path < $1.path }
             .compactMap { (try? Data(contentsOf: $0)).flatMap { try? StoreReceipt.decoder.decode(StoreReceipt.self, from: $0) } }
+            .filter { $0.store != .xbox || StoreGameKey.isProductID($0.storeID) }
     }
 
     public func saveReceipt(_ r: StoreReceipt) throws {

@@ -559,6 +559,49 @@ final class CatalogTests: XCTestCase {
         XCTAssertNil(StoreGameKey(titleID: "other"))
     }
 
+    /// An Xbox copy is `(xbox, Product ID)`: the Store's twelve-character product identifier
+    /// (decision 0166), its title ID `xbox-<ProductId>`, its receipt `installs/xbox-<ProductId>.json`.
+    func testAnXboxCopyIsTheXboxStoreAndItsProductID() throws {
+        let key = StoreGameKey(store: .xbox, id: "9MW9469V91LM")
+        XCTAssertEqual(Store.xbox.label, "Xbox")
+        XCTAssertEqual(key.titleID, "xbox-9MW9469V91LM")
+        XCTAssertEqual(StoreGameKey(titleID: "xbox-9MW9469V91LM"), key)
+        XCTAssertEqual(key.fileStem, "xbox-9MW9469V91LM")
+        XCTAssertTrue(StoreGameKey.isProductID("9NBLGGH4R315"))
+        for bad in ["xbox-", "xbox-9MW9469V91L", "xbox-9MW9469V91LMX", "xbox-9mw9469v91lm", "xbox-9MW9469V91-M",
+                    "xbox-9MW9469V91L\u{0130}", "xbox-Hollow Knight"] {
+            XCTAssertNil(StoreGameKey(titleID: bad), bad)
+        }
+        XCTAssertEqual(Store(rawValue: "xbox"), .xbox)
+    }
+
+    func testAnXboxReceiptRoundTripsThroughInstallsAndAdoption() throws {
+        let cohort = try Cohort.load(directory: titlesDir)
+        try file("Hollow Knight Voidheart/hollow_knight.exe")
+        let paths = PlayportPaths.container(home: root.appendingPathComponent("home"))
+        let key = StoreGameKey(store: .xbox, id: "9MW9469V91LM")
+        let receipt = StoreReceipt(store: .xbox, storeID: key.id, name: "Hollow Knight: Voidheart Edition",
+                                   installDir: "Hollow Knight Voidheart", version: "1.5.78.11833",
+                                   executable: "hollow_knight.exe", files: 1, bytes: 1,
+                                   installedAt: Date(timeIntervalSince1970: 1_790_000_000))
+        try paths.layout.saveReceipt(receipt)
+        XCTAssertEqual(paths.layout.receiptFile(key).lastPathComponent, "xbox-9MW9469V91LM.json")
+        // A receipt naming no Product ID is not an Xbox copy: skipped like an unreadable one.
+        var bad = receipt
+        bad.storeID = "not-a-product"
+        try paths.layout.saveReceipt(bad)
+        XCTAssertEqual(paths.layout.storeReceipts(), [receipt])
+        XCTAssertEqual(paths.layout.storeReceipts().first?.key, key)
+        let c = Adoption.scan(games: games, cohort: cohort, receipts: [], storeReceipts: paths.layout.storeReceipts(),
+                              previous: Catalog())
+        let title = try XCTUnwrap(c.titles.first { $0.installDir == "Hollow Knight Voidheart" })
+        XCTAssertEqual(title.id, "xbox-9MW9469V91LM")
+        XCTAssertEqual(title.store, .xbox)
+        XCTAssertEqual(title.key, key)
+        XCTAssertNil(title.appID)
+        XCTAssertEqual(StoreGameKey(titleID: title.id), key)
+    }
+
     func testVerifyCountsBadAndUnlistedFiles() async throws {
         try file("T/t.exe", "game")
         try file("T/data.bin", "data")
@@ -1242,6 +1285,24 @@ final class LibraryListTests: XCTestCase {
         XCTAssertEqual(LibraryFilter.shown(stores: [.gog]), [.all, .installed, .steam, .gog])
         XCTAssertEqual(LibraryFilter.shown(stores: [.epic, .gog]).map(\.label), ["All", "Installed", "Steam", "GOG", "Epic Games"])
         XCTAssertEqual(LibraryFilter.gog.next(in: shown), .all, "a chip no longer shown starts the row again")
+    }
+
+    /// Xbox's chip comes after Epic's, when the app names the store; its filter shows Xbox copies only
+    /// (decision 0166), and an empty Xbox library is an empty filter, not an error.
+    func testTheXboxChipShowsItsOwnCopiesOnly() {
+        XCTAssertEqual(LibraryFilter.shown(stores: [.xbox]), [.all, .installed, .steam, .xbox])
+        XCTAssertEqual(LibraryFilter.shown(stores: [.xbox, .epic, .gog]).map(\.label),
+                       ["All", "Installed", "Steam", "GOG", "Epic Games", "Xbox"])
+        XCTAssertEqual(LibraryFilter.xbox.store, .xbox)
+        XCTAssertEqual(LibraryFilter(rawValue: "xbox"), .xbox)
+        XCTAssertEqual(LibraryList.shown(entries, filter: .xbox, sort: .name), [], "no Xbox copy yet: an empty Xbox library")
+        let xbox = StoreGameKey(store: .xbox, id: "9MW9469V91LM")
+        let e = LibraryList.entries(titles: [], owned: owned + [LibraryList.Owned(key: xbox, name: "Hollow Knight")])
+        XCTAssertEqual(LibraryList.shown(e, filter: .xbox, sort: .name).map(\.id), ["xbox-9MW9469V91LM"])
+        XCTAssertEqual(LibraryList.shown(e, filter: .steam, sort: .name).map(\.id), ["app-504230", "app-588650", "app-367520"])
+        XCTAssertEqual(LibraryList.duplicateSourceIDs(e), ["app-367520", "xbox-9MW9469V91LM"],
+                       "the Steam and Xbox Hollow Knight are two copies")
+        XCTAssertEqual(LibraryFilter.xbox.next(in: LibraryFilter.shown(stores: [.xbox])), .all)
     }
 
     func testStoreCopiesJoinTheirOwnStoreOnly() {

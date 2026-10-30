@@ -34,6 +34,7 @@ struct DeveloperSettings: View {
         if #available(iOS 27.0, *) { pairingProbe }
         probes
         logs
+        XboxResetDeviceSettings()
         SettingsInfoRow(id: "dev:abi", title: "wine_host ABI", value: "\(wine_host_abi_version())")
     }
 

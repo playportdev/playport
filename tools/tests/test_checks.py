@@ -59,6 +59,78 @@ class Secrets(unittest.TestCase):
         self.assertFalse(hit("docs/evidence/2026-09-30-x.md"))
 
 
+def microsoft_forms():
+    """One made-up example of each Microsoft account, Xbox and licence form (PLA-489), built
+    from pieces so that pp secrets does not find them in this file: (what pp secrets calls
+    it, a line holding it)."""
+    import base64
+    b64 = base64.b64encode(bytes(range(7, 250, 3))).decode()
+    compact = "Ew" + "DoA+" + b64 + "/" + b64
+    jwe = ".".join(["ey" + "JlbmMiOiJBMTI4Q0JDK0hTMjU2IiwiYWxnIjoiUlNBLU9BRVAifQ", "K" * 40, "iv" * 8,
+                    "C" * 60, "T" * 22])
+    licence = ('<?xml version="1.0" encoding="utf-8"?><License xmlns="urn:schemas-microsoft-com:windows:'
+               'store:licensing:ls">' + '<LicenseInfo Type="Full"/><SPLicenseBlock>' + b64
+               + "</SPLicenseBlock></License>")
+    return [
+        ("Microsoft account refresh token", '{"refresh_token":"' + "M.C" + "507_BAY.0.U.-Cq!x*y$z" + "Kd9" * 10),
+        ("Microsoft account ticket", "t=" + compact + "&p="),
+        ("Microsoft account ticket field", '{"RpsTicket":"' + "d=" + b64 + '"}'),
+        ("JWT or JWE token (Steam, Xbox)", '{"Token":"' + jwe + '"}'),
+        ("Xbox Live authorization header", "Authorization: XBL3.0 x=" + "3192390212393254869" + ";" + "K" * 30),
+        ("Xbox user hash or XUID", '"xui":[{"uhs":"' + "3192390212393254869" + '"}]'),
+        ("Xbox user hash or XUID", '"xid":"' + "2535412345678901" + '"'),
+        ("Microsoft account session secret or licence block", "<wst:BinarySecret>" + b64[:44] + "</wst:BinarySecret>"),
+        ("Microsoft account session secret or licence block", "<CipherValue>" + b64 + "</CipherValue>"),
+        ("Xbox licence", licence),
+        ("Xbox licence (base64)", '{"keys":[{"value":"' + base64.b64encode(licence.encode()).decode() + '"}]}'),
+        ("content key", '"contentKey": "' + "0f" * 32 + '"'),
+        ("content key", "cik=" + b64[:44]),
+        ("content key", '"sDASessionKey":"' + b64[:44] + '"'),
+        ("Xbox bridge key", "XODUS_BRIDGE_KEY=" + "a1" * 32),
+    ]
+
+
+class MicrosoftSecrets(unittest.TestCase):
+    def test_each_form_is_named(self):
+        for what, line in microsoft_forms():
+            with self.subTest(what=what):
+                self.assertIn(what, [w for w, _ in checks.secret_hits(line)])
+
+    def test_placeholders_and_public_values_pass(self):
+        for line in ("Authorization: XBL3.0 x=<uhs>;<xsts>", "XBL3.0 x={uhs};{token}", "<License> and <LicenseInfo>",
+                     "<SPLicenseBlock>…</SPLicenseBlock>", '"uhs":"<redacted>"', "XODUS_BRIDGE_KEY=$KEY",
+                     "M.C5xx_BAY tokens", "a contentKey of 32 bytes", "<msa:redacted> <license:redacted>"):
+            with self.subTest(line=line):
+                self.assertEqual(checks.secret_hits(line), [])
+
+    def test_pp_secrets_fails_a_file_with_each_form_and_passes_once_removed(self):
+        import contextlib
+        import io
+        from pathlib import Path
+        from unittest import mock
+
+        cli = load_pp()
+        git = lambda root, *a: subprocess.run(["git", *a], cwd=root, check=True, stdout=subprocess.DEVNULL)
+        with tempfile.TemporaryDirectory() as root:
+            git(root, "init", "-q")
+            file = Path(root, "docs/evidence/xbox.log")
+            file.parent.mkdir(parents=True)
+            with mock.patch.object(cli, "REPO", root), mock.patch.dict(os.environ, {"PLAYPORT_BUILD": root}), \
+                    mock.patch.object(cli.checks, "PAIRING_RECORDS", root):
+                for what, line in microsoft_forms():
+                    with self.subTest(what=what):
+                        out = io.StringIO()
+                        file.write_text("signed in\n" + line + "\n")
+                        git(root, "add", ".")
+                        with contextlib.redirect_stdout(out):
+                            self.assertEqual(cli.cmd_secrets([]), 1)
+                        self.assertIn(what + ":", out.getvalue())
+                        file.write_text("signed in\n")
+                        git(root, "add", ".")
+                        with contextlib.redirect_stdout(io.StringIO()):
+                            self.assertEqual(cli.cmd_secrets([]), 0)
+
+
 class Names(unittest.TestCase):
     def test_upstream_gn_exception_in_index_and_commit(self):
         import contextlib

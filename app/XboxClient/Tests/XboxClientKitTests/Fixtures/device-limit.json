@@ -1,0 +1,8 @@
+{
+  "satisfactionFailure": {
+    "code": 501,
+    "description": "synthetic-private-provider-text-do-not-log",
+    "alternateContentIds": [],
+    "remediationAction": "https://untrusted.invalid/"
+  }
+}

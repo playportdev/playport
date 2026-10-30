@@ -97,6 +97,7 @@ struct AppShell: View {
         .overlay {
             #if !PLAYPORT_RELEASE
             BlackScreenView()
+            XboxSignInPresenter()
             #endif
         }
         .padFocusRoot()

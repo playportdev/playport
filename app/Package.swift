@@ -62,7 +62,7 @@ let package = Package(
         .package(path: "EpicClient"),
         // The product UI's catalogue, adoption and launch options, tested on the Linux host.
         .package(path: "PlayportKit"),
-    ],
+    ] + (release ? [] : [.package(path: "XboxClient")]),
     targets: [
         .target(
             name: "WineHost",
@@ -166,7 +166,8 @@ let package = Package(
                            .product(name: "GOGClientKit", package: "GOGClient"),
                            .product(name: "EpicClientKit", package: "EpicClient"),
                            .product(name: "PlayportKit", package: "PlayportKit")]
-                + ["Relaunch", "SharedMemory"] + (release ? [] : ["AuthProbe"]),
+                + ["Relaunch", "SharedMemory"] + (release ? [] : ["AuthProbe"])
+                + (release ? [] : [.product(name: "XboxClientKit", package: "XboxClient")]),
             path: "Sources/S1Probe",
             // Runtime/ ships at the app root through xtool.yml `resources`, not
             // as a SwiftPM resource bundle: ntdll resolves nls/ and <arch>-windows/

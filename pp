@@ -255,8 +255,9 @@ def swift_test(pkg, extra=()):
 
 
 def swift_package(name):
-    """A SWIFT_PACKAGES entry by its path or its last component (PlayportKit)."""
-    return next((p for p in SWIFT_PACKAGES if name.rstrip("/") in (p, os.path.basename(p))), None)
+    """A SWIFT_PACKAGES entry by path, directory name or client module name."""
+    return next((p for p in SWIFT_PACKAGES if name.rstrip("/") in
+                 (p, os.path.basename(p), os.path.basename(p) + "Kit")), None)
 
 
 def cmd_test(args):
