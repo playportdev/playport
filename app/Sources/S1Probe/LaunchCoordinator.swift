@@ -411,8 +411,16 @@ enum LaunchCoordinator {
         } else {
             unsetenv("PLAYPORT_DLL_OVERLAY")
         }
-        // Decisions 0138, 0153: ntdll refuses RDR2's later Social Club helper starts.
-        if r.endLauncher != nil && GameSocialClubEnd.enabled && GameSocialClubEnd.refuseRestart {
+        // Decisions 0138, 0153, 0169: ntdll refuses RDR2's later Social Club helper starts, only
+        // with the end of the game's own Social Club, which the Social Club layout leaves off.
+        let endGameSocialClub = GameSocialClubEnd.enabled(config: r.config)
+        let refuseGameSocialClubRestart = GameSocialClubEnd.refusesRestarts(ends: endGameSocialClub)
+        if r.endLauncher != nil && !endGameSocialClub {
+            log(GameSocialClubEnd.socialClubLayout(config: r.config)
+                ? "launcher: the game's own Social Club is not ended under the Social Club layout (decision 0169)"
+                : "launcher: the game's own Social Club is not ended (Settings)")
+        }
+        if r.endLauncher != nil && refuseGameSocialClubRestart {
             setenv(GameSocialClubEnd.refuseRestartVariable, "1", 1)
             log("launcher: the game's Social Club helper starts after the first are refused (decision 0138)")
         } else {
@@ -616,11 +624,10 @@ enum LaunchCoordinator {
 
         let t0 = Date()
         step(.running(since: t0))
-        let endGameSocialClub = GameSocialClubEnd.enabled   // decisions 0133, 0153: Settings › Graphics
         let launcher = r.endLauncher.map { s in
             LauncherEnd(signIn: s, profile: runtime.prefixURL.appendingPathComponent("drive_c/users/playport"),
                         endGameSocialClub: endGameSocialClub,
-                        refuseGameSocialClubRestart: endGameSocialClub && GameSocialClubEnd.refuseRestart)
+                        refuseGameSocialClubRestart: refuseGameSocialClubRestart)
         }
         var sampled = Date.distantPast
         while true {

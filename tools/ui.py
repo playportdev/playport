@@ -154,7 +154,8 @@ best-effort and reported as unconfirmed; transport loss/SIGKILL can leave cancel
   set:KEY=VALUE          a UserDefaults key, as a Settings control sets it (set:metalHUD=true;
                          set:donorPoolMB=0|auto|2048|4096|6144: Settings › Graphics › Donor memory, next Play,
                          Auto when unset; auto sizes it from the phone's tier and the app's limit;
-                         set:endGameSocialClubAfterSignIn=, set:refuseGameSocialClubRestart=: on when unset)
+                         set:endGameSocialClubAfterSignIn=, set:refuseGameSocialClubRestart=: on when unset,
+                         the end off under the Social Club layout unless set, decision 0169)
   hud:on | hud:off       Settings' Metal HUD
   queue:APP              queue a download from Steam, as a game page's Install does, and go on at once
   downloading:APP        wait (2 min at most) until the queue runs APP's download with progress (after
