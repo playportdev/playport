@@ -151,25 +151,60 @@
   - **l11 is +306 MB above d1 just before the step** (l10 +515): B's stock CEF +132, the host-side residual +119,
     and the rest across phases (I). On d1's 1426 MB step l11 needed ≥10–30 MB less: a near miss.
     HK first-frame+10 passed (`20261030T154742-hk-p476l11`).
-- **Chunk-2 gates after l11:**
+- **Owner decisions 2026-10-30 after l11, done** (`edddbb4`, `5987252`, `49e0bc7`, `79f42d7`, `2209aab`,
+  `08021da`, `da73673`):
+  - `[proc-mem]` splits resident pages into a file's and anonymous (madeira-unix 0232).
+  - [0116](../decisions/0116-tail-room-for-every-process-and-the-launchers-smc-checks.md) amended: a code buffer is
+    at most 64 MiB.
+  - [0150](../decisions/0150-dev-single-process-social-club.md) amended again: the stock browser also gets
+    `--disable-gpu --disable-gpu-compositing`. This widens this plan's "Chromium switches unchanged" scope, by the
+    owner.
+  - [0142](../decisions/0142-rdr2-owner-test-defaults-heap-size-semaphores-and-afp.md)/[0153](../decisions/0153-rdr2s-settings-are-every-games-defaults.md)
+    amended: RDR2 is told 2304 MiB of video memory.
+  - New [0168](../decisions/0168-social-clubs-helper-is-told-little-available-memory.md): the helper is told
+    300 MB available.
+  - New [0167](../decisions/0167-large-x86-64-images-map-from-a-cache-copy.md): large x86-64 images map from a
+    re-laid-out cache copy.
+- **Measured (l12, 2026-10-30, IPA `f2a0c7b8…`, `.work/ui-runs/20261030T171553-rdr2-p476l12`;
+  [evidence](../evidence/2026-10-29-sc-stock-cef-probe.md#l12-image-cache-copies-gpu-off-avail-phys-vram-2304-a-64-mib-code-buffer--story-reaches-the-cabin)):**
+  l11's keys.
+  - **Story reached the cabin** (+232) and held it to first-frame+600, at 21–22 fps. **Peak 7200 MB** (d1 7896).
+    There was no jetsam.
+  - **The step** came at press+76.5 from **5872 MB** (d1 6470, l11 6776) and rose 1318. The game-SC end
+    (0141/0153) fired inside it at 7185 MB and ended B (−265). The game stayed in the cabin, and 0138 refused 18
+    restarts.
+  - **Against l11 at step −5:** −888 MB in all:
+    - graphics −337 (VRAM 2304);
+    - B −264 (its libcef from the copy: image anonymous 293 → 58);
+    - the pool −274 (first stop 102 s later, live 3104);
+    - RDR2 −29;
+    - residual +52.
+  - **Social Club rendered and signed in with GPU off.** B still loaded wined3d, dxgi, D3DCompiler_47 and
+    libglesv2, but not d3d11.
+  - **The image copies:** written once each (libcef 239 MiB in 308 ms), then mapped in A, the game and B.
+  - **The 64 MiB code buffer:** RDR2 rolled at press+1.9 and press+67.4. The launcher's helper rolled 24 times and
+    B 13 times (I: likely why Story was pressed 21 s later than in l11).
+  - **HK:** first-frame+10 passed (`20261030T170711-hk-p476l12`). `pp perf` before/after: 58.7/58.7 fps, compiles
+    +30 % from one 64 MiB roll; the after run's hitches were not recorded (Metal HUD off).
+- **Chunk-2 gates after l12:**
 
-  | Gate | l7 | l8 | l9 | l10 | l11 |
-  | --- | --- | --- | --- | --- | --- |
-  | HK first-frame+10 | passed | passed | passed | passed | passed |
-  | The game's helper reaches allocator/browser startup | passed | **not passed** (kind 2 not held again; no grant, refused, died in init) | passed (kinds 1–6, no refusal) | passed (kinds 1–6, no refusal) | passed (kinds 1–6, no refusal) |
-  | The game signs in, Story is pressed | passed | passed | passed | passed | passed |
-  | Story reaches the cabin | **not passed** (jetsam at 8192 MB) | **not passed** (black loading screen without the game's Social Club) | **not passed** (jetsam at 8192 MB in the load step) | **not passed** (8185 MB in the load step, then the app ended) | **not passed** (8169 MB in the load step, then SIGKILL) |
-  | No SC/launcher `NO GAP FITS` or soft grant | **not passed** (26 V8 lines each from A and B, 36 `dllhost.exe`) | **not passed** (26 V8 lines from A; 0 `dllhost.exe`; no soft grant) | **not passed** (26 V8 lines each from A and B; 0 `dllhost.exe`; no soft grant) | **not passed** (26 V8 lines each from A and B; 0 `dllhost.exe`; no soft grant) | **not passed** (26 V8 lines each from A and B; 0 `dllhost.exe`; no soft grant) |
-  | Peak within 7343 MB ±10 % | **not passed** (8192 MB limit) | **not comparable** (6496 MB, no Story step) | **not passed** (≥ 8106 MB, the limit) | **not passed** (8185 MB) | **not passed** (8169 MB) |
+  | Gate | l7 | l8 | l9 | l10 | l11 | l12 |
+  | --- | --- | --- | --- | --- | --- | --- |
+  | HK first-frame+10 | passed | passed | passed | passed | passed | passed |
+  | The game's helper reaches allocator/browser startup | passed | **not passed** (kind 2 not held again; no grant, refused, died in init) | passed (kinds 1–6, no refusal) | passed (kinds 1–6, no refusal) | passed (kinds 1–6, no refusal) | passed (kinds 1–6, no refusal) |
+  | The game signs in, Story is pressed | passed | passed | passed | passed | passed | passed (GPU off) |
+  | Story reaches the cabin | **not passed** (jetsam at 8192 MB) | **not passed** (black loading screen without the game's Social Club) | **not passed** (jetsam at 8192 MB in the load step) | **not passed** (8185 MB in the load step, then the app ended) | **not passed** (8169 MB in the load step, then SIGKILL) | **passed** (peak 7200 MB, held to first-frame+600) |
+  | No SC/launcher `NO GAP FITS` or soft grant | **not passed** (26 V8 lines each from A and B, 36 `dllhost.exe`) | **not passed** (26 V8 lines from A; 0 `dllhost.exe`; no soft grant) | **not passed** (26 V8 lines each from A and B; 0 `dllhost.exe`; no soft grant) | **not passed** (26 V8 lines each from A and B; 0 `dllhost.exe`; no soft grant) | **not passed** (26 V8 lines each from A and B; 0 `dllhost.exe`; no soft grant) | **not passed** (26 V8 lines each from A and B; 0 `dllhost.exe`; no soft grant) |
+  | Peak within 7343 MB ±10 % | **not passed** (8192 MB limit) | **not comparable** (6496 MB, no Story step) | **not passed** (≥ 8106 MB, the limit) | **not passed** (8185 MB) | **not passed** (8169 MB) | **passed** (7200 MB) |
 
-- **Ordered queue now:** (1) done in `2df65fe` (slots held in place); (2) the memory of Story's load with the game's
-  own Social Club running (l11: 306 MB above d1 just before the step, ≥10–30 MB too many and ≈330 short of d1's
-  margin). Next (an owner decision wherever it changes behaviour):
-  - ending B before the step (≈−580) or trimming B's stock-CEF cost (≈−132);
-  - the host-side residual (≈+119 against d1), which needs a host-region walk to attribute;
-  - the FEX roll as a rule (it matched d1 in l11 only by tail-room timing);
+- **Ordered queue now:** (1) done in `2df65fe` (slots held in place); (2) Story's load with the game's own Social
+  Club running is under the limit since l12 (peak 7200 MB). It needs a repeat to show that the margin does not
+  hang on the pool's late stop (−274 of the −888). Open on the way:
+  - the 64 MiB cap's cost in the Social Club helpers (24 and 13 rolls), and an HK `pp perf` hitch comparison with
+    the HUD on;
+  - which libraries B still loads with GPU off.
 
-  then the V8 probes; (3) chunks 3–6,
+  Then the V8 probes (the last `NO GAP FITS` gate); (3) chunks 3–6,
   all under PLA-476. Chunk 5's decision is now partly covered by
   [0166](../decisions/0166-detach-a-parked-threads-wait-then-unpin-its-view.md) (the retention part of the layout);
   the rest of chunk 5 stays. 0.5.0 held.

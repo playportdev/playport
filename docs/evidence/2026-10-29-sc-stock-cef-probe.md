@@ -1172,3 +1172,255 @@ walk near the step is step −5.5; d1's is step −1.0 (144530), l10's step −3
 | Sampler: a sample inside the step | **passed** (cheap lines at 7272 and 7587/7738 MB) |
 | Pool: a spare resume at 15–19 % counts from 15 % | not exercised on the phone (both resumes at 13 %); host test only |
 | 0155 headroom refusal | not exercised (no game-SC end before the kill) |
+
+## l12: image cache copies, GPU off, avail-phys, VRAM 2304, a 64 MiB code buffer — Story reaches the cabin
+
+Owner decisions of 2026-10-30 (after the stock-CEF cost research and the willfaust/Madeira memory reading), one commit
+each, then one layout run with l11's keys:
+
+- `edddbb4`, madeira-unix 0232 (diagnostic): `[proc-mem]` rows keep committed/resident/compressed and add
+  `res_file=I/P/F res_anon=I/P/F` (image/private/fex), from mincore's `MINCORE_ANONYMOUS`/`MINCORE_COPIED`.
+- `5987252`, [0116](../decisions/0116-tail-room-for-every-process-and-the-launchers-smc-checks.md) amended
+  (madeira-unix 0233): a code-buffer grant is at most 64 MiB.
+- `49e0bc7`, [0150](../decisions/0150-dev-single-process-social-club.md) amended again (madeira-unix 0190): the
+  verified browser also gets `--disable-gpu --disable-gpu-compositing`.
+- `79f42d7` and `2209aab`, [0142](../decisions/0142-rdr2-owner-test-defaults-heap-size-semaphores-and-afp.md)/
+  [0153](../decisions/0153-rdr2s-settings-are-every-games-defaults.md) amended: RDR2's entry has `vram-mb=2304
+  env.PLAYPORT_VK_HEAP_MB=2304`.
+- `08021da`, [0168](../decisions/0168-social-clubs-helper-is-told-little-available-memory.md) (madeira-unix 0234,
+  wine-unix 0203): `SocialClubHelper.exe` is told 300 MB available.
+- `da73673`, [0167](../decisions/0167-large-x86-64-images-map-from-a-cache-copy.md) (madeira-unix 0235): x86-64
+  images of 64 MiB or more with sections off the 16 KiB grid map from a copy in `Library/Caches/images`.
+
+**Builds and session.**
+
+- **IPA (dev):** `f2a0c7b88e574842dd61c25442ad973bef39cf8e659c89c1959f9ce51f816ede` (HEAD `da73673`), verify-ipa
+  90 passed. `pp test` all passed.
+- **Session:** `agent-notes/pla476/l12.sh`, one `pp phone lock` session. `pp phone status` before: 1 phone, 80 %,
+  not on power, 3.4 GB free, installed `a5f40ebb…`.
+- **Order:** Hollow Knight `pp perf` before (on `a5f40ebb`); in-place install (36 s, container kept); HK
+  first-frame+10; HK `pp perf` after; RDR2 l12.
+
+**Hollow Knight (M).**
+
+- First-frame+10 **passed**: first frame +11.00 s (`$PLAYPORT_BUILD/ui-runs/20261030T170711-hk-p476l12`).
+- `pp perf --secs 120 --cool 5 --pad first-frame+25:hk-new-game --pad first-frame+80:hk-walk`
+  (`$PLAYPORT_BUILD/perf/p476l12-hk-before`, `…-after`):
+
+  | | before (`a5f40ebb`) | after (`f2a0c7b8`) |
+  | --- | --- | --- |
+  | fps mean / p10 / median / min | 58.7 / 55.4 / 60.0 / 45.3 | 58.7 / 55.0 / 60.0 / 45.1 |
+  | first frame | +11.73 s | +11.10 s |
+  | code buffers | gen 2 = 128 MiB, no third | gen 2 = 64 MiB, **gen 3 (64 MiB) at about +35 s** |
+  | block compiles (sum of `jit/s` × 5 s) | ≈66 k | ≈86 k (+30 %) |
+  | the bucket with the compile burst | +30 s: 51.9 fps, 3755 jit/s | +35 s: 50.7 fps, 6224 jit/s |
+  | wineserver requests per frame | 17.67 | 17.64 |
+  | thermal, battery | nominal, 80→80 %, off power | nominal, 80→80 %, **on power** |
+
+- **Hitches and frame/GPU times were not recorded in the after run:** its log says `hostio: Metal HUD off` (127
+  HUD lines in the before run, 1 in the after), so it counted frames from `[frames]` lines. That is a tooling gap,
+  not a measurement of zero.
+- **0116 gate (I):** passed on frame rate; the hitch part is unverified. The roll costs one burst of about 20 k extra
+  compiles and one 5-s bucket about 1 fps lower.
+
+**RDR2 l12:** `$PLAYPORT_BUILD/ui-runs/20261030T171553-rdr2-p476l12`.
+
+- Keys `env.PLAYPORT_CEF_SWAP=0 env.PLAYPORT_SC_SINGLE=1 env.PLAYPORT_SC_LAYOUT=1` (with the entry's `vram-mb=2304
+  env.PLAYPORT_VK_HEAP_MB=2304` and every game's `avail-phys-cef-mb=300`), `STORY_BY=420 UNTIL=600 WAIT=900`.
+- **Result `ok:true`, `until first-frame+600` reached.** First window +8.49 s, first frame +92.76 s (title clock),
+  the game signed in at +109.5 s.
+- Story was pressed at `[xp]` **+152.8** (`vpad` step 1). The `[xp]` clock starts at about 17:16:19.6; screenshot
+  names are seconds after the launch, which is `[xp]` + 10.9.
+
+**Image cache copies (0167, M).**
+
+| `[xp]` | line |
+| --- | --- |
+| +15.23 | Social-Club-Setup.exe: no copy, read; **wrote 122 MiB in 122 ms** (14 runs) |
+| +24.54 | libcef.dll (A's first load): no copy, read; **wrote 239 MiB in 308 ms** (31 runs) |
+| +25.12 | libcef.dll mapped from its copy (`[img-map] … file-mapped 0xefbe000 read 0x0`) |
+| +54.08 | RDR2.exe (first load): read; **wrote 115 MiB in 220 ms** (22 runs) |
+| +61.66 | RDR2.exe (the game) mapped from its copy |
+| +93.32 | libcef.dll mapped from its copy (the game process's own load, as l11's at +89.66) |
+| +112.07 | libcef.dll mapped from its copy (B) |
+
+- No copy failed, mismatched or was evicted. Three copies: 476 MiB in `Library/Caches/images`.
+- **0232's split works:** every fex row has `res_file` 0.
+
+**B, the game's helper (M; resident+compressed MiB, image/private/fex; `res_file`/`res_anon` of the image):**
+
+| point | l11 (stock libcef read) | l12 (libcef from the copy) |
+| --- | --- | --- |
+| press | 605 (293/85/227) | 450 (171/78/201), image res_file 112, res_anon 58 |
+| step −5 | 581 (292/68/221) | 392 (132/54/206), image res_file 74, res_anon 58 |
+| **anonymous (footprint) at step −5** | **581** | **318** (58 + 54 + 206) |
+
+- The launcher's helper A: image 173–310 with res_file 97–179 and res_anon 35–59, against l11's 297 all read.
+- RDR2.exe's image row: 40 MiB anonymous at step −5 (res_anon 9 + compressed 31; res_file 3) against l11's 58.
+- I: the copy takes about 235 MiB of B's footprint (293 → 58 image) and about 200 of A's while A lives. That matches
+  the 210–230 estimate.
+
+**GPU off (0150 amendment, M).**
+
+- Both helpers logged `[sc-single] verified browser: … component update off, GPU off` (+24.86 A, +111.22 B).
+- B still loaded `wined3d`, `dxgi`, `D3DCompiler_47`, `libglesv2` and `libegl` (+112.99–113.32). **`d3d11.dll` was
+  not loaded** (l11: +108.39, 6 MiB read). B's private row is 54–78 against l11's 68–85.
+- The launcher no longer presented through Vulkan before the game. Its UI came up as guest windows instead
+  (`hwnd=0x2003a` 700×800 at +43.3, `0x3006a` 1280×600 at +52.8). So the first frame (+92.76) is the game's;
+  l11's +40.72 was the launcher's.
+- **Social Club rendered and signed in.** Screenshots, described only:
+  - +43: the launcher's dark window with the Rockstar logo pattern;
+  - +96: the game's red Rockstar logo;
+  - the legal text with "Build 1491.50";
+  - the title screen with "RED DEAD REDEMPTION II", a snowy forest, the Story/Online tabs and the prompts
+    Settings, **Social Club (Y)**, Story and Quit Game.
+
+  `launcher: the game signed in at +109.5 s`. No `SC_INIT_ERR` line.
+
+**avail-phys (0168, M).**
+
+- `[avail-phys] SocialClubHelper.exe sees at most 300 MB available: Chromium's critical level` at +25.45.
+- The four logged answers (+25.70 to +35.87) were all A's (PEB `0x140268000`): 300 MB reported instead of
+  5208–5527 MB.
+- B's queries are not logged, because the line count is global (four). I: B got the same answer, by the same rule.
+- A's private row did not fall (284–290 at +92–100, l11 272–277); B's is 14 MiB lower than l11's. I: any purge saving
+  is within tens of MB, as estimated, and is not separable from GPU off.
+
+**VRAM 2304 (M).**
+
+- `memory plan: … video_mb=2304 override=vram-mb=2304`, `DXVK_CONFIG dxgi.maxDeviceMemory = 2304;
+  PLAYPORT_VK_BUDGET_MB=2304`, and `[kk-memory] heap 0: size 2304 MiB reported in place of 8192 MiB` in each
+  process.
+- **Graphics ledger:** 1510 at the press (l11 1863); 2070 at step −5.4 (l11 2407 at step −5.5); 2166 just before the
+  step (l11 2651); **3387** at the step's top (l11 3416 when the log ended, rising, killed); 3360–3449 after it.
+- No "out of memory" dialog in any screenshot. The game's own settings screen was not opened.
+
+**FEX (0116 amendment, M).**
+
+- RDR2.exe (`E 364`):
+  - gen 2 asked 128 MiB at +85.47 and got 64 (`tail CAP … cap 0x4000000`);
+  - **gen 3 at +154.66 = press+1.9** (l11 press+2.0, d1 press+2.1), and gen 4 at +220.20 = press+67.4, 9 s before
+    the step.
+- RDR2's fex row: 498 at press−5.9, 236 at press+3.6, 281 at step −5 (l11 561 → 237 → 298; d1 → 303).
+- **Every 128 MiB ask now rolls at 64.** The launcher's helper A rolled **24 generations** from +25.97 to +99.31
+  (about one every 3 s; l11's A rolled 6 of 128). B rolled 13 from +112.99 to +175.12 (l11's B rolled 2).
+- I: those rolls are FEX compile load during the sign-in and the menus. The Story press came 20.8 s later on the
+  `[xp]` clock than l11's (+152.8 against +132.0), with the sign-in 5 s later; A's and B's rolls are the likely
+  cause, not measured.
+
+**The donor pool (M).**
+
+- Launch `sys_free_mb=3187`, `sys_level=49`.
+- No stop during the sign-in. **The first stop was at +219.54** (level 14 % < 15 %, spare 3919); l11's was at +117.53.
+- Resumed on spare at +221.46 at 13 %, stopped +223.58 (12 % < 13 %). Then the pool was full (`no free run fits`
+  from +220.20, 1521 refusals).
+- Live **3104 MB** at the cap (l11 2812, d1 2809). Resident+compressed at the step's start 1989 + 609 = **2598**
+  (l11 2330).
+- No resume at 15–19 %: R = min(L, 15) is still not exercised on the phone.
+- I: the lower sign-in peak (5686 MB at the launcher's end against l11's 6397) kept the level at 15 % or above for
+  100 s longer.
+
+**The step, the sampler, the end of the game's SC (M).**
+
+- **Before the step:**
+  - `[footprint]` 5675/2070 (phys/graphics) at +223.91;
+  - `fast` 5720 at +224.25 (press+71.5), creeping to 5872 at +227.54.
+- **The step:** `fast` 6198 → 6615 → 6841 at +229.32 (press+76.5), `[footprint]` **7190** (graphics 3387,
+  compressed 1805) at +229.87. The highest `fpMB` was **7200** at +229.87.
+- **The sampler** fired once, `armed` at 6904 MB (+230.03, inside the step), and its walk took 16.4 s. Its ledger:
+
+  | field | MB |
+  | --- | --- |
+  | phys_footprint | 6996 |
+  | internal | 5716 |
+  | internal_compressed | 1516 |
+  | alternate_accounting | 2724 (+807 compressed) |
+  | page_table | 11 |
+  | graphics | 3371 |
+  | wired_mem | 2980 |
+
+- **The game-SC end (0141/0153):** `the footprint reached 7185 MB … ending the game's own Social Club at +236.4 s`
+  (title) = `[xp]` +229.87, sign-in+127. It ended B (pid 0500, footprint `7173->6908 MB`, −265). All six slots were
+  held in place.
+- **0138** then refused 18 restart attempts. The game stayed in the cabin, unlike d1's return to its title. There
+  was no re-sign-in line, so **0155 was not exercised** (no allow, no no-headroom line).
+- After the step the footprint stayed **6.9–7.2 GB to the end** (+741; 7096–7178 at +650–740). Graphics was
+  3360–3450. The pool was 3077 live, its resident falling to 283 and compressed rising to 2326 as the phone
+  compressed it.
+- **No jetsam:** the run ended on its own stop at first-frame+600.
+
+**The cabin (screenshots in `agent-notes/pla476/p476l12/shots/`, `[xp]` ≈ name − 11; described only).**
+
+- +232 (just after the step) through +707: **Arthur sits on a bed in the log cabin**, in a blue coat and black hat.
+  There is a snowy window behind him, a table with a tin cup, shelves on the right and a stove at the front right.
+  At +319 he lifts a hand to his face.
+- The cabin was reached and held for at least 475 s.
+- **Cabin frame rate (`[kk-gpu]`, M):** median 22.3 fps from +240 to +300, 21.4 from +300 to +450, 20.9 from +450 to
+  +700. d1's cabin was not measured long enough to compare (its game went back to its title).
+
+**The rest (M).**
+
+- **NO GAP FITS 53:** 26 from A's V8 probes (+20–30), 1 the game's 8960 MiB ask (+70), 26 from B's (+110–120).
+  0 `dllhost`. Unchanged.
+- **Slots:** A's teardown (+110.31) and B's end (+229.87) each held all six kinds in place. 0 `held again`, 0 `NOT
+  held`. B got kinds 1, 3, 2, 4 at +112.36, 5 at +114.39 and 6 at +116.78, with no refusal.
+- **Teardown footprints:** `5687->5460` (launcher), `5687->4731` (A), `7173->6908` (B).
+- **Waits:** 31 `wait-detached`, 13 `wait-only` (two teardowns: A and B). c0000005: 67 lines (l11 53).
+- **RDR2.exe was placed lower than in l11:** first load at `0x153f50000` and the game's at `0x154950000`, against
+  l11's `0x7240000000` and `0x717b760000`. I: the address-space state differed; it was not investigated.
+
+**Footprint aligned on the press** (`[footprint]` phys/graphics):
+
+| press+ | l12 (press +152.8) | l11 (press +132.0) | d1 (press +123.5) |
+| --- | --- | --- | --- |
+| ≈0 | +0.0: 5102/1510 | +0.1: 5852/1863 | +1.2: 5348/1794 |
+| ≈+20 | +20.3: 4834/1511 | +20.2: 5486/1864 | +19.2: 5044/1795 |
+| ≈+46 | +46.9: 5184/1738 | +46.7: 5818/2090 | +45.8: 5388/2022 |
+| ≈+60 | +60.9: 5333/1845 | +60.8: 6009/2184 | +60.1: 5680/2132 |
+| ≈+68 | +67.1: 5463/1941 | +69.0: 6551/2409 | +68.2: 6260/2356 |
+| just before the step | +71.1: 5675/2070; `fast` 5872 | +73.2: 6757/2503; `fast` 6776 | +74.3: 6470/2454; `fast` 6457 |
+| the step | 5872 → **7190** (+1318), press+76.5 | 6776 → ≥8169, press+74.8 | 6457 → 7896 (+1426), press+74.6 |
+| after | 6.9–7.2 GB, cabin | SIGKILL | cabin, then its title |
+
+**l12 against l11 at step −5** (l12 `[proc-mem]` +224.57 with `[footprint]` +223.91; l11 as in its table;
+footprint = graphics + `[proc-mem]` all, anonymous − donor-backed + non-view residual):
+
+| Component | d1 | l11 | l12 | l12 − l11 | M/I | Lever |
+| --- | --- | --- | --- | --- | --- | --- |
+| phys | 6457 | 6563 | 5675 | **−888** | M | |
+| graphics | 2420 | 2407 | 2070 | **−337** | M | VRAM 2304 (I: also the load's timing) |
+| B (anonymous) | 449 (counted with file pages) | 581 | 318 | **−264** | M | image −235 (0167), private −14 and fex −15 (GPU off, avail-phys; not separable) |
+| RDR2.exe fex | 303 | 298 | 281 | −17 | M | both rolled before the step (0116) |
+| RDR2.exe image+private (anonymous) | 2826 | 2700 | 2688 | −12 | M | image −18 (0167), private +6 |
+| runtime, child, services, rest | 464 | 495 | 458 | −37 | M | |
+| donor-backed (subtracted) | −2292 | −2324 | −2598 | **−274** | M | the pool's first stop 102 s later |
+| non-view residual | 2287 | 2406 | 2458 | +52 | M (±60 walk) | |
+| **sum** | | | | **−888** | | |
+
+- l11's `all` had almost no file pages (stock libcef read, B 0 file), so its row compares with l12's anonymous
+  total. d1's 449 for B and its residual include about 130 MiB of Playport libcef's file pages (I,
+  b-stock-cef-cost).
+- **Just before the step l12 was 5872 against d1's 6470 (−598) and l11's 6776 (−904).** The step itself rose 1318
+  (d1 1426). The game-SC end then took 265 off inside it.
+- **Peak 7190–7200 against d1's 7896.** The margin to 8192 MB was about 990 MB, against d1's 296.
+- I: about two thirds of the gain is policy that holds in any run: B's image (−235), graphics (about −340), RDR2's
+  image (−18). About a third is the pool's later stop (−274), which follows phone state and the lower sign-in peak.
+  Without the pool term, l12 would still have peaked at about 7470 MB.
+
+**Gates:**
+
+| Gate | Result |
+| --- | --- |
+| HK first-frame+10 | passed (+11.00 s) |
+| HK `pp perf` before/after (0116) | fps passed (58.7/58.7); hitches **not measured** in the after run (HUD off) |
+| The game's helper reaches allocator/browser startup | passed (kinds 1–6, no refusal) |
+| The game signs in, Story is pressed | passed |
+| Social Club renders with GPU off (0150) | passed (sign-in, Social Club prompt, Story tab) |
+| **Story reaches the cabin** | **passed** (+232, held to the run's end) |
+| No SC/launcher `NO GAP FITS` or soft grant | **not passed** (26 V8 lines each from A and B; 0 `dllhost`) |
+| **Peak within 7343 MB ±10 %** | **passed** (7200 MB) |
+| Slot release keeps the range held | passed (A 6/6, B 6/6 held in place) |
+| Sampler: a sample inside the step | passed (one `armed` firing at 6904 MB, ledger) |
+| Image copies: written once, mapped after (0167) | passed (3 written, 0 failures; B's image res_anon 58) |
+| Pool: a spare resume at 15–19 % counts from 15 % | not exercised (the resume at 13 %) |
+| 0155 headroom refusal | not exercised (no re-sign-in after the game-SC end) |
