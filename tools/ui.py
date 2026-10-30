@@ -175,8 +175,9 @@ best-effort and reported as unconfirmed; transport loss/SIGKILL can leave cancel
   xbox:addon-install:PRODUCTID/ADDONID  install that add-on into the copy's folder (DLC\ADDONID)
                          as its page's Add-ons picker does; waits, verifies, logs version and files
   xbox:addon-remove:PRODUCTID/ADDONID   remove that add-on; the copy stays
-  xbox:update:PRODUCTID  the Store's version against the installed copy's (GetBasePackage); when newer,
-                         the page's Update, waited for, then every file verified; logs versions and counts
+  xbox:update:PRODUCTID  the page's Check for update, pressed: the Store's version against the installed
+                         copy's (GetBasePackage); when newer, the page's Update, pressed and waited for,
+                         then every file verified; logs versions and counts
   xbox:offline-device:on|off  Accounts' Offline device row through its confirmation (one offline
                          device per account; Microsoft allows a few changes a year, each counts);
                          logs on/off and the changes left. :status only reads Microsoft's answer
