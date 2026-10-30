@@ -2132,6 +2132,9 @@ final class QuickMenuTests: XCTestCase {
         XCTAssertEqual(QuickMenu.controller(name: "Xbox", battery: 80), "Xbox · 80%")
         XCTAssertEqual(QuickMenu.controller(name: "DualSense", battery: nil), "DualSense")
         XCTAssertEqual(QuickMenu.controller(name: nil, battery: nil), "None")
+        // The dev build's scripted pad is no GameController pad: no name of its own (touch controls 3c).
+        XCTAssertEqual(QuickMenu.controller(name: nil, battery: nil, scriptedPad: true), "Scripted pad")
+        XCTAssertEqual(QuickMenu.controller(name: "DualSense", battery: 70, scriptedPad: true), "DualSense · 70%")
         XCTAssertEqual(QuickMenuItem.allCases.map(\.title),
                        ["Resume", "Controls", "Screenshot", "Performance overlay", "Controller", "Quit game"])
     }

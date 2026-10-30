@@ -279,11 +279,11 @@ proposed answer unless the owner says otherwise before the phase that needs them
 - **Settled after 2f (supervisor, 2026-10-13):** keep the 125 Hz cap (the DualShock 4 gives
   about 65/s and the phone 100/s, so neither reaches it), and keep the 500 Hz `GCMotion` poll
   (the same rate as the handler, but off the main thread).
-- **For the next fix chunk (seen in 3c, cosmetic):** the in-game panel's "Controller" label
-  wraps; the Controller page's Look speed row and the in-game Controls value are truncated;
-  the ActionPicker's footer hints overlap the page while it waits for a key; the in-game
-  Controller row says "None" with the scripted pad; the 3c script loses the pad steps' app
-  log (keep it next time).
+- **Seen in 3c, cosmetic (done in U, `c3920bd`; PLA-535):** the in-game panel's "Controller"
+  label wrapped; the Controller page's Look speed row and the in-game Controls value were
+  truncated; the ActionPicker's footer hints overlapped the page while it waited for a key; the
+  in-game Controller row said "None" with the scripted pad (now "Scripted pad" in dev, PlayportKit
+  `QuickMenu.controller(scriptedPad:)`); the 3c script lost the pad steps' app log (U kept it).
 - **Notes and reports:** `.work/agent-notes/pla-13-v2/`.
 
 ## Goal

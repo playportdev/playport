@@ -100,8 +100,10 @@ public struct QuickMenu: Equatable, Sendable {
     }
 
     /// The controller row's value: `Xbox · 80%`, the name alone without a battery, `None`.
-    public static func controller(name: String?, battery: Int?) -> String {
-        guard let name else { return "None" }
+    /// `scriptedPad`: the dev build's scripted pad is connected; it is no GameController pad,
+    /// so it has no name of its own and is `Scripted pad` when no real one is named.
+    public static func controller(name: String?, battery: Int?, scriptedPad: Bool = false) -> String {
+        guard let name else { return scriptedPad ? "Scripted pad" : "None" }
         return battery.map { "\(name) · \($0)%" } ?? name
     }
 }

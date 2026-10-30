@@ -493,12 +493,14 @@ struct InGameMenuView: View {
             guard MetalHUD.loaded else { return "Turn on Metal HUD in Settings, relaunch" }
             return model.overlay ? "On" : "Off"
         case .controller:
-            #if !PLAYPORT_RELEASE
-            // The dev build's scripted pad is no GameController pad, so the router has no name for it
-            // ("None" with it connected: touch controls 3c).
-            if router.controller == nil, VirtualPad.shared.connected { return "Scripted pad" }
+            // The dev build's scripted pad is no GameController pad, so the router has no name for it (touch controls 3c).
+            #if PLAYPORT_RELEASE
+            let scripted = false
+            #else
+            let scripted = VirtualPad.shared.connected
             #endif
-            return QuickMenu.controller(name: router.controller?.name, battery: router.controller?.battery)
+            return QuickMenu.controller(name: router.controller?.name, battery: router.controller?.battery,
+                                        scriptedPad: scripted)
         case .quit: return model.quitting ? "Closing…" : "Saves first"
         }
     }
