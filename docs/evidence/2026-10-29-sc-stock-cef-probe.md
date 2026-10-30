@@ -1536,3 +1536,113 @@ a step 142 MB lower), but 0155's allow path is a hazard at that footprint.
 - Red Dead Redemption 2 (1174180): dev stock-CEF probe, Story cabin reached and held in l14 (peak 7058 MB, 20 fps),
   l13 reached the cabin and then ended (app killed at +374 s after Social Club restarts). A dev experiment, no
   change to the compatibility status.
+
+## l15–l16: probe refusal, avail-phys per process, image-cache v2, one start per allow — neither run reaches Story
+
+IPA `b1a239f2717c8fa6b0f0d4810d2d2862b858f6534cf1b875febd827292ff3451`, built from HEAD `1413ed9`:
+- madeira-unix 0236: the helper's impossible V8 reserves are refused before the map walk;
+- 0237: the avail-phys log limit is per process;
+- 0238: the image-cache key carries the ctime, and each use runs a 16-point sampled check;
+- 0239 (0155 amendment 2): one start per allow.
+
+`./pp test` passed; `verify-ipa` 90/0.
+
+The session (`agent-notes/pla476/l15.sh` under one `pp phone lock`):
+- status: 80 %, on power, 2.4 GB free;
+- in-place install (29 s);
+- HK first-frame+10;
+- RDR2 l15 and l16 with l12's keys, `STORY_BY=420 UNTIL=600 WAIT=900`.
+
+The arm (`arm15.sh`) is `arm13.sh` plus `set:endGameSocialClubAfterSignIn=true set:refuseGameSocialClubRestart=true`: the
+owner had played RDR2 by hand just before, with the game-SC end off. Both RDR2 runs were ended by the arm's
+deadline (no Story press by +420 s), and `pp ui` pulled no host log. The logs were pulled afterwards with
+`pp phone pull` (`s1-host.prev.log` is l15, `s1-host.log` is l16), and both are copied into the run dirs. M = measured,
+I = inferred.
+
+- **HK (M):** first-frame+10 passed, first frame +11.78 s (`$PLAYPORT_BUILD/ui-runs/20261030T202011-hk-p476l15`,
+  IPA sha checked).
+- **l15** (`…/20261030T202106-rdr2-p476l15`):
+  - **The launcher's helper A died** at +89.66 `[xp]` in Chromium's out-of-memory exit (`0xE0000008`,
+    `[chromium-oom] request 0x3c0 bytes`, a small allocation). This was after the game's first frame (+83.7 title
+    clock) and before any sign-in.
+  - The launcher started a new helper (+91.5; kinds 1–6 granted). At +99 its 1280×600 window was shown over the
+    game (`a dialog is shown over the game`). The shots show a dark card with a red button and no text from +106 to
+    the end.
+  - The game never signed in: there is no `signed in` line and no game helper start.
+  - Cause of A's out-of-memory: not determined. No refused reserve or commit was logged before it, and its V8
+    setup was normal: 26 probes refused, kind 6 granted.
+- **l16** (`…/20261030T202901-rdr2-p476l16`):
+  - The game signed in at +104.5. The launcher ended, and A's exit line counted `26 impossible probes refused`.
+  - **The game's helper B died** at +115.6, also in Chromium's out-of-memory exit (`request 0 bytes`), before it
+    signed the game in:
+    - after the kind-6 grant, V8's 1 GiB range (hint `0x60800000000`, offset 0 within 16 GiB) took the jumbo
+      "plain" candidates. All were occupied, and the kernel pick gave `0x72b0370000`;
+    - V8 dropped that pick and tried twice more. Its padded `0x13fff0000` reserve then found no gap: the window was
+      `free=5751 MB maxhole=4203 MB`. That gave 4 `NO GAP FITS` lines, and the out-of-memory exit followed;
+    - in l12/l14 the same 1 GiB took the "guard" candidate `0x7100000000` on its first try (hint offset 4 GiB).
+  - 0138 then refused 60+ restarts, and the game stayed on its black loading spinner (shots from +126 to the end).
+  - l13's five restarted helpers died the same way (I: one mechanism, V8's code range by the random hint's
+    offset and the window's state).
+- **Whether 0236 caused either death (I):**
+  - 0236 refuses only ≥ 16 GiB unhinted asks, and ≥ 8 GiB once the helper owns kind 6. B died at the 1 GiB step, before
+    any (b) refusal: its count was `6`, the ladder only.
+  - A's death came 60 s after its last refusal.
+  - So neither failure points to 0236, 0237 or 0238; it is not excluded either. The owner's hand play just before
+    the session is a confounder: settings, and the phone's memory and page cache.
+  - These are the first first-helper out-of-memory deaths in l3–l16 (l2 had one).
+
+**Against l12/l14 (M unless marked).**
+
+| | l12 | l14 | l15 | l16 |
+| --- | --- | --- | --- | --- |
+| result | cabin, ff+600 | cabin, ff+600 | **no sign-in**; deadline +420 | **no Story** (B died); deadline +420 |
+| first frame (title clock) | 92.8 | 96.7 | 83.7 | 87.8 |
+| game signed in | +110.3 | +116.1 | none | +104.5 |
+| A / B `NO GAP FITS` | 26 / 26 | 26 / 26 | **0 / —** | **0 / 4** (`0x140000000`, the code-range fallback) |
+| refusal counter (exit line) | — | — | A 26; A's restart 2 logged, alive at the end | A 26, B 6 |
+| kind-6 grants | A, B | A, B | A, A's restart | A, B |
+| V8 probe walks / kind 5 → kind 6 grant | walks A 6.8 s, B 13.1 s | walks as l12 | no walk; A 0.30 s (+27.83 → +28.13) | no walk; A 0.31 s, B 0.35 s |
+| SC renders / signs in | yes / yes | yes / yes | launcher pages rendered (R★ windows); then a blank card / no | yes / yes, then B died |
+| avail-phys lines | 4, all A's | — | 4 A, 4 A's restart | 4 A (`0x14692c000`), 4 B (`0x17bcac000`) |
+| peak `fpMB` | 7200 | 7058 | 5564 | 5737 |
+| graphics at the end | — | — | 1510 | 1542 |
+| game-SC end / 0155 / 0239 | end, no allow | end, no allow | none | none (B died; 0138 refused 60+) |
+| jetsam | none | none | none | none |
+
+- **Image cache v2 (M).**
+  - l15's writer first deleted the three `v1-…` copies (`deleted v1-… (an older version's copy)`).
+  - It then wrote the v2 copies: Social-Club-Setup.exe 122 MiB in 118 ms, libcef 239 MiB in 290 ms, RDR2.exe
+    115 MiB in 173 ms. The v2 names carry the ctime (`…-1793376429.0752…`).
+  - Every later map logged `16 sampled points equal the file`: l15 A's second map, the game, A's restart; in l16
+    every map, including B's.
+  - There was no difference line and no rewrite.
+- **avail-phys per process (M):** the game's helper's answers are now logged (l16 B: 4210, 4028, 4080 and 4048 MB
+  reported as 300). The cap is unchanged.
+- **The cabin, the game-SC end and 0155:** not reached, so not exercised. 0239's one-start rule is untested on the
+  phone.
+
+**The l13 cascade, revisited (M, from the l13 log).**
+- The five starts the one allow let through (+318.6 to +362.2) each died 10–15 s after starting in the same
+  out-of-memory exit (`request 0 bytes`). At Story, the window's largest hole was 515 MB, so V8's
+  `0x13fff0000` code-range reserve failed.
+- The game restarted the helper 0.3 s after each exit.
+- The game had left Story before the restarts, about 7 s after its GetCurrentGameLanguage burst:
+  - cabin frames run to +318.6;
+  - empty 60 fps frames start at +319.5;
+  - DirectSound's mixer thread starts at +320.0.
+  This is d1's sequence.
+- Hence 0155 amendment 2 (one start per allow, owner 2026-10-30).
+
+**Verdict.**
+- The V8 probe gate is met for the launcher's helper in both runs, and for B's 26 old lines: 0 `NO GAP FITS` from A.
+- B's 4 lines are a new fallback: V8's code-range reserve, not the probes.
+- The helper's 1 GiB code range now looks like a separate hazard. Its placement depends on V8's random hint and
+  on the window. It killed a first helper in l16, A died differently in l15, and neither run reached Story.
+- The chunk-2 cabin and peak gates are not shown on this IPA.
+
+## Games observed (l15, l16)
+
+- Hollow Knight (367520): works; first-frame+10 at +11.78 s on `b1a239f2…`.
+- Red Dead Redemption 2 (1174180): dev stock-CEF probe on `b1a239f2…`; neither run reached Story. In l15 the
+  launcher's Social Club helper died before the sign-in; in l16 the game's helper died after the sign-in and the
+  game stayed on its loading spinner. A dev experiment, no change to the compatibility status.
