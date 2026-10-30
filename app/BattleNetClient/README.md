@@ -66,7 +66,8 @@ offline tests on the Linux host. The app's Battle.net store (`UI/BattleNetStore.
   build's own manifests (root, encoding, install, download, size, patch index, every `vfs-*`);
   the product folder gets the install manifest's selection as plain files, each directory
   spelled as it first appears. `x64Client` adds the x64 client: the x64 and ARM64 clients share
-  nine names under `Utils` (the browser and voice helpers) with different builds, and the x64
+  nine (Classic) or ten (retail) names under `Utils` (the browser and voice helpers) with
+  different builds, and the x64
   file is kept. Each object's place in the data files is fixed by the plan, so the journals are
   a function of it; neighbouring objects in an archive are one ranged read (up to 8 MiB, across
   gaps up to 16 KiB). `present` and `firstDataFile` let an update plan only the objects a store
