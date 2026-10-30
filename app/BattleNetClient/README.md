@@ -83,6 +83,15 @@ offline tests on the Linux host. The app's Battle.net store (`UI/BattleNetStore.
   checks every planned object is journalled and every product folder file against its CKey.
   The patch manifest is left out (its name is not the MD5 of its bytes, so nothing checks it;
   the game fetches it).
+- **Region and language of an install** (`BattleNetInstallChange.swift`, PLA-520):
+  `changeRegion` asks only the region's version and CDN endpoints and rewrites `.build.info`
+  (branch, CDN hosts and servers, the region tag); a region on another build is refused (an
+  update). `prepareLocaleChange` plans the new locale's selection of the installed build minus
+  the objects the store's journals name and the product folder files already there, numbering
+  data files after the store's and reading the CDN indexes from `Data/indices`; `changeLocale`
+  stages it through the engine, moves the new files in, writes the next journal generation
+  (old entries plus new), then the locale into `.build.info` and an existing `WTF/Config.wtf`
+  (`textLocale`, `audioLocale`). The old locale's data stays.
 - **Live runs**: `BATTLENET_LIVE_REPORT=$PLAYPORT_BUILD/bnet-live.md ./pp test --swift
   BattleNetClient --filter testLiveOffersAndSizes` asks Blizzard for every product and region and
   writes the table in [the offer evidence](../../docs/evidence/2026-10-30-battlenet-offer.md).

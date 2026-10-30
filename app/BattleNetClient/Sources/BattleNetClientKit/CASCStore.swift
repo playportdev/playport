@@ -107,9 +107,10 @@ public enum CASC {
     }
 
     /// The sixteen journals of `dataFiles` data files holding `objects`: each data file's own
-    /// headers go in the journal their seed names.
-    public static func journals(objects: [Location], dataFiles: [Int]) -> [[UInt8]] {
-        var byBucket = [[Location]](repeating: [], count: buckets)
+    /// headers go in the journal their seed names. `existing` (by bucket) are a store's entries
+    /// so far, kept (a language change adds to a store).
+    public static func journals(objects: [Location], dataFiles: [Int], existing: [[Location]] = []) -> [[UInt8]] {
+        var byBucket = existing.count == buckets ? existing : [[Location]](repeating: [], count: buckets)
         for l in objects { byBucket[bucket(l.key)].append(l) }
         for f in dataFiles {
             for (slot, key) in segmentKeys(dataFile: f).enumerated() {

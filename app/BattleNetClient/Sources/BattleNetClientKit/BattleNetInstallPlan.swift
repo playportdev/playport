@@ -127,6 +127,17 @@ public struct BattleNetSelection: Sendable {
 
     /// Every EKey the install reads from the CDN.
     public var wanted: Set<PackedKey> { Set(objects.map(\.key)).union(files.map(\.ekey)) }
+
+    init(query: TagQuery, objects: [Object], files: [File]) {
+        self.query = query
+        self.objects = objects
+        self.files = files
+    }
+
+    /// The selection without the product folder files `installed` says are there already.
+    public func without(files installed: (File) -> Bool) -> BattleNetSelection {
+        BattleNetSelection(query: query, objects: objects, files: files.filter { !installed($0) })
+    }
 }
 
 /// Where each wanted object is on the CDN, from the archive indexes: an archive and a range.

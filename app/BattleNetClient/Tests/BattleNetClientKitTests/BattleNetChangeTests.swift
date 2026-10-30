@@ -1,0 +1,112 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+import Foundation
+import XCTest
+import ContentKit
+@testable import BattleNetClientKit
+
+/// An installed product's store region and language changed (PLA-520): a region change rewrites
+/// `.build.info` and nothing else; a language change fetches only the new locale's data.
+extension BattleNetInstallTests {
+    /// Every file under `root` but `.build.info`, with its bytes.
+    func snapshot(_ root: URL) throws -> [String: Data] {
+        var out = [String: Data]()
+        let e = try XCTUnwrap(FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey]))
+        for case let url as URL in e where (try url.resourceValues(forKeys: [.isRegularFileKey])).isRegularFile == true {
+            let path = String(url.path.dropFirst(root.path.count))
+            if path != "/.build.info" { out[path] = try Data(contentsOf: url) }
+        }
+        return out
+    }
+
+    func testARegionChangeRewritesTheBuildInfoOnly() async throws {
+        let cdn = FakeCDN()
+        let p = FakeProduct.make(on: cdn, productConfig: try fixture("wow_classic_era-productconfig.json"))
+        let dir = try temp()
+        _ = try await install(cdn, in: dir)
+        let root = dir.appendingPathComponent("wow")
+        let before = try snapshot(root)
+        let asked = cdn.requests.count
+
+        let info = try await installer(client(cdn)).changeRegion(.wowClassicEra, root: root, to: .eu)
+
+        // Only the version and CDN endpoints were asked; nothing came from the CDN.
+        XCTAssertEqual(Set(cdn.requests.dropFirst(asked).map(\.url.path)),
+                       ["/v2/products/wow_classic_era/versions", "/v2/products/wow_classic_era/cdns"])
+        XCTAssertEqual(try snapshot(root), before)
+        let read = try BuildInfo.read([UInt8](try Data(contentsOf: root.appendingPathComponent(".build.info"))), product: "wow_classic_era")
+        XCTAssertEqual(read, info)
+        XCTAssertEqual(read.region, .eu)
+        XCTAssertEqual(read.buildKey, p.buildConfig)
+        XCTAssertEqual(read.cdnKey, p.cdnConfig)
+        XCTAssertEqual(read.cdnHosts, ["level3.blizzard.com", "eu.cdn.blizzard.com"])
+        XCTAssertEqual(read.cdnServers, ["https://eu.cdn.blizzard.com/?maxhosts=4", "http://level3.blizzard.com/?maxhosts=4"])
+        XCTAssertEqual(read.tags, "Windows arm64 EU? enUS speech?:Windows arm64 EU? enUS text?")
+        XCTAssertEqual(read.locale, "enUS")
+    }
+
+    /// A region whose current build is another is an update, not a rewrite: nothing changes.
+    func testARegionOnAnotherBuildIsRefused() async throws {
+        let cdn = FakeCDN()
+        let p = FakeProduct.make(on: cdn, productConfig: try fixture("wow_classic_era-productconfig.json"))
+        let dir = try temp()
+        _ = try await install(cdn, in: dir)
+        let root = dir.appendingPathComponent("wow")
+        let info = try Data(contentsOf: root.appendingPathComponent(".build.info"))
+        let other = String(repeating: "ab", count: 16)
+        cdn.set("/v2/products/wow_classic_era/versions", Array(("Region!STRING:0|BuildConfig!HEX:16|CDNConfig!HEX:16|KeyRing!HEX:16|BuildId!DEC:4|VersionsName!String:0|ProductConfig!HEX:16\n## seqn = 2\n"
+            + "us|\(p.buildConfig)|\(p.cdnConfig)||1|1.0.0.1|\(p.cdnConfig)\neu|\(other)|\(p.cdnConfig)||2|1.0.0.2|\(p.cdnConfig)\n").utf8))
+        do {
+            _ = try await installer(client(cdn)).changeRegion(.wowClassicEra, root: root, to: .eu)
+            XCTFail("expected a refusal")
+        } catch BattleNetError.unsupported {}
+        XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent(".build.info")), info)
+    }
+
+    /// A language change fetches the objects only the new locale has (the fake product's deDE-only
+    /// ones), into a data file numbered after the install's; the store keeps the old locale's
+    /// data, the journals name both, and `.build.info` and an existing `Config.wtf` say deDE.
+    func testALocaleChangePlansOnlyTheNewLocalesData() async throws {
+        let cdn = FakeCDN()
+        let p = FakeProduct.make(on: cdn, productConfig: try fixture("wow_classic_era-productconfig.json"))
+        let dir = try temp()
+        let (installed, _) = try await install(cdn, in: dir)
+        let root = dir.appendingPathComponent("wow"), work = dir.appendingPathComponent(".wow.locale")
+        let wtf = root.appendingPathComponent("_classic_era_/WTF/Config.wtf")
+        try FileManager.default.createDirectory(at: wtf.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("SET textLocale \"enUS\"\nSET gxApi \"D3D12\"\nSET audioLocale \"enUS\"\n".utf8).write(to: wtf)
+        let before = try snapshot(root)
+        let asked = cdn.requests.count
+
+        let i = installer(client(cdn))
+        let prepared = try await i.prepareLocaleChange(.wowClassicEra, root: root, to: "deDE", work: work)
+        XCTAssertEqual(Set(prepared.plan.locations.map(\.key)), Set([3, 11, 19, 27, 35].map { PackedKey(p.objects[$0].keys.ekey) }))
+        XCTAssertEqual(prepared.plan.files, [])
+        XCTAssertEqual(prepared.plan.dataFiles, [1])
+        // The CDN indexes came from the install, not the CDN.
+        XCTAssertFalse(cdn.requests.dropFirst(asked).contains { $0.url.path.hasSuffix(".index") })
+
+        _ = try await i.changeLocale(prepared, root: root, work: work)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: work.path))
+        let after = try snapshot(root)
+        for (path, data) in before where !path.hasSuffix(".idx") && !path.hasSuffix("Config.wtf") {
+            XCTAssertEqual(after[path], data, path)
+        }
+        XCTAssertNotNil(after["/Data/data/data.001"])
+        XCTAssertEqual(Set(after.keys.filter { $0.hasSuffix(".idx") }),
+                       Set((0..<16).map { "/Data/data/" + CASC.journalName(bucket: $0, generation: 2) }))
+        let read = try BuildInfo.read([UInt8](try Data(contentsOf: root.appendingPathComponent(".build.info"))), product: "wow_classic_era")
+        XCTAssertEqual(read.tags, "Windows arm64 US? deDE speech?:Windows arm64 US? deDE text?")
+        XCTAssertEqual(read.region, .us)
+        XCTAssertEqual(try String(contentsOf: wtf, encoding: .utf8), "SET textLocale \"deDE\"\nSET gxApi \"D3D12\"\nSET audioLocale \"deDE\"\n")
+        // Both locales' objects are named by the journals and read back whole.
+        for plan in [installed.plan, prepared.plan] {
+            let v = try await BattleNetInstaller.verify(root, plan: plan)
+            XCTAssertTrue(v.isIntact, "\(v.damaged) \(v.missing)")
+        }
+
+        // Back to enUS: everything is there already, so nothing is planned.
+        let back = try await i.prepareLocaleChange(.wowClassicEra, root: root, to: "enUS", work: work)
+        XCTAssertEqual(back.plan.objects, 0)
+        XCTAssertEqual(back.plan.files, [])
+    }
+}

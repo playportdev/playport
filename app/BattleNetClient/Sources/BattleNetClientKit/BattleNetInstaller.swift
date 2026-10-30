@@ -132,8 +132,44 @@ public struct BattleNetInstaller: Sendable {
     public func prepare(_ product: BattleNetProduct, _ region: StoreRegion, options: BattleNetInstallOptions,
                         work: URL) async throws -> Prepared {
         let build = try await client.build(product, region)
+        let r = try await read(build, work: work)
+        let selection = try BattleNetSelection(build: build, download: r.download, install: r.install, encoding: r.encoding, options: options)
+        let cdnConfig = r.cdnConfig, meta = r.meta
+
+        log.info("battlenet", "\(cdnConfig.archives.count) archive indexes")
+        let locations = try await locate(selection.wanted, cdnConfig.archives, meta: meta, build: build)
+        let patchArchives = (cdnConfig.config["patch-archives"] ?? []).compactMap { TACTHash(hex: $0) }
+        try await forEachIndex(patchArchives, patch: true, meta: meta, build: build) { _, _ in }
+        var others = [TACTHash]()
+        for (name, patch) in [("file-index", false), ("patch-file-index", true)] {
+            guard let key = cdnConfig.config[name]?.first.flatMap({ TACTHash(hex: $0) }) else { continue }
+            try await forEachIndex([key], patch: patch, meta: meta, build: build) { _, _ in }
+            others.append(key)
+        }
+        let plan = try BattleNetInstallPlan(build: build, archives: cdnConfig.archives, selection: selection, locations: locations,
+                                            options: options)
+        let installSize = build.config.config["install-size"].flatMap { $0.count >= 2 ? UInt64($0[1]) : nil } ?? 0
+        return Prepared(plan: plan, cdnConfig: cdnConfig, configs: r.configs, indexes: cdnConfig.archives + patchArchives + others,
+                        installSize: installSize, client: r.client)
+    }
+
+    /// What a plan is made from: the build's configs (kept in `meta`), the client with its key
+    /// ring, and its install, download and encoding manifests.
+    struct Reading {
+        let meta: URL
+        let client: BattleNetClient
+        let cdnConfig: CDNConfig
+        let configs: [TACTHash]
+        let install: InstallManifest
+        let download: DownloadManifest
+        let encoding: EncodingTable
+    }
+
+    /// Reads `build`'s configs and manifests, from `work` when a checked copy is there, else
+    /// from the CDN (kept in `work`).
+    func read(_ build: BattleNetBuild, work: URL) async throws -> Reading {
         guard build.config.config["build-file-db"] == nil else {
-            throw BattleNetError.unsupported("\(product.code) \(build.version.versionsName) is a containerless build")
+            throw BattleNetError.unsupported("\(build.product.code) \(build.version.versionsName) is a containerless build")
         }
         let meta = work.appendingPathComponent("meta")
         try InstallFS.makeDirectory(meta)
@@ -162,40 +198,30 @@ public struct BattleNetInstaller: Sendable {
             try InstallFS.writeAtomically(url, Data(raw))
             return try BLTE.decode(raw, ekey: pair.ekey, ckey: pair.ckey, keys: client.keys)
         }
-        log.info("battlenet", "\(product.code) \(region.rawValue) \(build.version.versionsName): reading the manifests")
-        let install = try InstallManifest(try await manifest("install"))
-        let download = try DownloadManifest(try await manifest("download"))
-        let encoding = try EncodingTable(try await manifest("encoding"))
-        let selection = try BattleNetSelection(build: build, download: download, install: install, encoding: encoding, options: options)
+        log.info("battlenet", "\(build.product.code) \(build.region.rawValue) \(build.version.versionsName): reading the manifests")
+        return Reading(meta: meta, client: client, cdnConfig: cdnConfig, configs: configs, install: try InstallManifest(try await manifest("install")),
+                       download: try DownloadManifest(try await manifest("download")), encoding: try EncodingTable(try await manifest("encoding")))
+    }
 
-        log.info("battlenet", "\(cdnConfig.archives.count) archive indexes")
-        let wanted = selection.wanted
+    /// Where the `wanted` objects are in `archives`, by their indexes (an installed store's
+    /// copies of them in `installed/Data/indices` are read before the CDN is asked).
+    func locate(_ wanted: Set<PackedKey>, _ archives: [TACTHash], meta: URL, build: BattleNetBuild,
+                installed: URL? = nil) async throws -> ArchiveLocations {
         var locations = ArchiveLocations()
-        try await forEachIndex(cdnConfig.archives, patch: false, meta: meta, build: build) { i, index in
+        try await forEachIndex(archives, patch: false, meta: meta, build: build, installed: installed) { i, index in
             locations.add(index, archive: i, wanted: wanted)
         }
-        let patchArchives = (cdnConfig.config["patch-archives"] ?? []).compactMap { TACTHash(hex: $0) }
-        try await forEachIndex(patchArchives, patch: true, meta: meta, build: build) { _, _ in }
-        var others = [TACTHash]()
-        for (name, patch) in [("file-index", false), ("patch-file-index", true)] {
-            guard let key = cdnConfig.config[name]?.first.flatMap({ TACTHash(hex: $0) }) else { continue }
-            try await forEachIndex([key], patch: patch, meta: meta, build: build) { _, _ in }
-            others.append(key)
-        }
-        let plan = try BattleNetInstallPlan(build: build, archives: cdnConfig.archives, selection: selection, locations: locations,
-                                            options: options)
-        let installSize = config["install-size"].flatMap { $0.count >= 2 ? UInt64($0[1]) : nil } ?? 0
-        return Prepared(plan: plan, cdnConfig: cdnConfig, configs: configs, indexes: cdnConfig.archives + patchArchives + others,
-                        installSize: installSize, client: client)
+        return locations
     }
 
     func save(_ meta: URL, _ hash: TACTHash, _ bytes: [UInt8]) throws {
         try InstallFS.writeAtomically(meta.appendingPathComponent(hash.hex), Data(bytes))
     }
 
-    /// Each index, from `meta` when a checked copy is there, else from the CDN (kept in `meta`),
-    /// handed to `body` in list order; at most the client's request limit in flight.
-    func forEachIndex(_ keys: [TACTHash], patch: Bool, meta: URL, build: BattleNetBuild,
+    /// Each index, from `meta` or an installed store's `Data/indices` when a checked copy is
+    /// there, else from the CDN (kept in `meta`), handed to `body` in list order; at most the
+    /// client's request limit in flight.
+    func forEachIndex(_ keys: [TACTHash], patch: Bool, meta: URL, build: BattleNetBuild, installed: URL? = nil,
                       _ body: (Int, ArchiveIndex) throws -> Void) async throws {
         let client = self.client
         try await withThrowingTaskGroup(of: (Int, ArchiveIndex).self) { group in
@@ -208,8 +234,10 @@ public struct BattleNetInstaller: Sendable {
                     running += 1
                     group.addTask {
                         let url = meta.appendingPathComponent(key.hex + ".index")
-                        if let cached = try? [UInt8](Data(contentsOf: url)), let index = try? ArchiveIndex(cached, name: key) {
-                            return (i, index)
+                        for copy in [url] + (installed.map { [$0.appendingPathComponent("Data/indices/\(key.hex).index")] } ?? []) {
+                            if let cached = try? [UInt8](Data(contentsOf: copy)), let index = try? ArchiveIndex(cached, name: key) {
+                                return (i, index)
+                            }
                         }
                         let (index, bytes) = try await client.index(key, patch: patch, from: build.cdn)
                         try InstallFS.writeAtomically(url, Data(bytes))
@@ -331,16 +359,22 @@ public struct BattleNetInstaller: Sendable {
         public var isIntact: Bool { damaged.isEmpty && missing.isEmpty }
     }
 
+    /// Each bucket's newest journal in a store's `Data/data`: its generation and name.
+    static func latestJournals(_ dataDir: URL) throws -> [Int: (generation: UInt32, name: String)] {
+        var latest = [Int: (generation: UInt32, name: String)]()
+        for name in try FileManager.default.contentsOfDirectory(atPath: dataDir.path) where name.hasSuffix(".idx") && name.count == 14 {
+            guard let bucket = Int(name.prefix(2), radix: 16), let gen = UInt32(name.dropFirst(2).prefix(8), radix: 16) else { continue }
+            if gen >= latest[bucket]?.generation ?? 0 { latest[bucket] = (gen, name) }
+        }
+        return latest
+    }
+
     /// Reads the whole install back: every journal entry's local header (both checksums, its
     /// key and size) and object (EKey and every block's hash), that every planned object is in
     /// a journal, and every product folder file against its CKey.
     public static func verify(_ root: URL, plan: BattleNetInstallPlan, concurrency: Int = 8) async throws -> Verification {
         let dataDir = root.appendingPathComponent("Data/data")
-        var latest = [Int: (UInt32, String)]()
-        for name in try FileManager.default.contentsOfDirectory(atPath: dataDir.path) where name.hasSuffix(".idx") && name.count == 14 {
-            guard let bucket = Int(name.prefix(2), radix: 16), let gen = UInt32(name.dropFirst(2).prefix(8), radix: 16) else { continue }
-            if gen >= latest[bucket]?.0 ?? 0 { latest[bucket] = (gen, name) }
-        }
+        let latest = try latestJournals(dataDir)
         var report = Verification()
         var byFile = [Int: [CASC.Location]]()
         var indexed = Set<PackedKey>()
