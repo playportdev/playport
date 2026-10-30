@@ -20,11 +20,11 @@
   owner-approved ADR before any 0127/0132/0134/0143 change.
 - The Risks stop rule (chunk 2 cannot place the pools: stop, PLA-372 fallback is the owner's call) is
   near-triggered; 0.5.0 decouple vs continue is the owner's call.
-- **Ordered queue:** (1) review-fix writer chunk: fixes in 0226/`wine_host.c`, host tests for `pp_sc_vm.h` and
-  `pp_sc_access.h`, wine-pe 0055 `Class:` trailer to `ios-port`, heavy-VA non-SC smoke
-  ([PLA-480](https://linear.app/playportdev/issue/PLA-480)), reported-tail diagnostic
-  ([PLA-482](https://linear.app/playportdev/issue/PLA-482): ownership hole in `pp_sc_access.h`, Oilpan sharing
-  chrome_elf's reported base); (2) retained-extent verdict, then owner decision; (3) remaining chunk-2 gates
+- **Ordered queue:** (1) review-fix writer chunk **done** in `ad295c7` (0225–0227, `wine_host.c`, 0055 `Class:`
+  `ios-port`, [PLA-482](https://linear.app/playportdev/issue/PLA-482) diagnostics, retained-extent §5 diagnostics;
+  [PLA-480](https://linear.app/playportdev/issue/PLA-480) smoke on RDR2 dev defaults, Witcher 3 not installed;
+  [evidence](../evidence/2026-10-29-sc-stock-cef-probe.md#review-fixes)); its host tests for `pp_sc_vm.h` and
+  `pp_sc_access.h` are drafted, not yet integrated; (2) retained-extent verdict, then owner decision; (3) remaining chunk-2 gates
   (allocator/browser, Story cabin, no SC/launcher `NO GAP FITS` or soft grant, 7343 MB ±10 %);
   (4) chunks 3–6, all under PLA-476. Chunk 3 needs owner approval if required; 0.5.0 held.
 - Phone: no session active. Reports: `.work/agent-notes/pla476/reports/`.

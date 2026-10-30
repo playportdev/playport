@@ -274,3 +274,42 @@ No safe replacement slot geometry is established. The next gate is an **owner-ap
 subsequent-helper allocation; all existing slots/views, retention, termination and restart policies remain
 unchanged. No chunks 3–6 were entered. Parent owns compatibility/Linear updates; no games were played during
 this documentation/commit finalization.
+
+## Review fixes
+
+Commit `ad295c7` (PLA-476, [PLA-480](https://linear.app/playportdev/issue/PLA-480),
+[PLA-482](https://linear.app/playportdev/issue/PLA-482)); dev IPA sha256
+`b5ee00eba4b38fad7824d3a9af7e0b58c2a8b9a5e1d8bd0044f59b2d91248ca2` (90 IPA checks); full `pp test` passed.
+
+What changed:
+
+- 0225: `PLAYPORT_SC_LAYOUT` is read once at boot. A layout play whose boot cannot hold every slot is now
+  refused in `virtual_init` (`[sc-layout] … launch refused`, `exit(1)`), not run on the host's moved map.
+- 0226: routing checks `ppsc_ready` first (no `getenv` per allocation). The subject says
+  `SocialClubHelper.exe`: the helper is matched by name, because 0150's exact-build verdict is a thread-local
+  of the child's first thread, cleared once its image is mapped. A grant refuses a slot that overlaps a Wine
+  reserved area (none do on iOS) and otherwise places its view with no-replace `VM_FLAGS_FIXED`, so a native
+  mapping that takes the slot between hold release and view placement makes the grant fail with
+  `STATUS_NO_MEMORY`, untouched. The V8 cage, like Oilpan, is granted only to the helper holding both core
+  pools (every logged layout play asked for it after both). `ppsc_free` requires a current PEB.
+- PLA-482 and retained-extent diagnostics, no new refusals: per-kind limited lines for helper commits in a
+  reported tail, Oilpan commits below its report + 16 GiB, operations aliasing another slot the same helper
+  owns; at owner exit a kept slot view with its owner and committed runs/bytes/highest end. New 0227
+  (`Class: diagnostics`) logs `[proc-end] keep-ref …` naming the parked register that keeps a view.
+- wine-pe 0055 `Class: ios-port`, patch-id unchanged. `wine_host.c`: `SC_LOW_SIZE` in error paths; a retry
+  says the low hold went with an earlier attempt instead of "not held at exec".
+
+Phone, one locked session each, same IPA:
+
+- Hollow Knight (`app-367520`) first-frame+10 passed: first frame +11.33 s, RW alias `0x7000000000`
+  (run `$PLAYPORT_BUILD/ui-runs/20261030T104015`).
+- Heavy-VA smoke: Witcher 3 (`app-292030`, the intended title) is not installed and the phone has 3.4 GB
+  free, so the supervisor chose Red Dead Redemption 2 (`app-1174180`) on dev defaults, layout off.
+  First-frame+60 passed: first frame +85.14 s, the game's 8960 MiB jumbo hold at `0x79d0000000`, RW alias
+  `0x7000000000` from the exec-time low hold, no `[sc-layout]` line, no `NO GAP FITS`, Launcher.exe exit 0,
+  RDR2.exe kept running; the final screenshot shows the RDR2 title menu. The eight `[store-noalias]` lines at
+  `libegl.dll` also occur in the l1 and l4 runs. 18 `[proc-end] keep-ref` lines appeared (0227).
+  Run `$PLAYPORT_BUILD/ui-runs/20261030T104204`.
+
+Not checked: any layout play (`PLAYPORT_SC_LAYOUT=1`), so the fail-closed boot, grant and diagnostic paths
+were compiled and host-tested but did not run on the phone.
