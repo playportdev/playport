@@ -15,7 +15,7 @@
 |---|---|
 | game | WoW retail `wow` 12.1.5.70575, "Version 12.1.5 (70575) (Release x64) Oct 22 2026" on the login screen; `_retail_/Wow.exe` 80,243,408 B, sha256 `14b70997cf6c7971a4fcd533b7f421316b6a3da0c8da3710425a8dd20e356a29`; region us, enUS |
 | install | `wow-install/wow` in the integration worktree's build area (`.work/worktrees/battlenet/.work/` in the main checkout), run in place; nothing copied |
-| Wine | Wine 11.20 (system), a scratch 64-bit prefix under `$PLAYPORT_BUILD/agent-notes/wow509/prefix` (the side worktree `bnet-517`'s build area) |
+| Wine | Wine 11.20 (system), a scratch 64-bit prefix under `$PLAYPORT_BUILD/agent-notes/wow509/prefix` (made in side worktree `bnet-517`'s build area, since moved to the integration worktree `battlenet`'s) |
 | D3D12 / D3D11 | vkd3d-proton 3.0.0 (build `21a49c97`) and DXVK 2.6.2-23-g3cb664e1 (`dxgi`, `d3d11`, `d3d10core`), both from Proton 10.0-4b, in the prefix's `system32`, `WINEDLLOVERRIDES=d3d12,d3d12core,dxgi,d3d11,d3d10core=n` |
 | driver | Mesa 26.2.5 RADV, AMD Radeon RX 9070, Vulkan loader 1.4.363, kernel 7.3.0 |
 | display | an agent-owned headless sway (`WLR_BACKENDS=headless`, its own Wayland and IPC sockets, Xwayland `:1`), 1920x1080; the game on Xwayland; no physical output; stopped after each run. The owner's niri session was not used |
@@ -221,8 +221,8 @@ HOST-DEBUGGING.md's sway-only rule stands for agent runs).
 2. From the main checkout, in a terminal on the niri desktop:
 
    ```sh
-   bash .work/worktrees/bnet-517/.work/agent-notes/wow509/owner-niri.sh          # Direct3D 12
-   bash .work/worktrees/bnet-517/.work/agent-notes/wow509/owner-niri.sh d3d11    # optional, D3D11
+   bash .work/worktrees/battlenet/.work/agent-notes/wow509/owner-niri.sh          # Direct3D 12
+   bash .work/worktrees/battlenet/.work/agent-notes/wow509/owner-niri.sh d3d11    # optional, D3D11
    ```
 
    It runs, with `WAYLAND_DISPLAY` unset and `DISPLAY=:0`:
