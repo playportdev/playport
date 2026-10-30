@@ -54,4 +54,21 @@ final class XboxCryptoTests: XCTestCase, @unchecked Sendable {
             }
         }
     }
+
+    /// Only UTF-8 is read, and a DTD in any form is refused: a UTF-16 document (BOM or
+    /// not) can't slip a DOCTYPE past a byte search, and the parser itself refuses one.
+    func testXMLIsUTF8OnlyAndADTDIsRefused() throws {
+        XCTAssertEqual(try XboxXML.parse(Array("<?xml version=\"1.0\" encoding=\"UTF-8\"?><a>é</a>".utf8)).text, "é")
+        let dtd = "<?xml version=\"1.0\"?><!DOCTYPE a [<!ENTITY e \"x\">]><a>&e;</a>"
+        func utf16(_ s: String, bom: Bool) -> [UInt8] {
+            (bom ? [0xFF, 0xFE] : []) + s.utf16.flatMap { [UInt8($0 & 0xFF), UInt8($0 >> 8)] }
+        }
+        for (what, bytes) in [("UTF-8 DTD", Array(dtd.utf8)), ("UTF-16 with BOM", utf16(dtd, bom: true)),
+                              ("UTF-16 without BOM", utf16(dtd, bom: false)), ("UTF-16 plain", utf16("<a>x</a>", bom: true)),
+                              ("Latin-1 declared", Array("<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?><a>x</a>".utf8)),
+                              ("invalid UTF-8", [0x3C, 0x61, 0x3E, 0xC3, 0x28, 0x3C, 0x2F, 0x61, 0x3E]),
+                              ("DOCTYPE in lower case", Array("<!doctype a><a/>".utf8))] {
+            XCTAssertThrowsError(try XboxXML.parse(bytes), what)
+        }
+    }
 }

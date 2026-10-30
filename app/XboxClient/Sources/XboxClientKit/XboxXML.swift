@@ -31,8 +31,18 @@ final class XboxXML {
     func adding(_ child: XboxXML) { children.append(child); parts.append((nil, child)) }
     func setText(_ value: String) { text = value; parts = [(value, nil)] }
 
+    /// UTF-8 only (no other declared encoding, no UTF-16 with or without a BOM, no invalid
+    /// bytes), so the parser reads the bytes the DTD check reads; and no DTD in any form:
+    /// refused before parsing, and by the parser should any declaration reach it.
     static func parse(_ bytes: [UInt8]) throws -> XboxXML {
-        guard bytes.count <= 1024 * 1024, !String(decoding: bytes, as: UTF8.self).contains("<!DOCTYPE") else { throw invalid() }
+        guard bytes.count <= 1024 * 1024, !bytes.contains(0), let text = String(validating: bytes, as: UTF8.self) else { throw invalid() }
+        let head = text.prefix(256).lowercased()
+        if head.hasPrefix("<?xml"), let end = head.range(of: "?>"),
+           let at = head[..<end.lowerBound].range(of: "encoding") {
+            let declared = head[at.upperBound..<end.lowerBound].drop { " =\"'".contains($0) }.prefix { !" \"'".contains($0) }
+            guard declared == "utf-8" || declared == "utf8" else { throw invalid() }
+        }
+        guard !text.lowercased().contains("<!doctype"), !text.contains("<!ENTITY") else { throw invalid() }
         let delegate = XboxXMLParser()
         let parser = XMLParser(data: Data(bytes))
         parser.shouldResolveExternalEntities = false
@@ -100,4 +110,15 @@ private final class XboxXMLParser: NSObject, XMLParserDelegate {
     func parser(_ parser: XMLParser, didEndElement name: String, namespaceURI: String?, qualifiedName qName: String?) { _ = stack.popLast() }
     func parser(_ parser: XMLParser, foundCharacters text: String) { stack.last?.text += text; stack.last?.parts.append((text, nil)) }
     func parser(_ parser: XMLParser, foundCDATA data: Data) { self.parser(parser, foundCharacters: String(decoding: data, as: UTF8.self)) }
+    // Any DTD declaration the parser meets ends the parse.
+    private func refuse(_ parser: XMLParser) { failed = true; parser.abortParsing() }
+    func parser(_ parser: XMLParser, foundInternalEntityDeclarationWithName name: String, value: String?) { refuse(parser) }
+    func parser(_ parser: XMLParser, foundExternalEntityDeclarationWithName name: String, publicID: String?, systemID: String?) { refuse(parser) }
+    func parser(_ parser: XMLParser, foundElementDeclarationWithName elementName: String, model: String) { refuse(parser) }
+    func parser(_ parser: XMLParser, foundAttributeDeclarationWithName attributeName: String, forElement elementName: String,
+                type: String?, defaultValue: String?) { refuse(parser) }
+    func parser(_ parser: XMLParser, foundNotationDeclarationWithName name: String, publicID: String?, systemID: String?) { refuse(parser) }
+    func parser(_ parser: XMLParser, foundUnparsedEntityDeclarationWithName name: String, publicID: String?, systemID: String?,
+                notationName: String?) { refuse(parser) }
+    func parser(_ parser: XMLParser, resolveExternalEntityName name: String, systemID: String?) -> Data? { refuse(parser); return nil }
 }
