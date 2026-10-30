@@ -1,0 +1,69 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: playportdev <dev@playport.dev>
+Date: Fri, 30 Oct 2026 21:34:50 +0100
+Subject: [PATCH 240/242] ntdll: limit the [thr-prio] lines per process, not
+ per app
+
+madeira-unix 0078 logs each SetThreadPriority and base-priority request
+as [thr-prio], up to 200 lines. The limit is a static in the one ntdll
+every Wine process of the app shares, and in every RDR2 run the launcher
+and its CEF helpers used all 200 before the game started, so what RAGE
+asks for its threads was never seen (PLA-364).
+
+The limit is now 200 lines for each of the first 64 Windows processes:
+a process claims a slot by its pid with compare-and-swap from 0, and with
+the table full nothing more is logged. Each line names the calling
+process (pid=). What is set is unchanged; a release build logs none of
+it (WINEDEBUG=-all).
+
+Linear: PLA-364
+Class: diagnostics
+Evidence: docs/evidence/2026-10-30-rdr2-kk-audio-diagnostics.md
+Offered-upstream: no
+---
+ build/ntdll-unix/thread_ios.c | 27 ++++++++++++++++++++++-----
+ 1 file changed, 22 insertions(+), 5 deletions(-)
+
+diff --git a/build/ntdll-unix/thread_ios.c b/build/ntdll-unix/thread_ios.c
+index 7180991..556acdd 100644
+--- a/build/ntdll-unix/thread_ios.c
++++ b/build/ntdll-unix/thread_ios.c
+@@ -3062,16 +3062,33 @@ NTSTATUS WINAPI NtQueryInformationThread( HANDLE handle, THREADINFOCLASS class,
+  * applies none on iOS; log the first 200 requests (the caller's TID, the
+  * target's, the class and value) so a title's priorities can be read beside
+  * the [xp-qos] census. Measurement only. */
++/* Playport (PLA-364): the 200-line limit is per Windows process, for the
++ * first 64 processes, not for the whole app: the launcher and its CEF helpers
++ * used all 200 before a game started. A process claims a slot by
++ * compare-and-swap from 0; with the table full nothing more is logged. */
++#define IOS_THR_PRIO_PROCESSES 64
++#define IOS_THR_PRIO_LINES 200
+ static void ios_log_thread_priority( HANDLE handle, const char *what, LONG value, unsigned int status )
+ {
+-    static LONG logged;
++    static struct { ULONG pid; LONG logged; } procs[IOS_THR_PRIO_PROCESSES];
+     THREAD_BASIC_INFORMATION tbi;
+-    ULONG target = 0;
+-    if (__atomic_add_fetch( &logged, 1, __ATOMIC_RELAXED ) > 200) return;
++    ULONG target = 0, pid = HandleToULong( NtCurrentTeb()->ClientId.UniqueProcess );
++    int i;
++    for (i = 0; i < IOS_THR_PRIO_PROCESSES; i++)
++    {
++        ULONG seen = __atomic_load_n( &procs[i].pid, __ATOMIC_ACQUIRE ), expected = 0;
++        if (seen == pid) break;
++        if (!seen && (__atomic_compare_exchange_n( &procs[i].pid, &expected, pid, FALSE,
++                                                   __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE ) || expected == pid))
++            break;
++    }
++    if (i == IOS_THR_PRIO_PROCESSES) return;
++    if (__atomic_add_fetch( &procs[i].logged, 1, __ATOMIC_RELAXED ) > IOS_THR_PRIO_LINES) return;
+     if (!NtQueryInformationThread( handle, ThreadBasicInformation, &tbi, sizeof(tbi), NULL ))
+         target = HandleToULong( tbi.ClientId.UniqueThread );
+-    ERR( "[thr-prio] tid=%04x target=%04x %s=%d status=%x\n",
+-         (unsigned)(ULONG_PTR)NtCurrentTeb()->ClientId.UniqueThread, (unsigned)target, what, (int)value, status );
++    ERR( "[thr-prio] tid=%04x target=%04x %s=%d status=%x pid=%04x\n",
++         (unsigned)(ULONG_PTR)NtCurrentTeb()->ClientId.UniqueThread, (unsigned)target, what, (int)value, status,
++         (unsigned)pid );
+ }
+ 
+ /******************************************************************************

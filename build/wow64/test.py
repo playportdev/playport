@@ -144,9 +144,6 @@ def run_audio_tests(scratch):
         (root / "native_other_functions.h").write_text(
             'static const char IOS_DEVICE_NAME[] = "ios-null";\n'
             "static uint64_t elapsed_frames(const struct ios_stream *s) { (void)s; return 0; }\n"
-            "static uint64_t mach_absolute_time(void) { return 0; }\n"
-            "static uint64_t mach_to_ns(uint64_t t) { return t; }\n"
-            "static unsigned long long ios_current_tid(void) { return 0; }\n"
             "static NTSTATUS ios_process_attach(void *p) { (void)p; return 0; }\n"
             "static NTSTATUS ios_start(void *p) { ((struct stream_handle_params *)p)->result = S_OK; return 0; }\n"
             "static NTSTATUS ios_stop(void *p) { ((struct stream_handle_params *)p)->result = S_OK; return 0; }\n"

@@ -65,6 +65,16 @@ static void ios_dev_stop_if_idle(void) {}
 static int ios_stream_is_live(const struct ios_stream *s) { (void)s; return 1; }
 static NTSTATUS NtWaitForSingleObject(HANDLE h, BOOL a, const void *t) { (void)h; (void)a; (void)t; return 0; }
 static NTSTATUS NtClose(HANDLE h) { (void)h; return 0; }
+/* The clock, the thread ids and madeira-unix 0241's diagnostics switch (on,
+ * so its getbuf-thread and ml1065 counters run here too) */
+static uint64_t mach_absolute_time(void) { return 0; }
+static uint64_t mach_to_ns(uint64_t t) { return t; }
+static unsigned long long ios_current_tid(void) { return 0; }
+static int ios_audio_diagnostics(void) { return 1; }
+static void ios_current_win_thread(unsigned int *pid, unsigned int *tid, int *priority, int *base_priority)
+{ *pid = 0x20; *tid = 0x24; *priority = 8; *base_priority = 0; }
+#define pthread_mach_thread_np(thread) ((void)(thread), 0u)
+#define qos_class_self() 0u
 #include "native_functions.h"
 
 /* Deliberately let the native getter return a foreign pointer to test the

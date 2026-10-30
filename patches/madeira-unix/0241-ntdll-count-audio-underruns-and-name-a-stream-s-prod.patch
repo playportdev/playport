@@ -1,0 +1,203 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: playportdev <dev@playport.dev>
+Date: Fri, 30 Oct 2026 21:35:09 +0100
+Subject: [PATCH 241/242] ntdll: count audio underruns and name a stream's
+ producer thread
+
+In RDR2's cabin the ml1065 line showed slot 1 delivering 40-50 % of real
+time, but the driver counted no underrun, did not say which thread
+produced the stream, and did not time its ReleaseBuffer calls, so the
+starvation of the producer was inferred, not measured (PLA-364).
+
+ios_mix_stream now counts, per stream while it is started, its render
+callbacks, those that found fewer frames than they needed, and the
+stream frames missing. Unless MADEIRA_NO_DIAGNOSTICS is set (the host
+app's release build):
+
+- the ml1065 line adds the stream, the window's length, the frames
+  written and their share of real time, the callbacks, short callbacks
+  and missing frames in the window, and the longest gap between two
+  ReleaseBuffers with frames;
+- the first GetBuffer of each stream logs a getbuf-thread line: the
+  calling Windows process and thread, its pthread and Mach port (its
+  [xp-t] and [xp-qos] rows), its Windows priority and base priority, and
+  its QoS class. thread_ios.c's ios_current_win_thread reads the ids.
+
+With MADEIRA_NO_DIAGNOSTICS the ml1065 line is as before and the
+getbuf-thread line is not printed. What is mixed, refused or reported to
+the game is unchanged: the counters are relaxed atomic adds in the
+callback, which takes no lock and logs nothing.
+
+Linear: PLA-364
+Class: diagnostics
+Evidence: docs/evidence/2026-10-30-rdr2-kk-audio-diagnostics.md
+Offered-upstream: no
+---
+ build/ntdll-unix/audio_null_ios.c | 78 +++++++++++++++++++++++++++++--
+ build/ntdll-unix/thread_ios.c     | 17 +++++++
+ 2 files changed, 91 insertions(+), 4 deletions(-)
+
+diff --git a/build/ntdll-unix/audio_null_ios.c b/build/ntdll-unix/audio_null_ios.c
+index b085eaa..e935278 100644
+--- a/build/ntdll-unix/audio_null_ios.c
++++ b/build/ntdll-unix/audio_null_ios.c
+@@ -33,6 +33,7 @@
+ #include <stdlib.h>
+ #include <string.h>
+ #include <pthread.h>
++#include <pthread/qos.h>
+ #include <mach/mach_time.h>
+ #include <unistd.h>
+ #include <time.h>
+@@ -305,6 +306,12 @@ struct ios_stream {
+     BYTE *ring;
+     _Atomic uint64_t write_pos;  /* frames produced by the game (monotonic) */
+     _Atomic uint64_t play_pos;   /* frames consumed by the RT callback */
++    /* Playport (PLA-364): what the RT callback lacked while the stream was
++     * started: callbacks, those that found fewer frames than they needed,
++     * and the stream frames missing. Reported on the ml1065 line. */
++    _Atomic uint64_t mix_callbacks, short_callbacks, underrun_frames;
++    int getbuf_logged;           /* the first GetBuffer caller is logged */
++    uint64_t last_release_mach;  /* the previous ReleaseBuffer with frames */
+ };
+ 
+ #include "audio_wow64_buffer.h"
+@@ -502,7 +509,12 @@ static void ios_mix_stream(struct ios_stream *s, float *out, UInt32 nframes,
+     /* frames of THIS stream that cover nframes of device time */
+     if (s->sample_rate == dev_rate) need = nframes;
+     else need = ((uint64_t)nframes * s->sample_rate + dev_rate - 1) / dev_rate;
+-    if (avail < need) need = avail;
++    atomic_fetch_add_explicit(&s->mix_callbacks, 1, memory_order_relaxed);
++    if (avail < need) {
++        atomic_fetch_add_explicit(&s->short_callbacks, 1, memory_order_relaxed);
++        atomic_fetch_add_explicit(&s->underrun_frames, need - avail, memory_order_relaxed);
++        need = avail;
++    }
+ 
+     for (f = 0; f < nframes; f++)
+     {
+@@ -797,6 +809,18 @@ static int ios_stream_is_live(const struct ios_stream *s)
+     return s->mixable && g_dev.au != NULL;
+ }
+ 
++/* Playport (PLA-364): the measurement lines below are off when
++ * MADEIRA_NO_DIAGNOSTICS is set (the host app's release build). */
++static int ios_audio_diagnostics(void)
++{
++    static int state = -1;
++    if (state < 0) state = getenv("MADEIRA_NO_DIAGNOSTICS") == NULL;
++    return state;
++}
++
++/* thread_ios.c: the calling thread's Windows ids and priorities */
++extern void ios_current_win_thread(unsigned int *pid, unsigned int *tid, int *priority, int *base_priority);
++
+ /* ---------------------------------------------------------------- */
+ 
+ static NTSTATUS ios_process_attach(void *args) {
+@@ -1057,6 +1081,20 @@ static NTSTATUS ios_get_render_buffer(void *args) {
+     struct get_render_buffer_params *p = args;
+     struct ios_stream *s = stream_from_handle(p->stream);
+     if (!s) { if (p->data) *p->data = NULL; p->result = AUDCLNT_E_NOT_INITIALIZED; return STATUS_SUCCESS; }
++    /* Playport (PLA-364): which thread produces this stream, so its [xp-t]
++     * row (Windows tid) and its [xp-qos] row can be read. Once per stream. */
++    if (!s->getbuf_logged && ios_audio_diagnostics()) {
++        unsigned int pid = 0, wtid = 0;
++        int prio = 0, base = 0, slot = -1, si;
++        s->getbuf_logged = 1;
++        ios_current_win_thread(&pid, &wtid, &prio, &base);
++        for (si = 0; si < IOS_MAX_STREAMS; si++)
++            if (atomic_load_explicit(&g_mix[si], memory_order_relaxed) == s) { slot = si; break; }
++        fprintf(stderr, "[ios_audio] getbuf-thread stream=%p slot=%d pid=%04x win_tid=%04x thread=%llu port=%#x "
++                "priority=%d base=%d qos=%#x frames=%u rate=%u ch=%u\n",
++                (void *)s, slot, pid, wtid, ios_current_tid(), (unsigned)pthread_mach_thread_np(pthread_self()),
++                prio, base, (unsigned)qos_class_self(), p->frames, s->sample_rate, s->channels);
++    }
+     if (ios_stream_is_live(s)) {
+         uint64_t padding = atomic_load(&s->write_pos) - atomic_load(&s->play_pos);
+         if (p->frames + padding > s->buffer_frames) {
+@@ -1106,10 +1144,24 @@ static NTSTATUS ios_release_render_buffer(void *args) {
+          * the source data (mean level high and flat, peaks saturating) or made
+          * later (clean source, noisy output). One line per stream per ~10 s. */
+         {
+-            static struct { uint64_t frames, clip; double sum_abs; float peak; time_t last; } st[IOS_MAX_STREAMS];
++            static struct { uint64_t frames, clip; double sum_abs; float peak; time_t last;
++                            /* Playport (PLA-364): this window's frames written, its start, its longest
++                             * gap between two ReleaseBuffers, and the underrun counts at its start */
++                            const void *owner; uint64_t written, start_mach, max_gap_mach, cbs, shorts, under; } st[IOS_MAX_STREAMS];
+             int slot = -1, si;
++            uint64_t now_mach = mach_absolute_time();
+             for (si = 0; si < IOS_MAX_STREAMS; si++) if (atomic_load_explicit(&g_mix[si], memory_order_relaxed) == s) { slot = si; break; }
+             if (slot >= 0 && slot < IOS_MAX_STREAMS && s->channels) {
++                if (st[slot].owner != s) {   /* a new stream in this slot: its own baseline */
++                    st[slot].owner = s; st[slot].written = 0; st[slot].start_mach = now_mach; st[slot].max_gap_mach = 0;
++                    st[slot].cbs = atomic_load_explicit(&s->mix_callbacks, memory_order_relaxed);
++                    st[slot].shorts = atomic_load_explicit(&s->short_callbacks, memory_order_relaxed);
++                    st[slot].under = atomic_load_explicit(&s->underrun_frames, memory_order_relaxed);
++                }
++                if (s->last_release_mach && now_mach - s->last_release_mach > st[slot].max_gap_mach)
++                    st[slot].max_gap_mach = now_mach - s->last_release_mach;
++                s->last_release_mach = now_mach;
++                st[slot].written += n;
+                 UINT32 f2, c2, step = n > 4096 ? n / 4096 : 1;
+                 for (f2 = 0; f2 < n; f2 += step) {
+                     const BYTE *fr = s->render_scratch + (size_t)f2 * fb;
+@@ -1129,10 +1181,28 @@ static NTSTATUS ios_release_render_buffer(void *args) {
+                             w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7], w[8], w[9], w[10], w[11]);
+                 }
+                 if (time(NULL) - st[slot].last >= 10 && st[slot].frames) {
+-                    fprintf(stderr, "[ios_audio] ml1065 slot=%d source: %llu samples, mean|x|=%.4f peak=%.3f clipped=%llu (rate %u ch %u float=%d bits=%d)\n",
++                    /* Playport (PLA-364): with diagnostics, the window's length, the frames
++                     * written against real time, the RT callbacks and those short of frames,
++                     * the stream frames they lacked, and the longest ReleaseBuffer gap */
++                    char under[256] = "";
++                    uint64_t cbs = atomic_load_explicit(&s->mix_callbacks, memory_order_relaxed);
++                    uint64_t shorts = atomic_load_explicit(&s->short_callbacks, memory_order_relaxed);
++                    uint64_t missing = atomic_load_explicit(&s->underrun_frames, memory_order_relaxed);
++                    if (ios_audio_diagnostics()) {
++                        double window_s = mach_to_ns(now_mach - st[slot].start_mach) / 1e9;
++                        snprintf(under, sizeof(under), " | stream=%p window=%.1fs written=%llu delivery=%.0f%% callbacks=%llu "
++                                 "short_callbacks=%llu underrun_frames=%llu max_release_gap_ms=%.0f",
++                                 (void *)s, window_s, (unsigned long long)st[slot].written,
++                                 window_s >= 1.0 && s->sample_rate ? 100.0 * st[slot].written / (window_s * s->sample_rate) : 0.0,
++                                 (unsigned long long)(cbs - st[slot].cbs), (unsigned long long)(shorts - st[slot].shorts),
++                                 (unsigned long long)(missing - st[slot].under), mach_to_ns(st[slot].max_gap_mach) / 1e6);
++                    }
++                    fprintf(stderr, "[ios_audio] ml1065 slot=%d source: %llu samples, mean|x|=%.4f peak=%.3f clipped=%llu (rate %u ch %u float=%d bits=%d)%s\n",
+                             slot, (unsigned long long)st[slot].frames, st[slot].sum_abs / (double)st[slot].frames, st[slot].peak,
+-                            (unsigned long long)st[slot].clip, s->sample_rate, s->channels, s->is_float, s->sample_bits);
++                            (unsigned long long)st[slot].clip, s->sample_rate, s->channels, s->is_float, s->sample_bits, under);
+                     st[slot].frames = 0; st[slot].sum_abs = 0; st[slot].peak = 0; st[slot].clip = 0; st[slot].last = time(NULL);
++                    st[slot].written = 0; st[slot].start_mach = now_mach; st[slot].max_gap_mach = 0;
++                    st[slot].cbs = cbs; st[slot].shorts = shorts; st[slot].under = missing;
+                 }
+             }
+         }
+diff --git a/build/ntdll-unix/thread_ios.c b/build/ntdll-unix/thread_ios.c
+index 556acdd..30968c5 100644
+--- a/build/ntdll-unix/thread_ios.c
++++ b/build/ntdll-unix/thread_ios.c
+@@ -3062,6 +3062,23 @@ NTSTATUS WINAPI NtQueryInformationThread( HANDLE handle, THREADINFOCLASS class,
+  * applies none on iOS; log the first 200 requests (the caller's TID, the
+  * target's, the class and value) so a title's priorities can be read beside
+  * the [xp-qos] census. Measurement only. */
++/* Playport (PLA-364): the calling thread's Windows process and thread ids
++ * and its current and base priority, for audio_null_ios.c's getbuf-thread
++ * line, which includes no Wine header */
++void ios_current_win_thread( unsigned int *pid, unsigned int *tid, int *priority, int *base_priority );
++void ios_current_win_thread( unsigned int *pid, unsigned int *tid, int *priority, int *base_priority )
++{
++    THREAD_BASIC_INFORMATION tbi;
++    *pid = HandleToULong( NtCurrentTeb()->ClientId.UniqueProcess );
++    *tid = HandleToULong( NtCurrentTeb()->ClientId.UniqueThread );
++    *priority = *base_priority = 0;
++    if (!NtQueryInformationThread( GetCurrentThread(), ThreadBasicInformation, &tbi, sizeof(tbi), NULL ))
++    {
++        *priority = tbi.Priority;
++        *base_priority = tbi.BasePriority;
++    }
++}
++
+ /* Playport (PLA-364): the 200-line limit is per Windows process, for the
+  * first 64 processes, not for the whole app: the launcher and its CEF helpers
+  * used all 200 before a game started. A process claims a slot by
