@@ -242,8 +242,16 @@ final class BattleNetStore: ObservableObject, DownloadDriver {
 
     func run(_ job: DownloadJob, progress: @escaping @Sendable (InstallEngine.Progress) -> Void) async throws -> UInt64? {
         guard let p = BattleNet.product(job.key) else { throw ClientError.notFound("\(job.key) is not a Battle.net product") }
-        // A language change (PLA-520) or an update to the region's current build (PLA-521).
-        if job.kind == .update { return try await BattleNetInstalled.shared.run(p, job, client: client, progress: progress) }
+        // A language change (PLA-520) or an update to the region's current build (PLA-521). One that
+        // stops (fails, pauses, is cancelled) drops the Play waiting for it.
+        if job.kind == .update {
+            do {
+                return try await BattleNetInstalled.shared.run(p, job, client: client, progress: progress)
+            } catch {
+                BattleNetInstalled.shared.stopped(job.key)
+                throw error
+            }
+        }
         guard job.kind == .install else { throw ClientError.unsupported("Battle.net \(job.kind.rawValue) is not available yet") }
         let choice = BattleNet.jobChoice(job.branch) ?? (region(p), locale(p))
         let layout = LibraryModel.paths.layout
@@ -251,29 +259,40 @@ final class BattleNetStore: ObservableObject, DownloadDriver {
         var installer = BattleNetInstaller(client: client, log: log)
         installer.engine.progressInterval = 0.5
         let prepared = try await installer.prepare(p, choice.region, options: BattleNetInstallOptions(locale: choice.locale), work: work)
+        // The plan holds the ARM64 client (prepare refuses one without it), before any download.
+        let pc = prepared.plan.build.productConfig
+        guard let exe = pc.arm64Executable, prepared.plan.arm64Client != nil else {
+            throw BattleNetError.unsupported("\(p.code) has no ARM64 client")
+        }
         try InstallFS.makeDirectory(layout.gamesRoot)
         let folder = BattleNet.folder(p, in: layout.gamesRoot)
+        let root = layout.gamesRoot.appendingPathComponent(folder, isDirectory: true)
         log.info("battlenet", "\(p.code) \(choice.region.rawValue) \(choice.locale) \(prepared.plan.build.version.versionsName): "
                  + "\(prepared.plan.content.totalBytes) bytes into C:\\Games\\\(folder)")
-        let r = try await installer.install(prepared, into: layout.gamesRoot.appendingPathComponent(folder, isDirectory: true),
-                                            work: work, progress: progress)
-        let pc = prepared.plan.build.productConfig
-        guard let exe = pc.arm64Executable else { throw BattleNetError.unsupported("\(p.code) has no ARM64 client") }
-        try layout.saveReceipt(BattleNet.receipt(p, folder: folder, version: prepared.plan.build.version.versionsName,
-                                                 productFolder: pc.folder, arm64Executable: exe,
-                                                 files: prepared.plan.content.files.count, bytes: prepared.plan.content.totalBytes,
-                                                 at: Date()))
+        let r = try await installer.install(prepared, into: root, work: work, progress: progress)
+        let measured = BattleNet.measure(root)
+        do {
+            try layout.saveReceipt(BattleNet.receipt(p, folder: folder, version: prepared.plan.build.version.versionsName,
+                                                     productFolder: pc.folder, arm64Executable: exe,
+                                                     files: measured.files, bytes: measured.bytes, at: Date()))
+        } catch {
+            // No receipt, no title: the folder would be left in C:\Games with nothing to play or remove it.
+            log.warn("battlenet", "\(p.code): the receipt was not saved (\(error)); C:\\Games\\\(folder) removed")
+            try? FileManager.default.removeItem(at: root)
+            throw error
+        }
         log.info("battlenet", String(format: "\(p.code): installed in C:\\Games\\\(folder), \(r.engine.downloadedBytes) bytes fetched in %.0f s",
                                      r.seconds))
         return prepared.plan.content.totalBytes
     }
 
     func finished(_ job: DownloadJob) {
-        if job.kind == .update, let p = BattleNet.product(job.key) { BattleNetInstalled.shared.finished(p) }
+        if job.kind == .update { BattleNetInstalled.shared.finished(job) }
     }
 
     func discard(_ key: StoreGameKey) {
         guard let p = BattleNet.product(key) else { return }
+        BattleNetInstalled.shared.stopped(key)
         let work = BattleNet.workArea(p, layout: LibraryModel.paths.layout)
         Task.detached(priority: .utility) { try? FileManager.default.removeItem(at: work) }
     }

@@ -40,9 +40,9 @@ final class BattleNetInstalled: ObservableObject {
     }
 
     @Published private(set) var updates: [BattleNetProduct: UpdateState] = [:]
-    /// Plays to go on with once their update finished in Downloads (this process only: a Play
-    /// is not started by an update the player resumes later).
-    private var playAfterUpdate: [BattleNetProduct: String] = [:]
+    /// Plays to go on with once their update finished well in Downloads (this process only: a
+    /// Play is not started by an update the player resumes later, nor by a language change).
+    private var playsAfterUpdate = BattleNet.PlaysAfterUpdate()
 
     private let log = SteamUILog.logger
 
@@ -158,8 +158,7 @@ final class BattleNetInstalled: ObservableObject {
             let prepared = try await installer.prepareUpdate(p, root: root, work: work)
             let r = try await installer.update(prepared, root: root, work: work, progress: progress)
             let version = prepared.plan.build.version.versionsName
-            try layout.saveReceipt(BattleNet.receipt(before, adding: prepared.plan.content.files.count, bytes: prepared.plan.content.totalBytes,
-                                                     version: version))
+            try layout.saveReceipt(BattleNet.receipt(before, measured: BattleNet.measure(root), version: version))
             updates[p] = .current(version)
             log.info("battlenet", "\(p.code): updated \(before.version ?? "?") → \(version) in C:\\Games\\\(before.installDir), "
                      + "\(prepared.plan.objects) objects and \(prepared.plan.files.count) files, \(r.engine.downloadedBytes) bytes fetched "
@@ -168,7 +167,7 @@ final class BattleNetInstalled: ObservableObject {
         }
         let prepared = try await installer.prepareLocaleChange(p, root: root, to: choice.locale, work: work)
         let r = try await installer.changeLocale(prepared, root: root, work: work, progress: progress)
-        try layout.saveReceipt(BattleNet.receipt(before, adding: prepared.plan.content.files.count, bytes: prepared.plan.content.totalBytes))
+        try layout.saveReceipt(BattleNet.receipt(before, measured: BattleNet.measure(root)))
         if let c = BattleNet.installedChoice(p, folder: root) { current[p] = Choice(region: c.region, locale: c.locale) }
         log.info("battlenet", "\(p.code): language \(choice.locale) in C:\\Games\\\(before.installDir), "
                  + "\(prepared.plan.objects) objects, \(r.engine.downloadedBytes) bytes fetched in \(Int(r.seconds)) s")
@@ -179,7 +178,8 @@ final class BattleNetInstalled: ObservableObject {
 
     /// Asks the version endpoint of the install's region whether its build is current; when not,
     /// plans the update (its manifests stay in the work area for the Downloads job) for its size.
-    /// Any failure is `unreachable`, worded for the player: Play reports it and goes on.
+    /// A failure is `unreachable`, worded by its kind for the player (no answer, a refusal or a
+    /// 429, damaged data, BattleNet.reason): Play reports it and goes on.
     func checkUpdate(_ p: BattleNetProduct) async -> BattleNetPlay.Update {
         guard let root = root(p) else { return .unreachable("\(p.name) is not installed.") }
         updates[p] = .checking
@@ -216,16 +216,34 @@ final class BattleNetInstalled: ObservableObject {
             return why
         }
         errors[p] = nil
-        if let thenPlay { playAfterUpdate[p] = thenPlay }
+        if let thenPlay { playsAfterUpdate.queued(p, thenPlay: thenPlay) }
         log.info("battlenet", "\(p.code): update to \(to) queued" + (thenPlay.map { ", then Play \($0)" } ?? ""))
         downloads.enqueue(BattleNet.updateJob(p, bytes: bytes))
         return nil
     }
 
-    /// After a Battle.net update job finished well: the Play that asked for it goes on.
-    func finished(_ p: BattleNetProduct) {
-        guard let id = playAfterUpdate.removeValue(forKey: p) else { return }
-        log.info("battlenet", "\(p.code): updated; Play \(id) goes on")
+    /// After a Battle.net update job finished well: the Play that asked for it goes on (never
+    /// after a language change).
+    func finished(_ job: DownloadJob) {
+        guard let id = playsAfterUpdate.finished(job) else { return }
+        log.info("battlenet", "\(job.key.id): updated; Play \(id) goes on")
         LibraryModel.shared.playAfterUpdate(id)
+    }
+
+    /// A Battle.net job failed, paused or was cancelled: a Play waiting for it does not go on.
+    func stopped(_ key: StoreGameKey) {
+        playsAfterUpdate.stopped(key)
+    }
+
+    /// Before Play: the game's `Config.wtf` gets the install's locale and region where it names
+    /// none, and Direct3D 12 (BattleNetClientKit's WoWConfig). A failure is logged and Play goes
+    /// on: WoW then asks for its language and region itself.
+    func prepareForPlay(_ p: BattleNetProduct) {
+        guard let root = root(p) else { return }
+        do {
+            try WoWConfig.prepareForPlay(p, root: root)
+        } catch {
+            log.warn("battlenet", "\(p.code): Config.wtf not prepared: \(error)")
+        }
     }
 }

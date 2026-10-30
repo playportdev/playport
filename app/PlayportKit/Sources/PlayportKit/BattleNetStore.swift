@@ -99,14 +99,52 @@ public enum BattleNet {
         job.key.store == .battlenet && isLanguageChange(job) ? "Changing language" : nil
     }
 
-    /// The receipt after a language change or an update (to `version`) added `files` files of
-    /// `bytes` bytes.
-    public static func receipt(_ r: StoreReceipt, adding files: Int, bytes: UInt64, version: String? = nil) -> StoreReceipt {
+    /// What the install folder holds: its files and their bytes (every file, as the phone's
+    /// storage counts them).
+    public static func measure(_ folder: URL) -> (files: Int, bytes: UInt64) {
+        guard let e = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey]) else {
+            return (0, 0)
+        }
+        var files = 0, bytes: UInt64 = 0
+        for case let url as URL in e {
+            guard let v = try? url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey]), v.isRegularFile == true else { continue }
+            files += 1
+            bytes += UInt64(v.fileSize ?? 0)
+        }
+        return (files, bytes)
+    }
+
+    /// The receipt after a language change or an update (to `version`): the folder's files and
+    /// bytes as `measure` found them, since an update replaces files as well as adding them.
+    public static func receipt(_ r: StoreReceipt, measured: (files: Int, bytes: UInt64), version: String? = nil) -> StoreReceipt {
         var r = r
-        r.files += files
-        r.bytes += bytes
+        r.files = measured.files
+        r.bytes = measured.bytes
         if let version { r.version = version }
         return r
+    }
+
+    /// The Plays waiting for their product's update (PLA-521), in this process only: one goes on
+    /// once that update finished well, and is dropped when it stops any other way.
+    public struct PlaysAfterUpdate: Sendable {
+        private var waiting: [BattleNetProduct: String] = [:]
+
+        public init() {}
+
+        /// The update of `product` is queued; `id` (a title ID) plays once it finished.
+        public mutating func queued(_ product: BattleNetProduct, thenPlay id: String) { waiting[product] = id }
+
+        /// A Battle.net job finished well: the Play to go on with, when the job was its product's
+        /// update (a language change starts none, and drops any).
+        public mutating func finished(_ job: DownloadJob) -> String? {
+            guard let p = BattleNet.product(job.key), let id = waiting.removeValue(forKey: p) else { return nil }
+            return isLanguageChange(job) ? nil : id
+        }
+
+        /// The product's job failed, paused or was cancelled: its Play does not go on.
+        public mutating func stopped(_ key: StoreGameKey) {
+            if let p = BattleNet.product(key) { waiting[p] = nil }
+        }
     }
 
     // MARK: space
@@ -152,6 +190,7 @@ public enum BattleNet {
         case let .refused(status, _): return "Blizzard's servers refused the download (HTTP \(status)). Try again later."
         case .damaged: return "Blizzard's servers sent damaged data. Try again later."
         case .missingKey, .unsupported: return "Playport can't read this build yet."
+        case let .outdated(installed, current): return "The game is on \(installed) and its region on \(current): update it first, then try again."
         }
     }
 

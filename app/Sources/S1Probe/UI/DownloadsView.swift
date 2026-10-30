@@ -210,8 +210,7 @@ private struct FirstJobCard: View {
     /// `Downloading · 3.4 of 5.4 GB`, `Paused · Steam can't be reached.`
     private var line: String {
         if case let .paused(reason) = job.phase { return ["Paused", reason].compactMap { $0 }.joined(separator: " · ") }
-        let kindVerb = job.kind == .repair ? "Repairing" : job.kind == .update ? "Updating" : "Downloading"
-        let what = job.phase == .downloading ? BattleNet.jobVerb(job.record) ?? kindVerb : job.status
+        let what = job.phase == .downloading ? job.verb : job.status
         if let p = job.progress, job.phase == .downloading {
             return "\(what) · \(ByteCount.format(p.bytesDone)) of \(ByteCount.format(p.bytesTotal))"
         }

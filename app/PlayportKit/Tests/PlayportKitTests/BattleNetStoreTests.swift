@@ -184,7 +184,7 @@ final class BattleNetStoreTests: XCTestCase {
 
     /// PLA-520: an installed product's region and language are its `.build.info`'s; a language
     /// change is an update job in the installed region and the new locale, and its receipt
-    /// counts the files it added.
+    /// counts what the install folder holds afterwards.
     func testAnInstalledProductsRegionAndLanguageAndALanguageChange() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("bnet-\(UUID().uuidString)")
         addTeardownBlock { try? FileManager.default.removeItem(at: folder) }
@@ -212,16 +212,25 @@ final class BattleNetStoreTests: XCTestCase {
         let at = Date(timeIntervalSince1970: 1_790_000_000)
         let before = BattleNet.receipt(.wowClassicEra, folder: "World of Warcraft Classic Era", version: "1.15.9.70576",
                                        productFolder: "_classic_era_", arm64Executable: "WowClassic-arm64.exe", files: 12, bytes: 4_959_406_050, at: at)
-        let after = BattleNet.receipt(before, adding: 2, bytes: 290_000_000)
-        XCTAssertEqual(after.files, 14)
-        XCTAssertEqual(after.bytes, 5_249_406_050)
+        // The folder holds .build.info and 300 bytes in two more files: the receipt says so,
+        // whatever it said before.
+        try FileManager.default.createDirectory(at: folder.appendingPathComponent("Data/data"), withIntermediateDirectories: true)
+        try Data(count: 100).write(to: folder.appendingPathComponent("Data/data/data.000"))
+        try Data(count: 200).write(to: folder.appendingPathComponent("Data/data/data.001"))
+        let measured = BattleNet.measure(folder)
+        XCTAssertEqual(measured.files, 3)
+        XCTAssertEqual(measured.bytes, 300 + UInt64(info.utf8.count))
+        let after = BattleNet.receipt(before, measured: measured)
+        XCTAssertEqual(after.files, 3)
+        XCTAssertEqual(after.bytes, measured.bytes)
         XCTAssertEqual(after.version, before.version)
         XCTAssertEqual(after.executable, before.executable)
         XCTAssertEqual(after.installedAt, at)
     }
 
     /// PLA-521: an update is an update job with no locale, which Downloads shows as Updating, apart
-    /// from a language change; its receipt names the new version and counts the files it added.
+    /// from a language change; its receipt names the new version and the folder's size, not the
+    /// old size plus what the update wrote (it replaces files too).
     func testAnUpdateJobIsShownApartFromALanguageChange() {
         let update = BattleNet.updateJob(.wow, bytes: 300_000_000)
         XCTAssertEqual(update.kind, .update)
@@ -233,11 +242,32 @@ final class BattleNetStoreTests: XCTestCase {
 
         let before = BattleNet.receipt(.wow, folder: "World of Warcraft", version: "12.0.1.1", productFolder: "_retail_",
                                        arm64Executable: "Wow-ARM64.exe", files: 12, bytes: 1000, at: Date(timeIntervalSince1970: 1_790_000_000))
-        let after = BattleNet.receipt(before, adding: 3, bytes: 200, version: "12.0.1.2")
+        let after = BattleNet.receipt(before, measured: (files: 10, bytes: 900), version: "12.0.1.2")
         XCTAssertEqual(after.version, "12.0.1.2")
-        XCTAssertEqual(after.files, 15)
-        XCTAssertEqual(after.bytes, 1200)
+        XCTAssertEqual(after.files, 10)
+        XCTAssertEqual(after.bytes, 900)
         XCTAssertEqual(after.executable, before.executable)
+    }
+
+    /// PLA-521: a Play waiting for its product's update goes on only after that update finished
+    /// well; one that failed, was paused or was cancelled drops it, and a language change of the
+    /// product never starts it.
+    func testAPlayWaitsForItsUpdateOnlyUntilTheUpdateStops() {
+        var plays = BattleNet.PlaysAfterUpdate()
+        let update = BattleNet.updateJob(.wow, bytes: 1)
+        plays.queued(.wow, thenPlay: "bnet-wow")
+        XCTAssertNil(plays.finished(BattleNet.languageJob(.wow, region: .eu, locale: "deDE")), "a language change starts no Play")
+        XCTAssertNil(plays.finished(update), "the language change dropped it")
+
+        plays.queued(.wow, thenPlay: "bnet-wow")
+        plays.stopped(update.key)
+        XCTAssertNil(plays.finished(update), "a failed or cancelled update drops its Play")
+
+        plays.queued(.wow, thenPlay: "bnet-wow")
+        plays.queued(.wowClassic, thenPlay: "bnet-wow_classic")
+        XCTAssertEqual(plays.finished(update), "bnet-wow")
+        XCTAssertNil(plays.finished(update), "once")
+        XCTAssertEqual(plays.finished(BattleNet.updateJob(.wowClassic)), "bnet-wow_classic")
     }
 
     func testBlizzardsCDNUnreachableOrRefusingIsSaidPlainly() {
@@ -251,6 +281,8 @@ final class BattleNetStoreTests: XCTestCase {
                        "Blizzard's servers sent damaged data. Try again later.")
         XCTAssertEqual(BattleNet.reason(BattleNetError.missingKey("FA505078126ACB3E")),
                        "Playport can't read this build yet.")
+        XCTAssertEqual(BattleNet.reason(BattleNetError.outdated(installed: "12.0.1.1", current: "12.0.1.2")),
+                       "The game is on 12.0.1.1 and its region on 12.0.1.2: update it first, then try again.")
         XCTAssertNil(BattleNet.reason(ClientError.insufficientSpace(needed: 1, available: 0)), "not Blizzard's: the store-neutral wording")
     }
 }
