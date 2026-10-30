@@ -238,6 +238,28 @@
       ]
     },
     {
+      "name": "xgameruntime (Xbox GDK runtime)",
+      "covers": [
+        "P11-xgameruntime"
+      ],
+      "licence": "LGPL-2.1-or-later; its libHttpClient-derived threading code, the Weather files and AsyncIdentity.h MIT; libxml2 (from Wine's tree) MIT, with list.c and dict.c under their own ISC-style notices and timsort.h MIT",
+      "include": [
+        "xgameruntime-*",
+        "wine-libs-xml2-COPYING",
+        "LGPL-2.1.txt"
+      ]
+    },
+    {
+      "name": "nghttp2",
+      "covers": [
+        "P11-nghttp2"
+      ],
+      "licence": "MIT; its sfparse MIT under the sfparse, nghttp3 and nghttp2 contributors",
+      "include": [
+        "nghttp2-*"
+      ]
+    },
+    {
       "name": "StikJIT",
       "covers": [
         "StikJIT"

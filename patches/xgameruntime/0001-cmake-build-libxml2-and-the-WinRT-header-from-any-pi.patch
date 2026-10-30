@@ -1,0 +1,135 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 30 Oct 2026 13:15:00 +0100
+Subject: [PATCH] cmake: build libxml2 and the WinRT header from any pinned
+ Wine tree
+
+cmake/Xml2.cmake and cmake/Winrt.cmake check NEXUS_WINE_SOURCE file by file
+against xml2.lock.json and winrt.lock.json, which name ValveSoftware/wine
+7fc704ef, and compile a fixed list of libxml2 sources. A distribution with
+its own pinned Wine tree (WineHQ's, whose libs/xml2 has no SAX.c and whose
+include/ differs in wtypes.idl, basetsd.h and guiddef.h) cannot pass them.
+
+NEXUS_WINE_SOURCE_LOCK (default ON, the current behaviour) turns the hash
+checks off for such a build, which answers for its tree itself; libxml2's
+sources are now the SOURCES list of the tree's own libs/xml2/Makefile.in,
+the set Wine builds its libxml2 from (the same files for Valve's tree).
+
+Playport's lines in this patch are offered under LGPL-2.1-or-later.
+
+Class: build-fix
+Evidence: docs/evidence/2026-10-30-xbox-runtime-pins.md
+Offered-upstream: no
+---
+ cmake/Winrt.cmake | 10 ++++---
+ cmake/Xml2.cmake  | 74 +++++++++++++++++------------------------------
+ 2 files changed, 33 insertions(+), 51 deletions(-)
+
+diff --git a/cmake/Winrt.cmake b/cmake/Winrt.cmake
+index 4e82a0b..c3cf7db 100644
+--- a/cmake/Winrt.cmake
++++ b/cmake/Winrt.cmake
+@@ -6,11 +6,13 @@ math(EXPR WINRT_LAST "${WINRT_COUNT} - 1")
+ set(WINRT_INPUTS)
+ foreach(INDEX RANGE ${WINRT_LAST})
+     string(JSON NAME MEMBER "${WINRT_LOCK}" files ${INDEX})
+-    string(JSON EXPECTED GET "${WINRT_LOCK}" files "${NAME}")
+     set(FILE "${NEXUS_WINE_SOURCE}/include/${NAME}")
+-    file(SHA256 "${FILE}" ACTUAL)
+-    if(NOT ACTUAL STREQUAL EXPECTED)
+-        message(FATAL_ERROR "Pinned WinRT source mismatch: ${NAME}")
++    if(NEXUS_WINE_SOURCE_LOCK)
++        string(JSON EXPECTED GET "${WINRT_LOCK}" files "${NAME}")
++        file(SHA256 "${FILE}" ACTUAL)
++        if(NOT ACTUAL STREQUAL EXPECTED)
++            message(FATAL_ERROR "Pinned WinRT source mismatch: ${NAME}")
++        endif()
+     endif()
+     list(APPEND WINRT_INPUTS "${FILE}")
+ endforeach()
+diff --git a/cmake/Xml2.cmake b/cmake/Xml2.cmake
+index f8fcb2b..deaf95a 100644
+--- a/cmake/Xml2.cmake
++++ b/cmake/Xml2.cmake
+@@ -4,54 +4,34 @@ if(NOT NEXUS_WINE_SOURCE)
+     message(FATAL_ERROR "Set NEXUS_WINE_SOURCE to the matching pinned Wine source tree")
+ endif()
+ set(XML2_SOURCE "${NEXUS_WINE_SOURCE}/libs/xml2")
+-file(READ "${CMAKE_CURRENT_LIST_DIR}/xml2.lock.json" XML2_LOCK)
+-string(JSON XML2_COUNT LENGTH "${XML2_LOCK}" files)
+-math(EXPR XML2_LAST "${XML2_COUNT} - 1")
+-foreach(INDEX RANGE ${XML2_LAST})
+-    string(JSON NAME MEMBER "${XML2_LOCK}" files ${INDEX})
+-    string(JSON EXPECTED GET "${XML2_LOCK}" files "${NAME}")
+-    file(SHA256 "${XML2_SOURCE}/${NAME}" ACTUAL)
+-    if(NOT ACTUAL STREQUAL EXPECTED)
+-        message(FATAL_ERROR "Pinned XML source mismatch: ${NAME}")
+-    endif()
+-endforeach()
++# A distribution that pins its own Wine tree turns the lock off and answers for
++# that tree itself; the default checks the tree against xml2.lock.json.
++option(NEXUS_WINE_SOURCE_LOCK "Check NEXUS_WINE_SOURCE against cmake/*.lock.json" ON)
++if(NEXUS_WINE_SOURCE_LOCK)
++    file(READ "${CMAKE_CURRENT_LIST_DIR}/xml2.lock.json" XML2_LOCK)
++    string(JSON XML2_COUNT LENGTH "${XML2_LOCK}" files)
++    math(EXPR XML2_LAST "${XML2_COUNT} - 1")
++    foreach(INDEX RANGE ${XML2_LAST})
++        string(JSON NAME MEMBER "${XML2_LOCK}" files ${INDEX})
++        string(JSON EXPECTED GET "${XML2_LOCK}" files "${NAME}")
++        file(SHA256 "${XML2_SOURCE}/${NAME}" ACTUAL)
++        if(NOT ACTUAL STREQUAL EXPECTED)
++            message(FATAL_ERROR "Pinned XML source mismatch: ${NAME}")
++        endif()
++    endforeach()
++endif()
+ 
+-add_library(nexus-xml2 STATIC
+-    "${XML2_SOURCE}/HTMLparser.c"
+-    "${XML2_SOURCE}/HTMLtree.c"
+-    "${XML2_SOURCE}/SAX.c"
+-    "${XML2_SOURCE}/SAX2.c"
+-    "${XML2_SOURCE}/buf.c"
+-    "${XML2_SOURCE}/catalog.c"
+-    "${XML2_SOURCE}/chvalid.c"
+-    "${XML2_SOURCE}/debugXML.c"
+-    "${XML2_SOURCE}/dict.c"
+-    "${XML2_SOURCE}/encoding.c"
+-    "${XML2_SOURCE}/entities.c"
+-    "${XML2_SOURCE}/error.c"
+-    "${XML2_SOURCE}/globals.c"
+-    "${XML2_SOURCE}/hash.c"
+-    "${XML2_SOURCE}/list.c"
+-    "${XML2_SOURCE}/parser.c"
+-    "${XML2_SOURCE}/parserInternals.c"
+-    "${XML2_SOURCE}/pattern.c"
+-    "${XML2_SOURCE}/relaxng.c"
+-    "${XML2_SOURCE}/threads.c"
+-    "${XML2_SOURCE}/tree.c"
+-    "${XML2_SOURCE}/uri.c"
+-    "${XML2_SOURCE}/valid.c"
+-    "${XML2_SOURCE}/xinclude.c"
+-    "${XML2_SOURCE}/xmlIO.c"
+-    "${XML2_SOURCE}/xmlmemory.c"
+-    "${XML2_SOURCE}/xmlreader.c"
+-    "${XML2_SOURCE}/xmlregexp.c"
+-    "${XML2_SOURCE}/xmlsave.c"
+-    "${XML2_SOURCE}/xmlschemas.c"
+-    "${XML2_SOURCE}/xmlschemastypes.c"
+-    "${XML2_SOURCE}/xmlstring.c"
+-    "${XML2_SOURCE}/xmlunicode.c"
+-    "${XML2_SOURCE}/xpath.c"
+-    "${XML2_SOURCE}/xpointer.c")
++# The sources are the ones the Wine tree builds its own libxml2 from: the
++# SOURCES list of its libs/xml2/Makefile.in (WineHQ's has no SAX.c).
++file(READ "${XML2_SOURCE}/Makefile.in" XML2_MAKEFILE)
++string(REPLACE "\\\n" " " XML2_MAKEFILE "${XML2_MAKEFILE}")
++string(REGEX MATCH "SOURCES = [^\n]*" XML2_SOURCES_LIST "${XML2_MAKEFILE}")
++string(REGEX MATCHALL "[A-Za-z0-9_]+\\.c" XML2_SOURCES "${XML2_SOURCES_LIST}")
++if(NOT XML2_SOURCES)
++    message(FATAL_ERROR "No SOURCES in ${XML2_SOURCE}/Makefile.in")
++endif()
++list(TRANSFORM XML2_SOURCES PREPEND "${XML2_SOURCE}/")
++add_library(nexus-xml2 STATIC ${XML2_SOURCES})
+ target_include_directories(nexus-xml2 PUBLIC "${XML2_SOURCE}/include")
+ target_compile_definitions(nexus-xml2 PUBLIC LIBXML_STATIC PRIVATE HAVE_VA_COPY)
+ set_target_properties(nexus-xml2 PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON)

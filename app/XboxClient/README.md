@@ -155,6 +155,51 @@ XVD header: the header's signature is not checked (as in Xodus).
 the record and stages and, unless saves are kept, the runtime's local saves for
 the copy's SCID (`XboxSaves`: `XodusGameSave`, `XodusGameSaveFiles[Cache]`, every
 account).
+## The bridge
+
+During one Xbox play the host answers the guest's `xgameruntime` over Xodus's
+keyed loopback bridge (decision
+[0167](../../docs/decisions/0167-xbox-guest-tickets.md)).
+
+- `XboxBridgeListener` (`XboxBridgeListener.swift`) binds 127.0.0.1 on a free
+  port at `start()`. `guestEnvironment` gives `XODUS_BRIDGE_PORT` and
+  `XODUS_BRIDGE_KEY`, the names the runtime reads. They go into the title's
+  environment only, never `setenv` in the app; the key is never logged.
+  Each connection must send the play's 64-hex-character key (32 random bytes)
+  within 10 s, before anything else. A missing or wrong key, another magic or a
+  frame over 64 KiB (header included) ends the connection. At most 8
+  connections are open at once.
+- Wire (`XboxBridgeWire.swift`): magic `0x58445358`, a u16 type and a u16
+  length, all little-endian, then an XML body. A reply's type is the request's
+  plus one.
+- `XboxBridgeService` binds every request to `XboxBridgeCopy`: the copy's
+  Product ID, its declared related products and the `MSAAppId` (with its
+  `MSAFullTrust`) from its MicrosoftGame.config.
+  - `MSA_TOKEN_REQUEST` (3 → 4) returns Xodus's `MSATokenResponse`: `Token`
+    and `Expiry` (the title's TokenBroker user ticket, `xboxlive.signin`, or
+    `MBI_SSL` for a full-trust copy) and `DeviceRps` and `DeviceExpiry` (the
+    device's user.auth ticket). It is served only for the copy's client ID, or
+    for Xbox's platform ID `0000000040159362` when the copy declares none. A
+    refusal is an empty body, as in Xodus.
+  - `STORE_LICENSE_TOKEN_REQUEST` (5 → 6) uses
+    `XboxSession.licenceToken(parentProductID:productIDs:nonce:)` (Nexus's
+    `v8.0/licenseToken` request) and answers `Hresult` and `Token`. The parent
+    must be the copy, and every product (or `PRODUCT/SKU`) the copy or one of
+    its related products.
+  - `STORE_PACKAGE_UPDATES_REQUEST` (9 → 10) passes the copy's version to the
+    injected `XboxPackageUpdates`. `Checked` true with `Count` 0 is sent only
+    for a verified current package. With no checker, or an unknown answer, the
+    reply is `E_FAIL`, never an empty success.
+  - Everything is refused before sign-in, for another client or product, and for
+    any other type (an empty reply of type + 1).
+- Sign-out (and device reset) runs `XboxSession.onSignOut` handlers before the
+  session's tickets are deleted. The listener's handler revokes the service, so a
+  ticket minted in flight is never sent, and it closes every connection and the
+  port. The host then holds no ticket it issued. A ticket the game already
+  received lasts until Microsoft lets it lapse; that is 0167's residual.
+- Logs name each request and reply type with sizes and a status (`served`,
+  `refused: another product`, …). They never contain a payload, ticket, licence
+  token, nonce or key.
 
 ## Provenance and offline checks
 
@@ -168,7 +213,12 @@ headers and licensing reason 501 also follow Xodus Nexus
 `licensing/{content,splicense}.rs`, `models/{licensing,devicecredential}.rs`,
 `xodus-cli/src/{license.rs,commands/license.rs}`) and Nexus
 `e0668a12f1da931aed13537ef04295599011317b`'s `xodus-content-response`,
-`xodus-content-device-limit` and `xodus-offline-license` patches. Derived files carry GPL-3.0-only provenance
+`xodus-content-device-limit` and `xodus-offline-license` patches. The bridge
+follows the same Xodus's `xodus-service/src/connection/{mod,xml}.rs`,
+`licensing/content.rs` (`get_license_token`) and `proto/xodus/common.proto`, and
+the same Nexus's `src/main/xodus-service.ts` and its `xodus-store-license`,
+`xodus-license-sku`, `xodus-store-updates`, `xgameruntime-tcp-bridge` and
+`xgameruntime-store-updates` patches. Derived files carry GPL-3.0-only provenance
 headers; `LICENSE-Xodus.txt`, `LICENSE-XodusNexus.txt` and
 `LICENSE-CikExtractor.txt` preserve the applicable notices. See
 [LICENSING.md](../../docs/LICENSING.md#xbox-planned). The library follows Xodus
@@ -214,13 +264,15 @@ test key) served by a 127.0.0.1 range server.
 flows (exchange, relaunch, expiry/renewal/refusal, device reuse/replacement/reset,
 sign-out during renewal, device limit, tampered response and logs), licensing
 (content key, cache and expiry, offline lease, refusal versus network/service
-error, logs), plus the independent FIPS-197/RFC-4231/RFC-3394/RSA vectors, and the
-install: the pilot's real header, layout, regions, segment metadata and hash tree
-(a flipped byte at each level found), IEEE 1619 and OpenSSL XTS vectors, cut and
-damaged metadata (throw, never trap), stream-extract over HTTP ranges, resume
-after a stop and a dropped connection, a byte flipped on the wire and on disk,
-the NTFS fallback without SegmentMetadata.bin, licence and entitlement refusals,
-and remove with and without saves.
+error, logs), the bridge (framing, the cap, key, tickets per request, refusals,
+logs, a real socket with a split and an oversized frame, sign-out closing it),
+plus the independent FIPS-197/RFC-4231/RFC-3394/RSA vectors, and the install: the
+pilot's real header, layout, regions, segment metadata and hash tree (a flipped
+byte at each level found), IEEE 1619 and OpenSSL XTS vectors, cut and damaged
+metadata (throw, never trap), stream-extract over HTTP ranges, resume after a
+stop and a dropped connection, a byte flipped on the wire and on disk, the NTFS
+fallback without SegmentMetadata.bin, licence and entitlement refusals, and
+remove with and without saves.
 
 The phone is a deferred gate: Microsoft sign-in/2FA, relaunch, sign-out/reuse,
 and the passkey finding. The sheet assumes passkeys are unavailable in a

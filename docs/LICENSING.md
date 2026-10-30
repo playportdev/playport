@@ -116,6 +116,9 @@ contributions, not the right to use or distribute the code under its licence.
 | vkd3d-proton `472989a` (with dxil-spirv), with `patches/vkd3d-proton` | `Runtime/vulkan/` DLLs (d3d12, d3d12core) | LGPL-2.1-or-later; dxil-spirv MIT, with MIT and BSD-3-Clause third-party files |
 | gbe_fork (Detanup01/gbe_fork) `7103add` (tag `release-2026_09_27`) plus `patches/gbe` (two build fixes and the MSVC way of returning interface structs), its regular `steam_api` build | `Runtime/steamapi/` DLLs (`steam_api64.dll`, `steam_api.dll`), copied into a game's folder at launch in place of the game's own | LGPL-3.0; see "Steam API emulator" below |
 | Linked statically into those DLLs: curl, libssq, Mbed TLS, Opus, PortAudio, Protocol Buffers with utf8_range and Abseil (the pins.lock `abseil-cpp` tag), SDL 3, zlib, and the header libraries in gbe_fork's `libs/` (nlohmann json and fifo_map, SimpleIni, stb, utfcpp, libgamepad, sha1) | `Runtime/steamapi/` DLLs | curl's MIT-style licence, MIT, Apache-2.0 (Mbed TLS's other option is GPL-2.0-or-later), BSD-3-Clause, MIT, BSD-3-Clause and MIT, Apache-2.0, zlib, zlib; MIT, MIT, MIT, MIT or public domain, BSL-1.0, MIT, public domain |
+| nexus-xgameruntime (domsvoboda/nexus-xgameruntime) `ab2fac3` plus `patches/xgameruntime` (a build fix: libxml2 and the WinRT JSON header from Playport's Wine tree), built by `build/stages/xbox-pe.sh` | `Runtime/arm64ec-windows/xgameruntime.dll`, an arm64ec Wine builtin | LGPL-2.1-or-later; see "Xbox (planned)" below for the MIT material in it |
+| Compiled into `xgameruntime.dll`: libxml2 from the Wine pin's `libs/xml2` with Playport's Wine series, and llvm-mingw's C++ runtime linked statically | `Runtime/arm64ec-windows/xgameruntime.dll` | libxml2 MIT, with `list.c` and `dict.c` under their own ISC-style notices and `timsort.h` MIT; the C++ runtime as the llvm-mingw rows say |
+| nghttp2 (nghttp2/nghttp2) `85e300c` (tag `v1.70.0`), unmodified, library only (`build/stages/xbox-pe.sh`) | `Runtime/arm64ec-windows/libnghttp2.dll`, an arm64ec Wine builtin that Wine's winhttp loads | MIT; its `lib/sfparse.c` MIT under the sfparse, nghttp3 and nghttp2 contributors |
 | GStreamer 1.28.7, GStreamer's own iOS binary release (the pins.lock `gstreamer` version, sha256 in `build/stages/gstreamer.sh`; built by GStreamer's Cerbero from the `1.28.7` tag of <https://gitlab.freedesktop.org/gstreamer/gstreamer>): core, base, good and bad plugin libraries and the plugins `build/stages/gstreamer.sh` registers | executable (in `libwinegstreamer_unix.a`, statically), with Wine's winegstreamer unix side | LGPL-2.1-or-later; see "GStreamer" below for the libraries it carries |
 | JavaSteam protocol schemas (field tables in `app/SteamClient`) | executable | MIT; pinned by commit `433f2ad15c36d5e690a4fe77401ec3f6b960641e` in the [joshuatam/JavaSteam](https://github.com/joshuatam/JavaSteam) fork of [Longi94/JavaSteam](https://github.com/Longi94/JavaSteam) |
 | StikJIT 1.9.0 framework (the prebuilt `StikJIT.xcframework` release asset; tag `1.9.0`, commit `32287268fa5824f9edce4cb359f5833ce0cf7b00`, source at <https://github.com/StikDebug/StikJIT>) | the JIT helper extension (`PlugIns/PlayportJIT.appex/Frameworks/StikJIT.framework`), unmodified | MPL-2.0; see "StikJIT" below for what it carries inside |
@@ -123,7 +126,7 @@ contributions, not the right to use or distribute the code under its licence.
 | Wine Mono 11.3.0, WineHQ's binary release (the pins.lock `wine-mono` version, `wine-mono-11.3.0-x86.tar.xz`, sha256 in `build/stages/wine-mono.sh`; decision [0077](decisions/0077-ship-wine-mono.md)): Mono's runtime (`libmono-2.0-x86_64.dll`, `libmono-2.0-x86.dll`) and class libraries, FNA with FAudio, FNA3D and SDL, winforms, wpf, monoDX, System.Speech and Wine Mono's support files | `Runtime/mono/wine-mono-11.3.0/`, unmodified (a link staged as a copy of its target) | the licences its `COPYING` lists: Mono's parts MIT X11 or LGPL (SharpZipLib GPL with an exception), FNA MS-PL and MIT, its libraries zlib, winforms, wpf, monoDX and System.Speech MIT, Wine Mono's own code MIT. Source: the release's `wine-mono-11.3.0-src.tar.xz` (sha256 `SRC_SHA256` in the same script), which the source bundle carries and the notices come from |
 | idevice (jkcoxson/idevice) at the `pins.lock` `idevice` commit plus `patches/idevice` (Bonjour advertising for on-device pairing), its C FFI with the features the restart after a game and pairing use (decisions 0029, 0033), built by `build/stages/idevice.sh` with the `pins.lock` Rust | executable (in `libidevice_ffi.a`, one prelinked object) | MIT; see "idevice in the executable" below for the crates it carries |
 | Playport's patches to Wine (`patches/wine-pe`, `patches/wine-unix`) | Wine trees | offered under LGPL-2.1-or-later, so the Wine tree stays LGPL |
-| Playport's patches to vkd3d-proton, gbe_fork and idevice (`patches/vkd3d-proton`, `patches/gbe`, `patches/idevice`) | those trees | offered under each upstream's licence: LGPL-2.1-or-later, LGPL-3.0, MIT ([decision 0040](decisions/0040-patch-series-under-upstream-licences.md)) |
+| Playport's patches to vkd3d-proton, gbe_fork, idevice and nexus-xgameruntime (`patches/vkd3d-proton`, `patches/gbe`, `patches/idevice`, `patches/xgameruntime`) | those trees | offered under each upstream's licence: LGPL-2.1-or-later, LGPL-3.0, MIT, LGPL-2.1-or-later ([decision 0040](decisions/0040-patch-series-under-upstream-licences.md)) |
 | Playport's patches to DXVK (`patches/dxvk`) | the DXVK tree | offered under DXVK's zlib/libpng licence ([decision 0061](decisions/0061-dxvk-as-a-series.md)) |
 | Playport's patches to Madeira, FEX and DXMT | those trees | the patched code keeps its licence; Playport's lines are GPL-3.0-or-later with the exception |
 
@@ -291,6 +294,15 @@ The upstreams were read on 2026-10-30:
 | Xodus Nexus ([domsvoboda/xodus-nexus](https://github.com/domsvoboda/xodus-nexus)) | `v0.4.1` (`e0668a12f1da931aed13537ef04295599011317b`) and main `96c652343d30ae16fe476818288edbed5dfac673`, the same `LICENSE` | MIT, "Copyright (c) 2026 Xodus Nexus contributors". Its `assets/` patches modify Xodus (GPL-3.0), Wine and xgameruntime (both LGPL-2.1-or-later) |
 | nexus-xgameruntime ([domsvoboda/nexus-xgameruntime](https://github.com/domsvoboda/nexus-xgameruntime)), a fork of [xodus-gaming/xgameruntime](https://github.com/xodus-gaming/xgameruntime) | main `5539e7d23d2d2c49f8547c9b9721fb7bc59139c1`, 74 commits ahead of upstream `f03484d64867c1e65d421c1aba2f290c20bd7b4d` | `LICENSE` is the LGPL-2.1 text (sha256 `108e904a8b3df6012207649af241d5261a9c000f75d025034618f53ff9485c75`); every source file is LGPL-2.1-or-later by its header or SPDX line, except the MIT material listed below |
 | nghttp2 ([nghttp2/nghttp2](https://github.com/nghttp2/nghttp2)) | tag `v1.70.0`, commit `85e300c79fb6dbcfa9c1013215c8710c1c2cd3d2` (the commit Nexus pins) | MIT (`COPYING`, sha256 `6b94f3abc1aabd0c72a7c7d92a77f79dda7c8a0cb3df839a97890b4116a2de2a`) |
+
+Rechecked at the pins (PLA-493, 2026-10-30): `xgameruntime` is `ab2fac35b500b87fefe51add26a0672a71d11576`,
+the commit the ground truth's runtime carried, three commits before the main read above. Its
+`LICENSE` and `tests/Nexus/LICENSE` have the same bytes, the same 12 `src/System/Threading`
+files name libHttpClient, and the MIT files are the same six; every other C, C++, IDL and
+header file in `src/`, `include/` and `libs/` has an LGPL-2.1-or-later header, and the two
+export `.def` files and `include/version.h.in` carry no notice. `nghttp2`'s `COPYING` has the bytes above.
+libxml2 comes from Playport's Wine tree, not Valve's `7fc704ef` (`patches/xgameruntime` 0001);
+its `COPYING` has the same bytes as Valve's.
 
 #### The Swift client
 
@@ -481,8 +493,9 @@ No IPA that carries either DLL leaves the workstation without these:
   (`app/Sources/WineHost/d3d12_converter_absent.c`). Adopting that path would
   first need Apple's converter agreement read.
 - DXMT's `nvapi` (built with `enable_nvapi=false`), Wine bundles that no
-  shipped DLL links (fluidsynth, mpg123, lcms2, xml2/xslt, jxr, gsm,
-  capstone), and Madeira's title scaffolding and deploy scripts.
+  shipped DLL links (fluidsynth, mpg123, lcms2, xslt, jxr, gsm, capstone;
+  Wine's libxml2 is compiled into `xgameruntime.dll`), and Madeira's title
+  scaffolding and deploy scripts.
 
 ## Obligations when an IPA is given to anyone
 
@@ -497,7 +510,7 @@ tester. The procedure is [DISTRIBUTION.md](DISTRIBUTION.md).
    Madeira, wine, FEX (with rpmalloc and its other submodules) and DXMT
    commits, the Mesa, DXVK and vkd3d-proton commits (with their submodules),
    the gbe_fork commit with its `third-party/deps/common` archives and the
-   Abseil tag,
+   Abseil tag, the nexus-xgameruntime and nghttp2 commits,
    FreeType `VER-2-14-3`, LLVM 15.0.7, the crypto tarballs with their
    checksums, and GStreamer 1.28.7 with the Cerbero recipes and library
    sources its iOS release was built from, and the idevice source with its
@@ -600,3 +613,7 @@ tester. The procedure is [DISTRIBUTION.md](DISTRIBUTION.md).
 - `xgameruntime`'s libHttpClient-derived threading files: the notice is
   settled, because libHttpClient's `LICENSE.md` has been unchanged since 2017.
   Which libHttpClient revision they were taken from is not recorded upstream.
+- The app's notice selection (`build/app-notices.json`) was release-reviewed on
+  2026-10-05; its `xgameruntime` and `nghttp2` components (PLA-493), like the
+  Xodus one, came later and wait for the owner's review before an IPA that
+  carries them leaves the workstation.

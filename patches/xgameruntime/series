@@ -1,0 +1,3 @@
+# xgameruntime: applied in this order with `git am -3` onto the xgameruntime pin in pins.lock.
+# nexus-xgameruntime's xgameruntime.dll for arm64ec, a Wine builtin (build/stages/xbox-pe.sh).
+0001-cmake-build-libxml2-and-the-WinRT-header-from-any-pi.patch

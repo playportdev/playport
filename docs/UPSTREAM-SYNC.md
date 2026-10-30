@@ -52,9 +52,10 @@ and move the row (a Hollow Knight play gates it). When Valve has rewritten the
 branch, a commit is new if its subject is not among the pin's.
 
 The watch report's "Component pins" section shows how far each other upstream
-has gone: for `wine`, `wine-valve`, `fex`, `rpmalloc`, `dxmt`, `mesa`, `dxvk`
-and `vkd3d-proton`, the tracked branch's tip and the newest release tag (named
-as `wine-11.20`, `FEX-2610`, `mesa-26.3.0`, `v3.1.1`) from `git ls-remote`, and
+has gone: for `wine`, `wine-valve`, `fex`, `rpmalloc`, `dxmt`, `mesa`, `dxvk`,
+`vkd3d-proton`, `xgameruntime` and `nghttp2`, the tracked branch's tip and the newest
+release tag (named as `wine-11.20`, `FEX-2610`, `mesa-26.3.0`, `v3.1.1`; `xgameruntime`
+has none) from `git ls-remote`, and
 the commits between the pin and each, counted in the row's mirror under
 `$PLAYPORT_BUILD/sync/mirrors` (the watch keeps those for `wine`, `fex`,
 `rpmalloc`, `dxmt` and `wine-valve`; the others are not cloned for this, so
@@ -137,3 +138,12 @@ A pin that is a gitlink of the moved one (FEX's `External/rpmalloc` is the
 `rpmalloc` row) is named when the new commit moves it; it is a run of its own
 (`pp rebase rpmalloc <commit>`). `pp rebase --help` has the files and exit
 statuses.
+
+The `xgameruntime` and `nghttp2` pins (the Xbox runtime, `build/stages/xbox-pe.sh`)
+are outside `pp rebase`, like `gbe`: a move is the new commit in its `pins.lock` row
+and, for `xgameruntime`, `patches/xgameruntime` re-exported where it no longer applies
+(the build stops with `git am`'s conflict). Recheck the licence facts
+[LICENSING.md](LICENSING.md#xbox-planned) lists at the new commit, and the notice line
+ranges in `build/notices-assemble.sh`. A new `nghttp2` also changes the headers Wine's
+winhttp compiles against (`build/stages/nghttp2-headers.sh`), so the `pe` stage
+rebuilds.

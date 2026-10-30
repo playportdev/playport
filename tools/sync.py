@@ -17,7 +17,7 @@ WATCH.md and watch.tsv in $PLAYPORT_BUILD/sync/watch-<sha8>/. A wanted fix is
 ported by hand as a Playport patch (docs/UPSTREAM-SYNC.md).
 
 WATCH.md's "Component pins" also compares the wine, wine-valve, fex, rpmalloc,
-dxmt, mesa, dxvk and vkd3d-proton rows with their upstreams (git ls-remote):
+dxmt, mesa, dxvk, vkd3d-proton, xgameruntime and nghttp2 rows with their upstreams (git ls-remote):
 the tracked branch's tip, the newest release tag (named as wine-11.20,
 FEX-2610, mesa-26.3.0, v3.1.1) and, where the row's mirror under mirrors/ is
 there (fetched, never cloned for this), the commits since the pin. A component
@@ -42,7 +42,7 @@ a pin move needs a new decision record first. Its stages:
            submodule that is no row (madeira-dock) is named in the report: the
            build never checks it out.
   replay   for every patches/<target>/series but those on pins no Madeira
-           commit moves (mesa, vkd3d-proton, gbe, idevice), a fresh sparse checkout (a
+           commit moves (mesa, vkd3d-proton, gbe, idevice, xgameruntime), a fresh sparse checkout (a
            `git clone --shared` of the mirror) where the series first applies on its
            own pin (which creates every patch's preimage blobs), then at the new component commit (for wine, dxmt and fex, with patches/wine-port
            (and for wine's own series patches/wine-valve), patches/dxmt-port or
@@ -136,7 +136,7 @@ TARGET_COMPONENT = {"madeira-unix": "madeira", "madeira-winios": "madeira", "win
 # Series on pins no Madeira commit moves (their own upstreams, outside COMPONENTS):
 # a sync does not replay them.
 # CEF/Chromium are built separately (build/cef/README.md), not by pp sync.
-NOT_REPLAYED = {"mesa", "dxvk", "vkd3d-proton", "gbe", "idevice", "cef", "chromium"}
+NOT_REPLAYED = {"mesa", "dxvk", "vkd3d-proton", "gbe", "idevice", "xgameruntime", "cef", "chromium"}
 # Series applied under a target's own, in order, as build/stages/unix.sh,
 # build/stages/wine-pe.sh, build/stages/dxmt-patched.sh and build/stages/fex.sh do.
 BELOW = {"wine-valve": ["wine-port"], "wine-unix": ["wine-port", "wine-valve"], "wine-pe": ["wine-port", "wine-valve"],
@@ -487,7 +487,7 @@ def valve_notice(valve, path):
 PIN_REPORT = {"wine": ("wine-*", r"wine-\d+\.\d+(\.\d+)?(-rc\d+)?"), "wine-valve": None,
               "fex": ("FEX-*", r"FEX-\d+(\.\d+)?"), "rpmalloc": None, "dxmt": ("v*", r"v\d+(\.\d+)*"),
               "mesa": ("mesa-*", r"mesa-\d+\.\d+\.\d+(-rc\d+)?"), "dxvk": ("v*", r"v\d+(\.\d+)*"),
-              "vkd3d-proton": ("v*", r"v\d+(\.\d+)*")}
+              "vkd3d-proton": ("v*", r"v\d+(\.\d+)*"), "xgameruntime": None, "nghttp2": ("v*", r"v\d+\.\d+\.\d+")}
 
 
 def tag_key(name):

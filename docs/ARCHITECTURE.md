@@ -1278,6 +1278,11 @@ Store's own ticket (`XboxSession.storeTicket`), resolved to owned or PC Game Pas
 the public display catalogue for titles, art and packages. Only games with a Windows.Desktop
 MSIXVC/MSIXVC2 package are listed, keyed by Product ID; UWP/EAppx, products with no Store
 package (Battle.net, EA app deliveries) and add-ons are left out.
+During an Xbox play, `XboxBridgeListener` answers the guest runtime on 127.0.0.1, on a free port
+with a per-play 64-character key (`XODUS_BRIDGE_PORT`/`XODUS_BRIDGE_KEY`, title environment only,
+[0167](decisions/0167-xbox-guest-tickets.md)). It speaks Xodus's framed XML. `XboxBridgeService`
+hands out only the copy's own client ID's user and device tickets, the licence token for its
+Product ID and related products, and update answers. Sign-out closes it.
 The release package has no XboxClientKit dependency and no `Dev/`; verification also rejects
 any Swift `Xbox…` type that reaches a release executable.
 

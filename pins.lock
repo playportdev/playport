@@ -48,6 +48,15 @@
 # loads in place of its steam_api(64).dll: its release-2026_09_27 tag, with
 # patches/gbe, built by build/stages/steamapi.sh (x86-64 and i386 steam_api).
 #
+# xgameruntime is nexus-xgameruntime (domsvoboda/nexus-xgameruntime, LGPL-2.1-or-later),
+# the C++ GDK runtime (XUser, XStore, XGameSave, XTaskQueue) an Xbox title loads:
+# the commit the Xbox ground truth's runtime carried (runtime-11.0-20261028-ge5afe21e;
+# docs/evidence/2026-10-30-xbox-ground-truth-nexus.md), with patches/xgameruntime.
+# nghttp2 (MIT) is tag v1.70.0, the commit that runtime pins: the HTTP/2 library
+# Wine's winhttp loads (patches/wine-gdk). build/stages/xbox-pe.sh builds both as
+# ARM64EC PE DLLs; xgameruntime compiles libxml2 and the WinRT IDL from the pe
+# stage's Wine tree (docs/LICENSING.md, "Xbox").
+#
 # name       commit                                    repository                                    branch
 madeira      8c050d03f4d89096e1e2e2c8bb44479fffd86619  https://github.com/willfaust/Madeira.git      main
 wine         7298a818b79446bae153b8d5aa27235ab3703bf9  https://gitlab.winehq.org/wine/wine.git       master
@@ -65,6 +74,8 @@ vkd3d-proton 31d1f89ca5b3f2fd3b6f025c8e6f73ed3eaa852b  https://github.com/HansKr
 vulkan-loader 9e9518d2cf00054a220ae1a40f4406804b420ef5  https://github.com/KhronosGroup/Vulkan-Loader.git   -
 vulkan-headers 6802bb4733b63ed5efd3adb308a6c885ef180ea1  https://github.com/KhronosGroup/Vulkan-Headers.git  -
 gbe          7103add7ca6ef3ef8353279219880068f2494fc8  https://github.com/Detanup01/gbe_fork.git     dev
+xgameruntime ab2fac35b500b87fefe51add26a0672a71d11576  https://github.com/domsvoboda/nexus-xgameruntime.git main
+nghttp2      85e300c79fb6dbcfa9c1013215c8710c1c2cd3d2  https://github.com/nghttp2/nghttp2.git        master
 #
 # CEF 143.0.14 / Chromium 143.0.7499.193 (decision 0110). Built separately;
 # prebuilt input record and integration status: build/cef/README.md.

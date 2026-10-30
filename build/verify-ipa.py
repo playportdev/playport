@@ -66,6 +66,10 @@ any mismatch:
                 and steam_api.dll (i386) under Runtime/steamapi, native (not
                 marked Wine builtins) and exporting SteamAPI_Init,
                 SteamAPI_RunCallbacks and SteamInternal_CreateInterface
+  xbox          the Xbox runtime (P11-xgameruntime, P11-nghttp2): xgameruntime.dll
+                and libnghttp2.dll in Runtime/arm64ec-windows, arm64ec Wine
+                builtins exporting QueryApiImpl and InitializeApiImpl, and
+                nghttp2_session_client_new and nghttp2_version
   steam         the native Steam client (app/SteamClient): SteamClientKit's
                 Keychain store (SecItem* and the ThisDeviceOnly class) and its
                 URLSessionWebSocketTask transport are linked, Security.framework
@@ -504,6 +508,27 @@ def steamapi_checks(rt, rows):
               "SteamAPI_RunCallbacks and SteamInternal_CreateInterface")
 
 
+def xbox_checks(rt, rows):
+    """The Xbox runtime's DLLs (P11-xgameruntime, P11-nghttp2): arm64ec Wine builtins in
+    Wine's own set, exporting what a title's GDK thunks and Wine's winhttp look up."""
+    want = {"Runtime/arm64ec-windows/xgameruntime.dll": ("P11-xgameruntime", {"QueryApiImpl", "InitializeApiImpl"}),
+            "Runtime/arm64ec-windows/libnghttp2.dll": ("P11-nghttp2", {"nghttp2_session_client_new", "nghttp2_version"})}
+    got = {r[1]: r[6] for r in rows if r[0] == "resource" and r[6] in ("P11-xgameruntime", "P11-nghttp2")}
+    if not got:
+        print("      xbox: no P11 rows (an IPA from before the Xbox runtime)")
+        return
+    check(got == {k: v[0] for k, v in want.items()}, f"xbox: rows are {', '.join(sorted(want))}")
+    readobj = Path(os.environ.get("MINGW") or inputs.need("LLVM_MINGW")) / "bin/llvm-readobj"
+    for k, (_, exports) in want.items():
+        body = rt(k).read_bytes() if rt(k).is_file() else b""
+        # An ARM64EC image's COFF machine is x86-64's; llvm-readobj names it from its hybrid metadata.
+        ec = body and "IMAGE_FILE_MACHINE_ARM64EC" in subprocess.run(
+            [str(readobj), "--file-headers", str(rt(k))], capture_output=True, text=True).stdout
+        check(pe_machine_magic(body) == (0x8664, 0x20b) and ec and b"Wine builtin DLL" in body[:0x200]
+              and exports <= pe_table(rt(k), "export"),
+              f"xbox: {k.split('/')[-1]} is an arm64ec Wine builtin exporting {', '.join(sorted(exports))}")
+
+
 def steamclient_checks(rt, rows):
     """Playport's Steam client (P9-steamclient, decision 0115): native x86-64 and i386 DLLs whose
     export names hold `steamclient` (the runtime gives them its unix table by that name) and that
@@ -879,6 +904,7 @@ def main():
                     check(same, f"dxmt: bundled {r[1]} is byte-identical to the patched build's {r[5]}")
         host_io_checks(exe, rt, rows)
         steamapi_checks(rt, rows)
+        xbox_checks(rt, rows)
         steamclient_checks(rt, rows)
         wow64_checks(rt, rows)
         steam_checks(exe)
