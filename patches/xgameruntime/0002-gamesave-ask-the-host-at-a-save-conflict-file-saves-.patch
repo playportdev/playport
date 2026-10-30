@@ -10,43 +10,60 @@ failed the whole sync with E_GS_CONTAINER_NOT_IN_SYNC: the session then
 played on local saves and the conflict stayed until something forced a side
 (XODUS_SAVE_SYNC=download/upload). Nothing asked the player.
 
-cloud_sync now asks once per sync through SaveTransport::Conflict, which
-sends the host a SaveConflictRequest (Scid, Container, DisplayName,
-LocalTime, CloudTime and CloudDevice, the listing's deviceName when it has
-one) over the keyed bridge as message type 0x5001, and waits for the
-player, as a game waits on the system's dialog. The reply's
-<Choice>local</Choice> uploads the local containers whole over the cloud's
-(force_upload); <Choice>cloud</Choice> downloads the cloud's, the local tree
-kept as a .recovery- copy as for any download; anything else, or no host,
-keeps both as before: local saves this session, the dirty index kept, the
-question again at the next connected session.
+cloud_sync now asks about each conflicting container through
+SaveTransport::Conflict, which sends the host a SaveConflictRequest (Scid,
+Container, DisplayName, LocalTime, CloudTime and CloudDevice, the listing's
+deviceName when it has one) over the keyed bridge as message type 0x5001,
+and waits for the player, as a game waits on the system's dialog. Each
+container is its own question and its answer is for that container alone.
+The reply is parsed as XML within the size the bridge gives (it is not
+NUL-terminated), with no DTD and no network; only the root's <Choice>
+counts:
+- local: the cloud's container is first downloaded whole into a
+  .recovery-cloud- copy beside the .recovery- copies a download keeps of
+  the local side; only then are the local blobs uploaded over the cloud's
+  (force_upload). If the cloud's side cannot be kept, nothing is uploaded
+  and the container is left as for no answer.
+- cloud: the cloud's container is downloaded, the local tree kept as a
+  .recovery- copy as for any download.
+- anything else, or no host: both sides kept. The other containers still
+  sync; the sync then reports E_GS_CONTAINER_NOT_IN_SYNC, so this session
+  plays on local saves, the dirty index kept, and the next connected
+  session asks again.
 
 The file-save provider (XGameSaveFiles) failed outright when the cloud
 could not be reached or locked. Like the container provider (cloud_disable)
 it now plays on local saves for the session, its changes left dirty for the
 next connected one.
 
-tests/Nexus/gamesave-sync.cpp covers the question's fields, no host, an
-unanswered question, the local choice (an upload attempted, the local data
-still unsynced when it fails) and the cloud choice (downloaded and synced),
-for both providers; its required check count rises to 315.
+tests/Nexus/gamesave-sync.cpp covers, for both providers: the question's
+fields, no host, an unanswered question, a reply whose choice lies past
+its stated size, the local choice (the cloud's side kept whole first, then
+an upload attempted, the local data still unsynced when it fails), the
+local choice when the cloud's side cannot be kept (nothing uploaded, no
+partial copy), the cloud choice (downloaded and synced), and two
+conflicting containers asked separately and answered differently. Its
+required check count rises to 407. The save tests link nexus-xml2 for the
+parser's headers.
 
 Playport's lines in this patch are offered under LGPL-2.1-or-later.
 
 Class: feature
-Evidence: docs/evidence/2026-10-30-xbox-ground-truth-nexus.md
+Evidence: docs/evidence/2026-10-30-xbox-save-conflict-runtime.md
 Offered-upstream: no
 ---
- scripts/test-component.mjs      |   2 +-
- src/System/GameSave/Files.h     |  29 ++++++---
- src/System/GameSave/Transport.h |   9 +++
- src/System/XGameSave.cpp        | 104 ++++++++++++++++++++++++++++++--
- src/System/XUser.cpp            |  12 ++++
- tests/Nexus/gamesave-sync.cpp   |  56 ++++++++++++++++-
- 6 files changed, 196 insertions(+), 16 deletions(-)
+ scripts/test-component.mjs         |   2 +-
+ src/System/GameSave/Files.h        |  29 ++--
+ src/System/GameSave/Transactions.h |  43 ++++++
+ src/System/GameSave/Transport.h    |   9 ++
+ src/System/XGameSave.cpp           | 134 +++++++++++++++++-
+ src/System/XUser.cpp               |  12 ++
+ tests/CMakeLists.txt               |   4 +-
+ tests/Nexus/gamesave-sync.cpp      | 209 +++++++++++++++++++++++++++--
+ 8 files changed, 411 insertions(+), 31 deletions(-)
 
 diff --git a/scripts/test-component.mjs b/scripts/test-component.mjs
-index 32765c8..280e322 100644
+index 32765c8..fb8e9e3 100644
 --- a/scripts/test-component.mjs
 +++ b/scripts/test-component.mjs
 @@ -16,7 +16,7 @@ const probes = [
@@ -54,7 +71,7 @@ index 32765c8..280e322 100644
      ['nexus_package-content',332], ['nexus_package-monitors', 362], ['nexus_package-progress-bytes', 115],
      ['nexus_package-selection', 750],
 -    ['nexus_gamesave-sync', 283], ['nexus_gamesave-transfer', 263], ['nexus_gamesave-files', 25],
-+    ['nexus_gamesave-sync', 315], ['nexus_gamesave-transfer', 263], ['nexus_gamesave-files', 25],
++    ['nexus_gamesave-sync', 407], ['nexus_gamesave-transfer', 263], ['nexus_gamesave-files', 25],
      ['nexus_gamesave-file-paths', 55],
      ['nexus_game-invitations', 56, ['--component']],
  ];
@@ -106,6 +123,57 @@ index 849859c..1b49872 100644
      }
      if ( FAILED( hr = files_export( provider, ipc->folder ) ) ) goto ready;
  ready:
+diff --git a/src/System/GameSave/Transactions.h b/src/System/GameSave/Transactions.h
+index 57efc66..53a5b0c 100644
+--- a/src/System/GameSave/Transactions.h
++++ b/src/System/GameSave/Transactions.h
+@@ -126,3 +126,46 @@ done:
+     delete_directory( incoming.root );
+     return hr;
+ }
++
++/* Before the local side of a save conflict replaces the cloud's: the cloud's container,
++ * downloaded whole into a private tree, kept as a .recovery-cloud- copy beside the
++ * .recovery- copies a download keeps of the local side. Fails, keeping nothing partial,
++ * when the cloud's container cannot be read whole. */
++static HRESULT cloud_keep_recovery( struct XGameSaveProvider *provider, const char *name, const char *display,
++                                    const char *remote_time )
++{
++    struct XGameSaveProvider incoming = { 0 };
++    char source[2048], target[2048], recovery[2048], guid_text[64];
++    WCHAR stage_wide[4096], source_wide[4096], recovery_wide[4096], guid_wide[40];
++    GUID guid;
++    HRESULT hr;
++
++    if ( FAILED( hr = CoCreateGuid( &guid ) ) ) return hr;
++    if ( !StringFromGUID2( guid, guid_wide, ARRAY_SIZE( guid_wide ) ) ||
++         !WideCharToMultiByte( CP_UTF8, 0, guid_wide, -1, guid_text, sizeof( guid_text ), NULL, NULL ) )
++        return E_FAIL;
++    if ( snprintf( incoming.root, sizeof( incoming.root ), "%s\\.incoming-%s", provider->root, guid_text ) >=
++             sizeof( incoming.root ) ||
++         !container_dir( provider, name, target, sizeof( target ) ) ||
++         snprintf( recovery, sizeof( recovery ), "%s\\.recovery-cloud-%s-%s", provider->root,
++                   strrchr( target, '\\' ) + 1, guid_text ) >= sizeof( recovery ) )
++        return E_GS_INVALID_CONTAINER_NAME;
++    if ( !save_wide_path( incoming.root, stage_wide ) || !save_wide_path( recovery, recovery_wide ) )
++        return E_GS_INVALID_CONTAINER_NAME;
++    if ( FAILED( hr = files_mkdir( provider->root ) ) ) return hr;
++    if ( !CreateDirectoryW( stage_wide, NULL ) ) return HRESULT_FROM_WIN32( GetLastError() );
++    incoming.transport = provider->transport;
++    incoming.user = provider->user;
++    incoming.auth = provider->auth;
++    incoming.files = provider->files;
++    strcpy( incoming.base, provider->base );
++    hr = cloud_download_into( &incoming, name, display, remote_time );
++    if ( SUCCEEDED( hr ) &&
++         ( !container_dir( &incoming, name, source, sizeof( source ) ) || !save_wide_path( source, source_wide ) ) )
++        hr = E_GS_INVALID_CONTAINER_NAME;
++    if ( SUCCEEDED( hr ) && !MoveFileExW( source_wide, recovery_wide, MOVEFILE_WRITE_THROUGH ) )
++        hr = HRESULT_FROM_WIN32( GetLastError() );
++    if ( SUCCEEDED( hr ) ) SaveStatus( "xodus-savesync: cloud side kept in %s\n", strrchr( recovery, '\\' ) + 1 );
++    delete_directory( incoming.root );
++    return hr;
++}
 diff --git a/src/System/GameSave/Transport.h b/src/System/GameSave/Transport.h
 index 948cf9f..7d6da8a 100644
 --- a/src/System/GameSave/Transport.h
@@ -125,10 +193,18 @@ index 948cf9f..7d6da8a 100644
 +
 +HRESULT xodus_save_conflict_xml( const char *request, SIZE_T request_size, char **response, UINT16 *size );
 diff --git a/src/System/XGameSave.cpp b/src/System/XGameSave.cpp
-index 708b184..d8bd527 100644
+index 708b184..c75c8cc 100644
 --- a/src/System/XGameSave.cpp
 +++ b/src/System/XGameSave.cpp
-@@ -142,6 +142,10 @@ public:
+@@ -27,6 +27,7 @@
+ #include "../Runtime/Configuration.h"
+ #include "../HttpClient.h"
+ #include <cstdarg>
++#include <libxml/parser.h>
+ #include <type_traits>
+ 
+ #include <bcrypt.h>
+@@ -142,6 +143,10 @@ public:
      {
          x_user_impl->XUserCloseHandle( user );
      }
@@ -139,21 +215,21 @@ index 708b184..d8bd527 100644
  };
  static SaveTransport &GetSaveTransport( XGameSaveProvider *provider )
  {
-@@ -1247,8 +1251,86 @@ struct remote_container
+@@ -1247,8 +1252,105 @@ struct remote_container
      char *name;
      char *display;
      char *time;
 +    /* The listing's deviceName, when the service gives one (none seen in captures). */
 +    char *device;
-+};
-+
+ };
+ 
 +enum save_choice
 +{
 +    SAVE_CHOICE_NONE,
 +    SAVE_CHOICE_LOCAL,
 +    SAVE_CHOICE_CLOUD,
- };
- 
++};
++
 +/* Appends text to out, XML-escaped when escape is set; control characters become '?'.
 + * FALSE when it does not fit. */
 +static BOOL save_xml_append( char *out, SIZE_T size, SIZE_T *len, const char *text, BOOL escape )
@@ -212,10 +288,29 @@ index 708b184..d8bd527 100644
 +    if ( !ok || !save_xml_append( request, sizeof( request ), &len, "</SaveConflictRequest>", FALSE ) )
 +        return SAVE_CHOICE_NONE;
 +    hr = GetSaveTransport( provider ).Conflict( request, len, &response, &size );
++    /* The reply is not NUL-terminated: it is parsed within its size, as a document with
++     * no DTD and no network, and only its root's Choice counts. */
 +    if ( SUCCEEDED( hr ) && response && size )
 +    {
-+        if ( strstr( response, "<Choice>local</Choice>" ) ) choice = SAVE_CHOICE_LOCAL;
-+        else if ( strstr( response, "<Choice>cloud</Choice>" ) ) choice = SAVE_CHOICE_CLOUD;
++        xmlDocPtr doc = xmlReadMemory( response, size, NULL, NULL,
++                                       XML_PARSE_NONET | XML_PARSE_NOERROR | XML_PARSE_NOWARNING );
++        xmlNodePtr root = doc ? xmlDocGetRootElement( doc ) : NULL;
++        if ( root && !doc->intSubset && !doc->extSubset && !strcmp( ( char * )root->name, "SaveConflictResponse" ) )
++        {
++            for ( xmlNodePtr child = root->children; child; child = child->next )
++            {
++                xmlChar *value;
++                if ( child->type != XML_ELEMENT_NODE || strcmp( ( char * )child->name, "Choice" ) ) continue;
++                if ( ( value = xmlNodeGetContent( child ) ) )
++                {
++                    if ( !strcmp( ( char * )value, "local" ) ) choice = SAVE_CHOICE_LOCAL;
++                    else if ( !strcmp( ( char * )value, "cloud" ) ) choice = SAVE_CHOICE_CLOUD;
++                    xmlFree( value );
++                }
++                break;
++            }
++        }
++        if ( doc ) xmlFreeDoc( doc );
 +    }
 +    free( response );
 +    SaveStatus( "xodus-savesync: conflict asked, hr %#lx, keeping %s\n", hr,
@@ -226,17 +321,17 @@ index 708b184..d8bd527 100644
  enum sync_mode
  {
      SYNC_AUTO,
-@@ -1326,6 +1408,9 @@ static HRESULT cloud_sync( struct XGameSaveProvider *provider )
+@@ -1326,6 +1428,9 @@ static HRESULT cloud_sync( struct XGameSaveProvider *provider )
  {
      struct remote_container *remote = NULL;
      enum sync_mode mode;
-+    /* One question per sync: the player's answer settles every conflicting container. */
-+    enum save_choice chosen = SAVE_CHOICE_NONE;
-+    BOOL asked = FALSE;
++    /* A container whose conflict the player left open: both sides kept, the sync reported
++     * unfinished, so this session plays on local saves and the next one asks again. */
++    BOOL unresolved = FALSE;
      const char *blobs, *item;
      UINT32 count = 0, capacity = 0;
      SIZE_T size;
-@@ -1397,6 +1482,7 @@ static HRESULT cloud_sync( struct XGameSaveProvider *provider )
+@@ -1397,6 +1502,7 @@ static HRESULT cloud_sync( struct XGameSaveProvider *provider )
              remote[count].name = fileName;
              remote[count].display = json_find_string( item, "displayName" );
              remote[count].time = json_find_string( item, "clientFileTime" );
@@ -244,22 +339,33 @@ index 708b184..d8bd527 100644
              remote[++count].name = NULL;
              fileName = NULL;
          }
-@@ -1428,16 +1514,23 @@ static HRESULT cloud_sync( struct XGameSaveProvider *provider )
+@@ -1426,18 +1532,34 @@ static HRESULT cloud_sync( struct XGameSaveProvider *provider )
+         struct container_state state;
+         BOOL exists = SUCCEEDED( load_state( provider, remote[i].name, &state ) );
          BOOL remoteChanged = !exists || strcmp( state.remote, remote[i].time ? remote[i].time : "" );
++        enum save_choice chosen = SAVE_CHOICE_NONE;
          if ( exists && state.dirty && remoteChanged && mode == SYNC_AUTO )
          {
 -            /* Never silently overwrite either side of a save conflict. */
 -            free_state( &state );
 -            hr = E_GS_CONTAINER_NOT_IN_SYNC;
 -            goto done;
-+            if ( !asked ) chosen = ask_save_conflict( provider, &state, &remote[i] );
-+            asked = TRUE;
++            /* Each conflicting container is its own question, and its answer is for it alone. */
++            chosen = ask_save_conflict( provider, &state, &remote[i] );
++            /* The cloud's side is replaced only once a copy of it is kept here. */
++            if ( chosen == SAVE_CHOICE_LOCAL &&
++                 FAILED( hr = cloud_keep_recovery( provider, remote[i].name, remote[i].display, remote[i].time ) ) )
++            {
++                WARN( "could not keep the cloud's side of a save conflict, hr %#lx; nothing uploaded.\n", hr );
++                chosen = SAVE_CHOICE_NONE;
++            }
 +            if ( chosen == SAVE_CHOICE_NONE )
 +            {
 +                /* Never silently overwrite either side of a save conflict. */
 +                free_state( &state );
-+                hr = E_GS_CONTAINER_NOT_IN_SYNC;
-+                goto done;
++                hr = S_OK;
++                unresolved = TRUE;
++                continue;
 +            }
          }
 -        if ( mode == SYNC_UPLOAD )
@@ -273,7 +379,15 @@ index 708b184..d8bd527 100644
                    ( remoteChanged && state.dirty && parse_iso_time( remote[i].time ) > state.time ) )
          {
              hr = provider->files ? files_cloud_download( provider, remote[i].name, remote[i].display, remote[i].time )
-@@ -1467,6 +1560,7 @@ done:
+@@ -1453,6 +1575,7 @@ static HRESULT cloud_sync( struct XGameSaveProvider *provider )
+         free_state( &state );
+         if ( FAILED( hr ) ) goto done;
+     }
++    if ( unresolved ) hr = E_GS_CONTAINER_NOT_IN_SYNC;
+ done:
+     if ( remote )
+     {
+@@ -1467,6 +1590,7 @@ done:
              free( remote[i].name );
              free( remote[i].display );
              free( remote[i].time );
@@ -318,38 +432,211 @@ index 7e4a263..20db7f0 100644
  HRESULT xodus_store_license_body( const char **product_ids, SIZE_T count, const char *nonce, char **body )
  {
      xmlDocPtr doc;
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index 75b2e7f..4414c00 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -121,7 +121,7 @@ endif()
+ 
+ foreach(probe sync transfer)
+     add_executable(nexus_gamesave-${probe} Nexus/gamesave-${probe}.cpp)
+-    target_link_libraries(nexus_gamesave-${probe} PRIVATE xgameruntime-impl)
++    target_link_libraries(nexus_gamesave-${probe} PRIVATE xgameruntime-impl nexus-xml2)
+     target_compile_features(nexus_gamesave-${probe} PRIVATE cxx_std_23)
+     target_link_options(nexus_gamesave-${probe} PRIVATE -static -static-libgcc -static-libstdc++)
+     set_target_properties(nexus_gamesave-${probe} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+@@ -135,7 +135,7 @@ target_compile_features(nexus_game-invitations PRIVATE cxx_std_23)
+ target_link_options(nexus_game-invitations PRIVATE -static -static-libgcc -static-libstdc++)
+ set_target_properties(nexus_game-invitations PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+ 
+-target_link_libraries(nexus_gamesave-file-paths PRIVATE xgameruntime-impl)
++target_link_libraries(nexus_gamesave-file-paths PRIVATE xgameruntime-impl nexus-xml2)
+ target_compile_features(nexus_gamesave-file-paths PRIVATE cxx_std_23)
+ target_link_options(nexus_gamesave-file-paths PRIVATE -static -static-libgcc -static-libstdc++)
+ set_target_properties(nexus_gamesave-file-paths PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 diff --git a/tests/Nexus/gamesave-sync.cpp b/tests/Nexus/gamesave-sync.cpp
-index efa8d6e..f867090 100644
+index efa8d6e..cb7e3d2 100644
 --- a/tests/Nexus/gamesave-sync.cpp
 +++ b/tests/Nexus/gamesave-sync.cpp
-@@ -15,6 +15,10 @@ static BOOL fail_promote;
+@@ -15,6 +15,17 @@ static BOOL fail_promote;
  static unsigned metadata_case;
  static unsigned listing_case;
  static const char *remote_time = "2026-10-22T12:00:00Z";
-+/* The host's answer to a save conflict (NULL: no host) and the last question asked. */
++/* The host's answers to save conflicts (NULL: no host), one for the container Other,
++ * the reply's stated size when it is shorter than the text (0: the whole text), and the
++ * questions asked: the last one, and each one's container in order. */
 +static const char *conflict_answer;
++static const char *conflict_answer_other;
++static UINT16 conflict_answer_size;
 +static unsigned conflicts_asked;
 +static char conflict_request[8192];
++static char conflict_containers[256];
++/* The cloud lists Other beside Save. */
++static BOOL two_containers;
  #define CHECK( name, expr )                                                                                            \
      do                                                                                                                 \
      {                                                                                                                  \
-@@ -35,6 +39,15 @@ public:
+@@ -35,6 +46,24 @@ public:
      HRESULT DirectRequest( const WCHAR *, const WCHAR *, const WCHAR *, const void *, DWORD, DWORD *, BYTE **,
                             SIZE_T * ) override;
      void CloseUser( XUserHandle ) override {}
 +    HRESULT Conflict( const char *request, SIZE_T size, char **response, UINT16 *responseSize ) override
 +    {
++        const char *answer = conflict_answer, *container;
 +        ++conflicts_asked;
 +        snprintf( conflict_request, sizeof( conflict_request ), "%.*s", ( int )size, request );
-+        if ( !conflict_answer ) return E_NOTIMPL;
-+        *responseSize = ( UINT16 )strlen( conflict_answer );
-+        *response = strdup( conflict_answer );
-+        return *response ? S_OK : E_OUTOFMEMORY;
++        if ( ( container = strstr( conflict_request, "<Container>" ) ) )
++            snprintf( conflict_containers + strlen( conflict_containers ),
++                      sizeof( conflict_containers ) - strlen( conflict_containers ), "%.*s;",
++                      ( int )strcspn( container + 11, "<" ), container + 11 );
++        if ( strstr( conflict_request, "<Container>Other</Container>" ) ) answer = conflict_answer_other;
++        if ( !answer ) return E_NOTIMPL;
++        /* As the bridge gives it: exactly the stated bytes, no terminator added. */
++        *responseSize = conflict_answer_size ? conflict_answer_size : ( UINT16 )strlen( answer );
++        *response = static_cast<char *>( malloc( strlen( answer ) ) );
++        if ( !*response ) return E_OUTOFMEMORY;
++        memcpy( *response, answer, strlen( answer ) );
++        return S_OK;
 +    }
  };
  static ClosedSaveTransport closedTransport;
  HRESULT ClosedSaveTransport::Authorization( XUserHandle user, const char *relying, char **auth )
-@@ -240,14 +253,55 @@ static void run_provider( BOOL files )
+@@ -68,9 +97,15 @@ HRESULT ClosedSaveTransport::SignedRequest( XUserHandle user, const char *method
+     }
+     if ( !strcmp( url, "https://fixture.invalid" ) )
+     {
+-        snprintf( listing, sizeof( listing ),
+-                  "{\"blobs\":[{\"fileName\":\"Save,savedgame\",\"displayName\":\"Save\",\"clientFileTime\":\"%s\"}]}",
+-                  remote_time );
++        if ( two_containers )
++            snprintf( listing, sizeof( listing ),
++                      "{\"blobs\":[{\"fileName\":\"Save,savedgame\",\"displayName\":\"Save\",\"clientFileTime\":\"%s\"},"
++                      "{\"fileName\":\"Other,savedgame\",\"displayName\":\"Other\",\"clientFileTime\":\"%s\"}]}",
++                      remote_time, remote_time );
++        else
++            snprintf( listing, sizeof( listing ),
++                      "{\"blobs\":[{\"fileName\":\"Save,savedgame\",\"displayName\":\"Save\",\"clientFileTime\":\"%s\"}]}",
++                      remote_time );
+         response = listing;
+         if ( listing_case )
+         {
+@@ -85,6 +120,8 @@ HRESULT ClosedSaveTransport::SignedRequest( XUserHandle user, const char *method
+             response = cases[listing_case];
+         }
+     }
++    else if ( !strcmp( url, "https://fixture.invalid/Other,savedgame" ) )
++        response = "{\"atoms\":{\"one\":\"atom-A\",\"two\":\"atom-B\"}}";
+     else if ( !strcmp( url, "https://fixture.invalid/Save,savedgame" ) )
+     {
+         const char *cases[] = { "{\"atoms\":{\"one\":\"atom-A\",\"two\":\"atom-B\"}}",
+@@ -132,39 +169,43 @@ static BOOL WINAPI test_move( const WCHAR *from, const WCHAR *to, DWORD flags )
+ #define MoveFileExW test_move
+ #include "../../src/System/XGameSave.cpp"
+ #undef MoveFileExW
+-static void seed( struct XGameSaveProvider *provider, BOOL dirty )
++static void seed_container( struct XGameSaveProvider *provider, const char *name, BOOL dirty )
+ {
+     struct container_state state = { 0 };
+     struct blob_entry *entry;
+     char file[2048], dir[2048];
+-    state.name = strdup( "Save" );
+-    state.display = strdup( "Save" );
++    state.name = strdup( name );
++    state.display = strdup( name );
+     state.dirty = dirty;
+     state.time = parse_iso_time( "2026-10-20T12:00:00Z" );
+     strcpy( state.remote, "2026-10-20T12:00:00Z" );
+-    container_dir( provider, "Save", dir, sizeof( dir ) );
++    container_dir( provider, name, dir, sizeof( dir ) );
+     create_directories( dir );
+     entry = add_blob( &state, "one" );
+     entry->size = 7;
+     strcpy( entry->atom, "old-A" );
+-    blob_path( provider, "Save", "one", file, sizeof( file ) );
++    blob_path( provider, name, "one", file, sizeof( file ) );
+     CHECK( "seed-one", write_file( file, "local-A", 7 ) == S_OK );
+     entry = add_blob( &state, "two" );
+     entry->size = 7;
+     strcpy( entry->atom, "old-B" );
+-    blob_path( provider, "Save", "two", file, sizeof( file ) );
++    blob_path( provider, name, "two", file, sizeof( file ) );
+     CHECK( "seed-two", write_file( file, "local-B", 7 ) == S_OK );
+     CHECK( "seed-state", save_state( provider, &state ) == S_OK );
+     free_state( &state );
+ }
+-static void preserved( struct XGameSaveProvider *provider, BOOL dirty )
++static void seed( struct XGameSaveProvider *provider, BOOL dirty )
++{
++    seed_container( provider, "Save", dirty );
++}
++static void preserved_container( struct XGameSaveProvider *provider, const char *name, BOOL dirty )
+ {
+     struct container_state state;
+     char file[2048];
+     BYTE *bytes = NULL;
+     SIZE_T size = 0;
+     HRESULT hr;
+-    hr = load_state( provider, "Save", &state );
++    hr = load_state( provider, name, &state );
+     CHECK( "original-index-preserved", hr == S_OK );
+     if ( SUCCEEDED( hr ) )
+     {
+@@ -172,16 +213,52 @@ static void preserved( struct XGameSaveProvider *provider, BOOL dirty )
+                state.dirty == dirty && !strcmp( state.remote, "2026-10-20T12:00:00Z" ) && state.count == 2 );
+     }
+     free_state( &state );
+-    blob_path( provider, "Save", "one", file, sizeof( file ) );
++    blob_path( provider, name, "one", file, sizeof( file ) );
+     hr = read_file( file, &bytes, &size );
+     CHECK( "original-one-preserved", hr == S_OK && size == 7 && !memcmp( bytes, "local-A", 7 ) );
+     free( bytes );
+     bytes = NULL;
+-    blob_path( provider, "Save", "two", file, sizeof( file ) );
++    blob_path( provider, name, "two", file, sizeof( file ) );
+     hr = read_file( file, &bytes, &size );
+     CHECK( "original-two-preserved", hr == S_OK && size == 7 && !memcmp( bytes, "local-B", 7 ) );
+     free( bytes );
+ }
++static void preserved( struct XGameSaveProvider *provider, BOOL dirty )
++{
++    preserved_container( provider, "Save", dirty );
++}
++/* The cloud's side kept before an upload replaced it: .recovery-cloud- trees, and how
++ * many of them hold the cloud's whole container (remote-A and remote-B). */
++static unsigned cloud_copies( struct XGameSaveProvider *provider, unsigned *whole )
++{
++    char pattern[2048], file[2048];
++    const char *blobs[][2] = { { "one", "remote-A" }, { "two", "remote-B" } };
++    WIN32_FIND_DATAA data;
++    HANDLE find;
++    unsigned count = 0;
++    *whole = 0;
++    snprintf( pattern, sizeof( pattern ), "%s\\.recovery-cloud-*", provider->root );
++    if ( ( find = save_find_first( pattern, &data ) ) == INVALID_HANDLE_VALUE ) return 0;
++    do
++    {
++        unsigned matched = 0;
++        ++count;
++        for ( UINT32 i = 0; i < ARRAY_SIZE( blobs ); i++ )
++        {
++            char *key = provider->files ? files_cache_key( blobs[i][0] ) : hex_encode( blobs[i][0] );
++            BYTE *bytes = NULL;
++            SIZE_T size = 0;
++            snprintf( file, sizeof( file ), "%s\\%s\\b_%s", provider->root, data.cFileName, key ? key : "" );
++            if ( key && SUCCEEDED( read_file( file, &bytes, &size ) ) && size == 8 && !memcmp( bytes, blobs[i][1], 8 ) )
++                ++matched;
++            free( bytes );
++            free( key );
++        }
++        if ( matched == ARRAY_SIZE( blobs ) ) ++*whole;
++    } while ( FindNextFileA( find, &data ) );
++    FindClose( find );
++    return count;
++}
+ static BOOL count_local( struct XGameSaveProvider *provider, const char *name, void *context )
+ {
+     unsigned *count = static_cast<unsigned *>( context );
+@@ -240,14 +317,118 @@ static void run_provider( BOOL files )
      listing_case = 0;
      seed( &provider, TRUE );
      fail_second = FALSE;
@@ -374,19 +661,49 @@ index efa8d6e..f867090 100644
 +    preserved( &provider, TRUE );
 +    free( provider.auth );
 +    provider.auth = NULL;
-+    /* The cloud's side replaced: the closed transport refuses the lock, so the upload
-+     * fails and the local container stays unsynced, never lost. */
++    /* A reply is read within its stated size only: a choice after it is not taken. */
 +    conflict_answer = "<SaveConflictResponse><Choice>local</Choice></SaveConflictResponse>";
++    conflict_answer_size = ( UINT16 )strlen( "<SaveConflictResponse><Choice>" );
 +    provider.cloud = TRUE;
 +    hr = cloud_sync( &provider );
 +    provider.cloud = FALSE;
-+    CHECK( "conflict-local-uploads", FAILED( hr ) && writes && !blob_gets );
++    conflict_answer_size = 0;
++    CHECK( "conflict-reply-bounded", hr == E_GS_CONTAINER_NOT_IN_SYNC && !blob_gets && !writes );
++    preserved( &provider, TRUE );
++    free( provider.auth );
++    provider.auth = NULL;
++    /* The local choice, but the cloud's side cannot be kept: nothing replaces it. */
++    fail_second = TRUE;
++    provider.cloud = TRUE;
++    hr = cloud_sync( &provider );
++    provider.cloud = FALSE;
++    fail_second = FALSE;
++    {
++        unsigned whole, copies = cloud_copies( &provider, &whole );
++        CHECK( "conflict-local-unkept-not-uploaded", hr == E_GS_CONTAINER_NOT_IN_SYNC && !writes && !copies );
++    }
++    preserved( &provider, TRUE );
++    free( provider.auth );
++    provider.auth = NULL;
++    /* The cloud's side replaced: kept first as a .recovery-cloud- copy. The closed
++     * transport then refuses the lock, so the upload fails and the local container
++     * stays unsynced, never lost. */
++    blob_gets = writes = 0;
++    provider.cloud = TRUE;
++    hr = cloud_sync( &provider );
++    provider.cloud = FALSE;
++    CHECK( "conflict-local-uploads", FAILED( hr ) && writes && blob_gets == 2 );
++    {
++        unsigned whole, copies = cloud_copies( &provider, &whole );
++        CHECK( "conflict-local-cloud-kept", copies == 1 && whole == 1 );
++    }
 +    {
 +        struct container_state state;
 +        CHECK( "conflict-local-state", load_state( &provider, "Save", &state ) == S_OK );
 +        CHECK( "conflict-local-still-unsynced", state.dirty && !strcmp( state.remote, "2026-10-20T12:00:00Z" ) );
 +        free_state( &state );
 +    }
++    preserved( &provider, TRUE );
 +    free( provider.auth );
 +    provider.auth = NULL;
 +    seed( &provider, TRUE );
@@ -403,6 +720,39 @@ index efa8d6e..f867090 100644
 +    conflict_answer = NULL;
 +    free( provider.auth );
 +    provider.auth = NULL;
++    /* Each conflicting container is its own question, and its answer is for it alone. */
++    two_containers = TRUE;
++    for ( unsigned order = 0; order < 2; order++ )
++    {
++        const char *other = order ? "Save" : "Other", *chosen = order ? "Other" : "Save";
++        struct container_state state;
++        seed( &provider, TRUE );
++        seed_container( &provider, "Other", TRUE );
++        blob_gets = writes = conflicts_asked = 0;
++        conflict_containers[0] = 0;
++        conflict_answer = order ? "<SaveConflictResponse><Choice>none</Choice></SaveConflictResponse>"
++                                : "<SaveConflictResponse><Choice>cloud</Choice></SaveConflictResponse>";
++        conflict_answer_other = order ? "<SaveConflictResponse><Choice>cloud</Choice></SaveConflictResponse>"
++                                      : "<SaveConflictResponse><Choice>none</Choice></SaveConflictResponse>";
++        hr = cloud_sync( &provider );
++        CHECK( "conflict-each-asked", conflicts_asked == 2 && !strcmp( conflict_containers, "Save;Other;" ) );
++        CHECK( "conflict-each-question",
++               strstr( conflict_request, "<Container>Other</Container><DisplayName>Other</DisplayName>" ) != NULL );
++        CHECK( "conflict-each-answer", hr == E_GS_CONTAINER_NOT_IN_SYNC && blob_gets == 2 && !writes );
++        CHECK( "conflict-each-chosen-state", load_state( &provider, chosen, &state ) == S_OK );
++        CHECK( "conflict-each-chosen-synced", !state.dirty && !strcmp( state.remote, remote_time ) );
++        free_state( &state );
++        preserved_container( &provider, other, TRUE );
++        free( provider.auth );
++        provider.auth = NULL;
++    }
++    two_containers = FALSE;
++    conflict_answer_other = NULL;
++    {
++        char dir[2048];
++        CHECK( "other-removed", container_dir( &provider, "Other", dir, sizeof( dir ) ) );
++        delete_directory( dir );
++    }
      seed( &provider, FALSE );
      remote_time = "2026-10-20T12:00:00Z";
      blob_gets = writes = 0;

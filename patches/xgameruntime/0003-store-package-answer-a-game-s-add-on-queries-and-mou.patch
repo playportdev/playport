@@ -65,7 +65,7 @@ Offered-upstream: no
  create mode 100644 src/System/Package/Mount.h
 
 diff --git a/scripts/test-component.mjs b/scripts/test-component.mjs
-index 280e322..13ca5e6 100644
+index fb8e9e3..b87cb3c 100644
 --- a/scripts/test-component.mjs
 +++ b/scripts/test-component.mjs
 @@ -13,8 +13,8 @@ const probes = [
@@ -77,7 +77,7 @@ index 280e322..13ca5e6 100644
 +    ['nexus_package-identity', 15], ['nexus_package-legacy', 153], ['nexus_package-chunks', 312],
 +    ['nexus_package-content',363], ['nexus_package-monitors', 362], ['nexus_package-progress-bytes', 115],
      ['nexus_package-selection', 750],
-     ['nexus_gamesave-sync', 315], ['nexus_gamesave-transfer', 263], ['nexus_gamesave-files', 25],
+     ['nexus_gamesave-sync', 407], ['nexus_gamesave-transfer', 263], ['nexus_gamesave-files', 25],
      ['nexus_gamesave-file-paths', 55],
 diff --git a/src/System/Package/Mount.h b/src/System/Package/Mount.h
 new file mode 100644
