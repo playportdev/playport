@@ -12,7 +12,9 @@
 //                              only if no loss/cancel was observed during replacement;
 //                              a Play refused before the runtime started (its alert shows)
 //                              goes on here. A Battle.net copy's first Play (bnet-wow) is
-//                              refused while its ban-risk notice asks: notice: answers it
+//                              refused while its ban-risk notice asks: notice: answers it.
+//                              Past it, a Play that found an update (PLA-521) is followed
+//                              through Downloads to the game's start
 //   notice:<title id>=accept|decline
 //                              An installed Battle.net copy's Play from its page and the
 //                              ban-risk notice it shows first (PLA-514), answered as the
@@ -47,6 +49,9 @@
 //   locale:bnet-<code>[=<l>]   An installed Battle.net product's page with its Language
 //                              picker open; =<l> (deDE) changes the language through
 //                              Downloads and waits until .build.info says <l> and Play shows
+//   update:bnet-<code>[=install] An installed Battle.net product's page and its Check for
+//                              update, with what it found logged; =install also queues the
+//                              update and waits until the receipt and .build.info name it
 //   queue:<app id>             Install from Steam, as a game page's Install does, and go on
 //                              at once: the download runs in the queue (SteamInstalls)
 //   downloading:<app id>       Waits (2 min at most) until the queue runs that app's download
@@ -373,6 +378,8 @@ enum UIDriver {
                     if let failure = try await battleNetRegion(id) { return finish("action=\(action) failed: \(failure)") }
                 case "locale":
                     if let failure = try await battleNetLocale(id) { return finish("action=\(action) failed: \(failure)") }
+                case "update":
+                    if let failure = try await battleNetUpdate(id) { return finish("action=\(action) failed: \(failure)") }
                 case "install" where id.hasPrefix("epic-"):
                     if let failure = try await installEpic(String(id.dropFirst(5))) { return finish("action=\(action) failed: \(failure)") }
                 case "install" where id.hasPrefix("gog-"):
@@ -842,8 +849,16 @@ enum UIDriver {
                         return finish("action=\(action) refused: \(id) is not a launcher (\(PublisherLauncher.all.map(\.id).joined(separator: ", ")))")
                     }
                       do {
-                        let started = try await checked {
+                        var started = try await checked {
                             if let launcher { await LauncherOpen.open(launcher) } else { try await library.play(id) }
+                        }
+                        // A Battle.net copy whose Play found an update (PLA-521): followed through
+                        // Downloads to the game's start.
+                        if !started, launcher == nil, let followed = try await battleNetUpdateThenPlay(id) {
+                            switch followed {
+                            case let .failed(why): return finish("action=\(action) failed: \(why)")
+                            case .started: started = true
+                            }
                         }
                         guard started else {
                             if launcher != nil {
@@ -968,6 +983,15 @@ enum UIDriver {
         }
         log("notice \(id): accepted at \(at); the Play goes on")
         guard try await checked({ await play.value }) else {
+            // The Play found an update (PLA-521): followed through Downloads to the game's start.
+            if let followed = try await battleNetUpdateThenPlay(id) {
+                switch followed {
+                case let .failed(why): return .failed("accepted, then \(why)")
+                case .started:
+                    log("notice \(id): started after the update")
+                    return .started
+                }
+            }
             try await pause(.milliseconds(1500))   // its alert drawn, for a screenshot
             return .failed("accepted, then the Play did not start: \(PadModal.shared.summary ?? TitleLaunch.shared.message?.title ?? "no message")")
         }
@@ -1257,6 +1281,100 @@ enum UIDriver {
         guard now.hasSuffix("/" + locale) else { return ".build.info says \(now)" }
         guard playShown(), t?.canPlay == true else { return "Play is not available after the download" }
         return nil
+    }
+
+    /// `bnet-<code>[=install]`: an installed product's page and its Check for update, with what it
+    /// found logged (a failed check too: the page shows it). `=install` also queues the update it
+    /// found and waits until the receipt and `.build.info` name the new version and Play shows
+    /// again; it fails when the check failed or found nothing newer.
+    private static func battleNetUpdate(_ spec: String) async throws -> String? {
+        let parts = spec.split(separator: "=", maxSplits: 1).map(String.init)
+        guard let key = StoreGameKey(titleID: parts[0]), let p = BattleNet.product(key) else { return "\(parts[0]) is not a Battle.net product" }
+        let model = BattleNetInstalled.shared, library = LibraryModel.shared
+        guard library.title(key.titleID) != nil else { return "\(key.titleID) is not installed" }
+        guard let installs = SteamAccountModel.current?.installs else { return "no download queue" }
+        if let j = installs.jobs[key] { return "a download of \(key.titleID) is queued (\(phase(j)))" }
+        guard try await openInstalledBattleNet(key, p) != nil else { return "\(key.titleID): no readable .build.info" }
+        func installed() -> String { installedVersion(key, p) }
+        let before = installed()
+        let started = Date()
+        let found = try await checked({ await model.checkUpdate(p) })
+        let ms = Int(Date().timeIntervalSince(started) * 1000)
+        switch found {
+        case .current:
+            log("update \(key.titleID): \(before) is current (checked in \(ms) ms)")
+        case let .available(version, bytes):
+            log("update \(key.titleID): \(before) → \(version) available, \(bytes) bytes to write, needs "
+                + "\(BattleNet.spaceNeeded(update: bytes)), free \(library.freeBytes ?? 0) (checked in \(ms) ms)")
+        case let .unreachable(why):
+            log("update \(key.titleID): the check failed after \(ms) ms: \(why)")
+        case .updated:
+            break
+        }
+        try await pause(.milliseconds(1000))   // the page drawn with the result, for a screenshot
+        guard parts.count > 1 else { return nil }
+        guard case let .available(version, _) = found else { return "no update to install (\(found))" }
+        if let why = model.update(p, downloads: installs) { return "refused: \(why)" }
+        var lastLog = Date()
+        while let j = installs.jobs[key] {
+            if case let .paused(reason) = j.phase { return "paused: \(reason ?? "no reason")" }
+            if Date().timeIntervalSince(lastLog) > 30 {
+                lastLog = Date()
+                log("update \(key.titleID): \(j.status) \(j.detail ?? "")")
+            }
+            try await pause(.milliseconds(250))
+        }
+        let now = installed()
+        let playShown = library.title(key.titleID)?.canPlay == true && installs.jobs[key] == nil
+        log("update \(key.titleID): \(before) → \(now) after \(Int(Date().timeIntervalSince(started))) s; play=\(playShown ? "shown" : "hidden")")
+        guard now == "\(version)/\(version)" else { return "receipt/.build.info say \(now), not \(version)" }
+        guard playShown else { return "Play is not available after the update" }
+        return nil
+    }
+
+    /// The receipt's and `.build.info`'s versions of an installed product (`receipt/build.info`).
+    private static func installedVersion(_ key: StoreGameKey, _ p: BattleNetProduct) -> String {
+        let layout = LibraryModel.paths.layout
+        let receipt = layout.storeReceipts().first { $0.key == key }
+        let info = receipt.flatMap { r in
+            (try? Data(contentsOf: layout.gamesRoot.appendingPathComponent(r.installDir).appendingPathComponent(".build.info")))
+                .flatMap { try? BuildInfo.read([UInt8]($0), product: p.code) }
+        }
+        return "\(receipt?.version ?? "?")/\(info?.version ?? "?")"
+    }
+
+    private enum UpdatePlayOutcome {
+        case started
+        case failed(String)
+    }
+
+    /// After a Battle.net Play that queued its update instead of starting (BattleNetPlay's update
+    /// step): the update followed in Downloads, then the Play that goes on once it finished; nil
+    /// when the Play queued no update.
+    private static func battleNetUpdateThenPlay(_ id: String) async throws -> UpdatePlayOutcome? {
+        guard let key = StoreGameKey(titleID: id), let p = BattleNet.product(key), let installs = SteamAccountModel.current?.installs,
+              let first = installs.jobs[key], first.kind == .update, !BattleNet.isLanguageChange(first.record) else { return nil }
+        let library = LibraryModel.shared
+        let before = installedVersion(key, p)
+        log("play \(id): an update was found (\(first.record.bytes ?? 0) bytes to write); following it in Downloads")
+        let started = Date()
+        var lastLog = Date()
+        while let j = installs.jobs[key] {
+            if case let .paused(reason) = j.phase { return .failed("the update paused: \(reason ?? "no reason")") }
+            if Date().timeIntervalSince(lastLog) > 30 {
+                lastLog = Date()
+                log("play \(id): \(j.status) \(j.detail ?? "")")
+            }
+            try await pause(.milliseconds(250))
+        }
+        for _ in 0..<50 where library.updatePlay?.id != id { try await pause(.milliseconds(100)) }
+        guard let play = library.updatePlay, play.id == id else { return .failed("the update finished, and the Play did not go on") }
+        log("play \(id): updated \(before) → \(installedVersion(key, p)) in \(Int(Date().timeIntervalSince(started))) s; the Play goes on")
+        guard try await checked({ await play.task.value }) else {
+            try await pause(.milliseconds(1500))
+            return .failed("updated, then the Play did not start: \(PadModal.shared.summary ?? TitleLaunch.shared.message?.title ?? "no message")")
+        }
+        return .started
     }
 
     /// The Battle.net page's Install of `code`, with a Pause and Resume at `pauseAt`; nil once it

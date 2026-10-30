@@ -242,7 +242,8 @@ final class BattleNetStore: ObservableObject, DownloadDriver {
 
     func run(_ job: DownloadJob, progress: @escaping @Sendable (InstallEngine.Progress) -> Void) async throws -> UInt64? {
         guard let p = BattleNet.product(job.key) else { throw ClientError.notFound("\(job.key) is not a Battle.net product") }
-        if BattleNet.isLanguageChange(job) { return try await BattleNetInstalled.shared.run(p, job, client: client, progress: progress) }
+        // A language change (PLA-520) or an update to the region's current build (PLA-521).
+        if job.kind == .update { return try await BattleNetInstalled.shared.run(p, job, client: client, progress: progress) }
         guard job.kind == .install else { throw ClientError.unsupported("Battle.net \(job.kind.rawValue) is not available yet") }
         let choice = BattleNet.jobChoice(job.branch) ?? (region(p), locale(p))
         let layout = LibraryModel.paths.layout
@@ -267,7 +268,9 @@ final class BattleNetStore: ObservableObject, DownloadDriver {
         return prepared.plan.content.totalBytes
     }
 
-    func finished(_ job: DownloadJob) {}
+    func finished(_ job: DownloadJob) {
+        if job.kind == .update, let p = BattleNet.product(job.key) { BattleNetInstalled.shared.finished(p) }
+    }
 
     func discard(_ key: StoreGameKey) {
         guard let p = BattleNet.product(key) else { return }

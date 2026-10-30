@@ -236,6 +236,16 @@ class UiEnvTest(unittest.TestCase):
                     "notice:bnet-WoW=accept"):
             self.assertFalse(m.ACTION_RE.match(bad), bad)
 
+    def test_battlenet_update_check_path(self):
+        """PLA-521: an installed product's Check for update from its page, or =install, which also
+        downloads the update it found through Downloads."""
+        m = load()
+        for ok in ("update:bnet-wow", "update:bnet-wow_classic_era", "update:bnet-wow=install"):
+            self.assertEqual(m.parse(["--action", ok]).action, [ok])
+        for bad in ("update:bnet-", "update:bnet-WoW", "update:bnet-wow=", "update:bnet-wow=yes", "update:wow",
+                    "update:app-367520", "update:gog-1207658924"):
+            self.assertFalse(m.ACTION_RE.match(bad), bad)
+
     def test_actions_after_a_play_run_after_the_restart(self):
         """play: with actions after it: they run in the restarted process; the title's end does
         not end the run, the UI's does."""

@@ -399,6 +399,16 @@ private struct GameDetailPage: View {
             SecondaryButton(id: "game:language", systemImage: "character.bubble", title: "Language · \(now?.locale ?? "…")",
                             enabled: now != nil && job == nil && !launch.running && !installs.suspended,
                             hint: "Language") { bnetInstalled.pickLanguage(p, downloads: installs) }
+            // Updates (PLA-521): every Play checks first; this asks by hand, and Update queues it.
+            let update = bnetInstalled.updates[p]
+            if job == nil, case .available? = update {
+                SecondaryButton(id: "game:update", systemImage: "arrow.down.circle", title: "Update",
+                                enabled: !launch.running && !installs.suspended,
+                                hint: "Update") { bnetInstalled.update(p, downloads: installs) }
+            }
+            SecondaryButton(id: "game:check-update", systemImage: "arrow.triangle.2.circlepath", title: "Check for update",
+                            enabled: job == nil && !launch.running && update != .checking,
+                            hint: "Check for update") { Task { await bnetInstalled.checkUpdate(p) } }
         }
         if job == nil, t.store == .gog, t.source == .installed, let newest = gog.newest[t.key.id], newest != t.storeVersion {
             SecondaryButton(id: "game:update", systemImage: "arrow.down.circle", title: "Update", enabled: canDownloadGOG && !launch.running,
@@ -548,6 +558,9 @@ private struct GameDetailPage: View {
     private func notes(_ t: InstalledTitle?, _ g: SteamGame?) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             if let p = installedBnet, let why = bnetInstalled.errors[p] { Text(why).foregroundStyle(.orange) }
+            if let p = installedBnet, case let .unreachable(why)? = bnetInstalled.updates[p] {
+                Text("Couldn't check for an update: \(why)").foregroundStyle(.orange)
+            }
             if let t {
                 if launch.spent {
                     Text(JitProvider.inLiveContainer
@@ -659,6 +672,13 @@ private struct GameDetailPage: View {
             if let p = installedBnet, let now = bnetInstalled.current[p] {
                 rows.append(("Region", bnetInstalled.changingRegion.contains(p) ? "Changing…" : BattleNetStore.label(now.region), nil))
                 rows.append(("Language", BattleNetInstalled.label(now.locale), nil))
+                switch bnetInstalled.updates[p] {
+                case nil: break
+                case .checking?: rows.append(("Update", "Checking…", nil))
+                case let .current(v)?: rows.append(("Update", "Up to date · \(v)", nil))
+                case let .available(from, to, bytes)?: rows.append(("Update", "\(from) → \(to) · \(ByteCount.format(bytes))", .orange))
+                case .unreachable?: rows.append(("Update", "Couldn't check", .orange))
+                }
             }
         } else if let g {
             if let s = g.info.installSize(branch: selectedBranch) { rows.append(("Download", ByteCount.format(s), nil)) }

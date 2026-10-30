@@ -59,6 +59,9 @@ final class LibraryModel: ObservableObject {
     /// The Play an accepted ban-risk notice went on with (PLA-514): what it returned, for a dev
     /// build's UIDriver to follow as it follows a play:.
     private(set) var noticePlay: Task<Bool, Never>?
+    /// The Play that goes on after the Battle.net update it asked for finished in Downloads
+    /// (`playAfterUpdate`), for a dev build's UIDriver to follow as it follows a play:.
+    private(set) var updatePlay: (id: String, task: Task<Bool, Never>)?
     /// A refresh asked for while a scan ran: its scan may predate the change.
     private var rescan = false
     private let store = CatalogStore(url: LibraryModel.paths.catalog)
@@ -204,29 +207,55 @@ final class LibraryModel: ObservableObject {
     /// asks, an ownership token. When they cannot be had it does not start; the player gets Try again,
     /// and for a game that may run offline Play offline (`epicOffline`), which starts it as before
     /// step 1 of the store game sign-in plan, with no sign-in arguments.
-    /// A Battle.net copy follows PlayportKit's BattleNetPlay (PLA-514): the ban-risk notice first (false
-    /// while it is up; accepted, the Play goes on as `noticePlay`), then its ARM64 client on Vulkan.
+    /// A Battle.net copy follows PlayportKit's BattleNetPlay (PLA-514, PLA-521): the ban-risk notice first
+    /// (false while it is up; accepted, the Play goes on as `noticePlay`), then the update check: a newer
+    /// build that fits is updated through Downloads (false; the Play goes on as `updatePlay` once it
+    /// finished), one that does not is refused, a failed check is said on the launch screen; then its
+    /// ARM64 client on Vulkan. `battleNetUpdate`: the check's answer when the Play already has it.
     /// `continuing`: the Play goes on after Playport's restart that followed its prerequisites
     /// (AppRestart.continuePlay, decision 0084): no cloud save check (the Play passed it a few
     /// seconds ago) and no prerequisites, so it cannot restart again.
     @discardableResult
-    func play(_ id: String, epicOffline: Bool = false, continuing: Bool = false) async throws -> Bool {
+    func play(_ id: String, epicOffline: Bool = false, continuing: Bool = false,
+              battleNetUpdate: BattleNetPlay.Update? = nil) async throws -> Bool {
         guard catalog.title(id: id)?.canPlay == true, !TitleLaunch.shared.running, !TitleLaunch.shared.spent else { return false }
         // A Battle.net copy (PLA-514, decision 0169): the ban-risk notice before its first Play, which
         // goes on once accepted; declined, nothing starts. A client that is not the ARM64 one is refused.
-        if let t = catalog.title(id: id), let step = BattleNetPlay.decide(.init(copy: t)) {
-            switch step {
-            case let .notice(product):
-                Self.log("play \(t.name) (\(id)): the ban-risk notice asks first")
-                askRiskNotice(t, product)
-                return false
-            case let .refuse(why):
-                Self.log("play \(t.name) (\(id)) refused: \(why)")
-                PadModal.shared.picker(title: "Can't start \(t.name)", context: nil, note: why,
-                                       options: [PadOption(id: "ok", label: "OK")], selected: nil) { _ in }
-                return false
-            case .launch:
-                break
+        // Then the update check (PLA-521), not while a download of the copy is queued.
+        var bnetLaunch: BattleNetPlay.Launch?
+        if let t = catalog.title(id: id), BattleNet.product(t.key) != nil {
+            let installs = SteamAccountModel.current?.installs
+            if installs?.jobs[t.key] != nil { return false }
+            var facts = BattleNetPlay.Facts(copy: t, update: battleNetUpdate)
+            decide: while let step = BattleNetPlay.decide(facts) {
+                switch step {
+                case let .notice(product):
+                    Self.log("play \(t.name) (\(id)): the ban-risk notice asks first")
+                    askRiskNotice(t, product)
+                    return false
+                case let .refuse(why):
+                    Self.log("play \(t.name) (\(id)) refused: \(why)")
+                    PadModal.shared.picker(title: "Can't start \(t.name)", context: nil, note: why,
+                                           options: [PadOption(id: "ok", label: "OK")], selected: nil) { _ in }
+                    return false
+                case let .checkUpdate(product):
+                    Self.log("play \(t.name) (\(id)): checking for an update")
+                    facts.update = await BattleNetInstalled.shared.checkUpdate(product)
+                    facts.freeBytes = freeBytes
+                case let .update(product, version):
+                    guard let installs else {
+                        Self.log("play \(t.name) (\(id)): an update to \(version) is out, and there is no download queue")
+                        return false
+                    }
+                    Self.log("play \(t.name) (\(id)): updating to \(version) in Downloads first")
+                    if let why = BattleNetInstalled.shared.update(product, downloads: installs, thenPlay: id) {
+                        Self.log("play \(t.name) (\(id)): the update was not queued: \(why)")
+                    }
+                    return false
+                case let .launch(launch):
+                    bnetLaunch = launch
+                    break decide
+                }
             }
         }
         // A game whose saves changed on the phone and on Steam asks which to keep first; the
@@ -243,6 +272,11 @@ final class LibraryModel: ObservableObject {
         // with the fix; a missing pairing (iOS 27) or LocalDevVPN down JitSetup fixes (UI/SetupView.swift).
         guard SetupState.shared.beforePlay(steamGame: catalog.title(id: id)?.appID != nil) else { return false }
         guard await JitSetup.shared.ensureReady() else { return false }
+        // A failed update check is said on the launch screen (PLA-521); the installed version plays.
+        if let report = bnetLaunch?.report {
+            Self.log("play \(id): \(report)")
+            SetupState.shared.addLaunchNote(report)
+        }
         // Setup may outlive navigation or a catalogue refresh: validate again
         // and build the launch from current settings only after sheet dismissal.
         guard let t = catalog.title(id: id), t.canPlay, !verifying.contains(id), !removing.contains(id),
@@ -270,7 +304,7 @@ final class LibraryModel: ObservableObject {
         #endif
         // A Battle.net copy's client: a native ARM64 child (decision 0170) drawing with Direct3D 12 through
         // vkd3d-proton on Vulkan, whatever the graphics settings say.
-        if case let .launch(bnet)? = BattleNetPlay.decide(.init(copy: t)) {
+        if let bnet = bnetLaunch {
             settings.graphics = bnet.graphics
             plan.args += bnet.arguments.filter { arg in !plan.args.contains { $0.caseInsensitiveCompare(arg) == .orderedSame } }
             Self.log("play \(t.name): Battle.net's ARM64 client as a native ARM64 child on \(bnet.graphics.rawValue), "
@@ -685,6 +719,12 @@ final class LibraryModel: ObservableObject {
         save()
         Self.log("play \(id): ban-risk notice accepted; kept with the copy, the Play goes on")
         noticePlay = Task { (try? await self.play(id)) ?? false }
+    }
+
+    /// A Battle.net Play goes on once the update it queued finished (BattleNetInstalled.finished):
+    /// the check is not asked again.
+    func playAfterUpdate(_ id: String) {
+        updatePlay = (id, Task { (try? await self.play(id, battleNetUpdate: .updated)) ?? false })
     }
 
     /// The Cloud save conflict screen for the game's open conflicts; `thenPlay` starts it once settled.

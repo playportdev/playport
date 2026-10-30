@@ -95,12 +95,17 @@ final class Downloads: ObservableObject {
             return DownloadRate.duration(s) + " left"
         }
 
+        /// What a running job is doing: its kind's verb, or its store's own (a Battle.net
+        /// language change is not shown as an update, PLA-521).
+        var verb: String {
+            BattleNet.jobVerb(record) ?? (kind == .repair ? "Repairing" : kind == .update ? "Updating" : kind == .import ? "Copying" : "Downloading")
+        }
+
         var status: String {
             switch phase {
             case .queued: return waitingFor ?? "Waiting"
             case .preparing: return kind == .repair ? "Checking files…" : "Preparing…"
             case .downloading:
-                let verb = kind == .repair ? "Repairing" : kind == .update ? "Updating" : kind == .import ? "Copying" : "Downloading"
                 return fraction.map { "\(verb) \(Int($0 * 100))%" } ?? verb
             case .finishing: return "Finishing…"
             case .paused: return "Paused"

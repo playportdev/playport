@@ -627,6 +627,14 @@ each product shows the ban-risk notice ([decision 0169](decisions/0169-anti-chea
 proposed: Blizzard does not support Playport, an account action is possible, Playport stores
 no Battle.net credential); declining starts nothing, accepting is kept with the copy
 (`InstalledTitle.riskNoticeAccepted`, gone with it) and the page keeps the notice's text.
+Every Play then asks the install region's version endpoint for its current build (PLA-521):
+a newer one is planned (BattleNetClientKit `prepareUpdate`: the new build's selection without
+the objects the store's journals name and the product folder files already on disk, in data
+files after the store's; never a reinstall), refused before it starts when it does not fit,
+else run as a Downloads update job naming no locale (shown as Updating; a language change
+shows as Changing language), after which the Play goes on; a failed check is said on the
+launch screen and the installed version starts, so the game itself decides. The page's
+Check for update asks the same by hand and offers Update.
 The Play then starts the receipt's ARM64 client as a native ARM64 child
 ([decision 0170](decisions/0170-native-arm64-guests.md)) on the Vulkan backend with `-d3d12`,
 whatever the graphics settings say, and passes no sign-in: WoW shows its own login.

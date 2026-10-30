@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// An installed Battle.net product's store region and language, changed on its page (PLA-520):
-// the region in place, without a download (every region's data is in the install, so only
-// `.build.info` changes, BattleNetClientKit's changeRegion); the language as a Downloads job (an
-// update of the installed build, PlayportKit BattleNet.languageJob) that fetches only the new
-// locale's data, after which Play is available again. What the install is in now is its
-// `.build.info`'s, read when the page shows.
+// An installed Battle.net product's store region, language and updates, on its page (PLA-520,
+// PLA-521): the region in place, without a download (every region's data is in the install, so
+// only `.build.info` changes, BattleNetClientKit's changeRegion); the language as a Downloads job
+// (an update of the installed build, PlayportKit BattleNet.languageJob) that fetches only the new
+// locale's data, after which Play is available again; an update to the region's current build
+// (BattleNet.updateJob), which every Play checks for first (BattleNetPlay) and the page's Check for
+// update asks by hand, as a Downloads job that fetches only what changed. What the install is in
+// now is its `.build.info`'s, read when the page shows.
 
 import BattleNetClientKit
 import Foundation
@@ -25,8 +27,22 @@ final class BattleNetInstalled: ObservableObject {
     @Published private(set) var current: [BattleNetProduct: Choice] = [:]
     /// Products whose region is being changed.
     @Published private(set) var changingRegion: Set<BattleNetProduct> = []
-    /// Why a product's last region change failed, worded for the player.
+    /// Why a product's last region change or update failed, worded for the player.
     @Published private(set) var errors: [BattleNetProduct: String] = [:]
+
+    /// What the last update check of a product found.
+    enum UpdateState: Equatable {
+        case checking
+        case current(String)
+        case available(from: String, to: String, bytes: UInt64)
+        /// The check failed; why, worded for the player.
+        case unreachable(String)
+    }
+
+    @Published private(set) var updates: [BattleNetProduct: UpdateState] = [:]
+    /// Plays to go on with once their update finished in Downloads (this process only: a Play
+    /// is not started by an update the player resumes later).
+    private var playAfterUpdate: [BattleNetProduct: String] = [:]
 
     private let log = SteamUILog.logger
 
@@ -129,15 +145,27 @@ final class BattleNetInstalled: ObservableObject {
         return nil
     }
 
-    /// Downloads' run of a language change: only the new locale's data, then the receipt counts it.
+    /// Downloads' run of a Battle.net update job: a language change (it names a locale), else an
+    /// update to the region's current build.
     func run(_ p: BattleNetProduct, _ job: DownloadJob, client: BattleNetClient,
              progress: @escaping @Sendable (InstallEngine.Progress) -> Void) async throws -> UInt64? {
-        guard let choice = BattleNet.jobChoice(job.branch) else { throw ClientError.unsupported("Battle.net update without a language") }
         let layout = LibraryModel.paths.layout
         guard let before = receipt(p), let root = root(p) else { throw ClientError.notFound("\(p.name) is not installed") }
         let work = BattleNet.workArea(p, layout: layout)
         var installer = BattleNetInstaller(client: client, log: log)
         installer.engine.progressInterval = 0.5
+        guard let choice = BattleNet.jobChoice(job.branch) else {
+            let prepared = try await installer.prepareUpdate(p, root: root, work: work)
+            let r = try await installer.update(prepared, root: root, work: work, progress: progress)
+            let version = prepared.plan.build.version.versionsName
+            try layout.saveReceipt(BattleNet.receipt(before, adding: prepared.plan.content.files.count, bytes: prepared.plan.content.totalBytes,
+                                                     version: version))
+            updates[p] = .current(version)
+            log.info("battlenet", "\(p.code): updated \(before.version ?? "?") → \(version) in C:\\Games\\\(before.installDir), "
+                     + "\(prepared.plan.objects) objects and \(prepared.plan.files.count) files, \(r.engine.downloadedBytes) bytes fetched "
+                     + "in \(Int(r.seconds)) s")
+            return r.engine.downloadedBytes
+        }
         let prepared = try await installer.prepareLocaleChange(p, root: root, to: choice.locale, work: work)
         let r = try await installer.changeLocale(prepared, root: root, work: work, progress: progress)
         try layout.saveReceipt(BattleNet.receipt(before, adding: prepared.plan.content.files.count, bytes: prepared.plan.content.totalBytes))
@@ -145,5 +173,59 @@ final class BattleNetInstalled: ObservableObject {
         log.info("battlenet", "\(p.code): language \(choice.locale) in C:\\Games\\\(before.installDir), "
                  + "\(prepared.plan.objects) objects, \(r.engine.downloadedBytes) bytes fetched in \(Int(r.seconds)) s")
         return r.engine.downloadedBytes
+    }
+
+    // MARK: updates
+
+    /// Asks the version endpoint of the install's region whether its build is current; when not,
+    /// plans the update (its manifests stay in the work area for the Downloads job) for its size.
+    /// Any failure is `unreachable`, worded for the player: Play reports it and goes on.
+    func checkUpdate(_ p: BattleNetProduct) async -> BattleNetPlay.Update {
+        guard let root = root(p) else { return .unreachable("\(p.name) is not installed.") }
+        updates[p] = .checking
+        let installer = BattleNetInstaller(client: BattleNetStore.shared.client, log: log)
+        do {
+            let check = try await installer.checkUpdate(p, root: root)
+            guard check.isNewer else {
+                log.info("battlenet", "\(p.code): \(check.installed) is current")
+                updates[p] = .current(check.installed)
+                return .current
+            }
+            let prepared = try await installer.prepareUpdate(p, root: root, work: BattleNet.workArea(p, layout: LibraryModel.paths.layout))
+            let bytes = prepared.plan.content.totalBytes
+            log.info("battlenet", "\(p.code): update \(check.installed) → \(check.current), \(bytes) bytes to write, "
+                     + "\(prepared.plan.fetchBytes) to fetch")
+            updates[p] = .available(from: check.installed, to: check.current, bytes: bytes)
+            return .available(version: check.current, bytes: bytes)
+        } catch {
+            log.warn("battlenet", "\(p.code): update check failed: \(error)")
+            let why = BattleNetStore.shared.reason(error)
+            updates[p] = .unreachable(why)
+            return .unreachable(why)
+        }
+    }
+
+    /// The update's Downloads job, queued; `thenPlay` (a title ID) starts once it finished.
+    /// Returns why it was not queued (it does not fit), or nil.
+    @discardableResult
+    func update(_ p: BattleNetProduct, downloads: Downloads, thenPlay: String? = nil) -> String? {
+        guard case let .available(_, to, bytes)? = updates[p] else { return "No update was found for \(p.name)." }
+        if let free = LibraryModel.shared.freeBytes, let why = BattleNet.refusal(needed: BattleNet.spaceNeeded(update: bytes), free: free) {
+            log.info("battlenet", "\(p.code): update to \(to) refused: \(why)")
+            errors[p] = why
+            return why
+        }
+        errors[p] = nil
+        if let thenPlay { playAfterUpdate[p] = thenPlay }
+        log.info("battlenet", "\(p.code): update to \(to) queued" + (thenPlay.map { ", then Play \($0)" } ?? ""))
+        downloads.enqueue(BattleNet.updateJob(p, bytes: bytes))
+        return nil
+    }
+
+    /// After a Battle.net update job finished well: the Play that asked for it goes on.
+    func finished(_ p: BattleNetProduct) {
+        guard let id = playAfterUpdate.removeValue(forKey: p) else { return }
+        log.info("battlenet", "\(p.code): updated; Play \(id) goes on")
+        LibraryModel.shared.playAfterUpdate(id)
     }
 }
