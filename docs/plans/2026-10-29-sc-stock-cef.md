@@ -443,7 +443,15 @@ decided by [0166](../decisions/0166-detach-a-parked-threads-wait-then-unpin-its-
 - amends 0150: on by default, in release; the page-bridge exception unchanged;
 - amends 0153: what RDR2 runs with in both builds, and the layout from chunk 2;
 - records the every-play low hold at `0x7000000000` (+1.5 GiB from exec) and the fixed JIT RW alias there
-  ([PLA-480](https://linear.app/playportdev/issue/PLA-480)).
+  ([PLA-480](https://linear.app/playportdev/issue/PLA-480));
+- records the helper's impossible-probe refusal (owner, 2026-10-30; madeira-unix 0236). `ppsc_route` refuses
+  an unhinted reserve from the verified helper with `STATUS_NO_MEMORY` before any map walk, at both entry
+  points and with the same guards, when either holds:
+  - (a) it is larger than `PPSC_CEILING − PPSC_FLOOR`;
+  - (b) it is 8 GiB or more and the helper already owns kind 6.
+
+  These are V8's sandbox ladder and gin's pool tries, 26 `NO GAP FITS` walks per helper in l10–l12. The
+  first two refusals per PEB are logged, and the kind-6 owner-exit line counts them all.
 
 Update `docs/decisions/README.md`, `ARCHITECTURE.md`, `BUILDING.md`, `LICENSING.md`, `NOTICES.md`
 and `DISTRIBUTION.md` where they name the CEF payload, and `docs/plans/finished.md` /

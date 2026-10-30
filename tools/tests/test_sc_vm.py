@@ -20,7 +20,8 @@ HEADERS = [('0224-ntdll-social-club-layout-geometry.patch', 'pp_sc_layout.h'),
            ('0226-ntdll-route-social-club-helper-reservations.patch', 'pp_sc_vm.h'),
            ('0226-ntdll-route-social-club-helper-reservations.patch', 'pp_sc_access.h')]
 LATER = ['0228-ntdll-second-social-club-elf-metadata-slot.patch',
-         '0231-ntdll-hold-a-dead-owner-s-Social-Club-slot-in-place-.patch']
+         '0231-ntdll-hold-a-dead-owner-s-Social-Club-slot-in-place-.patch',
+         '0236-ntdll-refuse-the-Social-Club-helper-s-impossible-V8-.patch']
 
 
 def header(patch, name):
@@ -253,6 +254,8 @@ static void reset(void)
 {
     memset(views, 0, sizeof views);
     memset(ppsc_owner, 0, sizeof ppsc_owner);
+    memset(ppsc_probe_peb, 0, sizeof ppsc_probe_peb);
+    memset(ppsc_probe_count, 0, sizeof ppsc_probe_count);
     memset(all_msgs, 0, sizeof all_msgs);
     params[0].ImagePathName.Buffer = params[1].ImagePathName.Buffer = params[3].ImagePathName.Buffer = helper_path;
     params[0].ImagePathName.Length = params[1].ImagePathName.Length = params[3].ImagePathName.Length =
@@ -395,8 +398,62 @@ static void t_route_cage(void)
     assert(alloc_calls == 2);
     grant_ok(0, GiB(8), 1, PPSC_CAGE);
     assert(last_protect == PAGE_NOACCESS);
-    assert(!reserve(0, GiB(8), MEM_RESERVE, PAGE_NOACCESS, 1, &st, &ret, &sz));     /* cage already taken */
+    /* The cage already taken: its owner's next unhinted 8 GiB is a sandbox probe,
+     * refused without a walk (0236); a hinted one keeps the ordinary path. */
+    assert(reserve(0, GiB(8), MEM_RESERVE, PAGE_NOACCESS, 1, &st, &ret, &sz) && st == STATUS_NO_MEMORY);
+    assert(!reserve(0x8400000000ULL, GiB(8), MEM_RESERVE, PAGE_NOACCESS, 1, &st, &ret, &sz));
     assert(alloc_calls == 3);
+}
+
+static void teardown_views(PEB *peb);
+/* 0236: A's l12 V8 sequence (v8-no-gap-fits). Every unhinted ask that cannot
+ * fit is refused before allocate_virtual_memory; hinted tries, the cage and
+ * the small asks are as before. Two lines per PEB; the cage's exit line counts. */
+static void t_route_impossible_probes(void)
+{
+    NTSTATUS st; void *ret; SIZE_T sz;
+    uint64_t ladder[] = {GiB(512), GiB(256), GiB(128), GiB(64), GiB(32), GiB(16)};
+    int calls;
+    reset();
+    grant_sequence();
+    calls = alloc_calls;
+    for (unsigned i = 0; i < 6; i++) {
+        assert(!reserve(0x1400000000ULL, ladder[i], MEM_RESERVE, PAGE_NOACCESS, 1, &st, &ret, &sz));
+        assert(reserve(0, ladder[i], MEM_RESERVE, PAGE_NOACCESS, 1, &st, &ret, &sz) && st == STATUS_NO_MEMORY);
+    }
+    assert(alloc_calls == calls && !ppsc_owner[PPSC_CAGE]);
+    grant_ok(0, GiB(8), 1, PPSC_CAGE);                                               /* the cage is unaffected */
+    calls = alloc_calls;
+    assert(!reserve(0x528b00000000ULL, GiB(1), MEM_RESERVE, PAGE_NOACCESS, 1, &st, &ret, &sz));
+    assert(!reserve(0, GiB(1), MEM_RESERVE, PAGE_NOACCESS, 1, &st, &ret, &sz));     /* the trusted range */
+    for (unsigned i = 0; i < 10; i++) {
+        assert(!reserve(0x8400000000ULL + i * GiB(16), GiB(16), MEM_RESERVE, PAGE_NOACCESS, 1, &st, &ret, &sz));
+        assert(reserve(0, GiB(16), MEM_RESERVE, PAGE_NOACCESS, 1, &st, &ret, &sz) && st == STATUS_NO_MEMORY);
+    }
+    for (unsigned i = 0; i < 10; i++) {
+        assert(reserve(0, GiB(8), MEM_RESERVE, PAGE_NOACCESS, 1, &st, &ret, &sz) && st == STATUS_NO_MEMORY);
+        assert(reserve(0, GiB(16) - 0x10000, MEM_RESERVE, PAGE_NOACCESS, 1, &st, &ret, &sz) && st == STATUS_NO_MEMORY);
+    }
+    assert(!reserve(0, GiB(4), MEM_RESERVE, PAGE_NOACCESS, 1, &st, &ret, &sz));     /* l13's smaller asks */
+    assert(!reserve(0, 0x13fff0000ULL, MEM_RESERVE, PAGE_NOACCESS, 1, &st, &ret, &sz));
+    assert(alloc_calls == calls);
+    assert(count_msg("probe refused") == 2 && count_msg("larger than any gap the layout leaves") == 2);
+    /* The non-extended entry point: the same rule, so no `refused reserve` line either. */
+    cur = &pebs[3];
+    assert(reserve(0, GiB(64), MEM_RESERVE, PAGE_READWRITE, 0, &st, &ret, &sz) && st == STATUS_NO_MEMORY);
+    assert(reserve(0, GiB(16) - 0x10000, MEM_RESERVE, PAGE_READWRITE, 0, &st, &ret, &sz) && st == STATUS_NO_MEMORY);
+    assert(!reserve(0, GiB(8), MEM_RESERVE, PAGE_READWRITE, 0, &st, &ret, &sz));    /* no cage of its own */
+    assert(count_msg("probe refused") == 4 && !count_msg("refused reserve") && alloc_calls == calls);
+    cur = &pebs[2];                                                                  /* the game: untouched */
+    assert(!reserve(0, GiB(64), MEM_RESERVE, PAGE_NOACCESS, 1, &st, &ret, &sz));
+    /* A's exit: 6 + 10 + 20 counted on its cage line. */
+    memset(all_msgs, 0, sizeof all_msgs);
+    teardown_views(&pebs[0]);
+    assert(count_msg("kind=6 slot held in place; 36 impossible probes refused") == 1);
+    assert(count_msg("impossible probes refused") == 1);
+    teardown_views(&pebs[3]);                                                        /* no cage: its own line */
+    assert(count_msg("owner") && count_msg("exited without kind=6; 2 impossible probes refused") == 1);
+    check_holds();
 }
 
 static void t_route_second_helper(void)
@@ -995,6 +1052,7 @@ static void t_meta_overflow_core_kinds(void)
 static const struct { const char *name; void (*fn)(void); } tests[] = {
     {"route_not_routed", t_route_not_routed}, {"route_giant_unknown", t_route_giant_unknown},
     {"route_sequence", t_route_sequence}, {"route_cage", t_route_cage},
+    {"route_impossible_probes", t_route_impossible_probes},
     {"route_second_helper", t_route_second_helper}, {"grant_failures", t_grant_failures},
     {"grant_reserved_area", t_grant_reserved_area}, {"grant_intruder", t_grant_intruder},
     {"reported_tail", t_reported_tail}, {"reported_oilpan_low", t_reported_oilpan_low},
@@ -1017,7 +1075,7 @@ int main(int argc, char **argv)
 '''
 
 
-NAMES = ['route_not_routed', 'route_giant_unknown', 'route_sequence', 'route_cage',
+NAMES = ['route_not_routed', 'route_giant_unknown', 'route_sequence', 'route_cage', 'route_impossible_probes',
          'route_second_helper', 'grant_failures', 'grant_reserved_area', 'grant_intruder',
          'free_whole', 'free_refusals', 'free_null_owner', 'access', 'reported_tail',
          'reported_oilpan_low', 'reported_cross_slot', 'owner_died', 'owner_held_in_place', 'meta2_second_helper',

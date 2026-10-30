@@ -11,7 +11,9 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 UNIX = ROOT / 'patches/madeira-unix'
 PATCH = UNIX / '0224-ntdll-social-club-layout-geometry.patch'
 OWNER_PATCH = UNIX / '0226-ntdll-route-social-club-helper-reservations.patch'
-LATER = [UNIX / '0228-ntdll-second-social-club-elf-metadata-slot.patch']
+LATER = [UNIX / '0228-ntdll-second-social-club-elf-metadata-slot.patch',
+         UNIX / '0231-ntdll-hold-a-dead-owner-s-Social-Club-slot-in-place-.patch',
+         UNIX / '0236-ntdll-refuse-the-Social-Club-helper-s-impossible-V8-.patch']
 
 
 def added_header(patch, name):
@@ -116,6 +118,50 @@ int main(void) {
         assert(ppsc_classify(m, h, all & ~meta, 0, meta) == PPSC_REFUSE);              /* no ELF */
         assert(ppsc_classify(m, 0x400000000ULL, all & ~(elf | meta), elf, meta) == PPSC_NONE);  /* aligned: not metadata */
     }
+
+    /* ppsc_impossible (madeira-unix 0236): every helper reserve size l12 logged. */
+    {
+        unsigned cage = PPSC_BIT(PPSC_CAGE), core = PPSC_BIT(PPSC_ELF) | PPSC_BIT(PPSC_CEF);
+        unsigned before = core | PPSC_BIT(PPSC_ELF_META) | PPSC_BIT(PPSC_CEF_META) | PPSC_BIT(PPSC_OILPAN);
+        /* V8's sandbox ladder, 512 GiB down to 16 GiB: never fits, cage or not. */
+        uint64_t ladder[] = { 0x8000000000ULL, 0x4000000000ULL, 0x2000000000ULL, 0x1000000000ULL,
+                              0x800000000ULL, 0x400000000ULL };
+        for (unsigned i = 0; i < sizeof(ladder)/sizeof(*ladder); i++) {
+            assert(ppsc_impossible(ladder[i], 0, before) == PPSC_PROBE_NO_GAP);
+            assert(ppsc_impossible(ladder[i], 0, before | cage) == PPSC_PROBE_NO_GAP);
+            assert(ppsc_impossible(ladder[i], 0, 0) == PPSC_PROBE_NO_GAP);
+            /* the hinted try fails fast already: left alone */
+            assert(ppsc_impossible(ladder[i], 0x1400000000ULL, before) == PPSC_PROBE_NONE);
+            assert(ppsc_impossible(ladder[i], 0x2f00000000ULL, before | cage) == PPSC_PROBE_NONE);
+        }
+        /* The cage's own 8 GiB ask, before the helper owns kind 6: to the router as before. */
+        assert(ppsc_impossible(0x200000000ULL, 0, before) == PPSC_PROBE_NONE);
+        assert(ppsc_impossible(0x200000000ULL, 0, 0) == PPSC_PROBE_NONE);
+        /* gin's pool tries after the cage: 16 GiB and its padded 16 GiB - 64 KiB never fit;
+         * 8 GiB (and Wine's +64 KiB) is a sandbox subspace probe V8 drops. */
+        assert(ppsc_impossible(0x400000000ULL, 0, before | cage) == PPSC_PROBE_NO_GAP);
+        assert(ppsc_impossible(0x3ffff0000ULL, 0, before | cage) == PPSC_PROBE_NO_GAP);
+        assert(ppsc_impossible(0x200000000ULL, 0, before | cage) == PPSC_PROBE_SANDBOX);
+        assert(ppsc_impossible(0x200010000ULL, 0, before | cage) == PPSC_PROBE_SANDBOX);
+        assert(ppsc_impossible(0x200000000ULL, 0, cage) == PPSC_PROBE_SANDBOX);
+        assert(ppsc_impossible(0x200000000ULL, 0x8400000000ULL, before | cage) == PPSC_PROBE_NONE);
+        assert(ppsc_impossible(0x200000000ULL, 0x15400000000ULL, before | cage) == PPSC_PROBE_NONE);
+        /* Smaller asks keep Wine's path: the 1 GiB trusted range, the 4 GiB pool, l13's
+         * restarted helper's 5 GiB - 64 KiB, the game's 8960 MiB and 1175 MB. */
+        assert(ppsc_impossible(0x40000000ULL, 0, before | cage) == PPSC_PROBE_NONE);
+        assert(ppsc_impossible(0x40000000ULL, 0x528b00000000ULL, before) == PPSC_PROBE_NONE);
+        assert(ppsc_impossible(0x100000000ULL, 0, before | cage) == PPSC_PROBE_NONE);
+        assert(ppsc_impossible(0x13fff0000ULL, 0, before | cage) == PPSC_PROBE_NONE);
+        assert(ppsc_impossible(PPSC_GAME_SIZE, 0, 0) == PPSC_PROBE_NONE);
+        assert(ppsc_impossible(0x49701000ULL, 0, 0) == PPSC_PROBE_NONE);
+        assert(ppsc_impossible(4096, 0, before | cage) == PPSC_PROBE_NONE);
+        /* The bound: exactly the layout's largest gap still goes to the walk. */
+        assert(PPSC_CEILING - PPSC_FLOOR == 0x3efff0000ULL);
+        assert(ppsc_impossible(0x3efff0000ULL, 0, before) == PPSC_PROBE_NONE);
+        assert(ppsc_impossible(0x3efff0001ULL, 0, before) == PPSC_PROBE_NO_GAP);
+        assert(ppsc_impossible(UINT64_MAX, 0, 0) == PPSC_PROBE_NO_GAP);
+        assert(ppsc_impossible(0x1ffffffffULL, 0, before | cage) == PPSC_PROBE_NONE);
+    }
     return 0;
 }
 '''
@@ -169,6 +215,12 @@ static int ppsc_native_hold(uint64_t base, uint64_t size)
 }
 #include "pp_sc_owner.h"
 static unsigned noted;
+/* pp_sc_vm.h's hold in place (0231); this test's teardown frees no view. */
+__attribute__((unused)) static int ppsc_owner_view_freed_locked(void *peb, struct file_view *view)
+{
+    (void)peb; (void)view;
+    return 0;
+}
 /* pp_sc_vm.h's logger only reads the kept view. */
 static void ppsc_note_kept_view_locked(int k, void *peb, struct file_view *v)
 {
@@ -222,6 +274,30 @@ int main(void)
     assert(!(ppsc_held & PPSC_BIT(PPSC_CEF)));
     assert(views[PPSC_CEF].owner == &pebs[1] && views[PPSC_CEF].contents == 0x5678);
     assert(ppsc_classify(0x800000000ULL, 0x1000000000ULL, ppsc_held, 0, PPSC_BIT(PPSC_ELF)) == PPSC_REFUSE);
+
+    /* Impossible-probe refusals (madeira-unix 0236): counted per PEB, eight PEBs at once,
+     * taken (and the entry freed) by the cage's owner-exit line or at the owner's exit. */
+    {
+        static char peb_ids[10];
+        char buf[48];
+        assert(!ppsc_probe_counted_locked(NULL) && !ppsc_probe_take_locked(NULL));
+        for (unsigned i = 1; i <= 26; i++) assert(ppsc_probe_counted_locked(&peb_ids[0]) == i);
+        assert(ppsc_probe_counted_locked(&peb_ids[1]) == 1);
+        for (int p = 2; p < PPSC_PROBE_PEBS; p++) assert(ppsc_probe_counted_locked(&peb_ids[p]) == 1);
+        assert(!ppsc_probe_counted_locked(&peb_ids[PPSC_PROBE_PEBS]));   /* full: refused uncounted */
+        assert(!strcmp(ppsc_probe_suffix_locked(PPSC_OILPAN, &peb_ids[0], buf, sizeof buf), ""));
+        assert(!strcmp(ppsc_probe_suffix_locked(PPSC_CAGE, &peb_ids[0], buf, sizeof buf),
+                       "; 26 impossible probes refused"));
+        assert(!ppsc_probe_take_locked(&peb_ids[0]));                     /* taken once */
+        assert(ppsc_probe_counted_locked(&peb_ids[PPSC_PROBE_PEBS]) == 1); /* its entry is free again */
+        assert(ppsc_probe_take_locked(&peb_ids[1]) == 1 && !ppsc_probe_take_locked(&peb_ids[1]));
+        /* An owner that dies without the cage line gives its count back too. */
+        assert(ppsc_probe_counted_locked(&pebs[1]) == 1 && ppsc_probe_counted_locked(&pebs[1]) == 2);
+        ppsc_owner_died_locked(&pebs[1]);
+        assert(!ppsc_probe_take_locked(&pebs[1]));
+        assert(!strcmp(ppsc_probe_suffix_locked(PPSC_CAGE, &peb_ids[9], buf, sizeof buf),
+                       "; 0 impossible probes refused"));
+    }
     return 0;
 }
 '''
