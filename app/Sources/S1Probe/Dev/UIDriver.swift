@@ -625,7 +625,8 @@ enum UIDriver {
                     if let failure = try await afterInGame(action, index: done + 1, next: actions[(i + 1)...]) { return finish(failure) }
                     if AppRestart.shared.restarting { return }
                 case "set":
-                    let kv = id.split(separator: "=", maxSplits: 1).map(String.init)
+                    // KEY= keeps its empty value: "" (set:controls.suggestedLayoutOffered= forgets the offers).
+                    let kv = id.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
                     guard kv.count == 2, !kv[0].isEmpty else { return finish("action=\(action) refused: not set:<key>=<value>") }
                     let value: Any = kv[1] == "true" ? true : kv[1] == "false" ? false : Int(kv[1]).map { $0 as Any } ?? kv[1]
                     DriverUndo.willSet(kv[0])

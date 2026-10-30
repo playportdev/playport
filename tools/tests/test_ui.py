@@ -155,6 +155,14 @@ class UiEnvTest(unittest.TestCase):
             self.assertEqual(m.parse(["--action", f"set:donorPoolMB={v}"]).action, [f"set:donorPoolMB={v}"])
         self.assertFalse(m.ACTION_RE.match("set:donorPoolMB=auto,play:app-367520"))
 
+    def test_set_takes_an_empty_value(self):
+        # set:KEY= stores "" (UIDriver keeps the empty value), as --help documents for
+        # set:controls.suggestedLayoutOffered= (forgets the offered layouts) and the Social Club keys.
+        m = load()
+        for a in ("set:controls.suggestedLayoutOffered=", "set:endGameSocialClubAfterSignIn="):
+            self.assertEqual(m.parse(["--action", a]).action, [a])
+        self.assertFalse(m.ACTION_RE.match("set:=x"))
+
     def test_memory_probe_sizes_are_bounded(self):
         m = load()
         for size in (64, 2048, 4096):

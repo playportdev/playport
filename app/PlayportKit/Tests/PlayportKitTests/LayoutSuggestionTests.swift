@@ -91,6 +91,11 @@ final class LayoutSuggestionTests: XCTestCase {
         XCTAssertTrue(LayoutSuggestion.offered("epic-Buffalo", in: d))
         XCTAssertFalse(LayoutSuggestion.offered("epic-buffalo", in: d))
         XCTAssertEqual(d.stringArray(forKey: LayoutSuggestion.offeredKey), ["app-1", "epic-Buffalo"])
+        // The driver's set:controls.suggestedLayoutOffered= stores "": no game offered, and offering starts again.
+        d.set("", forKey: LayoutSuggestion.offeredKey)
+        XCTAssertFalse(LayoutSuggestion.offered("app-1", in: d))
+        LayoutSuggestion.markOffered("app-1", in: d)
+        XCTAssertEqual(d.stringArray(forKey: LayoutSuggestion.offeredKey), ["app-1"])
         d.removeObject(forKey: LayoutSuggestion.offeredKey)
     }
 
