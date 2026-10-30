@@ -154,6 +154,11 @@
 //                              tap through the handler GameSurfaceView's recognizer calls
 //                              (HostIO.menuGesture), which opens the in-game menu with or
 //                              without on-screen controls, and waits 1 s
+//   suggest:accept|dismiss     After a play: (it runs while the game runs): waits (3 min at most)
+//                              for the toast that offers Keyboard & mouse (UI/LayoutSuggestionToast
+//                              .swift, PlayportKit LayoutSuggestion), then answers it as its Use or
+//                              Not now button does; fails, with the reason, when the game is not
+//                              offered (once per game: set:controls.suggestedLayoutOffered= forgets)
 //   menu:open                  After a play: (the actions after it then run while the game runs):
 //                              waits for the game's first frame (3 min at most), then holds the
 //                              controller's Home button 0.8 s through HostIO's pad handling
@@ -527,6 +532,25 @@ enum UIDriver {
                     log("gesture \(id): \(InGameMenu.shared.summary)")
                     if let failure = try await afterInGame(action, index: done + 1, next: actions[(i + 1)...]) { return finish(failure) }
                     if AppRestart.shared.restarting { return }
+                case "suggest":
+                    let launch = TitleLaunch.shared, suggested = SuggestedLayout.shared
+                    guard ["accept", "dismiss"].contains(id) else { return finish("action=\(action) refused: not suggest:accept or suggest:dismiss") }
+                    guard launch.running else { return finish("action=\(action) refused: no game is running") }
+                    // The offer is due after 20 s of play from the first frame (PlayportKit LayoutSuggestion).
+                    let deadline = Date().addingTimeInterval(180)
+                    while launch.running, !suggested.showing, suggested.outcome == nil, Date() < deadline {
+                        try await pause(.milliseconds(250))
+                    }
+                    guard suggested.showing else {
+                        let why = suggested.outcome.map { " (\($0))" } ?? (launch.running ? " in 3 min" : " before the game ended")
+                        return finish("action=\(action) failed: no Keyboard & mouse offer" + why)
+                    }
+                    try checkpoint()
+                    suggested.answer(accept: id == "accept", by: "driver")
+                    try await pause(.milliseconds(500))
+                    log("suggest \(id): \(OnScreenControls.shared.summary)")
+                    if let failure = try await afterInGame(action, index: done + 1, next: actions[(i + 1)...]) { return finish(failure) }
+                    if AppRestart.shared.restarting { return }
                 case "menu":
                     let launch = TitleLaunch.shared, menu = InGameMenu.shared
                     if id == "open" {
@@ -805,7 +829,7 @@ enum UIDriver {
     /// An action that acts on the running game, which a play: does not wait past.
     static func inGame(_ action: String) -> Bool {
         action.hasPrefix("menu:") || action.hasPrefix("wait:") || action.hasPrefix("web:") || action.hasPrefix("tap:")
-            || action.hasPrefix("touch:") || action.hasPrefix("gesture:") || action.hasPrefix("gyro:")
+            || action.hasPrefix("touch:") || action.hasPrefix("gesture:") || action.hasPrefix("gyro:") || action.hasPrefix("suggest:")
             || (action.hasPrefix("pad:") && InGameMenu.shared.isOpen)
     }
 

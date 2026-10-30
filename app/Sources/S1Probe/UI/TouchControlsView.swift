@@ -102,6 +102,7 @@ final class OnScreenControls: ObservableObject {
         TitleLaunch.shared.objectWillChange.sink { _ in later() }.store(in: &subscriptions)
         update()
         Self.log("start: \(n) controller(s) connected; \(state.summary), " + (padOn ? "player 1 is the controls' pad" : "no controls' pad"))
+        SuggestedLayout.shared.start()
     }
 
     func controllersChanged(_ n: Int) {
@@ -373,7 +374,7 @@ final class GyroChipOverlay: UIView {
     func hideNow() { chip.hideNow() }
 }
 
-private extension UIView {
+extension UIView {
     /// The safe area over the game. The game view ignores the safe area and
     /// fills the window: the window's insets are taken too, whichever is larger.
     var gameSafeInsets: UIEdgeInsets {

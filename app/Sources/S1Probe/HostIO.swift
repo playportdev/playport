@@ -904,6 +904,8 @@ final class GameSurfaceView: UIView {
     private let controls = TouchControlsView()
     /// The "Gyro aim" chip, over them and shown without them too; it takes no touch.
     private let gyroChip = GyroChipOverlay()
+    /// The suggested layout's toast (UI/LayoutSuggestionToast.swift), over them; it takes touches on its card only.
+    private let suggestion = LayoutSuggestionToast()
     #if !PLAYPORT_RELEASE
     /// The view on screen, for the UI driver's tap: action (Dev/UIDriver.swift).
     static weak var current: GameSurfaceView?
@@ -916,6 +918,7 @@ final class GameSurfaceView: UIView {
         layer.addSublayer(windows)
         addSubview(controls)
         addSubview(gyroChip)
+        addSubview(suggestion)
         // Every finger reaches the view, so the three-finger tap sees them; forward lets only one through.
         isMultipleTouchEnabled = true
         let menuTap = UITapGestureRecognizer(target: self, action: #selector(threeFingerTap))
@@ -950,6 +953,7 @@ final class GameSurfaceView: UIView {
         CATransaction.commit()
         controls.frame = bounds
         gyroChip.frame = bounds
+        suggestion.frame = bounds
     }
 
     override func didMoveToWindow() {
