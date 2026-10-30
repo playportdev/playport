@@ -1,4 +1,4 @@
-# WoW retail under desktop Wine: login screen on Direct3D 12 and 11 (2026-10-30)
+# WoW retail under desktop Wine: login and character select on Direct3D 12, login on 11 (2026-10-30)
 
 **Linear:** [PLA-509](https://linear.app/playportdev/issue/PLA-509) (spec
 [PLA-516](https://linear.app/playportdev/issue/PLA-516)). Uses the install from PLA-517
@@ -6,8 +6,8 @@
 ([HOST-DEBUGGING.md](../HOST-DEBUGGING.md)).
 
 **Status:** the x64 client reaches WoW's login screen on Direct3D 12 (vkd3d-proton) and with
-`-d3d11` (DXVK). **Character select is pending:** it needs the owner's sign-in, run with the
-procedure [below](#owner-sign-in-run-pending).
+`-d3d11` (DXVK), and with the owner signing in it reaches **character select on Direct3D 12**
+([owner run](#owner-sign-in-run)).
 
 ## Setup
 
@@ -191,14 +191,29 @@ the empty ADB/WDB caches), `WowConnection.log` and `Connection.log` stay empty, 
 prefix's registry gains no service or driver (only the two Blizzard values above).
 (inference: Warden's module is sent by the server after authentication, so what it checks, and
 whether the Wine session is flagged or disconnected, can only be seen after signing in: the
-owner's run.)
+owner's run below saw no disconnect in its short stay at character select.)
 
-## Owner sign-in run (pending)
+## Owner sign-in run
 
-The owner cannot reach the agent's sway session, so this run shows WoW on the owner's niri
-display through niri's Xwayland (`xwayland-satellite`), with the same prefix, DLLs, overrides
-and `Config.wtf` as the sway runs (by the owner's instruction; HOST-DEBUGGING.md's
-sway-only rule stands for agent runs). The agent did not start it.
+**Result (2026-10-30 15:24–15:27, run `owner-d3d12-152448`):** the owner signed in on the niri
+display and reached character select on Direct3D 12. From the run's `Logs/` (no account,
+character or realm data quoted):
+
+- `gx.log`: `GpuInfo: sm:dx_6_0, rt:DXR 1.1, vrs:2, bary:1, mesh:1`, `D3d12 Device Create
+  Successful (230.1 ms)`, `Using shader family dx_6_0` (RADV, as in the sway runs).
+- The console's `gxApi`: `"D3D12"` (owner's check, and `General.log`).
+- `Aurora.log`: `Logon complete.`, `Received AuthedToWoW result="ERROR_OK (0)"`, `Session with
+  Battle.net established.`; `Connection.log`: `Handle Auth Response: 0`, `Glue Authed To WoW:
+  0`, `Handle Char Enum` (the character list) twice, about 50 s at character select.
+- No disconnect or error box before Quit: `Disconnect: 13` comes after `Glues Shutdown()`, i.e.
+  from Quit; exit code 0. Warden: nothing visible in that time; a session in the world was not
+  part of this ticket.
+- Not tried: the gamepad (`GamePadEnable 1`) and `-d3d11` sign-in.
+
+The procedure, kept for a rerun: the owner cannot reach the agent's sway session, so this run
+shows WoW on the owner's niri display through niri's Xwayland (`xwayland-satellite`), with the
+same prefix, DLLs, overrides and `Config.wtf` as the sway runs (by the owner's instruction;
+HOST-DEBUGGING.md's sway-only rule stands for agent runs).
 
 1. Check niri's X display: `ps -o args -C xwayland-satellite` names it (`:0` on 2026-10-30;
    niri's Wayland socket was `wayland-1`). If it differs, prefix the command with
