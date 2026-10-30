@@ -88,7 +88,7 @@ offline device (PLA-504 below); it is recorded as the lease. The result is typed
   only one: an HTTP 2xx body holding `satisfactionFailure` with a numeric reason
   and no `license`. Reason 501 is `.deviceLimit` (the device, not the copy; it
   deletes every copy's keys); any other reason is `.refused` (that copy's keys
-  deleted). A licence lapse counts `.refused` only.
+  deleted). A licence lapse counts `.refused` only (`copyLicensed`, below).
 - `.unavailable(XboxLicenceProblem)` is never a verdict: network, HTTP
   408/429/5xx (`service`), any other HTTP error including 401 and 403
   (`rejected`; Nexus counts 403 as a refusal, but it carries no licensing
@@ -355,6 +355,24 @@ A Play of an installed copy (the dev app's `Dev/XboxPlay.swift`) goes through, i
 - PlayportKit's `GamingRuntimeKeys` (Gaming Services' version and the Store's
   WinRT class served by `xgameruntime.dll`) are topped up in the prefix.
 
+## A licence lapse (PLA-505)
+
+`XboxLicenceResult.copyLicensed` (`XboxLicenceLapse.swift`) is Microsoft's verdict
+on the copy: `true` for a licence it granted just now (`.microsoft`), `false` for
+`.refused(.refused)`, `nil` for everything else: the stored licence standing in
+(`.cache`), the device limit (the device, not the copy) and every `.unavailable`.
+PlayportKit's `LicenceLapses` (`LicenceLapse.swift`) is the store-neutral ledger:
+the first refusal starts a lapse and its removal falls due 7 days later
+(`LicenceLapses.grace`); a grant cancels it; no verdict changes nothing; past the
+grace the removal waits while `UnsyncedSaves` says the copy has saves not in the
+cloud or can't tell (`nil`); the player may uninstall earlier. The dev app's
+`Dev/XboxLapse.swift` feeds it from every Play and every Library refresh (each
+installed copy's licence), keeps it in the state root (`lapses.json`), shows the
+notice with Play off, Check licence and Uninstall now on the copy's page, and
+uninstalls a due copy, keeping its saves, at app start or a Library refresh. Until
+PLA-500's cloud saves are wired in (`XboxCloudSaves.unsynced(productID:)`) the
+saves are unknown, so every due removal is held.
+
 ## Provenance and offline checks
 
 Written from Xodus `514dd56f360a4bdf12f4acde5148bac5ce5f957f`:
@@ -468,3 +486,12 @@ offers deleting them).
 The play's phone gate (signed in, installed):
 `./pp ui --play xbox-9MW9469V91LM --until first-frame+10 --shot`. A refusal ends the
 run with `refused: <title>: <text>` (sign-in or licence).
+
+The lapse's phone gate (signed in, a copy installed, deferred): one real lapse, a
+Game Pass copy whose membership or catalogue entry ended,
+`./pp ui --action xbox:licence:<ID> --shot` (logs `licence refused` and
+`lapse grace, removal <date>`, the notice with Play off); the grace and the hold
+observed by relaunching after the date (`xbox:lapse:<ID>` logs `held` while the
+saves aren't known to be in the cloud). Without a real lapse,
+`xbox:lapse:<ID>@0` and `@8` simulate a refusal 0 and 8 days ago to show the notice
+and the hold; `xbox:licence:<ID>` puts Microsoft's verdict back.
