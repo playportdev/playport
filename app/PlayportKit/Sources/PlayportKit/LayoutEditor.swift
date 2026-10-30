@@ -86,8 +86,10 @@ public struct ControlDetails: Equatable, Sendable {
     public var size: String
     /// A button: Hold, Toggle, Repeat.
     public var behaviour: TouchBehaviour?
-    /// Not a surface: it can be moved, resized and duplicated.
+    /// Not a surface: it can be moved and resized.
     public var movable: Bool
+    /// Not one of what a layout has once (a surface, a pad stick, a pointer tool): it can be duplicated.
+    public var duplicable: Bool
 }
 
 public struct LayoutEditor: Equatable, Sendable {
@@ -211,7 +213,8 @@ public struct LayoutEditor: Equatable, Sendable {
         return ControlDetails(id: id, label: c.label, subtitle: c.kind.title + " · " + c.anchor.side,
                               slots: slots, actions: slots.indices.map { ActionText.name(c.actions[$0]) },
                               size: f.width == f.height ? "\(pt(f.width)) pt" : "\(pt(f.width)) × \(pt(f.height)) pt",
-                              behaviour: c.kind == .button ? c.behaviour : nil, movable: !c.isSurface)
+                              behaviour: c.kind == .button ? c.behaviour : nil, movable: !c.isSurface,
+                              duplicable: !c.isOnePerLayout)
     }
 
     /// The ActionPicker for a slot of `details(id).slots`, with what that slot takes.
@@ -364,10 +367,10 @@ public struct LayoutEditor: Equatable, Sendable {
         return c.id
     }
 
-    /// A copy of a control (not a surface), `duplicateOffset` down and right, selected.
+    /// A copy of a control (not one a layout has once), `duplicateOffset` down and right, selected.
     @discardableResult
     public mutating func duplicate(_ id: String) -> String? {
-        guard var c = layout.control(id), !c.isSurface, var f = frame(of: id) else { return nil }
+        guard var c = layout.control(id), !c.isOnePerLayout, var f = frame(of: id) else { return nil }
         let a = area
         let oldZone = zone(of: id)
         f.x += Self.duplicateOffset; f.y += Self.duplicateOffset
@@ -513,10 +516,7 @@ public struct LayoutEditor: Equatable, Sendable {
 
     /// A pad stick not in the layout yet (the left first), nil with both there.
     func newStick() -> PadControl? {
-        let there = Set(layout.controls.compactMap { c -> PadControl? in
-            if c.kind == .stick, case .pad(let p) = c.actions.first { return p }
-            return nil
-        })
+        let there = Set(layout.controls.compactMap(\.padStick))
         return [PadControl.leftStick, .rightStick].first { !there.contains($0) }
     }
 
@@ -542,6 +542,15 @@ public struct LayoutEditor: Equatable, Sendable {
 extension Control {
     /// The look area or the pointer surface: the whole safe area, under everything.
     var isSurface: Bool { kind == .lookArea || kind == .pointer }
+
+    /// The pad stick it is (the left or right stick, whole), else nil.
+    var padStick: PadControl? {
+        guard kind == .stick, case .pad(let p) = actions.first, p == .leftStick || p == .rightStick else { return nil }
+        return p
+    }
+
+    /// What a layout has once (`LayoutEditor.addable`): a surface, a pad stick, a pointer tool.
+    var isOnePerLayout: Bool { isSurface || padStick != nil || tool != nil }
 
     /// Placed at `f` (in the view): its size, and its centre from `anchor` (nil: the
     /// anchor of the ninth of the safe area `area` the centre is in).

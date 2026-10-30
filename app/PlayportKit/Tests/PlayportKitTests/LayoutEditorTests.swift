@@ -217,10 +217,30 @@ final class LayoutEditorTests: XCTestCase {
         XCTAssertNotNil(e.layout.control("jump"))
     }
 
+    /// What a layout has once is not duplicated: a pad stick, each pointer tool (as Add offers them).
+    func testDuplicateKeepsTheOneOfEachLimits() {
+        var pad = LayoutEditor(preset: .gamepad, width: 800, height: 400)
+        XCTAssertNil(pad.duplicate("leftStick"))
+        XCTAssertEqual(pad.details("leftStick")?.duplicable, false)
+        XCTAssertEqual(pad.details("leftStick")?.movable, true)
+        XCTAssertEqual(pad.details("a")?.duplicable, true)
+        XCTAssertEqual(pad.layout.controls.filter { $0.kind == .stick }.count, 1)
+        var point = LayoutEditor(preset: .pointClick, width: 800, height: 400)
+        XCTAssertNil(point.duplicate("hover"))
+        XCTAssertNil(point.duplicate("mode"))
+        XCTAssertEqual(point.details("hover")?.duplicable, false)
+        XCTAssertFalse(point.canUndo)
+        // A W A S D stick is any number of key sticks.
+        var kbm = LayoutEditor(preset: .keyboardMouse, width: 800, height: 400)
+        XCTAssertEqual(kbm.details("move")?.duplicable, true)
+        XCTAssertEqual(kbm.duplicate("move"), "move-2")
+    }
+
     func testTheInspectorEditsWhatAControlPressesItsLabelAndBehaviour() throws {
         var e = LayoutEditor(preset: .keyboardMouse, width: 800, height: 400)
         XCTAssertEqual(e.details("jump"), ControlDetails(id: "jump", label: "Jump", subtitle: "Button · right side", slots: ["Presses"],
-                                                         actions: ["Space"], size: "56 pt", behaviour: .hold, movable: true))
+                                                         actions: ["Space"], size: "56 pt", behaviour: .hold, movable: true,
+                                                         duplicable: true))
         XCTAssertEqual(e.details("move")?.slots, ["Up", "Down", "Left", "Right"])
         XCTAssertEqual(e.details("move")?.actions, ["W", "S", "A", "D"])
         XCTAssertEqual(e.details("move")?.subtitle, "Stick · left side")

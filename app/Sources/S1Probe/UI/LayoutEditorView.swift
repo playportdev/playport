@@ -396,7 +396,7 @@ struct LayoutEditorView: View {
             }
             if let b = d.behaviour { behaviour(b) }
             HStack(spacing: 6) {
-                if d.movable { button("edit:duplicate", "Duplicate") { session.duplicate() } }
+                if d.duplicable { button("edit:duplicate", "Duplicate") { session.duplicate() } }
                 button("edit:remove", "Remove", colour: Color(hex: 0xFF9A8A)) { session.remove() }
             }
         }
