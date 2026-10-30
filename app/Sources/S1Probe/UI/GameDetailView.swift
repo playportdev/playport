@@ -495,13 +495,9 @@ private struct GameDetailPage: View {
                 if case let .paused(reason?) = job.phase { Text(reason).foregroundStyle(.orange) }
                 if job.isRunning { Text("Keep Playport open: the download pauses when it leaves the screen.") }
             } else if let package = xbox.package(copy.id) {
-                if package.format != "MSIXVC" {
-                    Text("This game's package is \(package.format), which Playport can't install yet.").foregroundStyle(.orange)
-                } else {
-                    let parts = ["Download \(ByteCount.format(package.downloadSize))", "needs \(ByteCount.format(package.neededBytes))"]
-                        + [library.freeBytes.map { "\(ByteCount.format($0)) free" }].compactMap { $0 }
-                    Text(parts.joined(separator: " · ") + " · keep Playport open while it downloads")
-                }
+                let parts = ["Download \(ByteCount.format(package.downloadSize))", "needs \(ByteCount.format(package.neededBytes))"]
+                    + [library.freeBytes.map { "\(ByteCount.format($0)) free" }].compactMap { $0 }
+                Text(parts.joined(separator: " · ") + " · keep Playport open while it downloads")
             } else {
                 Text("Microsoft lists no Windows package for this game that Playport can install.").foregroundStyle(.orange)
             }

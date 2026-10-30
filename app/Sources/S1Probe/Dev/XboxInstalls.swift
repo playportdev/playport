@@ -43,7 +43,7 @@ final class XboxInstalls: ObservableObject, DownloadDriver {
     func package(_ id: String) -> XboxProductPackage? { XboxGames.shared.snapshot?.products[id]?.package }
 
 
-    func canInstall(_ id: String) -> Bool { XboxAccount.shared.state == .signedIn && package(id)?.format == "MSIXVC" }
+    func canInstall(_ id: String) -> Bool { XboxAccount.shared.state == .signedIn && package(id) != nil }
 
     func install(_ copy: XboxLibraryCopy) {
         refused[copy.id] = nil
@@ -64,7 +64,6 @@ final class XboxInstalls: ObservableObject, DownloadDriver {
         guard job.kind == .install else { throw ClientError.unsupported("Xbox copies are installed again from their page.") }
         if XboxGames.shared.snapshot == nil { await XboxGames.shared.refresh() }
         guard let package = package(id) else { throw XboxInstallRefusal.noPackage }
-        guard package.format == "MSIXVC" else { throw ClientError.unsupported("This game's package is MSIXVC2, which Playport can't install yet.") }
         var options = InstallEngine.Options()
         options.progressInterval = 0.5
         let r: XboxInstaller.Result

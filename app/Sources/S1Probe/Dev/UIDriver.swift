@@ -1077,7 +1077,7 @@ enum UIDriver {
         guard let installs = SteamAccountModel.current?.installs else { return "no download queue" }
         guard let copy = games.game(product) else { return "Xbox does not list \(product) for this account" }
         guard let package = xbox.package(product) else { return "Microsoft lists no package for \(product)" }
-        guard xbox.canInstall(product) else { return "refused: the package is \(package.format)" }
+        guard xbox.canInstall(product) else { return "refused: Xbox is not signed in" }
         let key = StoreGameKey(store: .xbox, id: product)
         guard LibraryModel.shared.title(key.titleID) == nil else { return "\(key.titleID) is installed already" }
         let started = Date()
