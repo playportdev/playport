@@ -43,6 +43,9 @@
     commit figures keep the phone's.
 - **Logs.** `[avail-phys] SocialClubHelper.exe sees at most 300 MB available: Chromium's critical level`, then
   the first four answers (`… asked: 300 MB reported instead of N MB`).
+  - **As built, 2026-10-30 (owner, PLA-476; madeira-unix 0237):** the four answers are per process, for each
+    of the first eight PEBs told less (`ppap_log_slot`). In l12 the launcher's helper used up the app-wide
+    four, and the game's helper's answers were never logged.
 - **Not ported:**
   - `avail-phys = 1` for every process. RDR2 reads the figure too; a low one could make it lower its settings
     or show its own "out of memory" dialog.

@@ -1,0 +1,99 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: playportdev <dev@playport.dev>
+Date: Fri, 30 Oct 2026 21:10:00 +0100
+Subject: [PATCH] ntdll: log the available-memory answers per Social Club
+ process
+
+madeira-unix 0234 logged the first four answers ios_avail_phys gave a
+SocialClubHelper.exe, counted for the whole app. In l12 the launcher's
+helper used all four, so the game's helper's answers were never seen.
+
+pp_avail_phys.h's ppap_log_slot now keeps the limit per process: the
+first four answers of each of the first eight PEBs told less (the
+launcher's helper, the game's, its restarts). A PEB claims a slot by
+compare-and-swap from NULL; with the table full nothing more is logged.
+What is reported is unchanged.
+
+Linear: PLA-476
+Class: diagnostics
+Evidence: docs/decisions/0168-social-clubs-helper-is-told-little-available-memory.md
+Offered-upstream: no
+---
+ build/ntdll-unix/pp_avail_phys.h | 25 +++++++++++++++++++++++--
+ build/ntdll-unix/virtual_ios.c   | 10 ++++++----
+ 2 files changed, 29 insertions(+), 6 deletions(-)
+
+diff --git a/build/ntdll-unix/pp_avail_phys.h b/build/ntdll-unix/pp_avail_phys.h
+index 240a284..43fd4f6 100644
+--- a/build/ntdll-unix/pp_avail_phys.h
++++ b/build/ntdll-unix/pp_avail_phys.h
+@@ -10,8 +10,8 @@
+  * `avail-phys-cef-mb = N` (MB, 1 to 65536; 0 or unset: off) a calling process
+  * whose image is SocialClubHelper.exe sees at most N MB; 300 is the critical
+  * level. Every other process, the game and the launcher included, keeps the
+- * phone's figure. Pure arithmetic and name matching (pp_game_sc_refuse.h), so a
+- * host test compiles this header as is. */
++ * phone's figure. Pure arithmetic, name matching (pp_game_sc_refuse.h) and
++ * the log's per-process limit, so a host test compiles this header as is. */
+ #ifndef PP_AVAIL_PHYS_H
+ #define PP_AVAIL_PHYS_H
+ 
+@@ -31,4 +31,25 @@ static inline unsigned long long ppap_available( unsigned long long host_free, u
+         return host_free;
+     return cap;
+ }
++
++/* Which answers are logged: the first PPAP_LOG_LINES of each of the first
++ * PPAP_LOG_PEBS processes told less (the launcher's helper, the game's, its
++ * restarts). pebs[n] and counts[n] start zeroed and are shared by every
++ * thread; a slot is claimed by compare-and-swap from NULL and never freed. */
++#define PPAP_LOG_PEBS 8
++#define PPAP_LOG_LINES 4
++static inline int ppap_log_slot( void **pebs, unsigned *counts, unsigned n, void *peb )
++{
++    unsigned i;
++
++    if (!peb) return 0;
++    for (i = 0; i < n; i++)
++    {
++        void *owner = __atomic_load_n( &pebs[i], __ATOMIC_ACQUIRE );
++        if (!owner && __atomic_compare_exchange_n( &pebs[i], &owner, peb, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE ))
++            owner = peb;
++        if (owner == peb) return __atomic_fetch_add( &counts[i], 1, __ATOMIC_RELAXED ) < PPAP_LOG_LINES;
++    }
++    return 0;
++}
+ #endif
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 9deeb0b..c06be26 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -4488,14 +4488,16 @@ void *ios_jit_current_peb(void)
+ /* Playport (PLA-476, decision 0168): the available memory Wine's
+  * get_performance_info reports to the calling process (pp_avail_phys.h):
+  * SocialClubHelper.exe sees at most madeira.cfg avail-phys-cef-mb, every other
+- * process host_free. The key is read once; a few `[avail-phys]` lines say
+- * what was reported. The caller is a thread of the process asking, so its PEB's
++ * process host_free. The key is read once; `[avail-phys]` lines say what was
++ * reported, the first four answers of each of the first eight processes told
++ * less (ppap_log_slot). The caller is a thread of the process asking, so its PEB's
+  * parameters are written. */
+ #include "pp_avail_phys.h"
+ unsigned long long ios_avail_phys( unsigned long long host_free )
+ {
+     static long long cap_mb = -1;
+-    static unsigned said;
++    static void *said_peb[PPAP_LOG_PEBS];
++    static unsigned said[PPAP_LOG_PEBS];
+     const PEB *peb;
+     const RTL_USER_PROCESS_PARAMETERS *params;
+     unsigned long long cap, value;
+@@ -4516,7 +4518,7 @@ unsigned long long ios_avail_phys( unsigned long long host_free )
+     if (!params || !params->ImagePathName.Buffer) return host_free;
+     value = ppap_available( host_free, cap, (const pp_wchar *)params->ImagePathName.Buffer,
+                             params->ImagePathName.Length / sizeof(WCHAR) );
+-    if (value != host_free && __atomic_fetch_add( &said, 1, __ATOMIC_RELAXED ) < 4)
++    if (value != host_free && ppap_log_slot( said_peb, said, PPAP_LOG_PEBS, (void *)(ULONG_PTR)peb ))
+         dprintf( 2, "[avail-phys] SocialClubHelper.exe (PEB %p) asked: %llu MB reported instead of %llu MB\n",
+                  peb, value >> 20, host_free >> 20 );
+     return value;

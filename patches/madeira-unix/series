@@ -203,3 +203,4 @@
 0234-ntdll-tell-Social-Club-s-helper-little-available-mem.patch
 0235-virtual-map-a-large-x86-64-image-from-a-re-laid-out-.patch
 0236-ntdll-refuse-the-Social-Club-helper-s-impossible-V8-.patch
+0237-ntdll-log-the-available-memory-answers-per-Social-Cl.patch
