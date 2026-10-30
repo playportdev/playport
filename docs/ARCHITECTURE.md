@@ -1401,7 +1401,9 @@ the trailers `Class:`, `Evidence:` and `Offered-upstream:`. The classes are:
   [0166](decisions/0166-the-xbox-store.md)), each keeping its author, with the
   trailers `Ported-from:` (the original commit's URL) and `Ported: clean` or
   `Ported: adapted`; what was ported, left out or found upstream is in
-  [the port's record](evidence/2026-10-30-wine-gdk-port.md).
+  [the port's record](evidence/2026-10-30-wine-gdk-port.md); a desktop x86-64
+  build of that tree with `xgameruntime` started the pilot with Xbox sign-in
+  ([desktop proof](evidence/2026-10-30-xbox-desktop-proof.md)).
 
 To make one, commit the change in the build's tree for its target (the pin
 plus the series as commits, under `.work/run/`) and write it out as the next

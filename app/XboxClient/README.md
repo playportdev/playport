@@ -207,6 +207,51 @@ No retail MSIXVC2 title was in the PC Game Pass or console catalogues on
 2026-10-30, so the format is checked against the two references and a synthetic
 package only (below).
 
+## Updates (PLA-501)
+
+`XboxUpdates.swift`, after Xodus Nexus's `xodus-store-updates` patch.
+
+- **Detection.** `XboxInstaller.updateCheck(_:)` asks GetBasePackage (the
+  install's call) for the record's content ID and compares its `VersionId`'s
+  first four parts with the record's version as four 16-bit numbers
+  (`XboxPackageVersion`). It answers `.available` or `.current`, or throws
+  (no record, Microsoft unreachable, no version). The content ID is the
+  record's (the package's VDUID), not displaycatalog's as in Nexus.
+- **The bridge's checker.** `XboxUpdateChecker(installer:)` is the
+  `XboxPackageUpdates` for a play. It answers for the version the runtime
+  sends, against GetBasePackage for the running copy's record. No record, a
+  malformed version, an error or 60 s without an answer (Nexus's limit) is
+  `.unknown`, so the reply is `E_FAIL`.
+- **Install.** `XboxInstaller.update(product:title:)` fetches the new
+  package's metadata (MSIXVC: the prefix with its hash tree; MSIXVC2: the
+  ZIP's metadata by range), then compares each of its files with the
+  installed file at the same path (any case), stored the same way:
+  - MSIXVC: every installed page against the new hash tree's level-0 entry.
+    A plain or kept-encrypted page is hashed as it is. A decrypted page is
+    encrypted again with its entry's data unit and the region's key first, so
+    it still matches when its file moved in the package. A kept-encrypted page
+    that moved has new data units and ciphertext, so it is fetched.
+  - MSIXVC2: every segment against the installed bytes at the same offset in
+    the file, by the segment's own hash.
+  - A file that matches whole stays in place (its SHA-1 is taken on the way).
+    Any other file is staged whole through ContentKit's resumable engine. Its
+    matching pages or segments are read from the installed file and checked
+    again as they are copied (one that no longer matches is fetched instead).
+    The rest come from the CDN. So only changed pages or segments are fetched.
+  - Staged files are renamed over the installed ones, files the package no
+    longer has are removed, and the record is rewritten last. A stop before
+    then leaves the copy and its record as they were; the next update resumes
+    from the journal (stage `xbox-<ID>_<version>-update`).
+  - With the copy's folder gone there is nothing to compare: it is installed
+    again whole (`reinstalled`). A copy already at the latest version fetches
+    nothing.
+- GetBasePackage also lists `update-<from version>-….xsp` files beside the
+  package (Microsoft's per-version patches). Their format is not known here and
+  they are not used: the comparison above needs only the new package.
+- Cost on the device: the update reads the whole installed copy once to compare
+  it, and encrypts each decrypted page again (software AES-XTS). A changed file
+  needs room for its staged copy until it is renamed in.
+
 ## The bridge
 
 During one Xbox play the host answers the guest's `xgameruntime` over Xodus's
@@ -239,9 +284,10 @@ keyed loopback bridge (decision
     must be the copy, and every product (or `PRODUCT/SKU`) the copy or one of
     its related products.
   - `STORE_PACKAGE_UPDATES_REQUEST` (9 → 10) passes the copy's version to the
-    injected `XboxPackageUpdates`. `Checked` true with `Count` 0 is sent only
-    for a verified current package. With no checker, or an unknown answer, the
-    reply is `E_FAIL`, never an empty success.
+    injected `XboxPackageUpdates`; the dev app's is `XboxUpdateChecker`
+    (below). `Checked` true with `Count` 0 is sent only for a verified current
+    package. With no checker, or an unknown answer, the reply is `E_FAIL`,
+    never an empty success.
   - Everything is refused before sign-in, for another client or product, and for
     any other type (an empty reply of type + 1).
 - Sign-out (and device reset) runs `XboxSession.onSignOut` handlers before the
@@ -400,7 +446,10 @@ synthetic MSIXVC2 (31 KiB: two chunks, two boxes, six files, compressed,
 encrypted, shared and plain segments, a ZIP64 entry) written by
 `Tests/msixvc2-fixture.py` with Python's zipfile, zlib and `cryptography`,
 independently of the reader, under a test licence key (bytes 0x40…0x5f);
-running the script again gives the same bytes.
+running the script again gives the same bytes. `msixvc2-synthetic-v2.msixvc2`
+(`--v2`) is the same package as version 1.2.4.0 with two segments and the
+config changed, a file removed and one added: the update tests' v2. The MSIXVC
+update tests build their v2 with `XboxTestPackage.build(…, version:)`.
 
 `PLAYPORT_BUILD=$PWD/.work ./pp test --swift XboxClientKit` runs public session
 flows (exchange, relaunch, expiry/renewal/refusal, device reuse/replacement/reset,
