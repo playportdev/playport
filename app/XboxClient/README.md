@@ -31,9 +31,10 @@ The release package has no XboxClientKit dependency. Every Xbox Swift type start
   `AfterFirstUnlockThisDeviceOnly`, non-synchronisable store. Item `device`
   holds random hardware, the registration and its encrypted private-key state;
   it survives sign-out. Items `session` and `device-token` hold **all issued
-  account/device tickets, proof secrets and account information**. Sign-out
-  deletes both, fences in-flight exchanges, and keeps `device`. Future Xbox
-  key/lease storage must participate in this deletion boundary.
+  account/device tickets, proof secrets and account information**; item
+  `licences` holds each copy's unwrapped content keys with the licence's expiry
+  and offline lease. Sign-out deletes all three, fences in-flight exchanges,
+  and keeps `device`.
 - The device contains no phone identifiers and never probes hardware. Reset
   signs out and generates a different device; the next sign-in registers it.
   A definitive device-authentication refusal replaces it once, not in a retry
@@ -65,6 +66,38 @@ The release package has no XboxClientKit dependency. Every Xbox Swift type start
   previous snapshot lacks; a product it could not resolve is looked up again.
   The catalogue transport allows 8 MiB a response (a page of 20 runs to ~2 MiB).
 
+## Licences and content keys
+
+`XboxSession.licence(contentID:market:)` (`XboxLicensing.swift`) follows Xodus's
+`get_license_content`: a device ticket and the account's Store ticket for
+`www.microsoft.com` (`mbi_ssl`, the Store app's client ID) and the PUID go to
+`licensing.mp.microsoft.com/v7.0/licenses/content` with Xodus's fixed challenge.
+The first key licence's SPLicense block carries the packed content keys (RFC 3394
+AES key wrap under the device key) and its expiry; the device key is the
+registration licence's EncryptedDeviceKey. Recorded responses (PLA-487) show the
+content licence expiring as it is issued, with a lease licence whose policy says
+`isOffline`, a 30-day `expiresAt` and a 2-day `pollAt`, although nobody had
+changed the account's offline device. As Nexus does, such a lease is taken as
+Microsoft's offline grant. The result is typed:
+
+- `.licensed`: fresh keys (`.microsoft`), stored in `licences`; or, only while
+  licensing is unreachable (`.network`, or HTTP 408/429/5xx), the stored keys
+  until the later of the licence's expiry and its offline lease (`.cache`).
+- `.refused(XboxLicenseFailure)` is Microsoft's **definitive** answer, and the
+  only one: an HTTP 2xx body holding `satisfactionFailure` with a numeric reason
+  and no `license`. Reason 501 is `.deviceLimit` (the device, not the copy; it
+  deletes every copy's keys); any other reason is `.refused` (that copy's keys
+  deleted). A licence lapse counts `.refused` only.
+- `.unavailable(XboxLicenceProblem)` is never a verdict: network, HTTP
+  408/429/5xx (`service`), any other HTTP error including 401 and 403
+  (`rejected`; Nexus counts 403 as a refusal, but it carries no licensing
+  reason), unrecognised or ambiguous bodies and keys that don't unwrap
+  (`invalidResponse`), and missing tickets (`session`). Only `network` and
+  `service` fall back to stored keys.
+
+Logs say granted/refused/unavailable only: no content ID, licence, key, ticket
+or provider text.
+
 ## Provenance and offline checks
 
 Written from Xodus `514dd56f360a4bdf12f4acde5148bac5ce5f957f`:
@@ -72,7 +105,12 @@ Written from Xodus `514dd56f360a4bdf12f4acde5148bac5ce5f957f`:
 models/,clep/challenge.rs,licensing/{splicense,utils}.rs}`. The two hosted legs'
 headers and licensing reason 501 also follow Xodus Nexus
 `96c652343d30ae16fe476818288edbed5dfac673` (`xodus-hosted-signin.patch`,
-`xodus-content-device-limit.patch`). Derived files carry GPL-3.0-only provenance
+`xodus-content-device-limit.patch`). Licensing follows Xodus
+`53ea781dcd073e31d7ea68e894134e9c959bff04` (the backend Nexus v0.4.1 pins:
+`licensing/{content,splicense}.rs`, `models/{licensing,devicecredential}.rs`,
+`xodus-cli/src/{license.rs,commands/license.rs}`) and Nexus
+`e0668a12f1da931aed13537ef04295599011317b`'s `xodus-content-response`,
+`xodus-content-device-limit` and `xodus-offline-license` patches. Derived files carry GPL-3.0-only provenance
 headers; `LICENSE-Xodus.txt`, `LICENSE-XodusNexus.txt` and
 `LICENSE-CikExtractor.txt` preserve the applicable notices. See
 [LICENSING.md](../../docs/LICENSING.md#xbox-planned). The library follows Xodus
@@ -80,7 +118,12 @@ Nexus `e0668a12f1da931aed13537ef04295599011317b` (`src/main/catalog.ts`,
 `src/main/account-library.ts`, `assets/xodus-subscription-login.patch`).
 
 `Tests/XboxClientKitTests/Fixtures/` contains **synthetic, redacted responses**, not
-account captures. No PLA-487 captures were present when this ticket began.
+account captures. No PLA-487 captures were present when PLA-491 began. The
+licensing fixtures (`licence-*`, `device-add-licensing.xml`) copy the recorded
+responses' shape (elements, attributes, policy fields, SPLicense block order and
+sizes, times) with made-up IDs and a generated device key; the wrapped content
+key is bytes 0x40…0x5f. The real licences can't be redacted: their keys are
+wrapped for a real device.
 The XML/JSON shapes are those Xodus parses. The device licence wraps a freshly
 generated test-only RSA2 key in a version-4 CLEP state. The device proof wraps
 bytes 0…31; user responses are AES-256-CBC encrypted and HMAC-signed with the
@@ -99,8 +142,9 @@ from the public endpoint, which needs no account), trimmed to the fields read.
 
 `PLAYPORT_BUILD=$PWD/.work ./pp test --swift XboxClientKit` runs public session
 flows (exchange, relaunch, expiry/renewal/refusal, device reuse/replacement/reset,
-sign-out during renewal, device limit, tampered response and logs), plus the
-independent FIPS-197/RFC-4231/RSA vectors.
+sign-out during renewal, device limit, tampered response and logs), licensing
+(content key, cache and expiry, offline lease, refusal versus network/service
+error, logs), plus the independent FIPS-197/RFC-4231/RFC-3394/RSA vectors.
 
 The phone is a deferred gate: Microsoft sign-in/2FA, relaunch, sign-out/reuse,
 and the passkey finding. The sheet assumes passkeys are unavailable in a
