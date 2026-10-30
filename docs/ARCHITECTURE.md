@@ -384,6 +384,15 @@ of RWX sections (ml957), the likely cause, and the phone showed no regression
 ([evidence](evidence/2026-10-07-pool-x64-images.md)): Hollow Knight's head
 fell from 138 to 83 MiB, Jurassic World Evolution's from 480 to 68.
 
+Wine maps an image section from its file only when it is 16 KiB-aligned in
+memory and in the file, and reads any other section into the view, where its
+pages are anonymous memory of the process. An x86-64 image of 64 MiB or more
+whose sections are not (Rockstar's libcef, RDR2.exe) maps whole from a copy laid
+out at its RVAs in the app's `Library/Caches/images`, written once in the
+background after its first load, so its clean pages stay the file's, shared and
+outside the footprint (`patches/madeira-unix` 0235, logged `[img-cache]`,
+decision [0167](decisions/0167-large-x86-64-images-map-from-a-cache-copy.md)).
+
 - Madeira-unix 0034 counts them (`ios_jit_pool_stats`), and
   `wine_host_pool_stats_read` passes the counts to the app. While a title
   runs, `LaunchCoordinator` logs a `title: pool: size_mb=… head_mb=… tail_mb=…

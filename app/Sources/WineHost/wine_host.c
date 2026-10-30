@@ -1441,9 +1441,17 @@ int wine_host_init(const wine_host_config *c)
         int n = snprintf(cache, sizeof(cache), "%s/Library/Caches/kosmickrisp", home);
         if (n > 0 && (size_t)n < sizeof(cache) && mkdirs(cache) == 0)
             setenv("MESA_SHADER_CACHE_DIR", cache, 0);
+        /* The runtime's re-laid-out copies of large x86-64 images (decision 0167,
+         * madeira-unix 0235): mapped from here, so their clean pages stay out of
+         * the footprint; the runtime keeps them within 1 GiB, and Settings >
+         * Storage's Emulator cache row counts and clears them (EmulatorCache). */
+        n = snprintf(cache, sizeof(cache), "%s/Library/Caches/images", home);
+        if (n > 0 && (size_t)n < sizeof(cache) && mkdirs(cache) == 0)
+            setenv("PLAYPORT_IMAGE_CACHE_DIR", cache, 0);
     }
     setenv("MESA_SHADER_CACHE_MAX_SIZE", "1G", 0);
     host_log("DXMT shader cache: %s", getenv("DXMT_SHADER_CACHE_PATH") ? getenv("DXMT_SHADER_CACHE_PATH") : "(none)");
+    host_log("image cache: %s", getenv("PLAYPORT_IMAGE_CACHE_DIR") ? getenv("PLAYPORT_IMAGE_CACHE_DIR") : "(none)");
     host_log("Mesa shader cache: %s (limit %s)",
              getenv("MESA_SHADER_CACHE_DIR") ? getenv("MESA_SHADER_CACHE_DIR") : "HOME/.cache",
              getenv("MESA_SHADER_CACHE_MAX_SIZE"));

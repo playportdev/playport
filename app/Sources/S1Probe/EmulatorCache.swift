@@ -10,6 +10,11 @@
 // configurations or game versions no longer used stay behind. Proton sets no total limit; here a
 // launch clears the whole cache when it is past 5 GB or the phone is short of
 // space (under 10 GB free), and FEX fills it again from that launch.
+//
+// The row also counts and clears the runtime's copies of large x86-64 images
+// (decision 0167, Library/Caches/images, wine_host.c's PLAYPORT_IMAGE_CACHE_DIR):
+// the runtime keeps them within their own 1 GiB budget, so a launch's budget
+// check leaves them alone.
 
 import Foundation
 import PlayportKit
@@ -19,6 +24,12 @@ enum EmulatorCache {
     nonisolated static var directory: URL {
         WineHostRuntime.documents.appendingPathComponent("prefix/drive_c/users/playport/AppData/Local/fex-emu",
                                                           isDirectory: true)
+    }
+
+    /// The runtime's re-laid-out image copies (decision 0167).
+    nonisolated static var imageDirectory: URL {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("images", isDirectory: true)
     }
 
     /// Past this the cache is cleared before a launch. Generous: clearing costs
@@ -34,10 +45,14 @@ enum EmulatorCache {
         return v?.volumeAvailableCapacityForImportantUsage.map { UInt64(max(0, $0)) }
     }
 
-    /// The cache's size on disk, 0 when there is none.
+    /// The cache's size on disk with the image copies, 0 when there is none.
     nonisolated static func size() -> UInt64 {
+        size(of: directory) + size(of: imageDirectory)
+    }
+
+    nonisolated private static func size(of dir: URL) -> UInt64 {
         let fm = FileManager.default
-        guard let walk = fm.enumerator(at: directory, includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey]) else {
+        guard let walk = fm.enumerator(at: dir, includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey]) else {
             return 0
         }
         var total: UInt64 = 0
@@ -48,9 +63,20 @@ enum EmulatorCache {
         return total
     }
 
-    /// Removes the cache; FEX makes it again at the next launch. False when it could not.
+    /// Removes the cache and the image copies; FEX and the runtime make them again from the next
+    /// launch (the image directory itself stays: wine_host.c makes it only at start). False when
+    /// something could not be removed. Only while no game runs.
     @discardableResult
     nonisolated static func clear() -> Bool {
+        let fm = FileManager.default
+        var ok = clearFEX()
+        if let items = try? fm.contentsOfDirectory(at: imageDirectory, includingPropertiesForKeys: nil) {
+            for item in items where (try? fm.removeItem(at: item)) == nil { ok = false }
+        }
+        return ok
+    }
+
+    nonisolated private static func clearFEX() -> Bool {
         let fm = FileManager.default
         guard fm.fileExists(atPath: directory.path) else { return true }
         return (try? fm.removeItem(at: directory)) != nil
@@ -59,7 +85,7 @@ enum EmulatorCache {
     /// Before a launch: clears the cache when it is over the budget or the phone
     /// is short of space, and says so in the log.
     nonisolated static func keepWithinBudget(log: (String) -> Void) {
-        let bytes = size()
+        let bytes = size(of: directory)
         guard bytes > 0 else { return }
         let free = freeBytes()
         let reason: String
@@ -70,7 +96,7 @@ enum EmulatorCache {
         } else {
             return
         }
-        let cleared = clear()
+        let cleared = clearFEX()
         log("fex: disk cache \(ByteCount.format(bytes)) \(reason): " + (cleared ? "cleared" : "could not be cleared"))
     }
 }
