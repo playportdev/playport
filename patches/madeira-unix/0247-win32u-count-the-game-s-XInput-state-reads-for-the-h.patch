@@ -1,0 +1,54 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 30 Oct 2026 18:00:00 +0100
+Subject: [PATCH] win32u: count the game's XInput state reads for the host app
+
+The host app offers a Keyboard & mouse on-screen layout to a game on
+the Gamepad layout that has not asked for an XInput state within 20 s
+of play after its first frame (Playport's touch-controls plan, phase
+4: the suggested starting layout). Only win32u sees those requests:
+the app's own reads of the controller snapshot go to
+winios_gamepad_get_state directly, so a count there would include
+them.
+
+ios_gamepad_query now calls the host's playport_gamepad_state_read
+(HostIO hio_pads.c) for each state request (op 0), whatever the slot,
+before the empty-slot return; capability requests are not counted. The
+reference is weak: a host that does not define it is not called.
+
+Linear: PLA-533
+Class: host-app
+Evidence: docs/plans/2026-10-09-touch-controls.md (phase 4 item 3; host test app/tests/pads_test.c; phone gate not run)
+Offered-upstream: no; the count feeds the iOS app's suggested layout
+---
+ build/win32u-unix/driver_ios.c | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/build/win32u-unix/driver_ios.c b/build/win32u-unix/driver_ios.c
+index 25bee8f..cbb42af 100644
+--- a/build/win32u-unix/driver_ios.c
++++ b/build/win32u-unix/driver_ios.c
+@@ -2599,6 +2599,11 @@ C_ASSERT( sizeof(struct ios_xinput_state) == 16 );
+ C_ASSERT( sizeof(struct ios_xinput_caps) == 20 );
+ C_ASSERT( sizeof(struct winios_gamepad) == 20 );
+ 
++/* Playport: the host app counts the game's XInput state reads (its
++ * HostIO hio_pads.c), to tell a game that never asks for a pad. Weak: a
++ * host without it is not called. */
++extern void playport_gamepad_state_read( void ) __attribute__((weak));
++
+ /***********************************************************************
+  *           ios_gamepad_query
+  *
+@@ -2614,6 +2619,11 @@ ULONG_PTR ios_gamepad_query( UINT index, UINT op, void *buffer )
+     struct winios_gamepad pad;
+ 
+     if (!buffer || index >= 4) return 0;
++    /* Every state request counts (XInputGetState; xinput's SetState and
++     * Enable ask for one too), for a slot with no pad as well: most games ask
++     * all four users each frame. The app's own snapshot reads do not come
++     * here. */
++    if (op == 0 && playport_gamepad_state_read) playport_gamepad_state_read();
+     if (!winios_gamepad_get_state( index, &pad )) return 0;
+ 
+     switch (op)
