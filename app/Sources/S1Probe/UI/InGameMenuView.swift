@@ -199,12 +199,12 @@ final class InGameMenu: ObservableObject {
     // MARK: the layout editor over the paused game
 
     /// Edit layout… (or A on the On-screen controls row): the editor over the paused game
-    /// (UI/LayoutEditorView.swift), on the layout the game plays with. The menu already holds
-    /// the game's input (holdGuest: every key, button and touch let go, Lifecycle).
+    /// (UI/LayoutEditorView.swift), on the layout the game plays with. Only with the menu open,
+    /// which already holds the game's input (holdGuest: every key and button let go, and the
+    /// on-screen controls hidden, which lets their touches go: OnScreenControls.update).
     func openLayoutEditor() {
         guard isOpen, !quitting, !editor, let id = TitleLaunch.shared.titleID else { return }
         menu.openPanel(.layout)
-        OnScreenControls.shared.releaseAll()
         LayoutEditorSession.shared.open(titleID: id, title: TitleLaunch.shared.title, host: .inGame,
                                         state: OnScreenControls.shared.state)
     }
