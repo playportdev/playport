@@ -281,6 +281,13 @@
   (l21's B through 0243's `sc-aligned` candidate after the plain ladder failed); helpers 0 `NO GAP FITS`, no
   helper OOM, no re-sign-in, no jetsam. **Headroom is thin:** peak 7960 / 8006 MB of 8192 (l17–l19 had 560–730 MB
   more), since nothing ends B; the KosmicKrisp retire path is the planned offset.
+- **Audio, owner decision 2026-10-30 (PLA-364), built, not yet on the phone**
+  ([decision 0172](../decisions/0172-audio-producer-runs-real-time-in-its-own-work-interval.md); dev IPA
+  `58432f76…`, `.work/out/20261030-235112-58432f76/`, 90 checks, on top of mesa 0132–0133 (opt-in), so it
+  serves the KosmicKrisp gates too): madeira-unix 0244 (`getbuf-producer`, ml1065 `caller_switches=`/`producer=`,
+  dev only), 0245 (the steady GetBuffer caller of a started stream gets a time-constraint policy and its own work
+  interval, CPU guard, `env.MADEIRA_AUDIO_RT=0`), 0246 (C1, `env.MADEIRA_AUDIO_REFILL=0`); every WASAPI title.
+  Phone gates next: HK `pp perf` and RDR2's heavy scene with both off against both on, The Witcher 3 `pp perf`.
 - **Chunk-2 gates after l19:**
 
   | Gate | l7 | l8 | l9 | l10 | l11 | l12 | l13 | l14 | l15 | l16 | l17 | l18 | l19 |

@@ -1,0 +1,462 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: playportdev <dev@playport.dev>
+Date: Fri, 30 Oct 2026 22:30:24 +0100
+Subject: [PATCH] ntdll: give a render stream's producer a time-constraint
+ policy and its own work interval
+
+In RDR2's clamped scenes slot 1 delivered 44-47 % of real time with no
+ReleaseBuffer gap over 40 ms: its producer is throttled, not stalled, at
+USER_INTERACTIVE timeshare among 13-37 runnable guest threads on the E
+cores, and no Windows priority reaches the kernel (l19, PLA-364).
+
+The steady GetBuffer caller of a started, mixed render stream (the
+previous patch) now gets THREAD_TIME_CONSTRAINT_POLICY: period 10 ms (the
+device period the driver reports), computation 5 ms, constraint 10 ms,
+preemptible. It joins a work interval of its own (AudioWorkIntervalCreate),
+since AudioWorkInterval.h keeps the RemoteIO unit's workgroup for threads
+at the I/O thread's cadence and a WASAPI producer runs at its own. The
+interval is one per producer thread, which joins one workgroup at a time
+and may feed two streams. The producer marks each cycle: a successful
+GetBuffer starts it with the deadline 10 ms later (the policy's
+constraint; one from the ring's padding would be missed in every clamped
+scene and ask for frequency under the thermal clamp), and its
+ReleaseBuffer finishes it.
+
+- The policy is set and reset through a send right the driver holds
+  (mach_thread_self, freed with the record), so Stop, Release, process
+  detach or a new producer demote the old one from whichever thread
+  calls them.
+- The interval is joined, marked and left only on the producer itself:
+  a demoted producer finishes an open cycle and leaves at its next
+  GetBuffer or ReleaseBuffer, or at its exit (a pthread key destructor,
+  which also releases the interval).
+- Every 2 s the producer checks itself: more than 80 % of one core since
+  the last check demotes it for good (a thread that holds a core is not
+  a mixer); a policy found reset (ECO's QoS change, anything else) is set
+  again, under the lock a demotion takes, so a demotion is never undone.
+- MADEIRA_AUDIO_RT=0 (read at process attach) turns it off. Lines: rt
+  promote (on failure), rt refused, rt join refused, the off line
+  (always); rt promote, demote, join, reassert and producer (with
+  diagnostics).
+
+Linear: PLA-364
+Class: feature
+Evidence: docs/evidence/2026-10-30-rdr2-kk-audio-diagnostics.md
+Offered-upstream: no
+---
+ build/ntdll-unix/audio_null_ios.c | 333 +++++++++++++++++++++++++++++-
+ 1 file changed, 329 insertions(+), 4 deletions(-)
+
+diff --git a/build/ntdll-unix/audio_null_ios.c b/build/ntdll-unix/audio_null_ios.c
+index 55640f5..e34b265 100644
+--- a/build/ntdll-unix/audio_null_ios.c
++++ b/build/ntdll-unix/audio_null_ios.c
+@@ -35,6 +35,9 @@
+ #include <pthread.h>
+ #include <pthread/qos.h>
+ #include <mach/mach_time.h>
++#include <mach/mach.h>
++#include <mach/thread_policy.h>
++#include <os/workgroup.h>
+ #include <unistd.h>
+ #include <time.h>
+ #include <AudioToolbox/AudioToolbox.h>
+@@ -322,6 +325,7 @@ struct ios_stream {
+     uint64_t producer_tid;       /* the steady caller since Start, 0 = none */
+     UINT32 producer_lines;       /* getbuf-producer lines printed */
+     _Atomic uint64_t caller_switches; /* GetBuffers by another thread than the one before */
++    struct ios_rt_thread *rt;    /* the producer this driver promoted (decision 0172); g_rt_lock */
+ };
+ 
+ #include "audio_wow64_buffer.h"
+@@ -867,12 +871,321 @@ static void ios_log_getbuf_caller(const struct ios_stream *s, const char *what,
+             (unsigned long long)atomic_load_explicit(&s->caller_switches, memory_order_relaxed));
+ }
+ 
++/* Playport (PLA-364, decision 0172): a render stream's producer -- the
++ * steady GetBuffer caller of a started stream (ios_producer_note) -- gets a
++ * Mach time-constraint policy and its own audio work interval. Every guest
++ * thread otherwise runs timeshare at USER_INTERACTIVE, and in RDR2's clamped
++ * scenes 13-37 of them wait for an E core, so the producer delivered 44-47 %
++ * of real time without ever stalling (l19).
++ *
++ * The interval is the producer's own (AudioWorkIntervalCreate), not the
++ * RemoteIO unit's workgroup: AudioWorkInterval.h keeps the device's group for
++ * threads triggered by its I/O cycle, and a WASAPI producer runs at its own
++ * cadence (its own timer, an event from ios_timer_loop, its frame loop). It is
++ * one per producer thread, not per stream, because a thread joins one
++ * workgroup at a time and a thread can feed two streams. The producer is the
++ * interval's only member and marks each cycle itself: a successful
++ * GetBuffer starts one, its ReleaseBuffer finishes it. The deadline is
++ * IOS_RT_CONSTRAINT_NS after the start, the constraint its policy already
++ * has: the copy between the two calls takes far less, so the deadline is
++ * missed only when the producer cannot get a core inside its own cycle. A
++ * deadline from the ring's padding would be missed whenever the stream is
++ * near empty -- in a clamped scene always -- and ask for more frequency under
++ * the thermal clamp that caused the starvation.
++ *
++ * The policy is set and reset through a send right this driver holds
++ * (mach_thread_self), so Stop, Release, process detach or a new producer
++ * demote the producer at once from whichever thread calls them; the right
++ * keeps the port name from being reused for another thread until the record
++ * is freed. The interval is joined, marked and left only by the thread
++ * itself: it finishes an open cycle and leaves at its next driver call after
++ * a demotion, or when it exits (the key's destructor). Off with
++ * MADEIRA_AUDIO_RT=0. */
++#define IOS_RT_PERIOD_NS       10000000ull  /* the device period ios_get_device_period reports */
++#define IOS_RT_COMPUTATION_NS   5000000ull  /* half of it, for a mixer translated by FEX */
++#define IOS_RT_CONSTRAINT_NS   10000000ull  /* also each work cycle's deadline */
++#define IOS_RT_CHECK_NS      2000000000ull  /* policy and CPU checked this often */
++#define IOS_RT_MAX_CPU_PERCENT 80           /* of one core between checks, else refused */
++
++struct ios_rt_thread {
++    /* under g_rt_lock */
++    int streams;                  /* streams this thread is the promoted producer of */
++    int alive;                    /* 0 once its key destructor ran */
++    _Atomic int promoted;         /* the time-constraint policy is set */
++    int refused;                  /* used more than IOS_RT_MAX_CPU_PERCENT once */
++    mach_port_t port;             /* mach_thread_self(): this driver's send right */
++    unsigned int win_tid;
++    /* the thread's own */
++    os_workgroup_interval_t wi;   /* its work interval, created at its first promotion */
++    os_workgroup_join_token_s token;
++    int joined;                   /* a member of wi */
++    int in_cycle;                 /* os_workgroup_interval_start without its finish */
++    uint64_t cycles, cycle_errors;
++    uint64_t check_mach, check_cpu_us;
++};
++static pthread_mutex_t g_rt_lock = PTHREAD_MUTEX_INITIALIZER;
++static pthread_key_t g_rt_key;
++static pthread_once_t g_rt_once = PTHREAD_ONCE_INIT;
++static int g_rt_on = 1;           /* read once at process attach */
++
++static uint64_t ios_ns_to_mach(uint64_t ns)
++{
++    if (!g_timebase.denom) mach_timebase_info(&g_timebase);
++    return ns * g_timebase.denom / g_timebase.numer;
++}
++
++static kern_return_t ios_rt_set_policy(mach_port_t port, int on)
++{
++    if (on) {
++        thread_time_constraint_policy_data_t tc;
++        tc.period = (uint32_t)ios_ns_to_mach(IOS_RT_PERIOD_NS);
++        tc.computation = (uint32_t)ios_ns_to_mach(IOS_RT_COMPUTATION_NS);
++        tc.constraint = (uint32_t)ios_ns_to_mach(IOS_RT_CONSTRAINT_NS);
++        tc.preemptible = TRUE;
++        return thread_policy_set(port, THREAD_TIME_CONSTRAINT_POLICY, (thread_policy_t)&tc,
++                                 THREAD_TIME_CONSTRAINT_POLICY_COUNT);
++    } else {
++        thread_standard_policy_data_t st = { 0 };
++        return thread_policy_set(port, THREAD_STANDARD_POLICY, (thread_policy_t)&st,
++                                 THREAD_STANDARD_POLICY_COUNT);
++    }
++}
++
++/* Back to timeshare at its QoS. Caller holds g_rt_lock; a thread whose
++ * destructor ran has no policy left to reset. */
++static void ios_rt_demote_locked(struct ios_rt_thread *t, const char *why)
++{
++    kern_return_t kr;
++    if (!t->alive || !atomic_load_explicit(&t->promoted, memory_order_relaxed)) return;
++    kr = ios_rt_set_policy(t->port, 0);
++    atomic_store_explicit(&t->promoted, 0, memory_order_relaxed);
++    if (ios_audio_diagnostics())
++        fprintf(stderr, "[ios_audio] rt demote win_tid=%04x (%s) kr=%d\n", t->win_tid, why, kr);
++}
++
++static void ios_rt_free_locked(struct ios_rt_thread *t)
++{
++    mach_port_deallocate(mach_task_self(), t->port);
++    free(t);
++}
++
++/* Drop one stream's hold on its producer. Caller holds g_rt_lock. */
++static void ios_rt_release_locked(struct ios_rt_thread *t, const char *why)
++{
++    if (--t->streams > 0) return;
++    ios_rt_demote_locked(t, why);
++    if (!t->alive) ios_rt_free_locked(t);
++}
++
++/* On the thread itself: close an open cycle */
++static void ios_rt_finish_self(struct ios_rt_thread *t)
++{
++    if (!t->in_cycle) return;
++    t->in_cycle = 0;
++    if (os_workgroup_interval_finish(t->wi, NULL)) t->cycle_errors++;
++}
++
++/* On the thread itself: close an open cycle and leave the interval */
++static void ios_rt_leave_self(struct ios_rt_thread *t)
++{
++    if (!t->joined) return;
++    ios_rt_finish_self(t);
++    os_workgroup_leave(t->wi, &t->token);
++    t->joined = 0;
++}
++
++/* On the thread itself, after a promotion: join its own interval */
++static void ios_rt_join_self(struct ios_rt_thread *t)
++{
++    int r;
++    if (t->joined) return;
++    if (!t->wi && !(t->wi = AudioWorkIntervalCreate("playport.audio-producer", OS_CLOCK_MACH_ABSOLUTE_TIME, NULL))) {
++        fprintf(stderr, "[ios_audio] rt interval win_tid=%04x: AudioWorkIntervalCreate failed\n", t->win_tid);
++        return;
++    }
++    if ((r = os_workgroup_join(t->wi, &t->token))) {
++        /* EALREADY: in a workgroup ours does not nest with; the policy stays */
++        fprintf(stderr, "[ios_audio] rt join win_tid=%04x refused: %d\n", t->win_tid, r);
++        return;
++    }
++    t->joined = 1;
++    if (ios_audio_diagnostics()) fprintf(stderr, "[ios_audio] rt join win_tid=%04x own interval\n", t->win_tid);
++}
++
++/* The thread's exit: leave on the thread that joined, then let the last
++ * stream holding the record free it */
++static void ios_rt_thread_exit(void *arg)
++{
++    struct ios_rt_thread *t = arg;
++    ios_rt_leave_self(t);
++    if (t->wi) os_release(t->wi);
++    t->wi = NULL;
++    pthread_mutex_lock(&g_rt_lock);
++    t->alive = 0;
++    if (!t->streams) ios_rt_free_locked(t);
++    pthread_mutex_unlock(&g_rt_lock);
++}
++
++static void ios_rt_key_init(void) { pthread_key_create(&g_rt_key, ios_rt_thread_exit); }
++
++/* The calling thread's record, NULL if it has none and `create` is 0 */
++static struct ios_rt_thread *ios_rt_self(int create)
++{
++    struct ios_rt_thread *t;
++    pthread_once(&g_rt_once, ios_rt_key_init);
++    if ((t = pthread_getspecific(g_rt_key)) || !create) return t;
++    if (!(t = calloc(1, sizeof(*t)))) return NULL;
++    t->alive = 1;
++    t->port = mach_thread_self();
++    {
++        unsigned int pid; int prio, base;
++        ios_current_win_thread(&pid, &t->win_tid, &prio, &base);
++    }
++    if (pthread_setspecific(g_rt_key, t)) {
++        mach_port_deallocate(mach_task_self(), t->port);
++        free(t);
++        return NULL;
++    }
++    return t;
++}
++
++static uint64_t ios_rt_cpu_us(mach_port_t port)
++{
++    thread_basic_info_data_t info;
++    mach_msg_type_number_t count = THREAD_BASIC_INFO_COUNT;
++    if (thread_info(port, THREAD_BASIC_INFO, (thread_info_t)&info, &count)) return 0;
++    return (uint64_t)(info.user_time.seconds + info.system_time.seconds) * 1000000u +
++           info.user_time.microseconds + info.system_time.microseconds;
++}
++
++/* Every 2 s on a promoted producer: the CPU guard, and the policy set again
++ * if something reset it. Returns 0 if the thread was refused. */
++static int ios_rt_check_self(struct ios_stream *s, struct ios_rt_thread *t)
++{
++    uint64_t now = mach_absolute_time(), cpu, wall_us;
++    unsigned int percent;
++    if (mach_to_ns(now - t->check_mach) < IOS_RT_CHECK_NS) return 1;
++    cpu = ios_rt_cpu_us(t->port);
++    wall_us = mach_to_ns(now - t->check_mach) / 1000;
++    percent = wall_us && cpu > t->check_cpu_us ? (unsigned int)((cpu - t->check_cpu_us) * 100 / wall_us) : 0;
++    t->check_mach = now;
++    t->check_cpu_us = cpu;
++    pthread_mutex_lock(&g_rt_lock);
++    if (percent > IOS_RT_MAX_CPU_PERCENT) {
++        /* a thread that holds a core is not a mixer: give it back, for good */
++        t->refused = 1;
++        if (s->rt == t) { s->rt = NULL; t->streams--; }
++        ios_rt_demote_locked(t, "cpu");
++        pthread_mutex_unlock(&g_rt_lock);
++        fprintf(stderr, "[ios_audio] rt refused win_tid=%04x cpu=%u%%\n", t->win_tid, percent);
++        return 0;
++    }
++    /* ECO's QoS change, or anything else, may have reset the policy. Under
++     * the lock, so a demotion from another thread is never undone here. */
++    if (atomic_load_explicit(&t->promoted, memory_order_relaxed)) {
++        thread_time_constraint_policy_data_t tc;
++        mach_msg_type_number_t count = THREAD_TIME_CONSTRAINT_POLICY_COUNT;
++        boolean_t get_default = FALSE;
++        if (!thread_policy_get(t->port, THREAD_TIME_CONSTRAINT_POLICY, (thread_policy_t)&tc, &count, &get_default) &&
++            get_default) {
++            kern_return_t kr = ios_rt_set_policy(t->port, 1);
++            if (ios_audio_diagnostics()) fprintf(stderr, "[ios_audio] rt reassert win_tid=%04x kr=%d\n", t->win_tid, kr);
++        }
++    }
++    pthread_mutex_unlock(&g_rt_lock);
++    if (ios_audio_diagnostics())
++        fprintf(stderr, "[ios_audio] rt producer win_tid=%04x cpu=%u%% interval=%d cycles=%llu cycle_errors=%llu\n",
++                t->win_tid, percent, t->joined, (unsigned long long)t->cycles, (unsigned long long)t->cycle_errors);
++    return 1;
++}
++
++/* Every GetBuffer by a stream's producer, before its result; `new_producer`
++ * on the call that made it one (ios_producer_note). Runs on the producer. */
++static void ios_audio_rt_producer(struct ios_stream *s, int new_producer)
++{
++    struct ios_rt_thread *t;
++
++    if (!g_rt_on || !ios_stream_is_live(s)) return;
++    if (!(t = ios_rt_self(new_producer))) return;
++    if (new_producer) {
++        pthread_mutex_lock(&g_rt_lock);
++        if (s->rt != t && s->started && !t->refused) {
++            if (s->rt) ios_rt_release_locked(s->rt, "producer changed");
++            s->rt = t;
++            t->streams++;
++            if (!atomic_load_explicit(&t->promoted, memory_order_relaxed)) {
++                kern_return_t kr = ios_rt_set_policy(t->port, 1);
++                atomic_store_explicit(&t->promoted, kr == KERN_SUCCESS, memory_order_relaxed);
++                t->check_mach = mach_absolute_time();
++                t->check_cpu_us = ios_rt_cpu_us(t->port);
++                if (ios_audio_diagnostics() || kr)
++                    fprintf(stderr, "[ios_audio] rt promote stream=%p win_tid=%04x kr=%d\n",
++                            (void *)s, t->win_tid, kr);
++            }
++        }
++        pthread_mutex_unlock(&g_rt_lock);
++    }
++    if (atomic_load_explicit(&t->promoted, memory_order_relaxed) && ios_rt_check_self(s, t))
++        ios_rt_join_self(t);
++    else
++        ios_rt_leave_self(t);        /* demoted by Stop, Release, a new producer or the CPU guard */
++}
++
++/* A GetBuffer by the producer succeeded: its work cycle starts */
++static void ios_audio_rt_cycle_start(void)
++{
++    struct ios_rt_thread *t;
++    uint64_t now;
++    if (!g_rt_on || !(t = ios_rt_self(0)) || !t->joined) return;
++    ios_rt_finish_self(t);           /* a GetBuffer the game did not release */
++    now = mach_absolute_time();
++    if (os_workgroup_interval_start(t->wi, now, now + ios_ns_to_mach(IOS_RT_CONSTRAINT_NS), NULL)) {
++        t->cycle_errors++;
++        return;
++    }
++    t->in_cycle = 1;
++    t->cycles++;
++}
++
++/* Every ReleaseBuffer: the producer's cycle finishes; a demoted thread leaves */
++static void ios_audio_rt_cycle_finish(void)
++{
++    struct ios_rt_thread *t;
++    if (!g_rt_on || !(t = ios_rt_self(0)) || !t->joined) return;
++    ios_rt_finish_self(t);
++    if (!atomic_load_explicit(&t->promoted, memory_order_relaxed)) ios_rt_leave_self(t);
++}
++
++/* Every other GetBuffer: a demoted thread that still calls leaves here */
++static void ios_audio_rt_caller(void)
++{
++    struct ios_rt_thread *t;
++    if (g_rt_on && (t = ios_rt_self(0)) && t->joined && !atomic_load_explicit(&t->promoted, memory_order_relaxed))
++        ios_rt_leave_self(t);
++}
++
++/* A stream stops or goes away: demote its producer now, from any thread. If
++ * that is the calling thread, it leaves its interval at once too. */
++static void ios_audio_rt_drop(struct ios_stream *s, const char *why)
++{
++    pthread_mutex_lock(&g_rt_lock);
++    if (s->rt) ios_rt_release_locked(s->rt, why);
++    s->rt = NULL;
++    pthread_mutex_unlock(&g_rt_lock);
++    ios_audio_rt_caller();
++}
++
+ /* ---------------------------------------------------------------- */
+ 
+ static NTSTATUS ios_process_attach(void *args) {
+     LOG_FN_CALL(0, "process_attach");
+     (void)args;
+     if (!g_timebase.denom) mach_timebase_info(&g_timebase);
++    {   /* Playport (decision 0172) */
++        const char *e = getenv("MADEIRA_AUDIO_RT");
++        g_rt_on = !(e && !strcmp(e, "0"));
++        if (!g_rt_on) fprintf(stderr, "[ios_audio] rt producer promotion off (MADEIRA_AUDIO_RT=0)\n");
++    }
+     return STATUS_SUCCESS;
+ }
+ 
+@@ -897,6 +1210,7 @@ static NTSTATUS ios_process_detach(void *args) {
+              * leaving the memory is the safe trade. */
+             s->valid = 0;
+             s->started = 0;
++            ios_audio_rt_drop(s, "process detach");
+             ios_dev_detach(s);
+         }
+     }
+@@ -1032,6 +1346,7 @@ static NTSTATUS ios_release_stream(void *args) {
+      * about to free. Nothing here touches another client's stream. */
+     s->valid = 0;
+     s->started = 0;
++    ios_audio_rt_drop(s, "release");
+     if (s->timer_thread) {
+         NtWaitForSingleObject(s->timer_thread, FALSE, NULL);
+         NtClose(s->timer_thread);
+@@ -1103,6 +1418,7 @@ static NTSTATUS ios_stop(void *args) {
+     if (s->started) {
+         s->accumulated_frames = elapsed_frames(s);
+         s->started = 0;
++        ios_audio_rt_drop(s, "stop");
+         ios_dev_stop_if_idle();
+     }
+     p->result = S_OK;
+@@ -1128,6 +1444,7 @@ static NTSTATUS ios_get_render_buffer(void *args) {
+     LOG_FN_CALL(10, "get_render_buffer");
+     struct get_render_buffer_params *p = args;
+     struct ios_stream *s = stream_from_handle(p->stream);
++    int producer;
+     if (!s) { if (p->data) *p->data = NULL; p->result = AUDCLNT_E_NOT_INITIALIZED; return STATUS_SUCCESS; }
+     /* Playport (PLA-364): which thread produces this stream, so its [xp-t]
+      * row (Windows tid) and its [xp-qos] row can be read: the first caller,
+@@ -1136,10 +1453,16 @@ static NTSTATUS ios_get_render_buffer(void *args) {
+         s->getbuf_logged = 1;
+         ios_log_getbuf_caller(s, "thread", p->frames);
+     }
+-    if (ios_producer_note(s, ios_current_tid()) && ios_audio_diagnostics() &&
+-        s->producer_lines < IOS_PRODUCER_LINES) {
+-        s->producer_lines++;
+-        ios_log_getbuf_caller(s, "producer", p->frames);
++    {
++        uint64_t tid = ios_current_tid();
++        int new_producer = ios_producer_note(s, tid);
++        if (new_producer && ios_audio_diagnostics() && s->producer_lines < IOS_PRODUCER_LINES) {
++            s->producer_lines++;
++            ios_log_getbuf_caller(s, "producer", p->frames);
++        }
++        producer = s->started && tid == s->producer_tid;
++        if (producer) ios_audio_rt_producer(s, new_producer);   /* decision 0172 */
++        else ios_audio_rt_caller();
+     }
+     if (ios_stream_is_live(s)) {
+         uint64_t padding = atomic_load(&s->write_pos) - atomic_load(&s->play_pos);
+@@ -1161,6 +1484,7 @@ static NTSTATUS ios_get_render_buffer(void *args) {
+     s->pending_frames = p->frames;
+     if (p->data) *p->data = s->render_scratch;
+     p->result = S_OK;
++    if (producer) ios_audio_rt_cycle_start();
+     return STATUS_SUCCESS;
+ }
+ 
+@@ -1262,6 +1586,7 @@ static NTSTATUS ios_release_render_buffer(void *args) {
+     }
+     s->pending_frames = 0;
+     p->result = S_OK;
++    ios_audio_rt_cycle_finish();     /* decision 0172 */
+     return STATUS_SUCCESS;
+ }
+ 

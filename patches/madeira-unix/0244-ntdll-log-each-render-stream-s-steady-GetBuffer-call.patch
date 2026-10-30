@@ -1,0 +1,184 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: playportdev <dev@playport.dev>
+Date: Fri, 30 Oct 2026 22:30:24 +0100
+Subject: [PATCH] ntdll: log each render stream's steady GetBuffer caller
+
+l19 named only the first GetBuffer caller of each stream, and in Hollow
+Knight and RDR2 that first call is a 4800-frame prefill by the main
+thread before Start (HK's main 0068, while its FMOD thread 00f8 is the
+one that asks for MMCSS "Audio"). Which thread produces RDR2's slot 1 in
+its clamped scenes, the main thread 0360 or another, is what the
+producer gate of the next patch depends on (PLA-364).
+
+A stream now counts its GetBuffer callers. A thread becomes the stream's
+producer after 32 GetBuffers in a row while the stream is started, so a
+prefill does not count; the count starts again at each Start. Unless
+MADEIRA_NO_DIAGNOSTICS is set:
+
+- each new producer gets a getbuf-producer line, as getbuf-thread (pid,
+  Windows tid, pthread, Mach port, priority, base, QoS) with the number
+  of caller switches so far, at most 16 per stream;
+- the ml1065 suffix adds caller_switches (GetBuffers whose caller
+  differed from the one before, in the window) and producer (its
+  pthread id).
+
+What is mixed, refused or reported to the game is unchanged.
+
+Linear: PLA-364
+Class: diagnostics
+Evidence: docs/evidence/2026-10-30-rdr2-kk-audio-diagnostics.md
+Offered-upstream: no
+---
+ build/ntdll-unix/audio_null_ios.c | 80 +++++++++++++++++++++++++------
+ 1 file changed, 65 insertions(+), 15 deletions(-)
+
+diff --git a/build/ntdll-unix/audio_null_ios.c b/build/ntdll-unix/audio_null_ios.c
+index e935278..55640f5 100644
+--- a/build/ntdll-unix/audio_null_ios.c
++++ b/build/ntdll-unix/audio_null_ios.c
+@@ -312,6 +312,16 @@ struct ios_stream {
+     _Atomic uint64_t mix_callbacks, short_callbacks, underrun_frames;
+     int getbuf_logged;           /* the first GetBuffer caller is logged */
+     uint64_t last_release_mach;  /* the previous ReleaseBuffer with frames */
++    /* Playport (PLA-364): the stream's GetBuffer callers. A caller becomes the
++     * stream's producer after IOS_PRODUCER_STEADY_CALLS GetBuffers in a row
++     * while the stream is started, so a prefill before Start by the thread
++     * that opened the stream (Hollow Knight's and RDR2's main threads, 4800
++     * frames each) does not count. Counted again from each Start. */
++    uint64_t caller_tid;         /* pthread id of the latest GetBuffer caller */
++    UINT32 caller_run;           /* its GetBuffers in a row while started */
++    uint64_t producer_tid;       /* the steady caller since Start, 0 = none */
++    UINT32 producer_lines;       /* getbuf-producer lines printed */
++    _Atomic uint64_t caller_switches; /* GetBuffers by another thread than the one before */
+ };
+ 
+ #include "audio_wow64_buffer.h"
+@@ -821,6 +831,42 @@ static int ios_audio_diagnostics(void)
+ /* thread_ios.c: the calling thread's Windows ids and priorities */
+ extern void ios_current_win_thread(unsigned int *pid, unsigned int *tid, int *priority, int *base_priority);
+ 
++/* Playport (PLA-364): see the caller fields of struct ios_stream */
++#define IOS_PRODUCER_STEADY_CALLS 32
++#define IOS_PRODUCER_LINES 16
++
++/* Count this GetBuffer by thread `tid`. Returns 1 when it makes `tid` the
++ * stream's producer: its IOS_PRODUCER_STEADY_CALLS-th call in a row while the
++ * stream is started, by another thread than the producer before it. */
++static int ios_producer_note(struct ios_stream *s, uint64_t tid)
++{
++    if (tid != s->caller_tid) {
++        if (s->caller_tid) atomic_fetch_add_explicit(&s->caller_switches, 1, memory_order_relaxed);
++        s->caller_tid = tid;
++        s->caller_run = 0;
++    }
++    if (!s->started || s->caller_run >= IOS_PRODUCER_STEADY_CALLS) return 0;
++    if (++s->caller_run < IOS_PRODUCER_STEADY_CALLS || tid == s->producer_tid) return 0;
++    s->producer_tid = tid;
++    return 1;
++}
++
++/* One getbuf line: `what` is "thread" (the stream's first GetBuffer) or
++ * "producer" (a new steady caller) */
++static void ios_log_getbuf_caller(const struct ios_stream *s, const char *what, UINT32 frames)
++{
++    unsigned int pid = 0, wtid = 0;
++    int prio = 0, base = 0, slot = -1, si;
++    ios_current_win_thread(&pid, &wtid, &prio, &base);
++    for (si = 0; si < IOS_MAX_STREAMS; si++)
++        if (atomic_load_explicit(&g_mix[si], memory_order_relaxed) == s) { slot = si; break; }
++    fprintf(stderr, "[ios_audio] getbuf-%s stream=%p slot=%d pid=%04x win_tid=%04x thread=%llu port=%#x "
++            "priority=%d base=%d qos=%#x frames=%u rate=%u ch=%u switches=%llu\n",
++            what, (void *)s, slot, pid, wtid, ios_current_tid(), (unsigned)pthread_mach_thread_np(pthread_self()),
++            prio, base, (unsigned)qos_class_self(), frames, s->sample_rate, s->channels,
++            (unsigned long long)atomic_load_explicit(&s->caller_switches, memory_order_relaxed));
++}
++
+ /* ---------------------------------------------------------------- */
+ 
+ static NTSTATUS ios_process_attach(void *args) {
+@@ -1040,6 +1086,8 @@ static NTSTATUS ios_start(void *args) {
+         /* ml1026: started BEFORE the endpoint runs, so the first render pass
+          * already sees this client. */
+         s->start_mach = mach_absolute_time();
++        s->caller_run = 0;          /* Playport (PLA-364): find the producer again */
++        s->producer_tid = 0;
+         s->started = 1;
+         ios_dev_start();
+     }
+@@ -1082,18 +1130,16 @@ static NTSTATUS ios_get_render_buffer(void *args) {
+     struct ios_stream *s = stream_from_handle(p->stream);
+     if (!s) { if (p->data) *p->data = NULL; p->result = AUDCLNT_E_NOT_INITIALIZED; return STATUS_SUCCESS; }
+     /* Playport (PLA-364): which thread produces this stream, so its [xp-t]
+-     * row (Windows tid) and its [xp-qos] row can be read. Once per stream. */
++     * row (Windows tid) and its [xp-qos] row can be read: the first caller,
++     * and every new steady caller (at most IOS_PRODUCER_LINES per stream). */
+     if (!s->getbuf_logged && ios_audio_diagnostics()) {
+-        unsigned int pid = 0, wtid = 0;
+-        int prio = 0, base = 0, slot = -1, si;
+         s->getbuf_logged = 1;
+-        ios_current_win_thread(&pid, &wtid, &prio, &base);
+-        for (si = 0; si < IOS_MAX_STREAMS; si++)
+-            if (atomic_load_explicit(&g_mix[si], memory_order_relaxed) == s) { slot = si; break; }
+-        fprintf(stderr, "[ios_audio] getbuf-thread stream=%p slot=%d pid=%04x win_tid=%04x thread=%llu port=%#x "
+-                "priority=%d base=%d qos=%#x frames=%u rate=%u ch=%u\n",
+-                (void *)s, slot, pid, wtid, ios_current_tid(), (unsigned)pthread_mach_thread_np(pthread_self()),
+-                prio, base, (unsigned)qos_class_self(), p->frames, s->sample_rate, s->channels);
++        ios_log_getbuf_caller(s, "thread", p->frames);
++    }
++    if (ios_producer_note(s, ios_current_tid()) && ios_audio_diagnostics() &&
++        s->producer_lines < IOS_PRODUCER_LINES) {
++        s->producer_lines++;
++        ios_log_getbuf_caller(s, "producer", p->frames);
+     }
+     if (ios_stream_is_live(s)) {
+         uint64_t padding = atomic_load(&s->write_pos) - atomic_load(&s->play_pos);
+@@ -1147,7 +1193,7 @@ static NTSTATUS ios_release_render_buffer(void *args) {
+             static struct { uint64_t frames, clip; double sum_abs; float peak; time_t last;
+                             /* Playport (PLA-364): this window's frames written, its start, its longest
+                              * gap between two ReleaseBuffers, and the underrun counts at its start */
+-                            const void *owner; uint64_t written, start_mach, max_gap_mach, cbs, shorts, under; } st[IOS_MAX_STREAMS];
++                            const void *owner; uint64_t written, start_mach, max_gap_mach, cbs, shorts, under, switches; } st[IOS_MAX_STREAMS];
+             int slot = -1, si;
+             uint64_t now_mach = mach_absolute_time();
+             for (si = 0; si < IOS_MAX_STREAMS; si++) if (atomic_load_explicit(&g_mix[si], memory_order_relaxed) == s) { slot = si; break; }
+@@ -1157,6 +1203,7 @@ static NTSTATUS ios_release_render_buffer(void *args) {
+                     st[slot].cbs = atomic_load_explicit(&s->mix_callbacks, memory_order_relaxed);
+                     st[slot].shorts = atomic_load_explicit(&s->short_callbacks, memory_order_relaxed);
+                     st[slot].under = atomic_load_explicit(&s->underrun_frames, memory_order_relaxed);
++                    st[slot].switches = atomic_load_explicit(&s->caller_switches, memory_order_relaxed);
+                 }
+                 if (s->last_release_mach && now_mach - s->last_release_mach > st[slot].max_gap_mach)
+                     st[slot].max_gap_mach = now_mach - s->last_release_mach;
+@@ -1184,25 +1231,28 @@ static NTSTATUS ios_release_render_buffer(void *args) {
+                     /* Playport (PLA-364): with diagnostics, the window's length, the frames
+                      * written against real time, the RT callbacks and those short of frames,
+                      * the stream frames they lacked, and the longest ReleaseBuffer gap */
+-                    char under[256] = "";
++                    char under[320] = "";
+                     uint64_t cbs = atomic_load_explicit(&s->mix_callbacks, memory_order_relaxed);
+                     uint64_t shorts = atomic_load_explicit(&s->short_callbacks, memory_order_relaxed);
+                     uint64_t missing = atomic_load_explicit(&s->underrun_frames, memory_order_relaxed);
++                    uint64_t switches = atomic_load_explicit(&s->caller_switches, memory_order_relaxed);
+                     if (ios_audio_diagnostics()) {
+                         double window_s = mach_to_ns(now_mach - st[slot].start_mach) / 1e9;
+                         snprintf(under, sizeof(under), " | stream=%p window=%.1fs written=%llu delivery=%.0f%% callbacks=%llu "
+-                                 "short_callbacks=%llu underrun_frames=%llu max_release_gap_ms=%.0f",
++                                 "short_callbacks=%llu underrun_frames=%llu max_release_gap_ms=%.0f "
++                                 "caller_switches=%llu producer=%llu",
+                                  (void *)s, window_s, (unsigned long long)st[slot].written,
+                                  window_s >= 1.0 && s->sample_rate ? 100.0 * st[slot].written / (window_s * s->sample_rate) : 0.0,
+                                  (unsigned long long)(cbs - st[slot].cbs), (unsigned long long)(shorts - st[slot].shorts),
+-                                 (unsigned long long)(missing - st[slot].under), mach_to_ns(st[slot].max_gap_mach) / 1e6);
++                                 (unsigned long long)(missing - st[slot].under), mach_to_ns(st[slot].max_gap_mach) / 1e6,
++                                 (unsigned long long)(switches - st[slot].switches), (unsigned long long)s->producer_tid);
+                     }
+                     fprintf(stderr, "[ios_audio] ml1065 slot=%d source: %llu samples, mean|x|=%.4f peak=%.3f clipped=%llu (rate %u ch %u float=%d bits=%d)%s\n",
+                             slot, (unsigned long long)st[slot].frames, st[slot].sum_abs / (double)st[slot].frames, st[slot].peak,
+                             (unsigned long long)st[slot].clip, s->sample_rate, s->channels, s->is_float, s->sample_bits, under);
+                     st[slot].frames = 0; st[slot].sum_abs = 0; st[slot].peak = 0; st[slot].clip = 0; st[slot].last = time(NULL);
+                     st[slot].written = 0; st[slot].start_mach = now_mach; st[slot].max_gap_mach = 0;
+-                    st[slot].cbs = cbs; st[slot].shorts = shorts; st[slot].under = missing;
++                    st[slot].cbs = cbs; st[slot].shorts = shorts; st[slot].under = missing; st[slot].switches = switches;
+                 }
+             }
+         }

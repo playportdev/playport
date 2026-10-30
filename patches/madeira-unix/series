@@ -210,3 +210,6 @@
 0241-ntdll-count-audio-underruns-and-name-a-stream-s-prod.patch
 0242-ntdll-split-the-xp-line-s-CPU-time-into-user-and-sys.patch
 0243-ntdll-place-the-Social-Club-helper-s-V8-code-range-o.patch
+0244-ntdll-log-each-render-stream-s-steady-GetBuffer-call.patch
+0245-ntdll-give-a-render-stream-s-producer-a-time-constra.patch
+0246-ntdll-after-repeated-underruns-play-whole-callbacks-.patch

@@ -833,6 +833,13 @@ them to UIKit, GameController and AVFAudio.
   its device lock, and `ios_audio_host_suspend(0)` restarts it only if a
   client still has it started
   ([madeira-unix 0012](../patches/madeira-unix/0012-audio-let-the-host-app-suspend-and-resume-the-proces.patch)).
+- **Audio producer scheduling** ([decision 0172](decisions/0172-audio-producer-runs-real-time-in-its-own-work-interval.md),
+  madeira-unix 0244–0246). The driver (`audio_null_ios.c`) gives a render
+  stream's steady GetBuffer caller a Mach time-constraint policy and a work
+  interval of its own, each GetBuffer…ReleaseBuffer one cycle; the RemoteIO
+  unit's workgroup is not joined. A starved stream plays whole callbacks or
+  none (C1). `env.MADEIRA_AUDIO_RT=0` and `env.MADEIRA_AUDIO_REFILL=0` turn
+  them off.
 - **Main thread.** Every host I/O entry point is a ring push, a few atomic
   stores or an audio unit start/stop, so the main thread may call it. Runtime
   work stays off the main thread (Apple's hang threshold is 250 ms).
