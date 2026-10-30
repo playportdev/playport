@@ -44,6 +44,27 @@ The release package has no XboxClientKit dependency. Every Xbox Swift type start
   Device registration is anonymous. Association with the account and that
   limit occur at licensing (PLA-496), not while displaying the sign-in page.
 
+## Library (PLA-492)
+
+- `XboxSession.storeTicket()` exchanges the device and user tickets silently for
+  the Microsoft Store's own ticket (`www.microsoft.com`, `mbi_ssl`, the Store
+  app's client ID), cached with the session and deleted at sign-out. A refusal
+  asks for sign-in but keeps the session.
+- `XboxStoreLibrary.refresh(_:)` reads the account's PCGAFD entitlements (every
+  `x-ms-ct` page) with that ticket, follows each licence's parents to **owned**
+  or **PC Game Pass** access (inactive, trial, shared, expired, flagged and
+  unresolved licences give none; a bad row takes its children with it), then
+  looks the licensed products up in the public display catalogue (20 per page,
+  four at a time, bundles' products in later rounds). A copy is listed, keyed
+  by Product ID with its title and Microsoft's art, only when it is a game with
+  a Windows.Desktop **MSIXVC/MSIXVC2** package, directly or through its bundle.
+  Left out: UWP/EAppx and other packages, products with no Store package
+  (Microsoft delivers them through Battle.net, the EA app or another launcher),
+  add-ons, and an edition whose games are listed as copies of their own.
+- Each refresh reads the entitlements again and looks up only products the
+  previous snapshot lacks; a product it could not resolve is looked up again.
+  The catalogue transport allows 8 MiB a response (a page of 20 runs to ~2 MiB).
+
 ## Provenance and offline checks
 
 Written from Xodus `514dd56f360a4bdf12f4acde5148bac5ce5f957f`:
@@ -54,7 +75,9 @@ headers and licensing reason 501 also follow Xodus Nexus
 `xodus-content-device-limit.patch`). Derived files carry GPL-3.0-only provenance
 headers; `LICENSE-Xodus.txt`, `LICENSE-XodusNexus.txt` and
 `LICENSE-CikExtractor.txt` preserve the applicable notices. See
-[LICENSING.md](../../docs/LICENSING.md#xbox-planned).
+[LICENSING.md](../../docs/LICENSING.md#xbox-planned). The library follows Xodus
+Nexus `e0668a12f1da931aed13537ef04295599011317b` (`src/main/catalog.ts`,
+`src/main/account-library.ts`, `assets/xodus-subscription-login.patch`).
 
 `Tests/XboxClientKitTests/Fixtures/` contains **synthetic, redacted responses**, not
 account captures. No PLA-487 captures were present when this ticket began.
@@ -66,6 +89,13 @@ with Python `cryptography` and exclusive-canonicalised with `lxml`; the binary
 RSA/DER/signature fixtures are known-answer vectors from that synthetic key,
 not usable credentials. Base64 text starts on its own line so the secret scan
 still catches a real inline ticket rather than exempting the whole directory.
+The library's fixtures are recorded, not synthetic: `entitlements.json` is 15
+rows of the PLA-487 ground-truth PCGAFD response (renewal IDs redacted; one row
+keeps the capture's redacted key, which the parser skips), and
+`catalog-products.json` is the display catalogue's records for those products
+and their bundles' products (the pilot's from the ground-truth capture, the rest
+from the public endpoint, which needs no account), trimmed to the fields read.
+`store-ticket.xml` is a synthetic, unsealed broker reply.
 
 `PLAYPORT_BUILD=$PWD/.work ./pp test --swift XboxClientKit` runs public session
 flows (exchange, relaunch, expiry/renewal/refusal, device reuse/replacement/reset,
