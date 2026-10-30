@@ -261,10 +261,14 @@ after a play launched. A mark or `ok` result proves only that stop condition,
 not that gameplay appeared: inspect the timeline, log and screenshot.
 
 - **The app's screens** ([decision 0034](decisions/0034-a-gamepad-first-ui.md)).
-  `open:SCREEN` shows Home, Library (`library`: on All, `games`: on Steam), Downloads,
+  `open:SCREEN` shows Home, Library (`library`: on All, `games`: on Steam, `battlenet`: on
+  Battle.net with the store's offered products), Downloads,
   Settings (`settings#SECTION`), the checklist (`setup`), Sign in to Steam
   (`signin`) or a game's page (`open:ID`, `open:ID#SECTION` with its Game
-  options open); `pad:` presses then move the one focus ring and press the
+  options open; `open:bnet-CODE` a Battle.net product's page). The Battle.net pages have their own
+  paths: `install:bnet-CODE`, `pause-resume:bnet-CODE`, `region:bnet-CODE[=R]`,
+  `locale:bnet-CODE[=L]`, `notice:bnet-CODE=accept|decline` and `update:bnet-CODE[=install]`
+  (`pp ui --help`). `pad:` presses then move the one focus ring and press the
   footer's buttons, as a controller does (`pp ui --help` has the buttons).
   Each `pad:` line in `s1-host.log` names the ringed item (`focus hero:app-367520`,
   `dl:job:APP`, `set:nav:graphics`, `opt:frameLimit`), the page and any panel,
