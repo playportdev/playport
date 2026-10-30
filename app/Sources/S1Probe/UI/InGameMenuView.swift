@@ -21,7 +21,8 @@
 // GyroSensors.swift, ControllerMapView.swift; A on the Controller row, a tap on
 // its "Edit controller…", or choosing Custom there opens the full Controller
 // page and its ActionPicker over the paused game, InGameControllerPage, B back
-// to the panel),
+// to the panel), Touch keyboard (back to the game with the touch keyboard open
+// over it, OnScreenControls.setKeyboard; its own close key closes it),
 // Screenshot (the frame on screen to
 // Photos; a dev build also keeps a PNG in Documents/Screenshots), Performance
 // overlay (the Metal HUD on the game layer, now and for this game only; only
@@ -131,6 +132,10 @@ final class InGameMenu: ObservableObject {
         switch item {
         case .resume: resume()
         case .controls: menu.openPanel()
+        case .keyboard:
+            // Back to the game, with the touch keyboard open over it (its keys reach the game only with the menu down).
+            resume()
+            OnScreenControls.shared.setKeyboard(true)
         case .screenshot: screenshot()
         case .overlay: toggleOverlay()
         case .controller: PadRouter.shared.refreshControllers()
@@ -488,6 +493,7 @@ struct InGameMenuView: View {
         switch item {
         case .resume: return nil
         case .controls: return controls.state.summary
+        case .keyboard: return controls.keyboard ? "Open" : nil
         case .screenshot: return model.shot ?? "Saved to Photos"
         case .overlay:
             guard MetalHUD.loaded else { return "Turn on Metal HUD in Settings, relaunch" }

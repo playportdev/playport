@@ -11,7 +11,11 @@
 // PlayportKit ControlLayout: view menu lt lb rt rb leftStick y x b a in the
 // Gamepad layout, with dpad and rightStick when the game's options have them); a stick or the d-pad takes a direction after
 // a dot (`dpad.right`, `leftStick.up`: the stick fully over, the d-pad near
-// its edge). A floating stick's finger lands at its home, in its zone. The
+// its edge). A floating stick's finger lands at its home, in its zone. With the
+// touch keyboard open (a layout's `keyboard` key, `menu:keyboard`), its keys are
+// the controls instead (HostIOKit TouchKeyboard): kb-a, kb-1, kb-f1, kb-shift,
+// kb-ctrl, kb-alt, kb-space, kb-enter, kb-backspace, kb-up, ... and kb-close; a
+// tapped kb-shift stays down for the next `touch:` key. The
 // in-game menu's three-finger tap is the driver's `gesture:three-finger-tap`. Every finger goes down together, stays `ms`
 // milliseconds (200 by default, 10000 at most), and lifts together.
 
@@ -58,7 +62,7 @@ extension OnScreenControls {
                 case .stick, .keyStick: reach = t.frame.width / 2
                 case .dpad: reach = min(t.frame.width, t.frame.height) * 0.4
                 case .button: return "\(w[0]) is a button: it takes no direction"
-                case .look, .pointer, .tool: return "\(w[0]) takes no direction"
+                case .look, .pointer, .tool, .key, .modifier: return "\(w[0]) takes no direction"
                 }
                 let d: (Double, Double)
                 switch w[1] {
@@ -95,7 +99,7 @@ extension OnScreenControls {
     var summary: String {
         "drawn=\(drawn) layout=\(state.layout.rawValue) visible=\(state.visible) dpad=\(state.dpad.rawValue) "
             + "rightStick=\(state.rightStick.rawValue) "
-            + "opacity=\(ControlsOpacity.label(state.opacity)) "
+            + "opacity=\(ControlsOpacity.label(state.opacity)) keyboard=\(keyboard ? "open" : "closed") "
             + "held=\(controls.held.sorted().joined(separator: "+"))"
     }
 }
