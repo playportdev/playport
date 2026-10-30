@@ -67,6 +67,7 @@ REPO = os.path.dirname(HERE)
 BUILD = os.environ.get("PLAYPORT_BUILD") or os.path.join(REPO, ".work")
 sys.path.insert(0, os.path.join(REPO, "build"))
 import inputs  # noqa: E402
+import checks  # noqa: E402  (tools/, beside this file)
 
 # netmuxd's socket (pp setup records it; build/install reads the same variable).
 SOCK = inputs.get("PLAYPORT_USBMUX_SOCKET")
@@ -78,6 +79,17 @@ UNATTENDED = os.path.join(DEVICE_DIR, "unattended.json")
 BID_RE = re.compile(r"^XTL-[A-Z0-9]+\.dev\.playport\.app$")
 PLACEHOLDER_BID = "XTL-TEAMIDXXXX.dev.playport.app"
 EXECUTABLES = ("S1Probe", "Playport")
+
+
+def scrub_file(path):
+    """Rewrites a pulled log with every `pp secrets` match replaced (checks.scrub_text);
+    the number replaced."""
+    with open(path, encoding="utf-8", errors="replace") as f:
+        text, n = checks.scrub_text(f.read())
+    if n:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+    return n
 
 
 class PhoneError(RuntimeError):
@@ -542,7 +554,9 @@ class Phone:
 
     def pull(self, remote, dest):
         """One named file into DEST (a directory); its path, or None, with the reason in
-        self.pull_error. Never a directory: Documents holds the prefix, whose z: drive links to /."""
+        self.pull_error. Never a directory: Documents holds the prefix, whose z: drive links to /.
+        A pulled `.log` is scrubbed of every `pp secrets` pattern (checks.scrub_text): the
+        runtime's and game's own output reaches s1-host.log without the app's Redactor."""
         os.makedirs(dest, exist_ok=True)
         local = os.path.join(dest, os.path.basename(remote))
         with contextlib.suppress(OSError):
@@ -559,6 +573,8 @@ class Phone:
                 open(os.path.join(self.cmd_dir, name + ".err"), "wb") as err:
             rc = subprocess.run(cmd, stdout=out, stderr=err, env=pmd_env()).returncode
         if rc == 0 and os.path.exists(local):
+            if local.endswith(".log"):
+                scrub_file(local)
             return local
         try:
             with open(os.path.join(self.cmd_dir, name + ".err"), errors="replace") as f:

@@ -57,6 +57,10 @@ SECRETS = [
                     r'''["']? *[:=] *["']?([0-9A-Fa-f]{32,}|[A-Za-z0-9+/]{22,})'''),
     # The per-play key of the runtime's bridge (0167).
     ("Xbox bridge key", r'''XODUS_BRIDGE_KEY["']? *[:=] *["']?[A-Za-z0-9+/_-]{32,}'''),
+    # A JWK's private part (`"d"`, base64url): the runtime's proof key (PLA-489), not its public x/y.
+    ("JWK private key", r'''"d" *: *"[A-Za-z0-9_-]{20,}"'''),
+    # GetBasePackage's per-package key blob.
+    ("Xbox package key blob", r'''KeyBlob["']? *[:=>] *["']?[A-Za-z0-9+/_-]{16,}'''),
 ]
 # Made-up or public values the tests use; a line holding one is not a hit.
 SECRET_FIXTURES = ("XTL-TEAMIDXXXX.", "XTL-A1B2C3D4E5.", "eyJhbGciOiJFZERTQSJ9.", "76561197960287930",
@@ -90,6 +94,23 @@ def secret_hits(text):
     """(what, line) for each line of text that matches a secret pattern."""
     return [(what, line) for line in text.splitlines() if not any(f in line for f in SECRET_FIXTURES)
             for what, r in _SECRET_RES if r.search(line)]
+
+
+def scrub_text(text):
+    """(text, count): each secret-pattern match replaced by `<pp:redacted WHAT>`, the rest of
+    each line kept. For logs pulled off the phone, whose runtime and game output reach the
+    file without the app's Redactor (decision 0167, the PLA-485 review)."""
+    count = 0
+
+    def one(line):
+        nonlocal count
+        if any(f in line for f in SECRET_FIXTURES):
+            return line
+        for what, r in _SECRET_RES:
+            line, n = r.subn(f"<pp:redacted {what}>", line)
+            count += n
+        return line
+    return "".join(one(line) for line in text.splitlines(keepends=True)), count
 
 
 TRAILERS = ("Class:", "Evidence:", "Offered-upstream:")

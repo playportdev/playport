@@ -31,8 +31,11 @@ public enum Redactor {
             (#"[A-Za-z0-9+/]*(?:PExpY2Vuc2U[g+]|xMaWNlbnNl[IP]|8TGljZW5zZ[ST])[A-Za-z0-9+/]*={0,2}"#, "<license:redacted>"),
             // A legacy (SOAP) Microsoft account ticket's encrypted body, its session key, a
             // licence's signed block, the bridge's ticket replies (decision 0167).
-            (#"(?i)(<(?:[A-Za-z]+:)?(?:BinarySecret|CipherValue|SPLicenseBlock|BinarySecurityToken|Token|DeviceRps)\b[^>]*>)[^<]+"#,
+            (#"(?i)(<(?:[A-Za-z]+:)?(?:BinarySecret|CipherValue|SPLicenseBlock|BinarySecurityToken|Token|DeviceRps|KeyBlob)\b[^>]*>)[^<]+"#,
              "$1<redacted>"),
+            // A JWK's private part (the runtime's proof key, `"d"`) and GetBasePackage's KeyBlob.
+            (#"("d"\s*:\s*")[A-Za-z0-9_\-]{20,}"#, "$1<redacted>"),
+            (#"(?i)(KeyBlob["']?\s*[:=]\s*["']?)[^\s"',&}<]+"#, "$1<redacted>"),
             // Epic's ownership token (`egoc1~<JWT>`, decision 0059), before the JWT rule takes its tail.
             (#"egoc1~[A-Za-z0-9._~+/=\-]+"#, "<ovt:redacted>"),
             // JWTs (Steam refresh and access tokens are eyJ... three-part JWTs) and JWEs (Xbox's

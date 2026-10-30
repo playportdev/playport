@@ -168,6 +168,7 @@ final class RedactorTests: XCTestCase {
         let licence64 = Data(licence.utf8).base64EncodedString()
         let hexKey = String(repeating: "0f", count: 32), cik = String(b64.suffix(44))
         let sessionKey = String(b64.dropFirst(10).prefix(44)), bridgeKey = String(repeating: "a1", count: 32)
+        let jwkD = String(b64.prefix(43)).replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")
         return [
             (#"{"refresh_token":""# + refresh + #"","expires_in":3600}"#, [refresh]),
             ("POST /token refresh=" + refresh, [refresh]),
@@ -183,6 +184,9 @@ final class RedactorTests: XCTestCase {
             ("<wst:RequestedProofToken><wst:BinarySecret>" + sessionKey + "</wst:BinarySecret>", [sessionKey]),
             ("<CipherData><CipherValue>" + b64 + "</CipherValue></CipherData>", [b64]),
             (licence, [block, "Type=\"Full\""]),
+            (#"{"kty":"EC","crv":"P-256","x":"AAAA","y":"BBBB",""# + "d" + #"":""# + jwkD + #""}"#, [jwkD]),
+            (#"{"Key"# + #"Blob":""# + String(b64.suffix(48)) + #"","FileHash":""}"#, [String(b64.suffix(48))]),
+            ("<Key" + "Blob>" + String(b64.prefix(48)) + "</KeyBlob>", [String(b64.prefix(48))]),
             (#"{"license":{"keys":[{"value":""# + licence64 + #""}],"leases":[]}}"#, [String(licence64.dropFirst(40).prefix(40))]),
             (#"{"licenseToken":""# + b64 + #""}"#, [b64]),
             (#"content key {"contentKey": ""# + hexKey + #""}"#, [hexKey]),

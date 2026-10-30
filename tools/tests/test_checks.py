@@ -26,6 +26,25 @@ diff --git a/f b/f
 
 
 class Secrets(unittest.TestCase):
+    def test_jwk_private_exponent_and_keyblob(self):
+        d = "Qm9ndXNQcml2YXRlRXhwb25lbnRGb3JUZXN0aW5nT25seQ"
+        jwk = '{"kty":"EC","crv":"P-256","x":"AAAA","y":"BBBB","' + 'd":"' + d + '"}'
+        self.assertEqual([w for w, _ in checks.secret_hits(jwk)], ["JWK private key"])
+        blob = '"Key' + 'Blob":"' + "c2VjcmV0LWtleS1ibG9iLWJ5dGVzLWZvci10ZXN0" + '"'
+        self.assertEqual([w for w, _ in checks.secret_hits(blob)], ["Xbox package key blob"])
+        self.assertEqual(checks.secret_hits('{"d":"<redacted>","KeyBlob":""}'), [])
+
+    def test_scrub_text_hides_each_secret_and_keeps_the_rest(self):
+        d = "Qm9ndXNQcml2YXRlRXhwb25lbnRGb3JUZXN0aW5nT25seQ"
+        text = "jit: acquire 12 ms\nproof {\"" + 'd":"' + d + "\"} sent\nlast line\n"
+        out, n = checks.scrub_text(text)
+        self.assertEqual(n, 1)
+        self.assertNotIn(d, out)
+        self.assertIn("jit: acquire 12 ms", out)
+        self.assertIn("<pp:redacted JWK private key>", out)
+        self.assertEqual(checks.secret_hits(out), [])
+        self.assertEqual(checks.scrub_text("plain\n"), ("plain\n", 0))
+
     def test_hits_and_fixtures(self):
         # Made up, and split so that pp secrets does not find them in this file.
         steam_id, team = "7656119" + "8000000000", "XTL-" + "ABCDE12345."
