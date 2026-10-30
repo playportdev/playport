@@ -80,6 +80,32 @@ public actor XboxSession {
                            clientID: String = XboxSignIn.clientID) async throws -> XboxTicket {
         try await userTicket(scope: scope, clientID: clientID, force: false)
     }
+    /// The Microsoft Store's own ticket (`www.microsoft.com`, MBI_SSL, the Store
+    /// app's client ID), exchanged silently as Xodus Nexus's `store_session` does.
+    /// PCGAFD entitlements take it as the raw `Authorization` value. A refusal asks
+    /// for sign-in but keeps the session: it is not the platform ticket's verdict.
+    public func storeTicket() async throws -> XboxTicket {
+        let epoch = generation
+        guard let session = try read(XboxStoredSession.self, "session"),
+              let user = session.tokens.first(where: { $0.legacy && $0.scope == XboxSOAP.sts }) else { throw XboxSessionError.signInRequired }
+        if let cached = session.tokens.first(where: { !$0.legacy && $0.scope == Self.storeScope && $0.expires > now().addingTimeInterval(60) }) {
+            return XboxTicket(token: Secret(cached.value), expiresAt: cached.expires)
+        }
+        let device = try await deviceToken()
+        try check(epoch)
+        let request = try XboxSOAP.request(now: now(), device: device, user: user, username: session.username,
+            app: Self.storeApp, scopes: [(Self.storeScope, "mbi_ssl")], silent: true)
+        let reply = try XboxSOAP.reply(await send(XboxSOAP.endpoint, body: request, epoch: epoch), device: device)
+        guard !reply.fault else { throw XboxSessionError.signInRequired }
+        let tickets = reply.tokens.filter { !$0.legacy && $0.scope == Self.storeScope }
+        guard tickets.count == 1, tickets[0].value.hasPrefix("t="), tickets[0].value.contains("&p=") else { throw XboxXML.invalid() }
+        guard var current = try read(XboxStoredSession.self, "session") else { throw XboxSessionError.signInRequired }
+        current.tokens.removeAll { !$0.legacy && $0.scope == Self.storeScope }; current.tokens.append(tickets[0])
+        try write(current, "session")
+        return XboxTicket(token: Secret(tickets[0].value), expiresAt: tickets[0].expires)
+    }
+    static let storeScope = "www.microsoft.com"
+    static let storeApp = "{d6d5a677-0872-4ab0-9442-bb792fce85c5}"
     private func userTicket(scope: String, clientID: String, force: Bool) async throws -> XboxTicket {
         let epoch = generation
         guard var session = try read(XboxStoredSession.self, "session"),
