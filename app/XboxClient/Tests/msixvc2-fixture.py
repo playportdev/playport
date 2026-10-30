@@ -3,24 +3,30 @@
 """Writes XboxClientKitTests/Fixtures/msixvc2-synthetic.msixvc2: a small MSIXVC2
 package with the real layout (Xodus pull request #219 e8194a8; LukeFZ/XvdTool.Streaming
 pull request #3 99db4dd for the CBOR model) and a test key, and prints the test key.
+With --v2, msixvc2-synthetic-v2.msixvc2 instead: the same package as version 1.2.4.0
+(PLA-501's update tests): Game.exe's second segment and level1.bin's last one changed,
+MicrosoftGame.config's version, readme.txt removed and Data/new.bin added.
 
 Independent of the Swift reader: Python's zipfile, zlib and `cryptography`'s AES.
 Deterministic: run it again and the bytes are the same.
 
-  python3 app/XboxClient/Tests/msixvc2-fixture.py
+  python3 app/XboxClient/Tests/msixvc2-fixture.py [--v2]
 """
 import hashlib
 import hmac
 import os
 import random
 import struct
+import sys
 import uuid
 import zipfile
 import zlib
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
-OUT = os.path.join(os.path.dirname(__file__), "XboxClientKitTests", "Fixtures", "msixvc2-synthetic.msixvc2")
+V2 = "--v2" in sys.argv[1:]
+OUT = os.path.join(os.path.dirname(__file__), "XboxClientKitTests", "Fixtures",
+                   "msixvc2-synthetic-v2.msixvc2" if V2 else "msixvc2-synthetic.msixvc2")
 rng = random.Random(503)
 
 
@@ -170,6 +176,8 @@ CONFIG = (b'<?xml version="1.0" encoding="utf-8"?>\r\n<Game configVersion="1"><I
           b'<ExecutableList><Executable Name="Game.exe" Id="Game"/></ExecutableList>'
           b'<ExtendedAttributeList><ExtendedAttribute Name="Scid" Value="00000000-0000-0000-0000-00001234abcd"/>'
           b'</ExtendedAttributeList></Game>\r\n')
+if V2:
+    CONFIG = CONFIG.replace(b'Version="1.2.3.0"', b'Version="1.2.4.0"')
 FILES = {}  # path -> plaintext, for the tests' expectations
 
 
@@ -210,6 +218,9 @@ class Chunk:
 exe = b"MZ\x90\x00" + rand(9000)
 level = text(20000, 1) + rand(3000)
 shared = rand(5000)
+if V2:
+    exe = exe[:4000] + bytes(b ^ 0x5A for b in exe[4000:7000]) + exe[7000:]
+    level = level[:12000] + level[12000:][::-1]
 
 c0, c1 = Chunk(0), Chunk(1)
 c0.add("Game.exe", [(0, exe[:4000], False, True), (0, exe[4000:7000], True, True), (1, exe[7000:], False, True)])
@@ -217,7 +228,10 @@ c0.add("MicrosoftGame.config", [(0, CONFIG, True, True)])
 level_refs = c0.add("Data\\level1.bin", [(1, level[:12000], True, True), (0, shared, False, True), (1, level[12000:], False, True)],
                     own_iv=rand(16))
 c0.add("Data\\empty.txt", [])
-c1.add("Data\\Sub\\readme.txt", [(1, b"Read me: an unencrypted segment.\n", False, False)])
+if V2:
+    c1.add("Data\\new.bin", [(1, hashlib.sha512(b"new").digest() * 40, True, True)])
+else:
+    c1.add("Data\\Sub\\readme.txt", [(1, b"Read me: an unencrypted segment.\n", False, False)])
 c1.add("Data/Sub/shared.bin", [("again", level_refs[1], shared)])
 
 # The package's rolling IV: one step per chunk secret, in chunk order.
@@ -234,7 +248,7 @@ package = described(XVCP, {
     260: CONTENT_ID,
     279: FULFILLMENT_ID,
     280: guid(),
-    261: {257: 1, 258: 2, 267: 3, 268: 0, 269: guid()},
+    261: {257: 1, 258: 2, 267: 4 if V2 else 3, 268: 0, 269: guid()},
     281: {257: 10, 258: 0, 267: 19041, 268: 0, 269: guid()},
     282: "9TESTGAME002",
     283: 1,
