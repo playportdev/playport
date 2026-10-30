@@ -4,14 +4,66 @@ import Foundation
 import FoundationNetworking
 #endif
 
-/// What a server answered: its HTTP status and body.
+/// What a server answered: its HTTP status, the headers the client reads (lowercased names)
+/// and the body.
 public struct BattleNetResponse: Sendable, Equatable {
     public var status: Int
+    public var headers: [String: String]
     public var body: [UInt8]
 
-    public init(status: Int, body: [UInt8]) {
+    public init(status: Int, headers: [String: String] = [:], body: [UInt8]) {
         self.status = status
+        self.headers = headers
         self.body = body
+    }
+}
+
+/// How the client behaves on Blizzard's servers (decision 0168): a User-Agent naming Playport,
+/// at most `maxConcurrent` requests in flight, and on HTTP 429 a pause of that host for the
+/// `Retry-After` it sends (else a doubling back-off) before asking again, `retries` times.
+public struct BattleNetManners: Sendable {
+    public var userAgent = "Playport"
+    public var maxConcurrent = 8
+    public var retries = 5
+    /// The first pause when a 429 names none; it doubles per retry, up to `maxBackoff`.
+    public var backoff: Double = 2
+    public var maxBackoff: Double = 120
+    /// Waits; tests record the pauses instead.
+    public var sleep: @Sendable (Double) async throws -> Void = { try await Task.sleep(nanoseconds: UInt64($0 * 1e9)) }
+
+    public init() {}
+}
+
+/// The requests in flight, and the hosts paused by a 429 until a time.
+actor RequestGate {
+    let limit: Int
+    private var running = 0
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+    private var pausedUntil: [String: Date] = [:]
+
+    init(limit: Int) { self.limit = max(1, limit) }
+
+    func acquire() async {
+        if running < limit {
+            running += 1
+            return
+        }
+        await withCheckedContinuation { waiting.append($0) }
+    }
+
+    func release() {
+        if waiting.isEmpty { running -= 1 } else { waiting.removeFirst().resume() }
+    }
+
+    func pause(_ host: String, for seconds: Double) {
+        let until = Date().addingTimeInterval(seconds)
+        if until > pausedUntil[host] ?? .distantPast { pausedUntil[host] = until }
+    }
+
+    /// How long `host` is still paused.
+    func pause(of host: String) -> Double {
+        guard let until = pausedUntil[host] else { return 0 }
+        return max(0, until.timeIntervalSinceNow)
     }
 }
 
@@ -82,6 +134,11 @@ public struct URLSessionTransport: BattleNetTransport {
         guard data.count <= maxBytes else {
             throw BattleNetError.damaged("\(url.host ?? "?")\(url.path): \(data.count) bytes exceeds the cap \(maxBytes)")
         }
-        return BattleNetResponse(status: (response as? HTTPURLResponse)?.statusCode ?? 0, body: [UInt8](data))
+        let http = response as? HTTPURLResponse
+        var fields = [String: String]()
+        for (k, v) in http?.allHeaderFields ?? [:] {
+            if let k = k as? String, let v = v as? String { fields[k.lowercased()] = v }
+        }
+        return BattleNetResponse(status: http?.statusCode ?? 0, headers: fields, body: [UInt8](data))
     }
 }

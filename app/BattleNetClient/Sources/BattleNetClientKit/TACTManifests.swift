@@ -100,9 +100,12 @@ public struct InstallManifest: Sendable, Equatable {
         names.allSatisfy { n in tags.contains { $0.name == n && $0.has(index) } }
     }
 
-    public func select(_ query: TagQuery) throws -> [File] {
+    public func select(_ query: TagQuery) throws -> [File] { try selectIndexes(query).map { files[$0] } }
+
+    /// The indexes of the files `query` selects, in manifest order.
+    public func selectIndexes(_ query: TagQuery) throws -> [Int] {
         let mask = try query.select(tags, entries: files.count, what: "install manifest")
-        return files.indices.filter { mask[$0 >> 3] & (0x80 >> UInt8($0 & 7)) != 0 }.map { files[$0] }
+        return files.indices.filter { mask[$0 >> 3] & (0x80 >> UInt8($0 & 7)) != 0 }
     }
 }
 

@@ -135,6 +135,8 @@ public struct CDNEndpoint: Sendable, Equatable {
     public let path: String
     public let hosts: [String]
     public let servers: [Server]
+    /// The servers as the endpoint writes them (with their `?maxhosts=` flags), for `.build.info`.
+    public let serverText: [String]
     /// Where product configs are (`tpr/configs/data`).
     public let configPath: String
 
@@ -157,8 +159,9 @@ public struct CDNEndpoint: Sendable, Equatable {
         let servers = t.columns.firstIndex(of: "servers")
         return try t.rows.map { r in
             guard !r[path].isEmpty, !r[configPath].isEmpty else { throw BattleNetError.damaged("\(what): \(r[name]) has no path") }
-            let list: [Server] = try (servers.map { r[$0] } ?? "").split(separator: " ").map { s in
-                guard let c = URLComponents(string: String(s)), let scheme = c.scheme, scheme == "http" || scheme == "https",
+            let text = (servers.map { r[$0] } ?? "").split(separator: " ").map(String.init)
+            let list: [Server] = try text.map { s in
+                guard let c = URLComponents(string: s), let scheme = c.scheme, scheme == "http" || scheme == "https",
                       let host = c.host, !host.isEmpty, let base = URL(string: "\(scheme)://\(host)\(c.port.map { ":\($0)" } ?? "")") else {
                     throw BattleNetError.damaged("\(what): server '\(s.prefix(60))'")
                 }
@@ -167,7 +170,7 @@ public struct CDNEndpoint: Sendable, Equatable {
                               fallback: q.contains { $0.name == "fallback" && $0.value == "1" })
             }
             return CDNEndpoint(region: r[name], path: r[path], hosts: r[hosts].split(separator: " ").map(String.init),
-                               servers: list, configPath: r[configPath])
+                               servers: list, serverText: text, configPath: r[configPath])
         }
     }
 }

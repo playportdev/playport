@@ -54,15 +54,19 @@ public struct BattleNetSizes: Sendable, Equatable {
 
 /// The Battle.net store client: Blizzard's public version endpoint (`{region}.version.battle.net`,
 /// HTTPS) and the CDN it names. Configs are checked against their names (their MD5), BLTE objects
-/// against their EKeys and decoded content against its CKey.
+/// against their EKeys and decoded content against its CKey. Every request follows `manners`.
 public struct BattleNetClient: Sendable {
     public let transport: any BattleNetTransport
     /// Keys for encrypted blocks; a build's own key ring is added when one is fetched.
     public let keys: TACTKeyring
+    public let manners: BattleNetManners
+    let gate: RequestGate
 
-    public init(transport: any BattleNetTransport, keys: TACTKeyring = TACTKeyring()) {
+    public init(transport: any BattleNetTransport, keys: TACTKeyring = TACTKeyring(), manners: BattleNetManners = BattleNetManners()) {
         self.transport = transport
         self.keys = keys
+        self.manners = manners
+        gate = RequestGate(limit: manners.maxConcurrent)
     }
 
     // MARK: discovery
@@ -152,6 +156,39 @@ public struct BattleNetClient: Sendable {
         return try TACTKeyring(keyRingConfig: try await config(ring, from: build.cdn))
     }
 
+    public func cdnConfig(_ build: BattleNetBuild) async throws -> (CDNConfig, [UInt8]) {
+        let bytes = try await config(build.version.cdnConfig, from: build.cdn)
+        return (try CDNConfig(bytes), bytes)
+    }
+
+    /// An index (`{path}/data|patch/xx/yy/{key}.index`), checked against its name.
+    public func index(_ key: TACTHash, patch: Bool = false, from cdn: CDNEndpoint) async throws -> (ArchiveIndex, [UInt8]) {
+        try await fromCDN(cdn, "\(cdn.path)/\(patch ? "patch" : "data")/\(key.cdnPath).index", what: "index \(key)") { body in
+            (try ArchiveIndex(body, name: key), body)
+        }
+    }
+
+    /// A loose object as the CDN serves it, checked against its EKey, every block's hash and
+    /// (when given) its size.
+    public func object(_ ekey: TACTHash, size: Int?, from cdn: CDNEndpoint) async throws -> [UInt8] {
+        try await fromCDN(cdn, "\(cdn.path)/data/\(ekey.cdnPath)", what: "data \(ekey)") { body in
+            if let size, body.count != size { throw BattleNetError.damaged("data \(ekey): \(body.count) bytes, not \(size)") }
+            try BLTE.verify(body, ekey: ekey)
+            return body
+        }
+    }
+
+    /// `length` bytes from `offset` in an archive (a ranged GET; HTTP 206 with exactly that
+    /// range). The objects in it are the caller's to check.
+    public func archiveRange(_ archive: TACTHash, offset: UInt64, length: Int, from cdn: CDNEndpoint) async throws -> [UInt8] {
+        let range = "bytes=\(offset)-\(offset + UInt64(length) - 1)"
+        let what = "archive \(archive) \(range)"
+        return try await fromCDN(cdn, "\(cdn.path)/data/\(archive.cdnPath)", what: what, headers: ["Range": range], accept: [206]) { body in
+            guard body.count == length else { throw BattleNetError.damaged("\(what): \(body.count) bytes") }
+            return body
+        }
+    }
+
     // MARK: offer
 
     /// Whether the product's current build in the region is offered: five small requests
@@ -169,33 +206,64 @@ public struct BattleNetClient: Sendable {
 
     // MARK: transport
 
-    /// One GET: a thrown transport error is `unreachable`, a status other than 200 `refused`.
-    func get(_ url: URL, what: String) async throws -> [UInt8] {
-        let response: BattleNetResponse
-        do {
-            response = try await transport.get(url, headers: [:])
-        } catch let e as BattleNetError {
-            throw e
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch {
-            throw BattleNetError.unreachable("\(what): \(url.host ?? "?"): \(error.localizedDescription)")
+    /// One GET with the manners: Playport's User-Agent, at most `maxConcurrent` in flight, and
+    /// on a 429 the host paused for its `Retry-After` (else a doubling back-off) and asked
+    /// again. A thrown transport error is `unreachable`, a status outside `accept` `refused`; a
+    /// 206 must carry the asked range in `Content-Range`.
+    func get(_ url: URL, what: String, headers: [String: String] = [:], accept: Set<Int> = [200]) async throws -> [UInt8] {
+        let host = url.host ?? "?"
+        var headers = headers
+        headers["User-Agent"] = manners.userAgent
+        var attempt = 0, backedOff = false
+        while true {
+            // Another request's 429 paused the host: wait it out first (this request's own
+            // back-off has just been waited).
+            if !backedOff {
+                let paused = await gate.pause(of: host)
+                if paused > 0 { try await manners.sleep(paused) }
+            }
+            backedOff = false
+            await gate.acquire()
+            let response: BattleNetResponse
+            do {
+                response = try await transport.get(url, headers: headers)
+                await gate.release()
+            } catch {
+                await gate.release()
+                if let e = error as? BattleNetError { throw e }
+                if error is CancellationError { throw error }
+                throw BattleNetError.unreachable("\(what): \(host): \(error.localizedDescription)")
+            }
+            if response.status == 429, attempt < manners.retries {
+                let wait = response.headers["retry-after"].flatMap { Double($0.trimmingCharacters(in: .whitespaces)) }
+                    ?? min(manners.maxBackoff, manners.backoff * Double(1 << attempt))
+                attempt += 1
+                await gate.pause(host, for: wait)
+                try await manners.sleep(wait)
+                backedOff = true
+                continue
+            }
+            guard accept.contains(response.status) else { throw BattleNetError.refused(status: response.status, "\(what) from \(host)") }
+            if response.status == 206, let asked = headers["Range"], let got = response.headers["content-range"],
+               !got.hasPrefix(asked.replacingOccurrences(of: "=", with: " ") + "/") {
+                throw BattleNetError.damaged("\(what): \(host) sent \(got)")
+            }
+            return response.body
         }
-        guard response.status == 200 else { throw BattleNetError.refused(status: response.status, "\(what) from \(url.host ?? "?")") }
-        return response.body
     }
 
     /// An object from the first CDN base that gives it whole: a base that fails (no answer, a
     /// refusal, a damaged body) is passed over. When every base fails, damage wins over the
     /// network's failures, since some host did answer with the wrong bytes. A missing key or an
     /// unsupported format is the same on every host and ends the search.
-    func fromCDN<T>(_ cdn: CDNEndpoint, _ path: String, what: String, _ accept: ([UInt8]) throws -> T) async throws -> T {
+    func fromCDN<T>(_ cdn: CDNEndpoint, _ path: String, what: String, headers: [String: String] = [:], accept: Set<Int> = [200],
+                    _ check: ([UInt8]) throws -> T) async throws -> T {
         var network: BattleNetError?
         var damaged: BattleNetError?
         for base in cdn.bases {
             try Task.checkCancellation()
             do {
-                return try accept(try await get(base.appendingPathComponent(path), what: what))
+                return try check(try await get(base.appendingPathComponent(path), what: what, headers: headers, accept: accept))
             } catch let e as BattleNetError {
                 switch e {
                 case .unreachable, .refused: network = network ?? e

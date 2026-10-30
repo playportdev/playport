@@ -502,8 +502,10 @@ enum Synthetic {
         return out
     }
 
-    /// EN with 1 KiB pages; content i's EKey has encoded size 500 + i and spec i % specs.count.
-    static func encoding(contents: [(ckey: [UInt8], size: UInt64, ekeys: [[UInt8]])], specs: [String]) -> [UInt8] {
+    /// EN with 1 KiB pages; content i's EKey has encoded size `encodedSizes[i]` (else 500 + i)
+    /// and spec i % specs.count.
+    static func encoding(contents: [(ckey: [UInt8], size: UInt64, ekeys: [[UInt8]])], specs: [String],
+                         encodedSizes: [UInt64]? = nil) -> [UInt8] {
         let page = 1024
         func pages(_ entries: [([UInt8], [UInt8])], terminator: Int) -> ([UInt8], [UInt8], Int) {
             var index = [UInt8](), data = [UInt8](), current = [UInt8](), first: [UInt8]?
@@ -530,7 +532,8 @@ enum Synthetic {
             (c.ckey, [UInt8(c.ekeys.count)] + be(c.size, 5) + c.ckey + c.ekeys.flatMap { $0 })
         }, terminator: 1)
         let encoded = contents.enumerated().flatMap { i, c in c.ekeys.map { ($0, i) } }.sorted { $0.0.lexicographicallyPrecedes($1.0) }
-        let es = pages(encoded.map { e, i in (e, e + be(UInt64(i % specs.count), 4) + be(UInt64(500 + i), 5)) }, terminator: 16)
+        let es = pages(encoded.map { e, i in (e, e + be(UInt64(i % specs.count), 4) + be(encodedSizes?[i] ?? UInt64(500 + i), 5)) },
+                       terminator: 16)
         let specBlock: [UInt8] = specs.flatMap { Array($0.utf8) + [UInt8(0)] }
         var out = Array("EN".utf8) + [1, 16, 16] + be(1, 2) + be(1, 2) + be(UInt64(ce.2), 4) + be(UInt64(es.2), 4) + [0]
         out += be(UInt64(specBlock.count), 4) + specBlock
