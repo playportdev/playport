@@ -255,7 +255,27 @@ public enum XboxAddOnEnvironment {
         for root in contentRoots where isRoot(root) && !roots.contains(root) && roots.count < maxRoots { roots.append(root) }
         let joined = roots.joined(separator: ";")
         if !roots.isEmpty, joined.utf16.count <= maxRootsLength { env["XODUS_CONTENT_ROOTS"] = Secret(joined) }
-        if let locale, isLocale(locale) { env["XODUS_PACKAGE_LOCALE"] = Secret(locale) }
+        if let locale, isLocale(locale) { env.merge(localeValues(locale)) { _, new in new } }
+        return env
+    }
+
+    /// Nexus's game-locale.ts: the runtime's `XODUS_PACKAGE_LOCALE`, Wine's `WINEUSERLOCALE`,
+    /// and, for a tag with a region, the Unix side's `LANG`, `LANGUAGE` and `LC_*`
+    /// (`pl_PL.UTF-8`; a Latin or Cyrillic script as `@latin`/`@cyrillic`).
+    static func localeValues(_ tag: String) -> [String: Secret<String>] {
+        var env = ["XODUS_PACKAGE_LOCALE": Secret(tag), "WINEUSERLOCALE": Secret(tag)]
+        let parts = tag.split(separator: "-").map(String.init)
+        let language = parts[0].lowercased()
+        let script = parts.dropFirst().first { $0.count == 4 && $0.allSatisfy(\.isLetter) }
+        guard let region = parts.dropFirst().first(where: { ($0.count == 2 && $0.allSatisfy(\.isLetter)) || ($0.count == 3 && $0.allSatisfy(\.isNumber)) })
+        else { return env }
+        let modifier = switch script?.lowercased() { case "latn": "@latin"; case "cyrl": "@cyrillic"; case let s?: "@" + s; case nil: "" }
+        let unix = "\(language)_\(region.uppercased()).UTF-8\(modifier)"
+        env["LANG"] = Secret(unix)
+        env["LANGUAGE"] = Secret("\(language)_\(region.uppercased())\(modifier):\(language)")
+        for name in ["LC_ALL", "LC_MESSAGES", "LC_CTYPE", "LC_TIME", "LC_COLLATE", "LC_MONETARY", "LC_NUMERIC", "LC_PAPER"] {
+            env[name] = Secret(unix)
+        }
         return env
     }
 

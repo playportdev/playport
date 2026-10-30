@@ -167,6 +167,17 @@ final class XboxAddOnTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(env["NEXUS_RELATED_PRODUCT_IDS"]?.value, "\(whip),\(suit)")
         XCTAssertEqual(env["XODUS_CONTENT_ROOTS"]?.value, "C:\\Games\\Indiana Jones\\DLC")
         XCTAssertEqual(env["XODUS_PACKAGE_LOCALE"]?.value, "pl-PL")
+        // Nexus sets Wine's and the Unix side's locale beside the runtime's.
+        XCTAssertEqual(env["WINEUSERLOCALE"]?.value, "pl-PL")
+        XCTAssertEqual(env["LANG"]?.value, "pl_PL.UTF-8")
+        XCTAssertEqual(env["LANGUAGE"]?.value, "pl_PL:pl")
+        XCTAssertEqual(env["LC_ALL"]?.value, "pl_PL.UTF-8")
+        XCTAssertEqual(env["LC_MESSAGES"]?.value, "pl_PL.UTF-8")
+        let serbian = XboxAddOnEnvironment.values(base: indy, related: [], contentRoots: [], locale: "sr-Latn-RS")
+        XCTAssertEqual(serbian["LANG"]?.value, "sr_RS.UTF-8@latin")
+        XCTAssertEqual(serbian["LANGUAGE"]?.value, "sr_RS@latin:sr")
+        let bare = XboxAddOnEnvironment.values(base: indy, related: [], contentRoots: [], locale: "ja")
+        XCTAssertEqual(bare.mapValues(\.value), ["XODUS_PACKAGE_LOCALE": "ja", "WINEUSERLOCALE": "ja"], "no region: Unix stays as it is")
         XCTAssertEqual(XboxAddOnEnvironment.values(base: indy, related: [], contentRoots: [], locale: "not a locale!"), [:])
         let many = (0..<300).map { String(format: "9MANY%07d", $0) }
         XCTAssertEqual(XboxAddOnEnvironment.values(base: indy, related: many, contentRoots: [], locale: nil)["NEXUS_RELATED_PRODUCT_IDS"]?.value
