@@ -6,25 +6,28 @@
 [PLA-372](https://linear.app/playportdev/issue/PLA-372) (CEF payload distribution, to be cancelled),
 [PLA-254](https://linear.app/playportdev/issue/PLA-254) (publisher launchers).
 
-**Status:** chunks 0 and 1 done 2026-10-29; chunk 2 remains **not passed** ([evidence](../evidence/2026-10-29-sc-stock-cef-probe.md)). Owner approved the initial layout port, not a change to retained-view policy. The early-image startup increment (wine-pe 0055) is independently accepted on dev IPA `3fd1145d`: l4 passes HK first-frame+10 and positively shows the game's helper registering kernel32 and reaching allocator startup beyond l3's NOEXEC. It then fails metadata allocation because the launcher's helper left a referenced view retained. Story ends at a black spinner, not the cabin; no gameplay/memory acceptance or safe replacement geometry is established. **Next:** obtain an owner-approved design for safe subsequent-helper allocation while preserving retained references under 0132/0143; do not clear, free or overwrite kept slots. No new runtime work or phone input is queued.
+**Status** (resume here; run log is in a PLA-476 Linear comment):
 
-**Runner checkpoint (history):** resuming from clean `241990e` on branch `dev/pla-476-sc-stock-cef` in the main checkout; no merge or push performed by this continuation. The previously recorded writer is not active and left no report or tracked changes. Models confirmed for this invocation: hard `openai-codex/gpt-6.1-sol:high`, easy `openai-codex/gpt-6.1-sol:medium`.
-
-**Current checkpoint:** `e7ae7d1` committed the accepted startup increment, tests, records and evidence. Branch remains unmerged and unpushed by this continuation. **Running:** read-only proof researcher `9d1263f2-c368-45a9-8ff3-c48a76508b74`, hard model `openai-codex/gpt-6.1-sol:high`, from clean `32df089`; report `.work/agent-notes/pla476/reports/prospective-cleanup-proof.md`. No runtime/policy edits or phone use authorized. Read-only researcher `921188b6-da68-49c2-b949-0d279d2e4bbf` finished the comparison; report copied to `.work/agent-notes/pla476/reports/retained-slot-design-comparison.md`. Supervisor executed its pure interval-check appendix successfully against current constants. No writer or phone session is active; the active researcher has proof/design authority only.
-
-**Finished startup checkpoint:** finalization writer `b64e1c09-bb78-497a-bc56-123991c02f4c`, model `openai-codex/gpt-6.1-sol:high`, from `7439797` (supervisor metadata added in `5ac72f8`); documentation reconciliation, focused checks and commit of the accepted startup increment only, no new implementation, build or phone input. Report `.work/agent-notes/pla476/reports/startup-finalize.md`. Read-only reviewer `b341b1bf-a6cb-4ad6-b8ce-4427ef7449a3` finished with no findings and accepts the startup increment only: l4's game helper registers kernel32 and reaches allocator startup, then fails metadata allocation. Review copied to `.work/agent-notes/pla476/reports/startup-candidate-review.md`. Writer `05e6db69-1b5d-4260-9ae6-ab86f5423693` previously finished blocked at phone preflight; its documentation/retention-test checkpoint is `31bd282`, report `.work/agent-notes/pla476/reports/chunk2-helper-restart.md`. Its early-image patch, startup test, series entry and four build records are now accepted together with the l4 evidence, not as overall chunk 2. Full tests and dev build already passed (90/90 IPA checks).
-
-**Owner direction:** compare both genuinely disjoint placement and safe parked-thread lifetime/cleanup, then present an evidence-backed design. This authorizes investigation only, not a retention-policy change or runtime implementation. Use the confirmed hard model `openai-codex/gpt-6.1-sol:high` for research.
-
-**Comparison outcome (research, not implementation approval):** a second complete bank preserving current capacities does not fit the existing resource envelopes, and only two 32-GiB-aligned core starts exist (`0x7000000000`, `0x7800000000`). Six slots total 20992 MiB; l4 blocks kind-3 capacity 6400 MiB, l2 blocks kinds 1/3/5 capacity 11520 MiB. Blocked slot capacity is **not** a measured surviving-view extent; exact inventory remains necessary. The supervisor ran the report's interval assertions successfully. Recycling deleted slots already works; it does not solve retained references. Smaller/finer future views or borrowed furniture space remain unproved and do not establish a solution to retained core prefixes.
-
-**Recommended next investigation:** a prospective helper-scoped wait-detach/quiescence proof **before** teardown, preserving the existing fail-closed retention fallback. The current PE wait queue has stack nodes and shared wake/unlink races; an i386 handshake is precedent, not proof of an x64 exit path. Archived parked threads must never be resumed after code/registry retirement. A safe native terminal boundary, FEX/TLS/callback drain and actual completion acknowledgement remain unproved. No sleeps, cancellation, ledger clearing or moving saved pointers qualifies. Owner approval of a proof stage is not approval to implement a retention-policy change; a new owner-approved ADR is required before changing 0127/0132/0134/0143 contracts. Exact surviving views, waiter attribution and helper-overlap reconstruction are focused prerequisites. Cleanup cannot solve simultaneously live helpers; that overlap must be established. Upstream's delay-based reaper is not a quiescence proof for Playport's forever-parked threads.
-
-**Owner authorization:** proceed with the bounded prospective lifetime **proof/design stage**, including safe wait detach, actual thread completion and helper overlap. Research only; no runtime implementation or retention-policy change. Bring a concrete design and unresolved proof gaps back for approval.
-
-**Ordered queue:** (1) execute the authorized lifetime proof/design stage and present its results to the owner; (2) only after approval, resolve the remaining chunk-2 allocator/browser, Story cabin, no-Social-Club/launcher-`NO GAP FITS`/soft-grant and 7343 MB ±10% memory gates; (3) consider chunks 3–6 in their documented order, all under PLA-476. Chunk 3 still requires owner approval if needed; 0.5.0 remains held.
-
-**Phone checkpoint:** connected discovery was restored by guarded `python3 tools/phonelib.py netmuxd-restart` (stale workstation service); preflight then found one network phone, battery 80%, 3 GB free. There is no current prerequisite blocker. The exact-IPA l4 session (`.work/agent-notes/pla476/l4.sh`, SHA-256 `3fd1145d5b6e59db874083a716ee5d10af685eb476fa4e1ff03c866129348a5e`) completed exit 0 with lock released: in-place install, HK first-frame+10 passed (`.work/ui-runs/20261029T220635-hk-p476l4`, first frame +10.58 s), RDR2 first-frame+420 (`.work/ui-runs/20261029T220726-rdr2-p476l4`). Independent analysis accepted only the bounded startup gates; the RDR2 wait-condition success is not Story success. No more phone input is queued.
+- Branch `dev/pla-476-sc-stock-cef`, unmerged and unpushed (HEAD: see `git log`).
+- Chunks 0 and 1 done. Chunk 2 **not passed** ([evidence](../evidence/2026-10-29-sc-stock-cef-probe.md)):
+  0224–0226 give the opt-in layout; wine-pe 0055 (early-image replay,
+  [PLA-481](https://linear.app/playportdev/issue/PLA-481), Done) is an accepted increment (HK first-frame+10,
+  game helper reaches allocator startup). **Blocker:** the launcher helper's retained view under 0132/0143
+  refuses the game's helper metadata (l4). Do not clear, free or overwrite kept slots.
+- **Owner direction 2026-10-29** (supersedes earlier ordering): FIRST measure the retained view's actual touched
+  extent (read-only research; report to `.work/agent-notes/pla476/reports/retained-extent.md`) and run a
+  review-fix writer chunk. The lifetime/quiescence proof is deferred behind it and still needs a new
+  owner-approved ADR before any 0127/0132/0134/0143 change.
+- The Risks stop rule (chunk 2 cannot place the pools: stop, PLA-372 fallback is the owner's call) is
+  near-triggered; 0.5.0 decouple vs continue is the owner's call.
+- **Ordered queue:** (1) review-fix writer chunk: fixes in 0226/`wine_host.c`, host tests for `pp_sc_vm.h` and
+  `pp_sc_access.h`, wine-pe 0055 `Class:` trailer to `ios-port`, heavy-VA non-SC smoke
+  ([PLA-480](https://linear.app/playportdev/issue/PLA-480)), reported-tail diagnostic
+  ([PLA-482](https://linear.app/playportdev/issue/PLA-482): ownership hole in `pp_sc_access.h`, Oilpan sharing
+  chrome_elf's reported base); (2) retained-extent verdict, then owner decision; (3) remaining chunk-2 gates
+  (allocator/browser, Story cabin, no SC/launcher `NO GAP FITS` or soft grant, 7343 MB ±10 %);
+  (4) chunks 3–6, all under PLA-476. Chunk 3 needs owner approval if required; 0.5.0 held.
+- Phone: no session active. Reports: `.work/agent-notes/pla476/reports/`.
 
 ## Why
 
@@ -153,12 +156,10 @@ path. In l3, `kernel32.dll!LoadLibraryExW` (`+0x365e0`) was never registered in 
 the decoder's NOEXEC trampoline caused the reported NULL read. `tools/tests/test_arm64ec_early_images.py`
 covers early dependencies, main/ntdll/queued maps, duplicates and failed init. `test_sc_layout.py` also locks
 down the existing refusal to reclaim kept or foreign views. Full `pp test` and the dev build passed (IPA
-`3fd1145d`, 90 verification checks). Initial no-phone preflight was a historical blocker, since resolved by
-the guarded netmuxd restart. On that exact IPA, l4 passes HK first-frame+10 and positively shows the game's
+`3fd1145d`, 90 verification checks). On that exact IPA, l4 passes HK first-frame+10 and positively shows the game's
 helper (PID `0528`, PEB `0x701af34000`, tracker `0x11a5b4d80`) registering kernel32 intervals covering
 `0x73fba465e0`, advancing through TLS into allocator startup, then receiving five metadata refusals and a
-guest `0x80000003` breakpoint. No NOEXEC remains. Independent review found no issues and accepted these two
-bounded startup gates; this does **not** accept allocator/browser startup or overall chunk 2.
+guest `0x80000003` breakpoint. No NOEXEC remains. These two bounded startup gates are accepted; this does **not** accept allocator/browser startup or overall chunk 2.
 
 **Slot reuse is blocked, not fixed:** l3's parked tid `0204` waits at `0x740007c3e0` inside the retained metadata
 view; l2's tid `0208` waits at `0x74000483e0`; l4 again retains kind 3 with parked tid `0204` waiting at
@@ -247,7 +248,9 @@ owner first:** it is a refused DLL load in the game, and 0150 excluded it. Other
 A new decision (next free number; 0165 is the last). It:
 - supersedes 0110;
 - amends 0150: on by default, in release; the page-bridge exception unchanged;
-- amends 0153: what RDR2 runs with in both builds, and the layout from chunk 2.
+- amends 0153: what RDR2 runs with in both builds, and the layout from chunk 2;
+- records the every-play low hold at `0x7000000000` (+1.5 GiB from exec) and the fixed JIT RW alias there
+  ([PLA-480](https://linear.app/playportdev/issue/PLA-480)).
 
 Update `docs/decisions/README.md`, `ARCHITECTURE.md`, `BUILDING.md`, `LICENSING.md`, `NOTICES.md`
 and `DISTRIBUTION.md` where they name the CEF payload, and `docs/plans/finished.md` /
