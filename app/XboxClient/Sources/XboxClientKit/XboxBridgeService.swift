@@ -184,6 +184,7 @@ public actor XboxBridgeService {
         case .service(let status), .rejected(let status): "HTTP \(status)"
         case .invalidResponse: "invalid response"
         case .session: "signed out"
+        case .connectionNeeded: "offline"
         }
     }
     static func plainID(_ id: String) -> Bool { (1...32).contains(id.utf8.count) && id.utf8.allSatisfy(isAlphanumeric) }

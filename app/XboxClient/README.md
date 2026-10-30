@@ -32,9 +32,10 @@ The release package has no XboxClientKit dependency. Every Xbox Swift type start
   holds random hardware, the registration and its encrypted private-key state;
   it survives sign-out. Items `session` and `device-token` hold **all issued
   account/device tickets, proof secrets and account information**; item
-  `licences` holds each copy's unwrapped content keys with the licence's expiry
-  and offline lease. Sign-out deletes all three, fences in-flight exchanges,
-  and keeps `device`.
+  `licences` holds each copy's unwrapped content keys with the licence's expiry,
+  offline lease and when it was stored; item `offline-device` holds whether
+  Microsoft named this device the offline device, and since when. Sign-out
+  deletes all four, fences in-flight exchanges, and keeps `device`.
 - The device contains no phone identifiers and never probes hardware. Reset
   signs out and generates a different device; the next sign-in registers it.
   A definitive device-authentication refusal replaces it once, not in a retry
@@ -77,12 +78,12 @@ AES key wrap under the device key) and its expiry; the device key is the
 registration licence's EncryptedDeviceKey. Recorded responses (PLA-487) show the
 content licence expiring as it is issued, with a lease licence whose policy says
 `isOffline`, a 30-day `expiresAt` and a 2-day `pollAt`, although nobody had
-changed the account's offline device. As Nexus does, such a lease is taken as
-Microsoft's offline grant. The result is typed:
+changed the account's offline device. So `isOffline` alone does not mean the
+offline device (PLA-504 below); it is recorded as the lease. The result is typed:
 
 - `.licensed`: fresh keys (`.microsoft`), stored in `licences`; or, only while
   licensing is unreachable (`.network`, or HTTP 408/429/5xx), the stored keys
-  until the later of the licence's expiry and its offline lease (`.cache`).
+  under the offline launch rule below (`.cache`).
 - `.refused(XboxLicenseFailure)` is Microsoft's **definitive** answer, and the
   only one: an HTTP 2xx body holding `satisfactionFailure` with a numeric reason
   and no `license`. Reason 501 is `.deviceLimit` (the device, not the copy; it
@@ -92,11 +93,82 @@ Microsoft's offline grant. The result is typed:
   408/429/5xx (`service`), any other HTTP error including 401 and 403
   (`rejected`; Nexus counts 403 as a refusal, but it carries no licensing
   reason), unrecognised or ambiguous bodies and keys that don't unwrap
-  (`invalidResponse`), and missing tickets (`session`). Only `network` and
+  (`invalidResponse`), missing tickets (`session`), and `connectionNeeded` (an
+  offline start the rule refuses, with its reason). Only `network` and
   `service` fall back to stored keys.
 
 Logs say granted/refused/unavailable only: no content ID, licence, key, ticket
 or provider text.
+
+## The offline device (PLA-504)
+
+`XboxSession.offlineDevice()` reads and `setOfflineDevice(_:)` changes whether
+the synthetic device is the account's offline device, as Nexus's
+`xodus-cli offline-pc` does (`XboxOfflineDevice.swift`, `XboxLiveDevice.swift`):
+
+- The token is an XSTS token for `http://mp.microsoft.com/` with device, title and
+  user claims (Xodus's `do_sisu`). `device.auth.xboxlive.com` takes the device's
+  TOKEN_BROKER ticket for Xbox Live's user.auth scope as `t=…` with an ES256 proof
+  key; `sisu.xboxlive.com/authorize` takes the Xbox app's (`000000004424da1f`)
+  `xboxlive.signin` ticket and the device token. XSTS takes the device, title and
+  user tokens. Each of those three requests carries Xbox Live's `Signature`: policy
+  version 1, a FILETIME and the P-256 signature over the method, path, Authorization
+  and body (76 bytes, as recorded). Each chain makes a fresh key; the phone signs
+  with CryptoKit, the test host with a fixed `XboxLiveSigner`.
+- `GET`/`POST …/pcgafd/config/offlinepc[/true|false]` (PC Game App Front Door), with
+  `XBL3.0 x=<uhs>;<token>`, `X-MS-API-Version: 1.0` and `x-xbl-contract-version: 1`.
+  The answer is `offlinePermissions.enabled` and `requestData` (`success`,
+  `maxTogglesPerPeriod`, `remainingTogglesForPeriod`, `periodLengthDays`,
+  `nextTimeToAdd`; 1601-01-01 means no date). Only the GET was recorded
+  (`offline-device-off.json` is that answer unchanged); the POST follows Nexus.
+- A change counts only when `success` is true and `enabled` is what was asked;
+  otherwise `XboxOfflineDeviceNotChanged`. Every applied change starts over, as
+  the Xbox app does: stored licences are deleted. A read that says "not this
+  device" (another device took over) deletes them too.
+- `isOfflineDevice` is the setting: false until Microsoft confirms this device to
+  the session; sign-out deletes it. `XboxOfflineDevice.confirmation` is the
+  confirmation's text: one offline device per account, this phone replaces the
+  current one, and the changes left.
+
+**What the designation changes in the licence.** The recorded licences come from a
+PC that was never the offline device. They already carry everything Nexus reads as
+the offline grant: a `Machine`-bound key licence (`LeaseRequired`), and a
+`Machine`-bound lease whose policy says `isOffline: true` with 30 days. Both say
+`LicenseUsage="Online"`, and the lease URI says `policyType=Online&policyKind=Device`.
+So neither the binding (Nexus's rule) nor `isOffline` tells the designation apart.
+Playport goes by Microsoft's answer to `offlinepc` instead. Each granted licence
+logs `licence usage: key <binding>/<usage>; lease <binding>/<usage> isOffline=…
+policyType=… policyKind=…`, words only. The phone gate compares that line before
+and after designating. [INFERENCE] `LicenseUsage` or `policyType` turns `Offline`
+on the offline device.
+
+**The offline launch rule** (`XboxOfflineLaunch`). While licensing can't be
+reached, a copy starts on its stored keys only if all of these hold:
+
+- this device is the offline device;
+- the keys come from a licence Microsoft issued at or after the designation (one
+  online play);
+- that licence's offline lease has not ended.
+
+Otherwise a network failure is `.unavailable(.connectionNeeded(reason))`. The
+reason is `notOfflineDevice`, `notPlayedOnline`, `noOfflineLease` or
+`leaseEnded(date)`, and its text says that a connection is needed and why.
+`XboxPlayRefusal` titles it "Connection needed". HTTP 408/429/5xx follow the
+same rule but keep their own message.
+
+**The runtime's offline identity.** xgameruntime keeps the last signed-in Xbox
+identity in the prefix (`OfflineIdentity.h`, feature `xuser-offline-identity-v2`,
+`%LOCALAPPDATA%\Xodus Nexus\offline-identity\<account>`).
+`XboxOfflineIdentity.environment` gives the play's game environment:
+
+- always `XODUS_ACCOUNT_HASH` (Nexus's `accountCacheKey`);
+- with stored keys, `XODUS_OFFLINE_IDENTITY=use` and `XODUS_FORCE_OFFLINE=1`;
+- with Microsoft's licence and an offline lease on the offline device, `store`;
+- otherwise nothing, and the runtime deletes the cache at its next sign-in.
+
+`XboxOfflineIdentity.remove(prefix:)` deletes every cache. It runs at sign-out,
+device reset, each designation change and a "not this device" read, and never
+follows a link out of the prefix.
 
 ## Installing a copy (PLA-497)
 
@@ -316,7 +388,13 @@ package}.rs`, `crates/xodus-cli/src/commands/extract.rs`); where it is silent or
 inconsistent (CBC key wrapping and the rolling IV, GUIDs as text, box manifests
 and seals, `Boxes/` names) the facts follow LukeFZ/XvdTool.Streaming pull request
 #3 at `99db4dd3285b80cadcd60f21a311d909121a8944` (GPL-2.0; read for the format,
-no code taken). Re-check both when #219 merges.
+no code taken). Re-check both when #219 merges. The offline device follows Xodus
+`514dd56f360a4bdf12f4acde5148bac5ce5f957f` `crates/xodus/src/auth.rs` (`do_sisu`,
+`get_xsts_token`) and Nexus `e0668a12f1da931aed13537ef04295599011317b`'s
+`xodus-offline-license` and `xodus-offline-license-revocation` patches,
+`src/main/offline-identity.ts` and `src/renderer/OfflinePermissions.tsx`. The
+request signature is the format OpenXbox's xal-rs implements, written from the
+recorded requests (no xal code taken).
 
 `Tests/XboxClientKitTests/Fixtures/` contains **synthetic, redacted responses**, not
 account captures. No PLA-487 captures were present when PLA-491 began. The
@@ -324,7 +402,11 @@ licensing fixtures (`licence-*`, `device-add-licensing.xml`) copy the recorded
 responses' shape (elements, attributes, policy fields, SPLicense block order and
 sizes, times) with made-up IDs and a generated device key; the wrapped content
 key is bytes 0x40…0x5f. The real licences can't be redacted: their keys are
-wrapped for a real device.
+wrapped for a real device. The offline device fixtures: `offline-device-off.json`
+is the recorded `offlinepc` answer unchanged (it has no identifier);
+`offline-device-on.json` and `-declined.json` are synthetic variants (Nexus's
+test values). `xbl-*.json` and `xbox-app-ticket.xml` copy the recorded Xbox Live
+shapes with made-up tokens.
 The XML/JSON shapes are those Xodus parses. The device licence wraps a freshly
 generated test-only RSA2 key in a version-4 CLEP state. The device proof wraps
 bytes 0…31; user responses are AES-256-CBC encrypted and HMAC-signed with the
