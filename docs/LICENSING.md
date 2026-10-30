@@ -82,7 +82,8 @@ gate (`pp names`, part of `pp test`). CI checks both
 Taking inspiration from other projects' user interfaces is fine. Porting
 their code, or copying their strings, icons or other assets, is not: it
 brings their licence terms and attribution duties into Playport. Design;
-do not port.
+do not port. The Xbox client is the one recorded exception: it is written
+from Xodus's code and takes Xodus's terms ("Xbox (planned)" below).
 
 Before offering a patch upstream, read that upstream's contribution policy
 (FEX-Emu does not accept AI-generated contributions). Such policies govern
@@ -274,6 +275,196 @@ beside it (docs/plans/finished.md#steam-for-games).
 - **No Steam code or Steam SDK binary** is shipped. gbe_fork's `sdk/` headers
   are compiled in; their provenance is gbe_fork's.
 
+### Xbox (planned)
+
+The Xbox store ([plan](plans/2026-10-30-xbox-game-pass.md), [decision 0166](decisions/0166-the-xbox-store.md))
+adds three things that are not built yet: a Swift client, `XboxClientKit`,
+written from Xodus's and Xodus Nexus's code and docs; `xgameruntime` as an
+ARM64EC Wine builtin; and `nghttp2`. This section answers the plan's question
+before any of them lands. The Components table gets their rows when they land.
+The upstreams were read on 2026-10-30:
+
+| Upstream | Read at | Licence as published |
+| --- | --- | --- |
+| Xodus ([xodus-gaming/xodus](https://github.com/xodus-gaming/xodus)) | `514dd56f360a4bdf12f4acde5148bac5ce5f957f`; MSIXVC2 is its open PR #219 from cyberps96/xodus, `e8194a89ea372c809015952bcab255e65b2b3089`, a fork carrying the same `LICENSE` | GPL-3.0. `LICENSE` is the version 3 text (sha256 `3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986`; it differs from Playport's `LICENSE` only in two FSF URLs). No file header, Cargo `license` field or README line says "only" or "or later" |
+| Xodus Nexus ([domsvoboda/xodus-nexus](https://github.com/domsvoboda/xodus-nexus)) | `v0.4.1` (`e0668a12f1da931aed13537ef04295599011317b`) and main `96c652343d30ae16fe476818288edbed5dfac673`, the same `LICENSE` | MIT, "Copyright (c) 2026 Xodus Nexus contributors". Its `assets/` patches modify Xodus (GPL-3.0), Wine and xgameruntime (both LGPL-2.1-or-later) |
+| nexus-xgameruntime ([domsvoboda/nexus-xgameruntime](https://github.com/domsvoboda/nexus-xgameruntime)), a fork of [xodus-gaming/xgameruntime](https://github.com/xodus-gaming/xgameruntime) | main `5539e7d23d2d2c49f8547c9b9721fb7bc59139c1`, 74 commits ahead of upstream `f03484d64867c1e65d421c1aba2f290c20bd7b4d` | `LICENSE` is the LGPL-2.1 text (sha256 `108e904a8b3df6012207649af241d5261a9c000f75d025034618f53ff9485c75`); every source file is LGPL-2.1-or-later by its header or SPDX line, except the MIT material listed below |
+| nghttp2 ([nghttp2/nghttp2](https://github.com/nghttp2/nghttp2)) | tag `v1.70.0`, commit `85e300c79fb6dbcfa9c1013215c8710c1c2cd3d2` (the commit Nexus pins) | MIT (`COPYING`, sha256 `6b94f3abc1aabd0c72a7c7d92a77f79dda7c8a0cb3df839a97890b4116a2de2a`) |
+
+#### The Swift client
+
+- **It is a work based on Xodus.** GPL-3.0 section 0 counts copying from or
+  adapting "all or part of the work" as modifying it; the result is "based
+  on" the earlier work. Translating Xodus's Rust into Swift is adapting it, so
+  the fact that no Xodus code is linked does not make the client independent.
+  The facts of Microsoft's protocol (hosts, field names, the bridge's wire
+  format) are not Xodus's expression, but a file is not split along that line:
+  the method decides. Every XboxClientKit file written while reading Xodus's
+  code, or Nexus's Xodus patches, is treated as a work based on Xodus.
+- **It may be combined.** Xodus's GPL-3.0 and Playport's GPL-3.0-or-later
+  meet at version 3, and an app that carries the client is conveyed under
+  GPL-3.0.
+- **Version 3 only, until the owner decides** (Open items). Xodus ships the
+  version 3 text and says nothing else. GPL-3.0 section 14 reads "If the
+  Program does not specify a version number … you may choose any version
+  ever published"; whether shipping the version 3 text specifies one is a
+  reading. Playport takes the stricter reading, as it did for Madeira's
+  headerless files. Under it:
+  - Xodus-derived code goes in files of its own, headed
+    `SPDX-License-Identifier: GPL-3.0-only`, never mixed into a
+    GPL-3.0-or-later file. XboxClientKit's other files keep the usual header.
+  - A build that carries those files is GPL-3.0 as a whole, not "or later".
+    Decision 0006's "the whole combination stays or later" holds only for builds
+    without them. Today that means the dev app only: decision 0166 keeps every
+    Xbox surface in the dev app, with `pp verify --variant release` refusing
+    a release executable that carries one.
+- **What it owes** (GPL-3.0 sections 4 and 5), from the first public push of
+  such a file, not only from the first IPA:
+  - each derived file states that it was modified, with a date (section
+    5(a)). Its header names Xodus, the Xodus commit it was written from, and
+    "translated to Swift by the Playport authors" with the date;
+  - the package carries Xodus's `LICENSE` beside the code as
+    `LICENSE-Xodus.txt`, as `app/SteamClient` carries JavaSteam's, and the
+    app's notices gain an Xodus component for it;
+  - code written from Nexus's own code (its launcher, MIT) keeps Nexus's
+    notice too (`LICENSE-XodusNexus.txt`). Code written from Nexus's Xodus
+    patches owes both;
+  - nothing else. Xodus's files carry no copyright notice to keep, and the
+    derived files are in Playport's own source.
+- **The converter exception does not cover it.** The exception covers only
+  code whose copyright Playport's holder owns. The Xodus-derived files are
+  third-party material in `app/`, which `LICENSE-EXCEPTION.md` already leaves
+  out ("material Playport takes from others"). GPL-3.0 section 7 adds: "If
+  additional permissions apply only to part of the Program, … the entire
+  Program remains governed by this License without regard to the additional
+  permissions." So a converter build that included this code could not rely
+  on the exception for it. Unlike DXMT's LGPL code, GPL-3.0 code has no
+  linking permission of its own to fall back on. Nothing changes today: the
+  converter is not built, and release builds carry no Xbox code. Whether this
+  blocks a future converter build is open (Open items).
+- **Apple's frameworks.** The client uses Foundation, Security and related
+  frameworks. For them it relies on the reading this page already takes:
+  they are System Libraries on the device (GPL-3.0 section 1), so it does not
+  depend on the exception.
+- **The bridge.** XboxClientKit and `xgameruntime` talk over a loopback TCP
+  socket (decision 0167). They are separate programs, so the bridge does not
+  join their licences, and both are GPL-3.0-compatible in any case.
+
+#### `xgameruntime`
+
+- **LGPL-2.1-or-later.** LGPL-2.1 section 3 lets it be conveyed under the
+  GPL, so it sits in the GPL-3.0 app as Wine's PE DLLs do. It is a PE DLL of its
+  own in the runtime, an ARM64EC Wine builtin that a game's process loads. It
+  is not linked into the executable, so a recipient replaces it by rebuilding
+  its stage, as with gbe_fork.
+- **Playport's lines in `patches/xgameruntime`** are offered under
+  LGPL-2.1-or-later, the licence of the tree they patch (decision 0040's rule),
+  so the tree stays under one licence and needs no exception.
+- **The converter.** It is a guest PE DLL that never links the converter or
+  an Apple framework, in the same position as Wine's PE DLLs. Playport's reading
+  is that it adds nothing to the open DXMT question. The owner confirms that
+  reading with the converter decision.
+- **What it carries that is not LGPL.** This list was read at the commit
+  above; recheck it at the pin.
+  - The 12 files in `src/System/Threading/` that say "From
+    https://github.com/microsoft/libHttpClient" under an LGPL header.
+    libHttpClient is MIT, "Copyright (c) 2017 Microsoft Corporation". MIT
+    permits the relicensing but requires its notice, which those files
+    dropped. Which libHttpClient revision they came from is not recorded.
+    Its `LICENSE.md` has not changed since the first commit,
+    `256d1cc9b3ed9310b41a3da9a2d2de354efe22da` (sha256
+    `d889d2995fd80a7eddc656e5e782d4755c4344cd2f80a6c7cc4529177829bc5f`).
+  - `include/private/env.h`, `logging.h`, `statics.h` and
+    `libs/xgameruntime-common/env.c`, `logging.c`: MIT, "Copyright (c) 2025
+    Weather". All but `statics.h` read "Permission is hereby granted,
+    CoTaskMemFree of charge", a search-and-replace slip in the grant; their
+    headers are carried as they are, with `statics.h`'s intact wording.
+  - `src/System/Threading/AsyncIdentity.h`, `SPDX-License-Identifier: MIT`
+    with no copyright line. Nexus's MIT text is in the tree as
+    `tests/Nexus/LICENSE` (the same bytes as Xodus Nexus's `LICENSE`).
+  - libxml2, compiled statically from a Wine tree's `libs/xml2`
+    (`cmake/Xml2.cmake`, checked against `cmake/xml2.lock.json`, which names
+    ValveSoftware/wine `7fc704ef49c50e9702c9983a5250d5738697bb04`). It is MIT
+    (`COPYING`, the same bytes as the fork's `licenses/Wine-libxml2.txt`),
+    with `list.c` and `dict.c` under their own ISC-style notices ("this
+    permission notice appear in all copies") and `timsort.h` under MIT
+    (Christopher Swenson, Vojtech Fried, Google). Once this ships, libxml2 is
+    no longer a Wine bundle that no shipped DLL links ("Not built and not
+    shipped").
+  - WinRT declarations generated from Wine's `include/` IDL
+    (LGPL-2.1-or-later).
+  - The C++ runtime it links statically (`-static -static-libstdc++`):
+    llvm-mingw's libc++, libc++abi, libunwind and the mingw-w64 CRT, as in
+    Playport's other PE files (Open items).
+  - The GDK API headers in its `include/` are headed as Wine-project files,
+    LGPL-2.1-or-later. Their provenance is the upstream's.
+- **Not built:** `external/googletest`, `tests/` and `scripts/`.
+
+#### nghttp2
+
+- **MIT.** It is built library-only as `libnghttp2.dll`, a separate ARM64EC
+  PE DLL. Wine's winhttp loads it at run time for HTTP/2 (Nexus's
+  `wine-winhttp-http2.patch`, which `patches/wine-gdk` ports), and winhttp
+  compiles against its header `nghttp2/nghttp2.h`. MIT is compatible with
+  Wine's LGPL and the app's GPL. MIT also permits combining it with anything,
+  the converter included, so it raises no exception question.
+- **Owed: its notice.** `COPYING` (Tatsuhiro Tsujikawa and nghttp2
+  contributors) covers the library. `lib/sfparse.c` and `sfparse.h` name
+  their own holders (sfparse, nghttp3 and nghttp2 contributors). Its source
+  goes in the bundle like every pin Playport builds, for the recipient's
+  rebuild; MIT itself asks only for the notice (decision 0042).
+
+#### For the runtime pins (PLA-493)
+
+No IPA that carries either DLL leaves the workstation without these:
+
+1. **Pins.** `xgameruntime` at a commit of domsvoboda/nexus-xgameruntime;
+   `nghttp2` at tag `v1.70.0`, commit `85e300c79fb6dbcfa9c1013215c8710c1c2cd3d2`.
+   Recheck the licence facts above at the pinned commit.
+2. **Source** (`build/source-bundle.json` and DISTRIBUTION.md's list of
+   git trees):
+   - both trees by commit, with `patches/xgameruntime` in Playport's archive;
+   - submodules a library-only or runtime build does not use, left out with
+     their reason: `external/googletest`, and nghttp2's `third-party/mruby`,
+     `third-party/neverbleed`, `third-party/urlparse` and `tests/munit`;
+   - libxml2 and the WinRT IDL compiled from a Wine tree the bundle packs:
+     Playport's Wine pin with its series. If the stage takes them from
+     another Wine commit (the fork's lock names Valve's `7fc704ef`), that
+     tree needs its own entry.
+3. **Notices** (`build/notices-assemble.sh`, NOTICES.md's table, one
+   `build/app-notices.json` component for each DLL):
+   - xgameruntime:
+     - its `LICENSE` (LGPL-2.1) and `tests/Nexus/LICENSE` (Nexus's MIT);
+     - the whole MIT headers of `libs/xgameruntime-common/env.c` and
+       `include/private/statics.h`;
+     - libHttpClient's `LICENSE.md`, committed in `build/notices-extra/` with
+       its commit and sha256, as DXBCParser's Microsoft text is;
+     - libxml2's `COPYING`, already collected as `wine-libs-xml2-COPYING`
+       and now to be selected for the app, plus the headers of `list.c`,
+       `dict.c` and `timsort.h`.
+   - nghttp2: `COPYING` and the header of `lib/sfparse.c`.
+   - Both DLLs come into the scope of the llvm-mingw runtime and mingw-w64
+     notice collection.
+4. **This page:** Components rows for both DLLs, libxml2 out of "Not built
+   and not shipped", and both trees in the Corresponding Source list under
+   "Obligations".
+
+#### For the other Xbox tickets
+
+- **The first that lands Xodus- or Nexus-derived Swift** (sign-in, PLA-491,
+  at the latest) must do the following: add the file headers and
+  `LICENSE-Xodus.txt` (and `LICENSE-XodusNexus.txt` if Nexus code is used),
+  add the notices component and NOTICES.md row, and add a Components row.
+- **`patches/wine-gdk`** (PLA-494): each commit keeps its author, and
+  Nexus's and Xodus's Wine patches become part of the LGPL-2.1-or-later Wine
+  tree; the MIT that Nexus's repository names is compatible with that for
+  its authors' lines. Playport's lines are offered under LGPL-2.1-or-later,
+  as in `patches/wine-pe`. A patch that copies code from elsewhere keeps
+  that code's terms.
+- **Outside this page:** Microsoft's terms, the synthetic device and
+  decrypting store DRM are not copyright-licence questions. They stay with
+  the release record decision 0166 requires.
+
 ### Not built and not shipped
 
 - Apple's `libmetalirconverter.dylib`, which Madeira's tree carries: never
@@ -389,3 +580,18 @@ tester. The procedure is [DISTRIBUTION.md](DISTRIBUTION.md).
   The owner accepts this risk ([decision 0039](decisions/0039-owners-licensing-review.md)).
 - Only the header lines of each Wine bundled library's licence were read; the
   notice files are copied whole.
+- Xodus's version: GPL-3.0 only, or any version under section 14 because it
+  names none? Playport takes version 3 only until the owner decides
+  ("Xbox (planned)"). Under the other reading, the derived files could carry
+  `GPL-3.0-or-later`, and the whole combination would stay "or later".
+- The Xodus-derived Swift and a future converter build: the exception does
+  not reach that code, and GPL-3.0 has no linking permission to fall back
+  on. This is open for the converter decision, as DXMT's question is. The
+  routes: the Xodus contributors grant the same permission; the converter
+  build leaves XboxClientKit out; or the derived code is replaced by code
+  written without reading Xodus. Playport's reading that `xgameruntime` (a
+  separate guest PE DLL) adds nothing to that question is confirmed at the
+  same time.
+- `xgameruntime`'s libHttpClient-derived threading files: the notice is
+  settled, because libHttpClient's `LICENSE.md` has been unchanged since 2017.
+  Which libHttpClient revision they were taken from is not recorded upstream.
