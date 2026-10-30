@@ -107,3 +107,6 @@ and the passkey finding. The sheet assumes passkeys are unavailable in a
 sideloaded web view and steers to Authenticator, code or password; no phone
 finding is claimed. `pp ui` paths: `xbox:signin`, `xbox:wait`, `xbox:status`,
 `xbox:signout`, `xbox:reset-device` (help in `tools/ui.py`).
+
+The library's phone gate is deferred too: `./pp ui --action xbox:library --shot`
+(signed in) shows the Xbox chip's copies with Microsoft's art and logs counts only.

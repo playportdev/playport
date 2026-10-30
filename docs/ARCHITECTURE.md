@@ -584,8 +584,9 @@ Each job waits for its driver's conditions (its store signed in, permitted netwo
 an unfinished import needs its source picked again); the player's Pause stays.
 A release build compiles none of `Dev/`
 ([decision 0009](decisions/0009-dev-and-release-builds.md)). The Xbox store is the dev
-app's only ([decision 0166](decisions/0166-the-xbox-store.md)): its chip and empty
-Library (`Dev/XboxLibrary.swift`), and `pp verify --variant release` fails an executable
+app's only ([decision 0166](decisions/0166-the-xbox-store.md)): its chip and Library of the
+signed-in account's copies (`Dev/XboxLibrary.swift`, refreshed whenever the Library opens),
+and `pp verify --variant release` fails an executable
 with a Swift `Xbox…` identifier or the Xbox Library's text (`verify-ipa.py` `XBOX_STRINGS`).
 
 - **Catalogue** (`app/PlayportKit`, tested on Linux): rebuilt by *adoption*
@@ -1272,6 +1273,11 @@ from issued session tickets/proofs: sign-out deletes the latter, retaining the s
 for the next sign-in. Microsoft's device-auth rejection or Developer's Reset Xbox device
 replaces it; a network/service error does not. The Store's 10-device limit is a licensing
 reason (501), not HTTP 501; its message points to `account.microsoft.com/devices/content`.
+`XboxStoreLibrary` lists the account's copies: PCGAFD entitlements, read with the Microsoft
+Store's own ticket (`XboxSession.storeTicket`), resolved to owned or PC Game Pass access, then
+the public display catalogue for titles, art and packages. Only games with a Windows.Desktop
+MSIXVC/MSIXVC2 package are listed, keyed by Product ID; UWP/EAppx, products with no Store
+package (Battle.net, EA app deliveries) and add-ons are left out.
 The release package has no XboxClientKit dependency and no `Dev/`; verification also rejects
 any Swift `Xbox…` type that reaches a release executable.
 
