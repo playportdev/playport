@@ -14,17 +14,25 @@
   [PLA-481](https://linear.app/playportdev/issue/PLA-481), Done) is an accepted increment (HK first-frame+10,
   game helper reaches allocator startup). **Blocker:** the launcher helper's retained view under 0132/0143
   refuses the game's helper metadata (l4). Do not clear, free or overwrite kept slots.
-- **Owner direction 2026-10-29** (supersedes earlier ordering): FIRST measure the retained view's actual touched
-  extent (read-only research; report to `.work/agent-notes/pla476/reports/retained-extent.md`) and run a
-  review-fix writer chunk. The lifetime/quiescence proof is deferred behind it and still needs a new
-  owner-approved ADR before any 0127/0132/0134/0143 change.
-- The Risks stop rule (chunk 2 cannot place the pools: stop, PLA-372 fallback is the owner's call) is
-  near-triggered; 0.5.0 decouple vs continue is the owner's call.
+- **Measured (l5, 2026-10-30, IPA `b5ee00eb…`, `.work/ui-runs/20261030T104925-rdr2-p476l5`):** only kind 3
+  (ELF_META) is kept, as its whole 6400 MiB view, pinned by one parked thread's wait address. It has 72.4 MiB
+  committed, highest end 170.5 MiB. Kinds 1, 2, 4, 5 and 6 are freed and held again. The game's helper gets
+  kind 1 and then fails **only** on the ELF_META refusal (`chrome_elf.dll failed to initialize`). Story stays on a
+  black spinner. Peak 6307 MB, no jetsam. l2's kind 1/5 retention did not recur.
+- **Owner decision 2026-10-30 (approved):** a disjoint 1 GiB second ELF_META slot, real
+  `[0x79c0000000, 0x7a00000000)` (RW-alias cap slack), for a later helper when kind 3 is owned by another PEB.
+  It comes with a slot-aware `ppsc_access` (real-range containment wins, a straddle across real ranges is
+  refused, possible metadata overflow is logged; PLA-482). Opt-in layout only; 0132/0143 unchanged. The
+  lifetime/quiescence proof stays deferred.
+- The Risks stop rule is no longer near-triggered for the l3–l5 shape. 0.5.0 stays held.
+- Build-records gap found on the way: [PLA-484](https://linear.app/playportdev/issue/PLA-484).
 - **Ordered queue:** (1) review-fix writer chunk **done** in `ad295c7` (0225–0227, `wine_host.c`, 0055 `Class:`
   `ios-port`, [PLA-482](https://linear.app/playportdev/issue/PLA-482) diagnostics, retained-extent §5 diagnostics;
   [PLA-480](https://linear.app/playportdev/issue/PLA-480) smoke on RDR2 dev defaults, Witcher 3 not installed;
   [evidence](../evidence/2026-10-29-sc-stock-cef-probe.md#review-fixes)); its host tests for `pp_sc_vm.h` and
-  `pp_sc_access.h` are drafted, not yet integrated; (2) retained-extent verdict, then owner decision; (3) remaining chunk-2 gates
+  `pp_sc_access.h` were integrated in `29dfb45`, and review-2 fixes landed in `e3334ec` (IPA `fc42b29e…`, HK
+  `.work/ui-runs/20261030T112027`); (2) **next:** madeira-unix 0228, the second ELF_META slot and slot-aware access
+  (draft in `.work/agent-notes/pla476/second-meta/`), then HK and an RDR2 layout run; (3) remaining chunk-2 gates
   (allocator/browser, Story cabin, no SC/launcher `NO GAP FITS` or soft grant, 7343 MB ±10 %);
   (4) chunks 3–6, all under PLA-476. Chunk 3 needs owner approval if required; 0.5.0 held.
 - Phone: no session active. Reports: `.work/agent-notes/pla476/reports/`.
