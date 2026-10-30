@@ -63,6 +63,7 @@ struct kk_mock_obj {
 #define KK_MOCK_MSL_LAYER 0x2u
 
 void *kk_mock_new(int kind, uint64_t size);
+void kk_mock_set_size(void *handle, uint64_t size);
 void kk_mock_drain_feedback(void *queue);
 void kk_mock_record_msl(const char *src);
 void kk_mock_trace(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
@@ -139,6 +140,14 @@ kk_mock_trace(const char *fmt, ...)
    va_end(ap);
 }
 
+/* Test-only: the size a dummy handle reports, e.g. an allocator's
+ * allocatedSize (kk-cmd-census-test.c) */
+void
+kk_mock_set_size(void *handle, uint64_t size)
+{
+   ((struct kk_mock_obj *)handle)->size = size;
+}
+
 void *
 kk_mock_new(int kind, uint64_t size)
 {
@@ -213,6 +222,8 @@ kk_mock_record_msl(const char *src)
 }
 '''}
 
+# Command allocators keep a size a test sets (kk_mock_set_size), 0 by default.
+body("mtl_command_allocator_allocated_size", "return allocator ? ((struct kk_mock_obj *)allocator)->size : 0u;")
 body("mtl_retain", "return handle;")
 body("mtl_release", "kk_mock_drain_feedback(handle);")
 body("mtl_device_create", "return kk_mock_new(1, 0);")

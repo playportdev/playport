@@ -1,0 +1,679 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 30 Oct 2026 21:32:03 +0100
+Subject: [PATCH] kk: count what each command buffer holds and each upload site
+ asks for
+
+With MESA_KK_DEBUG=memory (the dev app's default), log every 30 s, from
+the [kk-mem] line, a [kk-cmd-census] of the command buffers alive:
+
+- one line with their count, how many hold a recording, the upload BOs
+  and allocator bytes those recordings hold, the allocators' total,
+  largest and count over 8 MiB, the direct and replayed submits of
+  reusable (not ONE_TIME) primaries, and the application's recordings
+  released so far by how long they held after their first submit (or
+  never submitted), with the MiB they held;
+- up to twelve buckets holding the most: queue re-record or the
+  application's, level, usage (once, simultaneous, reusable), pool flags
+  (transient, reset), and state (recording, ended-unsubmitted,
+  submitted-once, submitted-2+), each with its count, upload and
+  allocator MiB, and ages (since the first submit, else since Begin).
+
+A recording holds from Begin to kk_cmd_release_resources (reset, free or
+the next Begin). What it added to its allocator is allocatedSize at End
+less at Begin: an allocator records one buffer at a time.
+
+Then [kk-upload]: every kk_pool_alloc and kk_pool_upload counts at its
+caller's site (a macro gives each a static record), with requests and
+bytes, and for requests over 128 KiB the bytes asked, the power-of-two
+heap bytes given, and those still owned by a command buffer. One line of
+totals, then the twelve sites with the most bytes.
+
+Every count sits behind KK_DEBUG(MEMORY) or the buffer's listing, which
+is made only then. No allocation, release, reset or encoding changes.
+kk-cmd-census-test.c checks the lines on the mock.
+
+Linear: PLA-364
+Class: diagnostics
+Evidence: docs/evidence/2026-10-30-rdr2-kk-audio-diagnostics.md
+Offered-upstream: no
+---
+ src/kosmickrisp/vulkan/kk_bo.c         |   2 +
+ src/kosmickrisp/vulkan/kk_cmd_buffer.c | 351 ++++++++++++++++++++++++-
+ src/kosmickrisp/vulkan/kk_cmd_buffer.h |  61 ++++-
+ src/kosmickrisp/vulkan/kk_cmd_pool.c   |  21 ++
+ src/kosmickrisp/vulkan/kk_cmd_pool.h   |   8 +
+ src/kosmickrisp/vulkan/kk_queue.c      |   4 +
+ 6 files changed, 438 insertions(+), 9 deletions(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_bo.c b/src/kosmickrisp/vulkan/kk_bo.c
+index 323ee6a..60ffd10 100644
+--- a/src/kosmickrisp/vulkan/kk_bo.c
++++ b/src/kosmickrisp/vulkan/kk_bo.c
+@@ -6,6 +6,7 @@
+ 
+ #include "kk_bo.h"
+ 
++#include "kk_cmd_buffer.h"
+ #include "kk_cmd_pool.h"
+ #include "kk_debug.h"
+ #include "kk_device.h"
+@@ -233,6 +234,7 @@ kk_memory_log(struct kk_device *dev)
+            p_atomic_read(&vk_pipeline_cache_stats.precomp_bytes) / mib,
+            allocator_count, allocator_bytes / mib, gpl, priority);
+ #undef KK_BO_FIELD
++   kk_cmd_census_log();
+ }
+ 
+ /* Playport (PLA-465): about once a second, from queue submits, log
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.c b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+index 4ae1e1f..ec12393 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_buffer.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+@@ -22,6 +22,8 @@
+ #include "kosmickrisp/bridge/mtl_sync.h"
+ #include "kosmickrisp/bridge/vk_to_mtl_map.h"
+ 
++#include "util/os_time.h"
++#include "util/simple_mtx.h"
+ #include "util/u_atomic.h"
+ 
+ #include "vk_alloc.h"
+@@ -29,6 +31,314 @@
+ #include "vk_format.h"
+ #include "vk_pipeline_layout.h"
+ 
++/* Playport (PLA-364), MESA_KK_DEBUG=memory: [kk-cmd-census] and [kk-upload].
++ * Every command buffer is listed from create to destroy; a recording holds
++ * what it added to its Metal allocator and its upload BOs from Begin until
++ * kk_cmd_release_resources (reset, free or the next Begin). Log only: no
++ * allocation, release or encoding changes. */
++static struct list_head kk_census_list = {&kk_census_list, &kk_census_list};
++static simple_mtx_t kk_census_lock = SIMPLE_MTX_INITIALIZER;
++static struct kk_upload_site *kk_upload_sites;
++
++/* Hold time buckets: <1 s, 1-10 s, 10-60 s, >60 s */
++#define KK_CENSUS_AGES 4
++static const char *const kk_census_age_names[KK_CENSUS_AGES] = {
++   "<1s", "1-10s", "10-60s", ">60s"};
++
++static unsigned
++kk_census_age(int64_t ns)
++{
++   if (ns < INT64_C(1000000000))
++      return 0u;
++   if (ns < INT64_C(10000000000))
++      return 1u;
++   if (ns < INT64_C(60000000000))
++      return 2u;
++   return 3u;
++}
++
++/* The application's recordings released since the start (not the queue's
++ * re-records, released at completion), by how long they held after their
++ * first submit (never submitted: unsubmitted), and the MiB they held */
++static struct {
++   int64_t count[KK_CENSUS_AGES], bytes[KK_CENSUS_AGES];
++   int64_t unsubmitted, unsubmitted_bytes;
++   /* submits of reusable (not ONE_TIME) primaries: direct commits of their
++    * own encoding, and replays through a queue re-record */
++   int64_t reuse_direct, reuse_replays;
++} kk_census_totals;
++
++static void
++kk_cmd_census_add(struct kk_cmd_buffer *cmd)
++{
++   simple_mtx_lock(&kk_census_lock);
++   list_addtail(&cmd->census.link, &kk_census_list);
++   cmd->census.listed = true;
++   simple_mtx_unlock(&kk_census_lock);
++}
++
++static void
++kk_cmd_census_remove(struct kk_cmd_buffer *cmd)
++{
++   if (!cmd->census.listed)
++      return;
++   simple_mtx_lock(&kk_census_lock);
++   list_del(&cmd->census.link);
++   cmd->census.listed = false;
++   simple_mtx_unlock(&kk_census_lock);
++}
++
++/* The recording is released: count its hold, then forget it */
++static void
++kk_cmd_census_retire(struct kk_cmd_buffer *cmd)
++{
++   struct kk_cmd_census *c = &cmd->census;
++   if (!c->listed || c->begin_ns == 0)
++      return;
++   const int64_t held = (int64_t)(c->upload_B + c->alloc_added_B);
++   if (c->first_submit_ns == 0 && !c->queue_owned) {
++      p_atomic_inc(&kk_census_totals.unsubmitted);
++      p_atomic_add(&kk_census_totals.unsubmitted_bytes, held);
++   } else if (!c->queue_owned) {
++      const unsigned age = kk_census_age(os_time_get_nano() - c->first_submit_ns);
++      p_atomic_inc(&kk_census_totals.count[age]);
++      p_atomic_add(&kk_census_totals.bytes[age], held);
++   }
++   c->begin_ns = 0;
++   c->first_submit_ns = 0;
++   c->flags = 0u;
++   c->submits = 0u;
++   c->alloc_begin_B = 0u;
++   c->alloc_added_B = 0u;
++   c->upload_B = 0u;
++}
++
++void
++kk_cmd_census_submitted(struct kk_cmd_buffer *cmd, bool replayed)
++{
++   struct kk_cmd_census *c = &cmd->census;
++   if (!c->listed)
++      return;
++   if (cmd->vk.level == VK_COMMAND_BUFFER_LEVEL_PRIMARY && !c->queue_owned &&
++       !(c->flags & VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT)) {
++      if (replayed)
++         p_atomic_inc(&kk_census_totals.reuse_replays);
++      else
++         p_atomic_inc(&kk_census_totals.reuse_direct);
++   }
++   if (c->first_submit_ns == 0)
++      c->first_submit_ns = os_time_get_nano();
++   c->submits++;
++}
++
++/* A census bucket: queue re-record or the application's, level, usage
++ * (ONE_TIME, SIMULTANEOUS, reusable), pool flags (TRANSIENT, RESET) and the
++ * recording's state */
++enum kk_census_state {
++   KK_CENSUS_RECORDING,
++   KK_CENSUS_UNSUBMITTED, /* ended, never submitted */
++   KK_CENSUS_SUBMITTED_ONCE,
++   KK_CENSUS_SUBMITTED_MORE,
++   KK_CENSUS_STATES,
++};
++static const char *const kk_census_state_names[KK_CENSUS_STATES] = {
++   "recording", "ended-unsubmitted", "submitted-once", "submitted-2+"};
++#define KK_CENSUS_BUCKETS (2 * 2 * 3 * 4 * KK_CENSUS_STATES)
++
++struct kk_census_bucket {
++   int64_t count, upload_B, alloc_B, ages[KK_CENSUS_AGES];
++};
++
++static unsigned
++kk_census_usage(uint32_t flags)
++{
++   if (flags & VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT)
++      return 0u;
++   if (flags & VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT)
++      return 1u;
++   return 2u;
++}
++
++/* Every 30 s from kk_memory_log (one caller at a time): the recordings held
++ * now, the twelve buckets holding the most (age: since the first submit, or
++ * since Begin if none), and the twelve upload sites that asked for the most
++ * bytes since the start (+: since the last line) */
++void
++kk_cmd_census_log(void)
++{
++   static int64_t last_ns;
++   static struct kk_census_bucket buckets[KK_CENSUS_BUCKETS];
++   static const char *const usage_names[3] = {"once", "simultaneous",
++                                              "reusable"};
++   const int64_t now = os_time_get_nano();
++   if (last_ns != 0 && now - last_ns < INT64_C(30000000000))
++      return;
++   const double since = last_ns ? (now - last_ns) / 1e9 : 0.0;
++   last_ns = now;
++
++   const double mib = 1024.0 * 1024.0;
++   memset(buckets, 0, sizeof(buckets));
++   int64_t listed = 0, idle = 0, upload = 0, alloc = 0;
++   simple_mtx_lock(&kk_census_lock);
++   list_for_each_entry(struct kk_cmd_buffer, cmd, &kk_census_list,
++                       census.link) {
++      const struct kk_cmd_census *c = &cmd->census;
++      listed++;
++      const int64_t begin_ns = c->begin_ns;
++      if (begin_ns == 0) {
++         idle++;
++         continue;
++      }
++      const int64_t first = c->first_submit_ns;
++      const uint32_t submits = c->submits;
++      enum kk_census_state state;
++      if (cmd->vk.state == MESA_VK_COMMAND_BUFFER_STATE_RECORDING)
++         state = KK_CENSUS_RECORDING;
++      else if (submits == 0u)
++         state = KK_CENSUS_UNSUBMITTED;
++      else if (submits == 1u)
++         state = KK_CENSUS_SUBMITTED_ONCE;
++      else
++         state = KK_CENSUS_SUBMITTED_MORE;
++      const VkCommandPoolCreateFlags pool_flags = cmd->vk.pool->flags;
++      const unsigned pool =
++         ((pool_flags & VK_COMMAND_POOL_CREATE_TRANSIENT_BIT) ? 1u : 0u) |
++         ((pool_flags & VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT) ? 2u
++                                                                         : 0u);
++      const unsigned index =
++         ((((c->queue_owned ? 1u : 0u) * 2u +
++            (cmd->vk.level == VK_COMMAND_BUFFER_LEVEL_PRIMARY ? 0u : 1u)) *
++              3u +
++           kk_census_usage(c->flags)) *
++             4u +
++          pool) *
++            KK_CENSUS_STATES +
++         state;
++      struct kk_census_bucket *b = &buckets[index];
++      b->count++;
++      b->upload_B += c->upload_B;
++      b->alloc_B += c->alloc_added_B;
++      b->ages[kk_census_age(now - (first ? first : begin_ns))]++;
++      upload += c->upload_B;
++      alloc += c->alloc_added_B;
++   }
++   simple_mtx_unlock(&kk_census_lock);
++
++   uint32_t allocators = 0u, over_8mib = 0u;
++   const uint64_t allocators_B = kk_cmd_pool_allocators_size(&allocators);
++   const uint64_t largest_B = kk_cmd_pool_allocators_largest(&over_8mib);
++   fprintf(stderr,
++           "[kk-cmd-census] s=%.1f buffers=%" PRId64 " idle=%" PRId64
++           " held upload=%.1f alloc-added=%.1f MiB | allocators=%u/%.1f MiB "
++           "largest=%.1f over-8MiB=%u | reusable-primary submits direct=%" PRId64
++           " replayed=%" PRId64 " | released by hold <1s/1-10s/10-60s/>60s="
++           "%" PRId64 "/%" PRId64 "/%" PRId64 "/%" PRId64
++           " (%.1f/%.1f/%.1f/%.1f MiB) unsubmitted=%" PRId64 " (%.1f MiB)\n",
++           since, listed, idle, upload / mib, alloc / mib, allocators,
++           allocators_B / mib, largest_B / mib, over_8mib,
++           p_atomic_read(&kk_census_totals.reuse_direct),
++           p_atomic_read(&kk_census_totals.reuse_replays),
++           p_atomic_read(&kk_census_totals.count[0]),
++           p_atomic_read(&kk_census_totals.count[1]),
++           p_atomic_read(&kk_census_totals.count[2]),
++           p_atomic_read(&kk_census_totals.count[3]),
++           p_atomic_read(&kk_census_totals.bytes[0]) / mib,
++           p_atomic_read(&kk_census_totals.bytes[1]) / mib,
++           p_atomic_read(&kk_census_totals.bytes[2]) / mib,
++           p_atomic_read(&kk_census_totals.bytes[3]) / mib,
++           p_atomic_read(&kk_census_totals.unsubmitted),
++           p_atomic_read(&kk_census_totals.unsubmitted_bytes) / mib);
++
++   /* The twelve buckets holding the most, largest first */
++   for (unsigned n = 0u; n < 12u; n++) {
++      int best = -1;
++      for (unsigned i = 0u; i < KK_CENSUS_BUCKETS; i++) {
++         if (buckets[i].count == 0)
++            continue;
++         if (best < 0 || buckets[i].upload_B + buckets[i].alloc_B >
++                            buckets[best].upload_B + buckets[best].alloc_B)
++            best = i;
++      }
++      if (best < 0)
++         break;
++      struct kk_census_bucket *b = &buckets[best];
++      const unsigned state = best % KK_CENSUS_STATES;
++      const unsigned pool = (best / KK_CENSUS_STATES) % 4u;
++      const unsigned usage = (best / KK_CENSUS_STATES / 4u) % 3u;
++      const unsigned secondary = (best / KK_CENSUS_STATES / 12u) % 2u;
++      const unsigned queue = best / KK_CENSUS_STATES / 24u;
++      fprintf(stderr,
++              "[kk-cmd-census] %s %s %s pool=%s%s %s n=%" PRId64
++              " upload=%.1f alloc-added=%.1f MiB age %s/%s/%s/%s=%" PRId64
++              "/%" PRId64 "/%" PRId64 "/%" PRId64 "\n",
++              queue ? "queue" : "app", secondary ? "secondary" : "primary",
++              usage_names[usage], (pool & 1u) ? "transient" : "-",
++              (pool & 2u) ? "+reset" : "", kk_census_state_names[state],
++              b->count, b->upload_B / mib, b->alloc_B / mib,
++              kk_census_age_names[0], kk_census_age_names[1],
++              kk_census_age_names[2], kk_census_age_names[3], b->ages[0],
++              b->ages[1], b->ages[2], b->ages[3]);
++      b->count = 0;
++   }
++
++   /* Upload sites: the twelve with the most bytes since the start */
++   int64_t calls = 0, bytes = 0, large_bytes = 0, rounded = 0, live = 0;
++   for (struct kk_upload_site *site = p_atomic_read(&kk_upload_sites); site;
++        site = site->next) {
++      calls += p_atomic_read(&site->calls);
++      bytes += p_atomic_read(&site->bytes);
++      large_bytes += p_atomic_read(&site->large_bytes);
++      rounded += p_atomic_read(&site->large_rounded_B);
++      live += p_atomic_read(&site->large_live_B);
++   }
++   fprintf(stderr,
++           "[kk-upload] s=%.1f calls=%" PRId64 " MiB=%.1f large asked=%.1f "
++           "rounded=%.1f live=%.1f MiB\n",
++           since, calls, bytes / mib, large_bytes / mib, rounded / mib,
++           live / mib);
++   struct kk_upload_site *shown[12] = {0};
++   for (unsigned n = 0u; n < 12u; n++) {
++      struct kk_upload_site *best = NULL;
++      for (struct kk_upload_site *site = p_atomic_read(&kk_upload_sites); site;
++           site = site->next) {
++         bool seen = false;
++         for (unsigned k = 0u; k < n; k++)
++            seen |= shown[k] == site;
++         if (!seen && (!best || p_atomic_read(&site->bytes) >
++                                   p_atomic_read(&best->bytes)))
++            best = site;
++      }
++      if (!best)
++         break;
++      shown[n] = best;
++      const int64_t site_bytes = p_atomic_read(&best->bytes);
++      fprintf(stderr,
++              "[kk-upload] %s:%d calls=%" PRId64 " MiB=%.1f (+%.1f) large=%" PRId64
++              " asked=%.1f rounded=%.1f live=%.1f MiB\n",
++              best->func, best->line, p_atomic_read(&best->calls),
++              site_bytes / mib, (site_bytes - best->logged_bytes) / mib,
++              p_atomic_read(&best->large_calls),
++              p_atomic_read(&best->large_bytes) / mib,
++              p_atomic_read(&best->large_rounded_B) / mib,
++              p_atomic_read(&best->large_live_B) / mib);
++      best->logged_bytes = site_bytes;
++   }
++}
++
++/* A site joins the list at its first counted use */
++static void
++kk_upload_site_count(struct kk_upload_site *site, uint32_t size_B)
++{
++   if (p_atomic_inc_return(&site->calls) == 1) {
++      struct kk_upload_site *head;
++      do {
++         head = p_atomic_read(&kk_upload_sites);
++         site->next = head;
++      } while (p_atomic_cmpxchg(&kk_upload_sites, head, site) != head);
++   }
++   p_atomic_add(&site->bytes, (int64_t)size_B);
++}
++
+ static void
+ kk_descriptor_state_fini(struct kk_cmd_buffer *cmd,
+                          struct kk_descriptor_state *desc)
+@@ -46,6 +356,7 @@ kk_cmd_release_resources(struct kk_cmd_buffer *cmd)
+ {
+    struct kk_cmd_pool *pool = kk_cmd_buffer_pool(cmd);
+ 
++   kk_cmd_census_retire(cmd);
+    kk_cmd_release_dynamic_ds_state(cmd);
+    kk_descriptor_state_fini(cmd, &cmd->state.gfx.descriptors);
+    kk_descriptor_state_fini(cmd, &cmd->state.cs.descriptors);
+@@ -67,6 +378,13 @@ end_recording(struct kk_cmd_buffer *cmd)
+ 
+    cs_end(cmd);
+    mtl_end_command_buffer(cmd->metal.cmd_buf);
++   if (cmd->census.listed) {
++      const uint64_t size =
++         mtl_command_allocator_allocated_size(cmd->metal.allocator);
++      cmd->census.alloc_added_B =
++         size > cmd->census.alloc_begin_B ? size - cmd->census.alloc_begin_B
++                                          : 0u;
++   }
+    kk_cmd_pool_return_allocator(kk_cmd_buffer_pool(cmd), cmd->metal.encoded_in);
+    cmd->metal.allocator = NULL;
+ }
+@@ -106,6 +424,7 @@ kk_destroy_cmd_buffer(struct vk_command_buffer *vk_cmd_buffer)
+ 
+    vk_command_buffer_finish(&cmd->vk);
+    kk_cmd_release_resources(cmd);
++   kk_cmd_census_remove(cmd);
+    util_dynarray_fini(&cmd->post_render_writes);
+    util_dynarray_fini(&cmd->ts_resolves);
+    util_dynarray_fini(&cmd->ts_stage_map);
+@@ -159,6 +478,9 @@ kk_create_cmd_buffer(struct vk_command_pool *vk_pool,
+ 
+    list_inithead(&cmd->uploader.bos);
+ 
++   if (KK_DEBUG(MEMORY))
++      kk_cmd_census_add(cmd);
++
+    *cmd_buffer_out = &cmd->vk;
+ 
+    return VK_SUCCESS;
+@@ -252,6 +574,12 @@ kk_BeginCommandBuffer(VkCommandBuffer commandBuffer,
+       cmd->metal.allocator = allocator->handle;
+    }
+    mtl_begin_command_buffer(cmd->metal.cmd_buf, cmd->metal.allocator);
++   if (cmd->census.listed) {
++      cmd->census.flags = pBeginInfo->flags;
++      cmd->census.alloc_begin_B =
++         mtl_command_allocator_allocated_size(cmd->metal.allocator);
++      cmd->census.begin_ns = os_time_get_nano();
++   }
+ 
+    return VK_SUCCESS;
+ 
+@@ -884,14 +1212,20 @@ kk_cmd_buffer_alloc_bo(struct kk_cmd_buffer *cmd, struct kk_cmd_bo **bo_out)
+       return result;
+ 
+    list_addtail(&(*bo_out)->link, &cmd->uploader.bos);
++   if (cmd->census.listed)
++      cmd->census.upload_B += KK_CMD_BO_SIZE;
+    return VK_SUCCESS;
+ }
+ 
+ struct kk_ptr
+-kk_pool_alloc(struct kk_cmd_buffer *cmd, uint32_t size_B, uint32_t alignment_B)
++kk_pool_alloc_at(struct kk_cmd_buffer *cmd, uint32_t size_B,
++                 uint32_t alignment_B, struct kk_upload_site *site)
+ {
+    struct kk_uploader *uploader = &cmd->uploader;
+ 
++   if (KK_DEBUG(MEMORY))
++      kk_upload_site_count(site, size_B);
++
+    /* Specially handle large allocations owned by the command buffer, e.g. used
+     * for statically allocated vertex output buffers with geometry shaders.
+     */
+@@ -905,6 +1239,15 @@ kk_pool_alloc(struct kk_cmd_buffer *cmd, uint32_t size_B, uint32_t alignment_B)
+       }
+       list_addtail(&bo->link, &cmd->large_bos);
+       struct kk_bo *buffer = bo->bo;
++      if (KK_DEBUG(MEMORY)) {
++         p_atomic_inc(&site->large_calls);
++         p_atomic_add(&site->large_bytes, (int64_t)size_B);
++         p_atomic_add(&site->large_rounded_B, (int64_t)buffer->size_B);
++         p_atomic_add(&site->large_live_B, (int64_t)buffer->size_B);
++         bo->site_live_B = &site->large_live_B;
++         if (cmd->census.listed)
++            cmd->census.upload_B += buffer->size_B;
++      }
+ 
+       return (struct kk_ptr){
+          .gpu = buffer->gpu,
+@@ -961,10 +1304,10 @@ kk_pool_alloc(struct kk_cmd_buffer *cmd, uint32_t size_B, uint32_t alignment_B)
+ }
+ 
+ struct kk_ptr
+-kk_pool_upload(struct kk_cmd_buffer *cmd, const void *data, uint32_t size,
+-               uint32_t alignment)
++kk_pool_upload_at(struct kk_cmd_buffer *cmd, const void *data, uint32_t size,
++                  uint32_t alignment, struct kk_upload_site *site)
+ {
+-   struct kk_ptr T = kk_pool_alloc(cmd, size, alignment);
++   struct kk_ptr T = kk_pool_alloc_at(cmd, size, alignment, site);
+    if (unlikely(T.cpu == NULL))
+       return (struct kk_ptr){0};
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.h b/src/kosmickrisp/vulkan/kk_cmd_buffer.h
+index 72ec2ed..2075182 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_buffer.h
++++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.h
+@@ -308,9 +308,43 @@ struct kk_ts_stage_entry {
+    uint32_t index;
+ };
+ 
++/* Playport (PLA-364), MESA_KK_DEBUG=memory: what the command buffer's current
++ * recording holds and since when, for the [kk-cmd-census] lines
++ * (kk_cmd_census_log). The owning thread writes it; the logger reads it
++ * without a lock, so a line may mix two moments of one buffer. */
++struct kk_cmd_census {
++   struct list_head link; /* in the census list, while listed */
++   bool listed;
++   /* a queue re-record (rerecord_and_commit_cmd_buffer), kept across resets */
++   bool queue_owned;
++   /* the current recording; begin_ns 0: none since the last release */
++   int64_t begin_ns;
++   int64_t first_submit_ns; /* 0: not submitted */
++   uint32_t flags;          /* VkCommandBufferUsageFlags of its Begin */
++   uint32_t submits;        /* direct commits plus re-recorded replays */
++   uint64_t alloc_begin_B;  /* its allocator's allocatedSize at Begin */
++   uint64_t alloc_added_B;  /* what it added to the allocator, at End */
++   uint64_t upload_B;       /* its upload BOs: 128 KiB each, large ones whole */
++};
++
++/* Playport (PLA-364), MESA_KK_DEBUG=memory: one kk_pool_alloc or
++ * kk_pool_upload call site, for the [kk-upload] lines. Counts are atomic;
++ * large_live_B is what its large BOs hold until their command buffer
++ * releases them. */
++struct kk_upload_site {
++   const char *func;
++   int line;
++   struct kk_upload_site *next; /* the list of sites used, set once */
++   int64_t calls, bytes;        /* every request, small and large */
++   int64_t large_calls, large_bytes, large_rounded_B, large_live_B;
++   int64_t logged_bytes; /* bytes at the last line, the logger's */
++};
++
+ struct kk_cmd_buffer {
+    struct vk_command_buffer vk;
+ 
++   struct kk_cmd_census census;
++
+    struct {
+       /* the allocator recording now, NULL outside Begin..End */
+       mtl_command_allocator *allocator;
+@@ -453,11 +487,28 @@ kk_compile_depth_stencil_state(struct kk_device *device,
+ void kk_meta_resolve_rendering(struct kk_cmd_buffer *cmd,
+                                const VkRenderingInfo *pRenderingInfo);
+ 
+-struct kk_ptr kk_pool_alloc(struct kk_cmd_buffer *cmd, uint32_t size,
+-                            uint32_t alignment);
+-
+-struct kk_ptr kk_pool_upload(struct kk_cmd_buffer *cmd, const void *data,
+-                             uint32_t size, uint32_t alignment);
++struct kk_ptr kk_pool_alloc_at(struct kk_cmd_buffer *cmd, uint32_t size,
++                               uint32_t alignment,
++                               struct kk_upload_site *site);
++
++struct kk_ptr kk_pool_upload_at(struct kk_cmd_buffer *cmd, const void *data,
++                                uint32_t size, uint32_t alignment,
++                                struct kk_upload_site *site);
++
++/* Playport (PLA-364): each caller's site, counted with MESA_KK_DEBUG=memory */
++#define KK_UPLOAD_SITE()                                                       \
++   ({                                                                          \
++      static struct kk_upload_site kk_upload_site_ = {__func__, __LINE__};     \
++      &kk_upload_site_;                                                        \
++   })
++#define kk_pool_alloc(cmd, size, alignment)                                    \
++   kk_pool_alloc_at((cmd), (size), (alignment), KK_UPLOAD_SITE())
++#define kk_pool_upload(cmd, data, size, alignment)                             \
++   kk_pool_upload_at((cmd), (data), (size), (alignment), KK_UPLOAD_SITE())
++
++/* Playport (PLA-364): MESA_KK_DEBUG=memory census hooks (kk_cmd_buffer.c) */
++void kk_cmd_census_submitted(struct kk_cmd_buffer *cmd, bool replayed);
++void kk_cmd_census_log(void);
+ 
+ uint64_t kk_upload_descriptor_root(struct kk_cmd_buffer *cmd,
+                                    VkPipelineBindPoint bind_point);
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_pool.c b/src/kosmickrisp/vulkan/kk_cmd_pool.c
+index 5c60278..2987d68 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_pool.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_pool.c
+@@ -62,6 +62,23 @@ kk_cmd_pool_allocators_size(uint32_t *count)
+    return size;
+ }
+ 
++uint64_t
++kk_cmd_pool_allocators_largest(uint32_t *over_8mib)
++{
++   uint64_t largest = 0u;
++   *over_8mib = 0u;
++   call_once(&kk_allocators_once, kk_allocators_init);
++   mtx_lock(&kk_allocators_lock);
++   util_dynarray_foreach(&kk_allocators, mtl_command_allocator *, allocator) {
++      const uint64_t size = mtl_command_allocator_allocated_size(*allocator);
++      largest = MAX2(largest, size);
++      if (size > (8u << 20))
++         (*over_8mib)++;
++   }
++   mtx_unlock(&kk_allocators_lock);
++   return largest;
++}
++
+ static VkResult
+ kk_cmd_bo_create(struct kk_cmd_pool *pool, uint32_t size_B,
+                   uint32_t alignment_B, struct kk_cmd_bo **bo_out)
+@@ -163,6 +180,10 @@ kk_cmd_pool_free_large_bo_list(struct kk_cmd_pool *pool, struct list_head *bos)
+ {
+    list_for_each_entry_safe(struct kk_cmd_bo, bo, bos, link) {
+       list_del(&bo->link);
++      if (bo->site_live_B) {
++         p_atomic_add(bo->site_live_B, -(int64_t)bo->bo->size_B);
++         bo->site_live_B = NULL;
++      }
+       if (bo->size_class >= KK_CMD_LARGE_BO_CLASSES ||
+           bo->bo->size_B > KK_CMD_LARGE_BO_MAX) {
+          kk_cmd_bo_destroy(pool, bo);
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_pool.h b/src/kosmickrisp/vulkan/kk_cmd_pool.h
+index 06e0c20..f934b53 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_pool.h
++++ b/src/kosmickrisp/vulkan/kk_cmd_pool.h
+@@ -35,6 +35,11 @@ struct kk_cmd_bo {
+     * size_class == KK_CMD_LARGE_BO_CLASSES means uncacheable. */
+    struct list_head lru_link;
+    unsigned size_class;
++
++   /* Playport (PLA-364), MESA_KK_DEBUG=memory: while a command buffer owns
++    * this large BO, the [kk-upload] live bytes of the site that asked for it
++    * (kk_upload_site::large_live_B), NULL otherwise */
++   int64_t *site_live_B;
+ };
+ 
+ struct kk_cmd_pool {
+@@ -95,6 +100,9 @@ struct kk_cmd_allocator *kk_cmd_pool_get_allocator(struct kk_cmd_pool *pool);
+ /* The live Metal command allocators and the memory they hold, for the
+  * [kk-mem] census */
+ uint64_t kk_cmd_pool_allocators_size(uint32_t *count);
++/* The largest live allocator's size, and how many hold over 8 MiB, for the
++ * [kk-cmd-census] line */
++uint64_t kk_cmd_pool_allocators_largest(uint32_t *over_8mib);
+ void kk_cmd_pool_return_allocator(struct kk_cmd_pool *pool,
+                                   struct kk_cmd_allocator *allocator);
+ mtl_command_buffer *kk_cmd_pool_get_cmd_buf(struct kk_cmd_pool *pool);
+diff --git a/src/kosmickrisp/vulkan/kk_queue.c b/src/kosmickrisp/vulkan/kk_queue.c
+index d5dc55b..f278fb0 100644
+--- a/src/kosmickrisp/vulkan/kk_queue.c
++++ b/src/kosmickrisp/vulkan/kk_queue.c
+@@ -266,6 +266,7 @@ rerecord_and_commit_cmd_buffer(struct kk_queue *queue,
+    result = kk_BeginCommandBuffer(rerecord_handle, &begin_info);
+    if (result != VK_SUCCESS)
+       goto release;
++   rerecord->census.queue_owned = true;
+ 
+    kk_pass_prof_attach(rerecord, queue->pass_prof);
+    vk_cmd_queue_execute(&cmd->vk.cmd_queue, rerecord_handle,
+@@ -293,6 +294,7 @@ rerecord_and_commit_cmd_buffer(struct kk_queue *queue,
+    queue->commits_in_flight++;
+    kk_pass_prof_ref(rerecord->pass_prof);
+    kk_queue_commit(queue, rerecord, rerecord_commit_callback, commit);
++   kk_cmd_census_submitted(rerecord, false);
+ 
+    mtx_unlock(&queue->mutex);
+    return VK_SUCCESS;
+@@ -393,8 +395,10 @@ kk_queue_submit(struct vk_queue *vk_queue, struct vk_queue_submit *submit)
+          VkResult result = rerecord_and_commit_cmd_buffer(queue, cmd_buffer);
+          if (result != VK_SUCCESS)
+             return result;
++         kk_cmd_census_submitted(cmd_buffer, true);
+       } else if (kk_cmd_buffer_has_work(cmd_buffer)) {
+          kk_queue_commit(queue, cmd_buffer, commit_callback, dev);
++         kk_cmd_census_submitted(cmd_buffer, false);
+       }
+ 
+       cmd_buffer->submitted = true;
