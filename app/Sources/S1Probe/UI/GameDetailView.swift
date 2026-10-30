@@ -78,6 +78,7 @@ private struct GameDetailPage: View {
     #if !PLAYPORT_RELEASE
     @ObservedObject private var xbox = XboxInstalls.shared
     @ObservedObject private var xboxGames = XboxGames.shared
+    @ObservedObject private var xboxAddOns = XboxGameAddOns.shared
     #endif
     @State private var playError: String?
     @State private var controllers = GCController.controllers().count
@@ -376,6 +377,12 @@ private struct GameDetailPage: View {
         SecondaryButton(id: "game:options", systemImage: "slider.horizontal.3", title: "Options", glyph: .x, hint: "Game options") {
             navigation.gamePanels = [.options]
         }
+        #if !PLAYPORT_RELEASE
+        if job == nil, t.store == .xbox, t.source == .installed {
+            SecondaryButton(id: "game:addons", systemImage: "puzzlepiece.extension", title: xboxAddOns.title(t.key.id),
+                            enabled: !launch.running, hint: "Add-ons") { xboxAddOns.open(t) }
+        }
+        #endif
         if job == nil, t.store == .gog, t.source == .installed, let newest = gog.newest[t.key.id], newest != t.storeVersion {
             SecondaryButton(id: "game:update", systemImage: "arrow.down.circle", title: "Update", enabled: canDownloadGOG && !launch.running,
                             hint: "Update") { gog.install(t.key.id, name: t.name, kind: .update) }

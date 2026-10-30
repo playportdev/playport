@@ -94,9 +94,10 @@ enum XboxPlay {
                      + String(format: " in %.2f s", Date().timeIntervalSince(started)))
         }
 
-        // 3. The bridge: the runtime's tickets for this copy, from now to the launch's end.
-        let service = XboxBridgeService(copy: XboxBridgeCopy(productID: id, manifest: manifest), account: account.session,
-                                        updates: nil, log: log)
+        // 3. The bridge: the runtime's tickets for this copy and its add-ons (PLA-502), from now to the launch's end.
+        let addOns = XboxGameAddOns.play(base: id, folder: folder, found: XboxGameAddOns.shared.found[id] ?? [], installer: installer)
+        let service = XboxBridgeService(copy: XboxBridgeCopy(productID: id, manifest: manifest).adding(related: addOns.related),
+                                        account: account.session, updates: nil, log: log)
         let listener = XboxBridgeListener(service: service, log: log)
         do { try await listener.start() } catch {
             listener.stop()
@@ -119,7 +120,8 @@ enum XboxPlay {
         }
 
         let ended = Once()
-        return .success(Prepared(guestEnvironment: listener.guestEnvironment.merging(winhttpHTTP2) { own, _ in own },
+        return .success(Prepared(guestEnvironment: listener.guestEnvironment.merging(winhttpHTTP2) { own, _ in own }
+                                     .merging(addOns.environment) { own, _ in own },
                                  prerequisites: prerequisites) {
             guard ended.first() else { return }
             listener.stop()

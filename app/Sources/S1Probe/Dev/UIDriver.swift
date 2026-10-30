@@ -582,6 +582,9 @@ enum UIDriver {
                     for _ in 0..<300 where account.state == .unknown { try await pause(.milliseconds(100)) }
                     if id.hasPrefix("installed:") {
                         if let failure = try await xboxInstalled(String(id.dropFirst("installed:".count))) { return finish("action=\(action) failed: \(failure)") }
+                    } else if id.hasPrefix("addons:") || id.hasPrefix("addon-") {
+                        guard account.state == .signedIn else { return finish("action=\(action) refused: Xbox is not signed in") }
+                        if let failure = await XboxGameAddOns.shared.drive(id, log: { log($0) }) { return finish("action=\(action) failed: \(failure)") }
                     } else if id == "wait" {
                         for _ in 0..<1200 where account.signingIn && account.state != .signedIn && account.error == nil {
                             try await pause(.milliseconds(250))

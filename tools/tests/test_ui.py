@@ -181,6 +181,15 @@ class UiEnvTest(unittest.TestCase):
                     "xbox:installed:", "xbox:installed", "xbox:installed:9MW9469V91LM:x", "install:xbox-../x"):
             self.assertFalse(m.ACTION_RE.match(bad), bad)
 
+    def test_an_xbox_copys_add_ons_are_found_installed_and_removed_by_product_ids(self):
+        m = load()
+        for action in ("xbox:addons:9N1WK33QNSRJ", "xbox:addon-install:9N1WK33QNSRJ/9NBL11JLNLMV",
+                       "xbox:addon-remove:9N1WK33QNSRJ/9NBL11JLNLMV"):
+            self.assertEqual(m.parse(["--action", action]).action, [action])
+        for bad in ("xbox:addons:", "xbox:addons:9n1wk33qnsrj", "xbox:addon-install:9N1WK33QNSRJ", "xbox:addon-install:9N1WK33QNSRJ/",
+                    "xbox:addon-install:9N1WK33QNSRJ/9NBL11JLNLMV/x", "xbox:addon-remove:9N1WK33QNSRJ/../x", "xbox:addon-update:9N1WK33QNSRJ/9NBL11JLNLMV"):
+            self.assertFalse(m.ACTION_RE.match(bad), bad)
+
     def test_donor_pool_setting_takes_auto_and_fixed_sizes(self):
         # Settings › Developer › Donor pool (PLA-351): set:'s generic KEY=VALUE carries auto.
         m = load()
