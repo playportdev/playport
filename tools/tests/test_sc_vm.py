@@ -569,7 +569,7 @@ static void t_reported_tail(void)
     assert(count_msg("in reported tail of kind=2") == 0);
     assert(ppsc_access((void *)(uintptr_t)0x7700000000ULL, 0x1000, PPSC_OP_COMMIT));   /* CEF's, another kind */
     assert(count_msg("in reported tail of kind=2") == 1 && count_msg("in reported tail of kind=1") == 16);
-    assert(strstr(all_msgs, "real slot kind=0"));
+    assert(strstr(all_msgs, ": view owner=") && !strstr(all_msgs, "real slot kind="));
     assert(!count_msg("refused"));
     check_holds();
 }

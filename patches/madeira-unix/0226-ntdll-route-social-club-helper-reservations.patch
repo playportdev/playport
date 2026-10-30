@@ -35,21 +35,21 @@ Class: feature
 Evidence: docs/evidence/2026-10-29-sc-stock-cef-probe.md
 Offered-upstream: no
 ---
- build/ntdll-unix/pp_sc_access.h |  79 ++++++++++++++++
+ build/ntdll-unix/pp_sc_access.h |  81 ++++++++++++++++
  build/ntdll-unix/pp_sc_owner.h  |  61 ++++++++++++
  build/ntdll-unix/pp_sc_vm.h     | 162 ++++++++++++++++++++++++++++++++
  build/ntdll-unix/virtual_ios.c  |  37 +++++++-
- 4 files changed, 337 insertions(+), 2 deletions(-)
+ 4 files changed, 339 insertions(+), 2 deletions(-)
  create mode 100644 build/ntdll-unix/pp_sc_access.h
  create mode 100644 build/ntdll-unix/pp_sc_owner.h
  create mode 100644 build/ntdll-unix/pp_sc_vm.h
 
 diff --git a/build/ntdll-unix/pp_sc_access.h b/build/ntdll-unix/pp_sc_access.h
 new file mode 100644
-index 0000000..86793bb
+index 0000000..13d9e5d
 --- /dev/null
 +++ b/build/ntdll-unix/pp_sc_access.h
-@@ -0,0 +1,79 @@
+@@ -0,0 +1,81 @@
 +/* SPDX-License-Identifier: LGPL-2.1-or-later */
 +/* Reported extents are not ownership. Call before commits/decommits/protects
 + * and non-grant frees, including extended-API commits. */
@@ -98,11 +98,13 @@ index 0000000..86793bb
 +                        owner, op, address, (unsigned long long)n, k, (unsigned long long)off, j);
 +            continue;
 +        }
-+        v = j ? NULL : find_view(address, n);
++        /* No real slot is underneath: ppsc_access refuses (and logs) an
++         * operation on one this helper does not own. */
++        v = find_view(address, n);
 +        if (op == PPSC_OP_COMMIT && said_tail[k]++ < 16)
-+            dprintf(2, "[sc-layout] helper %p commit %p+0x%llx in reported tail of kind=%d off=0x%llx: real slot kind=%d owner=%p, view owner=%p\n",
-+                    owner, address, (unsigned long long)n, k, (unsigned long long)off, j,
-+                    j ? ppsc_owner[j] : NULL, v ? v->ios_owner_peb : NULL);
++            dprintf(2, "[sc-layout] helper %p commit %p+0x%llx in reported tail of kind=%d off=0x%llx: view owner=%p\n",
++                    owner, address, (unsigned long long)n, k, (unsigned long long)off,
++                    v ? v->ios_owner_peb : NULL);
 +        /* FEX and thread views here may be tagged with another owner
 +         * legitimately; that is not yet proven safe to refuse. */
 +        if (v && v->ios_owner_peb != owner && said_view[k]++ < 16)

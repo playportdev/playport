@@ -1348,7 +1348,12 @@ the trailers `Class:`, `Evidence:` and `Offered-upstream:`. The classes are:
 - `diagnostics`: logging that measures what a component does, with no
   change to what it does;
 - `ios-port`: Playport's own port to iOS of a component whose upstream runs
-  only on macOS (so far `patches/mesa`, KosmicKrisp);
+  only on macOS (`patches/mesa`, KosmicKrisp), or a change that fits a
+  component to the iOS runtime, where every Wine process is a pseudo-process
+  of one app and FEX runs inside it (also in `patches/fex`, `rpmalloc`,
+  `wine-unix`, `madeira-unix` and `wine-pe`: wine-pe 0045 keeps the runtime's
+  variables in a service's environment block, 0055 tells FEX about the images
+  loaded before it started);
 - `feature`: a capability the upstream lacks and Playport needs, such as
   KosmicKrisp's geometry shaders, which DXVK requires;
 - `madeira-port`: in `patches/wine-port`, `patches/dxmt-port`, `patches/fex-port`

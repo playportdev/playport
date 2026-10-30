@@ -313,3 +313,5 @@ Phone, one locked session each, same IPA:
 
 Not checked: any layout play (`PLAYPORT_SC_LAYOUT=1`), so the fail-closed boot, grant and diagnostic paths
 were compiled and host-tested but did not run on the phone.
+
+Review-2 fixes (0227 quiet under `MADEIRA_NO_DIAGNOSTICS` and prints `slot-view` for a freed slot view, 0226 tail line without the always-empty real-slot fields, 0055 re-exported, patch-id unchanged): dev IPA sha256 `fc42b29eff9fb1977a36783e95ba7ea0684509b3cc22593a3d4fbc2fbf87c6a1` (90 IPA checks); Hollow Knight first-frame+10 passed, first frame +12.04 s (run `$PLAYPORT_BUILD/ui-runs/20261030T112027`).
