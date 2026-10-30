@@ -95,3 +95,14 @@ Hollow Knight and RDR2, the only titles installed on the phone, on dev IPAs 55b6
     silent revert.
 - **The release app now holds the donor pool's helper memory path,** which had no release play before.
 - **`PLAYPORT_SC_BLOCK_CRASHPAD` was not measured alone** (x3, x5, x6 only).
+
+## Amendment 2026-10-30: RDR2's video memory
+
+**Approved by the owner, 2026-10-30 (PLA-476).** everyGame's `env.PLAYPORT_VK_HEAP_MB=3072` stays
+every game's default, but RDR2's own entry now overrides it with `vram-mb=2304
+env.PLAYPORT_VK_HEAP_MB=2304`
+([0142's amendment](0142-rdr2-owner-test-defaults-heap-size-semaphores-and-afp.md#amendment-2026-10-30-rdr2-is-told-2304-mib-of-video-memory)).
+This is a per-title value against this record's "as little per-game settings as possible": a smaller
+video figure trades texture streaming for memory, which is RDR2's need, not a setting that makes
+games work.
+

@@ -71,6 +71,32 @@ final class CompatDefaultsTests: XCTestCase {
         XCTAssertEqual(LaunchSettings.overEveryGame(LaunchSettings(endLauncherAfterSignIn: false)).endLauncherAfterSignIn, false)
     }
 
+    /// RDR2 is told 2,304 MiB of video memory, not 3,072 (decisions 0142 and 0153 as amended
+    /// 2026-10-30): its heap size and the plan's video figure (DXVK's DXGI, KosmicKrisp's budget) by
+    /// its entry's keys over everyGame's; every other game keeps everyGame's 3,072 heap.
+    func testRDR2IsTold2304MiBOfVideoMemory() throws {
+        let rdr2 = try XCTUnwrap(CompatDefaults.load(directory: Self.shipped).entry(for: "app-1174180"))
+        let config = LaunchSettings.resolve(game: LaunchSettings.overEveryGame(rdr2.settings), global: LaunchSettings())
+            .config(over: [:])
+        XCTAssertEqual(config["env.PLAYPORT_VK_HEAP_MB"], "2304")
+        XCTAssertEqual(config["vram-mb"], "2304")
+        XCTAssertEqual(config["jumbo-mb"], "8960")   // everyGame's other keys stay
+        let overrides = MemoryPlan.Overrides.read(value: { config[$0] }, environment: [:])
+        let plan = MemoryPlan(MemoryPlan.Inputs(limitMB: 8192, physicalMB: 11734, poolMB: 4096), overrides: overrides)
+        XCTAssertEqual(plan.videoMB, 2304)
+        XCTAssertEqual(plan.dxvkOption, "dxgi.maxDeviceMemory = 2304")
+        XCTAssertEqual(plan.vulkanEnvironment[MemoryPlan.vulkanBudgetVariable], "2304")
+        // A person's Runtime keys still win (a dev build's row).
+        let own = LaunchSettings(runtime: "vram-mb=3072 env.PLAYPORT_VK_HEAP_MB=3072")
+            .over(LaunchSettings.overEveryGame(rdr2.settings))
+        let mine = LaunchSettings.resolve(game: own, global: LaunchSettings()).config(over: [:])
+        XCTAssertEqual(mine["vram-mb"], "3072")
+        XCTAssertEqual(mine["env.PLAYPORT_VK_HEAP_MB"], "3072")
+        let plain = LaunchSettings.resolve(game: LaunchSettings.overEveryGame(nil), global: LaunchSettings()).config(over: [:])
+        XCTAssertEqual(plain["env.PLAYPORT_VK_HEAP_MB"], "3072")
+        XCTAssertNil(plain["vram-mb"])
+    }
+
     /// The Witcher 3's current build gets short reservations (patches/madeira-unix 0222) and keeps
     /// FEX's PAUSE (decision 0163 withdrew 0162's WFE); its classic branch's cohort hold (jumbo-mb=32768) stays, since the entry names no jumbo-mb.
     func testTheWitcher3GetsShortReservationsAndKeepsItsCohortHold() throws {
