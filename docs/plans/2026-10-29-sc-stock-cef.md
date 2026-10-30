@@ -260,6 +260,18 @@
     builds, Playport's CEF removed) is still open.
   - Phone gates next: HK first-frame+10; RDR2 on l12's keys with the game-SC end left unset, to the cabin
     held to first-frame+600, with no game-SC end, no restart refusal, every V8 code range on an aligned base.
+- **KosmicKrisp command memory, owner decision 2026-10-30 after l19 (PLA-364), built, not yet on the phone**
+  (`d64b623`; dev IPA `6f1751c7…`, `.work/out/20261030-230828-6f1751c7/`, 90 checks):
+  design 2A (release reusable primaries' holds) is dropped: l19 shows they hold under 1 MiB. The retire path
+  is chosen instead: mesa 0132 `MESA_KK_EXPERIMENTAL=cmd_retire` (named only, not in `all`) gives a ONE_TIME
+  primary's upload BOs and allocator hold back to its pool when its only commit completes, and resets, seals
+  (8 MiB), taints (released uncommitted: destroyed, never reset) or shares allocators at Begin; 0133
+  `cmd_bo_classes` adds quarter-octave large-BO classes to 2 MiB. Both are **opt-in**: no game's default changes;
+  RDR2 gets them for the gates through its Graphics options row
+  (`MESA_KK_EXPERIMENTAL=cmd_retire,cmd_bo_classes`). Design:
+  `.work/agent-notes/pla476/reports/kk-retire-impl.md`; host test `kk-cmd-retire-test.c`. Phone gates next: HK on
+  Vulkan with and without the option (first-frame+10 and `pp perf`), then RDR2 on l19's protocol with the option,
+  compared with l19's `[kk-cmd-census]`, `[kk-upload]`, `[kk-mem]` and peak.
 - **Chunk-2 gates after l19:**
 
   | Gate | l7 | l8 | l9 | l10 | l11 | l12 | l13 | l14 | l15 | l16 | l17 | l18 | l19 |
