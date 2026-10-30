@@ -180,7 +180,7 @@
 //   xbox-save:wait | xbox-save:local | xbox-save:cloud | xbox-save:later
 //                              After a play: (they run while the game runs): an Xbox game's
 //                              save conflict card (Dev/XboxCloudSaves.swift): wait for it and log
-//                              both sides, then A, X or B (Dev/XboxSaveDriver.swift)
+//                              both sides, then Y twice (confirmed), X or B (Dev/XboxSaveDriver.swift)
 //   set:<key>=<value>          Sets a UserDefaults key, as a Settings control does:
 //                              true/false a Bool, an integer an Int, else a String
 //                              (`set:metalHUD=true`)

@@ -4,10 +4,13 @@
 // the game saves; with the cloud unreachable it plays on the phone's saves and syncs at
 // the next connected play (patches/xgameruntime/0002 for file saves). When both sides
 // changed since they last matched it asks here, over the play's bridge
-// (XboxClientKit XboxBridgeService, SAVE_CONFLICT_REQUEST): a card over the paused game
-// shows each side's time and device, A keeps the phone's, X the cloud's, B decides
-// later (this play on the phone's saves, the question again next time). The game's end
-// answers B. A copy's unsynced saves are read from the runtime's index (XboxSaves).
+// (XboxClientKit XboxBridgeService, SAVE_CONFLICT_REQUEST), once for each save that
+// conflicts: a card over the paused game names that save and shows each side's time and
+// device. A or B decides later (the default: this play on the phone's saves, both sides
+// kept, the question again next time), X keeps the cloud's (the runtime sets the phone's
+// aside as a copy), and keeping the phone's, which replaces the cloud's (the runtime keeps
+// the cloud's as a copy first), takes Y twice. The game's end or a sign-out answers later.
+// A copy's unsynced saves are read from the runtime's index (XboxSaves).
 
 import ContentKit
 import Foundation
@@ -56,6 +59,8 @@ final class XboxSaveConflictPrompt: ObservableObject {
         let game: String
     }
     @Published private(set) var shown: Shown?
+    /// Y pressed once: the card asks for Y again before the phone's saves replace the cloud's.
+    @Published private(set) var confirmingLocal = false
     private var answer: CheckedContinuation<XboxSaveChoice, Never>?
     private var nav = PadNavigation()
     private var shownAt = Date.distantPast
@@ -73,6 +78,7 @@ final class XboxSaveConflictPrompt: ObservableObject {
             nav.reset()
             shownAt = Date()
             lastChoice = nil
+            confirmingLocal = false
             shown = Shown(conflict: conflict, productID: productID, game: game)
             HostIO.shared.holdGuest()
             log("\(StoreGameKey(store: .xbox, id: productID)): conflict asked")
@@ -84,6 +90,7 @@ final class XboxSaveConflictPrompt: ObservableObject {
         guard let c = answer else { return }
         answer = nil
         shown = nil
+        confirmingLocal = false
         lastChoice = choice
         HostIO.shared.releaseGuest()
         log("keeping \(choice == .none ? "both, this play on the phone's" : choice == .local ? "the phone's" : "the cloud's") (\(why))")
@@ -101,12 +108,15 @@ final class XboxSaveConflictPrompt: ObservableObject {
         for b in presses { press(b) }
     }
 
+    /// A and B: decide later. X: the cloud's. Y twice: the phone's (Y once, then anything
+    /// else, decides nothing).
     func press(_ b: NavButton) {
         switch b {
-        case .a: choose(.local, why: "A")
+        case .a, .b: choose(.none, why: b == .a ? "A" : "B")
         case .x: choose(.cloud, why: "X")
-        case .b: choose(.none, why: "B")
-        default: break
+        case .y:
+            if confirmingLocal { choose(.local, why: "Y, confirmed") } else { confirmingLocal = true }
+        default: confirmingLocal = false
         }
     }
 
@@ -114,6 +124,7 @@ final class XboxSaveConflictPrompt: ObservableObject {
     var summary: String? {
         guard let s = shown else { return nil }
         return "phone \(Self.when(s.conflict.local.time)) on \(Self.phone), cloud \(Self.when(s.conflict.cloud.time)) on \(Self.device(s.conflict.cloud))"
+            + (confirmingLocal ? "; asking to confirm the phone's" : "")
     }
 
     static var phone: String { "this \(UIDevice.current.model)" }
@@ -131,19 +142,27 @@ struct XboxSaveConflictView: View {
                 Color.black.opacity(0.82).ignoresSafeArea()
                 VStack(spacing: 18) {
                     Image(systemName: "icloud.and.arrow.down").font(.system(size: 40)).foregroundStyle(.secondary)
-                    Text("\(s.game): which saves do you want to keep?").font(.title3.weight(.semibold))
+                    Text("\(s.game): which “\(s.conflict.displayName)” do you want to keep?").font(.title3.weight(.semibold))
                         .multilineTextAlignment(.center)
-                    Text("“\(s.conflict.displayName)” changed on this phone and in your Xbox cloud since they last matched.")
+                    Text("This save changed on this phone and in your Xbox cloud since they last matched. Only this save is asked about; "
+                         + "another one that conflicts gets its own question.")
                         .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
                     HStack(alignment: .top, spacing: 16) {
                         card("This phone", when: s.conflict.local.time, device: XboxSaveConflictPrompt.phone,
-                             button: "Keep these  Ⓐ", prominent: true) { prompt.press(.a) }
+                             button: prompt.confirmingLocal ? "Replace the cloud's  Ⓨ" : "Keep these  Ⓨ",
+                             destructive: prompt.confirmingLocal) { prompt.press(.y) }
                         card("Xbox cloud", when: s.conflict.cloud.time, device: XboxSaveConflictPrompt.device(s.conflict.cloud),
-                             button: "Keep these  Ⓧ", prominent: false) { prompt.press(.x) }
+                             button: "Keep these  Ⓧ", destructive: false) { prompt.press(.x) }
                     }
-                    Text("The saves you don't keep are replaced; the phone's stay aside as a copy if you keep the cloud's.")
-                        .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                    Button("Decide later  Ⓑ") { prompt.press(.b) }.buttonStyle(.bordered)
+                    if prompt.confirmingLocal {
+                        Text("Press Ⓨ again to replace the cloud's “\(s.conflict.displayName)” with this phone's. "
+                             + "The cloud's is kept as a copy on this phone first.")
+                            .font(.callout.weight(.semibold)).multilineTextAlignment(.center)
+                    } else {
+                        Text("Keeping one side replaces the other; the side you don't keep stays on this phone as a copy.")
+                            .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                    }
+                    Button("Decide later  Ⓑ") { prompt.press(.b) }.buttonStyle(.borderedProminent)
                 }
                 .padding(24)
                 .frame(maxWidth: 640)
@@ -154,17 +173,13 @@ struct XboxSaveConflictView: View {
         }
     }
 
-    private func card(_ heading: String, when: Date?, device: String, button: String, prominent: Bool,
+    private func card(_ heading: String, when: Date?, device: String, button: String, destructive: Bool,
                       action: @escaping () -> Void) -> some View {
         VStack(spacing: 8) {
             Text(heading).font(.headline)
             Text(XboxSaveConflictPrompt.when(when)).font(.body.monospacedDigit())
             Text("on \(device)").font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
-            if prominent {
-                Button(button, action: action).buttonStyle(.borderedProminent)
-            } else {
-                Button(button, action: action).buttonStyle(.bordered)
-            }
+            Button(button, role: destructive ? .destructive : nil, action: action).buttonStyle(.bordered)
         }
         .padding(16)
         .frame(maxWidth: .infinity)

@@ -23,6 +23,8 @@ final class XboxAccount: ObservableObject {
     @Published private(set) var exchanging = false
     let session: XboxSession
     private var exchange: Task<Void, Never>?
+    /// Sign-outs the player asked for (Sign out, Reset device) not yet heard back.
+    private var asked = 0
 
     private init() {
         #if canImport(Security)
@@ -31,7 +33,21 @@ final class XboxAccount: ObservableObject {
         let store = MemorySecretStore()
         #endif
         session = XboxSession(store: store, log: ContentKit.Logger { AppLog.append("xbox: " + $0) })
-        Task { await restore() }
+        Task {
+            _ = await session.onSignOut { Task { @MainActor in XboxAccount.shared.ended() } }
+            await restore()
+        }
+    }
+    /// The session ended: the player's sign-out or device reset, or Microsoft refusing to
+    /// renew it (at app start or mid-play). Every way runs the same clean-up: the play's
+    /// bridge is closed by its own handler, and here the account shows signed out, the
+    /// runtime's offline identities go and a save question still up is closed. A refusal
+    /// asks for sign-in again.
+    private func ended() {
+        state = .signedOut
+        if asked > 0 { asked -= 1; error = nil } else { error = XboxSessionError.signInRequired.description }
+        XboxOfflineDeviceModel.removeIdentities()
+        XboxSaveConflictPrompt.shared.choose(.none, why: "signed out")
     }
     func restore() async {
         state = await session.state == .signedIn ? .signedIn : .signedOut
@@ -66,12 +82,14 @@ final class XboxAccount: ObservableObject {
     func closeSignIn() { exchange?.cancel(); page = nil }
     func signOut() async {
         exchange?.cancel()
-        do { try await session.signOut(); state = .signedOut; error = nil; signingIn = false; page = nil; XboxOfflineDeviceModel.removeIdentities() }
+        asked += 1
+        do { try await session.signOut(); state = .signedOut; error = nil; signingIn = false; page = nil }
         catch { self.error = Self.message(error) }
     }
     func resetDevice() async {
         exchange?.cancel()
-        do { try await session.resetDevice(); state = .signedOut; error = nil; signingIn = false; page = nil; XboxOfflineDeviceModel.removeIdentities() }
+        asked += 1
+        do { try await session.resetDevice(); state = .signedOut; error = nil; signingIn = false; page = nil }
         catch { self.error = Self.message(error) }
     }
     private static func message(_ error: Error) -> String {
