@@ -328,9 +328,12 @@ Valve's ARM64 Proton (bleeding-edge) is the reference, never the base.
 
 `plans/2026-10-16-cef-low-va-build.md` ([PLA-370](https://linear.app/playportdev/issue/PLA-370);
 [decision 0110](../decisions/0110-own-cef-build-for-a-clients-cef.md)). Stages A–D done
-2026-10-16/18, merged with the Rockstar track (`dfc527f`); removed 2026-10-19. Playport builds
-CEF 143.0.14 from source on Linux (xwin) with low-address-space settings and loads it in place of
-Social Club's CEF of the exact same version (wine-unix 0039); it ships in the dev IPA only.
+2026-10-16/18, merged with the Rockstar track (`dfc527f`); the plan removed 2026-10-19. Playport built
+CEF 143.0.14 from source on Linux (xwin) with low-address-space settings and loaded it in place of
+Social Club's CEF of the exact same version (wine-unix 0039); it shipped in the dev IPA only.
+Superseded by Rockstar's own CEF ([decision 0169](../decisions/0169-social-club-on-rockstars-cef-in-the-stock-cef-layout.md))
+and removed on 2026-10-31 (PLA-476 chunk 4, PLA-603): no IPA carries the payload, and `pp verify` fails
+one that does.
 - **Stages:** toolchain and stock build ([swap test](../evidence/2026-10-16-cef-swap-test.md)); the
   low-VA build ([evidence](../evidence/2026-10-16-cef-low-va-build.md)); on the phone, after the
   alias table (PLA-373), fonts (PLA-374), fewer processes
@@ -344,10 +347,10 @@ Social Club's CEF of the exact same version (wine-unix 0039); it ships in the de
   was not adopted.
 - **Stage E:** the account signed in through RDR2's Steam copy (the
   [Steam bridge slice](#steam-bridge-for-rdr2)); the launcher then reached its main window.
-- **Open:** the pool head's thin margin ([PLA-399](https://linear.app/playportdev/issue/PLA-399),
+- **Open when removed:** the pool head's thin margin ([PLA-399](https://linear.app/playportdev/issue/PLA-399),
   sharing image copies is PLA-377); distribution of the payload
-  ([PLA-372](https://linear.app/playportdev/issue/PLA-372)); the browser timeout watch item
-  (PLA-371); the FEX self-modifying-code fix (PLA-367); RDR2 through the launcher (PLA-401,
+  ([PLA-372](https://linear.app/playportdev/issue/PLA-372), dropped with the build); the browser timeout
+  watch item (PLA-371); the FEX self-modifying-code fix (PLA-367); RDR2 through the launcher (PLA-401,
   PLA-295).
 
 ## Steam bridge for RDR2
