@@ -129,7 +129,7 @@ int main(void) {
     {
         size_t page = (size_t)sysconf(_SC_PAGESIZE), size = 4 * page;
         unsigned char *view = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        int peb_a, peb_b;
+        int peb_a = 0, peb_b = 0;
         void *owner = &peb_a;
         assert(view != MAP_FAILED);
         memset(view, 0xa5, size);

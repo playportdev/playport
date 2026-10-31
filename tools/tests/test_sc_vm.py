@@ -84,8 +84,8 @@ static WCHAR game_path[] = u"C:\\Games\\RDR2.exe";
 static PEB *cur;
 static void *ios_jit_current_peb(void) { return cur; }
 
-static int virtual_mutex, mutex_depth, mutex_max;
-static void server_enter_uninterrupted_section(int *m, sigset_t *s) { (void)m; (void)s; mutex_depth++; mutex_max++; }
+static int virtual_mutex, mutex_depth;
+static void server_enter_uninterrupted_section(int *m, sigset_t *s) { (void)m; (void)s; mutex_depth++; }
 static void server_leave_uninterrupted_section(int *m, sigset_t *s) { (void)m; (void)s; mutex_depth--; assert(mutex_depth >= 0); }
 
 static int dprintf_calls;

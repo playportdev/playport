@@ -19,13 +19,12 @@ MOCK = r'''
 
 struct tinfo { char name[32], group[32], units[32]; };
 struct einfo { int64_t balance, credit, debit; uint64_t limit, period, last; };
-static int refuse, calls;
+static int refuse;
 static const char *names[] = {"cpu_time", "phys_footprint", "page_table", "internal", "alternate_accounting", "iokit_mapped"};
 static const int64_t mb[] = {7, 7072, 5, 5986, 2100, -1};
 
 int ledger(int cmd, caddr_t a1, caddr_t a2, caddr_t a3)
 {
-    calls++;
     int n = (int)(sizeof(names) / sizeof(names[0]));
     if (cmd == 2) {                      /* LEDGER_TEMPLATE_INFO: records in a1, count in a2 */
         int *len = (int *)a2;

@@ -188,7 +188,7 @@ static _Thread_local struct Loop *current;
 static struct Task *task, *pending;
 static pthread_t renderer;
 static int allocations, constructions, originals, posts, allocation_fail, accept_post = 1;
-static int queue, due, completed, delayed_completed, work_calls, delayed_calls, idle_calls;
+static int queue, due, completed, delayed_completed, work_calls, idle_calls;
 static uint32_t expected_level = 1;
 static void *expected_handler = (void *)0x12345678;
 static struct Loop *browser_loop;
@@ -258,7 +258,6 @@ static unsigned char ABI do_work(struct Loop *loop)
 static unsigned char ABI do_delayed(struct Loop *loop, uint64_t *next_due)
 {
     verify_loop(loop);
-    delayed_calls++;
     *next_due = 0;
     if (!due) return 0;
     due--; delayed_completed++;
