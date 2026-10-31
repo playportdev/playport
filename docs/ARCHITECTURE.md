@@ -71,9 +71,16 @@ with its own PEB and private ntdll copy:
   The x86-64 session starts it with its own aarch64 ntdll (`patches/madeira-unix` 0249,
   the image a WoW64 child's native side uses), no WoW64 window and no FEX; its system
   DLLs come from `sysarm64` (`patches/wine-pe` 0015, 0056). Its image and DLLs take the
-  JIT pool copy and x18 patching like any ARM64 image; code it writes runs through the
-  anonymous executable path. `tools/compat/probes` `arm64`, `arm64-fault` and
-  `arm64-min` test it ([evidence](evidence/2026-10-30-native-arm64-child.md)). Its
+  JIT pool copy and x18 patching like any ARM64 image, and the copy is the image
+  ([decision 0176](decisions/0176-native-arm64-images-live-in-the-jit-pool.md),
+  `patches/madeira-unix` 0262): the mapping returns the copy's address, so the PEB, the
+  module list and the unwinder hold the address the code runs at. The PE view stays as
+  Wine's backing store, which the virtual-memory calls translate to and from, and which
+  the IAT sync never copies over the copy. Its private ntdll stays on its view.
+  A context continued with Cpsr.SS is stepped in software (0253, 0256, 0259, 0261);
+  code it writes runs through the anonymous executable path. `tools/compat/probes`
+  `arm64`, `arm64-fault` and `arm64-min` test it
+  ([evidence](evidence/2026-10-30-native-arm64-child.md)). Its
   Direct3D 12 is the Vulkan backend's aarch64 set (`Runtime/vulkan*/aarch64-windows`)
   linked over `sysarm64` by a Vulkan launch; the `d3d12` probe tests it
   ([evidence](evidence/2026-10-30-arm64-d3d12.md)).

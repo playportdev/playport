@@ -5,7 +5,9 @@
 runs on the phone and Hollow Knight still reaches first frame+10
 ([PLA-512](https://linear.app/playportdev/issue/PLA-512)). When accepted, it amends
 [0082](0082-system32-programs.md) ("an x86-64 process cannot start a pure ARM64 one here") and
-`ARCHITECTURE.md`'s "All guests are x86".
+`ARCHITECTURE.md`'s "All guests are x86". Amended by
+[0176](0176-native-arm64-images-live-in-the-jit-pool.md): the child's images live in the JIT pool,
+whose copy is the module's base.
 
 ## Decision
 

@@ -63,3 +63,21 @@ Hollow Knight on IPA 6e598040: first-frame+10 passes (run 20261031T234011).
    loader and the virtual-memory views, and is not done here.
 
 Hollow Knight on IPA 70718df4…: first-frame+10 passes (run 20261031T234751).
+
+## The pool copy as the image (decision 0176, madeira-unix 0262)
+
+IPA `d4c7ef73326c14a27fe7f8c66c5532616d33c398235d3d972c560bd41ed220ca`. A native ARM64 child is now given
+each image's pool copy as the module (`[native-image] … the image is its pool copy` for the exe and every
+DLL but its ntdll). The PE-side unwinder translated pool pcs to the view and looped in `virtual_unwind`
+(the `arm64` probe hung, run 20261031T235908) until its reverse translation left presented copies alone.
+
+- **The probes and Hollow Knight on this IPA:** `arm64` probe exit 42, which is all checks passing
+  (run 20261101T002236); `d3d12` probe on Vulkan exit 0 (run 20261101T002202); Hollow Knight
+  first-frame+10 passes (run 20261101T002112). `pp test --quick` passes.
+- **WoW (run 20261101T001536, the same runtime):** the store fault is gone, and exceptions carry pool
+  addresses. WoW handles 13 planned UDFs, then `blr x26` at +0x26670 jumps to +0xb3794. In the file
+  and the copy, those bytes are not code (0xc272545e): an illegal instruction, which WoW's handler
+  turns into "Game Initialization Failed: M". Still open is whether x26 is a pointer computed from a
+  wrong value or a region WoW expects to have decrypted, or to fault on, first: protecting a
+  presented copy changes Wine's view and leaves the pool page RX, so a region WoW makes no-access
+  or non-executable would not fault.
