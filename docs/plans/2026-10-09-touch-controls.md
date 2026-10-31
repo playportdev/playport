@@ -315,6 +315,15 @@ proposed answer unless the owner says otherwise before the phase that needs them
   - **Review (supervisor, 2026-10-30):** the starting layout takes 0074's order, the title's
     compatibility default before Settings' Starting layout (a fix chunk); the touch keyboard's
     touches above its panel reach the game, the one exception to 2e's ignored touches.
+- **Phases 4–5 on the phone (2026-10-31, PLA-538)** ([evidence](../evidence/2026-10-31-touch-controls-phases-4-5.md)):
+  the branch was rebased on main as `dev/pla-13-touch-controls-gates` (the commit hashes above are
+  the pre-rebase ones; the XInput counter is madeira-unix 0247). Dev IPA `6f177007…` installed. Passed:
+  Hollow Knight `first-frame+10` (7 plays), the touch keyboard into Portal 2's console, Point &
+  click on Hollow Knight's menu, a driven own Keyboard & mouse copy (its keys reach the game), the
+  editor over the paused game. Not run: Portal 2 Keyboard & mouse in a level (Portal 2 crashes on
+  main, PLA-596), the editor from Game options (`open:ID#layout`, PLA-597). Follow-up: PLA-598.
+  Release IPA `173f7f90…` built and verified, not installed. **Next: the owner's hands-on play,
+  the release install and the sign-offs; then merge to main.**
 
 ## Goal
 
