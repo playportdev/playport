@@ -964,12 +964,14 @@ the keyboard open. Behind the menu the game is paused:
     along with the launcher's tree.
 - **The game's own Social Club end.** `PP_CONTROL_END_GAME_SOCIAL_CLUB`, 120 s or more after the
   sign-in near the limit, ends the `SocialClubHelper.exe` processes under RDR2.exe, and ntdll refuses
-  their later starts (`PLAYPORT_REFUSE_GAME_SC_RESTART`). Both are on in dev and release builds unless
-  Settings › Graphics turns them off (`GameSocialClubEnd.swift`; decisions 0133, 0138, 0141,
-  [0153](decisions/0153-rdr2s-settings-are-every-games-defaults.md)). Under the stock-CEF Social Club
-  layout (`PLAYPORT_SC_LAYOUT=1`) neither runs unless a dev build's stored switch turns the end on
-  (`GameSocialClubEndPolicy`; decision
-  [0169](decisions/0169-social-club-on-rockstars-cef-in-the-stock-cef-layout.md)). If the game signs in again
+  their later starts (`PLAYPORT_REFUSE_GAME_SC_RESTART`). Every Play of Rockstar's launcher, RDR2's and
+  the Open, runs Social Club on Rockstar's own CEF, single-process, in the stock-CEF layout, in both
+  builds (`PublisherLauncher.rockstar`'s `env.PLAYPORT_SC_LAYOUT=1 env.PLAYPORT_SC_SINGLE=1`; decision
+  [0169](decisions/0169-social-club-on-rockstars-cef-in-the-stock-cef-layout.md)), and under the layout
+  neither runs unless a dev build's stored switch turns the end on (`GameSocialClubEndPolicy`). Only a
+  dev build's `env.PLAYPORT_SC_LAYOUT=0` brings back 0153's default: both on unless Settings › Graphics
+  turns them off (`GameSocialClubEnd.swift`; decisions 0133, 0138, 0141,
+  [0153](decisions/0153-rdr2s-settings-are-every-games-defaults.md)). If the game signs in again
   after the end (a new sign-in line in its Social Club log, or a GetCurrentGameLanguage burst within
   60 s) and the footprint plus 600 MB is under the limit less 400 MB, the app sends
   `PP_CONTROL_ALLOW_GAME_SOCIAL_CLUB` (the root's sweep stops) and then

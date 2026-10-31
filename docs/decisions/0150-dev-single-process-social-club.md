@@ -9,8 +9,10 @@ rule covers only the installed `SocialClubHelper.exe` page bridge described here
 It does not permit patching any other Rockstar component or build.
 
 **Amended 2026-10-30 by [0169](0169-social-club-on-rockstars-cef-in-the-stock-cef-layout.md) (owner, PLA-476):** single-process is on by default, in release
-too, with the stock-CEF layout and no keys (the plan's chunk 4, still open: until it lands the keys are
-needed). The exact-build guard, the page-bridge exception and the multi-process fallback are unchanged.
+too, with the stock-CEF layout and no keys. Built 2026-10-31 (the plan's chunk 4, `d1aff807`, `1424a0ac`,
+PLA-602): `playport_sc_single_enabled` is on in both builds, and only a dev build's `env.PLAYPORT_SC_SINGLE=0`
+turns it off; "Off by default, dev only" below is the record of 2026-10-20. The exact-build guard, the
+page-bridge exception and the multi-process fallback are unchanged.
 
 **Amended 2026-10-30 (owner, PLA-476):** a verified browser also gets
 `--disable-component-update` unless its command line has it, as
@@ -102,6 +104,8 @@ added: under `--single-process` the GPU service already runs as a thread of the 
   forged or made to succeed. Sign-in and its real result remain the helper's.
   No installed executable or DLL is changed on disk. Playport's version-matched
   CEF substitution from 0110 remains in place; no game-side libcef refusal is ported.
+  *(Amended 2026-10-31: the substitution is removed (0169, the plan's chunk 4, merge `b5814a58`); the
+  verified helper runs Rockstar's own CEF, and still no game-side libcef refusal is ported.)*
 
 ## Relationship to the memory experiments
 

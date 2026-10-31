@@ -13,12 +13,15 @@ a launcher helper's slot view is [0166](0166-detach-a-parked-threads-wait-then-u
 [evidence](../evidence/2026-10-29-sc-stock-cef-probe.md),
 [l19](../evidence/2026-10-30-rdr2-kk-audio-diagnostics.md).
 
-**What is built and what is open.** Built: the layout behind its dev keys (madeira-unix 0224–0231), the low
-hold (PLA-480), ELF_META2 (0228), the probe refusal (0236), the code-range placement (0243) and the
-game-helper end's default under the layout (`GameSocialClubEndPolicy`). Open, as the plan's chunk 4: turning
-the layout and single-process on with no keys in both builds, and removing Playport's CEF build. Until it
-lands, a layout play still needs `env.PLAYPORT_CEF_SWAP=0 env.PLAYPORT_SC_SINGLE=1 env.PLAYPORT_SC_LAYOUT=1`,
-and the dev IPA still carries Playport's CEF payload.
+**What is built and what is open.** Built: the layout (madeira-unix 0224–0231), the low hold (PLA-480),
+ELF_META2 (0228), the probe refusal (0236), the code-range placement (0243), the game-helper end's default
+under the layout (`GameSocialClubEndPolicy`) and the plan's chunk 4 (2026-10-31): single-process on by default
+in both builds (`d1aff807`, PLA-602), the layout and single-process carried by `PublisherLauncher.rockstar`'s
+runtime for every Rockstar Play (`1424a0ac`), and Playport's CEF build removed with `pp verify`'s `cef` check
+(merge `b5814a58`, PLA-603). A layout play needs no keys, and no IPA, dev or release, carries a CEF payload.
+As built, the layout is every Play of Rockstar's launcher (its Open and RDR2's), not "every Play with a
+verified helper" (below); other titles never get it, and a dev build's `=0` key turns the layout or
+single-process off. Open: the phone gates, chunk 6 ([PLA-605](https://linear.app/playportdev/issue/PLA-605)).
 
 ## Context
 

@@ -4,11 +4,23 @@
 [PLA-364](https://linear.app/playportdev/issue/PLA-364) (RDR2),
 [PLA-475](https://linear.app/playportdev/issue/PLA-475) (0.5.0, held for this),
 [PLA-372](https://linear.app/playportdev/issue/PLA-372) (CEF payload distribution, to be cancelled),
-[PLA-254](https://linear.app/playportdev/issue/PLA-254) (publisher launchers).
+[PLA-254](https://linear.app/playportdev/issue/PLA-254) (publisher launchers). Sub-issues:
+[PLA-602](https://linear.app/playportdev/issue/PLA-602) (chunk 4: on by default),
+[PLA-603](https://linear.app/playportdev/issue/PLA-603) (chunk 4: Playport's CEF removed),
+[PLA-604](https://linear.app/playportdev/issue/PLA-604) (chunk 5: docs),
+[PLA-605](https://linear.app/playportdev/issue/PLA-605) (chunk 6: gates).
 
 **Status** (resume here; run log is in a PLA-476 Linear comment):
 
 - Branch `dev/pla-476-sc-stock-cef`, unmerged and unpushed (HEAD: see `git log`).
+- **Chunk 4 built, 2026-10-31, host checks only** (no phone run): PLA-602 (`d1aff807`: single-process on by
+  default in both builds, a dev `PLAYPORT_SC_SINGLE=0` turns it off; `1424a0ac`: `PublisherLauncher.rockstar`'s
+  runtime carries `env.PLAYPORT_SC_LAYOUT=1 env.PLAYPORT_SC_SINGLE=1`, so RDR2's Play and the launcher's Open run
+  the layout in both builds with no keys, other titles never, a dev `=0` wins) and PLA-603 (merge `b5814a58`:
+  wine-unix 0039, `cef_swap` with the chunk-1 key, the payload, `build/cef`, `patches/cef`, `patches/chromium` and
+  their pins removed; `pp verify`'s `cef` check fails any IPA carrying a CEF payload). Chunk 3 skipped: since l7 the
+  game's helper takes its own slots, so no libcef refusal is needed. Chunk 5's docs done (PLA-604). Next: chunk 6,
+  the phone gates ([PLA-605](https://linear.app/playportdev/issue/PLA-605)).
 - Chunks 0 and 1 done. Chunk 2 **not passed** ([evidence](../evidence/2026-10-29-sc-stock-cef-probe.md)):
   0224–0226 give the opt-in layout; wine-pe 0055 (early-image replay,
   [PLA-481](https://linear.app/playportdev/issue/PLA-481), Done) is an accepted increment (HK first-frame+10,
@@ -537,7 +549,12 @@ The xs1 log shows `libcef.dll` mapped in the game's process too (with Playport's
 stock CEF the game's own load reserves pools that do not fit, port `ios_sc_cef_refuse`. **Ask the
 owner first:** it is a refused DLL load in the game, and 0150 excluded it. Otherwise skip.
 
+**Skipped:** since l7 the game's helper takes its own slots (kinds 1–6), so no refusal is needed.
+
 ### 4. Single-process in both builds; remove Playport's CEF
+
+**Built 2026-10-31** (PLA-602, PLA-603; Status above). As built, the layout and single-process come from
+`PublisherLauncher.rockstar`'s runtime keys, so every Rockstar Play runs them and no other title does.
 
 - **0190's gate.** `playport_sc_single_enabled` is on by default and in release:
   - `PLAYPORT_SC_SINGLE=0` turns it off (dev runtime key);
@@ -571,8 +588,8 @@ owner first:** it is a refused DLL load in the game, and 0150 excluded it. Other
 
 **Recorded** as [0169](../decisions/0169-social-club-on-rockstars-cef-in-the-stock-cef-layout.md) (owner,
 2026-10-30), with the code-range placement rule (0243) and no end of the game's helper under the layout.
-Still open: the doc updates below that depend on chunk 4's removal (`BUILDING.md`, `LICENSING.md`,
-`NOTICES.md`, `DISTRIBUTION.md`, `docs/plans/finished.md`).
+**Done 2026-10-31** (PLA-604): the doc updates that depended on chunk 4's removal. `LICENSING.md`, `NOTICES.md`
+and `DISTRIBUTION.md` name no CEF payload; `BUILDING.md` names `pp verify`'s `cef` check.
 
 A new decision (next free number; 0166 is the last). The retention of a launcher helper's slot view is already
 decided by [0166](../decisions/0166-detach-a-parked-threads-wait-then-unpin-its-view.md). It:

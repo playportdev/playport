@@ -11,8 +11,10 @@ shows Social Club's Sign In page on the phone. Through the Steam bridge slice
 ([finished](finished.md#steam-bridge-for-rdr2), PLA-398), RDR2's Steam copy signs in and reaches the
 launcher's main window. It then ends on `0xc0000096` under FEX
 ([PLA-401](https://linear.app/playportdev/issue/PLA-401), parked), so Stage 2 (PLA-295) is not
-reached. Also open: the pool head's margin (PLA-399), the FEX self-modifying-code fix (PLA-367) and
-distribution of the CEF payload (PLA-372). All of this is merged into `main` (`dfc527f`). The
+reached. Also open: the pool head's margin (PLA-399) and the FEX self-modifying-code fix (PLA-367).
+All of this is merged into `main` (`dfc527f`). Playport's CEF, and with it distribution of its payload
+(PLA-372), was dropped for Rockstar's own CEF on 2026-10-31
+([decision 0169](../decisions/0169-social-club-on-rockstars-cef-in-the-stock-cef-layout.md)). The
 Progress log below is in its original order: the newest entries are not at the end.
 **Review 2026-10-13:** the owner took D1–D10 as recommended (74c7c52); the answers are under
 [Owner decisions](#owner-decisions). Next: Stage 0, with its workstation reconnaissance (Stage R,

@@ -199,6 +199,11 @@ repository. A tree Madeira's scripts built before a flag change keeps the old
 paths: rebuild it with `--clean`. Prebuilt parts keep their own CI's paths
 (StikJIT, llvm-mingw's libc++abi).
 
+**No CEF in the IPA.** Social Club runs on Rockstar's own CEF ([decision
+0169](decisions/0169-social-club-on-rockstars-cef-in-the-stock-cef-layout.md)), so
+Playport builds and ships none: `pp verify`'s `cef` check fails a dev or release
+IPA with a `libcef.dll`, `chrome_elf.dll` or `cef` directory anywhere in the app.
+
 ### KosmicKrisp
 
 `build/stages/mesa.sh [ROOT]` builds Mesa's Vulkan driver for iOS from the

@@ -27,7 +27,7 @@ and account inventories stay in `.work`, not in the plan or Linear.
 | [Red Dead Redemption 2](2026-10-12-rdr2.md) | [PLA-254](https://linear.app/playportdev/issue/PLA-254); PLA-268, 269, 276, 300, 301, 364 | Partly under way. Memory (PLA-216) is [done](finished.md#guest-ram-from-donor-processes). The Vulkan needs are fixed on the host (PLA-386). The game is installed and its launcher signs in, then stops (PLA-401), so the game itself has not started. Online is not pursued. |
 | [ppsync](2026-10-21-ppsync.md) | [PLA-427](https://linear.app/playportdev/issue/PLA-427) | Merged to main on 2026-10-22, on by default (decision 0157, proposed); the owner's play and a `pp perf` comparison against fastsync are open |
 | [Witcher 3 AVX128 for the iOS host](2026-10-27-witcher3-avx.md) | [PLA-451](https://linear.app/playportdev/issue/PLA-451) | **Stopped 2026-10-27, branch unmerged for review.** Shipped `patches/fex-port` 0064 (the ARM64EC host sets `SupportsAVX`; Wow64 keeps upstream's false), `patches/fex` 0082 (the `FEX: iOS host AVX=` marker), the ymm-context host check, and IPA `097bb2cc` on the phone: Hollow Knight's first frame holds, and The Witcher 3's `vmovaps` now executes — its 4.x build then dies in its own OOM handler on a 64 GiB reservation this phone cannot serve (PLA-452). Open: per-title FEX features (PLA-269), the AVX cost measurement, PLA-453, PLA-454. |
-| [Social Club on Rockstar's own CEF](2026-10-29-sc-stock-cef.md) | [PLA-476](https://linear.app/playportdev/issue/PLA-476) | Goal: stock CEF single-process in both builds and removal of Playport's CEF payload; 0.5.0 held. Chunks 0–1 done; early-image startup increment accepted (PLA-481), chunk 2 not passed. Owner order: measure the retained view's extent and a review-fix chunk first; lifetime proof deferred and needs a new ADR. Story/memory gates unpassed. |
+| [Social Club on Rockstar's own CEF](2026-10-29-sc-stock-cef.md) | [PLA-476](https://linear.app/playportdev/issue/PLA-476) | Goal: stock CEF single-process in both builds and removal of Playport's CEF payload; 0.5.0 held. Chunks 0–1 done; chunk 2's layout holds RDR2's cabin (0169's gate passed in l20–l21, headroom thin); chunk 3 skipped; chunk 4 built 2026-10-31, host checks only (PLA-602: single-process and the layout on for every Rockstar Play in both builds; PLA-603: Playport's CEF removed, `pp verify` fails a CEF payload); chunk 5 done (0169, PLA-604). Next: chunk 6's phone gates (PLA-605). |
 
 Status here records the review, not live issue state. Linear is authoritative for
 what to do next. Overlapping performance/alignment/audit plans must share findings,
@@ -67,8 +67,8 @@ removed after review; raw private FL12_2 research remains in `.work/scratch/fl12
   a title (PLA-391), Portal 2's performance follow-ups are PLA-406. See
   [outcome](finished.md#proton-arm64-alignment).
 - **Own low-address-space CEF** (2026-10-19): stages A–D done, and the account signed in through
-  the Steam copy; the pool head (PLA-399), distribution (PLA-372) and the launcher's fault
-  (PLA-401) stay open. See [outcome](finished.md#own-low-address-space-cef).
+  the Steam copy; superseded by Rockstar's own CEF (decision 0169), and the build was removed on
+  2026-10-31 (PLA-603). See [outcome](finished.md#own-low-address-space-cef).
 - **Steam bridge for RDR2** (2026-10-19): goal passed (PLA-398 Done); PLA-401 and PLA-400 stay
   open. See [outcome](finished.md#steam-bridge-for-rdr2).
 - **KosmicKrisp graphics pipeline library** (2026-10-22): G0–G6 done on `dev/kk-gpl-phone`
