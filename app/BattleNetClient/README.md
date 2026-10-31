@@ -52,6 +52,12 @@ offline tests on the Linux host. The app's Battle.net store (`UI/BattleNetStore.
 - **Sizes** (`BattleNetClient.sizes`, `BattleNetSizes`): the download is the size manifest's
   selection (the stored objects, encoded); the install adds the product folder's files from the
   install manifest.
+- **Art** (`BattleNetArt`, `BattleNetClient.art`, PLA-607): each product's picture for its tile
+  (800 wide) and page backdrop (1600 wide), 16:9 JPEGs from the World of Warcraft site's public
+  image host (`blz-contentstack-images.akamaized.net`, no session, no cookies), fixed per product
+  and sized and cropped by the host's `width`, `crop` and `format` parameters; asked with the
+  client's manners. Retail's picture carries the game's logo, the Classic panels no words. The app
+  keeps it under Caches (PlayportKit `BattleNetArtCache`); none of it is in the repository.
 - **CDN indexes and the download manifest** (`ArchiveIndex`, `DownloadManifest`, `PackedKey`):
   archive indexes, the file index and the archive group, each checked by its name (the MD5 of
   its footer), its table of contents and every block's hash; the writer builds the archive group

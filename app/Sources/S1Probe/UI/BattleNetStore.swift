@@ -307,3 +307,51 @@ final class BattleNetStore: ObservableObject, DownloadDriver {
         BattleNet.reason(error).map { InstallCopy.detailed($0, error) } ?? InstallCopy.reason(error, store: Store.battlenet.label)
     }
 }
+
+// MARK: art
+
+/// A product's art from Blizzard's image host (BattleNetArt), kept under Caches beside the GOG
+/// and Epic art (BattleNetArtCache, re-fetchable). No session: anyone sees it, signed in or not.
+@MainActor
+final class BattleNetArtImages: ObservableObject {
+    static let shared = BattleNetArtImages()
+    @Published private var images: [String: UIImage] = [:]
+    private var loading = Set<String>()
+
+    nonisolated static let cache = BattleNetArtCache(directory: SteamPaths.art.appendingPathComponent("battlenet", isDirectory: true))
+
+    /// The page backdrop already on disk, for the launch screen (TitleLaunch).
+    nonisolated static func cachedHero(_ p: BattleNetProduct) -> UIImage? {
+        cache.cached(p, .hero).flatMap(UIImage.init(data:))
+    }
+
+    func image(_ p: BattleNetProduct, _ size: BattleNetArt.Size) -> UIImage? {
+        let key = "\(p.code)/\(size.rawValue)"
+        if let i = images[key] { return i }
+        guard loading.insert(key).inserted else { return nil }
+        let client = BattleNetStore.shared.client
+        Task.detached(priority: .utility) {
+            let image = await Self.cache.load(p, size) { try await client.art(p, size) }.flatMap(UIImage.init(data:))
+            await MainActor.run {
+                if let image { BattleNetArtImages.shared.images[key] = image }
+                // Not kept: the next time the tile or page is drawn asks again.
+                else { BattleNetArtImages.shared.loading.remove(key) }
+            }
+        }
+        return nil
+    }
+}
+
+struct BattleNetArtView: View {
+    let product: BattleNetProduct
+    var wide = false
+    @ObservedObject private var art = BattleNetArtImages.shared
+
+    var body: some View {
+        ZStack {
+            Rectangle().fill(PP.tile(for: product.name))
+            if let i = art.image(product, wide ? .hero : .tile) { Image(uiImage: i).resizable().aspectRatio(contentMode: .fill) }
+        }
+        .clipped()
+    }
+}

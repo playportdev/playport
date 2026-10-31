@@ -10,6 +10,7 @@
 // Play (decisions 0084, 0094).
 // Progress goes to the app log (AppLog) as `title:` lines.
 
+import BattleNetClientKit
 import EpicClientKit
 import GOGClientKit
 import Foundation
@@ -179,6 +180,7 @@ final class TitleLaunch: ObservableObject {
         appID.flatMap(cachedHero)
             ?? titleID.flatMap { $0.hasPrefix("gog-") ? GOGArt.cachedHero(String($0.dropFirst(4))) : nil }
             ?? titleID.flatMap { $0.hasPrefix("epic-") ? EpicArt.cachedHero(String($0.dropFirst(5))) : nil }
+            ?? titleID.flatMap { $0.hasPrefix("bnet-") ? BattleNetProduct(rawValue: String($0.dropFirst(5))).flatMap { BattleNetArtImages.cachedHero($0) } : nil }
     }
 
     /// The game's hero art as the art cache keeps it (`<app>/…library_hero.jpg`), with no
