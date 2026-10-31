@@ -283,13 +283,22 @@
   HK: smoke passed off and on. The gameplay pair has equal fps, −110 MiB and CPU +25 points (guest threads `00fc`
   and `dxvk-cs`, not the completion threads), with one allocator tainted and replaced per frame; a repeat pair is
   needed. The option stays opt-in, with no title default. Bounding allocator growth needs an owner decision.
-- **Allocator bound (B2), built, not yet on the phone** (dev IPA `d3be12c9…`, `.work/out/20261031-011233-d3be12c9/`,
+- **Allocator bound (B2), built; phone gate l24–l25 passed (below)** (dev IPA `d3be12c9…`, `.work/out/20261031-011233-d3be12c9/`,
   90 checks; [cause and fix](../evidence/2026-10-30-rdr2-kk-audio-diagnostics.md#the-cause-in-the-code-and-mesa-01340135-after-l23)):
   a Metal reset keeps an allocator's heaps, so 0132's sealed allocators re-sealed after each reset and were never
   destroyed; HK's taint was DXVK's spare ONE_TIME buffer, begun in Metal though empty. mesa 0134 (still only with
   `cmd_retire`) begins Metal at the first encoder, destroys idle sealed allocators, keeps four idle and caps a pool at
   eight; 0135 logs `[kk-mem]` within a second (census every 5 s) while command memory grows. Phone gates next: RDR2
   l24 on `arm20.sh` with the option, as l22; an interleaved HK gameplay pair off, on, off, on (window 85:120).
+- **Measured (l24–l25, 2026-10-31, IPA `d3be12c9…` with `MESA_KK_EXPERIMENTAL=cmd_retire,cmd_bo_classes`, against
+  l20–l21; `.work/ui-runs/20261031T041043-rdr2-p476l24`, `…/20261031T042918-rdr2-p476l25`, `.work/perf/kkb2-hk-*`;
+  [evidence](../evidence/2026-10-30-rdr2-kk-audio-diagnostics.md#l24-kosmickrisp-cmd_retire-with-the-allocator-bound)):**
+  both RDR2 runs held the cabin to first-frame+600, peak **7175 / 7250 MB** against 7960 / 8006 (about 0.7–0.8 GB
+  more headroom), no jetsam, no `commit done error`; fps within the l20–l21 spread. Allocators capped at 112
+  (`pool-max=8`, `over-cap=0`, taints 0) but still about 0.9 GB; the saving is command BOs (81 against 867–888 MiB,
+  held upload 69–74 against 848) and rounding (×1.23 against ×1.69). The 5 s census did not run. HK: smoke passed,
+  interleaved pairs equal in fps, tail and CPU, `tainted=0`. The option stays opt-in; making it RDR2's per-title
+  default needs an owner decision or amendment.
 - **Measured (l20–l21, 2026-10-30, IPA `6b5be569…`, `.work/ui-runs/20261030T225818-rdr2-p476l20`,
   `…/20261030T231556-rdr2-p476l21`; [evidence](../evidence/2026-10-29-sc-stock-cef-probe.md#l20l21-decision-0169-gate)):**
   decision 0169's gate **passed** in both runs. HK first-frame+10 passed (`20261030T225730-hk-p476l20`, +11.33 s).

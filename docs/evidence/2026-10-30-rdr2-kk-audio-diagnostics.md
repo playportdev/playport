@@ -574,3 +574,153 @@ No listening test (the owner's cabin listen), so whether the sound is right is n
   first-frame+600 by shots; on to 02:39 by the log), slot-1 audio 41.4 % off against 96.9 % on, no jetsam. A dev
   experiment: no change to the compatibility status.
 - The Witcher 3 (292030): not launched (not in the phone's library).
+
+## l24: KosmicKrisp cmd_retire with the allocator bound
+
+**Linear:** [PLA-364](https://linear.app/playportdev/issue/PLA-364), [PLA-476](https://linear.app/playportdev/issue/PLA-476).
+M = measured, I = inferred, U = unknown. RDR2 times are on the `[xp]` clock (≈ launch clock) unless a wall time is given.
+
+**IPA.** `d3be12c9b22161d470e13995919a96ab4f662d6a7f01f90a03fa3d6dabf88b2a` (dev; mesa 0134–0135 on top of
+0132–0133, all only with `cmd_retire`). Installed with `pp install --no-build --ipa …` at 03:18:33 (upgrade in place,
+container kept); `pp phone status` showed that sha at each session's start and end, and every `pp ui`/`pp perf` call
+passed `--expect-ipa`. 80 %, on power. This IPA also carries decision 0172's audio producer (on by default), which
+l20–l21 (`6b5be569…`) did not: the audio gate above measured no memory saving from it (peak 7863 on against 7787 MB
+off), so it is not counted as a cause below (I).
+
+**Runs.** Scripts and analysis in `.work/agent-notes/pla476/` (`l24-s1.sh`, `l24-s1b.sh`, `l24.sh` = `l22.sh` with
+the new IPA, `arm22.sh` unchanged; `l24-analysis/an24.py`, outputs `an-l20.txt`, `an-l21.txt`, `an-l24.txt`,
+`an-l25.txt`).
+
+| Session | Run | Dir |
+| --- | --- | --- |
+| 1 | HK smoke, Vulkan with the option | `$PLAYPORT_BUILD/ui-runs/20261031T031837-hk-kkb2-on` |
+| 1 | HK perf off1, on1, off2, on2 (03:20–03:51) | `$PLAYPORT_BUILD/perf/kkb2-hk-{off1,on1,off2,on2}` |
+| 1b | HK perf off2-r (off2 logged `Metal HUD off`: no per-frame columns) | `$PLAYPORT_BUILD/perf/kkb2-hk-off2-r` |
+| 2 | RDR2 l24 (after 600 s idle) | `$PLAYPORT_BUILD/ui-runs/20261031T041043-rdr2-p476l24` |
+| 2 | RDR2 l25 (repeat, after 180 s idle) | `$PLAYPORT_BUILD/ui-runs/20261031T042918-rdr2-p476l25` |
+
+RDR2 protocol: `arm22.sh` = l20's `arm20.sh` (keys `env.PLAYPORT_CEF_SWAP=0 env.PLAYPORT_SC_SINGLE=1
+env.PLAYPORT_SC_LAYOUT=1`, `STORY_BY=420 UNTIL=600 WAIT=900`) plus the Graphics options row
+`MESA_KK_EXPERIMENTAL=cmd_retire,cmd_bo_classes`. Both host logs were pulled by `pp ui` (`pull/s1-host.log`).
+
+### Hollow Knight (367520), Vulkan (M)
+
+- Smoke with the option: `ok:true`, first frame +10.91 s (this shows the first frame only).
+- `pp perf --compare … --window 85:120` (each run 120 s, `--cool 5`, pads at first-frame+25 `hk-new-game` and +80
+  `hk-walk`; all four started thermal nominal; every run logs both vpad scripts loaded):
+
+| run | fps | p99.9 ms | h25 | h50 | h100 | GPU ms | CPU % | P % | E % | CPU mW | MiB |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| off1 | 59.2 | 54.19 | 91 | 3 | 1 | 7.24 | 104.3 | 75.0 | 29.0 | 635 | 3155 |
+| on1 | 59.1 | 50.02 | 100 | 3 | 1 | 6.77 | 105.1 | 71.9 | 33.3 | 608 | 3152 |
+| on2 | 59.2 | 41.68 | 65 | 2 | 1 | 7.27 | 107.1 | 75.9 | 31.3 | 615 | 3171 |
+| off2-r | 59.1 | 50.02 | 60 | 3 | 1 | 8.91 | 110.6 | 78.3 | 32.3 | 618 | 3160 |
+
+  Order: off1, on1, (off2: HUD off, fps 59.0 only), on2, off2-r. Whole-run fps 58.7 in all five; fps per 30 s
+  identical within 0.3.
+- **Threads** (`threads.txt` at 90 / 105 / 120 s): total 91–98 % (off1), 92–97 (on1), 91–99 (on2), 97–104 (off2-r).
+  Guest `00fc` 9–12 %, 14–21 Mi/f and `00ec dxvk-cs` 8–9 %, 4.7–6.7 Mi/f in **all four** arms. l22's on run had
+  `dxvk-cs` at 15–16 % and CPU 103–113 %; that rise is gone (M). `00fc` was below the top 8 in l22's off run and is
+  10–12 % in both arms here (M); why it differs from l22's off run is U.
+- **Retire counters, on1 / on2 (M):** `tainted=0 destroyed=0` to the end (l22: 6841 / 6837, one a frame);
+  `released=0`, `trimmed=19` / `20`, `capped=0`, `over-cap=0`, `pool-max=5`, `sealed=0`. `unbegun` grows 5403 /
+  5400 per 30 s census, about **3 per frame** at 59 fps (the recipe expected about 1). Allocators 41 / 166–167 MiB
+  (off 43 / 181 MiB), largest 4.5 MiB. No `commit done error=` other than 0 (40 lines each).
+- **Verdict (HK):** no fps, tail or CPU difference across the two interleaved pairs; taints are 0. The l22 CPU cost
+  (+25 points) does not repeat (I: it was the per-frame taint path that 0134 removed).
+
+### RDR2 (1174180): census and memory (M)
+
+| | l20 (off, `6b5be569…`) | l21 (off) | **l24 (on)** | **l25 (on)** |
+| --- | --- | --- | --- | --- |
+| thermal | nominal → serious | nominal → serious | nominal → fair +111 → serious +405 | **serious at launch** |
+| first frame / Story press | +76 / +124 | +80 / +128 | +75 / +139 | +99 / +153 |
+| load step onset: `fpMB` ≥ 7000 (first `growing` line in the step) | +223 | +238 | +244 (+238) | +277 (+272) |
+| allocators before the step (n / MiB, largest) | 40 / 143 | – | 72 / 189, 4.9 | 72 / 170, 4.9 |
+| allocators in the cabin (n; MiB median / max, `[kk-mem]` from +330) | 45; 868 / 870 | 45; 803 / 818 | **112; 933 / 1038** | **111–112; 888 / 1014** |
+| `command=` / pooled MiB in the cabin (median) | 867 / 145 | 888 / 142 | **81 / 257** | **82 / 256** |
+| allocators + command + pooled (median / max) | 1877 / 2034 | 1819 / 1991 | **1270 / 1373** | **1229 / 1352** |
+| held upload, last census | 848 MiB (largest 142.8) | – | **69 MiB** (largest 24.1) | **74 MiB** (24.1) |
+| `[kk-upload]` total, end: asked → rounded MiB (live) | 467 097 → 788 460 (×1.69; live 733) | – | 396 248 → 487 491 (**×1.23**; live 55) | 338 771 → 417 572 (**×1.23**; live 60) |
+| `kk_upload_tess_params` asked → rounded | 230 650 → 395 360 (×1.71) | – | 195 665 → 250 583 (**×1.28**) | 167 284 → 215 683 (×1.29) |
+| `[footprint]` phys peak | 7930 @+701 | 7996 @+476 | **7175** @+695 | **7250** @+800 |
+| `fpMB` peak (of 8192) | 7960 @+793 | 7976 @+464 (8006 by the l22 table) | **7163** @+454 | **7290** @+744 |
+| graphics in the cabin, min / median / max | 3823 / 3947 / 4130 | 3704 / 3906 / 4116 | 3232 / 3334 / 3456 | 3215 / 3315 / 3409 |
+| compressed in the cabin, median | 4338 | 4262 | 2472 | 2359 |
+| fps, Story+150 → +350 (`[frames]`) | 17.4 | 13.7 | 16.2 | 13.8 |
+| fps, Story+150 → end | 17.8 | 13.9 (log to +494) | 15.8 | 14.3 |
+
+- **The early lines (M).** `growing` `[kk-mem]` lines came at +25.5 (allocators +12), at the first frame (+25), and
+  in the step at +238.1 (`allocators+23 command+12 MiB`, 95 / 320 MiB) and +238.8 (`allocators+17 command+273 MiB`,
+  112 / 857 MiB); l25 the same at +271.9 / +272.8 (95 / 299, then 112 / 789 MiB). An off-cycle census came with the
+  first one (`s=11.3` / `s=12.3`: 95 allocators, largest 11.2 MiB, 4 over 8 MiB, held upload 14 MiB). **The census
+  did not then run every 5 s (M):** the next came at the usual 30 s (`s=31.1`), and `[kk-mem]` lines every ~10 s.
+  The count reached 112 within 0.7 s of the step and stayed there to the end (111–112).
+- **The bound held (M).** `pool-max=8` from the first in-step census, `over-cap=0` throughout, `tainted=0
+  destroyed=0`. In the cabin, l24 to +778: `released=22870` (idle sealed ones destroyed), `capped=461581` (a
+  recording shared a pool's allocator at the cap), `sealed=22910`, `trimmed=633` (all before the step), `reset=35150`.
+  About 42 allocators destroyed and remade a second at a constant 112 (I: 14 pools × 8). `largest` 22–26 MiB,
+  38–40 over 8 MiB.
+- **What the saving is (M + I).** The allocator count is bounded (112 against l22–l23's 190–252 and 1.2–1.9 GB), but
+  allocator memory in the cabin is **0.89–0.93 GB median, 1.0 GB max**: at or above l20–l21's 0.80–0.87 GB, and far
+  from the design's 0.1–0.25 GB. The gain is in the command BOs: `command=` 81 MiB against 867–888, held upload
+  69–74 MiB against 848, and `[kk-upload]` rounding ×1.23 against ×1.69 (0133's classes). Net command memory is
+  about **0.6 GB lower** (1.23–1.27 against 1.82–1.88 GB median).
+- `unbegun` grows with `unsubmitted=` in RDR2 too (611 651 at +778 in l24): recordings that encode nothing no longer
+  reach Metal.
+
+### Footprint and headroom (M)
+
+- Peak 7175 / 7250 MB (`[footprint]`), 7163 / 7290 MB (`fpMB`) of 8192, against l20–l21's 7960 / 8006: **headroom
+  gained about 0.7–0.8 GB** (about 1.0 GB left, from 0.19–0.23). Graphics in the cabin is about 0.6 GB lower
+  (median 3315–3334 against 3906–3947) and compressed about 1.9 GB lower.
+- One memory warning each (syslog `Received memory warning`, l24 04:15:11 and l25 04:35:41, both at the step); no
+  `per-process-limit` or other jetsam line in either syslog, no `JetsamEvent` report pulled.
+
+### Cabin, fps and faults
+
+- **Cabin held to first-frame+600 in both (M).** `pp ui` `ok:true`, `why: until first-frame+600`, exit 0; the app
+  was alive to the end (no early-exit fallback ran). Screenshots (described, not published): l24 from +256 to +792
+  and l25 from +365 to +838 show Arthur standing on the snowy cabin porch by the window; l25's +274 is the black loading screen with the spinner.
+- **fps (M; comparison I).** Story+150 → +350: 16.2 (l24) and 13.8 (l25, serious at launch) against 17.4 (l20) and
+  13.7 (l21). The spread between runs of one arm is larger than the difference between arms: no fps change is
+  shown either way.
+- **GPU faults (M).** No `commit done error=` other than 0 (40 `commit done` lines each), no
+  `MTLCommandBufferErrorDomain`, no GPU restart, in the host logs or syslogs. The syslogs do carry kernel
+  `IOGPUFamily <FAULT>: IOGPUCommandDescriptor::prepare … preparedBytes != requiredBytes` lines: 11 543 (l24) and
+  10 448 (l25). They are not new: l20 has 60 853, l21 10 357, l17 60 256, the audio gate 15 344–41 495, and l22–l23
+  17 / 93 (the l22–l23 section above missed these in its syslog check). I: a kernel wiring-accounting notice that
+  every RDR2 run shows, not a fault of this change. This was read after the session; l25 ran on the automatic check
+  (commit errors, `MTLCommandBufferErrorDomain`, GPU restart).
+
+### Verdict
+
+- **The option now cuts RDR2's peak (M):** two runs held the cabin to first-frame+600 with peaks 0.7–0.8 GB below
+  l20–l21, where l22–l23 (without the bound) died 6–12 s into the step. No GPU fault beyond the baseline's kernel
+  notices; HK unchanged with taints at 0.
+- **The allocator bound is half the story (M):** the count is capped at 112 and stays there, but allocator memory
+  is still about 0.9 GB (design 0.1–0.25 GB); the saving comes from the retired command BOs and the upload rounding.
+  The 5 s census did not run. About 42 allocators a second are destroyed and remade in the cabin, with no measured
+  fps cost.
+- **Recommendation (the owner decides):** `MESA_KK_EXPERIMENTAL=cmd_retire,cmd_bo_classes` is a candidate for RDR2's
+  per-title default: it is the first change since l12 that gives RDR2 back headroom, and two runs is the same evidence
+  l20–l21 gave decision 0169. Making it the default needs a new decision or an amendment (as 0152 did for a
+  per-title row). Before that, worth weighing: one run started at thermal serious; no listening or gameplay past the
+  cabin; and the remaining 0.9 GB of allocators is a further target (smaller seal or cap, or destroy instead of reset
+  above a size), which needs its own owner decision.
+
+### Not shown
+
+- Gameplay past the cabin, or a run past first-frame+600, with the option.
+- Allocator memory per pool, and why 14 pools reach their cap (the census lists totals only).
+- Whether HK's `00fc` difference from l22's off run is real.
+- Any title other than HK and RDR2 with the option.
+
+### Games observed (l24–l25)
+
+- Red Dead Redemption 2 (1174180), dev `d3be12c9…` with `MESA_KK_EXPERIMENTAL=cmd_retire,cmd_bo_classes` on
+  `arm20.sh`'s keys: signed in, Story pressed, the cabin held to first-frame+600 in both runs at 14–16 fps, peak
+  7175 / 7250 MB, no jetsam. A dev experiment with an opt-in option: no change to the compatibility status unless the
+  owner makes it RDR2's default.
+- Hollow Knight (367520), dev `d3be12c9…` on Vulkan: first-frame+10 smoke passed with the option (+10.91 s); five
+  gameplay `pp perf` runs at 59 fps, no difference with the option.
