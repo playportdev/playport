@@ -203,8 +203,8 @@
 //                              controller's Home button 0.8 s through HostIO's pad handling
 //                              (HostIO.menuInput), which opens the in-game menu
 //                              (UI/InGameMenuView.swift), and waits 1 s
-//   menu:<row>                 In the menu: moves its ring to the row (resume, controls,
-//                              screenshot, overlay, controller, quit) and presses A, as a
+//   menu:<row>                 In the menu: moves its ring to the row (resume, controls, keyboard,
+//                              text, screenshot, overlay, controller, quit) and presses A, as a
 //                              controller does (controls opens its panel: pad:left/right
 //                              change the ringed row, pad:down moves along On-screen controls,
 //                              D-pad and Right stick (only on the Gamepad layout with no copy of
@@ -217,6 +217,15 @@
 //                              pad: presses go to the menu too while it is up. menu:quit waits
 //                              for the game's end: Playport restarts, and the actions after it
 //                              run in the new process, as after play:
+//                              menu:text goes back to the game with the text bar open over it
+//                              (UI/TextBarView.swift)
+//   textbar:<op>               After menu:text (it runs while the game runs), the text bar's own
+//                              controls (Dev/TextBarDriver.swift): close, secure | plain (its lock),
+//                              tab | enter | backspace (its keys), type:<text> (typed into its
+//                              field as the keyboard types it; percent-encoded, %2C a comma),
+//                              secret | secret+enter (password mode, then a value the workstation
+//                              pushes for this action alone, Documents/ui-text-<nonce>-<n>, read
+//                              and deleted before it is typed; nothing records it but the field)
 //   web:wait | web:click:<label> | web:close
 //                              After a play: (they run while the game runs): a web page the
 //                              game opened (UI/GameWebSheet.swift): wait for it (Open on its
@@ -662,6 +671,12 @@ enum UIDriver {
                     log("menu \(id): \(menu.summary)")
                     if let failure = try await afterInGame(action, index: done + 1, next: actions[(i + 1)...]) { return finish(failure) }
                     if AppRestart.shared.restarting { return }
+                case "textbar":
+                    // The text bar menu:text opened over the running game (Dev/TextBarDriver.swift).
+                    guard TitleLaunch.shared.running else { return finish("action=\(action) refused: no game is running") }
+                    if let failure = try await TextBarDriver.run(id, index: done + 1, log: log) { return finish("action=\(action) \(failure)") }
+                    if let failure = try await afterInGame(action, index: done + 1, next: actions[(i + 1)...]) { return finish(failure) }
+                    if AppRestart.shared.restarting { return }
                 case "web":
                     // A web page the running game opened (Dev/WebSheetDriver.swift).
                     guard TitleLaunch.shared.running || GameWebSheet.shared.isUp else {
@@ -918,6 +933,7 @@ enum UIDriver {
     static func inGame(_ action: String) -> Bool {
         action.hasPrefix("menu:") || action.hasPrefix("wait:") || action.hasPrefix("web:") || action.hasPrefix("tap:")
             || action.hasPrefix("touch:") || action.hasPrefix("gesture:") || action.hasPrefix("gyro:") || action.hasPrefix("suggest:")
+            || action.hasPrefix("textbar:")
             || (action.hasPrefix("pad:") && InGameMenu.shared.isOpen)
     }
 

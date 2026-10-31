@@ -306,6 +306,21 @@ final class HostIO {
         if ext { winios_post_key_extended(Int32(vk), down ? 1 : 0) } else { winios_post_key(Int32(vk), down ? 1 : 0) }
     }
 
+    /// The text bar's input (HostIOKit TextBar, UI/TextBarView.swift): a character as
+    /// winios_post_char (WM_CHAR for the focused window), a key pressed and let go.
+    /// Nothing while the menu is up, as a key. Nothing here logs what was typed.
+    func text(_ inputs: [TextBar.Input]) {
+        guard !menuUp else { return }
+        for i in inputs {
+            switch i {
+            case .char(let unit): winios_post_char(UInt32(unit))
+            case .key(let vk):
+                winios_post_key(vk, 1)
+                winios_post_key(vk, 0)
+            }
+        }
+    }
+
     /// A direct touch as the left button, at the same point of the client area.
     func touch(at p: CGPoint, in size: CGSize, phase: UITouch.Phase) {
         let x = min(max(p.x, 0), size.width - 0.001), y = min(max(p.y, 0), size.height - 0.001)
@@ -925,10 +940,9 @@ final class GameSurfaceView: UIView {
     private let magnifier = MagnifierOverlay()
     /// The suggested layout's toast (UI/LayoutSuggestionToast.swift), over them; it takes touches on its card only.
     private let suggestion = LayoutSuggestionToast()
-    #if !PLAYPORT_RELEASE
-    /// The view on screen, for the UI driver's tap: action (Dev/UIDriver.swift).
+    /// The view on screen: the text bar gives it the hardware keys back as it closes
+    /// (UI/TextBarView.swift); a dev build's UI driver taps it (Dev/UIDriver.swift).
     static weak var current: GameSurfaceView?
-    #endif
 
     init() {
         super.init(frame: .zero)
@@ -995,9 +1009,7 @@ final class GameSurfaceView: UIView {
             madeira_display_set_layer(layer)
             HostIO.surfaceReady.signal()
         }
-        #if !PLAYPORT_RELEASE
         Self.current = self
-        #endif
         becomeFirstResponder()   // hardware keys come here
     }
 
