@@ -15,34 +15,35 @@ with x8 = 0xffffffff, a read at ThreadLocalStoragePointer + 0x7fffffff8).
 The aarch64 ntdll now has xlate_ios_jit and exports
 p_ios_jit_translate_addr, which loader_ios.c already fills for the child
 ntdll, and alloc_tls_slot stores the slot through it on both builds.
-The ARM64EC build is unchanged.
+ARM64EC and i386 ntdll.dll are byte-identical to the build before.
 
 Linear: PLA-518
 Class: ios-port
 Evidence: docs/evidence/2026-10-30-arm64-d3d12.md
 Offered-upstream: no
 ---
- dlls/ntdll/loader.c       |  5 +++--
+ dlls/ntdll/loader.c       |  8 ++++----
  dlls/ntdll/ntdll.spec     |  2 +-
  dlls/ntdll/signal_arm64.c | 20 ++++++++++++++++++++
- 3 files changed, 24 insertions(+), 3 deletions(-)
+ 3 files changed, 25 insertions(+), 5 deletions(-)
 
 diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
-index a369cda04e0..8b042f8d725 100644
+index a369cda04e0..f18ebbbc969 100644
 --- a/dlls/ntdll/loader.c
 +++ b/dlls/ntdll/loader.c
-@@ -2240,11 +2240,12 @@ static BOOL alloc_tls_slot( LDR_DATA_TABLE_ENTRY *mod )
+@@ -2240,11 +2240,11 @@ static BOOL alloc_tls_slot( LDR_DATA_TABLE_ENTRY *mod )
      if (thread) NtClose( thread );
  
      *(DWORD *)dir->AddressOfIndex = i;
 -#ifdef __arm64ec__
-+#ifdef __aarch64__  /* ARM64EC, and the native ARM64 child's ntdll */
++#if defined(__arm64ec__) || defined(__aarch64__)
      {
-         /* iOS: the module's code runs from its JIT-pool copy, taken at map time,
-          * whose .data still holds the image's initial _tls_index (-1 in current
+-        /* iOS: the module's code runs from its JIT-pool copy, taken at map time,
+-         * whose .data still holds the image's initial _tls_index (-1 in current
 -         * mingw-w64 CRTs). Store the slot there too. */
-+         * mingw-w64 CRTs). Store the slot there too: an ARM64EC module and, in a
-+         * native ARM64 child, an ARM64 one alike. */
++        /* iOS: the module's code runs from its JIT-pool copy (ARM64EC, or ARM64 in a
++         * native child), whose .data still holds the image's initial _tls_index (-1 in
++         * current mingw-w64 CRTs), taken at map time. Store the slot there too. */
          extern void *xlate_ios_jit( void *ptr );
          DWORD *pool_index = xlate_ios_jit( (void *)dir->AddressOfIndex );
  
