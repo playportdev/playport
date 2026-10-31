@@ -5,7 +5,7 @@ Subject: [PATCH] ntdll: take a plain ARM64 process's system DLLs from sysarm64
  on iOS
 
 On iOS the aarch64 (non-EC) ntdll now also runs a plain ARM64 child of
-the ARM64EC session (madeira-unix 0224), which has no WowTebOffset. The
+the ARM64EC session (madeira-unix 0249), which has no WowTebOffset. The
 sysarm64 lookup of 0015 required one, so such a child would have looked
 for kernel32.dll and the rest in system32, the session's ARM64EC set,
 whose images it cannot load.

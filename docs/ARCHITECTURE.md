@@ -68,9 +68,9 @@ with its own PEB and private ntdll copy:
   ([decision 0047](decisions/0047-i386-titles-on-vulkan.md)).
 - **A plain ARM64 program runs as a native ARM64 child** (decision
   [0170](decisions/0170-native-arm64-guests.md), proposed; not yet run on the phone).
-  The x86-64 session starts it with its own aarch64 ntdll (`patches/madeira-unix` 0224,
+  The x86-64 session starts it with its own aarch64 ntdll (`patches/madeira-unix` 0249,
   the image a WoW64 child's native side uses), no WoW64 window and no FEX; its system
-  DLLs come from `sysarm64` (`patches/wine-pe` 0015, 0055). Its image and DLLs take the
+  DLLs come from `sysarm64` (`patches/wine-pe` 0015, 0056). Its image and DLLs take the
   JIT pool copy and x18 patching like any ARM64 image; code it writes runs through the
   anonymous executable path. `tools/compat/probes` `arm64`, `arm64-fault` and
   `arm64-min` test it ([evidence](evidence/2026-10-30-native-arm64-child.md)). Its
@@ -609,7 +609,7 @@ an unfinished import needs its source picked again); the player's Pause stays.
 A release build compiles none of `Dev/`
 ([decision 0009](decisions/0009-dev-and-release-builds.md)).
 The Battle.net store (`UI/BattleNetStore.swift`, PlayportKit `BattleNet`;
-[decision 0168](decisions/0168-battle-net-store-client.md), proposed) has no sign-in: its
+[decision 0174](decisions/0174-battle-net-store-client.md), proposed) has no sign-in: its
 chip is always shown and lists the World of Warcraft products whose current build carries
 an ARM64 client (BattleNetClientKit's offer, cached), All only once one is installed or
 downloading. A product's page picks the store region (from the phone's region) and the
@@ -623,7 +623,7 @@ language as a Downloads update job that fetches only the new locale's data, afte
 Play is available again; both read what the install is in from its `.build.info`.
 
 Play for a Battle.net copy follows PlayportKit `BattleNetPlay` (PLA-514): the first Play of
-each product shows the ban-risk notice ([decision 0169](decisions/0169-anti-cheat-refusal-scope.md),
+each product shows the ban-risk notice ([decision 0175](decisions/0175-anti-cheat-refusal-scope.md),
 proposed: Blizzard does not support Playport, an account action is possible, Playport stores
 no Battle.net credential); declining starts nothing, accepting is kept with the copy
 (`InstalledTitle.riskNoticeAccepted`, gone with it) and the page keeps the notice's text.

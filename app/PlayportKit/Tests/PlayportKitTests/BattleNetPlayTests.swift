@@ -4,7 +4,7 @@ import SteamClientKit
 import XCTest
 @testable import PlayportKit
 
-/// Play for a Battle.net copy (PLA-514, decision 0169): the ban-risk notice once per product,
+/// Play for a Battle.net copy (PLA-514, decision 0175): the ban-risk notice once per product,
 /// remembered with the copy, then the product's ARM64 client as a native ARM64 child.
 final class BattleNetPlayTests: XCTestCase {
     private var root: URL!

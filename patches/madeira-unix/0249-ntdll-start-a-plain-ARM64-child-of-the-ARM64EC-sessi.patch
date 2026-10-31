@@ -114,7 +114,7 @@ index dc95381..e626750 100644
 +         * the aarch64 build as a private image, as a WoW64 child's native
 +         * side does, but without the window or the i386 ntdll, and with no
 +         * FEX: nothing it loads is emulated. Its system DLLs come from
-+         * sysarm64 (wine-pe 0015, 0055). It ends like a failed image map when
++         * sysarm64 (wine-pe 0015, 0056). It ends like a failed image map when
 +         * that ntdll cannot load. An ARM64 child of an aarch64 session keeps
 +         * the S1 copy below. */
 +        if (ios_cur_image_info()->Machine == IMAGE_FILE_MACHINE_ARM64 && is_arm64ec())

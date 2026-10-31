@@ -1,7 +1,7 @@
 # Battle.net store: which World of Warcraft products are offered (2026-10-30)
 
 **Linear:** [PLA-510](https://linear.app/playportdev/issue/PLA-510) (spec
-[PLA-516](https://linear.app/playportdev/issue/PLA-516); decisions 0168, 0170 proposed).
+[PLA-516](https://linear.app/playportdev/issue/PLA-516); decisions 0170, 0174 proposed).
 
 `BattleNetClientKit` (`app/BattleNetClient`, commit `15813b9`) asked Blizzard's live endpoints for
 every product on the fixed list in every store region, on the workstation, 2026-10-30 at about

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Play for a Battle.net copy (PLA-514, decisions 0169 and 0170): the ban-risk notice before the
+// Play for a Battle.net copy (PLA-514, decisions 0170 and 0175): the ban-risk notice before the
 // first Play of each product, then the update check (PLA-521), then the product's ARM64 client as
 // a native ARM64 child of the x86-64 session, drawing with Direct3D 12 through ARM64 vkd3d-proton
 // on Vulkan. World of Warcraft shows its own login; Playport passes it no sign-in and keeps no

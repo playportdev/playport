@@ -1,4 +1,4 @@
-# 0169: The anti-cheat refusal covers anti-cheat that cannot run or rejects Wine; others get a ban-risk notice
+# 0175: The anti-cheat refusal covers anti-cheat that cannot run or rejects Wine; others get a ban-risk notice
 
 **Status:** proposed, 2026-10-30, by the owner while planning World of Warcraft
 ([PLA-508](https://linear.app/playportdev/issue/PLA-508)). Accepted after the host spike

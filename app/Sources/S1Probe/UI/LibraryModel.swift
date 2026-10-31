@@ -219,7 +219,7 @@ final class LibraryModel: ObservableObject {
     func play(_ id: String, epicOffline: Bool = false, continuing: Bool = false,
               battleNetUpdate: BattleNetPlay.Update? = nil) async throws -> Bool {
         guard catalog.title(id: id)?.canPlay == true, !TitleLaunch.shared.running, !TitleLaunch.shared.spent else { return false }
-        // A Battle.net copy (PLA-514, decision 0169): the ban-risk notice before its first Play, which
+        // A Battle.net copy (PLA-514, decision 0175): the ban-risk notice before its first Play, which
         // goes on once accepted; declined, nothing starts. A client that is not the ARM64 one is refused.
         // Then the update check (PLA-521), not while a download of the copy is queued.
         var bnetLaunch: BattleNetPlay.Launch?
@@ -696,7 +696,7 @@ final class LibraryModel: ObservableObject {
         }
     }
 
-    /// The ban-risk notice before a Battle.net product's first Play (PLA-514, decision 0169). The
+    /// The ban-risk notice before a Battle.net product's first Play (PLA-514, decision 0175). The
     /// cursor starts on Don't play; Don't play, B or a tap outside start nothing, and the notice asks
     /// again at the next Play. Accepting keeps the acceptance with the copy and goes on with the Play.
     func askRiskNotice(_ t: InstalledTitle, _ product: BattleNetProduct) {

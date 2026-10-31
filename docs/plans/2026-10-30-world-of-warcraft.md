@@ -11,8 +11,8 @@
 
 A user asked to play World of Warcraft on the phone. The owner chose a route that never runs the
 Battle.net app: Playport installs WoW itself and runs its native ARM64 Windows client without FEX.
-Proposed records: [0168](../decisions/0168-battle-net-store-client.md) (the store client),
-[0169](../decisions/0169-anti-cheat-refusal-scope.md) (Warden and the ban-risk notice),
+Proposed records: [0174](../decisions/0174-battle-net-store-client.md) (the store client),
+[0175](../decisions/0175-anti-cheat-refusal-scope.md) (Warden and the ban-risk notice),
 [0170](../decisions/0170-native-arm64-guests.md) (native ARM64 children).
 
 ## Done when
@@ -39,14 +39,14 @@ character select; the compatibility issue records the run.
 | | Decision |
 |---|---|
 | Goal | WoW on the phone; Battle.net only as where its files come from |
-| Install | Native Swift store client `app/BattleNetClient` (0168); full install before Play; update check at every Play |
+| Install | Native Swift store client `app/BattleNetClient` (0174); full install before Play; update check at every Play |
 | Products | Fixed list: WoW retail and the Classic products; a product is offered only while its build has an ARM64 client |
 | Region, language | Store region picker defaulting from the phone; the phone's language, `enUS` fallback |
 | CDN | Hosts from the `cdns` endpoint only; a User-Agent naming Playport; bounded concurrency; back-off on 429 |
 | Sign-in | In the game, through the text bar; no Battle.net session in Playport |
 | Client | `Wow*-ARM64.exe` only, as a native ARM64 child on the aarch64 Wine set; two Wine trees stay; no x64 fallback (0170) |
 | Graphics | vkd3d-proton and `vulkan-1` built for aarch64 |
-| Anti-cheat | Warden allowed; ban-risk notice once per title; the client never patched (0169) |
+| Anti-cheat | Warden allowed; ban-risk notice once per title; the client never patched (0175) |
 | Input | Controller (WoW's gamepad mode) and the text bar; no touch controls |
 | A broken Blizzard ARM64 build | Fails like any other play; the compatibility issue records it |
 

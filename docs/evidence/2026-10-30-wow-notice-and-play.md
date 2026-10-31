@@ -21,7 +21,7 @@ built there. IPA sha256 and run directories go here once they exist.
   Don't play (the cursor starts there) and I understand, play; Don't play, B or a tap outside
   start nothing. An installed copy's page shows the text, with "Play asks you to accept it
   first." or "You accepted this on DATE."
-- Decision 0169 (proposed) describes this behaviour as built; no update to it was needed.
+- Decision 0175 (proposed) describes this behaviour as built; no update to it was needed.
 - Redactor and `pp secrets` learn what WoW and Battle.net carry for a session. The ARM64 client's
   strings (retail `Wow-ARM64.exe`, installed on the workstation in PLA-517) show its command line
   carries no session value: its switches are `-d3d11`, `-d3d12`, `-metal`, `-compat`,

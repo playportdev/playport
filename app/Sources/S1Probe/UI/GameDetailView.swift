@@ -591,7 +591,7 @@ private struct GameDetailPage: View {
         .fixedSize(horizontal: false, vertical: true)
     }
 
-    /// A Battle.net copy's ban-risk notice (PLA-514, decision 0169): its text stays on the page, before
+    /// A Battle.net copy's ban-risk notice (PLA-514, decision 0175): its text stays on the page, before
     /// the first Play asks and after it was accepted.
     @ViewBuilder
     private func riskNotice(_ t: InstalledTitle) -> some View {

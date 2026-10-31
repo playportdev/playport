@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// The Battle.net store in the app (PLA-519, decision 0168), as EpicAccount.swift is Epic's,
+// The Battle.net store in the app (PLA-519, decision 0174), as EpicAccount.swift is Epic's,
 // without a sign-in: which World of Warcraft products are offered (BattleNetClientKit asks
 // Blizzard's public version endpoint and CDN; a product is listed while its build carries its
 // ARM64 client), cached so the store lists offline; each product's store region (the phone's

@@ -11,7 +11,7 @@ branch moves there; decision 0170 stays proposed until they pass.
 
 ## Change
 
-- **`patches/madeira-unix` 0224** (`loader_ios.c`). Before it, a child whose executable is a plain
+- **`patches/madeira-unix` 0249** (`loader_ios.c`). Before it, a child whose executable is a plain
   ARM64 image fell into `wine_ios_child_main`'s S1 branch: a per-child copy of the session's
   ARM64EC ntdll, which loads ARM64EC and x86-64 images and whose `system32` is the ARM64EC set.
   `ios_load_child_ec_ntdll`, which maps the aarch64 ntdll build as a private image for a WoW64
@@ -21,7 +21,7 @@ branch moves there; decision 0170 stays proposed until they pass.
   stack or ntdll ends the child with that status or `STATUS_DLL_INIT_FAILED`, as a WoW64 child's
   does. The log says `[arm64-child] native ARM64 child: private aarch64 ntdll, no window, no FEX`.
   An ARM64 child of an aarch64 session (upstream Madeira's case) keeps the S1 copy.
-- **`patches/wine-pe` 0055** (`dlls/ntdll/loader.c`, aarch64 non-EC build only). 0015's sysarm64
+- **`patches/wine-pe` 0056** (`dlls/ntdll/loader.c`, aarch64 non-EC build only). 0015's sysarm64
   lookup required `WowTebOffset`, so a native child would have taken `kernel32.dll` and the rest
   from `system32` (ARM64EC images it cannot load). The lookup (`open_sysarm64_dll`) now applies to
   every process the aarch64 build runs; on iOS that is only the native side of a WoW64 process
@@ -54,7 +54,7 @@ branch moves there; decision 0170 stays proposed until they pass.
 The session is x86-64 (ARM64EC): `is_arm64ec()` and `main_image_info` are the session's.
 `ios_cur_image_info()`, `ios_is_arm64ec_cur()` and `is_wow64()` are the calling pseudo-process's.
 For a native ARM64 child `ios_cur_image_info()->Machine == 0xAA64`, so `ios_is_arm64ec_cur()` is
-FALSE and `is_wow64()` is FALSE. Lines are the patched `build/ntdll-unix` files after 0224.
+FALSE and `is_wow64()` is FALSE. Lines are the patched `build/ntdll-unix` files after 0249.
 
 | File | Where | Check | Native ARM64 child |
 | --- | --- | --- | --- |
@@ -63,9 +63,9 @@ FALSE and `is_wow64()` is FALSE. Lines are the patched `build/ntdll-unix` files 
 | loader_ios.c | `get_alternate_wineloader` 735 (called env_ios.c 2212) | `machine != get_alt_machine(current_machine)` | ARM64 is `current_machine`: NULL, no start.exe fallback |
 | loader_ios.c | `load_main_exe` 1895 | ComPlus fallback | not reached (no machine mismatch) |
 | loader_ios.c | `load_ntdll_functions` 2047, `load_ntdll` 2685/2697 | `is_arm64ec()` | session's own ntdll only; never on the child path |
-| loader_ios.c | `ios_load_child_ec_ntdll` 2369 | kind → machine, i386 ntdll, EC bitmap | **0224**: native = ARM64 build, no init block, no i386 ntdll, no bitmap |
+| loader_ios.c | `ios_load_child_ec_ntdll` 2369 | kind → machine, i386 ntdll, EC bitmap | **0249**: native = ARM64 build, no init block, no i386 ntdll, no bitmap |
 | loader_ios.c | `start_main_thread` 2985 | `load_wow64_ntdll(main_image_info.Machine)` | session only |
-| loader_ios.c | `wine_ios_child_main` 3241 (log), 3399, 3419, 3436 | I386 branch; **new ARM64 && `is_arm64ec()` branch**; AMD64 && `!is_arm64ec()` | **0224**: the ARM64 branch; failure → `NtTerminateProcess` |
+| loader_ios.c | `wine_ios_child_main` 3241 (log), 3399, 3419, 3436 | I386 branch; **new ARM64 && `is_arm64ec()` branch**; AMD64 && `!is_arm64ec()` | **0249**: the ARM64 branch; failure → `NtTerminateProcess` |
 | env_ios.c | `init_peb` 2089 | owner I386 → WoW64 parameters | no |
 | env_ios.c | 2205-2212 | DLL characteristic, alternate loader | as above |
 | env_ios.c | 2542 | `is_wow64()` zero bits | owner-aware, FALSE |
@@ -93,7 +93,7 @@ FALSE and `is_wow64()` is FALSE. Lines are the patched `build/ntdll-unix` files 
 
 The PE side (`dlls/ntdll/loader.c`, aarch64 build): `is_valid_binary` accepts `Machine ==
 current_machine` (ARM64); `WowTebOffset` gates `init_wow64`, the TLS reservation and
-`\KnownDlls32` — all off for a native child; 0055 removes the one gate a native child needs
+`\KnownDlls32` — all off for a native child; 0056 removes the one gate a native child needs
 lifted.
 
 **Anonymous executable path.** In this ARM64EC session `ios_anon_plain_view()` is on: a guest
@@ -123,15 +123,22 @@ test program, WoW's client) has 4 KiB sections. The pool copy is per image, and 
   runs need the main checkout's own build). `pp verify` of it after the records below were
   committed fails only `resources` (the bundled `artifacts.tsv` holds the copy's eight
   path-dependent rows), as 0117 expects.
-- **Build records (0117).** Committed: `Runtime/aarch64-windows/ntdll.dll` (wine-pe 0055),
-  `lib/libntdll_unix.a` (madeira-unix 0224), and both `winetest.exe` rows of
-  `build/generated` (winetest embeds the wine tree's HEAD, which 0055 changes; the series'
-  commits are made with fixed dates, so it is reproducible). Path independence: with 0224 left
+- **Build records (0117).** Committed: `Runtime/aarch64-windows/ntdll.dll` (wine-pe 0056),
+  `lib/libntdll_unix.a` (madeira-unix 0249), and both `winetest.exe` rows of
+  `build/generated` (winetest embeds the wine tree's HEAD, which 0056 changes; the series'
+  commits are made with fixed dates, so it is reproducible). Path independence: with 0249 left
   out of the series, the copy's unix stage gave main's recorded `libntdll_unix.a`
   (`fb50884c…`), and with it the same `29e9f5ca…` in two builds; every other aarch64 row of the
   pe stage, rebuilt in the copy's path, kept main's value. Kept at main's values: the six i386
   media DLLs (`colorcnv`, `iyuv_32`, `msvproc`, `quartz`, `resampledmo`, `vidreszr`),
   `lib/libdxmt_combined.a` and `lib/libidevice_ffi.a`, which differ in any copy's build.
+  **Rebased onto `main` on 2026-10-31** (main had moved `ntdll.dll`, `libntdll_unix.a`,
+  `libwin32u_unix.a` and both `winetest.exe` rows, and taken madeira-unix 0224–0248 and wine-pe
+  0055): those rows conflicted and keep main's values, so the records commit fell away; the
+  main checkout's build after the move regenerates them (0117). The branch's patches were
+  renumbered then, madeira-unix 0224 → 0249 and wine-pe 0055 → 0056, and now apply after main's;
+  the line numbers above are the pre-rebase tree's, and the commits named here are pre-rebase
+  (`backup/pla-516-pre-rebase`).
 - **The aarch64 Vulkan rows (PLA-513, 0117).** `Runtime/vulkan/aarch64-windows/` `d3d12.dll`
   (`f2ca5f41…`), `d3d12core.dll` (`b57db18f…`), `dxgi.dll` (`e9afd4b9…`) and
   `Runtime/vulkan-loader/aarch64-windows/` `vulkan-1.dll` (`1be90a18…`) and `winevulkan.json`
@@ -141,7 +148,7 @@ test program, WoW's client) has 4 KiB sections. The pool copy is per image, and 
   (the only absolute paths in `d3d12core.dll` and `dxgi.dll` are llvm-mingw's own libc++abi and
   libunwind sources, which the committed arm64ec `dxgi.dll` carries too). The cross files link
   with `--no-insert-timestamp`.
-- **`pp test` (full)**, side copy: all passed (names, secrets, patches with the 0224 and 0055
+- **`pp test` (full)**, side copy: all passed (names, secrets, patches with the 0249 and 0056
   trailers, `tools/tests`, every C host test, every Swift package). `pp slots` was not run: no
   DXMT tree changed (its stage reran only because it follows `pe`).
 

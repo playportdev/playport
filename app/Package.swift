@@ -60,7 +60,7 @@ let package = Package(
         .package(path: "GOGClient"),
         // The Epic Games client (app/EpicClient): sign-in, library and content (decision 0058).
         .package(path: "EpicClient"),
-        // The Battle.net store client (app/BattleNetClient): offered WoW products and their installs (decision 0168).
+        // The Battle.net store client (app/BattleNetClient): offered WoW products and their installs (decision 0174).
         .package(path: "BattleNetClient"),
         // The product UI's catalogue, adoption and launch options, tested on the Linux host.
         .package(path: "PlayportKit"),

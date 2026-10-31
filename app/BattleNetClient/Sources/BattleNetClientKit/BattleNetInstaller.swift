@@ -136,7 +136,7 @@ public struct BattleNetInstaller: Sendable {
         let build = try await client.build(product, region)
         let r = try await read(build, work: work)
         let selection = try BattleNetSelection(build: build, download: r.download, install: r.install, encoding: r.encoding, options: options)
-        // Play starts only the ARM64 client (decision 0168): a build whose selection lacks it is
+        // Play starts only the ARM64 client (decision 0174): a build whose selection lacks it is
         // refused here, before any of it is downloaded.
         guard selection.arm64Client(build.productConfig) != nil else {
             throw BattleNetError.unsupported("\(product.code) \(build.version.versionsName): the install has no ARM64 client "

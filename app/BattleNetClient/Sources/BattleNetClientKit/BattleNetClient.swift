@@ -13,7 +13,7 @@ public struct BattleNetBuild: Sendable, Equatable {
     public let productConfig: ProductConfig
 }
 
-/// Whether a build is offered (decision 0168): only while it carries its ARM64 client, the
+/// Whether a build is offered (decision 0174): only while it carries its ARM64 client, the
 /// product config's ARM64 executable listed in the install manifest with the platform and ARM64
 /// tags.
 public struct BattleNetOffer: Sendable, Equatable {

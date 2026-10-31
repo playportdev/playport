@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 
-/// The fixed product list (decision 0168): World of Warcraft retail and its Classic products, by
+/// The fixed product list (decision 0174): World of Warcraft retail and its Classic products, by
 /// their TACT product code. Other Battle.net products are never asked for.
 public enum BattleNetProduct: String, CaseIterable, Sendable, Codable {
     case wow

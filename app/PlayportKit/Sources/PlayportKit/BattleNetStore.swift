@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// The Battle.net store in the library (PLA-519, decision 0168): no sign-in, a fixed list of
+// The Battle.net store in the library (PLA-519, decision 0174): no sign-in, a fixed list of
 // World of Warcraft products (BattleNetClientKit.BattleNetProduct), each listed while its build
 // carries its ARM64 client. A copy is `(battlenet, TACT product code)`, title ID
 // `bnet-<code>`. The app's side (UI/BattleNetStore.swift) asks Blizzard and runs the installs;

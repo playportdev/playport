@@ -3,7 +3,7 @@
 
 import PackageDescription
 
-// The Battle.net store client (README.md, decision 0168): Blizzard's public version and CDN
+// The Battle.net store client (README.md, decision 0174): Blizzard's public version and CDN
 // endpoints, the build, CDN and product configs, BLTE, and the encoding, install and size
 // manifests, for a fixed list of World of Warcraft products. No Battle.net session. Foundation
 // only, so its tests run on the Linux host.

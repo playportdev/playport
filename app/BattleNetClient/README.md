@@ -1,6 +1,6 @@
 # BattleNetClient: the Battle.net store's TACT client
 
-`BattleNetClientKit` is the Battle.net store (decision 0168, plan
+`BattleNetClientKit` is the Battle.net store (decision 0174, plan
 `docs/plans/2026-10-30-world-of-warcraft.md`, [PLA-510](https://linear.app/playportdev/issue/PLA-510),
 [PLA-517](https://linear.app/playportdev/issue/PLA-517)): which World of Warcraft products are
 offered, what an install of one is, and the install itself in the layout the game reads. No
@@ -15,7 +15,7 @@ offline tests on the Linux host. The app's Battle.net store (`UI/BattleNetStore.
 - **Transport** (`BattleNetTransport`, `URLSessionTransport`): one GET seam, a URL and headers in,
   the status, headers and body out; it throws only when no answer came. Tests inject recorded
   answers through it.
-- **Manners** (`BattleNetManners`, decision 0168): every request carries `User-Agent: Playport`;
+- **Manners** (`BattleNetManners`, decision 0174): every request carries `User-Agent: Playport`;
   at most `maxConcurrent` (8) are in flight; an HTTP 429 pauses that host for its `Retry-After`
   (at most 120 s; one that is not a finite, non-negative number of seconds counts as none: 2 s,
   doubling, up to 120 s) and asks again, five times, before the host counts as refusing. Only the

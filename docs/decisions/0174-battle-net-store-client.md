@@ -1,4 +1,4 @@
-# 0168: Battle.net games come from Playport's own store client, not the Battle.net app
+# 0174: Battle.net games come from Playport's own store client, not the Battle.net app
 
 **Status:** proposed, 2026-10-30, by the owner while planning World of Warcraft
 ([PLA-508](https://linear.app/playportdev/issue/PLA-508)). Accepted after the host spike

@@ -102,7 +102,7 @@ public struct InstalledTitle: Codable, Equatable, Identifiable, Sendable {
     /// The name the player gave the game (display only: the ID does not change).
     public var displayName: String? = nil
     /// When the player accepted the ban-risk notice of a title whose anti-cheat is allowed under
-    /// Wine (decision 0169; a Battle.net product, BattleNetPlay): once per copy, kept across
+    /// Wine (decision 0175; a Battle.net product, BattleNetPlay): once per copy, kept across
     /// adoptions and gone with the copy. Nil: not accepted, Play shows the notice first.
     public var riskNoticeAccepted: Date? = nil
 

@@ -18,7 +18,7 @@ public struct BattleNetResponse: Sendable, Equatable {
     }
 }
 
-/// How the client behaves on Blizzard's servers (decision 0168): a User-Agent naming Playport,
+/// How the client behaves on Blizzard's servers (decision 0174): a User-Agent naming Playport,
 /// at most `maxConcurrent` requests in flight, and on HTTP 429 a pause of that host for the
 /// `Retry-After` it sends (else a doubling back-off) before asking again, `retries` times.
 public struct BattleNetManners: Sendable {
@@ -112,7 +112,7 @@ public enum BattleNetError: Error, Equatable, Sendable, CustomStringConvertible 
     }
 }
 
-/// The URLSession transport: HTTPS GETs with Playport's User-Agent (decision 0168), no cookies,
+/// The URLSession transport: HTTPS GETs with Playport's User-Agent (decision 0174), no cookies,
 /// no cache, and a cap on the body size.
 public struct URLSessionTransport: BattleNetTransport {
     public let session: URLSession
