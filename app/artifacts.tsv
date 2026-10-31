@@ -1186,7 +1186,7 @@ resource	Runtime/aarch64-windows/npmshtml.dll	131072	1bc0a204365da64fbeb5dcaf19e
 resource	Runtime/aarch64-windows/npptools.dll	114688	9210e38f15d48bc80a50b019d4ede5e8519c9229ec2b6ac7d5e8f8f83d6f6c33	wine-build	build-macos/dlls/npptools/aarch64-windows/npptools.dll	P2
 resource	Runtime/aarch64-windows/nsi.dll	114688	d14a6df93978edb046c0381e788d0c9e3db9c9b5a2d8c6eb1b6ffde3c169688d	wine-build	build-macos/dlls/nsi/aarch64-windows/nsi.dll	P2
 resource	Runtime/aarch64-windows/nsiproxy.sys	114688	0d298d4eec08634fcd16ca2188f09481b7daa2d898911c03dbdcb84f733b3d08	wine-build	build-macos/dlls/nsiproxy.sys/aarch64-windows/nsiproxy.sys	P2
-resource	Runtime/aarch64-windows/ntdll.dll	1032192	bdcc2cdf3d227c6484d1574910764182880aa6b40cc235714aa0aae6a86a55ad	wine-build	build-macos/dlls/ntdll/aarch64-windows/ntdll.dll	P2
+resource	Runtime/aarch64-windows/ntdll.dll	1032192	e65a14a373b39554afdb4be48aaef13c1a8996111b1e15030bff090a358dd864	wine-build	build-macos/dlls/ntdll/aarch64-windows/ntdll.dll	P2
 resource	Runtime/aarch64-windows/ntdsapi.dll	114688	e50a2f3fae5404a916e9239b4e147fa9d2ef3ed9e7a91948bcd725989a512ebe	wine-build	build-macos/dlls/ntdsapi/aarch64-windows/ntdsapi.dll	P2
 resource	Runtime/aarch64-windows/ntoskrnl.exe	720896	f83d388b0d9b2daea765d229c39e41b28f93d75fbce9b172d7895abf32075d6a	wine-build	build-macos/dlls/ntoskrnl.exe/aarch64-windows/ntoskrnl.exe	P2
 resource	Runtime/aarch64-windows/ntprint.dll	131072	112b98093004136b2957a8cdb0fac670765794e05bd5d0d055ad6391c08d7bf3	wine-build	build-macos/dlls/ntprint/aarch64-windows/ntprint.dll	P2
@@ -5377,7 +5377,7 @@ resource	Runtime/mono/wine-mono-11.3.0/support/removeuserinstalls-x86.exe	12288	
 resource	Runtime/mono/wine-mono-11.3.0/support/removeuserinstalls-x86_64.exe	14848	716081b9913e005f0e1261f2c2a9d88da970fbe579c7dfd083774b228bd71675	wine-mono	support/removeuserinstalls-x86_64.exe	wine-mono
 resource	Runtime/mono/wine-mono-11.3.0/support/winemono-support.cab	1395918	857cb2bc7001aa6b94a90560a6996f7cf9fe3ebff72ac39e73ed5d05f83b78f4	wine-mono	support/winemono-support.cab	wine-mono
 resource	Runtime/mono/wine-mono-11.3.0/support/winemono-support.msi	22528	0567d9569c9ca7f678c7ccd4a5ccffbd9dc7bdd3c632ce204afaf7068bf9c2db	wine-mono	support/winemono-support.msi	wine-mono
-link	lib/libntdll_unix.a	4854856	2597a2e75725d01fee214d2a53fbd39cd108de773a4f437b8bc7eb59b5c802c9	unix	mythic/app/Madeira/libntdll_unix.a	P3
+link	lib/libntdll_unix.a	4855296	7fd793c8a037fb5bc3f2f8d3f39bb869425ff34c5d6d978f21b099e6cb9cada2	unix	mythic/app/Madeira/libntdll_unix.a	P3
 link	lib/libwin32u_unix.a	4136576	3a5b0613ca033150d18bdcd61a779acc2584f903a7dbeea477861a0ffd82d003	unix	mythic/app/Madeira/libwin32u_unix.a	P4-win32u
 link	lib/libwineserver.a	1214432	78f505018ee5ac887b8d8f7f77e9716662e28108cb17feeb432f0c273865399f	unix	mythic/app/Madeira/libwineserver.a	P4-server
 link	lib/libgnutls.a	3603280	e9fb697d624bb63d1c89e8569f1a8e0e69e576175407853bf34a6279fa1673b3	unix	mythic/toolchains/gnutls-ios/lib/libgnutls.a	P4-crypto
