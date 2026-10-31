@@ -416,3 +416,161 @@ M = read in the code, the SDK header or the l22–l23 / HK logs; I = inferred.
 - Hollow Knight (367520), `6f1751c7…` on Vulkan:
   - the first-frame+10 smoke passed without the option (+11.49 s) and with it (+10.78 s);
   - the gameplay pair ran at 59 fps both ways, with CPU +25 points and 110 MiB less with the option.
+
+## Audio gate (decision 0172)
+
+**Linear:** [PLA-364](https://linear.app/playportdev/issue/PLA-364). Chunk C's phone gate: the audio producer in real
+time ([decision 0172](../decisions/0172-audio-producer-runs-real-time-in-its-own-work-interval.md)).
+IPA `Playport-26.5-58432f76.ipa`, sha256
+`58432f76fa07cb2308cff7745e2c0d529cbbe133f874fc7a8eff3c309d2a0441` (dev). Installed with
+`pp install --ipa …` at 00:53:27 (upgrade in place). `pp phone status` before and after each session showed that sha.
+Every `pp ui`/`pp perf` call passed `--expect-ipa`. Phone iPhone18,4, iOS 27.2, on the charger, 80 % for the whole night.
+M = measured, I = inferred.
+
+Off arm = Runtime keys `env.MADEIRA_AUDIO_RT=0 env.MADEIRA_AUDIO_REFILL=0`; on arm = the IPA's defaults.
+
+### Runs
+
+| Session | Run | Dir |
+| --- | --- | --- |
+| 1 | HK smoke (on) | `$PLAYPORT_BUILD/ui-runs/20261031T005331-hk-aud-smoke` |
+| 1 | HK perf off1, on1, on2, off2 | `$PLAYPORT_BUILD/perf/hk-aud-{off1,on1,on2,off2}` |
+| 2 | RDR2 p476aud-off (arm20) | `$PLAYPORT_BUILD/ui-runs/20261031T020806-rdr2-p476aud-off`, notes `.work/agent-notes/pla476/p476aud-off` |
+| 2 | RDR2 p476aud-on (arm20) | `$PLAYPORT_BUILD/ui-runs/20261031T022731-rdr2-p476aud-on` (log pulled by hand into `pull-manual/`), notes `.work/agent-notes/pla476/p476aud-on` |
+| 3 | W3 perf off, on | `$PLAYPORT_BUILD/perf/w3-aud-{off,on}`: **not run**, see below |
+
+Analysis scripts and outputs: `.work/agent-notes/pla476/chunkC/` (`an.py`, `an-off.txt`, `an-on.txt`, `xp.py`, `heavy.py`).
+
+### Hollow Knight (367520)
+
+- Smoke (on arm): `ok:true`, first frame at +11.28 s, until first-frame+10 (M). This only shows the first frame was seen.
+- `pp perf --compare … --window 60:150` (M):
+
+| run | fps | p50 | p99 | p99.9 | h25 | h50 | h100 | gpu ms | cpu % | P% | E% | sys mW | MiB |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| off1 | 59.6 | 16.67 | 25.01 | 45.85 | 94 | 5 | 2 | 8.06 | 104.7 | 70.0 | 34.8 | 2853 | 3162 |
+| on1 | 59.6 | 16.67 | 25.01 | 41.68 | 272 | 5 | 2 | 7.74 | 101.2 | 62.4 | 38.9 | 2722 | 3157 |
+| on2 | 59.6 | 16.67 | 25.01 | 41.68 | 134 | 4 | 1 | 7.81 | 104.8 | 70.6 | 34.3 | 2724 | 3168 |
+| off2 | 59.7 | 16.67 | 25.01 | 29.18 | 188 | 3 | 1 | 7.92 | 104.4 | 68.9 | 35.4 | 2535 | 3163 |
+
+  Whole-run fps_mean 59.0 / 59.0 / 58.3 / 59.0. All four started nominal, with no pressure level logged (M).
+- **The pads reached gameplay** (no `--shot` in these runs).
+  - M: every run logs `vpad: script 1 loaded: 64 steps` and `script 2 loaded: 86 steps`, then `done` for both:
+    150 steps.
+  - M: each run has the same signature as the gameplay baseline `kkr-hk-before-play`, 10 s later because the pads
+    are at +35/+90 instead of +25/+80:
+    - a load hitch after hk-new-game (on1 500 ms at t=45; baseline 525 ms at t=35) with a JIT burst of about
+      5300–6100/s;
+    - GPU rising to 9.1–9.9 ms/frame;
+    - after hk-walk, the same 425.15 ms room-transition hitch (on1 t=105; baseline t=95).
+  - I: gameplay, not a menu.
+  - The window GPU% (56–59 % against the baseline's 62.8 %) is not a like-for-like comparison: the baseline ran
+    `graphics:vulkan` on another IPA with different pad times, and the 60–150 window covers a different stretch of
+    the walk.
+- **Verdict:** no measurable fps or tail change. The h25 counts (94–272) are spread within each arm and overlap
+  between arms. h50/h100 are the same (I).
+- **Audio (M):**
+  - The off arms log both off lines; there are no `rt` lines.
+  - The on arms log `getbuf-producer … win_tid=00f8 … switches=1`, then `rt promote stream=… win_tid=00f8 kr=0` and
+    `rt join win_tid=00f8 own interval`. The prefill caller is `getbuf-thread win_tid=0068` with 4800 frames.
+  - About 85 `rt producer win_tid=00f8 cpu=0% interval=1 cycles=… cycle_errors=0` lines appear per run, about 51 cycles/s.
+  - No `rt refused`, `rt reassert`, join refusal, `AudioWorkIntervalCreate failed` or `cycle_errors>0`.
+  - No `rt demote`: `pp perf` ends the app, so there is no teardown in the log.
+  - **FMOD's thread `00f8` is promoted** (M).
+  - Slot 0 delivered 99–100 % with 0 short callbacks on every arm, on or off (M).
+
+### Red Dead Redemption 2 (1174180): the heavy scene
+
+Arm20, keys `env.PLAYPORT_CEF_SWAP=0 env.PLAYPORT_SC_SINGLE=1 env.PLAYPORT_SC_LAYOUT=1` (plus the off keys), with no
+graphicsOptions, `STORY_BY=420 UNTIL=600 WAIT=900`, and 3 minutes idle between the arms.
+
+| | off | on |
+| --- | --- | --- |
+| thermal at launch (M) | nominal → fair +98 s → serious at the Story load | **serious at launch** |
+| first frame / Story press (M) | 02:09:58 / 02:15:11 | 02:30:39 / 02:31:19 |
+| heavy scene (M: fps drop, footprint ≥ 7.4 GB) | 02:17:06 → end 02:23 (ff+600) | 02:33:28 → 02:39:06 (last log line) |
+| clamp in the scene (M, `[xp]`) | P 0.03, E 3.11 cores, E 1.14 GHz, 0.34 W | P 0.02, E 3.22 cores, E 1.12 GHz, 0.33 W |
+| scene fps, mean of `[frames]` (M) | 15.98 over 346 s | 15.33 over 325 s (**−4.1 %**) |
+| 16-frame block mean ft: median / p95 / max (M) | 60.1 / 79.3 / 290 ms | 63.1 / 83.9 / 165 ms |
+| slot-1 delivery in the scene, mean of the 10 s windows (M) | **41.4 %** (35–61 %), 15 794 short callbacks | **96.9 %** (66–100 %), 490 short callbacks |
+| slot-1 longest ReleaseBuffer gap in the scene (M) | 47–101 ms (253 once) | 17–77 ms in the clean windows, **393–1547 ms** in the 9 dipped ones |
+| peak `[footprint]` (M) | 7787 MB | 7863 MB |
+| memory warning (syslog) / jetsam (M) | 1 / none | 1 (02:33:35) / none |
+| cabin held (M off from shots; I on) | yes: shots +635 to +880 show Arthur at the cabin | yes, by the log: 15–16.6 fps and 7.5–7.9 GB to 02:39:06, `app_pid` alive at 02:36:26 and 02:38; I ended it at 02:40 with `pp phone kill`. No screenshot after +276 (the loading screen) |
+
+**Slot 1 over time (M, 10 s windows).**
+- **Off:**
+  - Before the scene (menus and the Story load, 02:10–02:14:25): 82–99 %, with 13–181 short callbacks per window.
+  - From the Story load to 02:16:55: 87–100 %.
+  - In the scene (02:17:15 → 02:22:55): 35–61 %, nearly every callback short (437–470 / 469).
+- **On:**
+  - Before the scene: 99–100 %, with 0 short callbacks except 4 at 02:32:57.
+  - In the scene, 02:33:37 → 02:35:07: 100 %, 0 short callbacks.
+  - Then 9 of 22 windows dip: 93, 96, 89, 94, **66**, 84, 95, 91, 95, 97, 98 %. Each dip has a ReleaseBuffer gap of
+    0.3–1.5 s; the others are at 100 %.
+
+**The `[ios_audio]` lines, on arm (M):**
+- Slot 0: the launcher's stream (`Rockstar Games Launcher`, `getbuf-thread win_tid=00a4`). It had no
+  producer line, so it was never promoted.
+- Slot 1:
+  - The main thread `0360` is only the 4800-frame prefill (`getbuf-thread`).
+  - **The steady producer is `0428`** (`getbuf-producer … win_tid=0428 … priority=15 base=15 frames=256 switches=1`).
+  - Then `rt promote … win_tid=0428 kr=0` and `rt join win_tid=0428 own interval`.
+  - The off arm names the same producer `0428`.
+  - In the scene, 0428's guard reads cpu=20–32 %, 3–14 % before it. No reading is near 80 %.
+- Slot 2 (event-driven):
+  - `getbuf-producer win_tid=049c switches=0`, then `rt promote … kr=0` and `rt join`.
+  - 15 lines `rt producer win_tid=049c cpu=0%`. Then the stream's windows and rt lines end (02:31:16, as in the off arm's
+    slot 2 at 02:15:09).
+  - **No `rt demote` line for 049c.** U: was the stream stopped or released without a logged demotion, or did it just stop
+    being polled? The log does not say.
+- **None** of `rt refused`, `rt reassert`, join refusal, `AudioWorkIntervalCreate failed`, `kr≠0` or
+  `cycle_errors>0`. 266 `rt producer` lines; `cycle_errors` 0 throughout.
+- **Refill (C1):** no per-episode line exists in the log. The episodes are visible only as `short_callbacks`/`underrun_frames`
+  (which now count frames not played). No separate C1 count was measured.
+
+**The dips (I).**
+- They are not the throttling that 0172 targets. The off arm's starvation is every callback short with gaps of 50–100 ms.
+  The on arm's dips are a few windows with one long gap.
+- They coincide with whole-process stalls:
+  - Our own 250 ms `[xp]` sampler ran with dt of 1.3–19 s (02:33:44 → 02:36:10, 13.4 s at 02:36:10);
+  - a memory warning (02:33:35), ~7.7–7.8 GB footprint with 2.1 GB compressed, and `limit_remaining` 389 MB;
+  - the phone's syslog and lockdown connection dropping (02:33:35, 02:35:05–02:35:45, `GetProhibited`).
+- The off arm's sampler also stretched (median dt 1.6 s in the scene), so this memory/clamp state is shared. The on
+  arm's long gaps may be memory stalls hitting a producer that no longer starves the rest of the time. Not separated here.
+
+**`pp ui` result of the on arm (M):** `ok:false`, "the app exited before the stop condition" at 02:35:30.
+- The app was **not** gone: `pp phone status` gave `app_pid 14976` at 02:36:26 and 02:38.
+- No app events reached the workstation after 02:32:26, and the syslog stream failed repeatedly from 02:35:05.
+- The pull got nothing (`pull/` empty). The log was pulled by hand with `pp phone log` at 02:39.
+- I: a lost device connection, read as an exit. This is a tooling issue, separate from the audio change.
+
+**Verdicts (RDR2):**
+- Slot 1 ≥ 95 % in the clamp: **pass on the mean** (96.9 % against 41.4 % off). **9 of 22 windows below 95 %**
+  (min 66 %), all with 0.3–1.5 s stalls. A strict per-window reading fails.
+- Steady slot-1 producer named: **`0428`**, not `0360`.
+- No `rt refused`: pass. cycle_errors 0: pass.
+- fps no worse than ~10 %: **pass**, −4.1 %. The on arm started at thermal serious, the off arm at nominal.
+- No new jetsam: pass (peak 7863 against 7787 MB, below l22/l23's 7980/8084).
+- Cabin held: off M, on I (no screenshot in the scene).
+- One run per arm and an unequal thermal start: the fps comparison is weak.
+
+### The Witcher 3 (292030): not run
+
+Both `pp perf` arms ended at once with `action=settings:app-292030 refused: app-292030 is not a catalogued title` (M).
+The title is not in the app's library on the phone, so nothing launched; there is no frame-interval data. The
+off arm first waited the full `--cool-max 20` (pressure still 20 after 28 min of rest, after RDR2). `hud:off` was applied
+after.
+
+### Not checked
+
+No listening test (the owner's cabin listen), so whether the sound is right is not known. W3 is not covered. RDR2 has one run per arm.
+
+### Games observed (audio gate)
+
+- Hollow Knight (367520), dev `58432f76…` on its defaults: the first-frame+10 smoke passed (+11.28 s); four
+  gameplay `pp perf` runs at 59.6–59.7 fps with the producer off and on.
+- Red Dead Redemption 2 (1174180), dev `58432f76…` on `arm20.sh`: the cabin's heavy scene ran in both arms (off to
+  first-frame+600 by shots; on to 02:39 by the log), slot-1 audio 41.4 % off against 96.9 % on, no jetsam. A dev
+  experiment: no change to the compatibility status.
+- The Witcher 3 (292030): not launched (not in the phone's library).
