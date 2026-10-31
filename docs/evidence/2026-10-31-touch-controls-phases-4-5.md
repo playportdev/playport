@@ -83,3 +83,35 @@ them (`phone-session-6b*.sh`).
 The runs saved settings and controls through `--controls`/`--settings`, so DriverUndo puts each
 game's own back at the app's next launch outside the session (Hollow Knight's Gamepad layout was
 back at the next session). Portal 2 stays installed.
+
+## After the PLA-596 and PLA-340 fixes
+
+Both fixes were merged into the branch (`dev/pla-596-…` Portal 2's steamclient calls, `dev/pla-340-…`
+extended arrow keys, each verified on the phone in its own evidence). Dev IPA
+`Playport-26.5-0882126b.ipa`, sha256
+`0882126b89eccfffbcc39153f5796a8fd894c4cf392d85e11e0c8850d2e3deb3`. `pp test` all passed. The runs
+are in `$PLAYPORT_BUILD/agent-notes/pla-13-p4/runs6b-4` (`phone-session-6b-4.sh`), unattended.
+
+| Gate | Result | Run |
+| --- | --- | --- |
+| Hollow Knight `first-frame+10` | passed twice: +10.04, +10.19 s | `hk-smoke`, `hk-end` |
+| Portal 2 Keyboard & mouse in a level | **passed**: moves, looks, Esc menu | `p2-km` |
+| Portal 2 with its own driven layout | **passed**: drawn | `p2-own` |
+| Point & click on Portal 2's menu | hover passed; a tap moves the highlight but does not open the item (PLA-601) | `p2-point`, `p2-point2` |
+
+- **Keyboard & mouse in `sp_a1_intro3`** (first frame +7.57 s, in the level at +90 s):
+  `touch:move.up@2000` walked up the stairs to the exit door. The log
+  shows `drv_post_key vk=0x57 scan=0x11` down and up. `touch:look.left` twice and `look.right`
+  turned the view (`driver drags look ∓100,0 pt: mouse ∓300,0 counts`; the door moved across
+  the frame). `move.left`, Jump and Fire followed (the level has no portal gun yet, so Fire shows
+  nothing). The layout's Esc opened Portal 2's pause menu (Return to game, Save game, …).
+- **The game's own copy:** the layout drew Crouch (Ctrl), the moved Jump, Fire and the top-left
+  Esc from `--controls` `"layouts"`. Crouch was held 1.5 s; the screenshots don't show a clear
+  view change.
+- **Point & click:** tapping the Hover tool lit it, and the pointer then highlighted OPTIONS. A tap
+  at (0.25, 0.625) moved the highlight to OPTIONS, but Options did not open; on Hollow Knight the
+  same tap opens the item. A tap at x 0.12 lands on the side bar's Keys button, which sits over
+  Portal 2's left-aligned menu. Both are in PLA-601. A probe with a second tap
+  (`p2-point3`) was cancelled when Playport left the foreground at about +30 s. Phone input
+  stopped there, as the rules require.
+- Still not run: the editor from Game options (PLA-597, not fixed).

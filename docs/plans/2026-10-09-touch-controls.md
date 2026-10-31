@@ -322,8 +322,12 @@ proposed answer unless the owner says otherwise before the phase that needs them
   click on Hollow Knight's menu, a driven own Keyboard & mouse copy (its keys reach the game), the
   editor over the paused game. Not run: Portal 2 Keyboard & mouse in a level (Portal 2 crashes on
   main, PLA-596), the editor from Game options (`open:ID#layout`, PLA-597). Follow-up: PLA-598.
-  Release IPA `173f7f90…` built and verified, not installed. **Next: the owner's hands-on play,
-  the release install and the sign-offs; then merge to main.**
+  Release IPA `173f7f90…` built and verified, not installed.
+- **After PLA-596 and PLA-340 merged in (2026-10-31):** dev IPA `0882126b…`: Portal 2 Keyboard &
+  mouse in `sp_a1_intro3` passed (moves, looks, Esc menu), its own driven layout drew, Point &
+  click hovers its menu but a tap does not open an item (PLA-601). Merged to main on the owner's
+  word. Open: the editor from Game options (PLA-597), PLA-598, PLA-601, the owner's release
+  install and sign-off.
 
 ## Goal
 
