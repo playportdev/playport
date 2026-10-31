@@ -1,0 +1,41 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 1 Nov 2026 00:10:00 +0100
+Subject: [PATCH 2/3] ntdll: no JIT pool dump at the first unhandled Mach
+ exception
+
+The Mach exception thread wrote the whole JIT pool, 896 MB, to the
+Documents folder at the first unhandled exception of the app's life,
+which in most runs is a recoverable one (69 of 93 runs on 2026-10-30/31
+wrote it). It now does so only with the runtime's diagnostics on
+(madeira_diag_enabled).
+
+Linear: PLA-514
+Class: diagnostics
+Evidence: docs/evidence/2026-10-31-wow-arm64-start.md
+Offered-upstream: no
+---
+ build/ntdll-unix/signal_arm64_ios.c | 9 +++++++--
+ 1 file changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/build/ntdll-unix/signal_arm64_ios.c b/build/ntdll-unix/signal_arm64_ios.c
+index cae8e91..275f47d 100644
+--- a/build/ntdll-unix/signal_arm64_ios.c
++++ b/build/ntdll-unix/signal_arm64_ios.c
+@@ -5688,9 +5688,14 @@ skip_reclaim_band: ;
+                     /* One-shot dump: on the first UNHANDLED exec fault, dump the
+                      * JIT-pool RW alias contents around the relevant FEX CodeBuffer
+                      * slots to a file. Lets us disassemble FEX-emitted ARM64 offline
+-                     * to verify codegen correctness independently. */
++                     * to verify codegen correctness independently.
++                     * Playport (PLA-514): only with the diagnostics on
++                     * (madeira_diag_enabled). The first unhandled fault of most
++                     * runs is a recoverable one, and each wrote the whole pool,
++                     * 896 MB, to the Documents folder (69 of 93 runs on
++                     * 2026-10-30/31). */
+                     static volatile int dumped = 0;
+-                    if (cnt == 1 && __sync_bool_compare_and_swap(&dumped, 0, 1))
++                    if (cnt == 1 && madeira_diag_enabled && __sync_bool_compare_and_swap(&dumped, 0, 1))
+                     {
+                         extern void *ios_jit_rw_base_global;
+                         extern size_t ios_jit_pool_size_global;

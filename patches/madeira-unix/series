@@ -222,3 +222,8 @@
 0253-ntdll-single-step-a-native-ARM64-thread-that-continu.patch
 0254-ntdll-no-JIT-pool-dump-for-a-UDF-a-guest-image-raise.patch
 0255-signal-report-no-hardware-breakpoints-in-an-exceptio.patch
+0256-ntdll-leave-a-single-step-s-BRK-to-trap_handler.patch
+0257-ntdll-no-JIT-pool-dump-at-the-first-unhandled-Mach-e.patch
+0258-signal-NtGetContextThread-reports-no-hardware-breakp.patch
+0259-ntdll-step-an-x18-patched-instruction-as-one-instruc.patch
+0260-virtual-x18-patch-a-CMP-of-x18-that-a-literal-load-p.patch

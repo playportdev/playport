@@ -1,0 +1,47 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 1 Nov 2026 00:45:00 +0100
+Subject: [PATCH] virtual: x18-patch a CMP of x18 that a literal load points at
+
+The x18 patcher leaves alone every word an LDR (literal) points at, as
+data. World of Warcraft's ARM64 client aims junk literal loads at its
+own `cmp x18, #imm` guards (38 of them in WowClassic-arm64.exe), which
+then compared 0 with x18 zeroed by iOS: in its vectored handler one sent
+a single step down a path whose `ldr x28, <literal>` left code words in
+x28, and ntdll's call_vectored_handlers crashed on it after the handler
+returned.
+
+A CMP or CMN of x18 (ADDS/SUBS with Rd = 31) is now never taken for
+data: its word ends in 0b11111, which no aligned pointer does.
+
+Linear: PLA-514
+Class: ios-port
+Evidence: docs/evidence/2026-10-31-wow-arm64-start.md
+Offered-upstream: no
+---
+ build/ntdll-unix/virtual_ios.c | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 2a4adc6..3165228 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -5274,7 +5274,18 @@ static unsigned char *ios_x18_build_data_map( const char *text, size_t text_size
+         tgt = i + (size_t)(imm19 * 4);
+         if (imm19 * 4 + (int64_t)i < 0 || tgt >= text_size) continue;
+         for (size_t b = tgt; b < tgt + lit_bytes && b < text_size; b += 4)
++        {
++            /* Playport (PLA-514): a CMP or CMN of x18 (ADDS/SUBS with Rd = 31)
++             * stays code. Its word ends in 0b11111, which no aligned pointer
++             * does, and World of Warcraft's ARM64 client aims junk literal loads
++             * at its own `cmp x18, #imm` guards: left unpatched, one compared 0
++             * in its exception handler, which then took a path that ends with
++             * x28 holding code words, and its caller crashed. */
++            uint32_t w = *(const uint32_t *)(text + b);
++            if ((w & 0x1f) == 31 && (w & 0x20000000) && (((w >> 24) & 0x1f) == 0x11 || ((w >> 24) & 0x1f) == 0x0b) &&
++                ios_insn_x18_role( w ) != X18_ROLE_NONE) continue;
+             data_map[(b / 4) >> 3] |= 1 << ((b / 4) & 7);
++        }
+     }
+     for (size_t k = 0; k < text_size / 32 + 1; k++) data_map[k] |= x64_map[k];
+     free( x64_map );

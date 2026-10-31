@@ -1,0 +1,166 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 1 Nov 2026 00:30:00 +0100
+Subject: [PATCH] ntdll: step an x18-patched instruction as one instruction
+
+The x18 patcher replaces an instruction that uses x18 with a branch to a
+trampoline of up to seven instructions that loads the TEB into a scratch
+register and does the instruction with it. Stepped one by one (0253),
+World of Warcraft's vectored handler saw seven steps at addresses outside
+the image where Windows has one, stopped stepping in the middle of one,
+and the start-up code then ran on with a wrong state into a crash inside
+the handler call (x28 holding code words).
+
+A step at such a branch is now the patched instruction itself: MOV xN,
+x18 is done on the context, any other runs out of line with the TEB in
+its scratch register, whose value is put back after it, and the step's
+exception has the pc after the original instruction.
+
+Linear: PLA-514
+Class: ios-port
+Evidence: docs/evidence/2026-10-31-wow-arm64-start.md
+Offered-upstream: no
+---
+ build/ntdll-unix/pp_single_step.h   | 40 +++++++++++++++++++++++++++
+ build/ntdll-unix/signal_arm64_ios.c | 43 +++++++++++++++++++++++++++--
+ 2 files changed, 81 insertions(+), 2 deletions(-)
+
+diff --git a/build/ntdll-unix/pp_single_step.h b/build/ntdll-unix/pp_single_step.h
+index a6d47a3..db7e322 100644
+--- a/build/ntdll-unix/pp_single_step.h
++++ b/build/ntdll-unix/pp_single_step.h
+@@ -132,4 +132,44 @@ static inline int ppss_step_in_place( uint64_t x[31], uint64_t *pc, uint32_t cps
+     return 0;
+ }
+ 
++/* An instruction the x18 patcher replaced (virtual_ios.c ios_jit_patch_x18)
++ * is a B to a trampoline that loads the TEB into a register and does the
++ * instruction with it. On Windows that is one instruction, so it is one step
++ * here too: given the trampoline's words t at tramp, for the patched
++ * instruction at pc, ppss_x18_tramp returns
++ * - PPSS_TRAMP_OP: *op is the instruction with *reg in place of x18, to run
++ *   out of line with the TEB in *reg (its value put back after);
++ * - PPSS_TRAMP_MOV: the instruction was MOV x*reg, x18;
++ * - PPSS_TRAMP_NONE: no trampoline of the patcher's (a branch like another). */
++#define PPSS_TRAMP_NONE 0
++#define PPSS_TRAMP_OP   1
++#define PPSS_TRAMP_MOV  2
++
++static inline int ppss_branch_to( uint32_t insn, uint64_t at, uint64_t to )
++{
++    return (insn & 0xfc000000) == 0x14000000 && at + ppss_sext( (insn & 0x3ffffff) << 2, 28 ) == to;
++}
++
++static inline int ppss_x18_tramp( const uint32_t *t, uint64_t tramp, uint64_t pc, unsigned *reg, uint32_t *op )
++{
++    unsigned r = t[0] & 31;
++    uint32_t teb_load = 0x927df000u | (r << 5) | r;
++
++    if ((t[0] == 0xf81f0ff1u || t[0] == 0xf81f0ff0u) && t[1] == (0xd53bd060u | r) && t[2] == teb_load &&
++        (t[3] & 0xffc003ffu) == (0xf9400000u | (r << 5) | r) && t[5] == (0xf84107e0u | r) &&
++        ppss_branch_to( t[6], tramp + 24, pc + 4 ))
++    {
++        *reg = r;
++        *op = t[4];
++        return PPSS_TRAMP_OP;
++    }
++    if ((t[0] & 0xffffffe0u) == 0xd53bd060u && t[1] == teb_load &&
++        (t[2] & 0xffc003ffu) == (0xf9400000u | (r << 5) | r) && ppss_branch_to( t[3], tramp + 12, pc + 4 ))
++    {
++        *reg = r;
++        return PPSS_TRAMP_MOV;
++    }
++    return PPSS_TRAMP_NONE;
++}
++
+ #endif /* PP_SINGLE_STEP_H */
+diff --git a/build/ntdll-unix/signal_arm64_ios.c b/build/ntdll-unix/signal_arm64_ios.c
+index 6bd0d4c..68d37ef 100644
+--- a/build/ntdll-unix/signal_arm64_ios.c
++++ b/build/ntdll-unix/signal_arm64_ios.c
+@@ -585,6 +585,10 @@ static __thread int ios_my_slot = -1;
+ #include "pp_single_step.h"
+ static __thread ULONG64 ios_ss_slot;
+ static __thread ULONG64 ios_ss_pc;
++/* the register an x18-patched instruction stepped out of line uses for the TEB
++ * (its number + 1; 0: none), and its value to put back */
++static __thread int ios_ss_reg;
++static __thread ULONG64 ios_ss_reg_val;
+ 
+ /* Thread registry: maps Mach thread port → TEB + trampoline.
+  *
+@@ -6620,16 +6624,42 @@ static NTSTATUS ios_ss_continue( struct thread_data *data, const CONTEXT *contex
+     char *rw;
+     void *slot;
+     ULONG insn;
++    int tramp_reg = 0;
+ 
+     step.Cpsr &= ~PPSS_CPSR_SS;
+     if (!rx || step.Pc < rx || step.Pc + 4 > rx + ios_jit_pool_size_global || (step.Pc & 3))
+         return signal_set_full_context( &step );
+     insn = *(const ULONG *)step.Pc;
+-    if (ppss_step_in_place( (uint64_t *)step.X, (uint64_t *)&step.Pc, step.Cpsr, (unsigned char (*)[16])step.V, insn ))
++    if ((insn & 0xfc000000) == 0x14000000)
++    {
++        ULONG64 tramp = step.Pc + ppss_sext( (insn & 0x3ffffff) << 2, 28 );
++        if (tramp >= rx && tramp + 28 <= rx + ios_jit_pool_size_global)
++        {
++            unsigned reg;
++            uint32_t op;
++            switch (ppss_x18_tramp( (const uint32_t *)tramp, tramp, step.Pc, &reg, &op ))
++            {
++            case PPSS_TRAMP_MOV:   /* mov xN, x18: done here, below */
++                insn = 0xaa1203e0 | reg;
++                break;
++            case PPSS_TRAMP_OP:    /* the instruction, with the TEB in its scratch register */
++                tramp_reg = reg + 1;
++                insn = op;
++                break;
++            }
++        }
++    }
++    if ((insn & 0xffffffe0) == 0xaa1203e0 || ppss_step_in_place( (uint64_t *)step.X, (uint64_t *)&step.Pc, step.Cpsr, (unsigned char (*)[16])step.V, insn ))
+     {
+         EXCEPTION_RECORD rec = { .ExceptionCode = EXCEPTION_SINGLE_STEP };
+-        ULONG64 pe = ios_jit_reverse_translate( step.Pc, NULL );
++        ULONG64 pe;
+ 
++        if ((insn & 0xffffffe0) == 0xaa1203e0)   /* mov xN, x18 */
++        {
++            if ((insn & 31) != 31) step.X[insn & 31] = (ULONG64)data->teb;
++            step.Pc += 4;
++        }
++        pe = ios_jit_reverse_translate( step.Pc, NULL );
+         rec.ExceptionAddress = (void *)(pe ? pe : step.Pc);
+         return call_user_exception_dispatcher( data, &rec, &step );
+     }
+@@ -6642,6 +6672,11 @@ static NTSTATUS ios_ss_continue( struct thread_data *data, const CONTEXT *contex
+         ios_ss_pc = step.Pc;
+         ios_ss_slot = (ULONG64)slot;
+         step.Pc = (ULONG64)slot;
++        if ((ios_ss_reg = tramp_reg))
++        {
++            ios_ss_reg_val = step.X[tramp_reg - 1];
++            step.X[tramp_reg - 1] = (ULONG64)data->teb;
++        }
+     }
+     return signal_set_full_context( &step );
+ }
+@@ -7388,6 +7423,8 @@ static void setup_exception( ucontext_t *sigcontext, EXCEPTION_RECORD *rec )
+     {
+         PC_sig( sigcontext ) = ios_ss_pc;
+         ios_ss_slot = 0;
++        if (ios_ss_reg) REGn_sig( ios_ss_reg - 1, sigcontext ) = ios_ss_reg_val;
++        ios_ss_reg = 0;
+     }
+ #endif
+     rec->ExceptionAddress = (void *)PC_sig(sigcontext);
+@@ -13690,6 +13727,8 @@ static void trap_handler( int signal, siginfo_t *siginfo, void *sigcontext )
+         ULONG64 next = ios_ss_pc + 4, pe = ios_jit_reverse_translate( next, NULL );
+ 
+         ios_ss_slot = 0;
++        if (ios_ss_reg) REGn_sig( ios_ss_reg - 1, context ) = ios_ss_reg_val;
++        ios_ss_reg = 0;
+         PC_sig( context ) = next;
+         rec.ExceptionCode = EXCEPTION_SINGLE_STEP;
+         rec.ExceptionAddress = (void *)(pe ? pe : next);

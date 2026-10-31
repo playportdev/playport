@@ -23,10 +23,31 @@ Run directories are under `.work/ui-runs/`.
    handler with nonzero debug registers gives the same +0x53e8. Fix: 0255 zeroes them.
 4. 0254: the ILL handler no longer writes the 896 MB JIT pool dump for a UDF in a guest image.
 
+5. **The step's BRK hit the livelock breaker** (run 20261031T225422). The Mach exception thread's `[fault-stuck]`
+   breaker counted each out-of-line step's BRK at the same slot pc and ended the thread at 50. 0256 declines that
+   BRK first, so it goes to trap_handler.
+6. **Trampolines were stepped instruction by instruction** (run 20261031T231240; logged step trace: about 20 µs
+   a step). A patched instruction showed up as up to seven steps outside the image. 0259 steps it as one
+   instruction: out of line with the TEB in its scratch register, or on the context for `mov xN, x18`.
+7. **CMP x18 words that a junk literal load points at stayed unpatched** (runs 20261031T231240,
+   20261031T232640). The literal guard treated 38 of WoW's `cmp x18, #imm` words as data. With x18 = 0, the
+   handler's single-step path ran `ldr x28, <literal>` and returned with x28 = 0xf1030e5f1800009f (two code
+   words); ntdll's `call_vectored_handlers` then faulted on it. Reproduced in the emulator with the phone's x18
+   model, and gone once these words are patched. 0260 never treats a CMP/CMN of x18 as data: its low five bits
+   are 0b11111, which no aligned pointer has.
+8. 0257: the Mach thread's 896 MB pool dump at the first unhandled exception now runs only with the
+   diagnostics on (it ran in 69 of 93 runs on 2026-10-30/31). 0258: `NtGetContextThread` returns zeroed debug
+   registers.
+
 ## Where it stands
 
-Run 20261031T225422 (IPA ad5948b6…): the UDF is handled and single steps run (d6cc, d6d0, …). Each out-of-line
-step's BRK also reaches the Mach exception thread, whose `[fault-stuck]` breaker counts the same pc 50 times
-and aborts the thread. WoW exits with code 0 before its log or window exists. **Not working yet**. The next
-fix is to exempt `PPSS_BRK` from that breaker (signal_arm64_ios.c, `[fault-stuck]`). No login screen, no gx.log,
-and no Hollow Knight gate on these IPAs.
+Run 20261031T233815 (IPA 6e598040043f6dcbc1d552558d498d6234686b2c77e463b5e0a9564ac032c03e): the first TLS
+callback completes, and WoW handles 11 planned UDFs with their single steps (the emulator saw 7 in that
+callback). Then a stepped `str x9, [x8]` at +0x118d4 writes the image's PE .text address (0x141461000) through
+x8 = 0x710e184ed8, which nothing maps. x8 is `(ret ^ K) + w10`, where `ret` is the return value of a call at
++0x11064 that WoW resolved itself, and K = 0xb96cc89bbdc29933. Just before it, WoW had VirtualAlloc'd 0x2000
+bytes RWX (0x7043c50000). The game then shows "Game Initialization Failed: M…" and exits with code 1.
+Still open: which call at +0x11064 this is, what it returns under Wine on iOS compared with Windows, and how
+WoW's RWX code buffer is handled on iOS. No login screen yet.
+
+Hollow Knight on IPA 6e598040: first-frame+10 passes (run 20261031T234011).

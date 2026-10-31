@@ -10,7 +10,8 @@ import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-PATCH = ROOT / "patches/madeira-unix/0253-ntdll-single-step-a-native-ARM64-thread-that-continu.patch"
+PATCHES = [ROOT / "patches/madeira-unix/0253-ntdll-single-step-a-native-ARM64-thread-that-continu.patch",
+           ROOT / "patches/madeira-unix/0259-ntdll-step-an-x18-patched-instruction-as-one-instruc.patch"]
 HEADER = "build/ntdll-unix/pp_single_step.h"
 
 TEST_C = r'''
@@ -89,6 +90,20 @@ int main(void)
         pc = lit - 8; x[7] = 5;
         assert(ppss_step_in_place(x, &pc, 0, v, 0xd8000047) && pc == lit - 4 && x[7] == 5);
     }
+    /* The x18 patcher's trampolines: cmp w9, w18, asr #5 at pc, and mov x8, x18 */
+    {
+        uint64_t pc = 0x10a44d000ull, tramp = 0x11017cce8ull;
+        uint32_t t[7] = { 0xf81f0ff1, 0xd53bd071, 0x927df231, 0xf944a231, 0x4b91153f, 0xf84107f1, 0 };
+        uint32_t m[4] = { 0xd53bd068, 0x927df108, 0xf944a108, 0 };
+        unsigned reg = 0; uint32_t op = 0;
+        t[6] = 0x14000000 | (uint32_t)(((pc + 4 - (tramp + 24)) >> 2) & 0x3ffffff);
+        assert(ppss_x18_tramp(t, tramp, pc, &reg, &op) == PPSS_TRAMP_OP && reg == 17 && op == 0x4b91153f);
+        assert(ppss_x18_tramp(t, tramp, pc + 8, &reg, &op) == PPSS_TRAMP_NONE);   /* returns elsewhere */
+        m[3] = 0x14000000 | (uint32_t)(((pc + 4 - (tramp + 12)) >> 2) & 0x3ffffff);
+        assert(ppss_x18_tramp(m, tramp, pc, &reg, &op) == PPSS_TRAMP_MOV && reg == 8);
+        t[1] = 0xd503201f;
+        assert(ppss_x18_tramp(t, tramp, pc, &reg, &op) == PPSS_TRAMP_NONE);
+    }
     puts("single step: ok");
     return 0;
 }
@@ -104,7 +119,8 @@ class SingleStepTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=scratch) as td:
             d = pathlib.Path(td)
             subprocess.run(["git", "init", "-q", str(d)], check=True)
-            subprocess.run(["git", "apply", f"--include={HEADER}", str(PATCH)], cwd=d, check=True)
+            for patch in PATCHES:
+                subprocess.run(["git", "apply", f"--include={HEADER}", str(patch)], cwd=d, check=True)
             (d / "test.c").write_text(TEST_C)
             subprocess.run([cc, "-std=gnu11", "-O2", "-Wall", "-Wextra", "-Werror", "-I",
                             str((d / HEADER).parent), "-o", str(d / "t"), str(d / "test.c")], check=True)

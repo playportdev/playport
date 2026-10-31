@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 1 Nov 2026 00:15:00 +0100
+Subject: [PATCH 3/3] signal: NtGetContextThread reports no hardware
+ breakpoints
+
+A request for CONTEXT_DEBUG_REGISTERS printed a FIXME and left the
+caller's buffer as it came, which an anti-debug check reads as a
+debugger's breakpoints. The runtime arms none, so the fields are zero,
+as save_context reports them for an exception (0255).
+
+Linear: PLA-514
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-31-wow-arm64-start.md
+Offered-upstream: no
+---
+ build/ntdll-unix/signal_arm64_ios.c | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/build/ntdll-unix/signal_arm64_ios.c b/build/ntdll-unix/signal_arm64_ios.c
+index 275f47d..6bd0d4c 100644
+--- a/build/ntdll-unix/signal_arm64_ios.c
++++ b/build/ntdll-unix/signal_arm64_ios.c
+@@ -7022,7 +7022,17 @@ NTSTATUS WINAPI NtGetContextThread( HANDLE handle, CONTEXT *context )
+         context->X[18] = frame->x[18];
+         context->ContextFlags |= CONTEXT_ARM64_X18;
+     }
+-    if (needed_flags & CONTEXT_DEBUG_REGISTERS) FIXME( "debug registers not supported\n" );
++    if (needed_flags & CONTEXT_DEBUG_REGISTERS)
++    {
++        /* Playport (PLA-514): no hardware breakpoint or watchpoint is set (the
++         * runtime arms none), as save_context reports; the caller's buffer was
++         * left as it came, which an anti-debug check reads as a debugger's. */
++        memset( context->Bcr, 0, sizeof(context->Bcr) );
++        memset( context->Bvr, 0, sizeof(context->Bvr) );
++        memset( context->Wcr, 0, sizeof(context->Wcr) );
++        memset( context->Wvr, 0, sizeof(context->Wvr) );
++        context->ContextFlags |= CONTEXT_DEBUG_REGISTERS;
++    }
+     set_context_exception_reporting_flags( &context->ContextFlags, CONTEXT_SERVICE_ACTIVE );
+     return STATUS_SUCCESS;
+ }
