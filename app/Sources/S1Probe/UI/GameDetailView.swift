@@ -255,6 +255,13 @@ private struct GameDetailPage: View {
                 navigation.pageSection = nil
                 return
             }
+            if navigation.pageSection == "layout", let t {
+                // Its Controls › Edit on-screen layout: the layout editor over the game's art.
+                if navigation.gamePanels != [.options] { navigation.gamePanels = [.options] }
+                navigation.pageSection = nil
+                LayoutEditorSession.shared.openOverArt(titleID: t.id, title: name)
+                return
+            }
             if navigation.gamePanels != [.options] { navigation.gamePanels = [.options] }
         }
         // Again once a restore signs in: a page opened while it ran fetched nothing.
@@ -653,7 +660,7 @@ private struct GameDetailPage: View {
         case "files": "opt:files"
         case "developer", "ordering": "opt:ordering-\(MemoryOrdering.Setting.allCases[0].rawValue)"
         case "steam": "opt:steamAPI"
-        case "gyro", "controller": nil
+        case "gyro", "controller", "layout": nil
         case "runtime": "opt:runtime"
         case "graphicsoptions": "opt:graphicsOptions"
         default: nil
@@ -729,8 +736,9 @@ private struct GameDetailPage: View {
         let inheritedGraphics = launchSettings.effective(for: t, inheritingGraphics: true).graphics
         let d3d = OptionValue.of(own: own.graphics, compat: cs?.graphics, inherited: inheritedGraphics, name: LaunchSettingsText.graphics)
         PadSectionHeader(text: "Graphics").id("graphics")
-        if let compat {
-            // On the page for touch and in the ring for a controller: what the marker means.
+        if let compat, compat.settings != LaunchSettings() {
+            // On the page for touch and in the ring for a controller: what the marker means. An entry
+            // that sets only the on-screen layout says so in Controls (GameControlsOptionRows).
             PadRow(id: "opt:compat", title: "\(OptionValue.compatMarker) Set for this game's compatibility",
                    subtitle: compat.reason + " Your own choice on a row below wins; Y on that row comes back to this.",
                    subtitleLines: nil, style: .plain, hint: "Info") {}

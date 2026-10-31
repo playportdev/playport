@@ -14,12 +14,18 @@
 ///   merge and clamped to XInput's range; it connects no pad by itself. Gyro
 ///   aim as a mouse is relative motion (`move`).
 /// - Keys and mouse buttons: what the controls hold now against what they held,
-///   as downs (a chord's modifiers first) and ups (its key first); a chord
+///   as downs (a chord's modifiers first, then Shift, Ctrl or Alt held as keys
+///   themselves, as the touch keyboard's are) and ups (its key first); a chord
 ///   newly held while its key is already down (held alone by another control)
 ///   sends that key up, the modifiers down, then the key down again. HostIO sends
 ///   them through Lifecycle, which releases them on focus loss as it does a
 ///   hardware keyboard's.
 /// - The wheel and Playport's actions happen once, as their control goes down.
+/// - The controls' events (TouchOutput.events: a look area's or a trackpad's
+///   motion, tap to click's places, a trackpad tap's click, scroll's wheel
+///   notches) go out in order before the holds' edges, so a press lands where
+///   its place put the pointer. A click on a button the controls already hold
+///   sends nothing.
 /// - Controller maps (phase 3): with a table set (`setMap`; nil is the
 ///   `controller` mode), every physical pad plays through it (MappedPad): its
 ///   slot gets only its `pad:` actions (at rest with none, so the game sees no
@@ -42,6 +48,9 @@ public enum MixerOutput: Equatable, Sendable {
     case pointer(flags: UInt32, data: UInt32)
     /// winios_pointer(dx, dy, MOUSEEVENTF_MOVE, 0): relative motion, +y down.
     case move(dx: Int32, dy: Int32)
+    /// winios_post_client_pointer(x, y, MOUSEEVENTF_MOVE, 0): the pointer to
+    /// this place in the client area, 0...65535 each way (HostIO.touch's mapping).
+    case place(x: Int32, y: Int32)
     case playport(PlayportAction)
 }
 
@@ -216,31 +225,50 @@ public struct InputMixer: Sendable {
         keysDown = kept + new   // in press order: ups go last pressed first
         for m in [MouseAction.left, .right, .middle] {
             let was = buttonsDown.contains(m), now = mouse.contains(m)
-            guard was != now else { continue }
-            switch m {
-            case .left: out.append(.pointer(flags: now ? Pointer.leftDown : Pointer.leftUp, data: 0))
-            case .right: out.append(.pointer(flags: now ? Pointer.rightDown : Pointer.rightUp, data: 0))
-            default: out.append(.pointer(flags: now ? Pointer.middleDown : Pointer.middleUp, data: 0))
-            }
+            guard was != now, let flags = Self.buttonFlags(m) else { continue }
+            out.append(.pointer(flags: now ? flags.down : flags.up, data: 0))
         }
         buttonsDown = mouse.intersection([.left, .right, .middle])
         return out
     }
 
+    /// A mouse button's MOUSEEVENTF_*DOWN and *UP; nil for the wheel and motion.
+    static func buttonFlags(_ m: MouseAction) -> (down: UInt32, up: UInt32)? {
+        switch m {
+        case .left: (Pointer.leftDown, Pointer.leftUp)
+        case .right: (Pointer.rightDown, Pointer.rightUp)
+        case .middle: (Pointer.middleDown, Pointer.middleUp)
+        case .wheelUp, .wheelDown, .move: nil
+        }
+    }
+
     private mutating func sendEdges() { pending += edges() }
 
     /// The controls' new state, nil when they are off (hidden): slot 0's
-    /// update and the keys, pointer and Playport actions to send.
-    public mutating func touch(_ t: TouchOutput?) -> (slot0: SlotUpdate, outputs: [MixerOutput]) {
+    /// update and the keys, pointer and Playport actions to send. With
+    /// `padOn` false (a controller is player 1; the touch keyboard is open over
+    /// it) their keys, pointer and actions go through but their pad is not in slot 0.
+    public mutating func touch(_ t: TouchOutput?, padOn: Bool = true) -> (slot0: SlotUpdate, outputs: [MixerOutput]) {
         let before = slot0
-        touchPad = t.map { PadMapping.values($0.pad) }
+        touchPad = padOn ? t.map { PadMapping.values($0.pad) } : nil
         let after = slot0
         let slot: SlotUpdate = after == before ? .unchanged : after.map { .set($0) } ?? .disconnect
         let mouse = t?.mouse ?? []
         let wheel = mouse.subtracting(touchMouse)
+        var out: [MixerOutput] = []
+        for e in t?.events ?? [] {
+            switch e {
+            case .move(let dx, let dy): out.append(.move(dx: dx, dy: dy))
+            case .place(let x, let y): out.append(.place(x: x, y: y))
+            case .wheel(let n): out.append(.pointer(flags: Pointer.wheel, data: UInt32(bitPattern: Int32(clamping: n * 120))))
+            case .click(let m):
+                guard !buttonsDown.contains(m), let flags = Self.buttonFlags(m) else { continue }
+                out += [.pointer(flags: flags.down, data: 0), .pointer(flags: flags.up, data: 0)]
+            }
+        }
         touchKeys = t?.keys ?? []
         touchMouse = mouse
-        var out = edges()
+        out += edges()
         if wheel.contains(.wheelUp) { out.append(.pointer(flags: Pointer.wheel, data: 120)) }
         if wheel.contains(.wheelDown) { out.append(.pointer(flags: Pointer.wheel, data: UInt32(bitPattern: -120))) }
 
@@ -280,14 +308,17 @@ public struct InputMixer: Sendable {
         return out
     }
 
-    /// The VKs a set of key actions holds: every chord's modifiers, then the keys, each once.
+    /// The VKs a set of key actions holds: every chord's modifiers, then the
+    /// modifier keys held as keys (the touch keyboard's Shift, Ctrl, Alt), then
+    /// the other keys, each once.
     static func virtualKeys(_ keys: Set<InputAction>) -> [UInt8] {
         var mods: [UInt8] = [], main: [UInt8] = []
         for case let .key(vk, m) in keys.sorted(by: { $0.name < $1.name }) {
             for v in m.virtualKeys where !mods.contains(v) { mods.append(v) }
             if !main.contains(vk) { main.append(vk) }
         }
-        return mods.sorted() + main.filter { !mods.contains($0) }
+        main.removeAll { mods.contains($0) }
+        return mods.sorted() + main.filter(KeyModifiers.isModifier) + main.filter { !KeyModifiers.isModifier($0) }
     }
 
     public static func merge(physical p: PadValues, touch t: PadValues) -> PadValues {

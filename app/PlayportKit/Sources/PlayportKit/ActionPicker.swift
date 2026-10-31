@@ -351,7 +351,7 @@ public struct RealKeyCapture: Equatable, Sendable {
 
 /// The words an action is shown with (the Controller page's rows, the ActionPicker).
 public enum ActionText {
-    /// `Space`, `Shift+1`, `Left button`, `Mouse look`, `Pad A`, `Playport menu`; nil is `Nothing`.
+    /// `Space`, `Shift+1`, `Left button`, `Mouse look`, `Pad A`, `Playport menu`, `Touch keyboard`; nil is `Nothing`.
     public static func name(_ a: InputAction?) -> String {
         switch a {
         case nil: "Nothing"
@@ -359,6 +359,7 @@ public enum ActionText {
         case .mouse(let m)?: mouse(m)
         case .pad(let c)?: "Pad " + pad(c)
         case .playport(.menu)?: "Playport menu"
+        case .playport(.keyboard)?: "Touch keyboard"
         }
     }
 

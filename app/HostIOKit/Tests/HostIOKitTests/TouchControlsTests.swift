@@ -369,13 +369,14 @@ final class InputMixerTests: XCTestCase {
 final class InputActionTests: XCTestCase {
     func testNamesRoundTrip() throws {
         let all: [InputAction] = PadControl.allCases.map { .pad($0) } + MouseAction.allCases.map { .mouse($0) }
-            + [.key(0x20, []), .key(0x31, [.shift, .control]), .key(0x1B, .alt), .playport(.menu)]
+            + [.key(0x20, []), .key(0x31, [.shift, .control]), .key(0x1B, .alt), .playport(.menu), .playport(.keyboard)]
         for a in all {
             XCTAssertEqual(InputAction(name: a.name), a, a.name)
             let data = try JSONEncoder().encode([a])
             XCTAssertEqual(try JSONDecoder().decode([InputAction].self, from: data), [a])
         }
         XCTAssertEqual(InputAction.key(0x31, [.shift, .control]).name, "key:shift+ctrl+0x31")
+        XCTAssertEqual(InputAction(name: "playport:keyboard"), .playport(.keyboard))
         XCTAssertEqual(InputAction(name: "key:32"), .key(0x20, []))
         XCTAssertEqual(PadControl.leftStick.thumb, .ls)
         XCTAssertNil(PadControl.a.thumb)

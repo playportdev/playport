@@ -107,7 +107,7 @@ static void concurrent(void)
 }
 
 /* The loop: N client threads, each with a request pipe and a reply pipe, R synchronous round trips each. */
-static int nclients, rounds, full_sweep_ms, miss_every, legacy, think_us;
+static int rounds, miss_every, legacy, think_us;
 struct client { int req[2], rep[2]; uint32_t tid; unsigned served; };
 static struct client *cl;
 static struct ppsp_set ss;
@@ -163,7 +163,7 @@ static int loop(int clients, int r, int sweep_ms, int miss, int old, int think)
     double last_full = now_ms(), start = now_ms();
     unsigned long long total = (unsigned long long)clients * r;
 
-    nclients = clients; rounds = r; full_sweep_ms = sweep_ms; miss_every = miss; legacy = old; think_us = think;
+    rounds = r; miss_every = miss; legacy = old; think_us = think;
     memset(&ss, 0, sizeof ss);
     clients_done = 0; signals = rearms = timeouts_waiting = reads = failed_reads = full_sweeps = found_by_sweep = 0;
     assert(!sem_init(&wake, 0, 0));

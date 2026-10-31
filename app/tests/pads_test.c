@@ -3,8 +3,9 @@
  * pads_test.c — hio_pads.c on the Linux host (pp test), against Madeira's
  * WiniosGamepad.c at the pin: what Wine's XInput reads back (through
  * winios_gamepad_get_state, the call libwin32u_unix.a makes) after each
- * writer, and a writer thread racing a reader. Host only: on the device the
- * reader is win32u's ios_gamepad_query, which this cannot stand in for.
+ * writer, a writer thread racing a reader, and the count of the game's state
+ * reads. Host only: on the device the reader is win32u's ios_gamepad_query,
+ * which this cannot stand in for (it calls the counting hook, madeira-unix 0247).
  */
 #include "host_io.h"
 #include "WiniosGamepad.h"
@@ -27,6 +28,17 @@ static void *writer(void *arg)
         hio_pad_state st = {(uint16_t)k, (uint8_t)k, (uint8_t)(k >> 8), (int16_t)k, (int16_t)-k, (int16_t)(k / 2), (int16_t)(-k / 2)};
         host_pad_set(2, &st);
     }
+    return NULL;
+}
+
+#define STATE_READS 100000
+
+/* A game thread asking for XInput state. */
+static void *state_reader(void *arg)
+{
+    int i;
+    (void)arg;
+    for (i = 0; i < STATE_READS; i++) playport_gamepad_state_read();
     return NULL;
 }
 
@@ -77,6 +89,24 @@ int main(void)
     host_pad_disconnect(3);
     CHECK(!winios_gamepad_get_state(3, &g) && g.buttons == 0 && g.connected == 0);
     CHECK(host_pads_release_all() == 0);
+
+    /* The game's XInput state reads (win32u's ios_gamepad_query, patches/madeira-unix 0247,
+     * calls the hook): none yet, as the app's own snapshot reads above (release_all) and
+     * writes are not the game's; each call is one, from any thread. */
+    CHECK(host_pad_state_reads() == 0);
+    playport_gamepad_state_read();
+    playport_gamepad_state_read();
+    CHECK(host_pad_state_reads() == 2);
+    {
+        pthread_t r[2];
+        pthread_create(&r[0], NULL, state_reader, NULL);
+        pthread_create(&r[1], NULL, state_reader, NULL);
+        pthread_join(r[0], NULL);
+        pthread_join(r[1], NULL);
+    }
+    CHECK(host_pad_state_reads() == 2 + 2 * STATE_READS);
+    host_pads_release_all();
+    CHECK(host_pad_state_reads() == 2 + 2 * STATE_READS);
 
     /* A writer racing a reader: every read is one whole state (the writer
      * derives every field from one k). */

@@ -213,3 +213,5 @@
 0244-ntdll-log-each-render-stream-s-steady-GetBuffer-call.patch
 0245-ntdll-give-a-render-stream-s-producer-a-time-constra.patch
 0246-ntdll-after-repeated-underruns-play-whole-callbacks-.patch
+0247-win32u-count-the-game-s-XInput-state-reads-for-the-h.patch
+0248-win32u-post-the-nav-cluster-s-keys-with-E0-from-the-.patch

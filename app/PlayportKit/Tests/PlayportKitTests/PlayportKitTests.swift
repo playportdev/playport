@@ -2121,8 +2121,9 @@ final class QuickMenuTests: XCTestCase {
         XCTAssertEqual(m.ring, .quit)
         m.move(down: false)
         XCTAssertEqual(m.ring, .controller)
-        XCTAssertEqual(QuickMenu.steps(from: .resume, to: .quit), [true, true, true, true, true])
-        XCTAssertEqual(QuickMenu.steps(from: .overlay, to: .resume), [false, false, false])
+        XCTAssertEqual(QuickMenu.steps(from: .resume, to: .quit), [true, true, true, true, true, true])
+        XCTAssertEqual(QuickMenu.steps(from: .overlay, to: .resume), [false, false, false, false])
+        XCTAssertEqual(QuickMenu.steps(from: .controls, to: .keyboard), [true])
         XCTAssertEqual(QuickMenu.steps(from: .quit, to: .quit), [])
     }
 
@@ -2132,8 +2133,11 @@ final class QuickMenuTests: XCTestCase {
         XCTAssertEqual(QuickMenu.controller(name: "Xbox", battery: 80), "Xbox · 80%")
         XCTAssertEqual(QuickMenu.controller(name: "DualSense", battery: nil), "DualSense")
         XCTAssertEqual(QuickMenu.controller(name: nil, battery: nil), "None")
+        // The dev build's scripted pad is no GameController pad: no name of its own (touch controls 3c).
+        XCTAssertEqual(QuickMenu.controller(name: nil, battery: nil, scriptedPad: true), "Scripted pad")
+        XCTAssertEqual(QuickMenu.controller(name: "DualSense", battery: 70, scriptedPad: true), "DualSense · 70%")
         XCTAssertEqual(QuickMenuItem.allCases.map(\.title),
-                       ["Resume", "Controls", "Screenshot", "Performance overlay", "Controller", "Quit game"])
+                       ["Resume", "Controls", "Touch keyboard", "Screenshot", "Performance overlay", "Controller", "Quit game"])
     }
 
     func testTheControlsPanelTakesTheRingAndGivesItBack() {
@@ -2143,7 +2147,7 @@ final class QuickMenuTests: XCTestCase {
         XCTAssertNil(m.panel)
         m.openPanel()
         XCTAssertEqual(m.panel, .layout)
-        let noPad = QuickMenuControlsRow.shown(controller: false)
+        let noPad = QuickMenuControlsRow.shown(controller: false, state: Self.gamepad)
         m.move(down: true, rows: noPad)
         XCTAssertEqual(m.panel, .dpad)
         m.move(down: true, rows: noPad)
@@ -2160,7 +2164,7 @@ final class QuickMenuTests: XCTestCase {
         m.closePanel()
         XCTAssertNil(m.panel)
         m.move(down: true)
-        XCTAssertEqual(m.ring, .screenshot)
+        XCTAssertEqual(m.ring, .keyboard)
         m.openPanel(.opacity)
         XCTAssertEqual(m.ring, .controls)
         m.ring(.quit)                        // a tap on another row closes the panel
@@ -2168,19 +2172,39 @@ final class QuickMenuTests: XCTestCase {
     }
 
     func testTheControllerRowShowsOnlyWithAController() {
-        XCTAssertFalse(QuickMenuControlsRow.shown(controller: false).contains(.controllerMap))
-        XCTAssertEqual(QuickMenuControlsRow.shown(controller: true).last, .controllerMap)
+        XCTAssertFalse(QuickMenuControlsRow.shown(controller: false, state: Self.gamepad).contains(.controllerMap))
+        XCTAssertEqual(QuickMenuControlsRow.shown(controller: true, state: Self.gamepad).last, .controllerMap)
         XCTAssertEqual(QuickMenuControlsRow.controllerMap.title, "Controller")
         var m = QuickMenu()
         m.openPanel(.gyroSensitivity)
-        m.move(down: true, rows: QuickMenuControlsRow.shown(controller: true))
+        m.move(down: true, rows: QuickMenuControlsRow.shown(controller: true, state: Self.gamepad))
         XCTAssertEqual(m.panel, .controllerMap)
-        m.move(down: true, rows: QuickMenuControlsRow.shown(controller: true))
+        m.move(down: true, rows: QuickMenuControlsRow.shown(controller: true, state: Self.gamepad))
         XCTAssertEqual(m.panel, .controllerMap)
         // The controller goes: the ring comes back to the last row shown.
-        m.move(down: false, rows: QuickMenuControlsRow.shown(controller: false))
+        m.move(down: false, rows: QuickMenuControlsRow.shown(controller: false, state: Self.gamepad))
         XCTAssertEqual(m.panel, .gyroSensitivity)
         XCTAssertEqual(ControllerMap.Mode.allCases.map(\.shortTitle), ["Pad", "Keys & mouse", "Custom"])
+    }
+
+    static let gamepad = ControlsState(layout: .gamepad, visible: true, opacity: 0.6)
+
+    /// The D-pad and Right stick rows place the Gamepad preset's: shown only for Gamepad with no
+    /// copy of the game's own (a copy has its own d-pad and sticks, the other layouts none).
+    func testTheDpadAndRightStickRowsShowOnlyForThePlainGamepadLayout() {
+        XCTAssertTrue(Self.gamepad.hasGamepadOptions)
+        XCTAssertEqual(QuickMenuControlsRow.shown(controller: false, state: Self.gamepad),
+                       [.layout, .dpad, .rightStick, .opacity, .gyro, .gyroSensitivity])
+        let hidden = ControlsState(layout: .gamepad, visible: false, opacity: 0.6, padConnected: false)
+        XCTAssertTrue(QuickMenuControlsRow.shown(controller: true, state: hidden).contains(.dpad))
+        for state in [ControlsState(layout: .keyboardMouse, visible: true, opacity: 0.6),
+                      ControlsState(layout: .pointClick, visible: true, opacity: 0.6),
+                      ControlsState(layout: .off, visible: false, opacity: 0.6),
+                      ControlsState(layout: .gamepad, visible: true, opacity: 0.6, edited: .gamepad(dpad: .on))] {
+            XCTAssertFalse(state.hasGamepadOptions, "\(state.layout)")
+            XCTAssertEqual(QuickMenuControlsRow.shown(controller: true, state: state),
+                           [.layout, .opacity, .gyro, .gyroSensitivity, .controllerMap], "\(state.layout)")
+        }
     }
 }
 

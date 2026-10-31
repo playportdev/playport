@@ -5,7 +5,8 @@ session); [PLA-108](https://linear.app/playportdev/issue/PLA-108), and the mecha
 Proton-style per-game compatibility settings ([PLA-83](https://linear.app/playportdev/issue/PLA-83))
 can use. Adds a level to [0073](0073-screen-aspect-ratio.md)'s launch settings.
 Amended by [0091](0091-compat-default-keys-merge.md) (Runtime keys and Graphics options merge
-with the person's own by key).
+with the person's own by key) and [0171](0171-on-screen-controls-input-mapping-and-gyro.md) (an
+entry may set `controls`, the game's starting on-screen layout, with or without `settings`).
 
 ## Context
 

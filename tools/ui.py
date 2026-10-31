@@ -42,6 +42,15 @@ best-effort and reported as unconfirmed; transport loss/SIGKILL can leave cancel
                          controller "Switch to Custom?" first), pad:y resets it, pad:b goes back; in
                          the ActionPicker pad:lb/rb switch tabs, pad:x waits for a hardware key,
                          pad:b cancels);
+                         open:ID#layout opens its Controls › Edit on-screen layout: the layout editor
+                         (no game running: over the game's art, dimmed) on the layout the game starts
+                         with; pad:lb/rb ring a control (the selection), pad:up/down/left/right move it
+                         one 8 pt grid step, pad:a opens the bar (Add, preset, Opacity, undo, redo,
+                         Reset, Done) and the inspector (what it presses through the ActionPicker,
+                         Label, Size, Hold/Toggle/Repeat, Duplicate, Remove) to the ring, whose
+                         pad:directions and pad:a then work it and pad:b comes back; pad:x Add,
+                         pad:y Reset, pad:view undo, pad:menu redo; pad:b on the controls is Done,
+                         which saves the game's own copy ("layouts" below) and goes back;
                          open:settings#SECTION shows a Settings section (accounts, graphics, downloads,
                          controls, storage, setup, about, developer; also account, jit, memory,
                          diagnostics, pairing, probes, logs for the section that holds them,
@@ -89,6 +98,7 @@ best-effort and reported as unconfirmed; transport loss/SIGKILL can leave cancel
                          or a dialog it opens after it, decision 0076, --until mark:dialog shown+S)
                          while one is shown, else on the game. While the on-screen controls show it
                          sends nothing: a touch outside them is ignored, and the app logs `tap …: ignored`
+                         (above the open touch keyboard it is the game's, for a text field)
   touch:CONTROL[+CONTROL...][@MS]
                          after a play: (it runs while the game runs): wait for the game's first frame,
                          then fingers on the on-screen controls by id, held MS ms (200 by default,
@@ -96,9 +106,24 @@ best-effort and reported as unconfirmed; transport loss/SIGKILL can leave cancel
                          layout's ids: view menu lt lb rt rb leftStick y x b a, and dpad and rightStick
                          when the game's controls have them ("dpad":"on", "rightStick":"below"|"above");
                          a stick or the d-pad takes a direction: dpad.right, leftStick.up.
+                         Point & click's ids: pointer mode rightClick hover scroll keyboard esc; the
+                         pointer surface takes a point, fractions of the view as in tap:
+                         (pointer:0.25:0.6), else the finger lands at its middle; a tool's press turns
+                         it on or off (touch:hover+pointer:0.5:0.5 hovers there).
+                         With the touch keyboard open (a layout's keyboard key, menu:keyboard) its keys
+                         are the controls instead: kb-a, kb-1, kb-f1, kb-esc, kb-enter, kb-space,
+                         kb-backspace, kb-up, kb-shift, kb-ctrl, kb-alt, ... and kb-close; a tapped
+                         kb-shift (kb-ctrl, kb-alt) stays down for the next key: touch:kb-shift touch:kb-a.
                          The controls show while no controller is connected (--pad connects one).
                          Example: --action play:app-367520 --action wait:20 --action touch:a
                          --action touch:leftStick.right@2000 --action touch:leftStick.right+a@600
+                         The Keyboard & mouse layout's ids ("layout":"keyboardMouse"): look esc tab
+                         keyboard 1 2 3 4 move use reload jump fire; move (the W A S D stick) takes a
+                         direction (move.up holds W), and so does look: a finger lands in the look
+                         area's middle and drags 100 pt that way at once (look.left turns the view left,
+                         300 mouse counts; the log's `controls: driver drags look` line), then rests.
+                         Example: --controls 'app-620:{"layout":"keyboardMouse"}' --action play:app-620
+                         --action wait:30 --action touch:move.up@1500 --action touch:look.left+fire@400
   gyro:STEP[/STEP...]    after a play: (it runs while the game runs): wait for the game's first frame,
                          then play a scripted gyro into gyro aim where the sensors' samples enter it
                          (Dev/GyroDriver.swift, HostIOKit GyroScript), at 100 Hz, the device upright.
@@ -119,20 +144,36 @@ best-effort and reported as unconfirmed; transport loss/SIGKILL can leave cancel
                          then fire the three-finger tap through the handler the app's recognizer calls,
                          which opens the in-game menu with the on-screen controls on or off and with a
                          controller connected too (pad: and menu: then act on it)
+  suggest:accept|dismiss
+                         after a play: (it runs while the game runs): wait (3 min at most) for the toast
+                         that offers Keyboard & mouse to a game on Gamepad that asked for no XInput state
+                         in 20 s of play after its first frame (PlayportKit LayoutSuggestion), then press
+                         its Use button (saves the layout for the game; `controls:` logs the new layout)
+                         or its Not now. Fails when the game was not offered (it read a pad, it is not
+                         on the starting Gamepad layout, its layout was chosen (its own, or Settings'
+                         Starting layout rather than Suggested), or it was offered before: once per game;
+                         --action set:controls.suggestedLayoutOffered= forgets every game's).
+                         Example: --action play:ID --action suggest:accept --action touch:fire
   menu:open              after a play: (the actions after it then run while the game runs): wait for
                          the game's first frame, then hold the controller's Home button 0.8 s through
                          HostIO's pad handling, which opens Playport's in-game menu over the paused
                          game (UI/InGameMenuView.swift)
-  menu:ROW               in that menu, move its ring to ROW (resume, controls, screenshot, overlay,
-                         controller, quit) and press A; pad:up/down/a/b press into the menu while it is up.
+  menu:ROW               in that menu, move its ring to ROW (resume, controls, layout, keyboard, screenshot,
+                         overlay, controller, quit) and press A; pad:up/down/a/b press into the menu while it is up.
+                         menu:keyboard goes back to the game with the touch keyboard open over it.
                          menu:controls opens its Controls panel: pad:left/right change the ringed row
-                         (On-screen controls: Off, Gamepad; D-pad: Off, On; Right stick: Off, Below, Above
-                         A/B/X/Y; Opacity; Gyro aim: Off, Mouse, Right stick; Sensitivity; and, while a
+                         (On-screen controls: Off, Pad, Keys (Keyboard & mouse), Point (Point & click);
+                         D-pad: Off, On; Right stick: Off, Below, Above A/B/X/Y, these two only on the
+                         Gamepad layout with no copy of the game's own; Opacity;
+                         Gyro aim: Off, Mouse, Right stick; Sensitivity; and, while a
                          controller is connected, --pad's scripted pad too, Controller: Pad, Keys &
                          mouse, Custom), pad:down/up move, pad:b goes back. pad:a on Controller (or
                          choosing Custom there) opens the Controller page over the paused game, which
                          pad: then drives as on a game page (the ActionPicker too); pad:b comes back
-                         to the panel. The menu keeps the pads from the game all along.
+                         to the panel. pad:a on On-screen controls (or menu:layout, its Edit layout…) opens
+                         the layout editor over the paused game, which pad: then drives as on
+                         open:ID#layout; its Done (pad:b on the controls) saves and comes back to the panel.
+                         The menu keeps the pads from the game all along.
                          menu:screenshot saves the frame to Photos (the first time iOS asks a person
                          to allow it) and, in a dev build, to Documents/Screenshots; menu:quit closes
                          the game's windows, and the run follows Playport's restart as for play:.
@@ -232,9 +273,11 @@ best-effort and reported as unconfirmed; transport loss/SIGKILL can leave cancel
                          with no game; the run is done as it asks (use --leave-running); must be
                          the last action
   --controls ID:JSON     a game's own on-screen controls, as the in-game menu's Controls saves them
-                         (PlayportKit GameControls: {"layout":"off"|"gamepad","opacity":0.1-1,
-                         "dpad":"off"|"on","rightStick":"off"|"below"|"above","gyro":{...}}; a key left out
-                         follows Settings › Controls, where the d-pad and right stick are off by default;
+                         (PlayportKit GameControls: {"layout":"off"|"gamepad"|"keyboardMouse"|"pointClick",
+                         "opacity":0.1-1,"dpad":"off"|"on","rightStick":"off"|"below"|"above","gyro":{...}}; a
+                         key left out follows Settings › Controls, where the layout is the title's compatibility
+                         default, else its Starting layout (set:controls.startingLayout=keyboardMouse; Gamepad by default), and the d-pad and
+                         right stick are off by default;
                          `ID:{}` clears). "gyro" is the game's own gyro aim (PlayportKit GameGyro), each key
                          left out following the gyro.* defaults (output off): "output":"off"|"mouse"|
                          "rightStick", "source":"auto"|"phone"|"controller", "sensitivity":0.05-20 (1.5 by default),
@@ -259,6 +302,20 @@ best-effort and reported as unconfirmed; transport loss/SIGKILL can leave cancel
                          "lookSpeed" (0.1-8, Settings' controls.lookSpeed, 1 by default) is how fast a
                          stick bound to mouse:move turns the view, a multiple of 2000 counts/s (the
                          Controller page's Look speed row); a change logs `controls: look speed 2.0×`
+                         "layouts" is the game's own copies of the presets, as the layout editor saves
+                         them (GameControls.layouts): {"keyboardMouse":{"version":3,"controls":[...]},...},
+                         keyed by gamepad, keyboardMouse or pointClick (not off), each a PlayportKit
+                         ControlLayout version 3 whose controls have "id" (letters, digits, - and _, each
+                         once), "kind" (button, the default, stick, dpad, lookArea, pointer, tool),
+                         "actions" (a button one, a stick pad:leftStick|pad:rightStick or four up, down,
+                         left, right, a d-pad four, a look area mouse:move, a pointer mouse:left, a tool
+                         none and a "tool": rightClick|hover|scroll|trackpad; ACTION as above, also
+                         playport:keyboard), "anchor" (topLeading ... bottomTrailing), "x", "y" (the
+                         centre from the anchor, pt), "width", "height" (> 0), optional "label",
+                         "behaviour" (hold|toggle|repeat) and, for a stick, "floatingZone" ({"anchor",
+                         "width", "height", optional "x", "y"}). A copy is drawn while its preset is the
+                         layout (choose it with "layout"); the log's `controls ID:` line says
+                         layouts=keyboardMouse(N controls)
   --settings ID:JSON     a game's own launch settings, as its page saves them (PlayportKit
                          LaunchSettings: frame limit, screen, launch arguments; `ID:{}` clears);
                          `launcher-rockstar:JSON` is the runtime keys and FEX inputs open-launcher:rockstar
@@ -452,20 +509,25 @@ class EndOnTerm:
         return True
 
 
+# PlayportKit OnScreenLayout's names: --controls' "layout".
+LAYOUTS = ("off", "gamepad", "keyboardMouse", "pointClick")
+
 # Dev/UIDriverGameSection.swift: per-game destinations, independent of title/store ID grammar.
 GAME_SECTIONS = ("graphics", "controls", "game", "files", "developer", "ordering", "steam",
-                 "gyro", "controller", "runtime", "graphicsoptions")
+                 "gyro", "controller", "layout", "runtime", "graphicsoptions")
 
-# A control of an on-screen layout, with a direction for a stick or the d-pad (Dev/TouchDriver.swift).
-TOUCH_CONTROL = r"[A-Za-z0-9_-]+(?:\.(?:up|down|left|right))?"
+# A control of an on-screen layout, with a direction for a stick or the d-pad, or a point FX:FY (0-1 of the
+# view) for Point & click's pointer surface (Dev/TouchDriver.swift).
+TOUCH_CONTROL = r"[A-Za-z0-9_-]+(?:\.(?:up|down|left|right)|:(?:0(?:\.[0-9]+)?|1(?:\.0+)?):(?:0(?:\.[0-9]+)?|1(?:\.0+)?))?"
 # A gyro: script's step (HostIOKit GyroScript): axis=deg/s terms joined by +, or rest, then @ms.
 GYRO_TERM = r"(?:yaw|pitch|roll)=-?[0-9]{1,4}(?:\.[0-9]+)?"
 GYRO_STEP = rf"(?:rest|{GYRO_TERM}(?:\+{GYRO_TERM})*)@[0-9]{{1,5}}"
 ACTION_RE = re.compile((r"^(?:(?:install|pause-resume|queue|downloading):[0-9]+|install:gog-[0-9]+(?:@[0-9]+)?|install:epic-[A-Za-z0-9._-]+|(?:uninstall|verify|repair|play):[a-z]+-[A-Za-z0-9 ._-]+|(?:open-launcher|forget-launcher-window):[a-z]+"
                         r"|import:[A-Za-z0-9 ._()'+-]+(?:/[A-Za-z0-9 ._()'+-]+)*"
                        r"|hud:(?:on|off)|open:[a-z]+(?:-[A-Za-z0-9 ._-]+(?:#[a-z]+)?)?|open:settings#(?:accounts|steam|graphics|downloads|controls|controllers|gyro|controller|storage|setup|about|launchers|developer|account|jit|memory|diagnostics|pairing|probes|logs)|open:licences(?:#[a-z0-9 ._-]+)?|pad:(?:{b})(?:\+(?:{b}))*|set:[A-Za-z0-9._-]+=[^,]*"
-                       r"|wait:[0-9]{1,3}|tap:(?:0(?:\.[0-9]+)?|1(?:\.0+)?):(?:0(?:\.[0-9]+)?|1(?:\.0+)?)|menu:(?:open|resume|controls|screenshot|overlay|controller|quit)"
+                       r"|wait:[0-9]{1,3}|tap:(?:0(?:\.[0-9]+)?|1(?:\.0+)?):(?:0(?:\.[0-9]+)?|1(?:\.0+)?)|menu:(?:open|resume|controls|layout|keyboard|screenshot|overlay|controller|quit)"
                        r"|touch:{t}(?:\+{t})*(?:@[0-9]{1,5})?|gyro:{g}(?:/{g})*|gesture:three-finger-tap|web:(?:wait|close)|web:click:[A-Za-z0-9 ._-]+"
+                       r"|suggest:(?:accept|dismiss)"
                        r"|jit:(?:setup|pair|continue|open-settings|cancel|wait)|probe:settings-url-[0-9]|probe:helper-(?:(?:exit|kill)(?:-hold)?|report)|probe:memory-(?:64|2048|4096|donor-(?:tagged|purgeable)-(?:2048|4096)|donors-(?:6144|8192|10240)|pool-verify|pool-zero|pool-gpu)|background:(?:[1-9][0-9]|[1-5][0-9]{2}|600)|probe:relaunch|probe:native-auth|probe:pairing(?:-cancel|-use)?)$").replace("{b}", PAD_BUTTONS).replace("{t}", TOUCH_CONTROL)
                        .replace("{g}", GYRO_STEP))
 
@@ -478,11 +540,11 @@ def background_handoff(e):
 
 def in_game(actions, start):
     """How many actions from start act on the running game (UIDriver.inGame): wait:, tap:,
-    touch:, gyro:, gesture:, menu: and web:, and pad: once a menu:open or gesture:three-finger-tap
+    touch:, gyro:, gesture:, menu:, web: and suggest:, and pad: once a menu:open or gesture:three-finger-tap
     has opened the in-game menu."""
     n, menu = 0, False
     for x in actions[start:]:
-        if x.startswith(("wait:", "tap:", "touch:", "gyro:", "gesture:", "menu:", "web:")) or (menu and x.startswith("pad:")):
+        if x.startswith(("wait:", "tap:", "touch:", "gyro:", "gesture:", "menu:", "web:", "suggest:")) or (menu and x.startswith("pad:")):
             menu = menu or x in ("menu:open", "gesture:three-finger-tap")
             n += 1
         else:
@@ -590,6 +652,75 @@ def controller_map_ok(c):
     return not any(s in table and any(k.startswith(s + ".") for k in table) for s in ("leftStick", "rightStick"))
 
 
+# PlayportKit ControlLayout as JSON (--controls' "layouts": the game's own copies of the presets, as the
+# layout editor saves them). This build reads version 3 only; Off has no layout.
+LAYOUT_VERSION = 3
+CONTROL_KINDS = ("button", "stick", "dpad", "lookArea", "pointer", "tool")   # PlayportKit ControlKind
+ANCHORS = ("topLeading", "top", "topTrailing", "leading", "center", "trailing", "bottomLeading", "bottom",
+           "bottomTrailing")                                                 # PlayportKit ControlAnchor
+BEHAVIOURS = ("hold", "toggle", "repeat")                                    # HostIOKit TouchBehaviour
+POINTER_TOOLS = ("rightClick", "hover", "scroll", "trackpad")                # HostIOKit PointerTool
+# HostIOKit InputAction's saved names.
+INPUT_ACTION_RE = re.compile(r"pad:(?:" + "|".join(PAD_CONTROLS) + r")|mouse:(?:left|right|middle|wheelUp|wheelDown|move)"
+                             r"|playport:(?:menu|keyboard)|key:(?:(?:shift|ctrl|alt)\+)*(?:0[xX][0-9a-fA-F]{1,2}|[0-9]{1,3})")
+CONTROL_ID_RE = re.compile(r"[A-Za-z0-9_-]+")
+INF = float("inf")
+
+
+def zone_ok(z):
+    """Whether z is a PlayportKit ControlZone (a floating stick's): an anchor, a size, an optional offset."""
+    return isinstance(z, dict) and set(z) <= {"anchor", "x", "y", "width", "height"} and z.get("anchor") in ANCHORS \
+        and all(number(z.get(k, 0), -INF, INF) for k in ("x", "y")) \
+        and all(number(z.get(k), 0, INF) and z[k] > 0 for k in ("width", "height"))
+
+
+def control_ok(c):
+    """Whether c is a PlayportKit Control as JSON, usable as ControlLayout.problem has it: its keys, an id of
+    letters, digits, - and _, a size over 0, and the actions its kind takes."""
+    if not isinstance(c, dict) or not set(c) <= {"id", "kind", "actions", "label", "behaviour", "anchor", "x", "y",
+                                                 "width", "height", "floatingZone", "tool"}:
+        return False
+    kind, actions = c.get("kind", "button"), c.get("actions")
+    if not (isinstance(c.get("id"), str) and CONTROL_ID_RE.fullmatch(c["id"]) and kind in CONTROL_KINDS
+            and isinstance(c.get("label", ""), str) and c.get("behaviour", "hold") in BEHAVIOURS
+            and c.get("anchor") in ANCHORS and all(number(c.get(k), -INF, INF) for k in ("x", "y"))
+            and all(number(c.get(k), 0, INF) and c[k] > 0 for k in ("width", "height"))
+            and isinstance(actions, list)
+            and all(isinstance(a, str) and INPUT_ACTION_RE.fullmatch(a) and (not a.startswith("key:") or key_ok(a))
+                    for a in actions)):
+        return False
+    sticks = [a in ("pad:leftStick", "pad:rightStick") for a in actions]
+    if kind == "button":
+        ok = len(actions) == 1 and not sticks[0]
+    elif kind == "stick":
+        ok = (len(actions) == 1 and sticks[0]) or (len(actions) == 4 and not any(sticks))
+    elif kind == "dpad":
+        ok = len(actions) == 4
+    elif kind == "lookArea":
+        ok = actions == ["mouse:move"]
+    elif kind == "pointer":
+        ok = actions == ["mouse:left"]
+    else:
+        ok = c.get("tool") in POINTER_TOOLS and actions == []
+    return ok and ("tool" not in c or kind == "tool") and ("floatingZone" not in c or (kind == "stick" and zone_ok(c["floatingZone"])))
+
+
+def layouts_ok(ls):
+    """Whether ls is GameControls.layouts as JSON: preset name (not off) -> a version 3 ControlLayout whose
+    controls are each usable and have different ids."""
+    if not isinstance(ls, dict):
+        return False
+    for preset, layout in ls.items():
+        if preset not in LAYOUTS or preset == "off" or not isinstance(layout, dict) \
+                or set(layout) != {"version", "controls"} or layout["version"] != LAYOUT_VERSION \
+                or not isinstance(layout["controls"], list) or not all(control_ok(c) for c in layout["controls"]):
+            return False
+        ids = [c["id"] for c in layout["controls"]]
+        if len(ids) != len(set(ids)):
+            return False
+    return True
+
+
 def ui_env(nonce, verify=None, play=None, extra=(), settings=None, step=False, pad=False,
            session=None, keep_settings=False, controls=None, capture_layer=False):
     """settings: (title id, LaunchSettings JSON) or None; controls: (title id, GameControls
@@ -684,13 +815,15 @@ def band_of(timeline):
 def parse(argv=None):
     p = argparse.ArgumentParser(prog="pp ui", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--action", action="append", default=[], metavar="VERB:ARG",
-                   help="open:SCREEN|ID[#SECTION], pad:BUTTON[+BUTTON...], wait:S, menu:open|ROW, touch:CONTROL[+CONTROL...][@MS], gyro:STEP[/STEP...], gesture:three-finger-tap, set:KEY=VALUE, hud:on|off, install:APP, pause-resume:APP, queue:APP, downloading:APP, import:PATH, uninstall:ID, "
+                   help="open:SCREEN|ID[#SECTION], pad:BUTTON[+BUTTON...], wait:S, menu:open|ROW, touch:CONTROL[+CONTROL...][@MS], gyro:STEP[/STEP...], gesture:three-finger-tap, suggest:accept|dismiss, set:KEY=VALUE, hud:on|off, install:APP, pause-resume:APP, queue:APP, downloading:APP, import:PATH, uninstall:ID, "
                         "verify:ID, repair:ID, play:ID, probe:helper-exit|kill|report, probe:relaunch, probe:pairing[-cancel|-use]; in order, before --settings/--verify/--play")
     p.add_argument("--controls", metavar="ID:JSON",
-                   help='save these on-screen controls for the title first ({"layout":"off"} or '
+                   help='save these on-screen controls for the title first ({"layout":"off"}, '
+                        '{"layout":"keyboardMouse"}, {"layout":"pointClick"} or '
                         '{"layout":"gamepad","opacity":0.8,"dpad":"on","rightStick":"below"}, with "gyro":'
                         '{"output":"mouse","sensitivity":1.5} for its gyro aim, "controllerMap":{"mode":"keyboardMouse"} for its '
-                        'controller map, "lookSpeed":2 for its mouse look; {} clears them)')
+                        'controller map, "lookSpeed":2 for its mouse look, "layouts":{"keyboardMouse":{"version":3,'
+                        '"controls":[...]}} for its own copies of the presets; {} clears them)')
     p.add_argument("--settings", metavar="ID:JSON",
                    help='save these launch settings for the title first ({"frameLimit":30,"screen":"720",'
                         '"arguments":"-DX12"}; "arguments" may also be a list of strings; {} clears them)')
@@ -731,7 +864,7 @@ def parse(argv=None):
     for x in a.action:
         if not ACTION_RE.match(x) or (x.startswith("open:") and "-" not in x.split("#")[0]
                                       and x[5:].split("#")[0] not in SCREENS + ("licences", "black")):
-            p.error(f"{x!r} is not open:SCREEN|ID, pad:BUTTON[+BUTTON...], wait:S, menu:open|ROW, touch:CONTROL[+CONTROL...][@MS], gyro:STEP[/STEP...], gesture:three-finger-tap, set:KEY=VALUE, hud:on|off, install:APP, pause-resume:APP, "
+            p.error(f"{x!r} is not open:SCREEN|ID, pad:BUTTON[+BUTTON...], wait:S, menu:open|ROW, touch:CONTROL[+CONTROL...][@MS], gyro:STEP[/STEP...], gesture:three-finger-tap, suggest:accept|dismiss, set:KEY=VALUE, hud:on|off, install:APP, pause-resume:APP, "
                     "queue:APP, downloading:APP, import:PATH, uninstall:ID, verify:ID, repair:ID, play:ID, open-launcher:ID, forget-launcher-window:ID, probe:helper-exit|kill|report, probe:relaunch or probe:pairing[-cancel|-use]")
         if x.startswith("open:") and "#" in x:
             target, section = x[5:].split("#", 1)
@@ -756,23 +889,26 @@ def parse(argv=None):
         try:
             cobj = json.loads(cjs)
             ok = ID_RE.match(cid) and isinstance(cobj, dict) \
-                and set(cobj) <= {"layout", "opacity", "dpad", "rightStick", "gyro", "controllerMap", "lookSpeed"} \
-                and cobj.get("layout", "off") in ("off", "gamepad") \
+                and set(cobj) <= {"layout", "opacity", "dpad", "rightStick", "gyro", "controllerMap", "lookSpeed", "layouts"} \
+                and cobj.get("layout", "off") in LAYOUTS \
                 and number(cobj.get("opacity", 0.5), 0.1, 1) \
                 and cobj.get("dpad", "off") in ("off", "on") \
                 and cobj.get("rightStick", "off") in ("off", "below", "above") \
                 and gyro_ok(cobj.get("gyro", {})) \
                 and ("controllerMap" not in cobj or controller_map_ok(cobj["controllerMap"])) \
-                and number(cobj.get("lookSpeed", 1), 0.1, 8)
+                and number(cobj.get("lookSpeed", 1), 0.1, 8) \
+                and layouts_ok(cobj.get("layouts", {}))
         except ValueError:
             ok = False
         if not ok:
-            p.error(f"{a.controls!r} is not ID:JSON with layout (off, gamepad), opacity (0.1-1), dpad (off, on), "
+            p.error(f"{a.controls!r} is not ID:JSON with layout ({', '.join(LAYOUTS)}), opacity (0.1-1), dpad (off, on), "
                     "rightStick (off, below, above) and gyro (an object: output off|mouse|rightStick, source "
                     "auto|phone|controller, sensitivity 0.05-20, verticalRatio 0-4, turnAxis playerSpace|yaw|roll, "
                     "invertX/invertY true|false, pauseButton none|pad:BUTTON, antiDeadZone 0-0.9, smoothing auto|off|light|normal) "
                     "and controllerMap "
-                    "(an object: mode controller|keyboardMouse|custom, table INPUT:ACTION) and lookSpeed (0.1-8) only")
+                    "(an object: mode controller|keyboardMouse|custom, table INPUT:ACTION) and lookSpeed (0.1-8) "
+                    "and layouts (an object: PRESET (gamepad, keyboardMouse, pointClick): a ControlLayout, version 3, "
+                    "whose controls each have an id, kind, actions, anchor, x, y, width and height) only")
         a.controls_pair = (cid, json.dumps(cobj, separators=(",", ":")))
     a.settings_pair = None
     if a.settings:

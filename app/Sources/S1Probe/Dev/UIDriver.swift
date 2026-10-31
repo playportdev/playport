@@ -41,8 +41,9 @@
 //                              `{}` clears them) as the game's own launch settings,
 //                              as its page does
 //   controls:<title id>        Saves UI_CONTROLS (a PlayportKit GameControls as JSON:
-//                              {"layout":"off"|"gamepad","opacity":0.1-1,"dpad":"off"|"on",
-//                              "rightStick":"off"|"below"|"above","gyro":{...}}; `{}` clears them)
+//                              {"layout":"off"|"gamepad"|"keyboardMouse"|"pointClick","opacity":0.1-1,
+//                              "dpad":"off"|"on","rightStick":"off"|"below"|"above","gyro":{...},
+//                              "layouts":{PRESET:LAYOUT,...}}; `{}` clears them)
 //                              as the game's own controls, as the in-game menu's Controls does;
 //                              "gyro" is the game's own gyro aim (PlayportKit GameGyro:
 //                              "output":"off"|"mouse"|"rightStick","source":"auto"|"phone"|
@@ -55,7 +56,11 @@
 //                              ACTION,...}}, a custom map without a table starting as the
 //                              keyboardMouse preset); one this build cannot read is refused;
 //                              "lookSpeed" (0.1-8, 1 by default) its mouse look's speed, a
-//                              multiple of 2000 counts/s for a stick bound to mouse:move
+//                              multiple of 2000 counts/s for a stick bound to mouse:move;
+//                              "layouts" the game's own copies of the presets, as the layout
+//                              editor saves them (PlayportKit ControlLayout, version 3, by
+//                              preset name), drawn when their preset is the layout; a record
+//                              with a copy this build cannot read is refused
 //   hud:on | hud:off           Sets Settings' Metal HUD, as its toggle does
 //   open:<screen | title id>   Shows a screen (home, library, games, downloads, settings,
 //                              account, setup: the first-run checklist, signin: Sign in to
@@ -67,7 +72,13 @@
 //                              game, files, developer, ordering, steam, runtime, graphicsoptions).
 //                              runtime/graphicsoptions only ring/scroll existing rows: no edit,
 //                              keyboard or value mutation. Unknown game sections are refused.
-//                              `open:<title id>#gyro` its Controls › Gyro aim page, and
+//                              `open:<title id>#gyro` its Controls › Gyro aim page,
+//                              `open:<title id>#layout` its Controls › Edit on-screen layout,
+//                              the layout editor over the game's art (UI/LayoutEditorView.swift:
+//                              pad:lb/rb ring a control, pad:up/down/left/right move it a grid
+//                              step, pad:a opens the bar and inspector to the ring, pad:x Add,
+//                              pad:y Reset, pad:view undo, pad:menu redo, pad:b back and then
+//                              Done, which saves), and
 //                              `open:<title id>#controller` its Controller page
 //                              (UI/ControllerMapView.swift: ctl:mode, ctl:lookSpeed,
 //                              ctl:copy, ctl:resetAll, ctl:<row> such as ctl:a, ctl:leftStick,
@@ -154,6 +165,11 @@
 //                              tap through the handler GameSurfaceView's recognizer calls
 //                              (HostIO.menuGesture), which opens the in-game menu with or
 //                              without on-screen controls, and waits 1 s
+//   suggest:accept|dismiss     After a play: (it runs while the game runs): waits (3 min at most)
+//                              for the toast that offers Keyboard & mouse (UI/LayoutSuggestionToast
+//                              .swift, PlayportKit LayoutSuggestion), then answers it as its Use or
+//                              Not now button does; fails, with the reason, when the game is not
+//                              offered (once per game: set:controls.suggestedLayoutOffered= forgets)
 //   menu:open                  After a play: (the actions after it then run while the game runs):
 //                              waits for the game's first frame (3 min at most), then holds the
 //                              controller's Home button 0.8 s through HostIO's pad handling
@@ -163,9 +179,13 @@
 //                              screenshot, overlay, controller, quit) and presses A, as a
 //                              controller does (controls opens its panel: pad:left/right
 //                              change the ringed row, pad:down moves along On-screen controls,
-//                              D-pad, Right stick, Opacity, Gyro aim, Sensitivity and, while a
+//                              D-pad and Right stick (only on the Gamepad layout with no copy of
+//                              the game's own), Opacity, Gyro aim, Sensitivity and, while a
 //                              controller is connected (--pad's scripted pad counts), Controller:
 //                              Pad, Keys & mouse, Custom; pad:b back);
+//                              menu:layout opens the Controls panel and its Edit layout…, the
+//                              layout editor over the paused game (pad: then drives it as on
+//                              open:<title id>#layout; Done goes back to the panel);
 //                              pad: presses go to the menu too while it is up. menu:quit waits
 //                              for the game's end: Playport restarts, and the actions after it
 //                              run in the new process, as after play:
@@ -364,7 +384,8 @@ enum UIDriver {
                         + "controllerMap=\(c.controllerMap == nil ? "default" : "own") "
                         + "(\(ControlsStore.shared.game(id).controllerMap(over: ControlsStore.shared.defaults).summary)) "
                         + "lookSpeed=\(c.lookSpeed == nil ? "default" : "own") "
-                        + "(\(LookSpeed.label(ControlsStore.shared.game(id).lookSpeed(over: ControlsStore.shared.defaults))))")
+                        + "(\(LookSpeed.label(ControlsStore.shared.game(id).lookSpeed(over: ControlsStore.shared.defaults)))) "
+                        + "layouts=\(c.layouts.isEmpty ? "none" : OnScreenLayout.allCases.compactMap { p in c.layouts[p].map { "\(p.rawValue)(\($0.controls.count) controls)" } }.joined(separator: ","))")
                 case "touch":
                     let launch = TitleLaunch.shared
                     guard launch.running else { return finish("action=\(action) refused: no game is running") }
@@ -446,7 +467,7 @@ enum UIDriver {
                         return finish("action=\(action) refused: \(id) is not a screen or a catalogued title")
                     }
                     try await pause(.milliseconds(1500))
-                    log("open \(id)")
+                    log("open \(id)" + (LayoutEditorSession.shared.isUp ? ": \(LayoutEditorSession.shared.summary)" : ""))
                 case "pad":
                     // The presses a controller makes, into the same router (UI/Pad/PadRouter.swift),
                     // or the in-game menu's while it is up (HostIO feeds it the same presses).
@@ -472,7 +493,8 @@ enum UIDriver {
                         + (AppNavigation.shared.setup && !AppNavigation.shared.settings ? " (setup\(SetupState.shared.preview == nil ? "" : " preview"), \(SetupChecklist.summary(SetupState.shared.shown)))" : "")
                         + (AppNavigation.shared.signIn ? " (\(SteamAccountModel.current.map { SignInState.shared.summary($0) } ?? "signin"))" : "")
                         + (AppNavigation.shared.onGamePage ? " (game page\(AppNavigation.shared.gamePanels.map { ", " + $0.rawValue }.joined()))" : "")
-                        + (PadModal.shared.summary.map { ", \($0)" } ?? "") + gamePageSettings() + globalSettings())
+                        + (PadModal.shared.summary.map { ", \($0)" } ?? "") + gamePageSettings() + globalSettings()
+                        + (LayoutEditorSession.shared.isUp ? "; \(LayoutEditorSession.shared.summary)" : ""))
                     // A press that started a Play (a game page's Play, Home's card): the run follows the
                     // game as play: does, and ends with its title-done or pp ui's --until.
                     let launch = TitleLaunch.shared
@@ -527,6 +549,25 @@ enum UIDriver {
                     log("gesture \(id): \(InGameMenu.shared.summary)")
                     if let failure = try await afterInGame(action, index: done + 1, next: actions[(i + 1)...]) { return finish(failure) }
                     if AppRestart.shared.restarting { return }
+                case "suggest":
+                    let launch = TitleLaunch.shared, suggested = SuggestedLayout.shared
+                    guard ["accept", "dismiss"].contains(id) else { return finish("action=\(action) refused: not suggest:accept or suggest:dismiss") }
+                    guard launch.running else { return finish("action=\(action) refused: no game is running") }
+                    // The offer is due after 20 s of play from the first frame (PlayportKit LayoutSuggestion).
+                    let deadline = Date().addingTimeInterval(180)
+                    while launch.running, !suggested.showing, suggested.outcome == nil, Date() < deadline {
+                        try await pause(.milliseconds(250))
+                    }
+                    guard suggested.showing else {
+                        let why = suggested.outcome.map { " (\($0))" } ?? (launch.running ? " in 3 min" : " before the game ended")
+                        return finish("action=\(action) failed: no Keyboard & mouse offer" + why)
+                    }
+                    try checkpoint()
+                    suggested.answer(accept: id == "accept", by: "driver")
+                    try await pause(.milliseconds(500))
+                    log("suggest \(id): \(OnScreenControls.shared.summary)")
+                    if let failure = try await afterInGame(action, index: done + 1, next: actions[(i + 1)...]) { return finish(failure) }
+                    if AppRestart.shared.restarting { return }
                 case "menu":
                     let launch = TitleLaunch.shared, menu = InGameMenu.shared
                     if id == "open" {
@@ -547,6 +588,19 @@ enum UIDriver {
                         HostIO.shared.menuInput(PadInput())
                         try await pause(.milliseconds(1000))
                         guard menu.isOpen else { return finish("action=\(action) failed: the menu did not open") }
+                    } else if id == "layout" {
+                        // The Controls panel's Edit layout…, as a tap on it: the layout editor over the paused game.
+                        guard menu.isOpen else { return finish("action=\(action) refused: the in-game menu is not open") }
+                        guard !menu.editor, !LayoutEditorSession.shared.isUp else {
+                            return finish("action=\(action) refused: a page is already up over the menu")
+                        }
+                        try checkpoint()
+                        menu.choose(.controls)
+                        menu.openLayoutEditor()
+                        try await pause(.milliseconds(1000))
+                        guard LayoutEditorSession.shared.isUp(.inGame) else {
+                            return finish("action=\(action) failed: the layout editor did not open")
+                        }
                     } else {
                         guard let item = QuickMenuItem(rawValue: id) else {
                             return finish("action=\(action) refused: not menu:open or menu:<row> with rows "
@@ -572,7 +626,8 @@ enum UIDriver {
                     if let failure = try await afterInGame(action, index: done + 1, next: actions[(i + 1)...]) { return finish(failure) }
                     if AppRestart.shared.restarting { return }
                 case "set":
-                    let kv = id.split(separator: "=", maxSplits: 1).map(String.init)
+                    // KEY= keeps its empty value: "" (set:controls.suggestedLayoutOffered= forgets the offers).
+                    let kv = id.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
                     guard kv.count == 2, !kv[0].isEmpty else { return finish("action=\(action) refused: not set:<key>=<value>") }
                     let value: Any = kv[1] == "true" ? true : kv[1] == "false" ? false : Int(kv[1]).map { $0 as Any } ?? kv[1]
                     DriverUndo.willSet(kv[0])
@@ -805,7 +860,7 @@ enum UIDriver {
     /// An action that acts on the running game, which a play: does not wait past.
     static func inGame(_ action: String) -> Bool {
         action.hasPrefix("menu:") || action.hasPrefix("wait:") || action.hasPrefix("web:") || action.hasPrefix("tap:")
-            || action.hasPrefix("touch:") || action.hasPrefix("gesture:") || action.hasPrefix("gyro:")
+            || action.hasPrefix("touch:") || action.hasPrefix("gesture:") || action.hasPrefix("gyro:") || action.hasPrefix("suggest:")
             || (action.hasPrefix("pad:") && InGameMenu.shared.isOpen)
     }
 

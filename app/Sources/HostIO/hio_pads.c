@@ -3,8 +3,9 @@
  * hio_pads.c — the app's controller writers (host_io.h) over Madeira's
  * in-process controller snapshot (Winios/WiniosGamepad.c). Wine's own
  * xinput1_*.dll reads that snapshot through win32u (ios_gamepad_query in
- * libwin32u_unix.a). Plain C11 so tests/pads_test.c can run it on the Linux
- * host against the same WiniosGamepad.c.
+ * libwin32u_unix.a), which also counts the game's state reads here
+ * (playport_gamepad_state_read). Plain C11 so tests/pads_test.c can run it on
+ * the Linux host against the same WiniosGamepad.c.
  */
 
 #include "host_io.h"
@@ -64,4 +65,18 @@ int host_pads_release_all(void)
     }
     pthread_mutex_unlock(&g_lock);
     return n;
+}
+
+/* Game threads count (win32u's ios_gamepad_query); the main thread reads. Only
+ * the total matters, so relaxed. */
+static uint64_t g_state_reads;
+
+void playport_gamepad_state_read(void)
+{
+    __atomic_fetch_add(&g_state_reads, 1, __ATOMIC_RELAXED);
+}
+
+uint64_t host_pad_state_reads(void)
+{
+    return __atomic_load_n(&g_state_reads, __ATOMIC_RELAXED);
 }

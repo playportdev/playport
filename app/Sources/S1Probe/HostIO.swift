@@ -82,6 +82,9 @@ final class HostIO {
     nonisolated static let surfaceReady = DispatchSemaphore(value: 0)
 
     private var lifecycle = Lifecycle()
+    /// The held keys that went down extended (keypad Enter): their release goes
+    /// out extended too, also when Lifecycle releases them on a focus loss.
+    private var extendedHeld: Set<UInt8> = []
     private var slots = PadSlots<ObjectIdentifier>()
     /// Each physical pad's name, by slot, for the logs.
     private var padNames: [Int: String] = [:]
@@ -258,7 +261,7 @@ final class HostIO {
             case .focus(let active):
                 winios_post_focus(active ? 1 : 0)
             case .releaseKeys(let vks):
-                for vk in vks { winios_post_key(Int32(vk), 0) }
+                for vk in vks { postKey(vk, down: false) }
             case .releaseButtons(let flags):
                 for f in flags { winios_pointer(0, 0, f, 0) }
             case .suspendAudio(let deactivate):
@@ -289,8 +292,18 @@ final class HostIO {
     func key(hidUsage: Int, down: Bool) -> Bool {
         guard let vk = KeyMap.virtualKey(hidUsage: hidUsage) else { return false }
         if down && menuUp { return true }   // a key let go while the menu is up still reaches the game
-        if down ? lifecycle.keyDown(vk) : lifecycle.keyUp(vk) { winios_post_key(Int32(vk), down ? 1 : 0) }
+        if down ? lifecycle.keyDown(vk) : lifecycle.keyUp(vk) {
+            postKey(vk, down: down, extended: down && KeyMap.postsExtended(hidUsage: hidUsage))
+        }
         return true
+    }
+
+    /// winios_post_key, or winios_post_key_extended for a key that went down
+    /// extended: a release takes the flag of its press, whatever its source.
+    private func postKey(_ vk: UInt8, down: Bool, extended: Bool = false) {
+        let ext = down ? extended : extendedHeld.remove(vk) != nil
+        if down && extended { extendedHeld.insert(vk) }
+        if ext { winios_post_key_extended(Int32(vk), down ? 1 : 0) } else { winios_post_key(Int32(vk), down ? 1 : 0) }
     }
 
     /// A direct touch as the left button, at the same point of the client area.
@@ -429,13 +442,14 @@ final class HostIO {
     }
 
     /// The on-screen controls' state (OnScreenControls), nil while they are off:
-    /// their pad into slot 0, their keys and mouse buttons through Lifecycle (a press
-    /// while the menu is up does not reach the game, a release does), the Playport
-    /// button's menu.
-    func touchControls(_ t: TouchOutput?) {
+    /// their pad into slot 0 (unless `padOn` is false: the touch keyboard over a
+    /// controller that is player 1), their keys and mouse buttons through Lifecycle
+    /// (a press while the menu is up does not reach the game, a release does), the
+    /// Playport button's menu.
+    func touchControls(_ t: TouchOutput?, padOn: Bool = true) {
         let outputs = Self.pads.withLock { p in
             let earlier = p.mixer.takeOutputs()   // the mapped pads', in the order they came
-            let r = p.mixer.touch(t)
+            let r = p.mixer.touch(t, padOn: padOn)
             Self.apply(r.slot0, slot: 0, &p.gate)
             return earlier + r.outputs
         }
@@ -449,7 +463,7 @@ final class HostIO {
         switch o {
         case .key(let vk, let down):
             if down && menuUp { return }
-            if down ? lifecycle.keyDown(vk) : lifecycle.keyUp(vk) { winios_post_key(Int32(vk), down ? 1 : 0) }
+            if down ? lifecycle.keyDown(vk) : lifecycle.keyUp(vk) { postKey(vk, down: down) }
         case .pointer(let flags, let data):
             if flags == Pointer.wheel {
                 if !menuUp && lifecycle.active { winios_pointer(0, 0, flags, data) }
@@ -461,8 +475,15 @@ final class HostIO {
             }
         case .move(let dx, let dy):
             if !menuUp && lifecycle.active { winios_pointer(dx, dy, Pointer.move, 0) }
+        case .place(let x, let y):
+            if !menuUp && lifecycle.active { winios_post_client_pointer(x, y, Pointer.move, 0) }
         case .playport(.menu):
             InGameMenu.shared.open()
+        case .playport(.keyboard):
+            // The touch keyboard opens or closes on the next turn, not while the mixer's outputs are being sent.
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { OnScreenControls.shared.setKeyboard(!OnScreenControls.shared.keyboard) }
+            }
         }
     }
 
@@ -900,6 +921,10 @@ final class GameSurfaceView: UIView {
     private let controls = TouchControlsView()
     /// The "Gyro aim" chip, over them and shown without them too; it takes no touch.
     private let gyroChip = GyroChipOverlay()
+    /// Point & click's magnifier, over the controls at its own opacity; it takes no touch.
+    private let magnifier = MagnifierOverlay()
+    /// The suggested layout's toast (UI/LayoutSuggestionToast.swift), over them; it takes touches on its card only.
+    private let suggestion = LayoutSuggestionToast()
     #if !PLAYPORT_RELEASE
     /// The view on screen, for the UI driver's tap: action (Dev/UIDriver.swift).
     static weak var current: GameSurfaceView?
@@ -911,7 +936,9 @@ final class GameSurfaceView: UIView {
         layer.contentsGravity = .resizeAspect
         layer.addSublayer(windows)
         addSubview(controls)
+        addSubview(magnifier)
         addSubview(gyroChip)
+        addSubview(suggestion)
         // Every finger reaches the view, so the three-finger tap sees them; forward lets only one through.
         isMultipleTouchEnabled = true
         let menuTap = UITapGestureRecognizer(target: self, action: #selector(threeFingerTap))
@@ -946,6 +973,8 @@ final class GameSurfaceView: UIView {
         CATransaction.commit()
         controls.frame = bounds
         gyroChip.frame = bounds
+        magnifier.frame = bounds
+        suggestion.frame = bounds
     }
 
     override func didMoveToWindow() {
@@ -1002,13 +1031,17 @@ final class GameSurfaceView: UIView {
             HostIO.shared.windowTouch(x: dx, y: dy, phase: phase)
             return
         }
-        var origin = CGPoint.zero, size = bounds.size
-        if let d = (layer as? CAMetalLayer)?.drawableSize {
-            let r = Display.aspectFit(contentWidth: d.width, contentHeight: d.height, width: size.width, height: size.height)
-            origin = CGPoint(x: r.0, y: r.1)
-            size = CGSize(width: r.2, height: r.3)
-        }
-        HostIO.shared.touch(at: CGPoint(x: p.x - origin.x, y: p.y - origin.y), in: size, phase: phase)
+        let r = picture
+        HostIO.shared.touch(at: CGPoint(x: p.x - r.minX, y: p.y - r.minY), in: r.size, phase: phase)
+    }
+
+    /// Where the game's picture is in the view: the swap chain aspect-fitted, black around it
+    /// (contentsGravity resizeAspect). A game touch maps through it, and so does the on-screen
+    /// controls' pointer surface (Point & click; OnScreenControls.began).
+    var picture: CGRect {
+        guard let d = (layer as? CAMetalLayer)?.drawableSize else { return bounds }
+        let r = Display.aspectFit(contentWidth: d.width, contentHeight: d.height, width: bounds.width, height: bounds.height)
+        return CGRect(x: r.0, y: r.1, width: r.2, height: r.3)
     }
 
     #if !PLAYPORT_RELEASE
