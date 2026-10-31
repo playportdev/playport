@@ -6,6 +6,7 @@
         [--shot-each-action] [--pad] [--out DIR] [--until SPEC] [--wait S] [--idle N] [--quiet]
         [--shot] [--screenshot-after S ...] [--leave-running] [--keep-log] [--lock-wait S]
         [--expect-ipa IPA|SHA256] [--any-build] [--keep-settings] [--capture-layer] [--dry-run]
+        [--secret-file PATH | --secret-stdin]
 
 The app starts as a Home Screen launch does, shows the
 library, and does what a person would do with its buttons, through the same
@@ -159,9 +160,10 @@ best-effort and reported as unconfirmed; transport loss/SIGKILL can leave cancel
                          the game's first frame, then hold the controller's Home button 0.8 s through
                          HostIO's pad handling, which opens Playport's in-game menu over the paused
                          game (UI/InGameMenuView.swift)
-  menu:ROW               in that menu, move its ring to ROW (resume, controls, layout, keyboard, screenshot,
+  menu:ROW               in that menu, move its ring to ROW (resume, controls, layout, keyboard, text, screenshot,
                          overlay, controller, quit) and press A; pad:up/down/a/b press into the menu while it is up.
-                         menu:keyboard goes back to the game with the touch keyboard open over it.
+                         menu:keyboard goes back to the game with the touch keyboard open over it; menu:text
+                         goes back to it with the text bar and the iOS keyboard open over it (UI/TextBarView.swift).
                          menu:controls opens its Controls panel: pad:left/right change the ringed row
                          (On-screen controls: Off, Pad, Keys (Keyboard & mouse), Point (Point & click);
                          D-pad: Off, On; Right stick: Off, Below, Above A/B/X/Y, these two only on the
@@ -183,6 +185,22 @@ best-effort and reported as unconfirmed; transport loss/SIGKILL can leave cancel
                          Example: --action play:app-367520 --action wait:10 --action menu:open
                          --action menu:resume --action wait:5 --action menu:open --action menu:quit
                          --action open:home --shot-each-action
+  textbar:OP             after menu:text (it runs while the game runs): the text bar's own controls
+                         (Dev/TextBarDriver.swift): textbar:close; textbar:secure or textbar:plain (its lock:
+                         password mode on, dots, or off); textbar:tab, textbar:enter, textbar:backspace (its
+                         keys, to the focused guest window); textbar:type:TEXT types TEXT into its field as
+                         the keyboard would, each character a WM_CHAR (percent-encoded: %2C a comma, %25 a
+                         percent sign; TEXT is in argv and the logs, so never a password)
+  textbar:secret[+enter] password mode, then the value of --secret-file PATH (its one trailing newline
+                         stripped) or --secret-stdin typed into the field (and Enter pressed). The value is
+                         in no argv, environment, event, log or run file: the app asks for it when the action
+                         runs (a `ui-secret-wanted` event), pp ui pushes it over AFC to
+                         Documents/ui-text-<nonce>-<n> on stdin, and the app reads and deletes that file
+                         before typing; a file the app did not take is removed when the run ends, and at the
+                         app's next start. Keep the file under .work (gitignored), e.g. .work/secrets/wow-password.
+                         Example: --action play:bnet-wow --action wait:60 --action menu:open --action menu:text
+                         --action textbar:type:me%40example.com --action textbar:tab
+                         --action textbar:secret+enter --secret-file .work/secrets/wow-password --shot-each-action
   web:wait               after a play: (it runs while the game runs): wait (3 min at most) for a web
                          page the game opened in Playport's panel over the game (UI/GameWebSheet.swift),
                          press Open on its confirm card, and wait for the page (an Epic game's Epic
@@ -551,7 +569,8 @@ ACTION_RE = re.compile((r"^(?:(?:install|pause-resume|queue|downloading):[0-9]+|
                         r"|import:[A-Za-z0-9 ._()'+-]+(?:/[A-Za-z0-9 ._()'+-]+)*"
                        r"|notice:bnet-[a-z0-9_]+=(?:accept|decline)|update:bnet-[a-z0-9_]+(?:=install)?"
                        r"|hud:(?:on|off)|open:[a-z]+(?:-[A-Za-z0-9 ._-]+(?:#[a-z]+)?)?|open:settings#(?:accounts|steam|graphics|downloads|controls|controllers|gyro|controller|storage|setup|about|launchers|developer|account|jit|memory|diagnostics|pairing|probes|logs)|open:licences(?:#[a-z0-9 ._-]+)?|pad:(?:{b})(?:\+(?:{b}))*|set:[A-Za-z0-9._-]+=[^,]*"
-                       r"|wait:[0-9]{1,3}|tap:(?:0(?:\.[0-9]+)?|1(?:\.0+)?):(?:0(?:\.[0-9]+)?|1(?:\.0+)?)|menu:(?:open|resume|controls|layout|keyboard|screenshot|overlay|controller|quit)"
+                       r"|wait:[0-9]{1,3}|tap:(?:0(?:\.[0-9]+)?|1(?:\.0+)?):(?:0(?:\.[0-9]+)?|1(?:\.0+)?)|menu:(?:open|resume|controls|layout|keyboard|text|screenshot|overlay|controller|quit)"
+                       r"|textbar:(?:close|secure|plain|tab|enter|backspace|secret(?:\+enter)?)|textbar:type:(?:[^,%\x00-\x1f\x7f]|%[0-9A-Fa-f]{2})+"
                        r"|touch:{t}(?:\+{t})*(?:@[0-9]{1,5})?|gyro:{g}(?:/{g})*|gesture:three-finger-tap|web:(?:wait|close)|web:click:[A-Za-z0-9 ._-]+"
                        r"|suggest:(?:accept|dismiss)"
                        r"|jit:(?:setup|pair|continue|open-settings|cancel|wait)|probe:settings-url-[0-9]|probe:helper-(?:(?:exit|kill)(?:-hold)?|report)|probe:memory-(?:64|2048|4096|donor-(?:tagged|purgeable)-(?:2048|4096)|donors-(?:6144|8192|10240)|pool-verify|pool-zero|pool-gpu)|background:(?:[1-9][0-9]|[1-5][0-9]{2}|600)|probe:relaunch|probe:native-auth|probe:pairing(?:-cancel|-use)?)$").replace("{b}", PAD_BUTTONS).replace("{t}", TOUCH_CONTROL)
@@ -566,11 +585,12 @@ def background_handoff(e):
 
 def in_game(actions, start):
     """How many actions from start act on the running game (UIDriver.inGame): wait:, tap:,
-    touch:, gyro:, gesture:, menu:, web: and suggest:, and pad: once a menu:open or gesture:three-finger-tap
-    has opened the in-game menu."""
+    touch:, gyro:, gesture:, menu:, web:, suggest: and textbar:, and pad: once a menu:open or
+    gesture:three-finger-tap has opened the in-game menu."""
     n, menu = 0, False
     for x in actions[start:]:
-        if x.startswith(("wait:", "tap:", "touch:", "gyro:", "gesture:", "menu:", "web:", "suggest:")) or (menu and x.startswith("pad:")):
+        if x.startswith(("wait:", "tap:", "touch:", "gyro:", "gesture:", "menu:", "web:", "suggest:", "textbar:")) \
+                or (menu and x.startswith("pad:")):
             menu = menu or x in ("menu:open", "gesture:three-finger-tap")
             n += 1
         else:
@@ -841,7 +861,7 @@ def band_of(timeline):
 def parse(argv=None):
     p = argparse.ArgumentParser(prog="pp ui", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--action", action="append", default=[], metavar="VERB:ARG",
-                   help="open:SCREEN|ID[#SECTION], pad:BUTTON[+BUTTON...], wait:S, menu:open|ROW, touch:CONTROL[+CONTROL...][@MS], gyro:STEP[/STEP...], gesture:three-finger-tap, suggest:accept|dismiss, set:KEY=VALUE, hud:on|off, install:APP, pause-resume:APP, region:bnet-CODE[=R], locale:bnet-CODE[=L], notice:bnet-CODE=accept|decline, update:bnet-CODE[=install], queue:APP, downloading:APP, import:PATH, uninstall:ID, "
+                   help="open:SCREEN|ID[#SECTION], pad:BUTTON[+BUTTON...], wait:S, menu:open|ROW, touch:CONTROL[+CONTROL...][@MS], gyro:STEP[/STEP...], gesture:three-finger-tap, suggest:accept|dismiss, textbar:OP, textbar:type:TEXT, textbar:secret[+enter], set:KEY=VALUE, hud:on|off, install:APP, pause-resume:APP, region:bnet-CODE[=R], locale:bnet-CODE[=L], notice:bnet-CODE=accept|decline, update:bnet-CODE[=install], queue:APP, downloading:APP, import:PATH, uninstall:ID, "
                         "verify:ID, repair:ID, play:ID, probe:helper-exit|kill|report, probe:relaunch, probe:pairing[-cancel|-use]; in order, before --settings/--verify/--play")
     p.add_argument("--controls", metavar="ID:JSON",
                    help='save these on-screen controls for the title first ({"layout":"off"}, '
@@ -883,6 +903,11 @@ def parse(argv=None):
     p.add_argument("--keep-settings", action="store_true",
                    help="keep this run's set:, hud: and --settings changes after the session (default: undone)")
     p.add_argument("--dry-run", action="store_true", help="print the device commands; touch nothing")
+    secret = p.add_mutually_exclusive_group()
+    secret.add_argument("--secret-file", metavar="PATH",
+                        help="the value textbar:secret types (one trailing newline stripped); keep it under .work, "
+                             "e.g. .work/secrets/wow-password. It reaches the phone only as the file the app asks for")
+    secret.add_argument("--secret-stdin", action="store_true", help="read textbar:secret's value from stdin instead")
     a = p.parse_args(argv)
     for t in (a.verify, a.play):
         if t is not None and not ID_RE.match(t):
@@ -890,12 +915,20 @@ def parse(argv=None):
     for x in a.action:
         if not ACTION_RE.match(x) or (x.startswith("open:") and "-" not in x.split("#")[0]
                                       and x[5:].split("#")[0] not in SCREENS + ("licences", "black")):
-            p.error(f"{x!r} is not open:SCREEN|ID, pad:BUTTON[+BUTTON...], wait:S, menu:open|ROW, touch:CONTROL[+CONTROL...][@MS], gyro:STEP[/STEP...], gesture:three-finger-tap, suggest:accept|dismiss, set:KEY=VALUE, hud:on|off, install:APP, pause-resume:APP, region:bnet-CODE[=R], locale:bnet-CODE[=L], notice:bnet-CODE=accept|decline, update:bnet-CODE[=install], "
+            p.error(f"{x!r} is not open:SCREEN|ID, pad:BUTTON[+BUTTON...], wait:S, menu:open|ROW, touch:CONTROL[+CONTROL...][@MS], gyro:STEP[/STEP...], gesture:three-finger-tap, suggest:accept|dismiss, textbar:close|secure|plain|tab|enter|backspace|secret[+enter], textbar:type:TEXT (no comma: %2C), set:KEY=VALUE, hud:on|off, install:APP, pause-resume:APP, region:bnet-CODE[=R], locale:bnet-CODE[=L], notice:bnet-CODE=accept|decline, update:bnet-CODE[=install], "
                     "queue:APP, downloading:APP, import:PATH, uninstall:ID, verify:ID, repair:ID, play:ID, open-launcher:ID, forget-launcher-window:ID, probe:helper-exit|kill|report, probe:relaunch or probe:pairing[-cancel|-use]")
         if x.startswith("open:") and "#" in x:
             target, section = x[5:].split("#", 1)
             if target not in ("settings", "licences") and section not in GAME_SECTIONS:
                 p.error(f"{x!r}: unknown Game options section; choose " + ", ".join(GAME_SECTIONS))
+    # textbar:secret's value has one source, given only with the action (PLA-606).
+    wants_secret = any(x.startswith("textbar:secret") for x in a.action)
+    has_source = bool(a.secret_file or a.secret_stdin)
+    if wants_secret != has_source:
+        p.error("textbar:secret needs --secret-file PATH or --secret-stdin" if wants_secret
+                else "--secret-file and --secret-stdin go with a textbar:secret action only")
+    if a.secret_file and not os.path.isfile(a.secret_file):
+        p.error(f"--secret-file {a.secret_file!r} is not a file")
     # The black screen hands the screen over: the app ends the batch there, so no action,
     # press or step may follow it (and --controls/--settings/--verify/--play append actions).
     black = [i for i, x in enumerate(a.action) if x == "open:black"]
@@ -964,6 +997,28 @@ def parse(argv=None):
     return a
 
 
+# textbar:secret (PLA-606; Dev/TextBarDriver.swift): the actions that ask for the value, and
+# the file name it goes to, Documents/ui-text-<nonce>-<action number> (afc.py put-secret).
+SECRET_ACTIONS = ("textbar:secret", "textbar:secret+enter")
+SECRET_PREFIX = "ui-text-"
+
+
+def read_secret(a):
+    """textbar:secret's value as bytes, from --secret-file or stdin with one trailing newline
+    (\\n or \\r\\n) stripped; None without either. Kept in memory only."""
+    if a.secret_file:
+        with open(a.secret_file, "rb") as f:
+            data = f.read()
+    elif a.secret_stdin:
+        data = sys.stdin.buffer.read()
+    else:
+        return None
+    for end in (b"\r\n", b"\n"):
+        if data.endswith(end):
+            return data[:-len(end)]
+    return data
+
+
 def main(argv=None, launched=None):
     """launched: a dict main sets "play" in once it has launched a title (main_recorded's
     last-play.json is written only then)."""
@@ -990,8 +1045,25 @@ def main(argv=None, launched=None):
     nonce = secrets.token_hex(4)
     shots_taken = {"n": 0}
     ui_done = {"seen": None}
+    # textbar:secret (PLA-606): the value only here, in memory; the files pushed for it, by action number.
+    secret = read_secret(a)
+    if secret == b"":
+        return phonelib.fail(ev, "pp ui: the textbar:secret value is empty")
+    secret_files = {}
 
     def on_event(e):
+        if e.get("event") == "ui-secret-wanted":
+            n = e.get("index")
+            if secret is None or e.get("action") not in SECRET_ACTIONS or not isinstance(n, int) or n in secret_files:
+                ev("warning", message=f"the app asked for a secret for action {n} ({e.get('action')}), which is no "
+                                      "textbar:secret action waiting for one: nothing pushed")
+            else:
+                secret_files[n] = f"Documents/{SECRET_PREFIX}{nonce}-{n}"
+                phone.put_secret(secret_files[n], secret)
+                ev("secret-pushed", index=n)
+        if e.get("event") == "ui-action" and e.get("index") in secret_files:
+            # The app deleted it before typing, so its action is done.
+            secret_files.pop(e["index"])
         if phonelib.until_matches(a.until_spec, e):
             until_hit["seen"] = True
         if e.get("event") == "title-done":
@@ -1077,6 +1149,11 @@ def main(argv=None, launched=None):
                                               None if a.dry_run else phone.system_alert)
             ev("stop", why=why, after_s=round(time.monotonic() - t0, 1),
                **({"bound": STOP_BOUND[why]} if why in STOP_BOUND else {}))
+            # A secret the app did not take (the run stopped first) goes now; the app's next
+            # start removes one this misses (Dev/TextBarDriver.swift).
+            for n, remote in sorted(secret_files.items()):
+                phone.remove(remote, check=False)
+                ev("secret-removed", index=n)
             # --leave-running with no finished batch would let the app run the queued actions
             # unsupervised. Request ONE bounded, nonce-bound cancellation (best-effort: not
             # proof the app consumed it); a ui-done exit is left exactly as it was.

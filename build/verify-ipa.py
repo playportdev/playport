@@ -115,7 +115,8 @@ any mismatch:
                 release executable holds no dev code: no Dev/ type, no Swift
                 symbol of the S1Probe module, none of the UI driver's or the
                 scripted pad's environment names or files (S1_MODE, TITLE_NONCE,
-                UI_ACTIONS, HIO_VPAD, s1-host.log, run-events.jsonl), and its
+                UI_ACTIONS, HIO_VPAD, s1-host.log, run-events.jsonl, the text
+                bar's secret file ui-text-), and its
                 Info.plist queries no URL scheme; it carries
                 the quiet-runtime switch MADEIRA_NO_DIAGNOSTICS and its log,
                 playport.log, and links the donor pool (decision 0153:
@@ -159,9 +160,9 @@ EXECUTABLE = {"dev": "S1Probe", "release": "Playport"}
 # What only a dev build's code holds (Sources/S1Probe/Dev/).
 DEV_MODULES = ["7S1Probe"]
 DEV_TYPES = ["UIDriver", "VirtualPad", "RunEvents", "WebSheetDriver",
-             "DeveloperSettings"]
+             "DeveloperSettings", "TextBarDriver"]
 DEV_STRINGS = [b"S1_MODE", b"TITLE_NONCE", b"UI_ACTIONS", b"UI_SETTINGS", b"UI_CONTROLS", b"HIO_VPAD", b"s1-host.log",
-               b"run-events.jsonl", b"steam-drive.log"]
+               b"run-events.jsonl", b"steam-drive.log", b"ui-text-", b"ui-secret-wanted"]
 RELEASE_STRINGS = [b"MADEIRA_NO_DIAGNOSTICS", b"playport.log"]
 # The donor pool, in both builds since decision 0153: GuestPool.m's install and 0148's hook.
 RELEASE_SYMBOLS = ["_pp_guest_pool_install", "_playport_guest_memory_backing"]
