@@ -63,13 +63,16 @@ public struct PublisherLauncher: Equatable, Sendable, Identifiable {
     /// single-process needs no key, sc_single.h has it on by default. The layout changes every
     /// process of its session, so no other title gets it. A release build takes this key and never
     /// a person's; a dev build's `=0` saved for the game or the Open wins (openSettings, startingGame).
+    /// KosmicKrisp releases a submitted-once command buffer's memory at its completion and rounds large
+    /// command BOs finer (`MESA_KK_EXPERIMENTAL=cmd_retire,cmd_bo_classes`, mesa 0132–0135; decision
+    /// 0173): with the game's Social Club alive (0169) RDR2's cabin load otherwise reaches the limit.
     public static let rockstar = PublisherLauncher(
         id: "rockstar", name: "Rockstar Games Launcher",
         installKey: #"Software\Wow6432Node\Rockstar Games\Launcher"#, installValue: "InstallFolder",
         executable: "Launcher.exe", arguments: [], windowsServices: true, jitPoolMB: 896, graphics: .vulkan,
         exhaustionGrace: 240,
         graphicsEnvironment: ["DXVK_CONFIG": "dxvk.numCompilerThreads = 1", "DXVK_SHADER_CACHE": "0",
-                              "VKD3D_SHADER_CACHE_PATH": "0"],
+                              "VKD3D_SHADER_CACHE_PATH": "0", "MESA_KK_EXPERIMENTAL": "cmd_retire,cmd_bo_classes"],
         runtime: ["env.FEX_SMCCHECKS": "none", "env.PLAYPORT_SC_LAYOUT": "1"],
         // Red Dead Redemption 2's Steam copy: PlayRDR2.exe starts Launcher.exe -steamAppId=1174180.
         games: ["app-1174180"],

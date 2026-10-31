@@ -44,11 +44,14 @@ final class PublisherLauncherTests: XCTestCase {
     func testRockstarOpenRunsOneDXVKCompilerThreadAndNoShaderCacheThreads() {
         let r = PublisherLauncher.rockstar
         XCTAssertEqual(r.graphicsEnvironment, ["DXVK_CONFIG": "dxvk.numCompilerThreads = 1", "DXVK_SHADER_CACHE": "0",
-                                               "VKD3D_SHADER_CACHE_PATH": "0"])
+                                               "VKD3D_SHADER_CACHE_PATH": "0",
+                                               "MESA_KK_EXPERIMENTAL": "cmd_retire,cmd_bo_classes"])
         let env = r.graphics.environment(graphicsOptions: r.graphicsEnvironment)
         XCTAssertEqual(env["DXVK_CONFIG"], "dxvk.tilerMode = False;dxvk.numCompilerThreads = 1")
         XCTAssertEqual(env["DXVK_SHADER_CACHE"], "0")
         XCTAssertEqual(env["VKD3D_SHADER_CACHE_PATH"], "0")
+        // Decision 0173: RDR2's Play and the Open run KosmicKrisp's command-memory retire path.
+        XCTAssertEqual(env["MESA_KK_EXPERIMENTAL"], "cmd_retire,cmd_bo_classes")
         XCTAssertEqual(GraphicsBackend.vulkan.runtimeEnvironment, ["DXVK_CONFIG": "dxvk.tilerMode = False"])
     }
 

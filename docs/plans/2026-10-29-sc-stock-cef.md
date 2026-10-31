@@ -12,7 +12,13 @@
 
 **Status** (resume here; run log is in a PLA-476 Linear comment):
 
-- Branch `dev/pla-476-sc-stock-cef`, unmerged and unpushed (HEAD: see `git log`).
+- Merged to `main` 2026-10-31; PLA-476 and its sub-issues closed by the owner (reopen if RDR2 regresses).
+- **Chunk 6, 2026-10-31, dev IPA `61b54bfd…`, no keys (stopped by the owner after two RDR2 runs):** HK
+  first-frame+10 passed (`.work/ui-runs/20261031T195229-hk-p605`, no `[sc-layout]` lines). RDR2 m1 held the cabin to
+  first-frame+600 (`…/20261031T195324-rdr2-p605m1`); m2 exited about 1.5 min after the cabin's first frame at a
+  7,766 MB peak (`…/20261031T200932-rdr2-p605m2`; I: jetsam); m3 was cancelled. The owner then made KosmicKrisp's
+  retire path Rockstar's default, untested on the phone ([0173](../decisions/0173-rdr2-runs-kosmickrisps-command-memory-retire-path.md)).
+  The release IPA's owner play (decision 0068, PLA-475) remains for 0.5.0.
 - **Chunk 4 built, 2026-10-31, host checks only** (no phone run): PLA-602 (`d1aff807`: single-process on by
   default in both builds, a dev `PLAYPORT_SC_SINGLE=0` turns it off; `1424a0ac`: `PublisherLauncher.rockstar`'s
   runtime carries `env.PLAYPORT_SC_LAYOUT=1` (its `env.PLAYPORT_SC_SINGLE=1` was dropped in review, a no-op
