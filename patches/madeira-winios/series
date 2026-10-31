@@ -5,3 +5,5 @@
 0004-Winios-show-a-game-s-GDI-windows-until-its-swap-chai.patch
 0005-Winios-show-the-dialogs-a-game-opens-after-its-first.patch
 0006-Winios-post-a-key-extended-for-the-host-app.patch
+0007-Winios-log-no-key-codes.patch
+0008-Winios-post-a-Unicode-character-for-the-host-app.patch
