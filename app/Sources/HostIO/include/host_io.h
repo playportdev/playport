@@ -53,6 +53,11 @@ unsigned int playport_key_scan(unsigned int vk);
  * foreground, 1 when it is back. Both are queued in order with winios_post_key. */
 void winios_post_client_pointer(int fx, int fy, unsigned int flags, unsigned int data);
 void winios_post_focus(int active);
+/* Winios.m + patches/madeira-winios/0006: winios_post_key with
+ * KEYEVENTF_EXTENDEDKEY, for a key its VK cannot tell from another (keypad
+ * Enter is VK_RETURN with E0; KeyMap.postsExtended). Queued in order with
+ * winios_post_key. */
+void winios_post_key_extended(int vk, int down);
 
 /* Winios.m + patches/madeira-winios/0004-Winios-show-a-game-s-GDI-windows-until-its-swap-chai.patch
  * and 0005 (decisions 0075, 0076): the guest's GDI windows (a launcher, a

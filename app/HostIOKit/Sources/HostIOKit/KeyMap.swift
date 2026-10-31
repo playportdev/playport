@@ -20,6 +20,12 @@ public enum KeyMap {
         }
     }
 
+    /// A key whose VK it shares with another key, told apart by the extended
+    /// flag (winios_post_key_extended): keypad Enter is VK_RETURN with E0.
+    /// The extended keys a VK names alone (arrows, right Ctrl, …) get E0 in
+    /// win32u from HostIO hio_keys.c and are posted plainly.
+    public static func postsExtended(hidUsage u: Int) -> Bool { u == 0x58 }
+
     static let table: [Int: UInt8] = [
         0x28: 0x0D, // Return
         0x29: 0x1B, // Escape
@@ -57,7 +63,7 @@ public enum KeyMap {
         0x55: 0x6A, // keypad *
         0x56: 0x6D, // keypad -
         0x57: 0x6B, // keypad +
-        0x58: 0x0D, // keypad Enter (posted as Return: a VK alone cannot say extended)
+        0x58: 0x0D, // keypad Enter (posted extended: postsExtended)
         0x62: 0x60, // keypad 0
         0x63: 0x6E, // keypad .
         0x64: 0xE2, // non-US backslash (VK_OEM_102)

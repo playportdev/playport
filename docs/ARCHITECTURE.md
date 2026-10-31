@@ -804,7 +804,10 @@ them to UIKit, GameController and AVFAudio.
   `playport_key_scan` first for the keys a keyboard sends with E0 (arrows, the
   nav cluster, Print Screen, right Ctrl/Alt, Windows, menu, keypad /; posted
   extended, `patches/madeira-unix` 0248), else from Wine's `MapVirtualKeyEx`,
-  whose US table would give the arrows the numpad's codes (PLA-340).
+  whose US table would give the arrows the numpad's codes (PLA-340). Keypad
+  Enter shares VK_RETURN with Return, so HostIO posts it with
+  `winios_post_key_extended` (`patches/madeira-winios` 0006; KeyMap
+  `postsExtended`), and its release, also a focus loss's, goes out extended too.
 - **Controllers** go into Madeira's controller snapshot
   (`Sources/WinIOS/WiniosGamepad.c`, four slots under one lock), through the
   app's writers in `Sources/HostIO/hio_pads.c` (`host_pad_set`,
