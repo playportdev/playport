@@ -219,6 +219,25 @@ diff -rq "$ROOT/msl" "$ROOT/msl-pass-rules" >/dev/null ||
     { echo "MESA_KK_EXPERIMENTAL=narrow_barriers,ds_dont_care: not the MSL made without them" >&2; exit 1; }
 echo "MESA_KK_EXPERIMENTAL=narrow_barriers,ds_dont_care: every pipeline builds and draws, the same MSL"
 
+# MESA_KK_EXPERIMENTAL=private_memory,barrier_device_vis,no_quad_merge_block
+# (mesa 0140, 0141, 0143), PLA-541: every pipeline still builds and draws
+# with the private memory type listed first; encoder ends trace device
+# visibility; quad-merge.frag, the one fragment shader that needs quad
+# helpers, reads [[barycentric_coord]] by default to block triangle merging
+# and not with the switch, and no other library changes.
+rm -rf "$ROOT/msl-levers"; mkdir -p "$ROOT/msl-levers"
+MESA_KK_EXPERIMENTAL=private_memory,barrier_device_vis,no_quad_merge_block KK_MOCK_TRACE_ENCODERS=1 \
+    KK_MOCK_MSL_DIR="$ROOT/msl-levers" MESA_SHADER_CACHE_DISABLE=true \
+    "$ROOT/kk-host-test" "$ROOT/build/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.so" "$ROOT/spv" \
+    >"$ROOT/levers.log" 2>&1 || { cat "$ROOT/levers.log" >&2; exit 1; }
+device_ends=$(grep -c 'producer-barrier .* visibility=device' "$ROOT/levers.log" || true)
+blocked=$({ grep -l 'barycentric_coord' "$ROOT/msl/"*.metal || true; } | wc -l)
+merged=$({ grep -l 'barycentric_coord' "$ROOT/msl-levers/"*.metal || true; } | wc -l)
+changed=$(diff -rq "$ROOT/msl" "$ROOT/msl-levers" | grep -c . || true)
+[ "$device_ends" -gt 0 ] && [ "$blocked" -gt 0 ] && [ "$merged" = 0 ] && [ "$changed" = "$blocked" ] ||
+    { echo "PLA-541: $device_ends encoder ends with device visibility; $blocked libraries block triangle merging by default, $merged with no_quad_merge_block, $changed changed" >&2; exit 1; }
+echo "PLA-541: barrier_device_vis: $device_ends encoder ends with device visibility; no_quad_merge_block: $blocked libraries no longer block triangle merging, nothing else changed"
+
 # The same run with MESA_KK_BATCH2=1 (mesa 0091, 0092, 0094, 0095): the
 # used-prefix root upload, Metal's own mapping for a vkMapMemory that is not
 # placed, the residency commit only after a change, command allocators reset

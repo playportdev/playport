@@ -1,0 +1,222 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sat, 31 Oct 2026 01:37:05 +0100
+Subject: [PATCH 141/143] kk: MESA_KK_EXPERIMENTAL=barrier_device_vis ends
+ encoders with device visibility
+
+Every encoder end is barrierAfterStages:ALL beforeQueueStages:ALL with
+MTL4VisibilityOptionResourceAlias (end_encoder ->
+mtl_barrier_after_stages), and upstream's own TODO there says resource
+alias "should only be required if occlusion queries are used". Apple
+defines ResourceAlias as flushing so that aliased virtual addresses are
+memory consistent, possibly to the system coherence point; Device,
+Metal's default, makes writes visible to the device's later work. On
+The Witcher 3 an encoder boundary comes 201-236 times a frame, so the
+cost of the stronger flush, which nothing has measured, is the question.
+
+With the flag an encoder's end barrier uses MTL4VisibilityOptionDevice,
+except after a render encoder that counted occlusion (a draw set a
+visibility result mode other than disabled since the encoder began,
+kk_flush_dynamic_state): that one keeps ResourceAlias, the case
+upstream's TODO names. The other barriers (encoder-stage barriers
+inside an encoder, the consumer barriers of narrow_barriers and the
+query copies) are unchanged.
+
+What alias visibility still covers and the flag gives up: a write
+through one Metal resource read back through another over the same
+memory. KosmicKrisp makes such pairs itself (every image is a texture
+in a placement heap that a whole-heap MTLBuffer aliases, and a buffer
+bound to the same VkDeviceMemory is another placed MTLBuffer), and an
+application makes them by placing two resources in one allocation
+(vkd3d-proton's aliased placed resources, clears of image memory
+through a buffer). No encoder end knows whether the next reader is
+such an alias, so this is a measuring probe, not a correctness claim:
+it is in 0118's must-be-named set (MESA_KK_EXPERIMENTAL=all alone does
+not turn it on). A/B on the phone: GPU ms a frame, the pass-prof gap
+sum and screenshots for corruption.
+
+Without the flag every barrier is as before (ResourceAlias); the bridge
+call only gains the visibility argument.
+
+Linear: PLA-541
+Class: feature
+Evidence: $PLAYPORT_BUILD/agent-notes/pla541/kk-cmd.md (F1: encoder
+ boundaries, the ResourceAlias definition, the W3 pass-prof counts),
+ docs/evidence/2026-10-28-witcher3-trace-breakdown.md
+Offered-upstream: no
+---
+ src/kosmickrisp/bridge/mtl_encoder.h       |  6 +++++-
+ src/kosmickrisp/bridge/mtl_encoder.m       | 10 ++++++----
+ src/kosmickrisp/bridge/stubs/mtl_encoder.c |  3 ++-
+ src/kosmickrisp/vulkan/kk_cmd_buffer.c     | 16 +++++++++++++++-
+ src/kosmickrisp/vulkan/kk_cmd_buffer.h     |  5 +++++
+ src/kosmickrisp/vulkan/kk_cmd_draw.c       |  2 ++
+ src/kosmickrisp/vulkan/kk_debug.c          |  3 ++-
+ src/kosmickrisp/vulkan/kk_debug.h          |  6 ++++++
+ 8 files changed, 43 insertions(+), 8 deletions(-)
+
+diff --git a/src/kosmickrisp/bridge/mtl_encoder.h b/src/kosmickrisp/bridge/mtl_encoder.h
+index d8cf009..a3b24c5 100644
+--- a/src/kosmickrisp/bridge/mtl_encoder.h
++++ b/src/kosmickrisp/bridge/mtl_encoder.h
+@@ -9,12 +9,16 @@
+ 
+ #include "mtl_types.h"
+ 
++#include <stdbool.h>
+ #include <stdint.h>
+ 
+ /* Common encoder utils */
+ void mtl_end_encoding(void *encoder);
++/* alias_visibility: MTL4VisibilityOptionResourceAlias, else
++ * MTL4VisibilityOptionDevice */
+ void mtl_barrier_after_stages(void *encoder, enum mtl_stages after_stages,
+-                              enum mtl_stages before_queue_stages);
++                              enum mtl_stages before_queue_stages,
++                              bool alias_visibility);
+ void mtl_barrier_after_encoder_stages(void *encoder,
+                                       enum mtl_stages after_stages,
+                                       enum mtl_stages before_queue_stages);
+diff --git a/src/kosmickrisp/bridge/mtl_encoder.m b/src/kosmickrisp/bridge/mtl_encoder.m
+index 310c873..58b053c 100644
+--- a/src/kosmickrisp/bridge/mtl_encoder.m
++++ b/src/kosmickrisp/bridge/mtl_encoder.m
+@@ -24,14 +24,16 @@ mtl_end_encoding(void *encoder)
+ 
+ void
+ mtl_barrier_after_stages(void *encoder, enum mtl_stages after_stages,
+-                         enum mtl_stages before_queue_stages)
++                         enum mtl_stages before_queue_stages,
++                         bool alias_visibility)
+ {
+    @autoreleasepool {
+       id<MTL4CommandEncoder> enc = (id<MTL4CommandEncoder>)encoder;
+-      /* TODO_KOSMICKRISP Expose visibility option since resource alias should only be required
+-       * if occlusion queries are used */
++      /* Playport (PLA-541): the caller chooses; resource alias is the
++       * default (kk_cmd_buffer.c end_encoder) */
+       [enc barrierAfterStages:(MTLStages)after_stages beforeQueueStages:(MTLStages)before_queue_stages
+-           visibilityOptions:MTL4VisibilityOptionResourceAlias];
++           visibilityOptions:alias_visibility ? MTL4VisibilityOptionResourceAlias
++                                              : MTL4VisibilityOptionDevice];
+    }
+ }
+ 
+diff --git a/src/kosmickrisp/bridge/stubs/mtl_encoder.c b/src/kosmickrisp/bridge/stubs/mtl_encoder.c
+index f945664..ddf0914 100644
+--- a/src/kosmickrisp/bridge/stubs/mtl_encoder.c
++++ b/src/kosmickrisp/bridge/stubs/mtl_encoder.c
+@@ -14,7 +14,8 @@ mtl_end_encoding(void *encoder)
+ 
+ void
+ mtl_barrier_after_stages(void *encoder, enum mtl_stages after_stages,
+-                         enum mtl_stages before_queue_stages)
++                         enum mtl_stages before_queue_stages,
++                         bool alias_visibility)
+ {
+ }
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.c b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+index b045fd4..5f61c08 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_buffer.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+@@ -654,6 +654,7 @@ kk_BeginCommandBuffer(VkCommandBuffer commandBuffer,
+    /* Playport (PLA-72): the first render encoder waits for whatever the
+     * queue ran before, as every encoder end used to make it */
+    cmd->vertex_wait = KK_EXPERIMENTAL(NARROW_BARRIERS);
++   cmd->encoder_counted_visibility = false;
+ 
+    /* vk_command_buffer_begin will reset the command buffer meaning the
+     * allocator may be returned to the pool. Request a new one. */
+@@ -834,10 +835,23 @@ end_encoder(struct kk_cmd_buffer *cmd, mtl_command_encoder *encoder,
+    kk_pass_prof_end(cmd, render);
+    const bool narrow = render && KK_EXPERIMENTAL(NARROW_BARRIERS) &&
+                        !cmd->state.gfx.xfb.enabled;
++   /* Playport (PLA-541), MESA_KK_EXPERIMENTAL=barrier_device_vis: device
++    * visibility (Metal's default) instead of resource alias, except after a
++    * render encoder that counted occlusion, as upstream's TODO in
++    * mtl_barrier_after_stages says alias is for. Alias also makes a write
++    * through one resource visible through another over the same memory (a
++    * texture and the whole-heap buffer, or two resources an application
++    * placed in one VkDeviceMemory); no encoder end knows whether the next
++    * reader is such an alias, so the switch is a measuring probe. */
++   const bool alias_visibility = !KK_EXPERIMENTAL(BARRIER_DEVICE_VIS) ||
++                                 (render && cmd->encoder_counted_visibility);
++   if (render)
++      cmd->encoder_counted_visibility = false;
+    /* TODO_KOSMICKRISP This is probably overkill */
+    mtl_barrier_after_stages(encoder, MTL_STAGE_ALL,
+                             narrow ? MTL_STAGE_ALL & ~MTL_STAGE_VERTEX
+-                                   : MTL_STAGE_ALL);
++                                   : MTL_STAGE_ALL,
++                            alias_visibility);
+    KK_PASS_STAT(END_BARRIERS);
+    if (narrow)
+       KK_PASS_STAT(NARROW_END_BARRIERS);
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.h b/src/kosmickrisp/vulkan/kk_cmd_buffer.h
+index d4ce089..133d567 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_buffer.h
++++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.h
+@@ -424,6 +424,11 @@ struct kk_cmd_buffer {
+     * in the queue (kk_note_vertex_dependency) */
+    bool vertex_wait;
+ 
++   /* Playport (PLA-541), MESA_KK_EXPERIMENTAL=barrier_device_vis: the open
++    * render encoder had an occlusion query counting (kk_flush_gfx_state), so
++    * its end barrier keeps resource-alias visibility */
++   bool encoder_counted_visibility;
++
+    /* Playport (PLA-72): MESA_KK_DEBUG=passes bookkeeping, reset at
+     * vkBeginCommandBuffer */
+    struct kk_pass_debug pass_debug;
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_draw.c b/src/kosmickrisp/vulkan/kk_cmd_draw.c
+index 529f715..9be824a 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_draw.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_draw.c
+@@ -1545,6 +1545,8 @@ kk_flush_dynamic_state(struct kk_cmd_buffer *cmd)
+    if (gfx->dirty & KK_DIRTY_OCCLUSION) {
+       mtl_set_visibility_result_mode(enc, gfx->occlusion.mode,
+                                      gfx->occlusion.index * sizeof(uint64_t));
++      if (gfx->occlusion.mode != MTL_VISIBILITY_RESULT_MODE_DISABLED)
++         cmd->encoder_counted_visibility = true;
+    }
+ }
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_debug.c b/src/kosmickrisp/vulkan/kk_debug.c
+index c3e7962..bdda253 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.c
++++ b/src/kosmickrisp/vulkan/kk_debug.c
+@@ -66,6 +66,7 @@ const struct debug_named_value experimental_flags[] = {
+    {"cmd_retire", KK_EXPERIMENTAL_CMD_RETIRE},
+    {"cmd_bo_classes", KK_EXPERIMENTAL_CMD_BO_CLASSES},
+    {"private_memory", KK_EXPERIMENTAL_PRIVATE_MEMORY},
++   {"barrier_device_vis", KK_EXPERIMENTAL_BARRIER_DEVICE_VIS},
+    {NULL, 0},
+ };
+ 
+@@ -134,7 +135,7 @@ kk_process_debug_variable(void)
+       KK_EXPERIMENTAL_NO_FP_PRESERVE | KK_EXPERIMENTAL_FP_PRECISE_ONLY |
+       KK_EXPERIMENTAL_UBO_UNBOUNDED | KK_EXPERIMENTAL_NARROW_BARRIERS |
+       KK_EXPERIMENTAL_DS_DONT_CARE | KK_EXPERIMENTAL_CMD_RETIRE |
+-      KK_EXPERIMENTAL_PRIVATE_MEMORY;
++      KK_EXPERIMENTAL_PRIVATE_MEMORY | KK_EXPERIMENTAL_BARRIER_DEVICE_VIS;
+    for (const struct debug_named_value *f = experimental_flags; f->name; f++) {
+       if (f->value != UINT64_MAX && (f->value & explicit_only) &&
+           !has_named_experiment(experiments, f->name))
+diff --git a/src/kosmickrisp/vulkan/kk_debug.h b/src/kosmickrisp/vulkan/kk_debug.h
+index df775c2..951d43c 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.h
++++ b/src/kosmickrisp/vulkan/kk_debug.h
+@@ -278,6 +278,12 @@ enum kk_experimental {
+     * copy, not sparse, not external) may take it, so what DXVK and
+     * vkd3d-proton never map is not shared storage. Must be named */
+    KK_EXPERIMENTAL_PRIVATE_MEMORY = 1ull << 20,
++   /* Playport (PLA-541): an encoder's end barrier makes writes visible at
++    * device scope, not with resource-alias visibility, unless the render
++    * encoder counted occlusion (kk_cmd_buffer.c end_encoder). A write read
++    * back through another resource over the same memory may be stale: must
++    * be named, for measuring */
++   KK_EXPERIMENTAL_BARRIER_DEVICE_VIS = 1ull << 21,
+ };
+ 
+ extern enum kk_experimental kk_mesa_experimental_flags;

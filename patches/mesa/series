@@ -109,3 +109,7 @@
 0133-kk-MESA_KK_EXPERIMENTAL-cmd_bo_classes-gives-large-c.patch
 0134-kk-cmd_retire-destroys-idle-sealed-allocators-caps-a.patch
 0135-kk-MESA_KK_DEBUG-memory-logs-kk-mem-within-a-second-.patch
+0140-kk-MESA_KK_EXPERIMENTAL-private_memory-a-private-sto.patch
+0141-kk-MESA_KK_EXPERIMENTAL-barrier_device_vis-ends-enco.patch
+0142-kk-a-workaround-MESA_KK_DISABLE_WORKAROUNDS-names-st.patch
+0143-kk-MESA_KK_EXPERIMENTAL-no_quad_merge_block-lets-Met.patch

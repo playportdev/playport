@@ -1,0 +1,499 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sat, 31 Oct 2026 01:35:16 +0100
+Subject: [PATCH 140/143] kk: MESA_KK_EXPERIMENTAL=private_memory, a
+ private-storage memory type
+
+Re-port of the private_memory patch of c8c6016 (reverted in c17946c)
+onto 0019's typeless usage v2, 0119's memory priority, 0128-0135's
+command BOs and 0129's residency commits, so that private storage can
+be measured together with compressible usage, which it never was: the
+2026-10-08 run had the old 0x15 usage, so it tested nothing about
+lossless compression.
+
+With the flag, KosmicKrisp lists a second memory type, DEVICE_LOCAL
+only, before its host-visible one. Its memory is an MTLHeapTypePlacement
+heap with MTLResourceStorageModePrivate and no buffer over the whole
+heap (no CPU mapping, gpu and cpu unset); every other allocation stays
+a shared-storage heap as now, and a heap Metal refuses still retries
+once after a residency removal commit (0129).
+
+- DXVK, vkd3d-proton and the WSI take the lowest memory type that fits
+  the flags they ask for, so what they ask for as DEVICE_LOCAL without
+  HOST_VISIBLE lands in the new type; what they map they ask for as
+  HOST_VISIBLE and still get the host-visible type.
+- Images that cannot be private (linear: buffer-backed textures; host
+  image copy; sparse; external) report only the host-visible type, as
+  do host-pointer imports.
+- An image that can be private reports the larger size and alignment
+  of its texture in a shared and in a private heap, so it fits either.
+- Buffers keep every memory type (vkd3d-proton clears image memory with
+  a buffer bound to it) and take the larger buffer alignment of a
+  shared and a private heap.
+- A buffer placed in a heap takes the heap's resource options (Metal
+  requires the heap's storage mode).
+
+Without the flag the memory types (one, host visible), every
+requirement and every allocation are as before. The flag changes the
+memory types an application sees, so it is in 0118's must-be-named
+set: MESA_KK_EXPERIMENTAL=all alone does not turn it on.
+
+Linear: PLA-541
+Class: feature
+Evidence: docs/evidence/2026-10-08-vulkan-perf-private-memory.md;
+ $PLAYPORT_BUILD/agent-notes/pla541/kk-sync-mem.md (finding 3),
+ $PLAYPORT_BUILD/agent-notes/pla541/ev-kk-dxmt.md (private + compressible
+ usage never run)
+Offered-upstream: no (cf. mesa!44221, which adds the type but keeps its
+ memory shared)
+---
+ src/kosmickrisp/bridge/mtl_device.h         |  9 ++++
+ src/kosmickrisp/bridge/mtl_device.m         | 34 +++++++++++++
+ src/kosmickrisp/bridge/mtl_heap.m           |  2 +-
+ src/kosmickrisp/bridge/stubs/mtl_device.c   | 14 ++++++
+ src/kosmickrisp/vulkan/kk_bo.c              | 54 +++++++++++++++------
+ src/kosmickrisp/vulkan/kk_bo.h              |  6 +++
+ src/kosmickrisp/vulkan/kk_buffer.c          | 15 +++++-
+ src/kosmickrisp/vulkan/kk_debug.c           |  4 +-
+ src/kosmickrisp/vulkan/kk_debug.h           |  6 +++
+ src/kosmickrisp/vulkan/kk_device_memory.c   | 13 +++--
+ src/kosmickrisp/vulkan/kk_image.c           | 31 ++++++++++++
+ src/kosmickrisp/vulkan/kk_physical_device.c | 12 +++++
+ src/kosmickrisp/vulkan/kk_physical_device.h |  2 +
+ 13 files changed, 180 insertions(+), 22 deletions(-)
+
+diff --git a/src/kosmickrisp/bridge/mtl_device.h b/src/kosmickrisp/bridge/mtl_device.h
+index 120cd02..998a0a9 100644
+--- a/src/kosmickrisp/bridge/mtl_device.h
++++ b/src/kosmickrisp/bridge/mtl_device.h
+@@ -55,11 +55,20 @@ bool mtl_timestamp_counter_heap_read(mtl_counter_heap *heap, uint32_t count,
+ void mtl_heap_buffer_size_and_align_with_length(mtl_device *device,
+                                                 uint64_t *size_B,
+                                                 uint64_t *align_B);
++/* The same for a buffer in a private-storage heap */
++void mtl_heap_private_buffer_size_and_align_with_length(mtl_device *device,
++                                                        uint64_t *size_B,
++                                                        uint64_t *align_B);
+ uint64_t mtl_minimum_linear_texture_alignment_for_pixel_format(
+    mtl_device *device, enum mtl_pixel_format format);
+ void mtl_heap_texture_size_and_align_with_descriptor(
+    mtl_device *device, struct kk_image_layout *layout, uint64_t *size_B,
+    uint64_t *align_B);
++/* The same for a texture in a private-storage heap */
++void mtl_heap_private_texture_size_and_align(mtl_device *device,
++                                             struct kk_image_layout *layout,
++                                             uint64_t *size_B,
++                                             uint64_t *align_B);
+ 
+ uint32_t mtl_sparse_tile_size_in_bytes(mtl_device *device);
+ struct mtl_size mtl_sparse_tile_size(mtl_device *device,
+diff --git a/src/kosmickrisp/bridge/mtl_device.m b/src/kosmickrisp/bridge/mtl_device.m
+index fde20a4..575c130 100644
+--- a/src/kosmickrisp/bridge/mtl_device.m
++++ b/src/kosmickrisp/bridge/mtl_device.m
+@@ -277,6 +277,22 @@ mtl_heap_buffer_size_and_align_with_length(mtl_device *device, uint64_t *size_B,
+    }
+ }
+ 
++void
++mtl_heap_private_buffer_size_and_align_with_length(mtl_device *device,
++                                                   uint64_t *size_B,
++                                                   uint64_t *align_B)
++{
++   @autoreleasepool {
++      id<MTLDevice> dev = (id<MTLDevice>)device;
++      MTLResourceOptions options = MTLResourceStorageModePrivate |
++                                   MTLResourceCPUCacheModeDefaultCache |
++                                   MTLResourceHazardTrackingModeUntracked;
++      MTLSizeAndAlign size_align = [dev heapBufferSizeAndAlignWithLength:*size_B options:options];
++      *size_B = size_align.size;
++      *align_B = size_align.align;
++   }
++}
++
+ /* TODO_KOSMICKRISP Remove */
+ static MTLTextureDescriptor *
+ mtl_new_texture_descriptor(const struct kk_image_layout *layout)
+@@ -328,6 +344,24 @@ mtl_heap_texture_size_and_align_with_descriptor(mtl_device *device,
+    }
+ }
+ 
++void
++mtl_heap_private_texture_size_and_align(mtl_device *device,
++                                        struct kk_image_layout *layout,
++                                        uint64_t *size_B, uint64_t *align_B)
++{
++   @autoreleasepool {
++      id<MTLDevice> dev = (id<MTLDevice>)device;
++      MTLTextureDescriptor *descriptor = [mtl_new_texture_descriptor(layout) autorelease];
++      descriptor.resourceOptions = MTLResourceStorageModePrivate |
++                                   MTLResourceCPUCacheModeDefaultCache |
++                                   MTLResourceHazardTrackingModeUntracked;
++
++      MTLSizeAndAlign size_align = [dev heapTextureSizeAndAlignWithDescriptor:descriptor];
++      *size_B = size_align.size;
++      *align_B = size_align.align;
++   }
++}
++
+ uint32_t
+ mtl_sparse_tile_size_in_bytes(mtl_device *device) {
+    @autoreleasepool {
+diff --git a/src/kosmickrisp/bridge/mtl_heap.m b/src/kosmickrisp/bridge/mtl_heap.m
+index dc1e66c..72b458d 100644
+--- a/src/kosmickrisp/bridge/mtl_heap.m
++++ b/src/kosmickrisp/bridge/mtl_heap.m
+@@ -65,7 +65,7 @@ mtl_new_buffer_with_length(mtl_heap *heap, uint64_t size_B, uint64_t offset_B)
+ {
+    @autoreleasepool {
+       id<MTLHeap> hp = (id<MTLHeap>)heap;
+-      return (mtl_buffer *)[hp newBufferWithLength:size_B options:KK_MTL_RESOURCE_OPTIONS offset:offset_B];
++      return (mtl_buffer *)[hp newBufferWithLength:size_B options:hp.resourceOptions offset:offset_B];
+    }
+ }
+ 
+diff --git a/src/kosmickrisp/bridge/stubs/mtl_device.c b/src/kosmickrisp/bridge/stubs/mtl_device.c
+index 2ad0e2d..93a4c16 100644
+--- a/src/kosmickrisp/bridge/stubs/mtl_device.c
++++ b/src/kosmickrisp/bridge/stubs/mtl_device.c
+@@ -128,6 +128,13 @@ mtl_heap_buffer_size_and_align_with_length(mtl_device *device, uint64_t *size_B,
+ {
+ }
+ 
++void
++mtl_heap_private_buffer_size_and_align_with_length(mtl_device *device,
++                                                   uint64_t *size_B,
++                                                   uint64_t *align_B)
++{
++}
++
+ uint64_t
+ mtl_minimum_linear_texture_alignment_for_pixel_format(
+    mtl_device *device, enum mtl_pixel_format format)
+@@ -143,6 +150,13 @@ mtl_heap_texture_size_and_align_with_descriptor(mtl_device *device,
+ {
+ }
+ 
++void
++mtl_heap_private_texture_size_and_align(mtl_device *device,
++                                        struct kk_image_layout *layout,
++                                        uint64_t *size_B, uint64_t *align_B)
++{
++}
++
+ uint32_t
+ mtl_sparse_tile_size_in_bytes(mtl_device *device)
+ {
+diff --git a/src/kosmickrisp/vulkan/kk_bo.c b/src/kosmickrisp/vulkan/kk_bo.c
+index df6e2d4..0ef177e 100644
+--- a/src/kosmickrisp/vulkan/kk_bo.c
++++ b/src/kosmickrisp/vulkan/kk_bo.c
+@@ -89,9 +89,10 @@ kk_bo_report_failure(uint64_t size_B, const char *stage)
+            avail_MB, gap_MB, gap_at);
+ }
+ 
+-VkResult
+-kk_alloc_bo(struct kk_device *dev, struct vk_object_base *log_obj,
+-            uint64_t size_B, uint64_t align_B, struct kk_bo **bo_out)
++static VkResult
++kk_alloc_bo_storage(struct kk_device *dev, struct vk_object_base *log_obj,
++                    uint64_t size_B, uint64_t align_B, bool private_storage,
++                    struct kk_bo **bo_out)
+ {
+    VkResult result = VK_SUCCESS;
+ 
+@@ -110,23 +111,31 @@ kk_alloc_bo(struct kk_device *dev, struct vk_object_base *log_obj,
+ #endif
+ 
+    size_B = align64(size_B, minimum_alignment);
+-   mtl_heap *handle =
+-      mtl_new_heap(dev->mtl_handle, size_B, KK_MTL_RESOURCE_OPTIONS);
++   enum mtl_resource_options options =
++      private_storage ? MTL_RESOURCE_STORAGE_MODE_PRIVATE |
++                           MTL_RESOURCE_CPU_CACHE_MODE_DEFAULT_CACHE |
++                           MTL_RESOURCE_TRACKING_MODE_UNTRACKED
++                      : KK_MTL_RESOURCE_OPTIONS;
++   mtl_heap *handle = mtl_new_heap(dev->mtl_handle, size_B, options);
+    /* Playport (PLA-465): freed allocations the residency set still keeps
+     * alive are released by a commit; then try once more */
+    if (handle == NULL && kk_device_commit_residency_removals(dev))
+-      handle = mtl_new_heap(dev->mtl_handle, size_B, KK_MTL_RESOURCE_OPTIONS);
++      handle = mtl_new_heap(dev->mtl_handle, size_B, options);
+    if (handle == NULL) {
+       kk_bo_report_failure(size_B, "newHeap");
+       result = vk_errorf(log_obj, VK_ERROR_OUT_OF_DEVICE_MEMORY, "%m");
+       goto fail_heap;
+    }
+ 
+-   mtl_buffer *map = mtl_new_buffer_with_length(handle, size_B, 0u);
+-   if (map == NULL) {
+-      kk_bo_report_failure(size_B, "newBuffer");
+-      result = vk_errorf(log_obj, VK_ERROR_OUT_OF_DEVICE_MEMORY, "%m");
+-      goto fail_map;
++   /* A private-storage heap has no CPU mapping and no buffer over all of it */
++   mtl_buffer *map = NULL;
++   if (!private_storage) {
++      map = mtl_new_buffer_with_length(handle, size_B, 0u);
++      if (map == NULL) {
++         kk_bo_report_failure(size_B, "newBuffer");
++         result = vk_errorf(log_obj, VK_ERROR_OUT_OF_DEVICE_MEMORY, "%m");
++         goto fail_map;
++      }
+    }
+ 
+    struct kk_bo *bo = CALLOC_STRUCT(kk_bo);
+@@ -142,8 +151,10 @@ kk_alloc_bo(struct kk_device *dev, struct vk_object_base *log_obj,
+    bo->mtl_handle = handle;
+    bo->size_B = size_B;
+    bo->map = map;
+-   bo->gpu = mtl_buffer_get_gpu_address(map);
+-   bo->cpu = mtl_get_contents(map);
++   if (map) {
++      bo->gpu = mtl_buffer_get_gpu_address(map);
++      bo->cpu = mtl_get_contents(map);
++   }
+ 
+    kk_device_add_heap_to_residency_set(dev, handle, size_B);
+ 
+@@ -151,13 +162,28 @@ kk_alloc_bo(struct kk_device *dev, struct vk_object_base *log_obj,
+    return result;
+ 
+ fail_alloc:
+-   mtl_release(map);
++   if (map)
++      mtl_release(map);
+ fail_map:
+    mtl_release(handle);
+ fail_heap:
+    return result;
+ }
+ 
++VkResult
++kk_alloc_bo(struct kk_device *dev, struct vk_object_base *log_obj,
++            uint64_t size_B, uint64_t align_B, struct kk_bo **bo_out)
++{
++   return kk_alloc_bo_storage(dev, log_obj, size_B, align_B, false, bo_out);
++}
++
++VkResult
++kk_alloc_private_bo(struct kk_device *dev, struct vk_object_base *log_obj,
++                    uint64_t size_B, uint64_t align_B, struct kk_bo **bo_out)
++{
++   return kk_alloc_bo_storage(dev, log_obj, size_B, align_B, true, bo_out);
++}
++
+ struct kk_memory_stats kk_memory_stats;
+ 
+ void
+diff --git a/src/kosmickrisp/vulkan/kk_bo.h b/src/kosmickrisp/vulkan/kk_bo.h
+index 87b4713..3ac1b70 100644
+--- a/src/kosmickrisp/vulkan/kk_bo.h
++++ b/src/kosmickrisp/vulkan/kk_bo.h
+@@ -82,6 +82,12 @@ struct kk_ptr {
+ VkResult kk_alloc_bo(struct kk_device *dev, struct vk_object_base *log_obj,
+                      uint64_t size_B, uint64_t align_B, struct kk_bo **bo_out);
+ 
++/* A private-storage heap: no CPU mapping and no buffer over the whole heap
++ * (map, gpu and cpu are unset). For memory types that are not host visible. */
++VkResult kk_alloc_private_bo(struct kk_device *dev,
++                             struct vk_object_base *log_obj, uint64_t size_B,
++                             uint64_t align_B, struct kk_bo **bo_out);
++
+ void kk_destroy_bo(struct kk_device *dev, struct kk_bo *bo);
+ 
+ VkResult kk_bo_map_placed(struct kk_device *dev, struct kk_bo *bo, void **addr);
+diff --git a/src/kosmickrisp/vulkan/kk_buffer.c b/src/kosmickrisp/vulkan/kk_buffer.c
+index 73fd1f5..c6a4f18 100644
+--- a/src/kosmickrisp/vulkan/kk_buffer.c
++++ b/src/kosmickrisp/vulkan/kk_buffer.c
+@@ -7,6 +7,7 @@
+ 
+ #include "kk_buffer.h"
+ 
++#include "kk_debug.h"
+ #include "kk_device.h"
+ #include "kk_entrypoints.h"
+ #include "kk_physical_device.h"
+@@ -19,8 +20,18 @@ kk_get_buffer_alignment(const struct kk_physical_device *pdev, uint64_t size,
+                         VkBufferCreateFlags create_flags)
+ {
+    uint64_t alignment;
+-   mtl_heap_buffer_size_and_align_with_length(pdev->mtl_dev_handle, &size,
+-                                              &alignment);
++   uint64_t shared_size = size;
++   mtl_heap_buffer_size_and_align_with_length(pdev->mtl_dev_handle,
++                                              &shared_size, &alignment);
++
++   /* A buffer may be placed in a private-storage heap too, so it takes the
++    * larger alignment of the two. */
++   if (KK_EXPERIMENTAL(PRIVATE_MEMORY)) {
++      uint64_t private_size = size, private_alignment = 0u;
++      mtl_heap_private_buffer_size_and_align_with_length(
++         pdev->mtl_dev_handle, &private_size, &private_alignment);
++      alignment = MAX2(alignment, private_alignment);
++   }
+ 
+    /** TODO_KOSMICKRISP Metal requires that texel buffers be aligned to the
+     * format they'll use. Since we won't be able to know the format until the
+diff --git a/src/kosmickrisp/vulkan/kk_debug.c b/src/kosmickrisp/vulkan/kk_debug.c
+index 4394153..c3e7962 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.c
++++ b/src/kosmickrisp/vulkan/kk_debug.c
+@@ -65,6 +65,7 @@ const struct debug_named_value experimental_flags[] = {
+    {"module_identifier", KK_EXPERIMENTAL_MODULE_IDENTIFIER},
+    {"cmd_retire", KK_EXPERIMENTAL_CMD_RETIRE},
+    {"cmd_bo_classes", KK_EXPERIMENTAL_CMD_BO_CLASSES},
++   {"private_memory", KK_EXPERIMENTAL_PRIVATE_MEMORY},
+    {NULL, 0},
+ };
+ 
+@@ -132,7 +133,8 @@ kk_process_debug_variable(void)
+    const uint64_t explicit_only =
+       KK_EXPERIMENTAL_NO_FP_PRESERVE | KK_EXPERIMENTAL_FP_PRECISE_ONLY |
+       KK_EXPERIMENTAL_UBO_UNBOUNDED | KK_EXPERIMENTAL_NARROW_BARRIERS |
+-      KK_EXPERIMENTAL_DS_DONT_CARE | KK_EXPERIMENTAL_CMD_RETIRE;
++      KK_EXPERIMENTAL_DS_DONT_CARE | KK_EXPERIMENTAL_CMD_RETIRE |
++      KK_EXPERIMENTAL_PRIVATE_MEMORY;
+    for (const struct debug_named_value *f = experimental_flags; f->name; f++) {
+       if (f->value != UINT64_MAX && (f->value & explicit_only) &&
+           !has_named_experiment(experiments, f->name))
+diff --git a/src/kosmickrisp/vulkan/kk_debug.h b/src/kosmickrisp/vulkan/kk_debug.h
+index 093f94c..df775c2 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.h
++++ b/src/kosmickrisp/vulkan/kk_debug.h
+@@ -272,6 +272,12 @@ enum kk_experimental {
+     * and a cached BO is reused only for an ask over half its size
+     * (kk_cmd_pool_alloc_large_bo) */
+    KK_EXPERIMENTAL_CMD_BO_CLASSES = 1ull << 19,
++   /* Playport (PLA-541): a DEVICE_LOCAL-only memory type, first in the list,
++    * whose memory is a private-storage placement heap with no buffer over
++    * all of it; images that can be private (optimal tiling, no host image
++    * copy, not sparse, not external) may take it, so what DXVK and
++    * vkd3d-proton never map is not shared storage. Must be named */
++   KK_EXPERIMENTAL_PRIVATE_MEMORY = 1ull << 20,
+ };
+ 
+ extern enum kk_experimental kk_mesa_experimental_flags;
+diff --git a/src/kosmickrisp/vulkan/kk_device_memory.c b/src/kosmickrisp/vulkan/kk_device_memory.c
+index d426c16..767ba43 100644
+--- a/src/kosmickrisp/vulkan/kk_device_memory.c
++++ b/src/kosmickrisp/vulkan/kk_device_memory.c
+@@ -89,8 +89,7 @@ kk_GetMemoryHostPointerPropertiesEXT(
+    default:
+       return vk_error(dev, VK_ERROR_INVALID_EXTERNAL_HANDLE);
+    }
+-   pMemoryHostPointerProperties->memoryTypeBits =
+-      BITFIELD_MASK(pdev->mem_type_count);
++   pMemoryHostPointerProperties->memoryTypeBits = pdev->host_visible_mem_types;
+ 
+    return VK_SUCCESS;
+ }
+@@ -153,8 +152,14 @@ kk_AllocateMemory(VkDevice device, const VkMemoryAllocateInfo *pAllocateInfo,
+       mem->bo->gpu = mtl_buffer_get_gpu_address(mem->bo->map);
+       mem->bo->cpu = mtl_get_contents(mem->bo->map);
+    } else {
+-      result =
+-         kk_alloc_bo(dev, &dev->vk.base, aligned_size, alignment, &mem->bo);
++      struct kk_physical_device *pdev = kk_device_physical(dev);
++      if (pdev->host_visible_mem_types &
++          BITFIELD_BIT(pAllocateInfo->memoryTypeIndex))
++         result =
++            kk_alloc_bo(dev, &dev->vk.base, aligned_size, alignment, &mem->bo);
++      else
++         result = kk_alloc_private_bo(dev, &dev->vk.base, aligned_size,
++                                      alignment, &mem->bo);
+       if (result != VK_SUCCESS)
+          goto fail_alloc;
+       kk_bo_set_kind(mem->bo, KK_BO_KIND_DEVICE_MEMORY);
+diff --git a/src/kosmickrisp/vulkan/kk_image.c b/src/kosmickrisp/vulkan/kk_image.c
+index a4c255e..0bf5735 100644
+--- a/src/kosmickrisp/vulkan/kk_image.c
++++ b/src/kosmickrisp/vulkan/kk_image.c
+@@ -637,6 +637,21 @@ kk_image_init(struct kk_device *dev, struct kk_image *image,
+    return VK_SUCCESS;
+ }
+ 
++/* Whether the image may be bound to private memory (a memory type that is
++ * not host visible): a Metal texture placed in a heap, which nothing reads or
++ * writes with the CPU. Linear images are buffer-backed textures, host image
++ * copies write with the CPU, and external and sparse images keep the memory
++ * they always had. */
++static bool
++kk_image_may_be_private(const struct kk_image *image)
++{
++   return KK_EXPERIMENTAL(PRIVATE_MEMORY) &&
++          image->vk.tiling == VK_IMAGE_TILING_OPTIMAL &&
++          !(image->vk.usage & VK_IMAGE_USAGE_HOST_TRANSFER_BIT_EXT) &&
++          !(image->vk.create_flags & VK_IMAGE_CREATE_SPARSE_BINDING_BIT) &&
++          image->vk.external_handle_types == 0;
++}
++
+ static void
+ kk_image_plane_size_align_B(struct kk_device *dev, const struct kk_image *image,
+                             const struct kk_image_plane *plane,
+@@ -644,6 +659,19 @@ kk_image_plane_size_align_B(struct kk_device *dev, const struct kk_image *image,
+ {
+    *size_B_out = plane->layout.size_B;
+    *align_B_out = plane->layout.align_B;
++
++   /* Metal may need more room or alignment for the texture in a private heap
++    * (lossless compression keeps metadata beside it). Requirements and binds
++    * both come here, so the larger of the two fits either heap. */
++   if (kk_image_may_be_private(image)) {
++      uint64_t private_size_B = 0u, private_align_B = 0u;
++      struct kk_image_layout layout = plane->layout;
++      mtl_heap_private_texture_size_and_align(dev->mtl_handle, &layout,
++                                              &private_size_B,
++                                              &private_align_B);
++      *size_B_out = MAX2(*size_B_out, private_size_B);
++      *align_B_out = MAX2(*align_B_out, private_align_B);
++   }
+ }
+ 
+ static void
+@@ -746,6 +774,9 @@ kk_get_image_memory_requirements(struct kk_device *dev, struct kk_image *image,
+       }
+    }
+ 
++   if (!kk_image_may_be_private(image))
++      memory_types &= pdev->host_visible_mem_types;
++
+    // TODO hope for the best?
+ 
+    uint64_t size_B = 0;
+diff --git a/src/kosmickrisp/vulkan/kk_physical_device.c b/src/kosmickrisp/vulkan/kk_physical_device.c
+index ed9ec2a..fb894f3 100644
+--- a/src/kosmickrisp/vulkan/kk_physical_device.c
++++ b/src/kosmickrisp/vulkan/kk_physical_device.c
+@@ -1362,6 +1362,18 @@ kk_enumerate_physical_devices(struct vk_instance *_instance)
+       .used = kk_get_sysmem_heap_used,
+    };
+ 
++   /* Memory nothing maps is a private-storage Metal heap. The type comes
++    * first: the spec orders a type whose flags are a subset of another's
++    * before it, and DXVK, vkd3d-proton and the WSI take the first type that
++    * fits, so what they do not map lands here. */
++   if (KK_EXPERIMENTAL(PRIVATE_MEMORY)) {
++      pdev->mem_types[pdev->mem_type_count++] = (VkMemoryType){
++         .propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
++         .heapIndex = sysmem_heap_idx,
++      };
++   }
++
++   pdev->host_visible_mem_types |= BITFIELD_BIT(pdev->mem_type_count);
+    pdev->mem_types[pdev->mem_type_count++] = (VkMemoryType){
+       .propertyFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
+diff --git a/src/kosmickrisp/vulkan/kk_physical_device.h b/src/kosmickrisp/vulkan/kk_physical_device.h
+index 4f89bb1..a13986a 100644
+--- a/src/kosmickrisp/vulkan/kk_physical_device.h
++++ b/src/kosmickrisp/vulkan/kk_physical_device.h
+@@ -75,6 +75,8 @@ struct kk_physical_device {
+    // TODO: add mapable VRAM heap if possible
+    struct kk_memory_heap mem_heaps[3];
+    VkMemoryType mem_types[3];
++   /* The memory types a CPU can map; the others are private Metal heaps */
++   uint32_t host_visible_mem_types;
+    uint8_t mem_heap_count;
+    uint8_t mem_type_count;
+    /* PLAYPORT_VK_BUDGET_MB in bytes: the most the device-local heap's

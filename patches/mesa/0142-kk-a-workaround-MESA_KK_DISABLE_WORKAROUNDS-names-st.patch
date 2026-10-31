@@ -1,0 +1,73 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sat, 31 Oct 2026 01:37:46 +0100
+Subject: [PATCH 142/143] kk: a workaround MESA_KK_DISABLE_WORKAROUNDS names
+ stays disabled on Apple10
+
+kk_parse_environment_options sets the bits the variable names first,
+then the OS and GPU family rules, and the Apple10 rule clears bit 2
+unconditionally. The A19 Pro is Apple10, so MESA_KK_DISABLE_WORKAROUNDS=2
+(or =all) cannot turn workaround 2 off on the phone: every MSL loop
+stays `for (uint64_t no_crash = 0; no_crash < UINT64_MAX; ++no_crash)`,
+a 64-bit induction variable (two more live registers, an add with
+carry and a 64-bit compare an iteration). RDR2's MSL has 3,770 such
+loops in 479 files. The workaround is for an M5 compiler hang on three
+CTS reconvergence cases under macOS 27 betas (workarounds.rst) and was
+never checked on iOS 27.
+
+What the variable names is now also set again after those rules, so
+the list the user gives wins. Unset, the bits are exactly as before.
+The bits are hashed into the pipeline cache UUID and the disk cache's
+driver id (kk_physical_device_init_pipeline_cache, after this parse),
+so a run with workaround 2 off does not reuse MSL built with it on.
+
+A/B on the phone: MESA_KK_DISABLE_WORKAROUNDS=2 against unset; watch
+for a library build that never returns or fails.
+
+Linear: PLA-541
+Class: upstream-bug
+Evidence: $PLAYPORT_BUILD/agent-notes/pla541/kk-compiler.md (finding 4,
+ WA2 loop counts)
+Offered-upstream: no
+---
+ src/kosmickrisp/vulkan/kk_physical_device.c | 10 ++++++++--
+ 1 file changed, 8 insertions(+), 2 deletions(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_physical_device.c b/src/kosmickrisp/vulkan/kk_physical_device.c
+index fb894f3..5687be2 100644
+--- a/src/kosmickrisp/vulkan/kk_physical_device.c
++++ b/src/kosmickrisp/vulkan/kk_physical_device.c
+@@ -1228,18 +1228,23 @@ kk_parse_environment_options(struct kk_physical_device *pdev)
+       settings->pass_prof = false;
+    }
+ 
++   /* Playport (PLA-541): what MESA_KK_DISABLE_WORKAROUNDS names stays
++    * disabled whatever the OS and GPU family rules below turn back on
++    * (workaround 2 on Apple10, the A19 Pro); unset, nothing changes */
++   uint64_t named = 0;
+    const char *list = debug_get_option("MESA_KK_DISABLE_WORKAROUNDS", "");
+    const char *all_workarounds = "all";
+    const size_t all_len = strlen(all_workarounds);
+    for (unsigned n; n = strcspn(list, ","), *list; list += MAX2(1, n)) {
+       if (n == all_len && !strncmp(list, all_workarounds, n)) {
+-         settings->disabled_workarounds = UINT64_MAX;
++         named = UINT64_MAX;
+          break;
+       }
+ 
+       int index = atoi(list);
+-      settings->disabled_workarounds |= BITFIELD64_BIT(index);
++      named |= BITFIELD64_BIT(index);
+    }
++   settings->disabled_workarounds |= named;
+ 
+    /* Workarounds resolved on macOS 27 */
+    if (ns_is_os_version_at_least(27, 0, 0) && !KK_DEBUG(OS26_WORKAROUNDS)) {
+@@ -1273,6 +1278,7 @@ kk_parse_environment_options(struct kk_physical_device *pdev)
+    if (pdev->info.gpu_apple_family < 9) {
+       settings->disabled_workarounds |= BITFIELD64_BIT(18);
+    }
++   settings->disabled_workarounds |= named;
+ }
+ 
+ VkResult

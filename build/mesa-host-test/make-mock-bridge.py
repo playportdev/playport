@@ -298,6 +298,15 @@ body("mtl_heap_texture_size_and_align_with_descriptor", r'''
                  layout->depth_px * layout->sample_count_sa;
    if (size_B) *size_B = layout->layers * ((px * 16u * 2u + 16383u) & ~16383ull);
    if (align_B) *align_B = 16384u;''')
+# mesa 0140 (private_memory): a private texture takes one 16 KiB page more,
+# as if Metal kept compression metadata beside it, so the larger of the two
+# sizes is what an image that may be private reports.
+body("mtl_heap_private_texture_size_and_align", r'''
+   uint64_t px = (uint64_t)layout->width_px * layout->height_px *
+                 layout->depth_px * layout->sample_count_sa;
+   if (size_B) *size_B = layout->layers * ((px * 16u * 2u + 16383u) & ~16383ull) + 16384u;
+   if (align_B) *align_B = 16384u;''')
+body("mtl_heap_private_buffer_size_and_align_with_length", "if (align_B) *align_B = 256;")
 body("mtl_sparse_tile_size_in_bytes", "return 16384u;")
 body("mtl_new_heap", r'''
    /* One-shot, single-threaded command-pool regression fault injection. */
@@ -512,7 +521,7 @@ body("mtl_drawable_get_texture", "return kk_mock_new(7, 0);")
 body("mtl_new_render_command_encoder_with_descriptor", 'kk_mock_trace("render"); return kk_mock_new(0, 0);')
 body("mtl_new_compute_command_encoder", 'kk_mock_trace("compute"); return kk_mock_new(0, 0);')
 body("mtl_end_encoding", 'kk_mock_trace("end");')
-body("mtl_barrier_after_stages", 'kk_mock_trace("producer-barrier after=%#x before-queue=%#x", (unsigned)after_stages, (unsigned)before_queue_stages);')
+body("mtl_barrier_after_stages", 'kk_mock_trace("producer-barrier after=%#x before-queue=%#x%s", (unsigned)after_stages, (unsigned)before_queue_stages, alias_visibility ? "" : " visibility=device");')
 body("mtl_barrier_after_queue_stages", 'kk_mock_trace("consumer-barrier after-queue=%#x before=%#x", (unsigned)after_queue_stages, (unsigned)before_stages);')
 body("mtl_render_set_color_store_action", 'kk_mock_trace("color-store %u action=%u", index, (unsigned)action);')
 body("mtl_render_set_depth_store_action", 'kk_mock_trace("depth-store action=%u", (unsigned)action);')
