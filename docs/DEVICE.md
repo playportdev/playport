@@ -371,11 +371,13 @@ not that gameplay appeared: inspect the timeline, log and screenshot.
     value over AFC on stdin to `Documents/ui-text-<nonce>-<n>` (a `.part` renamed into
     place; the `secret-pushed` event has the action number only), and the app reads and
     deletes the file before typing. A file the app did not take is removed when the run
-    ends (`secret-removed`) and any left is removed at the app's next start. WoW's sign-in:
+    ends (`secret-removed`) and any left is removed at the app's next start. Given once,
+    `--secret-file` serves every secret action; given once per action, the Nth action types
+    the Nth file, so an account name stays out of argv too. WoW's sign-in:
     `pp ui --action play:bnet-wow --action wait:60 --action menu:open --action menu:text
-    --action textbar:type:me@example.com --action textbar:tab --action textbar:secret+enter
-    --secret-file .work/secrets/wow-password --shot-each-action`. The screenshots show the
-    bar's dots and the game's own field.
+    --action textbar:secret --action textbar:tab --action textbar:secret+enter
+    --secret-file .work/secrets/wow-email --secret-file .work/secrets/wow-password
+    --shot-each-action`. The screenshots show the bar's dots and the game's own field.
 - **The on-screen controls** ([decision 0171](decisions/0171-on-screen-controls-input-mapping-and-gyro.md);
   [ARCHITECTURE.md](ARCHITECTURE.md#input-sources-and-the-mixer)). They show while no
   controller is connected (`--pad` connects one). `--controls ID:JSON` saves a game's

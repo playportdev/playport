@@ -1212,12 +1212,17 @@ class TextBarSecret(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "pw")
             open(path, "w").close()
-            self.assertEqual(m.parse(["--action", "textbar:secret+enter", "--secret-file", path]).secret_file, path)
+            self.assertEqual(m.parse(["--action", "textbar:secret+enter", "--secret-file", path]).secret_file, [path])
+            # One file per secret action, in order; one file serves them all.
+            two = ["--action", "textbar:secret", "--action", "textbar:secret+enter"]
+            self.assertEqual(m.parse(two + ["--secret-file", path, "--secret-file", path]).secret_file, [path, path])
+            self.assertEqual(m.parse(two + ["--secret-file", path]).secret_file, [path])
             self.assertTrue(m.parse(["--action", "textbar:secret", "--secret-stdin"]).secret_stdin)
             for argv in (["--action", "textbar:secret"],
                          ["--action", "textbar:secret", "--secret-file", path, "--secret-stdin"],
                          ["--action", "textbar:enter", "--secret-file", path],
-                         ["--action", "textbar:secret", "--secret-file", os.path.join(d, "absent")]):
+                         ["--action", "textbar:secret", "--secret-file", os.path.join(d, "absent")],
+                         ["--action", "textbar:secret", "--secret-file", path, "--secret-file", path]):
                 with self.assertRaises(SystemExit, msg=argv), contextlib.redirect_stderr(io.StringIO()):
                     m.parse(argv)
 
@@ -1255,6 +1260,33 @@ class TextBarSecret(unittest.TestCase):
             nonce = next(e.split("=", 1)[1] for e in phone.envs if e.startswith("TITLE_NONCE="))
             self.assertEqual(phone.secrets, [(f"Documents/ui-text-{nonce}-1", self.SENTINEL.encode())])
             self.assertEqual(phone.removed, [f"Documents/ui-text-{nonce}-1"])
+
+    def test_each_secret_action_types_its_own_file_in_order(self):
+        """Two textbar:secret actions (an account name, then a password): the first the app asks
+        for gets the first --secret-file, the second the second; neither value is anywhere else."""
+        with tempfile.TemporaryDirectory() as d:
+            paths = []
+            for name, value in (("name", "N4me-sentinel"), ("pw", self.SENTINEL)):
+                paths.append(os.path.join(d, name))
+                with open(paths[-1], "w") as f:
+                    f.write(value + "\n")
+            events = lambda nonce: [  # noqa: E731
+                {"event": "ui-secret-wanted", "index": 3, "action": "textbar:secret"},
+                {"event": "ui-action", "action": "textbar:secret", "result": "ok", "index": 3},
+                {"event": "ui-secret-wanted", "index": 5, "action": "textbar:secret+enter"},
+                {"event": "ui-action", "action": "textbar:secret+enter", "result": "ok", "index": 5},
+                {"event": "ui-done", "outcome": "ok actions=5"}]
+            argv = ["--action", "menu:open", "--action", "menu:text", "--action", "textbar:secret",
+                    "--action", "textbar:tab", "--action", "textbar:secret+enter",
+                    "--secret-file", paths[0], "--secret-file", paths[1]]
+            code, stdout, files, _, phone = self.run_secret(argv, events)
+            self.assertEqual(code, 0, stdout)
+            nonce = next(e.split("=", 1)[1] for e in phone.envs if e.startswith("TITLE_NONCE="))
+            self.assertEqual(phone.secrets, [(f"Documents/ui-text-{nonce}-3", b"N4me-sentinel"),
+                                             (f"Documents/ui-text-{nonce}-5", self.SENTINEL.encode())])
+            for text in (stdout, "\n".join(phone.envs), files.decode(errors="replace")):
+                self.assertNotIn("N4me-sentinel", text)
+                self.assertNotIn(self.SENTINEL, text)
 
     def test_a_request_for_an_action_that_is_no_secret_gets_nothing(self):
         with tempfile.TemporaryDirectory() as d:

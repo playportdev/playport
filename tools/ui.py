@@ -198,9 +198,11 @@ best-effort and reported as unconfirmed; transport loss/SIGKILL can leave cancel
                          Documents/ui-text-<nonce>-<n> on stdin, and the app reads and deletes that file
                          before typing; a file the app did not take is removed when the run ends, and at the
                          app's next start. Keep the file under .work (gitignored), e.g. .work/secrets/wow-password.
-                         Example: --action play:bnet-wow --action wait:60 --action menu:open --action menu:text
-                         --action textbar:type:me%40example.com --action textbar:tab
-                         --action textbar:secret+enter --secret-file .work/secrets/wow-password --shot-each-action
+                         --secret-file once serves every textbar:secret action; given once per action, the
+                         Nth action types the Nth file (an account name, then a password). Example:
+                         --action play:bnet-wow --action wait:60 --action menu:open --action menu:text
+                         --action textbar:secret --action textbar:tab --action textbar:secret+enter
+                         --secret-file .work/secrets/wow-email --secret-file .work/secrets/wow-password
   web:wait               after a play: (it runs while the game runs): wait (3 min at most) for a web
                          page the game opened in Playport's panel over the game (UI/GameWebSheet.swift),
                          press Open on its confirm card, and wait for the page (an Epic game's Epic
@@ -904,9 +906,10 @@ def parse(argv=None):
                    help="keep this run's set:, hud: and --settings changes after the session (default: undone)")
     p.add_argument("--dry-run", action="store_true", help="print the device commands; touch nothing")
     secret = p.add_mutually_exclusive_group()
-    secret.add_argument("--secret-file", metavar="PATH",
+    secret.add_argument("--secret-file", metavar="PATH", action="append",
                         help="the value textbar:secret types (one trailing newline stripped); keep it under .work, "
-                             "e.g. .work/secrets/wow-password. It reaches the phone only as the file the app asks for")
+                             "e.g. .work/secrets/wow-password. It reaches the phone only as the file the app asks for. "
+                             "Once for every textbar:secret action, or once per action in their order")
     secret.add_argument("--secret-stdin", action="store_true", help="read textbar:secret's value from stdin instead")
     a = p.parse_args(argv)
     for t in (a.verify, a.play):
@@ -927,8 +930,13 @@ def parse(argv=None):
     if wants_secret != has_source:
         p.error("textbar:secret needs --secret-file PATH or --secret-stdin" if wants_secret
                 else "--secret-file and --secret-stdin go with a textbar:secret action only")
-    if a.secret_file and not os.path.isfile(a.secret_file):
-        p.error(f"--secret-file {a.secret_file!r} is not a file")
+    asking = sum(x in SECRET_ACTIONS for x in a.action)
+    if a.secret_file and len(a.secret_file) not in (1, asking):
+        p.error(f"--secret-file given {len(a.secret_file)} times for {asking} textbar:secret action(s): "
+                "once for all of them, or once each")
+    for path in a.secret_file or ():
+        if not os.path.isfile(path):
+            p.error(f"--secret-file {path!r} is not a file")
     # The black screen hands the screen over: the app ends the batch there, so no action,
     # press or step may follow it (and --controls/--settings/--verify/--play append actions).
     black = [i for i, x in enumerate(a.action) if x == "open:black"]
@@ -1003,20 +1011,21 @@ SECRET_ACTIONS = ("textbar:secret", "textbar:secret+enter")
 SECRET_PREFIX = "ui-text-"
 
 
-def read_secret(a):
-    """textbar:secret's value as bytes, from --secret-file or stdin with one trailing newline
-    (\\n or \\r\\n) stripped; None without either. Kept in memory only."""
-    if a.secret_file:
-        with open(a.secret_file, "rb") as f:
-            data = f.read()
-    elif a.secret_stdin:
-        data = sys.stdin.buffer.read()
-    else:
-        return None
-    for end in (b"\r\n", b"\n"):
-        if data.endswith(end):
-            return data[:-len(end)]
-    return data
+def read_secrets(a):
+    """textbar:secret's values as bytes, one per --secret-file (or one from stdin), each with one
+    trailing newline (\\n or \\r\\n) stripped; [] without a source. Kept in memory only."""
+    def strip(data):
+        for end in (b"\r\n", b"\n"):
+            if data.endswith(end):
+                return data[:-len(end)]
+        return data
+    if a.secret_stdin:
+        return [strip(sys.stdin.buffer.read())]
+    values = []
+    for path in a.secret_file or ():
+        with open(path, "rb") as f:
+            values.append(strip(f.read()))
+    return values
 
 
 def main(argv=None, launched=None):
@@ -1045,21 +1054,25 @@ def main(argv=None, launched=None):
     nonce = secrets.token_hex(4)
     shots_taken = {"n": 0}
     ui_done = {"seen": None}
-    # textbar:secret (PLA-606): the value only here, in memory; the files pushed for it, by action number.
-    secret = read_secret(a)
-    if secret == b"":
-        return phonelib.fail(ev, "pp ui: the textbar:secret value is empty")
+    # textbar:secret (PLA-606): the values only here, in memory; the files pushed for them, by action
+    # number. The Nth action the app asks for gets the Nth value (or the only one).
+    secret_values = read_secrets(a)
+    if any(v == b"" for v in secret_values):
+        return phonelib.fail(ev, "pp ui: a textbar:secret value is empty")
     secret_files = {}
+    secrets_asked = {"n": 0}
 
     def on_event(e):
         if e.get("event") == "ui-secret-wanted":
             n = e.get("index")
-            if secret is None or e.get("action") not in SECRET_ACTIONS or not isinstance(n, int) or n in secret_files:
+            if not secret_values or e.get("action") not in SECRET_ACTIONS or not isinstance(n, int) or n in secret_files:
                 ev("warning", message=f"the app asked for a secret for action {n} ({e.get('action')}), which is no "
                                       "textbar:secret action waiting for one: nothing pushed")
             else:
+                k = min(secrets_asked["n"], len(secret_values) - 1)
+                secrets_asked["n"] += 1
                 secret_files[n] = f"Documents/{SECRET_PREFIX}{nonce}-{n}"
-                phone.put_secret(secret_files[n], secret)
+                phone.put_secret(secret_files[n], secret_values[k])
                 ev("secret-pushed", index=n)
         if e.get("event") == "ui-action" and e.get("index") in secret_files:
             # The app deleted it before typing, so its action is done.
