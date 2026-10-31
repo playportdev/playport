@@ -2,7 +2,7 @@
 // The suggested starting layout's toast (docs/plans/2026-10-09-touch-controls.md, phase 4
 // item 3). PlayportKit LayoutSuggestion decides; SuggestedLayout samples it once a second on
 // the main queue with the game's XInput state reads (HostIO host_pad_state_reads, counted by
-// win32u through patches/madeira-unix 0224) and the on-screen controls' state:
+// win32u through patches/madeira-unix 0247) and the on-screen controls' state:
 //
 // - play counts while the controls are drawn (after the first frame, no menu, guest dialog or
 //   web page over the game) and the app is active;

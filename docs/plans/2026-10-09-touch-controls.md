@@ -303,7 +303,7 @@ proposed answer unless the owner says otherwise before the phase that needs them
   - **4d** (PLA-532): `7571986`, `d6e5e19` the touch keyboard (sticky Shift, Ctrl, Alt; `kb-`
     ids; `menu:keyboard`).
   - **4e** (PLA-533): `1aa81be` a compatibility default's `controls` (Assassin's Creed starts on
-    Keyboard & mouse); `4d06a33` win32u counts XInput state reads (madeira-unix 0224);
+    Keyboard & mouse); `4d06a33` win32u counts XInput state reads (madeira-unix 0247);
     `9b7e8ac` the Keyboard & mouse offer and `suggest:`.
   - **5a** (PLA-534): `bcb101e` the layout editor's model and `GameControls.layouts`.
   - **5b** (PLA-536): `3f3e1db`, `580b553`, `a4b9699` the editor by touch and controller, over

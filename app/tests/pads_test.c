@@ -5,7 +5,7 @@
  * winios_gamepad_get_state, the call libwin32u_unix.a makes) after each
  * writer, a writer thread racing a reader, and the count of the game's state
  * reads. Host only: on the device the reader is win32u's ios_gamepad_query,
- * which this cannot stand in for (it calls the counting hook, madeira-unix 0224).
+ * which this cannot stand in for (it calls the counting hook, madeira-unix 0247).
  */
 #include "host_io.h"
 #include "WiniosGamepad.h"
@@ -90,7 +90,7 @@ int main(void)
     CHECK(!winios_gamepad_get_state(3, &g) && g.buttons == 0 && g.connected == 0);
     CHECK(host_pads_release_all() == 0);
 
-    /* The game's XInput state reads (win32u's ios_gamepad_query, patches/madeira-unix 0224,
+    /* The game's XInput state reads (win32u's ios_gamepad_query, patches/madeira-unix 0247,
      * calls the hook): none yet, as the app's own snapshot reads above (release_all) and
      * writes are not the game's; each call is one, from any thread. */
     CHECK(host_pad_state_reads() == 0);
