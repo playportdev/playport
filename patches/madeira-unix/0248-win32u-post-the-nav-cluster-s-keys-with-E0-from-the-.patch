@@ -22,7 +22,7 @@ weak: a host that does not define it is not called.
 
 Linear: PLA-340
 Class: upstream-bug
-Evidence: app/tests/keys_test.c (host test; phone gate not run)
+Evidence: docs/evidence/2026-10-31-extended-keys.md (host test app/tests/keys_test.c)
 Offered-upstream: no; the key path is the iOS driver's
 ---
  build/win32u-unix/driver_ios.c | 18 ++++++++++++++----

@@ -9,7 +9,7 @@ by the owner and merged to `main` (`631bd7f`, 2026-10-13). Phases 4–5 are impl
 on `dev/pla-13-touch-controls-4-6` (from `main` at `70384b2`; PLA-529..PLA-537, commits under
 "Phases 4–5" below), with host tests and no phone run; their phone gates and the owner's
 sign-off are [PLA-538](https://linear.app/playportdev/issue/PLA-538), then phase 6's release
-and `finished.md`. Open follow-ups: PLA-338, PLA-339 and PLA-340. The Run state below is the
+and `finished.md`. Open follow-ups: PLA-338 and PLA-339 (PLA-340 fixed: madeira-unix 0248). The Run state below is the
 2026-10-13 run's record (started over from `main` at `412de5f`; the branch was
 `dev/pla-13-touch-controls`) plus the phases 4–5 run. The four items under [To confirm](#to-confirm) take the
 proposed answer unless the owner says otherwise before the phase that needs them.
