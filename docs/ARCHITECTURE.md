@@ -621,6 +621,9 @@ An installed product's page (`UI/BattleNetInstalled.swift`) changes its store re
 place (only `.build.info` is rewritten; every region's data is in the install) and its
 language as a Downloads update job that fetches only the new locale's data, after which
 Play is available again; both read what the install is in from its `.build.info`.
+Each product's tile, Home card and page backdrop show Blizzard's public art for it
+(BattleNetClientKit `BattleNetArt`, PLA-607), fetched once without a session and kept with
+the other stores' art under Caches (PlayportKit `BattleNetArtCache`).
 
 Play for a Battle.net copy follows PlayportKit `BattleNetPlay` (PLA-514): the first Play of
 each product shows the ban-risk notice ([decision 0175](decisions/0175-anti-cheat-refusal-scope.md),
