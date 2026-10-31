@@ -852,6 +852,19 @@ them to UIKit, GameController and AVFAudio.
   Enter shares VK_RETURN with Return, so HostIO posts it with
   `winios_post_key_extended` (`patches/madeira-winios` 0006; KeyMap
   `postsExtended`), and its release, also a focus loss's, goes out extended too.
+- **Text** (the text bar, PLA-267: HostIOKit `TextBar`, `UI/TextBarView.swift`, `HostIO.text`)
+  goes as characters, not keys: `winios_post_char` queues one UTF-16 unit as a press and a
+  release with `KEYEVENTF_UNICODE` (`patches/madeira-winios` 0008), and win32u's
+  `winios_drv_post_char` sends it with `wVk` 0 and the unit as `wScan` (`patches/madeira-unix`
+  0251), as `SendInput` does: the server makes it `VK_PACKET` and `TranslateMessage` posts
+  `WM_CHAR` to the focused window, whatever the keyboard layout. The bar diffs its field's
+  text (a key, a paste, AutoFill) into Backspaces and new characters; Tab, Enter and
+  Backspace go as keys.
+- **Nothing logs a key or a character.** A letter's virtual key is its ASCII code, so a key
+  log is the text typed: Winios's queue and drain (madeira-winios 0007) and
+  `winios_drv_post_key`'s count (madeira-unix 0250) name no key, and
+  `tools/tests/test_key_logging.py` keeps it so. The bar logs its mode, never its text or
+  length.
 - **Controllers** go into Madeira's controller snapshot
   (`Sources/WinIOS/WiniosGamepad.c`, four slots under one lock), through the
   app's writers in `Sources/HostIO/hio_pads.c` (`host_pad_set`,
@@ -969,7 +982,8 @@ build's scripted pad (`HOME`); `HostIOKit.QuickMenuControl` turns the
 snapshots into the open, the menu's presses and the close. Its Controls panel
 sets the game's layout, gyro aim and controller map and opens the layout editor
 and the Controller page over the paused game; its Touch keyboard row resumes with
-the keyboard open. Behind the menu the game is paused:
+the keyboard open, its Type text row with the text bar open (closed again when the
+menu opens). Behind the menu the game is paused:
 
 - **Input.** Every pad source reaches the guest's slots through one gate
   (`HostIOKit.GuestPadGate`, `HostIO.publish`): while the menu is up the slots

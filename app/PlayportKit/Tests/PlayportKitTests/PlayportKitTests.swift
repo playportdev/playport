@@ -2122,9 +2122,10 @@ final class QuickMenuTests: XCTestCase {
         XCTAssertEqual(m.ring, .quit)
         m.move(down: false)
         XCTAssertEqual(m.ring, .controller)
-        XCTAssertEqual(QuickMenu.steps(from: .resume, to: .quit), [true, true, true, true, true, true])
-        XCTAssertEqual(QuickMenu.steps(from: .overlay, to: .resume), [false, false, false, false])
+        XCTAssertEqual(QuickMenu.steps(from: .resume, to: .quit), [true, true, true, true, true, true, true])
+        XCTAssertEqual(QuickMenu.steps(from: .overlay, to: .resume), [false, false, false, false, false])
         XCTAssertEqual(QuickMenu.steps(from: .controls, to: .keyboard), [true])
+        XCTAssertEqual(QuickMenu.steps(from: .keyboard, to: .text), [true])
         XCTAssertEqual(QuickMenu.steps(from: .quit, to: .quit), [])
     }
 
@@ -2138,7 +2139,11 @@ final class QuickMenuTests: XCTestCase {
         XCTAssertEqual(QuickMenu.controller(name: nil, battery: nil, scriptedPad: true), "Scripted pad")
         XCTAssertEqual(QuickMenu.controller(name: "DualSense", battery: 70, scriptedPad: true), "DualSense · 70%")
         XCTAssertEqual(QuickMenuItem.allCases.map(\.title),
-                       ["Resume", "Controls", "Touch keyboard", "Screenshot", "Performance overlay", "Controller", "Quit game"])
+                       ["Resume", "Controls", "Touch keyboard", "Type text", "Screenshot", "Performance overlay", "Controller",
+                        "Quit game"])
+        // The driver's menu:ROW names (tools/ui.py ACTION_RE).
+        XCTAssertEqual(QuickMenuItem.allCases.map(\.rawValue),
+                       ["resume", "controls", "keyboard", "text", "screenshot", "overlay", "controller", "quit"])
     }
 
     func testTheControlsPanelTakesTheRingAndGivesItBack() {

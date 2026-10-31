@@ -58,6 +58,11 @@ void winios_post_focus(int active);
  * Enter is VK_RETURN with E0; KeyMap.postsExtended). Queued in order with
  * winios_post_key. */
 void winios_post_key_extended(int vk, int down);
+/* Winios.m + patches/madeira-winios/0008 (and madeira-unix 0251): one UTF-16
+ * code unit typed (the text bar, HostIOKit TextBar), pressed and let go as
+ * KEYEVENTF_UNICODE, which TranslateMessage turns into WM_CHAR for the focused
+ * window. Queued in order with winios_post_key. Nothing logs it, nor a key. */
+void winios_post_char(unsigned int unit);
 
 /* Winios.m + patches/madeira-winios/0004-Winios-show-a-game-s-GDI-windows-until-its-swap-chai.patch
  * and 0005 (decisions 0075, 0076): the guest's GDI windows (a launcher, a

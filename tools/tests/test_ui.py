@@ -674,6 +674,19 @@ class UiEnvTest(unittest.TestCase):
                     "Documents/.zip", "Documents/", "x.zip", "Documents/Playport-PLA-147.ipa"):
             self.assertIsNotNone(afc.rm_refusal(bad), bad)
 
+    def test_afc_puts_and_removes_only_a_text_bar_secret_file(self):
+        """put-secret and rm reach Documents/ui-text-<nonce>-<n> (the text bar's secret, PLA-606), nothing near it."""
+        spec = importlib.util.spec_from_file_location("afc_tool", os.path.join(TOOLS, "afc.py"))
+        afc = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(afc)
+        self.assertIsNone(afc.secret_refusal("Documents/ui-text-0a1b2c3d-3"))
+        self.assertIsNone(afc.rm_refusal("Documents/ui-text-0a1b2c3d-3"))
+        for bad in ("Documents/ui-text-0a1b2c3d", "Documents/ui-text-0A1B2C3D-3", "Documents/ui-text-0a1b2c3d-3/x",
+                    "Documents/ui-text-0a1b2c3d-3.part", "Documents/x/ui-text-0a1b2c3d-3", "ui-text-0a1b2c3d-3",
+                    "Documents/ui-step-0a1b2c3d-3", "Documents/s1-host.log"):
+            self.assertIsNotNone(afc.secret_refusal(bad), bad)
+        self.assertIsNotNone(afc.rm_refusal("Documents/ui-text-0a1b2c3d-3.part"))
+
     def test_jit_unreachable_is_its_own_failure(self):
         """LocalDevVPN off: the app's launch outcome names the helper's timeout; a person must act."""
         m = load()
@@ -1118,6 +1131,141 @@ class UntilReached(unittest.TestCase):
                 with self.assertRaises(SystemExit):
                     m.main_recorded(["--play", "app-1", "--until", "nonsense"])
             self.assertFalse(os.path.exists(m.LAST_PLAY))
+
+
+class TextBarSecret(unittest.TestCase):
+    """pp ui's text bar actions (PLA-267) and textbar:secret (PLA-606): the value comes from a
+    file or stdin and reaches the phone only as the nonce file the app asked for, never argv,
+    the launch environment (UI_ACTIONS, which a restart's continuation file copies), the lock
+    record, an event or any file of the run directory."""
+
+    SENTINEL = "S3ntinel-Pa55,w0rd!€"
+
+    class Phone(UntilReached.FakePhone):
+        envs, secrets, removed = [], [], []
+
+        def launch(self, envs):
+            self.__class__.envs = list(envs)
+            return super().launch(envs)
+
+        def put_secret(self, remote, data):
+            self.secrets.append((remote, data))
+
+        def remove(self, remote, check=True):
+            self.removed.append(remote)
+
+    def run_secret(self, argv, events, stdin=None):
+        """(exit code, stdout events, every byte the run directory holds, lock what, Phone)."""
+        m = load()
+        import phonelib
+        phone = self.Phone
+        phone.envs, phone.secrets, phone.removed = [], [], []
+        locked = []
+
+        def watch(_phone, ev, nonce, pid, until, wait, poll, done_events, is_done, quiet, on_event, *rest):
+            for e in events(nonce):
+                ev("app:" + e["event"], **{k: v for k, v in e.items() if k != "event"})
+                on_event(e)
+            return "done", {"event": "ui-done", "outcome": "ok"}
+        saved = (phonelib.Phone, phonelib.watch_launch, phonelib.installed_check, phonelib.device_lock, sys.argv, sys.stdin)
+        out = io.StringIO()
+        with tempfile.TemporaryDirectory() as d:
+            run = os.path.join(d, "run")
+            phonelib.Phone, phonelib.watch_launch = phone, watch
+            phonelib.installed_check = lambda *a: (True, None, None)
+            phonelib.device_lock = lambda what, **k: locked.append(what) or contextlib.nullcontext()
+            sys.argv = ["pp-ui", "--out", run, *argv]
+            if stdin is not None:
+                sys.stdin = io.TextIOWrapper(io.BytesIO(stdin))
+            try:
+                with contextlib.redirect_stdout(out):
+                    code = m.main(sys.argv[1:])
+            finally:
+                (phonelib.Phone, phonelib.watch_launch, phonelib.installed_check, phonelib.device_lock,
+                 sys.argv, sys.stdin) = saved
+            files = b""
+            for root, _, names in os.walk(d):
+                for n in names:
+                    with open(os.path.join(root, n), "rb") as f:
+                        files += n.encode() + b"\n" + f.read()
+        return code, out.getvalue(), files, locked, phone
+
+    @staticmethod
+    def asked(n, action):
+        """The app's events for a textbar:secret action at number n that typed what it got."""
+        return lambda nonce: [{"event": "ui-secret-wanted", "index": n, "action": action},
+                              {"event": "ui-action", "action": action, "result": "ok", "index": n},
+                              {"event": "ui-done", "outcome": "ok actions=3"}]
+
+    def test_the_bar_s_actions_parse(self):
+        m = load()
+        for ok in ("menu:text", "textbar:close", "textbar:secure", "textbar:plain", "textbar:tab", "textbar:enter",
+                   "textbar:backspace", "textbar:type:me@example.com", "textbar:type:a%2Cb%25 c"):
+            self.assertEqual(m.parse(["--action", ok]).action, [ok])
+        for bad in ("textbar:type:", "textbar:type:a,b", "textbar:open", "textbar:secret:x", "textbar:type:%zz"):
+            with self.assertRaises(SystemExit, msg=bad), contextlib.redirect_stderr(io.StringIO()):
+                m.parse(["--action", bad])
+        self.assertTrue(m.in_game(["menu:open", "menu:text", "textbar:type:x", "textbar:enter", "open:home"], 0) == 4)
+
+    def test_a_secret_action_needs_exactly_one_source_and_a_source_needs_the_action(self):
+        m = load()
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "pw")
+            open(path, "w").close()
+            self.assertEqual(m.parse(["--action", "textbar:secret+enter", "--secret-file", path]).secret_file, path)
+            self.assertTrue(m.parse(["--action", "textbar:secret", "--secret-stdin"]).secret_stdin)
+            for argv in (["--action", "textbar:secret"],
+                         ["--action", "textbar:secret", "--secret-file", path, "--secret-stdin"],
+                         ["--action", "textbar:enter", "--secret-file", path],
+                         ["--action", "textbar:secret", "--secret-file", os.path.join(d, "absent")]):
+                with self.assertRaises(SystemExit, msg=argv), contextlib.redirect_stderr(io.StringIO()):
+                    m.parse(argv)
+
+    def test_a_sentinel_secret_reaches_only_its_nonce_file(self):
+        actions = ["--action", "menu:open", "--action", "menu:text", "--action", "textbar:secret+enter"]
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "wow-password")
+            with open(path, "w") as f:
+                f.write(self.SENTINEL + "\n")
+            for argv, stdin in ((actions + ["--secret-file", path], None),
+                                (actions + ["--secret-stdin"], (self.SENTINEL + "\n").encode())):
+                code, stdout, files, locked, phone = self.run_secret(argv, self.asked(3, "textbar:secret+enter"), stdin)
+                self.assertEqual(code, 0, stdout)
+                nonce = next(e.split("=", 1)[1] for e in phone.envs if e.startswith("TITLE_NONCE="))
+                # The one copy: the file the app asked for, its trailing newline stripped.
+                self.assertEqual(phone.secrets, [(f"Documents/ui-text-{nonce}-3", self.SENTINEL.encode())])
+                for where, text in (("events", stdout), ("env", "\n".join(phone.envs)), ("lock", "\n".join(locked)),
+                                    ("run directory", files.decode(errors="replace"))):
+                    for piece in (self.SENTINEL, "S3ntinel", "Pa55"):
+                        self.assertNotIn(piece, text, where)
+                self.assertIn("UI_ACTIONS=menu:open,menu:text,textbar:secret+enter", phone.envs)
+                pushed = [json.loads(x) for x in stdout.splitlines() if '"secret-pushed"' in x]
+                self.assertEqual([(e["index"], set(e) - {"event", "t", "index"}) for e in pushed], [(3, set())])
+                # The app typed it (its ui-action): nothing is left to take back.
+                self.assertEqual(phone.removed, [])
+
+    def test_a_secret_the_app_did_not_take_is_removed_at_the_end(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "pw")
+            with open(path, "w") as f:
+                f.write(self.SENTINEL)
+            events = lambda nonce: [{"event": "ui-secret-wanted", "index": 1, "action": "textbar:secret"},  # noqa: E731
+                                    {"event": "ui-done", "outcome": "cancelled: foreground loss"}]
+            _, _, _, _, phone = self.run_secret(["--action", "textbar:secret", "--secret-file", path], events)
+            nonce = next(e.split("=", 1)[1] for e in phone.envs if e.startswith("TITLE_NONCE="))
+            self.assertEqual(phone.secrets, [(f"Documents/ui-text-{nonce}-1", self.SENTINEL.encode())])
+            self.assertEqual(phone.removed, [f"Documents/ui-text-{nonce}-1"])
+
+    def test_a_request_for_an_action_that_is_no_secret_gets_nothing(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "pw")
+            with open(path, "w") as f:
+                f.write(self.SENTINEL)
+            events = lambda nonce: [{"event": "ui-secret-wanted", "index": 1, "action": "textbar:enter"},  # noqa: E731
+                                    {"event": "ui-done", "outcome": "ok"}]
+            _, stdout, _, _, phone = self.run_secret(["--action", "textbar:secret", "--secret-file", path], events)
+            self.assertEqual(phone.secrets, [])
+            self.assertIn("nothing pushed", stdout)
 
 
 if __name__ == "__main__":

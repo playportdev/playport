@@ -7,18 +7,21 @@
 // (output and sensitivity) and, while a controller is connected, its controller map's
 // mode (ControllerMap.swift), up and down between them, left and right (and A) to
 // change one, B back to the rows. Touch keyboard goes back to the game with the
-// touch keyboard open over it (HostIOKit TouchKeyboard).
+// touch keyboard open over it (HostIOKit TouchKeyboard); Type text goes back to it
+// with the text bar open over it (HostIOKit TextBar), the way into a guest's text
+// field with a controller connected, when no on-screen controls are drawn.
 
 import Foundation
 
 public enum QuickMenuItem: String, CaseIterable, Sendable {
-    case resume, controls, keyboard, screenshot, overlay, controller, quit
+    case resume, controls, keyboard, text, screenshot, overlay, controller, quit
 
     public var title: String {
         switch self {
         case .resume: "Resume"
         case .controls: "Controls"
         case .keyboard: "Touch keyboard"
+        case .text: "Type text"
         case .screenshot: "Screenshot"
         case .overlay: "Performance overlay"
         case .controller: "Controller"

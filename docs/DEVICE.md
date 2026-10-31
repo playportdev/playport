@@ -345,8 +345,37 @@ not that gameplay appeared: inspect the timeline, log and screenshot.
   --action wait:5 --action menu:open --action menu:quit --action open:home --shot-each-action`.
   `gesture:three-finger-tap` opens it through the tap's own handler, with the controls
   on or off and with a controller connected. `menu:keyboard` goes back to the game with
-  the touch keyboard open; `menu:controls` opens the Controls panel (`pad:left/right`
-  change the ringed row) and `menu:layout` its layout editor over the paused game.
+  the touch keyboard open, `menu:text` with the text bar open; `menu:controls` opens the
+  Controls panel (`pad:left/right` change the ringed row) and `menu:layout` its layout
+  editor over the paused game.
+- **The text bar** (PLA-267; `UI/TextBarView.swift`, HostIOKit `TextBar`). The in-game
+  menu's Type text row resumes the game with a field above the iOS keyboard: what is
+  typed, pasted or AutoFilled reaches the focused guest window as `WM_CHAR` (one UTF-16
+  unit at a time, `KEYEVENTF_UNICODE`), Tab, Enter and Backspace as keys; its lock button
+  is password mode (dots, a saved password offered). It is the way into a launcher's or a
+  game's text field with a controller connected. Nothing typed is logged: the log has
+  `textbar: open, plain (not logged)`, `secret on (not logged)`, `closed` and the keys'
+  names; the key path logs no key code (patches/madeira-winios 0007, madeira-unix 0250).
+  A runtime key `WINEDEBUG=+key` or `+msg` (Settings' runtime keys) would trace the
+  messages, so it is never set for a sign-in. After `menu:open` and `menu:text`, the
+  driver's `textbar:` actions press what a person would: `textbar:type:TEXT` types TEXT
+  (percent-encoded, `%2C` a comma; it is in argv, events and the log, so never a
+  password), `textbar:tab`, `textbar:enter`, `textbar:backspace`, `textbar:secure`,
+  `textbar:plain`, `textbar:close`.
+  - **A secret** (PLA-606, dev builds only): `textbar:secret` or `textbar:secret+enter`
+    turns password mode on and types the value of `--secret-file PATH` (one trailing
+    newline stripped) or `--secret-stdin`. The file lives in the gitignored build area,
+    `.work/secrets/wow-password` (`chmod 600`). The value is in no argv, launch
+    environment (`UI_ACTIONS`, which a restart's `ui-continue.json` copies), event, log or
+    run file: when the action runs the app emits `ui-secret-wanted`, `pp ui` writes the
+    value over AFC on stdin to `Documents/ui-text-<nonce>-<n>` (a `.part` renamed into
+    place; the `secret-pushed` event has the action number only), and the app reads and
+    deletes the file before typing. A file the app did not take is removed when the run
+    ends (`secret-removed`) and any left is removed at the app's next start. WoW's sign-in:
+    `pp ui --action play:bnet-wow --action wait:60 --action menu:open --action menu:text
+    --action textbar:type:me@example.com --action textbar:tab --action textbar:secret+enter
+    --secret-file .work/secrets/wow-password --shot-each-action`. The screenshots show the
+    bar's dots and the game's own field.
 - **The on-screen controls** ([decision 0171](decisions/0171-on-screen-controls-input-mapping-and-gyro.md);
   [ARCHITECTURE.md](ARCHITECTURE.md#input-sources-and-the-mixer)). They show while no
   controller is connected (`--pad` connects one). `--controls ID:JSON` saves a game's
@@ -641,6 +670,7 @@ Where things are in the app's container (`pp phone ls DIR` lists a directory):
 | --- | --- |
 | `Documents/s1-host.log`, `s1-host.prev.log` | the dev app's runtime log, this launch and the one before |
 | `Documents/steam-drive.log`, `run-events.jsonl`, `vpad.txt` | the Steam client's log, the UI driver's events, the pad script |
+| `Documents/ui-text-<nonce>-<n>` | a `textbar:secret` value for a moment: pushed when the app asks, deleted by it before typing (none should be there) |
 | `Documents/Screenshots/` | a dev build's copies of the in-game menu's screenshots |
 | `Documents/Cloud Backups/<appid>/<time>/` | the copies of saves a Steam Cloud sync replaced (the side not kept in a conflict), kept 30 days |
 | `Documents/prefix/` | the Wine prefix; `drive_c/Games/<title>/` holds the installed titles |

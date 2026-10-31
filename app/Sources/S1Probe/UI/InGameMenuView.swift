@@ -25,7 +25,8 @@
 // to the panel; A on the On-screen controls row, or a tap on its "Edit
 // layout…", opens the layout editor over the paused game in the menu's place,
 // UI/LayoutEditorView.swift, Done back to the panel), Touch keyboard (back to the game with the touch keyboard open
-// over it, OnScreenControls.setKeyboard; its own close key closes it),
+// over it, OnScreenControls.setKeyboard; its own close key closes it), Type text (back to the game with the text
+// bar and the iOS keyboard over it, UI/TextBarView.swift; the menu opening closes the bar),
 // Screenshot (the frame on screen to
 // Photos; a dev build also keeps a PNG in Documents/Screenshots), Performance
 // overlay (the Metal HUD on the game layer, now and for this game only; only
@@ -77,6 +78,7 @@ final class InGameMenu: ObservableObject {
             return false
         }
         isOpen = true
+        GameTextBar.shared.close()
         menu = QuickMenu()
         shot = nil
         HostIO.shared.menuOpened()
@@ -148,6 +150,10 @@ final class InGameMenu: ObservableObject {
             // Back to the game, with the touch keyboard open over it (its keys reach the game only with the menu down).
             resume()
             OnScreenControls.shared.setKeyboard(true)
+        case .text:
+            // Back to the game, with the text bar and the iOS keyboard over it (its typing reaches the game only with the menu down).
+            resume()
+            GameTextBar.shared.open()
         case .screenshot: screenshot()
         case .overlay: toggleOverlay()
         case .controller: PadRouter.shared.refreshControllers()
@@ -285,6 +291,7 @@ final class InGameMenu: ObservableObject {
         // The game ended under the layout editor: it closes, unsaved.
         if LayoutEditorSession.shared.isUp(.inGame) { LayoutEditorSession.shared.close() }
         editor = false
+        GameTextBar.shared.close()
         isOpen = false
         paused = false
         quitting = false
@@ -437,6 +444,7 @@ struct InGameMenuView: View {
     @ObservedObject private var router = PadRouter.shared
     @ObservedObject private var safe = WindowInsets.shared
     @ObservedObject private var controls = OnScreenControls.shared
+    @ObservedObject private var textBar = GameTextBar.shared
     @ObservedObject private var store = ControlsStore.shared
     @ObservedObject private var layoutEditor = LayoutEditorSession.shared
 
@@ -529,7 +537,7 @@ struct InGameMenuView: View {
                 }
             }
             .padding(.horizontal, 14)
-            .frame(height: 42)
+            .frame(height: 36)
             .background(ringed ? PP.text : .clear, in: RoundedRectangle(cornerRadius: 10))
             .contentShape(RoundedRectangle(cornerRadius: 10))
         }
@@ -542,6 +550,7 @@ struct InGameMenuView: View {
         case .resume: return nil
         case .controls: return controls.state.summary
         case .keyboard: return controls.keyboard ? "Open" : nil
+        case .text: return textBar.isOpen ? "Open" : nil
         case .screenshot: return model.shot ?? "Saved to Photos"
         case .overlay:
             guard MetalHUD.loaded else { return "Turn on Metal HUD in Settings, relaunch" }
