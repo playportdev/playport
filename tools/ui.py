@@ -1062,12 +1062,17 @@ def main(argv=None, launched=None):
         return phonelib.fail(ev, "pp ui: a textbar:secret value is empty")
     secret_files = {}
     secrets_asked = {"n": 0}
+    # The app's ui-secret-wanted names the action's number only (Dev/TextBarDriver.swift); it is
+    # answered while this run's textbar:secret actions have not all been served.
+    secret_actions = sum(x in SECRET_ACTIONS for x in a.action)
 
     def on_event(e):
         if e.get("event") == "ui-secret-wanted":
             n = e.get("index")
-            if not secret_values or e.get("action") not in SECRET_ACTIONS or not isinstance(n, int) or n in secret_files:
-                ev("warning", message=f"the app asked for a secret for action {n} ({e.get('action')}), which is no "
+            action = e.get("action", "textbar:secret")
+            if not secret_values or action not in SECRET_ACTIONS or not isinstance(n, int) or n in secret_files \
+                    or secrets_asked["n"] >= secret_actions:
+                ev("warning", message=f"the app asked for a secret for action {n} ({action}), which is no "
                                       "textbar:secret action waiting for one: nothing pushed")
             else:
                 k = min(secrets_asked["n"], len(secret_values) - 1)

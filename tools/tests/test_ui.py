@@ -1206,7 +1206,7 @@ class TextBarSecret(unittest.TestCase):
     @staticmethod
     def asked(n, action):
         """The app's events for a textbar:secret action at number n that typed what it got."""
-        return lambda nonce: [{"event": "ui-secret-wanted", "index": n, "action": action},
+        return lambda nonce: [{"event": "ui-secret-wanted", "index": n},   # the app names the number only
                               {"event": "ui-action", "action": action, "result": "ok", "index": n},
                               {"event": "ui-done", "outcome": "ok actions=3"}]
 
@@ -1267,7 +1267,7 @@ class TextBarSecret(unittest.TestCase):
             path = os.path.join(d, "pw")
             with open(path, "w") as f:
                 f.write(self.SENTINEL)
-            events = lambda nonce: [{"event": "ui-secret-wanted", "index": 1, "action": "textbar:secret"},  # noqa: E731
+            events = lambda nonce: [{"event": "ui-secret-wanted", "index": 1},  # noqa: E731
                                     {"event": "ui-done", "outcome": "cancelled: foreground loss"}]
             _, _, _, _, phone = self.run_secret(["--action", "textbar:secret", "--secret-file", path], events)
             nonce = next(e.split("=", 1)[1] for e in phone.envs if e.startswith("TITLE_NONCE="))
@@ -1284,9 +1284,9 @@ class TextBarSecret(unittest.TestCase):
                 with open(paths[-1], "w") as f:
                     f.write(value + "\n")
             events = lambda nonce: [  # noqa: E731
-                {"event": "ui-secret-wanted", "index": 3, "action": "textbar:secret"},
+                {"event": "ui-secret-wanted", "index": 3},
                 {"event": "ui-action", "action": "textbar:secret", "result": "ok", "index": 3},
-                {"event": "ui-secret-wanted", "index": 5, "action": "textbar:secret+enter"},
+                {"event": "ui-secret-wanted", "index": 5},
                 {"event": "ui-action", "action": "textbar:secret+enter", "result": "ok", "index": 5},
                 {"event": "ui-done", "outcome": "ok actions=5"}]
             argv = ["--action", "menu:open", "--action", "menu:text", "--action", "textbar:secret",
@@ -1301,15 +1301,20 @@ class TextBarSecret(unittest.TestCase):
                 self.assertNotIn("N4me-sentinel", text)
                 self.assertNotIn(self.SENTINEL, text)
 
-    def test_a_request_for_an_action_that_is_no_secret_gets_nothing(self):
+    def test_a_request_past_the_run_s_secret_actions_gets_nothing(self):
+        """One textbar:secret action, two requests (the app's shape: a number only): the second
+        gets nothing, so a stray request cannot pull the value twice."""
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "pw")
             with open(path, "w") as f:
                 f.write(self.SENTINEL)
-            events = lambda nonce: [{"event": "ui-secret-wanted", "index": 1, "action": "textbar:enter"},  # noqa: E731
+            events = lambda nonce: [{"event": "ui-secret-wanted", "index": 1},  # noqa: E731
+                                    {"event": "ui-action", "action": "textbar:secret", "result": "ok", "index": 1},
+                                    {"event": "ui-secret-wanted", "index": 2},
                                     {"event": "ui-done", "outcome": "ok"}]
             _, stdout, _, _, phone = self.run_secret(["--action", "textbar:secret", "--secret-file", path], events)
-            self.assertEqual(phone.secrets, [])
+            nonce = next(e.split("=", 1)[1] for e in phone.envs if e.startswith("TITLE_NONCE="))
+            self.assertEqual(phone.secrets, [(f"Documents/ui-text-{nonce}-1", self.SENTINEL.encode())])
             self.assertIn("nothing pushed", stdout)
 
 
