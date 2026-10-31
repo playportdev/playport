@@ -181,8 +181,9 @@ def cmd_secrets(args):
 def cmd_names(args):
     """Reject retired provenance/prefixes in tracked files (COMMIT or index).
 
-    Only two exact upstream GN tokens in CEF/Chromium patches are exempt;
-    checks.name_scan_text defines this path-scoped exception for both gates.
+    Only two exact upstream GN tokens in the CEF/Chromium patches of commits
+    before their removal (PLA-603) are exempt; checks.name_scan_text defines
+    this path-scoped exception for both gates.
     """
     old, prefix = checks.NAME_PATTERNS
     where = [args[0]] if args else ["--cached"]

@@ -94,8 +94,9 @@ LIMITATIONS = [
 def text_rules(data, path=""):
     """Pattern IDs only; no blanket line-level exemptions.
 
-    The name gate alone exempts two exact upstream GN tokens in CEF/Chromium
-    patches, using the same repository-relative path rule as pp names.
+    The name gate alone exempts two exact upstream GN tokens in the CEF/Chromium
+    patches of commits before their removal (PLA-603), using the same
+    repository-relative path rule as pp names.
     """
     views = [data.decode("latin1")]
     if b"\0" in data:

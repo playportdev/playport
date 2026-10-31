@@ -150,15 +150,15 @@ class Patches(unittest.TestCase):
     def test_clean(self):
         self.assertEqual(checks.patch_problems(self.repo), [])
 
-    def test_cef_and_chromium_series_are_discovered(self):
-        for target in ("cef", "chromium"):
+    def test_new_series_are_discovered(self):
+        for target in ("alpha", "beta"):
             self.d = os.path.join(self.repo, "patches", target)
             os.makedirs(self.d)
             self.add("0001-a.patch", PATCH)
             self.series("0001-a.patch")
         self.assertEqual(checks.patch_problems(self.repo), [])
         self.add("0001-a.patch", PATCH.replace("Evidence: docs/evidence/x.md\n", ""))
-        self.assertIn("patches/chromium/0001-a.patch has no Evidence: trailer",
+        self.assertIn("patches/beta/0001-a.patch has no Evidence: trailer",
                       "\n".join(checks.patch_problems(self.repo)))
 
     def test_each_problem(self):

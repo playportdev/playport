@@ -51,6 +51,8 @@ _UPSTREAM_GN_TOKENS = re.compile(r"(?<![\w-])(?:" + "gn" + r"_args|" + "gn" + r"
 def name_scan_text(path, text):
     """Only the two upstream GN tokens are exempt, only in CEF/Chromium patches.
 
+    Those series were removed with Playport's CEF build (PLA-603); the exemption stays so that
+    `pp names COMMIT` and `pp source --rev`/`--build` still pass on commits from before it.
     The retired project name and every other retired-prefix word still fail.
     Callers pass a repository-relative path, never an archive or commit prefix.
     """

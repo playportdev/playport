@@ -66,12 +66,6 @@ vulkan-loader 9e9518d2cf00054a220ae1a40f4406804b420ef5  https://github.com/Khron
 vulkan-headers 6802bb4733b63ed5efd3adb308a6c885ef180ea1  https://github.com/KhronosGroup/Vulkan-Headers.git  -
 gbe          7103add7ca6ef3ef8353279219880068f2494fc8  https://github.com/Detanup01/gbe_fork.git     dev
 #
-# CEF 143.0.14 / Chromium 143.0.7499.193 (decision 0110). Built separately;
-# prebuilt input record and integration status: build/cef/README.md.
-# Chromium's series follows CEF's stock patches; nested ANGLE/Dawn are DEPS-pinned.
-cef          dd46a3761b5389255e1824c81ae1b131459f7cd0  https://bitbucket.org/chromiumembedded/cef.git 7499
-chromium     fc6af963edebc86a5d6779e29b94312ebe911538  https://chromium.googlesource.com/chromium/src.git 143.0.7499.193
-#
 # Build-time sources that are not Madeira components, fetched by tag.
 freetype     VER-2-14-3                                https://github.com/freetype/freetype.git      -
 llvm-project llvmorg-15.0.7                            https://github.com/llvm/llvm-project.git      -
