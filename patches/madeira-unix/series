@@ -227,3 +227,4 @@
 0258-signal-NtGetContextThread-reports-no-hardware-breakp.patch
 0259-ntdll-step-an-x18-patched-instruction-as-one-instruc.patch
 0260-virtual-x18-patch-a-CMP-of-x18-that-a-literal-load-p.patch
+0261-ntdll-step-a-call-into-host-code-as-one-instruction.patch

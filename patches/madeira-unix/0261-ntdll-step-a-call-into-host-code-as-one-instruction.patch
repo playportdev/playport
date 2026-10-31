@@ -1,0 +1,92 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 1 Nov 2026 01:00:00 +0100
+Subject: [PATCH] ntdll: step a call into host code as one instruction
+
+A single step at a BLR to code outside the JIT pool (ntdll's syscall
+stubs call the syscall dispatcher, host code) ended at the dispatcher,
+where no step can continue: the next continue dropped SS and the thread
+ran on unstepped. Such a BLR now runs out of line, the call returning to
+the BRK after it, and the step ends at the instruction after it with LR
+pointing there, as on Windows a stepped syscall does. A step that is
+dropped all the same is logged (first 8).
+
+Linear: PLA-514
+Class: ios-port
+Evidence: docs/evidence/2026-10-31-wow-arm64-start.md
+Offered-upstream: no
+---
+ build/ntdll-unix/signal_arm64_ios.c | 21 +++++++++++++++++++--
+ 1 file changed, 19 insertions(+), 2 deletions(-)
+
+diff --git a/build/ntdll-unix/signal_arm64_ios.c b/build/ntdll-unix/signal_arm64_ios.c
+index 68d37ef..5476411 100644
+--- a/build/ntdll-unix/signal_arm64_ios.c
++++ b/build/ntdll-unix/signal_arm64_ios.c
+@@ -589,6 +589,8 @@ static __thread ULONG64 ios_ss_pc;
+  * (its number + 1; 0: none), and its value to put back */
+ static __thread int ios_ss_reg;
+ static __thread ULONG64 ios_ss_reg_val;
++/* the step ran a BLR out of line (a call into host code): its LR is the original pc + 4 */
++static __thread int ios_ss_call;
+ 
+ /* Thread registry: maps Mach thread port → TEB + trampoline.
+  *
+@@ -6624,11 +6626,16 @@ static NTSTATUS ios_ss_continue( struct thread_data *data, const CONTEXT *contex
+     char *rw;
+     void *slot;
+     ULONG insn;
+-    int tramp_reg = 0;
++    int tramp_reg = 0, call_out = 0;
+ 
+     step.Cpsr &= ~PPSS_CPSR_SS;
+     if (!rx || step.Pc < rx || step.Pc + 4 > rx + ios_jit_pool_size_global || (step.Pc & 3))
++    {
++        static int dropped;
++        if (dropped++ < 8)
++            dprintf( 2, "[single-step] step dropped: pc %p is outside the JIT pool\n", (void *)step.Pc );
+         return signal_set_full_context( &step );
++    }
+     insn = *(const ULONG *)step.Pc;
+     if ((insn & 0xfc000000) == 0x14000000)
+     {
+@@ -6649,7 +6656,13 @@ static NTSTATUS ios_ss_continue( struct thread_data *data, const CONTEXT *contex
+             }
+         }
+     }
+-    if ((insn & 0xffffffe0) == 0xaa1203e0 || ppss_step_in_place( (uint64_t *)step.X, (uint64_t *)&step.Pc, step.Cpsr, (unsigned char (*)[16])step.V, insn ))
++    /* A BLR to code outside the pool (the syscall dispatcher, from a stub in
++     * ntdll) cannot be stepped into: the step would end there. It runs out of
++     * line as one step instead, returning to the BRK after it. */
++    if ((insn & 0xfffffc1f) == 0xd63f0000 && ((insn >> 5) & 31) != 31 &&
++        (step.X[(insn >> 5) & 31] < rx || step.X[(insn >> 5) & 31] >= rx + ios_jit_pool_size_global))
++        call_out = 1;
++    else if ((insn & 0xffffffe0) == 0xaa1203e0 || ppss_step_in_place( (uint64_t *)step.X, (uint64_t *)&step.Pc, step.Cpsr, (unsigned char (*)[16])step.V, insn ))
+     {
+         EXCEPTION_RECORD rec = { .ExceptionCode = EXCEPTION_SINGLE_STEP };
+         ULONG64 pe;
+@@ -6672,6 +6685,7 @@ static NTSTATUS ios_ss_continue( struct thread_data *data, const CONTEXT *contex
+         ios_ss_pc = step.Pc;
+         ios_ss_slot = (ULONG64)slot;
+         step.Pc = (ULONG64)slot;
++        ios_ss_call = call_out;
+         if ((ios_ss_reg = tramp_reg))
+         {
+             ios_ss_reg_val = step.X[tramp_reg - 1];
+@@ -7425,6 +7439,7 @@ static void setup_exception( ucontext_t *sigcontext, EXCEPTION_RECORD *rec )
+         ios_ss_slot = 0;
+         if (ios_ss_reg) REGn_sig( ios_ss_reg - 1, sigcontext ) = ios_ss_reg_val;
+         ios_ss_reg = 0;
++        ios_ss_call = 0;
+     }
+ #endif
+     rec->ExceptionAddress = (void *)PC_sig(sigcontext);
+@@ -13729,6 +13744,8 @@ static void trap_handler( int signal, siginfo_t *siginfo, void *sigcontext )
+         ios_ss_slot = 0;
+         if (ios_ss_reg) REGn_sig( ios_ss_reg - 1, context ) = ios_ss_reg_val;
+         ios_ss_reg = 0;
++        if (ios_ss_call) REGn_sig( 30, context ) = next;
++        ios_ss_call = 0;
+         PC_sig( context ) = next;
+         rec.ExceptionCode = EXCEPTION_SINGLE_STEP;
+         rec.ExceptionAddress = (void *)(pe ? pe : next);

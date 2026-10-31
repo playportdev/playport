@@ -51,3 +51,15 @@ Still open: which call at +0x11064 this is, what it returns under Wine on iOS co
 WoW's RWX code buffer is handled on iOS. No login screen yet.
 
 Hollow Knight on IPA 6e598040: first-frame+10 passes (run 20261031T234011).
+
+9. 0261: a stepped BLR into host code (the syscall dispatcher, from ntdll's stubs) now runs out of line as one
+   step, and a step that is dropped anyway is logged. Run 20261031T234647 (IPA 70718df4…): no step was dropped,
+   and the same store fault happened. Across runs the bad pointer moves by exactly as much as WoW's pool copy
+   moves (0xc8000). So `w10` is consistent with a 32-bit RVA computed as *pool address* (from ADRP) minus
+   *PE ImageBase* (from the loader): about 0x2e24ed8 into .rdata, offset by pool − PE. The native child runs the
+   image from its JIT-pool copy, but PEB/LDR report the PE view's base, so any RVA WoW computes from its own
+   code addresses against its module base is wrong. Making the pool copy the module's reported base for a
+   native ARM64 child (PEB ImageBaseAddress, the LDR entry, VirtualQuery of it) is a design change in the
+   loader and the virtual-memory views, and is not done here.
+
+Hollow Knight on IPA 70718df4…: first-frame+10 passes (run 20261031T234751).
