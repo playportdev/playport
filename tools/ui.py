@@ -601,9 +601,10 @@ def in_game(actions, start):
 
 
 def is_play(action):
-    """Whether an action starts a launch the run follows as a game: play:ID, or open-launcher:ID
-    (Settings › Launchers' Open, whose title is the launcher itself)."""
-    return action.startswith(("play:", "open-launcher:"))
+    """Whether an action starts a launch the run follows as a game: play:ID, open-launcher:ID
+    (Settings › Launchers' Open, whose title is the launcher itself), or notice:bnet-CODE=accept
+    (the ban-risk notice's accept goes on into that Play, UIDriver followPlay)."""
+    return action.startswith(("play:", "open-launcher:")) or (action.startswith("notice:") and action.endswith("=accept"))
 
 
 def pad_after_play(actions):

@@ -291,6 +291,19 @@ class UiEnvTest(unittest.TestCase):
         self.assertTrue(m.after_play(["open-launcher:rockstar", "wait:5", "open:settings"]))
         self.assertEqual(m.pad_after_play(["open-launcher:rockstar", "pad:a"]), "pad:a")
 
+    def test_an_accepted_ban_risk_notice_is_followed_as_a_play(self):
+        """notice:bnet-CODE=accept goes on into the Play (PLA-514): the game's end, not the UI's,
+        ends the run, so --until can match; a decline starts nothing."""
+        m = load()
+        title = {"event": "title-done", "outcome": "exit=0 after_s=90"}
+        ui = {"event": "ui-done", "outcome": "ok actions=1"}
+        accept = ["notice:bnet-wow=accept"]
+        self.assertFalse(m.ends_run(ui, accept, None))
+        self.assertTrue(m.ends_run(title, accept, None))
+        self.assertTrue(m.ends_run({"event": "ui-done", "outcome": "action=notice:bnet-wow=accept failed: x"}, accept, None))
+        self.assertTrue(m.ends_run(ui, ["notice:bnet-wow=decline"], None))
+        self.assertTrue(m.after_play(accept + ["wait:5", "open:settings"]))
+
     def test_forget_launcher_window_is_a_ui_step_not_a_play(self):
         """Settings \u203a Launchers' Forget the launcher's saved window settings (UIDriver
         forget-launcher-window:) is accepted for a launcher id and is not followed as a play."""

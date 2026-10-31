@@ -172,19 +172,25 @@ private struct LibraryGridView: View {
 
     private func chips(_ all: [LibraryEntry], downloading: Set<StoreGameKey>) -> some View {
         HStack(spacing: 8) {
-            // Store chips can grow without pushing search and sort off screen.
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(LibraryGrid.filters, id: \.self) { chip in
-                        let count = all.filter { LibraryList.matches($0, chip, downloading: downloading) }.count
-                        // Not in the ring: ⧉ picks one; a tap here.
-                        Button { grid.filter = chip } label: {
-                            Chip(text: "\(LibraryGrid.label(chip)) · \(count)", on: grid.filter == chip)
+            // Store chips can grow without pushing search and sort off screen; the chosen one
+            // scrolls into view (Battle.net, the last, sits past the edge on a phone).
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(LibraryGrid.filters, id: \.self) { chip in
+                            let count = all.filter { LibraryList.matches($0, chip, downloading: downloading) }.count
+                            // Not in the ring: ⧉ picks one; a tap here.
+                            Button { grid.filter = chip } label: {
+                                Chip(text: "\(LibraryGrid.label(chip)) · \(count)", on: grid.filter == chip)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("chip-\(chip.rawValue)")
+                            .id(chip)
                         }
-                        .buttonStyle(.plain)
-                        .accessibilityIdentifier("chip-\(chip.rawValue)")
                     }
                 }
+                .onAppear { proxy.scrollTo(grid.filter) }
+                .onChange(of: grid.filter) { _, chip in withAnimation { proxy.scrollTo(chip) } }
             }
             .fixedSize(horizontal: false, vertical: true)
             if grid.searching || !grid.search.isEmpty {
