@@ -1,0 +1,469 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sat, 31 Oct 2026 01:02:18 +0100
+Subject: [PATCH 134/135] kk: cmd_retire destroys idle sealed allocators, caps
+ a pool at eight and begins Metal at the first encoder
+
+With MESA_KK_EXPERIMENTAL=cmd_retire (0132) RDR2's command allocators
+went from 74 to 190-252 and 1.2-1.9 GB in its cabin's load step, and
+the process was ended for memory. Hollow Knight destroyed and made one
+allocator a frame. The causes, in the code:
+
+- A Metal reset keeps an allocator's heaps (MTL4CommandAllocator.h:
+  reset lets new command buffers "reuse its existing internal memory
+  heaps"; allocatedSize is the heaps' size). An allocator sealed past
+  8 MiB was reset at a Begin and sealed again at its next End, so it
+  took one recording at a time, never counted among the pool's four
+  unsealed allocators and was never destroyed: every allocator that
+  once passed 8 MiB let the pool make another, and none went away.
+- A ONE_TIME recording begun and ended but never submitted tainted its
+  allocator although it encoded nothing: DXVK begins the next command
+  list's spare command buffer after each submission and submits it
+  only if it was used (dxvk_cmdlist.cpp next(), submit()), once a frame.
+
+With cmd_retire now:
+
+- A recording begins its Metal command buffer at its first encoder
+  (kk_cmd_begin_metal), not at vkBeginCommandBuffer. One that encodes
+  nothing (DXVK's spare buffer, a secondary, an empty re-record) never
+  begins one: it is not committed and leaves its allocator clean
+  (unbegun=). One that began and is released uncommitted still taints
+  its allocator, which is destroyed, never reset.
+- An idle (no users) sealed allocator is destroyed, not reset: its
+  memory goes back. Of the idle clean ones the first is reset and taken
+  and up to three more are kept; the rest are destroyed (trimmed=).
+- A pool makes at most KK_CMD_POOL_ALLOCATOR_CAP (8) allocators. At the
+  cap a recording shares the least-filled unsealed ended allocator, or
+  if there is none the least-filled sealed one (capped=), which is
+  destroyed once idle. Only when every allocator records now or is
+  tainted is a new one made past the cap (over-cap=): a Metal
+  allocator serves one command buffer at a time. Nothing waits for the
+  GPU.
+- The idle scan reads no allocatedSize; only a Begin that finds none
+  idle compares sizes, to share.
+- [kk-cmd-retire] adds released= (sealed ones destroyed), trimmed=,
+  capped=, over-cap=, pool-max= (the most allocators one pool had) and
+  unbegun=.
+
+Without the switch Begin begins the command buffer and nothing else
+changes. kk-cmd-retire-test.c checks it on the mock, whose reset now
+keeps the size and which fails a reset of an allocator a command
+buffer was begun on and not committed.
+
+Linear: PLA-364
+Class: feature
+Evidence: docs/evidence/2026-10-30-rdr2-kk-audio-diagnostics.md
+Offered-upstream: no
+---
+ src/kosmickrisp/vulkan/kk_cmd_buffer.c |  57 ++++++++---
+ src/kosmickrisp/vulkan/kk_cmd_buffer.h |   9 ++
+ src/kosmickrisp/vulkan/kk_cmd_pool.c   | 132 ++++++++++++++++++-------
+ src/kosmickrisp/vulkan/kk_cmd_pool.h   |  25 +++--
+ src/kosmickrisp/vulkan/kk_debug.h      |   8 +-
+ src/kosmickrisp/vulkan/kk_queue.c      |   5 +-
+ 6 files changed, 178 insertions(+), 58 deletions(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.c b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+index a3a6a21..61dc83d 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_buffer.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+@@ -253,14 +253,23 @@ kk_cmd_census_log(void)
+       fprintf(stderr,
+               "[kk-cmd-retire] in-flight=%" PRId64 " (%.1f MiB) retired=%" PRId64
+               " (%.1f MiB) | allocators reset=%" PRId64 " sealed=%" PRId64
+-              " tainted=%" PRId64 " destroyed=%" PRId64 " shared=%" PRId64 "\n",
++              " tainted=%" PRId64 " destroyed=%" PRId64 " shared=%" PRId64
++              " released=%" PRId64 " trimmed=%" PRId64 " capped=%" PRId64
++              " over-cap=%" PRId64 " pool-max=%" PRId64 " | unbegun=%" PRId64
++              "\n",
+               p_atomic_read(&r->in_flight), p_atomic_read(&r->in_flight_B) / mib,
+               p_atomic_read(&r->retired), p_atomic_read(&r->retired_B) / mib,
+               p_atomic_read(&r->allocator_resets),
+               p_atomic_read(&r->allocator_seals),
+               p_atomic_read(&r->allocator_taints),
+               p_atomic_read(&r->allocator_destroys),
+-              p_atomic_read(&r->allocator_shares));
++              p_atomic_read(&r->allocator_shares),
++              p_atomic_read(&r->allocator_releases),
++              p_atomic_read(&r->allocator_trims),
++              p_atomic_read(&r->allocator_capped_shares),
++              p_atomic_read(&r->allocator_over_cap),
++              p_atomic_read(&r->pool_allocators_max),
++              p_atomic_read(&r->unbegun));
+    }
+ 
+    /* The twelve buckets holding the most, largest first */
+@@ -391,7 +400,10 @@ end_recording(struct kk_cmd_buffer *cmd)
+       return;
+ 
+    cs_end(cmd);
+-   mtl_end_command_buffer(cmd->metal.cmd_buf);
++   /* Playport (PLA-364): with cmd_retire a recording that encoded nothing
++    * never began cmd_buf (kk_cmd_begin_metal) */
++   if (cmd->metal.begun)
++      mtl_end_command_buffer(cmd->metal.cmd_buf);
+    if (cmd->census.listed) {
+       const uint64_t size =
+          mtl_command_allocator_allocated_size(cmd->metal.allocator);
+@@ -407,24 +419,40 @@ end_recording(struct kk_cmd_buffer *cmd)
+ 
+ /* Playport: the recording this command buffer encoded is no longer needed
+  * (it is reset, freed or begins again, so not pending). With
+- * MESA_KK_EXPERIMENTAL=cmd_retire a recording released without a commit
+- * taints its allocator. */
++ * MESA_KK_EXPERIMENTAL=cmd_retire a recording that began cmd_buf in its
++ * allocator and is released without a commit taints the allocator; one that
++ * never began cmd_buf (it encoded nothing: DXVK's spare command buffer of a
++ * frame, a secondary) leaves the allocator clean. */
+ static void
+ kk_cmd_release_allocator(struct kk_cmd_buffer *cmd)
+ {
+    struct kk_cmd_allocator *allocator = cmd->metal.encoded_in;
+    if (allocator) {
+       assert(p_atomic_read(&allocator->users) > 0u);
+-      if (KK_EXPERIMENTAL(CMD_RETIRE) && !cmd->metal.committed &&
+-          !allocator->tainted) {
+-         allocator->tainted = true;
+-         p_atomic_inc(&kk_cmd_retire_stats.allocator_taints);
++      if (KK_EXPERIMENTAL(CMD_RETIRE)) {
++         if (!cmd->metal.begun) {
++            p_atomic_inc(&kk_cmd_retire_stats.unbegun);
++         } else if (!cmd->metal.committed && !allocator->tainted) {
++            allocator->tainted = true;
++            p_atomic_inc(&kk_cmd_retire_stats.allocator_taints);
++         }
+       }
+       p_atomic_dec(&allocator->users);
+       cmd->metal.encoded_in = NULL;
+    }
+-   /* The next recording is uncommitted until kk_queue_commit */
++   /* The next recording is uncommitted until kk_queue_commit, and not begun */
+    cmd->metal.committed = false;
++   cmd->metal.begun = false;
++}
++
++void
++kk_cmd_begin_metal(struct kk_cmd_buffer *cmd)
++{
++   if (cmd->metal.begun)
++      return;
++   assert(cmd->metal.allocator != NULL);
++   mtl_begin_command_buffer(cmd->metal.cmd_buf, cmd->metal.allocator);
++   cmd->metal.begun = true;
+ }
+ 
+ struct kk_cmd_retire *
+@@ -636,7 +664,12 @@ kk_BeginCommandBuffer(VkCommandBuffer commandBuffer,
+       cmd->metal.encoded_in = allocator;
+       cmd->metal.allocator = allocator->handle;
+    }
+-   mtl_begin_command_buffer(cmd->metal.cmd_buf, cmd->metal.allocator);
++   /* Playport (PLA-364): with cmd_retire cmd_buf begins at the first encoder
++    * (kk_cmd_begin_metal) */
++   if (!KK_EXPERIMENTAL(CMD_RETIRE)) {
++      mtl_begin_command_buffer(cmd->metal.cmd_buf, cmd->metal.allocator);
++      cmd->metal.begun = true;
++   }
+    if (cmd->census.listed) {
+       cmd->census.flags = pBeginInfo->flags;
+       cmd->census.alloc_begin_B =
+@@ -686,6 +719,7 @@ cs_start_render(struct kk_cmd_buffer *cmd)
+    /* Ensure no other active encoder, aka compute */
+    cs_end(cmd);
+ 
++   kk_cmd_begin_metal(cmd);
+    cmd->metal.render = mtl_new_render_command_encoder_with_descriptor(
+       cmd->metal.cmd_buf, state->render_pass_descriptor);
+    if (KK_DEBUG(PASSES)) {
+@@ -761,6 +795,7 @@ cs_get_compute(struct kk_cmd_buffer *cmd)
+    }
+ 
+    if (cmd->metal.compute == NULL) {
++      kk_cmd_begin_metal(cmd);
+       cmd->metal.compute = mtl_new_compute_command_encoder(cmd->metal.cmd_buf);
+       if (KK_DEBUG(PASSES)) {
+          KK_PASS_STAT(COMPUTE_ENCODERS);
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.h b/src/kosmickrisp/vulkan/kk_cmd_buffer.h
+index a0e4071..76436c0 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_buffer.h
++++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.h
+@@ -355,6 +355,11 @@ struct kk_cmd_buffer {
+        * taken, so releasing encoded_in does not taint it
+        * (kk_cmd_allocator::tainted) */
+       bool committed;
++      /* Playport (PLA-364): cmd_buf was begun on encoded_in for the current
++       * recording. With MESA_KK_EXPERIMENTAL=cmd_retire that waits for the
++       * first encoder (kk_cmd_begin_metal), so a recording that encodes
++       * nothing never begins one and cannot taint its allocator. */
++      bool begun;
+       mtl_command_buffer *cmd_buf;
+       mtl_render_encoder *render;
+       mtl_compute_encoder *compute;
+@@ -521,6 +526,10 @@ void kk_cmd_census_log(void);
+  * its reset, free or next Begin, as without cmd_retire. */
+ struct kk_cmd_retire *kk_cmd_detach_retire(struct kk_cmd_buffer *cmd);
+ 
++/* Playport (PLA-364), MESA_KK_EXPERIMENTAL=cmd_retire: begins cmd_buf on the
++ * recording's allocator before its first encoder; nothing once begun */
++void kk_cmd_begin_metal(struct kk_cmd_buffer *cmd);
++
+ uint64_t kk_upload_descriptor_root(struct kk_cmd_buffer *cmd,
+                                    VkPipelineBindPoint bind_point);
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_pool.c b/src/kosmickrisp/vulkan/kk_cmd_pool.c
+index db229e5..86a4e81 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_pool.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_pool.c
+@@ -366,7 +366,9 @@ kk_cmd_pool_wait_retired(struct kk_cmd_pool *pool)
+ /* Playport, MESA_KK_BATCH2 "alloc": a pool makes up to this many allocators
+  * so that one without users is usually free to reset; past it a recording
+  * shares one that still has users, as before. Per-command-buffer allocators
+- * had reached 950 and 1.2 GB in RDR2 (ded9a76a). */
++ * had reached 950 and 1.2 GB in RDR2 (ded9a76a). MESA_KK_EXPERIMENTAL=
++ * cmd_retire caps a pool at as many (kk_cmd_pool_get_allocator_retire): with
++ * no cap its allocators had reached 252 and 1.9 GB in RDR2's cabin load. */
+ #define KK_CMD_POOL_ALLOCATOR_CAP 8
+ 
+ static struct kk_cmd_allocator *
+@@ -386,6 +388,17 @@ kk_cmd_pool_new_allocator(struct kk_cmd_pool *pool)
+    if (KK_DEBUG(MEMORY))
+       kk_allocators_add(allocator->handle);
+    pool->metal.allocator_count++;
++   if (KK_EXPERIMENTAL(CMD_RETIRE)) {
++      int64_t max = p_atomic_read(&kk_cmd_retire_stats.pool_allocators_max);
++      while (pool->metal.allocator_count > max) {
++         const int64_t seen =
++            p_atomic_cmpxchg(&kk_cmd_retire_stats.pool_allocators_max, max,
++                             (int64_t)pool->metal.allocator_count);
++         if (seen == max)
++            break;
++         max = seen;
++      }
++   }
+    return allocator;
+ }
+ 
+@@ -417,57 +430,102 @@ kk_cmd_pool_end_allocator(struct kk_cmd_pool *pool,
+ }
+ 
+ /* MESA_KK_EXPERIMENTAL=cmd_retire, on the pool's thread (for the queue's
+- * pool, under the queue mutex). In order:
+- * - a free allocator with no users is reset and taken; a tainted one is
+- *   destroyed instead, never reset;
+- * - with fewer than KK_CMD_POOL_UNSEALED_MAX unsealed allocators, a new one;
+- * - else the least-filled unsealed, untainted free one, which still has
+- *   users;
+- * - else (every unsealed one records now) a new one. */
++ * pool, under the queue mutex). An allocator's users are the recordings that
++ * may still be read by the GPU, so one without users is idle. Metal's reset
++ * keeps an allocator's heaps (MTL4CommandAllocator.h: "reuse its existing
++ * internal memory heaps"), so only a destroy gives memory back. In order:
++ * - idle and tainted: destroyed, never reset;
++ * - idle and sealed (heaps past KK_CMD_ALLOCATOR_SEAL_B): destroyed;
++ * - idle and clean: the first is reset and taken, up to
++ *   KK_CMD_POOL_UNSEALED_MAX - 1 more stay for later Begins, the rest are
++ *   destroyed;
++ * - none idle: a new one while the pool has fewer than
++ *   KK_CMD_POOL_UNSEALED_MAX unsealed ones or no unsealed one to share, and
++ *   fewer than KK_CMD_POOL_ALLOCATOR_CAP in all;
++ * - else the least-filled unsealed, untainted ended one, which still has
++ *   users; at the cap, if there is none, the least-filled sealed one;
++ * - else (every allocator records now or is tainted) a new one past the
++ *   cap: a Metal allocator serves one recording at a time. */
+ static struct kk_cmd_allocator *
+ kk_cmd_pool_get_allocator_retire(struct kk_cmd_pool *pool)
+ {
+    struct util_dynarray *free_list = &pool->metal.free_allocators;
+-   struct kk_cmd_allocator *share = NULL;
+-   uint64_t share_B = UINT64_MAX;
++   struct kk_cmd_allocator *take = NULL;
++   unsigned idle_kept = 0u;
+ 
++   /* The idle ones: destroy, take or keep */
+    unsigned i = 0u;
+    while (i < util_dynarray_num_elements(free_list, struct kk_cmd_allocator *)) {
+       struct kk_cmd_allocator **all = util_dynarray_begin(free_list);
+       struct kk_cmd_allocator *allocator = all[i];
+-      if (p_atomic_read(&allocator->users) == 0u) {
+-         const unsigned n =
+-            util_dynarray_num_elements(free_list, struct kk_cmd_allocator *);
+-         all[i] = all[n - 1u];
+-         (void)util_dynarray_pop(free_list, struct kk_cmd_allocator *);
+-         if (allocator->tainted) {
+-            kk_cmd_pool_destroy_allocator(pool, allocator);
+-            p_atomic_inc(&kk_cmd_retire_stats.allocator_destroys);
+-            continue;
+-         }
+-         mtl_command_allocator_reset(allocator->handle);
+-         if (allocator->sealed) {
+-            allocator->sealed = false;
+-            pool->metal.sealed_count--;
+-         }
+-         p_atomic_inc(&kk_cmd_retire_stats.allocator_resets);
+-         return allocator;
++      if (p_atomic_read(&allocator->users) != 0u) {
++         i++;
++         continue;
+       }
+-      if (!allocator->sealed && !allocator->tainted) {
+-         const uint64_t size =
+-            mtl_command_allocator_allocated_size(allocator->handle);
+-         if (size < share_B) {
+-            share = allocator;
+-            share_B = size;
+-         }
++      int64_t *destroyed = NULL;
++      if (allocator->tainted)
++         destroyed = &kk_cmd_retire_stats.allocator_destroys;
++      else if (allocator->sealed)
++         destroyed = &kk_cmd_retire_stats.allocator_releases;
++      else if (take != NULL && idle_kept + 1u >= KK_CMD_POOL_UNSEALED_MAX)
++         destroyed = &kk_cmd_retire_stats.allocator_trims;
++      if (destroyed == NULL && take != NULL) {
++         idle_kept++;
++         i++;
++         continue;
++      }
++      const unsigned n =
++         util_dynarray_num_elements(free_list, struct kk_cmd_allocator *);
++      all[i] = all[n - 1u];
++      (void)util_dynarray_pop(free_list, struct kk_cmd_allocator *);
++      if (destroyed) {
++         kk_cmd_pool_destroy_allocator(pool, allocator);
++         p_atomic_inc(destroyed);
++      } else {
++         take = allocator;
+       }
+-      i++;
+    }
+ 
+-   if (share == NULL || pool->metal.allocator_count - pool->metal.sealed_count <
+-                           KK_CMD_POOL_UNSEALED_MAX)
++   if (take) {
++      mtl_command_allocator_reset(take->handle);
++      p_atomic_inc(&kk_cmd_retire_stats.allocator_resets);
++      return take;
++   }
++
++   /* None idle: the ended ones still in flight, to share */
++   struct kk_cmd_allocator *share = NULL, *sealed_share = NULL;
++   uint64_t share_B = UINT64_MAX, sealed_share_B = UINT64_MAX;
++   util_dynarray_foreach(free_list, struct kk_cmd_allocator *, entry) {
++      struct kk_cmd_allocator *allocator = *entry;
++      if (allocator->tainted)
++         continue;
++      const uint64_t size =
++         mtl_command_allocator_allocated_size(allocator->handle);
++      if (!allocator->sealed && size < share_B) {
++         share = allocator;
++         share_B = size;
++      } else if (allocator->sealed && size < sealed_share_B) {
++         sealed_share = allocator;
++         sealed_share_B = size;
++      }
++   }
++
++   const uint32_t count = pool->metal.allocator_count;
++   if (count < KK_CMD_POOL_ALLOCATOR_CAP &&
++       (share == NULL ||
++        count - pool->metal.sealed_count < KK_CMD_POOL_UNSEALED_MAX))
+       return kk_cmd_pool_new_allocator(pool);
+ 
++   if (share == NULL && count >= KK_CMD_POOL_ALLOCATOR_CAP) {
++      share = sealed_share;
++      if (share)
++         p_atomic_inc(&kk_cmd_retire_stats.allocator_capped_shares);
++   }
++   if (share == NULL) {
++      p_atomic_inc(&kk_cmd_retire_stats.allocator_over_cap);
++      return kk_cmd_pool_new_allocator(pool);
++   }
++
+    util_dynarray_delete_unordered(free_list, struct kk_cmd_allocator *, share);
+    p_atomic_inc(&kk_cmd_retire_stats.allocator_shares);
+    return share;
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_pool.h b/src/kosmickrisp/vulkan/kk_cmd_pool.h
+index bab7685..88cab3b 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_pool.h
++++ b/src/kosmickrisp/vulkan/kk_cmd_pool.h
+@@ -93,16 +93,20 @@ struct kk_cmd_allocator {
+     * adds one */
+    uint32_t users;
+    /* cmd_retire, the pool's thread only. sealed: past
+-    * KK_CMD_ALLOCATOR_SEAL_B at an End, so it takes no new recording until it
+-    * is reset. tainted: a recording ended in it and was released without a
+-    * commit, so it is never reset (the IOGPU fault of 4bd22b36), only
+-    * destroyed once it has no users. */
++    * KK_CMD_ALLOCATOR_SEAL_B at an End, so it takes no new recording unless
++    * the pool is at KK_CMD_POOL_ALLOCATOR_CAP, and is destroyed once it has
++    * no users: a reset keeps an allocator's heaps (allocatedSize), so a reset
++    * one would seal again at its next End and keep the memory. tainted: a
++    * command buffer was begun in it and released without a commit, so it is
++    * never reset (the IOGPU fault of 4bd22b36), only destroyed once it has no
++    * users. */
+    bool sealed, tainted;
+ };
+ 
+ /* Playport (PLA-364), MESA_KK_EXPERIMENTAL=cmd_retire: an allocator holding
+- * more than this at an End is sealed, and a pool shares an allocator between
+- * recordings only once it has this many unsealed ones */
++ * more than this at an End is sealed; a pool shares an allocator between
++ * recordings only once it has KK_CMD_POOL_UNSEALED_MAX unsealed ones, and
++ * keeps at most that many without users */
+ #define KK_CMD_ALLOCATOR_SEAL_B (8u << 20)
+ #define KK_CMD_POOL_UNSEALED_MAX 4u
+ 
+@@ -125,6 +129,15 @@ struct kk_cmd_retire_stats {
+    int64_t in_flight, in_flight_B, retired, retired_B;
+    int64_t allocator_resets, allocator_seals, allocator_taints;
+    int64_t allocator_destroys, allocator_shares;
++   /* sealed ones destroyed without users; ones without users past
++    * KK_CMD_POOL_UNSEALED_MAX destroyed; shares of a sealed one at the pool
++    * cap; new ones past the cap (every one recording or tainted) */
++   int64_t allocator_releases, allocator_trims, allocator_capped_shares;
++   int64_t allocator_over_cap;
++   /* recordings released that never began a Metal command buffer */
++   int64_t unbegun;
++   /* the most allocators one pool had */
++   int64_t pool_allocators_max;
+ };
+ extern struct kk_cmd_retire_stats kk_cmd_retire_stats;
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_debug.h b/src/kosmickrisp/vulkan/kk_debug.h
+index a08a6ca..093f94c 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.h
++++ b/src/kosmickrisp/vulkan/kk_debug.h
+@@ -261,9 +261,11 @@ enum kk_experimental {
+    /* Playport (PLA-364): a ONE_TIME primary's first submit hands its upload
+     * BOs and its command allocator hold to the commit's completion, which
+     * returns them to the pool (kk_cmd_pool_retire), not the buffer's later
+-    * reset, free or Begin; allocators are then reset, sealed or replaced by
+-    * kk_cmd_pool_get_allocator's retire rules. Must be named: a release
+-    * before the GPU is done with a BO faults */
++    * reset, free or Begin; allocators are then reset, sealed, destroyed or
++    * shared by kk_cmd_pool_get_allocator's retire rules, at most
++    * KK_CMD_POOL_ALLOCATOR_CAP a pool, and a recording begins its Metal
++    * command buffer at its first encoder (kk_cmd_begin_metal). Must be
++    * named: a release before the GPU is done with a BO faults */
+    KK_EXPERIMENTAL_CMD_RETIRE = 1ull << 18,
+    /* Playport (PLA-364): a command BO over 128 KiB and up to 2 MiB comes in
+     * quarter-octave size classes (320 KiB, 384 KiB, ...), not powers of two,
+diff --git a/src/kosmickrisp/vulkan/kk_queue.c b/src/kosmickrisp/vulkan/kk_queue.c
+index 0dfcf9c..e5ef050 100644
+--- a/src/kosmickrisp/vulkan/kk_queue.c
++++ b/src/kosmickrisp/vulkan/kk_queue.c
+@@ -224,10 +224,13 @@ rerecord_commit_callback(struct mtl_feedback_data *data)
+    vk_free(&dev->vk.alloc, commit);
+ }
+ 
++/* Playport (PLA-364): with MESA_KK_EXPERIMENTAL=cmd_retire a recording that
++ * opened no encoder never began cmd_buf, and there is nothing to commit */
+ static bool
+ kk_cmd_buffer_has_work(struct kk_cmd_buffer *cmd)
+ {
+-   return cmd->metal.cmd_buf;
++   return cmd->metal.cmd_buf &&
++          (!KK_EXPERIMENTAL(CMD_RETIRE) || cmd->metal.begun);
+ }
+ 
+ static void

@@ -107,3 +107,5 @@
 0131-kk-count-what-each-command-buffer-holds-and-each-upl.patch
 0132-kk-MESA_KK_EXPERIMENTAL-cmd_retire-gives-a-ONE_TIME-.patch
 0133-kk-MESA_KK_EXPERIMENTAL-cmd_bo_classes-gives-large-c.patch
+0134-kk-cmd_retire-destroys-idle-sealed-allocators-caps-a.patch
+0135-kk-MESA_KK_DEBUG-memory-logs-kk-mem-within-a-second-.patch

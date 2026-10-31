@@ -366,6 +366,39 @@ l22 time series (l23 follows the same course: allocators 107–177 MiB before th
   - shorten the census interval during the load step, to measure largest, pooled and rounding there.
   Then repeat l22 on the same protocol.
 
+### The cause in the code, and mesa 0134–0135 (after l23)
+
+M = read in the code, the SDK header or the l22–l23 / HK logs; I = inferred.
+
+- **A Metal reset keeps an allocator's memory (M, SDK).** `MTL4CommandAllocator.h`: `reset` lets new command buffers
+  "reuse its existing internal memory heaps", and `allocatedSize` is those heaps' size. In l22 the 74 allocators'
+  `allocatedSize` sum only rose (98.8 → 100.0 → 140.1 → 171.8 MiB, +126 to +218) across 15,700 resets.
+- **Why the count jumped (M, code; I for the step's exact course).** 0132's `kk_cmd_pool_end_allocator` seals at an
+  End when `allocatedSize` passes 8 MiB. A reset sealed allocator was unsealed and taken, but its heaps stayed past
+  8 MiB, so it sealed again at its next End: it took one recording at a time, never counted among the pool's four
+  unsealed ones, and nothing destroyed it (only tainted ones were). Each allocator that once passed 8 MiB let the
+  pool make another. `sealed=` rose 14 → 165 at a constant count of 74 before the step (re-seals). In the step
+  (no census) the count went to 190–252, about 6.4–7.6 MiB each (I: the in-flight burst made new ones, which then
+  stayed).
+- **HK's one taint a frame (M, code and counts).** DXVK (`dxvk_cmdlist.cpp`) begins the next ExecBuffer (ONE_TIME)
+  after each submission in `next()` and submits it only if `execCommands`; `DxvkCommandPool::reset` then resets the
+  pool. That spare buffer encodes nothing, but KosmicKrisp began its Metal command buffer at `vkBeginCommandBuffer`,
+  so its release without a commit tainted the allocator: `unsubmitted=` 6808 (off) and `tainted=` 6841 (on) in
+  120 s, with `unsubmitted 0.0 MiB`. The reusable-primary submits (6856) are the WSI's present blit, recorded at
+  each acquire (`wsi_common_metal.c`): the same once-a-frame rate, not the same buffers. A replayed reusable primary
+  does not taint: its recording was committed at its first submit.
+- **mesa 0134 (`cmd_retire` only):** a recording begins its Metal command buffer at its first encoder, so one that
+  encodes nothing taints nothing (`unbegun=`); an idle sealed allocator is destroyed, not reset (`released=`); a pool
+  keeps at most four idle ones (`trimmed=`) and makes at most eight, sharing a sealed one at the cap (`capped=`), and
+  only past it when all eight record (`over-cap=`). An allocator begun in Metal and released uncommitted is still
+  destroyed, never reset (IOGPU's form-1 fault).
+- **mesa 0135 (dev, `MESA_KK_DEBUG=memory`):** `[kk-mem]` within a second, marked `| growing allocators+N command+M
+  MiB`, when 8 allocators or 64 MiB of command BOs came since its last line; the census then every 5 s.
+- **Host check (M):** `kk-cmd-retire-test.c` on the mock, whose reset now keeps the size and aborts on an allocator a
+  command buffer was begun on and not committed: an RDR2-like load (40 frames × 12 recordings of 3 MiB) keeps one
+  pool at ≤ 6 allocators, then 4 (15 MiB idle) after the drain, with 80 sealed ones destroyed. Dev IPA
+  `d3be12c9b22161d470e13995919a96ab4f662d6a7f01f90a03fa3d6dabf88b2a` (90 checks); **not run on the phone**.
+
 ### Not shown
 
 - Held upload, the largest allocator and `[kk-upload]` rounding inside the load step.
