@@ -118,7 +118,6 @@ C_TESTS = [
     ("url opener", ["app/tests/url_opener_test.c", "app/Sources/WineHost/url_opener.c"], []),
     ("time zone bias", ["app/tests/timezone_bias_test.c", "app/Sources/WineHost/timezone_bias.c"], ["-D_DEFAULT_SOURCE"]),
     ("command line", ["app/tests/command_line_test.c"], []),
-    ("cef swap", ["app/tests/cef_swap_test.c", "app/Sources/WineHost/cef_swap.c"], ["-D_GNU_SOURCE", "-pthread"]),
     ("guest pool", ["app/tests/guest_pool_test.c", "app/Sources/SharedMemory/guest_pool.c"],
      ["-Iapp/Sources/SharedMemory", "-fsanitize=address,undefined"]),
     ("ppsync", PPSYNC, PPSYNC_FLAGS),
@@ -182,8 +181,9 @@ def cmd_secrets(args):
 def cmd_names(args):
     """Reject retired provenance/prefixes in tracked files (COMMIT or index).
 
-    Only two exact upstream GN tokens in CEF/Chromium patches are exempt;
-    checks.name_scan_text defines this path-scoped exception for both gates.
+    Only two exact upstream GN tokens in the CEF/Chromium patches of commits
+    before their removal (PLA-603) are exempt; checks.name_scan_text defines
+    this path-scoped exception for both gates.
     """
     old, prefix = checks.NAME_PATTERNS
     where = [args[0]] if args else ["--cached"]

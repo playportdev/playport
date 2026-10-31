@@ -1487,8 +1487,4 @@ record that proved it. Where each series is
 applied is in [BUILDING.md](BUILDING.md#the-pipeline). No patch has
 been offered upstream yet ([LICENSING.md](LICENSING.md#other-projects)).
 
-`patches/cef` and `patches/chromium` are applied outside `pp build` per
-[build/cef/README.md](../build/cef/README.md); ANGLE/Dawn patches carry
-`Upstream-repo:` to name their DEPS-pinned repository.
-
-The name gate permits only the two exact upstream GN tokens (the argument module and helper module) inside `patches/cef/` and `patches/chromium/`; all other retired names/prefixes still fail (shared rule in `tools/checks.py`).
+The name gate permits only the two exact upstream GN tokens (the argument module and helper module) inside `patches/cef/` and `patches/chromium/`, so that commits from before Playport's CEF build was removed ([0169](decisions/0169-social-club-on-rockstars-cef-in-the-stock-cef-layout.md)) still pass `pp names COMMIT` and `pp source`; all other retired names/prefixes still fail (shared rule in `tools/checks.py`).
