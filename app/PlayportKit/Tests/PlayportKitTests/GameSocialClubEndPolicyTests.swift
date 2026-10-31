@@ -3,7 +3,8 @@ import XCTest
 @testable import PlayportKit
 
 /// Decisions 0153 and 0169: the game's own Social Club is ended after its sign-in unless turned off,
-/// except under the Social Club layout, where only a dev build's stored switch ends it.
+/// except under the Social Club layout, where only a dev build's stored switch ends it; every Play
+/// of Rockstar's launcher runs the layout (PLA-602).
 final class GameSocialClubEndPolicyTests: XCTestCase {
     func testWithoutTheLayoutTheEndIsOnUnlessTurnedOffInBothBuilds() {
         for release in [false, true] {
@@ -51,5 +52,22 @@ final class GameSocialClubEndPolicyTests: XCTestCase {
         XCTAssertTrue(layout([:], "1"))
         XCTAssertFalse(layout([:], nil))
         XCTAssertFalse(layout(["env.PLAYPORT_SC_SINGLE": "1"], nil))   // d1: single-process, no layout
+    }
+
+    /// PLA-602: a Rockstar Play's config carries the launcher's layout key, so with no key of a
+    /// person's the end is off in both builds; a dev build's `=0` brings back decision 0153's end.
+    func testARockstarPlayRunsTheLayoutSoTheEndIsOffUnlessADevKeyTurnsItOff() {
+        let rockstar = PublisherLauncher.rockstar.openSettings(saved: nil).config
+        let layout = GameSocialClubEndPolicy.socialClubLayout(config: rockstar, environment: nil)
+        XCTAssertTrue(layout)
+        for release in [false, true] {
+            let ends = GameSocialClubEndPolicy.ends(stored: nil, socialClubLayout: layout, release: release)
+            XCTAssertFalse(ends)
+            XCTAssertFalse(GameSocialClubEndPolicy.refusesRestarts(ends: ends, stored: nil))
+        }
+        let off = PublisherLauncher.rockstar.openSettings(saved: LaunchSettings(runtime: "env.PLAYPORT_SC_LAYOUT=0")).config
+        let devOff = GameSocialClubEndPolicy.socialClubLayout(config: off, environment: "1")
+        XCTAssertFalse(devOff)
+        XCTAssertTrue(GameSocialClubEndPolicy.ends(stored: nil, socialClubLayout: devOff, release: false))
     }
 }
