@@ -1,0 +1,40 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sat, 31 Oct 2026 23:55:00 +0100
+Subject: [PATCH] signal: report no hardware breakpoints in an exception's
+ context
+
+save_context filled a context's registers but not its debug registers
+(Bcr, Bvr, Wcr, Wvr), so the context an exception handler got held the
+stack's leftovers there. Windows reports the hardware breakpoints and
+watchpoints that are set: none. World of Warcraft's ARM64 client reads
+them in its vectored handler, took the leftovers for a debugger's and
+continued at a decoy (pc +0x53e8 with x1 = 0), where the game failed
+with "Game Initialization Failed". They are zero now.
+
+Linear: PLA-514
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-31-wow-arm64-start.md
+Offered-upstream: no
+---
+ build/ntdll-unix/signal_arm64_ios.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/build/ntdll-unix/signal_arm64_ios.c b/build/ntdll-unix/signal_arm64_ios.c
+index 2185874..e54da25 100644
+--- a/build/ntdll-unix/signal_arm64_ios.c
++++ b/build/ntdll-unix/signal_arm64_ios.c
+@@ -6464,6 +6464,13 @@ static void save_context( CONTEXT *context, const ucontext_t *sigcontext )
+     for (i = 0; i <= 28; i++) context->X[i] = REGn_sig( i, sigcontext );
+     if (save_fpu( context->V, &context->Fpcr, &context->Fpsr, sigcontext ))
+         context->ContextFlags |= CONTEXT_FLOATING_POINT;
++    /* Playport (PLA-514): no hardware breakpoint or watchpoint is set, as
++     * Windows reports them; the fields were the stack's leftovers, which
++     * World of Warcraft's vectored handler took for a debugger's. */
++    memset( context->Bcr, 0, sizeof(context->Bcr) );
++    memset( context->Bvr, 0, sizeof(context->Bvr) );
++    memset( context->Wcr, 0, sizeof(context->Wcr) );
++    memset( context->Wvr, 0, sizeof(context->Wvr) );
+ }
+ 
+ 

@@ -218,3 +218,7 @@
 0249-ntdll-start-a-plain-ARM64-child-of-the-ARM64EC-sessi.patch
 0250-win32u-log-no-key-codes-in-winios_drv_post_key.patch
 0251-win32u-post-a-Unicode-character-for-the-host-app.patch
+0252-virtual-x18-patch-SUB-SUBS-and-CMP-of-x18-as-well-as.patch
+0253-ntdll-single-step-a-native-ARM64-thread-that-continu.patch
+0254-ntdll-no-JIT-pool-dump-for-a-UDF-a-guest-image-raise.patch
+0255-signal-report-no-hardware-breakpoints-in-an-exceptio.patch
