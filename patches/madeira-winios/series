@@ -4,3 +4,4 @@
 0003-Winios-deliver-focus-changes-on-the-window-s-owner-t.patch
 0004-Winios-show-a-game-s-GDI-windows-until-its-swap-chai.patch
 0005-Winios-show-the-dialogs-a-game-opens-after-its-first.patch
+0006-Winios-post-a-key-extended-for-the-host-app.patch

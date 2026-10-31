@@ -34,6 +34,18 @@ final class KeyMapTests: XCTestCase {
         XCTAssertNil(KeyMap.virtualKey(hidUsage: 0x7F))   // Mute
     }
 
+    func testKeypadEnterIsReturnPostedExtended() {
+        XCTAssertEqual(KeyMap.virtualKey(hidUsage: 0x58), KeyMap.virtualKey(hidUsage: 0x28))
+        XCTAssertTrue(KeyMap.postsExtended(hidUsage: 0x58))
+        XCTAssertFalse(KeyMap.postsExtended(hidUsage: 0x28))
+        // Two keys on one VK are told apart by the flag; only the backslash position (0x31, 0x32) is one key.
+        var byVK: [UInt8: [Int]] = [:]
+        for u in 0...0xE7 { if let vk = KeyMap.virtualKey(hidUsage: u) { byVK[vk, default: []].append(u) } }
+        for (vk, us) in byVK where us.count > 1 && us != [0x31, 0x32] {
+            XCTAssertEqual(us.filter { !KeyMap.postsExtended(hidUsage: $0) }.count, 1, "VK \(vk): \(us)")
+        }
+    }
+
     func testNoTwoPrintableKeysShareAVK() {
         var seen: [UInt8: Int] = [:]
         for u in 0x04...0x38 where u != 0x32 {   // 0x32 (non-US #) is the backslash position on purpose

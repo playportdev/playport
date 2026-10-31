@@ -82,6 +82,9 @@ final class HostIO {
     nonisolated static let surfaceReady = DispatchSemaphore(value: 0)
 
     private var lifecycle = Lifecycle()
+    /// The held keys that went down extended (keypad Enter): their release goes
+    /// out extended too, also when Lifecycle releases them on a focus loss.
+    private var extendedHeld: Set<UInt8> = []
     private var slots = PadSlots<ObjectIdentifier>()
     /// Each physical pad's name, by slot, for the logs.
     private var padNames: [Int: String] = [:]
@@ -258,7 +261,7 @@ final class HostIO {
             case .focus(let active):
                 winios_post_focus(active ? 1 : 0)
             case .releaseKeys(let vks):
-                for vk in vks { winios_post_key(Int32(vk), 0) }
+                for vk in vks { postKey(vk, down: false) }
             case .releaseButtons(let flags):
                 for f in flags { winios_pointer(0, 0, f, 0) }
             case .suspendAudio(let deactivate):
@@ -289,8 +292,18 @@ final class HostIO {
     func key(hidUsage: Int, down: Bool) -> Bool {
         guard let vk = KeyMap.virtualKey(hidUsage: hidUsage) else { return false }
         if down && menuUp { return true }   // a key let go while the menu is up still reaches the game
-        if down ? lifecycle.keyDown(vk) : lifecycle.keyUp(vk) { winios_post_key(Int32(vk), down ? 1 : 0) }
+        if down ? lifecycle.keyDown(vk) : lifecycle.keyUp(vk) {
+            postKey(vk, down: down, extended: down && KeyMap.postsExtended(hidUsage: hidUsage))
+        }
         return true
+    }
+
+    /// winios_post_key, or winios_post_key_extended for a key that went down
+    /// extended: a release takes the flag of its press, whatever its source.
+    private func postKey(_ vk: UInt8, down: Bool, extended: Bool = false) {
+        let ext = down ? extended : extendedHeld.remove(vk) != nil
+        if down && extended { extendedHeld.insert(vk) }
+        if ext { winios_post_key_extended(Int32(vk), down ? 1 : 0) } else { winios_post_key(Int32(vk), down ? 1 : 0) }
     }
 
     /// A direct touch as the left button, at the same point of the client area.
@@ -450,7 +463,7 @@ final class HostIO {
         switch o {
         case .key(let vk, let down):
             if down && menuUp { return }
-            if down ? lifecycle.keyDown(vk) : lifecycle.keyUp(vk) { winios_post_key(Int32(vk), down ? 1 : 0) }
+            if down ? lifecycle.keyDown(vk) : lifecycle.keyUp(vk) { postKey(vk, down: down) }
         case .pointer(let flags, let data):
             if flags == Pointer.wheel {
                 if !menuUp && lifecycle.active { winios_pointer(0, 0, flags, data) }

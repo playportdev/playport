@@ -38,12 +38,26 @@ int host_pads_release_all(void);
 void playport_gamepad_state_read(void);
 uint64_t host_pad_state_reads(void);
 
+/* The scan code of a posted virtual key (hio_keys.c): 0xE0xx for the keys a
+ * real keyboard sends with the E0 prefix and whose scan code is the same on
+ * every layout (arrows, Insert/Delete/Home/End/PgUp/PgDn, Print Screen, right
+ * Ctrl and Alt, the Windows and menu keys, keypad /), else 0. win32u's
+ * winios_drv_post_key asks it first and marks the key extended
+ * (patches/madeira-unix 0248, a weak reference), falling back to Wine's
+ * MapVirtualKeyEx, which gives the arrows the numpad's scan codes. */
+unsigned int playport_key_scan(unsigned int vk);
+
 /* Winios.m + patches/madeira-winios/0002-Winios-accept-pointer-and-focus-events-posted-by-the.patch.
  * fx, fy: 0..65535 across the foreground window's client area; flags are
  * MOUSEEVENTF_* (ABSOLUTE is implied). active: 0 when the app leaves the
  * foreground, 1 when it is back. Both are queued in order with winios_post_key. */
 void winios_post_client_pointer(int fx, int fy, unsigned int flags, unsigned int data);
 void winios_post_focus(int active);
+/* Winios.m + patches/madeira-winios/0006: winios_post_key with
+ * KEYEVENTF_EXTENDEDKEY, for a key its VK cannot tell from another (keypad
+ * Enter is VK_RETURN with E0; KeyMap.postsExtended). Queued in order with
+ * winios_post_key. */
+void winios_post_key_extended(int vk, int down);
 
 /* Winios.m + patches/madeira-winios/0004-Winios-show-a-game-s-GDI-windows-until-its-swap-chai.patch
  * and 0005 (decisions 0075, 0076): the guest's GDI windows (a launcher, a

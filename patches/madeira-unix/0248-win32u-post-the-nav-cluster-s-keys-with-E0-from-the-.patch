@@ -1,0 +1,67 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sat, 31 Oct 2026 17:00:00 +0100
+Subject: [PATCH] win32u: post the nav cluster's keys with E0, from the host
+ app's table
+
+winios_drv_post_key took a posted key's scan code from
+MapVirtualKeyEx(MAPVK_VK_TO_VSC_EX) and marked it extended when that
+gave 0xE0xx. Wine's kbdus table lists the arrows, Insert, Delete, Home,
+End, Page Up, Page Down and Print Screen at the numpad's (and SysRq's)
+scan codes before its E0 table, so the map answers 0x48 for VK_UP and
+the key went out unextended: a game reading scan codes (raw input,
+DirectInput) saw numpad 8/2/4/6 for the arrows, from a hardware
+keyboard and from a mapped button alike.
+
+The driver now asks the host's playport_key_scan (HostIO hio_keys.c)
+first: 0xE0xx for the keys a real keyboard sends with E0 and whose
+scan code is the same on every layout (arrows, the nav cluster, Print
+Screen as E0 37, right Ctrl and Alt, the Windows and menu keys, keypad
+/), 0 otherwise, when Wine's map answers as before. The reference is
+weak: a host that does not define it is not called.
+
+Linear: PLA-340
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-31-extended-keys.md (host test app/tests/keys_test.c)
+Offered-upstream: no; the key path is the iOS driver's
+---
+ build/win32u-unix/driver_ios.c | 18 ++++++++++++++----
+ 1 file changed, 14 insertions(+), 4 deletions(-)
+
+diff --git a/build/win32u-unix/driver_ios.c b/build/win32u-unix/driver_ios.c
+index cbb42af..b61041b 100644
+--- a/build/win32u-unix/driver_ios.c
++++ b/build/win32u-unix/driver_ios.c
+@@ -96,6 +96,10 @@ void winios_drv_post_mouse(int x, int y, unsigned int flags, unsigned int mouse_
+     }
+ }
+ 
++/* Playport: the host app's scan code for the keys a real keyboard sends with
++ * E0 (its HostIO hio_keys.c). Weak: a host without it is not called. */
++extern unsigned int playport_key_scan( unsigned int vk ) __attribute__((weak));
++
+ /* Keyboard sibling of winios_drv_post_key: packages an INPUT_KEYBOARD
+  * event. vk is a Windows virtual-key code (VK_RETURN=0x0D, VK_SPACE=0x20,
+  * VK_ESCAPE=0x1B, ...); flags is 0 for key-down, KEYEVENTF_KEYUP (0x2)
+@@ -124,11 +128,17 @@ void winios_drv_post_key(unsigned short vk, unsigned int flags)
+      * W/A/S/D were delivered, accepted with STATUS_SUCCESS, and then discarded
+      * as unidentifiable. That is why the on-screen stick moved nothing.
+      *
+-     * MAPVK_VK_TO_VSC_EX returns 0xE0xx for the extended keys — arrows, the nav
+-     * cluster, right ctrl/alt, numpad enter and divide. Those MUST carry
++     * The extended keys — arrows, the nav cluster, Print Screen, right
++     * ctrl/alt, the Windows keys, numpad divide — MUST carry
+      * KEYEVENTF_EXTENDEDKEY, or a scan-code reader sees the numpad twin
+-     * instead: without E0, "up arrow" is numpad 8. */
+-    scan = NtUserMapVirtualKeyEx( vk, MAPVK_VK_TO_VSC_EX, NtUserGetKeyboardLayout(0) );
++     * instead: without E0, "up arrow" is numpad 8. MAPVK_VK_TO_VSC_EX does
++     * not give them all: Wine's kbdus table lists the arrows, the nav cluster
++     * and Print Screen at the numpad's (and SysRq's) scan codes first, so it
++     * answers 0x48 for VK_UP. Playport: the host app's fixed table answers
++     * for these first (their scan codes are the same on every layout); every
++     * other key keeps Wine's map. */
++    scan = playport_key_scan ? playport_key_scan( vk ) : 0;
++    if (!scan) scan = NtUserMapVirtualKeyEx( vk, MAPVK_VK_TO_VSC_EX, NtUserGetKeyboardLayout(0) );
+     if (scan & 0xe000) flags |= KEYEVENTF_EXTENDEDKEY;
+ 
+     input.type           = INPUT_KEYBOARD;
