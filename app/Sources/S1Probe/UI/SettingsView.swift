@@ -311,7 +311,8 @@ private struct GraphicsSettings: View {
                                     defaultValue: GraphicsBackend.default)
         valueRow("graphics", "Direct3D", "Vulkan, or DXMT for Direct3D 10 and 11", backends,
                  name: LaunchSettingsText.graphics, value: global.graphics)
-        SettingsSwitchRow(id: "metalHUD", title: "Metal HUD", subtitle: "Frame rate, frame time and memory over a game",
+        SettingsSwitchRow(id: "metalHUD", title: "Metal HUD",
+                          subtitle: "Frame rate, frame time and memory over a game; from Playport's next start",
                           on: $metalHUD)
         memoryRows
         SettingsNote(text: "From each game's next start. 720p at 60 fps keeps the phone cool enough to hold its "

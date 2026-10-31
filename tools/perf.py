@@ -11,9 +11,11 @@ use and the SoC's thermal power budget, second by second.
 WHEN is SECS after the launch, or first-frame+SECS after the game's first
 frame. The launch is the product UI's Play of --title (default app-367520,
 Hollow Knight), through `pp ui`. Settings' Metal HUD is turned on first, in
-a launch of its own: a dev build that starts with it on also has Metal log the
-HUD's figures (MetalHUD in HostIO.swift). --no-hud turns it off instead: the
-HUD's per-frame logging costs the process CPU work, and frames are then
+a launch of its own: the app loads the HUD only when it starts with the
+setting on, and a dev build then also has Metal log the HUD's figures
+(MetalHUD in HostIO.swift). --no-hud turns it off instead, so the measured
+launch loads no HUD: its interposer costs CPU on every encoder and its
+per-frame logging more, and frames are then
 counted from the game layer's per-16-drawable `[frames] HH:MM:SS.mmm n=N` lines
 (PacedMetalLayer in HostIO.swift, either backend), or in a run from before
 them, DXMT's per-16-present `[iOS DXMT] Present #N t=` lines.
@@ -1131,7 +1133,8 @@ def parser():
     p.add_argument("--keep-log", action="store_true", help="do not rotate s1-host.log before the launch")
     p.add_argument("--syslog-all", action="store_true", help="also keep the whole device syslog (syslog-all.txt)")
     p.add_argument("--no-hud", action="store_true",
-                   help="turn Settings' Metal HUD off first (its per-frame logging costs CPU); frames then come from "
+                   help="turn Settings' Metal HUD off first, so the measured launch does not load it (its "
+                        "interposer and per-frame logging cost CPU); frames then come from "
                         "the game layer's [frames] lines (any backend) and the frame-time, GPU and memory columns "
                         "stay empty")
     p.add_argument("--pass-prof", action="store_true",

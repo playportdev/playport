@@ -742,28 +742,43 @@ final class TraceBox: @unchecked Sendable {
 }
 
 /// Apple's Metal performance HUD over a game, from Settings. Metal loads the
-/// HUD only when MTL_HUD_ENABLED=1 is in the environment as the process
-/// starts, so the app always sets it then (PlayportApp); each game layer then
-/// shows or hides it from the setting as it is at that launch. A dev build
-/// that starts with the setting on also has Metal log the HUD's figures once a
-/// second (MTL_HUD_LOG_ENABLED; `pp perf` reads them). A process launched
-/// with its own MTL_HUD_ENABLED keeps what that says.
+/// HUD (libMetalMetricsInterpose, which costs every encoder CPU time even with
+/// the HUD hidden) only when MTL_HUD_ENABLED=1 is in the environment as the
+/// process starts, so the app sets it then (PlayportApp) only when the setting
+/// is on; each game layer then shows or hides it from the setting as it is at
+/// that launch. A setting turned on takes effect at the app's next start
+/// (`pp perf` turns it on in a launch of its own). A dev build that starts
+/// with the setting on also has Metal log the HUD's figures once a second
+/// (MTL_HUD_LOG_ENABLED; `pp perf` reads them). A process launched with its
+/// own MTL_HUD_ENABLED keeps what that says.
 enum MetalHUD {
     static let key = "metalHUD"
     static var enabled: Bool { UserDefaults.standard.bool(forKey: key) }
 
-    private static let inherited = ProcessInfo.processInfo.environment["MTL_HUD_ENABLED"] != nil
+    private static let inherited = ProcessInfo.processInfo.environment["MTL_HUD_ENABLED"]
+
+    /// Metal loaded the HUD in this process: the launch environment asked for
+    /// it, or the setting was on at loadAtStart. Without it a game layer has
+    /// no HUD to show (the in-game menu's performance overlay says so).
+    nonisolated(unsafe) private(set) static var loaded = false
 
     /// Before anything creates a Metal device.
     static func loadAtStart() {
-        if !inherited { setenv("MTL_HUD_ENABLED", "1", 1) }
+        if let inherited {
+            loaded = inherited == "1"
+            return
+        }
+        guard enabled else { return }
+        setenv("MTL_HUD_ENABLED", "1", 1)
+        loaded = true
         #if !PLAYPORT_RELEASE
-        if !inherited, enabled { setenv("MTL_HUD_LOG_ENABLED", "1", 1) }
+        setenv("MTL_HUD_LOG_ENABLED", "1", 1)
         #endif
     }
 
     static func show(on layer: CAMetalLayer) {
-        guard !inherited else { return HostIO.log("hostio: Metal HUD from the launch environment") }
+        guard inherited == nil else { return HostIO.log("hostio: Metal HUD from the launch environment") }
+        guard loaded else { return }
         set(enabled, on: layer)
     }
 

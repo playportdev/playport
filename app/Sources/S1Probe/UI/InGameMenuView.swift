@@ -24,7 +24,8 @@
 // to the panel),
 // Screenshot (the frame on screen to
 // Photos; a dev build also keeps a PNG in Documents/Screenshots), Performance
-// overlay (the Metal HUD on the game layer, now and for this game only), the
+// overlay (the Metal HUD on the game layer, now and for this game only; only
+// when Settings' Metal HUD was on as the app started, MetalHUD.loaded), the
 // controller with its battery, and Quit game (TitleLaunch.quit: WM_CLOSE to
 // the game's windows, so it saves as when its window is closed, then the
 // restart after the game, decision 0029, returns to Home).
@@ -45,7 +46,7 @@ final class InGameMenu: ObservableObject {
     @Published private(set) var isOpen = false
     @Published private(set) var menu = QuickMenu()
     /// The performance overlay as the game layer has it now.
-    @Published private(set) var overlay = MetalHUD.enabled
+    @Published private(set) var overlay = MetalHUD.loaded && MetalHUD.enabled
     /// Screenshot's value: nil until one is taken, then what happened.
     @Published private(set) var shot: String?
     @Published private(set) var quitting = false
@@ -248,7 +249,10 @@ final class InGameMenu: ObservableObject {
         quitting = false
     }
 
+    /// Nothing to toggle when Metal did not load the HUD at the app's start
+    /// (Settings' Metal HUD was off then): the row says how to get it.
     private func toggleOverlay() {
+        guard MetalHUD.loaded else { return Self.log("overlay: Metal HUD not loaded at start") }
         guard let layer = HostIO.shared.gameLayer else { return }
         overlay.toggle()
         MetalHUD.set(overlay, on: layer)
@@ -485,7 +489,9 @@ struct InGameMenuView: View {
         case .resume: return nil
         case .controls: return controls.state.summary
         case .screenshot: return model.shot ?? "Saved to Photos"
-        case .overlay: return model.overlay ? "On" : "Off"
+        case .overlay:
+            guard MetalHUD.loaded else { return "Turn on Metal HUD in Settings, relaunch" }
+            return model.overlay ? "On" : "Off"
         case .controller:
             #if !PLAYPORT_RELEASE
             // The dev build's scripted pad is no GameController pad, so the router has no name for it
