@@ -1,9 +1,9 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: The Playport authors <dev@playport.dev>
 Date: Tue, 20 Oct 2026 16:09:35 +0200
-Subject: [PATCH] ntdll: opt in to build-locked single-process Social Club
+Subject: [PATCH] ntdll: build-locked single-process Social Club
 
-Port the page bridge, renderer loop and IPC split from willfaust/Madeira (61dce1d, 293cd39). The app permits this only in dev with PLAYPORT_SC_SINGLE=1. Preflight the exact opened helper before changing the process policy; a mismatch retains the multi-process policy. Carry the successful decision on the child thread and recheck before writing, failing the load closed on a changed image. A verified browser also gets --disable-component-update unless its command line has it (decision 0150 as amended 2026-10-30): its component updater asks for BITS, which starts an i386 dllhost that finds no WoW64 window under the Social Club layout. It also gets --disable-gpu and --disable-gpu-compositing, each unless present (0150 amended again 2026-10-30): decision 0109's software drawing, so the helper loads no ANGLE or Direct3D stack; --in-process-gpu adds nothing to --single-process.
+Port the page bridge, renderer loop and IPC split from willfaust/Madeira (61dce1d, 293cd39). The app turns this on by default in both builds; a dev build's PLAYPORT_SC_SINGLE=0 turns it off (decision 0169, PLA-602). Preflight the exact opened helper before changing the process policy; a mismatch retains the multi-process policy. Carry the successful decision on the child thread and recheck before writing, failing the load closed on a changed image. A verified browser also gets --disable-component-update unless its command line has it (decision 0150 as amended 2026-10-30): its component updater asks for BITS, which starts an i386 dllhost that finds no WoW64 window under the Social Club layout. It also gets --disable-gpu and --disable-gpu-compositing, each unless present (0150 amended again 2026-10-30): decision 0109's software drawing, so the helper loads no ANGLE or Direct3D stack; --in-process-gpu adds nothing to --single-process.
 
 Class: host-app
 Evidence: docs/decisions/0150-dev-single-process-social-club.md
@@ -204,7 +204,7 @@ index 0000000..cdfeae0
 + *   none: mov qword [rbx],0; jmp out
 + * Applied after relocation and before the section protections, so the JIT-pool
 + * copy of .text carries it. Any mismatch: nothing is written and the reason is
-+ * logged. Only a dev launch with PLAYPORT_SC_SINGLE=1 and a successful file preflight
++ * logged. Only a launch with single-process on and a successful file preflight
 + * reaches this patch. The mapped image is checked again before any write.
 + *
 + * The Unix view can still have preferred-base pointers in its vtables. The
