@@ -799,7 +799,12 @@ them to UIKit, GameController and AVFAudio.
 - **Keyboard and pointer** go to Winios through its event ring:
   `winios_post_key`, `winios_post_client_pointer` (absolute 0..65535 across
   the foreground window's client area, `MOUSEEVENTF_*` flags) and
-  `winios_post_focus`.
+  `winios_post_focus`. A key goes by its virtual key; win32u's
+  `winios_drv_post_key` gives it a scan code, from `Sources/HostIO/hio_keys.c`'s
+  `playport_key_scan` first for the keys a keyboard sends with E0 (arrows, the
+  nav cluster, Print Screen, right Ctrl/Alt, Windows, menu, keypad /; posted
+  extended, `patches/madeira-unix` 0248), else from Wine's `MapVirtualKeyEx`,
+  whose US table would give the arrows the numpad's codes (PLA-340).
 - **Controllers** go into Madeira's controller snapshot
   (`Sources/WinIOS/WiniosGamepad.c`, four slots under one lock), through the
   app's writers in `Sources/HostIO/hio_pads.c` (`host_pad_set`,
