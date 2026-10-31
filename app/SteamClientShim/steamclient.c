@@ -715,6 +715,32 @@ static void user_CancelAuthTicket(iface *self, uint32_t handle)
     }
     ReleaseSRWLockExclusive(&lock);
 }
+/* The deprecated client-side handshake Source titles still use (a listen server's too): the blob
+ * is an auth session ticket; its size, 0 when there is none (the game then refuses to connect).
+ * One connection at a time: a new one cancels the last one's ticket, as Terminate does. */
+static uint32_t game_connection;
+static void user_TerminateGameConnection(iface *self, uint32_t ip, uint16_t port)
+{
+    uint32_t h;
+    (void)ip; (void)port;
+    AcquireSRWLockExclusive(&lock);
+    h = game_connection;
+    game_connection = 0;
+    ReleaseSRWLockExclusive(&lock);
+    if (h) user_CancelAuthTicket(self, h);
+}
+static int32_t user_InitiateGameConnection(iface *self, void *blob, int cap, uint64_t server, uint32_t ip,
+                                           uint16_t port, uint8_t secure)
+{
+    uint32_t size = 0, h;
+    (void)server; (void)secure;
+    user_TerminateGameConnection(self, ip, port);
+    AcquireSRWLockExclusive(&lock);
+    h = ticket(0, "", blob, cap, &size);
+    game_connection = h;
+    ReleaseSRWLockExclusive(&lock);
+    return h ? (int32_t)size : 0;
+}
 /* EUserHasLicenseForAppResult: 0 has it, 1 does not, 2 no auth (the user is not this one). */
 static int32_t user_UserHasLicenseForApp(iface *self, uint64_t steam_id, uint32_t app)
 {
@@ -812,6 +838,13 @@ static int32_t friends_GetPersonaState(iface *self)
     return snapshot.armed && snapshot.logged_on ? 1 : 0;   /* k_EPersonaStateOnline, else Offline */
 }
 
+/* Steam answers a name for any SteamID, never NULL: the user's own persona, "" for one it does not know. */
+static const char *friends_GetFriendPersonaName(iface *self, uint64_t steam_id)
+{
+    (void)self;
+    return snapshot.armed && steam_id == snapshot.steam_id ? snapshot.persona : "";
+}
+
 /* What a method name answers with, in any version that has it. */
 static const struct { const char *family, *method; void *fn; } served[] = {
     { "ISteamClient", "CreateSteamPipe", (void *)client_CreateSteamPipe },
@@ -834,6 +867,8 @@ static const struct { const char *family, *method; void *fn; } served[] = {
     { "ISteamUser", "CancelAuthTicket", (void *)user_CancelAuthTicket },
     { "ISteamUser", "UserHasLicenseForApp", (void *)user_UserHasLicenseForApp },
     { "ISteamUser", "RequestEncryptedAppTicket", (void *)user_RequestEncryptedAppTicket },
+    { "ISteamUser", "InitiateGameConnection", (void *)user_InitiateGameConnection },
+    { "ISteamUser", "TerminateGameConnection", (void *)user_TerminateGameConnection },
     { "ISteamUser", "GetEncryptedAppTicket", (void *)user_GetEncryptedAppTicket },
     { "ISteamUtils", "GetSecondsSinceAppActive", (void *)utils_seconds },
     { "ISteamUtils", "GetSecondsSinceComputerActive", (void *)utils_seconds },
@@ -875,6 +910,7 @@ static const struct { const char *family, *method; void *fn; } served[] = {
     { "ISteamFriends", "GetPersonaName", (void *)friends_GetPersonaName },
     { "ISteamFriends", "GetPersonaState", (void *)friends_GetPersonaState },
     { "ISteamFriends", "GetFriendCount", (void *)client_false },
+    { "ISteamFriends", "GetFriendPersonaName", (void *)friends_GetFriendPersonaName },
 };
 
 /* Every version of the slot table, its class's vtable filled at the first CreateInterface (the
@@ -917,6 +953,8 @@ static void fill(iface *o)
             fn = o->words[i] == 2 ? (void *)client_get2 : (void *)client_get3;
         for (size_t k = 0; k < sizeof(served) / sizeof(*served); k++)
             if (of_family(o->name, served[k].family) && same(m, served[k].method)) fn = served[k].fn;
+        /* InitiateGameConnection's (blob, cap, CSteamID, ip, port, secure) is 7 words; 004–009's differ. */
+        if (fn == (void *)user_InitiateGameConnection && o->words[i] != 7) fn = NULL;
         o->targets[i] = fn;
         o->kinds[i] = fn ? pp_tr_kind_of(m) : 0;
 #ifdef __i386__
