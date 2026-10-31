@@ -59,10 +59,10 @@ public struct PublisherLauncher: Equatable, Sendable, Identifiable {
     /// off (`env.FEX_SMCCHECKS=none`): with them on, Social Club's CEF crashed and the pool's tail
     /// passed 560 MB (run `20261018T095302`; decision 0116).
     /// Every Play that runs it, its Open and RDR2's, runs Social Club on Rockstar's own CEF in the
-    /// stock-CEF layout (`env.PLAYPORT_SC_LAYOUT=1`), single-process (`env.PLAYPORT_SC_SINGLE=1`),
-    /// in both builds (decision 0169, PLA-602). The layout changes every process of its session, so
-    /// no other title gets it. A release build takes these keys and never a person's; a dev build's
-    /// `=0` saved for the game or the Open wins (openSettings, startingGame).
+    /// stock-CEF layout (`env.PLAYPORT_SC_LAYOUT=1`), in both builds (decision 0169, PLA-602);
+    /// single-process needs no key, sc_single.h has it on by default. The layout changes every
+    /// process of its session, so no other title gets it. A release build takes this key and never
+    /// a person's; a dev build's `=0` saved for the game or the Open wins (openSettings, startingGame).
     public static let rockstar = PublisherLauncher(
         id: "rockstar", name: "Rockstar Games Launcher",
         installKey: #"Software\Wow6432Node\Rockstar Games\Launcher"#, installValue: "InstallFolder",
@@ -70,7 +70,7 @@ public struct PublisherLauncher: Equatable, Sendable, Identifiable {
         exhaustionGrace: 240,
         graphicsEnvironment: ["DXVK_CONFIG": "dxvk.numCompilerThreads = 1", "DXVK_SHADER_CACHE": "0",
                               "VKD3D_SHADER_CACHE_PATH": "0"],
-        runtime: ["env.FEX_SMCCHECKS": "none", "env.PLAYPORT_SC_LAYOUT": "1", "env.PLAYPORT_SC_SINGLE": "1"],
+        runtime: ["env.FEX_SMCCHECKS": "none", "env.PLAYPORT_SC_LAYOUT": "1"],
         // Red Dead Redemption 2's Steam copy: PlayRDR2.exe starts Launcher.exe -steamAppId=1174180.
         games: ["app-1174180"],
         // With it the main window logs "Using saved geometry"; without it "Centering on monitor",

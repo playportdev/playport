@@ -16,12 +16,12 @@ a launcher helper's slot view is [0166](0166-detach-a-parked-threads-wait-then-u
 **What is built and what is open.** Built: the layout (madeira-unix 0224–0231), the low hold (PLA-480),
 ELF_META2 (0228), the probe refusal (0236), the code-range placement (0243), the game-helper end's default
 under the layout (`GameSocialClubEndPolicy`) and the plan's chunk 4 (2026-10-31): single-process on by default
-in both builds (`d1aff807`, PLA-602), the layout and single-process carried by `PublisherLauncher.rockstar`'s
-runtime for every Rockstar Play (`1424a0ac`), and Playport's CEF build removed with `pp verify`'s `cef` check
-(merge `b5814a58`, PLA-603). A layout play needs no keys, and no IPA, dev or release, carries a CEF payload.
-As built, the layout is every Play of Rockstar's launcher (its Open and RDR2's), not "every Play with a
-verified helper" (below); other titles never get it, and a dev build's `=0` key turns the layout or
-single-process off. Open: the phone gates, chunk 6 ([PLA-605](https://linear.app/playportdev/issue/PLA-605)).
+in both builds (`d1aff807`, PLA-602), the layout carried by `PublisherLauncher.rockstar`'s runtime for every
+Rockstar Play (`1424a0ac`), and Playport's CEF build removed with `pp verify`'s `cef` check (merge
+`b5814a58`, PLA-603). A layout play needs no keys, and no IPA, dev or release, carries a CEF payload. Other
+titles never get the layout, and a dev build's `=0` key turns the layout or single-process off. Which Plays
+run the layout is amended as built (the Decision's layout bullet). Open: the phone gates, chunk 6
+([PLA-605](https://linear.app/playportdev/issue/PLA-605)).
 
 ## Context
 
@@ -87,7 +87,11 @@ single-process off. Open: the phone gates, chunk 6 ([PLA-605](https://linear.app
   send `PP_CONTROL_END_GAME_SOCIAL_CLUB` (`GameSocialClubEndPolicy`, PlayportKit;
   `GameSocialClubEnd.enabled(config:)`).
   - The layout is the Play's `env.PLAYPORT_SC_LAYOUT=1` key, else the app's environment; the runtime holds
-    it for such a Play or refuses the launch. After chunk 4 it is every Play with a verified helper.
+    it for such a Play or refuses the launch. *Amended as built, 2026-10-31:* the layout is every Play of
+    Rockstar's launcher, its Open and RDR2's, per the plan's §2 rule "Keep these out of it" (owner's plan,
+    2026-10-29: the layout applies only to a Play whose launcher is `PublisherLauncher.rockstar`). That is
+    every Play that can start a verified helper in the catalog today. This record first said "every Play
+    with a verified helper".
   - `endGameSocialClubAfterSignIn` and `refuseGameSocialClubRestart` stay. Without the layout they are
     unchanged: on unless turned off, both builds (0153). Under the layout the end is off when never set; a
     dev build's stored switch (`pp ui --action set:endGameSocialClubAfterSignIn=true`) still turns it on,

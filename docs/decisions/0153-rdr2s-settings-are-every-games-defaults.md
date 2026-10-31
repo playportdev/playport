@@ -120,6 +120,7 @@ of its restarts stay on in both builds when never set, except under the stock-CE
 the end is off when never set, a dev build's stored switch still turns it on, and a release build ignores
 the switch. The refusal and 0155's re-sign-in watch go with the end (`GameSocialClubEndPolicy`).
 
-Built 2026-10-31 (the plan's chunk 4, `d1aff807`, `1424a0ac`, PLA-602): every Play of Rockstar's launcher runs the
-layout and single-process in both builds (`PublisherLauncher.rockstar`'s runtime keys, not every game's), so
-"Not taken: `PLAYPORT_SC_SINGLE`" above no longer holds for RDR2; a dev build's `=0` key turns either off.
+Built 2026-10-31 (the plan's chunk 4, `d1aff807`, `1424a0ac`, PLA-602): single-process is on by default in both
+builds, and every Play of Rockstar's launcher runs the layout (`PublisherLauncher.rockstar`'s runtime key, not
+every game's), so "Not taken: `PLAYPORT_SC_SINGLE`" above no longer holds for RDR2; a dev build's `=0` key turns
+either off.

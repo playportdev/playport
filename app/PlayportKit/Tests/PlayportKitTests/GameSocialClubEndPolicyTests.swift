@@ -46,7 +46,7 @@ final class GameSocialClubEndPolicyTests: XCTestCase {
     /// The Play's `env.PLAYPORT_SC_LAYOUT` key wins over the app's environment; "1" only.
     func testTheLayoutIsTheConfigKeyElseTheEnvironment() {
         let layout = GameSocialClubEndPolicy.socialClubLayout(config:environment:)
-        XCTAssertTrue(layout(["env.PLAYPORT_SC_LAYOUT": "1", "env.PLAYPORT_SC_SINGLE": "1"], nil))
+        XCTAssertTrue(layout(["env.PLAYPORT_SC_LAYOUT": "1"], nil))
         XCTAssertFalse(layout(["env.PLAYPORT_SC_LAYOUT": "0"], "1"))
         XCTAssertFalse(layout(["env.PLAYPORT_SC_LAYOUT": "yes"], nil))
         XCTAssertTrue(layout([:], "1"))

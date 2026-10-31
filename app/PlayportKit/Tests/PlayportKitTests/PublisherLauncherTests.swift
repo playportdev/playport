@@ -52,9 +52,9 @@ final class PublisherLauncherTests: XCTestCase {
         XCTAssertEqual(GraphicsBackend.vulkan.runtimeEnvironment, ["DXVK_CONFIG": "dxvk.tilerMode = False"])
     }
 
-    /// The Social Club keys every Play of Rockstar's launcher runs with (decision 0169): the
-    /// stock-CEF layout and single-process.
-    static let socialClub = ["env.PLAYPORT_SC_LAYOUT": "1", "env.PLAYPORT_SC_SINGLE": "1"]
+    /// The Social Club key every Play of Rockstar's launcher runs with (decision 0169): the
+    /// stock-CEF layout. Single-process needs no key: sc_single.h has it on by default.
+    static let socialClub = ["env.PLAYPORT_SC_LAYOUT": "1"]
     static let rockstarRuntime = socialClub.merging(["env.FEX_SMCCHECKS": "none"]) { $1 }
 
     /// Decision 0116: the Rockstar launcher's Open runs with FEX's self-modifying-code checks off
@@ -154,37 +154,34 @@ final class PublisherLauncherTests: XCTestCase {
     }
 
     /// PLA-602 (decision 0169): every Play that runs Rockstar's launcher, RDR2's and the Open,
-    /// runs the stock-CEF layout and single-process with no keys, in both builds; a release build
-    /// ignores a person's keys but keeps the launcher's.
-    func testRockstarPlaysRunTheSocialClubLayoutAndSingleProcessInBothBuilds() throws {
+    /// runs the stock-CEF layout with no keys, in both builds; a release build ignores a person's
+    /// keys but keeps the launcher's.
+    func testRockstarPlaysRunTheSocialClubLayoutInBothBuilds() throws {
         let layout = { (c: [String: String]) in GameSocialClubEndPolicy.socialClubLayout(config: c, environment: nil) }
         for release in [false, true] {
             let rdr2 = try Self.play("app-1174180", person: "", release: release)
             XCTAssertEqual(rdr2["env.PLAYPORT_SC_LAYOUT"], "1")
-            XCTAssertEqual(rdr2["env.PLAYPORT_SC_SINGLE"], "1")
             XCTAssertTrue(layout(rdr2))
         }
         let open = PublisherLauncher.rockstar.openSettings(saved: nil).config   // a release build's Open
         XCTAssertEqual(open["env.PLAYPORT_SC_LAYOUT"], "1")
-        XCTAssertEqual(open["env.PLAYPORT_SC_SINGLE"], "1")
         XCTAssertTrue(layout(open))
-        // A person's =0 in a release build: dropped with every person's key.
+        // A person's =0 in a release build: dropped with every person's key, so single-process
+        // stays at its default too.
         let release = try Self.play("app-1174180", person: "env.PLAYPORT_SC_LAYOUT=0 env.PLAYPORT_SC_SINGLE=0", release: true)
         XCTAssertEqual(release["env.PLAYPORT_SC_LAYOUT"], "1")
-        XCTAssertEqual(release["env.PLAYPORT_SC_SINGLE"], "1")
+        XCTAssertNil(release["env.PLAYPORT_SC_SINGLE"])
     }
 
-    /// Hollow Knight and every title that starts no Rockstar launcher get neither key: the layout
+    /// Hollow Knight and every title that starts no Rockstar launcher get no layout key: the layout
     /// changes every process of the session (madeira-unix 0225).
-    func testAPlayWithoutRockstarsLauncherGetsNeitherKey() throws {
+    func testAPlayWithoutRockstarsLauncherGetsNoLayoutKey() throws {
         for release in [false, true] {
             let hk = try Self.play("app-367520", person: "", release: release)
             XCTAssertNil(hk["env.PLAYPORT_SC_LAYOUT"])
-            XCTAssertNil(hk["env.PLAYPORT_SC_SINGLE"])
             XCTAssertFalse(GameSocialClubEndPolicy.socialClubLayout(config: hk, environment: nil))
         }
         XCTAssertNil(LaunchSettings.everyGameKeys["env.PLAYPORT_SC_LAYOUT"])
-        XCTAssertNil(LaunchSettings.everyGameKeys["env.PLAYPORT_SC_SINGLE"])
     }
 
     /// A dev build's `=0` key, the game's or the Open's saved one, wins over the launcher's.
@@ -195,7 +192,6 @@ final class PublisherLauncherTests: XCTestCase {
         XCTAssertFalse(GameSocialClubEndPolicy.socialClubLayout(config: rdr2, environment: nil))
         let open = PublisherLauncher.rockstar.openSettings(saved: LaunchSettings(runtime: "env.PLAYPORT_SC_LAYOUT=0")).config
         XCTAssertEqual(open["env.PLAYPORT_SC_LAYOUT"], "0")
-        XCTAssertEqual(open["env.PLAYPORT_SC_SINGLE"], "1")
         XCTAssertFalse(GameSocialClubEndPolicy.socialClubLayout(config: open, environment: nil))
     }
 

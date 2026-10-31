@@ -15,12 +15,20 @@
 - Branch `dev/pla-476-sc-stock-cef`, unmerged and unpushed (HEAD: see `git log`).
 - **Chunk 4 built, 2026-10-31, host checks only** (no phone run): PLA-602 (`d1aff807`: single-process on by
   default in both builds, a dev `PLAYPORT_SC_SINGLE=0` turns it off; `1424a0ac`: `PublisherLauncher.rockstar`'s
-  runtime carries `env.PLAYPORT_SC_LAYOUT=1 env.PLAYPORT_SC_SINGLE=1`, so RDR2's Play and the launcher's Open run
-  the layout in both builds with no keys, other titles never, a dev `=0` wins) and PLA-603 (merge `b5814a58`:
+  runtime carries `env.PLAYPORT_SC_LAYOUT=1` (its `env.PLAYPORT_SC_SINGLE=1` was dropped in review, a no-op
+  beside the default), so RDR2's Play and the launcher's Open run the layout in both builds with no keys, other
+  titles never, a dev `=0` wins) and PLA-603 (merge `b5814a58`:
   wine-unix 0039, `cef_swap` with the chunk-1 key, the payload, `build/cef`, `patches/cef`, `patches/chromium` and
   their pins removed; `pp verify`'s `cef` check fails any IPA carrying a CEF payload). Chunk 3 skipped: since l7 the
-  game's helper takes its own slots, so no libcef refusal is needed. Chunk 5's docs done (PLA-604). Next: chunk 6,
-  the phone gates ([PLA-605](https://linear.app/playportdev/issue/PLA-605)).
+  game's helper takes its own slots, so no libcef refusal is needed. Chunk 5's docs done (PLA-604). Main-checkout
+  builds (records commit `ca8805e1`): dev IPA `92e7ba96568da1541384341c11ce91725b6bfa32edf6999ca18d9bb69587c5a0`
+  (`.work/out/20261031-193743-92e7ba96/`, `pp verify` 90 checks incl. `cef`), release IPA
+  `84bd7a16f23752055dc883c54c616b842910c6b8b25f2b70cda07e2df1fa0281` (`.work/out/20261031-194039-release-84bd7a16/`,
+  95 checks). Both predate the review fix that dropped the launcher's `PLAYPORT_SC_SINGLE` key; a rebuild
+  follows. Open for the owner: in a release build, Settings › Graphics' "End a game's own Social Club" and
+  "Refuse its restarts" switches still show On but do nothing for a Rockstar Play (it runs the layout, and a
+  release build ignores the stored switch there). Next: chunk 6, the phone gates
+  ([PLA-605](https://linear.app/playportdev/issue/PLA-605)).
 - Chunks 0 and 1 done. Chunk 2 **not passed** ([evidence](../evidence/2026-10-29-sc-stock-cef-probe.md)):
   0224–0226 give the opt-in layout; wine-pe 0055 (early-image replay,
   [PLA-481](https://linear.app/playportdev/issue/PLA-481), Done) is an accepted increment (HK first-frame+10,

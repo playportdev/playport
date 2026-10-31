@@ -965,8 +965,8 @@ the keyboard open. Behind the menu the game is paused:
 - **The game's own Social Club end.** `PP_CONTROL_END_GAME_SOCIAL_CLUB`, 120 s or more after the
   sign-in near the limit, ends the `SocialClubHelper.exe` processes under RDR2.exe, and ntdll refuses
   their later starts (`PLAYPORT_REFUSE_GAME_SC_RESTART`). Every Play of Rockstar's launcher, RDR2's and
-  the Open, runs Social Club on Rockstar's own CEF, single-process, in the stock-CEF layout, in both
-  builds (`PublisherLauncher.rockstar`'s `env.PLAYPORT_SC_LAYOUT=1 env.PLAYPORT_SC_SINGLE=1`; decision
+  the Open, runs Social Club on Rockstar's own CEF, single-process (on by default), in the stock-CEF
+  layout, in both builds (`PublisherLauncher.rockstar`'s `env.PLAYPORT_SC_LAYOUT=1`; decision
   [0169](decisions/0169-social-club-on-rockstars-cef-in-the-stock-cef-layout.md)), and under the layout
   neither runs unless a dev build's stored switch turns the end on (`GameSocialClubEndPolicy`). Only a
   dev build's `env.PLAYPORT_SC_LAYOUT=0` brings back 0153's default: both on unless Settings › Graphics

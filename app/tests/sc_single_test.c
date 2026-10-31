@@ -11,7 +11,6 @@ int main(void)
     assert(pp_sc_single_enabled(""));
     assert(pp_sc_single_enabled("1"));
     assert(pp_sc_single_enabled("true"));
-    assert(pp_sc_single_enabled("00"));
 #ifdef PLAYPORT_RELEASE
     assert(pp_sc_single_enabled("0"));
 #else

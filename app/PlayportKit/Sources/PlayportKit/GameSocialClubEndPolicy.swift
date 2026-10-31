@@ -3,9 +3,9 @@
 // app; decisions 0133, 0141, 0153, 0169).
 //
 // - Without the Social Club layout (Rockstar's own CEF, single-process; PLAYPORT_SC_LAYOUT=1):
-//   on unless the Settings switch turned it off, in both builds (decision 0153). Since PLA-602 that
-//   is only a Rockstar Play whose dev build's `env.PLAYPORT_SC_LAYOUT=0` turned the layout off.
-// - Under the layout (decision 0169), which every Play of Rockstar's launcher runs with its keys
+//   on unless the Settings switch turned it off, in both builds (decision 0153). That is only a
+//   Rockstar Play whose dev build's `env.PLAYPORT_SC_LAYOUT=0` turned the layout off.
+// - Under the layout (decision 0169), which every Play of Rockstar's launcher runs with its key
 //   (PublisherLauncher.rockstar's runtime, both builds): off. In l19 the game signed in again after the end, 0155
 //   refused the new helper (no headroom) and the game left Story for a black spinner; after the end
 //   d1's game went back to its title menu, and l13 was killed after the restarts 0155 allowed. A dev
