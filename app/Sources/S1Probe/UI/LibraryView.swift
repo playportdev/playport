@@ -19,6 +19,7 @@
 // a tile not wholly on screen scrolls just far enough to show its row, to an
 // offset worked out from that frame (a scroll to the lazy grid's id lands on an estimate).
 
+import BattleNetClientKit
 import GOGClientKit
 import EpicClientKit
 import PlayportKit
@@ -545,21 +546,22 @@ enum LibraryOwned {
     }
 }
 
-/// Whether a GOG or Epic game has its store's art (which carries its name, so no name is drawn
-/// over it). Battle.net products have none: their colour tile with the name drawn over it.
+/// Whether a store game has its store's art carrying its name, so no name is drawn over it: GOG's
+/// and Epic's, and retail World of Warcraft's (the Classic products' art has no words).
 enum StoreArt {
     @MainActor
     static func has(_ key: StoreGameKey) -> Bool {
         switch key.store {
         case .gog: GOGAccount.shared.game(key.id)?.image != nil
         case .epic: EpicAccount.shared.game(key.id).map { $0.wideArt ?? $0.tallArt } != nil
-        case .steam, .local, .battlenet: false
+        case .battlenet: BattleNet.product(key).map { BattleNetArt.carriesName($0) } ?? false
+        case .steam, .local: false
         }
     }
 }
 
-/// A game's store art when the paired account owns it; else, for a game in
-/// C:\Games, its executable's icon (LocalGameArt); else its colour tile.
+/// A game's store art when the paired account owns it, or a Battle.net product's (no account);
+/// else, for a game in C:\Games, its executable's icon (LocalGameArt); else its colour tile.
 struct GameArt: View {
     @EnvironmentObject private var model: SteamAccountModel
     @ObservedObject private var library = LibraryModel.shared
@@ -568,7 +570,7 @@ struct GameArt: View {
     let kind: ArtworkCache.Kind
     /// The catalogue's title, for a local game's icon.
     var titleID: String? = nil
-    /// The store's game, for GOG's or Epic's art.
+    /// The store's game, for GOG's, Epic's or Battle.net's art.
     var storeKey: StoreGameKey? = nil
 
     var body: some View {
@@ -578,6 +580,8 @@ struct GameArt: View {
             GOGArtView(game: g, wide: kind == .hero)
         } else if let key = storeKey, key.store == .epic, let g = EpicAccount.shared.game(key.id) {
             EpicArtView(game: g, wide: kind == .hero)
+        } else if let key = storeKey, let p = BattleNet.product(key) {
+            BattleNetArtView(product: p, wide: kind == .hero)
         } else if let id = titleID, let t = library.title(id), t.executable != nil {
             LocalGameArt(title: t)
         } else {
