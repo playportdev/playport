@@ -109,6 +109,12 @@ int main(void)
         assert(ppss_x18_tramp(m, tramp, pc, &reg, &op, &to) == PPSS_TRAMP_MOV && reg == 8);
         t[1] = 0xd503201f;
         assert(ppss_x18_tramp(t, tramp, pc, &reg, &op, &to) == PPSS_TRAMP_NONE);
+        /* subs x17, x18, x16, lsr #28 names x16 and x17: its scratch register is x15 (0263) */
+        {
+            uint32_t u[7] = { 0xf81f0fef, 0xd53bd06f, 0x927df1ef, 0xf944a1ef, 0xeb5071f1, 0xf84107ef, 0 };
+            u[6] = B_TO(tramp + 24, pc + 4);
+            assert(ppss_x18_tramp(u, tramp, pc, &reg, &op, &to) == PPSS_TRAMP_OP && reg == 15 && op == 0xeb5071f1);
+        }
     }
     /* A branch's (0263), for cbz x18, target at pc: str; mrs; and; ldr; cbz x17, #12;
        ldr x17, [sp], #16; b pc+4; ldr x17, [sp], #16; b target. Words 0-6 look like an

@@ -401,3 +401,55 @@ supported` and `Narrow quad lines not supported`, from `rs_line_info_from_d3d12`
 `[kk-wsi] create chain format=44 … 1564x720 images=3`. Two SEGVs (reads at the base of the read-write
 view, 0x7043c60000, from RVA +0x346e8c, after the client had unmapped it: `NO wine view`) went to the
 client's handler and it carried on. Runs before 0271 never got this far. The missing textures are the next blocker.
+
+## x18 coverage against the Linux reference; SIMD pairs and a third scratch register (madeira-unix 0263 amended)
+
+PLA-516. The reference (PLA-608, `$PLAYPORT_BUILD/ref-arm64/REFERENCE.md`) ran the Classic client's ARM64 image
+under Wine for aarch64 Linux in qemu TCG to its login screen and recorded every executed word with a
+register field of 18: 1,471 executed x18 readers (`x18-executed-classic.txt`), and in run c11-cnt how
+often each ran (`x18-counts-classic.txt`, plugin `x18cnt`). The patcher, as the series leaves
+`virtual_ios.c`, ran offline over the phone's dump of the decrypted Classic image (run 20261101T030044) as the
+phone runs it: the load pass (cipher 1) over the file's `.text`, then the flush pass (cipher 2, `.pdata`
+hint) over the 46,360 windows rewritten since the remap. Every rewritten word was checked with
+`ios_x18_patched_site` against its original.
+
+| The 1,471 executed x18 readers | Before | After |
+|---|---|---|
+| Rewritten by the flush pass | 1,347 | 1,347 |
+| Rewritten by the load pass (a B in the dump too: all 512 load-pass sites are) | 89 | 89 |
+| Left, completed by the `[x18-emul3]` fault path (`ldr x8, [x18, #0x58]`, the TLS array; one `ldr x8, [x18, x8]`): leaf functions `.pdata` does not list | 31 | 31 |
+| Left, harmless: Rd = xzr without flags (`sub wzr, w18, w16, lsr #1`) | 3 | 3 |
+| Left, reading 0 | 0 | 0 |
+| Not in the dump as executed: +0xb3824 `ldr x8, [x18, #0x60]` in the protector's self-rewritten function at +0xb3790 (the dump has other code there, with B words of an earlier flush pass) | 1 | 1 |
+
+The 31 emulated sites ran 2 to 179 times each in c11-cnt (179: +0x12d490, +0x133c58, +0x133c88, +0x1c5b60,
++0x1d4dc0; 68: +0x2d9bea0, +0x2df56d0, +0x2dfd438; 0: +0x28b5fd8; the rest 2): no hot path runs
+through the exception handler. The hottest readers are TLS-array loads the flush pass rewrites
+(+0x23d6e8 3,810,775 times, +0x24f330 and +0x24f2a0 2,040,065, +0x246cb8 1,912,184, +0x168128c 1,909,524,
++0x1681f1c 1,876,137). +0xb3824 ran 668,189 times, about 26 per raise of the UDF at +0x1297c that Linux
+re-raises some 26,000 times without a single step; the phone takes the other path there (0253).
+
+What the patcher did beyond the readers was wrong in one class: ios_insn_x18_role took Rt2 = 18 of
+every LDP/STP as x18, also in an LDP/STP of SIMD and FP registers (V = 1, `ldp q19, q18, [x8], #0x20`,
+`stp s19, s18, [x10, #0x50]`) and in a load into x18. Such a pair was rewritten to q17/s17 (s16 when
+it named x17): 2,003 words in the Classic client's code (14 in the load pass, a copy loop at
++0x22904…+0x2ccc8; 1,989 in the flush pass). 220 of them ran 132,000,579 times in c11-cnt, each
+loading or storing the wrong register (+0x1991db0…+0x1991ee8, 3,101,760 times each). WowTextures' d3d12
+probe (`stp s16, s18, [x13]` in its quad loop) draws its quads wrong on the phone the same way. An
+instruction naming both x16 and x17 (`subs x17, x18, x16, lsr #28`, `madd x16, x29, x17, x18`) was
+left to read 0: 48 code words. 0263 now gives Rt2 the x18 role only in an STP of X or W registers, and
+takes the first of x17, x16, x15 … the instruction does not name as its scratch register; the single
+step (0259's `ppss_x18_tramp`) and a re-flush (0264's `ios_x18_patched_site`) read it from the
+trampoline's first word. Over the dump: load pass 512 → 499 sites, flush pass 55,679 → 53,737
+(trampolines 0x17da5c → 0x1705f4 bytes), none skipped, no word rewritten that does not read x18, and the
+1,471 readers as in the table. Tests: `tools/tests/test_x18_compare.py`, `test_single_step.py`,
+`test_x18_x64_code.py` (ntdll's x64 word 0xec834817 is such an STP of d18 and no longer an x18 site).
+
+Left as they are: 1,198 code words that move x18 into SP (`sub sp, x18, #0x1a0`, `mov sp, x18`), none
+executed in the reference (the trampoline moves SP). Three data words the flush pass rewrites as code
+are loaded by code that ran in the reference: +0x322808 (the 8-byte constant 1,000,000,000 that
+`ldr x14, #0x322808; … mul x8, x8, x14` at +0x3226bc multiplies by, right after a `bl` to a function
+that does not return), +0x11593c (loaded by `ldr x26, #0x115938` at +0x111f18) and +0x10ce0c (by `ldr x8,
+#0x10ce08` at +0x10bdc0). Each sits in its function's constant data after a word that reads as an
+instruction falling through, which 0270 takes as code; the client loads its own code as literals
+2,897 times among the rewritten words, so the literal alone does not tell them apart (PLA-609).

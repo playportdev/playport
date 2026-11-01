@@ -8,8 +8,10 @@ exception handler parked in its loop. The words below are the client's own: its 
 `cmp x18, #0x38` and an opaque predicate's `cmp x18, xzr, asr #5`. The test runs the patcher, as
 the series leaves build/ntdll-unix/virtual_ios.c, over a .text of them and checks each became a
 branch to a trampoline that does the same compare on the TEB in x17; that a CBZ's offset bits are
-not taken for registers and an access relative to SP is left alone; and that the patcher knows each
-word it patched from its original (a re-flush of decrypted code leaves those)."""
+not taken for registers and an access relative to SP is left alone; that an LDP/STP of SIMD and FP
+registers (q18, s18) and a load into x18 keep their word while an STP of x18 is patched; that an
+instruction naming x16 and x17 gets x15; and that the patcher knows each word it patched from its
+original (a re-flush of decrypted code leaves those)."""
 import pathlib
 import subprocess
 import tempfile
@@ -36,7 +38,7 @@ int ios_teb_tls_slot_offset = 0x940;
 long ios_limit_x18_images, ios_limit_x18_sites;
 #include "patcher.c"
 
-static uint32_t text[13], tramp[1024], text2[4], tramp2[256];
+static uint32_t text[13], tramp[1024], text2[4], tramp2[256], text3[5], tramp3[256];
 
 /* The word the patcher put in the trampoline it branched word i to. */
 static uint32_t tramp_insn(int i)
@@ -119,6 +121,29 @@ int main(void)
         assert(!ios_x18_patched_site(text2[0], 0xb5110212, (char *)&text2[0], (char *)tramp2, used));
         assert(!ios_x18_patched_site(text2[0], 0xb4110212, (char *)&text2[0], (char *)tramp2, 16));
         assert(ios_x18_patched_site(text2[3], 0xaa1203ff, (char *)&text2[3], (char *)tramp2, used));
+    }
+    /* In an LDP/STP of SIMD and FP registers field 18 is q18/s18, and a load into x18 writes it:
+       those are left (WoW's `ldp q19, q18, [x8], #0x20` loaded q17). An STP of x18 is patched. An
+       instruction naming x16 and x17 gets x15. */
+    {
+        size_t used = 0;
+        uint32_t *t;
+
+        text3[0] = 0xacc14913;   /* ldp q19, q18, [x8], #0x20 */
+        text3[1] = 0x2d0a4953;   /* stp s19, s18, [x10, #0x50] */
+        text3[2] = 0xa9404820;   /* ldp x0, x18, [x1] */
+        text3[3] = 0xa9004820;   /* stp x0, x18, [x1] */
+        text3[4] = 0xeb507251;   /* subs x17, x18, x16, lsr #28 */
+        assert(ios_jit_x18_tramp_need((char *)text3, sizeof(text3), 0x1000, NULL, 1) == 2 * 32 + 0x1000);
+        assert(ios_jit_patch_x18((char *)text3, (char *)text3, sizeof(text3), 0x1000,
+                                 (char *)tramp3, (char *)tramp3, sizeof(tramp3), 1, &used) == 2);
+        assert(used == 56 && text3[0] == 0xacc14913 && text3[1] == 0x2d0a4953 && text3[2] == 0xa9404820);
+        t = (uint32_t *)((char *)&text3[3] + (intptr_t)((int32_t)(text3[3] << 6) >> 6) * 4);
+        assert(t[0] == 0xf81f0ff1 && t[4] == 0xa9004420);      /* stp x0, x17, [x1] */
+        t = (uint32_t *)((char *)&text3[4] + (intptr_t)((int32_t)(text3[4] << 6) >> 6) * 4);
+        assert(t[0] == 0xf81f0fef && t[1] == 0xd53bd06f && t[4] == 0xeb5071f1 && t[5] == 0xf84107ef);
+        assert(ios_x18_patched_site(text3[4], 0xeb507251, (char *)&text3[4], (char *)tramp3, used));
+        assert(!ios_x18_patched_site(text3[4], 0xeb507231, (char *)&text3[4], (char *)tramp3, used));
     }
     puts("x18 compare: ok");
     return 0;

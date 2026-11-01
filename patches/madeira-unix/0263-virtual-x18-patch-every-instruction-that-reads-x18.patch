@@ -12,8 +12,21 @@ way.
 
 ios_insn_x18_role now returns the fields holding x18 as a source for the
 logical (register and immediate), ADD/SUB, ADC/SBC, CCMP/CCMN, CSEL,
-1- and 2-source, 3-source, bitfield and EXTR classes, a store of x18 and
-LDP/STP's second register; each of those fields gets the scratch register.
+1- and 2-source, 3-source, bitfield and EXTR classes, and a store of
+x18 (STR, or either register of an STP of X or W registers); each of those
+fields gets the scratch register. A load into x18 writes it, and in an
+LDP or STP of SIMD and FP registers (`ldp q19, q18, [x8], #0x20`, `stp
+s19, s18, [x10, #0x50]`) field 18 is q18 or s18: those keep their word.
+Rewritten, such a pair loaded or stored q17 or s17 in place of q18 or
+s18; World of Warcraft's Classic client has 2,003 of them in its code,
+221 of which run before its login screen on Linux.
+
+The scratch register is the first of x17, x16, x15 ... the instruction
+does not name, where an instruction naming both x16 and x17 (47 in the
+Classic client's code, as `subs x17, x18, x16, lsr #28`) was left to
+read 0. The single step (0259) reads it back from the trampoline's
+first word.
+
 CBZ/CBNZ/TBZ/TBNZ on x18 get a trampoline that branches on the TEB and
 ends in a B to the original target or back; their scratch register is
 x17, as their other fields are the offset, not registers. Forms where
@@ -33,16 +46,16 @@ Class: ios-port
 Evidence: docs/evidence/2026-10-31-wow-arm64-start.md, tools/tests/test_x18_compare.py, tools/tests/test_single_step.py
 Offered-upstream: no
 ---
- build/ntdll-unix/pp_single_step.h   |  41 ++++-
+ build/ntdll-unix/pp_single_step.h   |  43 ++++-
  build/ntdll-unix/signal_arm64_ios.c |  15 +-
- build/ntdll-unix/virtual_ios.c      | 231 +++++++++++++++++++---------
- 3 files changed, 205 insertions(+), 82 deletions(-)
+ build/ntdll-unix/virtual_ios.c      | 250 ++++++++++++++++++----------
+ 3 files changed, 213 insertions(+), 95 deletions(-)
 
 diff --git a/build/ntdll-unix/pp_single_step.h b/build/ntdll-unix/pp_single_step.h
-index db7e322..21c854a 100644
+index db7e322..e1a978a 100644
 --- a/build/ntdll-unix/pp_single_step.h
 +++ b/build/ntdll-unix/pp_single_step.h
-@@ -140,17 +140,29 @@ static inline int ppss_step_in_place( uint64_t x[31], uint64_t *pc, uint32_t cps
+@@ -140,28 +140,46 @@ static inline int ppss_step_in_place( uint64_t x[31], uint64_t *pc, uint32_t cps
   * - PPSS_TRAMP_OP: *op is the instruction with *reg in place of x18, to run
   *   out of line with the TEB in *reg (its value put back after);
   * - PPSS_TRAMP_MOV: the instruction was MOV x*reg, x18;
@@ -77,7 +90,11 @@ index db7e322..21c854a 100644
  {
      unsigned r = t[0] & 31;
      uint32_t teb_load = 0x927df000u | (r << 5) | r;
-@@ -161,7 +173,13 @@ static inline int ppss_x18_tramp( const uint32_t *t, uint64_t tramp, uint64_t pc
+ 
+-    if ((t[0] == 0xf81f0ff1u || t[0] == 0xf81f0ff0u) && t[1] == (0xd53bd060u | r) && t[2] == teb_load &&
++    if ((t[0] & 0xffffffe0u) == 0xf81f0fe0u && r < 18 && t[1] == (0xd53bd060u | r) && t[2] == teb_load &&
+         (t[3] & 0xffc003ffu) == (0xf9400000u | (r << 5) | r) && t[5] == (0xf84107e0u | r) &&
+         ppss_branch_to( t[6], tramp + 24, pc + 4 ))
      {
          *reg = r;
          *op = t[4];
@@ -159,10 +176,24 @@ index f7f7aa4..4443248 100644
          EXCEPTION_RECORD rec = { .ExceptionCode = EXCEPTION_SINGLE_STEP };
          ULONG64 pe;
 diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
-index 03131fe..e64765b 100644
+index 03131fe..426befb 100644
 --- a/build/ntdll-unix/virtual_ios.c
 +++ b/build/ntdll-unix/virtual_ios.c
-@@ -5132,108 +5132,165 @@ void ios_jit_sync_write(void *addr, size_t size)
+@@ -230,10 +230,9 @@ static volatile unsigned long ios_pool_head_exhausted, ios_pool_tail_refused, io
+  * a W+X request that came back without WRITE (ml999), an image whose x18
+  * patching was refused or cut short (its trampolines out of B/BL reach of its
+  * .text, a budget that did not fit, the trampoline space run out), and the x18
+- * sites left to fault at run time (those of refused images, sites whose
+- * operands left no scratch register, and sites past the end of the trampoline
+- * space). Misaligned exclusives and CAS emulated
+- * by the Mach exception handler are counted in signal_arm64_ios.c. */
++ * sites left to fault at run time (those of refused images, and sites past the
++ * end of the trampoline space). Misaligned exclusives and CAS emulated by the
++ * Mach exception handler are counted in signal_arm64_ios.c. */
+ static volatile unsigned long ios_limit_wx_dropped, ios_limit_x18_images, ios_limit_x18_sites;
+ 
+ /* ---- Pool reclamation (task #25) ----------------------------------------
+@@ -5132,108 +5131,165 @@ void ios_jit_sync_write(void *addr, size_t size)
   * code never touches x18, so iOS zeroing it has no effect.
   */
  
@@ -204,16 +235,16 @@ index 03131fe..e64765b 100644
 +    int role = 0;
 +
 +    if (rn != 18 && rm != 18 && rt2 != 18 && rt != 18) return X18_ROLE_NONE;
++
++    /* CBZ/CBNZ, TBZ/TBNZ on x18 (as a W register too) */
++    if (((insn & 0x7e000000) == 0x34000000 || (insn & 0x7e000000) == 0x36000000) && rt == 18)
++        return X18_ROLE_BRANCH;
  
 -    /* LDR/STR (unsigned immediate) — top2=1x, [27:24]=x111, [29]=1 */
 -    if ((top8 & 0x3F) == 0x39 || (top8 & 0x3F) == 0x3D ||  /* 0b0011 1001, 0b0011 1101 */
 -        (top8 & 0x3F) == 0xB9 || (top8 & 0x3F) == 0xBD ||  /* 0b1011 1001, 0b1011 1101 */
 -        (top8 & 0x3F) == 0xF9 || (top8 & 0x3F) == 0xFD ||  /* 0b1111 1001, 0b1111 1101 */
 -        (top8 & 0x3F) == 0x79 || (top8 & 0x3F) == 0x7D)    /* 0b0111 1001, 0b0111 1101 */
-+    /* CBZ/CBNZ, TBZ/TBNZ on x18 (as a W register too) */
-+    if (((insn & 0x7e000000) == 0x34000000 || (insn & 0x7e000000) == 0x36000000) && rt == 18)
-+        return X18_ROLE_BRANCH;
-+
 +    /* LDR/STR (unsigned immediate) — [29:27]=111, [25:24]=01 */
 +    if ((top8 & 0x3F) == 0x39 || (top8 & 0x3F) == 0x3D)
      {
@@ -259,13 +290,13 @@ index 03131fe..e64765b 100644
 -    if ((top8 & 0x3E) == 0x28 || (top8 & 0x3E) == 0x2C ||  /* x010 100x, x010 110x */
 -        (top8 & 0x3E) == 0xA8 || (top8 & 0x3E) == 0xAC ||  /* 1010 100x, 1010 110x */
 -        (top8 & 0x3E) == 0x68 || (top8 & 0x3E) == 0x6C)    /* 0110 100x, 0110 110x */
-+    /* LDP/STP (signed offset, pre/post-indexed) */
++    /* LDP/STP (signed offset, pre/post-indexed); Rt2 = 18 is x18 only in an STP of X/W registers */
 +    if ((top8 & 0x3E) == 0x28 || (top8 & 0x3E) == 0x2C)
      {
 -        if (rn == 18) return X18_ROLE_RN;
 -        if (rt2 == 18) return X18_ROLE_RT2;
 +        if (rn == 18) role |= X18_ROLE_RN;
-+        if (rt2 == 18 && rn != 31) role |= X18_ROLE_RT2;
++        if (rt2 == 18 && !(insn & 0x04400000) && rn != 31) role |= X18_ROLE_RT2;
 +        if (rt == 18 && !(insn & 0x04400000) && rn != 31) role |= X18_ROLE_RT;
 +        return role;
      }
@@ -390,7 +421,7 @@ index 03131fe..e64765b 100644
  }
  
  /* Patch all x18 references in a PE .text section.
-@@ -5352,15 +5409,14 @@ static unsigned char *ios_x18_build_data_map( const char *text, size_t text_size
+@@ -5352,15 +5408,14 @@ static unsigned char *ios_x18_build_data_map( const char *text, size_t text_size
          if (imm19 * 4 + (int64_t)i < 0 || tgt >= text_size) continue;
          for (size_t b = tgt; b < tgt + lit_bytes && b < text_size; b += 4)
          {
@@ -410,7 +441,7 @@ index 03131fe..e64765b 100644
              data_map[(b / 4) >> 3] |= 1 << ((b / 4) & 7);
          }
      }
-@@ -5382,7 +5438,8 @@ size_t ios_jit_x18_tramp_need( const char *text, size_t text_size, size_t text_r
+@@ -5382,7 +5437,8 @@ size_t ios_jit_x18_tramp_need( const char *text, size_t text_size, size_t text_r
      {
          uint32_t insn = *(const uint32_t *)(text + i);
          if (data_map && (data_map[(i / 4) >> 3] & (1 << ((i / 4) & 7)))) continue;
@@ -420,25 +451,32 @@ index 03131fe..e64765b 100644
      }
      free( data_map );
      /* Slack: the patcher's per-site max is 32B; pad one page so a
-@@ -5539,9 +5596,15 @@ int ios_jit_patch_x18(char *text_rw, char *text_rx, size_t text_size, size_t tex
+@@ -5539,14 +5595,16 @@ int ios_jit_patch_x18(char *text_rw, char *text_rx, size_t text_size, size_t tex
          int rt = insn & 0x1f;
          int rn = (insn >> 5) & 0x1f;
          int rm = (insn >> 16) & 0x1f;
 -        if (rt == 17 || rn == 17 || rm == 17) scratch = 16;
+-        /* Double-check: if both x16 and x17 are used, skip (extremely rare) */
+-        if (scratch == 16 && (rt == 16 || rn == 16 || rm == 16))
+-        {
+-            skipped++;
+-            unpatched++;
+-            continue;
+-        }
 +        /* Playport: the third source of a 3-source instruction and an LDP/STP's
 +         * second register (bits 14:10) count too. A CBZ/CBNZ/TBZ/TBNZ has no
-+         * register but x18: bits 23:5 are its offset (and bit number). */
++         * register but x18: bits 23:5 are its offset (and bit number). The
++         * scratch register is the first of x17, x16, x15 ... the instruction does
++         * not name (it names four at most): World of Warcraft's client has `subs
++         * x17, x18, x16, lsr #28` and `madd x16, x29, x17, x18`. */
 +        int ra = ((insn & 0x1f000000) == 0x1b000000 || (insn & 0x3a000000) == 0x28000000)
 +                 ? (int)((insn >> 10) & 0x1f) : -1;
 +        if (role & X18_ROLE_BRANCH) rn = rm = ra = -1;
-+        if (rt == 17 || rn == 17 || rm == 17 || ra == 17) scratch = 16;
-         /* Double-check: if both x16 and x17 are used, skip (extremely rare) */
--        if (scratch == 16 && (rt == 16 || rn == 16 || rm == 16))
-+        if (scratch == 16 && (rt == 16 || rn == 16 || rm == 16 || ra == 16))
-         {
-             skipped++;
-             unpatched++;
-@@ -5598,8 +5661,8 @@ int ios_jit_patch_x18(char *text_rw, char *text_rx, size_t text_size, size_t tex
++        while (scratch == rt || scratch == rn || scratch == rm || scratch == ra) scratch--;
+ 
+         /* Check trampoline space (max 6 instructions = 24 bytes per trampoline) */
+         if (tramp_off + 24 > tramp_size)
+@@ -5598,15 +5656,15 @@ int ios_jit_patch_x18(char *text_rw, char *text_rx, size_t text_size, size_t tex
          }
          else
          {
@@ -449,7 +487,15 @@ index 03131fe..e64765b 100644
              {
                  ERR("x18 patcher: out of trampoline space at %d patches\n", count);
                  out_of_space = i;
-@@ -5617,12 +5680,36 @@ int ios_jit_patch_x18(char *text_rw, char *text_rx, size_t text_size, size_t tex
+                 break;
+             }
+             /* str xSCRATCH, [sp, #-16]! */
+-            *(uint32_t *)(tramp_rw + tramp_off) = (scratch == 17) ? 0xF81F0FF1 : 0xF81F0FF0;
++            *(uint32_t *)(tramp_rw + tramp_off) = 0xF81F0FE0 | scratch;
+             tramp_off += 4;
+             /* mrs xSCRATCH, TPIDRRO_EL0 */
+             *(uint32_t *)(tramp_rw + tramp_off) = 0xD53BD060 | scratch;
+@@ -5617,12 +5675,36 @@ int ios_jit_patch_x18(char *text_rw, char *text_rx, size_t text_size, size_t tex
              /* ldr xSCRATCH, [xSCRATCH, #slot_off] */
              *(uint32_t *)(tramp_rw + tramp_off) = 0xF9400000 | ((slot_off / 8) << 10) | (scratch << 5) | scratch;
              tramp_off += 4;
@@ -464,12 +510,12 @@ index 03131fe..e64765b 100644
 +                *(uint32_t *)(tramp_rw + tramp_off) = tb ? (insn & 0xfff80000) | (3 << 5) | scratch
 +                                                         : (insn & 0xff000000) | (3 << 5) | scratch;
 +                tramp_off += 4;
-+                *(uint32_t *)(tramp_rw + tramp_off) = (scratch == 17) ? 0xF84107F1 : 0xF84107F0;
++                *(uint32_t *)(tramp_rw + tramp_off) = 0xF84107E0 | scratch;
 +                tramp_off += 4;
 +                *(uint32_t *)(tramp_rw + tramp_off) =
 +                    0x14000000 | ((((intptr_t)return_rx - (intptr_t)(tramp_rx + tramp_off)) >> 2) & 0x3FFFFFF);
 +                tramp_off += 4;
-+                *(uint32_t *)(tramp_rw + tramp_off) = (scratch == 17) ? 0xF84107F1 : 0xF84107F0;
++                *(uint32_t *)(tramp_rw + tramp_off) = 0xF84107E0 | scratch;
 +                tramp_off += 4;
 +                /* the original target, in place of the way back below */
 +                return_rx = target;
@@ -480,7 +526,8 @@ index 03131fe..e64765b 100644
              *(uint32_t *)(tramp_rw + tramp_off) = ios_insn_replace_x18(insn, role, scratch);
              tramp_off += 4;
              /* ldr xSCRATCH, [sp], #16 */
-             *(uint32_t *)(tramp_rw + tramp_off) = (scratch == 17) ? 0xF84107F1 : 0xF84107F0;
+-            *(uint32_t *)(tramp_rw + tramp_off) = (scratch == 17) ? 0xF84107F1 : 0xF84107F0;
++            *(uint32_t *)(tramp_rw + tramp_off) = 0xF84107E0 | scratch;
              tramp_off += 4;
 +            }
          }
