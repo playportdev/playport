@@ -116,3 +116,76 @@ The phone: WoW on the Gamepad layout and with the scripted pad (`pp ui --pad`), 
 `controls: the game read XInput state (N reads by now)`, and WoW reacting to the pad.
 The desktop runs' scripts, logs and screenshots (Blizzard's artwork and an account name; not
 committed) stay in the side worktree's `$PLAYPORT_BUILD/wow509/`.
+
+## The owner's DualShock 4 play and the login screen (2026-11-01, afternoon)
+
+Side worktree `wowpad2` (branch `dev/pla-522-wow-pad-2`), desktop Wine plus the owner's phone log
+(IPA `a0acb433`, three WoW sessions). No phone command was run.
+
+**The owner's sessions never left the login screen.** In all three (a DualShock 4 from the start
+with the controls hidden; the same pad as `DUALSHOCK 4 Wireless Controller`, `extended=true`, XInput
+slot 0; no controller and the on-screen pad as player 1) the process footprint stays at 3.0–3.1 GB,
+the login screen's, with no world load; the second session typed into the email and password fields
+and clicked near Log In, after which nothing changed. The pad presses the log shows are A, B, X,
+the D-pad and START; no stick or trigger moved. Each session logs `controls: the game read XInput
+state (3 reads by now)` once, before WoW's first frame: SDL's open (`XInputSetState`, which 0055
+answers from the snapshot) plus one update (`XInputGetStateEx` and `XInputGetBatteryInformation`,
+each a state request). The line is logged at the first read only, so whether reads went on is not
+in that log.
+
+**What SDL 2 does with the bridge.** `Wow-ARM64.exe` carries SDL 2.26 (its hint strings are 2.26.5's
+joystick and controller hints, without 2.28's `SDL_JOYSTICK_WGI`). With `SDL_JOYSTICK_RAWINPUT=0`
+its XInput driver loads `XInput1_4.dll` (ordinal 100 for `XInputGetStateEx`), scans users 3 to 0
+with `XInputGetCapabilities(XINPUT_FLAG_GAMEPAD)` (0055: an empty slot falls back to the HID path,
+which starts `wine_xinput_hid_update` and answers `ERROR_DEVICE_NOT_CONNECTED`; slot 0 answers a
+gamepad, type 1 subtype 1), names it `XInput Controller #1` with a guessed 045e:02fd (the raw input
+list has no `IG_` device) and SDL's built-in XInput mapping, opens it (`XInputSetState` with zero
+vibration: success) and on each update reads `XInputGetStateEx` and the battery (0055: type
+unknown, which SDL ignores), raising events when the packet number is non-zero and new: the
+snapshot's packet starts at 1 and advances on every change. Nothing closes the pad while slot 0
+stays connected; SDL rescans only on a device notification, which this runtime never sends. A
+DualShock 4 and the on-screen pad both appear as that same slot 0 gamepad.
+
+**Desktop with the bridge.** The patched tree's `xinput1_3/main.c` (wine-port 0055) built as an
+x86_64 `xinput1_4.dll` with a stand-in `ios_gamepad_query` over a scripted slot 0 (WiniosGamepad's
+packet rule, no HID device, as on the phone) and loaded by `Wow.exe` from its folder, with
+`GamePadEnable 1` and `SDL_JOYSTICK_RAWINPUT=0`, to the login screen (stock settings otherwise):
+
+- WoW reads state 120 times a second from start to end (1,200 per 10 s in every window), sees each
+  packet change, and asks capabilities 5 times.
+- At the login screen the right stick moves WoW's cursor (`GetCursorPos` from inside the process:
+  x 960→1600→960… in step with the stick), with or without `GamePadCursorOnLogin "1"`.
+- With the cursor held on the Quit button, A, B, X, Y, the shoulders, the stick clicks, START, BACK
+  and the left trigger did nothing; the right trigger clicked (WoW quit, exit 0). The cursor on
+  Menu and A: no menu.
+- The left stick and the D-pad did nothing visible.
+- WoW's cursor is a Windows (hardware) cursor: no screenshot of the frame shows it. With
+  `HardwareCursor "0"` ("If disabled, draws a software cursor", the client's own description of
+  the CVar) WoW draws its gauntlet cursor into its frame, moved by the right stick.
+
+So the login screen reacts to a pad only as a pointer: right stick to move, right trigger to click.
+On the phone the game layer draws no Windows cursor (`Winios.m`'s `winios_pSetCursor` is a no-op
+outside desktop mode), so that pointer is invisible, and the presses the owner made do nothing on
+Windows either. Character select and the world need a sign-in, which this desktop copy cannot do
+(no password here); what the pad does there is not checked.
+
+**The change.**
+
+- `WoWConfig.prepareForPlay` also writes `SET HardwareCursor "0"` where `Config.wtf` names none, so
+  WoW's cursor is drawn in its frames on the phone. Test:
+  `testPlayWritesTheMissingLocaleRegionControllerAndCursorAndPinsDirect3D12`.
+- A dev-build summary while a game asks for XInput state, every 10 s:
+  `controls: XInput in 10 s: N state reads (from a pad: slot 0 …, 1 …, 2 …, 3 …), last slot S
+  ERROR_SUCCESS|ERROR_DEVICE_NOT_CONNECTED, K packet changes, buttons seen 0x…, C capability
+  requests`. `patches/madeira-unix` 0273 has `ios_gamepad_query` report every request with the
+  slot's answer to HostIO's `playport_gamepad_query` (replacing 0247's
+  `playport_gamepad_state_read`; the suggested layout's total is unchanged). Test:
+  `app/tests/pads_test.c`.
+
+**Phone check (not run).** `./pp ui --pad --play bnet-wow --until first-frame+40 --leave-running`,
+then `pp pad send` the right stick (several seconds each way) and the right trigger over the
+Quit or Menu button; with a physical controller the same by hand. Expect `Config.wtf` with
+`SET HardwareCursor "0"`, the gauntlet cursor drawn and moving, the right trigger clicking, and
+`controls: XInput in 10 s:` lines with about 1,200 reads from slot 0 per line, packet changes and
+the pressed buttons. Lines that stop after the first, or carry no packet changes while the pad
+moves, would be a runtime fault to chase.

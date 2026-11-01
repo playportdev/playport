@@ -324,7 +324,7 @@ final class LibraryModel: ObservableObject {
             settings.graphics = bnet.graphics
             plan.args += bnet.arguments.filter { arg in !plan.args.contains { $0.caseInsensitiveCompare(arg) == .orderedSame } }
             Self.log("play \(t.name): Battle.net's x64 client through FEX on \(bnet.graphics.rawValue), "
-                     + "\(bnet.arguments.joined(separator: " ")), Config.wtf's GxApi D3D12 and GamePadEnable; WoW asks for its own sign-in")
+                     + "\(bnet.arguments.joined(separator: " ")), Config.wtf's GxApi D3D12, GamePadEnable and HardwareCursor; WoW asks for its own sign-in")
         }
         // A game whose Play starts a publisher's launcher runs with its Open's grace, graphics
         // environment and runtime keys under its own (decision 0115).

@@ -1006,13 +1006,17 @@ pointer (`MixerOutput`), which `HostIO.send` hands to the calls above.
   decision 0074), else Settings' Starting layout, else Gamepad. `UI/ControlsStore.swift`
   keeps the defaults and each game's record in UserDefaults; a change applies at once.
 - **The suggestion counter.** win32u's `ios_gamepad_query` calls hio_pads.c's
-  `playport_gamepad_state_read` for each XInput op-0 request, which `XInputGetState` and also
+  `playport_gamepad_query` for each XInput request with the slot's answer (connected, packet
+  number, buttons); op-0 requests are state requests, which `XInputGetState` and also
   `XInputSetState`, `XInputEnable` and the battery and DirectSound queries send
-  (`patches/madeira-unix` 0247; `host_pad_state_reads` is the total, this game's since the app
-  restarts after each). PlayportKit `LayoutSuggestion`, sampled once a second
+  (`patches/madeira-unix` 0247 and 0273; `host_pad_state_reads` is their total, this game's
+  since the app restarts after each). PlayportKit `LayoutSuggestion`, sampled once a second
   (`UI/LayoutSuggestionToast.swift`), offers Keyboard & mouse to a game starting on Gamepad
   with Settings' Starting layout left at Suggested that made none in 20 s of play after its
-  first frame, once per game (`controls.suggestedLayoutOffered`).
+  first frame, once per game (`controls.suggestedLayoutOffered`). A dev build also logs
+  `controls: XInput in 10 s: …` every 10 s while the game makes state requests (HostIO's
+  once-a-second tick, `host_pad_xinput_summary`): how many, from which slots, the last
+  answer, packet changes and the buttons answered.
 
 HostIOKit's and PlayportKit's tests cover the machines, the mixer, the layouts, the editor and
 the suggestion on the host.
@@ -1169,9 +1173,10 @@ window surfaces `patches/madeira-unix` 0109 gives every mode, decision 0075, and
 after it the windows made since, 0005, decision 0076).
 `Sources/WinIOS/WiniosGamepad.c`, unmodified, defines the host-controller
 snapshot `libwin32u_unix.a` reads for Wine's XInput; the app writes it through
-`Sources/HostIO/hio_pads.c` (see HostIO above). Each XInput state request also
-calls hio_pads.c's `playport_gamepad_state_read` (`patches/madeira-unix` 0247),
-the count the suggested on-screen layout reads (PlayportKit `LayoutSuggestion`).
+`Sources/HostIO/hio_pads.c` (see HostIO above). Each XInput request also
+calls hio_pads.c's `playport_gamepad_query` with the slot's answer
+(`patches/madeira-unix` 0247 and 0273): the count the suggested on-screen layout
+reads (PlayportKit `LayoutSuggestion`) and the dev log's 10-second summary.
 
 Two parts of Madeira's reference app are not used. `wineios.drv` has no build
 recipe at the pin and is not in wine's configure; audio does not need it,

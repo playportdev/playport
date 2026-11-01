@@ -129,10 +129,11 @@ extension BattleNetInstallTests {
     }
 
     /// Before Play the game's `Config.wtf` gets the install's locale and region where it names
-    /// none (else WoW asks in a Win32 box first), the controller on where it names none (else WoW
-    /// looks for none) and Direct3D 12 always (WoW saves Direct3D 11 after one failed start). The
-    /// file and its folder are made when missing; other lines stay.
-    func testPlayWritesTheMissingLocaleRegionAndControllerAndPinsDirect3D12() async throws {
+    /// none (else WoW asks in a Win32 box first), the controller on and the software cursor
+    /// where it names none (else WoW looks for no controller, and its cursor, which the pad moves
+    /// at the login, is not drawn on the phone) and Direct3D 12 always (WoW saves Direct3D 11
+    /// after one failed start). The file and its folder are made when missing; other lines stay.
+    func testPlayWritesTheMissingLocaleRegionControllerAndCursorAndPinsDirect3D12() async throws {
         let cdn = FakeCDN()
         _ = FakeProduct.make(on: cdn, productConfig: try fixture("wow_classic_era-productconfig.json"))
         let dir = try temp()
@@ -141,12 +142,12 @@ extension BattleNetInstallTests {
         let wtf = root.appendingPathComponent("_classic_era_/WTF/Config.wtf")
         try WoWConfig.prepareForPlay(.wowClassicEra, root: root)
         XCTAssertEqual(try String(contentsOf: wtf, encoding: .utf8),
-                       "SET textLocale \"enUS\"\nSET audioLocale \"enUS\"\nSET portal \"US\"\nSET GamePadEnable \"1\"\nSET GxApi \"D3D12\"\n")
+                       "SET textLocale \"enUS\"\nSET audioLocale \"enUS\"\nSET portal \"US\"\nSET GamePadEnable \"1\"\nSET HardwareCursor \"0\"\nSET GxApi \"D3D12\"\n")
 
-        try Data("SET textLocale \"deDE\"\nSET gxApi \"D3D11\"\nSET gamePadEnable \"0\"\nSET hwDetect \"0\"\n".utf8).write(to: wtf)
+        try Data("SET textLocale \"deDE\"\nSET gxApi \"D3D11\"\nSET gamePadEnable \"0\"\nSET hardwareCursor \"1\"\nSET hwDetect \"0\"\n".utf8).write(to: wtf)
         try WoWConfig.prepareForPlay(.wowClassicEra, root: root)
         XCTAssertEqual(try String(contentsOf: wtf, encoding: .utf8),
-                       "SET textLocale \"deDE\"\nSET gxApi \"D3D12\"\nSET gamePadEnable \"0\"\nSET hwDetect \"0\"\nSET audioLocale \"enUS\"\nSET portal \"US\"\n")
+                       "SET textLocale \"deDE\"\nSET gxApi \"D3D12\"\nSET gamePadEnable \"0\"\nSET hardwareCursor \"1\"\nSET hwDetect \"0\"\nSET audioLocale \"enUS\"\nSET portal \"US\"\n")
     }
 
     /// A language change adds the text and voice locales to a `Config.wtf` that names neither.

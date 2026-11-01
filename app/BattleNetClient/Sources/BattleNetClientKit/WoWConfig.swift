@@ -9,10 +9,13 @@ public enum WoWConfig {
     /// Before Play: the install's text and voice locales and its region's portal where the file
     /// names none (without them WoW opens a Win32 language and region box before its login),
     /// `GamePadEnable` on where the file names none (WoW's default is off, and then it looks for
-    /// no controller at all; a line already there keeps its value), and `GxApi` pinned to
-    /// Direct3D 12 (after one failed Direct3D 12 start WoW saves Direct3D 11, and Play starts the
-    /// x64 client for Direct3D 12 through vkd3d-proton, decision 0177). The file and its folder
-    /// are made when missing.
+    /// no controller at all; a line already there keeps its value), `HardwareCursor` off where
+    /// the file names none (WoW then draws its cursor into its frames: the phone draws no Windows
+    /// cursor over a game, and at the login and character select a controller moves that cursor
+    /// with the right stick and clicks with A; docs/evidence/2026-11-01-wow-controller.md), and
+    /// `GxApi` pinned to Direct3D 12 (after one failed Direct3D 12 start WoW saves Direct3D 11, and
+    /// Play starts the x64 client for Direct3D 12 through vkd3d-proton, decision 0177). The file
+    /// and its folder are made when missing.
     public static func prepareForPlay(_ product: BattleNetProduct, root: URL) throws {
         let info = try BuildInfo.read([UInt8](try Data(contentsOf: root.appendingPathComponent(".build.info"))), product: product.code)
         guard let wtf = file(product, root: root) else { throw BattleNetError.damaged("\(product.code): no product folder names it") }
@@ -21,7 +24,7 @@ public enum WoWConfig {
         if let locale = info.locale {
             text = set(text, [("textLocale", locale), ("audioLocale", locale)], replacing: false)
         }
-        text = set(text, [("portal", info.region.tag), ("GamePadEnable", "1")], replacing: false)
+        text = set(text, [("portal", info.region.tag), ("GamePadEnable", "1"), ("HardwareCursor", "0")], replacing: false)
         text = set(text, [("GxApi", "D3D12")], replacing: true)
         guard text != old else { return }
         try InstallFS.makeDirectory(wtf.deletingLastPathComponent())

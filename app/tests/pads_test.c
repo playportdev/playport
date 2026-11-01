@@ -3,15 +3,17 @@
  * pads_test.c — hio_pads.c on the Linux host (pp test), against Madeira's
  * WiniosGamepad.c at the pin: what Wine's XInput reads back (through
  * winios_gamepad_get_state, the call libwin32u_unix.a makes) after each
- * writer, a writer thread racing a reader, and the count of the game's state
- * reads. Host only: on the device the reader is win32u's ios_gamepad_query,
- * which this cannot stand in for (it calls the counting hook, madeira-unix 0247).
+ * writer, a writer thread racing a reader, the count of the game's state
+ * reads and the dev log's summary of them. Host only: on the device the
+ * reader is win32u's ios_gamepad_query, which this cannot stand in for (it
+ * calls the reporting hook, madeira-unix 0247 and 0273).
  */
 #include "host_io.h"
 #include "WiniosGamepad.h"
 
 #include <pthread.h>
 #include <stdio.h>
+#include <string.h>
 #include <time.h>
 
 static int failures;
@@ -33,12 +35,12 @@ static void *writer(void *arg)
 
 #define STATE_READS 100000
 
-/* A game thread asking for XInput state. */
+/* A game thread asking for XInput state of an empty slot. */
 static void *state_reader(void *arg)
 {
     int i;
     (void)arg;
-    for (i = 0; i < STATE_READS; i++) playport_gamepad_state_read();
+    for (i = 0; i < STATE_READS; i++) playport_gamepad_query(1, 0, 0, 0, 0);
     return NULL;
 }
 
@@ -90,23 +92,53 @@ int main(void)
     CHECK(!winios_gamepad_get_state(3, &g) && g.buttons == 0 && g.connected == 0);
     CHECK(host_pads_release_all() == 0);
 
-    /* The game's XInput state reads (win32u's ios_gamepad_query, patches/madeira-unix 0247,
-     * calls the hook): none yet, as the app's own snapshot reads above (release_all) and
-     * writes are not the game's; each call is one, from any thread. */
-    CHECK(host_pad_state_reads() == 0);
-    playport_gamepad_state_read();
-    playport_gamepad_state_read();
-    CHECK(host_pad_state_reads() == 2);
+    /* The game's XInput requests (win32u's ios_gamepad_query, patches/madeira-unix 0247 and
+     * 0273, calls the hook): none yet, as the app's own snapshot reads above (release_all) and
+     * writes are not the game's; each state request is one, from any thread; capability
+     * requests are not. No request, no summary. */
     {
+        char line[512];
+        CHECK(host_pad_state_reads() == 0);
+        CHECK(host_pad_xinput_summary(line, sizeof line) == 0);
+        playport_gamepad_query(0, 1, 1, 0, 0);
+        CHECK(host_pad_state_reads() == 0);
+        CHECK(host_pad_xinput_summary(line, sizeof line) == 0);
+        playport_gamepad_query(0, 0, 1, 5, 0x1000);
+        playport_gamepad_query(0, 0, 1, 5, 0x1000);
+        playport_gamepad_query(0, 0, 1, 6, 0x0001);
+        playport_gamepad_query(4, 0, 1, 7, 0x8000);   /* out of range: not counted */
+        playport_gamepad_query(2, 0, 0, 0, 0);
+        CHECK(host_pad_state_reads() == 4);
+        CHECK(host_pad_xinput_summary(line, sizeof line) > 0);
+        CHECK(!strcmp(line, "4 state reads (from a pad: slot 0 3, 1 0, 2 0, 3 0), last slot 2 "
+                            "ERROR_DEVICE_NOT_CONNECTED, 2 packet changes, buttons seen 0x1001, "
+                            "1 capability requests"));
+        /* The summary takes its window: nothing new, nothing to say; the total stays.
+         * The same packet as the slot's last answer is no change. */
+        CHECK(host_pad_xinput_summary(line, sizeof line) == 0);
+        playport_gamepad_query(0, 0, 1, 6, 0);
+        CHECK(host_pad_xinput_summary(line, sizeof line) > 0);
+        CHECK(!strcmp(line, "1 state reads (from a pad: slot 0 1, 1 0, 2 0, 3 0), last slot 0 "
+                            "ERROR_SUCCESS, 0 packet changes, buttons seen 0x0000, "
+                            "0 capability requests"));
+        /* A short buffer holds what fits. */
+        playport_gamepad_query(0, 0, 1, 6, 0);
+        CHECK(host_pad_xinput_summary(line, 8) == 7 && !strcmp(line, "1 state"));
+        CHECK(host_pad_state_reads() == 6);
+    }
+    {
+        char line[512];
         pthread_t r[2];
         pthread_create(&r[0], NULL, state_reader, NULL);
         pthread_create(&r[1], NULL, state_reader, NULL);
         pthread_join(r[0], NULL);
         pthread_join(r[1], NULL);
+        CHECK(host_pad_xinput_summary(line, sizeof line) > 0);
+        CHECK(!strncmp(line, "200000 state reads (from a pad: slot 0 0,", 41));
     }
-    CHECK(host_pad_state_reads() == 2 + 2 * STATE_READS);
+    CHECK(host_pad_state_reads() == 6 + 2 * STATE_READS);
     host_pads_release_all();
-    CHECK(host_pad_state_reads() == 2 + 2 * STATE_READS);
+    CHECK(host_pad_state_reads() == 6 + 2 * STATE_READS);
 
     /* A writer racing a reader: every read is one whole state (the writer
      * derives every field from one k). */

@@ -28,15 +28,28 @@ void host_pad_set(int slot, const hio_pad_state *st);
 void host_pad_disconnect(int slot);
 int host_pads_release_all(void);
 
-/* The game's XInput state reads (hio_pads.c). win32u's ios_gamepad_query calls
- * playport_gamepad_state_read once for each XInputGetState, any slot, connected
- * or not (patches/madeira-unix/0247, a weak reference: a runtime without the
- * patch never calls it); the app's own snapshot reads do not count.
- * host_pad_state_reads is the total since the process started, i.e. this
- * game's (decision 0029): the suggested layout (PlayportKit LayoutSuggestion)
- * offers Keyboard & mouse to a game on Gamepad that made none. Lock-free. */
-void playport_gamepad_state_read(void);
+/* The game's XInput requests (hio_pads.c). win32u's ios_gamepad_query calls
+ * playport_gamepad_query for each request after reading the slot
+ * (patches/madeira-unix 0247 and 0273, a weak reference: a runtime without
+ * them never calls it): op 0 is a state request (XInputGetState and
+ * GetStateEx; xinput's SetState, Enable and battery query ask for one too),
+ * op 1 a capability request; connected, packet and buttons are what the slot
+ * answered (0 for an empty slot, which XInput reports as
+ * ERROR_DEVICE_NOT_CONNECTED). The app's own snapshot reads do not come here.
+ * host_pad_state_reads is the state requests' total since the process
+ * started, i.e. this game's (decision 0029): the suggested layout (PlayportKit
+ * LayoutSuggestion) offers Keyboard & mouse to a game on Gamepad that made
+ * none. host_pad_xinput_summary writes the dev log's line about the requests
+ * since the last line it wrote into buf (reads, from which slots, the last
+ * answer, packet changes seen, the buttons seen, capability requests) and
+ * returns its length, or 0 and writes nothing (taking nothing) when the game
+ * made no state request since.
+ * Lock-free; the summary's counters are taken one by one, so a request racing
+ * it lands in this line or the next. */
+void playport_gamepad_query(unsigned int index, unsigned int op, int connected, uint32_t packet,
+                            uint16_t buttons);
 uint64_t host_pad_state_reads(void);
+int host_pad_xinput_summary(char *buf, unsigned int size);
 
 /* The scan code of a posted virtual key (hio_keys.c): 0xE0xx for the keys a
  * real keyboard sends with the E0 prefix and whose scan code is the same on
