@@ -347,3 +347,43 @@ first-frame+90 --shot --wait 300`.
   happened before the flush. Still open: where the destination comes from, why each store costs
   about 4 ms, and what the same loop writes on Linux. This is the next blocker. It is not an x18
   rewrite gap.
+
+## The read-write view was never one with the copy; retail reaches its login screen (madeira-unix 0271)
+
+- **Correction to the last part.** The loop at +0xb51e0..+0xb5214 does not run slowly. Its last
+  instruction (`b +0xb51e4`) starts the 0x1000-byte copy again, without end. The 2 s dump caught it
+  0x94d bytes in and the 10 s dump 0x1d3 bytes in. The process ran at IPC 7.7 with 296 of 303 ms in
+  user time per sample, so no store traps. The about 75 Mach messages/s came from other threads.
+  The destination is the caller's x9, which held the PEB.
+- **Runtime cause.** Run 20261101T102407's remap lines read `0 bytes of other views made one with
+  it` for all three views. The copy started at 0x10a5b3000: the pool shift (ml141) had moved the
+  copy 0x3000 past a 16 KB page so that `.data` would start on one (`[data-align] Wow-arm64.exe
+  shifted +0x3000`). The client's read-write view of its section (0x7043c60000) is page aligned, so
+  no page of it could be `vm_remap`ped onto the copy (0264), and the two stayed separate memory.
+  A write through the view reached the copy only on a flush, and a write at the base never reached
+  the view. On Windows they are one memory, and the client wrote the 1 KB window at RVA 0xb5000
+  through that view.
+- **Fix (0271, `pp_copy_align.h`).** In a native ARM64 child, whose copy is the image, the copy is
+  shifted only when an executable section reaches into the page its first writable section starts
+  in. Otherwise it starts on a page, as Windows starts an image on 64 KB. x86-64 and ARM64EC
+  processes keep the shift. Host test: `tools/tests/test_copy_align.py` (retail's layout, `.text`
+  ending in `.data`'s page, code later in that page, aligned and read-only layouts).
+- **Run 20261101T104647** (fix plus the spin-dump diagnostic, IPA
+  `6bf94f3b5e991516d76d07f0c1132a17789f448824601f40e51eb04d2a70e595`, not kept): the copy is at
+  0x10a378000, and the remap lines read 0x4320000, 0x28a0000 and 0x208000 bytes made one (all but
+  the last 0x3000). The client flushes the window and then its 59,820 KB of rewritten .text, which is
+  x18-patched (trampolines 0x27765c of 0x7c8000). First window at +31.5 s and first frame at +32.1 s.
+  The stop screenshot shows the login screen: Email or Phone, Password, Remember Account, Log In,
+  Create Account, Menu, Quit, "Version 12.1.5 (70688) (Release arm64)", with the Screen Narrator
+  prompt over it. The background is black, with no login scene. `Logs/gx.log` (pulled into the
+  run's `wow/`): `World of Warcraft Retail ARM64 12.1.5.70688`, `Force API D3D12`, `"Apple A19 Pro
+  GPU" 3GB … dx12:true`, `D3d12 Device Create Successful (782.3 ms)`, `Using shader family dx_5_0`.
+
+Gates on IPA `fce8b0f432902b8567cd35e29205605ecd13a82eae5d9c3d811a12739c82ff06` (the 0271 build):
+
+| Check | Result | Run |
+|---|---|---|
+| Hollow Knight first-frame+10 | first frame at +9.84 s, passes | 20261101T110018 |
+| `arm64` probe | exit 0x2a (all checks pass) | 20261101T110124 |
+| `d3d12` probe on Vulkan | exit 0 | 20261101T110227 |
+| `./pp test --quick` | all passed | host |

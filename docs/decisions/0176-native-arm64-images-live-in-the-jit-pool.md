@@ -66,6 +66,10 @@ code only through the pool's RW alias, so no section view can sit there.
   section is recorded with the section's file and offset; the views of a section that is mapped
   at a copy are `vm_remap`ped onto the copy's RW alias, so a write through them is a write to the
   code that runs, as on Windows. The backing stores keep the section's bytes as of the remap.
+  That needs the copy and the view host-page aligned alike: since madeira-unix 0271 a native
+  child's copy starts on a 16 KB page unless code shares its first writable section's page (other
+  processes still shift the copy so that section starts a page, which left retail's copy 0x3000
+  past one and none of its read-write view one with the copy).
 - **`FlushInstructionCache` on such a view, or on a presented copy,** x18-patches the code
   reachable from the flushed address (fall-through and branches, not calls, up to a RET, BR,
   their authenticated forms RETAA/RETAB/BRAA/BRAB(Z), a UDF or an unallocated word) from the rest
