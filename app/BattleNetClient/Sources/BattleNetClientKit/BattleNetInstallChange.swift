@@ -48,19 +48,22 @@ extension BattleNetInstaller {
         let build = try await client.build(product, info.region)
         guard build.version.buildConfig == info.buildKey else { throw BattleNetError.outdated(installed: info.version, current: build.version.versionsName) }
         let r = try await read(build, work: work)
-        func options(_ locale: String) -> BattleNetInstallOptions { Self.options(locale, build: build, installed: info) }
-        let installed = try BattleNetSelection(build: build, download: r.download, install: r.install, encoding: r.encoding, options: options(old))
+        let installed = try BattleNetSelection(build: build, download: r.download, install: r.install, encoding: r.encoding,
+                                               options: BattleNetInstallOptions(locale: old))
         let have = Set(installed.files.map { "\($0.path)|\($0.ckey)" })
-        let selection = try BattleNetSelection(build: build, download: r.download, install: r.install, encoding: r.encoding, options: options(locale))
-            .without { have.contains("\($0.path)|\($0.ckey)") && InstallFS.fileSize(root.appendingPathComponent($0.path)) == $0.size }
+        let options = BattleNetInstallOptions(locale: locale)
+        let full = try BattleNetSelection(build: build, download: r.download, install: r.install, encoding: r.encoding, options: options)
+        let clientPath = try Self.clientPath(full, build)
+        let selection = full.without { have.contains("\($0.path)|\($0.ckey)") && InstallFS.fileSize(root.appendingPathComponent($0.path)) == $0.size }
 
         let (stored, lastDataFile) = try Self.stored(root)
         let present = Set(selection.objects.map(\.key).filter { stored.contains(Self.key9($0)) })
         let locations = try await locate(selection.wanted(besides: present), r.cdnConfig.archives, meta: r.meta, build: build, installed: root)
         let plan = try BattleNetInstallPlan(build: build, archives: r.cdnConfig.archives, selection: selection, locations: locations,
-                                            options: options(locale), present: present, firstDataFile: lastDataFile + 1)
+                                            options: options, present: present, firstDataFile: lastDataFile + 1)
         log.info("battlenet", "\(product.code) \(old) → \(locale): \(plan.objects) objects, \(plan.files.count) files, \(plan.fetchBytes) bytes to fetch")
-        return Prepared(plan: plan, cdnConfig: r.cdnConfig, configs: [], indexes: [], installSize: info.installSize, client: r.client)
+        return Prepared(plan: plan, cdnConfig: r.cdnConfig, configs: [], indexes: [], installSize: info.installSize, client: r.client,
+                        clientPath: clientPath)
     }
 
     /// A key as a journal names it: its first 9 bytes.
@@ -88,15 +91,6 @@ extension BattleNetInstaller {
     }
 
     // MARK: adding to an installed store
-
-    /// The install's options in `locale` for `build`: the x64 client too when the install's tags
-    /// name its machine.
-    static func options(_ locale: String, build: BattleNetBuild, installed info: BuildInfo) -> BattleNetInstallOptions {
-        let tags = Set(info.tags.split(separator: ":").first.map { $0.split(separator: " ").map(String.init) } ?? [])
-        var o = BattleNetInstallOptions(locale: locale)
-        o.x64Client = build.productConfig.x64Tags.contains(where: tags.contains)
-        return o
-    }
 
     /// What the store at `root` holds: its journals' keys (9 bytes, `key9`) and its last data
     /// file's number (-1 for none).
@@ -162,6 +156,11 @@ extension BuildInfo {
             return nil
         }
         return words[at + 1]
+    }
+
+    /// The install holds the x64 client: its tags name `x86_64` (BattleNetProduct.x64ClientTag).
+    public var hasX64Client: Bool {
+        tags.split(separator: ":").contains { $0.split(separator: " ").contains { $0 == BattleNetProduct.x64ClientTag } }
     }
 
     /// The tags with the region's tag, the locale, or both replaced; every other tag kept.

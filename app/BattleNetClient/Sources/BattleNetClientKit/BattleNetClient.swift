@@ -13,25 +13,24 @@ public struct BattleNetBuild: Sendable, Equatable {
     public let productConfig: ProductConfig
 }
 
-/// Whether a build is offered (decision 0174): only while it carries its ARM64 client, the
-/// product config's ARM64 executable listed in the install manifest with the platform and ARM64
-/// tags.
+/// Whether a build is offered (decisions 0174 and 0177): only while it carries its x64 client, the
+/// product config's x64 executable listed in the install manifest with the platform and x64 tags.
 public struct BattleNetOffer: Sendable, Equatable {
     public let build: BattleNetBuild
     public let install: InstallManifest
-    /// The ARM64 client's entry, when the build has one.
-    public let arm64Client: InstallManifest.File?
+    /// The x64 client's entry, when the build has one.
+    public let client: InstallManifest.File?
 
-    public var isOffered: Bool { arm64Client != nil }
+    public var isOffered: Bool { client != nil }
 
     public init(build: BattleNetBuild, install: InstallManifest) {
         self.build = build
         self.install = install
         let pc = build.productConfig
-        arm64Client = pc.arm64Executable.flatMap { exe in
+        client = pc.x64Executable.flatMap { exe in
             install.files.indices.first {
                 install.files[$0].name.caseInsensitiveCompare(exe) == .orderedSame
-                    && install.file($0, has: pc.platformTags + pc.arm64Tags) && !pc.arm64Tags.isEmpty
+                    && install.file($0, has: pc.platformTags + pc.x64Tags) && !pc.x64Tags.isEmpty
             }.map { install.files[$0] }
         }
     }
@@ -208,9 +207,9 @@ public struct BattleNetClient: Sendable {
         return BattleNetOffer(build: build, install: try await installManifest(build))
     }
 
-    /// The download and install sizes of an offered build's ARM64 client in one locale and region.
+    /// The download and install sizes of an offered build's x64 client in one locale and region.
     public func sizes(_ offer: BattleNetOffer, locale: String) async throws -> BattleNetSizes {
-        let query = TagQuery.arm64(offer.build.productConfig, locale: locale, regions: [offer.build.region])
+        let query = TagQuery.client(offer.build.productConfig, locale: locale, regions: [offer.build.region])
         return try BattleNetSizes(size: try await sizeManifest(offer.build), install: offer.install, query: query)
     }
 

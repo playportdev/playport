@@ -32,10 +32,11 @@ public struct TagQuery: Sendable, Equatable {
         self.excluded = excluded
     }
 
-    /// The Windows ARM64 client in one locale for the given regions: platform and ARM64 tags from
-    /// the product config, both content categories, and not the Alternate (censored) data.
-    public static func arm64(_ product: ProductConfig, locale: String, regions: [StoreRegion]) -> TagQuery {
-        TagQuery(tags: product.platformTags + product.arm64Tags + [locale] + regions.map(\.tag) + ["speech", "text"],
+    /// The Windows x64 client (decision 0177) in one locale for the given regions: platform and
+    /// x64 tags from the product config, both content categories, and not the Alternate
+    /// (censored) data. Nothing of the ARM64 client: its tags are not asked for.
+    public static func client(_ product: ProductConfig, locale: String, regions: [StoreRegion]) -> TagQuery {
+        TagQuery(tags: product.platformTags + product.x64Tags + [locale] + regions.map(\.tag) + ["speech", "text"],
                  excluded: ["Alternate"])
     }
 

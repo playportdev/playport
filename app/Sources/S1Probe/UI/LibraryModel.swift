@@ -64,6 +64,8 @@ final class LibraryModel: ObservableObject {
     private(set) var updatePlay: (id: String, task: Task<Bool, Never>)?
     /// A refresh asked for while a scan ran: its scan may predate the change.
     private var rescan = false
+    /// Waiting in `settled()` for the running scan, and any rescan asked during it, to be adopted.
+    private var settling: [CheckedContinuation<Void, Never>] = []
     private let store = CatalogStore(url: LibraryModel.paths.catalog)
 
     private init() {
@@ -186,6 +188,19 @@ final class LibraryModel: ObservableObject {
             rescan = false
             refresh()
         }
+        // No scan pending (a rescan that could not start, a title running, leaves none either).
+        if !scanning {
+            let waiting = settling
+            settling = []
+            for c in waiting { c.resume() }
+        }
+    }
+
+    /// Returns once the running scan, and a rescan asked for while it ran, has been adopted; at once
+    /// when no scan runs. What a refresh found on disk (an update's new client) is then the catalogue's.
+    func settled() async {
+        guard scanning else { return }
+        await withCheckedContinuation { settling.append($0) }
     }
 
     func title(_ id: String) -> InstalledTitle? { catalog.title(id: id) }
@@ -201,11 +216,13 @@ final class LibraryModel: ObservableObject {
     /// asks, an ownership token. When they cannot be had it does not start; the player gets Try again,
     /// and for a game that may run offline Play offline (`epicOffline`), which starts it as before
     /// step 1 of the store game sign-in plan, with no sign-in arguments.
-    /// A Battle.net copy follows PlayportKit's BattleNetPlay (PLA-514, PLA-521): the ban-risk notice first
-    /// (false while it is up; accepted, the Play goes on as `noticePlay`), then the update check: a newer
-    /// build that fits is updated through Downloads (false; the Play goes on as `updatePlay` once it
-    /// finished), one that does not is refused, a failed check is said on the launch screen; then its
-    /// ARM64 client on Vulkan. `battleNetUpdate`: the check's answer when the Play already has it.
+    /// A Battle.net copy follows PlayportKit's BattleNetPlay (PLA-514, PLA-521, decision 0177): the
+    /// ban-risk notice first (false while it is up; accepted, the Play goes on as `noticePlay`), then
+    /// the update check: a newer build, or the x64 client an install from before 0177 lacks, that fits
+    /// is updated through Downloads (false; the Play goes on as `updatePlay` once it finished), one that
+    /// does not is refused, a failed check is said on the launch screen; then a copy whose client is not
+    /// the x64 one is refused, and the x64 client starts through FEX on Vulkan. `battleNetUpdate`: the
+    /// check's answer when the Play already has it.
     /// `continuing`: the Play goes on after Playport's restart that followed its prerequisites
     /// (AppRestart.continuePlay, decision 0084): no cloud save check (the Play passed it a few
     /// seconds ago) and no prerequisites, so it cannot restart again.
@@ -213,10 +230,10 @@ final class LibraryModel: ObservableObject {
     func play(_ id: String, epicOffline: Bool = false, continuing: Bool = false,
               battleNetUpdate: BattleNetPlay.Update? = nil) async throws -> Bool {
         guard catalog.title(id: id)?.canPlay == true, !TitleLaunch.shared.running, !TitleLaunch.shared.spent else { return false }
-        // A Battle.net copy (PLA-514, decision 0175): the ban-risk notice before its first Play, which
-        // goes on once accepted; declined, nothing starts. A client that is not the ARM64 one is refused.
-        // Then the update check (PLA-521), not while a download of the copy is queued; while it runs the
-        // Play button says so and a second Play does not start another check.
+        // A Battle.net copy (PLA-514, decisions 0175 and 0177): the ban-risk notice before its first Play,
+        // which goes on once accepted; declined, nothing starts. Then the update check (PLA-521), not while
+        // a download of the copy is queued; while it runs the Play button says so and a second Play does not
+        // start another check. A client that is not the x64 one is refused after it.
         var bnetLaunch: BattleNetPlay.Launch?
         if let t = catalog.title(id: id), BattleNet.product(t.key) != nil {
             let installs = SteamAccountModel.current?.installs
@@ -299,14 +316,14 @@ final class LibraryModel: ObservableObject {
         #else
         var settings = LaunchSettingsStore.shared.effective(for: t)
         #endif
-        // A Battle.net copy's client: a native ARM64 child (decision 0170) drawing with Direct3D 12 through
-        // vkd3d-proton on Vulkan, whatever the graphics settings say. Its Config.wtf first gets the install's
+        // A Battle.net copy's client: Blizzard's x64 client through FEX (decision 0177) drawing with Direct3D 12
+        // through vkd3d-proton on Vulkan, whatever the graphics settings say. Its Config.wtf first gets the install's
         // language and region where it names none (else WoW asks in a Win32 box) and Direct3D 12 pinned.
         if let bnet = bnetLaunch {
             if let product = BattleNet.product(t.key) { BattleNetInstalled.shared.prepareForPlay(product) }
             settings.graphics = bnet.graphics
             plan.args += bnet.arguments.filter { arg in !plan.args.contains { $0.caseInsensitiveCompare(arg) == .orderedSame } }
-            Self.log("play \(t.name): Battle.net's ARM64 client as a native ARM64 child on \(bnet.graphics.rawValue), "
+            Self.log("play \(t.name): Battle.net's x64 client through FEX on \(bnet.graphics.rawValue), "
                      + "\(bnet.arguments.joined(separator: " ")), Config.wtf's GxApi D3D12 and GamePadEnable; WoW asks for its own sign-in")
         }
         // A game whose Play starts a publisher's launcher runs with its Open's grace, graphics
@@ -721,9 +738,14 @@ final class LibraryModel: ObservableObject {
     }
 
     /// A Battle.net Play goes on once the update it queued finished (BattleNetInstalled.finished):
-    /// the check is not asked again.
+    /// the check is not asked again. Downloads asked for a library refresh just before; the Play
+    /// waits for it, so it starts the client the update installed (the x64 one, decision 0177),
+    /// not the one the catalogue named before.
     func playAfterUpdate(_ id: String) {
-        updatePlay = (id, Task { (try? await self.play(id, battleNetUpdate: .updated)) ?? false })
+        updatePlay = (id, Task {
+            await self.settled()
+            return (try? await self.play(id, battleNetUpdate: .updated)) ?? false
+        })
     }
 
     /// The Cloud save conflict screen for the game's open conflicts; `thenPlay` starts it once settled.

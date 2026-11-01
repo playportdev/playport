@@ -52,6 +52,7 @@
 //   update:bnet-<code>[=install] An installed Battle.net product's page and its Check for
 //                              update, with what it found logged; =install also queues the
 //                              update and waits until the receipt and .build.info name it
+//                              and the copy's client is the x64 one (decision 0177)
 //   queue:<app id>             Install from Steam, as a game page's Install does, and go on
 //                              at once: the download runs in the queue (SteamInstalls)
 //   downloading:<app id>       Waits (2 min at most) until the queue runs that app's download
@@ -902,7 +903,7 @@ enum UIDriver {
                                 return finish("action=\(action) refused: the ban-risk notice asks first; "
                                               + "notice:\(id)=accept or notice:\(id)=decline answers it as the player does")
                             }
-                            // A Battle.net copy whose client is not the ARM64 one: its refusal is up.
+                            // A Battle.net copy whose client is not the x64 one: its refusal is up.
                             if case .picker = PadModal.shared.content {
                                 try await pause(.milliseconds(1000))
                                 return finish("action=\(action) refused: \(PadModal.shared.summary ?? "a picker")")
@@ -1211,7 +1212,7 @@ enum UIDriver {
         let parts = spec.split(separator: "=", maxSplits: 1).map(String.init)
         guard let key = StoreGameKey(titleID: parts[0]), let p = BattleNet.product(key) else { return "\(parts[0]) is not a Battle.net product" }
         if LibraryModel.shared.title(key.titleID) != nil { return try await battleNetInstalledRegion(key, p, parts.count > 1 ? parts[1] : nil) }
-        guard try await battleNetOffered(key) else { return "\(key.id) is not offered (\(BattleNetStore.shared.error ?? "no ARM64 client"))" }
+        guard try await battleNetOffered(key) else { return "\(key.id) is not offered (\(BattleNetStore.shared.error ?? "no x64 client"))" }
         let store = BattleNetStore.shared
         AppNavigation.shared.openGame(.store(key))
         try await pause(.milliseconds(500))
@@ -1312,8 +1313,9 @@ enum UIDriver {
 
     /// `bnet-<code>[=install]`: an installed product's page and its Check for update, with what it
     /// found logged (a failed check too: the page shows it). `=install` also queues the update it
-    /// found and waits until the receipt and `.build.info` name the new version and Play shows
-    /// again; it fails when the check failed or found nothing newer.
+    /// found and waits until the receipt and `.build.info` name the new version, the copy's client
+    /// is the x64 one (an install from before decision 0177 gets it by an update at its own build)
+    /// and Play shows again; it fails when the check failed or found nothing to update.
     private static func battleNetUpdate(_ spec: String) async throws -> String? {
         let parts = spec.split(separator: "=", maxSplits: 1).map(String.init)
         guard let key = StoreGameKey(titleID: parts[0]), let p = BattleNet.product(key) else { return "\(parts[0]) is not a Battle.net product" }
@@ -1351,10 +1353,14 @@ enum UIDriver {
             }
             try await pause(.milliseconds(250))
         }
+        await library.settled()
         let now = installed()
-        let playShown = library.title(key.titleID)?.canPlay == true && installs.jobs[key] == nil
-        log("update \(key.titleID): \(before) → \(now) after \(Int(Date().timeIntervalSince(started))) s; play=\(playShown ? "shown" : "hidden")")
+        let t = library.title(key.titleID)
+        let playShown = t?.canPlay == true && installs.jobs[key] == nil
+        log("update \(key.titleID): \(before) → \(now) after \(Int(Date().timeIntervalSince(started))) s; client \(t?.executable ?? "none") "
+            + "machine \(t?.executableMachine.map { String(format: "0x%04X", $0) } ?? "unread"); play=\(playShown ? "shown" : "hidden")")
         guard now == "\(version)/\(version)" else { return "receipt/.build.info say \(now), not \(version)" }
+        guard t?.executableMachine == 0x8664 else { return "the copy's client \(t?.executable ?? "none") is not the x64 one" }
         guard playShown else { return "Play is not available after the update" }
         return nil
     }
@@ -1410,7 +1416,7 @@ enum UIDriver {
         let store = BattleNetStore.shared, library = LibraryModel.shared
         let key = StoreGameKey(store: .battlenet, id: code)
         guard let p = BattleNet.product(key) else { return "\(code) is not a Battle.net product" }
-        guard try await battleNetOffered(key) else { return "\(code) is not offered (\(store.error ?? "no ARM64 client"))" }
+        guard try await battleNetOffered(key) else { return "\(code) is not offered (\(store.error ?? "no x64 client"))" }
         guard let installs = SteamAccountModel.current?.installs else { return "no download queue" }
         guard library.title(key.titleID) == nil else { return "\(key.titleID) is already installed" }
         AppNavigation.shared.openGame(.store(key))

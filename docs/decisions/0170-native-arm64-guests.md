@@ -16,6 +16,8 @@ whose copy is the module's base. World of Warcraft's own client does not reach i
 ([PLA-514](https://linear.app/playportdev/issue/PLA-514),
 [evidence](../evidence/2026-10-31-wow-arm64-start.md)).
 
+**Amended 2026-11-01 by [0177](0177-wow-plays-its-x64-client-through-fex.md):** World of Warcraft plays its x64 client through FEX; the native ARM64 child stays for other native ARM64 programs and Playport's probes, and "where a game ships an ARM64 client, Playport runs that client only" no longer applies to WoW.
+
 ## Decision
 
 - **Native ARM64 games come into scope,** starting with World of Warcraft's `Wow*-ARM64.exe`.

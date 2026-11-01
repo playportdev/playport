@@ -2,13 +2,12 @@
 import Foundation
 import ContentKit
 
-/// What an install takes: the locale, the region-tagged data to keep (every store region by
-/// default, so a later region change downloads nothing), and whether the x64 client comes too.
+/// What an install takes: the locale and the region-tagged data to keep (every store region by
+/// default, so a later region change downloads nothing). The machine is always the x64 client's
+/// (decision 0177).
 public struct BattleNetInstallOptions: Sendable, Equatable {
     public var locale: String
     public var regions: [StoreRegion] = StoreRegion.allCases
-    /// Also the x64 client (`Wow.exe`) and its data, beside the ARM64 one.
-    public var x64Client = false
     /// Data files are cut at this size (the store's offsets are 30 bits).
     public var maxDataFileSize: UInt64 = CASC.maxDataFileSize
     /// One ranged read covers neighbouring objects of an archive up to this many bytes…
@@ -18,12 +17,9 @@ public struct BattleNetInstallOptions: Sendable, Equatable {
 
     public init(locale: String) { self.locale = locale }
 
-    /// The manifest tag query: the platform, the machines, the locale, the regions and both
-    /// content categories, without the Alternate (censored) data.
+    /// The manifest tag query: the x64 client's (TagQuery.client) in the locale and regions.
     public func query(_ product: ProductConfig) -> TagQuery {
-        TagQuery(tags: product.platformTags + product.arm64Tags + (x64Client ? product.x64Tags : []) + [locale]
-                     + regions.map(\.tag) + ["speech", "text"],
-                 excluded: ["Alternate"])
+        TagQuery.client(product, locale: locale, regions: regions)
     }
 }
 
@@ -38,7 +34,7 @@ public struct BattleNetSelection: Sendable {
     }
 
     public struct File: Sendable, Equatable {
-        /// Under the install root, `/`-separated: `_retail_/Wow-ARM64.exe`.
+        /// Under the install root, `/`-separated: `_retail_/Wow.exe`.
         public let path: String
         public let size: UInt64
         public let ckey: TACTHash
@@ -50,10 +46,10 @@ public struct BattleNetSelection: Sendable {
     public let objects: [Object]
     public let files: [File]
 
-    /// The product config's ARM64 client among the files (`_retail_/Wow-ARM64.exe`); nil when
-    /// the selection does not hold it.
-    public func arm64Client(_ product: ProductConfig) -> File? {
-        guard let exe = product.arm64Executable else { return nil }
+    /// The product config's x64 client among the files, as the install manifest spells it
+    /// (`_retail_/Wow.exe` for the config's `WoW.exe`); nil when the selection does not hold it.
+    public func client(_ product: ProductConfig) -> File? {
+        guard let exe = product.x64Executable else { return nil }
         let want = (product.folder + "/" + exe.replacingOccurrences(of: "\\", with: "/")).lowercased()
         return files.first { $0.path.lowercased() == want }
     }
@@ -96,14 +92,13 @@ public struct BattleNetSelection: Sendable {
 
         // Product folder files, each directory spelled as it first appears (the manifest mixes
         // `UTILS` and `Utils`, which a case-sensitive volume would make two folders). The x64 and
-        // ARM64 clients share some names under `Utils` with different builds of the file; with
-        // both clients the x64 one's file is kept (the ARM64 executable is still there, its
-        // browser and voice helpers are not).
+        // ARM64 clients share some names under `Utils` with different builds of the file; where
+        // one name is selected twice, the x64 one's file is kept.
         var spelling = [String: String]()
         var names = Set<String>()
         var byPath = [String: Int]()
         var chosen = [Int]()
-        let preferred = options.x64Client ? build.productConfig.x64Tags : build.productConfig.arm64Tags
+        let preferred = build.productConfig.x64Tags
         for i in try install.selectIndexes(query) {
             let path = install.files[i].name.lowercased()
             if let earlier = byPath[path] {
@@ -222,8 +217,8 @@ public struct BattleNetInstallPlan: Sendable {
     public let fetchBytes: UInt64
 
     public var files: [BattleNetSelection.File] { selection.files }
-    /// The ARM64 client Play starts, when the plan installs it.
-    public var arm64Client: BattleNetSelection.File? { selection.arm64Client(build.productConfig) }
+    /// The x64 client Play starts, when the plan installs it.
+    public var client: BattleNetSelection.File? { selection.client(build.productConfig) }
 
     /// `present` objects are already in the store and are left out; data files are numbered
     /// from `firstDataFile` (an update appends to a store, PLA-521).

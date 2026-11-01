@@ -5,6 +5,8 @@ decisions for the World of Warcraft work ([PLA-514](https://linear.app/playportd
 Amends [0170](0170-native-arm64-guests.md) and [0175](0175-anti-cheat-refusal-scope.md)
 ("never patched" now covers the game's files, not its memory).
 
+**Amended 2026-11-01 by [0177](0177-wow-plays-its-x64-client-through-fex.md):** World of Warcraft no longer runs as a native ARM64 child; what follows applies to other native ARM64 programs, and its amendment of 0175 is replaced by 0177's.
+
 ## Decision
 
 - **The pool copy is the image.** For every PE image mapped into a native ARM64 child (0170): the

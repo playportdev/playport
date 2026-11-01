@@ -82,7 +82,7 @@ struct BattleNetChunkSource: ContentChunkSource {
 ///     <root>/Data/config/xx/yy/<hash>   build, CDN and key ring configs
 ///     <root>/Data/indices/<hash>.index  every CDN index and the archive group
 ///     <root>/Data/data/data.NNN, *.idx  the store and its sixteen journals
-///     <root>/<product folder>/          the install manifest's files (`_retail_/Wow-ARM64.exe`)
+///     <root>/<product folder>/          the install manifest's files (`_retail_/Wow.exe`)
 ///
 /// The work area (`work`, beside the root by default) keeps the CDN's indexes and manifests,
 /// ContentKit's stage and its journal, so an interrupted install resumes where it stopped; the
@@ -113,6 +113,10 @@ public struct BattleNetInstaller: Sendable {
         public let installSize: UInt64
         /// The client with the build's key ring added.
         public let client: BattleNetClient
+        /// The x64 client Play starts, under the install root as the install manifest spells it
+        /// (`_retail_/Wow.exe`): from the build's whole selection, so an update that leaves the
+        /// client's file alone (it is on disk already) names it too.
+        public let clientPath: String
     }
 
     public struct Result: Sendable {
@@ -136,12 +140,9 @@ public struct BattleNetInstaller: Sendable {
         let build = try await client.build(product, region)
         let r = try await read(build, work: work)
         let selection = try BattleNetSelection(build: build, download: r.download, install: r.install, encoding: r.encoding, options: options)
-        // Play starts only the ARM64 client (decision 0174): a build whose selection lacks it is
+        // Play starts only the x64 client (decision 0177): a build whose selection lacks it is
         // refused here, before any of it is downloaded.
-        guard selection.arm64Client(build.productConfig) != nil else {
-            throw BattleNetError.unsupported("\(product.code) \(build.version.versionsName): the install has no ARM64 client "
-                                             + "(\(build.productConfig.arm64Executable ?? "none named"))")
-        }
+        let clientPath = try Self.clientPath(selection, build)
         let cdnConfig = r.cdnConfig, meta = r.meta
 
         log.info("battlenet", "\(cdnConfig.archives.count) archive indexes")
@@ -150,7 +151,17 @@ public struct BattleNetInstaller: Sendable {
         let plan = try BattleNetInstallPlan(build: build, archives: cdnConfig.archives, selection: selection, locations: locations,
                                             options: options)
         return Prepared(plan: plan, cdnConfig: cdnConfig, configs: r.configs, indexes: cdnConfig.archives + others,
-                        installSize: Self.installSize(build), client: r.client)
+                        installSize: Self.installSize(build), client: r.client, clientPath: clientPath)
+    }
+
+    /// The x64 client's path in `selection` (Prepared.clientPath); a selection without it is
+    /// refused, since Play starts nothing else.
+    static func clientPath(_ selection: BattleNetSelection, _ build: BattleNetBuild) throws -> String {
+        guard let client = selection.client(build.productConfig) else {
+            throw BattleNetError.unsupported("\(build.product.code) \(build.version.versionsName): the build has no x64 client "
+                                             + "(\(build.productConfig.x64Executable ?? "none named"))")
+        }
+        return client.path
     }
 
     /// The build's patch archive indexes and its file and patch file indexes, which the store
@@ -321,14 +332,13 @@ public struct BattleNetInstaller: Sendable {
     }
 
     /// The `.build.info` row for an install: the store region, the build's keys, its CDN and the
-    /// install's tags.
+    /// install's tags (the x64 client's machine).
     public static func buildInfo(_ prepared: Prepared) -> BuildInfo {
         let plan = prepared.plan, b = plan.build
-        let pc = b.productConfig
         return BuildInfo(region: b.region, buildKey: b.version.buildConfig, cdnKey: b.version.cdnConfig,
                          installKey: b.config.install.ekey, installSize: prepared.installSize, cdnPath: b.cdn.path,
                          cdnHosts: b.cdn.hosts, cdnServers: b.cdn.serverText,
-                         tags: BuildInfo.tags(platform: pc.platformTags, machines: pc.arm64Tags + (plan.options.x64Client ? pc.x64Tags : []),
+                         tags: BuildInfo.tags(platform: b.productConfig.platformTags, machines: b.productConfig.x64Tags,
                                               region: b.region, locale: plan.options.locale),
                          version: b.version.versionsName, product: b.product.code)
     }

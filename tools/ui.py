@@ -243,13 +243,14 @@ best-effort and reported as unconfirmed; transport loss/SIGKILL can leave cancel
                          first Play shows (PLA-514), answered as the player does: decline checks Play
                          does not start; accept keeps the acceptance with the copy and the Play goes on,
                          followed as play: is. play:bnet-CODE is refused while the notice asks; past it,
-                         Play checks for an update first (PLA-521): a newer build is updated through
-                         Downloads and play: follows it to the game's start; a failed check is logged
-                         and the game starts
+                         Play checks for an update first (PLA-521): a newer build, or the x64 client an
+                         install from before decision 0177 lacks, is updated through Downloads and play:
+                         follows it to the game's start; a failed check is logged and the game starts
   update:bnet-CODE[=install]
                          an installed Battle.net product's page and its Check for update, logging what
                          it found (current, available with its size, or why it failed); =install also
                          queues the update it found and waits until .build.info names the new version
+                         and the copy's client is the x64 one
   uninstall:ID, verify:ID
   repair:ID              the game page's Repair from Steam, which it offers after a verify: that did
                          not pass (bad files, or depots to check with Steam again); waits for the job

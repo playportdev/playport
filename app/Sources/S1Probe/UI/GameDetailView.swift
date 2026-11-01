@@ -676,7 +676,9 @@ private struct GameDetailPage: View {
                 case nil: break
                 case .checking?: rows.append(("Update", "Checking…", nil))
                 case let .current(v)?: rows.append(("Update", "Up to date · \(v)", nil))
-                case let .available(from, to, bytes)?: rows.append(("Update", "\(from) → \(to) · \(ByteCount.format(bytes))", .orange))
+                // At the installed build: an install from before decision 0177 getting the x64 client.
+                case let .available(from, to, bytes)?:
+                    rows.append(("Update", (from == to ? "x64 client" : "\(from) → \(to)") + " · \(ByteCount.format(bytes))", .orange))
                 case .unreachable?: rows.append(("Update", "Couldn't check", .orange))
                 }
             }

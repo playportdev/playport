@@ -1,4 +1,4 @@
-# Plan: World of Warcraft through a Battle.net store client and a native ARM64 child
+# Plan: World of Warcraft through a Battle.net store client and its x64 client under FEX
 
 **Linear:** [PLA-508](https://linear.app/playportdev/issue/PLA-508) (under
 [PLA-254](https://linear.app/playportdev/issue/PLA-254); related to
@@ -12,15 +12,22 @@
 phone the store, install, region, language, art and the ban-risk notice pass, and the native
 ARM64 child and the aarch64 `d3d12` probe pass, so 0170 is accepted. Step 5's Done-when run is
 open: WoW Classic Era starts as a native ARM64 child but stops before its login
-([evidence](../evidence/2026-10-31-wow-arm64-start.md), PLA-514).
+([evidence](../evidence/2026-10-31-wow-arm64-start.md), PLA-514). On 2026-11-01 the owner banned
+the runtime changing the game's code in memory, and the ARM64 client cannot run on iOS without its
+x18 rewrite, so [0177](../decisions/0177-wow-plays-its-x64-client-through-fex.md) moves WoW to its
+x64 client (`Wow.exe`, `WowClassic.exe`) through FEX: the store installs and updates the x64
+client, an older ARM64 install gains it through an update, and Play starts it on the Vulkan
+backend with `-d3d12`.
 
 A user asked to play World of Warcraft on the phone. The owner chose a route that never runs the
-Battle.net app: Playport installs WoW itself and runs its native ARM64 Windows client without FEX.
-Records: [0174](../decisions/0174-battle-net-store-client.md) (the store client, proposed),
-[0175](../decisions/0175-anti-cheat-refusal-scope.md) (Warden and the ban-risk notice, proposed,
-amended by 0176), [0170](../decisions/0170-native-arm64-guests.md) (native ARM64 children,
-accepted), [0176](../decisions/0176-native-arm64-images-live-in-the-jit-pool.md) (a native child's
-images live in the JIT pool, accepted).
+Battle.net app: Playport installs WoW itself. It first ran the native ARM64 Windows client without
+FEX (0170, 0176); since 0177 it runs the x64 client through FEX and changes nothing of the game in
+memory. Records: [0174](../decisions/0174-battle-net-store-client.md) (the store client, proposed),
+[0175](../decisions/0175-anti-cheat-refusal-scope.md) (Warden and the ban-risk notice, proposed),
+[0170](../decisions/0170-native-arm64-guests.md) (native ARM64 children, accepted),
+[0176](../decisions/0176-native-arm64-images-live-in-the-jit-pool.md) (a native child's images
+live in the JIT pool, accepted), [0177](../decisions/0177-wow-plays-its-x64-client-through-fex.md)
+(the x64 client through FEX, accepted; amends all four).
 
 ## Done when
 
@@ -47,15 +54,15 @@ character select; the compatibility issue records the run.
 |---|---|
 | Goal | WoW on the phone; Battle.net only as where its files come from |
 | Install | Native Swift store client `app/BattleNetClient` (0174); full install before Play; update check at every Play |
-| Products | Fixed list: WoW retail and the Classic products; a product is offered only while its build has an ARM64 client |
+| Products | Fixed list: WoW retail and the Classic products; a product is offered only while its build has an x64 client (0177; was the ARM64 client) |
 | Region, language | Store region picker defaulting from the phone; the phone's language, `enUS` fallback |
 | CDN | Hosts from the `cdns` endpoint only; a User-Agent naming Playport; bounded concurrency; back-off on 429 |
 | Sign-in | In the game, through the text bar; no Battle.net session in Playport |
-| Client | `Wow*-ARM64.exe` only, as a native ARM64 child on the aarch64 Wine set; two Wine trees stay; no x64 fallback (0170) |
-| Graphics | vkd3d-proton and `vulkan-1` built for aarch64 |
-| Anti-cheat | Warden allowed; ban-risk notice once per title; the client's files never changed (0175). Amended 2026-11-01 by 0176: the runtime rewrites the image in memory to run it on iOS, and the notice says Blizzard may detect it |
+| Client | `Wow.exe` / `WowClassic.exe`, the x64 client, through FEX on the ordinary x86-64 path (0177, amending 0170's `Wow*-ARM64.exe` as a native ARM64 child); the runtime changes nothing of the game in memory |
+| Graphics | Direct3D 12 through the arm64ec vkd3d-proton on the Vulkan backend, `GxApi D3D12` pinned (the aarch64 set built for 0170 stays, unused by WoW) |
+| Anti-cheat | Warden allowed; ban-risk notice once per title; the client's files and memory never changed (0175 as amended by 0177; 0176's in-memory rewrite no longer applies) |
 | Input | Controller (WoW's gamepad mode) and the text bar; no touch controls |
-| A broken Blizzard ARM64 build | Fails like any other play; the compatibility issue records it |
+| A broken Blizzard x64 build under FEX | Fails like any other play; the compatibility issue records it |
 
 ## Steps
 
@@ -77,7 +84,8 @@ character select; the compatibility issue records the run.
    `Runtime/vulkan-loader/aarch64-windows` and linked over `sysarm64` only for a launch that uses
    them (`wine_host.c`), checked by `pp verify`.
 5. **App** ([PLA-514](https://linear.app/playportdev/issue/PLA-514)): the Battle.net store page, the
-   ban-risk notice, Play of the ARM64 client, `pp ui` paths. Phone gate: the Done-when run.
+   ban-risk notice, Play of the x64 client through FEX (0177; first the ARM64 client), `pp ui` paths.
+   Phone gate: the Done-when run.
 
 Steps 1, 2 and 4 can run in parallel; 3 needs the phone; 5 needs 2, 3 and 4.
 
@@ -85,11 +93,11 @@ Steps 1, 2 and 4 can run in parallel; 3 needs the phone; 5 needs 2, 3 and 4.
 
 | Risk | Effect | Answer |
 |---|---|---|
-| Blizzard ships an ARM64 client that fails (as in March 2026) | WoW unplayable until a later build | none by decision; recorded in PLA-515 |
+| Blizzard ships an x64 client FEX cannot run (AVX contexts, packed start-up) | WoW unplayable until fixed in FEX/Wine | a FEX/Wine fix, never a change to the game; recorded in PLA-515 |
 | Blizzard's CDN throttles or blocks an unofficial client | no install or update | none beyond polite pacing; record and stop |
 | WoW's D3D12 renderer needs more than 0032 gives (64-bit atomics, FL12_1+) | no first frame | spike finds it first; a KosmicKrisp issue |
-| Warden's run-time code is slow through the fault-emulated executable path | stalls at login | measured in step 3/5 |
-| Warden flags the session under the JIT pool's image copies | account action | the ban-risk notice, which says the runtime rewrites some of the game's instructions in memory (0175 as amended by 0176); no file changed |
+| Retail's CPU needs (6 cores at 4 GHz) against FEX on the phone's clamped cores | low frame rate in cities and raids | measured with `pp perf` after step 5; Classic Era is lighter |
+| Warden flags the session under translation | account action | the ban-risk notice; Playport changes none of the game's files or memory (0177) |
 | 131 GB on a phone already full of games | no retail install | the up-front space check; Classic is smaller |
-| A Classic product has no ARM64 client | not offered | by decision |
+| A product has no x64 client | not offered | by decision |
 | CPU and memory under 8 GiB guest RAM | low frame rate | measured with `pp perf` after step 5 |

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// The Battle.net store in the library (PLA-519, decision 0174): no sign-in, a fixed list of
-// World of Warcraft products (BattleNetClientKit.BattleNetProduct), each listed while its build
-// carries its ARM64 client. A copy is `(battlenet, TACT product code)`, title ID
+// The Battle.net store in the library (PLA-519, decisions 0174 and 0177): no sign-in, a fixed
+// list of World of Warcraft products (BattleNetClientKit.BattleNetProduct), each listed while its
+// build carries its x64 client. A copy is `(battlenet, TACT product code)`, title ID
 // `bnet-<code>`. The app's side (UI/BattleNetStore.swift) asks Blizzard and runs the installs;
 // what it decides with is here, so the host tests reach it.
 
@@ -21,7 +21,7 @@ public enum BattleNet {
         key.store == .battlenet ? BattleNetProduct(rawValue: key.id) : nil
     }
 
-    /// The store's tiles: the offered products (a build carrying its ARM64 client), in the
+    /// The store's tiles: the offered products (a build carrying its x64 client), in the
     /// fixed list's order.
     public static func shown(_ listings: [BattleNetListing]) -> [LibraryList.Owned] {
         let offered = Set(listings.filter(\.offered).map(\.product))
@@ -60,13 +60,18 @@ public enum BattleNet {
         return "\(tagged) \(n)"
     }
 
-    /// The receipt adoption reads: the product folder's ARM64 client is what Play starts.
-    public static func receipt(_ product: BattleNetProduct, folder: String, version: String, productFolder: String,
-                               arm64Executable: String, files: Int, bytes: UInt64, at: Date) -> StoreReceipt {
+    /// The receipt adoption reads: the x64 client is what Play starts. `client` is its path in
+    /// the install as the install manifest spells it (BattleNetInstaller.Prepared.clientPath,
+    /// `_retail_/Wow.exe`); the receipt names it with backslashes.
+    public static func receipt(_ product: BattleNetProduct, folder: String, version: String, client: String,
+                               files: Int, bytes: UInt64, at: Date) -> StoreReceipt {
         StoreReceipt(store: .battlenet, storeID: product.code, name: product.name, installDir: folder, version: version,
-                     executable: productFolder + "\\" + arm64Executable, arguments: nil, workingDir: nil,
+                     executable: executable(client), arguments: nil, workingDir: nil,
                      files: files, bytes: bytes, installedAt: at)
     }
+
+    /// A client path in the install (`_retail_/Wow.exe`) as a receipt names it (`_retail_\Wow.exe`).
+    static func executable(_ client: String) -> String { client.replacingOccurrences(of: "/", with: "\\") }
 
     // MARK: installed: region and language (PLA-520)
 
@@ -119,13 +124,17 @@ public enum BattleNet {
         return (files, bytes)
     }
 
-    /// The receipt after a language change or an update (to `version`): the folder's files and
-    /// bytes as `measure` found them, since an update replaces files as well as adding them.
-    public static func receipt(_ r: StoreReceipt, measured: (files: Int, bytes: UInt64), version: String? = nil) -> StoreReceipt {
+    /// The receipt after a language change or an update (to `version`, installing `client`): the
+    /// folder's files and bytes as `measure` found them, since an update replaces files as well as
+    /// adding them, and the client the update's plan names (an install from before decision 0177
+    /// named the ARM64 one; its update brings the x64 one).
+    public static func receipt(_ r: StoreReceipt, measured: (files: Int, bytes: UInt64), version: String? = nil,
+                               client: String? = nil) -> StoreReceipt {
         var r = r
         r.files = measured.files
         r.bytes = measured.bytes
         if let version { r.version = version }
+        if let client { r.executable = executable(client) }
         return r
     }
 
@@ -309,7 +318,7 @@ public struct BattleNetListing: Codable, Equatable, Sendable {
     public var region: StoreRegion
     /// The build's version name (`1.15.9.70576`).
     public var version: String
-    /// The build carries its ARM64 client (BattleNetOffer.isOffered).
+    /// The build carries its x64 client (BattleNetOffer.isOffered).
     public var offered: Bool
     public var supportedLocales: [String]
     public var replacementLocales: [String: String]

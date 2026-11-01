@@ -4,8 +4,9 @@ import SteamClientKit
 import XCTest
 @testable import PlayportKit
 
-/// Play for a Battle.net copy (PLA-514, decision 0175): the ban-risk notice once per product,
-/// remembered with the copy, then the product's ARM64 client as a native ARM64 child.
+/// Play for a Battle.net copy (PLA-514, decisions 0175 and 0177): the ban-risk notice once per
+/// product, remembered with the copy, then the update check, then the product's x64 client
+/// through FEX.
 final class BattleNetPlayTests: XCTestCase {
     private var root: URL!
     private var layout: InstallLayout { InstallLayout.root(root.appendingPathComponent("container")) }
@@ -17,13 +18,12 @@ final class BattleNetPlayTests: XCTestCase {
 
     override func tearDownWithError() throws { try? FileManager.default.removeItem(at: root) }
 
-    /// A product installed as the store installs it: its folder with the ARM64 client, its receipt.
+    /// A product installed as the store installs it: its folder with the x64 client, its receipt.
     private func install(_ p: BattleNetProduct, folder: String) throws -> StoreReceipt {
-        let exe = layout.gamesRoot.appendingPathComponent("\(folder)/_retail_/Wow-ARM64.exe")
+        let exe = layout.gamesRoot.appendingPathComponent("\(folder)/_retail_/Wow.exe")
         try FileManager.default.createDirectory(at: exe.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("MZ".utf8).write(to: exe)
-        return BattleNet.receipt(p, folder: folder, version: "12.0.0.1", productFolder: "_retail_", arm64Executable: "Wow-ARM64.exe",
-                                 files: 1, bytes: 2, at: Date())
+        return BattleNet.receipt(p, folder: folder, version: "12.0.0.1", client: "_retail_/Wow.exe", files: 1, bytes: 2, at: Date())
     }
 
     private func scan(_ receipts: [StoreReceipt], previous: Catalog) -> Catalog {
@@ -69,7 +69,7 @@ final class BattleNetPlayTests: XCTestCase {
     }
 
     /// A copy as adoption leaves it: the store's receipt, the client's PE machine.
-    private func copy(_ p: BattleNetProduct, machine: UInt16? = 0xAA64, exe: String = #"_retail_\Wow-ARM64.exe"#,
+    private func copy(_ p: BattleNetProduct, machine: UInt16? = 0x8664, exe: String = #"_retail_\Wow.exe"#,
                       accepted: Date? = nil) -> InstalledTitle {
         var t = InstalledTitle(id: BattleNet.key(p).titleID, appID: nil, name: p.name, developer: nil, installDir: p.name,
                                executable: exe, buildID: nil, depots: [], sizeBytes: 1, source: .installed, checksums: nil,
@@ -81,12 +81,12 @@ final class BattleNetPlayTests: XCTestCase {
         return t
     }
 
-    func testPlayShowsTheNoticeUntilItIsAcceptedThenStartsTheARM64ClientOnDirect3D12OverVulkan() {
+    func testPlayShowsTheNoticeUntilItIsAcceptedThenStartsTheX64ClientOnDirect3D12OverVulkan() {
         XCTAssertEqual(BattleNetPlay.decide(.init(copy: copy(.wow))), .notice(.wow), "first Play: the notice, nothing starts")
         XCTAssertEqual(BattleNetPlay.decide(.init(copy: copy(.wowClassicEra))), .notice(.wowClassicEra))
         let launch = BattleNetPlay.decide(.init(copy: copy(.wow, accepted: Date()), update: .current))
         XCTAssertEqual(launch, .launch(.init(graphics: .vulkan, arguments: ["-d3d12"])),
-                       "accepted: the client as a native ARM64 child, Direct3D 12 through vkd3d-proton on Vulkan")
+                       "accepted: the x64 client through FEX, Direct3D 12 through vkd3d-proton on Vulkan")
     }
 
     // MARK: the update check (PLA-521)
@@ -98,6 +98,11 @@ final class BattleNetPlayTests: XCTestCase {
         // Accepted, not asked yet: the version endpoint is asked before anything starts.
         XCTAssertEqual(BattleNetPlay.decide(.init(copy: copy(.wow, accepted: Date()))), .checkUpdate(.wow))
         XCTAssertEqual(BattleNetPlay.decide(.init(copy: copy(.wowClassicEra, accepted: Date()))), .checkUpdate(.wowClassicEra))
+        // A copy with only the ARM64 client is checked too: the update is what brings the x64 one.
+        let arm64 = copy(.wow, machine: 0xAA64, exe: #"_retail_\Wow-ARM64.exe"#, accepted: Date())
+        XCTAssertEqual(BattleNetPlay.decide(.init(copy: arm64)), .checkUpdate(.wow))
+        XCTAssertEqual(BattleNetPlay.decide(.init(copy: arm64, update: .available(version: "12.0.0.1", bytes: 1))),
+                       .update(.wow, version: "12.0.0.1"))
     }
 
     func testAnAvailableUpdateThatFitsIsDownloadedThenTheGameStarts() {
@@ -134,14 +139,26 @@ final class BattleNetPlayTests: XCTestCase {
         XCTAssertTrue(report.contains("starts the installed version"), report)
     }
 
-    func testAClientThatIsNotTheARM64OneIsNotStarted() {
-        // The player's pick of the x86-64 client, or a copy whose client is gone or unread.
-        for t in [copy(.wow, machine: 0x8664, exe: #"_retail_\Wow.exe"#, accepted: Date()), copy(.wow, machine: nil, accepted: Date())] {
-            guard case let .refuse(why) = BattleNetPlay.decide(.init(copy: t)) else { return XCTFail("\(t.executable ?? "none") started") }
-            XCTAssertTrue(why.contains("ARM64"), why)
+    func testAClientThatIsNotTheX64OneIsNotStarted() {
+        // An install from before decision 0177 (the ARM64 client), or a copy whose client is gone or unread.
+        let others = [copy(.wow, machine: 0xAA64, exe: #"_retail_\Wow-ARM64.exe"#, accepted: Date()), copy(.wow, machine: nil, accepted: Date())]
+        for t in others {
+            for update in [BattleNetPlay.Update.current, .updated] {
+                guard case let .refuse(why) = BattleNetPlay.decide(.init(copy: t, update: update)) else {
+                    return XCTFail("\(t.executable ?? "none") started after \(update)")
+                }
+                XCTAssertTrue(why.contains("x64 client"), why)
+                XCTAssertTrue(why.contains("Check for update on the game's page downloads it"), why)
+            }
+            guard case let .refuse(why) = BattleNetPlay.decide(.init(copy: t, update: .unreachable("No connection."))) else {
+                return XCTFail("\(t.executable ?? "none") started after a failed check")
+            }
+            XCTAssertTrue(why.contains("x64 client"), why)
+            XCTAssertTrue(why.contains("must be downloaded"), why)
+            XCTAssertTrue(why.contains("servers couldn't be reached"), why)
         }
         // The notice still comes first.
-        XCTAssertEqual(BattleNetPlay.decide(.init(copy: copy(.wow, machine: 0x8664))), .notice(.wow))
+        XCTAssertEqual(BattleNetPlay.decide(.init(copy: copy(.wow, machine: 0xAA64))), .notice(.wow))
     }
 
     func testOnlyBattleNetCopiesHaveThisPlay() {
@@ -159,10 +176,11 @@ final class BattleNetPlayTests: XCTestCase {
         XCTAssertEqual(n.title, "Before you play World of Warcraft")
         for words in ["Blizzard does not support Playport", "action against your Battle.net account",
                       "stores no Battle.net email, password or session", "changes none of the game's files",
-                      "rewrites some of the game's instructions in memory, which Blizzard may detect"] {
+                      "none of its code in memory", "Blizzard's x64 Windows client through an x86-64 translator (FEX)"] {
             XCTAssertTrue(n.text.contains(words), words)
         }
-        XCTAssertFalse(n.text.contains("changes nothing in the game"), "the runtime adapts the game's code in memory (0176)")
+        XCTAssertFalse(n.text.contains("rewrites"), "the runtime no longer adapts the game's code in memory (0177)")
+        XCTAssertFalse(n.text.contains("changes nothing in the game"))
         XCTAssertTrue(BattleNetPlay.notice(.wowClassic).text.contains("World of Warcraft Classic"))
     }
 }

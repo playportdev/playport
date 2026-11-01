@@ -84,7 +84,9 @@ with its own PEB and private ntdll copy:
   and be copied in, the section's other views `vm_remap`ped onto the copy's RW alias, and
   the code reachable from each `FlushInstructionCache` x18-patched; the load's patcher
   leaves encrypted 1 KB windows of a native child's `.text` alone. So the image a native
-  child runs is rewritten in memory, never on disk (decision 0175 as amended).
+  child runs is rewritten in memory, never on disk. No game runs this way any more:
+  World of Warcraft plays its x64 client through FEX, and the runtime changes no game's
+  code in memory ([decision 0177](decisions/0177-wow-plays-its-x64-client-through-fex.md)).
   A context continued with Cpsr.SS is stepped in software (0253, 0256, 0259, 0261);
   code it writes runs through the anonymous executable path. `tools/compat/probes`
   `arm64`, `arm64-fault` and `arm64-min` test it
@@ -97,9 +99,9 @@ with its own PEB and private ntdll copy:
   linked over `sysarm64` by a Vulkan launch; the `d3d12` probe tests it
   ([evidence](evidence/2026-10-30-arm64-d3d12.md)). As run on the phone (2026-11-01, IPA
   `ff0cd315`): the `arm64` and `d3d12` probes pass and Hollow Knight still reaches first
-  frame+10; WoW Classic Era starts as a native child, handles its own UDFs and single
-  steps, and stops before its login
-  ([evidence](evidence/2026-10-31-wow-arm64-start.md)).
+  frame+10; WoW Classic Era's ARM64 client started as a native child and stopped before its
+  login ([evidence](evidence/2026-10-31-wow-arm64-start.md)) before 0177 moved WoW to its x64
+  client.
 - **A crashing child is isolated only in part.** A fault in any pseudo-process is a
   fault in the app's one task. Orderly `TerminateProcess` of live children works and is
   tested. Two host-fault cases end the child, not the app (`patches/madeira-unix`
@@ -635,12 +637,14 @@ A release build compiles none of `Dev/`
 The Battle.net store (`UI/BattleNetStore.swift`, PlayportKit `BattleNet`;
 [decision 0174](decisions/0174-battle-net-store-client.md), proposed) has no sign-in: its
 chip is always shown and lists the World of Warcraft products whose current build carries
-an ARM64 client (BattleNetClientKit's offer, cached), All only once one is installed or
+an x64 client (BattleNetClientKit's offer, cached;
+[decision 0177](decisions/0177-wow-plays-its-x64-client-through-fex.md)), All only once one is installed or
 downloading. A product's page picks the store region (from the phone's region) and the
 locale (the phone's language as a WoW locale, enUS as fallback), shows the download size
-and the space needed, and refuses an Install that does not fit, saying how much it needs.
+and the space needed (the x64 client's selection), and refuses an Install that does not fit, saying how much it needs.
 The install stages under the staging root (nothing in `C:\Games`, so no Play, until it is
-complete) and becomes `C:\Games\<product>` with a store receipt naming the ARM64 client.
+complete) and becomes `C:\Games\<product>` with a store receipt naming the x64 client
+(`_retail_\Wow.exe`, `WowClassic.exe`); the store selects the `Windows` + `x86_64` files only.
 An installed product's page (`UI/BattleNetInstalled.swift`) changes, from its facts card's
 Region and Language rows (a phone in landscape has no room for them as buttons beside Play,
 PLA-519), its store region in place (only `.build.info` is rewritten; every region's data is
@@ -652,22 +656,25 @@ the other stores' art under Caches (PlayportKit `BattleNetArtCache`).
 
 Play for a Battle.net copy follows PlayportKit `BattleNetPlay` (PLA-514): the first Play of
 each product shows the ban-risk notice ([decision 0175](decisions/0175-anti-cheat-refusal-scope.md),
-proposed, amended by 0176: Blizzard does not support Playport, an account action is possible,
-Playport changes none of the game's files but rewrites some of its instructions in memory to run
-on iPhone, which Blizzard may detect, and Playport stores no Battle.net credential); declining
+proposed, as amended by 0177: Blizzard does not support Playport, an account action is possible,
+Playport changes none of the game's files and none of its code in memory and runs Blizzard's x64
+client through a translator, and Playport stores no Battle.net credential); declining
 starts nothing, accepting is kept with the copy
 (`InstalledTitle.riskNoticeAccepted`, gone with it) and the page keeps the notice's text.
 Every Play then asks the install region's version endpoint for its current build (PLA-521):
-a newer one is planned (BattleNetClientKit `prepareUpdate`: the new build's selection without
+a newer one, or an install whose `.build.info` names no `x86_64` (made before 0177, with the
+ARM64 client), is planned (BattleNetClientKit `prepareUpdate`: the current build's x64 selection without
 the objects the store's journals name and the product folder files already on disk, in data
 files after the store's; never a reinstall), refused before it starts when it does not fit,
 else run as a Downloads update job naming no locale (shown as Updating; a language change
-shows as Changing language), after which the Play goes on; a failed check is said on the
+shows as Changing language), after which the receipt names the x64 client and the Play goes on
+once the library has re-adopted it; a failed check is said on the
 launch screen and the installed version starts, so the game itself decides. The page's
 Check for update asks the same by hand and offers Update.
-The Play then starts the receipt's ARM64 client as a native ARM64 child
-([decision 0170](decisions/0170-native-arm64-guests.md)) on the Vulkan backend with `-d3d12`,
-whatever the graphics settings say, and passes no sign-in: WoW shows its own login.
+The Play then starts the receipt's x64 client (PE machine 0x8664; any other is refused) through
+FEX on the ordinary x86-64 path ([decision 0177](decisions/0177-wow-plays-its-x64-client-through-fex.md)):
+the Vulkan backend with `-d3d12` (arm64ec vkd3d-proton), whatever the graphics settings say,
+`Config.wtf`'s `GxApi D3D12` and `GamePadEnable` written first, and no sign-in: WoW shows its own login.
 
 - **Catalogue** (`app/PlayportKit`, tested on Linux): rebuilt by *adoption*
   each time the app comes to the front, from the prefix's `C:\Games`. A folder

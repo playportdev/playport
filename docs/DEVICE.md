@@ -270,7 +270,8 @@ not that gameplay appeared: inspect the timeline, log and screenshot.
   options open; `open:bnet-CODE` a Battle.net product's page). The Battle.net pages have their own
   paths: `install:bnet-CODE`, `pause-resume:bnet-CODE`, `region:bnet-CODE[=R]`,
   `locale:bnet-CODE[=L]`, `notice:bnet-CODE=accept|decline` and `update:bnet-CODE[=install]`
-  (`pp ui --help`). `pad:` presses then move the one focus ring and press the
+  (`pp ui --help`); `update:bnet-CODE=install` also brings an install made with the ARM64
+  client to the x64 client Play starts (decision 0177). `pad:` presses then move the one focus ring and press the
   footer's buttons, as a controller does (`pp ui --help` has the buttons).
   Each `pad:` line in `s1-host.log` names the ringed item (`focus hero:app-367520`,
   `dl:job:APP`, `set:nav:graphics`, `opt:frameLimit`), the page and any panel,

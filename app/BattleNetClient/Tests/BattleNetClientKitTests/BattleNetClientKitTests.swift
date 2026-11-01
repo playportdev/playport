@@ -106,6 +106,15 @@ final class BattleNetClientKitTests: XCTestCase {
         XCTAssertEqual(retail.productConfig.replacementLocales["enGB"], "enUS")
         let anniversary = try await client.build(.wowAnniversary, .tw)
         XCTAssertEqual(anniversary.productConfig.launchArguments, ["-initialgamemode=bccfresh"])
+
+        // Every product's x64 client is tagged `x86_64` (`tags_64bit`): an install's `.build.info`
+        // naming that tag holds the x64 client (BattleNetUpdateCheck.lacksClient).
+        for product in BattleNetProduct.allCases {
+            let pc = try await client.build(product, .eu).productConfig
+            XCTAssertEqual(pc.x64Tags, [BattleNetProduct.x64ClientTag], product.code)
+            XCTAssertEqual(pc.platformTags, ["Windows"], product.code)
+            XCTAssertNotNil(pc.x64Executable, product.code)
+        }
     }
 
     func testTheCDNConfigListsTheArchives() throws {
@@ -148,59 +157,58 @@ final class BattleNetClientKitTests: XCTestCase {
 
     // MARK: install manifest and the offer rule
 
-    func testTheInstallManifestNamesTheARM64ClientAndItsTags() async throws {
+    func testTheInstallManifestNamesTheX64ClientAndItsTags() async throws {
         let client = BattleNetClient(transport: try recorded())
         let retail = try await client.offer(.wow, .us)
-        let exe = try XCTUnwrap(retail.install.files.first { $0.name == "Wow-ARM64.exe" })
-        XCTAssertEqual(exe.size, 75_970_768)
-        let query = TagQuery.arm64(retail.build.productConfig, locale: "enUS", regions: [.us])
+        let query = TagQuery.client(retail.build.productConfig, locale: "enUS", regions: [.us])
+        XCTAssertEqual(query, TagQuery(tags: ["Windows", "x86_64", "enUS", "US", "speech", "text"], excluded: ["Alternate"]))
         let files = try retail.install.select(query)
-        XCTAssertEqual(files.count, 35)
-        XCTAssertTrue(files.contains { $0.name.hasSuffix(#"D3D12_ARM64\D3D12Core.dll"#) })
-        XCTAssertFalse(files.contains { $0.name == "Wow.exe" })
         // The x64 client has one entry for China and one for the other regions.
         XCTAssertEqual(retail.install.files.filter { $0.name == "Wow.exe" }.count, 2)
-        XCTAssertEqual(try retail.install.select(TagQuery(tags: ["Windows", "x86_64", "enUS", "US"])).filter { $0.name == "Wow.exe" }.count, 1)
+        XCTAssertEqual(files.filter { $0.name == "Wow.exe" }.count, 1)
+        XCTAssertFalse(files.contains { $0.name == "Wow-ARM64.exe" })
+        XCTAssertFalse(files.contains { $0.name.contains("ARM64") })
 
         let era = try await client.offer(.wowClassicEra, .us)
-        XCTAssertEqual(try era.install.select(.arm64(era.build.productConfig, locale: "enUS", regions: [.us])).count, 31)
-        XCTAssertThrowsError(try era.install.select(.arm64(era.build.productConfig, locale: "itIT", regions: [.us]))) {
+        let eraFiles = try era.install.select(.client(era.build.productConfig, locale: "enUS", regions: [.us]))
+        XCTAssertTrue(eraFiles.contains { $0.name == "WowClassic.exe" })
+        XCTAssertFalse(eraFiles.contains { $0.name == "WowClassic-arm64.exe" })
+        XCTAssertThrowsError(try era.install.select(.client(era.build.productConfig, locale: "itIT", regions: [.us]))) {
             XCTAssertEqual($0 as? BattleNetError, .unsupported("install manifest has no tag 'itIT'"))
         }
     }
 
-    func testEveryProductOnTheListIsOfferedWhileItsBuildCarriesTheARM64Client() async throws {
+    func testEveryProductOnTheListIsOfferedWhileItsBuildCarriesTheX64Client() async throws {
         let client = BattleNetClient(transport: try recorded())
-        let expected: [BattleNetProduct: (String, UInt64)] = [
-            .wow: ("Wow-ARM64.exe", 75_970_768), .wowClassic: ("WowClassic-arm64.exe", 62_027_472),
-            .wowClassicEra: ("WowClassic-arm64.exe", 59_313_872), .wowAnniversary: ("WowClassic-arm64.exe", 59_524_816),
+        let expected: [BattleNetProduct: String] = [
+            .wow: "Wow.exe", .wowClassic: "WowClassic.exe", .wowClassicEra: "WowClassic.exe", .wowAnniversary: "WowClassic.exe",
         ]
-        for (product, (name, size)) in expected {
+        for (product, name) in expected {
             let offer = try await client.offer(product, .eu)
             XCTAssertTrue(offer.isOffered, product.code)
-            XCTAssertEqual(offer.arm64Client?.name, name)
-            XCTAssertEqual(offer.arm64Client?.size, size)
+            XCTAssertEqual(offer.client?.name, name, product.code)
+            XCTAssertGreaterThan(offer.client?.size ?? 0, 10_000_000, product.code)
         }
     }
 
-    func testABuildWithoutItsARM64ClientIsNotOffered() async throws {
+    func testABuildWithoutItsX64ClientIsNotOffered() async throws {
         let client = BattleNetClient(transport: try recorded())
         let build = try await client.build(.wowClassicEra, .us)
-        let x64Only = try InstallManifest(Synthetic.install(tags: [("Windows", 1), ("x86_64", 2), ("arm64", 2)], files: [
-            ("WoWClassic.exe", 100, ["Windows", "x86_64"]),
+        let arm64Only = try InstallManifest(Synthetic.install(tags: [("Windows", 1), ("x86_64", 2), ("arm64", 2)], files: [
+            ("WowClassic-arm64.exe", 100, ["Windows", "arm64"]),
             ("BlizzardError.exe", 10, ["Windows", "x86_64", "arm64"]),
         ]))
-        XCTAssertFalse(BattleNetOffer(build: build, install: x64Only).isOffered)
-        // The ARM64 name present but not tagged for ARM64 Windows is not the ARM64 client either.
+        XCTAssertFalse(BattleNetOffer(build: build, install: arm64Only).isOffered)
+        // The x64 name present but not tagged for x64 Windows is not the x64 client either.
         let mistagged = try InstallManifest(Synthetic.install(tags: [("Windows", 1), ("x86_64", 2), ("arm64", 2)], files: [
-            ("WowClassic-arm64.exe", 100, ["Windows", "x86_64"]),
+            ("WoWClassic.exe", 100, ["Windows", "arm64"]),
         ]))
         XCTAssertFalse(BattleNetOffer(build: build, install: mistagged).isOffered)
-        let arm64 = try InstallManifest(Synthetic.install(tags: [("Windows", 1), ("x86_64", 2), ("arm64", 2)], files: [
-            ("WoWClassic.exe", 100, ["Windows", "x86_64"]),
-            ("WOWCLASSIC-ARM64.EXE", 90, ["Windows", "arm64"]),
+        let x64 = try InstallManifest(Synthetic.install(tags: [("Windows", 1), ("x86_64", 2), ("arm64", 2)], files: [
+            ("WOWCLASSIC.EXE", 100, ["Windows", "x86_64"]),
+            ("WowClassic-arm64.exe", 90, ["Windows", "arm64"]),
         ]))
-        XCTAssertEqual(BattleNetOffer(build: build, install: arm64).arm64Client?.size, 90)
+        XCTAssertEqual(BattleNetOffer(build: build, install: x64).client?.size, 100)
     }
 
     // MARK: sizes
@@ -214,10 +222,10 @@ final class BattleNetClientKitTests: XCTestCase {
             (1000, ["Windows", "arm64", "x86_64", "enUS", "deDE", "EU", "US", "speech", "text"]),   // shared
             (200, ["Windows", "arm64", "enUS", "EU", "US", "speech", "text"]),                       // ARM64 only
             (300, ["Windows", "x86_64", "enUS", "EU", "US", "speech", "text"]),                      // x64 only
-            (40, ["Windows", "arm64", "deDE", "EU", "US", "speech", "text"]),                        // German
-            (5, ["Windows", "arm64", "enUS", "EU", "speech", "text"]),                               // EU only
-            (7, ["Windows", "arm64", "enUS", "EU", "US", "speech", "text", "Alternate"]),            // censored
-            (11, ["OSX", "arm64", "enUS", "EU", "US", "speech", "text"]),                            // Mac
+            (40, ["Windows", "x86_64", "deDE", "EU", "US", "speech", "text"]),                       // German
+            (5, ["Windows", "x86_64", "enUS", "EU", "speech", "text"]),                              // EU only
+            (7, ["Windows", "x86_64", "enUS", "EU", "US", "speech", "text", "Alternate"]),           // censored
+            (11, ["OSX", "x86_64", "enUS", "EU", "US", "speech", "text"]),                           // Mac
         ])
         let install = Synthetic.install(tags: tags, files: [
             ("WowClassic-arm64.exe", 60, ["Windows", "arm64", "enUS", "deDE", "EU", "US", "speech", "text"]),
@@ -248,14 +256,14 @@ final class BattleNetClientKitTests: XCTestCase {
         XCTAssertTrue(us.isOffered)
         let usSizes = try await client.sizes(us, locale: "enUS")
         XCTAssertEqual(usSizes, try BattleNetSizes(size: SizeManifest(size), install: InstallManifest(install),
-                                                   query: TagQuery(tags: ["Windows", "arm64", "enUS", "US", "speech", "text"], excluded: ["Alternate"])))
-        XCTAssertEqual(usSizes.download, 1200)
+                                                   query: TagQuery(tags: ["Windows", "x86_64", "enUS", "US", "speech", "text"], excluded: ["Alternate"])))
+        XCTAssertEqual(usSizes.download, 1300)
         XCTAssertEqual(usSizes.objects, 2)
-        XCTAssertEqual(usSizes.installFiles, 60)
-        XCTAssertEqual(usSizes.install, 1260)
+        XCTAssertEqual(usSizes.installFiles, 70)
+        XCTAssertEqual(usSizes.install, 1370)
         let euSizes = try await client.sizes(try await client.offer(.wowClassicEra, .eu), locale: "deDE")
         XCTAssertEqual(euSizes.download, 1040)
-        XCTAssertEqual(euSizes.install, 1100)
+        XCTAssertEqual(euSizes.install, 1110)
     }
 
     // MARK: BLTE
@@ -459,7 +467,7 @@ final class BattleNetClientKitTests: XCTestCase {
             throw XCTSkip("BATTLENET_LIVE_REPORT is not set")
         }
         let client = BattleNetClient(transport: Self.live)
-        var rows = ["| product | region | version | build | offered | ARM64 client | download | install | of which product folder | objects |",
+        var rows = ["| product | region | version | build | offered | x64 client | download | install | of which product folder | objects |",
                     "|---|---|---|---|---|---|---|---|---|---|"]
         var sizeCache = [TACTHash: SizeManifest]()
         func gb(_ b: UInt64) -> String { String(format: "%.2f GB (%llu B)", Double(b) / 1e9, b) }
@@ -468,11 +476,11 @@ final class BattleNetClientKitTests: XCTestCase {
                 let offer = try await client.offer(product, region)
                 let v = offer.build.version
                 var cells = [product.code, region.rawValue, v.versionsName, "\(v.buildID)", offer.isOffered ? "yes" : "no",
-                             offer.arm64Client.map { "`\($0.name)` \($0.size) B" } ?? "—"]
+                             offer.client.map { "`\($0.name)` \($0.size) B" } ?? "—"]
                 if let key = offer.build.config.size {
                     if sizeCache[key.ekey] == nil { sizeCache[key.ekey] = try await client.sizeManifest(offer.build) }
                     let s = try BattleNetSizes(size: sizeCache[key.ekey]!, install: offer.install,
-                                               query: .arm64(offer.build.productConfig, locale: "enUS", regions: [region]))
+                                               query: .client(offer.build.productConfig, locale: "enUS", regions: [region]))
                     cells += [gb(s.download), gb(s.install), gb(s.installFiles), "\(s.objects)"]
                 } else {
                     cells += ["no size manifest", "—", "—", "—"]

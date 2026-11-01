@@ -385,7 +385,7 @@ private struct LibraryGridView: View {
         case .gog, .epic:
             return "Games from \(grid.filter.label) appear here."
         case .battlenet:
-            return bnet.error ?? "World of Warcraft products appear here while their builds carry an ARM64 client."
+            return bnet.error ?? "World of Warcraft products appear here while their builds carry an x64 client."
         }
     }
 }

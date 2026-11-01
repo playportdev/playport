@@ -5,8 +5,10 @@
 // (an update of the installed build, PlayportKit BattleNet.languageJob) that fetches only the new
 // locale's data, after which Play is available again; an update to the region's current build
 // (BattleNet.updateJob), which every Play checks for first (BattleNetPlay) and the page's Check for
-// update asks by hand, as a Downloads job that fetches only what changed. What the install is in
-// now is its `.build.info`'s, read when the page shows.
+// update asks by hand, as a Downloads job that fetches only what changed. An install without the
+// x64 client Play starts (one from before decision 0177) is updated the same way at its own build:
+// the job fetches the x64 client's files and data, and the receipt names it after. What the
+// install is in now is its `.build.info`'s, read when the page shows.
 
 import BattleNetClientKit
 import Foundation
@@ -163,7 +165,7 @@ final class BattleNetInstalled: ObservableObject {
             let r = try await installer.update(prepared, root: root, work: work, progress: progress)
             let version = prepared.plan.build.version.versionsName
             let measured = await BattleNet.measure(root)
-            try layout.saveReceipt(BattleNet.receipt(before, measured: measured, version: version))
+            try layout.saveReceipt(BattleNet.receipt(before, measured: measured, version: version, client: prepared.clientPath))
             updates[p] = .current(version)
             log.info("battlenet", "\(p.code): updated \(before.version ?? "?") → \(version) in C:\\Games\\\(before.installDir), "
                      + "\(prepared.plan.objects) objects and \(prepared.plan.files.count) files, \(r.engine.downloadedBytes) bytes fetched "
@@ -173,7 +175,7 @@ final class BattleNetInstalled: ObservableObject {
         let prepared = try await installer.prepareLocaleChange(p, root: root, to: choice.locale, work: work)
         let r = try await installer.changeLocale(prepared, root: root, work: work, progress: progress)
         let measured = await BattleNet.measure(root)
-        try layout.saveReceipt(BattleNet.receipt(before, measured: measured))
+        try layout.saveReceipt(BattleNet.receipt(before, measured: measured, client: prepared.clientPath))
         if let c = BattleNet.installedChoice(p, folder: root) { current[p] = Choice(region: c.region, locale: c.locale) }
         log.info("battlenet", "\(p.code): language \(choice.locale) in C:\\Games\\\(before.installDir), "
                  + "\(prepared.plan.objects) objects, \(r.engine.downloadedBytes) bytes fetched in \(Int(r.seconds)) s")
@@ -182,8 +184,9 @@ final class BattleNetInstalled: ObservableObject {
 
     // MARK: updates
 
-    /// Asks the version endpoint of the install's region whether its build is current; when not,
-    /// plans the update (its manifests stay in the work area for the Downloads job) for its size.
+    /// Asks the version endpoint of the install's region whether its build is current and the
+    /// install holds the x64 client; when not, plans the update (its manifests stay in the work area
+    /// for the Downloads job) for its size: a newer build's, or the x64 client's at the installed one.
     /// A failure is `unreachable`, worded by its kind for the player (no answer, a refusal or a
     /// 429, damaged data, BattleNet.reason): Play reports it and goes on.
     func checkUpdate(_ p: BattleNetProduct) async -> BattleNetPlay.Update {
@@ -192,14 +195,15 @@ final class BattleNetInstalled: ObservableObject {
         let installer = BattleNetInstaller(client: BattleNetStore.shared.client, log: log)
         do {
             let check = try await installer.checkUpdate(p, root: root)
-            guard check.isNewer else {
+            guard check.needsUpdate else {
                 log.info("battlenet", "\(p.code): \(check.installed) is current")
                 updates[p] = .current(check.installed)
                 return .current
             }
             let prepared = try await installer.prepareUpdate(p, root: root, work: BattleNet.workArea(p, layout: LibraryModel.paths.layout))
             let bytes = prepared.plan.content.totalBytes
-            log.info("battlenet", "\(p.code): update \(check.installed) → \(check.current), \(bytes) bytes to write, "
+            log.info("battlenet", "\(p.code): update \(check.installed) → \(check.current)"
+                     + (check.lacksClient ? " with the x64 client (\(prepared.clientPath))" : "") + ", \(bytes) bytes to write, "
                      + "\(prepared.plan.fetchBytes) to fetch")
             updates[p] = .available(from: check.installed, to: check.current, bytes: bytes)
             return .available(version: check.current, bytes: bytes)

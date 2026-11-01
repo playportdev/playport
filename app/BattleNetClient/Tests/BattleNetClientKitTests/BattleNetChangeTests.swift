@@ -40,7 +40,7 @@ extension BattleNetInstallTests {
         XCTAssertEqual(read.cdnKey, p.cdnConfig)
         XCTAssertEqual(read.cdnHosts, ["level3.blizzard.com", "eu.cdn.blizzard.com"])
         XCTAssertEqual(read.cdnServers, ["https://eu.cdn.blizzard.com/?maxhosts=4", "http://level3.blizzard.com/?maxhosts=4"])
-        XCTAssertEqual(read.tags, "Windows arm64 EU? enUS speech?:Windows arm64 EU? enUS text?")
+        XCTAssertEqual(read.tags, "Windows x86_64 EU? enUS speech?:Windows x86_64 EU? enUS text?")
         XCTAssertEqual(read.locale, "enUS")
     }
 
@@ -98,7 +98,7 @@ extension BattleNetInstallTests {
         XCTAssertEqual(Set(after.keys.filter { $0.hasSuffix(".idx") }),
                        Set((0..<16).map { "/Data/data/" + CASC.journalName(bucket: $0, generation: 2) }))
         let read = try BuildInfo.read([UInt8](try Data(contentsOf: root.appendingPathComponent(".build.info"))), product: "wow_classic_era")
-        XCTAssertEqual(read.tags, "Windows arm64 US? deDE speech?:Windows arm64 US? deDE text?")
+        XCTAssertEqual(read.tags, "Windows x86_64 US? deDE speech?:Windows x86_64 US? deDE text?")
         XCTAssertEqual(read.region, .us)
         XCTAssertEqual(try String(contentsOf: wtf, encoding: .utf8), "SET textLocale \"deDE\"\nSET gxApi \"D3D12\"\nSET audioLocale \"deDE\"\n")
         // Both locales' objects are named by the journals and read back whole.

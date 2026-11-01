@@ -20,6 +20,12 @@ public enum BattleNetProduct: String, CaseIterable, Sendable, Codable {
         case .wowAnniversary: return "World of Warcraft Classic Anniversary"
         }
     }
+
+    /// The x64 client's machine tag, every WoW product config's Windows `tags_64bit` (the
+    /// recorded configs of all four products say so). An install's `.build.info` tags name it
+    /// once the install holds the x64 client Play starts (decision 0177); an install from before
+    /// it names `arm64` instead, and its update brings the x64 client (BattleNetUpdateCheck).
+    public static let x64ClientTag = "x86_64"
 }
 
 /// A store region (GLOSSARY.md): the Battle.net region an install belongs to. The version and CDN

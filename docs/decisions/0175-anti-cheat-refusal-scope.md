@@ -7,6 +7,8 @@ session. When accepted, it narrows the launcher plan's refusal of "Battle.net ti
 anti-cheat titles ([launchers plan](../plans/2026-10-12-launchers.md), risks), and keeps every
 refusal of [0059](0059-epic-exchange-code.md).
 
+**Amended again 2026-11-01 by [0177](0177-wow-plays-its-x64-client-through-fex.md):** the runtime changes none of the game's code or data in memory (WoW plays its x64 client through FEX), so the 0176 amendment below no longer describes what runs; the notice no longer says the runtime rewrites the game's instructions.
+
 **Amended 2026-11-01 by [0176](0176-native-arm64-images-live-in-the-jit-pool.md):** "never
 patched" holds for the game's files only. In memory, the runtime rewrites the game's image to run
 it on iOS, and Warden may see that ([below](#amendment-2026-11-01-the-runtime-rewrites-the-image-in-memory)).

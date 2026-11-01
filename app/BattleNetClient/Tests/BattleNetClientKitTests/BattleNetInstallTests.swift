@@ -103,21 +103,22 @@ struct FakeProduct {
     static func data(_ key: TACTHash) -> String { "\(cdnPath)/data/\(key.cdnPath)" }
 
     /// Lays the product out on `cdn`. Build 2 (an update, PLA-521) changes objects 9, 19, 29 and 39
-    /// and `Utils\a-arm64.dll`, adds objects 40..<44 (loose), and is the version endpoint's build.
+    /// and `Utils\a.dll`, adds objects 40..<44 (loose), and is the version endpoint's build.
     /// `filesInStore` also lists the product folder files' objects in the download manifest, as
     /// Blizzard's manifests do, so the store holds them too.
     static func make(on cdn: FakeCDN, productConfig: [UInt8], build: Int = 1, filesInStore: Bool = false) -> FakeProduct {
         typealias S = Synthetic
         var p = FakeProduct()
         // Stored objects: most for every locale and region, some for one locale, one region,
-        // the Alternate data or the x64 client only.
+        // the Alternate data, the x64 client only or the ARM64 client only.
         for i in 0..<(build == 1 ? 40 : 44) {
             var tags = everywhere
             switch i % 8 {
             case 3: tags.removeAll { $0 == "enUS" }                                  // deDE only
+            case 4: tags.removeAll { $0 == "arm64" }                                  // x64 only
             case 5: tags.removeAll { ["US", "KR", "TW"].contains($0) }                // EU only
             case 6: tags.append("Alternate")
-            case 7: tags.removeAll { $0 == "arm64" }                                  // x64 only
+            case 7: tags.removeAll { $0 == "x86_64" }                                 // ARM64 only
             default: break
             }
             let seed = build > 1 && i % 10 == 9 ? 1000 * build + i : i
@@ -125,10 +126,10 @@ struct FakeProduct {
             p.objects.append(Object(blte: blte, keys: keys, tags: tags))
         }
         // Product folder files (two directories spelled two ways, as Blizzard's manifests do).
-        p.files = [("WowClassic-arm64.exe", bytes(100, 5000), ["Windows", "arm64"] + everywhere.suffix(8)),
-                   ("WoWClassic.exe", bytes(101, 4000), ["Windows", "x86_64"] + everywhere.suffix(8)),
-                   ("Utils\\a-arm64.dll", bytes(build == 1 ? 102 : 202, 1500), ["Windows", "arm64"] + everywhere.suffix(8)),
-                   ("UTILS\\b-arm64.dll", bytes(103, 700), ["Windows", "arm64"] + everywhere.suffix(8))]
+        p.files = [("WoWClassic.exe", bytes(101, 4000), ["Windows", "x86_64"] + everywhere.suffix(8)),
+                   ("WowClassic-arm64.exe", bytes(100, 5000), ["Windows", "arm64"] + everywhere.suffix(8)),
+                   ("Utils\\a.dll", bytes(build == 1 ? 102 : 202, 1500), ["Windows", "x86_64"] + everywhere.suffix(8)),
+                   ("UTILS\\b.dll", bytes(103, 700), ["Windows", "x86_64"] + everywhere.suffix(8))]
         let fileObjects = p.files.map { S.blte($0.content, blocks: 2) }
 
         // Archive 0: objects 0..<20 and file 0, with gaps between some; archive 1: 20..<34 and
@@ -348,11 +349,12 @@ final class BattleNetInstallTests: XCTestCase {
 
     // MARK: the plan
 
-    /// The plan for WoW Classic Era's real install manifest (ARM64, enUS): the product folder
-    /// gets the ARM64 client and its files under `_classic_era_`, each directory spelled once,
-    /// and not the x64 client unless asked; the store gets the download manifest's selection for
-    /// every region, without other locales or the Alternate data, and the build's manifests.
-    func testThePlanForARealInstallManifestSelectsTheARM64ClientInItsProductFolder() async throws {
+    /// The plan for WoW Classic Era's real install manifest (x64, enUS; decision 0177): the
+    /// product folder gets the x64 client and its files under `_classic_era_`, each directory
+    /// spelled once, and nothing of the ARM64 client; the store gets the download manifest's
+    /// selection for every region, without other locales, the ARM64 client's data or the
+    /// Alternate data, and the build's manifests.
+    func testThePlanForARealInstallManifestSelectsTheX64ClientInItsProductFolder() async throws {
         let cdn = Recorded()
         cdn.set("/v2/products/wow_classic_era/versions", try fixture("wow_classic_era-versions.psv"))
         cdn.set("/v2/products/wow_classic_era/cdns", try fixture("wow_classic_era-cdns.psv"))
@@ -369,7 +371,8 @@ final class BattleNetInstallTests: XCTestCase {
         let tags = FakeProduct.tags
         let entryTags: [[String]] = [FakeProduct.everywhere, FakeProduct.everywhere.filter { $0 != "enUS" },
                                      FakeProduct.everywhere.filter { !["US", "KR", "TW"].contains($0) },
-                                     FakeProduct.everywhere + ["Alternate"], FakeProduct.everywhere.filter { $0 != "arm64" }]
+                                     FakeProduct.everywhere + ["Alternate"], FakeProduct.everywhere.filter { $0 != "arm64" },
+                                     FakeProduct.everywhere.filter { $0 != "x86_64" }]
         let ekeys = (0..<entryTags.count).map { MD5.hash([UInt8($0), 0xEE]) }
         var download = Array("DL".utf8) + [1, 16, 0] + S.be(UInt64(entryTags.count), 4) + S.be(UInt64(tags.count), 2)
         for (i, k) in ekeys.enumerated() { download += k + S.be(UInt64(1000 + i), 5) + [UInt8(i % 3)] }
@@ -386,18 +389,29 @@ final class BattleNetInstallTests: XCTestCase {
         }
         let p = try plan(BattleNetInstallOptions(locale: "enUS"))
         let paths = p.files.map(\.path)
-        XCTAssertEqual(p.files.count, 31)
+        // 35 x64 files (without the three China-region helpers).
+        XCTAssertEqual(p.files.count, 35)
         XCTAssertTrue(paths.allSatisfy { $0.hasPrefix("_classic_era_/") })
-        let client = try XCTUnwrap(p.files.first { $0.path == "_classic_era_/WowClassic-arm64.exe" })
-        XCTAssertEqual(client.size, 59_313_872)
-        XCTAssertFalse(paths.contains("_classic_era_/WowClassic.exe"))
+        let client = try XCTUnwrap(p.client)
+        XCTAssertEqual(client.path, "_classic_era_/WowClassic.exe", "the manifest's spelling, not the product config's WoWClassic.exe")
+        XCTAssertEqual(p.selection.client(build.productConfig), client)
+        XCTAssertFalse(paths.contains("_classic_era_/WowClassic-arm64.exe"))
+        XCTAssertFalse(paths.contains { $0.lowercased().contains("arm64") })
+        // The x64 build of the helpers the clients share names with under Utils.
+        let cef = try XCTUnwrap(p.files.first { $0.path.lowercased() == "_classic_era_/utils/libcef.dll" })
+        let x64Cef = try XCTUnwrap(install.files.indices.first {
+            install.files[$0].name.lowercased() == #"utils\libcef.dll"# && install.file($0, has: ["Windows", "x86_64"])
+        })
+        XCTAssertEqual(cef.ckey, install.files[x64Cef].ckey)
+        XCTAssertEqual(Set(paths.map { $0.lowercased() }).count, 35)
         let dirs = Set(paths.map { $0.split(separator: "/").dropLast().joined(separator: "/") })
         XCTAssertEqual(dirs.count, Set(dirs.map { $0.lowercased() }).count)
         XCTAssertEqual(Set(p.content.files.map(\.path)).isSuperset(of: paths), true)
 
-        // Stored: the all-locale entry and the EU-only one; then root and the build's manifests.
+        // Stored: the all-locale entry, the EU-only one and the x64-only one; then root and the
+        // build's manifests.
         let stored = Set(p.selection.objects.map(\.key))
-        XCTAssertEqual(stored.intersection(ekeys.map { PackedKey($0) }), [PackedKey(ekeys[0]), PackedKey(ekeys[2])])
+        XCTAssertEqual(stored.intersection(ekeys.map { PackedKey($0) }), [PackedKey(ekeys[0]), PackedKey(ekeys[2]), PackedKey(ekeys[4])])
         let cfg = build.config.config
         for name in ["encoding", "install", "download", "size", "patch-index", "vfs-root", "vfs-1", "vfs-239"] {
             XCTAssertTrue(stored.contains(PackedKey(TACTHash(hex: cfg[name]![1])!)), name)
@@ -410,20 +424,10 @@ final class BattleNetInstallTests: XCTestCase {
         XCTAssertEqual(p.content.files[0].parts[1].fileOffset, 480)
         XCTAssertEqual(p.locations.count, p.selection.objects.count)
 
-        var x64 = BattleNetInstallOptions(locale: "enUS")
-        x64.x64Client = true
-        let both = try plan(x64)
-        XCTAssertTrue(both.files.contains { $0.path == "_classic_era_/WowClassic.exe" })
-        XCTAssertTrue(Set(both.selection.objects.map(\.key)).contains(PackedKey(ekeys[4])))
-        // 31 ARM64 files and 35 x64 ones (without the three China-region helpers), 28 names
-        // shared; of those, the 9 with different builds (the browser and voice helpers under
-        // Utils) keep the x64 file.
-        XCTAssertEqual(both.files.count, 38)
-        XCTAssertTrue(both.files.contains { $0.path == "_classic_era_/WowClassic-arm64.exe" })
-        let cef = { (p: BattleNetInstallPlan) in p.files.first { $0.path.lowercased() == "_classic_era_/utils/libcef.dll" }?.ckey }
-        XCTAssertNotNil(cef(both))
-        XCTAssertNotEqual(cef(both), cef(p))
-        XCTAssertEqual(Set(both.files.map { $0.path.lowercased() }).count, 38)
+        // A product config naming another x64 executable: the selection has no client.
+        let renamed = try ProductConfig(Array(String(decoding: try fixture("wow_classic_era-productconfig.json"), as: UTF8.self)
+            .replacingOccurrences(of: #""relative_path":"WoWClassic.exe""#, with: #""relative_path":"Elsewhere.exe""#).utf8))
+        XCTAssertNil(p.selection.client(renamed))
         var us = BattleNetInstallOptions(locale: "enUS")
         us.regions = [.us]
         XCTAssertFalse(Set(try plan(us).selection.objects.map(\.key)).contains(PackedKey(ekeys[2])))
@@ -440,12 +444,12 @@ final class BattleNetInstallTests: XCTestCase {
             configure(&options)
             return try await installer(client(cdn)).prepare(.wowClassicEra, .us, options: options, work: try temp()).plan
         }
-        // 40 objects, of which 3 per 8 are deDE-only, Alternate or x64-only; root is object 0;
+        // 40 objects, of which 3 per 8 are deDE-only, Alternate or ARM64-only; root is object 0;
         // and the three manifests.
         let wide = try await plan { $0.maxGapBytes = 1 << 20 }
         XCTAssertEqual(wide.objects, 25 + 3)
         // One read per archive, one per loose object (3 selected, 3 manifests), one per file
-        // (the x64 client is not selected).
+        // (the ARM64 client is not selected).
         XCTAssertEqual(wide.requests, 2 + 6 + 3)
         XCTAssertEqual(wide.dataFiles, [0])
         let narrow = try await plan { $0.maxGapBytes = 0 }
@@ -489,7 +493,7 @@ final class BattleNetInstallTests: XCTestCase {
         XCTAssertEqual(read.installKey, prepared.plan.build.config.install.ekey)
         XCTAssertEqual(read.cdnHosts, ["level3.blizzard.com", "us.cdn.blizzard.com"])
         XCTAssertEqual(read.cdnServers, ["https://us.cdn.blizzard.com/?maxhosts=4", "http://level3.blizzard.com/?maxhosts=4"])
-        XCTAssertEqual(read.tags, "Windows arm64 US? enUS speech?:Windows arm64 US? enUS text?")
+        XCTAssertEqual(read.tags, "Windows x86_64 US? enUS speech?:Windows x86_64 US? enUS text?")
         XCTAssertEqual(read.version, "1.0.0.1")
 
         for h in [p.buildConfig, p.cdnConfig] {
@@ -503,10 +507,11 @@ final class BattleNetInstallTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: root.appendingPathComponent("_classic_era_/.flavor.info"), encoding: .utf8),
                        "Product Flavor!STRING:0\nwow_classic_era\n")
 
-        XCTAssertEqual([UInt8](try Data(contentsOf: root.appendingPathComponent("_classic_era_/WowClassic-arm64.exe"))), p.files[0].content)
-        XCTAssertEqual([UInt8](try Data(contentsOf: root.appendingPathComponent("_classic_era_/Utils/a-arm64.dll"))), p.files[2].content)
-        XCTAssertEqual([UInt8](try Data(contentsOf: root.appendingPathComponent("_classic_era_/Utils/b-arm64.dll"))), p.files[3].content)
-        XCTAssertFalse(fm.fileExists(atPath: root.appendingPathComponent("_classic_era_/WoWClassic.exe").path))
+        XCTAssertEqual([UInt8](try Data(contentsOf: root.appendingPathComponent("_classic_era_/WoWClassic.exe"))), p.files[0].content)
+        XCTAssertEqual([UInt8](try Data(contentsOf: root.appendingPathComponent("_classic_era_/Utils/a.dll"))), p.files[2].content)
+        XCTAssertEqual([UInt8](try Data(contentsOf: root.appendingPathComponent("_classic_era_/Utils/b.dll"))), p.files[3].content)
+        XCTAssertFalse(fm.fileExists(atPath: root.appendingPathComponent("_classic_era_/WowClassic-arm64.exe").path))
+        XCTAssertEqual(prepared.clientPath, "_classic_era_/WoWClassic.exe")
 
         // Each stored object is in data.000 exactly as the CDN serves it, after its header.
         let store = [UInt8](try Data(contentsOf: root.appendingPathComponent("Data/data/data.000")))
@@ -541,10 +546,10 @@ final class BattleNetInstallTests: XCTestCase {
             XCTAssertFalse(v.isIntact, "byte \(at)")
             try flip(store, at: at)
         }
-        try flip("_classic_era_/Utils/a-arm64.dll", at: 100)
+        try flip("_classic_era_/Utils/a.dll", at: 100)
         let v = try await BattleNetInstaller.verify(root, plan: prepared.plan)
         XCTAssertEqual(v.damaged.count, 1)
-        XCTAssertTrue(v.damaged[0].hasPrefix("_classic_era_/Utils/a-arm64.dll"))
+        XCTAssertTrue(v.damaged[0].hasPrefix("_classic_era_/Utils/a.dll"))
     }
 
     /// An install interrupted after a few reads resumes without reading them again; a chunk
@@ -655,23 +660,26 @@ final class BattleNetInstallTests: XCTestCase {
         XCTAssertGreaterThan(pauses.all.last ?? 0, 25)
     }
 
-    /// A build whose plan lacks the ARM64 client the product config names is refused while it
-    /// is planned, before anything is downloaded; the plan names the client otherwise.
-    func testAPlanWithoutItsARM64ClientIsRefusedBeforeTheDownload() async throws {
+    /// A build whose plan lacks the x64 client the product config names is refused while it is
+    /// planned, before anything is downloaded; the plan names the client otherwise.
+    func testAPlanWithoutItsX64ClientIsRefusedBeforeTheDownload() async throws {
         let config = try fixture("wow_classic_era-productconfig.json")
         let cdn = FakeCDN()
         _ = FakeProduct.make(on: cdn, productConfig: config)
         let dir = try temp()
         let prepared = try await installer(client(cdn)).prepare(.wowClassicEra, .us, options: BattleNetInstallOptions(locale: "enUS"),
                                                                  work: dir.appendingPathComponent(".ok"))
-        XCTAssertEqual(prepared.plan.arm64Client?.path, "_classic_era_/WowClassic-arm64.exe")
+        XCTAssertEqual(prepared.plan.client?.path, "_classic_era_/WoWClassic.exe")
+        XCTAssertEqual(prepared.clientPath, "_classic_era_/WoWClassic.exe")
 
         let other = FakeCDN()
-        let renamed = String(decoding: config, as: UTF8.self).replacingOccurrences(of: "WowClassic-arm64.exe", with: "Elsewhere-arm64.exe")
+        let renamed = String(decoding: config, as: UTF8.self).replacingOccurrences(of: #""relative_path":"WoWClassic.exe""#,
+                                                                                    with: #""relative_path":"Elsewhere.exe""#)
         _ = FakeProduct.make(on: other, productConfig: Array(renamed.utf8))
         await assertThrows(try await installer(client(other)).prepare(.wowClassicEra, .us, options: BattleNetInstallOptions(locale: "enUS"),
                                                                       work: dir.appendingPathComponent(".no"))) {
-            guard case .unsupported = $0 else { return XCTFail("\($0)") }
+            guard case let .unsupported(why) = $0 else { return XCTFail("\($0)") }
+            XCTAssertTrue(why.contains("x64 client"), why)
         }
         XCTAssertFalse(other.requests.contains { $0.status == 206 })
     }
@@ -680,7 +688,7 @@ final class BattleNetInstallTests: XCTestCase {
 
     /// Installs a product from Blizzard's CDN on the workstation and writes what it took to a
     /// Markdown report. `BATTLENET_LIVE_INSTALL=<product>:<install root>` (region us, locale
-    /// enUS; `BATTLENET_LIVE_X64=1` adds the x64 client), `BATTLENET_LIVE_REPORT=<file>`.
+    /// enUS), `BATTLENET_LIVE_REPORT=<file>`.
     /// Skipped unless both are set. A network failure resumes the install, up to 20 times; run
     /// again after an interruption, it resumes too.
     func testLiveInstall() async throws {
@@ -691,8 +699,7 @@ final class BattleNetInstallTests: XCTestCase {
         }
         let root = URL(fileURLWithPath: String(spec[spec.index(after: colon)...]))
         let work = BattleNetInstaller.workArea(for: root)
-        var options = BattleNetInstallOptions(locale: "enUS")
-        options.x64Client = env["BATTLENET_LIVE_X64"] == "1"
+        let options = BattleNetInstallOptions(locale: "enUS")
         let transport = Counting(BattleNetClientKitTests.live)
         let installer = BattleNetInstaller(client: BattleNetClient(transport: transport), log: .stderr())
         @Sendable func say(_ s: String) { FileHandle.standardError.write(Data("[live] \(s)\n".utf8)) }
@@ -731,7 +738,7 @@ final class BattleNetInstallTests: XCTestCase {
         let engine = result!.engine
         var lines = ["| | |", "|---|---|",
                      "| product | `\(product.code)` \(b.version.versionsName) (build \(b.version.buildID)), region us, enUS, regions kept: \(options.regions.map(\.rawValue).joined(separator: " ")) |",
-                     "| machines | arm64\(options.x64Client ? " + x86_64" : "") |",
+                     "| machines | \(b.productConfig.x64Tags.joined(separator: " ")) (`\(prepared.clientPath)`) |",
                      "| stored objects | \(plan.objects), \(gb(plan.storedBytes)) in \(plan.dataFiles.count) data files |",
                      "| product folder files | \(plan.files.count), \(gb(plan.files.reduce(0) { $0 + $1.size })) |",
                      "| CDN reads | \(plan.requests) planned (\(gb(plan.fetchBytes))); this run \(engine.chunksDownloaded) chunks, \(gb(engine.downloadedBytes)) written from the CDN; \(engine.chunksResumed) resumed, \(engine.chunksRejected) rejected on resume |",

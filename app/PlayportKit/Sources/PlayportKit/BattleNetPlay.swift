@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Play for a Battle.net copy (PLA-514, decisions 0170 and 0175): the ban-risk notice before the
-// first Play of each product, then the update check (PLA-521), then the product's ARM64 client as
-// a native ARM64 child of the x86-64 session, drawing with Direct3D 12 through ARM64 vkd3d-proton
-// on Vulkan. World of Warcraft shows its own login; Playport passes it no sign-in and keeps no
-// Battle.net credential or session. The app (LibraryModel.play) asks `decide`, does the step, and
-// asks again with what it learned, until the step is `launch`.
+// Play for a Battle.net copy (PLA-514, decisions 0175 and 0177): the ban-risk notice before the
+// first Play of each product, then the update check (PLA-521), which also brings the x64 client to
+// an install from before 0177, then the product's x64 client through FEX on the x86-64 path,
+// drawing with Direct3D 12 through vkd3d-proton (x64/arm64ec) on Vulkan. World of Warcraft shows
+// its own login; Playport passes it no sign-in and keeps no Battle.net credential or session. The
+// app (LibraryModel.play) asks `decide`, does the step, and asks again with what it learned, until
+// the step is `launch`.
 
 import BattleNetClientKit
 import Foundation
@@ -26,11 +27,13 @@ public enum BattleNetPlay {
         }
     }
 
-    /// The update check's answer: the region's version endpoint against the install's build.
+    /// The update check's answer: the region's version endpoint against the install's build and
+    /// the install's client (BattleNetUpdateCheck).
     public enum Update: Equatable, Sendable {
-        /// The install is on the region's current build.
+        /// The install is on the region's current build, with the x64 client.
         case current
-        /// A newer build, and the bytes its update writes (BattleNetClientKit's update plan).
+        /// A newer build, or the x64 client an install from before decision 0177 lacks (`version`
+        /// is then the installed one), and the bytes its update writes (BattleNetClientKit's update plan).
         case available(version: String, bytes: UInt64)
         /// The check failed (no connection, Blizzard's servers): why, worded for the player.
         case unreachable(String)
@@ -38,8 +41,9 @@ public enum BattleNetPlay {
         case updated
     }
 
-    /// Play's next step. The gates run in this order: the notice, the client, the update check
-    /// with its space and its download, then the launch.
+    /// Play's next step. The gates run in this order: the notice, the update check with its space
+    /// and its download (an install without the x64 client gets it this way), the client, then the
+    /// launch.
     public enum Step: Equatable, Sendable {
         /// The ban-risk notice (`notice(_:)`); Play starts only once the player accepts it, and the
         /// acceptance is kept with the copy (InstalledTitle.riskNoticeAccepted).
@@ -53,11 +57,11 @@ public enum BattleNetPlay {
         case launch(Launch)
     }
 
-    /// How the client starts. Its executable is the copy's (the receipt names the ARM64 client),
-    /// which the session starts as a native ARM64 child (decision 0170): no FEX.
+    /// How the client starts. Its executable is the copy's (the receipt names the x64 client),
+    /// which the session runs through FEX like any x86-64 game (decision 0177).
     public struct Launch: Equatable, Sendable {
-        /// Vulkan whatever the settings say: vkd3d-proton is the ARM64 child's Direct3D 12, and
-        /// DXMT has no Direct3D 12.
+        /// Vulkan whatever the settings say: vkd3d-proton is the client's Direct3D 12, and DXMT
+        /// has no Direct3D 12.
         public var graphics: GraphicsBackend
         /// After the receipt's arguments: WoW's own switch for its Direct3D 12 renderer (its
         /// `-d3d11` was seen to force Direct3D 11; this one is not seen on its own). What keeps
@@ -82,10 +86,6 @@ public enum BattleNetPlay {
         let t = facts.copy
         guard t.store == .battlenet, let product = BattleNet.product(t.key) else { return nil }
         guard t.riskNoticeAccepted != nil else { return .notice(product) }
-        guard t.executableMachine == arm64Machine else {
-            return .refuse("\(product.name) starts only from its ARM64 client, and \(t.executable ?? "no client") is not it. "
-                           + "Pick the ARM64 client on the game's page, or reinstall.")
-        }
         var report: String?
         switch facts.update {
         case nil:
@@ -96,24 +96,31 @@ public enum BattleNetPlay {
             }
             return .update(product, version: version)
         case let .unreachable(why):
+            guard t.executableMachine == x64Machine else {
+                return .refuse("\(product.name) starts only from its x64 client, which must be downloaded first, and Blizzard's "
+                               + "servers couldn't be reached: \(why)")
+            }
             report = "Couldn't check for an update: \(why) \(product.name) starts the installed version."
         case .current, .updated:
-            break
+            guard t.executableMachine == x64Machine else {
+                return .refuse("\(product.name) starts only from its x64 client, and \(t.executable ?? "no client") is not it. "
+                               + "Check for update on the game's page downloads it.")
+            }
         }
         return .launch(Launch(graphics: .vulkan, arguments: ["-d3d12"], report: report))
     }
 
-    /// The PE machine of an ARM64 Windows executable.
-    static let arm64Machine: UInt16 = 0xAA64
+    /// The PE machine of an x86-64 Windows executable.
+    static let x64Machine: UInt16 = 0x8664
 
     /// The notice the player accepts or declines, and the product page shows afterwards. Its sentence on
-    /// the game's files says what decision 0176 does: the runtime adapts the client's code in memory
-    /// (x18 rewrite, relocations, section remap), never its files.
+    /// the game's files and code says what decision 0177 does: Blizzard's x64 client runs through FEX,
+    /// unchanged on disk and in memory.
     public static func notice(_ product: BattleNetProduct) -> (title: String, text: String) {
         ("Before you play \(product.name)",
          "Blizzard does not support Playport. Blizzard may take action against your Battle.net account for playing "
-         + "\(product.name) here, up to a suspension or a ban. Playport changes none of the game's files; to run on "
-         + "iPhone it rewrites some of the game's instructions in memory, which Blizzard may detect. "
-         + "You sign in inside \(product.name) itself: Playport stores no Battle.net email, password or session.")
+         + "\(product.name) here, up to a suspension or a ban. Playport changes none of the game's files and none of its "
+         + "code in memory: it runs Blizzard's x64 Windows client through an x86-64 translator (FEX), as Windows on ARM "
+         + "PCs do. You sign in inside \(product.name) itself: Playport stores no Battle.net email, password or session.")
     }
 }

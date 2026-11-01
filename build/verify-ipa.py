@@ -567,7 +567,8 @@ def wow64_checks(rt, rows):
 
 
 def arm64_vulkan_checks(rt, rows):
-    """The Vulkan backend's aarch64 set for a native ARM64 child (PLA-513, decision 0170):
+    """The Vulkan backend's aarch64 set for a native ARM64 child (PLA-513, decision 0170; World of
+    Warcraft plays its x64 client since 0177, so this serves the probes and other ARM64 programs):
     vkd3d-proton's d3d12 and d3d12core and DXVK's dxgi under Runtime/vulkan, the Khronos loader and
     winevulkan's ICD manifest under Runtime/vulkan-loader, each DLL an ARM64 PE32+ Wine builtin.
     An ARM64EC build (machine AMD64) is the wrong machine here."""

@@ -153,7 +153,7 @@ final class BattleNetStoreTests: XCTestCase {
         XCTAssertNil(BattleNet.jobChoice("eu"))
     }
 
-    func testAFinishedInstallIsALibraryTitlePlayedFromItsARM64Client() throws {
+    func testAFinishedInstallIsALibraryTitlePlayedFromItsX64Client() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("bnet-\(UUID().uuidString)")
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
         let paths = PlayportPaths.container(home: root)
@@ -168,15 +168,18 @@ final class BattleNetStoreTests: XCTestCase {
 
         let folder = games.appendingPathComponent("World of Warcraft Classic Era (Battle.net)/_classic_era_")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        var pe = Direct3D12Tests.pe(plus: true, name: "d3d12.dll")
-        pe[0x84] = 0x64
-        pe[0x85] = 0xAA
-        try pe.write(to: folder.appendingPathComponent("WowClassic-arm64.exe"))
-        try pe.write(to: folder.appendingPathComponent("WowClassic.exe"))
+        var arm64 = Direct3D12Tests.pe(plus: true, name: "d3d12.dll")
+        arm64[0x84] = 0x64
+        arm64[0x85] = 0xAA
+        var x64 = Direct3D12Tests.pe(plus: true, name: "d3d12.dll")
+        x64[0x84] = 0x64
+        x64[0x85] = 0x86
+        try arm64.write(to: folder.appendingPathComponent("WowClassic-arm64.exe"))
+        try x64.write(to: folder.appendingPathComponent("WowClassic.exe"))
         let at = Date(timeIntervalSince1970: 1_790_000_000)
+        // The client's path as the install manifest spells it (BattleNetInstaller.Prepared.clientPath).
         let receipt = BattleNet.receipt(.wowClassicEra, folder: "World of Warcraft Classic Era (Battle.net)", version: "1.15.9.70576",
-                                        productFolder: "_classic_era_", arm64Executable: "WowClassic-arm64.exe",
-                                        files: 12, bytes: 4_959_406_050, at: at)
+                                        client: "_classic_era_/WowClassic.exe", files: 12, bytes: 4_959_406_050, at: at)
         try paths.layout.saveReceipt(receipt)
         let c = Adoption.scan(games: games, cohort: Cohort(titles: []), receipts: [], storeReceipts: paths.layout.storeReceipts(),
                               previous: Catalog())
@@ -184,8 +187,8 @@ final class BattleNetStoreTests: XCTestCase {
         XCTAssertEqual(t.id, "bnet-wow_classic_era")
         XCTAssertEqual(t.key, BattleNet.key(.wowClassicEra))
         XCTAssertEqual(t.name, "World of Warcraft Classic Era")
-        XCTAssertEqual(t.executable, #"_classic_era_\WowClassic-arm64.exe"#)
-        XCTAssertEqual(t.executableMachine, 0xAA64, "the ARM64 client, never the x64 one")
+        XCTAssertEqual(t.executable, #"_classic_era_\WowClassic.exe"#)
+        XCTAssertEqual(t.executableMachine, 0x8664, "the x64 client, never the ARM64 one (decision 0177)")
         XCTAssertEqual(t.storeVersion, "1.15.9.70576")
         XCTAssertEqual(t.source, .installed)
         XCTAssertEqual(c.titles.filter { $0.store == .local }.map(\.installDir), ["world of warcraft classic era"])
@@ -202,7 +205,7 @@ final class BattleNetStoreTests: XCTestCase {
         let info = "Branch!STRING:0|Active!DEC:1|Build Key!HEX:16|CDN Key!HEX:16|Install Key!HEX:16|IM Size!DEC:4|CDN Path!STRING:0|"
             + "CDN Hosts!STRING:0|CDN Servers!STRING:0|Tags!STRING:0|Armadillo!STRING:0|Last Activated!STRING:0|Version!STRING:0|Product!STRING:0\n"
             + "eu|1|\(String(repeating: "a", count: 32))|\(String(repeating: "b", count: 32))|\(String(repeating: "c", count: 32))|1|tpr/wow|"
-            + "eu.cdn.blizzard.com|https://eu.cdn.blizzard.com/?maxhosts=4|Windows arm64 EU? frFR speech?:Windows arm64 EU? frFR text?|||1.15.9.70576|wow_classic_era\n"
+            + "eu.cdn.blizzard.com|https://eu.cdn.blizzard.com/?maxhosts=4|Windows x86_64 EU? frFR speech?:Windows x86_64 EU? frFR text?|||1.15.9.70576|wow_classic_era\n"
         try Data(info.utf8).write(to: folder.appendingPathComponent(".build.info"))
         let choice = try XCTUnwrap(BattleNet.installedChoice(.wowClassicEra, folder: folder))
         XCTAssertEqual(choice.region, .eu)
@@ -220,7 +223,7 @@ final class BattleNetStoreTests: XCTestCase {
 
         let at = Date(timeIntervalSince1970: 1_790_000_000)
         let before = BattleNet.receipt(.wowClassicEra, folder: "World of Warcraft Classic Era", version: "1.15.9.70576",
-                                       productFolder: "_classic_era_", arm64Executable: "WowClassic-arm64.exe", files: 12, bytes: 4_959_406_050, at: at)
+                                       client: "_classic_era_/WowClassic.exe", files: 12, bytes: 4_959_406_050, at: at)
         // The folder holds .build.info and 300 bytes in two more files: the receipt says so,
         // whatever it said before.
         try FileManager.default.createDirectory(at: folder.appendingPathComponent("Data/data"), withIntermediateDirectories: true)
@@ -238,8 +241,9 @@ final class BattleNetStoreTests: XCTestCase {
     }
 
     /// PLA-521: an update is an update job with no locale, which Downloads shows as Updating, apart
-    /// from a language change; its receipt names the new version and the folder's size, not the
-    /// old size plus what the update wrote (it replaces files too).
+    /// from a language change; its receipt names the new version, the folder's size, not the
+    /// old size plus what the update wrote (it replaces files too), and the client it installed:
+    /// an install from before decision 0177 named the ARM64 one.
     func testAnUpdateJobIsShownApartFromALanguageChange() {
         let update = BattleNet.updateJob(.wow, bytes: 300_000_000)
         XCTAssertEqual(update.kind, .update)
@@ -249,13 +253,17 @@ final class BattleNetStoreTests: XCTestCase {
         XCTAssertNil(BattleNet.jobVerb(update), "Downloads' own Updating")
         XCTAssertEqual(BattleNet.jobVerb(BattleNet.languageJob(.wow, region: .eu, locale: "deDE")), "Changing language")
 
-        let before = BattleNet.receipt(.wow, folder: "World of Warcraft", version: "12.0.1.1", productFolder: "_retail_",
-                                       arm64Executable: "Wow-ARM64.exe", files: 12, bytes: 1000, at: Date(timeIntervalSince1970: 1_790_000_000))
-        let after = BattleNet.receipt(before, measured: (files: 10, bytes: 900), version: "12.0.1.2")
+        var before = BattleNet.receipt(.wow, folder: "World of Warcraft", version: "12.0.1.1", client: "_retail_/Wow.exe",
+                                       files: 12, bytes: 1000, at: Date(timeIntervalSince1970: 1_790_000_000))
+        XCTAssertEqual(before.executable, #"_retail_\Wow.exe"#)
+        before.executable = #"_retail_\Wow-ARM64.exe"#
+        let after = BattleNet.receipt(before, measured: (files: 10, bytes: 900), version: "12.0.1.2", client: "_retail_/Wow.exe")
         XCTAssertEqual(after.version, "12.0.1.2")
         XCTAssertEqual(after.files, 10)
         XCTAssertEqual(after.bytes, 900)
-        XCTAssertEqual(after.executable, before.executable)
+        XCTAssertEqual(after.executable, #"_retail_\Wow.exe"#)
+        XCTAssertEqual(BattleNet.receipt(after, measured: (files: 10, bytes: 900)).executable, after.executable,
+                       "a language change keeps the client")
     }
 
     /// PLA-521: a Play waiting for its product's update goes on only after that update finished

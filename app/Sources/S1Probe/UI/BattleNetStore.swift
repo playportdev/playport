@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// The Battle.net store in the app (PLA-519, decision 0174), as EpicAccount.swift is Epic's,
-// without a sign-in: which World of Warcraft products are offered (BattleNetClientKit asks
-// Blizzard's public version endpoint and CDN; a product is listed while its build carries its
-// ARM64 client), cached so the store lists offline; each product's store region (the phone's
+// The Battle.net store in the app (PLA-519, decisions 0174 and 0177), as EpicAccount.swift is
+// Epic's, without a sign-in: which World of Warcraft products are offered (BattleNetClientKit
+// asks Blizzard's public version endpoint and CDN; a product is listed while its build carries
+// its x64 client), cached so the store lists offline; each product's store region (the phone's
 // region until the page's picker changes it) and install language (the phone's language as a
 // WoW locale, enUS as fallback); its download size and the space an install needs, an Install
 // refused up front when that space is not free; and the Battle.net driver of the download queue,
@@ -50,21 +50,26 @@ final class BattleNetStore: ObservableObject, DownloadDriver {
         .appendingPathComponent("Playport/battlenet/listings.json")
 
     private init() {
-        if let data = try? Data(contentsOf: Self.cache), let c = try? JSONDecoder.gogCache.decode(Cache.self, from: data) {
+        if let data = try? Data(contentsOf: Self.cache), let c = try? JSONDecoder.gogCache.decode(Cache.self, from: data),
+           c.machine == BattleNetProduct.x64ClientTag {
             listings = c.listings
             listedAt = c.at
         }
     }
 
+    /// `machine`: the client the listings' offers and sizes are for. A cache from before decision
+    /// 0177 has none (its sizes are the ARM64 client's) and is asked again.
     private struct Cache: Codable {
         var at: Date
         var listings: [BattleNetListing]
+        var machine: String?
     }
 
     private func saveCache() {
         guard let at = listedAt else { return }
         try? FileManager.default.createDirectory(at: Self.cache.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? JSONEncoder.gogCache.encode(Cache(at: at, listings: listings)).write(to: Self.cache, options: .atomic)
+        try? JSONEncoder.gogCache.encode(Cache(at: at, listings: listings, machine: BattleNetProduct.x64ClientTag))
+            .write(to: Self.cache, options: .atomic)
     }
 
     /// Registers the driver. Blizzard is asked only when the store is shown (the Library's
@@ -269,12 +274,8 @@ final class BattleNetStore: ObservableObject, DownloadDriver {
         let work = BattleNet.workArea(p, layout: layout)
         var installer = BattleNetInstaller(client: client, log: log)
         installer.engine.progressInterval = 0.5
+        // The plan holds the x64 client (prepare refuses one without it), before any download.
         let prepared = try await installer.prepare(p, choice.region, options: BattleNetInstallOptions(locale: choice.locale), work: work)
-        // The plan holds the ARM64 client (prepare refuses one without it), before any download.
-        let pc = prepared.plan.build.productConfig
-        guard let exe = pc.arm64Executable, prepared.plan.arm64Client != nil else {
-            throw BattleNetError.unsupported("\(p.code) has no ARM64 client")
-        }
         try InstallFS.makeDirectory(layout.gamesRoot)
         let folder = BattleNet.folder(p, in: layout.gamesRoot)
         let root = layout.gamesRoot.appendingPathComponent(folder, isDirectory: true)
@@ -284,7 +285,7 @@ final class BattleNetStore: ObservableObject, DownloadDriver {
         let measured = await BattleNet.measure(root)
         do {
             try layout.saveReceipt(BattleNet.receipt(p, folder: folder, version: prepared.plan.build.version.versionsName,
-                                                     productFolder: pc.folder, arm64Executable: exe,
+                                                     client: prepared.clientPath,
                                                      files: measured.files, bytes: measured.bytes, at: Date()))
         } catch {
             // No receipt, no title: the folder would be left in C:\Games with nothing to play or remove it.
