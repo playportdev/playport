@@ -1,0 +1,206 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 1 Nov 2026 21:00:00 +0100
+Subject: [PATCH] signal: the Mach handler's emulated reads skip a region query,
+ an instruction copy and the SIMD state fetch
+
+World of Warcraft's x64 client took about 16.6 M Mach exceptions before its
+first window (run 20261101T200342: 14.6 M reads of open pages of
+noaccess-split host pages, 2.0 M sub-floor reads of KUSER_SHARED_DATA), and the
+one thread that serves them used 165 s of CPU in those 250 s. From run
+20261101T194001 to 200342 that thread's CPU fell by 67 s (madeira-unix 0281)
+and the first window came 68 s sooner. Its samples in 200342: mach_msg 50 %,
+thread_get_state 20 %, mach_vm_read_overwrite 11 %, thread_set_state 7 %,
+mach_vm_region 8 %.
+
+For each such read the handler now
+- reads the faulting instruction of a JIT pool pc with a plain load
+  (ios_exc_pool_insn): the pool's RX mapping lives as long as the process and
+  the thread was executing that word; any other pc keeps the copy;
+- fetches the SIMD/FP state only when the faulting instruction is not a
+  general-register load or store in JIT code (pp_exc_fast.h, host test
+  tools/tests/test_exc_fast.py), or when
+  neither the sub-floor nor the noaccess-split service completed the access,
+  before every later stage;
+- skips the ml555 protection snapshot (mach_vm_region) for an access already
+  completed, whose [fault_rip] line never comes;
+- sets the SIMD/FP state after a sub-floor access only when the emulation
+  changed it, as madeira-unix 0281 does for noaccess-split.
+
+Linear: PLA-516
+Class: ios-port
+Evidence: docs/evidence/2026-11-01-wow-x64-fex.md
+Offered-upstream: no; the Mach exception handler is the iOS port's
+---
+ build/ntdll-unix/pp_exc_fast.h      | 22 +++++++++++
+ build/ntdll-unix/signal_arm64_ios.c | 77 +++++++++++++++++++++++++++++++------
+ 2 files changed, 88 insertions(+), 11 deletions(-)
+ create mode 100644 build/ntdll-unix/pp_exc_fast.h
+
+diff --git a/build/ntdll-unix/pp_exc_fast.h b/build/ntdll-unix/pp_exc_fast.h
+new file mode 100644
+index 0000000..9b3ea44
+--- /dev/null
++++ b/build/ntdll-unix/pp_exc_fast.h
+@@ -0,0 +1,22 @@
++/* Playport (PLA-516): the Mach exception handler's shortcuts for the reads it
++ * emulates (sub-floor and noaccess-split): which faulting instruction may be read
++ * with a plain load, and which needs no SIMD/FP state (host test:
++ * tools/tests/test_exc_fast.py). */
++#ifndef PP_EXC_FAST_H
++#define PP_EXC_FAST_H
++
++/* Whether pc is a whole aligned instruction word inside [rx, rx + size): the JIT
++ * pool's RX mapping, which lives as long as the process. */
++static inline int ppef_pool_word( unsigned long long pc, unsigned long long rx, unsigned long long size )
++{
++    return rx && size >= 4 && !(pc & 3) && pc >= rx && pc - rx <= size - 4;
++}
++
++/* Whether insn is an A64 load or store of general registers only (the
++ * load/store class, op0 x1x0, with V, bit 26, clear): emulating it neither reads
++ * nor writes the SIMD/FP registers. */
++static inline int ppef_gpr_ldst( unsigned int insn )
++{
++    return (insn & 0x0e000000u) == 0x08000000u;
++}
++#endif /* PP_EXC_FAST_H */
+diff --git a/build/ntdll-unix/signal_arm64_ios.c b/build/ntdll-unix/signal_arm64_ios.c
+index e469deb..37b075b 100644
+--- a/build/ntdll-unix/signal_arm64_ios.c
++++ b/build/ntdll-unix/signal_arm64_ios.c
+@@ -1586,6 +1586,36 @@ static int ios_fault_read_insn( uint64_t fault_pc, uint32_t *out )
+     }
+     return 1;
+ }
++
++#include "pp_exc_fast.h"
++
++/* Playport (PLA-516): the instruction at a JIT pool pc, read with a plain load:
++ * the pool's RX mapping lives as long as the process and the faulting thread was
++ * executing that word, so the read cannot fault. 0 for a pc outside the pool. */
++static int ios_exc_pool_insn( uint64_t pc, uint32_t *out )
++{
++    extern void *ios_jit_rx_base_global;
++    extern size_t ios_jit_pool_size_global;
++
++    if (!ppef_pool_word( pc, (uint64_t)(uintptr_t)ios_jit_rx_base_global, ios_jit_pool_size_global )) return 0;
++    *out = *(const volatile uint32_t *)(uintptr_t)pc;
++    return 1;
++}
++
++/* Playport (PLA-516): the faulting instruction of an emulated access, for the
++ * sub-floor and noaccess-split services: a JIT pool pc directly (ios_exc_pool_insn),
++ * which saves a mach_vm_read_overwrite (a Mach trap) on every one of the ~17 M
++ * emulated reads before World of Warcraft's first window (run 20261101T200342);
++ * any other pc through the failure-returning copy. 0 when the word cannot be read. */
++static int ios_exc_read_insn( uint64_t pc, uint32_t *out )
++{
++    mach_vm_size_t got = 0;
++
++    if (ios_exc_pool_insn( pc, out )) return 1;
++    *out = 0;
++    return mach_vm_read_overwrite( mach_task_self(), (mach_vm_address_t)pc, 4, (mach_vm_address_t)out, &got )
++               == KERN_SUCCESS && got == 4;
++}
+ /* smc-trap: set while the store emulator hands a write to a page
+  * Wine records as not writable to the guest exception path. Such a fault is
+  * not transient, so it is dispatched on the first occurrence. Only the single
+@@ -2124,11 +2154,25 @@ static void *ios_mach_exception_thread( void *arg )
+         mach_msg_type_number_t count = ARM_THREAD_STATE64_COUNT;
+         kr = thread_get_state( thread, ARM_THREAD_STATE64,
+                                (thread_state_t)&state, &count );
+-        /* Also fetch NEON (SIMD/FP) state for STR/STP-q emulation */
++        /* Also fetch NEON (SIMD/FP) state for STR/STP-q emulation. Playport (PLA-516):
++         * not yet for a bad access by a general-register load or store in JIT code, the
++         * sub-floor and noaccess-split reads (~17 M before World of Warcraft's first
++         * window, run 20261101T200342), whose emulation never touches it; it is
++         * fetched below when neither service completes the access. */
+         arm_neon_state64_t neon_state;
+         mach_msg_type_number_t neon_count = ARM_NEON_STATE64_COUNT;
+-        int have_neon = (thread_get_state(thread, ARM_NEON_STATE64,
+-                                          (thread_state_t)&neon_state, &neon_count) == KERN_SUCCESS);
++        int have_neon = 0, neon_deferred = 0;
++        {
++            uint32_t pre_insn = 0;
++
++            if (kr == KERN_SUCCESS && req->exception == EXC_BAD_ACCESS &&
++                ios_exc_pool_insn( (uint64_t)arm_thread_state64_get_pc( state ), &pre_insn ) &&
++                ppef_gpr_ldst( pre_insn ))
++                neon_deferred = 1;
++            else
++                have_neon = (thread_get_state( thread, ARM_NEON_STATE64,
++                                               (thread_state_t)&neon_state, &neon_count ) == KERN_SUCCESS);
++        }
+         if (kr == KERN_SUCCESS)
+         {
+             uintptr_t fault_addr = (uintptr_t)req->code[1];
+@@ -2248,7 +2292,7 @@ static void *ios_mach_exception_thread( void *arg )
+                     sf_uc.uc_mcontext = &sf_mc;
+                     /* ml974: tell the emulators whether __ns is real. */
+                     ios_neon_valid = have_neon;
+-                    if (!have_neon)
++                    if (!have_neon && !neon_deferred)
+                     {
+                         static int nn;
+                         if (nn++ < 8)
+@@ -2266,7 +2310,8 @@ static void *ios_mach_exception_thread( void *arg )
+                         sf_pc = (uint64_t)__darwin_arm_thread_state64_get_pc( state );
+                         __darwin_arm_thread_state64_set_pc_fptr( state,
+                                                                  (void *)(uintptr_t)(sf_pc + 4) );
+-                        if (have_neon)
++                        /* Only a vector load changes it (PLA-516, as for noaccess-split). */
++                        if (have_neon && memcmp( &neon_state, &sf_mc.__ns, sizeof(neon_state) ))
+                         {
+                             neon_state = sf_mc.__ns;
+                             thread_set_state( thread, ARM_NEON_STATE64,
+@@ -2306,6 +2351,13 @@ static void *ios_mach_exception_thread( void *arg )
+                 }
+             }
+ #endif
++            /* Playport (PLA-516): every later stage may read or deliver the SIMD/FP state. */
++            if (!handled && neon_deferred)
++            {
++                have_neon = (thread_get_state( thread, ARM_NEON_STATE64,
++                                               (thread_state_t)&neon_state, &neon_count ) == KERN_SUCCESS);
++                neon_deferred = 0;
++            }
+ 
+             /* ml555: snapshot the protection AT HANDLER ENTRY, and keep the kernel's
+              * own verdict from code[0].
+@@ -2334,7 +2386,10 @@ static void *ios_mach_exception_thread( void *arg )
+                 vm_region_basic_info_data_64_t ebi;
+                 mach_msg_type_number_t ec2 = VM_REGION_BASIC_INFO_COUNT_64;
+                 mach_port_t eo = MACH_PORT_NULL;
+-                if (fault_addr &&
++                /* Playport (PLA-516): not for an access the sub-floor or noaccess-split
++                 * service already completed, whose [fault_rip] line never comes: a
++                 * mach_vm_region less on each of those (~6 % of this thread's samples). */
++                if (fault_addr && !handled &&
+                     mach_vm_region( mach_task_self(), &ea, &es, VM_REGION_BASIC_INFO_64,
+                                     (vm_region_info_t)&ebi, &ec2, &eo ) == KERN_SUCCESS)
+                 { entry_prot = ebi.protection; entry_rbase = (unsigned long long)ea;
+@@ -12478,9 +12533,10 @@ static int ios_subfloor_service( ucontext_t *ctx, void *fault_addr, uintptr_t wi
+     /* ml956: read the faulting instruction through a failure-returning copy.
+      * A naked deref of PC_sig here is the same self-fault hazard as the
+      * backing access below -- an unmapped or stale PC would stop the exception
+-     * thread inside its own handler instead of reporting anything. */
+-    if (mach_vm_read_overwrite( mach_task_self(), (mach_vm_address_t)(uintptr_t)PC_sig(ctx),
+-                                4, (mach_vm_address_t)&insn, &got ) != KERN_SUCCESS || got != 4)
++     * thread inside its own handler instead of reporting anything. Playport
++     * (PLA-516): a JIT pool pc, which cannot be either, is read directly
++     * (ios_exc_read_insn). */
++    if (!ios_exc_read_insn( (uint64_t)(uintptr_t)PC_sig(ctx), &insn ))
+     {
+         static int pc_unreadable;
+         if (pc_unreadable++ < 8)
+@@ -12750,8 +12806,7 @@ static int ios_noaccess_split_service( ucontext_t *ctx, void *fault_addr, uintpt
+     unsigned bytes = 0;
+     int is_write = 0, ok = 0, translator;
+ 
+-    if (mach_vm_read_overwrite( mach_task_self(), (mach_vm_address_t)(uintptr_t)PC_sig(ctx), 4,
+-                                (mach_vm_address_t)&insn, &got ) != KERN_SUCCESS || got != 4)
++    if (!ios_exc_read_insn( (uint64_t)(uintptr_t)PC_sig(ctx), &insn ))
+         return 0;
+     if (!ios_subfloor_classify( insn, &bytes, &is_write ) || !bytes) return 0;
+     /* xtajit64 stamps TEB->Instrumentation[8] (+0x16f8) while the thread holds

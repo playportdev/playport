@@ -248,3 +248,4 @@
 0279-virtual-signal-a-no-access-4-KB-page-beside-code-fau.patch
 0280-virtual-a-read-only-alias-of-a-mapped-view-with-a-no.patch
 0281-signal-a-guest-read-of-an-open-page-of-a-noaccess-sp.patch
+0282-signal-the-Mach-handler-s-emulated-reads-skip-a-regi.patch
