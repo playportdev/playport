@@ -332,7 +332,8 @@ private struct GameDetailPage: View {
                         if let line = subtitle(t, g) {
                             Text(line).font(.system(size: 13)).foregroundStyle(PP.soft)
                         }
-                        HStack(spacing: 12) {
+                        // One row of buttons that wraps rather than squeezing a label to a letter.
+                        PageButtonRows {
                             if let t { installedButtons(t, g) } else if let g { installButtons(g) } else if let gg = gogGame { gogInstallButtons(gg) } else if let eg = epicGame { epicInstallButtons(eg) } else if let p = bnetProduct { bnetInstallButtons(p) }
                         }
                         .padding(.top, 14)
@@ -391,24 +392,20 @@ private struct GameDetailPage: View {
         SecondaryButton(id: "game:options", systemImage: "slider.horizontal.3", title: "Options", glyph: .x, hint: "Game options") {
             navigation.gamePanels = [.options]
         }
-        if let p = installedBnet {
-            let now = bnetInstalled.current[p]
-            SecondaryButton(id: "game:region", systemImage: "globe", title: "Region · \(now?.region.rawValue ?? "…")",
-                            enabled: now != nil && job == nil && !launch.running && !bnetInstalled.changingRegion.contains(p),
-                            hint: "Store region") { bnetInstalled.pickRegion(p) }
-            SecondaryButton(id: "game:language", systemImage: "character.bubble", title: "Language · \(now?.locale ?? "…")",
-                            enabled: now != nil && job == nil && !launch.running && !installs.suspended,
-                            hint: "Language") { bnetInstalled.pickLanguage(p, downloads: installs) }
-            // Updates (PLA-521): every Play checks first; this asks by hand, and Update queues it.
+        // Updates (PLA-521): every Play checks first; Check for update asks by hand, and Update
+        // queues it. Region and Language are rows of the facts card (`bnetLinks`): a phone in
+        // landscape has room for neither another button nor another row of them.
+        if let p = installedBnet, job == nil {
             let update = bnetInstalled.updates[p]
-            if job == nil, case .available? = update {
+            if case .available? = update {
                 SecondaryButton(id: "game:update", systemImage: "arrow.down.circle", title: "Update",
                                 enabled: !launch.running && !installs.suspended,
                                 hint: "Update") { bnetInstalled.update(p, downloads: installs) }
+            } else {
+                SecondaryButton(id: "game:check-update", systemImage: "arrow.triangle.2.circlepath", title: "Check for update",
+                                enabled: !launch.running && update != .checking,
+                                hint: "Check for update") { Task { await bnetInstalled.checkUpdate(p) } }
             }
-            SecondaryButton(id: "game:check-update", systemImage: "arrow.triangle.2.circlepath", title: "Check for update",
-                            enabled: job == nil && !launch.running && update != .checking,
-                            hint: "Check for update") { Task { await bnetInstalled.checkUpdate(p) } }
         }
         if job == nil, t.store == .gog, t.source == .installed, let newest = gog.newest[t.key.id], newest != t.storeVersion {
             SecondaryButton(id: "game:update", systemImage: "arrow.down.circle", title: "Update", enabled: canDownloadGOG && !launch.running,
@@ -659,6 +656,7 @@ private struct GameDetailPage: View {
 
     private func facts(_ t: InstalledTitle?, _ g: SteamGame?) -> some View {
         let source: LibrarySource = key?.store ?? (appID == nil ? .local : .steam)
+        var links: [String: FactLink] = [:]
         var rows: [(String, String, Color?)] = [("Store", source.label, nil)]
         if let t {
             if t.badge != .ready { rows.append(("State", t.badge.rawValue, .orange)) }
@@ -669,9 +667,11 @@ private struct GameDetailPage: View {
             }
             if t.appID != nil { rows.append(("Cloud saves", cloudStatus(t).0, cloudStatus(t).1)) }
             rows.append(("On this phone", t.sizeBytes.map(ByteCount.format) ?? "Unknown", nil))
-            if let p = installedBnet, let now = bnetInstalled.current[p] {
-                rows.append(("Region", bnetInstalled.changingRegion.contains(p) ? "Changing…" : BattleNetStore.label(now.region), nil))
-                rows.append(("Language", BattleNetInstalled.label(now.locale), nil))
+            if let p = installedBnet {
+                let now = bnetInstalled.current[p]
+                rows.append(("Region", bnetInstalled.changingRegion.contains(p) ? "Changing…" : now.map { BattleNetStore.label($0.region) } ?? "…", nil))
+                rows.append(("Language", now.map { BattleNetInstalled.name($0.locale) ?? $0.locale } ?? "…", nil))
+                links = bnetLinks(p, now)
                 switch bnetInstalled.updates[p] {
                 case nil: break
                 case .checking?: rows.append(("Update", "Checking…", nil))
@@ -696,21 +696,57 @@ private struct GameDetailPage: View {
         }
         return VStack(spacing: 0) {
             ForEach(rows.indices, id: \.self) { i in
-                HStack(spacing: 12) {
-                    Text(rows[i].0).foregroundStyle(PP.muted)
-                    Spacer(minLength: 8)
-                    Text(rows[i].1).foregroundStyle(rows[i].2 ?? PP.text).lineLimit(1)
-                }
-                .font(.system(size: 13))
-                .padding(.vertical, 7)
-                .overlay(alignment: .bottom) {
-                    if i < rows.count - 1 { Rectangle().fill(PP.raised).frame(height: 1) }
-                }
+                factRow(rows[i], link: links[rows[i].0], last: i == rows.count - 1)
             }
         }
         .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 10)
         .background(PP.surface, in: RoundedRectangle(cornerRadius: 14))
         .opacity(rows.isEmpty ? 0 : 1)
+    }
+
+    /// A fact that opens its picker: an installed Battle.net product's region and language.
+    private struct FactLink {
+        let id: String
+        let hint: String
+        let enabled: Bool
+        let action: () -> Void
+    }
+
+    /// The facts card's Region and Language rows, which change them as the store page's Region
+    /// button does: by their labels, the words a button beside Play had no room for (PLA-519).
+    private func bnetLinks(_ p: BattleNetProduct, _ now: BattleNetInstalled.Choice?) -> [String: FactLink] {
+        let idle = now != nil && job == nil && !launch.running
+        return [
+            "Region": FactLink(id: "game:region", hint: "Store region", enabled: idle && !bnetInstalled.changingRegion.contains(p)) {
+                bnetInstalled.pickRegion(p)
+            },
+            "Language": FactLink(id: "game:language", hint: "Language", enabled: idle && !installs.suspended) {
+                bnetInstalled.pickLanguage(p, downloads: installs)
+            },
+        ]
+    }
+
+    @ViewBuilder
+    private func factRow(_ row: (String, String, Color?), link: FactLink?, last: Bool) -> some View {
+        let line = HStack(spacing: 12) {
+            Text(row.0).foregroundStyle(PP.muted)
+            Spacer(minLength: 8)
+            Text(row.1).foregroundStyle(row.2 ?? PP.text).lineLimit(1).minimumScaleFactor(0.8)
+            if let link {
+                Image(systemName: "chevron.right").font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(link.enabled ? PP.soft : PP.muted)
+            }
+        }
+        .font(.system(size: 13))
+        .padding(.vertical, 7)
+        .overlay(alignment: .bottom) {
+            if !last { Rectangle().fill(PP.raised).frame(height: 1) }
+        }
+        if let link {
+            line.padItem(link.id, hint: link.hint, cornerRadius: 6) { if link.enabled { link.action() } }
+        } else {
+            line
+        }
     }
 
     /// Steam Cloud for the facts card and the options' row.
@@ -1386,6 +1422,60 @@ private struct GameDetailPage: View {
         .frame(minHeight: 44)
         .background(selected ? PP.text : .clear, in: RoundedRectangle(cornerRadius: 10))
         .padItem(id, hint: "", cornerRadius: 10, ring: false) {}
+    }
+}
+
+/// The page's buttons, each at its full width and in order, starting a new row where the next
+/// would not fit, so no label is cut to a letter on a phone in landscape.
+private struct PageButtonRows: Layout {
+    var spacing: CGFloat = 12
+    var rowSpacing: CGFloat = 10
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let rows = rows(subviews, width: proposal.width ?? .infinity)
+        let width = rows.map(\.width).max() ?? 0
+        let height = rows.map(\.height).reduce(0, +) + rowSpacing * CGFloat(max(rows.count - 1, 0))
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for row in rows(subviews, width: bounds.width) {
+            var x = bounds.minX
+            for (i, size) in zip(row.indices, row.sizes) {
+                subviews[i].place(at: CGPoint(x: x, y: y + row.height / 2), anchor: .leading,
+                                  proposal: ProposedViewSize(size))
+                x += size.width + spacing
+            }
+            y += row.height + rowSpacing
+        }
+    }
+
+    private struct Row {
+        var indices: [Int] = []
+        var sizes: [CGSize] = []
+        var width: CGFloat = 0
+        var height: CGFloat = 0
+    }
+
+    /// Each button at its ideal size (narrowed only when it alone is wider than the rows).
+    private func rows(_ subviews: Subviews, width: CGFloat) -> [Row] {
+        var rows: [Row] = []
+        var row = Row()
+        for i in subviews.indices {
+            var size = subviews[i].sizeThatFits(.unspecified)
+            if size.width > width { size = subviews[i].sizeThatFits(ProposedViewSize(width: width, height: nil)) }
+            if !row.indices.isEmpty, row.width + spacing + size.width > width {
+                rows.append(row)
+                row = Row()
+            }
+            row.width += (row.indices.isEmpty ? 0 : spacing) + size.width
+            row.height = max(row.height, size.height)
+            row.indices.append(i)
+            row.sizes.append(size)
+        }
+        if !row.indices.isEmpty { rows.append(row) }
+        return rows
     }
 }
 

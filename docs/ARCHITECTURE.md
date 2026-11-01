@@ -624,10 +624,11 @@ locale (the phone's language as a WoW locale, enUS as fallback), shows the downl
 and the space needed, and refuses an Install that does not fit, saying how much it needs.
 The install stages under the staging root (nothing in `C:\Games`, so no Play, until it is
 complete) and becomes `C:\Games\<product>` with a store receipt naming the ARM64 client.
-An installed product's page (`UI/BattleNetInstalled.swift`) changes its store region in
-place (only `.build.info` is rewritten; every region's data is in the install) and its
-language as a Downloads update job that fetches only the new locale's data, after which
-Play is available again; both read what the install is in from its `.build.info`.
+An installed product's page (`UI/BattleNetInstalled.swift`) changes, from its facts card's
+Region and Language rows (a phone in landscape has no room for them as buttons beside Play,
+PLA-519), its store region in place (only `.build.info` is rewritten; every region's data is
+in the install) and its language as a Downloads update job that fetches only the new locale's
+data, after which Play is available again; both read what the install is in from its `.build.info`.
 Each product's tile, Home card and page backdrop show Blizzard's public art for it
 (BattleNetClientKit `BattleNetArt`, PLA-607), fetched once without a session and kept with
 the other stores' art under Caches (PlayportKit `BattleNetArtCache`).
