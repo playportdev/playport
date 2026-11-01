@@ -1,0 +1,72 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 1 Nov 2026 15:00:00 +0100
+Subject: [PATCH] Winios: report the host's input not yet posted
+
+The host app queues input on Winios's ring and a guest thread's drain
+posts it to win32u later, so the host could not tell when what it typed
+had reached the server's queue. Its text bar sends a key that follows
+characters (Enter after a password) and long text in batches, and a
+batch larger than the ring's room is dropped.
+
+winios_input_pending returns how many queued events the drain has not
+handed to win32u yet: those on the ring plus one being posted. The
+drain counts the event it took off the ring until win32u has it.
+
+Linear: PLA-606
+Class: host-app
+Evidence: app/HostIOKit/Tests/HostIOKitTests/TextBarTests.swift (host checks; phone gate not run)
+Offered-upstream: no; the host app's text bar
+---
+ app/Madeira/Winios/Winios.m | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/app/Madeira/Winios/Winios.m b/app/Madeira/Winios/Winios.m
+index 44fceff..fd3f11f 100644
+--- a/app/Madeira/Winios/Winios.m
++++ b/app/Madeira/Winios/Winios.m
+@@ -471,6 +471,7 @@ static struct {
+     winios_input_event_t buf[WINIOS_RING_SIZE];
+     unsigned int head;       /* producer cursor (Swift side) */
+     unsigned int tail;       /* consumer cursor (Wine drain) */
++    unsigned int in_flight;  /* Playport: taken off the ring, not yet handed to win32u */
+     pthread_mutex_t lock;
+ } g_input_q = { .lock = PTHREAD_MUTEX_INITIALIZER };
+ 
+@@ -537,6 +538,18 @@ void winios_post_char(unsigned int unit) {
+     winios_q_push_ev(WINIOS_EV_CHAR, (int)(unit & 0xffff), 0, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, 0);
+ }
+ 
++/* Playport (app HostIO, its text bar): how many queued events the drain has
++ * not handed to win32u yet (those still on the ring and one being posted). 0
++ * once everything posted so far is in the server's queue, in order. The text
++ * bar waits for 0 before a key that follows characters (Enter after a
++ * password) and before a batch the ring could not hold, which it would drop. */
++unsigned int winios_input_pending(void) {
++    pthread_mutex_lock(&g_input_q.lock);
++    unsigned int n = (g_input_q.head + WINIOS_RING_SIZE - g_input_q.tail) % WINIOS_RING_SIZE + g_input_q.in_flight;
++    pthread_mutex_unlock(&g_input_q.lock);
++    return n;
++}
++
+ /* Playport (app HostIO): two event kinds the host posts that only a
+  * Wine thread can resolve, so they are converted here, in the drain, which runs
+  * on the guest thread that is pumping its messages.
+@@ -694,6 +707,7 @@ BOOL winios_pProcessEvents(DWORD mask) {
+             continue;
+         }
+         g_input_q.tail = (g_input_q.tail + 1) % WINIOS_RING_SIZE;
++        g_input_q.in_flight++;
+         pthread_mutex_unlock(&g_input_q.lock);
+ 
+         if (e.type != WINIOS_EV_KEY && e.type != WINIOS_EV_CHAR) {   /* Playport: a key's code is the text typed */
+@@ -709,6 +723,9 @@ BOOL winios_pProcessEvents(DWORD mask) {
+             winios_drain_focus(e.x);
+         else
+             winios_drv_post_mouse(e.x, e.y, e.flags, e.data, NULL);
++        pthread_mutex_lock(&g_input_q.lock);
++        g_input_q.in_flight--;
++        pthread_mutex_unlock(&g_input_q.lock);
+         drained = TRUE;
+     }
+     return drained;

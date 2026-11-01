@@ -251,8 +251,26 @@ again unless WoW exits cleanly.
 - `textbar:secret+enter` with the password then leaves the Password field empty and starts no
   login: 20 s and 60 s later the login screen is unchanged, `Aurora.log` has no line after the
   start-up's. The second value was pushed (`secret-pushed` index 10) and the action returned ok.
-  Not explained yet; candidates: WoW's password EditBox refusing the VK_PACKET characters
-  `winios_post_char` sends (KEYEVENTF_UNICODE), which the email field accepts.
+- **Cause (2026-11-01, PLA-606): the game froze, the field did not refuse the text.** The phone
+  runs `Wow-ARM64.exe`. In both runs the screenshots are identical, pixel for pixel, from the first
+  one taken a few seconds after `textbar:tab` (`20261101T124046` action-10 on, `20261101T124851`
+  action-11 on): the animated backdrop stops. In `20261101T124046`'s `s1-host.log`, Tab goes at
+  12:43:49.9 and the last `[frames]` line is at 12:43:54.6. The main thread (0068) then allocates
+  0x542 bytes RWX (`NtAllocateVirtualMemory … prot=0x40`, the JIT-pool path) and jumps to pc 0
+  (`[thunk-slot] WEDGE`, `dispatch_call_no_redirect=0`, an unhandled SEGV). No other WoW run that day
+  logs that allocation. The password's 32 key events reached the server (`send_hardware_message=32`,
+  status 0), but nothing accepted them (no `accept_hardware_message` or `get_message` after),
+  whereas the email's 36 were accepted. The blocker is that ARM64 crash, not the text bar.
+- **Desktop check** (Wine 11.20, x64 `Wow.exe` at the login screen in a headless sway, input from a
+  Win32 program in the prefix using `SendInput`, dummy values only): `KEYEVENTF_UNICODE`
+  characters sent in one burst (the `VK_PACKET` path the phone's `winios_drv_post_char` takes)
+  type into the Email field and into the Password field (14 asterisks for a 14-character dummy).
+  Shifted characters sent as keys (VK and scan code, with Shift) add to the Password field the same
+  way. A `VK_PACKET` burst followed at once by Enter logs in: the Connecting dialog appears, then a
+  dummy account's `BLZ51914400`, and `Aurora.log` shows the attempt. WoW drops the IME
+  context on the Password field (`ImmAssociateContext(hwnd, NULL)`) and restores it on the Email
+  field; the characters arrive either way. The x64 client allocates no RWX memory from the login
+  screen through typing.
 - The second run was cancelled during its `wait:20` when the owner took the phone.
 
 **Secret scan:** `grep -rlFf .work/secrets/wow-password` over the three WoW run directories, the

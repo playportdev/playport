@@ -14,7 +14,10 @@
 //                                with its number n, `pp ui` answers by pushing the value to
 //                                Documents/ui-text-<nonce>-<n> (from --secret-file or
 //                                --secret-stdin), and the driver reads that file, deletes it,
-//                                then types the value into the field (and presses Enter)
+//                                then types the value into the field (and presses Enter, which
+//                                goes once the value is in the server's queue: TextBarPacing).
+//                                Every action is done once what it typed is in that queue; a
+//                                game that drains none of it for 5 s fails the action
 //
 // The value lives in the field and the guest's window only. The log, run-events.jsonl
 // and a restart's ui-continue.json see the literal action; a file left by a run that
@@ -57,6 +60,11 @@ enum TextBarDriver {
                 return "refused: not textbar:close|secure|plain|tab|enter|backspace|type:<text>|secret[+enter]"
             }
             bar.type(text)
+        }
+        // Typed input reaches the server's queue before the action is done (and before the next
+        // action's key): none of it is lost to a game that pumps no messages without a word.
+        if !(await bar.delivered()) {
+            return "failed: the game took no input for 5 s (no guest thread drains it: hung or busy)"
         }
         try await UIDriver.pause(.milliseconds(500))   // the bar drawn, the game's window painted, for a screenshot
         log("textbar \(op.hasPrefix("type:") ? "type" : op): " + (bar.isOpen ? "open, \(bar.bar.summary)" : "closed"))

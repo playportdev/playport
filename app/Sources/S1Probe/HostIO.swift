@@ -327,6 +327,11 @@ final class HostIO {
         }
     }
 
+    /// Whether everything posted so far (keys, characters, touches) has left Winios's input ring
+    /// for the server's queue (winios_input_pending; patches/madeira-winios 0009). A guest thread
+    /// pumping messages drains the ring, so it stays false while none does.
+    var inputPosted: Bool { winios_input_pending() == 0 }
+
     /// A direct touch as the left button, at the same point of the client area.
     func touch(at p: CGPoint, in size: CGSize, phase: UITouch.Phase) {
         let x = min(max(p.x, 0), size.width - 0.001), y = min(max(p.y, 0), size.height - 0.001)
