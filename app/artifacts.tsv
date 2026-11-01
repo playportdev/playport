@@ -15,7 +15,7 @@
 #   P4-server reconstructed base + Madeira build/wineserver/build.sh via build/stages/unix-gaps.sh wineserver (patches/madeira-unix real-suspend-safepoint, patches/wine-unix server-ios-*)
 #   P4-crypto GnuTLS 3.8.9 / GMP 6.3.0 / Nettle 3.10.1 from Madeira's tracked tarballs via build/stages/unix.sh gnutls; nettle/hogweed hashes depend on UNIX_ROOT
 #   nls       wine pin nls/ (tracked data files): the set Madeira app/Madeira/nls ships, plus every Windows ANSI code page (PLA-233)
-#   fonts     wine pin fonts/{tahoma,tahomabd}.ttf (tracked prebuilts, not regenerated with FontForge); architecture-neutral GDI fallback faces
+#   fonts     wine pin fonts/{tahoma,tahomabd,marlett}.ttf (tracked prebuilts, not regenerated with FontForge); architecture-neutral GDI fallback faces, and the symbol face win32u draws caption buttons and other frame controls with
 #   winsxs    wine pin dlls/<module>/*.manifest for the modules with a WINE_MANIFEST resource (tracked data files, the side-by-side assemblies wineboot's fakedll.c registers); wine_host.c link_winsxs installs them for x86 and arm64 into drive_c/windows/winsxs with links into the i386 and arm64ec sets
 #   etc       wine pin dlls/ws2_32/{hosts,networks,protocol,services} (tracked data files, the ones ws2_32.dll carries as the resources wine.inf [EtcFiles] installs); wine_host.c copies the ones a prefix lacks into drive_c/windows/system32/drivers/etc
 #   P5-dxmt   DXMT pin (3Shain/dxmt) + patches/dxmt-port + patches/dxmt unix slice (build/stages/dxmt-patched.sh unix: build/stages/dxmt-base.sh unix + the hand-ported AIR helpers in build/air-helpers) + LLVM 15.0.7 iOS static libs, combined by build/stages/dxmt-combined.sh as Madeira build/dxmt-ios/README.md does
@@ -2414,6 +2414,7 @@ resource	Runtime/nls/c_1257.nls	66082	6ee5c098f01433e56fd92bc66d8d5530946ad1dcee
 resource	Runtime/nls/c_1258.nls	66082	f1966c599370dac14cea80810075b260eaa4b97689c47f6317e5a4ec30c23496	unix	wine/nls/c_1258.nls	nls
 resource	Runtime/fonts/tahoma.ttf	143884	90f1abad4da0ce03da5d2277ee75a9600ce812d37c90eab76e0838ffa7937e55	unix	wine/fonts/tahoma.ttf	fonts
 resource	Runtime/fonts/tahomabd.ttf	137836	508a2acc88cd6abdd399ae79c9965db43fba75a46bb115117b55d2be2272d889	unix	wine/fonts/tahomabd.ttf	fonts
+resource	Runtime/fonts/marlett.ttf	6136	1a9b951ca1815344050ae6158263991e2145918bc74ad65d82bc6ec4056a57d1	unix	wine/fonts/marlett.ttf	fonts
 resource	Runtime/etc/hosts	23	c09f63cdcfc4b88b967913f191cacff1a7267d1a61c6e23ac5e096fabbc7c48d	unix	wine/dlls/ws2_32/hosts	etc
 resource	Runtime/etc/networks	16	ee98c4cf62868d3f2b529464fe1fb26a826dff02fd29e98533e731d06c2ec67b	unix	wine/dlls/ws2_32/networks	etc
 resource	Runtime/etc/protocol	478	5b4db9f0ff619a89deb22108119287c92e4ebff1399e3c57ff520477933ffe1f	unix	wine/dlls/ws2_32/protocol	etc
@@ -2428,7 +2429,7 @@ resource	Runtime/winsxs/msvcr90/msvcr90.manifest	374	c137bf556c09d6071bdfe0bb998
 resource	Runtime/winsxs/msxml3/msxml3.manifest	322	69304ab6275f1614af7ccc021bea1af6773566e1a21c4b169c02f3c535c740cb	unix	wine/dlls/msxml3/msxml3.manifest	winsxs
 resource	Runtime/winsxs/msxml4/msxml4.manifest	306	04e566672246f68a36f7ea72c0d21c2fa5d44ab71e7a5fa07c6ad8490f76ae83	unix	wine/dlls/msxml4/msxml4.manifest	winsxs
 resource	Runtime/winsxs/msxml6/msxml6.manifest	322	80318507a7351e74d73e25cbc850f60190a5e52c1586aa3043dfc50dc77a7ae7	unix	wine/dlls/msxml6/msxml6.manifest	winsxs
-resource	Runtime/registry/system.reg	1317572	3e3e5d2800c860430f20216ada704ba940849a0669354c33743b08b83b2c5ea4	registry	system.reg	P7-reg
+resource	Runtime/registry/system.reg	1317607	d1536fd471eac26382723d3e996bd380bc2578175a41fea8a8ead8c492d2c61f	registry	system.reg	P7-reg
 resource	Runtime/registry/user.reg	12233	5088f07a85858de831633f8873b83600e40a717851af5fbdc0e0fd041caf34a0	registry	user.reg	P7-reg
 resource	Runtime/certs/cacert.pem	188900	a41b5d356aea97a529fe27e0f7316d2f9d946d75927476cf9cf1b90637d00505	ca-bundle	cacert.pem	ca-bundle
 resource	Runtime/mono/wine-mono-11.3.0/bin/libmono-2.0-x86.dll	3725824	cda071f4f4948abc4ab85593ec06f3b633c7420dcf455d10157e06d460f2db9f	wine-mono	bin/libmono-2.0-x86.dll	wine-mono

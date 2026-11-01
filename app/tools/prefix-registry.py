@@ -258,7 +258,7 @@ NETWORK_DATABASE = {
         ("DataBasePath", "sz", SYSTEM32 + "\\drivers\\etc"),
     ],
 }
-# The shipped fallback faces (Runtime/fonts, Wine's own Tahoma), registered where DirectWrite
+# The shipped fallback faces (Runtime/fonts, Wine's own Tahoma and Marlett), registered where DirectWrite
 # looks for them. wine_host.c link_fonts puts the files in C:\windows\fonts, where win32u's
 # directory scan finds them for GDI; but Wine's dwrite builds its system font collection only
 # from the files this key names (dlls/dwrite/main.c create_system_path_list; a name without a
@@ -269,7 +269,8 @@ NETWORK_DATABASE = {
 # the face's full name plus " (TrueType)", as win32u names its own; win32u's load_registry_fonts
 # skips a face it already has by that name. Marked like PROFILE.
 FONTS_KEY = "Software\\Microsoft\\Windows NT\\CurrentVersion\\Fonts"
-FONTS = {"tahoma.ttf": "Tahoma (TrueType)", "tahomabd.ttf": "Tahoma Bold (TrueType)"}
+FONTS = {"tahoma.ttf": "Tahoma (TrueType)", "tahomabd.ttf": "Tahoma Bold (TrueType)",
+         "marlett.ttf": "Marlett (TrueType)"}
 RUNTIME_FONTS = PKG / "Sources" / "S1Probe" / "Runtime" / "fonts"
 # The computer's name, which wineboot's create_computer_name_keys writes at every
 # start from the host's name (programs/wineboot/wineboot.c): SetComputerNameEx

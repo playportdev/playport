@@ -235,5 +235,35 @@ it cannot load.
 The screenshot `action-02-wait_20.png` of `20261101T053113` shows "Untitled - Notepad" with its
 File, Edit, Format, View and Help menus, an empty edit area and the status bar "Ln 1, Col 1". The
 caption buttons show the letters `0`, `1` and `r`, the Marlett codes for minimise, maximise and
-close, drawn in another font; not checked further. Hollow Knight's run is the runtime smoke for
-the wine-pe change. `./pp test --quick` passed.
+close, drawn in another font. Hollow Knight's run is the runtime smoke for the wine-pe change.
+`./pp test --quick` passed.
+
+### Marlett in the prefix's fonts (2026-11-01)
+
+Not ARM64-only: the app shipped no Marlett at all. win32u draws every window's caption buttons
+with it (`dlls/win32u/defwnd.c` `draw_frame_caption`, `CreateFont("Marlett", SYMBOL_CHARSET)`;
+`menu.c` its menus' magic bitmaps, user32 `uitools.c` its `DrawFrameControl` captions), and
+`Runtime/fonts` had only Wine's Tahoma faces, so font matching fell back and drew the codes as
+letters. An x86-64 window showed the same: Tomb Raider's error box's close glyph drew as `r`
+([2026-10-11-gdi-windows.md](2026-10-11-gdi-windows.md#findings-along-the-way)). Wine's tracked
+`fonts/marlett.ttf` (6,136 B, LGPL-2.1-or-later in its name table) is now staged as
+`Runtime/fonts/marlett.ttf` (`build/stages/stage-artifacts.py` `FONTS`), which `wine_host.c`
+`link_fonts` links into `C:\windows\fonts` with the rest (`fonts: 3 links` in the run's log), and
+registered as `Marlett (TrueType)` in the seed's top-up `Fonts` key for DirectWrite
+(`app/tools/prefix-registry.py`); its SFD header is excerpted with the Tahoma faces' in the notices
+(`build/notices-assemble.sh`, [NOTICES.md](../NOTICES.md#wine-fallback-fonts)). Host:
+`tools/tests/test_fonts.py`, `test_prefix_registry.py`.
+
+IPA sha256 `b0fdcf2a63fec7e65a273289cc76264902144f6ef8b91ea4f1b80aa7d7caf46d` (branch
+`dev/pla-516-battlenet`):
+
+| Run | What | Result |
+| --- | --- | --- |
+| `20261101T060119` | notepad, then the text bar's `textbar:tab` ([2026-10-30-wow-notice-and-play.md](2026-10-30-wow-notice-and-play.md#text-bar-into-wines-arm64-notepad-2026-11-01)) | ok, 7 actions; `action-02-wait_20.png`: the caption buttons are the minimise bar, the maximise box and the close cross |
+| `20261101T060426` | `--play app-367520 --until first-frame+10 --shot` | Hollow Knight first frame at +10.50 s |
+| `20261101T060520` | `--play dir-arm64 --wait 180 --shot` | exit `0x2a` (pass) |
+| `20261101T060616` | `--settings 'dir-d3d12:{"graphics":"vulkan"}' --play dir-d3d12 --wait 180` | exit `0x0` |
+
+Not checked after the change: an x86-64 window's caption (no x86-64 title with a captioned GDI
+window was played). The fix is the same file for every architecture's win32u.
+`./pp test --quick` passed.

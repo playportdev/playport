@@ -204,3 +204,17 @@ with no frame.
   `drv_post_key … vk=` line.
 - **Not covered:** AutoFill and the password mode by hand (PLA-267's person check), and the
   release build's absence of the action (`pp verify --variant release`, side copy, PLA-606).
+
+**Tab** (PLA-267): IPA sha256 `b0fdcf2a63fec7e65a273289cc76264902144f6ef8b91ea4f1b80aa7d7caf46d`
+(the same branch plus Marlett in the prefix's fonts), run `20261101T060119`:
+
+```sh
+./pp ui --action play:dir-notepad --action wait:20 --action menu:open --action menu:text \
+    --action textbar:type:a --action textbar:tab --action textbar:type:b --shot-each-action --wait 120
+```
+
+Every action returned ok (`ok actions=7`). `action-05-textbar_type_a.png` and
+`action-06-textbar_tab.png` show `a` on notepad's first line (the tab is blank space and the
+caret is not in that shot); `action-07-textbar_type_b.png` shows `a`, a tab stop's gap, then `b`
+on the same line, the bar's field empty. The log has `textbar: open, plain (not logged)` and
+`textbar: tab`.

@@ -113,7 +113,7 @@ HEADER = """\
 #   P4-server reconstructed base + Madeira build/wineserver/build.sh via build/stages/unix-gaps.sh wineserver (patches/madeira-unix real-suspend-safepoint, patches/wine-unix server-ios-*)
 #   P4-crypto GnuTLS 3.8.9 / GMP 6.3.0 / Nettle 3.10.1 from Madeira's tracked tarballs via build/stages/unix.sh gnutls; nettle/hogweed hashes depend on UNIX_ROOT
 #   nls       wine pin nls/ (tracked data files): the set Madeira app/Madeira/nls ships, plus every Windows ANSI code page (PLA-233)
-#   fonts     wine pin fonts/{tahoma,tahomabd}.ttf (tracked prebuilts, not regenerated with FontForge); architecture-neutral GDI fallback faces
+#   fonts     wine pin fonts/{tahoma,tahomabd,marlett}.ttf (tracked prebuilts, not regenerated with FontForge); architecture-neutral GDI fallback faces, and the symbol face win32u draws caption buttons and other frame controls with
 #   winsxs    wine pin dlls/<module>/*.manifest for the modules with a WINE_MANIFEST resource (tracked data files, the side-by-side assemblies wineboot's fakedll.c registers); wine_host.c link_winsxs installs them for x86 and arm64 into drive_c/windows/winsxs with links into the i386 and arm64ec sets
 #   etc       wine pin dlls/ws2_32/{hosts,networks,protocol,services} (tracked data files, the ones ws2_32.dll carries as the resources wine.inf [EtcFiles] installs); wine_host.c copies the ones a prefix lacks into drive_c/windows/system32/drivers/etc
 #   P5-dxmt   DXMT pin (3Shain/dxmt) + patches/dxmt-port + patches/dxmt unix slice (build/stages/dxmt-patched.sh unix: build/stages/dxmt-base.sh unix + the hand-ported AIR helpers in build/air-helpers) + LLVM 15.0.7 iOS static libs, combined by build/stages/dxmt-combined.sh as Madeira build/dxmt-ios/README.md does
@@ -146,7 +146,10 @@ NLS = ["c_1252.nls", "c_20127.nls", "c_28591.nls", "c_437.nls", "l_intl.nls", "l
 NLS += ["c_874.nls", "c_932.nls", "c_936.nls", "c_949.nls", "c_950.nls", "c_1250.nls", "c_1251.nls",
         "c_1253.nls", "c_1254.nls", "c_1255.nls", "c_1256.nls", "c_1257.nls", "c_1258.nls"]
 
-FONTS = ["tahoma.ttf", "tahomabd.ttf"]
+# Marlett: win32u draws every window's caption buttons and its menus' magic bitmaps with it
+# (dlls/win32u/defwnd.c draw_frame_caption, menu.c), user32 its DrawFrameControl captions
+# (uitools.c); without it they fell back to another face: "0", "1", "r".
+FONTS = ["tahoma.ttf", "tahomabd.ttf", "marlett.ttf"]
 
 ETC = ["hosts", "networks", "protocol", "services"]
 
