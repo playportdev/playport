@@ -87,6 +87,11 @@ final class BattleNetPlayTests: XCTestCase {
         let launch = BattleNetPlay.decide(.init(copy: copy(.wow, accepted: Date()), update: .current))
         XCTAssertEqual(launch, .launch(.init(graphics: .vulkan, arguments: ["-d3d12"])),
                        "accepted: the x64 client through FEX, Direct3D 12 through vkd3d-proton on Vulkan")
+        // The launch screen stays up to the client's first window (about 250 s on the phone),
+        // not the 30 s after which another Play uncovers its black screen.
+        guard case let .launch(l)? = launch else { return XCTFail("no launch") }
+        XCTAssertEqual(l.uncoverWithoutFrame, 600)
+        XCTAssertGreaterThan(l.uncoverWithoutFrame, LaunchProgress.uncoverWithoutFrame)
     }
 
     // MARK: the update check (PLA-521)

@@ -1838,8 +1838,17 @@ final class LaunchProgressTests: XCTestCase {
         XCTAssertEqual(LaunchProgress.status(.prerequisites, part: LaunchPart(index: 1, count: 2), elapsed: 42.7),
                        "Installing dependencies (1 of 2)… 42 s")
         XCTAssertEqual(LaunchProgress.status(.runtime), "Starting Windows…")
-        XCTAssertEqual(LaunchProgress.status(.game, elapsed: 60), "Starting the game…")
+        XCTAssertEqual(LaunchProgress.status(.game, elapsed: 29.9), "Starting the game…")
+        XCTAssertEqual(LaunchProgress.status(.drawing, elapsed: 60), "Starting the game…")
         XCTAssertEqual(LaunchProgress.stepName(.prerequisites), "Dependencies")
+    }
+
+    /// A game's start that runs long shows its seconds, so a launch screen held for a slow first
+    /// frame (World of Warcraft's x64 client: about 250 s on the phone) is seen to be alive.
+    func testTheGameStepShowsItsSecondsOnceLong() {
+        XCTAssertEqual(LaunchProgress.status(.game, elapsed: 30), "Starting the game… 30 s")
+        XCTAssertEqual(LaunchProgress.status(.game, elapsed: 251.6), "Starting the game… 251 s")
+        XCTAssertEqual(LaunchProgress.uncoverWithoutFrame, 30)
     }
 
     func testTheRestartAfterDependenciesSaysTheyAreDone() {

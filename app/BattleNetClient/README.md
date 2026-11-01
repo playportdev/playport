@@ -127,8 +127,11 @@ offline tests on the Linux host. The app's Battle.net store (`UI/BattleNetStore.
   `audioLocale` and `portal` where it names none (without them WoW opens a Win32 language and
   region box first), `GamePadEnable "1"` where it names none (off, WoW looks for no controller),
   `HardwareCursor "0"` where it names none (WoW then draws its cursor into its frames; the phone
-  draws no Windows cursor, and the controller moves that cursor at the login) and pins `GxApi` to
-  `D3D12` (after one failed Direct3D 12 start WoW saves Direct3D 11); every other line stays.
+  draws no Windows cursor, and the controller moves that cursor at the login), for retail
+  `playIntroMovie "14"` where it names none (the client marks its intro cinematic seen only in the
+  settings it saves on a clean exit, so on the phone the cinematic, about 265 s, played before the
+  login on every Play) and pins `GxApi` to `D3D12` (after one failed Direct3D 12 start WoW saves
+  Direct3D 11); every other line stays.
 - **Live runs**: `BATTLENET_LIVE_REPORT=$PLAYPORT_BUILD/bnet-live.md ./pp test --swift
   BattleNetClient --filter testLiveOffersAndSizes` asks Blizzard for every product and region and
   writes the table in [the offer evidence](../../docs/evidence/2026-10-30-battlenet-offer.md).

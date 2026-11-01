@@ -14,7 +14,11 @@ public enum WoWConfig {
     /// cursor over a game, and at the login and character select a controller moves that cursor
     /// with the right stick and clicks with A; docs/evidence/2026-11-01-wow-controller.md), and
     /// `GxApi` pinned to Direct3D 12 (after one failed Direct3D 12 start WoW saves Direct3D 11, and
-    /// Play starts the x64 client for Direct3D 12 through vkd3d-proton, decision 0177). The file
+    /// Play starts the x64 client for Direct3D 12 through vkd3d-proton, decision 0177), and for
+    /// retail `playIntroMovie` where the file names none: the client records the intro cinematic as
+    /// seen only in the settings it saves on a clean exit, which a phone launch rarely has, so the
+    /// cinematic (about 265 s on the phone, before the login screen; runs 20261101T195434 and
+    /// 200342) played on every Play; 14 is the value 12.1.5 saves after it. The file
     /// and its folder are made when missing.
     public static func prepareForPlay(_ product: BattleNetProduct, root: URL) throws {
         let info = try BuildInfo.read([UInt8](try Data(contentsOf: root.appendingPathComponent(".build.info"))), product: product.code)
@@ -25,11 +29,18 @@ public enum WoWConfig {
             text = set(text, [("textLocale", locale), ("audioLocale", locale)], replacing: false)
         }
         text = set(text, [("portal", info.region.tag), ("GamePadEnable", "1"), ("HardwareCursor", "0")], replacing: false)
+        if product == .wow {
+            text = set(text, [("playIntroMovie", introMovieSeen)], replacing: false)
+        }
         text = set(text, [("GxApi", "D3D12")], replacing: true)
         guard text != old else { return }
         try InstallFS.makeDirectory(wtf.deletingLastPathComponent())
         try InstallFS.writeAtomically(wtf, Data(text.utf8))
     }
+
+    /// The `playIntroMovie` retail 12.1.5 (70688) saves once its intro cinematic has played: the
+    /// login screen follows with no cinematic (docs/evidence/2026-10-30-wow-desktop-baseline.md).
+    static let introMovieSeen = "14"
 
     /// The settings file of the install at `root`: in the product folder whose `.flavor.info`
     /// names `product` (the installer writes it); nil when none does.

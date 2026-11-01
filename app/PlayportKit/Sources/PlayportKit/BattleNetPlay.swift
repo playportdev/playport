@@ -72,13 +72,24 @@ public enum BattleNetPlay {
         /// What the player is told as the game starts: a failed update check, after which the
         /// installed version plays and the game itself decides whether it may.
         public var report: String?
+        /// How long the launch screen waits for the first frame (or a guest window) before it
+        /// uncovers the title's black screen; LaunchProgress.uncoverWithoutFrame (30 s) for other
+        /// Plays. The x64 client through FEX shows its first window about 250 s after its start on
+        /// the reference phone (runs 20261101T195434 and 200342), so the screen stays up to then.
+        public var uncoverWithoutFrame: TimeInterval
 
-        public init(graphics: GraphicsBackend, arguments: [String], report: String? = nil) {
+        public init(graphics: GraphicsBackend, arguments: [String], report: String? = nil,
+                    uncoverWithoutFrame: TimeInterval = BattleNetPlay.uncoverWithoutFrame) {
             self.graphics = graphics
             self.arguments = arguments
             self.report = report
+            self.uncoverWithoutFrame = uncoverWithoutFrame
         }
     }
+
+    /// A Battle.net Play's hold of the launch screen (Launch.uncoverWithoutFrame): well past the
+    /// x64 client's first window on the phone; a guest window (an error box) uncovers it sooner.
+    public static let uncoverWithoutFrame: TimeInterval = 600
 
     /// The step for a Battle.net copy; nil for any other copy, and for a product not on the
     /// store's list.

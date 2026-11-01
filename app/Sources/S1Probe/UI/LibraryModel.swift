@@ -318,13 +318,15 @@ final class LibraryModel: ObservableObject {
         #endif
         // A Battle.net copy's client: Blizzard's x64 client through FEX (decision 0177) drawing with Direct3D 12
         // through vkd3d-proton on Vulkan, whatever the graphics settings say. Its Config.wtf first gets the install's
-        // language and region where it names none (else WoW asks in a Win32 box) and Direct3D 12 pinned.
+        // language and region where it names none (else WoW asks in a Win32 box), the intro cinematic marked seen
+        // where it names none, and Direct3D 12 pinned. The launch screen stays up to its first window (minutes).
         if let bnet = bnetLaunch {
             if let product = BattleNet.product(t.key) { BattleNetInstalled.shared.prepareForPlay(product) }
             settings.graphics = bnet.graphics
             plan.args += bnet.arguments.filter { arg in !plan.args.contains { $0.caseInsensitiveCompare(arg) == .orderedSame } }
             Self.log("play \(t.name): Battle.net's x64 client through FEX on \(bnet.graphics.rawValue), "
-                     + "\(bnet.arguments.joined(separator: " ")), Config.wtf's GxApi D3D12, GamePadEnable and HardwareCursor; WoW asks for its own sign-in")
+                     + "\(bnet.arguments.joined(separator: " ")), Config.wtf's GxApi D3D12, GamePadEnable, HardwareCursor and playIntroMovie; "
+                     + "the launch screen waits up to \(Int(bnet.uncoverWithoutFrame)) s for its first window; WoW asks for its own sign-in")
         }
         // A game whose Play starts a publisher's launcher runs with its Open's grace, graphics
         // environment and runtime keys under its own (decision 0115).
@@ -458,7 +460,8 @@ final class LibraryModel: ObservableObject {
                                        endLauncher: settings.endLauncherAfterSignIn
                                            ? PublisherLauncher.startedBy(game: t.id)?.signIn : nil,
                                        epicOffline: epicOffline,
-                                       exhaustionGrace: exhaustionGrace) else {
+                                       exhaustionGrace: exhaustionGrace,
+                                       uncoverWithoutFrame: bnetLaunch?.uncoverWithoutFrame ?? LaunchProgress.uncoverWithoutFrame) else {
             endTickets()
             galaxy?.stop()
             return false

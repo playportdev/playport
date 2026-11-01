@@ -150,6 +150,35 @@ extension BattleNetInstallTests {
                        "SET textLocale \"deDE\"\nSET gxApi \"D3D12\"\nSET gamePadEnable \"0\"\nSET hardwareCursor \"1\"\nSET hwDetect \"0\"\nSET audioLocale \"enUS\"\nSET portal \"US\"\n")
     }
 
+    /// Retail also gets the intro cinematic marked as seen where `Config.wtf` names none: the
+    /// client saves that only on a clean exit, so on the phone the cinematic played before the
+    /// login screen on every Play. A value the file has stays.
+    func testRetailPlayMarksTheIntroCinematicSeenWhereTheConfigNamesNone() async throws {
+        let cdn = FakeCDN()
+        _ = FakeProduct.make(on: cdn, productConfig: try fixture("wow_classic_era-productconfig.json"))
+        let dir = try temp()
+        _ = try await install(cdn, in: dir)
+        // The fake install as retail's: its build row and its product folder name `wow`.
+        let root = dir.appendingPathComponent("wow"), fm = FileManager.default
+        let info = root.appendingPathComponent(".build.info")
+        let text = try String(contentsOf: info, encoding: .utf8).replacingOccurrences(of: "wow_classic_era", with: "wow")
+        try Data(text.utf8).write(to: info)
+        try fm.moveItem(at: root.appendingPathComponent("_classic_era_"), to: root.appendingPathComponent("_retail_"))
+        try Data("Product Flavor!STRING:0\nwow\n".utf8).write(to: root.appendingPathComponent("_retail_/.flavor.info"))
+        let wtf = root.appendingPathComponent("_retail_/WTF/Config.wtf")
+
+        try WoWConfig.prepareForPlay(.wow, root: root)
+        XCTAssertEqual(try String(contentsOf: wtf, encoding: .utf8),
+                       "SET textLocale \"enUS\"\nSET audioLocale \"enUS\"\nSET portal \"US\"\nSET GamePadEnable \"1\"\nSET HardwareCursor \"0\"\n"
+                       + "SET playIntroMovie \"14\"\nSET GxApi \"D3D12\"\n")
+
+        try Data("SET PlayIntroMovie \"11\"\nSET gxApi \"D3D12\"\n".utf8).write(to: wtf)
+        try WoWConfig.prepareForPlay(.wow, root: root)
+        XCTAssertEqual(try String(contentsOf: wtf, encoding: .utf8),
+                       "SET PlayIntroMovie \"11\"\nSET gxApi \"D3D12\"\nSET textLocale \"enUS\"\nSET audioLocale \"enUS\"\nSET portal \"US\"\n"
+                       + "SET GamePadEnable \"1\"\nSET HardwareCursor \"0\"\n")
+    }
+
     /// A language change adds the text and voice locales to a `Config.wtf` that names neither.
     func testALocaleChangeAddsTheLocalesTheConfigLacks() {
         XCTAssertEqual(WoWConfig.locale("SET gxWindow \"1\"\n", "frFR"),
