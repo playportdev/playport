@@ -74,3 +74,4 @@
 0089-ARM64EC-export-ExitToX64-s-reads-of-an-x64-target-fo.patch
 0090-ARM64EC-an-instruction-fetch-fault-reports-the-first.patch
 0091-ARM64EC-print-the-lines-of-the-first-256-exceptions-.patch
+0092-ARM64EC-read-guest-code-from-Wine-s-read-only-alias-.patch

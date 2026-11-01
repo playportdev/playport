@@ -246,3 +246,5 @@
 0277-virtual-print-a-protection-change-s-no-read-skip-lin.patch
 0278-signal-the-SEGV-loop-guard-does-not-count-a-fault-in.patch
 0279-virtual-signal-a-no-access-4-KB-page-beside-code-fau.patch
+0280-virtual-a-read-only-alias-of-a-mapped-view-with-a-no.patch
+0281-signal-a-guest-read-of-an-open-page-of-a-noaccess-sp.patch
