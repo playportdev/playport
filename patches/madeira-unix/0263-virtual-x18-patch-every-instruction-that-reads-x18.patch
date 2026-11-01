@@ -15,22 +15,151 @@ logical (register and immediate), ADD/SUB, ADC/SBC, CCMP/CCMN, CSEL,
 1- and 2-source, 3-source, bitfield and EXTR classes, a store of x18 and
 LDP/STP's second register; each of those fields gets the scratch register.
 CBZ/CBNZ/TBZ/TBNZ on x18 get a trampoline that branches on the TEB and
-ends in a B to the original target or back. Forms where register 31 is SP
-(a destination without S, a store relative to SP) are left alone, as the
-trampoline moves SP. A word read by a literal load stays code whenever it
-reads x18 with Rd = 31, as 0260 did for CMP: such a word is odd, so no
-aligned pointer.
+ends in a B to the original target or back; their scratch register is
+x17, as their other fields are the offset, not registers. Forms where
+register 31 is SP (a destination without S, a load or store relative to
+SP with x18 as its data or its offset) are left alone, as the trampoline
+moves SP. A word read by a literal load stays code whenever it reads x18
+with Rd = 31, as 0260 did for CMP: such a word is odd, so no aligned
+pointer.
+
+A single step at such a branch (0259) is the branch on the TEB, to its
+target or on: the first seven words of its trampoline read as another
+site's, whose instruction would be `cbz x17, #12`, and the step tested
+the guest's x17 and went on to the site + 12.
 
 Linear: PLA-514
 Class: ios-port
-Evidence: docs/evidence/2026-10-31-wow-arm64-start.md
+Evidence: docs/evidence/2026-10-31-wow-arm64-start.md, tools/tests/test_x18_compare.py, tools/tests/test_single_step.py
 Offered-upstream: no
 ---
- build/ntdll-unix/virtual_ios.c | 229 ++++++++++++++++++++++-----------
- 1 file changed, 157 insertions(+), 72 deletions(-)
+ build/ntdll-unix/pp_single_step.h   |  41 ++++-
+ build/ntdll-unix/signal_arm64_ios.c |  15 +-
+ build/ntdll-unix/virtual_ios.c      | 231 +++++++++++++++++++---------
+ 3 files changed, 205 insertions(+), 82 deletions(-)
 
+diff --git a/build/ntdll-unix/pp_single_step.h b/build/ntdll-unix/pp_single_step.h
+index db7e322..21c854a 100644
+--- a/build/ntdll-unix/pp_single_step.h
++++ b/build/ntdll-unix/pp_single_step.h
+@@ -140,17 +140,29 @@ static inline int ppss_step_in_place( uint64_t x[31], uint64_t *pc, uint32_t cps
+  * - PPSS_TRAMP_OP: *op is the instruction with *reg in place of x18, to run
+  *   out of line with the TEB in *reg (its value put back after);
+  * - PPSS_TRAMP_MOV: the instruction was MOV x*reg, x18;
+- * - PPSS_TRAMP_NONE: no trampoline of the patcher's (a branch like another). */
+-#define PPSS_TRAMP_NONE 0
+-#define PPSS_TRAMP_OP   1
+-#define PPSS_TRAMP_MOV  2
++ * - PPSS_TRAMP_BRANCH: a CBZ/CBNZ/TBZ/TBNZ on x18 (0263), whose trampoline
++ *   branches on the TEB in *reg with *op (offset 12) to a restore before a B
++ *   to *target, or on to the way back; ppss_x18_branch_next does its step;
++ * - PPSS_TRAMP_NONE: no trampoline of the patcher's (a branch like another).
++ * A branch's trampoline is 9 words, any other 7 at most. */
++#define PPSS_TRAMP_NONE   0
++#define PPSS_TRAMP_OP     1
++#define PPSS_TRAMP_MOV    2
++#define PPSS_TRAMP_BRANCH 3
+ 
+ static inline int ppss_branch_to( uint32_t insn, uint64_t at, uint64_t to )
+ {
+     return (insn & 0xfc000000) == 0x14000000 && at + ppss_sext( (insn & 0x3ffffff) << 2, 28 ) == to;
+ }
+ 
+-static inline int ppss_x18_tramp( const uint32_t *t, uint64_t tramp, uint64_t pc, unsigned *reg, uint32_t *op )
++/* CBZ/CBNZ/TBZ/TBNZ */
++static inline int ppss_cb_tb( uint32_t op )
++{
++    return (op & 0x7e000000) == 0x34000000 || (op & 0x7e000000) == 0x36000000;
++}
++
++static inline int ppss_x18_tramp( const uint32_t *t, uint64_t tramp, uint64_t pc, unsigned *reg, uint32_t *op,
++                                  uint64_t *target )
+ {
+     unsigned r = t[0] & 31;
+     uint32_t teb_load = 0x927df000u | (r << 5) | r;
+@@ -161,7 +173,13 @@ static inline int ppss_x18_tramp( const uint32_t *t, uint64_t tramp, uint64_t pc
+     {
+         *reg = r;
+         *op = t[4];
+-        return PPSS_TRAMP_OP;
++        if (!ppss_cb_tb( t[4] )) return PPSS_TRAMP_OP;
++        /* a branch's: on the TEB to offset 12, the restore again and a B to the target */
++        if ((t[4] & 31) != r || ((t[4] >> 5) & ((t[4] & 0x02000000) ? 0x3fff : 0x7ffff)) != 3 ||
++            t[7] != t[5] || (t[8] & 0xfc000000) != 0x14000000)
++            return PPSS_TRAMP_NONE;
++        *target = tramp + 32 + ppss_sext( (t[8] & 0x3ffffff) << 2, 28 );
++        return PPSS_TRAMP_BRANCH;
+     }
+     if ((t[0] & 0xffffffe0u) == 0xd53bd060u && t[1] == teb_load &&
+         (t[2] & 0xffc003ffu) == (0xf9400000u | (r << 5) | r) && ppss_branch_to( t[3], tramp + 12, pc + 4 ))
+@@ -172,4 +190,15 @@ static inline int ppss_x18_tramp( const uint32_t *t, uint64_t tramp, uint64_t pc
+     return PPSS_TRAMP_NONE;
+ }
+ 
++/* The pc after a step at a CBZ/CBNZ/TBZ/TBNZ on x18 (PPSS_TRAMP_BRANCH) at pc:
++ * op tests the TEB, and taken it goes to target. */
++static inline uint64_t ppss_x18_branch_next( uint64_t teb, uint32_t op, uint64_t pc, uint64_t target )
++{
++    int nonzero = !!(op & 0x01000000);
++
++    if ((op & 0x7e000000) == 0x34000000)   /* CBZ/CBNZ, W or X */
++        return ((op & 0x80000000) ? teb : (uint32_t)teb) ? (nonzero ? target : pc + 4) : (nonzero ? pc + 4 : target);
++    return ((teb >> (((op >> 26) & 32) | ((op >> 19) & 31))) & 1) == (uint64_t)nonzero ? target : pc + 4;
++}
++
+ #endif /* PP_SINGLE_STEP_H */
+diff --git a/build/ntdll-unix/signal_arm64_ios.c b/build/ntdll-unix/signal_arm64_ios.c
+index f7f7aa4..4443248 100644
+--- a/build/ntdll-unix/signal_arm64_ios.c
++++ b/build/ntdll-unix/signal_arm64_ios.c
+@@ -6627,7 +6627,7 @@ static NTSTATUS ios_ss_continue( struct thread_data *data, const CONTEXT *contex
+     char *rw;
+     void *slot;
+     ULONG insn;
+-    int tramp_reg = 0, call_out = 0;
++    int tramp_reg = 0, call_out = 0, branched = 0;
+ 
+     step.Cpsr &= ~PPSS_CPSR_SS;
+     if (!rx || step.Pc < rx || step.Pc + 4 > rx + ios_jit_pool_size_global || (step.Pc & 3))
+@@ -6641,11 +6641,13 @@ static NTSTATUS ios_ss_continue( struct thread_data *data, const CONTEXT *contex
+     if ((insn & 0xfc000000) == 0x14000000)
+     {
+         ULONG64 tramp = step.Pc + ppss_sext( (insn & 0x3ffffff) << 2, 28 );
+-        if (tramp >= rx && tramp + 28 <= rx + ios_jit_pool_size_global)
++        /* Playport: a branch's trampoline (0263) is 9 words */
++        if (tramp >= rx && tramp + 36 <= rx + ios_jit_pool_size_global)
+         {
+             unsigned reg;
+             uint32_t op;
+-            switch (ppss_x18_tramp( (const uint32_t *)tramp, tramp, step.Pc, &reg, &op ))
++            uint64_t target;
++            switch (ppss_x18_tramp( (const uint32_t *)tramp, tramp, step.Pc, &reg, &op, &target ))
+             {
+             case PPSS_TRAMP_MOV:   /* mov xN, x18: done here, below */
+                 insn = 0xaa1203e0 | reg;
+@@ -6654,6 +6656,10 @@ static NTSTATUS ios_ss_continue( struct thread_data *data, const CONTEXT *contex
+                 tramp_reg = reg + 1;
+                 insn = op;
+                 break;
++            case PPSS_TRAMP_BRANCH:   /* CBZ/CBNZ/TBZ/TBNZ on x18: to its target or on, by the TEB */
++                step.Pc = ppss_x18_branch_next( (uint64_t)(ULONG_PTR)data->teb, op, step.Pc, target );
++                branched = 1;
++                break;
+             }
+         }
+     }
+@@ -6663,7 +6669,8 @@ static NTSTATUS ios_ss_continue( struct thread_data *data, const CONTEXT *contex
+     if ((insn & 0xfffffc1f) == 0xd63f0000 && ((insn >> 5) & 31) != 31 &&
+         (step.X[(insn >> 5) & 31] < rx || step.X[(insn >> 5) & 31] >= rx + ios_jit_pool_size_global))
+         call_out = 1;
+-    else if ((insn & 0xffffffe0) == 0xaa1203e0 || ppss_step_in_place( (uint64_t *)step.X, (uint64_t *)&step.Pc, step.Cpsr, (unsigned char (*)[16])step.V, insn ))
++    else if (branched || (insn & 0xffffffe0) == 0xaa1203e0 ||
++             ppss_step_in_place( (uint64_t *)step.X, (uint64_t *)&step.Pc, step.Cpsr, (unsigned char (*)[16])step.V, insn ))
+     {
+         EXCEPTION_RECORD rec = { .ExceptionCode = EXCEPTION_SINGLE_STEP };
+         ULONG64 pe;
 diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
-index 03131fe..aadb568 100644
+index 03131fe..e64765b 100644
 --- a/build/ntdll-unix/virtual_ios.c
 +++ b/build/ntdll-unix/virtual_ios.c
 @@ -5132,108 +5132,165 @@ void ios_jit_sync_write(void *addr, size_t size)
@@ -50,9 +179,9 @@ index 03131fe..aadb568 100644
 + * Warcraft's ARM64 client builds its opaque predicates and computed values
 + * from x18 in any data-processing form (TST, CCMP, CSEL, EOR, MADD ...):
 + * with 0 for the TEB those took other paths. CBZ/CBNZ/TBZ/TBNZ on x18 get a
-+ * branch trampoline (X18_ROLE_BRANCH). A store of x18 relative to SP, and the
-+ * forms where register 31 is SP as a destination, are left alone: the
-+ * trampoline runs with SP 16 bytes down. */
++ * branch trampoline (X18_ROLE_BRANCH). A load or store relative to SP (x18 as
++ * the data or the offset), and the forms where register 31 is SP as a
++ * destination, are left alone: the trampoline runs with SP 16 bytes down. */
 +#define X18_ROLE_NONE   0
 +#define X18_ROLE_RN     1   /* bits[9:5] */
 +#define X18_ROLE_RM     2   /* bits[20:16] */
@@ -110,7 +239,7 @@ index 03131fe..aadb568 100644
 -        if (rn == 18) return X18_ROLE_RN;
 -        if (rm == 18) return X18_ROLE_RM;
 +        if (rn == 18) role |= X18_ROLE_RN;
-+        if (rm == 18) role |= X18_ROLE_RM;
++        if (rm == 18 && rn != 31) role |= X18_ROLE_RM;
 +        if (rt == 18 && !(insn & 0x04c00000) && rn != 31) role |= X18_ROLE_RT;
 +        return role;
      }
@@ -136,7 +265,7 @@ index 03131fe..aadb568 100644
 -        if (rn == 18) return X18_ROLE_RN;
 -        if (rt2 == 18) return X18_ROLE_RT2;
 +        if (rn == 18) role |= X18_ROLE_RN;
-+        if (rt2 == 18) role |= X18_ROLE_RT2;
++        if (rt2 == 18 && rn != 31) role |= X18_ROLE_RT2;
 +        if (rt == 18 && !(insn & 0x04400000) && rn != 31) role |= X18_ROLE_RT;
 +        return role;
      }
@@ -291,15 +420,17 @@ index 03131fe..aadb568 100644
      }
      free( data_map );
      /* Slack: the patcher's per-site max is 32B; pad one page so a
-@@ -5539,9 +5596,13 @@ int ios_jit_patch_x18(char *text_rw, char *text_rx, size_t text_size, size_t tex
+@@ -5539,9 +5596,15 @@ int ios_jit_patch_x18(char *text_rw, char *text_rx, size_t text_size, size_t tex
          int rt = insn & 0x1f;
          int rn = (insn >> 5) & 0x1f;
          int rm = (insn >> 16) & 0x1f;
 -        if (rt == 17 || rn == 17 || rm == 17) scratch = 16;
 +        /* Playport: the third source of a 3-source instruction and an LDP/STP's
-+         * second register (bits 14:10) count too. */
++         * second register (bits 14:10) count too. A CBZ/CBNZ/TBZ/TBNZ has no
++         * register but x18: bits 23:5 are its offset (and bit number). */
 +        int ra = ((insn & 0x1f000000) == 0x1b000000 || (insn & 0x3a000000) == 0x28000000)
 +                 ? (int)((insn >> 10) & 0x1f) : -1;
++        if (role & X18_ROLE_BRANCH) rn = rm = ra = -1;
 +        if (rt == 17 || rn == 17 || rm == 17 || ra == 17) scratch = 16;
          /* Double-check: if both x16 and x17 are used, skip (extremely rare) */
 -        if (scratch == 16 && (rt == 16 || rn == 16 || rm == 16))
@@ -307,7 +438,7 @@ index 03131fe..aadb568 100644
          {
              skipped++;
              unpatched++;
-@@ -5598,8 +5659,8 @@ int ios_jit_patch_x18(char *text_rw, char *text_rx, size_t text_size, size_t tex
+@@ -5598,8 +5661,8 @@ int ios_jit_patch_x18(char *text_rw, char *text_rx, size_t text_size, size_t tex
          }
          else
          {
@@ -318,7 +449,7 @@ index 03131fe..aadb568 100644
              {
                  ERR("x18 patcher: out of trampoline space at %d patches\n", count);
                  out_of_space = i;
-@@ -5617,12 +5678,36 @@ int ios_jit_patch_x18(char *text_rw, char *text_rx, size_t text_size, size_t tex
+@@ -5617,12 +5680,36 @@ int ios_jit_patch_x18(char *text_rw, char *text_rx, size_t text_size, size_t tex
              /* ldr xSCRATCH, [xSCRATCH, #slot_off] */
              *(uint32_t *)(tramp_rw + tramp_off) = 0xF9400000 | ((slot_off / 8) << 10) | (scratch << 5) | scratch;
              tramp_off += 4;

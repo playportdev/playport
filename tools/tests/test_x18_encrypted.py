@@ -9,8 +9,12 @@ compiler emits, is now data to the patcher. The trampoline reservation still cou
 matches, and code decrypted there later is patched from what is left of it (cipher 2: only the
 words its first word reaches, so neither junk after its branches nor the still encrypted rest is
 touched). The test runs the patcher, as the series leaves build/ntdll-unix/virtual_ios.c, over a
-code window, an encrypted one and the same window partly decrypted."""
+code window, an encrypted one and the same window partly decrypted, and over flushed functions that
+end in a UDF or a pointer-authenticated return or branch. Only a native ARM64 child loads its images
+with the encrypted-window skip (0176: x86-64 and ARM64EC processes are unchanged), and a record of a
+section view is never dropped for a new one."""
 import pathlib
+import re
 import subprocess
 import tempfile
 import unittest
@@ -30,7 +34,16 @@ long ios_limit_x18_images, ios_limit_x18_sites;
 #include "patcher.c"
 
 #define WORDS 256   /* one 1 KB window */
-static uint32_t text[3 * WORDS], tramp[1024], saved[WORDS];
+static uint32_t text[3 * WORDS], tramp[1024], saved[WORDS], fn[4], fn_tramp[64];
+
+/* Patch a flushed function of four words, the last of them junk that reads as an x18 instruction. */
+static int flush_patch(uint32_t a, uint32_t b, uint32_t c)
+{
+    size_t n = 0;
+    fn[0] = a; fn[1] = b; fn[2] = c; fn[3] = 0xd1002240;   /* junk: sub x0, x18, #8 */
+    return ios_jit_patch_x18((char *)fn, (char *)fn, sizeof(fn), 0x2000,
+                             (char *)fn_tramp, (char *)fn_tramp, sizeof(fn_tramp), 2, &n);
+}
 
 int main(void)
 {
@@ -76,10 +89,91 @@ int main(void)
         uint32_t *t = (uint32_t *)((char *)&text[WORDS + 4] + (intptr_t)imm26 * 4);
         assert(t == (uint32_t *)((char *)tramp + used) && t[0] == 0xd53bd068);
     }
+    /* A flushed function ends at a UDF (which WoW executes on purpose), a RETAA/RETAB or a
+       BRAA/BRAB/BRAAZ/BRABZ: the words after one are not reached, and stay as they are. */
+    assert(flush_patch(0xaa1203e8, 0x00009720, 0xd1002240) == 1 && fn[2] == 0xd1002240 && fn[3] == 0xd1002240);
+    assert(flush_patch(0xd503201f, 0xd65f0bff, 0xd1002240) == 0);   /* retaa */
+    assert(flush_patch(0xd503201f, 0xd65f0fff, 0xd1002240) == 0);   /* retab */
+    assert(flush_patch(0xd503201f, 0xd71f0a11, 0xd1002240) == 0);   /* braa x16, x17 */
+    assert(flush_patch(0xd503201f, 0xd71f0e11, 0xd1002240) == 0);   /* brab x16, x17 */
+    assert(flush_patch(0xd503201f, 0xd61f0a1f, 0xd1002240) == 0);   /* braaz x16 */
+    assert(flush_patch(0xd503201f, 0xd61f0e1f, 0xd1002240) == 0);   /* brabz x16 */
+    assert(flush_patch(0xd503201f, 0xd503201f, 0xd1002240) == 2);   /* control: falls through */
     puts("x18 encrypted: ok");
     return 0;
 }
 '''
+
+SECTION_VIEWS_C = r'''
+#include <assert.h>
+#include <pthread.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/types.h>
+typedef unsigned long long ULONGLONG;
+#include "views.c"
+
+int main(void)
+{
+    struct ios_section_view *first, *v;
+    unsigned int i;
+
+    /* 200 live views of plain sections (NLS and font files, game files ...): none drops another */
+    for (i = 0; i < 200; i++)
+    {
+        assert((v = ios_section_view_slot()) && !v->peb);
+        v->peb = (void *)(uintptr_t)(0x1000 + i);
+        v->base = (char *)(uintptr_t)(0x10000 * (i + 1));
+        if (i == 3) v->copy = (char *)0x7000;   /* the remap's record */
+    }
+    for (i = 0; i < 200; i++)
+    {
+        int found = 0;
+        unsigned int k;
+        for (k = 0; k < ios_section_view_count; k++)
+            found += ios_section_views[k].peb == (void *)(uintptr_t)(0x1000 + i) &&
+                     ios_section_views[k].base == (char *)(uintptr_t)(0x10000 * (i + 1));
+        assert(found == 1);
+    }
+    /* an unmapped view's slot is taken again */
+    first = &ios_section_views[5];
+    first->peb = NULL;
+    assert(ios_section_view_slot() == first);
+    puts("section views: ok");
+    return 0;
+}
+'''
+
+# The cipher argument of each call: 0, 2 (a flush), the parameter passed on, or one that is 1 only
+# in a native ARM64 child.
+CIPHER_ARG = {"ios_jit_x18_tramp_need": 4, "ios_jit_patch_x18": 7, "ios_jit_repatch_x18": 3}
+
+
+def cipher_calls(source):
+    """(function, offset, cipher argument) of each call of the patcher's entry points."""
+    for name, index in CIPHER_ARG.items():
+        for match in re.finditer(r"\b%s\s*\(" % name, source):
+            depth, args, cur = 0, [], ""
+            for ch in source[match.end():]:
+                if ch == ")" and depth == 0:
+                    break
+                depth += (ch == "(") - (ch == ")")
+                if ch == "," and depth == 0:
+                    args.append(cur)
+                    cur = ""
+                else:
+                    cur += ch
+            args.append(cur)
+            if len(args) <= index:
+                continue   # a comment's mention
+            arg = " ".join(args[index].split())
+            if arg == "int cipher":
+                continue   # its declaration
+            yield name, match.start(), arg
+
+
 
 
 @unittest.skipUnless(UPSTREAM.exists(), "upstream/madeira is not checked out")
@@ -96,6 +190,37 @@ class X18PatcherEncrypted(unittest.TestCase):
             out = subprocess.run([str(exe)], capture_output=True, text=True)
             self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
             self.assertIn("x18 encrypted: ok", out.stdout)
+
+    def test_only_a_native_arm64_child_skips_encrypted_windows(self):
+        scratch = ROOT / ".work" / "tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=scratch) as tmp:
+            source = patched_source(pathlib.Path(tmp) / "tree")
+        start = source.index("static BOOL ios_remap_presented(")
+        end = source.index("\n}\n", start)
+        self.assertIn("!ios_is_native_arm64_cur()", source[start:end])
+        calls = list(cipher_calls(source))
+        self.assertGreaterEqual(len(calls), 8)
+        bad = [f"{name} at line {source.count(chr(10), 0, at) + 1}: cipher {arg}"
+               for name, at, arg in calls
+               if arg not in ("0", "2", "cipher") and "ios_is_native_arm64_cur()" not in arg
+               and not (arg == "1" and start <= at < end)]
+        self.assertEqual(bad, [])
+
+    def test_section_view_records_are_never_dropped(self):
+        scratch = ROOT / ".work" / "tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=scratch) as tmp:
+            tmp = pathlib.Path(tmp)
+            source = patched_source(tmp / "tree")
+            start = source.index("struct ios_section_view\n{")
+            (tmp / "views.c").write_text(source[start:source.index("/* Make the part of view s", start)])
+            (tmp / "test.c").write_text(SECTION_VIEWS_C)
+            exe = tmp / "views"
+            subprocess.run(["clang", "-std=gnu11", "-O1", "-w", "-o", str(exe), str(tmp / "test.c")], check=True)
+            out = subprocess.run([str(exe)], capture_output=True, text=True)
+            self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+            self.assertIn("section views: ok", out.stdout)
 
 
 if __name__ == "__main__":

@@ -17,7 +17,7 @@ Nothing logs it.
 
 Linear: PLA-267
 Class: host-app
-Evidence: app/HostIOKit/Tests/HostIOKitTests/TextBarTests.swift (host checks; phone gate not run)
+Evidence: tools/tests/test_key_logging.py, app/HostIOKit/Tests/HostIOKitTests/TextBarTests.swift (host checks; phone gate not run)
 Offered-upstream: no; the host app's text bar
 ---
  app/Madeira/Winios/Winios.m | 21 ++++++++++++++++++++-

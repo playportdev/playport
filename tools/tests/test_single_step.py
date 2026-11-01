@@ -2,7 +2,8 @@
 """Compile and exercise madeira-unix 0253's pp_single_step.h (PLA-514): a native ARM64 thread that continues
 with Cpsr.SS steps one instruction. One that reads or writes the pc is carried out on the context; any other
 is left to run out of line. The words are World of Warcraft's own where it has them (its stepped import
-resolver at 0xd6cc..0xd89c)."""
+resolver at 0xd6cc..0xd89c). A step at a site the x18 patcher branched to a trampoline (0259, 0263) is the
+patched instruction: a CBZ/CBNZ/TBZ/TBNZ on x18 goes to its target or on, by the TEB."""
 import pathlib
 import shutil
 import subprocess
@@ -11,13 +12,17 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 PATCHES = [ROOT / "patches/madeira-unix/0253-ntdll-single-step-a-native-ARM64-thread-that-continu.patch",
-           ROOT / "patches/madeira-unix/0259-ntdll-step-an-x18-patched-instruction-as-one-instruc.patch"]
+           ROOT / "patches/madeira-unix/0259-ntdll-step-an-x18-patched-instruction-as-one-instruc.patch",
+           ROOT / "patches/madeira-unix/0263-virtual-x18-patch-every-instruction-that-reads-x18.patch"]
 HEADER = "build/ntdll-unix/pp_single_step.h"
 
 TEST_C = r'''
 #include "pp_single_step.h"
 #include <assert.h>
 #include <stdio.h>
+
+/* B from one address to another */
+#define B_TO(from, to) (0x14000000u | (uint32_t)((((to) - (from)) >> 2) & 0x3ffffff))
 
 static uint64_t x[31];
 static unsigned char v[32][16];
@@ -92,17 +97,48 @@ int main(void)
     }
     /* The x18 patcher's trampolines: cmp w9, w18, asr #5 at pc, and mov x8, x18 */
     {
-        uint64_t pc = 0x10a44d000ull, tramp = 0x11017cce8ull;
-        uint32_t t[7] = { 0xf81f0ff1, 0xd53bd071, 0x927df231, 0xf944a231, 0x4b91153f, 0xf84107f1, 0 };
+        uint64_t pc = 0x10a44d000ull, tramp = 0x11017cce8ull, to = 0;
+        uint32_t t[9] = { 0xf81f0ff1, 0xd53bd071, 0x927df231, 0xf944a231, 0x4b91153f, 0xf84107f1, 0,
+                          0xd503201f, 0xd503201f };
         uint32_t m[4] = { 0xd53bd068, 0x927df108, 0xf944a108, 0 };
         unsigned reg = 0; uint32_t op = 0;
-        t[6] = 0x14000000 | (uint32_t)(((pc + 4 - (tramp + 24)) >> 2) & 0x3ffffff);
-        assert(ppss_x18_tramp(t, tramp, pc, &reg, &op) == PPSS_TRAMP_OP && reg == 17 && op == 0x4b91153f);
-        assert(ppss_x18_tramp(t, tramp, pc + 8, &reg, &op) == PPSS_TRAMP_NONE);   /* returns elsewhere */
-        m[3] = 0x14000000 | (uint32_t)(((pc + 4 - (tramp + 12)) >> 2) & 0x3ffffff);
-        assert(ppss_x18_tramp(m, tramp, pc, &reg, &op) == PPSS_TRAMP_MOV && reg == 8);
+        t[6] = B_TO(tramp + 24, pc + 4);
+        assert(ppss_x18_tramp(t, tramp, pc, &reg, &op, &to) == PPSS_TRAMP_OP && reg == 17 && op == 0x4b91153f);
+        assert(ppss_x18_tramp(t, tramp, pc + 8, &reg, &op, &to) == PPSS_TRAMP_NONE);   /* returns elsewhere */
+        m[3] = B_TO(tramp + 12, pc + 4);
+        assert(ppss_x18_tramp(m, tramp, pc, &reg, &op, &to) == PPSS_TRAMP_MOV && reg == 8);
         t[1] = 0xd503201f;
-        assert(ppss_x18_tramp(t, tramp, pc, &reg, &op) == PPSS_TRAMP_NONE);
+        assert(ppss_x18_tramp(t, tramp, pc, &reg, &op, &to) == PPSS_TRAMP_NONE);
+    }
+    /* A branch's (0263), for cbz x18, target at pc: str; mrs; and; ldr; cbz x17, #12;
+       ldr x17, [sp], #16; b pc+4; ldr x17, [sp], #16; b target. Words 0-6 look like an
+       ordinary site's, whose instruction would be cbz x17, #12: a step there took the
+       guest's x17 for the TEB and went to pc+12. */
+    {
+        uint64_t pc = 0x10a44d000ull, tramp = 0x11017cce8ull, target = pc - 0x1230, to = 0;
+        uint32_t t[9] = { 0xf81f0ff1, 0xd53bd071, 0x927df231, 0xf944a231, 0xb4000071, 0xf84107f1, 0,
+                          0xf84107f1, 0 };
+        unsigned reg = 0; uint32_t op = 0;
+        t[6] = B_TO(tramp + 24, pc + 4);
+        t[8] = B_TO(tramp + 32, target);
+        assert(ppss_x18_tramp(t, tramp, pc, &reg, &op, &to) == PPSS_TRAMP_BRANCH && reg == 17 &&
+               op == 0xb4000071 && to == target);
+        assert(ppss_x18_branch_next(0x7000ull, op, pc, to) == pc + 4);              /* cbz x17: the TEB is not 0 */
+        assert(ppss_x18_branch_next(0, op, pc, to) == target);
+        assert(ppss_x18_branch_next(0x7000ull, 0xb5000071, pc, to) == target);     /* cbnz x17 */
+        assert(ppss_x18_branch_next(0x100000000ull, 0x34000071, pc, to) == target); /* cbz w17: w is 0 */
+        assert(ppss_x18_branch_next(0x100000000ull, 0x35000071, pc, to) == pc + 4); /* cbnz w17 */
+        assert(ppss_x18_branch_next(0x8ull, 0x36180071, pc, to) == pc + 4);         /* tbz x17, #3 */
+        assert(ppss_x18_branch_next(0x7ull, 0x36180071, pc, to) == target);
+        assert(ppss_x18_branch_next(1ull << 40, 0xb7400071, pc, to) == target);     /* tbnz x17, #40 */
+        assert(ppss_x18_branch_next(0x8ull, 0xb7400071, pc, to) == pc + 4);
+        t[0] = 0xf81f0ff0; t[1] = 0xd53bd070; t[2] = 0x927df210; t[3] = 0xf944a210;   /* x16 */
+        t[4] = 0x36180070; t[5] = t[7] = 0xf84107f0;
+        assert(ppss_x18_tramp(t, tramp, pc, &reg, &op, &to) == PPSS_TRAMP_BRANCH && reg == 16 && op == 0x36180070);
+        t[4] = 0x36180090;                                       /* tbz x16, #3, #16: no trampoline's */
+        assert(ppss_x18_tramp(t, tramp, pc, &reg, &op, &to) == PPSS_TRAMP_NONE);
+        t[4] = 0x36180070; t[7] = 0xd503201f;
+        assert(ppss_x18_tramp(t, tramp, pc, &reg, &op, &to) == PPSS_TRAMP_NONE);
     }
     puts("single step: ok");
     return 0;
