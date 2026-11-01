@@ -55,3 +55,4 @@
 0056-ntdll-take-a-plain-ARM64-process-s-system-DLLs-from-.patch
 0057-ntdll-store-a-native-ARM64-module-s-TLS-index-into-i.patch
 0058-ntdll-look-up-a-plain-ARM64-process-s-assemblies-as-.patch
+0059-ntdll-tell-FEX-of-an-executable-view-of-a-plain-sect.patch
