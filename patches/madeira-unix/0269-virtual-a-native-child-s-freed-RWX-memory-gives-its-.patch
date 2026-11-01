@@ -1,0 +1,244 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 1 Nov 2026 04:33:17 +0100
+Subject: [PATCH] virtual: a native child's freed RWX memory gives its JIT-pool
+ range back
+
+A MEM_RELEASE retired the anonymous JIT alias of the memory it freed but
+kept its pool range until the process exited. In a native ARM64 child an
+alias retired whole now puts its range on the pool's free list, after the
+usual grace period, when the ledger still records it whole for the
+process that allocated it (ios_pool_return_anon_locked). The free list
+insertion is shared with the exit-time reclaim.
+
+A native child's live anonymous executable memory is also held to a
+quarter of the pool: past it the child's own allocation fails, instead of
+a guest that leaks such memory exhausting the pool, which ends the launch
+for every process.
+
+Linear: PLA-514
+Class: ios-port
+Evidence: docs/evidence/2026-10-31-wow-arm64-start.md, tools/tests/test_x64_syscall_stub.py
+Offered-upstream: no
+---
+ build/ntdll-unix/virtual_ios.c | 144 ++++++++++++++++++++++++++-------
+ 1 file changed, 114 insertions(+), 30 deletions(-)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 96ed95f..68bb597 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -2499,6 +2499,7 @@ struct ios_jit_anon_alias {
+     uintptr_t user_va_end;
+     uintptr_t jit_rw_alias;
+     uintptr_t jit_rx_alias;
++    void     *peb;          /* Playport (PLA-514): the allocating pseudo-process */
+ };
+ static struct ios_jit_anon_alias ios_jit_anon_aliases[IOS_JIT_MAX_ANON_ALIASES];
+ static volatile int ios_jit_anon_alias_count = 0;
+@@ -4176,6 +4177,7 @@ int ios_jit_anon_alias_add(void *user_va, size_t size, void *jit_rw_alias)
+     ios_jit_anon_aliases[idx].user_va_end = (uintptr_t)user_va + size;
+     ios_jit_anon_aliases[idx].jit_rw_alias = (uintptr_t)jit_rw_alias;
+     ios_jit_anon_aliases[idx].jit_rx_alias = 0;  /* set via _set_rx */
++    ios_jit_anon_aliases[idx].peb = ios_jit_current_peb();
+     __sync_synchronize();
+     /* ml648: retire the slot's previous occupant before it is overwritten, or a
+      * stale guest_rx would keep resolving to an RW alias that no longer backs it. */
+@@ -4345,15 +4347,20 @@ static int ios_jit_anon_alias_free_slot_locked( int skip1, int skip2 )
+  * the pages outside it as new entries, written before the old entry is retired,
+  * so a lock-free reader always finds an entry that maps an address to the same
+  * pool byte. With no slot for a remainder the entry is kept whole, as before.
+- * The pool range is not returned. A MEM_DECOMMIT keeps its alias: the mapping
+- * stays, and decommit_pages zeroes through it. virtual_mutex is held. */
++ * The pool range is not returned, but in a native ARM64 child (PLA-514): there
++ * an entry retired whole gives its range back (ios_pool_return_anon_locked).
++ * A MEM_DECOMMIT keeps its alias: the mapping stays, and decommit_pages zeroes
++ * through it. virtual_mutex is held. */
++static void ios_pool_return_anon_locked( uintptr_t jit_rw_alias, size_t size, void *peb );
+ static void ios_jit_anon_alias_release( const void *base, size_t size )
+ {
++    extern int ios_is_native_arm64_cur(void);
+     static unsigned int release_n;
+     uintptr_t lo = (uintptr_t)base, hi = lo + size;
+-    int i, n;
++    int i, n, native;
+ 
+     if (!size) return;
++    native = ios_is_native_arm64_cur();
+     pthread_mutex_lock( &ios_pool_lock );
+     n = ios_jit_anon_alias_count;
+     for (i = 0; i < n; i++)
+@@ -4382,6 +4389,7 @@ static void ios_jit_anon_alias_release( const void *base, size_t size )
+             e->user_va_end = keep_hi[p];
+             e->jit_rw_alias = old.jit_rw_alias + delta;
+             e->jit_rx_alias = old.jit_rx_alias ? old.jit_rx_alias + delta : 0;
++            e->peb = old.peb;
+             __sync_synchronize();
+             e->user_va = keep_lo[p];
+             ios_mono_alias_publish( keep_lo[p], e->jit_rw_alias, keep_hi[p] - keep_lo[p] );
+@@ -4395,10 +4403,25 @@ static void ios_jit_anon_alias_release( const void *base, size_t size )
+             dprintf( 2, "[jit-alias] PLA-205 release #%u %p+0x%lx: entry %d %p..%p rw=%p retired, "
+                         "%d remainder(s) kept\n", release_n, base, (unsigned long)size, i,
+                      (void *)old.user_va, (void *)old.user_va_end, (void *)old.jit_rw_alias, pieces );
++        if (native && !pieces) ios_pool_return_anon_locked( old.jit_rw_alias, old.user_va_end - old.user_va, old.peb );
+     }
+     pthread_mutex_unlock( &ios_pool_lock );
+ }
+ 
++/* Playport (PLA-514): the bytes of the live anonymous JIT aliases peb allocated. */
++static size_t ios_jit_anon_bytes_of( void *peb )
++{
++    size_t held = 0;
++    int i;
++
++    pthread_mutex_lock( &ios_pool_lock );
++    for (i = 0; i < ios_jit_anon_alias_count; i++)
++        if (ios_jit_anon_aliases[i].user_va && ios_jit_anon_aliases[i].peb == peb)
++            held += ios_jit_anon_aliases[i].user_va_end - ios_jit_anon_aliases[i].user_va;
++    pthread_mutex_unlock( &ios_pool_lock );
++    return held;
++}
++
+ uintptr_t ios_jit_anon_alias_lookup(uintptr_t fault_addr)
+ {
+     int n = ios_jit_anon_alias_count;
+@@ -9286,6 +9309,71 @@ int ios_jit_mark_ec_range( const void *addr, size_t size )
+  * would make arm64x_check_call BL into x86-64 bytes as if ARM64). */
+ static void clear_arm64ec_range( const void *addr, size_t size );
+ 
++/* Put pool range [off, off + size) on the free list, reusable after
++ * IOS_POOL_REUSE_GRACE_SEC. Returns 0 when the list is full and the range is
++ * leaked. ios_pool_lock is held. */
++static int ios_pool_freelist_add_locked( size_t off, size_t size, int poisoned )
++{
++    /* PLA-213: a full list gives up a poisoned range, which an image may
++     * never fit, rather than this one (a poisoned range was dropped before) */
++    if (ios_pool_free_count == IOS_POOL_FREE_MAX)
++    {
++        int k;
++        for (k = 0; k < ios_pool_free_count; k++)
++            if (ios_pool_freelist[k].poisoned)
++            {
++                dprintf(2, "[jit-pool] freelist FULL — dropped poisoned range off=0x%lx size=0x%lx for a new one\n",
++                        (unsigned long)ios_pool_freelist[k].off, (unsigned long)ios_pool_freelist[k].size);
++                ios_pool_freelist[k] = ios_pool_freelist[--ios_pool_free_count];
++                break;
++            }
++    }
++    if (ios_pool_free_count == IOS_POOL_FREE_MAX)
++    {
++        dprintf(2, "[jit-pool] freelist FULL — leaking range off=0x%lx size=0x%lx\n",
++                (unsigned long)off, (unsigned long)size);
++        return 0;
++    }
++    ios_pool_freelist[ios_pool_free_count].poisoned = poisoned;
++    ios_pool_freelist[ios_pool_free_count].off = off;
++    ios_pool_freelist[ios_pool_free_count].size = size;
++    ios_pool_freelist[ios_pool_free_count].freed_at = time( NULL );
++    /* Physical pages returned post-grace by the allocator's MADV_FREE sweep
++     * (not here — laggard exit threads may still execute this range during
++     * the grace window, and a purged page reads zero). */
++    ios_pool_freelist[ios_pool_free_count].advised = 0;
++    ios_pool_free_count++;
++    return 1;
++}
++
++/* Playport (PLA-514): a native ARM64 child's anonymous executable memory gives
++ * its pool range back when it is freed (ios_jit_anon_alias_release), as an
++ * exiting process does (ios_jit_reclaim_process_bytes). World of Warcraft's
++ * client allocated 1.3 MB of PAGE_EXECUTE_READWRITE memory 525 times, each a
++ * new range, until the pool was exhausted. Only a range still recorded whole
++ * for the pseudo-process that allocated it is listed; one of an alias split
++ * by a partial free stays with its process until it exits.
++ * ios_pool_lock is held. */
++static void ios_pool_return_anon_locked( uintptr_t jit_rw_alias, size_t size, void *peb )
++{
++    static unsigned int returned_n;
++    size_t off = jit_rw_alias - (uintptr_t)ios_jit_rw_base_global;
++    unsigned int cur = 0, max = 0;
++    int i, poisoned;
++
++    for (i = 0; i < ios_pool_ledger_count; i++)
++        if (ios_pool_ledger[i].off == off && ios_pool_ledger[i].size == size && ios_pool_ledger[i].peb == peb) break;
++    if (i == ios_pool_ledger_count) return;
++    if (arm64ec_view) clear_arm64ec_range( (char *)ios_jit_rx_base_global + off, size );
++    poisoned = !ios_pool_range_execable( off, size, &cur, &max );
++    if (!ios_pool_freelist_add_locked( off, size, poisoned )) return;
++    ios_pool_ledger[i] = ios_pool_ledger[--ios_pool_ledger_count];
++    if (++returned_n <= 16 || !(returned_n % 256))
++        dprintf( 2, "[jit-pool] anon RWX freed: #%u off=0x%lx size=0x%lx back on the freelist (%d listed%s)\n",
++                 returned_n, (unsigned long)off, (unsigned long)size, ios_pool_free_count,
++                 poisoned ? ", poisoned" : "" );
++}
++
+ /* Task #25: release everything a dead pseudo-process allocated from the
+  * pool head. Called from process_exit_wrapper on the dying process's own
+  * thread — its ranges become reusable after IOS_POOL_REUSE_GRACE_SEC (see
+@@ -9438,37 +9526,11 @@ size_t ios_jit_reclaim_process_bytes( void *peb )
+                          (unsigned long)off, (unsigned long)size, fcur, fmax );
+         }
+ 
+-        /* PLA-213: a full list gives up a poisoned range, which an image may
+-         * never fit, rather than this one (a poisoned range was dropped before) */
+-        if (ios_pool_free_count == IOS_POOL_FREE_MAX)
++        if (ios_pool_freelist_add_locked( off, size, poisoned ))
+         {
+-            int k;
+-            for (k = 0; k < ios_pool_free_count; k++)
+-                if (ios_pool_freelist[k].poisoned)
+-                {
+-                    dprintf(2, "[jit-pool] freelist FULL — dropped poisoned range off=0x%lx size=0x%lx for a new one\n",
+-                            (unsigned long)ios_pool_freelist[k].off, (unsigned long)ios_pool_freelist[k].size);
+-                    ios_pool_freelist[k] = ios_pool_freelist[--ios_pool_free_count];
+-                    break;
+-                }
+-        }
+-        if (ios_pool_free_count < IOS_POOL_FREE_MAX)
+-        {
+-            ios_pool_freelist[ios_pool_free_count].poisoned = poisoned;
+-            ios_pool_freelist[ios_pool_free_count].off = off;
+-            ios_pool_freelist[ios_pool_free_count].size = size;
+-            ios_pool_freelist[ios_pool_free_count].freed_at = time( NULL );
+-            /* Physical pages returned post-grace by the allocator's
+-             * MADV_FREE sweep (not here — laggard exit threads may still
+-             * execute this range during the grace window, and a purged
+-             * page reads zero). */
+-            ios_pool_freelist[ios_pool_free_count].advised = 0;
+-            ios_pool_free_count++;
+             total += size;
+             ranges++;
+         }
+-        else dprintf(2, "[jit-pool] freelist FULL — leaking range off=0x%lx size=0x%lx\n",
+-                     (unsigned long)off, (unsigned long)size);
+ 
+         /* Remove ledger entry (swap-with-last). */
+         ios_pool_ledger[i] = ios_pool_ledger[--ios_pool_ledger_count];
+@@ -11541,6 +11603,28 @@ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
+                     }
+                 }
+ 
++                /* Playport (PLA-514): a native ARM64 child's anonymous executable
++                 * memory is held to a quarter of the pool. Past it the child's
++                 * own allocation fails, as a commit limit would on Windows,
++                 * instead of a guest that leaks such memory taking the pool every
++                 * other process's code needs, which ends the launch. */
++                {
++                    extern int ios_is_native_arm64_cur(void);
++                    size_t held;
++                    if (ios_is_native_arm64_cur() &&
++                        (held = ios_jit_anon_bytes_of( ios_jit_current_peb() )) + alloc_size > jit_pool_size / 4)
++                    {
++                        static unsigned int over_n;
++                        if (++over_n <= 16 || !(over_n % 256))
++                            dprintf(2, "[jit-pool] anon RWX %p+0x%lx REFUSED #%u: the native child holds 0x%lx, "
++                                       "its budget is 0x%lx\n", base, (unsigned long)alloc_size, over_n,
++                                    (unsigned long)held, (unsigned long)(jit_pool_size / 4));
++                        mprotect( base, size, PROT_READ );
++                        errno = ENOMEM;
++                        return -1;
++                    }
++                }
++
+                 size_t offset = ios_pool_alloc_range(alloc_size, jit_pool_size - ios_jit_tail_reserved);
+                 if (offset == (size_t)-1)
+                 {

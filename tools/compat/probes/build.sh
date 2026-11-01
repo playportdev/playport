@@ -68,8 +68,11 @@
 #   cputopo-i386  the same for i386 (WoW64): cputopo-i386.exe
 #   arm64  a plain ARM64 program (aarch64), started as a native ARM64 child
 #          with no FEX: its machine, a sysarm64 DLL, code it writes (RWX and
-#          RW made executable), a thread and an ARM64 child of its own; exit
-#          42 when every check passes (arm64.c, PLA-512, decision 0170)
+#          RW made executable), 800 RWX blocks of 1.3 MB run and freed (the
+#          pool must get them back), system32's ntdll read into RWX memory
+#          and its NtProtectVirtualMemory export called there, a thread and
+#          an ARM64 child of its own; exit 42 when every check passes
+#          (arm64.c, PLA-512, PLA-514, decision 0170)
 #   arm64-fault  the same program writing through a null pointer: the play
 #          must end as a failed one (arm64-fault.exe)
 #   arm64-min  aarch64 with no C runtime: kernel32 only, ExitProcess(42)

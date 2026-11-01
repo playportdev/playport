@@ -1,6 +1,6 @@
 # World of Warcraft Classic Era (ARM64 client) start-up on the phone, 2026-10-31
 
-**Linear:** PLA-514. Branch `dev/pla-516-battlenet`, madeira-unix 0252–0267, decision 0176 and its amendment; runs 2026-10-31 to 2026-11-01. The game was started from the Library
+**Linear:** PLA-514. Branch `dev/pla-516-battlenet`, madeira-unix 0252–0269, decision 0176 and its amendment; runs 2026-10-31 to 2026-11-01. The game was started from the Library
 (`./pp ui --play bnet-wow_classic_era --until first-frame+60 --shot --wait 300`) as a native ARM64 child.
 Run directories are under `.work/ui-runs/`.
 
@@ -244,3 +244,55 @@ Gates on IPA `7b46d47396345036a31435624933277f00259dfb65b99a85ebac6063415035e9` 
 | Hollow Knight first-frame+10 | passes | 20261101T040449 |
 | `arm64` probe | exit 42 (all checks pass) | 20261101T040540 |
 | `d3d12` probe on Vulkan | exit 0 | 20261101T040611 |
+
+## The 1.3 MB blobs were system32's ntdll; freed RWX memory gives its pool range back (madeira-unix 0268, 0269)
+
+- **Which file, and the fault at +0x8e520** (run 20261101T040227, read off the run log and the decrypted
+  image): the reads are 1,343,488 bytes, the size of the ARM64EC `ntdll.dll` the prefix's `system32`
+  holds (`build-arm64ec/dlls/ntdll/arm64ec-windows/ntdll.dll`), and +0x8e520 is that file's export RVA of
+  `NtProtectVirtualMemory` (its file offsets equal its RVAs in `.text`). The caller, WoW+0x10aa5c, sets
+  `x0 = -1, x1 = &base, x2 = &size, w3 = 0x40, x4 = &old` and `blr`s into the copy: a hook-proof
+  `NtProtectVirtualMemory(PAGE_EXECUTE_READWRITE)`. On Windows the file is ARM64X and the export is the
+  native `svc #0x50; ret`; the ARM64EC file's export is the x86-64 stub (`4c 8b d1 b8 50 00 00 00 …
+  0f 05 c3`), whose first word, 0xb8d18b4c, is unallocated in ARM64. Each ILL went to WoW's handler,
+  which loaded the file again and called it again from inside the dispatch: the frame pointer at the ILL
+  drops by 0x2380 a copy, 525 nested loads, none freed. Not an x18, relocation or flush problem.
+- **Fix (0268):** both places such an ILL reaches, the Mach handler (which delivers it to the guest
+  itself) and `ill_handler`, recognize Wine's x86-64 stub at the pc in a native ARM64 child
+  (`pp_x64_syscall_stub.h`) and enter `__wine_syscall_dispatcher` as the child's aarch64 stub does (x8
+  the number, x9 the return address). The numbers agree: all 265 `Nt*` x86-64 stubs of the ARM64EC
+  ntdll carry the number of the same function's `mov x8, #id` stub in the aarch64 ntdll. A first build
+  with the `ill_handler` path only (IPA `6f4eaa673dff731a4cb463c6af4a86e90d3d21b278fb18e39d1a6c4c97ff85e6`, run 20261101T042609)
+  ran the first call of each iteration as a system call, but the second (restoring the protection)
+  reached the Mach handler and the guest, and the loop went on.
+- **Fix (0269):** a MEM_RELEASE of a native child's RWX memory now puts the alias's pool range on the
+  free list (after the 3 s reuse grace) when the ledger records it whole for that process; before, the
+  range stayed with the process until it exited. A native child's live RWX aliases are also held to a
+  quarter of the pool: past it the child's own allocation fails, rather than a leaking guest exhausting
+  the pool, which ends the launch for everyone. In run 20261101T042609 that budget refused 512 of WoW's
+  further blobs (`[jit-pool] anon RWX … REFUSED`) and the launch was not ended (`head_exhausted=0`).
+- **Run 20261101T043750** (IPA `bfbf4f78124c40361cdb9dfee954b9aea650d3f9927f1b886c207b2f8809e941`): two
+  blobs, not 525. Through the stubs WoW calls `NtProtectVirtualMemory` twice on the child's ntdll page
+  0x73fc0fc000 (and back), `NtCreateThreadEx` twice and `NtSuspendThread` on the new thread (all
+  `[x64-stub] … (Mach)`). It goes on: vkd3d-proton creates the swap chain
+  (`dxgi_vk_swap_chain_init_sync_objects`), mmdevapi and the audio stream start, `Logs` is written, 66
+  threads. No frame is presented by +250 s (`kk-gpu frames=0`), no window or login screen.
+- **The next blocker** (not fixed): the main thread runs at 98 % in WoW+0x2cb1b90 (`[thread-sample]`,
+  lr +0x2cacdf0): `cmp x18, #8` at +0x2cb1b8c, then `b.lo` back into the same block, with x18 = 0. It is
+  in `.pdata` function +0x2cb1018, in a case of the jump table at +0x2cb1af0 (`adr; ldrsw [x9, w0, uxtw
+  #2]; adr; add; br x8`, table at +0x2cb3f34). The flush's code walk (0265) stops at a `br`, so no case of
+  a switch is reached and their x18 reads stay unpatched: the gap the 0265 amendment names.
+- **Probe:** `arm64.c` now also allocates, runs and frees 800 RWX blocks of 0x148000 bytes (about 1 GB,
+  more than the pool's room), and reads `system32\ntdll.dll` into RWX memory and calls its
+  `NtProtectVirtualMemory` export there. Run 20261101T045041: `rwx churn: 800 of 800`, the pool head at
+  185 MB with 143 MB free (`anon RWX freed: #512 … back on the freelist`), `NtProtectVirtualMemory
+  returned 0x0, old 0x4, now 0x2`, `done ok`. The x86-64 build passes under desktop Wine. Host test:
+  `tools/tests/test_x64_syscall_stub.py`.
+
+Gates on IPA `bfbf4f78124c40361cdb9dfee954b9aea650d3f9927f1b886c207b2f8809e941` (the 0269 build):
+
+| Check | Result | Run |
+|---|---|---|
+| `arm64` probe (re-imported with the new checks) | exit 42 (all checks pass) | 20261101T045041 |
+| Hollow Knight first-frame+10 | passes | 20261101T045202 |
+| `d3d12` probe on Vulkan | exit 0 | 20261101T045256 |

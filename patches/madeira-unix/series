@@ -234,3 +234,5 @@
 0265-virtual-x18-patch-the-code-a-native-child-decrypts-i.patch
 0266-signal-the-fault-loop-breaker-counts-one-thread-s-fa.patch
 0267-win32u-skip-a-monitor-without-a-source-in-DisplayCon.patch
+0268-signal-a-native-child-s-call-into-an-x86-64-syscall-.patch
+0269-virtual-a-native-child-s-freed-RWX-memory-gives-its-.patch

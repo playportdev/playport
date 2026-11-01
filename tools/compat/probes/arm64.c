@@ -14,7 +14,12 @@
  *            FlushInstructionCache and called; rewritten in place and called
  *            again; a second copy made executable by VirtualProtect
  *            (PAGE_READWRITE to PAGE_EXECUTE_READ) and called: the runtime's
- *            anonymous executable path
+ *            anonymous executable path; 800 allocations of 1.3 MB of RWX
+ *            memory, each run and freed, more than the JIT pool holds
+ *            (freed RWX memory must give its pool space back); on ARM64,
+ *            system32\ntdll.dll read into RWX memory and its
+ *            NtProtectVirtualMemory export called there, as World of
+ *            Warcraft does (an x86-64 stub in Playport's ARM64EC ntdll)
  *   thread   a second thread runs and returns its exit code
  *   child    the program again as a child with `exit 7`: a native ARM64
  *            child of a native ARM64 child; its exit code must be 7
@@ -163,6 +168,110 @@ static size_t emit_return(unsigned char *code, unsigned int value)
 
 typedef unsigned int (*code_fn)(void);
 
+/* RWX memory freed and allocated again gives its JIT-pool space back (madeira-unix 0269, PLA-514): 800 copies of
+ * 1.3 MB, World of Warcraft's size, are about 1 GB, more than the pool has room for. The pause keeps the copies
+ * freed within the pool's 3 s reuse grace to about 160 MB. */
+static void rwx_churn(void)
+{
+    const SIZE_T size = 0x148000;
+    unsigned int i, ok = 0;
+
+    for (i = 0; i < 800; i++)
+    {
+        unsigned char *rwx = VirtualAlloc(NULL, size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+        size_t len;
+
+        if (!rwx)
+        {
+            probe_log("rwx churn: VirtualAlloc %u failed, error %lu\n", i, GetLastError());
+            break;
+        }
+        len = emit_return(rwx + size - 0x4000, i);
+        FlushInstructionCache(GetCurrentProcess(), rwx + size - 0x4000, len);
+        if (((code_fn)(void *)(rwx + size - 0x4000))() == i) ok++;
+        VirtualFree(rwx, 0, MEM_RELEASE);
+        Sleep(20);
+    }
+    probe_log("rwx churn: %u of 800 allocations of 0x%lx bytes ran their code\n", ok, (unsigned long)size);
+    check("800 RWX allocations freed and made again all run", ok == 800);
+}
+
+#ifdef __aarch64__
+typedef LONG (WINAPI *protect_fn)(HANDLE, void **, SIZE_T *, ULONG, ULONG *);
+
+/* The file offset of rva in a PE file with these section headers. */
+static DWORD file_offset(const IMAGE_SECTION_HEADER *sec, unsigned int count, DWORD rva)
+{
+    unsigned int i;
+
+    for (i = 0; i < count; i++)
+        if (rva >= sec[i].VirtualAddress && rva < sec[i].VirtualAddress + sec[i].SizeOfRawData)
+            return rva - sec[i].VirtualAddress + sec[i].PointerToRawData;
+    return rva;
+}
+
+/* system32\ntdll.dll read from disk into RWX memory and its NtProtectVirtualMemory export called there, as World of
+ * Warcraft does (madeira-unix 0268, PLA-514). On Windows the file is ARM64X and the export is `svc #id; ret`; here it
+ * is the ARM64EC ntdll, whose export is an x86-64 stub the runtime turns into the system call. */
+static void disk_ntdll_syscall(void)
+{
+    char path[MAX_PATH + 16];
+    unsigned char *file = NULL, *page = NULL;
+    DWORD got = 0, i;
+    HANDLE h;
+    LARGE_INTEGER fsize;
+    IMAGE_NT_HEADERS64 *nt;
+    IMAGE_SECTION_HEADER *sec;
+    IMAGE_EXPORT_DIRECTORY *exp;
+    DWORD *names, *funcs, rva = 0;
+    WORD *ordinals;
+    void *base;
+    SIZE_T len = 0x1000;
+    ULONG old = 0;
+    LONG status = -1;
+    MEMORY_BASIC_INFORMATION mbi;
+
+#define RAW(r) (file + file_offset(sec, nt->FileHeader.NumberOfSections, (r)))
+    GetSystemDirectoryA(path, MAX_PATH);
+    strcat(path, "\\ntdll.dll");
+    h = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    check("open system32\\ntdll.dll", h != INVALID_HANDLE_VALUE);
+    if (h == INVALID_HANDLE_VALUE) return;
+    GetFileSizeEx(h, &fsize);
+    file = VirtualAlloc(NULL, fsize.LowPart, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (file) ReadFile(h, file, fsize.LowPart, &got, NULL);
+    CloseHandle(h);
+    check("read system32\\ntdll.dll into RWX memory", file && got == fsize.LowPart);
+    if (!file || got != fsize.LowPart) goto done;
+
+    nt = (IMAGE_NT_HEADERS64 *)(file + ((IMAGE_DOS_HEADER *)file)->e_lfanew);
+    sec = IMAGE_FIRST_SECTION(nt);
+    exp = (IMAGE_EXPORT_DIRECTORY *)RAW(nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress);
+    names = (DWORD *)RAW(exp->AddressOfNames);
+    funcs = (DWORD *)RAW(exp->AddressOfFunctions);
+    ordinals = (WORD *)RAW(exp->AddressOfNameOrdinals);
+    for (i = 0; i < exp->NumberOfNames; i++)
+        if (!strcmp((const char *)RAW(names[i]), "NtProtectVirtualMemory")) rva = funcs[ordinals[i]];
+    probe_log("disk ntdll: %s, NtProtectVirtualMemory at RVA 0x%lx\n", path, rva);
+    check("NtProtectVirtualMemory in the file's exports", rva != 0);
+    if (!rva) goto done;
+
+    page = VirtualAlloc(NULL, len, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    base = page;
+    FlushInstructionCache(GetCurrentProcess(), file, fsize.LowPart);
+    status = ((protect_fn)(void *)RAW(rva))(GetCurrentProcess(), &base, &len, PAGE_READONLY, &old);
+    VirtualQuery(page, &mbi, sizeof(mbi));
+    probe_log("disk ntdll: NtProtectVirtualMemory returned 0x%lx, old 0x%lx, now 0x%lx\n", (unsigned long)status,
+              old, mbi.Protect);
+    check("the disk copy's NtProtectVirtualMemory makes a page read-only",
+          status == 0 && old == PAGE_READWRITE && mbi.Protect == PAGE_READONLY);
+done:
+    if (page) VirtualFree(page, 0, MEM_RELEASE);
+    if (file) VirtualFree(file, 0, MEM_RELEASE);
+#undef RAW
+}
+#endif
+
 static void rwx_phase(void)
 {
     const SIZE_T size = 0x10000;
@@ -203,6 +312,11 @@ static void rwx_phase(void)
     probe_log("rwx: write-then-protect code returned %u\n", got);
     check("RW code made executable runs", got == 99);
     VirtualFree(wx, 0, MEM_RELEASE);
+
+    rwx_churn();
+#ifdef __aarch64__
+    disk_ntdll_syscall();
+#endif
 }
 
 static DWORD WINAPI thread_main(void *arg)

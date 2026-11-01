@@ -1,0 +1,197 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 1 Nov 2026 04:33:17 +0100
+Subject: [PATCH] signal: a native child's call into an x86-64 syscall stub
+ runs the syscall
+
+World of Warcraft's ARM64 client reads C:\windows\system32\ntdll.dll into
+PAGE_EXECUTE_READWRITE memory, looks NtProtectVirtualMemory up in the
+file's export table and calls it there. On Windows the file is ARM64X and
+the export is the native `svc #id; ret`; Playport's system32 ntdll is
+ARM64EC, whose system call exports are the x86-64 stubs, so the call
+raised an illegal instruction at the stub's first word. The client's
+handler loaded the file again and called it again, nested, 525 times,
+each copy a new 1.3 MB JIT-pool range, until the pool was exhausted.
+
+Both places such an ILL reaches, the Mach handler (which delivers it to
+the guest itself) and ill_handler, now recognize Wine's x86-64 stub at
+the pc in a native ARM64 child (pp_x64_syscall_stub.h) and enter
+__wine_syscall_dispatcher as the child's own aarch64 stub does: x8 the
+stub's number, which is the aarch64 ntdll's number for the same function,
+x9 the return address. ill_handler does so before its diagnostics, which
+dumped the whole pool once. ios_is_native_arm64_peb answers for another
+thread's pseudo-process, as the Mach handler needs.
+
+Linear: PLA-514
+Class: ios-port
+Evidence: docs/evidence/2026-10-31-wow-arm64-start.md, tools/tests/test_x64_syscall_stub.py
+Offered-upstream: no
+---
+ build/ntdll-unix/loader_ios.c          | 10 ++++-
+ build/ntdll-unix/pp_x64_syscall_stub.h | 47 ++++++++++++++++++++
+ build/ntdll-unix/signal_arm64_ios.c    | 59 ++++++++++++++++++++++++++
+ 3 files changed, 114 insertions(+), 2 deletions(-)
+ create mode 100644 build/ntdll-unix/pp_x64_syscall_stub.h
+
+diff --git a/build/ntdll-unix/loader_ios.c b/build/ntdll-unix/loader_ios.c
+index a984db2..52bf3fa 100644
+--- a/build/ntdll-unix/loader_ios.c
++++ b/build/ntdll-unix/loader_ios.c
+@@ -363,12 +363,18 @@ int ios_is_arm64ec_cur(void)
+            ios_cur_image_info()->Machine == IMAGE_FILE_MACHINE_AMD64;
+ }
+ 
+-/* Playport (PLA-512, PLA-514): the current pseudo-process is a plain ARM64
++/* Playport (PLA-512, PLA-514): the pseudo-process of peb is a plain ARM64
+  * child of the ARM64EC session (0249), whose images live in the JIT pool
+  * (decision 0176). */
++int ios_is_native_arm64_peb( void *peb )
++{
++    return is_arm64ec() && ios_image_info_for_peb( peb )->Machine == IMAGE_FILE_MACHINE_ARM64;
++}
++
++/* The current pseudo-process is one (above). */
+ int ios_is_native_arm64_cur(void)
+ {
+-    return is_arm64ec() && ios_cur_image_info()->Machine == IMAGE_FILE_MACHINE_ARM64;
++    return ios_is_native_arm64_peb( ios_jit_current_peb() );
+ }
+ 
+ static BOOL ios_register_proc_ident( void *peb_id, const SECTION_IMAGE_INFORMATION *info )
+diff --git a/build/ntdll-unix/pp_x64_syscall_stub.h b/build/ntdll-unix/pp_x64_syscall_stub.h
+new file mode 100644
+index 0000000..3569f82
+--- /dev/null
++++ b/build/ntdll-unix/pp_x64_syscall_stub.h
+@@ -0,0 +1,47 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later
++ * An x86-64 system call stub reached by native ARM64 code (Playport, PLA-514).
++ *
++ * World of Warcraft's ARM64 client reads C:\windows\system32\ntdll.dll from
++ * disk into PAGE_EXECUTE_READWRITE memory, looks NtProtectVirtualMemory up in
++ * the file's export table and calls it there, a stub no hook in the loaded
++ * ntdll can intercept. On Windows that file is ARM64X: its export table is
++ * the native one, and the stub is `svc #id; ret`. Playport's system32 ntdll
++ * is ARM64EC, whose exports of system calls are the x86-64 stubs
++ *
++ *     4c 8b d1             mov r10, rcx
++ *     b8 <id32>            mov eax, id
++ *     f6 04 25 08 03 fe 7f test byte ptr [0x7ffe0308], 1
++ *     01
++ *     75 03                jne +3
++ *     0f 05                syscall
++ *     c3                   ret
++ *
++ * whose first word, 0xb8d18b4c, is an unallocated ARM64 encoding, so the call
++ * raised an illegal instruction each time. The system call numbers of Wine's
++ * x86-64 stubs are those of its aarch64 ntdll, so the ILL handler runs system
++ * call id with the ARM64 arguments, as the ARM64X stub would.
++ */
++#ifndef PP_X64_SYSCALL_STUB_H
++#define PP_X64_SYSCALL_STUB_H
++
++#include <stdint.h>
++#include <string.h>
++
++#define PP_X64_SYSCALL_STUB_SIZE 21
++
++/* The system call number of the x86-64 stub at code (PP_X64_SYSCALL_STUB_SIZE
++ * readable bytes), or -1 when code is not such a stub. Wine's system call
++ * numbers fit in 14 bits (the table number in bits 12-13). */
++static inline int pp_x64_syscall_stub_id( const unsigned char *code )
++{
++    static const unsigned char head[4] = { 0x4c, 0x8b, 0xd1, 0xb8 };
++    static const unsigned char tail[13] = { 0xf6, 0x04, 0x25, 0x08, 0x03, 0xfe, 0x7f, 0x01,
++                                            0x75, 0x03, 0x0f, 0x05, 0xc3 };
++    uint32_t id;
++
++    if (memcmp( code, head, sizeof(head) ) || memcmp( code + 8, tail, sizeof(tail) )) return -1;
++    id = (uint32_t)code[4] | (uint32_t)code[5] << 8 | (uint32_t)code[6] << 16 | (uint32_t)code[7] << 24;
++    return id < 0x4000 ? (int)id : -1;
++}
++
++#endif
+diff --git a/build/ntdll-unix/signal_arm64_ios.c b/build/ntdll-unix/signal_arm64_ios.c
+index 34f6f2b..33db472 100644
+--- a/build/ntdll-unix/signal_arm64_ios.c
++++ b/build/ntdll-unix/signal_arm64_ios.c
+@@ -609,6 +609,33 @@ static __thread int ios_ss_call;
+ /* Playport (PLA-514): the fault-loop breaker counts one thread's faults
+  * (pp_fault_loop.h). */
+ #include "pp_fault_loop.h"
++/* Playport (PLA-514): a native ARM64 child calling an x86-64 system call
++ * stub of the ARM64EC ntdll (pp_x64_syscall_stub.h). */
++#include "pp_x64_syscall_stub.h"
++extern int ios_is_native_arm64_peb( void *peb );
++extern void *ios_jit_current_peb(void);
++
++/* The system call number when pc, an illegal instruction in a thread of the
++ * pseudo-process peb, is Wine's x86-64 stub in a native ARM64 child, else -1.
++ * The thread then enters __wine_syscall_dispatcher as the child's own aarch64
++ * stub does: x8 the number, x9 the return address (x30), from which the
++ * dispatcher returns straight to the caller. The ILL can reach either the
++ * Mach handler, which delivers it to the guest itself, or ill_handler; both
++ * ask here first. Wine's stubs are 32-byte aligned, so one never crosses a
++ * page, and the faulting word's page is mapped. */
++static int ios_native_x64_stub( uint64_t pc, uint64_t lr, void *peb, const char *path )
++{
++    static unsigned int stub_calls;
++    int id;
++
++    if ((pc & 3) || (pc & 0x3fff) > 0x4000 - PP_X64_SYSCALL_STUB_SIZE ||
++        *(const uint32_t *)(uintptr_t)pc != 0xb8d18b4c || !ios_is_native_arm64_peb( peb )) return -1;
++    if ((id = pp_x64_syscall_stub_id( (const unsigned char *)(uintptr_t)pc )) < 0) return -1;
++    if (++stub_calls <= 16 || !(stub_calls % 4096))
++        dprintf( 2, "[x64-stub] #%u syscall 0x%x through the x86-64 stub at 0x%llx, called from 0x%llx (%s)\n",
++                 stub_calls, id, (unsigned long long)pc, (unsigned long long)lr, path );
++    return id;
++}
+ static struct ios_thread_entry ios_thread_registry[IOS_MAX_WINE_THREADS];
+ static volatile int32_t ios_thread_count = 0;
+ static __thread int ios_my_registry_idx = -1;
+@@ -4656,6 +4683,24 @@ skip_reclaim_band: ;
+                 }
+             }
+ 
++            /* Playport (PLA-514): a native child's call into an x86-64 system
++             * call stub of the ARM64EC ntdll runs the system call
++             * (ios_native_x64_stub) instead of reaching the guest as an
++             * illegal instruction. */
++            if (!handled && req->exception == EXC_BAD_INSTRUCTION && thread_teb)
++            {
++                uint64_t lr = (uint64_t)__darwin_arm_thread_state64_get_lr( state );
++                int id = ios_native_x64_stub( (uint64_t)__darwin_arm_thread_state64_get_pc( state ), lr,
++                                              ((TEB *)thread_teb)->Peb, "Mach" );
++                if (id >= 0)
++                {
++                    state.__x[8] = id;
++                    state.__x[9] = lr;
++                    __darwin_arm_thread_state64_set_pc_fptr( state, (void *)__wine_syscall_dispatcher );
++                    handled = 1;
++                }
++            }
++
+             /* ml369 (#63): last-resort in-process guest exception delivery.
+              * Nothing above claimed the fault; declining it is a death
+              * sentence under StikDebug (the stub cannot inject signals, so
+@@ -11055,6 +11100,20 @@ static void ill_handler( int signal, siginfo_t *siginfo, void *sigcontext )
+ #ifdef WINE_IOS
+     const int ill_dbg_ok = ios_make_wine_logging_safe();  /* ml375: before any ERR */
+     ios_track_signal( signal, context );
++    /* Playport (PLA-514): before the diagnostics below, a native child's call
++     * into an x86-64 system call stub is a system call, not a fault. */
++    if (!(PSTATE_sig( context ) & 0x10))
++    {
++        int id = ios_native_x64_stub( PC_sig( context ), REGn_sig( 30, context ), ios_jit_current_peb(),
++                                      "SIGILL" );
++        if (id >= 0)
++        {
++            REGn_sig( 8, context ) = id;
++            REGn_sig( 9, context ) = REGn_sig( 30, context );
++            PC_sig( context ) = (ULONG_PTR)__wine_syscall_dispatcher;
++            return;
++        }
++    }
+     if (ill_dbg_ok) ERR("ILL at pc=%p\n", (void*)PC_sig(context));
+     else dprintf( 2, "ILL at pc=%p (no TEB — wine logging unsafe)\n", (void*)PC_sig(context) );
+     {
