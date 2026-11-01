@@ -11,7 +11,8 @@
 //   at once; "Not now", or 15 s untouched, leaves the game on Gamepad;
 // - the toast goes when the controls do (the menu opens): the offer is not made again.
 //
-// A dev build logs `controls: suggested layout …` lines; the UI driver's suggest:accept and
+// A dev build logs `controls: suggested layout …` lines, and `controls: the game read XInput
+// state` at the game's first read; the UI driver's suggest:accept and
 // suggest:dismiss press its buttons (Dev/UIDriver.swift).
 
 #if canImport(UIKit)
@@ -37,6 +38,9 @@ final class SuggestedLayout {
     #if !PLAYPORT_RELEASE
     /// Why the game will not be offered, once that is known (the driver's refusal).
     private(set) var outcome: String?
+    /// Until the game's first XInput state read, which a dev build logs whatever the offer did
+    /// (one made before ends the sampling at once): a pad check reads it from s1-host.log.
+    private var readTimer: Timer?
     #endif
 
     private static func log(_ line: String) {
@@ -51,6 +55,14 @@ final class SuggestedLayout {
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
             MainActor.assumeIsolated { SuggestedLayout.shared.sample() }
         }
+        #if !PLAYPORT_RELEASE
+        readTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { t in
+            let reads = host_pad_state_reads()
+            guard reads > 0 else { return }
+            t.invalidate()
+            HostIO.log("controls: the game read XInput state (\(reads) reads by now)")
+        }
+        #endif
     }
 
     private func sample() {
