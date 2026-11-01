@@ -387,3 +387,17 @@ Gates on IPA `fce8b0f432902b8567cd35e29205605ecd13a82eae5d9c3d811a12739c82ff06` 
 | `arm64` probe | exit 0x2a (all checks pass) | 20261101T110124 |
 | `d3d12` probe on Vulkan | exit 0 | 20261101T110227 |
 | `./pp test --quick` | all passed | host |
+
+**World of Warcraft (retail) on the 0271 build** (`./pp ui --play bnet-wow --until first-frame+90 --shot
+--wait 300`, run 20261101T110435, exit 0): first window +23.6 s, first frame +24.0 s. The remap lines
+are the same as in the diagnostic run (all but the last 0x3000 bytes made one). The screenshot shows the
+same login screen, and the owner sees only text on black: the fonts are drawn, but not the background,
+frames, buttons or logo. The Screen Narrator prompt overlaps the login fields because its box is not
+drawn. `Logs/gx.log` has 25 lines, the same as above, ending `UAV format support BGRA8:true RG16F:true
+RGBA16F:true` and `<IsGPUDriverOutOfDate> No`. It has no texture-format, compressed-format or error line.
+The host log has no vkd3d-proton format warning. vkd3d-proton logged two `fixme`s (`Wide lines not
+supported` and `Narrow quad lines not supported`, from `rs_line_info_from_d3d12`) and DXVK's DXGI some
+`warn`s (`Found monitors not associated with any adapter, using fallback` and stubs). The swapchain is
+`[kk-wsi] create chain format=44 … 1564x720 images=3`. Two SEGVs (reads at the base of the read-write
+view, 0x7043c60000, from RVA +0x346e8c, after the client had unmapped it: `NO wine view`) went to the
+client's handler and it carried on. Runs before 0271 never got this far. The missing textures are the next blocker.
