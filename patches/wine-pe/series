@@ -58,3 +58,4 @@
 0059-ntdll-tell-FEX-of-an-executable-view-of-a-plain-sect.patch
 0060-ntdll-run-x64-Windows-KiUserExceptionDispatcher-for-.patch
 0061-ntdll-an-x64-call-target-check_call-cannot-read-is-c.patch
+0062-ntdll-log-the-first-256-of-the-remaining-exceptions-.patch

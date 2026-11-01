@@ -1,0 +1,226 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 1 Nov 2026 17:50:00 +0100
+Subject: [PATCH] ARM64EC: print the lines of the first 256 exceptions, then
+ count them by kind
+
+Every exception through ResetToConsistentState printed five to seven
+lines (the exception, the context reconstruction, the guest rip, pass
+through or rethrow), and Wine and the Mach handler add theirs. World of
+Warcraft's x64 client takes an execute fault per 4 KB page of its code
+(about 3,300 pages to its login screen under desktop Wine), and run
+20261101T172555 looped on one: its log passed the 256 MiB dev cap and
+the run could not be measured.
+
+The lines of the first 256 exceptions print as before. After that each
+is counted, by kind (access violation read, write or execute,
+breakpoint, single step, illegal instruction, misalignment, other) and
+outcome (passed through, rethrown to the guest, handled here), and an
+[exc-census] line gives the counts every 65536 exceptions and at most
+every 5 s (CNTVCT_EL0) while they keep coming. The tracker's
+[iOS-xrem] via=protect line, one per protection change that removes
+execute, prints for the first 64 and every 4096th, with the count.
+
+Linear: PLA-516
+Class: diagnostics
+Evidence: docs/evidence/2026-11-01-wow-x64-fex.md
+Offered-upstream: no
+---
+ Source/Windows/ARM64EC/Module.cpp             | 111 ++++++++++++++++--
+ Source/Windows/Common/InvalidationTracker.cpp |  12 +-
+ 2 files changed, 112 insertions(+), 11 deletions(-)
+
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index 10e382a..b6b4a0e 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -588,6 +588,80 @@ void HandleImageUnmap(uint64_t Address, uint64_t Size) {
+ }
+ } // namespace
+ 
++/* Playport (PLA-516): every guest exception printed five to seven lines here, and Wine and the Mach
++ * handler add theirs. A guest that takes an exception per page of its code, or loops on one, filled
++ * the 256 MiB dev log before a run could be measured. The lines of the first IosExcFullLines
++ * exceptions are printed as before; after that each exception is only counted, by kind and outcome,
++ * and an [exc-census] line gives the counts every IosExcCensusEvery exceptions and at most every
++ * IosExcCensusSeconds while they keep coming. */
++namespace IosExcLog {
++constexpr uint64_t FullLines = 256;
++constexpr uint64_t CensusEvery = 65536;
++constexpr uint64_t CensusSeconds = 5;
++enum Kind { AvRead, AvWrite, AvExec, Breakpoint, SingleStep, Illegal, Misaligned, Other, KindCount };
++enum Outcome { PassedThrough, Rethrown, OutcomeCount };
++std::atomic<uint64_t> Seen {};
++std::atomic<uint64_t> ByKind[KindCount] {};
++std::atomic<uint64_t> ByOutcome[OutcomeCount] {};
++std::atomic<uint64_t> LastCensus {};
++
++static uint64_t Ticks() {
++  uint64_t Value;
++  __asm volatile("mrs %0, cntvct_el0" : "=r"(Value));
++  return Value;
++}
++
++static uint64_t TickFrequency() {
++  uint64_t Value;
++  __asm volatile("mrs %0, cntfrq_el0" : "=r"(Value));
++  return Value;
++}
++
++static Kind KindOf(const EXCEPTION_RECORD& Rec) {
++  switch (static_cast<NTSTATUS>(Rec.ExceptionCode)) {
++  case EXCEPTION_ACCESS_VIOLATION:
++    if (Rec.NumberParameters < 2) {
++      return Other;
++    }
++    return Rec.ExceptionInformation[0] == 0 ? AvRead : Rec.ExceptionInformation[0] == 1 ? AvWrite : AvExec;
++  case EXCEPTION_BREAKPOINT: return Breakpoint;
++  case EXCEPTION_SINGLE_STEP: return SingleStep;
++  case EXCEPTION_ILLEGAL_INSTRUCTION: return Illegal;
++  case EXCEPTION_DATATYPE_MISALIGNMENT: return Misaligned;
++  default: return Other;
++  }
++}
++
++// Counts the exception; true while its lines are printed in full.
++static bool Count(const EXCEPTION_RECORD& Rec) {
++  const uint64_t N = Seen.fetch_add(1, std::memory_order_relaxed) + 1;
++  ByKind[KindOf(Rec)].fetch_add(1, std::memory_order_relaxed);
++  if (N > FullLines) {
++    const uint64_t Now = Ticks();
++    uint64_t Last = LastCensus.load(std::memory_order_relaxed);
++    const bool Due = (N % CensusEvery) == 0 || Now - Last >= CensusSeconds * TickFrequency();
++    if (Due && LastCensus.compare_exchange_strong(Last, Now, std::memory_order_relaxed)) {
++      auto K = [](Kind I) { return ByKind[I].load(std::memory_order_relaxed); };
++      auto O = [](Outcome I) { return ByOutcome[I].load(std::memory_order_relaxed); };
++      LogMan::Msg::EFmt("[exc-census] {} exceptions seen (lines for the first {} only; a guest fault the JIT raises counts "
++                        "twice: its break, then the guest's own): av read {} write {} exec {}, breakpoint {}, single step {}, "
++                        "illegal {}, misaligned {}, other {}; passed through {}, rethrown to the guest {}, the rest handled here",
++                        N, FullLines, K(AvRead), K(AvWrite), K(AvExec), K(Breakpoint), K(SingleStep), K(Illegal), K(Misaligned),
++                        K(Other), O(PassedThrough), O(Rethrown));
++    }
++  }
++  return N <= FullLines;
++}
++
++static bool Full() {
++  return Seen.load(std::memory_order_relaxed) <= FullLines;
++}
++
++static void Record(Outcome O) {
++  ByOutcome[O].fetch_add(1, std::memory_order_relaxed);
++}
++} // namespace IosExcLog
++
+ namespace Exception {
+ static std::optional<FEX::Windows::TSOHandlerConfig> HandlerConfig;
+ static uintptr_t KiUserExceptionDispatcher;
+@@ -886,12 +960,16 @@ static void RethrowGuestException(const EXCEPTION_RECORD& Rec, ARM64_NT_CONTEXT&
+   auto* Thread = GetCPUArea().ThreadState();
+   auto& Fault = Thread->CurrentFrame->SynchronousFaultData;
+ 
+-  LogMan::Msg::DFmt("Reconstructing context");
++  if (IosExcLog::Full()) {
++    LogMan::Msg::DFmt("Reconstructing context");
++  }
+   if (!IsDispatcherAddress(Context.Pc)) {
+     ReconstructThreadState(Thread, Context);
+   }
+   ARM64_NT_CONTEXT GuestContext = StoreStateToPackedECContext(Thread, Context.Fpcr, Context.Fpsr);
+-  LogMan::Msg::DFmt("pc: {:X} rip: {:X}", Context.Pc, GuestContext.Pc);
++  if (IosExcLog::Full()) {
++    LogMan::Msg::DFmt("pc: {:X} rip: {:X}", Context.Pc, GuestContext.Pc);
++  }
+ 
+ #ifdef FEX_IOS_HOST
+   // PLA-401: report our generated-fault provenance (the guest code window is
+@@ -1666,7 +1744,11 @@ bool ResetToConsistentStateImpl(const ThreadCPUArea CPUArea, EXCEPTION_RECORD* E
+    * no genuine access violation loses its data address. */
+   const bool IosDeferAvLog = Exception->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && Exception->NumberParameters >= 2 &&
+                              Exception->ExceptionInformation[0] == 1;
++  const bool IosFull = IosExcLog::Count(*Exception);
+   auto IosLogAv = [&]() {
++    if (!IosFull) {
++      return;
++    }
+     LogMan::Msg::DFmt("Exception: Code: {:X} Address: {:X} AV {} of {:X}", Exception->ExceptionCode,
+                       reinterpret_cast<uintptr_t>(Exception->ExceptionAddress),
+                       Exception->ExceptionInformation[0] == 0 ? "READ" : Exception->ExceptionInformation[0] == 1 ? "WRITE" : "EXEC",
+@@ -1677,6 +1759,9 @@ bool ResetToConsistentStateImpl(const ThreadCPUArea CPUArea, EXCEPTION_RECORD* E
+    * the fault is not one FEX completes. */
+   const bool IosDeferMisalignLog = Exception->ExceptionCode == EXCEPTION_DATATYPE_MISALIGNMENT;
+   auto IosLogException = [&]() {
++    if (!IosFull) {
++      return;
++    }
+     LogMan::Msg::DFmt("Exception: Code: {:X} Address: {:X}", Exception->ExceptionCode, reinterpret_cast<uintptr_t>(Exception->ExceptionAddress));
+   };
+   if (IosDeferAvLog || IosDeferMisalignLog) {
+@@ -1865,7 +1950,10 @@ bool ResetToConsistentStateImpl(const ThreadCPUArea CPUArea, EXCEPTION_RECORD* E
+   }
+ 
+   if (!IsJIT && !IsDispatcherAddress(NativeContext->Pc)) {
+-    LogMan::Msg::DFmt("Passing through exception");
++    IosExcLog::Record(IosExcLog::PassedThrough);
++    if (IosFull) {
++      LogMan::Msg::DFmt("Passing through exception");
++    }
+     return false;
+   }
+ 
+@@ -1880,9 +1968,12 @@ bool ResetToConsistentStateImpl(const ThreadCPUArea CPUArea, EXCEPTION_RECORD* E
+     return true;
+   }
+ 
++  IosExcLog::Record(IosExcLog::Rethrown);
+   if (IsEmulatorStackAddress(CPUArea, reinterpret_cast<uint64_t>(__builtin_frame_address(0)))) {
+     Exception::RethrowGuestException(*Exception, *NativeContext);
+-    LogMan::Msg::DFmt("Rethrowing onto guest stack: {:X}", NativeContext->Sp);
++    if (IosFull) {
++      LogMan::Msg::DFmt("Rethrowing onto guest stack: {:X}", NativeContext->Sp);
++    }
+     return true;
+   } else {
+ #ifdef FEX_IOS_HOST
+@@ -1893,11 +1984,13 @@ bool ResetToConsistentStateImpl(const ThreadCPUArea CPUArea, EXCEPTION_RECORD* E
+     // anyway — same path Windows takes; worst case we crash here instead
+     // of terminating with "Unexpected exception" silently. Better signal
+     // than fatal bail.
+-    LogMan::Msg::EFmt("iOS: rethrowing JIT fault onto guest stack despite "
+-                       "frame@{:X} not in emulator-stack range ({:X}..{:X})",
+-                       (uint64_t)__builtin_frame_address(0),
+-                       CPUArea.EmulatorStackLimit(),
+-                       CPUArea.EmulatorStackBase());
++    if (IosFull) {
++      LogMan::Msg::EFmt("iOS: rethrowing JIT fault onto guest stack despite "
++                         "frame@{:X} not in emulator-stack range ({:X}..{:X})",
++                         (uint64_t)__builtin_frame_address(0),
++                         CPUArea.EmulatorStackLimit(),
++                         CPUArea.EmulatorStackBase());
++    }
+     Exception::RethrowGuestException(*Exception, *NativeContext);
+     return true;
+ #else
+diff --git a/Source/Windows/Common/InvalidationTracker.cpp b/Source/Windows/Common/InvalidationTracker.cpp
+index fc07e79..d14ab42 100644
+--- a/Source/Windows/Common/InvalidationTracker.cpp
++++ b/Source/Windows/Common/InvalidationTracker.cpp
+@@ -114,8 +114,16 @@ void InvalidationTracker::HandleMemoryProtectionNotification(uint64_t Address, u
+                           ProtInterval.End, AlignedSize >> 20, Prot);
+         return false;
+       }
+-      LogMan::Msg::EFmt("[iOS-xrem] via=protect tracker={} {:#x}-{:#x}", static_cast<void*>(this),
+-                        ProtInterval.Offset, ProtInterval.End);
++      {
++        // Playport (PLA-516): a guest that keeps its code inaccessible a page at a time makes thousands of
++        // these; the first 64 and every 4096th are printed, with the count.
++        static std::atomic<uint64_t> ProtectRemovals {};
++        const uint64_t N = ProtectRemovals.fetch_add(1, std::memory_order_relaxed) + 1;
++        if (N <= 64 || (N % 4096) == 0) {
++          LogMan::Msg::EFmt("[iOS-xrem] via=protect #{} tracker={} {:#x}-{:#x}", N, static_cast<void*>(this),
++                            ProtInterval.Offset, ProtInterval.End);
++        }
++      }
+       XIntervals.Remove(ProtInterval);
+       RWXIntervals.Remove(ProtInterval);
+       if (DEPDisabled) {

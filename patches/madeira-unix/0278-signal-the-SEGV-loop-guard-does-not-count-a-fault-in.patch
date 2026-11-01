@@ -1,0 +1,59 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 1 Nov 2026 18:21:48 +0100
+Subject: [PATCH] signal: the SEGV loop guard does not count a fault in FEX's
+ code buffers
+
+segv_handler's loop guard counts faults at one pc across every thread
+and, at the fifth in a row, skips the faulting instruction and sets x0
+to 0xDEAD0001. FEX raises every guest page fault it detects in a
+translation (an instruction fetch from a page the guest keeps
+inaccessible) from one pc, the deliberate read of address 0 in its
+guest-signal raise, which it then rethrows to the guest. World of
+Warcraft's x64 client keeps its code PAGE_NOACCESS and takes one such
+fault per 4 KB page it runs; in run 20261101T181251 the fifth that
+reached this handler, on the main thread after others on worker
+threads, was skipped: the client's next read went through a register
+holding 0xdead0c39 and the process ended (c0000005), no window.
+
+A fault whose pc lies in one of FEX's live code buffers (the pool's
+tail carves) is not counted and resets the count: FEX turns it into a
+guest exception, and a guest looping on one fault is ended by the Mach
+handler's per-thread fault-loop breaker (pp_fault_loop.h).
+
+Linear: PLA-516, PLA-514
+Class: ios-port
+Evidence: docs/evidence/2026-11-01-wow-x64-fex.md
+Offered-upstream: no; Madeira's iOS signal handler
+---
+ build/ntdll-unix/signal_arm64_ios.c | 17 ++++++++++++++++-
+ 1 file changed, 16 insertions(+), 1 deletion(-)
+
+diff --git a/build/ntdll-unix/signal_arm64_ios.c b/build/ntdll-unix/signal_arm64_ios.c
+index 51d4c67..028f08b 100644
+--- a/build/ntdll-unix/signal_arm64_ios.c
++++ b/build/ntdll-unix/signal_arm64_ios.c
+@@ -10992,7 +10992,22 @@ static void segv_handler( int signal, siginfo_t *siginfo, void *sigcontext )
+         static uintptr_t last_fault_pc = 0;
+         static int fault_repeat_count = 0;
+         uintptr_t this_pc = PC_sig(context);
+-        if (this_pc == last_fault_pc)
++        /* Playport (PLA-516): a fault in FEX's code buffers is a guest's fault, which FEX
++         * raises to the guest (a guest instruction fetch from a page it keeps inaccessible
++         * faults at one pc, FEX's guest-signal raise, on whichever thread and page): it is
++         * not counted here, where five in a row from any threads ended the fifth thread
++         * (World of Warcraft's x64 client, run 20261101T181251). A guest looping on one
++         * fault is ended by the Mach handler's per-thread fault-loop breaker. */
++        extern int ios_tail_carve_lookup_trylock( unsigned long long rx_addr, unsigned *idx_out,
++                                                  unsigned long long *base_out, unsigned long long *size_out,
++                                                  int *free_out );
++        int fex_code_free = 0;
++        if (ios_tail_carve_lookup_trylock( this_pc, NULL, NULL, NULL, &fex_code_free ) != 0 && !fex_code_free)
++        {
++            last_fault_pc = 0;
++            fault_repeat_count = 0;
++        }
++        else if (this_pc == last_fault_pc)
+         {
+             fault_repeat_count++;
+             static unsigned long loop_storm;

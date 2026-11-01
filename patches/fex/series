@@ -72,3 +72,5 @@
 0087-ARM64EC-yield-os-wait-os-time-their-traps-at-CNTFRQ_.patch
 0088-Windows-honour-FEX_HOSTFEATURES-disableavx-on-the-iO.patch
 0089-ARM64EC-export-ExitToX64-s-reads-of-an-x64-target-fo.patch
+0090-ARM64EC-an-instruction-fetch-fault-reports-the-first.patch
+0091-ARM64EC-print-the-lines-of-the-first-256-exceptions-.patch

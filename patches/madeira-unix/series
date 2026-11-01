@@ -242,3 +242,6 @@
 0273-win32u-report-each-XInput-request-and-the-slot-s-ans.patch
 0274-virtual-a-section-s-view-keeps-the-section-s-memory-.patch
 0275-signal-the-fault-loop-breaker-does-not-count-a-break.patch
+0276-virtual-a-protection-change-on-a-page-of-ntdll-s-dat.patch
+0277-virtual-print-a-protection-change-s-no-read-skip-lin.patch
+0278-signal-the-SEGV-loop-guard-does-not-count-a-fault-in.patch
