@@ -141,7 +141,7 @@ final class HostIO {
     /// the RemoteIO driver. start() has already set the guest's environment.
     nonisolated static func prepareRuntime(log: (String) -> Void) {
         let env = ProcessInfo.processInfo.environment
-        log("hostio: WINEDLLOVERRIDES=\(env["WINEDLLOVERRIDES"] ?? "unset")")
+        log("hostio: WINEDLLOVERRIDES=\(env["WINEDLLOVERRIDES"] ?? "unset") SDL_JOYSTICK_RAWINPUT=\(env["SDL_JOYSTICK_RAWINPUT"] ?? "unset")")
         let session = AVAudioSession.sharedInstance()
         do {
             try session.setCategory(.playback, mode: .default, options: [])
@@ -162,6 +162,12 @@ final class HostIO {
         // pad; without it Unity falls back to XInput (Wine's builtin, which
         // reads the controller snapshot host_pad_set writes).
         setenv("WINEDLLOVERRIDES", "windows.gaming.input=d", 0)
+        // SDL 2's raw input joystick driver is off for the same reason: it takes
+        // XInput pads only as raw input HID devices, which there are none of
+        // here, and while it is on SDL's XInput driver neither loads XInput nor
+        // adds a pad, so a game on SDL (World of Warcraft) never sees one. SDL
+        // reads its hints from the environment, over a game's own SDL_SetHint.
+        setenv("SDL_JOYSTICK_RAWINPUT", "0", 0)
         let nc = NotificationCenter.default
         let app: [(Notification.Name, LifecycleEvent)] = [
             (UIApplication.willResignActiveNotification, .resignActive),

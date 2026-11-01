@@ -118,8 +118,9 @@ offline tests on the Linux host. The app's Battle.net store (`UI/BattleNetStore.
 - **The game's settings** (`WoWConfig`): `prepareForPlay`, before each Play, writes into
   `<product folder>/WTF/Config.wtf` (made when missing) the install's `textLocale`,
   `audioLocale` and `portal` where it names none (without them WoW opens a Win32 language and
-  region box first) and pins `GxApi` to `D3D12` (after one failed Direct3D 12 start WoW saves
-  Direct3D 11); every other line stays.
+  region box first), `GamePadEnable "1"` where it names none (off, WoW looks for no controller)
+  and pins `GxApi` to `D3D12` (after one failed Direct3D 12 start WoW saves Direct3D 11); every
+  other line stays.
 - **Live runs**: `BATTLENET_LIVE_REPORT=$PLAYPORT_BUILD/bnet-live.md ./pp test --swift
   BattleNetClient --filter testLiveOffersAndSizes` asks Blizzard for every product and region and
   writes the table in [the offer evidence](../../docs/evidence/2026-10-30-battlenet-offer.md).

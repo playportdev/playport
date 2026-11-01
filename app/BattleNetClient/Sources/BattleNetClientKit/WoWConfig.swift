@@ -7,9 +7,11 @@ import ContentKit
 /// and keeps every other line (docs/evidence/2026-10-30-wow-desktop-baseline.md).
 public enum WoWConfig {
     /// Before Play: the install's text and voice locales and its region's portal where the file
-    /// names none (without them WoW opens a Win32 language and region box before its login), and
-    /// `GxApi` pinned to Direct3D 12 (after one failed Direct3D 12 start WoW saves Direct3D 11,
-    /// which the ARM64 client has no renderer for). The file and its folder are made when missing.
+    /// names none (without them WoW opens a Win32 language and region box before its login),
+    /// `GamePadEnable` on where the file names none (WoW's default is off, and then it looks for
+    /// no controller at all; a line already there keeps its value), and `GxApi` pinned to
+    /// Direct3D 12 (after one failed Direct3D 12 start WoW saves Direct3D 11, which the ARM64
+    /// client has no renderer for). The file and its folder are made when missing.
     public static func prepareForPlay(_ product: BattleNetProduct, root: URL) throws {
         let info = try BuildInfo.read([UInt8](try Data(contentsOf: root.appendingPathComponent(".build.info"))), product: product.code)
         guard let wtf = file(product, root: root) else { throw BattleNetError.damaged("\(product.code): no product folder names it") }
@@ -18,7 +20,7 @@ public enum WoWConfig {
         if let locale = info.locale {
             text = set(text, [("textLocale", locale), ("audioLocale", locale)], replacing: false)
         }
-        text = set(text, [("portal", info.region.tag)], replacing: false)
+        text = set(text, [("portal", info.region.tag), ("GamePadEnable", "1")], replacing: false)
         text = set(text, [("GxApi", "D3D12")], replacing: true)
         guard text != old else { return }
         try InstallFS.makeDirectory(wtf.deletingLastPathComponent())

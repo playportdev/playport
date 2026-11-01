@@ -903,6 +903,12 @@ them to UIKit, GameController and AVFAudio.
   Microsoft's ordinals from Wine's specs, which games that import
   `XInputGetState` and `XInputSetState` by ordinal 2 and 3 need. Rumble is not
   implemented (the capabilities report none).
+- **Pads are XInput only**, so HostIO's guest environment turns off the APIs that find them
+  as HID devices: `WINEDLLOVERRIDES=windows.gaming.input=d` (Unity picks Windows.Gaming.Input,
+  which lists no pad here, over XInput) and `SDL_JOYSTICK_RAWINPUT=0` (SDL 2's raw input driver
+  takes XInput pads only as raw input HID devices, and while it is on SDL's XInput driver
+  loads no XInput; SDL reads the variable over a game's own hint). DirectInput and SDL's HIDAPI
+  driver find no pad either and need nothing ([WoW's controller](evidence/2026-11-01-wow-controller.md)).
 - **Lifecycle** (`HostIOKit/Lifecycle.swift`):
   - focus loss goes to Wine first, while held keys are still down, then every
     held key, mouse button and pad control is released, so a game never keeps
