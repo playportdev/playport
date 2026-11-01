@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import BattleNetClientKit
 import Foundation
 import XCTest
 @testable import PlayportKit
@@ -96,6 +97,21 @@ final class CompatDefaultsTests: XCTestCase {
         let plain = LaunchSettings.resolve(game: LaunchSettings.overEveryGame(nil), global: LaunchSettings()).config(over: [:])
         XCTAssertEqual(plain["env.PLAYPORT_VK_HEAP_MB"], "3072")
         XCTAssertNil(plain["vram-mb"])
+    }
+
+    /// Every World of Warcraft product runs FEX without AVX (patches/fex 0088): its entry's
+    /// FEX_HOSTFEATURES replaces everyGame's by key, so it names disableafp again; everyGame's
+    /// other keys stay, in the dev build's config and in the release build's runtime keys.
+    func testWorldOfWarcraftRunsWithoutAVXAndKeepsEveryGamesKeys() throws {
+        let table = try CompatDefaults.load(directory: Self.shipped)
+        for product in BattleNetProduct.allCases {
+            let wow = try XCTUnwrap(table.entry(for: "bnet-\(product.code)"), product.code)
+            let config = LaunchSettings.resolve(game: LaunchSettings.overEveryGame(wow.settings), global: LaunchSettings())
+                .config(over: [:])
+            XCTAssertEqual(config["env.FEX_HOSTFEATURES"], "disableafp,disableavx", product.code)
+            XCTAssertEqual(config["env.MADEIRA_FEX_AFPOFF_FPCR"], "fiz", product.code)
+            XCTAssertEqual(LaunchSettings.releaseRuntime(compat: wow.settings)["env.FEX_HOSTFEATURES"], "disableafp,disableavx")
+        }
     }
 
     /// The Witcher 3's current build gets short reservations (patches/madeira-unix 0222) and keeps
