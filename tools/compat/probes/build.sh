@@ -81,9 +81,12 @@
 #          desktop Wine (not a phone probe)
 #   d3d12  aarch64 Direct3D 12 for a native ARM64 child: DXGI, a device, a
 #          swap chain on a window, a triangle from embedded Shader Model 5.0
-#          bytecode presented for 5 seconds, the last frame read back; logs
-#          the adapter, feature level and shader model to d3d12.log, exit 0
-#          (d3d12.c, PLA-518; shaders: d3d12.hlsl, d3d12-shaders.sh)
+#          bytecode and 24 quads each sampling a texture (BC1/2/3/7,
+#          8-bit and 16-bit formats, sRGB views, mips, placed, custom-heap
+#          WriteToSubresource, copy queue, heap samplers) presented for 5
+#          seconds, the last frame read back and every quad's colour
+#          checked; logs to d3d12.log, exit 0 (d3d12.c, PLA-518, PLA-516;
+#          shaders: d3d12.hlsl, d3d12-shaders.sh). `skip I,J` leaves checks out
 #   d3d12-x86_64  d3d12.c for x86-64, to check the program under desktop
 #          Wine (not a phone probe)
 #

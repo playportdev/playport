@@ -453,3 +453,53 @@ that does not return), +0x11593c (loaded by `ldr x26, #0x115938` at +0x111f18) a
 #0x10ce08` at +0x10bdc0). Each sits in its function's constant data after a word that reads as an
 instruction falling through, which 0270 takes as code; the client loads its own code as literals
 2,897 times among the rewritten words, so the literal alone does not tell them apart (PLA-609).
+
+## The login screen draws: the textures were never a format problem (0263 amended, IPA e460d772)
+
+On IPA fce8b0f4 (run `20261101T110435`) retail drew only text on black. The leads were the GPU side;
+none held:
+
+- **BC formats work.** KosmicKrisp reports `textureCompressionBC` and maps BC1–BC7 to Metal's BC
+  formats; the A19 Pro is Apple9-or-later, where Metal samples BC natively. vkd3d-proton answers
+  `D3D12_FEATURE_FORMAT_SUPPORT` for BC1/2/3/4/5/7 with support1 `0x9013e0` (TEXTURE2D,
+  SHADER_SAMPLE, MIP; RADV `0xd013f0` adds TEXTURE1D and gather) and reports UMA, cache-coherent UMA.
+- **Nothing in the driver logs.** With `VKD3D_DEBUG=warn` (run `20261101T112608`) vkd3d-proton warned
+  only at device creation (no `VK_EXT_dynamic_rendering_unused_attachments`, A8 as R8, D24S8 as
+  D32S8, SM 6.6 caveats); no resource, heap or format warning. Metal API validation (`pp gpu
+  validate`, `.work/gpu-runs/20261101T112919`) found 134,267 messages, all redundant state or
+  render-target residency notices, no error, no command buffer error. A frame capture
+  (`.work/gpu-runs/20261101T113228`, frame 900) has the whole frame: an 80-draw depth pass of
+  13,533 elements (the login scene), bloom downsamples and a 22-draw UI pass, so the GPU was drawing
+  everything the client asked.
+- **The d3d12 probe now samples textures.** `tools/compat/probes/d3d12.c` draws 24 textured quads
+  beside its triangle and checks each quad's colour in the read-back frame: R8G8B8A8, B8G8R8A8,
+  BC1/2/3/7, A8 and R8 with swizzles, B5G6R5, B5G5R5A1, B4G4R4A4, sRGB views of TYPELESS textures,
+  7 mip levels (each level its own colour), placed in a default heap, copied from a buffer placed in
+  an upload heap, written by WriteToSubresource into a custom L0 write-back heap, copied on a copy
+  queue, and point/anisotropic heap samplers. Desktop Wine with vkd3d-proton 3.0 on RADV: all 24 ok.
+  The first phone version (8 quads, one row) passed on fce8b0f4 (run `20261101T112316`); the
+  24-quad version failed there (`20261101T114345`, exit 8) with the top row's colours wrong and, on
+  screen (`20261101T120323`), every quad stretched into a strip down the window: its vertices were
+  wrong. Leaving out the custom-heap and copy-queue checks, the A8 check, the heap samplers, or
+  vkd3d-proton's allocation clears (`VKD3D_CONFIG=memory_allocator_skip_clear`) changed nothing.
+- **The quads' vertices are written by `stp s16, s18, [x13]`** (and `stp s17, s18`, the y value in
+  s18) in the probe's own loop, the instruction class 0263 rewrote to s17 (section above). With
+  0263 amended (commit `64d7a8d2`) on IPA e460d772cd52c919a0575766959a88764c489908fce1db0c20944d21cfc23dbb
+  the probe passes all 24 checks (`20261101T121847`, exit 0, `--settings
+  'dir-d3d12:{"graphics":"vulkan"}' --play dir-d3d12 --wait 180`).
+
+The same IPA, run `20261101T121944` (`--play bnet-wow --until first-frame+90 --shot`): the login
+screen draws in full. The Midnight logo top left, the animated login scene through a ringed portal
+with crystal wings either side, the Blizzard logo, the version and copyright lines, red Log In,
+Menu, Create Account and Quit buttons, and the Screen Narrator dialog in its framed box with Enable
+and Disable buttons over the login fields (it hides them until answered). So the text-only screen
+came from the client's own code, not the driver: the only change between the two IPAs is the x18
+patcher's (0263/0264: SIMD pairs keep s18/q18, a third scratch register). Which of the client's copy
+loops and float stores fed the missing draws is not traced; that the
+text survived because other code builds it is an inference. The same IPA:
+Hollow Knight (Vulkan backend) first frame +9.81 s (`20261101T122231`), the arm64 probe exit 0x2a
+(`20261101T122330`).
+
+The d3d12 probe must be imported again after it is rebuilt (`pp phone put …
+Documents/Import/d3d12/d3d12.exe`, then `uninstall:dir-d3d12` and `import:Import/d3d12`, or the
+import lands as `dir-d3d12 2`); `skip I,J` on its command line leaves checks out.
