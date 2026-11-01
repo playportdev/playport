@@ -1,0 +1,543 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 1 Nov 2026 21:30:00 +0100
+Subject: [PATCH] signal, virtual: read stubs for the hot JIT sites of the
+ emulated reads
+
+After World of Warcraft's x64 client signed in (run of 2026-11-01 20:33), its
+main thread spent eight minutes in one yield-spin whose two reads per turn hit
+an open 4 KB page of a noaccess-split host page: about 48,000 Mach exceptions a
+second from one JIT site, with the one exception thread at ~63 % of a core and
+the main thread mostly waiting on it, and another ~4,300 a second of
+KUSER_SHARED_DATA reads. The game connection closed with no client packet after
+the auth response; character select never came.
+
+The Mach handler now counts the reads it completes for those two services per
+JIT pc. The 256th from one site whose load it can make (LDAPUR{B,H,,}, LDUR,
+LDR unsigned offset; a general register, no sp or x18 base) gets a stub in a
+pool region within branch reach (ios_jit_stub_region, carved below the tail and
+never handed to FEX), and an aligned B over the load. The stub (pp_split_stub.h,
+host test tools/tests/test_split_stub.py) saves two scratch registers on the
+host stack, checks without touching the flags that the address is in the
+window, aligned, and, for a view, that Wine's vprot byte of its 4 KB page is
+committed, not a guard page and accessible, then loads from the view's
+read-only alias (madeira-unix 0280; LDAPR for an LDAPUR) or the
+KUSER_SHARED_DATA mapping, and branches back past the site. Otherwise it
+restores the registers and runs the original load, which faults as before; a
+fault there that neither service completes is moved to the site before any
+later stage, so the guest's access violation comes from the site. A dropped
+view's stubs take their slow path from then on and its alias stays mapped
+(ios_code_alias_stub_window, ios_split_stub_retire).
+
+Linear: PLA-516
+Class: ios-port
+Evidence: docs/evidence/2026-11-01-wow-x64-fex.md
+Offered-upstream: no; the Mach exception handler and the 16 KB host page are the iOS port's
+---
+ build/ntdll-unix/pp_split_stub.h    | 176 ++++++++++++++++++++++++++++
+ build/ntdll-unix/signal_arm64_ios.c | 158 ++++++++++++++++++++++++-
+ build/ntdll-unix/virtual_ios.c      |  85 +++++++++++++-
+ 3 files changed, 415 insertions(+), 4 deletions(-)
+ create mode 100644 build/ntdll-unix/pp_split_stub.h
+
+diff --git a/build/ntdll-unix/pp_split_stub.h b/build/ntdll-unix/pp_split_stub.h
+new file mode 100644
+index 0000000..e95c01a
+--- /dev/null
++++ b/build/ntdll-unix/pp_split_stub.h
+@@ -0,0 +1,176 @@
++/* Playport (PLA-516): read stubs for the hot guest-read sites of the JIT code
++ * (host test: tools/tests/test_split_stub.py).
++ *
++ * A guest read of an open 4 KB page of a noaccess-split host page, or of
++ * KUSER_SHARED_DATA at 0x7ffe0000, takes a Mach exception that the handler
++ * completes (~10-20 us). World of Warcraft polls such words tens of thousands
++ * of times a second from a few JIT sites. Once one site has been completed often
++ * enough, the handler writes a branch over its load to a stub that makes the same
++ * read without a fault when it can and falls back to the original load when it
++ * cannot:
++ *
++ *     stp   s1, s2, [sp, #-16]!          host stack (never the guest's RSP)
++ *     ldr   s2, =imm ; add s1, Rn, s2     the guest address
++ *     ldr   s2, =base; sub s1, s1, s2     t = address - window base
++ *     lsr   s2, s1, #40; cbnz s2, slow    below the base
++ *     ldr   s2, =size; sub s2, s1, s2; tbz s2, #63, slow     past the window
++ *     and   s2, s1, #(bytes-1); cbnz s2, slow                unaligned (bytes > 1)
++ *     ldr   s2, =vprot; add s2, s2, s1, lsr #12; ldrb w(s2), [s2]   (views only:
++ *     tbz   s2, #5, slow; tbnz s2, #4, slow                   Wine's vprot byte of
++ *     and   s2, s2, #0xf; cbz s2, slow                        the 4 KB page: committed,
++ *                                                             no guard, some access)
++ *     ldr   s2, =alias; add s1, s1, s2
++ *     <the load, as LDAPR for an LDAPUR, else LDR>  Rt, [s1]
++ *     ldp   s1, s2, [sp], #16 ; b site+4
++ *   slow:
++ *     ldp   s1, s2, [sp], #16 ; <the original load> ; nop ; b site+4
++ *
++ * No instruction sets flags (the guest's NZCV lives in them); s1 and s2 are
++ * scratch registers other than Rt and Rn, restored before the original load, so a
++ * fault there sees the thread as the site would. The handler maps a fault at the
++ * slow load back to the site for everything it does not complete itself. */
++#ifndef PP_SPLIT_STUB_H
++#define PP_SPLIT_STUB_H
++
++#include <stdint.h>
++#include <stddef.h>
++
++/* A general-register load the stub can make: LDAPUR{B,H,,} (zero-extending),
++ * LDUR and LDR (unsigned offset). */
++struct ppss_load
++{
++    unsigned rt, rn, size_lg2;
++    int64_t  imm;   /* byte offset added to Rn */
++    int      tso;   /* LDAPUR: the stub's load is LDAPR */
++};
++
++#define PPSS_STUB_WORDS 40   /* code and literals of one stub, 160 bytes */
++#define PPSS_REACH      (120ull << 20)   /* B reaches +-128 MB; keep a margin */
++
++static inline int ppss_decode( uint32_t insn, struct ppss_load *l )
++{
++    unsigned size = insn >> 30, rn = (insn >> 5) & 31, rt = insn & 31;
++
++    if ((insn & 0x3fe00c00u) == 0x19400000u || (insn & 0x3fe00c00u) == 0x38400000u)
++    {
++        int64_t imm9 = (insn >> 12) & 0x1ff;
++        if (imm9 & 0x100) imm9 -= 0x200;
++        l->imm = imm9;
++        l->tso = (insn & 0x3fe00c00u) == 0x19400000u;
++    }
++    else if ((insn & 0x3fc00000u) == 0x39400000u)
++    {
++        l->imm = (int64_t)((uint64_t)((insn >> 10) & 0xfff) << size);
++        l->tso = 0;
++    }
++    else return 0;
++    if (rn == 31 || rt == 31 || rn == 18 || rt == 18) return 0;
++    l->rt = rt;
++    l->rn = rn;
++    l->size_lg2 = size;
++    return 1;
++}
++
++/* B from from to to, or 0 when out of reach or misaligned. */
++static inline uint32_t ppss_branch( uint64_t from, uint64_t to )
++{
++    int64_t d = (int64_t)(to - from);
++
++    if ((from | to) & 3) return 0;
++    if (d < -(int64_t)PPSS_REACH || d > (int64_t)PPSS_REACH) return 0;
++    return 0x14000000u | ((uint32_t)(d >> 2) & 0x3ffffffu);
++}
++
++/* Write the stub for the load orig at site into out (at least PPSS_STUB_WORDS
++ * words, executing at stub_rx, 8-byte aligned). The window is [base, base+size)
++ * read at alias + (address - base); vprot, when not 0, is the address of Wine's
++ * vprot byte of the window's first 4 KB page (the bytes of the window are
++ * contiguous). *slow_off gets the byte offset of the original load in the stub.
++ * Returns the words written, 0 when a branch is out of reach. */
++static inline unsigned ppss_emit( uint32_t *out, uint64_t stub_rx, uint64_t site, uint32_t orig,
++                                  const struct ppss_load *l, uint64_t base, uint64_t size,
++                                  uint64_t vprot, uint64_t alias, unsigned *slow_off )
++{
++    static const unsigned cand[] = { 9, 10, 11, 12, 13, 14, 15 };
++    unsigned s1 = 32, s2 = 32, i, n = 0, nslow, lit, fix[5], nfix = 0, slow_fix[8], nslowfix = 0;
++    uint64_t lits[5];
++    uint32_t b;
++
++    for (i = 0; i < sizeof(cand) / sizeof(cand[0]); i++)
++    {
++        if (cand[i] == l->rt || cand[i] == l->rn) continue;
++        if (s1 == 32) s1 = cand[i];
++        else if (s2 == 32) { s2 = cand[i]; break; }
++    }
++    lits[0] = (uint64_t)l->imm;
++    lits[1] = base;
++    lits[2] = size;
++    lits[3] = vprot;
++    lits[4] = alias;
++
++#define PPSS_LIT(reg, k) do { fix[nfix++] = n | ((k) << 16); out[n++] = 0x58000000u | (reg); } while (0)
++#define PPSS_TO_SLOW(word) do { slow_fix[nslowfix++] = n; out[n++] = (word); } while (0)
++    out[n++] = 0xa9bf03e0u | (s2 << 10) | s1;                         /* stp s1, s2, [sp, #-16]! */
++    PPSS_LIT( s2, 0 );
++    out[n++] = 0x8b000000u | (s2 << 16) | (l->rn << 5) | s1;          /* add s1, Rn, s2 */
++    PPSS_LIT( s2, 1 );
++    out[n++] = 0xcb000000u | (s2 << 16) | (s1 << 5) | s1;             /* sub s1, s1, s2 */
++    out[n++] = 0xd340fc00u | (40u << 16) | (s1 << 5) | s2;            /* lsr s2, s1, #40 */
++    PPSS_TO_SLOW( 0xb5000000u | s2 );                                 /* cbnz s2, slow */
++    PPSS_LIT( s2, 2 );
++    out[n++] = 0xcb000000u | (s2 << 16) | (s1 << 5) | s2;             /* sub s2, s1, s2 */
++    PPSS_TO_SLOW( 0x36000000u | (1u << 31) | (31u << 19) | s2 );      /* tbz s2, #63, slow */
++    if (l->size_lg2)
++    {
++        out[n++] = 0x92400000u | ((l->size_lg2 - 1) << 10) | (s1 << 5) | s2;   /* and s2, s1, #(bytes-1) */
++        PPSS_TO_SLOW( 0xb5000000u | s2 );                             /* cbnz s2, slow */
++    }
++    if (vprot)
++    {
++        PPSS_LIT( s2, 3 );
++        out[n++] = 0x8b400000u | (s1 << 16) | (12u << 10) | (s2 << 5) | s2;  /* add s2, s2, s1, lsr #12 */
++        out[n++] = 0x39400000u | (s2 << 5) | s2;                      /* ldrb w(s2), [s2] */
++        PPSS_TO_SLOW( 0x36000000u | (5u << 19) | s2 );                /* tbz s2, #5, slow */
++        PPSS_TO_SLOW( 0x37000000u | (4u << 19) | s2 );                /* tbnz s2, #4, slow */
++        out[n++] = 0x92400000u | (3u << 10) | (s2 << 5) | s2;         /* and s2, s2, #0xf */
++        PPSS_TO_SLOW( 0xb4000000u | s2 );                             /* cbz s2, slow */
++    }
++    PPSS_LIT( s2, 4 );
++    out[n++] = 0x8b000000u | (s2 << 16) | (s1 << 5) | s1;             /* add s1, s1, s2 */
++    if (l->tso) out[n++] = 0x38bfc000u | (l->size_lg2 << 30) | (s1 << 5) | l->rt;   /* ldapr Rt, [s1] */
++    else out[n++] = 0x39400000u | (l->size_lg2 << 30) | (s1 << 5) | l->rt;          /* ldr Rt, [s1] */
++    out[n++] = 0xa8c103e0u | (s2 << 10) | s1;                         /* ldp s1, s2, [sp], #16 */
++    if (!(b = ppss_branch( stub_rx + 4 * n, site + 4 ))) return 0;
++    out[n++] = b;
++    nslow = n;
++    out[n++] = 0xa8c103e0u | (s2 << 10) | s1;                         /* slow: ldp s1, s2, [sp], #16 */
++    *slow_off = 4 * n;
++    out[n++] = orig;
++    out[n++] = 0xd503201fu;                                           /* nop: room for FEX's half-barrier */
++    if (!(b = ppss_branch( stub_rx + 4 * n, site + 4 ))) return 0;
++    out[n++] = b;
++    if (n & 1) out[n++] = 0xd503201fu;
++    lit = n;
++    for (i = 0; i < 5; i++)
++    {
++        out[n++] = (uint32_t)lits[i];
++        out[n++] = (uint32_t)(lits[i] >> 32);
++    }
++    for (i = 0; i < nfix; i++)
++    {
++        unsigned at = fix[i] & 0xffff, k = fix[i] >> 16;
++        out[at] |= ((lit + 2 * k - at) & 0x7ffff) << 5;
++    }
++    for (i = 0; i < nslowfix; i++)
++    {
++        unsigned at = slow_fix[i];
++        if ((out[at] & 0x7e000000u) == 0x36000000u)                   /* tbz/tbnz: imm14 */
++            out[at] |= ((nslow - at) & 0x3fff) << 5;
++        else                                                          /* cbz/cbnz: imm19 */
++            out[at] |= ((nslow - at) & 0x7ffff) << 5;
++    }
++#undef PPSS_LIT
++#undef PPSS_TO_SLOW
++    return n;
++}
++#endif /* PP_SPLIT_STUB_H */
+diff --git a/build/ntdll-unix/signal_arm64_ios.c b/build/ntdll-unix/signal_arm64_ios.c
+index 37b075b..55b7310 100644
+--- a/build/ntdll-unix/signal_arm64_ios.c
++++ b/build/ntdll-unix/signal_arm64_ios.c
+@@ -1616,6 +1616,140 @@ static int ios_exc_read_insn( uint64_t pc, uint32_t *out )
+     return mach_vm_read_overwrite( mach_task_self(), (mach_vm_address_t)pc, 4, (mach_vm_address_t)out, &got )
+                == KERN_SUCCESS && got == 4;
+ }
++
++/* Playport (PLA-516): read stubs for the hot JIT sites of the reads the
++ * sub-floor (KUSER_SHARED_DATA) and noaccess-split services complete
++ * (pp_split_stub.h). A site the services completed PPSS_HOT times is patched
++ * to branch to a stub in a pool region near it; the stub reads without a fault
++ * what the service would have read, and runs the original load (which faults
++ * as before) when it cannot. Only the Mach exception thread creates stubs;
++ * ios_split_stub_retire (a view's drop) disables those of a view. */
++#include "pp_split_stub.h"
++#include <sched.h>
++#define PPSS_HOT        256
++#define PPSS_MAX_SITES  2048
++#define PPSS_REGION     0x10000
++#define PPSS_KUSD       0x7ffe0000ull
++static struct { uint64_t pc; uint32_t n; } ios_ss_hot[4096];
++static struct { uint64_t slow, site, size_rw, base; } ios_ss_sites[PPSS_MAX_SITES];
++static volatile int ios_ss_nsites;
++static struct { uint64_t rx; char *rw; size_t used; } ios_ss_regions[16];
++static int ios_ss_nregions, ios_ss_failed;
++static volatile int ios_ss_lock;
++
++/* The site of a stub's original load at pc, else 0. */
++static uint64_t ios_split_stub_site( uint64_t pc )
++{
++    int i, n = __atomic_load_n( &ios_ss_nsites, __ATOMIC_ACQUIRE );
++
++    for (i = 0; i < n; i++) if (ios_ss_sites[i].slow == pc) return ios_ss_sites[i].site;
++    return 0;
++}
++
++static int ios_split_stub_in_region( uint64_t pc )
++{
++    int i;
++
++    for (i = 0; i < ios_ss_nregions; i++)
++        if (pc >= ios_ss_regions[i].rx && pc - ios_ss_regions[i].rx < PPSS_REGION) return 1;
++    return 0;
++}
++
++/* From virtual_ios.c's view drop: every stub reading the view at base takes its
++ * slow path from now on (its window size literal becomes 0). */
++void ios_split_stub_retire( unsigned long long base )
++{
++    int i, n;
++
++    while (__atomic_exchange_n( &ios_ss_lock, 1, __ATOMIC_ACQUIRE )) sched_yield();
++    n = ios_ss_nsites;
++    for (i = 0; i < n; i++)
++        if (ios_ss_sites[i].base == base && ios_ss_sites[i].size_rw)
++            __atomic_store_n( (uint64_t *)(uintptr_t)ios_ss_sites[i].size_rw, 0, __ATOMIC_RELEASE );
++    __atomic_store_n( &ios_ss_lock, 0, __ATOMIC_RELEASE );
++}
++
++/* A read at the JIT pc of insn, completed by a service: count it, and once hot
++ * patch the site. The window [base, base + size) reads at alias + offset; vprot
++ * as for ppss_emit; window 0 asks the view alias table (noaccess-split). */
++static void ios_split_stub_hot( uint64_t pc, uint32_t insn, uint64_t addr, uint64_t base, uint64_t size,
++                                uint64_t alias )
++{
++    extern void *ios_jit_rx_base_global, *ios_jit_rw_base_global;
++    extern size_t ios_jit_pool_size_global;
++    extern void *ios_jit_stub_region( unsigned long long near, size_t size, unsigned long long max_dist,
++                                      char **rw );
++    extern int ios_code_alias_stub_window( unsigned long long va, unsigned long long *base,
++                                           unsigned long long *size, unsigned long long *alias,
++                                           unsigned long long *vprot );
++    uint32_t words[PPSS_STUB_WORDS], b;
++    unsigned long long vb = 0, vs = 0, va = 0, vp = 0;
++    unsigned h = (unsigned)((pc >> 2) * 0x9e3779b1u) & 4095, n, slow_off, i;
++    struct ppss_load l;
++    uint64_t stub = 0, rx = (uintptr_t)ios_jit_rx_base_global;
++    char *stub_rw = NULL;
++    int r;
++
++    if (!ppef_pool_word( pc, rx, ios_jit_pool_size_global )) return;
++    if (ios_ss_hot[h].pc != pc) { ios_ss_hot[h].pc = pc; ios_ss_hot[h].n = 0; }
++    if (++ios_ss_hot[h].n != PPSS_HOT) return;
++    if (ios_split_stub_in_region( pc ) || !ppss_decode( insn, &l )) return;
++    if (!size)
++    {
++        if (!ios_code_alias_stub_window( addr, &vb, &vs, &va, &vp )) return;
++        base = vb; size = vs; alias = va;
++    }
++    if (__atomic_exchange_n( &ios_ss_lock, 1, __ATOMIC_ACQUIRE )) return;
++    if (ios_ss_nsites >= PPSS_MAX_SITES) goto done;
++    for (r = 0; r < ios_ss_nregions && !stub; r++)
++        if (ios_ss_regions[r].used + 4 * PPSS_STUB_WORDS <= PPSS_REGION &&
++            ppss_branch( pc, ios_ss_regions[r].rx + ios_ss_regions[r].used ))
++        {
++            stub = ios_ss_regions[r].rx + ios_ss_regions[r].used;
++            stub_rw = ios_ss_regions[r].rw + ios_ss_regions[r].used;
++            break;
++        }
++    if (!stub && ios_ss_nregions < 16)
++    {
++        char *rw = NULL;
++        void *reg = ios_jit_stub_region( pc, PPSS_REGION, PPSS_REACH - PPSS_REGION, &rw );
++        if (reg)
++        {
++            r = ios_ss_nregions++;
++            ios_ss_regions[r].rx = (uintptr_t)reg;
++            ios_ss_regions[r].rw = rw;
++            ios_ss_regions[r].used = 0;
++            stub = ios_ss_regions[r].rx;
++            stub_rw = rw;
++        }
++    }
++    if (!stub || !(n = ppss_emit( words, stub, pc, insn, &l, base, size, vp, alias, &slow_off )) ||
++        !(b = ppss_branch( pc, stub )))
++    {
++        if (ios_ss_failed++ < 8)
++            dprintf( 2, "[split-stub] no stub for pc=%#llx insn=%#010x (stub %#llx)\n", (unsigned long long)pc,
++                     insn, (unsigned long long)stub );
++        goto done;
++    }
++    for (i = 0; i < n; i++) ((volatile uint32_t *)stub_rw)[i] = words[i];
++    ios_ss_regions[r].used += 4 * PPSS_STUB_WORDS;
++    sys_icache_invalidate( (void *)(uintptr_t)stub, 4 * n );
++    i = ios_ss_nsites;
++    ios_ss_sites[i].slow = stub + slow_off;
++    ios_ss_sites[i].site = pc;
++    ios_ss_sites[i].base = base;
++    /* The window size literal: the third, after the code (ppss_emit's literal order). */
++    ios_ss_sites[i].size_rw = (uintptr_t)stub_rw + 4 * (n - 10) + 2 * 8;
++    __atomic_store_n( &ios_ss_nsites, i + 1, __ATOMIC_RELEASE );
++    __atomic_store_n( (volatile uint32_t *)((char *)ios_jit_rw_base_global + (pc - rx)), b, __ATOMIC_RELEASE );
++    sys_icache_invalidate( (void *)(uintptr_t)pc, 4 );
++    if (i < 64 || !(i & 63))
++        dprintf( 2, "[split-stub] #%u site pc=%#llx insn=%#010x window %#llx+%#llx -> stub %#llx\n", i + 1,
++                 (unsigned long long)pc, insn, (unsigned long long)base, (unsigned long long)size,
++                 (unsigned long long)stub );
++done:
++    __atomic_store_n( &ios_ss_lock, 0, __ATOMIC_RELEASE );
++}
+ /* smc-trap: set while the store emulator hands a write to a page
+  * Wine records as not writable to the guest exception path. Such a fault is
+  * not transient, so it is dispatched on the first occurrence. Only the single
+@@ -2351,6 +2485,19 @@ static void *ios_mach_exception_thread( void *arg )
+                 }
+             }
+ #endif
++            /* Playport (PLA-516): a fault at a read stub's original load that the services
++             * did not complete belongs to its site (pp_split_stub.h): every later stage, the
++             * guest's exception or a retry (the site branches to the stub again), starts there.
++             * The thread gets the state now, as a stage may hand the fault on unchanged. */
++            if (!handled && req->exception == EXC_BAD_ACCESS)
++            {
++                uint64_t ss_site = ios_split_stub_site( (uint64_t)__darwin_arm_thread_state64_get_pc( state ) );
++                if (ss_site)
++                {
++                    __darwin_arm_thread_state64_set_pc_fptr( state, (void *)(uintptr_t)ss_site );
++                    thread_set_state( thread, ARM_THREAD_STATE64, (thread_state_t)&state, count );
++                }
++            }
+             /* Playport (PLA-516): every later stage may read or deliver the SIMD/FP state. */
+             if (!handled && neon_deferred)
+             {
+@@ -12781,6 +12928,11 @@ static int ios_subfloor_service( ucontext_t *ctx, void *fault_addr, uintptr_t wi
+                  "latest guest %#llx -> real %#llx insn=%#010x\n",
+                  ios_subfloor_hits, ios_subfloor_unknown, ios_subfloor_refused, via,
+                  (unsigned long long)addr, (unsigned long long)real, insn );
++    /* Playport (PLA-516): a hot site reading KUSER_SHARED_DATA gets a read stub. */
++    if (!is_write && !window_base && addr >= PPSS_KUSD && addr - PPSS_KUSD < 0x1000 && real &&
++        !strcmp( via, "mach" ))
++        ios_split_stub_hot( (uint64_t)(uintptr_t)PC_sig(ctx), insn, addr, PPSS_KUSD, 0x1000,
++                            real - (addr - PPSS_KUSD) );
+     return 1;
+ }
+ 
+@@ -12804,7 +12956,7 @@ static int ios_noaccess_split_service( ucontext_t *ctx, void *fault_addr, uintpt
+     vm_prot_t cur = 0, max = 0;
+     uint32_t insn = 0;
+     unsigned bytes = 0;
+-    int is_write = 0, ok = 0, translator;
++    int is_write = 0, ok = 0, translator, from_view = 0;
+ 
+     if (!ios_exc_read_insn( (uint64_t)(uintptr_t)PC_sig(ctx), &insn ))
+         return 0;
+@@ -12824,7 +12976,7 @@ static int ios_noaccess_split_service( ucontext_t *ctx, void *fault_addr, uintpt
+     if (!is_write && (real_alias = ios_code_alias_lookup( addr, bytes )))
+     {
+         ok = ios_emulate_load( ctx, insn, (uintptr_t)real_alias );
+-        if (ok) ios_noaccess_split_view_alias++;
++        if (ok) { ios_noaccess_split_view_alias++; from_view = 1; }
+     }
+     else
+     {
+@@ -12858,6 +13010,8 @@ static int ios_noaccess_split_service( ucontext_t *ctx, void *fault_addr, uintpt
+                     " %llu from a view alias)\n",
+                  ios_noaccess_split_hits, is_write ? "write" : "read", bytes, (unsigned long long)addr,
+                  (unsigned long long)PC_sig(ctx), insn, ios_noaccess_split_declined, ios_noaccess_split_view_alias );
++    /* Playport (PLA-516): a hot site reading through a view alias gets a read stub. */
++    if (from_view) ios_split_stub_hot( (uint64_t)(uintptr_t)PC_sig(ctx), insn, addr, 0, 0, 0 );
+     return 1;
+ }
+ #endif
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 54a241c..9179526 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -3432,6 +3432,31 @@ void *ios_jit_xol_slot( int slot, char **rw )
+     return (char *)ios_jit_rx_base_global + xol_off + slot * IOS_JIT_TRAMPOLINE_SIZE;
+ }
+ 
++/* Playport (PLA-516): a region of the pool for the Mach handler's read stubs
++ * (pp_split_stub.h), within max_dist of near (a JIT pc, which branches there with
++ * B). Carved below the tail, where FEX's newest code buffers end, and kept for the
++ * app's life; it is no tail carve, so FEX is never handed it. *rw gets its RW
++ * alias; NULL when the pool has no room in reach (that site keeps its faults). */
++void *ios_jit_stub_region( unsigned long long near, size_t size, unsigned long long max_dist, char **rw )
++{
++    size_t tail = ios_jit_tail_reserved, off;
++    unsigned long long rx;
++
++    if (!ios_jit_rx_base_global || !ios_jit_rw_base_global) return NULL;
++    if (tail + size > (ios_jit_pool_size_global / 4) * 3 ||
++        ios_jit_pool_size_global - tail - size < jit_pool_offset) return NULL;
++    rx = (uintptr_t)ios_jit_rx_base_global + ios_jit_pool_size_global - tail - size;
++    if (near < rx || near - rx > max_dist) return NULL;   /* the carve would be out of reach */
++    tail = __sync_fetch_and_add( &ios_jit_tail_reserved, size );
++    off = ios_jit_pool_size_global - tail - size;
++    rx = (uintptr_t)ios_jit_rx_base_global + off;
++    dprintf( 2, "[split-stub] stub region rx=%#llx size=%#lx (tail now %#lx)\n", rx, (unsigned long)size,
++             (unsigned long)(tail + size) );
++    if (near < rx || near - rx > max_dist) return NULL;   /* raced past reach: left unused */
++    *rw = (char *)ios_jit_rw_base_global + off;
++    return (void *)(uintptr_t)rx;
++}
++
+ /* Reverse of the JIT translation: pool alias → original PE VA. For the
+  * thread-stack dumper — a wedged thread executing PE code shows JIT-pool
+  * pcs that dladdr can't name; this recovers "PE module base + offset". */
+@@ -9589,20 +9614,76 @@ static void ios_code_alias_ensure( struct file_view *view )
+              view->base, (unsigned long)view->size, (unsigned long long)alias );
+ }
+ 
++/* Playport (PLA-516): set while a read stub of the Mach handler reads through the
++ * slot's alias (ios_code_alias_stub_window); its view's drop then retires those
++ * stubs and keeps the alias mapped, as a stub may be past its checks. */
++static unsigned char ios_code_alias_stubbed[IOS_CODE_ALIAS_MAX];
++
+ /* Under virtual_mutex, from delete_view. */
+ static void ios_code_alias_drop( struct file_view *view )
+ {
++    extern void ios_split_stub_retire( unsigned long long base );
+     unsigned long long alias = (uintptr_t)view->ios_code_alias;
+-    int slot;
++    int slot, keep = 0;
+ 
+     if (alias <= 1) return;
+     view->ios_code_alias = NULL;
+     for (slot = 0; slot < ios_code_alias_count; slot++)
+-        if (ios_code_alias_table[slot].alias == alias) ios_code_alias_table_set( slot, 0, 0, 0 );
++        if (ios_code_alias_table[slot].alias == alias)
++        {
++            ios_code_alias_table_set( slot, 0, 0, 0 );
++            if (ios_code_alias_stubbed[slot]) keep = 1;
++            ios_code_alias_stubbed[slot] = 0;
++        }
+     ios_alias_push_all( (uintptr_t)view->base, alias, IOS_CODE_ALIAS_FLAG );
++    if (keep)
++    {
++        ios_split_stub_retire( (uintptr_t)view->base );
++        dprintf( 2, "[code-alias] view %p+%#lx dropped: its read stubs retired, alias %#llx kept\n",
++                 view->base, (unsigned long)view->size, alias );
++        return;
++    }
+     mach_vm_deallocate( mach_task_self(), alias, view->size );
+ }
+ 
++/* Playport (PLA-516): for the Mach handler's read stubs (pp_split_stub.h), lock-free:
++ * the view alias holding va, its view's window, and the address of Wine's vprot byte
++ * of the view's first 4 KB page; 0 when none, while a slot changes, or when the
++ * view's vprot bytes are not contiguous. Marks the slot stubbed. */
++int ios_code_alias_stub_window( unsigned long long va, unsigned long long *base, unsigned long long *size,
++                                unsigned long long *alias, unsigned long long *vprot )
++{
++    unsigned long long gen = __atomic_load_n( &ios_code_alias_gen, __ATOMIC_ACQUIRE );
++    int slot, n = __atomic_load_n( &ios_code_alias_count, __ATOMIC_ACQUIRE );
++
++    if (gen & 1) return 0;
++    for (slot = 0; slot < n; slot++)
++    {
++        unsigned long long b = ios_code_alias_table[slot].base, s = ios_code_alias_table[slot].size;
++        unsigned long long a = ios_code_alias_table[slot].alias;
++        size_t first, last;
++
++        if (!s || va < b || va - b >= s) continue;
++        first = b >> page_shift;
++        last = (b + s - 1) >> page_shift;
++#ifdef _WIN64
++        if (first >> pages_vprot_shift != last >> pages_vprot_shift || !pages_vprot[first >> pages_vprot_shift])
++            return 0;
++        *vprot = (uintptr_t)(pages_vprot[first >> pages_vprot_shift] + (first & pages_vprot_mask));
++#else
++        *vprot = (uintptr_t)(pages_vprot + first);
++#endif
++        ios_code_alias_stubbed[slot] = 1;
++        __atomic_thread_fence( __ATOMIC_ACQUIRE );
++        if (__atomic_load_n( &ios_code_alias_gen, __ATOMIC_RELAXED ) != gen) return 0;
++        *base = b;
++        *size = s;
++        *alias = a;
++        return 1;
++    }
++    return 0;
++}
++
+ /* For the Mach exception handler, lock-free: the alias address of [va, va+len)
+  * when an image's alias holds all of it, else 0 (also while a slot changes). */
+ unsigned long long ios_code_alias_lookup( unsigned long long va, unsigned int len )

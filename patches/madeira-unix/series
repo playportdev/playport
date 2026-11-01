@@ -249,3 +249,4 @@
 0280-virtual-a-read-only-alias-of-a-mapped-view-with-a-no.patch
 0281-signal-a-guest-read-of-an-open-page-of-a-noaccess-sp.patch
 0282-signal-the-Mach-handler-s-emulated-reads-skip-a-regi.patch
+0283-signal-virtual-read-stubs-for-the-hot-JIT-sites-of-t.patch
