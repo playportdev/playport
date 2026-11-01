@@ -218,3 +218,44 @@ Every action returned ok (`ok actions=7`). `action-05-textbar_type_a.png` and
 caret is not in that shot); `action-07-textbar_type_b.png` shows `a`, a tab stop's gap, then `b`
 on the same line, the bar's field empty. The log has `textbar: open, plain (not logged)` and
 `textbar: tab`.
+
+## Controller and sign-in on the phone (2026-11-01, IPA a0acb433)
+
+Branch `dev/pla-516-battlenet` with `dev/pla-522-wow-pad` merged (HEAD `d8bc9b88`, the merge of
+`8f9e4edc`); IPA sha256 `a0acb433b27b53d8c6ccc48018e1c7d2e30a981de8b5a50a66756d3f9e723529`,
+no build records changed.
+
+**Gates:** Hollow Knight first frame at +9.04 s (`20261101T123140`); arm64 probe exit `0x2a`
+(`20261101T123241`); d3d12 probe on Vulkan exit 0 (`20261101T123345`), its log `textures: 24
+made, 0 skipped` and `done ok`; `./pp test --quick` passes.
+
+**Controller** (`./pp ui --pad --play bnet-wow --until first-frame+40 --leave-running`, run
+`20261101T123607`, then `pp pad send`): s1-host.log has `hostio:
+WINEDLLOVERRIDES=windows.gaming.input=d SDL_JOYSTICK_RAWINPUT=0`, xinput1_4.dll loaded, SDL's
+`SDL_joystick` thread, and `controls: the game read XInput state (3 reads by now)`; the pulled
+`Config.wtf` has `SET GamePadEnable "1"`. WoW showed no reaction on the login screen to D-pad
+left/right, the left and right sticks, A or START (screenshots identical apart from the
+animated backdrop; no focus ring on the Screen Narrator dialog's buttons, no pointer). Whether WoW
+reacts to the pad in the world or at character select is not checked.
+
+**Narrator dialog:** a tap on its Disable button (`tap:0.576:0.596`, routed "on the game" with
+the scripted pad connected) closes it and shows the Email or Phone / Password fields. Its answer
+is not in `Config.wtf` while the game runs (WoW writes it at exit), so the next Play shows it
+again unless WoW exits cleanly.
+
+**Sign-in** (runs `20261101T124046`, `20261101T124851`; `--secret-file` email then password):
+- The Email field has no caret until tapped (`tap:0.5:0.43`); after the tap, `menu:open`,
+  `menu:text`, `textbar:secret` types the email into it (shown in the field).
+- `textbar:tab` moves the caret to the Password field (`20261101T124851`,
+  `action-11-wait_2.png`, after `textbar:close`).
+- `textbar:secret+enter` with the password then leaves the Password field empty and starts no
+  login: 20 s and 60 s later the login screen is unchanged, `Aurora.log` has no line after the
+  start-up's. The second value was pushed (`secret-pushed` index 10) and the action returned ok.
+  Not explained yet; candidates: WoW's password EditBox refusing the VK_PACKET characters
+  `winios_post_char` sends (KEYEVENTF_UNICODE), which the email field accepts.
+- The second run was cancelled during its `wait:20` when the owner took the phone.
+
+**Secret scan:** `grep -rlFf .work/secrets/wow-password` over the three WoW run directories, the
+pulled logs and the session notes prints nothing (exit 1). The email address matches only each
+run's `cmd/apps.out` (the device's app list: the signing identity, also in runs before these);
+`./pp secrets` is clean.
