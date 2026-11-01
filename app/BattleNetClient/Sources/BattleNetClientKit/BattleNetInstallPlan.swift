@@ -135,6 +135,12 @@ public struct BattleNetSelection: Sendable {
 
     /// Every EKey the install reads from the CDN.
     public var wanted: Set<PackedKey> { Set(objects.map(\.key)).union(files.map(\.ekey)) }
+    /// The EKeys to find in the CDN indexes when the store holds `present` already: the objects
+    /// it lacks, and every product folder file, which is decoded from the CDN even when the store
+    /// holds its object (a file damaged on disk, or one moved to another path).
+    public func wanted(besides present: Set<PackedKey>) -> Set<PackedKey> {
+        Set(objects.map(\.key)).subtracting(present).union(files.map(\.ekey))
+    }
 
     init(query: TagQuery, objects: [Object], files: [File]) {
         self.query = query

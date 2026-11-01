@@ -56,7 +56,7 @@ extension BattleNetInstaller {
 
         let (stored, lastDataFile) = try Self.stored(root)
         let present = Set(selection.objects.map(\.key).filter { stored.contains(Self.key9($0)) })
-        let locations = try await locate(selection.wanted.subtracting(present), r.cdnConfig.archives, meta: r.meta, build: build, installed: root)
+        let locations = try await locate(selection.wanted(besides: present), r.cdnConfig.archives, meta: r.meta, build: build, installed: root)
         let plan = try BattleNetInstallPlan(build: build, archives: r.cdnConfig.archives, selection: selection, locations: locations,
                                             options: options(locale), present: present, firstDataFile: lastDataFile + 1)
         log.info("battlenet", "\(product.code) \(old) → \(locale): \(plan.objects) objects, \(plan.files.count) files, \(plan.fetchBytes) bytes to fetch")
