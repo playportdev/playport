@@ -158,7 +158,8 @@ final class BattleNetInstalled: ObservableObject {
             let prepared = try await installer.prepareUpdate(p, root: root, work: work)
             let r = try await installer.update(prepared, root: root, work: work, progress: progress)
             let version = prepared.plan.build.version.versionsName
-            try layout.saveReceipt(BattleNet.receipt(before, measured: BattleNet.measure(root), version: version))
+            let measured = await BattleNet.measure(root)
+            try layout.saveReceipt(BattleNet.receipt(before, measured: measured, version: version))
             updates[p] = .current(version)
             log.info("battlenet", "\(p.code): updated \(before.version ?? "?") → \(version) in C:\\Games\\\(before.installDir), "
                      + "\(prepared.plan.objects) objects and \(prepared.plan.files.count) files, \(r.engine.downloadedBytes) bytes fetched "
@@ -167,7 +168,8 @@ final class BattleNetInstalled: ObservableObject {
         }
         let prepared = try await installer.prepareLocaleChange(p, root: root, to: choice.locale, work: work)
         let r = try await installer.changeLocale(prepared, root: root, work: work, progress: progress)
-        try layout.saveReceipt(BattleNet.receipt(before, measured: BattleNet.measure(root)))
+        let measured = await BattleNet.measure(root)
+        try layout.saveReceipt(BattleNet.receipt(before, measured: measured))
         if let c = BattleNet.installedChoice(p, folder: root) { current[p] = Choice(region: c.region, locale: c.locale) }
         log.info("battlenet", "\(p.code): language \(choice.locale) in C:\\Games\\\(before.installDir), "
                  + "\(prepared.plan.objects) objects, \(r.engine.downloadedBytes) bytes fetched in \(Int(r.seconds)) s")

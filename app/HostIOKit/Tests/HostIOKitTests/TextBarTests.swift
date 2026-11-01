@@ -59,6 +59,28 @@ final class TextBarTests: XCTestCase {
         XCTAssertEqual(bar.change(to: "a\tb\r\nc\u{7}"), [.char(0x61), tab, .char(0x62), enter, .char(0x63)])
     }
 
+    /// The field holds only what the guest's field got: a dropped control character is not in
+    /// it, so deleting it takes back nothing the guest has.
+    func testADroppedControlIsNotInTheFieldAndTakesNothingBack() {
+        var bar = TextBar()
+        XCTAssertEqual(bar.change(to: "a\u{7}"), [.char(0x61)])
+        XCTAssertEqual(bar.text, "a")
+        XCTAssertEqual(bar.change(to: "a"), [])
+        XCTAssertEqual(bar.change(to: ""), [backspace])
+    }
+
+    /// A pasted Tab or line break moves on in the guest as the bar's own keys do: the field then
+    /// holds what follows the last of them, and Backspace takes back only that.
+    func testAPastedTabOrLineBreakStartsTheFieldAgain() {
+        var bar = TextBar()
+        XCTAssertEqual(bar.change(to: "name\tpw"), chars("name") + [tab] + chars("pw"))
+        XCTAssertEqual(bar.text, "pw")
+        XCTAssertEqual(bar.change(to: "p"), [backspace])
+        XCTAssertEqual(bar.change(to: "p\r\n"), [enter])
+        XCTAssertEqual(bar.text, "")
+        XCTAssertEqual(bar.change(to: ""), [])
+    }
+
     func testTypeAppendsAsTypingWould() {
         var bar = TextBar()
         _ = bar.change(to: "user")

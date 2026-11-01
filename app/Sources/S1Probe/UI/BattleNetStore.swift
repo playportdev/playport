@@ -29,8 +29,13 @@ final class BattleNetStore: ObservableObject, DownloadDriver {
     @Published private(set) var error: String?
     /// The region picked on a product's page; the phone's region until then.
     @Published private(set) var picked: [BattleNetProduct: StoreRegion] = [:]
-    /// Products whose sizes are being asked for.
-    @Published private(set) var sizing: Set<BattleNetProduct> = []
+    /// The size requests running, by product and region: a region picked while another region's
+    /// request runs gets its own.
+    @Published private var sizeRequests: Set<String> = []
+    /// Products whose sizes are being asked for in the region their page shows.
+    var sizing: Set<BattleNetProduct> {
+        Set(BattleNetProduct.allCases.filter { sizeRequests.contains("\($0.code)/\(region($0).rawValue)") })
+    }
     /// Why a product's sizes could not be asked for.
     @Published private(set) var sizeErrors: [BattleNetProduct: String] = [:]
     /// An Install refused for space: what the page says.
@@ -133,10 +138,10 @@ final class BattleNetStore: ObservableObject, DownloadDriver {
 
     /// The page's sizes for the product in its region and locale, asked once per build.
     func loadSizes(_ p: BattleNetProduct) async {
-        let r = region(p)
-        guard !sizing.contains(p) else { return }
-        sizing.insert(p)
-        defer { sizing.remove(p) }
+        let r = region(p), request = "\(p.code)/\(r.rawValue)"
+        guard !sizeRequests.contains(request) else { return }
+        sizeRequests.insert(request)
+        defer { sizeRequests.remove(request) }
         do {
             if listings.first(where: { $0.product == p && $0.region == r }) == nil || offers["\(p.code)/\(r.rawValue)"] == nil {
                 try await ask(p, r)
@@ -149,12 +154,18 @@ final class BattleNetStore: ObservableObject, DownloadDriver {
             if let i = listings.firstIndex(where: { $0.product == p && $0.region == r }) {
                 listings[i].sizes = BattleNetListing.Sizes(sizes, locale: locale)
             }
-            sizeErrors[p] = nil
+            if region(p) == r { sizeErrors[p] = nil }
             listedAt = listedAt ?? Date()
             saveCache()
             log.info("battlenet", "\(p.code) \(r.rawValue) \(locale): download \(sizes.download), install \(sizes.install), \(sizes.objects) objects")
         } catch {
+            // A page left (its task cancelled) or a region changed since is no error to show.
+            if Task.isCancelled {
+                log.info("battlenet", "\(p.code) \(r.rawValue): sizes not asked for: cancelled")
+                return
+            }
             log.warn("battlenet", "\(p.code) \(r.rawValue): sizes failed: \(error)")
+            guard region(p) == r else { return }
             sizeErrors[p] = BattleNet.reason(error).map { InstallCopy.detailed($0, error) } ?? InstallCopy.detailed("The size could not be read.", error)
         }
     }
@@ -270,7 +281,7 @@ final class BattleNetStore: ObservableObject, DownloadDriver {
         log.info("battlenet", "\(p.code) \(choice.region.rawValue) \(choice.locale) \(prepared.plan.build.version.versionsName): "
                  + "\(prepared.plan.content.totalBytes) bytes into C:\\Games\\\(folder)")
         let r = try await installer.install(prepared, into: root, work: work, progress: progress)
-        let measured = BattleNet.measure(root)
+        let measured = await BattleNet.measure(root)
         do {
             try layout.saveReceipt(BattleNet.receipt(p, folder: folder, version: prepared.plan.build.version.versionsName,
                                                      productFolder: pc.folder, arm64Executable: exe,
@@ -288,6 +299,11 @@ final class BattleNetStore: ObservableObject, DownloadDriver {
 
     func finished(_ job: DownloadJob) {
         if job.kind == .update { BattleNetInstalled.shared.finished(job) }
+    }
+
+    /// A paused update, queued or running: the Play waiting for it does not go on when it is resumed.
+    func held(_ key: StoreGameKey) {
+        BattleNetInstalled.shared.stopped(key)
     }
 
     func discard(_ key: StoreGameKey) {

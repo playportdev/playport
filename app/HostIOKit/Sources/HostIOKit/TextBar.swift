@@ -10,8 +10,11 @@
 /// posted as KEYEVENTF_UNICODE (WM_CHAR through TranslateMessage), so symbols
 /// and letters no US layout has type; a character beyond the BMP is its two
 /// surrogates and is taken back with one Backspace (one per Unicode scalar).
-/// Tab and a line break in pasted text are their keys; other control characters
-/// are dropped. Backspace on an empty field still reaches the guest.
+/// Tab and a line break in pasted text are their keys and, as the bar's own Tab
+/// and Enter, start the field again with what follows them; other control
+/// characters are dropped and never enter the field. So the field holds only
+/// what the guest's field got, and a Backspace never takes back more than that.
+/// Backspace on an empty field still reaches the guest.
 ///
 /// Nothing here, nor `summary`, says what was typed or how much.
 public struct TextBar: Equatable, Sendable {
@@ -34,20 +37,41 @@ public struct TextBar: Equatable, Sendable {
         }
     }
 
-    /// The field's text: what was typed into the guest's field since the bar opened, or since Tab or Enter.
+    /// The field's text: what was typed into the guest's field since the bar opened, or since Tab or
+    /// Enter, and nothing else (no dropped control character).
     public private(set) var text = ""
     /// Password mode: the field draws dots and offers a password's AutoFill.
     public var secure: Bool
 
     public init(secure: Bool = false) { self.secure = secure }
 
-    /// The field's text is now `new`: what the guest gets so that its field holds the same.
+    /// The field's text is now `new`: what the guest gets so that its field holds the same. The field
+    /// then holds what the guest's does (`text`), which the view shows.
     public mutating func change(to new: String) -> [Input] {
         let old = Array(text.unicodeScalars), now = Array(new.unicodeScalars)
         var same = 0
         while same < old.count, same < now.count, old[same] == now[same] { same += 1 }
-        text = new
-        return Array(repeating: .key(Key.backspace.vk), count: old.count - same) + Self.inputs(now[same...])
+        var out = Array(repeating: Input.key(Key.backspace.vk), count: old.count - same)
+        var field = String.UnicodeScalarView(old[..<same])
+        var previous: Unicode.Scalar?
+        for s in now[same...] {
+            defer { previous = s }
+            switch s {
+            case "\t":
+                out.append(.key(Key.tab.vk))
+                field = String.UnicodeScalarView()
+            case "\n" where previous == "\r": continue   // \r\n is one line break
+            case "\r", "\n":
+                out.append(.key(Key.enter.vk))
+                field = String.UnicodeScalarView()
+            default:
+                guard s.value >= 0x20, s.value != 0x7F, !(0x80..<0xA0).contains(s.value) else { continue }
+                out += String(s).utf16.map { .char($0) }
+                field.append(s)
+            }
+        }
+        text = String(field)
+        return out
     }
 
     /// `s` typed at the end of the field, as the keyboard would type it.
@@ -66,20 +90,4 @@ public struct TextBar: Equatable, Sendable {
 
     /// For a log line: the mode only, never the text or its length.
     public var summary: String { secure ? "secret (not logged)" : "plain (not logged)" }
-
-    private static func inputs(_ scalars: ArraySlice<Unicode.Scalar>) -> [Input] {
-        var out: [Input] = [], previous: Unicode.Scalar?
-        for s in scalars {
-            defer { previous = s }
-            switch s {
-            case "\t": out.append(.key(Key.tab.vk))
-            case "\n" where previous == "\r": continue   // \r\n is one line break
-            case "\r", "\n": out.append(.key(Key.enter.vk))
-            default:
-                guard s.value >= 0x20, s.value != 0x7F, !(0x80..<0xA0).contains(s.value) else { continue }
-                out += String(s).utf16.map { .char($0) }
-            }
-        }
-        return out
-    }
 }

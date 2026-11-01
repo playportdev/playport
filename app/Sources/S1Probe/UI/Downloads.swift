@@ -35,6 +35,12 @@ protocol DownloadDriver: AnyObject {
     func discard(_ key: StoreGameKey)
     /// What the player is told when a job stopped with `error`.
     func reason(_ error: Error) -> String
+    /// A job, running or waiting, was put on hold (paused, a sign-out, a launch).
+    func held(_ key: StoreGameKey)
+}
+
+extension DownloadDriver {
+    func held(_ key: StoreGameKey) {}
 }
 
 @MainActor
@@ -243,7 +249,12 @@ final class Downloads: ObservableObject {
 
     private func holdAll(_ hold: DownloadJob.Hold, where match: (DownloadJob) -> Bool) {
         for job in queue.jobs where job.hold == nil && match(job) {
-            if job.key == active?.key { stop(job.key, .hold(hold)) } else { queue.hold(job.key, hold) }
+            if job.key == active?.key {
+                stop(job.key, .hold(hold))
+            } else {
+                queue.hold(job.key, hold)
+                drivers[job.key.store]?.held(job.key)
+            }
         }
         rebuild()
         updateIdleTimer()
@@ -298,6 +309,8 @@ final class Downloads: ObservableObject {
             queue.hold(key, h)
             rebuild()
         }
+        // A queued job's driver hears of the hold too: nothing of it ran to stop.
+        if case .hold = how { drivers[key.store]?.held(key) }
     }
 
     /// Why `job` may not start now, or nil.
