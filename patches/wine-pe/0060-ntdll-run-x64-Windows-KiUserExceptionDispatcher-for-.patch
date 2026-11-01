@@ -1,0 +1,180 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 1 Nov 2026 16:06:19 +0100
+Subject: [PATCH] ntdll: run x64 Windows' KiUserExceptionDispatcher for a
+ guest's hook on iOS
+
+An x86-64 guest that hooks Wow64PrepareForException finds the pointer
+through the mov in the x64 code of the KiUserExceptionDispatcher export and
+writes its function there, at the image's own address. Two things kept the
+hook from running as on x64 Windows:
+
+- ntdll's ARM64EC code runs from its JIT-pool copy and reads that copy's
+  .data, so it never saw the guest's write (nor a guest's patch of the
+  export), and dispatched directly: the hook was never called (the exchook
+  probe, run 20261101T160121). World of Warcraft's x64 client hooks it and
+  then died at a breakpoint its hook should have seen.
+- When it was called, the x64 thunk called the hook with its own frame
+  (context at rsp+0x30, the record past the ARM64 context) and returned to
+  the ARM64EC dispatcher, while x64 Windows calls it with the context at
+  rsp and the record at rsp+0x4f0 and then dispatches in the same x64
+  code.
+
+prepare_exception_arm64ec now reads the hook and the export's bytes at the
+image's address, and when either is set lays out x64 Windows' frame (the
+record at context+0x4f0, the machine frame at +0x590) and enters the x64
+export with rsp at the context, through KiUserExceptionDispatcher_x64_entry,
+which drops the return address the ARM64EC-to-x64 call pushes. The export
+is x64 Windows' dispatcher: cld, the hook's mov, the call with rcx = the
+record and rdx = the context, then dispatch_exception, with the unwind
+information of x86-64 Wine's.
+
+Linear: PLA-516, PLA-514
+Class: ios-port
+Evidence: docs/evidence/2026-11-01-wow-x64-fex.md
+Offered-upstream: not yet; upstream's ARM64EC thunk calls the hook and returns, as here before
+---
+ dlls/ntdll/signal_arm64ec.c | 56 +++++++++++++++++++++++++++----------
+ dlls/ntdll/signal_x86_64.c  | 35 +++++++++++++++++++----
+ 2 files changed, 71 insertions(+), 20 deletions(-)
+
+diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
+index fe73b7649b6..2b87923603e 100644
+--- a/dlls/ntdll/signal_arm64ec.c
++++ b/dlls/ntdll/signal_arm64ec.c
+@@ -74,6 +74,7 @@ static void     (WINAPI *pUpdateProcessorInformation)(SYSTEM_CPU_INFORMATION*);
+ static BOOLEAN emulated_processor_features[PROCESSOR_FEATURE_MAX];
+ static BYTE KiUserExceptionDispatcher_orig[16]; /* to detect patching */
+ extern void KiUserExceptionDispatcher_thunk(void) asm("EXP+#KiUserExceptionDispatcher");
++extern void KiUserExceptionDispatcher_x64_entry(void) asm("KiUserExceptionDispatcher_x64_entry");
+ 
+ static inline CHPE_V2_CPU_AREA_INFO *get_arm64ec_cpu_area(void)
+ {
+@@ -4016,7 +4017,17 @@ static void * __attribute__((used)) prepare_exception_arm64ec( EXCEPTION_RECORD
+                  (void *)(ULONG_PTR)arm_ctx->Pc );
+     }
+     /* call x64 dispatcher if the thunk or the function pointer was modified */
+-    /* iOS-Madeira ml409 (#66): the fatal [bogus-ctx] walks a context whose Rsp
++    /* Playport (PLA-516): x64 code runs at an image's own addresses and reads
++     * its data there, while this code runs from ntdll's JIT-pool copy with its
++     * own .data. A guest that hooks Wow64PrepareForException or patches the
++     * export finds both through the export's x64 code, so it writes the image:
++     * look at that, and run the x64 dispatcher there. The frame it gets is x64
++     * Windows' KiUserExceptionDispatcher frame: the context at rsp, the record
++     * at rsp+0x4f0 and the machine frame at rsp+0x590 (over arm_ctx, which is
++     * no longer needed), entered with no return address by
++     * KiUserExceptionDispatcher_x64_entry.
++     *
++     * iOS-Madeira ml409 (#66): the fatal [bogus-ctx] walks a context whose Rsp
+      * high dword became exactly 1 and whose Rip/Rbp/R12 turned into FEX-band
+      * host pointers with recurring low bits, while [rtcs] post had printed the
+      * SAME context fields correct moments earlier. The corruption window is
+@@ -4024,23 +4035,38 @@ static void * __attribute__((used)) prepare_exception_arm64ec( EXCEPTION_RECORD
+      * re-entry points: the patched-thunk redirect below, and the vectored
+      * handlers in dispatch_exception. Bracket it: name the path taken here,
+      * and log the context around each guest handler (exception.c [veh],
+-     * call_seh_handlers [seh-entry]). Capped, AV-only. */
++     * call_seh_handlers [seh-entry]). Capped. */
+     {
+-        int patched = memcmp( KiUserExceptionDispatcher_thunk, KiUserExceptionDispatcher_orig,
+-                              sizeof(KiUserExceptionDispatcher_orig) ) != 0;
+-        if (rec->ExceptionCode == STATUS_ACCESS_VIOLATION)
++        const BYTE *thunk = xlate_ios_jit_rev( (void *)KiUserExceptionDispatcher_thunk );
++        void **hook_slot = xlate_ios_jit_rev( (void *)&pWow64PrepareForException );
++        void *hook = *hook_slot ? *hook_slot : (void *)pWow64PrepareForException;
++        int patched = memcmp( thunk, KiUserExceptionDispatcher_orig, sizeof(KiUserExceptionDispatcher_orig) ) != 0;
++        static LONG kipath_n;
++
++        if ((hook || patched || rec->ExceptionCode == STATUS_ACCESS_VIOLATION) &&
++            kipath_n < 60 && InterlockedIncrement( &kipath_n ) <= 60)
++            ERR( "[ki-path] code=%08x ctx=%p Rsp=%p Rip=%p -> %s (patched=%d hook=%p slot=%p ec=%p thunk=%p)\n",
++                 (unsigned int)rec->ExceptionCode, context,
++                 (void *)(ULONG_PTR)context->AMD64_Context.Rsp,
++                 (void *)(ULONG_PTR)context->AMD64_Context.Rip,
++                 (hook || patched) ? "x64 dispatcher (guest hook runs)" : "direct dispatch",
++                 patched, hook, hook_slot, pWow64PrepareForException, thunk );
++        if (hook || patched)
+         {
+-            static LONG kipath_n;
+-            if (kipath_n < 60 && InterlockedIncrement( &kipath_n ) <= 60)
+-                ERR( "[ki-path] code=%08x ctx=%p Rsp=%p Rip=%p -> %s (patched=%d wow64=%p)\n",
+-                     (unsigned int)rec->ExceptionCode, context,
+-                     (void *)(ULONG_PTR)context->AMD64_Context.Rsp,
+-                     (void *)(ULONG_PTR)context->AMD64_Context.Rip,
+-                     (pWow64PrepareForException || patched) ? "x64-THUNK (guest hook runs)" : "direct dispatch",
+-                     patched, pWow64PrepareForException );
++            EXCEPTION_RECORD *x64_rec = (EXCEPTION_RECORD *)((char *)context + 0x4f0);
++            ULONG64 *machine_frame = (ULONG64 *)((char *)context + 0x590);
++
++            C_ASSERT( sizeof(*context) == 0x4d0 );
++            C_ASSERT( 0x4f0 + sizeof(*x64_rec) <= 0x590 );
++            C_ASSERT( 0x590 + 5 * sizeof(ULONG64) <= 0x4d0 + 0x3b0 );  /* below the record KiUserExceptionDispatcher got */
++            *x64_rec = *rec;
++            machine_frame[0] = context->AMD64_Context.Rip;
++            machine_frame[1] = context->AMD64_Context.SegCs;
++            machine_frame[2] = context->AMD64_Context.EFlags;
++            machine_frame[3] = context->AMD64_Context.Rsp;
++            machine_frame[4] = context->AMD64_Context.SegSs;
++            return xlate_ios_jit_rev( (void *)KiUserExceptionDispatcher_x64_entry );
+         }
+-        if (pWow64PrepareForException || patched)
+-            return KiUserExceptionDispatcher_thunk;
+     }
+     return NULL;
+ }
+diff --git a/dlls/ntdll/signal_x86_64.c b/dlls/ntdll/signal_x86_64.c
+index f43c0ccbc1b..60405f9ae6c 100644
+--- a/dlls/ntdll/signal_x86_64.c
++++ b/dlls/ntdll/signal_x86_64.c
+@@ -142,18 +142,43 @@ __ASM_GLOBAL_FUNC( invoke_arm64ec_syscall,
+ 
+ /*******************************************************************
+  *		KiUserExceptionDispatcher (NTDLL.@)
++ *
++ * Playport (PLA-516): x64 Windows' dispatcher, run when a guest hooks
++ * Wow64PrepareForException or patches this code: entered with the context at
++ * rsp, the record at rsp+0x4f0 and the machine frame at rsp+0x590, it calls
++ * the hook and then dispatches in this same code, as World of Warcraft's x64
++ * client expects of the code it finds here.
+  */
+ __ASM_GLOBAL_FUNC( "EXP+#KiUserExceptionDispatcher",
++                   __ASM_SEH(".seh_pushframe\n\t")
++                   __ASM_SEH(".seh_stackalloc 0x590\n\t")
++                   __ASM_SEH(".seh_savereg %rbx,0x90\n\t")
++                   __ASM_SEH(".seh_savereg %rbp,0xa0\n\t")
++                   __ASM_SEH(".seh_savereg %rsi,0xa8\n\t")
++                   __ASM_SEH(".seh_savereg %rdi,0xb0\n\t")
++                   __ASM_SEH(".seh_savereg %r12,0xd8\n\t")
++                   __ASM_SEH(".seh_savereg %r13,0xe0\n\t")
++                   __ASM_SEH(".seh_savereg %r14,0xe8\n\t")
++                   __ASM_SEH(".seh_savereg %r15,0xf0\n\t")
++                   __ASM_SEH(".seh_endprologue\n\t")
+                    "cld\n\t"
+                    "mov pWow64PrepareForException(%rip),%rax\n\t"
+                    "test %rax,%rax\n\t"
+                    "jz 1f\n\t"
+-                   "subq $0x28,%rsp\n\t"
+-                   "leaq 0x30+0x3b0+0x4d0(%rsp),%rcx\n\t" /* rec */
+-                   "leaq 0x30(%rsp),%rdx\n\t"             /* context */
++                   "mov %rsp,%rdx\n\t"           /* context */
++                   "lea 0x4f0(%rsp),%rcx\n\t"    /* rec */
+                    "call *%rax\n"
+-                   "addq $0x28,%rsp\n"
+-                   "1:\tret" )
++                   "1:\tmov %rsp,%rdx\n\t"       /* context */
++                   "lea 0x4f0(%rsp),%rcx\n\t"    /* rec */
++                   "call dispatch_exception\n\t"
++                   "int3" )
++
++/* The ARM64EC KiUserExceptionDispatcher enters x64 code through
++ * __os_arm64x_dispatch_call_no_redirect, which pushes a return address: drop
++ * it, so the dispatcher above (or a guest's patch of it) gets rsp = the context. */
++__ASM_GLOBAL_FUNC( KiUserExceptionDispatcher_x64_entry,
++                   "lea 8(%rsp),%rsp\n\t"
++                   "jmp \"EXP+#KiUserExceptionDispatcher\"" )
+ 
+ #else  /* __arm64ec_x64__ */
+ 
+-- 
+2.56.0
+

@@ -98,6 +98,13 @@
 #          reads and writes the context's XSTATE), an APC and a thread's
 #          Get/SetThreadContext, and what the guest is told about AVX; `noavx`
 #          expects no AVX (FEX_HOSTFEATURES' disableavx) (ymmctx.c, PLA-516)
+#   exchook  x86-64: x64 KiUserExceptionDispatcher's code and its
+#          Wow64PrepareForException hook as x64 Windows has them: the hook
+#          called first, in x64 code, with rsp+8 the context, the record at
+#          context+0x4f0 and a machine frame; int3 and access violation
+#          values; its context changes reach the handlers and the resumed
+#          code; RtlRestoreContext and NtContinue from the hook; another
+#          thread (exchook.c, PLA-516, PLA-514)
 #
 #   tools/compat/probes/build.sh
 set -euo pipefail
@@ -173,6 +180,9 @@ mkdir -p "$OUT/d3d12" "$OUT/d3d12-x86_64"
 mkdir -p "$OUT/ymmctx"
 "$CC" -O2 -Wall -Wextra -Werror -Wno-unused-parameter -mwindows -Wl,--no-insert-timestamp \
     -o "$OUT/ymmctx/ymmctx.exe" "$HERE/ymmctx.c"
+mkdir -p "$OUT/exchook"
+"$CC" -O2 -Wall -Wextra -Werror -Wno-unused-parameter -mwindows -Wl,--no-insert-timestamp \
+    -o "$OUT/exchook/exchook.exe" "$HERE/exchook.c"
 # xaudio2_9redist.dll's import library: llvm-mingw has none (the EOS SDK
 # links Microsoft's), so it is made from its one export here.
 DLLTOOL=$LLVM_MINGW/bin/llvm-dlltool
@@ -194,6 +204,6 @@ for probe in machine machine-i386; do
     mkdir -p "$OUT/$probe/redist"
     cp "$OUT/$probe/xaudio2redist.exe" "$OUT/$probe/redist/"
 done
-for probe in gl21 gl21-i386 wgl childabort childabort-i386 x87m64-i386 protect machine machine-i386 splitlock splitlock-i386 threadctx threadctx-i386 shmap shmap-i386 poolstress console cputopo cputopo-i386 arm64 arm64-fault arm64-min arm64-x86_64 d3d12 d3d12-x86_64 ymmctx; do
+for probe in gl21 gl21-i386 wgl childabort childabort-i386 x87m64-i386 protect machine machine-i386 splitlock splitlock-i386 threadctx threadctx-i386 shmap shmap-i386 poolstress console cputopo cputopo-i386 arm64 arm64-fault arm64-min arm64-x86_64 d3d12 d3d12-x86_64 ymmctx exchook; do
     echo "$(sha256sum "$OUT/$probe/$probe.exe" | cut -c1-16)  $probe.exe ($(stat -c %s "$OUT/$probe/$probe.exe") bytes) in $OUT/$probe"
 done

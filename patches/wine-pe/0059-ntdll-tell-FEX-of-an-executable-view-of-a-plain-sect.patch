@@ -18,7 +18,7 @@ that is not an image to FEX's NotifyMemoryProtect as the protection
 change it is, and returns. An image's view goes on as before.
 
 Linear: PLA-516
-Class: compatibility
+Class: upstream-bug
 Evidence: docs/evidence/2026-11-01-wow-x64-fex.md
 Offered-upstream: not yet; upstream notifies an image's view only, as here before
 ---

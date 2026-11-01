@@ -21,7 +21,7 @@ when asked, as the plain view would, and returns. Its views stay one
 memory, as on Windows. A native ARM64 child keeps the pool path.
 
 Linear: PLA-516
-Class: compatibility
+Class: ios-port
 Evidence: docs/evidence/2026-11-01-wow-x64-fex.md
 Offered-upstream: no; the JIT pool is the iOS port's
 ---
