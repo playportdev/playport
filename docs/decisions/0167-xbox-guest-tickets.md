@@ -1,6 +1,6 @@
 # 0167: What an Xbox game receives from the host
 
-**Status:** proposed, 2026-10-30, with the [Xbox plan](../plans/2026-10-30-xbox-game-pass.md)
+**Status:** proposed, 2026-10-30, with the [Xbox spec PLA-485](https://linear.app/playportdev/issue/PLA-485)
 ([PLA-483](https://linear.app/playportdev/issue/PLA-483)); the owner chose this split in the
 plan's grilling session. Like [0059](0059-epic-exchange-code.md) and
 [0063](0063-gog-galaxy-sign-in.md), it carries the conditions of

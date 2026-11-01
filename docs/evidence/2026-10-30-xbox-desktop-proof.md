@@ -3,7 +3,7 @@
 **Date:** 2026-10-30. **Linear:** [PLA-495](https://linear.app/playportdev/issue/PLA-495).
 **Kind:** desktop runs on the workstation in a side copy (decision
 [0117](../decisions/0117-side-copies-that-build.md)), headless sway session. No phone run.
-**Plan:** [the Xbox plan](../plans/2026-10-30-xbox-game-pass.md), runtime track.
+**Plan:** [the Xbox spec PLA-485](https://linear.app/playportdev/issue/PLA-485), runtime track.
 
 ## Result
 

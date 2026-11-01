@@ -2,7 +2,7 @@
 
 **Linear:** [PLA-487](https://linear.app/playportdev/issue/PLA-487), under the spec
 [PLA-485](https://linear.app/playportdev/issue/PLA-485); plan
-[2026-10-30-xbox-game-pass.md](../plans/2026-10-30-xbox-game-pass.md), phase 0. Words as in
+[PLA-485](https://linear.app/playportdev/issue/PLA-485), phase 0. Words as in
 [GLOSSARY.md](../../GLOSSARY.md) and decisions [0166](../decisions/0166-the-xbox-store.md),
 [0167](../decisions/0167-xbox-guest-tickets.md).
 

@@ -1,6 +1,6 @@
 # 0166: The Xbox store
 
-**Status:** proposed, 2026-10-30, with the [Xbox plan](../plans/2026-10-30-xbox-game-pass.md)
+**Status:** proposed, 2026-10-30, with the [Xbox spec PLA-485](https://linear.app/playportdev/issue/PLA-485)
 ([PLA-483](https://linear.app/playportdev/issue/PLA-483)). The owner settled each point below
 in the plan's grilling session; the record is accepted when the plan is. Amends
 [0057](0057-store-identity.md)'s list of stores; [0045](0045-library-store-copies.md) and

@@ -281,7 +281,7 @@ beside it (docs/plans/finished.md#steam-for-games).
 
 ### Xbox (planned)
 
-The Xbox store ([plan](plans/2026-10-30-xbox-game-pass.md), [decision 0166](decisions/0166-the-xbox-store.md))
+The Xbox store ([spec PLA-485](https://linear.app/playportdev/issue/PLA-485), [decision 0166](decisions/0166-the-xbox-store.md))
 adds a Swift client, `XboxClientKit`, written from Xodus's and Xodus Nexus's
 code and docs (its session and synthetic device land in PLA-491); `xgameruntime`
 as an ARM64EC Wine builtin; and `nghttp2`. This section answers the plan's

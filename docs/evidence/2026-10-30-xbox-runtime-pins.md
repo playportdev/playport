@@ -6,7 +6,7 @@
 `patches/xgameruntime` 0001; nghttp2 `85e300c79fb6dbcfa9c1013215c8710c1c2cd3d2` (tag
 `v1.70.0`), unmodified. Built by `build/stages/xbox-pe.sh` with llvm-mingw 20260922
 (clang 23.1.2) for `arm64ec-windows`.
-**Plan:** [the Xbox plan](../plans/2026-10-30-xbox-game-pass.md), runtime track;
+**Plan:** [the Xbox spec PLA-485](https://linear.app/playportdev/issue/PLA-485), runtime track;
 [PLA-493](https://linear.app/playportdev/issue/PLA-493).
 
 ## The pins
