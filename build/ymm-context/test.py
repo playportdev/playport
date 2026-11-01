@@ -103,6 +103,7 @@ PINS = [
     # Wine: an exception's record (prepare_exception_arm64ec), NtContinue, the resume into x86 code
     # (dispatch_emulation), Get/SetThreadContext: each one of unwind.h's conversions.
     (WINE, SIGNAL_EC, "    if (rec->ExceptionCode == STATUS_EMULATION_SYSCALL) dispatch_syscall( arm_ctx );\n"
+                      "    if (check_call_read_fault( rec, arm_ctx )) syscall_NtContinue( arm_ctx, FALSE );\n"
                       "    context_arm_to_x64( context, arm_ctx );\n", 1),
     (WINE, SIGNAL_EC, "NTSTATUS SYSCALL_API NtContinue( CONTEXT *context, BOOLEAN alertable )\n{\n    ARM64_NT_CONTEXT arm_ctx;\n\n"
                       "    context_x64_to_arm( &arm_ctx, (ARM64EC_NT_CONTEXT *)context );\n", 1),

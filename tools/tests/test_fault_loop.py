@@ -96,6 +96,13 @@ class FaultLoopTests(unittest.TestCase):
         self.assertIn("+                        uint32_t n = ppfl_note( &fault_loop, thread, fault_pc_check,", text)
         self.assertIn("-                        static volatile uint32_t stuck_n;", text)
 
+    def test_a_breakpoint_is_not_counted(self):
+        """madeira-unix 0275 (PLA-516): FEX raises every guest int3 from one BRK, so a breakpoint is passed as not
+        counted, like an alignment fault, and a client taking int3 after int3 on one thread is not ended."""
+        text = (ROOT / "patches/madeira-unix/0275-signal-the-fault-loop-breaker-does-not-count-a-break.patch").read_text()
+        self.assertIn("+                                                fault_kr == EXC_ARM_DA_ALIGN || "
+                      "req->exception == EXC_BREAKPOINT,", text)
+
 
 if __name__ == "__main__":
     unittest.main()

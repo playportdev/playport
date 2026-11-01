@@ -241,3 +241,4 @@
 0272-signal-madeira.cfg-x18-abi-turns-on-the-custom-x18-A.patch
 0273-win32u-report-each-XInput-request-and-the-slot-s-ans.patch
 0274-virtual-a-section-s-view-keeps-the-section-s-memory-.patch
+0275-signal-the-fault-loop-breaker-does-not-count-a-break.patch

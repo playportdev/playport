@@ -1,0 +1,82 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 1 Nov 2026 17:02:04 +0100
+Subject: [PATCH] ARM64EC: export ExitToX64's reads of an x64 target for ntdll
+ to resume
+
+ExitToX64's fast-forward bypass reads the first 14 bytes of an x64 call
+target. A target the guest made PAGE_NOACCESS faults there, in this
+native code: World of Warcraft's x64 client keeps its code that way
+until its own exception handler sees it executed, and its entry point
+faulted here when BaseThreadInitThunk called it (run 20261101T165200).
+
+IosFfsRead and IosFfsReadEnd bound the reads and IosFfsNoBypass is the
+path that runs the target under emulation; all three are exported, and
+ntdll (wine-pe 0061) resumes a fault in the reads there, with every
+register as it was, so the target faults as x64 code, as on x64
+Windows.
+
+Linear: PLA-516, PLA-514
+Class: ios-port
+Evidence: docs/evidence/2026-11-01-wow-x64-fex.md
+Offered-upstream: no; the fast-forward bypass is Playport's own
+---
+ Source/Windows/ARM64EC/Module.S          | 11 +++++++++++
+ Source/Windows/ARM64EC/libarm64ecfex.def |  5 +++++
+ 2 files changed, 16 insertions(+)
+
+diff --git a/Source/Windows/ARM64EC/Module.S b/Source/Windows/ARM64EC/Module.S
+index 1513cbb16..e889d70ab 100644
+--- a/Source/Windows/ARM64EC/Module.S
++++ b/Source/Windows/ARM64EC/Module.S
+@@ -198,6 +198,13 @@ ExitToX64:
+   // from the native sp on every JIT entry. The `br` targets the PE VA; the Mach
+   // exec-fault redirect translates it to the pool copy (proven ~33us path, and this
+   // is RPC-call frequency, not per-frame).
++  // Playport (PLA-516): IosFfsRead..IosFfsReadEnd read the target's bytes. A target the
++  // guest made inaccessible (World of Warcraft's x64 client keeps its code PAGE_NOACCESS
++  // until it sees it executed) faults here, in this code; ntdll resumes such a fault at
++  // IosFfsNoBypass, with every register as it was, so the target runs and faults as x64
++  // code, as on x64 Windows.
++.globl IosFfsRead
++IosFfsRead:
+   ldr x16, [x9]
+   movz x17, #0x8b48
+   movk x17, #0x48c4, lsl #16
+@@ -210,6 +217,8 @@ ExitToX64:
+   cmp w16, w17
+   b.ne ios_ffs_no_bypass
+   ldursw x16, [x9, #10]  // jmp rel32 (signed)
++.globl IosFfsReadEnd
++IosFfsReadEnd:
+   add x17, x9, x16
+   add x17, x17, #14      // raw target = FFS base + 14 + rel32
+   // ml316b: x9 (and thus the raw target) is usually the POOL-COPY alias -- wine
+@@ -310,6 +319,8 @@ ios_ffs_reject:
+   str x23, [x16, #16]    // [2] = matched-but-rejected count
+   str x17, [x16, #24]    // [3] = last rejected (PE-space) target
+ ios_ffs_no_bypass:
++.globl IosFfsNoBypass
++IosFfsNoBypass:
+   IOS_XP_COUNT 2112, x16, x17   // ml1131: EC->x64 call (callback) emulated
+ #endif
+   str lr, [sp, #-8]! // Push return address to stack, this will be popped by the x86 RET instr.
+diff --git a/Source/Windows/ARM64EC/libarm64ecfex.def b/Source/Windows/ARM64EC/libarm64ecfex.def
+index 7f050a95a..b7777ab8e 100644
+--- a/Source/Windows/ARM64EC/libarm64ecfex.def
++++ b/Source/Windows/ARM64EC/libarm64ecfex.def
+@@ -13,6 +13,11 @@ EXPORTS
+   DispatchJump DATA
+   RetToEntryThunk DATA
+   ExitToX64 DATA
++  ; Playport (PLA-516): ExitToX64's reads of an x64 target's bytes, and where ntdll
++  ; resumes one that faults (Module.S).
++  IosFfsRead DATA
++  IosFfsReadEnd DATA
++  IosFfsNoBypass DATA
+   BeginSimulation DATA
+   FlushInstructionCacheHeavy
+   NotifyImageMap
+-- 
+2.56.0
+
