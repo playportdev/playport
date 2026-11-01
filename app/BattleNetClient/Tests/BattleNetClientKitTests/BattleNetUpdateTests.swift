@@ -94,4 +94,46 @@ extension BattleNetInstallTests {
         XCTAssertGreaterThan(prepared.plan.content.totalBytes, 0)
         XCTAssertLessThan(prepared.plan.content.totalBytes, installed.plan.content.totalBytes / 2)
     }
+
+    /// A new build without the ARM64 client Play starts is refused as a fresh install's is, even
+    /// though the install's copy of the old client is still on disk.
+    func testAnUpdateWithoutItsARM64ClientIsRefused() async throws {
+        let cdn = FakeCDN()
+        let config = try fixture("wow_classic_era-productconfig.json")
+        _ = FakeProduct.make(on: cdn, productConfig: config)
+        let dir = try temp()
+        _ = try await install(cdn, in: dir)
+        let renamed = String(decoding: config, as: UTF8.self).replacingOccurrences(of: "WowClassic-arm64.exe", with: "Elsewhere-arm64.exe")
+        _ = FakeProduct.make(on: cdn, productConfig: Array(renamed.utf8), build: 2)
+        let fetched = cdn.requests.count
+        await assertThrows(try await installer(client(cdn)).prepareUpdate(.wowClassicEra, root: dir.appendingPathComponent("wow"),
+                                                                           work: dir.appendingPathComponent(".wow.update"))) {
+            guard case .unsupported = $0 else { return XCTFail("\($0)") }
+        }
+        XCTAssertFalse(cdn.requests.dropFirst(fetched).contains { $0.status == 206 })
+    }
+
+    /// A product folder file whose object the store holds already (it was damaged on disk) is
+    /// decoded from its archive, not asked of the CDN as a loose object it is not.
+    func testAStoredProductFileIsFetchedFromItsArchive() async throws {
+        let cdn = FakeCDN()
+        let config = try fixture("wow_classic_era-productconfig.json")
+        _ = FakeProduct.make(on: cdn, productConfig: config, filesInStore: true)
+        let dir = try temp()
+        _ = try await install(cdn, in: dir)
+        let root = dir.appendingPathComponent("wow"), work = dir.appendingPathComponent(".wow.update")
+        let exe = root.appendingPathComponent("_classic_era_/WowClassic-arm64.exe")
+        let good = try Data(contentsOf: exe)
+        try Data(repeating: 0x5a, count: good.count).write(to: exe)
+
+        _ = FakeProduct.make(on: cdn, productConfig: config, build: 2, filesInStore: true)
+        let i = installer(client(cdn))
+        let prepared = try await i.prepareUpdate(.wowClassicEra, root: root, work: work)
+        XCTAssertEqual(prepared.plan.files.map(\.path).sorted(), ["_classic_era_/Utils/a-arm64.dll", "_classic_era_/WowClassic-arm64.exe"])
+        let n = try XCTUnwrap(prepared.plan.files.firstIndex { $0.path.hasSuffix("WowClassic-arm64.exe") })
+        let run = try XCTUnwrap(prepared.plan.runs.first { $0.kind == .file && $0.first == Int32(n) })
+        XCTAssertEqual(run.archive, 0)
+        _ = try await i.update(prepared, root: root, work: work)
+        XCTAssertEqual(try Data(contentsOf: exe), good)
+    }
 }

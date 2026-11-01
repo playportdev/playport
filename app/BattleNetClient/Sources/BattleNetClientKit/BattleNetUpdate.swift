@@ -38,11 +38,17 @@ extension BattleNetInstaller {
         let build = try await client.build(product, info.region)
         let r = try await read(build, work: work)
         let options = Self.options(locale, build: build, installed: info)
-        let selection = try BattleNetSelection(build: build, download: r.download, install: r.install, encoding: r.encoding, options: options)
-            .without { InstallEngine.fileMatches(root.appendingPathComponent($0.path), size: $0.size, hash: .md5($0.ckey.bytes)) }
+        let full = try BattleNetSelection(build: build, download: r.download, install: r.install, encoding: r.encoding, options: options)
+        // As `prepare` does: Play starts only the ARM64 client (decision 0174), so a build that
+        // drops or renames it is refused, before the product folder's files are left out.
+        guard full.arm64Client(build.productConfig) != nil else {
+            throw BattleNetError.unsupported("\(product.code) \(build.version.versionsName): the update has no ARM64 client "
+                                             + "(\(build.productConfig.arm64Executable ?? "none named"))")
+        }
+        let selection = full.without { InstallEngine.fileMatches(root.appendingPathComponent($0.path), size: $0.size, hash: .md5($0.ckey.bytes)) }
         let (stored, lastDataFile) = try Self.stored(root)
         let present = Set(selection.objects.map(\.key).filter { stored.contains(Self.key9($0)) })
-        let locations = try await locate(selection.wanted.subtracting(present), r.cdnConfig.archives, meta: r.meta, build: build, installed: root)
+        let locations = try await locate(selection.wanted(besides: present), r.cdnConfig.archives, meta: r.meta, build: build, installed: root)
         let others = try await otherIndexes(r.cdnConfig, meta: r.meta, build: build, installed: root)
         let plan = try BattleNetInstallPlan(build: build, archives: r.cdnConfig.archives, selection: selection, locations: locations,
                                             options: options, present: present, firstDataFile: lastDataFile + 1)

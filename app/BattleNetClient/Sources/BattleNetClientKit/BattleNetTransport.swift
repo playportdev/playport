@@ -113,7 +113,8 @@ public enum BattleNetError: Error, Equatable, Sendable, CustomStringConvertible 
 }
 
 /// The URLSession transport: HTTPS GETs with Playport's User-Agent (decision 0174), no cookies,
-/// no cache, and a cap on the body size.
+/// no cache, no redirects (a 3xx is the answer, so only the hosts the endpoints name are asked),
+/// and a cap on the body size.
 public struct URLSessionTransport: BattleNetTransport {
     public let session: URLSession
     public var timeout: TimeInterval = 30
@@ -126,8 +127,16 @@ public struct URLSessionTransport: BattleNetTransport {
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
         config.httpAdditionalHeaders = ["User-Agent": userAgent]
         config.httpMaximumConnectionsPerHost = 8
-        session = URLSession(configuration: config)
+        session = URLSession(configuration: config, delegate: NoRedirects(), delegateQueue: nil)
         self.maxBytes = maxBytes
+    }
+
+    /// Declines every redirect, so the 3xx itself comes back and the client refuses it.
+    final class NoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+        func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                        newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
+            completionHandler(nil)
+        }
     }
 
     public func get(_ url: URL, headers: [String: String]) async throws -> BattleNetResponse {

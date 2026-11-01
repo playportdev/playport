@@ -1155,7 +1155,7 @@ class TextBarSecret(unittest.TestCase):
     SENTINEL = "S3ntinel-Pa55,w0rd!€"
 
     class Phone(UntilReached.FakePhone):
-        envs, secrets, removed = [], [], []
+        envs, secrets, removed, put_fails = [], [], [], False
 
         def launch(self, envs):
             self.__class__.envs = list(envs)
@@ -1163,22 +1163,31 @@ class TextBarSecret(unittest.TestCase):
 
         def put_secret(self, remote, data):
             self.secrets.append((remote, data))
+            if self.put_fails:   # afc.py's 30 s timeout, after the .part was written
+                import phonelib
+                raise phonelib.PhoneError("afc put-secret failed (exit 124): ")
 
         def remove(self, remote, check=True):
             self.removed.append(remote)
 
-    def run_secret(self, argv, events, stdin=None):
-        """(exit code, stdout events, every byte the run directory holds, lock what, Phone)."""
+    def run_secret(self, argv, events, stdin=None, put_fails=False, interrupt=None):
+        """(exit code, stdout events, every byte the run directory holds, lock what, Phone).
+        `interrupt` names what the watch raises after the events: KeyboardInterrupt (SIGINT)
+        or Terminated (SIGTERM, SIGHUP)."""
         m = load()
         import phonelib
         phone = self.Phone
-        phone.envs, phone.secrets, phone.removed = [], [], []
+        phone.envs, phone.secrets, phone.removed, phone.put_fails = [], [], [], put_fails
         locked = []
 
         def watch(_phone, ev, nonce, pid, until, wait, poll, done_events, is_done, quiet, on_event, *rest):
             for e in events(nonce):
                 ev("app:" + e["event"], **{k: v for k, v in e.items() if k != "event"})
                 on_event(e)
+            if interrupt == "KeyboardInterrupt":
+                raise KeyboardInterrupt
+            if interrupt == "Terminated":
+                raise m.Terminated("SIGTERM")
             return "done", {"event": "ui-done", "outcome": "ok"}
         saved = (phonelib.Phone, phonelib.watch_launch, phonelib.installed_check, phonelib.device_lock, sys.argv, sys.stdin)
         out = io.StringIO()
@@ -1316,6 +1325,84 @@ class TextBarSecret(unittest.TestCase):
             nonce = next(e.split("=", 1)[1] for e in phone.envs if e.startswith("TITLE_NONCE="))
             self.assertEqual(phone.secrets, [(f"Documents/ui-text-{nonce}-1", self.SENTINEL.encode())])
             self.assertIn("nothing pushed", stdout)
+
+    def test_a_secret_is_removed_however_the_run_ends(self):
+        """A push that fails part-way (the 30 s timeout), SIGINT or SIGTERM: the file pushed, or
+        its .part, is removed before the run ends (afc.py rm takes both)."""
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "pw")
+            with open(path, "w") as f:
+                f.write(self.SENTINEL)
+            wanted = lambda nonce: [{"event": "ui-secret-wanted", "index": 2}]  # noqa: E731
+            for how, kw, code in (("failed push", {"put_fails": True}, 1),
+                                  ("SIGINT", {"interrupt": "KeyboardInterrupt"}, 130),
+                                  ("SIGTERM", {"interrupt": "Terminated"}, 143)):
+                got, stdout, _, _, phone = self.run_secret(["--action", "textbar:secret", "--secret-file", path], wanted, **kw)
+                nonce = next(e.split("=", 1)[1] for e in phone.envs if e.startswith("TITLE_NONCE="))
+                self.assertEqual(got, code, how)
+                self.assertEqual(phone.removed, [f"Documents/ui-text-{nonce}-2"], how)
+                self.assertIn('"secret-removed"', stdout, how)
+                self.assertNotIn(self.SENTINEL, stdout, how)
+
+    def test_afc_rm_takes_a_secret_s_part_file_and_a_failed_put_leaves_none(self):
+        spec = importlib.util.spec_from_file_location("afc_tool", os.path.join(TOOLS, "afc.py"))
+        afc = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(afc)
+
+        class AFC:
+            def __init__(self, files, fail_rename=False):
+                self.files, self.fail_rename = dict(files), fail_rename
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_):
+                return False
+
+            async def exists(self, p):
+                return p in self.files
+
+            async def stat(self, p):
+                return {"st_ifmt": "S_IFREG", "st_size": len(self.files[p])}
+
+            async def rm(self, p):
+                del self.files[p]
+
+            async def set_file_contents(self, p, data):
+                self.files[p] = data
+
+            async def rename(self, a, b):
+                if self.fail_rename:
+                    raise ConnectionError("the phone went away")
+                self.files[b] = self.files.pop(a)
+
+        name = "Documents/ui-text-0a1b2c3d-2"
+        out = io.StringIO()
+        for files in ({name + ".part": b"x"}, {name: b"x", name + ".part": b"x"}, {name: b"x"}):
+            fake = AFC(files)
+
+            async def connect(_bundle, fake=fake):
+                return fake
+            afc.connect = connect
+            with contextlib.redirect_stdout(out):
+                afc.asyncio.run(afc.main("app", "rm", [name]))
+            self.assertEqual(fake.files, {}, files)
+        with self.assertRaises(SystemExit), contextlib.redirect_stdout(out):
+            afc.asyncio.run(afc.main("app", "rm", [name]))   # neither is there
+
+        fake = AFC({}, fail_rename=True)
+
+        async def connect(_bundle):
+            return fake
+        afc.connect = connect
+        old = sys.stdin
+        sys.stdin = io.TextIOWrapper(io.BytesIO(self.SENTINEL.encode()))
+        try:
+            with self.assertRaises(ConnectionError):
+                afc.asyncio.run(afc.main("app", "put-secret", [name]))
+        finally:
+            sys.stdin = old
+        self.assertEqual(fake.files, {})
 
 
 if __name__ == "__main__":

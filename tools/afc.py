@@ -14,13 +14,14 @@ USBMUXD_SOCKET_ADDRESS set.
                                   directory with a trailing /, a link with -> and its target
   afc.py BUNDLE_ID rm REMOTE      delete one .zip file directly in Documents/ (what import: takes; a
                                   file a person or a probe put there), or a text bar secret file
-                                  (put-secret's). Nothing else: no directory, no other name, none
-                                  of the app's own files
+                                  (put-secret's) with the REMOTE.part a cut-short put-secret left.
+                                  Nothing else: no directory, no other name, none of the app's own
+                                  files
   afc.py BUNDLE_ID put-secret REMOTE
                                   write stdin to Documents/ui-text-<nonce>-<n> only (the value
                                   `pp ui --secret-file` types through the text bar, PLA-606): to
-                                  REMOTE.part, then renamed, so the app never reads half of it;
-                                  nothing is printed (secret_refusal)
+                                  REMOTE.part, then renamed, so the app never reads half of it; a
+                                  failure removes the .part; nothing is printed (secret_refusal)
   afc.py BUNDLE_ID stat REMOTE    "file SIZE", "dir", "link TARGET" or "absent"
   afc.py BUNDLE_ID pull REMOTE LOCAL
                                   one plain file to the path LOCAL, in PULL_CHUNK reads: a
@@ -45,6 +46,7 @@ past 256 MiB, WINE_HOST_DEV_LOG_CAP), and every driver pulls the whole file; thi
 copied. Run it only while the app is not running.
 """
 import asyncio
+import contextlib
 import os
 import re
 import sys
@@ -80,8 +82,16 @@ async def main(bundle_id, op, args):
             why = secret_refusal(args[0])
             if why:
                 sys.exit(f"{args[0]}: {why}")
-            await afc.set_file_contents(args[0] + ".part", sys.stdin.buffer.read())
-            await afc.rename(args[0] + ".part", args[0])
+            part = args[0] + ".part"
+            try:
+                await afc.set_file_contents(part, sys.stdin.buffer.read())
+                await afc.rename(part, args[0])
+            except BaseException:
+                # The connection may be gone too; pp ui's rm of the secret takes the .part then.
+                with contextlib.suppress(Exception):
+                    if await afc.exists(part):
+                        await afc.rm(part)
+                raise
         elif op == "put-import" and len(args) == 1:
             why = import_refusal(args[0])
             if why:
@@ -103,12 +113,20 @@ async def main(bundle_id, op, args):
             why = rm_refusal(args[0])
             if why:
                 sys.exit(f"{args[0]}: {why}")
-            k = await kind(afc, args[0])
-            if not k.startswith("file"):
-                sys.exit(f"{args[0]}: " + ("no such file" if k == "absent" else "not a plain file"))
-            await afc.rm(args[0])
-            # A secret's size is its length: not printed.
-            print(f"{args[0]}: removed" + ("" if secret_refusal(args[0]) is None else f" ({k.split()[1]} bytes)"))
+            secret = secret_refusal(args[0]) is None
+            removed = 0
+            for path in [args[0], args[0] + ".part"] if secret else [args[0]]:
+                k = await kind(afc, path)
+                if k == "absent":
+                    continue
+                if not k.startswith("file"):
+                    sys.exit(f"{path}: not a plain file")
+                await afc.rm(path)
+                removed += 1
+                # A secret's size is its length: not printed.
+                print(f"{path}: removed" + ("" if secret else f" ({k.split()[1]} bytes)"))
+            if not removed:
+                sys.exit(f"{args[0]}: no such file")
         elif op == "stat" and len(args) == 1:
             print(await kind(afc, args[0]))
         elif op == "pull-bundle" and len(args) == 2:

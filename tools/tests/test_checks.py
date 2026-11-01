@@ -44,16 +44,28 @@ class Secrets(unittest.TestCase):
         self.assertIn("Epic ownership token", [w for w, _ in checks.secret_hits("egoc1~" + "A" * 30)])
         self.assertEqual(checks.secret_hits("-AUTH_PASSWORD=<redacted> <ovt:redacted> egoc1~short"), [])
 
+    def test_patterns_are_ere(self):
+        """pp secrets hands each pattern to git grep -E, which drops one it cannot parse silently."""
+        for what, p in checks.SECRETS:
+            for perl in ("(?", r"\s", r"\d", r"\w"):
+                self.assertNotIn(perl, p, what)
+
     def test_battle_net_session_values(self):
         # Made up, and split so that pp secrets does not find them in this file.
         ticket = "US-" + "0123456789abcdef" * 2 + "-123456789"
         self.assertEqual([w for w, _ in checks.secret_hits(f"ST={ticket}")], ["Battle.net login ticket"])
         for line in ("WEB_" + "TOKEN=" + "A1b2C3d4" * 3, '"login_' + 'ticket":"' + "Zz09" * 5 + '"',
                      "Param_Bnet" + "SessionKey: " + "0f" * 16, "session_" + "key=" + "AbCdEf012345" * 2,
-                     "realm_join_" + "ticket = " + "x1Y2" * 5, '"auth_' + 'token":"' + "Qq12" * 5 + '"'):
+                     "realm_join_" + "ticket = " + "x1Y2" * 5, '"auth_' + 'token":"' + "Qq12" * 5 + '"',
+                     # Any case, as the Redactor (`(?i)`) takes them.
+                     "LOGIN_" + "TICKET=" + "Zz09" * 5, "web_" + "token=" + "A1b2C3d4" * 3, "AUTH" + "TOKEN: " + "Qq12" * 5,
+                     "REALMLIST" + "TICKET=" + "x1Y2" * 5):
             self.assertEqual([w for w, _ in checks.secret_hits(line)], ["WoW session value"], line)
-        self.assertEqual([w for w, _ in checks.secret_hits('SET account' + 'Name "player@example.com"')],
-                         ["WoW account name"])
+        for line in ('SET account' + 'Name "player@example.com"', "SET account" + 'list "!WoW1|WoW2|"',
+                     '{"account' + 'Name":"player3@example.com"}', "'account_" + "name': 'player4'"):
+            self.assertEqual([w for w, _ in checks.secret_hits(line)], ["WoW account name"], line)
+        self.assertEqual([w for w, _ in checks.secret_hits("open https://account.battle.net/login/" + "sso?token=SSO0123456789&ref=x")],
+                         ["Battle.net single sign-on token"])
         self.assertEqual([w for w, _ in checks.secret_hits("https://us.account.battle.net/login/en/?app=bam&account" + "Name=player2")],
                          ["WoW account name"])
         self.assertEqual([w for w, _ in checks.secret_hits("GAME_" + "ACCOUNT=WoW1")], ["Battle.net game account"])
@@ -63,7 +75,8 @@ class Secrets(unittest.TestCase):
         # The Redactor's own output (ContentKit Redaction.swift) for each of them is no hit either.
         for line in ('SET accountName "<redacted>"', 'SET accountList "<redacted>"', "GAME_ACCOUNT=<redacted>",
                      '"auth_token":"<redacted>"', "https://us.account.battle.net/login/en/?<query:redacted>",
-                     "/login/en/?app=bam&accountName=<redacted>"):
+                     "/login/en/?app=bam&accountName=<redacted>", '{"accountName":"<redacted>"}',
+                     "https://account.battle.net/login/sso?<query:redacted>", "/login/sso?token=<redacted>"):
             self.assertEqual(checks.secret_hits(line), [], line)
 
     def test_home_paths(self):

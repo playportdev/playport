@@ -104,7 +104,9 @@ struct FakeProduct {
 
     /// Lays the product out on `cdn`. Build 2 (an update, PLA-521) changes objects 9, 19, 29 and 39
     /// and `Utils\a-arm64.dll`, adds objects 40..<44 (loose), and is the version endpoint's build.
-    static func make(on cdn: FakeCDN, productConfig: [UInt8], build: Int = 1) -> FakeProduct {
+    /// `filesInStore` also lists the product folder files' objects in the download manifest, as
+    /// Blizzard's manifests do, so the store holds them too.
+    static func make(on cdn: FakeCDN, productConfig: [UInt8], build: Int = 1, filesInStore: Bool = false) -> FakeProduct {
         typealias S = Synthetic
         var p = FakeProduct()
         // Stored objects: most for every locale and region, some for one locale, one region,
@@ -170,9 +172,11 @@ struct FakeProduct {
         var install = Array("IN".utf8) + [1, 16] + S.be(UInt64(tags.count), 2) + S.be(UInt64(p.files.count), 4)
         install += S.tagBlock(tags, entries: p.files.map(\.tags))
         for f in p.files { install += Array(f.name.utf8) + [0] + MD5.hash(f.content) + S.be(UInt64(f.content.count), 4) }
-        var download = Array("DL".utf8) + [1, 16, 0] + S.be(UInt64(p.objects.count), 4) + S.be(UInt64(tags.count), 2)
-        for o in p.objects { download += o.keys.ekey.bytes + S.be(UInt64(o.blte.count), 5) + [0] }
-        download += S.tagBlock(tags, entries: p.objects.map(\.tags))
+        let downloaded = p.objects.map { (blte: $0.blte, ekey: $0.keys.ekey, tags: $0.tags) }
+            + (filesInStore ? zip(p.files, fileObjects).map { (blte: $1.0, ekey: $1.1.ekey, tags: $0.tags) } : [])
+        var download = Array("DL".utf8) + [1, 16, 0] + S.be(UInt64(downloaded.count), 4) + S.be(UInt64(tags.count), 2)
+        for o in downloaded { download += o.ekey.bytes + S.be(UInt64(o.blte.count), 5) + [0] }
+        download += S.tagBlock(tags, entries: downloaded.map(\.tags))
         let root = p.objects[0].keys
         let contents = [(ckey: root.ckey.bytes, size: UInt64(300), ekeys: [root.ekey.bytes])]
             + zip(p.files, fileObjects).map { (ckey: MD5.hash($0.content), size: UInt64($0.content.count), ekeys: [$1.1.ekey.bytes]) }

@@ -13,8 +13,9 @@ offline tests on the Linux host. The app's Battle.net store (`UI/BattleNetStore.
   `wow_classic`, `wow_classic_era`, `wow_anniversary`; the store regions us, eu, kr, tw (each
   region's manifest tag is its code in capitals).
 - **Transport** (`BattleNetTransport`, `URLSessionTransport`): one GET seam, a URL and headers in,
-  the status, headers and body out; it throws only when no answer came. Tests inject recorded
-  answers through it.
+  the status, headers and body out; it throws only when no answer came. It follows no redirect: a
+  3xx is the answer, which the client refuses, so no host the endpoints did not name is asked.
+  Tests inject recorded answers through it.
 - **Manners** (`BattleNetManners`, decision 0174): every request carries `User-Agent: Playport`;
   at most `maxConcurrent` (8) are in flight; an HTTP 429 pauses that host for its `Retry-After`
   (at most 120 s; one that is not a finite, non-negative number of seconds counts as none: 2 s,
@@ -105,12 +106,14 @@ offline tests on the Linux host. The app's Battle.net store (`UI/BattleNetStore.
   before removing the old one, then the locale into `.build.info` and an existing
   `WTF/Config.wtf` (`textLocale`, `audioLocale`, replaced or added). The old locale's data stays.
 - **Updates** (`BattleNetUpdate.swift`, PLA-521): `checkUpdate` asks the install region's version
-  endpoint for its current build (`BattleNetUpdateCheck`); `prepareUpdate` plans the new build's
-  selection in the install's locale and machines minus the objects the store holds and the
-  product folder files already on disk as the new build has them, fetching only the manifests
-  and CDN indexes the install lacks; `update` adds it as a language change does, then the new
-  build's configs, the missing indexes and the archive group, and `.build.info` last. Never a
-  reinstall; run again after an interruption, it resumes.
+  endpoint for its current build (`BattleNetUpdateCheck`); `prepareUpdate` refuses a new build
+  without the ARM64 client, as `prepare` does, then plans its selection in the install's locale
+  and machines minus the objects the store holds and the product folder files already on disk as
+  the new build has them, fetching only the manifests and CDN indexes the install lacks; `update`
+  adds it as a language change does, then the new build's configs, the missing indexes and the
+  archive group, and `.build.info` last. Never a reinstall; run again after an interruption, it
+  resumes. A product folder file still to write is decoded from its archive even when the store
+  holds its object (both here and in a language change).
 - **The game's settings** (`WoWConfig`): `prepareForPlay`, before each Play, writes into
   `<product folder>/WTF/Config.wtf` (made when missing) the install's `textLocale`,
   `audioLocale` and `portal` where it names none (without them WoW opens a Win32 language and
