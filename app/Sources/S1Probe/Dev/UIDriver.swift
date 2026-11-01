@@ -199,7 +199,8 @@
 //                              Not now button does; fails, with the reason, when the game is not
 //                              offered (once per game: set:controls.suggestedLayoutOffered= forgets)
 //   menu:open                  After a play: (the actions after it then run while the game runs):
-//                              waits for the game's first frame (3 min at most), then holds the
+//                              waits for the game's first frame (3 min at most; a guest window up
+//                              10 s with no frame counts, for a GDI-only program), then holds the
 //                              controller's Home button 0.8 s through HostIO's pad handling
 //                              (HostIO.menuInput), which opens the in-game menu
 //                              (UI/InGameMenuView.swift), and waits 1 s
@@ -626,8 +627,18 @@ enum UIDriver {
                     let launch = TitleLaunch.shared, menu = InGameMenu.shared
                     if id == "open" {
                         guard launch.running else { return finish("action=\(action) refused: no game is running") }
+                        // A program that only draws guest GDI windows (Wine's notepad) never takes a
+                        // drawable: its window, up 10 s with no frame, stands in for the first frame.
                         let deadline = Date().addingTimeInterval(180)
-                        while launch.running, !launch.acceptsMenu || launch.step != .drawing, Date() < deadline {
+                        var windowSince: Date?
+                        while launch.running, Date() < deadline {
+                            if launch.acceptsMenu, launch.step == .drawing { break }
+                            if launch.acceptsMenu, launch.step == .window {
+                                windowSince = windowSince ?? Date()
+                                if Date().timeIntervalSince(windowSince!) >= 10 { break }
+                            } else {
+                                windowSince = nil
+                            }
                             try await pause(.milliseconds(250))
                         }
                         guard launch.acceptsMenu else { return finish("action=\(action) failed: the game did not draw a frame") }

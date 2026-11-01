@@ -534,9 +534,10 @@ static const char *sxs_attr(const char *elem, const char *end, const char *attr,
  * wineboot's fakedll.c register_manifest does: winsxs/manifests/<dir>.manifest
  * with the architecture filled in, and winsxs/<dir>/ holding the assembly's
  * files, links into the runtime's <pe_arch>-windows set (the first <file> is
- * <module>.dll itself). 0 when installed. */
+ * <module>.dll itself). <dir> starts with prefix, the architecture except for
+ * the aarch64 set. 0 when installed. */
 static int link_sxs_manifest(const char *winsxs, const char *module, const char *path,
-                             const char *arch, const char *pe_arch)
+                             const char *prefix, const char *arch, const char *pe_arch)
 {
     char text[16384], dir[160], out[16600], dst[1600], src[1600];
     int fd = open(path, O_RDONLY);
@@ -553,7 +554,7 @@ static int link_sxs_manifest(const char *winsxs, const char *module, const char 
     const char *arch_at = id_end ? sxs_attr(id, id_end, "processorArchitecture", &arch_len) : NULL;
     /* Wine's manifests leave the architecture empty for wineboot to fill in. */
     if (!name || !version || !key || !arch_at || arch_len) return -1;
-    size_t n = sxs_field(dir, sizeof(dir), arch, strlen(arch), 16);
+    size_t n = sxs_field(dir, sizeof(dir), prefix, strlen(prefix), 16);
     n += sxs_field(dir + n, sizeof(dir) - n, name, name_len, 40);
     int w = snprintf(dir + n, sizeof(dir) - n, "%.*s_%.*s_none_deadbeef", (int)key_len, key, (int)version_len, version);
     if (w < 0 || (size_t)w >= sizeof(dir) - n) return -1;
@@ -594,12 +595,15 @@ static int link_sxs_manifest(const char *winsxs, const char *module, const char 
  * no v6-only class: a WiX bootstrapper's theme failed on SysLink with
  * ERROR_CLASS_DOES_NOT_EXIST. x86 for i386 titles; arm64 for the ARM64EC
  * set, which ntdll takes for an "amd64" or "*" request in an x86-64 title
- * (actctx.c lookup_manifest_file). Wine's own (_deadbeef) manifests are
- * rewritten on every session start, since the bundle path changes on
- * install; a title's own assemblies stay. */
+ * (actctx.c lookup_manifest_file); the aarch64 set for a plain ARM64 child
+ * (decision 0170), whose ntdll looks an arm64 assembly up as sysarm64_
+ * (wine-pe 0058): Wine's ARM64 notepad cannot load the ARM64EC comctl32 v6.
+ * Wine's own (_deadbeef) manifests are rewritten on every session start,
+ * since the bundle path changes on install; a title's own assemblies stay. */
 static void link_winsxs(void)
 {
-    static const char *const sets[][2] = { { "x86", "i386" }, { "arm64", "arm64ec" } };
+    static const char *const sets[][3] = {
+        { "x86", "x86", "i386" }, { "arm64", "arm64", "arm64ec" }, { "sysarm64", "arm64", "aarch64" } };
     char src_dir[1200], winsxs[1200], manifests[1300], path[2600];
     snprintf(src_dir, sizeof(src_dir), "%s/winsxs", g_runtime);
     snprintf(winsxs, sizeof(winsxs), "%s/drive_c/windows/winsxs", g_prefix);
@@ -631,7 +635,7 @@ static void link_winsxs(void)
             if (l < 10 || strcmp(e->d_name + l - 9, ".manifest")) continue;
             snprintf(path, sizeof(path), "%s/%s", mod_dir, e->d_name);
             for (size_t i = 0; i < sizeof(sets) / sizeof(sets[0]); i++) {
-                if (link_sxs_manifest(winsxs, m->d_name, path, sets[i][0], sets[i][1])) failed++;
+                if (link_sxs_manifest(winsxs, m->d_name, path, sets[i][0], sets[i][1], sets[i][2])) failed++;
                 else installed++;
             }
         }

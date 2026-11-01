@@ -195,3 +195,45 @@ passing ([2026-10-31-wow-arm64-start.md](2026-10-31-wow-arm64-start.md)).
 
 Decision 0170 moved to accepted with these runs, and amends 0082 and `ARCHITECTURE.md`'s "All
 guests are x86".
+
+## Wine's ARM64 notepad: the aarch64 assemblies (2026-11-01)
+
+Wine's own ARM64 `notepad.exe` (`.work/compat/notepad-arm64.exe`, imported as `dir-notepad`), a
+GUI program with an application manifest naming Common Controls 6, on IPA `bfbf4f78` (run
+`20261101T051825`): `import_dll Loading library comctl32.dll (which is needed by
+C:\windows\sysarm64\comdlg32.dll) failed (error c000007b)`, the same for `notepad.exe`'s own
+import, then exit `0xc0000135`. The prefix log said `winsxs: 20 assemblies installed`: each of
+Wine's 10 manifests for `x86` (the i386 set) and `arm64` (the ARM64EC set, which the ARM64EC ntdll
+takes for an `arm64`, `amd64` or `*` request). The aarch64 ntdll of a plain ARM64 child also
+builds its manifests' architecture as `arm64` (actctx.c `current_archW`), so its `*` request found
+`arm64_microsoft.windows.common-controls_…_deadbeef` and the ARM64EC `comctl32_v6.dll`, an image
+it cannot load.
+
+- **wine-pe 0058:** the aarch64 ntdll looks an `arm64` assembly up as `sysarm64_…` in
+  `C:\windows\winsxs\manifests` (`lookup_manifest_file`), as 0056 takes its system DLLs from
+  `sysarm64`. The manifest's own architecture stays `arm64`, which `is_matching_identity` checks,
+  and the DLL path follows the manifest's directory name. The ARM64EC and i386 ntdll keep their
+  lookup; their records changed only by the build's version string (a new commit in the tree).
+- **`wine_host.c` `link_winsxs`:** a third set, `sysarm64_` directories with `processorArchitecture`
+  `arm64` linked into `Runtime/aarch64-windows`, which has every assembly's module. The
+  `_deadbeef` manifests are rewritten at every session start, so an existing prefix gets them on
+  its next play. comctl32 5 needs nothing new: it is the plain `comctl32.dll` the child already
+  takes from `sysarm64`.
+- **Host:** `tools/tests/test_winsxs.py` checks the three sets, that every assembly's module is
+  in the aarch64 set too, and the `sysarm64_` prefix of 0058.
+- **`menu:open`** waited for a first frame that a GDI-only program never draws; it now also takes a
+  guest window up 10 s with no frame (`Dev/UIDriver.swift`, DEVICE.md).
+
+| Run | IPA | What | Result |
+| --- | --- | --- | --- |
+| `20261101T053113` | `5f72d802…` | `--action play:dir-notepad --action wait:20 --shot-each-action --wait 90` | `winsxs: 30 assemblies installed, 0 failed`; `comctl32_v6.dll` mapped as a native image; no `c000007b`; notepad's window up |
+| `20261101T053916` | `89baa276…` | notepad with the text bar (PLA-267, PLA-606; see [2026-10-30-wow-notice-and-play.md](2026-10-30-wow-notice-and-play.md#text-bar-into-wines-arm64-notepad-2026-11-01)) | ok, 8 actions |
+| `20261101T054245` | `89baa276…` | `--play app-367520 --until first-frame+10 --shot` | Hollow Knight first frame at +10.3 s, title menu |
+| `20261101T054342` | `89baa276…` | `--play dir-arm64 --wait 180 --shot` | exit `0x2a` (pass) |
+| `20261101T054448` | `89baa276…` | `--settings 'dir-d3d12:{"graphics":"vulkan"}' --play dir-d3d12 --wait 180` | exit `0x0` |
+
+The screenshot `action-02-wait_20.png` of `20261101T053113` shows "Untitled - Notepad" with its
+File, Edit, Format, View and Help menus, an empty edit area and the status bar "Ln 1, Col 1". The
+caption buttons show the letters `0`, `1` and `r`, the Marlett codes for minimise, maximise and
+close, drawn in another font; not checked further. Hollow Knight's run is the runtime smoke for
+the wine-pe change. `./pp test --quick` passed.

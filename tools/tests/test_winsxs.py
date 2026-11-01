@@ -62,10 +62,10 @@ class WinSxS(unittest.TestCase):
                 if l and not l.startswith("#")]
         self.assertEqual({r[1] for r in rows if r[6] == "winsxs"},
                          {f"Runtime/winsxs/{m}/{n}" for m, n in stage.SXS})
-        # link_winsxs links each module from both sets it installs for.
+        # link_winsxs links each module from every set it installs for.
         dests = {r[1].lower() for r in rows if r[0] == "resource"}
         for module, _ in stage.SXS:
-            for pe in ("i386", "arm64ec"):
+            for pe in ("i386", "arm64ec", "aarch64"):
                 self.assertIn(f"runtime/{pe}-windows/{module}.dll", dests)
         text = (REPO / "app/xtool.yml").read_text()
         self.assertIn("  - Sources/S1Probe/Runtime/winsxs\n", text)
@@ -74,7 +74,10 @@ class WinSxS(unittest.TestCase):
 
     def test_wine_host_installs_them_before_the_session_root_starts(self):
         src = (REPO / "app/Sources/WineHost/wine_host.c").read_text()
-        self.assertIn('{ { "x86", "i386" }, { "arm64", "arm64ec" } }', src)
+        self.assertIn('{ "x86", "x86", "i386" }, { "arm64", "arm64", "arm64ec" }, { "sysarm64", "arm64", "aarch64" } };', src)
+        # A plain ARM64 child's ntdll looks an arm64 assembly up under the aarch64 set's prefix.
+        ntdll = (REPO / "patches/wine-pe/0058-ntdll-look-up-a-plain-ARM64-process-s-assemblies-as-.patch").read_text()
+        self.assertIn('+        wcscpy( native, L"sysarm64_" );', ntdll)
         self.assertIn("_none_deadbeef", src)
         start = src.index("int wine_host_session_start(")
         self.assertLess(src.index("    link_winsxs();\n", start), src.index("start_guest()", start))

@@ -167,3 +167,40 @@ hits are the `container UUID` pattern in the raw `pull/s1-host.log` of `20261031
 
 Not yet: the acceptance remembered across a later Play (step 4), the login screen, the owner's
 sign-in (step 5), PLA-515 and the compatibility list.
+
+## Text bar into Wine's ARM64 notepad (2026-11-01)
+
+PLA-267's and PLA-606's phone criteria, with Wine's ARM64 notepad as the guest text field (it runs
+since wine-pe 0058, [2026-10-30-native-arm64-child.md](2026-10-30-native-arm64-child.md#wines-arm64-notepad-the-aarch64-assemblies-2026-11-01)).
+IPA sha256 `89baa2762d5d5caae1d320a0315082d6ba0b48b9c0c6fbf066f3c9966beacbd3` (branch
+`dev/pla-516-battlenet`), run `20261101T053916`:
+
+```sh
+./pp ui --action play:dir-notepad --action wait:20 --action menu:open --action menu:text \
+    --action "textbar:type:Zażółć gęślą jaźń ok" --action textbar:enter --action textbar:secret \
+    --action wait:5 --secret-file .work/secrets/sentinel --shot-each-action --wait 150
+```
+
+The sentinel is a 26-character test value in a gitignored file (mode 600), never on argv. Every
+action returned ok (`ok actions=8`); the events show `secret-pushed` with the action's number
+only. An earlier run on IPA `5f72d802…` (`20261101T053243`) stopped at `menu:open`, which waited
+for a first frame a GDI-only program never draws; `menu:open` now takes a guest window up 10 s
+with no frame.
+
+- **Screenshots:** `action-03-menu_open.png` the in-game menu over the dimmed notepad ("PLAYING ·
+  JUST STARTED", notepad; Resume, Controls, Touch keyboard, Type text, Screenshot, Performance
+  overlay, Controller, Quit game); `action-04-menu_text.png` the bar (close, the open lock, "Type
+  into the game", Tab, Enter) above the iOS keyboard with its Passwords bar, notepad's caret at the
+  top of its empty edit area; `action-05-…` and `action-06-textbar_enter.png` notepad's first line
+  "Zażółć gęślą jaźń ok", every Polish letter drawn; `action-07-textbar_secret.png` and
+  `action-08-wait_5.png` the lock lit orange (password mode) and a 26-character line, the sentinel
+  file's length and form, on notepad's second line (so Enter made the new line), the caret after it.
+  The bar's field stays empty after each send.
+- **Scan:** `grep -rFf .work/secrets/sentinel` over the run directory (events, `argv.txt`,
+  `timeline.txt`, `cmd/`, `pull/s1-host.log`, `pull/run-events.jsonl`) and over the two earlier
+  notepad runs found nothing (exit 1). The screenshots hold it as pixels only, as notepad shows it,
+  and stay under `.work`. The log has only `textbar: open, plain (not logged)`, `textbar: enter`,
+  `textbar: secret on (not logged)` and the driver's `ui: textbar …` lines, and no `post_key vk=` or
+  `drv_post_key … vk=` line.
+- **Not covered:** AutoFill and the password mode by hand (PLA-267's person check), and the
+  release build's absence of the action (`pp verify --variant release`, side copy, PLA-606).

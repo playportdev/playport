@@ -335,7 +335,9 @@ not that gameplay appeared: inspect the timeline, log and screenshot.
   paused behind it (its pads at rest, audio stopped, its threads suspended by
   the session root) until Resume, B or Home. The driver reaches it through
   the same pad handling: after `play:`, `wait:S` and `menu:` actions run while
-  the game runs; `menu:open` waits for the first frame and holds Home,
+  the game runs; `menu:open` waits for the first frame (for a program that
+  only draws guest GDI windows, such as Wine's notepad, its window up 10 s
+  with no frame) and holds Home,
   `menu:resume`, `menu:screenshot`, `menu:overlay` and `menu:quit` move the
   ring and press A, and `pad:` presses go to the menu while it is up. The
   scripted pad has `HOME` as well (`pp pad send "800 HOME" "100 -"`). Screenshot
