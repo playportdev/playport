@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""The x18 patcher sends SUB, SUBS and CMP of x18 to a trampoline, a CMP even where a literal load points
-(madeira-unix 0252, 0260, PLA-514).
+"""The x18 patcher sends every instruction that reads x18 to a trampoline (SUB, SUBS, CMP, TST, EOR, CBZ ...),
+a compare even where a literal load points (madeira-unix 0252, 0260, 0263, PLA-514).
 
 World of Warcraft's ARM64 client guards its code with `cmp x18, #imm; b.lo <loop>`. The role
 classifier matched ADD and ADDS only, so with x18 zeroed by iOS the compare saw 0 and the game's
@@ -34,7 +34,7 @@ int ios_teb_tls_slot_offset = 0x940;
 long ios_limit_x18_images, ios_limit_x18_sites;
 #include "patcher.c"
 
-static uint32_t text[10], tramp[1024];
+static uint32_t text[13], tramp[1024];
 
 /* The word the patcher put in the trampoline it branched word i to. */
 static uint32_t tramp_insn(int i)
@@ -60,16 +60,31 @@ int main(void)
     text[8] = 0x1800001c;   /* ldr w28, .+0: a junk literal load at the next word */
     text[9] = 0xf1030e5f;   /* cmp x18, #0xc3: patched all the same (0260) */
     text[8] = 0x1800003c;   /* ldr w28, .+4 */
+    text[10] = 0xf240065f;  /* tst x18, #0x3 (0263) */
+    text[11] = 0xca120129;  /* eor x9, x9, x18 (0263) */
+    text[12] = 0xb4000052;  /* cbz x18, .+8 (0263): a branch trampoline */
 
-    assert(ios_jit_x18_tramp_need((char *)text, sizeof(text), 0x1000, NULL) == 5 * 32 + 0x1000);
+    assert(ios_jit_x18_tramp_need((char *)text, sizeof(text), 0x1000, NULL) == 7 * 32 + 40 + 0x1000);
     assert(ios_jit_patch_x18((char *)text, (char *)text, sizeof(text), 0x1000,
-                             (char *)tramp, (char *)tramp, sizeof(tramp)) == 5);
+                             (char *)tramp, (char *)tramp, sizeof(tramp)) == 8);
     assert(tramp_insn(0) == 0xf100e23f);   /* cmp x17, #0x38 */
     assert(tramp_insn(1) == 0xeb9f163f);   /* cmp x17, xzr, asr #5 */
     assert(tramp_insn(2) == 0xd1002220);   /* sub x0, x17, #8 */
     assert(tramp_insn(3) == 0x8b110000);   /* add x0, x0, x17 */
     assert(text[4] == 0xd100025f && text[5] == 0xeb3263ff);
     assert(tramp_insn(9) == 0xf1030e3f);   /* cmp x17, #0xc3 */
+    assert(tramp_insn(10) == 0xf240063f);  /* tst x17, #0x3 */
+    assert(tramp_insn(11) == 0xca110129);  /* eor x9, x9, x17 */
+    {   /* cbz x17, +12; ldr x17, [sp], #16; b back; ldr x17, [sp], #16; b target */
+        uint32_t b = text[12];
+        int32_t imm26 = (int32_t)(b << 6) >> 6;
+        uint32_t *t = (uint32_t *)((char *)&text[12] + (intptr_t)imm26 * 4);
+        int32_t back, to;
+        assert(t[4] == 0xb4000071 && t[5] == 0xf84107f1 && t[7] == 0xf84107f1);
+        back = (int32_t)(t[6] << 6) >> 6; to = (int32_t)(t[8] << 6) >> 6;
+        assert((char *)&t[6] + back * 4 == (char *)&text[13]);
+        assert((char *)&t[8] + to * 4 == (char *)&text[12] + 8);
+    }
     puts("x18 compare: ok");
     return 0;
 }

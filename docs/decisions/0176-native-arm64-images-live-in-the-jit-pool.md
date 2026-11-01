@@ -19,6 +19,9 @@ Amends [0170](0170-native-arm64-guests.md).
   truth, so the IAT sync never copies the view over it.
 - **Exceptions in a presented copy keep their pool pc** as `ExceptionAddress`, with no translation
   to the view.
+- **Every instruction that reads x18 is patched** (madeira-unix 0263). Code bytes and data reads
+  of code stay as patched: a validation build that served the original bytes to WoW's own
+  .text hash loops made it fail sooner (evidence 2026-10-31-wow-arm64-start).
 - **x86-64 and ARM64EC processes are unchanged.** Their images keep the PE address as the image,
   and the pool copy as an alias their code runs from.
 

@@ -229,3 +229,4 @@
 0260-virtual-x18-patch-a-CMP-of-x18-that-a-literal-load-p.patch
 0261-ntdll-step-a-call-into-host-code-as-one-instruction.patch
 0262-ntdll-a-native-ARM64-child-s-images-live-in-the-JIT-.patch
+0263-virtual-x18-patch-every-instruction-that-reads-x18.patch

@@ -81,3 +81,35 @@ DLL but its ntdll). The PE-side unwinder translated pool pcs to the view and loo
   wrong value or a region WoW expects to have decrypted, or to fault on, first: protecting a
   presented copy changes Wine's view and leaves the pool page RX, so a region WoW makes no-access
   or non-executable would not fault.
+
+## Hash hypothesis, full x18 patching (madeira-unix 0263), and the jump target
+
+- **WoW does hash its own .text.** In the emulator, the first TLS callback reads .text byte by byte
+  in three loops over +0x2998–+0xb3760, about 181,000 bytes each (+0x22b9c, +0x2702c, +0x29134), plus
+  two shorter ones at +0x284e0 and +0x28618. The x18 patches put 1,038 changed words in that
+  range.
+- **But serving the original bytes made WoW fail earlier.** A validation build sent those 14 loads
+  to the PE view, which holds the original bytes, with a flag-free range check (runs 20261101T004745
+  and 20261101T005322). WoW then took the decoy path at +0x53e8 after 8 UDFs; without the redirect it
+  gets 13. So the jump into +0xb3790 does not come from a hash poisoned by patches; more likely,
+  every hash WoW compares reads the same patched bytes. The validation code was dropped.
+- **0263: the patcher now covers every instruction that reads x18.** That is, every logical,
+  ADD/SUB, ADC/SBC, CCMP, CSEL, 1-, 2- and 3-source, bitfield and EXTR form, stores of x18, and
+  CBZ/TBZ on x18 through a branch trampoline. The literal guard now leaves any x18 reader with Rd = 31
+  as code. WoW's text: 196,547 sites patched, 694 left to fault. Run 20261101T010131: no change,
+  13 UDFs, then the same jump.
+- **Registers at the bad jump** (run 20261101T010647): `blr x26` at +0x26670 with
+  x26 = pool + 0xb3790 (`add w7, w6, w17`, then the illegal word at +0xb3794). x20 and x21 point
+  into WoW's `.data` (+0x3520000, +0x3880000). The stack above sp+0x170 holds instruction words: a
+  code buffer WoW assembles. Where x26 is computed was not found statically (the function is
+  obfuscated junk around it), and the emulator does not yet run past the first TLS callback.
+  This is the open blocker.
+
+Final IPA `5b14b446dc0c571f7a08c11c6ced7b4402b947a414c81ea862a9fe15f63266c4`:
+
+| Check | Result | Run |
+|---|---|---|
+| Hollow Knight first-frame+10 | passes | 20261101T011141 |
+| `d3d12` probe on Vulkan | exit 0 | 20261101T011230 |
+| `arm64` probe | exit 42 (all checks pass) | 20261101T011306 |
+| `pp test --quick` | passes | |
