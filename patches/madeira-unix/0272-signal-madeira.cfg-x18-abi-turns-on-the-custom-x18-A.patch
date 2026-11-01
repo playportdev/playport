@@ -1,0 +1,197 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 1 Nov 2026 10:42:30 +0100
+Subject: [PATCH] signal: madeira.cfg x18-abi turns on the custom x18 ABI at a
+ native ARM64 thread's start
+
+Windows on ARM64 keeps the TEB in x18, and Darwin zeroes x18 at every
+return to user mode, so every x18 reader of a native ARM64 child is
+rewritten (0263, decision 0176). macOS 26.4's libsystem_kernel has a
+per-thread opt-out, os_set_custom_x18_abi_enabled: it sets TPIDR_EL0
+bit 48 through the commpage, and xnu's exception return restores x18
+while the bit is set. At a context switch xnu keeps the bit only for a
+task entitled com.apple.security.custom-x18-abi-toggle. The iOS 26.5
+SDK exports the function, though its header marks it unavailable there.
+
+With madeira.cfg x18-abi = 1, init_syscall_frame of a native ARM64
+child's thread looks the function, os_custom_x18_abi_enabled and
+update_tpidr up with dlsym, calls it once when that cannot trap (not
+already on, update_tpidr set), and logs a [x18-abi] line with the
+addresses, the state and TPIDR_EL0 around the call and errno (the call
+is void). pp_x18_abi_last keeps the latest result. Unset, nothing
+changes. The dir-arm64 probe's `x18` argument measures what the kernel
+does with the bit.
+
+Linear: PLA-516
+Class: diagnostics
+Evidence: docs/evidence/2026-11-01-ios-custom-x18-abi.md, tools/tests/test_x18_abi.py
+Offered-upstream: no; iOS port only
+---
+ build/ntdll-unix/pp_x18_abi.h       | 95 +++++++++++++++++++++++++++++
+ build/ntdll-unix/signal_arm64_ios.c | 37 +++++++++++
+ 2 files changed, 132 insertions(+)
+ create mode 100644 build/ntdll-unix/pp_x18_abi.h
+
+diff --git a/build/ntdll-unix/pp_x18_abi.h b/build/ntdll-unix/pp_x18_abi.h
+new file mode 100644
+index 0000000..40639eb
+--- /dev/null
++++ b/build/ntdll-unix/pp_x18_abi.h
+@@ -0,0 +1,95 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later
++ * The custom x18 ABI probe (Playport, PLA-516).
++ *
++ * Windows on ARM64 keeps the TEB in x18; Darwin's kernel zeroes x18 at every
++ * return to user mode, so the runtime rewrites each instruction of a native
++ * ARM64 child that reads x18 (decision 0176). macOS 26.4's libsystem_kernel
++ * added a per-thread opt-out, os_set_custom_x18_abi_enabled (xnu
++ * libsyscall/os/x18.c): it sets bit 48 of TPIDR_EL0 through the commpage's
++ * update_tpidr routine, and the kernel's exception return restores x18 while
++ * the bit is set (osfmk/arm64/locore.s). At a context switch xnu keeps the
++ * bit only for a task entitled com.apple.security.custom-x18-abi-toggle (or
++ * a private x18 entitlement): for any other task it clears the bit and x18
++ * goes back to 0 (osfmk/arm64/pcb.c, machine_switch_cpu_data). The iOS 26.5
++ * SDK's libSystem.B.tbd exports the function, its header marks it
++ * unavailable on iOS.
++ *
++ * With madeira.cfg `x18-abi = 1` each native ARM64 child thread calls it
++ * once as it starts, and what happened is logged ([x18-abi]) and kept. The
++ * call is void and sets no errno; errno is logged around it all the same.
++ * It traps when asked for the state the thread is already in, and calls
++ * through update_tpidr, which is NULL when the kernel passed no commpage
++ * text address: both are checked first. The dir-arm64 probe's `x18`
++ * argument then measures what the kernel does with the bit.
++ */
++#ifndef PP_X18_ABI_H
++#define PP_X18_ABI_H
++
++#include <errno.h>
++#include <stdbool.h>
++#include <stdint.h>
++#include <stdio.h>
++
++#define PP_X18_ABI_TPIDR_BIT (1ull << 48)   /* MACHDEP_TPIDR_FLAG_PRESERVE_X18 */
++
++enum pp_x18_abi_status
++{
++    PP_X18_ABI_MISSING,      /* dlsym found no os_set_custom_x18_abi_enabled or os_custom_x18_abi_enabled */
++    PP_X18_ABI_NO_UPDATE,    /* update_tpidr is NULL: the call would jump to 0 */
++    PP_X18_ABI_ALREADY_ON,   /* already enabled: a second enable traps */
++    PP_X18_ABI_CALLED,       /* called; after says whether it took */
++};
++
++struct pp_x18_abi_result
++{
++    enum pp_x18_abi_status status;
++    void *set_fn, *get_fn, *update_tpidr;   /* update_tpidr: the value of the exported pointer */
++    bool before, after;                     /* os_custom_x18_abi_enabled() around the call */
++    uint64_t tpidr_before, tpidr_after;
++    int errno_before, errno_after;
++};
++
++typedef void *(*pp_x18_lookup_fn)( const char *name );
++typedef uint64_t (*pp_x18_tpidr_fn)( void );
++
++/* Looks the functions up with lookup, enables the custom x18 ABI for the
++ * calling thread when that is safe, and fills r. */
++static inline enum pp_x18_abi_status pp_x18_abi_enable( pp_x18_lookup_fn lookup, pp_x18_tpidr_fn read_tpidr,
++                                                        struct pp_x18_abi_result *r )
++{
++    void *const *update = lookup( "update_tpidr" );
++
++    r->set_fn = lookup( "os_set_custom_x18_abi_enabled" );
++    r->get_fn = lookup( "os_custom_x18_abi_enabled" );
++    r->update_tpidr = update ? *update : NULL;
++    r->before = r->after = false;
++    r->tpidr_before = r->tpidr_after = read_tpidr();
++    r->errno_before = r->errno_after = errno;
++    if (!r->set_fn || !r->get_fn) return r->status = PP_X18_ABI_MISSING;
++    r->before = r->after = ((bool (*)(void))r->get_fn)();
++    if (r->before) return r->status = PP_X18_ABI_ALREADY_ON;
++    if (!update || !*update) return r->status = PP_X18_ABI_NO_UPDATE;
++    errno = 0;
++    r->errno_before = 0;
++    ((void (*)(bool))r->set_fn)( true );
++    r->errno_after = errno;
++    r->tpidr_after = read_tpidr();
++    r->after = ((bool (*)(void))r->get_fn)();
++    return r->status = PP_X18_ABI_CALLED;
++}
++
++/* The log line for r (without the [x18-abi] prefix and the newline). */
++static inline int pp_x18_abi_describe( const struct pp_x18_abi_result *r, char *buf, size_t size )
++{
++    static const char *const names[] = { "missing", "no update_tpidr", "already on", "called" };
++
++    return snprintf( buf, size,
++                     "%s: os_set_custom_x18_abi_enabled=%p os_custom_x18_abi_enabled=%p update_tpidr=%p; "
++                     "enabled %d -> %d, TPIDR_EL0 %#llx -> %#llx (bit 48 %d -> %d), errno %d -> %d",
++                     names[r->status], r->set_fn, r->get_fn, r->update_tpidr, r->before, r->after,
++                     (unsigned long long)r->tpidr_before, (unsigned long long)r->tpidr_after,
++                     !!(r->tpidr_before & PP_X18_ABI_TPIDR_BIT), !!(r->tpidr_after & PP_X18_ABI_TPIDR_BIT),
++                     r->errno_before, r->errno_after );
++}
++
++#endif /* PP_X18_ABI_H */
+diff --git a/build/ntdll-unix/signal_arm64_ios.c b/build/ntdll-unix/signal_arm64_ios.c
+index 33db472..398b913 100644
+--- a/build/ntdll-unix/signal_arm64_ios.c
++++ b/build/ntdll-unix/signal_arm64_ios.c
+@@ -73,6 +73,8 @@
+ #include <pthread/pthread.h>
+ #include <pthread/qos.h>
+ #include <fcntl.h>
++/* Playport (PLA-516): before the Wine headers, which forbid strncpy. */
++#include "../madeira_cfg.h"
+ #endif
+ #ifdef HAVE_SYS_PARAM_H
+ # include <sys/param.h>
+@@ -615,6 +617,38 @@ static __thread int ios_ss_call;
+ extern int ios_is_native_arm64_peb( void *peb );
+ extern void *ios_jit_current_peb(void);
+ 
++/* Playport (PLA-516): madeira.cfg x18-abi = 1 turns on the custom x18 ABI at
++ * the start of each native ARM64 child thread, a probe (pp_x18_abi.h). */
++#include "pp_x18_abi.h"
++struct pp_x18_abi_result pp_x18_abi_last;   /* the latest thread's, for a debugger */
++
++static void *pp_x18_abi_dlsym( const char *name )
++{
++    return dlsym( RTLD_DEFAULT, name );
++}
++
++static uint64_t pp_x18_abi_tpidr(void)
++{
++    uint64_t v;
++    __asm__ volatile( "mrs %0, TPIDR_EL0" : "=r"(v) );
++    return v;
++}
++
++static void pp_x18_abi_thread_start( TEB *teb )
++{
++    static int wanted = -1;
++    struct pp_x18_abi_result r;
++    char line[384];
++
++    if (wanted < 0) wanted = madeira_cfg_bool( "x18-abi", 0 );
++    if (!wanted || !ios_is_native_arm64_peb( teb->Peb )) return;
++    pp_x18_abi_enable( pp_x18_abi_dlsym, pp_x18_abi_tpidr, &r );
++    pp_x18_abi_describe( &r, line, sizeof(line) );
++    dprintf( 2, "[x18-abi] tid %04x teb %p: %s (PLA-516)\n",
++             (unsigned int)(ULONG_PTR)teb->ClientId.UniqueThread, (void *)teb, line );
++    pp_x18_abi_last = r;
++}
++
+ /* The system call number when pc, an illegal instruction in a thread of the
+  * pseudo-process peb, is Wine's x86-64 stub in a native ARM64 child, else -1.
+  * The thread then enters __wine_syscall_dispatcher as the child's own aarch64
+@@ -14630,6 +14664,9 @@ void init_syscall_frame( LPTHREAD_START_ROUTINE entry, void *arg, TEB *teb )
+      * when x18=0, [x18+0x60] returns PEB=0 from the hardware zero page
+      * without faulting, so the Mach handler can't intervene. */
+ #endif
++#ifdef WINE_IOS
++    pp_x18_abi_thread_start( teb );
++#endif
+ 
+     pthread_sigmask( SIG_UNBLOCK, &server_block_set, NULL );
+ }

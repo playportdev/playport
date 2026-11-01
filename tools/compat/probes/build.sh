@@ -72,7 +72,10 @@
 #          pool must get them back), system32's ntdll read into RWX memory
 #          and its NtProtectVirtualMemory export called there, a thread and
 #          an ARM64 child of its own; exit 42 when every check passes
-#          (arm64.c, PLA-512, PLA-514, decision 0170)
+#          (arm64.c, PLA-512, PLA-514, decision 0170); with `x18` as its
+#          arguments it then reports whether x18 survives kernel entries,
+#          a context switch, Wine calls and an exception, plain and with
+#          the custom x18 ABI bit set, without changing the exit code (PLA-516)
 #   arm64-fault  the same program writing through a null pointer: the play
 #          must end as a failed one (arm64-fault.exe)
 #   arm64-min  aarch64 with no C runtime: kernel32 only, ExitProcess(42)
