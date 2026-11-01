@@ -13,8 +13,10 @@ USBMUXD_SOCKET_ADDRESS set.
   afc.py BUNDLE_ID ls REMOTE      one line per entry: its size (- for a directory) and name, a
                                   directory with a trailing /, a link with -> and its target
   afc.py BUNDLE_ID rm REMOTE      delete one .zip file directly in Documents/ (what import: takes; a
-                                  file a person or a probe put there), or a text bar secret file
-                                  (put-secret's) with the REMOTE.part a cut-short put-secret left.
+                                  file a person or a probe put there), a text bar secret file
+                                  (put-secret's) with the REMOTE.part a cut-short put-secret left, or
+                                  a diagnostic NAME.bin a dev build's runtime wrote into a title's
+                                  config folder (Documents/prefix/Documents/title-cfg/TITLE/).
                                   Nothing else: no directory, no other name, none of the app's own
                                   files
   afc.py BUNDLE_ID put-secret REMOTE
@@ -156,15 +158,24 @@ async def main(bundle_id, op, args):
             sys.exit(__doc__)
 
 
+TITLE_DUMP = re.compile(r"Documents/prefix/Documents/title-cfg/([^/]+)/([A-Za-z0-9._-]+\.bin)")
+
+
 def rm_refusal(path):
     """Why rm will not delete this path, or None: only Documents/NAME.zip, NAME a plain file
-    name (the container also holds the Wine prefix and the Steam session), or a text bar
-    secret file (secret_refusal)."""
+    name (the container also holds the Wine prefix and the Steam session), a text bar
+    secret file (secret_refusal), or a diagnostic dump a dev build's runtime wrote into a
+    title's config folder, Documents/prefix/Documents/title-cfg/TITLE/NAME.bin (the app
+    writes only madeira.cfg there; $MADEIRA_DOCS_DIR points the runtime at it)."""
     if secret_refusal(path) is None:
+        return None
+    dump = TITLE_DUMP.fullmatch(path)
+    if dump and dump[1] not in (".", "..") and dump[2] != ".bin":
         return None
     name = path[len("Documents/"):] if path.startswith("Documents/") else ""
     if not name or "/" in name or name in (".", "..") or not name.endswith(".zip") or name == ".zip":
-        return "rm deletes only Documents/NAME.zip (a file put there for import:) or a text bar secret file"
+        return ("rm deletes only Documents/NAME.zip (a file put there for import:), a text bar secret file"
+                " or a diagnostic Documents/prefix/Documents/title-cfg/TITLE/NAME.bin")
     return None
 
 

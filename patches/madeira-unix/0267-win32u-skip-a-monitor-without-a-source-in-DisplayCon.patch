@@ -1,0 +1,63 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 1 Nov 2026 03:57:58 +0100
+Subject: [PATCH] win32u: skip a monitor without a source in
+ DisplayConfigGetDeviceInfo
+
+NtUserDisplayConfigGetDeviceInfo (sysparams_ios.c, the iOS build's copy of
+Wine's sysparams.c) looks a target up by its output id and
+then compares the adapter LUID through monitor->source->gpu. A monitor
+can have no source (a detached one; the rest of sysparams.c checks for
+it), and its output id can match the one asked for, so the lookup read
+through a NULL source while holding display_lock.
+
+World of Warcraft's ARM64 client asks for
+DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO before it creates its
+D3D12 device. On the phone the read faulted (address 0x120,
+source->gpu), the access violation went to the game's handler, which
+went on, and display_lock stayed locked: the main thread's next
+vkGetPhysicalDeviceProperties (get_gpu_info_from_uuid) waited on it
+forever, before any window or frame.
+
+A monitor without a source belongs to no adapter, so the target-name,
+preferred-mode and advanced-color lookups now pass over it, as
+NtUserQueryDisplayConfig does.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-31-wow-arm64-start.md
+Offered-upstream: not yet; WineHQ 11.20's sysparams.c has the same lookups
+---
+ build/win32u-unix/sysparams_ios.c | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/build/win32u-unix/sysparams_ios.c b/build/win32u-unix/sysparams_ios.c
+index 1916700..94a4c39 100644
+--- a/build/win32u-unix/sysparams_ios.c
++++ b/build/win32u-unix/sysparams_ios.c
+@@ -8513,7 +8513,7 @@ static NTSTATUS display_config_get_device_info_unlogged( DISPLAYCONFIG_DEVICE_IN
+ 
+         LIST_FOR_EACH_ENTRY(monitor, &monitors, struct monitor, entry)
+         {
+-            if (target_name->header.id != monitor->output_id) continue;
++            if (!monitor->source || target_name->header.id != monitor->output_id) continue;
+             if (memcmp( &target_name->header.adapterId, &monitor->source->gpu->luid,
+                         sizeof(monitor->source->gpu->luid) ))
+                 continue;
+@@ -8560,7 +8560,7 @@ static NTSTATUS display_config_get_device_info_unlogged( DISPLAYCONFIG_DEVICE_IN
+ 
+         LIST_FOR_EACH_ENTRY(monitor, &monitors, struct monitor, entry)
+         {
+-            if (preferred_mode->header.id != monitor->output_id) continue;
++            if (!monitor->source || preferred_mode->header.id != monitor->output_id) continue;
+             if (memcmp( &preferred_mode->header.adapterId, &monitor->source->gpu->luid,
+                         sizeof(monitor->source->gpu->luid) ))
+                 continue;
+@@ -8665,7 +8665,7 @@ static NTSTATUS display_config_get_device_info_unlogged( DISPLAYCONFIG_DEVICE_IN
+ 
+         LIST_FOR_EACH_ENTRY(monitor, &monitors, struct monitor, entry)
+         {
+-            if (color_info->header.id != monitor->output_id) continue;
++            if (!monitor->source || color_info->header.id != monitor->output_id) continue;
+             if (memcmp( &color_info->header.adapterId, &monitor->source->gpu->luid,
+                         sizeof(monitor->source->gpu->luid) ))
+                 continue;

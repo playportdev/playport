@@ -700,6 +700,21 @@ class UiEnvTest(unittest.TestCase):
             self.assertIsNotNone(afc.secret_refusal(bad), bad)
         self.assertIsNotNone(afc.rm_refusal("Documents/ui-text-0a1b2c3d-3.part"))
 
+    def test_afc_rm_deletes_a_diagnostic_dump_in_a_title_config_folder(self):
+        """rm reaches a NAME.bin a dev runtime wrote into title-cfg/TITLE/ (PLA-514's wow-dec.bin), never
+        madeira.cfg, the folder, a deeper path or the rest of the prefix."""
+        spec = importlib.util.spec_from_file_location("afc_tool", os.path.join(TOOLS, "afc.py"))
+        afc = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(afc)
+        cfg = "Documents/prefix/Documents/title-cfg/"
+        self.assertIsNone(afc.rm_refusal(cfg + "World of Warcraft Classic Era/wow-dec.bin"))
+        for bad in (cfg + "World of Warcraft Classic Era/madeira.cfg", cfg + "World of Warcraft Classic Era",
+                    cfg + "World of Warcraft Classic Era/", cfg + "World of Warcraft Classic Era/.bin",
+                    cfg + "W/sub/x.bin", cfg + "../x.bin", cfg + "./x.bin", cfg + "x.bin", cfg + "/x.bin",
+                    cfg + "W/x.bin.part", cfg + "W/x y.bin", "Documents/prefix/Documents/x.bin",
+                    "Documents/prefix/drive_c/Games/W/x.bin", "Documents/title-cfg/W/x.bin", cfg[:-1]):
+            self.assertIsNotNone(afc.rm_refusal(bad), bad)
+
     def test_jit_unreachable_is_its_own_failure(self):
         """LocalDevVPN off: the app's launch outcome names the helper's timeout; a person must act."""
         m = load()

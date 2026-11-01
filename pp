@@ -39,7 +39,7 @@ Drive the phone (dev app)
                                   (a running frame captured, replayed and profiled on the phone)
   pp pad send STEP... | push SCRIPT | rest [--shot FILE]
                                   press buttons on the scripted pad of a running title
-  pp phone status | kill | log [DIR] | ls REMOTE | pull REMOTE [DIR] | rm Documents/NAME.zip | shot [FILE] | crashes [DIR] [--since T]
+  pp phone status | kill | log [DIR] | ls REMOTE | pull REMOTE [DIR] | rm Documents/NAME.zip | rm Documents/prefix/Documents/title-cfg/TITLE/NAME.bin | shot [FILE] | crashes [DIR] [--since T]
   pp phone put LOCAL Documents/Import/NAME/FILE
                                   copy a file into the app's import inbox (what a person does with
                                   Files), then add it through the UI: pp ui --action import:Import/NAME
@@ -393,7 +393,8 @@ def cmd_phone(args):
                 return ev.result(True, 0, path=rest[1], put=said)
             if sub == "rm":
                 if len(rest) != 1:
-                    return phonelib.fail(ev, "pp phone rm Documents/NAME.zip (a zip put there for import:)", 2)
+                    return phonelib.fail(ev, "pp phone rm Documents/NAME.zip (a zip put there for import:) or "
+                                         "Documents/prefix/Documents/title-cfg/TITLE/NAME.bin (a runtime's diagnostic dump)", 2)
                 return ev.result(True, 0, removed=phone.remove(rest[0]).strip())
             if sub == "shot":
                 path = phone.screenshot(rest[0] if rest else os.path.join(out, "screen.png"))

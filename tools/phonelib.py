@@ -658,8 +658,8 @@ class Phone:
         return self.afc("put-import", "put-import", remote, data=data, secs=600)
 
     def remove(self, remote, check=True):
-        """Delete one Documents/NAME.zip or text bar secret file (afc.py rm refuses anything else);
-        afc.py's reply."""
+        """Delete one Documents/NAME.zip, text bar secret file or title-cfg/TITLE/NAME.bin
+        diagnostic dump (afc.py rm refuses anything else); afc.py's reply."""
         return self.afc("rm", "rm", remote, check=check)
 
     def put_secret(self, remote, data):

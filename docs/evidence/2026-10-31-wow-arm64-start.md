@@ -1,6 +1,6 @@
 # World of Warcraft Classic Era (ARM64 client) start-up on the phone, 2026-10-31
 
-**Linear:** PLA-514. Branch `dev/pla-516-battlenet`, madeira-unix 0252–0264, decision 0176 and its amendment; runs 2026-10-31 to 2026-11-01. The game was started from the Library
+**Linear:** PLA-514. Branch `dev/pla-516-battlenet`, madeira-unix 0252–0267, decision 0176 and its amendment; runs 2026-10-31 to 2026-11-01. The game was started from the Library
 (`./pp ui --play bnet-wow_classic_era --until first-frame+60 --shot --wait 300`) as a native ARM64 child.
 Run directories are under `.work/ui-runs/`.
 
@@ -195,3 +195,52 @@ Gates on IPA `6cc28905b97f5c815402d61b25ff527cc5ea13842679610f7ec58003a4d77d79` 
 | Hollow Knight first-frame+10 | passes | 20261101T032159 |
 | `arm64` probe | exit 42 (all checks pass) | 20261101T032252 |
 | `d3d12` probe on Vulkan | exit 0 | 20261101T032323 |
+
+## The idle was a thread the livelock breaker ended; then display_lock (madeira-unix 0266, 0267)
+
+- **What the main thread waited for** (run 20261101T031619, read off the decrypted image): the loop at
+  +0x293b618 creates WoW's worker threads one at a time (+0x2e5538: `_beginthreadex` suspended, store the
+  start routine and argument in a slot, `ResumeThread`) and, after each, waits (+0x2e5428, a parking lot
+  on `NtWaitForAlertByThreadId`) until the new thread's thunk (+0x2e5500) has taken them and cleared the
+  slot. Every thread first raises the planned UDF at +0x3367a4 in WoW's `DLL_THREAD_ATTACH` callback.
+  The Mach handler's livelock breaker (ml385/ml876) kept one count for the whole process; 28 threads at
+  the same pc brought it to 50, and it logged `[fault-stuck] BREAKING LOOP: page 0x4000 pc 0x10c64e7a4
+  repeated 50 times -> diverting thread to abort_thread` on the 29th, tid `00dc`, inside the callback:
+  that thread never reached the thunk and the main thread waited for it for the rest of the run.
+- **Fix (0266):** the breaker's rule moves to `pp_fault_loop.h`, keyed on the faulting Mach thread too: a
+  fault on another thread starts a new run. Alignment faults stay uncounted (0132), a new address is
+  still progress up to the storm ceiling. Test: `tools/tests/test_fault_loop.py`.
+- **Run 20261101T033858** (IPA `62ef5567cd955ff8288c777fd79b61c4dd20693480ebb8c42136c493e24c130a`): no
+  thread is ended; 57 threads start (named ones include `WowConnMain`, `bs Network`, `TACT Task Thread`,
+  `WatchdogThread`), WoW loads dxgi.dll and DXVK's DXGI creates a Vulkan instance and finds the A19 Pro
+  GPU. At +17 s the main thread faults in host code, `NtUserDisplayConfigGetDeviceInfo` (+0x170 into it)
+  for `DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO`: a monitor whose output id matches has no
+  source, and `monitor->source->gpu` reads address 0x120. The access violation goes to WoW's handler,
+  which carries on, with `display_lock` still held; its next `vkGetPhysicalDeviceProperties`
+  (`get_gpu_info_from_uuid` → `lock_display_devices`) waits on that lock, held by the same thread, for
+  the rest of the run (`[thread-sample] … mutex=S1Probe\`display_lock owner_tid64=` itself).
+- **Fix (0267):** the target-name, preferred-mode and advanced-color lookups in `sysparams_ios.c` pass
+  over a monitor without a source, as `NtUserQueryDisplayConfig` does. WineHQ 11.20's `sysparams.c` has
+  the same lookups. (`sysparams_ios.c` is what the iOS build compiles, not Wine's `sysparams.c`.)
+- **Run 20261101T040227** (IPA `7b46d47396345036a31435624933277f00259dfb65b99a85ebac6063415035e9`, the 0267 build): no fault in the display code. vkd3d-proton
+  creates the D3D12 device; WoW writes `Logs/gx.log` (pulled): `Force API D3D12`, adapter
+  `"Apple A19 Pro GPU" 3GB … dx12:true`, monitor 1564x720 at 120 Hz, `D3d12 Device Create Successful
+  (794.5 ms)`, `Using shader family dx_5_0`. Then the main thread repeats, 525 times in about 30 s:
+  open a file, `NtAllocateVirtualMemory` 0x148000 bytes `PAGE_EXECUTE_READWRITE`, read 1,343,488 bytes
+  into it, run code in it (an ILL at +0x8e520 of each copy). None is freed; each becomes a 1.3 MB JIT
+  pool alias (aliases 103 → 621), the 896 MB pool is exhausted at about +35 s and the launch ends
+  (`pool=exhausted:head`, the app's "ran out of JIT memory" alert). No window, no login screen yet.
+  Which file this is, and whether WoW reloads it because a step in the loaded code fails, is open.
+- Also: the 55 MB `wow-dec.bin` and a 940 MB `fex-jit-dump.bin` (diagnostic dumps in the title's config
+  folder) were removed with `pp phone rm`, which now deletes a `title-cfg/TITLE/NAME.bin` and nothing
+  else there. The unix stage's `LINK FAIL … libwineserver.a: duplicate symbol` line predates this work
+  (release 0.3.0's log has it): `stage_linktest` links the archive without the `ws_` renames on purpose,
+  beside the renamed one, which links (`LINK OK … libwineserver-ws4.a`).
+
+Gates on IPA `7b46d47396345036a31435624933277f00259dfb65b99a85ebac6063415035e9` (the 0267 build):
+
+| Check | Result | Run |
+|---|---|---|
+| Hollow Knight first-frame+10 | passes | 20261101T040449 |
+| `arm64` probe | exit 42 (all checks pass) | 20261101T040540 |
+| `d3d12` probe on Vulkan | exit 0 | 20261101T040611 |
