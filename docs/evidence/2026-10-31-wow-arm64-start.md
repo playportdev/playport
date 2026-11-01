@@ -326,3 +326,24 @@ Gates on IPA `9447607cde41bc0f6a3c83a201d6a74e19f5fb54183ccec0b39bb6b1bde7ab7b` 
 | Hollow Knight first-frame+10 | first frame at +9.09 s, passes | 20261101T100723 |
 | `arm64` probe | exit 0x2a (all checks pass) | 20261101T100811 |
 | `d3d12` probe on Vulkan | exit 0 | 20261101T100905 |
+
+**World of Warcraft (retail) on the 0270 build.** Classic Era was uninstalled from the phone to free
+space, so the retail client (`Wow-arm64.exe`) ran instead: `./pp ui --play bnet-wow --until
+first-frame+90 --shot --wait 300`.
+
+- **Run 20261101T101129:** no frame by +312 s (exit 2). The load's patcher patched 547 sites in the
+  copy's `.text` (the rest was still encrypted). Unlike Classic Era, the client flushed one 1 KB window
+  only (`[remap] … flushed 0x7043d15000+0x400, its copy at 0x108690000`, RVA 0xb5000), and the image's
+  re-patch found no x18 site in it. The main thread then ran at 98 % CPU, every sample at
+  `Wow-arm64.exe`+0xb5204.
+- **Diagnostic run 20261101T102407** (IPA with the parked `spin/0265-DIAG-spin-dump.patch`, not
+  committed; the clean IPA `9447607c…` was reinstalled after it): +0xb51e0..+0xb5214 is a byte-copy
+  loop that copies 0x1000 bytes from the stack (`ldrsb w8, [x8]; … strb w8, [x12]; cbnz x10`). It reads
+  no x18. Its destination x12 = 0x141a1c94c is in the client's own PEB page (`child_peb=0x141a1c000`).
+  Between the 2 s and 10 s watchdog dumps the destination moved from 0x141a1c1d3 to 0x141a1c94d
+  (1,914 bytes in 8 s, x10 0xe2d → 0x6b3) while the process handled about 600 Mach exception
+  messages. The PEB page now starts with the page's own address and a return address
+  (`0x10a5dab10`, +0x27b10). All of the 28,672+ `x18-redir2` dispatches to `KiUserExceptionDispatcher`
+  happened before the flush. Still open: where the destination comes from, why each store costs
+  about 4 ms, and what the same loop writes on Linux. This is the next blocker. It is not an x18
+  rewrite gap.
