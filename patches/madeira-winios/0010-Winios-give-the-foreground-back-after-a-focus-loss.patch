@@ -1,0 +1,331 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 1 Nov 2026 20:34:05 +0100
+Subject: [PATCH] Winios: give the foreground back after a focus loss
+
+A focus loss deactivates the foreground window on its own thread, which
+leaves Wine with no foreground window. Focus back called
+NtUserSetForegroundWindow(saved) from whichever guest thread drained the
+event; from a thread of another Wine process the server refuses it (the
+process is not the foreground's and its input is older), so the
+foreground stayed empty: every key and character went nowhere and every
+touch was dropped for want of a client area (WoW after the iOS Passwords
+sheet: focus back fg=0x0 -> 0x0 ok=0, then 173 dropped touches).
+
+Focus back now uses Wine's internal foreground request, which any thread
+may make (what winemac.drv uses for the host's activations), on the
+saved window if it can still be activated, else the topmost activatable
+window of its process, else the topmost of any (the host app's
+host_focus_pick). Input posted after it waits at the ring's head until
+a window is the foreground again, 0.5 s at most. Input while the app is
+in front and no window is the foreground makes the same restore, so a
+tap on the game recovers too; after one that did not land, input does
+not wait again for 2 s. The window's focused child at the loss gets the
+focus back once the window is active again on its own thread.
+
+Linear: PLA-516
+Class: host-app
+Evidence: app/tests/focus_test.c (host checks; phone gate not run); the owner's WoW log of 2026-11-01 (focus back ok=0, fg 0 afterwards)
+Offered-upstream: no; the host app's focus events
+---
+ app/Madeira/Winios/Winios.m | 218 +++++++++++++++++++++++++++++++-----
+ 1 file changed, 190 insertions(+), 28 deletions(-)
+
+diff --git a/app/Madeira/Winios/Winios.m b/app/Madeira/Winios/Winios.m
+index fd3f11f..924d1f2 100644
+--- a/app/Madeira/Winios/Winios.m
++++ b/app/Madeira/Winios/Winios.m
+@@ -561,33 +561,115 @@ unsigned int winios_input_pending(void) {
+  *   WINIOS_EV_FOCUS         x = 0: the app left the foreground; the
+  *       foreground window is deactivated on its own thread, so the game gets
+  *       WM_ACTIVATEAPP(FALSE)/WM_KILLFOCUS (winios_drain_focus). x = 1: the
+- *       window that lost it gets it back.
++ *       window that lost it, or the game's topmost window, is activated again.
+  *
+  * Ring order is kept: a focus loss posted before the key releases reaches the
+- * game while the keys are still down, as on a desktop. */
++ * game while the keys are still down, as on a desktop, and input posted after
++ * a focus back waits until a window is the foreground again. */
+ #define WINIOS_EV_CLIENT_MOUSE 2
+ #define WINIOS_EV_FOCUS        3
+ 
+ typedef struct { int left, top, right, bottom; } winios_wrect;   /* Wine RECT: LONG is 32-bit on LP64 */
+ typedef struct { int x, y; } winios_wpoint;
+ extern HWND NtUserGetForegroundWindow(void);
+-extern BOOL NtUserSetForegroundWindow(HWND hwnd);
+ extern HWND get_desktop_window(void);
+ extern BOOL get_client_rect(HWND hwnd, winios_wrect *rect, UINT dpi);
+ extern BOOL client_to_screen(HWND hwnd, winios_wpoint *pt);
+ 
+ extern HWND get_active_window(void);
+ extern int set_active_window(HWND hwnd, HWND *prev, int mouse, int focus, unsigned int new_active_thread_id);
+-extern int host_pads_release_all(void);   /* app HostIO hio_pad_block.c */
+-
+-static HWND g_focus_saved;          /* the window a focus loss deactivated */
++extern int set_foreground_window(HWND hwnd, int mouse, int internal);
++extern HWND *list_window_children(HWND hwnd);
++extern unsigned int get_window_long(HWND hwnd, int offset);
++extern unsigned int get_window_thread(HWND hwnd, unsigned int *process);
++extern int is_window(HWND hwnd);
++extern HWND get_focus(void);
++extern HWND NtUserSetFocus(HWND hwnd);
++extern HWND NtUserGetAncestor(HWND hwnd, UINT type);
++extern int host_pads_release_all(void);   /* app HostIO hio_pads.c */
++/* app HostIO hio_focus.c (host_io.h): the window to activate, or -1. */
++typedef struct { const void *hwnd; unsigned int pid, style, exstyle; } winios_focus_window;
++extern int host_focus_pick(const winios_focus_window *wins, int n, const void *saved, unsigned int saved_pid);
++
++/* Focus state, under g_focus_lock; no Wine call that sends a message is made
++ * holding it (a drain on another thread may be the one that must answer). */
++static pthread_mutex_t g_focus_lock = PTHREAD_MUTEX_INITIALIZER;
++static int g_app_away;              /* between a focus loss and the focus back */
++static HWND g_focus_saved;          /* the window the last focus loss deactivated */
++static unsigned int g_focus_pid;    /* its Wine process */
++static HWND g_focus_child;          /* its focused child at the loss, given back once it is active */
++static double g_child_until;        /* after a focus back, how long g_focus_child waits for that */
++static HWND g_restore_target;       /* the window a restore activates */
++static double g_restore_since;      /* a restore not seen to land yet: input waits */
++static double g_restore_retry_at;   /* after a restore that did not land, input-driven ones wait until */
+ static double g_focus_wait_since;   /* when a focus loss began waiting for its window's thread */
+ 
++static int winios_fg_none(HWND fg) {
++    return !fg || fg == get_desktop_window();
++}
++
++/* The window to give the foreground back to (hio_focus.c), or NULL. */
++static HWND winios_focus_target(HWND saved, unsigned int saved_pid) {
++    HWND *list = list_window_children(NULL), pick = NULL;
++    winios_focus_window *wins;
++    int n = 0, i;
++    if (!list) return NULL;
++    while (list[n]) n++;
++    if ((wins = calloc(n ? n : 1, sizeof(*wins)))) {
++        for (i = 0; i < n; i++) {
++            wins[i].hwnd = list[i];
++            get_window_thread(list[i], &wins[i].pid);
++            wins[i].style = get_window_long(list[i], -16);     /* GWL_STYLE */
++            wins[i].exstyle = get_window_long(list[i], -20);   /* GWL_EXSTYLE */
++        }
++        i = host_focus_pick(wins, n, saved, saved_pid);
++        if (i >= 0) pick = list[i];
++        free(wins);
++    }
++    free(list);
++    return pick;
++}
++
++/* Activate target from whatever thread drains: Wine's internal foreground
++ * request (NtUserSetForegroundWindowInternal, what winemac.drv uses for the
++ * host's activations) skips the foreground-stealing check. On the window's
++ * own thread it activates at once; on another it posts WM_WINE_SETACTIVEWINDOW
++ * to that thread, and input waits in winios_focus_ready until it has. */
++static int winios_focus_restore(HWND target, const char *why) {
++    HWND fg = NtUserGetForegroundWindow();
++    int ok = set_foreground_window(target, 0, 1);
++    HWND now = NtUserGetForegroundWindow();
++    fprintf(stderr, "[winios] focus restore (%s): target=%p fg=%p -> %p ok=%d\n", why, target, fg, now, ok);
++    return ok;
++}
++
++/* Give the saved focused child back once its window is active on this thread. */
++static void winios_focus_child_restore(void) {
++    HWND child, target, focus;
++    if (!g_focus_child) return;   /* unlocked peek: the common case costs nothing */
++    pthread_mutex_lock(&g_focus_lock);
++    child = g_focus_child;
++    target = g_restore_target;
++    if (!child || g_app_away || !g_child_until) {
++        child = NULL;                 /* not back yet */
++    } else if (target && get_active_window() == target) {
++        g_focus_child = NULL;         /* this is its thread, and it is active again */
++    } else {
++        if (CACurrentMediaTime() > g_child_until) g_focus_child = NULL;   /* it never was */
++        child = NULL;
++    }
++    pthread_mutex_unlock(&g_focus_lock);
++    if (!child || !is_window(child) || NtUserGetAncestor(child, 2 /* GA_ROOT */) != target) return;
++    focus = get_focus();
++    if (focus && focus != target) return;   /* the game chose its own focus */
++    fprintf(stderr, "[winios] focus back to child %p of %p: prev=%p\n", child, target, NtUserSetFocus(child));
++}
++
+ static void winios_drain_client_mouse(const winios_input_event_t *e) {
+     HWND fg = NtUserGetForegroundWindow();
+     winios_wrect rc;
+     winios_wpoint pt;
+-    if (!fg || fg == get_desktop_window() || !get_client_rect(fg, &rc, 0) || rc.right <= 0 || rc.bottom <= 0) {
++    if (winios_fg_none(fg) || !get_client_rect(fg, &rc, 0) || rc.right <= 0 || rc.bottom <= 0) {
+         fprintf(stderr, "[winios] client pointer dropped: no foreground client area (fg=%p)\n", fg);
+         return;
+     }
+@@ -609,8 +691,20 @@ static void winios_drain_client_mouse(const winios_input_event_t *e) {
+  * window's thread, so a focus loss that another thread's drain meets stays at
+  * the head of the ring, with everything behind it, until that thread drains;
+  * after 0.5 s it is dropped with a log line rather than holding input back.
+- * Focus back is NtUserSetForegroundWindow(saved), which is fine from any
+- * thread: that window has one.
++ *
++ * Focus back (PLA-516): the deactivation leaves no foreground window (fg 0),
++ * and NtUserSetForegroundWindow(saved) failed from a drain on another Wine
++ * process's thread (the server refuses a process that is not the
++ * foreground's: STATUS_ACCESS_DENIED), which left fg 0 for good: every key
++ * and character went nowhere and every touch was dropped (WoW after the
++ * Passwords sheet). The foreground now comes back through Wine's internal
++ * request, which any thread may make, to the saved window if it can still be
++ * activated, else the game's topmost window (hio_focus.c), and input posted
++ * after it waits at the ring's head until it has landed (0.5 s at most). Any
++ * input while the app is in front and fg is 0 makes the same restore, so a
++ * tap on the game recovers too; after one that did not land, input waits for
++ * none for 2 s. The saved window's focused child gets the focus back once the
++ * window is active again on its own thread.
+  *
+  * Held game-controller buttons are released here too, after the loss has
+  * reached the game (or was given up), not by the host when the app resigns:
+@@ -618,28 +712,72 @@ static void winios_drain_client_mouse(const winios_input_event_t *e) {
+  * event, but its pad release went straight to the block, so a game read the
+  * pad at rest before it saw WM_KILLFOCUS (session 2's held=0). */
+ 
+-/* 1 when the focus event at the ring's head can be handled on this thread. */
++/* 1 when the event at the ring's head can be handled on this thread. */
+ static int winios_focus_ready(const winios_input_event_t *e) {
+-    HWND fg;
++    HWND fg, target = NULL;
+     double now;
+-    if (e->type != WINIOS_EV_FOCUS || e->x) return 1;
++    int ready = 1;
++    if (e->type == WINIOS_EV_FOCUS) {
++        if (e->x) return 1;
++        fg = NtUserGetForegroundWindow();
++        if (winios_fg_none(fg) || get_active_window() == fg) return 1;
++        pthread_mutex_lock(&g_focus_lock);
++        now = CACurrentMediaTime();
++        if (!g_focus_wait_since) g_focus_wait_since = now;
++        ready = now - g_focus_wait_since >= 0.5;
++        pthread_mutex_unlock(&g_focus_lock);
++        return ready;
++    }
++    /* Input: wait for a pending restore, or start one when no window has the foreground. */
++    if (!g_restore_since && g_app_away) return 1;   /* unlocked peeks; the host's releases after a loss */
+     fg = NtUserGetForegroundWindow();
+-    if (!fg || fg == get_desktop_window() || get_active_window() == fg) return 1;
++    if (!g_restore_since && !winios_fg_none(fg)) return 1;
++    if (pthread_mutex_trylock(&g_focus_lock)) return 0;   /* another drain (or this one, re-entered) is at it */
+     now = CACurrentMediaTime();
+-    if (!g_focus_wait_since) g_focus_wait_since = now;
+-    return now - g_focus_wait_since >= 0.5;
++    if (g_restore_since) {
++        if (!winios_fg_none(fg)) {
++            fprintf(stderr, "[winios] focus restored: fg=%p after %.3f s\n", fg, now - g_restore_since);
++            g_restore_since = 0;
++        } else if (now - g_restore_since >= 0.5) {
++            fprintf(stderr, "[winios] focus restore to %p NOT done in 0.5 s; input goes on (fg=%p)\n", g_restore_target, fg);
++            g_restore_since = 0;
++            g_restore_retry_at = now + 2.0;
++        } else {
++            ready = 0;
++        }
++    } else if (!g_app_away && winios_fg_none(fg) && now >= g_restore_retry_at) {
++        if ((target = winios_focus_target(g_focus_saved, g_focus_pid))) {
++            g_restore_target = target;
++            g_restore_since = now;
++            g_child_until = now + 2.0;
++        } else {
++            g_restore_retry_at = now + 2.0;   /* no window to activate: drop input as before */
++        }
++    }
++    pthread_mutex_unlock(&g_focus_lock);
++    if (target) {
++        winios_focus_restore(target, "input with no foreground window");
++        ready = 0;   /* the next look sees whether it landed */
++    }
++    return ready;
+ }
+ 
+ static void winios_drain_focus(int active) {
+-    HWND fg = NtUserGetForegroundWindow(), prev = NULL;
+-    double waited = g_focus_wait_since ? CACurrentMediaTime() - g_focus_wait_since : 0;
+-    int ok = 0;
++    HWND fg = NtUserGetForegroundWindow(), prev = NULL, focus = NULL, target = NULL, saved;
++    unsigned int pid = 0;
++    double waited;
++    int ok = 0, pads;
++    pthread_mutex_lock(&g_focus_lock);
++    waited = g_focus_wait_since ? CACurrentMediaTime() - g_focus_wait_since : 0;
+     g_focus_wait_since = 0;
++    g_app_away = !active;
++    if (!active) g_restore_since = g_child_until = 0;
++    pthread_mutex_unlock(&g_focus_lock);
+     if (!active) {
+-        int pads;
+-        if (!fg || fg == get_desktop_window()) {
++        if (winios_fg_none(fg)) {
+             pads = host_pads_release_all();
+-            fprintf(stderr, "[winios] focus lost: no foreground window to deactivate (fg=%p); pads released=%d\n", fg, pads);
++            fprintf(stderr, "[winios] focus lost: no foreground window to deactivate (fg=%p, saved=%p); pads released=%d\n",
++                    fg, g_focus_saved, pads);
+             return;
+         }
+         if (get_active_window() != fg) {
+@@ -648,16 +786,38 @@ static void winios_drain_focus(int active) {
+                     fg, waited, pads);
+             return;
+         }
++        focus = get_focus();
++        get_window_thread(fg, &pid);
+         ok = set_active_window(NULL, &prev, 0, 1, 0);
+-        if (ok) g_focus_saved = fg;
++        if (ok) {
++            pthread_mutex_lock(&g_focus_lock);
++            g_focus_saved = fg;
++            g_focus_pid = pid;
++            g_focus_child = focus != fg ? focus : NULL;
++            g_restore_retry_at = 0;
++            pthread_mutex_unlock(&g_focus_lock);
++        }
+         pads = host_pads_release_all();
+         fprintf(stderr, "[winios] focus lost: pads released=%d after the deactivation\n", pads);
+-    } else if (g_focus_saved) {
+-        ok = NtUserSetForegroundWindow(g_focus_saved);
+-        g_focus_saved = NULL;
++        fprintf(stderr, "[winios] focus lost fg=%p (focus %p, pid %04x) -> %p active=%p ok=%d waited=%.3f s\n",
++                fg, focus, pid, NtUserGetForegroundWindow(), get_active_window(), ok, waited);
++        return;
+     }
+-    fprintf(stderr, "[winios] focus %s fg=%p -> %p active=%p ok=%d waited=%.3f s\n", active ? "back" : "lost",
+-            fg, NtUserGetForegroundWindow(), get_active_window(), ok, waited);
++    pthread_mutex_lock(&g_focus_lock);
++    saved = g_focus_saved;
++    g_restore_retry_at = 0;
++    if (winios_fg_none(fg) && (target = winios_focus_target(saved, g_focus_pid))) {
++        g_restore_target = target;
++        g_restore_since = CACurrentMediaTime();
++        g_child_until = g_restore_since + 2.0;
++    }
++    pthread_mutex_unlock(&g_focus_lock);
++    if (!winios_fg_none(fg))
++        fprintf(stderr, "[winios] focus back: fg=%p kept (saved=%p)\n", fg, saved);
++    else if (!target)
++        fprintf(stderr, "[winios] focus back: no window to activate (saved=%p)\n", saved);
++    else
++        winios_focus_restore(target, saved == target ? "focus back, the saved window" : "focus back, the topmost window");
+ }
+ 
+ /* fx, fy: 0..65535 across the client area; flags: MOUSEEVENTF_* (ABSOLUTE implied). */
+@@ -688,6 +848,7 @@ BOOL winios_pProcessEvents(DWORD mask) {
+             winios_dump_window_tree();
+         }
+     }
++    winios_focus_child_restore();
+     BOOL drained = FALSE;
+     for (;;) {
+         winios_input_event_t e;
+@@ -699,7 +860,8 @@ BOOL winios_pProcessEvents(DWORD mask) {
+         e = g_input_q.buf[g_input_q.tail];
+         unsigned int at = g_input_q.tail;
+         pthread_mutex_unlock(&g_input_q.lock);
+-        /* A focus loss waits at the head for its window's thread (winios_drain_focus). */
++        /* A focus loss waits at the head for its window's thread, input for a
++         * focus restore to land (winios_drain_focus, winios_focus_ready). */
+         if (!winios_focus_ready(&e)) break;
+         pthread_mutex_lock(&g_input_q.lock);
+         if (g_input_q.tail != at) {   /* another drain took it meanwhile */

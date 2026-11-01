@@ -60,6 +60,23 @@ int host_pad_xinput_summary(char *buf, unsigned int size);
  * MapVirtualKeyEx, which gives the arrows the numpad's scan codes. */
 unsigned int playport_key_scan(unsigned int vk);
 
+/* The guest window Winios activates when the app is back in the foreground, or
+ * when input arrives while no guest window is the foreground (hio_focus.c;
+ * Winios.m + patches/madeira-winios 0010). wins: the desktop's top-level
+ * windows in z-order, topmost first, with their Wine process and their
+ * GWL_STYLE/GWL_EXSTYLE; saved and saved_pid: the window the last focus loss
+ * deactivated and its process (NULL, 0: none). Returns the index of saved if it
+ * can still be activated (visible, enabled, not minimized, not a child, not
+ * WS_EX_NOACTIVATE), else of the topmost such window of saved_pid's process,
+ * else of the topmost such window, else -1. */
+typedef struct {
+    const void *hwnd;
+    unsigned int pid;
+    unsigned int style;
+    unsigned int exstyle;
+} host_focus_window;
+int host_focus_pick(const host_focus_window *wins, int n, const void *saved, unsigned int saved_pid);
+
 /* Winios.m + patches/madeira-winios/0002-Winios-accept-pointer-and-focus-events-posted-by-the.patch.
  * fx, fy: 0..65535 across the foreground window's client area; flags are
  * MOUSEEVENTF_* (ABSOLUTE is implied). active: 0 when the app leaves the

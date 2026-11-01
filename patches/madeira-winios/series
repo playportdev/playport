@@ -8,3 +8,4 @@
 0007-Winios-log-no-key-codes.patch
 0008-Winios-post-a-Unicode-character-for-the-host-app.patch
 0009-Winios-report-the-host-s-input-not-yet-posted.patch
+0010-Winios-give-the-foreground-back-after-a-focus-loss.patch
