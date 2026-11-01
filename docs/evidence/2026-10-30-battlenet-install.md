@@ -1,7 +1,8 @@
 # Battle.net store: WoW installed on the workstation (2026-10-30)
 
 **Linear:** [PLA-517](https://linear.app/playportdev/issue/PLA-517) (spec
-[PLA-516](https://linear.app/playportdev/issue/PLA-516); decision 0174 proposed).
+[PLA-516](https://linear.app/playportdev/issue/PLA-516); decision 0174 proposed). The phone's own
+install, region and language changes: [2026-10-31-battlenet-store-phone.md](2026-10-31-battlenet-store-phone.md).
 
 `BattleNetClientKit` (`app/BattleNetClient`, branch `dev/pla-517-install`) installed two products
 from Blizzard's live CDN on the workstation, region us, locale enUS, through ContentKit's install

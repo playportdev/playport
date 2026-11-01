@@ -26,7 +26,7 @@ do not apply on iOS:
 | `ProfileStats=1` | Writes Linux stats shared memory. `pp perf` has its own telemetry (0021). |
 | FEX Linux UnixLib (prctl hardware TSO and unaligned atomics, THP, VMA names) | Linux-only kernel interfaces. iOS has no separate FEX UnixLib; its entry points are no-ops (`patches/fex-port` 0030). |
 | `-march=armv8.2-a -mtune=cortex-x3` | Tuning for Snapdragon/Cortex. Apple cores need their own check. |
-| `-marm64x` for DXVK/vkd3d-proton | ARM64X serves native ARM64 callers. All guests are x86. A native ARM64 child (decision [0170](decisions/0170-native-arm64-guests.md), proposed) gets a separate `aarch64-windows` build of vkd3d-proton, DXVK's `dxgi` and the Vulkan loader instead (`build/stages/vulkan-pe.sh`). |
+| `-marm64x` for DXVK/vkd3d-proton | ARM64X serves native ARM64 callers. Guests are x86, except a native ARM64 child (decision [0170](decisions/0170-native-arm64-guests.md)), which gets a separate `aarch64-windows` build of vkd3d-proton, DXVK's `dxgi` and the Vulkan loader instead (`build/stages/vulkan-pe.sh`). |
 | fsync/ntsync, the Steam runtime, `PROTON_USE_ARM64` paths, `SilentLog`/`PROTON_LOG`, NVAPI | Linux launcher, driver or GPU specifics. In-process sync is ppsync, Playport's userspace ntsync driver ([below](#in-process-sync), 0157, proposed). |
 | FEX `client.json`/`steamwebhelper.json` app configs | These target the Linux Steam client. Playport's Steam client is native Swift. |
 | Valve Wine AVX/YMM contexts, SVE state | Not carried yet: since `patches/fex-port` 0064 the ARM64EC host has AVX128, which keeps the ymm high halves only in FEX's thread state; Wine's ARM64EC contexts drop them and never set `CONTEXT_XSTATE`, so a guest's handler cannot see them and its own AVX writes reach the code it resumes (`build/ymm-context/test.py` checks this convention). Apple CPUs have no SVE (0018). |
@@ -51,7 +51,7 @@ Wine's multi-process design into threads:
 | Wine PE side | the `arm64ec-windows`, `aarch64-windows` (including `wow64.dll`/`wow64win.dll`) and `i386-windows` DLL sets, `nls/` data; `system32` is the arm64ec set, with Wine's programs (`start`, `reg`, `conhost`, …) built for arm64ec ([decision 0082](decisions/0082-system32-programs.md)) | WineHQ wine plus Madeira's fork (`patches/wine-port`) and Valve's Wine commits (`patches/wine-valve`) |
 | FEX | `xtajit64.dll` (arm64ec, `libarm64ecfex.dll`) for x86-64 and `xtajit.dll` (aarch64, `libwow64fex.dll`) for i386: translate guest code into the JIT pool | FEX-Emu/FEX plus Madeira's port |
 | DXMT PE side | `d3d11.dll`, `dxgi.dll`, `winemetal.dll` (and `d3d10core.dll` in the arm64ec set); no i386 build or Direct3D 9 | DXMT fork |
-| Vulkan PE side | DXVK's arm64ec Direct3D 8–11 DLLs and vkd3d-proton's Direct3D 12 DLLs; i386 ships DXVK's `d3d9`, `d3d10core`, `d3d11` and `dxgi` (not `d3d8`, and no i386 vkd3d-proton), over Wine's i386 `winevulkan` and KosmicKrisp; aarch64 ships vkd3d-proton's `d3d12` and `d3d12core` and DXVK's `dxgi` for a native ARM64 child (decision [0170](decisions/0170-native-arm64-guests.md), proposed), linked over `sysarm64` | `build/stages/vulkan-pe.sh` |
+| Vulkan PE side | DXVK's arm64ec Direct3D 8–11 DLLs and vkd3d-proton's Direct3D 12 DLLs; i386 ships DXVK's `d3d9`, `d3d10core`, `d3d11` and `dxgi` (not `d3d8`, and no i386 vkd3d-proton), over Wine's i386 `winevulkan` and KosmicKrisp; aarch64 ships vkd3d-proton's `d3d12` and `d3d12core` and DXVK's `dxgi` for a native ARM64 child (decision [0170](decisions/0170-native-arm64-guests.md)), linked over `sysarm64` | `build/stages/vulkan-pe.sh` |
 | Khronos Vulkan loader | the Khronos Vulkan-Loader's arm64ec and aarch64 `vulkan-1.dll` and winevulkan's `winevulkan.json`, linked over system32 (and `sysarm64`) after the backend's set for a play with `khronosVulkanLoader` (RDR2), so a game's own Vulkan layer loads in front of winevulkan; every other play keeps Wine's `vulkan-1.dll` (decision [0131](decisions/0131-the-khronos-vulkan-loader-for-a-game-whose-layer-must-load.md)) | `build/stages/vulkan-pe.sh loader` |
 | OpenGL | Mesa's EGL, OpenGL frontend and Zink over KosmicKrisp (`MesaEGL.framework`, `MesaGallium.framework`), reached through win32u's EGL backend and Wine's opengl32 unix thunks, for x86-64 and i386 (see [OpenGL](#opengl)) | `build/stages/mesa.sh` with `patches/mesa`; `patches/madeira-unix` 0114–0116, `patches/wine-unix` 0028–0029 |
 | XInput | Wine's builtin `xinput*.dll`, reading Madeira's controller snapshot through win32u | Madeira `app/Madeira/Winios/WiniosGamepad.c`, Wine `dlls/xinput1_3` |
@@ -67,7 +67,7 @@ with its own PEB and private ntdll copy:
   `patches/wine-pe`), not every i386 title or API
   ([decision 0047](decisions/0047-i386-titles-on-vulkan.md)).
 - **A plain ARM64 program runs as a native ARM64 child** (decision
-  [0170](decisions/0170-native-arm64-guests.md), proposed; not yet run on the phone).
+  [0170](decisions/0170-native-arm64-guests.md), accepted after the phone runs of 2026-10-31).
   The x86-64 session starts it with its own aarch64 ntdll (`patches/madeira-unix` 0249,
   the image a WoW64 child's native side uses), no WoW64 window and no FEX; its system
   DLLs come from `sysarm64` (`patches/wine-pe` 0015, 0056). Its image and DLLs take the
