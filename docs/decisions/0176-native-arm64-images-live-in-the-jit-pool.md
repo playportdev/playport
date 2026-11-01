@@ -67,14 +67,16 @@ code only through the pool's RW alias, so no section view can sit there.
   at a copy are `vm_remap`ped onto the copy's RW alias, so a write through them is a write to the
   code that runs, as on Windows. The backing stores keep the section's bytes as of the remap.
 - **`FlushInstructionCache` on such a view, or on a presented copy,** x18-patches the code
-  reachable from the flushed address (fall-through and branches, not calls, up to a RET, BR or
-  an unallocated word) from the rest of the image's trampoline reservation.
+  reachable from the flushed address (fall-through and branches, not calls, up to a RET, BR,
+  their authenticated forms RETAA/RETAB/BRAA/BRAB(Z), a UDF or an unallocated word) from the rest
+  of the image's trampoline reservation.
 - **The load's x18 patcher leaves encrypted bytes alone, in a native ARM64 child only.** A 1 KB
   window of .text with more than 8 of its 256 words in the unallocated encoding groups (op0
   `0b0001`, `0b0011`) is data. No compiler emits those words; encrypted bytes put an eighth of
   theirs there, and a patched encrypted word decrypts to garbage. The trampoline reservation
-  still counts those windows. Images in x86-64 and ARM64EC processes are patched whole, as before
-  (their literal pools and x64 tails can look like such windows).
+  still counts those windows. Images in x86-64 and ARM64EC processes, and every child's private
+  ntdll copy, are patched whole, as before (their literal pools and x64 tails can look like such
+  windows).
 - **A native child's copy gets every relocation,** whatever the value, as Windows' loader applies
   them (the client has 95 on encrypted .text words).
 
