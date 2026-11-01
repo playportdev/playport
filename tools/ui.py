@@ -196,8 +196,9 @@ best-effort and reported as unconfirmed; transport loss/SIGKILL can leave cancel
                          in no argv, environment, event, log or run file: the app asks for it when the action
                          runs (a `ui-secret-wanted` event), pp ui pushes it over AFC to
                          Documents/ui-text-<nonce>-<n> on stdin, and the app reads and deletes that file
-                         before typing; a file the app did not take is removed when the run ends, and at the
-                         app's next start. Keep the file under .work (gitignored), e.g. .work/secrets/wow-password.
+                         before typing; a file the app did not take is removed when the run ends, however it
+                         ends (an error or a signal too), and at the app's next start. Keep the file under
+                         .work (gitignored), e.g. .work/secrets/wow-password.
                          --secret-file once serves every textbar:secret action; given once per action, the
                          Nth action types the Nth file (an account name, then a password). Example:
                          --action play:bnet-wow --action wait:60 --action menu:open --action menu:text
@@ -552,6 +553,39 @@ class EndOnTerm:
             for sig, handler in handlers.items():
                 signal.signal(sig, handler)
         return True
+
+
+class SecretsLeft:
+    """The text bar secret files this run pushed that the app has not taken (by action number):
+    removed, with a .part a cut-short push left (afc.py rm), however the run ends: a stop, a
+    PhoneError, SIGINT, SIGTERM or SIGHUP. Inside EndOnTerm, so before its own handling; the
+    signals are ignored while it removes."""
+    def __init__(self, phone, files, events):
+        self.phone, self.files, self.events = phone, files, events
+
+    def remove(self):
+        for n, remote in sorted(self.files.items()):
+            with contextlib.suppress(phonelib.PhoneError, OSError):
+                self.phone.remove(remote, check=False)
+            self.files.pop(n)
+            self.events("secret-removed", index=n)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        if not self.files:
+            return False
+        signals = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
+        handlers = {sig: signal.getsignal(sig) for sig in signals}
+        try:
+            for sig in signals:
+                signal.signal(sig, signal.SIG_IGN)
+            self.remove()
+        finally:
+            for sig, handler in handlers.items():
+                signal.signal(sig, handler)
+        return False
 
 
 # PlayportKit OnScreenLayout's names: --controls' "layout".
@@ -1126,7 +1160,8 @@ def main(argv=None, launched=None):
     try:
         lock = contextlib.nullcontext() if a.dry_run else phonelib.device_lock(what, wait=a.lock_wait, events=ev)
         term = EndOnTerm(phone, a.leave_running or a.dry_run)
-        with lock, term:
+        left = SecretsLeft(phone, secret_files, ev)
+        with lock, term, left:
             ok, why, rec = (True, None, None) if a.dry_run else \
                 phonelib.installed_check(a.expect_ipa, a.any_build, ev)
             if not ok:
@@ -1168,11 +1203,10 @@ def main(argv=None, launched=None):
                                               None if a.dry_run else phone.system_alert)
             ev("stop", why=why, after_s=round(time.monotonic() - t0, 1),
                **({"bound": STOP_BOUND[why]} if why in STOP_BOUND else {}))
-            # A secret the app did not take (the run stopped first) goes now; the app's next
-            # start removes one this misses (Dev/TextBarDriver.swift).
-            for n, remote in sorted(secret_files.items()):
-                phone.remove(remote, check=False)
-                ev("secret-removed", index=n)
+            # A secret the app did not take (the run stopped first) goes now; one an error or a
+            # signal cuts the run short goes as SecretsLeft exits; the app's next start removes
+            # one this misses (Dev/TextBarDriver.swift).
+            left.remove()
             # --leave-running with no finished batch would let the app run the queued actions
             # unsupervised. Request ONE bounded, nonce-bound cancellation (best-effort: not
             # proof the app consumed it); a ui-done exit is left exactly as it was.
