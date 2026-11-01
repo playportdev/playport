@@ -10,8 +10,14 @@ import subprocess
 SWIFT_PACKAGES = ["app/HostIOKit", "app/ContentKit", "app/GOGClient", "app/EpicClient", "app/SteamClient", "app/BattleNetClient",
                   "app/PlayportKit"]
 
+
+def _anycase(words):
+    """WORDS (letters, `_`, `?`, `|` and groups) matching in any case: ERE has no `(?i)`."""
+    return re.sub(r"[A-Za-z]", lambda m: f"[{m[0].upper()}{m[0].lower()}]", words)
+
+
 # What must never be committed (AGENTS.md, Secrets): (what, pattern). Each
-# pattern is both a `git grep -E` and a Python regular expression.
+# pattern is both a `git grep -E` and a Python regular expression: no `(?i)` or `\s`.
 SECRETS = [
     ("JWT-shaped token (Steam)", r"ey[AJ][A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"),
     ("SteamID64", r"\b7656119[0-9]{10}\b"),
@@ -33,14 +39,17 @@ SECRETS = [
     ("Epic exchange code argument", r"AUTH_PASSWORD=[0-9A-Fa-f]{32}"),
     ("Epic ownership token", r"egoc1~[A-Za-z0-9_-]{20,}"),
     # A Battle.net or World of Warcraft session (PLA-514), as the Redactor (Redaction.swift)
-    # scrubs it: the web login's ticket (`US-<32 hex>-<digits>`), the client's session values in
-    # a log line, the launcher's game account, and the account name WoW's Config.wtf or a login
-    # URL keeps. The Redactor's own `<redacted>` is no hit. Appended for the same reason.
+    # scrubs it, in any case as its `(?i)` rules: the web login's ticket (`US-<32 hex>-<digits>`),
+    # the client's session values in a log line, the launcher's game account, the account name
+    # and list WoW's Config.wtf, a login URL or a JSON answer keeps, and a single sign-on URL's
+    # token. The Redactor's own `<redacted>` is no hit. Appended for the same reason.
     ("Battle.net login ticket", r"\b(US|EU|KR|TW|CN)-[0-9A-Fa-f]{32}-[0-9]{5,}\b"),
-    ("WoW session value", r"""(WEB_TOKEN|[Ll]ogin_?[Tt]icket|[Ss]ession_?[Kk]ey|[Rr]ealm_?([Jj]oin|[Ll]ist)_?[Tt]icket|"""
-                          r"""[Rr]econnect_?[Tt]oken|[Aa]uth_?[Tt]oken)["']? *[:=] *["']?[A-Za-z0-9+/_-]{16,}"""),
-    ("WoW account name", r'SET account(Name|List) "[^"<][^"]*"|[?&]account_?[Nn]ame=[A-Za-z0-9%@._+-]+'),
-    ("Battle.net game account", r"""GAME_ACCOUNT["']? *[:=] *["']?[^<"' ]+"""),
+    ("WoW session value", _anycase("(web_token|login_?ticket|session_?key|realm_?(join|list)_?ticket|reconnect_?token|auth_?token)")
+                          + r"""["']? *[:=] *["']?[A-Za-z0-9+/_-]{16,}"""),
+    ("WoW account name", _anycase("set account_?(name|list)") + r""" "[^"<][^"]*"|[?&]""" + _anycase("account_?(name|list)")
+                         + r"""=[A-Za-z0-9%@._+!|-]+|["']""" + _anycase("account_?(name|list)") + r"""["'] *: *["'][^"'<\\ ][^"']*["']"""),
+    ("Battle.net game account", _anycase("game_account") + r"""["']? *[:=] *["']?[^<"' ]+"""),
+    ("Battle.net single sign-on token", _anycase("/login/sso") + r"""\?([^ "'#<]*&)?""" + _anycase("token") + r"""=[^ "'&<]+"""),
 ]
 # Made-up or public values the tests use; a line holding one is not a hit.
 SECRET_FIXTURES = ("XTL-TEAMIDXXXX.", "XTL-A1B2C3D4E5.", "eyJhbGciOiJFZERTQSJ9.", "76561197960287930",
