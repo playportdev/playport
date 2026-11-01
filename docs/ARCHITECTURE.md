@@ -77,13 +77,25 @@ with its own PEB and private ntdll copy:
   module list and the unwinder hold the address the code runs at. The PE view stays as
   Wine's backing store, which the virtual-memory calls translate to and from, and which
   the IAT sync never copies over the copy. Its private ntdll stays on its view.
+  Every instruction that reads x18 is patched, not only the ADD/LDR/STR forms
+  (`patches/madeira-unix` 0252, 0263); a native child's copy also gets every
+  relocation. An image that replaces itself with a section of its own (WoW's client,
+  0264, 0176's amendment) has a section view mapped at its copy go to the backing store
+  and be copied in, the section's other views `vm_remap`ped onto the copy's RW alias, and
+  the code reachable from each `FlushInstructionCache` x18-patched; the load's patcher
+  leaves encrypted 1 KB windows of a native child's `.text` alone. So the image a native
+  child runs is rewritten in memory, never on disk (decision 0175 as amended).
   A context continued with Cpsr.SS is stepped in software (0253, 0256, 0259, 0261);
   code it writes runs through the anonymous executable path. `tools/compat/probes`
   `arm64`, `arm64-fault` and `arm64-min` test it
   ([evidence](evidence/2026-10-30-native-arm64-child.md)). Its
   Direct3D 12 is the Vulkan backend's aarch64 set (`Runtime/vulkan*/aarch64-windows`)
   linked over `sysarm64` by a Vulkan launch; the `d3d12` probe tests it
-  ([evidence](evidence/2026-10-30-arm64-d3d12.md)).
+  ([evidence](evidence/2026-10-30-arm64-d3d12.md)). As run on the phone (2026-11-01, IPA
+  `ff0cd315`): the `arm64` and `d3d12` probes pass and Hollow Knight still reaches first
+  frame+10; WoW Classic Era starts as a native child, handles its own UDFs and single
+  steps, and stops before its login
+  ([evidence](evidence/2026-10-31-wow-arm64-start.md)).
 - **A crashing child is isolated only in part.** A fault in any pseudo-process is a
   fault in the app's one task. Orderly `TerminateProcess` of live children works and is
   tested. Two host-fault cases end the child, not the app (`patches/madeira-unix`
@@ -540,6 +552,7 @@ pool's use. `pp ui` and `pp perf` put the last line in the result event as
 | --- | --- | --- |
 | A W+X request that `mprotect` grants with EXEC but without WRITE (`mprotect_exec`'s fast path) | The request fails with `EACCES`, and `NtProtectVirtualMemory` returns `STATUS_ACCESS_DENIED` (madeira-unix 0036). Before 0036 it returned success with WRITE gone (the `ml999` report). On a TXM phone `mprotect` never grants EXEC, so W+X goes to the JIT-pool path, which serves it through the pool's RW and RX aliases. | `wx_dropped` |
 | x18 instructions in an image whose trampolines are out of B/BL reach (±124 MiB) of its `.text`, whose budget did not fit, or past the end of the trampoline space | Those instructions are not patched: one that runs after iOS has cleared x18 faults, and the Mach exception handler emulates it with the thread's TEB, one fault each time. The trampolines sit on the page after each image's copy, so only a `.text` larger than about 124 MiB could be out of reach. No trampoline islands are placed inside images. | `x18_images`, `x18_sites` |
+| In a native ARM64 child's image (0176's amendment, madeira-unix 0264): x18 readers in a 1 KB `.text` window the load's patcher takes as encrypted, and code reached only through an indirect branch from a function `FlushInstructionCache` patched | Not patched by design. The encrypted windows are patched when the game decrypts and flushes them; until then, and for code only an indirect branch reaches (the flush walk follows fall-through and direct branches only), an x18 read faults and the Mach exception handler emulates it, one fault each time. A window of real code the heuristic misreads as encrypted behaves the same. | `x18_sites` |
 | The anonymous-alias table's 4096 entries (guest JITs: Mono, V8) | A region with no slot ends the launch as *ran out of JIT memory* (`pool=exhausted:alias`, [JIT pool use](#jit-pool-use)). Hollow Knight peaks at 61 entries, so the table is neither grown nor turned into a map. | `alias_full` in `pool` |
 | Misaligned exclusives (`LDXR`/`LDAXR` then `STXR`/`STLXR`) and `CAS` in native ARM64EC code | The Mach exception handler emulates each one on its single thread (ml431, `signal_arm64_ios.c`). That serializes them with each other, but not with plain stores from other threads, so a split lock can tear, as it can on AMD. | `split_lock` |
 
@@ -634,8 +647,10 @@ the other stores' art under Caches (PlayportKit `BattleNetArtCache`).
 
 Play for a Battle.net copy follows PlayportKit `BattleNetPlay` (PLA-514): the first Play of
 each product shows the ban-risk notice ([decision 0175](decisions/0175-anti-cheat-refusal-scope.md),
-proposed: Blizzard does not support Playport, an account action is possible, Playport stores
-no Battle.net credential); declining starts nothing, accepting is kept with the copy
+proposed, amended by 0176: Blizzard does not support Playport, an account action is possible,
+Playport changes none of the game's files but rewrites some of its instructions in memory to run
+on iPhone, which Blizzard may detect, and Playport stores no Battle.net credential); declining
+starts nothing, accepting is kept with the copy
 (`InstalledTitle.riskNoticeAccepted`, gone with it) and the page keeps the notice's text.
 Every Play then asks the install region's version endpoint for its current build (PLA-521):
 a newer one is planned (BattleNetClientKit `prepareUpdate`: the new build's selection without

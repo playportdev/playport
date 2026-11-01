@@ -24,6 +24,10 @@ character select (step 5) and the log secret scan of the sign-in run (step 6) ar
   start nothing. An installed copy's page shows the text, with "Play asks you to accept it
   first." or "You accepted this on DATE."
 - Decision 0175 (proposed) describes this behaviour as built; no update to it was needed.
+  *2026-11-01:* the sentence "Playport changes nothing in the game." was wrong once decision 0176
+  rewrote the image in memory; it is now "Playport changes none of the game's files; to run on
+  iPhone it rewrites some of the game's instructions in memory, which Blizzard may detect." (0175
+  amended by 0176). The runs below showed the old text.
 - Redactor and `pp secrets` learn what WoW and Battle.net carry for a session. The ARM64 client's
   strings (retail `Wow-ARM64.exe`, installed on the workstation in PLA-517) show its command line
   carries no session value: its switches are `-d3d11`, `-d3d12`, `-metal`, `-compat`,

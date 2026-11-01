@@ -7,13 +7,20 @@
 [PLA-515](https://linear.app/playportdev/issue/PLA-515).
 
 **Date:** 2026-10-30. **Kind:** design and execution plan, decided by the owner the same day.
-**Status:** written; nothing built or run. Branch `dev/pla-508-world-of-warcraft`.
+**Status (2026-11-01):** built on branch `dev/pla-516-battlenet` (spec
+[PLA-516](https://linear.app/playportdev/issue/PLA-516)), not merged. Steps 1–4 are done; on the
+phone the store, install, region, language, art and the ban-risk notice pass, and the native
+ARM64 child and the aarch64 `d3d12` probe pass, so 0170 is accepted. Step 5's Done-when run is
+open: WoW Classic Era starts as a native ARM64 child but stops before its login
+([evidence](../evidence/2026-10-31-wow-arm64-start.md), PLA-514).
 
 A user asked to play World of Warcraft on the phone. The owner chose a route that never runs the
 Battle.net app: Playport installs WoW itself and runs its native ARM64 Windows client without FEX.
-Proposed records: [0174](../decisions/0174-battle-net-store-client.md) (the store client),
-[0175](../decisions/0175-anti-cheat-refusal-scope.md) (Warden and the ban-risk notice),
-[0170](../decisions/0170-native-arm64-guests.md) (native ARM64 children).
+Records: [0174](../decisions/0174-battle-net-store-client.md) (the store client, proposed),
+[0175](../decisions/0175-anti-cheat-refusal-scope.md) (Warden and the ban-risk notice, proposed,
+amended by 0176), [0170](../decisions/0170-native-arm64-guests.md) (native ARM64 children,
+accepted), [0176](../decisions/0176-native-arm64-images-live-in-the-jit-pool.md) (a native child's
+images live in the JIT pool, accepted).
 
 ## Done when
 
@@ -46,7 +53,7 @@ character select; the compatibility issue records the run.
 | Sign-in | In the game, through the text bar; no Battle.net session in Playport |
 | Client | `Wow*-ARM64.exe` only, as a native ARM64 child on the aarch64 Wine set; two Wine trees stay; no x64 fallback (0170) |
 | Graphics | vkd3d-proton and `vulkan-1` built for aarch64 |
-| Anti-cheat | Warden allowed; ban-risk notice once per title; the client never patched (0175) |
+| Anti-cheat | Warden allowed; ban-risk notice once per title; the client's files never changed (0175). Amended 2026-11-01 by 0176: the runtime rewrites the image in memory to run it on iOS, and the notice says Blizzard may detect it |
 | Input | Controller (WoW's gamepad mode) and the text bar; no touch controls |
 | A broken Blizzard ARM64 build | Fails like any other play; the compatibility issue records it |
 
@@ -82,7 +89,7 @@ Steps 1, 2 and 4 can run in parallel; 3 needs the phone; 5 needs 2, 3 and 4.
 | Blizzard's CDN throttles or blocks an unofficial client | no install or update | none beyond polite pacing; record and stop |
 | WoW's D3D12 renderer needs more than 0032 gives (64-bit atomics, FL12_1+) | no first frame | spike finds it first; a KosmicKrisp issue |
 | Warden's run-time code is slow through the fault-emulated executable path | stalls at login | measured in step 3/5 |
-| Warden flags the session under the JIT pool's image copies | account action | the ban-risk notice; nothing patched |
+| Warden flags the session under the JIT pool's image copies | account action | the ban-risk notice, which says the runtime rewrites some of the game's instructions in memory (0175 as amended by 0176); no file changed |
 | 131 GB on a phone already full of games | no retail install | the up-front space check; Classic is smaller |
 | A Classic product has no ARM64 client | not offered | by decision |
 | CPU and memory under 8 GiB guest RAM | low frame rate | measured with `pp perf` after step 5 |

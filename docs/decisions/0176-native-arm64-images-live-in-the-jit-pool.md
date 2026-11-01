@@ -2,7 +2,8 @@
 
 **Status:** accepted, 2026-11-01, by the supervisor under the owner's delegation of all
 decisions for the World of Warcraft work ([PLA-514](https://linear.app/playportdev/issue/PLA-514)).
-Amends [0170](0170-native-arm64-guests.md).
+Amends [0170](0170-native-arm64-guests.md) and [0175](0175-anti-cheat-refusal-scope.md)
+("never patched" now covers the game's files, not its memory).
 
 ## Decision
 
@@ -24,6 +25,13 @@ Amends [0170](0170-native-arm64-guests.md).
   .text hash loops made it fail sooner (evidence 2026-10-31-wow-arm64-start).
 - **x86-64 and ARM64EC processes are unchanged.** Their images keep the PE address as the image,
   and the pool copy as an alias their code runs from.
+- **Amends 0175.** 0175 said Playport modifies neither an allowed game's files nor its memory.
+  The image a native ARM64 child runs is rewritten in memory: every x18 reader patched, the
+  header's `ImageBase` set to the copy, the relocations applied, and, by the amendment below, its
+  section views remapped and its decrypted code patched at `FlushInstructionCache`. The game's
+  files are never changed, and nothing is spoofed beyond Wine. Warden may see the rewritten image,
+  so the ban-risk notice says the runtime rewrites some of the game's instructions in memory and
+  Blizzard may detect it (0175's amendment).
 
 ## Why
 
@@ -61,10 +69,12 @@ code only through the pool's RW alias, so no section view can sit there.
 - **`FlushInstructionCache` on such a view, or on a presented copy,** x18-patches the code
   reachable from the flushed address (fall-through and branches, not calls, up to a RET, BR or
   an unallocated word) from the rest of the image's trampoline reservation.
-- **The load's x18 patcher leaves encrypted bytes alone.** A 1 KB window of .text with more than
-  8 of its 256 words in the unallocated encoding groups (op0 `0b0001`, `0b0011`) is data. No
-  compiler emits those words; encrypted bytes put an eighth of theirs there, and a patched
-  encrypted word decrypts to garbage. The trampoline reservation still counts those windows.
+- **The load's x18 patcher leaves encrypted bytes alone, in a native ARM64 child only.** A 1 KB
+  window of .text with more than 8 of its 256 words in the unallocated encoding groups (op0
+  `0b0001`, `0b0011`) is data. No compiler emits those words; encrypted bytes put an eighth of
+  theirs there, and a patched encrypted word decrypts to garbage. The trampoline reservation
+  still counts those windows. Images in x86-64 and ARM64EC processes are patched whole, as before
+  (their literal pools and x64 tails can look like such windows).
 - **A native child's copy gets every relocation,** whatever the value, as Windows' loader applies
   them (the client has 95 on encrypted .text words).
 
