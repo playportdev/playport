@@ -69,7 +69,11 @@ code only through the pool's RW alias, so no section view can sit there.
 - **`FlushInstructionCache` on such a view, or on a presented copy,** x18-patches the code
   reachable from the flushed address (fall-through and branches, not calls, up to a RET, BR,
   their authenticated forms RETAA/RETAB/BRAA/BRAB(Z), a UDF or an unallocated word) from the rest
-  of the image's trampoline reservation.
+  of the image's trampoline reservation. Since madeira-unix 0265 it also patches what the image's
+  `.pdata` function starts reach (with BL calls too) inside the 1 KB windows of .text that differ
+  in a quarter of their words from the backing store: the client decrypts its whole .text in
+  place with no flush, then flushes each view of the image once, and the flushed address alone
+  reaches nothing (evidence 2026-10-31-wow-arm64-start, "decrypts all of its .text at once").
 - **The load's x18 patcher leaves encrypted bytes alone, in a native ARM64 child only.** A 1 KB
   window of .text with more than 8 of its 256 words in the unallocated encoding groups (op0
   `0b0001`, `0b0011`) is data. No compiler emits those words; encrypted bytes put an eighth of
@@ -82,4 +86,5 @@ code only through the pool's RW alias, so no section view can sit there.
 
 Costs: a view mapped before the remap stays one with the copy until it is unmapped; its last
 partial host page is not aliased. Code reached only through an indirect branch from a flushed
-function is not patched and leaves its x18 reads to the fault path.
+function, and not listed in `.pdata`, is not patched and leaves its x18 reads to the fault path;
+junk words a `.pdata` function's opaque branches reach are patched with it.

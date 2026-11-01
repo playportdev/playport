@@ -12,7 +12,9 @@ touched). The test runs the patcher, as the series leaves build/ntdll-unix/virtu
 code window, an encrypted one and the same window partly decrypted, and over flushed functions that
 end in a UDF or a pointer-authenticated return or branch. Only a native ARM64 child loads its images
 with the encrypted-window skip (0176: x86-64 and ARM64EC processes are unchanged), and a record of a
-section view is never dropped for a new one."""
+section view is never dropped for a new one. 0265: the client decrypts its whole .text in place and
+flushes the image at once, so a flush also takes as code what the function starts of the image's
+.pdata reach (with BL calls), inside the windows rewritten since the remap."""
 import pathlib
 import re
 import subprocess
@@ -99,6 +101,37 @@ int main(void)
     assert(flush_patch(0xd503201f, 0xd61f0a1f, 0xd1002240) == 0);   /* braaz x16 */
     assert(flush_patch(0xd503201f, 0xd61f0e1f, 0xd1002240) == 0);   /* brabz x16 */
     assert(flush_patch(0xd503201f, 0xd503201f, 0xd1002240) == 2);   /* control: falls through */
+
+    /* A whole image decrypted in place, then flushed at once (0265): its first word is still
+       encrypted, so only the code hint's function starts, and what they and their BL calls
+       reach, are code, inside the windows rewritten since the remap. A function start in a
+       window not rewritten (still encrypted), and junk after a RET, stay as they are. */
+    {
+        static uint32_t image[3 * WORDS], image_tramp[256];
+        static const uint32_t pdata[] = { 0x1000 + 10 * 4, 0, 0x1000 + (WORDS + 3) * 4, 0 };
+        static const unsigned char rewritten[] = { 0x05 };   /* windows 0 and 2 */
+        struct ios_x18_code_hint hint = { pdata, 2, rewritten, 0x1000, 3 };
+        size_t hint_used = 0;
+
+        for (i = 0; i < 3 * WORDS; i++) image[i] = 0xd503201f;
+        image[0] = 0x06000000;                              /* encrypted: unallocated */
+        image[10] = 0xd503201f;                             /* F: nop */
+        image[11] = 0x94000009;                             /*    bl G */
+        image[12] = 0xf100e25f;                             /*    cmp x18, #0x38 */
+        image[13] = 0xd65f03c0;                             /*    ret */
+        image[14] = 0xd1002240;                             /* junk: sub x0, x18, #8 */
+        image[20] = 0xaa1203e8;                             /* G (not in .pdata): mov x8, x18 */
+        image[21] = 0xd65f03c0;                             /*    ret */
+        image[WORDS + 3] = 0xd1002240;                      /* a function still encrypted */
+        assert(ios_jit_patch_x18((char *)image, (char *)image, sizeof(image), 0x1000, (char *)image_tramp,
+                                 (char *)image_tramp, sizeof(image_tramp), 2, &hint_used) == 0);   /* no hint */
+        ios_x18_code_hint = &hint;
+        assert(ios_jit_patch_x18((char *)image, (char *)image, sizeof(image), 0x1000, (char *)image_tramp,
+                                 (char *)image_tramp, sizeof(image_tramp), 2, &hint_used) == 2);
+        ios_x18_code_hint = NULL;
+        assert((image[12] >> 26) == 5 && (image[20] >> 26) == 5);
+        assert(image[0] == 0x06000000 && image[14] == 0xd1002240 && image[WORDS + 3] == 0xd1002240);
+    }
     puts("x18 encrypted: ok");
     return 0;
 }

@@ -144,3 +144,54 @@ Gates on IPA `ff0cd315c663a22fd3591de6a1b852bacea65ac4782d01ac1be6fbaaf4a3ea26` 
 | Hollow Knight first-frame+10 | passes | 20261101T022522 |
 | `arm64` probe | exit 42 (all checks pass) | 20261101T022617 |
 | `d3d12` probe on Vulkan | exit 0 | 20261101T022648 |
+
+## The client decrypts all of its .text at once (madeira-unix 0265)
+
+- **The spin** (diagnostic build dumping the stuck thread's registers and code, run 20261101T023507):
+  the main thread is in the third TLS callback (+0x3365f0, called with the image base and
+  `DLL_PROCESS_ATTACH`; WoW put it and +0x3366f0 into its TLS callback list, which the file has as
+  +0x43e8, +0x2f73a8, +0x2f7458). It calls +0x33a370, whose loop at +0x33a438 is
+  `ldr x8, [sp, #0x10]; cmp w1, w8; b.ne …; …; cmp x18, #0xa7e; …; b.lo +0x33a46c; b +0x33a438`. With
+  x18 = TEB, `b.lo` is never taken; iOS zeroes x18, so it loops forever. The decrypted code around
+  it was not x18-patched: +0x33a06c (`cmp x18, #0x605`) was left too.
+- **How it decrypts** (runs 20261101T024405 and 20261101T025321: every `NtFlushInstructionCache`
+  logged, and a thread watching eight words of the copy's .text): after the remap and the flush of
+  the function at +0xb3790, the only flushes are of 76 one-page RWX buffers, and then all eight
+  watched words (+0x200000 to +0x2df0000) change within one sample, written by code at +0xb8544 (lr
+  +0xb7a20). There is no flush on the way. Then WoW calls `FlushInstructionCache` on each of the
+  copy's three views (0x34d0000, 0x2740000 and 0x1b7000 bytes). 0264 took as code only what the first
+  word of a flushed range reaches, which for the whole image patched nothing.
+- **The decrypted image** (run 20261101T030044, the copy's first view written out at that flush and
+  compared with the file): 46,360 of the 47,103 1 KB windows of .text changed. 600 windows did not,
+  most of them 0x2d000–0xb1000 and a few near +0xb3790, which still read as encrypted (10 to 40
+  unallocated words in 256). A window threshold cannot tell the two apart: 63 decrypted windows hold
+  more than 8 unallocated words (data in .text), and two unchanged ones only 10 and 11. `.pdata`
+  lists the functions involved (+0x3365f0, +0x3366f0, +0x33a370 are in it; the protector's +0xb3790
+  is not); 24 of its 160,236 entries sit in windows that are still encrypted.
+- **Fix (0265):** a flush's patch run also gets a code hint: the image's `.pdata` function starts,
+  and the windows in which a quarter of the words differ from the backing store of the remap. What
+  those starts reach, following BL calls as well, is code, without leaving those windows. Run over
+  the dump on the workstation with the series' patcher, it patched 40,590 sites with 0x115c40 bytes
+  of trampolines, including +0x33a450 and +0x33a06c. Test: `tools/tests/test_x18_encrypted.py`.
+- **Run 20261101T031619** (IPA `6cc28905b97f5c815402d61b25ff527cc5ea13842679610f7ec58003a4d77d79`):
+  `[remap] … 46360 KB of .text … rewritten since the remap; the functions its .pdata lists there
+  x18-patched (x18 trampolines 0x1194d8 of 0x618000 used)`. There is no spin. WoW passes its TLS
+  callbacks, writes `Logs/cpu.log`, registers `Logs/gx.log` with WER (not written yet) and starts
+  threads: 28 raise the planned UDF at +0x3367a4 in its thread-attach callback; two ntdll
+  thread-pool workers exit. For the
+  rest of the 240 s the main thread waits at 0% CPU in `NtWaitForAlertByThreadId`, from a loop
+  at +0x293b618 that waits (through +0x2e5428) on each of a list of 0x40-byte entries; the worker
+  threads (started at +0x309138 and +0x2404e48) wait too. No window, no login screen.
+- **What 0265 does not reach** (same run): six `[x18-emul3]` faults at WoW +0xfc80, +0x12d490,
+  +0x133c58, +0x133c88, +0x1c5b60 and +0x1d4dc0, all `ldr x8, [x18, #0x58]` (the TLS array), which the
+  fault path emulates correctly. +0x12d488, for one, is a leaf function after `udf #0` padding that
+  `.pdata` does not list and no BL the walk followed calls. A CMP or MOV of x18 in such a function
+  would read 0.
+
+Gates on IPA `6cc28905b97f5c815402d61b25ff527cc5ea13842679610f7ec58003a4d77d79` (the 0265 build):
+
+| Check | Result | Run |
+|---|---|---|
+| Hollow Knight first-frame+10 | passes | 20261101T032159 |
+| `arm64` probe | exit 42 (all checks pass) | 20261101T032252 |
+| `d3d12` probe on Vulkan | exit 0 | 20261101T032323 |

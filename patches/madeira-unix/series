@@ -231,3 +231,4 @@
 0262-ntdll-a-native-ARM64-child-s-images-live-in-the-JIT-.patch
 0263-virtual-x18-patch-every-instruction-that-reads-x18.patch
 0264-virtual-a-native-ARM64-child-that-remaps-its-image-ke.patch
+0265-virtual-x18-patch-the-code-a-native-child-decrypts-i.patch
