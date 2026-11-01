@@ -14,7 +14,10 @@ end in a UDF or a pointer-authenticated return or branch. Only a native ARM64 ch
 with the encrypted-window skip (0176: x86-64 and ARM64EC processes are unchanged), and a record of a
 section view is never dropped for a new one. 0265: the client decrypts its whole .text in place and
 flushes the image at once, so a flush also takes as code what the function starts of the image's
-.pdata reach (with BL calls), inside the windows rewritten since the remap."""
+.pdata reach (with BL calls), inside the windows rewritten since the remap. 0270: and every word of
+those functions (their length from the unwind data) but the jump tables and literals among them,
+so a switch case reached only through a table and a BR is patched while the table is not; a word
+that code falls through to is code even where an LDR (literal) loads it."""
 import pathlib
 import re
 import subprocess
@@ -110,7 +113,7 @@ int main(void)
         static uint32_t image[3 * WORDS], image_tramp[256];
         static const uint32_t pdata[] = { 0x1000 + 10 * 4, 0, 0x1000 + (WORDS + 3) * 4, 0 };
         static const unsigned char rewritten[] = { 0x05 };   /* windows 0 and 2 */
-        struct ios_x18_code_hint hint = { pdata, 2, rewritten, 0x1000, 3 };
+        struct ios_x18_code_hint hint = { NULL, 0, 0, 0, pdata, 2, rewritten, 0x1000, 3 };
         size_t hint_used = 0;
 
         for (i = 0; i < 3 * WORDS; i++) image[i] = 0xd503201f;
@@ -131,6 +134,53 @@ int main(void)
         ios_x18_code_hint = NULL;
         assert((image[12] >> 26) == 5 && (image[20] >> 26) == 5);
         assert(image[0] == 0x06000000 && image[14] == 0xd1002240 && image[WORDS + 3] == 0xd1002240);
+    }
+    /* Every word of a .pdata function is code but its inline data: a switch case reached only
+       through a jump table and a BR is patched; the table's words, a literal after it, and a
+       function's words past an unallocated word stay as they are. A word an LDR (literal)
+       loads that code falls through to is code. */
+    {
+        static uint32_t image[0xc00], image_tramp[256];
+        uint32_t *f = image + 0x440, *h = image + 0x480;   /* F at RVA 0x1100, H at 0x1200 */
+        static const uint32_t pdata[] = { 0x1100, 1 | 20 << 2, 0x1200, 1 | 5 << 2 };   /* packed: length */
+        static const unsigned char rewritten[] = { 0x0f };
+        struct ios_x18_code_hint hint = { (char *)image, sizeof(image), 0x1000, 0x1000, pdata, 2, rewritten, 0x1000, 4 };
+        size_t hint_used = 0;
+
+        for (i = 0x400; i < 0x800; i++) image[i] = 0xd503201f;
+        image[0x400] = 0x06000000;                          /* .text's first word: encrypted */
+        f[0] = 0x7100081f;                                  /* cmp w0, #2 */
+        f[1] = 0x54000128;                                  /* b.hi f+10 */
+        f[2] = 0x10000149;                                  /* adr x9, f+12 (table) */
+        f[3] = 0xb8a05928;                                  /* ldrsw x8, [x9, w0, uxtw #2] */
+        f[4] = 0x10000009;                                  /* adr x9, f+4 (base) */
+        f[5] = 0x8b080928;                                  /* add x8, x9, x8, lsl #2 */
+        f[6] = 0xd61f0100;                                  /* br x8 */
+        f[7] = 0xaa1203e8;                                  /* case 0: mov x8, x18 */
+        f[8] = 0xf100225f;                                  /*         cmp x18, #8 */
+        f[9] = 0xd65f03c0;                                  /*         ret */
+        f[10] = 0xd65f03c0;                                 /* ret */
+        f[11] = 0xd503201f;                                 /* nop (alignment) */
+        f[12] = 3;                                          /* table: case 0 */
+        f[13] = 0xf100225f;                                 /*   reads as cmp x18, #8 */
+        f[14] = 0xd1002240;                                 /*   reads as sub x0, x18, #8 */
+        f[15] = 0xaa1203e8;                                 /* a literal after it: mov x8, x18 */
+        f[16] = 0x91000400;                                 /* add x0, x0, #1 */
+        f[17] = 0xaa1203e8;                                 /* mov x8, x18, which f+18 loads too */
+        f[18] = 0x58ffffe1;                                 /* ldr x1, f+17 */
+        f[19] = 0x18ffff81;                                 /* ldr w1, f+15 */
+        h[0] = 0xaa1203e8;                                  /* H: mov x8, x18 */
+        h[1] = 0xd65f03c0;                                  /*    ret */
+        h[2] = 0x06000000;                                  /*    unallocated */
+        h[3] = 0xf100225f;                                  /*    cmp x18, #8 */
+        h[4] = 0xd65f03c0;                                  /*    ret */
+        ios_x18_code_hint = &hint;
+        assert(ios_jit_patch_x18((char *)(image + 0x400), (char *)(image + 0x400), 0x1000, 0x1000,
+                                 (char *)image_tramp, (char *)image_tramp, sizeof(image_tramp), 2, &hint_used) == 4);
+        ios_x18_code_hint = NULL;
+        assert((f[7] >> 26) == 5 && (f[8] >> 26) == 5 && (f[17] >> 26) == 5 && (h[0] >> 26) == 5);
+        assert(f[12] == 3 && f[13] == 0xf100225f && f[14] == 0xd1002240 && f[15] == 0xaa1203e8);
+        assert(h[3] == 0xf100225f && image[0x400] == 0x06000000);
     }
     puts("x18 encrypted: ok");
     return 0;

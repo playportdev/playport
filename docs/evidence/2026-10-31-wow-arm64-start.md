@@ -1,6 +1,6 @@
 # World of Warcraft Classic Era (ARM64 client) start-up on the phone, 2026-10-31
 
-**Linear:** PLA-514. Branch `dev/pla-516-battlenet`, madeira-unix 0252–0269, decision 0176 and its amendment; runs 2026-10-31 to 2026-11-01. The game was started from the Library
+**Linear:** PLA-514. Branch `dev/pla-516-battlenet`, madeira-unix 0252–0270, decision 0176 and its amendment; runs 2026-10-31 to 2026-11-01. The game was started from the Library
 (`./pp ui --play bnet-wow_classic_era --until first-frame+60 --shot --wait 300`) as a native ARM64 child.
 Run directories are under `.work/ui-runs/`.
 
@@ -296,3 +296,33 @@ Gates on IPA `bfbf4f78124c40361cdb9dfee954b9aea650d3f9927f1b886c207b2f8809e941` 
 | `arm64` probe (re-imported with the new checks) | exit 42 (all checks pass) | 20261101T045041 |
 | Hollow Knight first-frame+10 | passes | 20261101T045202 |
 | `d3d12` probe on Vulkan | exit 0 | 20261101T045256 |
+
+## Every word of a `.pdata` function is code but its tables and literals (madeira-unix 0270)
+
+- **The gap:** 0265's flush walk follows direct branches and BL calls from the `.pdata` function
+  starts; a block entered only through a jump table and a `br` is never reached. The `cmp x18, #8`
+  at +0x2cb1b8c (run 20261101T043750) is such a block.
+- **Fix (0270):** a flush with a code hint also takes as code every word of each `.pdata` function,
+  its length from the packed unwind data or its `.xdata` header, except the data kept among them:
+  what an ADR, ADRP+ADD or ADRP+load offset addresses for a load in the next 8 words (a jump table,
+  bounded by the compare or mask on its index, else to the function's end), and what an LDR
+  (literal) loads. A data run must start where no code falls through to it: after a B, RET, BR
+  (and their authenticated forms), a UDF, an unallocated word, up to 3 alignment NOPs, or data,
+  and never at a function start. The literal rule needs that: in the Classic Era client 132,499 of
+  the 170,883 literal loads in reachable code load a word of reachable code. A function with an
+  unallocated word outside its data (still encrypted) is left to its start, as before.
+- **Offline, over the decrypted image of run 20261101T043750** (`.work/agent-notes/wowrt/spin/`,
+  the patcher as the series leaves `virtual_ios.c`): 40,590 sites before, 55,679 after (+15,089,
+  none lost); +0x2cb1b8c is patched. None of the added sites is in the 31,678 words of the bounded
+  jump tables an independent script (`spin/jt4.py`) finds; 891 are words an LDR (literal) loads
+  that code falls through to. The run takes 0.26 s of host CPU for the 46 MB `.text`. Host test:
+  `tools/tests/test_x18_encrypted.py` (a case reached only through a table, the table's
+  x18-looking words and a literal after it unchanged, a function past an unallocated word left).
+
+Gates on IPA `9447607cde41bc0f6a3c83a201d6a74e19f5fb54183ccec0b39bb6b1bde7ab7b` (the 0270 build):
+
+| Check | Result | Run |
+|---|---|---|
+| Hollow Knight first-frame+10 | first frame at +9.09 s, passes | 20261101T100723 |
+| `arm64` probe | exit 0x2a (all checks pass) | 20261101T100811 |
+| `d3d12` probe on Vulkan | exit 0 | 20261101T100905 |

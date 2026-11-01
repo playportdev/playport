@@ -236,3 +236,4 @@
 0267-win32u-skip-a-monitor-without-a-source-in-DisplayCon.patch
 0268-signal-a-native-child-s-call-into-an-x86-64-syscall-.patch
 0269-virtual-a-native-child-s-freed-RWX-memory-gives-its-.patch
+0270-virtual-x18-patch-every-word-of-a-decrypted-image-s-.patch

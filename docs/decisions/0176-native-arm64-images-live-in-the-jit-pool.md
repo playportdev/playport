@@ -74,6 +74,11 @@ code only through the pool's RW alias, so no section view can sit there.
   in a quarter of their words from the backing store: the client decrypts its whole .text in
   place with no flush, then flushes each view of the image once, and the flushed address alone
   reaches nothing (evidence 2026-10-31-wow-arm64-start, "decrypts all of its .text at once").
+  Since 0270 every word of those functions is code (their length from the unwind data), so a
+  switch case entered only through a jump table and a `br` is patched, except the data among
+  them: jump tables and constants an ADR/ADRP addresses for a load, and LDR (literal) targets,
+  where a data run never starts at a word code falls through to (the client loads its own code
+  as literals) nor at a function start.
 - **The load's x18 patcher leaves encrypted bytes alone, in a native ARM64 child only.** A 1 KB
   window of .text with more than 8 of its 256 words in the unallocated encoding groups (op0
   `0b0001`, `0b0011`) is data. No compiler emits those words; encrypted bytes put an eighth of
@@ -85,6 +90,8 @@ code only through the pool's RW alias, so no section view can sit there.
   them (the client has 95 on encrypted .text words).
 
 Costs: a view mapped before the remap stays one with the copy until it is unmapped; its last
-partial host page is not aliased. Code reached only through an indirect branch from a flushed
-function, and not listed in `.pdata`, is not patched and leaves its x18 reads to the fault path;
-junk words a `.pdata` function's opaque branches reach are patched with it.
+partial host page is not aliased. Code reached only through an indirect branch and outside every
+`.pdata` function is not patched and leaves its x18 reads to the fault path. Junk words inside a
+`.pdata` function (after its branches) are patched with it; a constant whose run starts after
+fall-through code, or a table whose address no ADR/ADRP-and-load pattern gives, would be taken
+for code.
