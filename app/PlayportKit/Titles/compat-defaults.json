@@ -12,6 +12,22 @@
       "settings": {"runtime": "short-reserve-mb=6144"},
       "reason": "The current build reserves 64 GB and 32 GB of address space at start, more than an iPhone app has, so it gets the first 6 GB of each and is told it got all of it."
     },
+    "bnet-wow": {
+      "settings": {"runtime": "env.FEX_HOSTFEATURES=disableafp,disableavx"},
+      "reason": "The game's x86-64 client runs without AVX and takes its SSE paths: its start handles many exceptions, and the emulator does not keep the AVX registers' upper halves in an exception's context, so AVX code could resume with wrong values."
+    },
+    "bnet-wow_anniversary": {
+      "settings": {"runtime": "env.FEX_HOSTFEATURES=disableafp,disableavx"},
+      "reason": "The game's x86-64 client runs without AVX and takes its SSE paths: its start handles many exceptions, and the emulator does not keep the AVX registers' upper halves in an exception's context, so AVX code could resume with wrong values."
+    },
+    "bnet-wow_classic": {
+      "settings": {"runtime": "env.FEX_HOSTFEATURES=disableafp,disableavx"},
+      "reason": "The game's x86-64 client runs without AVX and takes its SSE paths: its start handles many exceptions, and the emulator does not keep the AVX registers' upper halves in an exception's context, so AVX code could resume with wrong values."
+    },
+    "bnet-wow_classic_era": {
+      "settings": {"runtime": "env.FEX_HOSTFEATURES=disableafp,disableavx"},
+      "reason": "The game's x86-64 client runs without AVX and takes its SSE paths: its start handles many exceptions, and the emulator does not keep the AVX registers' upper halves in an exception's context, so AVX code could resume with wrong values."
+    },
     "epic-Buffalo": {
       "settings": {"aspect": "16:9"},
       "reason": "This game draws nothing on a screen wider than 16:9."

@@ -1,0 +1,59 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 1 Nov 2026 14:28:49 +0100
+Subject: [PATCH] Windows: honour FEX_HOSTFEATURES' disableavx on the iOS host
+
+The iOS branch of FetchHostFeatures sets SupportsAVX for the ARM64EC host by
+hand (fex-port 0064) and honours only the disable switches of the features it
+sets itself (fex 0005, 0023), so there was no way to run an x86-64 title
+without AVX: every one is told AVX, AVX2, FMA, F16C, BMI1/2 and XSAVE.
+
+The ARM64EC contexts do not carry the ymm high halves: Wine's conversions drop
+V[16..31] and never set CONTEXT_XSTATE, so an exception, APC or
+Get/SetThreadContext context has no AVX state. A handler cannot read or set
+the high halves, its own AVX writes (a vzeroupper, a memcpy built with AVX)
+reach the code it resumes, and a fault continued in the middle of a block
+resumes with the high half FEX last stored to its thread state, not the one
+the block held in a register (the per-instruction flush covers only the GPR
+and XMM static registers). Desktop Wine keeps all of it
+(tools/compat/probes/ymmctx.c, every check ok). A title whose start is
+exception-heavy, as World of Warcraft's is, can be run without AVX instead.
+
+disableavx now clears SupportsAVX on this branch, after the hand-set value:
+the guest sees what a CPU without AVX reports (no AVX, AVX2, FMA, F16C,
+BMI1/2 or XSAVE in CPUID, XCR0 without AVX, IsProcessorFeaturePresent from
+the same CPUID), and a VEX opcode decodes as an invalid instruction, as on
+such a CPU. The disk cache keys its entries on the host features, so code
+cached with AVX is not reused without it. The startup line already prints
+AVX=. Nothing changes without the switch.
+
+Linear: PLA-516
+Class: feature
+Evidence: docs/evidence/2026-11-01-x64-ymm-contexts.md
+Offered-upstream: no; the hand-built feature set exists only on the iOS port
+---
+ Source/Windows/Common/CPUFeatures.cpp | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/Source/Windows/Common/CPUFeatures.cpp b/Source/Windows/Common/CPUFeatures.cpp
+index fd1b3a5..bc6a760 100644
+--- a/Source/Windows/Common/CPUFeatures.cpp
++++ b/Source/Windows/Common/CPUFeatures.cpp
+@@ -139,6 +139,17 @@ FEXCore::HostFeatures CPUFeatures::FetchHostFeatures(bool IsWine, FEXCore::HostF
+       HostFeatures.SupportsSHA = false;
+       HostFeatures.SupportsPMULL_128Bit = false;
+     }
++    /* Playport: and AVX's, per launch, for a title whose AVX code must not meet
++     * the ARM64EC contexts: they carry the ymm high halves in no exception,
++     * APC or Get/SetThreadContext context (no CONTEXT_XSTATE), so a handler
++     * cannot read or set them and its own AVX writes reach the code it resumes,
++     * and a fault continued in the middle of a block can resume with a stale
++     * high half (tools/compat/probes/ymmctx.c). The guest then sees what a CPU
++     * without AVX reports: no AVX, AVX2, FMA, F16C, BMI1/2 or XSAVE in CPUID, no
++     * AVX in XCR0, and a VEX opcode is an invalid instruction. */
++    if (Control & FEXCore::Config::HostFeatures::DISABLEAVX) {
++      HostFeatures.SupportsAVX = false;
++    }
+     LogMan::Msg::IFmt("FEX: iOS host AVX={} AFP={} LRCPC2={} RCPC={} atomics={} FlagM={} FlagM2={} FCMA={} crypto={} (FEX_HOSTFEATURES={})",
+                       HostFeatures.SupportsAVX, HostFeatures.SupportsAFP, HostFeatures.SupportsTSOImm9, HostFeatures.SupportsRCPC,
+                       HostFeatures.SupportsAtomics, HostFeatures.SupportsFlagM, HostFeatures.SupportsFlagM2,
