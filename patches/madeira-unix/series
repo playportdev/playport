@@ -245,3 +245,4 @@
 0276-virtual-a-protection-change-on-a-page-of-ntdll-s-dat.patch
 0277-virtual-print-a-protection-change-s-no-read-skip-lin.patch
 0278-signal-the-SEGV-loop-guard-does-not-count-a-fault-in.patch
+0279-virtual-signal-a-no-access-4-KB-page-beside-code-fau.patch

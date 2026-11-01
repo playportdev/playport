@@ -1,0 +1,311 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 1 Nov 2026 18:50:54 +0100
+Subject: [PATCH] virtual, signal: a no-access 4 KB page beside code faults
+ inside its 16 KB host page
+
+A 16 KB host page holds four 4 KB Windows pages and got the union of their
+protections, so a committed PAGE_NOACCESS page beside an open one could be read
+without a fault. World of Warcraft's x64 client keeps its code PAGE_NOACCESS and
+opens it a page at a time when its exception hook sees the access violation; on
+desktop Wine the code on Wow.exe+0x2DA000 reads a jump-table entry on the next,
+still closed page, takes the read fault, and its hook opens the page first. On
+the phone the read got the page's closed bytes without a fault and the client
+jumped through them: Wow.exe+0x19575050, the value at +0x2DB590 in the file, at
+two different image bases (runs 20261101T182709 and 20261101T184550).
+
+A host page holding a committed no-access page (not a guard page) beside a page
+with EXEC is now kept PROT_NONE by mprotect_range; the Mach exception handler
+completes an access to its accessible pages through a transient alias of the
+host page with the store/load emulators, and declines an access to the
+no-access page, which then raises the guest's access violation as on x64
+Windows. The decisions are in pp_noaccess_split.h (host test
+tools/tests/test_noaccess_split.py).
+
+Linear: PLA-516, PLA-514
+Class: ios-port
+Evidence: docs/evidence/2026-11-01-wow-x64-fex.md
+Offered-upstream: no; the 16 KB host page is the iOS port's
+---
+ build/ntdll-unix/pp_noaccess_split.h |  54 ++++++++++++++
+ build/ntdll-unix/signal_arm64_ios.c  | 107 +++++++++++++++++++++++++++
+ build/ntdll-unix/virtual_ios.c       |  52 +++++++++++++
+ 3 files changed, 213 insertions(+)
+ create mode 100644 build/ntdll-unix/pp_noaccess_split.h
+
+diff --git a/build/ntdll-unix/pp_noaccess_split.h b/build/ntdll-unix/pp_noaccess_split.h
+new file mode 100644
+index 0000000..c7359b7
+--- /dev/null
++++ b/build/ntdll-unix/pp_noaccess_split.h
+@@ -0,0 +1,54 @@
++/* Playport (PLA-516): noaccess-split host pages, the decisions virtual_ios.c and the
++ * Mach exception handler share (host test: tools/tests/test_noaccess_split.py).
++ *
++ * A 16 KB host page holds four 4 KB Windows pages and gets the union of their
++ * protections. A committed PAGE_NOACCESS page beside a page with (logical) EXEC is
++ * how a protector keeps its code closed a page at a time; reading the closed page
++ * from code on an open one must fault, as on x64 Windows, so such a host page is
++ * kept PROT_NONE and accesses to its accessible pages are completed through an
++ * alias. The bytes are Wine's per-page vprot; the PPNS_ values are Wine's VPROT_
++ * values (virtual_ios.c asserts it). */
++#ifndef PP_NOACCESS_SPLIT_H
++#define PP_NOACCESS_SPLIT_H
++
++#include <stddef.h>
++
++#define PPNS_READ       0x01
++#define PPNS_WRITE      0x02
++#define PPNS_EXEC       0x04
++#define PPNS_WRITECOPY  0x08
++#define PPNS_GUARD      0x10
++#define PPNS_COMMITTED  0x20
++#define PPNS_WRITEWATCH 0x40
++
++/* Is the host page made of these pages' vprot bytes noaccess-split: a committed
++ * page with no access (not a guard page) beside one with EXEC? */
++static inline int ppns_host_page_split( const unsigned char *vprot, size_t pages )
++{
++    int any_none = 0, any_exec = 0;
++    size_t i;
++
++    for (i = 0; i < pages; i++)
++    {
++        unsigned char v = vprot[i];
++        if (!(v & PPNS_COMMITTED) || (v & PPNS_GUARD)) continue;
++        if (!(v & (PPNS_READ | PPNS_WRITE | PPNS_EXEC | PPNS_WRITECOPY))) any_none = 1;
++        else if (v & PPNS_EXEC) any_exec = 1;
++    }
++    return any_none && any_exec;
++}
++
++/* May an access to a page with this vprot byte be completed through the alias?
++ * A read needs any access (EXEC pages stay readable, as for FEX's decoder); a write
++ * needs plain write (write-copy and write-watch keep their own fault paths).
++ * translator: the reader is FEX translating guest code (it holds its code lock),
++ * not the guest. A protection change that closes the page under it is followed by
++ * FEX dropping what it translated there, so its read of any committed page is
++ * completed, as the union protection did before. */
++static inline int ppns_page_allows( unsigned char v, int is_write, int translator )
++{
++    if (!(v & PPNS_COMMITTED) || (v & PPNS_GUARD)) return 0;
++    if (is_write) return (v & PPNS_WRITE) && !(v & (PPNS_WRITECOPY | PPNS_WRITEWATCH));
++    return translator || (v & (PPNS_READ | PPNS_WRITE | PPNS_EXEC | PPNS_WRITECOPY)) != 0;
++}
++#endif /* PP_NOACCESS_SPLIT_H */
+diff --git a/build/ntdll-unix/signal_arm64_ios.c b/build/ntdll-unix/signal_arm64_ios.c
+index 028f08b..9ed3da4 100644
+--- a/build/ntdll-unix/signal_arm64_ios.c
++++ b/build/ntdll-unix/signal_arm64_ios.c
+@@ -1535,6 +1535,7 @@ static int ios_mach_emulate_cas(uint32_t insn, uintptr_t rw_addr, uint64_t gpr[2
+ static uintptr_t ios_subfloor_translate( uint64_t addr );
+ static int ios_subfloor_service( ucontext_t *ctx, void *fault_addr, uintptr_t window_base,
+                                  const char *via );
++static int ios_noaccess_split_service( ucontext_t *ctx, void *fault_addr, uintptr_t teb );
+ 
+ /* ml974: is the ucontext's NEON state real?
+  *
+@@ -2276,6 +2277,33 @@ static void *ios_mach_exception_thread( void *arg )
+                 }
+                 if (sf_window) ios_wow64_fault_leave();
+             }
++            /* Playport (PLA-516): noaccess-split host pages (ios_noaccess_split_service). */
++            if (!handled && req->exception == EXC_BAD_ACCESS && fault_addr >= 0x100000000ull)
++            {
++                __typeof__( *(((ucontext_t *)0)->uc_mcontext) ) ns_mc;
++                ucontext_t ns_uc;
++
++                memset( &ns_mc, 0, sizeof(ns_mc) );
++                memset( &ns_uc, 0, sizeof(ns_uc) );
++                ns_mc.__ss = state;
++                if (have_neon) ns_mc.__ns = neon_state;
++                ns_uc.uc_mcontext = &ns_mc;
++                ios_neon_valid = have_neon;
++                if (ios_noaccess_split_service( &ns_uc, (void *)fault_addr, thread_teb ))
++                {
++                    uint64_t ns_pc;
++
++                    state = ns_mc.__ss;
++                    ns_pc = (uint64_t)__darwin_arm_thread_state64_get_pc( state );
++                    __darwin_arm_thread_state64_set_pc_fptr( state, (void *)(uintptr_t)(ns_pc + 4) );
++                    if (have_neon)
++                    {
++                        neon_state = ns_mc.__ns;
++                        thread_set_state( thread, ARM_NEON_STATE64, (thread_state_t)&neon_state, neon_count );
++                    }
++                    handled = 1;
++                }
++            }
+ #endif
+ 
+             /* ml555: snapshot the protection AT HANDLER ENTRY, and keep the kernel's
+@@ -12005,6 +12033,20 @@ static int ios_emulate_load( ucontext_t *ctx, uint32_t insn, uintptr_t rd_addr )
+         return 1;
+     }
+ 
++    /* Playport (PLA-516): FP/SIMD LDP / LDNP -- opc 101 1 0xx 1 imm7 Rt2 Rn Rt;
++     * opc 00 = S, 01 = D, 10 = Q (memcpy's ldp q0, q1). */
++    if ((insn & 0x3E400000) == 0x2C400000)
++    {
++        const int rt2 = (insn >> 10) & 0x1F;
++        const int pair_opc = (insn >> 30) & 3;
++        const int bytes = 4 << pair_opc;
++
++        if (pair_opc == 3) return 0;
++        if (!ios_ld_setvec( ctx, rt, rd_addr, bytes )) return 0;
++        if (!ios_ld_setvec( ctx, rt2, rd_addr + bytes, bytes )) return 0;
++        return 1;
++    }
++
+     /* FP/SIMD. Width comes from size plus opc bit 23: size=00 with that bit
+      * set is the 128-bit (Q) form, otherwise 1<<size. opc bit 22 is L. */
+     if ((insn & 0x3F000000) == 0x3D000000 ||           /* unsigned offset */
+@@ -12684,6 +12726,71 @@ static int ios_subfloor_service( ucontext_t *ctx, void *fault_addr, uintptr_t wi
+                  (unsigned long long)addr, (unsigned long long)real, insn );
+     return 1;
+ }
++
++/* Playport (PLA-516): an access to an accessible 4 KB page of a host page that
++ * virtual_ios.c keeps PROT_NONE for a committed no-access neighbour beside code
++ * (noaccess-split, ios_noaccess_split_access_allowed). Complete it through a
++ * transient alias of the host page(s); an access to the no-access page itself is
++ * declined and raises the access violation, as on x64 Windows. */
++static unsigned long long ios_noaccess_split_hits, ios_noaccess_split_declined;
++
++static int ios_noaccess_split_service( ucontext_t *ctx, void *fault_addr, uintptr_t teb )
++{
++    extern int ios_noaccess_split_access_allowed( unsigned long long va, unsigned int len, int is_write,
++                                                  int translator );
++    uint64_t addr = (uint64_t)(uintptr_t)fault_addr;
++    mach_vm_address_t pg = addr & ~(mach_vm_address_t)0x3fff, alias = 0;
++    mach_vm_size_t got = 0, len;
++    vm_prot_t cur = 0, max = 0;
++    uint32_t insn = 0;
++    unsigned bytes = 0;
++    int is_write = 0, ok = 0, translator;
++
++    if (mach_vm_read_overwrite( mach_task_self(), (mach_vm_address_t)(uintptr_t)PC_sig(ctx), 4,
++                                (mach_vm_address_t)&insn, &got ) != KERN_SUCCESS || got != 4)
++        return 0;
++    if (!ios_subfloor_classify( insn, &bytes, &is_write ) || !bytes) return 0;
++    /* xtajit64 stamps TEB->Instrumentation[8] (+0x16f8) while the thread holds
++     * FEX's code lock (translating guest code; see [deliver-hold]). */
++    translator = teb && *(volatile uint64_t *)((char *)teb + 0x16f8);
++    if (!ios_noaccess_split_access_allowed( addr, bytes, is_write, translator ))
++    {
++        if (++ios_noaccess_split_declined <= 16)
++            dprintf( 2, "[noaccess-split] declined #%llu %s of %u at %#llx pc=%#llx%s\n", ios_noaccess_split_declined,
++                     is_write ? "write" : "read", bytes, (unsigned long long)addr,
++                     (unsigned long long)PC_sig(ctx), translator ? " (FEX translating)" : "" );
++        return 0;
++    }
++    len = ((addr + bytes - 1) & ~(mach_vm_address_t)0x3fff) - pg + 0x4000;
++    if (mach_vm_remap( mach_task_self(), &alias, len, 0, VM_FLAGS_ANYWHERE, mach_task_self(), pg, FALSE,
++                       &cur, &max, VM_INHERIT_NONE ) != KERN_SUCCESS)
++        return 0;
++    if (mach_vm_protect( mach_task_self(), alias, len, FALSE,
++                         VM_PROT_READ | (is_write ? VM_PROT_WRITE : 0) ) == KERN_SUCCESS)
++    {
++        uintptr_t real = (uintptr_t)(alias + (addr - pg));
++        if (is_write) ok = ios_emulate_store_rel( ctx, insn, real ) || ios_emulate_store( ctx, insn, real );
++        else ok = ios_emulate_load( ctx, insn, real );
++    }
++    mach_vm_deallocate( mach_task_self(), alias, len );
++    if (!ok)
++    {
++        static uint32_t seen[16];
++        static int nseen;
++        int i;
++        for (i = 0; i < nseen; i++) if (seen[i] == insn) return 0;
++        if (nseen < 16) seen[nseen++] = insn;
++        dprintf( 2, "[noaccess-split] UNHANDLED encoding %#010x at pc=%#llx for %#llx (%s %u)\n", insn,
++                 (unsigned long long)PC_sig(ctx), (unsigned long long)addr, is_write ? "write" : "read", bytes );
++        return 0;
++    }
++    ios_subfloor_writeback( ctx, insn, addr );
++    if (++ios_noaccess_split_hits <= 8 || !(ios_noaccess_split_hits & 0xfff))
++        dprintf( 2, "[noaccess-split] #%llu %s of %u at %#llx pc=%#llx insn=%#010x (%llu declined: no-access page)\n",
++                 ios_noaccess_split_hits, is_write ? "write" : "read", bytes, (unsigned long long)addr,
++                 (unsigned long long)PC_sig(ctx), insn, ios_noaccess_split_declined );
++    return 1;
++}
+ #endif
+ 
+ 
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index fa9917f..9d125f0 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -9469,6 +9469,55 @@ int ios_split_page_write_allowed( unsigned long long va )
+         return 0;
+     return ios_host_page_split_vprot( (const void *)(uintptr_t)va );
+ }
++
++/* Playport (PLA-516): noaccess-split. A protector that keeps its x86-64 code
++ * PAGE_NOACCESS and opens it one 4 KB page at a time on the access violation
++ * (World of Warcraft's x64 client) reads data on the next page from code on an
++ * open one: a jump table one page on. On x64 Windows that read faults and the
++ * client's handler opens the page first; with the union protection of a 16 KB
++ * host page it read the page's still-closed bytes without a fault and jumped
++ * through them (Wow.exe+0x19575050, runs 20261101T182709 and 184550). So a host
++ * page holding a committed no-access page beside a page with (logical) EXEC is
++ * kept inaccessible: mprotect_range gives it PROT_NONE, the Mach exception
++ * handler completes accesses to its accessible pages through a transient alias
++ * (ios_noaccess_split_access_allowed), and an access to the no-access page
++ * raises the access violation, as on Windows (pp_noaccess_split.h). Lock-free,
++ * like get_page_vprot. */
++#include "pp_noaccess_split.h"
++C_ASSERT( PPNS_READ == VPROT_READ && PPNS_WRITE == VPROT_WRITE && PPNS_EXEC == VPROT_EXEC &&
++          PPNS_WRITECOPY == VPROT_WRITECOPY && PPNS_GUARD == VPROT_GUARD &&
++          PPNS_COMMITTED == VPROT_COMMITTED && PPNS_WRITEWATCH == VPROT_WRITEWATCH );
++
++static BOOL ios_host_page_noaccess_split( const void *addr )
++{
++    const char *page = ROUND_ADDR( addr, host_page_mask );
++    unsigned char vprot[16];
++    size_t i, n = host_page_size / page_size;
++
++    if (n > ARRAY_SIZE(vprot)) return FALSE;
++    for (i = 0; i < n; i++) vprot[i] = get_page_vprot( page + i * page_size );
++    return ppns_host_page_split( vprot, n );
++}
++
++/* For the Mach exception handler: may an access of len bytes at va that faulted
++ * on a noaccess-split host page be completed? Every 4 KB page it touches must
++ * allow it, and a host page it touches must be noaccess-split (so PROT_NONE is
++ * why it faulted). translator: the faulting thread holds FEX's code lock; its read
++ * of a committed page is completed in any host page, since another thread may
++ * close every page of it between FEX's check and its read. */
++int ios_noaccess_split_access_allowed( unsigned long long va, unsigned int len, int is_write, int translator )
++{
++    unsigned long long p, end = va + (len ? len : 1);
++    BOOL split = translator && !is_write;
++
++    if (end < va) return 0;
++    for (p = va & ~(unsigned long long)page_mask; p < end; p += page_size)
++    {
++        if (!ppns_page_allows( get_page_vprot( (const void *)(uintptr_t)p ), is_write, translator )) return 0;
++        if (!split && ios_host_page_noaccess_split( (const void *)(uintptr_t)p )) split = TRUE;
++    }
++    return split;
++}
+ #endif
+ 
+ 
+@@ -13265,6 +13314,7 @@ static int mprotect_range( void *base, size_t size, BYTE set, BYTE clear )
+                          get_unix_prot( (vprot & ~clear) | set ) & host_exec_mask;
+ #ifdef WINE_IOS
+     if (!guest_image && !set && !clear && (prot & PROT_WRITE) && ios_host_page_split( addr )) prot &= ~PROT_WRITE;
++    if (!guest_image && !set && !clear && prot && ios_host_page_noaccess_split( addr )) prot = PROT_NONE;
+ #endif
+     for (count = i = 1; i < size / host_page_size; i++, count++)
+     {
+@@ -13275,6 +13325,8 @@ static int mprotect_range( void *base, size_t size, BYTE set, BYTE clear )
+ #ifdef WINE_IOS
+         if (!guest_image && !set && !clear && (next & PROT_WRITE) && ios_host_page_split( addr + count * host_page_size ))
+             next &= ~PROT_WRITE;
++        if (!guest_image && !set && !clear && next && ios_host_page_noaccess_split( addr + count * host_page_size ))
++            next = PROT_NONE;
+ #endif
+         if (next == prot) continue;
+         if (guest_image ? mprotect( addr, count * host_page_size, prot ) :
