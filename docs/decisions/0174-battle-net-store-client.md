@@ -21,8 +21,10 @@ alone ([launchers plan](../plans/2026-10-12-launchers.md)); Rockstar, Ubisoft an
   update check against the version endpoint at every Play, then the update, then the play.
 - **Region and language:** the store region (us, eu, kr, tw) comes from a picker defaulting to the
   phone's region; one locale, from the phone's language with `enUS` as fallback.
-- **Manners on Blizzard's CDN:** only the hosts the `cdns` endpoint names, a User-Agent naming
-  Playport, bounded concurrency, back-off on HTTP 429, no mirrors.
+- **Manners on Blizzard's CDN:** only the hosts the version and `cdns` endpoints name, a User-Agent
+  naming Playport, bounded concurrency, back-off on HTTP 429, no mirrors. One exception, for the
+  store's art only: the World of Warcraft site's public image host,
+  `blz-contentstack-images.akamaized.net` (no session, no cookies, the same manners; PLA-607).
 
 ## Why
 

@@ -26,7 +26,7 @@ do not apply on iOS:
 | `ProfileStats=1` | Writes Linux stats shared memory. `pp perf` has its own telemetry (0021). |
 | FEX Linux UnixLib (prctl hardware TSO and unaligned atomics, THP, VMA names) | Linux-only kernel interfaces. iOS has no separate FEX UnixLib; its entry points are no-ops (`patches/fex-port` 0030). |
 | `-march=armv8.2-a -mtune=cortex-x3` | Tuning for Snapdragon/Cortex. Apple cores need their own check. |
-| `-marm64x` for DXVK/vkd3d-proton | ARM64X serves native ARM64 callers. All guests are x86. A native ARM64 child (decision [0170](decisions/0170-native-arm64-guests.md), proposed) gets a separate `aarch64-windows` build of vkd3d-proton, DXVK's `dxgi` and the Vulkan loader instead (`build/stages/vulkan-pe.sh`). |
+| `-marm64x` for DXVK/vkd3d-proton | ARM64X serves native ARM64 callers. Guests are x86, except a native ARM64 child (decision [0170](decisions/0170-native-arm64-guests.md)), which gets a separate `aarch64-windows` build of vkd3d-proton, DXVK's `dxgi` and the Vulkan loader instead (`build/stages/vulkan-pe.sh`). |
 | fsync/ntsync, the Steam runtime, `PROTON_USE_ARM64` paths, `SilentLog`/`PROTON_LOG`, NVAPI | Linux launcher, driver or GPU specifics. In-process sync is ppsync, Playport's userspace ntsync driver ([below](#in-process-sync), 0157, proposed). |
 | FEX `client.json`/`steamwebhelper.json` app configs | These target the Linux Steam client. Playport's Steam client is native Swift. |
 | Valve Wine AVX/YMM contexts, SVE state | Not carried yet: since `patches/fex-port` 0064 the ARM64EC host has AVX128, which keeps the ymm high halves only in FEX's thread state; Wine's ARM64EC contexts drop them and never set `CONTEXT_XSTATE`, so a guest's handler cannot see them and its own AVX writes reach the code it resumes (`build/ymm-context/test.py` checks this convention). Apple CPUs have no SVE (0018). |
@@ -51,7 +51,7 @@ Wine's multi-process design into threads:
 | Wine PE side | the `arm64ec-windows`, `aarch64-windows` (including `wow64.dll`/`wow64win.dll`) and `i386-windows` DLL sets, `nls/` data; `system32` is the arm64ec set, with Wine's programs (`start`, `reg`, `conhost`, …) built for arm64ec ([decision 0082](decisions/0082-system32-programs.md)) | WineHQ wine plus Madeira's fork (`patches/wine-port`) and Valve's Wine commits (`patches/wine-valve`) |
 | FEX | `xtajit64.dll` (arm64ec, `libarm64ecfex.dll`) for x86-64 and `xtajit.dll` (aarch64, `libwow64fex.dll`) for i386: translate guest code into the JIT pool | FEX-Emu/FEX plus Madeira's port |
 | DXMT PE side | `d3d11.dll`, `dxgi.dll`, `winemetal.dll` (and `d3d10core.dll` in the arm64ec set); no i386 build or Direct3D 9 | DXMT fork |
-| Vulkan PE side | DXVK's arm64ec Direct3D 8–11 DLLs and vkd3d-proton's Direct3D 12 DLLs; i386 ships DXVK's `d3d9`, `d3d10core`, `d3d11` and `dxgi` (not `d3d8`, and no i386 vkd3d-proton), over Wine's i386 `winevulkan` and KosmicKrisp; aarch64 ships vkd3d-proton's `d3d12` and `d3d12core` and DXVK's `dxgi` for a native ARM64 child (decision [0170](decisions/0170-native-arm64-guests.md), proposed), linked over `sysarm64` | `build/stages/vulkan-pe.sh` |
+| Vulkan PE side | DXVK's arm64ec Direct3D 8–11 DLLs and vkd3d-proton's Direct3D 12 DLLs; i386 ships DXVK's `d3d9`, `d3d10core`, `d3d11` and `dxgi` (not `d3d8`, and no i386 vkd3d-proton), over Wine's i386 `winevulkan` and KosmicKrisp; aarch64 ships vkd3d-proton's `d3d12` and `d3d12core` and DXVK's `dxgi` for a native ARM64 child (decision [0170](decisions/0170-native-arm64-guests.md)), linked over `sysarm64` | `build/stages/vulkan-pe.sh` |
 | Khronos Vulkan loader | the Khronos Vulkan-Loader's arm64ec and aarch64 `vulkan-1.dll` and winevulkan's `winevulkan.json`, linked over system32 (and `sysarm64`) after the backend's set for a play with `khronosVulkanLoader` (RDR2), so a game's own Vulkan layer loads in front of winevulkan; every other play keeps Wine's `vulkan-1.dll` (decision [0131](decisions/0131-the-khronos-vulkan-loader-for-a-game-whose-layer-must-load.md)) | `build/stages/vulkan-pe.sh loader` |
 | OpenGL | Mesa's EGL, OpenGL frontend and Zink over KosmicKrisp (`MesaEGL.framework`, `MesaGallium.framework`), reached through win32u's EGL backend and Wine's opengl32 unix thunks, for x86-64 and i386 (see [OpenGL](#opengl)) | `build/stages/mesa.sh` with `patches/mesa`; `patches/madeira-unix` 0114–0116, `patches/wine-unix` 0028–0029 |
 | XInput | Wine's builtin `xinput*.dll`, reading Madeira's controller snapshot through win32u | Madeira `app/Madeira/Winios/WiniosGamepad.c`, Wine `dlls/xinput1_3` |
@@ -67,7 +67,7 @@ with its own PEB and private ntdll copy:
   `patches/wine-pe`), not every i386 title or API
   ([decision 0047](decisions/0047-i386-titles-on-vulkan.md)).
 - **A plain ARM64 program runs as a native ARM64 child** (decision
-  [0170](decisions/0170-native-arm64-guests.md), proposed; not yet run on the phone).
+  [0170](decisions/0170-native-arm64-guests.md), accepted after the phone runs of 2026-10-31).
   The x86-64 session starts it with its own aarch64 ntdll (`patches/madeira-unix` 0249,
   the image a WoW64 child's native side uses), no WoW64 window and no FEX; its system
   DLLs come from `sysarm64` (`patches/wine-pe` 0015, 0056). Its image and DLLs take the
@@ -77,13 +77,25 @@ with its own PEB and private ntdll copy:
   module list and the unwinder hold the address the code runs at. The PE view stays as
   Wine's backing store, which the virtual-memory calls translate to and from, and which
   the IAT sync never copies over the copy. Its private ntdll stays on its view.
+  Every instruction that reads x18 is patched, not only the ADD/LDR/STR forms
+  (`patches/madeira-unix` 0252, 0263); a native child's copy also gets every
+  relocation. An image that replaces itself with a section of its own (WoW's client,
+  0264, 0176's amendment) has a section view mapped at its copy go to the backing store
+  and be copied in, the section's other views `vm_remap`ped onto the copy's RW alias, and
+  the code reachable from each `FlushInstructionCache` x18-patched; the load's patcher
+  leaves encrypted 1 KB windows of a native child's `.text` alone. So the image a native
+  child runs is rewritten in memory, never on disk (decision 0175 as amended).
   A context continued with Cpsr.SS is stepped in software (0253, 0256, 0259, 0261);
   code it writes runs through the anonymous executable path. `tools/compat/probes`
   `arm64`, `arm64-fault` and `arm64-min` test it
   ([evidence](evidence/2026-10-30-native-arm64-child.md)). Its
   Direct3D 12 is the Vulkan backend's aarch64 set (`Runtime/vulkan*/aarch64-windows`)
   linked over `sysarm64` by a Vulkan launch; the `d3d12` probe tests it
-  ([evidence](evidence/2026-10-30-arm64-d3d12.md)).
+  ([evidence](evidence/2026-10-30-arm64-d3d12.md)). As run on the phone (2026-11-01, IPA
+  `ff0cd315`): the `arm64` and `d3d12` probes pass and Hollow Knight still reaches first
+  frame+10; WoW Classic Era starts as a native child, handles its own UDFs and single
+  steps, and stops before its login
+  ([evidence](evidence/2026-10-31-wow-arm64-start.md)).
 - **A crashing child is isolated only in part.** A fault in any pseudo-process is a
   fault in the app's one task. Orderly `TerminateProcess` of live children works and is
   tested. Two host-fault cases end the child, not the app (`patches/madeira-unix`
@@ -540,6 +552,7 @@ pool's use. `pp ui` and `pp perf` put the last line in the result event as
 | --- | --- | --- |
 | A W+X request that `mprotect` grants with EXEC but without WRITE (`mprotect_exec`'s fast path) | The request fails with `EACCES`, and `NtProtectVirtualMemory` returns `STATUS_ACCESS_DENIED` (madeira-unix 0036). Before 0036 it returned success with WRITE gone (the `ml999` report). On a TXM phone `mprotect` never grants EXEC, so W+X goes to the JIT-pool path, which serves it through the pool's RW and RX aliases. | `wx_dropped` |
 | x18 instructions in an image whose trampolines are out of B/BL reach (±124 MiB) of its `.text`, whose budget did not fit, or past the end of the trampoline space | Those instructions are not patched: one that runs after iOS has cleared x18 faults, and the Mach exception handler emulates it with the thread's TEB, one fault each time. The trampolines sit on the page after each image's copy, so only a `.text` larger than about 124 MiB could be out of reach. No trampoline islands are placed inside images. | `x18_images`, `x18_sites` |
+| In a native ARM64 child's image (0176's amendment, madeira-unix 0264): x18 readers in a 1 KB `.text` window the load's patcher takes as encrypted, and code reached only through an indirect branch from a function `FlushInstructionCache` patched | Not patched by design. The encrypted windows are patched when the game decrypts and flushes them; until then, and for code only an indirect branch reaches (the flush walk follows fall-through and direct branches only), an x18 read faults and the Mach exception handler emulates it, one fault each time. A window of real code the heuristic misreads as encrypted behaves the same. | `x18_sites` |
 | The anonymous-alias table's 4096 entries (guest JITs: Mono, V8) | A region with no slot ends the launch as *ran out of JIT memory* (`pool=exhausted:alias`, [JIT pool use](#jit-pool-use)). Hollow Knight peaks at 61 entries, so the table is neither grown nor turned into a map. | `alias_full` in `pool` |
 | Misaligned exclusives (`LDXR`/`LDAXR` then `STXR`/`STLXR`) and `CAS` in native ARM64EC code | The Mach exception handler emulates each one on its single thread (ml431, `signal_arm64_ios.c`). That serializes them with each other, but not with plain stores from other threads, so a split lock can tear, as it can on AMD. | `split_lock` |
 
@@ -635,8 +648,10 @@ the other stores' art under Caches (PlayportKit `BattleNetArtCache`).
 
 Play for a Battle.net copy follows PlayportKit `BattleNetPlay` (PLA-514): the first Play of
 each product shows the ban-risk notice ([decision 0175](decisions/0175-anti-cheat-refusal-scope.md),
-proposed: Blizzard does not support Playport, an account action is possible, Playport stores
-no Battle.net credential); declining starts nothing, accepting is kept with the copy
+proposed, amended by 0176: Blizzard does not support Playport, an account action is possible,
+Playport changes none of the game's files but rewrites some of its instructions in memory to run
+on iPhone, which Blizzard may detect, and Playport stores no Battle.net credential); declining
+starts nothing, accepting is kept with the copy
 (`InstalledTitle.riskNoticeAccepted`, gone with it) and the page keeps the notice's text.
 Every Play then asks the install region's version endpoint for its current build (PLA-521):
 a newer one is planned (BattleNetClientKit `prepareUpdate`: the new build's selection without

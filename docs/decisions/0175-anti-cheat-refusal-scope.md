@@ -7,6 +7,10 @@ session. When accepted, it narrows the launcher plan's refusal of "Battle.net ti
 anti-cheat titles ([launchers plan](../plans/2026-10-12-launchers.md), risks), and keeps every
 refusal of [0059](0059-epic-exchange-code.md).
 
+**Amended 2026-11-01 by [0176](0176-native-arm64-images-live-in-the-jit-pool.md):** "never
+patched" holds for the game's files only. In memory, the runtime rewrites the game's image to run
+it on iOS, and Warden may see that ([below](#amendment-2026-11-01-the-runtime-rewrites-the-image-in-memory)).
+
 ## Decision
 
 - **Refused, as today:** kernel anti-cheat, EasyAntiCheat and BattlEye, and any anti-cheat known to
@@ -16,8 +20,9 @@ refusal of [0059](0059-epic-exchange-code.md).
 - **Ban-risk notice:** before the first Play of an allowed title, Playport says the publisher does
   not support Playport and an account action is possible. The person acknowledges it once per
   title; it stays visible on the title page.
-- **Never patched:** Playport does not modify such a game's files or memory, and spoofs nothing
-  beyond what Wine does.
+- **No file changed, nothing spoofed:** Playport does not modify such a game's files, and spoofs
+  nothing beyond what Wine does. In memory, only the runtime's own translation of the image for
+  iOS (amended 2026-11-01, below).
 
 ## Why
 
@@ -33,3 +38,24 @@ refusal of [0059](0059-epic-exchange-code.md).
   to its anti-cheat than desktop Wine does. Playport cannot rule out a ban; the notice is the
   answer.
 - Each allowed anti-cheat is judged per title, from evidence, not detected.
+
+## Amendment 2026-11-01: the runtime rewrites the image in memory
+
+**Accepted by the supervisor under the owner's delegation, 2026-11-01
+([PLA-514](https://linear.app/playportdev/issue/PLA-514)), with
+[0176](0176-native-arm64-images-live-in-the-jit-pool.md).**
+
+- **The change.** The original bullet said Playport modifies neither the game's files nor its
+  memory. A native ARM64 client cannot run on iOS unchanged: iOS clears x18, which Windows code
+  reads as its TEB, and code runs only from the JIT pool. So, by 0176 and madeira-unix 0262–0264,
+  the image the game runs is the pool copy: every instruction that reads x18 is patched to a
+  trampoline (WoW Classic Era: 196,547 sites), the header's `ImageBase` is the copy's address,
+  every relocation is applied, the game's own section views are remapped onto the copy, and code
+  it decrypts is x18-patched at `FlushInstructionCache`.
+- **What still holds.** No file in the install is changed. The memory changes are the runtime's
+  generic translation for any native ARM64 child, not aimed at the game or its anti-cheat; nothing
+  is spoofed beyond what Wine does.
+- **The risk.** Warden, or the client's own integrity checks, can see the rewritten code and the
+  moved image, and Blizzard may act on it. The ban-risk notice says so: "Playport changes none of
+  the game's files; to run on iPhone it rewrites some of the game's instructions in memory, which
+  Blizzard may detect."

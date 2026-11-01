@@ -1,13 +1,20 @@
 # 0170: A game's native ARM64 Windows client runs as a plain ARM64 child, with no FEX
 
-**Status:** proposed, 2026-10-30, by the owner while planning World of Warcraft
-([PLA-508](https://linear.app/playportdev/issue/PLA-508)). Accepted after a native ARM64 child
-runs on the phone and Hollow Knight still reaches first frame+10
-([PLA-512](https://linear.app/playportdev/issue/PLA-512)). When accepted, it amends
+**Status:** accepted, 2026-11-01, by the supervisor under the owner's delegation of all decisions
+for the World of Warcraft work; proposed 2026-10-30 by the owner while planning it
+([PLA-508](https://linear.app/playportdev/issue/PLA-508)). The condition it was proposed with is
+met ([PLA-512](https://linear.app/playportdev/issue/PLA-512),
+[evidence](../evidence/2026-10-30-native-arm64-child.md)): on IPA `2f36ea66` a plain ARM64 program
+ran on the phone as a native ARM64 child with every check passing and its exit code back in the
+app, a failing one ended as a failed play with the app usable, and Hollow Knight reached first
+frame+10; the `d3d12` program drew through the aarch64 vkd3d-proton set on IPA `9ee99874`
+([PLA-518](https://linear.app/playportdev/issue/PLA-518)). It amends
 [0082](0082-system32-programs.md) ("an x86-64 process cannot start a pure ARM64 one here") and
 `ARCHITECTURE.md`'s "All guests are x86". Amended by
 [0176](0176-native-arm64-images-live-in-the-jit-pool.md): the child's images live in the JIT pool,
-whose copy is the module's base.
+whose copy is the module's base. World of Warcraft's own client does not reach its login yet
+([PLA-514](https://linear.app/playportdev/issue/PLA-514),
+[evidence](../evidence/2026-10-31-wow-arm64-start.md)).
 
 ## Decision
 

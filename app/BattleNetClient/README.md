@@ -20,7 +20,8 @@ offline tests on the Linux host. The app's Battle.net store (`UI/BattleNetStore.
   at most `maxConcurrent` (8) are in flight; an HTTP 429 pauses that host for its `Retry-After`
   (at most 120 s; one that is not a finite, non-negative number of seconds counts as none: 2 s,
   doubling, up to 120 s) and asks again, five times, before the host counts as refusing. Only the
-  hosts the version and CDN endpoints name are asked; no mirrors. `adding(keys:)` (a build's key
+  hosts the version and CDN endpoints name are asked, plus, for the art alone, the World of
+  Warcraft site's public image host (see **Art**); no mirrors. `adding(keys:)` (a build's key
   ring, for its download) keeps the same limit and paused hosts.
 - **Errors** (`BattleNetError`): `unreachable` (no answer) and `refused` (an HTTP status other than
   the one asked for) are the network's (`isNetwork`); `damaged` (truncated, wrong magic, a hash

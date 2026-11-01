@@ -1,19 +1,19 @@
 # World of Warcraft Classic Era (ARM64 client) start-up on the phone, 2026-10-31
 
-**Linear:** PLA-514. Branch `dev/pla-516-battlenet`, madeira-unix 0252–0255. The game was started from the Library
+**Linear:** PLA-514. Branch `dev/pla-516-battlenet`, madeira-unix 0252–0264, decision 0176 and its amendment; runs 2026-10-31 to 2026-11-01. The game was started from the Library
 (`./pp ui --play bnet-wow_classic_era --until first-frame+60 --shot --wait 300`) as a native ARM64 child.
 Run directories are under `.work/ui-runs/`.
 
 ## What blocked it, in order
 
-1. **x18 compares not patched** (run 20261031T215841, IPA 9ee99874). The main thread spun in
+1. **x18 compares not patched** (run 20261031T215841, IPA `9ee9987479c1eedfce817665aaf62f87335ee045b04afcb348e3b75991a1e32e`). The main thread spun in
    `WowClassic-arm64.exe`+0x2bb38, a loop inside the vectored handler (+0x2b870) that WoW calls for the
    `udf #0x9720` it raises at +0xd6c8 in a TLS callback. The handler does `cmp x18, #0x38; b.lo <loop>`; iOS
    zeroes x18 and the x18 patcher matched ADD/ADDS only, not SUB/SUBS (CMP). Reproduced off the phone by
    emulating the handler (Unicorn) on the run's JIT-pool dump: x18 = 0 reaches the loop, x18 = TEB returns
    `EXCEPTION_CONTINUE_EXECUTION` with Pc + 4. Fix: 0252. 239 `cmp x18` words exist in the exe (4x the rate of
    other registers); 16 of them sit on words a junk literal load targets, so the literal guard still leaves them.
-2. **Single step** (run 20261031T222147, IPA 1d723cd1). The handler sets Cpsr.SS (bit 21) and steps the
+2. **Single step** (run 20261031T222147, IPA `1d723cd19a4f5be8c03c7df25a18c3873f377bb66b27081983615b810604db8b`). The handler sets Cpsr.SS (bit 21) and steps the
    import resolver (emulated: about 4,000 steps across three UDFs). Wine on iOS dropped the bit. Fix: 0253
    steps such a context in software: branches/ADR/ADRP/literal loads are done on the context, other
    instructions run out of line before a `brk #0xf0f5`.
@@ -53,7 +53,7 @@ WoW's RWX code buffer is handled on iOS. No login screen yet.
 Hollow Knight on IPA 6e598040: first-frame+10 passes (run 20261031T234011).
 
 9. 0261: a stepped BLR into host code (the syscall dispatcher, from ntdll's stubs) now runs out of line as one
-   step, and a step that is dropped anyway is logged. Run 20261031T234647 (IPA 70718df4…): no step was dropped,
+   step, and a step that is dropped anyway is logged. Run 20261031T234647 (IPA `70718df4f0c43165766bc4814e27beee447e7a3ad8f12c5a828590203f6d360e`): no step was dropped,
    and the same store fault happened. Across runs the bad pointer moves by exactly as much as WoW's pool copy
    moves (0xc8000). So `w10` is consistent with a 32-bit RVA computed as *pool address* (from ADRP) minus
    *PE ImageBase* (from the loader): about 0x2e24ed8 into .rdata, offset by pool − PE. The native child runs the
@@ -62,7 +62,7 @@ Hollow Knight on IPA 6e598040: first-frame+10 passes (run 20261031T234011).
    native ARM64 child (PEB ImageBaseAddress, the LDR entry, VirtualQuery of it) is a design change in the
    loader and the virtual-memory views, and is not done here.
 
-Hollow Knight on IPA 70718df4…: first-frame+10 passes (run 20261031T234751).
+Hollow Knight on IPA `70718df4…` (the same): first-frame+10 passes (run 20261031T234751).
 
 ## The pool copy as the image (decision 0176, madeira-unix 0262)
 

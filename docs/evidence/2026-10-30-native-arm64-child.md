@@ -2,12 +2,12 @@
 
 **Linear:** [PLA-512](https://linear.app/playportdev/issue/PLA-512) (spec
 [PLA-516](https://linear.app/playportdev/issue/PLA-516); decision
-[0170](../decisions/0170-native-arm64-guests.md), proposed).
+[0170](../decisions/0170-native-arm64-guests.md), accepted on these runs).
 
-**Status: host side done; the phone gates have not run.** The runtime change, the test programs
-and the dev IPA were built in the side copy `.work/worktrees/bnet-runtime` (decision 0117), which
-may not reach the phone. The phone runs below are to be made from the main checkout after the
-branch moves there; decision 0170 stays proposed until they pass.
+**Status: done.** The runtime change, the test programs and a first dev IPA were built in the side
+copy `.work/worktrees/bnet-runtime` (decision 0117); the branch then moved to the main checkout,
+where it was built again and the phone runs [below](#phone-runs-2026-10-31-main-checkout) passed on
+2026-10-31.
 
 ## Change
 
@@ -105,8 +105,9 @@ unmeasured cost). `arm64.exe`'s rwx phase covers it; `MADEIRA_ANON_EXEC_POOL=1` 
 RX view instead, should it fail.
 
 **Image alignment.** Wine's builtins are linked with 16 KiB sections; a non-builtin ARM64 exe (the
-test program, WoW's client) has 4 KiB sections. The pool copy is per image, and the run log's
-`[jit-pool]`, `x18_images=… x18_sites=…` lines for `arm64.exe` are to be read on the phone run.
+test program, WoW's client) has 4 KiB sections. The pool copy is per image: the phone run's log
+has a `[jit-pool] image … → pool …` line for each, and `[child-ntdll] x18-patched 787
+instructions` for the child's private ntdll.
 
 ## Host results (side copy)
 
@@ -152,37 +153,45 @@ test program, WoW's client) has 4 KiB sections. The pool copy is per image, and 
   trailers, `tools/tests`, every C host test, every Swift package). `pp slots` was not run: no
   DXMT tree changed (its stage reran only because it follows `pe`).
 
-## Phone runs to make (main checkout)
+## Phone runs, 2026-10-31 (main checkout)
 
-Not run. Commands, in order, after the branch is in the main checkout and built there:
+IPA sha256 `2f36ea66dea1feed4c45907ea6306be5a7adbe75a7355d547911d6bada63e5d8` (the `installed`
+event of every run below; branch `dev/pla-516-battlenet` at `31780685`). The probes were imported
+as Local titles (`import:Import/arm64-min`, `arm64`, `arm64-fault`). Run directories are under
+`.work/ui-runs/`. `pp ui` reports a play that ends with a nonzero code as `title_failed`, so the
+probes' passes read `ok: false` there; the code is the result.
 
-```sh
-./pp build && ./pp install
-bash tools/compat/probes/build.sh
-P=$PLAYPORT_BUILD/compat/probes
-./pp phone put $P/arm64/arm64.exe Documents/Import/arm64/arm64.exe
-./pp phone put $P/arm64-fault/arm64-fault.exe Documents/Import/arm64-fault/arm64-fault.exe
-./pp phone put $P/arm64-min/arm64-min.exe Documents/Import/arm64-min/arm64-min.exe
-./pp ui --action import:Import/arm64-min
-./pp ui --action import:Import/arm64
-./pp ui --action import:Import/arm64-fault
-./pp ui --play dir-arm64-min --wait 120 --shot      # expect title: done … exit=0x0000002a
-./pp ui --play dir-arm64 --wait 180 --shot          # expect exit=0x0000002a; arm64.log: done ok
-./pp ui --settings 'dir-arm64:{"arguments":"exit 9"}' --play dir-arm64 --wait 120   # expect exit=0x00000009
-./pp ui --play dir-arm64-fault --wait 180 --shot    # expect exit=0xc0000005, the app back in the library
-./pp ui --play app-367520 --until first-frame+10 --shot   # Hollow Knight on the same IPA
-```
+| Run | What | Result |
+| --- | --- | --- |
+| `20261031T204826` | `--play dir-arm64-min --wait 120 --shot` | exit `0x2a`: the loader-only program started and ended |
+| `20261031T204905` | `--play dir-arm64 --wait 180 --shot` | exit `0x2a`; `arm64.log` (pulled into the run's `arm64-log/`) ends `done ok` |
+| `20261031T204938` | `--settings 'dir-arm64:{"arguments":"exit 9"}' --play dir-arm64` | exit `0x9`: the arguments reached the child and its code came back |
+| `20261031T205011` | `--play dir-arm64-fault --wait 180 --shot` | exit `0xc0000005`, the app back on Home |
+| `20261031T205520` | `--play app-367520 --until first-frame+10 --shot` | Hollow Knight first frame at +11.1 s, ok |
 
-`pp ui` reports a play that ends with a nonzero code as not ok (`title_failed`): for `arm64`,
-exit `0x2a` is the pass. Read `arm64.log` from the title's folder (`pp phone ls
-Documents/prefix/drive_c/Games` names it, `arm64` unless an earlier import took the name; then
-`pp phone pull Documents/prefix/drive_c/Games/arm64/arm64.log DIR`), and in
-the run log: `[arm64-child] native ARM64 child`, `[ec-child-ntdll] loading …/aarch64-windows/ntdll.dll`,
-`[ec-child-ntdll] no CHPE metadata` (expected), `[jit-pool]`/`x18_images=` lines for `arm64.exe`,
-and the `[anon-view]` line. If `arm64-min` passes and `arm64` does not, the CRT path
-(`api-ms-win-crt-*` → `sysarm64\ucrtbase.dll`) is the place to look; if neither starts, the
-`[arm64-child]`/`[ec-child-ntdll]` lines.
+- **`arm64.log`** (run `20261031T204905`): every check `ok`: `IsWow64Process2 process 0 native
+  0xaa64`, not WoW64; no `wow64.dll`, `xtajit64.dll` or `libarm64ecfex.dll`; `kernel32.dll` and
+  `version.dll` from `C:\windows\sysarm64`, a call into `version.dll`; ntdll is the aarch64
+  build; the four RWX calls returned 1234, 4321, 777 and 99 (RWX, rewritten in place, a later
+  page, RW made `PAGE_EXECUTE_READ`); a thread's exit code 42; the program's own child with
+  `exit 7` ended with 7; `done ok`.
+- **The run log** (`pull/s1-host.log`) of each probe run: `[arm64-child] native ARM64 child:
+  private aarch64 ntdll, no window, no FEX`, `[ec-child-ntdll] loading …/aarch64-windows/ntdll.dll`
+  (twice in `20261031T204905`: the program and its `exit 7` child), `[child-ntdll] x18-patched 787
+  instructions`, the `[anon-view] guest code ranges: RW view …` line, and `session: title 2: ended,
+  exit code 0x0000002a` (`0x00000009`, `0xc0000005`). For `arm64-fault` the child's thread raised
+  `c0000005` at a write to address 0 and `abort_process` tore down that pseudo-process only.
+- **Screenshots** (`screen-stop.png`, kept in the run directories): after `arm64` the app is on
+  Home with the box "arm64 stopped unexpectedly / It exited with code 0x0000002A." over it (the app
+  calls every nonzero code a stop; 42 is the probe's pass); after `arm64-fault` the same box says
+  "arm64-fault stopped unexpectedly / It exited with code 0xC0000005.", with Home and its Recent
+  row behind it: the app stayed usable. Hollow Knight's shows its title menu (Start Game, Options,
+  Achievements, Extras, Quit Game) under the on-screen controls.
 
-Then record the run directories and the IPA sha256 here, and move decision 0170 to accepted (with
-the 0082 and ARCHITECTURE.md "All guests are x86" amendments it names) or amend it with what
-failed.
+**Later IPAs.** The pool-copy change (decision 0176, madeira-unix 0262) and the x18 patcher's
+later forms kept the probe passing: `arm64` exit 42 on IPA `d4c7ef73…` (run `20261101T002236`)
+and on IPA `5b14b446…` (run `20261101T011306`), each with Hollow Knight's first-frame+10
+passing ([2026-10-31-wow-arm64-start.md](2026-10-31-wow-arm64-start.md)).
+
+Decision 0170 moved to accepted with these runs, and amends 0082 and `ARCHITECTURE.md`'s "All
+guests are x86".

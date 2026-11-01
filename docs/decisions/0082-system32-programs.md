@@ -13,7 +13,9 @@ arm64ec tree builds every program that does not restrict them, `patches/wine-pe`
 arm64ec to the ten that name only the host or the 16-bit architecture (`conhost`, the services,
 `winemenubuilder`, `winevdm`), and `wine-pe.sh` passes `--disable-` for `winetest`, `winedbg`,
 `wineboot` and `explorer`; the arm64ec set is what it was on wine-11.19
-([evidence](../evidence/2026-10-18-wine-11.20.md)).
+([evidence](../evidence/2026-10-18-wine-11.20.md)). Its "an x86-64 process cannot start a pure
+ARM64 one here" is amended by [0170](0170-native-arm64-guests.md): the x86-64 session starts a
+plain ARM64 program as a native ARM64 child on the `sysarm64` set.
 
 ## Context
 
