@@ -3,7 +3,8 @@
 // "Signing in on the phone"): a field across the bottom of the screen, above the
 // iOS keyboard, whose typing, paste and AutoFill reach the focused guest window
 // as characters (WM_CHAR), with Tab, Enter and Backspace as keys. HostIOKit
-// TextBar decides what each edit sends; HostIO.text posts it.
+// TextBar decides what each edit sends; HostIO.text posts it in TextBarPacing's
+// batches, so a key after characters (Enter after a password) waits for them.
 //
 // The in-game menu's Type text row opens it (back to the game, the bar and the
 // keyboard up), so it is in reach with a controller connected, when no
@@ -63,9 +64,42 @@ final class GameTextBar: ObservableObject {
         Self.log("\(key)")
     }
 
+    /// What the bar sent that is still going out: one chain, so its input leaves in its order.
+    /// Its value: whether every batch went once the ring was empty (none waited out `ringWait`).
+    private var sending: Task<Bool, Never>?
+    /// How long a batch waits for the input ring to empty before it goes anyway.
+    private static let ringWait: Duration = .seconds(5)
+
+    /// In HostIOKit TextBarPacing's batches: a key that follows characters (Enter after a
+    /// password) goes once they are in the server's queue, and long text never overflows the ring.
     private func send(_ inputs: [TextBar.Input]) {
         guard isOpen, !inputs.isEmpty else { return }
-        HostIO.shared.text(inputs)
+        let before = sending
+        sending = Task {
+            var posted = await before?.value ?? true
+            for batch in TextBarPacing.batches(inputs) {
+                posted = await Self.ringEmptied() && posted
+                HostIO.shared.text(batch)
+            }
+            return posted
+        }
+    }
+
+    /// Whether all the bar sent so far is in the server's queue: what is going out has gone, each
+    /// batch after an empty ring, and the ring is empty again. False after `ringWait` without a
+    /// guest thread draining it (a game that pumps no messages: hung, or still loading).
+    func delivered() async -> Bool {
+        let posted = await sending?.value ?? true
+        return await Self.ringEmptied() && posted
+    }
+
+    private static func ringEmptied() async -> Bool {
+        let deadline = ContinuousClock.now + ringWait
+        while !HostIO.shared.inputPosted {
+            guard ContinuousClock.now < deadline else { return false }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return true
     }
 }
 

@@ -97,4 +97,29 @@ final class TextBarTests: XCTestCase {
             XCTAssertTrue(bar.summary.contains(secure ? "secret" : "plain"), bar.summary)
         }
     }
+
+    func testEnterAfterAPasswordIsItsOwnBatchAfterTheCharacters() {
+        var bar = TextBar(secure: true)
+        let typed = bar.type("Test-Pass_123!")
+        let all = typed + bar.press(.enter)
+        XCTAssertEqual(TextBarPacing.batches(all), [typed, [enter]])
+    }
+
+    func testCharactersAfterAKeyWaitForIt() {
+        var bar = TextBar()
+        let sent = bar.change(to: "name\tpw\r\nx")
+        XCTAssertEqual(TextBarPacing.batches(sent),
+                       [chars("name"), [tab], chars("pw"), [enter], chars("x")])
+        // An edit's Backspaces are one batch, before the characters that replace them.
+        XCTAssertEqual(TextBarPacing.batches(bar.change(to: "y")), [[backspace], chars("y")])
+    }
+
+    func testLongTextGoesInBatchesTheRingHolds() {
+        let long = chars(String(repeating: "a", count: 150))
+        let batches = TextBarPacing.batches(long)
+        XCTAssertEqual(batches.map(\.count), [64, 64, 22])
+        XCTAssertEqual(Array(batches.joined()), long)
+        XCTAssertTrue(batches.allSatisfy { $0.count * 2 <= TextBarPacing.room })
+        XCTAssertEqual(TextBarPacing.batches([]), [])
+    }
 }

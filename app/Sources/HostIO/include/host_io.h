@@ -63,6 +63,11 @@ void winios_post_key_extended(int vk, int down);
  * KEYEVENTF_UNICODE, which TranslateMessage turns into WM_CHAR for the focused
  * window. Queued in order with winios_post_key. Nothing logs it, nor a key. */
 void winios_post_char(unsigned int unit);
+/* Winios.m + patches/madeira-winios/0009: how many queued events (keys,
+ * characters, pointer, focus) the drain has not handed to win32u yet; 0 once
+ * all are in the server's queue, in order. The text bar waits for 0 before a
+ * key that follows characters and before a batch the ring could not hold. */
+unsigned int winios_input_pending(void);
 
 /* Winios.m + patches/madeira-winios/0004-Winios-show-a-game-s-GDI-windows-until-its-swap-chai.patch
  * and 0005 (decisions 0075, 0076): the guest's GDI windows (a launcher, a

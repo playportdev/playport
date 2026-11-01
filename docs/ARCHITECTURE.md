@@ -886,7 +886,12 @@ them to UIKit, GameController and AVFAudio.
   0251), as `SendInput` does: the server makes it `VK_PACKET` and `TranslateMessage` posts
   `WM_CHAR` to the focused window, whatever the keyboard layout. The bar diffs its field's
   text (a key, a paste, AutoFill) into Backspaces and new characters; Tab, Enter and
-  Backspace go as keys.
+  Backspace go as keys. It posts them in HostIOKit `TextBarPacing`'s batches (a run of
+  characters or of keys, at most 64 inputs), each once `winios_input_pending`
+  (`patches/madeira-winios` 0009) says the ring is empty: Enter after a password goes once the
+  password is in the server's queue, and a long paste never overflows the 255-slot ring, which
+  drops what does not fit. Desktop Wine shows WoW's Email and Password fields take these
+  `VK_PACKET` characters (`docs/evidence/2026-10-30-wow-notice-and-play.md`).
 - **Nothing logs a key or a character.** A letter's virtual key is its ASCII code, so a key
   log is the text typed: Winios's queue and drain (madeira-winios 0007) and
   `winios_drv_post_key`'s count (madeira-unix 0250) name no key, and

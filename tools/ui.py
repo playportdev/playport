@@ -192,7 +192,9 @@ best-effort and reported as unconfirmed; transport loss/SIGKILL can leave cancel
                          the keyboard would, each character a WM_CHAR (percent-encoded: %2C a comma, %25 a
                          percent sign; TEXT is in argv and the logs, so never a password)
   textbar:secret[+enter] password mode, then the value of --secret-file PATH (its one trailing newline
-                         stripped) or --secret-stdin typed into the field (and Enter pressed). The value is
+                         stripped) or --secret-stdin typed into the field (and Enter pressed once the value
+                         is in the game's input queue; a textbar: action whose input no guest thread takes
+                         for 5 s fails: the game is hung or busy). The value is
                          in no argv, environment, event, log or run file: the app asks for it when the action
                          runs (a `ui-secret-wanted` event), pp ui pushes it over AFC to
                          Documents/ui-text-<nonce>-<n> on stdin, and the app reads and deletes that file

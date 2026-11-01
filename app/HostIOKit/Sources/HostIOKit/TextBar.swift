@@ -91,3 +91,34 @@ public struct TextBar: Equatable, Sendable {
     /// For a log line: the mode only, never the text or its length.
     public var summary: String { secure ? "secret (not logged)" : "plain (not logged)" }
 }
+
+/// How the text bar's input goes out to the guest (HostIO.text): in its order, in batches, each
+/// posted only once everything posted before it has left Winios's input ring for the server's
+/// queue (`winios_input_pending` is 0). A batch is a run of characters or a run of keys, so a
+/// key that follows characters (Enter after a password, Tab after an account name) goes once
+/// those characters are in the server's queue ahead of it, and characters after a key wait for
+/// the key. A batch holds at most `room` ring events (two per input, its press and its release):
+/// the ring has 255 slots and drops what does not fit, so long text never overflows it.
+public enum TextBarPacing {
+    /// Ring events one batch may take: below the ring's 255, with room for a person's other
+    /// input (a key, a touch) queued meanwhile.
+    public static let room = 128
+
+    public static func batches(_ inputs: [TextBar.Input], room: Int = room) -> [[TextBar.Input]] {
+        let most = max(1, room / 2)
+        var out: [[TextBar.Input]] = []
+        for i in inputs {
+            if let last = out.last?.last, isChar(last) == isChar(i), out[out.count - 1].count < most {
+                out[out.count - 1].append(i)
+            } else {
+                out.append([i])
+            }
+        }
+        return out
+    }
+
+    private static func isChar(_ i: TextBar.Input) -> Bool {
+        if case .char = i { return true }
+        return false
+    }
+}
