@@ -23,6 +23,21 @@
  *   thread   a second thread runs and returns its exit code
  *   child    the program again as a child with `exit 7`: a native ARM64
  *            child of a native ARM64 child; its exit code must be 7
+ *   x18      only with `x18` as the command line (PLA-516), after the checks
+ *            above: what happens to x18 in a native ARM64 child. x18 is set
+ *            to a sentinel, then each of: nothing; a 20 ms spin (interrupts);
+ *            a raw Darwin getpid (svc, a kernel entry with no wait); a raw
+ *            Mach thread_switch waiting 50 ms (svc, a context switch); the
+ *            Wine calls NtYieldExecution, Sleep(0), Sleep(50); a UDF round
+ *            trip through a vectored handler. After each, x18 is read back:
+ *            kept (the sentinel), TEB (what Wine put there), zero (the
+ *            kernel's) or other. The sequence runs plain, then armed: TPIDR_EL0
+ *            bit 48 set first, the custom x18 ABI bit that macOS 26.4's
+ *            os_set_custom_x18_abi_enabled sets (madeira-unix 0272 calls it at
+ *            thread start with madeira.cfg x18-abi = 1), and the bit read after.
+ *            x18 is read only by SP-relative stores, which the runtime's x18
+ *            patcher leaves alone. One line "arm64: x18-abi: VERDICT ..."
+ *            sums it up; the phase never changes the exit code.
  *
  * Each line goes to OutputDebugString and <dir>\arm64.log; the last line is
  * "arm64: done ok" and the exit code is 42, or "arm64: done FAIL" and 1.
@@ -362,6 +377,213 @@ static void child_phase(void)
     CloseHandle(pi.hProcess);
 }
 
+#ifdef __aarch64__
+/* The x18 phase (PLA-516). x18_run(op, sentinel, arm, out): with arm, sets TPIDR_EL0 bit 48 (the custom x18 ABI bit
+ * xnu's exception return restores x18 for); sets x18 to sentinel; calls op; stores x18, then TPIDR_EL0 as read before
+ * and after op; clears the bit again if it is still set; puts the entry x18 back. x18 is only ever read by a store
+ * relative to SP, a form the runtime's x18 patcher leaves alone (madeira-unix 0263); a write of x18 is not patched.
+ * x18_op_getpid and x18_op_switch enter the Darwin kernel straight from guest code (svc #0x80, x16 the call):
+ * getpid (20) returns at once, thread_switch (Mach trap -61) with SWITCH_OPTION_WAIT (2) blocks for 50 ms, so the
+ * thread is switched out and back in. x18_op_udf raises an illegal instruction at x18_udf_insn. */
+struct x18_out
+{
+    unsigned long long x18, tpidr_before, tpidr_after;
+};
+
+void x18_run(void (*op)(void), unsigned long long sentinel, int arm, struct x18_out *out);
+unsigned long long x18_read(void);
+unsigned long long x18_tpidr(void);
+void x18_op_none(void);
+void x18_op_getpid(void);
+void x18_op_switch(void);
+void x18_op_udf(void);
+extern const char x18_udf_insn[];
+
+__asm__(
+    ".text\n"
+    ".p2align 2\n"
+    ".globl x18_run\n"
+    "x18_run:\n\t"
+    "stp x29, x30, [sp, #-64]!\n\t"
+    "mov x29, sp\n\t"
+    "stp x19, x20, [sp, #16]\n\t"
+    "str x18, [sp, #32]\n\t"
+    "mov x19, x0\n\t"
+    "mov x20, x3\n\t"
+    "cbz w2, 1f\n\t"
+    "mrs x9, tpidr_el0\n\t"
+    "orr x9, x9, #0x1000000000000\n\t"
+    "msr tpidr_el0, x9\n"
+    "1:\n\t"
+    "mrs x9, tpidr_el0\n\t"
+    "str x9, [x20, #8]\n\t"
+    "mov x18, x1\n\t"
+    "blr x19\n\t"
+    "str x18, [sp, #40]\n\t"
+    "mrs x9, tpidr_el0\n\t"
+    "ldr x10, [sp, #40]\n\t"
+    "str x10, [x20]\n\t"
+    "str x9, [x20, #16]\n\t"
+    "tbz x9, #48, 2f\n\t"
+    "and x9, x9, #0xfffeffffffffffff\n\t"
+    "msr tpidr_el0, x9\n"
+    "2:\n\t"
+    "ldr x18, [sp, #32]\n\t"
+    "ldp x19, x20, [sp, #16]\n\t"
+    "ldp x29, x30, [sp], #64\n\t"
+    "ret\n"
+    ".p2align 2\n"
+    ".globl x18_read\n"
+    "x18_read:\n\t"
+    "str x18, [sp, #-16]!\n\t"
+    "ldr x0, [sp], #16\n\t"
+    "ret\n"
+    ".p2align 2\n"
+    ".globl x18_tpidr\n"
+    "x18_tpidr:\n\t"
+    "mrs x0, tpidr_el0\n\t"
+    "ret\n"
+    ".p2align 2\n"
+    ".globl x18_op_none\n"
+    "x18_op_none:\n\t"
+    "ret\n"
+    ".p2align 2\n"
+    ".globl x18_op_getpid\n"
+    "x18_op_getpid:\n\t"
+    "mov x16, #20\n\t"
+    "svc #0x80\n\t"
+    "ret\n"
+    ".p2align 2\n"
+    ".globl x18_op_switch\n"
+    "x18_op_switch:\n\t"
+    "mov x0, #0\n\t"
+    "mov x1, #2\n\t"
+    "mov x2, #50\n\t"
+    "mov x16, #-61\n\t"
+    "svc #0x80\n\t"
+    "ret\n"
+    ".p2align 2\n"
+    ".globl x18_op_udf\n"
+    ".globl x18_udf_insn\n"
+    "x18_op_udf:\n\t"
+    "nop\n"
+    "x18_udf_insn:\n\t"
+    "udf #0xdead\n\t"
+    "ret\n");
+
+#define X18_SENTINEL  0x7818a5a5c3c31818ull
+#define X18_TPIDR_BIT (1ull << 48)
+
+typedef LONG (WINAPI *nt_yield_fn)(void);
+static nt_yield_fn x18_nt_yield;
+static unsigned long long x18_udf_ctx_x18;
+static int x18_udf_seen;
+
+/* Steps over the UDF at x18_udf_insn and keeps the x18 its context reports. */
+static LONG CALLBACK x18_udf_handler(EXCEPTION_POINTERS *ep)
+{
+    if (ep->ExceptionRecord->ExceptionCode != EXCEPTION_ILLEGAL_INSTRUCTION ||
+        ep->ExceptionRecord->ExceptionAddress != (void *)x18_udf_insn)
+        return EXCEPTION_CONTINUE_SEARCH;
+    x18_udf_ctx_x18 = ep->ContextRecord->X18;
+    x18_udf_seen++;
+    ep->ContextRecord->Pc += 4;
+    return EXCEPTION_CONTINUE_EXECUTION;
+}
+
+/* 20 ms on the generic timer, with no call: only interrupts (and preemption) reach the kernel. */
+static void x18_op_spin(void)
+{
+    unsigned long long freq, start, now;
+
+    __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(freq));
+    __asm__ volatile("mrs %0, cntvct_el0" : "=r"(start));
+    if (!freq) freq = 24000000;
+    do __asm__ volatile("mrs %0, cntvct_el0" : "=r"(now));
+    while (now - start < freq / 50);
+}
+
+static void x18_op_yield(void) { x18_nt_yield(); }
+static void x18_op_sleep0(void) { Sleep(0); }
+static void x18_op_sleep50(void) { Sleep(50); }
+
+static const char *x18_class(unsigned long long v, unsigned long long teb)
+{
+    return v == X18_SENTINEL ? "kept" : v == teb ? "TEB" : !v ? "zero" : "other";
+}
+
+enum { X18_NONE, X18_SPIN, X18_GETPID, X18_SWITCH, X18_YIELD, X18_SLEEP0, X18_SLEEP50, X18_UDF, X18_OPS };
+
+static void x18_phase(void)
+{
+    static const struct { const char *name; void (*fn)(void); } ops[X18_OPS] = {
+        { "none", x18_op_none }, { "spin", x18_op_spin }, { "getpid", x18_op_getpid }, { "switch", x18_op_switch },
+        { "yield", x18_op_yield }, { "sleep0", x18_op_sleep0 }, { "sleep50", x18_op_sleep50 }, { "udf", x18_op_udf },
+    };
+    const unsigned long long teb = (ULONG_PTR)NtCurrentTeb(), x18 = x18_read(), tpidr = x18_tpidr();
+    const char *got[2][X18_OPS];
+    int bit_after[2][X18_OPS];
+    char sum[2][512];
+    const char *verdict;
+    PVOID veh;
+    int mode, i;
+
+    x18_nt_yield = (nt_yield_fn)(void *)GetProcAddress(GetModuleHandleA("ntdll.dll"), "NtYieldExecution");
+    probe_log("x18: TEB %#llx; x18 at the phase start %#llx (%s); TPIDR_EL0 %#llx, custom x18 ABI bit %d\n", teb, x18,
+              x18_class(x18, teb), tpidr, !!(tpidr & X18_TPIDR_BIT));
+    veh = AddVectoredExceptionHandler(1, x18_udf_handler);
+    for (mode = 0; mode < 2; mode++)
+    {
+        int n = 0;
+
+        for (i = 0; i < X18_OPS; i++)
+        {
+            struct x18_out out;
+            char extra[96] = "";
+
+            if (i == X18_YIELD && !x18_nt_yield)
+            {
+                got[mode][i] = "n/a";
+                bit_after[mode][i] = 0;
+                n += snprintf(sum[mode] + n, sizeof(sum[mode]) - n, "%s%s=n/a", i ? " " : "", ops[i].name);
+                continue;
+            }
+            x18_udf_seen = 0;
+            x18_run(ops[i].fn, X18_SENTINEL, mode, &out);
+            got[mode][i] = x18_class(out.x18, teb);
+            bit_after[mode][i] = !!(out.tpidr_after & X18_TPIDR_BIT);
+            if (i == X18_UDF && x18_udf_seen)
+                snprintf(extra, sizeof(extra), "; the handler's context had x18 %#llx (%s)", x18_udf_ctx_x18,
+                         x18_class(x18_udf_ctx_x18, teb));
+            else if (i == X18_UDF)
+                snprintf(extra, sizeof(extra), "; the handler was not called");
+            probe_log("x18: %s %s: x18 %#llx (%s), bit 48 %d -> %d%s\n", mode ? "armed" : "plain", ops[i].name,
+                      out.x18, got[mode][i], !!(out.tpidr_before & X18_TPIDR_BIT), bit_after[mode][i], extra);
+            n += snprintf(sum[mode] + n, sizeof(sum[mode]) - n, "%s%s=%s%s", i ? " " : "", ops[i].name,
+                          got[mode][i], mode && bit_after[mode][i] ? "+bit" : "");
+        }
+    }
+    if (veh) RemoveVectoredExceptionHandler(veh);
+
+    if (!strcmp(got[0][X18_GETPID], "kept"))
+        verdict = "NOT-ZEROED (x18 kept across a kernel entry without the bit)";
+    else if (strcmp(got[1][X18_GETPID], "kept"))
+        verdict = "IGNORED (the bit does not keep x18 across a kernel entry)";
+    else if (!strcmp(got[1][X18_SWITCH], "kept") && bit_after[1][X18_SWITCH])
+        verdict = "PRESERVED (x18 and the bit survive a context switch)";
+    else if (strcmp(got[1][X18_SWITCH], "kept"))
+        verdict = "UNTIL-SWITCH (the bit keeps x18 across kernel entries; a context switch clears both)";
+    else
+        verdict = "MIXED";
+    probe_log("x18-abi: %s; plain: %s; armed: %s\n", verdict, sum[0], sum[1]);
+}
+#else
+static void x18_phase(void)
+{
+    probe_log("x18: skipped, not an aarch64 build\n");
+}
+#endif
+
 int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
 {
     char dir[MAX_PATH], path[MAX_PATH + 16], *slash;
@@ -394,6 +616,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
     rwx_phase();
     thread_phase();
     child_phase();
+    if (strstr(cmdline, "x18")) x18_phase();
 
     probe_log("done %s\n", failed ? "FAIL" : "ok");
     if (log_file != INVALID_HANDLE_VALUE) CloseHandle(log_file);

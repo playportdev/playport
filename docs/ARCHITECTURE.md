@@ -88,7 +88,11 @@ with its own PEB and private ntdll copy:
   A context continued with Cpsr.SS is stepped in software (0253, 0256, 0259, 0261);
   code it writes runs through the anonymous executable path. `tools/compat/probes`
   `arm64`, `arm64-fault` and `arm64-min` test it
-  ([evidence](evidence/2026-10-30-native-arm64-child.md)). Its
+  ([evidence](evidence/2026-10-30-native-arm64-child.md)). The `arm64` probe's `x18`
+  argument, with `madeira.cfg` `x18-abi = 1` (madeira-unix 0272, a diagnostic, off by
+  default), measures whether iOS keeps x18 under the custom x18 ABI of macOS 26.4's
+  `os_set_custom_x18_abi_enabled`, which would make the patching unnecessary
+  ([evidence](evidence/2026-11-01-ios-custom-x18-abi.md)). Its
   Direct3D 12 is the Vulkan backend's aarch64 set (`Runtime/vulkan*/aarch64-windows`)
   linked over `sysarm64` by a Vulkan launch; the `d3d12` probe tests it
   ([evidence](evidence/2026-10-30-arm64-d3d12.md)). As run on the phone (2026-11-01, IPA
