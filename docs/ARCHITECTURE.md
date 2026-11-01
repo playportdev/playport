@@ -930,6 +930,14 @@ them to UIKit, GameController and AVFAudio.
     held key, mouse button and pad control is released, so a game never keeps
     a key down that the player let go of while the app was away (pad controls
     are released by Winios's drain once the loss has reached the game);
+  - focus back activates the window the loss deactivated, or, when it is gone, hidden or
+    disabled, the topmost window of its process, then of any (`Sources/HostIO/hio_focus.c`
+    `host_focus_pick`, `patches/madeira-winios` 0010), through Wine's internal foreground
+    request, which any guest thread's drain may make (a plain `SetForegroundWindow` from
+    another Wine process's thread is refused, which left WoW with no foreground window and
+    all input dropped after the Passwords sheet); input posted after it waits up to 0.5 s
+    for it to land, and input while no window is the foreground makes the same restore, so
+    a tap recovers;
   - going to the background or an audio-session interruption stops the
     output unit, so the game's WASAPI clock stalls instead of running on
     unheard; leaving the foreground alone (Control Center, a notification)
@@ -1167,7 +1175,8 @@ amended by [0088](decisions/0088-opengl-window-surfaces-and-pacing.md) and
 They are defined by Madeira's app-side Winios driver, which Playport compiles
 into the app from staged source (`Sources/WinIOS/Winios.m`, from the Madeira
 pin with `patches/madeira-winios`: the host owns `winios_phase`, and posts
-pointer and focus events; focus changes reach the window's owner thread; the
+pointer and focus events; focus changes reach the window's owner thread, and focus back
+gives the foreground back from any thread, 0010; the
 guest's GDI windows are shown until the game's swap chain presents, from the
 window surfaces `patches/madeira-unix` 0109 gives every mode, decision 0075, and
 after it the windows made since, 0005, decision 0076).
