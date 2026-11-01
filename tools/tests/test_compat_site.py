@@ -13,7 +13,7 @@ import unittest
 REPO = Path(__file__).resolve().parents[2]
 SITE = REPO / "site" / "compatibility"
 STATUSES = {"works", "issues", "broken"}
-STORES = {"steam", "gog", "epic", "other"}
+STORES = {"steam", "gog", "epic", "battlenet", "other"}
 REPORT = "issues/new?template=problem.yml"
 
 
