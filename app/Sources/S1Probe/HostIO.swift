@@ -770,6 +770,16 @@ final class TraceBox: @unchecked Sendable {
         // After wine_host_init: shows that HostIO's lines still reach the log with no input at all.
         let n = lock.withLock { ticks += 1; return ticks }
         if n == 15 || n == 60 { HostIO.log("hostio: log alive at \(n) s") }
+        #if !PLAYPORT_RELEASE
+        // The game's XInput requests over the last 10 s (hio_pads.c; win32u reports each one,
+        // madeira-unix 0273), while it makes any: a pad check reads whether it keeps reading.
+        if n % 10 == 0 {
+            var line = [CChar](repeating: 0, count: 256)
+            if host_pad_xinput_summary(&line, UInt32(line.count)) > 0 {
+                HostIO.log("controls: XInput in 10 s: " + String(cString: line))
+            }
+        }
+        #endif
         if let quiet { HostIO.log("hostio: main queue has not run for \(Int(quiet)) s; GameController handlers and notifications wait on it") }
         DispatchQueue.main.async { [self] in
             let back: Double? = lock.withLock {

@@ -239,3 +239,4 @@
 0270-virtual-x18-patch-every-word-of-a-decrypted-image-s-.patch
 0271-virtual-a-native-ARM64-child-s-image-copy-starts-on-.patch
 0272-signal-madeira.cfg-x18-abi-turns-on-the-custom-x18-A.patch
+0273-win32u-report-each-XInput-request-and-the-slot-s-ans.patch

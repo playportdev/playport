@@ -1,0 +1,75 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 1 Nov 2026 15:00:00 +0100
+Subject: [PATCH] win32u: report each XInput request and the slot's answer to
+ the host app
+
+0247 has ios_gamepad_query count the game's XInput state requests for
+the host app's suggested layout. That count cannot tell why a game
+that reads a pad does not react to it: World of Warcraft on the phone
+logged its first reads and nothing after, and whether it kept reading,
+which slot answered, what it answered and whether the packet number
+moved is not in any log.
+
+ios_gamepad_query now reads the slot first and calls the host's
+playport_gamepad_query(index, op, connected, packet, buttons) for
+every request, state and capability alike, in place of
+playport_gamepad_state_read. The host counts state requests as before
+(its total feeds the suggested layout unchanged) and a dev build logs
+a summary every 10 s while a game asks: reads, from which slots, the
+last answer, packet changes and the buttons answered. The reference
+stays weak.
+
+Linear: PLA-522
+Class: diagnostics
+Evidence: docs/evidence/2026-11-01-wow-controller.md (host test app/tests/pads_test.c; phone gate not run)
+Offered-upstream: no; the hook feeds the iOS app
+---
+ build/win32u-unix/driver_ios.c | 25 +++++++++++++++----------
+ 1 file changed, 15 insertions(+), 10 deletions(-)
+
+diff --git a/build/win32u-unix/driver_ios.c b/build/win32u-unix/driver_ios.c
+index 526dfa5..6db315c 100644
+--- a/build/win32u-unix/driver_ios.c
++++ b/build/win32u-unix/driver_ios.c
+@@ -2630,10 +2630,12 @@ C_ASSERT( sizeof(struct ios_xinput_state) == 16 );
+ C_ASSERT( sizeof(struct ios_xinput_caps) == 20 );
+ C_ASSERT( sizeof(struct winios_gamepad) == 20 );
+ 
+-/* Playport: the host app counts the game's XInput state reads (its
+- * HostIO hio_pads.c), to tell a game that never asks for a pad. Weak: a
+- * host without it is not called. */
+-extern void playport_gamepad_state_read( void ) __attribute__((weak));
++/* Playport: the host app sees each of the game's XInput requests and the
++ * slot's answer (its HostIO hio_pads.c): the count tells a game that never
++ * asks for a pad, and a dev build logs a summary every 10 s. Weak: a host
++ * without it is not called. */
++extern void playport_gamepad_query( unsigned int index, unsigned int op, int connected,
++                                    unsigned int packet, unsigned short buttons ) __attribute__((weak));
+ 
+ /***********************************************************************
+  *           ios_gamepad_query
+@@ -2648,14 +2650,17 @@ extern void playport_gamepad_state_read( void ) __attribute__((weak));
+ ULONG_PTR ios_gamepad_query( UINT index, UINT op, void *buffer )
+ {
+     struct winios_gamepad pad;
++    int connected;
+ 
+     if (!buffer || index >= 4) return 0;
+-    /* Every state request counts (XInputGetState; xinput's SetState and
+-     * Enable ask for one too), for a slot with no pad as well: most games ask
+-     * all four users each frame. The app's own snapshot reads do not come
+-     * here. */
+-    if (op == 0 && playport_gamepad_state_read) playport_gamepad_state_read();
+-    if (!winios_gamepad_get_state( index, &pad )) return 0;
++    /* Every request is reported (state: XInputGetState; xinput's SetState,
++     * Enable and battery query ask for one too), for a slot with no pad as
++     * well: most games ask all four users each frame. The app's own snapshot
++     * reads do not come here. */
++    connected = winios_gamepad_get_state( index, &pad );
++    if (playport_gamepad_query)
++        playport_gamepad_query( index, op, connected, pad.packet, pad.buttons );
++    if (!connected) return 0;
+ 
+     switch (op)
+     {
