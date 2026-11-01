@@ -7,7 +7,9 @@ classifier matched ADD and ADDS only, so with x18 zeroed by iOS the compare saw 
 exception handler parked in its loop. The words below are the client's own: its handler's
 `cmp x18, #0x38` and an opaque predicate's `cmp x18, xzr, asr #5`. The test runs the patcher, as
 the series leaves build/ntdll-unix/virtual_ios.c, over a .text of them and checks each became a
-branch to a trampoline that does the same compare on the TEB in x17."""
+branch to a trampoline that does the same compare on the TEB in x17; that a CBZ's offset bits are
+not taken for registers and an access relative to SP is left alone; and that the patcher knows each
+word it patched from its original (a re-flush of decrypted code leaves those)."""
 import pathlib
 import subprocess
 import tempfile
@@ -34,7 +36,7 @@ int ios_teb_tls_slot_offset = 0x940;
 long ios_limit_x18_images, ios_limit_x18_sites;
 #include "patcher.c"
 
-static uint32_t text[13], tramp[1024];
+static uint32_t text[13], tramp[1024], text2[4], tramp2[256];
 
 /* The word the patcher put in the trampoline it branched word i to. */
 static uint32_t tramp_insn(int i)
@@ -84,6 +86,39 @@ int main(void)
         back = (int32_t)(t[6] << 6) >> 6; to = (int32_t)(t[8] << 6) >> 6;
         assert((char *)&t[6] + back * 4 == (char *)&text[13]);
         assert((char *)&t[8] + to * 4 == (char *)&text[12] + 8);
+    }
+    /* The patcher knows each word it patched from its original (a re-flush leaves those) */
+    assert(ios_x18_patched_site(text[0], 0xf100e25f, (char *)&text[0], (char *)tramp, sizeof(tramp)));
+    assert(!ios_x18_patched_site(text[0], 0xf100e65f, (char *)&text[0], (char *)tramp, sizeof(tramp)));
+    assert(ios_x18_patched_site(text[11], 0xca120129, (char *)&text[11], (char *)tramp, sizeof(tramp)));
+    assert(!ios_x18_patched_site(text[11], 0xca120129, (char *)&text[11], (char *)tramp2, sizeof(tramp2)));
+    assert(!ios_x18_patched_site(text[4], 0xd100025f, (char *)&text[4], (char *)tramp, sizeof(tramp)));
+
+    /* A CBZ's offset bits are no registers: these read as x16 (Rn) and x17 (Rm), and the site
+       was left. An STP of x18 or an LDR with x18 as the offset relative to SP is left alone, as
+       the trampoline moves SP; MOV xzr, x18 becomes a NOP. */
+    {
+        size_t used = 0;
+        uint32_t *t;
+        int32_t to;
+
+        text2[0] = 0xb4110212;   /* cbz x18, .+0x22040 */
+        text2[1] = 0xa9014be0;   /* stp x0, x18, [sp, #16] */
+        text2[2] = 0xf8726be0;   /* ldr x0, [sp, x18] */
+        text2[3] = 0xaa1203ff;   /* mov xzr, x18 */
+        assert(ios_jit_x18_tramp_need((char *)text2, sizeof(text2), 0x1000, NULL, 1) == 40 + 32 + 0x1000);
+        assert(ios_jit_patch_x18((char *)text2, (char *)text2, sizeof(text2), 0x1000,
+                                 (char *)tramp2, (char *)tramp2, sizeof(tramp2), 1, &used) == 1);
+        assert(used == 36 && text2[1] == 0xa9014be0 && text2[2] == 0xf8726be0 && text2[3] == 0xd503201f);
+        t = (uint32_t *)((char *)&text2[0] + (intptr_t)((int32_t)(text2[0] << 6) >> 6) * 4);
+        assert(t == tramp2 && t[0] == 0xf81f0ff1 && t[4] == 0xb4000071);
+        to = (int32_t)(t[8] << 6) >> 6;
+        assert((char *)&t[8] + to * 4 == (char *)&text2[0] + 0x22040);
+        assert(ios_x18_patched_site(text2[0], 0xb4110212, (char *)&text2[0], (char *)tramp2, used));
+        assert(!ios_x18_patched_site(text2[0], 0xb4110232, (char *)&text2[0], (char *)tramp2, used));
+        assert(!ios_x18_patched_site(text2[0], 0xb5110212, (char *)&text2[0], (char *)tramp2, used));
+        assert(!ios_x18_patched_site(text2[0], 0xb4110212, (char *)&text2[0], (char *)tramp2, 16));
+        assert(ios_x18_patched_site(text2[3], 0xaa1203ff, (char *)&text2[3], (char *)tramp2, used));
     }
     puts("x18 compare: ok");
     return 0;
