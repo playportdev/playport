@@ -1,0 +1,90 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 1 Nov 2026 23:55:00 +0100
+Subject: [PATCH] FEXCore: print the first 256 NoExec decodes, then every
+ 4096th with the count
+
+World of Warcraft's x64 client keeps its code no-access until it runs,
+so FEX decodes one NoExec (or PartialDecode) entry block per page it
+opens: 41 a second in the owner's hitches, up to ~180 in a 0.3 s window,
+about 9,000 in the 7-minute last play. Each printed the frontend's
+"NoExec instruction in entry block" line and Core.cpp's [iOS-noexec]
+line, whose 32-repeat bound restarted at every new address, so the
+log took two lines per page, from the thread that holds the code
+invalidation mutex shared while it compiles.
+
+The frontend's line for NoExec and PartialDecode now prints for the
+first 256 and every 4096th, with a running count (#N); Invalid,
+BadRelocation and Unimplemented print as before. [iOS-noexec] prints a
+first try at an address for the first 256 decode failures and every
+4096th, with total=N; repeats at one address print up to 32 as before,
+and the 1024th and 65536th and the RUNAWAY line are unchanged.
+
+Linear: PLA-610
+Class: diagnostics
+Evidence: .work/hud-diag/s1-host.log (lines 914920-918117: 963 NoExec, 1006 [iOS-noexec] in 18.6 s), .work/scratch/pla610/s3-exc/REPORT.md
+Offered-upstream: no
+---
+ FEXCore/Source/Interface/Core/Core.cpp     | 12 +++++++++---
+ FEXCore/Source/Interface/Core/Frontend.cpp | 13 ++++++++++++-
+ 2 files changed, 21 insertions(+), 4 deletions(-)
+
+diff --git a/FEXCore/Source/Interface/Core/Core.cpp b/FEXCore/Source/Interface/Core/Core.cpp
+index c6dded0..af40db7 100644
+--- a/FEXCore/Source/Interface/Core/Core.cpp
++++ b/FEXCore/Source/Interface/Core/Core.cpp
+@@ -1184,11 +1184,17 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
+                   NoExecRepeat.store(1, std::memory_order_relaxed);
+                   n = 1;
+                 }
+-                if (n <= 32 || n == 1024 || n == 65536) {
+-                  LogMan::Msg::EFmt("[iOS-noexec] status={} BlockEntry={:#x} GuestRIP={:#x} repeat={} rev=ml486",
++                // Playport (PLA-610): every new address restarted the 32 lines, and a guest
++                // that opens its code a page at a time (World of Warcraft's x64 client) printed
++                // one per page. Lines of a first try print for the first 256 decode failures and
++                // every 4096th, with the count; the repeats of one address as before.
++                static std::atomic<uint64_t> NoExecTotal {};
++                const uint64_t Total = NoExecTotal.fetch_add(1, std::memory_order_relaxed) + 1;
++                if ((n <= 32 && (n > 1 || Total <= 256 || (Total % 4096) == 0)) || n == 1024 || n == 65536) {
++                  LogMan::Msg::EFmt("[iOS-noexec] status={} BlockEntry={:#x} GuestRIP={:#x} repeat={} total={} rev=ml486",
+                                     Block.BlockStatus == Frontend::Decoder::DecodedBlockStatus::NOEXEC_INST ?
+                                       "NOEXEC" : "PARTIAL",
+-                                    Block.Entry, GuestRIP, n);
++                                    Block.Entry, GuestRIP, n, Total);
+                 }
+                 if (n == 1024) {
+                   LogMan::Msg::EFmt("[iOS-noexec] RUNAWAY: {:#x} has failed to decode 1024 times — the guest is not "
+diff --git a/FEXCore/Source/Interface/Core/Frontend.cpp b/FEXCore/Source/Interface/Core/Frontend.cpp
+index 8470dcc..e718502 100644
+--- a/FEXCore/Source/Interface/Core/Frontend.cpp
++++ b/FEXCore/Source/Interface/Core/Frontend.cpp
+@@ -14,6 +14,7 @@ $end_info$
+ 
+ #include <array>
+ #include <algorithm>
++#include <atomic>
+ #include <cstring>
+ #include <FEXCore/Config/Config.h>
+ #include <FEXCore/Core/X86Enums.h>
+@@ -1725,10 +1726,20 @@ void Decoder::DecodeLoop(const uint8_t* _InstStream, uint64_t GuestSizePause) {
+             DecodedMaxAddress -= PCOffset;
+           }
+           EraseBlock = true;
++        } else if (BlockIt->BlockStatus == DecodedBlockStatus::NOEXEC_INST ||
++                   BlockIt->BlockStatus == DecodedBlockStatus::PARTIAL_DECODE_INST) {
++          // Playport (PLA-610): a guest that keeps its code inaccessible until it runs
++          // (World of Warcraft's x64 client) makes one of these per page it opens, up to
++          // ~180 a second; the first 256 and every 4096th are printed, with the count.
++          static std::atomic<uint64_t> NoExecLines {};
++          const uint64_t N = NoExecLines.fetch_add(1, std::memory_order_relaxed) + 1;
++          if (N <= 256 || (N % 4096) == 0) {
++            LogMan::Msg::EFmt("{} instruction in entry block: {:X} (#{})",
++                              BlockIt->BlockStatus == DecodedBlockStatus::NOEXEC_INST ? "NoExec" : "PartialDecode", OpAddress, N);
++          }
+         } else {
+           LogMan::Msg::EFmt("{} instruction in entry block: {:X}",
+                             BlockIt->BlockStatus == DecodedBlockStatus::INVALID_INST       ? "Invalid" :
+-                            BlockIt->BlockStatus == DecodedBlockStatus::NOEXEC_INST        ? "NoExec" :
+                             BlockIt->BlockStatus == DecodedBlockStatus::BAD_RELOCATION     ? "BadRelocation" :
+                             BlockIt->BlockStatus == DecodedBlockStatus::UNIMPLEMENTED_INST ? "Unimplemented" :
+                                                                                              "PartialDecode",

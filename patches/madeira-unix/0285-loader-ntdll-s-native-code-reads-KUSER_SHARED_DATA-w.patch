@@ -1,0 +1,82 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 1 Nov 2026 23:47:10 +0100
+Subject: [PATCH] loader: ntdll's native code reads KUSER_SHARED_DATA where it
+ is mapped
+
+The 4 GB page zero leaves 0x7ffe0000 unmapped, so KUSER_SHARED_DATA is
+mapped elsewhere (0x7038000000 on the phone) and the Mach exception handler
+emulates every read of 0x7ffe0000 (ml952). PE DLLs' native code read it
+there as well: in World of Warcraft's two owner plays of 2026-11-01, 446 of
+the 457 sampled sub-floor reads were kernel32's GetTickCount
+(ldr w0,[x8] at kernel32+0x17c3c), about 0.9-1.7 k emulated faults a second
+on average and 3-4 k in two-minute bursts.
+
+ntdll exports its user_shared_data pointer as ios_user_shared_data (wine-pe,
+same change). The loader writes the real mapping there for the session's
+ntdll (load_ntdll_functions) and a child's own ntdll
+(ios_load_child_ec_ntdll), and into the pool copy PE code reads, before any
+code of the process runs; a child that copies the session's ntdll inherits
+it. A "[kusd] <session|child> ntdll reads KUSER_SHARED_DATA at <addr>" line
+says so, or that the export is missing. Guest code keeps reading 0x7ffe0000
+through the sub-floor window.
+
+Linear: PLA-610
+Class: ios-port
+Evidence: docs/evidence/2026-11-01-wow-x64-fex.md
+Offered-upstream: no; the Mach exception handler and the page zero are the iOS port's
+---
+ build/ntdll-unix/loader_ios.c | 26 ++++++++++++++++++++++++++
+ 1 file changed, 26 insertions(+)
+
+diff --git a/build/ntdll-unix/loader_ios.c b/build/ntdll-unix/loader_ios.c
+index 52bf3fa..b5e0eb3 100644
+--- a/build/ntdll-unix/loader_ios.c
++++ b/build/ntdll-unix/loader_ios.c
+@@ -2028,6 +2028,30 @@ static const void *get_module_data_dir( HMODULE module, ULONG dir, ULONG *size )
+ void **ios_ntdll_syscall_dispatcher_ptr = NULL;
+ void **ios_ntdll_unix_call_dispatcher_ptr = NULL;
+ unixlib_handle_t *ios_ntdll_unixlib_handle_ptr = NULL;
++
++/* Playport (PLA-610): KUSER_SHARED_DATA is not at 0x7ffe0000 here (the 4 GB
++ * page zero; virtual_map_user_shared_data), and every read a PE DLL's native
++ * code makes there is a Mach exception the handler emulates. ntdll's
++ * user_shared_data, exported as ios_user_shared_data, gets the real mapping
++ * before any code of the process runs: ntdll reads through it, kernel32 and
++ * kernelbase take it at process attach. Written in the module's .data and in
++ * the pool copy PE code reads. Guest code keeps reading 0x7ffe0000. */
++static void ios_publish_user_shared_data( void *module, const IMAGE_EXPORT_DIRECTORY *exports,
++                                          const char *who )
++{
++    extern void ios_jit_sync_write( void *addr, size_t size );
++    void **p = (void **)find_named_export( module, exports, "ios_user_shared_data" );
++
++    if (!p)
++    {
++        dprintf( 2, "[kusd] %s ntdll export ios_user_shared_data not found: its native code "
++                 "reads 0x7ffe0000\n", who );
++        return;
++    }
++    *p = user_shared_data;
++    ios_jit_sync_write( p, sizeof(*p) );
++    dprintf( 2, "[kusd] %s ntdll reads KUSER_SHARED_DATA at %p\n", who, user_shared_data );
++}
+ #endif
+ 
+ static void load_ntdll_functions( HMODULE module )
+@@ -2089,6 +2113,7 @@ static void load_ntdll_functions( HMODULE module )
+         if (pon) *pon = ios_counters_on ? 1 : 0;
+         else ERR( "[counters] ntdll export ios_counters_on not found: the PE census stays on\n" );
+     }
++    ios_publish_user_shared_data( module, exports, "session" );
+     /* ml797: hand the FEX arena to the PE side as plain data. It cannot travel
+      * as an environment variable -- its consumer runs before any CRT or TEB
+      * exists. Publishing zero is normal and means "no arena"; the emulator then
+@@ -2483,6 +2508,7 @@ static int ios_load_child_ec_ntdll( PEB *child_peb, enum ios_child_ntdll kind )
+             if (pon) *pon = ios_counters_on ? 1 : 0;
+             else dprintf( 2, "[counters] ec-child ntdll export ios_counters_on not found: the PE census stays on\n" );
+         }
++        ios_publish_user_shared_data( module, exports, "child" );
+         {
+             /* ml797: same arena hand-off for a pseudo-process's own ntdll. */
+             extern ULONG_PTR ios_fex_arena_base_unix, ios_fex_arena_end_unix;

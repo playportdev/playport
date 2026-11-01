@@ -40,9 +40,12 @@ extern int  ppsync_close( int fd );
  * the client takes it (receiving that reference). Both key it by the
  * requesting Wine thread's id and the handle: a TEB's process id can differ
  * from the server's view of the thread. A post nobody takes is replaced by
- * the next for the same key, or dropped when the table is full. */
-extern void ppsync_post( unsigned int tid, unsigned int handle, int fd );
-extern int  ppsync_take( unsigned int tid, unsigned int handle );
+ * the next for the same key, or dropped when the table is full. A post also
+ * carries the handle's granted access, for a reply that hands a descriptor
+ * over without an access field of its own (create_event); `access' of
+ * ppsync_take may be NULL. */
+extern void ppsync_post( unsigned int tid, unsigned int handle, int fd, unsigned int access );
+extern int  ppsync_take( unsigned int tid, unsigned int handle, unsigned int *access );
 
 extern void ppsync_kick( unsigned int tid );
 extern void ppsync_freeze( unsigned int tid, int frozen );

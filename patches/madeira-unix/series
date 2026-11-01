@@ -250,3 +250,6 @@
 0281-signal-a-guest-read-of-an-open-page-of-a-noaccess-sp.patch
 0282-signal-the-Mach-handler-s-emulated-reads-skip-a-regi.patch
 0283-signal-virtual-read-stubs-for-the-hot-JIT-sites-of-t.patch
+0284-signal-virtual-read-stubs-follow-FEX-s-code-buffers-.patch
+0285-loader-ntdll-s-native-code-reads-KUSER_SHARED_DATA-w.patch
+0286-signal-print-a-SEGV-that-virtual_handle_fault-declin.patch

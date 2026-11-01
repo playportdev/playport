@@ -1,0 +1,78 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 1 Nov 2026 23:41:41 +0100
+Subject: [PATCH] ARM64EC: a disk-cache hit reads its patchable fields from
+ where FEX reads guest code
+
+World of Warcraft's x64 client keeps its on-demand code pages in a view whose
+16 KB host pages hold a closed 4 KB page (madeira-unix 0279), so a read of an
+open page takes a Mach exception that Wine's handler completes. Fex 0092 moved
+the decoder's byte source and the disk cache's hashing (GuestCodeBytes) to the
+view's read-only alias, but applying a cache hit's relocations did not:
+ReadLiveGuestData memcpy'd each patchable immediate or displacement (1 to 8
+bytes) from the guest address, and ntdll's memcpy copies under 8 bytes a byte
+at a time. In the owner's two plays of 2026-11-01 these were 90 % of the
+handler's emulated reads (1,812 of 2,000 samples past the first 256: memcpy+0x190, ldrb
+w11,[x8],#1; lr after the three bl memcpy of
+ApplyPackedCodeRelocations, under FEX's code lock): about 9,000 a second,
+50,000 in hitches, on the main thread.
+
+ReadLiveGuestData and the CRC relocation now read through
+DiskCache::GuestCodeBytes, as does the compile-time CRC of a full-SMC
+block. The value is the same memory (the alias is a remap of the view), the
+hash that admitted the hit already read these bytes there, and guest
+addresses, patch sites and the guest's own accesses are unchanged, so a guest
+read of the closed page still faults. Off iOS GuestCodeBytes is the address
+itself.
+
+Linear: PLA-610
+Class: ios-port
+Evidence: docs/evidence/2026-11-01-wow-x64-fex.md
+Offered-upstream: no; the 16 KB host page is the iOS port's
+---
+ FEXCore/Source/Interface/Core/CodeCache.cpp | 7 +++++--
+ FEXCore/Source/Interface/Core/Core.cpp      | 4 +++-
+ 2 files changed, 8 insertions(+), 3 deletions(-)
+
+diff --git a/FEXCore/Source/Interface/Core/CodeCache.cpp b/FEXCore/Source/Interface/Core/CodeCache.cpp
+index 5ef854e..d9dbdbe 100644
+--- a/FEXCore/Source/Interface/Core/CodeCache.cpp
++++ b/FEXCore/Source/Interface/Core/CodeCache.cpp
+@@ -542,9 +542,12 @@ ApplyRIPMoveRelocation(ContextImpl& CTX, uint64_t GuestRIP, uint8_t RegisterInde
+   Emitter.LoadConstant(ARMEmitter::Size::i64Bit, ARMEmitter::Register(RegisterIndex), Pointer, CPU::Arm64Emitter::PadType::DOPAD);
+ }
+ 
++// The live guest bytes of a patchable field are read where FEX reads guest code
++// (DiskCache::GuestCodeBytes): on iOS a code page of a noaccess-split host page
++// is read from its view's read-only alias, not a byte per Mach exception.
+ static inline int64_t ReadLiveGuestData(uint64_t SiteAddress, uint8_t ValueSize) {
+   uint64_t Raw = 0;
+-  memcpy(&Raw, reinterpret_cast<const void*>(SiteAddress), ValueSize);
++  memcpy(&Raw, DiskCache::GuestCodeBytes(SiteAddress), ValueSize);
+   // manual sign-extension from guest live bytes
+   if (ValueSize == 1) {
+     return (int8_t)Raw;
+@@ -572,7 +575,7 @@ static inline void ApplyPatchableRIPMoveRelocation(uint64_t SiteAddress, uint8_t
+ }
+ 
+ static inline void ApplyPatchableCRCMoveRelocation(uint64_t SiteAddress, uint8_t ValueSize, uint8_t RegisterIndex, CPU::Arm64Emitter& Emitter) {
+-  const uint64_t Target = FEXCore::Utils::crc32(reinterpret_cast<const uint8_t*>(SiteAddress), ValueSize);
++  const uint64_t Target = FEXCore::Utils::crc32(DiskCache::GuestCodeBytes(SiteAddress), ValueSize);
+   Emitter.LoadConstant(ARMEmitter::Size::i64Bit, ARMEmitter::Register(RegisterIndex), Target, CPU::Arm64Emitter::PadType::DOPAD);
+ }
+ 
+diff --git a/FEXCore/Source/Interface/Core/Core.cpp b/FEXCore/Source/Interface/Core/Core.cpp
+index 58a5ee8..a610b54 100644
+--- a/FEXCore/Source/Interface/Core/Core.cpp
++++ b/FEXCore/Source/Interface/Core/Core.cpp
+@@ -1069,7 +1069,9 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
+                                                         Thread->OpDispatcher->_Bfe(IR::OpSize::i64Bit, 32, 0, InstAddressReg));
+           }
+ 
+-          auto Value = FEXCore::Utils::crc32(ExistingCodePtr, DecodedInfo->InstSize);
++          // The bytes come from where FEX reads guest code (DiskCache::GuestCodeBytes); the check and the
++          // patch site keep the guest address.
++          auto Value = FEXCore::Utils::crc32(DiskCache::GuestCodeBytes(reinterpret_cast<uint64_t>(ExistingCodePtr)), DecodedInfo->InstSize);
+           auto CRC = WantsDiskCachePatching ?
+                        Thread->OpDispatcher->_PatchableGuestCRC(IR::OpSize::i64Bit, Value, (int64_t)ExistingCodePtr, DecodedInfo->InstSize) :
+                        Thread->OpDispatcher->Constant(Value);

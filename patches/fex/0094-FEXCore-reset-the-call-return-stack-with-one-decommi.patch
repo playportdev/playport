@@ -1,0 +1,116 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 1 Nov 2026 23:50:00 +0100
+Subject: [PATCH] FEXCore: reset the call-return stack with one decommit on iOS
+
+ResetCallRetStack runs, under the code invalidation mutex, for every
+thread with blocks in a range a code invalidation clears. Its
+VirtualDontNeed was three Wine calls: a VirtualQuery for the protection,
+a MEM_DECOMMIT and a MEM_COMMIT. In World of Warcraft's x64 client the
+resets cost 57 us on average over the last owner play, 129 us over the
+one before, and 175 us in its self-modifying-code bursts (16,384 resets,
+2.86 s of the 13 s from 23:00:12 in the 2026-11-01 owner session),
+against 16 us in a quiet process. They are almost all of the 190 us each
+access-violation invalidation took ([inv-census] av), and the 16-minute
+play spent 75 s in them.
+
+On iOS Wine's decommit (virtual_ios.c decommit_pages) maps fresh
+zero-fill pages over the range and leaves them readable and writable,
+the contract LookupCache's VirtualDontNeed(..., false) of the L1 array
+the JIT reads already relies on. The reset now makes the MEM_DECOMMIT
+alone there: the pages are zeroed and returned as before, without the
+query and the recommit. VirtualDontNeed also queries the protection only
+when it recommits, which saves that query for LookupCache's clears.
+
+Linear: PLA-610
+Class: ios-port
+Evidence: .work/hud-diag/s1-host.log ([callret], [inv-census], [dc-census]), .work/scratch/pla610/s3-exc/REPORT.md
+Offered-upstream: no; the query-only-to-recommit half could be, the rest is the iOS decommit's
+---
+ FEXCore/Source/Interface/Core/Core.cpp         | 18 ++++++++++++++----
+ .../FEXCore/Debug/InternalThreadState.h        |  8 ++++----
+ FEXCore/include/FEXCore/Utils/AllocatorHooks.h | 10 ++++++----
+ 3 files changed, 24 insertions(+), 12 deletions(-)
+
+diff --git a/FEXCore/Source/Interface/Core/Core.cpp b/FEXCore/Source/Interface/Core/Core.cpp
+index a610b54..c6dded0 100644
+--- a/FEXCore/Source/Interface/Core/Core.cpp
++++ b/FEXCore/Source/Interface/Core/Core.cpp
+@@ -681,11 +681,10 @@ void ContextImpl::ClearCodeCache(FEXCore::Core::InternalThreadState* Thread, boo
+  *     established; that is what the unix-side census below measures.)
+  *
+  *  2. THE CLEAR RECLAIMS -- IT DOES NOT DIRTY. VirtualDontNeed() here is
+- *     VirtualFree(MEM_DECOMMIT) + VirtualAlloc(MEM_COMMIT). This stack is not
++ *     VirtualFree(MEM_DECOMMIT) alone on iOS (PLA-610). This stack is not
+  *     pool-aliased, so wine's decommit_pages() (virtual_ios.c) takes the
+- *     anon_mmap_fixed() branch: a fresh MAP_ANON|MAP_FIXED over the range, which
+- *     DROPS the old physical pages and installs zero-fill-on-demand. The
+- *     MEM_COMMIT that follows only restores access; it does not touch pages.
++ *     anon_mmap_fixed() branch: a fresh read/write MAP_ANON|MAP_FIXED over the
++ *     range, which DROPS the old physical pages and installs zero-fill-on-demand.
+  *     So the full clear was RETURNING up to 16MB per reset, and ml609's 4MB
+  *     version left the rest of each stack resident.
+  *
+@@ -746,7 +745,18 @@ void ResetCallRetStack(FEXCore::Core::InternalThreadState* Thread, const char* S
+   uint64_t ResetT0, ResetT1, ResetFreq;
+   __asm__ volatile("mrs %0, cntvct_el0" : "=r"(ResetT0));
+ #endif
++#ifdef FEX_IOS_HOST
++  // Playport (PLA-610): one MEM_DECOMMIT, without the query and MEM_COMMIT around it.
++  // Wine's decommit on iOS (virtual_ios.c decommit_pages) maps fresh zero pages over
++  // the range and leaves it readable and writable, the contract LookupCache's
++  // VirtualDontNeed(..., false) of the L1 array the JIT reads already relies on; the
++  // pages are returned as before. A reset ran under the code invalidation mutex for
++  // every code invalidation that found blocks of the thread, and in World of
++  // Warcraft's SMC storms the three Wine calls took 60-180 us a reset.
++  FEXCore::Allocator::VirtualDontNeed(Thread->CallRetStackBase, TS::CALLRET_STACK_SIZE, false);
++#else
+   FEXCore::Allocator::VirtualDontNeed(Thread->CallRetStackBase, TS::CALLRET_STACK_SIZE);
++#endif
+ #if defined(ARCHITECTURE_arm64) || defined(ARCHITECTURE_arm64ec)
+   __asm__ volatile("mrs %0, cntvct_el0" : "=r"(ResetT1));
+   __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(ResetFreq));
+diff --git a/FEXCore/include/FEXCore/Debug/InternalThreadState.h b/FEXCore/include/FEXCore/Debug/InternalThreadState.h
+index 036bcd6..ca2a579 100644
+--- a/FEXCore/include/FEXCore/Debug/InternalThreadState.h
++++ b/FEXCore/include/FEXCore/Debug/InternalThreadState.h
+@@ -136,11 +136,11 @@ struct alignas(FEXCore::Utils::FEX_PAGE_SIZE) InternalThreadState : public FEXCo
+   //   (a) Dispatcher.cpp's JITCallback sentinel push tests the WHOLE stack, so
+   //       the callback path is not bounded by this window at all.
+   //
+-  //   (b) The clear RECLAIMS rather than dirties. VirtualDontNeed() is
+-  //       MEM_DECOMMIT + MEM_COMMIT, and on this (non-pool-aliased) range wine's
++  //   (b) The clear RECLAIMS rather than dirties. On iOS VirtualDontNeed() is a
++  //       MEM_DECOMMIT alone (PLA-610), and on this (non-pool-aliased) range wine's
+   //       decommit_pages() does anon_mmap_fixed() — a fresh MAP_ANON|MAP_FIXED
+-  //       that drops the physical pages and installs zero-fill-on-demand. The
+-  //       recommit only restores access. So a full-size clear RETURNS memory,
++  //       read/write mapping that drops the physical pages and installs
++  //       zero-fill-on-demand. So a full-size clear RETURNS memory,
+   //       and shrinking it strands the remainder resident.
+   //
+   // Clear CALLRET_STACK_SIZE. These constants describe the guard, not the cost.
+diff --git a/FEXCore/include/FEXCore/Utils/AllocatorHooks.h b/FEXCore/include/FEXCore/Utils/AllocatorHooks.h
+index 7a07a73..c7deede 100644
+--- a/FEXCore/include/FEXCore/Utils/AllocatorHooks.h
++++ b/FEXCore/include/FEXCore/Utils/AllocatorHooks.h
+@@ -157,13 +157,15 @@ inline void VirtualFree(void* Ptr, size_t Size) {
+ }
+ 
+ inline void VirtualDontNeed(void* Ptr, size_t Size, bool Recommit = true) {
+-  // Zero the page-aligned region, preserving permissions.
++  // Zero the page-aligned region, preserving permissions: only a recommit needs them.
++  if (!Recommit) {
++    ::VirtualFree(Ptr, Size, MEM_DECOMMIT);
++    return;
++  }
+   MEMORY_BASIC_INFORMATION Info;
+   ::VirtualQuery(Ptr, &Info, sizeof(Info));
+   ::VirtualFree(Ptr, Size, MEM_DECOMMIT);
+-  if (Recommit) {
+-    ::VirtualAlloc(Ptr, Size, MEM_COMMIT, Info.Protect);
+-  }
++  ::VirtualAlloc(Ptr, Size, MEM_COMMIT, Info.Protect);
+ }
+ 
+ inline bool VirtualProtect(void* Ptr, size_t Size, ProtectOptions options) {

@@ -370,16 +370,32 @@ static void test_freeze(void)
 
 static void test_handoff(void)
 {
-    int e = event( 0, 1 ), fd;
-    ppsync_post( 0x30, 0x44, e );
-    CHECK( ppsync_take( 0x30, 0x48 ) == -1 );
-    fd = ppsync_take( 0x30, 0x44 );
+    int e = event( 0, 1 ), f = event( 0, 0 ), fd;
+    unsigned int access = 0;
+    ppsync_post( 0x30, 0x44, e, 0x1f0003 );
+    CHECK( ppsync_take( 0x30, 0x48, NULL ) == -1 );
+    fd = ppsync_take( 0x30, 0x44, &access );
     CHECK( fd == e );
-    CHECK( ppsync_take( 0x30, 0x44 ) == -1 );
+    CHECK( access == 0x1f0003 );      /* the handle's access travels with it */
+    CHECK( ppsync_take( 0x30, 0x44, NULL ) == -1 );
     close( e );                       /* the creator's reference */
     CHECK( !wait1( fd, 4, 0 ) );      /* the posted one still holds it */
     close( fd );
     errno = 0; CHECK( wait1( fd, 4, 0 ) == -1 && errno == EBADF );
+
+    /* posts taken out of order: each key still finds its own entry, while
+     * the scan's high-water mark falls and rises behind them */
+    ppsync_post( 0x30, 0x50, f, 1 );
+    ppsync_post( 0x30, 0x54, f, 2 );
+    ppsync_post( 0x30, 0x58, f, 3 );
+    CHECK( ppsync_take( 0x30, 0x58, &access ) == f && access == 3 );
+    CHECK( ppsync_take( 0x30, 0x50, &access ) == f && access == 1 );
+    ppsync_post( 0x30, 0x5c, f, 4 );
+    CHECK( ppsync_take( 0x30, 0x54, &access ) == f && access == 2 );
+    CHECK( ppsync_take( 0x30, 0x5c, &access ) == f && access == 4 );
+    CHECK( ppsync_take( 0x30, 0x5c, NULL ) == -1 );
+    close( f ); close( f ); close( f ); close( f );   /* the four takes' references */
+    close( f );                                       /* the creator's */
 }
 
 static unsigned long long live(void)
@@ -397,20 +413,20 @@ static void test_handoff_leaks(void)
     unsigned long long before = live();
     int e = event( 0, 1 ), f = event( 0, 0 ), fd, i;
 
-    ppsync_post( 0x34, 0x10, e );
-    ppsync_post( 0x34, 0x10, f );               /* the same handle again: replaces */
-    CHECK( ppsync_take( 0x34, 0x10 ) == f );
-    CHECK( ppsync_take( 0x34, 0x10 ) == -1 );
+    ppsync_post( 0x34, 0x10, e, 0 );
+    ppsync_post( 0x34, 0x10, f, 0 );            /* the same handle again: replaces */
+    CHECK( ppsync_take( 0x34, 0x10, NULL ) == f );
+    CHECK( ppsync_take( 0x34, 0x10, NULL ) == -1 );
     close( f );                                 /* the take's reference */
 
-    for (i = 0; i < 3000; i++) ppsync_post( 0x38, 0x1000 + 4 * i, e );   /* never taken */
-    ppsync_post( 0x38, 0x8, e );
-    fd = ppsync_take( 0x38, 0x8 );              /* the newest still gets through */
+    for (i = 0; i < 3000; i++) ppsync_post( 0x38, 0x1000 + 4 * i, e, 0 );   /* never taken */
+    ppsync_post( 0x38, 0x8, e, 0 );
+    fd = ppsync_take( 0x38, 0x8, NULL );        /* the newest still gets through */
     CHECK( fd == e );
     close( fd );
-    CHECK( ppsync_take( 0x38, 0x1000 ) == -1 );  /* the oldest went */
+    CHECK( ppsync_take( 0x38, 0x1000, NULL ) == -1 );   /* the oldest went */
     for (i = 3000 - 1024 + 1; i < 3000; i++)    /* take the rest, so each reference returns */
-        if ((fd = ppsync_take( 0x38, 0x1000 + 4 * i )) == e) close( fd );
+        if ((fd = ppsync_take( 0x38, 0x1000 + 4 * i, NULL )) == e) close( fd );
     close( f );
     close( e );
     CHECK( live() == before );

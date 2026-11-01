@@ -59,3 +59,4 @@
 0060-ntdll-run-x64-Windows-KiUserExceptionDispatcher-for-.patch
 0061-ntdll-an-x64-call-target-check_call-cannot-read-is-c.patch
 0062-ntdll-log-the-first-256-of-the-remaining-exceptions-.patch
+0063-ntdll-kernel32-kernelbase-native-code-reads-KUSER_SH.patch
