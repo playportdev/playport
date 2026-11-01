@@ -4,10 +4,47 @@
 Windows ARM64 client; decisions [0170](../decisions/0170-native-arm64-guests.md) and
 [0176](../decisions/0176-native-arm64-images-live-in-the-jit-pool.md)).
 
-**Status: the probe is built; it has not run on the phone.** Written and built in the side copy
-`.work/worktrees/x18abi` (decision 0117), branch `dev/pla-516-x18-abi`. The same sequence ran
-natively on a Mac (macOS 27.2), [below](#on-macos-272-the-same-sequence-natively). Below: what
-the sources say, what the Mac showed, what was built, how to run it and how to read it.
+**Status: on the phone (iOS 27.2) the verdict is `UNTIL-SWITCH`, and the installer refuses an app
+carrying `com.apple.security.custom-x18-abi-toggle`, so the runtime keeps rewriting x18 readers.**
+Results: [on the phone](#on-the-phone-ios-272). The probe was written in the side copy
+`.work/worktrees/x18abi` (decision 0117), branch `dev/pla-516-x18-abi`, and ran from the main
+checkout. The same sequence ran natively on a Mac (macOS 27.2),
+[below](#on-macos-272-the-same-sequence-natively). Below: what the sources say, what the Mac and
+the phone showed, what was built, how to run it and how to read it.
+
+## On the phone (iOS 27.2)
+
+iPhone18,4 on iOS 27.2, dev IPA `b2b970695d0d6999b4796ecae9473bc5a391c07471024ae0fea2aff8cda16500`
+(merge `7f509e23`, madeira-unix 0272), run `20261101T135242`, with
+`--settings 'dir-arm64:{"arguments":"x18","runtime":"x18-abi=1"}'`. The probe exited 42.
+
+- **No entitlement: `UNTIL-SWITCH`.** Plain, x18 was zero after the 20 ms spin, `getpid`, the
+  forced switch and the `udf`, and the TEB after the Wine calls (the dispatcher's reload). Armed
+  (bit 48 set by `msr` from guest code), x18 and the bit survived `getpid`; the spin (preempted),
+  the forced `thread_switch`, `NtYieldExecution`, `Sleep(50)` and the `udf` round trip cleared the
+  bit and x18 came back zero. The `udf` handler's context still held the sentinel. The probe's
+  last line: `x18-abi: UNTIL-SWITCH …; armed: none=kept+bit spin=zero getpid=kept+bit switch=zero
+  yield=TEB sleep0=TEB+bit sleep50=TEB udf=zero`. So the kernel honours the bit as the sources say,
+  and drops it at the first context switch of an unentitled task.
+- **The libsystem path is absent.** Every `[x18-abi]` line in `s1-host.log` was `no update_tpidr`:
+  `os_set_custom_x18_abi_enabled` and `os_custom_x18_abi_enabled` resolve, but the `update_tpidr`
+  commpage pointer is NULL in an iOS app, so 0272 never calls the setter (it would jump to 0).
+  Only a direct `msr TPIDR_EL0` sets the bit there.
+- **With the entitlement: refused at install.** xtool drops a key it has no type for when it signs
+  for a free team; with a local type for the key (no App ID capability), the dev IPA
+  (`d24b8ef835e4a3b7d45ed70901cdb2ec9c657cb59788e0b8fc0a136bc0eea601`) carried it, and
+  `verify-ipa` already failed `profile: allows every entitlement the signature carries`. installd
+  refused it: `ApplicationVerificationFailed: Failed to verify code signature of …/S1Probe.app :
+  0xe8008015 (A valid provisioning profile for this executable was not found.)`. The installed app
+  stayed as it was (container kept); the entitlement and the xtool change were reverted, and the
+  dev app reinstalled without them. A free-team profile cannot list the key, so the entitled run
+  cannot happen on this phone with this signing.
+- **`pp install` recorded the refused IPA as installed.** Its recovery for a timed-out install
+  found the app and the (unchanged) profile on the phone and wrote the refused IPA's sha256 to the
+  install record. `build/install` now stops at an `AppInstallError` from installd, naming it.
+
+So nothing from [What a positive result would allow](#what-a-positive-result-would-allow) can be
+dropped: x18 must survive preemption, and only the entitlement gives that.
 
 ## What the sources say
 
@@ -84,9 +121,9 @@ a SIGILL handler. It was built three times, each ad hoc signed (`codesign -s -`)
 So the open question for the phone is not the API. It is whether an iOS app signed by the free
 team may carry `com.apple.security.custom-x18-abi-toggle`. On iOS the installer checks the
 executable's entitlements against the provisioning profile, and a free-team profile lists only
-its own capabilities. An app carrying the key is therefore expected to be refused at install
-[INFERENCE, untested]. The probe below measures the unentitled case, which the Mac predicts to
-be `UNTIL-SWITCH`.
+its own capabilities. An app carrying the key was therefore expected to be refused at install,
+and the phone [refused it](#on-the-phone-ios-272). The probe below measures the unentitled case,
+which the Mac predicted, and the phone showed, to be `UNTIL-SWITCH`.
 
 ## What was built
 
@@ -164,7 +201,5 @@ image from 40,590 to 55,679). The x18 rewriting is most of the rewrite of the ga
 With `UNTIL-SWITCH`, nothing can be dropped. The one lever left is the entitlement that turned the
 Mac's result into `PRESERVED`: `com.apple.security.custom-x18-abi-toggle` in
 `app/S1Probe.entitlements`, plus whatever xtool needs to keep a key the profile does not list
-(it already needs a local patch for `increased-memory-limit`). Whether the phone's installer
-accepts that key from a free-team app is untested. If it refuses, `pp install` fails and leaves
-the installed app as it was [INFERENCE]. That is an owner decision, because it is a phone install
-of a differently signed IPA.
+(it already needs a local patch for `increased-memory-limit`). The phone's installer refuses that
+key from a free-team app (0xe8008015, [above](#on-the-phone-ios-272)) and keeps the installed app.
