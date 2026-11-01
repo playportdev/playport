@@ -172,14 +172,8 @@ final class LibraryModel: ObservableObject {
     private func adopted(_ scanned: Catalog) {
         scanning = false
         scannedOnce = true
-        // Edits made while the scan ran win over the scan's copy of them.
-        var merged = scanned
-        for i in merged.titles.indices {
-            guard let now = catalog.title(id: merged.titles[i].id) else { continue }
-            merged.titles[i].lastPlayed = now.lastPlayed
-            merged.titles[i].playSeconds = now.playSeconds
-            if now.buildID == merged.titles[i].buildID { merged.titles[i].lastVerification = now.lastVerification }
-        }
+        // Edits made while the scan ran (play time, a verification, a notice acceptance) win over the scan's copy of them.
+        var merged = scanned.keepingEdits(of: catalog)
         if merged.titles.map(\.id) != catalog.titles.map(\.id) {
             Self.log("adopted \(merged.titles.count) title(s): "
                      + merged.titles.map { "\($0.name) [\($0.badge.rawValue)]" }.joined(separator: ", "))
@@ -221,11 +215,12 @@ final class LibraryModel: ObservableObject {
         guard catalog.title(id: id)?.canPlay == true, !TitleLaunch.shared.running, !TitleLaunch.shared.spent else { return false }
         // A Battle.net copy (PLA-514, decision 0175): the ban-risk notice before its first Play, which
         // goes on once accepted; declined, nothing starts. A client that is not the ARM64 one is refused.
-        // Then the update check (PLA-521), not while a download of the copy is queued.
+        // Then the update check (PLA-521), not while a download of the copy is queued; while it runs the
+        // Play button says so and a second Play does not start another check.
         var bnetLaunch: BattleNetPlay.Launch?
         if let t = catalog.title(id: id), BattleNet.product(t.key) != nil {
             let installs = SteamAccountModel.current?.installs
-            if installs?.jobs[t.key] != nil { return false }
+            if installs?.jobs[t.key] != nil || preparing[id] != nil { return false }
             var facts = BattleNetPlay.Facts(copy: t, update: battleNetUpdate)
             decide: while let step = BattleNetPlay.decide(facts) {
                 switch step {
@@ -240,7 +235,9 @@ final class LibraryModel: ObservableObject {
                     return false
                 case let .checkUpdate(product):
                     Self.log("play \(t.name) (\(id)): checking for an update")
+                    preparing[id] = "Checking for an update…"
                     facts.update = await BattleNetInstalled.shared.checkUpdate(product)
+                    preparing[id] = nil
                     facts.freeBytes = freeBytes
                 case let .update(product, version):
                     guard let installs else {

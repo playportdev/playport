@@ -55,6 +55,19 @@ final class BattleNetPlayTests: XCTestCase {
         XCTAssertNil(c.title(id: "bnet-wow")?.riskNoticeAccepted)
     }
 
+    /// An acceptance given while a library scan runs (LibraryModel.adopted): the live catalogue's
+    /// acceptance wins over the scan's copy of the catalogue from when it started.
+    func testAnAcceptanceGivenDuringAScanSurvivesIt() throws {
+        let wow = try install(.wow, folder: "World of Warcraft")
+        let started = scan([wow], previous: Catalog())
+        var live = started
+        let accepted = Date(timeIntervalSince1970: 1_800_000_000)
+        live.update("bnet-wow") { $0.riskNoticeAccepted = accepted }
+        let scanned = scan([wow], previous: started)
+        XCTAssertNil(scanned.title(id: "bnet-wow")?.riskNoticeAccepted, "the scan's snapshot predates the acceptance")
+        XCTAssertEqual(scanned.keepingEdits(of: live).title(id: "bnet-wow")?.riskNoticeAccepted, accepted)
+    }
+
     /// A copy as adoption leaves it: the store's receipt, the client's PE machine.
     private func copy(_ p: BattleNetProduct, machine: UInt16? = 0xAA64, exe: String = #"_retail_\Wow-ARM64.exe"#,
                       accepted: Date? = nil) -> InstalledTitle {
@@ -145,9 +158,11 @@ final class BattleNetPlayTests: XCTestCase {
         let n = BattleNetPlay.notice(.wow)
         XCTAssertEqual(n.title, "Before you play World of Warcraft")
         for words in ["Blizzard does not support Playport", "action against your Battle.net account",
-                      "stores no Battle.net email, password or session", "changes nothing in the game"] {
+                      "stores no Battle.net email, password or session", "changes none of the game's files",
+                      "rewrites some of the game's instructions in memory, which Blizzard may detect"] {
             XCTAssertTrue(n.text.contains(words), words)
         }
+        XCTAssertFalse(n.text.contains("changes nothing in the game"), "the runtime adapts the game's code in memory (0176)")
         XCTAssertTrue(BattleNetPlay.notice(.wowClassic).text.contains("World of Warcraft Classic"))
     }
 }

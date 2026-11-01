@@ -100,8 +100,13 @@ public enum BattleNet {
     }
 
     /// What the install folder holds: its files and their bytes (every file, as the phone's
-    /// storage counts them).
-    public static func measure(_ folder: URL) -> (files: Int, bytes: UInt64) {
+    /// storage counts them). The walk runs detached: a whole install takes a while, and the callers
+    /// are on the main actor.
+    public static func measure(_ folder: URL) async -> (files: Int, bytes: UInt64) {
+        await Task.detached(priority: .utility) { walk(folder) }.value
+    }
+
+    private static func walk(_ folder: URL) -> (files: Int, bytes: UInt64) {
         guard let e = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey]) else {
             return (0, 0)
         }
@@ -238,12 +243,14 @@ public enum BattleNet {
 
     /// The install's locale: the first of the phone's preferred languages (`Locale.preferredLanguages`,
     /// `de-DE`, `zh-Hant-TW`, `es-419`) that is a WoW locale the product ships (`supported`, after
-    /// the product config's `replacements`, enGB → enUS), else enUS. With no product config yet
-    /// (`supported` empty), any WoW locale.
+    /// the product config's `replacements`, enGB → enUS), else enUS. An English the product does not
+    /// ship as such (enGB on Classic, which ships enUS only and replaces nothing) is its enUS. With no
+    /// product config yet (`supported` empty), any WoW locale.
     public static func locale(preferredLanguages: [String], supported: [String], replacements: [String: String]) -> String {
         for language in preferredLanguages {
             guard var wow = wowLocale(language) else { continue }
             wow = replacements[wow] ?? wow
+            if wow.hasPrefix("en"), !supported.isEmpty, !supported.contains(wow) { wow = defaultLocale }
             if supported.isEmpty ? wowLocales.contains(wow) : supported.contains(wow) { return wow }
         }
         return defaultLocale
@@ -266,8 +273,9 @@ public enum BattleNet {
         case "es": return country == nil || spainSpanish.contains(country!) ? "esES" : "esMX"
         case "pt": return country == "PT" ? "ptPT" : "ptBR"
         case "zh":
-            if script == "hant" || ["TW", "HK", "MO"].contains(country ?? "") { return "zhTW" }
-            return "zhCN"
+            // The script first: zh-Hans-HK is Simplified Chinese.
+            if let script { return script == "hant" ? "zhTW" : "zhCN" }
+            return ["TW", "HK", "MO"].contains(country ?? "") ? "zhTW" : "zhCN"
         default: return nil
         }
     }

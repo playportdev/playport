@@ -69,7 +69,7 @@ final class BattleNetInstalled: ObservableObject {
 
     // MARK: region
 
-    /// The region picker (PadModal), as the installed page's Region button opens it.
+    /// The region picker (PadModal), as the installed page's Region row opens it.
     func pickRegion(_ p: BattleNetProduct) {
         PadModal.shared.picker(title: "Store region", context: p.name,
                                note: "Your Battle.net account's region. The game signs in to it. Changing it downloads nothing.",
@@ -112,12 +112,16 @@ final class BattleNetInstalled: ObservableObject {
 
     /// `deDE` as the phone words it: `German (Germany) · deDE`.
     static func label(_ locale: String) -> String {
-        guard locale.count == 4 else { return locale }
-        let id = locale.prefix(2) + "_" + locale.suffix(2)
-        return Locale.current.localizedString(forIdentifier: String(id)).map { "\($0) · \(locale)" } ?? locale
+        name(locale).map { "\($0) · \(locale)" } ?? locale
     }
 
-    /// The language picker (PadModal), as the installed page's Language button opens it.
+    /// `deDE`'s language alone, `German (Germany)`, for the page's narrow facts card.
+    static func name(_ locale: String) -> String? {
+        guard locale.count == 4 else { return nil }
+        return Locale.current.localizedString(forIdentifier: "\(locale.prefix(2))_\(locale.suffix(2))")
+    }
+
+    /// The language picker (PadModal), as the installed page's Language row opens it.
     func pickLanguage(_ p: BattleNetProduct, downloads: Downloads) {
         Task {
             let locales = await locales(p)
@@ -158,7 +162,8 @@ final class BattleNetInstalled: ObservableObject {
             let prepared = try await installer.prepareUpdate(p, root: root, work: work)
             let r = try await installer.update(prepared, root: root, work: work, progress: progress)
             let version = prepared.plan.build.version.versionsName
-            try layout.saveReceipt(BattleNet.receipt(before, measured: BattleNet.measure(root), version: version))
+            let measured = await BattleNet.measure(root)
+            try layout.saveReceipt(BattleNet.receipt(before, measured: measured, version: version))
             updates[p] = .current(version)
             log.info("battlenet", "\(p.code): updated \(before.version ?? "?") → \(version) in C:\\Games\\\(before.installDir), "
                      + "\(prepared.plan.objects) objects and \(prepared.plan.files.count) files, \(r.engine.downloadedBytes) bytes fetched "
@@ -167,7 +172,8 @@ final class BattleNetInstalled: ObservableObject {
         }
         let prepared = try await installer.prepareLocaleChange(p, root: root, to: choice.locale, work: work)
         let r = try await installer.changeLocale(prepared, root: root, work: work, progress: progress)
-        try layout.saveReceipt(BattleNet.receipt(before, measured: BattleNet.measure(root)))
+        let measured = await BattleNet.measure(root)
+        try layout.saveReceipt(BattleNet.receipt(before, measured: measured))
         if let c = BattleNet.installedChoice(p, folder: root) { current[p] = Choice(region: c.region, locale: c.locale) }
         log.info("battlenet", "\(p.code): language \(choice.locale) in C:\\Games\\\(before.installDir), "
                  + "\(prepared.plan.objects) objects, \(r.engine.downloadedBytes) bytes fetched in \(Int(r.seconds)) s")

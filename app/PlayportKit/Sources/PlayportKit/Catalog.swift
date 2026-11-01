@@ -161,6 +161,21 @@ public struct Catalog: Codable, Equatable, Sendable {
         guard let i = titles.firstIndex(where: { $0.id == id }) else { return }
         change(&titles[i])
     }
+
+    /// This scan's catalogue with the edits made to `live` while the scan ran (LibraryModel.adopted):
+    /// play time, the verification of the same build and the ban-risk notice acceptance win over the
+    /// scan's copy of them, which is the catalogue from when the scan started.
+    public func keepingEdits(of live: Catalog) -> Catalog {
+        var merged = self
+        for i in merged.titles.indices {
+            guard let now = live.title(id: merged.titles[i].id) else { continue }
+            merged.titles[i].lastPlayed = now.lastPlayed
+            merged.titles[i].playSeconds = now.playSeconds
+            if now.buildID == merged.titles[i].buildID { merged.titles[i].lastVerification = now.lastVerification }
+            merged.titles[i].riskNoticeAccepted = now.riskNoticeAccepted
+        }
+        return merged
+    }
 }
 
 /// Where the catalogue and the titles live in the app container: the install

@@ -89,6 +89,9 @@ final class BattleNetStoreTests: XCTestCase {
         XCTAssertEqual(retailLocale(["zh-Hant-HK"]), "zhTW")
         XCTAssertEqual(retailLocale(["zh-Hans-CN"]), "zhCN")
         XCTAssertEqual(retailLocale(["zh-TW"]), "zhTW")
+        XCTAssertEqual(retailLocale(["zh-Hans-HK"]), "zhCN", "the script decides before the country")
+        XCTAssertEqual(retailLocale(["zh-Hans-MO"]), "zhCN")
+        XCTAssertEqual(retailLocale(["zh-HK"]), "zhTW", "no script: the country")
         XCTAssertEqual(retailLocale(["ja-JP"]), "enUS", "no WoW locale: enUS")
         XCTAssertEqual(retailLocale(["ja-JP", "de-DE"]), "deDE", "the next language the phone prefers")
         XCTAssertEqual(retailLocale([]), "enUS")
@@ -97,6 +100,12 @@ final class BattleNetStoreTests: XCTestCase {
         XCTAssertEqual(BattleNet.locale(preferredLanguages: ["it-IT", "fr-FR"], supported: era, replacements: [:]), "frFR")
         XCTAssertEqual(BattleNet.locale(preferredLanguages: ["de_DE"], supported: [], replacements: [:]), "deDE",
                        "no product config yet: any WoW locale")
+        // A Classic product ships enUS and no enGB, and its config replaces nothing: British (or any)
+        // English is its US English, never the next language the phone prefers.
+        XCTAssertEqual(BattleNet.locale(preferredLanguages: ["en-GB", "fr-FR"], supported: era, replacements: [:]), "enUS")
+        XCTAssertEqual(BattleNet.locale(preferredLanguages: ["en-AU", "fr-FR"], supported: era, replacements: [:]), "enUS")
+        XCTAssertEqual(BattleNet.locale(preferredLanguages: ["en-GB"], supported: [], replacements: [:]), "enGB",
+                       "no product config yet: WoW's own British English")
     }
 
     func testTheStoreListsOnlyOfferedWoWProducts() {
@@ -185,7 +194,7 @@ final class BattleNetStoreTests: XCTestCase {
     /// PLA-520: an installed product's region and language are its `.build.info`'s; a language
     /// change is an update job in the installed region and the new locale, and its receipt
     /// counts what the install folder holds afterwards.
-    func testAnInstalledProductsRegionAndLanguageAndALanguageChange() throws {
+    func testAnInstalledProductsRegionAndLanguageAndALanguageChange() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("bnet-\(UUID().uuidString)")
         addTeardownBlock { try? FileManager.default.removeItem(at: folder) }
         XCTAssertNil(BattleNet.installedChoice(.wowClassicEra, folder: folder))
@@ -217,7 +226,7 @@ final class BattleNetStoreTests: XCTestCase {
         try FileManager.default.createDirectory(at: folder.appendingPathComponent("Data/data"), withIntermediateDirectories: true)
         try Data(count: 100).write(to: folder.appendingPathComponent("Data/data/data.000"))
         try Data(count: 200).write(to: folder.appendingPathComponent("Data/data/data.001"))
-        let measured = BattleNet.measure(folder)
+        let measured = await BattleNet.measure(folder)
         XCTAssertEqual(measured.files, 3)
         XCTAssertEqual(measured.bytes, 300 + UInt64(info.utf8.count))
         let after = BattleNet.receipt(before, measured: measured)
