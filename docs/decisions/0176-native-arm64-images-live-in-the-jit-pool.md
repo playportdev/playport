@@ -41,3 +41,33 @@ FEX executes guest code at PE addresses.
 - The child's ntdll stays on its view: the unix side writes its dispatcher slots there and syncs
   them into the copy.
 - The full copy costs the trimmed `.rsrc`/`.reloc` bytes again in the pool.
+
+## Amendment, 2026-11-01: an image that remaps itself (madeira-unix 0264)
+
+World of Warcraft's ARM64 client replaces its image with a section of its own: a
+`SEC_COMMIT | SEC_NO_CHANGE` section of SizeOfImage, mapped read-write, the image copied into it,
+the image unmapped, then three views of the section at the image's base (code RX, `.data` RW, the
+rest RO). It then decrypts its code a function at a time through the read-write view, with
+`FlushInstructionCache` on each, and runs it at the base. The base is the pool copy, which takes
+code only through the pool's RW alias, so no section view can sit there.
+
+- **A plain section view mapped at a presented copy's address** is mapped where the image's PE
+  view was (the hidden backing store again). Its bytes are copied into the copy through the RW
+  alias, x18-patched and flushed, and the caller gets the copy's address.
+- **The section's other views become the copy.** Every view a native child maps of a plain
+  section is recorded with the section's file and offset; the views of a section that is mapped
+  at a copy are `vm_remap`ped onto the copy's RW alias, so a write through them is a write to the
+  code that runs, as on Windows. The backing stores keep the section's bytes as of the remap.
+- **`FlushInstructionCache` on such a view, or on a presented copy,** x18-patches the code
+  reachable from the flushed address (fall-through and branches, not calls, up to a RET, BR or
+  an unallocated word) from the rest of the image's trampoline reservation.
+- **The load's x18 patcher leaves encrypted bytes alone.** A 1 KB window of .text with more than
+  8 of its 256 words in the unallocated encoding groups (op0 `0b0001`, `0b0011`) is data. No
+  compiler emits those words; encrypted bytes put an eighth of theirs there, and a patched
+  encrypted word decrypts to garbage. The trampoline reservation still counts those windows.
+- **A native child's copy gets every relocation,** whatever the value, as Windows' loader applies
+  them (the client has 95 on encrypted .text words).
+
+Costs: a view mapped before the remap stays one with the copy until it is unmapped; its last
+partial host page is not aliased. Code reached only through an indirect branch from a flushed
+function is not patched and leaves its x18 reads to the fault path.

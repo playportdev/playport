@@ -113,3 +113,34 @@ Final IPA `5b14b446dc0c571f7a08c11c6ced7b4402b947a414c81ea862a9fe15f63266c4`:
 | `d3d12` probe on Vulkan | exit 0 | 20261101T011230 |
 | `arm64` probe | exit 42 (all checks pass) | 20261101T011306 |
 | `pp test --quick` | passes | |
+
+## The client remaps its own image (madeira-unix 0264, decision 0176 amended)
+
+- **What it does** (diagnostic build logging a native child's memory calls, run 20261101T012702):
+  `NtCreateSection(SEC_COMMIT | SEC_NO_CHANGE, 0x5dc7000)`, a read-write view of it, an RWX
+  protect of the image, `NtUnmapViewOfSection` of the image, then three `NtMapViewOfSection` at
+  the image's base (offset 0 RX 0x34d0000, `.data` RW, the rest RO). All three failed the 64 KB
+  alignment check on the 16 KB-aligned pool copy, and the client jumped into encrypted bytes at
+  +0xb3790. It then decrypts a function at a time in the read-write view and calls
+  `FlushInstructionCache` on it (first: view+0xb3790, 0x400 bytes).
+- **Encrypted .text.** 46 MB of the client's 48 MB .text is encrypted (a 1 KB window is either free
+  of the unallocated encoding groups or about one word in eight in them; 142 windows are code). The
+  x18 patcher had changed 196,547 encrypted words; it now leaves those windows alone (512 sites
+  patched at load). 95 relocations on encrypted .text words were skipped by the copy; a native
+  child's copy now gets them all.
+- **The decrypted function at +0xb3790** checks that its return address lies between two
+  literals and that its caller is a BL/BLR; on failure it overwrites the PEB forever. Copying the
+  flushed bytes into the copy was not enough (run 20261101T020945: it spun in that loop); the
+  read-write view is now remapped onto the copy's RW alias, so writes WoW makes without a flush
+  reach the copy too.
+- **Run 20261101T021958:** the three views map at the copy, the other views are one with it, the
+  function at +0xb3790 is patched and passes its check, and WoW handles further UDFs and allocates
+  another RWX buffer. It then spins at +0x33a44c (called from +0x336694). No login screen yet.
+
+Gates on IPA `ff0cd315c663a22fd3591de6a1b852bacea65ac4782d01ac1be6fbaaf4a3ea26` (the 0264 build, the one run 20261101T021958 used):
+
+| Check | Result | Run |
+|---|---|---|
+| Hollow Knight first-frame+10 | passes | 20261101T022522 |
+| `arm64` probe | exit 42 (all checks pass) | 20261101T022617 |
+| `d3d12` probe on Vulkan | exit 0 | 20261101T022648 |

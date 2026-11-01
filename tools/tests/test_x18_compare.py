@@ -64,9 +64,9 @@ int main(void)
     text[11] = 0xca120129;  /* eor x9, x9, x18 (0263) */
     text[12] = 0xb4000052;  /* cbz x18, .+8 (0263): a branch trampoline */
 
-    assert(ios_jit_x18_tramp_need((char *)text, sizeof(text), 0x1000, NULL) == 7 * 32 + 40 + 0x1000);
+    assert(ios_jit_x18_tramp_need((char *)text, sizeof(text), 0x1000, NULL, 1) == 7 * 32 + 40 + 0x1000);
     assert(ios_jit_patch_x18((char *)text, (char *)text, sizeof(text), 0x1000,
-                             (char *)tramp, (char *)tramp, sizeof(tramp)) == 8);
+                             (char *)tramp, (char *)tramp, sizeof(tramp), 1, NULL) == 8);
     assert(tramp_insn(0) == 0xf100e23f);   /* cmp x17, #0x38 */
     assert(tramp_insn(1) == 0xeb9f163f);   /* cmp x17, xzr, asr #5 */
     assert(tramp_insn(2) == 0xd1002220);   /* sub x0, x17, #8 */
