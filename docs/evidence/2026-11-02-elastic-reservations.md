@@ -145,3 +145,24 @@ Findings:
 - **The Witcher 3 1.32 still needs its keys.** Without them, both asks were placed whole: no shortage of room. The game stalled loading its save; with the keys it plays. The difference is where the 8 and 32 GB land: off the 8 GB and 16 GB alignments the holds give. That this is the cause is an inference. Under decision 0180's rule the cohort keys stay.
 - **VirtualQuery:** no run queried an address inside a shortened view's claim (0 `[elastic] query` lines in both Mewgenics runs).
 - **RDR2's commit depth** stays open (PLA-805).
+
+### 7.1 After the review fixes
+
+Dev IPA `bbace771aa45a3c103d23b06f8faf90be84b73b778c3afc5cd418ef575eff31c` (commit `491717e7`):
+`ppe_before` only places outside live claims or defers to today's placement; never-shrunk asks are
+lent room once, from a donor that can hold them; no short grant past the view table; decommit over a
+claim frees the real view. Release IPA `9de55c4186cba9890ead2ad4d7790261b5dd7f52f379ecb8d91349e0874bc15d`
+passed `pp verify --variant release`. One locked session (`$PLAYPORT_BUILD/agent-notes/pla-799/s3.sh`),
+then `pp pad` steps with a screenshot after each.
+
+- **Hollow Knight** (`$PLAYPORT_BUILD/ui-runs/pla802r-hk`): first frame +10.5 s, to first-frame+10,
+  no `[elastic]` line.
+- **Mewgenics into a game** (`$PLAYPORT_BUILD/ui-runs/pla802r-mewgenics`, launched with the scripted
+  pad and left running; host log `pull-late/`):
+  - The pad's D-pad selected Play on the main menu, and A opened the save slots.
+  - A on slot 1 started a new game: the scientist's intro, then about 60 s of A presses through its
+    lines.
+  - The game then showed its first choice in play: "Choose two, a boy and a girl", with three cats.
+  - It was still at 60 fps about 4 minutes after the first frame, when the app was ended.
+  - Reservations: 61 of 1,024 MB, all placed. `[elastic]`: 8 lend, 19 grant, 2 place, no grow, no
+    refuse, no query. No `[alloc-fail]` line.
