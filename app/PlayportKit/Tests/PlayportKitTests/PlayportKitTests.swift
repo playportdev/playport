@@ -284,6 +284,39 @@ final class CatalogTests: XCTestCase {
         XCTAssertNil(w3.storeArguments, "the launcher's arguments are not the game's")
     }
 
+    /// A Steam game whose launch entry is a launcher that cannot run (Baldur's Gate 3's
+    /// .NET launcher) starts the executable the player picked instead, and a pick in place of
+    /// Counter-Strike's `hl.exe` starts without the entry's arguments; picking the entry's own
+    /// executable keeps them.
+    func testAnExecutablePickedForASteamGameReplacesItsLaunchEntry() throws {
+        let cohort = Cohort(titles: [])
+        try file("Baldurs Gate 3/Launcher/LariLauncher.exe")
+        try file("Baldurs Gate 3/bin/bg3_dx11.exe")
+        var bg3 = try receipt(app: 1086940, dir: "Baldurs Gate 3")
+        bg3.executable = #"Launcher\LariLauncher.exe"#
+        var c = Adoption.scan(games: games, cohort: cohort, receipts: [bg3], previous: Catalog())
+        XCTAssertEqual(c.title(id: "app-1086940")?.executable, #"Launcher\LariLauncher.exe"#)
+        c.update("app-1086940") { $0.chosenExecutable = #"bin\bg3_dx11.exe"# }
+        let picked = try XCTUnwrap(Adoption.scan(games: games, cohort: cohort, receipts: [bg3], previous: c).title(id: "app-1086940"))
+        XCTAssertEqual(picked.executable, #"bin\bg3_dx11.exe"#)
+        XCTAssertEqual(picked.chosenExecutable, #"bin\bg3_dx11.exe"#)
+
+        try file("Half-Life/hl.exe")
+        try file("Half-Life/other.exe")
+        var cs = try receipt(app: 10, dir: "Half-Life")
+        cs.executable = "hl.exe"
+        cs.arguments = "-steam -game cstrike"
+        var first = Adoption.scan(games: games, cohort: cohort, receipts: [cs], previous: Catalog())
+        first.update("app-10") { $0.chosenExecutable = "other.exe" }
+        let other = try XCTUnwrap(Adoption.scan(games: games, cohort: cohort, receipts: [cs], previous: first).title(id: "app-10"))
+        XCTAssertEqual(other.executable, "other.exe")
+        XCTAssertNil(other.storeArguments, "the launch entry's arguments are hl.exe's")
+        first.update("app-10") { $0.chosenExecutable = "HL.EXE" }
+        let same = try XCTUnwrap(Adoption.scan(games: games, cohort: cohort, receipts: [cs], previous: first).title(id: "app-10"))
+        XCTAssertEqual(same.executable, "hl.exe")
+        XCTAssertEqual(same.storeArguments, ["-steam", "-game", "cstrike"])
+    }
+
     /// Counter-Strike (10) and Half-Life (70) share Steam's Half-Life folder: one title each,
     /// and the second joining it inherits nothing the first's catalogue entry held.
     func testSteamAppsSharingAnInstallFolderAreOneTitleEach() throws {
