@@ -33,18 +33,14 @@ The game runs on the phone's own CPU and GPU: no PC, no cloud, no stream.
   <br><sub><b>World of Warcraft</b> from Battle.net, played with Playport's on-screen keyboard and mouse controls.</sub>
 </p>
 
-<p align="center">
-  <img src="site/screenshots/home-0.2.webp" width="100%" alt="Playport's Home page: Continue playing Kingdom Come: Deliverance, a download, recent games">
-</p>
-
 <table>
   <tr>
-    <td width="50%"><img src="site/screenshots/library-0.5.webp" alt="Playport's Library: All games, 175, with Steam, GOG, Epic Games and Battle.net in a column of store icons, Hollow Knight and World of Warcraft ready to play"></td>
-    <td width="50%"><img src="site/screenshots/downloads.webp" alt="Playport's Downloads: a game downloading from Steam, free storage, the games finished today"></td>
+    <td width="50%"><img src="site/screenshots/rdr2.webp" alt="Red Dead Redemption 2 on an iPhone in Playport: Arthur Morgan in a winter coat on a snowy cabin porch"></td>
+    <td width="50%"><img src="site/screenshots/witcher3-remastered.webp" alt="The Witcher 3 on an iPhone in Playport: Geralt walking through a hall in Kaer Morhen past a lit fireplace"></td>
   </tr>
   <tr>
-    <td align="center"><b>Library</b>: everything you own on Steam, GOG, Epic Games and Battle.net, installed or not</td>
-    <td align="center"><b>Downloads</b>: straight from your store onto the phone</td>
+    <td align="center"><b>Red Dead Redemption 2</b>: Story mode, signed in through Rockstar's own launcher (new in 0.5)</td>
+    <td align="center"><b>The Witcher 3: Wild Hunt – Remastered</b>: the current version, in Kaer Morhen (new in 0.5)</td>
   </tr>
 </table>
 
@@ -61,12 +57,12 @@ The game runs on the phone's own CPU and GPU: no PC, no cloud, no stream.
 
 <table>
   <tr>
-    <td width="50%"><img src="site/screenshots/library-gog.webp" alt="Playport's Library with the GOG filter: Moonscars, Monster Train, Shogun Showdown and Duck Paradox ready to play, more GOG games not installed"></td>
-    <td width="50%"><img src="site/screenshots/library-epic.webp" alt="Playport's Library with the Epic Games filter: Snakebird Complete, House of Golf 2, Football Manager 2022 and Death's Door ready to play, more Epic games not installed"></td>
+    <td width="50%"><img src="site/screenshots/library-0.5.webp" alt="Playport's Library: All games, 175, with Steam, GOG, Epic Games and Battle.net in a column of store icons, Hollow Knight and World of Warcraft ready to play"></td>
+    <td width="50%"><img src="site/screenshots/home-0.2.webp" alt="Playport's Home page: Continue playing Kingdom Come: Deliverance, a download, recent games"></td>
   </tr>
   <tr>
-    <td align="center"><b>GOG</b>: your GOG games in the same Library (new in 0.4)</td>
-    <td align="center"><b>Epic Games</b>: Epic games install and start signed in (new in 0.4)</td>
+    <td align="center"><b>Library</b>: everything you own on Steam, GOG, Epic Games and Battle.net, installed or not</td>
+    <td align="center"><b>Home</b>: pick up where you left off</td>
   </tr>
 </table>
 
@@ -75,18 +71,13 @@ The game runs on the phone's own CPU and GPU: no PC, no cloud, no stream.
   <br><sub><b>Watch the uncut recording</b>: Library to Play to Hollow Knight at 60 fps, then Quit back to Home (<a href="site/video/hollow-knight.mp4">MP4</a>).</sub>
 </p>
 
-<p align="center">
-  <img src="site/screenshots/kingdom-come.webp" width="100%" alt="Kingdom Come: Deliverance running on an iPhone in Playport, walking Rattay at about 29 fps through DXMT's Direct3D 11">
-  <br><b>Kingdom Come: Deliverance</b>: Rattay through DXMT's Direct3D 11, about 29 fps at 720 rows
-</p>
-
 <table>
   <tr>
-    <td width="50%"><img src="site/screenshots/witcher3-remastered.webp" alt="The Witcher 3 on an iPhone in Playport: Geralt walking through a hall in Kaer Morhen past a lit fireplace"></td>
+    <td width="50%"><img src="site/screenshots/kingdom-come.webp" alt="Kingdom Come: Deliverance running on an iPhone in Playport, walking Rattay at about 29 fps through DXMT's Direct3D 11"></td>
     <td width="50%"><img src="site/screenshots/hollow-knight.webp" alt="Hollow Knight at 2736x1260 and 120 fps"></td>
   </tr>
   <tr>
-    <td align="center"><b>The Witcher 3: Wild Hunt</b>: the current, remastered version, in Kaer Morhen</td>
+    <td align="center"><b>Kingdom Come: Deliverance</b>: Rattay through DXMT's Direct3D 11, about 29 fps at 720 rows</td>
     <td align="center"><b>Hollow Knight</b>: the full 2736×1260, up to 120 fps</td>
   </tr>
 </table>
