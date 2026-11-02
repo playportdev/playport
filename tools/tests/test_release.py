@@ -159,6 +159,9 @@ class Release(unittest.TestCase):
             path = self.repo / rel
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(self.catalog) + "\n" if rel.endswith(".json") else "fixture instructions\n")
+        self.notes = "# Playport 0.1.0: fixture\n<!-- date: 2026-09-30 -->\n\nFixture release notes.\n"
+        (self.repo / "site/releases").mkdir(parents=True)
+        (self.repo / "site/releases/0.1.0.md").write_text(self.notes)
         g = lambda *a: subprocess.run(["git", "-C", str(self.repo), *a], check=True, capture_output=True)
         subprocess.run(["git", "init", "-q", "--bare", str(self.root / "remote.git")], check=True)
         g("init", "-q", "-b", "main")
@@ -280,13 +283,7 @@ class Release(unittest.TestCase):
         sha = hashlib.sha256((dest / "Playport-0.1.0.ipa").read_bytes()).hexdigest()
         self.assertEqual(verify_cmd[3:], ["--variant", "release", "--unsigned", "--sha256", sha])
         self.assertIn(f"{sha}  Playport-0.1.0.ipa\n", (dest / "SHA256SUMS").read_text())
-        notes = (dest / "RELEASE-NOTES.md").read_text()
-        self.assertIn(sha, notes)
-        self.assertIn(hashlib.sha256((dest / "Playport-0.1.0-source.tar").read_bytes()).hexdigest(), notes)
-        self.assertIn("Do not publish", notes)
-        self.assertIn(self.head, notes)
-        self.assertIn("Source status: incomplete", notes)
-        self.assertIn("recipient build", notes)
+        self.assertEqual((dest / "RELEASE-NOTES.md").read_text(), self.notes)
         sums = release.checksums(dest)
         self.assertIn("RELEASE-NOTES.md", sums)
         output = next((self.build / "out").iterdir())
@@ -340,6 +337,15 @@ class Release(unittest.TestCase):
         g = lambda *a: subprocess.run(["git", "-C", str(self.repo), *a], check=True, capture_output=True)
         g("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "--allow-empty", "-m", "local")
         with self.assertRaisesRegex(release.Stop, "on no remote branch"):
+            self.release()
+        self.assertEqual(self.calls, [])
+
+    def test_missing_release_notes_stop_before_building(self):
+        g = lambda *a: subprocess.run(["git", "-C", str(self.repo), *a], check=True, capture_output=True)
+        g("rm", "-q", "site/releases/0.1.0.md")
+        g("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "no notes")
+        g("push", "-q", "origin", "main")
+        with self.assertRaisesRegex(release.Stop, "commit site/releases/0.1.0.md"):
             self.release()
         self.assertEqual(self.calls, [])
 

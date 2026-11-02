@@ -18,7 +18,8 @@ Build and ship
   pp release VERSION [--clean | --no-build] [--no-github]
                                   the unsigned release build of HEAD (reused, or built
                                   incrementally; --clean: every tree afresh), the gates, and a
-                                  GitHub draft pre-release (never published; decisions 0038, 0050)
+                                  GitHub draft pre-release whose body is site/releases/VERSION.md at
+                                  HEAD, which must exist (never published; decisions 0038, 0050)
 
 Test on the host
   pp test [--quick]               names, secrets, the pin and patch series (trailers), tools/tests,

@@ -17,9 +17,13 @@ even in a private GitHub draft. The owner's sign-off of the release app on the
 phone (decision 0068) and publication approval are separate; this command neither
 grants nor records them.
 
+The GitHub release body is site/releases/VERSION.md as committed at HEAD (also
+the releases page's source, tools/releases.py); without it nothing is built.
+
 Assemble atomically under $PLAYPORT_BUILD/releases/vVERSION; checksum every asset,
-including notes, instructions and the release manifest. Never overwrite existing
-outputs or follow symlink inputs. GitHub's repository and target are explicit.
+including the notes (RELEASE-NOTES.md, a copy of that file), instructions and the
+release manifest. Never overwrite existing outputs or follow symlink inputs.
+GitHub's repository and target are explicit.
 No raw upload command is printed for an unverified local draft.
 """
 
@@ -276,52 +280,13 @@ def extract_notices(ipa, dest):
     return {p.relative_to(dest).as_posix(): regular(p) for p in dest.rglob("*") if not p.is_dir()}
 
 
-def notes(version, head, ipa_name, ipa_sha, size, source_name, source_sha, source):
-    gaps = "\n".join(f"- {m['what']}: {m['why']}" for m in source["missing"]) or "- No catalogued missing sources."
-    return f"""# Playport {version} (draft)
-
-**Draft pre-release. Do not publish.** Local preparation and even a private upload
-are not permission to distribute; the owner's sign-off of the release app
-(decision 0068) and explicit owner approval still apply. This command never publishes.
-
-Built from commit `{head}` with `pp release {version}`.
-
-| File | sha256 |
-| --- | --- |
-| `{ipa_name}` ({size / 1e6:.0f} MB) | `{ipa_sha}` |
-| `{source_name}` | `{source_sha}` |
-
-## Source status: {source['status']}
-
-This archive is the Corresponding Source of the IPA above, packed from the
-exact commits its build used. Its manifest and README are inside. Known gaps:
-
-{gaps}
-
-## Install, rebuild and notices
-
-`INSTALL-REBUILD.tar` carries the build commit's distribution, build, device,
-licensing and notice instructions. Resolve their relative links in the supplied
-Playport snapshot.
-`NOTICES.tar`, when present, contains the IPA's exact Licenses/ bytes (no substitute
-from a current staging directory). A GitHub upload requires --distribution
-verification against those bytes; a local --no-github assembly does not.
-
-The IPA is signed ad hoc with no certificate or profile. Sign again with your
-own Apple ID, preserving increased-memory-limit and the JIT helper extension.
-Bring your own games. Playport is GPL-3.0-or-later with LICENSE-EXCEPTION.md;
-components keep their licences. No warranty except where the law requires one.
-
-## Before publishing
-
-- Complete and validate exact source, notices and usable rebuild/relink instructions.
-- Demonstrate recipient signing, installation and JIT; retain matching source.
-- The owner installs the release app, plays and signs off on its Linear issue (decision 0068).
-- Attach no Apple SDK, private signing/device data or games.
-- Obtain explicit owner approval of the remote, history, upload and publication.
-
-SHA256SUMS covers every attached asset, including these notes and RELEASE-MANIFEST.json.
-"""
+def release_notes(repo, head, version, run):
+    """The GitHub release body: site/releases/VERSION.md as committed at head."""
+    rel = f"site/releases/{version}.md"
+    try:
+        return git(repo, "show", f"{head}:{rel}", run=run, binary=True)
+    except Stop:
+        raise Stop(f"no release notes at HEAD: commit {rel} (it becomes the GitHub release body)") from None
 
 
 BUILD_MODES = ("auto", "clean", "none")
@@ -348,6 +313,7 @@ def release(version, repo=REPO, build_dir=None, build="auto", github=True, run=s
         return run(cmd, cwd=repo, env=env, **kwargs)
 
     head = clean_head(repo, run)
+    body = release_notes(repo, head, version, run)
     target_repo = github_repo(repo, run) if github else None
     say(f"release {version}: HEAD {head[:8]}")
     dest = no_links(build_dir / "releases" / f"v{version}")
@@ -413,8 +379,7 @@ def release(version, repo=REPO, build_dir=None, build="auto", github=True, run=s
             path.write_bytes(git(repo, "show", f"{head}:{rel}", run=run, binary=True))
         tar_files({rel: instructions / rel for rel in INSTRUCTIONS}, part / "INSTALL-REBUILD.tar", "INSTALL-REBUILD")
         shutil.rmtree(instructions)
-        (part / "RELEASE-NOTES.md").write_text(notes(version, head, ipa_name, ipa_sha, ipa.stat().st_size,
-                                                     source_name, sha256(part / source_name), source))
+        (part / "RELEASE-NOTES.md").write_bytes(body)
         files = {p.name: {"sha256": sha256(p), "size": p.stat().st_size} for p in sorted(part.iterdir())}
         manifest = {"schema": 1, "head": head, "version": version, "ipa_sha256": ipa_sha,
                     "source_manifest_sha256": source_manifest_sha, "source_status": source["status"],
