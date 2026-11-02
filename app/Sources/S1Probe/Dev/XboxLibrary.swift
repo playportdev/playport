@@ -21,10 +21,10 @@ enum XboxLibrary {
     /// The Xbox store's empty Library. Its last sentence is verify-ipa.py's release marker.
     static let emptyText = "Games you own on Xbox and PC Game Pass titles appear here. Xbox is in the dev app only."
 
-    /// What the empty Xbox store says now: loading, the refresh's failure, or the empty text.
+    /// What the empty Xbox store says now, signed in (signed out, the Library asks for the
+    /// account itself): loading, the refresh's failure, or the empty text.
     @MainActor static var emptyMessage: String {
         let games = XboxGames.shared
-        if XboxAccount.shared.state != .signedIn { return "Sign in to Xbox in Settings › Accounts. " + emptyText }
         if games.loading { return "Loading your Xbox library…" }
         return games.error ?? emptyText
     }

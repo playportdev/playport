@@ -95,6 +95,7 @@ contributions, not the right to use or distribute the code under its licence.
 | Component | Where it ends up | Licence |
 | --- | --- | --- |
 | Playport (app, HostIOKit, SteamClientKit, build and tooling code) | executable | GPL-3.0-or-later with the converter exception |
+| XboxClientKit and the Xbox sign-in sheet | dev executable only (0179); absent from release | Xodus-derived files GPL-3.0-only, without the converter exception; Nexus's Xodus patches also retain their MIT notice, CLEP decoding retains CikExtractor's MIT notice (below) |
 | Madeira host layer: `build/ntdll-unix`, `build/wineserver`, `build/win32u-unix`, `madeira_cfg.h`, Winios, `IOSDisplayShim` | executable | GPL-3.0-or-later with Madeira's own converter exception; many `build/*-unix` files carry Wine's LGPL header, and some carry none (see "Licence readings") |
 | Wine: WineHQ plus Madeira's fork (`patches/wine-port`, decision 0013) | executable (unix side), both PE DLL sets, `nls/` | LGPL-2.1-or-later (`COPYING.LIB`, `LICENSE`, `LICENSE-MADEIRA.md`; `NOTICES.md` records current third-party notices) |
 | Valve's Wine: the commits of ValveSoftware/wine's `bleeding-edge` branch (the Wine Proton bleeding-edge ships) that Playport carries as `patches/wine-valve` (decisions 0018, 0049) | both PE DLL sets, and the Wine headers the unix side compiles against | LGPL-2.1-or-later, as upstream Wine; each commit keeps its author, and notices are collected from the actual patched Wine tree |

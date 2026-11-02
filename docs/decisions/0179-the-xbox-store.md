@@ -3,7 +3,8 @@
 **Status:** proposed, 2026-10-30, with the [Xbox spec PLA-485](https://linear.app/playportdev/issue/PLA-485)
 ([PLA-483](https://linear.app/playportdev/issue/PLA-483)). The owner settled each point below
 in the plan's grilling session; the record is accepted when the plan is. Amends
-[0057](0057-store-identity.md)'s list of stores; [0045](0045-library-store-copies.md) and
+[0057](0057-store-identity.md)'s list of stores and [0178](0178-library-store-column.md)'s store
+column (Xbox's button is in the dev app's column only); [0045](0045-library-store-copies.md) and
 [0058](0058-store-sessions.md) unchanged.
 
 ## Decision

@@ -89,8 +89,9 @@
 //                              preset name), drawn when their preset is the layout; a record
 //                              with a copy this build cannot read is refused
 //   hud:on | hud:off           Sets Settings › Developer › Metal HUD, as its toggle does
-//   open:<screen | title id>   Shows a screen (home, library, games, battlenet: the Library on
-//                              Battle.net's chip, xbox: on the dev app's Xbox store's, downloads, settings,
+//   open:<screen | title id>   Shows a screen (home, library, games, gog, epic, battlenet, xbox
+//                              (the dev app's): the Library on that store's button in the store
+//                              column (Battle.net's with its offered products), downloads, settings,
 //                              account, setup: the first-run checklist, signin: Sign in to
 //                              Steam, a preview while Steam is signed in; AppNavigation.screens)
 //                              or a title's page (a Battle.net product offered and not
