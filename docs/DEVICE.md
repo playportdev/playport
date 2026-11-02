@@ -640,10 +640,11 @@ campaign-specific approval; it does not waive required regression smoke gates
   Mac would add is in [GPU-DEBUGGING.md](GPU-DEBUGGING.md).
 - Keep attribution runs separate from performance controls: GPU capture,
   validation, profilers and `--energy` perturb the title. `--no-hud` avoids the
-  Metal HUD's cost: the app loads the HUD only when it starts with Settings'
-  Metal HUD on (its interposer costs CPU on every encoder even hidden, its
-  logging more); frames then come from the game layer's `[frames]`
-  lines (every 16 drawables, either backend; dev builds). Match HUD/counter
+  Metal HUD's cost: a dev app loads the HUD only when it starts with Settings ›
+  Developer › Metal HUD on, as it is unless turned off (its interposer costs CPU on
+  every encoder even hidden, its logging more; a release app has no HUD); frames then
+  come from the game layer's `[frames]` lines (every 16 drawables, either backend;
+  dev builds). Match HUD/counter
   coverage rather than comparing missing figures as zero; use `--energy` for
   the CPU-to-GPU ratio only.
 - `--settings`, the HUD switch and Diagnostics last for the run's session and

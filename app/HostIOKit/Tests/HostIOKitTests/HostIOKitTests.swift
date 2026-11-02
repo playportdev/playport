@@ -390,6 +390,40 @@ final class FramePacerTests: XCTestCase {
     }
 }
 
+final class PresentRateTests: XCTestCase {
+    func testSteadyFramesReadAsTheirRateAndInterval() {
+        var r = PresentRate()
+        XCTAssertEqual(r.reading(now: 5), PresentRate.Reading(fps: 0, frameMS: nil))
+        // 60 fps for two seconds: the last second's 60, at 16.7 ms.
+        for i in 0..<120 { r.presented(at: 10 + Double(i) / 60) }
+        let got = r.reading(now: 10 + 119.0 / 60 + 0.001)
+        XCTAssertEqual(got.fps, 60)
+        XCTAssertEqual(got.frameMS ?? 0, 1000.0 / 60, accuracy: 1e-6)
+    }
+
+    func testSlowFramesReadAsTheLatestIntervalAndAStallAsTheTimeSinceTheLast() {
+        var r = PresentRate()
+        // 5 fps: one frame in the last quarter second, so the frame time is the latest interval.
+        for i in 0..<10 { r.presented(at: Double(i) * 0.2) }
+        let slow = r.reading(now: 1.85)
+        XCTAssertEqual(slow.fps, 5)
+        XCTAssertEqual(slow.frameMS ?? 0, 200, accuracy: 1e-6)
+        // Nothing for 1.5 s: no frames this second, and the frame time grows with the stall.
+        let stalled = r.reading(now: 3.3)
+        XCTAssertEqual(stalled.fps, 0)
+        XCTAssertEqual(stalled.frameMS ?? 0, 1500, accuracy: 1e-6)
+    }
+
+    func testTheRingKeepsTheNewestFramesPastItsCapacity() {
+        var r = PresentRate()
+        // 300 frames at 240 fps: more than the ring holds, its newest still read.
+        for i in 0..<300 { r.presented(at: Double(i) / 240) }
+        let got = r.reading(now: 299.0 / 240 + 0.001)
+        XCTAssertEqual(got.fps, 240)
+        XCTAssertEqual(got.frameMS ?? 0, 1000.0 / 240, accuracy: 1e-6)
+    }
+}
+
 final class PadNavigationTests: XCTestCase {
     private func pad(_ set: (inout PadInput) -> Void) -> PadInput {
         var p = PadInput()

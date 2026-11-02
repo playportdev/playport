@@ -223,7 +223,7 @@ best-effort and reported as unconfirmed; transport loss/SIGKILL can leave cancel
                          the end off under the Social Club layout unless set, decision 0169;
                          set:battlenetInstallBytes=N, dev builds: a Battle.net product needs N bytes, so a
                          size larger than free space shows the page's refusal; 0 or unset: the real size)
-  hud:on | hud:off       Settings' Metal HUD
+  hud:on | hud:off       Settings › Developer › Metal HUD (dev builds; on unless turned off)
   queue:APP              queue a download from Steam, as a game page's Install does, and go on at once
   downloading:APP        wait (2 min at most) until the queue runs APP's download with progress (after
                          the restart after a game, too), and log the queue

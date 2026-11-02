@@ -1103,9 +1103,13 @@ menu opens). Behind the menu the game is paused:
 The rows: Resume (also B, ≡ and Home); Screenshot, the last presented
 drawable's texture (`PacedMetalLayer.lastPresented`; DXMT's layer is not
 framebuffer-only) to Photos (`NSPhotoLibraryAddUsageDescription`), and in a
-dev build also to `Documents/Screenshots`; Performance overlay, the game
-layer's `developerHUDProperties` switched now, for this game only (the
-setting stays as Settings has it); the controller and its battery; Quit game.
+dev build also to `Documents/Screenshots`; Performance overlay, a pill over
+the game with its frame rate and frame time (`PacedMetalLayer.presentRate`,
+from each drawable's `presentedTime`; HostIOKit `PresentRate`) and the
+phone's thermal state, the same setting as Settings › Graphics and for every
+game; the controller and its battery; Quit game. Apple's Metal HUD is a dev
+build's only (Settings › Developer, on unless turned off; `Dev/MetalHUD.swift`):
+a release build sets no `MTL_HUD_ENABLED`, and `pp verify` fails one that names it.
 Quit game resumes the threads and sends `PP_CONTROL_CLOSE`: the root posts
 WM_CLOSE to the job's visible unowned top-level windows (all of them if none
 is), as closing a window does on Windows, so the game saves and exits, and it

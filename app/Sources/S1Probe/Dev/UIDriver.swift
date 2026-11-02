@@ -88,7 +88,7 @@
 //                              editor saves them (PlayportKit ControlLayout, version 3, by
 //                              preset name), drawn when their preset is the layout; a record
 //                              with a copy this build cannot read is refused
-//   hud:on | hud:off           Sets Settings' Metal HUD, as its toggle does
+//   hud:on | hud:off           Sets Settings › Developer › Metal HUD, as its toggle does
 //   open:<screen | title id>   Shows a screen (home, library, games, battlenet: the Library on
 //                              Battle.net's chip, downloads, settings,
 //                              account, setup: the first-run checklist, signin: Sign in to

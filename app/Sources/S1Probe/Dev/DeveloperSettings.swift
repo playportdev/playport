@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Settings › Developer, dev builds only (decision 0009): the diagnostics a
+// Settings › Developer, dev builds only (decision 0009): the Metal HUD
+// (MetalHUD.swift), the diagnostics a
 // game's next launch runs with (Diagnostics.swift), the memory simulations
 // (MemoryLimit), the on-device pairing experiment (iOS 27), the probes
 // (HelperLifetimeProbe.swift), the black screen (BlackScreen.swift), the logs
@@ -12,6 +13,7 @@ import SwiftUI
 import WineHost
 
 struct DeveloperSettings: View {
+    @AppStorage(MetalHUD.key) private var metalHUD = true
     @AppStorage(GPUCapture.key) private var frame = 0
     @AppStorage(Diagnostics.passProfileKey) private var passProfile = false
     @AppStorage(Diagnostics.cpuProfileKey) private var cpuProfile = false
@@ -41,6 +43,9 @@ struct DeveloperSettings: View {
 
     @ViewBuilder private var diagnostics: some View {
         PadSectionHeader(text: "Diagnostics").id("diagnostics")
+        SettingsSwitchRow(id: "dev:metalHUD", title: "Metal HUD",
+                          subtitle: "Apple's HUD over a game, its figures in the log; from Playport's next start",
+                          on: $metalHUD)
         choice("dev:gpuCapture", "GPU capture", subtitle: "A frame as a Metal .gputrace in the game's folder",
                value: frame == 0 ? "Off" : "Frame \(frame)",
                options: [PadOption(id: "0", label: "Off")] + GPUCapture.frames.map { PadOption(id: "\($0)", label: "Frame \($0)") },

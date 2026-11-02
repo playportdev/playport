@@ -29,8 +29,8 @@
 // bar and the iOS keyboard over it, UI/TextBarView.swift; the menu opening closes the bar),
 // Screenshot (the frame on screen to
 // Photos; a dev build also keeps a PNG in Documents/Screenshots), Performance
-// overlay (the Metal HUD on the game layer, now and for this game only; only
-// when Settings' Metal HUD was on as the app started, MetalHUD.loaded), the
+// overlay (UI/PerformanceOverlay.swift, at once and for every game: the same
+// setting as Settings › Graphics), the
 // controller with its battery, and Quit game (TitleLaunch.quit: WM_CLOSE to
 // the game's windows, so it saves as when its window is closed, then the
 // restart after the game, decision 0029, returns to Home).
@@ -50,8 +50,8 @@ final class InGameMenu: ObservableObject {
 
     @Published private(set) var isOpen = false
     @Published private(set) var menu = QuickMenu()
-    /// The performance overlay as the game layer has it now.
-    @Published private(set) var overlay = MetalHUD.loaded && MetalHUD.enabled
+    /// The performance overlay's setting.
+    @Published private(set) var overlay = PerformanceOverlay.enabled
     /// Screenshot's value: nil until one is taken, then what happened.
     @Published private(set) var shot: String?
     @Published private(set) var quitting = false
@@ -80,6 +80,7 @@ final class InGameMenu: ObservableObject {
         isOpen = true
         GameTextBar.shared.close()
         menu = QuickMenu()
+        overlay = PerformanceOverlay.enabled
         shot = nil
         HostIO.shared.menuOpened()
         HostIO.shared.holdGuest()
@@ -297,13 +298,12 @@ final class InGameMenu: ObservableObject {
         quitting = false
     }
 
-    /// Nothing to toggle when Metal did not load the HUD at the app's start
-    /// (Settings' Metal HUD was off then): the row says how to get it.
+    /// The setting, for every game, and the overlay over this one at once.
     private func toggleOverlay() {
-        guard MetalHUD.loaded else { return Self.log("overlay: Metal HUD not loaded at start") }
-        guard let layer = HostIO.shared.gameLayer else { return }
         overlay.toggle()
-        MetalHUD.set(overlay, on: layer)
+        UserDefaults.standard.set(overlay, forKey: PerformanceOverlay.key)
+        GameSurfaceView.current?.performance.refresh()
+        Self.log("overlay: " + (overlay ? "on" : "off"))
     }
 
     // MARK: Screenshot
@@ -552,9 +552,7 @@ struct InGameMenuView: View {
         case .keyboard: return controls.keyboard ? "Open" : nil
         case .text: return textBar.isOpen ? "Open" : nil
         case .screenshot: return model.shot ?? "Saved to Photos"
-        case .overlay:
-            guard MetalHUD.loaded else { return "Turn on Metal HUD in Settings, relaunch" }
-            return model.overlay ? "On" : "Off"
+        case .overlay: return model.overlay ? "On" : "Off"
         case .controller:
             // The dev build's scripted pad is no GameController pad, so the router has no name for it (touch controls 3c).
             #if PLAYPORT_RELEASE

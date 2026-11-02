@@ -26,8 +26,8 @@ struct PlayportApp: App {
         #endif
         // A restart after a game (AppRestart): why that game did not end cleanly, once.
         TitleLaunch.shared.message = AppRestart.noteLaunch()
-        MetalHUD.loadAtStart()
         #if !PLAYPORT_RELEASE
+        MetalHUD.loadAtStart()
         GPUCapture.loadAtStart()
         MetalValidation.loadAtStart()
         RuntimeCounters.loadAtStart()

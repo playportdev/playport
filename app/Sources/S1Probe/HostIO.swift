@@ -110,8 +110,6 @@ final class HostIO {
     private var windowsHoldPads = false
     /// The in-game menu is up: keys, touches and the mouse do not reach the guest.
     private(set) var menuUp = false
-    /// The game layer, once registered: the menu's performance overlay switches its HUD.
-    weak var gameLayer: CAMetalLayer?
     /// What the guest's pads get: slot 0 merged with the on-screen controls
     /// (HostIOKit.InputMixer), then held while the menu is up (HostIOKit.GuestPadGate),
     /// from the main thread and the scripted pad's queue; host_pad_set is called
@@ -798,55 +796,6 @@ final class TraceBox: @unchecked Sendable {
     }
 }
 
-/// Apple's Metal performance HUD over a game, from Settings. Metal loads the
-/// HUD (libMetalMetricsInterpose, which costs every encoder CPU time even with
-/// the HUD hidden) only when MTL_HUD_ENABLED=1 is in the environment as the
-/// process starts, so the app sets it then (PlayportApp) only when the setting
-/// is on; each game layer then shows or hides it from the setting as it is at
-/// that launch. A setting turned on takes effect at the app's next start
-/// (`pp perf` turns it on in a launch of its own). A dev build that starts
-/// with the setting on also has Metal log the HUD's figures once a second
-/// (MTL_HUD_LOG_ENABLED; `pp perf` reads them). A process launched with its
-/// own MTL_HUD_ENABLED keeps what that says.
-enum MetalHUD {
-    static let key = "metalHUD"
-    static var enabled: Bool { UserDefaults.standard.bool(forKey: key) }
-
-    private static let inherited = ProcessInfo.processInfo.environment["MTL_HUD_ENABLED"]
-
-    /// Metal loaded the HUD in this process: the launch environment asked for
-    /// it, or the setting was on at loadAtStart. Without it a game layer has
-    /// no HUD to show (the in-game menu's performance overlay says so).
-    nonisolated(unsafe) private(set) static var loaded = false
-
-    /// Before anything creates a Metal device.
-    static func loadAtStart() {
-        if let inherited {
-            loaded = inherited == "1"
-            return
-        }
-        guard enabled else { return }
-        setenv("MTL_HUD_ENABLED", "1", 1)
-        loaded = true
-        #if !PLAYPORT_RELEASE
-        setenv("MTL_HUD_LOG_ENABLED", "1", 1)
-        #endif
-    }
-
-    static func show(on layer: CAMetalLayer) {
-        guard inherited == nil else { return HostIO.log("hostio: Metal HUD from the launch environment") }
-        guard loaded else { return }
-        set(enabled, on: layer)
-    }
-
-    /// The HUD on the game layer now (the in-game menu's performance overlay),
-    /// for this game only: the setting stays as Settings has it.
-    static func set(_ on: Bool, on layer: CAMetalLayer) {
-        layer.developerHUDProperties = ["mode": on ? "default" : "off"]
-        HostIO.log("hostio: Metal HUD " + (on ? "on" : "off"))
-    }
-}
-
 /// The game layer: a CAMetalLayer whose nextDrawable, the call DXMT makes on
 /// its encode thread for every frame, is held so frames start at most at the
 /// player's frame rate limit (LaunchSettings; FramePacer). With no limit it
@@ -865,6 +814,13 @@ final class PacedMetalLayer: CAMetalLayer {
 
     /// The frame on screen, nil before the first or when it cannot be read.
     static var lastPresented: (any MTLTexture)? { shown.withLockUnchecked { $0 } }
+
+    private static let presents = OSAllocatedUnfairLock(initialState: PresentRate())
+
+    /// The game's frame rate and frame time on screen now (the performance overlay).
+    static func presentRate() -> PresentRate.Reading {
+        presents.withLock { $0.reading(now: CACurrentMediaTime()) }
+    }
 
     /// The associated-object key KosmicKrisp hangs a drawable texture's
     /// readable source under (mtl_drawable_texture_set_readable_source).
@@ -923,8 +879,10 @@ final class PacedMetalLayer: CAMetalLayer {
         if drawable != nil { Self.countDrawable() }
         #endif
         drawable?.addPresentedHandler { d in
-            if d.presentedTime > 0,
-               let then = Self.firstPresent.withLockUnchecked({ h in defer { h = nil }; return h }) { then() }
+            if d.presentedTime > 0 {
+                Self.presents.withLock { $0.presented(at: d.presentedTime) }
+                if let then = Self.firstPresent.withLockUnchecked({ h in defer { h = nil }; return h }) { then() }
+            }
             guard let t = (d as? CAMetalDrawable)?.texture else { return }
             let readable = Self.readable(t)
             Self.shown.withLockUnchecked { $0 = readable }
@@ -961,6 +919,8 @@ final class GameSurfaceView: UIView {
     private let magnifier = MagnifierOverlay()
     /// The suggested layout's toast (UI/LayoutSuggestionToast.swift), over them; it takes touches on its card only.
     private let suggestion = LayoutSuggestionToast()
+    /// The performance overlay (UI/PerformanceOverlay.swift), over them all; it takes no touch.
+    let performance = PerformanceOverlayView()
     /// The view on screen: the text bar gives it the hardware keys back as it closes
     /// (UI/TextBarView.swift); a dev build's UI driver taps it (Dev/UIDriver.swift).
     static weak var current: GameSurfaceView?
@@ -974,6 +934,7 @@ final class GameSurfaceView: UIView {
         addSubview(magnifier)
         addSubview(gyroChip)
         addSubview(suggestion)
+        addSubview(performance)
         // Every finger reaches the view, so the three-finger tap sees them; forward lets only one through.
         isMultipleTouchEnabled = true
         let menuTap = UITapGestureRecognizer(target: self, action: #selector(threeFingerTap))
@@ -1010,6 +971,7 @@ final class GameSurfaceView: UIView {
         gyroChip.frame = bounds
         magnifier.frame = bounds
         suggestion.frame = bounds
+        performance.frame = bounds
     }
 
     override func didMoveToWindow() {
@@ -1025,8 +987,9 @@ final class GameSurfaceView: UIView {
         window.windowScene?.requestGeometryUpdate(.iOS(interfaceOrientations: .landscape))
         if !registered, let layer = layer as? CAMetalLayer {
             registered = true
-            HostIO.shared.gameLayer = layer
+            #if !PLAYPORT_RELEASE
             MetalHUD.show(on: layer)
+            #endif
             madeira_display_set_layer(layer)
             HostIO.surfaceReady.signal()
         }

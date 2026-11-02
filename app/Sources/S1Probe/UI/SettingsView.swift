@@ -10,7 +10,7 @@
 // - Graphics: what every game launches with unless its Game options change
 //   it (LaunchSettingsStore.global): resolution, frame rate limit and
 //   Direct3D, changed with left and right, each "Default · X" while it follows
-//   Playport's default; and the Metal HUD.
+//   Playport's default; and the performance overlay (UI/PerformanceOverlay.swift).
 // - Downloads: PlayportKit DownloadPreferences (the download queue reads
 //   them) and Steam Cloud's switch (SteamAccountModel.cloudKey).
 // - Controls: when the on-screen controls show, every game's starting layout
@@ -286,7 +286,7 @@ struct SettingsSwitchRow: View {
 
 private struct GraphicsSettings: View {
     @ObservedObject private var launchSettings = LaunchSettingsStore.shared
-    @AppStorage(MetalHUD.key) private var metalHUD = false
+    @AppStorage(PerformanceOverlay.key) private var performanceOverlay = false
     // On unless turned off (decision 0153; GameSocialClubEnd).
     @AppStorage(GameSocialClubEnd.key) private var endGameSocialClub = true
     @AppStorage(GameSocialClubEnd.refuseRestartKey) private var refuseGameSocialClubRestart = true
@@ -312,9 +312,9 @@ private struct GraphicsSettings: View {
                                     defaultValue: GraphicsBackend.default)
         valueRow("graphics", "Direct3D", "Vulkan, or DXMT for Direct3D 10 and 11", backends,
                  name: LaunchSettingsText.graphics, value: global.graphics)
-        SettingsSwitchRow(id: "metalHUD", title: "Metal HUD",
-                          subtitle: "Frame rate, frame time and memory over a game; from Playport's next start",
-                          on: $metalHUD)
+        SettingsSwitchRow(id: "performanceOverlay", title: "Performance overlay",
+                          subtitle: "Frame rate, frame time and the phone's temperature over a game",
+                          on: $performanceOverlay)
         memoryRows
         SettingsNote(text: "From each game's next start. 720p at 60 fps keeps the phone cool enough to hold its "
                      + "frame rate; Native is the screen's full resolution, and Off runs a game as fast as the screen "
