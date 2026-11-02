@@ -12,8 +12,8 @@
 <meta property="og:title" content="Playport: PC games on your iPhone">
 <meta property="og:description" content="Windows games, 64-bit and now 32-bit, running natively on a non-jailbroken iPhone. No PC, no cloud, no streaming.">
 <meta property="og:type" content="website">
-<meta property="og:image" content="https://playport.dev/screenshots/og-0.2.jpg">
-<meta property="og:image:alt" content="Playport's Library on an iPhone: Steam games installed, downloading and ready to play">
+<meta property="og:image" content="https://playport.dev/screenshots/og-0.5.jpg">
+<meta property="og:image:alt" content="World of Warcraft on an iPhone in Playport, with on-screen keyboard and mouse controls">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="logo.svg" type="image/svg+xml">
 <style>
@@ -222,6 +222,7 @@
       <a href="#how">How it works</a>
       <a href="#start">Get started</a>
       <a href="compatibility/">Games</a>
+      <a href="releases/">Releases</a>
       <a class="btn btn-ghost btn-small" href="https://github.com/playportdev/playport">GitHub</a>
     </div>
   </div>
@@ -230,7 +231,7 @@
 <header class="hero" id="top">
   <div class="wrap">
     <div>
-      <a class="eyebrow" href="#features"><span class="dot"></span>New in 0.4: GOG, Epic Games and your own games</a>
+      <a class="eyebrow" href="releases/#v0.5.0"><span class="dot"></span>New in 0.5: World of Warcraft, Red Dead Redemption 2, The Witcher 3 Remastered and touch controls</a>
       <h1>PC games on your <em>iPhone.</em></h1>
       <p class="lead">Playport runs Windows games, 64-bit and 32-bit, on a stock, non-jailbroken iPhone.
         Install a game from Steam, GOG or Epic Games, or bring your own, pick up a controller and press Play.
@@ -266,8 +267,8 @@
     </div>
     <div class="shots shots-3">
       <figure class="shot">
-        <a href="screenshots/library-0.2.webp"><img src="screenshots/library-0.2.webp" width="2000" height="921" loading="lazy" alt="Playport's Library page: All, Installed and Steam filters over a grid of installed and not-installed Steam games"></a>
-        <figcaption><strong>Library</strong>Everything you own on Steam, GOG and Epic Games, installed or not.</figcaption>
+        <a href="screenshots/library-0.5.webp"><img src="screenshots/library-0.5.webp" width="2000" height="921" loading="lazy" alt="Playport's Library page: All games, 175, with Steam, GOG, Epic Games and Battle.net in a column of store icons, Hollow Knight and World of Warcraft ready to play"></a>
+        <figcaption><strong>Library</strong>Everything you own on Steam, GOG, Epic Games and Battle.net, installed or not.</figcaption>
       </figure>
       <figure class="shot">
         <a href="screenshots/downloads.webp"><img src="screenshots/downloads.webp" width="2000" height="921" loading="lazy" alt="Playport's Downloads page: a game downloading at 23.6 MB/s, free storage, and the games finished today"></a>
@@ -278,14 +279,28 @@
         <figcaption><strong>Game page</strong>Play, achievements, per-game options and cloud saves.</figcaption>
       </figure>
     </div>
+    <div class="shots shots-3">
+      <figure class="shot">
+        <a href="screenshots/library-battlenet.webp"><img src="screenshots/library-battlenet.webp" width="2000" height="921" loading="lazy" alt="Playport's Library with the Battle.net store selected: World of Warcraft ready to play, and World of Warcraft Classic, Classic Anniversary and Classic Era not installed"></a>
+        <figcaption><strong>Battle.net<span class="tag">NEW IN 0.5</span></strong>World of Warcraft and its Classic editions, in the same Library.</figcaption>
+      </figure>
+      <figure class="shot">
+        <a href="screenshots/wow-touch.webp"><img src="screenshots/wow-touch.webp" width="2000" height="921" loading="lazy" alt="World of Warcraft on a ship's deck, a mage in a blue robe seen from behind, with on-screen Esc, Tab, number, Jump, Reload, Use and Fire buttons and a movement stick"></a>
+        <figcaption><strong>Touch controls<span class="tag">NEW IN 0.5</span></strong>Play with no controller: a keyboard and mouse layout or a gamepad layout, drawn over the game.</figcaption>
+      </figure>
+      <figure class="shot">
+        <a href="screenshots/touch-editor.webp"><img src="screenshots/touch-editor.webp" width="2000" height="921" loading="lazy" alt="The touch layout editor over World of Warcraft: Add, Keyboard &amp; mouse, Opacity 30%, Reset and Done above a grid, with the buttons outlined to move and resize"></a>
+        <figcaption><strong>Layout editor<span class="tag">NEW IN 0.5</span></strong>Move, resize and add buttons, and set how see-through they are.</figcaption>
+      </figure>
+    </div>
     <div class="shots shots-2">
       <figure class="shot">
         <a href="screenshots/library-gog.webp"><img src="screenshots/library-gog.webp" width="2000" height="921" loading="lazy" alt="Playport's Library with the GOG filter: Moonscars, Monster Train, Shogun Showdown and Duck Paradox ready to play, more GOG games not installed"></a>
-        <figcaption><strong>GOG<span class="tag">NEW IN 0.4</span></strong>Your GOG games in the same Library, with GOG's artwork.</figcaption>
+        <figcaption><strong>GOG</strong>Your GOG games in the same Library, with GOG's artwork.</figcaption>
       </figure>
       <figure class="shot">
         <a href="screenshots/library-epic.webp"><img src="screenshots/library-epic.webp" width="2000" height="921" loading="lazy" alt="Playport's Library with the Epic Games filter: Snakebird Complete, House of Golf 2, Football Manager 2022 and Death's Door ready to play, more Epic games not installed"></a>
-        <figcaption><strong>Epic Games<span class="tag">NEW IN 0.4</span></strong>Epic games install and start signed in.</figcaption>
+        <figcaption><strong>Epic Games</strong>Epic games install and start signed in.</figcaption>
       </figure>
     </div>
   </div>
@@ -472,7 +487,7 @@
   <div class="wrap">
     <p class="kicker">On the phone</p>
     <h2>Running on an iPhone, right now.</h2>
-    <p class="sub">A screen recording and screenshots from an A19 Pro iPhone on iOS 27.0, with Metal's performance HUD on. Every frame is rendered on the phone.</p>
+    <p class="sub">A screen recording and screenshots from an A19 Pro iPhone on iOS 27.0. Every frame is rendered on the phone.</p>
     <div class="steps-cta games-cta">
       <a class="btn btn-primary" href="compatibility/">See which games run</a>
       <a class="btn btn-ghost" href="https://github.com/playportdev/playport/issues/new?template=problem.yml">Report a game</a>
@@ -489,6 +504,16 @@
         <figcaption><strong>Library to gameplay, uncut</strong>Hollow Knight from the Play button: Direct3D 11 through DXMT, 60 fps capped at 720 rows, then Quit back to Home.</figcaption>
       </figure>
     </div>
+    <div class="shots shots-2">
+      <figure class="shot">
+        <a href="screenshots/wow-gamepad.webp"><img src="screenshots/wow-gamepad.webp" width="2000" height="921" loading="lazy" alt="World of Warcraft: a mage in a blue robe running across a ship's deck past a blue dragon, a combat dummy and other players, with on-screen gamepad buttons"></a>
+        <figcaption><strong>World of Warcraft</strong>From Battle.net, played with the on-screen gamepad layout.</figcaption>
+      </figure>
+      <figure class="shot">
+        <a href="screenshots/rdr2.webp"><img src="screenshots/rdr2.webp" width="1600" height="737" loading="lazy" alt="Red Dead Redemption 2: Arthur Morgan in a winter coat on a snowy cabin porch, snow-covered pines beyond"></a>
+        <figcaption><strong>Red Dead Redemption 2</strong>Story mode in the snow, on the game's Vulkan renderer.</figcaption>
+      </figure>
+    </div>
     <div class="shots">
       <figure class="shot">
         <a href="screenshots/kingdom-come.webp"><img src="screenshots/kingdom-come.webp" width="2000" height="921" loading="lazy" alt="Kingdom Come: Deliverance: a street in Rattay, with Metal's HUD showing about 29 frames per second at 1564 by 720 through DXMT's Direct3D 11, Game Mode on"></a>
@@ -497,8 +522,8 @@
     </div>
     <div class="shots shots-2">
       <figure class="shot">
-        <a href="screenshots/witcher3.webp"><img src="screenshots/witcher3.webp" width="2000" height="921" loading="lazy" alt="The Witcher 3: Geralt in Kaer Morhen, with Metal's HUD showing about 36 frames per second through DXMT's Direct3D 11"></a>
-        <figcaption><strong>The Witcher 3: Wild Hunt</strong>Direct3D 11 through DXMT to Metal, about 36 fps.</figcaption>
+        <a href="screenshots/witcher3-remastered.webp"><img src="screenshots/witcher3-remastered.webp" width="1600" height="737" loading="lazy" alt="The Witcher 3: Geralt walking through a hall in Kaer Morhen past a lit fireplace, on a red stone floor"></a>
+        <figcaption><strong>The Witcher 3: Wild Hunt</strong>The current, remastered version, in Kaer Morhen.</figcaption>
       </figure>
       <figure class="shot">
         <a href="screenshots/hollow-knight.webp"><img src="screenshots/hollow-knight.webp" width="2000" height="921" loading="lazy" alt="Hollow Knight: the Knight resting on a bench in Dirtmouth, with Metal's HUD showing 120 frames per second at 2736 by 1260"></a>

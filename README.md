@@ -18,17 +18,19 @@
 </div>
 
 Playport runs Windows games, 64-bit and 32-bit, on a stock, non-jailbroken
-iPhone. Install a game from Steam, GOG or Epic Games, or bring your own, pick up
-a controller and press Play. The game runs on the phone's own CPU and GPU: no
-PC, no cloud, no stream.
+iPhone. Install a game from Steam, GOG, Epic Games or Battle.net, or bring your
+own, pick up a controller or play with on-screen touch controls, and press Play.
+The game runs on the phone's own CPU and GPU: no PC, no cloud, no stream.
 
-> **New in 0.4: GOG, Epic Games and your own games.** Sign in to GOG or Epic
-> Games beside Steam, or add a DRM-free game from Files, and games now sign in to
-> their store as they would on a PC. See the [release notes](docs/releases/0.4.0.md).
+> **New in 0.5: World of Warcraft, Red Dead Redemption 2, The Witcher 3: Wild Hunt
+> – Remastered and touch controls.** Install World of Warcraft from Battle.net,
+> play with nothing but the phone using on-screen controls and their layout editor,
+> and find every store in the redesigned Library. See the
+> [release notes](https://playport.dev/releases/#v0.5.0).
 
 <p align="center">
-  <a href="https://playport.dev/#video-portal2"><img src="site/screenshots/portal2.webp" width="100%" alt="Portal 2 running on an iPhone in Playport: an orange and a blue portal in a test chamber, with Metal's HUD showing 59.98 fps at 1564 by 720. Click to watch the recording on playport.dev"></a>
-  <br><sub><b>Portal 2</b>, a 32-bit Direct3D 9 game, at 60 fps through DXVK and KosmicKrisp. <b>Watch the uncut recording</b>: Home to Play to a test chamber (<a href="site/video/portal2.mp4">MP4</a>).</sub>
+  <a href="https://playport.dev/#screens"><img src="site/screenshots/wow-touch.webp" width="100%" alt="World of Warcraft on an iPhone in Playport: a mage in a blue robe on a ship's deck, with on-screen Esc, Tab, number, Jump, Reload, Use and Fire buttons and a movement stick"></a>
+  <br><sub><b>World of Warcraft</b> from Battle.net, played with Playport's on-screen keyboard and mouse controls.</sub>
 </p>
 
 <p align="center">
@@ -37,12 +39,23 @@ PC, no cloud, no stream.
 
 <table>
   <tr>
-    <td width="50%"><img src="site/screenshots/library-0.2.webp" alt="Playport's Library: All, Installed and Steam filters over Steam games, installed and not"></td>
+    <td width="50%"><img src="site/screenshots/library-0.5.webp" alt="Playport's Library: All games, 175, with Steam, GOG, Epic Games and Battle.net in a column of store icons, Hollow Knight and World of Warcraft ready to play"></td>
     <td width="50%"><img src="site/screenshots/downloads.webp" alt="Playport's Downloads: a game downloading from Steam, free storage, the games finished today"></td>
   </tr>
   <tr>
-    <td align="center"><b>Library</b>: everything you own, installed or not</td>
+    <td align="center"><b>Library</b>: everything you own on Steam, GOG, Epic Games and Battle.net, installed or not</td>
     <td align="center"><b>Downloads</b>: straight from your store onto the phone</td>
+  </tr>
+</table>
+
+<table>
+  <tr>
+    <td width="50%"><img src="site/screenshots/library-battlenet.webp" alt="Playport's Library with the Battle.net store selected: World of Warcraft ready to play, and World of Warcraft Classic, Classic Anniversary and Classic Era not installed"></td>
+    <td width="50%"><img src="site/screenshots/touch-editor.webp" alt="The touch layout editor over World of Warcraft: Add, Keyboard &amp; mouse, Opacity 30%, Reset and Done above a grid, with the buttons outlined to move and resize"></td>
+  </tr>
+  <tr>
+    <td align="center"><b>Battle.net</b>: World of Warcraft and its Classic editions in the same Library (new in 0.5)</td>
+    <td align="center"><b>Layout editor</b>: move, resize and add touch buttons (new in 0.5)</td>
   </tr>
 </table>
 
@@ -69,16 +82,16 @@ PC, no cloud, no stream.
 
 <table>
   <tr>
-    <td width="50%"><img src="site/screenshots/witcher3.webp" alt="The Witcher 3 running on an iPhone in Playport, with Metal's performance HUD showing about 36 fps through DXMT's Direct3D 11"></td>
+    <td width="50%"><img src="site/screenshots/witcher3-remastered.webp" alt="The Witcher 3 on an iPhone in Playport: Geralt walking through a hall in Kaer Morhen past a lit fireplace"></td>
     <td width="50%"><img src="site/screenshots/hollow-knight.webp" alt="Hollow Knight at 2736x1260 and 120 fps"></td>
   </tr>
   <tr>
-    <td align="center"><b>The Witcher 3: Wild Hunt</b>: Direct3D 11 through DXMT, about 36 fps</td>
+    <td align="center"><b>The Witcher 3: Wild Hunt</b>: the current, remastered version, in Kaer Morhen</td>
     <td align="center"><b>Hollow Knight</b>: the full 2736×1260, up to 120 fps</td>
   </tr>
 </table>
 
-<p align="center"><sub>On an A19 Pro iPhone, iOS 27.0, with Metal's performance HUD.</sub></p>
+<p align="center"><sub>On an A19 Pro iPhone, iOS 27.0.</sub></p>
 
 ## Features
 
