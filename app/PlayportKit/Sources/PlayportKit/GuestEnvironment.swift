@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// A play's own guest variables (an Xbox copy's bridge port and key, decision 0167):
+// A play's own guest variables (an Xbox copy's bridge port and key, decision 0180):
 // they go into the game's environment for its launch only. Never `setenv` into the
 // app's process (the runtime's unix side and every later child would see them), never
 // to the play's prerequisites, and only their names are logged.

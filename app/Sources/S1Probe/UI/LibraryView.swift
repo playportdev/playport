@@ -90,7 +90,7 @@ final class LibraryGrid: ObservableObject {
         filter = filter.step(by, in: Self.column)
     }
 
-    /// The store column: every store, Xbox's in the dev app only (decision 0166).
+    /// The store column: every store, Xbox's in the dev app only (decision 0179).
     static var column: [LibraryFilter] {
         #if PLAYPORT_RELEASE
         LibraryFilter.column(xbox: false)
@@ -767,7 +767,7 @@ enum LibraryOwned {
             + epic.map { LibraryList.Owned(key: StoreGameKey(store: .epic, id: $0.id), name: $0.title) }
             + battlenet
         #if !PLAYPORT_RELEASE
-        owned += XboxLibrary.owned // dev only (0166)
+        owned += XboxLibrary.owned // dev only (0179)
         #endif
         return owned
     }
@@ -827,7 +827,7 @@ struct GameArt: View {
     #if PLAYPORT_RELEASE
     private var xboxArt: Never? { nil }
     #else
-    /// Microsoft's art for the account's Xbox copy (dev only, 0166).
+    /// Microsoft's art for the account's Xbox copy (dev only, 0179).
     private var xboxArt: XboxArtView? { storeKey.flatMap { XboxLibrary.art($0, wide: kind == .hero) } }
     #endif
 }

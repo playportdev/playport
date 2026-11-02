@@ -1,4 +1,4 @@
-# 0167: What an Xbox game receives from the host
+# 0180: What an Xbox game receives from the host
 
 **Status:** proposed, 2026-10-30, with the [Xbox spec PLA-485](https://linear.app/playportdev/issue/PLA-485)
 ([PLA-483](https://linear.app/playportdev/issue/PLA-483)); the owner chose this split in the
@@ -71,7 +71,7 @@ the key. The host does not write a ticket anywhere.
 - the account's refresh token and session secrets;
 - the synthetic device's private key and proof secrets;
 - content keys and licences (the host decrypts; the guest sees decrypted files only during
-  the play, 0166);
+  the play, 0179);
 - the offline lease.
 
 ## Guest-side storage

@@ -83,7 +83,7 @@ final class SteamAccountModel: ObservableObject {
         EpicAccount.shared.attach(installs)
         BattleNetStore.shared.attach(installs)
         #if !PLAYPORT_RELEASE
-        XboxInstalls.shared.attach(installs)  // dev only (decision 0166)
+        XboxInstalls.shared.attach(installs)  // dev only (decision 0179)
         #endif
         Self.current = self
         // A game installed or updated (the catalogue's builds) may leave an update to queue, or none.

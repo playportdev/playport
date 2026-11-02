@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """build/verify-ipa.py's release variant: an executable with an Xbox surface fails
-(decision 0166: the Xbox store is in the dev app only), one with only the store's
+(decision 0179: the Xbox store is in the dev app only), one with only the store's
 identity (ContentKit's Store.xbox, PlayportKit's LibraryFilter.xbox) passes."""
 
 import importlib.util

@@ -7,7 +7,7 @@
 // a 64 KiB frame cap, a malformed frame ends the connection.
 import Foundation
 
-/// One message on the bridge (decision 0167), as xgameruntime writes it: magic
+/// One message on the bridge (decision 0180), as xgameruntime writes it: magic
 /// 0x58445358, the type and the body's length, all little-endian, then an XML body.
 /// A reply's type is its request's plus one.
 public struct XboxBridgeFrame: Sendable, Equatable {

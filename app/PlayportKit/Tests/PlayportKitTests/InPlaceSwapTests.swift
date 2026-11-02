@@ -3,7 +3,7 @@ import Foundation
 import XCTest
 @testable import PlayportKit
 
-/// A play's in-place swap (an Xbox copy's kept-encrypted files, decision 0166) on a
+/// A play's in-place swap (an Xbox copy's kept-encrypted files, decision 0179) on a
 /// temporary folder: the plaintext stands under the original names for the play only,
 /// and nothing of it is left after the play's end or after a crash.
 final class InPlaceSwapTests: XCTestCase {

@@ -61,7 +61,7 @@ public enum LibraryFilter: String, CaseIterable, Sendable {
     case epic
     /// The Battle.net store's offered products and copies (no sign-in, PLA-519).
     case battlenet
-    /// Every Xbox copy (decision 0166: only the dev app shows the store).
+    /// Every Xbox copy (decision 0179: only the dev app shows the store).
     case xbox
 
     public var label: String {
@@ -87,7 +87,7 @@ public enum LibraryFilter: String, CaseIterable, Sendable {
     }
 
     /// The column an app shows: every store, Xbox's only when the app names the store
-    /// (the dev app, decision 0166).
+    /// (the dev app, decision 0179).
     public static func column(xbox: Bool) -> [LibraryFilter] {
         xbox ? allCases : allCases.filter { $0 != .xbox }
     }

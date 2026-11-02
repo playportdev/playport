@@ -52,7 +52,7 @@ final class AppNavigation: ObservableObject {
         }
     }
 
-    /// `xbox` is the dev app's only (decision 0166).
+    /// `xbox` is the dev app's only (decision 0179).
     static let screens = ["home", "library", "installed", "games", "gog", "epic", "battlenet", "xbox", "downloads", "settings", "account", "setup", "signin"]
 
     @discardableResult
@@ -72,7 +72,7 @@ final class AppNavigation: ObservableObject {
             grid.show(LibraryFilter(rawValue: screen)!)
         #if !PLAYPORT_RELEASE
         case "xbox":
-            // The dev app's Xbox store (decision 0166), whose column button the release app has not.
+            // The dev app's Xbox store (decision 0179), whose column button the release app has not.
             show(.library)
             grid.show(.xbox)
         #endif

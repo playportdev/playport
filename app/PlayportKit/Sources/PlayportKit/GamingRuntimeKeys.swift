@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // The prefix keys a GDK game and the Xbox runtime (xgameruntime.dll, staged in the runtime's
 // arm64ec-windows set and so linked into system32) read, written for an Xbox copy's play as
-// Xodus Nexus has them in its prefix (decision 0166): Gaming Services' installed and available
+// Xodus Nexus has them in its prefix (decision 0179): Gaming Services' installed and available
 // version, which the game's own GDK thunks check before they load the runtime (Nexus writes
 // it before every launch, scripts/runtime-compat/gaming-services-version.c), and the Store's
 // WinRT class, Windows.Services.Store.StoreContext, served by xgameruntime.dll. Top-ups

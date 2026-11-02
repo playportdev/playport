@@ -281,7 +281,7 @@ beside it (PLA-650).
 
 ### Xbox (planned)
 
-The Xbox store ([spec PLA-485](https://linear.app/playportdev/issue/PLA-485), [decision 0166](decisions/0166-the-xbox-store.md))
+The Xbox store ([spec PLA-485](https://linear.app/playportdev/issue/PLA-485), [decision 0179](decisions/0179-the-xbox-store.md))
 adds a Swift client, `XboxClientKit`, written from Xodus's and Xodus Nexus's
 code and docs (its session and synthetic device land in PLA-491); `xgameruntime`
 as an ARM64EC Wine builtin; and `nghttp2`. This section answers the plan's
@@ -334,7 +334,7 @@ its `COPYING` has the same bytes as Valve's.
     GPL-3.0-or-later file. XboxClientKit's other files keep the usual header.
   - A build that carries those files is GPL-3.0 as a whole, not "or later".
     Decision 0006's "the whole combination stays or later" holds only for builds
-    without them. Today that means the dev app only: decision 0166 keeps every
+    without them. Today that means the dev app only: decision 0179 keeps every
     Xbox surface in the dev app, with `pp verify --variant release` refusing
     a release executable that carries one.
 - **What it owes** (GPL-3.0 sections 4 and 5), from the first public push of
@@ -370,7 +370,7 @@ its `COPYING` has the same bytes as Valve's.
   they are System Libraries on the device (GPL-3.0 section 1), so it does not
   depend on the exception.
 - **The bridge.** XboxClientKit and `xgameruntime` talk over a loopback TCP
-  socket (decision 0167). They are separate programs, so the bridge does not
+  socket (decision 0180). They are separate programs, so the bridge does not
   join their licences, and both are GPL-3.0-compatible in any case.
 
 #### `xgameruntime`
@@ -486,7 +486,7 @@ No IPA that carries either DLL leaves the workstation without these:
   that code's terms.
 - **Outside this page:** Microsoft's terms, the synthetic device and
   decrypting store DRM are not copyright-licence questions. They stay with
-  the release record decision 0166 requires.
+  the release record decision 0179 requires.
 
 ### Not built and not shipped
 

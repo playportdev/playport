@@ -560,7 +560,7 @@ final class CatalogTests: XCTestCase {
     }
 
     /// An Xbox copy is `(xbox, Product ID)`: the Store's twelve-character product identifier
-    /// (decision 0166), its title ID `xbox-<ProductId>`, its receipt `installs/xbox-<ProductId>.json`.
+    /// (decision 0179), its title ID `xbox-<ProductId>`, its receipt `installs/xbox-<ProductId>.json`.
     func testAnXboxCopyIsTheXboxStoreAndItsProductID() throws {
         let key = StoreGameKey(store: .xbox, id: "9MW9469V91LM")
         XCTAssertEqual(Store.xbox.label, "Xbox")
@@ -1285,7 +1285,7 @@ final class LibraryListTests: XCTestCase {
     }
 
     /// Xbox's button ends the dev app's store column, after Battle.net's, and is not in the release
-    /// app's; its store shows Xbox copies only (decision 0166), and an empty Xbox library is an
+    /// app's; its store shows Xbox copies only (decision 0179), and an empty Xbox library is an
     /// empty store, not an error.
     func testTheXboxStoreShowsItsOwnCopiesOnly() {
         let dev = LibraryFilter.column(xbox: true)

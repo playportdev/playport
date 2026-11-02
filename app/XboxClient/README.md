@@ -2,7 +2,7 @@
 
 `XboxClientKit` is the host-side Xbox client on ContentKit (PLA-491, decisions
 [0058](../../docs/decisions/0058-store-sessions.md) and
-[0166](../../docs/decisions/0166-the-xbox-store.md)). The app links it **only in dev**;
+[0179](../../docs/decisions/0179-the-xbox-store.md)). The app links it **only in dev**;
 its account, sign-in sheet and device-reset action are in `Sources/S1Probe/Dev/`.
 The release package has no XboxClientKit dependency. Every Xbox Swift type starts
 `Xbox`, so release verification catches a surface that reaches the executable.
@@ -340,7 +340,7 @@ package only (below).
 
 During one Xbox play the host answers the guest's `xgameruntime` over Xodus's
 keyed loopback bridge (decision
-[0167](../../docs/decisions/0167-xbox-guest-tickets.md)).
+[0180](../../docs/decisions/0180-xbox-guest-tickets.md)).
 
 - `XboxBridgeListener` (`XboxBridgeListener.swift`) binds 127.0.0.1 on a free
   port at `start()`. `guestEnvironment` gives `XODUS_BRIDGE_PORT` and
@@ -378,7 +378,7 @@ keyed loopback bridge (decision
   session's tickets are deleted. The listener's handler revokes the service, so a
   ticket minted in flight is never sent, and it closes every connection and the
   port. The host then holds no ticket it issued. A ticket the game already
-  received lasts until Microsoft lets it lapse; that is 0167's residual.
+  received lasts until Microsoft lets it lapse; that is 0180's residual.
 - Logs name each request and reply type with sizes and a status (`served`,
   `refused: another product`, …). They never contain a payload, ticket, licence
   token, nonce or key.

@@ -161,7 +161,7 @@ struct AppShell: View {
             AppRestart.shared.continuePlay()
             #if !PLAYPORT_RELEASE
             BlackScreen.restoreAtStart()
-            XboxLapses.shared.atStart()  // an Xbox copy's removal after its licence lapsed (dev only, 0166)
+            XboxLapses.shared.atStart()  // an Xbox copy's removal after its licence lapsed (dev only, 0179)
             UIDriver.startIfRequested()
             UIDriver.sceneChanged(active: scenePhase == .active)
             #endif

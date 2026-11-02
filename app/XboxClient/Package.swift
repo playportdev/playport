@@ -3,7 +3,7 @@
 import PackageDescription
 
 // XboxClientKit (README.md), on ContentKit. Foundation only; the same offline
-// response tests run on Linux and the phone. App entry points are dev-only (0166).
+// response tests run on Linux and the phone. App entry points are dev-only (0179).
 let package = Package(
     name: "XboxClient",
     platforms: [.iOS(.v18), .macOS(.v15)],

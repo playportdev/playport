@@ -2,7 +2,7 @@
 // Xodus Nexus e0668a12f1da931aed13537ef04295599011317b src/renderer/OfflinePermissions.tsx
 // and src/main/index.ts (settleOfflinePermissions); translated to Swift by the Playport
 // authors, 2026-10-30. Modified: a Settings › Accounts › Xbox row with the pad's
-// confirmation; dev only (decision 0166).
+// confirmation; dev only (decision 0179).
 import ContentKit
 import Foundation
 import SwiftUI

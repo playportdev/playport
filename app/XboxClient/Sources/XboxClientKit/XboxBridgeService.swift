@@ -11,7 +11,7 @@ import ContentKit
 
 /// What the bridge serves one play: the copy's Product ID (Store ID), the related
 /// products and `MSAAppId` its MicrosoftGame.config declares, read by the host from
-/// the copy's folder at launch (0167).
+/// the copy's folder at launch (0180).
 public struct XboxBridgeCopy: Sendable {
     public let productID: String
     public let relatedProductIDs: [String]
@@ -48,7 +48,7 @@ public protocol XboxPackageUpdates: Sendable {
     func check(productID: String, installedVersion: String) async -> XboxPackageUpdateCheck
 }
 
-/// Answers one play's runtime (decision 0167). Each request is bound to the copy:
+/// Answers one play's runtime (decision 0180). Each request is bound to the copy:
 /// tickets only for its client ID (or Xbox's platform client ID when it has none),
 /// the licence token only for its Product ID and declared related products, update
 /// queries only for its package. Before sign-in everything is refused; after

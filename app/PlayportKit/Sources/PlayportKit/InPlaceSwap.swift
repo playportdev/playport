@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// A play's in-place swap (decision 0166): an Xbox copy keeps some files encrypted on
+// A play's in-place swap (decision 0179): an Xbox copy keeps some files encrypted on
 // disk, and its Play puts their plaintext under the original names in the copy's own
 // folder, so a game that relaunches itself or looks beside its executable finds what
 // it expects, with no Wine loader change. Each original is set aside beside itself

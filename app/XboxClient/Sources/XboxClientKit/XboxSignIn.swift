@@ -28,7 +28,7 @@ public enum XboxSignInMessage: Sendable {
 public enum XboxSignIn {
     public static let clientID = "000000004424da1f"
     public static let userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; MSAppHost/3.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/70.0.3538.102 Safari/537.36 Edge/18.26100"
-    // Passkeys are assumed unavailable in a sideloaded WKWebView (0166). Phone
+    // Passkeys are assumed unavailable in a sideloaded WKWebView (0179). Phone
     // finding is a deferred gate; this text does not claim it was tested.
     public static let passkeyNote = "Passkeys aren't available in this sign-in window. Choose Microsoft's other sign-in options: Authenticator, an emailed or texted code, or a password. A passkey-only account needs another sign-in method added first."
     public static let bridgeScript = "window.ipc = {postMessage: function(m) { window.webkit.messageHandlers.xbox.postMessage(String(m)); }}; window.external = {notify: window.ipc.postMessage};"

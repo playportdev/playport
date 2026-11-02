@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Play of an installed Xbox copy (PLA-499), dev app only (decisions 0166, 0167): the
+// Play of an installed Xbox copy (PLA-499), dev app only (decisions 0179, 0180): the
 // licence, fetched at every Play (Microsoft asks for it, refreshOnStartup) or the stored
 // one while licensing can't be reached; the copy's kept-encrypted files decrypted in place
 // in its own folder (PlayportKit InPlaceSwap, the originals set aside); the keyed loopback

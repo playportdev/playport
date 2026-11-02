@@ -1,4 +1,4 @@
-# 0166: The Xbox store
+# 0179: The Xbox store
 
 **Status:** proposed, 2026-10-30, with the [Xbox spec PLA-485](https://linear.app/playportdev/issue/PLA-485)
 ([PLA-483](https://linear.app/playportdev/issue/PLA-483)). The owner settled each point below

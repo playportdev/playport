@@ -24,7 +24,7 @@
   "parts": {
     "app": "Playport's Swift app, PlayportKit, HostIOKit and the JIT helper extension's own code",
     "SteamClient": "app/SteamClient, with protocol schema tables derived from JavaSteam",
-    "XboxClient": "app/XboxClient and Dev/XboxAccount.swift, Xodus-derived Swift in the dev app only (0166)",
+    "XboxClient": "app/XboxClient and Dev/XboxAccount.swift, Xodus-derived Swift in the dev app only (0179)",
     "KosmicKrisp": "Frameworks/KosmicKrisp.framework (Mesa, build/stages/mesa.sh)",
     "MesaGL": "Frameworks/MesaEGL.framework and Frameworks/MesaGallium.framework (Mesa's EGL, OpenGL frontend and Zink, build/stages/mesa.sh)",
     "StikJIT": "PlugIns/PlayportJIT.appex/Frameworks/StikJIT.framework (prebuilt StikJIT 1.9.0)",

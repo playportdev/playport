@@ -46,7 +46,7 @@ import SteamClientKit
 import SwiftUI
 import UIKit
 #if !PLAYPORT_RELEASE
-import XboxClientKit  // the dev app's Xbox copies (decision 0166); release has no such package
+import XboxClientKit  // the dev app's Xbox copies (decision 0179); release has no such package
 #endif
 
 /// What X does on the game page now, for the shell's footer (AppShell.gamePageHints).

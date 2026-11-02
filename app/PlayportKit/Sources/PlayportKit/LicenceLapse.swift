@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// A copy's licence lapse (GLOSSARY "Licence"; an Xbox copy's, PLA-505, decision 0166):
+// A copy's licence lapse (GLOSSARY "Licence"; an Xbox copy's, PLA-505, decision 0179):
 // once the store definitively refuses a copy's licence (a Game Pass subscription ended,
 // the title left Game Pass), the copy can't be played and its removal falls due a grace
 // period after that first refusal. A licence granted again cancels the lapse. Only a
