@@ -32,6 +32,5 @@ ARM64EC/i386 objects must also be inspected with their actual build flags: no
 Stack setup/zeroing, branches and code/layout effects are not zero overhead.
 
 See `docs/evidence/2026-10-23-vkd3d-descriptor-cost-probe-host.md` for exact build,
-assembly, schema and coverage limits. Independent review precedes parser/integration;
-owner save/scene/window coordination, calibration/controls and human gameplay follow
-separately. A2 remains gated.
+assembly, schema and coverage limits. `tools/descriptorprof.py` parses the
+diagnostic's output; descriptor buffers (A2) are deferred (decision 0160).

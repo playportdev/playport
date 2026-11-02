@@ -1,7 +1,7 @@
 # 2026-10-13: touch controls phase 2f (controller gyro), host only
 
 **Linear:** [PLA-13](https://linear.app/playportdev/issue/PLA-13). **Plan:**
-[touch controls](../plans/2026-10-09-touch-controls.md), queue item 7 (2f). Before:
+[touch controls](https://linear.app/playportdev/issue/PLA-13), queue item 7 (2f). Before:
 [2e](2026-10-13-touch-controls-phase2e.md). Branch `dev/pla-13-touch-controls`.
 
 **The phone gates were NOT RUN: the owner paused phone testing.** Nothing in this record was

@@ -4,7 +4,7 @@
 [0052](0052-madeira-reconciliation.md), which turns Madeira's fastsync on by
 default (madsync stays off, as here); 0054, which supersedes 0052, ports
 fastsync as a Playport patch, on by default. Settles item 3 of the
-[runtime-risks plan](../plans/finished.md#runtime-risks) (only in-process
+[runtime-risks plan](https://linear.app/playportdev/issue/PLA-669) (only in-process
 sync is fast, and it is off). The measurements are in the
 [evidence record](../evidence/2026-09-28-server-sync.md).
 

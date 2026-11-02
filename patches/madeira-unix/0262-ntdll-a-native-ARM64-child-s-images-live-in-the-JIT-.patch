@@ -1,0 +1,359 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 1 Nov 2026 01:30:00 +0100
+Subject: [PATCH] ntdll: a native ARM64 child's images live in the JIT pool
+
+A native ARM64 child (0249) runs each image from its JIT-pool copy, but
+NtMapViewOfSection returned the PE view, so the PEB, the module list and
+every RVA a program computes from its own code addresses (ADRP, pool
+addresses) against its module base disagreed by the distance between
+the two. World of Warcraft's ARM64 client failed its start-up checks on
+it ("Game Initialization Failed").
+
+Decision 0176: for such a child, virtual_map_image returns the pool copy
+as the image (all images but its private ntdll, which the unix side
+writes through its view). The copy holds the whole image and its header's
+ImageBase is the copy's address. The view stays as Wine's and the
+server's backing store: NtQueryVirtualMemory (basic and image
+information), NtProtectVirtualMemory and NtUnmapViewOfSection take the
+copy's addresses and answer in them, the IAT sync never copies the view
+over a presented copy, an exception in one keeps its pool pc, and the
+PE-side ntdll's reverse translation (the unwinder, resources) leaves its
+addresses alone. x86-64 and ARM64EC processes are unchanged.
+
+Linear: PLA-514
+Class: ios-port
+Evidence: docs/evidence/2026-10-31-wow-arm64-start.md
+Offered-upstream: no
+---
+ build/ntdll-unix/loader_ios.c         |  14 ++-
+ build/ntdll-unix/signal_arm64_ios.c   |  14 ++-
+ build/ntdll-unix/virtual_ios.c        | 122 +++++++++++++++++++++++++-
+ build/ntdll-unix/wow64_image_mapper.h |  15 ++++
+ 4 files changed, 158 insertions(+), 7 deletions(-)
+
+diff --git a/build/ntdll-unix/loader_ios.c b/build/ntdll-unix/loader_ios.c
+index e2e1715..a984db2 100644
+--- a/build/ntdll-unix/loader_ios.c
++++ b/build/ntdll-unix/loader_ios.c
+@@ -363,6 +363,14 @@ int ios_is_arm64ec_cur(void)
+            ios_cur_image_info()->Machine == IMAGE_FILE_MACHINE_AMD64;
+ }
+ 
++/* Playport (PLA-512, PLA-514): the current pseudo-process is a plain ARM64
++ * child of the ARM64EC session (0249), whose images live in the JIT pool
++ * (decision 0176). */
++int ios_is_native_arm64_cur(void)
++{
++    return is_arm64ec() && ios_cur_image_info()->Machine == IMAGE_FILE_MACHINE_ARM64;
++}
++
+ static BOOL ios_register_proc_ident( void *peb_id, const SECTION_IMAGE_INFORMATION *info )
+ {
+     int idx = ios_proc_ident_count;
+@@ -2156,11 +2164,12 @@ static void load_ntdll_functions( HMODULE module )
+          * find their function tables (registered at PE VAs). */
+         {
+             extern void *ios_jit_reverse_translate_addr(const void *addr);
++            extern void *ios_jit_guest_reverse_translate_addr(const void *addr);
+             void **p_xlate_rev = (void **)find_named_export( module, exports,
+                                                              "p_ios_jit_reverse_translate_addr" );
+             if (p_xlate_rev)
+             {
+-                *p_xlate_rev = (void *)ios_jit_reverse_translate_addr;
++                *p_xlate_rev = (void *)ios_jit_guest_reverse_translate_addr;
+                 dprintf( 2, "XLATE-HOOK-REV installed p_ios_jit_reverse_translate_addr=%p at %p\n",
+                          ios_jit_reverse_translate_addr, p_xlate_rev );
+                 ios_jit_sync_write( p_xlate_rev, sizeof(void*) );
+@@ -2494,6 +2503,7 @@ static int ios_load_child_ec_ntdll( PEB *child_peb, enum ios_child_ntdll kind )
+         /* JIT translate hooks, as for the session image. */
+         {
+             extern void *ios_jit_reverse_translate_addr(const void *addr);
++            extern void *ios_jit_guest_reverse_translate_addr(const void *addr);
+             void **p_xlate = (void **)find_named_export( module, exports, "p_ios_jit_translate_addr" );
+             void **p_xlate_rev = (void **)find_named_export( module, exports, "p_ios_jit_reverse_translate_addr" );
+             if (p_xlate)     { *p_xlate = (void *)ios_jit_translate_addr;              ios_jit_sync_write( p_xlate, sizeof(void*) ); }
+@@ -2507,7 +2517,7 @@ static int ios_load_child_ec_ntdll( PEB *child_peb, enum ios_child_ntdll kind )
+              * frame trips "Exception frame is not in stack limits" -> process death. */
+             if (p_xlate_rev)
+             {
+-                *p_xlate_rev = (void *)ios_jit_reverse_translate_addr;
++                *p_xlate_rev = (void *)ios_jit_guest_reverse_translate_addr;
+                 ios_jit_sync_write( p_xlate_rev, sizeof(void*) );
+                 dprintf( 2, "[ec-child-ntdll] XLATE-REV installed at %p = %p\n",
+                          p_xlate_rev, (void *)ios_jit_reverse_translate_addr );
+diff --git a/build/ntdll-unix/signal_arm64_ios.c b/build/ntdll-unix/signal_arm64_ios.c
+index 5476411..f7f7aa4 100644
+--- a/build/ntdll-unix/signal_arm64_ios.c
++++ b/build/ntdll-unix/signal_arm64_ios.c
+@@ -6621,6 +6621,7 @@ static NTSTATUS ios_ss_continue( struct thread_data *data, const CONTEXT *contex
+     extern size_t ios_jit_pool_size_global;
+     extern void *ios_jit_xol_slot( int slot, char **rw );
+     extern uint64_t ios_jit_reverse_translate( uint64_t addr, uint64_t *module_base );
++    extern int ios_jit_is_presented( const void *pc );
+     ULONG64 rx = (ULONG64)ios_jit_rx_base_global;
+     CONTEXT step = *context;
+     char *rw;
+@@ -6672,7 +6673,7 @@ static NTSTATUS ios_ss_continue( struct thread_data *data, const CONTEXT *contex
+             if ((insn & 31) != 31) step.X[insn & 31] = (ULONG64)data->teb;
+             step.Pc += 4;
+         }
+-        pe = ios_jit_reverse_translate( step.Pc, NULL );
++        pe = ios_jit_is_presented( (void *)step.Pc ) ? 0 : ios_jit_reverse_translate( step.Pc, NULL );
+         rec.ExceptionAddress = (void *)(pe ? pe : step.Pc);
+         return call_user_exception_dispatcher( data, &rec, &step );
+     }
+@@ -7453,7 +7454,10 @@ static void setup_exception( ucontext_t *sigcontext, EXCEPTION_RECORD *rec )
+      * side.) The resume context keeps the real host pc. */
+     {
+         extern uint64_t ios_jit_reverse_translate( uint64_t addr, uint64_t *module_base );
+-        uint64_t pe = ios_jit_reverse_translate( (uint64_t)PC_sig(sigcontext), NULL );
++        extern int ios_jit_is_presented( const void *pc );
++        /* Playport (PLA-514, decision 0176): a presented image's copy is the image */
++        uint64_t pe = ios_jit_is_presented( (void *)PC_sig(sigcontext) ) ? 0
++                      : ios_jit_reverse_translate( (uint64_t)PC_sig(sigcontext), NULL );
+         if (pe)
+         {
+             rec->ExceptionAddress = (void *)(uintptr_t)pe;
+@@ -8011,7 +8015,8 @@ dispatch:
+ 
+     rec.ExceptionAddress = (void *)(uintptr_t)pc;
+     {
+-        uint64_t pe = ios_jit_reverse_translate( pc, NULL );
++        extern int ios_jit_is_presented( const void *pc );
++        uint64_t pe = ios_jit_is_presented( (void *)(uintptr_t)pc ) ? 0 : ios_jit_reverse_translate( pc, NULL );
+         if (pe) rec.ExceptionAddress = (void *)(uintptr_t)pe;
+     }
+ 
+@@ -13739,7 +13744,8 @@ static void trap_handler( int signal, siginfo_t *siginfo, void *sigcontext )
+     if (ios_ss_slot && PC_sig( context ) == ios_ss_slot + 4 && *(ULONG *)PC_sig( context ) == PPSS_BRK)
+     {
+         extern uint64_t ios_jit_reverse_translate( uint64_t addr, uint64_t *module_base );
+-        ULONG64 next = ios_ss_pc + 4, pe = ios_jit_reverse_translate( next, NULL );
++        extern int ios_jit_is_presented( const void *pc );
++        ULONG64 next = ios_ss_pc + 4, pe = ios_jit_is_presented( (void *)next ) ? 0 : ios_jit_reverse_translate( next, NULL );
+ 
+         ios_ss_slot = 0;
+         if (ios_ss_reg) REGn_sig( ios_ss_reg - 1, context ) = ios_ss_reg_val;
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 3165228..03131fe 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -198,6 +198,9 @@ struct ios_jit_mapping {
+     unsigned char is_fex;   /* Playport (PLA-93): a copy of FEX's own module
+                              * (libarm64ecfex.dll or libwow64fex.dll), for the
+                              * real suspend's safe point (ios_jit_pool_image_kind) */
++    unsigned char presented; /* Playport (PLA-514, decision 0176): a native ARM64
++                              * child's image, whose copy is the image the guest
++                              * sees (ios_jit_present_image) */
+ };
+ static struct ios_jit_mapping ios_jit_mappings[IOS_JIT_MAX_MAPPINGS];
+ static int ios_jit_mapping_count = 0;
+@@ -3576,6 +3579,7 @@ void ios_jit_add_mapping(void *pe_base, void *jit_base, size_t size, size_t imag
+         ios_jit_mappings[slot].loader_peb = ios_jit_current_peb();
+         ios_jit_mappings[slot].machine_cached = 0;   /* ml349: slot reuse invalidates memo */
+         ios_jit_mappings[slot].machine_valid = 0;
++        ios_jit_mappings[slot].presented = 0;
+         {
+             const char *name = ios_pe_module_name( pe_base, image_size );
+             ios_jit_mappings[slot].is_fex = !strcmp( name, "libarm64ecfex.dll" ) ||
+@@ -4945,6 +4949,79 @@ void *ios_jit_pool_copy_owner(const void *addr, void **pe_base_out)
+ 
+ /* Reverse-translate a JIT pool address back to the original PE address.
+  * Used when PE code passes ADRP-computed addresses to syscalls. */
++/* Playport (PLA-514, decision 0176): in a native ARM64 child the JIT-pool copy
++ * of an image IS the image. virtual_map_image hands out the copy's address as
++ * the module's base, so the PEB, the loader's module list, the unwinder and
++ * every RVA the program computes from its own code agree; the PE view stays as
++ * Wine's view and the server's, a backing store the guest is never told of.
++ * An address of a presented copy is turned into the view's for the virtual
++ * memory calls (ios_jit_reverse_translate_addr) and back for what they return. */
++void *ios_jit_present_image( void *pe_base )
++{
++    int i;
++    for (i = 0; i < ios_jit_mapping_count; i++)
++    {
++        struct ios_jit_mapping *m = &ios_jit_mappings[i];
++        IMAGE_DOS_HEADER *dos;
++        IMAGE_NT_HEADERS64 *nt;
++
++        if (m->pe_base != pe_base || !m->size) continue;
++        /* ntdll stays on its view: the unix side writes its dispatcher slots
++         * there and syncs them into the copy (ios_jit_sync_write). */
++        if (!strcmp( ios_pe_module_name( m->pe_base, m->image_size ), "ntdll.dll" )) return NULL;
++        if (m->size < m->image_size) return NULL;   /* a partial copy cannot be the image */
++        dos = (IMAGE_DOS_HEADER *)((char *)ios_jit_rw_base_global + ((char *)m->jit_base - (char *)ios_jit_rx_base_global));
++        if (dos->e_magic != IMAGE_DOS_SIGNATURE) return NULL;
++        nt = (IMAGE_NT_HEADERS64 *)((char *)dos + dos->e_lfanew);
++        if (nt->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC)
++            nt->OptionalHeader.ImageBase = (ULONG_PTR)m->jit_base;   /* as Windows rebases it */
++        m->presented = 1;
++        dprintf( 2, "[native-image] %s: view %p, the image is its pool copy %p+0x%lx\n",
++                 ios_pe_module_name( m->pe_base, m->image_size ), m->pe_base, m->jit_base,
++                 (unsigned long)m->image_size );
++        return m->jit_base;
++    }
++    return NULL;
++}
++
++/* The presented copy holding addr, or NULL; *pe gets addr's place in the view. */
++static struct ios_jit_mapping *ios_jit_presented_at( const void *addr, uintptr_t *pe )
++{
++    int i;
++    for (i = 0; i < ios_jit_mapping_count; i++)
++    {
++        uintptr_t a = (uintptr_t)addr, jb = (uintptr_t)ios_jit_mappings[i].jit_base;
++        if (!ios_jit_mappings[i].presented || a < jb || a >= jb + ios_jit_mappings[i].size) continue;
++        if (pe) *pe = (uintptr_t)ios_jit_mappings[i].pe_base + (a - jb);
++        return &ios_jit_mappings[i];
++    }
++    return NULL;
++}
++
++/* A view address of a presented image as the guest knows it (its copy's). */
++static void *ios_jit_presented_addr( const struct ios_jit_mapping *m, const void *view_addr )
++{
++    uintptr_t a = (uintptr_t)view_addr, pb = (uintptr_t)m->pe_base;
++    if (a < pb || a > pb + m->image_size) return (void *)view_addr;
++    return (char *)m->jit_base + (a - pb);
++}
++
++/* 1 when pc is in a presented copy: its own address is the guest's. */
++int ios_jit_is_presented( const void *pc )
++{
++    return ios_jit_presented_at( pc, NULL ) != NULL;
++}
++
++/* The PE-side ntdll's xlate_ios_jit_rev: the unwinder and the resource
++ * lookup turn a copy's address into its image's. A presented copy is its
++ * image (decision 0176), so its addresses stay. */
++void *ios_jit_guest_reverse_translate_addr(const void *addr)
++{
++    extern void *ios_jit_reverse_translate_addr(const void *addr);
++    if (ios_jit_presented_at( addr, NULL )) return (void *)addr;
++    return ios_jit_reverse_translate_addr( addr );
++}
++
+ void *ios_jit_reverse_translate_addr(const void *addr)
+ {
+     int i;
+@@ -11361,7 +11438,11 @@ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
+              * resource functions read resources there too. ntdll keeps its
+              * whole image: its child copies (ios_jit_copy_module_for_child)
+              * relocate from their own bytes, and it saves little. */
+-            size_t copy_size = strcmp( ios_pe_module_name( image_base, image_size ), "ntdll.dll" )
++            /* Playport (PLA-514, decision 0176): a native ARM64 child's copy is
++             * the image (ios_jit_present_image), so it holds all of it. */
++            extern int ios_is_native_arm64_cur(void);
++            size_t copy_size = strcmp( ios_pe_module_name( image_base, image_size ), "ntdll.dll" ) &&
++                               !ios_is_native_arm64_cur()
+                                ? ios_copy_extent( image_base, image_size, page_size ) : image_size;
+             size_t image_alloc = (copy_size + page_size - 1) & ~(page_size - 1);
+             size_t tramp_prealloc = ios_x18_tramp_prealloc_scan(image_base, image_size);
+@@ -23917,6 +23998,12 @@ NTSTATUS WINAPI NtProtectVirtualMemory( HANDLE process, PVOID *addr_ptr, SIZE_T
+         *addr_ptr = base;
+         *size_ptr = size;
+         *old_prot = old;
++#ifdef WINE_IOS
++        {   /* Playport (PLA-514, decision 0176): the caller's address space is the copy's */
++            struct ios_jit_mapping *pm = ios_jit_orig_addr ? ios_jit_presented_at( ios_jit_orig_addr, NULL ) : NULL;
++            if (pm) *addr_ptr = ios_jit_presented_addr( pm, base );
++        }
++#endif
+ 
+ #ifdef WINE_IOS
+         /* (Previously: also called mprotect_exec on the JIT-pool RX side
+@@ -23977,6 +24064,9 @@ NTSTATUS WINAPI NtProtectVirtualMemory( HANDLE process, PVOID *addr_ptr, SIZE_T
+ 
+                 if (rgn_start >= pe_start && rgn_end <= pe_end)
+                 {
++                    /* Playport (PLA-514, decision 0176): a presented copy is the
++                     * image; its view is a stale backing store, never a source. */
++                    if (ios_jit_mappings[idx].presented) break;
+                     /* iOS-Madeira ml632 A/B: DO NOT IAT-SYNC MEMORY OWNED BY AN ANON JIT ALIAS.
+                      *
+                      * Containment against the PE image is not sufficient ownership: the
+@@ -24825,6 +24915,7 @@ NTSTATUS WINAPI NtQueryVirtualMemory( HANDLE process, LPCVOID addr,
+         return status;
+     /* PE code in JIT pool computes addresses via ADRP relative to JIT PC.
+      * Translate JIT addresses back to original PE addresses for VM queries. */
++    struct ios_jit_mapping *ios_query_pm = process == NtCurrentProcess() ? ios_jit_presented_at( addr, NULL ) : NULL;
+     addr = ios_jit_reverse_translate_addr(addr);
+     /* ml966: VirtualQuery on a low guest allocation must describe the backing,
+      * otherwise the guest sees "free" for memory it holds. */
+@@ -24849,6 +24940,19 @@ NTSTATUS WINAPI NtQueryVirtualMemory( HANDLE process, LPCVOID addr,
+     switch(info_class)
+     {
+         case MemoryBasicInformation:
++#ifdef WINE_IOS
++            if (ios_query_pm)
++            {   /* Playport (PLA-514, decision 0176): answer in the copy's addresses */
++                status = get_basic_memory_info( process, addr, buffer, len, res_len );
++                if (!status && len >= sizeof(MEMORY_BASIC_INFORMATION))
++                {
++                    MEMORY_BASIC_INFORMATION *mbi = buffer;
++                    mbi->BaseAddress = ios_jit_presented_addr( ios_query_pm, mbi->BaseAddress );
++                    mbi->AllocationBase = ios_jit_presented_addr( ios_query_pm, mbi->AllocationBase );
++                }
++                return status;
++            }
++#endif
+             return get_basic_memory_info( process, addr, buffer, len, res_len );
+ 
+         case MemoryWorkingSetExInformation:
+@@ -24861,6 +24965,18 @@ NTSTATUS WINAPI NtQueryVirtualMemory( HANDLE process, LPCVOID addr,
+             return get_memory_region_info( process, addr, buffer, len, res_len );
+ 
+         case MemoryImageInformation:
++#ifdef WINE_IOS
++            if (ios_query_pm)
++            {
++                status = get_memory_image_info( process, addr, buffer, len, res_len );
++                if (!status && len >= sizeof(MEMORY_IMAGE_INFORMATION))
++                {
++                    MEMORY_IMAGE_INFORMATION *mii = buffer;
++                    mii->ImageBase = ios_jit_presented_addr( ios_query_pm, mii->ImageBase );
++                }
++                return status;
++            }
++#endif
+             return get_memory_image_info( process, addr, buffer, len, res_len );
+ 
+         case MemoryWineLoadUnixLib:
+@@ -25214,6 +25330,10 @@ static NTSTATUS unmap_view_of_section( HANDLE process, PVOID addr, ULONG flags )
+     NTSTATUS window_status;
+ 
+     if (ios_wow64_route_unmap( process, addr, flags, &window_status )) return window_status;
++    {   /* Playport (PLA-514, decision 0176): a presented image is unmapped by its copy's address */
++        uintptr_t pe;
++        if (process == NtCurrentProcess() && ios_jit_presented_at( addr, &pe )) addr = (void *)pe;
++    }
+     if (process != NtCurrentProcess())
+     {
+         union apc_call call;
+diff --git a/build/ntdll-unix/wow64_image_mapper.h b/build/ntdll-unix/wow64_image_mapper.h
+index d310380..e57c424 100644
+--- a/build/ntdll-unix/wow64_image_mapper.h
++++ b/build/ntdll-unix/wow64_image_mapper.h
+@@ -151,6 +151,21 @@ static NTSTATUS virtual_map_image( HANDLE mapping, void **addr_ptr, SIZE_T *size
+         }
+ #endif
+         *addr_ptr = view->base;
++#ifdef WINE_IOS
++        /* Playport (PLA-514, decision 0176): a native ARM64 child is given the
++         * image's JIT-pool copy, which its code runs from, as the image. */
++        if (!offset && !(view->protect & VPROT_WOW64_IMAGE))
++        {
++            extern int ios_is_native_arm64_cur(void);
++            extern void *ios_jit_present_image( void *pe_base );
++            void *pool = ios_is_native_arm64_cur() ? ios_jit_present_image( view->base ) : NULL;
++            if (pool)
++            {
++                pe_mapping->image.base = wine_server_client_ptr( pool );
++                *addr_ptr = pool;
++            }
++        }
++#endif
+         *size_ptr = size;
+         VIRTUAL_DEBUG_DUMP_VIEW( view );
+     }

@@ -11,7 +11,16 @@
 //                              run in the new process, under this run (DriverContinuation),
 //                              only if no loss/cancel was observed during replacement;
 //                              a Play refused before the runtime started (its alert shows)
-//                              goes on here
+//                              goes on here. A Battle.net copy's first Play (bnet-wow) is
+//                              refused while its ban-risk notice asks: notice: answers it.
+//                              Past it, a Play that found an update (PLA-521) is followed
+//                              through Downloads to the game's start
+//   notice:<title id>=accept|decline
+//                              An installed Battle.net copy's Play from its page and the
+//                              ban-risk notice it shows first (PLA-514), answered as the
+//                              player does: decline checks Play does not start and the copy
+//                              keeps no acceptance; accept keeps it with the copy and the
+//                              Play goes on, followed as play:. Fails once it was accepted
 //   open-launcher:<id>         Settings › Launchers' Open for a publisher's launcher
 //                              (PlayportKit PublisherLauncher: rockstar), followed as play:
 //   forget-launcher-window:<id> Settings › Launchers' Forget the launcher's saved window
@@ -24,8 +33,26 @@
 //   install:epic-<app name>    Install from Epic (signed in on the phone), the live build; an
 //                              installed game's install is its update; a refused game fails
 //                              with the page's reason
+//   install:bnet-<code>        Install a Battle.net product (bnet-wow_classic_era) from its
+//                              page, in the page's store region and language; waits until it is
+//                              in the library with Play. A product not offered, or one that
+//                              does not fit, fails with the page's reason
 //   pause-resume:<app id>      Install, Pause once a quarter is staged, check the
-//                              stage is kept, then Resume and wait as install does
+//                              stage is kept, then Resume and wait as install does;
+//                              pause-resume:bnet-<code> also checks Play stays hidden until
+//                              the install is complete
+//   region:bnet-<code>[=<r>]   A Battle.net product's page with its store region picker
+//                              open (UI/BattleNetStore.swift); =<r> (us, eu, kr, tw) picks it
+//                              as the picker does and waits for its sizes. On an installed
+//                              product (UI/BattleNetInstalled.swift), =<r> changes its region
+//                              in place and fails if a download starts or .build.info differs
+//   locale:bnet-<code>[=<l>]   An installed Battle.net product's page with its Language
+//                              picker open; =<l> (deDE) changes the language through
+//                              Downloads and waits until .build.info says <l> and Play shows
+//   update:bnet-<code>[=install] An installed Battle.net product's page and its Check for
+//                              update, with what it found logged; =install also queues the
+//                              update and waits until the receipt and .build.info name it
+//                              and the copy's client is the x64 one (decision 0177)
 //   queue:<app id>             Install from Steam, as a game page's Install does, and go on
 //                              at once: the download runs in the queue (SteamInstalls)
 //   downloading:<app id>       Waits (2 min at most) until the queue runs that app's download
@@ -41,8 +68,9 @@
 //                              `{}` clears them) as the game's own launch settings,
 //                              as its page does
 //   controls:<title id>        Saves UI_CONTROLS (a PlayportKit GameControls as JSON:
-//                              {"layout":"off"|"gamepad","opacity":0.1-1,"dpad":"off"|"on",
-//                              "rightStick":"off"|"below"|"above","gyro":{...}}; `{}` clears them)
+//                              {"layout":"off"|"gamepad"|"keyboardMouse"|"pointClick","opacity":0.1-1,
+//                              "dpad":"off"|"on","rightStick":"off"|"below"|"above","gyro":{...},
+//                              "layouts":{PRESET:LAYOUT,...}}; `{}` clears them)
 //                              as the game's own controls, as the in-game menu's Controls does;
 //                              "gyro" is the game's own gyro aim (PlayportKit GameGyro:
 //                              "output":"off"|"mouse"|"rightStick","source":"auto"|"phone"|
@@ -55,27 +83,36 @@
 //                              ACTION,...}}, a custom map without a table starting as the
 //                              keyboardMouse preset); one this build cannot read is refused;
 //                              "lookSpeed" (0.1-8, 1 by default) its mouse look's speed, a
-//                              multiple of 2000 counts/s for a stick bound to mouse:move
-//   hud:on | hud:off           Sets Settings' Metal HUD, as its toggle does
-//   open:<screen | title id>   Shows a screen (home, library, games, downloads, settings,
+//                              multiple of 2000 counts/s for a stick bound to mouse:move;
+//                              "layouts" the game's own copies of the presets, as the layout
+//                              editor saves them (PlayportKit ControlLayout, version 3, by
+//                              preset name), drawn when their preset is the layout; a record
+//                              with a copy this build cannot read is refused
+//   hud:on | hud:off           Sets Settings › Developer › Metal HUD, as its toggle does
+//   open:<screen | title id>   Shows a screen (home, library, games, battlenet: the Library on
+//                              Battle.net's chip, xbox: on the dev app's Xbox store's, downloads, settings,
 //                              account, setup: the first-run checklist, signin: Sign in to
 //                              Steam, a preview while Steam is signed in; AppNavigation.screens)
-//                              or a title's page over the
+//                              or a title's page (a Battle.net product offered and not
+//                              installed: open:bnet-<code>) over the
 //                              Library, then waits 1.5 s so a
 //                              screenshot sees it drawn; `open:<title id>#<section>`
 //                              opens the page's Game options at a section (graphics, controls,
 //                              game, files, developer, ordering, steam, runtime, graphicsoptions).
 //                              runtime/graphicsoptions only ring/scroll existing rows: no edit,
 //                              keyboard or value mutation. Unknown game sections are refused.
-//                              `open:<title id>#gyro` its Controls › Gyro aim page, and
+//                              `open:<title id>#gyro` its Controls › Gyro aim page,
+//                              `open:<title id>#layout` its Controls › Edit on-screen layout,
+//                              the layout editor over the game's art (UI/LayoutEditorView.swift:
+//                              pad:lb/rb ring a control, pad:up/down/left/right move it a grid
+//                              step, pad:a opens the bar and inspector to the ring, pad:x Add,
+//                              pad:y Reset, pad:view undo, pad:menu redo, pad:b back and then
+//                              Done, which saves), and
 //                              `open:<title id>#controller` its Controller page
 //                              (UI/ControllerMapView.swift: ctl:mode, ctl:lookSpeed,
 //                              ctl:copy, ctl:resetAll, ctl:<row> such as ctl:a, ctl:leftStick,
 //                              ctl:dpad; pad:x/lb/rb/view/menu ring their rows; A on a Custom
 //                              row opens the ActionPicker, whose presses pad: sends);
-//                              `open:library#<chip>` shows the Library on a chip it shows
-//                              now (all, installed, steam, gog, epic, xbox: LibraryFilter),
-//                              as ⧉'s Show list picks it; a chip not shown is refused;
 //                              `open:settings#<section>` shows a Settings section (accounts,
 //                              graphics, downloads, controls, storage, setup, about,
 //                              launchers, developer; PlayportKit SettingsSection.named also takes
@@ -157,21 +194,40 @@
 //                              tap through the handler GameSurfaceView's recognizer calls
 //                              (HostIO.menuGesture), which opens the in-game menu with or
 //                              without on-screen controls, and waits 1 s
+//   suggest:accept|dismiss     After a play: (it runs while the game runs): waits (3 min at most)
+//                              for the toast that offers Keyboard & mouse (UI/LayoutSuggestionToast
+//                              .swift, PlayportKit LayoutSuggestion), then answers it as its Use or
+//                              Not now button does; fails, with the reason, when the game is not
+//                              offered (once per game: set:controls.suggestedLayoutOffered= forgets)
 //   menu:open                  After a play: (the actions after it then run while the game runs):
-//                              waits for the game's first frame (3 min at most), then holds the
+//                              waits for the game's first frame (3 min at most; a guest window up
+//                              10 s with no frame counts, for a GDI-only program), then holds the
 //                              controller's Home button 0.8 s through HostIO's pad handling
 //                              (HostIO.menuInput), which opens the in-game menu
 //                              (UI/InGameMenuView.swift), and waits 1 s
-//   menu:<row>                 In the menu: moves its ring to the row (resume, controls,
-//                              screenshot, overlay, controller, quit) and presses A, as a
+//   menu:<row>                 In the menu: moves its ring to the row (resume, controls, keyboard,
+//                              text, screenshot, overlay, controller, quit) and presses A, as a
 //                              controller does (controls opens its panel: pad:left/right
 //                              change the ringed row, pad:down moves along On-screen controls,
-//                              D-pad, Right stick, Opacity, Gyro aim, Sensitivity and, while a
+//                              D-pad and Right stick (only on the Gamepad layout with no copy of
+//                              the game's own), Opacity, Gyro aim, Sensitivity and, while a
 //                              controller is connected (--pad's scripted pad counts), Controller:
 //                              Pad, Keys & mouse, Custom; pad:b back);
+//                              menu:layout opens the Controls panel and its Edit layout…, the
+//                              layout editor over the paused game (pad: then drives it as on
+//                              open:<title id>#layout; Done goes back to the panel);
 //                              pad: presses go to the menu too while it is up. menu:quit waits
 //                              for the game's end: Playport restarts, and the actions after it
 //                              run in the new process, as after play:
+//                              menu:text goes back to the game with the text bar open over it
+//                              (UI/TextBarView.swift)
+//   textbar:<op>               After menu:text (it runs while the game runs), the text bar's own
+//                              controls (Dev/TextBarDriver.swift): close, secure | plain (its lock),
+//                              tab | enter | backspace (its keys), type:<text> (typed into its
+//                              field as the keyboard types it; percent-encoded, %2C a comma),
+//                              secret | secret+enter (password mode, then a value the workstation
+//                              pushes for this action alone, Documents/ui-text-<nonce>-<n>, read
+//                              and deleted before it is typed; nothing records it but the field)
 //   web:wait | web:click:<label> | web:close
 //                              After a play: (they run while the game runs): a web page the
 //                              game opened (UI/GameWebSheet.swift): wait for it (Open on its
@@ -206,6 +262,7 @@
 // action has run (a play's own end is its `title: done` line). JIT comes from
 // the built-in helper (JitProvider), as for any Play.
 
+import BattleNetClientKit
 import Foundation
 import HostIOKit
 import GOGClientKit
@@ -329,6 +386,16 @@ enum UIDriver {
                     return finish("action=\(action) refused: \(id) is not a catalogued title")
                 }
                 switch parts[0] {
+                case "install" where id.hasPrefix("bnet-"), "pause-resume" where id.hasPrefix("bnet-"):
+                    if let failure = try await installBattleNet(String(id.dropFirst(5)), pauseAt: parts[0] == "pause-resume" ? 0.25 : nil) {
+                        return finish("action=\(action) failed: \(failure)")
+                    }
+                case "region":
+                    if let failure = try await battleNetRegion(id) { return finish("action=\(action) failed: \(failure)") }
+                case "locale":
+                    if let failure = try await battleNetLocale(id) { return finish("action=\(action) failed: \(failure)") }
+                case "update":
+                    if let failure = try await battleNetUpdate(id) { return finish("action=\(action) failed: \(failure)") }
                 case "install" where id.hasPrefix("epic-"):
                     if let failure = try await installEpic(String(id.dropFirst(5))) { return finish("action=\(action) failed: \(failure)") }
                 case "install" where id.hasPrefix("gog-"):
@@ -374,7 +441,8 @@ enum UIDriver {
                         + "controllerMap=\(c.controllerMap == nil ? "default" : "own") "
                         + "(\(ControlsStore.shared.game(id).controllerMap(over: ControlsStore.shared.defaults).summary)) "
                         + "lookSpeed=\(c.lookSpeed == nil ? "default" : "own") "
-                        + "(\(LookSpeed.label(ControlsStore.shared.game(id).lookSpeed(over: ControlsStore.shared.defaults))))")
+                        + "(\(LookSpeed.label(ControlsStore.shared.game(id).lookSpeed(over: ControlsStore.shared.defaults)))) "
+                        + "layouts=\(c.layouts.isEmpty ? "none" : OnScreenLayout.allCases.compactMap { p in c.layouts[p].map { "\(p.rawValue)(\($0.controls.count) controls)" } }.joined(separator: ","))")
                 case "touch":
                     let launch = TitleLaunch.shared
                     guard launch.running else { return finish("action=\(action) refused: no game is running") }
@@ -420,11 +488,15 @@ enum UIDriver {
                     let nav = AppNavigation.shared
                     let parts = id.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
                     // Validate game destinations before changing navigation. Settings/licences
-                    // retain their own section/alias handling, the Library its chips; generic
-                    // game IDs stay generic.
-                    if parts.count > 1, !["settings", "licences", "library"].contains(parts[0]),
+                    // retain their own section/alias handling; generic game IDs stay generic.
+                    if parts.count > 1, !["settings", "licences"].contains(parts[0]),
                        UIDriverGameSection(rawValue: parts[1]) == nil {
                         return finish("action=\(action) refused: unknown Game options section \(parts[1])")
+                    }
+                    // A Battle.net product's page: offered now (asked of Blizzard when nothing is known yet).
+                    var bnetOffered = false
+                    if let title = parts.first, let key = StoreGameKey(titleID: title), key.store == .battlenet, library.title(title) == nil {
+                        bnetOffered = try await battleNetOffered(key)
                     }
                     if parts.first == "black" {
                         // The black screen is a terminal handoff: it ends the batch, so no
@@ -442,11 +514,6 @@ enum UIDriver {
                             pages.append(.component(c.name))
                         }
                         nav.showLicences(pages)
-                    } else if parts.first == "library", parts.count > 1 {
-                        guard let chip = LibraryFilter(rawValue: parts[1]), LibraryGrid.filters.contains(chip)
-                        else { return finish("action=\(action) refused: the Library shows no \(parts[1]) chip") }
-                        nav.open("library")
-                        LibraryGrid.shared.filter = chip
                     } else if nav.open(parts.first ?? "") {
                         nav.pageSection = parts.count > 1 ? parts[1] : nil
                     } else if let title = parts.first, library.title(title) != nil {
@@ -455,6 +522,7 @@ enum UIDriver {
                     } else if let title = parts.first, let key = StoreGameKey(titleID: title),
                               (key.store == .gog && GOGAccount.shared.game(key.id) != nil)
                                 || (key.store == .epic && EpicAccount.shared.game(key.id) != nil)
+                                || (key.store == .battlenet && bnetOffered)
                                 || (key.store == .xbox && XboxGames.shared.game(key.id) != nil) {
                         // A store's game not installed: its page, as its library tile opens it.
                         nav.openGame(.store(key))
@@ -463,7 +531,7 @@ enum UIDriver {
                         return finish("action=\(action) refused: \(id) is not a screen or a catalogued title")
                     }
                     try await pause(.milliseconds(1500))
-                    log("open \(id)")
+                    log("open \(id)" + (LayoutEditorSession.shared.isUp ? ": \(LayoutEditorSession.shared.summary)" : ""))
                 case "pad":
                     // The presses a controller makes, into the same router (UI/Pad/PadRouter.swift),
                     // or the in-game menu's while it is up (HostIO feeds it the same presses).
@@ -489,7 +557,8 @@ enum UIDriver {
                         + (AppNavigation.shared.setup && !AppNavigation.shared.settings ? " (setup\(SetupState.shared.preview == nil ? "" : " preview"), \(SetupChecklist.summary(SetupState.shared.shown)))" : "")
                         + (AppNavigation.shared.signIn ? " (\(SteamAccountModel.current.map { SignInState.shared.summary($0) } ?? "signin"))" : "")
                         + (AppNavigation.shared.onGamePage ? " (game page\(AppNavigation.shared.gamePanels.map { ", " + $0.rawValue }.joined()))" : "")
-                        + (PadModal.shared.summary.map { ", \($0)" } ?? "") + gamePageSettings() + globalSettings())
+                        + (PadModal.shared.summary.map { ", \($0)" } ?? "") + gamePageSettings() + globalSettings()
+                        + (LayoutEditorSession.shared.isUp ? "; \(LayoutEditorSession.shared.summary)" : ""))
                     // A press that started a Play (a game page's Play, Home's card): the run follows the
                     // game as play: does, and ends with its title-done or pp ui's --until.
                     let launch = TitleLaunch.shared
@@ -544,12 +613,41 @@ enum UIDriver {
                     log("gesture \(id): \(InGameMenu.shared.summary)")
                     if let failure = try await afterInGame(action, index: done + 1, next: actions[(i + 1)...]) { return finish(failure) }
                     if AppRestart.shared.restarting { return }
+                case "suggest":
+                    let launch = TitleLaunch.shared, suggested = SuggestedLayout.shared
+                    guard ["accept", "dismiss"].contains(id) else { return finish("action=\(action) refused: not suggest:accept or suggest:dismiss") }
+                    guard launch.running else { return finish("action=\(action) refused: no game is running") }
+                    // The offer is due after 20 s of play from the first frame (PlayportKit LayoutSuggestion).
+                    let deadline = Date().addingTimeInterval(180)
+                    while launch.running, !suggested.showing, suggested.outcome == nil, Date() < deadline {
+                        try await pause(.milliseconds(250))
+                    }
+                    guard suggested.showing else {
+                        let why = suggested.outcome.map { " (\($0))" } ?? (launch.running ? " in 3 min" : " before the game ended")
+                        return finish("action=\(action) failed: no Keyboard & mouse offer" + why)
+                    }
+                    try checkpoint()
+                    suggested.answer(accept: id == "accept", by: "driver")
+                    try await pause(.milliseconds(500))
+                    log("suggest \(id): \(OnScreenControls.shared.summary)")
+                    if let failure = try await afterInGame(action, index: done + 1, next: actions[(i + 1)...]) { return finish(failure) }
+                    if AppRestart.shared.restarting { return }
                 case "menu":
                     let launch = TitleLaunch.shared, menu = InGameMenu.shared
                     if id == "open" {
                         guard launch.running else { return finish("action=\(action) refused: no game is running") }
+                        // A program that only draws guest GDI windows (Wine's notepad) never takes a
+                        // drawable: its window, up 10 s with no frame, stands in for the first frame.
                         let deadline = Date().addingTimeInterval(180)
-                        while launch.running, !launch.acceptsMenu || launch.step != .drawing, Date() < deadline {
+                        var windowSince: Date?
+                        while launch.running, Date() < deadline {
+                            if launch.acceptsMenu, launch.step == .drawing { break }
+                            if launch.acceptsMenu, launch.step == .window {
+                                windowSince = windowSince ?? Date()
+                                if Date().timeIntervalSince(windowSince!) >= 10 { break }
+                            } else {
+                                windowSince = nil
+                            }
                             try await pause(.milliseconds(250))
                         }
                         guard launch.acceptsMenu else { return finish("action=\(action) failed: the game did not draw a frame") }
@@ -564,6 +662,19 @@ enum UIDriver {
                         HostIO.shared.menuInput(PadInput())
                         try await pause(.milliseconds(1000))
                         guard menu.isOpen else { return finish("action=\(action) failed: the menu did not open") }
+                    } else if id == "layout" {
+                        // The Controls panel's Edit layout…, as a tap on it: the layout editor over the paused game.
+                        guard menu.isOpen else { return finish("action=\(action) refused: the in-game menu is not open") }
+                        guard !menu.editor, !LayoutEditorSession.shared.isUp else {
+                            return finish("action=\(action) refused: a page is already up over the menu")
+                        }
+                        try checkpoint()
+                        menu.choose(.controls)
+                        menu.openLayoutEditor()
+                        try await pause(.milliseconds(1000))
+                        guard LayoutEditorSession.shared.isUp(.inGame) else {
+                            return finish("action=\(action) failed: the layout editor did not open")
+                        }
                     } else {
                         guard let item = QuickMenuItem(rawValue: id) else {
                             return finish("action=\(action) refused: not menu:open or menu:<row> with rows "
@@ -608,10 +719,9 @@ enum UIDriver {
                     } else if id == "status" {
                         log("xbox: \(account.state == .signedIn ? "signed in" : "signed out")")
                     } else if id == "library" {
-                        // The Library on the Xbox chip, its refresh finished; counts only, no account data.
+                        // The Library on the Xbox store, its refresh finished; counts only, no account data.
                         guard account.state == .signedIn else { return finish("action=\(action) refused: Xbox is not signed in") }
-                        _ = AppNavigation.shared.open("library")
-                        LibraryGrid.shared.filter = .xbox
+                        _ = AppNavigation.shared.open("xbox")
                         let games = XboxGames.shared
                         await games.refresh()
                         for _ in 0..<1200 where games.loading { try await pause(.milliseconds(250)) }
@@ -674,6 +784,12 @@ enum UIDriver {
                     if let failure = try await XboxSaveDriver.run(id, log: log) { return finish("action=\(action) failed: \(failure)") }
                     if let failure = try await afterInGame(action, index: done + 1, next: actions[(i + 1)...]) { return finish(failure) }
                     if AppRestart.shared.restarting { return }
+                case "textbar":
+                    // The text bar menu:text opened over the running game (Dev/TextBarDriver.swift).
+                    guard TitleLaunch.shared.running else { return finish("action=\(action) refused: no game is running") }
+                    if let failure = try await TextBarDriver.run(id, index: done + 1, log: log) { return finish("action=\(action) \(failure)") }
+                    if let failure = try await afterInGame(action, index: done + 1, next: actions[(i + 1)...]) { return finish(failure) }
+                    if AppRestart.shared.restarting { return }
                 case "web":
                     // A web page the running game opened (Dev/WebSheetDriver.swift).
                     guard TitleLaunch.shared.running || GameWebSheet.shared.isUp else {
@@ -683,7 +799,8 @@ enum UIDriver {
                     if let failure = try await afterInGame(action, index: done + 1, next: actions[(i + 1)...]) { return finish(failure) }
                     if AppRestart.shared.restarting { return }
                 case "set":
-                    let kv = id.split(separator: "=", maxSplits: 1).map(String.init)
+                    // KEY= keeps its empty value: "" (set:controls.suggestedLayoutOffered= forgets the offers).
+                    let kv = id.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
                     guard kv.count == 2, !kv[0].isEmpty else { return finish("action=\(action) refused: not set:<key>=<value>") }
                     let value: Any = kv[1] == "true" ? true : kv[1] == "false" ? false : Int(kv[1]).map { $0 as Any } ?? kv[1]
                     DriverUndo.willSet(kv[0])
@@ -860,8 +977,16 @@ enum UIDriver {
                         return finish("action=\(action) refused: \(id) is not a launcher (\(PublisherLauncher.all.map(\.id).joined(separator: ", ")))")
                     }
                       do {
-                        let started = try await checked {
+                        var started = try await checked {
                             if let launcher { await LauncherOpen.open(launcher) } else { try await library.play(id) }
+                        }
+                        // A Battle.net copy whose Play found an update (PLA-521): followed through
+                        // Downloads to the game's start.
+                        if !started, launcher == nil, let followed = try await battleNetUpdateThenPlay(id) {
+                            switch followed {
+                            case let .failed(why): return finish("action=\(action) failed: \(why)")
+                            case .started: started = true
+                            }
                         }
                         guard started else {
                             if launcher != nil {
@@ -878,6 +1003,17 @@ enum UIDriver {
                                 return finish("action=\(action) refused: \(PadModal.shared.summary ?? "cloud conflict"): "
                                               + "the Cloud save conflict screen asks which saves to keep")
                             }
+                            // A Battle.net copy's first Play: the notice is up (notice: answers it).
+                            if case .notice? = library.title(id).flatMap({ BattleNetPlay.decide(.init(copy: $0)) }) {
+                                try await pause(.milliseconds(1000))   // the notice drawn, for a screenshot
+                                return finish("action=\(action) refused: the ban-risk notice asks first; "
+                                              + "notice:\(id)=accept or notice:\(id)=decline answers it as the player does")
+                            }
+                            // A Battle.net copy whose client is not the x64 one: its refusal is up.
+                            if case .picker = PadModal.shared.content {
+                                try await pause(.milliseconds(1000))
+                                return finish("action=\(action) refused: \(PadModal.shared.summary ?? "a picker")")
+                            }
                             return finish("action=\(action) refused: a launch is running or Playport needs a restart")
                         }
                         try checkpoint()
@@ -886,20 +1022,13 @@ enum UIDriver {
                         return finish("action=\(action) failed: \(error)")
                     }
                     // Actions for the running game (wait:, menu:) go on while it runs.
-                    if done + 1 < actions.count, !inGame(actions[i + 1]) {
-                        let launch = TitleLaunch.shared
-                        while launch.running { try await pause(.milliseconds(250)) }
-                        if AppRestart.shared.restarting {
-                            try checkpoint()
-                            batch.handoff()
-                            // The restarted process runs the rest (DriverContinuation, saved as it asks).
-                            RunEvents.emit("ui-action", ["action": action, "result": "ok", "index": done + 1, "restart": true])
-                            log("\(parts[0]) \(id): ended; Playport restarts, and the new process goes on")
-                            return
-                        }
-                        try await pause(.milliseconds(1500))   // the alert drawn, for a screenshot
-                        log("\(parts[0]) \(id): ended without starting the runtime: \(launch.message?.title ?? "no message")"
-                            + (launch.message?.step.map { " (failed at \(LaunchProgress.stepName($0)))" } ?? ""))
+                    if try await followPlay(action, "\(parts[0]) \(id)", index: done, next: actions[(i + 1)...]) { return }
+                case "notice":
+                    switch try await riskNotice(id) {
+                    case let .failed(why): return finish("action=\(action) failed: \(why)")
+                    case .declined: break
+                    case .started:
+                        if try await followPlay(action, "notice \(id)", index: done, next: actions[(i + 1)...]) { return }
                     }
                 default:
                     return finish("action=\(action) refused: unknown action")
@@ -921,9 +1050,87 @@ enum UIDriver {
     /// An action that acts on the running game, which a play: does not wait past.
     static func inGame(_ action: String) -> Bool {
         action.hasPrefix("menu:") || action.hasPrefix("wait:") || action.hasPrefix("web:") || action.hasPrefix("tap:")
-            || action.hasPrefix("xbox-save:")
-            || action.hasPrefix("touch:") || action.hasPrefix("gesture:") || action.hasPrefix("gyro:")
+            || action.hasPrefix("touch:") || action.hasPrefix("gesture:") || action.hasPrefix("gyro:") || action.hasPrefix("suggest:")
+            || action.hasPrefix("textbar:") || action.hasPrefix("xbox-save:")
             || (action.hasPrefix("pad:") && InGameMenu.shared.isOpen)
+    }
+
+    /// After a Play started: unless the next action is for the running game, waits for the game's
+    /// end. True once Playport restarts after it (the ui-action is sent here; the new process runs
+    /// the rest), so the caller returns.
+    private static func followPlay(_ action: String, _ label: String, index: Int, next: ArraySlice<String>) async throws -> Bool {
+        guard let first = next.first, !inGame(first) else { return false }
+        let launch = TitleLaunch.shared
+        while launch.running { try await pause(.milliseconds(250)) }
+        if AppRestart.shared.restarting {
+            try checkpoint()
+            batch.handoff()
+            // The restarted process runs the rest (DriverContinuation, saved as it asks).
+            RunEvents.emit("ui-action", ["action": action, "result": "ok", "index": index + 1, "restart": true])
+            log("\(label): ended; Playport restarts, and the new process goes on")
+            return true
+        }
+        try await pause(.milliseconds(1500))   // the alert drawn, for a screenshot
+        log("\(label): ended without starting the runtime: \(launch.message?.title ?? "no message")"
+            + (launch.message?.step.map { " (failed at \(LaunchProgress.stepName($0)))" } ?? ""))
+        return false
+    }
+
+    private enum NoticeOutcome {
+        case declined, started
+        case failed(String)
+    }
+
+    /// `<title id>=accept|decline`: an installed Battle.net copy's Play from its page, and the
+    /// ban-risk notice it shows answered as the player does (LibraryModel.askRiskNotice, PLA-514).
+    /// Declined: nothing starts, the copy keeps no acceptance, the page shows the notice's text.
+    /// Accepted: kept with the copy, and the Play goes on (followed as play:).
+    private static func riskNotice(_ spec: String) async throws -> NoticeOutcome {
+        let parts = spec.split(separator: "=", maxSplits: 1).map(String.init)
+        guard parts.count == 2, [LibraryModel.noticeAccept, LibraryModel.noticeDecline].contains(parts[1]) else {
+            return .failed("not notice:<title id>=\(LibraryModel.noticeAccept)|\(LibraryModel.noticeDecline)")
+        }
+        let library = LibraryModel.shared, id = parts[0], accept = parts[1] == LibraryModel.noticeAccept
+        guard let t = library.title(id), let product = BattleNet.product(t.key) else { return .failed("\(id) is not an installed Battle.net copy") }
+        guard case .notice? = BattleNetPlay.decide(.init(copy: t)) else {
+            return .failed("\(id)'s notice was accepted on \(t.riskNoticeAccepted.map { "\($0)" } ?? "?"); its Play does not ask again (play: starts it)")
+        }
+        AppNavigation.shared.openTitle(id)
+        try await pause(.milliseconds(500))
+        guard try await checked({ try await library.play(id) }) == false else { return .failed("Play started without the notice") }
+        let notice = BattleNetPlay.notice(product)
+        guard case let .picker(session) = PadModal.shared.content, session.title == notice.title,
+              let choice = session.options.firstIndex(where: { $0.id == parts[1] }) else {
+            return .failed("no notice showed: \(PadModal.shared.summary ?? "nothing up")")
+        }
+        try await pause(.milliseconds(1000))   // the notice drawn, for a screenshot
+        log("notice \(id): shown, \"\(notice.title)\", cursor on \(session.options[session.cursor].id): \(notice.text)")
+        session.pick(choice)
+        if !accept {
+            try await pause(.milliseconds(1500))   // the page drawn again, for a screenshot
+            if TitleLaunch.shared.running || library.title(id)?.riskNoticeAccepted != nil { return .failed("declined, yet Play started") }
+            log("notice \(id): declined; Play did not start and the copy keeps no acceptance; the page shows the notice's text")
+            return .declined
+        }
+        guard let at = library.title(id)?.riskNoticeAccepted, let play = library.noticePlay else {
+            return .failed("accepted, yet not kept with the copy")
+        }
+        log("notice \(id): accepted at \(at); the Play goes on")
+        guard try await checked({ await play.value }) else {
+            // The Play found an update (PLA-521): followed through Downloads to the game's start.
+            if let followed = try await battleNetUpdateThenPlay(id) {
+                switch followed {
+                case let .failed(why): return .failed("accepted, then \(why)")
+                case .started:
+                    log("notice \(id): started after the update")
+                    return .started
+                }
+            }
+            try await pause(.milliseconds(1500))   // its alert drawn, for a screenshot
+            return .failed("accepted, then the Play did not start: \(PadModal.shared.summary ?? TitleLaunch.shared.message?.title ?? "no message")")
+        }
+        log("notice \(id): started")
+        return .started
     }
 
     /// After an action for the running game: when the actions after it are not
@@ -1278,6 +1485,268 @@ enum UIDriver {
         return nil
     }
 
+    /// Whether the Battle.net store offers `key`'s product, asking Blizzard when nothing is known yet.
+    private static func battleNetOffered(_ key: StoreGameKey) async throws -> Bool {
+        let store = BattleNetStore.shared
+        if let p = BattleNet.product(key), store.listing(p) == nil { try await checked({ await store.refresh(force: true) }) }
+        return store.offered(key) != nil
+    }
+
+    /// `bnet-<code>[=<region>]`: the product's page and its region picker, or the picker's choice.
+    private static func battleNetRegion(_ spec: String) async throws -> String? {
+        let parts = spec.split(separator: "=", maxSplits: 1).map(String.init)
+        guard let key = StoreGameKey(titleID: parts[0]), let p = BattleNet.product(key) else { return "\(parts[0]) is not a Battle.net product" }
+        if LibraryModel.shared.title(key.titleID) != nil { return try await battleNetInstalledRegion(key, p, parts.count > 1 ? parts[1] : nil) }
+        guard try await battleNetOffered(key) else { return "\(key.id) is not offered (\(BattleNetStore.shared.error ?? "no x64 client"))" }
+        let store = BattleNetStore.shared
+        AppNavigation.shared.openGame(.store(key))
+        try await pause(.milliseconds(500))
+        if parts.count > 1 {
+            guard let r = StoreRegion(rawValue: parts[1]) else { return "\(parts[1]) is not a store region" }
+            store.pick(p, region: r)
+            try await checked({ await store.loadSizes(p) })
+            log("region \(key.titleID): \(store.region(p).rawValue) (phone: \(store.phoneRegion.rawValue)), language \(store.locale(p)), "
+                + "download \(store.listing(p)?.sizes?.download ?? 0), needs \(store.needed(p) ?? 0)")
+        } else {
+            store.pickRegion(p)
+            log("region \(key.titleID): picker open at \(store.region(p).rawValue) (phone: \(store.phoneRegion.rawValue))")
+        }
+        try await pause(.milliseconds(1000))
+        return nil
+    }
+
+    /// An installed product's page, its region and language read from its `.build.info`.
+    private static func openInstalledBattleNet(_ key: StoreGameKey, _ p: BattleNetProduct) async throws -> BattleNetInstalled.Choice? {
+        let model = BattleNetInstalled.shared
+        AppNavigation.shared.openTitle(key.titleID)
+        try await pause(.milliseconds(500))
+        model.load(p)
+        for _ in 0..<50 where model.current[p] == nil { try await pause(.milliseconds(100)) }
+        return model.current[p]
+    }
+
+    /// The installed install's `.build.info` region and locale, read again from C:\Games.
+    private static func installedChoice(_ key: StoreGameKey, _ p: BattleNetProduct) -> String {
+        guard let t = LibraryModel.shared.title(key.titleID),
+              let c = BattleNet.installedChoice(p, folder: LibraryModel.paths.layout.gamesRoot.appendingPathComponent(t.installDir)) else { return "unreadable" }
+        return "\(c.region.rawValue)/\(c.locale)"
+    }
+
+    /// `region:` on an installed product: its page's Region picker open, or `=<r>` changed in
+    /// place; fails when a download starts or `.build.info` does not say `<r>` afterwards.
+    private static func battleNetInstalledRegion(_ key: StoreGameKey, _ p: BattleNetProduct, _ region: String?) async throws -> String? {
+        let model = BattleNetInstalled.shared
+        guard let before = try await openInstalledBattleNet(key, p) else { return "\(key.titleID): no readable .build.info" }
+        guard let region else {
+            model.pickRegion(p)
+            log("region \(key.titleID): installed, picker open at \(before.region.rawValue)")
+            try await pause(.milliseconds(1000))
+            return nil
+        }
+        guard let r = StoreRegion(rawValue: region) else { return "\(region) is not a store region" }
+        let installs = SteamAccountModel.current?.installs
+        let started = Date()
+        if let why = await model.changeRegion(p, to: r) { return why }
+        let ms = Int(Date().timeIntervalSince(started) * 1000)
+        if let j = installs?.jobs[key] { return "a download started (\(phase(j)))" }
+        let now = installedChoice(key, p)
+        log("region \(key.titleID): installed \(before.region.rawValue) → \(r.rawValue) in \(ms) ms, no download; .build.info \(now)")
+        guard now.hasPrefix(r.rawValue + "/") else { return ".build.info says \(now)" }
+        try await pause(.milliseconds(1000))
+        return nil
+    }
+
+    /// `bnet-<code>[=<locale>]`: an installed product's page with its Language picker open, or
+    /// `<locale>` downloaded through Downloads; nil once Play shows again and `.build.info` says it.
+    private static func battleNetLocale(_ spec: String) async throws -> String? {
+        let parts = spec.split(separator: "=", maxSplits: 1).map(String.init)
+        guard let key = StoreGameKey(titleID: parts[0]), let p = BattleNet.product(key) else { return "\(parts[0]) is not a Battle.net product" }
+        let model = BattleNetInstalled.shared, library = LibraryModel.shared
+        guard library.title(key.titleID) != nil else { return "\(key.titleID) is not installed" }
+        guard let installs = SteamAccountModel.current?.installs else { return "no download queue" }
+        guard let before = try await openInstalledBattleNet(key, p) else { return "\(key.titleID): no readable .build.info" }
+        guard parts.count > 1 else {
+            model.pickLanguage(p, downloads: installs)
+            try await pause(.milliseconds(1500))
+            log("locale \(key.titleID): installed in \(before.locale), picker open")
+            return nil
+        }
+        let locale = parts[1]
+        let shipped = await model.locales(p)
+        guard shipped.contains(locale) else { return "\(p.code) does not ship \(locale) (\(shipped.joined(separator: " ")))" }
+        if let why = model.changeLanguage(p, to: locale, downloads: installs) { return why }
+        let started = Date()
+        func playShown() -> Bool { library.title(key.titleID) != nil && installs.jobs[key] == nil }
+        var lastLog = Date()
+        while let j = installs.jobs[key] {
+            if case let .paused(reason) = j.phase { return "paused: \(reason ?? "no reason")" }
+            if Date().timeIntervalSince(lastLog) > 30 {
+                lastLog = Date()
+                log("locale \(key.titleID): \(j.status) \(j.detail ?? "")")
+            }
+            try await pause(.milliseconds(250))
+        }
+        let now = installedChoice(key, p)
+        let t = library.title(key.titleID)
+        let receipt = LibraryModel.paths.layout.storeReceipts().first { $0.key == key }
+        log("locale \(key.titleID): installed \(before.locale) → \(locale) after \(Int(Date().timeIntervalSince(started))) s; .build.info \(now); "
+            + "receipt files=\(receipt?.files ?? 0) bytes=\(receipt?.bytes ?? 0); play=\(playShown() ? "shown" : "hidden")")
+        guard now.hasSuffix("/" + locale) else { return ".build.info says \(now)" }
+        guard playShown(), t?.canPlay == true else { return "Play is not available after the download" }
+        return nil
+    }
+
+    /// `bnet-<code>[=install]`: an installed product's page and its Check for update, with what it
+    /// found logged (a failed check too: the page shows it). `=install` also queues the update it
+    /// found and waits until the receipt and `.build.info` name the new version, the copy's client
+    /// is the x64 one (an install from before decision 0177 gets it by an update at its own build)
+    /// and Play shows again; it fails when the check failed or found nothing to update.
+    private static func battleNetUpdate(_ spec: String) async throws -> String? {
+        let parts = spec.split(separator: "=", maxSplits: 1).map(String.init)
+        guard let key = StoreGameKey(titleID: parts[0]), let p = BattleNet.product(key) else { return "\(parts[0]) is not a Battle.net product" }
+        let model = BattleNetInstalled.shared, library = LibraryModel.shared
+        guard library.title(key.titleID) != nil else { return "\(key.titleID) is not installed" }
+        guard let installs = SteamAccountModel.current?.installs else { return "no download queue" }
+        if let j = installs.jobs[key] { return "a download of \(key.titleID) is queued (\(phase(j)))" }
+        guard try await openInstalledBattleNet(key, p) != nil else { return "\(key.titleID): no readable .build.info" }
+        func installed() -> String { installedVersion(key, p) }
+        let before = installed()
+        let started = Date()
+        let found = try await checked({ await model.checkUpdate(p) })
+        let ms = Int(Date().timeIntervalSince(started) * 1000)
+        switch found {
+        case .current:
+            log("update \(key.titleID): \(before) is current (checked in \(ms) ms)")
+        case let .available(version, bytes):
+            log("update \(key.titleID): \(before) → \(version) available, \(bytes) bytes to write, needs "
+                + "\(BattleNet.spaceNeeded(update: bytes)), free \(library.freeBytes ?? 0) (checked in \(ms) ms)")
+        case let .unreachable(why):
+            log("update \(key.titleID): the check failed after \(ms) ms: \(why)")
+        case .updated:
+            break
+        }
+        try await pause(.milliseconds(1000))   // the page drawn with the result, for a screenshot
+        guard parts.count > 1 else { return nil }
+        guard case let .available(version, _) = found else { return "no update to install (\(found))" }
+        if let why = model.update(p, downloads: installs) { return "refused: \(why)" }
+        var lastLog = Date()
+        while let j = installs.jobs[key] {
+            if case let .paused(reason) = j.phase { return "paused: \(reason ?? "no reason")" }
+            if Date().timeIntervalSince(lastLog) > 30 {
+                lastLog = Date()
+                log("update \(key.titleID): \(j.status) \(j.detail ?? "")")
+            }
+            try await pause(.milliseconds(250))
+        }
+        await library.settled()
+        let now = installed()
+        let t = library.title(key.titleID)
+        let playShown = t?.canPlay == true && installs.jobs[key] == nil
+        log("update \(key.titleID): \(before) → \(now) after \(Int(Date().timeIntervalSince(started))) s; client \(t?.executable ?? "none") "
+            + "machine \(t?.executableMachine.map { String(format: "0x%04X", $0) } ?? "unread"); play=\(playShown ? "shown" : "hidden")")
+        guard now == "\(version)/\(version)" else { return "receipt/.build.info say \(now), not \(version)" }
+        guard t?.executableMachine == 0x8664 else { return "the copy's client \(t?.executable ?? "none") is not the x64 one" }
+        guard playShown else { return "Play is not available after the update" }
+        return nil
+    }
+
+    /// The receipt's and `.build.info`'s versions of an installed product (`receipt/build.info`).
+    private static func installedVersion(_ key: StoreGameKey, _ p: BattleNetProduct) -> String {
+        let layout = LibraryModel.paths.layout
+        let receipt = layout.storeReceipts().first { $0.key == key }
+        let info = receipt.flatMap { r in
+            (try? Data(contentsOf: layout.gamesRoot.appendingPathComponent(r.installDir).appendingPathComponent(".build.info")))
+                .flatMap { try? BuildInfo.read([UInt8]($0), product: p.code) }
+        }
+        return "\(receipt?.version ?? "?")/\(info?.version ?? "?")"
+    }
+
+    private enum UpdatePlayOutcome {
+        case started
+        case failed(String)
+    }
+
+    /// After a Battle.net Play that queued its update instead of starting (BattleNetPlay's update
+    /// step): the update followed in Downloads, then the Play that goes on once it finished; nil
+    /// when the Play queued no update.
+    private static func battleNetUpdateThenPlay(_ id: String) async throws -> UpdatePlayOutcome? {
+        guard let key = StoreGameKey(titleID: id), let p = BattleNet.product(key), let installs = SteamAccountModel.current?.installs,
+              let first = installs.jobs[key], first.kind == .update, !BattleNet.isLanguageChange(first.record) else { return nil }
+        let library = LibraryModel.shared
+        let before = installedVersion(key, p)
+        log("play \(id): an update was found (\(first.record.bytes ?? 0) bytes to write); following it in Downloads")
+        let started = Date()
+        var lastLog = Date()
+        while let j = installs.jobs[key] {
+            if case let .paused(reason) = j.phase { return .failed("the update paused: \(reason ?? "no reason")") }
+            if Date().timeIntervalSince(lastLog) > 30 {
+                lastLog = Date()
+                log("play \(id): \(j.status) \(j.detail ?? "")")
+            }
+            try await pause(.milliseconds(250))
+        }
+        for _ in 0..<50 where library.updatePlay?.id != id { try await pause(.milliseconds(100)) }
+        guard let play = library.updatePlay, play.id == id else { return .failed("the update finished, and the Play did not go on") }
+        log("play \(id): updated \(before) → \(installedVersion(key, p)) in \(Int(Date().timeIntervalSince(started))) s; the Play goes on")
+        guard try await checked({ await play.task.value }) else {
+            try await pause(.milliseconds(1500))
+            return .failed("updated, then the Play did not start: \(PadModal.shared.summary ?? TitleLaunch.shared.message?.title ?? "no message")")
+        }
+        return .started
+    }
+
+    /// The Battle.net page's Install of `code`, with a Pause and Resume at `pauseAt`; nil once it
+    /// is in the library with Play. Play must not show before the install is complete.
+    private static func installBattleNet(_ code: String, pauseAt: Double?) async throws -> String? {
+        let store = BattleNetStore.shared, library = LibraryModel.shared
+        let key = StoreGameKey(store: .battlenet, id: code)
+        guard let p = BattleNet.product(key) else { return "\(code) is not a Battle.net product" }
+        guard try await battleNetOffered(key) else { return "\(code) is not offered (\(store.error ?? "no x64 client"))" }
+        guard let installs = SteamAccountModel.current?.installs else { return "no download queue" }
+        guard library.title(key.titleID) == nil else { return "\(key.titleID) is already installed" }
+        AppNavigation.shared.openGame(.store(key))
+        try await checked({ await store.loadSizes(p) })
+        log("install \(key.titleID): region \(store.region(p).rawValue), language \(store.locale(p)), download "
+            + "\(store.listing(p)?.sizes?.download ?? 0), needs \(store.needed(p) ?? 0), free \(library.freeBytes ?? 0)")
+        if let why = store.install(p) { return "refused: \(why)" }
+        let started = Date()
+        // Play shows on the page only for a catalogued title with no job.
+        func playShown() -> Bool { library.title(key.titleID) != nil && installs.jobs[key] == nil }
+        if let pauseAt {
+            while let j = installs.jobs[key], j.isRunning || j.phase == .queued, (j.fraction ?? 0) < pauseAt {
+                if playShown() { return "Play showed during the download" }
+                try await pause(.milliseconds(100))
+            }
+            guard let j = installs.jobs[key], j.isRunning else { return "ended before \(Int(pauseAt * 100))% (\(phase(installs.jobs[key])))" }
+            installs.pause(key)
+            while installs.jobs[key]?.isRunning == true { try await pause(.milliseconds(100)) }
+            let staged = store.hasStage(p)
+            log("install \(key.titleID): paused at \(j.detail ?? "?"); phase=\(phase(installs.jobs[key])) stage kept=\(staged) "
+                + "play=\(playShown() ? "shown" : "hidden")")
+            guard staged, installs.jobs[key]?.phase == .paused(nil) else { return "pause did not keep a resumable stage" }
+            if playShown() { return "Play showed while paused" }
+            installs.resume(key)
+            while let ph = installs.jobs[key]?.phase, ph == .queued || ph == .preparing { try await pause(.milliseconds(100)) }
+            log("install \(key.titleID): resumed at \(installs.jobs[key]?.detail ?? "?") (\(phase(installs.jobs[key])))")
+        }
+        var lastLog = Date()
+        while let j = installs.jobs[key] {
+            if case let .paused(reason) = j.phase { return "paused: \(reason ?? "no reason")" }
+            if playShown() { return "Play showed during the download" }
+            if Date().timeIntervalSince(lastLog) > 30 {
+                lastLog = Date()
+                log("install \(key.titleID): \(j.status) \(j.detail ?? "")")
+            }
+            try await pause(.milliseconds(250))
+        }
+        for _ in 0..<600 where library.title(key.titleID) == nil { try await pause(.milliseconds(100)) }
+        guard let t = library.title(key.titleID) else { return "done, but not in the library" }
+        let machine = String(t.executableMachine ?? 0, radix: 16)
+        log("install \(key.titleID): in the library as \(t.id) [\(t.badge.rawValue)] version=\(t.storeVersion ?? "?") size=\(t.sizeBytes ?? 0) "
+            + "exe=\(t.executable ?? "none") machine=0x\(machine) play=\(playShown() ? "shown" : "hidden") after \(Int(Date().timeIntervalSince(started))) s")
+        return nil
+    }
+
     /// The GOG page's Install (or Update) of `spec` (`<id>` or `<id>@<build>`); nil once the build is in the library.
     private static func installGOG(_ spec: String) async throws -> String? {
         let parts = spec.split(separator: "@", maxSplits: 1).map(String.init)
@@ -1386,8 +1855,10 @@ enum UIDriver {
         if let e = library.removeErrors[id] { return e }
         let layout = LibraryModel.paths.layout
         let folder = FileManager.default.fileExists(atPath: layout.gamesRoot.appendingPathComponent(t.installDir).path)
-        let record = t.appID.map { FileManager.default.fileExists(atPath: layout.receiptFile(appID: $0).path) } ?? false
-        let stage = t.appID.map { TitleInstaller(layout: layout, session: nil, log: .silent).hasStage(appID: $0) } ?? false
+        let record = t.appID.map { FileManager.default.fileExists(atPath: layout.receiptFile(appID: $0).path) }
+            ?? FileManager.default.fileExists(atPath: layout.receiptFile(t.key).path)
+        let stage = t.appID.map { TitleInstaller(layout: layout, session: nil, log: .silent).hasStage(appID: $0) }
+            ?? BattleNet.product(t.key).map(BattleNetStore.shared.hasStage) ?? false
         // A folder another title shares (Steam's shared installdir) stays with that title's files.
         let shared = library.catalog.titles.contains { $0.id != id && $0.installDir.lowercased() == t.installDir.lowercased() }
         log("uninstall \(id): folder present=\(folder)\(shared ? " (shared)" : "") record present=\(record) stage present=\(stage) "

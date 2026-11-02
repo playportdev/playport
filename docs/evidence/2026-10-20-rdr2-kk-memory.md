@@ -2,7 +2,7 @@
 
 # 2026-10-20: what KosmicKrisp holds during RDR2's Story load; with the shaders' source kept compressed, Story reaches gameplay once, and then RDR2 crashes when the runtime's thread registry is full
 
-**Plan:** `.work/plans/rdr2-story-memory.md`.
+**Plan:** [PLA-413](https://linear.app/playportdev/issue/PLA-413#comment-4088d294).
 **Follows:** [rdr2-story-memory-levers](2026-10-20-rdr2-story-memory-levers.md), lever #4: the
 KosmicKrisp and host overhead census.
 

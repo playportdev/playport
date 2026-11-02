@@ -4,7 +4,7 @@
 **Linear:** [PLA-162](https://linear.app/playportdev/issue/PLA-162) (chunk 2),
 [PLA-180](https://linear.app/playportdev/issue/PLA-180), [PLA-179](https://linear.app/playportdev/issue/PLA-179),
 [PLA-181](https://linear.app/playportdev/issue/PLA-181);
-plan [2026-10-11-opengl-zink](../plans/finished.md#opengl-through-zink);
+plan [2026-10-11-opengl-zink](https://linear.app/playportdev/issue/PLA-162);
 decisions [0087](../decisions/0087-opengl-through-zink-on-the-host.md) and
 [0088](../decisions/0088-opengl-window-surfaces-and-pacing.md).
 **Build:** `patches/madeira-unix` 0001–0115, `patches/wine-unix` 0001–0028, `patches/mesa` 0001–0028

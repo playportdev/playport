@@ -20,7 +20,10 @@ builds that take an error report (the pipelines', not the driver's own
 shaders') fail as if Metal's compiler service had been interrupted (mesa
 0053's compile_retry builds them again). With KK_MOCK_TRACE_ENCODERS set,
 encoders begun and ended, their barriers and their store actions are
-printed on stderr as "kk-mock-enc: ..." lines (PLA-72).
+printed on stderr as "kk-mock-enc: ..." lines (PLA-72). A command allocator
+keeps the size a test sets across a reset, as Metal keeps its heaps, and a
+reset of one a command buffer was begun on and never committed aborts (the
+IOGPU fault KosmicKrisp's cmd_retire must avoid).
 
 The stubs are the template, so a new bridge function upstream still links:
 it gets the stub's body, with a dummy handle for a pointer return.
@@ -57,12 +60,21 @@ struct kk_mock_obj {
    uint32_t msl_writes;
    /* Render pipeline descriptors: the input primitive topology class */
    int topology_class;
+   /* Command buffers: the allocator the last begin attached, and whether that
+    * recording was committed. Allocators: the recordings begun on them and
+    * not committed, which a reset must not see (kk_mock_reset_allocator). */
+   struct kk_mock_obj *begun_on;
+   int begin_committed;
+   uint32_t uncommitted_begins;
 };
 #define KK_MOCK_MAGIC 0x6b6b6d6bu
 #define KK_MOCK_MSL_POINT_SIZE 0x1u
 #define KK_MOCK_MSL_LAYER 0x2u
 
 void *kk_mock_new(int kind, uint64_t size);
+void kk_mock_set_size(void *handle, uint64_t size);
+unsigned kk_mock_command_buffer_begins(void);
+extern unsigned kk_mock_begins;
 void kk_mock_drain_feedback(void *queue);
 void kk_mock_record_msl(const char *src);
 void kk_mock_trace(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
@@ -139,6 +151,23 @@ kk_mock_trace(const char *fmt, ...)
    va_end(ap);
 }
 
+/* Test-only: the size a dummy handle reports, e.g. an allocator's
+ * allocatedSize (kk-cmd-census-test.c) */
+void
+kk_mock_set_size(void *handle, uint64_t size)
+{
+   ((struct kk_mock_obj *)handle)->size = size;
+}
+
+/* Test-only: Metal command buffer begins so far (kk-cmd-retire-test.c) */
+unsigned kk_mock_begins;
+
+unsigned
+kk_mock_command_buffer_begins(void)
+{
+   return __atomic_load_n(&kk_mock_begins, __ATOMIC_SEQ_CST);
+}
+
 void *
 kk_mock_new(int kind, uint64_t size)
 {
@@ -213,6 +242,27 @@ kk_mock_record_msl(const char *src)
 }
 '''}
 
+# Command allocators keep a size a test sets (kk_mock_set_size), 0 by default.
+body("mtl_command_allocator_allocated_size", "return allocator ? ((struct kk_mock_obj *)allocator)->size : 0u;")
+# A reset keeps it: Metal's reset lets new command buffers "reuse its existing
+# internal memory heaps" (MTL4CommandAllocator.h), and allocatedSize is their
+# size. Resetting an allocator a command buffer was begun on and never
+# committed faulted in IOGPU (KosmicKrisp's form 1, 4bd22b36): the mock stops
+# there, even if that command buffer was begun again elsewhere since.
+body("mtl_command_allocator_reset", r'''
+   struct kk_mock_obj *a = allocator;
+   if (a->uncommitted_begins) {
+      fprintf(stderr, "kk-mock: reset of a command allocator with %u uncommitted command buffer begin(s)\n",
+              a->uncommitted_begins);
+      abort();
+   }''')
+body("mtl_begin_command_buffer", r'''
+   struct kk_mock_obj *cb = command_buffer;
+   struct kk_mock_obj *a = allocator;
+   __atomic_add_fetch(&kk_mock_begins, 1u, __ATOMIC_SEQ_CST);
+   cb->begun_on = a;
+   cb->begin_committed = 0;
+   a->uncommitted_begins++;''')
 body("mtl_retain", "return handle;")
 body("mtl_release", "kk_mock_drain_feedback(handle);")
 body("mtl_device_create", "return kk_mock_new(1, 0);")
@@ -248,6 +298,15 @@ body("mtl_heap_texture_size_and_align_with_descriptor", r'''
                  layout->depth_px * layout->sample_count_sa;
    if (size_B) *size_B = layout->layers * ((px * 16u * 2u + 16383u) & ~16383ull);
    if (align_B) *align_B = 16384u;''')
+# mesa 0140 (private_memory): a private texture takes one 16 KiB page more,
+# as if Metal kept compression metadata beside it, so the larger of the two
+# sizes is what an image that may be private reports.
+body("mtl_heap_private_texture_size_and_align", r'''
+   uint64_t px = (uint64_t)layout->width_px * layout->height_px *
+                 layout->depth_px * layout->sample_count_sa;
+   if (size_B) *size_B = layout->layers * ((px * 16u * 2u + 16383u) & ~16383ull) + 16384u;
+   if (align_B) *align_B = 16384u;''')
+body("mtl_heap_private_buffer_size_and_align_with_length", "if (align_B) *align_B = 256;")
 body("mtl_sparse_tile_size_in_bytes", "return 16384u;")
 body("mtl_new_heap", r'''
    /* One-shot, single-threaded command-pool regression fault injection. */
@@ -425,6 +484,13 @@ body("mtl_commit_options_add_feedback_handler", r'''
 body("mtl_command_queue_commit", r'''
    struct kk_mock_obj *o = options;
    static double gpu_clock = 100.0;
+   for (uint32_t k = 0; k < count; k++) {
+      struct kk_mock_obj *cb = command_buffers[k];
+      if (cb->begun_on && !cb->begin_committed) {
+         cb->begun_on->uncommitted_begins--;
+         cb->begin_committed = 1;
+      }
+   }
    if (o && o->mem) {
       struct mtl_feedback_data fb = {
          .user_data = (void *)(uintptr_t)o->value,
@@ -455,7 +521,7 @@ body("mtl_drawable_get_texture", "return kk_mock_new(7, 0);")
 body("mtl_new_render_command_encoder_with_descriptor", 'kk_mock_trace("render"); return kk_mock_new(0, 0);')
 body("mtl_new_compute_command_encoder", 'kk_mock_trace("compute"); return kk_mock_new(0, 0);')
 body("mtl_end_encoding", 'kk_mock_trace("end");')
-body("mtl_barrier_after_stages", 'kk_mock_trace("producer-barrier after=%#x before-queue=%#x", (unsigned)after_stages, (unsigned)before_queue_stages);')
+body("mtl_barrier_after_stages", 'kk_mock_trace("producer-barrier after=%#x before-queue=%#x%s", (unsigned)after_stages, (unsigned)before_queue_stages, alias_visibility ? "" : " visibility=device");')
 body("mtl_barrier_after_queue_stages", 'kk_mock_trace("consumer-barrier after-queue=%#x before=%#x", (unsigned)after_queue_stages, (unsigned)before_stages);')
 body("mtl_render_set_color_store_action", 'kk_mock_trace("color-store %u action=%u", index, (unsigned)action);')
 body("mtl_render_set_depth_store_action", 'kk_mock_trace("depth-store action=%u", (unsigned)action);')

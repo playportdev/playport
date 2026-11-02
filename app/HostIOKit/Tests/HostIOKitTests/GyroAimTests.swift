@@ -2,7 +2,7 @@
 import XCTest
 @testable import HostIOKit
 
-/// GyroAim (docs/plans/2026-10-09-touch-controls.md, phase 2): synthetic rate
+/// GyroAim (PLA-13, phase 2): synthetic rate
 /// sequences at 256 Hz (a step of 1/256 s, so the windows' edges are exact).
 final class GyroAimTests: XCTestCase {
     static let hz = 256.0

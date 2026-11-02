@@ -1,0 +1,70 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sat, 31 Oct 2026 23:30:00 +0100
+Subject: [PATCH] virtual: x18-patch SUB, SUBS and CMP of x18 as well as ADD
+
+ios_insn_x18_role matched ADD/SUB (immediate) and (register) with the
+mask 0x5F, which leaves the op bit in: ADD and ADDS matched, SUB and
+SUBS (so CMP x18, #imm and CMP x18, xzr) did not. Those words do no
+load through x18, so no fault repairs them either: with x18 zeroed by
+iOS they compare 0.
+
+World of Warcraft's ARM64 client guards its code with such compares
+(cmp x18, #imm; b.lo <loop>): its vectored handler for the UDF it
+raises in a TLS callback took the branch and parked the main thread in
+a loop of its own before the game's log or window existed.
+
+The role now covers all four (mask 0x1F, [28:24]). Register 31 as Rd of
+the non-flag-setting forms, and as Rn of the extended-register form, is
+SP, which the trampoline moves by 16 bytes: those words are left alone.
+
+Linear: PLA-514
+Class: ios-port
+Evidence: docs/evidence/2026-10-31-wow-arm64-start.md
+Offered-upstream: no
+---
+ build/ntdll-unix/virtual_ios.c | 31 ++++++++++++++++++++++---------
+ 1 file changed, 22 insertions(+), 9 deletions(-)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 73a0e2b..c84c9ad 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -5091,15 +5091,28 @@ static int ios_insn_x18_role(uint32_t insn)
+         if (rm == 18) return X18_ROLE_RM;
+     }
+ 
+-    /* ADD/SUB (immediate) — [31:24]=x00 10001 or x10 10001 */
+-    if ((top8 & 0x5F) == 0x11)
+-    {
+-        if (rn == 18) return X18_ROLE_RN;
+-    }
+-
+-    /* ADD/SUB (register) — [31:24]=x00 01011 or x10 01011 */
+-    if ((top8 & 0x5F) == 0x0B)
+-    {
++    /* ADD/ADDS/SUB/SUBS (immediate) — [28:24]=10001.
++     * Playport: the mask 0x5F matched ADD and ADDS only, so SUB and SUBS
++     * (CMP x18, #imm) stayed unpatched: no load through x18 faults there,
++     * so nothing repaired them either. World of Warcraft's ARM64 client
++     * guards its code with `cmp x18, #imm; b.lo <hang>` (x18 below the
++     * value only when it is not the TEB), and with x18 zeroed by iOS its
++     * exception handler for a planned UDF parked in that loop. In the
++     * trampoline register 31 as Rd is SP for the non-flag-setting forms:
++     * those are left alone. */
++    if ((top8 & 0x1F) == 0x11)
++    {
++        if (rn == 18 && ((insn & 0x1f) != 31 || (insn & 0x20000000))) return X18_ROLE_RN;
++    }
++
++    /* ADD/ADDS/SUB/SUBS (shifted or extended register) — [28:24]=01011.
++     * Playport: SUB and SUBS too (CMP x18, xzr), as above. In the extended
++     * form register 31 is SP as Rn, and as Rd without S: left alone, since
++     * the trampoline runs with SP 16 bytes down. */
++    if ((top8 & 0x1F) == 0x0B)
++    {
++        if ((insn & 0x00200000) && (rn == 31 || ((insn & 0x1f) == 31 && !(insn & 0x20000000))))
++            return X18_ROLE_NONE;
+         if (rn == 18) return X18_ROLE_RN;
+         if (rm == 18) return X18_ROLE_RM;
+     }

@@ -1,0 +1,76 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 1 Nov 2026 15:09:30 +0100
+Subject: [PATCH] virtual: a section's view keeps the section's memory in an
+ ARM64EC process
+
+mprotect_exec backs an executable range that is not an image with a JIT
+pool slot, by vm_remap over the guest's view, and records the alias. In
+an ARM64EC process the guest's view of that slot is the pool's RW side
+with no EXEC (ios_anon_plain_view): the code there is x86-64, which FEX
+reads and translates. For a view of a section the remap detaches the
+view from the section. World of Warcraft's x64 client maps a pagefile
+section twice, read-write and read-execute, writes its code through
+the first and runs it at the second, which then held the slot's zeros:
+its loader faulted at the first instruction there (c0000005 during
+Wow.exe's DLL initialisation, run 20261101T150548).
+
+In an ARM64EC process a view of a section (neither valloc nor image) now
+keeps the section's mapping: mprotect_exec gives it read, plus write
+when asked, as the plain view would, and returns. Its views stay one
+memory, as on Windows. A native ARM64 child keeps the pool path.
+
+Linear: PLA-516
+Class: ios-port
+Evidence: docs/evidence/2026-11-01-wow-x64-fex.md
+Offered-upstream: no; the JIT pool is the iOS port's
+---
+ build/ntdll-unix/virtual_ios.c | 32 ++++++++++++++++++++++++++++++++
+ 1 file changed, 32 insertions(+)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 8f00a09..8bdcfe5 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -11410,6 +11410,38 @@ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
+             jit_pool_init_done = 1;
+         }
+ 
++        /* Playport (PLA-516, decision 0177): in an ARM64EC process a view of a
++         * section keeps its section's memory. The pool path below backs the range
++         * with a pool slot by vm_remap over the view, which detaches the view from
++         * the section: World of Warcraft's x64 client maps a section twice, writes
++         * its code through the read-write view and runs it at the read-execute one,
++         * which then held the slot's zeros (c0000005 in its loader, run
++         * 20261101T150548). The guest's code there is x86-64, which FEX reads and
++         * translates, so the host never runs it: the view takes read, plus write
++         * when asked, exactly as the plain view (ios_anon_plain_view) would, and
++         * every view of the section stays one memory, as on Windows. */
++        extern int ios_is_native_arm64_cur(void);
++        if (ios_anon_plain_view() && !ios_is_native_arm64_cur())
++        {
++            struct file_view *sv = find_view( base, 0 );
++            if (sv && !is_view_valloc( sv ) && !(sv->protect & SEC_IMAGE)
++                && (char *)base + size <= (char *)sv->base + sv->size)
++            {
++                vm_prot_t vp = VM_PROT_READ | ((unix_prot & PROT_WRITE) ? VM_PROT_WRITE : 0);
++                kern_return_t pkr = vm_protect( mach_task_self(), (vm_address_t)base, size, FALSE, vp );
++                static int section_n;
++                if (section_n < 16 || pkr != KERN_SUCCESS)
++                {
++                    section_n++;
++                    dprintf( 2, "[anon-view] section view %p+0x%lx keeps its section's memory, %s%s\n", base,
++                             (unsigned long)size, (vp & VM_PROT_WRITE) ? "rw" : "r-",
++                             pkr == KERN_SUCCESS ? "" : " vm_protect FAILED" );
++                }
++                if (pkr != KERN_SUCCESS) { errno = EACCES; return -1; }
++                return 0;
++            }
++        }
++
+         /* iOS-Madeira ml640: AN OWNED ANON-JIT RANGE IS SETTLED — DECIDE IT FIRST.
+          *
+          * ROOT CAUSE, proven by the ml639 three-view hash:
+-- 
+2.56.0
+

@@ -1,0 +1,52 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 1 Nov 2026 16:27:07 +0100
+Subject: [PATCH] signal: the fault-loop breaker does not count a breakpoint
+
+FEX raises every guest int3 from one BRK in its code, so the Mach
+handler sees each at the same pc and address. World of Warcraft's x64
+loader takes int3 after int3 on its main thread through its own
+exception handlers; the breaker counted them as one pc faulting 50 times
+and ended the thread (run 20261101T161719: [fault-stuck] BREAKING LOOP,
+then the client hung with no window).
+
+A breakpoint is an exception delivered to the guest, as on Windows, not
+a fault nothing resolves: like an alignment fault, it is not counted.
+
+Linear: PLA-516, PLA-514
+Class: ios-port
+Evidence: docs/evidence/2026-11-01-wow-x64-fex.md
+Offered-upstream: no; the breaker is Playport's own
+---
+ build/ntdll-unix/signal_arm64_ios.c | 11 +++++++++--
+ 1 file changed, 9 insertions(+), 2 deletions(-)
+
+diff --git a/build/ntdll-unix/signal_arm64_ios.c b/build/ntdll-unix/signal_arm64_ios.c
+index 398b913..51d4c67 100644
+--- a/build/ntdll-unix/signal_arm64_ios.c
++++ b/build/ntdll-unix/signal_arm64_ios.c
+@@ -4831,12 +4831,19 @@ skip_reclaim_band: ;
+                          * pages). ml385: NULL-page faults keyed as 1. PLA-238:
+                          * alignment faults (EXC_ARM_DA_ALIGN, misaligned atomics FEX
+                          * emulates) are not counted. PLA-514: keyed on the thread
+-                         * too; pp_fault_loop.h has the rules. */
++                         * too; pp_fault_loop.h has the rules. PLA-516: neither is a
++                         * breakpoint (EXC_BREAKPOINT): FEX raises every guest int3
++                         * from one BRK in its code, so a client whose handlers take
++                         * int3 after int3 on one thread (World of Warcraft's x64
++                         * loader) looked like one pc faulting 50 times, and its main
++                         * thread was ended. Each is an exception delivered to the
++                         * guest, as on Windows, never a fault nothing resolves. */
+                         static volatile struct ppfl_state fault_loop;
+                         uint64_t fpage = ppfl_page( (uint64_t)fault_addr );
+                         uint32_t pn;
+                         uint32_t n = ppfl_note( &fault_loop, thread, fault_pc_check, (uint64_t)fault_addr,
+-                                                fault_kr == EXC_ARM_DA_ALIGN, &pn );
++                                                fault_kr == EXC_ARM_DA_ALIGN || req->exception == EXC_BREAKPOINT,
++                                                &pn );
+                         if (pn && (pn % 1000) == 0)
+                             dprintf(STDERR_FILENO,
+                                 "[fault-stuck] ml876 page 0x%llx pc 0x%llx: %u faults, addresses advancing (last 0x%llx)\n",
+-- 
+2.56.0
+

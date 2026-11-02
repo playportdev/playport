@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// A publisher's launcher Playport opens from Settings › Launchers (docs/plans/2026-10-12-launchers.md,
+// A publisher's launcher Playport opens from Settings › Launchers (PLA-616,
 // Where a launcher lives in the UI): a launch whose title is the launcher itself, started standalone
 // in the shared prefix. The compatibility table is keyed by a game's title id, so a launcher's play
 // settings (Windows services, decision 0107; its JIT pool, decision 0108; the backend, decision 0100)
@@ -58,14 +58,22 @@ public struct PublisherLauncher: Equatable, Sendable, Identifiable {
     /// host band to Social Club's threads (decision 0114). FEX's self-modifying-code checks are
     /// off (`env.FEX_SMCCHECKS=none`): with them on, Social Club's CEF crashed and the pool's tail
     /// passed 560 MB (run `20261018T095302`; decision 0116).
+    /// Every Play that runs it, its Open and RDR2's, runs Social Club on Rockstar's own CEF in the
+    /// stock-CEF layout (`env.PLAYPORT_SC_LAYOUT=1`), in both builds (decision 0169, PLA-602);
+    /// single-process needs no key, sc_single.h has it on by default. The layout changes every
+    /// process of its session, so no other title gets it. A release build takes this key and never
+    /// a person's; a dev build's `=0` saved for the game or the Open wins (openSettings, startingGame).
+    /// KosmicKrisp releases a submitted-once command buffer's memory at its completion and rounds large
+    /// command BOs finer (`MESA_KK_EXPERIMENTAL=cmd_retire,cmd_bo_classes`, mesa 0132–0135; decision
+    /// 0173): with the game's Social Club alive (0169) RDR2's cabin load otherwise reaches the limit.
     public static let rockstar = PublisherLauncher(
         id: "rockstar", name: "Rockstar Games Launcher",
         installKey: #"Software\Wow6432Node\Rockstar Games\Launcher"#, installValue: "InstallFolder",
         executable: "Launcher.exe", arguments: [], windowsServices: true, jitPoolMB: 896, graphics: .vulkan,
         exhaustionGrace: 240,
         graphicsEnvironment: ["DXVK_CONFIG": "dxvk.numCompilerThreads = 1", "DXVK_SHADER_CACHE": "0",
-                              "VKD3D_SHADER_CACHE_PATH": "0"],
-        runtime: ["env.FEX_SMCCHECKS": "none"],
+                              "VKD3D_SHADER_CACHE_PATH": "0", "MESA_KK_EXPERIMENTAL": "cmd_retire,cmd_bo_classes"],
+        runtime: ["env.FEX_SMCCHECKS": "none", "env.PLAYPORT_SC_LAYOUT": "1"],
         // Red Dead Redemption 2's Steam copy: PlayRDR2.exe starts Launcher.exe -steamAppId=1174180.
         games: ["app-1174180"],
         // With it the main window logs "Using saved geometry"; without it "Centering on monitor",

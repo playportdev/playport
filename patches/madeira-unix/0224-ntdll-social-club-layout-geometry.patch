@@ -1,0 +1,91 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: playportdev <dev@playport.dev>
+Date: Thu, 29 Oct 2026 15:50:56 +0100
+Subject: [PATCH] ntdll: describe stock Social Club reservation geometry and
+ ownership
+
+Host-testable foundation for PLA-476; not connected to allocation yet.
+Derived from willfaust/Madeira layout 2 with its RDR2 geometry.
+Reject cross-helper slot consumption and use real extents for bounds.
+
+Class: feature
+Evidence: docs/evidence/2026-10-29-sc-stock-cef-probe.md
+Offered-upstream: no
+---
+ build/ntdll-unix/pp_sc_layout.h | 67 +++++++++++++++++++++++++++++++++
+ 1 file changed, 67 insertions(+)
+ create mode 100644 build/ntdll-unix/pp_sc_layout.h
+
+diff --git a/build/ntdll-unix/pp_sc_layout.h b/build/ntdll-unix/pp_sc_layout.h
+new file mode 100644
+index 0000000..abf83a5
+--- /dev/null
++++ b/build/ntdll-unix/pp_sc_layout.h
+@@ -0,0 +1,67 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later */
++/* PLA-476: RDR2 geometry from willfaust/Madeira's Social Club layout 2.
++ * Real ranges are disjoint; reported Chromium reservations deliberately overlap.
++ * A caller MUST restrict commits/releases to its owned real range, not the
++ * reported extent. This header allocates nothing and changes no runtime policy. */
++#ifndef PP_SC_LAYOUT_H
++#define PP_SC_LAYOUT_H
++#include <stdint.h>
++
++enum ppsc_slot { PPSC_NONE, PPSC_ELF, PPSC_CEF, PPSC_ELF_META,
++                 PPSC_CEF_META, PPSC_OILPAN, PPSC_CAGE, PPSC_REFUSE };
++struct ppsc_range { uint64_t base, size, report, asked; };
++#define PPSC_RW_BASE UINT64_C(0x7900000000)
++#define PPSC_RW_CAP UINT64_C(0x100000000)
++#define PPSC_FLOOR UINT64_C(0x7010000000)
++#define PPSC_CEILING UINT64_C(0x73ffff0000)
++#define PPSC_GAME_BASE UINT64_C(0x75d0000000)
++#define PPSC_GAME_SIZE UINT64_C(0x230000000)
++#define PPSC_FEX_BASE UINT64_C(0x7c40000000)
++#define PPSC_TOP UINT64_C(0x8000000000)
++#define PPSC_BIT(k) (1u << (k))
++
++static inline struct ppsc_range ppsc_range(enum ppsc_slot k)
++{
++    switch (k) {
++    case PPSC_ELF: return (struct ppsc_range){0x7800000000ULL, 0x100000000ULL, 0x7800000000ULL, 0x800000000ULL};
++    case PPSC_CEF: return (struct ppsc_range){0x7000000000ULL, 0x10000000ULL, 0x7000000000ULL, 0x800000000ULL};
++    case PPSC_ELF_META: return (struct ppsc_range){0x7400000000ULL, 0x190000000ULL, 0x7400000000ULL, 0x400000000ULL};
++    case PPSC_CEF_META: return (struct ppsc_range){0x7590000000ULL, 0x40000000ULL, 0x7590000000ULL, 0x400000000ULL};
++    case PPSC_OILPAN: return (struct ppsc_range){0x7c00000000ULL, 0x40000000ULL, 0x7800000000ULL, 0x800000000ULL};
++    case PPSC_CAGE: return (struct ppsc_range){0x7a00000000ULL, 0x200000000ULL, 0x7a00000000ULL, 0x200000000ULL};
++    default: return (struct ppsc_range){0, 0, 0, 0};
++    }
++}
++
++/* Overflow-safe containment of a nonempty operation in real, owned storage. */
++static inline int ppsc_contains(struct ppsc_range r, uint64_t a, uint64_t n)
++{
++    return n && a >= r.base && a - r.base < r.size && n <= r.size - (a - r.base);
++}
++
++/* Only call for the verified helper's reserve-only requests. 'mine' describes
++ * this live helper, not another helper's grants; 'held' describes free slots.
++ * In particular, a second helper cannot consume the first helper's remaining
++ * slots. Refusal must not fall through to the unsafe generic soft-pool path. */
++static inline enum ppsc_slot ppsc_classify(uint64_t size, uint64_t hint,
++                                         unsigned held, unsigned mine)
++{
++    unsigned both = PPSC_BIT(PPSC_ELF) | PPSC_BIT(PPSC_CEF);
++    if (size == 0x800000000ULL) {
++        if (hint && !(hint & (0x400000000ULL - 1)) &&
++            (mine & both) == both && (held & PPSC_BIT(PPSC_OILPAN)))
++            return PPSC_OILPAN;
++        if (hint && !(hint & (0x800000000ULL - 1))) {
++            if (!(mine & both) && (held & both) == both) return PPSC_ELF;
++            if ((mine & both) == PPSC_BIT(PPSC_ELF) && (held & PPSC_BIT(PPSC_CEF))) return PPSC_CEF;
++        }
++        return PPSC_REFUSE;
++    }
++    if (size == 0x400000000ULL && (hint & 0xffffffffULL) && !(mine & PPSC_BIT(PPSC_CAGE))) {
++        if ((mine & both) == PPSC_BIT(PPSC_ELF) && (held & PPSC_BIT(PPSC_ELF_META))) return PPSC_ELF_META;
++        if ((mine & both) == both && (held & PPSC_BIT(PPSC_CEF_META))) return PPSC_CEF_META;
++        return PPSC_REFUSE;
++    }
++    return PPSC_NONE;
++}
++#endif

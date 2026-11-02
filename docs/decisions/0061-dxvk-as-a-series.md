@@ -1,7 +1,7 @@
 # 0061: DXVK carries a patch series, starting with a fix for devices that cannot share memory
 
 **Status:** accepted, 2026-10-06, taken unattended under the owner's answer 4 in the
-[Vulkan performance plan](../plans/2026-10-06-vulkan-performance.md) (DXVK and
+[Vulkan performance plan](https://linear.app/playportdev/issue/PLA-680) (DXVK and
 vkd3d-proton patches are not ruled out; each needs its own record). Changes
 [0015](0015-vulkan-backend-accepted.md) and [0032](0032-vkd3d-proton-as-a-series.md)
 where they say DXVK stays unmodified.

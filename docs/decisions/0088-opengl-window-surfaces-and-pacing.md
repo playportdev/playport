@@ -1,7 +1,7 @@
 # 0088: OpenGL window surfaces, pacing and limits
 
 **Status:** accepted for x86-64, 2026-10-11, carrying out the OpenGL plan's chunk 2
-([the plan](../plans/finished.md#opengl-through-zink)); the choices are the worker's conservative ones
+([the plan](https://linear.app/playportdev/issue/PLA-162)); the choices are the worker's conservative ones
 (owner away). [PLA-162](https://linear.app/playportdev/issue/PLA-162),
 [PLA-180](https://linear.app/playportdev/issue/PLA-180),
 [PLA-179](https://linear.app/playportdev/issue/PLA-179),

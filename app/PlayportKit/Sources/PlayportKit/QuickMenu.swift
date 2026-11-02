@@ -6,17 +6,22 @@
 // the game's on-screen layout, its d-pad and right stick, their opacity, its gyro aim
 // (output and sensitivity) and, while a controller is connected, its controller map's
 // mode (ControllerMap.swift), up and down between them, left and right (and A) to
-// change one, B back to the rows.
+// change one, B back to the rows. Touch keyboard goes back to the game with the
+// touch keyboard open over it (HostIOKit TouchKeyboard); Type text goes back to it
+// with the text bar open over it (HostIOKit TextBar), the way into a guest's text
+// field with a controller connected, when no on-screen controls are drawn.
 
 import Foundation
 
 public enum QuickMenuItem: String, CaseIterable, Sendable {
-    case resume, controls, screenshot, overlay, controller, quit
+    case resume, controls, keyboard, text, screenshot, overlay, controller, quit
 
     public var title: String {
         switch self {
         case .resume: "Resume"
         case .controls: "Controls"
+        case .keyboard: "Touch keyboard"
+        case .text: "Type text"
         case .screenshot: "Screenshot"
         case .overlay: "Performance overlay"
         case .controller: "Controller"
@@ -33,9 +38,16 @@ public enum QuickMenuControlsRow: String, CaseIterable, Sendable {
     /// The controller map's mode (Pad, Keys & mouse, Custom): only while a controller is connected.
     case controllerMap
 
-    /// The rows shown: the controller map's only with a controller connected.
-    public static func shown(controller: Bool) -> [QuickMenuControlsRow] {
-        controller ? allCases : allCases.filter { $0 != .controllerMap }
+    /// The rows shown: the D-pad's and Right stick's only while they change what is drawn
+    /// (`ControlsState.hasGamepadOptions`), the controller map's only with a controller connected.
+    public static func shown(controller: Bool, state: ControlsState) -> [QuickMenuControlsRow] {
+        allCases.filter { r in
+            switch r {
+            case .dpad, .rightStick: state.hasGamepadOptions
+            case .controllerMap: controller
+            default: true
+            }
+        }
     }
 
     public var title: String {
@@ -100,8 +112,10 @@ public struct QuickMenu: Equatable, Sendable {
     }
 
     /// The controller row's value: `Xbox · 80%`, the name alone without a battery, `None`.
-    public static func controller(name: String?, battery: Int?) -> String {
-        guard let name else { return "None" }
+    /// `scriptedPad`: the dev build's scripted pad is connected; it is no GameController pad,
+    /// so it has no name of its own and is `Scripted pad` when no real one is named.
+    public static func controller(name: String?, battery: Int?, scriptedPad: Bool = false) -> String {
+        guard let name else { return scriptedPad ? "Scripted pad" : "None" }
         return battery.map { "\(name) · \($0)%" } ?? name
     }
 }

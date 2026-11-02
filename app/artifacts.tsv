@@ -15,15 +15,15 @@
 #   P4-server reconstructed base + Madeira build/wineserver/build.sh via build/stages/unix-gaps.sh wineserver (patches/madeira-unix real-suspend-safepoint, patches/wine-unix server-ios-*)
 #   P4-crypto GnuTLS 3.8.9 / GMP 6.3.0 / Nettle 3.10.1 from Madeira's tracked tarballs via build/stages/unix.sh gnutls; nettle/hogweed hashes depend on UNIX_ROOT
 #   nls       wine pin nls/ (tracked data files): the set Madeira app/Madeira/nls ships, plus every Windows ANSI code page (PLA-233)
-#   fonts     wine pin fonts/{tahoma,tahomabd}.ttf (tracked prebuilts, not regenerated with FontForge); architecture-neutral GDI fallback faces
+#   fonts     wine pin fonts/{tahoma,tahomabd,marlett}.ttf (tracked prebuilts, not regenerated with FontForge); architecture-neutral GDI fallback faces, and the symbol face win32u draws caption buttons and other frame controls with
 #   winsxs    wine pin dlls/<module>/*.manifest for the modules with a WINE_MANIFEST resource (tracked data files, the side-by-side assemblies wineboot's fakedll.c registers); wine_host.c link_winsxs installs them for x86 and arm64 into drive_c/windows/winsxs with links into the i386 and arm64ec sets
 #   etc       wine pin dlls/ws2_32/{hosts,networks,protocol,services} (tracked data files, the ones ws2_32.dll carries as the resources wine.inf [EtcFiles] installs); wine_host.c copies the ones a prefix lacks into drive_c/windows/system32/drivers/etc
 #   P5-dxmt   DXMT pin (3Shain/dxmt) + patches/dxmt-port + patches/dxmt unix slice (build/stages/dxmt-patched.sh unix: build/stages/dxmt-base.sh unix + the hand-ported AIR helpers in build/air-helpers) + LLVM 15.0.7 iOS static libs, combined by build/stages/dxmt-combined.sh as Madeira build/dxmt-ios/README.md does
 #   P5-dxmt-pe  the same patched tree's PE DLLs (build/stages/dxmt-patched.sh pe, llvm-mingw 20260922); must match P5-dxmt's unix slot table (150 winemetal unix slots; newLibraryWithSource at 144)
 #   P5-winios Madeira pin app/Madeira/Winios/ (the reference's app-side Winios display driver); Winios.m + patches/madeira-winios; WiniosGamepad.c, the controller snapshot Wine's xinput1_*.dll (P2) read through libwin32u_unix.a
 #   P5-dxshim Madeira pin app/Madeira/IOSDisplayShim.{h,m}, unmodified: the macdrv_functions table DXMT's winemetal unix side looks up for a CAMetalLayer
-#   P6-vulkan-pe DXVK at its pin, unmodified, and vkd3d-proton at its pin + patches/vkd3d-proton, for arm64ec (build/stages/vulkan-pe.sh, llvm-mingw 20260922), marked Wine builtins; staged under Runtime/vulkan/, which a launch set to Vulkan puts first on WINEDLLPATH (decision 0014)
-#   P6-vulkan-loader the Khronos Vulkan-Loader (Apache-2.0) at the vulkan-loader pin with the vulkan-headers pin, unmodified, for arm64ec (build/stages/vulkan-pe.sh loader, llvm-mingw 20260922), marked a Wine builtin, and the wine pin's dlls/winevulkan/winevulkan.json (the ICD manifest winevulkan's DllRegisterServer writes); staged under Runtime/vulkan-loader/, which a play with khronosVulkanLoader links over system32 (decision 0131)
+#   P6-vulkan-pe DXVK at its pin, unmodified, and vkd3d-proton at its pin + patches/vkd3d-proton, for arm64ec, DXVK's Direct3D 9 to 11 and dxgi for i386, and vkd3d-proton with DXVK's dxgi for aarch64 (a native ARM64 child, decision 0170) (build/stages/vulkan-pe.sh, llvm-mingw 20260922), marked Wine builtins; staged under Runtime/vulkan/, which a launch set to Vulkan puts first on WINEDLLPATH (decision 0014)
+#   P6-vulkan-loader the Khronos Vulkan-Loader (Apache-2.0) at the vulkan-loader pin with the vulkan-headers pin, unmodified, for arm64ec and aarch64 (build/stages/vulkan-pe.sh loader, llvm-mingw 20260922), marked a Wine builtin, and the wine pin's dlls/winevulkan/winevulkan.json (the ICD manifest winevulkan's DllRegisterServer writes); staged under Runtime/vulkan-loader/, which a play with khronosVulkanLoader links over system32 (and sysarm64) (decision 0131)
 #   P6-gst    winegstreamer's unix side (wine pin + patches/wine-port + patches/wine-unix) prelinked with the static plugin set from the pins.lock gstreamer iOS release (build/stages/gstreamer.sh); one object, one exported symbol
 #   P8-steamapi gbe_fork (LGPL-3.0) at the gbe pin + patches/gbe: its regular steam_api for x86-64 and i386 with its static dependencies (build/stages/steamapi.sh, llvm-mingw 20260922); native DLLs under Runtime/steamapi/, which the app copies into a game's folder in place of the game's own (SteamClientKit SteamAPISwap)
 #   P9-session app/SessionRoot/playport-session.c (Playport's own) compiled by build/stages/session-root.sh (llvm-mingw 20260922) as a freestanding x86-64 program: the one Wine main process of an app run, which starts every title as its child (decision 0027); in arm64ec-windows so the prefix's system32 has it
@@ -297,8 +297,8 @@ resource	Runtime/arm64ec-windows/iyuv_32.dll	1949696	c5ade37c5559297b0c60ae66d39
 resource	Runtime/arm64ec-windows/joy.cpl	393216	7392b9103eb5711c675deb8836ca902c31458c4b43ed4904b0bcb078fa2706bc	wine-build	build-arm64ec/dlls/joy.cpl/arm64ec-windows/joy.cpl	P2
 resource	Runtime/arm64ec-windows/jscript.dll	1032192	5cb2526f214a0c8044a05b23aa15fbfde1ec0a9d20ccb88def34e2b9304b7b8a	wine-build	build-arm64ec/dlls/jscript/arm64ec-windows/jscript.dll	P2
 resource	Runtime/arm64ec-windows/jsproxy.dll	360448	d9b861fdc5922bf41a3315f249361ce48ec45a0fae3ee143e9e0f6a63d316567	wine-build	build-arm64ec/dlls/jsproxy/arm64ec-windows/jsproxy.dll	P2
-resource	Runtime/arm64ec-windows/kernel32.dll	688128	63ca60caf63af149412f0b21d7d64bbba57f62be0746ef48262f7e4ba7f33175	wine-build	build-arm64ec/dlls/kernel32/arm64ec-windows/kernel32.dll	P2
-resource	Runtime/arm64ec-windows/kernelbase.dll	3358720	d2949ce2c6457e307d3e14e6a602a7f4c4262e8f367373b1f9b8adac65fe70e7	wine-build	build-arm64ec/dlls/kernelbase/arm64ec-windows/kernelbase.dll	P2
+resource	Runtime/arm64ec-windows/kernel32.dll	688128	d055836dbdbcd702b4e17f8356921b76c7d06a95d5c4a5a682bc03707c70c76f	wine-build	build-arm64ec/dlls/kernel32/arm64ec-windows/kernel32.dll	P2
+resource	Runtime/arm64ec-windows/kernelbase.dll	3358720	792bba8607709b2d8e33c95b9879cdebb326a53f9873a56077e9f4877c40c6e4	wine-build	build-arm64ec/dlls/kernelbase/arm64ec-windows/kernelbase.dll	P2
 resource	Runtime/arm64ec-windows/klist.exe	180224	e4fe89d16404db5b6de910a947d3aeb7ef2993ea3067b6d9a9cdb5d2b77769ff	wine-build	build-arm64ec/programs/klist/arm64ec-windows/klist.exe	P2
 resource	Runtime/arm64ec-windows/ksecdd.sys	196608	894ecd15815525af928fba1cf10633a1b9234ee1684d5f51d3d468670a15bf33	wine-build	build-arm64ec/dlls/ksecdd.sys/arm64ec-windows/ksecdd.sys	P2
 resource	Runtime/arm64ec-windows/ksproxy.ax	180224	3fdd3ed9a57cdc9a7cdfeeab18ced0dee772070f1ef5b9bc042af669f0e1bcb8	wine-build	build-arm64ec/dlls/ksproxy.ax/arm64ec-windows/ksproxy.ax	P2
@@ -404,13 +404,13 @@ resource	Runtime/arm64ec-windows/msvcp60.dll	1441792	54c28ee1d3baacc764f69e88a9d
 resource	Runtime/arm64ec-windows/msvcp80.dll	1720320	c851ab605a9951a1e9ab943370411a731718398c733a163386e9adcdff910a97	wine-build	build-arm64ec/dlls/msvcp80/arm64ec-windows/msvcp80.dll	P2
 resource	Runtime/arm64ec-windows/msvcp90.dll	1720320	08fc31235e973599f89ffcb4dbaf232b79dccdf5e142b576b01c3403c85137e4	wine-build	build-arm64ec/dlls/msvcp90/arm64ec-windows/msvcp90.dll	P2
 resource	Runtime/arm64ec-windows/msvcp_win.dll	425984	9d74f8628e48499b9449c63a81eae6e8cab86cf118acc49eca04def55ddad0df	wine-build	build-arm64ec/dlls/msvcp_win/arm64ec-windows/msvcp_win.dll	P2
-resource	Runtime/arm64ec-windows/msvcr100.dll	1196032	9cd3d37f7adc93a4298f942b70e553783c8a763d4c4f320fdc2ceef3c3dbd3db	wine-build	build-arm64ec/dlls/msvcr100/arm64ec-windows/msvcr100.dll	P2
-resource	Runtime/arm64ec-windows/msvcr110.dll	1228800	ce12f8906c34b1f9db3fb6d0c30900b6c9c130bcc159d6fec4c21b69a8d809ee	wine-build	build-arm64ec/dlls/msvcr110/arm64ec-windows/msvcr110.dll	P2
-resource	Runtime/arm64ec-windows/msvcr120.dll	1310720	826935abb0f5ae7985db8503f57dea2e0e369707e9a0ebda029e31c276138a45	wine-build	build-arm64ec/dlls/msvcr120/arm64ec-windows/msvcr120.dll	P2
+resource	Runtime/arm64ec-windows/msvcr100.dll	1196032	57c24fa9acf7829cfa804ff2c456b6a03cbebb55dc73314d005920013b91a101	wine-build	build-arm64ec/dlls/msvcr100/arm64ec-windows/msvcr100.dll	P2
+resource	Runtime/arm64ec-windows/msvcr110.dll	1228800	5cd4999ab8e93d37dc5a6b2952e6a575aa662f966d016f7c0881b76e9d2f020b	wine-build	build-arm64ec/dlls/msvcr110/arm64ec-windows/msvcr110.dll	P2
+resource	Runtime/arm64ec-windows/msvcr120.dll	1310720	7a0b69d34df99ec0250f58fc51e9b5f78f8658fa7c650637180754b51f79052f	wine-build	build-arm64ec/dlls/msvcr120/arm64ec-windows/msvcr120.dll	P2
 resource	Runtime/arm64ec-windows/msvcr120_app.dll	278528	e743a8ea00d036f75fafb74a3f286a5f7c1033c83e917148f4594b6dc14a7c73	wine-build	build-arm64ec/dlls/msvcr120_app/arm64ec-windows/msvcr120_app.dll	P2
-resource	Runtime/arm64ec-windows/msvcr80.dll	1064960	c4a1d40d541d21584e50b6d02e8dc83068f9a9641b84eb33109786a5deaca8e4	wine-build	build-arm64ec/dlls/msvcr80/arm64ec-windows/msvcr80.dll	P2
-resource	Runtime/arm64ec-windows/msvcr90.dll	1064960	9714e99afea1bd4ba814c7ae6134b94d2843a8026a56986799861ed90eed79db	wine-build	build-arm64ec/dlls/msvcr90/arm64ec-windows/msvcr90.dll	P2
-resource	Runtime/arm64ec-windows/msvcrt.dll	1032192	6b939a3e4d7dab78a1281143b47e743aaf4af80a1d36c46c85fbb3456b5c61c9	wine-build	build-arm64ec/dlls/msvcrt/arm64ec-windows/msvcrt.dll	P2
+resource	Runtime/arm64ec-windows/msvcr80.dll	1064960	4c55a9f1df8950639492b05703cb9afa973297822066ab5762fe3971a262c7d7	wine-build	build-arm64ec/dlls/msvcr80/arm64ec-windows/msvcr80.dll	P2
+resource	Runtime/arm64ec-windows/msvcr90.dll	1064960	cc2adbd4adde80e24757ff3bf1599a40ae5e0a80548798164f5b84984cd0beee	wine-build	build-arm64ec/dlls/msvcr90/arm64ec-windows/msvcr90.dll	P2
+resource	Runtime/arm64ec-windows/msvcrt.dll	1032192	d8d3618e907a96ea173ccc6ea32f28ba82c8cf344c189bd086c24fa6247920c2	wine-build	build-arm64ec/dlls/msvcrt/arm64ec-windows/msvcrt.dll	P2
 resource	Runtime/arm64ec-windows/msvdsp.dll	262144	6a4f85e24288cbd408d2aa637ecfbbc77a075867a33cf7706ab9eb0ab7ceb518	wine-build	build-arm64ec/dlls/msvdsp/arm64ec-windows/msvdsp.dll	P2
 resource	Runtime/arm64ec-windows/msvfw32.dll	311296	3a88a9016bb9fca438ed4926842d01d78bccc71311425782dc3f3d76d086c5ca	wine-build	build-arm64ec/dlls/msvfw32/arm64ec-windows/msvfw32.dll	P2
 resource	Runtime/arm64ec-windows/msvidc32.dll	163840	65b56fde2f3800462f5003562fd0bbff013493799a8f363a1c3f5c3d6eafbcb4	wine-build	build-arm64ec/dlls/msvidc32/arm64ec-windows/msvidc32.dll	P2
@@ -442,7 +442,7 @@ resource	Runtime/arm64ec-windows/npmshtml.dll	163840	df795fba08ff0db75c021f88fd9
 resource	Runtime/arm64ec-windows/npptools.dll	163840	ea02a8c438492b153dee6ba844bbea54f6f1edb69b5f24bb45c4afe7861999d1	wine-build	build-arm64ec/dlls/npptools/arm64ec-windows/npptools.dll	P2
 resource	Runtime/arm64ec-windows/nsi.dll	180224	12a0fc2f641167fff696bfd2f9e722b1a171308e729d91a1cb58f91c8824cc23	wine-build	build-arm64ec/dlls/nsi/arm64ec-windows/nsi.dll	P2
 resource	Runtime/arm64ec-windows/nsiproxy.sys	147456	d26689916762179e6f4b1c41dfe6136efaafb876f780426b1f81488f88de2b2b	wine-build	build-arm64ec/dlls/nsiproxy.sys/arm64ec-windows/nsiproxy.sys	P2
-resource	Runtime/arm64ec-windows/ntdll.dll	1343488	5ff8df8aa7a521d07d2f5346f9f7c4e62c0b74109971aa6bff2d8e02b686f351	wine-build	build-arm64ec/dlls/ntdll/arm64ec-windows/ntdll.dll	P2-ec
+resource	Runtime/arm64ec-windows/ntdll.dll	1343488	acc047c226fc58d130aad4b4f32e4f11b17dfea5702f8dd77cfb7f509a9785d5	wine-build	build-arm64ec/dlls/ntdll/arm64ec-windows/ntdll.dll	P2-ec
 resource	Runtime/arm64ec-windows/ntdsapi.dll	212992	241a50fb7888e675e66ed88ab507c1ad04cc0d67d4d4544c1b6706c6142410fd	wine-build	build-arm64ec/dlls/ntdsapi/arm64ec-windows/ntdsapi.dll	P2
 resource	Runtime/arm64ec-windows/ntoskrnl.exe	786432	d05e8348ab5101608a738e64e80120be18f15be830b77ff0ca9552fa8247fd2f	wine-build	build-arm64ec/dlls/ntoskrnl.exe/arm64ec-windows/ntoskrnl.exe	P2
 resource	Runtime/arm64ec-windows/ntprint.dll	180224	f4b14616bcedd223eeb9d7a80c3c230c20657b4b052e148e04ca5742f19e3882	wine-build	build-arm64ec/dlls/ntprint/arm64ec-windows/ntprint.dll	P2
@@ -543,10 +543,11 @@ resource	Runtime/arm64ec-windows/sfc_os.dll	163840	87ff1606b5b5eed661fcdedd6d56d
 resource	Runtime/arm64ec-windows/shcore.dll	278528	a6d74d78ca519373ebe6ce70c48c053a12515432924018f4ecf9e8949f1b54a9	wine-build	build-arm64ec/dlls/shcore/arm64ec-windows/shcore.dll	P2
 resource	Runtime/arm64ec-windows/shdoclc.dll	327680	bab1a97015b6c4b82dc916912c37e211ac1537a658b088905189c21704eefb72	wine-build	build-arm64ec/dlls/shdoclc/arm64ec-windows/shdoclc.dll	P2
 resource	Runtime/arm64ec-windows/shdocvw.dll	442368	f7130a59a5a4bcc1fae87be1a6d1254c7c7aab9e66203454cc9942000394f4bc	wine-build	build-arm64ec/dlls/shdocvw/arm64ec-windows/shdocvw.dll	P2
-resource	Runtime/arm64ec-windows/shell32.dll	10354688	4f9c373d8fa0f0c6e342d7373080b03aa75b70e677758f32d785da0886b33364	wine-build	build-arm64ec/dlls/shell32/arm64ec-windows/shell32.dll	P2
+resource	Runtime/arm64ec-windows/shell32.dll	10354688	68016d6a72ecc228183653c0a0f5b87f14fade10dbeee2e78def3b84df91def7	wine-build	build-arm64ec/dlls/shell32/arm64ec-windows/shell32.dll	P2
 resource	Runtime/arm64ec-windows/shfolder.dll	196608	48227ebf240331d1a58b66e5070130ad42212131b803e71b87f8fa3d55a921c9	wine-build	build-arm64ec/dlls/shfolder/arm64ec-windows/shfolder.dll	P2
 resource	Runtime/arm64ec-windows/shlwapi.dll	671744	965459c355e1bc2a6a72179a848cc74c80954deea950756a9d298e053c016399	wine-build	build-arm64ec/dlls/shlwapi/arm64ec-windows/shlwapi.dll	P2
 resource	Runtime/arm64ec-windows/shutdown.exe	147456	d1755d46da64e422178860267cd581dc19ce799311a5fbe9e2d7458e744d7525	wine-build	build-arm64ec/programs/shutdown/arm64ec-windows/shutdown.exe	P2
+resource	Runtime/arm64ec-windows/signal_arm64ec-0a6af8ff.o.tmp	0	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	wine-build	build-arm64ec/dlls/ntdll/arm64ec-windows/signal_arm64ec-0a6af8ff.o.tmp	P2
 resource	Runtime/arm64ec-windows/slbcsp.dll	163840	ae91b3cc9a972656a8ffd09b2ab832c95eb605d9f2f881cbc5fb713efe4cabfc	wine-build	build-arm64ec/dlls/slbcsp/arm64ec-windows/slbcsp.dll	P2
 resource	Runtime/arm64ec-windows/slc.dll	163840	22553be9bea1c36da8513ecf7d0a0b527a867f7b3ed5ac8bd5b0c52935ddc836	wine-build	build-arm64ec/dlls/slc/arm64ec-windows/slc.dll	P2
 resource	Runtime/arm64ec-windows/snmpapi.dll	163840	b988a05013419ef72417c0f582e74a168594895ce3ef1032f939cd9cc5569b97	wine-build	build-arm64ec/dlls/snmpapi/arm64ec-windows/snmpapi.dll	P2
@@ -587,7 +588,7 @@ resource	Runtime/arm64ec-windows/traffic.dll	163840	1b4bbe95e4197fa8a6c95fa70c6a
 resource	Runtime/arm64ec-windows/twaindsm.dll	180224	c271c83872a8dea2944a2218ecf3a2f984c2219dbe70990233361d607737524e	wine-build	build-arm64ec/dlls/twaindsm/arm64ec-windows/twaindsm.dll	P2
 resource	Runtime/arm64ec-windows/twinapi.appcore.dll	376832	c3f35ee5070e94b609c0d11343b3018c2d8d0305ff3913da0760718ceb5a4bad	wine-build	build-arm64ec/dlls/twinapi.appcore/arm64ec-windows/twinapi.appcore.dll	P2
 resource	Runtime/arm64ec-windows/tzres.dll	655360	97d7763e18089636254cfaa08848bf0f4cee4903ee90ddeb56b088d3fea55314	wine-build	build-arm64ec/dlls/tzres/arm64ec-windows/tzres.dll	P2
-resource	Runtime/arm64ec-windows/ucrtbase.dll	1392640	293e34a1b0a6cd018692d0ec6f27ebc8c4bbd3d366063c4f8f4358c911761893	wine-build	build-arm64ec/dlls/ucrtbase/arm64ec-windows/ucrtbase.dll	P2
+resource	Runtime/arm64ec-windows/ucrtbase.dll	1392640	f6b3db8f020587f65a49d6261c99e9761418a8177244063bafdd31e15cce0b43	wine-build	build-arm64ec/dlls/ucrtbase/arm64ec-windows/ucrtbase.dll	P2
 resource	Runtime/arm64ec-windows/uianimation.dll	393216	4929122d6d2d8aaf5f1a3f01bdea23b9db681c145981457faddfed6e73feb346	wine-build	build-arm64ec/dlls/uianimation/arm64ec-windows/uianimation.dll	P2
 resource	Runtime/arm64ec-windows/uiautomationcore.dll	835584	c93f26647f15f74126fb9ec5aaa1444f245bb52d27859a28c3246b134ac817fe	wine-build	build-arm64ec/dlls/uiautomationcore/arm64ec-windows/uiautomationcore.dll	P2
 resource	Runtime/arm64ec-windows/uiribbon.dll	327680	2644e4639d7ae0516cf5f74bc7e0bdf20eecc5b918c42b620dca1db963eddf56	wine-build	build-arm64ec/dlls/uiribbon/arm64ec-windows/uiribbon.dll	P2
@@ -783,7 +784,7 @@ resource	Runtime/arm64ec-windows/xmllite.dll	278528	d757caee62880f8a8db3b19cfd18
 resource	Runtime/arm64ec-windows/xolehlp.dll	376832	88ef43a83812a0ba05eac585b602a046d9a5e57cb06b9ef428e683e2ab2c32b5	wine-build	build-arm64ec/dlls/xolehlp/arm64ec-windows/xolehlp.dll	P2
 resource	Runtime/arm64ec-windows/xpsprint.dll	180224	a7a277a30949807610da1e619a29ee1dd149cf8fc6b8824518201437d241190e	wine-build	build-arm64ec/dlls/xpsprint/arm64ec-windows/xpsprint.dll	P2
 resource	Runtime/arm64ec-windows/xpssvcs.dll	163840	fcedd8362256f64364cfce83fd74f9d36e39ac56651faf070ae29d2ac4bbc77b	wine-build	build-arm64ec/dlls/xpssvcs/arm64ec-windows/xpssvcs.dll	P2
-resource	Runtime/arm64ec-windows/xtajit64.dll	5762560	419c0122e5e589839ee3eddabc294da8abdf4aff1270f2bbd18f555fa5225914	fex	libarm64ecfex.dll	P1-de
+resource	Runtime/arm64ec-windows/xtajit64.dll	5767680	eea5232daa7876b6d16ed5969f93a8c47869419e35f1592108285986ba337f55	fex	libarm64ecfex.dll	P1-de
 resource	Runtime/aarch64-windows/acledit.dll	114688	65b4ed3b901dcec7cc425bbb4e7d4835f8e014be7a322e0f350fb40e54ad40ff	wine-build	build-macos/dlls/acledit/aarch64-windows/acledit.dll	P2
 resource	Runtime/aarch64-windows/aclui.dll	147456	2972a2b2b3956c32d5c9e889a603624cac10e7e13cb7ad8aadc817b0a8a12da2	wine-build	build-macos/dlls/aclui/aarch64-windows/aclui.dll	P2
 resource	Runtime/aarch64-windows/activeds.dll	327680	27d0eb07e839736dd6aec6462ba8e53ef8243f1e8dd8017ee0de8083e85ca589	wine-build	build-macos/dlls/activeds/aarch64-windows/activeds.dll	P2
@@ -1042,8 +1043,8 @@ resource	Runtime/aarch64-windows/iyuv_32.dll	1720320	48eb13961a10815496dc55be9f6
 resource	Runtime/aarch64-windows/joy.cpl	327680	81d887dc923a74150913919f59abed6c0f44d35157afd6df650f2ac8d1c62985	wine-build	build-macos/dlls/joy.cpl/aarch64-windows/joy.cpl	P2
 resource	Runtime/aarch64-windows/jscript.dll	917504	417797fee8f621cd3ed49ba5b30363a498f7bf099d190e9bd3e098a2ca40e51a	wine-build	build-macos/dlls/jscript/aarch64-windows/jscript.dll	P2
 resource	Runtime/aarch64-windows/jsproxy.dll	294912	a42cfd85aa720ae48bcd11151aa731808d4879bc7e1fefcb432445800c607d6c	wine-build	build-macos/dlls/jsproxy/aarch64-windows/jsproxy.dll	P2
-resource	Runtime/aarch64-windows/kernel32.dll	589824	1e72f8dc2aa19cec040eaf9890b60628034e7b789d7820ad1a880d88c48ac662	wine-build	build-macos/dlls/kernel32/aarch64-windows/kernel32.dll	P2
-resource	Runtime/aarch64-windows/kernelbase.dll	3211264	8164d017adcb7a090086465782afc107274ee169c8d2026b19054ddc5ff91a70	wine-build	build-macos/dlls/kernelbase/aarch64-windows/kernelbase.dll	P2
+resource	Runtime/aarch64-windows/kernel32.dll	589824	0512a9455f7d6b97646875a47d27d9fb3485da3c5e8af5d436728cf27c8d8fd0	wine-build	build-macos/dlls/kernel32/aarch64-windows/kernel32.dll	P2
+resource	Runtime/aarch64-windows/kernelbase.dll	3211264	4802f285fa921a29da81dc2209bfa832e73ebdb3c7139e535bae559cc176a843	wine-build	build-macos/dlls/kernelbase/aarch64-windows/kernelbase.dll	P2
 resource	Runtime/aarch64-windows/klist.exe	131072	3570f6c9aee50c90f5b8971d46f27c09b206d200c663de905de04709a1d36702	wine-build	build-macos/programs/klist/aarch64-windows/klist.exe	P2
 resource	Runtime/aarch64-windows/ksecdd.sys	131072	7daea4081a032d3449be50ff1869dd9f840080e8e137a910a088f3cee0fa3f26	wine-build	build-macos/dlls/ksecdd.sys/aarch64-windows/ksecdd.sys	P2
 resource	Runtime/aarch64-windows/ksproxy.ax	131072	efab4fd06756c54f7265e9361d82d16fe554f9637841599accd464dc9000ca21	wine-build	build-macos/dlls/ksproxy.ax/aarch64-windows/ksproxy.ax	P2
@@ -1149,13 +1150,13 @@ resource	Runtime/aarch64-windows/msvcp60.dll	1261568	c717413b806148498fe1d838ed3
 resource	Runtime/aarch64-windows/msvcp80.dll	1490944	bb376adb17e5909138c37ced2aea00be41c030ce8734a58637bf630d43c6a924	wine-build	build-macos/dlls/msvcp80/aarch64-windows/msvcp80.dll	P2
 resource	Runtime/aarch64-windows/msvcp90.dll	1490944	091a8ad62b481d7285f96d27dc6ee5ea501e572a810e977b5f5526b799f7b163	wine-build	build-macos/dlls/msvcp90/aarch64-windows/msvcp90.dll	P2
 resource	Runtime/aarch64-windows/msvcp_win.dll	360448	f2428c56fc169f178d7125e5e9fef97a4c98ab7d11a9594744c6857027446904	wine-build	build-macos/dlls/msvcp_win/aarch64-windows/msvcp_win.dll	P2
-resource	Runtime/aarch64-windows/msvcr100.dll	1032192	c99ce58420e98e06aaf5d308722c48ed41aad01ffd762c4d37e29b7cc0b68be6	wine-build	build-macos/dlls/msvcr100/aarch64-windows/msvcr100.dll	P2
-resource	Runtime/aarch64-windows/msvcr110.dll	1064960	16ca0c1e3902e82d0f0ff0381ff9c529f97b25d666f0806fbefec06dad6270f7	wine-build	build-macos/dlls/msvcr110/aarch64-windows/msvcr110.dll	P2
-resource	Runtime/aarch64-windows/msvcr120.dll	1146880	21a67cafd17628fa23a5f8058d3002cbb40e776306aa8f3d6b16aef22868f002	wine-build	build-macos/dlls/msvcr120/aarch64-windows/msvcr120.dll	P2
+resource	Runtime/aarch64-windows/msvcr100.dll	1032192	97e6ad97dafc8267652266ef35397a385d67c60da453816995f0d1648925f8a7	wine-build	build-macos/dlls/msvcr100/aarch64-windows/msvcr100.dll	P2
+resource	Runtime/aarch64-windows/msvcr110.dll	1064960	acf699c63541168e6d5a415f16382f5e01be211fdb1989a9d492ab49a593b85d	wine-build	build-macos/dlls/msvcr110/aarch64-windows/msvcr110.dll	P2
+resource	Runtime/aarch64-windows/msvcr120.dll	1146880	c0afd7aebbe68f2a3d053781fcfcea9d8db454b5da04b92b4eba876f1c7e1b12	wine-build	build-macos/dlls/msvcr120/aarch64-windows/msvcr120.dll	P2
 resource	Runtime/aarch64-windows/msvcr120_app.dll	229376	097686465d767ccea8d80b7ee24280927a3b8643127fe5f36b7b4eaad56891dc	wine-build	build-macos/dlls/msvcr120_app/aarch64-windows/msvcr120_app.dll	P2
-resource	Runtime/aarch64-windows/msvcr80.dll	917504	6b264d56ac1bb9b49b227cc758d335ef860fc98637fda9de6b0def0f9de2dee5	wine-build	build-macos/dlls/msvcr80/aarch64-windows/msvcr80.dll	P2
-resource	Runtime/aarch64-windows/msvcr90.dll	917504	ad3d402e323b51183de05ae71c6f19b4f901b1befad9373ff9e6fbf3bcad5d32	wine-build	build-macos/dlls/msvcr90/aarch64-windows/msvcr90.dll	P2
-resource	Runtime/aarch64-windows/msvcrt.dll	868352	3c44edf40baeefac15bb43b8598e36873ee407fc32469cf541d5bffb56b8c89c	wine-build	build-macos/dlls/msvcrt/aarch64-windows/msvcrt.dll	P2
+resource	Runtime/aarch64-windows/msvcr80.dll	917504	898436fbc4f4c0ab3837f34a05689a8e5f35266c9bd7d75c02015daeed59dc4a	wine-build	build-macos/dlls/msvcr80/aarch64-windows/msvcr80.dll	P2
+resource	Runtime/aarch64-windows/msvcr90.dll	917504	4b15af42fbe5e48d50949bc3fcf63f8c50f092290499c6de65c17574c8c6cc8e	wine-build	build-macos/dlls/msvcr90/aarch64-windows/msvcr90.dll	P2
+resource	Runtime/aarch64-windows/msvcrt.dll	868352	6f6a38e7c53c88b5de339cc786b92b1eee6dbd51e3fd73eb2770aa988575bb19	wine-build	build-macos/dlls/msvcrt/aarch64-windows/msvcrt.dll	P2
 resource	Runtime/aarch64-windows/msvdsp.dll	196608	99fe24315012e564e6f38daef124c7b028a2f5338688c3bf23c473060af77cbe	wine-build	build-macos/dlls/msvdsp/aarch64-windows/msvdsp.dll	P2
 resource	Runtime/aarch64-windows/msvfw32.dll	229376	0f40c7a8b84ea16cf217ccfd8f95c269fce92e21b3b1ccea3c20ef311add02f2	wine-build	build-macos/dlls/msvfw32/aarch64-windows/msvfw32.dll	P2
 resource	Runtime/aarch64-windows/msvidc32.dll	131072	ec0d39df1e0bdc0f51156252171cb89bbed69cd0831f113ffd02e53c6ac0f244	wine-build	build-macos/dlls/msvidc32/aarch64-windows/msvidc32.dll	P2
@@ -1188,7 +1189,7 @@ resource	Runtime/aarch64-windows/npmshtml.dll	131072	1bc0a204365da64fbeb5dcaf19e
 resource	Runtime/aarch64-windows/npptools.dll	114688	9210e38f15d48bc80a50b019d4ede5e8519c9229ec2b6ac7d5e8f8f83d6f6c33	wine-build	build-macos/dlls/npptools/aarch64-windows/npptools.dll	P2
 resource	Runtime/aarch64-windows/nsi.dll	114688	d14a6df93978edb046c0381e788d0c9e3db9c9b5a2d8c6eb1b6ffde3c169688d	wine-build	build-macos/dlls/nsi/aarch64-windows/nsi.dll	P2
 resource	Runtime/aarch64-windows/nsiproxy.sys	114688	0d298d4eec08634fcd16ca2188f09481b7daa2d898911c03dbdcb84f733b3d08	wine-build	build-macos/dlls/nsiproxy.sys/aarch64-windows/nsiproxy.sys	P2
-resource	Runtime/aarch64-windows/ntdll.dll	1032192	099352d770e4b93bf7602a5e8b6acfb1fdc4470e29da9dca53cb13854ce9a57b	wine-build	build-macos/dlls/ntdll/aarch64-windows/ntdll.dll	P2
+resource	Runtime/aarch64-windows/ntdll.dll	1032192	a895932cc7c7ca26e1eb139b937ae84e0b02959416a48deb123f1b68176100cd	wine-build	build-macos/dlls/ntdll/aarch64-windows/ntdll.dll	P2
 resource	Runtime/aarch64-windows/ntdsapi.dll	114688	e50a2f3fae5404a916e9239b4e147fa9d2ef3ed9e7a91948bcd725989a512ebe	wine-build	build-macos/dlls/ntdsapi/aarch64-windows/ntdsapi.dll	P2
 resource	Runtime/aarch64-windows/ntoskrnl.exe	720896	f83d388b0d9b2daea765d229c39e41b28f93d75fbce9b172d7895abf32075d6a	wine-build	build-macos/dlls/ntoskrnl.exe/aarch64-windows/ntoskrnl.exe	P2
 resource	Runtime/aarch64-windows/ntprint.dll	131072	112b98093004136b2957a8cdb0fac670765794e05bd5d0d055ad6391c08d7bf3	wine-build	build-macos/dlls/ntprint/aarch64-windows/ntprint.dll	P2
@@ -1289,7 +1290,7 @@ resource	Runtime/aarch64-windows/sfc_os.dll	114688	4dc1ace8aef9cc23ecf83b02b8e31
 resource	Runtime/aarch64-windows/shcore.dll	196608	dfe3a54c0bcf1eb773ae5502a650d9a4c961d9b4f480d6e1a5acaf7652a38bd5	wine-build	build-macos/dlls/shcore/aarch64-windows/shcore.dll	P2
 resource	Runtime/aarch64-windows/shdoclc.dll	327680	2afa7cfccd1d383f51ca10a3bf331a4a166349119a76334de78a7400a7bd312d	wine-build	build-macos/dlls/shdoclc/aarch64-windows/shdoclc.dll	P2
 resource	Runtime/aarch64-windows/shdocvw.dll	376832	bff1d8c76978b90b3cd9e4d2877039e5a57b437291a7b98b84b51957fb51e1db	wine-build	build-macos/dlls/shdocvw/aarch64-windows/shdocvw.dll	P2
-resource	Runtime/aarch64-windows/shell32.dll	10174464	5505124f66abd6fe0d4020d34869b5d00e36a9a82a8487263ac7b3236e08ce0a	wine-build	build-macos/dlls/shell32/aarch64-windows/shell32.dll	P2
+resource	Runtime/aarch64-windows/shell32.dll	10174464	40b2df0ff8efdc2f6e0179efb56996677b12b70cf537032f792318407357a8ad	wine-build	build-macos/dlls/shell32/aarch64-windows/shell32.dll	P2
 resource	Runtime/aarch64-windows/shfolder.dll	196608	92de6b61ec46fb62d01721fc37801d47ab7eed79e9a590c64ea7d356350ced07	wine-build	build-macos/dlls/shfolder/aarch64-windows/shfolder.dll	P2
 resource	Runtime/aarch64-windows/shlwapi.dll	573440	7b3c0c42856e14872c4ddcf1dfbb205a42e18a15704643383a22a43ea0f424af	wine-build	build-macos/dlls/shlwapi/aarch64-windows/shlwapi.dll	P2
 resource	Runtime/aarch64-windows/shutdown.exe	114688	298cd5262e620b95ed5249810cc70abe6d83b87fae9f0e9ec6b18395fff34735	wine-build	build-macos/programs/shutdown/aarch64-windows/shutdown.exe	P2
@@ -1333,7 +1334,7 @@ resource	Runtime/aarch64-windows/traffic.dll	114688	d96374301adc7ed8d40a71bd2e8f
 resource	Runtime/aarch64-windows/twaindsm.dll	131072	6e86cbe413a48a396f2e120481ed57cbcf3686161401faae1b2be7332978022e	wine-build	build-macos/dlls/twaindsm/aarch64-windows/twaindsm.dll	P2
 resource	Runtime/aarch64-windows/twinapi.appcore.dll	311296	d04ef395cc2df054a9e9ade1e83c9638df343cfdb10acc9e5ed9278bbcb1fc34	wine-build	build-macos/dlls/twinapi.appcore/aarch64-windows/twinapi.appcore.dll	P2
 resource	Runtime/aarch64-windows/tzres.dll	655360	ea99ddc2ddd687ccbc56dc17a2eb7260f7ace2b7ffc4a729088a9995f1d15b08	wine-build	build-macos/dlls/tzres/aarch64-windows/tzres.dll	P2
-resource	Runtime/aarch64-windows/ucrtbase.dll	1196032	dc6301f08fe97ab576913c531c41be035552b2d503bcc8ab1d1c44b2d5786286	wine-build	build-macos/dlls/ucrtbase/aarch64-windows/ucrtbase.dll	P2
+resource	Runtime/aarch64-windows/ucrtbase.dll	1196032	5e1523f52f3e59f8658cd5dcf9af477d9136a411b744d961d50109b5960d2f77	wine-build	build-macos/dlls/ucrtbase/aarch64-windows/ucrtbase.dll	P2
 resource	Runtime/aarch64-windows/uianimation.dll	327680	62b42a88d5e237ec7f3eb2c8e408d2cceaaa2a83af0b414daa2c6901a822c35e	wine-build	build-macos/dlls/uianimation/aarch64-windows/uianimation.dll	P2
 resource	Runtime/aarch64-windows/uiautomationcore.dll	737280	8bfb239913484705c89e98ebf0bbce95ea1e2f6f6139e2e52e9b806655056c03	wine-build	build-macos/dlls/uiautomationcore/aarch64-windows/uiautomationcore.dll	P2
 resource	Runtime/aarch64-windows/uiribbon.dll	294912	fc0d46477a36511d96eeebf1f0195902dbcfce89cf3942c2fa8652ca6920db2d	wine-build	build-macos/dlls/uiribbon/aarch64-windows/uiribbon.dll	P2
@@ -1471,8 +1472,8 @@ resource	Runtime/aarch64-windows/wmvdecod.dll	376832	e01e92870ee786a741a2f05ea60
 resource	Runtime/aarch64-windows/wnaspi32.dll	114688	aabfb8e06b1bb5404f333cd17be40ce8e88d2647c37deeca6412881bf9cacd22	wine-build	build-macos/dlls/wnaspi32/aarch64-windows/wnaspi32.dll	P2
 resource	Runtime/aarch64-windows/wofutil.dll	114688	a983f671c7faf2408df62db5ef3a3e83bdde5cf9afdf0cef88a2ea10687be343	wine-build	build-macos/dlls/wofutil/aarch64-windows/wofutil.dll	P2
 resource	Runtime/aarch64-windows/wordpad.exe	753664	820bacffe3cee76a68919dbb086b1a1cd5b1fb1aa41b2a5c270800c237ee9106	wine-build	build-macos/programs/wordpad/aarch64-windows/wordpad.exe	P2
-resource	Runtime/aarch64-windows/wow64.dll	229376	d1759a47242fef177330f7d6dbc1a0356a2f5c102d23619a50fe922ea1450682	wine-build	build-macos/dlls/wow64/aarch64-windows/wow64.dll	P2
-resource	Runtime/aarch64-windows/wow64win.dll	671744	670ea44d74ae083e9de7c53dcc11bc205e099cd8cb47b9ba4287769303b7971b	wine-build	build-macos/dlls/wow64win/aarch64-windows/wow64win.dll	P2
+resource	Runtime/aarch64-windows/wow64.dll	229376	ecd1af3f4c76d7951bb27fb022c5059d1627437375df0f1eb86674226893c901	wine-build	build-macos/dlls/wow64/aarch64-windows/wow64.dll	P2
+resource	Runtime/aarch64-windows/wow64win.dll	671744	9bf030ef63f5450270eb745ff8f32c8b1ce325c88733bb398b895499cb22c9da	wine-build	build-macos/dlls/wow64win/aarch64-windows/wow64win.dll	P2
 resource	Runtime/aarch64-windows/wpc.dll	147456	3fe15dadc1fe0e0c4b0fb6fc51ad7b3147291ec6b17d7c5553bf0afbd0cae839	wine-build	build-macos/dlls/wpc/aarch64-windows/wpc.dll	P2
 resource	Runtime/aarch64-windows/wpcap.dll	163840	ad20533d480a275b7150c5b912dae58aa6478f59a2712e27ecfe86f3a7daba70	wine-build	build-macos/dlls/wpcap/aarch64-windows/wpcap.dll	P2
 resource	Runtime/aarch64-windows/wpnapps.dll	114688	d04b35c0dde6044e143701cefb20de26e580bc9312823d7afe62760754150d50	wine-build	build-macos/dlls/wpnapps/aarch64-windows/wpnapps.dll	P2
@@ -1819,8 +1820,8 @@ resource	Runtime/i386-windows/iyuv_32.dll	1867776	54ab6fd67fa9b4bce70f2d3a04ddde
 resource	Runtime/i386-windows/joy.cpl	270336	3053bde631c72a36bdd24f128f75a69f043ab7dca9b07454ff0da7dfd645bf06	wine-build	build-macos/dlls/joy.cpl/i386-windows/joy.cpl	P2
 resource	Runtime/i386-windows/jscript.dll	897024	ceb7dfc31439adfcdfed3014ac805f1a02902fc70d12c1bb6592b28b93795770	wine-build	build-macos/dlls/jscript/i386-windows/jscript.dll	P2
 resource	Runtime/i386-windows/jsproxy.dll	217088	e02d89f6b513dafc26f1f8ec635c13f763a4569cc4f00f300e3511a13cf34f55	wine-build	build-macos/dlls/jsproxy/i386-windows/jsproxy.dll	P2
-resource	Runtime/i386-windows/kernel32.dll	585728	c5be006fc798ffa4eb2a2926d97cae012a079146101c9498b3dd93918bbaa0dc	wine-build	build-macos/dlls/kernel32/i386-windows/kernel32.dll	P2
-resource	Runtime/i386-windows/kernelbase.dll	3121152	352f813494e5441ca6c06a8a5dbd9f5fd619cf8abe7b738d74d995e8cce3eee0	wine-build	build-macos/dlls/kernelbase/i386-windows/kernelbase.dll	P2
+resource	Runtime/i386-windows/kernel32.dll	585728	454a77173ed04980c4d3fa2838d0123d11508aead49ec0f86cc2f506cf9c18ff	wine-build	build-macos/dlls/kernel32/i386-windows/kernel32.dll	P2
+resource	Runtime/i386-windows/kernelbase.dll	3121152	091b6f1888c879ec56027c1201ef85eb429290027d296f742a766d15bb8af09d	wine-build	build-macos/dlls/kernelbase/i386-windows/kernelbase.dll	P2
 resource	Runtime/i386-windows/keyboard.drv16	36864	caef8f607df28985aafcf13b49a4b3bebc86200ae2a73a09f684cbd21a5dd343	wine-build	build-macos/dlls/keyboard.drv16/i386-windows/keyboard.drv16	P2
 resource	Runtime/i386-windows/klist.exe	61440	b96d5fc0876487651db8f0cdd06c66e7b44301b4d36c1d8a10e6b13981274fc5	wine-build	build-macos/programs/klist/i386-windows/klist.exe	P2
 resource	Runtime/i386-windows/krnl386.exe16	512000	737683dd03caa0cdfe90e2ed204dab1639c4695b0e849670849633367f6ae154	wine-build	build-macos/dlls/krnl386.exe16/i386-windows/krnl386.exe16	P2
@@ -1981,7 +1982,7 @@ resource	Runtime/i386-windows/npmshtml.dll	32768	16280358b1ae9a6d53ae5b58a18bee8
 resource	Runtime/i386-windows/npptools.dll	36864	f637b26aa8f3036bd0e89e0e72c9307a6b9047d627aa01c7fdd31b651711e0e7	wine-build	build-macos/dlls/npptools/i386-windows/npptools.dll	P2
 resource	Runtime/i386-windows/nsi.dll	45056	e1c7f62e3e1ac7db9b415f8a0c670cece55e996a2ec76ae87ee57fe7bb9ecfd9	wine-build	build-macos/dlls/nsi/i386-windows/nsi.dll	P2
 resource	Runtime/i386-windows/nsiproxy.sys	32768	63f2090d76fe3497879693a736978cf0bad0f7488511efaacd8d4fccb3967dc6	wine-build	build-macos/dlls/nsiproxy.sys/i386-windows/nsiproxy.sys	P2
-resource	Runtime/i386-windows/ntdll.dll	942080	6411b7af8cf82c46aa46d8bc5c81aceede621b40e452539802ec117b284aa236	wine-build	build-macos/dlls/ntdll/i386-windows/ntdll.dll	P2
+resource	Runtime/i386-windows/ntdll.dll	942080	cb9d5dd1c36a6f490db8b62f119660e201b3305cd2d09c79487c9395b99fcc54	wine-build	build-macos/dlls/ntdll/i386-windows/ntdll.dll	P2
 resource	Runtime/i386-windows/ntdsapi.dll	61440	91a42f7a3112713e51b84d660b4fff5c15150db39036e483065e29098135749c	wine-build	build-macos/dlls/ntdsapi/i386-windows/ntdsapi.dll	P2
 resource	Runtime/i386-windows/ntoskrnl.exe	679936	c570161f2190a0712a747a3434dcf601701cbf42987ac3c0a18b010868668f68	wine-build	build-macos/dlls/ntoskrnl.exe/i386-windows/ntoskrnl.exe	P2
 resource	Runtime/i386-windows/ntprint.dll	45056	0f891342b8309612b84343f4d732bf85b0b7a7c5033fa184ec83a52531c8e39a	wine-build	build-macos/dlls/ntprint/i386-windows/ntprint.dll	P2
@@ -2364,7 +2365,7 @@ resource	Runtime/i386-windows/xmllite.dll	131072	eaa00dc52b17e1c4631452c588df70c
 resource	Runtime/i386-windows/xolehlp.dll	217088	47fa34ba3f9181434a79a2c38b699b8a021ecb17c544761623b5cc559ca3aaf2	wine-build	build-macos/dlls/xolehlp/i386-windows/xolehlp.dll	P2
 resource	Runtime/i386-windows/xpsprint.dll	32768	03bef0b4be2f453fdfb84785064698f18af0aad90f86285e53e9b7146f137dd8	wine-build	build-macos/dlls/xpsprint/i386-windows/xpsprint.dll	P2
 resource	Runtime/i386-windows/xpssvcs.dll	28672	20c72fb4fe690da091985162961d3ecf2440faae6223fd8f9cc678ffb39b811b	wine-build	build-macos/dlls/xpssvcs/i386-windows/xpssvcs.dll	P2
-resource	Runtime/aarch64-windows/xtajit.dll	5121024	ee4360b22f415e0434d0038a9d17cbc0a86ab778f4aeb37283c5de5cf8024b46	fex-wow64	libwow64fex.dll	P1-de
+resource	Runtime/aarch64-windows/xtajit.dll	5122048	a49a32b61f73d3fa979cb08b804720196d86d2b035def02f1276e1fbfba2c008	fex-wow64	libwow64fex.dll	P1-de
 resource	Runtime/vulkan/arm64ec-windows/d3d8.dll	1830912	e30267cc8f28188359d492da799f294980d5f78c2703992398bdab35bb167cdf	vulkan-pe	arm64ec-windows/d3d8.dll	P6-vulkan-pe
 resource	Runtime/vulkan/arm64ec-windows/d3d9.dll	7426048	16132abcdcac51a735d71ae4ea06535aae82878b3bb86e63ce23978a213f13ab	vulkan-pe	arm64ec-windows/d3d9.dll	P6-vulkan-pe
 resource	Runtime/vulkan/arm64ec-windows/d3d10core.dll	430080	bd784fc0f7da1724374bdeeb14a771eb5101938c6c23a3e893b5b8c316a0c6fd	vulkan-pe	arm64ec-windows/d3d10core.dll	P6-vulkan-pe
@@ -2376,16 +2377,21 @@ resource	Runtime/vulkan/i386-windows/d3d9.dll	7491584	64af9f2922d0424a406b6da9ef
 resource	Runtime/vulkan/i386-windows/d3d10core.dll	438272	667a647a191f01cef80050b514610644aa66fd2cfacd5c00035b6b068b65b774	vulkan-pe	i386-windows/d3d10core.dll	P6-vulkan-pe
 resource	Runtime/vulkan/i386-windows/d3d11.dll	8331264	94ab3cab4d2a3e80c1d159810fb5bb52b518a41a4eb3270ec735c7bf66ad2778	vulkan-pe	i386-windows/d3d11.dll	P6-vulkan-pe
 resource	Runtime/vulkan/i386-windows/dxgi.dll	5627904	ffac1ad03c7c0b2845c55bd7f8a5428c6d2237f4ccc9abd36c3fc76add87a6c0	vulkan-pe	i386-windows/dxgi.dll	P6-vulkan-pe
+resource	Runtime/vulkan/aarch64-windows/d3d12.dll	147456	f2ca5f41d7aa77b4d9db5904c1f209baa56f67a1769fe705d3a1cdb8720738a2	vulkan-pe	aarch64-windows/d3d12.dll	P6-vulkan-pe
+resource	Runtime/vulkan/aarch64-windows/d3d12core.dll	5734400	b57db18fbf5f20699320be257afd2c0d2fa044b9baca8bf18e843023cbd09bd1	vulkan-pe	aarch64-windows/d3d12core.dll	P6-vulkan-pe
+resource	Runtime/vulkan/aarch64-windows/dxgi.dll	4902912	e9afd4b98c4c1bef139371f3d4364a3b982b3790d87c7c06f0cf5733e7915680	vulkan-pe	aarch64-windows/dxgi.dll	P6-vulkan-pe
 resource	Runtime/vulkan-loader/arm64ec-windows/vulkan-1.dll	762880	db87edae47763dc52b0bbb20e3fef5713cb129de339b81943ff57f581b2d5daf	vulkan-loader	arm64ec-windows/vulkan-1.dll	P6-vulkan-loader
 resource	Runtime/vulkan-loader/arm64ec-windows/winevulkan.json	137	0947fde3a7cf0efea1fad4c0b0ea1822e122a56e0c821e39df68daf561ca50f8	vulkan-loader	arm64ec-windows/winevulkan.json	P6-vulkan-loader
+resource	Runtime/vulkan-loader/aarch64-windows/vulkan-1.dll	624128	1be90a18f185c5958e0273de88353c3f8398431581a0a1bb74694e5da545a3df	vulkan-loader	aarch64-windows/vulkan-1.dll	P6-vulkan-loader
+resource	Runtime/vulkan-loader/aarch64-windows/winevulkan.json	137	0947fde3a7cf0efea1fad4c0b0ea1822e122a56e0c821e39df68daf561ca50f8	vulkan-loader	aarch64-windows/winevulkan.json	P6-vulkan-loader
 resource	Runtime/steamapi/x86_64-windows/steam_api64.dll	8353280	f0db32854540fbfb0096e212436c03c7cee50f2671ce9bd14eab6da88484e713	steamapi	x86_64-windows/steam_api64.dll	P8-steamapi
 resource	Runtime/steamapi/i386-windows/steam_api.dll	8667648	0d6b96b7689a3286c891dd5b072f9f4b7ca88bf23ed84c2aba9b2b81106f7985	steamapi	i386-windows/steam_api.dll	P8-steamapi
 resource	Runtime/arm64ec-windows/xgameruntime.dll	2731520	996a90139955710b2eb1dc7fc10c9d9027322f0c77cf052bbafd3638df657efd	xbox	arm64ec-windows/xgameruntime.dll	P11-xgameruntime
 resource	Runtime/arm64ec-windows/libnghttp2.dll	243200	55e0d50f61b752a289bfab14da1c2b1d719bc0ab30db35f165aaa7308a7be98c	xbox	arm64ec-windows/libnghttp2.dll	P11-nghttp2
 resource	Runtime/arm64ec-windows/playport-session.exe	45056	5809fa8883fe08dbde32bcaed5f9c0e00b1dab4afe6f0eadfcb79b75fb42116c	session	playport-session.exe	P9-session
 resource	Runtime/arm64ec-windows/playport-url-opener.exe	5120	a4a9e67cec4f8df8e902e2a0714dd7c4828a4d3e0cabb65ef2fb6e214f0a6e4d	session	playport-url-opener.exe	P9-url-opener
-resource	Runtime/steamclient/x86_64-windows/steamclient64.dll	640000	bb25c97910ad23c1caf09d4fa8d383c0f3850792e279da239bc3f63961821e00	steamclient	steamclient64.dll	P9-steamclient
-resource	Runtime/steamclient/i386-windows/steamclient.dll	401408	7fab5325a929a63f12a8622bc2856460616d29bfa7337d7f166643c20972b0a4	steamclient	steamclient.dll	P9-steamclient
+resource	Runtime/steamclient/x86_64-windows/steamclient64.dll	640512	9eb519f562e4be368ade2f296f0bc6729a67763995abacb629d2194c3c05f073	steamclient	steamclient64.dll	P9-steamclient
+resource	Runtime/steamclient/i386-windows/steamclient.dll	401920	62fc9860e317c9ce8374559cc249fc6a49c4f3996cfe3b850e69d07a23a207fc	steamclient	steamclient.dll	P9-steamclient
 resource	Runtime/nls/c_1252.nls	66082	e2634ee32da7977d762d2d45be2053309ee718572a7d8bb0034180dc1b0b6b76	unix	wine/nls/c_1252.nls	nls
 resource	Runtime/nls/c_20127.nls	66082	951a19ce0d3c785d12ea94cb28ce5c2c096d302e35b3fb3e8b35248a006435ba	unix	wine/nls/c_20127.nls	nls
 resource	Runtime/nls/c_28591.nls	66082	aa52cf173808f65b117f0d7af574c11dde85133cccde306ccc57b5de50961b5c	unix	wine/nls/c_28591.nls	nls
@@ -2413,6 +2419,7 @@ resource	Runtime/nls/c_1257.nls	66082	6ee5c098f01433e56fd92bc66d8d5530946ad1dcee
 resource	Runtime/nls/c_1258.nls	66082	f1966c599370dac14cea80810075b260eaa4b97689c47f6317e5a4ec30c23496	unix	wine/nls/c_1258.nls	nls
 resource	Runtime/fonts/tahoma.ttf	143884	90f1abad4da0ce03da5d2277ee75a9600ce812d37c90eab76e0838ffa7937e55	unix	wine/fonts/tahoma.ttf	fonts
 resource	Runtime/fonts/tahomabd.ttf	137836	508a2acc88cd6abdd399ae79c9965db43fba75a46bb115117b55d2be2272d889	unix	wine/fonts/tahomabd.ttf	fonts
+resource	Runtime/fonts/marlett.ttf	6136	1a9b951ca1815344050ae6158263991e2145918bc74ad65d82bc6ec4056a57d1	unix	wine/fonts/marlett.ttf	fonts
 resource	Runtime/etc/hosts	23	c09f63cdcfc4b88b967913f191cacff1a7267d1a61c6e23ac5e096fabbc7c48d	unix	wine/dlls/ws2_32/hosts	etc
 resource	Runtime/etc/networks	16	ee98c4cf62868d3f2b529464fe1fb26a826dff02fd29e98533e731d06c2ec67b	unix	wine/dlls/ws2_32/networks	etc
 resource	Runtime/etc/protocol	478	5b4db9f0ff619a89deb22108119287c92e4ebff1399e3c57ff520477933ffe1f	unix	wine/dlls/ws2_32/protocol	etc
@@ -2427,7 +2434,7 @@ resource	Runtime/winsxs/msvcr90/msvcr90.manifest	374	c137bf556c09d6071bdfe0bb998
 resource	Runtime/winsxs/msxml3/msxml3.manifest	322	69304ab6275f1614af7ccc021bea1af6773566e1a21c4b169c02f3c535c740cb	unix	wine/dlls/msxml3/msxml3.manifest	winsxs
 resource	Runtime/winsxs/msxml4/msxml4.manifest	306	04e566672246f68a36f7ea72c0d21c2fa5d44ab71e7a5fa07c6ad8490f76ae83	unix	wine/dlls/msxml4/msxml4.manifest	winsxs
 resource	Runtime/winsxs/msxml6/msxml6.manifest	322	80318507a7351e74d73e25cbc850f60190a5e52c1586aa3043dfc50dc77a7ae7	unix	wine/dlls/msxml6/msxml6.manifest	winsxs
-resource	Runtime/registry/system.reg	1317572	3e3e5d2800c860430f20216ada704ba940849a0669354c33743b08b83b2c5ea4	registry	system.reg	P7-reg
+resource	Runtime/registry/system.reg	1317607	d1536fd471eac26382723d3e996bd380bc2578175a41fea8a8ead8c492d2c61f	registry	system.reg	P7-reg
 resource	Runtime/registry/user.reg	12233	5088f07a85858de831633f8873b83600e40a717851af5fbdc0e0fd041caf34a0	registry	user.reg	P7-reg
 resource	Runtime/certs/cacert.pem	188900	a41b5d356aea97a529fe27e0f7316d2f9d946d75927476cf9cf1b90637d00505	ca-bundle	cacert.pem	ca-bundle
 resource	Runtime/mono/wine-mono-11.3.0/bin/libmono-2.0-x86.dll	3725824	cda071f4f4948abc4ab85593ec06f3b633c7420dcf455d10157e06d460f2db9f	wine-mono	bin/libmono-2.0-x86.dll	wine-mono
@@ -5376,9 +5383,9 @@ resource	Runtime/mono/wine-mono-11.3.0/support/removeuserinstalls-x86.exe	12288	
 resource	Runtime/mono/wine-mono-11.3.0/support/removeuserinstalls-x86_64.exe	14848	716081b9913e005f0e1261f2c2a9d88da970fbe579c7dfd083774b228bd71675	wine-mono	support/removeuserinstalls-x86_64.exe	wine-mono
 resource	Runtime/mono/wine-mono-11.3.0/support/winemono-support.cab	1395918	857cb2bc7001aa6b94a90560a6996f7cf9fe3ebff72ac39e73ed5d05f83b78f4	wine-mono	support/winemono-support.cab	wine-mono
 resource	Runtime/mono/wine-mono-11.3.0/support/winemono-support.msi	22528	0567d9569c9ca7f678c7ccd4a5ccffbd9dc7bdd3c632ce204afaf7068bf9c2db	wine-mono	support/winemono-support.msi	wine-mono
-link	lib/libntdll_unix.a	4799984	fb50884c920524dd9221244f006178db0d3c0006fdce49daa156f9935ab07660	unix	mythic/app/Madeira/libntdll_unix.a	P3
-link	lib/libwin32u_unix.a	4136368	e8ded8744079e7dcd3cba9b69dc427b80ed7e2132a8d82aa2ecab8a158687f64	unix	mythic/app/Madeira/libwin32u_unix.a	P4-win32u
-link	lib/libwineserver.a	1214432	78f505018ee5ac887b8d8f7f77e9716662e28108cb17feeb432f0c273865399f	unix	mythic/app/Madeira/libwineserver.a	P4-server
+link	lib/libntdll_unix.a	4913048	289e8d3f3285dc64039069ad53ba561566c680a1c285ba6d4bba1dc7327c3b40	unix	mythic/app/Madeira/libntdll_unix.a	P3
+link	lib/libwin32u_unix.a	4136872	d447905dcc2dfb2bc8efcf518478b5b0d499cd254c1f33d1d9cee5fec5c8e65f	unix	mythic/app/Madeira/libwin32u_unix.a	P4-win32u
+link	lib/libwineserver.a	1215072	59234f2d76684299396f455b0a0bcd87aa4ba319ac9fb94bad0b5adb8aa540a3	unix	mythic/app/Madeira/libwineserver.a	P4-server
 link	lib/libgnutls.a	3603280	e9fb697d624bb63d1c89e8569f1a8e0e69e576175407853bf34a6279fa1673b3	unix	mythic/toolchains/gnutls-ios/lib/libgnutls.a	P4-crypto
 link	lib/libhogweed.a	1105792	247e869163901151301d2ff3c930a68c3742fbbb263a33b8bc10a98dfbd65b9f	unix	mythic/toolchains/gnutls-ios/lib/libhogweed.a	P4-crypto
 link	lib/libnettle.a	1705864	ff2ecf070899ab728cf21dc13bb9463fdf5a79775a34c5f87e7d861fed2d9543	unix	mythic/toolchains/gnutls-ios/lib/libnettle.a	P4-crypto

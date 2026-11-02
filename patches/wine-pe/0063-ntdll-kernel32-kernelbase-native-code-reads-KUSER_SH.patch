@@ -1,0 +1,215 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 1 Nov 2026 23:45:57 +0100
+Subject: [PATCH] ntdll, kernel32, kernelbase: native code reads
+ KUSER_SHARED_DATA where it is mapped
+
+iOS's 4 GB page zero leaves 0x7ffe0000 unmapped, so the unix side maps
+KUSER_SHARED_DATA elsewhere (0x7038000000 on the phone) and emulates every
+read of the architectural address in the Mach exception handler (madeira-unix
+ml952). The ARM64EC DLLs read it at 0x7ffe0000 too: in World of Warcraft's
+two owner plays of 2026-11-01, 446 of the 457 sampled sub-floor reads were
+kernel32's GetTickCount (ldr w0,[x8] at kernel32+0x17c3c, x8 = 0x7ffe0320),
+about 0.9-1.7 k emulated faults a second on average and 3-4 k in two-minute
+bursts, each 10-20 us of the exception thread with the caller suspended.
+Pool-head images are out of branch reach of the read stubs (madeira-unix
+0283), so this site never got one ("[split-stub] no stub for pc=...c3c").
+
+ntdll exports its user_shared_data pointer as ios_user_shared_data (arm64
+and arm64ec only), which the iOS unix loader sets to the real mapping before
+any PE code runs. ntdll's own readers (NtGetTickCount, the interrupt time,
+the XState configuration, RtlIsProcessorFeaturePresent) already go through
+that pointer. kernel32 and kernelbase keep one pointer each instead of their
+per-file constants and take ntdll's at process attach (GetTickCount,
+GetTickCount64, QueryInterruptTime, GetLargePageMinimum,
+GetSystemDEPPolicy). RtlLocateExtendedFeature2 takes a caller's
+&SharedUserData->XState at the architectural address as ntdll's own. Guest
+code still reads 0x7ffe0000. Where the loader does not write the export the
+pointer stays 0x7ffe0000 and nothing changes.
+
+Linear: PLA-610
+Class: ios-port
+Evidence: docs/evidence/2026-11-01-wow-x64-fex.md
+Offered-upstream: no; KUSER_SHARED_DATA away from 0x7ffe0000 is the iOS port's
+---
+ dlls/kernel32/kernel_main.c    |  1 +
+ dlls/kernel32/kernel_private.h |  2 ++
+ dlls/kernel32/process.c        |  2 --
+ dlls/kernel32/sync.c           | 12 +++++++++++-
+ dlls/kernelbase/kernelbase.h   |  3 +++
+ dlls/kernelbase/main.c         |  1 +
+ dlls/kernelbase/memory.c       |  2 --
+ dlls/kernelbase/sync.c         | 12 +++++++++++-
+ dlls/ntdll/exception.c         |  5 +++++
+ dlls/ntdll/ntdll.spec          |  2 ++
+ dlls/ntdll/thread.c            |  5 +++++
+ 11 files changed, 41 insertions(+), 6 deletions(-)
+
+diff --git a/dlls/kernel32/kernel_main.c b/dlls/kernel32/kernel_main.c
+index edf54e8..644fe88 100644
+--- a/dlls/kernel32/kernel_main.c
++++ b/dlls/kernel32/kernel_main.c
+@@ -128,6 +128,7 @@ static void copy_startup_info(void)
+  */
+ static BOOL process_attach( HMODULE module )
+ {
++    init_user_shared_data();
+     RtlSetUnhandledExceptionFilter( UnhandledExceptionFilter );
+ 
+     NtQuerySystemInformation( SystemBasicInformation, &system_info, sizeof(system_info), NULL );
+diff --git a/dlls/kernel32/kernel_private.h b/dlls/kernel32/kernel_private.h
+index 3c35a4b..26bbc3c 100644
+--- a/dlls/kernel32/kernel_private.h
++++ b/dlls/kernel32/kernel_private.h
+@@ -41,6 +41,8 @@ static inline BOOL set_ntstatus( NTSTATUS status )
+ }
+ 
+ extern SYSTEM_BASIC_INFORMATION system_info;
++extern const struct _KUSER_SHARED_DATA *user_shared_data;
++extern void init_user_shared_data(void);
+ 
+ extern WCHAR *FILE_name_AtoW( LPCSTR name, BOOL alloc );
+ extern DWORD FILE_name_WtoA( LPCWSTR src, INT srclen, LPSTR dest, INT destlen );
+diff --git a/dlls/kernel32/process.c b/dlls/kernel32/process.c
+index 9bbb18d..925e138 100644
+--- a/dlls/kernel32/process.c
++++ b/dlls/kernel32/process.c
+@@ -39,8 +39,6 @@
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(process);
+ 
+-static const struct _KUSER_SHARED_DATA *user_shared_data = (struct _KUSER_SHARED_DATA *)0x7ffe0000;
+-
+ typedef struct
+ {
+     LPSTR lpEnvAddress;
+diff --git a/dlls/kernel32/sync.c b/dlls/kernel32/sync.c
+index f3ca404..5bf4b5a 100644
+--- a/dlls/kernel32/sync.c
++++ b/dlls/kernel32/sync.c
+@@ -42,7 +42,17 @@
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(sync);
+ 
+-static const struct _KUSER_SHARED_DATA *user_shared_data = (struct _KUSER_SHARED_DATA *)0x7ffe0000;
++const struct _KUSER_SHARED_DATA *user_shared_data = (struct _KUSER_SHARED_DATA *)0x7ffe0000;
++
++/* Playport: read KUSER_SHARED_DATA where ntdll does (ntdll's thread.c): on iOS the
++ * page is not at 0x7ffe0000, and every read there is an emulated Mach fault. */
++void init_user_shared_data(void)
++{
++    const struct _KUSER_SHARED_DATA * const *ptr;
++
++    if ((ptr = RtlFindExportedRoutineByName( GetModuleHandleW( L"ntdll.dll" ), "ios_user_shared_data" )) && *ptr)
++        user_shared_data = *ptr;
++}
+ 
+ 
+ static void get_create_object_attributes( OBJECT_ATTRIBUTES *attr, UNICODE_STRING *nameW,
+diff --git a/dlls/kernelbase/kernelbase.h b/dlls/kernelbase/kernelbase.h
+index e46ca0f..0b8925c 100644
+--- a/dlls/kernelbase/kernelbase.h
++++ b/dlls/kernelbase/kernelbase.h
+@@ -38,6 +38,9 @@ extern void init_startup_info( RTL_USER_PROCESS_PARAMETERS *params );
+ extern void init_locale( HMODULE module );
+ extern void init_console(void);
+ extern BOOL is_console_handle( HANDLE );
++extern void init_user_shared_data(void);
++
++extern const struct _KUSER_SHARED_DATA *user_shared_data;
+ 
+ extern const WCHAR windows_dir[];
+ extern const WCHAR system_dir[];
+diff --git a/dlls/kernelbase/main.c b/dlls/kernelbase/main.c
+index 8c37e5d..60d2989 100644
+--- a/dlls/kernelbase/main.c
++++ b/dlls/kernelbase/main.c
+@@ -44,6 +44,7 @@ BOOL WINAPI DllMain( HINSTANCE hinst, DWORD reason, LPVOID reserved )
+     if (reason == DLL_PROCESS_ATTACH)
+     {
+         DisableThreadLibraryCalls( hinst );
++        init_user_shared_data();
+         IsWow64Process( GetCurrentProcess(), &is_wow64 );
+         init_global_data();
+         init_locale( hinst );
+diff --git a/dlls/kernelbase/memory.c b/dlls/kernelbase/memory.c
+index cebbc20..49155a0 100644
+--- a/dlls/kernelbase/memory.c
++++ b/dlls/kernelbase/memory.c
+@@ -40,8 +40,6 @@ WINE_DEFAULT_DEBUG_CHANNEL(heap);
+ WINE_DECLARE_DEBUG_CHANNEL(virtual);
+ WINE_DECLARE_DEBUG_CHANNEL(globalmem);
+ 
+-static const struct _KUSER_SHARED_DATA *user_shared_data = (struct _KUSER_SHARED_DATA *)0x7ffe0000;
+-
+ static CRITICAL_SECTION memstatus_section;
+ static CRITICAL_SECTION_DEBUG critsect_debug =
+ {
+diff --git a/dlls/kernelbase/sync.c b/dlls/kernelbase/sync.c
+index 0aef855..688f4ea 100644
+--- a/dlls/kernelbase/sync.c
++++ b/dlls/kernelbase/sync.c
+@@ -39,7 +39,17 @@
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(sync);
+ 
+-static const struct _KUSER_SHARED_DATA *user_shared_data = (struct _KUSER_SHARED_DATA *)0x7ffe0000;
++const struct _KUSER_SHARED_DATA *user_shared_data = (struct _KUSER_SHARED_DATA *)0x7ffe0000;
++
++/* Playport: read KUSER_SHARED_DATA where ntdll does (ntdll's thread.c): on iOS the
++ * page is not at 0x7ffe0000, and every read there is an emulated Mach fault. */
++void init_user_shared_data(void)
++{
++    const struct _KUSER_SHARED_DATA * const *ptr;
++
++    if ((ptr = RtlFindExportedRoutineByName( GetModuleHandleW( L"ntdll.dll" ), "ios_user_shared_data" )) && *ptr)
++        user_shared_data = *ptr;
++}
+ 
+ /* check if current version is NT or Win95 */
+ static inline BOOL is_version_nt(void)
+diff --git a/dlls/ntdll/exception.c b/dlls/ntdll/exception.c
+index ec04f7e..419dfdc 100644
+--- a/dlls/ntdll/exception.c
++++ b/dlls/ntdll/exception.c
+@@ -967,6 +967,11 @@ void * WINAPI RtlLocateExtendedFeature2( CONTEXT_EX *context_ex, ULONG feature_i
+         return NULL;
+     }
+ 
++    /* Playport: a caller's &SharedUserData->XState is the architectural address, which
++     * is not where ntdll reads KUSER_SHARED_DATA on iOS (thread.c). */
++    if (xstate_config == &((struct _KUSER_SHARED_DATA *)0x7ffe0000)->XState)
++        xstate_config = &user_shared_data->XState;
++
+     if (xstate_config != &user_shared_data->XState)
+     {
+         FIXME( "Custom xstate configuration is not supported.\n" );
+diff --git a/dlls/ntdll/ntdll.spec b/dlls/ntdll/ntdll.spec
+index db2ec2c..08d3293 100644
+--- a/dlls/ntdll/ntdll.spec
++++ b/dlls/ntdll/ntdll.spec
+@@ -1786,6 +1786,8 @@
+ @ extern -private ios_counters_on
+ @ extern -private ios_fex_arena_base
+ @ extern -private ios_fex_arena_end
++# Playport: where KUSER_SHARED_DATA is mapped; the iOS loader writes it (thread.c)
++@ extern -private -arch=arm64,arm64ec ios_user_shared_data user_shared_data
+ @ extern -private __wine_unixlib_handle
+ 
+ # Debugging
+diff --git a/dlls/ntdll/thread.c b/dlls/ntdll/thread.c
+index bfecc07..eaa108e 100644
+--- a/dlls/ntdll/thread.c
++++ b/dlls/ntdll/thread.c
+@@ -35,6 +35,11 @@ WINE_DECLARE_DEBUG_CHANNEL(relay);
+ WINE_DECLARE_DEBUG_CHANNEL(pid);
+ WINE_DECLARE_DEBUG_CHANNEL(timestamp);
+ 
++/* Playport: exported as ios_user_shared_data (ntdll.spec). On iOS the 4 GB page
++ * zero leaves 0x7ffe0000 unmapped; the unix loader writes where the page really is
++ * before any PE code runs, so ntdll's native code reads it there instead of taking
++ * an emulated Mach fault per read, and kernel32 and kernelbase read it from here.
++ * Guest code keeps reading 0x7ffe0000, which the unix side emulates. */
+ struct _KUSER_SHARED_DATA *user_shared_data = (void *)0x7ffe0000;
+ 
+ struct debug_info

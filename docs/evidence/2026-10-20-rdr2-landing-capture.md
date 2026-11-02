@@ -1,6 +1,6 @@
 # 2026-10-20: RDR2's blue band was a 124×11 10-bit drawable: a second swap chain reconfigured the shared CAMetalLayer, and the game kept presenting its 1280×720 one; with the layer configured again per swap chain (mesa 0045) the landing page renders. Also: KosmicKrisp captures with no timestamp counter heap (mesa 0044)
 
-**Linear:** PLA-364 (related: PLA-413, PLA-416). **Plan:** `.work/plans/rdr2-blue-band.md`.
+**Linear:** PLA-364 (related: PLA-413, PLA-416). **Plan:** [PLA-364](https://linear.app/playportdev/issue/PLA-364#comment-53e30d84).
 **Follows:** [rdr2-landing-press](2026-10-19-rdr2-landing-press.md), whose capture KosmicKrisp's counter heap
 refused.
 

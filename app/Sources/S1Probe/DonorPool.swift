@@ -108,13 +108,13 @@ enum DonorPool {
     nonisolated(unsafe) private static var growthTimer: DispatchSourceTimer?
 
     /// Every growthCheckInterval seconds, on a utility queue, the phone's spare memory and
-    /// jetsam's level decide whether the pool may grow (DonorPoolSizing.growthStop and
-    /// growthResumes); a stopped pool backs new commits only with pages it has used before,
-    /// so new memory is the app's own and jetsam sees it. One `donor-pool: pressure` line per
-    /// change.
+    /// jetsam's level decide whether the pool may grow (DonorPoolSizing.Growth, decision 0105
+    /// as amended: it also resumes on spare memory alone); a stopped pool backs new commits only
+    /// with pages it has used before, so new memory is the app's own and jetsam sees it. One
+    /// `donor-pool: pressure` line per change.
     private static func watchGrowth(physicalMB: Int) {
         let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
-        var growing = true
+        growthLock.lock(); growth = DonorPoolSizing.Growth(physicalMB: physicalMB); growthLock.unlock()
         timer.schedule(deadline: .now() + .seconds(growthCheckInterval), repeating: .seconds(growthCheckInterval))
         timer.setEventHandler {
             let s = pp_memory_system()
@@ -123,20 +123,28 @@ enum DonorPool {
             let level = s["level"]?.intValue ?? -1
             let readings = "spare_mb=\(spare) level=\(level) pressure_level=\(s["pressure"]?.intValue ?? -1) "
                 + "floor_mb=\(DonorPoolSizing.spareFloorMB(physicalMB: physicalMB))"
-            if growing, let why = DonorPoolSizing.growthStop(spareMB: spare, level: level, physicalMB: physicalMB) {
-                growing = false
+            growthLock.lock()
+            let change = growth?.check(spareMB: spare, level: level)
+            growthLock.unlock()
+            switch change {
+            case .stopped(let why)?:
                 pp_guest_pool_set_growth(false)
                 log("pressure: growth stopped (\(why)) " + readings)
                 report("growth stop")
-            } else if !growing, DonorPoolSizing.growthResumes(spareMB: spare, level: level, physicalMB: physicalMB) {
-                growing = true
+            case .resumed(let why)?:
                 pp_guest_pool_set_growth(true)
-                log("pressure: growth resumed " + readings)
+                log("pressure: growth resumed (\(why)) " + readings)
+            case nil:
+                break
             }
         }
         growthTimer = timer
         timer.resume()
     }
+
+    /// The growth checks' state, read by the stats lines too.
+    nonisolated(unsafe) private static var growth: DonorPoolSizing.Growth?
+    private static let growthLock = NSLock()
 
     /// Seconds between the stats lines while the pool is installed (the title runs in this
     /// process, which ends with it: decision 0029).
@@ -188,7 +196,26 @@ enum DonorPool {
             "madv_zeroed_mb=\(mb("madv_zeroed_bytes"))", "madv_zero_ms_total=\(n("madv_zero_ms_total"))",
             "madv_failures=\(n("madv_failures"))", "growing=\(n("growing"))", "growth_refused=\(n("growth_refused"))",
             "app_footprint_mb=\(footprint)", "app_available_mb=\(available)",
-        ]
+        ] + growthLevelFields(stopped: n("growing") == 0)
         log("stats at \(when): " + fields.joined(separator: " ") + " " + DonorRounds.system())
+    }
+
+    /// The level and spare memory the growth check compares (watchGrowth), with its thresholds, and
+    /// while the pool is stopped what it still waits for (`resume_wait`, DonorPoolSizing.Growth.resumeWait).
+    private static func growthLevelFields(stopped: Bool) -> [String] {
+        let s = pp_memory_system()
+        func mb(_ k: String) -> Int { Int((s[k]?.uint64Value ?? 0) >> 20) }
+        let spare = mb("free") + mb("inactive") + mb("speculative") + mb("purgeable")
+        let level = s["level"]?.intValue ?? -1
+        var fields = ["level=\(level)", "level_floor=\(DonorPoolSizing.levelFloor)",
+                      "level_resume=\(DonorPoolSizing.levelFloor + DonorPoolSizing.levelResumeMargin)", "spare_mb=\(spare)"]
+        growthLock.lock()
+        let g = growth
+        growthLock.unlock()
+        if let resumedAt = g?.spareResumeLevel { fields.append("spare_resume_level=\(resumedAt)") }
+        if stopped, let wait = g?.resumeWait(spareMB: spare, level: level) {
+            fields.append("resume_wait=\"\(wait)\"")
+        }
+        return fields
     }
 }

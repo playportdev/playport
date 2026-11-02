@@ -1,6 +1,6 @@
 # Vulkan performance: Wine's Vulkan present path
 
-**Date:** 2026-10-08. **Plan:** [Vulkan performance](../plans/2026-10-06-vulkan-performance.md)
+**Date:** 2026-10-08. **Plan:** [Vulkan performance](https://linear.app/playportdev/issue/PLA-680)
 (PLA-72), work-queue item 1. **Change:** `patches/wine-unix` 0021 (win32u: know the
 desktop window before a client surface's per-present update). **Controls:**
 [route-v2 controls](2026-10-08-vulkan-perf-controls.md) (IPA `0d4a0f1e…`).

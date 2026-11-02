@@ -4,7 +4,7 @@
 **Linear:** [PLA-365](https://linear.app/playportdev/issue/PLA-365) (step 1),
 [PLA-254](https://linear.app/playportdev/issue/PLA-254),
 [PLA-364](https://linear.app/playportdev/issue/PLA-364).
-**Plan:** [publisher launchers](../plans/2026-10-12-launchers.md), Progress (Rockstar track), chunk 2.
+**Plan:** [publisher launchers](https://linear.app/playportdev/issue/PLA-616), Progress (Rockstar track), chunk 2.
 
 Phone: iPhone18,4, iOS 27.0.1. Runs are under `$PLAYPORT_BUILD/ui-runs/`.
 

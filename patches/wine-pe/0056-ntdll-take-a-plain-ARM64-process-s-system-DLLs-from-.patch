@@ -1,0 +1,80 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 30 Oct 2026 13:19:41 +0100
+Subject: [PATCH] ntdll: take a plain ARM64 process's system DLLs from sysarm64
+ on iOS
+
+On iOS the aarch64 (non-EC) ntdll now also runs a plain ARM64 child of
+the ARM64EC session (madeira-unix 0249), which has no WowTebOffset. The
+sysarm64 lookup of 0015 required one, so such a child would have looked
+for kernel32.dll and the rest in system32, the session's ARM64EC set,
+whose images it cannot load.
+
+The lookup, now open_sysarm64_dll, applies to every process this build
+runs: on iOS that is the native side of a WoW64 process or a plain ARM64
+child, and neither has another system set. Already loaded modules are
+still found first; the ARM64EC and i386 builds are unchanged.
+
+Linear: PLA-512
+Class: feature
+Evidence: docs/evidence/2026-10-30-native-arm64-child.md
+Offered-upstream: no; the farm layout is specific to the iOS port
+---
+ dlls/ntdll/loader.c | 20 ++++++++++----------
+ 1 file changed, 10 insertions(+), 10 deletions(-)
+
+diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
+index a99c46f..3a1f7f1 100644
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -4449,16 +4449,17 @@ static NTSTATUS open_system_only_dll_by_path( const WCHAR *path, UNICODE_STRING
+ 
+ #if defined(__aarch64__) && !defined(__arm64ec__)
+ /***********************************************************************
+- *	open_wow64_native_dll
++ *	open_sysarm64_dll
+  *
+  * Playport: system32 is the iOS session's ARM64EC set, and is_valid_binary
+- * accepts any machine in a WoW64 process, so the native loader of a WoW64
+- * process takes a bare or system32 name from C:\windows\sysarm64, the
+- * aarch64 set, first.
++ * accepts any machine in a WoW64 process, so the native loader takes a bare
++ * or system32 name from C:\windows\sysarm64, the aarch64 set, first. On iOS
++ * this build runs only as the native side of a WoW64 process or as a plain
++ * ARM64 child of the ARM64EC session, which have no other system set.
+  */
+-static NTSTATUS open_wow64_native_dll( const WCHAR *libname, UNICODE_STRING *nt_name, WINE_MODREF **pwm,
+-                                       HANDLE *mapping, SECTION_IMAGE_INFORMATION *image_info,
+-                                       struct file_id *id )
++static NTSTATUS open_sysarm64_dll( const WCHAR *libname, UNICODE_STRING *nt_name, WINE_MODREF **pwm,
++                                   HANDLE *mapping, SECTION_IMAGE_INFORMATION *image_info,
++                                   struct file_id *id )
+ {
+     static const WCHAR sysarm64W[] = L"\\??\\C:\\windows\\sysarm64\\";
+     static const WCHAR system32W[] = L"C:\\windows\\system32\\";
+@@ -4467,7 +4468,6 @@ static NTSTATUS open_wow64_native_dll( const WCHAR *libname, UNICODE_STRING *nt_
+     WCHAR buf[MAX_PATH];
+     NTSTATUS status;
+ 
+-    if (!NtCurrentTeb()->WowTebOffset) return STATUS_DLL_NOT_FOUND;
+     for (p = libname; *p; p++) if (*p == '\\' || *p == '/') base = p + 1;
+     if (base != libname)
+     {
+@@ -4536,7 +4536,7 @@ static NTSTATUS find_dll_file( const WCHAR *load_path, const WCHAR *libname, UNI
+                 return STATUS_DLL_NOT_FOUND;
+             }
+ #if defined(__aarch64__) && !defined(__arm64ec__)
+-            if (!open_wow64_native_dll( libname, nt_name, pwm, mapping, image_info, id )) return STATUS_SUCCESS;
++            if (!open_sysarm64_dll( libname, nt_name, pwm, mapping, image_info, id )) return STATUS_SUCCESS;
+ #endif
+             if (!open_known_dll( libname, nt_name, pwm, mapping, image_info, id )) return STATUS_SUCCESS;
+             if (!open_system_only_dll( libname, nt_name, pwm, mapping, image_info, id )) return STATUS_SUCCESS;
+@@ -4545,7 +4545,7 @@ static NTSTATUS find_dll_file( const WCHAR *load_path, const WCHAR *libname, UNI
+     else if (!open_system_only_dll_by_path( libname, nt_name, pwm, mapping, image_info, id )) return STATUS_SUCCESS;
+ 
+ #if defined(__aarch64__) && !defined(__arm64ec__)
+-    if (contains_path( libname ) && !open_wow64_native_dll( libname, nt_name, pwm, mapping, image_info, id ))
++    if (contains_path( libname ) && !open_sysarm64_dll( libname, nt_name, pwm, mapping, image_info, id ))
+     {
+         RtlFreeHeap( GetProcessHeap(), 0, fullname );
+         return STATUS_SUCCESS;

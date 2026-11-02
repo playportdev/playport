@@ -1,0 +1,75 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sat, 31 Oct 2026 21:10:00 +0100
+Subject: [PATCH] Winios: post a Unicode character for the host app
+
+The host could post only virtual keys, so text reached a guest window
+only as the keys of a US layout: no character outside it (a password's
+symbols, an accented letter) could be typed, and the host had to know
+the layout to type one at all.
+
+winios_post_char queues one UTF-16 code unit as a press and a release
+flagged KEYEVENTF_UNICODE. The drain hands it to win32u's
+winios_drv_post_char (patches/madeira-unix), which sends it with wVk 0
+and wScan the unit, as SendInput does: the server makes it VK_PACKET
+and TranslateMessage posts WM_CHAR with the unit to the focused window.
+Nothing logs it.
+
+Linear: PLA-267
+Class: host-app
+Evidence: tools/tests/test_key_logging.py, app/HostIOKit/Tests/HostIOKitTests/TextBarTests.swift (host checks; phone gate not run)
+Offered-upstream: no; the host app's text bar
+---
+ app/Madeira/Winios/Winios.m | 21 ++++++++++++++++++++-
+ 1 file changed, 20 insertions(+), 1 deletion(-)
+
+diff --git a/app/Madeira/Winios/Winios.m b/app/Madeira/Winios/Winios.m
+index d57beda..44fceff 100644
+--- a/app/Madeira/Winios/Winios.m
++++ b/app/Madeira/Winios/Winios.m
+@@ -450,6 +450,9 @@ void winios_pWindowPosChanged(HWND hwnd, HWND insert_after, HWND owner_hint, UIN
+ 
+ extern void winios_drv_post_mouse(int x, int y, unsigned int flags, unsigned int mouse_data, void *hwnd);
+ extern void winios_drv_post_key(unsigned short vk, unsigned int flags);
++/* Playport: a Unicode character (one UTF-16 unit) as INPUT_KEYBOARD with
++ * KEYEVENTF_UNICODE (driver_ios.c; patches/madeira-unix). */
++extern void winios_drv_post_char(unsigned short unit, unsigned int flags);
+ extern void winios_dump_window_tree(void);
+ extern void ios_dump_all_thread_stacks(void);
+ 
+@@ -520,6 +523,20 @@ void winios_post_key_extended(int vk, int down) {
+     winios_q_push_ev(WINIOS_EV_KEY, vk, 0, 0x0001 | (down ? 0 : KEYEVENTF_KEYUP), 0);
+ }
+ 
++/* Playport (app HostIO, its text bar): one UTF-16 code unit typed, posted as
++ * a key press and release with KEYEVENTF_UNICODE (0x0004). win32u's
++ * winios_drv_post_char sends it with wVk 0 and wScan the unit; the server
++ * makes it VK_PACKET and TranslateMessage posts WM_CHAR with the unit, as
++ * SendInput does on Windows, so any character a keyboard layout lacks types.
++ * A character beyond the BMP is two calls, its surrogates in order. Like
++ * winios_post_key, nothing logs it. */
++#define WINIOS_EV_CHAR 4
++#define KEYEVENTF_UNICODE 0x0004
++void winios_post_char(unsigned int unit) {
++    winios_q_push_ev(WINIOS_EV_CHAR, (int)(unit & 0xffff), 0, KEYEVENTF_UNICODE, 0);
++    winios_q_push_ev(WINIOS_EV_CHAR, (int)(unit & 0xffff), 0, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, 0);
++}
++
+ /* Playport (app HostIO): two event kinds the host posts that only a
+  * Wine thread can resolve, so they are converted here, in the drain, which runs
+  * on the guest thread that is pumping its messages.
+@@ -679,11 +696,13 @@ BOOL winios_pProcessEvents(DWORD mask) {
+         g_input_q.tail = (g_input_q.tail + 1) % WINIOS_RING_SIZE;
+         pthread_mutex_unlock(&g_input_q.lock);
+ 
+-        if (e.type != WINIOS_EV_KEY) {   /* Playport: a key's code is the text typed */
++        if (e.type != WINIOS_EV_KEY && e.type != WINIOS_EV_CHAR) {   /* Playport: a key's code is the text typed */
+             fprintf(stderr, "[winios] drain type=%u x=%d y=%d flags=0x%x\n", e.type, e.x, e.y, e.flags); fflush(stderr);
+         }
+         if (e.type == WINIOS_EV_KEY)
+             winios_drv_post_key((unsigned short)e.x, e.flags);
++        else if (e.type == WINIOS_EV_CHAR)
++            winios_drv_post_char((unsigned short)e.x, e.flags);
+         else if (e.type == WINIOS_EV_CLIENT_MOUSE)
+             winios_drain_client_mouse(&e);
+         else if (e.type == WINIOS_EV_FOCUS)

@@ -1,0 +1,121 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: playportdev <dev@playport.dev>
+Date: Fri, 30 Oct 2026 22:32:16 +0100
+Subject: [PATCH] ntdll: after repeated underruns, play whole callbacks of a
+ stream or none
+
+A starved render stream left a hole in every RemoteIO callback: at RDR2's
+46 % delivery each 21 ms callback played about 10 ms and then silence,
+which a listener hears as distortion (PLA-364).
+
+A stream short in 2 of its last 8 callbacks now plays what it has, then
+plays nothing until max(one callback, 20 ms) of its frames are queued,
+capped at half its ring, or for at most 3 callbacks; then it plays
+again. While it waits, its position holds, as on any underrun, and the
+callbacks count as short with all their frames missing. A stream that is
+never short, or short once in 8 callbacks, plays exactly as before.
+Nothing is dropped. MADEIRA_AUDIO_REFILL=0 (read at process attach;
+an always-on line says so) turns it off.
+
+Linear: PLA-364
+Class: feature
+Evidence: docs/evidence/2026-10-30-rdr2-kk-audio-diagnostics.md
+Offered-upstream: no
+---
+ build/ntdll-unix/audio_null_ios.c | 45 +++++++++++++++++++++++++++++++
+ 1 file changed, 45 insertions(+)
+
+diff --git a/build/ntdll-unix/audio_null_ios.c b/build/ntdll-unix/audio_null_ios.c
+index e34b265..a85a24a 100644
+--- a/build/ntdll-unix/audio_null_ios.c
++++ b/build/ntdll-unix/audio_null_ios.c
+@@ -326,6 +326,10 @@ struct ios_stream {
+     UINT32 producer_lines;       /* getbuf-producer lines printed */
+     _Atomic uint64_t caller_switches; /* GetBuffers by another thread than the one before */
+     struct ios_rt_thread *rt;    /* the producer this driver promoted (decision 0172); g_rt_lock */
++    /* Playport (decision 0172): the RT callback's underrun hysteresis, see
++     * ios_mix_stream; reset at Start */
++    _Atomic uint32_t short_history;    /* bit i: the i-th callback before was short */
++    _Atomic uint32_t refill_callbacks; /* silent callbacks since a refill began, 0 = none */
+ };
+ 
+ #include "audio_wow64_buffer.h"
+@@ -507,11 +511,24 @@ static uint64_t elapsed_frames(const struct ios_stream *s) {
+  * atomics only -- no locks, no allocation, no logging, no Wine calls.
+  * Underrun mixes what is there and leaves the rest alone, which is
+  * WASAPI-correct: padding drains to 0 and the position clock pauses. */
++/* Playport (decision 0172): a stream that is short in IOS_REFILL_SHORTS of
++ * its last 8 callbacks plays nothing until max(one callback, IOS_REFILL_MS)
++ * of its frames are queued, or for at most IOS_REFILL_MAX_CALLBACKS
++ * callbacks. A starved producer then gives whole silent callbacks between
++ * whole ones instead of a hole in each; a stream that is short once in a
++ * while, or never, plays exactly as before. Nothing is dropped and the
++ * position still holds while nothing plays. Off with MADEIRA_AUDIO_REFILL=0. */
++#define IOS_REFILL_SHORTS 2
++#define IOS_REFILL_MS 20u
++#define IOS_REFILL_MAX_CALLBACKS 3u
++static int g_refill_on = 1;        /* read once at process attach */
++
+ static void ios_mix_stream(struct ios_stream *s, float *out, UInt32 nframes,
+                            UINT32 dev_ch, UINT32 dev_rate)
+ {
+     UINT32 cap = s->buffer_frames, sch = s->channels, fb = s->frame_bytes;
+     uint64_t play, wr, avail, need;
++    uint32_t history, refill;
+     UInt32 f;
+ 
+     if (!s->started || !s->mixable || !s->ring || !cap || !sch || !fb) return;
+@@ -524,11 +541,32 @@ static void ios_mix_stream(struct ios_stream *s, float *out, UInt32 nframes,
+     if (s->sample_rate == dev_rate) need = nframes;
+     else need = ((uint64_t)nframes * s->sample_rate + dev_rate - 1) / dev_rate;
+     atomic_fetch_add_explicit(&s->mix_callbacks, 1, memory_order_relaxed);
++    refill = atomic_load_explicit(&s->refill_callbacks, memory_order_relaxed);
++    if (refill) {
++        uint64_t target = (uint64_t)s->sample_rate * IOS_REFILL_MS / 1000;
++        if (target < need) target = need;
++        if (target > cap / 2) target = cap / 2;
++        if (avail < target && refill <= IOS_REFILL_MAX_CALLBACKS) {
++            /* still refilling: the whole callback is silence, the clock holds */
++            atomic_store_explicit(&s->refill_callbacks, refill + 1, memory_order_relaxed);
++            atomic_fetch_add_explicit(&s->short_callbacks, 1, memory_order_relaxed);
++            atomic_fetch_add_explicit(&s->underrun_frames, need, memory_order_relaxed);
++            return;
++        }
++        atomic_store_explicit(&s->refill_callbacks, 0, memory_order_relaxed);
++        atomic_store_explicit(&s->short_history, 0, memory_order_relaxed);
++    }
++    history = atomic_load_explicit(&s->short_history, memory_order_relaxed) << 1;
+     if (avail < need) {
+         atomic_fetch_add_explicit(&s->short_callbacks, 1, memory_order_relaxed);
+         atomic_fetch_add_explicit(&s->underrun_frames, need - avail, memory_order_relaxed);
+         need = avail;
++        history |= 1;
++        /* what is there still plays; the refill starts with the next callback */
++        if (g_refill_on && wr && __builtin_popcount(history & 0xff) >= IOS_REFILL_SHORTS)
++            atomic_store_explicit(&s->refill_callbacks, 1, memory_order_relaxed);
+     }
++    atomic_store_explicit(&s->short_history, history, memory_order_relaxed);
+ 
+     for (f = 0; f < nframes; f++)
+     {
+@@ -1186,6 +1224,11 @@ static NTSTATUS ios_process_attach(void *args) {
+         g_rt_on = !(e && !strcmp(e, "0"));
+         if (!g_rt_on) fprintf(stderr, "[ios_audio] rt producer promotion off (MADEIRA_AUDIO_RT=0)\n");
+     }
++    {   /* Playport (decision 0172): the callback reads no environment */
++        const char *e = getenv("MADEIRA_AUDIO_REFILL");
++        g_refill_on = !(e && !strcmp(e, "0"));
++        if (!g_refill_on) fprintf(stderr, "[ios_audio] underrun refill off (MADEIRA_AUDIO_REFILL=0)\n");
++    }
+     return STATUS_SUCCESS;
+ }
+ 
+@@ -1403,6 +1446,8 @@ static NTSTATUS ios_start(void *args) {
+         s->start_mach = mach_absolute_time();
+         s->caller_run = 0;          /* Playport (PLA-364): find the producer again */
+         s->producer_tid = 0;
++        atomic_store_explicit(&s->short_history, 0, memory_order_relaxed);
++        atomic_store_explicit(&s->refill_callbacks, 0, memory_order_relaxed);
+         s->started = 1;
+         ios_dev_start();
+     }

@@ -1,6 +1,6 @@
 # Vulkan performance: KosmicKrisp's sample-mask lowering on DXVK (not kept)
 
-**Date:** 2026-10-08. **Plan:** [Vulkan performance](../plans/2026-10-06-vulkan-performance.md)
+**Date:** 2026-10-08. **Plan:** [Vulkan performance](https://linear.app/playportdev/issue/PLA-680)
 (PLA-72), chunk 12, the first lead of the [standing](2026-10-08-vulkan-perf-standing.md).
 **IPAs (dev):**
 

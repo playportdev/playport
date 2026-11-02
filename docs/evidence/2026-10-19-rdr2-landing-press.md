@@ -1,6 +1,6 @@
 # 2026-10-19: RDR2's blue band is its landing page: one A press starts the Story load, which runs the app into the 8,192 MB limit; a Metal capture of the band is refused by KosmicKrisp's counter heap
 
-**Linear:** PLA-364 (related: PLA-413, PLA-416, PLA-420). **Plan:** `.work/plans/rdr2-blue-band.md` (test 1).
+**Linear:** PLA-364 (related: PLA-413, PLA-416, PLA-420). **Plan:** [PLA-364](https://linear.app/playportdev/issue/PLA-364#comment-53e30d84) (test 1).
 **Owner's approval:** 2026-10-19, an exception to PLA-401: one A (or Enter) press, only on the blue band.
 Later that evening the owner lifted the input limit (Story mode only; no credentials or purchases).
 The press run below still pressed only once.

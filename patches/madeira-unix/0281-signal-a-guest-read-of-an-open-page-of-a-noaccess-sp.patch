@@ -1,0 +1,203 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 1 Nov 2026 20:45:00 +0100
+Subject: [PATCH] signal: a guest read of an open page of a noaccess-split host
+ page is completed from its view's read-only alias
+
+The Mach handler completed every access to an open 4 KB page of a
+noaccess-split host page through a transient alias: a mach_vm_remap, a
+mach_vm_protect and a mach_vm_deallocate per access, on the one thread that
+serves every Mach exception. Of the samples of run 20261101T191349 about two
+thirds were World of Warcraft's x64 client's own reads (JIT code: LDAPUR of
+4 bytes, LDAPURB, LDR, LDP), jump tables and other data on its code pages.
+
+A read that a view's read-only alias holds (madeira-unix 0280) is
+completed from that alias with no remap: ios_code_alias_lookup reads
+virtual_ios.c's table of aliases under its sequence count, lock-free, with
+pp_code_alias.h's ppca_find (host test tools/tests/test_code_alias.py).
+Writes, and reads outside such a view, keep the transient alias. The
+handler also sets the faulting thread's NEON state only when the emulated
+load changed it. The [noaccess-split] line counts the reads served from a
+view's alias.
+
+Linear: PLA-516, PLA-514
+Class: ios-port
+Evidence: docs/evidence/2026-11-01-wow-x64-fex.md
+Offered-upstream: no; the 16 KB host page is the iOS port's
+---
+ build/ntdll-unix/pp_code_alias.h    | 30 +++++++++++++++++++
+ build/ntdll-unix/signal_arm64_ios.c | 46 +++++++++++++++++++----------
+ build/ntdll-unix/virtual_ios.c      | 26 ++++++++++++++--
+ 3 files changed, 84 insertions(+), 18 deletions(-)
+ create mode 100644 build/ntdll-unix/pp_code_alias.h
+
+diff --git a/build/ntdll-unix/pp_code_alias.h b/build/ntdll-unix/pp_code_alias.h
+new file mode 100644
+index 0000000..8924c26
+--- /dev/null
++++ b/build/ntdll-unix/pp_code_alias.h
+@@ -0,0 +1,30 @@
++/* Playport (PLA-516): the read-only aliases of mapped views with a
++ * noaccess-split host page (virtual_ios.c ios_code_alias_ensure), and the
++ * lookup the Mach exception handler uses to complete a guest read of an open
++ * 4 KB page of such a host page from the alias instead of a transient remap
++ * (host test: tools/tests/test_code_alias.py). */
++#ifndef PP_CODE_ALIAS_H
++#define PP_CODE_ALIAS_H
++
++struct ppca_entry
++{
++    unsigned long long base;   /* the view */  
++    unsigned long long size;   /* 0: a free slot */
++    unsigned long long alias;  /* its read-only alias */
++};
++
++/* The alias address of [va, va + len) when one entry's view holds all of it,
++ * else 0. */
++static inline unsigned long long ppca_find( const struct ppca_entry *t, int n, unsigned long long va,
++                                            unsigned int len )
++{
++    int i;
++
++    for (i = 0; i < n; i++)
++    {
++        unsigned long long size = t[i].size, off = va - t[i].base;
++        if (size && off < size && len <= size - off) return t[i].alias + off;
++    }
++    return 0;
++}
++#endif /* PP_CODE_ALIAS_H */
+diff --git a/build/ntdll-unix/signal_arm64_ios.c b/build/ntdll-unix/signal_arm64_ios.c
+index 9ed3da4..e469deb 100644
+--- a/build/ntdll-unix/signal_arm64_ios.c
++++ b/build/ntdll-unix/signal_arm64_ios.c
+@@ -2296,7 +2296,8 @@ static void *ios_mach_exception_thread( void *arg )
+                     state = ns_mc.__ss;
+                     ns_pc = (uint64_t)__darwin_arm_thread_state64_get_pc( state );
+                     __darwin_arm_thread_state64_set_pc_fptr( state, (void *)(uintptr_t)(ns_pc + 4) );
+-                    if (have_neon)
++                    /* Only a vector load changes it: a thread_set_state less per read. */
++                    if (have_neon && memcmp( &neon_state, &ns_mc.__ns, sizeof(neon_state) ))
+                     {
+                         neon_state = ns_mc.__ns;
+                         thread_set_state( thread, ARM_NEON_STATE64, (thread_state_t)&neon_state, neon_count );
+@@ -12730,16 +12731,19 @@ static int ios_subfloor_service( ucontext_t *ctx, void *fault_addr, uintptr_t wi
+ /* Playport (PLA-516): an access to an accessible 4 KB page of a host page that
+  * virtual_ios.c keeps PROT_NONE for a committed no-access neighbour beside code
+  * (noaccess-split, ios_noaccess_split_access_allowed). Complete it through a
+- * transient alias of the host page(s); an access to the no-access page itself is
+- * declined and raises the access violation, as on x64 Windows. */
+-static unsigned long long ios_noaccess_split_hits, ios_noaccess_split_declined;
++ * transient alias of the host page(s), or a read from its view's read-only
++ * alias when it has one (ios_code_alias_lookup); an access to the no-access page
++ * itself is declined and raises the access violation, as on x64 Windows. */
++static unsigned long long ios_noaccess_split_hits, ios_noaccess_split_declined, ios_noaccess_split_view_alias;
+ 
+ static int ios_noaccess_split_service( ucontext_t *ctx, void *fault_addr, uintptr_t teb )
+ {
+     extern int ios_noaccess_split_access_allowed( unsigned long long va, unsigned int len, int is_write,
+                                                   int translator );
++    extern unsigned long long ios_code_alias_lookup( unsigned long long va, unsigned int len );
+     uint64_t addr = (uint64_t)(uintptr_t)fault_addr;
+     mach_vm_address_t pg = addr & ~(mach_vm_address_t)0x3fff, alias = 0;
++    unsigned long long real_alias;
+     mach_vm_size_t got = 0, len;
+     vm_prot_t cur = 0, max = 0;
+     uint32_t insn = 0;
+@@ -12761,18 +12765,27 @@ static int ios_noaccess_split_service( ucontext_t *ctx, void *fault_addr, uintpt
+                      (unsigned long long)PC_sig(ctx), translator ? " (FEX translating)" : "" );
+         return 0;
+     }
+-    len = ((addr + bytes - 1) & ~(mach_vm_address_t)0x3fff) - pg + 0x4000;
+-    if (mach_vm_remap( mach_task_self(), &alias, len, 0, VM_FLAGS_ANYWHERE, mach_task_self(), pg, FALSE,
+-                       &cur, &max, VM_INHERIT_NONE ) != KERN_SUCCESS)
+-        return 0;
+-    if (mach_vm_protect( mach_task_self(), alias, len, FALSE,
+-                         VM_PROT_READ | (is_write ? VM_PROT_WRITE : 0) ) == KERN_SUCCESS)
++    /* Playport (PLA-516): a read that a view's read-only alias holds needs no remap. */
++    if (!is_write && (real_alias = ios_code_alias_lookup( addr, bytes )))
++    {
++        ok = ios_emulate_load( ctx, insn, (uintptr_t)real_alias );
++        if (ok) ios_noaccess_split_view_alias++;
++    }
++    else
+     {
+-        uintptr_t real = (uintptr_t)(alias + (addr - pg));
+-        if (is_write) ok = ios_emulate_store_rel( ctx, insn, real ) || ios_emulate_store( ctx, insn, real );
+-        else ok = ios_emulate_load( ctx, insn, real );
++        len = ((addr + bytes - 1) & ~(mach_vm_address_t)0x3fff) - pg + 0x4000;
++        if (mach_vm_remap( mach_task_self(), &alias, len, 0, VM_FLAGS_ANYWHERE, mach_task_self(), pg, FALSE,
++                           &cur, &max, VM_INHERIT_NONE ) != KERN_SUCCESS)
++            return 0;
++        if (mach_vm_protect( mach_task_self(), alias, len, FALSE,
++                             VM_PROT_READ | (is_write ? VM_PROT_WRITE : 0) ) == KERN_SUCCESS)
++        {
++            uintptr_t real = (uintptr_t)(alias + (addr - pg));
++            if (is_write) ok = ios_emulate_store_rel( ctx, insn, real ) || ios_emulate_store( ctx, insn, real );
++            else ok = ios_emulate_load( ctx, insn, real );
++        }
++        mach_vm_deallocate( mach_task_self(), alias, len );
+     }
+-    mach_vm_deallocate( mach_task_self(), alias, len );
+     if (!ok)
+     {
+         static uint32_t seen[16];
+@@ -12786,9 +12799,10 @@ static int ios_noaccess_split_service( ucontext_t *ctx, void *fault_addr, uintpt
+     }
+     ios_subfloor_writeback( ctx, insn, addr );
+     if (++ios_noaccess_split_hits <= 8 || !(ios_noaccess_split_hits & 0xfff))
+-        dprintf( 2, "[noaccess-split] #%llu %s of %u at %#llx pc=%#llx insn=%#010x (%llu declined: no-access page)\n",
++        dprintf( 2, "[noaccess-split] #%llu %s of %u at %#llx pc=%#llx insn=%#010x (%llu declined: no-access page;"
++                    " %llu from a view alias)\n",
+                  ios_noaccess_split_hits, is_write ? "write" : "read", bytes, (unsigned long long)addr,
+-                 (unsigned long long)PC_sig(ctx), insn, ios_noaccess_split_declined );
++                 (unsigned long long)PC_sig(ctx), insn, ios_noaccess_split_declined, ios_noaccess_split_view_alias );
+     return 1;
+ }
+ #endif
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index b0e314e..54a241c 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -9534,10 +9534,13 @@ int ios_noaccess_split_access_allowed( unsigned long long va, unsigned int len,
+  * the size set (IOS_CODE_ALIAS_FLAG; FEX's IosCodeReadAddr) and reads the
+  * view's code bytes there; guest accesses still go through the view's own
+  * pages, so a read of a closed 4 KB page faults as on Windows. A mapped view is
+- * never split or partly freed, so the alias covers it for its life. */
++ * never split or partly freed, so the alias covers it for its life. The Mach
++ * handler completes a guest read of an open 4 KB page from it too
++ * (ios_code_alias_lookup, pp_code_alias.h). */
++#include "pp_code_alias.h"
+ #define IOS_CODE_ALIAS_FLAG (1ull << 63)
+ #define IOS_CODE_ALIAS_MAX 32
+-static struct { unsigned long long base, size, alias; } ios_code_alias_table[IOS_CODE_ALIAS_MAX];
++static struct ppca_entry ios_code_alias_table[IOS_CODE_ALIAS_MAX];
+ static int ios_code_alias_count;               /* slots ever used */
+ static volatile unsigned long long ios_code_alias_gen;  /* odd while a slot changes */
+ 
+@@ -9600,6 +9603,25 @@ static void ios_code_alias_drop( struct file_view *view )
+     mach_vm_deallocate( mach_task_self(), alias, view->size );
+ }
+ 
++/* For the Mach exception handler, lock-free: the alias address of [va, va+len)
++ * when an image's alias holds all of it, else 0 (also while a slot changes). */
++unsigned long long ios_code_alias_lookup( unsigned long long va, unsigned int len )
++{
++    int tries;
++
++    if (!__atomic_load_n( &ios_code_alias_count, __ATOMIC_ACQUIRE )) return 0;
++    for (tries = 0; tries < 4; tries++)
++    {
++        unsigned long long gen = __atomic_load_n( &ios_code_alias_gen, __ATOMIC_ACQUIRE ), res;
++
++        if (gen & 1) continue;
++        res = ppca_find( ios_code_alias_table, __atomic_load_n( &ios_code_alias_count, __ATOMIC_ACQUIRE ), va, len );
++        __atomic_thread_fence( __ATOMIC_ACQUIRE );
++        if (__atomic_load_n( &ios_code_alias_gen, __ATOMIC_RELAXED ) == gen) return res;
++    }
++    return 0;
++}
++
+ #endif
+ 
+ 

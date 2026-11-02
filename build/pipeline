@@ -335,6 +335,7 @@ stage_vulkan() {
     run vulkan env WINEBUILD="$RUN/pe/wine/build-tools/tools/winebuild/winebuild" WINE_SRC="$RUN/pe/wine" \
         bash "$HERE/stages/vulkan-pe.sh" "$RUN/vulkan-pe"
     say "  $(grep -c ' arm64ec-windows/.*\.dll$' "$RUN/logs/vulkan.log") vulkan-pe DLLs"
+    say "  $(grep -c ' aarch64-windows/.*\.dll$' "$RUN/logs/vulkan.log") vulkan-pe aarch64 DLLs"
 }
 
 stage_stage() {
@@ -384,10 +385,6 @@ stage_app() {
     if [ "$VARIANT" = release ]; then
         run app python3 "$HERE/stages/stage-artifacts.py" release "$PKG"
         say "  $(tail -1 "$RUN/logs/app.log")"
-    else
-        # Always verify before copying, even when the common stage stamp is warm.
-        # CEF compilation and notice generation are separate owner inputs.
-        run app python3 "$HERE/cef/stage-payload.py"
     fi
     rm -f "$IPA"
     (cd "$PKG" && PLAYPORT_VARIANT=$VARIANT SWIFTPM_CUSTOM_BIN_DIR=$HERE/ld64 "$XTOOL" dev build $SIGN --ipa) >> "$RUN/logs/app.log" 2>&1 ||

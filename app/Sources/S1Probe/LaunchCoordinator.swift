@@ -422,8 +422,16 @@ enum LaunchCoordinator {
         } else {
             unsetenv("PLAYPORT_DLL_OVERLAY")
         }
-        // Decisions 0138, 0153: ntdll refuses RDR2's later Social Club helper starts.
-        if r.endLauncher != nil && GameSocialClubEnd.enabled && GameSocialClubEnd.refuseRestart {
+        // Decisions 0138, 0153, 0169: ntdll refuses RDR2's later Social Club helper starts, only
+        // with the end of the game's own Social Club, which the Social Club layout leaves off.
+        let endGameSocialClub = GameSocialClubEnd.enabled(config: r.config)
+        let refuseGameSocialClubRestart = GameSocialClubEnd.refusesRestarts(ends: endGameSocialClub)
+        if r.endLauncher != nil && !endGameSocialClub {
+            log(GameSocialClubEnd.socialClubLayout(config: r.config)
+                ? "launcher: the game's own Social Club is not ended under the Social Club layout (decision 0169)"
+                : "launcher: the game's own Social Club is not ended (Settings)")
+        }
+        if r.endLauncher != nil && refuseGameSocialClubRestart {
             setenv(GameSocialClubEnd.refuseRestartVariable, "1", 1)
             log("launcher: the game's Social Club helper starts after the first are refused (decision 0138)")
         } else {
@@ -628,11 +636,10 @@ enum LaunchCoordinator {
 
         let t0 = Date()
         step(.running(since: t0))
-        let endGameSocialClub = GameSocialClubEnd.enabled   // decisions 0133, 0153: Settings › Graphics
         let launcher = r.endLauncher.map { s in
             LauncherEnd(signIn: s, profile: runtime.prefixURL.appendingPathComponent("drive_c/users/playport"),
                         endGameSocialClub: endGameSocialClub,
-                        refuseGameSocialClubRestart: endGameSocialClub && GameSocialClubEnd.refuseRestart)
+                        refuseGameSocialClubRestart: refuseGameSocialClubRestart)
         }
         var sampled = Date.distantPast
         while true {
@@ -802,7 +809,8 @@ enum LaunchCoordinator {
     /// log, or a GetCurrentGameLanguage burst. At one they send the root
     /// PP_CONTROL_ALLOW_GAME_SOCIAL_CLUB (its sweep stops) and then allow ntdll's restarts, until
     /// the next sign-in line or 90 s; the end may then run again 120 s after that sign-in, at
-    /// most twice a Play. A run with no re-sign-in logs nothing of it.
+    /// most twice a Play. An allow needs headroom (0155 as amended): without it the restarts stay
+    /// refused. A run with no re-sign-in logs nothing of it.
     private final class LauncherEnd {
         let file: URL
         let watch: GameSignIn.Watch
@@ -925,9 +933,18 @@ enum LaunchCoordinator {
         private func watchReSignIn(elapsed: TimeInterval) {
             guard var r = reSignIn, r.watching else { return }
             defer { reSignIn = r }
-            switch r.slice(at: elapsed, signIns: signIns, languageCalls: GameSocialClubEnd.takeLanguageCalls()) {
+            let m = MemoryLimit.read()
+            switch r.slice(at: elapsed, signIns: signIns, languageCalls: GameSocialClubEnd.takeLanguageCalls(),
+                           footprintMB: m.footprintMB, limitMB: m.limitMB) {
             case nil:
                 return
+            case .noHeadroom(let detector, let footprint):
+                log("[game-sc] re-sign-in after end (\(detector.rawValue))")
+                log("[game-sc] re-sign-in after end: no headroom (\(footprint) MB), restart stays refused")
+                #if !PLAYPORT_RELEASE
+                RunEvents.emit("launcher", ["state": "game-social-club-no-headroom", "after_s": Int(elapsed),
+                                            "detector": detector.rawValue, "footprint_mb": footprint])
+                #endif
             case .allow(let detector):
                 log("[game-sc] re-sign-in after end (\(detector.rawValue))")
                 var n: UInt32 = 0
@@ -964,7 +981,8 @@ enum LaunchCoordinator {
     /// and a `limits:` mark at the end; reaching one does not change the outcome.
     /// So does the FEX arena's use (FexBand), as `band:` lines and a `band:` mark;
     /// a dev build also writes the arena's map into the log at the end, and memory by
-    /// pseudo-process (`[proc-mem]` lines) as it moves and at the end. An arena
+    /// pseudo-process (`[proc-mem]` lines) as it moves, near the limit as it climbs
+    /// (FootprintJumpSampler) and at the end. An arena
     /// that refused a request ends the launch as a pool that ran out does, after the
     /// same grace, and turns the outcome into `.outOfEmulatorMemory` (decision 0120).
     private final class PoolLog {
@@ -979,6 +997,11 @@ enum LaunchCoordinator {
         private(set) var exhaustedAt: Date?
         /// What ran out first, for the log line at the grace's end.
         private(set) var exhaustedWhat = "JIT memory"
+
+        #if !PLAYPORT_RELEASE
+        /// A dev build's samples near the limit, from the launch's start to its end (PLA-476).
+        private let footprintSampler = FootprintJumpSampler.start()
+        #endif
 
         init(grace: TimeInterval) { self.grace = grace }
 
@@ -1039,15 +1062,24 @@ enum LaunchCoordinator {
 
         /// The samples since the last `[proc-mem]` walk (a dev build's).
         private var processMemorySamples = 0
+        /// The runtime's finished teardowns at the last sample (wine_host_process_teardowns).
+        private var processTeardowns: UInt32 = 0
 
         func sample() {
             sampleLimits()
             sampleBand()
             #if !PLAYPORT_RELEASE
             // Memory by pseudo-process (PLA-414), every other sample (about 4 s); the runtime
-            // prints it only when a process came, went or moved by 32 MiB.
+            // prints it only when a process came, went or moved by 32 MiB. A teardown that
+            // finished since the last sample gets a forced walk at once, so its effect on each
+            // process shows next to its `[proc-end]` line (PLA-476).
+            let teardowns = wine_host_process_teardowns()
             processMemorySamples += 1
-            if processMemorySamples >= 2 {
+            if teardowns != processTeardowns {
+                processTeardowns = teardowns
+                processMemorySamples = 0
+                wine_host_process_memory_log("after teardown \(teardowns)", 1)
+            } else if processMemorySamples >= 2 {
                 processMemorySamples = 0
                 wine_host_process_memory_log("sample", 0)
             }
@@ -1069,6 +1101,7 @@ enum LaunchCoordinator {
             let band = Self.readBand()
             if let band { mark(band.line) }
             #if !PLAYPORT_RELEASE
+            footprintSampler.stop()
             wine_host_band_dump("launch end")
             wine_host_process_memory_log("launch end", 1)
             #endif

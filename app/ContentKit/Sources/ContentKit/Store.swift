@@ -2,11 +2,12 @@
 // Store identity (decision 0057): a copy of a game is `(store, store game ID)`
 // end to end, never a name. Its catalogue title ID is store-qualified:
 //
-//   steam  app-<appID>          (as before)
-//   gog    gog-<productID>
-//   epic   epic-<appName>
-//   xbox   xbox-<ProductId>     (decision 0166: the Store's twelve-character product identifier)
-//   local  dir-<lowercased folder> (as before: an imported or found folder)
+//   steam      app-<appID>          (as before)
+//   gog        gog-<productID>
+//   epic       epic-<appName>
+//   battlenet  bnet-<TACT product code> (bnet-wow_classic_era)
+//   xbox       xbox-<ProductId>     (decision 0166: the Store's twelve-character product identifier)
+//   local      dir-<lowercased folder> (as before: an imported or found folder)
 //
 // A store's install, and Playport's own import, writes a `StoreReceipt` under
 // installs/<store>-<id>.json; Steam's `<appID>.json` (InstallReceipt) stays as it is.
@@ -14,7 +15,7 @@
 import Foundation
 
 public enum Store: String, Codable, CaseIterable, Sendable {
-    case local, steam, gog, epic, xbox
+    case local, steam, gog, epic, battlenet, xbox
 
     public var label: String {
         switch self {
@@ -22,17 +23,19 @@ public enum Store: String, Codable, CaseIterable, Sendable {
         case .steam: "Steam"
         case .gog: "GOG"
         case .epic: "Epic Games"
+        case .battlenet: "Battle.net"
         case .xbox: "Xbox"
         }
     }
 
-    /// The title ID prefix (`app-`, `gog-`, `epic-`, `xbox-`, `dir-`).
+    /// The title ID prefix (`app-`, `gog-`, `epic-`, `bnet-`, `xbox-`, `dir-`).
     public var titlePrefix: String {
         switch self {
         case .local: "dir-"
         case .steam: "app-"
         case .gog: "gog-"
         case .epic: "epic-"
+        case .battlenet: "bnet-"
         case .xbox: "xbox-"
         }
     }
@@ -41,8 +44,8 @@ public enum Store: String, Codable, CaseIterable, Sendable {
 /// A game in one store: what downloads, art, receipts and navigation key on.
 public struct StoreGameKey: Codable, Hashable, Sendable, CustomStringConvertible {
     public var store: Store
-    /// Steam: the app ID in decimal; GOG: the product ID; Epic: the app name;
-    /// Xbox: the Product ID; local: the folder under C:\Games, lowercased.
+    /// Steam: the app ID in decimal; GOG: the product ID; Epic: the app name; Battle.net: the
+    /// TACT product code; Xbox: the Product ID; local: the folder under C:\Games, lowercased.
     public var id: String
 
     public init(store: Store, id: String) {
@@ -66,7 +69,7 @@ public struct StoreGameKey: Codable, Hashable, Sendable, CustomStringConvertible
 
     /// The key a title ID names, or nil for an ID of no known shape.
     public init?(titleID: String) {
-        for store in [Store.steam, .gog, .epic, .xbox, .local] where titleID.hasPrefix(store.titlePrefix) {
+        for store in [Store.steam, .gog, .epic, .battlenet, .xbox, .local] where titleID.hasPrefix(store.titlePrefix) {
             let id = String(titleID.dropFirst(store.titlePrefix.count))
             guard !id.isEmpty, store != .steam || UInt32(id) != nil, store != .xbox || Self.isProductID(id) else { return nil }
             self.init(store: store, id: id)

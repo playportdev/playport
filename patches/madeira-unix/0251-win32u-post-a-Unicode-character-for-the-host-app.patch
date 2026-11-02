@@ -1,0 +1,52 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sat, 31 Oct 2026 21:10:00 +0100
+Subject: [PATCH] win32u: post a Unicode character for the host app
+
+The host's key path posts virtual keys only, so a guest window could
+be typed into only through a US layout's keys: a character outside it
+(a password's symbols, an accented letter) had no way in.
+
+winios_drv_post_char, which Winios.m's drain calls for the host's
+winios_post_char (patches/madeira-winios), sends one UTF-16 code unit
+as INPUT_KEYBOARD with wVk 0, wScan the unit and KEYEVENTF_UNICODE, as
+SendInput sends a character on Windows: the server queues it as
+VK_PACKET and TranslateMessage posts WM_CHAR with the unit to the
+focused window. It is counted with the keys and never logged.
+
+Linear: PLA-267
+Class: host-app
+Evidence: tools/tests/test_key_logging.py, app/HostIOKit/Tests/HostIOKitTests/TextBarTests.swift (host checks; phone gate not run)
+Offered-upstream: no; the host app's text bar
+---
+ build/win32u-unix/driver_ios.c | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/build/win32u-unix/driver_ios.c b/build/win32u-unix/driver_ios.c
+index c978a2a..526dfa5 100644
+--- a/build/win32u-unix/driver_ios.c
++++ b/build/win32u-unix/driver_ios.c
+@@ -169,6 +169,23 @@ void winios_drv_post_key(unsigned short vk, unsigned int flags)
+     winios_count_key( st );
+ }
+ 
++/* Playport: one UTF-16 code unit the host app typed (its text bar, through
++ * Winios.m winios_post_char): INPUT_KEYBOARD with wVk 0, wScan the unit and
++ * KEYEVENTF_UNICODE, as SendInput sends a character. The server makes it
++ * VK_PACKET, and TranslateMessage posts WM_CHAR with the unit to the focused
++ * window, whatever the keyboard layout. flags: KEYEVENTF_UNICODE, with
++ * KEYEVENTF_KEYUP for the release. Counted with the keys, never logged. */
++void winios_drv_post_char(unsigned short unit, unsigned int flags)
++{
++    INPUT input = {0};
++
++    input.type           = INPUT_KEYBOARD;
++    input.ki.wVk         = 0;
++    input.ki.wScan       = unit;
++    input.ki.dwFlags     = flags | KEYEVENTF_UNICODE;
++    winios_count_key( server_send_hardware_message( NULL, 0, &input, 0 ) );
++}
++
+ /* [winios-tree] window-tree dump: every top-level window with class,
+  * title, style and rects. Driven from the app side (Winios.m
+  * ProcessEvents drain) every few seconds in desktop mode — ground truth

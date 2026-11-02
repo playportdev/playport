@@ -81,6 +81,7 @@ final class SteamAccountModel: ObservableObject {
         GameImports.shared.attach(installs)
         GOGAccount.shared.attach(installs)
         EpicAccount.shared.attach(installs)
+        BattleNetStore.shared.attach(installs)
         #if !PLAYPORT_RELEASE
         XboxInstalls.shared.attach(installs)  // dev only (decision 0166)
         #endif

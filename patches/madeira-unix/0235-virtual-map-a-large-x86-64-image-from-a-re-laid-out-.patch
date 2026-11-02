@@ -1,0 +1,582 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: playportdev <dev@playport.dev>
+Date: Fri, 30 Oct 2026 19:00:00 +0100
+Subject: [PATCH] virtual: map a large x86-64 image from a re-laid-out cache
+ copy
+
+map_file_into_view_ex maps an image section from its file only when it is
+16 KiB-aligned in memory and in the file; any other section is read into
+the view. Rockstar's libcef (4 KiB sections, 0x200 file alignment) is
+therefore read whole, 238 MiB of anonymous memory in every process that
+loads it, while Playport's own 16 KiB build mapped from its file and left
+its clean pages out of the footprint (PLA-415, PLA-476).
+
+An x86-64 PE32+ image of 64 MiB or more whose section or file alignment is
+under the host page, with no shared writable section and not on removable
+media, now maps whole from a copy laid out at its RVAs in
+PLAYPORT_IMAGE_CACHE_DIR (the app's Library/Caches/images): one
+map_file_into_view at offset 0, MAP_PRIVATE as before, so only pages Wine's
+loader or the program writes (relocations, the import table, .data) become
+private, and every process shares the rest. pp_img_cache.h's ppic_layout
+reproduces map_image_into_view's steps (map_pe_header's bytes and zeroes,
+each section's sector-rounded file bytes and the zeroes after them) for
+the host test.
+
+The copy is named by the image file's device, inode, size and mtime and
+the view size, and is used only when its size is right and its first
+SizeOfHeaders bytes equal the header map_pe_header put in the view; one
+that does not match is deleted. An image with no copy is read as before,
+and one background thread (all signals blocked, no Wine lock) writes the
+copy for the next load in 1 MiB blocks with F_NOCACHE, reads each back to
+compare, fsyncs and renames it into place. Copies take at most 1 GiB (the
+least recently used, by mtime, which each use touches, are deleted first)
+and none is written unless 2 GiB of the disk stays free. Any failure
+leaves today's read. `[img-cache]` lines say which.
+
+Linear: PLA-476
+Class: feature
+Evidence: docs/decisions/0167-large-x86-64-images-map-from-a-cache-copy.md
+Offered-upstream: no; the 16 KiB host page and the app's cache are the iOS port's
+---
+ build/ntdll-unix/pp_img_cache.h | 152 ++++++++++++++
+ build/ntdll-unix/virtual_ios.c  | 361 ++++++++++++++++++++++++++++++++
+ 2 files changed, 513 insertions(+)
+ create mode 100644 build/ntdll-unix/pp_img_cache.h
+
+diff --git a/build/ntdll-unix/pp_img_cache.h b/build/ntdll-unix/pp_img_cache.h
+new file mode 100644
+index 0000000..06d4aaf
+--- /dev/null
++++ b/build/ntdll-unix/pp_img_cache.h
+@@ -0,0 +1,152 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later
++ * Large x86-64 images mapped from a re-laid-out cache copy (Playport, PLA-476,
++ * decision 0167).
++ *
++ * map_file_into_view_ex maps an image section from its file only when the
++ * section is 16 KiB-aligned in memory and in the file; any other section is
++ * read into the view, which makes every page of it anonymous memory in each
++ * process that loads it (Rockstar's libcef: 238 MiB read per process). A cache
++ * copy whose file offset equals the RVA holds the same bytes as the view
++ * before any write, so the whole image maps with one MAP_PRIVATE mmap: clean
++ * pages stay the file's (shared, outside the footprint) and only written ones
++ * (relocations, the import table, .data) become private.
++ *
++ * ppic_layout reproduces map_image_into_view's steps as runs, in the order
++ * they apply: map_pe_header's bytes (the file's first header_map_size bytes,
++ * rounded down to the host page, when that mmap is taken, and at least
++ * SizeOfHeaders), the zeroes it writes up to the aligned header end, then each
++ * section's file bytes (rounded to 512-byte sectors, clipped to its mapped
++ * size) and the zeroes after them up to the section alignment. Pure
++ * arithmetic, so a host test compiles this header as is. */
++#ifndef PP_IMG_CACHE_H
++#define PP_IMG_CACHE_H
++#include <stdint.h>
++#include <stddef.h>
++#include <stdio.h>
++
++#define PPIC_MIN_IMAGE (64ull << 20)           /* decision 0167: images of 64 MiB or more */
++#define PPIC_BUDGET (1ull << 30)               /* all copies together */
++#define PPIC_FREE_KEEP (2ull << 30)            /* free disk left after a write */
++#define PPIC_SECTOR 0x1ffull                   /* Wine: file positions rounded to sectors */
++#define PPIC_SCN_SHARED_WRITE 0x90000000u      /* IMAGE_SCN_MEM_SHARED | IMAGE_SCN_MEM_WRITE */
++
++struct ppic_section { uint32_t va, raw_ptr, raw_size, virt_size, flags; };
++/* One step of the layout: len bytes at rva, from the file at off, or zeroes. */
++struct ppic_run { uint64_t rva, off, len; int zero; };
++
++static inline uint64_t ppic_round( uint64_t addr, uint64_t size, uint64_t mask )
++{
++    return (size + (addr & mask) + mask) & ~mask;   /* virtual_ios.c ROUND_SIZE */
++}
++
++/* Whether an image may use a cache copy: x86-64 (PE32+), at least
++ * PPIC_MIN_IMAGE, not on removable media, no shared writable section, and some
++ * section or file alignment under the host page (otherwise the file maps as it
++ * is). */
++static inline int ppic_eligible( int x64, uint64_t total_size, uint32_t section_align, uint32_t file_align,
++                                 uint64_t host_page_mask, int removable, const struct ppic_section *s, unsigned n )
++{
++    unsigned i;
++    if (!x64 || removable || total_size < PPIC_MIN_IMAGE) return 0;
++    if (!(section_align & host_page_mask) && !(file_align & host_page_mask)) return 0;
++    for (i = 0; i < n; i++) if ((s[i].flags & PPIC_SCN_SHARED_WRITE) == PPIC_SCN_SHARED_WRITE) return 0;
++    return 1;
++}
++
++/* The copy's file name for an image file's identity and its view size. */
++static inline int ppic_name( char *out, size_t size, uint64_t dev, uint64_t ino, uint64_t file_size,
++                             int64_t mtime_s, long mtime_ns, uint64_t total_size )
++{
++    return snprintf( out, size, "v1-%llx-%llx-%llx-%lld.%09ld-%llx.img", (unsigned long long)dev,
++                     (unsigned long long)ino, (unsigned long long)file_size, (long long)mtime_s, mtime_ns,
++                     (unsigned long long)total_size );
++}
++
++/* The copy's size: the view rounded up to the host page, so every mapped host
++ * page is backed. */
++static inline uint64_t ppic_file_size( uint64_t total_size, uint64_t host_page_mask )
++{
++    return (total_size + host_page_mask) & ~host_page_mask;
++}
++
++/* The layout as up to `max` runs; -1 for an image map_image_into_view would
++ * refuse or that has more runs. header_size and header_map_size are
++ * map_image_into_view's (SizeOfHeaders and the server's header map size, each
++ * at most the file); align_mask is max(SectionAlignment - 1, page_mask). */
++static inline int ppic_layout( const struct ppic_section *s, unsigned n, uint64_t file_size, uint64_t total_size,
++                               uint64_t header_size, uint64_t header_map_size, uint64_t align_mask,
++                               uint64_t host_page_mask, struct ppic_run *runs, unsigned max )
++{
++    uint64_t hmap = header_map_size & ~host_page_mask, header_end = ppic_round( 0, header_size, align_mask );
++    unsigned i, k = 0;
++
++    if (!header_size || max < 2) return -1;
++    runs[k++] = (struct ppic_run){ 0, 0, hmap > header_size ? hmap : header_size, 0 };
++    if (header_end > header_size) runs[k++] = (struct ppic_run){ header_size, 0, header_end - header_size, 1 };
++    for (i = 0; i < n; i++)
++    {
++        uint64_t map_size, file_start, fsize, end;
++
++        map_size = ppic_round( 0, s[i].virt_size ? s[i].virt_size : s[i].raw_size, align_mask );
++        file_start = s[i].raw_ptr & ~PPIC_SECTOR;
++        fsize = ppic_round( s[i].raw_ptr, s[i].raw_size, PPIC_SECTOR );
++        if (fsize > map_size) fsize = map_size;
++        end = s[i].va + ppic_round( s[i].va, map_size, align_mask );
++        if (s[i].va > total_size || end > total_size || end < s[i].va) return -1;
++        if ((s[i].flags & PPIC_SCN_SHARED_WRITE) == PPIC_SCN_SHARED_WRITE) return -1;
++        if (!s[i].raw_ptr || !fsize) continue;
++        end = file_start + fsize;
++        if (s[i].raw_ptr >= file_size || end > ((file_size + PPIC_SECTOR) & ~PPIC_SECTOR) || end < file_start)
++            return -1;
++        if (k == max) return -1;
++        runs[k++] = (struct ppic_run){ s[i].va, file_start, fsize, 0 };
++        if (fsize & align_mask)
++        {
++            end = ppic_round( 0, fsize, align_mask );
++            if (end > map_size) end = map_size;
++            if (end > fsize)
++            {
++                if (k == max) return -1;
++                runs[k++] = (struct ppic_run){ s[i].va + fsize, 0, end - fsize, 1 };
++            }
++        }
++    }
++    return (int)k;
++}
++
++/* The part of run r inside the block [b, b + size): its offset in the block,
++ * its offset in the run, and its length (0 when they do not meet). */
++static inline uint64_t ppic_overlap( const struct ppic_run *r, uint64_t b, uint64_t size,
++                                     uint64_t *in_block, uint64_t *in_run )
++{
++    uint64_t lo = r->rva > b ? r->rva : b, hi = r->rva + r->len < b + size ? r->rva + r->len : b + size;
++    if (lo >= hi) return 0;
++    *in_block = lo - b;
++    *in_run = lo - r->rva;
++    return hi - lo;
++}
++
++/* A copy on disk: its size and when it was last used (mtime). */
++struct ppic_entry { uint64_t size; int64_t used; int victim; };
++
++/* Marks the least recently used copies to delete so that `need` more bytes
++ * fit in `budget`; 0 when even deleting all of them is not enough. */
++static inline int ppic_evict( struct ppic_entry *e, unsigned n, uint64_t budget, uint64_t need )
++{
++    uint64_t total = 0;
++    unsigned i;
++
++    if (need > budget) return 0;
++    for (i = 0; i < n; i++) { e[i].victim = 0; total += e[i].size; }
++    while (total + need > budget)
++    {
++        int best = -1;
++        for (i = 0; i < n; i++)
++            if (!e[i].victim && (best < 0 || e[i].used < e[best].used)) best = (int)i;
++        if (best < 0) return 0;
++        e[best].victim = 1;
++        total -= e[best].size;
++    }
++    return 1;
++}
++#endif
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index e03fe8f..9deeb0b 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -14945,6 +14945,363 @@ done:
+ }
+ #endif
+ 
++#ifdef WINE_IOS
++/* Playport (PLA-476, decision 0167): a large x86-64 image whose sections are
++ * not 16 KiB-aligned in its file is mapped whole from a re-laid-out copy in
++ * PLAYPORT_IMAGE_CACHE_DIR (the app's Library/Caches/images), so its clean
++ * pages stay the file's: shared, and outside the footprint (pp_img_cache.h).
++ * The copy is named by the image file's identity (device, inode, size, mtime)
++ * and the view size, and is used only when its size is right and its first
++ * SizeOfHeaders bytes equal the header map_pe_header just put in the view. An
++ * image without one is read as before, and a background thread writes the copy
++ * for the next load: it lays the file out by ppic_layout in 1 MiB blocks,
++ * reads each block back to compare it, then renames it into place. Copies take
++ * at most PPIC_BUDGET (the least recently used are deleted first) and are not
++ * written unless PPIC_FREE_KEEP stays free. Any failure leaves today's path.
++ * `[img-cache]` lines say what happened. */
++#include <dirent.h>
++#include <sys/mount.h>
++#include "pp_img_cache.h"
++
++#define IOS_IMG_CACHE_SECTIONS 96
++#define IOS_IMG_CACHE_RUNS (2 * IOS_IMG_CACHE_SECTIONS + 2)
++#define IOS_IMG_CACHE_BLOCK (1u << 20)
++#define IOS_IMG_CACHE_BUSY 8
++#define IOS_IMG_CACHE_ENTRIES 64
++
++struct ios_img_cache_job
++{
++    struct ios_img_cache_job *next;
++    int fd;                                   /* a dup of the image file's */
++    char name[128], label[64];
++    uint64_t file_size;                       /* the copy's */
++    int nruns;
++    struct ppic_run runs[IOS_IMG_CACHE_RUNS];
++};
++
++static pthread_mutex_t ios_img_cache_lock = PTHREAD_MUTEX_INITIALIZER;
++static pthread_cond_t ios_img_cache_cond = PTHREAD_COND_INITIALIZER;
++static struct ios_img_cache_job *ios_img_cache_queue;
++static char ios_img_cache_busy[IOS_IMG_CACHE_BUSY][128];   /* copies queued or being written */
++static int ios_img_cache_writer_started;
++static const char *ios_img_cache_dir_path;
++static int ios_img_cache_dir_read;
++static unsigned ios_img_cache_said;
++
++static const char *ios_img_cache_dir(void)
++{
++    if (!__atomic_load_n( &ios_img_cache_dir_read, __ATOMIC_ACQUIRE ))
++    {
++        const char *d = getenv( "PLAYPORT_IMAGE_CACHE_DIR" );
++        ios_img_cache_dir_path = d && d[0] == '/' && strlen( d ) < 512 ? d : NULL;
++        __atomic_store_n( &ios_img_cache_dir_read, 1, __ATOMIC_RELEASE );
++    }
++    return ios_img_cache_dir_path;
++}
++
++/* Writer thread: deletes leftovers and the least recently used copies so the
++ * new one fits PPIC_BUDGET, and checks the free space. */
++static BOOL ios_img_cache_make_room( const char *dir, uint64_t need, char *why, size_t why_size )
++{
++    struct ppic_entry e[IOS_IMG_CACHE_ENTRIES];
++    char names[IOS_IMG_CACHE_ENTRIES][128], path[1024];
++    struct dirent *de;
++    struct statfs fs;
++    unsigned n = 0, i;
++    DIR *d;
++
++    if (!(d = opendir( dir )))
++    {
++        snprintf( why, why_size, "no directory (%s)", strerror( errno ) );
++        return FALSE;
++    }
++    while ((de = readdir( d )))
++    {
++        size_t len = strlen( de->d_name );
++        struct stat st;
++
++        if (len < 5 || len >= sizeof(names[0])) continue;
++        snprintf( path, sizeof(path), "%s/%s", dir, de->d_name );
++        if (!strcmp( de->d_name + len - 4, ".tmp" ))   /* one writer: a .tmp now is an interrupted write */
++        {
++            unlink( path );
++            continue;
++        }
++        if (strcmp( de->d_name + len - 4, ".img" ) || n == IOS_IMG_CACHE_ENTRIES || stat( path, &st )) continue;
++        e[n].size = (uint64_t)st.st_size;
++        e[n].used = (int64_t)st.st_mtime;
++        strcpy( names[n++], de->d_name );
++    }
++    closedir( d );
++    if (!ppic_evict( e, n, PPIC_BUDGET, need ))
++    {
++        snprintf( why, why_size, "%llu MiB is over the %llu MiB budget", (unsigned long long)(need >> 20),
++                  (unsigned long long)(PPIC_BUDGET >> 20) );
++        return FALSE;
++    }
++    for (i = 0; i < n; i++)
++    {
++        if (!e[i].victim) continue;
++        snprintf( path, sizeof(path), "%s/%s", dir, names[i] );
++        unlink( path );
++        dprintf( 2, "[img-cache] deleted %s (%llu MiB, least recently used) for room\n", names[i],
++                 (unsigned long long)(e[i].size >> 20) );
++    }
++    if (statfs( dir, &fs ) || (uint64_t)fs.f_bavail * fs.f_bsize < need + PPIC_FREE_KEEP)
++    {
++        snprintf( why, why_size, "%llu MiB free, under %llu MiB + %llu MiB",
++                  (unsigned long long)((uint64_t)fs.f_bavail * fs.f_bsize >> 20),
++                  (unsigned long long)(need >> 20), (unsigned long long)(PPIC_FREE_KEEP >> 20) );
++        return FALSE;
++    }
++    return TRUE;
++}
++
++/* Writer thread: one copy, written to <name>.tmp, read back, renamed. */
++static void ios_img_cache_write( const char *dir, struct ios_img_cache_job *job )
++{
++    char path[1024], tmp[1100], why[160] = "";
++    char *buf = NULL, *chk = NULL;
++    struct timespec t0, t1;
++    uint64_t b;
++    int out = -1, r;
++
++    clock_gettime( CLOCK_MONOTONIC, &t0 );
++    snprintf( path, sizeof(path), "%s/%s", dir, job->name );
++    snprintf( tmp, sizeof(tmp), "%s.tmp", path );
++    if (!ios_img_cache_make_room( dir, job->file_size, why, sizeof(why) )) goto failed;
++    if (!(buf = malloc( IOS_IMG_CACHE_BLOCK )) || !(chk = malloc( IOS_IMG_CACHE_BLOCK )))
++    {
++        snprintf( why, sizeof(why), "no memory for its buffers" );
++        goto failed;
++    }
++    if ((out = open( tmp, O_CREAT | O_TRUNC | O_RDWR | O_CLOEXEC, 0600 )) < 0)
++    {
++        snprintf( why, sizeof(why), "open: %s", strerror( errno ) );
++        goto failed;
++    }
++    fcntl( out, F_NOCACHE, 1 );   /* the copy's pages need not stay in memory while it is written */
++    for (b = 0; b < job->file_size; b += IOS_IMG_CACHE_BLOCK)
++    {
++        uint64_t size = job->file_size - b < IOS_IMG_CACHE_BLOCK ? job->file_size - b : IOS_IMG_CACHE_BLOCK;
++
++        memset( buf, 0, size );
++        for (r = 0; r < job->nruns; r++)
++        {
++            uint64_t in_block, in_run, len = ppic_overlap( &job->runs[r], b, size, &in_block, &in_run );
++            ssize_t got;
++
++            if (!len) continue;
++            if (job->runs[r].zero)
++            {
++                memset( buf + in_block, 0, len );
++                continue;
++            }
++            /* as pread into the view: a read short at the end of the file leaves the rest as it was */
++            if ((got = pread( job->fd, buf + in_block, len, job->runs[r].off + in_run )) < 0)
++            {
++                snprintf( why, sizeof(why), "read at 0x%llx: %s",
++                          (unsigned long long)(job->runs[r].off + in_run), strerror( errno ) );
++                goto failed;
++            }
++        }
++        if (pwrite( out, buf, size, b ) != (ssize_t)size || pread( out, chk, size, b ) != (ssize_t)size ||
++            memcmp( buf, chk, size ))
++        {
++            snprintf( why, sizeof(why), "write or read-back at 0x%llx failed", (unsigned long long)b );
++            goto failed;
++        }
++    }
++    if (fsync( out ) || close( out ))
++    {
++        out = -1;
++        snprintf( why, sizeof(why), "fsync: %s", strerror( errno ) );
++        goto failed;
++    }
++    out = -1;
++    if (rename( tmp, path ))
++    {
++        snprintf( why, sizeof(why), "rename: %s", strerror( errno ) );
++        goto failed;
++    }
++    clock_gettime( CLOCK_MONOTONIC, &t1 );
++    dprintf( 2, "[img-cache] wrote %s for %s: %llu MiB in %ld ms (%d runs)\n", job->name, job->label,
++             (unsigned long long)(job->file_size >> 20),
++             (long)((t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000), job->nruns );
++    free( buf );
++    free( chk );
++    return;
++
++failed:
++    if (out >= 0) close( out );
++    unlink( tmp );
++    free( buf );
++    free( chk );
++    dprintf( 2, "[img-cache] no copy written for %s: %s; it is read as before\n", job->label, why );
++}
++
++static void *ios_img_cache_writer( void *arg )
++{
++    sigset_t all;
++
++    sigfillset( &all );
++    pthread_sigmask( SIG_BLOCK, &all, NULL );   /* no Wine or FEX signal is meant for this thread */
++    for (;;)
++    {
++        struct ios_img_cache_job *job;
++        unsigned i;
++
++        pthread_mutex_lock( &ios_img_cache_lock );
++        while (!ios_img_cache_queue) pthread_cond_wait( &ios_img_cache_cond, &ios_img_cache_lock );
++        job = ios_img_cache_queue;
++        ios_img_cache_queue = job->next;
++        pthread_mutex_unlock( &ios_img_cache_lock );
++
++        ios_img_cache_write( arg, job );
++
++        pthread_mutex_lock( &ios_img_cache_lock );
++        for (i = 0; i < IOS_IMG_CACHE_BUSY; i++)
++            if (!strcmp( ios_img_cache_busy[i], job->name )) ios_img_cache_busy[i][0] = 0;
++        pthread_mutex_unlock( &ios_img_cache_lock );
++        close( job->fd );
++        free( job );
++    }
++    return NULL;
++}
++
++/* Queues the copy's write unless it is queued already; FALSE when it cannot. */
++static BOOL ios_img_cache_queue_write( const char *dir, int fd, const char *name, const char *label,
++                                       uint64_t file_size, const struct ppic_run *runs, int nruns )
++{
++    struct ios_img_cache_job *job;
++    int free_slot = -1, i;
++    pthread_t thread;
++    pthread_attr_t attr;
++
++    pthread_mutex_lock( &ios_img_cache_lock );
++    for (i = 0; i < IOS_IMG_CACHE_BUSY; i++)
++    {
++        if (!strcmp( ios_img_cache_busy[i], name )) break;
++        if (!ios_img_cache_busy[i][0] && free_slot < 0) free_slot = i;
++    }
++    if (i < IOS_IMG_CACHE_BUSY || free_slot < 0 || !(job = calloc( 1, sizeof(*job) )))
++    {
++        pthread_mutex_unlock( &ios_img_cache_lock );
++        return FALSE;
++    }
++    if ((job->fd = fcntl( fd, F_DUPFD_CLOEXEC, 0 )) < 0)
++    {
++        pthread_mutex_unlock( &ios_img_cache_lock );
++        free( job );
++        return FALSE;
++    }
++    snprintf( job->name, sizeof(job->name), "%s", name );
++    snprintf( job->label, sizeof(job->label), "%s", label );
++    job->file_size = file_size;
++    job->nruns = nruns;
++    memcpy( job->runs, runs, nruns * sizeof(*runs) );
++    if (!ios_img_cache_writer_started)
++    {
++        pthread_attr_init( &attr );
++        pthread_attr_setdetachstate( &attr, PTHREAD_CREATE_DETACHED );
++        if (pthread_create( &thread, &attr, ios_img_cache_writer, (void *)dir ))
++        {
++            pthread_attr_destroy( &attr );
++            pthread_mutex_unlock( &ios_img_cache_lock );
++            close( job->fd );
++            free( job );
++            return FALSE;
++        }
++        pthread_attr_destroy( &attr );
++        ios_img_cache_writer_started = 1;
++    }
++    snprintf( ios_img_cache_busy[free_slot], sizeof(ios_img_cache_busy[0]), "%s", name );
++    job->next = ios_img_cache_queue;
++    ios_img_cache_queue = job;
++    pthread_cond_signal( &ios_img_cache_cond );
++    pthread_mutex_unlock( &ios_img_cache_lock );
++    return TRUE;
++}
++
++/* virtual_mutex held, from map_image_into_view after map_pe_header: maps the
++ * whole image from its cache copy (TRUE), or leaves the view to the section
++ * loop (FALSE), queueing the copy's write when the image is eligible. */
++static BOOL ios_img_cache_map( struct file_view *view, const UNICODE_STRING *nt_name, int fd,
++                               const struct stat *st, const IMAGE_NT_HEADERS *nt, const IMAGE_SECTION_HEADER *sec,
++                               SIZE_T header_size, SIZE_T header_map_size, SIZE_T align_mask, BOOL removable )
++{
++    struct ppic_section s[IOS_IMG_CACHE_SECTIONS];
++    struct ppic_run runs[IOS_IMG_CACHE_RUNS];
++    unsigned n = nt->FileHeader.NumberOfSections, i;
++    char name[128], label[64], path[1024], *head = NULL;
++    const char *dir = ios_img_cache_dir();
++    uint64_t file_size = ppic_file_size( view->size, host_page_mask );
++    struct stat cst;
++    int nruns, cfd, x64, ok;
++
++    if (!dir || n > IOS_IMG_CACHE_SECTIONS || header_size > (1u << 20)) return FALSE;
++    for (i = 0; i < n; i++)
++        s[i] = (struct ppic_section){ sec[i].VirtualAddress, sec[i].PointerToRawData, sec[i].SizeOfRawData,
++                                      sec[i].Misc.VirtualSize, sec[i].Characteristics };
++    x64 = nt->FileHeader.Machine == IMAGE_FILE_MACHINE_AMD64 &&
++          nt->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC &&
++          !(view->protect & (VPROT_WOW64_IMAGE | VPROT_ARM64EC)) && !((UINT_PTR)view->base & host_page_mask);
++    if (!ppic_eligible( x64, view->size, nt->OptionalHeader.SectionAlignment, nt->OptionalHeader.FileAlignment,
++                        host_page_mask, removable, s, n ))
++        return FALSE;
++    {
++        /* the image's file name, ASCII, for the lines */
++        const WCHAR *p = nt_name ? nt_name->Buffer : NULL;
++        size_t len = nt_name ? nt_name->Length / sizeof(WCHAR) : 0, start = len, k = 0;
++        while (start > 0 && p[start - 1] != '\\' && p[start - 1] != '/') start--;
++        for (; start < len && k + 1 < sizeof(label); start++)
++            label[k++] = p[start] > 0x20 && p[start] < 0x7f ? (char)p[start] : '?';
++        label[k] = 0;
++    }
++    if ((nruns = ppic_layout( s, n, (uint64_t)st->st_size, view->size, header_size, header_map_size, align_mask,
++                              host_page_mask, runs, IOS_IMG_CACHE_RUNS )) < 0)
++        return FALSE;
++    ppic_name( name, sizeof(name), (uint64_t)st->st_dev, (uint64_t)st->st_ino, (uint64_t)st->st_size,
++               (int64_t)st->st_mtimespec.tv_sec, st->st_mtimespec.tv_nsec, view->size );
++    snprintf( path, sizeof(path), "%s/%s", dir, name );
++
++    if ((cfd = open( path, O_RDONLY | O_CLOEXEC )) >= 0)
++    {
++        ok = !fstat( cfd, &cst ) && (uint64_t)cst.st_size == file_size && (head = malloc( header_size ));
++        if (ok)
++        {
++            ok = pread( cfd, head, header_size, 0 ) == (ssize_t)header_size && !memcmp( head, view->base, header_size );
++            free( head );
++        }
++        if (ok && map_file_into_view( view, cfd, 0, view->size, 0, VPROT_COMMITTED | VPROT_READ | VPROT_WRITECOPY,
++                                      FALSE ) == STATUS_SUCCESS)
++        {
++            futimens( cfd, NULL );   /* last used: the eviction's order */
++            close( cfd );
++            if (__atomic_fetch_add( &ios_img_cache_said, 1, __ATOMIC_RELAXED ) < 64)
++                dprintf( 2, "[img-cache] mapped %s at %p from its copy %s (%llu MiB)\n", label, view->base, name,
++                         (unsigned long long)(file_size >> 20) );
++            return TRUE;
++        }
++        close( cfd );
++        if (!ok)
++        {
++            unlink( path );
++            dprintf( 2, "[img-cache] %s: copy %s did not match (size or header); deleted\n", label, name );
++        }
++        else
++        {
++            dprintf( 2, "[img-cache] %s: copy %s could not be mapped; read as before\n", label, name );
++            return FALSE;
++        }
++    }
++    if (ios_img_cache_queue_write( dir, fd, name, label, file_size, runs, nruns ))
++        dprintf( 2, "[img-cache] %s: no copy yet, read as before; writing %s (%llu MiB) in the background\n",
++                 label, name, (unsigned long long)(file_size >> 20) );
++    return FALSE;
++}
++#endif
++
+ /***********************************************************************
+  *           map_image_into_view
+  *
+@@ -15068,6 +15425,10 @@ static NTSTATUS map_image_into_view( struct file_view *view, const UNICODE_STRIN
+     /* map all the sections */
+ 
+     ios_img_file_mapped = ios_img_file_read = 0;
++#ifdef WINE_IOS
++    /* Playport (decision 0167): a large x86-64 image maps whole from its cache copy */
++    if (!ios_img_cache_map( view, nt_name, fd, &st, nt, sec, header_size, header_map_size, align_mask, removable ))
++#endif
+     for (i = pos = 0; i < nt->FileHeader.NumberOfSections; i++)
+     {
+         static const SIZE_T sector_align = 0x1ff;

@@ -1,7 +1,7 @@
 # 0057: A copy of a game is `(store, store game ID)`, end to end
 
 **Status:** accepted, 2026-10-06 (owner, in the
-[PC import, GOG and Epic plan](../plans/finished.md#pc-import-gog-and-epic), Phase 0).
+[PC import, GOG and Epic plan](https://linear.app/playportdev/issue/PLA-80), Phase 0).
 Carries out the condition [0045](0045-library-store-copies.md) set before a second
 store; 0045's library rules are unchanged.
 

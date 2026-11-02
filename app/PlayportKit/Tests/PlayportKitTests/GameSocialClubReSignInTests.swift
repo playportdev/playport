@@ -5,6 +5,52 @@ import XCTest
 /// Decision 0155: after the end of the game's own Social Club, a re-sign-in allows the helper's
 /// restarts until the new sign-in is done, at most twice a Play, and the end may run again after it.
 final class GameSocialClubReSignInTests: XCTestCase {
+    /// 0155 as amended: an allow needs footprint + 600 MB under the limit less 400 MB. Run d1's
+    /// two allows came at 7,621 and 8,124 MB of 8,192, and its jetsam followed the second.
+    func testAnAllowNeedsHeadroom() {
+        let fits = GameSocialClubReSignIn.hasRestartHeadroom(footprintMB:limitMB:)
+        XCTAssertTrue(fits(7_191, 8_192))     // 7,791 < 7,792
+        XCTAssertFalse(fits(7_192, 8_192))    // 7,792 is not under 7,792
+        XCTAssertFalse(fits(7_621, 8_192))    // d1's first allow
+        XCTAssertFalse(fits(8_124, 8_192))    // d1's second
+        XCTAssertFalse(fits(1_000, nil))      // no limit read: no headroom
+
+        var r = GameSocialClubReSignIn()
+        r.ended(at: 221.6, signIns: 1)
+        XCTAssertNil(r.slice(at: 251, signIns: 1, languageCalls: 1, footprintMB: 7_610, limitMB: 8_192))
+        XCTAssertEqual(r.slice(at: 253, signIns: 1, languageCalls: 3, footprintMB: 7_621, limitMB: 8_192),
+                       .noHeadroom(.steamLanguage, footprintMB: 7_621))
+        // the refusal stands for the rest of the Play and spends no allow; no re-end follows
+        XCTAssertEqual(r.phase, .finished)
+        XCTAssertFalse(r.watching)
+        XCTAssertEqual(r.allows, 0)
+        XCTAssertNil(r.slice(at: 300, signIns: 2, languageCalls: 0, footprintMB: 5_000, limitMB: 8_192))
+        XCTAssertNil(r.reEndSignInAt)
+
+        var log = GameSocialClubReSignIn()
+        log.ended(at: 300, signIns: 1)
+        XCTAssertEqual(log.slice(at: 302, signIns: 2, languageCalls: 0, footprintMB: 7_200, limitMB: 8_192),
+                       .noHeadroom(.socialClubLog, footprintMB: 7_200))
+        var room = GameSocialClubReSignIn()
+        room.ended(at: 300, signIns: 1)
+        XCTAssertEqual(room.slice(at: 302, signIns: 2, languageCalls: 0, footprintMB: 7_100, limitMB: 8_192),
+                       .allow(.socialClubLog))
+    }
+
+    /// With all allows spent the answer stays "no allow left", whatever the headroom.
+    func testNoAllowLeftComesBeforeHeadroom() {
+        var r = GameSocialClubReSignIn()
+        r.ended(at: 300, signIns: 1)
+        XCTAssertEqual(r.slice(at: 302, signIns: 2, languageCalls: 0), .allow(.socialClubLog))
+        XCTAssertEqual(r.slice(at: 320, signIns: 3, languageCalls: 0), .refuseAgain(signedIn: true))
+        r.ended(at: 450, signIns: 3)
+        XCTAssertEqual(r.slice(at: 451, signIns: 4, languageCalls: 0), .allow(.socialClubLog))
+        XCTAssertEqual(r.slice(at: 460, signIns: 5, languageCalls: 0), .refuseAgain(signedIn: true))
+        r.ended(at: 600, signIns: 5)
+        XCTAssertEqual(r.slice(at: 601, signIns: 6, languageCalls: 0, footprintMB: 8_100, limitMB: 8_192),
+                       .noAllowLeft(.socialClubLog))
+    }
+
     func testNothingBeforeTheEnd() {
         var r = GameSocialClubReSignIn()
         XCTAssertFalse(r.watching)
@@ -119,5 +165,12 @@ final class GameSocialClubReSignInTests: XCTestCase {
         XCTAssertEqual(w.signIns(log(first)), 1)
         XCTAssertEqual(w.signIns(log(first + ["[00300000] Signed out", "[00301000] Signed in online to profile someone"])), 2)
         XCTAssertEqual(w.signIns(log(["[00000000] Thu Oct 15 22:45:58 2026"])), 0)
+    }
+}
+
+private extension GameSocialClubReSignIn {
+    /// A slice with room for a restart (5,000 of 8,192 MB), for the tests that are not about headroom.
+    mutating func slice(at elapsed: Double, signIns: Int, languageCalls: Int) -> Step? {
+        slice(at: elapsed, signIns: signIns, languageCalls: languageCalls, footprintMB: 5_000, limitMB: 8_192)
     }
 }

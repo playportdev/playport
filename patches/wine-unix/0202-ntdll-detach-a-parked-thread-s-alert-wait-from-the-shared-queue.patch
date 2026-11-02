@@ -1,0 +1,114 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 30 Oct 2026 12:30:00 +0100
+Subject: [PATCH] ntdll: detach a parked thread's alert wait from the shared
+ queue on iOS
+
+Decision 0166 (PLA-476). A thread parked at its process's teardown (decision
+0127) stays Mach-suspended for ever in NtWaitForAlertByThreadId, on its own
+alert word; the address it waits on is only a key in the ml441 shared
+RtlWaitOnAddress queue, through its queue node on its stack, and in the
+waiter registry. Left there, a later process's wake on the same address
+finds the dead node first and its own waiter is never woken.
+
+ios_detach_parked_wait(tid, addr, stack) takes the bucket's lock with
+bounded tries (-1, nothing changed, when it stays held), unlinks the
+thread's node for (addr, tid) and writes its addr NULL with release
+semantics as RtlWakeAddress* does, and clears the thread's registry entry
+only while it is still that wait. A node for (addr, tid) off the thread's
+stack is a recycled tid's: it is left alone and the result is -1. The
+caller is madeira-unix 0229's teardown.
+
+Class: ios-port
+Evidence: docs/evidence/2026-10-29-sc-stock-cef-probe.md
+Offered-upstream: no; iOS one-process runtime integration
+---
+ dlls/ntdll/unix/sync.c | 75 ++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 75 insertions(+)
+
+diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
+index f03980c..363f9f0 100644
+--- a/dlls/ntdll/unix/sync.c
++++ b/dlls/ntdll/unix/sync.c
+@@ -4790,6 +4790,81 @@ int ios_alert_waiter_lookup( unsigned int tid, const void **addr, int *age_s, in
+     return 0;
+ }
+ 
++/* Playport (PLA-476, decision 0166): a parked thread's wait address leaves the
++ * ml441 shared queue and the waiter registry at its process's teardown, so it
++ * is no longer a key another process's wake or the lock monitor can find. The
++ * thread itself stays Mach-suspended for ever (0127) in its host wait, which is
++ * on its own alert word, not this address. Its queue node (on its stack) for
++ * (addr, tid) is unlinked and the node's addr written NULL with release
++ * semantics, as RtlWakeAddress* does; its registry entry's address is cleared
++ * only while it is still tid's wait on addr, so a recycled tid waiting
++ * elsewhere keeps its own. A node is the parked thread's only if it lies on
++ * that thread's stack, [stack_lo, stack_hi): a node for (addr, tid) anywhere
++ * else is a recycled tid's, and is left alone. The bucket lock is tried a
++ * bounded number of times. -1, and nothing changes, when the lock stays held
++ * (a thread suspended or ended in RtlWakeAddress*), the list is longer than
++ * any real one, or a recycled tid has a node for addr; 1 when the node was
++ * unlinked, 0 when none was queued (a waker took it, or the thread waited
++ * without one). */
++#define IOS_DETACH_LOCK_TRIES 200
++#define IOS_DETACH_NODES_MAX 4096
++
++struct ios_detach_node
++{
++    struct ios_detach_node *next, *prev;   /* PE ntdll's struct futex_entry: list, addr, tid */
++    const void *addr;
++    unsigned int tid;
++};
++
++/* The bucket's lock held. */
++static int ios_futex_unlink_tid( struct ios_shared_futex_queue *q, const void *addr, unsigned int tid,
++                                 ULONG_PTR stack_lo, ULONG_PTR stack_hi )
++{
++    struct ios_detach_node *head = (struct ios_detach_node *)q, *e, *next;
++    unsigned int seen = 0;
++    int found = 0;
++
++    if (!q->next) return 0;   /* no waiter ever: its first one list_init()s it */
++    for (e = head->next; e != head; e = e->next)
++    {
++        if (++seen > IOS_DETACH_NODES_MAX) return -1;
++        if (e->addr == addr && e->tid == tid && ((ULONG_PTR)e < stack_lo || (ULONG_PTR)e >= stack_hi))
++            return -1;
++    }
++    for (e = head->next; e != head; e = next)
++    {
++        next = e->next;
++        if (e->addr != addr || e->tid != tid) continue;
++        e->prev->next = e->next;
++        e->next->prev = e->prev;
++        __atomic_store_n( &e->addr, NULL, __ATOMIC_RELEASE );
++        found = 1;
++    }
++    return found;
++}
++
++int ios_detach_parked_wait( unsigned int tid, const void *addr, ULONG_PTR stack_lo, ULONG_PTR stack_hi )
++{
++    struct ios_shared_futex_queue *q = &ios_shared_futex_queues[(((ULONG_PTR)addr) >> 4) % 256];
++    int tries, ret, i;
++
++    for (tries = 0; InterlockedCompareExchange( &q->lock, -1, 0 ); tries++)
++    {
++        if (tries >= IOS_DETACH_LOCK_TRIES) return -1;
++        usleep( 50 );
++    }
++    ret = ios_futex_unlink_tid( q, addr, tid, stack_lo, stack_hi );
++    InterlockedExchange( &q->lock, 0 );
++    if (ret < 0) return -1;
++    for (i = 0; i < IOS_ALERT_WAITER_MAX; i++)
++        if ((unsigned int)(ULONG_PTR)ios_alert_waiters[i].tid == tid)
++        {
++            InterlockedCompareExchangePointer( (void **)&ios_alert_waiters[i].addr, NULL, (void *)addr );
++            break;
++        }
++    return ret;
++}
++
+ void ios_alert_waiter_dump(void)
+ {
+     LARGE_INTEGER now;

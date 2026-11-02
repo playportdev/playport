@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Gyro aim's settings (docs/plans/2026-10-09-touch-controls.md, "Gyro";
+// Gyro aim's settings (PLA-13, "Gyro";
 // GyroAim.dc.html), stored like the on-screen controls' (Controls.swift):
 // the defaults under their own UserDefaults keys, each game's own (GameGyro)
 // as JSON with nil fields following the defaults. HostIOKit GyroAim does the

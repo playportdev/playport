@@ -1,6 +1,6 @@
 # Vulkan performance, step 0: the tooling the Vulkan route lacked
 
-**Date:** 2026-10-06. **Plan:** [Vulkan performance](../plans/2026-10-06-vulkan-performance.md),
+**Date:** 2026-10-06. **Plan:** [Vulkan performance](https://linear.app/playportdev/issue/PLA-680),
 step 0. **Branch:** `vulkan-performance`. **IPAs:** `a69efc64…` (0.1–0.3),
 `4b6b0586…`, then `18805415…` (0.4 with the per-thread tables, 0.2, the gate), all dev,
 installed in place. Run directories are under `$PLAYPORT_BUILD`.

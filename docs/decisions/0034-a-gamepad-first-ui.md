@@ -2,8 +2,10 @@
 
 **Status:** accepted, 2026-09-30. Carries out the design in
 [`docs/design/2026-09-28-gamepad-ui/`](../design/2026-09-28-gamepad-ui/) under the
-[plan](../plans/finished.md#the-gamepad-first-ui). [0012](0012-the-ui-is-the-only-entry-point.md)
-holds: everything stays in the UI.
+[plan](https://linear.app/playportdev/issue/PLA-679). [0012](0012-the-ui-is-the-only-entry-point.md)
+holds: everything stays in the UI. Amended by
+[0171](0171-on-screen-controls-input-mapping-and-gyro.md): a three-finger tap on the game opens
+the in-game menu too.
 
 ## Decision
 

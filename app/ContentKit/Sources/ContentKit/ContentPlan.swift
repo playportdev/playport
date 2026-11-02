@@ -158,4 +158,12 @@ public struct ContentPlan: Sendable {
 /// returns bytes already checked against the chunk's size and `check`, or throws.
 public protocol ContentChunkSource: Sendable {
     func chunk(_ c: ContentChunk) async throws -> [UInt8]
+    /// Whether `plain` (read back from a stage on resume) is the chunk's content. The default is
+    /// the chunk's own `check`; a store whose chunks carry their own hashes inside the bytes
+    /// (`check: .none`) checks them here, so a resume never trusts damaged bytes.
+    func matches(_ c: ContentChunk, _ plain: [UInt8]) -> Bool
+}
+
+extension ContentChunkSource {
+    public func matches(_ c: ContentChunk, _ plain: [UInt8]) -> Bool { c.matches(plain) }
 }

@@ -2,7 +2,7 @@
 import Foundation
 
 /// A physical pad played through a controller map's table (ControllerBindings;
-/// docs/plans/2026-10-09-touch-controls.md, phase 3): what InputMixer sends for
+/// PLA-13, phase 3): what InputMixer sends for
 /// a pad whose map is not `controller`.
 ///
 /// - Buttons and d-pad directions hold their action while down. A trigger, or

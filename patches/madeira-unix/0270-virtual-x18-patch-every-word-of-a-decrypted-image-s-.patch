@@ -1,0 +1,625 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 1 Nov 2026 10:01:29 +0100
+Subject: [PATCH] virtual: x18-patch every word of a decrypted image's .pdata
+ functions
+
+A flush of World of Warcraft's decrypted image took as code what the
+function starts of its .pdata reach by direct branches and BL calls
+(0265). A block entered only through a switch jump table and a BR was
+never reached, and kept its x18 instructions: the client's main thread
+spun at +0x2cb1b90 on an unpatched `cmp x18, #8` in a case of function
++0x2cb1018, whose only way in is the table at +0x2cb3f34.
+
+A cipher 2 run with a code hint now also takes as code every word of
+each function .pdata lists, its length from the packed unwind data or
+the header of its .xdata, but the data kept among them: what an ADR, an
+ADRP and ADD, or an ADRP and a load offset addresses for a load in the
+8 words after it (a jump table, bounded by the compare or mask on its
+index; other data to the end of its function), and what an LDR
+(literal) loads. Data never starts where code falls through to it: a
+run is data only after a B, a RET, a BR, a UDF, an unallocated word,
+up to 3 alignment NOPs, or data, and never at a function start. The
+client loads 132,499 words of its own reachable code as literals, and
+one such word in a switch case is code. A function holding an
+unallocated word outside its data (bytes still encrypted) is left to
+its start, as before.
+
+Over the image dumped on the phone the patch count goes from 40,590 to
+55,679, +0x2cb1b8c among them, with none in the 31,678 words of the
+bounded jump tables found independently, nor on a literal not fallen
+into by code.
+
+Linear: PLA-514
+Class: ios-port
+Evidence: docs/evidence/2026-10-31-wow-arm64-start.md, tools/tests/test_x18_encrypted.py
+Offered-upstream: no
+---
+ build/ntdll-unix/virtual_ios.c | 516 +++++++++++++++++++++++++++------
+ 1 file changed, 431 insertions(+), 85 deletions(-)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 68bb597..8dd3520 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -5409,13 +5409,18 @@ static int ios_x18_mark_x64_ranges( const char *text, size_t text_size, size_t t
+ /* Playport (PLA-514): what a cipher 2 run (ios_x18_reachable_map) also knows to be code.
+  * World of Warcraft's ARM64 client decrypts all of its .text in place at once, without a
+  * flush on the way, and then flushes its whole image: reachable from the range's first
+- * word is then almost none of it. Its .pdata lists every function it decrypted, so the
+- * function starts there and what their BL calls reach are code too, inside the 1 KB
+- * windows of .text (from window_rva) the program rewrote since the copy took its bytes.
+- * A window it has not rewritten is left: it is still encrypted, or was patched before.
++ * word is then almost none of it. Its .pdata lists every function it decrypted, with
++ * each one's length in its unwind data, so every word of those functions is code too,
++ * but for the switch jump tables kept among them, inside the 1 KB windows of .text (from
++ * window_rva) the program rewrote since the copy took its bytes. A window it has not
++ * rewritten is left: it is still encrypted, or was patched before.
+  * ios_jit_repatch_x18 sets it for one run under ios_section_view_lock. */
+ struct ios_x18_code_hint
+ {
++    const char          *image;        /* the image the RVAs below are of */
++    size_t               image_size;
++    size_t               text_rva;     /* its .text */
++    size_t               text_size;
+     const uint32_t      *pdata;        /* RUNTIME_FUNCTION entries: BeginAddress, UnwindData */
+     size_t               pdata_count;
+     const unsigned char *rewritten;    /* a bit a window */
+@@ -5424,19 +5429,372 @@ struct ios_x18_code_hint
+ };
+ static const struct ios_x18_code_hint *ios_x18_code_hint;
+ 
++/* The length in bytes of the function .pdata entry k lists: from its packed unwind data, or
++ * from the header of its .xdata. 0 if that is outside the image. */
++static size_t ios_x18_function_length( const struct ios_x18_code_hint *hint, size_t k )
++{
++    uint32_t unwind = hint->pdata[2 * k + 1];
++
++    if (unwind & 3) return ((unwind >> 2) & 0x7ff) * 4;
++    if ((size_t)unwind + 4 > hint->image_size) return 0;
++    return (*(const uint32_t *)(hint->image + unwind) & 0x3ffff) * 4;
++}
++
++/* Where inline data at rva ends at the latest: at the end of the function .pdata lists that
++ * holds it, or, between functions, at the start of the next one (.pdata is sorted). */
++static size_t ios_x18_data_end( const struct ios_x18_code_hint *hint, size_t rva )
++{
++    size_t lo = 0, hi = hint->pdata_count, end;
++
++    while (lo < hi)
++    {
++        size_t mid = lo + (hi - lo) / 2;
++        if (hint->pdata[2 * mid] <= rva) lo = mid + 1;
++        else hi = mid;
++    }
++    if (lo && rva < (end = hint->pdata[2 * (lo - 1)] + ios_x18_function_length( hint, lo - 1 ))) return end;
++    return lo < hint->pdata_count ? hint->pdata[2 * lo] : (size_t)-1;
++}
++
++/* The largest value an AND (immediate) of datasize bits leaves: its bitmask. */
++static uint64_t ios_a64_logical_imm( uint32_t insn, int datasize )
++{
++    int n = (insn >> 22) & 1, immr = (insn >> 16) & 0x3f, imms = (insn >> 10) & 0x3f, len = 6, size, i;
++    uint64_t elem, mask = 0;
++
++    while (len >= 0 && !(((n << 6) | (~imms & 0x3f)) & (1 << len))) len--;
++    if (len < 1) return ~(uint64_t)0;
++    size = 1 << len;
++    imms &= size - 1;
++    immr &= size - 1;
++    elem = imms + 1 >= 64 ? ~(uint64_t)0 : ((uint64_t)1 << (imms + 1)) - 1;
++    if (immr) elem = ((elem >> immr) | (elem << (size - immr))) & (size == 64 ? ~(uint64_t)0 : ((uint64_t)1 << size) - 1);
++    for (i = 0; i < datasize; i += size) mask |= elem << i;
++    return datasize == 64 ? mask : mask & 0xffffffff;
++}
++
++/* How many values index register wI has at word j, from what bounds it before: `cmp wI, #n`
++ * with a B.HI or B.LS (n + 1) or a B.HS or B.LO (n) after it, an AND with an immediate, a
++ * UXTB or UXTH, or a byte or halfword load into it. 0: unknown. */
++static size_t ios_x18_index_entries( const uint32_t *text, size_t j, unsigned int rm )
++{
++    unsigned int conds = 0;
++    size_t k;
++
++    for (k = j; k-- > 0 && k + 40 > j;)
++    {
++        uint32_t insn = text[k];
++
++        if ((insn & 0xff000010) == 0x54000000)                                      /* B.cond */
++        {
++            conds |= 1 << (insn & 0xf);
++            continue;
++        }
++        if ((insn & 0xfc000000) == 0x14000000 || (insn & 0xfffffc1f) == 0xd65f0000 ||
++            (insn & 0xfffffc1f) == 0xd61f0000)
++            return 0;                                                               /* B, RET, BR */
++        if ((insn & 0x7f80001f) == 0x7100001f && ((insn >> 5) & 0x1f) == rm)        /* CMP wI, #n */
++        {
++            size_t n = ((insn >> 10) & 0xfff) << ((insn >> 22) & 1 ? 12 : 0);
++            if (conds & ((1 << 8) | (1 << 9))) return n + 1;                        /* HI, LS */
++            if (conds & ((1 << 2) | (1 << 3))) return n;                            /* HS, LO */
++            return 0;
++        }
++        if ((insn & 0x7e000000) == 0x34000000 || (insn & 0x7e000000) == 0x36000000) continue;
++        if ((insn & 0x1f) != rm) continue;
++        if ((insn & 0x7f800000) == 0x12000000)                                      /* AND (immediate) */
++        {
++            uint64_t max = ios_a64_logical_imm( insn, insn >> 31 ? 64 : 32 );
++            return max < 0x10000 ? max + 1 : 0;
++        }
++        if ((insn & 0x7fbffc00) == 0x53001c00 || (insn & 0xffc00000) == 0x39400000) return 0x100;
++        if ((insn & 0x7fbffc00) == 0x53003c00 || (insn & 0xffc00000) == 0x79400000) return 0x10000;
++        return 0;
++    }
++    return 0;
++}
++
++/* Whether the word after insn is reached from it by fall-through: not after a B, a RET, a BR,
++ * their pointer-authenticated forms, or a UDF. */
++static int ios_a64_falls_through( uint32_t insn )
++{
++    return !((insn & 0xfc000000) == 0x14000000 || (insn & 0xfffffc1f) == 0xd65f0000 ||
++             (insn & 0xfffffc1f) == 0xd61f0000 || insn == 0xd65f0bff || insn == 0xd65f0fff ||
++             (insn & 0xfefff800) == 0xd61f0800 || (insn & 0xffff0000) == 0);
++}
++
++/* What ios_x18_mark_inline_data takes for data before it checks where each run starts. */
++struct ios_x18_data_runs
++{
++    struct ios_x18_data_run { size_t at, end; } *run;
++    size_t count, cap;
++};
++
++/* Add the words of [at, end), clipped to the hint's .text, to runs. 0: out of memory. */
++static int ios_x18_data_add( struct ios_x18_data_runs *runs, const struct ios_x18_code_hint *hint,
++                             int64_t at, size_t end )
++{
++    size_t text_end = hint->text_rva + hint->text_size;
++
++    if (at < (int64_t)hint->text_rva || (size_t)at >= text_end) return 1;
++    at &= ~(int64_t)3;                                  /* a byte table can start in a word */
++    end = (end + 3) & ~(size_t)3;
++    if (end > text_end) end = text_end;
++    if (end <= (size_t)at) return 1;
++    if (runs->count == runs->cap)
++    {
++        size_t cap = runs->cap ? runs->cap * 2 : 1024;
++        struct ios_x18_data_run *more = realloc( runs->run, cap * sizeof(*more) );
++        if (!more) return 0;
++        runs->run = more;
++        runs->cap = cap;
++    }
++    runs->run[runs->count].at = at;
++    runs->run[runs->count++].end = end;
++    return 1;
++}
++
++static int ios_x18_data_run_cmp( const void *a, const void *b )
++{
++    size_t x = ((const struct ios_x18_data_run *)a)->at, y = ((const struct ios_x18_data_run *)b)->at;
++    return x < y ? -1 : x > y;
++}
++
++/* Whether rva is where a function .pdata lists starts. */
++static int ios_x18_function_start( const struct ios_x18_code_hint *hint, size_t rva )
++{
++    size_t lo = 0, hi = hint->pdata_count;
++
++    while (lo < hi)
++    {
++        size_t mid = lo + (hi - lo) / 2;
++        if (hint->pdata[2 * mid] == rva) return 1;
++        if (hint->pdata[2 * mid] < rva) lo = mid + 1;
++        else hi = mid;
++    }
++    return 0;
++}
++
++/* Playport (PLA-514): mark in data (a bit a word of the run's text, words from text_rva)
++ * what a function keeps among the functions .pdata lists, for a cipher 2 run that takes
++ * their words as code. That is what an ADR, an ADRP and ADD, or an ADRP and the offset of
++ * a load or store addresses for a load or store in the 8 words after it, before a branch
++ * or a write of its register: the switch jump tables MSVC puts after a function's code,
++ * as in `adr x9, table; ldrsw x8, [x9, w0, uxtw #2]; adr x9, base; add x8, x9, x8, lsl #2;
++ * br x8`, and constants, as in `adrp x8, pool; ldr d0, [x8, #lo]`. A table indexed by a
++ * register (ios_x18_index_entries) has as many entries as the index has values; other
++ * data runs to the end of the function that holds it, or to the start of the next one
++ * (ios_x18_data_end): data never runs into a function. What an LDR (literal) loads is
++ * data too, all of its bytes: a double's low word can read as a CMP of x18.
++ * Data never starts where code falls through to it: a run is data only where the word
++ * before it (past up to 3 alignment NOPs) is a B, a RET, a BR, a UDF, an unallocated
++ * word or data, and never at a function start. World of Warcraft's client loads 132,499
++ * words of its own reachable code as literals; one such word in a switch case is code.
++ * All of the image's .text is read: a run can be one window of a function, and an ADRP
++ * reaches across the image. The words of a table read as anything, x18 instructions too,
++ * and a patched one sends the switch into the trampoline space. 0: out of memory. */
++static int ios_x18_mark_inline_data( const struct ios_x18_code_hint *hint, size_t text_rva, size_t words,
++                                     unsigned char *data )
++{
++    size_t run_end = text_rva + words * 4, lo = hint->text_rva, n = hint->text_size / 4, k, j, a, covered = 0;
++    const uint32_t *code = (const uint32_t *)(hint->image + lo);
++    struct ios_x18_data_runs runs = { NULL };
++    int ok = 1;
++
++    for (k = 0; ok && k < n; k++)
++    {
++        uint32_t insn = code[k], use = 0;
++        unsigned int t = insn & 0x1f;
++        size_t at = 0, end = 0, bytes = 0;
++        int found = 0;
++
++        switch (insn >> 24)
++        {
++        case 0x18: case 0x1c: case 0x98: bytes = 4; break;       /* LDR Wt/St, LDRSW (literal) */
++        case 0x58: case 0x5c: case 0xd8: bytes = 8; break;       /* LDR Xt/Dt, PRFM */
++        case 0x9c:                       bytes = 16; break;      /* LDR Qt */
++        }
++        if (bytes)
++        {
++            int64_t to = (int64_t)(lo + k * 4) + ((int64_t)((int32_t)(insn << 8) >> 13) * 4);
++            ok = ios_x18_data_add( &runs, hint, to, to + bytes );
++            continue;
++        }
++        if ((insn & 0x9f000000) == 0x90000000)                                      /* ADRP xT */
++        {
++            int64_t page = (int64_t)((lo + k * 4) & ~(size_t)0xfff) +
++                           (int64_t)((int32_t)(((insn >> 5) & 0x7ffff) << 13 | ((insn >> 29) & 3) << 11) >> 11) * 4096;
++            for (j = k + 1; ok && j < n && j < k + 9; j++)
++            {
++                uint32_t next = code[j];
++                if ((next & 0x3b000000) == 0x39000000 && ((next >> 5) & 0x1f) == t)  /* [xT, #lo] */
++                {
++                    unsigned int scale = next >> 30;
++                    int64_t to;
++                    if ((next & 0x04800000) == 0x04800000 && !scale) scale = 4;     /* LDR/STR Qt */
++                    to = page + (int64_t)(((next >> 10) & 0xfff) << scale);
++                    if (to >= (int64_t)lo) ok = ios_x18_data_add( &runs, hint, to, ios_x18_data_end( hint, to ) );
++                }
++                if ((next & 0x0a000000) == 0x08000000) continue;                    /* a load or store */
++                if ((next & 0x7c000000) == 0x14000000 || (next & 0xfe000000) == 0xd6000000) break;
++                if ((next & 0xff000010) == 0x54000000 || (next & 0x7c000000) == 0x34000000) continue;
++                if ((next & 0x1f) == t) break;                                      /* xT set again */
++            }
++            continue;
++        }
++        if ((insn & 0x9f000000) == 0x10000000)                                      /* ADR */
++        {
++            int64_t imm = (int32_t)(((insn >> 5) & 0x7ffff) << 13 | ((insn >> 29) & 3) << 11) >> 11;
++            found = (int64_t)(lo + k * 4) + imm >= 0;
++            at = lo + k * 4 + imm;
++        }
++        else if ((insn & 0xffc00000) == 0x91000000)                                 /* ADD xT, xA, #lo */
++        {
++            unsigned int ra = (insn >> 5) & 0x1f;
++            for (a = k; a-- > 0 && a + 8 > k;)
++                if ((code[a] & 0x9f00001f) == (0x90000000 | ra))                   /* ADRP xA */
++                {
++                    uint32_t page = code[a];
++                    int64_t imm = (int64_t)((int32_t)(((page >> 5) & 0x7ffff) << 13 | ((page >> 29) & 3) << 11) >> 11) * 4096;
++                    int64_t to = (int64_t)((lo + a * 4) & ~(size_t)0xfff) + imm + ((insn >> 10) & 0xfff);
++                    found = to >= 0;
++                    at = to;
++                    break;
++                }
++        }
++        if (!found || at < hint->text_rva) continue;
++        for (j = k + 1; j < n && j < k + 9 && !use; j++)
++        {
++            uint32_t next = code[j];
++            if ((next & 0x0a000000) == 0x08000000)                                  /* a load or store */
++            {
++                if (((next >> 5) & 0x1f) == t) use = j;
++                continue;
++            }
++            if ((next & 0x7c000000) == 0x14000000 || (next & 0xfe000000) == 0xd6000000)
++                break;                                                              /* B, BL, BR, BLR, RET */
++            if ((next & 0xff000010) == 0x54000000 || (next & 0x7c000000) == 0x34000000) continue;
++            if ((next & 0x1f) == t) break;                                          /* xT set again */
++        }
++        if (!use) continue;
++        end = ios_x18_data_end( hint, at );
++        insn = code[use];
++        if ((insn & 0x3b200c00) == 0x38200800 && (insn >> 13) & 2)                 /* [xT, wI/xI, extend] */
++        {
++            size_t entries = ios_x18_index_entries( code, use, (insn >> 16) & 0x1f );
++            unsigned int scale = insn >> 30;
++            if ((insn & 0x04800000) == 0x04800000 && !scale) scale = 4;             /* LDR/STR Qt */
++            if (entries && (entries << scale) < end - at) end = at + (entries << scale);
++        }
++        ok = ios_x18_data_add( &runs, hint, at, end );
++    }
++    if (ok && runs.count) qsort( runs.run, runs.count, sizeof(*runs.run), ios_x18_data_run_cmp );
++    for (k = 0; ok && k < runs.count; k++)
++    {
++        size_t at = runs.run[k].at, end = runs.run[k].end, w = (at - lo) / 4, b;
++
++        if (ios_x18_function_start( hint, at )) continue;
++        if (at > covered)
++        {
++            for (j = 0; w && j < 3 && code[w - 1] == 0xd503201f; j++) w--;    /* NOP */
++            if (w && ios_a64_falls_through( code[w - 1] ) && ((code[w - 1] >> 25) & 0xd) != 1) continue;
++        }
++        if (end > covered) covered = end;
++        if (end > run_end) end = run_end;
++        for (b = at > text_rva ? at : text_rva; b < end; b += 4)
++            data[(b - text_rva) / 32] |= 1 << ((b - text_rva) / 4 % 8);
++    }
++    free( runs.run );
++    return ok;
++}
++
++/* One walk of ios_x18_reachable_map: its text, what it found so far, what is left of it. */
++struct ios_x18_walk
++{
++    const uint32_t      *text;
++    size_t               words, text_rva;
++    const struct ios_x18_code_hint *hint;  /* NULL: the walk from the first word */
++    const unsigned char *inline_data;      /* ios_x18_mark_inline_data's: a walk ends there */
++    unsigned char       *queued, *data_map;
++    uint32_t            *stack;
++    size_t               top, cap;
++};
++
+ /* Queue word w of a reachable walk unless it was queued before. 0: out of memory. */
+-static int ios_x18_walk_push( uint32_t **stack, size_t *top, size_t *cap, unsigned char *queued, size_t w )
++static int ios_x18_walk_push( struct ios_x18_walk *walk, size_t w )
+ {
+-    if (queued[w >> 3] & (1 << (w & 7))) return 1;
+-    if (*top == *cap)
++    if (walk->queued[w >> 3] & (1 << (w & 7))) return 1;
++    if (walk->top == walk->cap)
+     {
+-        uint32_t *more = realloc( *stack, *cap * 2 * sizeof(**stack) );
++        uint32_t *more = realloc( walk->stack, walk->cap * 2 * sizeof(*walk->stack) );
+         if (!more) return 0;
+-        *stack = more;
+-        *cap *= 2;
++        walk->stack = more;
++        walk->cap *= 2;
++    }
++    walk->queued[w >> 3] |= 1 << (w & 7);
++    walk->stack[walk->top++] = (uint32_t)w;
++    return 1;
++}
++
++/* Whether word w of a walk with a hint is in a window of .text the program rewrote. */
++static int ios_x18_walk_rewritten( const struct ios_x18_walk *walk, size_t w )
++{
++    const struct ios_x18_code_hint *hint = walk->hint;
++    size_t rva = walk->text_rva + w * 4;
++
++    if (rva < hint->window_rva || (rva - hint->window_rva) / 1024 >= hint->windows) return 0;
++    return (hint->rewritten[(rva - hint->window_rva) / 8192] >> ((rva - hint->window_rva) / 1024 % 8)) & 1;
++}
++
++/* Run the queued words of a walk to their ends; with a hint, follow BL calls too, never
++ * leaving the rewritten windows nor entering its inline data. 0: out of memory. */
++static int ios_x18_walk_run( struct ios_x18_walk *walk )
++{
++    const uint32_t *text = walk->text;
++    size_t words = walk->words;
++
++    while (walk->top)
++    {
++        size_t w = walk->stack[--walk->top];
++        for (;;)
++        {
++            uint32_t insn = text[w];
++            uint32_t op0 = (insn >> 25) & 0xf;
++            int64_t off = 0, to;
++            int branch = 0, next = 1;
++
++            if (op0 == 1 || op0 == 3) break;                                  /* not code */
++            if (walk->inline_data && (walk->inline_data[w >> 3] & (1 << (w & 7)))) break;
++            walk->data_map[w >> 3] &= ~(1 << (w & 7));
++            if ((insn & 0xfc000000) == 0x14000000)                              /* B */
++            {
++                off = (int64_t)((int32_t)(insn << 6) >> 6) * 4; branch = 1; next = 0;
++            }
++            else if (walk->hint && (insn & 0xfc000000) == 0x94000000)           /* BL */
++            {
++                off = (int64_t)((int32_t)(insn << 6) >> 6) * 4; branch = 1;
++            }
++            else if ((insn & 0xff000010) == 0x54000000 || (insn & 0x7e000000) == 0x34000000)
++            {                                                                   /* B.cond, CBZ/CBNZ */
++                off = (int64_t)((int32_t)(insn << 8) >> 13) * 4; branch = 1;
++            }
++            else if ((insn & 0x7e000000) == 0x36000000)                         /* TBZ/TBNZ */
++            {
++                off = (int64_t)((int32_t)(insn << 13) >> 18) * 4; branch = 1;
++            }
++            else if (!ios_a64_falls_through( insn ))
++                next = 0;                                       /* RET, BR, RETAA/AB, BRAA/AB(Z), UDF */
++            to = (int64_t)w * 4 + off;
++            if (branch && to >= 0 && (size_t)to < words * 4 &&
++                (!walk->hint || ios_x18_walk_rewritten( walk, (size_t)to / 4 )) &&
++                !ios_x18_walk_push( walk, (size_t)to / 4 ))
++                return 0;
++            if (!next || ++w >= words || (walk->queued[w >> 3] & (1 << (w & 7))) ||
++                (walk->hint && !ios_x18_walk_rewritten( walk, w )))
++                break;
++            walk->queued[w >> 3] |= 1 << (w & 7);
++        }
+     }
+-    queued[w >> 3] |= 1 << (w & 7);
+-    (*stack)[(*top)++] = (uint32_t)w;
+     return 1;
+ }
+ 
+@@ -5445,91 +5803,75 @@ static int ios_x18_walk_push( uint32_t **stack, size_t *top, size_t *cap, unsign
+  * B, B.cond, CBZ/CBNZ, TBZ/TBNZ (not into calls), up to a RET, BR, their pointer-
+  * authenticated forms, a UDF (which World of Warcraft's client executes on purpose to
+  * raise) or an unallocated word. A reachable word is code even where an LDR reads it as
+- * a literal: it runs. With ios_x18_code_hint, what its function starts reach is code
+- * too, following BL calls as well, without leaving the rewritten windows.
++ * a literal: it runs. With ios_x18_code_hint, what the function starts its .pdata lists
++ * reach is code too, following BL calls as well, without leaving the rewritten windows.
++ * So are then the words of those functions but their inline data
++ * (ios_x18_mark_inline_data), and what each of them reaches without entering inline
++ * data: a switch case is reached only through its jump table and a BR. A function with
++ * a word in an unallocated group outside its inline data holds data, or bytes still
++ * encrypted, that are not known: only its start is code.
+  * Code whose words sit beside encrypted bytes, and obfuscated code with junk words
+  * after its branches, is patched without touching those: a patched encrypted word
+  * decrypts to garbage. Caller frees; NULL on alloc failure. */
+ static unsigned char *ios_x18_reachable_map( const char *text, size_t text_size, size_t text_rva )
+ {
+     const struct ios_x18_code_hint *hint = ios_x18_code_hint;
+-    size_t words = text_size / 4, top = 0, cap = 4096, k;
+-    unsigned char *queued = calloc( 1, words / 8 + 1 ), *data_map = malloc( text_size / 32 + 1 );
+-    uint32_t *stack = malloc( cap * sizeof(*stack) );
+-    int pass, ok = 1;
+-
+-    if (!queued || !data_map || !stack) ok = 0;
+-    else memset( data_map, 0xff, text_size / 32 + 1 );
+-    for (pass = 0; ok && pass < 2; pass++)
+-    {
+-#define REWRITTEN(w) (text_rva + (w) * 4 >= hint->window_rva && \
+-                      (text_rva + (w) * 4 - hint->window_rva) / 1024 < hint->windows && \
+-                      (hint->rewritten[(text_rva + (w) * 4 - hint->window_rva) / 8192] & \
+-                       (1 << ((text_rva + (w) * 4 - hint->window_rva) / 1024 % 8))))
+-        if (!pass)
+-        {
+-            if (words) ok = ios_x18_walk_push( &stack, &top, &cap, queued, 0 );
+-        }
+-        else if (hint)
+-        {
+-            for (k = 0; ok && k < hint->pdata_count; k++)
+-            {
+-                size_t rva = hint->pdata[2 * k];
+-                if ((rva & 3) || rva < text_rva || rva - text_rva >= words * 4) continue;
+-                if (REWRITTEN( (rva - text_rva) / 4 ))
+-                    ok = ios_x18_walk_push( &stack, &top, &cap, queued, (rva - text_rva) / 4 );
+-            }
+-        }
+-        while (ok && top)
+-        {
+-            size_t w = stack[--top];
+-            for (;;)
++    struct ios_x18_walk walk = { (const uint32_t *)text, text_size / 4, text_rva };
++    unsigned char *data = NULL;
++    size_t k, w;
++    int ok;
++
++    walk.queued = calloc( 1, walk.words / 8 + 1 );
++    walk.data_map = malloc( text_size / 32 + 1 );
++    walk.stack = malloc( (walk.cap = 4096) * sizeof(*walk.stack) );
++    if (hint) data = calloc( 1, walk.words / 8 + 1 );
++    ok = walk.queued && walk.data_map && walk.stack && (!hint || data);
++    if (ok)
++    {
++        memset( walk.data_map, 0xff, text_size / 32 + 1 );
++        if (walk.words) ok = ios_x18_walk_push( &walk, 0 ) && ios_x18_walk_run( &walk );
++    }
++    if (ok && hint)
++    {
++        walk.hint = hint;
++        for (k = 0; ok && k < hint->pdata_count; k++)
++        {
++            size_t rva = hint->pdata[2 * k];
++            if ((rva & 3) || rva < text_rva || rva - text_rva >= walk.words * 4) continue;
++            if (ios_x18_walk_rewritten( &walk, (rva - text_rva) / 4 ))
++                ok = ios_x18_walk_push( &walk, (rva - text_rva) / 4 );
++        }
++        ok = ok && ios_x18_walk_run( &walk );
++        ok = ok && ios_x18_mark_inline_data( hint, text_rva, walk.words, data );
++        walk.inline_data = data;
++        for (k = 0; ok && k < hint->pdata_count; k++)
++        {
++            size_t begin = hint->pdata[2 * k], rva = begin, end = rva + ios_x18_function_length( hint, k );
++            if ((rva & 3) || end <= text_rva || rva >= text_rva + walk.words * 4) continue;
++            if (rva < text_rva) rva = text_rva;
++            if (end > text_rva + walk.words * 4) end = text_rva + walk.words * 4;
++            for (w = (rva - text_rva) / 4; w < (end - text_rva) / 4; w++)
+             {
+-                uint32_t insn = ((const uint32_t *)text)[w];
+-                uint32_t op0 = (insn >> 25) & 0xf;
+-                int64_t off = 0, to;
+-                int branch = 0, next = 1;
+-
+-                if (op0 == 1 || op0 == 3) break;                                  /* not code */
+-                data_map[w >> 3] &= ~(1 << (w & 7));
+-                if ((insn & 0xfc000000) == 0x14000000)                              /* B */
+-                {
+-                    off = (int64_t)((int32_t)(insn << 6) >> 6) * 4; branch = 1; next = 0;
+-                }
+-                else if (pass && (insn & 0xfc000000) == 0x94000000)                 /* BL */
+-                {
+-                    off = (int64_t)((int32_t)(insn << 6) >> 6) * 4; branch = 1;
+-                }
+-                else if ((insn & 0xff000010) == 0x54000000 || (insn & 0x7e000000) == 0x34000000)
+-                {                                                                   /* B.cond, CBZ/CBNZ */
+-                    off = (int64_t)((int32_t)(insn << 8) >> 13) * 4; branch = 1;
+-                }
+-                else if ((insn & 0x7e000000) == 0x36000000)                         /* TBZ/TBNZ */
+-                {
+-                    off = (int64_t)((int32_t)(insn << 13) >> 18) * 4; branch = 1;
+-                }
+-                else if ((insn & 0xfffffc1f) == 0xd65f0000 || (insn & 0xfffffc1f) == 0xd61f0000 ||
+-                         insn == 0xd65f0bff || insn == 0xd65f0fff || (insn & 0xfefff800) == 0xd61f0800 ||
+-                         (insn & 0xffff0000) == 0)
+-                    next = 0;                                       /* RET, BR, RETAA/AB, BRAA/AB(Z), UDF */
+-                to = (int64_t)w * 4 + off;
+-                if (branch && to >= 0 && (size_t)to < words * 4 && (!pass || REWRITTEN( (size_t)to / 4 )) &&
+-                    !(ok = ios_x18_walk_push( &stack, &top, &cap, queued, (size_t)to / 4 )))
++                uint32_t op0 = (walk.text[w] >> 25) & 0xf;
++                if ((op0 == 1 || op0 == 3) && ios_x18_walk_rewritten( &walk, w ) && !(data[w >> 3] & (1 << (w & 7))))
+                     break;
+-                if (!next || ++w >= words || (queued[w >> 3] & (1 << (w & 7))) || (pass && !REWRITTEN( w ))) break;
+-                queued[w >> 3] |= 1 << (w & 7);
+             }
++            if (w < (end - text_rva) / 4) end = begin == rva ? rva + 4 : rva;   /* not known: its start only */
++            for (w = (rva - text_rva) / 4; ok && w < (end - text_rva) / 4; w++)
++                if (ios_x18_walk_rewritten( &walk, w ) && !(data[w >> 3] & (1 << (w & 7))))
++                    ok = ios_x18_walk_push( &walk, w );
++            ok = ok && ios_x18_walk_run( &walk );
+         }
+-#undef REWRITTEN
+     }
+-    free( queued );
+-    free( stack );
++    free( data );
++    free( walk.queued );
++    free( walk.stack );
+     if (!ok)
+     {
+-        free( data_map );
++        free( walk.data_map );
+         return NULL;
+     }
+-    return data_map;
++    return walk.data_map;
+ }
+ 
+ /* Literal-pool data map builder — see the guard comment in
+@@ -5539,8 +5881,8 @@ static unsigned char *ios_x18_reachable_map( const char *text, size_t text_size,
+ /* Playport: x64_sites (may be NULL) gets ios_x18_mark_x64_ranges's result;
+  * the map returned covers those ranges too, and with cipher the encrypted windows. */
+ /* Playport (PLA-514): cipher 2 is code a program has just decrypted and flushed: of
+- * text, only what is reachable from its first word, or from ios_x18_code_hint's
+- * function starts, is code (ios_x18_reachable_map). */
++ * text, only what is reachable from its first word, or what ios_x18_code_hint's
++ * functions hold, is code (ios_x18_reachable_map). */
+ static unsigned char *ios_x18_build_data_map( const char *text, size_t text_size, size_t text_rva,
+                                               const char *image_rx, int *x64_sites, int cipher )
+ {
+@@ -25714,7 +26056,7 @@ static void ios_section_views_reclaim( void *peb )
+ }
+ 
+ /* The code hint of a cipher 2 run over [start, end) of presented copy m (ios_x18_code_hint):
+- * its image's .pdata, and the 1 KB windows of .text there in which a quarter of the words
++ * its image, with its .text and .pdata, and the 1 KB windows of .text there in which a quarter of the words
+  * differ from the backing store of the remap the copy took them from. NULL, with nothing
+  * to free, for an image without a remap or a .pdata. ios_section_view_lock is held. */
+ static unsigned char *ios_remap_code_hint( const struct ios_jit_mapping *m, const char *image_rw, size_t start,
+@@ -25736,6 +26078,10 @@ static unsigned char *ios_remap_code_hint( const struct ios_jit_mapping *m, cons
+     pdata_rva = *(const unsigned int *)(opt + 0x70 + 3 * 8);                /* the exception directory */
+     pdata_size = *(const unsigned int *)(opt + 0x70 + 3 * 8 + 4);
+     if (!pdata_rva || pdata_size < 8 || (size_t)pdata_rva + pdata_size > m->size) return NULL;
++    hint->image = image;
++    hint->image_size = m->size;
++    hint->text_rva = m->text_offset;
++    hint->text_size = m->text_size;
+     hint->pdata = (const uint32_t *)(image + pdata_rva);
+     hint->pdata_count = pdata_size / 8;
+     hint->window_rva = m->text_offset + ((start - m->text_offset) & ~(size_t)1023);

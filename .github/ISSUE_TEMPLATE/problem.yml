@@ -19,10 +19,9 @@ body:
     id: status
     attributes:
       label: How the game runs
-      description: For the compatibility list at playport.dev/compatibility. Leave empty for a problem that is not about one game.
+      description: "For the compatibility list at playport.dev/compatibility: Runs if it boots to a menu or further, Broken if it doesn't reach a menu. Leave empty for a problem that is not about one game."
       options:
-        - Works
-        - Playable with issues
+        - Runs
         - Broken
   - type: textarea
     id: what

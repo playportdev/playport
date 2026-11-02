@@ -1,0 +1,86 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: playportdev <dev@playport.dev>
+Date: Fri, 30 Oct 2026 21:30:00 +0100
+Subject: [PATCH] ntdll: an allowed Social Club restart is used by one start
+
+Decision 0155 lets RDR2's later SocialClubHelper.exe starts go ahead
+after the game signs in again following the end of its helper, from the
+app's allow until the next sign-in line or 90 s; its 2026-10-30
+amendment checks the headroom once, at the allow. In run l13 that one
+allow let five starts through: each helper died 10-15 s after it started,
+in Chromium's out-of-memory exit before it signed in (V8's 5 GiB
+reservation found no gap in the layout's window at Story), the game
+started the next 0.3 s later, and the footprint climbed until the app
+was ended.
+
+ppgsc_take_allow now uses the allow up: the first numbered start after
+it goes ahead and clears it, and the next is refused (0138) until the
+app allows again, with its own headroom check, at most twice a Play.
+The line reads `[game-sc] restart allowed start N; the allow is used,
+later starts are refused`.
+
+Linear: PLA-476
+Class: host-app
+Evidence: docs/decisions/0155-allow-rdr2s-social-club-restart-after-a-re-sign-in.md
+Offered-upstream: no
+---
+ build/ntdll-unix/pp_game_sc_refuse.h | 10 ++++++++++
+ build/ntdll-unix/process_ios.c       | 10 +++++-----
+ 2 files changed, 15 insertions(+), 5 deletions(-)
+
+diff --git a/build/ntdll-unix/pp_game_sc_refuse.h b/build/ntdll-unix/pp_game_sc_refuse.h
+index 74641e5..3a44bf9 100644
+--- a/build/ntdll-unix/pp_game_sc_refuse.h
++++ b/build/ntdll-unix/pp_game_sc_refuse.h
+@@ -85,6 +85,16 @@ static inline int ppgsc_allowed( struct ppgsc_state *st )
+     return __atomic_load_n( &st->allow, __ATOMIC_ACQUIRE );
+ }
+ 
++/* Decision 0155 as amended 2026-10-30 (run l13): an allow lets one start
++ * through. 1 when a start ppgsc_refuse numbered may go ahead, and the allow is
++ * used up by it, so the next is refused until the app allows again. In l13 one
++ * allow let five starts through, each helper ending in Chromium's
++ * out-of-memory exit before it signed in. */
++static inline int ppgsc_take_allow( struct ppgsc_state *st )
++{
++    return __atomic_exchange_n( &st->allow, 0, __ATOMIC_ACQ_REL );
++}
++
+ /* Playport (dev, off by default): with PLAYPORT_SC_BLOCK_CRASHPAD=1 in the environment, no crash
+  * reporter starts: Rockstar's RockstarErrorHandler.exe, the crashpad host the launcher and the game
+  * start (17 MB of image copies and a code buffer for the launcher's; about 106 MB for the game's), and
+diff --git a/build/ntdll-unix/process_ios.c b/build/ntdll-unix/process_ios.c
+index f2e088c..52ad03a 100644
+--- a/build/ntdll-unix/process_ios.c
++++ b/build/ntdll-unix/process_ios.c
+@@ -989,8 +989,8 @@ static void chromium_policy( const UNICODE_STRING *nt_image, RTL_USER_PROCESS_PA
+ /* Playport (decisions 0138, 0155): the game's Social Club helper starts. */
+ static struct ppgsc_state game_sc;
+ 
+-/* The app allows (1) or refuses again (0) the game's later helper starts
+- * (wine_host_game_sc_allow_restarts, decision 0155). */
++/* The app allows (1) the game's next helper start, or refuses again (0)
++ * (wine_host_game_sc_allow_restarts, decision 0155): an allow is used by one start. */
+ void ios_game_sc_allow_restarts( int on )
+ {
+     ppgsc_set_allow( &game_sc, on );
+@@ -1173,7 +1173,7 @@ NTSTATUS WINAPI NtCreateUserProcess( HANDLE *process_handle_ptr, HANDLE *thread_
+     }
+ 
+     /* Playport (decision 0138, dev): RDR2's later Social Club helper starts are refused,
+-     * but while the app allows them (decision 0155) they go ahead. */
++     * but one goes ahead for each allow of the app (decision 0155, amended). */
+     {
+         const char *on = getenv( "PLAYPORT_REFUSE_GAME_SC_RESTART" );
+         PEB *peb = NtCurrentTeb()->Peb;
+@@ -1183,8 +1183,8 @@ NTSTATUS WINAPI NtCreateUserProcess( HANDLE *process_handle_ptr, HANDLE *thread_
+                                    creator ? creator->Length / sizeof(WCHAR) : 0,
+                                    (const pp_wchar *)params->ImagePathName.Buffer,
+                                    params->ImagePathName.Length / sizeof(WCHAR) );
+-        if (n && ppgsc_allowed( &game_sc ))
+-            dprintf( 2, "[game-sc] restart allowed start %u\n", n );
++        if (n && ppgsc_take_allow( &game_sc ))
++            dprintf( 2, "[game-sc] restart allowed start %u; the allow is used, later starts are refused\n", n );
+         else if (n)
+         {
+             if (n <= 9 || n % 10 == 0)

@@ -65,6 +65,29 @@ static void ios_dev_stop_if_idle(void) {}
 static int ios_stream_is_live(const struct ios_stream *s) { (void)s; return 1; }
 static NTSTATUS NtWaitForSingleObject(HANDLE h, BOOL a, const void *t) { (void)h; (void)a; (void)t; return 0; }
 static NTSTATUS NtClose(HANDLE h) { (void)h; return 0; }
+/* The clock, the thread ids and madeira-unix 0241's diagnostics switch (on,
+ * so its getbuf-thread and ml1065 counters run here too) */
+static uint64_t mach_absolute_time(void) { return 0; }
+static uint64_t mach_to_ns(uint64_t t) { return t; }
+static unsigned long long current_tid = 1;
+static unsigned long long ios_current_tid(void) { return current_tid; }
+/* decision 0172's Mach side: what the gate asked of it */
+typedef uint32_t UInt32;
+struct ios_rt_thread;
+static unsigned rt_calls, rt_promotions, rt_drops;
+static unsigned long long rt_promoted_tid;
+static void ios_audio_rt_producer(struct ios_stream *s, int new_producer)
+{ (void)s; rt_calls++; if (new_producer) { rt_promotions++; rt_promoted_tid = current_tid; } }
+static void ios_audio_rt_drop(struct ios_stream *s, const char *why) { (void)s; (void)why; rt_drops++; }
+static unsigned rt_other_calls, rt_cycle_starts, rt_cycle_finishes;
+static void ios_audio_rt_caller(void) { rt_other_calls++; }
+static void ios_audio_rt_cycle_start(void) { rt_cycle_starts++; }
+static void ios_audio_rt_cycle_finish(void) { rt_cycle_finishes++; }
+static int ios_audio_diagnostics(void) { return 1; }
+static void ios_current_win_thread(unsigned int *pid, unsigned int *tid, int *priority, int *base_priority)
+{ *pid = 0x20; *tid = 0x24; *priority = 8; *base_priority = 0; }
+#define pthread_mach_thread_np(thread) ((void)(thread), 0u)
+#define qos_class_self() 0u
 #include "native_functions.h"
 
 /* Deliberately let the native getter return a foreign pointer to test the
@@ -238,12 +261,115 @@ static void test_endpoints_midi_and_native(void)
     assert(ios_release_stream(&close) == 0 && close.result == S_OK);
     assert(allocations == before); /* native clients keep their heap path */
 }
+/* decision 0172: the producer is the steady GetBuffer caller of a started stream */
+static void get_buffers(stream_handle handle, unsigned long long tid, unsigned n, UINT32 frames)
+{
+    BYTE *data;
+    struct get_render_buffer_params get = { .stream = handle, .frames = frames, .data = &data };
+    struct release_render_buffer_params release = { .stream = handle, .written_frames = 0 };
+    current_tid = tid;
+    while (n--) {
+        assert(ios_get_render_buffer(&get) == 0 && get.result == S_OK);
+        assert(ios_release_render_buffer(&release) == 0);
+    }
+}
+static void test_producer_gate(void)
+{
+    stream_handle handle = 0;
+    struct create_stream_params create = { .fmt = host(0x11000), .flow = eRender,
+        .duration = 1000000, .stream = &handle };
+    assert(ios_create_stream(&create) == 0 && create.result == S_OK);
+    struct ios_stream *s = stream_from_handle(handle);
+    rt_calls = rt_promotions = rt_drops = 0;
+    rt_other_calls = rt_cycle_starts = rt_cycle_finishes = 0;
+    get_buffers(handle, 0x68, 40, 0);            /* a prefill before Start never counts */
+    assert(!rt_calls && !rt_promotions && !s->producer_tid && rt_other_calls == 40);
+    assert(!rt_cycle_starts && rt_cycle_finishes == 40); /* every ReleaseBuffer may close a cycle */
+    s->started = 1;                              /* ios_start's reset, as in the driver */
+    s->caller_run = 0; s->producer_tid = 0;
+    get_buffers(handle, 0xf8, IOS_PRODUCER_STEADY_CALLS - 1, 0);
+    assert(!rt_promotions && !rt_calls);
+    get_buffers(handle, 0xf8, 1, 0);
+    assert(rt_promotions == 1 && rt_promoted_tid == 0xf8 && s->producer_tid == 0xf8);
+    get_buffers(handle, 0xf8, 10, 0);
+    assert(rt_promotions == 1 && rt_calls == 11); /* the producer is checked on every call */
+    assert(rt_cycle_starts == 11);               /* and each of its GetBuffers starts a work cycle */
+    {   /* a GetBuffer that fails starts none */
+        BYTE *data;
+        struct get_render_buffer_params big = { .stream = handle, .frames = s->buffer_frames + 1, .data = &data };
+        assert(ios_get_render_buffer(&big) == 0 && big.result != S_OK && rt_cycle_starts == 11);
+    }
+    uint64_t switches = atomic_load(&s->caller_switches);
+    for (unsigned i = 0; i < 2 * IOS_PRODUCER_STEADY_CALLS; i++)
+        get_buffers(handle, i & 1 ? 0xf8 : 0x360, 1, 0); /* alternating callers: nobody new */
+    assert(rt_promotions == 1 && s->producer_tid == 0xf8);
+    assert(atomic_load(&s->caller_switches) - switches == 2 * IOS_PRODUCER_STEADY_CALLS);
+    get_buffers(handle, 0x360, IOS_PRODUCER_STEADY_CALLS, 0);
+    assert(rt_promotions == 2 && rt_promoted_tid == 0x360 && s->producer_tid == 0x360);
+    s->started = 0;                              /* stopped: no more producer calls */
+    unsigned calls = rt_calls;
+    get_buffers(handle, 0x360, 4, 0);
+    assert(rt_calls == calls);
+    struct release_stream_params close = { .stream = handle };
+    assert(ios_release_stream(&close) == 0 && close.result == S_OK && rt_drops == 1);
+    current_tid = 1;
+}
+
+/* decision 0172: the RT callback's hysteresis over a 48 kHz float stereo ring */
+static float mix_out[2 * 1024];
+static unsigned mix(struct ios_stream *s, UInt32 nframes)
+{
+    unsigned played = 0;
+    uint64_t before = atomic_load(&s->play_pos);
+    memset(mix_out, 0, sizeof(mix_out));
+    ios_mix_stream(s, mix_out, nframes, 2, 48000);
+    for (UInt32 f = 0; f < nframes; f++) if (mix_out[2 * f] != 0.0f) played++;
+    assert(played == atomic_load(&s->play_pos) - before);
+    return played;
+}
+static void produce(struct ios_stream *s, UINT32 frames)
+{
+    uint64_t wr = atomic_load(&s->write_pos);
+    for (UINT32 i = 0; i < frames; i++) {
+        float *v = (float *)(s->ring + (size_t)((wr + i) % s->buffer_frames) * s->frame_bytes);
+        v[0] = v[1] = 0.25f;
+    }
+    atomic_store(&s->write_pos, wr + frames);
+}
+static void test_underrun_refill(void)
+{
+    struct ios_stream s = { .started = 1, .mixable = 1, .is_float = 1, .sample_bits = 32,
+        .sample_rate = 48000, .channels = 2, .frame_bytes = 8, .buffer_frames = 4800 };
+    s.ring = calloc(s.buffer_frames, s.frame_bytes);
+    produce(&s, 1024); assert(mix(&s, 1024) == 1024);  /* healthy: unchanged */
+    produce(&s, 500); assert(mix(&s, 1024) == 500);    /* one short callback plays what is there */
+    produce(&s, 1024); assert(mix(&s, 1024) == 1024);  /* and is not a refill */
+    produce(&s, 300); assert(mix(&s, 1024) == 300);    /* the second short in 8 callbacks */
+    uint64_t held = atomic_load(&s.play_pos);
+    produce(&s, 700); assert(mix(&s, 1024) == 0);      /* refilling: silence, the clock holds */
+    assert(atomic_load(&s.play_pos) == held);
+    produce(&s, 400); assert(mix(&s, 1024) == 1024);   /* 1100 queued >= one callback: whole again */
+    produce(&s, 100); assert(mix(&s, 1024) == 176);    /* one short after a refill: no refill */
+    produce(&s, 100); assert(mix(&s, 1024) == 100);    /* a second one starts it */
+    for (unsigned i = 0; i < IOS_REFILL_MAX_CALLBACKS; i++) {
+        produce(&s, 100); assert(mix(&s, 1024) == 0);  /* at most IOS_REFILL_MAX_CALLBACKS silent ... */
+    }
+    produce(&s, 100); assert(mix(&s, 1024) == 400);    /* ... then what is there plays */
+    uint64_t shorts = atomic_load(&s.short_callbacks);
+    g_refill_on = 0;                                   /* MADEIRA_AUDIO_REFILL=0: the old behaviour */
+    atomic_store(&s.short_history, 0);
+    for (unsigned i = 0; i < 4; i++) { produce(&s, 200); assert(mix(&s, 1024) == 200); }
+    assert(atomic_load(&s.short_callbacks) - shorts == 4);
+    g_refill_on = 1;
+    free(s.ring);
+}
 int main(void)
 {
     window = (uintptr_t)backing;
     test_round_trip(); test_rejection(); test_buffers_and_detach();
     test_endpoints_midi_and_native();
+    test_producer_gate(); test_underrun_refill();
     assert(attaches == detaches);
-    puts("WoW64 iOS audio: PE32 layouts, 64-bit tokens, render/ring round trip, silence, HANDLE identity, pointer/owner rejection, capture, growth/OOM, release and owner teardown passed");
+    puts("WoW64 iOS audio: PE32 layouts, 64-bit tokens, render/ring round trip, silence, HANDLE identity, pointer/owner rejection, capture, growth/OOM, release and owner teardown, producer gate and underrun refill passed");
     return 0;
 }

@@ -1,0 +1,166 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 1 Nov 2026 20:30:00 +0100
+Subject: [PATCH] virtual: a read-only alias of a mapped view with a
+ noaccess-split host page, for the emulator's code reads
+
+madeira-unix 0279 keeps a 16 KB host page that holds a committed
+PAGE_NOACCESS 4 KB page beside code PROT_NONE, so the guest's read of the
+closed page faults as on x64 Windows, and the Mach handler completes accesses
+to its open pages through a transient alias. FEX translating the code of such
+a page read it through that handler too, a byte at a time: in run
+20261101T191349 World of Warcraft's x64 client took 21.4 M emulated reads in
+400 s, about a third of the sampled ones FEX's decoder (its byte reads and
+the memcpy under them). That code is in the pagefile section its loader maps
+over Wow.exe's image range (madeira-unix 0274).
+
+When a host page of a mapped view (an image or a section, which keep their
+memory for their life; not an allocation, whose decommit replaces it) first
+becomes noaccess-split, mprotect_range makes a read-only alias of the whole
+view (mach_vm_remap of the same memory, not a copy) and sends it to every
+emulator through BTCpu64IosAddAliasMapping with bit 63 of the size set;
+delete_view retires it (the flag alone) and frees it. FEX reads the view's
+code bytes there (fex 0092); guest accesses keep the view's own pages.
+
+Linear: PLA-516, PLA-514
+Class: ios-port
+Evidence: docs/evidence/2026-11-01-wow-x64-fex.md
+Offered-upstream: no; the 16 KB host page is the iOS port's
+---
+ build/ntdll-unix/virtual_ios.c | 94 +++++++++++++++++++++++++++++++++-
+ 1 file changed, 93 insertions(+), 1 deletion(-)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 9d125f0..b0e314e 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -6534,6 +6534,9 @@ struct file_view
+     void         *ios_owner_peb; /* Playport (PLA-368): the pseudo-process whose
+                                   * allocation or section map made it, NULL for the
+                                   * runtime's own views; released when it exits */
++    void         *ios_code_alias; /* Playport (PLA-516): read-only alias of a mapped
++                                   * view with a noaccess-split host page, or NULL
++                                   * (ios_code_alias_ensure) */
+ };
+ 
+ /* Playport (PLA-368): the owner create_view gives a view. Set only around
+@@ -9518,6 +9521,85 @@ int ios_noaccess_split_access_allowed( unsigned long long va, unsigned int len,
+     }
+     return split;
+ }
++
++/* Playport (PLA-516): the read-only alias of a mapped view (an image, or a
++ * section such as the one World of Warcraft's loader maps over its own image)
++ * that has a noaccess-split host page. Every 4 KB page of such a host page is
++ * closed to the host, so FEX translating the view's code (its decoder reads it a
++ * byte at a time, its disk cache hashes it) took a Mach exception per read: 21.4 M
++ * in run 20261101T191349. The alias is a mach_vm_remap of the whole view (the
++ * same memory, not a copy), read-only whatever the view's own protections, made
++ * when the view's first host page becomes noaccess-split and dropped with the
++ * view. Each emulator gets it through BTCpu64IosAddAliasMapping with bit 63 of
++ * the size set (IOS_CODE_ALIAS_FLAG; FEX's IosCodeReadAddr) and reads the
++ * view's code bytes there; guest accesses still go through the view's own
++ * pages, so a read of a closed 4 KB page faults as on Windows. A mapped view is
++ * never split or partly freed, so the alias covers it for its life. */
++#define IOS_CODE_ALIAS_FLAG (1ull << 63)
++#define IOS_CODE_ALIAS_MAX 32
++static struct { unsigned long long base, size, alias; } ios_code_alias_table[IOS_CODE_ALIAS_MAX];
++static int ios_code_alias_count;               /* slots ever used */
++static volatile unsigned long long ios_code_alias_gen;  /* odd while a slot changes */
++
++static void ios_code_alias_table_set( int slot, unsigned long long base, unsigned long long size,
++                                      unsigned long long alias )
++{
++    __atomic_store_n( &ios_code_alias_gen, ios_code_alias_gen + 1, __ATOMIC_RELAXED );
++    __atomic_thread_fence( __ATOMIC_SEQ_CST );
++    ios_code_alias_table[slot].base = base;
++    ios_code_alias_table[slot].alias = alias;
++    ios_code_alias_table[slot].size = size;
++    if (slot == ios_code_alias_count) __atomic_store_n( &ios_code_alias_count, slot + 1, __ATOMIC_RELEASE );
++    __atomic_thread_fence( __ATOMIC_SEQ_CST );
++    __atomic_store_n( &ios_code_alias_gen, ios_code_alias_gen + 1, __ATOMIC_RELEASE );
++}
++
++/* Under virtual_mutex. */
++static void ios_code_alias_ensure( struct file_view *view )
++{
++    static unsigned int failed;
++    mach_vm_address_t alias = 0;
++    vm_prot_t cur = 0, max = 0;
++    kern_return_t kr;
++    int slot;
++
++    /* A mapped view keeps its memory for its life; an allocation's decommit replaces it. */
++    if (view->ios_code_alias || is_view_valloc( view ) || (view->protect & VPROT_SYSTEM)) return;
++    for (slot = 0; slot < ios_code_alias_count; slot++) if (!ios_code_alias_table[slot].size) break;
++    if (slot == IOS_CODE_ALIAS_MAX) kr = -1;
++    else if (!(kr = mach_vm_remap( mach_task_self(), &alias, view->size, 0, VM_FLAGS_ANYWHERE, mach_task_self(),
++                                   (mach_vm_address_t)(uintptr_t)view->base, FALSE, &cur, &max, VM_INHERIT_NONE )) &&
++             (kr = mach_vm_protect( mach_task_self(), alias, view->size, FALSE, VM_PROT_READ )))
++        mach_vm_deallocate( mach_task_self(), alias, view->size );
++    if (kr)
++    {
++        if (failed++ < 8)
++            dprintf( 2, "[code-alias] no alias for view %p+%#lx (kr=%d): its code is read through faults\n",
++                     view->base, (unsigned long)view->size, kr );
++        view->ios_code_alias = (void *)1;  /* do not retry for this view */
++        return;
++    }
++    view->ios_code_alias = (void *)(uintptr_t)alias;
++    ios_code_alias_table_set( slot, (uintptr_t)view->base, view->size, alias );
++    ios_alias_push_all( (uintptr_t)view->base, alias, view->size | IOS_CODE_ALIAS_FLAG );
++    dprintf( 2, "[code-alias] view %p+%#lx has a noaccess-split host page: read-only alias %#llx\n",
++             view->base, (unsigned long)view->size, (unsigned long long)alias );
++}
++
++/* Under virtual_mutex, from delete_view. */
++static void ios_code_alias_drop( struct file_view *view )
++{
++    unsigned long long alias = (uintptr_t)view->ios_code_alias;
++    int slot;
++
++    if (alias <= 1) return;
++    view->ios_code_alias = NULL;
++    for (slot = 0; slot < ios_code_alias_count; slot++)
++        if (ios_code_alias_table[slot].alias == alias) ios_code_alias_table_set( slot, 0, 0, 0 );
++    ios_alias_push_all( (uintptr_t)view->base, alias, IOS_CODE_ALIAS_FLAG );
++    mach_vm_deallocate( mach_task_self(), alias, view->size );
++}
++
+ #endif
+ 
+ 
+@@ -10800,6 +10882,9 @@ static void delete_view( struct file_view *view ) /* [in] View */
+     if (ios_retire_trace_armed) ios_retire_mark( "D0>\n" );
+     ios_guest_release_range( view->base, view->size, 0 );
+     ios_swap_release_range( view->base, view->size, 0 );   /* ml1077 */
++#ifdef WINE_IOS
++    ios_code_alias_drop( view );   /* Playport (PLA-516) */
++#endif
+     if (!(view->protect & VPROT_SYSTEM)) unmap_area( view->base, view->size );
+     if (ios_retire_trace_armed) ios_retire_mark( "D1u\n" );   /* unmap_area done */
+     set_page_vprot( view->base, view->size, 0 );
+@@ -13314,7 +13399,11 @@ static int mprotect_range( void *base, size_t size, BYTE set, BYTE clear )
+                          get_unix_prot( (vprot & ~clear) | set ) & host_exec_mask;
+ #ifdef WINE_IOS
+     if (!guest_image && !set && !clear && (prot & PROT_WRITE) && ios_host_page_split( addr )) prot &= ~PROT_WRITE;
+-    if (!guest_image && !set && !clear && prot && ios_host_page_noaccess_split( addr )) prot = PROT_NONE;
++    if (!guest_image && !set && !clear && prot && ios_host_page_noaccess_split( addr ))
++    {
++        prot = PROT_NONE;
++        if (view) ios_code_alias_ensure( view );
++    }
+ #endif
+     for (count = i = 1; i < size / host_page_size; i++, count++)
+     {
+@@ -13326,7 +13415,10 @@ static int mprotect_range( void *base, size_t size, BYTE set, BYTE clear )
+         if (!guest_image && !set && !clear && (next & PROT_WRITE) && ios_host_page_split( addr + count * host_page_size ))
+             next &= ~PROT_WRITE;
+         if (!guest_image && !set && !clear && next && ios_host_page_noaccess_split( addr + count * host_page_size ))
++        {
+             next = PROT_NONE;
++            if (view) ios_code_alias_ensure( view );
++        }
+ #endif
+         if (next == prot) continue;
+         if (guest_image ? mprotect( addr, count * host_page_size, prot ) :

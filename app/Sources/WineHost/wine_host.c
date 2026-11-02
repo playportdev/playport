@@ -448,14 +448,16 @@ static const char *dll_overlay(void)
     return o && o[0] ? o : NULL;
 }
 
-/* The WoW64 (i386) title's farms, since system32 is the session's ARM64EC
- * set: drive_c/windows/sysarm64, the aarch64 set its native loader takes
- * (wine-pe 0015), and drive_c/windows/syswow64, the i386 set its guest loader
- * reaches through wow64's system32 redirection. The launch's overlays
- * (PLAYPORT_DLL_OVERLAY) go over a set they have one for: the Vulkan backend's
- * i386 d3d9.dll (DXVK) over Wine's; an overlay with no such set is skipped.
- * Every link is recreated, so a later launch without the overlay gets Wine's
- * DLL back. A failure is logged: only i386 titles need them. */
+/* The farms of the titles that are not ARM64EC, since system32 is the
+ * session's ARM64EC set: drive_c/windows/sysarm64, the aarch64 set that a
+ * WoW64 (i386) title's native loader and a plain ARM64 title's loader take
+ * (wine-pe 0015, 0056), and drive_c/windows/syswow64, the i386 set a WoW64
+ * title's guest loader reaches through wow64's system32 redirection. The
+ * launch's overlays (PLAYPORT_DLL_OVERLAY) go over a set they have one for:
+ * the Vulkan backend's i386 d3d9.dll (DXVK) over Wine's; an overlay with no
+ * such set is skipped. Every link is recreated, so a later launch without
+ * the overlay gets Wine's DLL back. A failure is logged: only i386 and ARM64
+ * titles need them. */
 static void link_wow64_farm(const char *name, const char *pe_arch)
 {
     char src_dir[1200], dir[1200];
@@ -532,9 +534,10 @@ static const char *sxs_attr(const char *elem, const char *end, const char *attr,
  * wineboot's fakedll.c register_manifest does: winsxs/manifests/<dir>.manifest
  * with the architecture filled in, and winsxs/<dir>/ holding the assembly's
  * files, links into the runtime's <pe_arch>-windows set (the first <file> is
- * <module>.dll itself). 0 when installed. */
+ * <module>.dll itself). <dir> starts with prefix, the architecture except for
+ * the aarch64 set. 0 when installed. */
 static int link_sxs_manifest(const char *winsxs, const char *module, const char *path,
-                             const char *arch, const char *pe_arch)
+                             const char *prefix, const char *arch, const char *pe_arch)
 {
     char text[16384], dir[160], out[16600], dst[1600], src[1600];
     int fd = open(path, O_RDONLY);
@@ -551,7 +554,7 @@ static int link_sxs_manifest(const char *winsxs, const char *module, const char 
     const char *arch_at = id_end ? sxs_attr(id, id_end, "processorArchitecture", &arch_len) : NULL;
     /* Wine's manifests leave the architecture empty for wineboot to fill in. */
     if (!name || !version || !key || !arch_at || arch_len) return -1;
-    size_t n = sxs_field(dir, sizeof(dir), arch, strlen(arch), 16);
+    size_t n = sxs_field(dir, sizeof(dir), prefix, strlen(prefix), 16);
     n += sxs_field(dir + n, sizeof(dir) - n, name, name_len, 40);
     int w = snprintf(dir + n, sizeof(dir) - n, "%.*s_%.*s_none_deadbeef", (int)key_len, key, (int)version_len, version);
     if (w < 0 || (size_t)w >= sizeof(dir) - n) return -1;
@@ -592,12 +595,15 @@ static int link_sxs_manifest(const char *winsxs, const char *module, const char 
  * no v6-only class: a WiX bootstrapper's theme failed on SysLink with
  * ERROR_CLASS_DOES_NOT_EXIST. x86 for i386 titles; arm64 for the ARM64EC
  * set, which ntdll takes for an "amd64" or "*" request in an x86-64 title
- * (actctx.c lookup_manifest_file). Wine's own (_deadbeef) manifests are
- * rewritten on every session start, since the bundle path changes on
- * install; a title's own assemblies stay. */
+ * (actctx.c lookup_manifest_file); the aarch64 set for a plain ARM64 child
+ * (decision 0170), whose ntdll looks an arm64 assembly up as sysarm64_
+ * (wine-pe 0058): Wine's ARM64 notepad cannot load the ARM64EC comctl32 v6.
+ * Wine's own (_deadbeef) manifests are rewritten on every session start,
+ * since the bundle path changes on install; a title's own assemblies stay. */
 static void link_winsxs(void)
 {
-    static const char *const sets[][2] = { { "x86", "i386" }, { "arm64", "arm64ec" } };
+    static const char *const sets[][3] = {
+        { "x86", "x86", "i386" }, { "arm64", "arm64", "arm64ec" }, { "sysarm64", "arm64", "aarch64" } };
     char src_dir[1200], winsxs[1200], manifests[1300], path[2600];
     snprintf(src_dir, sizeof(src_dir), "%s/winsxs", g_runtime);
     snprintf(winsxs, sizeof(winsxs), "%s/drive_c/windows/winsxs", g_prefix);
@@ -629,7 +635,7 @@ static void link_winsxs(void)
             if (l < 10 || strcmp(e->d_name + l - 9, ".manifest")) continue;
             snprintf(path, sizeof(path), "%s/%s", mod_dir, e->d_name);
             for (size_t i = 0; i < sizeof(sets) / sizeof(sets[0]); i++) {
-                if (link_sxs_manifest(winsxs, m->d_name, path, sets[i][0], sets[i][1])) failed++;
+                if (link_sxs_manifest(winsxs, m->d_name, path, sets[i][0], sets[i][1], sets[i][2])) failed++;
                 else installed++;
             }
         }
@@ -1101,11 +1107,69 @@ static vm_address_t largest_gap(vm_address_t lo, vm_address_t hi, vm_address_t *
     return best;
 }
 
+/* PLA-476: the bottom of the guest window, held from exec. At pool time iOS
+ * has already put a system region (tag 87, ~74 MiB) at 0x7000000000, so a hold
+ * taken then can never get the address. A Social Club layout play keeps its
+ * bottom 256 MiB for libcef.dll's PartitionAlloc pools; every other play gets
+ * the JIT pool's RW alias there, where Madeira put it and where ntdll's floor
+ * (0x7000000000 + pool size, ios_usable_va_floor_get) expects it. Untouched
+ * PROT_NONE costs no footprint. */
+#define LOW_HOLD_BASE 0x7000000000ull
+#define LOW_HOLD_SIZE 0x60000000ull   /* 1.5 GiB: the largest JIT pool's alias */
+#define SC_LOW_SIZE   0x10000000ull   /* 256 MiB: pp_sc_layout.h PPSC_CEF */
+static vm_address_t g_low_hold;
+static vm_size_t g_low_hold_size;
+static int g_low_hold_taken;   /* held at exec; g_low_hold is 0 once handed over or released */
+
+__attribute__((constructor)) static void low_hold_at_exec(void)
+{
+    vm_address_t a = LOW_HOLD_BASE;
+    if (vm_allocate(mach_task_self(), &a, LOW_HOLD_SIZE, VM_FLAGS_FIXED) != KERN_SUCCESS) return;
+    if (vm_protect(mach_task_self(), a, LOW_HOLD_SIZE, FALSE, VM_PROT_NONE) != KERN_SUCCESS) {
+        vm_deallocate(mach_task_self(), a, LOW_HOLD_SIZE);
+        return;
+    }
+    g_low_hold = a;
+    g_low_hold_size = LOW_HOLD_SIZE;
+    g_low_hold_taken = 1;
+}
+
+static void low_hold_release(vm_address_t from)
+{
+    if (!g_low_hold || from >= g_low_hold + g_low_hold_size) return;
+    if (from < g_low_hold) from = g_low_hold;
+    vm_deallocate(mach_task_self(), from, g_low_hold + g_low_hold_size - from);
+    g_low_hold_size = from - g_low_hold;
+    if (!g_low_hold_size) g_low_hold = 0;
+}
+
 int wine_host_jit_pool_acquire(const char *log_path, size_t size, int wait_ms, void **rx_out, void **rw_out)
 {
     if (!rx_out || !rw_out || !size || (size & 0x3fff)) return -1;
     *rx_out = *rw_out = NULL;
     if (log_path && !g_log) g_log = fopen(log_path, "a");
+
+    /* PLA-476: opt-in stock Social Club layout. Never overwrite a mapping to
+     * make the low PartitionAlloc slot fit. Wine takes ownership of this exact
+     * native hold only after the RW alias has also been placed successfully. */
+    const char *sc = getenv("PLAYPORT_SC_LAYOUT");
+    const int sc_layout = sc && !strcmp(sc, "1");
+    vm_address_t sc_hold = 0;
+    unsetenv("WINE_IOS_SC_LOW_HELD");
+    host_log("low hold: %s", g_low_hold ? "0x7000000000 held since exec"
+                             : g_low_hold_taken ? "released or handed over by an earlier attempt"
+                             : "not taken at exec");
+    if (sc_layout) {
+        if (!g_low_hold || g_low_hold_size < SC_LOW_SIZE) {
+            host_log(g_low_hold_taken ? "sc-layout: the low hold went with an earlier attempt; launch refused, no mapping overwritten"
+                                      : "sc-layout: 0x7000000000 was not held at exec; launch refused, no mapping overwritten");
+            return -5;
+        }
+        low_hold_release(g_low_hold + SC_LOW_SIZE);   /* the rest goes back; the slot stays */
+        sc_hold = g_low_hold;
+        g_low_hold = 0;
+        g_low_hold_size = 0;
+    }
 
     for (int waited = 0;; waited += 50) {
         int state = wine_host_jit_debugger_state();
@@ -1113,6 +1177,7 @@ int wine_host_jit_pool_acquire(const char *log_path, size_t size, int wait_ms, v
         if (state == JIT_DEBUGGER_UNKNOWN || waited >= wait_ms) {
             int rc = jit_debugger_gate(state);
             host_log("JIT pool: no live debugger after %d ms (state=%d rc=%d); no brk issued", waited, state, rc);
+            if (sc_hold) vm_deallocate(mach_task_self(), sc_hold, SC_LOW_SIZE);
             return rc;
         }
         usleep(50 * 1000);
@@ -1149,7 +1214,10 @@ int wine_host_jit_pool_acquire(const char *log_path, size_t size, int wait_ms, v
     struct timeval t0, t1;
     gettimeofday(&t0, NULL);
     int gate = jit_breakpoint_gate("prepare");
-    if (gate) return gate;
+    if (gate) {
+        if (sc_hold) vm_deallocate(mach_task_self(), sc_hold, SC_LOW_SIZE);
+        return gate;
+    }
     void *rx = jit26_prepare_region(NULL, size);
     gettimeofday(&t1, NULL);
     double bless_s = (t1.tv_sec - t0.tv_sec) + (t1.tv_usec - t0.tv_usec) / 1e6;
@@ -1188,11 +1256,27 @@ int wine_host_jit_pool_acquire(const char *log_path, size_t size, int wait_ms, v
                      (unsigned long)freed_hi, (unsigned long)res_hi);
         }
     }
-    vm_address_t rw = 0;
+    vm_address_t rw = sc_layout ? 0x7900000000ull : 0;
+    if (!rc && sc_layout && size > 0x100000000ull) rc = -5;
+    int rw_fixed = sc_layout;
+    if (!rc && !sc_layout && g_low_hold) {
+        /* The alias's own home, freed just before it is mapped there. */
+        int fits = size <= g_low_hold_size;
+        rw = fits ? g_low_hold : 0;
+        rw_fixed = fits;
+        low_hold_release(g_low_hold);
+    }
     if (!rc) {
         vm_prot_t cur = VM_PROT_NONE, max = VM_PROT_NONE;
-        kern_return_t kr = mach_vm_remap(mach_task_self(), &rw, size, 0, VM_FLAGS_ANYWHERE, mach_task_self(), a,
+        kern_return_t kr = mach_vm_remap(mach_task_self(), &rw, size, 0,
+                                         rw_fixed ? VM_FLAGS_FIXED : VM_FLAGS_ANYWHERE, mach_task_self(), a,
                                          FALSE, &cur, &max, VM_INHERIT_NONE);
+        if (kr != KERN_SUCCESS && rw_fixed && !sc_layout) {
+            host_log("JIT pool: RW alias at 0x%lx failed kr=%d; anywhere", (unsigned long)rw, kr);
+            rw = 0;
+            kr = mach_vm_remap(mach_task_self(), &rw, size, 0, VM_FLAGS_ANYWHERE, mach_task_self(), a,
+                               FALSE, &cur, &max, VM_INHERIT_NONE);
+        }
         if (kr == KERN_SUCCESS) kr = mach_vm_protect(mach_task_self(), rw, size, FALSE, VM_PROT_READ | VM_PROT_WRITE);
         if (kr != KERN_SUCCESS) {
             host_log("JIT pool: RW alias failed kr=%d", kr);
@@ -1203,9 +1287,19 @@ int wine_host_jit_pool_acquire(const char *log_path, size_t size, int wait_ms, v
      * pool stays executable, and ntdll's trap handler skips any later stray
      * brk #0xf00d (signal_arm64_ios.c trap_handler). */
     gate = jit_breakpoint_gate("detach");
-    if (gate) return gate;
+    if (gate) {
+        if (sc_hold) vm_deallocate(mach_task_self(), sc_hold, SC_LOW_SIZE);
+        return gate;
+    }
     jit26_detach();
-    if (rc) return rc;
+    if (rc) {
+        if (sc_hold) vm_deallocate(mach_task_self(), sc_hold, SC_LOW_SIZE);
+        return rc;
+    }
+    if (sc_hold) {
+        setenv("WINE_IOS_SC_LOW_HELD", "1", 1);
+        host_log("sc-layout: low 256 MiB held, RW alias fixed at 0x%lx", (unsigned long)rw);
+    }
     *rx_out = rx;
     *rw_out = (void *)rw;
     host_log("JIT pool: rx=%p rw=%p size=0x%zx; debugger detached", rx, (void *)rw, size);
@@ -1353,9 +1447,17 @@ int wine_host_init(const wine_host_config *c)
         int n = snprintf(cache, sizeof(cache), "%s/Library/Caches/kosmickrisp", home);
         if (n > 0 && (size_t)n < sizeof(cache) && mkdirs(cache) == 0)
             setenv("MESA_SHADER_CACHE_DIR", cache, 0);
+        /* The runtime's re-laid-out copies of large x86-64 images (decision 0167,
+         * madeira-unix 0235): mapped from here, so their clean pages stay out of
+         * the footprint; the runtime keeps them within 1 GiB, and Settings >
+         * Storage's Emulator cache row counts and clears them (EmulatorCache). */
+        n = snprintf(cache, sizeof(cache), "%s/Library/Caches/images", home);
+        if (n > 0 && (size_t)n < sizeof(cache) && mkdirs(cache) == 0)
+            setenv("PLAYPORT_IMAGE_CACHE_DIR", cache, 0);
     }
     setenv("MESA_SHADER_CACHE_MAX_SIZE", "1G", 0);
     host_log("DXMT shader cache: %s", getenv("DXMT_SHADER_CACHE_PATH") ? getenv("DXMT_SHADER_CACHE_PATH") : "(none)");
+    host_log("image cache: %s", getenv("PLAYPORT_IMAGE_CACHE_DIR") ? getenv("PLAYPORT_IMAGE_CACHE_DIR") : "(none)");
     host_log("Mesa shader cache: %s (limit %s)",
              getenv("MESA_SHADER_CACHE_DIR") ? getenv("MESA_SHADER_CACHE_DIR") : "HOME/.cache",
              getenv("MESA_SHADER_CACHE_MAX_SIZE"));
@@ -1826,6 +1928,13 @@ extern void ios_process_memory_log(const char *why, int force);
 void wine_host_process_memory_log(const char *why, int force)
 {
     ios_process_memory_log(why, force);
+}
+
+extern unsigned int ios_proc_end_teardowns(void);
+
+unsigned int wine_host_process_teardowns(void)
+{
+    return ios_proc_end_teardowns();
 }
 
 extern void ios_game_sc_allow_restarts(int on);

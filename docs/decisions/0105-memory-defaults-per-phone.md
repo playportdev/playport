@@ -12,6 +12,11 @@ plan's formulas ([evidence](../evidence/2026-10-14-memory-plan.md)) and Auto's s
 headroom ([evidence](../evidence/2026-10-15-donor-pool-auto-headroom.md)).
 [Evidence](../evidence/2026-10-15-memory-defaults.md).
 
+**Amended 2026-10-30 (owner, PLA-476):** during a play the donor pool also grows again on
+spare memory alone, below level 20 %, with a hysteresis so it does not flap
+([below](#amendment-2026-10-30-the-pool-resumes-on-spare-memory)). This is the default path:
+the pool is on, Auto, in both builds for every game (0153).
+
 ## Context
 
 The memory plan told the guest the app's limit L as its RAM (8,192 MiB on the 12 GB reference
@@ -74,3 +79,59 @@ and without the pool, at low and at medium, at 720 and at the panel's 2736×1260
 - `DonorPoolSizing`'s headroom constants (the system reserve, the app's part, the 6 GiB Auto
   maximum, the 1 GiB minimum) and the plan's overhead, guest-share and margin constants are
   removed.
+
+## Amendment 2026-10-30: the pool resumes on spare memory
+
+By the owner, 2026-10-30 (PLA-476), from runs l9 and d1
+([evidence](../evidence/2026-10-29-sc-stock-cef-probe.md#d1-same-ipa-default-baseline)).
+
+### Context
+
+- Growth during play stopped when the phone's spare memory (free + inactive + speculative +
+  purgeable) fell under its floor (12 % of RAM, 1,408 MiB on 12 GB) or jetsam's level under
+  15 %, and resumed only with both back over a margin: 1,920 MiB spare and level 20 %.
+- Run l9 stopped at level 13 % with 4,105 MiB spare, resumed once at 20 %, stopped at 13 %
+  4 s later and never resumed: every later line had level 11–16 % with 4,064–4,434 MiB spare.
+  Its pool held 2,587 MiB live at its cap against d1's 2,809, the same IPA without the Social
+  Club layout, whose pool stopped 45 s later: about 220 MB more of the game's memory charged
+  to the app at the load step.
+- With that much spare memory the level, not the memory, held the pool.
+
+### Amended decision
+
+- **A stopped pool also grows again on spare memory alone:** spare at or over the existing
+  resume threshold (the floor plus 512 MiB, 1,920 MiB on 12 GB), whatever the level
+  (`DonorPoolSizing.Growth`). A resume with the level at 20 % or more, or unread, is the old
+  resume and ends what follows.
+- **The stop rules stay:** under the spare floor, or under level 15 %. Their hard caps (Auto's
+  tier pool, one donor's grant) are unchanged.
+- **The hysteresis.** Resuming on spare at a level under 15 % and then stopping on that level
+  at the next check would flap every 2 s. So after a resume on spare at level L, with
+  R = min(L, 15 %):
+  - the level stop fires only when the level falls under R, or
+    when it is under 15 % and the spare memory is back under the resume threshold;
+  - the next resume on spare waits for the level to come back to R (and the spare memory to
+    the threshold).
+
+  The pool then follows the level by at most a point under the level it resumed at: it never
+  ratchets down, since every later resume on spare happens at R or above. The alternative,
+  stopping only on spare once resumed, would let the level fall without bound while spare
+  memory stays high, and the level is jetsam's own measure.
+
+  *Corrected the same day (owner, 2026-10-30, run l10):* R was first the resume's level L
+  itself, so a resume at 15–19 % made the next resume on spare wait for that level; l10
+  resumed at 17 % and stayed stopped at 15 % with 4,545 MiB spare. At or over 15 % the level
+  stop is the plain rule anyway, so R is at most 15 %.
+- **Lines:** `donor-pool: pressure: growth resumed (spare N MiB >= 1920, level L% < 20%: on
+  spare memory; the level stop now under R%)`, the stop's `level L% < R%, the level at the
+  resume on spare memory`, and the stats lines' `spare_resume_level=R` and
+  `resume_wait="level L% < R% (the last resume on spare memory)"`.
+
+### Costs
+
+- **It changes the default path:** the pool is on, Auto, in both builds for every game
+  (0153), so every play with a stopped pool and ≥ 1,920 MiB spare grows it again.
+- Growth under level 15 % takes phone memory that jetsam counts towards ending background
+  processes sooner. The level stop still bounds it a point under the resume level.
+- l9's ≈ 220 MB is inferred from one run pair; l10 measures it.
+

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// A game picked in Files, copied into C:\Games (docs/plans/finished.md#pc-import-gog-and-epic,
+// A game picked in Files, copied into C:\Games (PLA-80,
 // Phase 1): a folder or a .zip, as a Downloads job of kind import.
 //
 // - The plan: every file the source holds, checked as the guest will name it

@@ -1,7 +1,7 @@
 # 0108: A launcher play's JIT pool and services.exe's start timeout
 
 **Status:** accepted, 2026-10-16, by the supervisor of the publisher-launchers run (chunk 3, step
-1 of the [launchers plan](../plans/2026-10-12-launchers.md)).
+1 of the [launchers plan](https://linear.app/playportdev/issue/PLA-616)).
 [PLA-275](https://linear.app/playportdev/issue/PLA-275),
 [PLA-274](https://linear.app/playportdev/issue/PLA-274),
 [PLA-254](https://linear.app/playportdev/issue/PLA-254). Amends

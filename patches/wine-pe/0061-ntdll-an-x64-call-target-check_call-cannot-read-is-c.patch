@@ -1,0 +1,144 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 1 Nov 2026 16:45:23 +0100
+Subject: [PATCH] ntdll: an x64 call target check_call cannot read is called,
+ not a fault in ntdll
+
+arm64x_check_call, and FEX's ExitToX64 after it, read the first bytes of
+an x64 target to spot a fast-forward, syscall or jmp sequence. World of
+Warcraft's x64 client keeps its code pages PAGE_NOACCESS until its own
+exception handler sees them executed; its entry point is one of them, so
+when BaseThreadInitThunk called it the read faulted in native code (run
+20261101T163408: AV reading Wow.exe's entry point at ntdll+0x4cbc0; with
+that resumed, run 20261101T165200: the same in libarm64ecfex.dll's
+ExitToX64), and the client's handler, which looks for an execute fault
+at its code, did not take it. x64 Windows calls the entry and faults at
+the target.
+
+A read that faults between arm64x_check_call_reads and
+arm64x_check_call_exit, or between FEX's exported IosFfsRead and
+IosFfsReadEnd (fex 0089), now resumes, with every register as it was, at
+the exit-thunk path (arm64x_check_call_exit, IosFfsNoBypass): the target
+runs as x64 code and faults there, as an execute fault the client's
+handler takes.
+
+Linear: PLA-516, PLA-514
+Class: upstream-bug
+Evidence: docs/evidence/2026-11-01-wow-x64-fex.md
+Offered-upstream: not yet; upstream's check_call reads the target the same way
+---
+ dlls/ntdll/signal_arm64ec.c | 66 +++++++++++++++++++++++++++++++++++++
+ 1 file changed, 66 insertions(+)
+
+diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
+index 2b87923603e..c4d6d946f46 100644
+--- a/dlls/ntdll/signal_arm64ec.c
++++ b/dlls/ntdll/signal_arm64ec.c
+@@ -582,6 +582,9 @@ void *arm64ec_redirect_ptr( HMODULE module, void *ptr, const IMAGE_ARM64EC_METAD
+ }
+ 
+ static void arm64x_check_call(void);
++/* FEX's ExitToX64 reads of an x64 target's bytes, and where a fault there resumes
++ * (check_call_read_fault, PLA-516). */
++static void *fex_ffs_read, *fex_ffs_read_end, *fex_ffs_no_bypass;
+ 
+ /*******************************************************************
+  *         arm64ec_process_init
+@@ -613,6 +616,11 @@ NTSTATUS arm64ec_process_init_dispatchers( HMODULE module )
+     __os_arm64x_dispatch_call_no_redirect = RtlFindExportedRoutineByName( module, "ExitToX64" );
+     __os_arm64x_dispatch_fptr = RtlFindExportedRoutineByName( module, "DispatchJump" );
+     __os_arm64x_dispatch_ret = RtlFindExportedRoutineByName( module, "RetToEntryThunk" );
++    fex_ffs_read = RtlFindExportedRoutineByName( module, "IosFfsRead" );
++    fex_ffs_read_end = RtlFindExportedRoutineByName( module, "IosFfsReadEnd" );
++    fex_ffs_no_bypass = RtlFindExportedRoutineByName( module, "IosFfsNoBypass" );
++    ERR( "[check-call] FEX's target reads %p-%p, resume %p (ExitToX64 %p)\n", fex_ffs_read,
++         fex_ffs_read_end, fex_ffs_no_bypass, __os_arm64x_dispatch_call_no_redirect );
+ 
+     /* The dispatcher globals were 0 when EVERY ARM64EC module's
+      * arm64ec_update_hybrid_metadata ran (because the globals only get set
+@@ -3594,10 +3602,64 @@ static void dispatch_syscall( ARM64_NT_CONTEXT *context )
+     dispatch_emulation( context );
+ }
+ 
++/* Playport (PLA-516): arm64x_check_call, and FEX's ExitToX64 after it, read the
++ * bytes of an x64 target to spot a fast-forward, syscall or jmp sequence. A
++ * target in a page the guest made inaccessible faulted there, in native code,
++ * where x64 Windows faults at the target itself: World of Warcraft's x64 client
++ * keeps its code pages PAGE_NOACCESS until its own handler sees them executed,
++ * and its entry point is one. Such a read resumes, with every register as it
++ * was, where the target is run as x64 code: it faults there. */
++extern const char arm64x_check_call_reads[] asm("arm64x_check_call_reads");
++extern const char arm64x_check_call_exit[] asm("arm64x_check_call_exit");
++
++static BOOL in_code_range( ULONG_PTR pc, const void *start, const void *end )
++{
++    ULONG_PTR pe_start = (ULONG_PTR)xlate_ios_jit_rev( (void *)start );
++    ULONG_PTR pool_start = (ULONG_PTR)xlate_ios_jit( (void *)pe_start );
++    ULONG_PTR len = (ULONG_PTR)xlate_ios_jit_rev( (void *)end ) - pe_start;
++
++    return pc - pe_start < len || pc - pool_start < len;
++}
++
++static BOOL check_call_read_fault( EXCEPTION_RECORD *rec, ARM64_NT_CONTEXT *arm_ctx )
++{
++    ULONG_PTR pc = arm_ctx->Pc, resume, target;
++    static LONG logged;
++
++    if (rec->ExceptionCode != STATUS_ACCESS_VIOLATION) return FALSE;
++    if (in_code_range( pc, arm64x_check_call_reads, arm64x_check_call_exit ))
++    {
++        resume = (ULONG_PTR)arm64x_check_call_exit;
++        target = arm_ctx->X[11];
++    }
++    else if (fex_ffs_read && in_code_range( pc, fex_ffs_read, fex_ffs_read_end ))
++    {
++        resume = (ULONG_PTR)xlate_ios_jit( fex_ffs_no_bypass );
++        target = arm_ctx->X[9];
++    }
++    else
++    {
++        static LONG near_n;
++        ULONG_PTR rev = (ULONG_PTR)xlate_ios_jit_rev( (void *)pc );
++        if (fex_ffs_read && rev - ((ULONG_PTR)fex_ffs_read & ~(ULONG_PTR)0xfff) < 0x2000 &&
++            near_n < 4 && InterlockedIncrement( &near_n ) <= 4)
++            ERR( "[check-call] AV at %p (%p) near FEX's reads %p-%p (pool %p), not resumed\n",
++                 (void *)pc, (void *)rev, fex_ffs_read, fex_ffs_read_end, xlate_ios_jit( fex_ffs_read ) );
++        return FALSE;
++    }
++    if (logged < 8 && InterlockedIncrement( &logged ) <= 8)
++        ERR( "[check-call] reading x64 target %p faulted at %p (%s): resuming at %p\n",
++             (void *)target, (void *)pc,
++             rec->NumberParameters >= 2 ? wine_dbgstr_longlong( rec->ExceptionInformation[1] ) : "?",
++             (void *)resume );
++    arm_ctx->Pc = resume;
++    return TRUE;
++}
+ 
+ static void * __attribute__((used)) prepare_exception_arm64ec( EXCEPTION_RECORD *rec, ARM64EC_NT_CONTEXT *context, ARM64_NT_CONTEXT *arm_ctx )
+ {
+     if (rec->ExceptionCode == STATUS_EMULATION_SYSCALL) dispatch_syscall( arm_ctx );
++    if (check_call_read_fault( rec, arm_ctx )) syscall_NtContinue( arm_ctx, FALSE );
+     context_arm_to_x64( context, arm_ctx );
+     /* iOS-Madeira task#34 probe: FEX's LogMan output is invisible on iOS (its
+      * write(2) resolves to the PE CRT's WriteFile → unplumbed std handle),
+@@ -4971,6 +5033,9 @@ static void __attribute__((naked)) arm64x_check_call(void)
+          "ldr x16, [x16, x17, lsl #3]\n\t"
+          "lsr x16, x16, x9\n\t"
+          "tbnz x16, #0, .Ldone\n\t"
++         /* Playport (PLA-516): from here to .Lexit the target's bytes are read; a
++          * read that faults resumes at .Lexit (prepare_exception_arm64ec). */
++         "arm64x_check_call_reads:\n\t"
+          /* check if dest is aligned */
+          "tst x11, #15\n\t"                 /* dest & 15 */
+          "b.ne .Ljmp\n\t"
+@@ -5021,6 +5086,7 @@ static void __attribute__((naked)) arm64x_check_call(void)
+          "b \"#arm64x_check_call\"\n"       /* restart checks with jump destination */
+          /* not a special sequence, call the exit thunk */
+          ".Lexit:\n\t"
++         "arm64x_check_call_exit:\n\t"
+          "mov x9, x11\n\t"
+          "mov x11, x10\n\t"
+          ".Ldone:\n\t"
+-- 
+2.56.0
+

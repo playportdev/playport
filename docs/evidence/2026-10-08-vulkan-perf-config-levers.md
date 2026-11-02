@@ -1,6 +1,6 @@
 # Vulkan performance: the two config levers (one-time submit, DXVK tiler mode)
 
-**Date:** 2026-10-08. **Plan:** [Vulkan performance](../plans/2026-10-06-vulkan-performance.md)
+**Date:** 2026-10-08. **Plan:** [Vulkan performance](https://linear.app/playportdev/issue/PLA-680)
 (PLA-72), work-queue items 2 and 3. **Compared with:** the 0021 IPA's runs in
 [present path](2026-10-08-vulkan-perf-present-path.md) (`vk-v2-dxvk-presentfix-1`,
 `vk-v2-vkd3d-presentfix-1`). **Result:** `VKD3D_CONFIG=one_time_submit` not kept;

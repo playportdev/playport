@@ -1,0 +1,216 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: playportdev <dev@playport.dev>
+Date: Fri, 30 Oct 2026 21:00:00 +0100
+Subject: [PATCH] ntdll: refuse the Social Club helper's impossible V8 probes
+ before the map walk
+
+Each SocialClubHelper.exe in an RDR2 layout play logged 26 `ml1027 NO
+GAP FITS` lines (l10-l12): V8's partially-reserved sandbox ladder (512 to
+16 GiB) and gin's ArrayBuffer pool tries (16 GiB, then 8 GiB after the
+sandbox is placed), every one an unhinted NtAllocateVirtualMemoryEx
+reserve that cannot fit under the 512 GiB task ceiling. Each one walked
+130-153k regions under virtual_mutex: 6.8 s of the launcher's helper and
+13.1 s of the game's in l12, while every pseudo-process's VM call waited.
+
+ppsc_route, for both entry points and with its guards unchanged (layout
+ready, the verified helper, MEM_RESERVE, no limit, alignment or
+attributes), now refuses an unhinted reserve with STATUS_NO_MEMORY before
+allocate_virtual_memory when pp_sc_layout.h's ppsc_impossible names it:
+larger than PPSC_CEILING - PPSC_FLOOR, the largest gap the layout leaves,
+or 8 GiB or more once this helper owns the cage (kind 6), V8's sandbox
+subspace tries whose result it keeps only above the ceiling. V8 gets the
+status the walk ended in; hinted asks and the cage's own 8 GiB ask are
+unchanged. The first two refusals of a PEB are logged; its kind-6
+owner-exit line counts them all.
+
+Linear: PLA-476
+Class: feature
+Evidence: docs/evidence/2026-10-29-sc-stock-cef-probe.md
+Offered-upstream: no
+---
+ build/ntdll-unix/pp_sc_layout.h | 19 ++++++++++++
+ build/ntdll-unix/pp_sc_owner.h  | 54 +++++++++++++++++++++++++++++++--
+ build/ntdll-unix/pp_sc_vm.h     | 36 +++++++++++++++++++---
+ 3 files changed, 102 insertions(+), 7 deletions(-)
+
+diff --git a/build/ntdll-unix/pp_sc_layout.h b/build/ntdll-unix/pp_sc_layout.h
+index b0c3249..f3fd88b 100644
+--- a/build/ntdll-unix/pp_sc_layout.h
++++ b/build/ntdll-unix/pp_sc_layout.h
+@@ -78,4 +78,23 @@ static inline enum ppsc_slot ppsc_classify(uint64_t size, uint64_t hint,
+     }
+     return PPSC_NONE;
+ }
++
++/* An unhinted reserve from the verified helper that cannot be placed, so the
++ * router refuses it with STATUS_NO_MEMORY before any map walk (PLA-476):
++ * - PPSC_PROBE_NO_GAP: larger than [PPSC_FLOOR, PPSC_CEILING), the largest gap
++ *   the layout leaves (V8's sandbox ladder from 512 GiB down to 16 GiB, gin's
++ *   16 GiB ArrayBuffer pool tries);
++ * - PPSC_PROBE_SANDBOX: 8 GiB or more once this helper owns the cage, V8's
++ *   emulated sandbox subspace tries, whose result it keeps only inside its
++ *   unbacked 1 TiB range above the task's ceiling.
++ * A hinted ask already fails without a walk and is left alone; the cage's own
++ * 8 GiB ask is routed before this is asked. */
++enum ppsc_probe { PPSC_PROBE_NONE, PPSC_PROBE_NO_GAP, PPSC_PROBE_SANDBOX };
++static inline enum ppsc_probe ppsc_impossible(uint64_t size, uint64_t hint, unsigned mine)
++{
++    if (hint) return PPSC_PROBE_NONE;
++    if (size > PPSC_CEILING - PPSC_FLOOR) return PPSC_PROBE_NO_GAP;
++    if (size >= 0x200000000ULL && (mine & PPSC_BIT(PPSC_CAGE))) return PPSC_PROBE_SANDBOX;
++    return PPSC_PROBE_NONE;
++}
+ #endif
+diff --git a/build/ntdll-unix/pp_sc_owner.h b/build/ntdll-unix/pp_sc_owner.h
+index 5c8a7f5..dd4ed7b 100644
+--- a/build/ntdll-unix/pp_sc_owner.h
++++ b/build/ntdll-unix/pp_sc_owner.h
+@@ -2,6 +2,51 @@
+ /* Shared by the layout router and the existing safe process teardown. */
+ static void *ppsc_owner[PPSC_LAST_SLOT + 1]; /* virtual_mutex protects grants and holds */
+ 
++/* The router's ppsc_impossible refusals per helper PEB, for its owner-exit
++ * line (virtual_mutex protects them). A ninth PEB at once is refused uncounted. */
++#define PPSC_PROBE_PEBS 8
++static void *ppsc_probe_peb[PPSC_PROBE_PEBS];
++static unsigned ppsc_probe_count[PPSC_PROBE_PEBS];
++
++/* virtual_mutex held: counts one refusal for peb; its number, 0 when not counted. */
++static inline unsigned ppsc_probe_counted_locked(void *peb)
++{
++    int i, free_slot = -1;
++    if (!peb) return 0;
++    for (i = 0; i < PPSC_PROBE_PEBS; i++) {
++        if (ppsc_probe_peb[i] == peb) return ++ppsc_probe_count[i];
++        if (!ppsc_probe_peb[i] && free_slot < 0) free_slot = i;
++    }
++    if (free_slot < 0) return 0;
++    ppsc_probe_peb[free_slot] = peb;
++    return ppsc_probe_count[free_slot] = 1;
++}
++
++/* virtual_mutex held, at peb's exit: its refusals; its entry is freed. */
++static inline unsigned ppsc_probe_take_locked(void *peb)
++{
++    int i;
++    unsigned n;
++    if (!peb) return 0;
++    for (i = 0; i < PPSC_PROBE_PEBS; i++) {
++        if (ppsc_probe_peb[i] != peb) continue;
++        n = ppsc_probe_count[i];
++        ppsc_probe_peb[i] = NULL;
++        ppsc_probe_count[i] = 0;
++        return n;
++    }
++    return 0;
++}
++
++/* The owner-exit line's suffix for kind k: the cage's carries peb's refusals. */
++static inline const char *ppsc_probe_suffix_locked(int k, void *peb, char *buf, size_t size)
++{
++    buf[0] = 0;
++    if (k == PPSC_CAGE)
++        snprintf(buf, size, "; %u impossible probes refused", ppsc_probe_take_locked(peb));
++    return buf;
++}
++
+ static int ppsc_helper(void)
+ {
+     static const char name[] = "socialclubhelper.exe";
+@@ -32,6 +77,8 @@ static void ppsc_note_kept_view_locked(int k, void *peb, struct file_view *v); /
+ static int ppsc_owner_view_freed_locked(void *peb, struct file_view *view); /* pp_sc_vm.h */
+ static void ppsc_owner_died_locked(void *peb)
+ {
++    char probes[48];
++    unsigned n;
+     int k;
+     if (!peb || !ppsc_ready) return;
+     for (k = PPSC_ELF; k <= PPSC_LAST_SLOT; k++) {
+@@ -45,9 +92,12 @@ static void ppsc_owner_died_locked(void *peb)
+         }
+         ppsc_owner[k] = NULL;
+         if (ppsc_native_hold(r.base, r.size)) ppsc_held |= PPSC_BIT(k);
+-        dprintf(2, "[sc-layout] owner %p exited; kind=%d slot %s\n", peb, k,
+-                (ppsc_held & PPSC_BIT(k)) ? "held again" : "NOT held again (something mapped it)");
++        dprintf(2, "[sc-layout] owner %p exited; kind=%d slot %s%s\n", peb, k,
++                (ppsc_held & PPSC_BIT(k)) ? "held again" : "NOT held again (something mapped it)",
++                ppsc_probe_suffix_locked(k, peb, probes, sizeof(probes)));
+     }
++    if ((n = ppsc_probe_take_locked(peb)))   /* a helper that never owned the cage, or released it */
++        dprintf(2, "[sc-layout] owner %p exited without kind=6; %u impossible probes refused\n", peb, n);
+ }
+ 
+ /* A view inside a layout slot is a Social Club grant, never FEX's band, even
+diff --git a/build/ntdll-unix/pp_sc_vm.h b/build/ntdll-unix/pp_sc_vm.h
+index d47ea0c..d5a6024 100644
+--- a/build/ntdll-unix/pp_sc_vm.h
++++ b/build/ntdll-unix/pp_sc_vm.h
+@@ -23,11 +23,12 @@ static unsigned ppsc_others(void *peb)
+  * owner's slot view (PLA-476 retained-extent diagnostic, no policy). */
+ static void ppsc_note_kept_view_locked(int k, void *peb, struct file_view *v)
+ {
+-    char *p = v->base, *end = (char *)v->base + v->size;
++    char *p = v->base, *end = (char *)v->base + v->size, probes[48];
+     unsigned long long bytes = 0, high = 0;
+     unsigned runs = 0;
+-    dprintf(2, "[sc-layout] owner %p exited; kind=%d view kept (view %p+0x%llx owner=%p), slot stays owned\n",
+-            peb, k, v->base, (unsigned long long)v->size, v->ios_owner_peb);
++    dprintf(2, "[sc-layout] owner %p exited; kind=%d view kept (view %p+0x%llx owner=%p), slot stays owned%s\n",
++            peb, k, v->base, (unsigned long long)v->size, v->ios_owner_peb,
++            ppsc_probe_suffix_locked(k, peb, probes, sizeof(probes)));
+     while (p < end) {
+         BYTE vprot;
+         SIZE_T len = get_vprot_range_size(p, end - p, VPROT_COMMITTED, &vprot);
+@@ -73,7 +74,9 @@ static enum ppsc_slot ppsc_hold_in_place_locked(void *owner, struct file_view *v
+ static int ppsc_owner_view_freed_locked(void *peb, struct file_view *view)
+ {
+     enum ppsc_slot k = ppsc_hold_in_place_locked(peb, view);
+-    if (k) dprintf(2, "[sc-layout] owner %p exited; kind=%d slot held in place\n", peb, k);
++    char probes[48];
++    if (k) dprintf(2, "[sc-layout] owner %p exited; kind=%d slot held in place%s\n", peb, k,
++                   ppsc_probe_suffix_locked(k, peb, probes, sizeof(probes)));
+     return k != PPSC_NONE;
+ }
+ 
+@@ -136,6 +139,25 @@ static NTSTATUS ppsc_grant(enum ppsc_slot k, SIZE_T asked, void **ret, SIZE_T *s
+     return STATUS_SUCCESS;
+ }
+ 
++/* virtual_mutex held: refuses an unhinted reserve ppsc_impossible names, before
++ * allocate_virtual_memory and so before Wine's map walk (PLA-476). V8 gets the
++ * STATUS_NO_MEMORY the walk would have ended in. The first two of a PEB are
++ * logged; its owner-exit line counts them all. */
++static int ppsc_refuse_probe_locked(void **ret, SIZE_T size, NTSTATUS *status)
++{
++    void *peb = ios_jit_current_peb();
++    enum ppsc_probe why = ppsc_impossible(size, (uintptr_t)*ret, ppsc_mine(peb));
++    unsigned n;
++    if (why == PPSC_PROBE_NONE) return 0;
++    if ((n = ppsc_probe_counted_locked(peb)) && n <= 2)
++        dprintf(2, "[sc-layout] probe refused owner=%p size=0x%llx: %s (%u; later ones are counted at its exit)\n",
++                peb, (unsigned long long)size,
++                why == PPSC_PROBE_NO_GAP ? "larger than any gap the layout leaves" : "a sandbox probe after its kind=6",
++                n);
++    *status = STATUS_NO_MEMORY;
++    return 1;
++}
++
+ static int ppsc_route(void **ret, SIZE_T *size, ULONG type, ULONG protect, ULONG_PTR limit,
+                       int extended, NTSTATUS *status)
+ {
+@@ -150,10 +172,14 @@ static int ppsc_route(void **ret, SIZE_T *size, ULONG type, ULONG protect, ULONG
+          * cage (every logged play asks for it after both). */
+         if (*size != 0x200000000ULL || protect != PAGE_NOACCESS ||
+             !(ppsc_held & PPSC_BIT(PPSC_CAGE)) || (ppsc_mine(ios_jit_current_peb()) & both) != both) {
++            int refused = ppsc_refuse_probe_locked(ret, *size, status);
+             server_leave_uninterrupted_section(&virtual_mutex, &sigset);
+-            return 0;
++            return refused;
+         }
+         k = PPSC_CAGE;
++    } else if (ppsc_refuse_probe_locked(ret, *size, status)) {
++        server_leave_uninterrupted_section(&virtual_mutex, &sigset);
++        return 1;
+     } else {
+         k = ppsc_classify(*size, (uintptr_t)*ret, ppsc_held, ppsc_mine(ios_jit_current_peb()),
+                           ppsc_others(ios_jit_current_peb()));

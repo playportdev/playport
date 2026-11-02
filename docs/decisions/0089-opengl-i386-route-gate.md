@@ -2,7 +2,7 @@
 
 **Status:** accepted 2026-10-11: host-side Zink serves i386. The budget was set and committed
 (be3a61a) before the measurement. This carries out the OpenGL plan's chunk 3 gate
-([the plan](../plans/finished.md#opengl-through-zink), "Route decision"). The worker chose the
+([the plan](https://linear.app/playportdev/issue/PLA-162), "Route decision"). The worker chose the
 conservative options (owner away).
 [PLA-162](https://linear.app/playportdev/issue/PLA-162). Amends
 [0087](0087-opengl-through-zink-on-the-host.md), which left i386 open until this gate.

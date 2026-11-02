@@ -1,0 +1,97 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: playportdev <dev@playport.dev>
+Date: Fri, 30 Oct 2026 18:00:00 +0100
+Subject: [PATCH] ntdll: cap a JIT code-buffer grant at 64 MiB, not 128
+
+The tail's cap granted a process that filled its first 16 MiB code buffer
+up to 128 MiB (ml1052: FEX's branch range), the largest power of two that
+left 48 MiB between head and tail and 16 MiB for each other process with a
+live carve (0157). Red Dead Redemption 2 asks for 128 MiB at its second
+generation in every run; what it got was left to the tail's room at that
+moment. In runs d1 and l11 the room gave it 64 MiB, it filled them two
+seconds after Story was pressed and rolled to a third generation, and its
+FEX band (code cache and per-thread lookup caches) fell by 285 and 324 MB;
+in l9 and l10 it got 128 MiB, did not roll, and reached Story's load step
+with that band 169 MB larger.
+
+The cap is now at most 64 MiB for every process, so a process that
+outgrows 64 MiB rolls. FEX halves its 128 MiB ask on the refusal, as it
+already does when the room is short. The arithmetic moves to
+pp_jit_tail_cap.h for the host test; the room rule is unchanged.
+
+Linear: PLA-476
+Class: feature
+Evidence: docs/evidence/2026-10-29-sc-stock-cef-probe.md
+Offered-upstream: no; the JIT pool is Madeira's own iOS code
+---
+ build/ntdll-unix/pp_jit_tail_cap.h | 27 +++++++++++++++++++++++++++
+ build/ntdll-unix/virtual_ios.c     | 14 +++++++-------
+ 2 files changed, 34 insertions(+), 7 deletions(-)
+ create mode 100644 build/ntdll-unix/pp_jit_tail_cap.h
+
+diff --git a/build/ntdll-unix/pp_jit_tail_cap.h b/build/ntdll-unix/pp_jit_tail_cap.h
+new file mode 100644
+index 0000000..4c79f3e
+--- /dev/null
++++ b/build/ntdll-unix/pp_jit_tail_cap.h
+@@ -0,0 +1,27 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later
++ * The largest code buffer the JIT pool's tail grants one ask (Madeira ml1052,
++ * Playport decision 0116 and its amendment of 2026-10-30). The room is the
++ * pool less the image head, the tail and a reserve: HEAD_RESERVE between head
++ * and tail, and one initial-size buffer for each other process holding a live
++ * tail carve. The cap is the largest power of two from PPJT_SMALL up to
++ * PPJT_MAX that fits the room. PPJT_MAX was 128 MiB, FEX's branch range; it
++ * is 64 MiB, so a process that outgrows its 64 MiB buffer rolls to a new code
++ * generation, which empties its translation caches (RDR2's FEX band fell by
++ * 285-324 MB at such a roll before Story's load, runs d1 and l11). Pure
++ * arithmetic, so a host test compiles this header as is. */
++#ifndef PP_JIT_TAIL_CAP_H
++#define PP_JIT_TAIL_CAP_H
++#include <stddef.h>
++
++enum { PPJT_SMALL = 0x1000000, PPJT_MAX = 0x4000000, PPJT_HEAD_RESERVE = 48u * 1024 * 1024 };
++
++static inline size_t pp_jit_tail_cap( size_t pool, size_t head, size_t tail, unsigned others )
++{
++    size_t reserve = PPJT_HEAD_RESERVE + (size_t)others * PPJT_SMALL;
++    size_t room = pool > head + tail + reserve ? pool - head - tail - reserve : 0;
++    size_t cap = PPJT_SMALL;
++
++    while (cap < PPJT_MAX && cap * 2 <= room) cap *= 2;
++    return cap;
++}
++#endif
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index c83b5eb..f869246 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -3112,6 +3112,8 @@ static void ios_tail_log_process_share( void )
+              (unsigned long)(live >> 20), carves );
+ }
+ 
++#include "pp_jit_tail_cap.h"
++
+ /* Playport (PLA-394): how many processes other than the current one hold a live tail
+  * carve. The tail cap keeps room for each of them (decision 0116). */
+ static unsigned ios_tail_other_live_processes( void )
+@@ -22534,14 +22536,12 @@ NTSTATUS WINAPI NtAllocateVirtualMemoryEx( HANDLE process, PVOID *ret, SIZE_T *s
+              * 128 MB grants, then head and tail met and every later process failed.
+              * The reserve now also keeps one initial-size buffer (TAIL_SMALL) per
+              * other process holding a live carve, so a lone game keeps its cap. */
+-            enum { TAIL_SMALL = 0x1000000, TAIL_MAX = 0x8000000, HEAD_RESERVE = 48u * 1024 * 1024 };
+-            size_t head_now = jit_pool_offset, tail_now = ios_jit_tail_reserved;
++            /* Playport (PLA-476, decision 0116 as amended 2026-10-30): the cap is at
++             * most 64 MiB, not 128 (pp_jit_tail_cap.h): a process that outgrows it
++             * rolls to a new code generation, as RDR2 did before Story's load. */
++            enum { TAIL_SMALL = PPJT_SMALL };
+             unsigned others = ios_tail_other_live_processes();
+-            size_t reserve = HEAD_RESERVE + (size_t)others * TAIL_SMALL;
+-            size_t room = ios_jit_pool_size_global > head_now + tail_now + reserve
+-                        ? ios_jit_pool_size_global - head_now - tail_now - reserve : 0;
+-            size_t cap = TAIL_SMALL;
+-            while (cap < TAIL_MAX && cap * 2 <= room) cap *= 2;
++            size_t cap = pp_jit_tail_cap( ios_jit_pool_size_global, jit_pool_offset, ios_jit_tail_reserved, others );
+             /* A retired generation of this size already sitting on the carve
+              * free-list costs the pool nothing new: never refuse that. */
+             if (alloc_size > cap)

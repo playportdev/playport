@@ -1,0 +1,132 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 30 Oct 2026 23:00:11 +0100
+Subject: [PATCH] kk: MESA_KK_EXPERIMENTAL=cmd_bo_classes gives large command
+ BOs quarter-octave size classes to 2 MiB
+
+A command BO over 128 KiB comes from a per-pool cache in power-of-two
+classes, 256 KiB to 16 MiB. RDR2's vertex and tessellation scratch
+(kk_upload_vertex_params, kk_upload_tess_params) asks a mean of
+0.54 MiB and is given 1 MiB: [kk-upload] counted 1.7x the bytes asked.
+
+The classes are now one table, kk_cmd_large_bo_class_B: the powers of
+two and, between 256 KiB and 2 MiB, the quarter octaves (320, 384, 448,
+640 KiB, ...). Without the switch only the powers of two are used: the
+same sizes and best-fit reuse as before, the unused classes' lists stay
+empty. With MESA_KK_EXPERIMENTAL=cmd_bo_classes (in "all") every class
+is used, the worst rounding drops from 2x to 1.25x, and a cached BO is
+reused only for an ask whose class is at least half its size, so a
+cached 1 MiB heap does not serve a 320 KiB ask.
+kk-cmd-retire-test.c checks the classes on the mock.
+
+Linear: PLA-364
+Class: feature
+Evidence: docs/evidence/2026-10-30-rdr2-kk-audio-diagnostics.md
+Offered-upstream: no
+---
+ src/kosmickrisp/vulkan/kk_cmd_pool.c | 33 +++++++++++++++++++++++-----
+ src/kosmickrisp/vulkan/kk_cmd_pool.h |  7 +++---
+ src/kosmickrisp/vulkan/kk_debug.c    |  1 +
+ src/kosmickrisp/vulkan/kk_debug.h    |  5 +++++
+ 4 files changed, 38 insertions(+), 8 deletions(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_pool.c b/src/kosmickrisp/vulkan/kk_cmd_pool.c
+index c13a8e0..db229e5 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_pool.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_pool.c
+@@ -153,6 +153,26 @@ kk_cmd_pool_trim_large_bos(struct kk_cmd_pool *pool, uint64_t limit)
+    }
+ }
+ 
++/* Playport (PLA-364): the large BO classes. Powers of two from 256 KiB to
++ * 16 MiB; with MESA_KK_EXPERIMENTAL=cmd_bo_classes also the quarter octaves
++ * between 256 KiB and 2 MiB, where RDR2's tessellation scratch asks a mean of
++ * 0.54 MiB and a power of two gave it 1 MiB (the [kk-upload] rounded bytes,
++ * 1.7x the asked ones). */
++#define KIB 1024u
++static const uint32_t kk_cmd_large_bo_class_B[KK_CMD_LARGE_BO_CLASSES] = {
++   256 * KIB,  320 * KIB,  384 * KIB,  448 * KIB,  512 * KIB,  640 * KIB,
++   768 * KIB,  896 * KIB,  1024 * KIB, 1280 * KIB, 1536 * KIB, 1792 * KIB,
++   2048 * KIB, 4096 * KIB, 8192 * KIB, 16384 * KIB,
++};
++#undef KIB
++
++static bool
++kk_cmd_large_bo_class_used(unsigned size_class)
++{
++   return KK_EXPERIMENTAL(CMD_BO_CLASSES) ||
++          util_is_power_of_two_nonzero(kk_cmd_large_bo_class_B[size_class]);
++}
++
+ VkResult
+ kk_cmd_pool_alloc_large_bo(struct kk_cmd_pool *pool, uint32_t size_B,
+                             uint32_t alignment_B, struct kk_cmd_bo **bo_out)
+@@ -162,14 +182,17 @@ kk_cmd_pool_alloc_large_bo(struct kk_cmd_pool *pool, uint32_t size_B,
+    const uint32_t required = MAX2(size_B, alignment_B);
+    if (required <= KK_CMD_LARGE_BO_MAX) {
+       size_class = 0;
+-      allocation_size = 1u << KK_CMD_LARGE_BO_MIN_LOG2;
+-      while (allocation_size < required) {
+-         allocation_size <<= 1;
++      while (!kk_cmd_large_bo_class_used(size_class) ||
++             kk_cmd_large_bo_class_B[size_class] < required)
+          size_class++;
+-      }
+-      /* Best fit: prefer the smallest available class that meets the ask. */
++      allocation_size = kk_cmd_large_bo_class_B[size_class];
++      /* Best fit: prefer the smallest available class that meets the ask;
++       * with cmd_bo_classes, none over twice the ask's class. */
+       kk_cmd_pool_lock(pool);
+       for (unsigned i = size_class; i < KK_CMD_LARGE_BO_CLASSES; i++) {
++         if (KK_EXPERIMENTAL(CMD_BO_CLASSES) &&
++             kk_cmd_large_bo_class_B[i] > 2u * allocation_size)
++            break;
+          if (list_is_empty(&pool->large_free_bos[i]))
+             continue;
+          struct kk_cmd_bo *bo =
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_pool.h b/src/kosmickrisp/vulkan/kk_cmd_pool.h
+index b09d44b..bab7685 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_pool.h
++++ b/src/kosmickrisp/vulkan/kk_cmd_pool.h
+@@ -20,9 +20,10 @@
+ #define KK_CMD_POOL_BO_MAX 32
+ 
+ /* Large command BOs: 256 KiB through 16 MiB, capped per pool, not per
+- * command buffer. Only idle BOs count against this limit. */
+-#define KK_CMD_LARGE_BO_MIN_LOG2 18
+-#define KK_CMD_LARGE_BO_CLASSES 7
++ * command buffer. Only idle BOs count against this limit. The classes are
++ * kk_cmd_pool.c's kk_cmd_large_bo_class_B: the powers of two, and with
++ * MESA_KK_EXPERIMENTAL=cmd_bo_classes also quarter octaves to 2 MiB. */
++#define KK_CMD_LARGE_BO_CLASSES 16
+ #define KK_CMD_LARGE_BO_MAX (1u << 24)
+ #define KK_CMD_LARGE_BO_CACHE_MAX (64u * 1024 * 1024)
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_debug.c b/src/kosmickrisp/vulkan/kk_debug.c
+index 109c79d..4394153 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.c
++++ b/src/kosmickrisp/vulkan/kk_debug.c
+@@ -64,6 +64,7 @@ const struct debug_named_value experimental_flags[] = {
+    {"memory_priority", KK_EXPERIMENTAL_MEMORY_PRIORITY},
+    {"module_identifier", KK_EXPERIMENTAL_MODULE_IDENTIFIER},
+    {"cmd_retire", KK_EXPERIMENTAL_CMD_RETIRE},
++   {"cmd_bo_classes", KK_EXPERIMENTAL_CMD_BO_CLASSES},
+    {NULL, 0},
+ };
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_debug.h b/src/kosmickrisp/vulkan/kk_debug.h
+index 5bef200..a08a6ca 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.h
++++ b/src/kosmickrisp/vulkan/kk_debug.h
+@@ -265,6 +265,11 @@ enum kk_experimental {
+     * kk_cmd_pool_get_allocator's retire rules. Must be named: a release
+     * before the GPU is done with a BO faults */
+    KK_EXPERIMENTAL_CMD_RETIRE = 1ull << 18,
++   /* Playport (PLA-364): a command BO over 128 KiB and up to 2 MiB comes in
++    * quarter-octave size classes (320 KiB, 384 KiB, ...), not powers of two,
++    * and a cached BO is reused only for an ask over half its size
++    * (kk_cmd_pool_alloc_large_bo) */
++   KK_EXPERIMENTAL_CMD_BO_CLASSES = 1ull << 19,
+ };
+ 
+ extern enum kk_experimental kk_mesa_experimental_flags;

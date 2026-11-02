@@ -74,6 +74,8 @@ class Fonts(unittest.TestCase):
         self.assertTrue(marked)
         self.assertIn('"Tahoma (TrueType)"="tahoma.ttf"', values)
         self.assertIn('"Tahoma Bold (TrueType)"="tahomabd.ttf"', values)
+        # win32u draws caption buttons with Marlett (defwnd.c draw_frame_caption).
+        self.assertIn('"Marlett (TrueType)"="marlett.ttf"', values)
         spec = importlib.util.spec_from_file_location("font_stage", REPO / "build/stages/stage-artifacts.py")
         stage = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(stage)

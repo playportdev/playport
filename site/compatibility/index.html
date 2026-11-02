@@ -7,12 +7,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Game compatibility: Playport</title>
-<meta name="description" content="Which Windows games run on an iPhone in Playport: works, playable with issues or broken.">
+<meta name="description" content="Which Windows games run on an iPhone in Playport: runs or broken.">
 <meta name="theme-color" content="#0B0E13">
 <meta property="og:title" content="Game compatibility: Playport">
 <meta property="og:description" content="Which Windows games run on an iPhone in Playport, and how well.">
 <meta property="og:type" content="website">
-<meta property="og:image" content="https://playport.dev/screenshots/og-0.2.jpg">
+<meta property="og:image" content="https://playport.dev/screenshots/og-0.5.jpg">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="../logo.svg" type="image/svg+xml">
 <style>
@@ -26,8 +26,7 @@
     --accent-tint: #FFD08A;
     --text: #EEF1F5;
     --muted: #9AA4B2;
-    --works: #3FB950;
-    --issues: #F5B544;
+    --runs: #3FB950;
     --broken: #F85149;
     --radius: 18px;
     --max: 1120px;
@@ -63,6 +62,9 @@
   .btn-ghost:hover { background: var(--surface-3); }
   .btn-small { padding: 8px 16px; font-size: 14px; }
   nav .links a.btn-primary { color: #1A1306; }
+  .btn-kofi { background: #FF5E5B; color: #fff; }
+  .btn-kofi:hover { background: #FF7A77; }
+  nav .links a.btn-kofi, nav .links a.btn-kofi:hover { color: #fff; }
 
   header { padding: 64px 0 24px; }
   .kicker { color: var(--accent); font-weight: 700; font-size: 13px; letter-spacing: 0.14em; text-transform: uppercase; margin: 0 0 12px; }
@@ -84,8 +86,7 @@
   .chip[aria-pressed="true"] { color: var(--text); border-color: rgba(245, 181, 68, 0.6); background: var(--surface-3); }
   .chip .n { color: var(--muted); font-weight: 500; }
   .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
-  .dot.works { background: var(--works); }
-  .dot.issues { background: var(--issues); }
+  .dot.runs { background: var(--runs); }
   .dot.broken { background: var(--broken); }
   .letters { display: flex; flex-wrap: wrap; gap: 4px; }
   .letters button { min-width: 34px; height: 34px; padding: 0 8px; border-radius: 9px; border: 1px solid transparent; background: none; color: var(--text); font: inherit; font-size: 14.5px; font-weight: 700; cursor: pointer; }
@@ -105,11 +106,10 @@
   .store { display: inline-block; margin-top: 4px; color: var(--muted); font-size: 13px; }
   td.status { width: 240px; white-space: nowrap; vertical-align: middle; }
   .pill { display: inline-flex; align-items: center; gap: 8px; padding: 4px 11px; border-radius: 999px; font-size: 13.5px; font-weight: 700; }
-  .pill.works { color: #7EE787; background: rgba(63, 185, 80, 0.14); }
-  .pill.issues { color: var(--accent-tint); background: rgba(245, 181, 68, 0.14); }
+  .pill.runs { color: #7EE787; background: rgba(63, 185, 80, 0.14); }
   .pill.broken { color: #FF9C95; background: rgba(248, 81, 73, 0.14); }
   .empty { padding: 40px 24px; text-align: center; color: var(--muted); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
-  .legend { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 40px 0 0; padding: 0; list-style: none; }
+  .legend { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin: 40px 0 0; padding: 0; list-style: none; }
   .legend li { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px; color: var(--muted); font-size: 15px; }
   .legend .pill { margin-bottom: 8px; }
 
@@ -138,7 +138,9 @@
     <div class="links">
       <a href="../">Home</a>
       <a href="../#start">Get started</a>
+      <a href="../releases/">Releases</a>
       <a href="https://github.com/playportdev/playport">GitHub</a>
+      <a class="btn btn-kofi btn-small" href="https://ko-fi.com/playportdev">♥ Support</a>
       <a class="btn btn-primary btn-small" href="https://github.com/playportdev/playport/issues/new?template=problem.yml">Report a game</a>
     </div>
   </div>
@@ -180,9 +182,8 @@
     <noscript><p class="empty">The list needs JavaScript to filter. The data is in <a href="games.json">games.json</a>.</p></noscript>
 
     <ul class="legend">
-      <li><span class="pill works"><span class="dot works"></span>Works</span><br>Plays as on a PC, as far as it was played.</li>
-      <li><span class="pill issues"><span class="dot issues"></span>Playable with issues</span><br>Plays, but something is wrong: speed, sound, a mode that fails.</li>
-      <li><span class="pill broken"><span class="dot broken"></span>Broken</span><br>Does not start, or cannot be played yet.</li>
+      <li><span class="pill runs"><span class="dot runs"></span>Runs</span><br>Boots to a menu or further on the phone.</li>
+      <li><span class="pill broken"><span class="dot broken"></span>Broken</span><br>Does not reach a menu yet.</li>
     </ul>
   </div>
 </main>
@@ -198,11 +199,11 @@
 (function () {
   "use strict";
   var STATUS = {
-    works: "Works",
-    issues: "Playable with issues",
+    runs: "Runs",
     broken: "Broken"
   };
-  var STORE = { steam: "Steam", gog: "GOG", epic: "Epic Games", xbox: "Xbox", other: "Other store" };
+  var OLD_STATUS = { works: "runs", issues: "runs" };
+  var STORE = { steam: "Steam", gog: "GOG", epic: "Epic Games", battlenet: "Battle.net", xbox: "Xbox", other: "Other store" };
   var games = [];
   var state = { q: "", letter: "", status: "" };
 
@@ -229,7 +230,9 @@
     var p = new URLSearchParams(location.search);
     state.q = p.get("q") || "";
     state.letter = (p.get("letter") || "").toUpperCase();
-    state.status = STATUS[p.get("status")] ? p.get("status") : "";
+    var status = p.get("status");
+    status = OLD_STATUS[status] || status;
+    state.status = STATUS[status] ? status : "";
     $("q").value = state.q;
   }
   function writeURL() {
@@ -255,7 +258,7 @@
   function renderStatuses() {
     var box = $("statuses");
     box.textContent = "";
-    var keys = ["", "works", "issues", "broken"];
+    var keys = ["", "runs", "broken"];
     keys.forEach(function (k) {
       var n = games.filter(function (g) { return (!k || g.status === k) && matches(g, { letter: true }); }).length;
       var b = el("button", "chip");

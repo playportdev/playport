@@ -3,7 +3,7 @@
 **Linear:** [PLA-394](https://linear.app/playportdev/issue/PLA-394),
 [PLA-385](https://linear.app/playportdev/issue/PLA-385),
 [PLA-370](https://linear.app/playportdev/issue/PLA-370).
-**Plan:** [low-VA CEF](../plans/finished.md#own-low-address-space-cef).
+**Plan:** [low-VA CEF](https://linear.app/playportdev/issue/PLA-370).
 **Decision:** [0114](../decisions/0114-trim-social-clubs-chromium-and-the-launchers-threads.md)
 (amended). Branch `dev/pla-291-rockstar-launcher`.
 

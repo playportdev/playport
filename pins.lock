@@ -77,12 +77,6 @@ gbe          7103add7ca6ef3ef8353279219880068f2494fc8  https://github.com/Detanu
 xgameruntime ab2fac35b500b87fefe51add26a0672a71d11576  https://github.com/domsvoboda/nexus-xgameruntime.git main
 nghttp2      85e300c79fb6dbcfa9c1013215c8710c1c2cd3d2  https://github.com/nghttp2/nghttp2.git        master
 #
-# CEF 143.0.14 / Chromium 143.0.7499.193 (decision 0110). Built separately;
-# prebuilt input record and integration status: build/cef/README.md.
-# Chromium's series follows CEF's stock patches; nested ANGLE/Dawn are DEPS-pinned.
-cef          dd46a3761b5389255e1824c81ae1b131459f7cd0  https://bitbucket.org/chromiumembedded/cef.git 7499
-chromium     fc6af963edebc86a5d6779e29b94312ebe911538  https://chromium.googlesource.com/chromium/src.git 143.0.7499.193
-#
 # Build-time sources that are not Madeira components, fetched by tag.
 freetype     VER-2-14-3                                https://github.com/freetype/freetype.git      -
 llvm-project llvmorg-15.0.7                            https://github.com/llvm/llvm-project.git      -

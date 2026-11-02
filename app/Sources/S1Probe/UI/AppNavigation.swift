@@ -52,14 +52,30 @@ final class AppNavigation: ObservableObject {
         }
     }
 
-    static let screens = ["home", "library", "games", "downloads", "settings", "account", "setup", "signin"]
+    /// `xbox` is the dev app's only (decision 0166).
+    static let screens = ["home", "library", "installed", "games", "gog", "epic", "battlenet", "xbox", "downloads", "settings", "account", "setup", "signin"]
 
     @discardableResult
     func open(_ screen: String) -> Bool {
+        let grid = LibraryGrid.shared
         switch screen {
+        case "installed":
+            // The Library on All, Installed only.
+            show(.library)
+            grid.show(.all, installedOnly: true)
         case "games":
             show(.library)
-            LibraryGrid.shared.filter = .steam
+            grid.show(.steam)
+        case "gog", "epic", "battlenet":
+            // A store: the Library on its column button (Battle.net's offered products).
+            show(.library)
+            grid.show(LibraryFilter(rawValue: screen)!)
+        #if !PLAYPORT_RELEASE
+        case "xbox":
+            // The dev app's Xbox store (decision 0166), whose column button the release app has not.
+            show(.library)
+            grid.show(.xbox)
+        #endif
         case "settings", "account":
             openSettings(section: screen == "account" ? .accounts : nil)
         case "setup":
@@ -69,7 +85,7 @@ final class AppNavigation: ObservableObject {
         default:
             guard let p = Page(rawValue: screen) else { return false }
             show(p)
-            if p == .library { LibraryGrid.shared.filter = .all }
+            if p == .library { grid.show(.all) }
         }
         return true
     }

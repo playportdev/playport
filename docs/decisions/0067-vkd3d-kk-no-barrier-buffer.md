@@ -1,7 +1,7 @@
 # 0067: Not accepted: vkd3d-proton serializing its submissions on KosmicKrisp with a semaphore, not a barrier command buffer
 
 **Status:** not accepted, 2026-10-08, unattended under the owner's protocol in the
-[Vulkan performance plan](../plans/2026-10-06-vulkan-performance.md) (decision 0061: each
+[Vulkan performance plan](https://linear.app/playportdev/issue/PLA-680) (decision 0061: each
 new vkd3d-proton patch gets its own record; rule 4: what does not help is reverted). The
 patch took effect but moved no CPU figure in a warm 720/60 Direct3D 12 pair
 ([evidence](../evidence/2026-10-08-vulkan-perf-vkd3d-kk-driver.md)). It was reverted:

@@ -1,0 +1,535 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 1 Nov 2026 02:00:00 +0100
+Subject: [PATCH] virtual: x18-patch every instruction that reads x18
+
+The patcher sent loads, stores, ADD/SUB and MOV off x18 to a TEB
+trampoline. Every other instruction that reads x18 kept reading the 0 iOS
+leaves there: World of Warcraft's ARM64 client mixes x18 into opaque
+predicates and computed values in any data-processing form (TST, EOR,
+CCMP, CSEL, MADD, CBZ ...), and with 0 for the TEB those went their other
+way.
+
+ios_insn_x18_role now returns the fields holding x18 as a source for the
+logical (register and immediate), ADD/SUB, ADC/SBC, CCMP/CCMN, CSEL,
+1- and 2-source, 3-source, bitfield and EXTR classes, and a store of
+x18 (STR, or either register of an STP of X or W registers); each of those
+fields gets the scratch register. A load into x18 writes it, and in an
+LDP or STP of SIMD and FP registers (`ldp q19, q18, [x8], #0x20`, `stp
+s19, s18, [x10, #0x50]`) field 18 is q18 or s18: those keep their word.
+Rewritten, such a pair loaded or stored q17 or s17 in place of q18 or
+s18; World of Warcraft's Classic client has 2,003 of them in its code,
+221 of which run before its login screen on Linux.
+
+The scratch register is the first of x17, x16, x15 ... the instruction
+does not name, where an instruction naming both x16 and x17 (47 in the
+Classic client's code, as `subs x17, x18, x16, lsr #28`) was left to
+read 0. The single step (0259) reads it back from the trampoline's
+first word.
+
+CBZ/CBNZ/TBZ/TBNZ on x18 get a trampoline that branches on the TEB and
+ends in a B to the original target or back; their scratch register is
+x17, as their other fields are the offset, not registers. Forms where
+register 31 is SP (a destination without S, a load or store relative to
+SP with x18 as its data or its offset) are left alone, as the trampoline
+moves SP. A word read by a literal load stays code whenever it reads x18
+with Rd = 31, as 0260 did for CMP: such a word is odd, so no aligned
+pointer.
+
+A single step at such a branch (0259) is the branch on the TEB, to its
+target or on: the first seven words of its trampoline read as another
+site's, whose instruction would be `cbz x17, #12`, and the step tested
+the guest's x17 and went on to the site + 12.
+
+Linear: PLA-514
+Class: ios-port
+Evidence: docs/evidence/2026-10-31-wow-arm64-start.md, tools/tests/test_x18_compare.py, tools/tests/test_single_step.py
+Offered-upstream: no
+---
+ build/ntdll-unix/pp_single_step.h   |  43 ++++-
+ build/ntdll-unix/signal_arm64_ios.c |  15 +-
+ build/ntdll-unix/virtual_ios.c      | 250 ++++++++++++++++++----------
+ 3 files changed, 213 insertions(+), 95 deletions(-)
+
+diff --git a/build/ntdll-unix/pp_single_step.h b/build/ntdll-unix/pp_single_step.h
+index db7e322..e1a978a 100644
+--- a/build/ntdll-unix/pp_single_step.h
++++ b/build/ntdll-unix/pp_single_step.h
+@@ -140,28 +140,46 @@ static inline int ppss_step_in_place( uint64_t x[31], uint64_t *pc, uint32_t cps
+  * - PPSS_TRAMP_OP: *op is the instruction with *reg in place of x18, to run
+  *   out of line with the TEB in *reg (its value put back after);
+  * - PPSS_TRAMP_MOV: the instruction was MOV x*reg, x18;
+- * - PPSS_TRAMP_NONE: no trampoline of the patcher's (a branch like another). */
+-#define PPSS_TRAMP_NONE 0
+-#define PPSS_TRAMP_OP   1
+-#define PPSS_TRAMP_MOV  2
++ * - PPSS_TRAMP_BRANCH: a CBZ/CBNZ/TBZ/TBNZ on x18 (0263), whose trampoline
++ *   branches on the TEB in *reg with *op (offset 12) to a restore before a B
++ *   to *target, or on to the way back; ppss_x18_branch_next does its step;
++ * - PPSS_TRAMP_NONE: no trampoline of the patcher's (a branch like another).
++ * A branch's trampoline is 9 words, any other 7 at most. */
++#define PPSS_TRAMP_NONE   0
++#define PPSS_TRAMP_OP     1
++#define PPSS_TRAMP_MOV    2
++#define PPSS_TRAMP_BRANCH 3
+ 
+ static inline int ppss_branch_to( uint32_t insn, uint64_t at, uint64_t to )
+ {
+     return (insn & 0xfc000000) == 0x14000000 && at + ppss_sext( (insn & 0x3ffffff) << 2, 28 ) == to;
+ }
+ 
+-static inline int ppss_x18_tramp( const uint32_t *t, uint64_t tramp, uint64_t pc, unsigned *reg, uint32_t *op )
++/* CBZ/CBNZ/TBZ/TBNZ */
++static inline int ppss_cb_tb( uint32_t op )
++{
++    return (op & 0x7e000000) == 0x34000000 || (op & 0x7e000000) == 0x36000000;
++}
++
++static inline int ppss_x18_tramp( const uint32_t *t, uint64_t tramp, uint64_t pc, unsigned *reg, uint32_t *op,
++                                  uint64_t *target )
+ {
+     unsigned r = t[0] & 31;
+     uint32_t teb_load = 0x927df000u | (r << 5) | r;
+ 
+-    if ((t[0] == 0xf81f0ff1u || t[0] == 0xf81f0ff0u) && t[1] == (0xd53bd060u | r) && t[2] == teb_load &&
++    if ((t[0] & 0xffffffe0u) == 0xf81f0fe0u && r < 18 && t[1] == (0xd53bd060u | r) && t[2] == teb_load &&
+         (t[3] & 0xffc003ffu) == (0xf9400000u | (r << 5) | r) && t[5] == (0xf84107e0u | r) &&
+         ppss_branch_to( t[6], tramp + 24, pc + 4 ))
+     {
+         *reg = r;
+         *op = t[4];
+-        return PPSS_TRAMP_OP;
++        if (!ppss_cb_tb( t[4] )) return PPSS_TRAMP_OP;
++        /* a branch's: on the TEB to offset 12, the restore again and a B to the target */
++        if ((t[4] & 31) != r || ((t[4] >> 5) & ((t[4] & 0x02000000) ? 0x3fff : 0x7ffff)) != 3 ||
++            t[7] != t[5] || (t[8] & 0xfc000000) != 0x14000000)
++            return PPSS_TRAMP_NONE;
++        *target = tramp + 32 + ppss_sext( (t[8] & 0x3ffffff) << 2, 28 );
++        return PPSS_TRAMP_BRANCH;
+     }
+     if ((t[0] & 0xffffffe0u) == 0xd53bd060u && t[1] == teb_load &&
+         (t[2] & 0xffc003ffu) == (0xf9400000u | (r << 5) | r) && ppss_branch_to( t[3], tramp + 12, pc + 4 ))
+@@ -172,4 +190,15 @@ static inline int ppss_x18_tramp( const uint32_t *t, uint64_t tramp, uint64_t pc
+     return PPSS_TRAMP_NONE;
+ }
+ 
++/* The pc after a step at a CBZ/CBNZ/TBZ/TBNZ on x18 (PPSS_TRAMP_BRANCH) at pc:
++ * op tests the TEB, and taken it goes to target. */
++static inline uint64_t ppss_x18_branch_next( uint64_t teb, uint32_t op, uint64_t pc, uint64_t target )
++{
++    int nonzero = !!(op & 0x01000000);
++
++    if ((op & 0x7e000000) == 0x34000000)   /* CBZ/CBNZ, W or X */
++        return ((op & 0x80000000) ? teb : (uint32_t)teb) ? (nonzero ? target : pc + 4) : (nonzero ? pc + 4 : target);
++    return ((teb >> (((op >> 26) & 32) | ((op >> 19) & 31))) & 1) == (uint64_t)nonzero ? target : pc + 4;
++}
++
+ #endif /* PP_SINGLE_STEP_H */
+diff --git a/build/ntdll-unix/signal_arm64_ios.c b/build/ntdll-unix/signal_arm64_ios.c
+index f7f7aa4..4443248 100644
+--- a/build/ntdll-unix/signal_arm64_ios.c
++++ b/build/ntdll-unix/signal_arm64_ios.c
+@@ -6627,7 +6627,7 @@ static NTSTATUS ios_ss_continue( struct thread_data *data, const CONTEXT *contex
+     char *rw;
+     void *slot;
+     ULONG insn;
+-    int tramp_reg = 0, call_out = 0;
++    int tramp_reg = 0, call_out = 0, branched = 0;
+ 
+     step.Cpsr &= ~PPSS_CPSR_SS;
+     if (!rx || step.Pc < rx || step.Pc + 4 > rx + ios_jit_pool_size_global || (step.Pc & 3))
+@@ -6641,11 +6641,13 @@ static NTSTATUS ios_ss_continue( struct thread_data *data, const CONTEXT *contex
+     if ((insn & 0xfc000000) == 0x14000000)
+     {
+         ULONG64 tramp = step.Pc + ppss_sext( (insn & 0x3ffffff) << 2, 28 );
+-        if (tramp >= rx && tramp + 28 <= rx + ios_jit_pool_size_global)
++        /* Playport: a branch's trampoline (0263) is 9 words */
++        if (tramp >= rx && tramp + 36 <= rx + ios_jit_pool_size_global)
+         {
+             unsigned reg;
+             uint32_t op;
+-            switch (ppss_x18_tramp( (const uint32_t *)tramp, tramp, step.Pc, &reg, &op ))
++            uint64_t target;
++            switch (ppss_x18_tramp( (const uint32_t *)tramp, tramp, step.Pc, &reg, &op, &target ))
+             {
+             case PPSS_TRAMP_MOV:   /* mov xN, x18: done here, below */
+                 insn = 0xaa1203e0 | reg;
+@@ -6654,6 +6656,10 @@ static NTSTATUS ios_ss_continue( struct thread_data *data, const CONTEXT *contex
+                 tramp_reg = reg + 1;
+                 insn = op;
+                 break;
++            case PPSS_TRAMP_BRANCH:   /* CBZ/CBNZ/TBZ/TBNZ on x18: to its target or on, by the TEB */
++                step.Pc = ppss_x18_branch_next( (uint64_t)(ULONG_PTR)data->teb, op, step.Pc, target );
++                branched = 1;
++                break;
+             }
+         }
+     }
+@@ -6663,7 +6669,8 @@ static NTSTATUS ios_ss_continue( struct thread_data *data, const CONTEXT *contex
+     if ((insn & 0xfffffc1f) == 0xd63f0000 && ((insn >> 5) & 31) != 31 &&
+         (step.X[(insn >> 5) & 31] < rx || step.X[(insn >> 5) & 31] >= rx + ios_jit_pool_size_global))
+         call_out = 1;
+-    else if ((insn & 0xffffffe0) == 0xaa1203e0 || ppss_step_in_place( (uint64_t *)step.X, (uint64_t *)&step.Pc, step.Cpsr, (unsigned char (*)[16])step.V, insn ))
++    else if (branched || (insn & 0xffffffe0) == 0xaa1203e0 ||
++             ppss_step_in_place( (uint64_t *)step.X, (uint64_t *)&step.Pc, step.Cpsr, (unsigned char (*)[16])step.V, insn ))
+     {
+         EXCEPTION_RECORD rec = { .ExceptionCode = EXCEPTION_SINGLE_STEP };
+         ULONG64 pe;
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 03131fe..426befb 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -230,10 +230,9 @@ static volatile unsigned long ios_pool_head_exhausted, ios_pool_tail_refused, io
+  * a W+X request that came back without WRITE (ml999), an image whose x18
+  * patching was refused or cut short (its trampolines out of B/BL reach of its
+  * .text, a budget that did not fit, the trampoline space run out), and the x18
+- * sites left to fault at run time (those of refused images, sites whose
+- * operands left no scratch register, and sites past the end of the trampoline
+- * space). Misaligned exclusives and CAS emulated
+- * by the Mach exception handler are counted in signal_arm64_ios.c. */
++ * sites left to fault at run time (those of refused images, and sites past the
++ * end of the trampoline space). Misaligned exclusives and CAS emulated by the
++ * Mach exception handler are counted in signal_arm64_ios.c. */
+ static volatile unsigned long ios_limit_wx_dropped, ios_limit_x18_images, ios_limit_x18_sites;
+ 
+ /* ---- Pool reclamation (task #25) ----------------------------------------
+@@ -5132,108 +5131,165 @@ void ios_jit_sync_write(void *addr, size_t size)
+  * code never touches x18, so iOS zeroing it has no effect.
+  */
+ 
+-/* Check if an ARM64 instruction references x18 as a register operand.
+- * Returns the role (which field contains x18) or 0 if no x18 reference. */
+-#define X18_ROLE_NONE 0
+-#define X18_ROLE_RN   1  /* bits[9:5] = base register for loads/stores/data-proc */
+-#define X18_ROLE_RM   2  /* bits[20:16] = second register (MOV, register offset) */
+-#define X18_ROLE_RT2  3  /* bits[14:10] = second register in LDP/STP */
++/* Check if an ARM64 instruction reads x18 as a register operand.
++ * Returns the fields that hold it as a mask of X18_ROLE_* bits, or 0.
++ * Playport (PLA-514): every instruction that reads x18 as a source, not
++ * only loads, stores and ADD/SUB/MOV off it. iOS zeroes x18, and World of
++ * Warcraft's ARM64 client builds its opaque predicates and computed values
++ * from x18 in any data-processing form (TST, CCMP, CSEL, EOR, MADD ...):
++ * with 0 for the TEB those took other paths. CBZ/CBNZ/TBZ/TBNZ on x18 get a
++ * branch trampoline (X18_ROLE_BRANCH). A load or store relative to SP (x18 as
++ * the data or the offset), and the forms where register 31 is SP as a
++ * destination, are left alone: the trampoline runs with SP 16 bytes down. */
++#define X18_ROLE_NONE   0
++#define X18_ROLE_RN     1   /* bits[9:5] */
++#define X18_ROLE_RM     2   /* bits[20:16] */
++#define X18_ROLE_RT2    4   /* bits[14:10]: LDP/STP's second register, 3-source's Ra */
++#define X18_ROLE_RT     8   /* bits[4:0] as a source: a store's Rt */
++#define X18_ROLE_BRANCH 16  /* CBZ/CBNZ/TBZ/TBNZ on x18 */
+ 
+ static int ios_insn_x18_role(uint32_t insn)
+ {
+-    /* Quick reject: check if 18 appears in any relevant field */
+     int rn = (insn >> 5) & 0x1f;
+     int rm = (insn >> 16) & 0x1f;
+     int rt2 = (insn >> 10) & 0x1f;
+-    if (rn != 18 && rm != 18 && rt2 != 18) return X18_ROLE_NONE;
+-
+-    /* Classify instruction to verify the field is actually a register */
++    int rt = insn & 0x1f;
+     uint32_t top8 = insn >> 24;
+     uint32_t top11 = insn >> 21;
++    int role = 0;
++
++    if (rn != 18 && rm != 18 && rt2 != 18 && rt != 18) return X18_ROLE_NONE;
++
++    /* CBZ/CBNZ, TBZ/TBNZ on x18 (as a W register too) */
++    if (((insn & 0x7e000000) == 0x34000000 || (insn & 0x7e000000) == 0x36000000) && rt == 18)
++        return X18_ROLE_BRANCH;
+ 
+-    /* LDR/STR (unsigned immediate) — top2=1x, [27:24]=x111, [29]=1 */
+-    if ((top8 & 0x3F) == 0x39 || (top8 & 0x3F) == 0x3D ||  /* 0b0011 1001, 0b0011 1101 */
+-        (top8 & 0x3F) == 0xB9 || (top8 & 0x3F) == 0xBD ||  /* 0b1011 1001, 0b1011 1101 */
+-        (top8 & 0x3F) == 0xF9 || (top8 & 0x3F) == 0xFD ||  /* 0b1111 1001, 0b1111 1101 */
+-        (top8 & 0x3F) == 0x79 || (top8 & 0x3F) == 0x7D)    /* 0b0111 1001, 0b0111 1101 */
++    /* LDR/STR (unsigned immediate) — [29:27]=111, [25:24]=01 */
++    if ((top8 & 0x3F) == 0x39 || (top8 & 0x3F) == 0x3D)
+     {
+-        if (rn == 18) return X18_ROLE_RN;
++        if (rn == 18) role |= X18_ROLE_RN;
++        if (rt == 18 && !(insn & 0x04c00000) && rn != 31) role |= X18_ROLE_RT;   /* STR x18 */
++        return role;
+     }
+ 
+-    /* LDR/STR (register offset) — [29:27]=111, V=0, [25:24]=00, [21]=1,
+-     * [11:10]=10; size [31:30] and opc [23:22] are DON'T-CARES.
+-     * iOS-Madeira 2026-07-04: mask was 0x3E7/0x1C1 which demanded
+-     * insn[30]==0 AND insn[22]==0 — i.e. only 8/32-bit STORES matched.
+-     * Every register-offset LOAD off x18 (`ldrb w8,[x18,x8]` — win32u's
+-     * hottest TEB poll) went unpatched and cost one Mach fault per visit
+-     * whenever x18 was 0 (~14%% of game-thread samples once
+-     * UNIXCALL-DIRECT removed the constant x18 refresh). */
++    /* LDR/STR (register offset) — [29:27]=111, [25:24]=00, [21]=1, [11:10]=10;
++     * size and opc are don't-cares. (iOS-Madeira 2026-07-04: the old mask
++     * matched 8/32-bit stores only, and win32u's `ldrb w8,[x18,x8]` faulted.) */
+     if ((top11 & 0x1F9) == 0x1C1 && ((insn >> 10) & 3) == 2)
+     {
+-        if (rn == 18) return X18_ROLE_RN;
+-        if (rm == 18) return X18_ROLE_RM;
++        if (rn == 18) role |= X18_ROLE_RN;
++        if (rm == 18 && rn != 31) role |= X18_ROLE_RM;
++        if (rt == 18 && !(insn & 0x04c00000) && rn != 31) role |= X18_ROLE_RT;
++        return role;
+     }
+ 
+-    /* LDR/STR (pre/post-indexed) — [31:21]=1x111000xx0 */
+-    if ((top11 & 0x3E7) == 0x1C0)
++    /* LDR/STR (unscaled, pre/post-indexed) — [29:27]=111, [25:24]=00, [21]=0 */
++    if ((top11 & 0x1F9) == 0x1C0)
+     {
+-        if (rn == 18) return X18_ROLE_RN;
++        if (rn == 18) role |= X18_ROLE_RN;
++        if (rt == 18 && !(insn & 0x04c00000) && rn != 31) role |= X18_ROLE_RT;
++        return role;
+     }
+ 
+-    /* LDP/STP (signed offset, pre/post-indexed) — [31:25]=x0101x01 or x0101x00 */
+-    if ((top8 & 0x3E) == 0x28 || (top8 & 0x3E) == 0x2C ||  /* x010 100x, x010 110x */
+-        (top8 & 0x3E) == 0xA8 || (top8 & 0x3E) == 0xAC ||  /* 1010 100x, 1010 110x */
+-        (top8 & 0x3E) == 0x68 || (top8 & 0x3E) == 0x6C)    /* 0110 100x, 0110 110x */
++    /* LDP/STP (signed offset, pre/post-indexed); Rt2 = 18 is x18 only in an STP of X/W registers */
++    if ((top8 & 0x3E) == 0x28 || (top8 & 0x3E) == 0x2C)
+     {
+-        if (rn == 18) return X18_ROLE_RN;
+-        if (rt2 == 18) return X18_ROLE_RT2;
++        if (rn == 18) role |= X18_ROLE_RN;
++        if (rt2 == 18 && !(insn & 0x04400000) && rn != 31) role |= X18_ROLE_RT2;
++        if (rt == 18 && !(insn & 0x04400000) && rn != 31) role |= X18_ROLE_RT;
++        return role;
+     }
+ 
+-    /* MOV (register) = ORR Rd, XZR, Rm — [31:21]=x01 0101 0000 */
+-    if ((top11 & 0x7FF) == 0x150 || (top11 & 0x7FF) == 0x550)
++    /* Logical (shifted register): AND/BIC/ORR/ORN/EOR/EON/ANDS/BICS, MOV, TST */
++    if ((insn & 0x1f000000) == 0x0a000000)
+     {
+-        if (rm == 18) return X18_ROLE_RM;
++        if (rn == 18) role |= X18_ROLE_RN;
++        if (rm == 18) role |= X18_ROLE_RM;
++        return role;
+     }
+ 
+-    /* ADD/ADDS/SUB/SUBS (immediate) — [28:24]=10001.
+-     * Playport: the mask 0x5F matched ADD and ADDS only, so SUB and SUBS
+-     * (CMP x18, #imm) stayed unpatched: no load through x18 faults there,
+-     * so nothing repaired them either. World of Warcraft's ARM64 client
+-     * guards its code with `cmp x18, #imm; b.lo <hang>` (x18 below the
+-     * value only when it is not the TEB), and with x18 zeroed by iOS its
+-     * exception handler for a planned UDF parked in that loop. In the
+-     * trampoline register 31 as Rd is SP for the non-flag-setting forms:
+-     * those are left alone. */
++    /* ADD/ADDS/SUB/SUBS (immediate) — CMP/CMN x18, #imm. Rd = 31 is SP
++     * without S: left alone. */
+     if ((top8 & 0x1F) == 0x11)
+     {
+-        if (rn == 18 && ((insn & 0x1f) != 31 || (insn & 0x20000000))) return X18_ROLE_RN;
++        if (rn == 18 && ((insn & 0x1f) != 31 || (insn & 0x20000000))) role |= X18_ROLE_RN;
++        return role;
+     }
+ 
+-    /* ADD/ADDS/SUB/SUBS (shifted or extended register) — [28:24]=01011.
+-     * Playport: SUB and SUBS too (CMP x18, xzr), as above. In the extended
+-     * form register 31 is SP as Rn, and as Rd without S: left alone, since
+-     * the trampoline runs with SP 16 bytes down. */
++    /* ADD/ADDS/SUB/SUBS (shifted or extended register). In the extended
++     * form register 31 is SP as Rn, and as Rd without S: left alone. */
+     if ((top8 & 0x1F) == 0x0B)
+     {
+         if ((insn & 0x00200000) && (rn == 31 || ((insn & 0x1f) == 31 && !(insn & 0x20000000))))
+             return X18_ROLE_NONE;
+-        if (rn == 18) return X18_ROLE_RN;
+-        if (rm == 18) return X18_ROLE_RM;
++        if (rn == 18) role |= X18_ROLE_RN;
++        if (rm == 18) role |= X18_ROLE_RM;
++        return role;
++    }
++
++    /* Logical (immediate): Rd = 31 is SP but for ANDS (TST) */
++    if ((insn & 0x1f800000) == 0x12000000)
++    {
++        if (rn == 18 && (rt != 31 || (insn & 0x60000000) == 0x60000000)) role |= X18_ROLE_RN;
++        return role;
++    }
++
++    /* ADC/SBC, CCMP/CCMN, CSEL/CSINC/CSINV/CSNEG */
++    if ((insn & 0x1fe00000) == 0x1a000000 || (insn & 0x1fe00000) == 0x1a800000 ||
++        ((insn & 0x1fe00000) == 0x1a400000 && (insn & 0x20000000)))
++    {
++        if (rn == 18) role |= X18_ROLE_RN;
++        if (rm == 18 && !((insn & 0x1fe00000) == 0x1a400000 && (insn & 0x800))) role |= X18_ROLE_RM;
++        return role;
++    }
++
++    /* Data-processing (2-source and 1-source) */
++    if ((insn & 0x1fe00000) == 0x1ac00000)
++    {
++        if (rn == 18) role |= X18_ROLE_RN;
++        if (rm == 18 && !(insn & 0x40000000)) role |= X18_ROLE_RM;
++        return role;
++    }
++
++    /* Data-processing (3-source): MADD/MSUB/SMADDL/UMULH ... */
++    if ((insn & 0x1f000000) == 0x1b000000)
++    {
++        if (rn == 18) role |= X18_ROLE_RN;
++        if (rm == 18) role |= X18_ROLE_RM;
++        if (rt2 == 18) role |= X18_ROLE_RT2;
++        return role;
++    }
++
++    /* Bitfield (SBFM/BFM/UBFM: LSL, LSR, ASR, UBFX ...) and EXTR */
++    if ((insn & 0x1f800000) == 0x13000000)
++    {
++        if (rn == 18) role |= X18_ROLE_RN;
++        return role;
++    }
++    if ((insn & 0x1f800000) == 0x13800000)
++    {
++        if (rn == 18) role |= X18_ROLE_RN;
++        if (rm == 18) role |= X18_ROLE_RM;
++        return role;
+     }
+ 
+     return X18_ROLE_NONE;
+ }
+ 
+-/* Replace x18 in an instruction with a different register */
++/* Replace x18 in an instruction's role fields with a different register */
+ static uint32_t ios_insn_replace_x18(uint32_t insn, int role, int scratch)
+ {
+-    switch (role)
+-    {
+-    case X18_ROLE_RN:  return (insn & ~(0x1f << 5)) | (scratch << 5);
+-    case X18_ROLE_RM:  return (insn & ~(0x1f << 16)) | (scratch << 16);
+-    case X18_ROLE_RT2: return (insn & ~(0x1f << 10)) | (scratch << 10);
+-    default:           return insn;
+-    }
++    if (role & X18_ROLE_RN)  insn = (insn & ~(0x1f << 5)) | (scratch << 5);
++    if (role & X18_ROLE_RM)  insn = (insn & ~(0x1f << 16)) | (scratch << 16);
++    if (role & X18_ROLE_RT2) insn = (insn & ~(0x1f << 10)) | (scratch << 10);
++    if (role & (X18_ROLE_RT | X18_ROLE_BRANCH)) insn = (insn & ~0x1fu) | scratch;
++    return insn;
++}
++
++/* Trampoline bytes for a site: the TEB load, the instruction and the way back. */
++static size_t ios_x18_tramp_bytes(int role)
++{
++    return (role & X18_ROLE_BRANCH) ? 40 : 32;
+ }
+ 
+ /* Patch all x18 references in a PE .text section.
+@@ -5352,15 +5408,14 @@ static unsigned char *ios_x18_build_data_map( const char *text, size_t text_size
+         if (imm19 * 4 + (int64_t)i < 0 || tgt >= text_size) continue;
+         for (size_t b = tgt; b < tgt + lit_bytes && b < text_size; b += 4)
+         {
+-            /* Playport (PLA-514): a CMP or CMN of x18 (ADDS/SUBS with Rd = 31)
+-             * stays code. Its word ends in 0b11111, which no aligned pointer
+-             * does, and World of Warcraft's ARM64 client aims junk literal loads
++            /* Playport (PLA-514): an instruction reading x18 whose Rd is 31 (CMP,
++             * CMN, TST and the like) stays code. Its word ends in 0b11111, which
++             * no aligned pointer does, and World of Warcraft's ARM64 client aims junk literal loads
+              * at its own `cmp x18, #imm` guards: left unpatched, one compared 0
+              * in its exception handler, which then took a path that ends with
+              * x28 holding code words, and its caller crashed. */
+             uint32_t w = *(const uint32_t *)(text + b);
+-            if ((w & 0x1f) == 31 && (w & 0x20000000) && (((w >> 24) & 0x1f) == 0x11 || ((w >> 24) & 0x1f) == 0x0b) &&
+-                ios_insn_x18_role( w ) != X18_ROLE_NONE) continue;
++            if ((w & 0x1f) == 31 && ios_insn_x18_role( w ) != X18_ROLE_NONE) continue;
+             data_map[(b / 4) >> 3] |= 1 << ((b / 4) & 7);
+         }
+     }
+@@ -5382,7 +5437,8 @@ size_t ios_jit_x18_tramp_need( const char *text, size_t text_size, size_t text_r
+     {
+         uint32_t insn = *(const uint32_t *)(text + i);
+         if (data_map && (data_map[(i / 4) >> 3] & (1 << ((i / 4) & 7)))) continue;
+-        if (ios_insn_x18_role( insn ) != X18_ROLE_NONE) need += 32;
++        int role = ios_insn_x18_role( insn );
++        if (role != X18_ROLE_NONE) need += ios_x18_tramp_bytes( role );
+     }
+     free( data_map );
+     /* Slack: the patcher's per-site max is 32B; pad one page so a
+@@ -5539,14 +5595,16 @@ int ios_jit_patch_x18(char *text_rw, char *text_rx, size_t text_size, size_t tex
+         int rt = insn & 0x1f;
+         int rn = (insn >> 5) & 0x1f;
+         int rm = (insn >> 16) & 0x1f;
+-        if (rt == 17 || rn == 17 || rm == 17) scratch = 16;
+-        /* Double-check: if both x16 and x17 are used, skip (extremely rare) */
+-        if (scratch == 16 && (rt == 16 || rn == 16 || rm == 16))
+-        {
+-            skipped++;
+-            unpatched++;
+-            continue;
+-        }
++        /* Playport: the third source of a 3-source instruction and an LDP/STP's
++         * second register (bits 14:10) count too. A CBZ/CBNZ/TBZ/TBNZ has no
++         * register but x18: bits 23:5 are its offset (and bit number). The
++         * scratch register is the first of x17, x16, x15 ... the instruction does
++         * not name (it names four at most): World of Warcraft's client has `subs
++         * x17, x18, x16, lsr #28` and `madd x16, x29, x17, x18`. */
++        int ra = ((insn & 0x1f000000) == 0x1b000000 || (insn & 0x3a000000) == 0x28000000)
++                 ? (int)((insn >> 10) & 0x1f) : -1;
++        if (role & X18_ROLE_BRANCH) rn = rm = ra = -1;
++        while (scratch == rt || scratch == rn || scratch == rm || scratch == ra) scratch--;
+ 
+         /* Check trampoline space (max 6 instructions = 24 bytes per trampoline) */
+         if (tramp_off + 24 > tramp_size)
+@@ -5598,15 +5656,15 @@ int ios_jit_patch_x18(char *text_rw, char *text_rx, size_t text_size, size_t tex
+         }
+         else
+         {
+-            /* Check trampoline space (7 instructions = 28 bytes) */
+-            if (tramp_off + 32 > tramp_size)
++            /* Check trampoline space (7 instructions = 28 bytes; a branch's 9) */
++            if (tramp_off + ios_x18_tramp_bytes( role ) > tramp_size)
+             {
+                 ERR("x18 patcher: out of trampoline space at %d patches\n", count);
+                 out_of_space = i;
+                 break;
+             }
+             /* str xSCRATCH, [sp, #-16]! */
+-            *(uint32_t *)(tramp_rw + tramp_off) = (scratch == 17) ? 0xF81F0FF1 : 0xF81F0FF0;
++            *(uint32_t *)(tramp_rw + tramp_off) = 0xF81F0FE0 | scratch;
+             tramp_off += 4;
+             /* mrs xSCRATCH, TPIDRRO_EL0 */
+             *(uint32_t *)(tramp_rw + tramp_off) = 0xD53BD060 | scratch;
+@@ -5617,12 +5675,36 @@ int ios_jit_patch_x18(char *text_rw, char *text_rx, size_t text_size, size_t tex
+             /* ldr xSCRATCH, [xSCRATCH, #slot_off] */
+             *(uint32_t *)(tramp_rw + tramp_off) = 0xF9400000 | ((slot_off / 8) << 10) | (scratch << 5) | scratch;
+             tramp_off += 4;
++            if (role & X18_ROLE_BRANCH)
++            {
++                /* Playport: CBZ/CBNZ/TBZ/TBNZ on the TEB, to the restore before
++                 * a B to the original target, or on to the way back */
++                int tb = (insn & 0x7e000000) == 0x36000000;
++                int64_t off = tb ? (int64_t)((int32_t)(insn << 13) >> 18) * 4
++                                 : (int64_t)((int32_t)(insn << 8) >> 13) * 4;
++                uintptr_t target = insn_rx + off;
++                *(uint32_t *)(tramp_rw + tramp_off) = tb ? (insn & 0xfff80000) | (3 << 5) | scratch
++                                                         : (insn & 0xff000000) | (3 << 5) | scratch;
++                tramp_off += 4;
++                *(uint32_t *)(tramp_rw + tramp_off) = 0xF84107E0 | scratch;
++                tramp_off += 4;
++                *(uint32_t *)(tramp_rw + tramp_off) =
++                    0x14000000 | ((((intptr_t)return_rx - (intptr_t)(tramp_rx + tramp_off)) >> 2) & 0x3FFFFFF);
++                tramp_off += 4;
++                *(uint32_t *)(tramp_rw + tramp_off) = 0xF84107E0 | scratch;
++                tramp_off += 4;
++                /* the original target, in place of the way back below */
++                return_rx = target;
++            }
++            else
++            {
+             /* Modified instruction with x18 replaced by scratch */
+             *(uint32_t *)(tramp_rw + tramp_off) = ios_insn_replace_x18(insn, role, scratch);
+             tramp_off += 4;
+             /* ldr xSCRATCH, [sp], #16 */
+-            *(uint32_t *)(tramp_rw + tramp_off) = (scratch == 17) ? 0xF84107F1 : 0xF84107F0;
++            *(uint32_t *)(tramp_rw + tramp_off) = 0xF84107E0 | scratch;
+             tramp_off += 4;
++            }
+         }
+ 
+         /* Branch back to return address */

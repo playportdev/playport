@@ -2,7 +2,7 @@
 
 ## Result and scope
 
-The first part of [step 2](../plans/finished.md#portal-2)
+The first part of [step 2](https://linear.app/playportdev/issue/PLA-26)
 reserves an owned, uncommitted 4 GiB window on the phone before attempting the
 i386 main image. The owner-identity follow-up below isolates child startup
 image state from the session and makes unix-side WoW64 identity owner-aware.

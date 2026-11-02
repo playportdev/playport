@@ -2,7 +2,7 @@
 
 **Status:** accepted, 2026-10-24, by the owner
 ([PLA-431](https://linear.app/playportdev/issue/PLA-431);
-[plan outcome](../plans/finished.md#kosmickrisp-proton-parity)). The plan's delivered
+[plan outcome](https://linear.app/playportdev/issue/PLA-431)). The plan's delivered
 work is complete. Deferring A2–A4 is a prioritization choice, not a measured
 negative result or rejection of descriptor buffers. This confirms
 [0158](0158-kk-gpl-stays-experimental.md), not a promotion of GPL.

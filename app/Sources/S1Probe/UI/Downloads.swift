@@ -35,6 +35,12 @@ protocol DownloadDriver: AnyObject {
     func discard(_ key: StoreGameKey)
     /// What the player is told when a job stopped with `error`.
     func reason(_ error: Error) -> String
+    /// A job, running or waiting, was put on hold (paused, a sign-out, a launch).
+    func held(_ key: StoreGameKey)
+}
+
+extension DownloadDriver {
+    func held(_ key: StoreGameKey) {}
 }
 
 @MainActor
@@ -95,12 +101,17 @@ final class Downloads: ObservableObject {
             return DownloadRate.duration(s) + " left"
         }
 
+        /// What a running job is doing: its kind's verb, or its store's own (a Battle.net
+        /// language change is not shown as an update, PLA-521).
+        var verb: String {
+            BattleNet.jobVerb(record) ?? (kind == .repair ? "Repairing" : kind == .update ? "Updating" : kind == .import ? "Copying" : "Downloading")
+        }
+
         var status: String {
             switch phase {
             case .queued: return waitingFor ?? "Waiting"
             case .preparing: return kind == .repair ? "Checking files…" : "Preparing…"
             case .downloading:
-                let verb = kind == .repair ? "Repairing" : kind == .update ? "Updating" : kind == .import ? "Copying" : "Downloading"
                 return fraction.map { "\(verb) \(Int($0 * 100))%" } ?? verb
             case .finishing: return "Finishing…"
             case .paused: return "Paused"
@@ -238,7 +249,12 @@ final class Downloads: ObservableObject {
 
     private func holdAll(_ hold: DownloadJob.Hold, where match: (DownloadJob) -> Bool) {
         for job in queue.jobs where job.hold == nil && match(job) {
-            if job.key == active?.key { stop(job.key, .hold(hold)) } else { queue.hold(job.key, hold) }
+            if job.key == active?.key {
+                stop(job.key, .hold(hold))
+            } else {
+                queue.hold(job.key, hold)
+                drivers[job.key.store]?.held(job.key)
+            }
         }
         rebuild()
         updateIdleTimer()
@@ -293,6 +309,8 @@ final class Downloads: ObservableObject {
             queue.hold(key, h)
             rebuild()
         }
+        // A queued job's driver hears of the hold too: nothing of it ran to stop.
+        if case .hold = how { drivers[key.store]?.held(key) }
     }
 
     /// Why `job` may not start now, or nil.

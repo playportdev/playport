@@ -1,7 +1,7 @@
 # ppsync on the phone: Hollow Knight and RDR2's launcher (PLA-427)
 
 **Linear:** [PLA-427](https://linear.app/playportdev/issue/PLA-427), PLA-364 (RDR2), PLA-42 (Hollow Knight).
-**Decision:** [0157](../decisions/0157-ppsync.md) (proposed). **Plan:** [ppsync](../plans/2026-10-21-ppsync.md).
+**Decision:** [0157](../decisions/0157-ppsync.md) (proposed). **Plan:** [ppsync](https://linear.app/playportdev/issue/PLA-659).
 **Patches:** `patches/wine-unix` 0045, `patches/madeira-unix` 0220, `build/ppsync`.
 
 The runs are in `$PLAYPORT_BUILD/ui-runs/<run>`. Every run used the defaults of decision 0153.

@@ -1,0 +1,288 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 1 Nov 2026 23:46:11 +0100
+Subject: [PATCH] signal, virtual: read stubs follow FEX's code buffers when
+ they are freed and reused
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+FEX frees a full code buffer and gets the same range back (`tail FREE`,
+`tail REUSE`): in the owner's World of Warcraft plays of 2026-11-01 two 64 MB
+buffers alternated 21 and 11 times, every 30 to 70 s. The new code at a site
+pc lost its B to the stub, and the Mach handler stubbed a pc only at exactly
+its 256th read, so a load compiled where a site had been never got one: three
+such sites took about 295,000 emulated reads in the first play, up to 3,000 a
+second in bursts. The stubs and table entries of the freed buffer stayed, so
+the 2,048-site cap counted dead sites: the agent's 67-minute play reached it
+at 22:22, and from then on the JIT sites' emulated reads rose from about 2,000
+to about 17,700 a second.
+
+Every 256th read of a pc now tries again. The tail FREE (and a dead process's
+carve reclaim) records the freed range, under the carve lock and so before the
+range can be handed out again; the exception thread drops its sites before its
+next stub and reuses their stub slots for later sites in branch reach. A
+thread inside such a stub counts as inside the carve, so the carve is not
+freed under it (as ml557 does for a pc inside the carve). Log:
+`[split-stub] code buffer 0x…+0x… freed: N sites dropped (live L, free stub
+slots F)`; the site line now gives the live count.
+
+Linear: PLA-610
+Class: ios-port
+Evidence: docs/evidence/2026-11-01-wow-x64-fex.md
+Offered-upstream: no; the Mach exception handler and the 16 KB host page are the iOS port's
+---
+ build/ntdll-unix/signal_arm64_ios.c | 129 +++++++++++++++++++++++++---
+ build/ntdll-unix/virtual_ios.c      |  10 ++-
+ 2 files changed, 124 insertions(+), 15 deletions(-)
+
+diff --git a/build/ntdll-unix/signal_arm64_ios.c b/build/ntdll-unix/signal_arm64_ios.c
+index 55b7310..34885f6 100644
+--- a/build/ntdll-unix/signal_arm64_ios.c
++++ b/build/ntdll-unix/signal_arm64_ios.c
+@@ -1623,21 +1623,43 @@ static int ios_exc_read_insn( uint64_t pc, uint32_t *out )
+  * to branch to a stub in a pool region near it; the stub reads without a fault
+  * what the service would have read, and runs the original load (which faults
+  * as before) when it cannot. Only the Mach exception thread creates stubs;
+- * ios_split_stub_retire (a view's drop) disables those of a view. */
++ * ios_split_stub_retire (a view's drop) disables those of a view.
++ *
++ * Playport (PLA-610): FEX frees its code buffers and gets the same ranges back
++ * (`tail FREE`/`tail REUSE`, every 30 to 70 s in World of Warcraft), so a site
++ * pc holds different code later. Every PPSS_HOT-th read of a pc tries again,
++ * so a load compiled where a patched or refused site was gets its own stub.
++ * A freed buffer's sites are dropped and their stub slots reused
++ * (ios_split_stub_carve_freed), so PPSS_MAX_SITES counts the live sites. */
+ #include "pp_split_stub.h"
+ #include <sched.h>
+ #define PPSS_HOT        256
+ #define PPSS_MAX_SITES  2048
+ #define PPSS_REGION     0x10000
+ #define PPSS_KUSD       0x7ffe0000ull
++#define PPSS_FREED_MAX  64
+ static struct { uint64_t pc; uint32_t n; } ios_ss_hot[4096];
+-static struct { uint64_t slow, site, size_rw, base; } ios_ss_sites[PPSS_MAX_SITES];
++static struct { uint64_t slow, site, size_rw, base, stub; char *rw; } ios_ss_sites[PPSS_MAX_SITES];
+ static volatile int ios_ss_nsites;
+ static struct { uint64_t rx; char *rw; size_t used; } ios_ss_regions[16];
+ static int ios_ss_nregions, ios_ss_failed;
+ static volatile int ios_ss_lock;
++/* Stub slots of dropped sites, for reuse in reach of a new site (a slot past the
++ * list's end is left unused). */
++static struct { uint64_t rx; char *rw; } ios_ss_free[PPSS_MAX_SITES];
++static int ios_ss_nfree;
++/* Code buffers FEX freed since the exception thread last looked (under ios_ss_lock). */
++static struct { uint64_t lo, hi; } ios_ss_freed[PPSS_FREED_MAX];
++static int ios_ss_nfreed;
++static unsigned ios_ss_made;
++
++static void ios_ss_lock_wait(void)
++{
++    while (__atomic_exchange_n( &ios_ss_lock, 1, __ATOMIC_ACQUIRE )) sched_yield();
++}
+ 
+-/* The site of a stub's original load at pc, else 0. */
++/* The site of a stub's original load at pc, else 0. Only the Mach exception
++ * thread calls it, and only that thread changes the table's entries. */
+ static uint64_t ios_split_stub_site( uint64_t pc )
+ {
+     int i, n = __atomic_load_n( &ios_ss_nsites, __ATOMIC_ACQUIRE );
+@@ -1646,6 +1668,72 @@ static uint64_t ios_split_stub_site( uint64_t pc )
+     return 0;
+ }
+ 
++/* From virtual_ios.c's tail FREE, under its carve lock, before the carve can be
++ * handed out again: FEX freed the code buffer [lo, hi). Its sites are dropped on
++ * the exception thread's next stub decision, before any stub is made. A full list
++ * leaves them in the table (their slots are not reused). */
++void ios_split_stub_carve_freed( unsigned long long lo, unsigned long long hi )
++{
++    ios_ss_lock_wait();
++    if (ios_ss_nfreed < PPSS_FREED_MAX)
++    {
++        ios_ss_freed[ios_ss_nfreed].lo = lo;
++        ios_ss_freed[ios_ss_nfreed].hi = hi;
++        ios_ss_nfreed++;
++    }
++    __atomic_store_n( &ios_ss_lock, 0, __ATOMIC_RELEASE );
++}
++
++/* From virtual_ios.c's ios_tail_carve_occupied: is pc inside a stub whose site
++ * is in [lo, hi)? A thread there returns into that code buffer. */
++int ios_split_stub_pc_in_carve( unsigned long long pc, unsigned long long lo, unsigned long long hi )
++{
++    int i, n, hit = 0;
++
++    ios_ss_lock_wait();
++    n = ios_ss_nsites;
++    for (i = 0; i < n && !hit; i++)
++        hit = pc - ios_ss_sites[i].stub < 4 * PPSS_STUB_WORDS && ios_ss_sites[i].site >= lo &&
++              ios_ss_sites[i].site < hi;
++    __atomic_store_n( &ios_ss_lock, 0, __ATOMIC_RELEASE );
++    return hit;
++}
++
++/* Under ios_ss_lock, on the exception thread: drop the sites of the code buffers
++ * FEX freed. No thread runs in their stubs (the free checked that), and no
++ * branch reaches them once the buffer's memory holds new code. */
++static void ios_split_stub_drain_freed(void)
++{
++    int f, i, j, dropped;
++
++    for (f = 0; f < ios_ss_nfreed; f++)
++    {
++        dropped = 0;
++        for (i = j = 0; i < ios_ss_nsites; i++)
++        {
++            if (ios_ss_sites[i].site >= ios_ss_freed[f].lo && ios_ss_sites[i].site < ios_ss_freed[f].hi)
++            {
++                if (ios_ss_nfree < PPSS_MAX_SITES)
++                {
++                    ios_ss_free[ios_ss_nfree].rx = ios_ss_sites[i].stub;
++                    ios_ss_free[ios_ss_nfree].rw = ios_ss_sites[i].rw;
++                    ios_ss_nfree++;
++                }
++                dropped++;
++                continue;
++            }
++            if (j != i) ios_ss_sites[j] = ios_ss_sites[i];
++            j++;
++        }
++        __atomic_store_n( &ios_ss_nsites, j, __ATOMIC_RELEASE );
++        if (dropped)
++            dprintf( 2, "[split-stub] code buffer %#llx+%#llx freed: %d sites dropped (live %d, free stub slots %d)\n",
++                     (unsigned long long)ios_ss_freed[f].lo,
++                     (unsigned long long)(ios_ss_freed[f].hi - ios_ss_freed[f].lo), dropped, j, ios_ss_nfree );
++    }
++    ios_ss_nfreed = 0;
++}
++
+ static int ios_split_stub_in_region( uint64_t pc )
+ {
+     int i;
+@@ -1661,7 +1749,7 @@ void ios_split_stub_retire( unsigned long long base )
+ {
+     int i, n;
+ 
+-    while (__atomic_exchange_n( &ios_ss_lock, 1, __ATOMIC_ACQUIRE )) sched_yield();
++    ios_ss_lock_wait();
+     n = ios_ss_nsites;
+     for (i = 0; i < n; i++)
+         if (ios_ss_sites[i].base == base && ios_ss_sites[i].size_rw)
+@@ -1669,9 +1757,10 @@ void ios_split_stub_retire( unsigned long long base )
+     __atomic_store_n( &ios_ss_lock, 0, __ATOMIC_RELEASE );
+ }
+ 
+-/* A read at the JIT pc of insn, completed by a service: count it, and once hot
+- * patch the site. The window [base, base + size) reads at alias + offset; vprot
+- * as for ppss_emit; window 0 asks the view alias table (noaccess-split). */
++/* A read at the JIT pc of insn, completed by a service: count it, and every
++ * PPSS_HOT-th time patch the site. The window [base, base + size) reads at
++ * alias + offset; vprot as for ppss_emit; window 0 asks the view alias table
++ * (noaccess-split). */
+ static void ios_split_stub_hot( uint64_t pc, uint32_t insn, uint64_t addr, uint64_t base, uint64_t size,
+                                 uint64_t alias )
+ {
+@@ -1688,11 +1777,11 @@ static void ios_split_stub_hot( uint64_t pc, uint32_t insn, uint64_t addr, uint6
+     struct ppss_load l;
+     uint64_t stub = 0, rx = (uintptr_t)ios_jit_rx_base_global;
+     char *stub_rw = NULL;
+-    int r;
++    int r = -1, fslot = -1;
+ 
+     if (!ppef_pool_word( pc, rx, ios_jit_pool_size_global )) return;
+     if (ios_ss_hot[h].pc != pc) { ios_ss_hot[h].pc = pc; ios_ss_hot[h].n = 0; }
+-    if (++ios_ss_hot[h].n != PPSS_HOT) return;
++    if (++ios_ss_hot[h].n % PPSS_HOT) return;
+     if (ios_split_stub_in_region( pc ) || !ppss_decode( insn, &l )) return;
+     if (!size)
+     {
+@@ -1700,7 +1789,15 @@ static void ios_split_stub_hot( uint64_t pc, uint32_t insn, uint64_t addr, uint6
+         base = vb; size = vs; alias = va;
+     }
+     if (__atomic_exchange_n( &ios_ss_lock, 1, __ATOMIC_ACQUIRE )) return;
++    if (ios_ss_nfreed) ios_split_stub_drain_freed();
+     if (ios_ss_nsites >= PPSS_MAX_SITES) goto done;
++    for (i = 0; i < (unsigned)ios_ss_nfree && !stub; i++)
++        if (ppss_branch( pc, ios_ss_free[i].rx ))
++        {
++            fslot = i;
++            stub = ios_ss_free[i].rx;
++            stub_rw = ios_ss_free[i].rw;
++        }
+     for (r = 0; r < ios_ss_nregions && !stub; r++)
+         if (ios_ss_regions[r].used + 4 * PPSS_STUB_WORDS <= PPSS_REGION &&
+             ppss_branch( pc, ios_ss_regions[r].rx + ios_ss_regions[r].used ))
+@@ -1732,21 +1829,25 @@ static void ios_split_stub_hot( uint64_t pc, uint32_t insn, uint64_t addr, uint6
+         goto done;
+     }
+     for (i = 0; i < n; i++) ((volatile uint32_t *)stub_rw)[i] = words[i];
+-    ios_ss_regions[r].used += 4 * PPSS_STUB_WORDS;
++    if (fslot >= 0) ios_ss_free[fslot] = ios_ss_free[--ios_ss_nfree];
++    else ios_ss_regions[r].used += 4 * PPSS_STUB_WORDS;
+     sys_icache_invalidate( (void *)(uintptr_t)stub, 4 * n );
+     i = ios_ss_nsites;
+     ios_ss_sites[i].slow = stub + slow_off;
+     ios_ss_sites[i].site = pc;
+     ios_ss_sites[i].base = base;
++    ios_ss_sites[i].stub = stub;
++    ios_ss_sites[i].rw = stub_rw;
+     /* The window size literal: the third, after the code (ppss_emit's literal order). */
+     ios_ss_sites[i].size_rw = (uintptr_t)stub_rw + 4 * (n - 10) + 2 * 8;
+     __atomic_store_n( &ios_ss_nsites, i + 1, __ATOMIC_RELEASE );
+     __atomic_store_n( (volatile uint32_t *)((char *)ios_jit_rw_base_global + (pc - rx)), b, __ATOMIC_RELEASE );
+     sys_icache_invalidate( (void *)(uintptr_t)pc, 4 );
+-    if (i < 64 || !(i & 63))
+-        dprintf( 2, "[split-stub] #%u site pc=%#llx insn=%#010x window %#llx+%#llx -> stub %#llx\n", i + 1,
+-                 (unsigned long long)pc, insn, (unsigned long long)base, (unsigned long long)size,
+-                 (unsigned long long)stub );
++    if (ios_ss_made < 64 || !(ios_ss_made & 63))
++        dprintf( 2, "[split-stub] #%u site pc=%#llx insn=%#010x window %#llx+%#llx -> stub %#llx (live %u)\n",
++                 ios_ss_made + 1, (unsigned long long)pc, insn, (unsigned long long)base,
++                 (unsigned long long)size, (unsigned long long)stub, i + 1 );
++    ios_ss_made++;
+ done:
+     __atomic_store_n( &ios_ss_lock, 0, __ATOMIC_RELEASE );
+ }
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 9179526..ce87334 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -3090,6 +3090,10 @@ static struct { size_t off; size_t size; int free; void *owner; int reclaimed; }
+  * which is what ml438 set out to fix — but a leak is strictly better than
+  * executing recycled code, and the carve becomes freeable on the next release
+  * once the thread has left. */
++/* Playport (PLA-610): a thread inside a read stub (pp_split_stub.h) of a site in
++ * the carve returns into it, so it counts as inside. */
++extern int ios_split_stub_pc_in_carve( unsigned long long pc, unsigned long long lo, unsigned long long hi );
++extern void ios_split_stub_carve_freed( unsigned long long lo, unsigned long long hi );
+ static int ios_tail_carve_occupied( const void *base, size_t size )
+ {
+     thread_act_array_t threads = NULL;
+@@ -3109,7 +3113,7 @@ static int ios_tail_carve_occupied( const void *base, size_t size )
+                               (thread_state_t)&st, &sc ) == KERN_SUCCESS)
+         {
+             uintptr_t pc = (uintptr_t)arm_thread_state64_get_pc( st );
+-            if (pc >= lo && pc < hi) { occupied = 1; }
++            if ((pc >= lo && pc < hi) || ios_split_stub_pc_in_carve( pc, lo, hi )) { occupied = 1; }
+         }
+         mach_port_deallocate( mach_task_self(), threads[i] );
+     }
+@@ -10178,6 +10182,8 @@ size_t ios_jit_reclaim_process_bytes( void *peb )
+                 kept++;
+                 continue;
+             }
++            ios_split_stub_carve_freed( (uintptr_t)(rx_base + ios_tail_carves[ci].off),
++                                        (uintptr_t)(rx_base + ios_tail_carves[ci].off) + ios_tail_carves[ci].size );
+             ios_tail_carves[ci].free = 1;
+             ios_tail_carves[ci].reclaimed = 1;
+             ios_tail_carves[ci].owner = NULL;
+@@ -24870,6 +24876,8 @@ NTSTATUS WINAPI NtFreeVirtualMemory( HANDLE process, PVOID *addr_ptr, SIZE_T *si
+                 carve_size = 0;
+                 break;
+             }
++            /* Playport (PLA-610): its read stubs' sites go before the carve can be handed out. */
++            ios_split_stub_carve_freed( (uintptr_t)base, (uintptr_t)base + ios_tail_carves[i].size );
+             ios_tail_carves[i].free = 1;
+             carve_size = ios_tail_carves[i].size;
+             break;

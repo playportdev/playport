@@ -1,0 +1,57 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 1 Nov 2026 05:23:05 +0100
+Subject: [PATCH] ntdll: look up a plain ARM64 process's assemblies as
+ sysarm64_ on iOS
+
+link_winsxs installs each Wine assembly for arm64 from the ARM64EC set,
+which the ARM64EC ntdll takes for an arm64, amd64 or "*" request. The
+aarch64 ntdll, which runs a plain ARM64 child (madeira-unix 0249), asks
+for the same arm64_ assemblies: Wine's ARM64 notepad, whose manifest
+names Common Controls 6, got the ARM64EC comctl32_v6.dll, which it cannot
+load (c000007b from comdlg32's and notepad's imports), and exited with
+c0000135.
+
+The aarch64 ntdll now looks an arm64 assembly up as sysarm64_, which
+link_winsxs installs from the aarch64 set with the manifest's
+architecture still arm64, as 0056 takes such a process's system DLLs
+from sysarm64. ARM64EC and i386 ntdll.dll are unchanged.
+
+Linear: PLA-606
+Class: ios-port
+Evidence: docs/evidence/2026-10-30-native-arm64-child.md
+Offered-upstream: no; the split ARM64EC and aarch64 sets are specific to the iOS port
+---
+ dlls/ntdll/actctx.c | 19 +++++++++++++++++++
+ 1 file changed, 19 insertions(+)
+
+diff --git a/dlls/ntdll/actctx.c b/dlls/ntdll/actctx.c
+index 03a4dfc..7cd2770 100644
+--- a/dlls/ntdll/actctx.c
++++ b/dlls/ntdll/actctx.c
+@@ -3198,6 +3198,25 @@ static WCHAR *lookup_manifest_file( HANDLE dir, struct assembly_identity *ai )
+     char buffer[8192];
+ 
+     if (!(lookup = build_manifest_filter( ai ))) return NULL;
++
++#if defined(__aarch64__) && !defined(__arm64ec__)
++    /* Playport: on iOS the arm64 assemblies are the session's ARM64EC set,
++     * which a plain ARM64 process cannot load; its aarch64 set is installed
++     * as sysarm64_ assemblies, as its system DLLs come from sysarm64. */
++    if (!wcsncmp( lookup, L"arm64_", 6 ))
++    {
++        WCHAR *native = RtlAllocateHeap( GetProcessHeap(), 0, (wcslen( lookup ) + 4) * sizeof(WCHAR) );
++        if (!native)
++        {
++            RtlFreeHeap( GetProcessHeap(), 0, lookup );
++            return NULL;
++        }
++        wcscpy( native, L"sysarm64_" );
++        wcscat( native, lookup + 6 );
++        RtlFreeHeap( GetProcessHeap(), 0, lookup );
++        lookup = native;
++    }
++#endif
+     RtlInitUnicodeString( &lookup_us, lookup );
+ 
+ #ifdef __arm64ec__

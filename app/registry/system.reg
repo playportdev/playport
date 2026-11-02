@@ -25086,6 +25086,7 @@ WINE REGISTRY Version 2
 
 ;; playport:top-up
 [Software\\Microsoft\\Windows NT\\CurrentVersion\\Fonts]
+"Marlett (TrueType)"="marlett.ttf"
 "Tahoma (TrueType)"="tahoma.ttf"
 "Tahoma Bold (TrueType)"="tahomabd.ttf"
 

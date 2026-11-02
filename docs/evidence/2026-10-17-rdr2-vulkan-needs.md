@@ -4,7 +4,7 @@
 (under PLA-254). **Kind:** workstation measurement; two dev IPAs built in the side copy, not
 installed ([H4](#dev-ipa-with-mesa-00370039-h4), [H8](#dev-ipa-with-mesa-00370043-h8)); the
 Hollow Knight phone gate on main's build of 0037–0043 in [M1](#phone-gate-m1).
-Answers the open question in the [RDR2 plan](../plans/2026-10-12-rdr2.md): which Vulkan
+Answers the open question in the [RDR2 plan](https://linear.app/playportdev/issue/PLA-254): which Vulkan
 features and extensions RDR2's renderer requires, against KosmicKrisp's.
 
 ## Setup
@@ -120,7 +120,7 @@ transform-feedback pools only; a pipeline-statistics pool reaches `UNREACHABLE`
 
 - RDR2 on Vulkan needs **none** of the FL12_2 plan's features. Its gaps on KosmicKrisp are
   three defects (the texture lowering, statistics query pools, 8-sample pipelines) and the
-  VRAM message box. The [FL12_2 plan](../plans/2026-10-05-kosmickrisp-fl12_2.md) now carries
+  VRAM message box. The [FL12_2 plan](https://linear.app/playportdev/issue/PLA-624) now carries
   them as chunks V0–V4 ahead of its own.
 - What the host cannot show: MSL compilation by Apple's compiler, `poly`'s tessellation and
   geometry at run time, depth bounds on the A19, performance, memory. The phone is the

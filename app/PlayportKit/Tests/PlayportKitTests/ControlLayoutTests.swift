@@ -12,7 +12,7 @@ final class ControlLayoutTests: XCTestCase {
         for o in Self.options {
             let g = ControlLayout.gamepad(dpad: o.dpad, rightStick: o.rightStick)
             XCTAssertNil(g.problem)
-            XCTAssertEqual(g.version, 2)
+            XCTAssertEqual(g.version, 3)
             let data = try JSONEncoder().encode(g)
             XCTAssertEqual(try JSONDecoder().decode(ControlLayout.self, from: data), g)
             XCTAssertFalse(g.controls.contains { $0.actions.contains(.playport(.menu)) })   // the menu is a three-finger tap
@@ -222,27 +222,60 @@ final class ControlLayoutTests: XCTestCase {
     func testANewerOlderOrBrokenLayoutIsRefused() {
         func decode(_ s: String) -> ControlLayout? { try? JSONDecoder().decode(ControlLayout.self, from: Data(s.utf8)) }
         let button = #"{"id":"jump","actions":["key:0x20"],"anchor":"bottomTrailing","x":-60,"y":-60,"width":50,"height":50}"#
-        let ok = decode(#"{"version":2,"controls":[\#(button)]}"#)
+        let ok = decode(#"{"version":3,"controls":[\#(button)]}"#)
         XCTAssertEqual(ok?.controls.first?.label, "jump")          // label and behaviour may be left out
         XCTAssertEqual(ok?.controls.first?.behaviour, .hold)
         XCTAssertEqual(ok?.controls.first?.kind, .button)
         let stick = #"{"id":"s","kind":"stick","actions":["pad:leftStick"],"anchor":"bottomLeading","x":100,"y":-80,"width":100,"height":100"#
-        XCTAssertEqual(decode(#"{"version":2,"controls":[\#(stick),"floatingZone":{"anchor":"bottomLeading","width":200,"height":150}}]}"#)?
+        XCTAssertEqual(decode(#"{"version":3,"controls":[\#(stick),"floatingZone":{"anchor":"bottomLeading","width":200,"height":150}}]}"#)?
             .controls.first?.floatingZone, ControlZone(anchor: .bottomLeading, width: 200, height: 150))
         // A zone's offset (1c) may be left out: 0, as a layout saved before it reads.
-        XCTAssertEqual(decode(#"{"version":2,"controls":[\#(stick),"floatingZone":{"anchor":"bottomTrailing","y":-132,"width":210,"height":120}}]}"#)?
+        XCTAssertEqual(decode(#"{"version":3,"controls":[\#(stick),"floatingZone":{"anchor":"bottomTrailing","y":-132,"width":210,"height":120}}]}"#)?
             .controls.first?.floatingZone, ControlZone(anchor: .bottomTrailing, y: -132, width: 210, height: 120))
-        // Version 1 (before the safe area; zones as fractions of the view): refused, so the preset is used.
+        // Version 1 (before the safe area; zones as fractions of the view) and 2 (before phase 4's
+        // kinds): refused, so the preset is used.
         XCTAssertNil(decode(#"{"version":1,"controls":[\#(button)]}"#))
-        XCTAssertNil(decode(#"{"version":2,"controls":[\#(stick),"floatingZone":{"x":0,"y":0.33,"width":0.33,"height":0.67}}]}"#))
-        XCTAssertNil(decode(#"{"version":2,"controls":[\#(stick),"floatingZone":{"anchor":"bottomLeading","width":0,"height":150}}]}"#))
-        XCTAssertNil(decode(#"{"version":3,"controls":[\#(button)]}"#))
+        XCTAssertNil(decode(#"{"version":2,"controls":[\#(button)]}"#))
+        XCTAssertNil(decode(#"{"version":3,"controls":[\#(stick),"floatingZone":{"x":0,"y":0.33,"width":0.33,"height":0.67}}]}"#))
+        XCTAssertNil(decode(#"{"version":3,"controls":[\#(stick),"floatingZone":{"anchor":"bottomLeading","width":0,"height":150}}]}"#))
+        XCTAssertNil(decode(#"{"version":4,"controls":[\#(button)]}"#))
         XCTAssertNil(decode(#"{"controls":[\#(button)]}"#))
-        XCTAssertNil(decode(#"{"version":2,"controls":[\#(button),\#(button)]}"#))   // one id twice
-        XCTAssertNil(decode(#"{"version":2,"controls":[{"id":"s","kind":"stick","actions":["pad:a"],"anchor":"center","x":0,"y":0,"width":50,"height":50}]}"#))
-        XCTAssertNil(decode(#"{"version":2,"controls":[{"id":"d","kind":"dpad","actions":["pad:up"],"anchor":"center","x":0,"y":0,"width":50,"height":50}]}"#))
-        XCTAssertNil(decode(#"{"version":2,"controls":[{"id":"z","actions":["pad:a"],"anchor":"center","x":0,"y":0,"width":0,"height":50}]}"#))
-        XCTAssertNil(decode(#"{"version":2,"controls":[{"id":"a b","actions":["pad:a"],"anchor":"center","x":0,"y":0,"width":5,"height":50}]}"#))
+        XCTAssertNil(decode(#"{"version":3,"controls":[\#(button),\#(button)]}"#))   // one id twice
+        XCTAssertNil(decode(#"{"version":3,"controls":[{"id":"s","kind":"stick","actions":["pad:a"],"anchor":"center","x":0,"y":0,"width":50,"height":50}]}"#))
+        XCTAssertNil(decode(#"{"version":3,"controls":[{"id":"d","kind":"dpad","actions":["pad:up"],"anchor":"center","x":0,"y":0,"width":50,"height":50}]}"#))
+        XCTAssertNil(decode(#"{"version":3,"controls":[{"id":"z","actions":["pad:a"],"anchor":"center","x":0,"y":0,"width":0,"height":50}]}"#))
+        XCTAssertNil(decode(#"{"version":3,"controls":[{"id":"a b","actions":["pad:a"],"anchor":"center","x":0,"y":0,"width":5,"height":50}]}"#))
+    }
+
+    /// What a button shows (TouchKeyboardMouse.dc.html): a key's cap over its label when they differ,
+    /// the mouse or the keyboard drawn, else the label alone (Gamepad's, Esc, 1–4).
+    func testAButtonsFaceIsItsKeyCapOverItsLabel() {
+        let kbm = ControlLayout.keyboardMouse()
+        func face(_ id: String) -> ControlFace? { kbm.control(id)?.face }
+        XCTAssertEqual(face("use"), ControlFace(cap: .text("E"), caption: "Use"))
+        XCTAssertEqual(face("reload"), ControlFace(cap: .text("R"), caption: "Reload"))
+        XCTAssertEqual(face("jump"), ControlFace(cap: .text("␣"), caption: "Jump"))
+        XCTAssertEqual(face("fire"), ControlFace(cap: .mouse(.left), caption: "Fire"))
+        XCTAssertEqual(face("esc"), ControlFace(cap: .text("Esc"), caption: nil))
+        XCTAssertEqual(face("tab"), ControlFace(cap: .text("Tab"), caption: nil))
+        XCTAssertEqual(face("2"), ControlFace(cap: .text("2"), caption: nil))
+        XCTAssertEqual(face("keyboard"), ControlFace(cap: .keyboard, caption: nil))
+        XCTAssertEqual(ControlLayout.pointClick().control("keyboard")?.face, ControlFace(cap: .keyboard, caption: "Keys"))
+        let pad = ControlLayout.gamepad()
+        XCTAssertEqual(pad.control("a")?.face, ControlFace(cap: .text("A"), caption: nil))
+        XCTAssertEqual(pad.control("lt")?.face, ControlFace(cap: .text("LT"), caption: nil))
+        XCTAssertEqual(pad.control("view")?.face, ControlFace(cap: .text("⧉"), caption: nil))
+        // A label that is the key's name, or a key with Shift, shows as it is named.
+        let shift = Control(id: "s", actions: [.key(0x31, .shift)], label: "Shift+1", anchor: .center, x: 0, y: 0, width: 40, height: 30)
+        XCTAssertEqual(shift.face, ControlFace(cap: .text("Shift+1"), caption: nil))
+        let space = Control(id: "sp", actions: [.key(0x20, [])], label: "Space", anchor: .center, x: 0, y: 0, width: 60, height: 30)
+        XCTAssertEqual(space.face, ControlFace(cap: .text("Space"), caption: nil))
+    }
+
+    /// The W A S D stick's letters, up, down, left, right, from its actions.
+    func testAKeySticksLetters() {
+        XCTAssertEqual(ControlLayout.keyboardMouse().control("move")?.keyLetters, ["W", "S", "A", "D"])
+        XCTAssertNil(ControlLayout.gamepad().control("leftStick")?.keyLetters)
     }
 }
 
@@ -274,6 +307,27 @@ final class ControlsSettingsTests: XCTestCase {
         XCTAssertNil(pad.drawnLayout)
         XCTAssertEqual(ControlsState.resolve(game: nil, defaults: ControlsDefaults(), controllerConnected: false).drawnLayout,
                        .gamepad())
+    }
+
+    /// A compatibility default's layout (decision 0074) is the game's starting layout over Settings'
+    /// Starting layout; the game's own choice wins, and Never still makes Off every game's start.
+    func testTheCompatibilityLayoutStartsTheGameAndTheGamesOwnWins() {
+        let d = ControlsDefaults()
+        let kbm = ControlsState.resolve(game: nil, defaults: d, controllerConnected: false, compat: .keyboardMouse)
+        XCTAssertEqual(kbm.layout, .keyboardMouse)
+        XCTAssertEqual(kbm.drawnLayout, .keyboardMouse())
+        XCTAssertEqual(ControlsState.resolve(game: GameControls(opacity: 0.9), defaults: d, controllerConnected: false,
+                                             compat: .pointClick).layout, .pointClick)
+        XCTAssertEqual(ControlsState.resolve(game: GameControls(layout: .gamepad), defaults: d, controllerConnected: false,
+                                             compat: .keyboardMouse).layout, .gamepad)
+        XCTAssertEqual(ControlsState.resolve(game: nil, defaults: ControlsDefaults(show: .never), controllerConnected: false,
+                                             compat: .keyboardMouse).layout, .off)
+        XCTAssertEqual(ControlsState.resolve(game: nil, defaults: d, controllerConnected: false, compat: nil).layout, .gamepad)
+        // Over Settings' Starting layout: game, then compat, then Settings (decision 0074).
+        XCTAssertEqual(ControlsState.resolve(game: nil, defaults: ControlsDefaults(startingLayout: .gamepad),
+                                             controllerConnected: false, compat: .keyboardMouse).layout, .keyboardMouse)
+        XCTAssertEqual(ControlsState.resolve(game: nil, defaults: ControlsDefaults(startingLayout: .pointClick),
+                                             controllerConnected: false, compat: nil).layout, .pointClick)
     }
 
     /// The controls' pad is player 1 whenever no controller is connected, Off too,
@@ -309,6 +363,32 @@ final class ControlsSettingsTests: XCTestCase {
         XCTAssertEqual(OnScreenDpad.allCases.map(\.title), ["Off", "On"])
     }
 
+    /// Settings › Controls › Starting layout: every game's first choice unless it has its own (or a
+    /// compatibility default); "Suggested for the game" (nil) leaves it to the game (Gamepad), and Never still starts Off.
+    func testTheStartingLayoutIsEveryGamesFirstChoiceAndAGamesOwnWins() {
+        let kbm = ControlsDefaults(startingLayout: .keyboardMouse)
+        let s = ControlsState.resolve(game: nil, defaults: kbm, controllerConnected: false)
+        XCTAssertEqual(s.layout, .keyboardMouse)
+        XCTAssertEqual(s.drawnLayout, .keyboardMouse())
+        XCTAssertEqual(ControlsState.resolve(game: GameControls(layout: .gamepad), defaults: kbm, controllerConnected: false).layout,
+                       .gamepad)
+        XCTAssertEqual(ControlsState.resolve(game: GameControls(opacity: 0.9), defaults: kbm, controllerConnected: false).layout,
+                       .keyboardMouse)
+        XCTAssertEqual(ControlsState.resolve(game: nil, defaults: ControlsDefaults(), controllerConnected: false).layout, .gamepad)
+        XCTAssertEqual(ControlsState.resolve(game: nil, defaults: ControlsDefaults(show: .never, startingLayout: .pointClick),
+                                             controllerConnected: false).layout, .off)
+        // The Settings row: Suggested first, then the three layouts (Off is On-screen controls › Never).
+        XCTAssertEqual(OnScreenLayout.startingChoices, [nil, .gamepad, .keyboardMouse, .pointClick])
+        XCTAssertEqual(OnScreenLayout.startingChoices.map(OnScreenLayout.startingTitle),
+                       ["Suggested for the game", "Gamepad", "Keyboard & mouse", "Point & click"])
+    }
+
+    /// The in-game panel's layout row: titles short enough for four beside "On-screen controls" in 330 pt.
+    func testTheLayoutsShortTitles() {
+        XCTAssertEqual(OnScreenLayout.allCases.map(\.shortTitle), ["Off", "Pad", "Keys", "Point"])
+        XCTAssertEqual(ControlsState(layout: .keyboardMouse, visible: true, opacity: 0.6).summary, "Keyboard & mouse · 60%")
+    }
+
     func testTheSummaryAndOpacitySteps() {
         XCTAssertEqual(ControlsState(layout: .gamepad, visible: true, opacity: 0.6).summary, "Gamepad · 60%")
         XCTAssertEqual(ControlsState(layout: .gamepad, visible: false, opacity: 0.6).summary, "Gamepad · hidden")
@@ -336,6 +416,15 @@ final class ControlsSettingsTests: XCTestCase {
         XCTAssertEqual(ControlsDefaults(d), ControlsDefaults(show: .automatic, opacity: 0.6, haptics: false, dpad: .on, rightStick: .below))
         d.set("sideways", forKey: ControlsDefaults.rightStickKey)
         XCTAssertEqual(ControlsDefaults(d).rightStick, .off)
+        // The starting layout: a layout's name (the driver's set:controls.startingLayout=keyboardMouse); anything
+        // else, Off and empty (the Settings row's Suggested) too, is Suggested.
+        XCTAssertNil(ControlsDefaults(d).startingLayout)
+        d.set("keyboardMouse", forKey: ControlsDefaults.startingLayoutKey)
+        XCTAssertEqual(ControlsDefaults(d).startingLayout, .keyboardMouse)
+        for other in ["", "off", "tank"] {
+            d.set(other, forKey: ControlsDefaults.startingLayoutKey)
+            XCTAssertNil(ControlsDefaults(d).startingLayout, other)
+        }
         d.removePersistentDomain(forName: "ControlsSettingsTests")
         let g = try JSONDecoder().decode(GameControls.self, from: Data(#"{"layout":"off"}"#.utf8))
         XCTAssertEqual(g, GameControls(layout: .off))

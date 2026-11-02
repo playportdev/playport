@@ -2,7 +2,7 @@
 
 **Linear:** [PLA-13](https://linear.app/playportdev/issue/PLA-13); the background bug is
 [PLA-338](https://linear.app/playportdev/issue/PLA-338). **Plan:**
-[touch controls](../plans/2026-10-09-touch-controls.md), queue item 2e. Before:
+[touch controls](https://linear.app/playportdev/issue/PLA-13), queue item 2e. Before:
 [2d](2026-10-13-touch-controls-phase2d.md). Branch `dev/pla-13-touch-controls`.
 
 Setup: an iPhone18,4 on iOS 27.0.1, built-in JIT, on power, lying still, no controller connected.

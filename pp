@@ -18,7 +18,8 @@ Build and ship
   pp release VERSION [--clean | --no-build] [--no-github]
                                   the unsigned release build of HEAD (reused, or built
                                   incrementally; --clean: every tree afresh), the gates, and a
-                                  GitHub draft pre-release (never published; decisions 0038, 0050)
+                                  GitHub draft pre-release whose body is site/releases/VERSION.md at
+                                  HEAD, which must exist (never published; decisions 0038, 0050)
 
 Test on the host
   pp test [--quick]               names, secrets, the pin and patch series (trailers), tools/tests,
@@ -39,7 +40,7 @@ Drive the phone (dev app)
                                   (a running frame captured, replayed and profiled on the phone)
   pp pad send STEP... | push SCRIPT | rest [--shot FILE]
                                   press buttons on the scripted pad of a running title
-  pp phone status | kill | log [DIR] | ls REMOTE | pull REMOTE [DIR] | rm Documents/NAME.zip | shot [FILE] | crashes [DIR] [--since T]
+  pp phone status | kill | log [DIR] | ls REMOTE | pull REMOTE [DIR] | rm Documents/NAME.zip | rm Documents/prefix/Documents/title-cfg/TITLE/NAME.bin | shot [FILE] | crashes [DIR] [--since T]
   pp phone put LOCAL Documents/Import/NAME/FILE
                                   copy a file into the app's import inbox (what a person does with
                                   Files), then add it through the UI: pp ui --action import:Import/NAME
@@ -100,6 +101,8 @@ C_TESTS = [
     ("pads", PADS, PADS_FLAGS),
     ("pads (ThreadSanitizer)", PADS, PADS_FLAGS + ["-fsanitize=thread", "-O1", "-g"]),
     ("host log", ["app/tests/host_log_test.c", "app/Sources/HostIO/host_log.c"], ["-D_DEFAULT_SOURCE"]),
+    ("keys", ["app/tests/keys_test.c", "app/Sources/HostIO/hio_keys.c"], []),
+    ("focus", ["app/tests/focus_test.c", "app/Sources/HostIO/hio_focus.c"], []),
     ("log cap", ["app/tests/log_cap_test.c", "app/Sources/WineHost/log_cap.c"], ["-D_DEFAULT_SOURCE"]),
     ("title path", ["app/tests/title_path_test.c", "app/Sources/WineHost/title_path.c"], ["-D_DEFAULT_SOURCE"]),
     ("dotnet fake DLLs", ["app/tests/dotnet_fakedlls_test.c", "app/Sources/WineHost/dotnet_fakedlls.c"], ["-D_DEFAULT_SOURCE"]),
@@ -108,8 +111,8 @@ C_TESTS = [
     ("self-check", ["app/tests/selfcheck_test.c", "app/Sources/WineHost/selfcheck.c"], []),
     ("session protocol", ["app/tests/session_protocol_test.c"], []),
     ("launcher end", ["app/tests/launcher_end_test.c"], []),
-    ("Social Club single-process dev gate", ["app/tests/sc_single_test.c"], []),
-    ("Social Club single-process release gate", ["app/tests/sc_single_test.c"], ["-DPLAYPORT_RELEASE"]),
+    ("Social Club single-process default-on (dev)", ["app/tests/sc_single_test.c"], []),
+    ("Social Club single-process default-on (release)", ["app/tests/sc_single_test.c"], ["-DPLAYPORT_RELEASE"]),
     ("jit debugger", ["app/tests/jit_debugger_test.c"], []),
     ("steam tickets", ["app/tests/steam_ticket_test.c", "app/Sources/WineHost/steam_ticket.c"], []),
     ("steam client", ["app/tests/steam_client_test.c", "app/Sources/WineHost/steam_client.c"], []),
@@ -117,7 +120,6 @@ C_TESTS = [
     ("url opener", ["app/tests/url_opener_test.c", "app/Sources/WineHost/url_opener.c"], []),
     ("time zone bias", ["app/tests/timezone_bias_test.c", "app/Sources/WineHost/timezone_bias.c"], ["-D_DEFAULT_SOURCE"]),
     ("command line", ["app/tests/command_line_test.c"], []),
-    ("cef swap", ["app/tests/cef_swap_test.c", "app/Sources/WineHost/cef_swap.c"], ["-D_GNU_SOURCE", "-pthread"]),
     ("guest pool", ["app/tests/guest_pool_test.c", "app/Sources/SharedMemory/guest_pool.c"],
      ["-Iapp/Sources/SharedMemory", "-fsanitize=address,undefined"]),
     ("ppsync", PPSYNC, PPSYNC_FLAGS),
@@ -181,8 +183,9 @@ def cmd_secrets(args):
 def cmd_names(args):
     """Reject retired provenance/prefixes in tracked files (COMMIT or index).
 
-    Only two exact upstream GN tokens in CEF/Chromium patches are exempt;
-    checks.name_scan_text defines this path-scoped exception for both gates.
+    Only two exact upstream GN tokens in the CEF/Chromium patches of commits
+    before their removal (PLA-603) are exempt; checks.name_scan_text defines
+    this path-scoped exception for both gates.
     """
     old, prefix = checks.NAME_PATTERNS
     where = [args[0]] if args else ["--cached"]
@@ -393,7 +396,8 @@ def cmd_phone(args):
                 return ev.result(True, 0, path=rest[1], put=said)
             if sub == "rm":
                 if len(rest) != 1:
-                    return phonelib.fail(ev, "pp phone rm Documents/NAME.zip (a zip put there for import:)", 2)
+                    return phonelib.fail(ev, "pp phone rm Documents/NAME.zip (a zip put there for import:) or "
+                                         "Documents/prefix/Documents/title-cfg/TITLE/NAME.bin (a runtime's diagnostic dump)", 2)
                 return ev.result(True, 0, removed=phone.remove(rest[0]).strip())
             if sub == "shot":
                 path = phone.screenshot(rest[0] if rest else os.path.join(out, "screen.png"))

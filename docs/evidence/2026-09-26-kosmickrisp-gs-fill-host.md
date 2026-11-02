@@ -10,7 +10,7 @@ and nothing ran on the phone.
 ## Why
 
 DXVK `52fe923` requires `geometryShader` and `fillModeNonSolid` to create a
-device ([research](../research/2026-09-26-d3d-backends.md),
+device ([research](2026-09-26-d3d-backends.md),
 [decision 0014](../decisions/0014-vulkan-through-kosmickrisp.md)). Upstream
 KosmicKrisp advertises neither. Patch 0005 implements both instead of hiding
 them from DXVK.

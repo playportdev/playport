@@ -1,6 +1,6 @@
 # GOGClient: GOG sign-in, library and content
 
-`GOGClientKit` is GOG's side of the PC-store plan (docs/plans/finished.md#pc-import-gog-and-epic,
+`GOGClientKit` is GOG's side of the PC-store work (PLA-80,
 Phase 2), on [ContentKit](../ContentKit/README.md)'s install core. Foundation only; `pp test`
 runs its offline tests on the Linux host.
 

@@ -1,0 +1,72 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sat, 31 Oct 2026 21:00:00 +0100
+Subject: [PATCH] win32u: log no key codes in winios_drv_post_key
+
+winios_drv_post_key logged the first 8 keys of the process and every
+256th with their virtual key, scan code and flags. stderr is the app's
+log, in a release build too, and a letter's or digit's virtual key is
+its ASCII code: a sign-in typed first was in the log, up to 8
+characters of it.
+
+The line now gives the running count and the status only; the count
+moves to winios_count_key, which the character post shares.
+
+Linear: PLA-267
+Class: host-app
+Evidence: tools/tests/test_key_logging.py (host checks; phone gate not run)
+Offered-upstream: no; the key path is the iOS driver's
+---
+ build/win32u-unix/driver_ios.c | 32 ++++++++++++++++++--------------
+ 1 file changed, 18 insertions(+), 14 deletions(-)
+
+diff --git a/build/win32u-unix/driver_ios.c b/build/win32u-unix/driver_ios.c
+index b61041b..c978a2a 100644
+--- a/build/win32u-unix/driver_ios.c
++++ b/build/win32u-unix/driver_ios.c
+@@ -100,6 +100,23 @@ void winios_drv_post_mouse(int x, int y, unsigned int flags, unsigned int mouse_
+  * E0 (its HostIO hio_keys.c). Weak: a host without it is not called. */
+ extern unsigned int playport_key_scan( unsigned int vk ) __attribute__((weak));
+ 
++/* ml647: COUNT EVENTS, and never let a cap masquerade as absence. The
++ * old "first 40 lines" cap was exhausted by arrow keys early in the
++ * session, so the WASD presses that prompted this fix left no trace at
++ * all and the log looked like they were never sent. Log the first few,
++ * then one line per 256 with a running total that is always truthful.
++ * Playport: the count and the status only, never which key: a log of the
++ * keys posted is the text typed, a password too. */
++static void winios_count_key( NTSTATUS st )
++{
++    static unsigned cnt, bad;
++    if (st) bad++;
++    cnt++;
++    if (cnt <= 8 || (cnt & 0xff) == 0)
++        dprintf(2, "[winios] ml647 drv_post_key #%u -> status=0x%x (failures=%u)\n",
++                cnt, (unsigned)st, bad);
++}
++
+ /* Keyboard sibling of winios_drv_post_key: packages an INPUT_KEYBOARD
+  * event. vk is a Windows virtual-key code (VK_RETURN=0x0D, VK_SPACE=0x20,
+  * VK_ESCAPE=0x1B, ...); flags is 0 for key-down, KEYEVENTF_KEYUP (0x2)
+@@ -149,20 +166,7 @@ void winios_drv_post_key(unsigned short vk, unsigned int flags)
+     input.ki.dwExtraInfo = 0;
+ 
+     st = server_send_hardware_message( NULL, 0, &input, 0 );
+-    {
+-        /* ml647: COUNT EVENTS, and never let a cap masquerade as absence. The
+-         * old "first 40 lines" cap was exhausted by arrow keys early in the
+-         * session, so the WASD presses that prompted this fix left no trace at
+-         * all and the log looked like they were never sent. Log the first few,
+-         * then one line per 256 with a running total that is always truthful. */
+-        static unsigned cnt, bad;
+-        if (st) bad++;
+-        cnt++;
+-        if (cnt <= 8 || (cnt & 0xff) == 0)
+-            dprintf(2, "[winios] ml647 drv_post_key #%u vk=0x%x scan=0x%x flags=0x%x "
+-                       "-> status=0x%x (failures=%u)\n",
+-                    cnt, vk, scan, flags, (unsigned)st, bad);
+-    }
++    winios_count_key( st );
+ }
+ 
+ /* [winios-tree] window-tree dump: every top-level window with class,

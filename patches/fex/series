@@ -70,3 +70,11 @@
 0085-ARM64EC-yield-os-counts-its-traps-the-short-ones-and.patch
 0086-ARM64EC-MADEIRA_FEX_PAUSE-wait-os-K-U-a-PAUSE-that-b.patch
 0087-ARM64EC-yield-os-wait-os-time-their-traps-at-CNTFRQ_.patch
+0088-Windows-honour-FEX_HOSTFEATURES-disableavx-on-the-iO.patch
+0089-ARM64EC-export-ExitToX64-s-reads-of-an-x64-target-fo.patch
+0090-ARM64EC-an-instruction-fetch-fault-reports-the-first.patch
+0091-ARM64EC-print-the-lines-of-the-first-256-exceptions-.patch
+0092-ARM64EC-read-guest-code-from-Wine-s-read-only-alias-.patch
+0093-ARM64EC-a-disk-cache-hit-reads-its-patchable-fields-.patch
+0094-FEXCore-reset-the-call-return-stack-with-one-decommi.patch
+0095-FEXCore-print-the-first-256-NoExec-decodes-then-ever.patch

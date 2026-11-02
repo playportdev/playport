@@ -3,7 +3,7 @@ import XCTest
 @testable import HostIOKit
 
 /// The cases Madeira's check-touch-gamepad.py lists, and phase 1's state machines
-/// (docs/plans/2026-10-09-touch-controls.md).
+/// (PLA-13).
 final class TouchControlsTests: XCTestCase {
     let a = TouchTarget(id: "a", kind: .button(.pad(.a), .hold), frame: TouchRect(x: 700, y: 300, width: 50, height: 50))
     let b = TouchTarget(id: "b", kind: .button(.pad(.b), .hold), frame: TouchRect(x: 760, y: 250, width: 50, height: 50))
@@ -369,13 +369,14 @@ final class InputMixerTests: XCTestCase {
 final class InputActionTests: XCTestCase {
     func testNamesRoundTrip() throws {
         let all: [InputAction] = PadControl.allCases.map { .pad($0) } + MouseAction.allCases.map { .mouse($0) }
-            + [.key(0x20, []), .key(0x31, [.shift, .control]), .key(0x1B, .alt), .playport(.menu)]
+            + [.key(0x20, []), .key(0x31, [.shift, .control]), .key(0x1B, .alt), .playport(.menu), .playport(.keyboard)]
         for a in all {
             XCTAssertEqual(InputAction(name: a.name), a, a.name)
             let data = try JSONEncoder().encode([a])
             XCTAssertEqual(try JSONDecoder().decode([InputAction].self, from: data), [a])
         }
         XCTAssertEqual(InputAction.key(0x31, [.shift, .control]).name, "key:shift+ctrl+0x31")
+        XCTAssertEqual(InputAction(name: "playport:keyboard"), .playport(.keyboard))
         XCTAssertEqual(InputAction(name: "key:32"), .key(0x20, []))
         XCTAssertEqual(PadControl.leftStick.thumb, .ls)
         XCTAssertNil(PadControl.a.thumb)

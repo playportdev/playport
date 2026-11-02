@@ -7,10 +7,17 @@ import re
 import subprocess
 
 # The app's Swift packages with host tests.
-SWIFT_PACKAGES = ["app/HostIOKit", "app/ContentKit", "app/GOGClient", "app/EpicClient", "app/XboxClient", "app/SteamClient", "app/PlayportKit"]
+SWIFT_PACKAGES = ["app/HostIOKit", "app/ContentKit", "app/GOGClient", "app/EpicClient", "app/XboxClient", "app/SteamClient", "app/BattleNetClient",
+                  "app/PlayportKit"]
+
+
+def _anycase(words):
+    """WORDS (letters, `_`, `?`, `|` and groups) matching in any case: ERE has no `(?i)`."""
+    return re.sub(r"[A-Za-z]", lambda m: f"[{m[0].upper()}{m[0].lower()}]", words)
+
 
 # What must never be committed (AGENTS.md, Secrets): (what, pattern). Each
-# pattern is both a `git grep -E` and a Python regular expression.
+# pattern is both a `git grep -E` and a Python regular expression: no `(?i)` or `\s`.
 SECRETS = [
     # Steam's refresh and access tokens (JWTs) and Xbox's device, user, title and XSTS tokens
     # (five-part JWEs).
@@ -52,8 +59,9 @@ SECRETS = [
     # base64's three alignments; not <LicenseInfo>).
     ("Xbox licence", r"<License( [^>]*)?><[A-Z]"),
     ("Xbox licence (base64)", r"(PExpY2Vuc2U[g+]|xMaWNlbnNl[IP]|8TGljZW5zZ[ST])[A-Za-z0-9+/]{20,}"),
-    # A copy's content key (Xodus's `cik`), a device key or a session key, as hex or base64.
-    ("content key", r'''([Cc]ontent_?[Kk]ey|\b[Cc][Ii][Kk]|[Dd]evice_?[Kk]ey|[Ss]ession_?[Kk]ey|[Bb]inary_?[Ss]ecret)'''
+    # A copy's content key (Xodus's `cik`) or a device key, as hex or base64; a session key is
+    # the WoW session value rule's below (any case).
+    ("content key", r'''([Cc]ontent_?[Kk]ey|\b[Cc][Ii][Kk]|[Dd]evice_?[Kk]ey|[Bb]inary_?[Ss]ecret)'''
                     r'''["']? *[:=] *["']?([0-9A-Fa-f]{32,}|[A-Za-z0-9+/]{22,})'''),
     # The per-play key of the runtime's bridge (0167).
     ("Xbox bridge key", r'''XODUS_BRIDGE_KEY["']? *[:=] *["']?[A-Za-z0-9+/_-]{32,}'''),
@@ -61,10 +69,22 @@ SECRETS = [
     ("JWK private key", r'''"d" *: *"[A-Za-z0-9_-]{20,}"'''),
     # GetBasePackage's per-package key blob.
     ("Xbox package key blob", r'''KeyBlob["']? *[:=>] *["']?[A-Za-z0-9+/_-]{16,}'''),
+    # A Battle.net or World of Warcraft session (PLA-514), as the Redactor (Redaction.swift)
+    # scrubs it, in any case as its `(?i)` rules: the web login's ticket (`US-<32 hex>-<digits>`),
+    # the client's session values in a log line, the launcher's game account, the account name
+    # and list WoW's Config.wtf, a login URL or a JSON answer keeps, and a single sign-on URL's
+    # token. The Redactor's own `<redacted>` is no hit. Appended for the same reason.
+    ("Battle.net login ticket", r"\b(US|EU|KR|TW|CN)-[0-9A-Fa-f]{32}-[0-9]{5,}\b"),
+    ("WoW session value", _anycase("(web_token|login_?ticket|session_?key|realm_?(join|list)_?ticket|reconnect_?token|auth_?token)")
+                          + r"""["']? *[:=] *["']?[A-Za-z0-9+/_-]{16,}"""),
+    ("WoW account name", _anycase("set account_?(name|list)") + r""" "[^"<][^"]*"|[?&]""" + _anycase("account_?(name|list)")
+                         + r"""=[A-Za-z0-9%@._+!|-]+|["']""" + _anycase("account_?(name|list)") + r"""["'] *: *["'][^"'<\\ ][^"']*["']"""),
+    ("Battle.net game account", _anycase("game_account") + r"""["']? *[:=] *["']?[^<"' ]+"""),
+    ("Battle.net single sign-on token", _anycase("/login/sso") + r"""\?([^ "'#<]*&)?""" + _anycase("token") + r"""=[^ "'&<]+"""),
 ]
 # Made-up or public values the tests use; a line holding one is not a hit.
 SECRET_FIXTURES = ("XTL-TEAMIDXXXX.", "XTL-A1B2C3D4E5.", "eyJhbGciOiJFZERTQSJ9.", "76561197960287930",
-                   "/home/someone/")
+                   "/home/someone/", "synthetic-page-proof")
 SECRET_FILES = r"\.(p12|pfx|mobileprovision|cer|keystore|jks)$|(loginusers|config|local)\.vdf$|/ssfn[0-9]+$"
 # Screenshots and recordings show games' artwork: evidence keeps them under .work and
 # describes them in text (decision 0043).
@@ -81,6 +101,8 @@ _UPSTREAM_GN_TOKENS = re.compile(r"(?<![\w-])(?:" + "gn" + r"_args|" + "gn" + r"
 def name_scan_text(path, text):
     """Only the two upstream GN tokens are exempt, only in CEF/Chromium patches.
 
+    Those series were removed with Playport's CEF build (PLA-603); the exemption stays so that
+    `pp names COMMIT` and `pp source --rev`/`--build` still pass on commits from before it.
     The retired project name and every other retired-prefix word still fail.
     Callers pass a repository-relative path, never an archive or commit prefix.
     """

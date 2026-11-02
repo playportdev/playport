@@ -1,0 +1,806 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 1 Nov 2026 01:38:42 +0100
+Subject: [PATCH] virtual: a native ARM64 child that remaps its image keeps
+ running it
+
+World of Warcraft's ARM64 client replaces its image with a section of
+its own: NtCreateSection(SEC_COMMIT | SEC_NO_CHANGE, SizeOfImage), a
+read-write view, a copy of the image there, NtUnmapViewOfSection of the
+image, then three views of the section at the image's base (code RX,
+.data RW, the rest RO). It then decrypts its code a function at a time
+through the read-write view, with FlushInstructionCache on each, and
+runs it at the base. In a native ARM64 child the base is the image's
+JIT-pool copy (0262), 16 KB aligned, so the views failed alignment and
+the client jumped into still encrypted bytes at +0xb3790.
+
+Decision 0176, amended: a view of a plain section mapped at a presented
+copy's address is mapped where the image's PE view was, its bytes are
+copied into the copy through the pool's RW alias, x18-patched and
+flushed, and the caller gets the copy's address. Every view a native
+child maps of a plain section is recorded with the section's file and
+offset (the records grow as needed; none is dropped for a new one); a
+FlushInstructionCache on one whose section is also mapped at a copy
+brings the flushed bytes into the copy the same way, but for the words
+patched there already, and one on a presented copy x18-patches the
+range. Such a flush patches the code its first word reaches, up to a
+RET, BR, their pointer-authenticated forms or a UDF.
+
+In a native child's image the x18 patcher passes over encrypted 1 KB
+windows of .text (more than 8 of 256 words in the unallocated encoding
+groups, which no compiler emits): a patched word there decrypted to
+garbage. The trampoline reservation still counts them, so the code
+decrypted there later has room. Images in x86-64 and ARM64EC processes,
+and a child's copy of ntdll, are patched whole, as before. A native
+child's copy gets every relocation, as Windows' loader applies them:
+the client has 95 on encrypted .text words, which were skipped.
+
+Linear: PLA-514
+Class: ios-port
+Evidence: docs/evidence/2026-10-31-wow-arm64-start.md, tools/tests/test_x18_encrypted.py
+Offered-upstream: no
+---
+ build/ntdll-unix/virtual_ios.c | 540 +++++++++++++++++++++++++++++++--
+ 1 file changed, 519 insertions(+), 21 deletions(-)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 426befb..a12260b 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -201,6 +201,11 @@ struct ios_jit_mapping {
+     unsigned char presented; /* Playport (PLA-514, decision 0176): a native ARM64
+                               * child's image, whose copy is the image the guest
+                               * sees (ios_jit_present_image) */
++    size_t x18_tramp_off;    /* Playport (PLA-514): the offset from jit_base of the image's x18
++                              * trampolines, their reserved size and the bytes used,
++                              * for code the image writes later (ios_jit_repatch_x18) */
++    size_t x18_tramp_size;
++    size_t x18_tramp_used;
+ };
+ static struct ios_jit_mapping ios_jit_mappings[IOS_JIT_MAX_MAPPINGS];
+ static int ios_jit_mapping_count = 0;
+@@ -235,6 +240,12 @@ static volatile unsigned long ios_pool_head_exhausted, ios_pool_tail_refused, io
+  * Mach exception handler are counted in signal_arm64_ios.c. */
+ static volatile unsigned long ios_limit_wx_dropped, ios_limit_x18_images, ios_limit_x18_sites;
+ 
++/* Playport (PLA-514): a native ARM64 child's views of plain sections, for a remap
++ * of its presented image (ios_remap_presented). */
++static void ios_section_view_add( char *base, size_t size, int fd, ULONGLONG offset );
++static void ios_section_view_remove( const void *base );
++static void ios_section_views_reclaim( void *peb );
++
+ /* ---- Pool reclamation (task #25) ----------------------------------------
+  * The bump allocator never freed anything: 8 pseudo-processes consumed
+  * 368.9/384MB (2026-07-07) and the 9th BUS-loop-locked the session. Every
+@@ -3579,6 +3590,9 @@ void ios_jit_add_mapping(void *pe_base, void *jit_base, size_t size, size_t imag
+         ios_jit_mappings[slot].machine_cached = 0;   /* ml349: slot reuse invalidates memo */
+         ios_jit_mappings[slot].machine_valid = 0;
+         ios_jit_mappings[slot].presented = 0;
++        ios_jit_mappings[slot].x18_tramp_off = 0;
++        ios_jit_mappings[slot].x18_tramp_size = 0;
++        ios_jit_mappings[slot].x18_tramp_used = 0;
+         {
+             const char *name = ios_pe_module_name( pe_base, image_size );
+             ios_jit_mappings[slot].is_fex = !strcmp( name, "libarm64ecfex.dll" ) ||
+@@ -5368,19 +5382,88 @@ static int ios_x18_mark_x64_ranges( const char *text, size_t text_size, size_t t
+     return sites;
+ }
+ 
++/* Playport (PLA-514): the data map of code a program decrypted at run time and flushed:
++ * every word is data but those reachable from the first one, following fall-through,
++ * B, B.cond, CBZ/CBNZ, TBZ/TBNZ (not into calls), up to a RET, BR, their pointer-
++ * authenticated forms, a UDF (which World of Warcraft's client executes on purpose to
++ * raise) or an unallocated word. A reachable word is code even where an LDR reads it as
++ * a literal: it runs.
++ * Code whose words sit beside encrypted bytes, and obfuscated code with junk words
++ * after its branches, is patched without touching those: a patched encrypted word
++ * decrypts to garbage. Caller frees; NULL on alloc failure. */
++static unsigned char *ios_x18_reachable_map( const char *text, size_t text_size )
++{
++    size_t words = text_size / 4, top = 0, i;
++    unsigned char *seen = calloc( 1, words / 8 + 1 ), *data_map = malloc( text_size / 32 + 1 );
++    size_t *stack = malloc( (words + 1) * sizeof(*stack) );
++
++    if (!seen || !data_map || !stack)
++    {
++        free( seen );
++        free( data_map );
++        free( stack );
++        return NULL;
++    }
++    memset( data_map, 0xff, text_size / 32 + 1 );
++    if (words) stack[top++] = 0;
++    while (top)
++    {
++        size_t w = stack[--top];
++        while (w < words && !(seen[w >> 3] & (1 << (w & 7))))
++        {
++            uint32_t insn = ((const uint32_t *)text)[w];
++            uint32_t op0 = (insn >> 25) & 0xf;
++            int64_t off = 0;
++            int branch = 0, next = 1;
++
++            seen[w >> 3] |= 1 << (w & 7);
++            if (op0 == 1 || op0 == 3) { seen[w >> 3] &= ~(1 << (w & 7)); break; }   /* not code */
++            if ((insn & 0xfc000000) == 0x14000000)                              /* B */
++            {
++                off = (int64_t)((int32_t)(insn << 6) >> 6) * 4; branch = 1; next = 0;
++            }
++            else if ((insn & 0xff000010) == 0x54000000 || (insn & 0x7e000000) == 0x34000000)
++            {                                                                   /* B.cond, CBZ/CBNZ */
++                off = (int64_t)((int32_t)(insn << 8) >> 13) * 4; branch = 1;
++            }
++            else if ((insn & 0x7e000000) == 0x36000000)                         /* TBZ/TBNZ */
++            {
++                off = (int64_t)((int32_t)(insn << 13) >> 18) * 4; branch = 1;
++            }
++            else if ((insn & 0xfffffc1f) == 0xd65f0000 || (insn & 0xfffffc1f) == 0xd61f0000 ||
++                     insn == 0xd65f0bff || insn == 0xd65f0fff || (insn & 0xfefff800) == 0xd61f0800 ||
++                     (insn & 0xffff0000) == 0)
++                next = 0;                                       /* RET, BR, RETAA/AB, BRAA/AB(Z), UDF */
++            if (branch && (int64_t)w * 4 + off >= 0 && (size_t)((int64_t)w * 4 + off) < text_size)
++                stack[top++] = (size_t)((int64_t)w * 4 + off) / 4;
++            if (!next) break;
++            w++;
++        }
++    }
++    for (i = 0; i < words; i++)
++        if (seen[i >> 3] & (1 << (i & 7))) data_map[i >> 3] &= ~(1 << (i & 7));
++    free( seen );
++    free( stack );
++    return data_map;
++}
++
+ /* Literal-pool data map builder — see the guard comment in
+  * ios_jit_patch_x18. Shared by the patcher and the trampoline-need
+  * counter. Caller frees. NULL on alloc failure (callers degrade to the
+  * unguarded pre-2026-07-07 behavior). */
+ /* Playport: x64_sites (may be NULL) gets ios_x18_mark_x64_ranges's result;
+- * the map returned covers those ranges too. */
++ * the map returned covers those ranges too, and with cipher the encrypted windows. */
++/* Playport (PLA-514): cipher 2 is code a program has just decrypted and flushed: of
++ * text, only what is reachable from its first word is code (ios_x18_reachable_map). */
+ static unsigned char *ios_x18_build_data_map( const char *text, size_t text_size, size_t text_rva,
+-                                              const char *image_rx, int *x64_sites )
++                                              const char *image_rx, int *x64_sites, int cipher )
+ {
+-    unsigned char *data_map = calloc( 1, text_size / 32 + 1 );
+-    unsigned char *x64_map = calloc( 1, text_size / 32 + 1 );
++    unsigned char *data_map, *x64_map;
+     int x64 = -1;
+     if (x64_sites) *x64_sites = -1;
++    if (cipher == 2) return ios_x18_reachable_map( text, text_size );
++    data_map = calloc( 1, text_size / 32 + 1 );
++    x64_map = calloc( 1, text_size / 32 + 1 );
+     if (!data_map || !x64_map)
+     {
+         free( x64_map );
+@@ -5420,6 +5503,27 @@ static unsigned char *ios_x18_build_data_map( const char *text, size_t text_size
+         }
+     }
+     for (size_t k = 0; k < text_size / 32 + 1; k++) data_map[k] |= x64_map[k];
++    /* Playport (PLA-514): with cipher, a 1 KB window (from the start of text) in which
++     * more than 8 of its 256 words fall in the two unallocated top-level encoding
++     * groups (op0 = 0b0001, 0b0011) is data. No compiler emits those words, and
++     * encrypted bytes put an eighth of their words there. World of Warcraft's ARM64
++     * client ships most of its .text encrypted and decrypts it at run time from the
++     * bytes at its image: a word patched there decrypts to garbage. */
++    if (cipher)
++    {
++        for (size_t w0 = 0; w0 < text_size; w0 += 1024)
++        {
++            size_t end = w0 + 1024 < text_size ? w0 + 1024 : text_size, b;
++            int unallocated = 0;
++            for (b = w0; b + 4 <= end; b += 4)
++            {
++                uint32_t op0 = (*(const uint32_t *)(text + b) >> 25) & 0xf;
++                unallocated += op0 == 1 || op0 == 3;
++            }
++            if (unallocated > 8)
++                for (b = w0; b + 4 <= end; b += 4) data_map[(b / 4) >> 3] |= 1 << ((b / 4) & 7);
++        }
++    }
+     free( x64_map );
+     return data_map;
+ }
+@@ -5429,9 +5533,12 @@ static unsigned char *ios_x18_build_data_map( const char *text, size_t text_size
+  * 2.2MB reservation for ntdll) — with per-child copies of every DLL that
+  * waste was ~HALF the pool (4 apps hit 368/384MB). Count the actual
+  * patch sites and size the reservation to fit. */
+-size_t ios_jit_x18_tramp_need( const char *text, size_t text_size, size_t text_rva, const char *image_rx )
++/* Playport (PLA-514): cipher as for ios_x18_build_data_map. A reservation counts the
++ * encrypted windows' matches too, which leaves room for the code decrypted there later. */
++size_t ios_jit_x18_tramp_need( const char *text, size_t text_size, size_t text_rva, const char *image_rx,
++                               int cipher )
+ {
+-    unsigned char *data_map = ios_x18_build_data_map( text, text_size, text_rva, image_rx, NULL );
++    unsigned char *data_map = ios_x18_build_data_map( text, text_size, text_rva, image_rx, NULL, cipher );
+     size_t need = 0;
+     for (size_t i = 0; i < text_size; i += 4)
+     {
+@@ -5447,10 +5554,16 @@ size_t ios_jit_x18_tramp_need( const char *text, size_t text_size, size_t text_r
+     return need + 0x1000;
+ }
+ 
++/* Playport (PLA-514): cipher as for ios_x18_build_data_map (1: encrypted windows are
++ * data; 2: code flushed at run time, of which only what its first word reaches is
++ * code). tramp_used (may be NULL) gets the trampoline bytes used. A run with cipher 2
++ * (ios_jit_repatch_x18) logs only the sites it leaves to fault. */
+ int ios_jit_patch_x18(char *text_rw, char *text_rx, size_t text_size, size_t text_rva,
+-                       char *tramp_rw, char *tramp_rx, size_t tramp_size)
++                       char *tramp_rw, char *tramp_rx, size_t tramp_size, int cipher, size_t *tramp_used)
+ {
++    const int quiet = cipher == 2;
+     size_t tramp_off = 0;
++    if (tramp_used) *tramp_used = 0;
+     int count = 0;
+     int skipped = 0;
+     int lit_skipped = 0;
+@@ -5478,7 +5591,7 @@ int ios_jit_patch_x18(char *text_rw, char *text_rx, size_t text_size, size_t tex
+         {
+             /* Playport: count the image and the sites it leaves to fault (the
+              * budget is 32 bytes a site plus one page of slack). */
+-            size_t sites = (ios_jit_x18_tramp_need( text_rw, text_size, text_rva, text_rx - text_rva ) - 0x1000) / 32;
++            size_t sites = (ios_jit_x18_tramp_need( text_rw, text_size, text_rva, text_rx - text_rva, cipher ) - 0x1000) / 32;
+             __sync_fetch_and_add( &ios_limit_x18_images, 1 );
+             __sync_fetch_and_add( &ios_limit_x18_sites, sites );
+             dprintf(2, "[x18-tramp] REFUSED: tramp %p+0x%lx out of B/BL reach of text %p+0x%lx "
+@@ -5503,7 +5616,8 @@ int ios_jit_patch_x18(char *text_rw, char *text_rx, size_t text_size, size_t tex
+      * (data that happens to look like one) only mark extra words as data
+      * — an unpatched real instruction degrades to a recoverable runtime
+      * fault, while a patched literal is fatal. Asymmetry favors skipping. */
+-    data_map = ios_x18_build_data_map( text_rw, text_size, text_rva, text_rx - text_rva, &x64_sites );
++    data_map = ios_x18_build_data_map( text_rw, text_size, text_rva, text_rx - text_rva, &x64_sites, cipher );
++    if (!data_map && cipher == 2) return 0;   /* nothing known to be code */
+ 
+     /* Pass 0: retarget hand-written TEB-from-TSD reads.
+      *
+@@ -5756,7 +5870,8 @@ int ios_jit_patch_x18(char *text_rw, char *text_rx, size_t text_size, size_t tex
+         __sync_fetch_and_add( &ios_limit_x18_sites, unpatched );
+         if (out_of_space != (size_t)-1) __sync_fetch_and_add( &ios_limit_x18_images, 1 );
+     }
+-    if (count > 0 || skipped > 0 || text_size)
++    if (tramp_used) *tramp_used = tramp_off;
++    if (quiet ? unpatched > 0 : (count > 0 || skipped > 0 || text_size))
+         dprintf(2, "[x18-patch] ml1005 text=%p+%#lx (rw=%p) patched=%d skipped=%d unpatched=%d "
+                 "tramp=%p+%#lx used=%lu x64_skipped=%d\n",
+                 text_rx, (unsigned long)text_size, text_rw, count, skipped, unpatched,
+@@ -5764,13 +5879,13 @@ int ios_jit_patch_x18(char *text_rw, char *text_rx, size_t text_size, size_t tex
+     if (x64_sites > 0) lit_skipped -= x64_sites;
+     /* dprintf, not ERR (err-virtual muted): literal words the x18 matcher
+      * WOULD have clobbered — nonzero = a dodged conhost-class boot death. */
+-    if (lit_skipped)
++    if (lit_skipped && !quiet)
+         dprintf(2, "[x18-lit] %d literal-pool word(s) matched x18 patterns — skipped (data, not code)\n",
+                 lit_skipped);
+     free( data_map );
+ 
+     /* Verify: log first patched instruction's encoding */
+-    if (count > 0)
++    if (count > 0 && !quiet)
+     {
+         for (size_t i = 0; i < text_size; i += 4)
+         {
+@@ -5794,6 +5909,45 @@ int ios_jit_patch_x18(char *text_rw, char *text_rx, size_t text_size, size_t tex
+     return count;
+ }
+ 
++/* Playport (PLA-514): b is a B to the address to. */
++static int ios_x18_b_to( const uint32_t *b, uintptr_t to )
++{
++    return (*b & 0xfc000000) == 0x14000000 && (uintptr_t)b + (intptr_t)((int32_t)(*b << 6) >> 6) * 4 == to;
++}
++
++/* Playport (PLA-514): the word now at now_rx is the one ios_jit_patch_x18 put in place of
++ * the instruction orig: a B to a trampoline within tramp_rx + tramp_size that does orig
++ * with the TEB and comes back (or goes to orig's target), or the NOP for MOV xzr, x18.
++ * A flush of code decrypted through a view the copy is not one with (ios_remap_flush)
++ * keeps these words: copied back, orig would be live until patched again, each time
++ * with new trampoline space. */
++static int ios_x18_patched_site( uint32_t now, uint32_t orig, const char *now_rx, const char *tramp_rx,
++                                 size_t tramp_size )
++{
++    int role = ios_insn_x18_role( orig ), scratch;
++    int mov = role == X18_ROLE_RM && (orig & 0xffe0ffe0) == 0xaa0003e0;
++    const uint32_t *t;
++    uintptr_t back = (uintptr_t)now_rx + 4;
++
++    if (role == X18_ROLE_NONE) return 0;
++    if (mov && (orig & 31) == 31) return now == 0xd503201f;
++    if ((now & 0xfc000000) != 0x14000000) return 0;
++    t = (const uint32_t *)((uintptr_t)now_rx + (intptr_t)((int32_t)(now << 6) >> 6) * 4);
++    if ((const char *)t < tramp_rx || (size_t)((const char *)t - tramp_rx) +
++        (mov ? 16 : (role & X18_ROLE_BRANCH) ? 36 : 28) > tramp_size) return 0;
++    if (mov) return t[0] == (0xd53bd060 | (orig & 31)) && ios_x18_b_to( &t[3], back );
++    scratch = t[0] & 31;                                    /* str xSCRATCH, [sp, #-16]! */
++    if ((t[0] & 0xffffffe0) != 0xf81f0fe0 || scratch > 17) return 0;
++    if (role & X18_ROLE_BRANCH)
++    {
++        int tb = (orig & 0x7e000000) == 0x36000000;
++        int64_t off = tb ? (int64_t)((int32_t)(orig << 13) >> 18) * 4 : (int64_t)((int32_t)(orig << 8) >> 13) * 4;
++        return t[4] == ((orig & (tb ? 0xfff80000 : 0xff000000)) | (3 << 5) | scratch) &&
++               ios_x18_b_to( &t[6], back ) && ios_x18_b_to( &t[8], (uintptr_t)now_rx + off );
++    }
++    return t[4] == ios_insn_replace_x18( orig, role, scratch ) && ios_x18_b_to( &t[6], back );
++}
++
+ #endif
+ 
+ struct preload_info
+@@ -9310,6 +9464,7 @@ size_t ios_jit_reclaim_process_bytes( void *peb )
+ void ios_jit_reclaim_process( void *peb )
+ {
+     ios_jit_reclaim_process_bytes( peb );
++    ios_section_views_reclaim( peb );   /* Playport (PLA-514) */
+ }
+ 
+ 
+@@ -10208,7 +10363,7 @@ const char *ios_pe_module_name( const void *image_base, size_t image_size )
+  * the patch stage; scanning x64 bytes would count garbage matches). */
+ static size_t ios_x18_tramp_prealloc_scan( const char *image, size_t image_size )
+ {
+-    extern size_t ios_jit_x18_tramp_need( const char *text, size_t text_size, size_t text_rva, const char *image_rx );
++    extern size_t ios_jit_x18_tramp_need( const char *text, size_t text_size, size_t text_rva, const char *image_rx, int cipher );
+     const size_t pg = 0x4000;
+     unsigned int pe_off;
+     unsigned short machine, num_sec, opt_sz;
+@@ -10237,7 +10392,7 @@ static size_t ios_x18_tramp_prealloc_scan( const char *image, size_t image_size
+     }
+     if (machine != IMAGE_FILE_MACHINE_ARM64 && !is_arm64ec) return 0;
+     if (!text_sz || text_off + text_sz > image_size) return 0;
+-    return (ios_jit_x18_tramp_need(image + text_off, text_sz, text_off, NULL) + pg - 1) & ~(pg - 1);
++    return (ios_jit_x18_tramp_need(image + text_off, text_sz, text_off, NULL, 0) + pg - 1) & ~(pg - 1);
+ }
+ 
+ 
+@@ -11898,6 +12053,13 @@ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
+                         char *block = reloc_data;
+                         int fixup_count = 0, to_pe_view = 0;
+                         intptr_t pe_view_delta = (intptr_t)image_base - (intptr_t)pe_image_base;
++                        /* Playport (PLA-514, decision 0176): a native ARM64 child's
++                         * copy is the image, so every fixup gets the delta, as
++                         * Windows' loader adds it whatever the value: World of
++                         * Warcraft's ARM64 client has 95 fixups on encrypted .text
++                         * words, whose values point nowhere in the image. */
++                        extern int ios_is_native_arm64_cur(void);
++                        const int windows_relocs = copy_size == image_size && ios_is_native_arm64_cur();
+ 
+                         ERR("iOS JIT:   relocations: RVA=0x%x size=0x%x delta=0x%lx\n",
+                             reloc_rva, reloc_sz, (long)delta);
+@@ -11937,6 +12099,11 @@ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
+                                         *fixup += pe_view_delta;
+                                         to_pe_view++;
+                                     }
++                                    else if (windows_relocs)
++                                    {
++                                        *fixup += delta;
++                                        fixup_count++;
++                                    }
+                                     else
+                                     {
+                                         /* Log first few skipped entries */
+@@ -12028,9 +12195,14 @@ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
+                     if (text_sz > 0)
+                     {
+                         /* Task #25: exact budget (was 100% of .text, ~99% wasted). */
+-                        extern size_t ios_jit_x18_tramp_need( const char *text, size_t text_size, size_t text_rva, const char *image_rx );
++                        /* Playport (PLA-514): encrypted windows are data in a native
++                         * ARM64 child's image only (decision 0176): x86-64 and ARM64EC
++                         * processes' images are patched whole, as before. */
++                        extern size_t ios_jit_x18_tramp_need( const char *text, size_t text_size, size_t text_rva, const char *image_rx, int cipher );
++                        extern int ios_is_native_arm64_cur(void);
+                         size_t tramp_budget = ios_jit_x18_tramp_need((char *)jit_rw_base + offset + text_off, text_sz, text_off,
+-                                                                    (char *)jit_rx_base + offset);
++                                                                    (char *)jit_rx_base + offset,
++                                                                    ios_is_native_arm64_cur() ? 1 : 0);
+                         size_t tramp_alloc = (tramp_budget + page_size - 1) & ~(page_size - 1);
+                         /* task #34: fixed image-relative offset — the region
+                          * pre-reserved in this image's own allocation. The
+@@ -12066,9 +12238,16 @@ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
+                             char *text_rw = (char *)jit_rw_base + offset + text_off;
+                             char *text_rx = (char *)jit_rx_base + offset + text_off;
+ 
++                            size_t tramp_used = 0;
+                             int patched = ios_jit_patch_x18(text_rw, text_rx, text_sz, text_off,
+-                                                            tramp_rw, tramp_rx, tramp_alloc);
+-
++                                                            tramp_rw, tramp_rx, tramp_alloc,
++                                                            ios_is_native_arm64_cur() ? 1 : 0, &tramp_used);
++
++                            /* Playport (PLA-514): what is left of the reservation is
++                             * for code the image writes later (ios_jit_repatch_x18) */
++                            ios_jit_mappings[map_idx].x18_tramp_off = tramp_pool_off - offset;
++                            ios_jit_mappings[map_idx].x18_tramp_size = tramp_prealloc;
++                            ios_jit_mappings[map_idx].x18_tramp_used = tramp_used;
+                             if (patched > 0)
+                             {
+                                 sys_icache_invalidate(text_rx, text_sz);
+@@ -12302,9 +12481,9 @@ int ios_jit_copy_module_for_child(void *module_addr, void *child_peb)
+      * mprotect_exec copy pipeline). Budget from the SOURCE bytes; identical
+      * to what the post-memcpy scan would compute. */
+     {
+-        extern size_t ios_jit_x18_tramp_need( const char *text, size_t text_size, size_t text_rva, const char *image_rx );
++        extern size_t ios_jit_x18_tramp_need( const char *text, size_t text_size, size_t text_rva, const char *image_rx, int cipher );
+         child_tramp_prealloc = m->text_size
+-            ? ((ios_jit_x18_tramp_need((const char *)m->pe_base + m->text_offset, m->text_size, m->text_offset, NULL) + pg - 1) & ~(pg - 1))
++            ? ((ios_jit_x18_tramp_need((const char *)m->pe_base + m->text_offset, m->text_size, m->text_offset, NULL, 0) + pg - 1) & ~(pg - 1))
+             : 0;
+     }
+     alloc_size += child_tramp_prealloc;
+@@ -12436,7 +12615,7 @@ int ios_jit_copy_module_for_child(void *module_addr, void *child_peb)
+         int patched = ios_jit_patch_x18(
+             rw_dest + m->text_offset, rx_dest + m->text_offset, m->text_size, m->text_offset,
+             (char *)ios_jit_rw_base_global + tramp_off,
+-            (char *)ios_jit_rx_base_global + tramp_off, child_tramp_prealloc);
++            (char *)ios_jit_rx_base_global + tramp_off, child_tramp_prealloc, 0, NULL);
+         sys_icache_invalidate((char *)ios_jit_rx_base_global + tramp_off, child_tramp_prealloc);
+         dprintf(2, "[child-ntdll] x18-patched %d instructions (tramps at image-relative +0x%lx)\n",
+                 patched, (unsigned long)(alloc_size - child_tramp_prealloc));
+@@ -12469,6 +12648,10 @@ int ios_jit_copy_module_for_child(void *module_addr, void *child_peb)
+         ios_jit_mappings[slot].owner_peb = child_peb;
+         ios_jit_mappings[slot].loader_peb = child_peb;
+         ios_jit_mappings[slot].is_fex = m->is_fex;
++        ios_jit_mappings[slot].presented = 0;   /* a reused slot may be a gone child's image */
++        ios_jit_mappings[slot].x18_tramp_off = 0;
++        ios_jit_mappings[slot].x18_tramp_size = 0;
++        ios_jit_mappings[slot].x18_tramp_used = 0;
+         __sync_synchronize();
+         ios_jit_mappings[slot].pe_base = m->pe_base;
+         if (slot == ios_jit_mapping_count) ios_jit_mapping_count++;
+@@ -16429,6 +16612,10 @@ static unsigned int virtual_map_section_body( HANDLE handle, PVOID *addr_ptr, UL
+         *addr_ptr = view->base;
+         *size_ptr = size;
+         VIRTUAL_DEBUG_DUMP_VIEW( view );
++        {   /* Playport (PLA-514): for a remap of a presented image (ios_remap_presented) */
++            extern int ios_is_native_arm64_cur(void);
++            if (ios_is_native_arm64_cur()) ios_section_view_add( view->base, size, unix_handle, offset.QuadPart );
++        }
+     }
+     else delete_view( view );
+ 
+@@ -25230,6 +25417,304 @@ NTSTATUS WINAPI NtUnlockVirtualMemory( HANDLE process, PVOID *addr, SIZE_T *size
+ }
+ 
+ 
++/***********************************************************************
++ *           Remapping a presented image                    (PLA-514)
++ *
++ * Decision 0176. World of Warcraft's ARM64 client replaces its own image with
++ * a section: it creates a SEC_NO_CHANGE section of SizeOfImage, maps it
++ * read-write, copies its image there, unmaps the image and maps the section at
++ * the image's base (its code read-execute, .data read-write, the rest
++ * read-only). From then on it decrypts its code a function at a time through
++ * the read-write view, calls FlushInstructionCache on each, and runs it at the
++ * base. In a native ARM64 child the base is the image's pool copy, whose pages
++ * take code only through the pool's RW alias, so no section view can sit
++ * there. Instead:
++ *  - a view of a plain section mapped at a presented copy's address is mapped
++ *    where the image's PE view was (the hidden backing store again); its bytes
++ *    are copied into the copy through the RW alias, x18-patched and flushed,
++ *    and the caller gets the copy's address;
++ *  - every view a native child maps of a plain section is recorded with the
++ *    section's file and offset. The other views of a section mapped at a copy
++ *    are remapped onto the copy's RW alias, so they and the copy are one
++ *    memory, as they are on Windows;
++ *  - a FlushInstructionCache on such a view, or on a presented copy,
++ *    x18-patches the code it reaches from the flushed address, and flushes.
++ * The backing stores keep the section's bytes as they were at the remap.
++ */
++struct ios_section_view
++{
++    void     *peb;      /* the pseudo-process that mapped it; NULL: a free slot */
++    char     *base;     /* the view (for a remap, its backing store) */
++    size_t    size;
++    dev_t     dev;      /* the section's file */
++    ino_t     ino;
++    ULONGLONG offset;   /* the view's offset in the section */
++    char     *copy;     /* a remap: the presented copy's address it is mapped at */
++};
++/* the records, grown as needed: a record dropped for a new one would leave its view's
++ * flushes out of the copy, or a later view not one with it */
++static struct ios_section_view *ios_section_views;
++static unsigned int ios_section_view_count;
++static pthread_mutex_t ios_section_view_lock = PTHREAD_MUTEX_INITIALIZER;
++static unsigned long ios_remap_flushes, ios_remap_flush_bytes;
++
++/* A free record, the table doubled when every one is live. NULL (logged) when it cannot
++ * grow. ios_section_view_lock is held. */
++static struct ios_section_view *ios_section_view_slot( void )
++{
++    struct ios_section_view *grown;
++    unsigned int i, count = ios_section_view_count ? 2 * ios_section_view_count : 64;
++
++    for (i = 0; i < ios_section_view_count; i++) if (!ios_section_views[i].peb) return &ios_section_views[i];
++    if (!(grown = realloc( ios_section_views, count * sizeof(*grown) )))
++    {
++        dprintf( 2, "[remap] no memory for more than %u section view records: a view is not recorded\n",
++                 ios_section_view_count );
++        return NULL;
++    }
++    memset( grown + ios_section_view_count, 0, (count - ios_section_view_count) * sizeof(*grown) );
++    ios_section_views = grown;
++    ios_section_view_count = count;
++    return &ios_section_views[i];
++}
++
++/* Make the part of view s that remap r covers the same memory as r's copy: remap
++ * it onto the copy's RW alias (the tail short of a host page stays the view's).
++ * ios_section_view_lock is held. Returns the bytes made one. */
++static size_t ios_section_view_alias( struct ios_section_view *s, const struct ios_section_view *r )
++{
++    ULONGLONG from = s->offset > r->offset ? s->offset : r->offset;
++    ULONGLONG to = s->offset + s->size < r->offset + r->size ? s->offset + s->size : r->offset + r->size;
++    struct ios_jit_mapping *m = ios_jit_presented_at( r->copy, NULL );
++    vm_address_t target;
++    vm_prot_t cur = 0, max = 0;
++    kern_return_t kr;
++    char *copy;
++    size_t len;
++
++    if (!m || from >= to) return 0;
++    copy = r->copy + (from - r->offset);
++    len = to - from;
++    if (copy + len > (char *)m->jit_base + m->size) len = (char *)m->jit_base + m->size - copy;
++    len &= ~host_page_mask;
++    target = (vm_address_t)(s->base + (from - s->offset));
++    if (!len || ((target | (uintptr_t)copy) & host_page_mask)) return 0;
++    kr = vm_remap( mach_task_self(), &target, len, 0, VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE, mach_task_self(),
++                   (vm_address_t)((char *)ios_jit_rw_base_global + (copy - (char *)ios_jit_rx_base_global)),
++                   FALSE, &cur, &max, VM_INHERIT_DEFAULT );
++    if (kr != KERN_SUCCESS)
++    {
++        dprintf( 2, "[remap] the view %p+%#lx could not become the copy at %p: kr=%d\n",
++                 (void *)target, (unsigned long)len, copy, kr );
++        return 0;
++    }
++    return len;
++}
++
++/* Record a native child's view of a plain section (virtual_map_section_body), and
++ * make it one with a copy its section is mapped at. */
++static void ios_section_view_add( char *base, size_t size, int fd, ULONGLONG offset )
++{
++    struct ios_section_view *v;
++    struct stat st;
++    unsigned int i;
++
++    if (fstat( fd, &st )) return;
++    pthread_mutex_lock( &ios_section_view_lock );
++    if (!(v = ios_section_view_slot()))
++    {
++        pthread_mutex_unlock( &ios_section_view_lock );
++        return;
++    }
++    v->peb = ios_jit_current_peb();
++    v->base = base;
++    v->size = size;
++    v->dev = st.st_dev;
++    v->ino = st.st_ino;
++    v->offset = offset;
++    v->copy = NULL;
++    for (i = 0; i < ios_section_view_count; i++)
++    {
++        const struct ios_section_view *r = &ios_section_views[i];
++        if (r->peb == v->peb && r->copy && r->dev == v->dev && r->ino == v->ino) ios_section_view_alias( v, r );
++    }
++    pthread_mutex_unlock( &ios_section_view_lock );
++}
++
++/* Forget the view at base (unmap_view_of_section). */
++static void ios_section_view_remove( const void *base )
++{
++    unsigned int i;
++    pthread_mutex_lock( &ios_section_view_lock );
++    for (i = 0; i < ios_section_view_count; i++)
++        if (ios_section_views[i].peb && ios_section_views[i].base == base) ios_section_views[i].peb = NULL;
++    pthread_mutex_unlock( &ios_section_view_lock );
++}
++
++/* Forget a gone pseudo-process's views (ios_jit_reclaim_process). */
++static void ios_section_views_reclaim( void *peb )
++{
++    unsigned int i;
++    pthread_mutex_lock( &ios_section_view_lock );
++    for (i = 0; i < ios_section_view_count; i++)
++        if (ios_section_views[i].peb == peb) ios_section_views[i].peb = NULL;
++    pthread_mutex_unlock( &ios_section_view_lock );
++}
++
++/* x18-patch size bytes of a presented copy from image offset off, with the rest
++ * of the image's trampoline reservation, and flush them. cipher as for
++ * ios_jit_patch_x18. ios_section_view_lock is held. */
++static void ios_jit_repatch_x18( struct ios_jit_mapping *m, size_t off, size_t size, int cipher )
++{
++    char *image_rw = (char *)ios_jit_rw_base_global + ((char *)m->jit_base - (char *)ios_jit_rx_base_global);
++    size_t start = off > m->text_offset ? off : m->text_offset;
++    size_t end = off + size < m->text_offset + m->text_size ? off + size : m->text_offset + m->text_size;
++    size_t used = 0;
++
++    if (m->x18_tramp_size && start < end)
++    {
++        /* the windows of the load's scan, from the start of .text */
++        if (cipher == 1) start = m->text_offset + ((start - m->text_offset) & ~(size_t)1023);
++        start &= ~(size_t)3;
++        ios_jit_patch_x18( image_rw + start, (char *)m->jit_base + start, end - start, start,
++                           image_rw + m->x18_tramp_off + m->x18_tramp_used,
++                           (char *)m->jit_base + m->x18_tramp_off + m->x18_tramp_used,
++                           m->x18_tramp_size - m->x18_tramp_used, cipher, &used );
++        if (used) sys_icache_invalidate( (char *)m->jit_base + m->x18_tramp_off + m->x18_tramp_used, used );
++        m->x18_tramp_used += used;
++    }
++    __asm__ __volatile__( "dsb sy" ::: "memory" );
++    sys_icache_invalidate( (char *)m->jit_base + off, size );
++}
++
++/* NtMapViewOfSection[Ex] at a presented copy's address: see above. */
++static BOOL ios_remap_presented( HANDLE handle, PVOID *addr_ptr, SIZE_T commit_size, const LARGE_INTEGER *offset_ptr,
++                                 SIZE_T *size_ptr, ULONG alloc_type, ULONG protect, NTSTATUS *status )
++{
++    extern int ios_is_native_arm64_cur(void);
++    SECTION_BASIC_INFORMATION info;
++    struct ios_jit_mapping *m;
++    struct ios_section_view *v = NULL;
++    char *copy = *addr_ptr;
++    size_t size, one = 0;
++    uintptr_t pe;
++    void *view;
++    unsigned int i;
++
++    if (!copy || !ios_is_native_arm64_cur() || !(m = ios_jit_presented_at( copy, &pe ))) return FALSE;
++    if (NtQuerySection( handle, SectionBasicInformation, &info, sizeof(info), NULL ) ||
++        (info.Attributes & SEC_IMAGE)) return FALSE;
++    view = (void *)pe;
++    *status = virtual_map_section( handle, &view, 0, 0, commit_size, offset_ptr, size_ptr, alloc_type, protect, 0 );
++    if (!NT_SUCCESS( *status ))
++    {
++        dprintf( 2, "[remap] %s: section view at %p+%#lx could not take its backing store %p: %#x\n",
++                 ios_pe_module_name( m->pe_base, m->image_size ), copy, (unsigned long)*size_ptr, (void *)pe,
++                 (unsigned)*status );
++        return TRUE;
++    }
++    size = *size_ptr;
++    if (copy + size > (char *)m->jit_base + m->size) size = (char *)m->jit_base + m->size - copy;
++    pthread_mutex_lock( &ios_section_view_lock );
++    for (i = 0; i < ios_section_view_count; i++)
++        if (ios_section_views[i].peb && ios_section_views[i].base == view) v = &ios_section_views[i];
++    if (protect != PAGE_NOACCESS)
++    {
++        memcpy( (char *)ios_jit_rw_base_global + (copy - (char *)ios_jit_rx_base_global), view, size );
++        if (protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY))
++            ios_jit_repatch_x18( m, copy - (char *)m->jit_base, size, 1 );
++    }
++    if (v)
++    {
++        v->copy = copy;
++        for (i = 0; i < ios_section_view_count; i++)
++        {
++            struct ios_section_view *s = &ios_section_views[i];
++            if (s->peb == v->peb && !s->copy && s->dev == v->dev && s->ino == v->ino)
++                one += ios_section_view_alias( s, v );
++        }
++    }
++    pthread_mutex_unlock( &ios_section_view_lock );
++    dprintf( 2, "[remap] %s: a section view (offset %#llx, prot %#x) at %p+%#lx, its image's copy: mapped at %p, "
++             "the copy took its bytes, %#lx bytes of other views made one with it; x18 trampolines %#lx of %#lx used%s\n",
++             ios_pe_module_name( m->pe_base, m->image_size ),
++             (unsigned long long)(offset_ptr ? offset_ptr->QuadPart : 0), (unsigned)protect, copy,
++             (unsigned long)size, view, (unsigned long)one, (unsigned long)m->x18_tramp_used,
++             (unsigned long)m->x18_tramp_size, v ? "" : " (no section record)" );
++    return TRUE;
++}
++
++/* NtFlushInstructionCache in a native child: see above. */
++static void ios_remap_flush( const char *addr, SIZE_T size )
++{
++    extern int ios_is_native_arm64_cur(void);
++    struct ios_jit_mapping *m;
++    struct ios_section_view *v = NULL;
++    unsigned int i;
++    void *peb;
++
++    if (!size || !ios_is_native_arm64_cur()) return;
++    peb = ios_jit_current_peb();
++    pthread_mutex_lock( &ios_section_view_lock );
++    if ((m = ios_jit_presented_at( addr, NULL )))
++    {
++        if (addr + size > (char *)m->jit_base + m->size) size = (char *)m->jit_base + m->size - addr;
++        ios_jit_repatch_x18( m, addr - (char *)m->jit_base, size, 2 );
++        pthread_mutex_unlock( &ios_section_view_lock );
++        return;
++    }
++    for (i = 0; i < ios_section_view_count; i++)
++    {
++        struct ios_section_view *s = &ios_section_views[i];
++        if (s->peb == peb && !s->copy && addr >= s->base && addr < s->base + s->size) v = s;
++    }
++    if (v)
++    {
++        ULONGLONG lo = v->offset + (addr - v->base);
++        ULONGLONG hi = lo + (addr + size <= v->base + v->size ? size : (SIZE_T)(v->base + v->size - addr));
++        for (i = 0; i < ios_section_view_count; i++)
++        {
++            struct ios_section_view *r = &ios_section_views[i];
++            ULONGLONG from, to;
++
++            if (r->peb != peb || !r->copy || r->dev != v->dev || r->ino != v->ino) continue;
++            from = lo > r->offset ? lo : r->offset;
++            to = hi < r->offset + r->size ? hi : r->offset + r->size;
++            if (from >= to || !(m = ios_jit_presented_at( r->copy, NULL ))) continue;
++            if (r->copy + (to - r->offset) > (char *)m->jit_base + m->size) continue;
++            {   /* a part not made one with the copy (ios_section_view_alias) is copied, but
++                 * for the words patched there already: their originals are the view's */
++                char *rx = r->copy + (from - r->offset);
++                char *rw = (char *)ios_jit_rw_base_global + (rx - (char *)ios_jit_rx_base_global);
++                const char *src = v->base + (from - v->offset);
++                const char *tramp = (char *)m->jit_base + m->x18_tramp_off;
++                size_t n = to - from, k, len;
++
++                if (memcmp( rw, src, n ))
++                    for (k = 0; k < n; k += len)
++                    {
++                        len = 4 - ((uintptr_t)(rx + k) & 3);
++                        if (len > n - k) len = n - k;
++                        if (!memcmp( rw + k, src + k, len )) continue;
++                        if (len == 4 && ios_x18_patched_site( *(const uint32_t *)(rw + k), *(const uint32_t *)(src + k),
++                                                              rx + k, tramp, m->x18_tramp_used )) continue;
++                        memcpy( rw + k, src + k, len );
++                    }
++            }
++            ios_jit_repatch_x18( m, r->copy + (from - r->offset) - (char *)m->jit_base, to - from, 2 );
++            ios_remap_flush_bytes += to - from;
++            if (!(ios_remap_flushes++ & 0xff) || ios_remap_flushes <= 8)
++                dprintf( 2, "[remap] %s: flushed %p+%#lx, its copy at %p (flush %lu, %lu bytes in all, "
++                         "x18 trampolines %#lx of %#lx used)\n",
++                         ios_pe_module_name( m->pe_base, m->image_size ), addr, (unsigned long)size,
++                         r->copy + (from - r->offset), ios_remap_flushes, ios_remap_flush_bytes,
++                         (unsigned long)m->x18_tramp_used, (unsigned long)m->x18_tramp_size );
++        }
++    }
++    pthread_mutex_unlock( &ios_section_view_lock );
++}
++
++
+ /***********************************************************************
+  *             NtMapViewOfSection   (NTDLL.@)
+  *             ZwMapViewOfSection   (NTDLL.@)
+@@ -25246,6 +25731,9 @@ NTSTATUS WINAPI NtMapViewOfSection( HANDLE handle, HANDLE process, PVOID *addr_p
+     if (ios_wow64_route_section( handle, process, addr_ptr, size_ptr, zero_bits, commit_size,
+                                   offset_ptr, inherit, alloc_type, protect, FALSE, &window_status ))
+         return window_status;
++    if (process == NtCurrentProcess() &&
++        ios_remap_presented( handle, addr_ptr, commit_size, offset_ptr, size_ptr, alloc_type, protect, &window_status ))
++        return window_status;
+     offset.QuadPart = offset_ptr ? offset_ptr->QuadPart : 0;
+ 
+     TRACE("handle=%p process=%p addr=%p off=%s size=0x%lx alloc_type=0x%x access=0x%x\n",
+@@ -25333,6 +25821,12 @@ NTSTATUS WINAPI NtMapViewOfSectionEx( HANDLE handle, HANDLE process, PVOID *addr
+      * addresses still must not fall through to the native mapper. */
+     if (ios_wow64_route_section( handle, process, addr_ptr, size_ptr, 0, 0, offset_ptr,
+                                   ViewUnmap, alloc_type, protect, TRUE, &status )) return status;
++    {
++        NTSTATUS remap_status;
++        if (process == NtCurrentProcess() && !count &&
++            ios_remap_presented( handle, addr_ptr, 0, offset_ptr, size_ptr, alloc_type, protect, &remap_status ))
++            return remap_status;
++    }
+     offset.QuadPart = offset_ptr ? offset_ptr->QuadPart : 0;
+ 
+     TRACE( "handle=%p process=%p addr=%p off=%s size=0x%lx alloc_type=0x%x access=0x%x\n",
+@@ -25461,6 +25955,7 @@ static NTSTATUS unmap_view_of_section( HANDLE process, PVOID addr, ULONG flags )
+     if (!status)
+     {
+         if (view->protect & SEC_IMAGE) release_builtin_module( view->base );
++        ios_section_view_remove( view->base );   /* Playport (PLA-514) */
+         if (flags & MEM_PRESERVE_PLACEHOLDER) free_pages_preserve_placeholder( view, view->base, view->size );
+         else delete_view( view );
+     }
+@@ -26082,6 +26577,9 @@ NTSTATUS WINAPI NtSetInformationVirtualMemory( HANDLE process,
+  */
+ NTSTATUS WINAPI NtFlushInstructionCache( HANDLE handle, const void *addr, SIZE_T size )
+ {
++#ifdef WINE_IOS
++    if (handle == GetCurrentProcess()) ios_remap_flush( addr, size );   /* Playport (PLA-514) */
++#endif
+ #if defined(__x86_64__) || defined(__i386__)
+     /* no-op */
+ #elif defined(HAVE___CLEAR_CACHE)

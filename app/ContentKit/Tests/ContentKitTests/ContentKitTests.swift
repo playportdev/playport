@@ -35,6 +35,18 @@ final class MemoryChunks: ContentChunkSource, @unchecked Sendable {
     }
 }
 
+/// Chunks whose plan carries no hash: the source knows each one's bytes and checks them itself.
+final class SelfCheckingChunks: ContentChunkSource, @unchecked Sendable {
+    var data: [[UInt8]: [UInt8]] = [:]
+
+    func chunk(_ c: ContentChunk) async throws -> [UInt8] {
+        guard let plain = data[c.key] else { throw ClientError.verificationFailed("chunk") }
+        return plain
+    }
+
+    func matches(_ c: ContentChunk, _ plain: [UInt8]) -> Bool { data[c.key] == plain }
+}
+
 final class SlicedPlanTests: XCTestCase {
     var root: URL!
 
@@ -121,6 +133,43 @@ final class SlicedPlanTests: XCTestCase {
             _ = try await engine(src).run(plan)
             XCTFail("expected a refusal")
         } catch ClientError.verificationFailed {}
+    }
+
+    /// A chunk only its source can check (`check: .none`, as a store whose chunks carry their
+    /// own hashes): a resume asks the source about each journalled whole chunk, so one damaged
+    /// on disk after the interruption is fetched again rather than trusted.
+    func testAResumeAsksTheSourceAboutChunksWithoutAHash() async throws {
+        let c0 = Array("0123456789abcdef".utf8), c1 = Array("ABCDEFGHIJKLMNOP".utf8)
+        let src = SelfCheckingChunks()
+        src.data = [Array("k0".utf8): c0, Array("k1".utf8): c1]
+        let chunks = [ContentChunk(key: Array("k0".utf8), size: 16, compressedSize: 16, check: .none),
+                      ContentChunk(key: Array("k1".utf8), size: 16, compressedSize: 16, check: .none)]
+        let plan = ContentPlan(files: [ContentFile(path: "store.bin", size: 32, hash: .none,
+                                                   parts: [ContentPart(chunk: 0, length: 16, fileOffset: 0),
+                                                           ContentPart(chunk: 1, length: 16, fileOffset: 16)])],
+                               directories: [], chunks: chunks, identity: SHA1.hash(Array("self-checked".utf8)))
+        func run(_ configure: (inout InstallEngine.Options) -> Void = { _ in }) async throws -> InstallEngine.Result {
+            var o = InstallEngine.Options()
+            o.concurrency = 1
+            o.flushEveryChunks = 1
+            configure(&o)
+            var e = InstallEngine(tree: root.appendingPathComponent("tree"), journal: root.appendingPathComponent("j.journal"),
+                                  source: src, log: .silent, options: o)
+            e.freeSpace = { _ in 1 << 40 }
+            return try await e.run(plan)
+        }
+        do {
+            _ = try await run { $0.cancelAfterChunks = 1 }
+            XCTFail("expected a pause")
+        } catch ClientError.cancelled {}
+        let file = root.appendingPathComponent("tree/store.bin")
+        var bytes = [UInt8](try Data(contentsOf: file))
+        bytes[3] ^= 0x01
+        try Data(bytes).write(to: file)
+        let r = try await run()
+        XCTAssertEqual(r.chunksRejected, 1)
+        XCTAssertEqual(r.chunksDownloaded, 2)
+        XCTAssertEqual([UInt8](try Data(contentsOf: file)), c0 + c1)
     }
 
     func testJournalKeysAreTwentyBytes() {
@@ -224,5 +273,37 @@ final class RedactorTests: XCTestCase {
         for (_, secrets) in Self.microsoftForms() {
             for secret in secrets { XCTAssertFalse(out.contains(secret.suffix(16)), "\(secret.prefix(24))… leaked") }
         }
+    }
+
+    /// What World of Warcraft and Battle.net carry for a session (PLA-514), as a log line or a
+    /// command line could show it: the login ticket Battle.net's web login hands back
+    /// (`ST=US-<32 hex>-<digits>`), the launcher login's WEB_TOKEN and game account, the
+    /// client's login ticket, session key, auth and reconnect tokens, realm join and list
+    /// tickets, a single sign-on URL's token, and the account name a login URL or Config.wtf names.
+    func testBattleNetAndWorldOfWarcraftSessionValuesAreScrubbed() {
+        // Made up, and split so that pp secrets does not find them in this file.
+        let ticket = "EU-" + "0123456789abcdef0123456789abcdef" + "-123456789"
+        let lines = [
+            "Wow-ARM64.exe -d3d12 -config Config.wtf ST=\(ticket)",
+            "redirect to http://localhost:0/?ST=\(ticket)",
+            "login ticket \(ticket) accepted",
+            "WEB_TOKEN=WTOK0123456789 GAME_" + "ACCOUNT=WoW1",
+            #"{"login_ticket":"LT0123456789","session_key":"SK0123456789","auth_token":"AT0123456789"}"#,
+            "Param_BnetSessionKey: BSK0123456789 Param_RealmJoinTicket=RJT0123456789 Param_RealmListTicket = RLT0123456789",
+            "reconnect_token=RCT0123456789",
+            "open https://account.battle.net/login/" + "sso?token=SSO0123456789&ref=x",
+            "SET account" + #"Name "player@example.com""#,
+            "SET account" + #"List "!WoW1|WoW2|""#,
+            "https://us.account.battle.net/login/en/?app=bam&account" + "Name=player2@example.com",
+        ]
+        let out = lines.map(Redactor.scrub).joined(separator: "\n")
+        for secret in ["0123456789abcdef0123456789abcdef", "WTOK0123456789", "LT0123456789", "SK0123456789",
+                       "AT0123456789", "BSK0123456789", "RJT0123456789", "RLT0123456789", "RCT0123456789", "SSO0123456789",
+                       "player@example.com", "player2@example.com", "WoW2"] {
+            XCTAssertFalse(out.contains(secret), "\(secret) leaked: \(out)")
+        }
+        // WoW's own switches stay: they say how it started, and name no session.
+        XCTAssertTrue(out.contains("Wow-ARM64.exe -d3d12 -config Config.wtf ST=<redacted>"), out)
+        XCTAssertTrue(out.contains("login ticket <bnet-ticket:redacted> accepted"), out)
     }
 }

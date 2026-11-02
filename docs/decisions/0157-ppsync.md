@@ -13,7 +13,7 @@ When accepted, it supersedes the sync parts of
 [0153](0153-rdr2s-settings-are-every-games-defaults.md): every game's
 `env.MADEIRA_FASTSYNC_SEM=1` (`LaunchSettings.everyGame`) goes, because it has
 no effect any more. The plan
-is [2026-10-21-ppsync](../plans/2026-10-21-ppsync.md).
+is [2026-10-21-ppsync](https://linear.app/playportdev/issue/PLA-659).
 
 ## Decision
 

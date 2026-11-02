@@ -18,15 +18,10 @@ import UIKit
 import XboxClientKit
 
 enum XboxLibrary {
-    /// Keep the dev Xbox chip visible even while the account is signed out.
-    static func addChip(to stores: inout Set<Store>) {
-        stores.insert(.xbox)
-    }
-
-    /// The Xbox chip's empty Library. Its last sentence is verify-ipa.py's release marker.
+    /// The Xbox store's empty Library. Its last sentence is verify-ipa.py's release marker.
     static let emptyText = "Games you own on Xbox and PC Game Pass titles appear here. Xbox is in the dev app only."
 
-    /// What the empty Xbox chip says now: loading, the refresh's failure, or the empty text.
+    /// What the empty Xbox store says now: loading, the refresh's failure, or the empty text.
     @MainActor static var emptyMessage: String {
         let games = XboxGames.shared
         if XboxAccount.shared.state != .signedIn { return "Sign in to Xbox in Settings › Accounts. " + emptyText }

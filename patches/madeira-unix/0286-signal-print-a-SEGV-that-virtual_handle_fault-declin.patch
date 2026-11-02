@@ -1,0 +1,86 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Mon, 2 Nov 2026 00:00:00 +0100
+Subject: [PATCH] signal: print a SEGV that virtual_handle_fault declines on
+ the region dump's schedule
+
+segv_handler printed an ERR line and a [fault-pc] line, symbolised with
+dladdr, for every fault virtual_handle_fault declined. FEX raises a guest
+access violation for code it may not execute (NoExecOp) by reading
+address 0 from one dispatcher pc, and in the first World of Warcraft
+play of the 2026-11-01 session worker threads took that path 159,756
+times: 320,000 lines, 47 MB of the 101 MB log, and a dladdr over the
+host image's symbols each time on the faulting thread.
+
+The two lines now follow the schedule of the region dump beside them
+(ios_storm_gate, no longer static): the first 20, then 1 in 1000, then
+1 in 100,000, with the count on the ERR line. The region dump keeps its
+own gate and the exception is set up as before.
+
+Linear: PLA-610
+Class: diagnostics
+Evidence: .work/hud-diag/s1-host.log (lines 0-749611: 159,756 segv_handler lines at pc=0x13b604650 addr=0x0), .work/scratch/pla610/s3-exc/REPORT.md
+Offered-upstream: no
+---
+ build/ntdll-unix/signal_arm64_ios.c | 30 +++++++++++++++++++----------
+ build/ntdll-unix/virtual_ios.c      |  2 +-
+ 2 files changed, 21 insertions(+), 11 deletions(-)
+
+diff --git a/build/ntdll-unix/signal_arm64_ios.c b/build/ntdll-unix/signal_arm64_ios.c
+index 34885f6..38a15cf 100644
+--- a/build/ntdll-unix/signal_arm64_ios.c
++++ b/build/ntdll-unix/signal_arm64_ios.c
+@@ -11455,20 +11455,30 @@ static void segv_handler( int signal, siginfo_t *siginfo, void *sigcontext )
+         return;
+     }
+ #ifdef WINE_IOS
+-    ERR("setup_exception for SEGV at pc=%p addr=%p (virtual_handle_fault failed)\n",
+-        (void*)PC_sig(context), siginfo->si_addr);
+-    /* Steam S3 (task #29): name the native faulting code + the target
+-     * memory region so the unhandled-write fault is diagnosable. */
++    /* Playport (PLA-610): the ERR and the dladdr symbolisation ran for every
++     * fault virtual_handle_fault declined; FEX's NoExec raise reads address 0
++     * from one dispatcher pc, 160,000 times in one session's first play. They
++     * follow the region dump's schedule (its own gate, unchanged): the first 20,
++     * then 1 in 1000, then 1 in 100000, with the count. */
+     {
++        extern int ios_storm_gate( unsigned long *n );
+         extern void ios_dump_fault_region( void *addr );
++        static unsigned long segv_storm;
+         Dl_info di;
+         uint64_t pcv = (uint64_t)PC_sig(context);
+-        if (dladdr( (void *)(uintptr_t)pcv, &di ) && di.dli_fname)
+-            dprintf( 2, "[fault-pc] pc=%p = %s`%s+0x%llx (img base %p, slide-relative)\n",
+-                     (void *)(uintptr_t)pcv, di.dli_fname,
+-                     di.dli_sname ? di.dli_sname : "?",
+-                     (unsigned long long)(pcv - (uint64_t)(uintptr_t)(di.dli_saddr ? di.dli_saddr : di.dli_fbase)),
+-                     di.dli_fbase );
++        if (ios_storm_gate( &segv_storm ))
++        {
++            ERR("setup_exception for SEGV at pc=%p addr=%p (virtual_handle_fault failed) #%lu\n",
++                (void*)PC_sig(context), siginfo->si_addr, segv_storm);
++            /* Steam S3 (task #29): name the native faulting code + the target
++             * memory region so the unhandled-write fault is diagnosable. */
++            if (dladdr( (void *)(uintptr_t)pcv, &di ) && di.dli_fname)
++                dprintf( 2, "[fault-pc] pc=%p = %s`%s+0x%llx (img base %p, slide-relative)\n",
++                         (void *)(uintptr_t)pcv, di.dli_fname,
++                         di.dli_sname ? di.dli_sname : "?",
++                         (unsigned long long)(pcv - (uint64_t)(uintptr_t)(di.dli_saddr ? di.dli_saddr : di.dli_fbase)),
++                         di.dli_fbase );
++        }
+         ios_dump_fault_region( siginfo->si_addr );
+     }
+ #endif
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index ce87334..64c0a95 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -7231,7 +7231,7 @@ static uint64_t ios_steer_reclaim_dead( void )
+  * Escalating schedule: every one of the first 20, then 1-in-1000, then
+  * 1-in-100000 past 100k. A storm still proves it is a storm and still shows where
+  * it ends, at ~1/1000th the bytes. */
+-static int ios_storm_gate( unsigned long *n )
++int ios_storm_gate( unsigned long *n )
+ {
+     unsigned long c = ++(*n);
+     if (c <= 20) return 1;

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// GOG in the app (docs/plans/finished.md#pc-import-gog-and-epic, Phase 2): the
+// GOG in the app (PLA-80, Phase 2): the
 // sign-in (a WKWebView sheet on GOG's login page; decision 0058), the owned
 // library (cached, listed offline), the art, and the GOG driver of the download
 // queue: install, update and repair through GOGClientKit's GOGInstaller. After an

@@ -28,12 +28,76 @@ void host_pad_set(int slot, const hio_pad_state *st);
 void host_pad_disconnect(int slot);
 int host_pads_release_all(void);
 
+/* The game's XInput requests (hio_pads.c). win32u's ios_gamepad_query calls
+ * playport_gamepad_query for each request after reading the slot
+ * (patches/madeira-unix 0247 and 0273, a weak reference: a runtime without
+ * them never calls it): op 0 is a state request (XInputGetState and
+ * GetStateEx; xinput's SetState, Enable and battery query ask for one too),
+ * op 1 a capability request; connected, packet and buttons are what the slot
+ * answered (0 for an empty slot, which XInput reports as
+ * ERROR_DEVICE_NOT_CONNECTED). The app's own snapshot reads do not come here.
+ * host_pad_state_reads is the state requests' total since the process
+ * started, i.e. this game's (decision 0029): the suggested layout (PlayportKit
+ * LayoutSuggestion) offers Keyboard & mouse to a game on Gamepad that made
+ * none. host_pad_xinput_summary writes the dev log's line about the requests
+ * since the last line it wrote into buf (reads, from which slots, the last
+ * answer, packet changes seen, the buttons seen, capability requests) and
+ * returns its length, or 0 and writes nothing (taking nothing) when the game
+ * made no state request since.
+ * Lock-free; the summary's counters are taken one by one, so a request racing
+ * it lands in this line or the next. */
+void playport_gamepad_query(unsigned int index, unsigned int op, int connected, uint32_t packet,
+                            uint16_t buttons);
+uint64_t host_pad_state_reads(void);
+int host_pad_xinput_summary(char *buf, unsigned int size);
+
+/* The scan code of a posted virtual key (hio_keys.c): 0xE0xx for the keys a
+ * real keyboard sends with the E0 prefix and whose scan code is the same on
+ * every layout (arrows, Insert/Delete/Home/End/PgUp/PgDn, Print Screen, right
+ * Ctrl and Alt, the Windows and menu keys, keypad /), else 0. win32u's
+ * winios_drv_post_key asks it first and marks the key extended
+ * (patches/madeira-unix 0248, a weak reference), falling back to Wine's
+ * MapVirtualKeyEx, which gives the arrows the numpad's scan codes. */
+unsigned int playport_key_scan(unsigned int vk);
+
+/* The guest window Winios activates when the app is back in the foreground, or
+ * when input arrives while no guest window is the foreground (hio_focus.c;
+ * Winios.m + patches/madeira-winios 0010). wins: the desktop's top-level
+ * windows in z-order, topmost first, with their Wine process and their
+ * GWL_STYLE/GWL_EXSTYLE; saved and saved_pid: the window the last focus loss
+ * deactivated and its process (NULL, 0: none). Returns the index of saved if it
+ * can still be activated (visible, enabled, not minimized, not a child, not
+ * WS_EX_NOACTIVATE), else of the topmost such window of saved_pid's process,
+ * else of the topmost such window, else -1. */
+typedef struct {
+    const void *hwnd;
+    unsigned int pid;
+    unsigned int style;
+    unsigned int exstyle;
+} host_focus_window;
+int host_focus_pick(const host_focus_window *wins, int n, const void *saved, unsigned int saved_pid);
+
 /* Winios.m + patches/madeira-winios/0002-Winios-accept-pointer-and-focus-events-posted-by-the.patch.
  * fx, fy: 0..65535 across the foreground window's client area; flags are
  * MOUSEEVENTF_* (ABSOLUTE is implied). active: 0 when the app leaves the
  * foreground, 1 when it is back. Both are queued in order with winios_post_key. */
 void winios_post_client_pointer(int fx, int fy, unsigned int flags, unsigned int data);
 void winios_post_focus(int active);
+/* Winios.m + patches/madeira-winios/0006: winios_post_key with
+ * KEYEVENTF_EXTENDEDKEY, for a key its VK cannot tell from another (keypad
+ * Enter is VK_RETURN with E0; KeyMap.postsExtended). Queued in order with
+ * winios_post_key. */
+void winios_post_key_extended(int vk, int down);
+/* Winios.m + patches/madeira-winios/0008 (and madeira-unix 0251): one UTF-16
+ * code unit typed (the text bar, HostIOKit TextBar), pressed and let go as
+ * KEYEVENTF_UNICODE, which TranslateMessage turns into WM_CHAR for the focused
+ * window. Queued in order with winios_post_key. Nothing logs it, nor a key. */
+void winios_post_char(unsigned int unit);
+/* Winios.m + patches/madeira-winios/0009: how many queued events (keys,
+ * characters, pointer, focus) the drain has not handed to win32u yet; 0 once
+ * all are in the server's queue, in order. The text bar waits for 0 before a
+ * key that follows characters and before a batch the ring could not hold. */
+unsigned int winios_input_pending(void);
 
 /* Winios.m + patches/madeira-winios/0004-Winios-show-a-game-s-GDI-windows-until-its-swap-chai.patch
  * and 0005 (decisions 0075, 0076): the guest's GDI windows (a launcher, a

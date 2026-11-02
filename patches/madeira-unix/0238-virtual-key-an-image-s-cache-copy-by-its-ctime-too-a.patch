@@ -1,0 +1,198 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: playportdev <dev@playport.dev>
+Date: Fri, 30 Oct 2026 21:20:00 +0100
+Subject: [PATCH] virtual: key an image's cache copy by its ctime too, and
+ sample it on use
+
+madeira-unix 0235 named a large x86-64 image's cache copy by the file's
+device, inode, size and mtime and the view size, and checked only the
+copy's size and header on use: an in-place rewrite that kept size, mtime
+and inode would have mapped a stale copy.
+
+The name is now v2-<dev>-<ino>-<size>-<mtime>-<ctime>-<view size>.img.
+No one can set a file's status change time and any write changes it; a
+chmod or a new link only costs a miss. On each use, after the header,
+16 points of the copy (pp_img_cache.h's ppic_samples: spread over the
+bytes the file's runs put in it, 4 KiB each, none a later run overwrote)
+are read from the image file and from the copy and compared, about
+128 KiB of reads a map. A difference deletes the copy, and the image is
+read as before and its copy written again. The writer deletes copies of
+an older name version before it writes. `[img-cache]` lines give the
+sampled count with each use and the rva of a difference.
+
+Linear: PLA-476
+Class: feature
+Evidence: docs/decisions/0167-large-x86-64-images-map-from-a-cache-copy.md
+Offered-upstream: no
+---
+ build/ntdll-unix/pp_img_cache.h | 58 ++++++++++++++++++++++++++++++---
+ build/ntdll-unix/virtual_ios.c  | 51 ++++++++++++++++++++++-------
+ 2 files changed, 94 insertions(+), 15 deletions(-)
+
+diff --git a/build/ntdll-unix/pp_img_cache.h b/build/ntdll-unix/pp_img_cache.h
+index 06d4aaf..d1241ad 100644
+--- a/build/ntdll-unix/pp_img_cache.h
++++ b/build/ntdll-unix/pp_img_cache.h
+@@ -53,13 +53,63 @@ static inline int ppic_eligible( int x64, uint64_t total_size, uint32_t section_
+     return 1;
+ }
+ 
+-/* The copy's file name for an image file's identity and its view size. */
++/* The copy's file name for an image file's identity and its view size. The
++ * status change time is in it because no one can set it: any write changes it
++ * (a chmod or a new link only costs a miss). A name of another version is an
++ * older copy (ppic_current). */
++#define PPIC_VERSION "v2-"
+ static inline int ppic_name( char *out, size_t size, uint64_t dev, uint64_t ino, uint64_t file_size,
+-                             int64_t mtime_s, long mtime_ns, uint64_t total_size )
++                             int64_t mtime_s, long mtime_ns, int64_t ctime_s, long ctime_ns, uint64_t total_size )
+ {
+-    return snprintf( out, size, "v1-%llx-%llx-%llx-%lld.%09ld-%llx.img", (unsigned long long)dev,
++    return snprintf( out, size, PPIC_VERSION "%llx-%llx-%llx-%lld.%09ld-%lld.%09ld-%llx.img", (unsigned long long)dev,
+                      (unsigned long long)ino, (unsigned long long)file_size, (long long)mtime_s, mtime_ns,
+-                     (unsigned long long)total_size );
++                     (long long)ctime_s, ctime_ns, (unsigned long long)total_size );
++}
++
++/* Whether a copy's file name is of this version. */
++static inline int ppic_current( const char *name )
++{
++    size_t i;
++    for (i = 0; PPIC_VERSION[i]; i++) if (name[i] != PPIC_VERSION[i]) return 0;
++    return 1;
++}
++
++/* The sampled content check on each use: up to k (at most PPIC_SAMPLES)
++ * points of the copy, each compared with the image file. They are spread
++ * evenly over the bytes the file's runs put in the copy, start on a
++ * PPIC_SAMPLE_SIZE boundary of their run, stay inside it, and are dropped
++ * where a later run overwrote the bytes. out[i] is { rva in the copy, offset
++ * in the file, length }; returns how many. */
++#define PPIC_SAMPLES 16
++#define PPIC_SAMPLE_SIZE 4096ull
++static inline unsigned ppic_samples( const struct ppic_run *runs, unsigned n, unsigned k, struct ppic_run *out )
++{
++    uint64_t total = 0;
++    unsigned i, j, l, m = 0;
++
++    if (k > PPIC_SAMPLES) k = PPIC_SAMPLES;
++    for (i = 0; i < n; i++) if (!runs[i].zero) total += runs[i].len;
++    if (!total || !k) return 0;
++    for (j = 0; j < k; j++)
++    {
++        uint64_t t = total / k * j + total / (2 * k), at, len;
++        int overwritten = 0;
++
++        for (i = 0; i < n; i++)
++        {
++            if (runs[i].zero) continue;
++            if (t < runs[i].len) break;
++            t -= runs[i].len;
++        }
++        if (i == n) continue;
++        at = t & ~(PPIC_SAMPLE_SIZE - 1);
++        len = runs[i].len - at < PPIC_SAMPLE_SIZE ? runs[i].len - at : PPIC_SAMPLE_SIZE;
++        for (l = i + 1; l < n; l++)
++            if (runs[l].rva < runs[i].rva + at + len && runs[i].rva + at < runs[l].rva + runs[l].len) overwritten = 1;
++        if (overwritten || (m && out[m - 1].rva == runs[i].rva + at)) continue;
++        out[m++] = (struct ppic_run){ runs[i].rva + at, runs[i].off + at, len, 0 };
++    }
++    return m;
+ }
+ 
+ /* The copy's size: the view rounded up to the host page, so every mapped host
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index c06be26..1fc12e6 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -14952,9 +14952,11 @@ done:
+  * not 16 KiB-aligned in its file is mapped whole from a re-laid-out copy in
+  * PLAYPORT_IMAGE_CACHE_DIR (the app's Library/Caches/images), so its clean
+  * pages stay the file's: shared, and outside the footprint (pp_img_cache.h).
+- * The copy is named by the image file's identity (device, inode, size, mtime)
+- * and the view size, and is used only when its size is right and its first
+- * SizeOfHeaders bytes equal the header map_pe_header just put in the view. An
++ * The copy is named by the image file's identity (device, inode, size, mtime,
++ * ctime) and the view size, and is used only when its size is right, its first
++ * SizeOfHeaders bytes equal the header map_pe_header just put in the view and
++ * 16 sampled 4 KiB points equal the file (ppic_samples); otherwise it is
++ * deleted, and so is a copy of an older name version. An
+  * image without one is read as before, and a background thread writes the copy
+  * for the next load: it lays the file out by ppic_layout in 1 MiB blocks,
+  * reads each block back to compare it, then renames it into place. Copies take
+@@ -15029,6 +15031,12 @@ static BOOL ios_img_cache_make_room( const char *dir, uint64_t need, char *why,
+             unlink( path );
+             continue;
+         }
++        if (!strcmp( de->d_name + len - 4, ".img" ) && !ppic_current( de->d_name ))   /* an older version's */
++        {
++            unlink( path );
++            dprintf( 2, "[img-cache] deleted %s (an older version's copy)\n", de->d_name );
++            continue;
++        }
+         if (strcmp( de->d_name + len - 4, ".img" ) || n == IOS_IMG_CACHE_ENTRIES || stat( path, &st )) continue;
+         e[n].size = (uint64_t)st.st_size;
+         e[n].used = (int64_t)st.st_mtime;
+@@ -15263,33 +15271,54 @@ static BOOL ios_img_cache_map( struct file_view *view, const UNICODE_STRING *nt_
+     if ((nruns = ppic_layout( s, n, (uint64_t)st->st_size, view->size, header_size, header_map_size, align_mask,
+                               host_page_mask, runs, IOS_IMG_CACHE_RUNS )) < 0)
+         return FALSE;
+-    ppic_name( name, sizeof(name), (uint64_t)st->st_dev, (uint64_t)st->st_ino, (uint64_t)st->st_size,
+-               (int64_t)st->st_mtimespec.tv_sec, st->st_mtimespec.tv_nsec, view->size );
++    if ((unsigned)ppic_name( name, sizeof(name), (uint64_t)st->st_dev, (uint64_t)st->st_ino, (uint64_t)st->st_size,
++                             (int64_t)st->st_mtimespec.tv_sec, st->st_mtimespec.tv_nsec,
++                             (int64_t)st->st_ctimespec.tv_sec, st->st_ctimespec.tv_nsec, view->size ) >= sizeof(name))
++        return FALSE;
+     snprintf( path, sizeof(path), "%s/%s", dir, name );
+ 
+     if ((cfd = open( path, O_RDONLY | O_CLOEXEC )) >= 0)
+     {
+-        ok = !fstat( cfd, &cst ) && (uint64_t)cst.st_size == file_size && (head = malloc( header_size ));
++        struct ppic_run samples[PPIC_SAMPLES];
++        unsigned nsamples = ppic_samples( runs, nruns, PPIC_SAMPLES, samples ), k;
++        int sampled = 0;
++        uint64_t differs_at = 0;
++
++        ok = !fstat( cfd, &cst ) && (uint64_t)cst.st_size == file_size &&
++             (head = malloc( header_size > 2 * PPIC_SAMPLE_SIZE ? header_size : 2 * PPIC_SAMPLE_SIZE ));
+         if (ok)
+-        {
+             ok = pread( cfd, head, header_size, 0 ) == (ssize_t)header_size && !memcmp( head, view->base, header_size );
+-            free( head );
++        /* the sampled content check: an in-place rewrite that kept the file's identity */
++        for (k = 0; ok && k < nsamples; k++)
++        {
++            ssize_t got = pread( fd, head, samples[k].len, samples[k].off );
++            ok = got >= 0 && (!got || (pread( cfd, head + PPIC_SAMPLE_SIZE, got, samples[k].rva ) == got &&
++                                        !memcmp( head, head + PPIC_SAMPLE_SIZE, got )));
++            if (!ok)
++            {
++                sampled = 1;
++                differs_at = samples[k].rva;
++            }
+         }
++        free( head );
+         if (ok && map_file_into_view( view, cfd, 0, view->size, 0, VPROT_COMMITTED | VPROT_READ | VPROT_WRITECOPY,
+                                       FALSE ) == STATUS_SUCCESS)
+         {
+             futimens( cfd, NULL );   /* last used: the eviction's order */
+             close( cfd );
+             if (__atomic_fetch_add( &ios_img_cache_said, 1, __ATOMIC_RELAXED ) < 64)
+-                dprintf( 2, "[img-cache] mapped %s at %p from its copy %s (%llu MiB)\n", label, view->base, name,
+-                         (unsigned long long)(file_size >> 20) );
++                dprintf( 2, "[img-cache] mapped %s at %p from its copy %s (%llu MiB; %u sampled points equal the file)\n",
++                         label, view->base, name, (unsigned long long)(file_size >> 20), nsamples );
+             return TRUE;
+         }
+         close( cfd );
+         if (!ok)
+         {
+             unlink( path );
+-            dprintf( 2, "[img-cache] %s: copy %s did not match (size or header); deleted\n", label, name );
++            if (sampled)
++                dprintf( 2, "[img-cache] %s: copy %s differs from the file at rva 0x%llx (sampled check); "
++                            "deleted, read as before\n", label, name, (unsigned long long)differs_at );
++            else dprintf( 2, "[img-cache] %s: copy %s did not match (size or header); deleted\n", label, name );
+         }
+         else
+         {

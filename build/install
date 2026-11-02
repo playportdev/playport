@@ -306,6 +306,11 @@ say "installing (about 300 MB; keep the phone awake and unlocked)"
 start=$(date +%s)
 if ! timeout 1800 env USBMUXD_SOCKET_ADDRESS="$SOCK" pymobiledevice3 apps install "$IPA" \
         > "$LOG/install.out" 2> "$LOG/install.err"; then
+    # installd refused the IPA (a signature or profile it does not accept): the app on the
+    # phone is the old one, and its profile may be the same, so the checks below cannot tell.
+    if grep -q 'AppInstallError' "$LOG/install.err"; then
+        die "installd refused the IPA: $(tr -s ' \n' ' ' < "$LOG/install.err" | grep -oE 'AppInstallError: .*' | cut -c1-400)"
+    fi
     # installd may still finish after a timeout that fired after the upload.
     say "the install command failed or timed out ($LOG/install.err); checking whether installd finished"
     sleep 60

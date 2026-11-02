@@ -1267,32 +1267,33 @@ final class LibraryListTests: XCTestCase {
         XCTAssertEqual(LibrarySource.local.label, "Local")
     }
 
-    func testChipsFilter() {
-        func ids(_ f: LibraryFilter, downloading: Set<StoreGameKey> = []) -> [String] {
-            LibraryList.shown(entries, filter: f, sort: .name, downloading: downloading).map(\.id)
+    func testStoreColumnAndInstalledOnly() {
+        func ids(_ f: LibraryFilter, installedOnly: Bool = false, downloading: Set<StoreGameKey> = []) -> [String] {
+            LibraryList.shown(entries, filter: f, installedOnly: installedOnly, sort: .name, downloading: downloading).map(\.id)
         }
-        XCTAssertEqual(ids(.installed), ["app-367520", "dir-my game"])
-        XCTAssertEqual(ids(.installed, downloading: [.steam(588650)]), ["app-588650", "app-367520", "dir-my game"],
+        XCTAssertEqual(ids(.all, installedOnly: true), ["app-367520", "dir-my game"])
+        XCTAssertEqual(ids(.all, installedOnly: true, downloading: [.steam(588650)]), ["app-588650", "app-367520", "dir-my game"],
                        "a download counts as installed")
         XCTAssertEqual(ids(.steam), ["app-504230", "app-588650", "app-367520"])
+        XCTAssertEqual(ids(.steam, installedOnly: true), ["app-367520"], "Installed only narrows a store too")
         XCTAssertEqual(ids(.all), ["app-504230", "app-588650", "app-367520", "dir-my game"])
-        let shown = LibraryFilter.shown(stores: [])
-        XCTAssertEqual(shown, [.all, .installed, .steam])
-        XCTAssertEqual(shown.map(\.label), ["All", "Installed", "Steam"])
-        XCTAssertEqual(LibraryFilter.all.next(in: shown), .installed)
-        XCTAssertEqual(LibraryFilter.installed.next(in: shown), .steam)
-        XCTAssertEqual(LibraryFilter.steam.next(in: shown), .all)
-        XCTAssertEqual(LibraryFilter.shown(stores: [.gog]), [.all, .installed, .steam, .gog])
-        XCTAssertEqual(LibraryFilter.shown(stores: [.epic, .gog]).map(\.label), ["All", "Installed", "Steam", "GOG", "Epic Games"])
-        XCTAssertEqual(LibraryFilter.gog.next(in: shown), .all, "a chip no longer shown starts the row again")
+        let release = LibraryFilter.column(xbox: false)
+        XCTAssertEqual(release, [.all, .steam, .gog, .epic, .battlenet], "every store, always")
+        XCTAssertEqual(LibraryFilter.all.step(1, in: release), .steam)
+        XCTAssertEqual(LibraryFilter.battlenet.step(1, in: release), .all, "RT past the last wraps round")
+        XCTAssertEqual(LibraryFilter.all.step(-1, in: release), .battlenet, "LT before the first wraps round")
     }
 
-    /// Xbox's chip comes after Epic's, when the app names the store; its filter shows Xbox copies only
-    /// (decision 0166), and an empty Xbox library is an empty filter, not an error.
-    func testTheXboxChipShowsItsOwnCopiesOnly() {
-        XCTAssertEqual(LibraryFilter.shown(stores: [.xbox]), [.all, .installed, .steam, .xbox])
-        XCTAssertEqual(LibraryFilter.shown(stores: [.xbox, .epic, .gog]).map(\.label),
-                       ["All", "Installed", "Steam", "GOG", "Epic Games", "Xbox"])
+    /// Xbox's button ends the dev app's store column, after Battle.net's, and is not in the release
+    /// app's; its store shows Xbox copies only (decision 0166), and an empty Xbox library is an
+    /// empty store, not an error.
+    func testTheXboxStoreShowsItsOwnCopiesOnly() {
+        let dev = LibraryFilter.column(xbox: true)
+        XCTAssertEqual(dev.map(\.label), ["All games", "Steam", "GOG", "Epic Games", "Battle.net", "Xbox"])
+        XCTAssertFalse(LibraryFilter.column(xbox: false).contains(.xbox))
+        XCTAssertEqual(LibraryFilter.battlenet.step(1, in: dev), .xbox)
+        XCTAssertEqual(LibraryFilter.xbox.step(1, in: dev), .all, "RT past Xbox wraps round")
+        XCTAssertEqual(LibraryFilter.all.step(-1, in: dev), .xbox)
         XCTAssertEqual(LibraryFilter.xbox.store, .xbox)
         XCTAssertEqual(LibraryFilter(rawValue: "xbox"), .xbox)
         XCTAssertEqual(LibraryList.shown(entries, filter: .xbox, sort: .name), [], "no Xbox copy yet: an empty Xbox library")
@@ -1302,7 +1303,6 @@ final class LibraryListTests: XCTestCase {
         XCTAssertEqual(LibraryList.shown(e, filter: .steam, sort: .name).map(\.id), ["app-504230", "app-588650", "app-367520"])
         XCTAssertEqual(LibraryList.duplicateSourceIDs(e), ["app-367520", "xbox-9MW9469V91LM"],
                        "the Steam and Xbox Hollow Knight are two copies")
-        XCTAssertEqual(LibraryFilter.xbox.next(in: LibraryFilter.shown(stores: [.xbox])), .all)
     }
 
     /// PLA-492: Hollow Knight installed from Steam and on the account's PC Game Pass (its
@@ -1352,24 +1352,22 @@ final class LibraryListTests: XCTestCase {
         XCTAssertEqual(copies.map(\.source), [.steam, .local])
         XCTAssertFalse(copies[0].installed, "the local copy does not mark the Steam copy installed")
         XCTAssertFalse(copies[1].owned, "the local copy does not inherit Steam ownership")
-        XCTAssertEqual(LibraryList.shown(e, filter: .installed, sort: .name).map(\.id), ["dir-celeste"])
+        XCTAssertEqual(LibraryList.shown(e, filter: .all, installedOnly: true, sort: .name).map(\.id), ["dir-celeste"])
         XCTAssertEqual(LibraryList.shown(e, filter: .steam, sort: .name, search: "Celeste").map(\.id), ["app-504230"])
     }
 
-    func testSourceBadgesOnlyForDuplicatesInMixedSourceFilters() {
+    func testSourceBadgesOnlyForDuplicatesInAll() {
         let e = LibraryList.entries(titles: [title("Celeste", app: nil)], owned: owned)
         let duplicates = LibraryList.duplicateSourceIDs(e)
         XCTAssertEqual(duplicates, ["app-504230", "dir-celeste"])
         for entry in e {
             XCTAssertEqual(LibraryList.showsSourceBadge(entry, filter: .all, duplicateIDs: duplicates),
                            duplicates.contains(entry.id))
-            XCTAssertEqual(LibraryList.showsSourceBadge(entry, filter: .installed, duplicateIDs: duplicates),
-                           duplicates.contains(entry.id))
             XCTAssertFalse(LibraryList.showsSourceBadge(entry, filter: .steam, duplicateIDs: duplicates))
         }
-        let installed = LibraryList.shown(e, filter: .installed, sort: .name)
+        let installed = LibraryList.shown(e, filter: .all, installedOnly: true, sort: .name)
         XCTAssertEqual(installed.map(\.id), ["dir-celeste"])
-        XCTAssertTrue(LibraryList.showsSourceBadge(installed[0], filter: .installed, duplicateIDs: duplicates),
+        XCTAssertTrue(LibraryList.showsSourceBadge(installed[0], filter: .all, duplicateIDs: duplicates),
                       "the other copy need not be visible or installed")
         XCTAssertEqual(LibraryList.duplicateSourceIDs(entries), [], "an installed/owned Steam merge is not a duplicate")
     }
@@ -1919,8 +1917,17 @@ final class LaunchProgressTests: XCTestCase {
         XCTAssertEqual(LaunchProgress.status(.prerequisites, part: LaunchPart(index: 1, count: 2), elapsed: 42.7),
                        "Installing dependencies (1 of 2)… 42 s")
         XCTAssertEqual(LaunchProgress.status(.runtime), "Starting Windows…")
-        XCTAssertEqual(LaunchProgress.status(.game, elapsed: 60), "Starting the game…")
+        XCTAssertEqual(LaunchProgress.status(.game, elapsed: 29.9), "Starting the game…")
+        XCTAssertEqual(LaunchProgress.status(.drawing, elapsed: 60), "Starting the game…")
         XCTAssertEqual(LaunchProgress.stepName(.prerequisites), "Dependencies")
+    }
+
+    /// A game's start that runs long shows its seconds, so a launch screen held for a slow first
+    /// frame (World of Warcraft's x64 client: about 250 s on the phone) is seen to be alive.
+    func testTheGameStepShowsItsSecondsOnceLong() {
+        XCTAssertEqual(LaunchProgress.status(.game, elapsed: 30), "Starting the game… 30 s")
+        XCTAssertEqual(LaunchProgress.status(.game, elapsed: 251.6), "Starting the game… 251 s")
+        XCTAssertEqual(LaunchProgress.uncoverWithoutFrame, 30)
     }
 
     func testTheRestartAfterDependenciesSaysTheyAreDone() {
@@ -2203,8 +2210,10 @@ final class QuickMenuTests: XCTestCase {
         XCTAssertEqual(m.ring, .quit)
         m.move(down: false)
         XCTAssertEqual(m.ring, .controller)
-        XCTAssertEqual(QuickMenu.steps(from: .resume, to: .quit), [true, true, true, true, true])
-        XCTAssertEqual(QuickMenu.steps(from: .overlay, to: .resume), [false, false, false])
+        XCTAssertEqual(QuickMenu.steps(from: .resume, to: .quit), [true, true, true, true, true, true, true])
+        XCTAssertEqual(QuickMenu.steps(from: .overlay, to: .resume), [false, false, false, false, false])
+        XCTAssertEqual(QuickMenu.steps(from: .controls, to: .keyboard), [true])
+        XCTAssertEqual(QuickMenu.steps(from: .keyboard, to: .text), [true])
         XCTAssertEqual(QuickMenu.steps(from: .quit, to: .quit), [])
     }
 
@@ -2214,8 +2223,15 @@ final class QuickMenuTests: XCTestCase {
         XCTAssertEqual(QuickMenu.controller(name: "Xbox", battery: 80), "Xbox · 80%")
         XCTAssertEqual(QuickMenu.controller(name: "DualSense", battery: nil), "DualSense")
         XCTAssertEqual(QuickMenu.controller(name: nil, battery: nil), "None")
+        // The dev build's scripted pad is no GameController pad: no name of its own (touch controls 3c).
+        XCTAssertEqual(QuickMenu.controller(name: nil, battery: nil, scriptedPad: true), "Scripted pad")
+        XCTAssertEqual(QuickMenu.controller(name: "DualSense", battery: 70, scriptedPad: true), "DualSense · 70%")
         XCTAssertEqual(QuickMenuItem.allCases.map(\.title),
-                       ["Resume", "Controls", "Screenshot", "Performance overlay", "Controller", "Quit game"])
+                       ["Resume", "Controls", "Touch keyboard", "Type text", "Screenshot", "Performance overlay", "Controller",
+                        "Quit game"])
+        // The driver's menu:ROW names (tools/ui.py ACTION_RE).
+        XCTAssertEqual(QuickMenuItem.allCases.map(\.rawValue),
+                       ["resume", "controls", "keyboard", "text", "screenshot", "overlay", "controller", "quit"])
     }
 
     func testTheControlsPanelTakesTheRingAndGivesItBack() {
@@ -2225,7 +2241,7 @@ final class QuickMenuTests: XCTestCase {
         XCTAssertNil(m.panel)
         m.openPanel()
         XCTAssertEqual(m.panel, .layout)
-        let noPad = QuickMenuControlsRow.shown(controller: false)
+        let noPad = QuickMenuControlsRow.shown(controller: false, state: Self.gamepad)
         m.move(down: true, rows: noPad)
         XCTAssertEqual(m.panel, .dpad)
         m.move(down: true, rows: noPad)
@@ -2242,7 +2258,7 @@ final class QuickMenuTests: XCTestCase {
         m.closePanel()
         XCTAssertNil(m.panel)
         m.move(down: true)
-        XCTAssertEqual(m.ring, .screenshot)
+        XCTAssertEqual(m.ring, .keyboard)
         m.openPanel(.opacity)
         XCTAssertEqual(m.ring, .controls)
         m.ring(.quit)                        // a tap on another row closes the panel
@@ -2250,19 +2266,39 @@ final class QuickMenuTests: XCTestCase {
     }
 
     func testTheControllerRowShowsOnlyWithAController() {
-        XCTAssertFalse(QuickMenuControlsRow.shown(controller: false).contains(.controllerMap))
-        XCTAssertEqual(QuickMenuControlsRow.shown(controller: true).last, .controllerMap)
+        XCTAssertFalse(QuickMenuControlsRow.shown(controller: false, state: Self.gamepad).contains(.controllerMap))
+        XCTAssertEqual(QuickMenuControlsRow.shown(controller: true, state: Self.gamepad).last, .controllerMap)
         XCTAssertEqual(QuickMenuControlsRow.controllerMap.title, "Controller")
         var m = QuickMenu()
         m.openPanel(.gyroSensitivity)
-        m.move(down: true, rows: QuickMenuControlsRow.shown(controller: true))
+        m.move(down: true, rows: QuickMenuControlsRow.shown(controller: true, state: Self.gamepad))
         XCTAssertEqual(m.panel, .controllerMap)
-        m.move(down: true, rows: QuickMenuControlsRow.shown(controller: true))
+        m.move(down: true, rows: QuickMenuControlsRow.shown(controller: true, state: Self.gamepad))
         XCTAssertEqual(m.panel, .controllerMap)
         // The controller goes: the ring comes back to the last row shown.
-        m.move(down: false, rows: QuickMenuControlsRow.shown(controller: false))
+        m.move(down: false, rows: QuickMenuControlsRow.shown(controller: false, state: Self.gamepad))
         XCTAssertEqual(m.panel, .gyroSensitivity)
         XCTAssertEqual(ControllerMap.Mode.allCases.map(\.shortTitle), ["Pad", "Keys & mouse", "Custom"])
+    }
+
+    static let gamepad = ControlsState(layout: .gamepad, visible: true, opacity: 0.6)
+
+    /// The D-pad and Right stick rows place the Gamepad preset's: shown only for Gamepad with no
+    /// copy of the game's own (a copy has its own d-pad and sticks, the other layouts none).
+    func testTheDpadAndRightStickRowsShowOnlyForThePlainGamepadLayout() {
+        XCTAssertTrue(Self.gamepad.hasGamepadOptions)
+        XCTAssertEqual(QuickMenuControlsRow.shown(controller: false, state: Self.gamepad),
+                       [.layout, .dpad, .rightStick, .opacity, .gyro, .gyroSensitivity])
+        let hidden = ControlsState(layout: .gamepad, visible: false, opacity: 0.6, padConnected: false)
+        XCTAssertTrue(QuickMenuControlsRow.shown(controller: true, state: hidden).contains(.dpad))
+        for state in [ControlsState(layout: .keyboardMouse, visible: true, opacity: 0.6),
+                      ControlsState(layout: .pointClick, visible: true, opacity: 0.6),
+                      ControlsState(layout: .off, visible: false, opacity: 0.6),
+                      ControlsState(layout: .gamepad, visible: true, opacity: 0.6, edited: .gamepad(dpad: .on))] {
+            XCTAssertFalse(state.hasGamepadOptions, "\(state.layout)")
+            XCTAssertEqual(QuickMenuControlsRow.shown(controller: true, state: state),
+                           [.layout, .opacity, .gyro, .gyroSensitivity, .controllerMap], "\(state.layout)")
+        }
     }
 }
 

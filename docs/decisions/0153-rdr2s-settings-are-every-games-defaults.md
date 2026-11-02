@@ -95,3 +95,32 @@ Hollow Knight and RDR2, the only titles installed on the phone, on dev IPAs 55b6
     silent revert.
 - **The release app now holds the donor pool's helper memory path,** which had no release play before.
 - **`PLAYPORT_SC_BLOCK_CRASHPAD` was not measured alone** (x3, x5, x6 only).
+
+## Amendment 2026-10-30: RDR2's video memory
+
+**Approved by the owner, 2026-10-30 (PLA-476).** everyGame's `env.PLAYPORT_VK_HEAP_MB=3072` stays
+every game's default, but RDR2's own entry now overrides it with `vram-mb=2304
+env.PLAYPORT_VK_HEAP_MB=2304`
+([0142's amendment](0142-rdr2-owner-test-defaults-heap-size-semaphores-and-afp.md#amendment-2026-10-30-rdr2-is-told-2304-mib-of-video-memory)).
+This is a per-title value against this record's "as little per-game settings as possible": a smaller
+video figure trades texture streaming for memory, which is RDR2's need, not a setting that makes
+games work.
+
+## Amendment 2026-10-30: Social Club's helper sees little available memory
+
+**Approved by the owner, 2026-10-30 (PLA-476).** everyGame's runtime keys add
+`avail-phys-cef-mb=300` ([0168](0168-social-clubs-helper-is-told-little-available-memory.md)): only
+a `SocialClubHelper.exe` process is told 300 MB of available memory, so its Chromium purges; every
+other process keeps the phone's figure.
+
+## Amendment 2026-10-30: no end of the game's Social Club under the layout
+
+**Approved by the owner, 2026-10-30 (PLA-476; [0169](0169-social-club-on-rockstars-cef-in-the-stock-cef-layout.md)).** The end of a game's own Social Club and the refusal
+of its restarts stay on in both builds when never set, except under the stock-CEF Social Club layout: there
+the end is off when never set, a dev build's stored switch still turns it on, and a release build ignores
+the switch. The refusal and 0155's re-sign-in watch go with the end (`GameSocialClubEndPolicy`).
+
+Built 2026-10-31 (the plan's chunk 4, `d1aff807`, `1424a0ac`, PLA-602): single-process is on by default in both
+builds, and every Play of Rockstar's launcher runs the layout (`PublisherLauncher.rockstar`'s runtime key, not
+every game's), so "Not taken: `PLAYPORT_SC_SINGLE`" above no longer holds for RDR2; a dev build's `=0` key turns
+either off.

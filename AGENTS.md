@@ -21,14 +21,15 @@ below.
 
 ## Rules
 
-- **Linear tracks everything.** Team PLA is the source of truth for planned work, bugs,
-  follow-ups and release handoffs. Any plan — including drafts under `.work/plans/` — gets
-  a Linear issue when written, before commit or execution: search first, reuse an issue
-  covering its scope, or create one. Link it in the plan under `**Linear:**` and put the
-  plan's repository path in the issue. Keep progress, blockers, evidence and completion in
-  sync; split follow-ups into linked issues, not prose. Delete a plan only once its outcome
-  is in decisions/evidence and `docs/plans/finished.md`, with leftover work in open issues.
-  [Plans](docs/plans/README.md) indexes documents; it is not a backlog.
+- **Linear holds all planned work; the repository holds no plans.** Team PLA is the source of
+  truth for planned work, bugs, follow-ups and release handoffs. A feature or larger change is
+  designed with the `grill-with-docs` skill (its decisions become `docs/decisions/` records and
+  `GLOSSARY.md` terms), written up with `to-spec` as a `Spec: …` issue (project Plans, label
+  `ready-for-agent`), broken into ticket sub-issues with blocking edges by `to-tickets`, and
+  built with `implement-spec`. Search before creating; reuse an issue covering the scope. Keep
+  progress, blockers, evidence and completion in the issues; split follow-ups into linked
+  issues, not prose. No plan, roadmap or task list goes into a committed file; private
+  research notes stay under `.work/`, and a repository file cites work by its `PLA-n`.
   The Linear MCP server declares `mcp__linear__get_issue` (pass `fields`, `includeRelations`),
   `mcp__linear__list_issues` and `mcp__linear__save_comment` directly; everything else is
   deferred, so `tool_search` its exact name instead of guessing — `mcp__linear__save_issue`
@@ -182,7 +183,8 @@ or outlive/kill unrelated jobs.
   Compatibility; one issue per title, `Name (Steam appID)`, with **Status:** Works,
   Playable with issues or Broken and **Best known:**, the IPA and the run directory). Search
   first and update the existing issue, then its status in `site/compatibility/games.json`
-  (playport.dev/compatibility). A failure outside your task is filed there, not fixed in
+  (playport.dev/compatibility; it shows Works and Playable with issues as `runs`, Broken as
+  `broken`). A failure outside your task is filed there, not fixed in
   passing; a subagent lists its games for the supervisor to file.
 - When a question is quicker to answer on this workstation than on the phone (what a game waits
   for, Playport or the game, its network, a file's format, a binary), answer it under desktop
@@ -194,7 +196,7 @@ or outlive/kill unrelated jobs.
 ## Reference
 
 This file is the current working contract; command help and reference docs describe current
-behavior. [Plans](docs/plans/README.md) are proposals/work in progress, not accepted policy.
+behavior. Specs and tickets in Linear are proposals/work in progress, not accepted policy.
 Check a [decision's](docs/decisions/README.md) status and later amendments: proposed records are
 not accepted, and superseded rules are historical. [Dated evidence](docs/evidence/) records what
 a particular build/run showed, not an evergreen command recipe.

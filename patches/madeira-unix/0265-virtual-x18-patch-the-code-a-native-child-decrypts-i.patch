@@ -1,0 +1,326 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 1 Nov 2026 03:10:57 +0100
+Subject: [PATCH] virtual: x18-patch the code a native child decrypts in place
+ at once
+
+World of Warcraft's ARM64 client decrypts all of its .text in place at
+once, with no flush on the way, and then calls FlushInstructionCache on
+each of its image's three views. Of a flushed range the x18 patcher
+took as code only what its first word reaches (0264), which for the
+whole image is nothing: the decrypted code kept its `cmp x18, #imm`
+guards, and with x18 zeroed by iOS the client spun in one of them
+(+0x33a450, a `b.lo` back to its loop) inside a TLS callback.
+
+A cipher 2 run now also gets a code hint: the function starts the
+image's .pdata lists, and the 1 KB windows of .text in which a quarter
+of the words differ from the backing store of the remap the copy took
+them from. What those function starts reach, following BL calls too,
+is code, without leaving the rewritten windows: a window still
+encrypted, or patched at load and unchanged, is left as it is. The walk
+queues a word once, on a stack that grows as needed instead of one word
+of stack a word of text.
+
+Linear: PLA-514
+Class: ios-port
+Evidence: docs/evidence/2026-10-31-wow-arm64-start.md, tools/tests/test_x18_encrypted.py
+Offered-upstream: no
+---
+ build/ntdll-unix/virtual_ios.c | 228 ++++++++++++++++++++++++++-------
+ 1 file changed, 179 insertions(+), 49 deletions(-)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index bde0a88..96ed95f 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -5383,68 +5383,129 @@ static int ios_x18_mark_x64_ranges( const char *text, size_t text_size, size_t t
+     return sites;
+ }
+ 
++/* Playport (PLA-514): what a cipher 2 run (ios_x18_reachable_map) also knows to be code.
++ * World of Warcraft's ARM64 client decrypts all of its .text in place at once, without a
++ * flush on the way, and then flushes its whole image: reachable from the range's first
++ * word is then almost none of it. Its .pdata lists every function it decrypted, so the
++ * function starts there and what their BL calls reach are code too, inside the 1 KB
++ * windows of .text (from window_rva) the program rewrote since the copy took its bytes.
++ * A window it has not rewritten is left: it is still encrypted, or was patched before.
++ * ios_jit_repatch_x18 sets it for one run under ios_section_view_lock. */
++struct ios_x18_code_hint
++{
++    const uint32_t      *pdata;        /* RUNTIME_FUNCTION entries: BeginAddress, UnwindData */
++    size_t               pdata_count;
++    const unsigned char *rewritten;    /* a bit a window */
++    size_t               window_rva;
++    size_t               windows;
++};
++static const struct ios_x18_code_hint *ios_x18_code_hint;
++
++/* Queue word w of a reachable walk unless it was queued before. 0: out of memory. */
++static int ios_x18_walk_push( uint32_t **stack, size_t *top, size_t *cap, unsigned char *queued, size_t w )
++{
++    if (queued[w >> 3] & (1 << (w & 7))) return 1;
++    if (*top == *cap)
++    {
++        uint32_t *more = realloc( *stack, *cap * 2 * sizeof(**stack) );
++        if (!more) return 0;
++        *stack = more;
++        *cap *= 2;
++    }
++    queued[w >> 3] |= 1 << (w & 7);
++    (*stack)[(*top)++] = (uint32_t)w;
++    return 1;
++}
++
+ /* Playport (PLA-514): the data map of code a program decrypted at run time and flushed:
+  * every word is data but those reachable from the first one, following fall-through,
+  * B, B.cond, CBZ/CBNZ, TBZ/TBNZ (not into calls), up to a RET, BR, their pointer-
+  * authenticated forms, a UDF (which World of Warcraft's client executes on purpose to
+  * raise) or an unallocated word. A reachable word is code even where an LDR reads it as
+- * a literal: it runs.
++ * a literal: it runs. With ios_x18_code_hint, what its function starts reach is code
++ * too, following BL calls as well, without leaving the rewritten windows.
+  * Code whose words sit beside encrypted bytes, and obfuscated code with junk words
+  * after its branches, is patched without touching those: a patched encrypted word
+  * decrypts to garbage. Caller frees; NULL on alloc failure. */
+-static unsigned char *ios_x18_reachable_map( const char *text, size_t text_size )
++static unsigned char *ios_x18_reachable_map( const char *text, size_t text_size, size_t text_rva )
+ {
+-    size_t words = text_size / 4, top = 0, i;
+-    unsigned char *seen = calloc( 1, words / 8 + 1 ), *data_map = malloc( text_size / 32 + 1 );
+-    size_t *stack = malloc( (words + 1) * sizeof(*stack) );
++    const struct ios_x18_code_hint *hint = ios_x18_code_hint;
++    size_t words = text_size / 4, top = 0, cap = 4096, k;
++    unsigned char *queued = calloc( 1, words / 8 + 1 ), *data_map = malloc( text_size / 32 + 1 );
++    uint32_t *stack = malloc( cap * sizeof(*stack) );
++    int pass, ok = 1;
+ 
+-    if (!seen || !data_map || !stack)
+-    {
+-        free( seen );
+-        free( data_map );
+-        free( stack );
+-        return NULL;
+-    }
+-    memset( data_map, 0xff, text_size / 32 + 1 );
+-    if (words) stack[top++] = 0;
+-    while (top)
++    if (!queued || !data_map || !stack) ok = 0;
++    else memset( data_map, 0xff, text_size / 32 + 1 );
++    for (pass = 0; ok && pass < 2; pass++)
+     {
+-        size_t w = stack[--top];
+-        while (w < words && !(seen[w >> 3] & (1 << (w & 7))))
++#define REWRITTEN(w) (text_rva + (w) * 4 >= hint->window_rva && \
++                      (text_rva + (w) * 4 - hint->window_rva) / 1024 < hint->windows && \
++                      (hint->rewritten[(text_rva + (w) * 4 - hint->window_rva) / 8192] & \
++                       (1 << ((text_rva + (w) * 4 - hint->window_rva) / 1024 % 8))))
++        if (!pass)
+         {
+-            uint32_t insn = ((const uint32_t *)text)[w];
+-            uint32_t op0 = (insn >> 25) & 0xf;
+-            int64_t off = 0;
+-            int branch = 0, next = 1;
+-
+-            seen[w >> 3] |= 1 << (w & 7);
+-            if (op0 == 1 || op0 == 3) { seen[w >> 3] &= ~(1 << (w & 7)); break; }   /* not code */
+-            if ((insn & 0xfc000000) == 0x14000000)                              /* B */
++            if (words) ok = ios_x18_walk_push( &stack, &top, &cap, queued, 0 );
++        }
++        else if (hint)
++        {
++            for (k = 0; ok && k < hint->pdata_count; k++)
+             {
+-                off = (int64_t)((int32_t)(insn << 6) >> 6) * 4; branch = 1; next = 0;
+-            }
+-            else if ((insn & 0xff000010) == 0x54000000 || (insn & 0x7e000000) == 0x34000000)
+-            {                                                                   /* B.cond, CBZ/CBNZ */
+-                off = (int64_t)((int32_t)(insn << 8) >> 13) * 4; branch = 1;
++                size_t rva = hint->pdata[2 * k];
++                if ((rva & 3) || rva < text_rva || rva - text_rva >= words * 4) continue;
++                if (REWRITTEN( (rva - text_rva) / 4 ))
++                    ok = ios_x18_walk_push( &stack, &top, &cap, queued, (rva - text_rva) / 4 );
+             }
+-            else if ((insn & 0x7e000000) == 0x36000000)                         /* TBZ/TBNZ */
++        }
++        while (ok && top)
++        {
++            size_t w = stack[--top];
++            for (;;)
+             {
+-                off = (int64_t)((int32_t)(insn << 13) >> 18) * 4; branch = 1;
++                uint32_t insn = ((const uint32_t *)text)[w];
++                uint32_t op0 = (insn >> 25) & 0xf;
++                int64_t off = 0, to;
++                int branch = 0, next = 1;
++
++                if (op0 == 1 || op0 == 3) break;                                  /* not code */
++                data_map[w >> 3] &= ~(1 << (w & 7));
++                if ((insn & 0xfc000000) == 0x14000000)                              /* B */
++                {
++                    off = (int64_t)((int32_t)(insn << 6) >> 6) * 4; branch = 1; next = 0;
++                }
++                else if (pass && (insn & 0xfc000000) == 0x94000000)                 /* BL */
++                {
++                    off = (int64_t)((int32_t)(insn << 6) >> 6) * 4; branch = 1;
++                }
++                else if ((insn & 0xff000010) == 0x54000000 || (insn & 0x7e000000) == 0x34000000)
++                {                                                                   /* B.cond, CBZ/CBNZ */
++                    off = (int64_t)((int32_t)(insn << 8) >> 13) * 4; branch = 1;
++                }
++                else if ((insn & 0x7e000000) == 0x36000000)                         /* TBZ/TBNZ */
++                {
++                    off = (int64_t)((int32_t)(insn << 13) >> 18) * 4; branch = 1;
++                }
++                else if ((insn & 0xfffffc1f) == 0xd65f0000 || (insn & 0xfffffc1f) == 0xd61f0000 ||
++                         insn == 0xd65f0bff || insn == 0xd65f0fff || (insn & 0xfefff800) == 0xd61f0800 ||
++                         (insn & 0xffff0000) == 0)
++                    next = 0;                                       /* RET, BR, RETAA/AB, BRAA/AB(Z), UDF */
++                to = (int64_t)w * 4 + off;
++                if (branch && to >= 0 && (size_t)to < words * 4 && (!pass || REWRITTEN( (size_t)to / 4 )) &&
++                    !(ok = ios_x18_walk_push( &stack, &top, &cap, queued, (size_t)to / 4 )))
++                    break;
++                if (!next || ++w >= words || (queued[w >> 3] & (1 << (w & 7))) || (pass && !REWRITTEN( w ))) break;
++                queued[w >> 3] |= 1 << (w & 7);
+             }
+-            else if ((insn & 0xfffffc1f) == 0xd65f0000 || (insn & 0xfffffc1f) == 0xd61f0000 ||
+-                     insn == 0xd65f0bff || insn == 0xd65f0fff || (insn & 0xfefff800) == 0xd61f0800 ||
+-                     (insn & 0xffff0000) == 0)
+-                next = 0;                                       /* RET, BR, RETAA/AB, BRAA/AB(Z), UDF */
+-            if (branch && (int64_t)w * 4 + off >= 0 && (size_t)((int64_t)w * 4 + off) < text_size)
+-                stack[top++] = (size_t)((int64_t)w * 4 + off) / 4;
+-            if (!next) break;
+-            w++;
+-        }
+-    }
+-    for (i = 0; i < words; i++)
+-        if (seen[i >> 3] & (1 << (i & 7))) data_map[i >> 3] &= ~(1 << (i & 7));
+-    free( seen );
++        }
++#undef REWRITTEN
++    }
++    free( queued );
+     free( stack );
++    if (!ok)
++    {
++        free( data_map );
++        return NULL;
++    }
+     return data_map;
+ }
+ 
+@@ -5455,14 +5516,15 @@ static unsigned char *ios_x18_reachable_map( const char *text, size_t text_size
+ /* Playport: x64_sites (may be NULL) gets ios_x18_mark_x64_ranges's result;
+  * the map returned covers those ranges too, and with cipher the encrypted windows. */
+ /* Playport (PLA-514): cipher 2 is code a program has just decrypted and flushed: of
+- * text, only what is reachable from its first word is code (ios_x18_reachable_map). */
++ * text, only what is reachable from its first word, or from ios_x18_code_hint's
++ * function starts, is code (ios_x18_reachable_map). */
+ static unsigned char *ios_x18_build_data_map( const char *text, size_t text_size, size_t text_rva,
+                                               const char *image_rx, int *x64_sites, int cipher )
+ {
+     unsigned char *data_map, *x64_map;
+     int x64 = -1;
+     if (x64_sites) *x64_sites = -1;
+-    if (cipher == 2) return ios_x18_reachable_map( text, text_size );
++    if (cipher == 2) return ios_x18_reachable_map( text, text_size, text_rva );
+     data_map = calloc( 1, text_size / 32 + 1 );
+     x64_map = calloc( 1, text_size / 32 + 1 );
+     if (!data_map || !x64_map)
+@@ -25567,27 +25629,95 @@ static void ios_section_views_reclaim( void *peb )
+     pthread_mutex_unlock( &ios_section_view_lock );
+ }
+ 
++/* The code hint of a cipher 2 run over [start, end) of presented copy m (ios_x18_code_hint):
++ * its image's .pdata, and the 1 KB windows of .text there in which a quarter of the words
++ * differ from the backing store of the remap the copy took them from. NULL, with nothing
++ * to free, for an image without a remap or a .pdata. ios_section_view_lock is held. */
++static unsigned char *ios_remap_code_hint( const struct ios_jit_mapping *m, const char *image_rw, size_t start,
++                                           size_t end, struct ios_x18_code_hint *hint, size_t *count )
++{
++    const char *image = (const char *)m->jit_base;
++    const char *opt;
++    unsigned int pe_off, pdata_rva, pdata_size, i;
++    unsigned char *rewritten;
++    size_t w;
++    void *peb = ios_jit_current_peb();
++
++    *count = 0;
++    if (m->size < 0x40) return NULL;
++    pe_off = *(const unsigned int *)(image + 0x3c);
++    if ((size_t)pe_off + 0x18 + 0x70 + 4 * 8 > m->size || memcmp( image + pe_off, "PE\0\0", 4 )) return NULL;
++    opt = image + pe_off + 0x18;
++    if (*(const unsigned short *)opt != 0x20b || *(const unsigned int *)(opt + 0x6c) < 4) return NULL;
++    pdata_rva = *(const unsigned int *)(opt + 0x70 + 3 * 8);                /* the exception directory */
++    pdata_size = *(const unsigned int *)(opt + 0x70 + 3 * 8 + 4);
++    if (!pdata_rva || pdata_size < 8 || (size_t)pdata_rva + pdata_size > m->size) return NULL;
++    hint->pdata = (const uint32_t *)(image + pdata_rva);
++    hint->pdata_count = pdata_size / 8;
++    hint->window_rva = m->text_offset + ((start - m->text_offset) & ~(size_t)1023);
++    hint->windows = (end - hint->window_rva + 1023) / 1024;
++    if (!(rewritten = calloc( 1, hint->windows / 8 + 1 ))) return NULL;
++    hint->rewritten = rewritten;
++    for (w = 0; w < hint->windows; w++)
++    {
++        size_t rva = hint->window_rva + w * 1024, words = (end - rva < 1024 ? end - rva : 1024) / 4, k, differ = 0;
++        const uint32_t *now = (const uint32_t *)(image_rw + rva), *was = NULL;
++
++        for (i = 0; i < ios_section_view_count && !was; i++)
++        {
++            const struct ios_section_view *r = &ios_section_views[i];
++            if (r->peb == peb && r->copy && image + rva >= r->copy && image + rva + words * 4 <= r->copy + r->size)
++                was = (const uint32_t *)(r->base + (image + rva - r->copy));
++        }
++        if (!was) continue;
++        for (k = 0; k < words; k++) differ += now[k] != was[k];
++        if (words && differ * 4 >= words)
++        {
++            rewritten[w / 8] |= 1 << (w % 8);
++            ++*count;
++        }
++    }
++    if (*count) return rewritten;
++    free( rewritten );
++    return NULL;
++}
++
+ /* x18-patch size bytes of a presented copy from image offset off, with the rest
+  * of the image's trampoline reservation, and flush them. cipher as for
+- * ios_jit_patch_x18. ios_section_view_lock is held. */
++ * ios_jit_patch_x18; a cipher 2 run gets the copy's code hint (ios_remap_code_hint).
++ * ios_section_view_lock is held. */
+ static void ios_jit_repatch_x18( struct ios_jit_mapping *m, size_t off, size_t size, int cipher )
+ {
++    static unsigned long hinted;
+     char *image_rw = (char *)ios_jit_rw_base_global + ((char *)m->jit_base - (char *)ios_jit_rx_base_global);
+     size_t start = off > m->text_offset ? off : m->text_offset;
+     size_t end = off + size < m->text_offset + m->text_size ? off + size : m->text_offset + m->text_size;
+-    size_t used = 0;
++    size_t used = 0, rewritten = 0;
+ 
+     if (m->x18_tramp_size && start < end)
+     {
++        struct ios_x18_code_hint hint;
++        unsigned char *windows = NULL;
++
+         /* the windows of the load's scan, from the start of .text */
+         if (cipher == 1) start = m->text_offset + ((start - m->text_offset) & ~(size_t)1023);
+         start &= ~(size_t)3;
++        if (cipher == 2 && (windows = ios_remap_code_hint( m, image_rw, start, end, &hint, &rewritten )))
++            ios_x18_code_hint = &hint;
+         ios_jit_patch_x18( image_rw + start, (char *)m->jit_base + start, end - start, start,
+                            image_rw + m->x18_tramp_off + m->x18_tramp_used,
+                            (char *)m->jit_base + m->x18_tramp_off + m->x18_tramp_used,
+                            m->x18_tramp_size - m->x18_tramp_used, cipher, &used );
++        ios_x18_code_hint = NULL;
++        free( windows );
+         if (used) sys_icache_invalidate( (char *)m->jit_base + m->x18_tramp_off + m->x18_tramp_used, used );
+         m->x18_tramp_used += used;
++        if (rewritten && (!(hinted++ & 0xff) || hinted <= 8))
++            dprintf( 2, "[remap] %s: %lu KB of .text at %p+%#lx rewritten since the remap; the functions its .pdata "
++                     "lists there x18-patched (x18 trampolines %#lx of %#lx used)\n",
++                     ios_pe_module_name( m->pe_base, m->image_size ), (unsigned long)rewritten,
++                     (char *)m->jit_base + start, (unsigned long)(end - start), (unsigned long)m->x18_tramp_used,
++                     (unsigned long)m->x18_tramp_size );
+     }
+     __asm__ __volatile__( "dsb sy" ::: "memory" );
+     sys_icache_invalidate( (char *)m->jit_base + off, size );

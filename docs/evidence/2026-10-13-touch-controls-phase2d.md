@@ -1,7 +1,7 @@
 # 2026-10-13: touch controls phase 2d (gyro aim on the phone)
 
 **Linear:** [PLA-13](https://linear.app/playportdev/issue/PLA-13). **Plan:**
-[touch controls](../plans/2026-10-09-touch-controls.md), queue item 2d. Before:
+[touch controls](https://linear.app/playportdev/issue/PLA-13), queue item 2d. Before:
 [1c](2026-10-13-touch-controls-phase1c.md). Branch `dev/pla-13-touch-controls`.
 
 iPhone (iPhone18,4), iOS 27.0.1, built-in JIT, on power, lying still, no controller connected.

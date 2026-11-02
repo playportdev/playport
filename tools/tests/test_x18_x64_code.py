@@ -56,8 +56,8 @@ TEST_C = r'''
 #define CODE_MAP    0x95100u
 #define MOV_X8_X18  0x628bcu      /* RtlProcessFlsData's TEB read */
 #define LEA_WORD    0x8670cu      /* a relay entry point's lea rcx, [rip+0x...] */
-#define X64_X18_1   0x87488u      /* x64 words that decode as x18 instructions */
-#define X64_X18_2   0x8ed4cu      /* inside the x64 KiUserExceptionDispatcher */
+#define X64_X18_1   0x87488u      /* an x64 word that decodes as an x18 instruction */
+#define X64_X18_2   0x8ed4cu      /* inside the x64 KiUserExceptionDispatcher: an STP of d18 (0263) */
 #define LDR_LIT     0x10000u      /* an ARM64EC ldr x16, <literal> 16 bytes on */
 #define LITERAL     0x10010u      /* its literal, whose low word decodes as LDP with rt2 = x18 */
 
@@ -107,30 +107,30 @@ int main(void)
     text = (char *)image + TEXT_RVA;
     assert(ios_insn_x18_role(0x18ee0d8d) == X18_ROLE_NONE);
     assert(ios_insn_x18_role(0xaa1203e8) != X18_ROLE_NONE);
-    assert(ios_insn_x18_role(0x0b720d8d) != X18_ROLE_NONE && ios_insn_x18_role(0xec834817) != X18_ROLE_NONE);
+    assert(ios_insn_x18_role(0x0b720d8d) != X18_ROLE_NONE && ios_insn_x18_role(0xec834817) == X18_ROLE_NONE);
     assert(ios_insn_x18_role(0xa9004a40) != X18_ROLE_NONE);
 
     /* The source mapping: the metadata pointer relocated with the header's ImageBase. */
     build(IMAGE_BASE, IMAGE_BASE + METADATA);
-    map = ios_x18_build_data_map(text, TEXT_SIZE, TEXT_RVA, NULL, &x64);
-    assert(x64 == 2);
+    map = ios_x18_build_data_map(text, TEXT_SIZE, TEXT_RVA, NULL, &x64, 1);
+    assert(x64 == 1);
     assert(!marked(map, MOV_X8_X18));                 /* patched: the x64 lea is no LDR */
     assert(marked(map, X64_X18_1) && marked(map, X64_X18_2) && marked(map, LEA_WORD));
     assert(!marked(map, LDR_LIT) && marked(map, LITERAL));   /* the ARM64EC literal is still data */
     free(map);
     /* One site in the code (the mov), 32 bytes, plus a page of slack. */
-    assert(ios_jit_x18_tramp_need(text, TEXT_SIZE, TEXT_RVA, NULL) == 32 + 0x1000);
+    assert(ios_jit_x18_tramp_need(text, TEXT_SIZE, TEXT_RVA, NULL, 1) == 32 + 0x1000);
 
     /* A child copy: the pointer rebased to the copy, the header's ImageBase not. */
     build(IMAGE_BASE, 0x10bf4c000ULL + METADATA);
-    map = ios_x18_build_data_map(text, TEXT_SIZE, TEXT_RVA, (const char *)0x10bf4c000ULL, &x64);
-    assert(x64 == 2 && !marked(map, MOV_X8_X18) && marked(map, X64_X18_2));
+    map = ios_x18_build_data_map(text, TEXT_SIZE, TEXT_RVA, (const char *)0x10bf4c000ULL, &x64, 1);
+    assert(x64 == 1 && !marked(map, MOV_X8_X18) && marked(map, X64_X18_2));
     free(map);
-    assert(ios_jit_x18_tramp_need(text, TEXT_SIZE, TEXT_RVA, (const char *)0x10bf4c000ULL) == 32 + 0x1000);
+    assert(ios_jit_x18_tramp_need(text, TEXT_SIZE, TEXT_RVA, (const char *)0x10bf4c000ULL, 1) == 32 + 0x1000);
 
     /* No code map to read: scanned as before 0204, and the x64 word hides the mov. */
     build(IMAGE_BASE, 0);
-    map = ios_x18_build_data_map(text, TEXT_SIZE, TEXT_RVA, NULL, &x64);
+    map = ios_x18_build_data_map(text, TEXT_SIZE, TEXT_RVA, NULL, &x64, 1);
     assert(x64 == -1 && marked(map, MOV_X8_X18) && !marked(map, X64_X18_2));
     free(map);
 

@@ -249,7 +249,9 @@ argument with a space is quoted; one holding `"` is refused). `pp phone put LOCA
 Documents/Import/NAME/FILE` copies one file into the app's import inbox (what a person does with
 Files; nothing else, and the import still goes through the UI: `import:Import/NAME`), so a probe from
 `tools/compat/probes/build.sh` is put file by file. `pp phone rm Documents/NAME.zip`
-deletes a zip put in Documents for `import:` and nothing else. For a known no-frame problem, stop at an existing launch
+deletes a zip put in Documents for `import:`, and `pp phone rm
+Documents/prefix/Documents/title-cfg/TITLE/NAME.bin` a diagnostic dump a dev runtime wrote into a
+title's config folder (`$MADEIRA_DOCS_DIR`; the app writes only `madeira.cfg` there); nothing else. For a known no-frame problem, stop at an existing launch
 mark, e.g. `--until 'mark:game started+30' --wait 120 --shot`, rather than waiting
 for the missing first frame. `--wait` counts from JIT ready (the app's "runtime started" mark); the launch
 first gets 180 s for JIT, so bound the outer timeout by 180 s + `--wait` at most. The
@@ -261,10 +263,16 @@ after a play launched. A mark or `ok` result proves only that stop condition,
 not that gameplay appeared: inspect the timeline, log and screenshot.
 
 - **The app's screens** ([decision 0034](decisions/0034-a-gamepad-first-ui.md)).
-  `open:SCREEN` shows Home, Library (`library`: on All, `games`: on Steam), Downloads,
+  `open:SCREEN` shows Home, Library (`library`: on All, `installed`: on All with Installed only,
+  `games`, `gog`, `epic`, `battlenet`: on that store's button in the store column, Battle.net's
+  with the store's offered products), Downloads,
   Settings (`settings#SECTION`), the checklist (`setup`), Sign in to Steam
   (`signin`) or a game's page (`open:ID`, `open:ID#SECTION` with its Game
-  options open); `pad:` presses then move the one focus ring and press the
+  options open; `open:bnet-CODE` a Battle.net product's page). The Battle.net pages have their own
+  paths: `install:bnet-CODE`, `pause-resume:bnet-CODE`, `region:bnet-CODE[=R]`,
+  `locale:bnet-CODE[=L]`, `notice:bnet-CODE=accept|decline` and `update:bnet-CODE[=install]`
+  (`pp ui --help`); `update:bnet-CODE=install` also brings an install made with the ARM64
+  client to the x64 client Play starts (decision 0177). `pad:` presses then move the one focus ring and press the
   footer's buttons, as a controller does (`pp ui --help` has the buttons).
   Each `pad:` line in `s1-host.log` names the ringed item (`focus hero:app-367520`,
   `dl:job:APP`, `set:nav:graphics`, `opt:frameLimit`), the page and any panel,
@@ -325,11 +333,13 @@ not that gameplay appeared: inspect the timeline, log and screenshot.
   the screen (Kingdom Come's Continue above New Game: `--crop 0.70,0.33,0.92,0.80
   --highlight-above "New Game" "New Game"`) before that A.
 - **The in-game menu.** Holding the controller's Home button half a second over
-  a running game opens Playport's menu (`UI/InGameMenuView.swift`): the game is
+  a running game, or a three-finger tap on it, opens Playport's menu (`UI/InGameMenuView.swift`): the game is
   paused behind it (its pads at rest, audio stopped, its threads suspended by
   the session root) until Resume, B or Home. The driver reaches it through
   the same pad handling: after `play:`, `wait:S` and `menu:` actions run while
-  the game runs; `menu:open` waits for the first frame and holds Home,
+  the game runs; `menu:open` waits for the first frame (for a program that
+  only draws guest GDI windows, such as Wine's notepad, its window up 10 s
+  with no frame) and holds Home,
   `menu:resume`, `menu:screenshot`, `menu:overlay` and `menu:quit` move the
   ring and press A, and `pad:` presses go to the menu while it is up. The
   scripted pad has `HOME` as well (`pp pad send "800 HOME" "100 -"`). Screenshot
@@ -339,6 +349,90 @@ not that gameplay appeared: inspect the timeline, log and screenshot.
   10 s later, and the run follows the restart to Home:
   `pp ui --action play:app-367520 --action wait:10 --action menu:open --action menu:resume
   --action wait:5 --action menu:open --action menu:quit --action open:home --shot-each-action`.
+  `gesture:three-finger-tap` opens it through the tap's own handler, with the controls
+  on or off and with a controller connected. `menu:keyboard` goes back to the game with
+  the touch keyboard open, `menu:text` with the text bar open; `menu:controls` opens the
+  Controls panel (`pad:left/right` change the ringed row) and `menu:layout` its layout
+  editor over the paused game.
+- **The text bar** (PLA-267; `UI/TextBarView.swift`, HostIOKit `TextBar`). The in-game
+  menu's Type text row resumes the game with a field above the iOS keyboard: what is
+  typed, pasted or AutoFilled reaches the focused guest window as `WM_CHAR` (one UTF-16
+  unit at a time, `KEYEVENTF_UNICODE`), Tab, Enter and Backspace as keys; its lock button
+  is password mode (dots, a saved password offered). It is the way into a launcher's or a
+  game's text field with a controller connected. Nothing typed is logged: the log has
+  `textbar: open, plain (not logged)`, `secret on (not logged)`, `closed` and the keys'
+  names; the key path logs no key code (patches/madeira-winios 0007, madeira-unix 0250).
+  A runtime key `WINEDEBUG=+key` or `+msg` (Settings' runtime keys) would trace the
+  messages, so it is never set for a sign-in. After `menu:open` and `menu:text`, the
+  driver's `textbar:` actions press what a person would: `textbar:type:TEXT` types TEXT
+  (percent-encoded, `%2C` a comma; it is in argv, events and the log, so never a
+  password), `textbar:tab`, `textbar:enter`, `textbar:backspace`, `textbar:secure`,
+  `textbar:plain`, `textbar:close`.
+  - **A secret** (PLA-606, dev builds only): `textbar:secret` or `textbar:secret+enter`
+    turns password mode on and types the value of `--secret-file PATH` (one trailing
+    newline stripped) or `--secret-stdin`. The file lives in the gitignored build area,
+    `.work/secrets/wow-password` (`chmod 600`). The value is in no argv, launch
+    environment (`UI_ACTIONS`, which a restart's `ui-continue.json` copies), event, log or
+    run file: when the action runs the app emits `ui-secret-wanted`, `pp ui` writes the
+    value over AFC on stdin to `Documents/ui-text-<nonce>-<n>` (a `.part` renamed into
+    place; the `secret-pushed` event has the action number only), and the app reads and
+    deletes the file before typing. A file the app did not take is removed when the run
+    ends (`secret-removed`) and any left is removed at the app's next start. Given once,
+    `--secret-file` serves every secret action; given once per action, the Nth action types
+    the Nth file, so an account name stays out of argv too. WoW's sign-in:
+    `pp ui --action play:bnet-wow --action wait:60 --action menu:open --action menu:text
+    --action textbar:secret --action textbar:tab --action textbar:secret+enter
+    --secret-file .work/secrets/wow-email --secret-file .work/secrets/wow-password
+    --shot-each-action`. The screenshots show the bar's dots and the game's own field.
+- **The on-screen controls** ([decision 0171](decisions/0171-on-screen-controls-input-mapping-and-gyro.md);
+  [ARCHITECTURE.md](ARCHITECTURE.md#input-sources-and-the-mixer)). They show while no
+  controller is connected (`--pad` connects one). `--controls ID:JSON` saves a game's
+  controls as its in-game Controls panel does (the app's internal `controls:`, run after the
+  `--action`s and before `--settings`; `ID:{}` clears): `"layout"` (`off`, `gamepad`,
+  `keyboardMouse`, `pointClick`; left out, the title's compatibility default, else Settings'
+  Starting layout, `set:controls.startingLayout=keyboardMouse`, else
+  Gamepad), `"opacity"`, Gamepad's `"dpad"` and `"rightStick"`, `"gyro"`, `"controllerMap"`,
+  `"lookSpeed"` and `"layouts"`, the game's own copies of the presets as the layout editor
+  saves them (version 3 `ControlLayout`s by preset name); `pp ui --help` has every key. The
+  log's `controls ID:` line shows what was saved. After `play:`, `touch:CONTROL[+CONTROL...][@MS]`
+  waits for the first frame and puts fingers on controls by id, held MS ms (200 by default),
+  through the view's own calls (`Dev/TouchDriver.swift`):
+  - Gamepad: `view menu lt lb rt rb leftStick y x b a`, `dpad` and `rightStick` when on; a
+    stick or the d-pad takes a direction (`leftStick.up`, `dpad.right`).
+  - Keyboard & mouse: `look esc tab keyboard 1 2 3 4 move use reload jump fire`; `move.up`
+    holds W, `look.left` drags 100 pt across the look area at once (300 mouse counts).
+  - Point & click: `pointer mode rightClick hover scroll keyboard esc`; the pointer takes a
+    point as fractions of the view (`pointer:0.25:0.6`), and a tool's press turns it on or off
+    (`touch:hover+pointer:0.5:0.5`).
+  - The touch keyboard, while open (a layout's `keyboard`, `menu:keyboard`): `kb-a`, `kb-1`,
+    `kb-f1`, `kb-esc`, `kb-enter`, `kb-space`, `kb-up`, `kb-close`, ...; a tapped `kb-shift`
+    (`kb-ctrl`, `kb-alt`) stays down for the next key.
+  - While the controls show, `tap:` sends nothing (a touch off them is ignored; the log says
+    `tap …: ignored`), except above the open touch keyboard. Portal 2 on Keyboard & mouse:
+    `pp ui --controls 'app-620:{"layout":"keyboardMouse"}' --action play:app-620 --action
+    wait:30 --action touch:move.up@1500 --action touch:look.left+fire@400`.
+- **The layout editor.** `open:ID#layout` opens Game options › Controls › Edit on-screen
+  layout over the game's art, on the layout the game starts with; `menu:layout` opens it over
+  the paused game. `pad:lb/rb` ring a control, the directions move it 8 pt, `pad:a` opens the
+  bar and the inspector, `pad:x` Add, `pad:y` Reset, `pad:view` undo, `pad:menu` redo, and
+  `pad:b` on the controls is Done, which saves the game's `"layouts"` copy (nothing when
+  nothing changed). The log's summary line is `layout editor (...)`.
+- **The suggested layout.** A game starting on Gamepad (Settings' Starting layout left at
+  Suggested) that reads no XInput state in 20 s of play after its first frame gets a toast
+  offering Keyboard & mouse, once per game. After `play:`,
+  `suggest:accept` waits for it (3 min at most) and presses Use (the layout is saved for the
+  game), `suggest:dismiss` presses Not now; either fails when the game was not offered.
+  `set:controls.suggestedLayoutOffered=` forgets every game's offer:
+  `pp ui --action play:ID --action suggest:accept --action touch:fire`.
+- **Gyro aim.** After `play:`, `gyro:STEP[/STEP...]` waits for the first frame and plays a
+  scripted gyro where the sensors' samples enter gyro aim, at 100 Hz (`Dev/GyroDriver.swift`,
+  HostIOKit `GyroScript`). A STEP is `AXIS=DEG_PER_S[+...]@MS` or `rest@MS` (`yaw` + right,
+  `pitch` + up, `roll` + clockwise). It moves the aim only while the game's gyro output is on
+  (`--controls 'ID:{"gyro":{"output":"mouse"}}'` or `"rightStick"`) and no menu is up; the
+  log's `gyro: driver` line gives the mouse counts (20 a degree at sensitivity 1; 1.5 by
+  default) or the right stick's peak. With no game running and `open:ID#gyro` up, it moves the
+  Gyro aim page's test dot instead: `pp ui --controls 'app-620:{"gyro":{"output":"mouse"}}'
+  --action play:app-620 --action wait:30 --action gyro:yaw=90@500/rest@300`.
 - **A game's web page.** A page the game opens (an Epic game's EOS sign-in) comes up in
   Playport's panel over the running game (decision [0064](decisions/0064-game-web-sheet.md)),
   logged as `url: … open <host><path> (<kind>) for <title>` and `url: … [sheet]` lines. After
@@ -547,8 +641,11 @@ campaign-specific approval; it does not waive required regression smoke gates
   Mac would add is in [GPU-DEBUGGING.md](GPU-DEBUGGING.md).
 - Keep attribution runs separate from performance controls: GPU capture,
   validation, profilers and `--energy` perturb the title. `--no-hud` avoids the
-  Metal HUD's logging cost; frames then come from the game layer's `[frames]`
-  lines (every 16 drawables, either backend; dev builds). Match HUD/counter
+  Metal HUD's cost: a dev app loads the HUD only when it starts with Settings ›
+  Developer › Metal HUD on, as it is unless turned off (its interposer costs CPU on
+  every encoder even hidden, its logging more; a release app has no HUD); frames then
+  come from the game layer's `[frames]` lines (every 16 drawables, either backend;
+  dev builds). Match HUD/counter
   coverage rather than comparing missing figures as zero; use `--energy` for
   the CPU-to-GPU ratio only.
 - `--settings`, the HUD switch and Diagnostics last for the run's session and
@@ -582,6 +679,7 @@ Where things are in the app's container (`pp phone ls DIR` lists a directory):
 | --- | --- |
 | `Documents/s1-host.log`, `s1-host.prev.log` | the dev app's runtime log, this launch and the one before |
 | `Documents/steam-drive.log`, `run-events.jsonl`, `vpad.txt` | the Steam client's log, the UI driver's events, the pad script |
+| `Documents/ui-text-<nonce>-<n>` | a `textbar:secret` value for a moment: pushed when the app asks, deleted by it before typing (none should be there) |
 | `Documents/Screenshots/` | a dev build's copies of the in-game menu's screenshots |
 | `Documents/Cloud Backups/<appid>/<time>/` | the copies of saves a Steam Cloud sync replaced (the side not kept in a conflict), kept 30 days |
 | `Documents/prefix/` | the Wine prefix; `drive_c/Games/<title>/` holds the installed titles |

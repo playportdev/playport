@@ -1,0 +1,111 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: playportdev <dev@playport.dev>
+Date: Fri, 30 Oct 2026 10:28:34 +0100
+Subject: [PATCH] ntdll: name the parked register that keeps a dead process's
+ view
+
+PLA-476 retained-extent diagnostic, no change to what teardown does. When a
+dead process's view is kept because a parked thread's saved register points
+into it, or the view lies in a Social Club layout slot, log every such
+register of every parked thread of the process, on one line for the view:
+the thread, its index in the parked refs (0-28 x0-x28, 29 fp, 30 lr, 31 sp,
+32 pc, 33-49 the guest's GPRs and rip when readable, then TPIDRRO_EL0 when
+thread_info succeeds, the TEB and the wait address) and its value. l5 and
+l6 printed only the first, so the older parked threads were never checked
+against the view. A slot view that is freed anyway prints as slot-view. At
+most 64 lines per run, none under MADEIRA_NO_DIAGNOSTICS (the release app).
+
+Class: diagnostics
+Evidence: docs/evidence/2026-10-29-sc-stock-cef-probe.md
+Offered-upstream: no
+---
+ build/ntdll-unix/virtual_ios.c | 55 +++++++++++++++++++++++++++++++++-
+ 1 file changed, 54 insertions(+), 1 deletion(-)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 5275323..39bfc00 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -18122,6 +18122,50 @@ static unsigned long long ios_proc_end_footprint(void)
+     return info.phys_footprint;
+ }
+ 
++/* PLA-476 diagnostic, virtual_mutex held: every parked thread's saved ref
++ * that lies in [base, base + size), each as its thread and index, on one line
++ * per view. A thread's refs are in ios_abort_park_state's order
++ * (ios_proc_end_note_parked keeps them): 0-28 x0-x28, 29 fp, 30 lr, 31 sp,
++ * 32 pc, then (when readable) 33-49 the guest's 16 GPRs and rip, then
++ * TPIDRRO_EL0 (when thread_info succeeds), its TEB and (when the lookup
++ * succeeded) its wait address. Refs past what one line holds are counted as
++ * "+N more". A view in a Social Club slot that is freed anyway prints as
++ * slot-view. Measurement only: at most 64 lines, quiet under
++ * MADEIRA_NO_DIAGNOSTICS, like [span-census]. */
++static struct { unsigned int start, n, tid; } ios_proc_end_ref_thread[IOS_PROC_END_PARKED_MAX];
++
++static void ios_proc_end_log_keep_ref( void *peb, uintptr_t base, size_t size, int fate,
++                                       unsigned int nthreads )
++{
++    static unsigned int said;
++    const char *what = fate == PPE_KEEP_REF ? "keep-ref" : "slot-view";
++    char line[2048];
++    unsigned int t, i, more = 0;
++    int len, hits = 0;
++
++    if (said >= 64 || ios_no_diagnostics()) return;
++    said++;
++    len = snprintf( line, sizeof(line), "[proc-end] %s peb=%p view=%p+0x%llx fate=%d", what, peb, (void *)base,
++                    (unsigned long long)size, fate );
++    for (t = 0; t < nthreads; t++)
++        for (i = 0; i < ios_proc_end_ref_thread[t].n; i++)
++        {
++            uint64_t ref = ios_proc_end_refs[ios_proc_end_ref_thread[t].start + i];
++            int n;
++
++            if (ref < base || ref - base >= size) continue;
++            hits++;
++            n = snprintf( line + len, sizeof(line) - len, " tid=%04x ref#%u/%u=0x%llx", ios_proc_end_ref_thread[t].tid,
++                          i, ios_proc_end_ref_thread[t].n, (unsigned long long)ref );
++            if (n < 0 || len + n >= (int)sizeof(line) - 32) more++;
++            else len += n;
++        }
++    line[len] = 0;
++    if (!hits) dprintf( 2, "%s no parked ref (PLA-476)\n", line );
++    else if (more) dprintf( 2, "%s +%u more (PLA-476)\n", line, more );
++    else dprintf( 2, "%s (PLA-476)\n", line );
++}
++
+ /* virtual_mutex held. Deletes or empties a dead peb's views as pp_proc_end.h
+  * decides, for a killed process and one that exited by itself (decision
+  * 0143). Each view is taken once (ppe_take_view): it then belongs to the
+@@ -18130,7 +18174,7 @@ static void ios_proc_end_release_views_locked( void *peb, const struct ppe_censu
+ {
+     struct file_view *view, *next;
+     struct thread_data *data;
+-    unsigned int nrefs = 0;
++    unsigned int nrefs = 0, nthreads = 0;
+ 
+     LIST_FOR_EACH_ENTRY( data, &teb_list, struct thread_data, entry )
+     {
+@@ -18142,6 +18186,13 @@ static void ios_proc_end_release_views_locked( void *peb, const struct ppe_censu
+         {
+             memcpy( ios_proc_end_refs + nrefs, ios_proc_end_parked[p].refs,
+                     ios_proc_end_parked[p].nrefs * sizeof(uint64_t) );
++            if (nthreads < IOS_PROC_END_PARKED_MAX)
++            {
++                ios_proc_end_ref_thread[nthreads].start = nrefs;
++                ios_proc_end_ref_thread[nthreads].n = ios_proc_end_parked[p].nrefs;
++                ios_proc_end_ref_thread[nthreads].tid = (unsigned)(ULONG_PTR)data->teb->ClientId.UniqueThread;
++                nthreads++;
++            }
+             nrefs += ios_proc_end_parked[p].nrefs;
+         }
+     }
+@@ -18171,6 +18222,8 @@ static void ios_proc_end_release_views_locked( void *peb, const struct ppe_censu
+             continue;
+         }
+         fate = ppe_view_fate( cls, census->parked, base, view->size, ios_proc_end_refs, nrefs );
++        if (fate == PPE_KEEP_REF || ppsc_in_slot( base, view->size ))
++            ios_proc_end_log_keep_ref( peb, base, view->size, fate, nthreads );
+         if (fate != PPE_FREE)
+         {
+             r->kept += view->size;

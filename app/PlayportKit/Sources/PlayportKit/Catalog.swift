@@ -101,6 +101,10 @@ public struct InstalledTitle: Codable, Equatable, Identifiable, Sendable {
     public var chosenExecutable: String? = nil
     /// The name the player gave the game (display only: the ID does not change).
     public var displayName: String? = nil
+    /// When the player accepted the ban-risk notice of a title whose anti-cheat is allowed under
+    /// Wine (decision 0175; a Battle.net product, BattleNetPlay): once per copy, kept across
+    /// adoptions and gone with the copy. Nil: not accepted, Play shows the notice first.
+    public var riskNoticeAccepted: Date? = nil
 
     public var key: StoreGameKey {
         StoreGameKey(store: store, id: storeID ?? appID.map(String.init) ?? installDir.lowercased())
@@ -110,6 +114,7 @@ public struct InstalledTitle: Codable, Equatable, Identifiable, Sendable {
         case id, appID, name, developer, installDir, executable, buildID, depots, sizeBytes, source, checksums, note
         case addedAt, lastPlayed, playSeconds, lastVerification, branch, importsDirect3D12, direct3D, executableMachine
         case storeRaw = "store", storeID, storeArguments, hintSteamAppID, storeVersion, chosenExecutable, displayName
+        case riskNoticeAccepted
     }
     /// An i386 (WoW64) title: its default backend is Vulkan (decision 0047).
     public var isI386: Bool { executableMachine == 0x14c }
@@ -155,6 +160,21 @@ public struct Catalog: Codable, Equatable, Sendable {
     public mutating func update(_ id: String, _ change: (inout InstalledTitle) -> Void) {
         guard let i = titles.firstIndex(where: { $0.id == id }) else { return }
         change(&titles[i])
+    }
+
+    /// This scan's catalogue with the edits made to `live` while the scan ran (LibraryModel.adopted):
+    /// play time, the verification of the same build and the ban-risk notice acceptance win over the
+    /// scan's copy of them, which is the catalogue from when the scan started.
+    public func keepingEdits(of live: Catalog) -> Catalog {
+        var merged = self
+        for i in merged.titles.indices {
+            guard let now = live.title(id: merged.titles[i].id) else { continue }
+            merged.titles[i].lastPlayed = now.lastPlayed
+            merged.titles[i].playSeconds = now.playSeconds
+            if now.buildID == merged.titles[i].buildID { merged.titles[i].lastVerification = now.lastVerification }
+            merged.titles[i].riskNoticeAccepted = now.riskNoticeAccepted
+        }
+        return merged
     }
 }
 
@@ -299,6 +319,8 @@ public enum Adoption {
                     if let chosen = old.chosenExecutable, let there = locate(chosen, in: dir) { t.executable = there }
                     t.displayName = old.displayName
                     if let name = old.displayName, !name.isEmpty { t.name = name }
+                    // The copy's own: never another title's that used the folder before.
+                    if old.id == t.id { t.riskNoticeAccepted = old.riskNoticeAccepted }
                 }
                 t.direct3D = t.executable.map {
                     Direct3D.detect(executable: dir.appendingPathComponent($0.replacingOccurrences(of: "\\", with: "/")), root: dir)

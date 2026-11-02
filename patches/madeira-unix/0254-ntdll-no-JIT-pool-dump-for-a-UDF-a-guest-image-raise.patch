@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sat, 31 Oct 2026 23:50:00 +0100
+Subject: [PATCH 2/2] ntdll: no JIT pool dump for a UDF a guest image raises
+
+ill_handler wrote the whole JIT pool, 896 MB, to the Documents folder at
+the first illegal instruction of the app's life. World of Warcraft's
+ARM64 client raises a UDF in its TLS callback at every start and
+handles it, so each start wrote the file and dirtied every pool page.
+A UDF in a guest image copy is now left out.
+
+Linear: PLA-514
+Class: diagnostics
+Evidence: docs/evidence/2026-10-31-wow-arm64-start.md
+Offered-upstream: no
+---
+ build/ntdll-unix/signal_arm64_ios.c | 10 ++++++++--
+ 1 file changed, 8 insertions(+), 2 deletions(-)
+
+diff --git a/build/ntdll-unix/signal_arm64_ios.c b/build/ntdll-unix/signal_arm64_ios.c
+index 5bb0598..2185874 100644
+--- a/build/ntdll-unix/signal_arm64_ios.c
++++ b/build/ntdll-unix/signal_arm64_ios.c
+@@ -11114,10 +11114,16 @@ static void ill_handler( int signal, siginfo_t *siginfo, void *sigcontext )
+             }
+         }
+         /* iOS-Madeira: also dump JIT pool here (the Mach UNHANDLED path may not
+-         * fire for ILL since we deliver via setup_exception). One-shot. */
++         * fire for ILL since we deliver via setup_exception). One-shot.
++         * Playport (PLA-514): not for a UDF in a guest image, which the guest
++         * raises to handle it (World of Warcraft at every start): the dump
++         * wrote the whole pool, 896 MB, to the Documents folder each time. */
+         {
++            extern uint64_t ios_jit_reverse_translate( uint64_t addr, uint64_t *module_base );
+             static volatile int ill_dumped = 0;
+-            if (__sync_bool_compare_and_swap(&ill_dumped, 0, 1)) {
++            int planned = !(pc & 3) && ios_jit_reverse_translate( pc, NULL ) &&
++                          !(*(const uint32_t *)(uintptr_t)pc >> 16);
++            if (!planned && __sync_bool_compare_and_swap(&ill_dumped, 0, 1)) {
+                 extern void *ios_jit_rw_base_global;
+                 extern size_t ios_jit_pool_size_global;
+                 if (ios_jit_rw_base_global && ios_jit_pool_size_global) {

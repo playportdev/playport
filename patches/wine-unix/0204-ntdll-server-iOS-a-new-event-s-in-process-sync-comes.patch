@@ -1,0 +1,208 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 1 Nov 2026 23:48:32 +0100
+Subject: [PATCH] ntdll, server: iOS: a new event's in-process sync comes with
+ create_event's reply
+
+World of Warcraft's x64 client creates and closes about 6,400 events a
+second in play (its Net_Queue threads, CreateEventW and CloseHandle from
+x64 code). Under ppsync each event cost three round trips to the
+in-process server: create_event, get_inproc_sync_fd at the first wait or
+SetEvent (from whichever thread touched the handle first), and
+close_handle. Those three made 95 % of the server's 20,000 requests a
+second; get_inproc_sync_fd was a third of them.
+
+create_event now posts the new handle's sync for its creator through
+ppsync's hand-off, with the handle's granted access, and NtCreateEvent
+takes it and caches it while it still holds fd_cache_mutex from before
+the request, as wine-staging's esync receives a new object's fd in the
+same request. The first wait or signal then hits the cache. A handle the
+cache cannot hold (no PEB yet, a slot still referenced) gives the
+descriptor back, and its first use asks the server, as before. The
+other hand-off callers pass the new access argument (0, or the reply's).
+
+Needs build/ppsync with the access argument of ppsync_post and
+ppsync_take.
+
+Class: ios-port
+Evidence: docs/evidence/2026-11-01-wow-x64-fex.md (PLA-610: [srv] req298 = create_event = close_handle ~6,400/s in play, 95 % of requests)
+Offered-upstream: no; iOS one-process runtime integration
+---
+ dlls/ntdll/unix/sync.c | 41 +++++++++++++++++++++++++++++++++++++++--
+ server/event.c         |  3 +++
+ server/inproc_sync.c   | 27 ++++++++++++++++++++++++++-
+ server/object.h        |  3 +++
+ server/thread.c        |  4 ++--
+ 5 files changed, 73 insertions(+), 5 deletions(-)
+
+diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
+index 363f9f0..8df2581 100644
+--- a/dlls/ntdll/unix/sync.c
++++ b/dlls/ntdll/unix/sync.c
+@@ -778,7 +778,7 @@ static NTSTATUS get_server_inproc_sync( HANDLE handle, struct inproc_sync *sync
+ #ifdef WINE_IOS
+             /* The descriptor is a pseudo fd handed over in-process; see
+              * build/ppsync. Nothing travels over the socket. */
+-            sync->fd = ppsync_take( get_thread_data()->tid, wine_server_obj_handle( handle ) );
++            sync->fd = ppsync_take( get_thread_data()->tid, wine_server_obj_handle( handle ), NULL );
+             if (sync->fd < 0) ret = STATUS_INVALID_HANDLE;
+ #else
+             obj_handle_t fd_handle;
+@@ -845,6 +845,29 @@ static NTSTATUS get_inproc_sync( HANDLE handle, enum inproc_sync_type desired_ty
+     return STATUS_SUCCESS;
+ }
+ 
++#ifdef WINE_IOS
++/* Playport: the in-process server posts a new event's sync with its handle's
++ * access in answer to create_event (server/inproc_sync.c); cache it now, so
++ * the first wait or signal on the handle does not ask get_inproc_sync_fd for
++ * it. As in get_inproc_sync(), the caller holds fd_cache_mutex, here from
++ * before the creating request, so no close and reuse of the handle can come
++ * between the reply and the cache. */
++static void cache_created_inproc_sync( HANDLE handle, enum inproc_sync_type type )
++{
++    struct inproc_sync stack, *sync;
++    unsigned int access = 0;
++
++    stack.fd = ppsync_take( get_thread_data()->tid, wine_server_obj_handle( handle ), &access );
++    if (stack.fd < 0) return;   /* not posted: the first use asks the server, as before */
++    stack.refcount = 1;
++    stack.access = access;
++    stack.type = type;
++    stack.closed = 0;
++    sync = cache_inproc_sync( handle, &stack );
++    release_inproc_sync( sync );   /* the caller's reference: a cached sync keeps the handle's */
++}
++#endif
++
+ extern NTSTATUS check_signal_access( struct inproc_sync *sync )
+ {
+     switch (sync->type)
+@@ -994,7 +1017,7 @@ static int get_inproc_alert_fd(void)
+             {
+ #ifdef WINE_IOS
+                 (void)token;
+-                data->alert_fd = fd = ppsync_take( data->tid, reply->handle );
++                data->alert_fd = fd = ppsync_take( data->tid, reply->handle, NULL );
+ #else
+                 data->alert_fd = fd = wine_server_receive_fd( &token );
+                 assert( token == reply->handle );
+@@ -1210,6 +1233,10 @@ NTSTATUS WINAPI NtCreateEvent( HANDLE *handle, ACCESS_MASK access, const OBJECT_
+     unsigned int ret;
+     data_size_t len;
+     struct object_attributes *objattr;
++#ifdef WINE_IOS
++    const BOOL inproc = inproc_device_fd >= 0;
++    sigset_t sigset;
++#endif
+ 
+     TRACE( "access %#x, name %s, type %u, state %u\n", access,
+            attr ? debugstr_us(attr->ObjectName) : "(null)", type, state );
+@@ -1218,6 +1245,9 @@ NTSTATUS WINAPI NtCreateEvent( HANDLE *handle, ACCESS_MASK access, const OBJECT_
+     if (type != NotificationEvent && type != SynchronizationEvent) return STATUS_INVALID_PARAMETER;
+     if ((ret = wine_server_alloc_object_attributes( attr, &objattr, &len ))) return ret;
+ 
++#ifdef WINE_IOS
++    if (inproc) server_enter_uninterrupted_section( &fd_cache_mutex, &sigset );
++#endif
+     SERVER_START_REQ( create_event )
+     {
+         req->access = access;
+@@ -1228,6 +1258,13 @@ NTSTATUS WINAPI NtCreateEvent( HANDLE *handle, ACCESS_MASK access, const OBJECT_
+         *handle = wine_server_ptr_handle( reply->handle );
+     }
+     SERVER_END_REQ;
++#ifdef WINE_IOS
++    if (inproc)
++    {
++        if (*handle) cache_created_inproc_sync( *handle, INPROC_SYNC_EVENT );
++        server_leave_uninterrupted_section( &fd_cache_mutex, &sigset );
++    }
++#endif
+ 
+     free( objattr );
+     return ret;
+diff --git a/server/event.c b/server/event.c
+index 682b131..b1e3bc2 100644
+--- a/server/event.c
++++ b/server/event.c
+@@ -563,6 +563,9 @@ DECL_HANDLER(create_event)
+ 
+     if (!get_req_object_attributes( &params )) return;
+     reply->handle = create_named_obj_handle( current->process, &params );
++#ifdef WINE_IOS
++    post_created_inproc_sync( reply->handle, INPROC_SYNC_EVENT );   /* Playport: see inproc_sync.c */
++#endif
+     if (params.root) release_object( params.root );
+ }
+ 
+diff --git a/server/inproc_sync.c b/server/inproc_sync.c
+index 3c24291..bd835df 100644
+--- a/server/inproc_sync.c
++++ b/server/inproc_sync.c
+@@ -293,10 +293,35 @@ DECL_HANDLER(get_inproc_sync_fd)
+     /* No SCM_RIGHTS for a pseudo fd: it is posted for the requesting thread,
+      * by its id. Not by its process: a thread's TEB may name another process
+      * than the server has it in, so a pid key could miss. */
+-    else ppsync_post( get_thread_id( current ), req->handle, fd );
++    else ppsync_post( get_thread_id( current ), req->handle, fd, reply->access );
+ #else
+     else send_client_fd( current->process, fd, req->handle );
+ #endif
+ 
+     release_object( obj );
+ }
++
++#ifdef WINE_IOS
++/* Playport: post a handle the current request has just created for its
++ * creator with the handle's access, as get_inproc_sync_fd would, so the
++ * client caches the object's in-process sync with the create's reply
++ * instead of asking for it at its first wait or signal: one round trip less
++ * for each event a client creates. Only an object of the expected type is
++ * posted; the client takes exactly that. The request's status (success, or
++ * STATUS_OBJECT_NAME_EXISTS) is left as it was. */
++void post_created_inproc_sync( obj_handle_t handle, int expected_type )
++{
++    unsigned int status = get_error();
++    struct object *obj;
++    int fd, type = -1;
++
++    if (!handle || get_inproc_device_fd() < 0) return;
++    if ((obj = get_handle_obj( current->process, handle, 0, NULL )))
++    {
++        if ((fd = get_obj_inproc_sync( obj, &type )) >= 0 && type == expected_type)
++            ppsync_post( get_thread_id( current ), handle, fd, get_handle_access( current->process, handle ) );
++        release_object( obj );
++    }
++    set_error( status );
++}
++#endif
+diff --git a/server/object.h b/server/object.h
+index 3c19d15..7cb3afa 100644
+--- a/server/object.h
++++ b/server/object.h
+@@ -270,6 +270,9 @@ extern struct inproc_sync *create_inproc_mutex_sync( thread_id_t owner, unsigned
+ extern void abandon_inproc_mutexes( thread_id_t owner );
+ extern void signal_inproc_sync( struct inproc_sync *sync );
+ extern void reset_inproc_sync( struct inproc_sync *sync );
++#ifdef WINE_IOS
++extern void post_created_inproc_sync( obj_handle_t handle, int expected_type );
++#endif
+ 
+ /* serial functions */
+ 
+diff --git a/server/thread.c b/server/thread.c
+index 8fe1afa..83d830a 100644
+--- a/server/thread.c
++++ b/server/thread.c
+@@ -2651,8 +2651,8 @@ DECL_HANDLER(get_inproc_alert_fd)
+     {
+         reply->handle = get_thread_id( current ) | 1; /* arbitrary token */
+ #ifdef WINE_IOS
+-        { extern void ppsync_post( unsigned int tid, unsigned int handle, int fd );
+-          ppsync_post( get_thread_id( current ), reply->handle, fd ); }   /* posted for this thread, by its id */
++        { extern void ppsync_post( unsigned int tid, unsigned int handle, int fd, unsigned int access );
++          ppsync_post( get_thread_id( current ), reply->handle, fd, 0 ); }   /* posted for this thread, by its id */
+ #else
+         send_client_fd( current->process, fd, reply->handle );
+ #endif

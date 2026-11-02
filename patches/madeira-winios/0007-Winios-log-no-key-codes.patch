@@ -1,0 +1,50 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sat, 31 Oct 2026 21:00:00 +0100
+Subject: [PATCH] Winios: log no key codes
+
+winios_post_key wrote every key it queued to stderr ("post_key vk=0x41
+down=1"), and the drain wrote every event again ("drain type=1 x=65"),
+both unconditionally. stderr is the app's log, in a release build too,
+and a letter's or digit's virtual key is its ASCII code: whatever was
+typed, a password included, could be read back from the log.
+
+Neither line is written for a key any more; the drain still logs the
+other event kinds.
+
+Linear: PLA-267
+Class: host-app
+Evidence: tools/tests/test_key_logging.py (host checks; phone gate not run)
+Offered-upstream: no; the key bridge is the iOS app's
+---
+ app/Madeira/Winios/Winios.m | 9 ++++++---
+ 1 file changed, 6 insertions(+), 3 deletions(-)
+
+diff --git a/app/Madeira/Winios/Winios.m b/app/Madeira/Winios/Winios.m
+index ab15c02..d57beda 100644
+--- a/app/Madeira/Winios/Winios.m
++++ b/app/Madeira/Winios/Winios.m
+@@ -506,9 +506,10 @@ void winios_post_touch_up(int x, int y) {
+ }
+ 
+ /* Key press bridge. vk = Windows virtual-key code, down = 1 for press,
+- * 0 for release. Queued like mouse events; drained in pProcessEvents. */
++ * 0 for release. Queued like mouse events; drained in pProcessEvents.
++ * Playport: nothing here logs a key: a log of the keys typed is the text
++ * typed, a password too. */
+ void winios_post_key(int vk, int down) {
+-    fprintf(stderr, "[winios] post_key vk=0x%x down=%d\n", vk, down); fflush(stderr);
+     winios_q_push_ev(WINIOS_EV_KEY, vk, 0, down ? 0 : KEYEVENTF_KEYUP, 0);
+ }
+ 
+@@ -678,7 +679,9 @@ BOOL winios_pProcessEvents(DWORD mask) {
+         g_input_q.tail = (g_input_q.tail + 1) % WINIOS_RING_SIZE;
+         pthread_mutex_unlock(&g_input_q.lock);
+ 
+-        fprintf(stderr, "[winios] drain type=%u x=%d y=%d flags=0x%x\n", e.type, e.x, e.y, e.flags); fflush(stderr);
++        if (e.type != WINIOS_EV_KEY) {   /* Playport: a key's code is the text typed */
++            fprintf(stderr, "[winios] drain type=%u x=%d y=%d flags=0x%x\n", e.type, e.x, e.y, e.flags); fflush(stderr);
++        }
+         if (e.type == WINIOS_EV_KEY)
+             winios_drv_post_key((unsigned short)e.x, e.flags);
+         else if (e.type == WINIOS_EV_CLIENT_MOUSE)

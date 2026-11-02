@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 
-/// A game's Steam Cloud files on the phone (docs/plans/finished.md#steam-for-games,
+/// A game's Steam Cloud files on the phone (PLA-650,
 /// phase 4).
 ///
 /// Steam names a cloud file by a root token and a path:

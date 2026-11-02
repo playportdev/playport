@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-/// A controller map's table (docs/plans/2026-10-09-touch-controls.md,
+/// A controller map's table (PLA-13,
 /// "Controller maps"): what each physical input of a controller does, as an
 /// InputAction. PlayportKit ControllerMap holds the mode and the
 /// `keyboardMouse` preset; MappedPad plays a physical pad through a table.

@@ -7,7 +7,7 @@
 // pool (MemoryPlan.Tier, decision 0105: 4 GiB on 12 GB, 1 GiB on 8 GB, none
 // under), at most what one donor grants (DonorPool). It is not gated on
 // jetsam's level at Play: idle processes there are jetsam's to end, and growth
-// during play stops on low memory instead (growthStop). The fixed sizes stay as
+// during play stops on low memory instead (growthStop, Growth). The fixed sizes stay as
 // experiments, capped by jetsam's level as before.
 
 import Foundation
@@ -138,10 +138,83 @@ public enum DonorPoolSizing {
         return nil
     }
 
-    /// Whether a stopped pool may grow again: both readings back over their floors with a margin.
-    public static func growthResumes(spareMB: Int, level: Int, physicalMB: Int) -> Bool {
-        spareMB >= spareFloorMB(physicalMB: physicalMB) + resumeMarginMB
-            && (level < 0 || level >= levelFloor + levelResumeMargin)
+    /// Growth during play, checked every 2 s (DonorPool.watchGrowth): growthStop stops it, and a
+    /// stopped pool grows again once the spare memory is resumeMarginMB over its floor (1,920 MiB
+    /// on 12 GB) and the level levelResumeMargin points over levelFloor (20 %).
+    ///
+    /// Decision 0105 as amended 2026-10-30: it also grows again on spare memory alone, at a level
+    /// under 20 % (run l9 stopped at level 13 % with 4,105 MiB spare and stayed stopped with
+    /// 4,064-4,434). A level stop right after such a resume would flap, so after it the level
+    /// stop counts from the level at that resume, at most levelFloor (`spareResumeLevel`): it
+    /// fires under that level, or under levelFloor once the spare memory is back under the
+    /// resume threshold; and the next resume on spare waits for the level to come back to it.
+    /// At or over levelFloor the level stop is the plain rule, so a resume there (15-19 %) counts
+    /// from levelFloor: run l10 resumed at 17 %, and counting from 17 % it did not resume at 15 %
+    /// with 4,545 MiB spare. The spare floor's stop is unchanged. A resume on both readings ends
+    /// this.
+    public struct Growth: Equatable, Sendable {
+        public enum Change: Equatable, Sendable {
+            case stopped(String)
+            case resumed(String)
+        }
+
+        public let physicalMB: Int
+        public private(set) var growing = true
+        /// The level at the last resume on spare memory alone, at most levelFloor, until a resume
+        /// on both readings.
+        public private(set) var spareResumeLevel: Int?
+
+        public init(physicalMB: Int) { self.physicalMB = physicalMB }
+
+        /// The spare memory a stopped pool needs to grow again: 1,920 MiB on 12 GB.
+        public var resumeSpareMB: Int { spareFloorMB(physicalMB: physicalMB) + resumeMarginMB }
+        public static let resumeLevel = levelFloor + levelResumeMargin
+
+        /// One check: the change, when there is one.
+        public mutating func check(spareMB: Int, level: Int) -> Change? {
+            if growing {
+                guard let why = stopReason(spareMB: spareMB, level: level) else { return nil }
+                growing = false
+                return .stopped(why)
+            }
+            guard resumeWait(spareMB: spareMB, level: level) == nil else { return nil }
+            growing = true
+            let spare = "spare \(spareMB) MiB >= \(resumeSpareMB)"
+            if level < 0 {
+                spareResumeLevel = nil
+                return .resumed(spare + ", level unread")
+            }
+            if level >= Self.resumeLevel {
+                spareResumeLevel = nil
+                return .resumed("level \(level)% >= \(Self.resumeLevel)%, " + spare)
+            }
+            spareResumeLevel = min(level, levelFloor)
+            return .resumed(spare + ", level \(level)% < \(Self.resumeLevel)%: on spare memory; the level stop "
+                            + "now under \(min(level, levelFloor))%")
+        }
+
+        /// Why a growing pool stops now, or nil.
+        public func stopReason(spareMB: Int, level: Int) -> String? {
+            guard let why = growthStop(spareMB: spareMB, level: level, physicalMB: physicalMB) else { return nil }
+            guard let resumedAt = spareResumeLevel, spareMB >= spareFloorMB(physicalMB: physicalMB) else { return why }
+            // after a resume on spare memory: under levelFloor, but not under its level
+            if level < resumedAt {
+                return resumedAt >= levelFloor ? why : "level \(level)% < \(resumedAt)%, the level at the resume on spare memory"
+            }
+            if spareMB < resumeSpareMB { return "level \(level)% < \(levelFloor)%, spare \(spareMB) MiB < \(resumeSpareMB)" }
+            return nil
+        }
+
+        /// What a stopped pool still waits for, as the stats line's `resume_wait` prints it, or nil
+        /// when it resumes.
+        public func resumeWait(spareMB: Int, level: Int) -> String? {
+            var short: [String] = []
+            if let resumedAt = spareResumeLevel, level >= 0, level < resumedAt {
+                short.append("level \(level)% < \(resumedAt)% (the last resume on spare memory)")
+            }
+            if spareMB < resumeSpareMB { short.append("spare \(spareMB) MiB < \(resumeSpareMB)") }
+            return short.isEmpty ? nil : short.joined(separator: ", ")
+        }
     }
 
     /// Why the first donor's own limit stops the pool, or nil.

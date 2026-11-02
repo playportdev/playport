@@ -165,7 +165,7 @@ The import chain is read from the staged DLLs in the IPA (`llvm-objdump -p`): i3
 `app/artifacts.tsv` before 0070, so this is not a regression of the Proton module set.
 
 This is the failure the compatibility plan records as class 0
-([plan, now in finished.md](../plans/finished.md#testing-reported-games-without-owning-them), found in the PLA-29 log): an
+([PLA-12](https://linear.app/playportdev/issue/PLA-12), found in the PLA-29 log): an
 i386 process cannot initialise `opengl32.dll` because `patches/madeira-unix` 0068 gives a
 WoW64 caller the all-fail stub table, whose attach fails. The plan names wined3d's own users;
 Super Meat Boy shows a new path into it: **any i386 title that imports `d3dx9_*`** reaches

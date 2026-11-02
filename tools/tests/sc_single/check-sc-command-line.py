@@ -34,6 +34,11 @@ int main(void) {
     assert(strstr(result, " --single-process"));
     assert(strstr(result, " --js-flags=--jitless"));
     assert(strstr(result, " --no-proxy-server"));
+    /* Decision 0150 as amended 2026-10-30: no component updater, so no BITS activation. */
+    assert(strstr(result, " --disable-component-update") && (how & SC_NOUPDATE_ADDED));
+    /* 0150 amended again 2026-10-30: software drawing, no GPU stack (0109's two switches). */
+    assert(strstr(result, " --disable-gpu ") && strstr(result, " --disable-gpu-compositing") && (how & SC_NOGPU_ADDED));
+    assert(!strstr(result, "--in-process-gpu"));
     cl = wide(cmd, "helper.exe --type=renderer");
     assert(sc_helper_kind(image, il, cmd, cl) == SC_CHILD);
     cl = wide(cmd, "helper.exe --type=gpu-process");
@@ -49,6 +54,33 @@ int main(void) {
     assert(!strstr(result, "--js-flags=--jitless"));
     assert(strstr(result, "--disable-features=First --disable-features=PartitionAllocBackupRefPtr,Last"));
     assert(!(how & SC_SINGLE_ADDED) && (how & SC_OWN_JS_FLAGS));
+    assert(strstr(result, " --disable-component-update") && (how & SC_NOUPDATE_ADDED));
+    /* Present already: kept once, not appended; a longer switch with the same start is not it. */
+    cl = wide(cmd, "helper --disable-component-update --lang=en");
+    n = sc_browser_cmdline(cmd, cl, 1, NULL, out, 2304, &how);
+    for (int i = 0; i <= n; i++) result[i] = out[i];
+    assert(!(how & SC_NOUPDATE_ADDED));
+    assert(strstr(result, "--disable-component-update") &&
+           !strstr(strstr(result, "--disable-component-update") + 1, "--disable-component-update"));
+    cl = wide(cmd, "helper --disable-component-updater-x");
+    n = sc_browser_cmdline(cmd, cl, 1, NULL, out, 2304, &how);
+    assert(how & SC_NOUPDATE_ADDED);
+    /* Both GPU switches present: kept once each, nothing added; one present: only the other is
+     * added, and --disable-gpu-compositing alone does not count as --disable-gpu. */
+    cl = wide(cmd, "helper --disable-gpu --disable-gpu-compositing");
+    n = sc_browser_cmdline(cmd, cl, 1, NULL, out, 2304, &how);
+    for (int i = 0; i <= n; i++) result[i] = out[i];
+    assert(!(how & SC_NOGPU_ADDED));
+    assert(!strstr(strstr(result, "--disable-gpu ") + 1, "--disable-gpu "));
+    assert(!strstr(strstr(result, "--disable-gpu-compositing") + 1, "--disable-gpu-compositing"));
+    cl = wide(cmd, "helper --disable-gpu-compositing");
+    n = sc_browser_cmdline(cmd, cl, 1, NULL, out, 2304, &how);
+    for (int i = 0; i <= n; i++) result[i] = out[i];
+    assert((how & SC_NOGPU_ADDED) && n > 14 && !strcmp(result + n - 14, " --disable-gpu") &&
+           !strstr(strstr(result, "--disable-gpu-compositing") + 1, "--disable-gpu-compositing"));
+    /* The worst case still fits the caller's len + 256. */
+    cl = wide(cmd, "helper");
+    assert(sc_browser_cmdline(cmd, cl, 1, NULL, out, cl + 256, &how) > 0);
     assert(sc_browser_cmdline(cmd, cl, 1, NULL, out, 1, &how) == -1);
     return 0;
 }
@@ -69,4 +101,4 @@ assert process.index('if (verified)') < process.index('sc_browser_cmdline( param
 assert 'if (!sc_single) chromium_policy( &path, params );' in process
 assert 'pp_sc_single_mapping = args->sc_single;' in process
 assert 'args->sc_single = sc_single;' in process
-print('PASS: helper-only classification, child kinds, flag/feature merges, proxy preservation, overflow and preflight-first wiring')
+print('PASS: helper-only classification, child kinds, flag/feature merges, proxy preservation, component update off, GPU off, overflow and preflight-first wiring')

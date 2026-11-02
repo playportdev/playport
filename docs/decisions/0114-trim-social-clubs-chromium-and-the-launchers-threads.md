@@ -6,8 +6,13 @@ and processes; FEX, the pool and rpmalloc unchanged). Follows
 [0111](0111-fewer-cef-processes-with-chromium-features.md)**: storage no longer stays out.
 [PLA-384](https://linear.app/playportdev/issue/PLA-384),
 [PLA-370](https://linear.app/playportdev/issue/PLA-370),
-[plan](../plans/finished.md#own-low-address-space-cef),
+[plan](https://linear.app/playportdev/issue/PLA-370),
 [evidence](../evidence/2026-10-17-cef-trim.md).
+
+**Amended 2026-10-31 by [0169](0169-social-club-on-rockstars-cef-in-the-stock-cef-layout.md) (PLA-476):** the
+"Our CEF" trims (`patches/chromium` 0008–0013, 0015–0016, `patches/cef` 0002) are removed with Playport's CEF build (the
+plan's chunk 4, merge `b5814a58`). Rockstar's CEF runs without them; its verified browser gets
+`--disable-component-update` at run time instead (0150, amended). The launcher's Open environment stays.
 
 ## Context
 

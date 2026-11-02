@@ -1,6 +1,6 @@
 # 2026-10-20: RDR2's own graphics settings at their lowest get the Story load to its first 3D frames; the load still ends at the 8,192 MB limit. A smaller `totalphys` or video budget changes nothing, and ending the game's own Social Club frees about 480 MB that the load takes back
 
-**Linear:** PLA-413 (and PLA-364). **Plan:** `.work/plans/rdr2-story-memory.md`. **Decision:**
+**Linear:** PLA-413 (and PLA-364). **Plan:** [PLA-413](https://linear.app/playportdev/issue/PLA-413#comment-4088d294). **Decision:**
 [0133](../decisions/0133-a-dev-build-may-end-rdr2s-own-social-club-after-its-sign-in.md).
 **Follows:** [rdr2-landing-capture](2026-10-20-rdr2-landing-capture.md), section 6.
 

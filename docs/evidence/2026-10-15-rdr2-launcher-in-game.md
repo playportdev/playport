@@ -1,7 +1,7 @@
 # RDR2 Story with the Rockstar Games Launcher, measured during play (desktop Proton)
 
 **Linear:** [PLA-291](https://linear.app/playportdev/issue/PLA-291) (Stage R, in-game phase), plan
-[launchers](../plans/2026-10-12-launchers.md) (Progress (Rockstar track)). Date 2026-10-15.
+[launchers](https://linear.app/playportdev/issue/PLA-616) (Progress (Rockstar track)). Date 2026-10-15.
 
 **Setup**
 

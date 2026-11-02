@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
-# The Xbox runtime's PE DLLs (the Xbox plan, docs/plans/2026-10-30-xbox-game-pass.md):
+# The Xbox runtime's PE DLLs (the Xbox spec, PLA-485):
 # nexus-xgameruntime's xgameruntime.dll, the GDK runtime an Xbox title loads,
 # at the pins.lock xgameruntime commit with patches/xgameruntime, and nghttp2's
 # libnghttp2.dll (library only, at the nghttp2 pin, unmodified), the HTTP/2

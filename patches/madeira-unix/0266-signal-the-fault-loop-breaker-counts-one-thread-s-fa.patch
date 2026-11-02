@@ -1,0 +1,242 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 1 Nov 2026 03:33:15 +0100
+Subject: [PATCH] signal: the fault-loop breaker counts one thread's faults
+
+The Mach handler's livelock breaker (ml261, ml385, ml876) ends a thread
+once the same page and pc fault 50 times in a row with no new address.
+Its state was one set of statics for the whole process, so faults on
+different threads at the same place added up as if one thread were
+looping.
+
+World of Warcraft's ARM64 client raises a UDF at +0x3367a4 in its
+DLL_THREAD_ATTACH callback on every thread it starts, and handles it.
+Its main thread creates its worker threads one at a time and waits for
+each to take its start arguments. By the 29th thread the count reached
+50 and the breaker ended that thread inside the callback, before it
+ran its start routine; the main thread then waited for it for the rest
+of the run, with every thread idle and no window.
+
+The rule moves to pp_fault_loop.h, keyed on the faulting Mach thread as
+well: a fault on another thread starts a new run. Alignment faults are
+still not counted (PLA-238), a new address on the same page and pc is
+still progress up to the storm ceiling.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-31-wow-arm64-start.md
+Offered-upstream: no; the Mach exception handler is the iOS port's
+---
+ build/ntdll-unix/pp_fault_loop.h    | 74 ++++++++++++++++++++++
+ build/ntdll-unix/signal_arm64_ios.c | 95 +++++++++--------------------
+ 2 files changed, 102 insertions(+), 67 deletions(-)
+ create mode 100644 build/ntdll-unix/pp_fault_loop.h
+
+diff --git a/build/ntdll-unix/pp_fault_loop.h b/build/ntdll-unix/pp_fault_loop.h
+new file mode 100644
+index 0000000..77f58fc
+--- /dev/null
++++ b/build/ntdll-unix/pp_fault_loop.h
+@@ -0,0 +1,74 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later
++ * The Mach exception handler's fault-loop breaker (Playport, PLA-514).
++ *
++ * A fault nothing resolves can repeat forever: a stack growing into a page
++ * no one commits (ml261), a NULL write (ml385). When one thread faults on the
++ * same page, at the same pc and address, PPFL_BREAK_AT times in a row, the
++ * handler ends that thread. Not a loop:
++ *
++ * - the same page and pc at a new address: progress (an import table walked
++ *   entry by entry, ml876), counted only toward a page-level storm ceiling;
++ * - an alignment fault: a misaligned atomic FEX emulates and resumes after
++ *   (PLA-238); it is not counted and leaves the state as it was;
++ * - the same fault on another thread: each thread faults once, as World of
++ *   Warcraft's threads do on the UDF in their DLL_THREAD_ATTACH callback.
++ *   Counted across threads, a thread WoW had just created was ended before
++ *   it started, and the main thread, waiting for it to start, waited forever.
++ */
++#ifndef PP_FAULT_LOOP_H
++#define PP_FAULT_LOOP_H
++
++#include <stdint.h>
++
++#define PPFL_BREAK_AT      50
++#define PPFL_STORM_CEILING 20000
++
++struct ppfl_state
++{
++    uint64_t page, pc, addr;
++    uint32_t thread, n, page_n;
++};
++
++/* The page the breaker keys on: the 16 KB host page, the NULL page as 1. */
++static inline uint64_t ppfl_page( uint64_t addr )
++{
++    uint64_t page = addr & ~0x3fffull;
++    return page ? page : 1;
++}
++
++/* Notes a fault the handler did not resolve. Returns how many times in a row
++ * this thread has faulted on this page at this pc (0: not counted, or the
++ * first of a new run); at PPFL_BREAK_AT the caller ends the thread and the
++ * count restarts. *advanced is the page's storm count when the address moved
++ * on, else 0. */
++static inline uint32_t ppfl_note( volatile struct ppfl_state *s, uint32_t thread, uint64_t pc,
++                                  uint64_t addr, int align_fault, uint32_t *advanced )
++{
++    uint64_t page = ppfl_page( addr );
++    uint32_t n;
++
++    *advanced = 0;
++    if (align_fault) return 0;
++    if (s->thread != thread || s->page != page || s->pc != pc)
++    {
++        s->thread = thread;
++        s->page = page;
++        s->pc = pc;
++        s->addr = addr;
++        s->n = 0;
++        s->page_n = 0;
++        return 0;
++    }
++    if (s->addr != addr)
++    {
++        uint32_t pn = __sync_add_and_fetch( &s->page_n, 1 );
++        s->addr = addr;
++        s->n = pn >= PPFL_STORM_CEILING ? PPFL_BREAK_AT - 1 : 0;   /* storm: the next fault breaks */
++        *advanced = pn;
++    }
++    n = __sync_add_and_fetch( &s->n, 1 );
++    if (n >= PPFL_BREAK_AT) s->n = 0;
++    return n;
++}
++
++#endif /* PP_FAULT_LOOP_H */
+diff --git a/build/ntdll-unix/signal_arm64_ios.c b/build/ntdll-unix/signal_arm64_ios.c
+index 4443248..34f6f2b 100644
+--- a/build/ntdll-unix/signal_arm64_ios.c
++++ b/build/ntdll-unix/signal_arm64_ios.c
+@@ -606,6 +606,9 @@ static __thread int ios_ss_call;
+ /* Playport (PLA-364, decision 0134): an entry is given back when its thread
+  * ends or is parked, and reused (pp_thread_slots.h). */
+ #include "pp_thread_slots.h"
++/* Playport (PLA-514): the fault-loop breaker counts one thread's faults
++ * (pp_fault_loop.h). */
++#include "pp_fault_loop.h"
+ static struct ios_thread_entry ios_thread_registry[IOS_MAX_WINE_THREADS];
+ static volatile int32_t ios_thread_count = 0;
+ static __thread int ios_my_registry_idx = -1;
+@@ -4743,66 +4746,33 @@ skip_reclaim_band: ;
+                      * eating an entire run, and dumps the region layout around it so the
+                      * owner can be identified and the real fix aimed correctly. */
+                     {
+-                        static volatile uint64_t stuck_page;
+-                        static volatile uint64_t stuck_pc;
+-                        static volatile uint32_t stuck_n;
+                         /* ml876: exact faulting ADDRESS, and a page-level storm
+-                         * counter. ml871-875 killed a UE 5.4 game thread here on
+-                         * every run: an SDK dll walked its import table with the
+-                         * classic VirtualProtect(entry,RW) / write / VirtualProtect
+-                         * (page,RO) pattern; on 16 KB host pages the RO of one 4 KB
+-                         * guest page strips W from the neighbour the guest had just
+-                         * made RW, [wr-strip] heals it and the thread advances to
+-                         * the NEXT entry -- a different address every time. Same
+-                         * (page,pc) 50x is therefore NOT "zero progress". Livelock
+-                         * = the SAME address re-faulting (ml261 sp-16 push, ml385
+-                         * NULL write, ml557 un-stuck heal); key on it. Keep a much
+-                         * larger page-level ceiling as the storm safety net. */
+-                        static volatile uint64_t stuck_addr;
+-                        static volatile uint32_t stuck_page_n;
+-                        uint64_t fpage = (uint64_t)fault_addr & ~0x3fffull;
+-                        /* ml385: NULL-page faults keyed as 1, not 0 — `if (fpage &&`
+-                         * excluded them entirely and a NULL-write loop in
+-                         * server_ioctl_file ran 3.3M times with no breaker
+-                         * (StikDebug's 8-stop kill was the only breaker, and it
+-                         * had detached). */
+-                        if (!fpage) fpage = 1;
+-                        /* PLA-238: an alignment fault (EXC_ARM_DA_ALIGN) is not
+-                         * counted. It is a misaligned atomic, a guest split lock
+-                         * in code FEX translated: FEX emulates it and resumes after
+-                         * it, so the same pc and address in a row is a loop making
+-                         * progress, not a livelock. Jurassic World Evolution's
+-                         * Wwise bank thread runs such a loop on a stack variable,
+-                         * and this breaker ended the thread 50 faults in. */
+-                        int align_fault = fault_kr == EXC_ARM_DA_ALIGN;
+-
+-                        if (!align_fault && fpage == stuck_page && fault_pc_check == stuck_pc &&
+-                            (uint64_t)fault_addr != stuck_addr)
+-                        {
+-                            /* ml876: same page+pc but a NEW address = progress.
+-                             * Restart the exact-address count; keep the page
+-                             * storm count (ceiling 20000, logged every 1000). */
+-                            uint32_t pn = __sync_add_and_fetch(&stuck_page_n, 1);
+-                            stuck_addr = (uint64_t)fault_addr;
+-                            stuck_n = 0;
+-                            if ((pn % 1000) == 0)
+-                                dprintf(STDERR_FILENO,
+-                                    "[fault-stuck] ml876 page 0x%llx pc 0x%llx: %u faults, addresses advancing (last 0x%llx)\n",
+-                                    (unsigned long long)fpage, (unsigned long long)fault_pc_check, pn,
+-                                    (unsigned long long)fault_addr);
+-                            if (pn >= 20000) stuck_n = 49;   /* storm ceiling: next fault breaks */
+-                        }
+-                        if (!align_fault && fpage == stuck_page && fault_pc_check == stuck_pc)
++                         * counter: the same (page,pc) at a NEW address is progress
++                         * (an import table walked entry by entry under 16 KB host
++                         * pages). ml385: NULL-page faults keyed as 1. PLA-238:
++                         * alignment faults (EXC_ARM_DA_ALIGN, misaligned atomics FEX
++                         * emulates) are not counted. PLA-514: keyed on the thread
++                         * too; pp_fault_loop.h has the rules. */
++                        static volatile struct ppfl_state fault_loop;
++                        uint64_t fpage = ppfl_page( (uint64_t)fault_addr );
++                        uint32_t pn;
++                        uint32_t n = ppfl_note( &fault_loop, thread, fault_pc_check, (uint64_t)fault_addr,
++                                                fault_kr == EXC_ARM_DA_ALIGN, &pn );
++                        if (pn && (pn % 1000) == 0)
++                            dprintf(STDERR_FILENO,
++                                "[fault-stuck] ml876 page 0x%llx pc 0x%llx: %u faults, addresses advancing (last 0x%llx)\n",
++                                (unsigned long long)fpage, (unsigned long long)fault_pc_check, pn,
++                                (unsigned long long)fault_addr);
++                        if (n)
+                         {
+-                            uint32_t n = __sync_add_and_fetch(&stuck_n, 1);
+-                            /* ml385 LOOP BREAKER: same page AND same pc 50 times
+-                             * with zero progress is a livelock, not a recoverable
+-                             * fault (guard/watch pages resolve in 1-3). Divert the
+-                             * thread to wine's abort_thread so the pseudo-process
+-                             * dies cleanly instead of eating the whole run. Native
+-                             * unix-code faults (dylib pc) can never be delivered
+-                             * to guest SEH anyway. */
+-                            if (n >= 50)
++                            /* ml385 LOOP BREAKER: one thread faulting on the same
++                             * page AND pc 50 times with zero progress is a livelock,
++                             * not a recoverable fault (guard/watch pages resolve in
++                             * 1-3). Divert the thread to wine's abort_thread so the
++                             * pseudo-process dies cleanly instead of eating the whole
++                             * run. Native unix-code faults (dylib pc) can never be
++                             * delivered to guest SEH anyway. */
++                            if (n >= PPFL_BREAK_AT)
+                             {
+                                 extern void abort_thread( int status );
+                                 uint64_t cur_sp = __darwin_arm_thread_state64_get_sp(state);
+@@ -4816,7 +4786,6 @@ skip_reclaim_band: ;
+                                 thread_set_state( thread, ARM_THREAD_STATE64,
+                                                   (thread_state_t)&state, count );
+                                 handled = 1;
+-                                stuck_n = 0;
+                             }
+                             /* ml369: was 2048, which NEVER fired — the
+                              * debugger script kills the app after 8
+@@ -4862,14 +4831,6 @@ skip_reclaim_band: ;
+                                 }
+                             }
+                         }
+-                        else if (!align_fault)
+-                        {
+-                            stuck_page = fpage;
+-                            stuck_pc = fault_pc_check;
+-                            stuck_addr = (uint64_t)fault_addr;
+-                            stuck_n = 0;
+-                            stuck_page_n = 0;
+-                        }
+                     }
+ 
+                     if (cnt <= 50 || first_seen || (cnt % 500) == 0)

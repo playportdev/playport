@@ -1,0 +1,232 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 1 Nov 2026 20:30:00 +0100
+Subject: [PATCH] ARM64EC: read guest code from Wine's read-only alias of a
+ view with a noaccess-split host page
+
+Wine keeps a 16 KB host page that holds a committed PAGE_NOACCESS 4 KB page
+beside code PROT_NONE (madeira-unix 0279), so the guest's read of the closed
+page faults as on x64 Windows. The decoder read the code of such a page, a
+byte at a time, through Wine's Mach handler: World of Warcraft's x64 client
+took 21.4 M emulated reads in 400 s (run 20261101T191349).
+
+Wine now sends a read-only alias of the view (madeira-unix 0280)
+through BTCpu64IosAddAliasMapping with bit 63 of the size set, and the size
+equal to the flag alone retires it. IosJitAlias.cpp keeps these in a
+query-only table under a sequence count, like the sub-floor windows, and
+IosCodeReadAddr gives the alias address of a guest code address. The
+decoder's byte source (AdjustAddrForSpecialRegion, as for sub-floor code)
+and the disk cache's hashing (GuestCodeBytes) read there; guest addresses,
+block identity, executable-range questions and the guest's own accesses are
+unchanged. The WOW64 module has no such aliases.
+
+Linear: PLA-516, PLA-514
+Class: ios-port
+Evidence: docs/evidence/2026-11-01-wow-x64-fex.md
+Offered-upstream: no; the 16 KB host page is the iOS port's
+---
+ FEXCore/Source/Interface/Core/DiskCache.h  |   7 +-
+ FEXCore/Source/Interface/Core/Frontend.cpp |  18 ++++
+ Source/Windows/ARM64EC/IosJitAlias.cpp     | 103 +++++++++++++++++++++
+ Source/Windows/WOW64/Module.cpp            |   5 +
+ 4 files changed, 132 insertions(+), 1 deletion(-)
+
+diff --git a/FEXCore/Source/Interface/Core/DiskCache.h b/FEXCore/Source/Interface/Core/DiskCache.h
+index c90854849..eccaac07d 100644
+--- a/FEXCore/Source/Interface/Core/DiskCache.h
++++ b/FEXCore/Source/Interface/Core/DiskCache.h
+@@ -26,6 +26,9 @@
+ // address IosGuestWindowBase + g); 0 in an ARM64EC process. Set by the WOW64
+ // module before it creates the context, whose constructor runs DiskCache::Init.
+ extern "C" uint64_t IosGuestWindowBase;
++// Playport (PLA-516): where FEX reads guest code: its view's read-only alias
++// when Wine made one (IosJitAlias.cpp), else the address itself.
++extern "C" uint64_t IosCodeReadAddr(uint64_t Addr);
+ #endif
+ 
+ namespace FEXCore {
+@@ -42,8 +45,10 @@ namespace DiskCache {
+     if (IosGuestWindowBase && GuestAddr < (1ULL << 32)) {
+       return reinterpret_cast<const uint8_t*>(IosGuestWindowBase + GuestAddr);
+     }
+-#endif
++    return reinterpret_cast<const uint8_t*>(IosCodeReadAddr(GuestAddr));
++#else
+     return reinterpret_cast<const uint8_t*>(GuestAddr);
++#endif
+   }
+ 
+ 
+diff --git a/FEXCore/Source/Interface/Core/Frontend.cpp b/FEXCore/Source/Interface/Core/Frontend.cpp
+index 2b4c21185..8470dcc1a 100644
+--- a/FEXCore/Source/Interface/Core/Frontend.cpp
++++ b/FEXCore/Source/Interface/Core/Frontend.cpp
+@@ -1355,6 +1355,7 @@ void Decoder::AddBranchTarget(uint64_t Target) {
+  * Addr unchanged when it is not inside a registered sub-floor window, so the
+  * fast path is one compare. */
+ extern "C" uint64_t IosSubfloorToReal(uint64_t Addr);
++extern "C" uint64_t IosCodeReadAddr(uint64_t Addr);
+ #endif
+ 
+ const Decoder::DecodeStream Decoder::AdjustAddrForSpecialRegion(const uint8_t* _InstStream, uint64_t EntryPoint, uint64_t RIP) {
+@@ -1416,6 +1417,23 @@ const Decoder::DecodeStream Decoder::AdjustAddrForSpecialRegion(const uint8_t* _
+       };
+     }
+   }
++  /* Playport (PLA-516): code on a host page Wine keeps closed for a no-access
++   * 4 KB neighbour is read from its view's read-only alias (IosJitAlias.cpp's
++   * code-read aliases), the same split as above: only the byte source moves. */
++  {
++    const uint64_t AliasRIP = IosCodeReadAddr(RIP);
++    if (AliasRIP != RIP) {
++      static uint32_t CodeReadDecodeCount = 0;
++      if (CodeReadDecodeCount < 4) {
++        CodeReadDecodeCount++;
++        LogMan::Msg::EFmt("[iOS-code-read] block bytes from the view's read-only alias: guest RIP={:#x} -> {:#x}", RIP, AliasRIP);
++      }
++      return DecodeStream {
++        .InstStream = _InstStream - EntryPoint + RIP,
++        .AdjustedInstStream = reinterpret_cast<const uint8_t*>(AliasRIP),
++      };
++    }
++  }
+ #endif
+ 
+   return DecodeStream {
+diff --git a/Source/Windows/ARM64EC/IosJitAlias.cpp b/Source/Windows/ARM64EC/IosJitAlias.cpp
+index 4127fe2e1..82248132a 100644
+--- a/Source/Windows/ARM64EC/IosJitAlias.cpp
++++ b/Source/Windows/ARM64EC/IosJitAlias.cpp
+@@ -495,6 +495,106 @@ static bool IosSubfloorAdd(uint64_t LowBase, uint64_t RealBase, uint64_t Size) {
+ }
+ /* ======================= end ml951 SUB-FLOOR WINDOWS ===================== */
+ 
++/* ===================== Playport (PLA-516) CODE-READ ALIASES ===================
++ *
++ * Wine keeps a host page that holds a committed PAGE_NOACCESS 4 KB page beside
++ * code PROT_NONE, so the guest's read of the closed page faults as on Windows;
++ * an access to its open pages is completed by Wine's Mach handler. The decoder
++ * reading such a page's code, a byte at a time, took one Mach exception per
++ * byte (21.4 M in 400 s of World of Warcraft's x64 client). Wine therefore
++ * makes a read-only alias of the view (the same memory) and sends it here
++ * through BTCpu64IosAddAliasMapping with kIosCodeReadFlag set in Size
++ * (Size == the flag alone retires it). FEX's own reads of guest code -- the
++ * decoder's byte source and the disk cache's hashing -- go to the alias; guest
++ * accesses and every executable-range question keep the guest address. Query
++ * only, like the sub-floor table: Module.S never sees it. */
++static constexpr uint64_t kIosCodeReadFlag = 1ull << 63;
++static constexpr int kMaxCodeReadEntries = 32;
++
++struct IosCodeReadEntry {
++  uint64_t Base;
++  uint64_t Alias;
++  uint64_t Size;
++  uint64_t _Padding;
++};
++static IosCodeReadEntry g_CodeRead[kMaxCodeReadEntries];
++static int g_CodeReadCount;               // slots ever used
++static volatile uint64_t g_CodeReadGen;  // odd while a slot changes
++
++// Under AliasWriteLock.
++static void IosCodeReadSlotSet(int Slot, uint64_t Base, uint64_t Alias, uint64_t Size) {
++  __atomic_store_n(&g_CodeReadGen, g_CodeReadGen + 1, __ATOMIC_RELAXED);
++  __atomic_thread_fence(__ATOMIC_SEQ_CST);
++  g_CodeRead[Slot].Base = Base;
++  g_CodeRead[Slot].Alias = Alias;
++  g_CodeRead[Slot].Size = Size;
++  if (Slot == g_CodeReadCount) {
++    __atomic_store_n(&g_CodeReadCount, Slot + 1, __ATOMIC_RELEASE);
++  }
++  __atomic_thread_fence(__ATOMIC_SEQ_CST);
++  __atomic_store_n(&g_CodeReadGen, g_CodeReadGen + 1, __ATOMIC_RELEASE);
++}
++
++// Nothing here may log (see BTCpu64IosAddAliasMapping). 0 when the table is full.
++static int IosCodeReadUpdate(uint64_t Base, uint64_t Alias, uint64_t Size) {
++  int Result = 1, Free = -1;
++  AliasWriteLock();
++  const int Count = g_CodeReadCount;
++  for (int i = 0; i < Count; i++) {
++    if (g_CodeRead[i].Size && g_CodeRead[i].Base == Base && g_CodeRead[i].Alias == Alias) {
++      if (!Size) {
++        IosCodeReadSlotSet(i, 0, 0, 0);
++      }
++      AliasWriteUnlock();
++      return 1;
++    }
++    if (!g_CodeRead[i].Size && Free < 0) {
++      Free = i;
++    }
++  }
++  if (Size) {
++    if (Free < 0 && Count < kMaxCodeReadEntries) {
++      Free = Count;
++    }
++    if (Free < 0) {
++      Result = 0;
++    } else {
++      IosCodeReadSlotSet(Free, Base, Alias, Size);
++    }
++  }
++  AliasWriteUnlock();
++  return Result;
++}
++
++// Where FEX reads the guest code byte at Addr: its view's alias, or Addr. A
++// reader that races a change gives Addr, whose read Wine's handler completes.
++uint64_t IosCodeReadAddr(uint64_t Addr) {
++  if (!__atomic_load_n(&g_CodeReadCount, __ATOMIC_ACQUIRE)) {
++    return Addr; // the common case: no image has a noaccess-split page
++  }
++  for (int Try = 0; Try < 4; Try++) {
++    const uint64_t Gen = __atomic_load_n(&g_CodeReadGen, __ATOMIC_ACQUIRE);
++    if (Gen & 1) {
++      continue;
++    }
++    uint64_t Result = Addr;
++    const int Count = __atomic_load_n(&g_CodeReadCount, __ATOMIC_ACQUIRE);
++    for (int i = 0; i < Count; i++) {
++      const uint64_t Base = g_CodeRead[i].Base, Size = g_CodeRead[i].Size;
++      if (Size && Addr - Base < Size) {
++        Result = g_CodeRead[i].Alias + (Addr - Base);
++        break;
++      }
++    }
++    __atomic_thread_fence(__ATOMIC_ACQUIRE);
++    if (__atomic_load_n(&g_CodeReadGen, __ATOMIC_RELAXED) == Gen) {
++      return Result;
++    }
++  }
++  return Addr;
++}
++/* =================== end Playport (PLA-516) CODE-READ ALIASES ================= */
++
+ /* Returns 1 when the alias is in the table (or retired), 0 when it was
+  * refused because the table is full: the caller (Wine's ntdll-unix) logs it.
+  *
+@@ -523,6 +623,9 @@ int BTCpu64IosAddAliasMapping(uint64_t PeBase, uint64_t JitBase, uint64_t Size)
+   if (Size && PeBase < kIosSubfloorFloor) {
+     return IosSubfloorAdd(PeBase, JitBase, Size) ? 1 : 0;
+   }
++  if (Size & kIosCodeReadFlag) {
++    return IosCodeReadUpdate(PeBase, JitBase, Size & ~kIosCodeReadFlag);
++  }
+   AliasWriteLock();
+   const int Result = IosAddAliasMappingLocked(PeBase, JitBase, Size);
+   AliasWriteUnlock();
+diff --git a/Source/Windows/WOW64/Module.cpp b/Source/Windows/WOW64/Module.cpp
+index 52a413695..408e1c6c1 100644
+--- a/Source/Windows/WOW64/Module.cpp
++++ b/Source/Windows/WOW64/Module.cpp
+@@ -169,6 +169,11 @@ uint64_t IosSubfloorToReal(uint64_t Address) {
+   return Window::Base ? Window::ToHost(Address) : Address;
+ }
+ 
++// Wine sends code-read aliases to the ARM64EC module only (IosJitAlias.cpp).
++uint64_t IosCodeReadAddr(uint64_t Address) {
++  return Address;
++}
++
+ // The whole 32-bit window for every block (OpcodeDispatcher.cpp's BeginFunction
+ // takes 0 to 4 GiB in 32-bit mode as the guest window).
+ int IosSubfloorWindowForCode(uint64_t, uint64_t* Low, uint64_t* Size, uint64_t* Real) {

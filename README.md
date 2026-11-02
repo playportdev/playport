@@ -6,7 +6,9 @@
 
 **PC games on your iPhone. Natively, no streaming.**
 
-[Website](https://playport.dev/) · [Download](https://github.com/playportdev/playport/releases) · [Game compatibility](https://playport.dev/compatibility/) · [Architecture](docs/ARCHITECTURE.md)
+[Website](https://playport.dev/) · [Download](https://github.com/playportdev/playport/releases) · [Game compatibility](https://playport.dev/compatibility/) · [Architecture](docs/ARCHITECTURE.md) · [❤️ Support on Ko-fi](https://ko-fi.com/playportdev)
+
+[![Support Playport on Ko-fi](https://img.shields.io/badge/Support_Playport-on_Ko--fi-FF5E5B?style=for-the-badge&logo=kofi&logoColor=white)](https://ko-fi.com/playportdev)
 
 [![Checks](https://img.shields.io/github/actions/workflow/status/playportdev/playport/checks.yml?branch=main&style=flat-square&label=checks&labelColor=151A21)](https://github.com/playportdev/playport/actions/workflows/checks.yml)
 [![Licence: GPL-3.0-or-later](https://img.shields.io/badge/licence-GPL--3.0--or--later-F5B544?style=flat-square&labelColor=151A21)](LICENSE)
@@ -18,42 +20,57 @@
 </div>
 
 Playport runs Windows games, 64-bit and 32-bit, on a stock, non-jailbroken
-iPhone. Install a game from Steam, GOG or Epic Games, or bring your own, pick up
-a controller and press Play. The game runs on the phone's own CPU and GPU: no
-PC, no cloud, no stream.
+iPhone. Install a game from Steam, GOG, Epic Games or Battle.net, or bring your
+own, pick up a controller or play with on-screen touch controls, and press Play.
+The game runs on the phone's own CPU and GPU: no PC, no cloud, no stream.
 
-> **New in 0.4: GOG, Epic Games and your own games.** Sign in to GOG or Epic
-> Games beside Steam, or add a DRM-free game from Files, and games now sign in to
-> their store as they would on a PC. See the [release notes](docs/releases/0.4.0.md).
+> **New in 0.5: World of Warcraft, Red Dead Redemption 2, The Witcher 3: Wild Hunt
+> – Remastered and touch controls.** Install World of Warcraft from Battle.net,
+> play with nothing but the phone using on-screen controls and their layout editor,
+> and find every store in the redesigned Library. See the
+> [release notes](https://playport.dev/releases/#v0.5.0).
+
+> [!TIP]
+> **❤️ Playport is free, and it stays free. If it put a PC game in your pocket,
+> please consider [supporting it on Ko-fi](https://ko-fi.com/playportdev).**
+> Every donation buys time for the next release: more games and more fixes.
+> See [Support Playport](#support-playport).
 
 <p align="center">
-  <a href="https://playport.dev/#video-portal2"><img src="site/screenshots/portal2.webp" width="100%" alt="Portal 2 running on an iPhone in Playport: an orange and a blue portal in a test chamber, with Metal's HUD showing 59.98 fps at 1564 by 720. Click to watch the recording on playport.dev"></a>
-  <br><sub><b>Portal 2</b>, a 32-bit Direct3D 9 game, at 60 fps through DXVK and KosmicKrisp. <b>Watch the uncut recording</b>: Home to Play to a test chamber (<a href="site/video/portal2.mp4">MP4</a>).</sub>
-</p>
-
-<p align="center">
-  <img src="site/screenshots/home-0.2.webp" width="100%" alt="Playport's Home page: Continue playing Kingdom Come: Deliverance, a download, recent games">
+  <a href="https://playport.dev/#screens"><img src="site/screenshots/wow-touch.webp" width="100%" alt="World of Warcraft on an iPhone in Playport: a mage in a blue robe on a ship's deck, with on-screen Esc, Tab, number, Jump, Reload, Use and Fire buttons and a movement stick"></a>
+  <br><sub><b>World of Warcraft</b> from Battle.net, played with Playport's on-screen keyboard and mouse controls.</sub>
 </p>
 
 <table>
   <tr>
-    <td width="50%"><img src="site/screenshots/library-0.2.webp" alt="Playport's Library: All, Installed and Steam filters over Steam games, installed and not"></td>
-    <td width="50%"><img src="site/screenshots/downloads.webp" alt="Playport's Downloads: a game downloading from Steam, free storage, the games finished today"></td>
+    <td width="50%"><img src="site/screenshots/rdr2.webp" alt="Red Dead Redemption 2 on an iPhone in Playport: Arthur Morgan in a winter coat on a snowy cabin porch"></td>
+    <td width="50%"><img src="site/screenshots/witcher3-remastered.webp" alt="The Witcher 3 on an iPhone in Playport: Geralt walking through a hall in Kaer Morhen past a lit fireplace"></td>
   </tr>
   <tr>
-    <td align="center"><b>Library</b>: everything you own, installed or not</td>
-    <td align="center"><b>Downloads</b>: straight from your store onto the phone</td>
+    <td align="center"><b>Red Dead Redemption 2</b>: Story mode, signed in through Rockstar's own launcher (new in 0.5)</td>
+    <td align="center"><b>The Witcher 3: Wild Hunt – Remastered</b>: the current version, in Kaer Morhen (new in 0.5)</td>
   </tr>
 </table>
 
 <table>
   <tr>
-    <td width="50%"><img src="site/screenshots/library-gog.webp" alt="Playport's Library with the GOG filter: Moonscars, Monster Train, Shogun Showdown and Duck Paradox ready to play, more GOG games not installed"></td>
-    <td width="50%"><img src="site/screenshots/library-epic.webp" alt="Playport's Library with the Epic Games filter: Snakebird Complete, House of Golf 2, Football Manager 2022 and Death's Door ready to play, more Epic games not installed"></td>
+    <td width="50%"><img src="site/screenshots/library-battlenet.webp" alt="Playport's Library with the Battle.net store selected: World of Warcraft ready to play, and World of Warcraft Classic, Classic Anniversary and Classic Era not installed"></td>
+    <td width="50%"><img src="site/screenshots/touch-editor.webp" alt="The touch layout editor over World of Warcraft: Add, Keyboard &amp; mouse, Opacity 30%, Reset and Done above a grid, with the buttons outlined to move and resize"></td>
   </tr>
   <tr>
-    <td align="center"><b>GOG</b>: your GOG games in the same Library (new in 0.4)</td>
-    <td align="center"><b>Epic Games</b>: Epic games install and start signed in (new in 0.4)</td>
+    <td align="center"><b>Battle.net</b>: World of Warcraft and its Classic editions in the same Library (new in 0.5)</td>
+    <td align="center"><b>Layout editor</b>: move, resize and add touch buttons (new in 0.5)</td>
+  </tr>
+</table>
+
+<table>
+  <tr>
+    <td width="50%"><img src="site/screenshots/library-0.5.webp" alt="Playport's Library: All games, 175, with Steam, GOG, Epic Games and Battle.net in a column of store icons, Hollow Knight and World of Warcraft ready to play"></td>
+    <td width="50%"><img src="site/screenshots/home-0.2.webp" alt="Playport's Home page: Continue playing Kingdom Come: Deliverance, a download, recent games"></td>
+  </tr>
+  <tr>
+    <td align="center"><b>Library</b>: everything you own on Steam, GOG, Epic Games and Battle.net, installed or not</td>
+    <td align="center"><b>Home</b>: pick up where you left off</td>
   </tr>
 </table>
 
@@ -62,23 +79,18 @@ PC, no cloud, no stream.
   <br><sub><b>Watch the uncut recording</b>: Library to Play to Hollow Knight at 60 fps, then Quit back to Home (<a href="site/video/hollow-knight.mp4">MP4</a>).</sub>
 </p>
 
-<p align="center">
-  <img src="site/screenshots/kingdom-come.webp" width="100%" alt="Kingdom Come: Deliverance running on an iPhone in Playport, walking Rattay at about 29 fps through DXMT's Direct3D 11">
-  <br><b>Kingdom Come: Deliverance</b>: Rattay through DXMT's Direct3D 11, about 29 fps at 720 rows
-</p>
-
 <table>
   <tr>
-    <td width="50%"><img src="site/screenshots/witcher3.webp" alt="The Witcher 3 running on an iPhone in Playport, with Metal's performance HUD showing about 36 fps through DXMT's Direct3D 11"></td>
+    <td width="50%"><img src="site/screenshots/kingdom-come.webp" alt="Kingdom Come: Deliverance running on an iPhone in Playport, walking Rattay at about 29 fps through DXMT's Direct3D 11"></td>
     <td width="50%"><img src="site/screenshots/hollow-knight.webp" alt="Hollow Knight at 2736x1260 and 120 fps"></td>
   </tr>
   <tr>
-    <td align="center"><b>The Witcher 3: Wild Hunt</b>: Direct3D 11 through DXMT, about 36 fps</td>
+    <td align="center"><b>Kingdom Come: Deliverance</b>: Rattay through DXMT's Direct3D 11, about 29 fps at 720 rows</td>
     <td align="center"><b>Hollow Knight</b>: the full 2736×1260, up to 120 fps</td>
   </tr>
 </table>
 
-<p align="center"><sub>On an A19 Pro iPhone, iOS 27.0, with Metal's performance HUD.</sub></p>
+<p align="center"><sub>On an A19 Pro iPhone, iOS 27.0.</sub></p>
 
 ## Features
 
@@ -93,10 +105,11 @@ PC, no cloud, no stream.
   A sign-in page a game opens shows in a panel over the play. *New in 0.4.*
 - **32-bit and 64-bit games.** Each 32-bit game gets its own 4 GB window above the
   memory iOS keeps for itself; Portal 2 plays at about 60 fps at 720p.
-- **Native on the phone.** Wine, the FEX x86 translator and DXMT run inside one
-  iOS app; Direct3D 10 and 11 render to Metal through DXMT.
-- **Vulkan through KosmicKrisp** (experimental): Direct3D 9 through DXVK and
-  Direct3D 12 through vkd3d-proton, chosen per game automatically.
+- **Native on the phone.** Wine, the FEX x86 translator and the graphics
+  backends run inside one iOS app, rendering through Metal.
+- **Vulkan through KosmicKrisp**, every game's default: Direct3D 8 to 11 through
+  DXVK, Direct3D 12 through vkd3d-proton and OpenGL through Zink. DXMT stays one
+  choice away for Direct3D 10 and 11.
 - **Made for a controller.** A landscape, gamepad-first app with an in-game menu
   to pause, resume or quit; controllers reach the game as XInput.
 - **JIT your way.** A built-in JIT helper after a one-time pairing, or JIT from
@@ -207,6 +220,20 @@ The capability stays on the App ID, so SideStore's weekly refresh keeps it. If
 the tick ever goes away, repeat steps 3 and 4. GetMoreRam takes one of a free
 Apple ID's three app slots; delete it afterwards to free the slot.
 
+## Support Playport
+
+Playport is free and open source. Getting World of Warcraft, Red Dead
+Redemption 2 or The Witcher 3 running on a phone takes a lot of work, game by
+game. If Playport is worth something to you, please consider a donation: it is
+what keeps new releases coming.
+
+<p align="center">
+  <a href="https://ko-fi.com/playportdev"><img src="https://img.shields.io/badge/Support_Playport-on_Ko--fi-FF5E5B?style=for-the-badge&logo=kofi&logoColor=white" alt="Support Playport on Ko-fi"></a>
+</p>
+
+A donation is a gift: it buys no licence, no extra rights and no different build,
+and everyone may keep sharing Playport under its licence.
+
 ## Game compatibility
 
 Which games run, and how well: the [compatibility list](https://playport.dev/compatibility/)
@@ -246,8 +273,7 @@ signature does not settle Apple's SDK, provisioning, JIT or delivery terms.
 
 - Playport is early and is tested on one phone: an A19 Pro iPhone (iPhone18,4) on iOS 27.0
   ([known-good versions](docs/DEVICE.md#known-good-ios-versions)).
-- 32-bit games are new: Portal 2 is the only one tested so far. They run on
-  the Vulkan backend, which is experimental.
+- 32-bit games are newer than 64-bit ones, so expect rough edges.
 - A free Apple ID signs apps for seven days, so refresh the app once a week
   (SideStore can do it on the phone, after the one-time
   [memory step](#sidestore-when-memory-has-no-tick)). Your games and saves stay on the phone.

@@ -1,7 +1,7 @@
 # 2026-10-13: touch controls 2f and 3c on the phone (controller gyro, controller map)
 
 **Linear:** [PLA-13](https://linear.app/playportdev/issue/PLA-13). **Plan:**
-[touch controls](../plans/2026-10-09-touch-controls.md), queue items 7 (2f), 10 (R) and 11 (3c).
+[touch controls](https://linear.app/playportdev/issue/PLA-13), queue items 7 (2f), 10 (R) and 11 (3c).
 Before: [R](2026-10-13-touch-controls-R.md), [2f host](2026-10-13-touch-controls-phase2f.md).
 Branch `dev/pla-13-touch-controls`, HEAD `f82fa90`. No code changed in this chunk.
 

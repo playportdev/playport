@@ -14,7 +14,7 @@ spec.loader.exec_module(stage)
 
 
 class Fonts(unittest.TestCase):
-    def test_record_includes_both_wine_pin_faces(self):
+    def test_record_includes_every_wine_pin_face(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             roots = {k: root / k for k in stage.ROOTS}
@@ -33,14 +33,15 @@ class Fonts(unittest.TestCase):
                 p.write_bytes(name.encode())
             manifest = root / "artifacts.tsv"
             with patch.multiple(stage, REPO=root, ROOTS=roots, MANIFEST=manifest,
-                                NLS=[], SXS=[], LINK=[], SOURCES=[], VULKAN_PE=[], VULKAN_PE_I386=[], VULKAN_LOADER=[], STEAMAPI=[], XBOX_PE=[], GAPS=[]), \
+                                NLS=[], SXS=[], LINK=[], SOURCES=[], VULKAN_PE=[], VULKAN_PE_I386=[], VULKAN_PE_AARCH64=[], VULKAN_LOADER=[], STEAMAPI=[], XBOX_PE=[], GAPS=[]), \
                  patch.object(stage, "reference_names", return_value=[]), \
                  patch.object(stage, "selection", return_value=[]), \
                  patch.object(stage, "production", return_value={}):
                 stage.record()
             rows = [l.split("\t") for l in manifest.read_text().splitlines() if l and not l.startswith("#")]
             fonts = [r for r in rows if r[6] == "fonts"]
-            self.assertEqual({r[1] for r in fonts}, {"Runtime/fonts/tahoma.ttf", "Runtime/fonts/tahomabd.ttf"})
+            self.assertEqual({r[1] for r in fonts}, {"Runtime/fonts/tahoma.ttf", "Runtime/fonts/tahomabd.ttf",
+                                                     "Runtime/fonts/marlett.ttf"})
             for kind, dest, size, digest, key, source, provenance in fonts:
                 self.assertEqual((kind, key, source), ("resource", "unix", "wine/fonts/" + Path(dest).name))
                 p = roots[key] / source
@@ -79,7 +80,7 @@ class Fonts(unittest.TestCase):
         self.assertIn("fonts", wine["covers"])
         self.assertIn("wine-*", wine["include"])
         collection = (REPO / "build/notices-assemble.sh").read_text()
-        for name in ("tahoma", "tahomabd"):
+        for name in ("tahoma", "tahomabd", "marlett"):
             self.assertIn(f'excerpt_ wine-fonts-{name}-attribution.txt "$WINE/fonts/{name}.sfd" 1 6', collection)
 
 

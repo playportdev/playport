@@ -630,7 +630,7 @@ finding is claimed. `pp ui` paths: `xbox:signin`, `xbox:wait`, `xbox:status`,
 `xbox:signout`, `xbox:reset-device` (help in `tools/ui.py`).
 
 The library's phone gate is deferred too: `./pp ui --action xbox:library --shot`
-(signed in) shows the Xbox chip's copies with Microsoft's art and logs counts only.
+(signed in) shows the Xbox store's copies with Microsoft's art and logs counts only.
 
 The install's phone gate is deferred as well (signed in, the pilot in the library):
 `./pp ui --action install:xbox-9MW9469V91LM --action xbox:installed:9MW9469V91LM --shot`

@@ -214,6 +214,12 @@ final class SetupState: ObservableObject {
         }
         return true
     }
+
+    /// A note of the Play's own for its launch screen, after `beforePlay` set the checks' (a
+    /// Battle.net copy's failed update check, PLA-521).
+    func addLaunchNote(_ note: String) {
+        if !launchNotes.contains(note) { launchNotes.append(note) }
+    }
 }
 
 extension SetupStep {
@@ -394,7 +400,7 @@ enum SetupRing {
         case .x:
             if let step = ringed { SetupState.shared.skip(step) }
             if focus.focused == SetupStep.pairing.item, SetupState.shared.preview == nil { JitMethodPicker.show() }
-        case .menu, .view: break
+        case .menu, .view, .lt, .rt: break
         }
         return true
     }

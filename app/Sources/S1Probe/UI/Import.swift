@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Importing a game from Files (docs/plans/finished.md#pc-import-gog-and-epic, Phase 1):
+// Importing a game from Files (PLA-80, Phase 1):
 // the Library's Add a game tile opens the system picker (touch: iOS draws it, as
 // the pairing-file import's), and what is picked, a folder or a .zip, becomes a
 // Downloads job of kind import (PlayportKit GameImporter does the copy).

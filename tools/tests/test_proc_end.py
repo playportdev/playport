@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Compile and exercise the rules for ending a terminated pseudo-process: madeira-unix 0169 (PLA-416), 0172,
-which empties a parked process's FEX band views in place (decision 0132), and 0203, which gives a child that exits by
-itself the same rules for its views, FEX's band included (decision 0143, PLA-413)."""
+which empties a parked process's FEX band views in place (decision 0132), 0203, which gives a child that exits by
+itself the same rules for its views, FEX's band included (decision 0143, PLA-413), and 0229 with wine-unix 0202,
+which detach a parked thread's alert wait and free a view only it named (decision 0166, PLA-476), and 0230, which
+counts finished teardowns for the dev host's post-teardown `[proc-mem]` sample (PLA-476)."""
 import pathlib
 import shutil
 import subprocess
@@ -12,8 +14,16 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 SERIES = ROOT / "patches/madeira-unix"
 PATCHES = ("0169-ntdll-wineserver-tear-down-a-pseudo-process-another-.patch",
            "0172-ntdll-empty-a-killed-process-s-FEX-band-views-in-pla.patch",
-           "0203-ntdll-release-a-self-exited-child-s-FEX-band-views-a.patch")
+           "0203-ntdll-release-a-self-exited-child-s-FEX-band-views-a.patch",
+           "0229-ntdll-detach-a-parked-thread-s-alert-wait-then-free-a-view.patch")
 HEADER = "build/ntdll-unix/pp_proc_end.h"
+DETACH_PATCH = ROOT / "patches/wine-unix/0202-ntdll-detach-a-parked-thread-s-alert-wait-from-the-shared-queue.patch"
+
+
+def detach_source():
+    """wine-unix 0202's one hunk in unix sync.c: ios_futex_unlink_tid and ios_detach_parked_wait."""
+    hunk = DETACH_PATCH.read_text().split("\n@@ ", 1)[1].split("\n-- \n", 1)[0]
+    return "\n".join(line[1:] for line in hunk.splitlines() if line.startswith("+")) + "\n"
 
 
 def shipped_header(directory):
@@ -119,7 +129,7 @@ int main(void) {
     {
         size_t page = (size_t)sysconf(_SC_PAGESIZE), size = 4 * page;
         unsigned char *view = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        int peb_a, peb_b;
+        int peb_a = 0, peb_b = 0;
         void *owner = &peb_a;
         assert(view != MAP_FAILED);
         memset(view, 0xa5, size);
@@ -172,8 +182,235 @@ int main(void) {
 '''
 
 
+# Decision 0166: the wait-detach rules of pp_proc_end.h, and wine-unix 0202's unlink over a mock shared queue and
+# waiter registry with Wine's types and interlocked calls.
+WAIT_C = r"""
+#include "pp_proc_end.h"
+#include <assert.h>
+#include <stdint.h>
+#include <string.h>
+
+typedef int LONG;
+typedef uintptr_t ULONG_PTR;
+#define IOS_ALERT_WAITER_MAX 4
+struct ios_shared_futex_queue { void *next, *prev; LONG lock; };
+static struct ios_shared_futex_queue ios_shared_futex_queues[256];
+static struct { void *tid; const void *addr; unsigned long long since; int inf; } ios_alert_waiters[IOS_ALERT_WAITER_MAX];
+static int sleeps;
+static LONG InterlockedCompareExchange( LONG *dst, LONG xchg, LONG cmp )
+{ return __sync_val_compare_and_swap( dst, cmp, xchg ); }
+static LONG InterlockedExchange( LONG *dst, LONG value ) { return __atomic_exchange_n( dst, value, __ATOMIC_SEQ_CST ); }
+static void *InterlockedCompareExchangePointer( void **dst, void *xchg, void *cmp )
+{ return __sync_val_compare_and_swap( dst, cmp, xchg ); }
+static int test_usleep( unsigned us ) { (void)us; sleeps++; return 0; }
+#define usleep test_usleep
+#include "detach.c"
+
+#define BASE 0x7400000000ull
+#define SIZE 0x190000000ull
+#define WAIT 0x74000643e0ull
+
+/* A parked thread with its whole saved set, none of it in [BASE, BASE + SIZE) but its wait address. */
+static struct ppe_parked full(int in_view)
+{
+    struct ppe_parked t;
+    unsigned i;
+    memset(&t, 0, sizeof t);
+    t.nrefs = PPE_REFS;
+    for (i = 0; i < PPE_REFS; i++) t.refs[i] = 0x13ef00000ull + 0x1000 * i;
+    t.refs[PPE_WAIT_REF] = in_view ? WAIT : 0x70334dc938ull;
+    t.ready = 1;
+    return t;
+}
+
+/* The fate the release gives [BASE, BASE + SIZE) for the dead process's parked threads all[0..n), of the
+ * nall in the table, after its teardown detached each detachable wait (or found the bucket busy), as
+ * ios_proc_end_release_views_locked does. */
+static enum ppe_fate release(struct ppe_parked *all, unsigned n, unsigned nall, int busy)
+{
+    uint64_t refs[8 * PPE_REFS], dropped[8];
+    unsigned i, nrefs = 0, ndropped = 0;
+    enum ppe_fate fate;
+    for (i = 0; i < n; i++)
+        if (ppe_wait_detachable(&all[i]))
+            all[i].wait_detach = ppe_wait_detach_result(busy ? PPE_NODE_BUSY : PPE_NODE_UNLINKED);
+    for (i = 0; i < n; i++) {
+        if (ppe_drop_wait(&all[i], &dropped[ndropped])) ndropped++;
+        memcpy(refs + nrefs, all[i].refs, all[i].nrefs * sizeof(uint64_t));
+        nrefs += all[i].nrefs;
+    }
+    fate = ppe_view_fate(PPE_PRIVATE, n, BASE, SIZE, refs, nrefs);
+    if (fate != PPE_KEEP_REF && ndropped && ppe_referenced(BASE, SIZE, dropped, ndropped))
+        fate = ppe_fate_after_detach(fate, BASE, SIZE, dropped, ndropped, all, nall);
+    return fate;
+}
+
+struct node { struct node *next, *prev; const void *addr; unsigned int tid; };
+
+/* The bucket of addr, as RtlWaitOnAddress leaves it: list_init on the first wait, nodes added at the tail. */
+static struct ios_shared_futex_queue *bucket(const void *addr)
+{
+    return &ios_shared_futex_queues[(((ULONG_PTR)addr) >> 4) % 256];
+}
+static void enqueue(struct node *e, const void *addr, unsigned int tid)
+{
+    struct ios_shared_futex_queue *q = bucket(addr);
+    struct node *head = (struct node *)q;
+    if (!q->next) q->next = q->prev = q;
+    e->addr = addr; e->tid = tid;
+    e->next = head; e->prev = head->prev;
+    head->prev->next = e; head->prev = e;
+}
+static unsigned queued(const void *addr)
+{
+    struct node *head = (struct node *)bucket(addr), *e;
+    unsigned n = 0;
+    for (e = head->next; e != head; e = e->next) n++;
+    return n;
+}
+
+int main(void)
+{
+    struct ppe_parked all[4];
+    enum ppe_fate fate;
+    char row[128];
+
+    assert(PPE_WAIT_REF == 52);
+
+    /* Only the wait names the view: freed, as a view no parked address names (in a slot, outside the band). */
+    all[0] = full(1);
+    assert(release(all, 1, 1, 0) == PPE_FREE);
+    assert(all[0].refs[PPE_WAIT_REF] == 0 && all[0].wait_detach == PPE_WAIT_DETACHED);
+    /* Its own other waiting threads' waits elsewhere are detached too; a second process's thread names nothing. */
+    all[0] = full(1); all[1] = full(0); all[2] = full(0);
+    assert(release(all, 2, 3, 0) == PPE_FREE && all[1].wait_detach == PPE_WAIT_DETACHED && !all[1].refs[PPE_WAIT_REF]);
+    assert(all[2].wait_detach == PPE_WAIT_QUEUED && all[2].refs[PPE_WAIT_REF]);
+    /* A band view only the wait names takes the no-parked fate: freed, not emptied, whatever its class. */
+    {
+        struct ppe_parked u = full(1);
+        uint64_t dropped;
+        u.wait_detach = PPE_WAIT_DETACHED;
+        assert(ppe_drop_wait(&u, &dropped) && dropped == WAIT);
+        for (int cls = PPE_SPAN; cls < PPE_CLASSES; cls++) {
+            fate = ppe_view_fate((enum ppe_class)cls, 1, BASE, SIZE, u.refs, u.nrefs);
+            assert(ppe_fate_after_detach(fate, BASE, SIZE, &dropped, 1, &u, 1) ==
+                   ppe_view_fate((enum ppe_class)cls, 0, BASE, SIZE, u.refs, u.nrefs));
+            assert(ppe_fate_after_detach(fate, BASE, SIZE, &dropped, 1, &u, 1) == PPE_FREE);
+        }
+        assert(!ppe_drop_wait(&u, &dropped));                       /* dropped once */
+    }
+
+    /* Wait-only is false for: ref 51 (the TEB) or 31 (sp) in the view too. */
+    all[0] = full(1); all[0].refs[51] = BASE + 0x1000;
+    assert(release(all, 1, 1, 0) == PPE_KEEP_REF);
+    all[0] = full(1); all[0].refs[31] = BASE + SIZE - 8;
+    assert(release(all, 1, 1, 0) == PPE_KEEP_REF);
+    /* A saved set of 52 (thread_info failed): index 51 is its wait, never detached. */
+    all[0] = full(1); all[0].nrefs = 52; all[0].refs[51] = WAIT;
+    assert(!ppe_wait_detachable(&all[0]));
+    assert(release(all, 1, 1, 0) == PPE_KEEP_REF && all[0].wait_detach == PPE_WAIT_QUEUED && all[0].refs[51] == WAIT);
+    /* Two threads: one waits in the view, the other's x15 lies in it. */
+    all[0] = full(1); all[1] = full(0); all[1].refs[15] = BASE + 0x4000;
+    assert(release(all, 2, 2, 0) == PPE_KEEP_REF);
+    /* A later thread, of another process, parked after these, names the view (the whole table, exactly). */
+    all[0] = full(1); all[1] = full(0); all[1].refs[7] = BASE + 0x8000;
+    assert(release(all, 1, 2, 0) == PPE_KEEP_REF);
+    all[0] = full(1); all[1] = full(0); all[1].refs[PPE_WAIT_REF] = WAIT + 0x40;   /* its wait, not detached */
+    assert(release(all, 1, 2, 0) == PPE_KEEP_REF);
+    all[0] = full(1); all[1] = full(0);
+    assert(release(all, 1, 2, 0) == PPE_FREE);
+    /* One being written names every view. */
+    all[0] = full(1); all[1] = full(0); all[1].ready = 0;
+    assert(release(all, 1, 2, 0) == PPE_KEEP_REF);
+    /* A busy bucket keeps the wait and the view as before. */
+    all[0] = full(1);
+    assert(release(all, 1, 1, 1) == PPE_KEEP_REF);
+    assert(all[0].wait_detach == PPE_WAIT_KEPT && all[0].refs[PPE_WAIT_REF] == WAIT && !ppe_wait_detachable(&all[0]));
+    /* Claimed by another teardown and not finished: not dropped, kept. */
+    all[0] = full(1); all[0].wait_detach = PPE_WAIT_DETACHING;
+    assert(!ppe_wait_detachable(&all[0]) && release(all, 1, 1, 0) == PPE_KEEP_REF);
+
+    /* Negative: a view any non-wait ref names keeps today's fate whatever was dropped, and a view no dropped wait
+     * names keeps today's fate whatever the global table holds. */
+    {
+        uint64_t refs[2] = { BASE + 0x10, WAIT }, dropped = WAIT;
+        struct ppe_parked other = full(0);
+        other.refs[3] = 0x7c10000010ull;
+        for (int cls = 0; cls < PPE_CLASSES; cls++)
+            for (unsigned parked = 0; parked < 2; parked++) {
+                fate = ppe_view_fate((enum ppe_class)cls, parked, BASE, SIZE, refs, 1);
+                assert(ppe_fate_after_detach(fate, BASE, SIZE, &dropped, 1, &other, 1) == fate);
+                fate = ppe_view_fate((enum ppe_class)cls, parked, 0x7c10000000ull, 0x100000, refs, 2);
+                assert(ppe_fate_after_detach(fate, 0x7c10000000ull, 0x100000, &dropped, 1, &other, 1) == fate);
+            }
+    }
+
+    /* The line. */
+    ppe_wait_detached_row(row, sizeof row, 0x208, WAIT, PPE_NODE_UNLINKED);
+    assert(!strcmp(row, "[proc-end] wait-detached tid=0208 wait=0x74000643e0 node=unlinked"));
+    ppe_wait_detached_row(row, sizeof row, 0x1a0, 0x70334dc938ull, PPE_NODE_ABSENT);
+    assert(!strcmp(row, "[proc-end] wait-detached tid=01a0 wait=0x70334dc938 node=absent"));
+    ppe_wait_detached_row(row, sizeof row, 0x210, WAIT, PPE_NODE_BUSY);
+    assert(!strcmp(row, "[proc-end] wait-detached tid=0210 wait=0x74000643e0 node=busy"));
+
+    /* wine-unix 0202 over a mock bucket: the parked thread's node lies on its stack. */
+    {
+        static struct node stack[16], live[4];   /* the parked thread's stack; a live thread's */
+        const ULONG_PTR lo = (ULONG_PTR)stack, hi = (ULONG_PTR)(stack + 16);
+        const void *w = (const void *)(ULONG_PTR)WAIT, *other = (const void *)(ULONG_PTR)(WAIT + 0x1000);
+
+        /* An empty, never initialised bucket: nothing queued. */
+        assert(!bucket(w)->next);
+        assert(ios_detach_parked_wait(0x208, w, lo, hi) == PPE_NODE_ABSENT);
+        assert(!bucket(w)->next && !bucket(w)->lock);
+
+        /* The parked node goes, a same-address node of another tid stays, and so do other addresses' nodes. */
+        enqueue(&live[0], w, 0x300);
+        enqueue(&stack[3], w, 0x208);
+        enqueue(&live[1], other, 0x208);
+        enqueue(&live[2], w, 0x301);
+        ios_alert_waiters[1].tid = (void *)(ULONG_PTR)0x208; ios_alert_waiters[1].addr = w;
+        ios_alert_waiters[2].tid = (void *)(ULONG_PTR)0x300; ios_alert_waiters[2].addr = w;
+        assert(queued(w) == 4);
+        assert(ios_detach_parked_wait(0x208, w, lo, hi) == PPE_NODE_UNLINKED);
+        assert(queued(w) == 3 && stack[3].addr == NULL);
+        assert(live[0].addr == w && live[1].addr == other && live[2].addr == w);
+        assert(live[0].next == &live[1] && live[1].prev == &live[0]);
+        assert(ios_alert_waiters[1].addr == NULL && ios_alert_waiters[2].addr == w);
+        assert(!bucket(w)->lock);
+        /* Again: the node is gone. */
+        assert(ios_detach_parked_wait(0x208, w, lo, hi) == PPE_NODE_ABSENT && queued(w) == 3);
+
+        /* The registry CAS leaves a recycled tid's entry waiting on another address. */
+        ios_alert_waiters[1].addr = other;
+        assert(ios_detach_parked_wait(0x208, w, lo, hi) == PPE_NODE_ABSENT);
+        assert(ios_alert_waiters[1].addr == other);
+
+        /* A node for (addr, tid) off the parked thread's stack is a recycled tid's: busy, nothing changes. */
+        enqueue(&live[3], w, 0x208);
+        enqueue(&stack[5], w, 0x208);
+        ios_alert_waiters[1].addr = w;
+        assert(ios_detach_parked_wait(0x208, w, lo, hi) == PPE_NODE_BUSY);
+        assert(queued(w) == 5 && live[3].addr == w && stack[5].addr == w && ios_alert_waiters[1].addr == w);
+        assert(!bucket(w)->lock);
+
+        /* A lock another holder keeps: bounded tries, busy, nothing changes; the view stays kept. */
+        sleeps = 0;
+        bucket(w)->lock = -1;
+        assert(ios_detach_parked_wait(0x208, w, lo, (ULONG_PTR)-1) == PPE_NODE_BUSY);
+        assert(sleeps == IOS_DETACH_LOCK_TRIES && bucket(w)->lock == -1 && queued(w) == 5);
+        assert(ios_alert_waiters[1].addr == w);
+        all[0] = full(1);
+        assert(release(all, 1, 1, 1) == PPE_KEEP_REF);
+        bucket(w)->lock = 0;
+    }
+    return 0;
+}
+"""
+
+
 class ProcessEndTests(unittest.TestCase):
-    def test_shipped_header(self):
+    def compile_and_run(self, source, extra=None):
         cc = shutil.which("cc")
         self.assertIsNotNone(cc)
         scratch = ROOT / ".work" / "tmp"
@@ -181,11 +418,50 @@ class ProcessEndTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=scratch) as td:
             d = pathlib.Path(td)
             header = shipped_header(d)
-            (d / "test.c").write_text(TEST_C)
-            subprocess.run([cc, "-std=gnu11", "-Wall", "-Wextra", "-Werror", "-I", str(header.parent), "-o",
-                            str(d / "t"), str(d / "test.c")], check=True)
+            for name, text in (extra or {}).items():
+                (d / name).write_text(text)
+            (d / "test.c").write_text(source)
+            subprocess.run([cc, "-std=gnu11", "-Wall", "-Wextra", "-Werror", "-fsanitize=undefined",
+                            "-I", str(header.parent), "-I", str(d), "-o", str(d / "t"), str(d / "test.c")],
+                           check=True)
             subprocess.run([str(d / "t")], check=True)
 
+    def test_shipped_header(self):
+        self.compile_and_run(TEST_C)
+
+    def test_wait_detach(self):
+        """Decision 0166: which views a detached wait frees, the line, and wine-unix 0202's unlink."""
+        self.compile_and_run(WAIT_C, {"detach.c": detach_source()})
+
+    def test_detach_is_outside_virtual_mutex(self):
+        """0229 detaches before the killed teardown and the self-exit release take virtual_mutex, and resumes
+        nothing (the parked threads stay suspended, decisions 0127 and 0166)."""
+        lines = (SERIES / PATCHES[-1]).read_text().splitlines()
+        after = "\n".join(line[1:] for line in lines if line[:1] in " +" and not line.startswith("+++"))
+        added = "\n".join(line[1:] for line in lines if line.startswith("+") and not line.startswith("+++"))
+        self.assertIn("ios_proc_end_detach_waits( peb );   /* decision 0166 */\n"
+                      "        server_enter_uninterrupted_section( &virtual_mutex, &sigset );", after)
+        self.assertIn("if (peb && peb != self) ios_proc_end_detach_waits( peb );   /* decision 0166 */", added)
+        self.assertIn("server_leave_uninterrupted_section( &virtual_mutex, &sigset );\n"
+                      "        for (i = 0; i < n; i++)\n        {\n            int node = ios_detach_parked_wait(", added)
+        self.assertNotIn("thread_resume", added)
+
+    def test_teardown_count_follows_each_teardown_line(self):
+        """madeira-unix 0230 (PLA-476): each finished teardown, killed or self-exited, counts after its line; the
+        dev host forces a `[proc-mem]` walk when the count moves, on its own thread and never in a release build."""
+        lines = next(SERIES.glob("0230-*.patch")).read_text().splitlines()
+        after = "\n".join(line[1:] for line in lines if line[:1] in " +" and not line.startswith("+++"))
+        bump = "        __atomic_add_fetch( &ios_proc_end_teardown_count, 1, __ATOMIC_RELEASE );"
+        self.assertIn('dprintf( 2, "[view-owner] %s (PLA-413)\\n", row );\n    ' + bump.strip(), after)
+        self.assertIn('dprintf( 2, "[proc-end] %s (PLA-416)\\n", row );\n' + bump, after)
+        self.assertEqual(after.count("__atomic_add_fetch( &ios_proc_end_teardown_count"), 2)
+        self.assertIn("unsigned int ios_proc_end_teardowns(void)", after)
+        self.assertNotIn("ios_process_memory_log(", after)
+        host = (ROOT / "app/Sources/S1Probe/LaunchCoordinator.swift").read_text()
+        call = host.index('wine_host_process_memory_log("after teardown')
+        self.assertGreater(call, host.rindex("#if !PLAYPORT_RELEASE", 0, call))
+        self.assertLess(host.rindex("#if !PLAYPORT_RELEASE", 0, call), host.rindex("let teardowns = wine_host_process_teardowns()", 0, call))
+        self.assertNotIn("#endif", host[host.rindex("#if !PLAYPORT_RELEASE", 0, call):call])
 
 if __name__ == "__main__":
     unittest.main()

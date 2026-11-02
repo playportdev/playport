@@ -1,6 +1,6 @@
 # Vulkan performance: where both routes stand against DXMT after `patches/mesa` 0019 (warm, measurement only)
 
-**Date:** 2026-10-08. **Plan:** [Vulkan performance](../plans/2026-10-06-vulkan-performance.md)
+**Date:** 2026-10-08. **Plan:** [Vulkan performance](https://linear.app/playportdev/issue/PLA-680)
 (PLA-72), chunk 11: measurement only, with no code change and no build. **IPA (dev):**
 `4e6e930d5289b1a6d54bd61468eee97dd2b28122883039d827465c3ae09f87d7` (commit `ca12f08`; branch HEAD
 `a14e0f4` adds only documents). It carries `wine-unix` 0021, decision 0066 (tiler mode off),
@@ -9,7 +9,7 @@ compression).
 
 **Result:**
 
-- **Not at exit.** Read against the [exit criteria](../plans/2026-10-06-vulkan-performance.md#exit-criteria),
+- **Not at exit.** Read against the [exit criteria](https://linear.app/playportdev/issue/PLA-680),
   each Vulkan route meets 2 of the 9 rows below. Both routes still fail phone mW at native/60
   (+6 to +8 %), sys mJ/f at native/free (+12 to +17 %) and GPU ms at native/free. One D3D12 run
   froze.

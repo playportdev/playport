@@ -3,7 +3,8 @@
 // GameOptionsControls.dc.html, GyroAim.dc.html):
 //
 // - GameControlsOptionRows: Game options' Controls section, the game's own
-//   on-screen controls (layout, d-pad, right stick, opacity) and the entries to
+//   on-screen controls (layout, d-pad, right stick, opacity), the layout editor
+//   (Edit on-screen layout, UI/LayoutEditorView.swift, over the game's art) and the entries to
 //   its Controller page (UI/ControllerMapView.swift) and its Gyro aim page. Each shows "Default · X" while it follows Settings ›
 //   Controls, the amber dot while the game sets it, and Y puts it back.
 // - GyroAimPanel: Game options › Controls › Gyro aim (AppRoutes.GamePanel.gyro),
@@ -33,13 +34,29 @@ struct GameControlsOptionRows: View {
     var body: some View {
         let own = store.game(titleID)
         let inherited = ControlsState.resolve(game: nil, defaults: store.defaults, controllerConnected: false)
+        // The game's compatibility default (decision 0074), where it is the layout the game starts on.
+        let entry = LaunchSettingsStore.compat.entry(for: titleID)
+        let suggested = ControlsState.resolve(game: nil, defaults: store.defaults, controllerConnected: false,
+                                              compat: entry?.controls).layout
+        let compat = suggested == inherited.layout ? nil : suggested
         PadSectionHeader(text: "Controls").id("controls")
+        if let entry, compat != nil {
+            // What the marker means, as Graphics' row says it for launch settings (GameDetailView).
+            PadRow(id: "opt:compatControls", title: "\(OptionValue.compatMarker) Set for this game's compatibility",
+                   subtitle: entry.reason + " Your own choice on the row below wins; Y on it comes back to this.",
+                   subtitleLines: nil, style: .plain, hint: "Info") {}
+        }
         choiceRow("opt:layout", "On-screen controls", \.layout, all: OnScreenLayout.allCases, inherited: inherited.layout,
-                  name: \.title, detail: "Shown while no controller is connected")
-        choiceRow("opt:dpad", "D-pad", \.dpad, all: OnScreenDpad.allCases, inherited: inherited.dpad, name: \.title,
-                  detail: "Above the left stick")
-        choiceRow("opt:rightStick", "Right stick", \.rightStick, all: OnScreenRightStick.allCases,
-                  inherited: inherited.rightStick, name: \.title, detail: "Beside A/B/X/Y")
+                  compat: compat, name: \.title, detail: "Shown while no controller is connected")
+        // The Gamepad preset's d-pad and right stick: only while the game plays that preset itself
+        // (no copy of its own, not another layout), where they change what is drawn.
+        let plays = ControlsState.resolve(game: own, defaults: store.defaults, controllerConnected: false, compat: entry?.controls)
+        if plays.hasGamepadOptions {
+            choiceRow("opt:dpad", "D-pad", \.dpad, all: OnScreenDpad.allCases, inherited: inherited.dpad, name: \.title,
+                      detail: "Above the left stick")
+            choiceRow("opt:rightStick", "Right stick", \.rightStick, all: OnScreenRightStick.allCases,
+                      inherited: inherited.rightStick, name: \.title, detail: "Beside A/B/X/Y")
+        }
         let opacity = OptionValue.of(own: own.opacity, inherited: inherited.opacity, name: ControlsOpacity.label)
         PadRow(id: "opt:opacity", title: "Opacity", value: opacity.text, accessory: .chevron, changed: opacity.changed,
                style: .plain, reset: opacity.changed ? { set { $0.opacity = nil } } : nil) {
@@ -48,6 +65,14 @@ struct GameControlsOptionRows: View {
                 options: [PadOption(id: "", label: "Default", detail: ControlsOpacity.label(inherited.opacity) + ", from Settings")]
                     + ControlsOpacity.steps.map { PadOption(id: String($0), label: ControlsOpacity.label($0)) },
                 selected: own.opacity.map { String(ControlsOpacity.step($0, by: 0)) } ?? "") { id in set { $0.opacity = Double(id) } }
+        }
+        // The layout editor (UI/LayoutEditorView.swift) over the game's art; the dot and Y for the game's own copies.
+        PadRow(id: LayoutEditorSession.gameRowID, title: "Edit on-screen layout",
+               value: own.layouts.isEmpty ? "Over the game"
+                   : "Your " + OnScreenLayout.allCases.filter { own.layouts[$0] != nil }.map(\.title).joined(separator: ", "),
+               accessory: .chevron, changed: !own.layouts.isEmpty, style: .plain, hint: "Open",
+               reset: own.layouts.isEmpty ? nil : { set { $0.layouts = [:] } }) {
+            LayoutEditorSession.shared.openOverArt(titleID: titleID, title: context)
         }
         // The Controller page (UI/ControllerMapView.swift): the game's controller map and its look speed.
         // The dot and Y for its own map or look speed; "Default ·" while the mode is Settings'.
@@ -77,17 +102,19 @@ struct GameControlsOptionRows: View {
         store.setGame(titleID, c)
     }
 
+    /// `compat`: the game's compatibility default, when it is not `inherited`.
     private func choiceRow<T: RawRepresentable & CaseIterable & Equatable>(
-        _ id: String, _ title: String, _ key: WritableKeyPath<GameControls, T?>, all: [T], inherited: T,
+        _ id: String, _ title: String, _ key: WritableKeyPath<GameControls, T?>, all: [T], inherited: T, compat: T? = nil,
         name: KeyPath<T, String>, detail: String
     ) -> some View where T.RawValue == String {
         let own = store.game(titleID)[keyPath: key]
-        let v = OptionValue.of(own: own, inherited: inherited, name: { $0[keyPath: name] })
+        let v = OptionValue.of(own: own, compat: compat, inherited: inherited, name: { $0[keyPath: name] })
+        let fallback = compat.map { $0[keyPath: name] + ", for this game's compatibility" } ?? inherited[keyPath: name] + ", from Settings"
         return PadRow(id: id, title: title, value: v.text, accessory: .chevron, changed: v.changed, style: .plain,
                       reset: v.changed ? { set { $0[keyPath: key] = nil } } : nil) {
             PadModal.shared.picker(
                 title: title, context: "\(context) · Controls", note: detail + ". " + Self.note,
-                options: [PadOption(id: "", label: "Default", detail: inherited[keyPath: name] + ", from Settings")]
+                options: [PadOption(id: "", label: "Default", detail: fallback)]
                     + all.map { PadOption(id: $0.rawValue, label: $0[keyPath: name]) },
                 selected: own?.rawValue ?? "") { choice in set { $0[keyPath: key] = T(rawValue: choice) } }
         }

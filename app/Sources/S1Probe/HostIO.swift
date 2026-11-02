@@ -82,6 +82,9 @@ final class HostIO {
     nonisolated static let surfaceReady = DispatchSemaphore(value: 0)
 
     private var lifecycle = Lifecycle()
+    /// The held keys that went down extended (keypad Enter): their release goes
+    /// out extended too, also when Lifecycle releases them on a focus loss.
+    private var extendedHeld: Set<UInt8> = []
     private var slots = PadSlots<ObjectIdentifier>()
     /// Each physical pad's name, by slot, for the logs.
     private var padNames: [Int: String] = [:]
@@ -107,8 +110,6 @@ final class HostIO {
     private var windowsHoldPads = false
     /// The in-game menu is up: keys, touches and the mouse do not reach the guest.
     private(set) var menuUp = false
-    /// The game layer, once registered: the menu's performance overlay switches its HUD.
-    weak var gameLayer: CAMetalLayer?
     /// What the guest's pads get: slot 0 merged with the on-screen controls
     /// (HostIOKit.InputMixer), then held while the menu is up (HostIOKit.GuestPadGate),
     /// from the main thread and the scripted pad's queue; host_pad_set is called
@@ -138,7 +139,7 @@ final class HostIO {
     /// the RemoteIO driver. start() has already set the guest's environment.
     nonisolated static func prepareRuntime(log: (String) -> Void) {
         let env = ProcessInfo.processInfo.environment
-        log("hostio: WINEDLLOVERRIDES=\(env["WINEDLLOVERRIDES"] ?? "unset")")
+        log("hostio: WINEDLLOVERRIDES=\(env["WINEDLLOVERRIDES"] ?? "unset") SDL_JOYSTICK_RAWINPUT=\(env["SDL_JOYSTICK_RAWINPUT"] ?? "unset")")
         let session = AVAudioSession.sharedInstance()
         do {
             try session.setCategory(.playback, mode: .default, options: [])
@@ -159,6 +160,12 @@ final class HostIO {
         // pad; without it Unity falls back to XInput (Wine's builtin, which
         // reads the controller snapshot host_pad_set writes).
         setenv("WINEDLLOVERRIDES", "windows.gaming.input=d", 0)
+        // SDL 2's raw input joystick driver is off for the same reason: it takes
+        // XInput pads only as raw input HID devices, which there are none of
+        // here, and while it is on SDL's XInput driver neither loads XInput nor
+        // adds a pad, so a game on SDL (World of Warcraft) never sees one. SDL
+        // reads its hints from the environment, over a game's own SDL_SetHint.
+        setenv("SDL_JOYSTICK_RAWINPUT", "0", 0)
         let nc = NotificationCenter.default
         let app: [(Notification.Name, LifecycleEvent)] = [
             (UIApplication.willResignActiveNotification, .resignActive),
@@ -258,7 +265,7 @@ final class HostIO {
             case .focus(let active):
                 winios_post_focus(active ? 1 : 0)
             case .releaseKeys(let vks):
-                for vk in vks { winios_post_key(Int32(vk), 0) }
+                for vk in vks { postKey(vk, down: false) }
             case .releaseButtons(let flags):
                 for f in flags { winios_pointer(0, 0, f, 0) }
             case .suspendAudio(let deactivate):
@@ -289,9 +296,39 @@ final class HostIO {
     func key(hidUsage: Int, down: Bool) -> Bool {
         guard let vk = KeyMap.virtualKey(hidUsage: hidUsage) else { return false }
         if down && menuUp { return true }   // a key let go while the menu is up still reaches the game
-        if down ? lifecycle.keyDown(vk) : lifecycle.keyUp(vk) { winios_post_key(Int32(vk), down ? 1 : 0) }
+        if down ? lifecycle.keyDown(vk) : lifecycle.keyUp(vk) {
+            postKey(vk, down: down, extended: down && KeyMap.postsExtended(hidUsage: hidUsage))
+        }
         return true
     }
+
+    /// winios_post_key, or winios_post_key_extended for a key that went down
+    /// extended: a release takes the flag of its press, whatever its source.
+    private func postKey(_ vk: UInt8, down: Bool, extended: Bool = false) {
+        let ext = down ? extended : extendedHeld.remove(vk) != nil
+        if down && extended { extendedHeld.insert(vk) }
+        if ext { winios_post_key_extended(Int32(vk), down ? 1 : 0) } else { winios_post_key(Int32(vk), down ? 1 : 0) }
+    }
+
+    /// The text bar's input (HostIOKit TextBar, UI/TextBarView.swift): a character as
+    /// winios_post_char (WM_CHAR for the focused window), a key pressed and let go.
+    /// Nothing while the menu is up, as a key. Nothing here logs what was typed.
+    func text(_ inputs: [TextBar.Input]) {
+        guard !menuUp else { return }
+        for i in inputs {
+            switch i {
+            case .char(let unit): winios_post_char(UInt32(unit))
+            case .key(let vk):
+                winios_post_key(vk, 1)
+                winios_post_key(vk, 0)
+            }
+        }
+    }
+
+    /// Whether everything posted so far (keys, characters, touches) has left Winios's input ring
+    /// for the server's queue (winios_input_pending; patches/madeira-winios 0009). A guest thread
+    /// pumping messages drains the ring, so it stays false while none does.
+    var inputPosted: Bool { winios_input_pending() == 0 }
 
     /// A direct touch as the left button, at the same point of the client area.
     func touch(at p: CGPoint, in size: CGSize, phase: UITouch.Phase) {
@@ -429,13 +466,14 @@ final class HostIO {
     }
 
     /// The on-screen controls' state (OnScreenControls), nil while they are off:
-    /// their pad into slot 0, their keys and mouse buttons through Lifecycle (a press
-    /// while the menu is up does not reach the game, a release does), the Playport
-    /// button's menu.
-    func touchControls(_ t: TouchOutput?) {
+    /// their pad into slot 0 (unless `padOn` is false: the touch keyboard over a
+    /// controller that is player 1), their keys and mouse buttons through Lifecycle
+    /// (a press while the menu is up does not reach the game, a release does), the
+    /// Playport button's menu.
+    func touchControls(_ t: TouchOutput?, padOn: Bool = true) {
         let outputs = Self.pads.withLock { p in
             let earlier = p.mixer.takeOutputs()   // the mapped pads', in the order they came
-            let r = p.mixer.touch(t)
+            let r = p.mixer.touch(t, padOn: padOn)
             Self.apply(r.slot0, slot: 0, &p.gate)
             return earlier + r.outputs
         }
@@ -449,7 +487,7 @@ final class HostIO {
         switch o {
         case .key(let vk, let down):
             if down && menuUp { return }
-            if down ? lifecycle.keyDown(vk) : lifecycle.keyUp(vk) { winios_post_key(Int32(vk), down ? 1 : 0) }
+            if down ? lifecycle.keyDown(vk) : lifecycle.keyUp(vk) { postKey(vk, down: down) }
         case .pointer(let flags, let data):
             if flags == Pointer.wheel {
                 if !menuUp && lifecycle.active { winios_pointer(0, 0, flags, data) }
@@ -461,8 +499,15 @@ final class HostIO {
             }
         case .move(let dx, let dy):
             if !menuUp && lifecycle.active { winios_pointer(dx, dy, Pointer.move, 0) }
+        case .place(let x, let y):
+            if !menuUp && lifecycle.active { winios_post_client_pointer(x, y, Pointer.move, 0) }
         case .playport(.menu):
             InGameMenu.shared.open()
+        case .playport(.keyboard):
+            // The touch keyboard opens or closes on the next turn, not while the mixer's outputs are being sent.
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { OnScreenControls.shared.setKeyboard(!OnScreenControls.shared.keyboard) }
+            }
         }
     }
 
@@ -735,6 +780,16 @@ final class TraceBox: @unchecked Sendable {
         // After wine_host_init: shows that HostIO's lines still reach the log with no input at all.
         let n = lock.withLock { ticks += 1; return ticks }
         if n == 15 || n == 60 { HostIO.log("hostio: log alive at \(n) s") }
+        #if !PLAYPORT_RELEASE
+        // The game's XInput requests over the last 10 s (hio_pads.c; win32u reports each one,
+        // madeira-unix 0273), while it makes any: a pad check reads whether it keeps reading.
+        if n % 10 == 0 {
+            var line = [CChar](repeating: 0, count: 256)
+            if host_pad_xinput_summary(&line, UInt32(line.count)) > 0 {
+                HostIO.log("controls: XInput in 10 s: " + String(cString: line))
+            }
+        }
+        #endif
         if let quiet { HostIO.log("hostio: main queue has not run for \(Int(quiet)) s; GameController handlers and notifications wait on it") }
         DispatchQueue.main.async { [self] in
             let back: Double? = lock.withLock {
@@ -745,40 +800,6 @@ final class TraceBox: @unchecked Sendable {
             }
             if let back { HostIO.log("hostio: main queue ran again after \(Int(back)) s") }
         }
-    }
-}
-
-/// Apple's Metal performance HUD over a game, from Settings. Metal loads the
-/// HUD only when MTL_HUD_ENABLED=1 is in the environment as the process
-/// starts, so the app always sets it then (PlayportApp); each game layer then
-/// shows or hides it from the setting as it is at that launch. A dev build
-/// that starts with the setting on also has Metal log the HUD's figures once a
-/// second (MTL_HUD_LOG_ENABLED; `pp perf` reads them). A process launched
-/// with its own MTL_HUD_ENABLED keeps what that says.
-enum MetalHUD {
-    static let key = "metalHUD"
-    static var enabled: Bool { UserDefaults.standard.bool(forKey: key) }
-
-    private static let inherited = ProcessInfo.processInfo.environment["MTL_HUD_ENABLED"] != nil
-
-    /// Before anything creates a Metal device.
-    static func loadAtStart() {
-        if !inherited { setenv("MTL_HUD_ENABLED", "1", 1) }
-        #if !PLAYPORT_RELEASE
-        if !inherited, enabled { setenv("MTL_HUD_LOG_ENABLED", "1", 1) }
-        #endif
-    }
-
-    static func show(on layer: CAMetalLayer) {
-        guard !inherited else { return HostIO.log("hostio: Metal HUD from the launch environment") }
-        set(enabled, on: layer)
-    }
-
-    /// The HUD on the game layer now (the in-game menu's performance overlay),
-    /// for this game only: the setting stays as Settings has it.
-    static func set(_ on: Bool, on layer: CAMetalLayer) {
-        layer.developerHUDProperties = ["mode": on ? "default" : "off"]
-        HostIO.log("hostio: Metal HUD " + (on ? "on" : "off"))
     }
 }
 
@@ -800,6 +821,13 @@ final class PacedMetalLayer: CAMetalLayer {
 
     /// The frame on screen, nil before the first or when it cannot be read.
     static var lastPresented: (any MTLTexture)? { shown.withLockUnchecked { $0 } }
+
+    private static let presents = OSAllocatedUnfairLock(initialState: PresentRate())
+
+    /// The game's frame rate and frame time on screen now (the performance overlay).
+    static func presentRate() -> PresentRate.Reading {
+        presents.withLock { $0.reading(now: CACurrentMediaTime()) }
+    }
 
     /// The associated-object key KosmicKrisp hangs a drawable texture's
     /// readable source under (mtl_drawable_texture_set_readable_source).
@@ -858,8 +886,10 @@ final class PacedMetalLayer: CAMetalLayer {
         if drawable != nil { Self.countDrawable() }
         #endif
         drawable?.addPresentedHandler { d in
-            if d.presentedTime > 0,
-               let then = Self.firstPresent.withLockUnchecked({ h in defer { h = nil }; return h }) { then() }
+            if d.presentedTime > 0 {
+                Self.presents.withLock { $0.presented(at: d.presentedTime) }
+                if let then = Self.firstPresent.withLockUnchecked({ h in defer { h = nil }; return h }) { then() }
+            }
             guard let t = (d as? CAMetalDrawable)?.texture else { return }
             let readable = Self.readable(t)
             Self.shown.withLockUnchecked { $0 = readable }
@@ -892,10 +922,15 @@ final class GameSurfaceView: UIView {
     private let controls = TouchControlsView()
     /// The "Gyro aim" chip, over them and shown without them too; it takes no touch.
     private let gyroChip = GyroChipOverlay()
-    #if !PLAYPORT_RELEASE
-    /// The view on screen, for the UI driver's tap: action (Dev/UIDriver.swift).
+    /// Point & click's magnifier, over the controls at its own opacity; it takes no touch.
+    private let magnifier = MagnifierOverlay()
+    /// The suggested layout's toast (UI/LayoutSuggestionToast.swift), over them; it takes touches on its card only.
+    private let suggestion = LayoutSuggestionToast()
+    /// The performance overlay (UI/PerformanceOverlay.swift), over them all; it takes no touch.
+    let performance = PerformanceOverlayView()
+    /// The view on screen: the text bar gives it the hardware keys back as it closes
+    /// (UI/TextBarView.swift); a dev build's UI driver taps it (Dev/UIDriver.swift).
     static weak var current: GameSurfaceView?
-    #endif
 
     init() {
         super.init(frame: .zero)
@@ -903,7 +938,10 @@ final class GameSurfaceView: UIView {
         layer.contentsGravity = .resizeAspect
         layer.addSublayer(windows)
         addSubview(controls)
+        addSubview(magnifier)
         addSubview(gyroChip)
+        addSubview(suggestion)
+        addSubview(performance)
         // Every finger reaches the view, so the three-finger tap sees them; forward lets only one through.
         isMultipleTouchEnabled = true
         let menuTap = UITapGestureRecognizer(target: self, action: #selector(threeFingerTap))
@@ -938,6 +976,9 @@ final class GameSurfaceView: UIView {
         CATransaction.commit()
         controls.frame = bounds
         gyroChip.frame = bounds
+        magnifier.frame = bounds
+        suggestion.frame = bounds
+        performance.frame = bounds
     }
 
     override func didMoveToWindow() {
@@ -953,14 +994,13 @@ final class GameSurfaceView: UIView {
         window.windowScene?.requestGeometryUpdate(.iOS(interfaceOrientations: .landscape))
         if !registered, let layer = layer as? CAMetalLayer {
             registered = true
-            HostIO.shared.gameLayer = layer
+            #if !PLAYPORT_RELEASE
             MetalHUD.show(on: layer)
+            #endif
             madeira_display_set_layer(layer)
             HostIO.surfaceReady.signal()
         }
-        #if !PLAYPORT_RELEASE
         Self.current = self
-        #endif
         becomeFirstResponder()   // hardware keys come here
     }
 
@@ -994,13 +1034,17 @@ final class GameSurfaceView: UIView {
             HostIO.shared.windowTouch(x: dx, y: dy, phase: phase)
             return
         }
-        var origin = CGPoint.zero, size = bounds.size
-        if let d = (layer as? CAMetalLayer)?.drawableSize {
-            let r = Display.aspectFit(contentWidth: d.width, contentHeight: d.height, width: size.width, height: size.height)
-            origin = CGPoint(x: r.0, y: r.1)
-            size = CGSize(width: r.2, height: r.3)
-        }
-        HostIO.shared.touch(at: CGPoint(x: p.x - origin.x, y: p.y - origin.y), in: size, phase: phase)
+        let r = picture
+        HostIO.shared.touch(at: CGPoint(x: p.x - r.minX, y: p.y - r.minY), in: r.size, phase: phase)
+    }
+
+    /// Where the game's picture is in the view: the swap chain aspect-fitted, black around it
+    /// (contentsGravity resizeAspect). A game touch maps through it, and so does the on-screen
+    /// controls' pointer surface (Point & click; OnScreenControls.began).
+    var picture: CGRect {
+        guard let d = (layer as? CAMetalLayer)?.drawableSize else { return bounds }
+        let r = Display.aspectFit(contentWidth: d.width, contentHeight: d.height, width: bounds.width, height: bounds.height)
+        return CGRect(x: r.0, y: r.1, width: r.2, height: r.3)
     }
 
     #if !PLAYPORT_RELEASE

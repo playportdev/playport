@@ -4,7 +4,7 @@
 **Linear:** [PLA-291](https://linear.app/playportdev/issue/PLA-291) (Stage R, Rockstar only),
 [PLA-254](https://linear.app/playportdev/issue/PLA-254), [PLA-364](https://linear.app/playportdev/issue/PLA-364)
 (Red Dead Redemption 2 on the phone), [PLA-365](https://linear.app/playportdev/issue/PLA-365) (the
-skipped Steam depot). **Plan:** [publisher launchers](../plans/2026-10-12-launchers.md).
+skipped Steam depot). **Plan:** [publisher launchers](https://linear.app/playportdev/issue/PLA-616).
 
 Host only: no phone, no build, no sign-in, no game run. Sources are marked **[M]** measured here,
 **[S]** read from the binaries here (strings, imports, PE headers), **[P]** public, with a link,

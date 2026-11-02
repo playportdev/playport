@@ -60,6 +60,8 @@ let package = Package(
         .package(path: "GOGClient"),
         // The Epic Games client (app/EpicClient): sign-in, library and content (decision 0058).
         .package(path: "EpicClient"),
+        // The Battle.net store client (app/BattleNetClient): offered WoW products and their installs (decision 0174).
+        .package(path: "BattleNetClient"),
         // The product UI's catalogue, adoption and launch options, tested on the Linux host.
         .package(path: "PlayportKit"),
     ] + (release ? [] : [.package(path: "XboxClient")]),
@@ -130,6 +132,8 @@ let package = Package(
         .target(name: "HostIO", dependencies: ["WinIOS"]),
         // Only the dev app depends on this synthetic native-authentication probe.
         .target(name: "AuthProbe", linkerSettings: [.linkedFramework("GSS")]),
+        // Only the dev app depends on this: the task's memory ledger for the footprint-jump sampler.
+        .target(name: "MemoryLedger"),
         // The JIT helper extension: StikJIT's prebuilt framework (MPL-2.0,
         // embedded unmodified in the extension's Frameworks/), the XPC contract
         // it shares with the app, and its entry point (PlayportJITEntry/entry.c).
@@ -165,8 +169,9 @@ let package = Package(
                            .product(name: "SteamClientKit", package: "SteamClient"),
                            .product(name: "GOGClientKit", package: "GOGClient"),
                            .product(name: "EpicClientKit", package: "EpicClient"),
+                           .product(name: "BattleNetClientKit", package: "BattleNetClient"),
                            .product(name: "PlayportKit", package: "PlayportKit")]
-                + ["Relaunch", "SharedMemory"] + (release ? [] : ["AuthProbe"])
+                + ["Relaunch", "SharedMemory"] + (release ? [] : ["AuthProbe", "MemoryLedger"])
                 + (release ? [] : [.product(name: "XboxClientKit", package: "XboxClient")]),
             path: "Sources/S1Probe",
             // Runtime/ ships at the app root through xtool.yml `resources`, not

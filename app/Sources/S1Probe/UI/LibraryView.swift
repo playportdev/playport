@@ -1,40 +1,52 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // The Library (docs/design/2026-09-28-gamepad-ui/Library.dc.html): the games
 // in C:\Games and the paired account's owned games in one grid
-// (PlayportKit.LibraryList), with the chips All (default), Installed and Steam,
-// then future stores, and a sort, both in one list picker on the View button
-// (⧉), and search on Y with the controller keyboard (UI/Pad/PadKeyboardView.swift). The ring
-// moves among the tiles only: the chips and the sort take a tap or their button. Each tile
-// says whether the game is ready and when it was last played, its download or
-// queued update, or its size when it is not installed. A opens the game's
-// page over the grid. Works offline, with no Steam session: the owned games
-// come from the disk cache.
+// (PlayportKit.LibraryList). At its left the store column (decision 0178): All,
+// then every store as its mark (a store not connected dimmed), the chosen one
+// named with its count above the grid. ◀ from the grid's first column takes the
+// ring into the column at the chosen store; ▲▼ there switch the grid at once; ▶,
+// A or B go back to the first tile; LT/RT step along the stores from anywhere.
+// Installed only (narrowing any store) and the sort are in the list picker on
+// the View button (⧉), and search is on Y with the controller keyboard
+// (UI/Pad/PadKeyboardView.swift). Each tile says whether the game is ready and
+// when it was last played, its download or queued update, or its size when it
+// is not installed. A opens the game's page over the grid. Works offline, with
+// no Steam session: the owned games come from the disk cache.
 //
 // Add a game (UI/Import.swift) opens Files to import a game's folder or .zip: a
-// button at the chips' right and X in the footer on every filter, an entry in the
-// ⧉ picker, and a tile after the games in All and Installed and on the empty page.
+// button in the heading and X in the footer on every store, an entry in the
+// ⧉ picker, and a tile after the games in All and on the empty page.
 //
 // The grid is lazy, so a tile off screen is not drawn; the grid reports every
 // tile's frame to the focus ring itself (padFrames), and when the ring moves to
 // a tile not wholly on screen scrolls just far enough to show its row, to an
 // offset worked out from that frame (a scroll to the lazy grid's id lands on an estimate).
 
+import BattleNetClientKit
+import Combine
 import GOGClientKit
 import EpicClientKit
+import HostIOKit
 import PlayportKit
 import SteamClientKit
 import SwiftUI
 
-/// The Library's chips, sort and search: where it was left, for the session.
+/// The Library's store, Installed only, sort and search: where it was left, for the session.
 @MainActor
 final class LibraryGrid: ObservableObject {
     static let shared = LibraryGrid()
 
     @Published var filter = LibraryFilter.all
+    @Published var installedOnly = false
     @Published var sort = LibrarySort.recent
     @Published var search = ""
     /// The controller keyboard is up for the search (Y).
     @Published private(set) var searching = false
+    /// The ring leaves the store column for the grid's first item (LibraryRing).
+    let toTiles = PassthroughSubject<Void, Never>()
+    /// The grid had nothing to ring when it was (re)started: the ring waits on the store's
+    /// button and goes to the first tile when one comes, unless the player moved it first.
+    var ringWaits = false
 
     /// The controller keyboard over the Library: the grid filters as the player types.
     func openSearch() {
@@ -47,17 +59,20 @@ final class LibraryGrid: ObservableObject {
                                  })
     }
 
-    /// The chips and the sorts, in one list picker (UI/Pad/PadPicker.swift): the View button (⧉).
+    /// The stores, Installed only and the sorts, in one list picker (UI/Pad/PadPicker.swift): the View button (⧉).
     func openFilterSort() {
-        let show = "Show", order = "Sort"
-        PadModal.shared.picker(title: "Filter & sort", context: "Library",
-                               options: Self.filters.map { .init(id: "filter:\($0.rawValue)", label: Self.label($0), section: show) }
-                                   + [.init(id: "add", label: "Add a game", detail: "From Files: a folder or a .zip", section: "Games")]
-                                   + [.init(id: "sort:\(LibrarySort.recent.rawValue)", label: "Recent", detail: "Last played first", section: order),
-                                      .init(id: "sort:\(LibrarySort.name.rawValue)", label: "Name", detail: "A to Z", section: order),
-                                      .init(id: "sort:\(LibrarySort.size.rawValue)", label: "Size", detail: "Largest first", section: order)],
-                               selected: ["filter:\(filter.rawValue)", "sort:\(sort.rawValue)"]) { [weak self] id in
+        let order = "Sort"
+        var options: [PadOption] = Self.column.map { PadOption(id: "filter:\($0.rawValue)", label: $0.label, section: "Store") }
+        options.append(PadOption(id: "installed", label: "Installed only", detail: "Games in C:\\Games or downloading", section: "Show"))
+        options.append(PadOption(id: "add", label: "Add a game", detail: "From Files: a folder or a .zip", section: "Games"))
+        options += [PadOption(id: "sort:\(LibrarySort.recent.rawValue)", label: "Recent", detail: "Last played first", section: order),
+                    PadOption(id: "sort:\(LibrarySort.name.rawValue)", label: "Name", detail: "A to Z", section: order),
+                    PadOption(id: "sort:\(LibrarySort.size.rawValue)", label: "Size", detail: "Largest first", section: order)]
+        var selected: Set<String> = ["filter:\(filter.rawValue)", "sort:\(sort.rawValue)"]
+        if installedOnly { selected.insert("installed") }
+        PadModal.shared.picker(title: "Filter & sort", context: "Library", options: options, selected: selected) { [weak self] id in
             if id == "add" { GameImports.requests.send(); return }
+            if id == "installed" { self?.installedOnly.toggle(); return }
             let parts = id.split(separator: ":", maxSplits: 1).map(String.init)
             guard parts.count == 2 else { return }
             if parts[0] == "filter", let f = LibraryFilter(rawValue: parts[1]) { self?.filter = f }
@@ -70,22 +85,41 @@ final class LibraryGrid: ObservableObject {
         searching = false
     }
 
-    static func label(_ filter: LibraryFilter) -> String {
-        filter.label
+    /// LT (-1) or RT (+1): the store before or after, wrapping round.
+    func step(_ by: Int) {
+        filter = filter.step(by, in: Self.column)
     }
 
-    /// The chips: Steam's always, GOG's and Epic's once a copy is in the catalogue
-    /// or the store is signed in (decision 0045); Xbox's in the dev app only (0166).
-    static var filters: [LibraryFilter] {
-        var stores = Set(LibraryModel.shared.catalog.titles.map(\.store))
-        if GOGAccount.shared.state == .signedIn { stores.insert(.gog) }
-        if EpicAccount.shared.state == .signedIn { stores.insert(.epic) }
+    /// The store column: every store, Xbox's in the dev app only (decision 0166).
+    static var column: [LibraryFilter] {
         #if PLAYPORT_RELEASE
-        stores.remove(.xbox)
+        LibraryFilter.column(xbox: false)
         #else
-        XboxLibrary.addChip(to: &stores)
+        LibraryFilter.column(xbox: true)
         #endif
-        return LibraryFilter.shown(stores: stores)
+    }
+
+    /// Shows `filter` from the start: All, or a store, with Installed only off (`open:` screens).
+    func show(_ filter: LibraryFilter, installedOnly: Bool = false) {
+        self.filter = filter
+        self.installedOnly = installedOnly
+    }
+
+    /// Whether the store is connected; one that is not is dimmed in the column (decision 0178).
+    /// Battle.net needs no sign-in, and All is no store.
+    static func connected(_ filter: LibraryFilter) -> Bool {
+        switch filter {
+        case .all, .battlenet: true
+        case .steam: SteamAccountModel.current.map { $0.state.account != nil && $0.state != .expired } ?? false
+        case .gog: GOGAccount.shared.state == .signedIn
+        case .epic: EpicAccount.shared.state == .signedIn
+        case .xbox:
+            #if PLAYPORT_RELEASE
+            false
+            #else
+            XboxAccount.shared.state == .signedIn
+            #endif
+        }
     }
 
     static func label(_ sort: LibrarySort) -> String {
@@ -94,6 +128,42 @@ final class LibraryGrid: ObservableObject {
         case .name: "Name"
         case .size: "Size"
         }
+    }
+}
+
+/// The Library's presses before the shell's own (AppShell): the store column's and LT/RT.
+@MainActor
+enum LibraryRing {
+    static func press(_ b: NavButton) -> Bool {
+        let nav = AppNavigation.shared, focus = PadFocus.shared, grid = LibraryGrid.shared
+        guard nav.page == .library, !nav.settings, !nav.onGamePage, !nav.signIn else { return false }
+        grid.ringWaits = false
+        let inColumn = focus.focused.map(StoreColumn.isItem) ?? false
+        let tiles: (String) -> Bool = { !StoreColumn.isItem($0) }
+        switch b {
+        case .lt, .rt:
+            grid.step(b == .lt ? -1 : 1)
+        case .up, .down:
+            if inColumn {
+                focus.move(b == .up ? .up : .down, within: StoreColumn.isItem)
+                if let f = focus.focused.flatMap(StoreColumn.filter) { grid.filter = f }
+            } else {
+                focus.move(b == .up ? .up : .down, within: tiles)
+            }
+        case .right:
+            if inColumn { grid.toTiles.send() } else { focus.move(.right, within: tiles) }
+        case .left:
+            if inColumn { return true }
+            let before = focus.focused
+            focus.move(.left, within: tiles)
+            // From the grid's first column: into the column, at the chosen store.
+            if focus.focused == before { focus.ring(StoreColumn.item(grid.filter)) }
+        case .b where inColumn:
+            grid.toTiles.send()
+        default:
+            return false
+        }
+        return true
     }
 }
 
@@ -127,6 +197,7 @@ private struct LibraryGridView: View {
     @ObservedObject private var imports = GameImports.shared
     @ObservedObject private var gog = GOGAccount.shared
     @ObservedObject private var epic = EpicAccount.shared
+    @ObservedObject private var bnet = BattleNetStore.shared
     #if !PLAYPORT_RELEASE
     @ObservedObject private var xbox = XboxGames.shared
     #endif
@@ -145,57 +216,80 @@ private struct LibraryGridView: View {
     private static let inset: CGFloat = 8
 
     var body: some View {
-        let all = LibraryList.entries(titles: library.catalog.titles, owned: LibraryOwned.all(model.games, gog.games, epic.games))
+        let all = LibraryList.entries(titles: library.catalog.titles, owned: LibraryOwned.all(model.games, gog.games, epic.games, bnet.shown))
         let downloading = Set(installs.jobs.keys)
-        let shown = LibraryList.shown(all, filter: grid.filter, sort: grid.sort, search: grid.search, downloading: downloading)
-        VStack(alignment: .leading, spacing: 0) {
-            chips(all, downloading: downloading)
-                .padding(.top, 6).padding(.bottom, 8)
-            if shown.isEmpty {
-                empty
-            } else {
-                tiles(shown, duplicateIDs: LibraryList.duplicateSourceIDs(all), addTile: showsAddTile)
+        let shown = LibraryList.shown(all, filter: grid.filter, installedOnly: grid.installedOnly, sort: grid.sort,
+                                      search: grid.search, downloading: downloading)
+        let count = all.filter { LibraryList.matches($0, grid.filter, installedOnly: grid.installedOnly, downloading: downloading) }.count
+        HStack(alignment: .top, spacing: 12) {
+            StoreColumn()
+                .padding(.top, 6).padding(.bottom, 8).padding(.leading, 6)
+            VStack(alignment: .leading, spacing: 0) {
+                heading(count: count)
+                    .padding(.top, 6).padding(.bottom, 8)
+                if shown.isEmpty {
+                    empty
+                } else {
+                    tiles(shown, duplicateIDs: LibraryList.duplicateSourceIDs(all), addTile: showsAddTile)
+                }
             }
         }
-        // The ring starts on the first tile, on arrival and after the chip, sort or search changes.
-        // Back from a game page the ring is still on its tile, and stays there.
+        // The ring starts on the first tile, on arrival and after the store, sort or search changes.
+        // Back from a game page the ring is still on its tile, and stays there; on arrival the page
+        // switch has put it top left, which is the column's All, so that does not count.
         .onAppear {
-            if focus.focused?.hasPrefix("lib:") != true { PadFocus.shared.reset(start: nav.focusStart ?? firstTile()) }
+            if focus.focused.map({ $0.hasPrefix("lib:") && !StoreColumn.isItem($0) }) != true { startRing(at: nav.focusStart) }
             #if !PLAYPORT_RELEASE
             XboxLibrary.opened()
             #endif
         }
-        .onChange(of: grid.filter) { _, _ in PadFocus.shared.reset(start: firstTile()) }
-        .onChange(of: grid.sort) { _, _ in PadFocus.shared.reset(start: firstTile()) }
-        .onChange(of: grid.search) { _, _ in PadFocus.shared.reset(start: firstTile()) }
-    }
-
-    /// The first tile the grid shows now, read afresh (an onChange's closure holds the old body's values).
-    private func firstTile() -> String? {
-        let all = LibraryList.entries(titles: library.catalog.titles, owned: LibraryOwned.all(model.games, gog.games, epic.games))
-        return LibraryList.shown(all, filter: grid.filter, sort: grid.sort, search: grid.search,
-                                 downloading: Set(installs.jobs.keys)).first.map { "lib:\($0.id)" }
-    }
-
-    // MARK: chips
-
-    private func chips(_ all: [LibraryEntry], downloading: Set<StoreGameKey>) -> some View {
-        HStack(spacing: 8) {
-            // Store chips can grow without pushing search and sort off screen.
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(LibraryGrid.filters, id: \.self) { chip in
-                        let count = all.filter { LibraryList.matches($0, chip, downloading: downloading) }.count
-                        // Not in the ring: ⧉ picks one; a tap here.
-                        Button { grid.filter = chip } label: {
-                            Chip(text: "\(LibraryGrid.label(chip)) · \(count)", on: grid.filter == chip)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityIdentifier("chip-\(chip.rawValue)")
-                    }
-                }
+        // All and the Battle.net store list what Blizzard offers now (cached for six hours).
+        .task { await bnet.refresh() }
+        // In the column the ring stays there, on the store now shown (▲▼ or LT/RT).
+        .onChange(of: grid.filter) { _, f in
+            if focus.focused.map(StoreColumn.isItem) == true { focus.ring(StoreColumn.item(f)) } else { startRing() }
+        }
+        .onChange(of: grid.installedOnly) { _, _ in startRing() }
+        .onChange(of: grid.sort) { _, _ in startRing() }
+        .onChange(of: grid.search) { _, _ in startRing() }
+        // The games came after the ring started (the catalogue or a store still loading).
+        .onChange(of: shown.first?.id ?? emptyItems.first) { _, _ in
+            if grid.ringWaits, let id = entryItem() {
+                grid.ringWaits = false
+                focus.ring(id)
             }
-            .fixedSize(horizontal: false, vertical: true)
+        }
+        .onReceive(grid.toTiles) { if let id = entryItem() { focus.ring(id) } }
+    }
+
+    /// The ring on `start`, else the first tile; with nothing to ring yet, on the store's button
+    /// until the first tile comes (`ringWaits`), not on whatever is top left.
+    private func startRing(at start: String? = nil) {
+        let entry = start ?? entryItem()
+        grid.ringWaits = entry == nil
+        PadFocus.shared.reset(start: entry ?? StoreColumn.item(grid.filter))
+    }
+
+    /// The first tile the grid shows now, else the empty page's first button, read afresh
+    /// (an onChange's closure holds the old body's values).
+    private func entryItem() -> String? {
+        let all = LibraryList.entries(titles: library.catalog.titles, owned: LibraryOwned.all(model.games, gog.games, epic.games, bnet.shown))
+        let first = LibraryList.shown(all, filter: grid.filter, installedOnly: grid.installedOnly, sort: grid.sort, search: grid.search,
+                                      downloading: Set(installs.jobs.keys)).first.map { "lib:\($0.id)" }
+        return first ?? emptyItems.first
+    }
+
+    // MARK: heading
+
+    /// The chosen store and its count, Installed only when on, the search, Add a game and the sort.
+    private func heading(count: Int) -> some View {
+        HStack(spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(grid.filter.label).font(PP.display(20)).foregroundStyle(PP.text).lineLimit(1)
+                Text("\(count)").font(.system(size: 13)).foregroundStyle(PP.muted)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("library-store")
             if grid.searching || !grid.search.isEmpty {
                 // What the keyboard typed; a tap brings the keyboard back.
                 Button { grid.openSearch() } label: {
@@ -214,7 +308,8 @@ private struct LibraryGridView: View {
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("library-search")
             }
-            if library.scanning || model.gamesLoading { ProgressView().controlSize(.small) }
+            if library.scanning || model.gamesLoading || bnet.loading { ProgressView().controlSize(.small) }
+            Spacer(minLength: 0)
             // Not in the ring (it leaves the tiles alone): X does it; a tap here.
             Button { GameImports.requests.send() } label: {
                 HStack(spacing: 5) {
@@ -236,14 +331,22 @@ private struct LibraryGridView: View {
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("library-sort")
+            // Styled as the sort beside it; a tap flips it, ⧉ does too (it is not in the ring).
+            Button { grid.installedOnly.toggle() } label: {
+                Text("Installed only: \(grid.installedOnly ? "On" : "Off")")
+                    .font(.system(size: 12)).foregroundStyle(PP.muted)
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("library-installed-only")
         }
-        .padding(.horizontal, 6)
+        .padding(.trailing, 6)
     }
 
     // MARK: tiles
 
-    /// Add a game shows where local games do: All and Installed, with no search typed.
-    private var showsAddTile: Bool { (grid.filter == .all || grid.filter == .installed) && grid.search.isEmpty }
+    /// Add a game shows where local games do: All, with no search typed.
+    private var showsAddTile: Bool { grid.filter == .all && grid.search.isEmpty }
 
     private func tiles(_ shown: [LibraryEntry], duplicateIDs: Set<String>, addTile: Bool) -> some View {
         GeometryReader { outer in
@@ -289,7 +392,7 @@ private struct LibraryGridView: View {
                     await model.loadGames(refresh: true)
                 }
                 .onChange(of: focus.focused) { _, id in
-                    if let id, id.hasPrefix("lib:"), let frame = focus.items[id]?.frame { reveal(frame) }
+                    if let id, id.hasPrefix("lib:"), !StoreColumn.isItem(id), let frame = focus.items[id]?.frame { reveal(frame) }
                 }
         }
     }
@@ -325,40 +428,46 @@ private struct LibraryGridView: View {
 
     // MARK: nothing to show
 
+    /// A store not connected (GOG, Epic: Steam has its own sign-in below), asking for its account.
+    private var needsStore: Bool {
+        grid.filter.store != nil && grid.filter != .steam && !LibraryGrid.connected(grid.filter)
+    }
+
+    /// Installed only hides games: Show all turns it off.
+    private var offersAll: Bool { grid.installedOnly && grid.search.isEmpty }
+
+    /// The empty page's buttons, in order: the ring starts on the first.
+    private var emptyItems: [String] {
+        (needsSignIn ? ["signin"] : []) + (needsStore ? ["store-signin"] : []) + (showsAddTile ? [AddGameTile.item] : [])
+            + (offersAll ? ["show-all"] : [])
+    }
+
     @ViewBuilder
     private var empty: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(emptyTitle).font(PP.display(24)).foregroundStyle(PP.text)
             Text(emptyText).font(.system(size: 13)).foregroundStyle(PP.soft)
             if needsSignIn {
-                Text("Steam account")
-                    .font(.system(size: 13, weight: .bold)).foregroundStyle(PP.onAccent)
-                    .padding(.horizontal, 14).padding(.vertical, 6)
-                    .background(PP.accent, in: Capsule())
-                    .padItem("signin", hint: "Open", cornerRadius: 14) { _ = nav.open("account") }
-                    .padding(.top, 6)
+                EmptyButton(text: "Steam account", primary: true)
+                    .padItem("signin", hint: "Open", cornerRadius: 14) { _ = nav.open("account") }.padding(.top, 6)
+            }
+            if needsStore {
+                EmptyButton(text: "\(grid.filter.label) account", primary: true)
+                    .padItem("store-signin", hint: "Open", cornerRadius: 14) { _ = nav.open("account") }.padding(.top, 6)
             }
             if showsAddTile {
-                Text(imports.planning ? "Reading…" : "Add a game")
-                    .font(.system(size: 13, weight: .bold)).foregroundStyle(needsSignIn ? PP.text : PP.onAccent)
-                    .padding(.horizontal, 14).padding(.vertical, 6)
-                    .background(needsSignIn ? PP.line : PP.accent, in: Capsule())
-                    .padItem(AddGameTile.item, hint: "Add", cornerRadius: 14) { GameImports.requests.send() }
-                    .padding(.top, 6)
+                EmptyButton(text: imports.planning ? "Reading…" : "Add a game", primary: !needsSignIn)
+                    .padItem(AddGameTile.item, hint: "Add", cornerRadius: 14) { GameImports.requests.send() }.padding(.top, 6)
             }
-            if !needsSignIn, grid.filter == .installed, !model.games.isEmpty, grid.search.isEmpty {
-                Text(LibrarySource.steam.label)
-                    .font(.system(size: 13, weight: .bold)).foregroundStyle(PP.onAccent)
-                    .padding(.horizontal, 14).padding(.vertical, 6)
-                    .background(PP.accent, in: Capsule())
-                    .padItem("steam", hint: "Show", cornerRadius: 14) { grid.filter = .steam }
-                    .padding(.top, 6)
+            if offersAll {
+                EmptyButton(text: "Show all", primary: !needsSignIn && !needsStore && !showsAddTile)
+                    .padItem("show-all", hint: "Show", cornerRadius: 14) { grid.installedOnly = false }.padding(.top, 6)
             }
         }
         .padding(20)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(PP.surface, in: RoundedRectangle(cornerRadius: 14))
-        .padding(.horizontal, 6).padding(.bottom, 8)
+        .padding(.trailing, 6).padding(.bottom, 8)
     }
 
     private var needsSignIn: Bool {
@@ -369,26 +478,35 @@ private struct LibraryGridView: View {
 
     private var emptyTitle: String {
         if !grid.search.isEmpty { return "No games match “\(grid.search)”" }
+        if needsStore { return "Sign in to \(grid.filter.label)" }
+        if grid.installedOnly {
+            return grid.filter == .all ? "No games installed" : "No \(grid.filter.label) games installed"
+        }
         switch grid.filter {
         case .all: return "No games yet"
-        case .installed: return "No games installed"
         case .steam: return needsSignIn ? "Sign in to Steam" : (model.gamesLoading ? "Loading your games…" : "No Steam games")
-        case .gog, .epic, .xbox: return "No \(grid.filter.label) games"
+        case .gog, .epic: return "No \(grid.filter.label) games"
+        case .battlenet: return bnet.loading ? "Asking Blizzard…" : "No Battle.net games offered"
+        case .xbox: return "No \(grid.filter.label) games"
         }
     }
 
     private var emptyText: String {
         if !grid.search.isEmpty { return "Press B to clear the search." }
+        if needsStore { return "Connect your \(grid.filter.label) account in Settings › Accounts to see your games here." }
+        if grid.installedOnly {
+            return "Install one from a store, or add one from Files: its folder or a .zip of it. Installed only is in Filter & sort (⧉)."
+        }
         switch grid.filter {
         case .all:
             return model.gamesError ?? "Your installed games and games from connected stores appear here. Sign in to Steam or add a game from Files to get started."
-        case .installed:
-            return "Install one from your Steam games, or add one from Files: its folder or a .zip of it."
         case .steam:
             if needsSignIn { return model.state == .expired ? AccountCopy.status(.expired) : "Pair Playport with your Steam account to see your games." }
             return model.gamesError ?? "Your Steam account owns no games."
         case .gog, .epic:
             return "Games from \(grid.filter.label) appear here."
+        case .battlenet:
+            return bnet.error ?? "World of Warcraft products appear here while their builds carry an x64 client."
         case .xbox:
             #if PLAYPORT_RELEASE
             return "Games from \(grid.filter.label) appear here."
@@ -399,17 +517,107 @@ private struct LibraryGridView: View {
     }
 }
 
-private struct Chip: View {
+/// A button on the empty page: the accent for the one to press first.
+private struct EmptyButton: View {
     let text: String
-    let on: Bool
+    let primary: Bool
 
     var body: some View {
         Text(text)
-            .font(.system(size: 13, weight: .semibold))
+            .font(.system(size: 13, weight: .bold)).foregroundStyle(primary ? PP.onAccent : PP.text)
+            .padding(.horizontal, 14).padding(.vertical, 6)
+            .background(primary ? PP.accent : PP.line, in: Capsule())
+    }
+}
+
+/// The store column (decision 0178): All, a rule, then every store as its mark; the chosen one
+/// lit with an accent bar, one not connected dimmed. Its buttons join the ring (LibraryRing).
+private struct StoreColumn: View {
+    @ObservedObject private var grid = LibraryGrid.shared
+    // The dimming follows the accounts.
+    @EnvironmentObject private var model: SteamAccountModel
+    @ObservedObject private var gog = GOGAccount.shared
+    @ObservedObject private var epic = EpicAccount.shared
+    #if !PLAYPORT_RELEASE
+    @ObservedObject private var xbox = XboxAccount.shared
+    #endif
+
+    static func item(_ filter: LibraryFilter) -> String { "lib:store:\(filter.rawValue)" }
+    static func isItem(_ id: String) -> Bool { id.hasPrefix("lib:store:") }
+    static func filter(_ id: String) -> LibraryFilter? {
+        isItem(id) ? LibraryFilter(rawValue: String(id.dropFirst("lib:store:".count))) : nil
+    }
+
+    var body: some View {
+        VStack(spacing: 8) {
+            ForEach(LibraryGrid.column, id: \.self) { f in
+                if f == LibraryGrid.column.dropFirst().first {
+                    Rectangle().fill(PP.line).frame(width: 24, height: 1).padding(.vertical, 2)
+                }
+                button(f)
+            }
+        }
+        .padding(.vertical, 8)
+        .frame(width: 52)
+        .background(PP.surface.opacity(0.6), in: RoundedRectangle(cornerRadius: 14))
+    }
+
+    private func button(_ f: LibraryFilter) -> some View {
+        let on = grid.filter == f
+        return StoreGlyph(filter: f)
             .foregroundStyle(on ? PP.text : PP.soft)
-            .padding(.horizontal, 12).padding(.vertical, 4)
-            .background(on ? PP.line : PP.surface, in: Capsule())
-            .overlay(Capsule().strokeBorder(on ? Color(hex: 0x4A5667) : PP.line, lineWidth: 1))
+            .opacity(LibraryGrid.connected(f) ? 1 : 0.4)
+            .frame(width: 38, height: 38)
+            .background(on ? PP.line : .clear, in: RoundedRectangle(cornerRadius: 10))
+            .overlay(alignment: .leading) {
+                if on { Capsule().fill(PP.accent).frame(width: 3, height: 20).offset(x: -7) }
+            }
+            .accessibilityElement()
+            .accessibilityLabel(f.label + (LibraryGrid.connected(f) ? "" : ", not connected"))
+            .accessibilityAddTraits(on ? .isSelected : [])
+            // A tap, or A with the ring here: this store, then the grid.
+            .padItem(Self.item(f), hint: "Show", cornerRadius: 10) {
+                grid.filter = f
+                grid.toTiles.send()
+            }
+    }
+}
+
+/// A store's mark (PlayportKit.StoreMark, in its 24×24 box), its letter when it has none,
+/// or All's grid symbol.
+private struct StoreGlyph: View {
+    let filter: LibraryFilter
+
+    var body: some View {
+        if let store = filter.store {
+            if let d = StoreMark.path(store), let segments = SVGPath.parse(d) {
+                StoreMarkShape(segments: segments).frame(width: 20, height: 20)
+            } else {
+                Text(StoreMark.letter(store)).font(.system(size: 15, weight: .heavy))
+            }
+        } else {
+            Image(systemName: "square.grid.2x2.fill").font(.system(size: 17, weight: .semibold))
+        }
+    }
+}
+
+/// SVG path segments in a 24×24 box, scaled to the frame.
+private struct StoreMarkShape: Shape {
+    let segments: [SVGPath.Segment]
+
+    func path(in rect: CGRect) -> Path {
+        let k = min(rect.width, rect.height) / 24
+        func p(_ q: SVGPath.Point) -> CGPoint { CGPoint(x: rect.minX + q.x * k, y: rect.minY + q.y * k) }
+        var path = Path()
+        for s in segments {
+            switch s {
+            case .move(let a): path.move(to: p(a))
+            case .line(let a): path.addLine(to: p(a))
+            case .cubic(let c1, let c2, let a): path.addCurve(to: p(a), control1: p(c1), control2: p(c2))
+            case .close: path.closeSubpath()
+            }
+        }
+        return path
     }
 }
 
@@ -553,10 +761,11 @@ struct GameSourceBadge: View {
 /// The owned games of every signed-in store, as the library joins them.
 enum LibraryOwned {
     @MainActor
-    static func all(_ steam: [SteamGame], _ gog: [GOGGame], _ epic: [EpicGame]) -> [LibraryList.Owned] {
+    static func all(_ steam: [SteamGame], _ gog: [GOGGame], _ epic: [EpicGame], _ battlenet: [LibraryList.Owned]) -> [LibraryList.Owned] {
         var owned = steam.map { LibraryList.Owned(appID: $0.id, name: $0.info.name, installSize: $0.info.installSize) }
             + gog.map { LibraryList.Owned(key: StoreGameKey(store: .gog, id: $0.id), name: $0.title) }
             + epic.map { LibraryList.Owned(key: StoreGameKey(store: .epic, id: $0.id), name: $0.title) }
+            + battlenet
         #if !PLAYPORT_RELEASE
         owned += XboxLibrary.owned // dev only (0166)
         #endif
@@ -564,13 +773,15 @@ enum LibraryOwned {
     }
 }
 
-/// Whether a GOG or Epic game has its store's art (which carries its name, so no name is drawn over it).
+/// Whether a store game has its store's art carrying its name, so no name is drawn over it: GOG's
+/// and Epic's, and retail World of Warcraft's (the Classic products' art has no words).
 enum StoreArt {
     @MainActor
     static func has(_ key: StoreGameKey) -> Bool {
         switch key.store {
         case .gog: GOGAccount.shared.game(key.id)?.image != nil
         case .epic: EpicAccount.shared.game(key.id).map { $0.wideArt ?? $0.tallArt } != nil
+        case .battlenet: BattleNet.product(key).map { BattleNetArt.carriesName($0) } ?? false
         case .steam, .local: false
         case .xbox:
             #if PLAYPORT_RELEASE
@@ -582,8 +793,8 @@ enum StoreArt {
     }
 }
 
-/// A game's store art when the paired account owns it; else, for a game in
-/// C:\Games, its executable's icon (LocalGameArt); else its colour tile.
+/// A game's store art when the paired account owns it, or a Battle.net product's (no account);
+/// else, for a game in C:\Games, its executable's icon (LocalGameArt); else its colour tile.
 struct GameArt: View {
     @EnvironmentObject private var model: SteamAccountModel
     @ObservedObject private var library = LibraryModel.shared
@@ -592,7 +803,7 @@ struct GameArt: View {
     let kind: ArtworkCache.Kind
     /// The catalogue's title, for a local game's icon.
     var titleID: String? = nil
-    /// The store's game, for GOG's or Epic's art.
+    /// The store's game, for GOG's, Epic's or Battle.net's art.
     var storeKey: StoreGameKey? = nil
 
     var body: some View {
@@ -602,6 +813,8 @@ struct GameArt: View {
             GOGArtView(game: g, wide: kind == .hero)
         } else if let key = storeKey, key.store == .epic, let g = EpicAccount.shared.game(key.id) {
             EpicArtView(game: g, wide: kind == .hero)
+        } else if let key = storeKey, let p = BattleNet.product(key) {
+            BattleNetArtView(product: p, wide: kind == .hero)
         } else if let art = xboxArt {
             art
         } else if let id = titleID, let t = library.title(id), t.executable != nil {

@@ -1,7 +1,7 @@
 # 0109: Chromium's switches for a CEF browser, and where a launcher's Open lives
 
 **Status:** accepted, 2026-10-16, by the supervisor of the publisher-launchers run (chunk 4, steps
-4 and 5 of the [launchers plan](../plans/2026-10-12-launchers.md)), within the owner's decisions D1
+4 and 5 of the [launchers plan](https://linear.app/playportdev/issue/PLA-616)), within the owner's decisions D1
 and D2 there. [PLA-277](https://linear.app/playportdev/issue/PLA-277),
 [PLA-271](https://linear.app/playportdev/issue/PLA-271),
 [PLA-254](https://linear.app/playportdev/issue/PLA-254).

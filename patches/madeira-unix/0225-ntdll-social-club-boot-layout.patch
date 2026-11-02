@@ -1,0 +1,152 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: playportdev <dev@playport.dev>
+Date: Thu, 29 Oct 2026 15:57:55 +0100
+Subject: [PATCH] ntdll: reserve the opt-in stock Social Club boot layout
+
+PLA-476 startup half only: require the host-owned low hold and fixed RW
+alias, reserve real slots without overwriting mappings, retain the game
+hold, and move the FEX arena above Oilpan. Off unless PLAYPORT_SC_LAYOUT=1,
+which is read once here. With it, a boot that cannot hold every slot
+refuses the launch (exit from virtual_init, as its other start-up failures
+do): the host has already fixed the RW alias at 0x7900000000 and given back
+the low hold but 256 MiB, a map no play was tested on.
+Allocation routing follows separately; not a usable stock-CEF mode yet.
+
+Class: feature
+Evidence: docs/evidence/2026-10-29-sc-stock-cef-probe.md
+Offered-upstream: no
+---
+ build/ntdll-unix/pp_sc_boot.h  | 58 ++++++++++++++++++++++++++++++++++
+ build/ntdll-unix/virtual_ios.c | 19 +++++++++--
+ 2 files changed, 74 insertions(+), 3 deletions(-)
+ create mode 100644 build/ntdll-unix/pp_sc_boot.h
+
+diff --git a/build/ntdll-unix/pp_sc_boot.h b/build/ntdll-unix/pp_sc_boot.h
+new file mode 100644
+index 0000000..d6b8a41
+--- /dev/null
++++ b/build/ntdll-unix/pp_sc_boot.h
+@@ -0,0 +1,58 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later */
++/* Included by virtual_ios.c after the jumbo hold globals. */
++#include "pp_sc_layout.h"
++static unsigned ppsc_held;
++static int ppsc_ready;
++/* PLAYPORT_SC_LAYOUT=1, read once by ppsc_boot. With it and no ppsc_ready,
++ * virtual_init refuses the launch. */
++static int ppsc_requested;
++
++static int ppsc_native_hold(uint64_t base, uint64_t size)
++{
++    mach_vm_address_t a = base;
++    return mach_vm_map(mach_task_self(), &a, size, 0, VM_FLAGS_FIXED,
++                       MEMORY_OBJECT_NULL, 0, 0, PROT_NONE, VM_PROT_ALL,
++                       VM_INHERIT_COPY) == KERN_SUCCESS;
++}
++
++static void ppsc_boot(void)
++{
++    const char *low, *rw, *span, *e = getenv("PLAYPORT_SC_LAYOUT");
++    int k;
++    ppsc_requested = e && !strcmp(e, "1");
++    if (!ppsc_requested) return;
++    low = getenv("WINE_IOS_SC_LOW_HELD");
++    rw = getenv("WINE_IOS_JIT_RW");
++    span = getenv("WINE_IOS_JIT_SIZE");
++    if (!low || strcmp(low, "1") || !rw || strtoull(rw, NULL, 16) != PPSC_RW_BASE ||
++        !span || !strtoull(span, NULL, 16) || strtoull(span, NULL, 16) > PPSC_RW_CAP) {
++        dprintf(2, "[sc-layout] missing host low hold or fixed RW alias; layout unavailable\n");
++        return;
++    }
++    /* Only this marker transfers the host's own hold. A foreign PROT_NONE
++     * mapping is not evidence of ownership and is never taken over. */
++    unsetenv("WINE_IOS_SC_LOW_HELD");
++    ppsc_held = PPSC_BIT(PPSC_CEF);
++    for (k = PPSC_ELF; k <= PPSC_CAGE; k++) {
++        struct ppsc_range r = ppsc_range(k);
++        if (k == PPSC_CEF) continue;
++        if (!ppsc_native_hold(r.base, r.size)) goto failed;
++        ppsc_held |= PPSC_BIT(k);
++    }
++    if (ios_jumbo_hold_size || !ppsc_native_hold(PPSC_GAME_BASE, PPSC_GAME_SIZE)) goto failed;
++    ios_jumbo_hold_base = PPSC_GAME_BASE;
++    ios_jumbo_hold_size = PPSC_GAME_SIZE;
++    ios_jumbo_hold_keep = 0;
++    ppsc_ready = 1;
++    dprintf(2, "[sc-layout] RDR2 layout held: furniture 0x%llx..0x%llx, game 8960 MiB at 0x%llx, FEX floor 0x%llx\n",
++            (unsigned long long)PPSC_FLOOR, (unsigned long long)PPSC_CEILING,
++            (unsigned long long)PPSC_GAME_BASE, (unsigned long long)PPSC_FEX_BASE);
++    return;
++failed:
++    for (k = PPSC_ELF; k <= PPSC_CAGE; k++) if (ppsc_held & PPSC_BIT(k)) {
++        struct ppsc_range r = ppsc_range(k);
++        mach_vm_deallocate(mach_task_self(), r.base, r.size);
++    }
++    ppsc_held = 0;
++    dprintf(2, "[sc-layout] fixed slot unavailable; released only our holds, layout unavailable\n");
++}
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index aaa1b19..ffcaebf 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -2022,6 +2022,7 @@ static size_t    ios_jumbo_hold_size;
+  * madeira-jumbo-keep-mb.txt; 0 (absent) => keep everything, i.e. exactly the
+  * pre-ml1029 behaviour. */
+ static size_t    ios_jumbo_hold_keep;
++#include "pp_sc_boot.h"
+ 
+ static void *anon_mmap_tryfixed( void *start, size_t size, int prot, int flags );
+ 
+@@ -2037,6 +2038,7 @@ void ios_jumbo_holdback_init( void )
+ 
+     if (done) return;
+     done = 1;
++    if (ppsc_ready) return; /* The Social Club layout already owns the exact game hold. */
+ 
+     want = (size_t)(madeira_cfg_int( "jumbo-mb", 0 ) * 1024ll * 1024ll);   /* ml1095: madeira.cfg jumbo-mb = N */
+     if (!want) return;                       /* opt-in: absent or 0 => off */
+@@ -6129,6 +6131,7 @@ static int ios_va_pressure;
+ static inline ULONG_PTR ios_usable_va_floor_get(void)
+ {
+     size_t sz = ios_jit_pool_size_global;
++    if (ppsc_ready) return PPSC_FLOOR;
+     return (ULONG_PTR)0x7000000000ULL + (ULONG_PTR)(sz ? sz : (896ULL << 20));
+ }
+ #define ios_usable_va_floor (ios_usable_va_floor_get())
+@@ -15926,6 +15929,14 @@ void virtual_init(void)
+ #endif
+ 
+     kernel_writewatch_init();
++    ppsc_boot(); /* Before Wine places furniture in the fixed Social Club slots. */
++    if (ppsc_requested && !ppsc_ready)
++    {
++        /* The host already moved the RW alias and gave back the low hold but
++         * 256 MiB; that map is not one any play was tested on. */
++        dprintf( 2, "[sc-layout] PLAYPORT_SC_LAYOUT=1 but the boot layout is incomplete; launch refused\n" );
++        exit(1);
++    }
+ 
+     if (preload_info && *preload_info)
+         for (i = 0; (*preload_info)[i].size; i++)
+@@ -15972,7 +15983,9 @@ void virtual_init(void)
+      * (evidence 2026-10-06-guest-va-exhaustion.md). It followed jumbo-mb until
+      * PLA-417: RDR2's jumbo-mb then held it all run for an 8 GB ask RDR2 never
+      * makes, and the rest of the window filled at +94 s. */
+-    if (!ppj_cage_hold_wanted( madeira_cfg_int( "cage-hold", 0 ) ))
++    if (ppsc_ready)
++        dprintf(2, "[sc-layout] V8 cage held by layout, classic cage disabled\n");
++    else if (!ppj_cage_hold_wanted( madeira_cfg_int( "cage-hold", 0 ) ))
+         dprintf( 2, "[cage] no holdback: no cage-hold for this title\n" );
+     else if (anon_mmap_fixed( (void *)(uintptr_t)IOS_CAGE_BASE, IOS_CAGE_REAL_SIZE, PROT_NONE, 0 ) != MAP_FAILED)
+     {
+@@ -22050,8 +22063,8 @@ void ios_reserve_fex_arena(void)
+          * so the result must be CHECKED against the window rather than assumed:
+          * a mapping that landed outside is worse than none, because the whole
+          * point is that FEX and Wine agree on where the arena is. */
+-        mach_vm_address_t addr = (mach_vm_address_t)plan[i].lo;
+-        SIZE_T size = plan[i].size;
++        mach_vm_address_t addr = (ppsc_ready && !i) ? PPSC_FEX_BASE : (mach_vm_address_t)plan[i].lo;
++        SIZE_T size = (ppsc_ready && !i) ? PPSC_TOP - PPSC_FEX_BASE : plan[i].size;
+         void *base;
+         kern_return_t kr;
+ 

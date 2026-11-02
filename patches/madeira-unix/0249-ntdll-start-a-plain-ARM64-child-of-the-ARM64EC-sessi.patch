@@ -1,0 +1,143 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 30 Oct 2026 13:19:01 +0100
+Subject: [PATCH] ntdll: start a plain ARM64 child of the ARM64EC session on
+ its own aarch64 ntdll
+
+The session is x86-64 (ARM64EC), and a child whose executable is a plain
+ARM64 image fell into the S1 branch of wine_ios_child_main: a per-child
+copy of the session's ARM64EC ntdll, whose loader takes ARM64EC and
+x86-64 images and whose system32 is the ARM64EC set. Such a child could
+not start.
+
+ios_load_child_ec_ntdll, which already maps the aarch64 ntdll build as a
+private image for a WoW64 child (0061), now takes the kind of child: EC
+(the ARM64EC build, X3c), WoW64 (the aarch64 build with the i386 ntdll in
+the owner's window) or native (the aarch64 build alone: no window, no
+LdrSystemDllInitBlock, no i386 ntdll, no EC code bitmap, and no FEX, since
+nothing in the process is emulated). An ARM64 child of an ARM64EC session
+takes the native kind; a stack or ntdll failure ends it with the status or
+STATUS_DLL_INIT_FAILED, as a WoW64 child's does, so it ends like any failed
+play. Its image and DLLs go through the standard map pipeline (pool copy,
+x18 patching); an ARM64 child of an aarch64 session keeps the S1 copy.
+
+Every check of the session's machine in the forked loader files was
+reviewed for this child; the table is in the evidence file.
+
+The aarch64 build has no hybrid metadata, so "no CHPE metadata -- EC
+redirect skipped!" is logged for the EC build only, not for every WoW64
+or ARM64 child that starts well.
+
+Linear: PLA-512
+Class: feature
+Evidence: docs/evidence/2026-10-30-native-arm64-child.md
+Offered-upstream: no; the pseudo-process loader is specific to the iOS port
+---
+ build/ntdll-unix/loader_ios.c | 53 +++++++++++++++++++++++++++++++++++++++++--------
+ 1 file changed, 44 insertions(+), 9 deletions(-)
+
+diff --git a/build/ntdll-unix/loader_ios.c b/build/ntdll-unix/loader_ios.c
+index dc95381..e626750 100644
+--- a/build/ntdll-unix/loader_ios.c
++++ b/build/ntdll-unix/loader_ios.c
+@@ -2354,18 +2354,29 @@ static void redirect_ntdll_functions( HMODULE module )
+  */
+ static int ios_load_child_i386_ntdll( SYSTEM_DLL_INIT_BLOCK *block );
+ 
++/* Which ntdll a child pseudo-process gets in place of the session's. */
++enum ios_child_ntdll
++{
++    IOS_CHILD_NTDLL_EC,     /* X3c: an AMD64 child of an aarch64 session: the ARM64EC build */
++    IOS_CHILD_NTDLL_WOW64,  /* an i386 child: the aarch64 build, with the i386 ntdll in its window */
++    IOS_CHILD_NTDLL_NATIVE, /* an ARM64 child: the aarch64 build alone, no window, no FEX */
++};
++
+ /* X3c: an AMD64 child of an aarch64 session runs the ARM64EC ntdll build.
+  * Playport: a WoW64 (i386) child runs the native aarch64 build, whatever the
+- * session is, with the i386 ntdll mapped in its own window. */
+-static int ios_load_child_ec_ntdll( PEB *child_peb, BOOL wow64 )
++ * session is, with the i386 ntdll mapped in its own window; a plain ARM64
++ * child runs the same aarch64 build with nothing on top. */
++static int ios_load_child_ec_ntdll( PEB *child_peb, enum ios_child_ntdll kind )
+ {
+     static WCHAR path[] = {'\\','?','?','\\','C',':','\\','w','i','n','d','o','w','s','\\',
+                            's','y','s','t','e','m','3','2','\\','n','t','d','l','l','.','d','l','l',0};
+     extern void ios_jit_sync_write(void *addr, size_t size);
+     extern void *ios_jit_translate_addr(void *addr);
+     extern void *ios_arm64ec_bitmap_base(void);
+-    /* owner-aware: /arm64ec-windows for an AMD64 child, /aarch64-windows for i386 */
+-    const WORD machine = wow64 ? IMAGE_FILE_MACHINE_ARM64 : IMAGE_FILE_MACHINE_AMD64;
++    const BOOL wow64 = kind == IOS_CHILD_NTDLL_WOW64;
++    /* owner-aware: /arm64ec-windows for an AMD64 child, /aarch64-windows for
++     * an i386 or ARM64 one */
++    const WORD machine = kind == IOS_CHILD_NTDLL_EC ? IMAGE_FILE_MACHINE_AMD64 : IMAGE_FILE_MACHINE_ARM64;
+     const char *pe_dir = get_pe_dir( machine );
+     unsigned int status;
+     SECTION_IMAGE_INFORMATION info;
+@@ -2538,13 +2549,17 @@ static int ios_load_child_ec_ntdll( PEB *child_peb, BOOL wow64 )
+             EC_REDIRECT( DbgUiRemoteBreakin );
+ #undef EC_REDIRECT
+         }
+-        else dprintf(2, "[ec-child-ntdll] no CHPE metadata — EC redirect skipped!\n");
++        /* The aarch64 build (a WoW64 or plain ARM64 child) has no hybrid
++         * metadata and nothing to redirect: only the EC build lacking it is news. */
++        else if (kind == IOS_CHILD_NTDLL_EC)
++            dprintf(2, "[ec-child-ntdll] no CHPE metadata — EC redirect skipped!\n");
+     }
+ 
+     /* The EC code bitmap is lazily created by the first hybrid AMD64 map;
+      * only the creating PEB gets EcCodeBitMap set. Every EC child needs it
+-     * (arm64x_check_call reads TEB->Peb->EcCodeBitMap). */
+-    if (!wow64 && !child_peb->EcCodeBitMap) child_peb->EcCodeBitMap = ios_arm64ec_bitmap_base();
++     * (arm64x_check_call reads TEB->Peb->EcCodeBitMap); the aarch64 build
++     * never reads it. */
++    if (kind == IOS_CHILD_NTDLL_EC && !child_peb->EcCodeBitMap) child_peb->EcCodeBitMap = ios_arm64ec_bitmap_base();
+     dprintf(2, "[ec-child-ntdll] EcCodeBitMap=%p LdrInitializeThunk=%p (pool %p)\n",
+             child_peb->EcCodeBitMap, funcs.LdrInitializeThunk,
+             ios_jit_translate_addr( funcs.LdrInitializeThunk ));
+@@ -3386,7 +3401,7 @@ DECLSPEC_EXPORT void wine_ios_child_main( int argc, char *argv[], int child_fd_s
+          * 32-bit stack is in the owner's window (init_thread_stack). */
+         if (ios_cur_image_info()->Machine == IMAGE_FILE_MACHINE_I386)
+         {
+-            if (status || ios_load_child_ec_ntdll( child_peb, TRUE ) != 0)
++            if (status || ios_load_child_ec_ntdll( child_peb, IOS_CHILD_NTDLL_WOW64 ) != 0)
+             {
+                 dprintf(STDERR_FILENO, "[wow64-loader] native ntdll, i386 ntdll or stack FAILED "
+                         "(stack status %x) -- the WoW64 child cannot start\n", (unsigned int)status);
+@@ -3395,6 +3410,27 @@ DECLSPEC_EXPORT void wine_ios_child_main( int argc, char *argv[], int child_fd_s
+             }
+         }
+         else
++        /* Playport: a plain ARM64 child of the ARM64EC session cannot run on
++         * a copy of the session's ntdll either: the EC build loads ARM64EC
++         * and x86-64 images, and its system32 is the ARM64EC set. It gets
++         * the aarch64 build as a private image, as a WoW64 child's native
++         * side does, but without the window or the i386 ntdll, and with no
++         * FEX: nothing it loads is emulated. Its system DLLs come from
++         * sysarm64 (wine-pe 0015, 0056). It ends like a failed image map when
++         * that ntdll cannot load. An ARM64 child of an aarch64 session keeps
++         * the S1 copy below. */
++        if (ios_cur_image_info()->Machine == IMAGE_FILE_MACHINE_ARM64 && is_arm64ec())
++        {
++            if (status || ios_load_child_ec_ntdll( child_peb, IOS_CHILD_NTDLL_NATIVE ) != 0)
++            {
++                dprintf(STDERR_FILENO, "[arm64-child] native ntdll or stack FAILED "
++                        "(stack status %x) -- the ARM64 child cannot start\n", (unsigned int)status);
++                NtTerminateProcess( GetCurrentProcess(), status ? status : STATUS_DLL_INIT_FAILED );
++                return;
++            }
++            dprintf(STDERR_FILENO, "[arm64-child] native ARM64 child: private aarch64 ntdll, no window, no FEX\n");
++        }
++        else
+         /* X3c: a cross-arch child (AMD64 exe, non-EC session) cannot run on
+          * the session's aarch64 ntdll at all — load the ARM64EC build as a
+          * private second image instead of copying the session image. The
+@@ -3402,7 +3438,7 @@ DECLSPEC_EXPORT void wine_ios_child_main( int argc, char *argv[], int child_fd_s
+          * the standard map pipeline gave it pool/EC/x18 treatment. */
+         if (ios_cur_image_info()->Machine == IMAGE_FILE_MACHINE_AMD64 && !is_arm64ec())
+         {
+-            if (ios_load_child_ec_ntdll( child_peb, FALSE ) != 0)
++            if (ios_load_child_ec_ntdll( child_peb, IOS_CHILD_NTDLL_EC ) != 0)
+             {
+                 dprintf(STDERR_FILENO, "[Wine child] EC ntdll load FAILED — cross-arch child cannot start\n");
+                 return;

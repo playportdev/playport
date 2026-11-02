@@ -8,15 +8,18 @@ what an IPA owes before it is distributed.
 
 ## Wine fallback fonts
 
-`Runtime/fonts/{tahoma,tahomabd}.ttf` are unchanged, tracked Wine-pin prebuilts
+`Runtime/fonts/{tahoma,tahomabd,marlett}.ttf` are unchanged, tracked Wine-pin prebuilts
 from `fonts/` (artifact provenance `fonts`), not host FontForge outputs.
 `wine-NOTICES.md` includes the Bitstream Vera font licence; the notices stage
 also preserves SFD header lines 1–6 for each face as
 `wine-fonts-*-attribution.txt`, with committed-source derived origins.
 The Wine component's `wine-*` app selection includes these attributions.
-Each face is LGPL-2.1-or-later (its SFD name table) and derived from Bitstream
-Vera Sans. The owner reviewed and accepted them on 2026-10-05: the answer is in
-`build/app-notices.json`'s review.
+Each face is LGPL-2.1-or-later (its SFD name table); the Tahoma faces are derived
+from Bitstream Vera Sans. The owner reviewed and accepted the Tahoma faces on
+2026-10-05: the answer is in `build/app-notices.json`'s review. Marlett (Wine's
+own symbol face, copyright TransGaming Technologies, no third-party font licence)
+was added on 2026-11-01 under the Wine component's LGPL-2.1-or-later and is not
+in that answer.
 
 ## Collecting the files
 
@@ -334,7 +337,8 @@ This does **not** audit individual compiled headers, actual linked members,
 libc++/compiler-rt notices or CRT rebuild provenance. The runtime text's upstream
 **Cephes FIXME** is answered by Moshier's own grants, which FEX's
 `cephes-LICENSE.txt` quotes; the app carries that file for mingw-w64 as well, and
-the reading awaits review ([audit](release-audits/mingw-cephes.md)). The separate
+the owner accepted that reading ([audit](release-audits/mingw-cephes.md),
+[decision 0039](decisions/0039-owners-licensing-review.md)). The separate
 DirectX copies remain tied to their DXMT/DXVK submodule versions.
 
 ### Separate LLVM runtime preparation
@@ -347,11 +351,13 @@ scanned **17,768 files** and preserved **14,321 whole-file texts, 81,916,394 byt
 Recursive notice/credit and marker-selected files include code, tests, tools,
 documentation and other platforms as an explicitly incomplete superset.
 
-This output is **not part of `pp notices`**. Do not merge its flat files blindly:
-its complete-set `verify` contract, scope text and checksum list must survive
-an explicit future assembly integration. Exhaustive attribution, installed
-headers/generated inputs, actual applicability, libunwind's missing legacy
-contributor reference and binary/IPA derivation remain open. See
+`build/notices-assemble.sh` collects this output into `pp notices`' separately
+verified `llvm-runtime/` directory; its complete-set `verify` contract, scope
+text and checksum list are kept there rather than merged into the flat files.
+`build/app-notices.json` selects from it, and `build/notices-provenance.py`
+requires it. Exhaustive attribution, installed headers/generated inputs, actual
+applicability, libunwind's missing legacy contributor reference and binary/IPA
+derivation remain open. See
 [the collection audit](release-audits/llvm-runtime-collection.md).
 
 ### Khronos header notices in the PE backend
@@ -521,13 +527,10 @@ credit lines, and while the selection is unreviewed its status and open
 questions. A missing or inconsistent `components.json` (a listed file absent, an
 unsafe name, another schema) shows as missing notices, never a placeholder list.
 A dev build's driver opens it with `open:licences` (`open:licences#wine` for a
-component). No build has run the stage or compiled the page yet.
+component).
 
 ## Gaps
 
-- **No IPA carries notices yet.** The `notices` stage and the licences page
-  exist ([The app's selection](#the-apps-selection)), but no build has run them.
-  The selection is `release-reviewed` ([decision 0039](decisions/0039-owners-licensing-review.md)). The first build changes the IPA and its checksum.
 - mingw-w64's runtime and recursive source notices are now collected and
   installed notice bytes checked (the Cephes reading is accepted:
   [audit](release-audits/mingw-cephes.md), decision 0039), but actual
@@ -535,7 +538,7 @@ component). No build has run the stage or compiled the page yet.
   The exact-source LLVM runtime/header-credit superset is now collected in a
   separately verified `llvm-runtime/` directory, but exhaustive attribution,
   applicability and binary derivation remain open
-  ([LICENSING.md, "Open items"](LICENSING.md#open-items)).
+  ([LICENSING.md, "Licence readings"](LICENSING.md#licence-readings); [PLA-725](https://linear.app/playportdev/issue/PLA-725)).
 - Mesa's licence texts are collected whole; which of them the files compiled
   into KosmicKrisp and the Zink frameworks carry has not been read file by file. DXVK/vkd3d-proton's
   seven Khronos header checkouts now supply root notices and licence-text

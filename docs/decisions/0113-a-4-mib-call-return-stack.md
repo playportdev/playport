@@ -9,7 +9,7 @@ with 1 MiB rpmalloc spans.
 [PLA-383](https://linear.app/playportdev/issue/PLA-383),
 [PLA-381](https://linear.app/playportdev/issue/PLA-381),
 [PLA-370](https://linear.app/playportdev/issue/PLA-370),
-[plan](../plans/finished.md#own-low-address-space-cef),
+[plan](https://linear.app/playportdev/issue/PLA-370),
 [evidence](../evidence/2026-10-17-callret-stack.md).
 
 ## Context

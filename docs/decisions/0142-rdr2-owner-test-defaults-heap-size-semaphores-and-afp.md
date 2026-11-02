@@ -5,7 +5,8 @@ the owner plays on the phone (PLA-413, PLA-364). Amends
 [0106](0106-8gb-row-in-full-and-vulkan-plan-default.md): KosmicKrisp's heap size may follow a title's
 value, not only its budget. Revisit with the owner's results: each default stays only if that play
 supports it. **Amended the same day:** `inproc-sync=1` is dropped from the default after the
-owner's first play (below, and the evidence).
+owner's first play (below, and the evidence). **Amended 2026-10-30 (owner, PLA-476):** RDR2 is told
+2,304 MiB of video memory ([below](#amendment-2026-10-30-rdr2-is-told-2304-mib-of-video-memory)).
 
 ## Context
 
@@ -45,3 +46,29 @@ owner's first play (below, and the evidence).
 - **A 3,072 MiB heap is a smaller pool target for the game**; a game that refuses a setting it
   thinks the heap cannot hold may lower its own quality or refuse a preset.
 - **The defaults reach a release build too**, where a person cannot override runtime keys (0126).
+
+## Amendment 2026-10-30: RDR2 is told 2,304 MiB of video memory
+
+**Approved by the owner, 2026-10-30 (PLA-476).** Red Dead Redemption 2's compatibility default
+(`app-1174180` in `app/PlayportKit/Titles/compat-defaults.json`) adds the runtime keys
+`vram-mb=2304 env.PLAYPORT_VK_HEAP_MB=2304`. Its Vulkan heap size (mesa 0064), its
+`VK_EXT_memory_budget` budget (`PLAYPORT_VK_BUDGET_MB`) and DXVK's `dxgi.maxDeviceMemory` are then
+all 2,304 MiB, not 3,072.
+
+- **Scope.** Every other game keeps everyGame's 3,072 MiB heap (0153) and the 12 GB tier's 3,072 MiB
+  plan (0105). A title's key wins over everyGame's by key, the release app runs the compatibility
+  default's keys (0126), and a dev build's Runtime keys row still sets its own.
+- **Why** ([evidence](../evidence/2026-10-29-sc-stock-cef-probe.md)):
+  - RDR2's streamer sizes its pool from the start-up figure. On willfaust/Madeira's Direct3D 12
+    route, 1,536 → 3,072 MiB added about 1.4 GB in the benchmark. The game refused 1,024 MiB and
+    accepted 1,280 and up. At 2,304 its settings showed 2,300 MB and Story was ridden at 23–33 fps.
+    At 1,950 Story ran slower.
+  - In Playport's run l11, Story's load step was graphics: +765 of +802 MB in 0.43 s (2,651 → 3,416 MB
+    in the task ledger). The run was killed at 8,169 MB.
+  - Expected: −0.3 to −0.7 GB of graphics at the step (inferred). Playport's Vulkan route is
+    unmeasured.
+- **Costs.**
+  - Texture quality: the game may lower it, or refuse a preset it judges the heap cannot hold.
+  - Speed: a smaller pool streams more (on Madeira's route 3,072 doubled a snow scene's frame rate
+    against 1,536).
+  - Story-world speed at 2,304 on Playport stays unmeasured until a porch run.

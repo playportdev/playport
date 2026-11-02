@@ -66,6 +66,45 @@
 #          processor, which tells the fast cluster from the slow one
 #          (cputopo.c, PLA-392)
 #   cputopo-i386  the same for i386 (WoW64): cputopo-i386.exe
+#   arm64  a plain ARM64 program (aarch64), started as a native ARM64 child
+#          with no FEX: its machine, a sysarm64 DLL, code it writes (RWX and
+#          RW made executable), 800 RWX blocks of 1.3 MB run and freed (the
+#          pool must get them back), system32's ntdll read into RWX memory
+#          and its NtProtectVirtualMemory export called there, a thread and
+#          an ARM64 child of its own; exit 42 when every check passes
+#          (arm64.c, PLA-512, PLA-514, decision 0170); with `x18` as its
+#          arguments it then reports whether x18 survives kernel entries,
+#          a context switch, Wine calls and an exception, plain and with
+#          the custom x18 ABI bit set, without changing the exit code (PLA-516)
+#   arm64-fault  the same program writing through a null pointer: the play
+#          must end as a failed one (arm64-fault.exe)
+#   arm64-min  aarch64 with no C runtime: kernel32 only, ExitProcess(42)
+#          (arm64-min.exe, a loader-only start)
+#   arm64-x86_64  arm64.c for x86-64, to check the program itself under
+#          desktop Wine (not a phone probe)
+#   d3d12  aarch64 Direct3D 12 for a native ARM64 child: DXGI, a device, a
+#          swap chain on a window, a triangle from embedded Shader Model 5.0
+#          bytecode and 24 quads each sampling a texture (BC1/2/3/7,
+#          8-bit and 16-bit formats, sRGB views, mips, placed, custom-heap
+#          WriteToSubresource, copy queue, heap samplers) presented for 5
+#          seconds, the last frame read back and every quad's colour
+#          checked; logs to d3d12.log, exit 0 (d3d12.c, PLA-518, PLA-516;
+#          shaders: d3d12.hlsl, d3d12-shaders.sh). `skip I,J` leaves checks out
+#   d3d12-x86_64  d3d12.c for x86-64, to check the program under desktop
+#          Wine (not a phone probe)
+#   ymmctx  x86-64: the ymm registers' high halves through an exception the
+#          guest handles (int3, a continued access violation, RaiseException,
+#          a vectored and a frame handler that overwrite ymm, a handler that
+#          reads and writes the context's XSTATE), an APC and a thread's
+#          Get/SetThreadContext, and what the guest is told about AVX; `noavx`
+#          expects no AVX (FEX_HOSTFEATURES' disableavx) (ymmctx.c, PLA-516)
+#   exchook  x86-64: x64 KiUserExceptionDispatcher's code and its
+#          Wow64PrepareForException hook as x64 Windows has them: the hook
+#          called first, in x64 code, with rsp+8 the context, the record at
+#          context+0x4f0 and a machine frame; int3 and access violation
+#          values; its context changes reach the handlers and the resumed
+#          code; RtlRestoreContext and NtContinue from the hook; another
+#          thread (exchook.c, PLA-516, PLA-514)
 #
 #   tools/compat/probes/build.sh
 set -euo pipefail
@@ -74,6 +113,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/../../../build/lib.sh"
 CC=${LLVM_MINGW:?set LLVM_MINGW (pp setup)}/bin/x86_64-w64-mingw32-clang
 CC32=$LLVM_MINGW/bin/i686-w64-mingw32-clang
+CCA64=$LLVM_MINGW/bin/aarch64-w64-mingw32-clang
 OUT=$PLAYPORT_BUILD/compat/probes
 
 mkdir -p "$OUT/gl21" "$OUT/gl21-i386"
@@ -123,6 +163,26 @@ mkdir -p "$OUT/cputopo" "$OUT/cputopo-i386"
     -o "$OUT/cputopo/cputopo.exe" "$HERE/cputopo.c"
 "$CC32" -O2 -Wall -Wextra -Werror -Wno-unused-parameter -mwindows -Wl,--no-insert-timestamp \
     -o "$OUT/cputopo-i386/cputopo-i386.exe" "$HERE/cputopo.c"
+mkdir -p "$OUT/arm64" "$OUT/arm64-fault" "$OUT/arm64-min" "$OUT/arm64-x86_64"
+"$CCA64" -O2 -Wall -Wextra -Werror -Wno-unused-parameter -mwindows -Wl,--no-insert-timestamp \
+    -o "$OUT/arm64/arm64.exe" "$HERE/arm64.c"
+"$CCA64" -O2 -Wall -Wextra -Werror -Wno-unused-parameter -mwindows -Wl,--no-insert-timestamp -DPROBE_FAULT \
+    -o "$OUT/arm64-fault/arm64-fault.exe" "$HERE/arm64.c"
+"$CCA64" -O2 -Wall -Wextra -Werror -Wno-unused-parameter -mwindows -Wl,--no-insert-timestamp -DPROBE_MIN \
+    -nostdlib -Wl,-e,entry -o "$OUT/arm64-min/arm64-min.exe" "$HERE/arm64.c" -lkernel32
+"$CC" -O2 -Wall -Wextra -Werror -Wno-unused-parameter -mwindows -Wl,--no-insert-timestamp \
+    -o "$OUT/arm64-x86_64/arm64-x86_64.exe" "$HERE/arm64.c"
+mkdir -p "$OUT/d3d12" "$OUT/d3d12-x86_64"
+"$CCA64" -O2 -Wall -Wextra -Werror -Wno-unused-parameter -mwindows -Wl,--no-insert-timestamp \
+    -o "$OUT/d3d12/d3d12.exe" "$HERE/d3d12.c" -ld3d12 -ldxgi
+"$CC" -O2 -Wall -Wextra -Werror -Wno-unused-parameter -mwindows -Wl,--no-insert-timestamp \
+    -o "$OUT/d3d12-x86_64/d3d12-x86_64.exe" "$HERE/d3d12.c" -ld3d12 -ldxgi
+mkdir -p "$OUT/ymmctx"
+"$CC" -O2 -Wall -Wextra -Werror -Wno-unused-parameter -mwindows -Wl,--no-insert-timestamp \
+    -o "$OUT/ymmctx/ymmctx.exe" "$HERE/ymmctx.c"
+mkdir -p "$OUT/exchook"
+"$CC" -O2 -Wall -Wextra -Werror -Wno-unused-parameter -mwindows -Wl,--no-insert-timestamp \
+    -o "$OUT/exchook/exchook.exe" "$HERE/exchook.c"
 # xaudio2_9redist.dll's import library: llvm-mingw has none (the EOS SDK
 # links Microsoft's), so it is made from its one export here.
 DLLTOOL=$LLVM_MINGW/bin/llvm-dlltool
@@ -144,6 +204,6 @@ for probe in machine machine-i386; do
     mkdir -p "$OUT/$probe/redist"
     cp "$OUT/$probe/xaudio2redist.exe" "$OUT/$probe/redist/"
 done
-for probe in gl21 gl21-i386 wgl childabort childabort-i386 x87m64-i386 protect machine machine-i386 splitlock splitlock-i386 threadctx threadctx-i386 shmap shmap-i386 poolstress console cputopo cputopo-i386; do
+for probe in gl21 gl21-i386 wgl childabort childabort-i386 x87m64-i386 protect machine machine-i386 splitlock splitlock-i386 threadctx threadctx-i386 shmap shmap-i386 poolstress console cputopo cputopo-i386 arm64 arm64-fault arm64-min arm64-x86_64 d3d12 d3d12-x86_64 ymmctx exchook; do
     echo "$(sha256sum "$OUT/$probe/$probe.exe" | cut -c1-16)  $probe.exe ($(stat -c %s "$OUT/$probe/$probe.exe") bytes) in $OUT/$probe"
 done

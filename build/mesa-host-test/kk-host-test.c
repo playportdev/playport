@@ -2412,6 +2412,7 @@ main(int argc, char **argv)
       {"no-gs", "pass.vert", NULL, NULL, NULL, "color.frag", TRI, false, FIRST, FILL},
       {"unroll-hint", "pass.vert", NULL, NULL, NULL, "unroll-hint.frag", TRI, false, FIRST, FILL},
       {"dxvk-fp", "pass.vert", NULL, NULL, NULL, "dxvk-fp.frag", TRI, false, FIRST, FILL},
+      {"quad-merge", "pass.vert", NULL, NULL, NULL, "quad-merge.frag", TRI, false, FIRST, FILL},
       {"gs-passthrough", "pass.vert", NULL, NULL, "passthrough.geom", "color.frag", TRI, false, FIRST, FILL},
       {"gs-dynamic-count", "pass.vert", NULL, NULL, "dynamic.geom", "color.frag", VK_PRIMITIVE_TOPOLOGY_POINT_LIST, false, FIRST, FILL},
       {"gs-lines-out", "pass.vert", NULL, NULL, "lines.geom", "color.frag", TRI, false, FIRST, FILL},

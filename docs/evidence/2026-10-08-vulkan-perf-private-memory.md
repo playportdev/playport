@@ -1,6 +1,6 @@
 # Vulkan performance: private-storage memory and narrow texture usage on KosmicKrisp (not kept)
 
-**Date:** 2026-10-08. **Plan:** [Vulkan performance](../plans/2026-10-06-vulkan-performance.md)
+**Date:** 2026-10-08. **Plan:** [Vulkan performance](https://linear.app/playportdev/issue/PLA-680)
 (PLA-72), work-queue item 7 (GPU energy a frame at native). **IPA:** dev
 `55ca5c34df9cdb72de6d290533e4a4e622ad58058e30ffe91b8dac9c078276d7` (commit `c8c6016`).
 

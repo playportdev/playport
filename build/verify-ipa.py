@@ -40,6 +40,9 @@ any mismatch:
                 bundle); the bundled artifacts.tsv equals the committed one;
                 every `resource` row present with its size and sha256; no
                 extras
+  cef           no CEF payload, in a dev or a release IPA: no libcef.dll or
+                chrome_elf.dll and no directory named cef anywhere in the app
+                (decision 0169: Social Club runs on Rockstar's own CEF)
   dxmt          the unix dispatch table linked into the executable has
                 TABLE_SLOTS entries and upstream's handler for
                 MTLDevice_newLibraryWithSource at slot 144, the bundled
@@ -59,6 +62,12 @@ any mismatch:
                 wow64.dll, wow64win.dll and xtajit.dll are ARM64 PE32+
                 builtins; xtajit exports FEX's WoW64 CPU interface.
                 Build scaffolding only: does not claim 32-bit execution works.
+  arm64-vulkan  the Vulkan backend's aarch64 set a native ARM64 child loads
+                (PLA-513): vkd3d-proton's d3d12.dll and d3d12core.dll and
+                DXVK's dxgi.dll under Runtime/vulkan/aarch64-windows, the
+                Khronos vulkan-1.dll and winevulkan.json under
+                Runtime/vulkan-loader/aarch64-windows; each DLL a PE32+
+                ARM64 (0xAA64) Wine builtin
   steamclient   Playport's Steam client (P9-steamclient): steamclient64.dll and
                 steamclient.dll, native x86-64 and i386 DLLs exporting what a
                 genuine steam_api resolves
@@ -110,7 +119,8 @@ any mismatch:
                 release executable holds no dev code: no Dev/ type, no Swift
                 symbol of the S1Probe module, none of the UI driver's or the
                 scripted pad's environment names or files (S1_MODE, TITLE_NONCE,
-                UI_ACTIONS, HIO_VPAD, s1-host.log, run-events.jsonl), and its
+                UI_ACTIONS, HIO_VPAD, s1-host.log, run-events.jsonl, the text
+                bar's secret file ui-text-) and no Metal HUD (MTL_HUD_ENABLED), and its
                 Info.plist queries no URL scheme; it carries
                 the quiet-runtime switch MADEIRA_NO_DIAGNOSTICS and its log,
                 playport.log, and links the donor pool (decision 0153:
@@ -151,9 +161,6 @@ _spec.loader.exec_module(notices_bundle)
 _spec = importlib.util.spec_from_file_location("notices_app", REPO / "build/notices-app.py")
 notices_app = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(notices_app)
-_spec = importlib.util.spec_from_file_location("cef_payload", REPO / "build/cef/verify-payload.py")
-cef_payload = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(cef_payload)
 MSL_SHA256 = "78cc2261e4259f43dd1478c2055031b2446aa40acfb2e47187c464397274323a"  # dxmt_command.metal at the dxmt pin, includes inlined
 SLOT = 144         # upstream DXMT's MTLDevice_newLibraryWithSource (139 was Playport's own slot before the upstream rebase)
 TABLE_SLOTS = 150  # upstream's 0-145, then patches/dxmt-port's 146-149
@@ -162,9 +169,9 @@ EXECUTABLE = {"dev": "S1Probe", "release": "Playport"}
 # What only a dev build's code holds (Sources/S1Probe/Dev/).
 DEV_MODULES = ["7S1Probe"]
 DEV_TYPES = ["UIDriver", "VirtualPad", "RunEvents", "WebSheetDriver",
-             "DeveloperSettings"]
+             "DeveloperSettings", "TextBarDriver", "MetalHUD"]
 DEV_STRINGS = [b"S1_MODE", b"TITLE_NONCE", b"UI_ACTIONS", b"UI_SETTINGS", b"UI_CONTROLS", b"HIO_VPAD", b"s1-host.log",
-               b"run-events.jsonl", b"steam-drive.log"]
+               b"run-events.jsonl", b"steam-drive.log", b"ui-text-", b"ui-secret-wanted", b"MTL_HUD_ENABLED"]
 RELEASE_STRINGS = [b"MADEIRA_NO_DIAGNOSTICS", b"playport.log"]
 # The donor pool, in both builds since decision 0153: GuestPool.m's install and 0148's hook.
 RELEASE_SYMBOLS = ["_pp_guest_pool_install", "_playport_guest_memory_backing"]
@@ -594,6 +601,23 @@ def wow64_checks(rt, rows):
                   f"wow64: xtajit.dll imports only ntdll.dll and wow64.dll (imports {', '.join(sorted(dlls))})")
 
 
+def arm64_vulkan_checks(rt, rows):
+    """The Vulkan backend's aarch64 set for a native ARM64 child (PLA-513, decision 0170; World of
+    Warcraft plays its x64 client since 0177, so this serves the probes and other ARM64 programs):
+    vkd3d-proton's d3d12 and d3d12core and DXVK's dxgi under Runtime/vulkan, the Khronos loader and
+    winevulkan's ICD manifest under Runtime/vulkan-loader, each DLL an ARM64 PE32+ Wine builtin.
+    An ARM64EC build (machine AMD64) is the wrong machine here."""
+    staged = {r[1] for r in rows if r[0] == "resource"}
+    for name in ("Runtime/vulkan/aarch64-windows/d3d12.dll", "Runtime/vulkan/aarch64-windows/d3d12core.dll",
+                 "Runtime/vulkan/aarch64-windows/dxgi.dll", "Runtime/vulkan-loader/aarch64-windows/vulkan-1.dll"):
+        path = rt(name)
+        body = path.read_bytes() if name in staged and path.is_file() else b""
+        check(pe_machine_magic(body) == (0xaa64, 0x20b) and b"Wine builtin DLL" in body[:0x200],
+              f"arm64-vulkan: {name} bundled, a PE32+ ARM64 (0xAA64) Wine builtin")
+    name = "Runtime/vulkan-loader/aarch64-windows/winevulkan.json"
+    check(name in staged and rt(name).is_file(), f"arm64-vulkan: {name} bundled")
+
+
 def host_io_checks(exe, rt, rows):
     """The host I/O app pieces (docs/ARCHITECTURE.md)."""
     trie = subprocess.run(["llvm-objdump", "--macho", "--exports-trie", str(exe)], capture_output=True,
@@ -654,21 +678,13 @@ def xbox_surfaces(body, syms):
     return sorted(found | {s.decode() for s in XBOX_STRINGS if s in body})
 
 
-def cef_checks(app, base, variant, distribution=False):
-    """CEF is an exact recorded dev payload, never a release/distribution input."""
-    found = [p for p in app.rglob('*') if p.name.lower() in ('cef', 'libcef.dll')]
-    if variant == 'release' or distribution:
-        check(not found, 'cef: payload absent from release/distribution (0110, PLA-372)')
-        return
-    directory = base / 'cef'
-    try:
-        if sorted(p.name for p in directory.iterdir()) != [cef_payload.VERSION]:
-            raise ValueError('unexpected CEF version directory')
-        entries = cef_payload.verify_runtime(directory / cef_payload.VERSION)
-    except (OSError, ValueError) as error:
-        check(False, f'cef: {error}')
-        return
-    check(True, f'cef: {len(entries)} runtime/notice files match the dev-only records')
+def cef_checks(app):
+    """No IPA, dev or release, carries a CEF payload: Social Club runs on Rockstar's own CEF
+    (decision 0169). libcef.dll and chrome_elf.dll are in every CEF build."""
+    found = [p for p in app.rglob('*') if p.name.lower() in ('libcef.dll', 'chrome_elf.dll')
+             or (p.is_dir() and p.name.lower() == 'cef')]
+    check(not found, 'cef: no CEF payload in the app (decision 0169)'
+          + (f" (found {', '.join(str(p.relative_to(app)) for p in found[:3])})" if found else ''))
 
 
 def icon_checks(app, info, variant):
@@ -870,7 +886,7 @@ def main():
                 or sha256(rt(k).read_bytes()) != h]
         check(not miss and got == set(res), f"resources: all {len(res)} rows match, no extras; gaps absent: "
               f"{sum(r[0] == 'gap' and not rt(r[1]).exists() for r in rows)}/{sum(r[0] == 'gap' for r in rows)}")
-        cef_checks(app, base, a.variant, a.distribution)
+        cef_checks(app)
         empty = [p for p in app.rglob("*") if p.is_dir() and not any(p.iterdir())]
         check(not empty, "resources: no empty directories")
 
@@ -907,6 +923,7 @@ def main():
         xbox_checks(rt, rows)
         steamclient_checks(rt, rows)
         wow64_checks(rt, rows)
+        arm64_vulkan_checks(rt, rows)
         steam_checks(exe)
         workstation_path_checks(app)
         jit_helper_checks(app, info, not a.app, profile=not a.unsigned)

@@ -128,7 +128,7 @@ class NativeAuthProbeTests(unittest.TestCase):
 
     def test_dev_only_dependency(self):
         package = (REPO / "app/Package.swift").read_text()
-        self.assertIn('(release ? [] : ["AuthProbe"])', package)
+        self.assertIn('(release ? [] : ["AuthProbe", "MemoryLedger"])', package)
         self.assertIn('release ? ["Dev"] : []', package)
 
 

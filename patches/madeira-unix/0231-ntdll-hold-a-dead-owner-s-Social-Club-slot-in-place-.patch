@@ -1,0 +1,161 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: playportdev <dev@playport.dev>
+Date: Fri, 30 Oct 2026 15:00:00 +0100
+Subject: [PATCH] ntdll: hold a dead owner's Social Club slot in place instead
+ of freeing then re-holding it
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+PLA-476, layout only (PLAYPORT_SC_LAYOUT=1). At a Social Club helper's
+teardown its freed slot views were deleted, which munmaps them, and each
+slot was held again by ppsc_owner_died_locked after the whole view walk.
+virtual_mutex covers both, so no Wine allocation can come in between, but
+a native anywhere-allocation can: in l8 one took the start of kind 2
+(0x7000000000) in that window, the slot was not held again, and the game's
+helper's PEB and image landed in its old real range, every operation on
+them was refused, and the helper died in its init.
+
+A freed view that is a whole slot view of the dead owner is now released
+and held in one step: the slot's PROT_NONE hold is mapped over it with
+VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE (the old pages are discarded, so the
+footprint still drops), then the view is deleted without an unmap and the
+slot is free and held (`[sc-layout] owner … exited; kind=N slot held in
+place`). Both teardowns, a killed process's and one that exited by itself
+(decision 0143), and decision 0166's wait-only views pass through it. An
+owner's own whole-grant release (ppsc_free) uses it too. If the hold
+cannot be mapped over, the view is freed as before and the slot held again
+afterwards, with the "NOT held again" line when that fails.
+
+Linear: PLA-476
+Class: feature
+Evidence: docs/evidence/2026-10-29-sc-stock-cef-probe.md
+Offered-upstream: no
+---
+ build/ntdll-unix/pp_sc_boot.h  | 12 +++++++++
+ build/ntdll-unix/pp_sc_owner.h |  5 +++-
+ build/ntdll-unix/pp_sc_vm.h    | 46 +++++++++++++++++++++++++++++++---
+ build/ntdll-unix/virtual_ios.c |  1 +
+ 4 files changed, 60 insertions(+), 4 deletions(-)
+
+diff --git a/build/ntdll-unix/pp_sc_boot.h b/build/ntdll-unix/pp_sc_boot.h
+index 8c01dba..cb7d5e1 100644
+--- a/build/ntdll-unix/pp_sc_boot.h
++++ b/build/ntdll-unix/pp_sc_boot.h
+@@ -15,6 +15,18 @@ static int ppsc_native_hold(uint64_t base, uint64_t size)
+                        VM_INHERIT_COPY) == KERN_SUCCESS;
+ }
+ 
++/* The same hold mapped over whatever is at [base, base + size) in one call:
++ * the old pages are discarded and the range is never unmapped in between, so
++ * no native anywhere-allocation can take it (l8 lost kind 2 between a freed
++ * slot view's munmap and its ppsc_native_hold). Only for a range Wine owns. */
++static int ppsc_native_hold_over(uint64_t base, uint64_t size)
++{
++    mach_vm_address_t a = base;
++    return mach_vm_map(mach_task_self(), &a, size, 0, VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE,
++                       MEMORY_OBJECT_NULL, 0, 0, PROT_NONE, VM_PROT_ALL,
++                       VM_INHERIT_COPY) == KERN_SUCCESS;
++}
++
+ static void ppsc_boot(void)
+ {
+     const char *low, *rw, *span, *e = getenv("PLAYPORT_SC_LAYOUT");
+diff --git a/build/ntdll-unix/pp_sc_owner.h b/build/ntdll-unix/pp_sc_owner.h
+index e120867..5c8a7f5 100644
+--- a/build/ntdll-unix/pp_sc_owner.h
++++ b/build/ntdll-unix/pp_sc_owner.h
+@@ -23,10 +23,13 @@ static int ppsc_helper(void)
+ 
+ /* virtual_mutex held, from the existing process teardown after the dead
+  * process's views were released. A grant whose real view is still present
+- * (kept for a parked register) stays owned; nothing else may take it. */
++ * (kept for a parked register) stays owned; nothing else may take it. A view
++ * the teardown freed was normally held in place (ppsc_owner_view_freed_locked)
++ * and is no longer this owner's; the rest are held again here. */
+ struct file_view;
+ static struct file_view *find_view( const void *addr, size_t size );
+ static void ppsc_note_kept_view_locked(int k, void *peb, struct file_view *v); /* pp_sc_vm.h */
++static int ppsc_owner_view_freed_locked(void *peb, struct file_view *view); /* pp_sc_vm.h */
+ static void ppsc_owner_died_locked(void *peb)
+ {
+     int k;
+diff --git a/build/ntdll-unix/pp_sc_vm.h b/build/ntdll-unix/pp_sc_vm.h
+index 4513ed8..d47ea0c 100644
+--- a/build/ntdll-unix/pp_sc_vm.h
++++ b/build/ntdll-unix/pp_sc_vm.h
+@@ -42,6 +42,41 @@ static void ppsc_note_kept_view_locked(int k, void *peb, struct file_view *v)
+     dprintf(2, "[sc-layout] kind=%d committed runs=%u bytes=0x%llx highest_end_off=0x%llx\n", k, runs, bytes, high);
+ }
+ 
++/* virtual_mutex held. If view is the whole real view of a slot owner owns,
++ * frees it and holds the slot again in one step: the PROT_NONE hold is mapped
++ * over the view's pages (discarding them), then the view is deleted without an
++ * unmap. Returns the kind, or PPSC_NONE with nothing changed when view is no
++ * such view or the hold cannot be mapped over it; the caller then frees the
++ * view its usual way and the slot is held again after, if it still can be. */
++static enum ppsc_slot ppsc_hold_in_place_locked(void *owner, struct file_view *view)
++{
++    int k;
++    if (!ppsc_ready || !owner) return PPSC_NONE;
++    for (k = PPSC_ELF; k <= PPSC_LAST_SLOT; k++) {
++        struct ppsc_range r = ppsc_range(k);
++        if (ppsc_owner[k] != owner || (uintptr_t)view->base != r.base || view->size != r.size) continue;
++        if (!ppsc_native_hold_over(r.base, r.size)) {
++            dprintf(2, "[sc-layout] owner %p kind=%d slot not held in place; freed, then held again\n", owner, k);
++            return PPSC_NONE;
++        }
++        view->protect |= VPROT_SYSTEM; /* delete_view must not unmap the hold */
++        delete_view(view);
++        ppsc_owner[k] = NULL;
++        ppsc_held |= PPSC_BIT(k);
++        return k;
++    }
++    return PPSC_NONE;
++}
++
++/* virtual_mutex held, from the process teardown for each view it frees of a
++ * dead peb: whether it was a slot view, freed and held in place. */
++static int ppsc_owner_view_freed_locked(void *peb, struct file_view *view)
++{
++    enum ppsc_slot k = ppsc_hold_in_place_locked(peb, view);
++    if (k) dprintf(2, "[sc-layout] owner %p exited; kind=%d slot held in place\n", peb, k);
++    return k != PPSC_NONE;
++}
++
+ /* Whether any of Wine's reserved areas overlaps slot r. */
+ static int ppsc_in_reserved_area_locked(struct ppsc_range r)
+ {
+@@ -159,12 +194,17 @@ static int ppsc_free(void **addr, SIZE_T *size, ULONG type, NTSTATUS *status)
+         struct file_view *v = find_view((void *)(uintptr_t)r.base, 0);
+         *status = STATUS_UNABLE_TO_FREE_VM;
+         if (!*size && v && (uintptr_t)v->base == r.base && v->size == r.size && v->ios_owner_peb == owner) {
+-            *status = free_pages(v, v->base, v->size);
+-            if (!*status) {
++            const char *held = "held in place";
++            ios_jit_anon_alias_release(v->base, v->size); /* as free_pages */
++            if (ppsc_hold_in_place_locked(owner, v)) *status = STATUS_SUCCESS;
++            else if (!(*status = free_pages(v, v->base, v->size))) {
+                 ppsc_owner[chosen] = NULL;
+                 if (ppsc_native_hold(r.base, r.size)) ppsc_held |= PPSC_BIT(chosen);
++                held = (ppsc_held & PPSC_BIT(chosen)) ? "held again" : "NOT held again (something mapped it)";
++            }
++            if (!*status) {
+                 *size = r.asked;
+-                dprintf(2, "[sc-layout] released kind=%d owner=%p; real range only\n", chosen, owner);
++                dprintf(2, "[sc-layout] released kind=%d owner=%p; real range only, slot %s\n", chosen, owner, held);
+             }
+         }
+     }
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 21d3dc1..1464709 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -18320,6 +18320,7 @@ static void ios_proc_end_release_views_locked( void *peb, const struct ppe_censu
+         }
+         r->freed[cls] += view->size;
+         view->wow64_mapping = 0;   /* the server closed the dead process's handles (0139) */
++        if (ppsc_owner_view_freed_locked( peb, view )) continue;   /* deleted, slot held in place */
+         delete_view( view );
+     }
+     ppsc_owner_died_locked( peb );

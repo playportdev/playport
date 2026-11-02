@@ -673,9 +673,16 @@ class Phone:
             data = f.read()
         return self.afc("put-import", "put-import", remote, data=data, secs=600)
 
-    def remove(self, remote):
-        """Delete one Documents/NAME.zip (afc.py rm refuses anything else); afc.py's reply."""
-        return self.afc("rm", "rm", remote)
+    def remove(self, remote, check=True):
+        """Delete one Documents/NAME.zip, text bar secret file or title-cfg/TITLE/NAME.bin
+        diagnostic dump (afc.py rm refuses anything else); afc.py's reply."""
+        return self.afc("rm", "rm", remote, check=check)
+
+    def put_secret(self, remote, data):
+        """The text bar's secret for one action (pp ui --secret-file, PLA-606) to its
+        Documents/ui-text-<nonce>-<n>: on stdin, under a temporary name renamed into place
+        (afc.py put-secret); no argv, no cmd/ file, no event carries it."""
+        self.afc("put-secret", "put-secret", remote, data=data, secs=30)
 
     def run_events(self, nonce):
         """This launch's events from the app's Documents/run-events.jsonl ([] if none yet)."""

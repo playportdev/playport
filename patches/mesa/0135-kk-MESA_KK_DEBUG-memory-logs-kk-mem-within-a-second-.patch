@@ -1,0 +1,231 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sat, 31 Oct 2026 01:03:06 +0100
+Subject: [PATCH 135/135] kk: MESA_KK_DEBUG=memory logs [kk-mem] within a
+ second, and the census every 5 s, while command memory grows fast
+
+RDR2 with cmd_retire was ended for memory 6-12 s into its cabin's load
+step, and neither the 10 s [kk-mem] line nor the 30 s [kk-cmd-census]
+fell inside it, so the largest allocator, held upload and [kk-upload]
+rounding there were never seen.
+
+kk_memory_log still logs every 10 s. Between those it now compares, at
+most once a second, the live command allocators and the command BOs
+(pooled included) with its last line: 8 more allocators or 64 MiB more
+logs a [kk-mem] line ending "| growing allocators+N command+M MiB",
+and the census then runs if 5 s (not 30) have passed. The check is two
+atomic reads and a counter kept beside the allocator list
+(kk_cmd_pool_allocators_live); no lock, no Metal call. Only with
+MESA_KK_DEBUG=memory (dev app).
+
+Linear: PLA-364
+Class: diagnostics
+Evidence: docs/evidence/2026-10-30-rdr2-kk-audio-diagnostics.md
+Offered-upstream: no
+---
+ src/kosmickrisp/vulkan/kk_bo.c         | 43 ++++++++++++++++++++++----
+ src/kosmickrisp/vulkan/kk_bo.h         |  2 +-
+ src/kosmickrisp/vulkan/kk_cmd_buffer.c | 15 +++++----
+ src/kosmickrisp/vulkan/kk_cmd_buffer.h |  2 +-
+ src/kosmickrisp/vulkan/kk_cmd_pool.c   | 14 +++++++++
+ src/kosmickrisp/vulkan/kk_cmd_pool.h   |  3 ++
+ 6 files changed, 65 insertions(+), 14 deletions(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_bo.c b/src/kosmickrisp/vulkan/kk_bo.c
+index 60ffd10..df6e2d4 100644
+--- a/src/kosmickrisp/vulkan/kk_bo.c
++++ b/src/kosmickrisp/vulkan/kk_bo.c
+@@ -172,16 +172,41 @@ kk_bo_set_kind(struct kk_bo *bo, enum kk_bo_kind kind)
+    p_atomic_inc(&kk_memory_stats.bo_count[kind]);
+ }
+ 
++/* Playport (PLA-364): kk_memory_log logs sooner than every 10 s, at most
++ * once a second, when since its last line the live command allocators grew
++ * by this many or the command BOs (pooled included) by this many bytes. RDR2
++ * went from 74 to 252 allocators and was ended for memory within 12 s of a
++ * load step, between two 30 s censuses. */
++#define KK_MEMORY_LOG_GROWTH_ALLOCATORS 8
++#define KK_MEMORY_LOG_GROWTH_B (INT64_C(64) << 20)
++
+ void
+ kk_memory_log(struct kk_device *dev)
+ {
+-   static int64_t last_ns;
++   static int64_t last_ns, last_allocators, last_command_B;
+    const int64_t now = os_time_get_nano();
+    const int64_t last = p_atomic_read(&last_ns);
+-   if (last != 0 && now - last < INT64_C(10000000000))
+-      return;
++   const int64_t allocators_now = kk_cmd_pool_allocators_live();
++   const int64_t command_now =
++      p_atomic_read(&kk_memory_stats.bo_bytes[KK_BO_KIND_COMMAND]) +
++      p_atomic_read(&kk_memory_stats.bo_bytes[KK_BO_KIND_COMMAND_POOL]);
++   bool growing = false;
++   if (last != 0 && now - last < INT64_C(10000000000)) {
++      if (now - last < INT64_C(1000000000))
++         return;
++      growing = allocators_now >= p_atomic_read(&last_allocators) +
++                                     KK_MEMORY_LOG_GROWTH_ALLOCATORS ||
++                command_now >=
++                   p_atomic_read(&last_command_B) + KK_MEMORY_LOG_GROWTH_B;
++      if (!growing)
++         return;
++   }
+    if (p_atomic_cmpxchg(&last_ns, last, now) != last)
+       return;
++   const int64_t grew_allocators = allocators_now - last_allocators;
++   const int64_t grew_command_B = command_now - last_command_B;
++   p_atomic_set(&last_allocators, allocators_now);
++   p_atomic_set(&last_command_B, command_now);
+ 
+    const double mib = 1024.0 * 1024.0;
+    uint32_t allocator_count = 0;
+@@ -203,6 +228,12 @@ kk_memory_log(struct kk_device *dev)
+                p_atomic_read(&gpl_stats->links));
+    /* Playport (PLA-431): with MESA_KK_EXPERIMENTAL=memory_priority, the
+     * priorities the application gave, which change nothing */
++   /* Logged early: what grew since the last line */
++   char growth[96] = "";
++   if (growing)
++      snprintf(growth, sizeof(growth),
++               " | growing allocators%+" PRId64 " command%+.0f MiB",
++               grew_allocators, grew_command_B / mib);
+    char priority[64] = "";
+    if (KK_EXPERIMENTAL(MEMORY_PRIORITY))
+       snprintf(priority, sizeof(priority),
+@@ -218,7 +249,7 @@ kk_memory_log(struct kk_device *dev)
+            "command-pooled=%d/%.0f large-new=%" PRId64 " large-reuse=%" PRId64
+            " | shaders=%d "
+            "pipelines=%d msl=%.1f | cache raw=%d/%.1f precomp=%d/%.1f | "
+-           "allocators=%u/%.1f MiB%s%s\n",
++           "allocators=%u/%.1f MiB%s%s%s\n",
+            mtl_device_current_allocated_size(dev->mtl_handle) / mib,
+            bo_total / mib, KK_BO_FIELD(DEVICE_MEMORY), KK_BO_FIELD(INTERNAL),
+            KK_BO_FIELD(DESCRIPTOR_POOL), KK_BO_FIELD(QUERY),
+@@ -232,9 +263,9 @@ kk_memory_log(struct kk_device *dev)
+            p_atomic_read(&vk_pipeline_cache_stats.raw_bytes) / mib,
+            p_atomic_read(&vk_pipeline_cache_stats.precomp_count),
+            p_atomic_read(&vk_pipeline_cache_stats.precomp_bytes) / mib,
+-           allocator_count, allocator_bytes / mib, gpl, priority);
++           allocator_count, allocator_bytes / mib, gpl, priority, growth);
+ #undef KK_BO_FIELD
+-   kk_cmd_census_log();
++   kk_cmd_census_log(growing);
+ }
+ 
+ /* Playport (PLA-465): about once a second, from queue submits, log
+diff --git a/src/kosmickrisp/vulkan/kk_bo.h b/src/kosmickrisp/vulkan/kk_bo.h
+index bb15fa5..87b4713 100644
+--- a/src/kosmickrisp/vulkan/kk_bo.h
++++ b/src/kosmickrisp/vulkan/kk_bo.h
+@@ -93,7 +93,7 @@ void kk_bo_set_label(struct kk_bo *bo, const char *label);
+ void kk_bo_set_kind(struct kk_bo *bo, enum kk_bo_kind kind);
+ 
+ /* One [kk-mem] line when MESA_KK_DEBUG has memory and 10 s have passed since
+- * the last one. */
++ * the last one, or 1 s while command memory grows fast (kk_bo.c). */
+ void kk_memory_log(struct kk_device *dev);
+ void kk_residency_log(struct kk_device *dev);
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.c b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+index 61dc83d..b045fd4 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_buffer.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+@@ -159,19 +159,22 @@ kk_census_usage(uint32_t flags)
+    return 2u;
+ }
+ 
+-/* Every 30 s from kk_memory_log (one caller at a time): the recordings held
+- * now, the twelve buckets holding the most (age: since the first submit, or
+- * since Begin if none), and the twelve upload sites that asked for the most
+- * bytes since the start (+: since the last line) */
++/* Every 30 s from kk_memory_log (one caller at a time), or every 5 s while
++ * command memory grows fast (growing): the recordings held now, the twelve
++ * buckets holding the most (age: since the first submit, or since Begin if
++ * none), and the twelve upload sites that asked for the most bytes since the
++ * start (+: since the last line) */
+ void
+-kk_cmd_census_log(void)
++kk_cmd_census_log(bool growing)
+ {
+    static int64_t last_ns;
+    static struct kk_census_bucket buckets[KK_CENSUS_BUCKETS];
+    static const char *const usage_names[3] = {"once", "simultaneous",
+                                               "reusable"};
+    const int64_t now = os_time_get_nano();
+-   if (last_ns != 0 && now - last_ns < INT64_C(30000000000))
++   const int64_t interval_ns =
++      growing ? INT64_C(5000000000) : INT64_C(30000000000);
++   if (last_ns != 0 && now - last_ns < interval_ns)
+       return;
+    const double since = last_ns ? (now - last_ns) / 1e9 : 0.0;
+    last_ns = now;
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.h b/src/kosmickrisp/vulkan/kk_cmd_buffer.h
+index 76436c0..d4ce089 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_buffer.h
++++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.h
+@@ -517,7 +517,7 @@ struct kk_ptr kk_pool_upload_at(struct kk_cmd_buffer *cmd, const void *data,
+ 
+ /* Playport (PLA-364): MESA_KK_DEBUG=memory census hooks (kk_cmd_buffer.c) */
+ void kk_cmd_census_submitted(struct kk_cmd_buffer *cmd, bool replayed);
+-void kk_cmd_census_log(void);
++void kk_cmd_census_log(bool growing);
+ 
+ /* Playport (PLA-364), MESA_KK_EXPERIMENTAL=cmd_retire: at a ONE_TIME
+  * primary's first submit, before its commit, moves its upload BOs and its
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_pool.c b/src/kosmickrisp/vulkan/kk_cmd_pool.c
+index 86a4e81..bfbc655 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_pool.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_pool.c
+@@ -41,6 +41,8 @@ kk_cmd_pool_unlock(struct kk_cmd_pool *pool)
+ /* Every live Metal command allocator, for kk_cmd_pool_allocators_size */
+ static struct util_dynarray kk_allocators = UTIL_DYNARRAY_INIT;
+ static mtx_t kk_allocators_lock;
++/* their number, read without the lock (kk_cmd_pool_allocators_live) */
++static uint32_t kk_allocators_count;
+ static once_flag kk_allocators_once = ONCE_FLAG_INIT;
+ 
+ static void
+@@ -55,6 +57,9 @@ kk_allocators_add(mtl_command_allocator *allocator)
+    call_once(&kk_allocators_once, kk_allocators_init);
+    mtx_lock(&kk_allocators_lock);
+    util_dynarray_append(&kk_allocators, allocator);
++   p_atomic_set(&kk_allocators_count,
++                util_dynarray_num_elements(&kk_allocators,
++                                           mtl_command_allocator *));
+    mtx_unlock(&kk_allocators_lock);
+ }
+ 
+@@ -65,9 +70,18 @@ kk_allocators_remove(mtl_command_allocator *allocator)
+    mtx_lock(&kk_allocators_lock);
+    util_dynarray_delete_unordered(&kk_allocators, mtl_command_allocator *,
+                                   allocator);
++   p_atomic_set(&kk_allocators_count,
++                util_dynarray_num_elements(&kk_allocators,
++                                           mtl_command_allocator *));
+    mtx_unlock(&kk_allocators_lock);
+ }
+ 
++uint32_t
++kk_cmd_pool_allocators_live(void)
++{
++   return p_atomic_read(&kk_allocators_count);
++}
++
+ uint64_t
+ kk_cmd_pool_allocators_size(uint32_t *count)
+ {
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_pool.h b/src/kosmickrisp/vulkan/kk_cmd_pool.h
+index 88cab3b..f56de16 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_pool.h
++++ b/src/kosmickrisp/vulkan/kk_cmd_pool.h
+@@ -177,6 +177,9 @@ struct kk_cmd_allocator *kk_cmd_pool_get_allocator(struct kk_cmd_pool *pool);
+ /* The live Metal command allocators and the memory they hold, for the
+  * [kk-mem] census */
+ uint64_t kk_cmd_pool_allocators_size(uint32_t *count);
++/* Their number alone, without a lock or a Metal call, for kk_memory_log's
++ * growth check */
++uint32_t kk_cmd_pool_allocators_live(void);
+ /* The largest live allocator's size, and how many hold over 8 MiB, for the
+  * [kk-cmd-census] line */
+ uint64_t kk_cmd_pool_allocators_largest(uint32_t *over_8mib);

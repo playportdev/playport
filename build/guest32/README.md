@@ -1,7 +1,10 @@
-# 32-bit (i386) titles: host-side FEX build
+# 32-bit (i386) titles: host-side FEX audits
 
-The work toward 32-bit titles follows [the Portal 2 plan](../../docs/plans/finished.md#portal-2).
-Nothing here is shipped.
+32-bit titles run as WoW64 children of the session root through a 4 GiB guest
+window, with FEX's `xtajit.dll` translating each memory access inline as
+`B + zext32(EA)` ([decision 0047](../../docs/decisions/0047-i386-titles-on-vulkan.md)).
+The two audits here check that translation on the workstation. Nothing in this
+directory is shipped.
 
 ## Native FEX build (host audit only)
 
@@ -19,7 +22,7 @@ FEXCore, FEXCore_Base, JemallocDummy, cephes and softfloat
 ([link evidence](../../docs/evidence/2026-10-01-fex-native-context.md)). It decodes
 and executes nothing.
 
-## Window coverage (step 4)
+## Window coverage
 
 ```sh
 python3 build/guest32/window_coverage_audit.py .work/guest32/decode-audit/native
@@ -35,5 +38,5 @@ store, atomic and string op to address the window: `[B, wEA, uxtw]` or
 reduced-precision x87), then a control without a window that must be rejected
 ([evidence](../../docs/evidence/2026-10-04-portal2-inline-translation.md)).
 
-The earlier software-checked memory, PE32 loader and simulator experiments are
-retired by the plan. They are kept on the `portal2-guest32-experiment` branch.
+The earlier software-checked memory, PE32 loader and simulator experiments were
+replaced by the inline translation. They are kept on the `portal2-guest32-experiment` branch.

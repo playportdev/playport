@@ -4,6 +4,10 @@
 [0034](0034-a-gamepad-first-ui.md); replaces the design's Installed,
 All Steam games and Recently played filters, not its Recent sort.
 
+**Amended 2026-11-02 by [0178](0178-library-store-column.md):** the store filters are a column of
+marks at the Library's left with every store always shown (one not connected dimmed), and
+Installed is an Installed only toggle that narrows All or any store; source badges show in All only.
+
 ## Decision
 
 - Filters are **All** (default), **Installed**, then **Steam**. Future connected

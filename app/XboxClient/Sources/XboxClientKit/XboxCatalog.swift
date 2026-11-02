@@ -2,7 +2,7 @@
 // Xodus Nexus e0668a12f1da931aed13537ef04295599011317b src/main/catalog.ts
 // (directPackageSupport, bundleReferences, packageSupport, licensedDetails,
 // displayImage); translated to Swift by the Playport authors, 2026-10-30.
-// Modified: MSIXVC2 counts as GDK (plan scope); a product with no Store package
+// Modified: MSIXVC2 counts as GDK (the scope of spec PLA-485); a product with no Store package
 // is named as delivered elsewhere (Battle.net, the EA app); bundles keep the games
 // they resolve to, so the library can drop an edition whose games it lists.
 import Foundation

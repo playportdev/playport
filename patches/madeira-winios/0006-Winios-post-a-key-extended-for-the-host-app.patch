@@ -1,0 +1,41 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sat, 31 Oct 2026 17:30:00 +0100
+Subject: [PATCH] Winios: post a key extended for the host app
+
+winios_post_key carries a virtual key only, so the host could not post
+keypad Enter: it went out as VK_RETURN with scan 0x1C and no E0, the
+main Return key to a game reading scan codes or WM_KEYDOWN's extended
+bit.
+
+winios_post_key_extended queues the key with KEYEVENTF_EXTENDEDKEY.
+The drain already hands an event's flags to win32u's
+winios_drv_post_key, which keeps the flag and takes the scan code from
+its map as before (0x1C for VK_RETURN), so the game sees E0 1C.
+
+Linear: PLA-599
+Class: host-app
+Evidence: app/HostIOKit/Tests/HostIOKitTests (KeyMap marks keypad Enter extended; phone gate not run)
+Offered-upstream: no; the extended key feeds the iOS app's keyboard path
+---
+ app/Madeira/Winios/Winios.m | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/app/Madeira/Winios/Winios.m b/app/Madeira/Winios/Winios.m
+index bdd4e0e..ab15c02 100644
+--- a/app/Madeira/Winios/Winios.m
++++ b/app/Madeira/Winios/Winios.m
+@@ -512,6 +512,13 @@ void winios_post_key(int vk, int down) {
+     winios_q_push_ev(WINIOS_EV_KEY, vk, 0, down ? 0 : KEYEVENTF_KEYUP, 0);
+ }
+ 
++/* Playport (app HostIO): a key its virtual key cannot tell from another,
++ * posted with KEYEVENTF_EXTENDEDKEY (0x0001), which win32u's
++ * winios_drv_post_key keeps: keypad Enter is VK_RETURN with E0. */
++void winios_post_key_extended(int vk, int down) {
++    winios_q_push_ev(WINIOS_EV_KEY, vk, 0, 0x0001 | (down ? 0 : KEYEVENTF_KEYUP), 0);
++}
++
+ /* Playport (app HostIO): two event kinds the host posts that only a
+  * Wine thread can resolve, so they are converted here, in the drain, which runs
+  * on the guest thread that is pumping its messages.

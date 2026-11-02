@@ -1,0 +1,99 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 1 Nov 2026 17:49:53 +0100
+Subject: [PATCH] ARM64EC: an instruction fetch fault reports the first byte
+ outside executable memory
+
+A guest instruction whose bytes run from an executable page into one
+that is not decodes as PartialDecode, and its access violation reported
+the instruction's own address (Rip) in ExceptionInformation[1]. x86-64
+Windows reports the address the fetch faulted on: the first byte
+outside, on the next page.
+
+World of Warcraft's x64 client keeps its code PAGE_NOACCESS and makes a
+4 KB page executable when its handler sees an execute fault there. An
+instruction at the last byte of a page (0x1489B3FFF in run
+20261101T172555) faulted on Rip's page, which was executable already:
+the handler made it executable again and the client faulted 441,337
+times on that one address until the run ended, with no window.
+
+The fault's address is now the first byte of the instruction (at most
+15) outside the tracker's executable ranges: Rip when Rip itself is not
+executable (FetchFault.h).
+
+Linear: PLA-516, PLA-514
+Class: upstream-bug
+Evidence: docs/evidence/2026-11-01-wow-x64-fex.md
+Offered-upstream: no; reproduced against FEX's Windows frontends, not yet offered
+---
+ Source/Windows/ARM64EC/Module.cpp  |  9 +++++++++
+ Source/Windows/Common/FetchFault.h | 27 +++++++++++++++++++++++++++
+ 2 files changed, 36 insertions(+)
+ create mode 100644 Source/Windows/Common/FetchFault.h
+
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index 2849fb0..10e382a 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -37,6 +37,7 @@ $end_info$
+ #include "Common/JITGuardPage.h"
+ #include "Common/Config.h"
+ #include "Common/Exception.h"
++#include "Common/FetchFault.h"
+ #include "Common/ImageTracker.h"
+ #include "Common/InvalidationTracker.h"
+ #include "Common/Threads.h"
+@@ -950,12 +951,20 @@ static void RethrowGuestException(const EXCEPTION_RECORD& Rec, ARM64_NT_CONTEXT&
+   CTX->SetFlagsFromCompactedEFLAGS(Thread, EFlags);
+ 
+   BOOL FirstChance = TRUE;
++  const bool FetchFault = Fault.FaultToTopAndGeneratedException && Fault.Signal == FEXCore::Core::FAULT_SIGSEGV &&
++                          Fault.TrapNo == FEXCore::X86State::X86_TRAPNO_PF;
+   EXCEPTION_RECORD GuestRec = FEX::Windows::HandleGuestException(Fault, Rec, GuestContext.Pc, GuestContext.X8, GuestContext.X0, FirstChance);
+   if (GuestRec.ExceptionCode == EXCEPTION_SINGLE_STEP) {
+     GuestContext.Cpsr &= ~(1 << 21); // PSTATE.SS
+   } else if (GuestRec.ExceptionCode == EXCEPTION_BREAKPOINT) {
+     // INT3 will set RIP to the instruction following it, undo this (any edge cases with multibyte instructions that trigger breakpoints are bugs present in Windows also)
+     GuestContext.Pc -= 1;
++  } else if (FetchFault) {
++    // Playport (PLA-516): an instruction that starts in executable memory and runs into memory that is
++    // not faults on its first byte outside, as x86-64 Windows reports it (ExceptionInformation[1]), not on
++    // Rip: a protector that makes its code executable a page at a time loops on Rip's page otherwise.
++    GuestRec.ExceptionInformation[1] = FEX::Windows::FetchFaultAddress(
++      GuestContext.Pc, [](uint64_t Address) { return InvalidationTracker->QueryExecutableRange(Address); });
+   }
+ 
+ #ifdef FEX_IOS_HOST
+diff --git a/Source/Windows/Common/FetchFault.h b/Source/Windows/Common/FetchFault.h
+new file mode 100644
+index 0000000..3274d06
+--- /dev/null
++++ b/Source/Windows/Common/FetchFault.h
+@@ -0,0 +1,27 @@
++// SPDX-License-Identifier: MIT
++#pragma once
++
++#include <cstdint>
++
++namespace FEX::Windows {
++// The address an x86 instruction fetch at Rip faulted on, as x86-64 Windows reports it in an access
++// violation's ExceptionInformation[1]: the first byte of the instruction (at most 15 bytes) outside
++// the executable ranges. That is Rip when Rip itself is not executable, and the start of the next
++// range when the instruction runs off the end of an executable one; a protector that makes its code
++// executable a page at a time when it sees an execute fault makes the page holding that byte
++// executable, so reporting Rip there would loop. Query(Address) returns the executable range holding
++// Address ({Base, Size}, Size 0 when there is none). Rip comes back when every byte is executable.
++template<typename QueryFn>
++uint64_t FetchFaultAddress(uint64_t Rip, QueryFn&& Query) {
++  constexpr uint64_t MaxInstSize = 15;
++  uint64_t Address = Rip;
++  while (Address - Rip < MaxInstSize) {
++    const auto Range = Query(Address);
++    if (Range.Size == 0 || Address < Range.Base || Range.Base + Range.Size <= Address) {
++      return Address;
++    }
++    Address = Range.Base + Range.Size;
++  }
++  return Rip;
++}
++} // namespace FEX::Windows

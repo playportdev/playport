@@ -2,7 +2,7 @@
 
 **Status:** accepted, 2026-10-16, by the supervisor of the publisher-launchers run (design A of
 chunk 2, step 2), implementing the owner's D5 in the
-[launchers plan](../plans/2026-10-12-launchers.md#owner-decisions) ("only for a play whose
+[launchers plan](https://linear.app/playportdev/issue/PLA-616) ("only for a play whose
 launcher or title needs them"). [PLA-275](https://linear.app/playportdev/issue/PLA-275),
 [PLA-254](https://linear.app/playportdev/issue/PLA-254). Amends
 [0080](0080-prefix-wineboot-parity.md) for one service entry.

@@ -1,0 +1,67 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 1 Nov 2026 00:05:00 +0100
+Subject: [PATCH 1/3] ntdll: leave a single step's BRK to trap_handler
+
+The BRK that ends a single step run out of line (0253) also reached the
+Mach exception thread, whose unhandled-fault path counted each step at
+the same slot pc and, at 50, took it for a livelock and ended the
+thread: World of Warcraft's main thread died some 50 steps into its
+import resolver. The thread now declines that BRK first, so the kernel
+delivers it as SIGTRAP to trap_handler.
+
+Linear: PLA-514
+Class: ios-port
+Evidence: docs/evidence/2026-10-31-wow-arm64-start.md
+Offered-upstream: no
+---
+ build/ntdll-unix/signal_arm64_ios.c | 21 +++++++++++++++++++++
+ 1 file changed, 21 insertions(+)
+
+diff --git a/build/ntdll-unix/signal_arm64_ios.c b/build/ntdll-unix/signal_arm64_ios.c
+index e54da25..cae8e91 100644
+--- a/build/ntdll-unix/signal_arm64_ios.c
++++ b/build/ntdll-unix/signal_arm64_ios.c
+@@ -1566,6 +1566,24 @@ static void *ios_mach_exception_thread( void *arg )
+         thread_t thread = req->thread.name;
+         int handled = 0;
+ 
++        /* Playport (PLA-514): the BRK that ends a single step run out of line
++         * (ios_ss_continue) is trap_handler's. Decline it before any of the
++         * fault machinery below, whose [fault-stuck] breaker took one step after
++         * another at the same slot pc for a livelock and ended the thread. */
++        if (req->exception == EXC_BREAKPOINT)
++        {
++            arm_thread_state64_t ss_state;
++            mach_msg_type_number_t ss_count = ARM_THREAD_STATE64_COUNT;
++            uint32_t ss_insn = 0;
++            vm_size_t ss_size = sizeof(ss_insn);
++
++            if (thread_get_state( thread, ARM_THREAD_STATE64, (thread_state_t)&ss_state, &ss_count ) == KERN_SUCCESS &&
++                vm_read_overwrite( mach_task_self(), arm_thread_state64_get_pc( ss_state ), sizeof(ss_insn),
++                                   (vm_address_t)&ss_insn, &ss_size ) == KERN_SUCCESS &&
++                ss_insn == PPSS_BRK)
++                goto ios_exc_reply;
++        }
++
+         /* 2026-07-03 storm probe: ~40K Mach exceptions PER PRESENT measured
+          * in the menu phase (~all of the 1.4s frame time at ~33us each).
+          * Sample every 4096th message: exception type + faulting PC + insn
+@@ -6118,7 +6136,9 @@ skip_reclaim_band: ;
+             }
+         }
+ 
++ios_exc_reply:
+         /* Build reply */
++        {
+         ios_exc_reply_t reply;
+         reply.head.msgh_bits = MACH_MSGH_BITS( MACH_MSGH_BITS_REMOTE(req->head.msgh_bits), 0 );
+         reply.head.msgh_size = sizeof(reply);
+@@ -6134,6 +6154,7 @@ skip_reclaim_band: ;
+         /* Deallocate the send rights we received */
+         mach_port_deallocate( mach_task_self(), thread );
+         mach_port_deallocate( mach_task_self(), req->task.name );
++        }
+     }
+     return NULL;
+ }

@@ -2,7 +2,7 @@
 import XCTest
 @testable import HostIOKit
 
-/// Controller maps (docs/plans/2026-10-09-touch-controls.md, phase 3):
+/// Controller maps (PLA-13, phase 3):
 /// ControllerBindings, MappedPad, and InputMixer's mapped pads.
 final class MappedPadTests: XCTestCase {
     /// A table with every mapping kind (the keyboardMouse preset itself is PlayportKit's: ControllerMapTests).

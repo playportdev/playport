@@ -424,9 +424,16 @@ int ppsync_close( int fd )
  * the client did not act on) must not fill the table: a post for the same
  * (tid, handle) replaces it, and a full table drops its oldest entry. Each
  * dropped entry gives back the reference its post took, and the first few
- * are logged, as are takes that find nothing. */
+ * are logged, as are takes that find nothing.
+ *
+ * Entries at g_post_hi and above are all empty, and both calls scan only
+ * below it: a post fills the lowest empty slot and a take lowers the mark
+ * past the empty slots it leaves at the top, so with the few posts that are
+ * live at once a scan reads a handful of entries, not all PPS_POSTS (the
+ * server posts for every event its clients create). */
 #define PPS_POSTS 1024
-static struct { unsigned int tid, handle; int fd; unsigned long long seq; } g_post[PPS_POSTS];
+static struct { unsigned int tid, handle, access; int fd; unsigned long long seq; } g_post[PPS_POSTS];
+static unsigned int g_post_hi;
 static unsigned long long g_post_seq;
 static pps_lock_t g_post_lock = PPS_LOCK_INITIALIZER;
 static _Atomic unsigned long long g_post_replaced, g_post_evicted, g_take_missed;
@@ -442,7 +449,7 @@ static void post_drop( unsigned int i, const char *why, _Atomic unsigned long lo
     if (o) obj_unref( o );
 }
 
-void ppsync_post( unsigned int tid, unsigned int handle, int fd )
+void ppsync_post( unsigned int tid, unsigned int handle, int fd, unsigned int access )
 {
     struct pps_obj *o = obj_of( fd );
     unsigned int i, slot = PPS_POSTS, oldest = 0;
@@ -450,7 +457,7 @@ void ppsync_post( unsigned int tid, unsigned int handle, int fd )
     if (!o) return;
     atomic_fetch_add_explicit( &o->refs, 1, RLX );
     pps_lock_wait( &g_post_lock );
-    for (i = 0; i < PPS_POSTS; i++)
+    for (i = 0; i < g_post_hi; i++)
     {
         if (!g_post[i].fd) { if (slot == PPS_POSTS) slot = i; continue; }
         if (g_post[i].tid == tid && g_post[i].handle == handle)
@@ -461,24 +468,28 @@ void ppsync_post( unsigned int tid, unsigned int handle, int fd )
         }
         if (g_post[i].seq < g_post[oldest].seq || !g_post[oldest].fd) oldest = i;
     }
+    if (slot == PPS_POSTS && g_post_hi < PPS_POSTS) slot = g_post_hi++;
     if (slot == PPS_POSTS)
     {
         post_drop( oldest, "evicted", &g_post_evicted );
         slot = oldest;
     }
     g_post[slot].tid = tid; g_post[slot].handle = handle; g_post[slot].fd = fd;
+    g_post[slot].access = access;
     g_post[slot].seq = ++g_post_seq;
     pps_unlock( &g_post_lock );
 }
 
-int ppsync_take( unsigned int tid, unsigned int handle )
+int ppsync_take( unsigned int tid, unsigned int handle, unsigned int *access )
 {
     unsigned int i; int fd = -1;
     pps_lock_wait( &g_post_lock );
-    for (i = 0; i < PPS_POSTS; i++)
+    for (i = 0; i < g_post_hi; i++)
         if (g_post[i].fd && g_post[i].tid == tid && g_post[i].handle == handle)
         {
             fd = g_post[i].fd; g_post[i].fd = 0;
+            if (access) *access = g_post[i].access;
+            while (g_post_hi && !g_post[g_post_hi - 1].fd) g_post_hi--;
             break;
         }
     pps_unlock( &g_post_lock );

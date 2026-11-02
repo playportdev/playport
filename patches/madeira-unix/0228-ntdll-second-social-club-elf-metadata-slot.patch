@@ -1,0 +1,280 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: playportdev <dev@playport.dev>
+Date: Fri, 30 Oct 2026 16:00:00 +0100
+Subject: [PATCH] ntdll: give a second Social Club helper its own chrome_elf
+ metadata slot
+
+PLA-476, active only with PLAYPORT_SC_LAYOUT=1. A helper that exits while
+a parked thread's saved register points into its chrome_elf metadata keeps
+that view and its slot, so the next helper is refused ELF_META right after
+it gets ELF, and chrome_elf's init aborts (l3, l4, l5). A second, disjoint
+metadata slot PPSC_ELF_META2, 1 GiB real at 0x79c0000000 reporting the
+16 GiB asked, is held at boot with the others. It goes only to a helper
+that owns ELF and no ELF metadata while another PEB owns ELF_META, live or
+dead with a kept view; frees and teardown treat it as every other slot.
+The RW alias must end at or below it (WINE_IOS_JIT_SIZE at most
+0xc0000000), or the boot fails closed and the launch is refused. The boot
+line names the second slot.
+
+The new kind is 7, before PPSC_REFUSE, which becomes 8: a refused reserve
+now logs kind=8. Loops and ledgers run to PPSC_LAST_SLOT.
+
+PLA-482: an operation inside a slot the caller owns still belongs to that
+slot. One that also lies past a metadata kind's real end in its report is
+logged as a possible metadata overflow into that slot, not refused: l5's
+2 MiB-stride metadata commits land legitimately in their own slots, and
+the reported extents alias the cage, chrome_elf and Oilpan. An operation
+straddling two real ranges stays refused, even when the caller owns both.
+
+Class: feature
+Evidence: docs/evidence/2026-10-29-sc-stock-cef-probe.md
+Offered-upstream: no
+---
+ build/ntdll-unix/pp_sc_access.h | 23 ++++++++++++++++++-----
+ build/ntdll-unix/pp_sc_boot.h   | 16 +++++++++++-----
+ build/ntdll-unix/pp_sc_layout.h | 26 ++++++++++++++++++++------
+ build/ntdll-unix/pp_sc_owner.h  |  6 +++---
+ build/ntdll-unix/pp_sc_vm.h     | 17 ++++++++++++++---
+ 5 files changed, 66 insertions(+), 22 deletions(-)
+
+diff --git a/build/ntdll-unix/pp_sc_access.h b/build/ntdll-unix/pp_sc_access.h
+index 13d9e5d..f22abaa 100644
+--- a/build/ntdll-unix/pp_sc_access.h
++++ b/build/ntdll-unix/pp_sc_access.h
+@@ -7,7 +7,7 @@ enum ppsc_op { PPSC_OP_COMMIT, PPSC_OP_FREE, PPSC_OP_PROTECT };
+ static enum ppsc_slot ppsc_real_slot(uint64_t a, uint64_t n)
+ {
+     int k;
+-    for (k = PPSC_ELF; k <= PPSC_CAGE; k++) {
++    for (k = PPSC_ELF; k <= PPSC_LAST_SLOT; k++) {
+         struct ppsc_range r = ppsc_range(k);
+         if (a < r.base + r.size && a + n > r.base) return k;
+     }
+@@ -19,15 +19,19 @@ static enum ppsc_slot ppsc_real_slot(uint64_t a, uint64_t n)
+  * outside k's real range, say what is underneath: another slot it also owns
+  * (the reported extents alias real slots), a commit in a reported tail, an
+  * Oilpan commit in the lower half of its report (chrome_elf's), or a view of
+- * another owner. Each message has its own per-kind limit. */
++ * another owner. Each message has its own per-kind limit.
++ * An operation inside owned slot j belongs to j (real-range containment
++ * decides). When it also lies past a metadata kind's real end in that kind's
++ * report, it may be that pool overflowing into j, which an address cannot
++ * tell apart from j's own use (PLA-482): logged as possible overflow. */
+ static void ppsc_note_reported_locked(void *owner, const void *address, uint64_t a, uint64_t n,
+                                       enum ppsc_op op)
+ {
+-    static unsigned said_view[PPSC_CAGE + 1], said_alias[PPSC_CAGE + 1], said_tail[PPSC_CAGE + 1];
+-    static unsigned said_oilpan_low;
++    static unsigned said_view[PPSC_LAST_SLOT + 1], said_alias[PPSC_LAST_SLOT + 1], said_tail[PPSC_LAST_SLOT + 1];
++    static unsigned said_oilpan_low, said_overflow[PPSC_LAST_SLOT + 1];
+     enum ppsc_slot j = ppsc_real_slot(a, n);
+     int k;
+-    for (k = PPSC_ELF; k <= PPSC_CAGE; k++) {
++    for (k = PPSC_ELF; k <= PPSC_LAST_SLOT; k++) {
+         struct ppsc_range r = ppsc_range(k);
+         struct file_view *v;
+         uint64_t off;
+@@ -40,6 +44,13 @@ static void ppsc_note_reported_locked(void *owner, const void *address, uint64_t
+                         owner, address, (unsigned long long)n, (unsigned long long)off, j);
+             continue;
+         }
++        if (j && ppsc_owner[j] == owner && a >= r.base + r.size &&
++            (k == PPSC_ELF_META || k == PPSC_CEF_META || k == PPSC_ELF_META2)) {
++            if (said_overflow[k]++ < 16)
++                dprintf(2, "[sc-layout] helper %p op=%d %p+0x%llx in reported extent of kind=%d off=0x%llx past its real end: possible metadata overflow into kind=%d\n",
++                        owner, op, address, (unsigned long long)n, k, (unsigned long long)off, j);
++            continue;
++        }
+         if (j && ppsc_owner[j] == owner) {
+             if (said_alias[k]++ < 16)
+                 dprintf(2, "[sc-layout] helper %p op=%d %p+0x%llx in reported extent of kind=%d off=0x%llx lands in its own kind=%d real range\n",
+@@ -72,6 +83,8 @@ static int ppsc_access(const void *address, SIZE_T size, enum ppsc_op op)
+     if (n > UINT64_MAX - a) return 0;
+     owner = ios_jit_current_peb();
+     server_enter_uninterrupted_section(&virtual_mutex, &sigset);
++    /* Wholly inside one real range this caller owns: an operation that
++     * straddles two slots is refused even when it owns both. */
+     if ((k = ppsc_real_slot(a, n))) ok = owner && ppsc_owner[k] == owner && ppsc_contains(ppsc_range(k), a, n);
+     if (!ok) dprintf(2, "[sc-layout] refused memory operation owner=%p addr=%p size=0x%llx: outside owned real range\n",
+                      owner, address, (unsigned long long)size);
+diff --git a/build/ntdll-unix/pp_sc_boot.h b/build/ntdll-unix/pp_sc_boot.h
+index d6b8a41..8c01dba 100644
+--- a/build/ntdll-unix/pp_sc_boot.h
++++ b/build/ntdll-unix/pp_sc_boot.h
+@@ -25,15 +25,20 @@ static void ppsc_boot(void)
+     rw = getenv("WINE_IOS_JIT_RW");
+     span = getenv("WINE_IOS_JIT_SIZE");
+     if (!low || strcmp(low, "1") || !rw || strtoull(rw, NULL, 16) != PPSC_RW_BASE ||
+-        !span || !strtoull(span, NULL, 16) || strtoull(span, NULL, 16) > PPSC_RW_CAP) {
++        !span || !strtoull(span, NULL, 16)) {
+         dprintf(2, "[sc-layout] missing host low hold or fixed RW alias; layout unavailable\n");
+         return;
+     }
++    if (strtoull(span, NULL, 16) > PPSC_RW_CAP) {
++        dprintf(2, "[sc-layout] RW alias 0x%llx+0x%llx reaches the second ELF metadata slot at 0x%llx; layout unavailable\n",
++                (unsigned long long)PPSC_RW_BASE, strtoull(span, NULL, 16), (unsigned long long)PPSC_ELF_META2_BASE);
++        return;
++    }
+     /* Only this marker transfers the host's own hold. A foreign PROT_NONE
+      * mapping is not evidence of ownership and is never taken over. */
+     unsetenv("WINE_IOS_SC_LOW_HELD");
+     ppsc_held = PPSC_BIT(PPSC_CEF);
+-    for (k = PPSC_ELF; k <= PPSC_CAGE; k++) {
++    for (k = PPSC_ELF; k <= PPSC_LAST_SLOT; k++) {
+         struct ppsc_range r = ppsc_range(k);
+         if (k == PPSC_CEF) continue;
+         if (!ppsc_native_hold(r.base, r.size)) goto failed;
+@@ -44,12 +49,13 @@ static void ppsc_boot(void)
+     ios_jumbo_hold_size = PPSC_GAME_SIZE;
+     ios_jumbo_hold_keep = 0;
+     ppsc_ready = 1;
+-    dprintf(2, "[sc-layout] RDR2 layout held: furniture 0x%llx..0x%llx, game 8960 MiB at 0x%llx, FEX floor 0x%llx\n",
++    dprintf(2, "[sc-layout] RDR2 layout held: furniture 0x%llx..0x%llx, game 8960 MiB at 0x%llx, FEX floor 0x%llx, second ELF metadata 0x%llx+0x%llx\n",
+             (unsigned long long)PPSC_FLOOR, (unsigned long long)PPSC_CEILING,
+-            (unsigned long long)PPSC_GAME_BASE, (unsigned long long)PPSC_FEX_BASE);
++            (unsigned long long)PPSC_GAME_BASE, (unsigned long long)PPSC_FEX_BASE,
++            (unsigned long long)PPSC_ELF_META2_BASE, (unsigned long long)ppsc_range(PPSC_ELF_META2).size);
+     return;
+ failed:
+-    for (k = PPSC_ELF; k <= PPSC_CAGE; k++) if (ppsc_held & PPSC_BIT(k)) {
++    for (k = PPSC_ELF; k <= PPSC_LAST_SLOT; k++) if (ppsc_held & PPSC_BIT(k)) {
+         struct ppsc_range r = ppsc_range(k);
+         mach_vm_deallocate(mach_task_self(), r.base, r.size);
+     }
+diff --git a/build/ntdll-unix/pp_sc_layout.h b/build/ntdll-unix/pp_sc_layout.h
+index abf83a5..b0c3249 100644
+--- a/build/ntdll-unix/pp_sc_layout.h
++++ b/build/ntdll-unix/pp_sc_layout.h
+@@ -7,11 +7,16 @@
+ #define PP_SC_LAYOUT_H
+ #include <stdint.h>
+ 
++/* PPSC_ELF_META2 is chrome_elf's metadata for a helper started while another
++ * PEB owns PPSC_ELF_META (a dead helper's kept view, or a live one). */
+ enum ppsc_slot { PPSC_NONE, PPSC_ELF, PPSC_CEF, PPSC_ELF_META,
+-                 PPSC_CEF_META, PPSC_OILPAN, PPSC_CAGE, PPSC_REFUSE };
++                 PPSC_CEF_META, PPSC_OILPAN, PPSC_CAGE, PPSC_ELF_META2, PPSC_REFUSE };
++#define PPSC_LAST_SLOT PPSC_ELF_META2
+ struct ppsc_range { uint64_t base, size, report, asked; };
+ #define PPSC_RW_BASE UINT64_C(0x7900000000)
+-#define PPSC_RW_CAP UINT64_C(0x100000000)
++#define PPSC_ELF_META2_BASE UINT64_C(0x79c0000000)
++/* The RW alias ends at or below PPSC_ELF_META2's real range. */
++#define PPSC_RW_CAP (PPSC_ELF_META2_BASE - PPSC_RW_BASE)
+ #define PPSC_FLOOR UINT64_C(0x7010000000)
+ #define PPSC_CEILING UINT64_C(0x73ffff0000)
+ #define PPSC_GAME_BASE UINT64_C(0x75d0000000)
+@@ -29,6 +34,8 @@ static inline struct ppsc_range ppsc_range(enum ppsc_slot k)
+     case PPSC_CEF_META: return (struct ppsc_range){0x7590000000ULL, 0x40000000ULL, 0x7590000000ULL, 0x400000000ULL};
+     case PPSC_OILPAN: return (struct ppsc_range){0x7c00000000ULL, 0x40000000ULL, 0x7800000000ULL, 0x800000000ULL};
+     case PPSC_CAGE: return (struct ppsc_range){0x7a00000000ULL, 0x200000000ULL, 0x7a00000000ULL, 0x200000000ULL};
++    /* 1 GiB real; the 16 GiB report overlaps the cage, Oilpan and FEX. */
++    case PPSC_ELF_META2: return (struct ppsc_range){PPSC_ELF_META2_BASE, 0x40000000ULL, PPSC_ELF_META2_BASE, 0x400000000ULL};
+     default: return (struct ppsc_range){0, 0, 0, 0};
+     }
+ }
+@@ -40,13 +47,16 @@ static inline int ppsc_contains(struct ppsc_range r, uint64_t a, uint64_t n)
+ }
+ 
+ /* Only call for the verified helper's reserve-only requests. 'mine' describes
+- * this live helper, not another helper's grants; 'held' describes free slots.
++ * this live helper, not another helper's grants; 'held' describes free slots;
++ * 'others' the slots another PEB owns, live or dead with a kept view.
+  * In particular, a second helper cannot consume the first helper's remaining
+- * slots. Refusal must not fall through to the unsafe generic soft-pool path. */
++ * slots: the only slot it gets instead of another's is PPSC_ELF_META2.
++ * Refusal must not fall through to the unsafe generic soft-pool path. */
+ static inline enum ppsc_slot ppsc_classify(uint64_t size, uint64_t hint,
+-                                         unsigned held, unsigned mine)
++                                         unsigned held, unsigned mine, unsigned others)
+ {
+     unsigned both = PPSC_BIT(PPSC_ELF) | PPSC_BIT(PPSC_CEF);
++    unsigned elf_meta = PPSC_BIT(PPSC_ELF_META) | PPSC_BIT(PPSC_ELF_META2);
+     if (size == 0x800000000ULL) {
+         if (hint && !(hint & (0x400000000ULL - 1)) &&
+             (mine & both) == both && (held & PPSC_BIT(PPSC_OILPAN)))
+@@ -58,7 +68,11 @@ static inline enum ppsc_slot ppsc_classify(uint64_t size, uint64_t hint,
+         return PPSC_REFUSE;
+     }
+     if (size == 0x400000000ULL && (hint & 0xffffffffULL) && !(mine & PPSC_BIT(PPSC_CAGE))) {
+-        if ((mine & both) == PPSC_BIT(PPSC_ELF) && (held & PPSC_BIT(PPSC_ELF_META))) return PPSC_ELF_META;
++        if ((mine & both) == PPSC_BIT(PPSC_ELF) && !(mine & elf_meta)) {
++            if (held & PPSC_BIT(PPSC_ELF_META)) return PPSC_ELF_META;
++            if ((others & PPSC_BIT(PPSC_ELF_META)) && (held & PPSC_BIT(PPSC_ELF_META2))) return PPSC_ELF_META2;
++            return PPSC_REFUSE;
++        }
+         if ((mine & both) == both && (held & PPSC_BIT(PPSC_CEF_META))) return PPSC_CEF_META;
+         return PPSC_REFUSE;
+     }
+diff --git a/build/ntdll-unix/pp_sc_owner.h b/build/ntdll-unix/pp_sc_owner.h
+index 99c103b..e120867 100644
+--- a/build/ntdll-unix/pp_sc_owner.h
++++ b/build/ntdll-unix/pp_sc_owner.h
+@@ -1,6 +1,6 @@
+ /* SPDX-License-Identifier: LGPL-2.1-or-later */
+ /* Shared by the layout router and the existing safe process teardown. */
+-static void *ppsc_owner[PPSC_CAGE + 1]; /* virtual_mutex protects grants and holds */
++static void *ppsc_owner[PPSC_LAST_SLOT + 1]; /* virtual_mutex protects grants and holds */
+ 
+ static int ppsc_helper(void)
+ {
+@@ -31,7 +31,7 @@ static void ppsc_owner_died_locked(void *peb)
+ {
+     int k;
+     if (!peb || !ppsc_ready) return;
+-    for (k = PPSC_ELF; k <= PPSC_CAGE; k++) {
++    for (k = PPSC_ELF; k <= PPSC_LAST_SLOT; k++) {
+         struct ppsc_range r;
+         struct file_view *v;
+         if (ppsc_owner[k] != peb) continue;
+@@ -53,7 +53,7 @@ static int ppsc_in_slot(uintptr_t base, size_t size)
+ {
+     int k;
+     if (!ppsc_ready) return 0;
+-    for (k = PPSC_ELF; k <= PPSC_CAGE; k++) {
++    for (k = PPSC_ELF; k <= PPSC_LAST_SLOT; k++) {
+         struct ppsc_range r = ppsc_range(k);
+         if (base < r.base + r.size && base + size > r.base) return 1;
+     }
+diff --git a/build/ntdll-unix/pp_sc_vm.h b/build/ntdll-unix/pp_sc_vm.h
+index eb9ef2f..4513ed8 100644
+--- a/build/ntdll-unix/pp_sc_vm.h
++++ b/build/ntdll-unix/pp_sc_vm.h
+@@ -5,7 +5,17 @@ static unsigned ppsc_mine(void *peb)
+ {
+     unsigned bits = 0;
+     int k;
+-    for (k = PPSC_ELF; k <= PPSC_CAGE; k++) if (ppsc_owner[k] == peb) bits |= PPSC_BIT(k);
++    for (k = PPSC_ELF; k <= PPSC_LAST_SLOT; k++) if (ppsc_owner[k] == peb) bits |= PPSC_BIT(k);
++    return bits;
++}
++
++/* The slots another PEB owns: a live helper, or a dead one whose view was kept. */
++static unsigned ppsc_others(void *peb)
++{
++    unsigned bits = 0;
++    int k;
++    for (k = PPSC_ELF; k <= PPSC_LAST_SLOT; k++)
++        if (ppsc_owner[k] && ppsc_owner[k] != peb) bits |= PPSC_BIT(k);
+     return bits;
+ }
+ 
+@@ -110,7 +120,8 @@ static int ppsc_route(void **ret, SIZE_T *size, ULONG type, ULONG protect, ULONG
+         }
+         k = PPSC_CAGE;
+     } else {
+-        k = ppsc_classify(*size, (uintptr_t)*ret, ppsc_held, ppsc_mine(ios_jit_current_peb()));
++        k = ppsc_classify(*size, (uintptr_t)*ret, ppsc_held, ppsc_mine(ios_jit_current_peb()),
++                          ppsc_others(ios_jit_current_peb()));
+         if (k == PPSC_NONE) {
+             /* Unsupported giant asks must fail, not reach soft-pool granting.
+              * Ordinary small requests keep Wine's normal path. */
+@@ -139,7 +150,7 @@ static int ppsc_free(void **addr, SIZE_T *size, ULONG type, NTSTATUS *status)
+     if (!ppsc_ready || type != MEM_RELEASE) return 0;
+     owner = ios_jit_current_peb();
+     server_enter_uninterrupted_section(&virtual_mutex, &sigset);
+-    for (k = PPSC_CAGE; k >= PPSC_ELF; k--) {
++    for (k = PPSC_LAST_SLOT; k >= PPSC_ELF; k--) {
+         struct ppsc_range r = ppsc_range(k);
+         if (owner && r.report == (uintptr_t)*addr && ppsc_owner[k] == owner) { chosen = k; break; }
+     }

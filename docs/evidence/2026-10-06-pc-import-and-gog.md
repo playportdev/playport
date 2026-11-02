@@ -1,6 +1,6 @@
 # PC game import and GOG on the phone (plan Phases 0–2)
 
-**Date:** 2026-10-06. **Plan:** [PC import, GOG and Epic](../plans/finished.md#pc-import-gog-and-epic).
+**Date:** 2026-10-06. **Plan:** [PC import, GOG and Epic](https://linear.app/playportdev/issue/PLA-80).
 **Decisions:** [0057](../decisions/0057-store-identity.md), [0058](../decisions/0058-store-sessions.md).
 **Phone:** iPhone18,4, iOS 27.0, dev builds. Driven with `pp ui`; the GOG sign-in was
 done by hand by the owner.

@@ -1,0 +1,153 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 1 Nov 2026 10:52:21 +0100
+Subject: [PATCH] virtual: a native ARM64 child's image copy starts on a host
+ page
+
+World of Warcraft's retail ARM64 client maps a read-write view of a
+section holding its image, then three views of it at the image's base on
+64 KB boundaries (0264). The views at the base are the image's JIT-pool
+copy, and the read-write view is made one memory with it only where both
+are 16 KB aligned. The copy was shifted 0x3000 past a page so that its
+first writable section starts one (ml141), so no part of the read-write
+view matched: "0 bytes of other views made one with it". What the client
+wrote through that view reached the copy only on a flush, and what it
+wrote at the base never reached the view. Its main thread then ran,
+without end, a loop in the 1 KB window it had written through that view
+(+0xb5204); there was no first frame.
+
+In a native ARM64 child, whose copy is the image (decision 0176), the
+shift is now taken only when an executable section reaches into the page
+its first writable section starts in; otherwise the copy starts on a
+page, as Windows starts an image on 64 KB, and the views are one memory
+(all 0x6dcb000 bytes but the last 0x3000). x86-64 and ARM64EC processes
+keep the shift (pp_copy_align.h). The client reaches its login screen.
+
+Linear: PLA-514
+Class: ios-port
+Evidence: docs/evidence/2026-10-31-wow-arm64-start.md, tools/tests/test_copy_align.py
+Offered-upstream: no
+---
+ build/ntdll-unix/pp_copy_align.h | 72 ++++++++++++++++++++++++++++++++
+ build/ntdll-unix/virtual_ios.c   | 27 ++++--------
+ 2 files changed, 81 insertions(+), 18 deletions(-)
+ create mode 100644 build/ntdll-unix/pp_copy_align.h
+
+diff --git a/build/ntdll-unix/pp_copy_align.h b/build/ntdll-unix/pp_copy_align.h
+new file mode 100644
+index 0000000..134e92a
+--- /dev/null
++++ b/build/ntdll-unix/pp_copy_align.h
+@@ -0,0 +1,72 @@
++/* Where in its 16 KB host page a JIT-pool copy of a PE image starts, shared with
++ * tools/tests/test_copy_align.py.
++ * SPDX-License-Identifier: LGPL-2.1-or-later
++ */
++#ifndef PP_COPY_ALIGN_H
++#define PP_COPY_ALIGN_H
++#include <stddef.h>
++#include <stdint.h>
++#include <string.h>
++
++#define PP_COPY_ALIGN_PAGE        0x4000u
++#define PP_COPY_ALIGN_CNT_CODE    0x00000020u
++#define PP_COPY_ALIGN_MEM_EXECUTE 0x20000000u
++#define PP_COPY_ALIGN_MEM_WRITE   0x80000000u
++
++static inline uint32_t pp_copy_align_u32( const unsigned char *p )
++{
++    uint32_t v;
++    memcpy( &v, p, sizeof(v) );
++    return v;
++}
++
++/* How far past a 16 KB boundary the copy of the image at `image` (mapped, RVA ==
++ * offset; image_size its SizeOfImage) starts: the shift that puts its first
++ * writable section on a page of its own, so that making it writable never
++ * takes EXECUTE from code sharing its first page (ml141).
++ *
++ * In a native ARM64 child (`native`) the copy is the image (decision 0176),
++ * whose base Windows aligns to 64 KB: a program maps views of a section of its
++ * own at that base on 64 KB boundaries, and the other views of that section are
++ * made one memory with the copy only where both are host-page aligned. There
++ * the shift is taken only when an executable section reaches into the page the
++ * first writable section starts in; otherwise the copy starts on a page. */
++static inline size_t pp_copy_data_delta( const unsigned char *image, size_t image_size, int native )
++{
++    uint32_t lfanew, first_w = 0, page, i, nsec, optsize, delta;
++    const unsigned char *nt, *sec;
++
++    if (!image || image_size < 0x1000 || image[0] != 'M' || image[1] != 'Z') return 0;
++    lfanew = pp_copy_align_u32( image + 0x3c );
++    if ((size_t)lfanew + 24 > image_size) return 0;
++    nt = image + lfanew;
++    if (memcmp( nt, "PE\0\0", 4 )) return 0;
++    nsec = (uint32_t)nt[6] | (uint32_t)nt[7] << 8;
++    optsize = (uint32_t)nt[20] | (uint32_t)nt[21] << 8;
++    sec = nt + 24 + optsize;
++    if ((size_t)(sec - image) + (size_t)nsec * 40 > image_size) return 0;
++    for (i = 0; i < nsec; i++)
++    {
++        const unsigned char *s = sec + i * 40;
++        uint32_t va = pp_copy_align_u32( s + 12 );
++        if ((pp_copy_align_u32( s + 36 ) & PP_COPY_ALIGN_MEM_WRITE) && pp_copy_align_u32( s + 8 ) &&
++            (!first_w || va < first_w))
++            first_w = va;
++    }
++    if (!first_w) return 0;
++    delta = (PP_COPY_ALIGN_PAGE - (first_w & (PP_COPY_ALIGN_PAGE - 1))) & (PP_COPY_ALIGN_PAGE - 1);
++    if (!delta || !native) return delta;
++    page = first_w & ~(PP_COPY_ALIGN_PAGE - 1);
++    for (i = 0; i < nsec; i++)
++    {
++        const unsigned char *s = sec + i * 40;
++        uint32_t va = pp_copy_align_u32( s + 12 ), vsize = pp_copy_align_u32( s + 8 );
++        uint32_t end = va + (vsize ? vsize : pp_copy_align_u32( s + 16 ));
++        if ((pp_copy_align_u32( s + 36 ) & (PP_COPY_ALIGN_CNT_CODE | PP_COPY_ALIGN_MEM_EXECUTE)) &&
++            va < page + PP_COPY_ALIGN_PAGE && end > page)
++            return delta;
++    }
++    return 0;
++}
++
++#endif
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 8dd3520..2ce5ef2 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -1915,26 +1915,17 @@ static void ios_jit_verify_text_exec( const char *who, const void *rx_dest, size
+  * it is RX either way, so .text being page-misaligned costs nothing, and no
+  * page is ever both code and data. The shift is a deterministic function of the
+  * image, so every copy of a DLL still gets an identical layout — the
+- * precondition the .text-sharing/tramp-fold work depends on. */
++ * precondition the .text-sharing/tramp-fold work depends on.
++ *
++ * Playport (PLA-514): in a native ARM64 child the copy is the image (decision
++ * 0176) and starts on a page unless code shares its first writable section's
++ * page, so the views of a section the program maps at its base (0264) can be
++ * one memory with the copy (pp_copy_align.h). */
++#include "pp_copy_align.h"
+ static size_t ios_jit_data_align_delta( const void *image_base, size_t image_size )
+ {
+-    const IMAGE_DOS_HEADER *dos = image_base;
+-    const IMAGE_NT_HEADERS *nt;
+-    const IMAGE_SECTION_HEADER *sec;
+-    unsigned int first_w = 0;
+-    unsigned i;
+-
+-    if (!image_base || image_size < 0x1000) return 0;
+-    if (dos->e_magic != IMAGE_DOS_SIGNATURE) return 0;
+-    nt = (const IMAGE_NT_HEADERS *)((const char *)image_base + dos->e_lfanew);
+-    if (nt->Signature != IMAGE_NT_SIGNATURE) return 0;
+-    sec = IMAGE_FIRST_SECTION( nt );
+-    for (i = 0; i < nt->FileHeader.NumberOfSections; i++)
+-        if ((sec[i].Characteristics & IMAGE_SCN_MEM_WRITE) && sec[i].Misc.VirtualSize &&
+-            (!first_w || sec[i].VirtualAddress < first_w))
+-            first_w = sec[i].VirtualAddress;
+-    if (!first_w) return 0;
+-    return (0x4000 - (first_w & 0x3fff)) & 0x3fff;
++    extern int ios_is_native_arm64_cur(void);
++    return pp_copy_data_delta( image_base, image_size, ios_is_native_arm64_cur() );
+ }
+ 
+ static void ios_va_gap_probe( const char *why )

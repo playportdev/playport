@@ -2,7 +2,7 @@
 
 **Date:** 2026-10-11. **Kind:** phone runs (dev app) and a desktop-Wine check of the probe.
 **Linear:** [PLA-162](https://linear.app/playportdev/issue/PLA-162);
-plan [2026-10-11-opengl-zink](../plans/finished.md#opengl-through-zink), chunk 1b;
+plan [2026-10-11-opengl-zink](https://linear.app/playportdev/issue/PLA-162), chunk 1b;
 [decision 0087](../decisions/0087-opengl-through-zink-on-the-host.md).
 **Build:** `patches/mesa` 0001–0027, `patches/madeira-unix` 0001–0114 (0114 is this chunk's Wine
 side), the frameworks of [chunk 1a](2026-10-11-mesa-gl-ios-build.md).

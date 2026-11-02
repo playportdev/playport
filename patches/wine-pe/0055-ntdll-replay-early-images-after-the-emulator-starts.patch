@@ -1,0 +1,51 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: playportdev <dev@playport.dev>
+Date: Thu, 29 Oct 2026 21:38:05 +0100
+Subject: [PATCH] ntdll: replay early images after the emulator starts
+
+PLA-476: kernel32 is loaded as an emulator dependency before the
+image-notification exports or executable tracker exist. The game's stock
+helper calls its LoadLibraryExW x64 stub from chrome_elf TLS
+initialization; with no tracked interval FEX emits NOEXEC and its
+deliberate NULL-read trampoline, not a genuine NULL dereference in
+chrome_elf. Replay the loader list through the existing guarded
+intervals-only entry after successful ProcessInit/ThreadInit and before
+guest callbacks. The loader lock pins every image; duplicate section
+inserts are idempotent. Do not replay ImageTracker or map side effects,
+and do not change retained-slot ownership or parked threads.
+
+Class: ios-port
+Evidence: docs/evidence/2026-10-29-sc-stock-cef-probe.md
+Offered-upstream: no; iOS pseudo-process notification gap
+---
+ dlls/ntdll/loader.c | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
+index a99c46f..538b362 100644
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -6020,6 +6020,23 @@ static void load_arm64ec_module(void)
+         NtTerminateProcess( GetCurrentProcess(), status );
+     }
+     ERR( "load_arm64ec_module: arm64ec_process_init returned cleanly, status=%lx\n", status );
++
++    /* PLA-476: the emulator's dependencies were mapped before its notification
++     * exports and trackers existed. Replay them now, before guest TLS callbacks.
++     * loader_section is held, so the list and images stay alive. Use only the
++     * guarded, intervals-only API: the full map callback takes FEX's code lock
++     * exclusively and is not safe under the loader lock. Duplicate executable
++     * section inserts (main image, ntdll, queued maps) are harmless. */
++    {
++        LIST_ENTRY *list = &NtCurrentTeb()->Peb->LdrData->InLoadOrderModuleList;
++        LIST_ENTRY *entry;
++
++        for (entry = list->Flink; entry != list; entry = entry->Flink)
++        {
++            LDR_DATA_TABLE_ENTRY *mod = CONTAINING_RECORD( entry, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks );
++            arm64ec_notify_image_map( mod->DllBase );
++        }
++    }
+ }
+
+ #endif

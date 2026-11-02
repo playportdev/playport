@@ -10,11 +10,12 @@
 // - Graphics: what every game launches with unless its Game options change
 //   it (LaunchSettingsStore.global): resolution, frame rate limit and
 //   Direct3D, changed with left and right, each "Default · X" while it follows
-//   Playport's default; and the Metal HUD.
+//   Playport's default; and the performance overlay (UI/PerformanceOverlay.swift).
 // - Downloads: PlayportKit DownloadPreferences (the download queue reads
 //   them) and Steam Cloud's switch (SteamAccountModel.cloudKey).
-// - Controls: when the on-screen controls show, their opacity, the Gamepad
-//   layout's d-pad and right stick, and haptics
+// - Controls: when the on-screen controls show, every game's starting layout
+//   (`controls.startingLayout`; Suggested for the game, else a layout), their
+//   opacity, the Gamepad layout's d-pad and right stick, and haptics
 //   (PlayportKit ControlsDefaults; UI/TouchControlsView.swift), gyro aim's
 //   defaults (UI/GyroAimView.swift, the `gyro.*` keys), every
 //   controller connected, with its battery and whether it has a gyro (PadRouter),
@@ -288,7 +289,7 @@ struct SettingsSwitchRow: View {
 
 private struct GraphicsSettings: View {
     @ObservedObject private var launchSettings = LaunchSettingsStore.shared
-    @AppStorage(MetalHUD.key) private var metalHUD = false
+    @AppStorage(PerformanceOverlay.key) private var performanceOverlay = false
     // On unless turned off (decision 0153; GameSocialClubEnd).
     @AppStorage(GameSocialClubEnd.key) private var endGameSocialClub = true
     @AppStorage(GameSocialClubEnd.refuseRestartKey) private var refuseGameSocialClubRestart = true
@@ -314,8 +315,9 @@ private struct GraphicsSettings: View {
                                     defaultValue: GraphicsBackend.default)
         valueRow("graphics", "Direct3D", "Vulkan, or DXMT for Direct3D 10 and 11", backends,
                  name: LaunchSettingsText.graphics, value: global.graphics)
-        SettingsSwitchRow(id: "metalHUD", title: "Metal HUD", subtitle: "Frame rate, frame time and memory over a game",
-                          on: $metalHUD)
+        SettingsSwitchRow(id: "performanceOverlay", title: "Performance overlay",
+                          subtitle: "Frame rate, frame time and the phone's temperature over a game",
+                          on: $performanceOverlay)
         memoryRows
         SettingsNote(text: "From each game's next start. 720p at 60 fps keeps the phone cool enough to hold its "
                      + "frame rate; Native is the screen's full resolution, and Off runs a game as fast as the screen "
@@ -400,6 +402,8 @@ private struct ControlsSettings: View {
     @AppStorage(ControlsDefaults.hapticsKey) private var haptics = true
     @AppStorage(ControlsDefaults.dpadKey) private var dpad = OnScreenDpad.off.rawValue
     @AppStorage(ControlsDefaults.rightStickKey) private var rightStick = OnScreenRightStick.off.rawValue
+    /// A layout's name, or "" for Suggested for the game.
+    @AppStorage(ControlsDefaults.startingLayoutKey) private var startingLayout = ""
 
     var body: some View {
         Color.clear.frame(height: 42)
@@ -407,6 +411,13 @@ private struct ControlsSettings: View {
         let current = ControlsShow(rawValue: show) ?? .automatic
         PadValueRow(id: "set:controlsShow", title: "On-screen controls", subtitle: Self.showSubtitle(current),
                     values: shows.map(\.title), index: shows.firstIndex(of: current) ?? 0) { show = shows[$0].rawValue }
+        // Every game's layout unless it has its own or a compatibility default (SettingsControls.dc.html).
+        let starts = OnScreenLayout.startingChoices
+        PadValueRow(id: "set:controlsStartingLayout", title: "Starting layout", subtitle: "Each game can pick its own",
+                    values: starts.map(OnScreenLayout.startingTitle),
+                    index: starts.firstIndex(of: OnScreenLayout(rawValue: startingLayout)) ?? 0) {
+            startingLayout = starts[$0]?.rawValue ?? ""
+        }
         let steps = ControlsOpacity.steps
         PadValueRow(id: "set:controlsOpacity", title: "Opacity", subtitle: "How much of the game shows through",
                     values: steps.map(ControlsOpacity.label),
@@ -490,7 +501,8 @@ private struct StorageSettings: View {
                 }
             }
         }
-        // FEX's disk cache (decision 0056): its size, and the one way to clear it (decision 0012).
+        // FEX's disk cache (decision 0056) and the runtime's image copies (decision 0167): their
+        // size, and the one way to clear them (decision 0012).
         PadRow(id: "set:emulator-cache", title: "Emulator cache",
                subtitle: "Speeds up later starts; cleared past 5 GB or when space is low",
                value: cacheBytes.map(ByteCount.format) ?? "…", hint: launch.running ? "" : "Clear") {

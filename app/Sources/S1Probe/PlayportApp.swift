@@ -21,11 +21,13 @@ struct PlayportApp: App {
         // driver session changed go back before anything reads them.
         DriverContinuation.adoptAtStart()
         DriverUndo.restoreAtStart()
+        // A text bar secret a run pushed and never got to read goes, unread (Dev/TextBarDriver.swift).
+        TextBarDriver.clearAtStart()
         #endif
         // A restart after a game (AppRestart): why that game did not end cleanly, once.
         TitleLaunch.shared.message = AppRestart.noteLaunch()
-        MetalHUD.loadAtStart()
         #if !PLAYPORT_RELEASE
+        MetalHUD.loadAtStart()
         GPUCapture.loadAtStart()
         MetalValidation.loadAtStart()
         RuntimeCounters.loadAtStart()
@@ -43,6 +45,7 @@ struct PlayportApp: App {
 struct RootView: View {
     @ObservedObject private var launch = TitleLaunch.shared
     @ObservedObject private var menu = InGameMenu.shared
+    @ObservedObject private var textBar = GameTextBar.shared
     @ObservedObject private var web = GameWebSheet.shared
     @ObservedObject private var restart = AppRestart.shared
     @ObservedObject private var setup = JitSetup.shared
@@ -74,6 +77,8 @@ struct RootView: View {
                         }
                         .animation(LaunchMotion.sheetOut, value: launch.showsSheet)
                     }
+                    // The text bar over the running game, above the iOS keyboard (UI/TextBarView.swift).
+                    .overlay { if textBar.isOpen { TextBarView() } }
                     // Playport's menu over the paused game, on a long press of Home (UI/InGameMenuView.swift).
                     .overlay { if menu.isOpen || menu.quitting { InGameMenuView() } }
                     // A web page the game opened, over the running game (UI/GameWebSheet.swift).

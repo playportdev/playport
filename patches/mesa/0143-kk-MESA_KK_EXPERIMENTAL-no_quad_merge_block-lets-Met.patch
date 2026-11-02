@@ -1,0 +1,126 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sat, 31 Oct 2026 01:38:46 +0100
+Subject: [PATCH 143/143] kk: MESA_KK_EXPERIMENTAL=no_quad_merge_block lets
+ Metal merge triangles into quads
+
+Why the block exists: Apple GPUs merge adjacent triangles of a draw
+into shared 2x2 quads, so a quad on the seam of two triangles is shaded
+with real fragments of both rather than helper invocations of one, and
+its derivatives (an implicit-LOD sample's mip level) mix two
+interpolation functions. Under perspective that gives wrong mip levels
+along the seam, which the CTS's projected-geometry sampling tests
+check per pixel (KhronosGroup/Vulkan-Portability#54, the
+samplingImplicitLODProjectedGeometryAccuracyConformance capability
+MoltenVK reports as not supported). KosmicKrisp keeps Vulkan's per-
+triangle quads instead: for any fragment shader that needs full or
+coarse quad helper invocations, kk_lower_fs (kk_shader.c) runs
+msl_disable_triangle_merge (msl_nir_lower_common.c), which reads
+[[barycentric_coord]] and stores zero colour when all three weights
+are negative, a condition that never holds but that the MSL compiler
+cannot drop, so Metal stops merging; a shader with no colour output
+writes the sample mask instead, which upstream's comment says costs
+more. It is skipped only for multisampled pipelines on Apple7/8 before
+OS 27, where a sample mask write broke derivatives. It is not an OS 26
+workaround and has no switch. The mesa tree here is a shallow copy of
+the pin, so the commit that added it was not read; the reason is the
+code's own comments and the issue.
+
+The cost is per fragment shader that samples with implicit LOD: 550 of
+RDR2's 584 fragment shaders have it. Each pays an extra interpolant and
+three compares and selects, and above all loses quad merging, so small
+triangles (foliage, hair, distant geometry) shade more partly covered
+quads and helper lanes. DXMT, which D3D titles run correctly on, does
+not block merging.
+
+With the flag the pass is not run: fragment shaders are as Metal would
+build them without the block, and derivatives along a triangle seam
+may differ from Vulkan's (no D3D title is known to depend on it). The
+flag is in the pipeline cache UUID with the other MSL-changing
+switches, so the disk cache and application pipeline caches never mix
+MSL built with and without it, and in 0118's must-be-named set
+(MESA_KK_EXPERIMENTAL=all alone does not turn it on). Without it every
+shader, and the UUID, are as before.
+
+Linear: PLA-541
+Class: feature
+Evidence: $PLAYPORT_BUILD/agent-notes/pla541/kk-compiler.md (finding 3,
+ the 550 of 584 RDR2 fragment shaders)
+Offered-upstream: no
+---
+ src/kosmickrisp/vulkan/kk_debug.c           | 4 +++-
+ src/kosmickrisp/vulkan/kk_debug.h           | 7 +++++++
+ src/kosmickrisp/vulkan/kk_physical_device.c | 2 +-
+ src/kosmickrisp/vulkan/kk_shader.c          | 6 +++++-
+ 4 files changed, 16 insertions(+), 3 deletions(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_debug.c b/src/kosmickrisp/vulkan/kk_debug.c
+index bdda253..655cf52 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.c
++++ b/src/kosmickrisp/vulkan/kk_debug.c
+@@ -67,6 +67,7 @@ const struct debug_named_value experimental_flags[] = {
+    {"cmd_bo_classes", KK_EXPERIMENTAL_CMD_BO_CLASSES},
+    {"private_memory", KK_EXPERIMENTAL_PRIVATE_MEMORY},
+    {"barrier_device_vis", KK_EXPERIMENTAL_BARRIER_DEVICE_VIS},
++   {"no_quad_merge_block", KK_EXPERIMENTAL_NO_QUAD_MERGE_BLOCK},
+    {NULL, 0},
+ };
+ 
+@@ -135,7 +136,8 @@ kk_process_debug_variable(void)
+       KK_EXPERIMENTAL_NO_FP_PRESERVE | KK_EXPERIMENTAL_FP_PRECISE_ONLY |
+       KK_EXPERIMENTAL_UBO_UNBOUNDED | KK_EXPERIMENTAL_NARROW_BARRIERS |
+       KK_EXPERIMENTAL_DS_DONT_CARE | KK_EXPERIMENTAL_CMD_RETIRE |
+-      KK_EXPERIMENTAL_PRIVATE_MEMORY | KK_EXPERIMENTAL_BARRIER_DEVICE_VIS;
++      KK_EXPERIMENTAL_PRIVATE_MEMORY | KK_EXPERIMENTAL_BARRIER_DEVICE_VIS |
++      KK_EXPERIMENTAL_NO_QUAD_MERGE_BLOCK;
+    for (const struct debug_named_value *f = experimental_flags; f->name; f++) {
+       if (f->value != UINT64_MAX && (f->value & explicit_only) &&
+           !has_named_experiment(experiments, f->name))
+diff --git a/src/kosmickrisp/vulkan/kk_debug.h b/src/kosmickrisp/vulkan/kk_debug.h
+index 951d43c..2ca6672 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.h
++++ b/src/kosmickrisp/vulkan/kk_debug.h
+@@ -284,6 +284,13 @@ enum kk_experimental {
+     * back through another resource over the same memory may be stale: must
+     * be named, for measuring */
+    KK_EXPERIMENTAL_BARRIER_DEVICE_VIS = 1ull << 21,
++   /* Playport (PLA-541): a fragment shader that needs quad helpers (an
++    * implicit-LOD sample, a derivative) does not get
++    * msl_disable_triangle_merge's fake barycentric read and select (or its
++    * sample mask write), so Metal may merge triangles into shared quads;
++    * derivatives along a seam may then mix two triangles. In the pipeline
++    * cache UUID. Must be named */
++   KK_EXPERIMENTAL_NO_QUAD_MERGE_BLOCK = 1ull << 22,
+ };
+ 
+ extern enum kk_experimental kk_mesa_experimental_flags;
+diff --git a/src/kosmickrisp/vulkan/kk_physical_device.c b/src/kosmickrisp/vulkan/kk_physical_device.c
+index 5687be2..c193084 100644
+--- a/src/kosmickrisp/vulkan/kk_physical_device.c
++++ b/src/kosmickrisp/vulkan/kk_physical_device.c
+@@ -1082,7 +1082,7 @@ kk_physical_device_init_pipeline_cache(struct kk_physical_device *pdev)
+       kk_mesa_experimental_flags &
+       (KK_EXPERIMENTAL_FP_PRECISE_ONLY | KK_EXPERIMENTAL_ROOT_TABLE_LOADS |
+        KK_EXPERIMENTAL_UBO_UNBOUNDED | KK_EXPERIMENTAL_CONST_OFFSET_LOADS |
+-       KK_EXPERIMENTAL_UBO_VEC4_BOUNDS);
++       KK_EXPERIMENTAL_UBO_VEC4_BOUNDS | KK_EXPERIMENTAL_NO_QUAD_MERGE_BLOCK);
+    if (msl_experimental)
+       _mesa_blake3_update(&blake3_ctx, &msl_experimental,
+                           sizeof(msl_experimental));
+diff --git a/src/kosmickrisp/vulkan/kk_shader.c b/src/kosmickrisp/vulkan/kk_shader.c
+index 4b57074..7da02a6 100644
+--- a/src/kosmickrisp/vulkan/kk_shader.c
++++ b/src/kosmickrisp/vulkan/kk_shader.c
+@@ -749,7 +749,11 @@ kk_lower_fs(struct kk_device *dev, nir_shader *nir,
+                             (pdev->info.gpu_apple_family == 7 ||
+                              pdev->info.gpu_apple_family == 8) &&
+                             state->ms && state->ms->rasterization_samples > 1;
+-      if (!ms_bug_present)
++      /* Playport (PLA-541), MESA_KK_EXPERIMENTAL=no_quad_merge_block: let
++       * Metal merge triangles into shared quads, as DXMT does; derivatives
++       * along a seam may mix two triangles (the pipeline cache UUID has the
++       * switch) */
++      if (!ms_bug_present && !KK_EXPERIMENTAL(NO_QUAD_MERGE_BLOCK))
+          NIR_PASS(_, nir, msl_disable_triangle_merge);
+    }
+ 

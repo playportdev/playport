@@ -1,0 +1,332 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sat, 31 Oct 2026 23:45:00 +0100
+Subject: [PATCH 1/2] ntdll: single-step a native ARM64 thread that continues
+ with Cpsr.SS
+
+On Windows a thread that continues with Cpsr.SS (bit 21) set in its
+context runs one instruction and then takes EXCEPTION_SINGLE_STEP with
+the next pc. World of Warcraft's ARM64 client relies on it at start-up:
+the vectored handler for a UDF it raises in a TLS callback sets SS and
+then steps the code that resolves its imports from KERNEL32's exports
+(some 4,000 steps in three runs, each ended by the handler clearing
+SS). iOS lets a process arm no hardware step for itself, so the bit was
+dropped: the code ran on without its handler and the game ended with
+"Game Initialization Failed".
+
+signal_set_full_context of a thread outside ARM64EC now steps such a
+context itself (pp_single_step.h): an instruction that reads or writes
+the pc (branches, ADR, ADRP, loads of literals) is carried out on the
+context and the step's exception raised at once; any other runs out of
+line, copied with a BRK after it to the thread's 16-byte slot in a pool
+page taken at the first step, and the BRK's trap raises the exception
+with the pc after the original instruction. A fault in the slot is
+reported at the original instruction.
+
+Linear: PLA-514
+Class: ios-port
+Evidence: docs/evidence/2026-10-31-wow-arm64-start.md
+Offered-upstream: no
+---
+ build/ntdll-unix/pp_single_step.h   | 135 ++++++++++++++++++++++++++++
+ build/ntdll-unix/signal_arm64_ios.c |  78 ++++++++++++++++
+ build/ntdll-unix/virtual_ios.c      |  27 ++++++
+ 3 files changed, 240 insertions(+)
+ create mode 100644 build/ntdll-unix/pp_single_step.h
+
+diff --git a/build/ntdll-unix/pp_single_step.h b/build/ntdll-unix/pp_single_step.h
+new file mode 100644
+index 0000000..a6d47a3
+--- /dev/null
++++ b/build/ntdll-unix/pp_single_step.h
+@@ -0,0 +1,135 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later
++ * A guest's single step on a native ARM64 thread (Playport, PLA-514).
++ *
++ * On Windows a thread that continues with Cpsr.SS (bit 21) set in its context
++ * runs one instruction and then takes EXCEPTION_SINGLE_STEP, with the pc of
++ * the next one. World of Warcraft's ARM64 client steps through parts of its
++ * start-up this way from its own vectored handler. iOS gives a process no way
++ * to arm the hardware step for itself, so signal_set_full_context steps here:
++ *
++ * - an instruction that reads or writes the pc (a branch, ADR, ADRP, a load
++ *   of a literal) is carried out on the context by ppss_step_in_place, and
++ *   the step's exception raised at once;
++ * - any other runs out of line: copied, with PPSS_BRK after it, to the
++ *   thread's slot in the JIT pool, where the context continues; the BRK's trap
++ *   puts the pc after the original instruction and raises the exception.
++ *
++ * x[] is the context's X0..X30, v[] its V0..V31. */
++#ifndef PP_SINGLE_STEP_H
++#define PP_SINGLE_STEP_H
++
++#include <stdint.h>
++#include <string.h>
++
++#define PPSS_CPSR_SS  0x00200000u
++#define PPSS_BRK      0xd43e1ea0u   /* brk #0xf0f5 */
++
++static inline int ppss_cond( uint32_t cpsr, unsigned cond )
++{
++    int n = (cpsr >> 31) & 1, z = (cpsr >> 30) & 1, c = (cpsr >> 29) & 1, v = (cpsr >> 28) & 1;
++    int r;
++
++    switch (cond >> 1)
++    {
++    case 0: r = z; break;                    /* EQ */
++    case 1: r = c; break;                    /* CS */
++    case 2: r = n; break;                    /* MI */
++    case 3: r = v; break;                    /* VS */
++    case 4: r = c && !z; break;              /* HI */
++    case 5: r = n == v; break;               /* GE */
++    case 6: r = n == v && !z; break;         /* GT */
++    default: return 1;                       /* AL, NV */
++    }
++    return (cond & 1) ? !r : r;
++}
++
++static inline int64_t ppss_sext( uint64_t value, unsigned bits )
++{
++    return (int64_t)(value << (64 - bits)) >> (64 - bits);
++}
++
++static inline uint64_t ppss_xzr( const uint64_t x[31], unsigned n )
++{
++    return n == 31 ? 0 : x[n];
++}
++
++/* Steps the instruction insn at *pc on the registers when it reads or writes
++ * the pc: 1, with *pc the next one; 0 when it runs out of line unchanged. */
++static inline int ppss_step_in_place( uint64_t x[31], uint64_t *pc, uint32_t cpsr,
++                                      unsigned char v[32][16], uint32_t insn )
++{
++    uint64_t at = *pc;
++    unsigned rt = insn & 31, rn = (insn >> 5) & 31;
++
++    if ((insn & 0x7c000000) == 0x14000000)                       /* B, BL */
++    {
++        if (insn & 0x80000000) x[30] = at + 4;
++        *pc = at + ppss_sext( (insn & 0x3ffffff) << 2, 28 );
++        return 1;
++    }
++    if ((insn & 0xff000000) == 0x54000000)                       /* B.cond, BC.cond */
++    {
++        *pc = ppss_cond( cpsr, insn & 15 ) ? at + ppss_sext( ((insn >> 5) & 0x7ffff) << 2, 21 ) : at + 4;
++        return 1;
++    }
++    if ((insn & 0x7e000000) == 0x34000000)                       /* CBZ, CBNZ */
++    {
++        uint64_t value = ppss_xzr( x, rt );
++        int zero = (insn & 0x80000000) ? !value : !(uint32_t)value;
++        *pc = zero != !!(insn & 0x01000000) ? at + ppss_sext( ((insn >> 5) & 0x7ffff) << 2, 21 ) : at + 4;
++        return 1;
++    }
++    if ((insn & 0x7e000000) == 0x36000000)                       /* TBZ, TBNZ */
++    {
++        unsigned bit = ((insn >> 26) & 32) | ((insn >> 19) & 31);
++        int set = (ppss_xzr( x, rt ) >> bit) & 1;
++        *pc = set == !!(insn & 0x01000000) ? at + ppss_sext( ((insn >> 5) & 0x3fff) << 2, 16 ) : at + 4;
++        return 1;
++    }
++    if ((insn & 0xfe1f0000) == 0xd61f0000 && ((insn >> 21) & 15) <= 2)   /* BR, BLR, RET (and their PAC forms) */
++    {
++        unsigned opc = (insn >> 21) & 15;
++        uint64_t target = opc == 2 && (insn & 0xfc00) ? x[30] : ppss_xzr( x, rn );   /* RETAA, RETAB: x30 */
++        if (opc == 1) x[30] = at + 4;
++        *pc = target;
++        return 1;
++    }
++    if ((insn & 0x1f000000) == 0x10000000)                       /* ADR, ADRP */
++    {
++        int64_t imm = ppss_sext( ((insn >> 5) & 0x7ffff) << 2 | ((insn >> 29) & 3), 21 );
++        if (rt != 31)
++            x[rt] = (insn & 0x80000000) ? (at & ~(uint64_t)0xfff) + (uint64_t)(imm << 12) : at + imm;
++        *pc = at + 4;
++        return 1;
++    }
++    if ((insn & 0x3b000000) == 0x18000000)                       /* LDR (literal) */
++    {
++        const unsigned char *src = (const unsigned char *)(uintptr_t)(at + ppss_sext( ((insn >> 5) & 0x7ffff) << 2, 21 ));
++        unsigned opc = insn >> 30;
++
++        if (insn & 0x04000000)                                   /* SIMD&FP: S, D, Q */
++        {
++            if (opc < 3)
++            {
++                memset( v[rt], 0, 16 );
++                memcpy( v[rt], src, 4u << opc );
++            }
++        }
++        else if (rt != 31 && opc != 3)                           /* PRFM loads nothing */
++        {
++            uint32_t w;
++            uint64_t d;
++            if (opc == 1) { memcpy( &d, src, 8 ); x[rt] = d; }
++            else
++            {
++                memcpy( &w, src, 4 );
++                x[rt] = opc == 2 ? (uint64_t)(int64_t)(int32_t)w : w;
++            }
++        }
++        *pc = at + 4;
++        return 1;
++    }
++    return 0;
++}
++
++#endif /* PP_SINGLE_STEP_H */
+diff --git a/build/ntdll-unix/signal_arm64_ios.c b/build/ntdll-unix/signal_arm64_ios.c
+index 2e4afe6..5bb0598 100644
+--- a/build/ntdll-unix/signal_arm64_ios.c
++++ b/build/ntdll-unix/signal_arm64_ios.c
+@@ -579,6 +579,13 @@ static void *ios_stale_va_scanner( void *arg )
+ static __thread void *ios_my_trampoline = NULL;
+ static __thread int ios_my_slot = -1;
+ 
++/* Playport (PLA-514): a guest single step in flight on this thread
++ * (pp_single_step.h): the out-of-line slot it runs in, and the pc of the
++ * instruction it stands for. */
++#include "pp_single_step.h"
++static __thread ULONG64 ios_ss_slot;
++static __thread ULONG64 ios_ss_pc;
++
+ /* Thread registry: maps Mach thread port → TEB + trampoline.
+  *
+  * ml384: was 64. Steam runs register 90+ threads; entries past the cap were
+@@ -6564,6 +6571,49 @@ static void ios_ua_compare( const struct syscall_frame *frame, DWORD flags )
+ }
+ #endif
+ 
++#ifdef WINE_IOS
++/* Playport (PLA-514): continue a native ARM64 thread with Cpsr.SS set, as
++ * Windows does, by one instruction and then EXCEPTION_SINGLE_STEP
++ * (pp_single_step.h). Its pc must be in the JIT pool, where guest code runs;
++ * elsewhere the step is dropped and the thread continues. */
++static NTSTATUS ios_ss_continue( struct thread_data *data, const CONTEXT *context )
++{
++    extern void *ios_jit_rx_base_global;
++    extern size_t ios_jit_pool_size_global;
++    extern void *ios_jit_xol_slot( int slot, char **rw );
++    extern uint64_t ios_jit_reverse_translate( uint64_t addr, uint64_t *module_base );
++    ULONG64 rx = (ULONG64)ios_jit_rx_base_global;
++    CONTEXT step = *context;
++    char *rw;
++    void *slot;
++    ULONG insn;
++
++    step.Cpsr &= ~PPSS_CPSR_SS;
++    if (!rx || step.Pc < rx || step.Pc + 4 > rx + ios_jit_pool_size_global || (step.Pc & 3))
++        return signal_set_full_context( &step );
++    insn = *(const ULONG *)step.Pc;
++    if (ppss_step_in_place( (uint64_t *)step.X, (uint64_t *)&step.Pc, step.Cpsr, (unsigned char (*)[16])step.V, insn ))
++    {
++        EXCEPTION_RECORD rec = { .ExceptionCode = EXCEPTION_SINGLE_STEP };
++        ULONG64 pe = ios_jit_reverse_translate( step.Pc, NULL );
++
++        rec.ExceptionAddress = (void *)(pe ? pe : step.Pc);
++        return call_user_exception_dispatcher( data, &rec, &step );
++    }
++    if ((slot = ios_jit_xol_slot( ios_my_slot >= 0 ? ios_my_slot : 0, &rw )))
++    {
++        ((ULONG *)rw)[0] = insn;
++        ((ULONG *)rw)[1] = PPSS_BRK;
++        __asm__ __volatile__( "dsb ish" ::: "memory" );
++        sys_icache_invalidate( slot, 8 );
++        ios_ss_pc = step.Pc;
++        ios_ss_slot = (ULONG64)slot;
++        step.Pc = (ULONG64)slot;
++    }
++    return signal_set_full_context( &step );
++}
++#endif
++
+ /***********************************************************************
+  *           signal_set_full_context
+  */
+@@ -6587,6 +6637,10 @@ NTSTATUS signal_set_full_context( CONTEXT *context )
+      * a process that has exited would make it on descriptors the process's
+      * teardown closed, whose numbers another process may have since. */
+     if (arm64_data->killed) abort_thread( 0 );
++    /* Playport (PLA-514): Cpsr.SS asks a native ARM64 thread for a single step. */
++    if ((context->ContextFlags & CONTEXT_CONTROL) == CONTEXT_CONTROL && (context->Cpsr & PPSS_CPSR_SS) &&
++        !ios_is_arm64ec_cur())
++        return ios_ss_continue( data, context );
+ #endif
+     /* wine-11.18: a cooperative suspend requested by usr1_handler while the thread
+      * was in simulation is taken here, before the new context is applied. */
+@@ -7284,6 +7338,15 @@ static void setup_exception( ucontext_t *sigcontext, EXCEPTION_RECORD *rec )
+ {
+     CONTEXT context;
+ 
++#ifdef WINE_IOS
++    /* Playport (PLA-514): a fault in a single step run out of line
++     * (ios_ss_continue) is the original instruction's. */
++    if (ios_ss_slot && PC_sig( sigcontext ) == ios_ss_slot)
++    {
++        PC_sig( sigcontext ) = ios_ss_pc;
++        ios_ss_slot = 0;
++    }
++#endif
+     rec->ExceptionAddress = (void *)PC_sig(sigcontext);
+ #ifdef WINE_IOS
+     /* task#34 guest-exception-DISPATCH: when the faulting pc is inside a
+@@ -13570,6 +13633,21 @@ static void trap_handler( int signal, siginfo_t *siginfo, void *sigcontext )
+         return;
+     }
+     ios_track_signal( signal, context );
++    /* Playport (PLA-514): the end of a single step run out of line
++     * (ios_ss_continue): the step's exception, after the original instruction. */
++    if (ios_ss_slot && PC_sig( context ) == ios_ss_slot + 4 && *(ULONG *)PC_sig( context ) == PPSS_BRK)
++    {
++        extern uint64_t ios_jit_reverse_translate( uint64_t addr, uint64_t *module_base );
++        ULONG64 next = ios_ss_pc + 4, pe = ios_jit_reverse_translate( next, NULL );
++
++        ios_ss_slot = 0;
++        PC_sig( context ) = next;
++        rec.ExceptionCode = EXCEPTION_SINGLE_STEP;
++        rec.ExceptionAddress = (void *)(pe ? pe : next);
++        save_context( &ctx, sigcontext );
++        setup_raise_exception( get_thread_data(), sigcontext, &rec, &ctx );
++        return;
++    }
+     /* Playport (PLA-222): a killed thread whose suspend doorbell the server rang
+      * (abort_ring_doorbell) is at FEX's suspend check, at the start of a block of
+      * translated code. End it here, as quit_handler does outside a syscall,
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index c84c9ad..2a4adc6 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -3374,6 +3374,33 @@ void *ios_jit_get_trampoline(int slot)
+     return NULL;
+ }
+ 
++/* Playport (PLA-514): the out-of-line slots of a guest single step (Cpsr.SS
++ * in a context a native ARM64 thread continues with, signal_arm64_ios.c's
++ * ios_ss_stage): one 16-byte slot a trampoline slot, in a pool page taken at
++ * the first step and kept for the app's life. *rw gets the slot's RW alias;
++ * NULL when the pool has no page to give. */
++void *ios_jit_xol_slot( int slot, char **rw )
++{
++    static size_t xol_off = (size_t)-1;
++    static int xol_tried;
++    static pthread_mutex_t xol_lock = PTHREAD_MUTEX_INITIALIZER;
++
++    if (!ios_jit_rx_base_global || !ios_jit_rw_base_global || slot < 0 || slot >= IOS_JIT_MAX_SLOTS)
++        return NULL;
++    pthread_mutex_lock( &xol_lock );
++    if (!xol_tried)
++    {
++        xol_tried = 1;
++        xol_off = ios_pool_alloc_range( IOS_JIT_MAX_SLOTS * IOS_JIT_TRAMPOLINE_SIZE,
++                                        ios_jit_pool_size_global - ios_jit_tail_reserved );
++        dprintf( 2, "[single-step] out-of-line slots at pool offset 0x%lx\n", (unsigned long)xol_off );
++    }
++    pthread_mutex_unlock( &xol_lock );
++    if (xol_off == (size_t)-1) return NULL;
++    *rw = (char *)ios_jit_rw_base_global + xol_off + slot * IOS_JIT_TRAMPOLINE_SIZE;
++    return (char *)ios_jit_rx_base_global + xol_off + slot * IOS_JIT_TRAMPOLINE_SIZE;
++}
++
+ /* Reverse of the JIT translation: pool alias → original PE VA. For the
+  * thread-stack dumper — a wedged thread executing PE code shows JIT-pool
+  * pcs that dladdr can't name; this recovers "PE module base + offset". */

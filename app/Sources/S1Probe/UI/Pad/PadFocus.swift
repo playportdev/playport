@@ -44,12 +44,20 @@ final class PadFocus: ObservableObject {
     let resets = PassthroughSubject<String, Never>()
     /// Where the ring starts on this screen when that item is on it (the Library's first tile), else top left.
     private var start: String?
+    /// The ring went top left because `start` had not reported its frame yet (a lazy grid's tile
+    /// comes a layout after the items beside it): it moves there when it does, unless moved first.
+    private var startPending = false
 
     /// The items on screen now (PadItemsKey).
     func update(_ new: [String: Item]) {
         items = new
-        if !new.isEmpty, focused.map({ new[$0] == nil }) ?? true {
-            focused = start.flatMap { new[$0] == nil ? nil : $0 } ?? FocusMove.first(among: new.mapValues(\.frame))
+        if startPending, let start, new[start] != nil {
+            startPending = false
+            focused = start
+        } else if !new.isEmpty, focused.map({ new[$0] == nil }) ?? true {
+            let present = start.flatMap { new[$0] == nil ? nil : $0 }
+            startPending = start != nil && present == nil
+            focused = present ?? FocusMove.first(among: new.mapValues(\.frame))
         }
         refreshHint()
     }
@@ -65,6 +73,7 @@ final class PadFocus: ObservableObject {
             return adjustments.send((ringed, direction == .left ? -1 : 1))
         }
         if let next = FocusMove.next(from: from, direction, among: among) {
+            startPending = false
             focused = next
             refreshHint()
         }
@@ -82,11 +91,13 @@ final class PadFocus: ObservableObject {
     /// Another screen: the ring starts at `start` when it comes, else at its top left.
     func reset(start: String? = nil) {
         self.start = start
+        startPending = false
         focused = start.flatMap { items[$0] == nil ? nil : $0 }
         refreshHint()
     }
 
     func ring(_ id: String) {
+        startPending = false
         focused = id
         refreshHint()
     }

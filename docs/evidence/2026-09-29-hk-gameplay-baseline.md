@@ -1,7 +1,7 @@
 # Hollow Knight gameplay baseline, first pass: five modes, one run each
 
 **Status:** partial. Each of the plan's five modes ran once
-([performance follow-up](../plans/finished.md#performance-follow-up-after-the-runtime-audit), step
+([performance follow-up](https://linear.app/playportdev/issue/PLA-684), step
 1). None is repeated yet. **Date:** 2026-09-29. **Builds:** dev. 720 and native
 free-running ran on
 `a2f29a31dea07aca4f101855b1c769ecaaa5333ff11777b22a8bde7ceb19a5cc` (tree

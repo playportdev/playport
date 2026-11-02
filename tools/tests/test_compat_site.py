@@ -12,8 +12,8 @@ import unittest
 
 REPO = Path(__file__).resolve().parents[2]
 SITE = REPO / "site" / "compatibility"
-STATUSES = {"works", "issues", "broken"}
-STORES = {"steam", "gog", "epic", "xbox", "other"}
+STATUSES = {"runs", "broken"}
+STORES = {"steam", "gog", "epic", "battlenet", "xbox", "other"}
 REPORT = "issues/new?template=problem.yml"
 
 
@@ -55,7 +55,7 @@ class Links(unittest.TestCase):
         stores = re.search(r"var STORE = \{([^}]*)\}", page).group(1)
         self.assertEqual(set(re.findall(r"(\w+):", stores)), STORES)
         template = (REPO / ".github" / "ISSUE_TEMPLATE" / "problem.yml").read_text(encoding="utf-8")
-        for status in ("Works", "Playable with issues", "Broken"):
+        for status in ("Runs", "Broken"):
             self.assertRegex(template, rf"(?m)^\s+- {re.escape(status)}$")
 
     def test_linked_from_landing_page_and_readme(self):

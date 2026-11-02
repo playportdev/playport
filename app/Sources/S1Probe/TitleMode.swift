@@ -10,6 +10,7 @@
 // Play (decisions 0084, 0094).
 // Progress goes to the app log (AppLog) as `title:` lines.
 
+import BattleNetClientKit
 import EpicClientKit
 import GOGClientKit
 import Foundation
@@ -64,6 +65,9 @@ final class TitleLaunch: ObservableObject {
     /// The Epic game plays offline (the player's choice): a Play continued after its
     /// prerequisites does too (decision 0084).
     private var epicOffline = false
+    /// How long the sheet waits for the first frame or a guest window after the game started
+    /// (LaunchProgress.uncoverWithoutFrame; a Battle.net Play holds it longer).
+    private var uncoverWithoutFrame = LaunchProgress.uncoverWithoutFrame
 
     /// A title picked in the library (PlayportKit's LaunchPlan): its screen,
     /// then the launch on its own thread. False when a launch is running or spent.
@@ -77,7 +81,8 @@ final class TitleLaunch: ObservableObject {
                prerequisites: [Prerequisite] = [], windowsServices: Bool = false, khronosVulkanLoader: Bool = false,
                jitPoolMB: Int? = nil,
                endLauncher: GameSignIn? = nil,
-               epicOffline: Bool = false, exhaustionGrace: TimeInterval = JitPool.exhaustionGrace) -> Bool {
+               epicOffline: Bool = false, exhaustionGrace: TimeInterval = JitPool.exhaustionGrace,
+               uncoverWithoutFrame: TimeInterval = LaunchProgress.uncoverWithoutFrame) -> Bool {
         guard !running, !spent else { return false }
         self.title = title
         self.titleID = titleID
@@ -85,6 +90,7 @@ final class TitleLaunch: ObservableObject {
         startedAt = Date()
         quitting = false
         self.epicOffline = epicOffline
+        self.uncoverWithoutFrame = uncoverWithoutFrame
         message = nil
         step = .preparing
         stage = .preparing
@@ -162,9 +168,9 @@ final class TitleLaunch: ObservableObject {
         case .drawing, .window:
             showsSheet = false
         case .running:
-            // The sheet covers the black surface until the game's first frame (.drawing);
-            // one that never comes through the game layer still uncovers the title.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 30) { MainActor.assumeIsolated {
+            // The sheet covers the black surface until the game's first frame (.drawing) or a
+            // guest window; one that never comes through the game layer still uncovers the title.
+            DispatchQueue.main.asyncAfter(deadline: .now() + uncoverWithoutFrame) { MainActor.assumeIsolated {
                 if case .running = TitleLaunch.shared.step { TitleLaunch.shared.showsSheet = false }
             } }
         default:
@@ -181,6 +187,7 @@ final class TitleLaunch: ObservableObject {
         appID.flatMap(cachedHero)
             ?? titleID.flatMap { $0.hasPrefix("gog-") ? GOGArt.cachedHero(String($0.dropFirst(4))) : nil }
             ?? titleID.flatMap { $0.hasPrefix("epic-") ? EpicArt.cachedHero(String($0.dropFirst(5))) : nil }
+            ?? titleID.flatMap { $0.hasPrefix("bnet-") ? BattleNetProduct(rawValue: String($0.dropFirst(5))).flatMap { BattleNetArtImages.cachedHero($0) } : nil }
     }
 
     /// The game's hero art as the art cache keeps it (`<app>/…library_hero.jpg`), with no

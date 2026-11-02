@@ -1,6 +1,6 @@
 # Epic Games on the phone (plan Phase 3 gate)
 
-**Date:** 2026-10-06. **Plan:** [PC import, GOG and Epic](../plans/finished.md#pc-import-gog-and-epic), Phase 3.
+**Date:** 2026-10-06. **Plan:** [PC import, GOG and Epic](https://linear.app/playportdev/issue/PLA-80), Phase 3.
 **Decisions:** [0057](../decisions/0057-store-identity.md), [0058](../decisions/0058-store-sessions.md).
 **Phone:** iPhone18,4, iOS 27.0, dev build. Driven with `pp ui`; the Epic sign-in was done by
 hand by the owner.

@@ -1,0 +1,37 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 1 Nov 2026 17:49:33 +0100
+Subject: [PATCH 277/277] virtual: print a protection change's no-read skip
+ line as the other sync lines
+
+World of Warcraft's x64 client keeps its code PAGE_NOACCESS and sets it
+so 4 KB at a time: one "NtProtect-sync: SKIP" line each, 15,205 in run
+20261101T172555, with as many FEX lines beside them. The line now
+prints for the first 64 protection changes and every 65536th, with the
+count, as the sync-check line does.
+
+Linear: PLA-516
+Class: diagnostics
+Evidence: docs/evidence/2026-11-01-wow-x64-fex.md
+Offered-upstream: no
+---
+ build/ntdll-unix/virtual_ios.c | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index d9071c5..fa9917f 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -24882,7 +24882,11 @@ NTSTATUS WINAPI NtProtectVirtualMemory( HANDLE process, PVOID *addr_ptr, SIZE_T
+                                  PAGE_EXECUTE_WRITECOPY;
+             if (!(new_prot & read_bits))
+             {
+-                ERR("iOS NtProtect-sync: SKIP (new_prot=0x%x has no READ bit)\n", new_prot);
++                /* Playport (PLA-516): World of Warcraft's x64 client makes its code pages
++                 * PAGE_NOACCESS 4 KB at a time, 15,000 times a run: printed as the
++                 * sync-check line is, the first 64 and every 65536th. */
++                if (ios_protect_line_due( ios_sync_n ))
++                    ERR("iOS NtProtect-sync: SKIP (new_prot=0x%x has no READ bit) #%lu\n", new_prot, ios_sync_n);
+                 return status;
+             }
+         }

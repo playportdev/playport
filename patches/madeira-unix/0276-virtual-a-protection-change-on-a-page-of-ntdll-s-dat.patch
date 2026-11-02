@@ -1,0 +1,378 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 1 Nov 2026 17:49:16 +0100
+Subject: [PATCH 276/277] virtual: a protection change on a page of ntdll's
+ data copies only what was written while it was open, into the caller's copy
+
+NtProtectVirtualMemory on a page of an image that runs from a JIT-pool
+copy copied the image's page over the copy's, on every call, and into
+the first copy of the image it found. For the loader's own pattern
+(open a page PAGE_READWRITE, write an import table or ARM64EC metadata
+slots at the image's address, restore it) that brings the writes in.
+But ntdll's code keeps its globals in its copy, where the image's page
+is stale, and the loader never patches ntdll's image: a guest's
+VirtualProtect of a page of ntdll's .data (World of Warcraft's x64
+client hooks Wow64PrepareForException there; the page also holds the
+loader's hash_table, node_ntdll and tls_dirs) put the stale bytes over
+the live ones, twice (open and restore), and into the session's copy of
+ntdll rather than the calling child's: the exchook probe's sibling
+process then crashed in find_basename_module (runs 20261101T160121,
+20261101T161254).
+
+For a page of ntdll's writable sections, opening it (PAGE_READWRITE,
+PAGE_EXECUTE_READWRITE) now keeps the image's bytes and copies nothing;
+restoring it copies only the 8-byte words written in between, and the
+relocation and pointer passes touch only those words (pp_image_sync.h).
+Every other module's page is copied whole as before (applying the merge
+to them hung the session's start: the loader's metadata writes need
+the whole page). The copy synced is the calling process's own (a
+child's ntdll), else the shared one, as address translation resolves
+it. The sync's lines print with the other protection-change lines (the
+first 64, then every 65536th).
+
+Linear: PLA-516, PLA-514
+Class: ios-port
+Evidence: docs/evidence/2026-11-01-wow-x64-fex.md
+Offered-upstream: no; the pool copy is Madeira's iOS JIT design
+---
+ build/ntdll-unix/pp_image_sync.h | 116 ++++++++++++++++++++++++++
+ build/ntdll-unix/virtual_ios.c   | 139 ++++++++++++++++++++++++++++---
+ 2 files changed, 243 insertions(+), 12 deletions(-)
+ create mode 100644 build/ntdll-unix/pp_image_sync.h
+
+diff --git a/build/ntdll-unix/pp_image_sync.h b/build/ntdll-unix/pp_image_sync.h
+new file mode 100644
+index 0000000..0b3f7db
+--- /dev/null
++++ b/build/ntdll-unix/pp_image_sync.h
+@@ -0,0 +1,116 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later
++ * What a protection change on an image page copies into the image's pool copy (Playport, PLA-516).
++ *
++ * An ARM64EC image runs from its JIT-pool copy, and its own code reads and writes its globals there:
++ * for those bytes the copy is the live one and the image's page is stale. The loader, though, writes
++ * a module's import table and ARM64EC metadata slots at the image's address, between a protection
++ * change that opens the page (PAGE_READWRITE) and one that restores it, and NtProtectVirtualMemory
++ * then brings the image's page into the copy. Copying the whole page put stale bytes over the live
++ * ones: a guest's VirtualProtect of a page of ntdll's .data (World of Warcraft's x64 client hooks
++ * Wow64PrepareForException there; the page also holds the loader's hash_table, node_ntdll, tls_dirs)
++ * wrote the image's copy of those over the pool's, and a process then crashed in
++ * find_basename_module.
++ *
++ * So the image's bytes are kept when a page is opened (ppis_keep), and when it is restored only the
++ * 8-byte words written in between are copied (ppis_take, ppis_merge). A region with nothing kept
++ * (larger than PPIS_MAX_BYTES, or never opened) is copied whole, as before.
++ */
++#ifndef PP_IMAGE_SYNC_H
++#define PP_IMAGE_SYNC_H
++
++#include <stdint.h>
++#include <stdlib.h>
++#include <string.h>
++
++#define PPIS_SNAPS     8
++#define PPIS_MAX_BYTES 0x10000
++
++struct ppis_snap
++{
++    uintptr_t base;
++    size_t size;
++    unsigned char *bytes;
++};
++
++struct ppis_table
++{
++    struct ppis_snap snap[PPIS_SNAPS];
++    unsigned next;
++};
++
++/* A protection that opens a page for writing: what the loader (PAGE_READWRITE) and a guest
++ * (PAGE_EXECUTE_READWRITE) ask for before they write. A write-copy protection is what they restore. */
++static inline int ppis_opens( unsigned int prot )
++{
++    prot &= 0xff;
++    return prot == 0x04 /* PAGE_READWRITE */ || prot == 0x40 /* PAGE_EXECUTE_READWRITE */;
++}
++
++/* Keeps the image's bytes of [base, base + size) as they are now; 1 when kept. */
++static inline int ppis_keep( struct ppis_table *t, const void *base, size_t size )
++{
++    unsigned i;
++
++    if (!size || size > PPIS_MAX_BYTES) return 0;
++    for (i = 0; i < PPIS_SNAPS; i++)
++        if (t->snap[i].bytes && t->snap[i].base == (uintptr_t)base && t->snap[i].size == size) break;
++    if (i == PPIS_SNAPS)
++    {
++        i = t->next++ % PPIS_SNAPS;
++        free( t->snap[i].bytes );
++        t->snap[i].bytes = NULL;
++    }
++    if (!t->snap[i].bytes && !(t->snap[i].bytes = malloc( size ))) return 0;
++    memcpy( t->snap[i].bytes, base, size );
++    t->snap[i].base = (uintptr_t)base;
++    t->snap[i].size = size;
++    return 1;
++}
++
++/* The bytes kept when exactly [base, base + size) was opened, now the caller's to free; NULL if none. */
++static inline unsigned char *ppis_take( struct ppis_table *t, const void *base, size_t size )
++{
++    unsigned i;
++
++    for (i = 0; i < PPIS_SNAPS; i++)
++        if (t->snap[i].bytes && t->snap[i].base == (uintptr_t)base && t->snap[i].size == size)
++        {
++            unsigned char *bytes = t->snap[i].bytes;
++            t->snap[i].bytes = NULL;
++            return bytes;
++        }
++    return NULL;
++}
++
++/* Whether the 8-byte word at offset of src (offset + 8 <= the region's size) was written since
++ * was was kept: the relocation and pointer passes after a merge touch only those words, as they
++ * would only those a whole copy had brought in. */
++static inline int ppis_written( const unsigned char *src, const unsigned char *was, size_t offset )
++{
++    return memcmp( src + offset, was + offset, 8 ) != 0;
++}
++
++/* Copies to dst each 8-byte word (and trailing byte) of src that differs from was: what was written
++ * since was was kept. Whole words, so a pointer written over a relocated one is never half copied.
++ * Returns the bytes copied. */
++static inline size_t ppis_merge( unsigned char *dst, const unsigned char *src, const unsigned char *was,
++                                 size_t size )
++{
++    size_t i, copied = 0;
++
++    for (i = 0; i + 8 <= size; i += 8)
++        if (memcmp( src + i, was + i, 8 ))
++        {
++            memcpy( dst + i, src + i, 8 );
++            copied += 8;
++        }
++    for (; i < size; i++)
++        if (src[i] != was[i])
++        {
++            dst[i] = src[i];
++            copied++;
++        }
++    return copied;
++}
++
++#endif /* PP_IMAGE_SYNC_H */
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 8bdcfe5..d9071c5 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -1927,6 +1927,32 @@ static size_t ios_jit_data_align_delta( const void *image_base, size_t image_siz
+     return pp_copy_data_delta( image_base, image_size, ios_is_native_arm64_cur() );
+ }
+ 
++/* Playport (PLA-516): what a protection change on an image page copies into the pool copy
++ * (pp_image_sync.h): only the words written while the page was open, into the copy of the
++ * process that made the change. */
++#include "pp_image_sync.h"
++static struct ppis_table ios_image_sync;
++static pthread_mutex_t ios_image_sync_lock = PTHREAD_MUTEX_INITIALIZER;
++
++/* The mapping whose copy a protection change of [base, base + size) syncs: the current
++ * process's own copy of the image (a child's ntdll), else the shared one, as
++ * ios_jit_translate_addr_for_owner resolves an address; -1 when no image holds the region. */
++static int ios_image_sync_mapping( uintptr_t base, size_t size )
++{
++    void *owner = ios_jit_current_peb();
++    int i, shared = -1, any = -1;
++
++    for (i = 0; i < ios_jit_mapping_count; i++)
++    {
++        uintptr_t pe_start = (uintptr_t)ios_jit_mappings[i].pe_base;
++        if (base < pe_start || base + size > pe_start + ios_jit_mappings[i].size) continue;
++        if (ios_jit_mappings[i].owner_peb == owner) return i;
++        if (!ios_jit_mappings[i].owner_peb && shared < 0) shared = i;
++        if (any < 0) any = i;
++    }
++    return shared >= 0 ? shared : any;
++}
++
+ static void ios_va_gap_probe( const char *why )
+ {
+     const mach_vm_address_t CARVE_LO = 0x1000000000ULL;   /* 64G  */
+@@ -5097,6 +5123,36 @@ static int ios_img_off_is_exec( const void *img, size_t img_size, size_t off )
+     return 0;   /* outside every section: headers/padding, not code */
+ }
+ 
++/* Playport (PLA-516): whether [off, off + size) of an image lies in writable sections
++ * (IMAGE_SCN_MEM_WRITE, .data): where the image's own code keeps its globals, in its copy. */
++static int ios_img_off_is_writable( const void *img, size_t img_size, size_t off )
++{
++    const IMAGE_DOS_HEADER *dos = img;
++    const IMAGE_NT_HEADERS *nt;
++    const IMAGE_SECTION_HEADER *sec;
++    unsigned i;
++
++    if (!img || dos->e_magic != IMAGE_DOS_SIGNATURE) return 0;
++    if ((size_t)dos->e_lfanew + sizeof *nt > img_size) return 0;
++    nt = (const IMAGE_NT_HEADERS *)((const char *)img + dos->e_lfanew);
++    if (nt->Signature != IMAGE_NT_SIGNATURE) return 0;
++    sec = IMAGE_FIRST_SECTION( nt );
++    for (i = 0; i < nt->FileHeader.NumberOfSections; i++)
++    {
++        size_t lo = sec[i].VirtualAddress;
++        size_t vs = ((sec[i].Misc.VirtualSize ? sec[i].Misc.VirtualSize : sec[i].SizeOfRawData) + 0xfff) & ~(size_t)0xfff;
++        if (off < lo || off >= lo + vs) continue;
++        return (sec[i].Characteristics & IMAGE_SCN_MEM_WRITE) ? 1 : 0;
++    }
++    return 0;
++}
++
++static int ios_img_range_is_writable( const void *img, size_t img_size, size_t off, size_t size )
++{
++    return size && ios_img_off_is_writable( img, img_size, off ) &&
++           ios_img_off_is_writable( img, img_size, off + size - 1 );
++}
++
+ /* ml1017: OPT-IN via `madeira-iat-noexec.txt` = 1.
+  *
+  * Default OFF because the guard is UNPROVEN and possibly too broad: enabling it
+@@ -24832,7 +24888,8 @@ NTSTATUS WINAPI NtProtectVirtualMemory( HANDLE process, PVOID *addr_ptr, SIZE_T
+         }
+         if (1)
+         {
+-            int idx;
++            int idx, sync_pick = ios_image_sync_mapping( (uintptr_t)base, size );
++            unsigned char *was = NULL;
+             if (ios_protect_line_due( ios_sync_n ))
+                 ERR("iOS NtProtect-sync: triggered, scanning %d JIT mappings\n", ios_jit_mapping_count);
+             for (idx = 0; idx < ios_jit_mapping_count; idx++)
+@@ -24844,6 +24901,8 @@ NTSTATUS WINAPI NtProtectVirtualMemory( HANDLE process, PVOID *addr_ptr, SIZE_T
+ 
+                 if (rgn_start >= pe_start && rgn_end <= pe_end)
+                 {
++                    /* Playport (PLA-516): only the current process's copy (or the shared one). */
++                    if (idx != sync_pick) continue;
+                     /* Playport (PLA-514, decision 0176): a presented copy is the
+                      * image; its view is a stale backing store, never a source. */
+                     if (ios_jit_mappings[idx].presented) break;
+@@ -24868,6 +24927,34 @@ NTSTATUS WINAPI NtProtectVirtualMemory( HANDLE process, PVOID *addr_ptr, SIZE_T
+                         break;
+                     }
+ 
++                    /* Playport (PLA-516): ntdll's code keeps its globals (the loader's hash_table,
++                     * node_ntdll, tls_dirs) in its copy, and the loader does not patch ntdll's image
++                     * (arm64ec_process_init_dispatchers skips ntdll's metadata): a
++                     * guest is the only writer there (World of Warcraft's x64 client hooks
++                     * Wow64PrepareForException in its .data). For a page of ntdll's writable
++                     * sections, opening it copies nothing (its writes are still to come); the image's
++                     * bytes are kept, and restoring it copies only the words written in between
++                     * (pp_image_sync.h). Every other module's page (an import table, ARM64EC metadata
++                     * the loader writes at the image's address) is copied whole as before. */
++                    if (ios_img_range_is_writable( (const void *)pe_start, ios_jit_mappings[idx].image_size,
++                                                   (size_t)(rgn_start - pe_start), size ) &&
++                        !strcmp( ios_pe_module_name( ios_jit_mappings[idx].pe_base, ios_jit_mappings[idx].image_size ),
++                                 "ntdll.dll" ))
++                    {
++                        int kept = 0;
++                        pthread_mutex_lock( &ios_image_sync_lock );
++                        if (ppis_opens( new_prot )) kept = ppis_keep( &ios_image_sync, base, size );
++                        else was = ppis_take( &ios_image_sync, base, size );
++                        pthread_mutex_unlock( &ios_image_sync_lock );
++                        if (kept)
++                        {
++                            if (ios_protect_line_due( ios_sync_n ))
++                                ERR("iOS JIT IAT sync: %p+0x%lx opened (prot 0x%x): image bytes kept, nothing copied\n",
++                                    base, (unsigned long)size, new_prot);
++                            break;
++                        }
++                    }
++
+                     /* Region is within this JIT-mapped PE image — sync to JIT pool.
+                      * IMPORTANT: skip any overlap with .text (code) section to avoid
+                      * overwriting JIT-relocated code with the original unix mapping copy. */
+@@ -24887,9 +24974,20 @@ NTSTATUS WINAPI NtProtectVirtualMemory( HANDLE process, PVOID *addr_ptr, SIZE_T
+                     if (text_sz == 0 || text_abs_end <= rgn_start || text_abs_start >= rgn_end)
+                     {
+                         /* No overlap with .text — safe to copy whole region */
+-                        memcpy(jit_rw_dest, base, size);
+-                        ERR("iOS JIT IAT sync: full copy %p+0x%lx → JIT (no text overlap)\n",
+-                            base, (unsigned long)size);
++                        if (was)
++                        {
++                            size_t n = ppis_merge( (unsigned char *)jit_rw_dest, base, was, size );
++                            if (ios_protect_line_due( ios_sync_n ))
++                                ERR("iOS JIT IAT sync: %p+0x%lx → JIT: 0x%lx byte(s) written since it was opened\n",
++                                    base, (unsigned long)size, (unsigned long)n);
++                        }
++                        else
++                        {
++                            memcpy(jit_rw_dest, base, size);
++                            if (ios_protect_line_due( ios_sync_n ))
++                                ERR("iOS JIT IAT sync: full copy %p+0x%lx → JIT (no text overlap)\n",
++                                    base, (unsigned long)size);
++                        }
+                     }
+                     else
+                     {
+@@ -24897,14 +24995,26 @@ NTSTATUS WINAPI NtProtectVirtualMemory( HANDLE process, PVOID *addr_ptr, SIZE_T
+                         size_t overlap_start = text_abs_start > rgn_start ? text_abs_start - rgn_start : 0;
+                         size_t overlap_end   = text_abs_end   < rgn_end   ? text_abs_end   - rgn_start : size;
+ 
+-                        if (overlap_start > 0)
+-                            memcpy(jit_rw_dest, (char *)base, overlap_start);
+-                        if (overlap_end < size)
+-                            memcpy(jit_rw_dest + overlap_end, (char *)base + overlap_end, size - overlap_end);
++                        if (was)
++                        {
++                            if (overlap_start > 0)
++                                ppis_merge( (unsigned char *)jit_rw_dest, base, was, overlap_start );
++                            if (overlap_end < size)
++                                ppis_merge( (unsigned char *)jit_rw_dest + overlap_end, (unsigned char *)base + overlap_end,
++                                            was + overlap_end, size - overlap_end );
++                        }
++                        else
++                        {
++                            if (overlap_start > 0)
++                                memcpy(jit_rw_dest, (char *)base, overlap_start);
++                            if (overlap_end < size)
++                                memcpy(jit_rw_dest + overlap_end, (char *)base + overlap_end, size - overlap_end);
++                        }
+ 
+-                        ERR("iOS JIT IAT sync: partial copy %p+0x%lx → JIT (skipping text [0x%lx-0x%lx])\n",
+-                            base, (unsigned long)size,
+-                            (unsigned long)overlap_start, (unsigned long)overlap_end);
++                        if (ios_protect_line_due( ios_sync_n ))
++                            ERR("iOS JIT IAT sync: partial %s %p+0x%lx → JIT (skipping text [0x%lx-0x%lx])\n",
++                                was ? "merge" : "copy", base, (unsigned long)size,
++                                (unsigned long)overlap_start, (unsigned long)overlap_end);
+                     }
+ 
+                     /* Re-apply DIR64 relocations within the synced region.
+@@ -24959,6 +25069,9 @@ NTSTATUS WINAPI NtProtectVirtualMemory( HANDLE process, PVOID *addr_ptr, SIZE_T
+                                 /* Only fix entries within the synced region */
+                                 if (fixup_rva < rgn_off_start || fixup_rva + 8 > rgn_off_end)
+                                     continue;
++                                /* Playport (PLA-516): after a merge, only what it brought in */
++                                if (was && !ppis_written( base, was, fixup_rva - rgn_off_start ))
++                                    continue;
+ 
+                                 {
+                                     uint64_t *fixup = (uint64_t *)(rw_image + fixup_rva);
+@@ -25070,7 +25183,8 @@ NTSTATUS WINAPI NtProtectVirtualMemory( HANDLE process, PVOID *addr_ptr, SIZE_T
+                         while (p < end_p)
+                         {
+                             uint64_t val = *p;
+-                            if (val)
++                            /* Playport (PLA-516): after a merge, only what it brought in */
++                            if (val && (!was || ppis_written( base, was, (size_t)((char *)p - jit_rw_dest) )))
+                             {
+                                 void *nv = ios_jit_translate_addr_for_owner(
+                                         (void *)(uintptr_t)val, sync_owner);
+@@ -25126,6 +25240,7 @@ NTSTATUS WINAPI NtProtectVirtualMemory( HANDLE process, PVOID *addr_ptr, SIZE_T
+                     break;
+                 }
+             }
++            free( was );
+         }
+ #endif
+     }

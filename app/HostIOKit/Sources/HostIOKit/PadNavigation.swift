@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 /// A controller as Playport's own screens read it, not the guest: the buttons
-/// the footer names, and four directions from the D-pad or the left stick.
+/// the footer names, the triggers as buttons, and four directions from the D-pad or the left stick.
 /// `view` is the button left of ≡ (Xbox View, DualSense Create: GameController's buttonOptions).
 public enum NavButton: String, CaseIterable, Sendable {
-    case a, b, x, y, lb, rb, menu, view, up, down, left, right
+    case a, b, x, y, lb, rb, lt, rt, menu, view, up, down, left, right
 
     public var isDirection: Bool { self == .up || self == .down || self == .left || self == .right }
 }
@@ -13,10 +13,12 @@ public enum NavButton: String, CaseIterable, Sendable {
 /// A button counts once, as it goes down. A direction (the D-pad, or the left
 /// stick past `stickOn` on its larger axis, let go below `stickOff`) counts as
 /// it goes down and then again every `repeatInterval` seconds once it has been
-/// held `repeatDelay` seconds. Only the direction pressed last repeats.
+/// held `repeatDelay` seconds. Only the direction pressed last repeats. A trigger
+/// counts as it passes `triggerOn` and is let go below `triggerOff`.
 public struct PadNavigation: Sendable {
     public var repeatDelay = 0.4, repeatInterval = 0.12
     public var stickOn: Float = 0.5, stickOff: Float = 0.3
+    public var triggerOn: Float = 0.5, triggerOff: Float = 0.3
 
     private var held: Set<NavButton> = []
     private var stick: NavButton?
@@ -34,6 +36,10 @@ public struct PadNavigation: Sendable {
             (p.up, .up), (p.down, .down), (p.left, .left), (p.right, .right),
         ]
         for (on, b) in buttons where on { now.insert(b) }
+        for (value, b) in [(p.leftTrigger, NavButton.lt), (p.rightTrigger, .rt)]
+        where value.isFinite && value >= (held.contains(b) ? triggerOff : triggerOn) {
+            now.insert(b)
+        }
         if let stick { now.insert(stick) }
         let pressed = NavButton.allCases.filter { now.contains($0) && !held.contains($0) }
         held = now

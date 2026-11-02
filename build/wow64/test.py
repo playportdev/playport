@@ -138,15 +138,16 @@ def run_audio_tests(scratch):
         (root / "native_types.h").write_text(
             (types + "\n" + stream + "\n" + midi).replace(
                 "#define AUDCLNT_E_NOT_INITIALIZED ((HRESULT)0x88890001L)\n", "", 1))
-        (root / "native_functions.h").write_text("".join(c_function(s, n) for n in (
-            "stream_from_handle", "stream_register", "stream_unregister", "ios_create_stream",
+        # decision 0172: the producer gate and the underrun hysteresis, with their constants
+        producer = s[s.index("#define IOS_PRODUCER_STEADY_CALLS"):s.index("/* Count this GetBuffer")]
+        refill = s[s.index("#define IOS_REFILL_SHORTS"):s.index("static void ios_mix_stream(")]
+        (root / "native_functions.h").write_text(producer + refill + "".join(c_function(s, n) for n in (
+            "stream_from_handle", "stream_register", "stream_unregister", "ios_producer_note",
+            "ios_log_getbuf_caller", "ios_mix_stream", "ios_create_stream",
             "ios_release_stream", "ios_get_render_buffer", "ios_release_render_buffer")))
         (root / "native_other_functions.h").write_text(
             'static const char IOS_DEVICE_NAME[] = "ios-null";\n'
             "static uint64_t elapsed_frames(const struct ios_stream *s) { (void)s; return 0; }\n"
-            "static uint64_t mach_absolute_time(void) { return 0; }\n"
-            "static uint64_t mach_to_ns(uint64_t t) { return t; }\n"
-            "static unsigned long long ios_current_tid(void) { return 0; }\n"
             "static NTSTATUS ios_process_attach(void *p) { (void)p; return 0; }\n"
             "static NTSTATUS ios_start(void *p) { ((struct stream_handle_params *)p)->result = S_OK; return 0; }\n"
             "static NTSTATUS ios_stop(void *p) { ((struct stream_handle_params *)p)->result = S_OK; return 0; }\n"

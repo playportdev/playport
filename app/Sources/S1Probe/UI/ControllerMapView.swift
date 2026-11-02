@@ -474,7 +474,7 @@ enum ControllerMapRing {
         case .a: PadFocus.shared.activate()
         case .y: PadFocus.shared.resetFocused()
         case .b: back()
-        case .x, .view, .menu: break
+        case .x, .view, .menu, .lt, .rt: break
         }
     }
 

@@ -1,17 +1,40 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// On-screen control layouts (docs/plans/2026-10-09-touch-controls.md,
-// "Touch layouts"; docs/design/2026-10-09-touch-controls/TouchGamepad.dc.html):
-// a layout is a list of placed controls, each with an id the dev driver's
-// `touch:` names, a kind, its actions (HostIOKit InputAction), a label and a
-// behaviour. A control is placed in the view's safe area (the screen less the
-// notch or Dynamic Island and the home indicator, on whichever side they are)
-// by an anchor (a corner, an edge's middle or the centre), the offset of its
-// centre from there and its size, in points, so one layout fits every iPhone
-// in either landscape orientation; one that would reach out of the safe area
-// is moved back in. A floating stick's zone is a corner of the safe area,
-// moved by an offset (0 when left out, so a layout saved without one reads the same).
+// On-screen control layouts (PLA-13,
+// "Touch layouts"; docs/design/2026-10-09-touch-controls/TouchGamepad.dc.html,
+// TouchKeyboardMouse.dc.html, TouchPointer.dc.html): a layout is a list of
+// placed controls, each with an id the dev driver's `touch:` names, a kind,
+// its actions (HostIOKit InputAction), a label and a behaviour. A control is
+// placed in the view's safe area (the screen less the notch or Dynamic Island
+// and the home indicator, on whichever side they are) by an anchor (a corner,
+// an edge's middle or the centre), the offset of its centre from there and its
+// size, in points, so one layout fits every iPhone in either landscape
+// orientation; one larger than the safe area is cut to it, and one that would
+// reach out of it is moved back in. A floating stick's zone is a corner of the
+// safe area, moved by an offset (0 when left out, so a layout saved without one
+// reads the same).
+//
+// The kinds (ControlKind) and what TouchControls makes of them:
+//
+// - `button`: one action, held, toggled or repeated (`behaviour`).
+// - `stick`: `pad:leftStick` or `pad:rightStick`, or four actions (up, down,
+//   left, right) pressed as it leans: the Keyboard & mouse layout's W A S D
+//   (TouchTarget.Kind.keyStick). Either may float in a zone.
+// - `dpad`: four actions, up, down, left, right.
+// - `lookArea`: `mouse:move`; a drag on it moves the mouse. Under every other
+//   control, so with the size of the screen it is "anywhere free".
+// - `pointer`: `mouse:left`; Point & click's surface, tap to click or a
+//   trackpad, with a magnifier while a finger is down. Under every other control.
+// - `tool`: no action; a side-bar tool (`tool`, HostIOKit PointerTool) that
+//   changes what the pointer surface does: right click, hover, scroll, or the
+//   trackpad mode.
+//
+// The touch keyboard is a button with `playport:keyboard`. The presets:
+// `gamepad(dpad:rightStick:)`, `keyboardMouse()` and `pointClick()`
+// (OnScreenLayout, Controls.swift).
+//
 // A saved layout carries `version`; any other than this build's is refused, and
-// the caller uses a preset instead (no build saved a version 1 layout).
+// the caller uses a preset instead (no build saved a version 1 or 2 layout:
+// 2 placed controls in the safe area, 3 added phase 4's kinds).
 //
 // `targets` turns a layout into what HostIOKit's TouchControls hit-tests, at
 // the view's size and safe-area insets.
@@ -83,10 +106,17 @@ extension TouchRect {
 public enum ControlKind: String, Codable, CaseIterable, Sendable {
     /// One action.
     case button
-    /// One stick action (`pad:leftStick`, `pad:rightStick`).
+    /// One stick action (`pad:leftStick`, `pad:rightStick`), or four actions
+    /// pressed as it leans: up, down, left, right (W S A D).
     case stick
     /// Four actions: up, down, left, right.
     case dpad
+    /// `mouse:move`: a finger dragged on it moves the mouse (Keyboard & mouse's look area).
+    case lookArea
+    /// `mouse:left`: Point & click's pointer surface.
+    case pointer
+    /// No action: a side-bar tool for the pointer surface (`Control.tool`).
+    case tool
 }
 
 /// Where a floating stick starts: a width × height rectangle, in points, in a
@@ -132,16 +162,18 @@ public struct Control: Codable, Equatable, Sendable, Identifiable {
     public var width: Double, height: Double
     /// A stick that starts where the thumb lands anywhere in this part of the screen.
     public var floatingZone: ControlZone?
+    /// A `tool` control's tool.
+    public var tool: PointerTool?
 
     public init(id: String, kind: ControlKind = .button, actions: [InputAction], label: String,
                 behaviour: TouchBehaviour = .hold, anchor: ControlAnchor, x: Double, y: Double,
-                width: Double, height: Double, floatingZone: ControlZone? = nil) {
+                width: Double, height: Double, floatingZone: ControlZone? = nil, tool: PointerTool? = nil) {
         self.id = id; self.kind = kind; self.actions = actions; self.label = label; self.behaviour = behaviour
         self.anchor = anchor; self.x = x; self.y = y; self.width = width; self.height = height
-        self.floatingZone = floatingZone
+        self.floatingZone = floatingZone; self.tool = tool
     }
 
-    enum CodingKeys: String, CodingKey { case id, kind, actions, label, behaviour, anchor, x, y, width, height, floatingZone }
+    enum CodingKeys: String, CodingKey { case id, kind, actions, label, behaviour, anchor, x, y, width, height, floatingZone, tool }
 
     /// `label` and `behaviour` may be left out (the id, hold).
     public init(from decoder: Decoder) throws {
@@ -157,13 +189,16 @@ public struct Control: Codable, Equatable, Sendable, Identifiable {
         width = try c.decode(Double.self, forKey: .width)
         height = try c.decode(Double.self, forKey: .height)
         floatingZone = try c.decodeIfPresent(ControlZone.self, forKey: .floatingZone)
+        tool = try c.decodeIfPresent(PointerTool.self, forKey: .tool)
     }
 
-    /// Where it is in a view of width × height with these safe-area insets: kept inside the safe area.
+    /// Where it is in a view of width × height with these safe-area insets: cut
+    /// to the safe area and kept inside it.
     public func frame(width w: Double, height h: Double, insets: ControlInsets = .zero) -> TouchRect {
         let area = insets.area(width: w, height: h)
         let a = anchor.point(in: area)
-        return TouchRect(x: a.x + x - width / 2, y: a.y + y - height / 2, width: width, height: height).kept(in: area)
+        let cw = min(width, area.width), ch = min(height, area.height)
+        return TouchRect(x: a.x + x - cw / 2, y: a.y + y - ch / 2, width: cw, height: ch).kept(in: area)
     }
 
     /// Why it cannot be used, nil when it can.
@@ -179,12 +214,21 @@ public struct Control: Codable, Equatable, Sendable, Identifiable {
             guard actions.count == 1 else { return "\(id): a button has one action" }
             if case .pad(let p) = actions[0], p.isStick { return "\(id): a stick action needs a stick" }
         case .stick:
-            guard actions.count == 1, case .pad(let p) = actions[0], p.isStick else {
-                return "\(id): a stick's action is pad:leftStick or pad:rightStick"
+            let pad = actions.count == 1 && { if case .pad(let p) = actions[0] { p.isStick } else { false } }()
+            let four = actions.count == 4 && !actions.contains { if case .pad(let p) = $0 { p.isStick } else { false } }
+            guard pad || four else {
+                return "\(id): a stick's action is pad:leftStick or pad:rightStick, or four: up, down, left, right"
             }
         case .dpad:
             guard actions.count == 4 else { return "\(id): a d-pad has four actions: up, down, left, right" }
+        case .lookArea:
+            guard actions == [.mouse(.move)] else { return "\(id): a look area's action is mouse:move" }
+        case .pointer:
+            guard actions == [.mouse(.left)] else { return "\(id): a pointer surface's action is mouse:left" }
+        case .tool:
+            guard tool != nil, actions.isEmpty else { return "\(id): a tool has a tool and no action" }
         }
+        if tool != nil, kind != .tool { return "\(id): only a tool has a tool" }
         if let z = floatingZone {
             guard kind == .stick else { return "\(id): only a stick floats" }
             guard z.width > 0, z.height > 0, z.width.isFinite, z.height.isFinite, z.x.isFinite, z.y.isFinite else {
@@ -197,7 +241,7 @@ public struct Control: Codable, Equatable, Sendable, Identifiable {
 
 public struct ControlLayout: Codable, Equatable, Sendable {
     /// The layout format this build writes and reads.
-    public static let currentVersion = 2
+    public static let currentVersion = 3
 
     public var version: Int
     public var controls: [Control]
@@ -214,7 +258,7 @@ public struct ControlLayout: Codable, Equatable, Sendable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         version = try c.decode(Int.self, forKey: .version)
-        // Version 2 placed controls in the safe area and floating zones in points.
+        // Version 2 placed controls in the safe area and floating zones in points; 3 added phase 4's kinds.
         guard version == Self.currentVersion else {
             throw DecodingError.dataCorruptedError(forKey: .version, in: c,
                                                    debugDescription: "layout version \(version); this build reads \(Self.currentVersion)")
@@ -244,10 +288,17 @@ public struct ControlLayout: Codable, Equatable, Sendable {
             case .button:
                 kind = .button(c.actions[0], c.behaviour)
             case .stick:
-                guard case .pad(let stick) = c.actions[0] else { fatalError("checked by problem") }
-                kind = .stick(stick, zone: c.floatingZone?.frame(in: area))
+                let zone = c.floatingZone?.frame(in: area)
+                if case .pad(let stick) = c.actions[0] { kind = .stick(stick, zone: zone) } else { kind = .keyStick(c.actions, zone: zone) }
             case .dpad:
                 kind = .dpad(c.actions)
+            case .lookArea:
+                kind = .look
+            case .pointer:
+                kind = .pointer(view: TouchRect(x: 0, y: 0, width: width, height: height))
+            case .tool:
+                guard let tool = c.tool else { fatalError("checked by problem") }
+                kind = .tool(tool)
             }
             return TouchTarget(id: c.id, kind: kind, frame: frame)
         }
@@ -320,5 +371,67 @@ public struct ControlLayout: Codable, Equatable, Sendable {
                     width: face, height: face),
         ]
         return ControlLayout(controls: controls)
+    }
+
+    /// A surface's size: larger than any safe area, so it is cut to the whole of it.
+    static let wholeArea = 4000.0
+
+    /// The Keyboard & mouse layout (TouchKeyboardMouse.dc.html), in the safe
+    /// area of every iPhone (TouchLayoutsTests checks each):
+    ///
+    /// - The look area fills the safe area under everything: a drag anywhere
+    ///   free looks. There is no Aim button: gyro aim aims by itself.
+    /// - Esc, Tab and the touch keyboard's key in the top left corner; 1–4 in the top right.
+    /// - The W A S D stick floats in the Gamepad layout's left zone.
+    /// - Fire (the left button) in the lower right corner, with Use (E),
+    ///   Reload (R) and Jump (Space) around it, under the right thumb.
+    public static func keyboardMouse() -> ControlLayout {
+        let zoneWidth = 210.0, zoneHeight = 126.0
+        var controls = [
+            Control(id: "look", kind: .lookArea, actions: [.mouse(.move)], label: "Look", anchor: .center, x: 0, y: 0,
+                    width: wholeArea, height: wholeArea),
+            Control(id: "esc", actions: [.key(0x1B, [])], label: "Esc", anchor: .topLeading, x: 30, y: 22, width: 52, height: 30),
+            Control(id: "tab", actions: [.key(0x09, [])], label: "Tab", anchor: .topLeading, x: 88, y: 22, width: 52, height: 30),
+            Control(id: "keyboard", actions: [.playport(.keyboard)], label: "⌨", anchor: .topLeading, x: 142, y: 22,
+                    width: 44, height: 30),
+        ]
+        for n in 1...4 {
+            controls.append(Control(id: "\(n)", actions: [.key(UInt8(0x30 + n), [])], label: "\(n)", anchor: .topTrailing,
+                                    x: -26 - Double(4 - n) * 40, y: 22, width: 36, height: 30))
+        }
+        controls += [
+            Control(id: "move", kind: .stick, actions: [.key(0x57, []), .key(0x53, []), .key(0x41, []), .key(0x44, [])],
+                    label: "WASD", anchor: .bottomLeading, x: zoneWidth / 2, y: -zoneHeight / 2, width: 104, height: 104,
+                    floatingZone: ControlZone(anchor: .bottomLeading, width: zoneWidth, height: zoneHeight)),
+            Control(id: "use", actions: [.key(0x45, [])], label: "Use", anchor: .bottomTrailing, x: -150, y: -83, width: 50, height: 50),
+            Control(id: "reload", actions: [.key(0x52, [])], label: "Reload", anchor: .bottomTrailing, x: -126, y: -137,
+                    width: 46, height: 46),
+            Control(id: "jump", actions: [.key(0x20, [])], label: "Jump", anchor: .bottomTrailing, x: -71, y: -166, width: 56, height: 56),
+            Control(id: "fire", actions: [.mouse(.left)], label: "Fire", anchor: .bottomTrailing, x: -58, y: -75, width: 76, height: 76),
+        ]
+        return ControlLayout(controls: controls)
+    }
+
+    /// The Point & click layout (TouchPointer.dc.html): the pointer surface fills
+    /// the safe area under everything; the Tap to click / Trackpad switch in the
+    /// top right corner; the side bar at the left edge's middle, top to bottom:
+    /// right click, hover, scroll, the touch keyboard and Esc.
+    public static func pointClick() -> ControlLayout {
+        let side = 44.0, step = 52.0
+        func bar(_ i: Int, _ id: String, _ label: String, tool: PointerTool? = nil, actions: [InputAction] = []) -> Control {
+            Control(id: id, kind: tool == nil ? .button : .tool, actions: actions, label: label, anchor: .leading, x: 30,
+                    y: Double(i - 2) * step, width: side, height: side, tool: tool)
+        }
+        return ControlLayout(controls: [
+            Control(id: "pointer", kind: .pointer, actions: [.mouse(.left)], label: "Pointer", anchor: .center, x: 0, y: 0,
+                    width: wholeArea, height: wholeArea),
+            Control(id: "mode", kind: .tool, actions: [], label: "Trackpad", anchor: .topTrailing, x: -105, y: 22,
+                    width: 210, height: 32, tool: .trackpad),
+            bar(0, "rightClick", "Right", tool: .rightClick),
+            bar(1, "hover", "Hover", tool: .hover),
+            bar(2, "scroll", "Scroll", tool: .scroll),
+            bar(3, "keyboard", "Keys", actions: [.playport(.keyboard)]),
+            bar(4, "esc", "Esc", actions: [.key(0x1B, [])]),
+        ])
     }
 }

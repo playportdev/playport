@@ -1,0 +1,58 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 1 Nov 2026 15:17:19 +0100
+Subject: [PATCH] ntdll: tell FEX of an executable view of a plain section on
+ iOS
+
+FEX decodes guest code only inside its executable intervals. The ARM64EC
+NtMapViewOfSection wrappers notify it of an image's view, and nothing
+else: a view of a plain section mapped executable (no NtProtectVirtualMemory
+after it) never reached FEX. World of Warcraft's x64 client maps a
+pagefile section twice, read-write and read-execute, writes its code
+through the first and calls into the second: FEX decoded NOEXEC at the
+first instruction there, raised NoExecOp, and Wow_loader.dll's
+initialisation died with c0000005 (run 20261101T151452).
+
+notify_map_view_of_section now passes an executable view of a section
+that is not an image to FEX's NotifyMemoryProtect as the protection
+change it is, and returns. An image's view goes on as before.
+
+Linear: PLA-516
+Class: upstream-bug
+Evidence: docs/evidence/2026-11-01-wow-x64-fex.md
+Offered-upstream: not yet; upstream notifies an image's view only, as here before
+---
+ dlls/ntdll/signal_arm64ec.c | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
+index cca4fddde13..fe73b7649b6 100644
+--- a/dlls/ntdll/signal_arm64ec.c
++++ b/dlls/ntdll/signal_arm64ec.c
+@@ -1943,6 +1943,23 @@ static void notify_map_view_of_section( HANDLE handle, void *addr, SIZE_T size,
+         }
+     }
+     if (!pNotifyMapViewOfSection) return;
++    /* Playport (PLA-516, decision 0177): a view of a plain section mapped
++     * executable is guest code too. FEX decodes only what its executable
++     * intervals cover, and only an image's view reaches it below, so World of
++     * Warcraft's x64 client, which maps a pagefile section read-execute and
++     * writes its code through a second, read-write view, decoded NOEXEC at the
++     * first instruction there. Such a view is told to FEX as the protection
++     * change it is; an image's view goes on as before. */
++    if ((protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY))
++        && pNotifyMemoryProtect && NtQuerySection( handle, SectionImageInformation, &info, sizeof(info), NULL ))
++    {
++        static int exec_views;
++        if (exec_views < 20)
++        { exec_views++; ERR( "[map-notify] executable view of a plain section addr=%p size=%p prot=%x: told to FEX\n",
++                             addr, (void *)size, protect ); }
++        pNotifyMemoryProtect( addr, size, protect, TRUE, STATUS_SUCCESS );
++        return;
++    }
+     if (!NtCurrentTeb()->Tib.ArbitraryUserPointer)
+     {
+         static int skip_aup;
+-- 
+2.56.0
+

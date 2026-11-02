@@ -1,0 +1,93 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sat, 31 Oct 2026 21:03:28 +0100
+Subject: [PATCH] ntdll: store a native ARM64 module's TLS index into its
+ JIT-pool copy
+
+0003 stores each module's TLS slot into the JIT-pool copy its code runs
+from, but only in the ARM64EC ntdll. A plain ARM64 child (madeira-unix
+0249) runs the aarch64 ntdll, which had no forward pool hook, so its
+modules' pool copies kept the image's initial _tls_index of -1. The ARM64
+Direct3D 12 probe died on the first thread-local access in d3d12core.dll
+(vkd3d_address_binding_tracker_mark_user_thread: ldr x8, [x9, x8, lsl #3]
+with x8 = 0xffffffff, a read at ThreadLocalStoragePointer + 0x7fffffff8).
+
+The aarch64 ntdll now has xlate_ios_jit and exports
+p_ios_jit_translate_addr, which loader_ios.c already fills for the child
+ntdll, and alloc_tls_slot stores the slot through it on both builds.
+ARM64EC and i386 ntdll.dll are byte-identical to the build before.
+
+Linear: PLA-518
+Class: ios-port
+Evidence: docs/evidence/2026-10-30-arm64-d3d12.md
+Offered-upstream: no
+---
+ dlls/ntdll/loader.c       |  8 ++++----
+ dlls/ntdll/ntdll.spec     |  2 +-
+ dlls/ntdll/signal_arm64.c | 20 ++++++++++++++++++++
+ 3 files changed, 25 insertions(+), 5 deletions(-)
+
+diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
+index a369cda04e0..f18ebbbc969 100644
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -2240,11 +2240,11 @@ static BOOL alloc_tls_slot( LDR_DATA_TABLE_ENTRY *mod )
+     if (thread) NtClose( thread );
+ 
+     *(DWORD *)dir->AddressOfIndex = i;
+-#ifdef __arm64ec__
++#if defined(__arm64ec__) || defined(__aarch64__)
+     {
+-        /* iOS: the module's code runs from its JIT-pool copy, taken at map time,
+-         * whose .data still holds the image's initial _tls_index (-1 in current
+-         * mingw-w64 CRTs). Store the slot there too. */
++        /* iOS: the module's code runs from its JIT-pool copy (ARM64EC, or ARM64 in a
++         * native child), whose .data still holds the image's initial _tls_index (-1 in
++         * current mingw-w64 CRTs), taken at map time. Store the slot there too. */
+         extern void *xlate_ios_jit( void *ptr );
+         DWORD *pool_index = xlate_ios_jit( (void *)dir->AddressOfIndex );
+ 
+diff --git a/dlls/ntdll/ntdll.spec b/dlls/ntdll/ntdll.spec
+index 43daa888548..db2ec2cf1e4 100644
+--- a/dlls/ntdll/ntdll.spec
++++ b/dlls/ntdll/ntdll.spec
+@@ -1777,7 +1777,7 @@
+ @ extern -private __wine_syscall_dispatcher
+ @ extern -private __wine_unix_call_dispatcher
+ @ extern -private -arch=arm64ec __wine_unix_call_dispatcher_arm64ec
+-@ extern -private -arch=arm64ec p_ios_jit_translate_addr
++@ extern -private -arch=arm64,arm64ec p_ios_jit_translate_addr
+ @ extern -private -arch=arm64,arm64ec p_ios_jit_reverse_translate_addr
+ @ extern -private ios_teb_tsd_offset
+ # ml1131: [xp-api] probe counters (sync.c), read by ntdll-unix
+diff --git a/dlls/ntdll/signal_arm64.c b/dlls/ntdll/signal_arm64.c
+index e7c9d176c1a..17a32b46b52 100644
+--- a/dlls/ntdll/signal_arm64.c
++++ b/dlls/ntdll/signal_arm64.c
+@@ -129,6 +129,26 @@ void *__attribute__((naked)) xlate_ios_jit_rev( void *ptr )
+          "1: ret\n\t"
+          ".seh_endproc" );
+ }
++
++/* iOS: the forward hook (PE VA → JIT-pool alias), aarch64 counterpart of
++ * xlate_ios_jit in signal_arm64ec.c. A native ARM64 module's code reads its
++ * writable sections in its pool copy, not in the PE view, so a value the
++ * loader stores for that code (the TLS index) must go there too. Unix-side
++ * loader_ios.c fills the pointer at the child ntdll's load; NULL → identity. */
++void *p_ios_jit_translate_addr = NULL;
++
++void *__attribute__((naked)) xlate_ios_jit( void *ptr )
++{
++    asm( ".seh_proc xlate_ios_jit\n\t"
++         ".seh_endprologue\n\t"
++         "cbz x0, 1f\n\t"                                 /* NULL → return NULL */
++         "adrp x16, p_ios_jit_translate_addr\n\t"
++         "ldr x16, [x16, #:lo12:p_ios_jit_translate_addr]\n\t"
++         "cbz x16, 1f\n\t"                                /* fn-ptr unset → identity */
++         "br x16\n"                                       /* tail-call unix fn */
++         "1: ret\n\t"
++         ".seh_endproc" );
++}
+ #else
+ extern void *xlate_ios_jit_rev( void *ptr );
+ #endif

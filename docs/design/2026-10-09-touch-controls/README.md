@@ -1,8 +1,11 @@
 # Touch controls, controller mapping and gyro aim
 
-**Linear:** [PLA-13](https://linear.app/playportdev/issue/PLA-13). **Status:** a
-design for the owner's review, 2026-10-09. The plan is
-[`docs/plans/2026-10-09-touch-controls.md`](../../plans/2026-10-09-touch-controls.md); there is no code yet.
+**Linear:** [PLA-13](https://linear.app/playportdev/issue/PLA-13). **Status:** shipped. This
+is the design drawn for the owner's review on 2026-10-09; what was built is decision
+[0171](../../decisions/0171-on-screen-controls-input-mapping-and-gyro.md), with phases 4–5 in
+[evidence](../../evidence/2026-10-31-touch-controls-phases-4-5.md). Where the boards differ,
+0171 and the code win: there is no Playport button (a three-finger tap opens the in-game
+menu), and a title's starting layout can come from `controls` in its compatibility default.
 
 Open `index.html` in a browser to see every board. Each `*.dc.html` is one
 874×402 landscape screen in the gamepad UI's palette
@@ -61,7 +64,7 @@ holds the defaults.
   it disconnects. "Always" and "Never" are choices in Settings.
 - **Suggested layout.** A game that reads XInput starts on Gamepad, a game that
   reads only keyboard and mouse starts on Keyboard & mouse. The person's choice
-  wins. (How Playport knows a game's input is an open question, below.)
+  wins. (How Playport knows a game's input is settled in 0171.)
 - **Merged input.** Touch controls feed player 1 (slot 0). When a physical pad
   is also in slot 0, buttons combine, triggers take the larger value, and a
   deflected physical stick wins (Madeira's `TouchGamepad` rule).
@@ -83,16 +86,3 @@ holds the defaults.
 - **Release and dev.** Everything here is for players, so it ships in both
   variants. The dev driver (`pp ui`) needs ids for each control and action
   (decision 0012).
-
-## Open questions for the owner
-
-1. **Playport button placement.** The design puts it at the top center over the game. The
-   alternative is a corner, or a two-finger tap anywhere.
-2. **Suggested layout source.** Options are a per-title table (the compatibility-defaults
-   table from decision 0074), detecting XInput use at run time, or always Gamepad until
-   the person changes it.
-3. **Sharing layouts.** Copy a layout from another game, or export and import one?
-   Not drawn; probably later.
-4. **Scope of the first cut.** Proposed order: (a) Gamepad touch layout with
-   the Playport button, (b) gyro aim, (c) the controller map, (d) Keyboard &
-   mouse and Point & click layouts and the touch keyboard, (e) the editor.

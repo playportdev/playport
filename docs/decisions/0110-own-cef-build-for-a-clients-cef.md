@@ -1,9 +1,12 @@
 # 0110: Playport supplies its own build of the CEF version a client ships, loaded in its place
 
-**Status:** accepted by the owner, 2026-10-16, with the plan's D1–D6 as recommended.
+**Status:** superseded by [0169](0169-social-club-on-rockstars-cef-in-the-stock-cef-layout.md) (owner, 2026-10-30): Social Club runs on Rockstar's own
+CEF in the stock-CEF layout. The build is removed (the plan's chunk 4, 2026-10-31, merge `b5814a58`, PLA-603):
+no IPA carries its payload, and `pp verify` fails one that does. Accepted by the owner, 2026-10-16, with the
+plan's D1–D6 as recommended.
 [PLA-370](https://linear.app/playportdev/issue/PLA-370),
 [PLA-369](https://linear.app/playportdev/issue/PLA-369),
-[plan](../plans/finished.md#own-low-address-space-cef).
+[plan](https://linear.app/playportdev/issue/PLA-370).
 
 Amended by [0150](0150-dev-single-process-social-club.md): the owner permits a
 dev-only, exact-build-guarded in-memory Social Club page-bridge patch for

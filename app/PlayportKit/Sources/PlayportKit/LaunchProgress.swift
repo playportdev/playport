@@ -46,6 +46,12 @@ public enum LaunchProgress {
     public static let jitSlow: TimeInterval = 10
     /// A dependency install running longer than this shows its seconds under the bar.
     public static let dependencySlow: TimeInterval = 10
+    /// The game's stage running longer than this shows its seconds under the bar.
+    public static let gameSlow: TimeInterval = 30
+    /// With no first frame and no guest window by then, the launch screen uncovers the title's
+    /// screen this long after the game started: a game whose frames never pass the game layer still
+    /// shows. A Play may hold it longer (BattleNetPlay.Launch.uncoverWithoutFrame).
+    public static let uncoverWithoutFrame: TimeInterval = 30
 
     /// The bar's span per stage, and how long the stage usually takes.
     static func span(_ s: LaunchStage) -> (from: Double, to: Double, usual: TimeInterval) {
@@ -94,7 +100,7 @@ public enum LaunchProgress {
     }
 
     /// What the screen says under the bar, `elapsed` seconds into `stage` (or into `part` of the
-    /// dependencies): which install of how many, and its seconds once it runs long.
+    /// dependencies): which install of how many, and its seconds once it, or the game's start, runs long.
     public static func status(_ stage: LaunchStage, part: LaunchPart? = nil, elapsed: TimeInterval = 0) -> String {
         switch stage {
         case .preparing: "Getting ready…"
@@ -104,7 +110,8 @@ public enum LaunchProgress {
             "Installing dependencies"
                 + (part.map { $0.count > 1 ? " (\($0.index) of \($0.count))" : "" } ?? "") + "…"
                 + (elapsed >= dependencySlow ? " \(Int(elapsed)) s" : "")
-        case .game, .drawing: "Starting the game…"
+        case .game: "Starting the game…" + (elapsed >= gameSlow ? " \(Int(elapsed)) s" : "")
+        case .drawing: "Starting the game…"
         }
     }
 

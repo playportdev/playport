@@ -8,6 +8,46 @@ Amends [0109](0109-chromium-switches-for-a-cef-browser.md) and
 rule covers only the installed `SocialClubHelper.exe` page bridge described here.
 It does not permit patching any other Rockstar component or build.
 
+**Amended 2026-10-30 by [0169](0169-social-club-on-rockstars-cef-in-the-stock-cef-layout.md) (owner, PLA-476):** single-process is on by default, in release
+too, with the stock-CEF layout and no keys. Built 2026-10-31 (the plan's chunk 4, `d1aff807`, `1424a0ac`,
+PLA-602): `playport_sc_single_enabled` is on in both builds, and only a dev build's `env.PLAYPORT_SC_SINGLE=0`
+turns it off; "Off by default, dev only" below is the record of 2026-10-20. The exact-build guard, the
+page-bridge exception and the multi-process fallback are unchanged.
+
+**Amended 2026-10-30 (owner, PLA-476):** a verified browser also gets
+`--disable-component-update` unless its command line has it, as
+[0114](0114-trim-social-clubs-chromium-and-the-launchers-threads.md)'s amendment
+(`patches/cef` 0002) gives Playport's CEF. The stock helper's component updater asks
+for BITS about 63 s after each helper starts. Wine's COM then starts an i386
+`syswow64\dllhost.exe` surrogate, which finds no 4 GiB WoW64 window under the Social
+Club layout (36 `NO GAP FITS size=0x100010000` failures in l7). BITS is absent from
+the prefix, so the activation can never succeed. When a window did fit (l3–l6), the
+dllhost crashed in its own init and its 4 GiB window was kept for the rest of the run
+([evidence, l7](../evidence/2026-10-29-sc-stock-cef-probe.md#l7-wait-detach-decision-0166)).
+
+**Amended again 2026-10-30 (owner, PLA-476):** a verified browser also gets `--disable-gpu` and
+`--disable-gpu-compositing`, each unless its command line has it. `--in-process-gpu` is not
+added: under `--single-process` the GPU service already runs as a thread of the browser.
+- Until now a verified browser got none of
+  [0109](0109-chromium-switches-for-a-cef-browser.md)'s GPU switches, because madeira-unix 0190 skips
+  `chromium_policy` for it. Both helpers therefore loaded ANGLE and Direct3D (l11 `[img-map]`:
+  `libglesv2` 7.8 MiB read, `d3d11` 6, `D3DCompiler_47` 4.5, `dxgi` 3.4, and wined3d). That costs
+  reads, FEX translation and GL state in each helper: about 20–60 MiB in the game's helper (inferred).
+- 0109 chose these switches because they worked under desktop Wine: Chromium draws in software and
+  needs no GPU process. Social Club rendered with them multi-process, in the launcher and in the game.
+- 0111's `--enable-features=NetworkServiceInProcess2,…` is not added: in a single process the network
+  service already runs in the browser.
+- The `[sc-single] verified browser` line ends "…, component update off, GPU off".
+- **Risk.** Social Club has not been seen rendering with these switches under `--single-process`
+  with off-screen rendering. If it asks CEF for shared-texture paint, the sign-in overlay may be blank
+  (`SC_INIT_ERR_WEBSITE_FAILED_LOAD`).
+- **Proof.** The next layout run must show:
+  - Social Club drawn and signed in (`Signed in online`) and the Story tab;
+  - the game's helper without the GPU DLLs in its `[img-map]` lines (or which remain);
+  - its `[proc-mem]` row against l11.
+
+  If the sign-in fails, the switch pair is reverted and this amendment is recorded as not accepted.
+
 ## Decision
 
 - **Off by default, dev only.** The existing title Runtime options UI accepts
@@ -26,7 +66,9 @@ It does not permit patching any other Rockstar component or build.
 - **One helper process per browser.** A verified browser gets `--single-process`,
   BackupRefPtr disabled (merged into its existing feature list), `--js-flags=--jitless`
   unless it already supplies its own JS flags, and `--no-proxy-server` unless
-  it supplies a proxy. Every verified `--type=` helper child is refused with
+  it supplies a proxy. *(Amended 2026-10-30: and `--disable-component-update` unless
+  present.)* *(Amended again 2026-10-30: and `--disable-gpu` and
+  `--disable-gpu-compositing`, each unless present.)* Every verified `--type=` helper child is refused with
   `STATUS_ACCESS_DENIED`. Other executables and unverified helper children keep
   today's policy. No generic child blocklist or stock-CEF address-space changes.
 - **The in-memory compatibility change.** Port the helper adapter from
@@ -62,6 +104,8 @@ It does not permit patching any other Rockstar component or build.
   forged or made to succeed. Sign-in and its real result remain the helper's.
   No installed executable or DLL is changed on disk. Playport's version-matched
   CEF substitution from 0110 remains in place; no game-side libcef refusal is ported.
+  *(Amended 2026-10-31: the substitution is removed (0169, the plan's chunk 4, merge `b5814a58`); the
+  verified helper runs Rockstar's own CEF, and still no game-side libcef refusal is ported.)*
 
 ## Relationship to the memory experiments
 

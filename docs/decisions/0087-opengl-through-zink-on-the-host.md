@@ -1,7 +1,7 @@
 # 0087: OpenGL through Zink on the host
 
 **Status:** accepted for x86-64, 2026-10-11, carrying out the owner's "do Zink"
-([the plan](../plans/finished.md#opengl-through-zink), settled 2026-10-11) by the route that plan
+([the plan](https://linear.app/playportdev/issue/PLA-162), settled 2026-10-11) by the route that plan
 recommends; the worker's choices below are the conservative ones (owner away). The i386 route is
 open until the plan's chunk 3 gate amends this record.
 [PLA-162](https://linear.app/playportdev/issue/PLA-162).

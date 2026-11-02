@@ -1,0 +1,325 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: playportdev <dev@playport.dev>
+Date: Fri, 30 Oct 2026 12:30:00 +0100
+Subject: [PATCH] ntdll: detach a parked thread's alert wait, then free a view
+ only it named
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Decision 0166 (PLA-476), amending 0127, 0132 and 0143. A parked thread's
+wait address (its saved ref 52) is not its host wait, which is on the
+runtime's per-thread alert word, but a key in the app-wide RtlWaitOnAddress
+queue and the waiter registry. Kept as a register, it pinned a launcher
+helper's whole Social Club metadata view in l2-l6, and the game's helper's
+libcef then failed at that address.
+
+At a teardown, before virtual_mutex is taken, the wait of each parked thread
+of the process whose whole saved set (PPE_REFS) was captured is detached:
+the shared queue's bucket lock is tried a bounded number of times (busy keeps
+everything as before), the thread's node for (address, tid) on its own stack
+is unlinked and its address written NULL with release semantics, and its
+registry entry's address is cleared while it is still that wait. Each logs
+`[proc-end] wait-detached tid=… wait=… node=unlinked|absent|busy`. The
+release then drops the address from the thread's saved set; a view only
+dropped addresses named is freed, as a process with no parked thread frees
+it, in FEX's band too, if no saved address of any parked thread names it
+(`[proc-end] wait-only … fate=N`), and is kept whole otherwise. A view
+any register, TPIDRRO or TEB names keeps the whole-view rule. Parked
+threads stay suspended for ever; nothing resumes one. Views kept by
+earlier teardowns stay. The unix side is wine-unix 0202.
+
+Class: ios-port
+Evidence: docs/evidence/2026-10-29-sc-stock-cef-probe.md
+Offered-upstream: no
+---
+ build/ntdll-unix/pp_proc_end.h | 99 ++++++++++++++++++++++++++++++++++
+ build/ntdll-unix/virtual_ios.c | 93 +++++++++++++++++++++++++++++---
+ 2 files changed, 184 insertions(+), 8 deletions(-)
+
+diff --git a/build/ntdll-unix/pp_proc_end.h b/build/ntdll-unix/pp_proc_end.h
+index 1074e9a..ca37f4c 100644
+--- a/build/ntdll-unix/pp_proc_end.h
++++ b/build/ntdll-unix/pp_proc_end.h
+@@ -13,6 +13,14 @@
+  * Mach-suspended for ever, and counted as finished. Its TEB, stacks and every
+  * view its saved registers point into stay mapped.
+  *
++ * Its wait address is not its host wait (that is on the runtime's per-thread
++ * alert word) but a key in the app-wide RtlWaitOnAddress queue and the waiter
++ * registry. Decision 0166: at the teardown, the wait of each parked thread
++ * whose whole saved set was captured is detached from both, outside
++ * virtual_mutex, and dropped from its saved set; a view then named by no
++ * saved address of any parked thread is freed, as a process with no parked
++ * thread frees it, in FEX's band too.
++ *
+  * The rest of such a process's views in FEX's band are emptied in place
+  * (decision 0132): their pages are replaced by fresh zero-fill at the same
+  * protection, so the view, its address range and every page's protection stay
+@@ -36,6 +44,7 @@
+ #define PPE_UL_COMPARE_AND_WAIT 1             /* x0's operation: futex_wait's */
+ #define PPE_REFS                53            /* x0-x28, fp, lr, sp, pc; the guest's 16 GPRs and rip;
+                                                  TPIDRRO_EL0, its TEB and its wait address */
++#define PPE_WAIT_REF            (PPE_REFS - 1) /* a whole saved set's last: the wait address */
+ 
+ /* What the abort read of a killed thread it has stopped. */
+ struct ppe_thread_state
+@@ -185,6 +194,96 @@ static inline int ppe_take_view( void **view_owner, const void *owner )
+     return 1;
+ }
+ 
++/* A parked thread's saved addresses (ios_proc_end_note_parked): written once
++ * on the server's thread, then ready; afterwards only its teardown drops its
++ * detached wait address, under virtual_mutex. */
++enum ppe_wait_detach
++{
++    PPE_WAIT_QUEUED,      /* not tried yet */
++    PPE_WAIT_DETACHING,   /* claimed by a teardown, outside virtual_mutex */
++    PPE_WAIT_DETACHED,    /* out of the shared queue and the registry: refs[PPE_WAIT_REF] names nothing */
++    PPE_WAIT_KEPT,        /* the bucket stayed busy: its wait address keeps naming its view, as before */
++};
++
++struct ppe_parked
++{
++    void    *teb;
++    unsigned nrefs;
++    uint64_t refs[PPE_REFS];
++    int      ready;         /* atomic: the fields above are written */
++    int      wait_detach;   /* atomic: enum ppe_wait_detach */
++};
++
++/* Whether a parked thread's wait is detached at its process's teardown
++ * (decision 0166): only with its whole saved set, so refs[PPE_WAIT_REF] is its
++ * wait address (the guest's registers, read only when its state was readable,
++ * and TPIDRRO_EL0 come before it), and only once. */
++static inline int ppe_wait_detachable( const struct ppe_parked *t )
++{
++    return t->nrefs == PPE_REFS && t->refs[PPE_WAIT_REF] &&
++           __atomic_load_n( &t->wait_detach, __ATOMIC_ACQUIRE ) == PPE_WAIT_QUEUED;
++}
++
++/* What ios_detach_parked_wait (unix sync.c) found of the thread's queue node. */
++enum ppe_wait_node { PPE_NODE_BUSY = -1, PPE_NODE_ABSENT = 0, PPE_NODE_UNLINKED = 1 };
++
++static inline const char *ppe_wait_node_name( int node )
++{
++    return node == PPE_NODE_UNLINKED ? "unlinked" : node == PPE_NODE_ABSENT ? "absent" : "busy";
++}
++
++/* The detach's state from its result: busy keeps the wait address. */
++static inline enum ppe_wait_detach ppe_wait_detach_result( int node )
++{
++    return node == PPE_NODE_UNLINKED || node == PPE_NODE_ABSENT ? PPE_WAIT_DETACHED : PPE_WAIT_KEPT;
++}
++
++/* The `[proc-end] wait-detached` line. */
++static inline int ppe_wait_detached_row( char *buf, size_t size, unsigned tid, uint64_t wait, int node )
++{
++    return snprintf( buf, size, "[proc-end] wait-detached tid=%04x wait=0x%llx node=%s", tid,
++                     (unsigned long long)wait, ppe_wait_node_name( node ) );
++}
++
++/* At the teardown, under virtual_mutex: drop a detached wait address from the
++ * saved set, into *dropped. 1 when one was dropped. */
++static inline int ppe_drop_wait( struct ppe_parked *t, uint64_t *dropped )
++{
++    if (t->nrefs != PPE_REFS || !t->refs[PPE_WAIT_REF] ||
++        __atomic_load_n( &t->wait_detach, __ATOMIC_ACQUIRE ) != PPE_WAIT_DETACHED)
++        return 0;
++    *dropped = t->refs[PPE_WAIT_REF];
++    t->refs[PPE_WAIT_REF] = 0;
++    return 1;
++}
++
++/* Whether a saved address of any of n parked threads, of any process, lies in
++ * [base, base + size). One still being written names every view. */
++static inline int ppe_parked_names( uint64_t base, uint64_t size, const struct ppe_parked *t, unsigned n )
++{
++    unsigned i;
++    for (i = 0; i < n; i++)
++        if (!__atomic_load_n( &t[i].ready, __ATOMIC_ACQUIRE ) ||
++            ppe_referenced( base, size, t[i].refs, t[i].nrefs ))
++            return 1;
++    return 0;
++}
++
++/* The fate of a dead process's view once its parked threads' detached wait
++ * addresses are dropped (decision 0166). fate is ppe_view_fate's over its
++ * saved addresses without them, and dropped are those this teardown dropped.
++ * A view only they named is freed, the fate a process with no parked thread
++ * gives it (ppe_view_fate with none parked), in FEX's band too, only if no
++ * saved address of any parked thread, all n of them, names it; otherwise it
++ * is kept whole, as before. Any other view keeps its fate. */
++static inline enum ppe_fate ppe_fate_after_detach( enum ppe_fate fate, uint64_t base, uint64_t size,
++                                                   const uint64_t *dropped, unsigned ndropped,
++                                                   const struct ppe_parked *all, unsigned n )
++{
++    if (fate == PPE_KEEP_REF || !ppe_referenced( base, size, dropped, ndropped )) return fate;
++    return ppe_parked_names( base, size, all, n ) ? PPE_KEEP_REF : PPE_FREE;
++}
++
+ /* What a teardown did, for its `[proc-end]` line. */
+ struct ppe_result
+ {
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 39bfc00..a3bbc63 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -17927,6 +17927,7 @@ static BOOL ios_view_owner_release_locked( void *peb )
+ }
+ 
+ static void ios_proc_end_sweep( void *self );
++static void ios_proc_end_detach_waits( void *peb );
+ 
+ /* Release the views of every queued process whose threads have all finished;
+  * never the caller's own process. PLA-416: first end the children another
+@@ -17938,6 +17939,11 @@ static void ios_view_owner_sweep(void)
+     unsigned int i;
+ 
+     ios_proc_end_sweep( self );
++    for (i = 0; i < IOS_VIEW_OWNER_DEAD_MAX; i++)
++    {
++        void *peb = __atomic_load_n( &ios_view_owner_dead[i], __ATOMIC_RELAXED );
++        if (peb && peb != self) ios_proc_end_detach_waits( peb );   /* decision 0166 */
++    }
+     for (i = 0; i < IOS_VIEW_OWNER_DEAD_MAX; i++)
+         if (__atomic_load_n( &ios_view_owner_dead[i], __ATOMIC_RELAXED )) break;
+     if (i == IOS_VIEW_OWNER_DEAD_MAX) return;
+@@ -18002,15 +18008,10 @@ void ios_view_owner_process_exit( void *peb )
+ 
+ #define IOS_PROC_END_PARKED_MAX 256
+ static struct ppe_gone ios_proc_end_gone[PPE_GONE_MAX];   /* atomic slots */
+-static struct
+-{
+-    TEB     *teb;
+-    unsigned nrefs;
+-    uint64_t refs[PPE_REFS];
+-    int      ready;
+-} ios_proc_end_parked[IOS_PROC_END_PARKED_MAX];          /* written once each */
++static struct ppe_parked ios_proc_end_parked[IOS_PROC_END_PARKED_MAX];   /* written once each */
+ static unsigned int ios_proc_end_parked_count;
+ static uint64_t ios_proc_end_refs[IOS_PROC_END_PARKED_MAX * PPE_REFS];   /* virtual_mutex */
++static uint64_t ios_proc_end_dropped[IOS_PROC_END_PARKED_MAX];            /* virtual_mutex */
+ 
+ /* The server ended pid's process: on the server's thread, lock-free. */
+ void ios_proc_end_process_gone( void *peb, unsigned int pid )
+@@ -18047,6 +18048,13 @@ static int ios_proc_end_parked_index( TEB *teb )
+     return -1;
+ }
+ 
++static unsigned int ios_proc_end_parked_seen(void)
++{
++    unsigned int n = __atomic_load_n( &ios_proc_end_parked_count, __ATOMIC_RELAXED );
++
++    return n > IOS_PROC_END_PARKED_MAX ? IOS_PROC_END_PARKED_MAX : n;
++}
++
+ /* virtual_mutex held. */
+ static void ios_proc_end_census_locked( void *peb, struct ppe_census *c )
+ {
+@@ -18062,6 +18070,64 @@ static void ios_proc_end_census_locked( void *peb, struct ppe_census *c )
+     }
+ }
+ 
++/* Decision 0166, outside virtual_mutex: a bucket lock's holder may be any
++ * thread, stopped anywhere. Before peb's views are released, detach the alert
++ * wait of each of its parked threads whose whole saved set was captured from
++ * the shared RtlWaitOnAddress queue and the waiter registry (unix sync.c), so
++ * the release drops it from the saved set (ppe_drop_wait). Only once all its
++ * threads have finished or are parked; each wait is claimed once, and a busy
++ * bucket keeps it. Parked threads stay suspended: nothing here resumes one. */
++#define IOS_PROC_END_DETACH_BATCH 32
++static void ios_proc_end_detach_waits( void *peb )
++{
++    extern int ios_detach_parked_wait( unsigned int tid, const void *addr, ULONG_PTR stack_lo, ULONG_PTR stack_hi );
++    struct { int p; unsigned int tid; uint64_t wait; ULONG_PTR stack_lo, stack_hi; } todo[IOS_PROC_END_DETACH_BATCH];
++    struct thread_data *data;
++    struct ppe_census census;
++    sigset_t sigset;
++    unsigned int n, i;
++    char row[128];
++
++    do
++    {
++        n = 0;
++        server_enter_uninterrupted_section( &virtual_mutex, &sigset );
++        ios_proc_end_census_locked( peb, &census );
++        if (ppe_all_ended( &census ) && census.parked)
++        {
++            LIST_FOR_EACH_ENTRY( data, &teb_list, struct thread_data, entry )
++            {
++                int p, expected = PPE_WAIT_QUEUED;
++
++                if (n == IOS_PROC_END_DETACH_BATCH) break;
++                if (!data->teb || data->teb->Peb != peb) continue;
++                if ((p = ios_proc_end_parked_index( data->teb )) < 0 ||
++                    !ppe_wait_detachable( &ios_proc_end_parked[p] ) ||
++                    !__atomic_compare_exchange_n( &ios_proc_end_parked[p].wait_detach, &expected,
++                                                  PPE_WAIT_DETACHING, 0, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED ))
++                    continue;
++                todo[n].p = p;
++                todo[n].tid = (unsigned int)(ULONG_PTR)data->teb->ClientId.UniqueThread;
++                todo[n].wait = ios_proc_end_parked[p].refs[PPE_WAIT_REF];
++                todo[n].stack_lo = (ULONG_PTR)data->teb->DeallocationStack;
++                todo[n].stack_hi = (ULONG_PTR)data->teb->Tib.StackBase;
++                n++;
++            }
++        }
++        server_leave_uninterrupted_section( &virtual_mutex, &sigset );
++        for (i = 0; i < n; i++)
++        {
++            int node = ios_detach_parked_wait( todo[i].tid, (const void *)(ULONG_PTR)todo[i].wait,
++                                               todo[i].stack_lo, todo[i].stack_hi );
++
++            ppe_wait_detached_row( row, sizeof(row), todo[i].tid, todo[i].wait, node );
++            dprintf( 2, "%s\n", row );
++            __atomic_store_n( &ios_proc_end_parked[todo[i].p].wait_detach, ppe_wait_detach_result( node ),
++                              __ATOMIC_RELEASE );
++        }
++    } while (n == IOS_PROC_END_DETACH_BATCH);
++}
++
+ /* virtual_mutex held. Empties a kept band view of a killed process (decision
+  * 0132): each whole host page of its committed runs is mapped over with fresh
+  * anonymous zero-fill at the protection it has now, as decommit_pages'
+@@ -18174,7 +18240,7 @@ static void ios_proc_end_release_views_locked( void *peb, const struct ppe_censu
+ {
+     struct file_view *view, *next;
+     struct thread_data *data;
+-    unsigned int nrefs = 0, nthreads = 0;
++    unsigned int nrefs = 0, nthreads = 0, ndropped = 0;
+ 
+     LIST_FOR_EACH_ENTRY( data, &teb_list, struct thread_data, entry )
+     {
+@@ -18184,6 +18250,9 @@ static void ios_proc_end_release_views_locked( void *peb, const struct ppe_censu
+         if ((p = ios_proc_end_parked_index( data->teb )) >= 0 &&
+             nrefs + ios_proc_end_parked[p].nrefs <= sizeof(ios_proc_end_refs) / sizeof(ios_proc_end_refs[0]))
+         {
++            if (ndropped < IOS_PROC_END_PARKED_MAX &&
++                ppe_drop_wait( &ios_proc_end_parked[p], &ios_proc_end_dropped[ndropped] ))
++                ndropped++;
+             memcpy( ios_proc_end_refs + nrefs, ios_proc_end_parked[p].refs,
+                     ios_proc_end_parked[p].nrefs * sizeof(uint64_t) );
+             if (nthreads < IOS_PROC_END_PARKED_MAX)
+@@ -18222,6 +18291,13 @@ static void ios_proc_end_release_views_locked( void *peb, const struct ppe_censu
+             continue;
+         }
+         fate = ppe_view_fate( cls, census->parked, base, view->size, ios_proc_end_refs, nrefs );
++        if (fate != PPE_KEEP_REF && ndropped && ppe_referenced( base, view->size, ios_proc_end_dropped, ndropped ))
++        {
++            fate = ppe_fate_after_detach( fate, base, view->size, ios_proc_end_dropped, ndropped,
++                                          ios_proc_end_parked, ios_proc_end_parked_seen() );
++            dprintf( 2, "[proc-end] wait-only peb=%p view=%p+0x%llx fate=%d (decision 0166)\n", peb,
++                     (void *)base, (unsigned long long)view->size, fate );
++        }
+         if (fate == PPE_KEEP_REF || ppsc_in_slot( base, view->size ))
+             ios_proc_end_log_keep_ref( peb, base, view->size, fate, nthreads );
+         if (fate != PPE_FREE)
+@@ -18327,6 +18403,7 @@ static void ios_proc_end_sweep( void *self )
+         result.footprint_before = ios_proc_end_footprint();
+         ios_fd_cache_release( peb );
+         result.pool = ios_jit_reclaim_process_bytes( peb );
++        ios_proc_end_detach_waits( peb );   /* decision 0166 */
+         server_enter_uninterrupted_section( &virtual_mutex, &sigset );
+         ios_proc_end_census_locked( peb, &census );
+         ios_proc_end_release_locked( peb, &census, &result );

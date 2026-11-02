@@ -142,14 +142,15 @@ class UiEnvTest(unittest.TestCase):
             self.assertEqual(m.parse(["--action", f"open:{screen}"]).action, [f"open:{screen}"])
         self.assertEqual(m.parse(["--action", "open:licences#wine"]).action, ["open:licences#wine"])
         with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
-            m.parse(["--action", "open:installed"])   # the old tab, now open:library
-        for ok in ("pad:a", "pad:rb", "pad:down+down+a", "pad:menu+b", "pad:lb+right"):
+            m.parse(["--action", "open:steam"])   # Steam's store button is open:games
+        for ok in ("pad:a", "pad:rb", "pad:lt", "pad:down+down+a", "pad:menu+b", "pad:lb+right"):
             self.assertTrue(m.ACTION_RE.match(ok), ok)
-        for bad in ("pad:", "pad:start", "pad:a+", "pad:a b", "pad:A"):
+        for bad in ("pad:", "pad:start", "pad:a+", "pad:a b", "pad:A", "pad:l2"):
             self.assertFalse(m.ACTION_RE.match(bad), bad)
 
-    def test_open_library_names_each_chip_the_app_has(self):
-        """open:library#CHIP: pp ui's chips are PlayportKit's LibraryFilter cases, Xbox's too (PLA-490)."""
+    def test_open_reaches_every_store_in_the_column(self):
+        """open:SCREEN reaches each of PlayportKit's LibraryFilter cases (decision 0178), the dev
+        app's Xbox store too (PLA-490): All is open:library, Steam open:games."""
         m = load()
         path = os.path.join(TOOLS, "..", "app", "PlayportKit", "Sources", "PlayportKit", "LibraryList.swift")
         with open(path) as f:
@@ -158,10 +159,11 @@ class UiEnvTest(unittest.TestCase):
         self.assertIsNotNone(body, "LibraryFilter's case list moved: update this test")
         cases = re.findall(r"^\s*case (\w+)$", body.group(1), re.M)
         self.assertIn("xbox", cases)
-        self.assertEqual(list(m.LIBRARY_CHIPS), cases)
-        for chip in m.LIBRARY_CHIPS:
-            self.assertEqual(m.parse(["--action", f"open:library#{chip}"]).action, [f"open:library#{chip}"])
-        for bad in ("open:library#Xbox", "open:library#local", "open:library#", "open:games#xbox"):
+        for case in cases:
+            screen = {"all": "library", "steam": "games"}.get(case, case)
+            self.assertIn(screen, m.SCREENS, case)
+            self.assertEqual(m.parse(["--action", f"open:{screen}"]).action, [f"open:{screen}"])
+        for bad in ("open:library#xbox", "open:Xbox", "open:xbox#library"):
             with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
                 m.parse(["--action", bad])
 
@@ -226,6 +228,14 @@ class UiEnvTest(unittest.TestCase):
             self.assertEqual(m.parse(["--action", f"set:donorPoolMB={v}"]).action, [f"set:donorPoolMB={v}"])
         self.assertFalse(m.ACTION_RE.match("set:donorPoolMB=auto,play:app-367520"))
 
+    def test_set_takes_an_empty_value(self):
+        # set:KEY= stores "" (UIDriver keeps the empty value), as --help documents for
+        # set:controls.suggestedLayoutOffered= (forgets the offered layouts) and the Social Club keys.
+        m = load()
+        for a in ("set:controls.suggestedLayoutOffered=", "set:endGameSocialClubAfterSignIn="):
+            self.assertEqual(m.parse(["--action", a]).action, [a])
+        self.assertFalse(m.ACTION_RE.match("set:=x"))
+
     def test_memory_probe_sizes_are_bounded(self):
         m = load()
         for size in (64, 2048, 4096):
@@ -264,6 +274,49 @@ class UiEnvTest(unittest.TestCase):
                    "verify:epic-Hazelnut", "uninstall:epic-65d73e3be8824829b5b788bd849b6559", "repair:app-1174180"):
             self.assertTrue(m.ACTION_RE.match(ok), ok)
         for bad in ("queue:app-2494780", "downloading:", "queue:12a", "install:epic-", "install:epic-a/b", "install:gog-x", "repair:1174180"):
+            self.assertFalse(m.ACTION_RE.match(bad), bad)
+
+    def test_battlenet_store_paths(self):
+        """PLA-519: the Battle.net store, a product page, its region picker, install with pause and
+        resume, removal, and a size larger than free space for the refusal."""
+        m = load()
+        for ok in ("open:battlenet", "open:bnet-wow_classic_era", "region:bnet-wow_classic_era", "region:bnet-wow=eu",
+                   "install:bnet-wow_classic_era", "pause-resume:bnet-wow_classic_era", "uninstall:bnet-wow_classic_era",
+                   "set:battlenetInstallBytes=999000000000", "set:battlenetInstallBytes=0"):
+            self.assertEqual(m.parse(["--action", ok]).action, [ok])
+        for bad in ("install:bnet-", "install:bnet-WoW", "install:bnet-a/b", "region:bnet-wow=cn", "region:bnet-wow=",
+                    "region:wow", "pause-resume:bnet-", "region:epic-Hazelnut"):
+            self.assertFalse(m.ACTION_RE.match(bad), bad)
+
+    def test_battlenet_installed_region_and_language_paths(self):
+        """PLA-520: an installed product's region changed in place and its language through Downloads,
+        or either picker open."""
+        m = load()
+        for ok in ("region:bnet-wow_classic_era=eu", "region:bnet-wow_classic_era", "locale:bnet-wow_classic_era=deDE",
+                   "locale:bnet-wow_classic_era"):
+            self.assertEqual(m.parse(["--action", ok]).action, [ok])
+        for bad in ("locale:bnet-", "locale:bnet-wow=de", "locale:bnet-wow=dede", "locale:bnet-wow=deDE1", "locale:bnet-wow=",
+                    "locale:wow=deDE", "locale:epic-Hazelnut=deDE"):
+            self.assertFalse(m.ACTION_RE.match(bad), bad)
+
+    def test_battlenet_notice_and_play_paths(self):
+        """PLA-514: a Battle.net copy's ban-risk notice, accepted or declined as the player does, and
+        its Play."""
+        m = load()
+        for ok in ("notice:bnet-wow=accept", "notice:bnet-wow_classic_era=decline", "play:bnet-wow"):
+            self.assertEqual(m.parse(["--action", ok]).action, [ok])
+        for bad in ("notice:bnet-wow", "notice:bnet-wow=yes", "notice:bnet-=accept", "notice:app-367520=accept",
+                    "notice:bnet-WoW=accept"):
+            self.assertFalse(m.ACTION_RE.match(bad), bad)
+
+    def test_battlenet_update_check_path(self):
+        """PLA-521: an installed product's Check for update from its page, or =install, which also
+        downloads the update it found through Downloads."""
+        m = load()
+        for ok in ("update:bnet-wow", "update:bnet-wow_classic_era", "update:bnet-wow=install"):
+            self.assertEqual(m.parse(["--action", ok]).action, [ok])
+        for bad in ("update:bnet-", "update:bnet-WoW", "update:bnet-wow=", "update:bnet-wow=yes", "update:wow",
+                    "update:app-367520", "update:gog-1207658924"):
             self.assertFalse(m.ACTION_RE.match(bad), bad)
 
     def test_actions_after_a_play_run_after_the_restart(self):
@@ -310,6 +363,19 @@ class UiEnvTest(unittest.TestCase):
         self.assertFalse(m.ends_run(ui, ["open-launcher:rockstar"], None))
         self.assertTrue(m.after_play(["open-launcher:rockstar", "wait:5", "open:settings"]))
         self.assertEqual(m.pad_after_play(["open-launcher:rockstar", "pad:a"]), "pad:a")
+
+    def test_an_accepted_ban_risk_notice_is_followed_as_a_play(self):
+        """notice:bnet-CODE=accept goes on into the Play (PLA-514): the game's end, not the UI's,
+        ends the run, so --until can match; a decline starts nothing."""
+        m = load()
+        title = {"event": "title-done", "outcome": "exit=0 after_s=90"}
+        ui = {"event": "ui-done", "outcome": "ok actions=1"}
+        accept = ["notice:bnet-wow=accept"]
+        self.assertFalse(m.ends_run(ui, accept, None))
+        self.assertTrue(m.ends_run(title, accept, None))
+        self.assertTrue(m.ends_run({"event": "ui-done", "outcome": "action=notice:bnet-wow=accept failed: x"}, accept, None))
+        self.assertTrue(m.ends_run(ui, ["notice:bnet-wow=decline"], None))
+        self.assertTrue(m.after_play(accept + ["wait:5", "open:settings"]))
 
     def test_forget_launcher_window_is_a_ui_step_not_a_play(self):
         """Settings \u203a Launchers' Forget the launcher's saved window settings (UIDriver
@@ -370,11 +436,36 @@ class UiEnvTest(unittest.TestCase):
         m = load()
         for ok in ("touch:a", "touch:dpad.right@2000", "touch:dpad.right+a@600",
                    "touch:leftStick.up+rightStick.left@10000", "menu:controls", "open:settings#controls",
+                   # Keyboard & mouse: the W A S D stick, a look drag while firing, a number key.
+                   "touch:move.up@1500", "touch:look.left+fire@400", "touch:1",
                    "open:settings#controllers"):
             self.assertTrue(m.ACTION_RE.match(ok), ok)
         for bad in ("touch:", "touch:a@", "touch:a.b", "touch:a@123456", "touch:a+", "touch:a,b", "menu:control"):
             self.assertFalse(m.ACTION_RE.match(bad), bad)
         self.assertEqual(m.in_game(["play:app-367520", "touch:a", "pad:a"], 1), 1)
+
+    def test_touch_taps_the_pointer_surface_at_a_point(self):
+        """Point & click: pointer:FX:FY is a finger on the pointer surface at that fraction of the view; tools by id."""
+        m = load()
+        for ok in ("touch:pointer", "touch:pointer:0.25:0.6", "touch:pointer:1:0", "touch:hover+pointer:0.5:0.5@400",
+                   "touch:rightClick", "touch:mode", "touch:scroll+pointer:0.5:0.5@1000"):
+            self.assertTrue(m.ACTION_RE.match(ok), ok)
+        for bad in ("touch:pointer:0.5", "touch:pointer:1.5:0.5", "touch:pointer:0.5:0.5.up", "touch:pointer:-0.1:0.5",
+                    "touch:pointer::0.5"):
+            self.assertFalse(m.ACTION_RE.match(bad), bad)
+
+    def test_the_touch_keyboard_opens_from_the_menu_and_its_keys_are_touched(self):
+        """menu:keyboard opens the touch keyboard over the game; touch: presses its kb- keys (HostIOKit TouchKeyboard)."""
+        m = load()
+        for ok in ("menu:keyboard", "touch:kb-shift", "touch:kb-a", "touch:kb-f12", "touch:kb-ctrl+kb-alt+kb-del",
+                   "touch:kb-close", "touch:kb-backspace@1000"):
+            self.assertTrue(m.ACTION_RE.match(ok), ok)
+        for bad in ("menu:keyboards", "menu:touch-keyboard", "touch:kb-a.up.down"):
+            self.assertFalse(m.ACTION_RE.match(bad), bad)
+        run = ["play:app-620", "wait:20", "menu:open", "menu:keyboard", "touch:kb-shift", "touch:kb-h", "touch:kb-close"]
+        self.assertEqual(m.in_game(run, 1), 6)
+        self.assertFalse(m.after_play(run))
+        self.assertIn("menu:keyboard", m.__doc__)
 
     def test_gyro_plays_a_scripted_gyro_while_the_game_runs(self):
         """gyro: plays HostIOKit GyroScript steps into gyro aim (Dev/GyroDriver.swift) while the game runs."""
@@ -452,6 +543,16 @@ class UiEnvTest(unittest.TestCase):
         self.assertEqual(m.in_game(["play:app-367520", "touch:playport", "pad:a"], 1), 1)
         self.assertEqual(m.pad_after_play(["play:app-367520", "touch:playport", "pad:a"]), "pad:a")
 
+    def test_suggest_answers_the_suggested_layouts_toast_while_the_game_runs(self):
+        """suggest:accept|dismiss waits for the Keyboard & mouse offer (PlayportKit LayoutSuggestion)
+        and answers it as its buttons do; it runs while the game runs."""
+        m = load()
+        for ok in ("suggest:accept", "suggest:dismiss"):
+            self.assertTrue(m.ACTION_RE.match(ok), ok)
+        for bad in ("suggest:", "suggest:yes", "suggest:accept@100"):
+            self.assertFalse(m.ACTION_RE.match(bad), bad)
+        self.assertEqual(m.in_game(["play:app-15100", "suggest:accept", "touch:fire"], 1), 2)
+
     def test_controls_saves_a_games_on_screen_controls_before_play(self):
         m = load()
         env = m.ui_env("n1", play="app-367520", controls=("app-367520", '{"layout":"off"}'),
@@ -466,7 +567,11 @@ class UiEnvTest(unittest.TestCase):
             self.assertEqual(a.controls_pair,
                              ("app-367520", f'{{"layout":"gamepad","dpad":"on","rightStick":"{stick}"}}'))
         self.assertEqual(m.parse(["--controls", 'app-367520:{"dpad":"off"}']).controls_pair, ("app-367520", '{"dpad":"off"}'))
-        for bad in ('app-367520:{"layout":"tank"}', 'app-367520:{"opacity":3}', 'app-367520:{"x":1}', "app-367520:[]",
+        # Every layout (PlayportKit OnScreenLayout).
+        for layout in ("off", "gamepad", "keyboardMouse", "pointClick"):
+            self.assertEqual(m.parse(["--controls", f'app-620:{{"layout":"{layout}"}}']).controls_pair,
+                             ("app-620", f'{{"layout":"{layout}"}}'))
+        for bad in ('app-367520:{"layout":"tank"}', 'app-367520:{"layout":"Keyboard & mouse"}', 'app-367520:{"opacity":3}', 'app-367520:{"x":1}', "app-367520:[]",
                     'nope:{}', 'app-367520:{"dpad":"yes"}', 'app-367520:{"dpad":true}', 'app-367520:{"rightStick":"left"}',
                     'app-367520:{"rightStick":"Below A/B/X/Y"}'):
             with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
@@ -539,6 +644,67 @@ class UiEnvTest(unittest.TestCase):
                 m.parse(["--controls", "app-620:" + bad])
         self.assertIn("lookSpeed", m.__doc__)
 
+    def test_controls_carries_a_games_own_layouts(self):
+        """--controls' "layouts" is GameControls.layouts: the game's own copies of the presets, as the
+        layout editor saves them (PlayportKit ControlLayout version 3, keyed by preset name)."""
+        m = load()
+        jump = {"id": "jump", "actions": ["key:0x20"], "label": "Jump", "anchor": "bottomTrailing", "x": -71, "y": -166,
+                "width": 56, "height": 56}
+        wasd = {"id": "move", "kind": "stick", "actions": ["key:0x57", "key:0x53", "key:0x41", "key:0x44"],
+                "anchor": "bottomLeading", "x": 120, "y": -90, "width": 132, "height": 132,
+                "floatingZone": {"anchor": "bottomLeading", "width": 210, "height": 126}}
+        look = {"id": "look", "kind": "lookArea", "actions": ["mouse:move"], "anchor": "center", "x": 0, "y": 0,
+                "width": 10000, "height": 10000}
+        tool = {"id": "rc", "kind": "tool", "actions": [], "tool": "rightClick", "anchor": "leading", "x": 30, "y": 0,
+                "width": 44, "height": 44}
+        pad = {"id": "a", "actions": ["pad:a"], "behaviour": "toggle", "anchor": "bottomTrailing", "x": -60, "y": -60,
+               "width": 52, "height": 52}
+        stick = {"id": "leftStick", "kind": "stick", "actions": ["pad:leftStick"], "anchor": "bottomLeading", "x": 100,
+                 "y": -100, "width": 120, "height": 120}
+        for ok in ({"keyboardMouse": {"version": 3, "controls": [look, jump, wasd, {**jump, "id": "jump-2", "x": -140}]}},
+                   {"gamepad": {"version": 3, "controls": [pad, stick]}, "pointClick": {"version": 3, "controls": [tool]}},
+                   {"keyboardMouse": {"version": 3, "controls": []}}, {}):
+            js = json.dumps({"layout": "keyboardMouse", "layouts": ok}, separators=(",", ":"))
+            self.assertEqual(m.parse(["--controls", "app-620:" + js]).controls_pair, ("app-620", js), js)
+        for bad in ({"off": {"version": 3, "controls": []}},                       # Off has no layout
+                    {"racingWheel": {"version": 3, "controls": []}},
+                    {"gamepad": {"version": 2, "controls": []}},                   # this build reads version 3
+                    {"gamepad": {"controls": []}}, {"gamepad": []}, [],
+                    {"gamepad": {"version": 3, "controls": [jump, jump]}},         # two controls with one id
+                    {"gamepad": {"version": 3, "controls": [{**jump, "id": "a b"}]}},
+                    {"gamepad": {"version": 3, "controls": [{**jump, "width": 0}]}},
+                    {"gamepad": {"version": 3, "controls": [{**jump, "anchor": "middle"}]}},
+                    {"gamepad": {"version": 3, "controls": [{**jump, "kind": "slider"}]}},
+                    {"gamepad": {"version": 3, "controls": [{**jump, "behaviour": "turbo"}]}},
+                    {"gamepad": {"version": 3, "controls": [{**jump, "actions": ["key:0x20", "key:0x21"]}]}},
+                    {"gamepad": {"version": 3, "controls": [{**jump, "actions": ["pad:leftStick"]}]}},
+                    {"gamepad": {"version": 3, "controls": [{**jump, "actions": ["key:0x0"]}]}},
+                    {"gamepad": {"version": 3, "controls": [{**jump, "actions": ["mouse:hover"]}]}},
+                    {"gamepad": {"version": 3, "controls": [{**jump, "floatingZone": wasd["floatingZone"]}]}},
+                    {"gamepad": {"version": 3, "controls": [{**jump, "tool": "hover"}]}},
+                    {"gamepad": {"version": 3, "controls": [{**jump, "colour": "red"}]}},
+                    {"gamepad": {"version": 3, "controls": [{**wasd, "actions": ["key:0x57"]}]}},
+                    {"gamepad": {"version": 3, "controls": [{**look, "actions": ["mouse:left"]}]}},
+                    {"gamepad": {"version": 3, "controls": [{**tool, "tool": "lasso"}]}},
+                    {"gamepad": {"version": 3, "controls": [{**tool, "actions": ["mouse:left"]}]}}):
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                m.parse(["--controls", "app-620:" + json.dumps({"layouts": bad})])
+        self.assertIn('"layouts"', m.__doc__)
+
+    def test_the_layout_editor_opens_from_game_options_and_over_the_paused_game(self):
+        """open:ID#layout: Game options › Controls › Edit on-screen layout, the editor over the game's art;
+        menu:layout: the in-game Controls panel's Edit layout…; pad: drives either."""
+        m = load()
+        self.assertIn("layout", m.GAME_SECTIONS)
+        self.assertEqual(m.parse(["--action", "open:app-620#layout", "--action", "pad:rb+right+right+a"]).action,
+                         ["open:app-620#layout", "pad:rb+right+right+a"])
+        a = m.parse(["--action", "play:app-620", "--action", "menu:open", "--action", "menu:layout",
+                     "--action", "pad:rb+up+b", "--action", "menu:resume"])
+        self.assertIsNone(m.pad_after_play(a.action))
+        self.assertEqual(m.in_game(a.action, 1), 4)
+        for text in ("open:ID#layout", "menu:layout", "the layout editor"):
+            self.assertIn(text, m.__doc__)
+
     def test_pad_after_play_is_refused_and_settings_arguments_may_be_a_list(self):
         m = load()
         self.assertEqual(m.pad_after_play(["play:app-367520", "wait:10", "pad:a"]), "pad:a")
@@ -592,6 +758,34 @@ class UiEnvTest(unittest.TestCase):
         self.assertIsNone(afc.rm_refusal("Documents/sockprobe.zip"))
         for bad in ("Documents/prefix", "Documents/s1-host.log", "Documents/prefix/a.zip", "Documents/../x.zip",
                     "Documents/.zip", "Documents/", "x.zip", "Documents/Playport-PLA-147.ipa"):
+            self.assertIsNotNone(afc.rm_refusal(bad), bad)
+
+    def test_afc_puts_and_removes_only_a_text_bar_secret_file(self):
+        """put-secret and rm reach Documents/ui-text-<nonce>-<n> (the text bar's secret, PLA-606), nothing near it."""
+        spec = importlib.util.spec_from_file_location("afc_tool", os.path.join(TOOLS, "afc.py"))
+        afc = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(afc)
+        self.assertIsNone(afc.secret_refusal("Documents/ui-text-0a1b2c3d-3"))
+        self.assertIsNone(afc.rm_refusal("Documents/ui-text-0a1b2c3d-3"))
+        for bad in ("Documents/ui-text-0a1b2c3d", "Documents/ui-text-0A1B2C3D-3", "Documents/ui-text-0a1b2c3d-3/x",
+                    "Documents/ui-text-0a1b2c3d-3.part", "Documents/x/ui-text-0a1b2c3d-3", "ui-text-0a1b2c3d-3",
+                    "Documents/ui-step-0a1b2c3d-3", "Documents/s1-host.log"):
+            self.assertIsNotNone(afc.secret_refusal(bad), bad)
+        self.assertIsNotNone(afc.rm_refusal("Documents/ui-text-0a1b2c3d-3.part"))
+
+    def test_afc_rm_deletes_a_diagnostic_dump_in_a_title_config_folder(self):
+        """rm reaches a NAME.bin a dev runtime wrote into title-cfg/TITLE/ (PLA-514's wow-dec.bin), never
+        madeira.cfg, the folder, a deeper path or the rest of the prefix."""
+        spec = importlib.util.spec_from_file_location("afc_tool", os.path.join(TOOLS, "afc.py"))
+        afc = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(afc)
+        cfg = "Documents/prefix/Documents/title-cfg/"
+        self.assertIsNone(afc.rm_refusal(cfg + "World of Warcraft Classic Era/wow-dec.bin"))
+        for bad in (cfg + "World of Warcraft Classic Era/madeira.cfg", cfg + "World of Warcraft Classic Era",
+                    cfg + "World of Warcraft Classic Era/", cfg + "World of Warcraft Classic Era/.bin",
+                    cfg + "W/sub/x.bin", cfg + "../x.bin", cfg + "./x.bin", cfg + "x.bin", cfg + "/x.bin",
+                    cfg + "W/x.bin.part", cfg + "W/x y.bin", "Documents/prefix/Documents/x.bin",
+                    "Documents/prefix/drive_c/Games/W/x.bin", "Documents/title-cfg/W/x.bin", cfg[:-1]):
             self.assertIsNotNone(afc.rm_refusal(bad), bad)
 
     def test_jit_unreachable_is_its_own_failure(self):
@@ -1038,6 +1232,265 @@ class UntilReached(unittest.TestCase):
                 with self.assertRaises(SystemExit):
                     m.main_recorded(["--play", "app-1", "--until", "nonsense"])
             self.assertFalse(os.path.exists(m.LAST_PLAY))
+
+
+class TextBarSecret(unittest.TestCase):
+    """pp ui's text bar actions (PLA-267) and textbar:secret (PLA-606): the value comes from a
+    file or stdin and reaches the phone only as the nonce file the app asked for, never argv,
+    the launch environment (UI_ACTIONS, which a restart's continuation file copies), the lock
+    record, an event or any file of the run directory."""
+
+    SENTINEL = "S3ntinel-Pa55,w0rd!€"
+
+    class Phone(UntilReached.FakePhone):
+        envs, secrets, removed, put_fails = [], [], [], False
+
+        def launch(self, envs):
+            self.__class__.envs = list(envs)
+            return super().launch(envs)
+
+        def put_secret(self, remote, data):
+            self.secrets.append((remote, data))
+            if self.put_fails:   # afc.py's 30 s timeout, after the .part was written
+                import phonelib
+                raise phonelib.PhoneError("afc put-secret failed (exit 124): ")
+
+        def remove(self, remote, check=True):
+            self.removed.append(remote)
+
+    def run_secret(self, argv, events, stdin=None, put_fails=False, interrupt=None):
+        """(exit code, stdout events, every byte the run directory holds, lock what, Phone).
+        `interrupt` names what the watch raises after the events: KeyboardInterrupt (SIGINT)
+        or Terminated (SIGTERM, SIGHUP)."""
+        m = load()
+        import phonelib
+        phone = self.Phone
+        phone.envs, phone.secrets, phone.removed, phone.put_fails = [], [], [], put_fails
+        locked = []
+
+        def watch(_phone, ev, nonce, pid, until, wait, poll, done_events, is_done, quiet, on_event, *rest):
+            for e in events(nonce):
+                ev("app:" + e["event"], **{k: v for k, v in e.items() if k != "event"})
+                on_event(e)
+            if interrupt == "KeyboardInterrupt":
+                raise KeyboardInterrupt
+            if interrupt == "Terminated":
+                raise m.Terminated("SIGTERM")
+            return "done", {"event": "ui-done", "outcome": "ok"}
+        saved = (phonelib.Phone, phonelib.watch_launch, phonelib.installed_check, phonelib.device_lock, sys.argv, sys.stdin)
+        out = io.StringIO()
+        with tempfile.TemporaryDirectory() as d:
+            run = os.path.join(d, "run")
+            phonelib.Phone, phonelib.watch_launch = phone, watch
+            phonelib.installed_check = lambda *a: (True, None, None)
+            phonelib.device_lock = lambda what, **k: locked.append(what) or contextlib.nullcontext()
+            sys.argv = ["pp-ui", "--out", run, *argv]
+            if stdin is not None:
+                sys.stdin = io.TextIOWrapper(io.BytesIO(stdin))
+            try:
+                with contextlib.redirect_stdout(out):
+                    code = m.main(sys.argv[1:])
+            finally:
+                (phonelib.Phone, phonelib.watch_launch, phonelib.installed_check, phonelib.device_lock,
+                 sys.argv, sys.stdin) = saved
+            files = b""
+            for root, _, names in os.walk(d):
+                for n in names:
+                    with open(os.path.join(root, n), "rb") as f:
+                        files += n.encode() + b"\n" + f.read()
+        return code, out.getvalue(), files, locked, phone
+
+    @staticmethod
+    def asked(n, action):
+        """The app's events for a textbar:secret action at number n that typed what it got."""
+        return lambda nonce: [{"event": "ui-secret-wanted", "index": n},   # the app names the number only
+                              {"event": "ui-action", "action": action, "result": "ok", "index": n},
+                              {"event": "ui-done", "outcome": "ok actions=3"}]
+
+    def test_the_bar_s_actions_parse(self):
+        m = load()
+        for ok in ("menu:text", "textbar:close", "textbar:secure", "textbar:plain", "textbar:tab", "textbar:enter",
+                   "textbar:backspace", "textbar:type:me@example.com", "textbar:type:a%2Cb%25 c"):
+            self.assertEqual(m.parse(["--action", ok]).action, [ok])
+        for bad in ("textbar:type:", "textbar:type:a,b", "textbar:open", "textbar:secret:x", "textbar:type:%zz"):
+            with self.assertRaises(SystemExit, msg=bad), contextlib.redirect_stderr(io.StringIO()):
+                m.parse(["--action", bad])
+        self.assertTrue(m.in_game(["menu:open", "menu:text", "textbar:type:x", "textbar:enter", "open:home"], 0) == 4)
+
+    def test_a_secret_action_needs_exactly_one_source_and_a_source_needs_the_action(self):
+        m = load()
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "pw")
+            open(path, "w").close()
+            self.assertEqual(m.parse(["--action", "textbar:secret+enter", "--secret-file", path]).secret_file, [path])
+            # One file per secret action, in order; one file serves them all.
+            two = ["--action", "textbar:secret", "--action", "textbar:secret+enter"]
+            self.assertEqual(m.parse(two + ["--secret-file", path, "--secret-file", path]).secret_file, [path, path])
+            self.assertEqual(m.parse(two + ["--secret-file", path]).secret_file, [path])
+            self.assertTrue(m.parse(["--action", "textbar:secret", "--secret-stdin"]).secret_stdin)
+            for argv in (["--action", "textbar:secret"],
+                         ["--action", "textbar:secret", "--secret-file", path, "--secret-stdin"],
+                         ["--action", "textbar:enter", "--secret-file", path],
+                         ["--action", "textbar:secret", "--secret-file", os.path.join(d, "absent")],
+                         ["--action", "textbar:secret", "--secret-file", path, "--secret-file", path]):
+                with self.assertRaises(SystemExit, msg=argv), contextlib.redirect_stderr(io.StringIO()):
+                    m.parse(argv)
+
+    def test_a_sentinel_secret_reaches_only_its_nonce_file(self):
+        actions = ["--action", "menu:open", "--action", "menu:text", "--action", "textbar:secret+enter"]
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "wow-password")
+            with open(path, "w") as f:
+                f.write(self.SENTINEL + "\n")
+            for argv, stdin in ((actions + ["--secret-file", path], None),
+                                (actions + ["--secret-stdin"], (self.SENTINEL + "\n").encode())):
+                code, stdout, files, locked, phone = self.run_secret(argv, self.asked(3, "textbar:secret+enter"), stdin)
+                self.assertEqual(code, 0, stdout)
+                nonce = next(e.split("=", 1)[1] for e in phone.envs if e.startswith("TITLE_NONCE="))
+                # The one copy: the file the app asked for, its trailing newline stripped.
+                self.assertEqual(phone.secrets, [(f"Documents/ui-text-{nonce}-3", self.SENTINEL.encode())])
+                for where, text in (("events", stdout), ("env", "\n".join(phone.envs)), ("lock", "\n".join(locked)),
+                                    ("run directory", files.decode(errors="replace"))):
+                    for piece in (self.SENTINEL, "S3ntinel", "Pa55"):
+                        self.assertNotIn(piece, text, where)
+                self.assertIn("UI_ACTIONS=menu:open,menu:text,textbar:secret+enter", phone.envs)
+                pushed = [json.loads(x) for x in stdout.splitlines() if '"secret-pushed"' in x]
+                self.assertEqual([(e["index"], set(e) - {"event", "t", "index"}) for e in pushed], [(3, set())])
+                # The app typed it (its ui-action): nothing is left to take back.
+                self.assertEqual(phone.removed, [])
+
+    def test_a_secret_the_app_did_not_take_is_removed_at_the_end(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "pw")
+            with open(path, "w") as f:
+                f.write(self.SENTINEL)
+            events = lambda nonce: [{"event": "ui-secret-wanted", "index": 1},  # noqa: E731
+                                    {"event": "ui-done", "outcome": "cancelled: foreground loss"}]
+            _, _, _, _, phone = self.run_secret(["--action", "textbar:secret", "--secret-file", path], events)
+            nonce = next(e.split("=", 1)[1] for e in phone.envs if e.startswith("TITLE_NONCE="))
+            self.assertEqual(phone.secrets, [(f"Documents/ui-text-{nonce}-1", self.SENTINEL.encode())])
+            self.assertEqual(phone.removed, [f"Documents/ui-text-{nonce}-1"])
+
+    def test_each_secret_action_types_its_own_file_in_order(self):
+        """Two textbar:secret actions (an account name, then a password): the first the app asks
+        for gets the first --secret-file, the second the second; neither value is anywhere else."""
+        with tempfile.TemporaryDirectory() as d:
+            paths = []
+            for name, value in (("name", "N4me-sentinel"), ("pw", self.SENTINEL)):
+                paths.append(os.path.join(d, name))
+                with open(paths[-1], "w") as f:
+                    f.write(value + "\n")
+            events = lambda nonce: [  # noqa: E731
+                {"event": "ui-secret-wanted", "index": 3},
+                {"event": "ui-action", "action": "textbar:secret", "result": "ok", "index": 3},
+                {"event": "ui-secret-wanted", "index": 5},
+                {"event": "ui-action", "action": "textbar:secret+enter", "result": "ok", "index": 5},
+                {"event": "ui-done", "outcome": "ok actions=5"}]
+            argv = ["--action", "menu:open", "--action", "menu:text", "--action", "textbar:secret",
+                    "--action", "textbar:tab", "--action", "textbar:secret+enter",
+                    "--secret-file", paths[0], "--secret-file", paths[1]]
+            code, stdout, files, _, phone = self.run_secret(argv, events)
+            self.assertEqual(code, 0, stdout)
+            nonce = next(e.split("=", 1)[1] for e in phone.envs if e.startswith("TITLE_NONCE="))
+            self.assertEqual(phone.secrets, [(f"Documents/ui-text-{nonce}-3", b"N4me-sentinel"),
+                                             (f"Documents/ui-text-{nonce}-5", self.SENTINEL.encode())])
+            for text in (stdout, "\n".join(phone.envs), files.decode(errors="replace")):
+                self.assertNotIn("N4me-sentinel", text)
+                self.assertNotIn(self.SENTINEL, text)
+
+    def test_a_request_past_the_run_s_secret_actions_gets_nothing(self):
+        """One textbar:secret action, two requests (the app's shape: a number only): the second
+        gets nothing, so a stray request cannot pull the value twice."""
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "pw")
+            with open(path, "w") as f:
+                f.write(self.SENTINEL)
+            events = lambda nonce: [{"event": "ui-secret-wanted", "index": 1},  # noqa: E731
+                                    {"event": "ui-action", "action": "textbar:secret", "result": "ok", "index": 1},
+                                    {"event": "ui-secret-wanted", "index": 2},
+                                    {"event": "ui-done", "outcome": "ok"}]
+            _, stdout, _, _, phone = self.run_secret(["--action", "textbar:secret", "--secret-file", path], events)
+            nonce = next(e.split("=", 1)[1] for e in phone.envs if e.startswith("TITLE_NONCE="))
+            self.assertEqual(phone.secrets, [(f"Documents/ui-text-{nonce}-1", self.SENTINEL.encode())])
+            self.assertIn("nothing pushed", stdout)
+
+    def test_a_secret_is_removed_however_the_run_ends(self):
+        """A push that fails part-way (the 30 s timeout), SIGINT or SIGTERM: the file pushed, or
+        its .part, is removed before the run ends (afc.py rm takes both)."""
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "pw")
+            with open(path, "w") as f:
+                f.write(self.SENTINEL)
+            wanted = lambda nonce: [{"event": "ui-secret-wanted", "index": 2}]  # noqa: E731
+            for how, kw, code in (("failed push", {"put_fails": True}, 1),
+                                  ("SIGINT", {"interrupt": "KeyboardInterrupt"}, 130),
+                                  ("SIGTERM", {"interrupt": "Terminated"}, 143)):
+                got, stdout, _, _, phone = self.run_secret(["--action", "textbar:secret", "--secret-file", path], wanted, **kw)
+                nonce = next(e.split("=", 1)[1] for e in phone.envs if e.startswith("TITLE_NONCE="))
+                self.assertEqual(got, code, how)
+                self.assertEqual(phone.removed, [f"Documents/ui-text-{nonce}-2"], how)
+                self.assertIn('"secret-removed"', stdout, how)
+                self.assertNotIn(self.SENTINEL, stdout, how)
+
+    def test_afc_rm_takes_a_secret_s_part_file_and_a_failed_put_leaves_none(self):
+        spec = importlib.util.spec_from_file_location("afc_tool", os.path.join(TOOLS, "afc.py"))
+        afc = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(afc)
+
+        class AFC:
+            def __init__(self, files, fail_rename=False):
+                self.files, self.fail_rename = dict(files), fail_rename
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_):
+                return False
+
+            async def exists(self, p):
+                return p in self.files
+
+            async def stat(self, p):
+                return {"st_ifmt": "S_IFREG", "st_size": len(self.files[p])}
+
+            async def rm(self, p):
+                del self.files[p]
+
+            async def set_file_contents(self, p, data):
+                self.files[p] = data
+
+            async def rename(self, a, b):
+                if self.fail_rename:
+                    raise ConnectionError("the phone went away")
+                self.files[b] = self.files.pop(a)
+
+        name = "Documents/ui-text-0a1b2c3d-2"
+        out = io.StringIO()
+        for files in ({name + ".part": b"x"}, {name: b"x", name + ".part": b"x"}, {name: b"x"}):
+            fake = AFC(files)
+
+            async def connect(_bundle, fake=fake):
+                return fake
+            afc.connect = connect
+            with contextlib.redirect_stdout(out):
+                afc.asyncio.run(afc.main("app", "rm", [name]))
+            self.assertEqual(fake.files, {}, files)
+        with self.assertRaises(SystemExit), contextlib.redirect_stdout(out):
+            afc.asyncio.run(afc.main("app", "rm", [name]))   # neither is there
+
+        fake = AFC({}, fail_rename=True)
+
+        async def connect(_bundle):
+            return fake
+        afc.connect = connect
+        old = sys.stdin
+        sys.stdin = io.TextIOWrapper(io.BytesIO(self.SENTINEL.encode()))
+        try:
+            with self.assertRaises(ConnectionError):
+                afc.asyncio.run(afc.main("app", "put-secret", [name]))
+        finally:
+            sys.stdin = old
+        self.assertEqual(fake.files, {})
 
 
 if __name__ == "__main__":

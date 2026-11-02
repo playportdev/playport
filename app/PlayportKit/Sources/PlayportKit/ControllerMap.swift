@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// A controller map (docs/plans/2026-10-09-touch-controls.md, "Controller maps",
+// A controller map (PLA-13, "Controller maps",
 // phase 3; ControllerMapping.dc.html): what a physical controller's inputs do
 // in a game.
 //
