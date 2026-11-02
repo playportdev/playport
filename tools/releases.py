@@ -313,6 +313,9 @@ STYLE = """\
   .btn-ghost:hover { background: var(--surface-3); }
   .btn-small { padding: 8px 16px; font-size: 14px; }
   nav .links a.btn-primary { color: #1A1306; }
+  .btn-kofi { background: #FF5E5B; color: #fff; }
+  .btn-kofi:hover { background: #FF7A77; }
+  nav .links a.btn-kofi, nav .links a.btn-kofi:hover { color: #fff; }
 
   header { padding: 64px 0 24px; }
   .kicker { color: var(--accent); font-weight: 700; font-size: 13px; letter-spacing: 0.14em; text-transform: uppercase; margin: 0 0 12px; }
@@ -411,6 +414,7 @@ def page(releases):
       <a href="../#start">Get started</a>
       <a href="../compatibility/">Games</a>
       <a href="./" aria-current="page">Releases</a>
+      <a class="btn btn-kofi btn-small" href="https://ko-fi.com/playportdev">♥ Support</a>
       <a class="btn btn-primary btn-small" href="{DOWNLOAD}">Download</a>
     </div>
   </div>

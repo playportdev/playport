@@ -6,7 +6,9 @@
 
 **PC games on your iPhone. Natively, no streaming.**
 
-[Website](https://playport.dev/) · [Download](https://github.com/playportdev/playport/releases) · [Game compatibility](https://playport.dev/compatibility/) · [Architecture](docs/ARCHITECTURE.md)
+[Website](https://playport.dev/) · [Download](https://github.com/playportdev/playport/releases) · [Game compatibility](https://playport.dev/compatibility/) · [Architecture](docs/ARCHITECTURE.md) · [❤️ Support on Ko-fi](https://ko-fi.com/playportdev)
+
+[![Support Playport on Ko-fi](https://img.shields.io/badge/Support_Playport-on_Ko--fi-FF5E5B?style=for-the-badge&logo=kofi&logoColor=white)](https://ko-fi.com/playportdev)
 
 [![Checks](https://img.shields.io/github/actions/workflow/status/playportdev/playport/checks.yml?branch=main&style=flat-square&label=checks&labelColor=151A21)](https://github.com/playportdev/playport/actions/workflows/checks.yml)
 [![Licence: GPL-3.0-or-later](https://img.shields.io/badge/licence-GPL--3.0--or--later-F5B544?style=flat-square&labelColor=151A21)](LICENSE)
@@ -27,6 +29,12 @@ The game runs on the phone's own CPU and GPU: no PC, no cloud, no stream.
 > play with nothing but the phone using on-screen controls and their layout editor,
 > and find every store in the redesigned Library. See the
 > [release notes](https://playport.dev/releases/#v0.5.0).
+
+> [!TIP]
+> **❤️ Playport is free, and it stays free. If it put a PC game in your pocket,
+> please consider [supporting it on Ko-fi](https://ko-fi.com/playportdev).**
+> Every donation buys time for the next release: more games and more fixes.
+> See [Support Playport](#support-playport).
 
 <p align="center">
   <a href="https://playport.dev/#screens"><img src="site/screenshots/wow-touch.webp" width="100%" alt="World of Warcraft on an iPhone in Playport: a mage in a blue robe on a ship's deck, with on-screen Esc, Tab, number, Jump, Reload, Use and Fire buttons and a movement stick"></a>
@@ -211,6 +219,20 @@ so Playport's App ID gets it once with GetMoreRam:
 The capability stays on the App ID, so SideStore's weekly refresh keeps it. If
 the tick ever goes away, repeat steps 3 and 4. GetMoreRam takes one of a free
 Apple ID's three app slots; delete it afterwards to free the slot.
+
+## Support Playport
+
+Playport is free and open source. Getting World of Warcraft, Red Dead
+Redemption 2 or The Witcher 3 running on a phone takes a lot of work, game by
+game. If Playport is worth something to you, please consider a donation: it is
+what keeps new releases coming.
+
+<p align="center">
+  <a href="https://ko-fi.com/playportdev"><img src="https://img.shields.io/badge/Support_Playport-on_Ko--fi-FF5E5B?style=for-the-badge&logo=kofi&logoColor=white" alt="Support Playport on Ko-fi"></a>
+</p>
+
+A donation is a gift: it buys no licence, no extra rights and no different build,
+and everyone may keep sharing Playport under its licence.
 
 ## Game compatibility
 
