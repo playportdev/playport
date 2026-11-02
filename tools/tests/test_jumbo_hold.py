@@ -79,14 +79,14 @@ class JumboHoldTests(unittest.TestCase):
         runtimes = {key: runtime_keys(entry.get("settings", {}).get("runtime", ""))
                     for key, entry in compat["titles"].items()}
         self.assertEqual([key for key, keys in runtimes.items() if "cage-hold" in keys], [])
-        # RDR2's jumbo-mb=8960 is every game's default since decision 0153 (LaunchSettings.everyGame),
-        # under a title's own config, so The Witcher 3 keeps 32768; it holds no cage.
+        # RDR2's jumbo-mb=8960 is its own compatibility entry's (decisions 0126, 0179), not every
+        # game's: an 8,960 MB hold in every game left Mewgenics' 1 GiB reservations no room.
         swift = (ROOT / "app/PlayportKit/Sources/PlayportKit/LaunchSettings.swift").read_text()
         every = swift[swift.index("public static let everyGame"):]
         every = every[:every.index("windowsServices:")]
-        self.assertIn("jumbo-mb=8960", every)
+        self.assertNotIn("jumbo-mb", every)
         self.assertNotIn("cage-hold", every)
-        self.assertNotIn("jumbo-mb", runtimes["app-1174180"])
+        self.assertEqual(runtimes["app-1174180"].get("jumbo-mb"), "8960")
 
 
 if __name__ == "__main__":

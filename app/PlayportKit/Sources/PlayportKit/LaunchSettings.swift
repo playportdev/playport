@@ -158,9 +158,11 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
     /// without AFP unless FIZ follows DAZ); a game's `env.FEX_HOSTFEATURES=enableafp` keeps AFP.
     /// `avail-phys-cef-mb=300` tells only SocialClubHelper.exe 300 MB of available memory, so
     /// Chromium's memory-pressure evaluator purges (decision 0168; `avail-phys-cef-mb=0` turns it off).
+    /// No address-space hold (`jumbo-mb`): it held 8,960 MB for RDR2's one reservation in every game,
+    /// and a game that reserves in smaller pieces ran out of room around it (decision 0179).
     public static let everyGame = LaunchSettings(
         steamAPI: .client,
-        runtime: "jumbo-mb=8960 env.PLAYPORT_VK_HEAP_MB=3072 "
+        runtime: "env.PLAYPORT_VK_HEAP_MB=3072 "
             + "env.MADEIRA_X64_CS_FASTPATH=1 env.MADEIRA_FEX_BATCH2=1 env.PLAYPORT_SC_BLOCK_CRASHPAD=1 "
             + "env.FEX_HOSTFEATURES=disableafp env.MADEIRA_FEX_AFPOFF_FPCR=fiz avail-phys-cef-mb=300",
         windowsServices: true, jitPoolMB: 896, khronosVulkanLoader: true, endLauncherAfterSignIn: true)

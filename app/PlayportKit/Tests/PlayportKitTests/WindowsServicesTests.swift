@@ -23,12 +23,13 @@ final class WindowsServicesTests: XCTestCase {
     }
 
     /// Every game starts its services since decision 0153 (LaunchSettings.everyGame); RDR2's
-    /// table entry keeps only its backend (FEX without AFP is everyone's since decision 0154) and,
-    /// since 0142's amendment of 2026-10-30, its 2,304 MiB of video memory.
+    /// table entry keeps its backend (FEX without AFP is everyone's since decision 0154), its
+    /// address-space hold (decision 0179) and, since 0142's amendment of 2026-10-30, its 2,304 MiB
+    /// of video memory.
     func testEveryGameStartsThemAndRDR2sEntryKeepsItsBackendAndVideoMemory() throws {
         let table = try CompatDefaults.load(directory: CompatDefaultsTests.shipped)
         let rdr2 = try XCTUnwrap(table.entry(for: "app-1174180"))
-        XCTAssertEqual(rdr2.settings, LaunchSettings(graphics: .vulkan, runtime: "vram-mb=2304 env.PLAYPORT_VK_HEAP_MB=2304"))
+        XCTAssertEqual(rdr2.settings, LaunchSettings(graphics: .vulkan, runtime: "jumbo-mb=8960 vram-mb=2304 env.PLAYPORT_VK_HEAP_MB=2304"))
         XCTAssertEqual(LaunchSettings.overEveryGame(rdr2.settings).windowsServices, true)
         XCTAssertEqual(LaunchSettings.overEveryGame(nil).windowsServices, true)
         XCTAssertEqual(LaunchSettings(windowsServices: false).over(LaunchSettings.overEveryGame(nil)).windowsServices, false)
@@ -42,7 +43,7 @@ final class WindowsServicesTests: XCTestCase {
         XCTAssertEqual(LaunchSettings.everyGameKeys["env.FEX_HOSTFEATURES"], "disableafp")   // decision 0154
         XCTAssertEqual(LaunchSettings.everyGameKeys["env.MADEIRA_FEX_AFPOFF_FPCR"], "fiz")
         let rdr2 = LaunchSettings.releaseRuntime(compat: table.entry(for: "app-1174180")?.settings)
-        XCTAssertEqual(rdr2, ["vram-mb": "2304", "env.PLAYPORT_VK_HEAP_MB": "2304"])   // decision 0142 as amended
+        XCTAssertEqual(rdr2, ["jumbo-mb": "8960", "vram-mb": "2304", "env.PLAYPORT_VK_HEAP_MB": "2304"])   // decisions 0142 as amended, 0179
         let titled = LaunchSettings.releaseRuntime(compat: LaunchSettings(runtime: "env.FEX_HOSTFEATURES=enableafp"))
         var effective = LaunchSettings.resolve(game: nil, global: LaunchSettings())
         effective.runtime = titled

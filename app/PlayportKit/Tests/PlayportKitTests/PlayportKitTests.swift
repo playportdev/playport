@@ -895,7 +895,7 @@ final class FEXProfileTests: XCTestCase {
         XCTAssertFalse(keys.isEmpty)
         let on = LaunchSettings.resolve(game: keys, global: LaunchSettings())
         XCTAssertEqual(on.runtime, ["vram-mb": "768", "inproc-sync": "1"])
-        // All over every game's keys (decision 0153), the title's cohort jumbo-mb over everyGame's.
+        // All over every game's keys (decision 0153), the title's cohort jumbo-mb with them.
         XCTAssertEqual(on.config(over: ["jumbo-mb": "32768", "vram-mb": "2048"]),
                        LaunchSettings.everyGameKeys.merging(["jumbo-mb": "32768", "vram-mb": "768", "inproc-sync": "1"]) { _, b in b })
         XCTAssertEqual(LaunchSettings.resolve(game: nil, global: keys).runtime, [:])

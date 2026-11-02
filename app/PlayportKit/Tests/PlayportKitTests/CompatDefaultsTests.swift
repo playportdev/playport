@@ -32,13 +32,13 @@ final class CompatDefaultsTests: XCTestCase {
         XCTAssertEqual(LaunchSettings(steamAPI: .emulated).over(LaunchSettings.overEveryGame(nil)).steamAPI, .emulated)
     }
 
-    /// Every game's runtime keys (decision 0153, from RDR2's of decisions 0126, 0142, 0152, plus
-    /// the crash-reporter refusal): the address-space holdback, a 3,072 MiB heap, the x64
-    /// critical-section stubs and FEX's batch 2; and FEX without AFP, with FPCR.FIZ from
-    /// MXCSR.DAZ (decision 0154, from RDR2's of 0142). Its fastsync semaphores went with fastsync
-    /// (decision 0157): ppsync takes every semaphore in process. Social Club's helper is told
-    /// 300 MB of available memory (decision 0168).
-    static let everyGameRuntime = "jumbo-mb=8960 env.PLAYPORT_VK_HEAP_MB=3072 "
+    /// Every game's runtime keys (decision 0153, from RDR2's of decisions 0142, 0152, plus the
+    /// crash-reporter refusal): a 3,072 MiB heap, the x64 critical-section stubs and FEX's batch 2;
+    /// and FEX without AFP, with FPCR.FIZ from MXCSR.DAZ (decision 0154, from RDR2's of 0142). Its
+    /// fastsync semaphores went with fastsync (decision 0157): ppsync takes every semaphore in
+    /// process. Social Club's helper is told 300 MB of available memory (decision 0168). RDR2's
+    /// address-space hold is RDR2's own again (decision 0179).
+    static let everyGameRuntime = "env.PLAYPORT_VK_HEAP_MB=3072 "
         + "env.MADEIRA_X64_CS_FASTPATH=1 env.MADEIRA_FEX_BATCH2=1 env.PLAYPORT_SC_BLOCK_CRASHPAD=1 "
         + "env.FEX_HOSTFEATURES=disableafp env.MADEIRA_FEX_AFPOFF_FPCR=fiz avail-phys-cef-mb=300"
 
@@ -47,7 +47,7 @@ final class CompatDefaultsTests: XCTestCase {
     /// by key and keep the rest (decisions 0091, 0153).
     func testEveryGamesDefaultsAreTheLowestRuntimeKeys() throws {
         XCTAssertEqual(LaunchSettings.everyGame.runtime, Self.everyGameRuntime)
-        let every: [String: String] = ["jumbo-mb": "8960", "env.PLAYPORT_VK_HEAP_MB": "3072",
+        let every: [String: String] = ["env.PLAYPORT_VK_HEAP_MB": "3072",
                                        "env.MADEIRA_X64_CS_FASTPATH": "1", "env.MADEIRA_FEX_BATCH2": "1",
                                        "env.PLAYPORT_SC_BLOCK_CRASHPAD": "1", "env.FEX_HOSTFEATURES": "disableafp",
                                        "env.MADEIRA_FEX_AFPOFF_FPCR": "fiz", "avail-phys-cef-mb": "300"]
@@ -55,7 +55,7 @@ final class CompatDefaultsTests: XCTestCase {
         let plain = LaunchSettings.resolve(game: LaunchSettings.overEveryGame(nil), global: LaunchSettings())
         XCTAssertEqual(plain.runtime, [:])
         XCTAssertEqual(plain.config(over: [:]), every)
-        // A cohort title's own key (The Witcher 3's address-space hold) wins over everyGame's.
+        // A cohort title's own key (The Witcher 3's address-space hold) is its own.
         XCTAssertEqual(plain.config(over: ["jumbo-mb": "32768", "cage-hold": "1"])["jumbo-mb"], "32768")
         // A person's key wins over all; everyGame's other keys stay.
         let own = LaunchSettings(runtime: "inproc-sync=0 env.PLAYPORT_VK_HEAP_MB=0 env.MADEIRA_FEX_BATCH2=0")
@@ -75,14 +75,16 @@ final class CompatDefaultsTests: XCTestCase {
 
     /// RDR2 is told 2,304 MiB of video memory, not 3,072 (decisions 0142 and 0153 as amended
     /// 2026-10-30): its heap size and the plan's video figure (DXVK's DXGI, KosmicKrisp's budget) by
-    /// its entry's keys over everyGame's; every other game keeps everyGame's 3,072 heap.
+    /// its entry's keys over everyGame's; every other game keeps everyGame's 3,072 heap. Only RDR2
+    /// holds its 8,960 MB address-space gap (decisions 0126, 0179).
     func testRDR2IsTold2304MiBOfVideoMemory() throws {
         let rdr2 = try XCTUnwrap(CompatDefaults.load(directory: Self.shipped).entry(for: "app-1174180"))
         let config = LaunchSettings.resolve(game: LaunchSettings.overEveryGame(rdr2.settings), global: LaunchSettings())
             .config(over: [:])
         XCTAssertEqual(config["env.PLAYPORT_VK_HEAP_MB"], "2304")
         XCTAssertEqual(config["vram-mb"], "2304")
-        XCTAssertEqual(config["jumbo-mb"], "8960")   // everyGame's other keys stay
+        XCTAssertEqual(config["jumbo-mb"], "8960")
+        XCTAssertEqual(config["env.MADEIRA_FEX_BATCH2"], "1")   // everyGame's other keys stay
         let overrides = MemoryPlan.Overrides.read(value: { config[$0] }, environment: [:])
         let plan = MemoryPlan(MemoryPlan.Inputs(limitMB: 8192, physicalMB: 11734, poolMB: 4096), overrides: overrides)
         XCTAssertEqual(plan.videoMB, 2304)
@@ -97,6 +99,7 @@ final class CompatDefaultsTests: XCTestCase {
         let plain = LaunchSettings.resolve(game: LaunchSettings.overEveryGame(nil), global: LaunchSettings()).config(over: [:])
         XCTAssertEqual(plain["env.PLAYPORT_VK_HEAP_MB"], "3072")
         XCTAssertNil(plain["vram-mb"])
+        XCTAssertNil(plain["jumbo-mb"])
     }
 
     /// Every World of Warcraft product runs FEX without AVX (patches/fex 0088): its entry's
@@ -123,7 +126,7 @@ final class CompatDefaultsTests: XCTestCase {
         let effective = LaunchSettings.resolve(game: game, global: LaunchSettings())
         XCTAssertEqual(effective.config(over: [:])["short-reserve-mb"], "6144")
         XCTAssertNil(effective.config(over: [:])["env.MADEIRA_FEX_PAUSE"])
-        XCTAssertEqual(effective.config(over: [:])["jumbo-mb"], "8960")
+        XCTAssertNil(effective.config(over: [:])["jumbo-mb"])   // RDR2's hold is RDR2's alone (decision 0179)
         let classic = effective.config(over: ["jumbo-mb": "32768", "cage-hold": "1"])
         XCTAssertEqual(classic["jumbo-mb"], "32768")
         XCTAssertEqual(classic["cage-hold"], "1")

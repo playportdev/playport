@@ -5,8 +5,8 @@
       "reason": "This game takes no controller on PC without a third-party fix (its Options list only keyboard layouts), so its on-screen controls start as a keyboard and mouse."
     },
     "app-1174180": {
-      "settings": {"graphics": "vulkan", "runtime": "vram-mb=2304 env.PLAYPORT_VK_HEAP_MB=2304"},
-      "reason": "This game draws through Vulkan or Direct3D 12, which only the Vulkan layer runs, so it keeps Vulkan even when Settings chooses DXMT for every game. It is told 2,304 MB of video memory, not 3,072: it sizes its texture streaming from that figure, and Story's first load otherwise passes the app's memory limit."
+      "settings": {"graphics": "vulkan", "runtime": "jumbo-mb=8960 vram-mb=2304 env.PLAYPORT_VK_HEAP_MB=2304"},
+      "reason": "This game draws through Vulkan or Direct3D 12, which only the Vulkan layer runs, so it keeps Vulkan even when Settings chooses DXMT for every game. The runtime holds an 8,960 MB gap from its start for the game's one reservation of that size. It is told 2,304 MB of video memory, not 3,072: it sizes its texture streaming from that figure, and Story's first load otherwise passes the app's memory limit."
     },
     "app-292030": {
       "settings": {"runtime": "short-reserve-mb=6144"},
