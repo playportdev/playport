@@ -44,6 +44,9 @@ final class LibraryGrid: ObservableObject {
     @Published private(set) var searching = false
     /// The ring leaves the store column for the grid's first item (LibraryRing).
     let toTiles = PassthroughSubject<Void, Never>()
+    /// The grid had nothing to ring when it was (re)started: the ring waits on the store's
+    /// button and goes to the first tile when one comes, unless the player moved it first.
+    var ringWaits = false
 
     /// The controller keyboard over the Library: the grid filters as the player types.
     func openSearch() {
@@ -119,6 +122,7 @@ enum LibraryRing {
     static func press(_ b: NavButton) -> Bool {
         let nav = AppNavigation.shared, focus = PadFocus.shared, grid = LibraryGrid.shared
         guard nav.page == .library, !nav.settings, !nav.onGamePage, !nav.signIn else { return false }
+        grid.ringWaits = false
         let inColumn = focus.focused.map(StoreColumn.isItem) ?? false
         let tiles: (String) -> Bool = { !StoreColumn.isItem($0) }
         switch b {
@@ -213,18 +217,36 @@ private struct LibraryGridView: View {
             }
         }
         // The ring starts on the first tile, on arrival and after the store, sort or search changes.
-        // Back from a game page the ring is still on its tile, and stays there.
-        .onAppear { if focus.focused?.hasPrefix("lib:") != true { PadFocus.shared.reset(start: nav.focusStart ?? entryItem()) } }
+        // Back from a game page the ring is still on its tile, and stays there; on arrival the page
+        // switch has put it top left, which is the column's All, so that does not count.
+        .onAppear {
+            if focus.focused.map({ $0.hasPrefix("lib:") && !StoreColumn.isItem($0) }) != true { startRing(at: nav.focusStart) }
+        }
         // All and the Battle.net store list what Blizzard offers now (cached for six hours).
         .task { await bnet.refresh() }
         // In the column the ring stays there, on the store now shown (▲▼ or LT/RT).
         .onChange(of: grid.filter) { _, f in
-            if focus.focused.map(StoreColumn.isItem) == true { focus.ring(StoreColumn.item(f)) } else { PadFocus.shared.reset(start: entryItem()) }
+            if focus.focused.map(StoreColumn.isItem) == true { focus.ring(StoreColumn.item(f)) } else { startRing() }
         }
-        .onChange(of: grid.installedOnly) { _, _ in PadFocus.shared.reset(start: entryItem()) }
-        .onChange(of: grid.sort) { _, _ in PadFocus.shared.reset(start: entryItem()) }
-        .onChange(of: grid.search) { _, _ in PadFocus.shared.reset(start: entryItem()) }
+        .onChange(of: grid.installedOnly) { _, _ in startRing() }
+        .onChange(of: grid.sort) { _, _ in startRing() }
+        .onChange(of: grid.search) { _, _ in startRing() }
+        // The games came after the ring started (the catalogue or a store still loading).
+        .onChange(of: shown.first?.id ?? emptyItems.first) { _, _ in
+            if grid.ringWaits, let id = entryItem() {
+                grid.ringWaits = false
+                focus.ring(id)
+            }
+        }
         .onReceive(grid.toTiles) { if let id = entryItem() { focus.ring(id) } }
+    }
+
+    /// The ring on `start`, else the first tile; with nothing to ring yet, on the store's button
+    /// until the first tile comes (`ringWaits`), not on whatever is top left.
+    private func startRing(at start: String? = nil) {
+        let entry = start ?? entryItem()
+        grid.ringWaits = entry == nil
+        PadFocus.shared.reset(start: entry ?? StoreColumn.item(grid.filter))
     }
 
     /// The first tile the grid shows now, else the empty page's first button, read afresh
@@ -247,20 +269,23 @@ private struct LibraryGridView: View {
             }
             .accessibilityElement(children: .combine)
             .accessibilityIdentifier("library-store")
-            if grid.installedOnly {
-                // Not in the ring: ⧉ turns it off too; a tap here.
-                Button { grid.installedOnly = false } label: {
-                    HStack(spacing: 5) {
-                        Text("Installed only")
-                        Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
-                    }
-                    .font(.system(size: 12, weight: .semibold)).foregroundStyle(PP.text)
-                    .padding(.horizontal, 10).padding(.vertical, 4)
-                    .background(PP.line, in: Capsule())
+            // Always shown, lit while on: a tap flips it; ⧉ does too (it is not in the ring).
+            Button { grid.installedOnly.toggle() } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: grid.installedOnly ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(grid.installedOnly ? PP.accent : PP.muted)
+                    Text("Installed only")
                 }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("library-installed-only")
+                .font(.system(size: 12, weight: .semibold)).foregroundStyle(grid.installedOnly ? PP.text : PP.soft)
+                .padding(.horizontal, 10).padding(.vertical, 4)
+                .background(grid.installedOnly ? PP.line : PP.surface, in: Capsule())
+                .overlay(Capsule().strokeBorder(grid.installedOnly ? PP.accent : PP.line, lineWidth: 1))
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Installed only")
+            .accessibilityAddTraits(grid.installedOnly ? .isSelected : [])
+            .accessibilityIdentifier("library-installed-only")
             if grid.searching || !grid.search.isEmpty {
                 // What the keyboard typed; a tap brings the keyboard back.
                 Button { grid.openSearch() } label: {
