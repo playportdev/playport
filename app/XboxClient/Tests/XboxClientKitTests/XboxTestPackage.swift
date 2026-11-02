@@ -453,10 +453,12 @@ enum XboxSignedFixture {
             + "</SignatureValue>" + keyInfo + "</Signature></wsse:Security>"
     }
 
-    static func sign(_ bytes: [UInt8]) throws -> [UInt8] {
+    /// `force` signs a reply whose plain body carries a legacy ticket's EncryptedData (the
+    /// device-step fixtures, which go unsigned, are told apart by that).
+    static func sign(_ bytes: [UInt8], force: Bool = false) throws -> [UInt8] {
         let original = String(decoding: bytes, as: UTF8.self)
         guard original.contains("<wsse:Security/>"), original.contains("<s:Body><wst:RequestSecurityTokenResponse"),
-              !original.contains("EncryptedData"), !original.contains("xmlns:wssc") else { return bytes }
+              force || !original.contains("EncryptedData"), !original.contains("xmlns:wssc") else { return bytes }
         let base = original.replacingOccurrences(of: "<s:Envelope ", with: "<s:Envelope xmlns:wssc=\"http://schemas.xmlsoap.org/ws/2005/02/sc\" ")
             .replacingOccurrences(of: "<s:Body>", with: "<s:Body wsu:Id=\"ResponseBody\">")
         let body = try XboxXML.parse(Array(base.utf8)).child("Body")!

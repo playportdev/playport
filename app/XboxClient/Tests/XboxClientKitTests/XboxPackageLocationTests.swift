@@ -40,6 +40,8 @@ final class XboxPackageLocationTests: XCTestCase, @unchecked Sendable {
           "RelativeUrl":"\(content)/1.5.12620.0.0a1b2c3d-0000-4000-8000-000000000001/\(file)"}]}
         """
     }
+    /// A compact JWE (`{"alg":"dir","enc":"A256GCM"}`, empty encrypted key), as Microsoft's ticket.
+    static let jwe = "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..aXY.Y2lwaGVydGV4dA.dGFn"
 
     func signedIn() async throws -> (XboxSession, XboxPackagesHTTP, XboxLines) {
         let http = XboxPackagesHTTP(), lines = XboxLines()
@@ -47,9 +49,28 @@ final class XboxPackageLocationTests: XCTestCase, @unchecked Sendable {
         _ = try await session.prepareSignIn()
         _ = try await session.signIn(xboxSignInToken())
         let raw = try Data(contentsOf: Bundle.module.url(forResource: "Fixtures/store-ticket.xml", withExtension: nil)!)
+        // Microsoft's real answer for this scope (phone, 2026-11-02): a delegation compact
+        // ticket that is a compact JWE, which Xbox Live takes only as `t=` (x-err 5 for `d=`).
         let ticket = String(decoding: raw, as: UTF8.self).replacingOccurrences(of: "www.microsoft.com", with: "user.auth.xboxlive.com")
+            .replacingOccurrences(of: "urn:passport:compact", with: "urn:passport:delegationcompact")
+            .replacingOccurrences(of: "t=synthetic-store-ticket&amp;p=", with: Self.jwe)
         await http.tickets.reply("renew", body: try XboxSignedFixture.sign(Array(ticket.utf8)))
         return (session, http, lines)
+    }
+
+    /// Delegation tickets go to Xbox Live as `t=` when they are a compact JWE, else as `d=`;
+    /// a compact ticket keeps Microsoft's own `t=…&p=`.
+    func testATicketsFormFollowsItsKindAndShape() throws {
+        for (kind, raw, expected) in [("urn:passport:delegationcompact", Self.jwe, "t=" + Self.jwe),
+                                      ("urn:passport:delegationcompact", "opaque", "d=opaque"),
+                                      ("urn:passport:delegationcompact", "e30..aXY.Y2lwaGVydGV4dA.dGFn", "d=e30..aXY.Y2lwaGVydGV4dA.dGFn"),
+                                      ("urn:passport:compact", "t=opaque&amp;p=proof", "t=opaque&p=proof")] {
+            let xml = "<wst:RequestSecurityTokenResponse xmlns:wst=\"t\" xmlns:wsp=\"p\" xmlns:wsa=\"a\" xmlns:wsu=\"u\" xmlns:wsse=\"s\">"
+                + "<wst:TokenType>\(kind)</wst:TokenType><wsp:AppliesTo><wsa:EndpointReference><wsa:Address>user.auth.xboxlive.com</wsa:Address>"
+                + "</wsa:EndpointReference></wsp:AppliesTo><wst:Lifetime><wsu:Expires>2026-10-31T00:00:00Z</wsu:Expires></wst:Lifetime>"
+                + "<wst:RequestedSecurityToken><wsse:BinarySecurityToken>\(raw)</wsse:BinarySecurityToken></wst:RequestedSecurityToken></wst:RequestSecurityTokenResponse>"
+            XCTAssertEqual(try XboxSOAP.parseToken(XboxXML.parse(Array(xml.utf8))).value, expected, raw)
+        }
     }
 
     /// Xodus's chain: an RPS ticket for user.auth, an XSTS token for update.xboxlive.com,
@@ -70,7 +91,7 @@ final class XboxPackageLocationTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(sent.map { $0.url.absoluteString }, ["https://user.auth.xboxlive.com/user/authenticate", "https://xsts.auth.xboxlive.com/xsts/authorize",
                                                          "https://packagespc.xboxlive.com/GetBasePackage/\(Self.content)"])
         let auth = try JSONSerialization.jsonObject(with: Data(sent[0].body.value)) as! [String: Any]
-        XCTAssertEqual((auth["Properties"] as! [String: String])["RpsTicket"], "t=synthetic-store-ticket&p=")
+        XCTAssertEqual((auth["Properties"] as! [String: String])["RpsTicket"], "t=" + Self.jwe)
         let xsts = try JSONSerialization.jsonObject(with: Data(sent[1].body.value)) as! [String: Any]
         XCTAssertEqual(xsts["RelyingParty"] as? String, "http://update.xboxlive.com")
         XCTAssertEqual((xsts["Properties"] as! [String: Any])["UserTokens"] as? [String], ["synthetic-user-jwt"])

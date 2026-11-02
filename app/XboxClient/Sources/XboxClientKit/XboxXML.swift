@@ -110,6 +110,9 @@ private final class XboxXMLParser: NSObject, XMLParserDelegate {
     func parser(_ parser: XMLParser, didEndElement name: String, namespaceURI: String?, qualifiedName qName: String?) { _ = stack.popLast() }
     func parser(_ parser: XMLParser, foundCharacters text: String) { stack.last?.text += text; stack.last?.parts.append((text, nil)) }
     func parser(_ parser: XMLParser, foundCDATA data: Data) { self.parser(parser, foundCharacters: String(decoding: data, as: UTF8.self)) }
+    // Darwin's XMLParser ends the parse at any error, a namespace error (201, an undeclared
+    // prefix) included; Linux's reports it and goes on. Fail here too, so tests see the phone.
+    func parser(_ parser: XMLParser, parseErrorOccurred parseError: Error) { refuse(parser) }
     // Any DTD declaration the parser meets ends the parse.
     private func refuse(_ parser: XMLParser) { failed = true; parser.abortParsing() }
     func parser(_ parser: XMLParser, foundInternalEntityDeclarationWithName name: String, value: String?) { refuse(parser) }

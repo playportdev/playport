@@ -133,6 +133,18 @@ final class XboxSessionTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(pending, .signedOut)
         guard case .signedIn = try await s.signIn(xboxSignInToken()) else { return XCTFail("second step failed") }
     }
+    /// Microsoft's real first leg (phone, 2026-11-02): no fault, a collection whose Xbox Live
+    /// answer carries only its status and the approval page, beside an issued STS ticket.
+    func testAnXboxLiveAnswerThatAsksForApprovalContinuesAtItsPage() async throws {
+        let store = MemorySecretStore(), http = XboxFixtureHTTP(), s = session(store, http)
+        await http.set("signin", XboxHTTPResponse(status: 200, body: try XboxSignedFixture.sign(xboxFixture("user-inline-consent.xml"), force: true)))
+        _ = try await s.prepareSignIn()
+        guard case let .continueAt(page) = try await s.signIn(xboxSignInToken()) else { return XCTFail("approval not presented") }
+        XCTAssertEqual(page.url.absoluteString, "https://login.live.com/ppsecure/InlineConnect.srf?synthetic=consent")
+        let pending = await s.state
+        XCTAssertEqual(pending, .signedOut)
+        guard case .signedIn = try await s.signIn(xboxSignInToken()) else { return XCTFail("second step failed") }
+    }
     func testStoreReason501NamesTenDevicesAndWhereToUnlinkButHTTP501IsNotThatError() throws {
         let bytes = try xboxFixture("device-limit.json")
         XCTAssertThrowsError(try XboxLicenceFailure.check(XboxHTTPResponse(status: 200, body: bytes))) {

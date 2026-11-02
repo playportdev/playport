@@ -2,6 +2,8 @@
 // Xodus 514dd56f360a4bdf12f4acde5148bac5ce5f957f api/live/rst/, models/soap/;
 // translated to Swift by the Playport authors, 2026-10-30. Modified: bounded XML,
 // explicit failures, exclusive canonical signatures, no provider data in errors.
+// Delegation tickets' form: Xodus Nexus's backend e44f4ebe0732aa0c6e514aaaa64cde9ab5f151c5
+// models/secrets.rs (delegation_ticket, is_compact_jwe), translated 2026-11-02.
 import Foundation
 import ContentKit
 
@@ -180,7 +182,17 @@ enum XboxSOAP {
         }
         let responses = clear.local == "RequestSecurityTokenResponse" ? [clear] : clear.children.filter { $0.local == "RequestSecurityTokenResponse" }
         guard !responses.isEmpty else { throw XboxXML.invalid() }
-        return XboxSOAPReply(tokens: try responses.map(parseToken))
+        // A ticket Microsoft will issue only after a hosted step (an approval, a consent)
+        // comes back without a token: its own pp carries a status and the page, while the
+        // collection's other tickets are issued. It is that page, not a broken reply.
+        var reply = XboxSOAPReply()
+        for response in responses {
+            if response.child("RequestedSecurityToken") == nil, let pending = response.child("pp"),
+               let url = pending.value("inlineauthurl").flatMap(URL.init(string:)) {
+                reply.inlineURL = reply.inlineURL ?? url
+            } else { reply.tokens.append(try parseToken(response)) }
+        }
+        return reply
     }
     static func parseToken(_ xml: XboxXML) throws -> XboxToken {
         guard let type = xml.value("TokenType"), let scope = xml.child("AppliesTo")?.child("EndpointReference")?.value("Address"),
@@ -193,8 +205,22 @@ enum XboxSOAP {
                              scope: enc.child("KeyInfo")?.value("KeyName") ?? scope, expires: expiry)
         case "urn:passport:compact", "urn:passport:delegationcompact":
             guard let token = requested.value("BinarySecurityToken"), !token.isEmpty else { throw XboxXML.invalid() }
-            return XboxToken(legacy: false, value: (type == "urn:passport:delegationcompact" ? "d=" : "") + token, proof: nil, scope: scope, expires: expiry)
+            let form = type == "urn:passport:compact" ? "" : isCompactJWE(token) ? "t=" : "d="
+            return XboxToken(legacy: false, value: form + token, proof: nil, scope: scope, expires: expiry)
         default: throw ClientError.protocolChanged("Microsoft returned an unsupported ticket type")
         }
+    }
+    /// Xbox Live sign-in takes an opaque delegation ticket as `d=` but a compact JWE one only
+    /// as `t=`: five base64url parts (the encrypted key may be empty) and a JSON header
+    /// naming `alg` and `enc`.
+    static func isCompactJWE(_ value: String) -> Bool {
+        let parts = value.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 5, !parts[0].isEmpty, parts[0].utf8.count <= 8192, !parts[2].isEmpty, !parts[3].isEmpty, !parts[4].isEmpty,
+              parts.allSatisfy({ $0.utf8.count % 4 != 1 && $0.utf8.allSatisfy { ($0 >= 0x30 && $0 <= 0x39) || ($0 | 0x20 >= 0x61 && $0 | 0x20 <= 0x7A) || $0 == 0x2D || $0 == 0x5F } })
+        else { return false }
+        var b64 = parts[0].replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+        while b64.utf8.count % 4 != 0 { b64 += "=" }
+        guard let data = Data(base64Encoded: b64), let header = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
+        return ["alg", "enc"].allSatisfy { (header[$0] as? String).map { !$0.isEmpty } ?? false }
     }
 }

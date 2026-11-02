@@ -70,6 +70,9 @@ public actor XboxSession {
             if let url = reply.inlineURL { return .continueAt(try XboxSignIn.continuation(url)) }
             throw XboxSessionError.signInRequired
         }
+        if !reply.tokens.contains(where: { !$0.legacy && $0.scope == XboxSOAP.userScope }), let url = reply.inlineURL {
+            return .continueAt(try XboxSignIn.continuation(url))
+        }
         guard reply.tokens.filter({ $0.legacy && $0.scope == XboxSOAP.sts }).count == 1,
               reply.tokens.contains(where: { !$0.legacy && $0.scope == XboxSOAP.userScope }) else { throw XboxXML.invalid() }
         try write(XboxStoredSession(username: prop.sSigninName, puid: prop.K, tokens: reply.tokens), "session")
@@ -102,9 +105,14 @@ public actor XboxSession {
         let request = try XboxSOAP.request(now: now(), device: device, user: user, username: session.username,
             app: Self.storeApp, scopes: [(scope, "mbi_ssl")], silent: true)
         let reply = try XboxSOAP.reply(await send(XboxSOAP.endpoint, body: request, epoch: epoch), device: device)
-        guard !reply.fault else { throw XboxSessionError.signInRequired }
+        // A silent exchange cannot show a hosted page: a pending approval is a refusal here.
+        guard !reply.fault, reply.inlineURL == nil else { throw XboxSessionError.signInRequired }
         let tickets = reply.tokens.filter { !$0.legacy && $0.scope == scope }
-        guard tickets.count == 1, tickets[0].value.hasPrefix("t="), tickets[0].value.contains("&p=") else { throw XboxXML.invalid() }
+        // MBI_SSL for www.microsoft.com is compact (`t=…&p=`); user.auth.xboxlive.com's RPS
+        // ticket is delegation compact (`d=…`, or `t=` for a compact JWE: XboxSOAP.parseToken).
+        guard tickets.count == 1, tickets[0].value.hasPrefix("d=") || tickets[0].value.hasPrefix("t=") else {
+            throw ClientError.protocolChanged("Microsoft returned an unexpected Store ticket")
+        }
         guard var current = try read(XboxStoredSession.self, "session") else { throw XboxSessionError.signInRequired }
         current.tokens.removeAll { !$0.legacy && $0.scope == scope }; current.tokens.append(tickets[0])
         try write(current, "session")
@@ -125,7 +133,7 @@ public actor XboxSession {
         let request = try XboxSOAP.request(now: now(), device: device, user: user, username: session.username,
             app: clientID, scopes: [(scope, "TOKEN_BROKER"), (XboxSOAP.tb, nil)], silent: true)
         let reply = try XboxSOAP.reply(await send(XboxSOAP.endpoint, body: request, epoch: epoch), device: device)
-        if reply.fault {
+        if reply.fault || reply.inlineURL != nil {
             // As a sign-out: a play's bridge closes and the app asks for sign-in again.
             try signOut(why: "sign-in required")
             throw XboxSessionError.signInRequired
