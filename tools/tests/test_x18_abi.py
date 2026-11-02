@@ -13,7 +13,7 @@ import tempfile
 import unittest
 
 from test_x18_compare import patcher
-from test_x18_x64_code import ROOT, patched_source
+from test_x18_x64_code import ROOT, UPSTREAM, patched_source
 
 PATCH = ROOT / "patches/madeira-unix/0272-signal-madeira.cfg-x18-abi-turns-on-the-custom-x18-A.patch"
 HEADER = "build/ntdll-unix/pp_x18_abi.h"
@@ -151,6 +151,7 @@ class X18AbiHeaderTests(unittest.TestCase):
 
 
 class X18AbiProbeTests(unittest.TestCase):
+    @unittest.skipUnless(UPSTREAM.exists(), "upstream/madeira is not checked out")
     def test_patcher_leaves_the_probe_alone(self):
         with tempfile.TemporaryDirectory(dir=ROOT / ".work") as td:
             tmp = pathlib.Path(td)
