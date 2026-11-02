@@ -127,6 +127,28 @@ final class Direct3DTests: XCTestCase {
         XCTAssertTrue(Direct3D.detect(executable: exe, root: root).hasDirect3D12)
     }
 
+    func testADependencysDynamicReferencesDoNotOverrideTheExecutablesImport() throws {
+        // Baldur's Gate 3's shape: bg3_dx11.exe imports d3d11.dll, and the SDL2.dll it
+        // imports names d3d9, d3d11 and d3d12 for SDL's own renderer.
+        let sdl = Self.pe([("kernel32.dll", ["LoadLibraryA", "GetProcAddress"])],
+                          strings: ["d3d9.dll", "Direct3DCreate9", "d3d11.dll", "D3D11CreateDevice",
+                                    "d3d12.dll", "D3D12CreateDevice"])
+        let exe = try write("bin/game_dx11.exe", Self.pe([("d3d11.dll", ["D3D11CreateDevice"]), ("SDL2.dll", ["SDL_Init"])]))
+        try write("bin/SDL2.dll", sdl)
+        let result = Direct3D.detect(executable: exe, root: root)
+        XCTAssertEqual(result.apis, [.d3d11])
+        XCTAssertFalse(result.hasDirect3D12)
+        XCTAssertEqual(result.modulesScanned, 2)
+        XCTAssertEqual(LaunchSettings.resolve(game: nil, global: LaunchSettings(), importsDirect3D12: result.hasDirect3D12).graphics, .dxmt)
+
+        // With no Direct3D import of its own, the executable's dependencies still tell.
+        let engine = try write("engine/game.exe", Self.pe([("SDL2.dll", ["SDL_Init"])]))
+        try write("engine/SDL2.dll", sdl)
+        let loaded = Direct3D.detect(executable: engine, root: root)
+        XCTAssertEqual(loaded.apis, [.d3d9, .d3d11, .d3d12])
+        XCTAssertTrue(loaded.hasDirect3D12)
+    }
+
     func testAPIVersionsAndDualRendererDoNotClaimActiveVersion() throws {
         for (api, library, function) in [(Direct3D.API.d3d8, "d3d8.dll", "Direct3DCreate8"),
                                           (.d3d9, "d3d9.dll", "Direct3DCreate9Ex"),
