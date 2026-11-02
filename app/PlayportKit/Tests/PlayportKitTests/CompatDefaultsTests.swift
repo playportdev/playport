@@ -75,15 +75,15 @@ final class CompatDefaultsTests: XCTestCase {
 
     /// RDR2 is told 2,304 MiB of video memory, not 3,072 (decisions 0142 and 0153 as amended
     /// 2026-10-30): its heap size and the plan's video figure (DXVK's DXGI, KosmicKrisp's budget) by
-    /// its entry's keys over everyGame's; every other game keeps everyGame's 3,072 heap. Only RDR2
-    /// holds its 8,960 MB address-space gap (decisions 0126, 0179).
+    /// its entry's keys over everyGame's; every other game keeps everyGame's 3,072 heap. No game
+    /// holds an address-space gap by default any more: elastic reservations make room (decision 0180).
     func testRDR2IsTold2304MiBOfVideoMemory() throws {
         let rdr2 = try XCTUnwrap(CompatDefaults.load(directory: Self.shipped).entry(for: "app-1174180"))
         let config = LaunchSettings.resolve(game: LaunchSettings.overEveryGame(rdr2.settings), global: LaunchSettings())
             .config(over: [:])
         XCTAssertEqual(config["env.PLAYPORT_VK_HEAP_MB"], "2304")
         XCTAssertEqual(config["vram-mb"], "2304")
-        XCTAssertEqual(config["jumbo-mb"], "8960")
+        XCTAssertNil(config["jumbo-mb"])
         XCTAssertEqual(config["env.MADEIRA_FEX_BATCH2"], "1")   // everyGame's other keys stay
         let overrides = MemoryPlan.Overrides.read(value: { config[$0] }, environment: [:])
         let plan = MemoryPlan(MemoryPlan.Inputs(limitMB: 8192, physicalMB: 11734, poolMB: 4096), overrides: overrides)
@@ -117,16 +117,15 @@ final class CompatDefaultsTests: XCTestCase {
         }
     }
 
-    /// The Witcher 3's current build gets short reservations (patches/madeira-unix 0222) and keeps
-    /// FEX's PAUSE (decision 0163 withdrew 0162's WFE); its classic branch's cohort hold (jumbo-mb=32768) stays, since the entry names no jumbo-mb.
-    func testTheWitcher3GetsShortReservationsAndKeepsItsCohortHold() throws {
-        let entry = try XCTUnwrap(CompatDefaults.load(directory: Self.shipped).entry(for: "app-292030"))
-        XCTAssertEqual(entry.settings.runtime, "short-reserve-mb=6144")
-        let game = LaunchSettings.overEveryGame(entry.settings)
-        let effective = LaunchSettings.resolve(game: game, global: LaunchSettings())
-        XCTAssertEqual(effective.config(over: [:])["short-reserve-mb"], "6144")
+    /// The Witcher 3's current build has no entry: elastic reservations place its 64 and 32 GB asks
+    /// without a key (decision 0180), and it keeps FEX's PAUSE (decision 0163 withdrew 0162's WFE);
+    /// its classic branch's cohort hold (jumbo-mb=32768 cage-hold=1) stays with its cohort entry.
+    func testTheWitcher3HasNoAddressSpaceKeyAndKeepsItsCohortHold() throws {
+        XCTAssertNil(try CompatDefaults.load(directory: Self.shipped).entry(for: "app-292030"))
+        let effective = LaunchSettings.resolve(game: LaunchSettings.overEveryGame(nil), global: LaunchSettings())
+        XCTAssertNil(effective.config(over: [:])["short-reserve-mb"])
         XCTAssertNil(effective.config(over: [:])["env.MADEIRA_FEX_PAUSE"])
-        XCTAssertNil(effective.config(over: [:])["jumbo-mb"])   // RDR2's hold is RDR2's alone (decision 0179)
+        XCTAssertNil(effective.config(over: [:])["jumbo-mb"])   // RDR2's hold is gone too (decision 0180)
         let classic = effective.config(over: ["jumbo-mb": "32768", "cage-hold": "1"])
         XCTAssertEqual(classic["jumbo-mb"], "32768")
         XCTAssertEqual(classic["cage-hold"], "1")

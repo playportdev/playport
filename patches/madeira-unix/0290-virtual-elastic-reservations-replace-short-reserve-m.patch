@@ -1,0 +1,807 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Mon, 2 Nov 2026 16:52:24 +0100
+Subject: [PATCH] virtual: elastic reservations replace short-reserve-mb
+
+The Wine glue of decision 0180's rule: virtual_ios.c now calls
+pp_elastic.h (madeira-unix 0289) and performs only the mappings it
+decides. Nothing changes until a reservation fails for room
+(STATUS_NO_MEMORY). Then:
+
+- the untouched upper part of the large plain reservation with the most
+  lendable room goes back to the host (free_pages on the view's tail):
+  the view shrinks in Wine's view tracking, keeps a 32 MiB guard at its
+  new end, and its claim, the size the guest was told, is remembered;
+- an unhinted reserve-only ask from 1 GiB that cannot be placed whole
+  gets a short grant with its guard, below earlier claims (0222's
+  ordering), and is told it got its full size;
+- once engaged, an elastic ask of 256 MiB or more is placed by the
+  module first, outside every live claim, and falls back to today's
+  placement when the module finds no room.
+
+A commit, in allocate_virtual_memory's commit branch for both entry
+points, is matched to its own elastic view first, then to the claim
+covering it. Reaching the guard or the claim beyond it grows the view
+in place, doubling, with a no-overwrite fixed mapping, the guard moving
+up; when the space above is taken it returns STATUS_NO_MEMORY and is
+logged with what blocked it. It is never served inside another view.
+The views carry VPROT_ELASTIC (PR #84's flag); their release ends the
+claim. VirtualQuery reports the real view, never the tail beyond it as
+the guest's; a query inside a shortened view's claim is logged.
+
+Never shrunk, by property: hinted, aligned, placeholder, Ex asks with
+address requirements, zero_bits/limited, commit-at-reserve,
+hold-served asks, and every ask the Social Club layout's router sees,
+which runs first. The window is the guest's below FEX's band; free
+ranges come from the kernel map, so the holds are never lent.
+
+One tag, [elastic], for place, grant, lend, grow, refuse and query:
+address, real size, claim, committed height; each kind counted, its
+first 32 lines printed and then every power of two, in both variants.
+
+madeira-unix 0222's short-reserve path goes: pp_short_reserve.h, its
+fixed-N grant, its commit check and its release of an untaken jumbo
+hold, with the short-reserve-mb key.
+
+Linear: PLA-802
+Class: feature
+Evidence: docs/evidence/2026-11-02-elastic-reservations.md
+Offered-upstream: no; the address-space layout is the iOS port's
+---
+ build/ntdll-unix/pp_short_reserve.h |  50 ---
+ build/ntdll-unix/virtual_ios.c      | 590 +++++++++++++++++++++-------
+ 2 files changed, 457 insertions(+), 183 deletions(-)
+ delete mode 100644 build/ntdll-unix/pp_short_reserve.h
+
+diff --git a/build/ntdll-unix/pp_short_reserve.h b/build/ntdll-unix/pp_short_reserve.h
+deleted file mode 100644
+index ad8c7be..0000000
+--- a/build/ntdll-unix/pp_short_reserve.h
++++ /dev/null
+@@ -1,50 +0,0 @@
+-/* SPDX-License-Identifier: LGPL-2.1-or-later
+- * Short reservations (Playport, PLA-452).
+- *
+- * The Witcher 3's 4.x build reserves 16, 64 and 32 GiB of address space at
+- * start (red::memory's pools, MEM_RESERVE only) and bumps a commit cursor up
+- * from each base. This task's VA is 512 GiB, of which the usable window is
+- * 64 GiB, so the 64 and 32 GiB asks cannot be placed and the game dies in its
+- * own out-of-memory handler at its first allocation from them.
+- *
+- * With madeira.cfg short-reserve-mb = N, an unhinted reserve-only ask larger
+- * than N MiB that nothing else can place is granted N MiB of real view plus a
+- * guard, and the caller is told it got its full size. A commit that reaches
+- * past the real part, into the guard or the claimed tail, is refused with
+- * STATUS_NO_MEMORY: a bump cursor's first overrun lands in the guard, so the
+- * game fails the way a full pool fails on Windows, never in another view.
+- *
+- * Pure, so a host test compiles this header as is. */
+-#ifndef PP_SHORT_RESERVE_H
+-#define PP_SHORT_RESERVE_H
+-#include <stdint.h>
+-
+-/* The guard above the real part: no commit there is served. */
+-#define PPSR_GUARD (256ull << 20)
+-
+-/* The real size for an ask of `ask` bytes under short-reserve-mb = cfg_mb:
+- * 0 (no short grant) when the key is off or the ask fits in it, else the cap
+- * rounded down to the 64 KiB allocation granularity. */
+-static inline uint64_t ppsr_real_size( uint64_t ask, long long cfg_mb )
+-{
+-    uint64_t cap;
+-
+-    if (cfg_mb <= 0) return 0;
+-    cap = ((uint64_t)cfg_mb << 20) & ~0xffffull;
+-    if (!cap || ask <= cap + PPSR_GUARD) return 0;
+-    return cap;
+-}
+-
+-/* Whether a commit of [addr, addr + size) reaches past the real part of a
+- * short grant at base (real bytes backed, claimed bytes promised). */
+-static inline int ppsr_commit_overruns( uint64_t base, uint64_t real, uint64_t claimed,
+-                                        uint64_t addr, uint64_t size )
+-{
+-    uint64_t end = addr + (size ? size : 1);
+-
+-    if (end < addr) return 1;                         /* wraps: never ours to serve */
+-    if (addr >= base + claimed || end <= base) return 0;   /* outside the claim */
+-    return end > base + real;
+-}
+-
+-#endif
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 64c0a95..43a1b14 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -124,6 +124,7 @@ extern kern_return_t vm_protect(mach_port_t target_task, vm_address_t address,
+ #define VPROT_WOW64_VM 0x4000 /* anonymous i386 storage, logical EXEC only */
+ #define VPROT_WOW64_DATA 0x8000 /* a data section's view (file or pagefile backed) */
+ #define VPROT_X64_IMAGE 0x10000 /* pure x86-64 image: logical EXEC only, no pool copy */
++#define VPROT_ELASTIC 0x20000 /* Playport (PLA-802): a view pp_elastic.h tracks (ios_ppe) */
+ #include "ios_process_image.h"
+ #include "ios_copy_extent.h"
+ #include "wine/debug.h"
+@@ -1483,12 +1484,12 @@ static void ios_pool_owner_search( const uint64_t *wanted, unsigned nwanted )
+ static struct { uint64_t base, size, committed; unsigned commits, collisions; unsigned cage; } ios_soft[IOS_SOFT_MAX];
+ static unsigned ios_soft_n;
+ 
+-/* Playport (PLA-452): short grants, see pp_short_reserve.h. The view is
+- * real + PPSR_GUARD bytes at base; the caller was promised claimed bytes. */
+-#include "pp_short_reserve.h"
+-#define IOS_SHORT_MAX 8
+-static struct { uint64_t base, real, claimed, committed, high; unsigned commits, refused, foreign; } ios_short[IOS_SHORT_MAX];
+-static unsigned ios_short_n;
++/* Playport (PLA-802, decision 0180): elastic reservations. The policy is
++ * pp_elastic.h; the glue (ios_elastic_*, before allocate_virtual_memory_body)
++ * performs what it decides. One state for the address space, which every
++ * pseudo-process shares, under virtual_mutex. */
++#include "pp_elastic.h"
++static struct ppe_state ios_ppe;
+ 
+ /* ml433 (#72): the V8/cppgc cage holdback.
+  *
+@@ -10993,6 +10994,8 @@ static void delete_view( struct file_view *view ) /* [in] View */
+     ios_swap_release_range( view->base, view->size, 0 );   /* ml1077 */
+ #ifdef WINE_IOS
+     ios_code_alias_drop( view );   /* Playport (PLA-516) */
++    /* Playport (PLA-802): its claim ends with it (pp_elastic.h). */
++    if (view->protect & VPROT_ELASTIC) ppe_released( &ios_ppe, (uint64_t)(uintptr_t)view->base );
+ #endif
+     if (!(view->protect & VPROT_SYSTEM)) unmap_area( view->base, view->size );
+     if (ios_retire_trace_armed) ios_retire_mark( "D1u\n" );   /* unmap_area done */
+@@ -15392,6 +15395,14 @@ static NTSTATUS remove_pages_from_view( struct file_view *view, char *base, size
+         unregister_view( view );
+         if (view->base == base)
+         {
++#ifdef WINE_IOS
++            /* Playport (PLA-802): pp_elastic.h knows a view by its base. */
++            if (view->protect & VPROT_ELASTIC)
++            {
++                ppe_released( &ios_ppe, (uint64_t)(uintptr_t)view->base );
++                view->protect &= ~VPROT_ELASTIC;
++            }
++#endif
+             view->base = base + size;
+             view->size -= size;
+         }
+@@ -21659,6 +21670,408 @@ static NTSTATUS decommit_pages( struct file_view *view, char *base, size_t size
+ #include "pp_sc_vm.h"
+ #include "pp_sc_access.h"
+ 
++/***********************************************************************
++ *           Elastic reservations (Playport, PLA-802, decision 0180)
++ *
++ * The glue around pp_elastic.h, the policy: it reads the guest window's free
++ * ranges, performs the mappings the module decides and reports them back.
++ * Under virtual_mutex throughout (recursive: allocate_virtual_memory nests).
++ * Nothing changes until a reservation fails for room. madeira-unix 0222's
++ * short-reserve-mb path is gone; its ordering (later grants below earlier
++ * claims), guard and commit matching are the module's.
++ *
++ * One tag, [elastic], for place, grant, lend, grow and refuse, and for a
++ * VirtualQuery inside a shortened view's claim: each line gives the address,
++ * the real size, the claim and the committed height. Each kind is counted;
++ * its first 32 lines print, then every power of two. Plain dprintf, so the
++ * release variant has them too, as it has [alloc-fail].
++ */
++#define IOS_PPE_TOP      0x7c00000000ULL   /* FEX's band starts here */
++#define IOS_PPE_GAPS_MAX 512
++#define IOS_PPE_MB(x)    ((unsigned long long)(x) >> 20)
++#define IOS_PPE_KB(x)    ((unsigned long long)(x) >> 10)
++
++enum ios_ppe_kind { IOS_PPE_PLACE, IOS_PPE_GRANT, IOS_PPE_LEND, IOS_PPE_GROW, IOS_PPE_REFUSE, IOS_PPE_QUERY,
++                    IOS_PPE_LINES };
++static unsigned ios_ppe_lines[IOS_PPE_LINES];
++static struct ppe_gap ios_ppe_gaps[IOS_PPE_GAPS_MAX];
++
++/* Counts a line of a kind: its number when it prints, else 0. */
++static unsigned ios_ppe_line( enum ios_ppe_kind kind )
++{
++    unsigned n = ++ios_ppe_lines[kind];
++
++    return n <= 32 || !(n & (n - 1)) ? n : 0;
++}
++
++/* The properties of an ask, for pp_elastic.h. limit: zero_bits' limit, or for
++ * NtAllocateVirtualMemoryEx any of its address requirements. */
++static unsigned ios_ppe_ask( void *hint, ULONG_PTR limit, ULONG type, SIZE_T size, unsigned more )
++{
++    unsigned flags = more;
++
++    if (hint) flags |= PPE_ASK_HINT;
++    if (limit) flags |= PPE_ASK_LIMIT;
++    if (type & MEM_COMMIT) flags |= PPE_ASK_COMMIT;
++    if (type & (MEM_RESERVE_PLACEHOLDER | MEM_REPLACE_PLACEHOLDER)) flags |= PPE_ASK_PLACEHOLDER;
++    if (ppj_hold_serves( size, ios_jumbo_hold_size ) || (ios_cage_holdback_live && size == 0x200000000ULL))
++        flags |= PPE_ASK_HELD;
++    /* Every ask the Social Club layout's router sees is the layout's (ppsc_route's guards). */
++    if (ppsc_ready && type == MEM_RESERVE && !limit && ppsc_helper()) flags |= PPE_ASK_LAYOUT;
++    return flags;
++}
++
++/* The guest window's free ranges of at least min bytes, ascending, between
++ * the usable floor and FEX's band: the holds are mapped, so they are not
++ * among them. Past IOS_PPE_GAPS_MAX the smallest go. */
++static unsigned ios_ppe_gaps_read( uint64_t min )
++{
++    uint64_t prev = ios_usable_va_floor;
++    unsigned n = 0;
++
++    if (min < PPE_GRAIN) min = PPE_GRAIN;
++    while (prev < IOS_PPE_TOP)
++    {
++        mach_vm_address_t a = prev;
++        mach_vm_size_t sz = 0;
++        vm_region_basic_info_data_64_t info;
++        mach_msg_type_number_t cnt = VM_REGION_BASIC_INFO_COUNT_64;
++        mach_port_t obj = MACH_PORT_NULL;
++        uint64_t end;
++
++        if (mach_vm_region( mach_task_self(), &a, &sz, VM_REGION_BASIC_INFO_64,
++                            (vm_region_info_t)&info, &cnt, &obj ) != KERN_SUCCESS || a > IOS_PPE_TOP)
++        {
++            a = IOS_PPE_TOP;
++            sz = 0;
++        }
++        end = a;
++        if (end > prev && end - prev >= min)
++        {
++            int keep = 1;
++
++            if (n == IOS_PPE_GAPS_MAX)
++            {
++                unsigned s = 0, k;
++
++                for (k = 1; k < n; k++) if (ios_ppe_gaps[k].size < ios_ppe_gaps[s].size) s = k;
++                if (ios_ppe_gaps[s].size >= end - prev) keep = 0;
++                else memmove( &ios_ppe_gaps[s], &ios_ppe_gaps[s + 1], (--n - s) * sizeof(ios_ppe_gaps[0]) );
++            }
++            if (keep)
++            {
++                ios_ppe_gaps[n].base = prev;
++                ios_ppe_gaps[n].size = end - prev;
++                n++;
++            }
++        }
++        if (a + sz <= prev) break;
++        prev = a + sz;
++    }
++    return n;
++}
++
++/* Free bytes from `from` up to the next mapping or FEX's band; *next: where they end. */
++static uint64_t ios_ppe_free_above( uint64_t from, uint64_t *next )
++{
++    mach_vm_address_t a = from;
++    mach_vm_size_t sz = 0;
++    vm_region_basic_info_data_64_t info;
++    mach_msg_type_number_t cnt = VM_REGION_BASIC_INFO_COUNT_64;
++    mach_port_t obj = MACH_PORT_NULL;
++
++    if (from >= IOS_PPE_TOP) a = from;
++    else if (mach_vm_region( mach_task_self(), &a, &sz, VM_REGION_BASIC_INFO_64,
++                             (vm_region_info_t)&info, &cnt, &obj ) != KERN_SUCCESS || a > IOS_PPE_TOP)
++        a = IOS_PPE_TOP;
++    if (a < from) a = from;
++    *next = a;
++    return a - from;
++}
++
++/* Track a view placed at base: real usable bytes of claim. Only views in the
++ * guest window: room lent above it is no use to an ask. */
++static void ios_ppe_track( void *base, SIZE_T claim, SIZE_T real, unsigned flags )
++{
++    uint64_t b = (uint64_t)(uintptr_t)base;
++    struct file_view *view;
++
++    if (b < ios_usable_va_floor || b + real > IOS_PPE_TOP) return;
++    if (ppe_placed( &ios_ppe, b, claim, real, flags ) < 0) return;
++    if ((view = find_view( base, 0 )) && view->base == base) view->protect |= VPROT_ELASTIC;
++    else ppe_released( &ios_ppe, b );
++}
++
++/* Shrink view i to keep bytes, its last PPE_GUARD the guard, and give the
++ * rest back to the host. The guest keeps the view and its claim. */
++static int ios_ppe_lend( int i, uint64_t keep, SIZE_T ask )
++{
++    const struct ppe_view *pv = &ios_ppe.v[i];
++    struct file_view *view = find_view( (void *)(uintptr_t)pv->base, 0 );
++    size_t span;
++    unsigned n;
++
++    if (!view || (uint64_t)(uintptr_t)view->base != pv->base || keep >= view->size) return 0;
++    span = view->size;
++    if (free_pages( view, (char *)view->base + keep, view->size - keep )) return 0;
++    ppe_lent( &ios_ppe, i, keep );
++    if ((n = ios_ppe_line( IOS_PPE_LEND )))
++        dprintf( 2, "[elastic] lend #%u 0x%llx real %llu MB claim %llu MB high %llu KB: keeps %llu MB with its "
++                    "guard, %llu MB back to the host for a %llu MB ask\n",
++                 n, (unsigned long long)pv->base, IOS_PPE_MB(pv->real), IOS_PPE_MB(pv->claim),
++                 IOS_PPE_KB(pv->high), IOS_PPE_MB(keep), IOS_PPE_MB(span - keep), IOS_PPE_MB(ask) );
++    return 1;
++}
++
++/* Grow view i in place to real usable bytes: the space above its guard is
++ * mapped no-overwrite and becomes part of the view, the guard moving up. */
++static int ios_ppe_grow( int i, uint64_t real )
++{
++    const struct ppe_view *pv = &ios_ppe.v[i];
++    char *old_end = (char *)(uintptr_t)ppe_view_end( &ios_ppe, i );
++    size_t delta = real - pv->real;
++    struct file_view *view = find_view( (void *)(uintptr_t)pv->base, 0 );
++    BYTE vprot;
++
++    if (!view || (uint64_t)(uintptr_t)view->base != pv->base || (char *)view->base + view->size != old_end)
++        return 0;
++    if (find_view_range( old_end, delta )) return 0;
++    if (anon_mmap_tryfixed( old_end, delta, PROT_NONE, 0 ) == MAP_FAILED) return 0;
++    if (!alloc_pages_vprot( old_end, delta ))
++    {
++        munmap( old_end, delta );
++        return 0;
++    }
++    vprot = get_page_vprot( old_end - page_size ) & ~VPROT_COMMITTED;   /* the old guard's: reserved */
++    unregister_view( view );
++    view->size += delta;
++    register_view( view );
++    set_page_vprot( old_end, delta, vprot );
++    ppe_grown( &ios_ppe, i, real );
++    return 1;
++}
++
++/* A reservation placed as today: tracked when it may lend. */
++static void ios_elastic_placed( void *base, SIZE_T size, unsigned flags )
++{
++    sigset_t sigset;
++
++    server_enter_uninterrupted_section( &virtual_mutex, &sigset );
++    ios_ppe_track( base, size, size, flags );
++    server_leave_uninterrupted_section( &virtual_mutex, &sigset );
++}
++
++/* A reservation, before today's placement (before) or after it failed for
++ * room: perform pp_elastic.h's decisions. *handled = 0 when the module says
++ * to place it as today; else the status to return, with *ret and *size_ptr
++ * set on success (a short grant reports the size asked). */
++static NTSTATUS ios_elastic_reserve( int before, void **ret, SIZE_T *size_ptr, ULONG type, ULONG protect,
++                                     ULONG_PTR limit_low, ULONG_PTR limit_high, ULONG_PTR align,
++                                     ULONG attributes, unsigned flags, int *handled )
++{
++    void *hint = *ret, *p;
++    SIZE_T size = *size_ptr, sz;
++    uint64_t min = ppe_up( size ), failed_at = 0;
++    struct ppe_decision d;
++    NTSTATUS status = STATUS_NO_MEMORY;
++    sigset_t sigset;
++    unsigned n, tries;
++
++    *handled = 0;
++    if (before && (!ios_ppe.engaged || !ppe_elastic_ask( flags ) || size < PPE_DONOR_MIN)) return STATUS_SUCCESS;
++    /* A short grant needs a gap of twice its floor and guard; a whole fit, the ask. */
++    if (size >= PPE_SHORT_MIN && min > 2 * (PPE_SHORT_FLOOR + PPE_GUARD)) min = 2 * (PPE_SHORT_FLOOR + PPE_GUARD);
++
++    server_enter_uninterrupted_section( &virtual_mutex, &sigset );
++    ios_ppe.window = IOS_PPE_TOP - ios_usable_va_floor;
++    n = ios_ppe_gaps_read( min );
++    d = before ? ppe_before( &ios_ppe, size, flags, ios_ppe_gaps, n )
++               : ppe_failed( &ios_ppe, size, flags, ios_ppe_gaps, n );
++    if (d.kind == PPE_TODAY)
++    {
++        server_leave_uninterrupted_section( &virtual_mutex, &sigset );
++        return STATUS_SUCCESS;
++    }
++    *handled = 1;
++    for (tries = 0; d.kind != PPE_FAIL && tries < 256; tries++)
++    {
++        if (d.kind == PPE_LEND)
++        {
++            if (!ios_ppe_lend( d.view, d.keep, size )) break;
++            if (!ppe_elastic_ask( flags ))
++            {
++                /* Never shrunk: today's placement again, in the room lent. */
++                p = hint;
++                sz = size;
++                if (!allocate_virtual_memory( &p, &sz, type, protect, limit_low, limit_high, align, attributes ))
++                {
++                    *ret = p;
++                    *size_ptr = sz;
++                    status = STATUS_SUCCESS;
++                    break;
++                }
++            }
++        }
++        else
++        {
++            unsigned line;
++
++            p = (void *)(uintptr_t)d.addr;
++            sz = d.kind == PPE_SHORT ? d.real + PPE_GUARD : size;
++            if (!allocate_virtual_memory( &p, &sz, type & ~MEM_TOP_DOWN, protect, 0, 0, 0, 0 ))
++            {
++                ios_ppe_track( p, size, d.kind == PPE_SHORT ? d.real : size, flags );
++                if (d.kind == PPE_SHORT && (line = ios_ppe_line( IOS_PPE_GRANT )))
++                    dprintf( 2, "[elastic] grant #%u %p real %llu MB + %llu MB guard claim %llu MB high 0 KB: "
++                                "a %llu MB ask, told it got all of it\n", line, p, IOS_PPE_MB(d.real),
++                             IOS_PPE_MB(PPE_GUARD), IOS_PPE_MB(size), IOS_PPE_MB(size) );
++                else if (d.kind == PPE_PLACE && (line = ios_ppe_line( IOS_PPE_PLACE )))
++                    dprintf( 2, "[elastic] place #%u %p real %llu MB claim %llu MB high 0 KB: whole, outside "
++                                "every claim\n", line, p, IOS_PPE_MB(sz), IOS_PPE_MB(size) );
++                *ret = p;
++                *size_ptr = d.kind == PPE_SHORT ? (size + page_mask) & ~(SIZE_T)page_mask : sz;
++                status = STATUS_SUCCESS;
++                break;
++            }
++            /* Something took the room meanwhile: read the window again, once. */
++            if (failed_at == d.addr) break;
++            failed_at = d.addr;
++        }
++        n = ios_ppe_gaps_read( min );
++        d = ppe_failed( &ios_ppe, size, flags, ios_ppe_gaps, n );
++    }
++    server_leave_uninterrupted_section( &virtual_mutex, &sigset );
++    if (status)
++    {
++        *ret = hint;
++        *size_ptr = size;
++        /* Before today's placement, a failure leaves it its chance (a steer slot, FEX's band). */
++        if (before) *handled = 0;
++    }
++    return status;
++}
++
++/* After today's placement of an ask: track it, or hand a failure for room to
++ * pp_elastic.h. Any other ask and status is returned as is. */
++static NTSTATUS ios_elastic_after( NTSTATUS status, void **ret, SIZE_T *size_ptr, void *hint, SIZE_T size,
++                                   ULONG type, ULONG protect, ULONG_PTR limit_low, ULONG_PTR limit_high,
++                                   ULONG_PTR align, ULONG attributes, unsigned flags )
++{
++    int handled;
++
++    if (!(type & MEM_RESERVE)) return status;
++    if (!status)
++    {
++        if (size >= PPE_DONOR_MIN && ppe_elastic_ask( flags ) && *ret) ios_elastic_placed( *ret, size, flags );
++        return status;
++    }
++    /* Layout asks fail as today; room lent in the window is no use under a limit below it. */
++    if (status != STATUS_NO_MEMORY || (flags & PPE_ASK_LAYOUT) || (limit_high && limit_high < ios_usable_va_floor))
++        return status;
++    *ret = hint;
++    *size_ptr = size;
++    return ios_elastic_reserve( 0, ret, size_ptr, type, protect, limit_low, limit_high, align, attributes,
++                                flags, &handled );
++}
++
++/* What blocked a view's growth at `blocker`, for the refuse line. */
++static const char *ios_ppe_blocker( int i, uint64_t blocker, char *buf, size_t len )
++{
++    const struct ppe_view *pv = &ios_ppe.v[i];
++    struct file_view *other;
++
++    if (blocker == pv->base + pv->claim) return "the end of its claim";
++    if (blocker >= IOS_PPE_TOP) return "FEX's band";
++    if (blocker == ppe_view_end( &ios_ppe, i )) return "a mapping at its guard's end";
++    if ((other = find_view( (void *)(uintptr_t)blocker, 0 )))
++    {
++        snprintf( buf, len, "view %p+%llu MB", other->base, IOS_PPE_MB(other->size) );
++        return buf;
++    }
++    return "a host mapping";
++}
++
++/* A commit of [base, base + size), page-rounded, virtual_mutex held: in a
++ * shortened view's guard or claim it grows the view in place or is refused
++ * (STATUS_NO_MEMORY), never served in another view. Every other commit is
++ * served as today. */
++static NTSTATUS ios_elastic_commit( char *base, size_t size )
++{
++    struct file_view *view = find_view( base, 0 );
++    uint64_t a = (uint64_t)(uintptr_t)base, from, next = 0, free_above, old;
++    const struct ppe_view *pv;
++    struct ppe_commit_decision c;
++    char what[64];
++    unsigned n;
++    int i;
++
++    if (view ? !(view->protect & VPROT_ELASTIC) : !(ios_ppe.lends | ios_ppe.shorts)) return STATUS_SUCCESS;
++    if ((i = ppe_owner( &ios_ppe, a, view ? (uint64_t)(uintptr_t)view->base : 0 )) < 0) return STATUS_SUCCESS;
++    pv = &ios_ppe.v[i];
++    if (!ppe_shortened( pv ))
++    {
++        /* Whole: served as today; only its committed height is the module's. */
++        if (a + size <= pv->base + pv->real) ppe_served( &ios_ppe, i, a, size );
++        return STATUS_SUCCESS;
++    }
++    from = ppe_view_end( &ios_ppe, i );
++    free_above = ios_ppe_free_above( from, &next );
++    old = pv->real;
++    c = ppe_commit( &ios_ppe, i, a, size, free_above, next );
++    if (c.kind == PPE_GROW)
++    {
++        if (ios_ppe_grow( i, c.real ))
++        {
++            if ((n = ios_ppe_line( IOS_PPE_GROW )))
++                dprintf( 2, "[elastic] grow #%u 0x%llx real %llu -> %llu MB claim %llu MB high %llu KB: commit "
++                            "%p+0x%lx, guard moved up\n", n, (unsigned long long)pv->base, IOS_PPE_MB(old),
++                         IOS_PPE_MB(pv->real), IOS_PPE_MB(pv->claim), IOS_PPE_KB(pv->high), base,
++                         (unsigned long)size );
++        }
++        else
++        {
++            c.kind = PPE_REFUSE;
++            c.blocker = from;
++            ios_ppe.refusals++;
++        }
++    }
++    if (c.kind == PPE_REFUSE)
++    {
++        if ((n = ios_ppe_line( IOS_PPE_REFUSE )))
++            dprintf( 2, "[elastic] refuse #%u 0x%llx real %llu MB claim %llu MB high %llu KB: commit %p+0x%lx "
++                        "STATUS_NO_MEMORY, growth blocked at 0x%llx by %s\n", n, (unsigned long long)pv->base,
++                     IOS_PPE_MB(pv->real), IOS_PPE_MB(pv->claim), IOS_PPE_KB(pv->high), base,
++                     (unsigned long)size, (unsigned long long)c.blocker,
++                     ios_ppe_blocker( i, c.blocker, what, sizeof(what) ) );
++        return STATUS_NO_MEMORY;
++    }
++    ppe_served( &ios_ppe, i, a, size );
++    return STATUS_SUCCESS;
++}
++
++/* VirtualQuery at addr answered info: inside a shortened view's claim, log
++ * what the guest was told (decision 0180's open measurement). The view is
++ * reported as it really is; the tail beyond it never as the guest's. */
++static void ios_elastic_query( const void *addr, const MEMORY_BASIC_INFORMATION *info )
++{
++    struct file_view *view;
++    sigset_t sigset;
++    unsigned n;
++    int i = -1;
++
++    if (!(ios_ppe.lends | ios_ppe.shorts)) return;
++    server_enter_uninterrupted_section( &virtual_mutex, &sigset );
++    view = find_view( addr, 0 );
++    if (!view || (view->protect & VPROT_ELASTIC))
++        i = ppe_owner( &ios_ppe, (uint64_t)(uintptr_t)addr, view ? (uint64_t)(uintptr_t)view->base : 0 );
++    if (i >= 0 && ppe_shortened( &ios_ppe.v[i] ) && (n = ios_ppe_line( IOS_PPE_QUERY )))
++        dprintf( 2, "[elastic] query #%u 0x%llx real %llu MB claim %llu MB high %llu KB: VirtualQuery %p told "
++                    "base %p size %llu MB state 0x%x\n", n, (unsigned long long)ios_ppe.v[i].base,
++                 IOS_PPE_MB(ios_ppe.v[i].real), IOS_PPE_MB(ios_ppe.v[i].claim), IOS_PPE_KB(ios_ppe.v[i].high),
++                 addr, info->BaseAddress, IOS_PPE_MB(info->RegionSize), (unsigned)info->State );
++    server_leave_uninterrupted_section( &virtual_mutex, &sigset );
++}
++
+ static NTSTATUS allocate_virtual_memory_body( void **ret, SIZE_T *size_ptr, ULONG type, ULONG protect,
+                                               ULONG_PTR limit_low, ULONG_PTR limit_high,
+                                               ULONG_PTR align, ULONG attributes )
+@@ -21835,7 +22248,9 @@ static NTSTATUS allocate_virtual_memory_body( void **ret, SIZE_T *size_ptr, ULON
+         int was_committed = (get_page_vprot( base ) & VPROT_COMMITTED) != 0;
+         int any_committed = 0;   /* ml1077: only FRESH commits may be file-backed (a hole reads as zero) */
+         { const char *pg; for (pg = base; pg < (const char *)base + size; pg += page_size) if (get_page_vprot( pg ) & VPROT_COMMITTED) { any_committed = 1; break; } }
+-        if (!(view = find_view( base, size ))) status = STATUS_NOT_MAPPED_VIEW;
++        /* Playport (PLA-802): a commit in an elastic view grows it or is refused. */
++        if (ios_ppe.n && (status = ios_elastic_commit( base, size ))) view = NULL;
++        else if (!(view = find_view( base, size ))) status = STATUS_NOT_MAPPED_VIEW;
+         else if (view->protect & SEC_FILE) status = STATUS_ALREADY_COMMITTED;
+         else if (view->protect & VPROT_FREE_PLACEHOLDER) status = STATUS_CONFLICTING_ADDRESSES;
+         else if (!(status = set_protection( view, base, size, protect )))
+@@ -22554,6 +22969,9 @@ NTSTATUS WINAPI NtAllocateVirtualMemory( HANDLE process, PVOID *ret, ULONG_PTR z
+         void  *jumbo_hint = *ret;
+         size_t jumbo_size = *size_ptr;
+         int    is_jumbo   = (jumbo_size >= 0x40000000 && (type & MEM_RESERVE));
++        /* Playport (PLA-802): the ask's properties, for pp_elastic.h. */
++        unsigned ppe_flags = ios_ppe_ask( jumbo_hint, limit, type, jumbo_size, 0 );
++        int ppe_handled = 0;
+         /* ml125 [bigres]: settle the furniture attribution WITHOUT an FEX build.
+          * The [window] probe found ~30 runs of ~511MB and I inferred FEXCore's
+          * per-thread LookupCache (TotalCacheSize = VirtualMemSize/4096*8 +
+@@ -22566,71 +22984,6 @@ NTSTATUS WINAPI NtAllocateVirtualMemory( HANDLE process, PVOID *ret, ULONG_PTR z
+          * would have been wasted work. */
+         if ((type & MEM_COMMIT) && ios_bigres_cnt && *ret)
+             ios_bigres_commit( *ret, *size_ptr );
+-        /* Playport (PLA-452): a commit inside a short grant's claim. Claims
+-         * overlap other views (each later grant sits below the earlier ones,
+-         * see the grant), so the grant whose own view holds the address
+-         * answers first. Within its real part a commit is served as usual; in
+-         * its guard, or in a claim where no view is, it is refused as a full
+-         * pool's would be. Another view's commit inside a claim is that
+-         * view's: counted and served. */
+-        if ((type & MEM_COMMIT) && ios_short_n && *ret)
+-        {
+-            uint64_t a = (uint64_t)(uintptr_t)*ret;
+-            struct file_view *v = find_view( *ret, 0 );
+-            unsigned i, pick = ios_short_n;
+-
+-            for (i = 0; i < ios_short_n && v; i++)
+-                if ((uint64_t)(uintptr_t)v->base == ios_short[i].base) pick = i;
+-            for (i = 0; i < ios_short_n && pick == ios_short_n; i++)
+-            {
+-                struct file_view *own = find_view( (void *)(uintptr_t)ios_short[i].base, 0 );
+-                if (own && (uint64_t)(uintptr_t)own->base == ios_short[i].base
+-                    && a >= ios_short[i].base && a < ios_short[i].base + ios_short[i].claimed)
+-                    pick = i;
+-            }
+-            if (pick < ios_short_n)
+-            {
+-                uint64_t off = a - ios_short[pick].base;
+-
+-                i = pick;
+-                if (v && (uint64_t)(uintptr_t)v->base != ios_short[i].base)
+-                {
+-                    if (ios_short[i].foreign++ < 8)
+-                        dprintf( 2, "[short-reserve] commit 0x%llx+0x%lx in grant 0x%llx's claim at +%llu MB "
+-                                    "belongs to view %p: served as that view's\n",
+-                                 (unsigned long long)a, (unsigned long)*size_ptr,
+-                                 (unsigned long long)ios_short[i].base,
+-                                 (unsigned long long)(off >> 20), v->base );
+-                }
+-                else if (ppsr_commit_overruns( ios_short[i].base, ios_short[i].real, ios_short[i].claimed,
+-                                               a, *size_ptr ))
+-                {
+-                    if (ios_short[i].refused++ < 16)
+-                        dprintf( 2, "[short-reserve] REFUSED commit 0x%llx+0x%lx at +%llu MB of grant 0x%llx: "
+-                                    "past its %llu MB real part (committed %llu MB in %u calls, high +%llu MB)\n",
+-                                 (unsigned long long)a, (unsigned long)*size_ptr, (unsigned long long)(off >> 20),
+-                                 (unsigned long long)ios_short[i].base,
+-                                 (unsigned long long)(ios_short[i].real >> 20),
+-                                 (unsigned long long)(ios_short[i].committed >> 20), ios_short[i].commits,
+-                                 (unsigned long long)(ios_short[i].high >> 20) );
+-                    return STATUS_NO_MEMORY;
+-                }
+-                else
+-                {
+-                    ios_short[i].commits++;
+-                    ios_short[i].committed += *size_ptr;
+-                    if (off + *size_ptr > ios_short[i].high) ios_short[i].high = off + *size_ptr;
+-                    if (ios_short[i].commits <= 12 || !(ios_short[i].commits & 255))
+-                        dprintf( 2, "[short-reserve] commit #%u 0x%llx+0x%lx at +%llu MB of grant 0x%llx "
+-                                    "(committed %llu MB, high +%llu MB of %llu MB real)\n",
+-                                 ios_short[i].commits, (unsigned long long)a, (unsigned long)*size_ptr,
+-                                 (unsigned long long)(off >> 20), (unsigned long long)ios_short[i].base,
+-                                 (unsigned long long)(ios_short[i].committed >> 20),
+-                                 (unsigned long long)(ios_short[i].high >> 20),
+-                                 (unsigned long long)(ios_short[i].real >> 20) );
+-                }
+-            }
+-        }
+         /* ml151: a commit landing in a SOFT pool range — see ios_soft. The range
+          * was never backed, so materialise exactly this sub-range now. Check the
+          * kernel map first: if something already owns the VA (furniture, most
+@@ -22848,11 +23201,17 @@ NTSTATUS WINAPI NtAllocateVirtualMemory( HANDLE process, PVOID *ret, ULONG_PTR z
+                 }
+             }
+         }
++        /* Playport (PLA-802, decision 0180): once a placement has failed, an
++         * elastic reservation of a donor's size is placed by pp_elastic.h, or
++         * sent back to be placed as today (ios_elastic_reserve). */
++        if ((type & MEM_RESERVE) && !*ret)
++            st = ios_elastic_reserve( 1, ret, size_ptr, type, protect, 0, limit, 0, 0, ppe_flags, &ppe_handled );
++        if (ppe_handled) ;
+         /* task#29 CEF: PartitionAlloc (chrome_elf DllMain) reserves multi-GB
+          * pools. iOS caps user VA at 0x8000000000 (39-bit; extended-VA is not
+          * available to free personal teams) and wine's furniture (PE images,
+          * TEBs, stacks, EC bitmap) clusters at the TOP of that space. */
+-        if (!*ret && *size_ptr >= 0x40000000 && (type & MEM_RESERVE) && !limit)
++        else if (!*ret && *size_ptr >= 0x40000000 && (type & MEM_RESERVE) && !limit)
+         {
+             /* ml92 (task #35) MEASURED, replacing two generations of guesses.
+              * The original target was [256G,480G) — written before the GPU
+@@ -22958,64 +23317,6 @@ NTSTATUS WINAPI NtAllocateVirtualMemory( HANDLE process, PVOID *ret, ULONG_PTR z
+                     ios_bigres_report( "jumbo reserve failed" );
+                     ios_soft_report( "jumbo reserve failed" );
+                 }
+-                /* Playport (PLA-452): madeira.cfg short-reserve-mb = N grants
+-                 * N MiB of real view plus a guard and reports the full size;
+-                 * commits past the real part are refused above. Above the
+-                 * guest window first, below FEX's band, then anywhere, and
+-                 * top-down: The Witcher 3's free finds a pointer's pool by
+-                 * address range, the earlier pool first, so each later grant
+-                 * goes below the earlier ones, whose claims then never cover
+-                 * it. Placed bottom-up, its 32 GiB grant sat inside the 64 GiB
+-                 * one's claim and its blocks were freed into the wrong pool. */
+-                if (!(type & MEM_COMMIT) && ios_short_n < IOS_SHORT_MAX)
+-                {
+-                    uint64_t real = ppsr_real_size( *size_ptr, madeira_cfg_int( "short-reserve-mb", 0 ) );
+-
+-                    if (real && ios_jumbo_hold_size)
+-                    {
+-                        /* The jumbo hold serves one ask of its size, which this
+-                         * title has not made: a title that needs short grants
+-                         * gets nothing from it (everyGame's 8,960 MB hold is
+-                         * RDR2's size). Release it before the first grant, so
+-                         * the grants go top-down from the same ceiling and each
+-                         * later one still lands below the earlier ones. */
+-                        dprintf( 2, "[short-reserve] releasing the untaken jumbo hold 0x%llx +%llu MB "
+-                                    "before the first short grant\n",
+-                                 (unsigned long long)ios_jumbo_hold_base,
+-                                 (unsigned long long)ios_jumbo_hold_size >> 20 );
+-                        munmap( (void *)ios_jumbo_hold_base, ios_jumbo_hold_size );
+-                        ios_jumbo_hold_base = 0;
+-                        ios_jumbo_hold_size = 0;
+-                    }
+-                    if (real)
+-                    {
+-                        void *p = NULL;
+-                        SIZE_T psz = real + PPSR_GUARD;
+-                        unsigned int st3 = allocate_virtual_memory( &p, &psz, type | MEM_TOP_DOWN, protect,
+-                                                                    0x7400000000ULL, 0x7c00000000ULL, 0, 0 );
+-                        if (st3)
+-                        {
+-                            p = NULL;
+-                            psz = real + PPSR_GUARD;
+-                            st3 = allocate_virtual_memory( &p, &psz, type | MEM_TOP_DOWN, protect, 0, 0, 0, 0 );
+-                        }
+-                        dprintf( 2, "[short-reserve] ask 0x%lx (%lu MB): real %llu MB + %llu MB guard -> %p "
+-                                    "st=0x%x; the caller is told it got the full size\n",
+-                                 (unsigned long)*size_ptr, (unsigned long)(*size_ptr >> 20),
+-                                 (unsigned long long)(real >> 20), (unsigned long long)(PPSR_GUARD >> 20),
+-                                 p, st3 );
+-                        if (!st3)
+-                        {
+-                            ios_short[ios_short_n].base = (uint64_t)(uintptr_t)p;
+-                            ios_short[ios_short_n].real = real;
+-                            ios_short[ios_short_n].claimed = *size_ptr;
+-                            ios_short_n++;
+-                            *ret = p;
+-                            ios_jumbo_census( jumbo_hint, jumbo_size, p, 0 );
+-                            return STATUS_SUCCESS;
+-                        }
+-                    }
+-                }
+             }
+         }
+         else
+@@ -23403,6 +23704,11 @@ NTSTATUS WINAPI NtAllocateVirtualMemory( HANDLE process, PVOID *ret, ULONG_PTR z
+                 }
+             }
+         }
++        /* Playport (PLA-802): a reservation placed as today is tracked; one
++         * that failed for room goes to pp_elastic.h (ios_elastic_after). */
++        if (!ppe_handled)
++            st = ios_elastic_after( st, ret, size_ptr, jumbo_hint, jumbo_size, type, protect, 0, limit, 0, 0,
++                                    ppe_flags );
+ 
+         if (is_jumbo) ios_jumbo_census( jumbo_hint, jumbo_size, st ? NULL : *ret, (unsigned)st );
+         if (!st && *size_ptr >= 0x10000000 && *size_ptr < 0x40000000 && (type & MEM_RESERVE))
+@@ -24472,6 +24778,11 @@ NTSTATUS WINAPI NtAllocateVirtualMemoryEx( HANDLE process, PVOID *ret, SIZE_T *s
+         void  *jumbo_hint = *ret;
+         size_t jumbo_size = *size_ptr;
+         int    is_jumbo   = (jumbo_size >= 0x40000000 && (type & MEM_RESERVE));
++        /* Playport (PLA-802): the ask's properties, for pp_elastic.h. */
++        unsigned ppe_flags = ios_ppe_ask( jumbo_hint, limit_low | limit_high | align | attributes, type, jumbo_size,
++                                          (limit_low || limit_high || attributes ? PPE_ASK_EX_ADDR : 0) |
++                                          (align ? PPE_ASK_ALIGN : 0) );
++        int ppe_handled = 0;
+         /* ml125 [bigres]: settle the furniture attribution WITHOUT an FEX build.
+          * The [window] probe found ~30 runs of ~511MB and I inferred FEXCore's
+          * per-thread LookupCache (TotalCacheSize = VirtualMemSize/4096*8 +
+@@ -24621,8 +24932,18 @@ NTSTATUS WINAPI NtAllocateVirtualMemoryEx( HANDLE process, PVOID *ret, SIZE_T *s
+             }
+         }
+ 
+-        st = allocate_virtual_memory( ret, size_ptr, type, protect,
+-                                      limit_low, limit_high, align, attributes );
++        /* Playport (PLA-802): pp_elastic.h first once a placement has failed,
++         * then today's placement, then pp_elastic.h when that fails for room. */
++        if ((type & MEM_RESERVE) && !*ret)
++            st = ios_elastic_reserve( 1, ret, size_ptr, type, protect, limit_low, limit_high, align, attributes,
++                                      ppe_flags, &ppe_handled );
++        if (!ppe_handled)
++        {
++            st = allocate_virtual_memory( ret, size_ptr, type, protect,
++                                          limit_low, limit_high, align, attributes );
++            st = ios_elastic_after( st, ret, size_ptr, jumbo_hint, jumbo_size, type, protect,
++                                    limit_low, limit_high, align, attributes, ppe_flags );
++        }
+ 
+         if (is_jumbo) ios_jumbo_census( jumbo_hint, jumbo_size, st ? NULL : *ret, (unsigned)st );
+         if (!st && *size_ptr >= 0x10000000 && *size_ptr < 0x40000000 && (type & MEM_RESERVE))
+@@ -25693,6 +26014,9 @@ static unsigned int get_basic_memory_info( HANDLE process, LPCVOID addr,
+     }
+ 
+     if ((status = fill_basic_memory_info( addr, info ))) return status;
++#ifdef WINE_IOS
++    ios_elastic_query( addr, info );   /* Playport (PLA-802) */
++#endif
+ 
+     if (res_len) *res_len = sizeof(*info);
+     return STATUS_SUCCESS;

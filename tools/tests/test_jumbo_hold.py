@@ -79,14 +79,16 @@ class JumboHoldTests(unittest.TestCase):
         runtimes = {key: runtime_keys(entry.get("settings", {}).get("runtime", ""))
                     for key, entry in compat["titles"].items()}
         self.assertEqual([key for key, keys in runtimes.items() if "cage-hold" in keys], [])
-        # RDR2's jumbo-mb=8960 is its own compatibility entry's (decisions 0126, 0179), not every
-        # game's: an 8,960 MB hold in every game left Mewgenics' 1 GiB reservations no room.
+        # No compatibility entry holds address space (decision 0180): elastic reservations make room, so
+        # RDR2's jumbo-mb=8960 went, and an 8,960 MB hold in every game had left Mewgenics' 1 GiB
+        # reservations no room (decision 0179). The mechanism stays for a cohort title's own key.
         swift = (ROOT / "app/PlayportKit/Sources/PlayportKit/LaunchSettings.swift").read_text()
         every = swift[swift.index("public static let everyGame"):]
         every = every[:every.index("windowsServices:")]
         self.assertNotIn("jumbo-mb", every)
         self.assertNotIn("cage-hold", every)
-        self.assertEqual(runtimes["app-1174180"].get("jumbo-mb"), "8960")
+        self.assertEqual([key for key, keys in runtimes.items() if "jumbo-mb" in keys], [])
+        self.assertEqual([key for key, keys in runtimes.items() if "short-reserve-mb" in keys], [])
 
 
 if __name__ == "__main__":

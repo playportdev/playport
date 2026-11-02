@@ -490,9 +490,23 @@ CEF's PartitionAlloc pools and large reservations. When the window is full:
 Each placement that fails logs a `[va-scan] FAILED` line. i386 images go into their process's
 4 GiB window instead.
 
+Elastic reservations make room when a guest reservation fails for room
+([decision 0180](decisions/0180-elastic-reservations.md); madeira-unix 0289's `pp_elastic.h` decides,
+0290 performs it). Until a placement fails every reservation gets its full size. Then the untouched
+upper part of the large plain reservation with the most lendable room goes back to the host: the view
+shrinks to `max(2h, h + 64 MiB)` plus a 32 MiB inaccessible guard, `h` its committed height, and its
+claim (what the guest was told) is remembered. An unhinted reserve-only ask of 1 GiB or more that
+cannot be placed whole gets a short grant with the same guard and is told it got its full size. A
+commit reaching a guard or a claim grows the view in place while the space above is free, else
+returns `STATUS_NO_MEMORY`; it is never served in another view. `VirtualQuery` reports the real view.
+Hinted, aligned, placeholder, limited, commit-at-reserve and hold-served asks, and every ask the
+Social Club layout's router sees, are never shortened. One log tag, `[elastic]`, covers place, grant,
+lend, grow, refuse and a query inside a shortened view's claim, in both variants.
+
 Two holds keep address space for a title's large reservations from boot, both set by its
 `madeira.cfg` keys ([decisions 0126](decisions/0126-hold-rdr2s-address-space-from-the-start.md),
-[0129](decisions/0129-the-holds-serve-only-their-own-request.md)):
+[0129](decisions/0129-the-holds-serve-only-their-own-request.md)); no compatibility entry sets them
+since decision 0180, and a cohort title (The Witcher 3 1.32) may:
 
 - `jumbo-mb` holds a gap of that size below FEX's band, for the one reservation of that size;
 - `cage-hold` holds 8 GB of the guest window at 0x7200000000, for an 8 GB ask (The Witcher 3).
