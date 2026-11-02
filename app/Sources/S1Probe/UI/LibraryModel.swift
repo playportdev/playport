@@ -23,7 +23,7 @@ final class LibraryModel: ObservableObject {
     nonisolated static let home = WineHostRuntime.documents.deletingLastPathComponent()
     nonisolated static let paths = PlayportPaths.container(home: home)
     #if !PLAYPORT_RELEASE
-    /// A play's in-place swap of a copy's kept-encrypted files (an Xbox copy's, decision 0179:
+    /// A play's in-place swap of a copy's kept-encrypted files (an Xbox copy's, decision 0181:
     /// dev only, as everything only an Xbox play makes), its markers beside the catalogue.
     nonisolated static let inPlaceSwap = InPlaceSwap(games: paths.games,
                                                      markers: paths.layout.stateRoot.appendingPathComponent("plays", isDirectory: true))
@@ -89,7 +89,7 @@ final class LibraryModel: ObservableObject {
         removeSteamTickets("at app start")
         removeEpicOwnershipFiles("at app start")
         #if !PLAYPORT_RELEASE
-        // A play's plaintext a crash left in a copy's folder: the originals back first (decision 0179).
+        // A play's plaintext a crash left in a copy's folder: the originals back first (decision 0181).
         for play in Self.inPlaceSwap.pending {
             do {
                 try Self.inPlaceSwap.restore(play: play)
@@ -446,7 +446,7 @@ final class LibraryModel: ObservableObject {
             storePrerequisites += await gogSupportSetups(t)
             gogInstallScripts(t)
         }
-        // An Xbox copy (dev only, decisions 0179, 0180): its licence, its kept-encrypted files in
+        // An Xbox copy (dev only, decisions 0181, 0182): its licence, its kept-encrypted files in
         // plaintext in place for this play, the bridge for the runtime's tickets and the prefix keys
         // the runtime reads; the launch's end undoes the files and stops the bridge.
         var guestEnvironment: [String: Secret<String>] = [:]

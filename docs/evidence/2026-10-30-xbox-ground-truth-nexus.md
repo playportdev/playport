@@ -3,8 +3,8 @@
 **Linear:** [PLA-487](https://linear.app/playportdev/issue/PLA-487), under the spec
 [PLA-485](https://linear.app/playportdev/issue/PLA-485); plan
 [PLA-485](https://linear.app/playportdev/issue/PLA-485), phase 0. Words as in
-[GLOSSARY.md](../../GLOSSARY.md) and decisions [0179](../decisions/0179-the-xbox-store.md),
-[0180](../decisions/0180-xbox-guest-tickets.md).
+[GLOSSARY.md](../../GLOSSARY.md) and decisions [0181](../decisions/0181-the-xbox-store.md),
+[0182](../decisions/0182-xbox-guest-tickets.md).
 
 **Result.** On 2026-10-30, unmodified Xodus Nexus v0.4.1 installed the pilot (Product ID
 `9MW9469V91LM`) from the test account's PC Game Pass access. Its runtime signed in to Xbox Live

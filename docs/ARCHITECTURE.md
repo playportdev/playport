@@ -634,7 +634,7 @@ Each job waits for its driver's conditions (its store signed in, permitted netwo
 an unfinished import needs its source picked again); the player's Pause stays.
 A release build compiles none of `Dev/`
 ([decision 0009](decisions/0009-dev-and-release-builds.md)). The Xbox store is the dev
-app's only ([decision 0179](decisions/0179-the-xbox-store.md)): its button in the Library's
+app's only ([decision 0181](decisions/0181-the-xbox-store.md)): its button in the Library's
 store column (`LibraryGrid.column`, dimmed while Xbox is signed out; `open:xbox` in `pp ui`) and
 Library of the signed-in account's copies (`Dev/XboxLibrary.swift`, refreshed whenever the
 Library opens), and `pp verify --variant release` fails an executable
@@ -687,7 +687,7 @@ the Vulkan backend with `-d3d12` (arm64ec vkd3d-proton), whatever the graphics s
   if its name matches the bundled cohort list (`Titles/titles.json`). Identity is
   `(store, store game ID)` (ContentKit `StoreGameKey`), for Local, Steam, GOG,
   Epic, Battle.net (`bnet-<TACT product code>`) and Xbox (its Product ID, `xbox-<ProductId>`,
-  decision 0179); library joins, downloads, art and navigation use it, never the name
+  decision 0181); library joins, downloads, art and navigation use it, never the name
   ([decision 0057](decisions/0057-store-identity.md)). Files imports are Local,
   with their own receipts; store markers in imported or found files supply only
   launch hints, not store identity. Without a receipt, a folder named as a cohort
@@ -1488,7 +1488,7 @@ The per-game channels below are explicit exceptions, not transfers of the
 host account session. GOG and Epic's host sessions use separate Keychain
 services ([0058](decisions/0058-store-sessions.md)).
 
-The dev app also uses `XboxClientKit` (`app/XboxClient`, [0179](decisions/0179-the-xbox-store.md)):
+The dev app also uses `XboxClientKit` (`app/XboxClient`, [0181](decisions/0181-the-xbox-store.md)):
 an injected `XboxHTTP` (request in, status/body out), on ContentKit's `SecretStore`.
 `XboxSession` registers a random synthetic Windows device without probing the phone, exchanges
 Microsoft's inline sign-in result through signed SOAP, and silently renews the user session.
@@ -1506,7 +1506,7 @@ MSIXVC/MSIXVC2 package are listed, keyed by Product ID; UWP/EAppx, products with
 package (Battle.net, EA app deliveries) and add-ons are left out.
 During an Xbox play, `XboxBridgeListener` answers the guest runtime on 127.0.0.1, on a free port
 with a per-play 64-character key (`XODUS_BRIDGE_PORT`/`XODUS_BRIDGE_KEY`, title environment only,
-[0180](decisions/0180-xbox-guest-tickets.md)). It speaks Xodus's framed XML. `XboxBridgeService`
+[0182](decisions/0182-xbox-guest-tickets.md)). It speaks Xodus's framed XML. `XboxBridgeService`
 hands out only the copy's own client ID's user and device tickets, the licence token for its
 Product ID and related products, and update answers. Sign-out closes it.
 The release package has no XboxClientKit dependency and no `Dev/`; verification also rejects
@@ -1631,7 +1631,7 @@ the trailers `Class:`, `Evidence:` and `Offered-upstream:`. The classes are:
   `wine-unix` or `wine-pe`; the PE tree then applies `patches/wine-gdk`.
 - In `patches/wine-gdk` (any class): Xodus's and Xodus Nexus's Wine patches
   for GDK titles and their runtime, ported onto the PE tree (decision
-  [0179](decisions/0179-the-xbox-store.md)), each keeping its author, with the
+  [0181](decisions/0181-the-xbox-store.md)), each keeping its author, with the
   trailers `Ported-from:` (the original commit's URL) and `Ported: clean` or
   `Ported: adapted`; what was ported, left out or found upstream is in
   [the port's record](evidence/2026-10-30-wine-gdk-port.md); a desktop x86-64

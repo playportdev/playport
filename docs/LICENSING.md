@@ -95,7 +95,7 @@ contributions, not the right to use or distribute the code under its licence.
 | Component | Where it ends up | Licence |
 | --- | --- | --- |
 | Playport (app, HostIOKit, SteamClientKit, build and tooling code) | executable | GPL-3.0-or-later with the converter exception |
-| XboxClientKit and the Xbox sign-in sheet | dev executable only (0179); absent from release | Xodus-derived files GPL-3.0-only, without the converter exception; Nexus's Xodus patches also retain their MIT notice, CLEP decoding retains CikExtractor's MIT notice (below) |
+| XboxClientKit and the Xbox sign-in sheet | dev executable only (0181); absent from release | Xodus-derived files GPL-3.0-only, without the converter exception; Nexus's Xodus patches also retain their MIT notice, CLEP decoding retains CikExtractor's MIT notice (below) |
 | Madeira host layer: `build/ntdll-unix`, `build/wineserver`, `build/win32u-unix`, `madeira_cfg.h`, Winios, `IOSDisplayShim` | executable | GPL-3.0-or-later with Madeira's own converter exception; many `build/*-unix` files carry Wine's LGPL header, and some carry none (see "Licence readings") |
 | Wine: WineHQ plus Madeira's fork (`patches/wine-port`, decision 0013) | executable (unix side), both PE DLL sets, `nls/` | LGPL-2.1-or-later (`COPYING.LIB`, `LICENSE`, `LICENSE-MADEIRA.md`; `NOTICES.md` records current third-party notices) |
 | Valve's Wine: the commits of ValveSoftware/wine's `bleeding-edge` branch (the Wine Proton bleeding-edge ships) that Playport carries as `patches/wine-valve` (decisions 0018, 0049) | both PE DLL sets, and the Wine headers the unix side compiles against | LGPL-2.1-or-later, as upstream Wine; each commit keeps its author, and notices are collected from the actual patched Wine tree |
@@ -282,7 +282,7 @@ beside it (PLA-650).
 
 ### Xbox (planned)
 
-The Xbox store ([spec PLA-485](https://linear.app/playportdev/issue/PLA-485), [decision 0179](decisions/0179-the-xbox-store.md))
+The Xbox store ([spec PLA-485](https://linear.app/playportdev/issue/PLA-485), [decision 0181](decisions/0181-the-xbox-store.md))
 adds a Swift client, `XboxClientKit`, written from Xodus's and Xodus Nexus's
 code and docs (its session and synthetic device land in PLA-491); `xgameruntime`
 as an ARM64EC Wine builtin; and `nghttp2`. This section answers the plan's
@@ -335,7 +335,7 @@ its `COPYING` has the same bytes as Valve's.
     GPL-3.0-or-later file. XboxClientKit's other files keep the usual header.
   - A build that carries those files is GPL-3.0 as a whole, not "or later".
     Decision 0006's "the whole combination stays or later" holds only for builds
-    without them. Today that means the dev app only: decision 0179 keeps every
+    without them. Today that means the dev app only: decision 0181 keeps every
     Xbox surface in the dev app, with `pp verify --variant release` refusing
     a release executable that carries one.
 - **What it owes** (GPL-3.0 sections 4 and 5), from the first public push of
@@ -371,7 +371,7 @@ its `COPYING` has the same bytes as Valve's.
   they are System Libraries on the device (GPL-3.0 section 1), so it does not
   depend on the exception.
 - **The bridge.** XboxClientKit and `xgameruntime` talk over a loopback TCP
-  socket (decision 0180). They are separate programs, so the bridge does not
+  socket (decision 0182). They are separate programs, so the bridge does not
   join their licences, and both are GPL-3.0-compatible in any case.
 
 #### `xgameruntime`
@@ -487,7 +487,7 @@ No IPA that carries either DLL leaves the workstation without these:
   that code's terms.
 - **Outside this page:** Microsoft's terms, the synthetic device and
   decrypting store DRM are not copyright-licence questions. They stay with
-  the release record decision 0179 requires.
+  the release record decision 0181 requires.
 
 ### Not built and not shipped
 

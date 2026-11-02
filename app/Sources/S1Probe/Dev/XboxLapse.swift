@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// An Xbox copy's licence lapse (PLA-505), dev app only (decision 0179): PlayportKit's
+// An Xbox copy's licence lapse (PLA-505), dev app only (decision 0181): PlayportKit's
 // LicenceLapses kept in the state root. Microsoft's verdict on an installed copy's licence
 // comes from each Play (XboxPlay.prepare) and each Library refresh (XboxGames.refresh).
 // Only its definitive refusal of the copy counts (XboxLicenceResult.copyLicensed): no

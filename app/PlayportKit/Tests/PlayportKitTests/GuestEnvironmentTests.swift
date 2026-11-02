@@ -4,7 +4,7 @@ import XCTest
 @testable import PlayportKit
 import SteamClientKit
 
-/// A play's per-title guest variables (an Xbox copy's bridge port and key, decision 0180)
+/// A play's per-title guest variables (an Xbox copy's bridge port and key, decision 0182)
 /// reach the game's own environment only, and their values never reach the log.
 final class GuestEnvironmentTests: XCTestCase {
     private let key = String(repeating: "k3", count: 32)

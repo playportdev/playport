@@ -6,7 +6,7 @@
 //   gog        gog-<productID>
 //   epic       epic-<appName>
 //   battlenet  bnet-<TACT product code> (bnet-wow_classic_era)
-//   xbox       xbox-<ProductId>     (decision 0179: the Store's twelve-character product identifier)
+//   xbox       xbox-<ProductId>     (decision 0181: the Store's twelve-character product identifier)
 //   local      dir-<lowercased folder> (as before: an imported or found folder)
 //
 // A store's install, and Playport's own import, writes a `StoreReceipt` under

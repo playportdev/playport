@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// An installed Xbox copy's updates (PLA-501), dev app only (decision 0179): the game
+// An installed Xbox copy's updates (PLA-501), dev app only (decision 0181): the game
 // page asks once per process whether the Store has a newer package (GetBasePackage
 // through XboxClientKit's XboxInstaller.updateCheck) and offers Update as for GOG and
 // Epic; the Downloads queue runs it as an `.update` job of the Xbox driver, which

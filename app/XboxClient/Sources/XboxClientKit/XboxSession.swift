@@ -165,7 +165,7 @@ public actor XboxSession {
         log.info("xbox", "\(why); session secrets deleted, synthetic device kept")
     }
     /// Runs `action` at each sign-out (and device reset, and a renewal Microsoft refuses),
-    /// before the session's secrets are deleted: a play's bridge closes its channel with it (0180).
+    /// before the session's secrets are deleted: a play's bridge closes its channel with it (0182).
     public func onSignOut(_ action: @escaping @Sendable () -> Void) -> UInt64 {
         lastSignOutHandler &+= 1
         signOutHandlers[lastSignOutHandler] = action

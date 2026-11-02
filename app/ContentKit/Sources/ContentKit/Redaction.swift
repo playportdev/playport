@@ -25,12 +25,12 @@ public enum Redactor {
             // Xbox Live's authorization header, `XBL3.0 x=<user hash>;<XSTS token>`, whole,
             // before the authorization and JWT rules take its parts.
             (#"XBL3\.0\s+x=[^;\s"']+;[^\s"',]+"#, "XBL3.0 x=<uhs:redacted>;<xsts:redacted>"),
-            // An Xbox licence (decision 0179): its XML on one line, or base64 holding
+            // An Xbox licence (decision 0181): its XML on one line, or base64 holding
             // `<License ` or `<License>` at any of base64's three alignments (not <LicenseInfo>).
             (#"<License[\s>].*?(?:</License>|$)"#, "<license:redacted>"),
             (#"[A-Za-z0-9+/]*(?:PExpY2Vuc2U[g+]|xMaWNlbnNl[IP]|8TGljZW5zZ[ST])[A-Za-z0-9+/]*={0,2}"#, "<license:redacted>"),
             // A legacy (SOAP) Microsoft account ticket's encrypted body, its session key, a
-            // licence's signed block, the bridge's ticket replies (decision 0180).
+            // licence's signed block, the bridge's ticket replies (decision 0182).
             (#"(?i)(<(?:[A-Za-z]+:)?(?:BinarySecret|CipherValue|SPLicenseBlock|BinarySecurityToken|Token|DeviceRps|KeyBlob)\b[^>]*>)[^<]+"#,
              "$1<redacted>"),
             // A JWK's private part (the runtime's proof key, `"d"`) and GetBasePackage's KeyBlob.
@@ -63,7 +63,7 @@ public enum Redactor {
             // A copy's content key (Xodus's `cik`), a device or session key, a proof secret.
             (#"(?i)([A-Za-z]*(?:content|device|session|tweak|data)_?key|\bcik|binary_?secret)(["']?\s*[:=]\s*["']?)(?:[0-9A-Fa-f]{32,}|[A-Za-z0-9+/_\-]{22,}={0,2})"#,
              "$1$2<redacted>"),
-            // The per-play key of the Xbox runtime's bridge (decision 0180).
+            // The per-play key of the Xbox runtime's bridge (decision 0182).
             (#"(XODUS_BRIDGE_KEY["']?\s*[:=]\s*["']?)[^\s"',&}]+"#, "$1<redacted>"),
             // QR challenge URLs: https://s.team/q/<version>/<client id>.
             (#"https?://s\.team/q/[^\s"']+"#, "<qr-challenge:redacted>"),

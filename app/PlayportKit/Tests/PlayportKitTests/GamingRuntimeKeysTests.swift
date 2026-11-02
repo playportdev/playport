@@ -4,7 +4,7 @@ import XCTest
 @testable import PlayportKit
 
 /// The keys a GDK game and its runtime read in the prefix (an Xbox copy's play, decision
-/// 0179), as Xodus Nexus's prefix holds them: Gaming Services' version, a REG_QWORD, and
+/// 0181), as Xodus Nexus's prefix holds them: Gaming Services' version, a REG_QWORD, and
 /// the Store's WinRT class served by xgameruntime.dll, in both views of HKLM\Software.
 final class GamingRuntimeKeysTests: XCTestCase {
     func testTheGamingServicesVersionAndTheStoreClassAreToppedUpInBothViews() throws {

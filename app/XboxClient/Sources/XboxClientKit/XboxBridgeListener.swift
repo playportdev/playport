@@ -12,7 +12,7 @@ import Darwin
 #endif
 import ContentKit
 
-/// The bridge's socket for one Xbox play (decision 0180): 127.0.0.1 on a free port,
+/// The bridge's socket for one Xbox play (decision 0182): 127.0.0.1 on a free port,
 /// from the play's start to its end. A connection must send the play's key before
 /// anything else; each frame then goes to the service in order and its reply is
 /// written back. A wrong key, a malformed or oversized frame ends that connection, and

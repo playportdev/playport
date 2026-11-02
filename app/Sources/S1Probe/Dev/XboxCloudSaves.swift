@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// An Xbox copy's cloud saves (PLA-500), dev app only (decisions 0179, 0180). The game's
+// An Xbox copy's cloud saves (PLA-500), dev app only (decisions 0181, 0182). The game's
 // runtime syncs with the account's Xbox cloud itself at each play's start and uploads as
 // the game saves; with the cloud unreachable it plays on the phone's saves and syncs at
 // the next connected play (patches/xgameruntime/0002 for file saves). When both sides

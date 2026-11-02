@@ -45,7 +45,7 @@ test -f "$OUT/build/madeira_cfg.h" || { echo "link $OUT/build to a Madeira check
 #    space and run FEX's image-map notification as a syscall callback (arm64ec
 #    ntdll.dll only); guard the iOS-only srcwatch probe so the darwin win32u.so links.
 #    Last patches/wine-gdk: what Xbox PC (GDK) titles and their runtime need of
-#    Wine (Xodus's and Xodus Nexus's Wine patches, ported; decision 0179).
+#    Wine (Xodus's and Xodus Nexus's Wine patches, ported; decision 0181).
 ensure_series "$WINE" "wine-port wine-valve wine-pe wine-gdk" "$PIN"
 
 # winhttp's HTTP/2 (patches/wine-gdk) compiles against nghttp2's header; the

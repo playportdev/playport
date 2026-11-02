@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// An installed Xbox copy's DLC and add-ons (PLA-502), dev app only (decision 0179).
+// An installed Xbox copy's DLC and add-ons (PLA-502), dev app only (decision 0181).
 // XboxClientKit's XboxAddOnFinder finds them (the public catalogue, the game's config
 // and the account's licensed non-game products the library keeps); XboxInstaller
 // installs one through the copy's own path into the game's folder (`DLC\<ProductId>`).

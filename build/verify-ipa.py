@@ -125,7 +125,7 @@ any mismatch:
                 the quiet-runtime switch MADEIRA_NO_DIAGNOSTICS and its log,
                 playport.log, and links the donor pool (decision 0153:
                 pp_guest_pool_install, playport_guest_memory_backing). It
-                carries no Xbox surface (decision 0179: the dev app only): no
+                carries no Xbox surface (decision 0181: the dev app only): no
                 Swift identifier starting Xbox (Dev/XboxLibrary.swift's
                 XboxLibrary and every Xbox type after it) and not the Xbox
                 Library's empty text; the store's identity (Store.xbox,
@@ -175,7 +175,7 @@ DEV_STRINGS = [b"S1_MODE", b"TITLE_NONCE", b"UI_ACTIONS", b"UI_SETTINGS", b"UI_C
 RELEASE_STRINGS = [b"MADEIRA_NO_DIAGNOSTICS", b"playport.log"]
 # The donor pool, in both builds since decision 0153: GuestPool.m's install and 0148's hook.
 RELEASE_SYMBOLS = ["_pp_guest_pool_install", "_playport_guest_memory_backing"]
-# The Xbox store is in the dev app only (decision 0179): a Swift identifier starting Xbox, as
+# The Xbox store is in the dev app only (decision 0181): a Swift identifier starting Xbox, as
 # Swift mangles one (<len><name>), and the dev app's empty Xbox Library text
 # (Sources/S1Probe/Dev/XboxLibrary.swift). Lower-case xbox (Store.xbox, its title prefix) is identity.
 XBOX_IDENTIFIER = re.compile(r"(?<![0-9])([1-9][0-9]*)(Xbox[A-Za-z0-9_]*)")
@@ -666,7 +666,7 @@ def release_checks(exe, info):
     check(not missing, "variant: the donor pool is linked (decision 0153)"
           + (f" (missing {', '.join(missing)})" if missing else ""))
     found = xbox_surfaces(body, syms)
-    check(not found, "variant: no Xbox surface (decision 0179: the dev app only)"
+    check(not found, "variant: no Xbox surface (decision 0181: the dev app only)"
           + (f" (found {', '.join(found)})" if found else ""))
 
 

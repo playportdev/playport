@@ -44,7 +44,7 @@ shared prefix and `C:\Games`, and it can talk to the bridge.
 ## Left for the owner and the phone
 
 - **Residual risks for the release decision**: [PLA-527](https://linear.app/playportdev/issue/PLA-527).
-  - Tickets outlive sign-out ([0180](../decisions/0180-xbox-guest-tickets.md)), and guest caches stay in the shared prefix and in backups.
+  - Tickets outlive sign-out ([0182](../decisions/0182-xbox-guest-tickets.md)), and guest caches stay in the shared prefix and in backups.
   - Licence signatures are not verified, and the offline lease follows the phone's clock.
   - Requests identify themselves as Xodus Nexus.
   - Plaintext lingers outside the in-place swap.
@@ -52,7 +52,7 @@ shared prefix and `C:\Games`, and it can talk to the bridge.
   - The account hash in the guest environment can be reversed.
   - The native runtime DLLs and `wine-gdk` ship in release too, inert without a bridge.
 - **Phone measurements** ([PLA-528](https://linear.app/playportdev/issue/PLA-528)):
-  - **Not measured yet:** ticket lifetimes in the guest, which 0180 asks for.
+  - **Not measured yet:** ticket lifetimes in the guest, which 0182 asks for.
   - Prefix caches after play, sign-out and restart.
   - Plaintext after a kill.
   - CDN HTTPS.

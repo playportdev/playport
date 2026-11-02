@@ -40,7 +40,7 @@ SECRETS = [
     # token. Appended for the same reason.
     ("Epic exchange code argument", r"AUTH_PASSWORD=[0-9A-Fa-f]{32}"),
     ("Epic ownership token", r"egoc1~[A-Za-z0-9_-]{20,}"),
-    # Microsoft account and Xbox (decisions 0179, 0180). Appended for the same reason.
+    # Microsoft account and Xbox (decisions 0181, 0182). Appended for the same reason.
     # A refresh token (M.C507_BAY.0.U.-C…, M.R3_BAY.-C…), with its ! * $ characters.
     ("Microsoft account refresh token", r"\bM\.[CR][0-9]+_[A-Z0-9]+\.[A-Za-z0-9!*$%._-]{20,}"),
     # A compact ticket or access token (t=EwA…&p=, d=EwA…, an RpsTicket, a DeviceRps), a
@@ -63,7 +63,7 @@ SECRETS = [
     # the WoW session value rule's below (any case).
     ("content key", r'''([Cc]ontent_?[Kk]ey|\b[Cc][Ii][Kk]|[Dd]evice_?[Kk]ey|[Bb]inary_?[Ss]ecret)'''
                     r'''["']? *[:=] *["']?([0-9A-Fa-f]{32,}|[A-Za-z0-9+/]{22,})'''),
-    # The per-play key of the runtime's bridge (0180).
+    # The per-play key of the runtime's bridge (0182).
     ("Xbox bridge key", r'''XODUS_BRIDGE_KEY["']? *[:=] *["']?[A-Za-z0-9+/_-]{32,}'''),
     # A JWK's private part (`"d"`, base64url): the runtime's proof key (PLA-489), not its public x/y.
     ("JWK private key", r'''"d" *: *"[A-Za-z0-9_-]{20,}"'''),
@@ -121,7 +121,7 @@ def secret_hits(text):
 def scrub_text(text):
     """(text, count): each secret-pattern match replaced by `<pp:redacted WHAT>`, the rest of
     each line kept. For logs pulled off the phone, whose runtime and game output reach the
-    file without the app's Redactor (decision 0180, the PLA-485 review)."""
+    file without the app's Redactor (decision 0182, the PLA-485 review)."""
     count = 0
 
     def one(line):
@@ -144,7 +144,7 @@ PORT_FOLLOWUPS = {"madeira-unix"}
 # The one series that carries Valve's Wine commits (class valve, decision 0018).
 VALVE_SERIES = "wine-valve"
 VALVE_TRAILERS = ("Valve-commit:", "Picked:")
-# The series of Xodus's and Xodus Nexus's Wine patches ported onto the PE tree (decision 0179):
+# The series of Xodus's and Xodus Nexus's Wine patches ported onto the PE tree (decision 0181):
 # each names the commit it was ported from and how.
 PORTED_SERIES = "wine-gdk"
 PORTED_TRAILERS = ("Ported-from:", "Ported:")

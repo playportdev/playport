@@ -84,11 +84,11 @@ enum LaunchCoordinator {
         /// game's environment for its launch only (GuestEnvironment), never set in the app's
         /// process or given to the prerequisites; their names alone are logged. Empty unless a
         /// store's Play sets it (today only the dev app's Xbox Play: its bridge port and key,
-        /// decision 0180), so the release app carries no store's logic here.
+        /// decision 0182), so the release app carries no store's logic here.
         var guestEnvironment: [String: Secret<String>] = [:]
         /// A general launch hook, store-neutral: runs once the launch ends, however it ends; nil
         /// for none. Only a store's Play sets it (today the dev app's Xbox Play: its bridge stops
-        /// and its swapped files go back, decision 0179).
+        /// and its swapped files go back, decision 0181).
         var atEnd: (@Sendable () -> Void)? = nil
         /// The title's own prerequisite installers (decision 0079), each run before the
         /// game when one of its ids has not run in the prefix.
@@ -352,7 +352,7 @@ enum LaunchCoordinator {
     static func run(_ r: Request, step: @escaping (Step) -> Void = { _ in }) -> Outcome {
         precondition(!Thread.isMainThread, "LaunchCoordinator.run blocks; call it off the main thread")
         // However the launch ends, the Galaxy service ends with it (decision 0063), and the play's own
-        // end runs (an Xbox copy's bridge and in-place swap, decision 0179).
+        // end runs (an Xbox copy's bridge and in-place swap, decision 0181).
         defer { r.galaxy?.stop(); r.atEnd?() }
         let launched = Date()
         let mark = { (what: String) in

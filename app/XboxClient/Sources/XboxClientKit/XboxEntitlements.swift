@@ -8,7 +8,7 @@ import Foundation
 import ContentKit
 
 /// How the account licenses a copy: bought (or through a bought bundle), or
-/// through PC Game Pass, whose licence lapses with the membership (0179).
+/// through PC Game Pass, whose licence lapses with the membership (0181).
 public enum XboxAccess: String, Codable, Sendable { case owned, gamePass }
 
 struct XboxEntitlement: Equatable {
