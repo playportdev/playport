@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // The Library's one grid (docs/design/2026-09-28-gamepad-ui/Library.dc.html):
 // the games in C:\Games and the paired account's owned games as one list,
-// the filter chips (All, Installed, then stores), the sort,
-// the search, and where each tile sits on the grid, so the focus ring can
-// move to a tile the lazy grid has not drawn yet (UI/LibraryView.swift).
+// the store column (All, then every store; decision 0178) with Installed only
+// beside it, the sort, the search, and where each tile sits on the grid, so the
+// focus ring can move to a tile the lazy grid has not drawn yet (UI/LibraryView.swift).
 
 import Foundation
 #if canImport(CoreGraphics)
@@ -47,26 +47,24 @@ public struct LibraryEntry: Equatable, Identifiable, Sendable {
     }
 }
 
+/// The Library's store column (decision 0178): All, then every store, each always there
+/// (one not connected is dimmed). Installed only is apart from it and narrows any of them.
 public enum LibraryFilter: String, CaseIterable, Sendable {
     /// Every known copy, including local games, store games not installed and Battle.net's
     /// offered products (no account owns them, so every player sees them).
     case all
-    /// In C:\Games, or downloading into it.
-    case installed
     /// Every Steam copy, including installed games outside the paired account.
     case steam
-    /// Every GOG copy: shown once GOG is signed in or a copy is in the catalogue.
+    /// Every GOG copy.
     case gog
-    /// Every Epic Games copy, likewise.
+    /// Every Epic Games copy.
     case epic
-    /// The Battle.net store's offered products and copies: shown always, since it needs no
-    /// sign-in (PLA-519).
+    /// The Battle.net store's offered products and copies (no sign-in, PLA-519).
     case battlenet
 
     public var label: String {
         switch self {
-        case .all: "All"
-        case .installed: "Installed"
+        case .all: "All games"
         case .steam: Store.steam.label
         case .gog: Store.gog.label
         case .epic: Store.epic.label
@@ -76,7 +74,7 @@ public enum LibraryFilter: String, CaseIterable, Sendable {
 
     public var store: Store? {
         switch self {
-        case .all, .installed: nil
+        case .all: nil
         case .steam: .steam
         case .gog: .gog
         case .epic: .epic
@@ -84,19 +82,11 @@ public enum LibraryFilter: String, CaseIterable, Sendable {
         }
     }
 
-    /// The chips to show (decision 0045: connected stores add their own after
-    /// Installed): Steam always, GOG and Epic when `stores` (signed in, or with
-    /// a copy in the catalogue) has them, Battle.net always (no sign-in).
-    public static func shown(stores: Set<Store>) -> [LibraryFilter] {
-        allCases.filter { f in f == .gog ? stores.contains(.gog) : f == .epic ? stores.contains(.epic) : true }
-    }
-
-    /// The next chip, wrapping round.
-    public var next: LibraryFilter { next(in: Self.allCases) }
-
-    public func next(in shown: [LibraryFilter]) -> LibraryFilter {
-        guard let i = shown.firstIndex(of: self) else { return shown.first ?? .all }
-        return shown[(i + 1) % shown.count]
+    /// The one `by` steps along the column (LT -1, RT +1), wrapping round as LB and RB do.
+    public func step(_ by: Int) -> LibraryFilter {
+        let all = Self.allCases
+        let i = all.firstIndex(of: self)!
+        return all[((i + by) % all.count + all.count) % all.count]
     }
 }
 
@@ -168,27 +158,26 @@ public enum LibraryList {
             .values.flatMap { $0.map(\.id) })
     }
 
-    /// Duplicate source badges only help in mixed-source views.
+    /// Duplicate source badges only help in the mixed-source view.
     public static func showsSourceBadge(_ entry: LibraryEntry, filter: LibraryFilter, duplicateIDs: Set<String>) -> Bool {
-        (filter == .all || filter == .installed) && duplicateIDs.contains(entry.id)
+        filter == .all && duplicateIDs.contains(entry.id)
     }
 
-    /// `downloading`: the games with a download, update, repair or import queued or running.
-    public static func matches(_ entry: LibraryEntry, _ filter: LibraryFilter, downloading: Set<StoreGameKey> = []) -> Bool {
-        switch filter {
-        case .all: true
-        case .installed: entry.installed || downloading.contains(entry.key)
-        case .steam, .gog, .epic, .battlenet: entry.source == filter.store
-        }
+    /// `installedOnly`: in C:\Games, or downloading into it. `downloading`: the games with a
+    /// download, update, repair or import queued or running.
+    public static func matches(_ entry: LibraryEntry, _ filter: LibraryFilter, installedOnly: Bool = false,
+                               downloading: Set<StoreGameKey> = []) -> Bool {
+        (filter.store.map { entry.source == $0 } ?? true)
+            && (!installedOnly || entry.installed || downloading.contains(entry.key))
     }
 
     /// What the grid shows: the filter's entries whose name contains `search`
     /// (case and accents aside), in `sort` order.
-    public static func shown(_ entries: [LibraryEntry], filter: LibraryFilter, sort: LibrarySort, search: String = "",
-                             downloading: Set<StoreGameKey> = []) -> [LibraryEntry] {
+    public static func shown(_ entries: [LibraryEntry], filter: LibraryFilter, installedOnly: Bool = false, sort: LibrarySort,
+                             search: String = "", downloading: Set<StoreGameKey> = []) -> [LibraryEntry] {
         let query = search.trimmingCharacters(in: .whitespaces)
         return entries
-            .filter { matches($0, filter, downloading: downloading) }
+            .filter { matches($0, filter, installedOnly: installedOnly, downloading: downloading) }
             .filter { query.isEmpty || $0.name.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil }
             .sorted { lhs, rhs in
                 switch sort {

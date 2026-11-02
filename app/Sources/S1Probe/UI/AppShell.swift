@@ -233,6 +233,7 @@ struct AppShell: View {
         }
         if !nav.settings, nav.page == .library {
             let grid = LibraryGrid.shared
+            h.append(PadHint(button: .lt, label: "Store", action: { grid.step(1) }, also: .rt))
             h.append(PadHint(button: .view, label: "Filter & sort") { grid.openFilterSort() })
             h.append(PadHint(button: .y, label: "Search") { grid.openSearch() })
             // Add a game (UI/Import.swift): on every filter, not only at the grid's end.
@@ -305,6 +306,8 @@ struct AppShell: View {
         if nav.settings, SettingsRing.press(b) { return }
         // The checklist: its steps with left and right or LB and RB (UI/SetupView.swift).
         if onSetup, SetupRing.press(b) { return }
+        // The Library's store column and LT/RT (UI/LibraryView.swift).
+        if LibraryRing.press(b) { return }
         switch b {
         case .up: focus.move(.up)
         case .down: focus.move(.down)

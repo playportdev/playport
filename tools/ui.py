@@ -24,8 +24,9 @@ cancellation even with --leave-running (no gameplay kill in that mode). Delivery
 best-effort and reported as unconfirmed; transport loss/SIGKILL can leave cancellation uncertain.
 --dry-run prints UI_ACTIONS without accessing the phone:
 
-  open:SCREEN | open:ID  show a screen (home, library, games: the Library on Steam, battlenet: the Library
-                         on Battle.net, the store's offered products (open:bnet-CODE a product's page), downloads,
+  open:SCREEN | open:ID  show a screen (home, library: the Library on All, installed: on All with Installed only,
+                         games, gog, epic, battlenet: on that store's button in the store column, Battle.net's
+                         with the store's offered products (open:bnet-CODE a product's page), downloads,
                          settings, account: Settings' Accounts section, setup: the first-run checklist as
                          Settings › Setup check's first row opens it, signin: Sign in to Steam, a preview
                          that sends nothing to Steam while Steam is signed in) or a title's page;
@@ -80,9 +81,11 @@ best-effort and reported as unconfirmed; transport loss/SIGKILL can leave cancel
                          On Sign in to Steam (open:signin) pad:a on its left card asks for the account
                          name, then the password, on the keyboard (neither is logged), pad:rb shows a
                          QR code, pad:b cancels or leaves; a real sign-in needs Steam signed out
-  pad:BUTTON[+BUTTON...] (not directly after play:, see below) press controller buttons (a b x y lb rb menu view up down left right), 250 ms
+  pad:BUTTON[+BUTTON...] (not directly after play:, see below) press controller buttons (a b x y lb rb lt rt menu view up down left right), 250 ms
                          apart, into the router a controller feeds (UI/Pad/PadRouter.swift):
                          pad:rb moves to the next page, pad:down+a opens what the ring moves to;
+                         in the Library pad:lt/rt step along the store column, pad:left from the
+                         grid's first column enters it and pad:up/down there switch the store;
                          on a game page pad:x opens its Game options and pad:y puts the ringed
                          setting back to its default, and pad:a on Play plays: the run follows the
                          game as for play: (use --until first-frame+S);
@@ -466,8 +469,8 @@ STOP_WHY = {"timeout": "no stop condition within --wait",
 # A catalogue title id: a lower-case store prefix, then its own id (an Epic app name can
 # have capitals: epic-Buffalo).
 ID_RE = re.compile(r"^[a-z]+-[A-Za-z0-9 ._-]+$")
-SCREENS = ("home", "library", "games", "battlenet", "downloads", "settings", "account", "setup", "signin")   # AppNavigation.screens
-PAD_BUTTONS = "a|b|x|y|lb|rb|menu|view|up|down|left|right"   # HostIOKit NavButton
+SCREENS = ("home", "library", "installed", "games", "gog", "epic", "battlenet", "downloads", "settings", "account", "setup", "signin")   # AppNavigation.screens
+PAD_BUTTONS = "a|b|x|y|lb|rb|lt|rt|menu|view|up|down|left|right"   # HostIOKit NavButton
 # the app's launch failure when its JIT helper cannot reach LocalDevVPN's address
 JIT_UNREACHABLE_RE = re.compile(r"Timed out connecting to 10\.7\.0\.1")  # "not ready for JIT: X" has other X too
 JIT_UNREACHABLE = dict(why="jit-unreachable", exit=4,

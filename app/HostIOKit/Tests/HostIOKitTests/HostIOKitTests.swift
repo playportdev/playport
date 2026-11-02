@@ -477,6 +477,16 @@ final class PadNavigationTests: XCTestCase {
         XCTAssertEqual(nav.update(pad { $0.ly = -0.9 }, at: 0.5), [.down])  // +y is up
     }
 
+    func testATriggerIsOnePressWithHysteresisAndNeverRepeats() {
+        var nav = PadNavigation()
+        XCTAssertEqual(nav.update(pad { $0.leftTrigger = 0.45 }, at: 0), [])
+        XCTAssertEqual(nav.update(pad { $0.leftTrigger = 0.6 }, at: 0.1), [.lt])
+        XCTAssertEqual(nav.update(pad { $0.leftTrigger = 0.35 }, at: 0.2), [])  // still held: no second press
+        XCTAssertEqual(nav.tick(at: 5), [])
+        XCTAssertEqual(nav.update(pad { $0.leftTrigger = 0.2 }, at: 0.3), [])   // let go
+        XCTAssertEqual(nav.update(pad { $0.leftTrigger = 0.9; $0.rightTrigger = 1 }, at: 0.4), [.lt, .rt])
+    }
+
     func testResetLetsEverythingGo() {
         var nav = PadNavigation()
         _ = nav.update(pad { $0.a = true; $0.up = true }, at: 0)

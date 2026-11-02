@@ -55,7 +55,7 @@ final class PadKeyboardSession: ObservableObject {
         case .lb: state.moveCaret(by: -1)
         case .rb: state.moveCaret(by: 1)
         case .menu: finish()
-        case .view: break
+        case .view, .lt, .rt: break
         }
     }
 

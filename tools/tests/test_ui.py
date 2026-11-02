@@ -142,10 +142,10 @@ class UiEnvTest(unittest.TestCase):
             self.assertEqual(m.parse(["--action", f"open:{screen}"]).action, [f"open:{screen}"])
         self.assertEqual(m.parse(["--action", "open:licences#wine"]).action, ["open:licences#wine"])
         with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
-            m.parse(["--action", "open:installed"])   # the old tab, now open:library
-        for ok in ("pad:a", "pad:rb", "pad:down+down+a", "pad:menu+b", "pad:lb+right"):
+            m.parse(["--action", "open:steam"])   # Steam's store button is open:games
+        for ok in ("pad:a", "pad:rb", "pad:lt", "pad:down+down+a", "pad:menu+b", "pad:lb+right"):
             self.assertTrue(m.ACTION_RE.match(ok), ok)
-        for bad in ("pad:", "pad:start", "pad:a+", "pad:a b", "pad:A"):
+        for bad in ("pad:", "pad:start", "pad:a+", "pad:a b", "pad:A", "pad:l2"):
             self.assertFalse(m.ACTION_RE.match(bad), bad)
 
     def test_donor_pool_setting_takes_auto_and_fixed_sizes(self):

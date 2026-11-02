@@ -636,10 +636,10 @@ A release build compiles none of `Dev/`
 ([decision 0009](decisions/0009-dev-and-release-builds.md)).
 The Battle.net store (`UI/BattleNetStore.swift`, PlayportKit `BattleNet`;
 [decision 0174](decisions/0174-battle-net-store-client.md), proposed) has no sign-in: its
-chip is always shown and lists the World of Warcraft products whose current build carries
-an x64 client (BattleNetClientKit's offer, cached;
-[decision 0177](decisions/0177-wow-plays-its-x64-client-through-fex.md)), All only once one is installed or
-downloading. A product's page picks the store region (from the phone's region) and the
+button in the Library's store column ([decision 0178](decisions/0178-library-store-column.md))
+is never dimmed, and it and All list the World of Warcraft products whose current build carries
+an x64 client (BattleNetClientKit's offer, cached six hours and asked for when the Library appears;
+[decision 0177](decisions/0177-wow-plays-its-x64-client-through-fex.md)). A product's page picks the store region (from the phone's region) and the
 locale (the phone's language as a WoW locale, enUS as fallback), shows the download size
 and the space needed (the x64 client's selection), and refuses an Install that does not fit, saying how much it needs.
 The install stages under the staging root (nothing in `C:\Games`, so no Play, until it is

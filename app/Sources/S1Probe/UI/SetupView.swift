@@ -400,7 +400,7 @@ enum SetupRing {
         case .x:
             if let step = ringed { SetupState.shared.skip(step) }
             if focus.focused == SetupStep.pairing.item, SetupState.shared.preview == nil { JitMethodPicker.show() }
-        case .menu, .view: break
+        case .menu, .view, .lt, .rt: break
         }
         return true
     }

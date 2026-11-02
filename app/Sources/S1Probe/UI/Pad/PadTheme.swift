@@ -60,6 +60,8 @@ struct PadGlyph: View {
         case .y: "Y"
         case .lb: "LB"
         case .rb: "RB"
+        case .lt: "LT"
+        case .rt: "RT"
         case .menu: "≡"
         case .view: "⧉"
         case .up: "↑"

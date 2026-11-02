@@ -40,7 +40,7 @@ final class BattleNetStoreTests: XCTestCase {
                        ["bnet-wow", "bnet-wow_classic", "bnet-wow_classic_era"])
         XCTAssertEqual(LibraryList.shown(entries, filter: .all, sort: .name).map(\.id),
                        ["bnet-wow", "bnet-wow_classic", "bnet-wow_classic_era"], "All lists every offered product, installed or not")
-        XCTAssertEqual(LibraryList.shown(entries, filter: .installed, sort: .name).map(\.id), ["bnet-wow"])
+        XCTAssertEqual(LibraryList.shown(entries, filter: .battlenet, installedOnly: true, sort: .name).map(\.id), ["bnet-wow"])
     }
 
     func testTheStoreRegionStartsFromThePhonesRegion() {

@@ -52,18 +52,23 @@ final class AppNavigation: ObservableObject {
         }
     }
 
-    static let screens = ["home", "library", "games", "battlenet", "downloads", "settings", "account", "setup", "signin"]
+    static let screens = ["home", "library", "installed", "games", "gog", "epic", "battlenet", "downloads", "settings", "account", "setup", "signin"]
 
     @discardableResult
     func open(_ screen: String) -> Bool {
+        let grid = LibraryGrid.shared
         switch screen {
+        case "installed":
+            // The Library on All, Installed only.
+            show(.library)
+            grid.show(.all, installedOnly: true)
         case "games":
             show(.library)
-            LibraryGrid.shared.filter = .steam
-        case "battlenet":
-            // The Battle.net store: the Library on its chip.
+            grid.show(.steam)
+        case "gog", "epic", "battlenet":
+            // A store: the Library on its column button (Battle.net's offered products).
             show(.library)
-            LibraryGrid.shared.filter = .battlenet
+            grid.show(LibraryFilter(rawValue: screen)!)
         case "settings", "account":
             openSettings(section: screen == "account" ? .accounts : nil)
         case "setup":
@@ -73,7 +78,7 @@ final class AppNavigation: ObservableObject {
         default:
             guard let p = Page(rawValue: screen) else { return false }
             show(p)
-            if p == .library { LibraryGrid.shared.filter = .all }
+            if p == .library { grid.show(.all) }
         }
         return true
     }

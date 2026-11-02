@@ -263,8 +263,9 @@ after a play launched. A mark or `ok` result proves only that stop condition,
 not that gameplay appeared: inspect the timeline, log and screenshot.
 
 - **The app's screens** ([decision 0034](decisions/0034-a-gamepad-first-ui.md)).
-  `open:SCREEN` shows Home, Library (`library`: on All, `games`: on Steam, `battlenet`: on
-  Battle.net with the store's offered products), Downloads,
+  `open:SCREEN` shows Home, Library (`library`: on All, `installed`: on All with Installed only,
+  `games`, `gog`, `epic`, `battlenet`: on that store's button in the store column, Battle.net's
+  with the store's offered products), Downloads,
   Settings (`settings#SECTION`), the checklist (`setup`), Sign in to Steam
   (`signin`) or a game's page (`open:ID`, `open:ID#SECTION` with its Game
   options open; `open:bnet-CODE` a Battle.net product's page). The Battle.net pages have their own
