@@ -116,6 +116,11 @@ void winios_windows_on_dialog(void (*handler)(int shown));
 void winios_windows_game_presenting(void);
 int winios_windows_shown(void);
 int winios_windows_point(double x, double y, int *dx, int *dy);
+/* Winios.m + patches/madeira-winios/0011 (PLA-479): a touch on the windows at
+ * desktop pixel (x, y) from winios_windows_point, MOUSEEVENTF_* with ABSOLUTE,
+ * posted to the window drawn there (not one transparent at that pixel); main
+ * thread only. */
+void winios_window_pointer(int x, int y, unsigned int flags);
 
 /* host_log.c: one line into the log at path; through stderr once
  * wine_host_init has made fd 2 that file, appended directly before. */
