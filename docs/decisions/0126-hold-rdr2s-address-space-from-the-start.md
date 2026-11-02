@@ -4,6 +4,11 @@
 Amended by [0129](0129-the-holds-serve-only-their-own-request.md): the hold serves only the
 held size, and `jumbo-mb` no longer turns on the ml433 cage hold.
 
+**Amended 2026-11-02 by [0180](0180-elastic-reservations.md):** RDR2's compatibility entry no longer
+sets `jumbo-mb=8960`. Shipped Plays use the Social Club layout, which places the game's own slot and
+ignores the key, and in six off-layout runs the 8,960 MB reservation was placed outside the hold;
+elastic reservations make room when a placement fails. The jumbo-hold mechanism stays.
+
 ## Context
 
 - **The reservation.** RDR2.exe reserves 8,960 MB of address space in one piece

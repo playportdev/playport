@@ -5,6 +5,11 @@ supervisor as a correction of 0126's side effect. Amends
 [0126](0126-hold-rdr2s-address-space-from-the-start.md). Not yet shown on the phone. The Witcher 3
 was not re-run on the phone.
 
+**Amended 2026-11-02 by [0180](0180-elastic-reservations.md):** RDR2 no longer sets `jumbo-mb`. The
+Witcher 3 1.32's cohort entry loses `jumbo-mb=32768 cage-hold=1` only once a phone run without them
+reaches Kaer Morhen with its 32 GB ask placed whole, or short with at least 4 GB usable, and no
+refused commit; until then it keeps them. The jumbo-hold and cage-hold mechanisms stay.
+
 ## Context
 
 In run `20261019T173829` ([evidence](../evidence/2026-10-19-rdr2-whole-launcher-end.md)), two

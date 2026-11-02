@@ -4,6 +4,10 @@
 (PLA-455). Supersedes [0162](0162-the-witcher-3-pause-as-wfe.md); `app-292030`'s row of
 [0074](0074-per-title-compatibility-defaults.md)'s table is back to `short-reserve-mb=6144`.
 
+**Amended 2026-11-02 by [0180](0180-elastic-reservations.md):** `app-292030`'s row no longer sets
+`short-reserve-mb=6144`: elastic reservations replace madeira-unix 0222's short-reserve path and
+place The Witcher 3's 64 and 32 GiB asks without a key. It keeps FEX's PAUSE (YIELD).
+
 ## Context
 
 - **What 0162 measured.** 0162 made `env.MADEIRA_FEX_PAUSE=wfe` (`patches/fex` 0083) The Witcher 3's default

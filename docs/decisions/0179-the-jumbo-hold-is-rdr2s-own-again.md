@@ -6,6 +6,12 @@ GitHub #66). Amends [0153](0153-rdr2s-settings-are-every-games-defaults.md): `ju
 `LaunchSettings.everyGame` and goes back to RDR2's compatibility entry, where
 [0126](0126-hold-rdr2s-address-space-from-the-start.md) put it.
 
+**Amended 2026-11-02 by [0180](0180-elastic-reservations.md):** RDR2's entry no longer sets
+`jumbo-mb=8960` (the Social Club layout ignores it); The Witcher 3 4.x's `short-reserve-mb=6144`
+goes with madeira-unix 0222's short-reserve path; the cohort entry's `jumbo-mb=32768 cage-hold=1`
+goes only after its phone run. Elastic reservations make room for a game like Mewgenics without
+any per-game key.
+
 ## Context
 
 - **0153 made the hold every game's.** `jumbo-mb=8960` holds an 8,960 MB gap below FEX's band,
