@@ -13,7 +13,7 @@ always shown.
 - **Every store is always in the column.** One not connected (Steam, GOG or Epic signed out) is
   dimmed; its page asks for its account and opens Settings › Accounts. Battle.net needs no sign-in.
 - **Installed only** replaces the Installed filter: a toggle that narrows All or any store,
-  always shown in the heading (lit while on; a tap flips it) and in the ⧉ Filter & sort list,
+  always shown at the heading's right after the sort, styled as it ("Installed only: Off"; a tap flips it) and in the ⧉ Filter & sort list,
   which is the controller's way to it (it is not in the ring).
 - **Controller.** The column's buttons join the ring. ◀ from the grid's first column enters the
   column at the chosen store; ▲▼ there switch the grid as soon as the ring lands, as LB/RB switch

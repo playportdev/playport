@@ -269,23 +269,6 @@ private struct LibraryGridView: View {
             }
             .accessibilityElement(children: .combine)
             .accessibilityIdentifier("library-store")
-            // Always shown, lit while on: a tap flips it; ⧉ does too (it is not in the ring).
-            Button { grid.installedOnly.toggle() } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: grid.installedOnly ? "checkmark.circle.fill" : "circle")
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(grid.installedOnly ? PP.accent : PP.muted)
-                    Text("Installed only")
-                }
-                .font(.system(size: 12, weight: .semibold)).foregroundStyle(grid.installedOnly ? PP.text : PP.soft)
-                .padding(.horizontal, 10).padding(.vertical, 4)
-                .background(grid.installedOnly ? PP.line : PP.surface, in: Capsule())
-                .overlay(Capsule().strokeBorder(grid.installedOnly ? PP.accent : PP.line, lineWidth: 1))
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Installed only")
-            .accessibilityAddTraits(grid.installedOnly ? .isSelected : [])
-            .accessibilityIdentifier("library-installed-only")
             if grid.searching || !grid.search.isEmpty {
                 // What the keyboard typed; a tap brings the keyboard back.
                 Button { grid.openSearch() } label: {
@@ -327,6 +310,14 @@ private struct LibraryGridView: View {
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("library-sort")
+            // Styled as the sort beside it; a tap flips it, ⧉ does too (it is not in the ring).
+            Button { grid.installedOnly.toggle() } label: {
+                Text("Installed only: \(grid.installedOnly ? "On" : "Off")")
+                    .font(.system(size: 12)).foregroundStyle(PP.muted)
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("library-installed-only")
         }
         .padding(.trailing, 6)
     }
