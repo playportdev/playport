@@ -97,10 +97,11 @@ The game runs on the phone's own CPU and GPU: no PC, no cloud, no stream.
   A sign-in page a game opens shows in a panel over the play. *New in 0.4.*
 - **32-bit and 64-bit games.** Each 32-bit game gets its own 4 GB window above the
   memory iOS keeps for itself; Portal 2 plays at about 60 fps at 720p.
-- **Native on the phone.** Wine, the FEX x86 translator and DXMT run inside one
-  iOS app; Direct3D 10 and 11 render to Metal through DXMT.
-- **Vulkan through KosmicKrisp** (experimental): Direct3D 9 through DXVK and
-  Direct3D 12 through vkd3d-proton, chosen per game automatically.
+- **Native on the phone.** Wine, the FEX x86 translator and the graphics
+  backends run inside one iOS app, rendering through Metal.
+- **Vulkan through KosmicKrisp**, every game's default: Direct3D 8 to 11 through
+  DXVK, Direct3D 12 through vkd3d-proton and OpenGL through Zink. DXMT stays one
+  choice away for Direct3D 10 and 11.
 - **Made for a controller.** A landscape, gamepad-first app with an in-game menu
   to pause, resume or quit; controllers reach the game as XInput.
 - **JIT your way.** A built-in JIT helper after a one-time pairing, or JIT from
@@ -250,8 +251,7 @@ signature does not settle Apple's SDK, provisioning, JIT or delivery terms.
 
 - Playport is early and is tested on one phone: an A19 Pro iPhone (iPhone18,4) on iOS 27.0
   ([known-good versions](docs/DEVICE.md#known-good-ios-versions)).
-- 32-bit games are new: Portal 2 is the only one tested so far. They run on
-  the Vulkan backend, which is experimental.
+- 32-bit games are newer than 64-bit ones, so expect rough edges.
 - A free Apple ID signs apps for seven days, so refresh the app once a week
   (SideStore can do it on the phone, after the one-time
   [memory step](#sidestore-when-memory-has-no-tick)). Your games and saves stay on the phone.

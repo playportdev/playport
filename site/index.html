@@ -378,12 +378,12 @@
       <div class="card">
         <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2.5" width="12" height="19" rx="3"/><path d="M10.5 6.5h3"/><path d="m10.5 11 3.5 2-3.5 2z" fill="currentColor"/></svg></div>
         <h3>Native on the phone</h3>
-        <p>Wine, the FEX x86 translator and DXMT run together inside one iOS app. Direct3D 10 and 11 render straight to Metal through DXMT.</p>
+        <p>Wine, the FEX x86 translator and the graphics backends run together inside one iOS app, rendering on the phone's own GPU through Metal.</p>
       </div>
       <div class="card">
         <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5l9 15 9-15"/><path d="M8 5l4 7 4-7"/></svg></div>
-        <h3>Vulkan, with KosmicKrisp<span class="tag">EXPERIMENTAL</span></h3>
-        <p>A Vulkan backend on KosmicKrisp, Mesa's Vulkan driver for Metal, ported to iOS. It draws Direct3D 9 through DXVK (Portal 2 runs on it) and Direct3D 12 through vkd3d-proton. Each game gets the right backend automatically.</p>
+        <h3>Vulkan, with KosmicKrisp</h3>
+        <p>Every game's default graphics backend: Vulkan on KosmicKrisp, Mesa's Vulkan driver for Metal, ported to iOS. It draws Direct3D 8 to 11 through DXVK, Direct3D 12 through vkd3d-proton and OpenGL through Zink. DXMT stays one choice away for Direct3D 10 and 11.</p>
       </div>
       <div class="card">
         <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 9h10a4 4 0 0 1 3.9 4.9l-.8 3.5a2.3 2.3 0 0 1-4 1L14 16h-4l-2.1 2.4a2.3 2.3 0 0 1-4-1l-.8-3.5A4 4 0 0 1 7 9Z"/><path d="M8 11.5v3M6.5 13h3"/><circle cx="15.5" cy="12.5" r=".6" fill="currentColor"/><circle cx="17" cy="14" r=".6" fill="currentColor"/></svg></div>
@@ -431,7 +431,7 @@
         </div>
       </div>
       <div class="lane">
-        <div class="lane-label">Direct3D 10 and 11</div>
+        <div class="lane-label">DXMT (option)</div>
         <div class="flow">
           <div class="node">D3D10, D3D11</div>
           <span class="arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h15m-5-5 5 5-5 5"/></svg></span>
@@ -441,9 +441,9 @@
         </div>
       </div>
       <div class="lane">
-        <div class="lane-label">Vulkan</div>
+        <div class="lane-label">Vulkan (default)</div>
         <div class="flow">
-          <div class="node">D3D9, D3D12<small>and D3D8 to 11</small></div>
+          <div class="node">D3D8 to 12<small>and OpenGL through Zink</small></div>
           <span class="arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h15m-5-5 5 5-5 5"/></svg></span>
           <div class="node hot">DXVK, vkd3d-proton<small>Direct3D to Vulkan</small></div>
           <span class="arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h15m-5-5 5 5-5 5"/></svg></span>
@@ -508,9 +508,9 @@
     <p class="sub">Playport is young. Here is what to expect.</p>
     <ul class="notes">
       <li><strong>Tested on one phone:</strong> an A19 Pro iPhone on iOS 27.0. See the <a href="https://github.com/playportdev/playport/blob/main/docs/DEVICE.md#known-good-ios-versions">known-good versions</a>.</li>
-      <li><strong>32-bit games are new.</strong> Portal 2 is the only one tested so far; other 32-bit Direct3D 9 games take the same path, so expect rough edges.</li>
+      <li><strong>32-bit games are newer.</strong> Portal 2, Half-Life and Counter-Strike run, but 32-bit games have had less testing than 64-bit ones, so expect rough edges.</li>
       <li><strong>Refresh weekly.</strong> A free Apple ID signs apps for seven days; SideStore can refresh on the phone (after its <a href="#sidestore">one-time memory fix</a>). Your games and saves stay. Playport takes one of the account's three app slots, and its JIT helper one of its ten App IDs a week.</li>
-      <li><strong>Vulkan is experimental.</strong> The path through KosmicKrisp, for DXVK and Direct3D 12, is under active development. Long sessions warm the phone, and frame rates drop with the heat.</li>
+      <li><strong>Big games run hot.</strong> Vulkan through KosmicKrisp is every game's default and still improving. Long sessions warm the phone, and frame rates drop with the heat.</li>
     </ul>
   </div>
 </section>
