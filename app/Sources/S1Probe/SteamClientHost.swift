@@ -3,8 +3,9 @@
 // behind its unix call table (WineHost steam_client.c). HELLO answers the
 // play's snapshot (the SteamID, the persona name, logged on, ownership of the
 // launched app, the language); CALL passes auth session and web API tickets to
-// the play's SteamTicketBroker (decision 0062) and hands out the encrypted app
-// ticket fetched at Play (decision 0017); POLL reads a ticket's state. The calls
+// the play's SteamTicketBroker (decision 0062), hands out the broker's ownership
+// ticket and the encrypted app ticket fetched at Play (decision 0017); POLL
+// reads a ticket's state. The calls
 // come on the guest's threads and answer from a lock, never waiting on the
 // network. Armed by the launch (LaunchCoordinator) for a play in client mode,
 // or with nil: then HELLO answers off and the shim answers as Steam's client
@@ -129,6 +130,13 @@ enum SteamClientHost {
         case UInt32(PP_SC_APP_TICKET.rawValue):
             guard let t = p.appTicket else { return UInt32(PP_SC_NO_MORE_ENTRIES) }
             return put(t.value) ? SteamClientHost.ok : UInt32(PP_SC_NO_MORE_ENTRIES)
+        case UInt32(PP_SC_OWNERSHIP_TICKET.rawValue):
+            guard let t = p.tickets?.ownershipTicket, put(t.value) else {
+                SteamClientHost.log("ownership ticket: none")
+                return UInt32(PP_SC_NO_MORE_ENTRIES)
+            }
+            SteamClientHost.log("ownership ticket: \(t.value.count) bytes")
+            return SteamClientHost.ok
         default:
             return UInt32(PP_SC_INVALID_PARAMETER)
         }

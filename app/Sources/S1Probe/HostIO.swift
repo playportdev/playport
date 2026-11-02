@@ -347,17 +347,18 @@ final class HostIO {
         }
     }
 
-    /// A touch on a guest GDI window (GuestWindows) as the left button at that desktop pixel.
+    /// A touch on a guest GDI window (GuestWindows) as the left button at that desktop pixel,
+    /// to the window drawn there (winios_window_pointer).
     func windowTouch(x: Int32, y: Int32, phase: UITouch.Phase) {
         if menuUp && phase != .ended && phase != .cancelled { return }
         let at = Pointer.move | Pointer.absolute
         switch phase {
         case .began:
-            if lifecycle.buttonDown(upFlag: Pointer.leftUp) { winios_pointer(x, y, at | Pointer.leftDown, 0) }
+            if lifecycle.buttonDown(upFlag: Pointer.leftUp) { winios_window_pointer(x, y, at | Pointer.leftDown) }
         case .moved:
-            winios_pointer(x, y, at, 0)
+            winios_window_pointer(x, y, at)
         case .ended, .cancelled:
-            if lifecycle.buttonUp(upFlag: Pointer.leftUp) { winios_pointer(x, y, at | Pointer.leftUp, 0) }
+            if lifecycle.buttonUp(upFlag: Pointer.leftUp) { winios_window_pointer(x, y, at | Pointer.leftUp) }
         default:
             break
         }
