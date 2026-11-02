@@ -330,6 +330,19 @@ private struct GameDetailPage: View {
         }
     }
 
+    /// The page's hero art: Steam's app, else the installed title, else the store's game
+    /// (GOG, Epic, Battle.net, Xbox). One step at a time: the `??` chain of all of them
+    /// was too much for the type checker at -Onone.
+    private func pageArt(_ t: InstalledTitle?, _ g: SteamGame?) -> PageArt? {
+        if let g { return PageArt(appID: g.id, name: name, info: g.info) }
+        if let t { return PageArt(appID: t.appID, name: t.name, info: nil, titleID: t.id, storeKey: t.key) }
+        if let gg = gogGame { return PageArt(appID: nil, name: gg.title, info: nil, storeKey: StoreGameKey(store: .gog, id: gg.id)) }
+        if let eg = epicGame { return PageArt(appID: nil, name: eg.title, info: nil, storeKey: StoreGameKey(store: .epic, id: eg.id)) }
+        if let p = bnetProduct { return PageArt(appID: nil, name: p.name, info: nil, storeKey: BattleNet.key(p)) }
+        if let title = xboxTitle, let key { return PageArt(appID: nil, name: title, info: nil, storeKey: key) }
+        return nil
+    }
+
     /// The page; under a panel only its art and name show (GameOptions.dc.html).
     private func page(_ t: InstalledTitle?, _ g: SteamGame?) -> some View {
         let under = !navigation.gamePanels.isEmpty
@@ -337,14 +350,7 @@ private struct GameDetailPage: View {
             // The hero art fills the screen behind the page and its footer: the shell draws
             // it (PageArt), as the launch screen does, so on Play it does not change.
             Color.clear
-                .preference(key: PageArtKey.self,
-                            value: g.map { PageArt(appID: $0.id, name: name, info: $0.info) }
-                                ?? t.map { PageArt(appID: $0.appID, name: $0.name, info: nil, titleID: $0.id,
-                                                   storeKey: $0.key) }
-                                ?? gogGame.map { PageArt(appID: nil, name: $0.title, info: nil, storeKey: StoreGameKey(store: .gog, id: $0.id)) }
-                                ?? epicGame.map { PageArt(appID: nil, name: $0.title, info: nil, storeKey: StoreGameKey(store: .epic, id: $0.id)) }
-                                ?? bnetProduct.map { PageArt(appID: nil, name: $0.name, info: nil, storeKey: BattleNet.key($0)) }
-                                ?? xboxTitle.flatMap { title in key.map { PageArt(appID: nil, name: title, info: nil, storeKey: $0) } })
+                .preference(key: PageArtKey.self, value: pageArt(t, g))
 
             HStack(alignment: .top, spacing: 24) {
                 VStack(alignment: .leading, spacing: 8) {
