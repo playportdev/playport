@@ -5,7 +5,7 @@
 ([PLA-509](https://linear.app/playportdev/issue/PLA-509)) installs WoW from Blizzard's CDN in a
 layout the game accepts. When accepted, it amends the launcher plan's owner decisions D6 (the
 guest launcher signs itself in) and D7 (launcher-store games are out of scope) for Battle.net
-alone ([launchers plan](../plans/2026-10-12-launchers.md)); Rockstar, Ubisoft and EA keep them.
+alone ([launchers plan](https://linear.app/playportdev/issue/PLA-616)); Rockstar, Ubisoft and EA keep them.
 
 **Amended 2026-11-01 by [0177](0177-wow-plays-its-x64-client-through-fex.md):** a product is offered, installed and updated with its x64 client (`Wow.exe`, `WowClassic.exe`), not the ARM64 one; an older ARM64 install gains the x64 client through an update.
 

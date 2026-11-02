@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Tile art for a game no store draws (docs/plans/finished.md#pc-import-gog-and-epic, 1.6):
+// Tile art for a game no store draws (PLA-80, 1.6):
 // the icon its executable carries (PlayportKit PEIcon), on the name's colour, or the
 // name's initials when it has none. Icons are read once off the main thread and kept
 // as PNGs under Caches/Playport/art/local, keyed by the title and its executable, so a

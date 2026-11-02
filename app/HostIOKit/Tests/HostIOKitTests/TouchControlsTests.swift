@@ -3,7 +3,7 @@ import XCTest
 @testable import HostIOKit
 
 /// The cases Madeira's check-touch-gamepad.py lists, and phase 1's state machines
-/// (docs/plans/2026-10-09-touch-controls.md).
+/// (PLA-13).
 final class TouchControlsTests: XCTestCase {
     let a = TouchTarget(id: "a", kind: .button(.pad(.a), .hold), frame: TouchRect(x: 700, y: 300, width: 50, height: 50))
     let b = TouchTarget(id: "b", kind: .button(.pad(.b), .hold), frame: TouchRect(x: 760, y: 250, width: 50, height: 50))

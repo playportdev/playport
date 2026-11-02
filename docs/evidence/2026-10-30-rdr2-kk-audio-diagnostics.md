@@ -1,7 +1,7 @@
 # RDR2: KosmicKrisp command memory, audio underruns and the CPU split (l19 diagnostics)
 
 **Linear:** [PLA-364](https://linear.app/playportdev/issue/PLA-364) (RDR2),
-[PLA-476](https://linear.app/playportdev/issue/PLA-476) (plan `docs/plans/2026-10-29-sc-stock-cef.md`).
+[PLA-476](https://linear.app/playportdev/issue/PLA-476) (plan `PLA-476`).
 
 Four log-only patches measure what the PLA-476 design reports ranked first (KosmicKrisp allocator design, RDR2
 audio, RDR2 CPU cores). Nothing they add changes what the runtime does. One RDR2 run (l19) read them. M = measured

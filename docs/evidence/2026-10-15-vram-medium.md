@@ -5,7 +5,7 @@
 [PLA-216](https://linear.app/playportdev/issue/PLA-216) (donor pool),
 [PLA-352](https://linear.app/playportdev/issue/PLA-352) (the memory plan); the title is PLA-49
 (Kingdom Come: Deliverance, app-379430).
-**Plan:** [donor memory](../plans/finished.md#guest-ram-from-donor-processes). Follows
+**Plan:** [donor memory](https://linear.app/playportdev/issue/PLA-216). Follows
 [the low-spec runs](2026-10-15-memory-ceiling-vram.md) (`940d2a9`).
 
 The owner asked whether Kingdom Come uses more graphics memory when told it has more video

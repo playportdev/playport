@@ -1,7 +1,7 @@
 # 0060: A dev build's game page sets the Vulkan layers' options, from an allowlist
 
 **Status:** accepted, 2026-10-06, under the owner's answer 3 in the
-[Vulkan performance plan](../plans/2026-10-06-vulkan-performance.md) (step 0.1).
+[Vulkan performance plan](https://linear.app/playportdev/issue/PLA-680) (step 0.1).
 Narrows 0034's "environment variables gone" for dev builds only; 0012 holds.
 **Superseded in part** by [0137](0137-graphics-options-set-any-variable.md) (2026-10-20): the
 allowlist is gone; any `NAME=value` variable may be set.

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// The layout editor by controller (LayoutEditor.dc.html; docs/plans/2026-10-09-touch-controls.md,
+// The layout editor by controller (LayoutEditor.dc.html; PLA-13,
 // phase 5): what each press does to the LayoutEditor, and what the view does with the rest.
 //
 // - On the canvas the selection is the ring: LB and RB ring the controls in

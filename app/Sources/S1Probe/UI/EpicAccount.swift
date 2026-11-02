@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Epic Games in the app (docs/plans/finished.md#pc-import-gog-and-epic, Phase 3), as
+// Epic Games in the app (PLA-80, Phase 3), as
 // GOGAccount.swift is GOG's: the sign-in (a WKWebView sheet on Epic's login page,
 // whose redirect page is JSON with the code; decision 0058), the owned library
 // (cached, listed offline), the art, and the Epic driver of the download queue:

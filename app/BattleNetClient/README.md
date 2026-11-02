@@ -1,7 +1,7 @@
 # BattleNetClient: the Battle.net store's TACT client
 
-`BattleNetClientKit` is the Battle.net store (decisions 0174 and 0177, plan
-`docs/plans/2026-10-30-world-of-warcraft.md`, [PLA-510](https://linear.app/playportdev/issue/PLA-510),
+`BattleNetClientKit` is the Battle.net store (decisions 0174 and 0177, spec
+[PLA-516](https://linear.app/playportdev/issue/PLA-516), [PLA-510](https://linear.app/playportdev/issue/PLA-510),
 [PLA-517](https://linear.app/playportdev/issue/PLA-517)): which World of Warcraft products are
 offered, what an install of one is, and the install itself in the layout the game reads. No
 Battle.net session; everything it reads is public. Foundation and

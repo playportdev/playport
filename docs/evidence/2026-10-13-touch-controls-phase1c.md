@@ -1,7 +1,7 @@
 # 2026-10-13: on-screen controls, phase 1c (the owner's feedback on 1b)
 
 **Linear:** [PLA-13](https://linear.app/playportdev/issue/PLA-13). **Plan:**
-[touch controls](../plans/2026-10-09-touch-controls.md), "Owner feedback on 1b". **Commit:**
+[touch controls](https://linear.app/playportdev/issue/PLA-13), "Owner feedback on 1b". **Commit:**
 `7f6cd07` on `dev/pla-13-touch-controls`. Before: [phase 1](2026-10-13-touch-controls-phase1.md),
 [1b](2026-10-13-touch-controls-phase1b.md).
 

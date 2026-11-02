@@ -1,7 +1,7 @@
 # KosmicKrisp graphics pipeline library: host results
 
 **Linear:** [PLA-424](https://linear.app/playportdev/issue/PLA-424). **Plan:**
-[kk-graphics-pipeline-library](../plans/finished.md#kosmickrisp-graphics-pipeline-library).
+[kk-graphics-pipeline-library](https://linear.app/playportdev/issue/PLA-424).
 **Where:** the workstation's host mock of KosmicKrisp (`build/mesa-host-test`), from the side copy
 `.work/worktrees/kkgpl`. **Not run on the phone.**
 

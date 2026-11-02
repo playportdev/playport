@@ -1,6 +1,6 @@
 # Vulkan performance: the missed 120-Hz frames (p99)
 
-**Date:** 2026-10-08. **Plan:** [Vulkan performance](../plans/2026-10-06-vulkan-performance.md)
+**Date:** 2026-10-08. **Plan:** [Vulkan performance](https://linear.app/playportdev/issue/PLA-680)
 (PLA-72), work-queue item 5. **Compared with:** `vk-v2-dxvk-notiler-1`
 ([config levers](2026-10-08-vulkan-perf-config-levers.md)), `vk-v2-vkd3d-presentfix-1`
 ([present path](2026-10-08-vulkan-perf-present-path.md)) and the DXMT control `vk-v2-dxmt-2`

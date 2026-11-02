@@ -1,7 +1,7 @@
 # 2026-10-13: on-screen controls, phase 1b (the owner's phase 1 feedback)
 
 **Linear:** [PLA-13](https://linear.app/playportdev/issue/PLA-13). **Plan:**
-[touch controls](../plans/2026-10-09-touch-controls.md), "Owner feedback on phase 1". **Commit:**
+[touch controls](https://linear.app/playportdev/issue/PLA-13), "Owner feedback on phase 1". **Commit:**
 `8371fb1` on `dev/pla-13-touch-controls`. Phase 1: [evidence](2026-10-13-touch-controls-phase1.md).
 
 **IPA (dev):** `.work/out/20261013-113710-4cfadad8/Playport-26.5-4cfadad8.ipa`, sha256

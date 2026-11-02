@@ -3,7 +3,7 @@
 **Linear:** [PLA-383](https://linear.app/playportdev/issue/PLA-383),
 [PLA-381](https://linear.app/playportdev/issue/PLA-381),
 [PLA-370](https://linear.app/playportdev/issue/PLA-370).
-**Plan:** [low-VA CEF](../plans/finished.md#own-low-address-space-cef).
+**Plan:** [low-VA CEF](https://linear.app/playportdev/issue/PLA-370).
 **Decision:** [0113](../decisions/0113-a-4-mib-call-return-stack.md).
 Branch `dev/pla-291-rockstar-launcher`.
 

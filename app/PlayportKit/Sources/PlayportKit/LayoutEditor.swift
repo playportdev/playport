@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// The layout editor's model (docs/plans/2026-10-09-touch-controls.md, phase 5;
+// The layout editor's model (PLA-13, phase 5;
 // LayoutEditor.dc.html): it edits a ControlLayout over the paused game, and its
 // result is the game's own copy of a preset (GameControls.layouts). The view
 // (S1Probe) draws `layout` at the view's size and passes gestures and taps in.

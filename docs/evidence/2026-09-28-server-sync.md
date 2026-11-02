@@ -8,7 +8,7 @@ before the branch was rebased onto main's 0035 and 0036) and wine-unix 0006
 started at `thermal_start: nominal`. hk-a, w3-a and w3-a2 ran on battery or
 with a charger plugged in partway through; w3-b2 and hk-b ran on a charger
 (`summary.json` has each). Settles item 3 of the
-[runtime-risks plan](../plans/finished.md#runtime-risks); the decision is
+[runtime-risks plan](https://linear.app/playportdev/issue/PLA-669); the decision is
 [0023](../decisions/0023-in-process-sync-stays-off.md).
 
 **Result:**

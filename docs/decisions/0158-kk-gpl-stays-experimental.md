@@ -3,7 +3,7 @@
 **Status:** accepted, 2026-10-22, by the supervisor for the owner (the owner was away; the
 session ran unattended), from G5's evidence, as the plan's G6 step required
 ([PLA-424](https://linear.app/playportdev/issue/PLA-424);
-[plan outcome](../plans/finished.md#kosmickrisp-graphics-pipeline-library)). It keeps the
+[plan outcome](https://linear.app/playportdev/issue/PLA-424)). It keeps the
 owner's 2026-10-21 decision: full GPL, staged behind `MESA_KK_EXPERIMENTAL=gpl`, off by default
 until the phone shows it works. Evidence:
 [host](../evidence/2026-10-21-kk-gpl-host.md) and

@@ -4,7 +4,7 @@
 [0123](0123-builtins-linked-with-16-kib-sections.md) from Playport's own builtins to foreign x86-64
 images, and it keeps [0150](0150-dev-single-process-social-club.md)'s "no installed executable or DLL is
 changed on disk": only a separate copy in the app's caches is written.
-[Plan](../plans/2026-10-29-sc-stock-cef.md), [evidence](../evidence/2026-10-29-sc-stock-cef-probe.md).
+[Plan](https://linear.app/playportdev/issue/PLA-476), [evidence](../evidence/2026-10-29-sc-stock-cef-probe.md).
 
 **As built 2026-10-30 (owner, PLA-476):** the key carries the file's ctime, and each use checks 16
 sampled points ([below](#as-built-2026-10-30-the-ctime-in-the-key-and-a-sampled-check-madeira-unix-0238)).

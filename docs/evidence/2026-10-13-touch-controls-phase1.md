@@ -1,7 +1,7 @@
 # 2026-10-13: on-screen controls, phase 1 (the Gamepad layout and the Playport button)
 
 **Linear:** [PLA-13](https://linear.app/playportdev/issue/PLA-13). **Plan:**
-[touch controls](../plans/2026-10-09-touch-controls.md), phase 1. **Commit:** `b784617` on
+[touch controls](https://linear.app/playportdev/issue/PLA-13), phase 1. **Commit:** `b784617` on
 `dev/pla-13-touch-controls`.
 
 **IPA (dev):** `.work/out/20261013-103922-3911e0fa/Playport-26.5-3911e0fa.ipa`, sha256

@@ -1,7 +1,7 @@
 # 2026-10-13: touch controls U on the phone (gyro smoothing, arrow keys, the Controller page's ring, the in-game editor)
 
 **Linear:** [PLA-13](https://linear.app/playportdev/issue/PLA-13). **Plan:**
-[touch controls](../plans/2026-10-09-touch-controls.md), queue items 12 and 13. Before:
+[touch controls](https://linear.app/playportdev/issue/PLA-13), queue items 12 and 13. Before:
 [2f and 3c](2026-10-13-touch-controls-2f-3c.md). Branch `dev/pla-13-touch-controls`.
 
 | IPA (dev) | sha256 | Built from |

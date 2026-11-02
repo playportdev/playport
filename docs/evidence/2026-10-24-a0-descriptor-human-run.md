@@ -1,7 +1,7 @@
 # A0 descriptor decision input: owner-played Hollow Knight
 
 **Linear:** [PLA-431](https://linear.app/playportdev/issue/PLA-431).
-**Plan:** [Proton parity, A0](../plans/finished.md#kosmickrisp-proton-parity).
+**Plan:** [Proton parity, A0](https://linear.app/playportdev/issue/PLA-431).
 **Verdict: covered native cost looks small; total opportunity is NOT DECISIVE.
 A0 does not authorize A2; A2–A4 remain unstarted/gated.**
 

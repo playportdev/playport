@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// The layout editor (docs/plans/2026-10-09-touch-controls.md, phase 5;
+// The layout editor (PLA-13, phase 5;
 // docs/design/2026-10-09-touch-controls/LayoutEditor.dc.html): a game's
 // on-screen layout edited where it is played, over the paused game.
 //

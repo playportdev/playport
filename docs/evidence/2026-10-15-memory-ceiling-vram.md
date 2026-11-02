@@ -5,7 +5,7 @@
 [PLA-355](https://linear.app/playportdev/issue/PLA-355) (the memory settings),
 [PLA-352](https://linear.app/playportdev/issue/PLA-352) (the memory plan); the title is PLA-49
 (Kingdom Come: Deliverance, app-379430).
-**Plan:** [donor memory](../plans/finished.md#guest-ram-from-donor-processes).
+**Plan:** [donor memory](https://linear.app/playportdev/issue/PLA-216).
 
 The owner asked two questions:
 

@@ -5,7 +5,7 @@ After reconstructing DXVK with patches 0006–0007:
 
 ```sh
 export PLAYPORT_BUILD=$PWD/.work
-export TMPDIR=$PLAYPORT_BUILD/agent-notes/kk-parity/tmp
+export TMPDIR=$PLAYPORT_BUILD/tmp
 build/dxvk-descriptor-test/run.sh
 ```
 
@@ -33,5 +33,5 @@ The null-pointer branch must bypass diagnostic TLS, clocks, counters and work lo
 
 No Vulkan calls or GPU work execute here. Host `CLOCK_MONOTONIC` tests do not prove
 Windows QPC/iOS clock resolution or diagnostic overhead. There is no phone driver,
-gameplay harness or parser in this directory. The diagnostic remains default off;
-future activation uses existing Graphics options, `PLAYPORT_DESCRIPTOR_STATS=1`.
+gameplay harness or parser in this directory. The diagnostic is off by default;
+a dev build's game Graphics options turn it on with `PLAYPORT_DESCRIPTOR_STATS=1`.

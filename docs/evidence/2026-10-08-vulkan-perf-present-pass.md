@@ -1,6 +1,6 @@
 # Vulkan performance: the extra present pass (work-queue item 4), no change made
 
-**Date:** 2026-10-08. **Plan:** [Vulkan performance](../plans/2026-10-06-vulkan-performance.md)
+**Date:** 2026-10-08. **Plan:** [Vulkan performance](https://linear.app/playportdev/issue/PLA-680)
 (PLA-72), work-queue item 4. **Result:** no change, so no build, no install and no phone
 run. The extra pass cannot be removed safely in KosmicKrisp or the Metal WSI, and the safe
 changes that are left touch too little work for one run to show. Nothing is reverted. The

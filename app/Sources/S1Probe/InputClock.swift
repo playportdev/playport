@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// The one clock of the continuous input sources (docs/plans/2026-10-09-touch-controls.md,
+// The one clock of the continuous input sources (PLA-13,
 // "Output"): a CADisplayLink on the main run loop while any source needs a tick,
 // stopped when none does. The on-screen controls tick for a button's repeat
 // (UI/TouchControlsView.swift, OnScreenControls); the controller map for a

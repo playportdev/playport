@@ -4,7 +4,7 @@
 ([PLA-508](https://linear.app/playportdev/issue/PLA-508)). Accepted after the host spike
 ([PLA-509](https://linear.app/playportdev/issue/PLA-509)) shows WoW's Warden accepting a Wine
 session. When accepted, it narrows the launcher plan's refusal of "Battle.net titles" as
-anti-cheat titles ([launchers plan](../plans/2026-10-12-launchers.md), risks), and keeps every
+anti-cheat titles ([launchers plan](https://linear.app/playportdev/issue/PLA-616), risks), and keeps every
 refusal of [0059](0059-epic-exchange-code.md).
 
 **Amended again 2026-11-01 by [0177](0177-wow-plays-its-x64-client-through-fex.md):** the runtime changes none of the game's code or data in memory (WoW plays its x64 client through FEX), so the 0176 amendment below no longer describes what runs; the notice no longer says the runtime rewrites the game's instructions.

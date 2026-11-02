@@ -1,7 +1,7 @@
 # 2026-10-13: touch controls R (review fixes), host, plus one install and smoke run
 
 **Linear:** [PLA-13](https://linear.app/playportdev/issue/PLA-13). **Plan:**
-[touch controls](../plans/2026-10-09-touch-controls.md), queue item 10 (R). Before:
+[touch controls](https://linear.app/playportdev/issue/PLA-13), queue item 10 (R). Before:
 [2f](2026-10-13-touch-controls-phase2f.md). Branch `dev/pla-13-touch-controls`.
 
 | IPA (dev) | sha256 | Built from |

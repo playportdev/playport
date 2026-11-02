@@ -5,7 +5,7 @@ not permission to publish.** Playport is open source. Its IPAs are free to
 download from this repository's GitHub Releases, and support is voluntary,
 through Ko-fi or Patreon. `LICENSE` stays GPL-3.0-or-later with the existing
 exception. The source and the IPA were published through separate gates
-([finished plans](plans/finished.md#open-source-publication-and-the-first-ipa)).
+([finished plans](https://linear.app/playportdev/issue/PLA-695)).
 
 ## What a release holds
 
@@ -58,9 +58,9 @@ these assets:
   its source, and may share it. Do not attach an NDA or a no-sharing rule.
 - Stopping a Patreon membership does not take away the right to run, change or
   share a copy already received.
-- Link the page from `README.md` and from each release's notes. GitHub shows a
-  **Sponsor** button when `.github/FUNDING.yml` names the account
-  (`ko_fi: NAME`, `patreon: NAME`). Add that file only once the page exists.
+- Link the page from `README.md` and from each release's notes.
+  `.github/FUNDING.yml` names the accounts (`github: playportdev`,
+  `ko_fi: playportdev`), so GitHub shows a **Sponsor** button.
 - Before starting, review Ko-fi's or Patreon's terms, fees, taxes and
   consumer duties. Describe the support as a donation only when it is one.
 
@@ -71,11 +71,10 @@ That is **where we publish**, not a restriction on recipients. Anyone who gets
 the IPA may mirror it or its source elsewhere under its licences. We cannot
 require them to donate, to download only from GitHub, or to keep a copy private.
 
-Check GitHub's [Terms of Service](https://docs.github.com/en/site-policy/github-terms/github-terms-of-service)
+GitHub's [Terms of Service](https://docs.github.com/en/site-policy/github-terms/github-terms-of-service)
 and [Acceptable Use Policies](https://docs.github.com/en/site-policy/acceptable-use-policies/github-acceptable-use-policies)
-for this package before the first release. Hosting on GitHub does not settle
-Apple's terms; the owner accepts that risk
-([decision 0039](decisions/0039-owners-licensing-review.md)).
+apply to this package. Hosting on GitHub does not settle Apple's terms; the owner
+accepts that risk ([decision 0039](decisions/0039-owners-licensing-review.md)).
 
 ## Draft release notes
 
@@ -94,27 +93,12 @@ place:
 > redistribute any game. Read the device and signing requirements before you
 > install.
 
-Once a Ko-fi or Patreon page exists, add after "The IPA is free.": "If you want
+When a release links the donation page, add after "The IPA is free.": "If you want
 to support development, you can donate on Ko-fi or Patreon. A donation buys no
 extra licence and does not restrict anyone's right to share the software."
-0.1.0 names no donation link (decision 0039).
 
 Do not promise App Store approval, permanent signing, support for every game, or
 an Apple-approved JIT or distribution route.
-
-## Before the first release
-
-- [x] Resolve the Apple SDK, signing and channel questions: the owner accepts the
-  risk, and nothing Apple owns is attached (decision 0039).
-- [ ] Complete and test the release package in [DISTRIBUTION.md](DISTRIBUTION.md):
-  the exact source, complete notices, and usable install and relinking
-  instructions (relinking by rebuilding from the source, decision 0041).
-- [ ] Check that every asset fits GitHub's limits and that the source archives
-  rebuild the tagged IPA.
-- [ ] Later, not for 0.1.0 (decision 0039): set up the Ko-fi or Patreon page,
-  review its terms, then add `.github/FUNDING.yml` and the README link.
-- [ ] Get the owner's explicit approval before creating the tag, the release or
-  any upload. Record the released checksum and the matching source manifest.
 
 ## Primary sources to re-check at publication
 

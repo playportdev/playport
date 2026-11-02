@@ -2,7 +2,7 @@
 
 **Status:** accepted, 2026-10-04. Extends [0005](0005-title-cohort.md)'s cohort
 (x86-64 Direct3D 11 only) and [0044](0044-vulkan-default-for-dx12.md)'s
-default backend; accepts the direction of the Portal 2 plan(../plans/finished.md#portal-2).
+default backend; accepts the direction of the Portal 2 plan(PLA-26).
 
 ## Decision
 

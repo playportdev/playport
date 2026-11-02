@@ -3,7 +3,7 @@ import HostIOKit
 import XCTest
 @testable import PlayportKit
 
-/// The layout editor's model (docs/plans/2026-10-09-touch-controls.md, phase 5;
+/// The layout editor's model (PLA-13, phase 5;
 /// LayoutEditor.dc.html) and the game's own copy it saves.
 final class LayoutEditorTests: XCTestCase {
     // MARK: the game's own copy

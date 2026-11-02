@@ -15,7 +15,7 @@ import Foundation
 public enum SettingsSection: String, CaseIterable, Sendable {
     /// Every store's account (Steam, then GOG and Epic Games as they land).
     case accounts, graphics, downloads, controls, storage, setup, about
-    /// Dev builds only until a launcher passes Stage 1 (docs/plans/2026-10-12-launchers.md):
+    /// Dev builds only until a launcher passes Stage 1 (PLA-616):
     /// each publisher's launcher (PublisherLauncher) with Open.
     case launchers
     /// Dev builds only: diagnostics, simulations, probes and logs.

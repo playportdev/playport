@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// The on-screen controls over a running game (docs/plans/2026-10-09-touch-controls.md,
+// The on-screen controls over a running game (PLA-13,
 // phases 1 and 4; docs/design/2026-10-09-touch-controls/TouchGamepad.dc.html,
 // TouchKeyboardMouse.dc.html).
 //

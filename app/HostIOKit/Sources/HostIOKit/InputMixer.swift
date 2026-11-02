@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 /// What the guest gets from every input source at once
-/// (docs/plans/2026-10-09-touch-controls.md, "Output"): the on-screen controls
+/// (PLA-13, "Output"): the on-screen controls
 /// (TouchControls' output), the physical pads and gyro aim (GyroAim's output).
 ///
 /// - Pads: the touch controls are player 1. While they are on, slot 0 has

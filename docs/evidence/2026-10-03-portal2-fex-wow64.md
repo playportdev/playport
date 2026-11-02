@@ -2,7 +2,7 @@
 
 ## Result
 
-[Step 3](../plans/finished.md#portal-2)'s check
+[Step 3](https://linear.app/playportdev/issue/PLA-26)'s check
 passes on the phone: Portal 2's i386 child loads FEX's WoW64 module
 (`xtajit.dll`), and FEX compiles and runs i386 code from the i386 ntdll's
 `LdrInitializeThunk` (guest `0x7bf8f420`) through several blocks to the

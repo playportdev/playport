@@ -2,8 +2,9 @@
 
 This page records what licences apply to Playport and to what it builds, and
 what has to happen before an IPA is given to anyone. It is a working record
-by the copyright holder, not legal advice; the assembled application must be
-reviewed before any public release.
+by the copyright holder, not legal advice. Each release passes the checks in
+[DISTRIBUTION.md](DISTRIBUTION.md) and the owner's sign-off
+([decision 0068](decisions/0068-release-owner-signoff.md)) before it is published.
 
 ## Paid distribution and closed source
 
@@ -20,11 +21,11 @@ possible after securing alternative rights or replacing/separating the GPL
 parts, while still supplying LGPL/MPL source and usable relinking materials.
 Nothing here grants such permissions.
 
-The current preparation target is **open-source publication, then a free IPA
-with optional support**, not proprietary relicensing. Both publication gates
-are passed ([finished plans](plans/finished.md#open-source-publication-and-the-first-ipa));
-[RELEASE-HOSTING.md](RELEASE-HOSTING.md) describes the chosen flow: free IPAs
-on GitHub Releases and donations on Ko-fi or Patreon (decision 0037).
+Playport is **open source, with free IPAs and optional support**, not
+proprietary relicensing. Both publication gates are passed
+([finished plans](https://linear.app/playportdev/issue/PLA-695)).
+[RELEASE-HOSTING.md](RELEASE-HOSTING.md) describes the flow: free IPAs on GitHub
+Releases and donations on Ko-fi or Patreon (decision 0037).
 Recipients may mirror their GPL copies anywhere.
 
 ## Playport's own licence
@@ -70,9 +71,9 @@ no header.
 
 ### Pushing
 
-Distribution begins with the first push to a public remote, not with a
-release. Before any public push, `LICENSE-EXCEPTION.md` must be adopted (its
-`Adopted on:` line carries a date) and every pushed commit must pass the name
+Distribution began with the first push to a public remote, not with a
+release. Every public push needs `LICENSE-EXCEPTION.md` adopted (its
+`Adopted on:` line carries a date) and every pushed commit to pass the name
 gate (`pp names`, part of `pp test`). CI checks both
 (`.github/workflows/checks.yml`); nothing refuses the push itself
 ([decision 0025](decisions/0025-no-git-hooks.md)).
@@ -93,11 +94,11 @@ contributions, not the right to use or distribute the code under its licence.
 | Component | Where it ends up | Licence |
 | --- | --- | --- |
 | Playport (app, HostIOKit, SteamClientKit, build and tooling code) | executable | GPL-3.0-or-later with the converter exception |
-| Madeira host layer: `build/ntdll-unix`, `build/wineserver`, `build/win32u-unix`, `madeira_cfg.h`, Winios, `IOSDisplayShim` | executable | GPL-3.0-or-later with Madeira's own converter exception; many `build/*-unix` files carry Wine's LGPL header, and some carry none (see "Open items") |
+| Madeira host layer: `build/ntdll-unix`, `build/wineserver`, `build/win32u-unix`, `madeira_cfg.h`, Winios, `IOSDisplayShim` | executable | GPL-3.0-or-later with Madeira's own converter exception; many `build/*-unix` files carry Wine's LGPL header, and some carry none (see "Licence readings") |
 | Wine: WineHQ plus Madeira's fork (`patches/wine-port`, decision 0013) | executable (unix side), both PE DLL sets, `nls/` | LGPL-2.1-or-later (`COPYING.LIB`, `LICENSE`, `LICENSE-MADEIRA.md`; `NOTICES.md` records current third-party notices) |
-| Valve's Wine: the commits of ValveSoftware/wine `proton_11.0` (the Wine Proton ships) that Playport carries as `patches/wine-valve` (decision 0018) | both PE DLL sets, and the Wine headers the unix side compiles against | LGPL-2.1-or-later, as upstream Wine; each commit keeps its author, and notices are collected from the actual patched Wine tree |
+| Valve's Wine: the commits of ValveSoftware/wine's `bleeding-edge` branch (the Wine Proton bleeding-edge ships) that Playport carries as `patches/wine-valve` (decisions 0018, 0049) | both PE DLL sets, and the Wine headers the unix side compiles against | LGPL-2.1-or-later, as upstream Wine; each commit keeps its author, and notices are collected from the actual patched Wine tree |
 | Libraries bundled into the Wine PE DLLs: compiler-rt, musl, tomcrypt, zlib, libpng, libjpeg, libtiff, vkd3d, FAudio, OpenLDAP, Mozilla-derived `regexp.c` | Wine PE DLLs | NCSA or MIT, MIT, public domain/WTFPL, zlib, PNG v2, IJG, libtiff, LGPL-2.1-or-later, zlib, OpenLDAP 2.8, LGPL-2.1-or-later |
-| FEX: FEX-Emu/FEX plus Madeira's port (`patches/fex-port`, decision 0008) | `xtajit64.dll` | MIT upstream; Madeira's changes GPL-3.0-or-later with its exception |
+| FEX: FEX-Emu/FEX plus Madeira's port (`patches/fex-port`, decision 0008) | `xtajit64.dll` (arm64ec) and `xtajit.dll` (FEX's WoW64 CPU for 32-bit games) | MIT upstream; Madeira's changes GPL-3.0-or-later with its exception |
 | Inside `xtajit64.dll`: rpmalloc (FEX-Emu/rpmalloc plus Madeira's changes, `patches/rpmalloc-port`), fmt, xxHash, Cephes, SoftFloat 3e, tiny-json, cpp-optparse, unordered_dense | `xtajit64.dll` | rpmalloc 0BSD upstream plus Madeira's GPL changes; MIT, BSD-2-Clause, BSD, BSD-3-Clause, MIT, MIT, MIT |
 | DXMT: 3Shain/dxmt plus Madeira's port (`patches/dxmt-port`) | executable (unix slice), DXMT PE DLLs | LGPL-2.1-or-later upstream (`LICENSE`, `COPYING.LIB`; upstream relicensed from MIT, kept as `LICENSE.OLD`, after v0.80); Madeira's changes GPL-3.0-or-later with its exception |
 | DXBCParser (in DXMT) | executable, DXMT PE DLLs | MIT, per its file headers |
@@ -128,7 +129,7 @@ contributions, not the right to use or distribute the code under its licence.
 Apple's frameworks and the Swift runtime are system libraries on the device,
 not bundle contents. The build tools (llvm-mingw, xtool, Apple ld64, the
 Apple SDK) are not redistributed, but llvm-mingw's mingw-w64 CRT and headers
-are compiled into the PE files Playport builds (see "Open items").
+are compiled into the PE files Playport builds (see "Licence readings").
 
 The combination is conveyed under GPL-3.0-or-later as a whole: every
 component licence above is compatible with that, and the LGPL relinking
@@ -255,7 +256,7 @@ accepts the codec patent risk of FFmpeg's H.264, AAC and MPEG decoders ([decisio
 `build/stages/steamapi.sh` builds gbe_fork's regular `steam_api` for x86-64
 and i386 from its pin with `patches/gbe`. The app copies it into a game's
 folder at launch in place of the game's own `steam_api(64).dll`, which it keeps
-beside it (docs/plans/finished.md#steam-for-games).
+beside it (PLA-650).
 
 - **LGPL-3.0** (gbe_fork's `LICENSE`; the repository names no "or later").
   Conveying it inside a GPL-3.0-or-later app is permitted: LGPL-3.0 is GPL-3.0
@@ -334,33 +335,25 @@ tester. The procedure is [DISTRIBUTION.md](DISTRIBUTION.md).
 5. **No further restrictions** on the recipient. Whether a given delivery
    channel's terms add restrictions is part of choosing the channel.
 
-## Open items
+## Licence readings
 
-- Wine's bundled-library row predates the current pin's complete library set
-  (including its replacement of `tomcrypt`). Review actual linked members and
-  compiled headers against the recursively collected notice inventory; that
-  row is not a completed release audit.
-- mingw-w64's exact source revision and release-script association are recorded
-  in `build/mingw-notices.lock.json`; runtime/source notice collection and installed
-  notice-byte comparisons are implemented. Audit actual CRT/compiled header/linked
-  members across the PE binaries and the local arm64ec CRT rebuild. The
-  [LLVM runtime collector](release-audits/llvm-runtime-collection.md)
+- **mingw-w64.** Its exact source revision and release-script association are recorded
+  in `build/mingw-notices.lock.json`; runtime/source notices are collected and installed
+  notice bytes compared. The [LLVM runtime collector](release-audits/llvm-runtime-collection.md)
   preserves exact-source libc++/libc++abi/libunwind/compiler-rt and resource-header
-  credit supersets, now included in a separately verified `pp notices` directory.
-  Complete applicability/attribution and binary derivation remain open. `COPYING.MinGW-w64-runtime.txt`'s upstream
+  credit supersets in a separately verified `pp notices` directory.
+  `COPYING.MinGW-w64-runtime.txt`'s upstream
   Cephes FIXME: only libmingwex's `lgamma`, `lgammaf`, `lgammal`, `coshl`, `sinhl`,
   `tanhl` and `hypotl` can reach a UCRT link, and Moshier's grants ("may be used
   freely"; "BSD license is fine, modification is OK") are carried in FEX's
-  `cephes-LICENSE.txt`, which the app now lists for mingw-w64 too; the owner
+  `cephes-LICENSE.txt`, which the app lists for mingw-w64 too; the owner
   accepted that reading ([audit](release-audits/mingw-cephes.md), [decision 0039](decisions/0039-owners-licensing-review.md)). Tool/profile licence texts in the
   collected superset do not establish that those tools/profile objects are shipped.
-- Khronos header root notices and `LICENSES/` texts from DXVK/vkd3d-proton's
+- **Khronos and Mesa headers.** Root notices and `LICENSES/` texts from DXVK/vkd3d-proton's
   seven header checkouts (including nested converter copies) are collected with
   committed-byte origins. Mesa's scoped Vulkan/video and top-level SPIR-V headers
   are also collected whole with file/blob/range origins, preserving their credits
-  as a superset. Review per-file/compiled-header applicability, Mesa's generated
-  registry/grammar and other source credits, and additional shader-converter
-  notices; neither superset is a claim of executable linkage.
+  as a superset. Neither superset is a claim of executable linkage.
 - FreeType: taken under FTL, with its credit line ([decision 0039](decisions/0039-owners-licensing-review.md)).
 - OpenLDAP 2.8: taken as GPL-compatible, as the FSF lists the OpenLDAP licence ([decision 0041](decisions/0041-codecs-supersets-and-relinking.md)).
 - DXBCParser: its files say "Copyright (c) Microsoft Corporation. Licensed under the MIT
@@ -369,13 +362,12 @@ tester. The procedure is [DISTRIBUTION.md](DISTRIBUTION.md).
   ShaderBinary modified) and microsoft/DirectX-Headers (the tokenized-format header),
   whose LICENSE texts are identical. That text is committed byte for byte in
   `build/notices-extra/` with its commit and sha256, and collected as
-  `DXBCParser-LICENSE-Microsoft.txt`. Resolved as a notice; no year exists upstream.
+  `DXBCParser-LICENSE-Microsoft.txt`, the notice; no year exists upstream.
 - DXMT's upstream is LGPL-2.1-or-later since the move to upstream DXMT
   ([decision 0007](decisions/0007-dxmt-on-upstream.md)). Madeira's
   `LICENSE-MADEIRA.md` in the DXMT tree still calls the upstream licence MIT;
-  it is Madeira's file and is left as it is. Whether the LGPL DXMT code
-  changes anything for a future converter combination is open (LGPL code
-  does not carry Playport's or Madeira's converter exception).
+  it is Madeira's file and is left as it is. LGPL code does not carry Playport's
+  or Madeira's converter exception, and the converter is not built.
 - Madeira's `build/*-unix` files without a licence header: Madeira's
   documents disagree on whether they are LGPL or GPL-3.0; either reading
   allows Playport to convey the app under GPL-3.0-or-later. Playport takes the
@@ -389,3 +381,8 @@ tester. The procedure is [DISTRIBUTION.md](DISTRIBUTION.md).
   The owner accepts this risk ([decision 0039](decisions/0039-owners-licensing-review.md)).
 - Only the header lines of each Wine bundled library's licence were read; the
   notice files are copied whole.
+
+The collected notices' known coverage limits are in [NOTICES.md](NOTICES.md#gaps). The
+linked-member and applicability audits not yet done (Wine's bundled libraries against the
+current pin, mingw-w64 and the LLVM runtime, Khronos and Mesa headers, LGPL DXMT with a
+converter) are [PLA-725](https://linear.app/playportdev/issue/PLA-725).

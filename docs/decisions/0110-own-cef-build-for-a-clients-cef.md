@@ -6,7 +6,7 @@ no IPA carries its payload, and `pp verify` fails one that does. Accepted by the
 plan's D1–D6 as recommended.
 [PLA-370](https://linear.app/playportdev/issue/PLA-370),
 [PLA-369](https://linear.app/playportdev/issue/PLA-369),
-[plan](../plans/finished.md#own-low-address-space-cef).
+[plan](https://linear.app/playportdev/issue/PLA-370).
 
 Amended by [0150](0150-dev-single-process-social-club.md): the owner permits a
 dev-only, exact-build-guarded in-memory Social Club page-bridge patch for

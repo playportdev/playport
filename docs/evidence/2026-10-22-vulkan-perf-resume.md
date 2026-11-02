@@ -1,6 +1,6 @@
 # Hollow Knight Vulkan performance resume: opt-in probes, no default winner
 
-**Linear:** PLA-72; [plan](../plans/2026-10-06-vulkan-performance.md).
+**Linear:** PLA-72; [plan](https://linear.app/playportdev/issue/PLA-680).
 **Session:** 2026-10-22–23, unattended, main checkout. This continues the plan's
 2026-10-21 desk review; it is not an exit-criteria result. Only Hollow Knight
 (Steam 367520) was played. Portal 2 was removed to make room for its installation;

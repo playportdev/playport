@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// The suggested starting layout's run-time half (docs/plans/2026-10-09-touch-controls.md,
+// The suggested starting layout's run-time half (PLA-13,
 // phase 4 item 3; the table half is CompatDefaults' `controls`). A game on the Gamepad layout
 // that has asked for no XInput state within 20 s of play after its first frame most likely
 // reads only a keyboard and mouse: a toast offers Keyboard & mouse, and accepting saves it as

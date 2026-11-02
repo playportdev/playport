@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// The text bar over a running game (PLA-267; docs/plans/2026-10-12-launchers.md,
+// The text bar over a running game (PLA-267; PLA-616,
 // "Signing in on the phone"): a field across the bottom of the screen, above the
 // iOS keyboard, whose typing, paste and AutoFill reach the focused guest window
 // as characters (WM_CHAR), with Tab, Enter and Backspace as keys. HostIOKit

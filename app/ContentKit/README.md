@@ -1,6 +1,6 @@
 # ContentKit: the store-neutral install core
 
-What every store client (Steam today, GOG and Epic next) shares, so each store
+What every store client (Steam, GOG, Epic and Battle.net) shares, so each store
 adds only its protocol, its manifests and its chunk source. Foundation only;
 `swift test --build-system native` runs its tests on the Linux host, and `pp test`
 runs them too. It is compiled with `-O` in every configuration, for the reason in

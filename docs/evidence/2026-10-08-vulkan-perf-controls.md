@@ -1,6 +1,6 @@
 # Vulkan performance: route-v2 controls on one IPA
 
-**Date:** 2026-10-08. **Plan:** [Vulkan performance](../plans/2026-10-06-vulkan-performance.md)
+**Date:** 2026-10-08. **Plan:** [Vulkan performance](https://linear.app/playportdev/issue/PLA-680)
 (PLA-72), the controls the plan's rules compare every lever with. **IPA:** dev
 `0d4a0f1e6c24a2548566894b4942231edf3e0e9f7413f0433464c9c60e68a929`, built from
 `vulkan-performance-2` at `62427de` (main `1e08fe3` plus the first branch's work, with its

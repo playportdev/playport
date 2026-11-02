@@ -6,7 +6,7 @@
 [0153](0153-rdr2s-settings-are-every-games-defaults.md)'s every-game defaults. It gives the stock helper of
 [0150](0150-dev-single-process-social-club.md) a runtime trim, alongside the compiled trims
 [0114](0114-trim-social-clubs-chromium-and-the-launchers-threads.md) gives Playport's own CEF.
-[Plan](../plans/2026-10-29-sc-stock-cef.md),
+[Plan](https://linear.app/playportdev/issue/PLA-476),
 [evidence](../evidence/2026-10-29-sc-stock-cef-probe.md).
 
 ## Context

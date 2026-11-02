@@ -1,7 +1,7 @@
 # KosmicKrisp shader module identifier: phone gate
 
 **Linear:** [PLA-431](https://linear.app/playportdev/issue/PLA-431). **Plan:**
-[Proton parity](../plans/finished.md#kosmickrisp-proton-parity), B3 (Mesa **0120**, experimental
+[Proton parity](https://linear.app/playportdev/issue/PLA-431), B3 (Mesa **0120**, experimental
 bit **17**). **Result:** functional launch smoke passed on both Vulkan routes; vkd3d's
 second launch demonstrably loaded disk-cached PSOs and created **25 graphics pipelines
 from identifiers**. No performance, gameplay, cache-size improvement or conformance claim.

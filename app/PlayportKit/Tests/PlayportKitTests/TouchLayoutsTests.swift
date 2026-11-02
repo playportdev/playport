@@ -3,7 +3,7 @@ import HostIOKit
 import XCTest
 @testable import PlayportKit
 
-/// Phase 4's presets and control kinds (docs/plans/2026-10-09-touch-controls.md;
+/// Phase 4's presets and control kinds (PLA-13;
 /// TouchKeyboardMouse.dc.html, TouchPointer.dc.html).
 final class TouchLayoutsTests: XCTestCase {
     func testThePresetsRoundTripAndAreUsable() throws {

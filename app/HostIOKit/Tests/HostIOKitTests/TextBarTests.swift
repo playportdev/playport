@@ -2,7 +2,7 @@
 import XCTest
 @testable import HostIOKit
 
-/// The text bar over a running game (PLA-267; docs/plans/2026-10-12-launchers.md, "Signing in on
+/// The text bar over a running game (PLA-267; PLA-616, "Signing in on
 /// the phone"): what its field's edits send to the focused guest window.
 final class TextBarTests: XCTestCase {
     let backspace = TextBar.Input.key(0x08), tab = TextBar.Input.key(0x09), enter = TextBar.Input.key(0x0D)

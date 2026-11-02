@@ -7,7 +7,7 @@ import Darwin
 #endif
 
 /// Steam's DRM wrapper (SteamStub) taken off a game's executable, and put
-/// back (docs/plans/finished.md#steam-for-games, phase 2). A wrapped
+/// back (PLA-650, phase 2). A wrapped
 /// executable starts in a `.bind` section whose stub checks for a running
 /// Steam client before it jumps to the game's own entry point; with no Steam
 /// on the phone the game exits there.
@@ -22,7 +22,7 @@ import Darwin
 /// with or without encrypted code; 3.0 is recognised and reported, and left
 /// alone. Only 3.1 x64 without encrypted code has been checked against a
 /// real executable (En Garde!: docs/evidence/2026-09-27-gbe-steam-api-build.md,
-/// docs/plans/finished.md#en-garde); x86 and encrypted code follow the same
+/// PLA-45); x86 and encrypted code follow the same
 /// header (docs/evidence/2026-10-12-steamstub-x86.md).
 ///
 /// Variant 2.0 (x86 only) marks its entry with the dword 0xC0DEC0DE just

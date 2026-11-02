@@ -1,6 +1,6 @@
 # Vulkan performance, step 1 (partial): first A/B on one IPA, stability counts, and the battery
 
-**Date:** 2026-10-06. **Plan:** [Vulkan performance](../plans/2026-10-06-vulkan-performance.md),
+**Date:** 2026-10-06. **Plan:** [Vulkan performance](https://linear.app/playportdev/issue/PLA-680),
 steps 1 and 3 (one screening run). **IPA:** dev `18805415…` (`1880541585…951a`), the
 step-0 build, for every run below. Run directories: `$PLAYPORT_BUILD/perf-runs/vk-*`.
 Settings per the plan's protocol (`graphics` dxmt / vulkan / vulkan with

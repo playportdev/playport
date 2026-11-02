@@ -1,6 +1,6 @@
 # Steam encrypted app ticket on the phone (decision 0017)
 
-**Date:** 2026-10-07. **Plan:** [store game sign-in](../plans/finished.md#games-sign-in-to-their-store),
+**Date:** 2026-10-07. **Plan:** [store game sign-in](https://linear.app/playportdev/issue/PLA-716),
 step 2. **Decisions:** [0017](../decisions/0017-encrypted-app-ticket.md) (accepted),
 [0004](../decisions/0004-steam-session-boundary.md).
 **Phone:** iPhone18,4, iOS 27.0, dev build, Steam signed in (the paired account). Driven

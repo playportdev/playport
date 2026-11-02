@@ -2,7 +2,7 @@
 
 **Linear:** [PLA-476](https://linear.app/playportdev/issue/PLA-476),
 [PLA-477](https://linear.app/playportdev/issue/PLA-477), [PLA-364](https://linear.app/playportdev/issue/PLA-364).
-**Plan:** [2026-10-29-sc-stock-cef.md](../plans/2026-10-29-sc-stock-cef.md), chunk 1.
+**Plan:** [2026-10-29-sc-stock-cef.md](https://linear.app/playportdev/issue/PLA-476), chunk 1.
 
 ## Build and runs
 

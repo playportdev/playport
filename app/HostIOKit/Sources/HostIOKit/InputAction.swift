@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 /// What one on-screen control (and, later, one controller button) does: the
-/// single model every input source is mapped through (docs/plans/2026-10-09-touch-controls.md,
+/// single model every input source is mapped through (PLA-13,
 /// "Actions"). InputMixer turns the actions held at a moment into the guest's
 /// pad slot, keys and pointer, and Playport's own actions.
 ///

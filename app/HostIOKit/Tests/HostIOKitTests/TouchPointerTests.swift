@@ -2,7 +2,7 @@
 import XCTest
 @testable import HostIOKit
 
-/// Phase 4's touch machines (docs/plans/2026-10-09-touch-controls.md): the
+/// Phase 4's touch machines (PLA-13): the
 /// Keyboard & mouse layout's look area and WASD stick, and Point & click's
 /// pointer surface and its side-bar tools.
 final class TouchPointerTests: XCTestCase {

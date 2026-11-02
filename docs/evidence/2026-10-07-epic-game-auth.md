@@ -1,6 +1,6 @@
 # Epic games start signed in, on the phone (decision 0059)
 
-**Date:** 2026-10-07. **Plan:** [store game sign-in](../plans/finished.md#games-sign-in-to-their-store),
+**Date:** 2026-10-07. **Plan:** [store game sign-in](https://linear.app/playportdev/issue/PLA-716),
 step 1. **Decisions:** [0059](../decisions/0059-epic-exchange-code.md) (accepted),
 [0004](../decisions/0004-steam-session-boundary.md), [0058](../decisions/0058-store-sessions.md).
 **Phone:** iPhone18,4, iOS 27.0, dev build, Epic and Steam signed in. Driven with `pp ui`,

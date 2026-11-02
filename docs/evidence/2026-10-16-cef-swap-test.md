@@ -2,7 +2,7 @@
 
 **Date:** 2026-10-16 (09:30–10:00). **Branch:** `dev/pla-291-rockstar-launcher` (from `6832893`).
 **Linear:** [PLA-369](https://linear.app/playportdev/issue/PLA-369). **Plan:**
-[publisher launchers](../plans/2026-10-12-launchers.md), Rockstar track.
+[publisher launchers](https://linear.app/playportdev/issue/PLA-616), Rockstar track.
 
 Host only: no phone, no build, no sign-in, no game. The owner approved the test. Rockstar's binaries
 were not analysed: only libcef.dll's version resource was read, and runtime behaviour and the
@@ -147,7 +147,7 @@ On the phone those all share one address window.
 ## Our stock-args build in place of Social Club's (PLA-370 stage B exit)
 
 **Date:** 2026-10-16 (14:47–14:50). **Linear:** [PLA-370](https://linear.app/playportdev/issue/PLA-370).
-**Plan:** [CEF low-VA build](../plans/finished.md#own-low-address-space-cef), stage B. The same procedure,
+**Plan:** [CEF low-VA build](https://linear.app/playportdev/issue/PLA-370), stage B. The same procedure,
 prefix and runner as the swap above (`swaprun.sh`, 150 s, `WINEDEBUG=+pid,+virtual,+process,+loaddll`),
 run `runs/swap-ours1`. Host only, no sign-in.
 

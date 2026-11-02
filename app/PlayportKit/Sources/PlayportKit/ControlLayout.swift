@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// On-screen control layouts (docs/plans/2026-10-09-touch-controls.md,
+// On-screen control layouts (PLA-13,
 // "Touch layouts"; docs/design/2026-10-09-touch-controls/TouchGamepad.dc.html,
 // TouchKeyboardMouse.dc.html, TouchPointer.dc.html): a layout is a list of
 // placed controls, each with an id the dev driver's `touch:` names, a kind,

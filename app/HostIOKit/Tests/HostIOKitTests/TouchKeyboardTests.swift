@@ -2,7 +2,7 @@
 import XCTest
 @testable import HostIOKit
 
-/// The touch keyboard (TouchKeyboard.dc.html; docs/plans/2026-10-09-touch-controls.md,
+/// The touch keyboard (TouchKeyboard.dc.html; PLA-13,
 /// phase 4 item 2): its keys, where they are, and its sticky modifiers.
 final class TouchKeyboardTests: XCTestCase {
     /// The board's screen: 874 × 402 with 44 pt either side for the island and the home indicator under it.

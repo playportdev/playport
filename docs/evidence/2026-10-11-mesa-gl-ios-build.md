@@ -3,7 +3,7 @@
 **Date:** 2026-10-11. **Kind:** workstation build, host test, and a Hollow Knight
 smoke run on the phone. Nothing on the phone calls the new libraries yet.
 **Linear:** [PLA-162](https://linear.app/playportdev/issue/PLA-162);
-plan [2026-10-11-opengl-zink](../plans/finished.md#opengl-through-zink), chunk 1a.
+plan [2026-10-11-opengl-zink](https://linear.app/playportdev/issue/PLA-162), chunk 1a.
 **Tree:** Mesa `b39d173ca9369c19fda2635be6655d308067e52d` (the `mesa` pin) plus
 `patches/mesa` 0001–0026, built by `build/stages/mesa.sh`.
 **IPA:** `Playport-26.5-7254816c.ipa`, sha256

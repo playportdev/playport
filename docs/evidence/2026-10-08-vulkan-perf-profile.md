@@ -1,6 +1,6 @@
 # Vulkan performance: native resolution, 720/60, CPU profiles, and texture usage (not kept)
 
-**Date:** 2026-10-08. **Plan:** [Vulkan performance](../plans/2026-10-06-vulkan-performance.md)
+**Date:** 2026-10-08. **Plan:** [Vulkan performance](https://linear.app/playportdev/issue/PLA-680)
 (PLA-72), work-queue item 6 and the GPU-time question item 5 left open. **IPA** for the
 comparison and profile runs: dev
 `b024e1f756b9520af7253bd5eed3e7d476908c60c555bd39e56d698722e57b1a` (commit `80d48bf`).

@@ -4,6 +4,14 @@
 **Pins read:** `dxmt` 7c8dee1 (3Shain/dxmt `main`, 2026-09-17) and `madeira`
 8c050d0, as in `pins.lock`.
 
+**Superseded.** KosmicKrisp was ported to iOS and ships
+([0014](../decisions/0014-vulkan-through-kosmickrisp.md),
+[0015](../decisions/0015-vulkan-backend-accepted.md)); Direct3D 12 runs on vkd3d-proton
+([0044](../decisions/0044-vulkan-default-for-dx12.md)), and Vulkan is every game's default
+([0100](../decisions/0100-vulkan-is-the-direction.md),
+[0153](../decisions/0153-rdr2s-settings-are-every-games-defaults.md)). Kept as the record of
+what was known on 2026-09-26.
+
 ## Questions
 
 1. Is DXMT the best-performing way to run D3D11 games here, and is there an alternative?

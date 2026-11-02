@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Settings › Launchers (docs/plans/2026-10-12-launchers.md, Where a launcher lives in the UI): one
+// Settings › Launchers (PLA-616, Where a launcher lives in the UI): one
 // row per publisher's launcher (PlayportKit PublisherLauncher) with Open, a launch whose title is
 // the launcher itself, started standalone in the shared prefix with the launcher's own play
 // settings (Windows services, its JIT pool, its backend). Dev builds only until a launcher passes

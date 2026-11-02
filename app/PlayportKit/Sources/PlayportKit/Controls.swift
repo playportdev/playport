@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// When the on-screen controls show, and how (docs/plans/2026-10-09-touch-controls.md,
+// When the on-screen controls show, and how (PLA-13,
 // phase 1; SettingsControls.dc.html, QuickMenuControls.dc.html). Settings ›
 // Controls holds the defaults (ControlsDefaults); the in-game menu's Controls
 // panel sets a game's own (GameControls), which apply at once.

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// A publisher's launcher Playport opens from Settings › Launchers (docs/plans/2026-10-12-launchers.md,
+// A publisher's launcher Playport opens from Settings › Launchers (PLA-616,
 // Where a launcher lives in the UI): a launch whose title is the launcher itself, started standalone
 // in the shared prefix. The compatibility table is keyed by a game's title id, so a launcher's play
 // settings (Windows services, decision 0107; its JIT pool, decision 0108; the backend, decision 0100)

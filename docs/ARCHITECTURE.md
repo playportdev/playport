@@ -18,7 +18,7 @@ rebased as `patches/*-port` series (decisions
 
 Valve's Proton bleeding-edge is the reference for ARM64 defaults, not a base
 ([decision 0049](decisions/0049-latest-pins.md); the items taken and still open
-are in [the alignment plan](plans/finished.md#proton-arm64-alignment)). These
+are in [the alignment plan](https://linear.app/playportdev/issue/PLA-76)). These
 do not apply on iOS:
 
 | Proton item | Why not |
@@ -29,7 +29,7 @@ do not apply on iOS:
 | `-marm64x` for DXVK/vkd3d-proton | ARM64X serves native ARM64 callers. Guests are x86, except a native ARM64 child (decision [0170](decisions/0170-native-arm64-guests.md)), which gets a separate `aarch64-windows` build of vkd3d-proton, DXVK's `dxgi` and the Vulkan loader instead (`build/stages/vulkan-pe.sh`). |
 | fsync/ntsync, the Steam runtime, `PROTON_USE_ARM64` paths, `SilentLog`/`PROTON_LOG`, NVAPI | Linux launcher, driver or GPU specifics. In-process sync is ppsync, Playport's userspace ntsync driver ([below](#in-process-sync), 0157, proposed). |
 | FEX `client.json`/`steamwebhelper.json` app configs | These target the Linux Steam client. Playport's Steam client is native Swift. |
-| Valve Wine AVX/YMM contexts, SVE state | Not carried yet: since `patches/fex-port` 0064 the ARM64EC host has AVX128, which keeps the ymm high halves only in FEX's thread state; Wine's ARM64EC contexts drop them and never set `CONTEXT_XSTATE`, so a guest's handler cannot see them and its own AVX writes reach the code it resumes (`build/ymm-context/test.py` checks this convention; the `ymmctx` probe checks it in a guest). A title's `env.FEX_HOSTFEATURES` with `disableavx` runs it as on a CPU without AVX (`patches/fex` 0088); every World of Warcraft product has it by compatibility default ([evidence](evidence/2026-11-01-x64-ymm-contexts.md)). Apple CPUs have no SVE (0018). |
+| Valve Wine AVX/YMM contexts, SVE state | Not carried: since `patches/fex-port` 0064 the ARM64EC host has AVX128, which keeps the ymm high halves only in FEX's thread state; Wine's ARM64EC contexts drop them and never set `CONTEXT_XSTATE`, so a guest's handler cannot see them and its own AVX writes reach the code it resumes (`build/ymm-context/test.py` checks this convention; the `ymmctx` probe checks it in a guest). A title's `env.FEX_HOSTFEATURES` with `disableavx` runs it as on a CPU without AVX (`patches/fex` 0088); every World of Warcraft product has it by compatibility default ([evidence](evidence/2026-11-01-x64-ymm-contexts.md)). Apple CPUs have no SVE (0018). |
 | `MIMALLOC_DISABLE_REDIRECT` for Teardown (1167630) | Per-game data, not an ARM default. Carry it only if Teardown is played. |
 | Valve's FEX DLL names (`libarm64ecfex.dll`, `libwow64fex.dll`) | Playport ships `xtajit64.dll`/`xtajit.dll`, the names Windows uses and Madeira's loader expects (0018). |
 
@@ -255,7 +255,7 @@ from a donor pool, on as Auto unless Settings › Graphics › Donor memory turn
 the JIT activation, helpers that then end give purgeable objects, and each
 commit is a `vm_map` of an unused range of one at Wine's address
 (`SharedMemory/GuestPool.m`, `DonorPool.swift`, `DonorRounds.swift`;
-[plan](plans/finished.md#guest-ram-from-donor-processes), step 3). Auto takes the phone's tier's
+[plan](https://linear.app/playportdev/issue/PLA-216), step 3). Auto takes the phone's tier's
 pool ([decision 0105](decisions/0105-memory-defaults-per-phone.md): 4 GiB on a 12 GB
 phone, 1 GiB on 8 GB, none and no setting under), at most one donor's grant
 (PlayportKit `DonorPoolSizing`). During play the pool stops taking unused pages
@@ -693,7 +693,7 @@ the Vulkan backend with `-d3d12` (arm64ec vkd3d-proton), whatever the graphics s
   app and build, never a newer build sharing the folder; its screen no longer sets a launch's. A
   launch's screen, frame limit and Direct3D come from the game's own launch
   settings (its Game options), else the global Settings; with none, 720 rows
-  at 60 FPS, on Vulkan for i386 or detected DX12 games and DXMT otherwise
+  at 60 FPS, on Vulkan (decision 0153)
   (`LaunchSettings.defaultScreen`, `defaultFrameLimit`, `LaunchSettings.resolve`).
   Steam installs naming `REDprelauncher.exe` launch the game's nested executable
   instead; Unreal bootstraps also prefer the shipping EXE. This avoids unvalidated
@@ -710,13 +710,16 @@ the Vulkan backend with `-d3d12` (arm64ec vkd3d-proton), whatever the graphics s
   ([decision 0046](decisions/0046-static-direct3d-evidence.md)). Unknown is not
   DX11; multiple detected APIs do not identify the active renderer. Adoption also
   records the selected EXE's COFF machine (`InstalledTitle.executableMachine`).
-  Launch API flags override API inference, not the i386 default; explicit game
-  and global graphics choices still win, even DXMT for i386, which cannot draw
-  ([0044](decisions/0044-vulkan-default-for-dx12.md),
-  [0047](decisions/0047-i386-titles-on-vulkan.md)).
+  With no game or global graphics choice, every game launches on Vulkan
+  ([decision 0153](decisions/0153-rdr2s-settings-are-every-games-defaults.md);
+  before it, only detected Direct3D 12, [0044](decisions/0044-vulkan-default-for-dx12.md),
+  and i386, [0047](decisions/0047-i386-titles-on-vulkan.md), did). DXMT stays a choice;
+  explicit game and global graphics choices still win, even DXMT for i386, which
+  cannot draw.
   Game options show the same inherited backend as Play. Native and no limit are a player's choice. FEX's memory
   ordering comes from a dev build's Game options over the game's profile (the
-  release app runs the profile, and the Steam API emulator), Proton's FEX
+  release app runs the profile, and every game's default Steam API mode,
+  Playport's Steam client: [decision 0153](decisions/0153-rdr2s-settings-are-every-games-defaults.md)), Proton's FEX
   settings for its Steam app ID and executable (PlayportKit `FEXProfile`,
   [decision 0021](decisions/0021-fex-ordering-per-game.md)), as `FEX_*`
   environment variables, with the host CPU features FEX cannot read on iOS
@@ -813,9 +816,11 @@ the Vulkan backend with `-d3d12` (arm64ec vkd3d-proton), whatever the graphics s
   `C:\users\playport\AppData\Local\Playport\session`, written only for a
   Play). Once the pool is blessed, a Play in the same process is refused
   (`launch=refused session=spent`), and after a restart that failed the
-  game's page offers Close Playport. CS_DEBUGGED stays set after the detach,
-  so `JitProvider` cannot tell a new attach from the old one: a pool is
-  blessed once per process.
+  game's page offers Close Playport. `JitProvider` checks for a live tracer
+  (`CS_DEBUGGED` and `P_TRACED`); Built-in and StikDebug ask for a fresh attach
+  when none is attached, Another app is refused. The pool is blessed once per
+  process by the `session=spent` rule; blessing a second region with a second
+  attach has not been tried.
 
 ### Restarting after a game
 
@@ -1498,7 +1503,9 @@ services ([0058](decisions/0058-store-sessions.md)).
   play. It closes the CM session unless the game's ticket broker is armed;
   then only the game's auth session/web API tickets keep it logged on
   ([0062](decisions/0062-steam-live-session.md)).
-- **For Steam games** using the Steam API emulator (the default),
+- **For Steam games** using the Steam API emulator (mode `emulated`, which a
+  title's compatibility entry or the player chooses; Playport's Steam client is
+  every game's default, decisions 0153 and 0161),
   `SteamAPISwap` puts gbe_fork's `steam_api(64).dll` (`Runtime/steamapi/`) in
   the game's folder and `SteamStub` takes SteamStub 3.1 (x64 and x86, its
   encrypted code decrypted) off its executable, each keeping the game's file

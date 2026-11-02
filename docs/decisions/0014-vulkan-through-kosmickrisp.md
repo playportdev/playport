@@ -27,7 +27,7 @@ only Direct3D layer.
 ## Why
 
 - DXMT is the only Direct3D layer that runs here, and it covers D3D 10/11 only
-  ([research](../research/2026-09-26-d3d-backends.md)). A conformant Vulkan
+  ([research](../evidence/2026-09-26-d3d-backends.md)). A conformant Vulkan
   driver would make DXVK (D3D 8–11) and vkd3d-proton (D3D 12) candidates. It
   would also allow the first A/B comparison against DXMT on the phone.
 - MoltenVK, the other Vulkan layer on Metal, has no geometry shaders, and DXVK

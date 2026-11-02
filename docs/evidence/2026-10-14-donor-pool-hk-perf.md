@@ -2,7 +2,7 @@
 
 **Date:** 2026-10-14. **Branch:** `research/extended-memory`.
 **Linear:** [PLA-216](https://linear.app/playportdev/issue/PLA-216); the title is PLA-42.
-**Plan:** [donor memory](../plans/finished.md#guest-ram-from-donor-processes), queue item "HK `pp perf` A/B".
+**Plan:** [donor memory](https://linear.app/playportdev/issue/PLA-216), queue item "HK `pp perf` A/B".
 
 **Setup:**
 

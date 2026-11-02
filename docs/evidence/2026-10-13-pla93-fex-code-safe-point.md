@@ -1,7 +1,7 @@
 # PLA-93: a real suspend does not hold a thread in FEX's module or a function it called
 
 **Date:** 2026-10-13. **Linear:** PLA-93 (sweep 15c of PLA-112). **Plan:**
-[compat speedrun](../plans/2026-10-08-compat-speedrun.md), queue item 15c.
+[compat speedrun](https://linear.app/playportdev/issue/PLA-633), queue item 15c.
 **IPA (dev):** `3b39063b3b46a8fb44d114408db51d57a61cd8254bf40f58b7dc98acd6bc8f44`, built from
 the change (`patches/madeira-unix` 0143) on `1473299`.
 

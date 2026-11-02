@@ -1,7 +1,7 @@
 # 0066: The Vulkan backend turns DXVK's tiler mode off
 
 **Status:** accepted, 2026-10-08, unattended under the owner's protocol in the
-[Vulkan performance plan](../plans/2026-10-06-vulkan-performance.md) (rule 4: a
+[Vulkan performance plan](https://linear.app/playportdev/issue/PLA-680) (rule 4: a
 config lever kept goes into `GraphicsBackend.runtimeEnvironment`). Supersedes
 [0024](0024-dxvk-picks-its-compiler-threads.md)'s "the Vulkan backend starts with
 no `DXVK_CONFIG`"; the rest of 0024 (DXVK picks its compiler thread count) stands.

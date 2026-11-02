@@ -179,7 +179,7 @@ public enum TouchRoute: Equatable, Sendable {
 }
 
 /// The on-screen controls' touch state: which fingers are on which control,
-/// and what that holds (docs/plans/2026-10-09-touch-controls.md, phase 1;
+/// and what that holds (PLA-13, phase 1;
 /// S1Probe's UI/TouchControlsView.swift feeds it UIKit's touches). Geometry is
 /// in the view's points, +y down; a control's frame comes from its layout
 /// (PlayportKit ControlLayout).

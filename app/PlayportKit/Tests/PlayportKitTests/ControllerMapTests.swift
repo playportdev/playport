@@ -3,7 +3,7 @@ import XCTest
 import HostIOKit
 @testable import PlayportKit
 
-/// ControllerMap (docs/plans/2026-10-09-touch-controls.md, phase 3): the
+/// ControllerMap (PLA-13, phase 3): the
 /// keyboardMouse preset, its storage, and the preset played through InputMixer.
 final class ControllerMapTests: XCTestCase {
     func testThePresetIsThePlansTable() {

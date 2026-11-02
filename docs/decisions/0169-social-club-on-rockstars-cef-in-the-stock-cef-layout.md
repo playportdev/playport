@@ -9,7 +9,7 @@
 [0138](0138-refuse-rdr2s-social-club-restarts-at-process-creation.md) and
 [0155](0155-allow-rdr2s-social-club-restart-after-a-re-sign-in.md) act under the layout. The retention of
 a launcher helper's slot view is [0166](0166-detach-a-parked-threads-wait-then-unpin-its-view.md)'s.
-[Plan](../plans/2026-10-29-sc-stock-cef.md) (chunks 4 and 5),
+[Plan](https://linear.app/playportdev/issue/PLA-476) (chunks 4 and 5),
 [evidence](../evidence/2026-10-29-sc-stock-cef-probe.md),
 [l19](../evidence/2026-10-30-rdr2-kk-audio-diagnostics.md).
 

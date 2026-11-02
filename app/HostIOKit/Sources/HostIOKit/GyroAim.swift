@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-/// Gyro aim (docs/plans/2026-10-09-touch-controls.md, "Gyro"): a gyro's
+/// Gyro aim (PLA-13, "Gyro"): a gyro's
 /// angular-velocity samples turned into relative mouse motion or a right-stick
 /// deflection. Pure: the samples' timestamps are its only clock, so a recorded
 /// or scripted sequence gives the same output every time.

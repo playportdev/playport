@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Gyro aim's sensors over a running game (docs/plans/2026-10-09-touch-controls.md,
+// Gyro aim's sensors over a running game (PLA-13,
 // phase 2): the iPhone's or a controller's gyro into HostIOKit's GyroAim, its
 // output into the guest as slot 0's right stick or relative mouse motion.
 //

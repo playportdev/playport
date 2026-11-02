@@ -2,7 +2,7 @@
 
 **Linear:** [PLA-538](https://linear.app/playportdev/issue/PLA-538) (parent
 [PLA-13](https://linear.app/playportdev/issue/PLA-13)). **Plan:**
-[touch controls](../plans/2026-10-09-touch-controls.md), phase 4 and 5 gates. Before:
+[touch controls](https://linear.app/playportdev/issue/PLA-13), phase 4 and 5 gates. Before:
 [U](2026-10-13-touch-controls-U.md). Branch `dev/pla-13-touch-controls-gates`: the phase 4–6
 integration branch rebased on main `3fb12cc`, with merges kept (`git rebase --rebase-merges`; each
 in-branch merge's conflicts resolved as the original merge did). The tree equals the old branch tip

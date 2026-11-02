@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-/// Gyro aim's sources (docs/plans/2026-10-09-touch-controls.md, "Gyro"): each
+/// Gyro aim's sources (PLA-13, "Gyro"): each
 /// sensor's axes onto GyroAim's aim frame (x right, y up, z toward the
 /// player, right-handed), and what S1Probe's GyroSensors does with the output.
 ///

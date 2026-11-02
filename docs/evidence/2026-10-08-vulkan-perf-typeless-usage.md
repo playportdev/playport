@@ -1,6 +1,6 @@
 # Vulkan performance: lossless compression on Unity's TYPELESS targets (KosmicKrisp texture usage, kept)
 
-**Date:** 2026-10-08. **Plan:** [Vulkan performance](../plans/2026-10-06-vulkan-performance.md)
+**Date:** 2026-10-08. **Plan:** [Vulkan performance](https://linear.app/playportdev/issue/PLA-680)
 (PLA-72), work-queue item 7 (GPU energy a frame at native). **Change:** `patches/mesa` 0019
 (`kk: texture usage that keeps lossless compression on render targets`).
 **IPAs (dev):**

@@ -3,7 +3,7 @@
 **Status:** accepted, 2026-10-31, by the owner (PLA-476, PLA-364), without a further phone run. Amends
 [0169](0169-social-club-on-rockstars-cef-in-the-stock-cef-layout.md)'s costs (B alive for the whole play).
 [Evidence](../evidence/2026-10-30-rdr2-kk-audio-diagnostics.md#l24-kosmickrisp-cmd_retire-with-the-allocator-bound),
-[plan](../plans/2026-10-29-sc-stock-cef.md).
+[plan](https://linear.app/playportdev/issue/PLA-476).
 
 ## Context
 

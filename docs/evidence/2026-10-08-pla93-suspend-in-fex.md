@@ -1,7 +1,7 @@
 # PLA-93: a real suspend's hold is deferred while the thread is inside FEX
 
 **Date:** 2026-10-08. **Linear:** PLA-93 (a stability blocker of PLA-72). **Plan:**
-[Vulkan performance](../plans/2026-10-06-vulkan-performance.md), Progress (stability).
+[Vulkan performance](https://linear.app/playportdev/issue/PLA-680), Progress (stability).
 **IPA (dev):** `363c123408d708034a0c17459edfe3262ee54e84974356bb0452226ccac32237`, built from
 commit `dedb498` (the change is `59a107e`, its build records `dedb498`).
 

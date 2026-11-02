@@ -27,8 +27,10 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
     /// gives it (per game only), as the player typed them: split by
     /// LaunchSettings.splitArguments. `-DX12`, `-force-d3d12` and the like.
     public var arguments: String
-    /// The Steam API emulator or the game's own steam_api (per game only); nil
-    /// is the emulator (SteamAPISwap).
+    /// Playport's Steam client, the Steam API emulator or the game's own
+    /// steam_api (per game only); nil inherits the compatibility default, then
+    /// every game's `.client` (decision 0153), and is the emulator only when
+    /// neither sets one (SteamAPISwap).
     public var steamAPI: SteamAPISwap.Mode?
     /// Sync the game's saves with Steam Cloud (per game only); nil is on.
     public var cloudSync: Bool?
@@ -364,7 +366,8 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
 
 /// The layer that turns a game's Direct3D into Metal (decision 0014).
 public enum GraphicsBackend: String, Codable, CaseIterable, Sendable {
-    /// DXMT: Direct3D 10 and 11 straight to Metal. What every tested game runs on.
+    /// DXMT: Direct3D 10 and 11 straight to Metal. A choice since Vulkan became
+    /// every game's default (decision 0153).
     case dxmt
     /// DXVK (Direct3D 8 to 11) and vkd3d-proton (Direct3D 12) on Vulkan, on
     /// KosmicKrisp, Mesa's Vulkan driver on Metal.

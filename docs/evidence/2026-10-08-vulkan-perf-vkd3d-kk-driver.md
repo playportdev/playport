@@ -1,6 +1,6 @@
 # Vulkan performance: vkd3d-proton's submission barrier buffer on KosmicKrisp (not kept)
 
-**Date:** 2026-10-08. **Plan:** [Vulkan performance](../plans/2026-10-06-vulkan-performance.md)
+**Date:** 2026-10-08. **Plan:** [Vulkan performance](https://linear.app/playportdev/issue/PLA-680)
 (PLA-72), vkd3d-proton's CPU power at 720/60. **Decision:**
 [0067](../decisions/0067-vkd3d-kk-no-barrier-buffer.md) (not accepted). **Result:**
 `patches/vkd3d-proton` 0005 took effect: KosmicKrisp committed fewer empty Metal command

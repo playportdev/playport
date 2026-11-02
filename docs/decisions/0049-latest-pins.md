@@ -8,7 +8,7 @@
 from `proton_11.0`); the rest of those records stands: each component is still
 built from its own upstream with Madeira's port and Playport's changes as
 patch series. The owner's direction of 2026-10-05, as written in the
-[Proton ARM64 alignment plan](../plans/finished.md#proton-arm64-alignment).
+[Proton ARM64 alignment plan](https://linear.app/playportdev/issue/PLA-76).
 
 ## Decision
 
@@ -24,7 +24,7 @@ patch series. The owner's direction of 2026-10-05, as written in the
     0018's rules, not from `proton_11.0`.
   - `dxmt`, `mesa`, `dxvk`, `vkd3d-proton`: their `main`/`master` heads.
   - `madeira`: last, by `pp sync`, after the Madeira reconciliation of the
-    [dependency strategy](../plans/finished.md#dependency-strategy).
+    [dependency strategy](https://linear.app/playportdev/issue/PLA-700).
 - **Small and frequent moves.** Wine moves at every WineHQ tag (every two
   weeks), FEX every one to two weeks, the others when their heads move.
   One dependency per commit (`rpmalloc` goes with `fex`), each with its

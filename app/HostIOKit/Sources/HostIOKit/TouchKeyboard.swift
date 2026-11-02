@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-/// The touch keyboard over the running game (docs/plans/2026-10-09-touch-controls.md,
+/// The touch keyboard over the running game (PLA-13,
 /// phase 4 item 2; docs/design/2026-10-09-touch-controls/TouchKeyboard.dc.html):
 /// a US layout's F row, number row, letters, modifiers and arrows, as a panel
 /// across the bottom of the safe area, and its close key above the panel's right end.

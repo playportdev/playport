@@ -1,7 +1,7 @@
 # 0171: On-screen controls, input mapping and gyro aim
 
 **Status:** accepted, 2026-10-30, from the owner's decisions recorded in the
-[plan](../plans/2026-10-09-touch-controls.md)'s Run state (2026-10-13; phases 1–3 signed off on
+[plan](https://linear.app/playportdev/issue/PLA-13)'s Run state (2026-10-13; phases 1–3 signed off on
 the phone) and phases 4–5 as built on the host
 ([PLA-13](https://linear.app/playportdev/issue/PLA-13)). The record the plan calls "0075".
 Amends [0034](0034-a-gamepad-first-ui.md) (Home is no longer the only way into the in-game menu)
