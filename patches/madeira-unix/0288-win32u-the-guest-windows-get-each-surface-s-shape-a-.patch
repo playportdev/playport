@@ -1,0 +1,129 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Mon, 2 Nov 2026 12:00:00 +0100
+Subject: [PATCH] win32u: the guest windows get each surface's shape, a layered
+ window's alpha and the window under a touch
+
+For Winios.m's guest windows (patches/madeira-winios 0011), so a touch
+goes to the window drawn under it and a layered window is drawn as
+Windows draws it:
+
+- winios_surface_flush hands win32u's 1bpp shape of the surface (a
+  layered window's transparent pixels, a color key or a window region;
+  none for a plain window) and whether the picture's alpha is the
+  window's to winios_surface_shape, just before the picture.
+- SetLayeredWindowAttributes and UpdateLayeredWindow hand the window's
+  constant alpha to winios_window_alpha, and a window that stops being
+  layered is opaque again.
+- winios_drv_post_mouse passes the window Winios found under the point
+  to the server, which takes it as the window under the cursor, as it
+  does a desktop driver's; NULL still leaves the hit test to the server.
+
+The Witcher 2's launcher: Wine gave the taps on its menu to its
+transparent splash, drawn under the menu window (PLA-479).
+
+Linear: PLA-479, PLA-478
+
+Class: host-app
+Evidence: docs/evidence/2026-11-02-witcher2-launcher-taps.md
+Offered-upstream: no
+---
+ build/win32u-unix/driver_ios.c | 54 ++++++++++++++++++++++++++++++----
+ 1 file changed, 49 insertions(+), 5 deletions(-)
+
+diff --git a/build/win32u-unix/driver_ios.c b/build/win32u-unix/driver_ios.c
+index 6db315c..cd40eca 100644
+--- a/build/win32u-unix/driver_ios.c
++++ b/build/win32u-unix/driver_ios.c
+@@ -80,14 +80,17 @@ void winios_drv_post_mouse(int x, int y, unsigned int flags, unsigned int mouse_
+     input.mi.time        = 0;
+     input.mi.dwExtraInfo = 0;
+ 
+-    /* Pass hwnd=NULL — the server then hit-tests via shallow_window_from_point
+-     * which walks the desktop's children (where the game's window lives).
+-     * Passing the desktop handle goes through window_thread_from_point on
+-     * the detached desktop window and returns NULL, dropping the message.
++    /* hwnd: the top-level window the host found under the point (Playport: the
++     * guest window drawn there, Winios.m winios_window_pointer), which the
++     * server takes as the window under the cursor, as a desktop driver's;
++     * NULL: the server hit-tests via shallow_window_from_point, which walks
++     * the desktop's children (where the game's window lives). Never the
++     * desktop handle: that goes through window_thread_from_point on the
++     * detached desktop window and returns NULL, dropping the message.
+      * Call win32u's server_send_hardware_message directly (same library) instead
+      * of the NtUserCallHwndParam inline — we get the raw NTSTATUS and skip
+      * a dispatch layer that can fail for its own reasons. */
+-    NTSTATUS st = server_send_hardware_message( NULL, 0, &input, 0 );
++    NTSTATUS st = server_send_hardware_message( hwnd, 0, &input, 0 );
+     {
+         static unsigned cnt;
+         if (cnt++ < 40)
+@@ -290,6 +293,15 @@ extern void winios_window_frame( HWND hwnd, int x, int y, int w, int h, int visi
+ extern void winios_cursor_set( unsigned int id, int w, int h, int hot_x, int hot_y,
+                                const void *bgra ) __attribute__((weak));
+ extern void winios_cursor_show( int show ) __attribute__((weak));
++/* Playport (Winios.m, the guest windows): a surface's shape with its picture,
++ * the 1bpp mask win32u keeps for a layered window, a color key or a window
++ * region (1: part of the window; rows top-down, bit 7 the leftmost pixel; NULL
++ * when there is none, all of it is), and whether its picture's alpha is the
++ * window's (a layered window's premultiplied alpha); and a layered window's
++ * constant alpha (255 opaque, 0 invisible). Both on wine threads; the app copies. */
++extern void winios_surface_shape( HWND hwnd, int w, int h, int stride, const void *bits,
++                                  int alpha ) __attribute__((weak));
++extern void winios_window_alpha( HWND hwnd, unsigned int alpha ) __attribute__((weak));
+ 
+ static int winios_desktop_mode(void);
+ 
+@@ -453,6 +465,14 @@ static BOOL winios_surface_flush( struct window_surface *surface, const RECT *re
+         int surf_w = color_info->bmiHeader.biWidth;
+         int surf_h = color_info->bmiHeader.biHeight;
+         if (surf_h < 0) surf_h = -surf_h;
++        /* Playport: the shape before the picture, so the picture is shown with it. */
++        if (winios_surface_shape)
++        {
++            int shape_h = shape_bits ? abs( (int)shape_info->bmiHeader.biHeight ) : 0;
++            winios_surface_shape( surface->hwnd, shape_h ? (int)shape_info->bmiHeader.biWidth : 0, shape_h,
++                                  shape_h ? (int)(shape_info->bmiHeader.biSizeImage / shape_h) : 0,
++                                  shape_h ? shape_bits : NULL, surface->alpha_mask != 0 );
++        }
+         /* ml1028: propagate the snapshot allocation result. dce.c only calls
+          * reset_bounds() when we return TRUE, so returning FALSE keeps the
+          * dirty region and the frame is repainted on a later flush instead of
+@@ -480,6 +500,24 @@ static const struct window_surface_funcs winios_surface_funcs =
+     .destroy = winios_surface_destroy,
+ };
+ 
++/* Playport: a layered window's constant alpha to the guest windows (Winios.m):
++ * at 0 Windows neither shows it nor gives it a click. */
++static void winios_drv_set_layered_attributes( HWND hwnd, COLORREF key, BYTE alpha, DWORD flags )
++{
++    winios_window_alpha( hwnd, (flags & LWA_ALPHA) ? alpha : 255 );
++}
++
++static void winios_drv_update_layered( HWND hwnd, BYTE alpha, UINT flags )
++{
++    winios_window_alpha( hwnd, (flags & ULW_ALPHA) ? alpha : 255 );
++}
++
++static void winios_drv_set_window_style( HWND hwnd, INT offset, STYLESTRUCT *style )
++{
++    if (offset == GWL_EXSTYLE && (style->styleOld & ~style->styleNew & WS_EX_LAYERED))
++        winios_window_alpha( hwnd, 255 );   /* no longer layered: opaque again */
++}
++
+ static BOOL winios_CreateWindowSurface( HWND hwnd, BOOL layered, const RECT *surface_rect,
+                                         struct window_surface **window_surface )
+ {
+@@ -2162,6 +2200,12 @@ static void load_display_driver(void)
+          * (Playport) a game's launcher and dialogs until its swap chain
+          * presents (Winios.m, the guest windows). */
+         winios_user_driver.pCreateWindowSurface = winios_CreateWindowSurface;
++        if (winios_window_alpha)
++        {
++            winios_user_driver.pSetLayeredWindowAttributes = winios_drv_set_layered_attributes;
++            winios_user_driver.pUpdateLayeredWindow = winios_drv_update_layered;
++            winios_user_driver.pSetWindowStyle = winios_drv_set_window_style;
++        }
+         if (winios_desktop_mode())
+             dprintf( 2, "[winios] desktop mode: window-surface compositing ENABLED\n" );
+         winios_user_driver.pUpdateDisplayDevices = winios_UpdateDisplayDevices;

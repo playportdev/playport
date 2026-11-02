@@ -121,6 +121,11 @@ public final class SteamTicketBroker: @unchecked Sendable, CustomStringConvertib
 
     public var isArmed: Bool { lock.withLock { armed } }
 
+    /// The launched app's ownership ticket while the play lasts, nil after `endPlay`: what
+    /// ISteamAppTicket's GetAppOwnershipTicketData gives the game (a SteamStub DRM payload checks
+    /// its signature). Every ticket `create` makes already carries it.
+    public var ownershipTicket: Secret<[UInt8]>? { isArmed ? ownership : nil }
+
     // MARK: the game's calls
 
     /// A new ticket of `type` for the launched app. `identity` binds it to the

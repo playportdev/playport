@@ -48,6 +48,7 @@ static unsigned p_call(void *args)
         return PP_SC_OK;
     case PP_SC_TICKET_CANCEL: cancelled = c->handle; return PP_SC_OK;
     case PP_SC_APP_TICKET: return PP_SC_NO_MORE_ENTRIES;
+    case PP_SC_OWNERSHIP_TICKET: memcpy(c->data, "own", 3); c->data_size = 3; return PP_SC_OK;
     }
     return PP_SC_INVALID_PARAMETER;
 }
@@ -110,6 +111,8 @@ int main(void)
     CHECK(call(PP_SC_CALL, &c) == PP_SC_OK && cancelled == 7);
     fresh_call(&c, PP_SC_APP_TICKET);
     CHECK(call(PP_SC_CALL, &c) == PP_SC_NO_MORE_ENTRIES && c.data_size == 0);
+    fresh_call(&c, PP_SC_OWNERSHIP_TICKET);
+    CHECK(call(PP_SC_CALL, &c) == PP_SC_OK && c.data_size == 3 && !memcmp(c.data, "own", 3));
     /* A provider that claims more than the block holds is not believed. */
     oversize = 1;
     fresh_call(&c, PP_SC_TICKET_SESSION);

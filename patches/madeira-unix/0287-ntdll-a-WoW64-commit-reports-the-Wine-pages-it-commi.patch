@@ -1,0 +1,53 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Mon, 2 Nov 2026 00:00:00 +0100
+Subject: [PATCH] ntdll: a WoW64 commit reports the Wine pages it committed
+
+NtAllocateVirtualMemory(MEM_COMMIT) in an owner's i386 window rounded
+the range out to 16 KiB host pages and returned that base. Windows
+returns the 4 KiB page that holds the requested address. An unpacker
+stub that maps its payload DLL itself (The Binding of Isaac: Rebirth,
+The Witcher 2) commits each section at base + VirtualAddress and copies
+the section to the address the commit returns: .text at base + 0x1000
+came back as base, so the copy overwrote the headers whose section
+table the stub was still walking. The next "section" then had code
+bytes for its VirtualAddress and PointerToRawData, its commit failed
+with STATUS_CONFLICTING_ADDRESSES and the copy read from
+buffer + 0x7d8b5756, in the reserved upper half of the window:
+c0000005 before the game's first line.
+
+A commit now covers and reports whole Wine pages. The host-page
+protection is already the union of each host page's Wine pages
+(ios_wow64_apply_protection), as for NtProtectVirtualMemory and the
+decommit; reserve keeps its 64 KiB base and host-page extent.
+
+Linear: PLA-31, PLA-478
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-11-02-wow64-commit-pages.md
+Offered-upstream: no; owner-local WoW64 VM is Playport code
+---
+ build/ntdll-unix/wow64_vm.h | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/build/ntdll-unix/wow64_vm.h b/build/ntdll-unix/wow64_vm.h
+index 7a1b297..f5dbf38 100644
+--- a/build/ntdll-unix/wow64_vm.h
++++ b/build/ntdll-unix/wow64_vm.h
+@@ -84,6 +84,13 @@ static NTSTATUS ios_wow64_vm_allocate( uintptr_t window, void **addr, size_t *si
+     }
+     else
+     {
++        /* Commit whole Wine (4 KiB) pages and report them, as Windows does: a PE
++         * loader copies each section to the address its commit returns, and a
++         * 16 KiB-rounded one put .text over the headers it was still reading.
++         * ios_wow64_apply_protection keeps a shared host page's neighbours. */
++        uintptr_t value = (uintptr_t)*addr;
++        base = (void *)(value & ~(uintptr_t)page_mask);
++        length = (*size + (value - (uintptr_t)base) + page_mask) & ~page_mask;
+         view = find_view( base, length );
+         if (!view || !(view->protect & VPROT_WOW64_VM)) return STATUS_CONFLICTING_ADDRESSES;
+         status = ios_wow64_apply_protection( view, base, length, vprot | VPROT_COMMITTED );
+-- 
+2.56.0
+

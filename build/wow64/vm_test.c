@@ -251,8 +251,20 @@ int main(void)
     inaccessible(addr, 0);
     ULONG old = 0xdead;
     assert(routed(2, &addr, &size, 0, PAGE_READWRITE, &old) == STATUS_NOT_COMMITTED && old == 0xdead);
+    /* A PE loader commits each section at base + VirtualAddress and copies it
+     * to the address the commit returns: report Wine (4 KiB) pages, as Windows
+     * does. A 16 KiB-rounded base put .text over the headers the loader was
+     * still reading (an i386 unpacker stub, PLA-31). */
+    void *section = (char *)addr + 0x1000;
+    size_t section_size = 0x2600;
+    assert(!routed(0, &section, &section_size, MEM_COMMIT, PAGE_READWRITE, NULL));
+    assert(section == (char *)addr + 0x1000 && section_size == 0x3000);
+    assert(!(get_page_vprot(addr) & VPROT_COMMITTED));
+    assert(get_page_vprot(section) == (VPROT_READ | VPROT_WRITE | VPROT_COMMITTED));
+    assert(!routed(1, &section, &section_size, MEM_DECOMMIT, 0, NULL));
+    assert(!(get_page_vprot(section) & VPROT_COMMITTED));
     void *sub = (char *)addr + 0x4003;
-    size_t subsize = 1;
+    size_t subsize = 0x3ffd;
     assert(!routed(0, &sub, &subsize, MEM_COMMIT, PAGE_EXECUTE_READWRITE, NULL));
     assert(sub == (char *)addr + 0x4000 && subsize == 0x4000);
     assert(get_page_vprot(sub) == (VPROT_READ | VPROT_WRITE | VPROT_EXEC | VPROT_COMMITTED));

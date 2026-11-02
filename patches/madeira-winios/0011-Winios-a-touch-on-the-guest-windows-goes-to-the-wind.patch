@@ -1,0 +1,222 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Mon, 2 Nov 2026 12:00:00 +0100
+Subject: [PATCH] Winios: a touch on the guest windows goes to the window drawn
+ there
+
+The guest-window layers stack in the order the windows were shown, and a
+touch went to Wine's hit test, which takes Wine's z-order and the whole
+rectangle of every layered window. The Witcher 2's launcher shows its
+363x363 splash (a layered window, mostly transparent) first and its
+menu window after: the layer drew the launcher over the splash, while
+Wine gave the taps on the menu's upper half, Launch game among them, to
+the splash, where nothing happened.
+
+winios_window_pointer (the host's touch on the guest windows) now picks
+the topmost shown layer whose window covers the pixel, leaving out a
+pixel its shape excludes (win32u's 1bpp shape for a layered window's
+transparent pixels, a color key or a window region, which
+winios_surface_shape now receives with each picture) and a window faded
+to a constant alpha of 0 (winios_window_alpha), as Windows gives a
+click to the window seen there, and posts the event to it; with none,
+the server hit-tests as before. A layered window's picture is drawn
+with its premultiplied alpha and its constant alpha.
+
+Linear: PLA-479, PLA-478
+
+Class: host-app
+Evidence: docs/evidence/2026-11-02-witcher2-launcher-taps.md
+Offered-upstream: no
+---
+ app/Madeira/Winios/Winios.m | 102 +++++++++++++++++++++++++++++++++---
+ 1 file changed, 96 insertions(+), 6 deletions(-)
+
+diff --git a/app/Madeira/Winios/Winios.m b/app/Madeira/Winios/Winios.m
+index 924d1f2..76de07d 100644
+--- a/app/Madeira/Winios/Winios.m
++++ b/app/Madeira/Winios/Winios.m
+@@ -465,6 +465,7 @@ typedef struct {
+     int x, y;                /* mouse: coords; key: x = virtual-key code */
+     unsigned int flags;      /* mouse: MOUSEEVENTF_*; key: KEYEVENTF_* */
+     unsigned int data;       /* mouse: mouseData (wheel delta) */
++    void *hwnd;              /* mouse: Playport: the window under the point, else NULL (the server's hit test) */
+ } winios_input_event_t;
+ 
+ static struct {
+@@ -475,11 +476,11 @@ static struct {
+     pthread_mutex_t lock;
+ } g_input_q = { .lock = PTHREAD_MUTEX_INITIALIZER };
+ 
+-static void winios_q_push_ev(unsigned int type, int x, int y, unsigned int flags, unsigned int data) {
++static void winios_q_push_to(unsigned int type, int x, int y, unsigned int flags, unsigned int data, void *hwnd) {
+     pthread_mutex_lock(&g_input_q.lock);
+     unsigned int next = (g_input_q.head + 1) % WINIOS_RING_SIZE;
+     if (next != g_input_q.tail) {
+-        g_input_q.buf[g_input_q.head] = (winios_input_event_t){type, x, y, flags, data};
++        g_input_q.buf[g_input_q.head] = (winios_input_event_t){type, x, y, flags, data, hwnd};
+         g_input_q.head = next;
+     }
+     /* If buffer is full we drop the oldest event by simply not advancing —
+@@ -487,6 +488,10 @@ static void winios_q_push_ev(unsigned int type, int x, int y, unsigned int flags
+     pthread_mutex_unlock(&g_input_q.lock);
+ }
+ 
++static void winios_q_push_ev(unsigned int type, int x, int y, unsigned int flags, unsigned int data) {
++    winios_q_push_to(type, x, y, flags, data, NULL);
++}
++
+ /* Public C entry points for Swift / UIKit gesture handlers.
+  * Coordinates are in iOS view-local pixels; we scale to a fixed
+  * 1024×768 logical surface inside winios_pProcessEvents to match
+@@ -873,7 +878,7 @@ BOOL winios_pProcessEvents(DWORD mask) {
+         pthread_mutex_unlock(&g_input_q.lock);
+ 
+         if (e.type != WINIOS_EV_KEY && e.type != WINIOS_EV_CHAR) {   /* Playport: a key's code is the text typed */
+-            fprintf(stderr, "[winios] drain type=%u x=%d y=%d flags=0x%x\n", e.type, e.x, e.y, e.flags); fflush(stderr);
++            fprintf(stderr, "[winios] drain type=%u x=%d y=%d flags=0x%x hwnd=%p\n", e.type, e.x, e.y, e.flags, e.hwnd); fflush(stderr);
+         }
+         if (e.type == WINIOS_EV_KEY)
+             winios_drv_post_key((unsigned short)e.x, e.flags);
+@@ -884,7 +889,7 @@ BOOL winios_pProcessEvents(DWORD mask) {
+         else if (e.type == WINIOS_EV_FOCUS)
+             winios_drain_focus(e.x);
+         else
+-            winios_drv_post_mouse(e.x, e.y, e.flags, e.data, NULL);
++            winios_drv_post_mouse(e.x, e.y, e.flags, e.data, e.hwnd);
+         pthread_mutex_lock(&g_input_q.lock);
+         g_input_q.in_flight--;
+         pthread_mutex_unlock(&g_input_q.lock);
+@@ -919,6 +924,16 @@ BOOL winios_pProcessEvents(DWORD mask) {
+  * is kept under g_gw_lock for the wine threads; everything but that and the
+  * copy runs on the main thread. */
+ 
++/* A touch goes to the window drawn under it (winios_window_pointer): the
++ * topmost shown layer whose window covers the pixel, not one its shape leaves
++ * out (a layered window's transparent pixels, a color key, a window region)
++ * and not one faded to a constant alpha of 0 — as Windows gives a click to
++ * the window seen there. Wine's own hit test would take its z-order, which
++ * the layers do not follow (they stack in the order shown), and every
++ * layered window's whole rectangle: The Witcher 2's launcher was drawn over
++ * its transparent splash, which took the taps on its menu (PLA-479). A
++ * layered window is drawn with its alpha and its constant alpha. */
++
+ @interface WiniosGuestWindow : NSObject
+ @property (nonatomic, strong) CALayer *layer;
+ @property (nonatomic, strong) NSData *picture;   /* the last surface, BGRX */
+@@ -926,6 +941,11 @@ BOOL winios_pProcessEvents(DWORD mask) {
+ @property (nonatomic) size_t stride;
+ @property (nonatomic) CGRect px, client;         /* visible and client rects, desktop pixels */
+ @property (nonatomic) BOOL visible, painted, shown;
++@property (nonatomic, strong) NSData *shape;     /* the surface's 1bpp shape (1: the window's), nil: all of it */
++@property (nonatomic) size_t shapeStride;
++@property (nonatomic) CGSize shapeSize;
++@property (nonatomic) BOOL layered;              /* the picture's alpha is the window's (premultiplied) */
++@property (nonatomic) unsigned int clear;        /* 255 - its constant alpha: 0 opaque, 255 invisible */
+ @end
+ @implementation WiniosGuestWindow
+ @end
+@@ -1074,7 +1094,7 @@ static void winios_guest_window_check(WiniosGuestWindow *w) {
+ }
+ 
+ static BOOL winios_guest_window_showable(WiniosGuestWindow *w) {
+-    return w.visible && w.painted && w.px.size.width >= 32 && w.px.size.height >= 32;
++    return w.visible && w.painted && w.clear < 255 && w.px.size.width >= 32 && w.px.size.height >= 32;
+ }
+ 
+ /* main thread only: which windows are shown and where */
+@@ -1184,10 +1204,12 @@ static int winios_guest_window_present(HWND hwnd, int sw, int sh, int stride, co
+         CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+         CGDataProviderRef dp = CGDataProviderCreateWithCFData((__bridge CFDataRef)data);
+         CGImageRef img = CGImageCreate(sw, sh, 8, 32, stride, cs,
+-                                       kCGBitmapByteOrder32Little | kCGImageAlphaNoneSkipFirst,
++                                       kCGBitmapByteOrder32Little
++                                           | (gw.layered ? kCGImageAlphaPremultipliedFirst : kCGImageAlphaNoneSkipFirst),
+                                        dp, NULL, false, kCGRenderingIntentDefault);
+         if (img) {
+             gw.layer.contents = (__bridge id)img;
++            gw.layer.opaque = !gw.layered;
+             gw.picture = data;
+             gw.surface = CGSizeMake(sw, sh);
+             gw.stride = (size_t)stride;
+@@ -1201,6 +1223,60 @@ static int winios_guest_window_present(HWND hwnd, int sw, int sh, int stride, co
+     return 1;
+ }
+ 
++/* wine thread: a surface's shape and whether its alpha is the window's, just
++ * before its picture (driver_ios.c winios_surface_flush); copied */
++void winios_surface_shape(HWND hwnd, int w, int h, int stride, const void *bits, int alpha) {
++    if (winios_desktop() || !winios_guest_window_kept(hwnd, 1)) return;
++    NSData *shape = bits && w > 0 && h > 0 && stride > 0 ? [NSData dataWithBytes:bits length:(size_t)stride * (size_t)h] : nil;
++    dispatch_async(dispatch_get_main_queue(), ^{
++        if (!winios_guest_window_kept(hwnd, 0)) return;
++        WiniosGuestWindow *gw = winios_guest_window(hwnd);
++        gw.shape = shape;
++        gw.shapeStride = (size_t)stride;
++        gw.shapeSize = CGSizeMake(w, h);
++        gw.layered = alpha != 0;
++    });
++}
++
++/* wine thread: a layered window's constant alpha (driver_ios.c) */
++void winios_window_alpha(HWND hwnd, unsigned int alpha) {
++    if (winios_desktop() || !winios_guest_window_kept(hwnd, 0)) return;
++    dispatch_async(dispatch_get_main_queue(), ^{
++        if (!winios_guest_window_kept(hwnd, 0)) return;
++        WiniosGuestWindow *gw = winios_guest_window(hwnd);
++        unsigned int clear = 255 - MIN(alpha, 255u);
++        if (clear == gw.clear) return;
++        gw.clear = clear;
++        gw.layer.opacity = (float)(255 - clear) / 255.0f;
++        fprintf(stderr, "[guest-window] hwnd=%p constant alpha %u\n", hwnd, 255 - clear);
++        winios_guest_windows_layout();
++    });
++}
++
++/* main thread: whether the window drawn as w covers desktop pixel (x, y) */
++static BOOL winios_guest_window_covers(WiniosGuestWindow *w, int x, int y) {
++    if (!w.shown || w.clear >= 255 || !CGRectContainsPoint(w.px, CGPointMake(x + 0.5, y + 0.5))) return NO;
++    if (!w.shape) return YES;
++    int sx = x - (int)w.px.origin.x, sy = y - (int)w.px.origin.y;
++    if (sx < 0 || sy < 0 || sx >= (int)w.shapeSize.width || sy >= (int)w.shapeSize.height) return NO;
++    const uint8_t *row = (const uint8_t *)w.shape.bytes + (size_t)sy * w.shapeStride;
++    return (row[sx / 8] >> (7 - sx % 8)) & 1;
++}
++
++/* main thread: the top-level window drawn at desktop pixel (x, y), NULL for none */
++static HWND winios_guest_window_at(int x, int y) {
++    WiniosGuestWindow *top = nil;
++    NSNumber *topKey = nil;
++    for (NSNumber *key in g_gw) {
++        WiniosGuestWindow *w = g_gw[key];
++        if ((!top || w.layer.zPosition > top.layer.zPosition) && winios_guest_window_covers(w, x, y)) {
++            top = w;
++            topKey = key;
++        }
++    }
++    return topKey ? (HWND)(uintptr_t)topKey.unsignedLongValue : NULL;
++}
++
+ static void winios_guest_window_gone(HWND hwnd) {
+     winios_guest_window_untrack(hwnd);
+     dispatch_async(dispatch_get_main_queue(), ^{ winios_guest_window_drop(hwnd, "destroyed"); });
+@@ -2074,6 +2150,20 @@ void winios_pointer(int x, int y, unsigned int flags, unsigned int data) {
+     if ((flags & MOUSEEVENTF_MOVE) && (flags & MOUSEEVENTF_ABSOLUTE)) winios_cursor_move(x, y);
+ }
+ 
++/* Playport, main thread: a touch on the guest windows at desktop pixel (x, y)
++ * (winios_windows_point), MOUSEEVENTF_* with ABSOLUTE: posted to the window
++ * drawn there (winios_guest_window_at), else hit-tested by the server. */
++void winios_window_pointer(int x, int y, unsigned int flags) {
++    HWND hwnd = winios_guest_window_at(x, y);
++    if (flags & (MOUSEEVENTF_LEFTDOWN | MOUSEEVENTF_LEFTUP)) {
++        fprintf(stderr, "[guest-window] %s at (%d,%d) to hwnd=%p\n",
++                flags & MOUSEEVENTF_LEFTDOWN ? "press" : "release", x, y, hwnd);
++        fflush(stderr);
++    }
++    winios_q_push_to(WINIOS_EV_MOUSE, x, y, flags, 0, hwnd);
++    if ((flags & MOUSEEVENTF_MOVE) && (flags & MOUSEEVENTF_ABSOLUTE)) winios_cursor_move(x, y);
++}
++
+ /* ============================================================ *
+  * cursor (no cursor on iOS — these are no-ops)
+  * ============================================================ */
