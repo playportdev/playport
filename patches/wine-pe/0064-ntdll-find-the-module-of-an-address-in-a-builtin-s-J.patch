@@ -1,0 +1,55 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Mon, 2 Nov 2026 23:07:11 +0100
+Subject: [PATCH] ntdll: find the module of an address in a builtin's JIT-pool
+ copy
+
+On iOS a builtin's code runs from its JIT-pool copy, so the address of one
+of its functions lies in the copy, not in the module's view, and
+LdrFindEntryForAddress found no module for it. GetModuleHandleExW with
+GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS then failed with
+ERROR_MOD_NOT_FOUND: xgameruntime's WaitTimer names its callback's
+module that way for SetThreadpoolCallbackLibrary, so XTaskQueueCreate
+failed with 0x8007007e and a GDK game never signed its player in.
+
+LdrFindEntryForAddress now retries a miss with the address
+xlate_ios_jit_rev gives, the copy's PE address; any other address is
+left alone. The i386 and x86_64 builds do not change.
+
+Linear: PLA-499
+Class: feature
+Evidence: docs/evidence/2026-11-02-xbox-pilot-task-queue.md
+Offered-upstream: no; the JIT pool is the iOS port's
+---
+ dlls/ntdll/loader.c | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
+index f18ebbbc969..993119e3bd8 100644
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -2832,7 +2832,21 @@ NTSTATUS WINAPI LdrFindEntryForAddress( const void *addr, PLDR_DATA_TABLE_ENTRY
+     RTL_BALANCED_NODE *node;
+ 
+     if (!(node = rtl_rb_tree_get( &base_address_index_tree, addr, module_address_search_compare )))
++    {
++#if defined(__aarch64__) || defined(__arm64ec__)
++        /* iOS: a builtin's code runs from its JIT-pool copy, so the address of
++         * one of its functions (GetModuleHandleExW's FROM_ADDRESS, a threadpool
++         * callback library) lies in the copy, not in the module's view.
++         * xlate_ios_jit_rev turns it into its PE address and leaves any other
++         * address alone. */
++        extern void *xlate_ios_jit_rev( void *ptr );
++        const void *pe = xlate_ios_jit_rev( (void *)addr );
++
++        if (!pe || pe == addr ||
++            !(node = rtl_rb_tree_get( &base_address_index_tree, pe, module_address_search_compare )))
++#endif
+         return STATUS_NO_MORE_ENTRIES;
++    }
+     *pmod = CONTAINING_RECORD(node, LDR_DATA_TABLE_ENTRY, BaseAddressIndexNode);
+     return STATUS_SUCCESS;
+ }
+-- 
+2.56.0
+
