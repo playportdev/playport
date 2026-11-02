@@ -12,7 +12,7 @@ import unittest
 
 REPO = Path(__file__).resolve().parents[2]
 SITE = REPO / "site" / "compatibility"
-STATUSES = {"works", "issues", "broken"}
+STATUSES = {"runs", "broken"}
 STORES = {"steam", "gog", "epic", "battlenet", "other"}
 REPORT = "issues/new?template=problem.yml"
 
@@ -51,7 +51,7 @@ class Links(unittest.TestCase):
         self.assertIn('fetch("games.json"', page)
         self.assertIn(REPORT, page)
         template = (REPO / ".github" / "ISSUE_TEMPLATE" / "problem.yml").read_text(encoding="utf-8")
-        for status in ("Works", "Playable with issues", "Broken"):
+        for status in ("Runs", "Broken"):
             self.assertRegex(template, rf"(?m)^\s+- {re.escape(status)}$")
 
     def test_linked_from_landing_page_and_readme(self):

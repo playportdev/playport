@@ -183,7 +183,8 @@ or outlive/kill unrelated jobs.
   Compatibility; one issue per title, `Name (Steam appID)`, with **Status:** Works,
   Playable with issues or Broken and **Best known:**, the IPA and the run directory). Search
   first and update the existing issue, then its status in `site/compatibility/games.json`
-  (playport.dev/compatibility). A failure outside your task is filed there, not fixed in
+  (playport.dev/compatibility; it shows Works and Playable with issues as `runs`, Broken as
+  `broken`). A failure outside your task is filed there, not fixed in
   passing; a subagent lists its games for the supervisor to file.
 - When a question is quicker to answer on this workstation than on the phone (what a game waits
   for, Playport or the game, its network, a file's format, a binary), answer it under desktop
