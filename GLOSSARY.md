@@ -100,3 +100,36 @@ _Avoid_: blocked, unsupported
 A warning shown before Play for a title whose anti-cheat Playport allows but the publisher does
 not support on Playport.
 _Avoid_: anti-cheat warning, disclaimer
+
+## Guest address space
+
+**Claim**:
+The size a guest reservation was told it got. Under elastic reservations it can be larger than the
+view behind it; a later commit inside the claim grows the view or is refused (decision 0180).
+_Avoid_: reservation size, virtual size
+
+**Live claim**:
+The part of a claim beyond a shortened view's real part: room the guest was promised that is not
+mapped for it, and that later pools are placed outside while room elsewhere allows.
+_Avoid_: lent tail, phantom range
+
+**Lend**:
+Giving the untouched upper part of a large plain reservation (the donor) back to the host after a
+placement fails. The view shrinks and its claim stays.
+_Avoid_: reclaim, release, trim
+
+**Donor**:
+The reservation a lend shortens: unhinted, reserve-only, 256 MiB or more, not held, not committed
+to its top; the one with the most lendable room.
+_Avoid_: victim, source pool
+
+**Short grant**:
+A reservation of 1 GiB or more that cannot be placed whole, given a smaller real part with a guard
+while the caller is told it got its full size.
+_Avoid_: partial reservation, lean reserve
+
+**Guard (elastic)**:
+The 32 MiB of inaccessible view above a shortened view's or short grant's real part. A commit
+there grows the view or is refused, so a pool that outgrows its room faults at its own end, never
+in a neighbour.
+_Avoid_: red zone, padding

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: The Playport authors <dev@playport.dev>
-Date: Mon, 2 Nov 2026 18:00:00 +0100
-Subject: [PATCH] ntdll: the elastic-reservation policy, pp_elastic.h
+Date: Mon, 2 Nov 2026 17:43:30 +0100
+Subject: [PATCH 289/290] ntdll: the elastic-reservation policy, pp_elastic.h
 
 Decision 0180's rule as one pure header, with no Wine or Mach
 dependency: whether an ask engages it, short grants, lending (the donor
@@ -19,6 +19,13 @@ first, then to the covering claim, and never served in another view.
 Hinted, aligned, placeholder, address-limited, commit-at-reserve,
 hold-served and Social Club layout asks are never shrunk.
 
+Lending and short grants come only from ppe_failed, after today's
+placement failed: ppe_before answers PPE_PLACE (outside every live
+claim) or PPE_TODAY. An ask carries its limit and alignment as named
+fields (struct ppe_ask), and a never-shrunk ask is lent room only by a
+donor whose freed range holds it there. A short grant is made only
+while the view table has room for it. The state counts live claims.
+
 The header returns decisions; the Wine glue (PLA-802) performs the
 mappings, and its comment says how the glue calls it. Nothing calls it
 yet. tools/tests/test_elastic_reserve.py compiles it as shipped here and
@@ -31,16 +38,16 @@ Class: feature
 Evidence: docs/evidence/2026-11-02-elastic-reservations.md
 Offered-upstream: no; the address-space layout is the iOS port's
 ---
- build/ntdll-unix/pp_elastic.h | 474 ++++++++++++++++++++++++++++++++++++++++++++++++++
- 1 file changed, 474 insertions(+)
+ build/ntdll-unix/pp_elastic.h | 538 ++++++++++++++++++++++++++++++++++
+ 1 file changed, 538 insertions(+)
  create mode 100644 build/ntdll-unix/pp_elastic.h
 
 diff --git a/build/ntdll-unix/pp_elastic.h b/build/ntdll-unix/pp_elastic.h
 new file mode 100644
-index 0000000..ee98fa3
+index 0000000..befa105
 --- /dev/null
 +++ b/build/ntdll-unix/pp_elastic.h
-@@ -0,0 +1,474 @@
+@@ -0,0 +1,538 @@
 +/* SPDX-License-Identifier: LGPL-2.1-or-later
 + * Elastic reservations (Playport, PLA-799, decision 0180): the policy.
 + *
@@ -81,11 +88,12 @@ index 0000000..ee98fa3
 + * How the glue calls it (PLA-802), under virtual_mutex, one ppe_state per
 + * address space (the pseudo-processes share one):
 + *
-+ *   reserve (after the Social Club router; flags from the ask's properties):
-+ *     d = ppe_before( st, size, flags, gaps, n );
++ *   reserve (after the Social Club router; ask: size, property flags and the
++ *   named limit and alignment it must meet):
++ *     d = ppe_before( st, &ask, gaps, n );   (PPE_TODAY or PPE_PLACE only)
 + *     if (d.kind == PPE_TODAY) { place as today; on success
 + *         ppe_placed( st, base, size, size, flags ); done; on STATUS_NO_MEMORY
-+ *         d = ppe_failed( st, size, flags, gaps, n ); }
++ *         d = ppe_failed( st, &ask, gaps, n ); }
 + *     loop on d.kind:
 + *       PPE_PLACE: map size bytes at d.addr (fixed, no-overwrite);
 + *                  ppe_placed( st, d.addr, size, size, flags ); done.
@@ -94,9 +102,11 @@ index 0000000..ee98fa3
 + *                  ppe_placed( st, d.addr, size, d.real, flags ); done.
 + *       PPE_LEND:  shrink view d.view to d.keep bytes (its last PPE_GUARD
 + *                  PROT_NONE), release the rest to the host;
-+ *                  ppe_lent( st, d.view, d.keep ); for a never-shrunk ask
-+ *                  retry today's placement first; then
-+ *                  d = ppe_failed( st, size, flags, gaps, n ) again.
++ *                  ppe_lent( st, d.view, d.keep ); a never-shrunk ask then
++ *                  retries today's placement once and fails if that fails
++ *                  (the donor was picked for a freed range that can hold
++ *                  it); an elastic one asks ppe_failed( st, &ask, gaps, n )
++ *                  again.
 + *       PPE_FAIL:  return STATUS_NO_MEMORY as today.
 + *     gaps: the free ranges the ask may use (the guest window below FEX's
 + *     band, holds excluded), ascending, 64 KiB-aligned, re-read after a lend.
@@ -141,6 +151,19 @@ index 0000000..ee98fa3
 +
 +struct ppe_gap { uint64_t base, size; };
 +
++/* An ask: its size, its property flags, and what a never-shrunk one requires
++ * of its place. */
++struct ppe_ask
++{
++    uint64_t size;
++    unsigned flags;   /* PPE_ASK_* */
++    uint64_t limit;   /* the address its place must end at or below; 0: none */
++    uint64_t align;   /* the alignment its base needs; 0: the 64 KiB grain */
++};
++
++/* Which free room a search may use. */
++enum ppe_room { PPE_ROOM_ANY, PPE_ROOM_OUTSIDE_CLAIMS };
++
 +struct ppe_view
 +{
 +    uint64_t base;
@@ -154,6 +177,7 @@ index 0000000..ee98fa3
 +{
 +    uint64_t window;          /* bytes of guest window: an ask above twice it fails */
 +    unsigned n, engaged, lends, shorts, grows, refusals;
++    unsigned shortened;       /* tracked views with real < claim: live claims */
 +    struct ppe_view v[PPE_VIEWS_MAX];
 +};
 +
@@ -183,10 +207,13 @@ index 0000000..ee98fa3
 +static inline void ppe_init( struct ppe_state *st, uint64_t window )
 +{
 +    st->window = window;
-+    st->n = st->engaged = st->lends = st->shorts = st->grows = st->refusals = 0;
++    st->n = st->engaged = st->lends = st->shorts = st->grows = st->refusals = st->shortened = 0;
 +}
 +
 +static inline int ppe_shortened( const struct ppe_view *v ) { return v->real < v->claim; }
++
++/* Whether any live claim exists (a shortened view). */
++static inline int ppe_any_shortened( const struct ppe_state *st ) { return st->shortened != 0; }
 +
 +/* End of the view's host mapping (its guard included). */
 +static inline uint64_t ppe_view_end( const struct ppe_state *st, int i )
@@ -197,6 +224,38 @@ index 0000000..ee98fa3
 +/* An ask the rule may shorten: unhinted, reserve-only, no exception. */
 +static inline int ppe_elastic_ask( unsigned flags ) { return !(flags & PPE_ASK_WHOLE); }
 +
++/* Whether a placed view is the module's to track: elastic, and of a donor's
++ * size or shortened. */
++static inline int ppe_tracks( uint64_t claim, uint64_t real, unsigned flags )
++{
++    return ppe_elastic_ask( flags ) && (ppe_up( claim ) >= PPE_DONOR_MIN || real < claim);
++}
++
++/* Whether ppe_before engages for this ask: after a failed placement, an
++ * elastic ask of a donor's size that is not over twice the window. */
++static inline int ppe_before_engages( const struct ppe_state *st, const struct ppe_ask *ask )
++{
++    return st->engaged && ppe_elastic_ask( ask->flags ) && ask->size >= PPE_DONOR_MIN && ask->size <= 2 * st->window;
++}
++
++/* The smallest free gap the module can use for an ask: a whole fit needs the
++ * ask, a short grant twice its floor and guard. Smaller gaps can be left out. */
++static inline uint64_t ppe_gap_min( uint64_t size )
++{
++    uint64_t whole = ppe_up( size ), shortg = 2 * (PPE_SHORT_FLOOR + PPE_GUARD);
++
++    return size >= PPE_SHORT_MIN && whole > shortg ? shortg : whole;
++}
++
++/* Whether [b, e) holds the ask whole, at its alignment and under its limit. */
++static inline int ppe_range_holds( uint64_t b, uint64_t e, const struct ppe_ask *ask )
++{
++    uint64_t align = ask->align > PPE_GRAIN ? ask->align : PPE_GRAIN, a = (b + align - 1) & ~(align - 1);
++
++    if (ask->limit && e > ask->limit) e = ask->limit;
++    return a < e && e - a >= ppe_up( ask->size );
++}
++
 +/* Bytes the donor keeps, its guard included, at committed height h. */
 +static inline uint64_t ppe_keep( uint64_t high )
 +{
@@ -205,8 +264,10 @@ index 0000000..ee98fa3
 +    return ppe_up( twice > margin ? twice : margin ) + PPE_GUARD;
 +}
 +
-+/* The donor with the most lendable room, -1 if none has `need` bytes to lend. */
-+static inline int ppe_donor( const struct ppe_state *st, uint64_t need, uint64_t *keep )
++/* The donor with the most lendable room, -1 if none has `need` bytes to lend.
++ * With `holds`, only a donor whose freed range holds that ask whole. */
++static inline int ppe_donor( const struct ppe_state *st, uint64_t need, const struct ppe_ask *holds,
++                             uint64_t *keep )
 +{
 +    uint64_t best = 0;
 +    unsigned i;
@@ -218,6 +279,7 @@ index 0000000..ee98fa3
 +        uint64_t span = v->real + v->guard, k = ppe_keep( v->high );
 +
 +        if (v->claim < PPE_DONOR_MIN || v->high >= v->real || k >= span) continue;
++        if (holds && !ppe_range_holds( v->base + k, v->base + span, holds )) continue;
 +        if (span - k > best) { best = span - k; pick = (int)i; *keep = k; }
 +    }
 +    if (pick >= 0 && best < need) pick = -1;
@@ -276,10 +338,9 @@ index 0000000..ee98fa3
 +    return real >= PPE_SHORT_FLOOR ? real : 0;
 +}
 +
-+/* The lowest whole fit for `size` among the gaps, outside every live claim
-+ * when `outside`: 0 when none. */
++/* The lowest whole fit for `size` among the gaps, in the given room: 0 when none. */
 +static inline uint64_t ppe_fit( const struct ppe_state *st, uint64_t size, const struct ppe_gap *gaps,
-+                                unsigned n, int outside )
++                                unsigned n, enum ppe_room room )
 +{
 +    unsigned g;
 +
@@ -287,7 +348,7 @@ index 0000000..ee98fa3
 +    {
 +        uint64_t b = ppe_up( gaps[g].base ), e = ppe_down( gaps[g].base + gaps[g].size ), pb, pe;
 +
-+        if (!outside)
++        if (room == PPE_ROOM_ANY)
 +        {
 +            if (b < e && e - b >= size) return b;
 +            continue;
@@ -301,10 +362,9 @@ index 0000000..ee98fa3
 +    return 0;
 +}
 +
-+/* The largest gap (outside every live claim and below `below` when
-+ * `outside`) as [*gb, *ge): its size, 0 if none. */
++/* The largest gap in the given room below `below` as [*gb, *ge): its size, 0 if none. */
 +static inline uint64_t ppe_largest( const struct ppe_state *st, const struct ppe_gap *gaps, unsigned n,
-+                                    int outside, uint64_t below, uint64_t *gb, uint64_t *ge )
++                                    enum ppe_room room, uint64_t below, uint64_t *gb, uint64_t *ge )
 +{
 +    uint64_t best = 0;
 +    unsigned g;
@@ -314,7 +374,7 @@ index 0000000..ee98fa3
 +        uint64_t b = ppe_up( gaps[g].base ), e = ppe_down( gaps[g].base + gaps[g].size ), pb, pe;
 +
 +        if (e > below) e = below;
-+        if (!outside)
++        if (room == PPE_ROOM_ANY)
 +        {
 +            if (b < e && e - b > best) { best = e - b; *gb = b; *ge = e; }
 +            continue;
@@ -328,11 +388,11 @@ index 0000000..ee98fa3
 +    return best;
 +}
 +
-+/* A short grant for `size` in the largest gap of the given kind, top-down. */
++/* A short grant for `size` in the largest gap of the given room, top-down. */
 +static inline int ppe_short_in( const struct ppe_state *st, uint64_t size, const struct ppe_gap *gaps,
-+                                unsigned n, int outside, uint64_t below, struct ppe_decision *d )
++                                unsigned n, enum ppe_room room, uint64_t below, struct ppe_decision *d )
 +{
-+    uint64_t gb = 0, ge = 0, real = ppe_short_real( ppe_largest( st, gaps, n, outside, below, &gb, &ge ), size );
++    uint64_t gb = 0, ge = 0, real = ppe_short_real( ppe_largest( st, gaps, n, room, below, &gb, &ge ), size );
 +
 +    if (!real) return 0;
 +    d->kind = PPE_SHORT;
@@ -341,43 +401,45 @@ index 0000000..ee98fa3
 +    return 1;
 +}
 +
-+/* Today's placement of an ask failed (STATUS_NO_MEMORY), or ppe_before sent
-+ * the ask here: what to do next. */
-+static inline struct ppe_decision ppe_failed( struct ppe_state *st, uint64_t size, unsigned flags,
++/* Today's placement of an ask failed (STATUS_NO_MEMORY): what to do next. */
++static inline struct ppe_decision ppe_failed( struct ppe_state *st, const struct ppe_ask *ask,
 +                                              const struct ppe_gap *gaps, unsigned n )
 +{
 +    struct ppe_decision d = { PPE_FAIL, 0, 0, 0, -1 };
-+    uint64_t keep = 0;
++    uint64_t keep = 0, size;
 +    int shortable;
 +
-+    if (flags & PPE_ASK_LAYOUT) return d;
++    if (ask->flags & PPE_ASK_LAYOUT) return d;
 +    st->engaged = 1;
-+    if (!size || size > 2 * st->window) return d;
-+    if (!ppe_elastic_ask( flags ))
++    if (!ask->size || ask->size > 2 * st->window) return d;
++    if (!ppe_elastic_ask( ask->flags ))
 +    {
 +        /* Never shrunk: lend room for today's placement to retry in, unless
-+         * the ask's place is given (a hint) or a hold serves it. */
-+        if (!(flags & (PPE_ASK_HINT | PPE_ASK_HELD)) && (d.view = ppe_donor( st, size, &keep )) >= 0)
++         * the ask's place is given (a hint) or a hold serves it, and only
++         * from a donor whose freed range holds the ask at its alignment and
++         * under its limit. */
++        if (!(ask->flags & (PPE_ASK_HINT | PPE_ASK_HELD)) && (d.view = ppe_donor( st, ask->size, ask, &keep )) >= 0)
 +        {
 +            d.kind = PPE_LEND;
 +            d.keep = keep;
 +        }
 +        return d;
 +    }
-+    size = ppe_up( size );
-+    shortable = size >= PPE_SHORT_MIN;
-+    if ((d.addr = ppe_fit( st, size, gaps, n, 1 ))) { d.kind = PPE_PLACE; return d; }
-+    if (shortable && (ppe_short_in( st, size, gaps, n, 1, ppe_lowest_claim( st ), &d )
-+                      || ppe_short_in( st, size, gaps, n, 1, ~UINT64_C(0), &d )))
++    size = ppe_up( ask->size );
++    /* A short grant is tracked or not made: past PPE_VIEWS_MAX the ask fails as today. */
++    shortable = size >= PPE_SHORT_MIN && st->n < PPE_VIEWS_MAX;
++    if ((d.addr = ppe_fit( st, size, gaps, n, PPE_ROOM_OUTSIDE_CLAIMS ))) { d.kind = PPE_PLACE; return d; }
++    if (shortable && (ppe_short_in( st, size, gaps, n, PPE_ROOM_OUTSIDE_CLAIMS, ppe_lowest_claim( st ), &d )
++                      || ppe_short_in( st, size, gaps, n, PPE_ROOM_OUTSIDE_CLAIMS, ~UINT64_C(0), &d )))
 +        return d;
 +    if (st->lends)
 +    {
 +        /* After lending: the room it freed lies inside the donors' claims. */
-+        if ((d.addr = ppe_fit( st, size, gaps, n, 0 ))) { d.kind = PPE_PLACE; return d; }
-+        if (shortable && ppe_short_in( st, size, gaps, n, 0, ~UINT64_C(0), &d )) return d;
++        if ((d.addr = ppe_fit( st, size, gaps, n, PPE_ROOM_ANY ))) { d.kind = PPE_PLACE; return d; }
++        if (shortable && ppe_short_in( st, size, gaps, n, PPE_ROOM_ANY, ~UINT64_C(0), &d )) return d;
 +    }
 +    d.addr = 0;
-+    if ((d.view = ppe_donor( st, shortable ? 2 * (PPE_SHORT_FLOOR + PPE_GUARD) : size, &keep )) >= 0)
++    if ((d.view = ppe_donor( st, shortable ? ppe_gap_min( size ) : size, 0, &keep )) >= 0)
 +    {
 +        d.kind = PPE_LEND;
 +        d.keep = keep;
@@ -385,18 +447,21 @@ index 0000000..ee98fa3
 +    return d;
 +}
 +
-+/* Before today's placement. Until a placement has failed, and for asks
-+ * smaller than a donor or never shrunk, PPE_TODAY: placed exactly as today.
-+ * Once engaged, an elastic ask of donor size is placed outside every live
-+ * claim first, so a later pool does not land inside an earlier claim while
-+ * room elsewhere allows. */
-+static inline struct ppe_decision ppe_before( struct ppe_state *st, uint64_t size, unsigned flags,
++/* Before today's placement: PPE_TODAY, or PPE_PLACE and nothing else. Until a
++ * placement has failed, and for asks smaller than a donor or never shrunk,
++ * PPE_TODAY: placed exactly as today. Once engaged, an elastic ask of donor
++ * size is placed outside every live claim when a gap there holds it whole, so
++ * a later pool does not land inside an earlier claim while room elsewhere
++ * allows; else it is placed as today. It never lends or shortens: those come
++ * only from ppe_failed, after today's placement failed. */
++static inline struct ppe_decision ppe_before( struct ppe_state *st, const struct ppe_ask *ask,
 +                                              const struct ppe_gap *gaps, unsigned n )
 +{
 +    struct ppe_decision d = { PPE_TODAY, 0, 0, 0, -1 };
 +
-+    if (!st->engaged || !ppe_elastic_ask( flags ) || size < PPE_DONOR_MIN || size > 2 * st->window) return d;
-+    return ppe_failed( st, size, flags, gaps, n );
++    if (ppe_before_engages( st, ask ) && (d.addr = ppe_fit( st, ppe_up( ask->size ), gaps, n, PPE_ROOM_OUTSIDE_CLAIMS )))
++        d.kind = PPE_PLACE;
++    return d;
 +}
 +
 +/* A reservation was placed at base: real usable bytes of claim promised.
@@ -408,21 +473,25 @@ index 0000000..ee98fa3
 +
 +    if (real >= claim) real = ppe_up( claim );   /* placed whole */
 +    claim = ppe_up( claim );
-+    if (!ppe_elastic_ask( flags ) || (claim < PPE_DONOR_MIN && real >= claim) || st->n >= PPE_VIEWS_MAX)
-+        return -1;
++    if (!ppe_tracks( claim, real, flags ) || st->n >= PPE_VIEWS_MAX) return -1;
 +    v = &st->v[st->n];
 +    v->base = base;
 +    v->real = real < claim ? real : claim;
 +    v->guard = real < claim ? PPE_GUARD : 0;
 +    v->claim = claim;
 +    v->high = 0;
-+    if (real < claim) st->shorts++;
++    if (real < claim)
++    {
++        st->shorts++;
++        st->shortened++;
++    }
 +    return (int)st->n++;
 +}
 +
 +/* The glue shrank view i to keep bytes, its guard the last PPE_GUARD. */
 +static inline void ppe_lent( struct ppe_state *st, int i, uint64_t keep )
 +{
++    if (!ppe_shortened( &st->v[i] )) st->shortened++;
 +    st->v[i].real = keep - PPE_GUARD;
 +    st->v[i].guard = PPE_GUARD;
 +    st->lends++;
@@ -436,6 +505,7 @@ index 0000000..ee98fa3
 +    for (i = 0; i < st->n; i++)
 +        if (st->v[i].base == base)
 +        {
++            if (ppe_shortened( &st->v[i] )) st->shortened--;
 +            st->v[i] = st->v[--st->n];
 +            return;
 +        }
@@ -502,6 +572,7 @@ index 0000000..ee98fa3
 +/* The glue grew view i in place to real usable bytes, the guard above. */
 +static inline void ppe_grown( struct ppe_state *st, int i, uint64_t real )
 +{
++    if (ppe_shortened( &st->v[i] ) && real >= st->v[i].claim) st->shortened--;
 +    st->v[i].real = real;
 +    st->grows++;
 +}

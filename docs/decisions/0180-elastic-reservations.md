@@ -4,9 +4,13 @@
 settings, and per-game address-space keys go where the general rule makes them unnecessary
 (spec [PLA-799](https://linear.app/playportdev/issue/PLA-799); Mewgenics
 [PLA-769](https://linear.app/playportdev/issue/PLA-769), GitHub #66; The Witcher 3 4.x
-[PLA-452](https://linear.app/playportdev/issue/PLA-452)). Not yet shown on the phone: the runtime
-lands in [PLA-802](https://linear.app/playportdev/issue/PLA-802), its policy module in
-[PLA-801](https://linear.app/playportdev/issue/PLA-801). Amends
+[PLA-452](https://linear.app/playportdev/issue/PLA-452)). The policy module is
+[PLA-801](https://linear.app/playportdev/issue/PLA-801) (madeira-unix 0289), the runtime
+[PLA-802](https://linear.app/playportdev/issue/PLA-802) (0290). Shown on the phone for Mewgenics,
+Death's Door, Portal 2, Hollow Knight and The Witcher 3 1.32, which still needs its keys
+(evidence §7); The Witcher 3 4.x and RDR2 without their keys are owed
+([PLA-804](https://linear.app/playportdev/issue/PLA-804),
+[PLA-805](https://linear.app/playportdev/issue/PLA-805)). Amends
 [0126](0126-hold-rdr2s-address-space-from-the-start.md),
 [0129](0129-the-holds-serve-only-their-own-request.md),
 [0163](0163-the-witcher-3-keeps-yield.md) (`app-292030`'s row) and
@@ -84,14 +88,17 @@ madeira-unix 0222's short-reserve path
 - **Relation to the PLA-631 chain.** Lending is not PLA-675's reclaim: it never releases a view the
   guest holds, it shortens one, keeps its claim and refuses honestly. `VirtualQuery` on a
   shortened view reports the real view, never the tail beyond it as the guest's (PLA-690).
-- **Where:** the policy is madeira-unix 0289's `pp_elastic.h`, a pure header the glue calls
-  (PLA-801), replayed against phone traces by `tools/tests/test_elastic_reserve.py`
+- **Where:** the policy is madeira-unix 0289's `pp_elastic.h`, a pure header the glue (0290) calls,
+  replayed against phone traces by `tools/tests/test_elastic_reserve.py`
   (`tools/tests/fixtures/elastic/`). Live claims are the extents promised beyond a shortened view's
-  real part. Once a placement has failed, an unhinted reserve-only ask of 256 MiB or more is placed
-  outside every live claim while room there allows, so a later pool lands inside an earlier claim
-  only in room lending freed. Every ask the Social Club layout's router sees (layout held, verified
-  helper) is the layout's, including the helper's 5,119 MB asks it passes through: they fail as
-  today.
+  real part. Lending and short grants come only after today's placement has failed. Before it, once
+  a placement has failed, an unhinted reserve-only ask of 256 MiB or more is placed outside every
+  live claim when a gap there holds it whole, else as today, so a later pool lands inside an earlier
+  claim only in room lending freed. A never-shrunk ask is lent room once, and only by a donor whose
+  freed range holds it at its alignment and under its limit. A short grant is made only while the
+  module can track it (1,024 views). A decommit or release over a shortened view's claim frees its
+  real view. Every ask the Social Club layout's router sees (layout held, verified helper) is the
+  layout's, including the helper's 5,119 MB asks it passes through: they fail as today.
 
 ## Departure from Windows
 
@@ -115,6 +122,7 @@ gets its own out-of-memory path, never another pool's memory.
   lent tail. The log names it; the hold keys can come back per title.
 - **Elastic reservations cannot create memory:** games that genuinely commit tens of GB are out of
   scope.
-- **Open measurements** (closed by PLA-802): RDR2's commit depth into its 8,960 MB pool beyond the
-  first minute; a phone log of The Witcher 3 1.32 on this runtime; how a game reacts to
-  `VirtualQuery` on a shortened view.
+- **Open measurements:** RDR2's commit depth into its 8,960 MB pool beyond the first minute
+  ([PLA-805](https://linear.app/playportdev/issue/PLA-805)); how a game reacts to `VirtualQuery` on
+  a shortened view (no game in the PLA-802 runs queried one). The Witcher 3 1.32's phone log on
+  this runtime is in the evidence (§7): it stalled loading without its keys, so they stay.
