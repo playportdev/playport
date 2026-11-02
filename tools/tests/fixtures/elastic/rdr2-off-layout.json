@@ -1,0 +1,33 @@
+{
+  "title": "Red Dead Redemption 2 (1174180) off the Social Club layout, without jumbo-mb",
+  "sources": ["phone run 20261030T141431-rdr2-p476d1: [va-gaps] walk with the jumbo hold's range returned to the window, the [jumbo#]/[bigres] asks that placed (CEF's hinted 2 GB pools, 256 MB placeholders, PartitionAlloc's unhinted 512 MB retries, the game's 8,960 and 1,175 MB pools), [bigres-use] committed MB (8,960 MB pool: 2,357 MB); a view the log shows reused is released first"],
+  "free": [["0x706a478000", "0x73fede0000"], ["0x73ffff0000", "0x7c00000000"]],
+  "events": [
+    ["reserve", "cef2g_a", "0x80000000", ["hint"], {}],
+    ["commit", "cef2g_a", "0xbd00000"],
+    ["reserve", "ph256_a", "0x10000000", ["placeholder"], {}],
+    ["reserve", "pa512_a", "0x20000000", [], {}],
+    ["reserve", "pa512_b", "0x20000000", [], {}],
+    ["reserve", "pa512_c", "0x20000000", [], {}],
+    ["reserve", "pa512_d", "0x20000000", [], {}],
+    ["reserve", "rc692", "0x2b401000", ["commit"], {}],
+    ["reserve", "game8960", "0x230000000", [], {}],
+    ["commit", "game8960", "0x93500000"],
+    ["release", "pa512_d"],
+    ["reserve", "game1175", "0x49701000", [], {}],
+    ["release", "cef2g_a"],
+    ["reserve", "cef2g_b", "0x80000000", ["hint"], {}],
+    ["commit", "cef2g_b", "0xb00000"],
+    ["reserve", "ph256_b", "0x10000000", ["placeholder"], {}],
+    ["reserve", "pa512_e", "0x20000000", [], {}],
+    ["reserve", "rc459", "0x1cb88000", ["commit"], {}],
+    ["reserve", "cef2g_c", "0x80000000", ["hint"], {}],
+    ["reserve", "cef2g_d", "0x80000000", ["hint"], {}],
+    ["commit", "cef2g_d", "0xb00000"],
+    ["reserve", "ph256_c", "0x10000000", ["placeholder"], {}],
+    ["reserve", "pa512_f", "0x20000000", [], {}],
+    ["reserve", "cef2g_e", "0x80000000", ["hint"], {}],
+    ["reserve", "ph256_d", "0x10000000", ["placeholder"], {}],
+    ["reserve", "pa512_g", "0x20000000", [], {}]
+  ]
+}

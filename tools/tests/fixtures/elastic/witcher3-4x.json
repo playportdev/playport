@@ -1,0 +1,21 @@
+{
+  "title": "The Witcher 3 4.x (292030), without short-reserve-mb",
+  "sources": ["phone run pla452-2026-10-27/witcher-3-short3: [va-gaps] walk, the [jumbo#]/[bigres] asks in order, [bigres-use] committed MB per pool, the 32 GiB pool's [short-reserve] commits to +77 MB"],
+  "free": [["0x704a860000", "0x73fede0000"], ["0x73ffff0000", "0x7c00000000"]],
+  "events": [
+    ["reserve", "pool16g", "0x400000000", [], {"at": "0x73ffff0000"}],
+    ["commit", "pool16g", "0x25800000"],
+    ["reserve", "pool64g", "0x1000000000", [], {}],
+    ["commit", "pool64g", "0x40000000"],
+    ["reserve", "pool32g", "0x800000000", [], {}],
+    ["commit", "pool32g", "0x4d00000"],
+    ["reserve", "ask500m", "0x1f400000", [], {}],
+    ["reserve", "pool1g_a", "0x40000000", [], {}],
+    ["commit", "pool1g_a", "0x1000000"],
+    ["reserve", "pool1g_b", "0x40000000", [], {}],
+    ["commit", "pool1g_b", "0x100000"],
+    ["commit", "pool64g", "0x5d200000"],
+    ["reserve", "ask768m", "0x30000000", [], {}],
+    ["reserve", "pool3g", "0xc0000000", [], {}]
+  ]
+}

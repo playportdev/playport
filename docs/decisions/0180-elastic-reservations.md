@@ -84,6 +84,14 @@ madeira-unix 0222's short-reserve path
 - **Relation to the PLA-631 chain.** Lending is not PLA-675's reclaim: it never releases a view the
   guest holds, it shortens one, keeps its claim and refuses honestly. `VirtualQuery` on a
   shortened view reports the real view, never the tail beyond it as the guest's (PLA-690).
+- **Where:** the policy is madeira-unix 0289's `pp_elastic.h`, a pure header the glue calls
+  (PLA-801), replayed against phone traces by `tools/tests/test_elastic_reserve.py`
+  (`tools/tests/fixtures/elastic/`). Live claims are the extents promised beyond a shortened view's
+  real part. Once a placement has failed, an unhinted reserve-only ask of 256 MiB or more is placed
+  outside every live claim while room there allows, so a later pool lands inside an earlier claim
+  only in room lending freed. Every ask the Social Club layout's router sees (layout held, verified
+  helper) is the layout's, including the helper's 5,119 MB asks it passes through: they fail as
+  today.
 
 ## Departure from Windows
 

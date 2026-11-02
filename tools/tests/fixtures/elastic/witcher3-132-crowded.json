@@ -1,0 +1,24 @@
+{
+  "title": "The Witcher 3 1.32, without its keys, an early 82 MB view at the ceiling",
+  "sources": ["host Wine trace in docs/evidence/2026-09-25-witcher3-setup.md section 6: 8,192 MB (600 MB committed), 32,768 MB (1,600 MB at its base), 300 MB, 2,048 MB (128 MB), 40 MB, reserve+commit 72/72/52/512 MB, 32.1 MB; no phone log of 1.32 on this runtime yet (decision 0180)", "the guest window of phone run pla452-2026-10-27/witcher-3-short3 ([va-gaps] walk), no jumbo or cage hold (the keys removed)", "the early view: Mewgenics run 20261102T152055's first [big-reserve] above the ceiling, 0x5210000 at 0x7400000000, which splits the 32 GiB gap"],
+  "free": [["0x704a860000", "0x73fede0000"], ["0x73ffff0000", "0x7c00000000"]],
+  "events": [
+    ["occupy", "0x7400000000", "0x5210000"],
+    ["reserve", "pool8g", "0x200000000", [], {}],
+    ["commit", "pool8g", "0x25800000"],
+    ["reserve", "pool32g", "0x800000000", [], {}],
+    ["commit", "pool32g", "0x64000000"],
+    ["reserve", "ask300m", "0x12c00000", [], {}],
+    ["commit", "ask300m", "0x12c00000"],
+    ["reserve", "ask2g", "0x80000000", [], {}],
+    ["commit", "ask2g", "0x8000000"],
+    ["reserve", "ask40m", "0x2800000", [], {}],
+    ["commit", "ask40m", "0x2800000"],
+    ["reserve", "rc72a", "0x4800000", ["commit"], {}],
+    ["reserve", "rc72b", "0x4800000", ["commit"], {}],
+    ["reserve", "rc52", "0x3400000", ["commit"], {}],
+    ["reserve", "rc512", "0x20000000", ["commit"], {}],
+    ["reserve", "ask32m", "0x2010000", [], {}],
+    ["commit", "ask32m", "0x2010000"]
+  ]
+}

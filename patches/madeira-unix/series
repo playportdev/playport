@@ -255,3 +255,4 @@
 0286-signal-print-a-SEGV-that-virtual_handle_fault-declin.patch
 0287-ntdll-a-WoW64-commit-reports-the-Wine-pages-it-commi.patch
 0288-win32u-the-guest-windows-get-each-surface-s-shape-a-.patch
+0289-ntdll-the-elastic-reservation-policy-pp_elastic.h.patch

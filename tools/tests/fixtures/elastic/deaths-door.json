@@ -1,0 +1,25 @@
+{
+  "title": "Death's Door (894020)",
+  "sources": ["phone run regression-2026-10-27/15-deaths-door: [va-gaps] walk (the 8,960 MB jumbo hold then every game's, outside the free list), each [bigres] 511 MB Unity arena at its [big-reserve] address"],
+  "free": [["0x703f420000", "0x73fede0000"], ["0x73ffff0000", "0x79d0000000"]],
+  "events": [
+    ["reserve", "arena1", "0x1ffff000", [], {"at": "0x7400000000"}],
+    ["reserve", "arena2", "0x1ffff000", [], {"at": "0x7420000000"}],
+    ["reserve", "arena3", "0x1ffff000", [], {"at": "0x7440000000"}],
+    ["reserve", "arena4", "0x1ffff000", [], {"at": "0x7460000000"}],
+    ["reserve", "arena5", "0x1ffff000", [], {"at": "0x7480000000"}],
+    ["reserve", "arena6", "0x1ffff000", [], {"at": "0x74a0000000"}],
+    ["reserve", "arena7", "0x1ffff000", [], {"at": "0x74c0000000"}],
+    ["reserve", "arena8", "0x1ffff000", [], {"at": "0x74e0000000"}],
+    ["reserve", "arena9", "0x1ffff000", [], {"at": "0x7500000000"}],
+    ["reserve", "arena10", "0x1ffff000", [], {"at": "0x7520000000"}],
+    ["reserve", "arena11", "0x1ffff000", [], {"at": "0x7540000000"}],
+    ["reserve", "arena12", "0x1ffff000", [], {"at": "0x7560000000"}],
+    ["reserve", "arena13", "0x1ffff000", [], {"at": "0x7580000000"}],
+    ["reserve", "arena14", "0x1ffff000", [], {"at": "0x75a0000000"}],
+    ["reserve", "arena15", "0x1ffff000", [], {"at": "0x75c0000000"}],
+    ["reserve", "arena16", "0x1ffff000", [], {"at": "0x75e0000000"}],
+    ["reserve", "arena17", "0x1ffff000", [], {"at": "0x7600000000"}],
+    ["reserve", "arena18", "0x1ffff000", [], {"at": "0x7620000000"}]
+  ]
+}
