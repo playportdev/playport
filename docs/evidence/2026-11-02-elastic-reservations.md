@@ -118,3 +118,30 @@ a refusal.
 Social Club's 5,119 MB `PAGE_NOACCESS` asks (§1) are not left open: under the layout an ask its
 router guards carries the layout exception whether the router grants, refuses or passes it, so
 they fail as today; PLA-801's on-layout replay includes them and asserts no short grant.
+
+## 7. The runtime on the phone (PLA-802)
+
+Dev IPA `c6bdd627a2f81921f63bbaa9c12dd993fba6fe01454d4f1aaa3014512ac6a0f5` (madeira-unix 0289 and
+0290 on `d662dc0e`, committed as `128c27fc`), installed in place; iPhone18,4, iOS 27.2, 80 %, on
+power. Two `pp phone lock` sessions (`$PLAYPORT_BUILD/agent-notes/pla-799/s1.sh`, `s2.sh`); run
+directories under `$PLAYPORT_BUILD/ui-runs/`. The release IPA
+`0e2019957a3bf843c9638a9643aa3b175f2a951590061e5ea242bcb7e11185df` passed
+`pp verify --variant release`.
+
+| Gate | Run | Result |
+| --- | --- | --- |
+| Mewgenics | `pla802-mewgenics` | first frame +5.69 s, alive at first-frame+180 (main menu, 60 fps). 52 reservations of 1,024 MB all placed (`ok=52 fail=0`); `[elastic]` 5 lend, 1 place, 10 grant, 0 grow, 0 refuse; no `[alloc-fail]`. The first lend was for a 12 MB ask: `0x70700a0000` (committed height 24 KB) kept 96 MB with its guard and gave back 927 MB. Grants: 84–431 MB real plus the 32 MiB guard, claim 1,024 MB. |
+| Mewgenics, taps | `pla802-mewgenics-play` | first frame +5.95 s, alive at first-frame+240; 4 lend, 11 grant, 0 grow, 0 refuse, no `[alloc-fail]`. Taps skipped the intro to the main menu; the run did not enter a game. |
+| The Witcher 3 | `pla802-witcher3` | the installed build is the classic 1.32 (`bin\x64\witcher3.exe`, no `bin\x64_dx12`); 4.x was not installed (PLA-804). Without its keys (`jumbo-mb=0 cage-hold=0`): first frame +23.90 s, 8,192 MB placed whole at `0x707a350000`, 32,768 MB whole at `0x73ffff0000`, no `[elastic]` line, no `[alloc-fail]`; Continue then stayed on its Loading screen, no frame presented after about +60 s, to the end at +90. |
+| The Witcher 3, control | `pla802-witcher3-keys` | the same with its cohort keys: first frame +18.85 s, 8 GB at `0x7200000000` (cage), 32 GB at `0x7400000000` (hold); Kaer Morhen gameplay at +80 (21 fps). |
+| Death's Door | `pla802-deathsdoor` | first frame +6.50 s, to first-frame+25; no `[elastic]` line; 14 `[alloc-fail]`, all hinted 64 KiB `c0000018` asks. |
+| Portal 2 | `pla802-portal2` | first frame +9.38 s, to first-frame+10; no `[elastic]` line, no `[alloc-fail]`. |
+| Hollow Knight | `pla802-hk` | first frame +10.55 s, to first-frame+10; no `[elastic]` line; 23 `[alloc-fail]` (hinted `c0000018`), as in today's earlier HK runs (21–23). |
+| RDR2 | not run | not installed (about 120 GB; 59 GB free): PLA-805. |
+
+Findings:
+
+- **Mewgenics no longer dies at its 34th or 42nd pool.** All 52 pools were served. None committed past its real part, so no grow or refuse line appeared.
+- **The Witcher 3 1.32 still needs its keys.** Without them, both asks were placed whole: no shortage of room. The game stalled loading its save; with the keys it plays. The difference is where the 8 and 32 GB land: off the 8 GB and 16 GB alignments the holds give. That this is the cause is an inference. Under decision 0180's rule the cohort keys stay.
+- **VirtualQuery:** no run queried an address inside a shortened view's claim (0 `[elastic] query` lines in both Mewgenics runs).
+- **RDR2's commit depth** stays open (PLA-805).
