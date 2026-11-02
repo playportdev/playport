@@ -785,6 +785,51 @@ static uint8_t user_GetEncryptedAppTicket(iface *self, void *buf, int cap, uint3
     return ok;
 }
 
+/* ISteamAppTicket */
+/* Steam's ownership ticket for the launched app (the play's, from the host), as Steam's client
+ * hands it to a SteamStub DRM payload, which checks it: the bytes, and where in them its SteamID,
+ * app ID and signature are. The ticket starts with the length of its signed part (the SteamID at
+ * 8, the app ID at 16); the signature is the rest. 0 for another app, no ticket, a short buffer,
+ * or bytes not of that shape. */
+static uint32_t appticket_GetAppOwnershipTicketData(iface *self, uint32_t app, void *buf, uint32_t cap,
+                                                    uint32_t *app_at, uint32_t *steam_id_at,
+                                                    uint32_t *signature_at, uint32_t *signature_size)
+{
+    static pp_sc_call c;
+    uint32_t n = 0, signed_part = 0, ticket_app = 0;
+    const char *why = "no ticket";
+    char a[24], b[24];
+    (void)self;
+    AcquireSRWLockExclusive(&lock);
+    if (!unix_call || !snapshot.armed) why = "no host";
+    else if (!app || app != snapshot.app_id) why = "not the launched app";
+    else {
+        memset(&c, 0, sizeof(c));
+        c.magic = PP_SC_MAGIC;
+        c.size = sizeof(c);
+        c.method = PP_SC_OWNERSHIP_TICKET;
+        if (unix_call(unix_handle, PP_SC_CALL, &c) == PP_SC_OK && c.data_size >= 24 && c.data_size <= sizeof(c.data)) {
+            memcpy(&signed_part, c.data, 4);
+            memcpy(&ticket_app, c.data + 16, 4);
+            if (signed_part < 24 || signed_part >= c.data_size || ticket_app != app) why = "not a ticket for this app";
+            else if (!buf || c.data_size > cap) why = "the buffer is too small";
+            else {
+                memcpy(buf, c.data, c.data_size);
+                n = c.data_size;
+                if (app_at) *app_at = 16;
+                if (steam_id_at) *steam_id_at = 8;
+                if (signature_at) *signature_at = signed_part;
+                if (signature_size) *signature_size = n - signed_part;
+            }
+        }
+        memset(c.data, 0, sizeof(c.data));
+    }
+    ReleaseSRWLockExclusive(&lock);
+    if (n) say("app ownership ticket: ", num(a, n), " bytes, signed part ", num(b, signed_part), NULL, NULL);
+    else say("app ownership ticket: none (", why, ")", NULL, NULL, NULL);
+    return n;
+}
+
 /* ISteamUtils */
 static uint32_t utils_seconds(iface *self) { (void)self; return (uint32_t)((GetTickCount64() - started) / 1000); }
 static int32_t utils_GetConnectedUniverse(iface *self) { (void)self; return 1; }   /* k_EUniversePublic */
@@ -870,6 +915,7 @@ static const struct { const char *family, *method; void *fn; } served[] = {
     { "ISteamUser", "InitiateGameConnection", (void *)user_InitiateGameConnection },
     { "ISteamUser", "TerminateGameConnection", (void *)user_TerminateGameConnection },
     { "ISteamUser", "GetEncryptedAppTicket", (void *)user_GetEncryptedAppTicket },
+    { "ISteamAppTicket", "GetAppOwnershipTicketData", (void *)appticket_GetAppOwnershipTicketData },
     { "ISteamUtils", "GetSecondsSinceAppActive", (void *)utils_seconds },
     { "ISteamUtils", "GetSecondsSinceComputerActive", (void *)utils_seconds },
     { "ISteamUtils", "GetConnectedUniverse", (void *)utils_GetConnectedUniverse },

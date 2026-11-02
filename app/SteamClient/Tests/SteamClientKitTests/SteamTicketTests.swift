@@ -165,12 +165,14 @@ final class TicketBrokerTests: XCTestCase {
         b.cancel(one.handle)
         XCTAssertEqual(sent.all.last?.tickets.map(\.ticketCRC), [crcTwo])
         XCTAssertNil(b.status(one.handle))
-        // The play's end: an empty list, then nothing more.
+        // The play's end: an empty list, then nothing more; the ownership ticket is no longer handed out.
+        XCTAssertEqual(b.ownershipTicket?.value, ownership)
         let end = b.endPlay()
         XCTAssertEqual(end?.tickets.count, 0)
         XCTAssertEqual(end?.appIDs, [367520])
         XCTAssertNil(b.endPlay())
         XCTAssertEqual(b.create(type: .authSession, identity: "").failure, .notArmed)
+        XCTAssertNil(b.ownershipTicket)
     }
 
     func testLimits() throws {
