@@ -72,8 +72,8 @@ final class BattleNetStore: ObservableObject, DownloadDriver {
             .write(to: Self.cache, options: .atomic)
     }
 
-    /// Registers the driver. Blizzard is asked only when the store is shown (the Library's
-    /// Battle.net chip, a product's page), never at start.
+    /// Registers the driver. Blizzard is asked only when the store is shown (the Library, a
+    /// product's page), never at start.
     func attach(_ downloads: Downloads) {
         self.downloads = downloads
         downloads.register(self, for: .battlenet)

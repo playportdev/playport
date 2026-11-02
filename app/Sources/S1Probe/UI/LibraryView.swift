@@ -154,8 +154,8 @@ private struct LibraryGridView: View {
         // The ring starts on the first tile, on arrival and after the chip, sort or search changes.
         // Back from a game page the ring is still on its tile, and stays there.
         .onAppear { if focus.focused?.hasPrefix("lib:") != true { PadFocus.shared.reset(start: nav.focusStart ?? firstTile()) } }
-        // The Battle.net chip lists what Blizzard offers now (cached for six hours).
-        .task(id: grid.filter) { if grid.filter == .battlenet { await bnet.refresh() } }
+        // All and the Battle.net chip list what Blizzard offers now (cached for six hours).
+        .task { await bnet.refresh() }
         .onChange(of: grid.filter) { _, _ in PadFocus.shared.reset(start: firstTile()) }
         .onChange(of: grid.sort) { _, _ in PadFocus.shared.reset(start: firstTile()) }
         .onChange(of: grid.search) { _, _ in PadFocus.shared.reset(start: firstTile()) }
@@ -211,7 +211,7 @@ private struct LibraryGridView: View {
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("library-search")
             }
-            if library.scanning || model.gamesLoading || (grid.filter == .battlenet && bnet.loading) { ProgressView().controlSize(.small) }
+            if library.scanning || model.gamesLoading || bnet.loading { ProgressView().controlSize(.small) }
             // Not in the ring (it leaves the tiles alone): X does it; a tap here.
             Button { GameImports.requests.send() } label: {
                 HStack(spacing: 5) {

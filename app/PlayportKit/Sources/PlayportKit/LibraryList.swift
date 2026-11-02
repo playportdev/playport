@@ -48,8 +48,8 @@ public struct LibraryEntry: Equatable, Identifiable, Sendable {
 }
 
 public enum LibraryFilter: String, CaseIterable, Sendable {
-    /// Every known copy, including local games and store games not installed; Battle.net's
-    /// offered products (no account owns them) only once installed or downloading.
+    /// Every known copy, including local games, store games not installed and Battle.net's
+    /// offered products (no account owns them, so every player sees them).
     case all
     /// In C:\Games, or downloading into it.
     case installed
@@ -176,7 +176,7 @@ public enum LibraryList {
     /// `downloading`: the games with a download, update, repair or import queued or running.
     public static func matches(_ entry: LibraryEntry, _ filter: LibraryFilter, downloading: Set<StoreGameKey> = []) -> Bool {
         switch filter {
-        case .all: entry.source != .battlenet || entry.installed || downloading.contains(entry.key)
+        case .all: true
         case .installed: entry.installed || downloading.contains(entry.key)
         case .steam, .gog, .epic, .battlenet: entry.source == filter.store
         }

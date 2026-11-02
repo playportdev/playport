@@ -26,7 +26,7 @@ final class BattleNetStoreTests: XCTestCase {
         XCTAssertEqual(LibraryList.shown(entries, filter: .battlenet, sort: .name).map(\.id), ["bnet-wow_classic_era"])
     }
 
-    func testOfferedProductsShowUnderTheBattleNetChipUntilOneIsInstalledOrDownloading() {
+    func testOfferedProductsShowUnderTheBattleNetChipAndInAll() {
         var installed = InstalledTitle(id: "bnet-wow", appID: nil, name: "World of Warcraft", developer: nil, installDir: "World of Warcraft",
                                        executable: #"_retail_\Wow-ARM64.exe"#, buildID: nil, depots: [], sizeBytes: 1, source: .installed,
                                        checksums: nil, note: nil, addedAt: Date(), lastPlayed: nil, lastVerification: nil)
@@ -38,10 +38,9 @@ final class BattleNetStoreTests: XCTestCase {
         let entries = LibraryList.entries(titles: [installed], owned: offered)
         XCTAssertEqual(LibraryList.shown(entries, filter: .battlenet, sort: .name).map(\.id),
                        ["bnet-wow", "bnet-wow_classic", "bnet-wow_classic_era"])
-        XCTAssertEqual(LibraryList.shown(entries, filter: .all, sort: .name).map(\.id), ["bnet-wow"],
-                       "All lists the player's games: an offered product only once installed")
-        XCTAssertEqual(LibraryList.shown(entries, filter: .all, sort: .name, downloading: [BattleNet.key(.wowClassicEra)]).map(\.id),
-                       ["bnet-wow", "bnet-wow_classic_era"], "or downloading")
+        XCTAssertEqual(LibraryList.shown(entries, filter: .all, sort: .name).map(\.id),
+                       ["bnet-wow", "bnet-wow_classic", "bnet-wow_classic_era"], "All lists every offered product, installed or not")
+        XCTAssertEqual(LibraryList.shown(entries, filter: .installed, sort: .name).map(\.id), ["bnet-wow"])
     }
 
     func testTheStoreRegionStartsFromThePhonesRegion() {
