@@ -188,7 +188,17 @@ final class TitleLaunch: ObservableObject {
             ?? titleID.flatMap { $0.hasPrefix("gog-") ? GOGArt.cachedHero(String($0.dropFirst(4))) : nil }
             ?? titleID.flatMap { $0.hasPrefix("epic-") ? EpicArt.cachedHero(String($0.dropFirst(5))) : nil }
             ?? titleID.flatMap { $0.hasPrefix("bnet-") ? BattleNetProduct(rawValue: String($0.dropFirst(5))).flatMap { BattleNetArtImages.cachedHero($0) } : nil }
+            ?? cachedXboxHero(titleID)
     }
+
+    #if PLAYPORT_RELEASE
+    private static func cachedXboxHero(_ titleID: String?) -> UIImage? { nil }
+    #else
+    /// An Xbox copy's (dev only, decision 0181).
+    private static func cachedXboxHero(_ titleID: String?) -> UIImage? {
+        titleID.flatMap { $0.hasPrefix("xbox-") ? XboxArt.cachedHero(String($0.dropFirst(5))) : nil }
+    }
+    #endif
 
     /// The game's hero art as the art cache keeps it (`<app>/…library_hero.jpg`), with no
     /// network and no games list: a Play right after the app starts has neither yet.

@@ -120,6 +120,11 @@ final class XboxArt: ObservableObject {
         XboxGames.art.appendingPathComponent("\(StoreGameKey(store: .xbox, id: id).fileStem)_\(width(wide: wide)).jpg")
     }
 
+    /// The page backdrop already on disk, for the launch screen (TitleLaunch).
+    nonisolated static func cachedHero(_ id: String) -> UIImage? {
+        (try? Data(contentsOf: file(id, wide: true))).flatMap(UIImage.init(data:))
+    }
+
     func image(_ copy: XboxLibraryCopy, wide: Bool) -> UIImage? {
         let key = "\(copy.id)/\(wide)"
         if let i = images[key] { return i }

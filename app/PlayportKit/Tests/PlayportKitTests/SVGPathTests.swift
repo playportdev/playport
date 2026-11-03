@@ -41,7 +41,7 @@ final class SVGPathTests: XCTestCase {
     func testEveryStoreMarkParsesInsideItsBox() throws {
         for store in Store.allCases {
             guard let d = StoreMark.path(store) else {
-                XCTAssert([.local, .xbox].contains(store), "only a local game and Xbox (no Simple Icons mark) have none")
+                XCTAssertEqual(store, .local, "only a local game has no mark")
                 continue
             }
             let segments = try XCTUnwrap(SVGPath.parse(d), "\(store)")

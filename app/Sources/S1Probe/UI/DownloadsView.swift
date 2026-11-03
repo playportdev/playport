@@ -179,7 +179,7 @@ private struct FirstJobCard: View {
 
     var body: some View {
         HStack(spacing: 14) {
-            Color.clear.overlay { GameArt(appID: job.appID, name: job.name, kind: .header) }
+            Color.clear.overlay { GameArt(appID: job.appID, name: job.name, kind: .header, storeKey: job.key) }
                 .frame(width: 120, height: 56).clipShape(RoundedRectangle(cornerRadius: 8))
             VStack(alignment: .leading, spacing: 6) {
                 HStack(alignment: .firstTextBaseline) {
@@ -227,7 +227,7 @@ private struct JobRow: View {
     var body: some View {
         let id = DownloadsPage.item(job.key)
         HStack(spacing: 12) {
-            Color.clear.overlay { GameArt(appID: job.appID, name: job.name, kind: .header) }
+            Color.clear.overlay { GameArt(appID: job.appID, name: job.name, kind: .header, storeKey: job.key) }
                 .frame(width: 64, height: 30).clipShape(RoundedRectangle(cornerRadius: 6))
             VStack(alignment: .leading, spacing: 1) {
                 Text(job.name).font(.system(size: 14, weight: .semibold)).foregroundStyle(PP.text)
