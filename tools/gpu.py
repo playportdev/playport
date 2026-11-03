@@ -52,6 +52,10 @@ On a Mac (decision 0165, tools/apple.py; docs/GPU-DEBUGGING.md#on-a-mac):
       bandwidth); profile.json and profile/*.json hold the rows and the raw series.
       --read only reads a trace's embedded profile. Starts Xcode hidden for its GPU tools
       agent when the phone is not yet a replay device; no Xcode window is used
+  pp gpu debug TRACE -c COMMAND [-c COMMAND ...] [--out DIR]
+      gpudebug replays TRACE on the phone and runs the gpudebug COMMANDs in order (go,
+      info, list, fetch ...; man gpudebug) in one session, which it then terminates:
+      fetched textures and buffers go to DIR/fetched, the replies to DIR/debug.txt
 
 Every play goes through the app's UI (pp ui), under one hold of the device lock.
 The Diagnostics switches last for that session and are undone at the app's next
@@ -447,6 +451,17 @@ def trace_toc(path, out, log):
     return toc
 
 
+def replayer_ready(s, ev, t0, wait):
+    """Wait until session S's replayer has loaded and prepared the trace."""
+    st = {}
+    while time.monotonic() - t0 < wait:
+        st = s.status()
+        if (st.get("replayer") or {}).get("state") not in ("loading", "preparing", None):
+            break
+        time.sleep(10)
+    ev("replayer", session=s.id, status=st, after_s=round(time.monotonic() - t0))
+
+
 def profile(trace, device, out, ev, gpu_state="default", wait=1800, execution="serial"):
     """gpudebug replays TRACE on the phone and profiles it, embedding the profile in the trace;
     then reads it back without the phone: profile.txt (the frame's encoders by GPU time, each
@@ -456,18 +471,28 @@ def profile(trace, device, out, ev, gpu_state="default", wait=1800, execution="s
     log = os.path.join(out, "apple-tools.txt")
     t0 = time.monotonic()
     with apple.Session(trace, device, os.path.join(out, "fetched"), log) as s:
-        st = {}
-        while time.monotonic() - t0 < wait:
-            st = s.status()
-            if (st.get("replayer") or {}).get("state") not in ("loading", "preparing", None):
-                break
-            time.sleep(10)
-        ev("replayer", session=s.id, status=st, after_s=round(time.monotonic() - t0))
+        replayer_ready(s, ev, t0, wait)
         opts = (f" --gpu-state {gpu_state}" if gpu_state != "default" else "") \
             + f" --exec {execution}"
         said = apple.json_lines(s.cmd(f"profile run{opts} --embed", secs=wait))
         ev("profiled", said=said[-1:], after_s=round(time.monotonic() - t0))
     return read(trace, out, ev)
+
+
+def debug(trace, device, out, ev, commands, wait=1800):
+    """gpudebug replays TRACE on the phone and runs COMMANDS in one session: debug.txt holds
+    the replies, fetched/ what they fetched."""
+    import apple
+    log = os.path.join(out, "apple-tools.txt")
+    t0 = time.monotonic()
+    with apple.Session(trace, device, os.path.join(out, "fetched"), log) as s:
+        replayer_ready(s, ev, t0, wait)
+        said = s.cmd(*commands, secs=wait, json_out=False)
+    path = os.path.join(out, "debug.txt")
+    with open(path, "w") as f:
+        f.write(said)
+    ev("debugged", commands=len(commands), after_s=round(time.monotonic() - t0))
+    return {"debug": path, "fetched": os.path.join(out, "fetched")}
 
 
 def read(trace, out, ev):
@@ -484,6 +509,29 @@ def read(trace, out, ev):
         json.dump(rows, f, indent=1)
     ev("profile", encoders=len(rows), counters=len(series))
     return {"profile": os.path.join(out, "profile.txt"), "encoders": len(rows), "counters": len(series)}
+
+
+def cmd_debug(argv):
+    p = argparse.ArgumentParser(prog="pp gpu debug",
+                                description="replay a .gputrace on the phone and run gpudebug commands (a Mac)")
+    p.add_argument("trace")
+    p.add_argument("-c", dest="commands", action="append", required=True, metavar="COMMAND",
+                   help="a gpudebug command (man gpudebug), run in order in one session")
+    p.add_argument("--out", help="the run directory (default $PLAYPORT_BUILD/gpu-runs/<time>)")
+    a = p.parse_args(argv)
+    import apple
+    a.out = phonelib.run_dir("gpu-runs", a.out)
+    ev = phonelib.Events(a.out)
+    why = apple.require()
+    if why:
+        return phonelib.fail(ev, "pp gpu debug: " + why)
+    try:
+        with phonelib.device_lock("pp gpu debug", events=ev, expect_s=1800):
+            device, _ = apple.ensure_agent(ev)
+            extra = debug(os.path.abspath(a.trace), device, a.out, ev, a.commands)
+    except phonelib.PhoneError as e:
+        return phonelib.fail(ev, str(e))
+    return ev.result(True, 0, out=a.out, **extra)
 
 
 def cmd_profile(argv):
@@ -598,6 +646,8 @@ def main(argv):
         return cmd_names(rest)
     if sub == "profile":
         return cmd_profile(rest)
+    if sub == "debug":
+        return cmd_debug(rest)
     if sub not in ("capture", "validate", "live"):
         print(f"pp gpu: no subcommand {sub} (pp gpu --help)", file=sys.stderr)
         return 2
