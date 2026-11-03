@@ -1709,6 +1709,101 @@ descriptor_init_fail_alloc(void *data, size_t size, size_t alignment,
                          size) ? NULL : ptr;
 }
 
+/* PLA-815: vkd3d-proton writes a null of the type the game asked for, usually
+ * a sampled image (64 bytes), into every set of a slot, the raw buffer set too,
+ * whose mutable binding lists only buffers (a 16-byte stride). The write must
+ * stay in its element: the buffer descriptor in the next element survives. A
+ * copy of that element is the readout: under MESA_KK_WATCH_DESC=1 its [kk-desc]
+ * copy line shows the bytes the copy read (run.sh checks they are not NULL). */
+static int
+check_mutable_null_image(VkPhysicalDevice pd)
+{
+   if (!getenv("KK_HOST_MUTABLE_TEST"))
+      return 0;
+   DPROC(vkCreateDevice); DPROC(vkDestroyDevice);
+   DPROC(vkCreateDescriptorSetLayout); DPROC(vkDestroyDescriptorSetLayout);
+   DPROC(vkCreateDescriptorPool); DPROC(vkDestroyDescriptorPool);
+   DPROC(vkAllocateDescriptorSets); DPROC(vkUpdateDescriptorSets);
+   DPROC(vkCreateBuffer); DPROC(vkDestroyBuffer);
+   DPROC(vkGetBufferMemoryRequirements); DPROC(vkAllocateMemory); DPROC(vkFreeMemory);
+   DPROC(vkBindBufferMemory);
+   float priority = 1;
+   VkDeviceQueueCreateInfo qci = {.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+      .queueCount = 1, .pQueuePriorities = &priority};
+   const char *exts[] = {"VK_EXT_mutable_descriptor_type", "VK_EXT_robustness2"};
+   VkPhysicalDeviceRobustness2FeaturesEXT robustness = {
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT,
+      .nullDescriptor = VK_TRUE};
+   VkPhysicalDeviceMutableDescriptorTypeFeaturesEXT mutable = {
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MUTABLE_DESCRIPTOR_TYPE_FEATURES_EXT,
+      .pNext = &robustness, .mutableDescriptorType = VK_TRUE};
+   VkDeviceCreateInfo dci = {.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+      .pNext = &mutable, .queueCreateInfoCount = 1, .pQueueCreateInfos = &qci,
+      .enabledExtensionCount = 2, .ppEnabledExtensionNames = exts};
+   VkDevice d;
+   CHECK(vkCreateDevice(pd, &dci, NULL, &d));
+
+   const VkDescriptorType raw_types[] = {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                                         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
+   VkMutableDescriptorTypeListEXT list = {.descriptorTypeCount = 2,
+                                          .pDescriptorTypes = raw_types};
+   VkMutableDescriptorTypeCreateInfoEXT mci = {
+      .sType = VK_STRUCTURE_TYPE_MUTABLE_DESCRIPTOR_TYPE_CREATE_INFO_EXT,
+      .mutableDescriptorTypeListCount = 1, .pMutableDescriptorTypeLists = &list};
+   VkDescriptorSetLayoutBinding binding = {.binding = 0,
+      .descriptorType = VK_DESCRIPTOR_TYPE_MUTABLE_EXT, .descriptorCount = 4,
+      .stageFlags = VK_SHADER_STAGE_ALL};
+   VkDescriptorSetLayoutCreateInfo lci = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+      .pNext = &mci, .bindingCount = 1, .pBindings = &binding};
+   VkDescriptorSetLayout layout;
+   CHECK(vkCreateDescriptorSetLayout(d, &lci, NULL, &layout));
+   VkDescriptorPoolSize size = {VK_DESCRIPTOR_TYPE_MUTABLE_EXT, 8};
+   VkDescriptorPoolCreateInfo pci = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+      .pNext = &mci, .maxSets = 2, .poolSizeCount = 1, .pPoolSizes = &size};
+   VkDescriptorPool pool;
+   CHECK(vkCreateDescriptorPool(d, &pci, NULL, &pool));
+   VkDescriptorSetLayout layouts[2] = {layout, layout};
+   VkDescriptorSetAllocateInfo ai = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+      .descriptorPool = pool, .descriptorSetCount = 2, .pSetLayouts = layouts};
+   VkDescriptorSet sets[2];
+   CHECK(vkAllocateDescriptorSets(d, &ai, sets));
+
+   VkBufferCreateInfo bci = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+      .size = 4096, .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT};
+   VkBuffer buffer;
+   CHECK(vkCreateBuffer(d, &bci, NULL, &buffer));
+   VkMemoryRequirements req;
+   vkGetBufferMemoryRequirements(d, buffer, &req);
+   VkMemoryAllocateInfo mai = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+      .allocationSize = req.size, .memoryTypeIndex = (uint32_t)__builtin_ctz(req.memoryTypeBits)};
+   VkDeviceMemory memory;
+   CHECK(vkAllocateMemory(d, &mai, NULL, &memory));
+   CHECK(vkBindBufferMemory(d, buffer, memory, 0));
+   VkDescriptorBufferInfo bi = {.buffer = buffer, .offset = 0, .range = 256};
+   VkDescriptorImageInfo null_image = {.imageView = VK_NULL_HANDLE,
+      .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+   VkWriteDescriptorSet writes[2] = {
+      {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = sets[0],
+       .dstBinding = 0, .dstArrayElement = 1, .descriptorCount = 1,
+       .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .pBufferInfo = &bi},
+      {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = sets[0],
+       .dstBinding = 0, .dstArrayElement = 0, .descriptorCount = 1,
+       .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, .pImageInfo = &null_image}};
+   vkUpdateDescriptorSets(d, 2, writes, 0, NULL);
+   VkCopyDescriptorSet copy = {.sType = VK_STRUCTURE_TYPE_COPY_DESCRIPTOR_SET,
+      .srcSet = sets[0], .srcBinding = 0, .srcArrayElement = 1,
+      .dstSet = sets[1], .dstBinding = 0, .dstArrayElement = 1, .descriptorCount = 1};
+   vkUpdateDescriptorSets(d, 0, NULL, 1, &copy);
+
+   vkDestroyBuffer(d, buffer, NULL);
+   vkFreeMemory(d, memory, NULL);
+   vkDestroyDescriptorPool(d, pool, NULL);
+   vkDestroyDescriptorSetLayout(d, layout, NULL);
+   vkDestroyDevice(d, NULL);
+   puts("ok mutable null image: element 1 copied after a null sampled image into element 0");
+   return 0;
+}
+
 static int
 check_descriptor_stats(VkPhysicalDevice pd)
 {
@@ -3259,6 +3354,8 @@ main(int argc, char **argv)
    if (gpl_wanted() && check_gpl(pd, queue, pool, buf))
       return 1;
    if (check_module_identifier(pd, queue, pool, buf))
+      return 1;
+   if (check_mutable_null_image(pd))
       return 1;
    if (check_descriptor_stats(pd))
       return 1;

@@ -1,0 +1,68 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 3 Nov 2026 11:15:50 +0100
+Subject: [PATCH] kk: MESA_KK_DEBUG=no_compression keeps every image's texels
+ plain
+
+A Metal GPU capture stores a heap's memory as it is. An image with
+GPU-optimized contents (allowGPUOptimizedContents, which KosmicKrisp
+gives optimal-tiling images it can) is losslessly compressed and
+twiddled there, so a render target placed in a heap cannot be read from
+the capture on this workstation. With the flag no image gets optimized
+contents: the capture's heap snapshots hold each texture's texels, which
+the frame's render targets can then be read from command buffer to
+command buffer. It costs bandwidth on every render target, so it is for
+captures only.
+
+Linear: PLA-815
+Class: diagnostics
+Evidence: docs/evidence/2026-11-03-dirt5-xbox-minidump-apiset.md
+Offered-upstream: no
+---
+ src/kosmickrisp/vulkan/kk_debug.c        | 1 +
+ src/kosmickrisp/vulkan/kk_debug.h        | 4 ++++
+ src/kosmickrisp/vulkan/kk_image_layout.c | 4 ++++
+ 3 files changed, 9 insertions(+)
+
+diff --git a/src/kosmickrisp/vulkan/kk_debug.c b/src/kosmickrisp/vulkan/kk_debug.c
+index fc62ff6..a5657cf 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.c
++++ b/src/kosmickrisp/vulkan/kk_debug.c
+@@ -32,6 +32,7 @@ const struct debug_named_value debug_flags[] = {
+    {"passes", KK_DEBUG_PASSES},
+    {"vertex_stats", KK_DEBUG_VERTEX_STATS},
+    {"descriptor_stats", KK_DEBUG_DESCRIPTOR_STATS},
++   {"no_compression", KK_DEBUG_NO_COMPRESSION},
+    {NULL, 0},
+ };
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_debug.h b/src/kosmickrisp/vulkan/kk_debug.h
+index 6dd5544..9abb6f0 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.h
++++ b/src/kosmickrisp/vulkan/kk_debug.h
+@@ -68,6 +68,10 @@ enum kk_debug {
+    KK_DEBUG_VERTEX_STATS = 1ull << 15,
+    /* PLA-431: cumulative legacy resource descriptor counts/elapsed time. */
+    KK_DEBUG_DESCRIPTOR_STATS = 1ull << 16,
++   /* Playport (PLA-815): no image gets Metal's GPU-optimized contents
++    * (lossless compression, twiddling), so a GPU capture's heap snapshots
++    * hold every texture's texels as they are */
++   KK_DEBUG_NO_COMPRESSION = 1ull << 17,
+ };
+ 
+ extern enum kk_debug kk_mesa_debug_flags;
+diff --git a/src/kosmickrisp/vulkan/kk_image_layout.c b/src/kosmickrisp/vulkan/kk_image_layout.c
+index 1e55a62..1f2b80d 100644
+--- a/src/kosmickrisp/vulkan/kk_image_layout.c
++++ b/src/kosmickrisp/vulkan/kk_image_layout.c
+@@ -92,6 +92,10 @@ kk_image_layout_can_optimize(const struct kk_physical_device *pdev,
+    if (tiling != VK_IMAGE_TILING_OPTIMAL)
+       return false;
+ 
++   /* Playport (PLA-815): MESA_KK_DEBUG=no_compression, for reading captures */
++   if (KK_DEBUG(NO_COMPRESSION))
++      return false;
++
+    /* Cannot optimize if host transfer for a format that would use Apple's
+     * lossless compression. Otherwise, CTS tests which populate memory with
+     * random data fail due to differences in how invalid optimized data is

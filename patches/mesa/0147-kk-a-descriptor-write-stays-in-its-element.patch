@@ -1,0 +1,175 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 3 Nov 2026 12:46:17 +0100
+Subject: [PATCH] kk: a descriptor write stays in its element
+
+A mutable descriptor binding's stride is the largest of its listed types,
+and the writers copied each descriptor whole: a sampled image is 64
+bytes, a buffer 16. vkd3d-proton writes a null descriptor of the type the
+game asked for (usually a sampled image) into every set of a heap slot,
+the raw buffer set too, whose mutable binding lists only uniform and
+storage buffers (resource.c, d3d12_descriptor_heap_write_null_descriptor
+_template: "some games don't write the correct type ... splat null
+descriptors over all descriptor sets"). There the 64-byte null ran over
+the next three buffer descriptors.
+
+DIRT 5 (GDK) writes a null texture SRV just before the structured buffer
+SRV that holds its objects' transforms. Every world vertex shader then
+read a null storage buffer and multiplied positions by zero, so the
+world drew nothing: depth prepass, G-buffer and shadow maps held their
+clear values, and a race showed only the HUD and screen-space effects
+on black. A race-frame capture showed the slot zero with its neighbours
+intact while vkd3d-proton's offset buffer had the view; the
+MESA_KK_WATCH_DESC trace showed the buffer descriptor written and no
+later buffer write to it, and the image writes, which bypassed
+write_desc, were the rest.
+
+write_desc now writes one element: what fits of the descriptor (a null
+image becomes a null buffer descriptor), the rest of the element
+zeroed so no earlier type's bytes remain. The sampled and storage image
+writers build their descriptor and go through it. Inline uniform blocks
+are byte arrays and are written as given, and multi-plane bindings
+already have a stride per plane, so no valid write changes. The host
+test writes a storage buffer into element 1 of a buffer-only mutable
+binding, then a null sampled image into element 0, and checks a copy of
+element 1 still reads the buffer (it read zeros before).
+
+Linear: PLA-815
+Class: upstream-bug
+Evidence: docs/evidence/2026-11-03-dirt5-xbox-minidump-apiset.md
+Offered-upstream: no
+---
+ src/kosmickrisp/vulkan/kk_descriptor_set.c | 82 +++++++++-------------
+ 1 file changed, 35 insertions(+), 47 deletions(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_descriptor_set.c b/src/kosmickrisp/vulkan/kk_descriptor_set.c
+index 58ead3b..85d6741 100644
+--- a/src/kosmickrisp/vulkan/kk_descriptor_set.c
++++ b/src/kosmickrisp/vulkan/kk_descriptor_set.c
+@@ -80,30 +80,46 @@ kk_desc_trace(const char *op, const struct kk_descriptor_set *set,
+            (const void *)src, src_elem);
+ }
+ 
++/* Write one descriptor into an array element. Playport (PLA-815): never more
++ * than the element: a mutable binding's stride is the largest of its listed
++ * types, and vkd3d-proton splats a null of the type the game asked for
++ * (usually a 64-byte sampled image) over every set, the 16-byte raw buffer
++ * set too, which ran into the next three buffer descriptors. So a descriptor
++ * larger than the stride is cut to it (a null image becomes a null buffer),
++ * and a smaller one zeroes the element's rest, so no earlier type's bytes
++ * remain. Inline uniform blocks are byte arrays and are written as given;
++ * multi-plane bindings already have a stride per plane. */
+ static void
+ write_desc(struct kk_descriptor_set *set, uint32_t binding, uint32_t elem,
+            const void *desc_data, size_t desc_size)
+ {
+    ASSERTED uint32_t dst_size;
+    void *dst = desc_ubo_data(set, binding, elem, &dst_size);
+-   assert(desc_size <= dst_size);
+-   memcpy(dst, desc_data, desc_size);
++   const struct kk_descriptor_set_binding_layout *bl = &set->layout->binding[binding];
++   size_t elem_size = desc_size;
++   if (bl->type != VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK && bl->stride)
++      elem_size = bl->stride;
++   assert(elem_size <= dst_size);
++   memcpy(dst, desc_data, MIN2(desc_size, elem_size));
++   if (desc_size < elem_size)
++      memset((char *)dst + desc_size, 0, elem_size - desc_size);
+    if (unlikely(kk_watch_desc_count || KK_DEBUG(NULL_DESC))) {
+-      const struct kk_descriptor_set_binding_layout *bl = &set->layout->binding[binding];
+-      if (bl->type != VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK && bl->stride &&
+-          desc_size > bl->stride)
+-         fprintf(stderr, "[kk-desc] OVERFLOW write into binding=%u stride=%u "
+-                 "elem=%u wrote=%zu\n", binding, bl->stride, elem, desc_size);
+-      kk_desc_trace("write", set, binding, elem, desc_data, desc_size, NULL, 0);
++      if (desc_size > elem_size)
++         fprintf(stderr, "[kk-desc] OVERFLOW write type=%d into binding=%u "
++                 "stride=%u elem=%u wrote=%zu: cut to the element\n",
++                 (int)bl->type, binding, bl->stride, elem, desc_size);
++      kk_desc_trace("write", set, binding, elem, dst, MIN2(desc_size, elem_size),
++                    NULL, 0);
+    }
+ }
+ 
+ static uint32_t
+ get_sampled_image_view_desc(VkDescriptorType descriptor_type,
+-                            const VkDescriptorImageInfo *const info, void *dst,
+-                            size_t dst_size, bool is_input_attachment)
++                            const VkDescriptorImageInfo *const info,
++                            struct kk_sampled_image_descriptor desc[3],
++                            bool is_input_attachment)
+ {
+-   struct kk_sampled_image_descriptor desc[3] = {};
++   memset(desc, 0, 3 * sizeof(*desc));
+    uint8_t plane_count = 1;
+ 
+    if (descriptor_type != VK_DESCRIPTOR_TYPE_SAMPLER && info &&
+@@ -167,8 +183,6 @@ get_sampled_image_view_desc(VkDescriptorType descriptor_type,
+       }
+    }
+ 
+-   assert(sizeof(desc[0]) * plane_count <= dst_size);
+-   memcpy(dst, desc, sizeof(desc[0]) * plane_count);
+    return sizeof(desc[0]) * plane_count;
+ }
+ 
+@@ -190,27 +204,17 @@ write_sampled_image_view_desc(struct kk_descriptor_set *set,
+       }
+    }
+ 
+-   uint32_t dst_size;
+-   void *dst = desc_ubo_data(set, binding, elem, &dst_size);
+-   uint32_t written = get_sampled_image_view_desc(
+-      descriptor_type, &info, dst, dst_size,
++   struct kk_sampled_image_descriptor desc[3];
++   uint32_t size = get_sampled_image_view_desc(
++      descriptor_type, &info, desc,
+       descriptor_type == VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT);
+-   if (unlikely(kk_watch_desc_count || KK_DEBUG(NULL_DESC))) {
+-      /* Playport (PLA-815): what a write past the element's stride clobbers */
+-      if (written > binding_layout->stride)
+-         fprintf(stderr, "[kk-desc] OVERFLOW image type=%d into binding=%u "
+-                 "stride=%u elem=%u wrote=%u: elements %u-%u overwritten\n",
+-                 (int)descriptor_type, binding, binding_layout->stride, elem,
+-                 written, elem + 1, elem + (written - 1) / MAX2(binding_layout->stride, 1u));
+-      kk_desc_trace("image", set, binding, elem, dst,
+-                    MIN2(written, MAX2(binding_layout->stride, 16u)), NULL, 0);
+-   }
++   write_desc(set, binding, elem, desc, size);
+ }
+ 
+ static void
+-get_storage_image_view_desc(
+-   struct kk_descriptor_set_binding_layout *binding_layout,
+-   const VkDescriptorImageInfo *const info, void *dst, size_t dst_size)
++write_storage_image_view_desc(struct kk_descriptor_set *set,
++                              const VkDescriptorImageInfo *const info,
++                              uint32_t binding, uint32_t elem)
+ {
+    struct kk_storage_image_descriptor desc = {};
+ 
+@@ -225,23 +229,7 @@ get_storage_image_view_desc(
+       desc.image_gpu_resource_id = view->planes[plane].storage_gpu_resource_id;
+    }
+ 
+-   assert(sizeof(desc) <= dst_size);
+-   memcpy(dst, &desc, sizeof(desc));
+-}
+-
+-static void
+-write_storage_image_view_desc(struct kk_descriptor_set *set,
+-                              const VkDescriptorImageInfo *const info,
+-                              uint32_t binding, uint32_t elem)
+-{
+-   uint32_t dst_size;
+-   void *dst = desc_ubo_data(set, binding, elem, &dst_size);
+-   struct kk_descriptor_set_binding_layout *binding_layout =
+-      &set->layout->binding[binding];
+-   get_storage_image_view_desc(binding_layout, info, dst, dst_size);
+-   if (unlikely(kk_watch_desc_count || KK_DEBUG(NULL_DESC)))
+-      kk_desc_trace("storage-image", set, binding, elem, dst,
+-                    sizeof(struct kk_storage_image_descriptor), NULL, 0);
++   write_desc(set, binding, elem, &desc, sizeof(desc));
+ }
+ 
+ 

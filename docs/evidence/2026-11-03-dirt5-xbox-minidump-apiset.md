@@ -63,3 +63,26 @@ title's compatibility entry sets it.
   pipelines for about 150 s and its first frame is at +155.5 s. A race starts (HUD, minimap,
   standings, lap timer, 17 to 32 FPS), but the 3D scene is black: only out-of-focus particles
   and a bloom smear show (`screen-0300s.png`; the owner's play the same).
+
+## A null image overwrote the world's transform buffers
+
+A race-frame GPU capture (`MESA_KK_DEBUG=no_compression`, `patches/mesa` 0145, so heap
+snapshots hold plain texels) showed the G-buffer pass's depth and normal targets holding
+only their clear values. Its first draw's vertex shader reads the objects' transforms
+through the raw-buffer descriptor set, slot `push[5] + 21` (2,933), and that slot and its
+four neighbours below were zero for the whole frame, although vkd3d-proton's offset buffer
+had the view. The `MESA_KK_WATCH_DESC` trace (0146) showed the buffer descriptor written,
+then nothing through the buffer path: vkd3d-proton writes a null of the game's type (a
+64-byte sampled image) into every set of a heap slot, and KosmicKrisp copied it whole into
+the buffer-only mutable binding's 16-byte elements, over the next three.
+
+`patches/mesa` 0147 cuts a descriptor write to its element. The host test writes a storage
+buffer into element 1 of such a binding, then a null sampled image into element 0: without
+the fix a copy of element 1 reads zeros, with it the buffer.
+
+Phone, dev IPA `083152d5641f98f3f2cb9d95593452fc341e2e4056875040292d2674ae8c891a`, capture
+`.work/gpu-runs/20261103T125747`: slot 2,933 holds a 13 MB buffer; the G-buffer pass now has
+depth on 72% of pixels and 133,944 distinct normal values. The race is still black: the
+deferred lighting compute writes +Inf (`0xfc3f07e0` in RG11B10F) into every pixel of the HDR
+target, whose clear is 0, and the tonemap turns that black. The lighting constant buffer's
+fields are finite.

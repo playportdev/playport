@@ -121,6 +121,19 @@ fp64_new=$(comm -13 <(cd "$ROOT/msl" && md5sum -- *.metal | cut -d' ' -f1 | sort
     { echo "soft_fp64: $fp64_new libraries not in the default run's MSL, not fp64.comp's alone" >&2; exit 1; }
 echo "soft fp64: fp64.comp builds with soft_fp64; the other $(ls "$ROOT/msl" | wc -l) libraries keep their MSL"
 
+# A null sampled image into a buffer-only mutable binding (PLA-815): vkd3d-proton
+# splats a null of the game's type over every set, its 16-byte raw buffer set too.
+# The next element's storage buffer descriptor survives: the copy of it that
+# MESA_KK_WATCH_DESC=1 traces reads the buffer's size, not zeros.
+KK_HOST_MUTABLE_TEST=1 MESA_KK_WATCH_DESC=1 MESA_SHADER_CACHE_DISABLE=true \
+    "$ROOT/kk-host-test" "$ROOT/build/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.so" "$ROOT/spv" \
+    >"$ROOT/mutable.log" 2>&1 || { cat "$ROOT/mutable.log" >&2; exit 1; }
+mutable_copy=$(grep '^\[kk-desc\] copy .* elem=1 ' "$ROOT/mutable.log" | tail -n 1)
+case $mutable_copy in
+*" size=16 data="*" 00000100 00000000 "*) echo "mutable null image: the next element's buffer descriptor survives ($mutable_copy)" ;;
+*) echo "PLA-815: a null sampled image into a buffer-only mutable binding ran into the next element: ${mutable_copy:-no copy traced}" >&2; exit 1 ;;
+esac
+
 # Float maths and root table loads (PLA-72), each behind a switch:
 # dxvk-fp.frag is a fragment shader as DXVK's dxbc-spirv gives KosmicKrisp,
 # with SignedZeroInfNanPreserve and precise (NoContraction) operations, and

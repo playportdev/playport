@@ -1,0 +1,222 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 3 Nov 2026 12:17:19 +0100
+Subject: [PATCH] kk: MESA_KK_DEBUG=null_desc and MESA_KK_WATCH_DESC trace
+ descriptor writes
+
+DIRT 5's world vertex shaders read their instance transforms through a
+bindless storage buffer descriptor that a race-frame capture shows null
+for the whole frame, while vkd3d-proton's offset buffer entry for the
+same heap index is set: every world vertex collapses and nothing of the
+world rasterizes. To tell whether that descriptor is never written,
+written null, or overwritten:
+
+- MESA_KK_DEBUG=null_desc logs, as [kk-desc] lines, the first 200
+  descriptor writes or copies that leave a descriptor all zero;
+- MESA_KK_WATCH_DESC=N[,N...] (16 at most) logs every write and copy into
+  those array elements, whatever it writes.
+
+Sampled and storage image writes, which fill set memory directly rather
+than through write_desc, are logged too, and a write larger than its
+binding's stride is logged as OVERFLOW with the elements it runs into.
+
+Each line names the operation, the set, binding and type, the element,
+the descriptor's bytes and, for a copy, the source set and element.
+Buffer, texel buffer and inline uniform block writes go through
+write_desc, image writes through their own writers, and copies through
+kk_UpdateDescriptorSets_impl's copy loop. Without either variable
+nothing is logged and nothing else changes.
+
+Linear: PLA-815
+Class: diagnostics
+Evidence: docs/evidence/2026-11-03-dirt5-xbox-minidump-apiset.md
+Offered-upstream: no
+---
+ src/kosmickrisp/vulkan/kk_debug.c          | 15 ++++++
+ src/kosmickrisp/vulkan/kk_debug.h          |  8 +++
+ src/kosmickrisp/vulkan/kk_descriptor_set.c | 63 +++++++++++++++++++++-
+ 3 files changed, 84 insertions(+), 2 deletions(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_debug.c b/src/kosmickrisp/vulkan/kk_debug.c
+index a5657cf..4706f99 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.c
++++ b/src/kosmickrisp/vulkan/kk_debug.c
+@@ -10,6 +10,7 @@
+ 
+ #include <stdio.h>
+ #include <ctype.h>
++#include <stdlib.h>
+ #include <string.h>
+ 
+ enum kk_debug kk_mesa_debug_flags = 0;
+@@ -33,6 +34,7 @@ const struct debug_named_value debug_flags[] = {
+    {"vertex_stats", KK_DEBUG_VERTEX_STATS},
+    {"descriptor_stats", KK_DEBUG_DESCRIPTOR_STATS},
+    {"no_compression", KK_DEBUG_NO_COMPRESSION},
++   {"null_desc", KK_DEBUG_NULL_DESC},
+    {NULL, 0},
+ };
+ 
+@@ -44,6 +46,9 @@ int kk_dump_msl_min_kb = -1;
+ 
+ int kk_frame_probe_s = 0;
+ 
++uint32_t kk_watch_desc[16];
++uint32_t kk_watch_desc_count = 0;
++
+ const struct debug_named_value experimental_flags[] = {
+    {"all", UINT64_MAX},
+    {"custom_border", KK_EXPERIMENTAL_CUSTOM_BORDER},
+@@ -149,6 +154,16 @@ kk_process_debug_variable(void)
+       kk_mesa_experimental_flags &= ~KK_EXPERIMENTAL_UBO_UNBOUNDED;
+    kk_dump_msl_min_kb = debug_get_num_option("MESA_KK_DUMP_MSL_MIN_KB", -1);
+    kk_frame_probe_s = debug_get_num_option("MESA_KK_FRAME_PROBE_S", 0);
++   /* Playport (PLA-815) */
++   const char *watch = os_get_option("MESA_KK_WATCH_DESC");
++   while (watch && *watch && kk_watch_desc_count < ARRAY_SIZE(kk_watch_desc)) {
++      char *end;
++      unsigned long v = strtoul(watch, &end, 0);
++      if (end == watch)
++         break;
++      kk_watch_desc[kk_watch_desc_count++] = (uint32_t)v;
++      watch = *end == ',' ? end + 1 : end;
++   }
+ }
+ 
+ uint32_t kk_pass_stats[KK_PASS_STAT_COUNT];
+diff --git a/src/kosmickrisp/vulkan/kk_debug.h b/src/kosmickrisp/vulkan/kk_debug.h
+index 9abb6f0..76d58f7 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.h
++++ b/src/kosmickrisp/vulkan/kk_debug.h
+@@ -72,10 +72,18 @@ enum kk_debug {
+     * (lossless compression, twiddling), so a GPU capture's heap snapshots
+     * hold every texture's texels as they are */
+    KK_DEBUG_NO_COMPRESSION = 1ull << 17,
++   /* Playport (PLA-815): log a descriptor write or copy that leaves a
++    * descriptor all zero, the first 200 (kk_desc_trace) */
++   KK_DEBUG_NULL_DESC = 1ull << 18,
+ };
+ 
+ extern enum kk_debug kk_mesa_debug_flags;
+ 
++/* Playport (PLA-815): MESA_KK_WATCH_DESC=N[,N...], descriptor array elements
++ * whose every write and copy is logged (kk_desc_trace); 16 at most */
++extern uint32_t kk_watch_desc[16];
++extern uint32_t kk_watch_desc_count;
++
+ /* Counters [kk-gpu] logs with KK_DEBUG(GPU) and clears each line: command
+  * buffer begins, those with ONE_TIME_SUBMIT, render passes begun, and Metal
+  * depth/stencil states compiled for dynamic state (kk_gpu_log). */
+diff --git a/src/kosmickrisp/vulkan/kk_descriptor_set.c b/src/kosmickrisp/vulkan/kk_descriptor_set.c
+index aceb819..58ead3b 100644
+--- a/src/kosmickrisp/vulkan/kk_descriptor_set.c
++++ b/src/kosmickrisp/vulkan/kk_descriptor_set.c
+@@ -47,6 +47,39 @@ desc_ubo_data(struct kk_descriptor_set *set, uint32_t binding, uint32_t elem,
+    return (char *)set->mapped_ptr + offset;
+ }
+ 
++/* Playport (PLA-815): MESA_KK_DEBUG=null_desc logs a write or copy that
++ * leaves a descriptor all zero (a null descriptor), the first 200;
++ * MESA_KK_WATCH_DESC=N[,N...] logs every write or copy into those array
++ * elements, whatever it writes. */
++static void
++kk_desc_trace(const char *op, const struct kk_descriptor_set *set,
++              uint32_t binding, uint32_t elem, const void *data, uint32_t size,
++              const struct kk_descriptor_set *src, uint32_t src_elem)
++{
++   bool zero = true;
++   for (uint32_t i = 0; i < size; i++)
++      zero &= ((const uint8_t *)data)[i] == 0;
++   bool watched = false;
++   for (uint32_t i = 0; i < kk_watch_desc_count; i++)
++      watched |= kk_watch_desc[i] == elem;
++   static uint32_t nulls = 0u;
++   if (!watched && !(zero && KK_DEBUG(NULL_DESC) && p_atomic_inc_return(&nulls) <= 200u))
++      return;
++   uint64_t w0 = 0;
++   uint32_t w1 = 0, w2 = 0;
++   memcpy(&w0, data, MIN2(size, 8u));
++   if (size >= 12)
++      memcpy(&w1, (const uint8_t *)data + 8, 4);
++   if (size >= 16)
++      memcpy(&w2, (const uint8_t *)data + 12, 4);
++   fprintf(stderr,
++           "[kk-desc] %s set=%p binding=%u type=%d elem=%u size=%u%s "
++           "data=%016llx %08x %08x src=%p elem=%u\n",
++           op, (const void *)set, binding, (int)set->layout->binding[binding].type,
++           elem, size, zero ? " NULL" : "", (unsigned long long)w0, w1, w2,
++           (const void *)src, src_elem);
++}
++
+ static void
+ write_desc(struct kk_descriptor_set *set, uint32_t binding, uint32_t elem,
+            const void *desc_data, size_t desc_size)
+@@ -55,9 +88,17 @@ write_desc(struct kk_descriptor_set *set, uint32_t binding, uint32_t elem,
+    void *dst = desc_ubo_data(set, binding, elem, &dst_size);
+    assert(desc_size <= dst_size);
+    memcpy(dst, desc_data, desc_size);
++   if (unlikely(kk_watch_desc_count || KK_DEBUG(NULL_DESC))) {
++      const struct kk_descriptor_set_binding_layout *bl = &set->layout->binding[binding];
++      if (bl->type != VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK && bl->stride &&
++          desc_size > bl->stride)
++         fprintf(stderr, "[kk-desc] OVERFLOW write into binding=%u stride=%u "
++                 "elem=%u wrote=%zu\n", binding, bl->stride, elem, desc_size);
++      kk_desc_trace("write", set, binding, elem, desc_data, desc_size, NULL, 0);
++   }
+ }
+ 
+-static void
++static uint32_t
+ get_sampled_image_view_desc(VkDescriptorType descriptor_type,
+                             const VkDescriptorImageInfo *const info, void *dst,
+                             size_t dst_size, bool is_input_attachment)
+@@ -128,6 +169,7 @@ get_sampled_image_view_desc(VkDescriptorType descriptor_type,
+ 
+    assert(sizeof(desc[0]) * plane_count <= dst_size);
+    memcpy(dst, desc, sizeof(desc[0]) * plane_count);
++   return sizeof(desc[0]) * plane_count;
+ }
+ 
+ static void
+@@ -150,9 +192,19 @@ write_sampled_image_view_desc(struct kk_descriptor_set *set,
+ 
+    uint32_t dst_size;
+    void *dst = desc_ubo_data(set, binding, elem, &dst_size);
+-   get_sampled_image_view_desc(
++   uint32_t written = get_sampled_image_view_desc(
+       descriptor_type, &info, dst, dst_size,
+       descriptor_type == VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT);
++   if (unlikely(kk_watch_desc_count || KK_DEBUG(NULL_DESC))) {
++      /* Playport (PLA-815): what a write past the element's stride clobbers */
++      if (written > binding_layout->stride)
++         fprintf(stderr, "[kk-desc] OVERFLOW image type=%d into binding=%u "
++                 "stride=%u elem=%u wrote=%u: elements %u-%u overwritten\n",
++                 (int)descriptor_type, binding, binding_layout->stride, elem,
++                 written, elem + 1, elem + (written - 1) / MAX2(binding_layout->stride, 1u));
++      kk_desc_trace("image", set, binding, elem, dst,
++                    MIN2(written, MAX2(binding_layout->stride, 16u)), NULL, 0);
++   }
+ }
+ 
+ static void
+@@ -187,6 +239,9 @@ write_storage_image_view_desc(struct kk_descriptor_set *set,
+    struct kk_descriptor_set_binding_layout *binding_layout =
+       &set->layout->binding[binding];
+    get_storage_image_view_desc(binding_layout, info, dst, dst_size);
++   if (unlikely(kk_watch_desc_count || KK_DEBUG(NULL_DESC)))
++      kk_desc_trace("storage-image", set, binding, elem, dst,
++                    sizeof(struct kk_storage_image_descriptor), NULL, 0);
+ }
+ 
+ 
+@@ -366,6 +421,10 @@ kk_UpdateDescriptorSets_impl(VkDevice device, uint32_t descriptorWriteCount,
+                MIN2(dst_binding_layout->stride, src_binding_layout->stride);
+             assert(copy_size <= dst_max_size && copy_size <= src_max_size);
+             memcpy(dst_map, src_map, copy_size);
++            if (unlikely(kk_watch_desc_count || KK_DEBUG(NULL_DESC)))
++               kk_desc_trace("copy", dst, copy->dstBinding,
++                             copy->dstArrayElement + j, dst_map, copy_size, src,
++                             copy->srcArrayElement + j);
+          }
+       }
+ 

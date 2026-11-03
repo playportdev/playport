@@ -114,3 +114,6 @@
 0142-kk-a-workaround-MESA_KK_DISABLE_WORKAROUNDS-names-st.patch
 0143-kk-MESA_KK_EXPERIMENTAL-no_quad_merge_block-lets-Met.patch
 0144-kk-MESA_KK_EXPERIMENTAL-soft_fp64-lowers-64-bit-floa.patch
+0145-kk-MESA_KK_DEBUG-no_compression-keeps-every-image-s-.patch
+0146-kk-MESA_KK_DEBUG-null_desc-and-MESA_KK_WATCH_DESC-tr.patch
+0147-kk-a-descriptor-write-stays-in-its-element.patch
