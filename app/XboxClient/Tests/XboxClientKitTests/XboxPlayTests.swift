@@ -117,16 +117,46 @@ final class XboxPlayTests: XCTestCase, @unchecked Sendable {
                 XCTAssertTrue("\($0)".contains("Verify the game"), "\($0)")
             }
         }
-        // A record written before these were kept declares neither: a config adding them is refused.
-        try XboxTestPackage.config().withUnsafeBytes { try Data($0).write(to: config) }
+        // A record written before these were kept declares neither. The installed config,
+        // by its hash in the record, still declares them; a rewritten one adding them is refused.
         let old = try JSONDecoder().decode(XboxInstalled.self, from: JSONSerialization.data(withJSONObject:
             (try JSONSerialization.jsonObject(with: JSONEncoder().encode(rec)) as! [String: Any])
                 .filter { !["msaFullTrust", "relatedProductIDs"].contains($0.key) }))
-        let plain = try XboxBridgeCopy(productID: product, installed: old, folder: dir)
-        XCTAssertFalse(plain.msaFullTrust)
-        XCTAssertEqual(plain.relatedProductIDs, [])
         try Data(declared.utf8).write(to: config)
+        let installed = try XboxBridgeCopy(productID: product, installed: old, folder: dir)
+        XCTAssertTrue(installed.msaFullTrust)
+        XCTAssertEqual(installed.relatedProductIDs, ["9NDLCPRODUCT"])
+        try Data((declared + " ").utf8).write(to: config)
         XCTAssertThrowsError(try XboxBridgeCopy(productID: product, installed: old, folder: dir))
+    }
+
+    /// An Entra application ID (a GUID) is a client ID as a Live one is: the runtime asks
+    /// for the title's tickets with it (Moonlighter 2), and a record from before it was read
+    /// serves it from the installed config.
+    func testAGUIDClientIDIsKeptAndServedFromAnOlderRecordsInstalledConfig() async throws {
+        let guid = "d647809d-24f7-45b1-af06-c57ea5c12ad3"
+        let declared = String(decoding: XboxTestPackage.config(), as: UTF8.self).replacingOccurrences(of: "0000000040ABCDEF", with: guid)
+        var files = XboxTestPackage.standard().files.filter { $0.path != "MicrosoftGame.Config" }
+        files.append(.init(path: "MicrosoftGame.Config", data: Array(declared.utf8), encrypted: false))
+        package = XboxTestPackage.build(files, gameConfig: Array(declared.utf8))
+        cdn.stop()
+        cdn = try XboxTestCDN(package.bytes)
+        let rec = try await install()
+        XCTAssertEqual(rec.msaAppID, guid)
+        let dir = root.appendingPathComponent("Games/\(rec.installDir)", isDirectory: true)
+        XCTAssertEqual(try XboxBridgeCopy(productID: product, installed: rec, folder: dir).msaAppID, guid)
+
+        let old = try JSONDecoder().decode(XboxInstalled.self, from: JSONSerialization.data(withJSONObject:
+            (try JSONSerialization.jsonObject(with: JSONEncoder().encode(rec)) as! [String: Any]).filter { $0.key != "msaAppID" }))
+        XCTAssertEqual(try XboxBridgeCopy(productID: product, installed: old, folder: dir).msaAppID, guid)
+        // Rewritten, the folder's GUID is not the record's (none): refused.
+        try Data(declared.replacingOccurrences(of: guid, with: "d647809d-24f7-45b1-af06-c57ea5c12ad4").utf8)
+            .write(to: dir.appendingPathComponent("MicrosoftGame.Config"))
+        XCTAssertThrowsError(try XboxBridgeCopy(productID: product, installed: old, folder: dir))
+        // Not an ID of either shape: none.
+        for bad in ["d647809d24f745b1af06c57ea5c12ad3", "d647809d-24f7-45b1-af06-c57ea5c12ad", "{d647809d-24f7-45b1-af06-c57ea5c12ad3}", "0000000040ABCDEZ"] {
+            XCTAssertNil(XboxGameManifest.msaAppID(bad), bad)
+        }
     }
 
     /// VC14 is run from the installer the package carries (an Unreal Engine layout), else

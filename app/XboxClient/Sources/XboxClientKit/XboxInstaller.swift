@@ -390,7 +390,7 @@ struct XboxGameConfig: Equatable {
         }
         let manifest = try XboxGameManifest.parse(bytes)
         return XboxGameConfig(executable: exe, titleID: id(root.value("TitleId"), \.isHexDigit, max: 8),
-                              msaAppID: id(root.value("MSAAppId"), \.isHexDigit, max: 16),
+                              msaAppID: manifest.msaAppID,
                               scid: id(scid, { $0.isHexDigit || $0 == "-" }, max: 36),
                               msaFullTrust: manifest.msaFullTrust, relatedProductIDs: manifest.relatedProductIDs)
     }

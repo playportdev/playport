@@ -83,6 +83,11 @@ public struct XboxGameManifest: Sendable, Equatable {
 
     /// Throws when the folder has no readable config.
     public static func load(folder: URL) throws -> XboxGameManifest {
+        try parse(read(folder: folder))
+    }
+
+    /// The folder's MicrosoftGame.config, in whatever case its name is spelled.
+    static func read(folder: URL) throws -> [UInt8] {
         let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
         guard let name = names.first(where: { $0.lowercased() == "microsoftgame.config" }),
               let url = try? InstallFS.resolveInside(folder, name, createParents: false),
@@ -90,17 +95,27 @@ public struct XboxGameManifest: Sendable, Equatable {
               let bytes = try? [UInt8](Data(contentsOf: url)) else {
             throw ClientError.notFound("the game has no MicrosoftGame.config")
         }
-        return try parse(bytes)
+        return bytes
     }
 
     static func parse(_ bytes: [UInt8]) throws -> XboxGameManifest {
         let root = try XboxXML.parse(bytes.starts(with: [0xEF, 0xBB, 0xBF]) ? Array(bytes.dropFirst(3)) : bytes)
         let related = (root.child("RelatedProducts")?.children ?? []).filter { $0.local == "RelatedProduct" }
             .map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }.filter(StoreGameKey.isProductID)
-        let app = root.value("MSAAppId").flatMap { $0.count == 16 && $0.allSatisfy(\.isHexDigit) ? $0 : nil }
         let known = root.all("KnownDependency").compactMap { $0.attr("Name") }
-        return XboxGameManifest(msaAppID: app, msaFullTrust: root.value("MSAFullTrust")?.lowercased() == "true",
+        return XboxGameManifest(msaAppID: msaAppID(root.value("MSAAppId")), msaFullTrust: root.value("MSAFullTrust")?.lowercased() == "true",
                                 relatedProductIDs: related, knownDependencies: known)
+    }
+
+    /// An `MSAAppId` as the runtime sends it for the title's tickets: a Live client ID
+    /// (16 hex digits, the pilot's `000000004823914A`) or an Entra application ID, a GUID
+    /// (Moonlighter 2's `d647809d-24f7-45b1-af06-c57ea5c12ad3`). Anything else is none.
+    static func msaAppID(_ value: String?) -> String? {
+        guard let s = value?.trimmingCharacters(in: .whitespacesAndNewlines) else { return nil }
+        if s.count == 16, s.allSatisfy(\.isHexDigit) { return s }
+        let groups = s.split(separator: "-", omittingEmptySubsequences: false)
+        guard groups.map(\.count) == [8, 4, 4, 4, 12], groups.allSatisfy({ $0.allSatisfy(\.isHexDigit) }) else { return nil }
+        return s
     }
 
     /// A prerequisite installer the package itself carries for a dependency it declares:
@@ -128,14 +143,22 @@ public struct XboxGameManifest: Sendable, Equatable {
 
 extension XboxBridgeCopy {
     /// The copy the bridge serves a play: what the package's config declared when it was
-    /// installed or updated (the install record), never what the folder says now. The
-    /// folder's config must still declare the same client ID, full trust and related
-    /// products, or the play is refused: any title can rewrite a file in C:\Games.
-    /// A record from before full trust and related products were kept declares neither.
+    /// installed or updated, never what a rewritten folder config says: any title can
+    /// rewrite a file in C:\Games. The folder's config is the package's when its bytes are
+    /// the install record's for that file (size and SHA-1); then what it declares is
+    /// served, whatever the record kept (one from before full trust and related products,
+    /// or a GUID client ID, were read). Otherwise it must declare the same client ID, full
+    /// trust and related products as the record, or the play is refused.
     public init(productID: String, installed rec: XboxInstalled, folder: URL) throws {
-        let now = try XboxGameManifest.load(folder: folder)
+        let bytes = try XboxGameManifest.read(folder: folder)
+        let now = try XboxGameManifest.parse(bytes)
+        let sha1 = SHA1.hash(bytes).hex
+        if rec.files.contains(where: { $0.path.lowercased() == "microsoftgame.config" && $0.size == UInt64(bytes.count) && $0.sha1 == sha1 }) {
+            self.init(productID: productID, relatedProductIDs: now.relatedProductIDs, msaAppID: now.msaAppID, msaFullTrust: now.msaFullTrust)
+            return
+        }
         let related = rec.relatedProductIDs ?? [], fullTrust = rec.msaFullTrust ?? false
-        let app = rec.msaAppID.flatMap { $0.count == 16 ? $0 : nil }
+        let app = XboxGameManifest.msaAppID(rec.msaAppID)
         guard now.msaAppID?.uppercased() == app?.uppercased(), now.msaFullTrust == fullTrust,
               Set(now.relatedProductIDs.map { $0.uppercased() }) == Set(related.map { $0.uppercased() }) else {
             throw ClientError.verificationFailed("The game's MicrosoftGame.config is not the one Playport installed. Verify the game.")
