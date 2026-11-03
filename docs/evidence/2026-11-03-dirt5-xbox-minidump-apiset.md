@@ -46,3 +46,20 @@ warn:vkd3d-proton:d3d12_pipeline_state_init_compute: Failed to create Vulkan com
 KosmicKrisp has no `shaderFloat64` (as for OpenGL's 3.3 ceiling, decision 0087), so
 vkd3d-proton refuses any shader that declares FP64 operations. That is the next blocker; the
 API set change is not the cause.
+
+## With soft FP64: the game boots, the race renders black
+
+`patches/mesa` 0144 adds `MESA_KK_EXPERIMENTAL=soft_fp64` (KosmicKrisp reports FP64 and lowers
+it to integer code with Mesa's soft-fp64 library, as Intel's ANV does for this game), and the
+title's compatibility entry sets it.
+
+- **Host test** (`build/stages/mesa.sh .work/run/mesa hosttest`): `fp64.comp` (DIRT 5's loop
+  plus double multiply, divide, fma, min/max, compares and conversions) builds only with the
+  flag; its MSL (8,655 lines) names no `double`, and the other 187 libraries keep their MSL.
+  Apple's Metal compiler (Metal Developer Tools for Windows, `msl-compile.sh`) compiles it to
+  AIR; a one-line `double` kernel fails with "not supported in Metal".
+- **Phone**, dev IPA `3f61cde05649fb4b7daa4c20738bb610282f79163e5561c753f5b71320039a07`, run
+  `.work/ui-runs/20261103T100828`: no FP64 refusal and no error box; the game compiles its
+  pipelines for about 150 s and its first frame is at +155.5 s. A race starts (HUD, minimap,
+  standings, lap timer, 17 to 32 FPS), but the 3D scene is black: only out-of-focus particles
+  and a bloom smear show (`screen-0300s.png`; the owner's play the same).

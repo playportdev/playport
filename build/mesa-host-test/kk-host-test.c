@@ -2248,6 +2248,8 @@ main(int argc, char **argv)
       .geometryShader = VK_TRUE,
       .tessellationShader = VK_TRUE,
       .fillModeNonSolid = f2.features.fillModeNonSolid,
+      /* MESA_KK_EXPERIMENTAL=soft_fp64 (PLA-815): the fp64 compute case */
+      .shaderFloat64 = f2.features.shaderFloat64,
       .shaderClipDistance = VK_TRUE,
       .shaderCullDistance = VK_TRUE,
       /* check_gpl's dual-source blend and logic op links */
@@ -2730,6 +2732,25 @@ main(int argc, char **argv)
             return 1;
          }
          printf("ok texel-ftz\n");
+      }
+
+      /* 64-bit float maths (shaders/fp64.comp), in the same layout: with
+       * MESA_KK_EXPERIMENTAL=soft_fp64 the device reports shaderFloat64 and
+       * the pipeline builds, every double lowered to integer code: the MSL
+       * names no double and has no untranslated ALU op. Without it, not
+       * reported, and no pipeline is made. */
+      if (f2.features.shaderFloat64) {
+         int fp64_before = msl_count();
+         VkComputePipelineCreateInfo dci = cpci;
+         dci.stage.module = load_module("fp64.comp");
+         VkPipeline dp64;
+         CHECK(vkCreateComputePipelines(dev, VK_NULL_HANDLE, 1, &dci, NULL, &dp64));
+         if (fp64_before >= 0 && (msl_contains(fp64_before, msl_count(), "double") ||
+                                  msl_contains(fp64_before, msl_count(), "ALU "))) {
+            fprintf(stderr, "fp64: a double or an untranslated ALU op in the MSL\n");
+            return 1;
+         }
+         printf("ok fp64\n");
       }
 
       VkCommandBufferAllocateInfo cbai = {

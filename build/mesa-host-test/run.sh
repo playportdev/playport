@@ -107,6 +107,20 @@ else
     echo "MSL 4.0 only: MSL 4.1 arm explicitly skipped"
 fi
 
+# Soft fp64 (PLA-815): with MESA_KK_EXPERIMENTAL=soft_fp64 the device reports
+# shaderFloat64 and kk-host-test builds fp64.comp, every double lowered to
+# integer code ("ok fp64"); every other library is the default run's MSL.
+rm -rf "$ROOT/msl-fp64"; mkdir -p "$ROOT/msl-fp64"
+MESA_KK_EXPERIMENTAL=soft_fp64 KK_MOCK_MSL_DIR="$ROOT/msl-fp64" MESA_SHADER_CACHE_DISABLE=true \
+    "$ROOT/kk-host-test" "$ROOT/build/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.so" "$ROOT/spv" \
+    >"$ROOT/fp64.log" 2>&1 || { cat "$ROOT/fp64.log" >&2; exit 1; }
+grep -qx "ok fp64" "$ROOT/fp64.log" || { echo "soft_fp64: fp64.comp was not built" >&2; exit 1; }
+fp64_new=$(comm -13 <(cd "$ROOT/msl" && md5sum -- *.metal | cut -d' ' -f1 | sort) \
+    <(cd "$ROOT/msl-fp64" && md5sum -- *.metal | cut -d' ' -f1 | sort) | wc -l)
+[ "$fp64_new" = 1 ] && [ "$(ls "$ROOT/msl-fp64" | wc -l)" = "$(( $(ls "$ROOT/msl" | wc -l) + 1 ))" ] ||
+    { echo "soft_fp64: $fp64_new libraries not in the default run's MSL, not fp64.comp's alone" >&2; exit 1; }
+echo "soft fp64: fp64.comp builds with soft_fp64; the other $(ls "$ROOT/msl" | wc -l) libraries keep their MSL"
+
 # Float maths and root table loads (PLA-72), each behind a switch:
 # dxvk-fp.frag is a fragment shader as DXVK's dxbc-spirv gives KosmicKrisp,
 # with SignedZeroInfNanPreserve and precise (NoContraction) operations, and

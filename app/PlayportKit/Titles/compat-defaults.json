@@ -31,6 +31,10 @@
     "epic-Buffalo": {
       "settings": {"aspect": "16:9"},
       "reason": "This game draws nothing on a screen wider than 16:9."
+    },
+    "xbox-9PJGM0T0827V": {
+      "settings": {"graphicsOptions": "MESA_KK_EXPERIMENTAL=soft_fp64"},
+      "reason": "One of this game's compute shaders does its arithmetic in 64-bit floating point, which the iPhone's GPU does not have, so its 64-bit maths is done in software and the game is told it is supported. Without that it stops at its first screen with an error."
     }
   }
 }

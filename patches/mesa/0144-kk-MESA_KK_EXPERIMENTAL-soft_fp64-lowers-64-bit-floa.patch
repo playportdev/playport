@@ -1,0 +1,325 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 3 Nov 2026 10:00:10 +0100
+Subject: [PATCH] kk: MESA_KK_EXPERIMENTAL=soft_fp64 lowers 64-bit floats to
+ integer code
+
+Apple GPUs have no FP64 and Metal has no double (MSL specification 2.1),
+so KosmicKrisp reports no shaderFloat64, vkd3d-proton reports no
+DoublePrecisionFloatShaderOps and refuses any shader that declares FP64
+(d3d12_device_validate_shader_meta), and DXVK refuses a DXBC double
+instruction. DIRT 5's GDK build stops on one such compute shader: its
+pipeline fails with E_INVALIDARG.
+
+With the flag, every 64-bit float operation becomes inlined calls into
+Mesa's soft-fp64 library (src/compiler/glsl/float64.glsl, Berkeley
+SoftFloat), as ANV's fp64_workaround_enabled does on GPUs without FP64
+hardware; Mesa enables that for DIRT 5 and DOOM Eternal. Results are IEEE
+binary64 with round-to-nearest-even and subnormals; NaN propagation is
+relaxed and there is no fused fma.
+
+- The library is built to SPIR-V with the driver (glslangValidator, now
+  required for KosmicKrisp; ANV's meson rule) and to NIR at the first
+  shader that needs it, kept on the physical device.
+- kk_preprocess_nir lowers after msl_preprocess_nir, where functions are
+  inlined and ALU ops scalar, which nir_lower_doubles needs. flrp and
+  ffma are split first; what is left is 64-bit integer code, which the
+  MSL backend writes as long and ulong.
+- The device reports shaderFloat64, shaderDenormPreserveFloat64 and
+  denormBehaviorIndependence ALL, which vkd3d-proton needs before it
+  reports FP64; the fp16 and fp32 denorm modes still cannot be asked for.
+
+It changes only shaders that use a 64-bit float, which could not be
+built without it, so it is not in the pipeline cache UUID. It must be
+named (MESA_KK_EXPERIMENTAL=all alone does not turn it on).
+
+Linear: PLA-815
+Class: feature
+Evidence: docs/evidence/2026-11-03-dirt5-xbox-minidump-apiset.md
+Offered-upstream: no
+---
+ meson.build                                 |  2 +-
+ src/kosmickrisp/vulkan/kk_debug.c           |  3 +-
+ src/kosmickrisp/vulkan/kk_debug.h           |  7 +++
+ src/kosmickrisp/vulkan/kk_physical_device.c | 53 ++++++++++++++++++++-
+ src/kosmickrisp/vulkan/kk_physical_device.h | 10 ++++
+ src/kosmickrisp/vulkan/kk_shader.c          | 27 ++++++++++-
+ src/kosmickrisp/vulkan/meson.build          | 18 +++++++
+ 7 files changed, 115 insertions(+), 5 deletions(-)
+
+diff --git a/meson.build b/meson.build
+index d467651..a029c14 100644
+--- a/meson.build
++++ b/meson.build
+@@ -747,7 +747,7 @@ _glslang_preamble_version = '12.2'
+ prog_glslang = find_program(
+   'glslangValidator',
+   native : true,
+-  required : with_vulkan_overlay_layer or with_aco_tests or with_bvh
++  required : with_vulkan_overlay_layer or with_aco_tests or with_bvh or with_kosmickrisp_vk
+ )
+ 
+ if prog_glslang.found()
+diff --git a/src/kosmickrisp/vulkan/kk_debug.c b/src/kosmickrisp/vulkan/kk_debug.c
+index 655cf52..fc62ff6 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.c
++++ b/src/kosmickrisp/vulkan/kk_debug.c
+@@ -68,6 +68,7 @@ const struct debug_named_value experimental_flags[] = {
+    {"private_memory", KK_EXPERIMENTAL_PRIVATE_MEMORY},
+    {"barrier_device_vis", KK_EXPERIMENTAL_BARRIER_DEVICE_VIS},
+    {"no_quad_merge_block", KK_EXPERIMENTAL_NO_QUAD_MERGE_BLOCK},
++   {"soft_fp64", KK_EXPERIMENTAL_SOFT_FP64},
+    {NULL, 0},
+ };
+ 
+@@ -137,7 +138,7 @@ kk_process_debug_variable(void)
+       KK_EXPERIMENTAL_UBO_UNBOUNDED | KK_EXPERIMENTAL_NARROW_BARRIERS |
+       KK_EXPERIMENTAL_DS_DONT_CARE | KK_EXPERIMENTAL_CMD_RETIRE |
+       KK_EXPERIMENTAL_PRIVATE_MEMORY | KK_EXPERIMENTAL_BARRIER_DEVICE_VIS |
+-      KK_EXPERIMENTAL_NO_QUAD_MERGE_BLOCK;
++      KK_EXPERIMENTAL_NO_QUAD_MERGE_BLOCK | KK_EXPERIMENTAL_SOFT_FP64;
+    for (const struct debug_named_value *f = experimental_flags; f->name; f++) {
+       if (f->value != UINT64_MAX && (f->value & explicit_only) &&
+           !has_named_experiment(experiments, f->name))
+diff --git a/src/kosmickrisp/vulkan/kk_debug.h b/src/kosmickrisp/vulkan/kk_debug.h
+index 2ca6672..6dd5544 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.h
++++ b/src/kosmickrisp/vulkan/kk_debug.h
+@@ -291,6 +291,13 @@ enum kk_experimental {
+     * derivatives along a seam may then mix two triangles. In the pipeline
+     * cache UUID. Must be named */
+    KK_EXPERIMENTAL_NO_QUAD_MERGE_BLOCK = 1ull << 22,
++   /* Playport (PLA-815): shaderFloat64, with 64-bit denorms preserved and
++    * float controls independent, and every 64-bit float operation lowered
++    * to integer code by Mesa's soft-fp64 library (float64.glsl), as ANV's
++    * fp64_workaround_enabled does on GPUs without FP64. Metal has no double.
++    * Changes only shaders that could not be built without it, so it is not
++    * in the pipeline cache UUID. Must be named */
++   KK_EXPERIMENTAL_SOFT_FP64 = 1ull << 23,
+ };
+ 
+ extern enum kk_experimental kk_mesa_experimental_flags;
+diff --git a/src/kosmickrisp/vulkan/kk_physical_device.c b/src/kosmickrisp/vulkan/kk_physical_device.c
+index c193084..cba6781 100644
+--- a/src/kosmickrisp/vulkan/kk_physical_device.c
++++ b/src/kosmickrisp/vulkan/kk_physical_device.c
+@@ -19,6 +19,9 @@
+ #include "kosmickrisp/bridge/ns_process_info.h"
+ #include "kosmickrisp/compiler/nir_to_msl.h"
+ 
++#include "compiler/spirv/nir_spirv.h"
++#include "float64_spv.h"
++
+ #include "util/detect_os.h"
+ #include "util/disk_cache.h"
+ #include "util/mesa-blake3.h"
+@@ -291,6 +294,8 @@ kk_get_device_features(
+       .shaderImageGatherExtended = true,
+       .shaderInt16 = true,
+       .shaderInt64 = true,
++      /* Playport (PLA-815): in software (kk_preprocess_nir) */
++      .shaderFloat64 = KK_EXPERIMENTAL(SOFT_FP64),
+       .shaderResourceMinLod = true,
+       .shaderSampledImageArrayDynamicIndexing = true,
+       .shaderStorageBufferArrayDynamicIndexing = true,
+@@ -789,7 +794,11 @@ kk_get_device_properties(
+       .independentResolve = true,
+       .driverID = VK_DRIVER_ID_MESA_KOSMICKRISP,
+       .conformanceVersion = (VkConformanceVersion){1, 4, 6, 2},
+-      .denormBehaviorIndependence = VK_SHADER_FLOAT_CONTROLS_INDEPENDENCE_NONE,
++      /* Playport (PLA-815): with soft_fp64, ALL, which vkd3d-proton needs to
++       * report FP64: the fp16/fp32 denorm modes still cannot be asked for */
++      .denormBehaviorIndependence =
++         KK_EXPERIMENTAL(SOFT_FP64) ? VK_SHADER_FLOAT_CONTROLS_INDEPENDENCE_ALL
++                                    : VK_SHADER_FLOAT_CONTROLS_INDEPENDENCE_NONE,
+       .roundingModeIndependence = VK_SHADER_FLOAT_CONTROLS_INDEPENDENCE_NONE,
+       /* Playport (PLA-72): neither with MESA_KK_EXPERIMENTAL=no_fp_preserve */
+       .shaderSignedZeroInfNanPreserveFloat16 = !KK_EXPERIMENTAL(NO_FP_PRESERVE),
+@@ -797,7 +806,8 @@ kk_get_device_properties(
+       .shaderSignedZeroInfNanPreserveFloat64 = false,
+       .shaderDenormPreserveFloat16 = false,
+       .shaderDenormPreserveFloat32 = false,
+-      .shaderDenormPreserveFloat64 = false,
++      /* Playport (PLA-815): float64.glsl keeps subnormals */
++      .shaderDenormPreserveFloat64 = KK_EXPERIMENTAL(SOFT_FP64),
+       .shaderDenormFlushToZeroFloat16 = false,
+       .shaderDenormFlushToZeroFloat32 = false,
+       .shaderDenormFlushToZeroFloat64 = false,
+@@ -1410,6 +1420,7 @@ kk_enumerate_physical_devices(struct vk_instance *_instance)
+    if (result != VK_SUCCESS)
+       goto fail_disk_cache;
+ 
++   simple_mtx_init(&pdev->softfp64_mtx, mtx_plain);
+    list_add(&pdev->vk.link, &instance->vk.physical_devices.list);
+ 
+    return VK_SUCCESS;
+@@ -1434,9 +1445,47 @@ kk_physical_device_destroy(struct vk_physical_device *vk_pdev)
+    kk_physical_device_free_disk_cache(pdev);
+    vk_physical_device_finish(&pdev->vk);
+    mtl_release(pdev->mtl_dev_handle);
++   ralloc_free(pdev->softfp64);
++   simple_mtx_destroy(&pdev->softfp64_mtx);
+    vk_free(&pdev->vk.instance->alloc, pdev);
+ }
+ 
++/* Playport (PLA-815): Mesa's soft-fp64 library (src/compiler/glsl/float64.glsl,
++ * built to SPIR-V with the driver) as NIR, for nir_lower_doubles; built at the
++ * first shader that needs it, as ANV's anv_ensure_fp64_shader does, since the
++ * NIR takes megabytes. */
++const nir_shader *
++kk_physical_device_softfp64(struct kk_physical_device *pdev)
++{
++   simple_mtx_lock(&pdev->softfp64_mtx);
++   if (!pdev->softfp64) {
++      const struct spirv_capabilities caps = {
++         .Addresses = true,
++         .Float64 = true,
++         .Int8 = true,
++         .Int16 = true,
++         .Int64 = true,
++         .Shader = true,
++      };
++      const struct spirv_to_nir_options options = {
++         .capabilities = &caps,
++         .environment = NIR_SPIRV_VULKAN,
++         .create_library = true,
++      };
++      nir_shader *nir = spirv_to_nir(
++         float64_spv_source, ARRAY_SIZE(float64_spv_source), NULL,
++         MESA_SHADER_COMPUTE, "main", &options, &kk_nir_options);
++      assert(nir != NULL);
++      NIR_PASS(_, nir, nir_lower_variable_initializers, nir_var_function_temp);
++      NIR_PASS(_, nir, nir_lower_returns);
++      NIR_PASS(_, nir, nir_inline_functions);
++      nir_sweep(nir);
++      pdev->softfp64 = nir;
++   }
++   simple_mtx_unlock(&pdev->softfp64_mtx);
++   return pdev->softfp64;
++}
++
+ VKAPI_ATTR void VKAPI_CALL
+ kk_GetPhysicalDeviceProperties2(VkPhysicalDevice physicalDevice,
+                                 VkPhysicalDeviceProperties2 *pProperties)
+diff --git a/src/kosmickrisp/vulkan/kk_physical_device.h b/src/kosmickrisp/vulkan/kk_physical_device.h
+index a13986a..712c540 100644
+--- a/src/kosmickrisp/vulkan/kk_physical_device.h
++++ b/src/kosmickrisp/vulkan/kk_physical_device.h
+@@ -16,12 +16,15 @@
+ #include "vk_sync.h"
+ #include "vk_sync_binary.h"
+ 
++#include "util/simple_mtx.h"
++
+ #include "wsi_common.h"
+ 
+ #include <sys/types.h>
+ 
+ struct kk_instance;
+ struct kk_physical_device;
++struct nir_shader;
+ 
+ struct kk_queue_family {
+    VkQueueFlags queue_flags;
+@@ -89,6 +92,11 @@ struct kk_physical_device {
+ 
+    struct kk_queue_family queue_families[3];
+    uint8_t queue_family_count;
++
++   /* Playport (PLA-815): MESA_KK_EXPERIMENTAL=soft_fp64's library NIR, built
++    * at the first shader with a 64-bit float (kk_physical_device_softfp64) */
++   simple_mtx_t softfp64_mtx;
++   struct nir_shader *softfp64;
+ };
+ 
+ static inline uint32_t
+@@ -109,6 +117,8 @@ kk_physical_device_instance(struct kk_physical_device *pdev)
+ 
+ VkResult kk_enumerate_physical_devices(struct vk_instance *_instance);
+ void kk_physical_device_destroy(struct vk_physical_device *vk_device);
++const struct nir_shader *
++kk_physical_device_softfp64(struct kk_physical_device *pdev);
+ 
+ #if defined(VK_USE_PLATFORM_WAYLAND_KHR) ||                                    \
+    defined(VK_USE_PLATFORM_XCB_KHR) || defined(VK_USE_PLATFORM_XLIB_KHR) ||    \
+diff --git a/src/kosmickrisp/vulkan/kk_shader.c b/src/kosmickrisp/vulkan/kk_shader.c
+index 7da02a6..39b6eb0 100644
+--- a/src/kosmickrisp/vulkan/kk_shader.c
++++ b/src/kosmickrisp/vulkan/kk_shader.c
+@@ -111,7 +111,7 @@ kk_get_spirv_options(struct vk_physical_device *vk_pdev,
+ }
+ 
+ static void
+-kk_preprocess_nir(UNUSED struct vk_physical_device *vk_pdev, nir_shader *nir,
++kk_preprocess_nir(struct vk_physical_device *vk_pdev, nir_shader *nir,
+                   UNUSED const struct vk_pipeline_robustness_state *rs)
+ {
+    /* First, before nir_shader_gather_info below, the runtime's descriptor
+@@ -129,6 +129,31 @@ kk_preprocess_nir(UNUSED struct vk_physical_device *vk_pdev, nir_shader *nir,
+ 
+    msl_preprocess_nir(nir);
+ 
++   /* Playport (PLA-815), MESA_KK_EXPERIMENTAL=soft_fp64: Metal has no double,
++    * so every 64-bit float operation becomes a call into Mesa's soft-fp64
++    * library, inlined, as ANV does (anv_shader_compile.c). Here every function
++    * is inlined and every ALU op scalar, which nir_lower_doubles needs, and
++    * nir_lower_io has not yet split 64-bit varyings. What is left is 64-bit
++    * integer code, which the MSL backend writes as long and ulong. */
++   if (KK_EXPERIMENTAL(SOFT_FP64) && (nir->info.bit_sizes_float & 64)) {
++      const nir_shader *softfp64 = kk_physical_device_softfp64(
++         container_of(vk_pdev, struct kk_physical_device, vk));
++      /* No soft routine for flrp or a fused ffma: split them first */
++      NIR_PASS(_, nir, nir_lower_flrp, 64, false);
++      NIR_PASS(_, nir, nir_opt_algebraic);
++      NIR_PASS(_, nir, nir_lower_doubles, softfp64,
++               nir->options->lower_doubles_options);
++      bool conversions = false;
++      NIR_PASS(conversions, nir, nir_lower_int64_float_conversions);
++      if (conversions) {
++         NIR_PASS(_, nir, nir_opt_algebraic);
++         NIR_PASS(_, nir, nir_lower_doubles, softfp64,
++                  nir->options->lower_doubles_options);
++      }
++      NIR_PASS(_, nir, nir_lower_vars_to_ssa);
++      NIR_PASS(_, nir, nir_opt_dce);
++   }
++
+    /* Cannot be part of msl_preprocess_nir since clc does not expose
+     * has_base_workgroup_id */
+    nir_lower_compute_system_values_options csv_options = {
+diff --git a/src/kosmickrisp/vulkan/meson.build b/src/kosmickrisp/vulkan/meson.build
+index 71e1bdc..1b5d4d0 100644
+--- a/src/kosmickrisp/vulkan/meson.build
++++ b/src/kosmickrisp/vulkan/meson.build
+@@ -119,6 +119,23 @@ kk_files = files(
+   'kk_wsi.c',
+ )
+ 
++# Playport (PLA-815): the soft-fp64 library MESA_KK_EXPERIMENTAL=soft_fp64
++# lowers 64-bit float operations to (src/intel/shaders/meson.build's rule)
++kk_float64_spv_h = custom_target(
++  'float64_spv.h',
++  input : [glsl2spirv, float64_glsl_file],
++  output : 'float64_spv.h',
++  command : [
++    prog_python, '@INPUT@', '@OUTPUT@',
++    prog_glslang,
++    '--vn', 'float64_spv_source',
++    '--glsl-version', '450',
++    '-Olib',
++    glslang_depfile,
++  ],
++  depfile : 'float64_spv.h.d',
++)
++
+ kk_entrypoints = custom_target(
+   'kk_entrypoints',
+   input : [vk_entrypoints_gen, vk_api_xml],
+@@ -153,6 +170,7 @@ libkk = static_library(
+   [
+     kk_files,
+     kk_entrypoints,
++    kk_float64_spv_h,
+     sha1_h,
+   ],
+   include_directories : [
