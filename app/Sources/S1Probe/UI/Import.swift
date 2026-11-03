@@ -13,6 +13,7 @@ import Combine
 import Foundation
 import PlayportKit
 import SteamClientKit
+import UIKit
 import UniformTypeIdentifiers
 
 @MainActor
@@ -23,7 +24,9 @@ final class GameImports: ObservableObject, DownloadDriver {
 
     /// What the picker offers: folders and zips, and executables only so that a picked
     /// installer gets an answer (installers are not run; plan 1.5, owner 2026-10-06).
-    static let contentTypes: [UTType] = [.folder, .zip] + [UTType(filenameExtension: "exe")].compactMap { $0 }
+    /// Only a declared `.exe` type: where iOS declares none it makes up a dynamic one, which the
+    /// picker is not given (issue #39).
+    static let contentTypes: [UTType] = [.folder, .zip] + [UTType(filenameExtension: "exe")].compactMap { $0 }.filter(\.isDeclared)
 
     static let pickAgain = "Pick the folder again in Add a game to continue."
 
@@ -160,6 +163,54 @@ final class GameImports: ObservableObject, DownloadDriver {
         }
         RunEvents.emit("import", o)
         #endif
+    }
+}
+
+/// Add a game's Files picker (issue #39). UIKit's own document picker, presented over the
+/// top controller. The shell's SwiftUI fileImporter, shared with the pairing file's import
+/// and given its types in the same update that presented it, came up browse-only on device:
+/// a tap on a .zip did nothing and a folder had no Open. This one has only its own types;
+/// a tap on a .zip picks it, and Open inside a folder picks the folder.
+@MainActor
+enum GamePicker {
+    /// The picker's delegate, held while it is up (the picker keeps it weakly).
+    private static var delegate: Delegate?
+
+    static func present() {
+        guard let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene })
+                  .first(where: { $0.activationState == .foregroundActive }),
+              var top = scene.keyWindow?.rootViewController else {
+            LibraryModel.log("import: picker: no window to present it from")
+            return
+        }
+        while let next = top.presentedViewController { top = next }
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: GameImports.contentTypes, asCopy: false)
+        picker.allowsMultipleSelection = false
+        picker.shouldShowFileExtensions = true
+        let d = Delegate()
+        delegate = d
+        picker.delegate = d
+        LibraryModel.log("import: picker up for \(GameImports.contentTypes.map(\.identifier).joined(separator: ", "))")
+        top.present(picker, animated: true)
+    }
+
+    private final class Delegate: NSObject, UIDocumentPickerDelegate {
+        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+            GamePicker.delegate = nil
+            guard let url = urls.first else { return }
+            LibraryModel.log("import: picked \(url.lastPathComponent)\(url.hasDirectoryPath ? " (a folder)" : "")")
+            Task { @MainActor in
+                if let refusal = await GameImports.shared.picked(url) {
+                    PadModal.shared.picker(title: "Can't import \(url.lastPathComponent)", note: refusal,
+                                           options: [PadOption(id: "ok", label: "OK")], selected: "ok") { _ in }
+                }
+            }
+        }
+
+        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+            GamePicker.delegate = nil
+            LibraryModel.log("import: picker cancelled")
+        }
     }
 }
 
