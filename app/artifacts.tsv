@@ -51,7 +51,7 @@ resource	Runtime/arm64ec-windows/advpack.dll	212992	7f5015f43d56f879b822505ef5d4
 resource	Runtime/arm64ec-windows/aero.msstyles	7667712	b9456e606d23698636901b57a25d41414e96af452010da2d07fbd1cfe9ea2422	wine-build	build-arm64ec/dlls/aero.msstyles/arm64ec-windows/aero.msstyles	P2
 resource	Runtime/arm64ec-windows/amsi.dll	163840	1e9f98a2f9d1027a7b2d6295ff58c74e54ea71b54c85fcb854deaf397b0bfcde	wine-build	build-arm64ec/dlls/amsi/arm64ec-windows/amsi.dll	P2
 resource	Runtime/arm64ec-windows/amstream.dll	540672	c1b7dcd33ffb68692cdcd68bc54f0682fe0c8c04e1d598293494d2948c3211c2	wine-build	build-arm64ec/dlls/amstream/arm64ec-windows/amstream.dll	P2
-resource	Runtime/arm64ec-windows/apisetschema.dll	196608	e7a05d4e436159bb2dea45a5216e3c2c61c45b4daf19ce8fa89033bf899b7ac5	wine-build	build-arm64ec/dlls/apisetschema/arm64ec-windows/apisetschema.dll	P2
+resource	Runtime/arm64ec-windows/apisetschema.dll	196608	aa85c441bf3858507040e8a7e6c689053ca37f4bd51bc5619ecc17c255a5018d	wine-build	build-arm64ec/dlls/apisetschema/arm64ec-windows/apisetschema.dll	P2
 resource	Runtime/arm64ec-windows/apphelp.dll	212992	9e907dd3be3d467131359c4f18e50412b3a93ffe2a7e9c8e1c8cddba3a3aaf81	wine-build	build-arm64ec/dlls/apphelp/arm64ec-windows/apphelp.dll	P2
 resource	Runtime/arm64ec-windows/appwiz.cpl	638976	363ea037ad569a26f71a6fe8492aba44573e1dfe670a972cf74c30eb2510752f	wine-build	build-arm64ec/dlls/appwiz.cpl/arm64ec-windows/appwiz.cpl	P2
 resource	Runtime/arm64ec-windows/appxdeploymentclient.dll	294912	02480129b6ccd821d38e5a7e3a2ec366712a4df61be4e2379ee6155dea2843c7	wine-build	build-arm64ec/dlls/appxdeploymentclient/arm64ec-windows/appxdeploymentclient.dll	P2
@@ -796,7 +796,7 @@ resource	Runtime/aarch64-windows/advpack.dll	163840	81965d9989eae5f4537824f3c90d
 resource	Runtime/aarch64-windows/aero.msstyles	7667712	8a59fd7481f1c18d5626ecea13fe52a35e7154b7eb6b268b8f2bd6c8953395f5	wine-build	build-macos/dlls/aero.msstyles/aarch64-windows/aero.msstyles	P2
 resource	Runtime/aarch64-windows/amsi.dll	114688	3415fba11594a066c1e4db38230012cc9deb3fc4f08a7ca91673355308b54ac5	wine-build	build-macos/dlls/amsi/aarch64-windows/amsi.dll	P2
 resource	Runtime/aarch64-windows/amstream.dll	491520	8e2ebd54c8c6f594a976abd2ea74d03872697c82cecceaaf08a78b5cd117195c	wine-build	build-macos/dlls/amstream/aarch64-windows/amstream.dll	P2
-resource	Runtime/aarch64-windows/apisetschema.dll	196608	5f7a017e7cdd97c412593e17c65a9964a2d41e76ff7b8d5255c4e21413dc3e0c	wine-build	build-macos/dlls/apisetschema/aarch64-windows/apisetschema.dll	P2
+resource	Runtime/aarch64-windows/apisetschema.dll	196608	bae3cba34a74f9f25fc475d63eac31bf7733e49d9f3b58d597f2de8dc895aef7	wine-build	build-macos/dlls/apisetschema/aarch64-windows/apisetschema.dll	P2
 resource	Runtime/aarch64-windows/apphelp.dll	147456	44ed551bc86302457b4d502898317fc8cb7d66781a520b4ce84e215ef73d5cf8	wine-build	build-macos/dlls/apphelp/aarch64-windows/apphelp.dll	P2
 resource	Runtime/aarch64-windows/appwiz.cpl	589824	3b95717d83ead87aaf9e05b50f09ed0fb85764331273ec5fbbcb95d818e14a6b	wine-build	build-macos/dlls/appwiz.cpl/aarch64-windows/appwiz.cpl	P2
 resource	Runtime/aarch64-windows/appxdeploymentclient.dll	196608	7cc046ba4262734c513077d22dae1e99a7f47594c61322d3fcd8561d06d45347	wine-build	build-macos/dlls/appxdeploymentclient/aarch64-windows/appxdeploymentclient.dll	P2
@@ -1546,7 +1546,7 @@ resource	Runtime/i386-windows/advpack.dll	90112	4c8e7a72d6206f830be53ccc93d74423
 resource	Runtime/i386-windows/aero.msstyles	7585792	d85442687f1972ab6ffd46e40f83f25d25a965c172956b5e87dfca42dd11ead7	wine-build	build-macos/dlls/aero.msstyles/i386-windows/aero.msstyles	P2
 resource	Runtime/i386-windows/amsi.dll	36864	2927a545a344a2b08112b5a55120b14b7d78ff0668c241c957de2a4936888ac9	wine-build	build-macos/dlls/amsi/i386-windows/amsi.dll	P2
 resource	Runtime/i386-windows/amstream.dll	409600	0b92846ce2741a8e7cd3e5478622f7ae500c832a096d4901aeeae2bb795cae06	wine-build	build-macos/dlls/amstream/i386-windows/amstream.dll	P2
-resource	Runtime/i386-windows/apisetschema.dll	90112	ebd18a6d620d889729da8bc8794c5f33809a14fd0ff9a462d2a8f40ab66ae880	wine-build	build-macos/dlls/apisetschema/i386-windows/apisetschema.dll	P2
+resource	Runtime/i386-windows/apisetschema.dll	90112	39f9b78acee59b652d09a34729d979860d15f47518cf5584ddc3eeabb31b853c	wine-build	build-macos/dlls/apisetschema/i386-windows/apisetschema.dll	P2
 resource	Runtime/i386-windows/apphelp.dll	81920	105117365677f4f3dd0ba207b3a9122235080078b6adf885198c5ae3c91b2d0a	wine-build	build-macos/dlls/apphelp/i386-windows/apphelp.dll	P2
 resource	Runtime/i386-windows/appwiz.cpl	516096	13b2ff767fe7484d9719fc1cf70a3424b8fc9300d525b049ccf9b971b4649cc3	wine-build	build-macos/dlls/appwiz.cpl/i386-windows/appwiz.cpl	P2
 resource	Runtime/i386-windows/appxdeploymentclient.dll	139264	beee997bfd371fa08227f719d0780703f8001c62fab4f8ba87b5ec1ba060eb87	wine-build	build-macos/dlls/appxdeploymentclient/i386-windows/appxdeploymentclient.dll	P2

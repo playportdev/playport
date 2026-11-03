@@ -1,0 +1,30 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 3 Nov 2026 07:43:35 +0100
+Subject: [PATCH] apisetschema: Add api-ms-win-core-debug-minidump-l1-1-0.
+
+DIRT 5's GDK build (game_release.exe) imports MiniDump functions through
+this contract. Windows hosts it in dbgcore.dll; Wine has no dbgcore, and
+dbghelp exports MiniDumpWriteDump and MiniDumpReadDumpStream, the
+contract's two functions. Without the entry the loader finds no DLL and
+the process ends with STATUS_DLL_NOT_FOUND before its entry point.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-11-03-dirt5-xbox-minidump-apiset.md
+Offered-upstream: no
+---
+ dlls/apisetschema/apisetschema.spec | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/dlls/apisetschema/apisetschema.spec b/dlls/apisetschema/apisetschema.spec
+index 1f40225..f0682fb 100644
+--- a/dlls/apisetschema/apisetschema.spec
++++ b/dlls/apisetschema/apisetschema.spec
+@@ -33,6 +33,7 @@ apiset api-ms-win-core-crt-l1-1-0 = msvcrt.dll
+ apiset api-ms-win-core-crt-l2-1-0 = msvcrt.dll
+ apiset api-ms-win-core-datetime-l1-1-1 = kernelbase.dll
+ apiset api-ms-win-core-debug-l1-1-1 = kernelbase.dll
++apiset api-ms-win-core-debug-minidump-l1-1-0 = dbghelp.dll
+ apiset api-ms-win-core-delayload-l1-1-1 = kernelbase.dll
+ apiset api-ms-win-core-enclave-l1-1-1 = kernelbase.dll
+ apiset api-ms-win-core-errorhandling-l1-1-3 = kernelbase.dll

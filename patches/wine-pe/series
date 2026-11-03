@@ -61,3 +61,4 @@
 0062-ntdll-log-the-first-256-of-the-remaining-exceptions-.patch
 0063-ntdll-kernel32-kernelbase-native-code-reads-KUSER_SH.patch
 0064-ntdll-find-the-module-of-an-address-in-a-builtin-s-J.patch
+0065-apisetschema-Add-api-ms-win-core-debug-minidump-l1-1.patch
