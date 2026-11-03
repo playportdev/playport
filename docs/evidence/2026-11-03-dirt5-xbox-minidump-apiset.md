@@ -83,6 +83,30 @@ the fix a copy of element 1 reads zeros, with it the buffer.
 Phone, dev IPA `083152d5641f98f3f2cb9d95593452fc341e2e4056875040292d2674ae8c891a`, capture
 `.work/gpu-runs/20261103T125747`: slot 2,933 holds a 13 MB buffer; the G-buffer pass now has
 depth on 72% of pixels and 133,944 distinct normal values. The race is still black: the
-deferred lighting compute writes +Inf (`0xfc3f07e0` in RG11B10F) into every pixel of the HDR
-target, whose clear is 0, and the tonemap turns that black. The lighting constant buffer's
-fields are finite.
+deferred lighting compute writes NaN (`0xfc3f07e0`, RG11B10F's NaN in all three channels) into
+92% of the HDR target, which held 2.6% NaN before it, and the tonemap turns that black. The
+lighting constant buffer's fields are finite.
+
+## The NaN is the scene's history
+
+Same capture. The lighting kernel's inputs, by descriptor (texture views resolved to the trace's
+textures by creation order; `gpudebug` on the Mac lists them):
+
+- a 64-byte sun buffer, written by pass 49, is NaN in the RGB of all three vec4s from the frame's
+  start to its end (w finite);
+- the fog volumes (three 48x24x96 and two 32x16x24 RGBA16F) are NaN in RGB, 58% and 100%, with
+  alpha finite; the 32x16x24 ones are rewritten this frame (command buffer 74) from the last
+  frame's;
+- 1024x1024 tables are 78.5% NaN (RG11B10F) and hold +Inf (RGBA16F); this frame does not write
+  them.
+
+All are canonical NaN (`0x7e00`, `0xfc3f07e0`), so a GPU computed them. The sun buffer's writer is
+an 8x8 reduction with a barrier between its steps, reading the sky tables; the sky and fog read
+the sun buffer: once one NaN enters, the loop keeps it. The front end's 3D background is black
+at first frame +60 s too.
+
+Ruled out on the way: `MESA_KK_SAFE_MATH=1` (Metal's safe math and precise functions) leaves the
+race black (`.work/ui-runs/20261103T132619`); Metal's `saturate`, `clamp` and
+`precise::fmin(fmax)` return 0 for NaN under each of KosmicKrisp's library math options (a Metal
+probe on an M1 Pro, not the phone's GPU). The FP64 shader soft-FP64 lowers writes
+`clamp(sum, 0, 1)` into a 128x128 image, not these tables.
