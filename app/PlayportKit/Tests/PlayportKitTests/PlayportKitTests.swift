@@ -450,6 +450,22 @@ final class CatalogTests: XCTestCase {
         XCTAssertEqual(c.titles.first { $0.installDir == "Plain" }?.executable, "Plain.exe", "only the project's own shipping executable")
     }
 
+    func testAdoptionStartsTheShippingExecutableWhenSteamNamesAnUnrealBootstrap() throws {
+        let cohort = try Cohort.load(directory: titlesDir)
+        // Silent Hill 2: Steam's launch entry is SHProto.exe, the bootstrap.
+        try file("SILENT HILL 2/SHProto.exe")
+        try file("SILENT HILL 2/SHProto/Binaries/Win64/SHProto-Win64-Shipping.exe")
+        var sh2 = try receipt(app: 2124490, dir: "SILENT HILL 2")
+        sh2.executable = "SHProto.exe"
+        // No shipping executable beside it: Steam's entry as it is.
+        try file("Lone/Lone.exe")
+        var lone = try receipt(app: 501, dir: "Lone")
+        lone.executable = "Lone.exe"
+        let c = Adoption.scan(games: games, cohort: cohort, receipts: [sh2, lone], previous: Catalog())
+        XCTAssertEqual(c.title(id: "app-2124490")?.executable, #"SHProto\Binaries\Win64\SHProto-Win64-Shipping.exe"#)
+        XCTAssertEqual(c.title(id: "app-501")?.executable, "Lone.exe")
+    }
+
     func testAdoptionKeepsSettingsAndDropsVanishedTitles() throws {
         let cohort = try Cohort.load(directory: titlesDir)
         try file("Hollow Knight/hollow_knight.exe")
