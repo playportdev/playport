@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 
-/// The fixed product list (decision 0174): World of Warcraft retail and its Classic products, by
+/// The fixed product list (decision 0174): World of Warcraft retail, Classic and Forever, by
 /// their TACT product code. Other Battle.net products are never asked for.
 public enum BattleNetProduct: String, CaseIterable, Sendable, Codable {
     case wow
     case wowClassic = "wow_classic"
     case wowClassicEra = "wow_classic_era"
     case wowAnniversary = "wow_anniversary"
+    case wowForever = "wowf"
 
     /// The TACT product code (`wow_classic_era`), also the store game ID.
     public var code: String { rawValue }
@@ -18,6 +19,7 @@ public enum BattleNetProduct: String, CaseIterable, Sendable, Codable {
         case .wowClassic: return "World of Warcraft Classic"
         case .wowClassicEra: return "World of Warcraft Classic Era"
         case .wowAnniversary: return "World of Warcraft Classic Anniversary"
+        case .wowForever: return "World of Warcraft: Forever"
         }
     }
 
