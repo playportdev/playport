@@ -26,6 +26,17 @@ final class BattleNetStoreTests: XCTestCase {
         XCTAssertEqual(LibraryList.shown(entries, filter: .battlenet, sort: .name).map(\.id), ["bnet-wow_classic_era"])
     }
 
+    func testForeverHasItsOwnLiveProductIdentity() {
+        XCTAssertEqual(BattleNetProduct.wowForever.code, "wowf")
+        XCTAssertEqual(BattleNetProduct.wowForever.name, "World of Warcraft: Forever")
+        XCTAssertEqual(BattleNet.key(.wowForever).titleID, "bnet-wowf")
+        XCTAssertEqual(BattleNet.product(StoreGameKey(store: .battlenet, id: "wowf")), .wowForever)
+        let shown = BattleNet.shown([BattleNetListing(product: .wowForever, region: .us, version: "1.60.1", offered: true)])
+        XCTAssertEqual(shown.map(\.key.titleID), ["bnet-wowf"])
+        XCTAssertEqual(shown.map(\.name), ["World of Warcraft: Forever"])
+        XCTAssertEqual(BattleNet.shown([BattleNetListing(product: .wowForever, region: .us, version: "1.60.1", offered: false)]), [])
+    }
+
     func testOfferedProductsShowUnderTheBattleNetChipAndInAll() {
         var installed = InstalledTitle(id: "bnet-wow", appID: nil, name: "World of Warcraft", developer: nil, installDir: "World of Warcraft",
                                        executable: #"_retail_\Wow-ARM64.exe"#, buildID: nil, depots: [], sizeBytes: 1, source: .installed,
