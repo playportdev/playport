@@ -196,3 +196,31 @@ network only). A RenderDoc reference of the same event on a Direct3D 12 renderer
 needs the Xodus Nexus workstation setup from 2026-10-30, which is no longer on
 disk (only its licence notices are).
 
+
+### A typed image store is not where the Inf lives
+
+The default flush runs on a fragment shader's colour output. The 1024x1024
+RGBA16F table a frame carries holds Inf (the intro capture's copy,
+`.work/gpu-runs/20261110T220133`: `(1, inf, inf, 0)` at one sampled texel,
+152,649 texels with Inf), and no fragment pass of the captured frame writes it,
+so 0150 was extended to flush a typed image store too, in every stage but
+fragment (`kk_lower_nir`). Phone, dev IPA
+`00b05fbe202fa904c2e8d8a997e39aba4203ed59fdf2339e41c518a92460e5d3` (98 IPA
+checks): the race's start line draws the same black sprites and the same white
+sky (`.work/scratch/pla815a/imagestore3.png`, 1.95 s into the race, the
+confetti burst). The extension is reverted rather than shipped: it costs an
+Inf/NaN test on every float image store and nothing visible came of it.
+
+Neither table dump is trustworthy yet either. Both the RGBA16F and the RG11B10F
+1024x1024 tables decode as stripes at every row pitch the readers try
+(`.work/gpu-runs/20261110T220133/tab*/`), so the "15 % Inf" above and the
+"78.5 % NaN" of 2026-11-03 may be artefacts of the layout guess, not the
+tables' contents.
+
+Last, the MacBook (cabled phone, 172 GB free, Xcode 27.2, gpudebug 1.0) went off
+the network at 23:45 while Xcode's GPU tools agent was still not up: `open -a
+Xcode`, a hidden launch, a GUI-session `launchctl asuser` launch and waiting
+minutes each left `gpucapture --list-devices` at "Remote device browsing
+requires Xcode to be running", so it is a person's step: open Xcode and Window ›
+Devices and Simulators once with the phone shown.
+
