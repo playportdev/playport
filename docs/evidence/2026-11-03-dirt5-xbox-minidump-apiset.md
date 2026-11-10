@@ -137,3 +137,62 @@ compile) and the manual route's screenshots
 HUD; 14 FPS at thermal Serious, not a measurement) and `zero-hub.png` (the garage
 with its colors, under Video Options). The black scene is gone. The race was not
 driven: the car stands at the start line.
+
+## 2026-11-10, after the clamp: the sprites that go black are the flush's zero
+
+The scene now renders, and two things in it are still wrong: the event's confetti,
+spray and dust sprites draw as dark shapes at the race start and in the event
+intro, and the sky of that event ("afternoon, cloudy") is a flat over-bright
+white. Both look the same at Image Quality Ultra Low, Medium and High (the preset
+was raised and lowered on the phone during the test), so neither is the low-quality
+path.
+
+**The sprites' colour is exactly what the clamp writes.** In the intro at Medium
+(`.work/scratch/pla815a/q6.png`) the water behind a sprite is `(196,175,169)` and
+the sprite is `(56,47,50)`: every channel is the background times `(1 - 0.71)`,
+so the sprite's own colour is 0 with alpha 0.71, not a dark texture. A
+premultiplied or straight alpha blend of a zero source over that water gives those
+three numbers, so the sprite's *colour output* is the 0 the flush writes for NaN or
+Inf, while its *alpha* survives (the flush is per component). On the race's start
+line (`.work/scratch/pla815a/s16.png`, Ultra Low) the same sprites cover the road
+as a black mass. What produces the NaN in the colour and not in the alpha is still
+unknown: the particle pass reads its per-instance data and its lighting from
+compute-written buffers, and those are not flushed.
+
+**Keeping Inf and NaN in the IEEE targets is not the answer.** `patches/mesa` 0150
+now takes the flush's value and scope from the title's Graphics options
+(`MESA_KK_CLAMP_FLOAT_OUTPUT=zero|max|none` and
+`MESA_KK_CLAMP_FLOAT_OUTPUT_KEEP_IEEE=1`, a diagnostic default that keeps the
+current behaviour). Phone, dev IPA
+`91566575f996f8db39aa378d1613d2f29d7ad0abaf31cf4877937dd9106a7f8d`, one route to
+the same start line with `MESA_KK_CLAMP_FLOAT_OUTPUT_KEEP_IEEE=1` (only
+R11G11B10F and R9G9B9E5 convert, RGBA16F keeps whatever the shader wrote):
+`.work/scratch/pla815a/keepieee3.png` shows the race with large black regions on
+its right half — the `Inf * 0` NaN that started this is back, so the game *is*
+written for a store conversion that turns Inf and NaN into 0 in RGBA16F too, and
+the default stands. `MESA_KK_DEBUG=os26_workarounds` (every iOS 27 workaround back
+on) changes neither the sprites nor the sky (`os26-race2.png`,
+`os26-intro.png`, 6 FPS: the workarounds cost that much).
+
+**The frames.** Two captures of the current build, read with `pp gpu read`:
+`.work/gpu-runs/20261110T212655` (race, frame 5600: 54 command buffers, 116
+passes, 3018 draws) and `.work/gpu-runs/20261110T220133` (event intro, frame
+4200, `MESA_KK_DEBUG=no_compression`: 102 command buffers, 161 passes, 3337
+draws). The renderer's shape is a depth prepass, an `RGBA16F 1564x720` colour
+pass, four `640x320 RG11B10F` passes with depth, a full-resolution
+`RG11B10F` pass with depth (the decals), the HUD and a fullscreen tonemap.
+
+**Where this stops.** The colour targets cannot be read out of these traces from
+the workstation: `tools/gputrace.py` and `.work/scratch/rtdump.py` see every
+`MTLHeap-231150-*` alias for the `RGBA16F` target's heap resolve to one 9.4 MB
+zeroed file, and the `RG11B10F` target decodes as stripes at every row pitch they
+try, so the iOS 27.2 / Metal 4 bundle's snapshot naming and pitch need fixing
+first. Apple's own reader cannot stand in yet either: the MacBook (macOS 27.2,
+Xcode 27.2, `gpudebug` 1.0) replays an A19 Pro trace only on the phone, the M1 Pro
+reports "GPU address range, argument buffer internal format" as incompatible, and
+`gpucapture --list-devices` needs Xcode's GPU tools agent, which starts only with
+the phone cabled and trusted by that Mac (`xcrun devicectl` sees it over the
+network only). A RenderDoc reference of the same event on a Direct3D 12 renderer
+needs the Xodus Nexus workstation setup from 2026-10-30, which is no longer on
+disk (only its licence notices are).
+

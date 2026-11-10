@@ -1,4 +1,4 @@
-From 32660a2de8a0ae9d8934d1d76c945e013a18ba10 Mon Sep 17 00:00:00 2001
+From 4dd4e29770d1e366982539ab4fb5919c7ce2b221 Mon Sep 17 00:00:00 2001
 From: The Playport authors <dev@playport.dev>
 Date: Tue, 10 Nov 2026 19:47:07 +0100
 Subject: [PATCH] kk: MESA_KK_EXPERIMENTAL=clamp_float_output flushes Inf and
@@ -14,30 +14,87 @@ Offered-upstream: no
 
 Generated-by: LLM
 ---
- .../compiler/msl_nir_lower_common.c           | 47 +++++++++++++++++++
- src/kosmickrisp/compiler/nir_to_msl.h         |  3 ++
- src/kosmickrisp/vulkan/kk_debug.c             |  1 +
- src/kosmickrisp/vulkan/kk_debug.h             |  7 +++
- src/kosmickrisp/vulkan/kk_shader.c            |  2 +
- 5 files changed, 60 insertions(+)
+ .../compiler/msl_nir_lower_common.c           | 114 ++++++++++++++++++
+ src/kosmickrisp/compiler/nir_to_msl.h         |   3 +
+ src/kosmickrisp/vulkan/kk_debug.c             |   1 +
+ src/kosmickrisp/vulkan/kk_debug.h             |   7 ++
+ src/kosmickrisp/vulkan/kk_shader.c            |   2 +
+ 5 files changed, 127 insertions(+)
 
 diff --git a/src/kosmickrisp/compiler/msl_nir_lower_common.c b/src/kosmickrisp/compiler/msl_nir_lower_common.c
-index 9c84d2f..47ff591 100644
+index 9c84d2f..1045ce5 100644
 --- a/src/kosmickrisp/compiler/msl_nir_lower_common.c
 +++ b/src/kosmickrisp/compiler/msl_nir_lower_common.c
-@@ -6,6 +6,8 @@
+@@ -6,6 +6,12 @@
  #include "msl_private.h"
  #include "nir_to_msl.h"
  
++#include <float.h>
 +#include <math.h>
++#include <string.h>
++
++#include "util/u_debug.h"
 +
  #include "nir.h"
  #include "nir_builder.h"
  #include "nir_builtin_builder.h"
-@@ -123,6 +125,51 @@ msl_nir_fs_force_output_signedness(
+@@ -123,6 +129,114 @@ msl_nir_fs_force_output_signedness(
                                       render_target_formats);
  }
  
++/* Playport (PLA-815): what a float colour output that is Inf or NaN becomes,
++ * and which targets it applies to. D3D12's render target conversion of Inf and
++ * NaN is only defined for a format that can hold them: R11G11B10F and R9G9B9E5
++ * have no encoding for either, while an IEEE half/float target stores what the
++ * shader wrote. These are experiments, named in the title's Graphics options:
++ *
++ *   MESA_KK_CLAMP_FLOAT_OUTPUT=zero   Inf/NaN become 0 (the default: the value
++ *                                     D3D12 is taken to store, and the one
++ *                                     DIRT 5's race renders right with)
++ *   MESA_KK_CLAMP_FLOAT_OUTPUT=max    Inf/NaN become the format's largest
++ *                                     finite value
++ *   MESA_KK_CLAMP_FLOAT_OUTPUT=none   the store keeps what the shader wrote
++ *   MESA_KK_CLAMP_FLOAT_OUTPUT_KEEP_IEEE=1
++ *                                     only a format without an Inf/NaN
++ *                                     encoding converts; an IEEE target keeps
++ *                                     the shader's Inf and NaN
++ */
++enum clamp_float_output_mode {
++   CLAMP_FLOAT_OUTPUT_ZERO,
++   CLAMP_FLOAT_OUTPUT_MAX,
++   CLAMP_FLOAT_OUTPUT_NONE,
++};
++
++static enum clamp_float_output_mode
++clamp_float_output_mode(void)
++{
++   static int mode = -1;
++   if (mode < 0) {
++      const char *opt = debug_get_option("MESA_KK_CLAMP_FLOAT_OUTPUT", "zero");
++      mode = strcmp(opt, "none") == 0 ? CLAMP_FLOAT_OUTPUT_NONE
++           : strcmp(opt, "max") == 0  ? CLAMP_FLOAT_OUTPUT_MAX
++                                      : CLAMP_FLOAT_OUTPUT_ZERO;
++   }
++   return (enum clamp_float_output_mode)mode;
++}
++
++/* A target whose format has no encoding for Inf or NaN, so a store of one has
++ * to become a finite value. */
++static bool
++format_has_no_inf_or_nan(enum pipe_format format)
++{
++   return format == PIPE_FORMAT_R11G11B10_FLOAT ||
++          format == PIPE_FORMAT_R9G9B9E5_FLOAT;
++}
++
++static float
++format_largest_finite(enum pipe_format format, unsigned bit_size)
++{
++   if (format == PIPE_FORMAT_R11G11B10_FLOAT)
++      return 65024.0f;
++   return bit_size == 16 ? 65504.0f : FLT_MAX;
++}
++
 +static bool
 +fs_clamp_float_output(nir_builder *b, nir_intrinsic_instr *intrin, void *data)
 +{
@@ -54,22 +111,32 @@ index 9c84d2f..47ff591 100644
 +   if (!util_format_is_float(format))
 +      return false;
 +
++   enum clamp_float_output_mode mode = clamp_float_output_mode();
++   if (mode == CLAMP_FLOAT_OUTPUT_NONE)
++      return false;
++   if (debug_get_bool_option("MESA_KK_CLAMP_FLOAT_OUTPUT_KEEP_IEEE", false) &&
++       !format_has_no_inf_or_nan(format))
++      return false;
++
 +   nir_def *value = intrin->src[0].ssa;
 +   if (!(nir_intrinsic_src_type(intrin) & nir_type_float) ||
 +       (value->bit_size != 16 && value->bit_size != 32))
 +      return false;
 +
-+   /* Playport (PLA-815): D3D12's render target conversion flushes a shader's
-+    * Inf or NaN to 0, the format's invalid value; Metal keeps them. A game's
-+    * next shader that multiplies such a value by 0 then makes a NaN (DIRT 5's
-+    * sky table from its transmittance table), and a kept Inf lights the scene
-+    * to white. Map both to 0 here, where the format is known. */
 +   b->cursor = nir_before_instr(&intrin->instr);
 +   nir_def *nan = nir_fneu(b, value, value);
 +   nir_def *inf = nir_fge(b, nir_fabs(b, value),
 +                          nir_imm_floatN_t(b, INFINITY, value->bit_size));
-+   nir_def *zero = nir_imm_zero(b, value->num_components, value->bit_size);
-+   nir_def *clamped = nir_bcsel(b, nir_ior(b, nan, inf), zero, value);
++   nir_def *replacement;
++   if (mode == CLAMP_FLOAT_OUTPUT_MAX) {
++      nir_def *one = nir_imm_floatN_t(
++         b, format_largest_finite(format, value->bit_size), value->bit_size);
++      nir_def *comps[NIR_MAX_VEC_COMPONENTS] = {one, one, one, one};
++      replacement = nir_vec(b, comps, value->num_components);
++   } else {
++      replacement = nir_imm_zero(b, value->num_components, value->bit_size);
++   }
++   nir_def *clamped = nir_bcsel(b, nir_ior(b, nan, inf), replacement, value);
 +   nir_src_rewrite(&intrin->src[0], clamped);
 +   return true;
 +}
