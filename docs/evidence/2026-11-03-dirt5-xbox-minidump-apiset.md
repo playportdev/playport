@@ -110,3 +110,30 @@ race black (`.work/ui-runs/20261103T132619`); Metal's `saturate`, `clamp` and
 `precise::fmin(fmax)` return 0 for NaN under each of KosmicKrisp's library math options (a Metal
 probe on an M1 Pro, not the phone's GPU). The FP64 shader soft-FP64 lowers writes
 `clamp(sum, 0, 1)` into a 128x128 image, not these tables.
+
+## 2026-11-10: the tables hold Inf and NaN, and D3D12's store writes 0
+
+The same race capture's 1024x1024 RGBA16F table holds +Inf and the RG11B10F one
+`0xfc3f07e0`, the NaN a Metal store writes for a NaN. The game's shaders produce
+those values; the deferred lighting reads the +Inf through a multiply by 0, which is
+NaN, and the tonemap draws the race black.
+
+Metal keeps them. Probes on the Mac (M1 Pro, `.work/scratch/rg11/`): an RGBA16F and
+an RG11B10F render target store `Inf` as `0x7c00`/`0xf83e07c0` and NaN as
+`0x7e00`/`0xfc3f07e0`, and a finite overflow clamps to the format's max; a compute
+store of Inf to RGBA16F clamps to the max finite. D3D12's render target conversion
+writes 0 for those Inf and NaN values: clamping them to the format maximum (65504) left
+the garage and the race white, but 0 gave the garage its colors and the race its track.
+
+`patches/mesa` 0150 adds `MESA_KK_EXPERIMENTAL=clamp_float_output`: in the
+format-aware fragment output pass that already converts the output type, a float color
+output that is Inf or NaN becomes 0. DIRT 5's compatibility entry sets
+`soft_fp64,clamp_float_output`.
+
+Phone, dev IPA `e4afe761d12b95594a031b58586ec53a37720f3df5335b35be89c76a793d43fb`,
+plays `.work/ui-runs/20261110T202401` (first frame at +68.13 s, the new shaders'
+compile) and the manual route's screenshots
+`.work/ui-runs/dirt5-fix/zero-race6.png` (the race's car, track, bridge, puddles and
+HUD; 14 FPS at thermal Serious, not a measurement) and `zero-hub.png` (the garage
+with its colors, under Video Options). The black scene is gone. The race was not
+driven: the car stands at the start line.

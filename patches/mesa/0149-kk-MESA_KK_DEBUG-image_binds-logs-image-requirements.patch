@@ -1,0 +1,95 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 3 Nov 2026 15:22:22 +0100
+Subject: [PATCH] kk: MESA_KK_DEBUG=image_binds logs image requirements and
+ plane binds
+
+Each image's memory requirements ([kk-req]: extent, format, mips, layers,
+usage, size, alignment) and each plane bind ([kk-bind]: the memory, its
+size, the offset asked for and the offset bound after kk_image_plane_bind
+rounds it up to the plane's alignment, marked MOVED when they differ, and
+the size the plane takes).
+
+DIRT 5's shadow depth map and an RG11B10F mip chain end up in the same
+Metal heap memory, 640 KiB apart, with and without vkd3d-proton's
+placed_depth_committed: these lines say whether vkd3d-proton asked for
+that or the bind moved a plane.
+
+Linear: PLA-815
+Class: diagnostics
+Evidence: docs/evidence/2026-11-03-dirt5-xbox-minidump-apiset.md
+Offered-upstream: no
+---
+ src/kosmickrisp/vulkan/kk_debug.c |  1 +
+ src/kosmickrisp/vulkan/kk_debug.h |  4 ++++
+ src/kosmickrisp/vulkan/kk_image.c | 22 ++++++++++++++++++++++
+ 3 files changed, 27 insertions(+)
+
+diff --git a/src/kosmickrisp/vulkan/kk_debug.c b/src/kosmickrisp/vulkan/kk_debug.c
+index 3f37260..708f9c9 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.c
++++ b/src/kosmickrisp/vulkan/kk_debug.c
+@@ -35,6 +35,7 @@ const struct debug_named_value debug_flags[] = {
+    {"descriptor_stats", KK_DEBUG_DESCRIPTOR_STATS},
+    {"no_compression", KK_DEBUG_NO_COMPRESSION},
+    {"null_desc", KK_DEBUG_NULL_DESC},
++   {"image_binds", KK_DEBUG_IMAGE_BINDS},
+    {NULL, 0},
+ };
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_debug.h b/src/kosmickrisp/vulkan/kk_debug.h
+index 430ff49..6ba0779 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.h
++++ b/src/kosmickrisp/vulkan/kk_debug.h
+@@ -75,6 +75,10 @@ enum kk_debug {
+    /* Playport (PLA-815): log a descriptor write or copy that leaves a
+     * descriptor all zero, the first 200 (kk_desc_trace) */
+    KK_DEBUG_NULL_DESC = 1ull << 18,
++   /* Playport (PLA-815): log every image's memory requirements and every
++    * plane bind: the offset asked for, the offset bound after alignment,
++    * and the size and alignment the plane takes (kk_image.c) */
++   KK_DEBUG_IMAGE_BINDS = 1ull << 19,
+ };
+ 
+ extern enum kk_debug kk_mesa_debug_flags;
+diff --git a/src/kosmickrisp/vulkan/kk_image.c b/src/kosmickrisp/vulkan/kk_image.c
+index 0bf5735..93488df 100644
+--- a/src/kosmickrisp/vulkan/kk_image.c
++++ b/src/kosmickrisp/vulkan/kk_image.c
+@@ -795,6 +795,13 @@ kk_get_image_memory_requirements(struct kk_device *dev, struct kk_image *image,
+    pMemoryRequirements->memoryRequirements.memoryTypeBits = memory_types;
+    pMemoryRequirements->memoryRequirements.alignment = align_B;
+    pMemoryRequirements->memoryRequirements.size = size_B;
++   if (KK_DEBUG(IMAGE_BINDS)) {
++      fprintf(stderr, "[kk-req] %ux%ux%u fmt=%u mips=%u layers=%u usage=%#x size=%llu align=%u\n",
++              image->vk.extent.width, image->vk.extent.height,
++              image->vk.extent.depth, (unsigned)image->vk.format,
++              image->vk.mip_levels, image->vk.array_layers,
++              (unsigned)image->vk.usage, (unsigned long long)size_B, align_B);
++   }
+ 
+    vk_foreach_struct(sType, ext, pMemoryRequirements->pNext) {
+       switch (sType) {
+@@ -958,7 +965,22 @@ kk_image_plane_bind(struct kk_device *dev, struct kk_image *image,
+    uint64_t plane_size_B, plane_align_B;
+    kk_image_plane_size_align_B(dev, image, plane, &plane_size_B,
+                                &plane_align_B);
++   const uint64_t asked_B = *offset_B;
+    *offset_B = align64(*offset_B, plane_align_B);
++   if (KK_DEBUG(IMAGE_BINDS)) {
++      fprintf(stderr,
++              "[kk-bind] %ux%ux%u fmt=%u mips=%u layers=%u usage=%#x mem=%p "
++              "mem_size=%llu asked=%llu bound=%llu size=%llu align=%llu%s\n",
++              image->vk.extent.width, image->vk.extent.height,
++              image->vk.extent.depth, (unsigned)image->vk.format,
++              image->vk.mip_levels, image->vk.array_layers,
++              (unsigned)image->vk.usage, (void *)mem,
++              (unsigned long long)mem->bo->size_B,
++              (unsigned long long)asked_B, (unsigned long long)*offset_B,
++              (unsigned long long)plane_size_B,
++              (unsigned long long)plane_align_B,
++              asked_B != *offset_B ? " MOVED" : "");
++   }
+ 
+    assert(plane->layout.linear || mem->bo->mtl_handle);
+ 

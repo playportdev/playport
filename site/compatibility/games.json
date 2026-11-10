@@ -1,6 +1,6 @@
 {
   "comment": "Playport's public compatibility list, shown by site/compatibility/index.html: each title's status from Linear project Compatibility (team PLA), with Works and Playable with issues both shown as runs. Keep entries sorted by name; tools/tests/test_compat_site.py checks the format.",
-  "updated": "2026-11-02",
+  "updated": "2026-11-10",
   "games": [
     {
       "name": "#DRIVE Rally",
@@ -179,6 +179,12 @@
       "name": "DiRT 3 Complete Edition",
       "store": "steam",
       "id": "321040",
+      "status": "runs"
+    },
+    {
+      "name": "DIRT 5",
+      "store": "xbox",
+      "id": "9PJGM0T0827V",
       "status": "runs"
     },
     {

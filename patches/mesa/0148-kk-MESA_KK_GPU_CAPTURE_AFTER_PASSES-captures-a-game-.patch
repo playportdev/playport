@@ -1,0 +1,125 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 3 Nov 2026 14:31:35 +0100
+Subject: [PATCH] kk: MESA_KK_GPU_CAPTURE_AFTER_PASSES captures a game's first
+ 3D frame
+
+With a GPU capture armed (MESA_KK_GPU_CAPTURE_FRAME), N captures the frame
+after the first one that began more than N render passes, whatever its
+number: a game's first frame past its loading and title screens, which a
+frame number cannot name when the title screen waits for a button.
+
+DIRT 5 shows 14 render passes a frame at 60 FPS on its title screen for as
+long as nobody presses a button, and its sky and fog tables are NaN by
+the main menu (119 passes): the frame where they turn NaN is among the
+first of its 3D.
+
+Linear: PLA-815
+Class: diagnostics
+Evidence: docs/evidence/2026-11-03-dirt5-xbox-minidump-apiset.md
+Offered-upstream: no
+---
+ src/kosmickrisp/vulkan/kk_cmd_draw.c |  2 ++
+ src/kosmickrisp/vulkan/kk_debug.c    |  4 ++++
+ src/kosmickrisp/vulkan/kk_debug.h    |  9 +++++++++
+ src/kosmickrisp/vulkan/kk_queue.c    | 14 ++++++++++++++
+ src/kosmickrisp/vulkan/kk_queue.h    |  4 +++-
+ 5 files changed, 32 insertions(+), 1 deletion(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_draw.c b/src/kosmickrisp/vulkan/kk_cmd_draw.c
+index 9be824a..c60296c 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_draw.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_draw.c
+@@ -265,6 +265,8 @@ kk_CmdBeginRendering(VkCommandBuffer commandBuffer,
+ 
+    if (KK_DEBUG(GPU))
+       p_atomic_inc(&kk_gpu_passes);
++   if (kk_capture_after_passes)
++      p_atomic_inc(&kk_capture_frame_passes);
+    KK_PASS_STAT(PASSES);
+ 
+    struct kk_rendering_state *render = &cmd->state.gfx.render;
+diff --git a/src/kosmickrisp/vulkan/kk_debug.c b/src/kosmickrisp/vulkan/kk_debug.c
+index 4706f99..3f37260 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.c
++++ b/src/kosmickrisp/vulkan/kk_debug.c
+@@ -48,6 +48,8 @@ int kk_frame_probe_s = 0;
+ 
+ uint32_t kk_watch_desc[16];
+ uint32_t kk_watch_desc_count = 0;
++uint32_t kk_capture_after_passes = 0;
++uint32_t kk_capture_frame_passes = 0;
+ 
+ const struct debug_named_value experimental_flags[] = {
+    {"all", UINT64_MAX},
+@@ -164,6 +166,8 @@ kk_process_debug_variable(void)
+       kk_watch_desc[kk_watch_desc_count++] = (uint32_t)v;
+       watch = *end == ',' ? end + 1 : end;
+    }
++   kk_capture_after_passes =
++      debug_get_num_option("MESA_KK_GPU_CAPTURE_AFTER_PASSES", 0);
+ }
+ 
+ uint32_t kk_pass_stats[KK_PASS_STAT_COUNT];
+diff --git a/src/kosmickrisp/vulkan/kk_debug.h b/src/kosmickrisp/vulkan/kk_debug.h
+index 76d58f7..430ff49 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.h
++++ b/src/kosmickrisp/vulkan/kk_debug.h
+@@ -84,6 +84,15 @@ extern enum kk_debug kk_mesa_debug_flags;
+ extern uint32_t kk_watch_desc[16];
+ extern uint32_t kk_watch_desc_count;
+ 
++/* Playport (PLA-815): MESA_KK_GPU_CAPTURE_AFTER_PASSES=N, with a GPU capture
++ * armed (MESA_KK_GPU_CAPTURE_FRAME), captures the frame after the first one
++ * that begins more than N render passes instead of frame MESA_KK_GPU_CAPTURE_
++ * FRAME: a game's first frame of 3D after its loading or title screens,
++ * whenever a player gets there (kk_queue_capture_frame). Render passes begun
++ * since the last present. */
++extern uint32_t kk_capture_after_passes;
++extern uint32_t kk_capture_frame_passes;
++
+ /* Counters [kk-gpu] logs with KK_DEBUG(GPU) and clears each line: command
+  * buffer begins, those with ONE_TIME_SUBMIT, render passes begun, and Metal
+  * depth/stencil states compiled for dynamic state (kk_gpu_log). */
+diff --git a/src/kosmickrisp/vulkan/kk_queue.c b/src/kosmickrisp/vulkan/kk_queue.c
+index e5ef050..f0b19c4 100644
+--- a/src/kosmickrisp/vulkan/kk_queue.c
++++ b/src/kosmickrisp/vulkan/kk_queue.c
+@@ -343,6 +343,20 @@ kk_queue_capture_frame(struct kk_queue *queue, bool presented)
+       return;
+    if (presented)
+       queue->presents++;
++   if (kk_capture_after_passes) {
++      if (presented && !queue->capture_frame) {
++         uint32_t passes = p_atomic_xchg(&kk_capture_frame_passes, 0u);
++         if (passes > kk_capture_after_passes) {
++            queue->capture_frame = queue->presents + 1u;
++            fprintf(stderr, "[kk] present %u began %u render passes (more than %u): capturing frame %u\n",
++                    queue->presents, passes, kk_capture_after_passes, queue->capture_frame);
++            fflush(stderr);
++         }
++      }
++      frame = queue->capture_frame;
++      if (!frame)
++         return;
++   }
+    if (!queue->capturing && queue->presents == frame - 1u && !presented) {
+       const char *dir = debug_get_option("MESA_KK_GPU_CAPTURE_DIRECTORY", ".");
+       char path[1024];
+diff --git a/src/kosmickrisp/vulkan/kk_queue.h b/src/kosmickrisp/vulkan/kk_queue.h
+index 504b542..57b4dfe 100644
+--- a/src/kosmickrisp/vulkan/kk_queue.h
++++ b/src/kosmickrisp/vulkan/kk_queue.h
+@@ -33,9 +33,11 @@ struct kk_queue {
+    cnd_t cond;
+ 
+    /* Presents submitted so far, and whether a one-frame GPU capture
+-    * (MESA_KK_GPU_CAPTURE_FRAME) is running. */
++    * (MESA_KK_GPU_CAPTURE_FRAME) is running; with
++    * MESA_KK_GPU_CAPTURE_AFTER_PASSES, the frame chosen (0: none yet). */
+    uint32_t presents;
+    bool capturing;
++   uint32_t capture_frame;
+ 
+    bool pass_prof_enabled;
+    uint32_t pass_prof_presents;

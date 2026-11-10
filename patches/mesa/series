@@ -117,3 +117,6 @@
 0145-kk-MESA_KK_DEBUG-no_compression-keeps-every-image-s-.patch
 0146-kk-MESA_KK_DEBUG-null_desc-and-MESA_KK_WATCH_DESC-tr.patch
 0147-kk-a-descriptor-write-stays-in-its-element.patch
+0148-kk-MESA_KK_GPU_CAPTURE_AFTER_PASSES-captures-a-game-.patch
+0149-kk-MESA_KK_DEBUG-image_binds-logs-image-requirements.patch
+0150-kk-MESA_KK_EXPERIMENTAL-clamp_float_output-clamps-a.patch

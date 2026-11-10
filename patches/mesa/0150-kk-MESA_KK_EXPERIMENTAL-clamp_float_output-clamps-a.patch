@@ -1,0 +1,148 @@
+From 32660a2de8a0ae9d8934d1d76c945e013a18ba10 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 10 Nov 2026 19:47:07 +0100
+Subject: [PATCH] kk: MESA_KK_EXPERIMENTAL=clamp_float_output flushes Inf and
+ NaN to 0
+
+DIRT 5 writes Inf and NaN into 1024x1024 sky and transmittance tables. D3D12 flushes them to 0, the format invalid value; Metal keeps them, and the next shader that multiplies one by 0 makes a NaN that turns the race black (a kept Inf lights it white). With clamp_float_output, a float color output that is Inf or NaN becomes 0 in the format-aware fragment pass that already converts the output type.
+
+Class: feature
+
+Evidence: docs/evidence/2026-11-03-dirt5-xbox-minidump-apiset.md
+
+Offered-upstream: no
+
+Generated-by: LLM
+---
+ .../compiler/msl_nir_lower_common.c           | 47 +++++++++++++++++++
+ src/kosmickrisp/compiler/nir_to_msl.h         |  3 ++
+ src/kosmickrisp/vulkan/kk_debug.c             |  1 +
+ src/kosmickrisp/vulkan/kk_debug.h             |  7 +++
+ src/kosmickrisp/vulkan/kk_shader.c            |  2 +
+ 5 files changed, 60 insertions(+)
+
+diff --git a/src/kosmickrisp/compiler/msl_nir_lower_common.c b/src/kosmickrisp/compiler/msl_nir_lower_common.c
+index 9c84d2f..47ff591 100644
+--- a/src/kosmickrisp/compiler/msl_nir_lower_common.c
++++ b/src/kosmickrisp/compiler/msl_nir_lower_common.c
+@@ -6,6 +6,8 @@
+ #include "msl_private.h"
+ #include "nir_to_msl.h"
+ 
++#include <math.h>
++
+ #include "nir.h"
+ #include "nir_builder.h"
+ #include "nir_builtin_builder.h"
+@@ -123,6 +125,51 @@ msl_nir_fs_force_output_signedness(
+                                      render_target_formats);
+ }
+ 
++static bool
++fs_clamp_float_output(nir_builder *b, nir_intrinsic_instr *intrin, void *data)
++{
++   if (intrin->intrinsic != nir_intrinsic_store_output)
++      return false;
++
++   nir_io_semantics io = nir_intrinsic_io_semantics(intrin);
++   if (io.location < FRAG_RESULT_DATA0 || FRAG_RESULT_DATA7 < io.location)
++      return false;
++
++   enum pipe_format *render_target_formats = (enum pipe_format *)data;
++   enum pipe_format format =
++      render_target_formats[io.location - FRAG_RESULT_DATA0];
++   if (!util_format_is_float(format))
++      return false;
++
++   nir_def *value = intrin->src[0].ssa;
++   if (!(nir_intrinsic_src_type(intrin) & nir_type_float) ||
++       (value->bit_size != 16 && value->bit_size != 32))
++      return false;
++
++   /* Playport (PLA-815): D3D12's render target conversion flushes a shader's
++    * Inf or NaN to 0, the format's invalid value; Metal keeps them. A game's
++    * next shader that multiplies such a value by 0 then makes a NaN (DIRT 5's
++    * sky table from its transmittance table), and a kept Inf lights the scene
++    * to white. Map both to 0 here, where the format is known. */
++   b->cursor = nir_before_instr(&intrin->instr);
++   nir_def *nan = nir_fneu(b, value, value);
++   nir_def *inf = nir_fge(b, nir_fabs(b, value),
++                          nir_imm_floatN_t(b, INFINITY, value->bit_size));
++   nir_def *zero = nir_imm_zero(b, value->num_components, value->bit_size);
++   nir_def *clamped = nir_bcsel(b, nir_ior(b, nan, inf), zero, value);
++   nir_src_rewrite(&intrin->src[0], clamped);
++   return true;
++}
++
++bool
++msl_nir_fs_clamp_float_output(
++   nir_shader *nir, enum pipe_format render_target_formats[MAX_DRAW_BUFFERS])
++{
++   return nir_shader_intrinsics_pass(nir, fs_clamp_float_output,
++                                     nir_metadata_control_flow,
++                                     render_target_formats);
++}
++
+ /* Used to weed out instructions where the lod is known to be 0.
+  * This is an optimization and avoids trying to instrument
+  * texel buffers, which won't work with the generated Metal code
+diff --git a/src/kosmickrisp/compiler/nir_to_msl.h b/src/kosmickrisp/compiler/nir_to_msl.h
+index 31c563a..dd6a2ab 100644
+--- a/src/kosmickrisp/compiler/nir_to_msl.h
++++ b/src/kosmickrisp/compiler/nir_to_msl.h
+@@ -96,6 +96,9 @@ msl_convert_access_flag(enum gl_access_qualifier qual)
+ bool msl_nir_fs_force_output_signedness(
+    nir_shader *nir, enum pipe_format render_target_formats[MAX_DRAW_BUFFERS]);
+ 
++bool msl_nir_fs_clamp_float_output(
++   nir_shader *nir, enum pipe_format render_target_formats[MAX_DRAW_BUFFERS]);
++
+ bool msl_nir_vs_remove_point_size_write(nir_builder *b,
+                                         nir_intrinsic_instr *intrin,
+                                         void *data);
+diff --git a/src/kosmickrisp/vulkan/kk_debug.c b/src/kosmickrisp/vulkan/kk_debug.c
+index 708f9c9..720cc41 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.c
++++ b/src/kosmickrisp/vulkan/kk_debug.c
+@@ -78,6 +78,7 @@ const struct debug_named_value experimental_flags[] = {
+    {"barrier_device_vis", KK_EXPERIMENTAL_BARRIER_DEVICE_VIS},
+    {"no_quad_merge_block", KK_EXPERIMENTAL_NO_QUAD_MERGE_BLOCK},
+    {"soft_fp64", KK_EXPERIMENTAL_SOFT_FP64},
++   {"clamp_float_output", KK_EXPERIMENTAL_CLAMP_FLOAT_OUTPUT},
+    {NULL, 0},
+ };
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_debug.h b/src/kosmickrisp/vulkan/kk_debug.h
+index 6ba0779..e7a2f7d 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.h
++++ b/src/kosmickrisp/vulkan/kk_debug.h
+@@ -323,6 +323,13 @@ enum kk_experimental {
+     * Changes only shaders that could not be built without it, so it is not
+     * in the pipeline cache UUID. Must be named */
+    KK_EXPERIMENTAL_SOFT_FP64 = 1ull << 23,
++   /* Playport (PLA-815): a float fragment output that is Inf or NaN is
++    * clamped to the render target format's max finite (NaN to 0) before the
++    * store, as D3D12's render target conversion does. Metal keeps Inf and
++    * NaN, and DIRT 5's sky table takes the +Inf its transmittance table holds
++    * through a multiply that makes NaN, so the race renders black. Must be
++    * named: it changes what a shader's own Inf/NaN reaches a later pass as */
++   KK_EXPERIMENTAL_CLAMP_FLOAT_OUTPUT = 1ull << 24,
+ };
+ 
+ extern enum kk_experimental kk_mesa_experimental_flags;
+diff --git a/src/kosmickrisp/vulkan/kk_shader.c b/src/kosmickrisp/vulkan/kk_shader.c
+index 39b6eb0..2f14450 100644
+--- a/src/kosmickrisp/vulkan/kk_shader.c
++++ b/src/kosmickrisp/vulkan/kk_shader.c
+@@ -706,6 +706,8 @@ kk_lower_fs(struct kk_device *dev, nir_shader *nir,
+       }
+ 
+       NIR_PASS(_, nir, msl_nir_fs_force_output_signedness, rts);
++      if (KK_EXPERIMENTAL(CLAMP_FLOAT_OUTPUT))
++         NIR_PASS(_, nir, msl_nir_fs_clamp_float_output, rts);
+    }
+ 
+    if ((!gpl_separate &&
+-- 
+2.56.0
+
