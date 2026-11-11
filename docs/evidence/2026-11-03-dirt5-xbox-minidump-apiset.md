@@ -456,3 +456,8 @@ Frame 6800 is the **race** as well: 101 command buffers, 161 passes, 3,673 draws
 The current build's race-long route reaches 6800 frames at the 900 s play end, so
 the hub is later (~7000). The next capture is **frame 7000** with a 1200 s play.
 
+Frame 7000 is still the **race**: 101 command buffers, 149 passes, 3,394 draws.
+The hub is later than 7000 on the current build. The launch/route again shows the
+**profile NUMBER** screen (the garage livery), not the event pause; the video
+options' lower rows remain unchecked.
+
