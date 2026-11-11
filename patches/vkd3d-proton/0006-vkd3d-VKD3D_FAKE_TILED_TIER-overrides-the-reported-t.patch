@@ -1,0 +1,39 @@
+From bc64eeb57b2cf85a9fe407ee57a863bb9afcfa87 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kamil=20Postro=C5=BCny?= <kamil@postrozny.pl>
+Date: Wed, 11 Nov 2026 09:40:11 +0100
+Subject: [PATCH] vkd3d: VKD3D_FAKE_TILED_TIER overrides the reported tiled
+ resources tier
+
+DIRT 5 takes a different streaming/probe path with tiled resources; the
+diagnostic forces the tier so the two can be compared.
+
+Class: diagnostics
+
+Evidence: docs/evidence/2026-11-03-dirt5-xbox-minidump-apiset.md
+
+Offered-upstream: no
+
+Generated-by: LLM
+---
+ libs/vkd3d/device.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/libs/vkd3d/device.c b/libs/vkd3d/device.c
+index b49e858..51bbd3c 100644
+--- a/libs/vkd3d/device.c
++++ b/libs/vkd3d/device.c
+@@ -9124,7 +9124,11 @@ static CONST_VTBL ID3D12DeviceConfiguration1Vtbl d3d12_device_configuration_vtbl
+ 
+ static D3D12_TILED_RESOURCES_TIER d3d12_device_determine_tiled_resources_tier(struct d3d12_device *device)
+ {
++    const char *fake_tier = getenv("VKD3D_FAKE_TILED_TIER");
+     const VkPhysicalDeviceSparseProperties *sparse_properties = &device->device_info.properties2.properties.sparseProperties;
++
++    if (fake_tier)
++        return (D3D12_TILED_RESOURCES_TIER)atoi(fake_tier);
+     const VkPhysicalDeviceFeatures *features = &device->device_info.features2.features;
+ 
+     if (!features->sparseBinding || !features->sparseResidencyAliased ||
+-- 
+2.56.0
+

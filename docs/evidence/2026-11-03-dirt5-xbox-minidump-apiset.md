@@ -487,6 +487,12 @@ returns **tier 0** because KosmicKrisp's sparse residency features are all
 tier 2. Implementing sparse binding/residency (Metal sparse textures) plus the
 ROV feature is a large driver feature, not a quick patch.
 
+**A forced tiled-tier diagnostic.** vkd3d patch 0006
+(`vkd3d: VKD3D_FAKE_TILED_TIER overrides the reported tiled resources tier`) lets
+an env var force tier 0/1/2, so Dirt 5's tiled-resources path can be compared
+against the tier-0 fallback. The diagnostic is built and installed next; the run
+checks whether the streaming/probe/particle path changes.
+
 Frame 8000 is still the **race**: 101 command buffers, 161 passes, 3,471 draws.
 The race-to-hub route's A presses after the throttle hold did not finish/advance
 to the hub within 1500 s. The driven hub captures are exhausted; the user's 3.4 GB
