@@ -343,3 +343,12 @@ longer reaches the profile/garage; the probe writer must be captured from the
 garage hub's load. The 3.4 GB garage frame 5600 remains the only fetchable garage
 trace (and the only one that shows the empty probe).
 
+**The particle colour draw is empty.** The frame-2800 event trace (4.6 GB on the
+Mac, fetchable) has the same 269-draw main pass. Its last draw is indirect
+(pipeline `rps30`, a 6-index quad); fetching `@buf155` at offset 16449876 gives
+`[6, 0, 0, 0, 0]`: indexCount 6, **instanceCount 0**. The writer wrote 6 and 0,
+so the particle colour pass draws nothing; the preceding mask draws (3/6/5
+instances) blacken the silhouettes. A run **without** `zero_init` still shows the
+black flags, so zero_init is not the cause: the colour culling/simulation writes
+0 and is the next target.
+
