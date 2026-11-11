@@ -368,3 +368,17 @@ The zero particle args are therefore not a shader compile failure. An arg-table
 scan (128 KiB buffers for a pointer into `@buf155`) was attempted; the per-buffer
 fetches stalled on the 4.6 GB trace and were stopped.
 
+**The particle append shader.** `lib68` is the GPU particle queue append: it
+builds a 64-bit counter/list pointer from a `packed_uint4` descriptor and an
+incrementing 32-bit device atomic, writing a particle index into the list. Its
+first spawn condition is 0, so the queue stays empty and the colour args read 0;
+the dispatch itself is present and does not fault. The game's GPU particle
+emission/spawn is the missing input.
+
+**A required extension is missing.** vkd3d's startup warning says
+`VK_EXT_dynamic_rendering_unused_attachments not supported. The functionality in
+this EXT is required for correct operation.` KosmicKrisp exposes KHR dynamic
+rendering and local read but not this EXT. The mask/deferred PSOs with unused
+attachments are exactly what the extension covers; adding it to KosmicKrisp is
+the next driver experiment.
+
