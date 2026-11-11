@@ -408,3 +408,9 @@ That frame-2600 capture is the **event**, not the profile: 5.37 GB, 160 passes,
 3837 draws, no 128x128 pass. The profile comes later on this route; the next
 attempt is frame 3000-3500.
 
+That frame-3200 capture is the **event** as well: 101 command buffers, 161
+passes, 3807 draws, no 128x128 pass. The profile/garage is later than 3200 on
+this route; the garage frame 5600 user trace remains the hub frame. The next
+thread is the probe's **source**: the 30-slice RG11B10F array may be filled from
+an HDR cubemap asset (BC6H) whose decode/copy leaves it zero.
+
