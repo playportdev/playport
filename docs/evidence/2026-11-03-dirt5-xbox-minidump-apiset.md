@@ -314,3 +314,13 @@ ignored write mask. The black windows/flags in the G-buffer are expected; the
 lit colour comes from the deferred/lighting pass and the reflection probe. That
 rules out the colour write mask as the cause.
 
+**A new event trace, and its limit.** The event intro capture at frame 4200 with a
+600 s play succeeded (5.34 GB; the earlier 420 s attempt ended before the frame).
+In it the main pass's last draw is **indirect**: pipeline `rps30`, index buffer
+`@buf11` offset 12058624 with a 24-byte index buffer, indirect buffer `@buf155`
+offset 16449876. Its instance count would say whether the particle colour draw is
+empty, but fetching the 16 MiB indirect buffer (like the colour target) hangs/
+times out on the 5.3 GB trace; the 3.4 GB garage trace still fetches. The next
+trace should shrink the resource set (shadows low/medium) so the event's particle
+draw is fetchable.
+
