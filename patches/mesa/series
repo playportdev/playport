@@ -121,3 +121,4 @@
 0149-kk-MESA_KK_DEBUG-image_binds-logs-image-requirements.patch
 0150-kk-MESA_KK_EXPERIMENTAL-clamp_float_output-clamps-a.patch
 0151-kk-MESA_KK_EXPERIMENTAL-zero_init-zeroes-a-device-a.patch
+0152-kk-expose-VK_EXT_dynamic_rendering_unused_attachment.patch

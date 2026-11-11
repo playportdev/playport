@@ -1,0 +1,43 @@
+From f309df906a6376f383884b6f831c453a1528012a Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kamil=20Postro=C5=BCny?= <kamil@postrozny.pl>
+Date: Wed, 11 Nov 2026 04:59:37 +0100
+Subject: [PATCH] kk: expose VK_EXT_dynamic_rendering_unused_attachments
+
+vkd3d-proton requires the extension for correct dynamic rendering with
+unused attachments; the common vk_graphics_state code already handles
+it.
+
+Class: diagnostics
+
+Evidence: docs/evidence/2026-11-03-dirt5-xbox-minidump-apiset.md
+
+Offered-upstream: no
+
+Generated-by: LLM
+---
+ src/kosmickrisp/vulkan/kk_physical_device.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/src/kosmickrisp/vulkan/kk_physical_device.c b/src/kosmickrisp/vulkan/kk_physical_device.c
+index cba6781..bfab549 100644
+--- a/src/kosmickrisp/vulkan/kk_physical_device.c
++++ b/src/kosmickrisp/vulkan/kk_physical_device.c
+@@ -118,6 +118,7 @@ kk_get_device_extensions(const struct kk_instance *instance,
+       .KHR_vulkan_memory_model = true, /* Required in Vulkan 1.3 */
+       .EXT_buffer_device_address = true,
+       .EXT_descriptor_indexing = true,
++      .EXT_dynamic_rendering_unused_attachments = true,
+       .EXT_host_query_reset = true,
+       .EXT_sampler_filter_minmax = pdev->info.gpu_apple_family >= 10,
+       .EXT_scalar_block_layout = true,
+@@ -373,6 +374,7 @@ kk_get_device_features(
+       .bufferDeviceAddress = true,
+       .computeFullSubgroups = true,
+       .dynamicRendering = true,
++      .dynamicRenderingUnusedAttachments = true,
+       .extendedDynamicState = true,
+       .extendedDynamicState2 = true,
+       .extendedDynamicState2LogicOp = false,
+-- 
+2.56.0
+

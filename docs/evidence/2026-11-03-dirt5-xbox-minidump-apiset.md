@@ -382,3 +382,12 @@ rendering and local read but not this EXT. The mask/deferred PSOs with unused
 attachments are exactly what the extension covers; adding it to KosmicKrisp is
 the next driver experiment.
 
+**The extension test.** The 0152 patch exposes the extension and its feature;
+the build (IPA `3fdc9685`, sha256
+`3fdc96853ec9fc71551f35a18536b5a42487380973cec34769c602d5828342f2`) compiles and
+installs, and vkd3d's startup **warning is gone** (0 occurrences in the log). The
+visuals are unchanged: the event's black flags and white sky
+(`.work/scratch/pla815a/ext-event2.png`) and the garage's black glass
+(`.work/scratch/pla815a/ext-profile2.png`). The extension is spec-correct but is
+not the visual fix; the particle emission and the reflection probe remain.
+
