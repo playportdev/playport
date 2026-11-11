@@ -307,3 +307,10 @@ The 24 dispatches after the particle pass are a **bloom/mip chain** (1568x720,
 source is therefore elsewhere: the deferred lighting/forward composite that
 reads the R8 mask, or the particle material buffer. That is still open.
 
+The mask pipelines' colour0 `writeMask` is **RGBA** in the Metal pipeline, and
+KosmicKrisp translates the Vulkan colour write mask (bridge/mtl_compiler.m), so
+the `color_0 = 0` writes to the G-buffer are the title's own state, not a
+ignored write mask. The black windows/flags in the G-buffer are expected; the
+lit colour comes from the deferred/lighting pass and the reflection probe. That
+rules out the colour write mask as the cause.
+
