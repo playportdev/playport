@@ -352,3 +352,11 @@ instances) blacken the silhouettes. A run **without** `zero_init` still shows th
 black flags, so zero_init is not the cause: the colour culling/simulation writes
 0 and is the next target.
 
+`@buf155` is a 16 MiB **Shared** buffer (gpuAddress 0x1003e148000). At 0xFB0000
+(it is 0xFB0000 + n*20) sits a table of **20-byte `[6,0,0,0,0]` entries** — the
+particle colour draw's ExecuteIndirect arguments. The index count 6 is set, the
+instance count is 0; the buffer is Shared, so the game's CPU wrote this table.
+The visible mask draws (3/6/5) still draw; the colour args are culled to zero.
+The next target is the particle count/readback that fills these args (the GPU
+particle simulation or the CPU culling), not the args buffer itself.
+
