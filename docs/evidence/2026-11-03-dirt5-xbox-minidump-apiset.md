@@ -224,3 +224,50 @@ minutes each left `gpucapture --list-devices` at "Remote device browsing
 requires Xcode to be running", so it is a person's step: open Xcode and Window ›
 Devices and Simulators once with the phone shown.
 
+## 2026-11-11: the MacBook answers; D3D's conversion; the black glass is an empty reflection probe
+
+**The Mac.** Over SSH, macOS 27.2 and Xcode 27.2: `gpucapture --list-devices`
+lists the MacBook and the cabled iPhone. After a restart the GPU tools agent
+came up only once Xcode was opened again; `gpudebug -d 1` then replayed the
+3.2 GB race trace (`kk-frame5600-1794342742`) and the 5.2 GB intro trace
+(`kk-frame4200-1794344778`) on the phone in about a minute. A trace larger than
+the phone's free space leaves GTReplayService in "failed to load trace: File
+transfer failed" until Xcode is restarted; the Dirt 5 runs below had 88 GB free.
+
+**D3D's conversion is not what the clamp does.** The D3D11.3 functional spec
+(3.2.2) keeps NaN where the format encodes one, and Inf where it can, and gives
+0/max only where it cannot. `MESA_KK_CLAMP_FLOAT_OUTPUT=d3d` and `inf_max`
+(`patches/mesa` 0152, 0153, since dropped) were built and played with
+`zero_init`: both turn the garage and the race **white**
+(`.work/scratch/pla815a/d3d-garage.png`, `infmax-garage.png`,
+`race-now.png`). The original `zero` is the only mode that keeps the scene
+visible, so DIRT 5's data has an Inf in an RGBA16F target where the game wants
+0; either the game relies on a store conversion beyond the spec or the Inf is
+ours. `zero` stays the title's setting.
+
+**Zero initialisation.** `MESA_KK_EXPERIMENTAL=zero_init` (`patches/mesa` 0151)
+zeroes each `VkDeviceMemory` allocation before it is returned, the value D3D12
+promises and the driver does not. With `zero,zero_init` the garage showed a blue
+cloudy sky where it had been flat white (`.work/scratch/pla815a/garage-zero2.png`),
+but a later view (`.work/scratch/pla815a/nulldesc-garage.png`) was white again,
+and the car windows and the garage's glass stayed black at every image quality.
+It is kept as the D3D12 fix and a diagnostic; it is not the whole cause.
+
+**The black glass is an empty reflection probe.** The garage scene's 41-draw
+pass (`commands/cb93/re0`, capture pass 103) is a G-buffer/mask pass: its
+pipelines write `color0 = 0` and a mask or alpha to `color1` (for example
+draw29, lib189, and draw30, lib221); the final colour is computed later. The
+reflection source is a 128x128 RG11B10F `2DArray`, 30 slices, 6 mips
+(`@tex569`, usage ShaderRead/Write/RenderTarget); `fetch @tex569` is entirely
+0. The only captured pass with a 128x128 RG11B10F target is a clear with no
+draws, and no captured compute dispatch binds `@tex569` directly. The probe is
+cleared and not written in the captured frame. The 1024x1024 RG11B10F sky
+table does hold a cloudy sky (`.work/scratch/pla815a/rt/rg11b10.png`), so the
+direct sky source is not the probe. The car and garage windows sample the black
+probe and are black; the fragment clamp cannot help a texture that is 0.
+
+**Still open.** The probe's writer is not in the captured frame: a startup pass
+the capture missed, a compute the argument buffer hides, or a pass the title
+skips on KosmicKrisp. That is the next question; the Mac tools now replay both
+traces on the phone.
+

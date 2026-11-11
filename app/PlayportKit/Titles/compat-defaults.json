@@ -33,7 +33,7 @@
       "reason": "This game draws nothing on a screen wider than 16:9."
     },
     "xbox-9PJGM0T0827V": {
-      "settings": {"graphicsOptions": "MESA_KK_EXPERIMENTAL=soft_fp64,clamp_float_output"},
+      "settings": {"graphicsOptions": "MESA_KK_EXPERIMENTAL=soft_fp64,clamp_float_output,zero_init"},
       "reason": "One of this game's compute shaders does its arithmetic in 64-bit floating point, which the iPhone's GPU does not have, so its 64-bit maths is done in software and the game is told it is supported. Without that it stops at its first screen with an error. Its sky and transmittance tables then get an infinity or a NaN from its float outputs: the D3D12 render target store writes 0 for those and Metal keeps them, and the lighting reads a NaN and draws the race black (or a kept infinity lights it white). The clamp writes 0 for an Inf or NaN color output, as D3D12 does."
     }
   }

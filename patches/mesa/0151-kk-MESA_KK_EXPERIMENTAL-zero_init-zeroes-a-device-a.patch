@@ -1,0 +1,79 @@
+From a6f77a2f728b10b19351f06750c04f34beb5b15a Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Wed, 11 Nov 2026 00:51:33 +0100
+Subject: [PATCH] kk: MESA_KK_EXPERIMENTAL=zero_init zeroes a device allocation
+
+Direct3D 12 promises a new resource reads as zero. vkd3d-proton clears what it can itself, but a dedicated image is left to the driver, and a new Metal heap is not defined to be zero: DIRT 5 reads Inf and NaN from its sky and transmittance tables. This diagnostic zeroes each VkDeviceMemory allocation of the driver own before it returns.
+
+Class: diagnostics
+
+Evidence: docs/evidence/2026-11-03-dirt5-xbox-minidump-apiset.md
+
+Offered-upstream: no
+
+Generated-by: LLM
+---
+ src/kosmickrisp/vulkan/kk_debug.c         |  1 +
+ src/kosmickrisp/vulkan/kk_debug.h         |  4 ++++
+ src/kosmickrisp/vulkan/kk_device_memory.c | 11 +++++++++++
+ 3 files changed, 16 insertions(+)
+
+diff --git a/src/kosmickrisp/vulkan/kk_debug.c b/src/kosmickrisp/vulkan/kk_debug.c
+index 720cc41..135863c 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.c
++++ b/src/kosmickrisp/vulkan/kk_debug.c
+@@ -79,6 +79,7 @@ const struct debug_named_value experimental_flags[] = {
+    {"no_quad_merge_block", KK_EXPERIMENTAL_NO_QUAD_MERGE_BLOCK},
+    {"soft_fp64", KK_EXPERIMENTAL_SOFT_FP64},
+    {"clamp_float_output", KK_EXPERIMENTAL_CLAMP_FLOAT_OUTPUT},
++   {"zero_init", KK_EXPERIMENTAL_ZERO_INIT},
+    {NULL, 0},
+ };
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_debug.h b/src/kosmickrisp/vulkan/kk_debug.h
+index e7a2f7d..eb29ae3 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.h
++++ b/src/kosmickrisp/vulkan/kk_debug.h
+@@ -330,6 +330,10 @@ enum kk_experimental {
+     * through a multiply that makes NaN, so the race renders black. Must be
+     * named: it changes what a shader's own Inf/NaN reaches a later pass as */
+    KK_EXPERIMENTAL_CLAMP_FLOAT_OUTPUT = 1ull << 24,
++   /* Playport (PLA-815): zero every VkDeviceMemory allocation of the driver's
++    * own, so a Direct3D 12 title's resources start at zero as Direct3D 12
++    * promises; diagnostic until the reason for DIRT 5's Inf and NaN is known. */
++   KK_EXPERIMENTAL_ZERO_INIT = 1ull << 25,
+ };
+ 
+ extern enum kk_experimental kk_mesa_experimental_flags;
+diff --git a/src/kosmickrisp/vulkan/kk_device_memory.c b/src/kosmickrisp/vulkan/kk_device_memory.c
+index 767ba43..63add81 100644
+--- a/src/kosmickrisp/vulkan/kk_device_memory.c
++++ b/src/kosmickrisp/vulkan/kk_device_memory.c
+@@ -24,6 +24,7 @@
+ #include <inttypes.h>
+ #include <math.h>
+ #include <stdlib.h>
++#include <string.h>
+ #include "util/os_time.h"
+ #include <sys/mman.h>
+ #include <pthread.h>
+@@ -163,6 +164,16 @@ kk_AllocateMemory(VkDevice device, const VkMemoryAllocateInfo *pAllocateInfo,
+       if (result != VK_SUCCESS)
+          goto fail_alloc;
+       kk_bo_set_kind(mem->bo, KK_BO_KIND_DEVICE_MEMORY);
++
++      /* Playport (PLA-815): Direct3D 12 promises a new resource reads as zero;
++       * vkd3d-proton relies on the driver for a dedicated image, and Metal's
++       * new heap is not defined to be zero. */
++      if (KK_EXPERIMENTAL(ZERO_INIT) && mem->bo->cpu) {
++         memset(mem->bo->cpu, 0, mem->bo->size_B);
++         if (KK_DEBUG(MEMORY))
++            fprintf(stderr, "[kk-zero] %" PRIu64 " bytes\n",
++                    (uint64_t)mem->bo->size_B);
++      }
+    }
+ 
+    if (KK_DEBUG(DRAWS) || kk_frame_probe_s > 0)
+-- 
+2.56.0
+
