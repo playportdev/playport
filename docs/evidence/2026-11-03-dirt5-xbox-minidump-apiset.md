@@ -461,6 +461,11 @@ The hub is later than 7000 on the current build. The launch/route again shows th
 **profile NUMBER** screen (the garage livery), not the event pause; the video
 options' lower rows remain unchecked.
 
+**The probe pass is a black clear.** In the hub trace the 128x128 probe pass
+(commands/cb7/re24, color0 @tex1031) has no draws; its fetched color0 is a solid
+black 128x128 RG11B10F image (`.work/scratch/pla815a/pass28.png`). The game's
+reflection-probe render/update is skipped on this driver; the glass samples black.
+
 Frame 8000 is still the **race**: 101 command buffers, 161 passes, 3,471 draws.
 The race-to-hub route's A presses after the throttle hold did not finish/advance
 to the hub within 1500 s. The driven hub captures are exhausted; the user's 3.4 GB
