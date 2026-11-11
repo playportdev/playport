@@ -2371,13 +2371,13 @@ resource	Runtime/vulkan/arm64ec-windows/d3d10core.dll	430080	bd784fc0f7da1724374
 resource	Runtime/vulkan/arm64ec-windows/d3d11.dll	8392704	9a70a43bfbf82b541e7988f4d6ebaa08a50540e8d2dc9bf4d62d4c8051e560d4	vulkan-pe	arm64ec-windows/d3d11.dll	P6-vulkan-pe
 resource	Runtime/vulkan/arm64ec-windows/dxgi.dll	5537792	67b6f9372a2100cf1e632d8c219eb736f1aaba412767dc39755aa584d5de1422	vulkan-pe	arm64ec-windows/dxgi.dll	P6-vulkan-pe
 resource	Runtime/vulkan/arm64ec-windows/d3d12.dll	196608	36e1555ac92da8faa7c28d63008693b601ff34d364860e58891dacfe4e7a1b34	vulkan-pe	arm64ec-windows/d3d12.dll	P6-vulkan-pe
-resource	Runtime/vulkan/arm64ec-windows/d3d12core.dll	6406144	a860e9cdb159502c9478e4d2283c0f21b15aefd30d9f4db8afd4e605d21782b5	vulkan-pe	arm64ec-windows/d3d12core.dll	P6-vulkan-pe
+resource	Runtime/vulkan/arm64ec-windows/d3d12core.dll	6406144	a722bbfa221da4956cb6117c6413f150dbe8642d2fad3106785d4745a0b0f217	vulkan-pe	arm64ec-windows/d3d12core.dll	P6-vulkan-pe
 resource	Runtime/vulkan/i386-windows/d3d9.dll	7491584	64af9f2922d0424a406b6da9ef5d178be2b647dea2051f8ff70299edb4473250	vulkan-pe	i386-windows/d3d9.dll	P6-vulkan-pe
 resource	Runtime/vulkan/i386-windows/d3d10core.dll	438272	667a647a191f01cef80050b514610644aa66fd2cfacd5c00035b6b068b65b774	vulkan-pe	i386-windows/d3d10core.dll	P6-vulkan-pe
 resource	Runtime/vulkan/i386-windows/d3d11.dll	8331264	94ab3cab4d2a3e80c1d159810fb5bb52b518a41a4eb3270ec735c7bf66ad2778	vulkan-pe	i386-windows/d3d11.dll	P6-vulkan-pe
 resource	Runtime/vulkan/i386-windows/dxgi.dll	5627904	ffac1ad03c7c0b2845c55bd7f8a5428c6d2237f4ccc9abd36c3fc76add87a6c0	vulkan-pe	i386-windows/dxgi.dll	P6-vulkan-pe
 resource	Runtime/vulkan/aarch64-windows/d3d12.dll	147456	f2ca5f41d7aa77b4d9db5904c1f209baa56f67a1769fe705d3a1cdb8720738a2	vulkan-pe	aarch64-windows/d3d12.dll	P6-vulkan-pe
-resource	Runtime/vulkan/aarch64-windows/d3d12core.dll	5738496	6996837ee7821a373f92c046dc0851576f5ed37cbe73a7f7836d191df0f32d7f	vulkan-pe	aarch64-windows/d3d12core.dll	P6-vulkan-pe
+resource	Runtime/vulkan/aarch64-windows/d3d12core.dll	5738496	d16ea9bdfc07fb1a171e95b559cf12c88c4aba292e5ce1147a5b3473b11fddca	vulkan-pe	aarch64-windows/d3d12core.dll	P6-vulkan-pe
 resource	Runtime/vulkan/aarch64-windows/dxgi.dll	4902912	e9afd4b98c4c1bef139371f3d4364a3b982b3790d87c7c06f0cf5733e7915680	vulkan-pe	aarch64-windows/dxgi.dll	P6-vulkan-pe
 resource	Runtime/vulkan-loader/arm64ec-windows/vulkan-1.dll	762880	db87edae47763dc52b0bbb20e3fef5713cb129de339b81943ff57f581b2d5daf	vulkan-loader	arm64ec-windows/vulkan-1.dll	P6-vulkan-loader
 resource	Runtime/vulkan-loader/arm64ec-windows/winevulkan.json	137	0947fde3a7cf0efea1fad4c0b0ea1822e122a56e0c821e39df68daf561ca50f8	vulkan-loader	arm64ec-windows/winevulkan.json	P6-vulkan-loader

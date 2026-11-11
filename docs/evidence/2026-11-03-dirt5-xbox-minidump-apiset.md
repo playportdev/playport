@@ -513,3 +513,64 @@ FidelityFX Ambient Occlusion (`.work/scratch/pla815a/vidopt3-bottom2.png`). Ther
 is no separate particle, effects or reflection quality, so the empty particle
 colour and the empty probe are not a low-quality setting.
 
+## 2026-11-11 (later): the desktop reference, the GPU-address alignment, and what it did not fix
+
+**The desktop reference makes the missing outputs concrete.** A RenderDoc
+capture of the same game on this workstation (Xodus Nexus 0.5.0, Vulkan/RADV,
+`.work/agent-notes/dirt5-nexus/captures/`) was compared with the phone trace:
+
+* `dirt5_frame117211.rdc`, the race with particles: the particle draw at event
+  10678 (`vkCmdDrawIndexedIndirect(1) => <201, 7>`) reads 20-byte arguments
+  from `ResourceId::5973346 + 3,868,824` (0x3B05F8): indexCount 201,
+  **instanceCount 7**. The phone's particle colour draw reads `@buf155` and
+  gets `[6, 0, 0, 0, 0]` (round 11).
+* `dirt5_frame33841.rdc`, the garage: the reflection probe
+  `ResourceId::1068095` is 256x256 R11G11B10F, 30 slices, 7 mips; slices 0-11
+  hold data (about 261k non-zero bytes each) and 12-29 are zero. The phone's
+  128x128, 30-slice, 6-mip probe is entirely zero (round 4).
+
+So the passes, shaders and textures are not the difference; the inputs the
+game builds for them are empty on KosmicKrisp.
+
+**The GPU addresses were not 64 KiB aligned.** Every Dirt 5 run logged:
+
+```
+fixme:vkd3d-proton:vkd3d_memory_allocation_init: Requested alignment of
+10000, but got GPU VA of 10000b18000 for intended start of heap, which is
+not aligned as expected. If application relies on this alignment, weird
+things might happen.
+```
+
+The address ends in `0x8000`: KosmicKrisp returns a Metal-page-aligned GPU
+virtual address where D3D12 promises the 64 KiB placement alignment. vkd3d's
+padded-BDA workaround (overallocate 64 KiB and shift the bind offset) only ran
+for allocations that carry `REQUIRE_ALIGNED_GPU_ADDRESS`; a resource heap
+does, a committed global buffer does not. The game packs resource addresses
+into its GPU descriptor tables, so the low address bits are part of what its
+shaders read.
+
+**Patch 0007.** `vkd3d: align KosmicKrisp global buffers to the 64 KiB
+placement alignment` treats KosmicKrisp as a driver that does not align BDA,
+runs the padded path for every global buffer whose device address is visible
+to shaders, and prints the allocation's size and flags when one still lands
+unaligned. The first variant (heaps only, IPA `9120b18f`) left the warning in
+place; the broad variant (IPA
+`16b7879c47973222d95305fed6fa562b0c1032478a2033d935d517de86adc2af`) removes
+it: run `.work/ui-runs/align2-warn`, the `Requested alignment` line is gone.
+
+**What the phone showed with the alignment fix.** The race at the start line
+(`.work/ui-runs/align2/race-move.png`, `pause4.png`), the podcast/Bruno event
+intro (`event3.png`, `event4.png`) and the profile (`after-route.png`) render
+with colour; the transparent glass roofs of the start-line structure show the
+track through them. The profile's car side windows are still dark, as in
+`faketier-profile.png`; the Henningsvaer Reverse event intro with the flat
+white sky and black banner shapes (`faketier-intro.png`) was **not re-reached**:
+the career save is now on a later event, and the routes that reached the
+Henningsvaer event earlier now select the podcast/Bruno event instead.
+
+The alignment is a real D3D12 correctness fix and the warning it removes was
+present in every run, but this test does not prove it is the black-glass or
+black-flag cause. The next check is the same event intro on this build: select
+or restart Henningsvaer Reverse and compare the same camera, then re-read the
+particle args and the probe if the shapes are still black.
+

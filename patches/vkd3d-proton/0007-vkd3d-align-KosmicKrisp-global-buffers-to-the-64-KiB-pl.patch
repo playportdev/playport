@@ -1,0 +1,94 @@
+From 29c6a71d88bffb0135fc9c66e143acaf349fde58 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kamil=20Postro=C5=BCny?= <kamil@postrozny.pl>
+Date: Wed, 11 Nov 2026 12:05:39 +0100
+Subject: [PATCH] vkd3d: align KosmicKrisp global buffers to the 64 KiB
+ placement alignment
+
+KosmicKrisp returns a global buffer's GPU address aligned to Metal's
+page, not to D3D12's 64 KiB resource placement alignment, so a buffer
+whose address is visible to shaders can land 32 KiB off. vkd3d's
+padded-BDA workaround (overallocate 64 KiB and shift the bind offset)
+ran only for allocations that asked for an aligned GPU address: a
+resource heap asks, a committed buffer does not.
+
+DIRT 5's device log shows the warning on every run:
+
+  fixme:vkd3d-proton:vkd3d_memory_allocation_init: Requested alignment
+  of 10000, but got GPU VA of 10000b18000 for intended start of heap,
+  which is not aligned as expected. If application relies on this
+  alignment, weird things might happen.
+
+The desktop Direct3D 12 reference populates the particle draw arguments
+and the reflection probe; the phone's are zero. The game packs resource
+addresses into its GPU descriptor tables, so the low address bits are
+part of what its shaders read. Align every KosmicKrisp global buffer
+with a device address, and log the allocation's shape when one still
+lands unaligned.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-11-03-dirt5-xbox-minidump-apiset.md
+Offered-upstream: no
+Generated-by: LLM
+---
+ libs/vkd3d/memory.c | 28 +++++++++++++++++++++-------
+ 1 file changed, 21 insertions(+), 7 deletions(-)
+
+diff --git a/libs/vkd3d/memory.c b/libs/vkd3d/memory.c
+index 131a09b..287ef75 100644
+--- a/libs/vkd3d/memory.c
++++ b/libs/vkd3d/memory.c
+@@ -1309,10 +1309,14 @@ static bool vkd3d_is_imported_allocation(const struct vkd3d_allocate_memory_info
+ 
+ static bool d3d12_device_aligns_bda_64k(struct d3d12_device *device)
+ {
+-    /* Only seems to affect Turnip for now at least.
+-     * TODO: We really should just have an extension for this.
+-     */
+-    return device->device_info.vulkan_1_2_properties.driverID != VK_DRIVER_ID_MESA_TURNIP;
++    /* Turnip and KosmicKrisp return a buffer's GPU address aligned to the
++     * driver's page, not to D3D12's 64 KiB resource placement alignment, so
++     * the padded-BDA workaround below has to shift the bind offset. Driver
++     * names are the only way to say this in Vulkan today. */
++    const VkDriverId driver_id = device->device_info.vulkan_1_2_properties.driverID;
++
++    return driver_id != VK_DRIVER_ID_MESA_TURNIP &&
++           driver_id != VK_DRIVER_ID_MESA_KOSMICKRISP;
+ }
+ 
+ static HRESULT vkd3d_memory_allocation_init(struct vkd3d_memory_allocation *allocation, struct d3d12_device *device,
+@@ -1373,10 +1377,17 @@ static HRESULT vkd3d_memory_allocation_init(struct vkd3d_memory_allocation *allo
+          */
+         if (!device->device_info.buffer_device_address_allocation_alignment_features.bufferDeviceAddressAllocationAlignment)
+         {
++            const bool global_device_address =
++                !!(info->flags & VKD3D_ALLOCATION_FLAG_GLOBAL_BUFFER);
++            const bool align_committed_kosmickrisp =
++                global_device_address &&
++                device->device_info.vulkan_1_2_properties.driverID == VK_DRIVER_ID_MESA_KOSMICKRISP;
++
+             if ((!info->explicit_global_buffer_usage ||
+                     (info->explicit_global_buffer_usage & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT)) &&
+                 !(info->flags & VKD3D_ALLOCATION_FLAG_INTERNAL_SCRATCH) &&
+-                (info->flags & VKD3D_ALLOCATION_FLAG_REQUIRE_ALIGNED_GPU_ADDRESS) &&
++                ((info->flags & VKD3D_ALLOCATION_FLAG_REQUIRE_ALIGNED_GPU_ADDRESS) ||
++                        align_committed_kosmickrisp) &&
+                 !d3d12_device_aligns_bda_64k(device) && !host_ptr && !info->pNext &&
+                 info->memory_requirements.alignment >= D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT)
+             {
+@@ -1616,8 +1627,11 @@ static HRESULT vkd3d_memory_allocation_init(struct vkd3d_memory_allocation *allo
+             {
+                 FIXME_ONCE("Requested alignment of %"PRIx64", but got GPU VA of %"PRIx64" for intended start of heap, "
+                      "which is not aligned as expected. "
+-                     "If application relies on this alignment, weird things might happen.\n",
+-                     required_alignment, allocation->resource.va + allocation->realignment_offset);
++                     "If application relies on this alignment, weird things might happen. "
++                     "(size %"PRIx64", flags %#x, heap flags %#x, explicit usage %#x)\n",
++                     required_alignment, allocation->resource.va + allocation->realignment_offset,
++                     info->memory_requirements.size, info->flags, info->heap_flags,
++                     info->explicit_global_buffer_usage);
+             }
+         }
+     }
+-- 
+2.56.0
+
