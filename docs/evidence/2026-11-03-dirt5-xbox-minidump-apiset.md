@@ -438,3 +438,7 @@ The garage frame 5600 was captured with `dirt5-race-long.txt` at frame 5600 /
 next capture is frame 5400 with the same route, to catch the hub load and the
 probe writer.
 
+That frame-5400 capture is the **race**: 100 command buffers, 153 passes, 4,385
+draws. The hub is at frame 5600; its load is just before. The next capture is
+**frame 5550** with the race route.
+
