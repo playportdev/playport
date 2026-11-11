@@ -493,6 +493,12 @@ an env var force tier 0/1/2, so Dirt 5's tiled-resources path can be compared
 against the tier-0 fallback. The diagnostic is built and installed next; the run
 checks whether the streaming/probe/particle path changes.
 
+**The forced tier 2 is neutral.** With the 0006 build and
+`VKD3D_FAKE_TILED_TIER=2`, the profile car windows stay black and the event's
+black flags and white sky are unchanged (`faketier-profile.png`,
+`faketier-intro.png`). The reported tiled tier is not the cause of the black
+glass/flags.
+
 Frame 8000 is still the **race**: 101 command buffers, 161 passes, 3,471 draws.
 The race-to-hub route's A presses after the throttle hold did not finish/advance
 to the hub within 1500 s. The driven hub captures are exhausted; the user's 3.4 GB
