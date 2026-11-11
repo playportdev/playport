@@ -360,3 +360,11 @@ The visible mask draws (3/6/5) still draw; the colour args are culled to zero.
 The next target is the particle count/readback that fills these args (the GPU
 particle simulation or the CPU culling), not the args buffer itself.
 
+**No shader/pipeline error in the event/profile path.** A garage-profile run with
+`VKD3D_DEBUG=warn VKD3D_SHADER_DEBUG=warn` logged **no `err:vkd3d`**; its warnings
+are the startup feature notices, split `ResourceBarrier` flags and normal DXBC
+checksum/unknown-dword skips. The 64-bit buffer atomics notice is startup-only.
+The zero particle args are therefore not a shader compile failure. An arg-table
+scan (128 KiB buffers for a pointer into `@buf155`) was attempted; the per-buffer
+fetches stalled on the 4.6 GB trace and were stopped.
+
