@@ -427,3 +427,7 @@ probe writer remains the target.
 or the hub later. The next check is the video options' lower rows: the GPU
 particle colour is empty, and a low particle/effects setting could cull it.
 
+**Frame 1800 is the menu showcase.** 50 command buffers, 35 passes, 50 draws,
+1.34 GB; not the profile/garage (which has 116 encoders). The profile sits
+between the menu and the event; the next capture is frame 2100.
+
