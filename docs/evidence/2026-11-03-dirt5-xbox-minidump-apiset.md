@@ -442,3 +442,8 @@ That frame-5400 capture is the **race**: 100 command buffers, 153 passes, 4,385
 draws. The hub is at frame 5600; its load is just before. The next capture is
 **frame 5550** with the race route.
 
+Frame 5550 is the **race** (the trace grows to ~5.3 GB, the event/race size),
+not the hub. The hub is the frame-5600 user trace (3.4 GB). The next capture is
+**frame 5600** with the race route, i.e. the hub's first frame, where the
+128x128 probe should be written.
+
