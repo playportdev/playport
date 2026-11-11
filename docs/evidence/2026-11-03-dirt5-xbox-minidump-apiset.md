@@ -447,3 +447,8 @@ not the hub. The hub is the frame-5600 user trace (3.4 GB). The next capture is
 **frame 5600** with the race route, i.e. the hub's first frame, where the
 128x128 probe should be written.
 
+Under the current build (4 GB budget, extension) frame 5600 is still the **race**:
+100 command buffers, 151 passes, 3,502 draws. The user's 3.4 GB hub trace at 5600
+was the earlier, faster build; the current hub is later (~6800 at this frame
+rate). The next capture is **frame 6800** with the race route.
+
