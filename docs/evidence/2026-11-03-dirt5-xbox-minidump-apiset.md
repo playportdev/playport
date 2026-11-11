@@ -479,6 +479,14 @@ One/PC Dirt 5 expects at least 12_0 with tiled resources (the Xbox One has tier
 memory use, and fits the low-VRAM alert. Exposing sparse binding/tiled resources
 (Metal sparse textures) is a candidate fix.
 
+**The tier source.** vkd3d's `d3d12_device_caps_init_feature_level` reaches 12_0;
+12_1 additionally needs `ROVsSupported`. `d3d12_device_determine_tiled_resources_tier`
+returns **tier 0** because KosmicKrisp's sparse residency features are all
+**false** (`kk_physical_device.c`: `sparseResidencyNonResidentStrict`,
+`AlignedMipSize`, `Standard2DBlockShape`, ... false). The Xbox One has tiled
+tier 2. Implementing sparse binding/residency (Metal sparse textures) plus the
+ROV feature is a large driver feature, not a quick patch.
+
 Frame 8000 is still the **race**: 101 command buffers, 161 passes, 3,471 draws.
 The race-to-hub route's A presses after the throttle hold did not finish/advance
 to the hub within 1500 s. The driven hub captures are exhausted; the user's 3.4 GB
