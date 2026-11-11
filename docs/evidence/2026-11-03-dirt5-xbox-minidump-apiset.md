@@ -337,3 +337,9 @@ Its 266-draw main pass is a **different moment** (last draws 2, 2x2, 24x2, no
 garage/profile load at frame 2800, where the reflection probe is created or
 updated.
 
+That frame-2800 capture is the **event intro**, not the garage: 4096 shadow maps,
+no 128x128 pass, 4.91 GB. The save resumes the event, so the intro route no
+longer reaches the profile/garage; the probe writer must be captured from the
+garage hub's load. The 3.4 GB garage frame 5600 remains the only fetchable garage
+trace (and the only one that shows the empty probe).
+
