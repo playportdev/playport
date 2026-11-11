@@ -121,6 +121,22 @@ fp64_new=$(comm -13 <(cd "$ROOT/msl" && md5sum -- *.metal | cut -d' ' -f1 | sort
     { echo "soft_fp64: $fp64_new libraries not in the default run's MSL, not fp64.comp's alone" >&2; exit 1; }
 echo "soft fp64: fp64.comp builds with soft_fp64; the other $(ls "$ROOT/msl" | wc -l) libraries keep their MSL"
 
+# clamp_float_output (PLA-815): kk-host-test's float-target pipelines (RGBA16F and
+# RG11B10F) still write the fragment's own color, behind an exponent test per
+# component ("ok float-target clamp_float_output"); those two fragment libraries
+# are the only MSL the switch changes.
+rm -rf "$ROOT/msl-clamp"; mkdir -p "$ROOT/msl-clamp"
+MESA_KK_EXPERIMENTAL=clamp_float_output KK_MOCK_MSL_DIR="$ROOT/msl-clamp" MESA_SHADER_CACHE_DISABLE=true \
+    "$ROOT/kk-host-test" "$ROOT/build/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.so" "$ROOT/spv" \
+    >"$ROOT/clamp.log" 2>&1 || { cat "$ROOT/clamp.log" >&2; exit 1; }
+grep -qx "ok float-target clamp_float_output" "$ROOT/clamp.log" ||
+    { echo "clamp_float_output: the float-target pipelines were not checked" >&2; exit 1; }
+clamp_new=$(comm -13 <(cd "$ROOT/msl" && md5sum -- *.metal | cut -d' ' -f1 | sort) \
+    <(cd "$ROOT/msl-clamp" && md5sum -- *.metal | cut -d' ' -f1 | sort) | wc -l)
+[ "$clamp_new" = 2 ] && [ "$(ls "$ROOT/msl-clamp" | wc -l)" = "$(ls "$ROOT/msl" | wc -l)" ] ||
+    { echo "clamp_float_output: $clamp_new libraries not in the default run's MSL, not the two float-target fragments" >&2; exit 1; }
+echo "clamp_float_output: a float target keeps the fragment's color behind an exponent test; the other libraries keep their MSL"
+
 # A null sampled image into a buffer-only mutable binding (PLA-815): vkd3d-proton
 # splats a null of the game's type over every set, its 16-byte raw buffer set too.
 # The next element's storage buffer descriptor survives: the copy of it that

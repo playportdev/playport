@@ -574,3 +574,18 @@ black-flag cause. The next check is the same event intro on this build: select
 or restart Henningsvaer Reverse and compare the same camera, then re-read the
 particle args and the probe if the shapes are still black.
 
+## 2026-11-11: the clamp's test folded; the float targets keep their colour
+
+`patches/mesa` 0153 replaced `clamp_float_output`'s Inf/NaN float compares with an
+exponent test: the compares were built with no float controls, NIR folded them as
+if the value were finite, and a float-target fragment output wrote the replacement
+instead of its colour. The host test and the phone run are in
+[2026-11-11-dirt5-clamp-fold.md](2026-11-11-dirt5-clamp-fold.md).
+
+Dev IPA `4b900be4…`, run `.work/ui-runs/clampfix-start` (first frame +274.52 s,
+the recompiled shaders): the title, garage, podcast/Bruno intro, Henningsvaer
+Reverse splash and race all draw in colour; the race's glass roof is transparent
+and its puddles reflect the sky (`.work/ui-runs/clampfix/s1.png`–`s14.png`). A lap
+was not driven, and the event intro camera from `faketier-intro.png` was not
+re-captured.
+

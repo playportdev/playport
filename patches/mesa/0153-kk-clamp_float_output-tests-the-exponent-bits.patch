@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kamil=20Postro=C5=BCny?= <kamil@postrozny.pl>
+Date: Wed, 11 Nov 2026 13:54:43 +0100
+Subject: [PATCH] kk: clamp_float_output tests the exponent bits
+
+The Inf and NaN tests were float compares built with no float controls, so NIR folded them as if the value were finite: every float color output became the replacement constant and the shader's own color was never read. Test the exponent bits instead. (biblioklept)
+
+Class: upstream-bug
+
+Evidence: docs/evidence/2026-11-11-dirt5-clamp-fold.md
+
+Offered-upstream: no
+
+Generated-by: LLM
+---
+ src/kosmickrisp/compiler/msl_nir_lower_common.c | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/src/kosmickrisp/compiler/msl_nir_lower_common.c b/src/kosmickrisp/compiler/msl_nir_lower_common.c
+index 1045ce5..dbb82c4 100644
+--- a/src/kosmickrisp/compiler/msl_nir_lower_common.c
++++ b/src/kosmickrisp/compiler/msl_nir_lower_common.c
+@@ -211,9 +211,9 @@ fs_clamp_float_output(nir_builder *b, nir_intrinsic_instr *intrin, void *data)
+       return false;
+ 
+    b->cursor = nir_before_instr(&intrin->instr);
+-   nir_def *nan = nir_fneu(b, value, value);
+-   nir_def *inf = nir_fge(b, nir_fabs(b, value),
+-                          nir_imm_floatN_t(b, INFINITY, value->bit_size));
++   const uint64_t exponent = value->bit_size == 16 ? 0x7c00 : 0x7f800000;
++   nir_def *non_finite =
++      nir_ieq_imm(b, nir_iand_imm(b, value, exponent), exponent);
+    nir_def *replacement;
+    if (mode == CLAMP_FLOAT_OUTPUT_MAX) {
+       nir_def *one = nir_imm_floatN_t(
+@@ -223,7 +223,7 @@ fs_clamp_float_output(nir_builder *b, nir_intrinsic_instr *intrin, void *data)
+    } else {
+       replacement = nir_imm_zero(b, value->num_components, value->bit_size);
+    }
+-   nir_def *clamped = nir_bcsel(b, nir_ior(b, nan, inf), replacement, value);
++   nir_def *clamped = nir_bcsel(b, non_finite, replacement, value);
+    nir_src_rewrite(&intrin->src[0], clamped);
+    return true;
+ }

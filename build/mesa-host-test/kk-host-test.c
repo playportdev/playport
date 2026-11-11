@@ -262,6 +262,8 @@ struct pipe_desc {
    bool no_attachments;
    /* pSampleMask's word; 0 for none */
    VkSampleMask sample_mask;
+   /* The color attachment's format; 0 is VK_FORMAT_R8G8B8A8_UNORM */
+   VkFormat color_format;
 };
 
 static VkPipeline
@@ -353,7 +355,7 @@ make_pipeline(const struct pipe_desc *d, VkPipelineLayout layout)
       .dynamicStateCount = 2,
       .pDynamicStates = dyn_states,
    };
-   VkFormat color = VK_FORMAT_R8G8B8A8_UNORM;
+   VkFormat color = d->color_format ? d->color_format : VK_FORMAT_R8G8B8A8_UNORM;
    VkPipelineRenderingCreateInfo rinfo = {
       .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
       .colorAttachmentCount = d->no_attachments ? 0 : 1,
@@ -2680,6 +2682,39 @@ main(int argc, char **argv)
    }
 
    printf("all %u pipelines built and drawn\n", ndescs);
+
+   /* MESA_KK_EXPERIMENTAL=clamp_float_output (PLA-815): a fragment shader
+    * that writes its varying to a float target still writes it, behind a
+    * test of each component's exponent bits (0x7f800000, all ones for Inf
+    * and NaN). The first version tested with float compares, which NIR
+    * folded as if the value were finite: the output became the constant 0
+    * and the varying was never read, so every float target DIRT 5 drew into
+    * was black. Without the switch the MSL has no such test. Only built: the
+    * draws' attachment is RGBA8. */
+   {
+      const VkFormat formats[] = {VK_FORMAT_R16G16B16A16_SFLOAT,
+                                  VK_FORMAT_B10G11R11_UFLOAT_PACK32};
+      const char *e = getenv("MESA_KK_EXPERIMENTAL");
+      const bool clamp = e && strstr(e, "clamp_float_output");
+      for (unsigned i = 0; i < 2; i++) {
+         const int before = msl_count();
+         struct pipe_desc d = {"float-target", "pass.vert", NULL, NULL, NULL,
+                               "color.frag", TRI, false, FIRST, FILL};
+         d.color_format = formats[i];
+         make_pipeline(&d, layout);
+         if (before < 0)
+            continue;
+         const bool reads = msl_contains(before, msl_count(), "in.vary_00");
+         const int tests = msl_count_text(before, msl_count(), "& uint(2139095040u)");
+         if (!reads || (tests != 0) != clamp) {
+            fprintf(stderr, "float-target %d: the fragment MSL %s its varying and "
+                            "tests %d exponents, clamp_float_output %d\n",
+                    formats[i], reads ? "reads" : "does not read", tests, clamp);
+            return 1;
+         }
+      }
+      printf("ok float-target%s\n", clamp ? " clamp_float_output" : "");
+   }
 
    /* Texel buffers whose views start at a texel that is not 16-byte aligned
     * (storage/uniformTexelBufferOffsetSingleTexelAlignment, which
