@@ -404,3 +404,7 @@ profile). The profile appears before the event (the frame-2800 event trace), so
 a frame-2600 capture with the intro route should be the garage/profile load and
 the probe writer.
 
+That frame-2600 capture is the **event**, not the profile: 5.37 GB, 160 passes,
+3837 draws, no 128x128 pass. The profile comes later on this route; the next
+attempt is frame 3000-3500.
+
