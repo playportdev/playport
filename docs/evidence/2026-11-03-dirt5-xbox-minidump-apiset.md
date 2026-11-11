@@ -293,3 +293,12 @@ white (`.work/scratch/pla815a/vram4g-intro2.png`). The budget is not what makes
 the transparent materials black; they are the forward/transparent shading
 path, separate from the empty reflection probe.
 
+**The black particles/flags are a mask pass.** In the event intro's 269-draw main
+pass (`commands/cb30/re1`) the last instanced draws are 456x3, 519x6 and 84x5
+(the same counts as the garage's draw235-237). Their pipeline's fragment shader
+(`lib165`) writes `color_0 = 0` and reads no varyings: a depth/stencil mask, not
+a coloured sprite. The colour is composited later (the 24-dispatch compute after
+the 41-draw particle pass), so the fragment clamp never sees the black. The
+intro trace's main-pass colour fetch hangs in the 5 GB replayer; the 3.4 GB
+garage trace fetches normally and shows the same mask draws.
+
