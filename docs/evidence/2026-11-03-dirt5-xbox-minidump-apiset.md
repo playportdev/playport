@@ -466,6 +466,11 @@ options' lower rows remain unchecked.
 black 128x128 RG11B10F image (`.work/scratch/pla815a/pass28.png`). The game's
 reflection-probe render/update is skipped on this driver; the glass samples black.
 
+**The vkd3d caps log only shows SM 6.6.** A `VKD3D_DEBUG=info` run logs
+`Enabling support for SM 6.6` repeatedly; the D3D12 feature-options values are not
+logged at that level. The game's probe/particle capability check is not visible
+in the log; a trace-level log or a host reference would be needed.
+
 Frame 8000 is still the **race**: 101 command buffers, 161 passes, 3,471 draws.
 The race-to-hub route's A presses after the throttle hold did not finish/advance
 to the hub within 1500 s. The driven hub captures are exhausted; the user's 3.4 GB
