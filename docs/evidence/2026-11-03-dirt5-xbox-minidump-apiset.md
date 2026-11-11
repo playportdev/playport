@@ -421,3 +421,9 @@ RG11B10F **array** with usage 23 (render target/read/write), next to 128x128
 RGBA16F arrays; its source is a render or compute target, not a BC6H asset. The
 probe writer remains the target.
 
+**Frames 2400 and 3200 are the event.** Frame 2400 is 102 cbs, 151 passes,
+3,750 draws; frame 3200 is 101 cbs, 161 passes, 3,807 draws; neither has a
+128x128 pass. The profile/garage is earlier on the route (the profile modal),
+or the hub later. The next check is the video options' lower rows: the GPU
+particle colour is empty, and a low particle/effects setting could cull it.
+
