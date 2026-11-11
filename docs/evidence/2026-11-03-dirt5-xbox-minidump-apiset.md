@@ -302,3 +302,8 @@ the 41-draw particle pass), so the fragment clamp never sees the black. The
 intro trace's main-pass colour fetch hangs in the 5 GB replayer; the 3.4 GB
 garage trace fetches normally and shows the same mask draws.
 
+The 24 dispatches after the particle pass are a **bloom/mip chain** (1568x720,
+1x1, 688x352, 256x90, 128x195...), not the particle colour. The mask's colour
+source is therefore elsewhere: the deferred lighting/forward composite that
+reads the R8 mask, or the particle material buffer. That is still open.
+
