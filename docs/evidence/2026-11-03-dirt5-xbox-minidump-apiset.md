@@ -431,3 +431,10 @@ particle colour is empty, and a low particle/effects setting could cull it.
 1.34 GB; not the profile/garage (which has 116 encoders). The profile sits
 between the menu and the event; the next capture is frame 2100.
 
+That frame-2100 capture is the **event** as well: 100 command buffers, 161
+passes, 3455 draws. The profile/garage is not between the menu and the event.
+The garage frame 5600 was captured with `dirt5-race-long.txt` at frame 5600 /
+900 s, i.e. **after the race**: the hub/profile is at the end of that route. The
+next capture is frame 5400 with the same route, to catch the hub load and the
+probe writer.
+
