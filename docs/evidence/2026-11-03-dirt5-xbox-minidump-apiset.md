@@ -471,6 +471,14 @@ reflection-probe render/update is skipped on this driver; the glass samples blac
 logged at that level. The game's probe/particle capability check is not visible
 in the log; a trace-level log or a host reference would be needed.
 
+**vkd3d exposes feature level 12_0 / tiled resources tier 0.** The caps log says:
+max feature level **0xc000** (12_0), **tiled resources tier 0 (sparse binding
+0)**, resource binding tier 3, typed UAV loads 1, shader model 0x66. The Xbox
+One/PC Dirt 5 expects at least 12_0 with tiled resources (the Xbox One has tier
+2); the tier-0 fallback can change the game's streaming/probe/particle path and
+memory use, and fits the low-VRAM alert. Exposing sparse binding/tiled resources
+(Metal sparse textures) is a candidate fix.
+
 Frame 8000 is still the **race**: 101 command buffers, 161 passes, 3,471 draws.
 The race-to-hub route's A presses after the throttle hold did not finish/advance
 to the hub within 1500 s. The driven hub captures are exhausted; the user's 3.4 GB
