@@ -330,3 +330,10 @@ A further LEFT raised the title's **Low Video Memory (VRAM)** alert (the 3 GB
 budget), so Medium is what the save now holds; the next event capture uses it
 with a 4 GB budget to avoid the alert and shrink the 8192 shadow maps.
 
+That capture (frame 4200, 4 GB, Medium) produced a **5.12 GB** trace: the shadow
+maps are 4096x4096 instead of 8192, but the file is still too large to fetch.
+Its 266-draw main pass is a **different moment** (last draws 2, 2x2, 24x2, no
+456x3 masks), so it does not show the black flags. The next capture targets the
+garage/profile load at frame 2800, where the reflection probe is created or
+updated.
+
