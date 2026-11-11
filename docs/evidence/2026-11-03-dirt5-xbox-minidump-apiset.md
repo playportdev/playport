@@ -271,3 +271,14 @@ the capture missed, a compute the argument buffer hides, or a pass the title
 skips on KosmicKrisp. That is the next question; the Mac tools now replay both
 traces on the phone.
 
+**The probe's catalog entry.** In the garage trace's device resources it is
+created by `MTLHeap_newTextureWithDescriptor_offset` (object `0x713c7d5400`):
+a 128x128 RG11B10F `2DArray`, 30 slices, 6 mips, usage 23. In the frame it is
+not an attachment and no explicit call names it; it is sampled only through an
+argument buffer by the compute shader `lib69` (the lighting kernel, which reads
+`texturecube_array` at a reflection vector and slice). A 128x128 RG11B10F pass
+with no draws is the only pass with that target. The garage-menu frames
+(1200 and 3000) have no such pass at all; the first-frame trace's 140 startup
+dispatches are vkd3d's `vkCmdFillMemoryKHR` zero fills, not the probe. The
+writer therefore runs at the garage load or is skipped, and the probe stays 0.
+
