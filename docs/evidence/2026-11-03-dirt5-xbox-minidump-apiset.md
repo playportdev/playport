@@ -397,3 +397,10 @@ black car windows (`.work/scratch/pla815a/bardev-profile2.png`); the flag is
 neutral for the probe/particles. The GPU-driven particle colour and the empty
 reflection cube array remain the targets.
 
+**The profile/garage route.** The player-card NUMBER screen is the garage
+livery; its background is the garage itself, and a GARAGE tile is not on the
+podcast/profile path (wait-text for GARAGE pressed A through the clips to the
+profile). The profile appears before the event (the frame-2800 event trace), so
+a frame-2600 capture with the intro route should be the garage/profile load and
+the probe writer.
+
