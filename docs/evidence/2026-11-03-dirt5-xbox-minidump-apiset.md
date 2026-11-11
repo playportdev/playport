@@ -468,3 +468,10 @@ hub trace (5600) remains the only hub frame (128x128 pass, no draws). The next
 step is to analyse that pass directly and check the video options' lower rows
 through the event pause.
 
+**The video options have no particle/reflection row.** The list is Image Quality,
+Vsync, Dynamic Resolution Scaling, Final/History/Render Resolution, Geometry,
+Tessellation, Shadow, Volumetric, Cloud, Procedural, Global Illumination and
+FidelityFX Ambient Occlusion (`.work/scratch/pla815a/vidopt3-bottom2.png`). There
+is no separate particle, effects or reflection quality, so the empty particle
+colour and the empty probe are not a low-quality setting.
+
