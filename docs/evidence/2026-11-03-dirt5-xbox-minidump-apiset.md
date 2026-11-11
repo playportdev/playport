@@ -391,3 +391,9 @@ visuals are unchanged: the event's black flags and white sky
 (`.work/scratch/pla815a/ext-profile2.png`). The extension is spec-correct but is
 not the visual fix; the particle emission and the reflection probe remain.
 
+**The barrier-visibility flag does not fix it.** A garage run with
+`MESA_KK_EXPERIMENTAL=...,barrier_device_vis` (IPA `3fdc9685`) still shows the
+black car windows (`.work/scratch/pla815a/bardev-profile2.png`); the flag is
+neutral for the probe/particles. The GPU-driven particle colour and the empty
+reflection cube array remain the targets.
+
