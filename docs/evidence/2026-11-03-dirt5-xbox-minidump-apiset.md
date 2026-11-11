@@ -282,3 +282,14 @@ with no draws is the only pass with that target. The garage-menu frames
 dispatches are vkd3d's `vkCmdFillMemoryKHR` zero fills, not the probe. The
 writer therefore runs at the garage load or is skipped, and the probe stays 0.
 
+**The video budget is not the black surfaces.** The 12 GB tier's plan gives 3072 MiB
+video (Dirt 5's `memory plan` line); a play with `runtime:
+vram-mb=4096 env.PLAYPORT_VK_BUDGET_MB=4096 env.PLAYPORT_VK_HEAP_MB=4096`
+logs `[kk-memory] heap 0: size 8192 MiB, budget capped at 4096 MiB`. The
+garage's front windshield then showed blue
+(`.work/scratch/pla815a/vram4g-intro.png`), but the car's rear window and the
+event's large black flag/banner polygons stayed black, and the sky stayed flat
+white (`.work/scratch/pla815a/vram4g-intro2.png`). The budget is not what makes
+the transparent materials black; they are the forward/transparent shading
+path, separate from the empty reflection probe.
+
