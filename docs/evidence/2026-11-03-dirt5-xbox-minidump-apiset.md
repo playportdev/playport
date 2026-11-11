@@ -461,3 +461,10 @@ The hub is later than 7000 on the current build. The launch/route again shows th
 **profile NUMBER** screen (the garage livery), not the event pause; the video
 options' lower rows remain unchecked.
 
+Frame 8000 is still the **race**: 101 command buffers, 161 passes, 3,471 draws.
+The race-to-hub route's A presses after the throttle hold did not finish/advance
+to the hub within 1500 s. The driven hub captures are exhausted; the user's 3.4 GB
+hub trace (5600) remains the only hub frame (128x128 pass, no draws). The next
+step is to analyse that pass directly and check the video options' lower rows
+through the event pause.
+
