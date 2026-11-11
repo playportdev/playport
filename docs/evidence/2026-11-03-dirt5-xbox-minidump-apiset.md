@@ -414,3 +414,10 @@ this route; the garage frame 5600 user trace remains the hub frame. The next
 thread is the probe's **source**: the 30-slice RG11B10F array may be filled from
 an HDR cubemap asset (BC6H) whose decode/copy leaves it zero.
 
+**No BC6H in the frame.** The garage trace's textures are BC7 (Metal 152/153:
+1,191), BC1 (130/131: 375), BC5 (142/143: 123) and BC4 (140: 40), plus RGBA8,
+RG11B10F and RGBA16F; there is **no BC6H** (150/151). The probe is a 128x128
+RG11B10F **array** with usage 23 (render target/read/write), next to 128x128
+RGBA16F arrays; its source is a render or compute target, not a BC6H asset. The
+probe writer remains the target.
+
