@@ -452,3 +452,7 @@ Under the current build (4 GB budget, extension) frame 5600 is still the **race*
 was the earlier, faster build; the current hub is later (~6800 at this frame
 rate). The next capture is **frame 6800** with the race route.
 
+Frame 6800 is the **race** as well: 101 command buffers, 161 passes, 3,673 draws.
+The current build's race-long route reaches 6800 frames at the 900 s play end, so
+the hub is later (~7000). The next capture is **frame 7000** with a 1200 s play.
+
