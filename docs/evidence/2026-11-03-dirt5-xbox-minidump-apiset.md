@@ -324,3 +324,9 @@ times out on the 5.3 GB trace; the 3.4 GB garage trace still fetches. The next
 trace should shrink the resource set (shadows low/medium) so the event's particle
 draw is fetchable.
 
+**Shadow Quality Medium.** The event pause menu (RESUME/RESTART/PHOTOMODE/
+SETTINGS → VIDEO OPTIONS) was driven to **Shadow Quality**; High → **Medium**.
+A further LEFT raised the title's **Low Video Memory (VRAM)** alert (the 3 GB
+budget), so Medium is what the save now holds; the next event capture uses it
+with a 4 GB budget to avoid the alert and shrink the 8192 shadow maps.
+
