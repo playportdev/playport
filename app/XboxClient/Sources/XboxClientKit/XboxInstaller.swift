@@ -329,11 +329,14 @@ public struct XboxInstaller: Sendable {
         ((try? FileManager.default.contentsOfDirectory(atPath: layout.stagingRoot.path)) ?? []).contains { $0.hasPrefix(stem(product) + "_") }
     }
 
-    /// A folder name Windows and the library accept, from the copy's title.
+    /// A folder name Windows and the library accept, from the copy's title. ASCII only: a
+    /// play's start path reaches the guest one byte per character (WineHost's title_path), so
+    /// accents are folded and other characters (`™`, `®`) dropped.
     static func folderName(_ title: String, fallback: String) -> String {
         let bad = Set("<>:\"/\\|?*")
-        var name = String(title.unicodeScalars.filter { $0.value >= 0x20 && $0.value != 0x7F }.map(Character.init).filter { !bad.contains($0) })
-            .trimmingCharacters(in: .whitespaces)
+        let folded = title.folding(options: [.diacriticInsensitive, .widthInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+        var name = String(folded.unicodeScalars.filter { (0x20..<0x7F).contains($0.value) }.map(Character.init).filter { !bad.contains($0) })
+            .split(separator: " ", omittingEmptySubsequences: true).joined(separator: " ")
         while name.hasSuffix(".") { name.removeLast() }
         name = String(name.prefix(80)).trimmingCharacters(in: .whitespaces)
         return (try? WindowsName.check(name)) != nil ? name : fallback

@@ -34,10 +34,18 @@ final class XboxInstallTests: XCTestCase, @unchecked Sendable {
         o.cancelAfterChunks = cancelAfter
         return o
     }
-    func run(_ i: XboxInstaller, cancelAfter: Int? = nil) async throws -> XboxInstaller.Result {
+    func run(_ i: XboxInstaller, cancelAfter: Int? = nil, title: String = "Test Game: Edition") async throws -> XboxInstaller.Result {
         var engine = options(cancelAfter: cancelAfter)
         engine.progressInterval = 0
-        return try await i.install(product: product, contentID: XboxTestPackage.contentID.uuidString, title: "Test Game: Edition", options: engine)
+        return try await i.install(product: product, contentID: XboxTestPackage.contentID.uuidString, title: title, options: engine)
+    }
+
+    /// A play's start path must be ASCII (WineHost's title_path refuses anything else), so a
+    /// Store title with `™` or accents installs into an ASCII folder (THPS 3+4 on the phone).
+    func testAStoreTitleWithTrademarksAndAccentsInstallsIntoAnASCIIFolder() async throws {
+        let r = try await run(installer(XboxTestServices(cdn, size: package.bytes.count)), title: "Tony Hawk's™ Pro Skater™ 3 + 4 — Édition")
+        XCTAssertEqual(r.installed.installDir, "Tony Hawk's Pro Skater 3 + 4 Edition")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent("Games/Tony Hawk's Pro Skater 3 + 4 Edition").path))
     }
 
     /// Stream-extract: every file lands from ranged reads, plain files decrypted,
