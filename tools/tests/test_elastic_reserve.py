@@ -7,7 +7,9 @@ the guest window and FEX's band at 0x7c00000000 (the holds and furniture of each
 outside them), places an ask as today (its logged address, else the lowest gap that fits; a WoW64
 window its first free fixed slot from madeira-unix 0146's wow64_slots.h, else the lowest gap), and
 performs what the module decides: whole placements, short grants with their guard, lends, growth,
-refusals. The fixtures in fixtures/elastic/ name the runs they come from."""
+refusals. The fixtures in fixtures/elastic/ name the runs they come from. A fixture's `held` ranges
+are the Social Club layout's slots, held from boot; a routed ask with a `real` size takes its slot's
+real range."""
 import copy
 import ctypes
 import json
@@ -134,7 +136,7 @@ def flags_of(names):
 class Space:
     """The guest window as the glue sees it, with the module's state beside it."""
 
-    def __init__(self, free, elastic=True):
+    def __init__(self, free, elastic=True, held=()):
         self.occ = []                       # sorted [base, end, owner]
         cur = LO
         for b, e in sorted((int(b, 16), int(e, 16)) for b, e in free):
@@ -143,6 +145,11 @@ class Space:
             cur = max(cur, e)
         if cur < HI:
             self.occ.append([cur, HI, "furniture"])
+        # The Social Club layout's slots, held natively from boot: furniture a routed ask takes over.
+        for name, b, size in held:
+            b, size = int(b, 16), int(size, 16)
+            self.vacate(b, b + size)
+            self.occupy(b, size, "held:" + name)
         self.elastic = elastic
         self.st = LIB.s_new(WINDOW) if elastic else None
         self.views = {}                     # id -> dict(base, span, claim, height)
@@ -269,7 +276,7 @@ class Space:
         return base
 
     # -- the glue
-    def reserve(self, vid, size, names, at=None, routed=None, limit=0, align=0):
+    def reserve(self, vid, size, names, at=None, routed=None, limit=0, align=0, real=None):
         flags = flags_of(names)
 
         def today():
@@ -284,9 +291,17 @@ class Space:
             if routed is None:
                 self.placements[vid] = None
                 return None
-            if self.is_free(routed, size):
+            span, hold = size, None
+            if real is not None:
+                # A slot's grant: its real range out of the hold, the reported extent only a claim.
+                hold = self.owner_at(routed)[1]
+                assert hold and hold.startswith("held:") and self.owner_at(routed + real - 1)[1] == hold, (vid, hold)
+                self.vacate(routed, routed + real)
+                self.occupy(routed, real, vid)
+                span = real
+            elif self.is_free(routed, size):
                 self.occupy(routed, size, vid)
-            self.views[vid] = dict(base=routed, span=size, claim=size, height=0, flags=flags)
+            self.views[vid] = dict(base=routed, span=span, claim=size, height=0, flags=flags, hold=hold)
             self.placements[vid] = routed
             return routed
         if not self.elastic:
@@ -341,6 +356,9 @@ class Space:
     def release(self, vid):
         v = self.views.pop(vid)
         self.vacate(v["base"], v["base"] + v["span"])
+        if v.get("hold"):
+            # A slot's owner exits: the slot is held in place (madeira-unix 0231), never a gap.
+            self.occupy(v["base"], v["span"], v["hold"])
         if self.st:
             LIB.s_released(self.st, v["base"])
 
@@ -411,13 +429,14 @@ def load(name):
 
 
 def replay(fx, elastic=True):
-    sp = Space(fx["free"], elastic)
+    sp = Space(fx["free"], elastic, fx.get("held", ()))
     for ev in fx["events"]:
         op = ev[0]
         if op == "reserve":
             _, vid, size, names, extra = ev
-            at, routed = extra.get("at"), extra.get("routed")
-            sp.reserve(vid, int(size, 16), names, int(at, 16) if at else None, int(routed, 16) if routed else None)
+            at, routed, real = extra.get("at"), extra.get("routed"), extra.get("real")
+            sp.reserve(vid, int(size, 16), names, int(at, 16) if at else None, int(routed, 16) if routed else None,
+                       real=int(real, 16) if real else None)
         elif op == "commit":
             if sp.placements.get(ev[1]) is not None and sp.elastic:
                 sp.commit(ev[1], int(ev[2], 16))
@@ -472,6 +491,12 @@ class NoPressure(unittest.TestCase):
         # V8's ladder and the helper's 5,119 MB asks fail as today, never shortened.
         for vid in ("v8_512g", "v8_64g", "v8_32g", "v8_16g", "v8_5119_a1", "v8_5119_b2"):
             self.assertIsNone(sp.placements[vid], vid)
+
+    def test_rdr2_helper_slots_are_placed_in_their_holds(self):
+        sp, fx = self.check("rdr2-helper-slots.json")
+        for who in ("a", "b"):
+            for kind, (base, _) in SLOTS.items():
+                self.assertEqual(sp.placements[f"{who}_{kind}"], base, (who, kind))
 
     def test_the_witcher_3_132_without_its_keys_places_whole(self):
         sp, fx = self.check("witcher3-132.json")
@@ -729,6 +754,74 @@ class ReviewFixes(unittest.TestCase):
         sp.release("b")
         sp.release("a")
         self.assertEqual(sp.counts()["shortened"], 0)
+
+
+# The verified helper's slots on the Social Club layout (pp_sc_layout.h): real base and size.
+SLOTS = {"cef": (0x7000000000, 0x10000000), "elf_meta": (0x7400000000, 0x190000000),
+         "cef_meta": (0x7590000000, 0x40000000), "elf": (0x7800000000, 0x100000000),
+         "cage": (0x7A00000000, 0x200000000)}
+
+
+class HelperSlots(unittest.TestCase):
+    """The verified helper's slot asks (PLA-840): the Social Club router places each in its slot's real
+    range, so the policy never tracks them. Under pressure that lends the game's pools, no slot is lent or
+    shortened, its growth inside the real prefix is served, and V8's ladder is refused before the policy."""
+
+    def replayed(self):
+        return replay(load("rdr2-helper-slots.json"))
+
+    def assert_slots_whole(self, sp):
+        tracked = {v["base"] for v in sp.mviews()}
+        for kind, (base, real) in SLOTS.items():
+            v = sp.views["b_" + kind]
+            self.assertEqual((v["base"], v["span"]), (base, real), kind)
+            self.assertNotIn(base, tracked, kind)
+
+    def test_a_dead_helpers_slots_are_held_in_place_for_the_next(self):
+        sp = self.replayed()
+        self.assert_slots_whole(sp)
+        self.assertEqual(sp.views["b_elf_meta"]["height"], 0xAB00000)
+        for kind, (base, _) in SLOTS.items():
+            self.assertNotIn(base, [b for b, _ in sp.gaps()], kind)
+
+    def test_pressure_lends_only_the_games_pool_and_the_slots_grow_through_their_prefix(self):
+        sp = self.replayed()
+        sp.commit("game1175", 64 * MB)
+        sp.fill()
+        self.assertIsNotNone(sp.reserve("game512", 512 * MB, []))      # fails today: the game's pool lends
+        c = sp.counts()
+        self.assertEqual((c["lends"], c["shorts"]), (1, 0))
+        self.assertLess(sp.views["game1175"]["span"], 0x49701000)
+        for kind, (_, real) in SLOTS.items():
+            sp.commit("b_" + kind, real, step=64 * MB)
+            self.assertEqual(sp.views["b_" + kind]["height"], real, kind)
+        self.assert_slots_whole(sp)
+        self.assertEqual(sp.refused, {})
+        self.assertEqual(sp.wrong_view, [])
+
+    def test_a_shortened_claim_over_a_slot_never_takes_its_growth(self):
+        sp = self.replayed()
+        base = sp.reserve("game16g", 16 * GB, [])                       # no 16 GiB gap: shortened
+        self.assertEqual(sp.counts()["shorts"], 1)
+        meta = SLOTS["elf_meta"][0]
+        self.assertTrue(base < meta < base + 16 * GB)                   # its claim runs over ELF_META's slot
+        sp.commit("b_elf_meta", SLOTS["elf_meta"][1], step=64 * MB)
+        sp.commit("game16g", 16 * GB, step=64 * MB)
+        self.assertNotIn("b_elf_meta", sp.refused)
+        self.assertIn("game16g", sp.refused)                            # refused at the next mapping, never served past it
+        self.assert_slots_whole(sp)
+        self.assertEqual(sp.wrong_view, [])
+
+    def test_v8s_ladder_is_refused_before_the_policy_could_lend(self):
+        sp = self.replayed()
+        sp.fill()
+        before = sp.counts()
+        for n in (512, 256, 128, 64, 32, 16):
+            self.assertIsNone(sp.reserve(f"ladder{n}", n * GB, ["layout"]), n)
+        self.assertEqual(sp.counts(), before)
+        # The same 16 GiB, were it not the router's, would have engaged the policy.
+        self.assertIsNotNone(sp.reserve("plain16", 16 * GB, []))
+        self.assertNotEqual(sp.counts(), before)
 
 
 if __name__ == "__main__":

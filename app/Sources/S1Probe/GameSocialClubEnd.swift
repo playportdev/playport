@@ -2,9 +2,8 @@
 // Settings › Graphics › End a game's own Social Club, in dev and release builds, on unless turned
 // off (decision 0153, amending 0133 and 0141), and off under the Social Club layout, where only a
 // dev build's stored switch turns it on (decision 0169; GameSocialClubEndPolicy, PlayportKit).
-// Every Play of Rockstar's launcher runs the layout with the launcher's runtime keys
-// (PublisherLauncher.rockstar, both builds), so the end applies only where a dev build's
-// `env.PLAYPORT_SC_LAYOUT=0` turned the layout off.
+// A Play holds the layout when what it starts is a verified Rockstar bootstrap (SocialClubLayout,
+// decision 0183), so the end applies to a Rockstar Play whose game folder holds none Playport verified.
 // 120 s or more after the game's sign-in, once the
 // footprint is within LauncherEndTrigger.headroomMB of the limit, a Play whose launcher ends at the
 // sign-in (LaunchSettings.endLauncherAfterSignIn with a PublisherLauncher, which only Rockstar's
@@ -27,22 +26,14 @@ enum GameSocialClubEnd {
     static let refuseRestartKey = "refuseGameSocialClubRestart"
     static let refuseRestartVariable = "PLAYPORT_REFUSE_GAME_SC_RESTART"
 
-    /// Whether a Play with this title config runs the Social Club layout (PLAYPORT_SC_LAYOUT=1,
-    /// the Rockstar launcher's runtime key).
-    static func socialClubLayout(config: [String: String]) -> Bool {
-        GameSocialClubEndPolicy.socialClubLayout(
-            config: config, environment: getenv(GameSocialClubEndPolicy.layoutVariable).map { String(cString: $0) })
-    }
-
-    /// Whether a Play with this title config ends the game's own Social Club (decisions 0153, 0169).
-    static func enabled(config: [String: String]) -> Bool {
-        let layout = socialClubLayout(config: config)
+    /// Whether a Play ends the game's own Social Club (decisions 0153, 0169).
+    static func enabled(socialClubLayout: Bool) -> Bool {
         #if PLAYPORT_RELEASE
         let release = true
         #else
         let release = false
         #endif
-        return GameSocialClubEndPolicy.ends(stored: stored(key), socialClubLayout: layout, release: release)
+        return GameSocialClubEndPolicy.ends(stored: stored(key), socialClubLayout: socialClubLayout, release: release)
     }
 
     /// Whether ntdll refuses the helper's restarts for a Play that does or does not end it (decision 0138).

@@ -483,6 +483,11 @@ final class LibraryModel: ObservableObject {
         await Task.detached(priority: .userInitiated) { EmulatorCache.keepWithinBudget { Self.log($0) } }.value
         let fex = FEXProfile.launch(appID: t.appID, exe: plan.exe, ordering: settings.ordering, maxInst: settings.maxInst,
                                     x87Reduced: settings.x87Reduced, diskCache: settings.diskCache)
+        // The Social Club layout, only for a game whose folder holds a verified Rockstar bootstrap, whichever
+        // launcher it starts (decisions 0169, 0183; SocialClubLayout).
+        let gameFolder = Self.paths.games.appendingPathComponent(t.installDir, isDirectory: true)
+        let socialClub = await Task.detached(priority: .userInitiated) { SocialClubLayout.check(folder: gameFolder, place: .game) }.value
+        for line in socialClub.lines { Self.log("play \(t.name): " + line) }
         guard TitleLaunch.shared.start(title: t.name, titleID: t.id, exe: plan.exe, args: plan.args + settings.arguments + epicArgs,
                                        config: settings.config(over: plan.config),
                                        screen: settings.guestScreen, frameLimit: settings.frameLimit,
@@ -492,7 +497,7 @@ final class LibraryModel: ObservableObject {
                                        guestEnvironment: guestEnvironment, atEnd: atEnd,
                                        prerequisites: prerequisites, windowsServices: settings.windowsServices,
                                        khronosVulkanLoader: settings.khronosVulkanLoader,
-                                       jitPoolMB: settings.jitPoolMB,
+                                       jitPoolMB: settings.jitPoolMB, socialClubLayout: socialClub.engaged,
                                        // The launcher it starts ends at the game's sign-in (decision 0130).
                                        endLauncher: settings.endLauncherAfterSignIn
                                            ? PublisherLauncher.startedBy(game: t.id)?.signIn : nil,

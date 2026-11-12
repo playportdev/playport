@@ -58,11 +58,10 @@ public struct PublisherLauncher: Equatable, Sendable, Identifiable {
     /// host band to Social Club's threads (decision 0114). FEX's self-modifying-code checks are
     /// off (`env.FEX_SMCCHECKS=none`): with them on, Social Club's CEF crashed and the pool's tail
     /// passed 560 MB (run `20261018T095302`; decision 0116).
-    /// Every Play that runs it, its Open and RDR2's, runs Social Club on Rockstar's own CEF in the
-    /// stock-CEF layout (`env.PLAYPORT_SC_LAYOUT=1`), in both builds (decision 0169, PLA-602);
-    /// single-process needs no key, sc_single.h has it on by default. The layout changes every
-    /// process of its session, so no other title gets it. A release build takes this key and never
-    /// a person's; a dev build's `=0` saved for the game or the Open wins (openSettings, startingGame).
+    /// Social Club runs on Rockstar's own CEF, single-process by default (sc_single.h; decision 0169).
+    /// The launcher carries no Social Club layout key (decision 0183): a Play holds the stock-CEF layout
+    /// only when what it starts is a verified Rockstar bootstrap (SocialClubBootstrap, PLA-840), RDR2's
+    /// in its game folder or, for the Open, a verified Launcher.exe in the launcher's install folder.
     /// KosmicKrisp releases a submitted-once command buffer's memory at its completion and rounds large
     /// command BOs finer (`MESA_KK_EXPERIMENTAL=cmd_retire,cmd_bo_classes`, mesa 0132–0135; decision
     /// 0173): with the game's Social Club alive (0169) RDR2's cabin load otherwise reaches the limit.
@@ -73,7 +72,7 @@ public struct PublisherLauncher: Equatable, Sendable, Identifiable {
         exhaustionGrace: 240,
         graphicsEnvironment: ["DXVK_CONFIG": "dxvk.numCompilerThreads = 1", "DXVK_SHADER_CACHE": "0",
                               "VKD3D_SHADER_CACHE_PATH": "0", "MESA_KK_EXPERIMENTAL": "cmd_retire,cmd_bo_classes"],
-        runtime: ["env.FEX_SMCCHECKS": "none", "env.PLAYPORT_SC_LAYOUT": "1"],
+        runtime: ["env.FEX_SMCCHECKS": "none"],
         // Red Dead Redemption 2's Steam copy: PlayRDR2.exe starts Launcher.exe -steamAppId=1174180.
         games: ["app-1174180"],
         // With it the main window logs "Using saved geometry"; without it "Centering on monitor",

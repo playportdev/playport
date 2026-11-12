@@ -40,8 +40,8 @@ lands, the keys it removes stay as built, and no part of it is shown on the phon
   size, a layout switched on by title or launcher, a video memory or heap figure, a title's JIT pool
   size, a stored memory need. Every game, 32-bit and 64-bit, runs under one memory layout.
 - **An exception is decided by a property the runtime observes, never by title or launcher.** A
-  hinted ask, an aligned ask, a verified helper's hash and an image's large-address-aware flag are
-  such properties; 0180's never-shrunk asks are exceptions of this kind.
+  hinted ask, an aligned ask, a verified Rockstar bootstrap's hash and an image's large-address-aware
+  flag are such properties; 0180's never-shrunk asks are exceptions of this kind.
 - **A new exception needs its own decision record**, saying why no general rule replaces it.
 - **`avail-phys-cef-mb` is not a per-game key and stays.** It applies to the Social Club helper
   process in every game ([0168](0168-social-clubs-helper-is-told-little-available-memory.md)).
@@ -54,11 +54,15 @@ lands, the keys it removes stay as built, and no part of it is shown on the phon
     tests; the configuration check refuses the keys, and a check fails any entry, cohort title,
     launcher or `everyGame` default that carries a memory key
     ([PLA-843](https://linear.app/playportdev/issue/PLA-843)). No title can get a hold back.
-  - The Social Club layout engages when the Play's installed copy contains a verified Social Club
-    helper, not when Rockstar's launcher starts the Play
-    ([PLA-840](https://linear.app/playportdev/issue/PLA-840)). Any other Play holds no Social Club
-    range. The layout shrinks to the anchors its window forces, and the rest is claimed at the
-    helper's first ask; ELF_META2 and RDR2's 8,960 MiB game hold go
+  - The Social Club layout engages when what the Play starts is a Rockstar bootstrap verified by hash,
+    not when Rockstar's launcher starts the Play
+    ([PLA-840](https://linear.app/playportdev/issue/PLA-840); the owner's decision there of
+    2026-11-12): a game whose install folder holds one (RDR2's Steam copy: `PlayRDR2.exe` and
+    `Redistributables/Rockstar-Games-Launcher.exe`), or the launcher's Open of a verified
+    `Launcher.exe`. The helper itself cannot decide it: it is in the shared prefix, missing until the
+    launcher's first run, and the layout is decided before the runtime starts (0169's amendment note).
+    Any other Play holds no Social Club range. The layout shrinks to the anchors its window forces,
+    and the rest is claimed at the helper's first ask; ELF_META2 and RDR2's 8,960 MiB game hold go
     ([PLA-841](https://linear.app/playportdev/issue/PLA-841),
     [PLA-842](https://linear.app/playportdev/issue/PLA-842)).
   - A 32-bit game's WoW64 window is placed by the elastic policy
@@ -88,6 +92,7 @@ lands, the keys it removes stay as built, and no part of it is shown on the phon
 - **A fix for one game changes every game's layout.** Hollow Knight's first-frame+10 gates each
   runtime change, and each milestone's sweep plays the problem titles on one IPA with games that
   already worked (Death's Door, Portal 2, Kingdom Come: Deliverance).
-- **The Social Club layout follows the helper's hash.** A helper build Playport has not verified
-  gets no layout, as an unverified helper gets none today
-  ([0150](0150-dev-single-process-social-club.md)'s guard).
+- **The Social Club layout follows the bootstrap's hash.** A bootstrap Playport has not verified (a
+  Steam update of `PlayRDR2.exe`, a launcher self-update) gets no layout until its hashes join the
+  table; a dev build logs them. The helper keeps [0150](0150-dev-single-process-social-club.md)'s
+  guard for single-process.
