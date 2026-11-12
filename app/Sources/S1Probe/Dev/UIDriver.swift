@@ -404,8 +404,10 @@ enum UIDriver {
                 case "install" where id.hasPrefix("xbox-"):
                     if let failure = try await installXbox(String(id.dropFirst(5))) { return finish("action=\(action) failed: \(failure)") }
                 case "install", "pause-resume":
-                    guard let app = UInt32(id) else { return finish("action=\(action) refused: \(id) is not a Steam app id") }
-                    if let failure = try await install(app, pauseAt: parts[0] == "pause-resume" ? 0.25 : nil) {
+                    let appAndBranch = id.split(separator: "@", maxSplits: 1).map(String.init)
+                    guard let app = UInt32(appAndBranch[0]) else { return finish("action=\(action) refused: \(id) is not a Steam app id") }
+                    let branch = appAndBranch.count > 1 ? appAndBranch[1] : nil
+                    if let failure = try await install(app, branch: branch, pauseAt: parts[0] == "pause-resume" ? 0.25 : nil) {
                         return finish("action=\(action) failed: \(failure)")
                     }
                 case "import":
@@ -1157,7 +1159,9 @@ enum UIDriver {
 
     /// The UI's install (and, with `pauseAt`, its Pause and Resume); nil when
     /// the title reached the library, else why not.
-    private static func install(_ app: UInt32, pauseAt: Double?) async throws -> String? {
+    /// `branch`: a Steam branch, as the game page's Version picker gives it (over an installed
+    /// copy, that version downloads over it).
+    private static func install(_ app: UInt32, branch: String? = nil, pauseAt: Double?) async throws -> String? {
         guard let steam = SteamAccountModel.current else { return "no Steam model" }
         for _ in 0..<600 where steam.state.account == nil || { if case .restoring = steam.state { return true }; return false }() {
             try await pause(.milliseconds(100))
@@ -1170,8 +1174,8 @@ enum UIDriver {
         if steam.games.first(where: { $0.id == app }) == nil,
            let info = try await checked({ try? await steam.appInfo(app) }) { name = info.name }
         let started = Date()
-        log("install \(app) \(name): started")
-        installs.install(app, name: name)
+        log("install \(app) \(name): started" + (branch.map { " branch=\($0)" } ?? ""))
+        installs.install(app, name: name, branch: branch)
         if let pauseAt {
             while let j = installs.jobs[.steam(app)], j.isRunning || j.phase == .queued, (j.fraction ?? 0) < pauseAt {
                 try await pause(.milliseconds(100))
