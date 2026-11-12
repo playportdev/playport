@@ -11,7 +11,9 @@ import Darwin
 /// rename into place and an install record. Verify re-hashes an install
 /// against its retained manifests with no session; repair re-downloads the
 /// files that fail into a side stage and renames each one over the broken
-/// copy. Uninstall moves the title aside with one rename, then deletes it and
+/// copy. Each file an install or a check verified is recorded by its size,
+/// time and inode, so recheck finds one written since without hashing the
+/// title (VerifiedStamps). Uninstall moves the title aside with one rename, then deletes it and
 /// its record. A folder another Steam app's record names (Steam's shared
 /// installdir, SharedInstallDir) is joined file by file instead: only the files
 /// the other apps do not list are downloaded and renamed in, and uninstalling
@@ -69,6 +71,9 @@ public struct TitleInstaller: Sendable {
         public var bytes: UInt64
         /// Missing, wrong size or wrong hash, by path.
         public var bad: [String]
+        /// What is wrong with each bad file: missing, its size against the manifest's, and whether it
+        /// was written since it was last verified (VerifiedStamps).
+        public var notes: [String] = []
         /// Regular files under the install that no plan entry names (left alone).
         public var unlisted: [String]
         public var seconds: Double
@@ -140,6 +145,28 @@ public struct TitleInstaller: Sendable {
         let plan = try InstallPlan.make(appID: r.appID, buildID: app.publicBuildID, manifests: manifests)
         say("plan: \(plan.files.count) files, \(plan.directories.count) directories, \(plan.totalBytes) bytes, \(plan.chunkCount) chunks (\(plan.uniqueChunkCount) unique)"
             + (plan.skippedSymlinks.isEmpty ? "" : ", \(plan.skippedSymlinks.count) symlink entries not installed"))
+        let receipt = InstallReceipt(appID: r.appID, name: app.name, installDir: name, buildID: app.publicBuildID, depots: refs,
+                                     files: plan.files.count, bytes: plan.totalBytes,
+                                     skippedDepots: selection.skipped.map { "\($0.depotID): \($0.reason)" },
+                                     skippedSymlinks: plan.skippedSymlinks.count, installedAt: "",
+                                     branch: branch == Branch.publicName ? nil : branch,
+                                     executable: app.launchExecutable, arguments: app.launchArguments)
+        let source = CDNChunkSource(content: content, keys: keys, pool: ServerPool(servers, use: r.servers, log: log), log: log)
+        let (written, result) = try await stageAndCommit(plan, to: final, replacing: replacing, sharing: sharing, receipt: receipt,
+                                                         source: source, options: r.engine, progress: progress, say: say)
+        try? FileManager.default.removeItem(at: layout.stageBranch(appID: r.appID, buildID: app.publicBuildID))
+        return Outcome(receipt: written, stage: result, installedTo: final, alreadyInstalled: false)
+    }
+
+    /// An install's or update's download and commit, once it has the plan: stages it from `source` (in
+    /// a folder other Steam apps share, only the files they do not list), each file SHA-1-checked; puts
+    /// it in place, by one rename over the previous copy or file by file into the shared folder; writes
+    /// `receipt`, stamped now, and records each staged file as verified (VerifiedStamps).
+    func stageAndCommit(_ plan: InstallPlan, to final: URL, replacing: Bool, sharing: [InstallReceipt], receipt: InstallReceipt,
+                        source: any ChunkSource, options: InstallEngine.Options,
+                        progress: @escaping @Sendable (InstallEngine.Progress) -> Void,
+                        say: @escaping @Sendable (String) -> Void) async throws -> (receipt: InstallReceipt, stage: InstallEngine.Result?) {
+        let name = receipt.installDir
         var stagePlan = plan
         var others: SharedInstallDir.Others?
         if !sharing.isEmpty {
@@ -150,11 +177,9 @@ public struct TitleInstaller: Sendable {
                 + "\(plan.files.count - stagePlan.files.count) of \(plan.files.count) files are theirs too, \(stagePlan.files.count) to download")
         }
 
-        let tree = layout.stagingTree(appID: r.appID, buildID: app.publicBuildID)
-        let pool = ServerPool(servers, use: r.servers, log: log)
-        let engine = InstallEngine(tree: tree, journal: layout.journal(appID: r.appID, buildID: app.publicBuildID),
-                                   source: CDNChunkSource(content: content, keys: keys, pool: pool, log: log),
-                                   log: log, options: r.engine)
+        let tree = layout.stagingTree(appID: plan.appID, buildID: plan.buildID)
+        let engine = InstallEngine(tree: tree, journal: layout.journal(appID: plan.appID, buildID: plan.buildID),
+                                   source: source, log: log, options: options)
         var result: InstallEngine.Result?
         if !stagePlan.files.isEmpty {
             let staged = try await engine.run(stagePlan) { p in progress(p); say(Self.progressLine(p)) }
@@ -162,23 +187,18 @@ public struct TitleInstaller: Sendable {
             result = staged
         }
 
-        let receipt = InstallReceipt(appID: r.appID, name: app.name, installDir: name, buildID: app.publicBuildID, depots: refs,
-                                     files: plan.files.count, bytes: plan.totalBytes,
-                                     skippedDepots: selection.skipped.map { "\($0.depotID): \($0.reason)" },
-                                     skippedSymlinks: plan.skippedSymlinks.count,
-                                     installedAt: ISO8601DateFormatter().string(from: Date()),
-                                     branch: branch == Branch.publicName ? nil : branch,
-                                     executable: app.launchExecutable, arguments: app.launchArguments)
+        var receipt = receipt
+        receipt.installedAt = ISO8601DateFormatter().string(from: Date())
         if let others {
             try commitShared(tree, plan: plan, staged: stagePlan, to: final, others: others, receipt: receipt)
         } else {
             try commit(tree, to: final, replacing: replacing, receipt: receipt)
         }
         try? FileManager.default.removeItem(at: engine.journalURL)
-        try? FileManager.default.removeItem(at: layout.stageBranch(appID: r.appID, buildID: app.publicBuildID))
+        recordVerified(appID: plan.appID, root: final, paths: stagePlan.files.map(\.path), keeping: nil)
         say(others == nil ? "install: committed to Games/\(name) with one rename; record written"
                           : "install: \(stagePlan.files.count) files renamed into the shared Games/\(name); record written")
-        return Outcome(receipt: receipt, stage: result, installedTo: final, alreadyInstalled: false)
+        return (receipt, result)
     }
 
     /// The depots the account's packages list, or nil (anonymous, or not
@@ -248,17 +268,22 @@ public struct TitleInstaller: Sendable {
         let entries = plan.files.filter { only?.contains($0.path) ?? true }
         // A steam_api DLL swapped for the emulator is checked as its kept original (SteamAPISwap).
         let checks = try entries.map { f in
-            (f.path, try InstallFS.resolveInside(root, SteamAPISwap.manifestFile(root, f.path), createParents: false), f.size, f.sha)
+            (f, try InstallFS.resolveInside(root, SteamAPISwap.manifestFile(root, f.path), createParents: false))
         }
-        let bad = await Self.parallel(checks, width: concurrency) { c in
-            InstallEngine.fileMatches(c.1, size: c.2, hash: c.3.map(FileHash.sha1) ?? .none) ? nil : c.0
-        }
+        let stamps = VerifiedStamps.load(layout.verifiedFile(appID: appID))
+        let failed = await Self.parallel(checks, width: concurrency) { c in
+            InstallEngine.fileMatches(c.1, size: c.0.size, hash: c.0.sha.map(FileHash.sha1) ?? .none) ? nil : c
+        }.sorted { $0.0.path < $1.0.path }
+        let bad = Set(failed.map(\.0.path))
+        recordVerified(appID: appID, root: root, paths: entries.map(\.path).filter { !bad.contains($0) },
+                       keeping: Set(plan.files.map(\.path)))
         var unlisted: [String] = []
         if only == nil {
             let known = Set(plan.files.map { $0.path.lowercased() })
             unlisted = Self.regularFiles(under: root).filter { !known.contains($0.lowercased()) && !SteamAPISwap.isSwapFile(root, $0) }
         }
-        let report = VerifyReport(files: entries.count, bytes: entries.reduce(0) { $0 + $1.size }, bad: bad.sorted(),
+        let report = VerifyReport(files: entries.count, bytes: entries.reduce(0) { $0 + $1.size }, bad: failed.map(\.0.path),
+                                  notes: failed.map { Self.note($0.0, at: $0.1, stamps: stamps, root: root) },
                                   unlisted: unlisted, seconds: Date().timeIntervalSince(started), repaired: nil,
                                   depotsToRecheck: only == nil ? receipt.depotsToRecheck : [])
         return (report, plan, receipt, root)
@@ -397,6 +422,7 @@ public struct TitleInstaller: Sendable {
         guard after.bad.isEmpty else { throw SteamError.verificationFailed("\(after.bad.count) files still fail after repair") }
         var full = first
         full.bad = []
+        full.notes = []
         full.repaired = after.repaired
         return full
     }
@@ -647,9 +673,10 @@ public struct TitleInstaller: Sendable {
         discardStage(appID: own.appID)
     }
 
-    /// Deletes a record and its retained manifests that no other record names.
+    /// Deletes a record, its verified files' record and its retained manifests that no other record names.
     func forget(_ r: InstallReceipt) {
         try? FileManager.default.removeItem(at: layout.receiptFile(appID: r.appID))
+        try? FileManager.default.removeItem(at: layout.verifiedFile(appID: r.appID))
         let names = (try? FileManager.default.contentsOfDirectory(atPath: layout.installsDir.path)) ?? []
         let kept = Set(names.compactMap { n -> UInt32? in n.hasSuffix(".json") ? UInt32(n.dropLast(5)) : nil }
             .compactMap { loadReceipt($0)?.depots }.joined())
