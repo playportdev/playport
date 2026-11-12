@@ -1491,8 +1491,12 @@ writes `Documents/prefix/Documents/title-cfg/<install folder>/madeira.cfg` as
 the shared file followed by those keys (the reader keeps a key's last line)
 and points `MADEIRA_DOCS_DIR` there before the runtime starts, so the shared
 file is never edited (PlayportKit `TitleConfig`). The runtime's own
-`MADEIRA_DOCS_DIR` outputs (`fex-jit-dump.bin`, `madeira-retire-trace.txt`)
-land in that directory for such a launch. The first title in a process fixes
+`MADEIRA_DOCS_DIR` outputs land in that directory for such a launch:
+`madeira-retire-trace.txt`, and `fex-jit-dump.bin`, the JIT pool's whole RW
+alias at the first unhandled exec fault or illegal instruction, which the
+runtime writes only when a dev build's Settings › Developer › JIT pool dump
+sets `MADEIRA_JIT_DUMP` (madeira-unix 0297, PLA-555; it wrote about 0.9 GB
+at every launch of a game that handles such a fault). The first title in a process fixes
 the guest's screen (`TitleScreen.configure`).
 
 **The memory plan** (PLA-352, PlayportKit `MemoryPlan`). Just before Wine starts,

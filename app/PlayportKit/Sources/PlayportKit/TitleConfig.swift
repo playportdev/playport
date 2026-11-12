@@ -8,7 +8,8 @@
 // for a key, so the title's keys win and every other shared key still holds.
 // The file is rewritten at every launch, so edits to the shared file carry
 // over. That directory also receives what the runtime writes to
-// MADEIRA_DOCS_DIR (fex-jit-dump.bin, madeira-retire-trace.txt). With no
+// MADEIRA_DOCS_DIR (madeira-retire-trace.txt; fex-jit-dump.bin only with
+// Settings › Developer's JIT pool dump on, PLA-555). With no
 // shared madeira.cfg the legacy madeira-<key>.txt files are not consulted
 // for such a launch, since a madeira.cfg is then present.
 

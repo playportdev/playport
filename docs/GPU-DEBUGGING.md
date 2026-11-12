@@ -48,6 +48,7 @@ the same keys:
 | GPU time per pass | `passProfile` | winemetal times every encoder of two frames in every 1200 presents (`[pass-prof]` lines; `patches/dxmt` 0008) | the next game |
 | CPU sampling | `cpuProfile` | the busiest threads sampled at about 1 kHz, 3 s in every 15 s (`[wprof]` lines; `patches/madeira-unix` 0028) | the next game |
 | Metal validation | `metalValidation` (`api`, `shaders`, `stop`) | Metal's API validation layer; with `shaders` also shader validation; with `stop` the process ends at the first API error | Playport's next start |
+| JIT pool dump | `jitPoolDump` | the runtime writes the JIT pool's whole RW alias as `fex-jit-dump.bin` into `MADEIRA_DOCS_DIR` (a title's `title-cfg` folder) at the first unhandled exec fault or illegal instruction (`MADEIRA_JIT_DUMP`; `patches/madeira-unix` 0297, PLA-555); off by default, and off neither fault reads the pool | the next game |
 
 Notes:
 - **What a run touches:** `pp gpu` and `pp perf` set these keys in a launch

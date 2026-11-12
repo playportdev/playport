@@ -17,6 +17,7 @@ struct DeveloperSettings: View {
     @AppStorage(GPUCapture.key) private var frame = 0
     @AppStorage(Diagnostics.passProfileKey) private var passProfile = false
     @AppStorage(Diagnostics.cpuProfileKey) private var cpuProfile = false
+    @AppStorage(Diagnostics.jitDumpKey) private var jitDump = false
     @AppStorage(MetalValidation.key) private var validation = MetalValidation.Level.off.rawValue
     @AppStorage(RuntimeCounters.key) private var countersOff = false
     @AppStorage(InprocSync.offKey) private var inprocSyncOff = false
@@ -64,6 +65,9 @@ struct DeveloperSettings: View {
                           on: Binding(get: { !countersOff }, set: { countersOff = !$0 }))
         SettingsSwitchRow(id: "dev:inprocsync", title: "In-process sync", subtitle: "NT waits without the wineserver (ppsync); off from Playport's next start",
                           on: Binding(get: { !inprocSyncOff }, set: { inprocSyncOff = !$0 }))
+        SettingsSwitchRow(id: "dev:jitDump", title: "JIT pool dump",
+                          subtitle: "The whole JIT pool as fex-jit-dump.bin in the title's title-cfg folder, at its first unhandled fault",
+                          on: $jitDump)
     }
 
     // MARK: memory
