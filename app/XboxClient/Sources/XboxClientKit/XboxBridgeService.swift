@@ -196,10 +196,12 @@ public actor XboxBridgeService {
         guard Self.plainID(parent), (1...64).contains(ids.count), ids.allSatisfy(Self.productSelector),
               (1...4096).contains(nonce.utf8.count) else { return Self.licenceReply(Self.invalid, status: "refused: malformed") }
         let allowed = Set(([copy.productID] + copy.relatedProductIDs).map { $0.uppercased() })
-        let foreign = ids.filter { !allowed.contains(String($0.split(separator: "/")[0]).uppercased()) }
+        let foreign = ids.map { String($0.split(separator: "/")[0]).uppercased() }.filter { !allowed.contains($0) }
         guard parent.caseInsensitiveCompare(copy.productID) == .orderedSame, foreign.isEmpty else {
-            // Public Store IDs, already checked to be plain: they name what the game wanted.
-            return Self.licenceReply(Self.denied, status: "refused: another product (\(parent): \(foreign.joined(separator: ",")))")
+            // Only Store product IDs (twelve characters, public) are named, each once; any other
+            // string the guest sent shows as "?", so the log never carries guest-chosen text.
+            let named = ([parent.uppercased()] + foreign).map { StoreGameKey.isProductID($0) ? $0 : "?" }
+            return Self.licenceReply(Self.denied, status: "refused: another product (\(named[0]): \(Set(named.dropFirst()).sorted().joined(separator: ",")))")
         }
         do {
             guard take() else { return Self.licenceReply(Self.fail, status: "refused: rate limited") }

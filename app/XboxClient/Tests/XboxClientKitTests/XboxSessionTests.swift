@@ -145,6 +145,24 @@ final class XboxSessionTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(pending, .signedOut)
         guard case .signedIn = try await s.signIn(xboxSignInToken()) else { return XCTFail("second step failed") }
     }
+    /// A game's own client ID (a GUID MSAAppId, say) that Microsoft wants approved refuses
+    /// that game's ticket only; the same answer for Playport's client ends the session.
+    func testAnApprovalPageForAGamesClientRefusesItsTicketButKeepsTheSession() async throws {
+        let store = MemorySecretStore(), http = XboxFixtureHTTP(), s = session(store, http)
+        try await signIn(s)
+        let consent = try XboxSignedFixture.sign(xboxFixture("user-inline-consent.xml"), force: true)
+        await http.set("renew", XboxHTTPResponse(status: 200, body: consent))
+        let game = "6c7e2b74-6f3a-4f31-9e4b-2d0a9c1f5e01"
+        do { _ = try await s.userTicket(scope: "scope=xboxlive.signin&api-version=2.0&clientid=\(game)", clientID: game); XCTFail("ticket issued") }
+        catch { XCTAssertEqual(error as? XboxSessionError, .titleApprovalRequired) }
+        let kept = await s.state
+        XCTAssertEqual(kept, .signedIn); XCTAssertNotNil(try store.read("session"))
+        await http.set("renew", XboxHTTPResponse(status: 200, body: consent))
+        do { _ = try await s.renew(); XCTFail("renewal accepted") }
+        catch { XCTAssertEqual(error as? XboxSessionError, .signInRequired) }
+        let ended = await s.state
+        XCTAssertEqual(ended, .signedOut)
+    }
     func testStoreReason501NamesTenDevicesAndWhereToUnlinkButHTTP501IsNotThatError() throws {
         let bytes = try xboxFixture("device-limit.json")
         XCTAssertThrowsError(try XboxLicenceFailure.check(XboxHTTPResponse(status: 200, body: bytes))) {

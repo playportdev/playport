@@ -205,6 +205,7 @@ public enum XboxPlayRefusal: Error, Equatable, Sendable, CustomStringConvertible
         case .signedOut: "You are not signed in to Xbox. Sign in under Settings › Accounts › Xbox, then play again."
         case .signIn(.signInRequired): "Microsoft couldn't renew your Xbox sign-in. Sign in again under Settings › Accounts › Xbox, then play again."
         case .signIn(.deviceRejected): "Microsoft rejected the Xbox device. Sign in again under Settings › Accounts › Xbox, then play again."
+        case .signIn(.titleApprovalRequired): XboxSessionError.titleApprovalRequired.description
         case .refused(let f): f.description
         case .unavailable(.connectionNeeded(let why)): why.description
         case .unavailable(let p): "The game needs its licence to start. " + p.description

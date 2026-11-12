@@ -83,8 +83,10 @@ it finds in the evidence.
 ## Logs
 
 The bridge never logs payloads: a connection, each request's type and size, and each reply's
-type and status. `Redactor` and `pp secrets` learn every Microsoft account, Xbox and licence
-token form before the bridge lands; host tests show it.
+type and status. A licence request refused for another product names the public
+twelve-character Store IDs it asked for (any other string as `?`), so a title's unanswered
+licence check can be named. `Redactor` and `pp secrets` learn every Microsoft account, Xbox
+and licence token form before the bridge lands; host tests show it.
 
 ## Sign-out and revocation (the residual)
 

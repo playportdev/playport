@@ -16,10 +16,13 @@ public struct XboxTicket: Sendable {
 public enum XboxSessionError: Error, Sendable, Equatable, CustomStringConvertible {
     case signInRequired
     case deviceRejected
+    /// Microsoft wants an approval page shown for one game's client ID; the session is fine.
+    case titleApprovalRequired
     public var description: String {
         switch self {
         case .signInRequired: "Microsoft couldn't renew your Xbox sign-in. Sign in again in Settings › Accounts › Xbox."
         case .deviceRejected: "Microsoft rejected the Xbox device. Try signing in again."
+        case .titleApprovalRequired: "Microsoft asks for an approval for this game's Xbox sign-in, which Playport can't show."
         }
     }
 }
@@ -133,11 +136,14 @@ public actor XboxSession {
         let request = try XboxSOAP.request(now: now(), device: device, user: user, username: session.username,
             app: clientID, scopes: [(scope, "TOKEN_BROKER"), (XboxSOAP.tb, nil)], silent: true)
         let reply = try XboxSOAP.reply(await send(XboxSOAP.endpoint, body: request, epoch: epoch), device: device)
-        if reply.fault || reply.inlineURL != nil {
+        if reply.fault || (reply.inlineURL != nil && clientID == XboxSignIn.clientID) {
             // As a sign-out: a play's bridge closes and the app asks for sign-in again.
             try signOut(why: "sign-in required")
             throw XboxSessionError.signInRequired
         }
+        // A pending approval for a game's own client ID can't be cleared by signing in to
+        // Playport's client again: that game is refused its ticket, the session stays.
+        if reply.inlineURL != nil { throw XboxSessionError.titleApprovalRequired }
         guard let ticket = reply.tokens.first(where: { !$0.legacy && $0.scope == scope }),
               reply.tokens.filter({ !$0.legacy && $0.scope == scope }).count == 1 else { throw XboxXML.invalid() }
         if let refreshed = reply.tokens.first(where: { $0.legacy && $0.scope == XboxSOAP.sts }) {

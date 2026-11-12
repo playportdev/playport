@@ -30,8 +30,8 @@ public enum XboxSignIn {
     public static let userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; MSAppHost/3.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/70.0.3538.102 Safari/537.36 Edge/18.26100"
     // Phone, 2026-11-12 (PLA-491): Microsoft tries a passkey first; its face/fingerprint/
     // security-key choices fail in the sideloaded WKWebView and return to the same screen.
-    // The password works; an Authenticator approval means leaving the app.
-    public static let passkeyNote = "Passkeys don't work in this sign-in window. If Microsoft asks for one (face, fingerprint or a security key), choose its other ways to sign in and use your password. A passkey-only account needs a password added first."
+    // The password works; codes and Authenticator approval were not tried in the sheet.
+    public static let passkeyNote = "Passkeys don't work in this sign-in window. If Microsoft asks for one (face, fingerprint or a security key), choose its other ways to sign in: your password, an emailed or texted code, or Authenticator. A passkey-only account needs another sign-in method added first."
     public static let bridgeScript = "window.ipc = {postMessage: function(m) { window.webkit.messageHandlers.xbox.postMessage(String(m)); }}; window.external = {notify: window.ipc.postMessage};"
     public static let handoffScript = "if (typeof ServerData !== 'undefined') window.ipc.postMessage(JSON.stringify(ServerData));"
 

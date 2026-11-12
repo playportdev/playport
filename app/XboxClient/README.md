@@ -380,8 +380,9 @@ keyed loopback bridge (decision
   port. The host then holds no ticket it issued. A ticket the game already
   received lasts until Microsoft lets it lapse; that is 0182's residual.
 - Logs name each request and reply type with sizes and a status (`served`,
-  `refused: another product`, …). They never contain a payload, ticket, licence
-  token, nonce or key.
+  `refused: another product (PARENT: IDS)`, …). They never contain a payload, ticket,
+  licence token, nonce or key; a licence request for another product names the public
+  twelve-character Store IDs it asked for, any other string as `?`.
 
 ## Playing a copy (PLA-499)
 
@@ -626,14 +627,16 @@ stop and a dropped connection, a byte flipped on the wire and on disk, the NTFS
 fallback without SegmentMetadata.bin, licence and entitlement refusals, and
 remove with and without saves.
 
-The phone is a deferred gate: Microsoft sign-in/2FA, relaunch, sign-out/reuse,
-and the passkey finding. The sheet assumes passkeys are unavailable in a
-sideloaded web view and steers to Authenticator, code or password; no phone
-finding is claimed. `pp ui` paths: `xbox:signin`, `xbox:wait`, `xbox:status`,
-`xbox:signout`, `xbox:reset-device` (help in `tools/ui.py`).
+The phone gates ran on 2026-11-12 (PLA-491): sign-in with the password and a hosted approval
+step, status across relaunches, sign-out and sign-in on the same synthetic device. Microsoft
+tries a passkey first; its choices fail in the sideloaded web view and return to the same
+screen, so the sheet's note steers to the other ways (password, which worked; an emailed or
+texted code and Authenticator, not tried in the sheet). `pp ui` paths:
+`xbox:signin`, `xbox:wait`, `xbox:status`, `xbox:signout`, `xbox:reset-device` (help in
+`tools/ui.py`).
 
-The library's phone gate is deferred too: `./pp ui --action xbox:library --shot`
-(signed in) shows the Xbox store's copies with Microsoft's art and logs counts only.
+The library's phone gate ran too (PLA-492): `./pp ui --action xbox:library --shot` (signed in)
+shows the Xbox store's copies with Microsoft's art and logs counts only.
 
 The install's phone gate is deferred as well (signed in, the pilot in the library):
 `./pp ui --action install:xbox-9MW9469V91LM --action xbox:installed:9MW9469V91LM --shot`
