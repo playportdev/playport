@@ -79,8 +79,9 @@ final class LibraryModel: ObservableObject {
         catalog = store.load()
         // A game's session that its process did not live to count (the restart after it, a
         // crash, the app ended from outside, iOS past the memory limit): added up to its last
-        // beat (UI/PlayClock.swift). One that ended near the limit was ended for memory, and the
-        // game's page says so; any other end clears that (PlayportKit MemoryKill).
+        // beat (UI/PlayClock.swift). One that ended near the limit with no end mark (WineHost
+        // play_end.h) was ended for memory, and the game's page says so; any other end clears
+        // that (PlayportKit MemoryKill).
         let clock = PlayClock.shared.store
         if let left = clock.load() {
             let kill = MemoryKill(leftBy: left)
@@ -93,7 +94,8 @@ final class LibraryModel: ObservableObject {
                      + " (total \(Int(catalog.title(id: left.titleID)?.playSeconds ?? 0)) s)")
             if let m = left.memory {
                 Self.log("memory: the last process ended at \(m.footprintMB) MB of a \(m.limitMB) MB limit"
-                         + " (peak \(m.peakMB) MB): " + (kill != nil ? "ended for memory" : "not near the limit"))
+                         + " (peak \(m.peakMB) MB): " + (kill != nil ? "ended for memory"
+                            : left.endedBy.map { "its end was marked (\($0)), not for memory" } ?? "not near the limit"))
             }
         }
         removeSteamTickets("at app start")

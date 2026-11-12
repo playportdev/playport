@@ -48,6 +48,7 @@ typedef struct {
 int wine_host_abi_version(void);
 
 #include "jit_debugger.h"
+#include "play_end.h"   /* the Play's end mark, for PlayClock.swift (PLA-847) */
 
 /* Acquire the JIT pool for wine_host_config through the universal debugserver
  * protocol (app/PlayportJIT/playport-universal.js): wait up to wait_ms for

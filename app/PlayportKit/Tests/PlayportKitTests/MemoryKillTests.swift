@@ -26,6 +26,37 @@ final class MemoryKillTests: XCTestCase {
         XCTAssertNil(MemoryKill(leftBy: left))
     }
 
+    /// A process that ended any way but iOS's SIGKILL marked its end first (WineHost play_end.h): a
+    /// host crash ntdll declined, SIGTERM, exit(), the app in the background or terminated. However
+    /// near the limit its last reading was, iOS did not end it for memory.
+    func testAMarkedEndIsNoMemoryKill() {
+        for why in ["signal 11", "signal 15", "exit", "background", "terminated"] {
+            var left = session([(700, 8_192), (8_050, 8_192)])
+            left.endedBy = why
+            XCTAssertNil(MemoryKill(leftBy: left), why)
+        }
+    }
+
+    /// The mark is a file beside the session, one line as play_end.c writes it: loading the session
+    /// reads it, and clearing the session removes it too.
+    func testTheStoreReadsTheEndMarkBesideTheSession() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("playend-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = PlaySessionStore(url: root.appendingPathComponent("session.json"))
+        XCTAssertEqual(store.endMarkURL, root.appendingPathComponent("session.end"))
+        try store.save(session([(700, 8_192), (8_050, 8_192)]))
+        let killed = try XCTUnwrap(store.load())
+        XCTAssertNil(killed.endedBy)
+        XCTAssertEqual(MemoryKill(leftBy: killed), MemoryKill(peakMB: 8_050, limitMB: 8_192))
+        try Data("signal 11\n".utf8).write(to: store.endMarkURL)
+        let crashed = try XCTUnwrap(store.load())
+        XCTAssertEqual(crashed.endedBy, "signal 11")
+        XCTAssertNil(MemoryKill(leftBy: crashed))
+        store.clear()
+        XCTAssertNil(store.load())
+        XCTAssertFalse(FileManager.default.fileExists(atPath: store.endMarkURL.path))
+    }
+
     /// The peak is the Play's highest reading; nearness is the last one's: a game that climbed near
     /// the limit while loading, came back down and then ended is not a memory kill.
     func testOnlyTheLastReadingDecides() {

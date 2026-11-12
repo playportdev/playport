@@ -7,10 +7,16 @@
 // session and takes the app's footprint and memory limit (MemoryLimit); the
 // session goes on disk every five seconds, and at once when a reading near the
 // limit needs it (PlayMemory.needsWrite), so a process iOS ends there leaves
-// its climb behind. A session left on disk by a process that ended first (a
-// crash, iOS, or the app ended from outside) is added by the next process's
-// LibraryModel, up to its last beat, and tells it whether iOS ended the game
-// for memory.
+// its climb behind. A save that fails waits for the next beat or step, and is
+// logged once until one succeeds. A session left on disk by a process that
+// ended first (a crash, iOS, or the app ended from outside) is added by the
+// next process's LibraryModel, up to its last beat, and tells it whether iOS
+// ended the game for memory.
+//
+// While a session runs its end mark is armed (WineHost play_end.h): SIGTERM,
+// SIGHUP, exit() and a host fault ntdll declines mark the Play's end beside
+// the session, and so do the app going to the background (unmarked when it
+// comes back) and iOS terminating it. iOS's memory kill marks nothing.
 //
 // A dev build's simulated limit (MemoryLimit.simulatedKey) ends the process as
 // iOS ends one past its limit, once a reading reaches it, so a memory kill can
@@ -18,6 +24,8 @@
 
 import Foundation
 import PlayportKit
+import UIKit
+import WineHost
 
 final class PlayClock: @unchecked Sendable {
     static let shared = PlayClock()
@@ -32,14 +40,32 @@ final class PlayClock: @unchecked Sendable {
     /// dispatch_sync is checked for escaping at its file location, which names the source's path).
     private let lock = NSLock()
     private var session: PlaySession?
-    /// The session as last written, and when.
+    /// The session as last handed to the store, and when, whether or not it was saved.
     private var written: (session: PlaySession, at: Date)?
+    /// The last save failed: logged once, not at every try.
+    private var saveFailed = false
     private var timer: DispatchSourceTimer?
+    private var observers: [NSObjectProtocol] = []
+
+    private init() {
+        // On the posting thread (the main one), so each mark is on disk before the handler returns.
+        let nc = NotificationCenter.default
+        let marks: [(Notification.Name, String?)] = [
+            (UIApplication.didEnterBackgroundNotification, "background"),
+            (UIApplication.willEnterForegroundNotification, nil),
+            (UIApplication.willTerminateNotification, "terminated"),
+        ]
+        for (name, why) in marks {
+            observers.append(nc.addObserver(forName: name, object: nil, queue: nil) { [weak self] _ in self?.markEnd(why) })
+        }
+    }
 
     /// Play started `titleID`'s launch.
     func begin(_ titleID: String) {
         lock.withLock {
             timer?.cancel()
+            play_end_arm(store.endMarkURL.path)
+            play_end_unmark()
             var s = PlaySession(titleID: titleID)
             read(into: &s)
             session = s
@@ -57,12 +83,23 @@ final class PlayClock: @unchecked Sendable {
         lock.withLock {
             timer?.cancel()
             timer = nil
+            play_end_disarm()
             guard var s = session else { return nil }
             s.beat()
             session = nil
             written = nil
+            saveFailed = false
             store.clear()
             return s
+        }
+    }
+
+    /// The app went to the background or iOS is terminating it (`why`), or it came back (nil): while
+    /// a session runs, its end is marked as no memory kill, or unmarked again.
+    private func markEnd(_ why: String?) {
+        lock.withLock {
+            guard session != nil else { return }
+            if let why { play_end_mark(why) } else { play_end_unmark() }
         }
     }
 
@@ -70,23 +107,24 @@ final class PlayClock: @unchecked Sendable {
         lock.withLock {
             guard var s = session else { return }
             s.beat()
-            #if PLAYPORT_RELEASE
-            read(into: &s)
-            #else
             let reading = read(into: &s)
-            #endif
             session = s
             let due = written.map { Date().timeIntervalSince($0.at) >= Self.interval } ?? true
             if due || s.memory?.needsWrite(after: written?.session.memory) == true { write(s) }
-            #if !PLAYPORT_RELEASE
-            if let limit = reading.simulatedMB, reading.footprintMB >= limit {
-                write(s)
-                LibraryModel.log("memory: footprint \(reading.footprintMB) MB reached the simulated limit of \(limit) MB;"
-                                 + " Playport ends as iOS ends a process past its limit")
-                kill(getpid(), SIGKILL)
-            }
-            #endif
+            endAtSimulatedLimit(reading, s)
         }
+    }
+
+    /// A dev build's simulated limit: once a reading reaches it, the session goes on disk and the
+    /// process ends as iOS ends one past its limit, with no end mark.
+    private func endAtSimulatedLimit(_ reading: MemoryLimit.Reading, _ s: PlaySession) {
+        #if !PLAYPORT_RELEASE
+        guard let limit = reading.simulatedMB, reading.footprintMB >= limit else { return }
+        write(s)
+        LibraryModel.log("memory: footprint \(reading.footprintMB) MB reached the simulated limit of \(limit) MB;"
+                         + " Playport ends as iOS ends a process past its limit")
+        kill(getpid(), SIGKILL)
+        #endif
     }
 
     /// One reading of the app's footprint and the limit a Play has (a dev build's simulated one first).
@@ -98,11 +136,13 @@ final class PlayClock: @unchecked Sendable {
     }
 
     private func write(_ s: PlaySession) {
+        written = (s, Date())
         do {
             try store.save(s)
-            written = (s, Date())
+            saveFailed = false
         } catch {
-            LibraryModel.log("play session not saved: \(error)")
+            if !saveFailed { LibraryModel.log("play session not saved: \(error); tried again at the next beat") }
+            saveFailed = true
         }
     }
 }

@@ -109,6 +109,7 @@ C_TESTS = [
     ("dll overlay", ["app/tests/dll_overlay_test.c", "app/Sources/WineHost/dll_overlay.c"], ["-D_DEFAULT_SOURCE"]),
     ("prefix registry", ["app/tests/prefix_registry_test.c", "app/Sources/WineHost/prefix_registry.c"], ["-D_DEFAULT_SOURCE"]),
     ("self-check", ["app/tests/selfcheck_test.c", "app/Sources/WineHost/selfcheck.c"], []),
+    ("play end", ["app/tests/play_end_test.c", "app/Sources/WineHost/play_end.c"], ["-D_DEFAULT_SOURCE"]),
     ("session protocol", ["app/tests/session_protocol_test.c"], []),
     ("launcher end", ["app/tests/launcher_end_test.c"], []),
     ("Social Club single-process default-on (dev)", ["app/tests/sc_single_test.c"], []),

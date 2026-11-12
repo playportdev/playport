@@ -4,9 +4,14 @@
 // app's process. So while a game runs the app reads its footprint (phys_footprint, the counter
 // behind the runtime's `[footprint]` lines) and the limit into the Play's session (PlayTime.swift's
 // session file, PlayMemory), on disk at every beat and at each step of a climb near the limit. A
-// session still on disk when a process starts is a Play whose process ended first: when its last
-// reading was within `nearLimitMB` of the limit, iOS ended it for memory, and the game's page says
-// so with the Play's peak and the limit until a later Play of the game ends any other way.
+// session still on disk when a process starts is a Play whose process ended first. Every end that
+// runs code first marks itself beside the session (PlaySessionStore.endMarkURL; the app's WineHost
+// play_end.h): a host crash ntdll declines, SIGTERM, exit(), the app in the background or
+// terminated. A session with no mark whose last reading was within `nearLimitMB` of the limit was
+// ended by iOS for memory, and the game's page says so with the Play's peak and the limit until a
+// later Play of the game ends any other way. The app switcher ends an app that is in the
+// background or that iOS tells it is terminating, both marked; a SIGKILL nothing announces (a
+// `pp ui` run's end, iOS's watchdog) leaves no mark either, and near the limit reads as one.
 //
 // The app reads its own footprint rather than the runtime's `[footprint]` lines: a release build's
 // log stops at its size limit, and with it those lines.
@@ -76,10 +81,10 @@ public struct MemoryKill: Codable, Equatable, Sendable {
         self.limitMB = limitMB
     }
 
-    /// The end of a Play whose session its process left on disk: a memory kill when the last
-    /// reading was near the limit, else nil (a crash, or the app ended from outside).
+    /// The end of a Play whose session its process left on disk: a memory kill when nothing marked
+    /// another end and the last reading was near the limit, else nil.
     public init?(leftBy session: PlaySession) {
-        guard let m = session.memory, m.nearLimit else { return nil }
+        guard session.endedBy == nil, let m = session.memory, m.nearLimit else { return nil }
         self.init(peakMB: m.peakMB, limitMB: m.limitMB)
     }
 }

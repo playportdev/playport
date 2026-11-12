@@ -28,6 +28,10 @@ public struct PlaySession: Codable, Equatable, Sendable {
     /// The app's footprint and limit as read during the Play (MemoryKill.swift); nil before the
     /// first reading, or in a session from before them.
     public var memory: PlayMemory? = nil
+    /// How a process that left the session on disk ended, when it marked its end before it did
+    /// (PlaySessionStore.endMarkURL: "signal 11", "exit", "background"); nil for an end nothing
+    /// marked, as iOS's memory kill.
+    public var endedBy: String? = nil
 
     /// The most one beat counts: a few beats' interval.
     public static let maxGap: TimeInterval = 15
@@ -56,9 +60,17 @@ public struct PlaySessionStore: Sendable {
         self.url = url
     }
 
+    /// Beside the session (`session.end`): one line a Play's process writes when it ends, or may be
+    /// ended, any way but by iOS's memory kill (the app's WineHost play_end.h).
+    public var endMarkURL: URL { url.deletingPathExtension().appendingPathExtension("end") }
+
+    /// The session, with its end mark when there is one.
     public func load() -> PlaySession? {
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        return try? CatalogStore.decoder.decode(PlaySession.self, from: data)
+        guard let data = try? Data(contentsOf: url),
+              var s = try? CatalogStore.decoder.decode(PlaySession.self, from: data) else { return nil }
+        s.endedBy = (try? String(contentsOf: endMarkURL, encoding: .utf8))
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.flatMap { $0.isEmpty ? nil : $0 }
+        return s
     }
 
     public func save(_ s: PlaySession) throws {
@@ -66,8 +78,10 @@ public struct PlaySessionStore: Sendable {
         try CatalogStore.encoder.encode(s).write(to: url, options: .atomic)
     }
 
+    /// No session, and no end mark.
     public func clear() {
         try? FileManager.default.removeItem(at: url)
+        try? FileManager.default.removeItem(at: endMarkURL)
     }
 }
 

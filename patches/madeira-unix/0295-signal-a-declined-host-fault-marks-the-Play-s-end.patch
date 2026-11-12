@@ -1,0 +1,67 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 12 Nov 2026 19:53:55 +0100
+Subject: [PATCH] signal: a declined host fault marks the Play's end
+
+PLA-847, for the game page's memory-kill note. iOS ends a process past
+its memory limit with SIGKILL, which nothing can see, so the app takes
+a Play whose process ended near the limit for a memory kill unless the
+process marked another end first (app/Sources/WineHost/play_end.c). A
+host crash during a Play comes here: a fault the runtime does not adopt
+as the guest's (ml481's rule: a thread with no TEB, or host code's PC)
+is declined, the default disposition is restored and the repeated fault
+or abort() ends the process, by SIGSEGV, SIGBUS, SIGILL, SIGTRAP or
+SIGABRT.
+
+madeira_set_play_end_hook takes the host's hook before __wine_main;
+ios_decline_foreign_fault calls it with the signal before restoring the
+default disposition. The hook only opens, writes and closes a file it
+named before the Play, so it may run in a signal handler. With no hook
+nothing changes.
+
+Linear: PLA-847
+Class: host-app
+Evidence: app/tests/play_end_test.c (the mark the hook writes; host checks; phone gates not run)
+Offered-upstream: no; the hook serves the iOS app's own record of a Play
+---
+ build/ntdll-unix/signal_arm64_ios.c | 18 ++++++++++++++++--
+ 1 file changed, 16 insertions(+), 2 deletions(-)
+
+diff --git a/build/ntdll-unix/signal_arm64_ios.c b/build/ntdll-unix/signal_arm64_ios.c
+index 38a15cf..6b9aeba 100644
+--- a/build/ntdll-unix/signal_arm64_ios.c
++++ b/build/ntdll-unix/signal_arm64_ios.c
+@@ -10013,10 +10013,23 @@ static int ios_fault_is_foreign( const void *pc, const void *addr )
+     return 1;
+ }
+ 
++/* PLA-847: the host's end mark (app/Sources/WineHost/play_end.c), set before
++ * __wine_main. A declined fault is fatal: the default disposition ends the
++ * process when the fault repeats. iOS's memory kill is a SIGKILL nothing sees,
++ * so a Play whose process ended with no mark may have been ended for memory,
++ * and one marked here was not. The hook only opens, writes and closes a file. */
++static void (*ios_play_end_hook)( int sig );
++
++void madeira_set_play_end_hook( void (*hook)( int sig ) )
++{
++    ios_play_end_hook = hook;
++}
++
+ /* Decline a foreign fault: report it with write(2)-only logging (the
+  * interrupted thread may hold the malloc lock, so NOTHING here may allocate or
+- * hit an unbound lazy stub), then restore the default disposition so the OS
+- * reports honestly instead of us spinning forever inside our own handler. */
++ * hit an unbound lazy stub), mark the Play's end, then restore the default
++ * disposition so the OS reports honestly instead of us spinning forever inside
++ * our own handler. */
+ static void ios_decline_foreign_fault( int sig, const void *pc, const void *addr )
+ {
+     static int declined_n;
+@@ -10026,6 +10039,7 @@ static void ios_decline_foreign_fault( int sig, const void *pc, const void *addr
+         dprintf( 2, "[host-fault] sig=%d pc=%p addr=%p on a NON-guest thread — declining to adopt "
+                     "(would have deadlocked in our own handler) rev=ml481\n", sig, pc, addr );
+     }
++    if (ios_play_end_hook) ios_play_end_hook( sig );
+     signal( sig, SIG_DFL );
+ }
+ #endif
