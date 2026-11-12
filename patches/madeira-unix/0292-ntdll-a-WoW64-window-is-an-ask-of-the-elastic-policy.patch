@@ -45,10 +45,10 @@ Offered-upstream: no; the address-space layout is the iOS port's
  1 file changed, 38 insertions(+), 8 deletions(-)
 
 diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
-index a9f0e4d..e6f68eb 100644
+index 08c733d..edba417 100644
 --- a/build/ntdll-unix/virtual_ios.c
 +++ b/build/ntdll-unix/virtual_ios.c
-@@ -18712,6 +18712,8 @@ static int ios_wow64_try_slot( uintptr_t base, void *ctx )
+@@ -18771,6 +18771,8 @@ static int ios_wow64_try_slot( uintptr_t base, void *ctx )
      return 1;
  }
  
@@ -57,7 +57,7 @@ index a9f0e4d..e6f68eb 100644
  static NTSTATUS ios_wow64_reserve_window( void *owner )
  {
      unsigned int i, slot = IOS_WOW64_WINDOWS_MAX;
-@@ -18719,6 +18721,7 @@ static NTSTATUS ios_wow64_reserve_window( void *owner )
+@@ -18778,6 +18780,7 @@ static NTSTATUS ios_wow64_reserve_window( void *owner )
      sigset_t sigset;
      struct file_view *view;
      uintptr_t fixed;
@@ -65,7 +65,7 @@ index a9f0e4d..e6f68eb 100644
  
      if (!owner) return STATUS_NOT_SUPPORTED; /* no process identity, no shared fallback */
      ios_wow64_reap_threads( NULL );  /* a dead owner's last threads release its window */
-@@ -18731,16 +18734,28 @@ static NTSTATUS ios_wow64_reserve_window( void *owner )
+@@ -18790,16 +18793,28 @@ static NTSTATUS ios_wow64_reserve_window( void *owner )
      if (slot == IOS_WOW64_WINDOWS_MAX) goto done;
  
      server_enter_uninterrupted_section( &virtual_mutex, &sigset );
@@ -102,7 +102,7 @@ index a9f0e4d..e6f68eb 100644
      }
      if (!status && !ios_wow64_valid_base( (uintptr_t)view->base ))
      {
-@@ -21975,6 +21990,21 @@ static NTSTATUS ios_elastic_failed( void **ret, SIZE_T *size_ptr, ULONG type, UL
+@@ -22034,6 +22049,21 @@ static NTSTATUS ios_elastic_failed( void **ret, SIZE_T *size_ptr, ULONG type, UL
      return status;
  }
  

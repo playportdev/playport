@@ -513,6 +513,15 @@ since decision 0180, and a cohort title (The Witcher 3 1.32) may:
 - `jumbo-mb` holds a gap of that size below FEX's band, for the one reservation of that size;
 - `cage-hold` holds 8 GB of the guest window at 0x7200000000, for an 8 GB ask (The Witcher 3).
 
+A dev build's address pins (PLA-837; madeira-unix 0291's `pp_va_pin.h`) put a reservation of a
+given size at a given address, to tell what a title's large pools need. The Runtime keys row's
+`env.PLAYPORT_VA_PINS=MiB@0xBASE[,MiB@0xBASE]` (at most four) is read by WineHost only in the dev
+app: each pin's range is held from `virtual_init`, where the cage hold is taken, and the first
+unhinted, unlimited `NtAllocateVirtualMemory` reservation of exactly its size is mapped there
+(`[va-pin]` lines). A pin replaces the boot hold of its size, the cage's 8 GB or `jumbo-mb`'s. The
+release app never sets one: `pp verify` fails a release executable that names the variable or links
+ntdll's setter, `madeira_set_va_pins`, which the release link drops since nothing there calls it.
+
 ### The FEX host band
 
 FEX keeps its host state in one 16 GB range, `[0x7c00000000, 0x8000000000)`,

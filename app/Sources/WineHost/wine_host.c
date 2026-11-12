@@ -58,6 +58,7 @@ extern void wineserver_set_timezone_bias(long long bias);    /* libwineserver.a 
 extern void wineserver_inject_client_fd(int fd);             /* libwineserver.a */
 extern int foreground;                                       /* libwineserver.a */
 extern void __wine_main(int argc, char *argv[]);             /* libntdll_unix.a */
+extern void madeira_set_va_pins(const char *spec);           /* libntdll_unix.a (madeira-unix 0291) */
 
 /* --- host state -------------------------------------------------------- */
 
@@ -954,6 +955,11 @@ static void *guest_thread(void *arg)
     wine_ios_exit_initialized = 1;
     uint64_t tid = 0;
     pthread_threadid_np(NULL, &tid);
+#ifndef PLAYPORT_RELEASE
+    /* PLA-837: the dev app's address pins (madeira-unix 0291), from its Runtime keys row's
+     * env.PLAYPORT_VA_PINS, before virtual_init holds them. The release app has none. */
+    madeira_set_va_pins(getenv("PLAYPORT_VA_PINS"));
+#endif
     host_log("__wine_main %s (%s set) on thread m%llu", g_exe_path, g_pe_arch, (unsigned long long)tid);
     pthread_cleanup_push(guest_thread_exiting, NULL);
     if (setjmp(wine_ios_exit_jmpbuf) == 0) {

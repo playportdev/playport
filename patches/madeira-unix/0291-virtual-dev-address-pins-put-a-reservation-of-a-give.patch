@@ -1,0 +1,314 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 12 Nov 2026 18:38:06 +0100
+Subject: [PATCH] virtual: dev address pins put a reservation of a given size
+ at a given address
+
+A dev app's knob for PLA-837: with no keys, The Witcher 3 1.32's 8 GB
+and 32 GB pools land at 0x707a350000 and 0x73ffff0000 and the game
+stalls on Loading; with jumbo-mb=32768 cage-hold=1 they land at
+0x7200000000 and 0x7400000000 and it reaches Kaer Morhen. Two crossed
+runs tell whether the addresses are the cause, and each needs the
+other run's addresses.
+
+pp_va_pin.h reads a list of pins, "MiB@0xBASE" joined by commas, at
+most four, 64 KiB-aligned and not overlapping; a malformed list pins
+nothing. madeira_set_va_pins takes the list from the host before
+__wine_main. virtual_init holds each pin's range with no overwrite,
+where the cage hold is taken, before furniture can land there: in the
+no-key run Wine's furniture sat under 0x73ffff0000 by the 8 GB ask, so
+0x7200000000 could not be had then. The first unhinted, unlimited
+reservation of exactly a pin's size, in NtAllocateVirtualMemory, takes
+the pin before the elastic policy and today's placement: the hold is
+unmapped and the view mapped there. A range that is taken or cannot be
+mapped is logged, and its reservation is placed as without a pin.
+
+A pin replaces the boot hold of its size, held or not: the cage's
+8 GB and jumbo-mb's. Both holds of one ask cannot be where it lands
+(the no-key 32 GB at 0x73ffff0000 overlaps the jumbo hold at
+0x7400000000), so with the keys the pins move their holds.
+
+Only the dev app's WineHost calls madeira_set_va_pins; the release
+app never does, so its list stays empty, and no string here names the
+knob. One log tag, [va-pin].
+
+Linear: PLA-837
+Class: feature
+Evidence: docs/evidence/2026-11-02-elastic-reservations.md
+Offered-upstream: no; a Playport dev knob for the iOS port's address-space layout
+---
+ build/ntdll-unix/pp_va_pin.h   | 115 +++++++++++++++++++++++++++++++++
+ build/ntdll-unix/virtual_ios.c | 106 ++++++++++++++++++++++++++++--
+ 2 files changed, 215 insertions(+), 6 deletions(-)
+ create mode 100644 build/ntdll-unix/pp_va_pin.h
+
+diff --git a/build/ntdll-unix/pp_va_pin.h b/build/ntdll-unix/pp_va_pin.h
+new file mode 100644
+index 0000000..bf277a8
+--- /dev/null
++++ b/build/ntdll-unix/pp_va_pin.h
+@@ -0,0 +1,115 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later
++ * Address pins (Playport, PLA-837): a dev app's knob that puts a guest
++ * reservation of a given size at a given address, to find what a title's
++ * large pools need there (an alignment, an address range or something else)
++ * with nothing else changed.
++ *
++ * A pin is "MiB@0xBASE"; a list joins at most PPVP_MAX of them with commas.
++ * Each holds [base, base + size) from virtual_init, where the cage hold is
++ * taken, before furniture can land there, and serves the first unhinted,
++ * unlimited reservation of exactly its size, once. It replaces the boot hold
++ * of its size, held or not: the cage's 8 GB and jumbo-mb's. Two holds for one
++ * ask cannot both be where the ask lands.
++ *
++ * Only the dev app's host sets pins (madeira_set_va_pins, from its Runtime
++ * keys); the release app never calls it, so its list stays empty.
++ *
++ * Pure, so a host test compiles this header as is. */
++#ifndef PP_VA_PIN_H
++#define PP_VA_PIN_H
++#include <stdint.h>
++
++#define PPVP_MAX    4
++#define PPVP_GRAIN  0x10000ull          /* Windows' allocation granularity */
++#define PPVP_MB_MAX (1ull << 20)        /* 1 TiB, far above any address space */
++
++enum ppvp_state { PPVP_SET, PPVP_HELD, PPVP_DONE };
++
++struct ppvp_pin
++{
++    uint64_t base, size;
++    enum ppvp_state state;              /* SET: not held; HELD: from boot; DONE: served */
++};
++
++struct ppvp
++{
++    struct ppvp_pin pin[PPVP_MAX];
++    unsigned n;
++};
++
++static inline int ppvp_hex( char c )
++{
++    if (c >= '0' && c <= '9') return c - '0';
++    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
++    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
++    return -1;
++}
++
++/* Reads spec into p, every pin SET: 0, or -1 with no pin when spec is
++ * malformed (a size of 1 MiB to PPVP_MB_MAX in decimal, '@', a non-zero
++ * 64 KiB-aligned base in hex with an optional 0x; ranges that do not
++ * overlap or wrap). No spec, or an empty one, is no pin. */
++static inline int ppvp_parse( struct ppvp *p, const char *spec )
++{
++    const char *s = spec;
++    unsigned i;
++
++    p->n = 0;
++    if (!s || !*s) return 0;
++    for (;;)
++    {
++        uint64_t mb = 0, base = 0;
++        int digits = 0, d;
++
++        if (p->n == PPVP_MAX) goto bad;
++        for (; *s >= '0' && *s <= '9'; s++, digits++)
++            if ((mb = mb * 10 + (uint64_t)(*s - '0')) > PPVP_MB_MAX) goto bad;
++        if (!digits || !mb || *s++ != '@') goto bad;
++        if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) s += 2;
++        for (digits = 0; (d = ppvp_hex( *s )) >= 0; s++, digits++)
++        {
++            if (base >> 60) goto bad;
++            base = base << 4 | (uint64_t)d;
++        }
++        if (!digits || !base || base % PPVP_GRAIN || base > UINT64_MAX - (mb << 20)) goto bad;
++        for (i = 0; i < p->n; i++)
++            if (base < p->pin[i].base + p->pin[i].size && p->pin[i].base < base + (mb << 20)) goto bad;
++        p->pin[p->n].base = base;
++        p->pin[p->n].size = mb << 20;
++        p->pin[p->n].state = PPVP_SET;
++        p->n++;
++        if (!*s) return 0;
++        if (*s++ != ',') goto bad;
++    }
++bad:
++    p->n = 0;
++    return -1;
++}
++
++/* Whether a pin is set for reservations of size: it replaces the boot hold
++ * that would serve them. */
++static inline int ppvp_replaces( const struct ppvp *p, uint64_t size )
++{
++    unsigned i;
++
++    for (i = 0; i < p->n; i++)
++        if (p->pin[i].size == size) return 1;
++    return 0;
++}
++
++/* The pin a reservation of size takes, now DONE: the first HELD one of
++ * exactly that size, else -1. */
++static inline int ppvp_take( struct ppvp *p, uint64_t size )
++{
++    unsigned i;
++
++    for (i = 0; i < p->n; i++)
++        if (p->pin[i].state == PPVP_HELD && p->pin[i].size == size)
++        {
++            p->pin[i].state = PPVP_DONE;
++            return (int)i;
++        }
++    return -1;
++}
++
++#endif
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index a9f0e4d..08c733d 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -2059,6 +2059,53 @@ static size_t    ios_jumbo_hold_keep;
+ 
+ static void *anon_mmap_tryfixed( void *start, size_t size, int prot, int flags );
+ 
++/* Playport (PLA-837): the dev app's address pins (pp_va_pin.h). The release
++ * app never sets them. */
++#include "pp_va_pin.h"
++
++static struct ppvp ios_va_pins;
++
++/* Called by the dev app's host before __wine_main, with its Runtime keys'
++ * list; NULL is none. */
++void madeira_set_va_pins( const char *spec )
++{
++    unsigned i;
++
++    if (ppvp_parse( &ios_va_pins, spec ))
++    {
++        dprintf( 2, "[va-pin] refused \"%s\": not MiB@0xBASE pins, comma-separated, at most %u, "
++                    "64 KiB-aligned and not overlapping; no pin\n", spec, PPVP_MAX );
++        return;
++    }
++    for (i = 0; i < ios_va_pins.n; i++)
++        dprintf( 2, "[va-pin] pin %u: the first %llu MB reservation goes to 0x%llx\n", i,
++                 (unsigned long long)(ios_va_pins.pin[i].size >> 20),
++                 (unsigned long long)ios_va_pins.pin[i].base );
++}
++
++/* virtual_init, where the cage hold is taken: hold every pin's range, with
++ * no overwrite. A pin whose range is taken is not held and serves nothing. */
++static void ios_va_pins_hold( void )
++{
++    unsigned i;
++
++    for (i = 0; i < ios_va_pins.n; i++)
++    {
++        struct ppvp_pin *pin = &ios_va_pins.pin[i];
++
++        if (anon_mmap_tryfixed( (void *)(uintptr_t)pin->base, pin->size, PROT_NONE, MAP_NORESERVE ) == MAP_FAILED)
++        {
++            dprintf( 2, "[va-pin] pin %u: hold of 0x%llx +%llu MB FAILED errno=%d: the range is taken; "
++                        "its reservation is placed as without a pin\n", i, (unsigned long long)pin->base,
++                     (unsigned long long)(pin->size >> 20), errno );
++            continue;
++        }
++        pin->state = PPVP_HELD;
++        dprintf( 2, "[va-pin] pin %u: HELD 0x%llx +%llu MB PROT_NONE from boot\n", i,
++                 (unsigned long long)pin->base, (unsigned long long)(pin->size >> 20) );
++    }
++}
++
+ void ios_jumbo_holdback_init( void )
+ {
+     static int done;
+@@ -2075,6 +2122,12 @@ void ios_jumbo_holdback_init( void )
+ 
+     want = (size_t)(madeira_cfg_int( "jumbo-mb", 0 ) * 1024ll * 1024ll);   /* ml1095: madeira.cfg jumbo-mb = N */
+     if (!want) return;                       /* opt-in: absent or 0 => off */
++    if (ppvp_replaces( &ios_va_pins, want ))
++    {
++        dprintf( 2, "[jumbo-hold] not holding: an address pin holds the %llu MB reservation (PLA-837)\n",
++                 want >> 20 );
++        return;
++    }
+ 
+     /* ml1029: the keep floor, same units. ml1095: madeira.cfg jumbo-keep-mb = N */
+     ios_jumbo_hold_keep = (size_t)(madeira_cfg_int( "jumbo-keep-mb", 0 ) * 1024ll * 1024ll);
+@@ -17647,11 +17700,17 @@ void virtual_init(void)
+      * guest window for nothing: Death's Door filled the other 8 GB 14 s in
+      * (evidence 2026-10-06-guest-va-exhaustion.md). It followed jumbo-mb until
+      * PLA-417: RDR2's jumbo-mb then held it all run for an 8 GB ask RDR2 never
+-     * makes, and the rest of the window filled at +94 s. */
++     * makes, and the rest of the window filled at +94 s.
++     *
++     * PLA-837: a dev app's address pins are held here too, and an 8 GB pin
++     * replaces the cage hold. */
++    ios_va_pins_hold();
+     if (ppsc_ready)
+         dprintf(2, "[sc-layout] V8 cage held by layout, classic cage disabled\n");
+     else if (!ppj_cage_hold_wanted( madeira_cfg_int( "cage-hold", 0 ) ))
+         dprintf( 2, "[cage] no holdback: no cage-hold for this title\n" );
++    else if (ppvp_replaces( &ios_va_pins, IOS_CAGE_ASK_SIZE ))
++        dprintf( 2, "[cage] no holdback: an address pin holds the 8 GB reservation (PLA-837)\n" );
+     else if (anon_mmap_fixed( (void *)(uintptr_t)IOS_CAGE_BASE, IOS_CAGE_REAL_SIZE, PROT_NONE, 0 ) != MAP_FAILED)
+     {
+         ios_cage_holdback_live = 1;
+@@ -21995,6 +22054,39 @@ static NTSTATUS ios_elastic_after( NTSTATUS status, void **ret, SIZE_T *size_ptr
+     return ios_elastic_failed( ret, size_ptr, type, protect, ask, limit_low, limit_high, align, attributes );
+ }
+ 
++/* Before today's placement of an unhinted, unlimited reservation: a held
++ * address pin of its size (pp_va_pin.h) gives up its hold and the reservation
++ * is mapped there. Returns 1 with *status when it placed it, else 0: today's
++ * placement follows, also when the pin's range could not be mapped. */
++static int ios_va_pin_serve( void **ret, SIZE_T *size_ptr, ULONG type, ULONG protect, NTSTATUS *status )
++{
++    void *p;
++    SIZE_T sz = *size_ptr;
++    NTSTATUS st;
++    sigset_t sigset;
++    int i;
++
++    if (!ios_va_pins.n) return 0;
++    server_enter_uninterrupted_section( &virtual_mutex, &sigset );
++    if ((i = ppvp_take( &ios_va_pins, sz )) < 0)
++    {
++        server_leave_uninterrupted_section( &virtual_mutex, &sigset );
++        return 0;
++    }
++    p = (void *)(uintptr_t)ios_va_pins.pin[i].base;
++    munmap( p, sz );
++    st = allocate_virtual_memory( &p, &sz, type & ~MEM_TOP_DOWN, protect, 0, 0, 0, 0 );
++    server_leave_uninterrupted_section( &virtual_mutex, &sigset );
++    dprintf( 2, "[va-pin] pin %u: a %llu MB reservation -> 0x%llx size=0x%lx st=0x%x%s\n", i,
++             (unsigned long long)(*size_ptr >> 20), (unsigned long long)ios_va_pins.pin[i].base,
++             (unsigned long)(st ? 0 : sz), (unsigned)st, st ? ": placed as without a pin" : "" );
++    if (st) return 0;
++    *ret = p;
++    *size_ptr = sz;
++    *status = STATUS_SUCCESS;
++    return 1;
++}
++
+ /* What blocked a view's growth at `blocker`, for the refuse line. */
+ static const char *ios_ppe_blocker( int i, uint64_t blocker, char *buf, size_t len )
+ {
+@@ -23241,11 +23333,13 @@ NTSTATUS WINAPI NtAllocateVirtualMemory( HANDLE process, PVOID *ret, ULONG_PTR z
+                 }
+             }
+         }
+-        /* Playport (PLA-802, decision 0180): once a placement has failed, an
+-         * elastic reservation of a lender's size goes outside every live claim
+-         * when a gap there holds it (ios_elastic_before); else today's
+-         * placement below. */
+-        if ((type & MEM_RESERVE) && !*ret) ppe_handled = ios_elastic_before( ret, size_ptr, type, protect, &ppe_ask, &st );
++        /* Playport (PLA-837): a dev app's pinned reservation goes to its pin
++         * (ios_va_pin_serve). (PLA-802, decision 0180): once a placement has
++         * failed, an elastic reservation of a lender's size goes outside every
++         * live claim when a gap there holds it (ios_elastic_before); else
++         * today's placement below. ppe_handled: placed before today's path. */
++        if ((type & MEM_RESERVE) && !*ret && !limit) ppe_handled = ios_va_pin_serve( ret, size_ptr, type, protect, &st );
++        if (!ppe_handled && (type & MEM_RESERVE) && !*ret) ppe_handled = ios_elastic_before( ret, size_ptr, type, protect, &ppe_ask, &st );
+         /* task#29 CEF: PartitionAlloc (chrome_elf DllMain) reserves multi-GB
+          * pools. iOS caps user VA at 0x8000000000 (39-bit; extended-VA is not
+          * available to free personal teams) and wine's furniture (PE images,
