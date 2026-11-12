@@ -6,9 +6,9 @@
 // what happened and the fix), what a launch that did not end cleanly says
 // (LaunchMessage), and the screen shown while Playport restarts itself after
 // a game (decision 0029). A clean exit says nothing: Playport restarts to
-// Home. A launch refused before the runtime started (a memory limit below
-// the game's need, a failed start-up self-check, a missing executable or
-// Direct3D backend) says why in an alert over the page it was started from;
+// Home. A launch refused before the runtime started (a failed start-up
+// self-check, a missing executable or Direct3D backend; never memory)
+// says why in an alert over the page it was started from;
 // one that failed at a step (JIT, the runtime, the game's start) shows the
 // failure screen there or, when it had spent the runtime, once the
 // restarted Playport shows Home (AppRestart); a crash or the JIT pool running
@@ -443,9 +443,6 @@ struct LaunchMessage: Codable, Equatable, Identifiable {
             #else
             return .init(title: "\(title) stopped unexpectedly", text: "It exited with code \(String(format: "0x%08X", code)).")
             #endif
-        case .refused where MemoryNeed.parseRefusal(line) != nil:
-            let m = MemoryNeed.parseRefusal(line)!
-            return .init(title: "Not enough memory for \(title)", text: MemoryNote.refused(limitMB: m.limitMB, needMB: m.needMB))
         case .refused where SelfCheck.failure(in: line) != nil, .failed where SelfCheck.failure(in: line) != nil:
             return .init(title: "\(title) could not start", text: SelfCheck.explanation(SelfCheck.failure(in: line)!))
         case .refused where sessionFull(line):

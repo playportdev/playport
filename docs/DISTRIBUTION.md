@@ -317,10 +317,9 @@ got:
   carries Increased Memory Limit (On or Off), with a warning when it is Off.
   The app log's first lines have the same, from before Game Mode:
   `memory: limit 6144 MB (footprint 3 MB), phone 11734 MB, increased-memory-limit yes`.
-- **Play** is refused before any JIT is spent when the limit is below what a
-  tested game reached on the reference phone (`memoryMB` in
-  `app/PlayportKit/Titles/titles.json`), with an alert that says why
-  ("Not enough memory for …") instead of iOS closing the game partway. When
-  the limit is less than a quarter above that, or an untested game has under
-  4 GB, the game's page warns under Play and the play goes on
-  (PlayportKit `MemoryNeed`).
+- **Play** is never refused for memory. Under a 4 GB limit the game's page
+  warns under Play that a larger game may need more. When iOS closes a game
+  for going past the limit, the game's page says so at Playport's next start
+  ("Ended for memory on its last play"), with the most memory the play reached
+  and the limit, until the game's next play ends another way (PlayportKit
+  `MemoryKill`).

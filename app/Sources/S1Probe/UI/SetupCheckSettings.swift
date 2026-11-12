@@ -206,18 +206,18 @@ struct SetupCheckSettings: View {
 
     @ViewBuilder private var memoryRows: some View {
         SettingsInfoRow(id: "setup:memory", title: "Memory limit", subtitle: "For a game and Playport's JIT memory together",
-                        value: reading.effectiveMB.map { MemoryNeed.format(mb: $0) } ?? "Not reported")
+                        value: reading.effectiveMB.map { ByteCount.format(mb: $0) } ?? "Not reported")
         SettingsInfoRow(id: "setup:iml", title: "Increased Memory Limit",
                         subtitle: reading.entitled == false ? "This copy was signed without it" : nil,
                         value: reading.entitled.map { $0 ? "On" : "Off" } ?? "Unknown")
-        SettingsInfoRow(id: "setup:pool", title: "JIT memory", value: MemoryNeed.format(mb: MemoryLimit.poolMB(reading).mb))
+        SettingsInfoRow(id: "setup:pool", title: "JIT memory", value: ByteCount.format(mb: MemoryLimit.poolMB(reading).mb))
         #if !PLAYPORT_RELEASE
         if reading.simulatedMB != nil {
             SettingsInfoRow(id: "setup:realLimit", title: "Real limit",
-                            value: reading.limitMB.map { MemoryNeed.format(mb: $0) } ?? "Not reported")
+                            value: reading.limitMB.map { ByteCount.format(mb: $0) } ?? "Not reported")
         }
-        SettingsInfoRow(id: "setup:footprint", title: "In use now", value: MemoryNeed.format(mb: reading.footprintMB))
-        SettingsInfoRow(id: "setup:phone", title: "Phone", value: MemoryNeed.format(mb: reading.physicalMB))
+        SettingsInfoRow(id: "setup:footprint", title: "In use now", value: ByteCount.format(mb: reading.footprintMB))
+        SettingsInfoRow(id: "setup:phone", title: "Phone", value: ByteCount.format(mb: reading.physicalMB))
         #endif
         SettingsNote(text: reading.entitled == false ? MemoryNote.notEntitled + " " + MemoryNote.footer : MemoryNote.footer)
     }

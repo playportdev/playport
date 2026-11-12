@@ -32,9 +32,6 @@ public struct CohortTitle: Codable, Equatable, Sendable {
     /// The guest's screen for a library Play, a screen spec (HostIOKit Display.guestSize; `720`:
     /// the panel's aspect at 720 rows); absent for the panel's native pixels.
     public var screen: String?
-    /// The memory footprint (MB) the title reached on the reference phone, pool included:
-    /// a Play under a lower limit is refused (MemoryNeed); absent for an unmeasured title.
-    public var memoryMB: Int?
     public var note: String?
 }
 

@@ -1,5 +1,5 @@
 {
-  "comment": "The pinned title cohort (docs/decisions/0005-title-cohort.md), shipped at the app root as Titles/. The catalogue adopts a folder of C:\\Games whose name matches installDir (PlayportKit Adoption), so a title staged from the workstation shows up with no Steam session. checksums names a sha256sum list beside this file (also the list the workstation staging tools take). arguments are the default launch arguments, one item per argument. executable is relative to installDir. config holds madeira.cfg keys the title launches with over the shared file (PlayportKit TitleConfig). memoryMB is the memory footprint the title reached on the reference phone, the JIT pool included: a Play under a lower memory limit is refused, and one under a quarter more is warned about (PlayportKit MemoryNeed).",
+  "comment": "The pinned title cohort (docs/decisions/0005-title-cohort.md), shipped at the app root as Titles/. The catalogue adopts a folder of C:\\Games whose name matches installDir (PlayportKit Adoption), so a title staged from the workstation shows up with no Steam session. checksums names a sha256sum list beside this file (also the list the workstation staging tools take). arguments are the default launch arguments, one item per argument. executable is relative to installDir. config holds madeira.cfg keys the title launches with over the shared file (PlayportKit TitleConfig).",
   "titles": [
     {
       "appID": 367520,
@@ -13,7 +13,6 @@
       "installedSize": 5231995691,
       "files": 1785,
       "checksums": "hollow-knight-367520-22529139.sha256",
-      "memoryMB": 3200,
       "note": "Verified on the reference phone: x86-64 Unity, Direct3D 11. Saves live in the prefix, not the install folder."
     },
     {
@@ -54,7 +53,6 @@
       "checksums": "witcher3-292030-3280809.sha256",
       "config": {"cage-hold": "1", "jumbo-mb": "32768"},
       "screen": "720",
-      "memoryMB": 6246,
       "note": "Patch 1.32 (classic branch), x86-64, Direct3D 11. Not yet run on the phone with this runtime: jumbo-mb keeps a 32 GB hole free at boot for the game's 32 GB reservation, and the game renders at the panel's aspect at 720 rows, since 1.32 has no render scale (docs/evidence/2026-09-25-witcher3-setup.md)."
     }
   ]

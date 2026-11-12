@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// One title launch, from the product UI's Play button (TitleLaunch). Refuse a
-// title that needs more than the app's memory limit (MemoryLimit, PlayportKit
-// MemoryNeed), resolve the executable's DOS path on drive C, add the Unity
+// One title launch, from the product UI's Play button (TitleLaunch). Never
+// refused for memory (a game iOS ends past the app's memory limit is noted on
+// its page at the next start: PlayClock, PlayportKit MemoryKill). Resolve the
+// executable's DOS path on drive C, add the Unity
 // screen switches, run the start-up self-check (SelfCheck), bring up host I/O.
 // The Play then acquires the JIT pool (JitProvider, through
 // WineHostRuntime.start, which checks it) in the size the limit gives it
@@ -72,8 +73,6 @@ enum LaunchCoordinator {
         /// The game's steam_api: the emulator or its own (LaunchSettings); nil
         /// for a title with no Steam app ID.
         var steamAPI: SteamAPI? = nil
-        /// What the title needs of the app's memory limit (MemoryNeed); nil checks nothing.
-        var memory: MemoryNeed? = nil
         /// An Epic game's ownership token file (decision 0059); nil for a game of another store.
         var epic: Epic? = nil
         /// The title's name, for a web page the game opens (UrlOpenerHost).
@@ -373,27 +372,10 @@ enum LaunchCoordinator {
             return Outcome(kind: .refused, line: "launch=refused session=spent")
         }
 
-        // A limit below the title's need would end in a jetsam kill partway: refuse
-        // before any JIT is spent, with the numbers its alert shows.
+        // The limit at Play, for the log: nothing refuses a Play for memory (PLA-847).
         var memory = MemoryLimit.read()
-        if let need = r.memory {
-            var verdict = need.verdict(limitMB: memory.effectiveMB)
-            // Game Mode raises the limit a few seconds after the app comes to the front
-            // (6 GB to 8 GB on the reference phone): a Play that early waits for it.
-            let deadline = Date().addingTimeInterval(5)
-            while verdict == .tooLow, memory.simulatedMB == nil, Date() < deadline {
-                Thread.sleep(forTimeInterval: 0.5)
-                memory = MemoryLimit.read()
-                verdict = need.verdict(limitMB: memory.effectiveMB)
-            }
-            log("memory: limit \(memory.effectiveMB.map { "\($0) MB" } ?? "not reported")"
-                + (memory.simulatedMB != nil ? " (simulated)" : "")
-                + ", footprint \(memory.footprintMB) MB; the title needs \(need.minimumMB) MB"
-                + " (\(need.measured ? "measured" : "untested"), \(need.recommendedMB) MB recommended): \(verdict)")
-            if verdict == .tooLow, let limit = memory.effectiveMB {
-                return Outcome(kind: .refused, line: MemoryNeed.refusalLine(limitMB: limit, needMB: need.minimumMB))
-            }
-        }
+        log("memory: limit \(memory.effectiveMB.map { "\($0) MB" } ?? "not reported")"
+            + (memory.simulatedMB != nil ? " (simulated)" : "") + ", footprint \(memory.footprintMB) MB")
 
         // Resolve before the pool is blessed, so a name that is not staged costs no activation.
         var tp = title_path()

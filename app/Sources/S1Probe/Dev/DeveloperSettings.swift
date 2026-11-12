@@ -70,17 +70,18 @@ struct DeveloperSettings: View {
 
     @ViewBuilder private var memory: some View {
         PadSectionHeader(text: "Memory").id("memory")
-        // 2 GB refuses every tested game; 3.3 GB is what a copy without the entitlement gets.
+        // A Play ends at it as iOS ends one past its limit (PlayClock): 2 GB is under the about 3 GB
+        // Hollow Knight reaches; 3.3 GB is what a copy without the entitlement gets.
         let limits = Self.choices([2048, 3379, 4096], with: simulated)
-        choice("dev:simulatedLimit", "Simulated limit", subtitle: "What every Play is checked against",
-               value: simulated > 0 ? MemoryNeed.format(mb: simulated) : "Off",
-               options: [PadOption(id: "0", label: "Off")] + limits.map { PadOption(id: "\($0)", label: MemoryNeed.format(mb: $0)) },
+        choice("dev:simulatedLimit", "Simulated limit", subtitle: "Where every Play ends, as iOS ends one past the limit",
+               value: simulated > 0 ? ByteCount.format(mb: simulated) : "Off",
+               options: [PadOption(id: "0", label: "Off")] + limits.map { PadOption(id: "\($0)", label: ByteCount.format(mb: $0)) },
                selected: "\(simulated)", note: nil) { simulated = Int($0) ?? 0 }
         // Below Hollow Knight's high-water marks, so a Play runs the pool out (docs/evidence/2026-09-28-jit-pool.md).
         let pools = Self.choices([128, 256, 512], with: simulatedPool)
         choice("dev:simulatedPool", "Simulated JIT memory", subtitle: "What every Play gets",
-               value: simulatedPool > 0 ? MemoryNeed.format(mb: simulatedPool) : "Off",
-               options: [PadOption(id: "0", label: "Off")] + pools.map { PadOption(id: "\($0)", label: MemoryNeed.format(mb: $0)) },
+               value: simulatedPool > 0 ? ByteCount.format(mb: simulatedPool) : "Off",
+               options: [PadOption(id: "0", label: "Off")] + pools.map { PadOption(id: "\($0)", label: ByteCount.format(mb: $0)) },
                selected: "\(simulatedPool)", note: nil) { simulatedPool = Int($0) ?? 0 }
         // The donor pool and the end of a game's own Social Club are Settings › Graphics' rows (decision 0153).
     }

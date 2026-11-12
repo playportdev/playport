@@ -9,12 +9,14 @@
 // once iOS turns Game Mode on, a few seconds after the app comes to the front.
 //
 // Read at the app's start (a `memory:` line in the app log), by Settings
-// (Setup check), and at every Play, which PlayportKit's MemoryNeed
-// refuses or warns about before any JIT is spent (LaunchCoordinator), and
-// which sizes the Play's JIT pool from it (PlayportKit JitPool). A dev
-// build's Settings can simulate a lower limit (`simulatedKey`), so the
-// low-limit path can be driven on a phone that has the entitlement, and a
-// JIT pool of a given size (`simulatedPoolKey`), so running out of it can be.
+// (Setup check), at every Play, which sizes the Play's JIT pool from it
+// (PlayportKit JitPool) and never refuses for it, and every 250 ms while the
+// game runs, so the next start can tell a game iOS ended for memory
+// (PlayClock, PlayportKit MemoryKill). A dev build's Settings can simulate a
+// lower limit (`simulatedKey`), at which a Play's process ends as iOS ends one
+// past its limit, so a memory kill can be driven on a phone that has the
+// entitlement, and a JIT pool of a given size (`simulatedPoolKey`), so running
+// out of it can be.
 
 import Foundation
 import HostIO
@@ -29,20 +31,20 @@ enum MemoryLimit {
         var physicalMB: Int
         /// Whether the signature carries increased-memory-limit; nil when it cannot be read.
         var entitled: Bool?
-        /// A dev build's simulated limit, which Plays are checked against instead.
+        /// A dev build's simulated limit, at which a Play ends instead (PlayClock).
         var simulatedMB: Int?
         /// A dev build's simulated JIT pool size in MiB, which Plays get instead of the one the limit gives.
         var simulatedPoolMB: Int?
 
-        /// The limit a Play is checked against.
+        /// The limit a Play has: the simulated one in a dev build that sets it.
         var effectiveMB: Int? { simulatedMB ?? limitMB }
     }
 
     static let entitlement = "com.apple.developer.kernel.increased-memory-limit"
 
     #if !PLAYPORT_RELEASE
-    /// UserDefaults: a limit in MB that Plays are checked against instead of the real
-    /// one; 0 or unset for none (Settings › Developer, the driver's `set:`).
+    /// UserDefaults: a limit in MB at which a Play ends instead of the real one (PlayClock);
+    /// 0 or unset for none (Settings › Developer, the driver's `set:`).
     static let simulatedKey = "memoryLimitSimulatedMB"
     /// UserDefaults: a JIT pool in MiB that Plays get instead of the one the limit
     /// gives; 0 or unset for none (Settings › Developer, the driver's `set:`).

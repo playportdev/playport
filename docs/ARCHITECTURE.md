@@ -380,9 +380,13 @@ executable window at some slides). The limit itself comes from the
 Mode is on. Of the build's signers only the patched xtool keeps it
 ([BUILDING.md, "Signing"](BUILDING.md#signing); other signers:
 [DISTRIBUTION.md, section 6](DISTRIBUTION.md#6-signing-tools-and-the-memory-limit)).
-The app reads its memory limit at start and at every Play (`MemoryLimit.swift`),
-shows it and the pool it gives (*JIT memory*) in Settings › Setup check, and refuses a Play
-whose title needs more (PlayportKit `MemoryNeed`) before the pool is acquired.
+The app reads its memory limit at start and at every Play (`MemoryLimit.swift`) and
+shows it and the pool it gives (*JIT memory*) in Settings › Setup check. No Play is refused
+for memory, and no title carries a memory figure: while a game runs the app reads its
+footprint and limit every 250 ms into the Play's session (`UI/PlayClock.swift`), and a
+session a process left with its last reading within 1 GB of the limit was a game iOS ended
+for memory, which its page says at the next start with the peak and the limit until a later
+Play ends any other way (PlayportKit `MemoryKill`, PLA-847).
 
 ### JIT pool use
 
@@ -756,9 +760,11 @@ the Vulkan backend with `-d3d12` (arm64ec vkd3d-proton), whatever the graphics s
   gets no FlagM, FlagM2 or AFP code) in `FEX_HOSTFEATURES`. Beside when a title was last
   played, the catalogue keeps its play time, the sum of its sessions
   (PlayportKit `PlayTime.swift`). A session is on disk while the game runs
-  (`session.json`, beaten every 5 s by `UI/PlayClock.swift`): the game's end
-  adds it before the restart after the game, and a session a process left
-  (a crash, the app ended from outside) is added by the next process.
+  (`session.json`, beaten every 5 s by `UI/PlayClock.swift`, with the app's
+  footprint and memory limit, sooner near the limit): the game's end adds it
+  before the restart after the game, and a session a process left (a crash,
+  iOS past the memory limit, the app ended from outside) is added by the next
+  process, which notes a memory kill on the game's page (PlayportKit `MemoryKill`).
 - **Launch** (`LaunchCoordinator.swift`): the Play button resolves the title
   and sets up host I/O, then acquires the JIT pool and runs `wine_host_init`,
   `wine_host_session_start`, `wine_host_session_launch` and

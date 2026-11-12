@@ -105,6 +105,9 @@ public struct InstalledTitle: Codable, Equatable, Identifiable, Sendable {
     /// Wine (decision 0175; a Battle.net product, BattleNetPlay): once per copy, kept across
     /// adoptions and gone with the copy. Nil: not accepted, Play shows the notice first.
     public var riskNoticeAccepted: Date? = nil
+    /// Its last Play was ended for memory (MemoryKill.swift): that Play's peak and the limit, for
+    /// the game's page, until a later Play ends any other way. An observation, never a requirement.
+    public var memoryKill: MemoryKill? = nil
 
     public var key: StoreGameKey {
         StoreGameKey(store: store, id: storeID ?? appID.map(String.init) ?? installDir.lowercased())
@@ -114,7 +117,7 @@ public struct InstalledTitle: Codable, Equatable, Identifiable, Sendable {
         case id, appID, name, developer, installDir, executable, buildID, depots, sizeBytes, source, checksums, note
         case addedAt, lastPlayed, playSeconds, lastVerification, branch, importsDirect3D12, direct3D, executableMachine
         case storeRaw = "store", storeID, storeArguments, hintSteamAppID, storeVersion, chosenExecutable, displayName
-        case riskNoticeAccepted
+        case riskNoticeAccepted, memoryKill
     }
     /// An i386 (WoW64) title: its default backend is Vulkan (decision 0047).
     public var isI386: Bool { executableMachine == 0x14c }
@@ -163,14 +166,15 @@ public struct Catalog: Codable, Equatable, Sendable {
     }
 
     /// This scan's catalogue with the edits made to `live` while the scan ran (LibraryModel.adopted):
-    /// play time, the verification of the same build and the ban-risk notice acceptance win over the
-    /// scan's copy of them, which is the catalogue from when the scan started.
+    /// play time, the memory-kill note, the verification of the same build and the ban-risk notice
+    /// acceptance win over the scan's copy of them, which is the catalogue from when the scan started.
     public func keepingEdits(of live: Catalog) -> Catalog {
         var merged = self
         for i in merged.titles.indices {
             guard let now = live.title(id: merged.titles[i].id) else { continue }
             merged.titles[i].lastPlayed = now.lastPlayed
             merged.titles[i].playSeconds = now.playSeconds
+            merged.titles[i].memoryKill = now.memoryKill
             if now.buildID == merged.titles[i].buildID { merged.titles[i].lastVerification = now.lastVerification }
             merged.titles[i].riskNoticeAccepted = now.riskNoticeAccepted
         }
@@ -312,6 +316,7 @@ public enum Adoption {
                     t.addedAt = old.addedAt
                     t.lastPlayed = old.lastPlayed
                     t.playSeconds = old.playSeconds
+                    t.memoryKill = old.memoryKill
                     if old.buildID == t.buildID { t.lastVerification = old.lastVerification }
                     if t.source == .found, old.source == .found { t.sizeBytes = old.sizeBytes }
                     if old.storeVersion != t.storeVersion { t.lastVerification = nil }
@@ -520,5 +525,11 @@ public enum ByteCount {
             i += 1
         }
         return i == 0 ? "\(bytes) B" : String(format: v >= 100 ? "%.0f" : v >= 10 ? "%.1f" : "%.2f", v) + " " + units[i]
+    }
+
+    /// `3.3 GB`, `896 MB`: memory in MB as a player reads it, 1,024 MB to the GB as iOS counts it
+    /// (the memory limit, the JIT pool, a memory kill's figures).
+    public static func format(mb: Int) -> String {
+        mb >= 1024 ? String(format: "%.1f GB", Double(mb) / 1024) : "\(mb) MB"
     }
 }

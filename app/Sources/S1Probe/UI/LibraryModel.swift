@@ -78,13 +78,23 @@ final class LibraryModel: ObservableObject {
         _ = (Self.home, Self.paths, Self.cohort)
         catalog = store.load()
         // A game's session that its process did not live to count (the restart after it, a
-        // crash, the app ended from outside): added up to its last beat (UI/PlayClock.swift).
+        // crash, the app ended from outside, iOS past the memory limit): added up to its last
+        // beat (UI/PlayClock.swift). One that ended near the limit was ended for memory, and the
+        // game's page says so; any other end clears that (PlayportKit MemoryKill).
         let clock = PlayClock.shared.store
         if let left = clock.load() {
-            if catalog.addPlayTime(left) { save() }
+            let kill = MemoryKill(leftBy: left)
+            if catalog.addPlayTime(left) {
+                catalog.playEnded(left.titleID, kill: kill)
+                save()
+            }
             clock.clear()
             Self.log("play time: \(left.titleID) +\(Int(left.seconds)) s from the session the last process left"
                      + " (total \(Int(catalog.title(id: left.titleID)?.playSeconds ?? 0)) s)")
+            if let m = left.memory {
+                Self.log("memory: the last process ended at \(m.footprintMB) MB of a \(m.limitMB) MB limit"
+                         + " (peak \(m.peakMB) MB): " + (kill != nil ? "ended for memory" : "not near the limit"))
+            }
         }
         removeSteamTickets("at app start")
         removeEpicOwnershipFiles("at app start")
@@ -162,10 +172,12 @@ final class LibraryModel: ObservableObject {
     }
 
     /// The game ended in this process: its session counts when the runtime ran it
-    /// (`counted`), not for a launch refused before that.
+    /// (`counted`), not for a launch refused before that, and then clears the game's
+    /// memory-kill note (PlayportKit MemoryKill).
     func sessionEnded(counted: Bool) {
         guard let s = PlayClock.shared.end(), counted else { return }
         catalog.addPlayTime(s)
+        catalog.playEnded(s.titleID, kill: nil)
         save()
         Self.log("play time: \(s.titleID) +\(Int(s.seconds)) s (total \(Int(catalog.title(id: s.titleID)?.playSeconds ?? 0)) s)")
     }
@@ -225,7 +237,7 @@ final class LibraryModel: ObservableObject {
     /// Runs the setup checks (SetupState.beforePlay), awaits on-device setup when needed, then starts TitleLaunch; false on
     /// cancellation or a title that can no longer play.
     /// Its screen, frame rate limit, Direct3D backend, environment and steam_api come from LaunchSettingsStore;
-    /// its memory need (MemoryNeed) from the cohort; a Steam app runs with its app ID as Steam's game id (SteamGameID);
+    /// a Steam app runs with its app ID as Steam's game id (SteamGameID);
     /// FEX's memory ordering and block size from the game's profile with its page's choices over it (FEXProfile).
     /// Throws for a title whose executable is not a path inside C:\Games, or whose
     /// cohort entry has a bad madeira.cfg key or screen (LaunchPlanError).
@@ -488,7 +500,7 @@ final class LibraryModel: ObservableObject {
                                        screen: settings.guestScreen, frameLimit: settings.frameLimit,
                                        graphics: settings.graphics, graphicsEnvironment: settings.graphicsEnvironment,
                                        steamAppID: t.appID, fex: fex, steamAPI: steamAPI,
-                                       memory: MemoryNeed.of(t, cohort: Self.cohort), epic: epic, galaxy: galaxy,
+                                       epic: epic, galaxy: galaxy,
                                        guestEnvironment: guestEnvironment, atEnd: atEnd,
                                        prerequisites: prerequisites, windowsServices: settings.windowsServices,
                                        khronosVulkanLoader: settings.khronosVulkanLoader,

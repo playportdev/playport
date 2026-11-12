@@ -684,9 +684,13 @@ private struct GameDetailPage: View {
                         Text(saves).foregroundStyle(.orange).accessibilityIdentifier("xbox-unsynced-saves")
                     }
                     #endif
-                    MemoryWarning(need: MemoryNeed.of(t, cohort: LibraryModel.cohort))
+                    MemoryWarning()
                     if installs.isBusy { Text("Starting a game pauses the download. It goes on when Playport reopens after the game.") }
                     controllerLine
+                }
+                // Its last Play was ended for memory (PlayportKit MemoryKill): said, never a reason not to play.
+                if let kill = t.memoryKill {
+                    Text(MemoryNote.killed(kill)).foregroundStyle(.orange).accessibilityIdentifier("memory-kill")
                 }
                 riskNotice(t)
             } else if let g {
@@ -1775,7 +1779,7 @@ enum JitNote {
         case .tail: "the code Playport translated for it"
         case .alias: "the code the game compiled as it ran"
         }
-        let size = poolMB > 0 ? "\(MemoryNeed.format(mb: poolMB)) of " : ""
+        let size = poolMB > 0 ? "\(ByteCount.format(mb: poolMB)) of " : ""
         let more = poolMB > 0 && poolMB < JitPool.minimumMB
             ? "Less than usual was set aside: Settings › Developer's Simulated JIT memory makes it smaller."
             : "This game needs more than Playport sets aside."
