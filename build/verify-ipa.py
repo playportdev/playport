@@ -120,7 +120,9 @@ any mismatch:
                 symbol of the S1Probe module, none of the UI driver's or the
                 scripted pad's environment names or files (S1_MODE, TITLE_NONCE,
                 UI_ACTIONS, HIO_VPAD, s1-host.log, run-events.jsonl, the text
-                bar's secret file ui-text-) and no Metal HUD (MTL_HUD_ENABLED), and its
+                bar's secret file ui-text-), no Metal HUD (MTL_HUD_ENABLED) and no
+                address pins' knob (PLAYPORT_VA_PINS, PLA-837) or their setter
+                (madeira_set_va_pins, which only the dev host calls), and its
                 Info.plist queries no URL scheme; it carries
                 the quiet-runtime switch MADEIRA_NO_DIAGNOSTICS and its log,
                 playport.log, and links the donor pool (decision 0153:
@@ -170,8 +172,12 @@ EXECUTABLE = {"dev": "S1Probe", "release": "Playport"}
 DEV_MODULES = ["7S1Probe"]
 DEV_TYPES = ["UIDriver", "VirtualPad", "RunEvents", "WebSheetDriver",
              "DeveloperSettings", "TextBarDriver", "MetalHUD"]
+# PLAYPORT_VA_PINS: the address pins' knob (PLA-837), read only by the dev app's WineHost.
 DEV_STRINGS = [b"S1_MODE", b"TITLE_NONCE", b"UI_ACTIONS", b"UI_SETTINGS", b"UI_CONTROLS", b"HIO_VPAD", b"s1-host.log",
-               b"run-events.jsonl", b"steam-drive.log", b"ui-text-", b"ui-secret-wanted", b"MTL_HUD_ENABLED"]
+               b"run-events.jsonl", b"steam-drive.log", b"ui-text-", b"ui-secret-wanted", b"MTL_HUD_ENABLED",
+               b"PLAYPORT_VA_PINS"]
+# The address pins' setter (PLA-837): only the dev WineHost calls it, so the release link drops it.
+DEV_SYMBOLS = ["_madeira_set_va_pins"]
 RELEASE_STRINGS = [b"MADEIRA_NO_DIAGNOSTICS", b"playport.log"]
 # The donor pool, in both builds since decision 0153: GuestPool.m's install and 0148's hook.
 RELEASE_SYMBOLS = ["_pp_guest_pool_install", "_playport_guest_memory_backing"]
@@ -659,6 +665,9 @@ def release_checks(exe, info):
     body = exe.read_bytes()
     found = [d.decode() for d in DEV_STRINGS if d in body]
     check(not found, "variant: none of the dev code's environment names or files" + (f" (found {', '.join(found)})" if found else ""))
+    found = [n for n in DEV_SYMBOLS if n in syms]
+    check(not found, "variant: nothing sets the address pins (madeira_set_va_pins is not linked)"
+          + (f" (found {', '.join(found)})" if found else ""))
     missing = [d.decode() for d in RELEASE_STRINGS if d not in body]
     check(not missing, "variant: the quiet-runtime switch and playport.log are in the executable"
           + (f" (missing {', '.join(missing)})" if missing else ""))
