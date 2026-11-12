@@ -985,3 +985,136 @@ final class VerifyRepairTests: XCTestCase {
         XCTAssertEqual(r.unlisted, [])
     }
 }
+
+/// A Steam branch switch over an installed copy (PLA-850: The Witcher 3's 4.x to `classic` left a
+/// `content/metadata.store` that did not match the new manifest), through the installer's own staging
+/// and commit, and what an install, a check and a repair record of each file they verified.
+final class BranchSwitchTests: XCTestCase {
+    var dir: URL!
+    var layout: InstallLayout!
+    var installer: TitleInstaller!
+    let fx = Fixture()
+    var root: URL { layout.gamesRoot.appendingPathComponent("The Witcher 3") }
+
+    override func setUpWithError() throws {
+        dir = try scratchDir("branch")
+        layout = InstallLayout.root(dir)
+        installer = TitleInstaller(layout: layout, session: nil, log: .silent)
+    }
+
+    override func tearDownWithError() throws { try? FileManager.default.removeItem(at: dir) }
+
+    func manifest(_ depot: UInt32, _ gid: UInt64, _ files: [DepotManifest.File]) throws -> DepotManifest {
+        let m = try DepotManifest(depotID: depot, gid: gid, files: files)
+        try RetainedManifest.save(m, to: layout.manifestFile(DepotRef(depotID: depot, gid: gid)))
+        return m
+    }
+
+    /// The installer's path once it has the manifests: destination, sweep, stage and commit.
+    func install(build: UInt32, _ manifests: [DepotManifest], options: InstallEngine.Options = .init()) async throws {
+        let plan = try InstallPlan.make(appID: 9, buildID: build, manifests: manifests)
+        let (final, replacing, sharing) = try installer.destination("The Witcher 3", appID: 9)
+        installer.sweepStaging(appID: 9, buildID: build)
+        let receipt = InstallReceipt(appID: 9, name: "W", installDir: "The Witcher 3", buildID: build,
+                                     depots: manifests.map { DepotRef(depotID: $0.depotID, gid: $0.gid) },
+                                     files: plan.files.count, bytes: plan.totalBytes, skippedDepots: [], skippedSymlinks: 0,
+                                     installedAt: "-")
+        _ = try await installer.stageAndCommit(plan, to: final, replacing: replacing, sharing: sharing, receipt: receipt,
+                                               source: fx.source, options: options, progress: { _ in }, say: { _ in })
+    }
+
+    func text(_ path: String) -> String? {
+        (try? Data(contentsOf: root.appendingPathComponent(path))).map { String(decoding: $0, as: UTF8.self) }
+    }
+
+    /// The current build: its index, a bundle, its executable, a file two depots list, one of its own.
+    func current() throws -> [DepotManifest] {
+        [try manifest(31, 1, [fx.file("content/content0/blob.bundle", bytes("AAAABBBBCCCCDDDDEEEE")),
+                              fx.file("content/patch1/enpc.w3speech", bytes("4XS1"))]),
+         try manifest(34, 1, [fx.file("content/metadata.store", bytes("MS40AAAABBBBCCCC"))]),
+         try manifest(36, 1, [fx.file("content/patch1/enpc.w3speech", bytes("4XS2"))]),
+         try manifest(42, 1, [fx.file("bin/x64_dx12/witcher3.exe", bytes("EXE4")), fx.file("dx12only.bin", bytes("DX12"))])]
+    }
+
+    /// The classic build: the index changes content and size and is cut from chunks the current build's files
+    /// hold at other offsets; the bundle is the same; the file two depots list changes at the same size.
+    func classic() throws -> [DepotManifest] {
+        [try manifest(31, 2, [fx.file("content/content0/blob.bundle", bytes("AAAABBBBCCCCDDDDEEEE")),
+                              fx.file("content/patch1/enpc.w3speech", bytes("13S1"))]),
+         try manifest(34, 2, [fx.file("content/metadata.store", bytes("MS13DDDDAAAAEEEEBBBBXX"))]),
+         try manifest(36, 2, [fx.file("content/patch1/enpc.w3speech", bytes("13S2"))]),
+         try manifest(42, 2, [fx.file("bin/x64/witcher3.exe", bytes("EXE1")), fx.file("classic.bin", bytes("C132"))])]
+    }
+
+    func testABranchSwitchOverAnInstalledCopyLeavesEveryFileAsTheNewManifestHasIt() async throws {
+        try await install(build: 26238013, try current())
+        try await install(build: 3280809, try classic())
+        let report = try await installer.verify(appID: 9)
+        XCTAssertEqual(report.bad, [])
+        XCTAssertEqual(report.unlisted, [])
+        XCTAssertEqual(report.files, 5)
+        XCTAssertEqual(text("content/metadata.store"), "MS13DDDDAAAAEEEEBBBBXX")
+        XCTAssertEqual(text("content/patch1/enpc.w3speech"), "13S2")   // the later depot's
+        XCTAssertNil(text("dx12only.bin"))
+        XCTAssertEqual(installer.loadReceipt(9)?.buildID, 3280809)
+    }
+
+    func testAPausedBranchSwitchResumesToTheNewManifest() async throws {
+        try await install(build: 26238013, try current())
+        var pause = InstallEngine.Options()
+        pause.cancelAfterChunks = 2
+        pause.concurrency = 1
+        pause.flushEveryChunks = 1
+        do {
+            try await install(build: 3280809, try classic(), options: pause)
+            XCTFail("the switch should have paused")
+        } catch ClientError.cancelled {}
+        XCTAssertEqual(text("bin/x64_dx12/witcher3.exe"), "EXE4")   // the installed copy is untouched while paused
+        try await install(build: 3280809, try classic())
+        let report = try await installer.verify(appID: 9)
+        XCTAssertEqual(report.bad, [])
+        XCTAssertEqual(text("content/metadata.store"), "MS13DDDDAAAAEEEEBBBBXX")
+    }
+
+    /// After the install, a check that reads only each file's size, time and inode finds a file written
+    /// since it was verified, and hashes only that file: a rewrite with the same bytes is not damage.
+    func testACheckFindsAFileWrittenSinceItWasVerified() async throws {
+        try await install(build: 3280809, try classic())
+        var check = try await installer.recheck(appID: 9)
+        XCTAssertEqual(check?.changed, [])
+        XCTAssertEqual(check?.files, 5)
+
+        // The same bytes, written as a new file: changed, still good, and recorded again.
+        try Data(bytes("AAAABBBBCCCCDDDDEEEE")).write(to: root.appendingPathComponent("content/content0/blob.bundle"), options: .atomic)
+        check = try await installer.recheck(appID: 9)
+        XCTAssertEqual(check?.changed, ["content/content0/blob.bundle"])
+        XCTAssertEqual(check?.bad, [])
+        check = try await installer.recheck(appID: 9)
+        XCTAssertEqual(check?.changed, [])
+
+        // The index emptied to a header; the executable changed in place at its size, later.
+        try Data(repeating: 0, count: 24).write(to: root.appendingPathComponent("content/metadata.store"))
+        let exe = root.appendingPathComponent("bin/x64/witcher3.exe")
+        try Data(bytes("EXE!")).write(to: exe)
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(60)], ofItemAtPath: exe.path)
+        check = try await installer.recheck(appID: 9)
+        XCTAssertEqual(check?.bad, ["bin/x64/witcher3.exe", "content/metadata.store"])
+        XCTAssertEqual(check?.notes, ["bin/x64/witcher3.exe: other content at the manifest's size, written since it was verified",
+                                      "content/metadata.store: 24 bytes, the manifest's 22, written since it was verified"])
+        let report = try await installer.verify(appID: 9)
+        XCTAssertEqual(report.notes, check?.notes)
+
+        // A repair replaces them and records them again.
+        let v = try await installer.verifyPlan(appID: 9, concurrency: 2)
+        _ = try await installer.replace(v.report, plan: v.plan.restricted(to: Set(v.report.bad)), receipt: v.receipt,
+                                        root: v.root, source: fx.source, options: .init(), say: { _ in })
+        check = try await installer.recheck(appID: 9)
+        XCTAssertEqual(check?.changed, [])
+
+        // Uninstall removes the record of them with the install's.
+        try installer.uninstall(installDir: "The Witcher 3", appID: 9)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: layout.verifiedFile(appID: 9).path))
+        let gone = try await installer.recheck(appID: 9)
+        XCTAssertNil(gone)
+    }
+}

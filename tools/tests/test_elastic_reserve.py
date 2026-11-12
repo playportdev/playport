@@ -504,6 +504,17 @@ class NoPressure(unittest.TestCase):
         self.assertEqual(sp.views["pool32g"]["height"], 1600 * MB)
         self.assertEqual(sp.views["pool8g"]["height"], 600 * MB)
 
+    def test_the_witcher_3_132_on_the_phone_is_served_as_the_phone_served_it(self):
+        """The pools of the no-key 1.32 run that reached Kaer Morhen (PLA-837), placed by the replay with no
+        logged address: where the phone put them, whole, with no lend and no short grant."""
+        sp, fx = self.check("witcher3-132-phone.json")
+        self.assertEqual(sp.placements, {"pool8g": 0x707C000000, "pool32g": 0x73FFFF0000, "pool2g": 0x727C000000})
+        for vid, size, height in (("pool8g", 8 * GB, 600 * MB), ("pool32g", 32 * GB, 1600 * MB),
+                                  ("pool2g", 2 * GB, 128 * MB)):
+            self.assertEqual(sp.views[vid]["span"], size, vid)
+            self.assertEqual(sp.views[vid]["height"], height, vid)
+        self.assertEqual(sp.landed_in_claim, [])
+
     def test_portal_2s_wow64_window_takes_its_first_fixed_slot(self):
         sp, fx = self.check("portal2-wow64.json")
         self.assertEqual(sp.placements["window"], 0x72BFFF0000)   # its [wow64-window] fixed slot line

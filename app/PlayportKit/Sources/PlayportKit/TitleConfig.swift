@@ -2,7 +2,7 @@
 // Per-title runtime switches without touching the shared file. The runtime
 // reads one madeira.cfg (Madeira build/madeira_cfg.h) from $MADEIRA_DOCS_DIR,
 // else $HOME/Documents, which wine_host makes the prefix's Documents. A title
-// whose cohort entry has `config` keys (Witcher 3's `jumbo-mb`) launches with
+// whose cohort entry has `config` keys launches with
 // MADEIRA_DOCS_DIR pointed at its own directory, whose madeira.cfg is the
 // shared file followed by the title's keys: the reader takes the last line
 // for a key, so the title's keys win and every other shared key still holds.

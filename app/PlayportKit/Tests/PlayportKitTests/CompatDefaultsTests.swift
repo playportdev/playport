@@ -54,7 +54,7 @@ final class CompatDefaultsTests: XCTestCase {
         let plain = LaunchSettings.resolve(game: LaunchSettings.overEveryGame(nil), global: LaunchSettings())
         XCTAssertEqual(plain.runtime, [:])
         XCTAssertEqual(plain.config(over: [:]), every)
-        // A cohort title's own key (The Witcher 3's address-space hold) is its own.
+        // A cohort title's own key is its own.
         XCTAssertEqual(plain.config(over: ["jumbo-mb": "32768", "cage-hold": "1"])["jumbo-mb"], "32768")
         // A person's key wins over all; everyGame's other keys stay.
         let own = LaunchSettings(runtime: "inproc-sync=0 env.MADEIRA_FEX_BATCH2=0")
@@ -122,17 +122,15 @@ final class CompatDefaultsTests: XCTestCase {
     }
 
     /// The Witcher 3's current build has no entry: elastic reservations place its 64 and 32 GB asks
-    /// without a key (decision 0180), and it keeps FEX's PAUSE (decision 0163 withdrew 0162's WFE);
-    /// its classic branch's cohort hold (jumbo-mb=32768 cage-hold=1) stays with its cohort entry.
-    func testTheWitcher3HasNoAddressSpaceKeyAndKeepsItsCohortHold() throws {
+    /// without a key (decision 0180), and it keeps FEX's PAUSE (decision 0163 withdrew 0162's WFE).
+    /// Its classic branch (1.32) has no key either (PLA-837).
+    func testTheWitcher3HasNoAddressSpaceKey() throws {
         XCTAssertNil(try CompatDefaults.load(directory: Self.shipped).entry(for: "app-292030"))
         let effective = LaunchSettings.resolve(game: LaunchSettings.overEveryGame(nil), global: LaunchSettings())
         XCTAssertNil(effective.config(over: [:])["short-reserve-mb"])
         XCTAssertNil(effective.config(over: [:])["env.MADEIRA_FEX_PAUSE"])
         XCTAssertNil(effective.config(over: [:])["jumbo-mb"])   // RDR2's hold is gone too (decision 0180)
-        let classic = effective.config(over: ["jumbo-mb": "32768", "cage-hold": "1"])
-        XCTAssertEqual(classic["jumbo-mb"], "32768")
-        XCTAssertEqual(classic["cage-hold"], "1")
+        XCTAssertNil(try XCTUnwrap(Cohort.load(directory: Self.shipped).title(installDir: "The Witcher 3")).config)
     }
 
     /// The table reaches players: no issue id or tracker address anywhere in it.

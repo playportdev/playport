@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Compile and exercise who may take the boot-time address-space holds, shipped in madeira-unix 0171 (PLA-417,
-decision 0129), and check which titles ask for the cage hold."""
+decision 0129), and check that no title asks for one."""
 import json
 import pathlib
 import shutil
@@ -37,7 +37,7 @@ int main(void) {
     /* No hold, nothing to take. */
     assert(!ppj_hold_serves(MB(8960), 0));
     assert(!ppj_hold_serves(0, 0));
-    /* The Witcher 3's 32 GB hold for its 32 GB reservation. */
+    /* A 32 GB hold for a 32 GB reservation. */
     assert(ppj_hold_serves(MB(32768), MB(32768)));
 
     /* The cage hold only with cage-hold set. */
@@ -68,27 +68,24 @@ class JumboHoldTests(unittest.TestCase):
                            check=True)
             subprocess.run([str(d / "t")], check=True)
 
-    def test_only_the_witcher_3_asks_for_the_cage_hold(self):
-        """The cage hold followed jumbo-mb before decision 0129: every title that set jumbo-mb held it."""
+    def test_no_title_asks_for_an_address_space_hold(self):
+        """No compatibility entry holds address space (decision 0180): elastic reservations make room, so
+        RDR2's jumbo-mb=8960 went, and an 8,960 MB hold in every game had left Mewgenics' 1 GiB reservations
+        no room (decision 0179). No cohort title does either: The Witcher 3 1.32 played without its
+        jumbo-mb=32768 cage-hold=1 (PLA-837)."""
+        memory_keys = ("jumbo-mb", "cage-hold", "short-reserve-mb")
         titles = json.loads((ROOT / "app/PlayportKit/Titles/titles.json").read_text())
         compat = json.loads((ROOT / "app/PlayportKit/Titles/compat-defaults.json").read_text())
         configs = {t.get("installDir"): t.get("config", {}) for t in titles["titles"]}
-        self.assertEqual(configs["The Witcher 3"], {"cage-hold": "1", "jumbo-mb": "32768"})
-        cage = [name for name, config in configs.items() if "cage-hold" in config]
-        self.assertEqual(cage, ["The Witcher 3"])
         runtimes = {key: runtime_keys(entry.get("settings", {}).get("runtime", ""))
                     for key, entry in compat["titles"].items()}
-        self.assertEqual([key for key, keys in runtimes.items() if "cage-hold" in keys], [])
-        # No compatibility entry holds address space (decision 0180): elastic reservations make room, so
-        # RDR2's jumbo-mb=8960 went, and an 8,960 MB hold in every game had left Mewgenics' 1 GiB
-        # reservations no room (decision 0179). The mechanism stays for a cohort title's own key.
         swift = (ROOT / "app/PlayportKit/Sources/PlayportKit/LaunchSettings.swift").read_text()
         every = swift[swift.index("public static let everyGame"):]
         every = every[:every.index("windowsServices:")]
-        self.assertNotIn("jumbo-mb", every)
-        self.assertNotIn("cage-hold", every)
-        self.assertEqual([key for key, keys in runtimes.items() if "jumbo-mb" in keys], [])
-        self.assertEqual([key for key, keys in runtimes.items() if "short-reserve-mb" in keys], [])
+        for key in memory_keys:
+            self.assertEqual([name for name, config in configs.items() if key in config], [], key)
+            self.assertEqual([name for name, keys in runtimes.items() if key in keys], [], key)
+            self.assertNotIn(key, every)
 
 
 if __name__ == "__main__":

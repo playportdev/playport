@@ -166,7 +166,7 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
     /// A title's compatibility default (nil for none) over everyGame: each setting the title's
     /// entry has wins; the launcher's end is the entry's, else everyGame's. The runtime keys stay the
     /// entry's own: everyGame's go under the title's madeira.cfg keys too (Effective.config), so a
-    /// cohort title's `jumbo-mb=32768` keeps its value.
+    /// cohort title's own key keeps its value.
     public static func overEveryGame(_ compat: LaunchSettings?) -> LaunchSettings {
         var s = (compat ?? LaunchSettings()).over(everyGame)
         s.runtime = compat?.runtime ?? ""

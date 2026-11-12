@@ -197,6 +197,8 @@ extension InstallLayout {
 
     public func manifestFile(_ d: DepotRef) -> URL { manifestsDir.appendingPathComponent("\(d.depotID)_\(d.gid).json") }
     public func receiptFile(appID: UInt32) -> URL { installsDir.appendingPathComponent("\(appID).json") }
+    /// What each file of the install looked like when it last matched its manifest (VerifiedStamps).
+    public func verifiedFile(appID: UInt32) -> URL { installsDir.appendingPathComponent("\(appID).verified") }
 }
 
 
