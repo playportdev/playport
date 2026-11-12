@@ -41,6 +41,15 @@
 //                       has them off with the samplers too (MADEIRA_NO_DIAGNOSTICS):
 //                       what the counters cost, measured with the samplers kept
 //                       (`pp perf --no-counters`); those lines then read zero.
+//   JIT pool dump       (off by default) the runtime writes the JIT pool's whole
+//                       RW alias (896 MiB) as fex-jit-dump.bin into
+//                       MADEIRA_DOCS_DIR at the first unhandled exec fault or
+//                       illegal instruction, for offline disassembly of FEX's
+//                       code (MADEIRA_JIT_DUMP, patches/madeira-unix 0297,
+//                       PLA-555). Off, neither site reads the pool: a game that
+//                       handles such a fault (The Witcher 3) wrote nearly 1 GB at
+//                       every launch and dirtied the pool's untouched pages.
+//                       `pp phone rm` deletes a dump.
 //
 // `pp gpu` drives all of these (docs/GPU-DEBUGGING.md).
 
@@ -140,6 +149,7 @@ enum RuntimeCounters {
 enum Diagnostics {
     static let passProfileKey = "passProfile"
     static let cpuProfileKey = "cpuProfile"
+    static let jitDumpKey = "jitPoolDump"
 
     /// The next launch's diagnostic variables, each logged.
     static func launchEnvironment(exe: String, dir: String, graphics: GraphicsBackend,
@@ -154,13 +164,16 @@ enum Diagnostics {
             log("diagnostics: GPU time per pass")
         }
         if d.bool(forKey: cpuProfileKey) { env["WINE_IOS_PROF"] = "1"; log("diagnostics: CPU sampling") }
+        if d.bool(forKey: jitDumpKey) { log("diagnostics: JIT pool dump at the first unhandled fault (MADEIRA_JIT_DUMP)") }
         return env
     }
 
     /// Before the runtime starts. The [wprof] sampler is one thread for the whole
     /// process, armed when the session root starts (decision 0027), and it reads
     /// WINE_IOS_PROF from the process's environment then, not from a title's.
+    /// The fault handlers read MADEIRA_JIT_DUMP from the process's environment too.
     static func loadBeforeRuntime() {
         if UserDefaults.standard.bool(forKey: cpuProfileKey) { setenv("WINE_IOS_PROF", "1", 1) } else { unsetenv("WINE_IOS_PROF") }
+        if UserDefaults.standard.bool(forKey: jitDumpKey) { setenv("MADEIRA_JIT_DUMP", "1", 1) } else { unsetenv("MADEIRA_JIT_DUMP") }
     }
 }

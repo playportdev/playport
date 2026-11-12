@@ -1,0 +1,214 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 12 Nov 2026 23:45:00 +0100
+Subject: [PATCH] ntdll: the JIT pool dump only when a Diagnostics switch asks
+ for it
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The Mach handler's first unhandled exec fault and ill_handler's first
+illegal instruction each wrote the JIT pool's whole RW alias, 896 MiB,
+to $MADEIRA_DOCS_DIR/fex-jit-dump.bin. The Witcher 3 raises a c000001d
+in a pool copy of its image at every launch and handles it, so each
+launch wrote 939,524,096 bytes into its title-cfg folder (12 files,
+10.5 GB, on the phone by 2026-11-12), and reading the pool to write it
+dirtied every page of it: the untouched pages madeira-unix 0296 leaves
+out of the footprint counted against the memory limit again.
+
+Both sites now dump only with MADEIRA_JIT_DUMP set (and not 0), which
+the dev app's Settings › Developer › JIT pool dump sets for a launch;
+the release app never does. Without it neither site reads the pool or
+opens a file; ill_handler also skips its guest-image lookup. With it
+the dump is written as before (still not for 0254's UDF in a guest
+image). The Mach site's gate was madeira_diag_enabled, which only
+WINE_HOST_DIAG turns on and Playport never sets; the switch replaces
+it. The write is pp_jit_dump.h's ppjd_dump, shared by both sites.
+
+Linear: PLA-555
+Class: diagnostics
+Evidence: tools/tests/test_jit_dump.py (the header without the switch reads no pool page and writes no file; with it the file is the pool)
+Offered-upstream: no; the dump and the JIT pool are Madeira's own iOS code
+---
+ build/ntdll-unix/pp_jit_dump.h      | 55 ++++++++++++++++++++
+ build/ntdll-unix/signal_arm64_ios.c | 78 +++++++++--------------------
+ 2 files changed, 78 insertions(+), 55 deletions(-)
+ create mode 100644 build/ntdll-unix/pp_jit_dump.h
+
+diff --git a/build/ntdll-unix/pp_jit_dump.h b/build/ntdll-unix/pp_jit_dump.h
+new file mode 100644
+index 0000000..02f041d
+--- /dev/null
++++ b/build/ntdll-unix/pp_jit_dump.h
+@@ -0,0 +1,55 @@
++/* Playport (PLA-555): the JIT pool dump, only when Settings › Developer's
++ * "JIT pool dump" asks for it.
++ *
++ * The Mach handler's first unhandled exec fault and ill_handler's first
++ * illegal instruction each wrote the whole JIT pool's RW alias (896 MiB) to
++ * $MADEIRA_DOCS_DIR/fex-jit-dump.bin. A game that hits a fault it handles
++ * (The Witcher 3's c000001d in a pool copy of its image) so wrote nearly
++ * 1 GB of flash at every launch, and reading the pool dirtied every page of
++ * it, so its untouched pages (madeira-unix 0296) counted against the app's
++ * memory limit again. The dev app sets MADEIRA_JIT_DUMP=1 for a launch with
++ * the switch on; the release app never sets it.
++ *
++ * Without the switch ppjd_dump reads nothing of the pool and opens no file. */
++#ifndef PP_JIT_DUMP_H
++#define PP_JIT_DUMP_H
++
++#include <fcntl.h>
++#include <stdio.h>
++#include <string.h>
++#include <unistd.h>
++#include <sys/types.h>
++
++#define PPJD_SWITCH "MADEIRA_JIT_DUMP"
++
++/* Whether the switch's value asks for the dump: set, and neither empty nor "0". */
++static inline int ppjd_asked( const char *value )
++{
++    return value && value[0] && strcmp( value, "0" ) != 0;
++}
++
++/* With the switch's value asking for it, writes size bytes from the pool's RW
++ * alias at base to DIR/fex-jit-dump.bin (/tmp without DIR) and names the file
++ * in path. Returns the bytes written, -1 if the file cannot be opened, or -2,
++ * having read nothing, when the dump is not asked for or there is no pool. */
++static inline ssize_t ppjd_dump( const char *value, const char *dir, const void *base, size_t size,
++                                 char *path, size_t len )
++{
++    ssize_t off = 0;
++    int fd;
++
++    if (!ppjd_asked( value ) || !base || !size) return -2;
++    snprintf( path, len, "%s/fex-jit-dump.bin", dir ? dir : "/tmp" );
++    fd = open( path, O_WRONLY | O_CREAT | O_TRUNC, 0644 );
++    if (fd < 0) return -1;
++    while ((size_t)off < size)
++    {
++        ssize_t n = write( fd, (const char *)base + off, size - off > 0x10000 ? 0x10000 : size - off );
++        if (n <= 0) break;
++        off += n;
++    }
++    close( fd );
++    return off;
++}
++
++#endif /* PP_JIT_DUMP_H */
+diff --git a/build/ntdll-unix/signal_arm64_ios.c b/build/ntdll-unix/signal_arm64_ios.c
+index 6b9aeba..b6f88c2 100644
+--- a/build/ntdll-unix/signal_arm64_ios.c
++++ b/build/ntdll-unix/signal_arm64_ios.c
+@@ -614,6 +614,9 @@ static __thread int ios_ss_call;
+ /* Playport (PLA-514): a native ARM64 child calling an x86-64 system call
+  * stub of the ARM64EC ntdll (pp_x64_syscall_stub.h). */
+ #include "pp_x64_syscall_stub.h"
++/* Playport (PLA-555): the JIT pool dump only with the Diagnostics switch on
++ * (pp_jit_dump.h). */
++#include "pp_jit_dump.h"
+ extern int ios_is_native_arm64_peb( void *peb );
+ extern void *ios_jit_current_peb(void);
+ 
+@@ -6074,47 +6077,23 @@ skip_reclaim_band: ;
+                      * JIT-pool RW alias contents around the relevant FEX CodeBuffer
+                      * slots to a file. Lets us disassemble FEX-emitted ARM64 offline
+                      * to verify codegen correctness independently.
+-                     * Playport (PLA-514): only with the diagnostics on
+-                     * (madeira_diag_enabled). The first unhandled fault of most
++                     * Playport (PLA-514): the first unhandled fault of most
+                      * runs is a recoverable one, and each wrote the whole pool,
+                      * 896 MB, to the Documents folder (69 of 93 runs on
+-                     * 2026-10-30/31). */
++                     * 2026-10-30/31). Playport (PLA-555): only with Settings ›
++                     * Developer's JIT pool dump on (pp_jit_dump.h). */
+                     static volatile int dumped = 0;
+-                    if (cnt == 1 && madeira_diag_enabled && __sync_bool_compare_and_swap(&dumped, 0, 1))
++                    if (cnt == 1 && ppjd_asked(getenv(PPJD_SWITCH)) && __sync_bool_compare_and_swap(&dumped, 0, 1))
+                     {
+                         extern void *ios_jit_rw_base_global;
+                         extern size_t ios_jit_pool_size_global;
+-                        if (ios_jit_rw_base_global && ios_jit_pool_size_global)
+-                        {
+-                            const char *docs = getenv("MADEIRA_DOCS_DIR");
+-                            char path[512];
+-                            if (docs)
+-                                snprintf(path, sizeof(path), "%s/fex-jit-dump.bin", docs);
+-                            else
+-                                snprintf(path, sizeof(path), "/tmp/fex-jit-dump.bin");
+-                            int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+-                            if (fd >= 0)
+-                            {
+-                                /* Dump the entire JIT pool RW alias. ~128MB but
+-                                 * mostly zero. Compresses well; helpful to scan
+-                                 * any populated region. */
+-                                ssize_t off = 0;
+-                                size_t total = ios_jit_pool_size_global;
+-                                while ((size_t)off < total)
+-                                {
+-                                    ssize_t n = write(fd, (char*)ios_jit_rw_base_global + off,
+-                                                       total - off > 0x10000 ? 0x10000 : total - off);
+-                                    if (n <= 0) break;
+-                                    off += n;
+-                                }
+-                                close(fd);
+-                                dprintf(STDERR_FILENO, "[mach_exc] DUMPED JIT pool RW alias (%zd bytes) to %s rev=ml347\n", off, path);
+-                            }
+-                            else
+-                            {
+-                                dprintf(STDERR_FILENO, "[mach_exc] DUMP open failed errno=%d path=%s\n", errno, path);
+-                            }
+-                        }
++                        char path[512];
++                        ssize_t off = ppjd_dump(getenv(PPJD_SWITCH), getenv("MADEIRA_DOCS_DIR"), ios_jit_rw_base_global,
++                                                ios_jit_pool_size_global, path, sizeof(path));
++                        if (off >= 0)
++                            dprintf(STDERR_FILENO, "[mach_exc] DUMPED JIT pool RW alias (%zd bytes) to %s rev=ml347\n", off, path);
++                        else if (off == -1)
++                            dprintf(STDERR_FILENO, "[mach_exc] DUMP open failed errno=%d path=%s\n", errno, path);
+                     }
+                     /* Diagnostic: query the kernel for what VM region the fault PC lives in.
+                      * Helps identify mystery regions (e.g. JIT pool guard zone, wineserver heap). */
+@@ -11656,7 +11635,11 @@ static void ill_handler( int signal, siginfo_t *siginfo, void *sigcontext )
+          * fire for ILL since we deliver via setup_exception). One-shot.
+          * Playport (PLA-514): not for a UDF in a guest image, which the guest
+          * raises to handle it (World of Warcraft at every start): the dump
+-         * wrote the whole pool, 896 MB, to the Documents folder each time. */
++         * wrote the whole pool, 896 MB, to the Documents folder each time.
++         * Playport (PLA-555): and only with Settings › Developer's JIT pool
++         * dump on (pp_jit_dump.h): The Witcher 3's handled c000001d in a pool
++         * copy of its image wrote it at every launch. */
++        if (ppjd_asked( getenv( PPJD_SWITCH ) ))
+         {
+             extern uint64_t ios_jit_reverse_translate( uint64_t addr, uint64_t *module_base );
+             static volatile int ill_dumped = 0;
+@@ -11665,25 +11648,10 @@ static void ill_handler( int signal, siginfo_t *siginfo, void *sigcontext )
+             if (!planned && __sync_bool_compare_and_swap(&ill_dumped, 0, 1)) {
+                 extern void *ios_jit_rw_base_global;
+                 extern size_t ios_jit_pool_size_global;
+-                if (ios_jit_rw_base_global && ios_jit_pool_size_global) {
+-                    const char *docs = getenv("MADEIRA_DOCS_DIR");
+-                    char path[512];
+-                    if (docs) snprintf(path, sizeof(path), "%s/fex-jit-dump.bin", docs);
+-                    else      snprintf(path, sizeof(path), "/tmp/fex-jit-dump.bin");
+-                    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+-                    if (fd >= 0) {
+-                        ssize_t off = 0;
+-                        size_t total = ios_jit_pool_size_global;
+-                        while ((size_t)off < total) {
+-                            ssize_t n = write(fd, (char*)ios_jit_rw_base_global + off,
+-                                              total - off > 0x10000 ? 0x10000 : total - off);
+-                            if (n <= 0) break;
+-                            off += n;
+-                        }
+-                        close(fd);
+-                        ERR("ILL diag: DUMPED JIT pool RW alias (%zd bytes) to %s\n", off, path);
+-                    }
+-                }
++                char path[512];
++                ssize_t off = ppjd_dump( getenv( PPJD_SWITCH ), getenv( "MADEIRA_DOCS_DIR" ), ios_jit_rw_base_global,
++                                         ios_jit_pool_size_global, path, sizeof(path) );
++                if (off >= 0) ERR("ILL diag: DUMPED JIT pool RW alias (%zd bytes) to %s\n", off, path);
+             }
+         }
+     }
