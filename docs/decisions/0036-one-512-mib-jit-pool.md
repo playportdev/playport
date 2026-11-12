@@ -5,6 +5,10 @@
 out, and each pseudo-process's private ntdll copy, stay as 0019 has them.
 The measurements are in the
 [evidence record](../evidence/2026-10-01-kcd-memory.md).
+**Amended 2026-11-12 by [0184](0184-one-jit-pool-whose-untouched-pages-cost-nothing.md)**
+([PLA-846](https://linear.app/playportdev/issue/PLA-846)): every Play gets 896 MiB, whatever the
+limit, and the pool's untouched pages no longer count against it, so the pool is no longer memory
+the game cannot have beyond what the Play uses of it.
 
 ## Decision
 

@@ -68,15 +68,16 @@ final class CompatDefaultsTests: XCTestCase {
         let titled = LaunchSettings.overEveryGame(LaunchSettings(runtime: "jumbo-mb=4096"))
         XCTAssertEqual(titled.runtime, "jumbo-mb=4096")
         XCTAssertEqual(LaunchSettings.resolve(game: titled, global: LaunchSettings()).config(over: [:])["jumbo-mb"], "4096")
-        XCTAssertEqual(titled.jitPoolMB, 896)
         XCTAssertEqual(LaunchSettings.overEveryGame(LaunchSettings(endLauncherAfterSignIn: false)).endLauncherAfterSignIn, false)
     }
 
     /// No shipped entry (a compatibility entry, a cohort entry's `config`, a launcher or the everyGame
     /// default) carries a key the configuration check refuses (TitleConfig.refusedKeys, decision 0183):
     /// every game, RDR2 too, is told its memory plan row's guest RAM and its one video figure
-    /// (MemoryPlan), the same for the reported video memory and the Vulkan heap and budget. Nor does
-    /// one pin an address: PLAYPORT_VA_PINS is a dev build's Runtime keys row's alone (PLA-837).
+    /// (MemoryPlan), the same for the reported video memory and the Vulkan heap and budget, and gets
+    /// the one JIT pool (JitPool.sizeMB, decision 0184): none sets `jitPoolMB`, which the table would
+    /// refuse to load. Nor does one pin an address: PLAYPORT_VA_PINS is a dev build's Runtime keys
+    /// row's alone (PLA-837).
     func testNoShippedEntryOverridesThePlanOrPinsAnAddress() throws {
         let table = try CompatDefaults.load(directory: Self.shipped)
         func config(_ compat: LaunchSettings?, over base: [String: String] = [:]) -> [String: String] {

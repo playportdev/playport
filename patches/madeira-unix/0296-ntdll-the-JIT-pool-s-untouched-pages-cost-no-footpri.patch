@@ -1,0 +1,298 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 12 Nov 2026 20:30:44 +0100
+Subject: [PATCH] ntdll: the JIT pool's untouched pages cost no footprint
+
+PLA-846, decision 0184. The debugger blesses the pool by writing a byte
+to every 16 KiB page of it (StikJIT's prepare_memory_region), so every
+page is dirty from activation and the whole pool counted against the
+app's memory limit: an 896 MiB pool took Hollow Knight's footprint from
+58 to 962 MiB at activation, and its play used 202 MiB of it.
+
+At the pool's start (ios_pool_room_init) the room, every page but the
+first (the trampolines), is made reusable through the RW alias
+(MADV_FREE_REUSABLE): iOS leaves a reusable page out of the footprint
+and may take it back. A page is claimed once, just before it is first
+handed out: by the head's bump (before the head passes it), a fresh
+tail carve (before its NOP prefill) or a stub region below the tail.
+The claim (ios_pool_room_take) cancels reusable, reads the page
+through the RX mapping, then writes it back through the RW alias. A
+page iOS took back so faults in through the blessed RX entry, whose
+faults the kernel maps with the debugger's page type (vm_fault's
+fi_xnu_user_debug, from the entry's vme_xnu_user_debug), not through
+the RW alias, whose entry the remap did not mark: Madeira's MADV_FREE
+sweep of freed pool ranges (fea6798) reused them through the RW alias
+first and lost execute on them. The write makes the page dirty, so
+pageout compresses it rather than drops it again. Which pages are
+claimed is pp_jit_room.h's bitmap. The pool warmer reads the RX
+mapping before the RW alias, since the tail publishes a carve before
+its claim.
+
+[jit-pool] room: lines give the footprint before and after the
+madvise, each claim that met pages iOS had taken back (their 0x69
+marker read 0), and every minute the room left. A failed madvise
+leaves the pool as before, dirty from the bless.
+
+Linear: PLA-846
+Class: feature
+Evidence: tools/tests/test_jit_room.py (the claim bitmap; host checks; phone gates not run)
+Offered-upstream: no; the JIT pool is Madeira's own iOS code
+---
+ build/ntdll-unix/pp_jit_room.h |  81 ++++++++++++++++++++++++
+ build/ntdll-unix/virtual_ios.c | 110 ++++++++++++++++++++++++++++++++-
+ 2 files changed, 189 insertions(+), 2 deletions(-)
+ create mode 100644 build/ntdll-unix/pp_jit_room.h
+
+diff --git a/build/ntdll-unix/pp_jit_room.h b/build/ntdll-unix/pp_jit_room.h
+new file mode 100644
+index 0000000..5c47cf6
+--- /dev/null
++++ b/build/ntdll-unix/pp_jit_room.h
+@@ -0,0 +1,81 @@
++/* Playport (PLA-846, decision 0184): the JIT pool's room, the pages nothing
++ * has used yet between the head and the tail. Blessing writes a byte to every
++ * page of the pool, so each page is dirty from activation on and the whole pool
++ * counted against the memory limit. At the pool's start the room is made
++ * reusable (MADV_FREE_REUSABLE through the RW alias): out of the footprint,
++ * though iOS may take a page back. A page is claimed once, just before the head
++ * or the tail first hands it out: virtual_ios.c (ios_pool_room_take) cancels
++ * reusable, reads the page through the RX mapping, the blessed one, so a page
++ * iOS took back comes back through it, and writes it through the RW alias, so
++ * it is dirty and iOS never drops it again. This header keeps which pages are
++ * claimed. */
++#ifndef PP_JIT_ROOM_H
++#define PP_JIT_ROOM_H
++
++#include <stddef.h>
++
++#define PPJR_PAGE ((size_t)0x4000)
++
++struct ppjr
++{
++    unsigned char *claimed;   /* a bit per pool page, set once claimed; NULL: no room */
++    size_t pages;             /* pool pages */
++    size_t first;             /* the room's first page: those below were never reusable */
++    unsigned long claims;     /* room pages claimed */
++    unsigned long taken;      /* of those, pages iOS had taken back while they were room */
++};
++
++/* Makes the pool's [off, off + len) usable; returns how many of its pages iOS had taken back. */
++typedef unsigned long (*ppjr_take_fn)( void *ctx, size_t off, size_t len );
++
++/* bits: (pool_size / PPJR_PAGE + 7) / 8 zeroed bytes. The room is [first_off, pool_size).
++ * 0 when set up; -1 and no room for a size or start off the page grid or no room at all. */
++static inline int ppjr_init( struct ppjr *r, unsigned char *bits, size_t pool_size, size_t first_off )
++{
++    r->claimed = NULL;
++    r->pages = r->first = 0;
++    r->claims = r->taken = 0;
++    if (!bits || pool_size % PPJR_PAGE || first_off % PPJR_PAGE || first_off >= pool_size) return -1;
++    r->claimed = bits;
++    r->pages = pool_size / PPJR_PAGE;
++    r->first = first_off / PPJR_PAGE;
++    return 0;
++}
++
++static inline int ppjr_is_claimed( const struct ppjr *r, size_t page )
++{
++    return r->claimed[page / 8] & (1u << (page % 8));
++}
++
++/* Claims the room's unclaimed pages in [off, off + size), a run of them at a time, calling take
++ * for each run before marking it; returns the pages claimed now. */
++static inline size_t ppjr_claim( struct ppjr *r, size_t off, size_t size, ppjr_take_fn take, void *ctx )
++{
++    size_t p, end, done = 0;
++
++    if (!r->claimed || !size) return 0;
++    p = off / PPJR_PAGE;
++    end = off + size < off ? r->pages : (off + size + PPJR_PAGE - 1) / PPJR_PAGE;
++    if (p < r->first) p = r->first;
++    if (end > r->pages) end = r->pages;
++    while (p < end)
++    {
++        size_t q;
++        if (ppjr_is_claimed( r, p )) { p++; continue; }
++        for (q = p; q < end && !ppjr_is_claimed( r, q ); q++) {}
++        r->taken += take( ctx, p * PPJR_PAGE, (q - p) * PPJR_PAGE );
++        r->claims += q - p;
++        done += q - p;
++        for (; p < q; p++) r->claimed[p / 8] |= (unsigned char)(1u << (p % 8));
++    }
++    return done;
++}
++
++/* The room still out of the footprint, in bytes: the room's pages not yet claimed. */
++static inline size_t ppjr_room_bytes( const struct ppjr *r )
++{
++    if (!r->claimed) return 0;
++    return (r->pages - r->first - r->claims) * PPJR_PAGE;
++}
++
++#endif /* PP_JIT_ROOM_H */
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 697e89e..0470806 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -421,6 +421,96 @@ extern void *ios_jit_rx_base_global;  /* defined below */
+  * both the experiment (faults vanish => theory confirmed) and the mitigation. */
+ static volatile size_t ios_jit_tail_reserved;   /* defined below (tail EC_CODE carve) */
+ extern size_t ios_jit_pool_size_global;         /* defined below */
++
++/* Playport (PLA-846, decision 0184): the pool's room is out of the footprint
++ * until first use (pp_jit_room.h). Claims come from the head's bump
++ * (ios_pool_alloc_range_ex, under ios_pool_lock, before the head moves past
++ * them), the tail's fresh carves and the stub regions below the tail; this
++ * lock is taken last. */
++#include "pp_jit_room.h"
++#ifndef MADV_FREE_REUSABLE
++#define MADV_FREE_REUSABLE 7
++#endif
++static struct ppjr ios_pool_room;
++static pthread_mutex_t ios_pool_room_lock = PTHREAD_MUTEX_INITIALIZER;
++
++/* A run of room pages about to be handed out. Reusable is cancelled; each
++ * page is read through the RX mapping, its first touch, so a page iOS took
++ * back faults in through the blessed entry, whose faults give a page the
++ * debugger's executable type (the RW alias's do not: Madeira's MADV_FREE sweep,
++ * which reused such pages through the RW alias first, killed its reused ranges);
++ * then it is written back through the RW alias, so it is dirty and pageout
++ * compresses it rather than drops it. A page iOS took back reads 0 where the
++ * bless left its 0x69 marker. */
++static unsigned long ios_pool_room_take( void *ctx, size_t off, size_t len )
++{
++    volatile unsigned char *rx = (volatile unsigned char *)ios_jit_rx_base_global + off;
++    volatile unsigned char *rw = (volatile unsigned char *)ios_jit_rw_base_global + off;
++    unsigned long gone = 0;
++    size_t o;
++
++    (void)ctx;
++    madvise( (char *)ios_jit_rw_base_global + off, len, MADV_FREE_REUSE );
++    for (o = 0; o < len; o += PPJR_PAGE)
++    {
++        unsigned char b = rx[o];
++        if (b != 0x69) gone++;
++        rw[o] = b;
++    }
++    return gone;
++}
++
++/* Makes the room's pages in [off, off + size) usable before they are handed out. */
++static void ios_pool_room_claim( size_t off, size_t size )
++{
++    unsigned long before;
++
++    pthread_mutex_lock( &ios_pool_room_lock );
++    before = ios_pool_room.taken;
++    ppjr_claim( &ios_pool_room, off, size, ios_pool_room_take, NULL );
++    if (ios_pool_room.taken != before)
++    {
++        static unsigned n;
++        if (n < 16 || !(n & (n - 1)))
++            dprintf( 2, "[jit-pool] room: off=0x%lx+0x%lx: %lu page(s) iOS had taken back came back through "
++                        "the RX mapping (%lu of %lu claimed pages so far)\n",
++                     (unsigned long)off, (unsigned long)size, ios_pool_room.taken - before,
++                     ios_pool_room.taken, ios_pool_room.claims );
++        n++;
++    }
++    pthread_mutex_unlock( &ios_pool_room_lock );
++}
++
++/* At the pool's start, its room [first, size) leaves the footprint until it is
++ * claimed. A failed madvise leaves the pool as it was: dirty from the bless. */
++static void ios_pool_room_init( size_t size, size_t first )
++{
++    task_vm_info_data_t vmi;
++    mach_msg_type_number_t cnt = TASK_VM_INFO_COUNT;
++    unsigned long long was = 0, now = 0;
++    unsigned char *bits = calloc( (size / PPJR_PAGE + 7) / 8, 1 );
++    struct ppjr room;
++    int rc = -1, err = 0;
++
++    if (task_info( mach_task_self(), TASK_VM_INFO, (task_info_t)&vmi, &cnt ) == KERN_SUCCESS)
++        was = vmi.phys_footprint;
++    pthread_mutex_lock( &ios_pool_room_lock );
++    if (bits && !ppjr_init( &room, bits, size, first ))
++    {
++        rc = madvise( (char *)ios_jit_rw_base_global + first, size - first, MADV_FREE_REUSABLE );
++        err = rc ? errno : 0;
++    }
++    if (!rc) ios_pool_room = room;
++    else free( bits );
++    pthread_mutex_unlock( &ios_pool_room_lock );
++    cnt = TASK_VM_INFO_COUNT;
++    if (task_info( mach_task_self(), TASK_VM_INFO, (task_info_t)&vmi, &cnt ) == KERN_SUCCESS)
++        now = vmi.phys_footprint;
++    dprintf( 2, "[jit-pool] room: 0x%lx bytes from pool+0x%lx %s (madvise rc=%d errno=%d); footprint %llu -> %llu MB\n",
++             (unsigned long)(size - first), (unsigned long)first,
++             rc ? "stay in the footprint" : "out of the footprint until first use", rc, err, was >> 20, now >> 20 );
++}
++
+ /* task #35 THE MEASUREMENT THAT DECIDES THE WHOLE PLAN.
+  *
+  * Everything else about the furniture ceiling is instrumentation of a means to
+@@ -792,18 +882,30 @@ static void *ios_pool_warmer_thread( void *arg )
+             volatile char sink = 0;
+             if (head > total) head = total;
+             if (tail > total) tail = total;
+-            for (o = 0; o < head; o += 0x4000) { sink += rw[o]; touched++; }
+-            for (o = total - tail; o < total; o += 0x4000) { sink += rw[o]; touched++; }
++            /* Playport (PLA-846): the RX mapping first. The tail publishes a carve
++             * before it claims the carve's room (ios_pool_room_claim), and a page
++             * iOS took back must fault in through the blessed mapping. */
+             if (rx)
+             {
+                 for (o = 0; o < head; o += 0x4000) { sink += rx[o]; touched++; }
+                 for (o = total - tail; o < total; o += 0x4000) { sink += rx[o]; touched++; }
+             }
++            for (o = 0; o < head; o += 0x4000) { sink += rw[o]; touched++; }
++            for (o = total - tail; o < total; o += 0x4000) { sink += rw[o]; touched++; }
+             (void)sink;
+             cycle++;
+             if (cycle == 1 || (cycle % 30) == 0)
++            {
+                 dprintf(2, "[pool-warmer] cycle=%u touched=%lu pages (head=0x%lx tail=0x%lx)\n",
+                         cycle, (unsigned long)touched, (unsigned long)head, (unsigned long)tail);
++                pthread_mutex_lock( &ios_pool_room_lock );
++                if (ios_pool_room.claimed)
++                    dprintf(2, "[jit-pool] room: %lu MiB still out of the footprint; %lu pages claimed, "
++                               "%lu of them taken back by iOS first\n",
++                            (unsigned long)(ppjr_room_bytes( &ios_pool_room ) >> 20), ios_pool_room.claims,
++                            ios_pool_room.taken);
++                pthread_mutex_unlock( &ios_pool_room_lock );
++            }
+             /* task #35: report the three pool slots every ~30s on this existing
+              * timer — see ios_slot_probe. Cheap (a few mach queries) and it is
+              * the only signal that says whether the ceiling is doing its job. */
+@@ -2886,6 +2988,7 @@ static size_t ios_pool_alloc_range_ex( size_t alloc_size, size_t pool_limit,
+             && IOS_POOL_IN_REACH(jit_pool_offset))
+         {
+             off = jit_pool_offset;
++            ios_pool_room_claim( off, alloc_size );   /* PLA-846: before the head passes it */
+             jit_pool_offset += alloc_size;
+             ios_pool_last_alloc_reused = 0;
+             /* ml89 CONTROL for the POISONED check above: report the same
+@@ -3512,6 +3615,7 @@ void *ios_jit_stub_region( unsigned long long near, size_t size, unsigned long l
+     dprintf( 2, "[split-stub] stub region rx=%#llx size=%#lx (tail now %#lx)\n", rx, (unsigned long)size,
+              (unsigned long)(tail + size) );
+     if (near < rx || near - rx > max_dist) return NULL;   /* raced past reach: left unused */
++    ios_pool_room_claim( off, size );
+     *rw = (char *)ios_jit_rw_base_global + off;
+     return (void *)(uintptr_t)rx;
+ }
+@@ -11981,6 +12085,7 @@ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
+ 
+                 ERR("iOS JIT pool: RX=%p RW=%p size=0x%lx\n",
+                     jit_rx_base, jit_rw_base, (unsigned long)jit_pool_size);
++                ios_pool_room_init( jit_pool_size, jit_pool_offset );
+             }
+             jit_pool_init_done = 1;
+         }
+@@ -25064,6 +25169,7 @@ NTSTATUS WINAPI NtAllocateVirtualMemoryEx( HANDLE process, PVOID *ret, SIZE_T *s
+         {
+             void *jit_rx = (char *)ios_jit_rx_base_global + pool_tail_off;
+             void *jit_rw = (char *)ios_jit_rw_base_global + pool_tail_off;
++            ios_pool_room_claim( pool_tail_off, alloc_size );   /* PLA-846: before the NOP prefill */
+             *ret = jit_rx;
+             *size_ptr = alloc_size;
+             /* iOS-Madeira: pre-fill the buffer with NOPs (0xd503201f) via the RW

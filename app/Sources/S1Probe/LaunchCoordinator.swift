@@ -65,9 +65,6 @@ enum LaunchCoordinator {
         var graphicsEnvironment: [String: String] = [:]
         /// FEX's memory ordering for the game (FEXProfile.launch); nil leaves FEX's own defaults.
         var fex: FEXProfile.Launch? = nil
-        /// The JIT pool (docs/ARCHITECTURE.md, JIT pool placement); nil sizes it
-        /// from the memory limit (JitPool.sizeMB).
-        var poolMB: Int? = nil
         /// How long the pool acquire waits for a debugger.
         var jitWait: TimeInterval
         /// The game's steam_api: the emulator or its own (LaunchSettings); nil
@@ -98,9 +95,6 @@ enum LaunchCoordinator {
         /// The Khronos Vulkan loader in place of Wine's vulkan-1.dll, linked into system32 after
         /// the backend's set (LaunchSettings.khronosVulkanLoader, decision 0131).
         var khronosVulkanLoader = false
-        /// The game's own pool from its compatibility entry (LaunchSettings.jitPoolMB, decision
-        /// 0108), granted when the memory limit allows; nil for the default.
-        var gamePoolMB: Int? = nil
         /// Whether the Play holds the Social Club layout: what it starts is a verified Rockstar bootstrap
         /// (SocialClubLayout, decisions 0169, 0183). The launch sets PLAYPORT_SC_LAYOUT=1 for the runtime
         /// from it alone, and unsets it for every other Play.
@@ -492,15 +486,12 @@ enum LaunchCoordinator {
         if HostIO.surfaceReady.wait(timeout: .now() + 15) == .timedOut {
             log("no GameSurface after 15 s; the swap chain will find no layer")
         }
-        // Every byte of the pool counts against the limit from the bless on. Read
-        // again: Game Mode may have raised the limit since the Play.
+        // Every Play gets the one pool (JitPool.sizeMB, decision 0184); its untouched pages cost no
+        // footprint (madeira-unix 0296). Read again: Game Mode may have raised the limit since the Play.
         memory = MemoryLimit.read()
-        let sized = MemoryLimit.poolMB(memory, gameMB: r.gamePoolMB)
-        let poolMB = r.poolMB ?? sized.mb
+        let poolMB = MemoryLimit.poolMB(memory)
         log("jit pool: \(poolMB) MiB for a memory limit of \(memory.effectiveMB.map { "\($0) MB" } ?? "not reported")"
-            + (memory.simulatedPoolMB != nil ? " (simulated pool)" : "")
-            + (r.poolMB == nil && memory.simulatedPoolMB == nil && sized.mb > JitPool.minimumMB ? " (the game's)" : "")
-            + (r.poolMB == nil ? sized.note.map { "; \($0)" } ?? "" : ""))
+            + (memory.simulatedPoolMB != nil ? " (simulated pool)" : ""))
         mark("surface ready; asking for JIT")
         #if !PLAYPORT_RELEASE
         Diagnostics.loadBeforeRuntime()

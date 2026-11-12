@@ -6,6 +6,10 @@
 [PLA-274](https://linear.app/playportdev/issue/PLA-274),
 [PLA-254](https://linear.app/playportdev/issue/PLA-254). Amends
 [0036](0036-one-512-mib-jit-pool.md) and [0107](0107-windows-services-for-a-flagged-play.md).
+**Amended 2026-11-12 by [0184](0184-one-jit-pool-whose-untouched-pages-cost-nothing.md)**
+([PLA-846](https://linear.app/playportdev/issue/PLA-846)): no compatibility entry or launcher sets
+`jitPoolMB` any more (the configuration check refuses it); every Play, the launcher's Open too, gets
+the one 896 MiB pool, whose untouched pages cost no footprint. The services.exe start timeout stays.
 
 ## Context
 

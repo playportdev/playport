@@ -462,9 +462,11 @@ not that gameplay appeared: inspect the timeline, log and screenshot.
   simulated limit`), and at the next start the game's page notes the memory kill with the
   peak and the limit (`open:app-367520`; `library: memory: the last process ended at …`).
   Each play logs a `title: memory:` line.
-- **The JIT pool.** Every Play gets 512 MiB, independent of the app's memory
-  limit ([decision 0036](decisions/0036-one-512-mib-jit-pool.md)); Setup check's
-  *JIT memory* and `title: jit pool:` show it. Developer's *Simulated JIT memory*
+- **The JIT pool.** Every Play gets 896 MiB, whatever the game and the app's memory
+  limit, and only the pages it uses count against the limit
+  ([decision 0184](decisions/0184-one-jit-pool-whose-untouched-pages-cost-nothing.md));
+  Setup check's *JIT memory* and `title: jit pool:` show it, and the runtime's
+  `[jit-pool] room:` lines what is still out of the footprint. Developer's *Simulated JIT memory*
   (`set:jitPoolSimulatedMB=128`) overrides it for exhaustion tests. Usage is
   logged as `title: pool:`; `pp ui` and `pp perf` put the last line in the
   `result` event as `pool` (`head_mb`, `tail_mb`, `alias`, `children`,

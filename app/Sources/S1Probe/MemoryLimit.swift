@@ -9,8 +9,8 @@
 // once iOS turns Game Mode on, a few seconds after the app comes to the front.
 //
 // Read at the app's start (a `memory:` line in the app log), by Settings
-// (Setup check), at every Play, which sizes the Play's JIT pool from it
-// (PlayportKit JitPool) and never refuses for it, and every 250 ms while the
+// (Setup check), at every Play, which logs it beside the Play's JIT pool (the
+// same for every Play: PlayportKit JitPool) and never refuses for it, and every 250 ms while the
 // game runs, so the next start can tell a game iOS ended for memory
 // (PlayClock, PlayportKit MemoryKill). A dev build's Settings can simulate a
 // lower limit (`simulatedKey`), at which a Play's process ends as iOS ends one
@@ -46,17 +46,14 @@ enum MemoryLimit {
     /// UserDefaults: a limit in MB at which a Play ends instead of the real one (PlayClock);
     /// 0 or unset for none (Settings › Developer, the driver's `set:`).
     static let simulatedKey = "memoryLimitSimulatedMB"
-    /// UserDefaults: a JIT pool in MiB that Plays get instead of the one the limit
-    /// gives; 0 or unset for none (Settings › Developer, the driver's `set:`).
+    /// UserDefaults: a JIT pool in MiB that Plays get instead of every Play's (JitPool.sizeMB);
+    /// 0 or unset for none (Settings › Developer, the driver's `set:`).
     static let simulatedPoolKey = "jitPoolSimulatedMB"
     #endif
 
-    /// The JIT pool a Play gets under this reading, in MiB (a multiple of 16 KiB), with the
-    /// game's own (`gameMB`, decision 0108) when the limit grants it; a note when it does not.
-    static func poolMB(_ r: Reading, gameMB: Int? = nil) -> (mb: Int, note: String?) {
-        if let simulated = r.simulatedPoolMB { return (simulated, nil) }
-        return JitPool.size(limitMB: r.effectiveMB, gameMB: gameMB)
-    }
+    /// The JIT pool a Play gets under this reading, in MiB (a multiple of 16 KiB): every Play's
+    /// (JitPool.sizeMB, decision 0184), or a dev build's simulated one.
+    static func poolMB(_ r: Reading) -> Int { JitPool.playMB(simulatedMB: r.simulatedPoolMB) }
 
     static func read() -> Reading {
         var m = host_memory()

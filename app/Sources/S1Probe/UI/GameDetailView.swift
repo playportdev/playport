@@ -1766,13 +1766,8 @@ enum JitNote {
     static let waitingForAnotherApp = "Waiting for JIT from another app. Enable JIT for Playport there now, with the universal.js script."
 
     /// Why a game ended on running out of its JIT pool (LaunchMessage). Every Play
-    /// gets the same pool (JitPool.sizeMB, decision 0036); only a dev build's simulated
+    /// gets the same pool (JitPool.sizeMB, decision 0184); only a dev build's simulated
     /// one is smaller. One that went on running was ended by the restart (decision 0030).
-    /// Why a game ended on FEX's host band filling (LaunchMessage, decision 0120): its size is
-    /// fixed, so there is nothing to set; what fills it is the game's threads, with its launcher's.
-    static let outOfEmulatorMemory = "The x86 emulator keeps a fixed amount of memory for every thread "
-        + "the game and its launcher run, and their threads filled it. This game runs more threads than Playport can hold."
-
     static func outOfMemory(_ part: JitPool.Exhaustion, poolMB: Int) -> String {
         let what = switch part {
         case .head: "the game's program files"
@@ -1780,9 +1775,14 @@ enum JitNote {
         case .alias: "the code the game compiled as it ran"
         }
         let size = poolMB > 0 ? "\(ByteCount.format(mb: poolMB)) of " : ""
-        let more = poolMB > 0 && poolMB < JitPool.minimumMB
+        let more = poolMB > 0 && poolMB < JitPool.sizeMB
             ? "Less than usual was set aside: Settings › Developer's Simulated JIT memory makes it smaller."
             : "This game needs more than Playport sets aside."
         return "Playport set aside \(size)JIT memory for the game, and \(what) filled it. \(more)"
     }
+
+    /// Why a game ended on FEX's host band filling (LaunchMessage, decision 0120): its size is
+    /// fixed, so there is nothing to set; what fills it is the game's threads, with its launcher's.
+    static let outOfEmulatorMemory = "The x86 emulator keeps a fixed amount of memory for every thread "
+        + "the game and its launcher run, and their threads filled it. This game runs more threads than Playport can hold."
 }

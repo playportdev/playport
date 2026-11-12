@@ -5,30 +5,32 @@
 // builtins), a child's ntdll copy and guest JIT code (Mono, V8) are copied into
 // its head, from the bottom up; a pure x86-64 image is not (madeira-unix 0090:
 // FEX runs it at its PE address). FEX's translated code goes into its tail, from
-// the top down. Its size is fixed at the Play, and every byte of it
-// counts against the app's memory limit from the bless on, so every Play gets the
-// least that the games measured need (`sizeMB`, decision 0036, which replaced 0019's
-// eighth of the limit). A launch logs its use as `pool:` lines
-// (`Use.line`), and one that ran out of it ends with its own outcome
-// (`Use.exhaustion`).
+// the top down. Every Play gets the same pool (`sizeMB`, decision 0184). The
+// bless dirties every page of it, and the runtime takes the pages nothing has
+// used yet out of the app's footprint until the head or the tail first hands
+// them out (madeira-unix 0296), so a game pays only for the pool it uses. A
+// launch logs its use as `pool:` lines (`Use.line`), and one that ran out of it
+// ends with its own outcome (`Use.exhaustion`).
 
 import Foundation
 
 public enum JitPool {
-    /// What the executable's exec-time reservation is laid out for: its 1440 MiB
-    /// hold this plus 64 MiB of slack at its start at any slide (wine_host.c
-    /// host_pool_reserve); a larger pool is placed first fit, which failed about one
-    /// launch in four. A dev build's simulated pool may go up to it. Above a pool of
-    /// up to 768 MiB the reservation also keeps the executable window
-    /// (0x140000000-0x15c000000) at every slide seen; 896 MiB keeps it only at the
-    /// lowest slides, and a launch that loses it logs `executable window: not held`.
-    public static let maximumMB = 896
-    /// What every Play gets: the high-water marks measured (The Witcher 3: head
-    /// 206 MiB, tail 145 MiB; Kingdom Come: Deliverance: head 182, tail 161) with
-    /// FEX's 128 MiB code buffer still granted (docs/evidence/2026-09-28-jit-pool.md,
-    /// 2026-10-01-kcd-memory.md). More would come out of the game's memory: Kingdom
-    /// Come loads Rattay about 100 MB under the 8 GB limit only with this size.
-    public static let minimumMB = 512
+    /// The pool every Play gets, whatever the game and the memory limit (decision 0184): all the
+    /// executable's exec-time reservation is laid out for, its 1440 MiB hold this plus 64 MiB of
+    /// slack at its start at any slide (wine_host.c host_pool_reserve); a larger pool is placed
+    /// first fit, which failed about one launch in four. A pool of up to 768 MiB leaves the
+    /// reservation the executable window (0x140000000-0x15c000000) at every slide seen; this one
+    /// keeps it only at the lowest slides, and a launch that loses it logs `executable window: not
+    /// held`.
+    public static let sizeMB = 896
+
+    /// The settings key a title's compatibility entry or a launcher once sized its pool with
+    /// (decision 0108); no title sets one since (TitleConfig.refusedKeys, decision 0184).
+    public static let titleKey = "jitPoolMB"
+
+    /// The pool a Play asks for: a dev build's simulated pool (`jitPoolSimulatedMB`, Settings ›
+    /// Developer: any size, a small one to run a game out of JIT memory), else `sizeMB`.
+    public static func playMB(simulatedMB: Int?) -> Int { simulatedMB ?? sizeMB }
 
     /// The room (`Use.roomForGame`) a game must have at its start for its Play to skip the
     /// restart after prerequisites ran (decision 0094): the heaviest high-water marks measured
@@ -41,30 +43,6 @@ public enum JitPool {
     /// the restart ends it (decisions 0022, 0030). A publisher's launcher Open may carry its own
     /// (`PublisherLauncher.exhaustionGrace`, decision 0112).
     public static let exhaustionGrace: TimeInterval = 10
-
-    /// The pool a Play gets: `minimumMB`, whatever the memory limit (decision 0036), unless the
-    /// game's compatibility entry asks for more (`gameMB`, decision 0108).
-    public static func sizeMB(limitMB: Int?, gameMB: Int? = nil) -> Int {
-        size(limitMB: limitMB, gameMB: gameMB).mb
-    }
-
-    /// The least memory limit, in MB, under which a game's larger pool is granted (decision 0108):
-    /// the reference phone's limit with the Increased Memory Limit entitlement before Game Mode.
-    /// Under it (a signer that dropped the entitlement, a phone with less RAM) the Play keeps
-    /// `minimumMB`, since every byte of the pool comes out of the game's memory. The limit
-    /// reads a little under a whole GiB (8,191 for 8 GiB, decision 0105), so 64 MB of slack count.
-    public static let largerPoolLimitMB = 6144
-
-    /// The pool for a game, and why when it is not the one the game asked for.
-    public static func size(limitMB: Int?, gameMB: Int?) -> (mb: Int, note: String?) {
-        guard let gameMB, gameMB > minimumMB else { return (minimumMB, nil) }
-        let wanted = min(gameMB, maximumMB)
-        guard let limitMB, limitMB + 64 >= largerPoolLimitMB else {
-            return (minimumMB, "the game's \(wanted) MiB not granted: a memory limit of "
-                    + (limitMB.map { "\($0) MB" } ?? "not reported") + ", under \(largerPoolLimitMB) MB")
-        }
-        return (wanted, wanted < gameMB ? "the game's \(gameMB) MiB capped at \(maximumMB) MiB" : nil)
-    }
 
     /// What ran out, from the runtime's refusal counts.
     public enum Exhaustion: String, Equatable, Sendable {

@@ -369,19 +369,52 @@ could bring mode A back is the trap path, and the start-up self-check
 asserts the property it lacked: a word written through the RW alias reads
 back through the pool.
 
-Blessing touches every page, so the whole pool is in the app's footprint from
-then on, and every MiB of it is a MiB the game cannot have. Every Play therefore
-gets 512 MiB, the least the games measured need, whatever the memory limit
-(PlayportKit `JitPool`, [decision 0036](decisions/0036-one-512-mib-jit-pool.md),
-which replaced 0019's eighth of the limit); the reservation still holds 896 MiB,
-which a dev build's simulated pool may use (above 768 MiB at the cost of the
-executable window at some slides). The limit itself comes from the
+Every Play gets the same pool, 896 MiB, whatever the game and the memory limit: all the
+reservation holds (PlayportKit `JitPool.sizeMB`,
+[decision 0184](decisions/0184-one-jit-pool-whose-untouched-pages-cost-nothing.md), which replaced
+0036's 512 MiB and 0108's per-game sizes). No compatibility entry, launcher or `everyGame` default
+sets a size, and the configuration check refuses `jitPoolMB`. A dev build's simulated pool may set
+any size (*Simulated JIT memory*, `set:jitPoolSimulatedMB=184`) to run a game out of it.
+
+Blessing writes a byte to every page, so the whole pool would be in the app's footprint from the
+bless on: an 896 MiB pool took Hollow Knight's footprint from 58 MB to 962 MiB at activation, of
+which its play used 202 MiB. So the pool's **room**, the pages nothing has used yet between the head
+and the tail (below), leaves the footprint at the pool's start (`patches/madeira-unix` 0296,
+`pp_jit_room.h`).
+
+- **At the start.** ntdll makes every page but the first (the trampolines) reusable through the RW
+  alias (`MADV_FREE_REUSABLE`). iOS leaves a reusable page out of the footprint and may take it
+  back.
+- **At first use.** A page is claimed once, just before it is first handed out: by the head's bump,
+  before the head passes it, by a fresh tail carve, before its NOP prefill, or by a stub region below
+  the tail. The claim:
+  - cancels reusable;
+  - reads the page through the RX mapping, so a page iOS took back faults in through the blessed
+    entry. XNU gives a page faulted there the debugger's executable type; one faulted through the RW
+    alias would not execute, which is how Madeira's sweep of freed pool ranges lost them;
+  - writes the page back through the RW alias, so it is dirty and pageout compresses it rather than
+    discards it again.
+- **The pool warmer** reads the RX mapping before the RW alias, since the tail publishes a carve
+  before it claims it.
+- **Logs.** `[jit-pool] room:` lines give:
+  - the footprint before and after the start;
+  - each claim that met pages iOS had taken back (they read 0 where the bless left `0x69`);
+  - every minute, the room still out of the footprint.
+
+  If the madvise fails, the pool stays dirty from the bless, as before 0296.
+
+The pool does not grow on demand instead: blessing more of it needs the debugger back in the middle
+of a Play, which stops the process at every exception, and StikDebug or another app's JIT cannot be
+called back from inside one. That a page iOS took back runs once faulted in through the RX mapping
+rests on XNU's source, not yet on a phone run (0184's costs).
+
+The app's memory limit comes from the
 `com.apple.developer.kernel.increased-memory-limit` entitlement: 8 GB once Game
 Mode is on. Of the build's signers only the patched xtool keeps it
 ([BUILDING.md, "Signing"](BUILDING.md#signing); other signers:
 [DISTRIBUTION.md, section 6](DISTRIBUTION.md#6-signing-tools-and-the-memory-limit)).
 The app reads its memory limit at start and at every Play (`MemoryLimit.swift`) and
-shows it and the pool it gives (*JIT memory*) in Settings › Setup check. No Play is refused
+shows it and the pool (*JIT memory*) in Settings › Setup check. No Play is refused
 for memory, and no title carries a memory figure: while a game runs the app reads its
 footprint and limit every 250 ms into the Play's session (`UI/PlayClock.swift`). iOS's
 memory kill is a SIGKILL nothing sees, so every other end that runs code first marks itself

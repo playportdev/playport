@@ -99,7 +99,7 @@ enum LauncherOpen {
         guard TitleLaunch.shared.start(title: l.name, titleID: l.titleID, exe: exe, args: l.arguments, config: saved.config,
                                        graphics: l.graphics, graphicsEnvironment: l.graphicsEnvironment,
                                        fex: fex, windowsServices: l.windowsServices,
-                                       jitPoolMB: l.jitPoolMB, socialClubLayout: socialClub.engaged,
+                                       socialClubLayout: socialClub.engaged,
                                        exhaustionGrace: l.exhaustionGrace) else { return false }
         log("open \(l.id) on \(l.graphics.rawValue): \(exe) \(l.arguments.joined(separator: " "))")
         return true

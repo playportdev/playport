@@ -510,7 +510,7 @@ final class LibraryModel: ObservableObject {
                                        guestEnvironment: guestEnvironment, atEnd: atEnd,
                                        prerequisites: prerequisites, windowsServices: settings.windowsServices,
                                        khronosVulkanLoader: settings.khronosVulkanLoader,
-                                       jitPoolMB: settings.jitPoolMB, socialClubLayout: socialClub.engaged,
+                                       socialClubLayout: socialClub.engaged,
                                        // The launcher it starts ends at the game's sign-in (decision 0130).
                                        endLauncher: settings.endLauncherAfterSignIn
                                            ? PublisherLauncher.startedBy(game: t.id)?.signIn : nil,
