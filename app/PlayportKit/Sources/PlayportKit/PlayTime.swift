@@ -25,6 +25,9 @@ public struct PlaySession: Codable, Equatable, Sendable {
     public var lastBeat: Date
     /// Played so far, up to `lastBeat`.
     public var seconds: TimeInterval
+    /// The app's footprint and limit as read during the Play (MemoryKill.swift); nil before the
+    /// first reading, or in a session from before them.
+    public var memory: PlayMemory? = nil
 
     /// The most one beat counts: a few beats' interval.
     public static let maxGap: TimeInterval = 15

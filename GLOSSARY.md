@@ -89,6 +89,13 @@ An unsynced save whose cloud save has also changed since their last exchange; th
 player chooses which one to keep.
 _Avoid_: sync error, merge
 
+## Play
+
+**Memory kill**:
+iOS ending a Play because Playport went past its memory limit; an observation of that Play, never a
+reason to refuse the next one.
+_Avoid_: memory need, memory requirement (no game carries a memory figure), out of memory, crash
+
 ## Play gates
 
 **Anti-cheat refusal**:

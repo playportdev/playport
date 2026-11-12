@@ -9,6 +9,16 @@ private let titlesDir = URL(fileURLWithPath: #filePath).deletingLastPathComponen
     .deletingLastPathComponent().appendingPathComponent("Titles")
 
 final class CohortTests: XCTestCase {
+    /// No cohort entry carries a memory figure (`memoryMB`, PLA-847): a Play is never refused or
+    /// warned about from a stored figure. Read raw, since a key the decoder no longer knows is skipped.
+    func testNoCohortEntryCarriesAMemoryFigure() throws {
+        let data = try Data(contentsOf: titlesDir.appendingPathComponent("titles.json"))
+        let file = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let titles = try XCTUnwrap(file["titles"] as? [[String: Any]])
+        XCTAssertFalse(titles.isEmpty)
+        for t in titles { XCTAssertNil(t["memoryMB"], "\(t["name"] ?? "?") carries memoryMB") }
+    }
+
     func testTheBundledCohortCarriesTheHollowKnightPin() throws {
         let cohort = try Cohort.load(directory: titlesDir)
         let hk = try XCTUnwrap(cohort.title(installDir: "hollow knight"))
@@ -630,6 +640,12 @@ final class CatalogTests: XCTestCase {
         XCTAssertEqual(ByteCount.format(243_438_208), "243 MB")
         XCTAssertEqual(ByteCount.format(12_500), "12.5 KB")
     }
+
+    func testMemoryInMegabytesUsesBinaryUnits() {
+        XCTAssertEqual(ByteCount.format(mb: 8192), "8.0 GB")
+        XCTAssertEqual(ByteCount.format(mb: 3379), "3.3 GB")
+        XCTAssertEqual(ByteCount.format(mb: 896), "896 MB")
+    }
 }
 
 private func XCTAssertThrowsErrorAsync<T>(_ body: @autoclosure () async throws -> T, file: StaticString = #filePath,
@@ -971,65 +987,6 @@ final class FEXProfileTests: XCTestCase {
         var noSHA = allFeatures
         noSHA.sha256 = false
         XCTAssertEqual(FEXProfile.hostFeatures(player: nil, cpu: noSHA), "disablecrypto,enablelrcpc2")
-    }
-}
-
-final class MemoryNeedTests: XCTestCase {
-    private func title(app: UInt32?, dir: String, source: InstalledTitle.Source) -> InstalledTitle {
-        InstalledTitle(id: app.map { "app-\($0)" } ?? "dir-\(dir.lowercased())", appID: app, name: dir, installDir: dir,
-                       executable: "game.exe", depots: [], source: source, addedAt: Date(timeIntervalSince1970: 0))
-    }
-
-    /// A tested title's need is its measured footprint, however it was installed.
-    func testATestedTitleNeedsWhatItReachedOnThePhone() throws {
-        let cohort = try Cohort.load(directory: titlesDir)
-        for source in [InstalledTitle.Source.cohort, .installed] {
-            let hk = MemoryNeed.of(title(app: 367520, dir: "Hollow Knight", source: source), cohort: cohort)
-            XCTAssertEqual(hk, MemoryNeed(minimumMB: 3200, recommendedMB: 4000, measured: true))
-        }
-        // Found by its folder, with no app ID.
-        XCTAssertEqual(MemoryNeed.of(title(app: nil, dir: "the witcher 3", source: .found), cohort: cohort).minimumMB, 6246)
-        // Every cohort title is measured.
-        XCTAssertTrue(cohort.titles.allSatisfy { ($0.memoryMB ?? 0) > MemoryNeed.runtimeFloorMB })
-    }
-
-    func testAnUntestedTitleNeedsTheRuntimeFloor() {
-        let need = MemoryNeed.of(title(app: 70, dir: "Half-Life", source: .installed), cohort: Cohort(titles: []))
-        XCTAssertEqual(need, MemoryNeed(minimumMB: 2048, recommendedMB: 4096, measured: false))
-    }
-
-    /// The reference phone's 8 GB plays every cohort title; a re-signed IPA's 3.3 GB
-    /// warns for Hollow Knight and refuses The Witcher 3; a limit not read never refuses.
-    func testVerdicts() throws {
-        let cohort = try Cohort.load(directory: titlesDir)
-        let hk = MemoryNeed.of(title(app: 367520, dir: "Hollow Knight", source: .cohort), cohort: cohort)
-        let w3 = MemoryNeed.of(title(app: 292030, dir: "The Witcher 3", source: .cohort), cohort: cohort)
-        XCTAssertEqual(hk.verdict(limitMB: 8192), .fits)
-        XCTAssertEqual(w3.verdict(limitMB: 8192), .fits)
-        XCTAssertEqual(hk.verdict(limitMB: 3379), .tight)
-        XCTAssertEqual(w3.verdict(limitMB: 3379), .tooLow)
-        XCTAssertEqual(hk.verdict(limitMB: 2048), .tooLow)
-        XCTAssertEqual(hk.verdict(limitMB: 3200), .tight)
-        XCTAssertEqual(hk.verdict(limitMB: 3199), .tooLow)
-        XCTAssertEqual(hk.verdict(limitMB: 4000), .fits)
-        XCTAssertEqual(hk.verdict(limitMB: nil), .fits)
-        XCTAssertEqual(hk.verdict(limitMB: 0), .fits)
-    }
-
-    func testTheRefusalLineRoundTrips() throws {
-        let line = MemoryNeed.refusalLine(limitMB: 2048, needMB: 3200)
-        XCTAssertEqual(line, "launch=refused memory=2048 need=3200")
-        let parsed = try XCTUnwrap(MemoryNeed.parseRefusal(line))
-        XCTAssertEqual(parsed.limitMB, 2048)
-        XCTAssertEqual(parsed.needMB, 3200)
-        XCTAssertNil(MemoryNeed.parseRefusal("launch=refused graphics=vulkan reason=not-in-this-build"))
-        XCTAssertNil(MemoryNeed.parseRefusal("exit=0x00000000 after_s=12"))
-    }
-
-    func testFormat() {
-        XCTAssertEqual(MemoryNeed.format(mb: 8192), "8.0 GB")
-        XCTAssertEqual(MemoryNeed.format(mb: 3379), "3.3 GB")
-        XCTAssertEqual(MemoryNeed.format(mb: 896), "896 MB")
     }
 }
 
@@ -2105,7 +2062,7 @@ final class SetupChecklistTests: XCTestCase {
         f.memoryEntitled = true
         XCTAssertTrue(SetupChecklist.complete(f))
         XCTAssertFalse(SetupChecklist.offersNotNow(.memory, f, firstRun: true))
-        // The entitlement never stops a launch: MemoryNeed decides per game.
+        // The entitlement never stops a launch, and nothing refuses one for memory (PLA-847).
         f.memoryEntitled = false
         XCTAssertEqual(SetupChecklist.beforeLaunch(f), .go)
     }

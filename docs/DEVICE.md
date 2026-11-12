@@ -457,8 +457,10 @@ not that gameplay appeared: inspect the timeline, log and screenshot.
 - **The memory limit.** Settings › Setup check shows the app's limit
   ([DISTRIBUTION.md, section 6](DISTRIBUTION.md#6-signing-tools-and-the-memory-limit)).
   Settings › Developer's *Simulated limit* (`set:memoryLimitSimulatedMB=2048`, undone like
-  any `set:`) is what every Play is then checked against: a Hollow Knight play
-  ends refused with `launch=refused memory=2048 need=3200`, and no JIT is spent.
+  any `set:`) is where every Play then ends: once the app's footprint reaches it the
+  process ends as iOS ends one past its limit (`library: memory: footprint … reached the
+  simulated limit`), and at the next start the game's page notes the memory kill with the
+  peak and the limit (`open:app-367520`; `library: memory: the last process ended at …`).
   Each play logs a `title: memory:` line.
 - **The JIT pool.** Every Play gets 512 MiB, independent of the app's memory
   limit ([decision 0036](decisions/0036-one-512-mib-jit-pool.md)); Setup check's

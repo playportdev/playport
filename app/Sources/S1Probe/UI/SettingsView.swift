@@ -356,7 +356,7 @@ private struct GraphicsSettings: View {
     private static var donorOptions: [(DonorPoolSizing.Setting, String)] {
         var options: [(DonorPoolSizing.Setting, String)] = [(.off, "Off"), (.auto, "Auto")]
         #if !PLAYPORT_RELEASE
-        options += DonorPoolSizing.fixedSizesMB.map { (.fixed($0), MemoryNeed.format(mb: $0) + " (fixed)") }
+        options += DonorPoolSizing.fixedSizesMB.map { (.fixed($0), ByteCount.format(mb: $0) + " (fixed)") }
         #endif
         return options
     }
