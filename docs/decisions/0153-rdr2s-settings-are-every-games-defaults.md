@@ -128,3 +128,11 @@ Built 2026-10-31 (the plan's chunk 4, `d1aff807`, `1424a0ac`, PLA-602): single-p
 builds, and every Play of Rockstar's launcher runs the layout (`PublisherLauncher.rockstar`'s runtime key, not
 every game's), so "Not taken: `PLAYPORT_SC_SINGLE`" above no longer holds for RDR2; a dev build's `=0` key turns
 either off.
+
+## Amendment 2026-11-12: the JIT pool
+
+*By [0184](0184-one-jit-pool-whose-untouched-pages-cost-nothing.md)
+([PLA-846](https://linear.app/playportdev/issue/PLA-846)).* everyGame no longer carries `jitPoolMB`
+896: every Play gets the one 896 MiB pool (PlayportKit `JitPool.sizeMB`), and the pool's untouched
+pages no longer count against the limit, so the table's "a memory cost" for the pool is what a game
+uses of it.

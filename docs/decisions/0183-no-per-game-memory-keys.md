@@ -83,7 +83,8 @@ lands, the keys it removes stay as built, and no part of it is shown on the phon
     proven on 2,304. So that row's V is 2,304 for every game; no phone has run the row since, and a
     12 GB phone's check of it is owed. The 8 GB row's 2,048 is under RDR2's figure already.
   - One JIT pool, the same size in every Play, whose untouched pages cost nothing, in place of
-    per-title sizes ([PLA-846](https://linear.app/playportdev/issue/PLA-846)).
+    per-title sizes ([PLA-846](https://linear.app/playportdev/issue/PLA-846),
+    [0184](0184-one-jit-pool-whose-untouched-pages-cost-nothing.md)).
   - Play is never refused for a stored memory figure: `memoryMB` goes, and a game ended for memory
     has its page say so at the next app start
     ([PLA-847](https://linear.app/playportdev/issue/PLA-847)). Since PLA-847 nothing refuses a Play
