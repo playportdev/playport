@@ -34,7 +34,7 @@ Nothing runs when MADEIRA_NO_DIAGNOSTICS is set, as in the release app.
 
 Linear: PLA-841
 Class: diagnostics
-Evidence: docs/evidence/2026-10-29-sc-stock-cef-probe.md
+Evidence: tools/tests/test_sc_census.py (host checks; phone gates not run)
 Offered-upstream: no; a Playport diagnostic for the iOS port's Social Club layout
 ---
  build/ntdll-unix/pp_sc_census.h | 182 ++++++++++++++++++++++++++
@@ -231,7 +231,7 @@ index 0000000..c5282f9
 +}
 +#endif
 diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
-index edba417..b974031 100644
+index 393c649..697e89e 100644
 --- a/build/ntdll-unix/virtual_ios.c
 +++ b/build/ntdll-unix/virtual_ios.c
 @@ -9819,6 +9819,219 @@ static SIZE_T get_vprot_range_size( char *base, SIZE_T size, BYTE mask, BYTE *vp

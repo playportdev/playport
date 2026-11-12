@@ -36,16 +36,20 @@ at its first fixed slot as today, RDR2's syswow64 dllhost.exe window in
 a full window placed in the room its 8,960 MB pool lends, and
 Senren＊Banka's small map failing with nothing lent or shortened.
 
+The policy's window, the span from the usable floor to FEX's band, is
+now set where its gaps are read (ios_ppe_gaps_read), for 0290's two
+calls and this one alike.
+
 Linear: PLA-839
 Class: feature
 Evidence: tools/tests/test_elastic_reserve.py (Wow64Window; host checks; phone gates not run)
 Offered-upstream: no; the address-space layout is the iOS port's
 ---
- build/ntdll-unix/virtual_ios.c | 46 ++++++++++++++++++++++++++++------
- 1 file changed, 38 insertions(+), 8 deletions(-)
+ build/ntdll-unix/virtual_ios.c | 52 +++++++++++++++++++++++++++-------
+ 1 file changed, 41 insertions(+), 11 deletions(-)
 
 diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
-index 08c733d..edba417 100644
+index 08c733d..393c649 100644
 --- a/build/ntdll-unix/virtual_ios.c
 +++ b/build/ntdll-unix/virtual_ios.c
 @@ -18771,6 +18771,8 @@ static int ios_wow64_try_slot( uintptr_t base, void *ctx )
@@ -102,7 +106,40 @@ index 08c733d..edba417 100644
      }
      if (!status && !ios_wow64_valid_base( (uintptr_t)view->base ))
      {
-@@ -22034,6 +22049,21 @@ static NTSTATUS ios_elastic_failed( void **ret, SIZE_T *size_ptr, ULONG type, UL
+@@ -21789,12 +21804,15 @@ static struct ppe_ask ios_ppe_ask( void *hint, SIZE_T size, ULONG type, ULONG_PT
+ 
+ /* The guest window's free ranges of at least min bytes, ascending, between
+  * the usable floor and FEX's band: the holds are mapped, so they are not
+- * among them. Past IOS_PPE_GAPS_MAX the smallest go. */
++ * among them. Past IOS_PPE_GAPS_MAX the smallest go. The policy's window
++ * is set to the same span first, since the floor moves with the JIT pool
++ * and the Social Club layout. */
+ static unsigned ios_ppe_gaps_read( uint64_t min )
+ {
+     uint64_t prev = ios_usable_va_floor;
+     unsigned n = 0;
+ 
++    ios_ppe.window = IOS_PPE_TOP - prev;
+     if (min < PPE_GRAIN) min = PPE_GRAIN;
+     while (prev < IOS_PPE_TOP)
+     {
+@@ -21967,7 +21985,6 @@ static int ios_elastic_before( void **ret, SIZE_T *size_ptr, ULONG type, ULONG p
+ 
+     if (!ppe_before_engages( &ios_ppe, ask )) return 0;
+     server_enter_uninterrupted_section( &virtual_mutex, &sigset );
+-    ios_ppe.window = IOS_PPE_TOP - ios_usable_va_floor;
+     d = ppe_before( &ios_ppe, ask, ios_ppe_gaps, ios_ppe_gaps_read( ppe_gap_min( ask->size ) ) );
+     if (d.kind == PPE_PLACE && !ios_ppe_map( &d, ask, type, protect, ret, size_ptr ))
+     {
+@@ -21995,7 +22012,6 @@ static NTSTATUS ios_elastic_failed( void **ret, SIZE_T *size_ptr, ULONG type, UL
+     unsigned tries;
+ 
+     server_enter_uninterrupted_section( &virtual_mutex, &sigset );
+-    ios_ppe.window = IOS_PPE_TOP - ios_usable_va_floor;
+     d = ppe_failed( &ios_ppe, ask, ios_ppe_gaps, ios_ppe_gaps_read( min ) );
+     for (tries = 0; d.kind != PPE_FAIL && tries < 256; tries++)
+     {
+@@ -22034,6 +22050,20 @@ static NTSTATUS ios_elastic_failed( void **ret, SIZE_T *size_ptr, ULONG type, UL
      return status;
  }
  
@@ -116,7 +153,6 @@ index 08c733d..edba417 100644
 +    const struct ppe_ask ask = { IOS_WOW64_WINDOW_SIZE, PPE_ASK_WOW64, 0, 0 };
 +    struct ppe_decision d;
 +
-+    ios_ppe.window = IOS_PPE_TOP - ios_usable_va_floor;
 +    d = ppe_failed( &ios_ppe, &ask, ios_ppe_gaps, ios_ppe_gaps_read( ppe_gap_min( ask.size ) ) );
 +    return d.kind == PPE_LEND && ios_ppe_lend( d.view, d.keep, ask.size );
 +}
