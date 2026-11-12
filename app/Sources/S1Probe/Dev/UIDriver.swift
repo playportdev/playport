@@ -404,8 +404,10 @@ enum UIDriver {
                 case "install" where id.hasPrefix("xbox-"):
                     if let failure = try await installXbox(String(id.dropFirst(5))) { return finish("action=\(action) failed: \(failure)") }
                 case "install", "pause-resume":
-                    guard let app = UInt32(id) else { return finish("action=\(action) refused: \(id) is not a Steam app id") }
-                    if let failure = try await install(app, pauseAt: parts[0] == "pause-resume" ? 0.25 : nil) {
+                    let appAndBranch = id.split(separator: "@", maxSplits: 1).map(String.init)
+                    guard let app = UInt32(appAndBranch[0]) else { return finish("action=\(action) refused: \(id) is not a Steam app id") }
+                    let branch = appAndBranch.count > 1 ? appAndBranch[1] : nil
+                    if let failure = try await install(app, branch: branch, pauseAt: parts[0] == "pause-resume" ? 0.25 : nil) {
                         return finish("action=\(action) failed: \(failure)")
                     }
                 case "import":
@@ -1157,7 +1159,9 @@ enum UIDriver {
 
     /// The UI's install (and, with `pauseAt`, its Pause and Resume); nil when
     /// the title reached the library, else why not.
-    private static func install(_ app: UInt32, pauseAt: Double?) async throws -> String? {
+    /// `branch`: a Steam branch, as the game page's Version picker gives it (over an installed
+    /// copy, that version downloads over it).
+    private static func install(_ app: UInt32, branch: String? = nil, pauseAt: Double?) async throws -> String? {
         guard let steam = SteamAccountModel.current else { return "no Steam model" }
         for _ in 0..<600 where steam.state.account == nil || { if case .restoring = steam.state { return true }; return false }() {
             try await pause(.milliseconds(100))
@@ -1170,8 +1174,10 @@ enum UIDriver {
         if steam.games.first(where: { $0.id == app }) == nil,
            let info = try await checked({ try? await steam.appInfo(app) }) { name = info.name }
         let started = Date()
-        log("install \(app) \(name): started")
-        installs.install(app, name: name)
+        // Over an installed copy, the library keeps the old build until it adopts the new one.
+        let before = LibraryModel.shared.catalog.titles.first { $0.appID == app }?.buildID
+        log("install \(app) \(name): started" + (branch.map { " branch=\($0)" } ?? ""))
+        installs.install(app, name: name, branch: branch)
         if let pauseAt {
             while let j = installs.jobs[.steam(app)], j.isRunning || j.phase == .queued, (j.fraction ?? 0) < pauseAt {
                 try await pause(.milliseconds(100))
@@ -1199,10 +1205,11 @@ enum UIDriver {
             try await pause(.milliseconds(250))
         }
         let library = LibraryModel.shared
-        for _ in 0..<600 where library.catalog.titles.first(where: { $0.appID == app }) == nil {
+        for _ in 0..<600 where library.catalog.titles.first(where: { $0.appID == app }).map({ before != nil && $0.buildID == before }) ?? true {
             try await pause(.milliseconds(100))
         }
         guard let t = library.catalog.titles.first(where: { $0.appID == app }) else { return "done, but not in the library" }
+        if before != nil, t.buildID == before { log("install \(app): the library still shows build \(before.map(String.init) ?? "?") after 60 s") }
         log(String(format: "install \(app): in the library as \(t.id) [\(t.badge.rawValue)] build=\(t.buildID.map(String.init) ?? "?") "
                     + "size=\(t.sizeBytes ?? 0) exe=\(t.executable ?? "none") after %.0f s", Date().timeIntervalSince(started)))
         return nil
