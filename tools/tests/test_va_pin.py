@@ -5,7 +5,7 @@ two crossed The Witcher 3 1.32 runs, and check that the knob's name stays out of
 A pin, "MiB@0xBASE", holds [base, base + size) from boot and serves the first unhinted, unlimited
 reservation of exactly its size; it replaces the boot hold of that size (the cage's 8 GB, jumbo-mb's).
 The dev app's WineHost reads the list from its Runtime keys row (env.PLAYPORT_VA_PINS); build/verify-ipa.py
-fails a release executable that names it."""
+fails a release executable that names it or links ntdll's setter, madeira_set_va_pins."""
 import importlib.util
 import pathlib
 import re
@@ -147,13 +147,13 @@ class AddressPins(unittest.TestCase):
         added = "\n".join(line for line in patch.splitlines() if line.startswith("+"))
         self.assertNotIn('"PLAYPORT_VA_PINS"', added)
 
-    def test_release_check_fails_an_executable_that_names_the_knob(self):
+    def test_release_check_fails_an_executable_that_names_or_sets_the_knob(self):
         verify = load("verify_ipa_va_pin", "build/verify-ipa.py")
         clean = b"\0MADEIRA_NO_DIAGNOSTICS\0playport.log\0"
         syms = ["_pp_guest_pool_install", "_playport_guest_memory_backing"]
-        nm = subprocess.CompletedProcess(["llvm-nm"], 0, "".join(f"0000000000000000 T {s}\n" for s in syms), "")
 
-        def failures(body):
+        def failures(body, syms=syms):
+            nm = subprocess.CompletedProcess(["llvm-nm"], 0, "".join(f"0000000000000000 T {s}\n" for s in syms), "")
             with tempfile.TemporaryDirectory() as d:
                 exe = pathlib.Path(d) / "Playport"
                 exe.write_bytes(body)
@@ -166,6 +166,10 @@ class AddressPins(unittest.TestCase):
         failed = failures(clean + b"PLAYPORT_VA_PINS\0")
         self.assertEqual(len(failed), 1, failed)
         self.assertIn("PLAYPORT_VA_PINS", failed[0])
+        # Something in the release app calling the setter links it.
+        failed = failures(clean, syms + ["_madeira_set_va_pins"])
+        self.assertEqual(len(failed), 1, failed)
+        self.assertIn("madeira_set_va_pins", failed[0])
 
 
 if __name__ == "__main__":

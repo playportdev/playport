@@ -517,7 +517,8 @@ given size at a given address, to tell what a title's large pools need. The Runt
 app: each pin's range is held from `virtual_init`, where the cage hold is taken, and the first
 unhinted, unlimited `NtAllocateVirtualMemory` reservation of exactly its size is mapped there
 (`[va-pin]` lines). A pin replaces the boot hold of its size, the cage's 8 GB or `jumbo-mb`'s. The
-release app never sets one, and `pp verify` fails a release executable that names the variable.
+release app never sets one: `pp verify` fails a release executable that names the variable or links
+ntdll's setter, `madeira_set_va_pins`, which the release link drops since nothing there calls it.
 
 ### The FEX host band
 
