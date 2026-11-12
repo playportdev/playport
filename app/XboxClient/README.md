@@ -638,34 +638,29 @@ texted code and Authenticator, not tried in the sheet). `pp ui` paths:
 The library's phone gate ran too (PLA-492): `./pp ui --action xbox:library --shot` (signed in)
 shows the Xbox store's copies with Microsoft's art and logs counts only.
 
-The install's phone gate is deferred as well (signed in, the pilot in the library):
+The install's phone gate ran on 2026-11-12 (PLA-497):
 `./pp ui --action install:xbox-9MW9469V91LM --action xbox:installed:9MW9469V91LM --shot`
 installs the copy from its page and checks it is adopted and every file verifies;
 `uninstall:xbox-9MW9469V91LM` removes it keeping its saves (the page's Remove also
 offers deleting them).
 
-The play's phone gate (signed in, installed):
+The play's phone gate ran too (PLA-499), with a forced kill and the next start's clean-up:
 `./pp ui --play xbox-9MW9469V91LM --until first-frame+10 --shot`. A refusal ends the
 run with `refused: <title>: <text>` (sign-in or licence).
 
-The lapse's phone gate (signed in, a copy installed, deferred): one real lapse, a
-Game Pass copy whose membership or catalogue entry ended,
+The lapse's phone gate was skipped by the owner (2026-11-12, PLA-505): it needs one real
+lapse, a Game Pass copy whose membership or catalogue entry ended,
 `./pp ui --action xbox:licence:<ID> --shot` (logs `licence refused` and
 `lapse grace, removal <date>`, the notice with Play off); the grace and the hold
 observed by relaunching after the date (`xbox:lapse:<ID>` logs `held` while the
 saves aren't known to be in the cloud). The driver reads a lapse, never makes one
 up (decision 0012), so the notice and the hold need a real refusal.
 
-The cloud saves' phone gates (signed in, the pilot installed, deferred):
-- A round trip: play on the phone into a save
-  (`./pp ui --play xbox-9MW9469V91LM --until first-frame+10 --action wait:120 --shot`),
-  continue on Windows or Xbox and save there, then
-  `./pp ui --play xbox-9MW9469V91LM --until first-frame+10 --shot`: the game log's
-  `xodus-savesync: cloud 1 downloaded N` and the Windows/Xbox progress in game.
-- A conflict: save on the phone with the cloud unreachable, save on Windows, then
-  `./pp ui --play xbox-9MW9469V91LM --action xbox-save:cloud --action wait:30 --shot`
-  (`xbox-save:local` the other way; `xbox-save:wait --shot` to photograph the card).
-- Unreachable cloud: play with titlestorage blocked, save, end; then
-  `./pp ui --action xbox:saves:9MW9469V91LM --action open:xbox-9MW9469V91LM --shot`
-  logs `unsynced` and the page says so; the next connected play and
-  `xbox:saves:9MW9469V91LM` log `synced`.
+The cloud saves' phone gates (PLA-500):
+- A round trip ran on 2026-11-12, phone → Xodus Nexus on a workstation → phone. Each
+  container's `index` shows it: `dirty 0` and a `remote` time equal to the local one
+  after an upload. The runtime uploads a save during play, not only at exit.
+- Skipped by the owner: a conflict and a play with the cloud unreachable. The phone has to
+  stay on the LAN without the internet, and a force-quit leaves nothing unsynced. The
+  `pp ui` paths stay: `xbox-save:wait|local|cloud|later` for the card, and
+  `xbox:saves:ID`, which logs `unsynced` or `synced`.
