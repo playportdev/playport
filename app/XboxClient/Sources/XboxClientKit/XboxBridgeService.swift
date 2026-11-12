@@ -56,7 +56,8 @@ public protocol XboxPackageUpdates: Sendable {
 /// A play's tickets are kept for it until a minute before they expire, and what reaches
 /// Microsoft is limited per play (a bucket of `burst` requests, one more every `refill`
 /// seconds), so guest code looping requests can't flood the account's sign-in.
-/// Logs name each request and reply with sizes and status, never a payload.
+/// Logs name each request and reply with sizes and status, never a payload; a licence
+/// request for another product names the public Store IDs it asked for.
 public actor XboxBridgeService {
     /// The runtime's MSA client ID for a title without an MSAAppId
     /// (xgameruntime's `platform_client_id`).
@@ -195,9 +196,10 @@ public actor XboxBridgeService {
         guard Self.plainID(parent), (1...64).contains(ids.count), ids.allSatisfy(Self.productSelector),
               (1...4096).contains(nonce.utf8.count) else { return Self.licenceReply(Self.invalid, status: "refused: malformed") }
         let allowed = Set(([copy.productID] + copy.relatedProductIDs).map { $0.uppercased() })
-        guard parent.caseInsensitiveCompare(copy.productID) == .orderedSame,
-              ids.allSatisfy({ allowed.contains(String($0.split(separator: "/")[0]).uppercased()) }) else {
-            return Self.licenceReply(Self.denied, status: "refused: another product")
+        let foreign = ids.filter { !allowed.contains(String($0.split(separator: "/")[0]).uppercased()) }
+        guard parent.caseInsensitiveCompare(copy.productID) == .orderedSame, foreign.isEmpty else {
+            // Public Store IDs, already checked to be plain: they name what the game wanted.
+            return Self.licenceReply(Self.denied, status: "refused: another product (\(parent): \(foreign.joined(separator: ",")))")
         }
         do {
             guard take() else { return Self.licenceReply(Self.fail, status: "refused: rate limited") }
