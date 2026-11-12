@@ -71,7 +71,9 @@ lands, the keys it removes stay as built, and no part of it is shown on the phon
     per-title sizes ([PLA-846](https://linear.app/playportdev/issue/PLA-846)).
   - Play is never refused for a stored memory figure: `memoryMB` goes, and a game ended for memory
     has its page say so at the next app start
-    ([PLA-847](https://linear.app/playportdev/issue/PLA-847)).
+    ([PLA-847](https://linear.app/playportdev/issue/PLA-847)). Since PLA-847 nothing refuses a Play
+    for memory, and the memory-kill note, that Play's peak and the limit, is an observation of the
+    Play, never a stored requirement or a reason to refuse or size the next one.
 - **Unchanged.** Per-game keys that are not about memory (`FEX_HOSTFEATURES`, the graphics backend,
   controls); the memory plan's table (0105) and the donor pool's sizing; the iOS low hold at exec
   in every Play; madeira-unix 0236's refusal of V8's reserve ladder, which runs before the elastic
