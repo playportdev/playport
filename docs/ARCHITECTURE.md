@@ -520,6 +520,17 @@ unhinted, unlimited `NtAllocateVirtualMemory` reservation of exactly its size is
 release app never sets one: `pp verify` fails a release executable that names the variable or links
 ntdll's setter, `madeira_set_va_pins`, which the release link drops since nothing there calls it.
 
+A dev build's Social Club census (PLA-841; madeira-unix 0294's `pp_sc_census.h`) measures, under
+the Social Club layout, the committed extent of each kind the layout holds: every slot by its real
+range, V8's code range (a helper's 1 GiB view at a 4 GiB-aligned base in the layout's window) and
+the JIT pool's RW alias (its head plus its tail). `[sc-census] peak` lines give a kind's committed
+bytes, peak and highest committed end offset at its first commit and each 16 MiB of growth;
+`[sc-census] exit` lines give every kind's at a layout owner's exit, with the guest modules whose
+commits landed there (each one's commits, bytes and offset span), and `[sc-census] commit` lines
+the first four commits per module and kind. A commit is attributed to the module of the first
+image address on the guest stack saved at the x64 caller's switch to `VirtualAlloc`. The release
+app prints none of them (`MADEIRA_NO_DIAGNOSTICS`).
+
 ### The FEX host band
 
 FEX keeps its host state in one 16 GB range, `[0x7c00000000, 0x8000000000)`,

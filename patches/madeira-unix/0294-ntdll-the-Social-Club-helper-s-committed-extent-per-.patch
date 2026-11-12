@@ -1,0 +1,498 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 12 Nov 2026 19:08:30 +0100
+Subject: [PATCH] ntdll: the Social Club helper's committed extent per kind
+
+PLA-841, a dev app's census for shrinking the Social Club layout
+(decision 0169) to what Chromium uses: per kind, the bytes committed
+now, their peak and the highest committed end offset from the kind's
+base. The kinds are the layout's slots by their real ranges (chrome_elf's
+pool, libcef's pool, ELF_META, CEF_META, Oilpan, the cage, ELF_META2),
+V8's code range (a helper's 1 GiB view at a 4 GiB-aligned base in the
+layout's window, recorded at its first change) and the JIT pool's RW
+alias (the pool's head plus its tail, read from the pool).
+
+Every change of a page's VPROT_COMMITTED goes through set_page_vprot or
+set_page_vprot_bits; each measures the committed pages of the census
+ranges it touches before and after, under virtual_mutex. A kind's line
+is printed at its first commit and then for each 16 MiB its peak or
+highest end grows ("[sc-census] peak"), and every kind's at a layout
+owner's exit, before its views go ("[sc-census] exit"), so a run from
+sign-in to Story records the peaks of both helpers.
+
+H1 (does libcef's PartitionAlloc use ELF_META's address?) and Oilpan's
+placement need to know whose commit lands where: an address cannot tell
+(PLA-482). A helper's commit is attributed to the guest module whose
+return address is the first image address on the guest stack, from the
+x64 context saved when the thread left x64 code for kernelbase's
+VirtualAlloc. The first four commits per module and kind are printed
+("[sc-census] commit ... caller=libcef.dll+0x..."), and the exit lines
+give each module's commits, bytes and lowest and highest offsets.
+
+pp_sc_census.h counts; the glue in virtual_ios.c measures and prints.
+Nothing runs when MADEIRA_NO_DIAGNOSTICS is set, as in the release app.
+
+Linear: PLA-841
+Class: diagnostics
+Evidence: docs/evidence/2026-10-29-sc-stock-cef-probe.md
+Offered-upstream: no; a Playport diagnostic for the iOS port's Social Club layout
+---
+ build/ntdll-unix/pp_sc_census.h | 182 ++++++++++++++++++++++++++
+ build/ntdll-unix/virtual_ios.c  | 220 ++++++++++++++++++++++++++++++++
+ 2 files changed, 402 insertions(+)
+ create mode 100644 build/ntdll-unix/pp_sc_census.h
+
+diff --git a/build/ntdll-unix/pp_sc_census.h b/build/ntdll-unix/pp_sc_census.h
+new file mode 100644
+index 0000000..c5282f9
+--- /dev/null
++++ b/build/ntdll-unix/pp_sc_census.h
+@@ -0,0 +1,182 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later */
++/* PLA-841: the Social Club helper's committed extent per kind, the evidence
++ * that sizes the layout's anchors (decision 0169). A kind is a layout slot's
++ * real range, a V8 code range (1 GiB at a 4 GiB-aligned base in the layout's
++ * window) or the JIT pool's RW alias. Per kind: the bytes committed now, their
++ * peak, the highest committed end offset from the kind's base, and the guest
++ * modules whose commits landed there (H1: libcef's PartitionAlloc in
++ * ELF_META's real range; where Oilpan commits). A dev-app diagnostic: the
++ * runtime glue measures pages, keeps this under virtual_mutex and prints
++ * nothing when MADEIRA_NO_DIAGNOSTICS is set. This header counts only. */
++#ifndef PP_SC_CENSUS_H
++#define PP_SC_CENSUS_H
++#include <stdint.h>
++#include "pp_sc_layout.h"
++
++enum { PPSC_CENSUS_CODE = PPSC_LAST_SLOT + 1, PPSC_CENSUS_JIT_RW, PPSC_CENSUS_KINDS };
++/* A kind's line is due at its first commit, then whenever its peak or highest
++ * end has grown this much since its last line. */
++#define PPSC_CENSUS_STEP (UINT64_C(16) << 20)
++#define PPSC_CENSUS_CALLERS 4
++#define PPSC_CENSUS_CODE_SIZE UINT64_C(0x40000000)
++/* 4 GiB-aligned GiBs inside [PPSC_FLOOR, PPSC_CEILING): 0x71, 0x72, 0x73. */
++#define PPSC_CENSUS_CODE_RANGES 3
++/* One page-protection change spans at most a few adjacent ranges. */
++#define PPSC_CENSUS_PIECES 4
++
++/* A guest module whose commits landed in a kind: module is its image base,
++ * 0 when the commit could not be attributed. Offsets are from the kind's base. */
++struct ppsc_census_caller {
++    uint64_t module, commits, bytes, low_off, high_end_off;
++    char name[32];
++    unsigned said;          /* its commit lines printed so far */
++};
++
++struct ppsc_census {
++    uint64_t committed, peak, high_end_off;
++    uint64_t said_peak, said_high;   /* the figures of its last line */
++    unsigned lines;
++    unsigned callers_full;           /* commits of modules past the table */
++    struct ppsc_census_caller caller[PPSC_CENSUS_CALLERS];
++};
++
++struct ppsc_census_state {
++    struct ppsc_census kind[PPSC_CENSUS_KINDS];
++    uint64_t code[PPSC_CENSUS_CODE_RANGES];   /* the code ranges' bases, 0 = none */
++};
++
++/* [a, a + n) inside the census range of kind, which starts at base. */
++struct ppsc_census_piece { int kind; uint64_t base, a, n; };
++
++static inline const char *ppsc_census_name(int k)
++{
++    static const char *const names[PPSC_CENSUS_KINDS] = {
++        "?", "ELF", "CEF", "ELF_META", "CEF_META", "OILPAN", "CAGE", "ELF_META2",
++        "V8_CODE_RANGE", "JIT_RW_ALIAS" };
++    return k > 0 && k < PPSC_CENSUS_KINDS ? names[k] : "?";
++}
++
++/* The kind as the census lines print it: the slot number, or a word. */
++static inline const char *ppsc_census_id(int k)
++{
++    static const char *const ids[PPSC_CENSUS_KINDS] = {
++        "?", "1", "2", "3", "4", "5", "6", "7", "code", "jit-rw" };
++    return k > 0 && k < PPSC_CENSUS_KINDS ? ids[k] : "?";
++}
++
++static inline int ppsc_census_code_shape(uint64_t base, uint64_t size)
++{
++    return size == PPSC_CENSUS_CODE_SIZE && !(base & (PPSC_CODE_RANGE_ALIGN - 1)) &&
++           base >= PPSC_FLOOR && base < PPSC_CEILING && size <= PPSC_CEILING - base;
++}
++
++/* The base of the code range holding a, or 0. */
++static inline uint64_t ppsc_census_code_at(const struct ppsc_census_state *s, uint64_t a)
++{
++    int i;
++    for (i = 0; i < PPSC_CENSUS_CODE_RANGES; i++)
++        if (s->code[i] && a >= s->code[i] && a - s->code[i] < PPSC_CENSUS_CODE_SIZE) return s->code[i];
++    return 0;
++}
++
++/* Records a code range at base; 1 when it is new. */
++static inline int ppsc_census_code_add(struct ppsc_census_state *s, uint64_t base)
++{
++    int i;
++    if (!ppsc_census_code_shape(base, PPSC_CENSUS_CODE_SIZE) || ppsc_census_code_at(s, base)) return 0;
++    for (i = 0; i < PPSC_CENSUS_CODE_RANGES; i++)
++        if (!s->code[i]) { s->code[i] = base; return 1; }
++    return 0;
++}
++
++static inline unsigned ppsc_census_clip(uint64_t a, uint64_t n, int kind, uint64_t base, uint64_t size,
++                                        struct ppsc_census_piece *out, unsigned got, unsigned max)
++{
++    uint64_t lo, hi;
++    if (got >= max || a >= base + size || a + n <= base) return got;
++    lo = a > base ? a : base;
++    hi = a + n < base + size ? a + n : base + size;
++    out[got] = (struct ppsc_census_piece){ kind, base, lo, hi - lo };
++    return got + 1;
++}
++
++/* The parts of [a, a + n) in each census range that has pages: the slots'
++ * real ranges in kind order, then the code ranges found. The JIT pool's RW
++ * alias is not Wine's memory and never a piece. */
++static inline unsigned ppsc_census_pieces(const struct ppsc_census_state *s, uint64_t a, uint64_t n,
++                                          struct ppsc_census_piece *out, unsigned max)
++{
++    unsigned got = 0;
++    int k, i;
++    if (!n || n > UINT64_MAX - a) return 0;
++    for (k = PPSC_ELF; k <= PPSC_LAST_SLOT; k++) {
++        struct ppsc_range r = ppsc_range(k);
++        got = ppsc_census_clip(a, n, k, r.base, r.size, out, got, max);
++    }
++    for (i = 0; i < PPSC_CENSUS_CODE_RANGES; i++)
++        if (s->code[i])
++            got = ppsc_census_clip(a, n, PPSC_CENSUS_CODE, s->code[i], PPSC_CENSUS_CODE_SIZE, out, got, max);
++    return got;
++}
++
++/* Whether a line is due now; if so, its figures become the last line's. */
++static inline int ppsc_census_due(struct ppsc_census *c)
++{
++    if (!c->peak && !c->high_end_off) return 0;
++    if (c->lines && c->peak < c->said_peak + PPSC_CENSUS_STEP &&
++        c->high_end_off < c->said_high + PPSC_CENSUS_STEP) return 0;
++    c->said_peak = c->peak;
++    c->said_high = c->high_end_off;
++    c->lines++;
++    return 1;
++}
++
++/* A change of delta committed bytes in the kind; high_end is the end offset
++ * of the highest page committed in the changed range after it (0: none).
++ * Returns whether the kind's line is due. */
++static inline int ppsc_census_note(struct ppsc_census *c, int64_t delta, uint64_t high_end)
++{
++    if (delta < 0 && (uint64_t)-delta > c->committed) c->committed = 0;
++    else c->committed += (uint64_t)delta;
++    if (c->committed > c->peak) c->peak = c->committed;
++    if (high_end > c->high_end_off) c->high_end_off = high_end;
++    return ppsc_census_due(c);
++}
++
++/* As ppsc_census_note, for a kind measured whole (the JIT pool). */
++static inline int ppsc_census_set(struct ppsc_census *c, uint64_t committed, uint64_t high_end)
++{
++    c->committed = committed;
++    if (committed > c->peak) c->peak = committed;
++    if (high_end > c->high_end_off) c->high_end_off = high_end;
++    return ppsc_census_due(c);
++}
++
++/* bytes newly committed by module over [off, off + len) of the kind. Returns
++ * the module's entry, or PPSC_CENSUS_CALLERS when the table is full (counted
++ * in callers_full); *first says the entry was made now. */
++static inline unsigned ppsc_census_caller_note(struct ppsc_census *c, uint64_t module, uint64_t off,
++                                               uint64_t len, uint64_t bytes, int *first)
++{
++    unsigned i;
++    struct ppsc_census_caller *e;
++    *first = 0;
++    for (i = 0; i < PPSC_CENSUS_CALLERS; i++)
++        if (!c->caller[i].commits || c->caller[i].module == module) break;
++    if (i == PPSC_CENSUS_CALLERS) {
++        c->callers_full++;
++        return i;
++    }
++    e = &c->caller[i];
++    if (!e->commits) {
++        *first = 1;
++        e->module = module;
++        e->low_off = off;
++    }
++    e->commits++;
++    e->bytes += bytes;
++    if (off < e->low_off) e->low_off = off;
++    if (off + len > e->high_end_off) e->high_end_off = off + len;
++    return i;
++}
++#endif
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 08c733d..16e2710 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -9819,6 +9819,219 @@ static SIZE_T get_vprot_range_size( char *base, SIZE_T size, BYTE mask, BYTE *vp
+     return size;
+ }
+ 
++#include "pp_sc_census.h"
++/* Playport (PLA-841): the Social Club helper's committed extent per kind
++ * (pp_sc_census.h). Every change of a page's VPROT_COMMITTED goes through
++ * set_page_vprot or set_page_vprot_bits, so each measures the committed pages
++ * of the census ranges it touches before and after. A kind's line is printed
++ * at its first commit and each PPSC_CENSUS_STEP of growth ("peak"), and every
++ * kind's at a layout owner's exit ("exit", before its views go). A helper's
++ * commit is also attributed to the guest module that made it: its first four
++ * per module and kind are printed ("commit"), the rest summed in the exit
++ * lines. One state for the whole Play (helpers A and B add up), under
++ * virtual_mutex. Dev app only: nothing runs under MADEIRA_NO_DIAGNOSTICS. */
++static struct ppsc_census_state ppsc_cs;
++
++struct ppsc_census_op
++{
++    unsigned n;
++    struct ppsc_census_piece p[PPSC_CENSUS_PIECES];
++    uint64_t before[PPSC_CENSUS_PIECES];
++};
++
++/* virtual_mutex held. Committed bytes in [a, a + n), and the end offset from
++ * a of the highest committed page (0: none). */
++static uint64_t ppsc_census_committed_locked( uint64_t a, uint64_t n, uint64_t *high_end )
++{
++    char *p = (char *)(uintptr_t)a, *end = p + n;
++    uint64_t bytes = 0;
++
++    *high_end = 0;
++    while (p < end)
++    {
++        BYTE vprot;
++        SIZE_T len = get_vprot_range_size( p, end - p, VPROT_COMMITTED, &vprot );
++        if (!len) break;
++        if (vprot & VPROT_COMMITTED)
++        {
++            bytes += len;
++            *high_end = (uint64_t)(p + len - (char *)(uintptr_t)a);
++        }
++        p += len;
++    }
++    return bytes;
++}
++
++/* virtual_mutex held. The image view holding guest address v, or NULL. */
++static struct file_view *ppsc_census_image_locked( uint64_t v )
++{
++    struct file_view *view;
++
++    if (v < 0x10000 || v >= PPSC_TOP) return NULL;
++    view = find_view( (const void *)(uintptr_t)v, 0 );
++    return view && (view->protect & SEC_IMAGE) ? view : NULL;
++}
++
++/* virtual_mutex held, on a helper's thread: the guest module whose commit
++ * this is. The x64 context saved at the thread's switch out of x64 code (the
++ * CPU area's ContextAmd64, as [tls38] reads it) has the guest Rsp; a call
++ * into kernelbase's VirtualAlloc leaves the x64 caller's return address at
++ * its first word. The first of 16 committed stack words that is an address
++ * in an image view is taken, *word its index (-1: none); *rip is the saved
++ * Rip, kernelbase's VirtualAlloc when the context is this call's. */
++static struct file_view *ppsc_census_caller_locked( uint64_t *ret, int *word, uint64_t *rip )
++{
++    TEB *teb = NtCurrentTeb();
++    CHPE_V2_CPU_AREA_INFO *area = teb ? teb->ChpeV2CpuAreaInfo : NULL;
++    struct file_view *stack, *image;
++    uint64_t rsp;
++    int i;
++
++    *ret = *rip = 0;
++    *word = -1;
++    if (!area || !area->ContextAmd64) return NULL;
++    rsp = *(ULONG64 *)((char *)area->ContextAmd64 + 0x98);
++    *rip = *(ULONG64 *)((char *)area->ContextAmd64 + 0xF8);
++    if (rsp < 0x10000 || (rsp & 7) || !(stack = find_view( (const void *)(uintptr_t)rsp, 0 ))) return NULL;
++    for (i = 0; i < 16 && rsp + 8 * i + 8 <= (uintptr_t)stack->base + stack->size; i++)
++    {
++        const uint64_t *w = (const uint64_t *)(uintptr_t)rsp + i;
++        if ((get_page_vprot( w ) & (VPROT_COMMITTED | VPROT_READ | VPROT_GUARD)) != (VPROT_COMMITTED | VPROT_READ))
++            return NULL;
++        if ((image = ppsc_census_image_locked( *w )))
++        {
++            *ret = *w;
++            *word = i;
++            return image;
++        }
++    }
++    return NULL;
++}
++
++static void ppsc_census_say_locked( int k, const char *why, void *owner )
++{
++    extern size_t ios_jit_pool_size_global;
++    const struct ppsc_census *c = &ppsc_cs.kind[k];
++    char where[96], who[40] = "";
++    unsigned i;
++
++    if (k <= PPSC_LAST_SLOT)
++        snprintf( where, sizeof(where), "real=0x%llx+0x%llx", (unsigned long long)ppsc_range( k ).base,
++                  (unsigned long long)ppsc_range( k ).size );
++    else if (k == PPSC_CENSUS_CODE)
++        snprintf( where, sizeof(where), "ranges=0x%llx,0x%llx,0x%llx+0x%llx",
++                  (unsigned long long)ppsc_cs.code[0], (unsigned long long)ppsc_cs.code[1],
++                  (unsigned long long)ppsc_cs.code[2], (unsigned long long)PPSC_CENSUS_CODE_SIZE );
++    else
++        snprintf( where, sizeof(where), "rw=%p+0x%llx tail=0x%llx", ios_jit_rw_base_global,
++                  (unsigned long long)ios_jit_pool_size_global, (unsigned long long)ios_jit_tail_reserved );
++    if (owner) snprintf( who, sizeof(who), " owner=%p", owner );
++    dprintf( 2, "[sc-census] %s%s kind=%s %s %s committed=0x%llx peak=0x%llx high_end_off=0x%llx callers_full=%u\n",
++             why, who, ppsc_census_id( k ), ppsc_census_name( k ), where, (unsigned long long)c->committed,
++             (unsigned long long)c->peak, (unsigned long long)c->high_end_off, c->callers_full );
++    if (!owner) return;
++    for (i = 0; i < PPSC_CENSUS_CALLERS; i++)
++    {
++        const struct ppsc_census_caller *e = &c->caller[i];
++        if (!e->commits) continue;
++        dprintf( 2, "[sc-census] %s owner=%p kind=%s %s caller=%s@0x%llx commits=%llu bytes=0x%llx low_off=0x%llx high_end_off=0x%llx\n",
++                 why, owner, ppsc_census_id( k ), ppsc_census_name( k ), e->name, (unsigned long long)e->module,
++                 (unsigned long long)e->commits, (unsigned long long)e->bytes,
++                 (unsigned long long)e->low_off, (unsigned long long)e->high_end_off );
++    }
++}
++
++/* The JIT pool's RW alias, measured whole: its head (which only grows) plus
++ * its tail of code buffers, read without the pool's lock. */
++static int ppsc_census_jit_locked( void )
++{
++    uint64_t head = jit_pool_offset, tail = ios_jit_tail_reserved;
++    return ios_jit_rw_base_global && ppsc_census_set( &ppsc_cs.kind[PPSC_CENSUS_JIT_RW], head + tail, head );
++}
++
++/* virtual_mutex held. A helper's new commit of bytes in piece p. */
++static void ppsc_census_attribute_locked( const struct ppsc_census_piece *p, uint64_t bytes )
++{
++    struct ppsc_census *c = &ppsc_cs.kind[p->kind];
++    struct file_view *image = NULL;
++    uint64_t ret = 0, rip = 0, module;
++    int word = -1, first;
++    unsigned i;
++
++    if (ppsc_helper()) image = ppsc_census_caller_locked( &ret, &word, &rip );
++    module = image ? (uintptr_t)image->base : 0;
++    i = ppsc_census_caller_note( c, module, p->a - p->base, p->n, bytes, &first );
++    if (i == PPSC_CENSUS_CALLERS) return;
++    if (first)
++        snprintf( c->caller[i].name, sizeof(c->caller[i].name), "%s",
++                  image ? ios_pe_module_name( image->base, image->size ) : "?" );
++    if (c->caller[i].said >= 4) return;
++    c->caller[i].said++;
++    dprintf( 2, "[sc-census] commit kind=%s %s off=0x%llx size=0x%llx new=0x%llx caller=%s+0x%llx word=%d rip=0x%llx owner=%p\n",
++             ppsc_census_id( p->kind ), ppsc_census_name( p->kind ), (unsigned long long)(p->a - p->base),
++             (unsigned long long)p->n, (unsigned long long)bytes, c->caller[i].name,
++             (unsigned long long)(ret - module), word, (unsigned long long)rip, ios_jit_current_peb() );
++}
++
++/* virtual_mutex held, before a page-protection change of [addr, addr + size):
++ * the committed bytes of each census piece it touches. A helper's view of the
++ * code range's shape is recorded as a code range at its first change. */
++static int ppsc_census_begin_locked( const void *addr, size_t size, struct ppsc_census_op *op )
++{
++    uint64_t a = (uintptr_t)addr & ~(uint64_t)page_mask;
++    uint64_t e = ((uintptr_t)addr + size + page_mask) & ~(uint64_t)page_mask, high;
++    unsigned i;
++
++    if (e <= ppsc_range( PPSC_CEF ).base || a >= PPSC_TOP || !ppsc_ready || ios_no_diagnostics()) return 0;
++    if (a < PPSC_CEILING && e > PPSC_FLOOR && !ppsc_census_code_at( &ppsc_cs, a ) && ppsc_helper())
++    {
++        struct file_view *view = find_view( (const void *)(uintptr_t)a, 0 );
++        if (view && view->ios_owner_peb == ios_jit_current_peb() &&
++            ppsc_census_code_shape( (uintptr_t)view->base, view->size ) &&
++            ppsc_census_code_add( &ppsc_cs, (uintptr_t)view->base ))
++            dprintf( 2, "[sc-census] found kind=code %s at %p+0x%llx owner=%p\n", ppsc_census_name( PPSC_CENSUS_CODE ),
++                     view->base, (unsigned long long)view->size, view->ios_owner_peb );
++    }
++    op->n = ppsc_census_pieces( &ppsc_cs, a, e - a, op->p, PPSC_CENSUS_PIECES );
++    for (i = 0; i < op->n; i++) op->before[i] = ppsc_census_committed_locked( op->p[i].a, op->p[i].n, &high );
++    return op->n != 0;
++}
++
++/* virtual_mutex held, after the change ppsc_census_begin_locked measured. */
++static void ppsc_census_end_locked( const struct ppsc_census_op *op )
++{
++    unsigned i;
++    int changed = 0;
++
++    for (i = 0; i < op->n; i++)
++    {
++        const struct ppsc_census_piece *p = &op->p[i];
++        uint64_t high, after = ppsc_census_committed_locked( p->a, p->n, &high );
++        int64_t delta = (int64_t)(after - op->before[i]);
++
++        if (!delta) continue;
++        changed = 1;
++        if (ppsc_census_note( &ppsc_cs.kind[p->kind], delta, high ? p->a - p->base + high : 0 ))
++            ppsc_census_say_locked( p->kind, "peak", NULL );
++        if (delta > 0) ppsc_census_attribute_locked( p, (uint64_t)delta );
++    }
++    if (changed && ppsc_census_jit_locked()) ppsc_census_say_locked( PPSC_CENSUS_JIT_RW, "peak", NULL );
++}
++
++/* virtual_mutex held, at a dead peb's teardown before its views go: every
++ * kind's figures and callers when it owned a layout slot. */
++static void ppsc_census_owner_exit_locked( void *peb )
++{
++    int k, owner = 0;
++
++    if (!ppsc_ready || !peb || ios_no_diagnostics()) return;
++    for (k = PPSC_ELF; k <= PPSC_LAST_SLOT; k++) if (ppsc_owner[k] == peb) owner = 1;
++    if (!owner) return;
++    ppsc_census_jit_locked();
++    for (k = PPSC_ELF; k < PPSC_CENSUS_KINDS; k++)
++        if (ppsc_cs.kind[k].peak || ppsc_cs.kind[k].high_end_off) ppsc_census_say_locked( k, "exit", peb );
++}
++
+ /***********************************************************************
+  *           set_page_vprot
+  *
+@@ -9828,6 +10041,8 @@ static void set_page_vprot( const void *addr, size_t size, BYTE vprot )
+ {
+     size_t idx = (size_t)addr >> page_shift;
+     size_t end = ((size_t)addr + size + page_mask) >> page_shift;
++    struct ppsc_census_op census;
++    int counted = ppsc_census_begin_locked( addr, size, &census );
+ 
+ #ifdef _WIN64
+     while (idx >> pages_vprot_shift != end >> pages_vprot_shift)
+@@ -9840,6 +10055,7 @@ static void set_page_vprot( const void *addr, size_t size, BYTE vprot )
+ #else
+     memset( pages_vprot + idx, vprot, end - idx );
+ #endif
++    if (counted) ppsc_census_end_locked( &census );
+ }
+ 
+ 
+@@ -9852,6 +10068,8 @@ static void set_page_vprot_bits( const void *addr, size_t size, BYTE set, BYTE c
+ {
+     size_t idx = (size_t)addr >> page_shift;
+     size_t end = ((size_t)addr + size + page_mask) >> page_shift;
++    struct ppsc_census_op census;
++    int counted = ((set | clear) & VPROT_COMMITTED) && ppsc_census_begin_locked( addr, size, &census );
+ 
+ #ifdef _WIN64
+     for ( ; idx < end; idx++)
+@@ -9862,6 +10080,7 @@ static void set_page_vprot_bits( const void *addr, size_t size, BYTE set, BYTE c
+ #else
+     for ( ; idx < end; idx++) pages_vprot[idx] = (pages_vprot[idx] & ~clear) | set;
+ #endif
++    if (counted) ppsc_census_end_locked( &census );
+ }
+ 
+ 
+@@ -19976,6 +20195,7 @@ static void ios_proc_end_release_views_locked( void *peb, const struct ppe_censu
+     struct thread_data *data;
+     unsigned int nrefs = 0, nthreads = 0, ndropped = 0;
+ 
++    ppsc_census_owner_exit_locked( peb );   /* PLA-841: before its slot views go */
+     LIST_FOR_EACH_ENTRY( data, &teb_list, struct thread_data, entry )
+     {
+         int p;
