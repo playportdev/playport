@@ -508,10 +508,10 @@ lend, grow, refuse and a query inside a shortened view's claim, in both variants
 Two holds keep address space for a title's large reservations from boot, both set by its
 `madeira.cfg` keys ([decisions 0126](decisions/0126-hold-rdr2s-address-space-from-the-start.md),
 [0129](decisions/0129-the-holds-serve-only-their-own-request.md)); no compatibility entry sets them
-since decision 0180, and a cohort title (The Witcher 3 1.32) may:
+since decision 0180, and no cohort title since The Witcher 3 1.32 played without them (PLA-837):
 
 - `jumbo-mb` holds a gap of that size below FEX's band, for the one reservation of that size;
-- `cage-hold` holds 8 GB of the guest window at 0x7200000000, for an 8 GB ask (The Witcher 3).
+- `cage-hold` holds 8 GB of the guest window at 0x7200000000, for an 8 GB ask.
 
 A dev build's address pins (PLA-837; madeira-unix 0291's `pp_va_pin.h`) put a reservation of a
 given size at a given address, to tell what a title's large pools need. The Runtime keys row's

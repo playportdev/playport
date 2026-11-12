@@ -23,7 +23,7 @@ final class CohortTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: list, encoding: .utf8).split(separator: "\n").count, 1785)
     }
 
-    func testTheBundledCohortCarriesTheWitcher3PinWithItsHoldback() throws {
+    func testTheBundledCohortCarriesTheWitcher3Pin() throws {
         let cohort = try Cohort.load(directory: titlesDir)
         let w3 = try XCTUnwrap(cohort.title(installDir: "The Witcher 3"))
         XCTAssertEqual(w3.appID, 292030)
@@ -31,10 +31,6 @@ final class CohortTests: XCTestCase {
         XCTAssertEqual(w3.depots.count, 23)
         XCTAssertEqual(w3.executable, #"bin\x64\witcher3.exe"#)
         XCTAssertEqual(w3.installedSize, 41_585_389_035)
-        // docs/evidence/2026-09-25-witcher3-setup.md: the 32 GB reservation needs the boot-time hold,
-        // and its 8 GB ask the ml433 cage hold, which has its own key since decision 0129.
-        XCTAssertEqual(w3.config, ["cage-hold": "1", "jumbo-mb": "32768"])
-        XCTAssertNoThrow(try TitleConfig.validate(w3.config ?? [:]))
         XCTAssertEqual(w3.screen, "720")   // 1.32 has no render scale; the guest's desktop sets its size
         let list = try XCTUnwrap(cohort.checksumList(named: w3.checksums))
         let lines = try String(contentsOf: list, encoding: .utf8).split(separator: "\n")
@@ -233,7 +229,7 @@ final class CatalogTests: XCTestCase {
         XCTAssertNil(try hk.launchPlan(cohort: cohort).screen)   // native pixels
     }
 
-    func testAdoptionFindsANestedCohortExecutableAndCarriesItsConfig() throws {
+    func testAdoptionFindsANestedCohortExecutableAndCarriesItsScreen() throws {
         let cohort = try Cohort.load(directory: titlesDir)
         try file("The Witcher 3/REDprelauncher.exe")
         try file("The Witcher 3/bin/x64/Witcher3.EXE")
@@ -245,7 +241,6 @@ final class CatalogTests: XCTestCase {
         let plan = try w3.launchPlan(cohort: cohort)
         XCTAssertEqual(plan.exe, #"Games\The Witcher 3\bin\x64\Witcher3.EXE"#)
         XCTAssertEqual(plan.args, [])
-        XCTAssertEqual(plan.config, ["cage-hold": "1", "jumbo-mb": "32768"])
         XCTAssertEqual(plan.screen, "720")
 
         // Without the nested file the pin has no executable, and a directory is not one.
@@ -358,7 +353,6 @@ final class CatalogTests: XCTestCase {
                                              importsDirect3D12: w3.importsDirect3D12 == true).graphics, .vulkan)
         let plan = try w3.launchPlan(cohort: cohort)
         XCTAssertEqual(plan.exe, #"Games\The Witcher 3\bin\x64_dx12\Witcher3.EXE"#)
-        XCTAssertTrue(plan.config.isEmpty, "classic's runtime keys do not belong to the new build")
         XCTAssertTrue(plan.args.isEmpty)
         XCTAssertNil(plan.screen)
 
@@ -383,7 +377,6 @@ final class CatalogTests: XCTestCase {
         XCTAssertEqual(classic.title(id: w3.id)?.executable, #"bin\x64\witcher3.exe"#)
         XCTAssertNil(classic.title(id: w3.id)?.checksums)
         let classicPlan = try XCTUnwrap(classic.title(id: w3.id)).launchPlan(cohort: cohort)
-        XCTAssertEqual(classicPlan.config, ["cage-hold": "1", "jumbo-mb": "32768"], "keep the exact pinned build's launch requirements")
         XCTAssertEqual(classicPlan.screen, "720")
         XCTAssertEqual(Adoption.scan(games: games, cohort: cohort, receipts: [], previous: classic)
             .title(id: w3.id)?.source, .cohort)
