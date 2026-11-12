@@ -77,7 +77,11 @@ hold key per title.
   aligned asks, placeholders and `…Ex` asks with address requirements, `zero_bits`/limited asks,
   commit-at-reserve asks, asks served by a hold (jumbo hold, cage hold), and asks the Social Club
   layout ([0169](0169-social-club-on-rockstars-cef-in-the-stock-cef-layout.md)) routes; its router
-  runs first. Chromium/V8 pools, which depend on their exact extents, stay truthful.
+  runs first. Chromium/V8 pools, which depend on their exact extents, stay truthful. A WoW64
+  process's window is such an ask too ([PLA-839](https://linear.app/playportdev/issue/PLA-839),
+  madeira-unix 0292): always 4 GiB, since FEX zero-extends a 32-bit guest pointer over all of it, so
+  it is never shortened and never lends; when its fixed slots and a first fit fail, a lender's freed
+  range can hold it.
 - **One log tag** covers lend, grant, grow and refuse, with the address, real size, claim and
   committed height; a refusal also names what blocked growth. Counted, rate-limited, in release
   builds at the level of `[alloc-fail]`.

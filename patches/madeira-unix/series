@@ -258,3 +258,4 @@
 0289-ntdll-the-elastic-reservation-policy-pp_elastic.h.patch
 0290-virtual-elastic-reservations-replace-short-reserve-m.patch
 0291-virtual-dev-address-pins-put-a-reservation-of-a-give.patch
+0292-ntdll-a-WoW64-window-is-an-ask-of-the-elastic-policy.patch

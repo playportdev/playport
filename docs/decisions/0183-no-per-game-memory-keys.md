@@ -65,8 +65,10 @@ lands, the keys it removes stay as built, and no part of it is shown on the phon
     and the rest is claimed at the helper's first ask; ELF_META2 and RDR2's 8,960 MiB game hold go
     ([PLA-841](https://linear.app/playportdev/issue/PLA-841),
     [PLA-842](https://linear.app/playportdev/issue/PLA-842)).
-  - A 32-bit game's WoW64 window is placed by the elastic policy: 4 GiB for a large-address-aware
-    image, else 2 GiB ([PLA-839](https://linear.app/playportdev/issue/PLA-839)).
+  - A 32-bit game's WoW64 window is placed by the elastic policy
+    ([PLA-839](https://linear.app/playportdev/issue/PLA-839)). It stays 4 GiB for every image (the
+    owner on PLA-839, 2026-11-12): FEX zero-extends a guest pointer over all of it, and
+    large-address-aware only bounds allocations inside it, as before.
   - One video figure from the phone's memory plan row
     ([0105](0105-memory-defaults-per-phone.md), [0106](0106-8gb-row-in-full-and-vulkan-plan-default.md))
     for every game, in place of RDR2's entry and `everyGame`'s fixed heap

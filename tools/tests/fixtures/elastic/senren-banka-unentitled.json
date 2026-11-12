@@ -1,0 +1,9 @@
+{
+  "title": "Senren＊Banka (1144400), i386 and not large-address-aware, installed without the increased-memory-limit entitlement",
+  "sources": ["GitHub #31's report log (Playport 0.4.0, PLA-326): increased-memory-limit no (line 4), Machine=0x14c chars=0x102 (line 7), the window search from the floor 0x7020000000 failing first at 0x7180000000 (line 8), [mmap-place] NO GAP FITS size=0x100010000 ceiling=0x7180000000 (line 10), [wow64-window] reservation FAILED status=0xc0000017 (line 11); the excerpt has no map walk",
+              "GitHub #34's report log (app 3278760, the same failure on a 12 GB phone without the entitlement): max_address=0x7180000000 (lines 209, 257), the JIT pool's RW alias at 0x7000000000 + 512 MiB (line 208), FEX's 4 GiB arena kept at [0x7038950000, 0x7138950000) (line 337), the [va-gaps] walk at JIT pool init with 0x7138950000..0x717edb0000 = 1124 MB free in the guest window (line 347; the top tail it lists from 0x7180000000 lies above max_address and cannot be mapped), [wow64-window] reservation FAILED (line 879)"],
+  "free": [["0x7138950000", "0x717edb0000"]],
+  "events": [
+    ["reserve", "window", "0x100000000", ["wow64"], {}]
+  ]
+}
