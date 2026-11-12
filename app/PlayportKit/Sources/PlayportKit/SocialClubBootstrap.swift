@@ -23,6 +23,10 @@ import Foundation
 import SteamClientKit
 
 public struct SocialClubBootstrap: Equatable, Sendable {
+    /// The variable that turns the layout on for wine_host.c and ntdll at the runtime's start: the launch
+    /// sets it to 1 for a Play whose verdict holds a verified bootstrap and unsets it for every other.
+    public static let layoutVariable = "PLAYPORT_SC_LAYOUT"
+
     /// Which folder an entry's files are in.
     public enum Place: Equatable, Sendable {
         /// The game's install folder.
@@ -30,7 +34,8 @@ public struct SocialClubBootstrap: Equatable, Sendable {
         /// The install folder of the publisher's launcher the Open starts.
         case launcher
 
-        var folder: String { self == .game ? "the game's folder" : "the launcher's folder" }
+        /// How a log line names the folder.
+        var logName: String { self == .game ? "the game's folder" : "the launcher's folder" }
     }
 
     public struct File: Equatable, Sendable {
@@ -119,8 +124,8 @@ public struct SocialClubBootstrap: Equatable, Sendable {
                 return ["the Social Club layout is on: verified Rockstar bootstrap \(b.name) ("
                         + b.files.map(\.path).joined(separator: ", ") + ")"]
             }
-            guard !observed.isEmpty else { return ["the Social Club layout is off: no Rockstar bootstrap in \(place.folder)"] }
-            return ["the Social Club layout is off: the Rockstar bootstrap in \(place.folder) is not one Playport verified"]
+            guard !observed.isEmpty else { return ["the Social Club layout is off: no Rockstar bootstrap in \(place.logName)"] }
+            return ["the Social Club layout is off: the Rockstar bootstrap in \(place.logName) is not one Playport verified"]
                 + observed.map { o in
                     "bootstrap \(o.path): \(o.size) B, "
                         + (o.verified ? "verified" : (hashes ? o.sha256.map { "sha256 \($0), " } ?? "" : "") + "not in the table")

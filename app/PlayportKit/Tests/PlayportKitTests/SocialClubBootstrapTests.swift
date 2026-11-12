@@ -161,7 +161,7 @@ final class SocialClubBootstrapTests: XCTestCase {
     /// The launcher plays no part: Rockstar's launcher carries no layout key, so neither RDR2's Play
     /// nor the Open gets one from it in either build.
     func testRockstarsLauncherCarriesNoLayoutKey() {
-        let key = "env." + GameSocialClubEndPolicy.layoutVariable
+        let key = "env." + SocialClubBootstrap.layoutVariable
         XCTAssertNil(PublisherLauncher.rockstar.runtime[key])
         XCTAssertNil(PublisherLauncher.rockstar.openSettings(saved: nil).config[key])
         let plain = LaunchSettings.resolve(game: nil, global: LaunchSettings())

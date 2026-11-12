@@ -486,8 +486,7 @@ final class LibraryModel: ObservableObject {
         // The Social Club layout, only for a game whose folder holds a verified Rockstar bootstrap, whichever
         // launcher it starts (decisions 0169, 0183; SocialClubLayout).
         let gameFolder = Self.paths.games.appendingPathComponent(t.installDir, isDirectory: true)
-        let socialClub = await Task.detached(priority: .userInitiated) { SocialClubLayout.check(folder: gameFolder, place: .game) }.value
-        for line in socialClub.lines { Self.log("play \(t.name): " + line) }
+        let socialClub = await SocialClubLayout.check(folder: gameFolder, place: .game) { Self.log("play \(t.name): " + $0) }
         guard TitleLaunch.shared.start(title: t.name, titleID: t.id, exe: plan.exe, args: plan.args + settings.arguments + epicArgs,
                                        config: settings.config(over: plan.config),
                                        screen: settings.guestScreen, frameLimit: settings.frameLimit,

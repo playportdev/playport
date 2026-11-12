@@ -15,11 +15,6 @@
 // that never ends the helper refuses none of its starts and never watches for a re-sign-in.
 
 public enum GameSocialClubEndPolicy {
-    /// The variable that turns the layout on for wine_host.c and ntdll at the runtime's start: the launch
-    /// sets it to 1 for a Play whose game folder holds a verified Rockstar bootstrap and unsets it for
-    /// every other, whatever a runtime key says.
-    public static let layoutVariable = "PLAYPORT_SC_LAYOUT"
-
     /// Whether the Play ends the game's own Social Club: `stored` is the switch's stored value, nil
     /// when never set.
     public static func ends(stored: Bool?, socialClubLayout: Bool, release: Bool) -> Bool {

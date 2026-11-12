@@ -19,13 +19,21 @@ enum SocialClubLayout {
     private static let dev = true
     #endif
 
-    /// The folder's verdict and its log lines. Reads files: not on the main thread.
-    static func check(folder: URL, place: SocialClubBootstrap.Place) -> (engaged: Bool, lines: [String]) {
+    /// The folder's verdict, read off the main thread, with each of its log lines given to `log`.
+    @MainActor
+    static func check(folder: URL, place: SocialClubBootstrap.Place, log: (String) -> Void) async -> SocialClubBootstrap.Verdict {
+        let verdict = await Task.detached(priority: .userInitiated) { read(folder: folder, place: place) }.value
+        for line in verdict.logLines(hashes: dev) { log(line) }
+        return verdict
+    }
+
+    /// The folder's verdict, with the hashes kept between Plays. Reads files.
+    private static func read(folder: URL, place: SocialClubBootstrap.Place) -> SocialClubBootstrap.Verdict {
         let defaults = UserDefaults.standard
         let kept = defaults.data(forKey: cacheKey).flatMap { try? JSONDecoder().decode(SocialClubBootstrap.HashCache.self, from: $0) }
         var cache = kept ?? .init()
         let verdict = SocialClubBootstrap.check(folder: folder, place: place, cache: &cache, hashMismatches: dev)
         if cache != kept, let data = try? JSONEncoder().encode(cache) { defaults.set(data, forKey: cacheKey) }
-        return (verdict.engaged, verdict.logLines(hashes: dev))
+        return verdict
     }
 }

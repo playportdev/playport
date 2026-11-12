@@ -17,26 +17,22 @@ import WineHost
 enum LauncherOpen {
     static func log(_ line: String) { WineHostRuntime.appendLog("launcher: " + line) }
 
-    /// The executable's DOS path when the launcher is installed in the prefix: the folder its
-    /// installer recorded (system.reg, as the runtime last saved it), and the file in it.
-    nonisolated static func installedPath(_ l: PublisherLauncher, prefix: URL) -> String? {
+    /// The launcher as installed in the prefix: its executable's DOS path and the folder it is in.
+    struct Installed: Sendable {
+        let exe: String
+        let folder: URL
+    }
+
+    /// The launcher's install when the prefix records it: the folder its installer recorded
+    /// (system.reg, as the runtime last saved it), with the executable in it.
+    nonisolated static func installed(_ l: PublisherLauncher, prefix: URL) -> Installed? {
         let hive = (try? String(contentsOf: prefix.appendingPathComponent("system.reg"), encoding: .utf8)) ?? ""
         guard let dos = l.executablePath(systemHive: hive) else { return nil }
         var tp = title_path()
         var msg = [CChar](repeating: 0, count: 512)
-        return title_path_resolve(prefix.path, dos, &tp, &msg, msg.count) == 0 ? dos : nil
-    }
-
-    /// Whether the Open holds the Social Club layout: the executable it starts, in the launcher's install
-    /// folder, is a verified Rockstar bootstrap (SocialClubLayout, decision 0183), and its log lines.
-    nonisolated static func socialClubLayout(exe dos: String, prefix: URL) -> (engaged: Bool, lines: [String]) {
-        var tp = title_path()
-        var msg = [CChar](repeating: 0, count: 512)
-        guard title_path_resolve(prefix.path, dos, &tp, &msg, msg.count) == 0 else {
-            return (false, ["the Social Club layout is off: \(dos) is not resolved"])
-        }
+        guard title_path_resolve(prefix.path, dos, &tp, &msg, msg.count) == 0 else { return nil }
         let unix = withUnsafeBytes(of: tp.unix_path) { String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) }
-        return SocialClubLayout.check(folder: URL(fileURLWithPath: unix).deletingLastPathComponent(), place: .launcher)
+        return Installed(exe: dos, folder: URL(fileURLWithPath: unix).deletingLastPathComponent())
     }
 
     #if !PLAYPORT_RELEASE
@@ -63,10 +59,11 @@ enum LauncherOpen {
         guard await JitSetup.shared.ensureReady() else { return false }
         guard !TitleLaunch.shared.running, !TitleLaunch.shared.spent else { return false }
         let prefix = WineHostRuntime.shared.prefixURL
-        guard let exe = await Task.detached(priority: .userInitiated, operation: { installedPath(l, prefix: prefix) }).value else {
+        guard let install = await Task.detached(priority: .userInitiated, operation: { installed(l, prefix: prefix) }).value else {
             log("open \(l.id): not installed (no \(l.installValue) under \(l.installKey), or no \(l.executable) in it)")
             return false
         }
+        let exe = install.exe
         // Windows services (decision 0107): RpcSs's entry and the SCM's start timeout, topped up
         // as for a game's play.
         if l.windowsServices {
@@ -98,8 +95,7 @@ enum LauncherOpen {
         let fex = FEXProfile.launch(appID: nil, exe: exe, ordering: saved.ordering, maxInst: saved.maxInst,
                                     x87Reduced: saved.x87Reduced, diskCache: saved.diskCache)
         // The Social Club layout when the Launcher.exe it starts is verified (decisions 0169, 0183).
-        let socialClub = await Task.detached(priority: .userInitiated) { socialClubLayout(exe: exe, prefix: prefix) }.value
-        for line in socialClub.lines { log("open \(l.id): " + line) }
+        let socialClub = await SocialClubLayout.check(folder: install.folder, place: .launcher) { log("open \(l.id): " + $0) }
         guard TitleLaunch.shared.start(title: l.name, titleID: l.titleID, exe: exe, args: l.arguments, config: saved.config,
                                        graphics: l.graphics, graphicsEnvironment: l.graphicsEnvironment,
                                        fex: fex, windowsServices: l.windowsServices,
@@ -155,7 +151,7 @@ struct LaunchersSettings: View {
             .task {
                 let prefix = WineHostRuntime.shared.prefixURL
                 for l in PublisherLauncher.all {
-                    let p = await Task.detached(priority: .utility) { LauncherOpen.installedPath(l, prefix: prefix) }.value
+                    let p = await Task.detached(priority: .utility) { LauncherOpen.installed(l, prefix: prefix)?.exe }.value
                     installed[l.id] = .some(p)
                 }
             }

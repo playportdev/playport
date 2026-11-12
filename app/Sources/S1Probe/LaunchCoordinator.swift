@@ -460,7 +460,7 @@ enum LaunchCoordinator {
                 // and the like once, at its own start.
                 for key in r.config.keys.sorted() where key.hasPrefix("env.") && key.count > 4 {
                     // The layout is what the Play starts, never a key (decision 0183): set below.
-                    if key == "env." + GameSocialClubEndPolicy.layoutVariable {
+                    if key == "env." + SocialClubBootstrap.layoutVariable {
                         log("config: \(key) ignored: the Social Club layout follows the verified Rockstar bootstrap (PLA-840)")
                         continue
                     }
@@ -474,9 +474,9 @@ enum LaunchCoordinator {
         // wine_host.c holds libcef's range and ntdll the layout's slots only with this (madeira-unix 0225):
         // from what the Play starts, over the app's own environment.
         if r.socialClubLayout {
-            setenv(GameSocialClubEndPolicy.layoutVariable, "1", 1)
+            setenv(SocialClubBootstrap.layoutVariable, "1", 1)
         } else {
-            unsetenv(GameSocialClubEndPolicy.layoutVariable)
+            unsetenv(SocialClubBootstrap.layoutVariable)
         }
 
         if let s = r.steamAPI { prepareSteamAPI(s) }
