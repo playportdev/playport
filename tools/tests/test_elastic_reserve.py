@@ -291,11 +291,11 @@ class Space:
                 LIB.s_placed(self.st, addr, size, real, flags)
                 return addr
             if kind == LEND:
-                donor = self.mviews()[view]
-                did = self.view_by_base(donor["base"])
+                lender = self.mviews()[view]
+                did = self.view_by_base(lender["base"])
                 span = self.views[did]["span"]
                 assert keep < span and keep >= GUARD + 64 * MB
-                self.vacate(donor["base"] + keep, donor["base"] + span)
+                self.vacate(lender["base"] + keep, lender["base"] + span)
                 self.views[did]["span"] = keep
                 LIB.s_lent(self.st, view, keep)
                 if flags & 0xFF:

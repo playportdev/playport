@@ -45,10 +45,10 @@ madeira-unix 0222's short-reserve path
 - **Lending only after a placement fails.** While there is room, every reservation gets its full
   size, as today: a game that never runs out keeps identical addresses and timing. When a
   placement fails, the runtime takes back the untouched upper part of the large plain reservation
-  with the most lendable room, then retries.
-  - Donors are unhinted, reserve-only views of 256 MiB or more, not held, not committed to their
+  with the most lendable room (the lender), then retries.
+  - Lenders are unhinted, reserve-only views of 256 MiB or more, not held, not committed to their
     top.
-  - A donor keeps `max(2 × committed height, committed height + 64 MiB)` plus the guard. Its view
+  - A lender keeps `max(2 × committed height, committed height + 64 MiB)` plus the guard. Its view
     shrinks in Wine's view tracking, and its claim (the size the guest believes it holds) is
     remembered.
 - **Short grants with a 32 MiB inaccessible guard.** An unhinted reserve-only ask from 1 GiB up to
@@ -94,7 +94,7 @@ madeira-unix 0222's short-reserve path
   real part. Lending and short grants come only after today's placement has failed. Before it, once
   a placement has failed, an unhinted reserve-only ask of 256 MiB or more is placed outside every
   live claim when a gap there holds it whole, else as today, so a later pool lands inside an earlier
-  claim only in room lending freed. A never-shrunk ask is lent room once, and only by a donor whose
+  claim only in room lending freed. A never-shrunk ask is lent room once, and only by a lender whose
   freed range holds it at its alignment and under its limit. A short grant is made only while the
   module can track it (1,024 views). A decommit or release over a shortened view's claim frees its
   real view. Every ask the Social Club layout's router sees (layout held, verified helper) is the

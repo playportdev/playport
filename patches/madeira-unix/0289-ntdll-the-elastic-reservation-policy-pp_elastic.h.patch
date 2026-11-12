@@ -4,7 +4,7 @@ Date: Mon, 2 Nov 2026 17:43:30 +0100
 Subject: [PATCH 289/290] ntdll: the elastic-reservation policy, pp_elastic.h
 
 Decision 0180's rule as one pure header, with no Wine or Mach
-dependency: whether an ask engages it, short grants, lending (the donor
+dependency: whether an ask engages it, short grants, lending (the lender
 and what it keeps), growth and refusal of a commit, and which view a
 commit belongs to. Nothing changes until a placement fails; then the
 large plain reservation with the most lendable room keeps
@@ -23,7 +23,7 @@ Lending and short grants come only from ppe_failed, after today's
 placement failed: ppe_before answers PPE_PLACE (outside every live
 claim) or PPE_TODAY. An ask carries its limit and alignment as named
 fields (struct ppe_ask), and a never-shrunk ask is lent room only by a
-donor whose freed range holds it there. A short grant is made only
+lender whose freed range holds it there. A short grant is made only
 while the view table has room for it. The state counts live claims.
 
 The header returns decisions; the Wine glue (PLA-802) performs the
@@ -44,7 +44,7 @@ Offered-upstream: no; the address-space layout is the iOS port's
 
 diff --git a/build/ntdll-unix/pp_elastic.h b/build/ntdll-unix/pp_elastic.h
 new file mode 100644
-index 0000000..befa105
+index 0000000..965794b
 --- /dev/null
 +++ b/build/ntdll-unix/pp_elastic.h
 @@ -0,0 +1,538 @@
@@ -59,7 +59,7 @@ index 0000000..befa105
 + * glue (virtual_ios.c) performs the mappings it decides and reports back.
 + *
 + * Nothing changes until a placement fails. Then:
-+ *  - lending: the donor with the most lendable room (an unhinted reserve-only
++ *  - lending: the lender with the most lendable room (an unhinted reserve-only
 + *    view of 256 MiB or more, not held, not committed to its top) keeps
 + *    max(2h, h + 64 MiB) plus a 32 MiB guard, h its committed height, and
 + *    gives the rest of its view back; its claim (the size the guest was told)
@@ -104,7 +104,7 @@ index 0000000..befa105
 + *                  PROT_NONE), release the rest to the host;
 + *                  ppe_lent( st, d.view, d.keep ); a never-shrunk ask then
 + *                  retries today's placement once and fails if that fails
-+ *                  (the donor was picked for a freed range that can hold
++ *                  (the lender was picked for a freed range that can hold
 + *                  it); an elastic one asks ppe_failed( st, &ask, gaps, n )
 + *                  again.
 + *       PPE_FAIL:  return STATUS_NO_MEMORY as today.
@@ -132,10 +132,10 @@ index 0000000..befa105
 +
 +#define PPE_GRAIN       UINT64_C(0x10000)        /* allocation granularity */
 +#define PPE_GUARD       (UINT64_C(32) << 20)     /* PROT_NONE above a shortened view */
-+#define PPE_DONOR_MIN   (UINT64_C(256) << 20)    /* smallest view that lends */
++#define PPE_LENDER_MIN  (UINT64_C(256) << 20)    /* smallest view that lends */
 +#define PPE_SHORT_MIN   (UINT64_C(1) << 30)      /* smallest ask a short grant serves */
 +#define PPE_SHORT_FLOOR (UINT64_C(64) << 20)     /* smallest real part of a short grant */
-+#define PPE_KEEP_MARGIN (UINT64_C(64) << 20)     /* a donor keeps at least h + this */
++#define PPE_KEEP_MARGIN (UINT64_C(64) << 20)     /* a lender keeps at least h + this */
 +#define PPE_VIEWS_MAX   1024
 +
 +/* Properties of an ask. Any of PPE_ASK_WHOLE: never shrunk. */
@@ -188,8 +188,8 @@ index 0000000..befa105
 +    enum ppe_kind kind;
 +    uint64_t addr;    /* PPE_PLACE, PPE_SHORT: where */
 +    uint64_t real;    /* PPE_SHORT: usable bytes (the guard follows) */
-+    uint64_t keep;    /* PPE_LEND: bytes the donor keeps, its guard included */
-+    int view;         /* PPE_LEND: the donor */
++    uint64_t keep;    /* PPE_LEND: bytes the lender keeps, its guard included */
++    int view;         /* PPE_LEND: the lender */
 +};
 +
 +enum ppe_commit_kind { PPE_SERVE, PPE_GROW, PPE_REFUSE };
@@ -224,18 +224,18 @@ index 0000000..befa105
 +/* An ask the rule may shorten: unhinted, reserve-only, no exception. */
 +static inline int ppe_elastic_ask( unsigned flags ) { return !(flags & PPE_ASK_WHOLE); }
 +
-+/* Whether a placed view is the module's to track: elastic, and of a donor's
++/* Whether a placed view is the module's to track: elastic, and of a lender's
 + * size or shortened. */
 +static inline int ppe_tracks( uint64_t claim, uint64_t real, unsigned flags )
 +{
-+    return ppe_elastic_ask( flags ) && (ppe_up( claim ) >= PPE_DONOR_MIN || real < claim);
++    return ppe_elastic_ask( flags ) && (ppe_up( claim ) >= PPE_LENDER_MIN || real < claim);
 +}
 +
 +/* Whether ppe_before engages for this ask: after a failed placement, an
-+ * elastic ask of a donor's size that is not over twice the window. */
++ * elastic ask of a lender's size that is not over twice the window. */
 +static inline int ppe_before_engages( const struct ppe_state *st, const struct ppe_ask *ask )
 +{
-+    return st->engaged && ppe_elastic_ask( ask->flags ) && ask->size >= PPE_DONOR_MIN && ask->size <= 2 * st->window;
++    return st->engaged && ppe_elastic_ask( ask->flags ) && ask->size >= PPE_LENDER_MIN && ask->size <= 2 * st->window;
 +}
 +
 +/* The smallest free gap the module can use for an ask: a whole fit needs the
@@ -256,7 +256,7 @@ index 0000000..befa105
 +    return a < e && e - a >= ppe_up( ask->size );
 +}
 +
-+/* Bytes the donor keeps, its guard included, at committed height h. */
++/* Bytes the lender keeps, its guard included, at committed height h. */
 +static inline uint64_t ppe_keep( uint64_t high )
 +{
 +    uint64_t twice = 2 * high, margin = high + PPE_KEEP_MARGIN;
@@ -264,10 +264,10 @@ index 0000000..befa105
 +    return ppe_up( twice > margin ? twice : margin ) + PPE_GUARD;
 +}
 +
-+/* The donor with the most lendable room, -1 if none has `need` bytes to lend.
-+ * With `holds`, only a donor whose freed range holds that ask whole. */
-+static inline int ppe_donor( const struct ppe_state *st, uint64_t need, const struct ppe_ask *holds,
-+                             uint64_t *keep )
++/* The lender with the most lendable room, -1 if none has `need` bytes to lend.
++ * With `holds`, only a lender whose freed range holds that ask whole. */
++static inline int ppe_lender( const struct ppe_state *st, uint64_t need, const struct ppe_ask *holds,
++                              uint64_t *keep )
 +{
 +    uint64_t best = 0;
 +    unsigned i;
@@ -278,7 +278,7 @@ index 0000000..befa105
 +        const struct ppe_view *v = &st->v[i];
 +        uint64_t span = v->real + v->guard, k = ppe_keep( v->high );
 +
-+        if (v->claim < PPE_DONOR_MIN || v->high >= v->real || k >= span) continue;
++        if (v->claim < PPE_LENDER_MIN || v->high >= v->real || k >= span) continue;
 +        if (holds && !ppe_range_holds( v->base + k, v->base + span, holds )) continue;
 +        if (span - k > best) { best = span - k; pick = (int)i; *keep = k; }
 +    }
@@ -416,9 +416,9 @@ index 0000000..befa105
 +    {
 +        /* Never shrunk: lend room for today's placement to retry in, unless
 +         * the ask's place is given (a hint) or a hold serves it, and only
-+         * from a donor whose freed range holds the ask at its alignment and
++         * from a lender whose freed range holds the ask at its alignment and
 +         * under its limit. */
-+        if (!(ask->flags & (PPE_ASK_HINT | PPE_ASK_HELD)) && (d.view = ppe_donor( st, ask->size, ask, &keep )) >= 0)
++        if (!(ask->flags & (PPE_ASK_HINT | PPE_ASK_HELD)) && (d.view = ppe_lender( st, ask->size, ask, &keep )) >= 0)
 +        {
 +            d.kind = PPE_LEND;
 +            d.keep = keep;
@@ -434,12 +434,12 @@ index 0000000..befa105
 +        return d;
 +    if (st->lends)
 +    {
-+        /* After lending: the room it freed lies inside the donors' claims. */
++        /* After lending: the room it freed lies inside the lenders' claims. */
 +        if ((d.addr = ppe_fit( st, size, gaps, n, PPE_ROOM_ANY ))) { d.kind = PPE_PLACE; return d; }
 +        if (shortable && ppe_short_in( st, size, gaps, n, PPE_ROOM_ANY, ~UINT64_C(0), &d )) return d;
 +    }
 +    d.addr = 0;
-+    if ((d.view = ppe_donor( st, shortable ? ppe_gap_min( size ) : size, 0, &keep )) >= 0)
++    if ((d.view = ppe_lender( st, shortable ? ppe_gap_min( size ) : size, 0, &keep )) >= 0)
 +    {
 +        d.kind = PPE_LEND;
 +        d.keep = keep;
@@ -448,8 +448,8 @@ index 0000000..befa105
 +}
 +
 +/* Before today's placement: PPE_TODAY, or PPE_PLACE and nothing else. Until a
-+ * placement has failed, and for asks smaller than a donor or never shrunk,
-+ * PPE_TODAY: placed exactly as today. Once engaged, an elastic ask of donor
++ * placement has failed, and for asks smaller than a lender or never shrunk,
++ * PPE_TODAY: placed exactly as today. Once engaged, an elastic ask of lender
 + * size is placed outside every live claim when a gap there holds it whole, so
 + * a later pool does not land inside an earlier claim while room elsewhere
 + * allows; else it is placed as today. It never lends or shortens: those come
@@ -465,7 +465,7 @@ index 0000000..befa105
 +}
 +
 +/* A reservation was placed at base: real usable bytes of claim promised.
-+ * Tracks elastic reservations of donor size and every short grant; returns
++ * Tracks elastic reservations of lender size and every short grant; returns
 + * the view or -1. */
 +static inline int ppe_placed( struct ppe_state *st, uint64_t base, uint64_t claim, uint64_t real, unsigned flags )
 +{

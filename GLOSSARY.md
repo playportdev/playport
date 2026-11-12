@@ -114,14 +114,14 @@ mapped for it, and that later pools are placed outside while room elsewhere allo
 _Avoid_: lent tail, phantom range
 
 **Lend**:
-Giving the untouched upper part of a large plain reservation (the donor) back to the host after a
-placement fails. The view shrinks and its claim stays.
+Giving the untouched upper part of a large plain reservation (the lender) back to the host after
+a placement fails. The view shrinks and its claim stays.
 _Avoid_: reclaim, release, trim
 
-**Donor**:
+**Lender**:
 The reservation a lend shortens: unhinted, reserve-only, 256 MiB or more, not held, not committed
 to its top; the one with the most lendable room.
-_Avoid_: victim, source pool
+_Avoid_: donor (the donor pool is the helpers' memory that backs guest commits), victim, source pool
 
 **Short grant**:
 A reservation of 1 GiB or more that cannot be placed whole, given a smaller real part with a guard

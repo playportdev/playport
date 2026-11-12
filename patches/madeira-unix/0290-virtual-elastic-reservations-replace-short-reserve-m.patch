@@ -20,7 +20,7 @@ decides. Nothing changes until a reservation fails for room
   every live claim when a gap there holds it whole, else as today;
   nothing is lent or shortened before today's placement has failed;
 - a never-shrunk ask (limited, aligned, commit-at-reserve) gets at
-  most one lend, from a donor whose freed range holds it, and today's
+  most one lend, from a lender whose freed range holds it, and today's
   placement once more.
 
 A commit, in allocate_virtual_memory's commit branch for both entry
@@ -115,7 +115,7 @@ index ad8c7be..0000000
 -
 -#endif
 diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
-index 64c0a95..2cd2637 100644
+index 64c0a95..a9f0e4d 100644
 --- a/build/ntdll-unix/virtual_ios.c
 +++ b/build/ntdll-unix/virtual_ios.c
 @@ -124,6 +124,7 @@ extern kern_return_t vm_protect(mach_port_t target_task, vm_address_t address,
@@ -405,7 +405,7 @@ index 64c0a95..2cd2637 100644
 +}
 +
 +/* Before today's placement of a reservation: once a placement has failed, an
-+ * elastic ask of a donor's size goes outside every live claim when a gap
++ * elastic ask of a lender's size goes outside every live claim when a gap
 + * there holds it whole (ppe_before: PPE_PLACE or PPE_TODAY, never a lend or a
 + * short grant). Returns 1 with *status when it placed it, else 0: today's
 + * placement follows. */
@@ -430,7 +430,7 @@ index 64c0a95..2cd2637 100644
 +}
 +
 +/* Today's placement of a reservation failed for room: perform pp_elastic.h's
-+ * decisions. A never-shrunk ask gets at most one lend, from a donor whose
++ * decisions. A never-shrunk ask gets at most one lend, from a lender whose
 + * freed range holds it, and today's placement once more. Returns the status,
 + * with *ret and *size_ptr set on success. */
 +static NTSTATUS ios_elastic_failed( void **ret, SIZE_T *size_ptr, ULONG type, ULONG protect,
@@ -723,7 +723,7 @@ index 64c0a95..2cd2637 100644
              }
          }
 +        /* Playport (PLA-802, decision 0180): once a placement has failed, an
-+         * elastic reservation of a donor's size goes outside every live claim
++         * elastic reservation of a lender's size goes outside every live claim
 +         * when a gap there holds it (ios_elastic_before); else today's
 +         * placement below. */
 +        if ((type & MEM_RESERVE) && !*ret) ppe_handled = ios_elastic_before( ret, size_ptr, type, protect, &ppe_ask, &st );
