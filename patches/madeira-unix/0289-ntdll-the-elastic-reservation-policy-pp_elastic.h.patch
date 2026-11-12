@@ -17,7 +17,10 @@ the guard grows its view by doubling while the space above is free,
 else is refused with what blocked growth; it is matched to its own view
 first, then to the covering claim, and never served in another view.
 Hinted, aligned, placeholder, address-limited, commit-at-reserve,
-hold-served and Social Club layout asks are never shrunk.
+hold-served and Social Club layout asks are never shrunk, and so is a
+WoW64 process's 4 GiB address window (PPE_ASK_WOW64, PLA-839): FEX
+zero-extends a guest pointer over all of it. It is never tracked, so it
+never lends; like any never-shrunk ask it can be lent room.
 
 Lending and short grants come only from ppe_failed, after today's
 placement failed: ppe_before answers PPE_PLACE (outside every live
@@ -30,24 +33,25 @@ The header returns decisions; the Wine glue (PLA-802) performs the
 mappings, and its comment says how the glue calls it. Nothing calls it
 yet. tools/tests/test_elastic_reserve.py compiles it as shipped here and
 replays phone traces of Mewgenics, The Witcher 3 4.x and 1.32, RDR2 on
-and off the Social Club layout, Hollow Knight and Death's Door through
-it (tools/tests/fixtures/elastic/).
+and off the Social Club layout, Hollow Knight, Death's Door, Portal 2's
+WoW64 window and PLA-326's on a map without the increased-memory-limit
+entitlement through it (tools/tests/fixtures/elastic/).
 
-Linear: PLA-801
+Linear: PLA-801, PLA-839
 Class: feature
 Evidence: docs/evidence/2026-11-02-elastic-reservations.md
 Offered-upstream: no; the address-space layout is the iOS port's
 ---
- build/ntdll-unix/pp_elastic.h | 538 ++++++++++++++++++++++++++++++++++
- 1 file changed, 538 insertions(+)
+ build/ntdll-unix/pp_elastic.h | 552 ++++++++++++++++++++++++++++++++++
+ 1 file changed, 552 insertions(+)
  create mode 100644 build/ntdll-unix/pp_elastic.h
 
 diff --git a/build/ntdll-unix/pp_elastic.h b/build/ntdll-unix/pp_elastic.h
 new file mode 100644
-index 0000000..965794b
+index 0000000..95423f2
 --- /dev/null
 +++ b/build/ntdll-unix/pp_elastic.h
-@@ -0,0 +1,538 @@
+@@ -0,0 +1,552 @@
 +/* SPDX-License-Identifier: LGPL-2.1-or-later
 + * Elastic reservations (Playport, PLA-799, decision 0180): the policy.
 + *
@@ -76,7 +80,8 @@ index 0000000..965794b
 + *    to the view that owns it first, then to the claim covering it; it is
 + *    never served in another view.
 + * Never shrunk, by property: hinted, aligned, placeholder, ...Ex with address
-+ * requirements, zero_bits/limited, commit-at-reserve and hold-served asks.
++ * requirements, zero_bits/limited, commit-at-reserve and hold-served asks, and
++ * a WoW64 process's address window.
 + * Asks the Social Club layout's router decides (any reserve passing its
 + * guards: layout held, verified helper) carry PPE_ASK_LAYOUT and get no
 + * decision here.
@@ -121,6 +126,11 @@ index 0000000..965794b
 + *                  ppe_served.
 + *       PPE_REFUSE: STATUS_NO_MEMORY, logged with c.blocker.
 + *   release of a view: ppe_released( st, base ).
++ *   a WoW64 process's window (PLA-839; Wine reserves it, the guest never
++ *   asks): ask { IOS_WOW64_WINDOW_SIZE, PPE_ASK_WOW64 }, placed as today
++ *   (its fixed slots, then a first fit; ppe_before has nothing for a
++ *   never-shrunk ask); when that fails, d = ppe_failed( st, &ask, gaps, n ):
++ *   a PPE_LEND as above, then today's placement once more; else it fails.
 + * Lend, grant, grow and refuse each log one tagged line with the address,
 + * real size, claim and committed height.
 + *
@@ -147,7 +157,15 @@ index 0000000..965794b
 +#define PPE_ASK_COMMIT      0x020u  /* MEM_COMMIT at reserve time */
 +#define PPE_ASK_HELD        0x040u  /* served by the jumbo or cage hold */
 +#define PPE_ASK_LAYOUT      0x080u  /* the Social Club layout's router decides it */
-+#define PPE_ASK_WHOLE       0x0ffu
++#define PPE_ASK_WOW64       0x100u  /* a WoW64 process's address window */
++#define PPE_ASK_WHOLE       0x1ffu
++
++/* A WoW64 window is 4 GiB whatever the image: FEX zero-extends a 32-bit guest
++ * pointer to the window's base plus 32 bits, so every page of it is one the
++ * guest can name. Never shrunk is never tracked, so it never lends either:
++ * room given back from it would be guest addresses, and its commits go to the
++ * window's own allocator, never through ppe_served, so the policy could not
++ * know its committed height. */
 +
 +struct ppe_gap { uint64_t base, size; };
 +
