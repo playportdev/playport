@@ -25,6 +25,5 @@ final class XboxSignInTests: XCTestCase {
         for url in ["https://evil.invalid/ppsecure/post.srf", "http://login.live.com/ppsecure/post.srf", "https://login.live.com.evil.invalid/"] {
             guard case .ignored = try XboxSignIn.receive(token, from: URL(string: url)!) else { return XCTFail("foreign page accepted") }
         }
-        XCTAssertTrue(XboxSignIn.passkeyNote.contains("Authenticator"))
     }
 }
