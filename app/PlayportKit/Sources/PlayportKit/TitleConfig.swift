@@ -21,12 +21,13 @@ public enum TitleConfig {
 
     /// Keys no title may set (decision 0183): the memory plan's guest RAM and video figure are no
     /// game's own, every game takes its plan row's (MemoryPlan), so neither its madeira.cfg keys
-    /// (`totalphys`, `vram-mb`, `vulkan-vram-plan`) nor its variables are a title's; and the Social
-    /// Club layout follows a verified Rockstar bootstrap (SocialClubBootstrap), never a key. Refused
-    /// here, so no cohort entry, compatibility entry, launcher, everyGame default, dev Runtime keys
-    /// row or driven launch sets one. The shared madeira.cfg is the person's for every game alike
-    /// and is not checked.
-    public static let refusedKeys = Set([MemoryPlan.guestRAMKey, MemoryPlan.videoKey, MemoryPlan.vulkanKey]
+    /// (`totalphys`, `vram-mb`, `vulkan-vram-plan`) nor its variables are a title's; the Social
+    /// Club layout follows a verified Rockstar bootstrap (SocialClubBootstrap), never a key; and
+    /// every Play gets the one JIT pool (JitPool.sizeMB, decision 0184), so `jitPoolMB` is no
+    /// title's either. Refused here, so no cohort entry, compatibility entry, launcher, everyGame
+    /// default, dev Runtime keys row or driven launch sets one. The shared madeira.cfg is the
+    /// person's for every game alike and is not checked.
+    public static let refusedKeys = Set([MemoryPlan.guestRAMKey, MemoryPlan.videoKey, MemoryPlan.vulkanKey, JitPool.titleKey]
         + [MemoryPlan.guestRAMVariable, MemoryPlan.videoVariable, MemoryPlan.vulkanHeapVariable,
            MemoryPlan.vulkanBudgetVariable, SocialClubBootstrap.layoutVariable].map { "env." + $0 })
 

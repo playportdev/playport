@@ -139,14 +139,15 @@ final class TitleConfigTests: XCTestCase {
         XCTAssertThrowsError(try LaunchPlan.make(installDir: "G", executable: "g.exe", arguments: [], config: ["=": "1"]))
     }
 
-    /// No title sets the memory plan's figures or the Social Club layout (decision 0183): every game
-    /// takes its memory plan row's guest RAM and video figure (MemoryPlan), and the layout follows the
-    /// verified Rockstar bootstrap (SocialClubBootstrap). So no cohort entry, compatibility entry,
-    /// launcher, everyGame default, dev Runtime keys row or driven launch can set the plan's
-    /// madeira.cfg keys, its variables or PLAYPORT_SC_LAYOUT.
-    func testThePlansKeysAndTheLayoutVariableAreRefused() {
+    /// No title sets the memory plan's figures, the Social Club layout or a JIT pool size (decisions
+    /// 0183, 0184): every game takes its memory plan row's guest RAM and video figure (MemoryPlan),
+    /// the layout follows the verified Rockstar bootstrap (SocialClubBootstrap), and every Play gets
+    /// the one pool (JitPool.sizeMB). So no cohort entry, compatibility entry, launcher, everyGame
+    /// default, dev Runtime keys row or driven launch can set the plan's madeira.cfg keys, its
+    /// variables, PLAYPORT_SC_LAYOUT or `jitPoolMB`.
+    func testThePlansKeysTheLayoutVariableAndThePoolSizeAreRefused() {
         let keys = ["totalphys", "vram-mb", "vulkan-vram-plan", "env.MADEIRA_TOTAL_PHYS_MB", "env.PLAYPORT_VRAM_MB",
-                    "env.PLAYPORT_VK_HEAP_MB", "env.PLAYPORT_VK_BUDGET_MB", "env.PLAYPORT_SC_LAYOUT"]
+                    "env.PLAYPORT_VK_HEAP_MB", "env.PLAYPORT_VK_BUDGET_MB", "env.PLAYPORT_SC_LAYOUT", "jitPoolMB"]
         XCTAssertEqual(TitleConfig.refusedKeys, Set(keys))
         for key in keys {
             XCTAssertThrowsError(try TitleConfig.validate([key: "0"]), key) {
@@ -1025,46 +1026,29 @@ final class FEXProfileTests: XCTestCase {
 }
 
 final class JitPoolTests: XCTestCase {
-    func testEveryPlayGetsTheSamePool() {
-        // One size for every Play (decision 0036), whatever the limit.
-        XCTAssertEqual(JitPool.sizeMB(limitMB: 8192), 512)       // the reference phone with Game Mode
-        XCTAssertEqual(JitPool.sizeMB(limitMB: 6144), 512)       // before Game Mode raises it
-        XCTAssertEqual(JitPool.sizeMB(limitMB: 3379), 512)       // signed without the entitlement
-        XCTAssertEqual(JitPool.sizeMB(limitMB: nil), 512)
-        XCTAssertEqual(JitPool.sizeMB(limitMB: 0), 512)
-        for limit in stride(from: 1024, through: 16384, by: 7) {
-            XCTAssertEqual(JitPool.sizeMB(limitMB: limit), JitPool.minimumMB)
-        }
-        XCTAssertLessThanOrEqual(JitPool.minimumMB, JitPool.maximumMB)   // it fits the executable's reservation
+    /// One pool for every Play, every game and every limit (decision 0184): its untouched pages cost
+    /// no footprint, so no Play gets less for its limit and no game more for itself.
+    func testEveryPlayGetsTheOnePool() {
+        XCTAssertEqual(JitPool.sizeMB, 896)   // all the executable's reservation holds
+        XCTAssertEqual(JitPool.playMB(simulatedMB: nil), JitPool.sizeMB)
     }
 
-    func testAGamesLargerPoolIsGrantedOnlyUnderAnEntitledLimitAndNeverAboveTheReservation() {
-        // Decision 0108: a compatibility entry's pool, on a limit of at least 6 GiB.
-        XCTAssertEqual(JitPool.sizeMB(limitMB: 8191, gameMB: 896), 896)
-        XCTAssertEqual(JitPool.sizeMB(limitMB: 6143, gameMB: 896), 896)     // 6 GiB as the phone reads it
-        XCTAssertNil(JitPool.size(limitMB: 8191, gameMB: 896).note)
-        XCTAssertEqual(JitPool.size(limitMB: 8191, gameMB: 4096).mb, JitPool.maximumMB)
-        XCTAssertNotNil(JitPool.size(limitMB: 8191, gameMB: 4096).note)
-        // Signed without the entitlement, or no limit reported: the default, with a note.
-        XCTAssertEqual(JitPool.size(limitMB: 3379, gameMB: 896).mb, JitPool.minimumMB)
-        XCTAssertEqual(JitPool.size(limitMB: 3379, gameMB: 896).note,
-                       "the game's 896 MiB not granted: a memory limit of 3379 MB, under 6144 MB")
-        XCTAssertEqual(JitPool.size(limitMB: nil, gameMB: 896).mb, JitPool.minimumMB)
-        // A game with no entry of its own, or one below the default, gets the default.
-        XCTAssertEqual(JitPool.size(limitMB: 8191, gameMB: nil).mb, JitPool.minimumMB)
-        XCTAssertNil(JitPool.size(limitMB: 8191, gameMB: 256).note)
-        XCTAssertEqual(JitPool.sizeMB(limitMB: 8191, gameMB: 256), JitPool.minimumMB)
+    /// A dev build's simulated pool (`set:jitPoolSimulatedMB=184`) still gives a Play a pool too
+    /// small for its game, the run that shows the *ran out of JIT memory* outcome (decision 0022).
+    func testADevBuildsSimulatedPoolStillMakesThePoolTooSmall() {
+        XCTAssertEqual(JitPool.playMB(simulatedMB: 184), 184)
     }
 
-    func testTheCompatibilityTableRefusesAPoolOutsideTheReservation() throws {
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("pool-\(UUID().uuidString)", isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: dir) }
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let file = dir.appendingPathComponent("compat-defaults.json")
-        try Data(#"{"titles": {"app-1": {"settings": {"jitPoolMB": 2048}, "reason": "r"}}}"#.utf8).write(to: file)
-        XCTAssertThrowsError(try CompatDefaults.load(directory: dir)) {
+    /// No title sets a pool size (decisions 0183, 0184): a compatibility entry's `jitPoolMB`, which
+    /// the table took up to 896 MiB, is refused (a Runtime keys row's too: TitleConfigTests); a
+    /// person's settings saved with one still read, without it.
+    func testNoTitleCanSetAPoolSize() throws {
+        XCTAssertThrowsError(try CompatDefaults.parse(
+            Data(#"{"titles": {"app-1": {"settings": {"jitPoolMB": 896}, "reason": "r"}}}"#.utf8))) {
             XCTAssertEqual($0 as? CompatDefaultsError, .badSetting("app-1.jitPoolMB"))
         }
+        let saved = try JSONDecoder().decode(LaunchSettings.self, from: Data(#"{"aspect": "16:9", "jitPoolMB": 896}"#.utf8))
+        XCTAssertEqual(saved, LaunchSettings(aspect: "16:9"))
     }
 
     func testTheLineCarriesEveryFieldAndWhatRanOut() {

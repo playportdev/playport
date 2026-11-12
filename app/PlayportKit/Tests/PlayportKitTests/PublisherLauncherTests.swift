@@ -20,16 +20,14 @@ final class PublisherLauncherTests: XCTestCase {
     "InstallFolder"="C:\\Elsewhere"
     """#
 
-    func testRockstarOpensStandaloneWithServicesTheLargerPoolAndVulkan() {
+    func testRockstarOpensStandaloneWithServicesAndVulkan() {
         let r = PublisherLauncher.rockstar
         XCTAssertEqual(PublisherLauncher.named("rockstar"), r)
         XCTAssertNil(PublisherLauncher.named("ubisoft"))
         XCTAssertEqual(r.titleID, "launcher-rockstar")
         XCTAssertEqual(r.arguments, [])   // no -steamAppId: Steam mode wants a Steam client
         XCTAssertTrue(r.windowsServices)
-        XCTAssertEqual(r.jitPoolMB, 896)
         XCTAssertEqual(r.graphics, .vulkan)
-        XCTAssertEqual(JitPool.size(limitMB: 8191, gameMB: r.jitPoolMB).mb, 896)
     }
 
     /// Decision 0112: the Rockstar launcher's Open alone goes on 240 s after the pool ran out;
@@ -87,7 +85,7 @@ final class PublisherLauncherTests: XCTestCase {
         ordering[.tso] = false
         let saved = LaunchSettings(screen: "1080", graphics: .dxmt, ordering: ordering, maxInst: 100, x87Reduced: true,
                                    diskCache: false, runtime: "env.FEX_SMCCHECKS=none inproc-sync=1",
-                                   windowsServices: false, jitPoolMB: 512)
+                                   windowsServices: false)
         let open = launcher.openSettings(saved: saved)
         XCTAssertEqual(open.config, Self.rockstarRuntime.merging(["inproc-sync": "1"]) { $1 })
         XCTAssertEqual(open.ordering, ordering)

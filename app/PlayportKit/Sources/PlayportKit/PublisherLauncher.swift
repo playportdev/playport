@@ -2,7 +2,7 @@
 // A publisher's launcher Playport opens from Settings › Launchers (PLA-616,
 // Where a launcher lives in the UI): a launch whose title is the launcher itself, started standalone
 // in the shared prefix. The compatibility table is keyed by a game's title id, so a launcher's play
-// settings (Windows services, decision 0107; its JIT pool, decision 0108; the backend, decision 0100)
+// settings (Windows services, decision 0107; the backend, decision 0100)
 // live here. The launcher's own installer records its folder in the prefix's registry, which is
 // where Playport finds it: no install, no folder, no Open.
 
@@ -19,8 +19,6 @@ public struct PublisherLauncher: Equatable, Sendable, Identifiable {
     public let executable: String
     public let arguments: [String]
     public let windowsServices: Bool
-    /// The JIT pool its play asks for (JitPool.size grants it under a large enough memory limit).
-    public let jitPoolMB: Int?
     public let graphics: GraphicsBackend
     /// How long its Open goes on after the pool ran out (JitPool.exhaustionGrace for a game).
     public let exhaustionGrace: TimeInterval
@@ -50,7 +48,7 @@ public struct PublisherLauncher: Equatable, Sendable, Identifiable {
     /// The Rockstar Games Launcher. Its installer writes `InstallFolder` in the 32-bit view;
     /// `PlayRDR2.exe` reads the same value (Stage R). Started with no `-steamAppId`: in Steam mode
     /// it wants a Steam client before its sign-in page (run `20261016T010049`). Rockstar Service
-    /// runs under services.exe, and the launcher with it needs the 896 MiB pool (decision 0108).
+    /// runs under services.exe. Its JIT pool is every Play's (JitPool.sizeMB, decision 0184).
     /// A Social Club child that runs the pool out does not end the Open for 240 s (decision 0112):
     /// the browser and its renderers go on after an optional child cannot start.
     /// Its Direct3D device query starts DXVK and vkd3d-proton in the launcher; one DXVK compiler
@@ -68,7 +66,7 @@ public struct PublisherLauncher: Equatable, Sendable, Identifiable {
     public static let rockstar = PublisherLauncher(
         id: "rockstar", name: "Rockstar Games Launcher",
         installKey: #"Software\Wow6432Node\Rockstar Games\Launcher"#, installValue: "InstallFolder",
-        executable: "Launcher.exe", arguments: [], windowsServices: true, jitPoolMB: 896, graphics: .vulkan,
+        executable: "Launcher.exe", arguments: [], windowsServices: true, graphics: .vulkan,
         exhaustionGrace: 240,
         graphicsEnvironment: ["DXVK_CONFIG": "dxvk.numCompilerThreads = 1", "DXVK_SHADER_CACHE": "0",
                               "VKD3D_SHADER_CACHE_PATH": "0", "MESA_KK_EXPERIMENTAL": "cmd_retire,cmd_bo_classes"],

@@ -59,9 +59,6 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
     /// Start Windows services for the game (services.exe, Wine's SCM, and the services it
     /// starts; per game only, decision 0107): a launcher that installs and uses one. Nil is off.
     public var windowsServices: Bool?
-    /// The game's JIT pool in MiB (per game only, the compatibility table's; decision 0108):
-    /// a launcher's many processes outgrow JitPool.minimumMB. Nil is the default pool.
-    public var jitPoolMB: Int?
     /// The Khronos Vulkan loader in place of Wine's vulkan-1.dll (per game only, decision 0131):
     /// a game whose own Vulkan layer (RDR2's Social Club) must load, which Wine's does not do.
     /// A dev build's game page and `set:` change it; a release build shows no row, so the
@@ -78,7 +75,7 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
                 arguments: String = "", steamAPI: SteamAPISwap.Mode? = nil,
                 cloudSync: Bool? = nil, ordering: MemoryOrdering = MemoryOrdering(), maxInst: Int? = nil,
                 x87Reduced: Bool? = nil, diskCache: Bool? = nil, runtime: String = "", graphicsOptions: String = "",
-                windowsServices: Bool? = nil, jitPoolMB: Int? = nil, khronosVulkanLoader: Bool? = nil,
+                windowsServices: Bool? = nil, khronosVulkanLoader: Bool? = nil,
                 endLauncherAfterSignIn: Bool? = nil) {
         self.screen = screen
         self.aspect = aspect
@@ -94,7 +91,6 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
         self.runtime = runtime
         self.graphicsOptions = graphicsOptions
         self.windowsServices = windowsServices
-        self.jitPoolMB = jitPoolMB
         self.khronosVulkanLoader = khronosVulkanLoader
         self.endLauncherAfterSignIn = endLauncherAfterSignIn
     }
@@ -117,7 +113,6 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
         runtime = try c.decodeIfPresent(String.self, forKey: .runtime) ?? ""
         graphicsOptions = try c.decodeIfPresent(String.self, forKey: .graphicsOptions) ?? ""
         windowsServices = try c.decodeIfPresent(Bool.self, forKey: .windowsServices)
-        jitPoolMB = try c.decodeIfPresent(Int.self, forKey: .jitPoolMB)
         khronosVulkanLoader = try c.decodeIfPresent(Bool.self, forKey: .khronosVulkanLoader)
         endLauncherAfterSignIn = try c.decodeIfPresent(Bool.self, forKey: .endLauncherAfterSignIn)
     }
@@ -129,7 +124,7 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
             && ordering.isEmpty && maxInst == nil && x87Reduced == nil && diskCache == nil
             && runtime.trimmingCharacters(in: .whitespaces).isEmpty
             && graphicsOptions.trimmingCharacters(in: .whitespaces).isEmpty && windowsServices == nil
-            && jitPoolMB == nil && khronosVulkanLoader == nil
+            && khronosVulkanLoader == nil
     }
 
     /// Arguments as a command line splits them: at spaces, except inside
@@ -161,11 +156,12 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
     /// No address-space hold (`jumbo-mb`): it held 8,960 MB for RDR2's one reservation in every game,
     /// and a game that reserves in smaller pieces ran out of room around it (decision 0179). No video
     /// memory or Vulkan heap figure: every game takes its memory plan row's (MemoryPlan, decision 0183).
+    /// No JIT pool size: every Play gets the one pool (JitPool.sizeMB, decision 0184).
     public static let everyGame = LaunchSettings(
         steamAPI: .client,
         runtime: "env.MADEIRA_X64_CS_FASTPATH=1 env.MADEIRA_FEX_BATCH2=1 env.PLAYPORT_SC_BLOCK_CRASHPAD=1 "
             + "env.FEX_HOSTFEATURES=disableafp env.MADEIRA_FEX_AFPOFF_FPCR=fiz avail-phys-cef-mb=300",
-        windowsServices: true, jitPoolMB: 896, khronosVulkanLoader: true, endLauncherAfterSignIn: true)
+        windowsServices: true, khronosVulkanLoader: true, endLauncherAfterSignIn: true)
 
     /// A title's compatibility default (nil for none) over everyGame: each setting the title's
     /// entry has wins; the launcher's end is the entry's, else everyGame's. The runtime keys stay the
@@ -296,8 +292,6 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
         public var graphicsEnvironment: [String: String]
         /// Windows services for the game (decision 0107).
         public var windowsServices: Bool
-        /// The game's JIT pool in MiB (decision 0108); nil for the default (JitPool.sizeMB).
-        public var jitPoolMB: Int?
         /// The Khronos Vulkan loader in place of Wine's vulkan-1.dll (decision 0131).
         public var khronosVulkanLoader: Bool
         /// End the launcher the game's Play starts at the game's sign-in (decision 0130).
@@ -308,7 +302,7 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
                     ordering: MemoryOrdering = MemoryOrdering(), maxInst: Int? = nil,
                     x87Reduced: Bool? = nil, diskCache: Bool? = nil, runtime: [String: String] = [:],
                     graphicsEnvironment: [String: String] = [:], windowsServices: Bool = false,
-                    jitPoolMB: Int? = nil, khronosVulkanLoader: Bool = false, endLauncherAfterSignIn: Bool = false) {
+                    khronosVulkanLoader: Bool = false, endLauncherAfterSignIn: Bool = false) {
             self.screen = screen
             self.aspect = aspect
             self.frameLimit = frameLimit
@@ -322,7 +316,6 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
             self.runtime = runtime
             self.graphicsEnvironment = graphicsEnvironment
             self.windowsServices = windowsServices
-            self.jitPoolMB = jitPoolMB
             self.khronosVulkanLoader = khronosVulkanLoader
             self.endLauncherAfterSignIn = endLauncherAfterSignIn
         }
@@ -372,7 +365,7 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
                          x87Reduced: game?.x87Reduced, diskCache: game?.diskCache,
                          runtime: runtimeKeys(game?.runtime ?? "") ?? [:],
                          graphicsEnvironment: graphicsEnvironment(game?.graphicsOptions ?? "") ?? [:],
-                         windowsServices: game?.windowsServices ?? false, jitPoolMB: game?.jitPoolMB,
+                         windowsServices: game?.windowsServices ?? false,
                          khronosVulkanLoader: game?.khronosVulkanLoader ?? false,
                          endLauncherAfterSignIn: game?.endLauncherAfterSignIn ?? false)
     }

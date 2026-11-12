@@ -30,8 +30,7 @@ enum MemoryNote {
     /// the same for every game; no game carries a figure of its own.
     static let lowLimitMB = 4096
 
-    static let footer = "The most memory iOS lets Playport use, for a game and Playport's own JIT memory together, "
-        + "which is sized from it. "
+    static let footer = "The most memory iOS lets Playport use, for a game and the JIT memory it uses together. "
         + "iOS closes a game that goes past it; the game's page then says so, with the most it used. It rises once "
         + "Game Mode turns on. The Increased Memory Limit entitlement raises it; a copy signed without it gets far less."
 
