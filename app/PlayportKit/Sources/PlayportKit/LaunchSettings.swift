@@ -48,7 +48,7 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
     /// takes the default, on (FEXProfile.defaultDiskCache, decision 0056).
     public var diskCache: Bool?
     /// madeira.cfg keys over the game's own (per game only; a dev build's), as typed:
-    /// `key=value` items split at spaces (`vram-mb=1024 totalphys=6144 inproc-sync=1`).
+    /// `key=value` items split at spaces (`inproc-sync=1 env.FEX_SMCCHECKS=mtrack`).
     /// LaunchSettings.runtimeKeys parses them; TitleConfig writes them after the title's.
     public var runtime: String
     /// The game's environment variables and Vulkan layers' options (per game only; a dev
@@ -159,11 +159,11 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
     /// `avail-phys-cef-mb=300` tells only SocialClubHelper.exe 300 MB of available memory, so
     /// Chromium's memory-pressure evaluator purges (decision 0168; `avail-phys-cef-mb=0` turns it off).
     /// No address-space hold (`jumbo-mb`): it held 8,960 MB for RDR2's one reservation in every game,
-    /// and a game that reserves in smaller pieces ran out of room around it (decision 0179).
+    /// and a game that reserves in smaller pieces ran out of room around it (decision 0179). No video
+    /// memory or Vulkan heap figure: every game takes its memory plan row's (MemoryPlan, decision 0183).
     public static let everyGame = LaunchSettings(
         steamAPI: .client,
-        runtime: "env.PLAYPORT_VK_HEAP_MB=3072 "
-            + "env.MADEIRA_X64_CS_FASTPATH=1 env.MADEIRA_FEX_BATCH2=1 env.PLAYPORT_SC_BLOCK_CRASHPAD=1 "
+        runtime: "env.MADEIRA_X64_CS_FASTPATH=1 env.MADEIRA_FEX_BATCH2=1 env.PLAYPORT_SC_BLOCK_CRASHPAD=1 "
             + "env.FEX_HOSTFEATURES=disableafp env.MADEIRA_FEX_AFPOFF_FPCR=fiz avail-phys-cef-mb=300",
         windowsServices: true, jitPoolMB: 896, khronosVulkanLoader: true, endLauncherAfterSignIn: true)
 
@@ -194,8 +194,9 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
         overEveryGame(compat).steamAPI ?? .emulated
     }
 
-    /// Runtime keys as typed (`vram-mb=1024 inproc-sync=1`): `key=value` items at spaces,
-    /// a later item for a key winning. nil when an item has no `=` or TitleConfig refuses it.
+    /// Runtime keys as typed (`inproc-sync=1 env.FEX_SMCCHECKS=mtrack`): `key=value` items at spaces,
+    /// a later item for a key winning. nil when an item has no `=` or TitleConfig refuses it (a
+    /// refused key such as `vram-mb`, decision 0183).
     public static func runtimeKeys(_ line: String) -> [String: String]? {
         var out: [String: String] = [:]
         for item in splitArguments(line) {
@@ -203,6 +204,18 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
             out[String(item[..<eq])] = String(item[item.index(after: eq)...])
         }
         return (try? TitleConfig.validate(out)) == nil ? nil : out
+    }
+
+    /// What a Runtime keys row says when a launch does not use it: the refused key it names
+    /// (TitleConfig.refusedKeys), else that its items are not `key=value`; nil when it is used.
+    public static func unusedRuntimeKeysNote(_ line: String) -> String? {
+        guard runtimeKeys(line) == nil else { return nil }
+        for item in splitArguments(line) {
+            if let eq = item.firstIndex(of: "="), TitleConfig.refusedKeys.contains(String(item[..<eq])) {
+                return "\(item[..<eq]) is not a game's own key (no per-game memory keys): not used"
+            }
+        }
+        return "Not key=value items: not used"
     }
 
     /// The list variables a game's Graphics options join when repeated (decision 0060):

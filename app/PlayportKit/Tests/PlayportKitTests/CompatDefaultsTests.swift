@@ -33,13 +33,13 @@ final class CompatDefaultsTests: XCTestCase {
     }
 
     /// Every game's runtime keys (decision 0153, from RDR2's of decisions 0142, 0152, plus the
-    /// crash-reporter refusal): a 3,072 MiB heap, the x64 critical-section stubs and FEX's batch 2;
-    /// and FEX without AFP, with FPCR.FIZ from MXCSR.DAZ (decision 0154, from RDR2's of 0142). Its
-    /// fastsync semaphores went with fastsync (decision 0157): ppsync takes every semaphore in
-    /// process. Social Club's helper is told 300 MB of available memory (decision 0168). RDR2's
-    /// address-space hold is RDR2's own again (decision 0179).
-    static let everyGameRuntime = "env.PLAYPORT_VK_HEAP_MB=3072 "
-        + "env.MADEIRA_X64_CS_FASTPATH=1 env.MADEIRA_FEX_BATCH2=1 env.PLAYPORT_SC_BLOCK_CRASHPAD=1 "
+    /// crash-reporter refusal): the x64 critical-section stubs and FEX's batch 2; and FEX without
+    /// AFP, with FPCR.FIZ from MXCSR.DAZ (decision 0154, from RDR2's of 0142). Its fastsync
+    /// semaphores went with fastsync (decision 0157): ppsync takes every semaphore in process.
+    /// Social Club's helper is told 300 MB of available memory (decision 0168). RDR2's
+    /// address-space hold is RDR2's own again (decision 0179). No heap figure: every game takes its
+    /// memory plan's (decision 0183).
+    static let everyGameRuntime = "env.MADEIRA_X64_CS_FASTPATH=1 env.MADEIRA_FEX_BATCH2=1 env.PLAYPORT_SC_BLOCK_CRASHPAD=1 "
         + "env.FEX_HOSTFEATURES=disableafp env.MADEIRA_FEX_AFPOFF_FPCR=fiz avail-phys-cef-mb=300"
 
     /// Each default is a madeira.cfg key at the lowest level of a launch's config (Effective.config):
@@ -47,8 +47,7 @@ final class CompatDefaultsTests: XCTestCase {
     /// by key and keep the rest (decisions 0091, 0153).
     func testEveryGamesDefaultsAreTheLowestRuntimeKeys() throws {
         XCTAssertEqual(LaunchSettings.everyGame.runtime, Self.everyGameRuntime)
-        let every: [String: String] = ["env.PLAYPORT_VK_HEAP_MB": "3072",
-                                       "env.MADEIRA_X64_CS_FASTPATH": "1", "env.MADEIRA_FEX_BATCH2": "1",
+        let every: [String: String] = ["env.MADEIRA_X64_CS_FASTPATH": "1", "env.MADEIRA_FEX_BATCH2": "1",
                                        "env.PLAYPORT_SC_BLOCK_CRASHPAD": "1", "env.FEX_HOSTFEATURES": "disableafp",
                                        "env.MADEIRA_FEX_AFPOFF_FPCR": "fiz", "avail-phys-cef-mb": "300"]
         XCTAssertEqual(LaunchSettings.everyGameKeys, every)
@@ -58,10 +57,10 @@ final class CompatDefaultsTests: XCTestCase {
         // A cohort title's own key (The Witcher 3's address-space hold) is its own.
         XCTAssertEqual(plain.config(over: ["jumbo-mb": "32768", "cage-hold": "1"])["jumbo-mb"], "32768")
         // A person's key wins over all; everyGame's other keys stay.
-        let own = LaunchSettings(runtime: "inproc-sync=0 env.PLAYPORT_VK_HEAP_MB=0 env.MADEIRA_FEX_BATCH2=0")
+        let own = LaunchSettings(runtime: "inproc-sync=0 env.MADEIRA_FEX_BATCH2=0")
             .over(LaunchSettings.overEveryGame(nil))
         let config = LaunchSettings.resolve(game: own, global: LaunchSettings()).config(over: ["jumbo-mb": "32768"])
-        XCTAssertEqual(config, ["jumbo-mb": "32768", "env.PLAYPORT_VK_HEAP_MB": "0", "inproc-sync": "0",
+        XCTAssertEqual(config, ["jumbo-mb": "32768", "inproc-sync": "0",
                                 "env.MADEIRA_X64_CS_FASTPATH": "1", "env.MADEIRA_FEX_BATCH2": "0",
                                 "env.PLAYPORT_SC_BLOCK_CRASHPAD": "1", "env.FEX_HOSTFEATURES": "disableafp",
                                 "env.MADEIRA_FEX_AFPOFF_FPCR": "fiz", "avail-phys-cef-mb": "300"])
@@ -73,33 +72,27 @@ final class CompatDefaultsTests: XCTestCase {
         XCTAssertEqual(LaunchSettings.overEveryGame(LaunchSettings(endLauncherAfterSignIn: false)).endLauncherAfterSignIn, false)
     }
 
-    /// RDR2 is told 2,304 MiB of video memory, not 3,072 (decisions 0142 and 0153 as amended
-    /// 2026-10-30): its heap size and the plan's video figure (DXVK's DXGI, KosmicKrisp's budget) by
-    /// its entry's keys over everyGame's; every other game keeps everyGame's 3,072 heap. No game
-    /// holds an address-space gap by default any more: elastic reservations make room (decision 0180).
-    func testRDR2IsTold2304MiBOfVideoMemory() throws {
-        let rdr2 = try XCTUnwrap(CompatDefaults.load(directory: Self.shipped).entry(for: "app-1174180"))
-        let config = LaunchSettings.resolve(game: LaunchSettings.overEveryGame(rdr2.settings), global: LaunchSettings())
-            .config(over: [:])
-        XCTAssertEqual(config["env.PLAYPORT_VK_HEAP_MB"], "2304")
-        XCTAssertEqual(config["vram-mb"], "2304")
-        XCTAssertNil(config["jumbo-mb"])
-        XCTAssertEqual(config["env.MADEIRA_FEX_BATCH2"], "1")   // everyGame's other keys stay
-        let overrides = MemoryPlan.Overrides.read(value: { config[$0] }, environment: [:])
-        let plan = MemoryPlan(MemoryPlan.Inputs(limitMB: 8192, physicalMB: 11734, poolMB: 4096), overrides: overrides)
-        XCTAssertEqual(plan.videoMB, 2304)
-        XCTAssertEqual(plan.dxvkOption, "dxgi.maxDeviceMemory = 2304")
-        XCTAssertEqual(plan.vulkanEnvironment[MemoryPlan.vulkanBudgetVariable], "2304")
-        // A person's Runtime keys still win (a dev build's row).
-        let own = LaunchSettings(runtime: "vram-mb=3072 env.PLAYPORT_VK_HEAP_MB=3072")
-            .over(LaunchSettings.overEveryGame(rdr2.settings))
-        let mine = LaunchSettings.resolve(game: own, global: LaunchSettings()).config(over: [:])
-        XCTAssertEqual(mine["vram-mb"], "3072")
-        XCTAssertEqual(mine["env.PLAYPORT_VK_HEAP_MB"], "3072")
-        let plain = LaunchSettings.resolve(game: LaunchSettings.overEveryGame(nil), global: LaunchSettings()).config(over: [:])
-        XCTAssertEqual(plain["env.PLAYPORT_VK_HEAP_MB"], "3072")
-        XCTAssertNil(plain["vram-mb"])
-        XCTAssertNil(plain["jumbo-mb"])
+    /// No compatibility entry, launcher or everyGame default sets a video memory or heap figure
+    /// (decision 0183): every game, RDR2 too, is told its memory plan row's (MemoryPlan), the same
+    /// figure for the reported video memory and the Vulkan heap.
+    func testNoEntryOverridesThePlansVideoFigure() throws {
+        let table = try CompatDefaults.load(directory: Self.shipped)
+        var configs = ["everyGame": LaunchSettings.resolve(game: LaunchSettings.overEveryGame(nil), global: LaunchSettings())
+            .config(over: [:])]
+        for (id, entry) in table.entries {
+            configs[id] = LaunchSettings.resolve(game: LaunchSettings.overEveryGame(entry.settings), global: LaunchSettings())
+                .config(over: [:])
+        }
+        for launcher in PublisherLauncher.all { configs[launcher.name] = launcher.openSettings(saved: nil).config }
+        XCTAssertNotNil(configs["app-1174180"])
+        for (id, config) in configs {
+            XCTAssertNil(config["vram-mb"], id)
+            XCTAssertNil(config["env.PLAYPORT_VK_HEAP_MB"], id)
+            let overrides = MemoryPlan.Overrides.read(value: { config[$0] }, environment: [:])
+            let plan = MemoryPlan(MemoryPlan.Inputs(limitMB: 6046, physicalMB: 7679), overrides: overrides)
+            XCTAssertEqual(plan.environment["PLAYPORT_VRAM_MB"], "2048", id)   // the 8 GB row's V
+            XCTAssertEqual(plan.vulkanEnvironment["PLAYPORT_VK_HEAP_MB"], "2048", id)
+        }
     }
 
     /// Every World of Warcraft product runs FEX without AVX (patches/fex 0088): its entry's
@@ -218,8 +211,8 @@ final class CompatDefaultsTests: XCTestCase {
         XCTAssertEqual(effective(own).screen, "1280x720")
         XCTAssertEqual(LaunchSettings.resolve(game: LaunchSettings().over(nil), global: LaunchSettings()).screen, "720")
         XCTAssertEqual(LaunchSettings(arguments: "-a").over(LaunchSettings(arguments: "-b")).arguments, "-a")
-        XCTAssertEqual(LaunchSettings().over(LaunchSettings(arguments: "-b", runtime: "vram-mb=1")),
-                       LaunchSettings(arguments: "-b", runtime: "vram-mb=1"))
+        XCTAssertEqual(LaunchSettings().over(LaunchSettings(arguments: "-b", runtime: "inproc-sync=1")),
+                       LaunchSettings(arguments: "-b", runtime: "inproc-sync=1"))
     }
 
     /// A person's own Runtime keys or Graphics options merge with the default's by key

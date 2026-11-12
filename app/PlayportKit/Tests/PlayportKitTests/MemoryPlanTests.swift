@@ -127,19 +127,34 @@ final class MemoryPlanTests: XCTestCase {
 
     func testVulkanClampIsOnByDefault() {
         XCTAssertEqual(plan(8192).dxvkOption, "dxgi.maxDeviceMemory = 3072")
-        XCTAssertEqual(plan(8192).vulkanEnvironment, ["PLAYPORT_VK_BUDGET_MB": "3072"])
+        XCTAssertEqual(plan(8192).vulkanEnvironment, ["PLAYPORT_VK_BUDGET_MB": "3072", "PLAYPORT_VK_HEAP_MB": "3072"])
         // The tier's V, and a clamped plan's.
         XCTAssertEqual(plan(6046, ram: 7679).dxvkOption, "dxgi.maxDeviceMemory = 2048")
-        XCTAssertEqual(plan(6144).vulkanEnvironment, ["PLAYPORT_VK_BUDGET_MB": "2048"])
-        // An explicit vram-mb wins.
+        XCTAssertEqual(plan(6144).vulkanEnvironment, ["PLAYPORT_VK_BUDGET_MB": "2048", "PLAYPORT_VK_HEAP_MB": "2048"])
+        // The shared madeira.cfg's vram-mb wins, in every game alike.
         XCTAssertEqual(plan(8192, MemoryPlan.Overrides(videoMB: 2048)).dxvkOption, "dxgi.maxDeviceMemory = 2048")
         XCTAssertEqual(plan(8192, MemoryPlan.Overrides(videoMB: 2048)).vulkanEnvironment,
-                       ["PLAYPORT_VK_BUDGET_MB": "2048"])
+                       ["PLAYPORT_VK_BUDGET_MB": "2048", "PLAYPORT_VK_HEAP_MB": "2048"])
         // vulkan-vram-plan = 0 turns both off.
         XCTAssertNil(plan(8192, MemoryPlan.Overrides(vulkan: false)).dxvkOption)
         XCTAssertEqual(plan(8192, MemoryPlan.Overrides(vulkan: false)).vulkanEnvironment, [:])
         // KosmicKrisp's cap is set apart from the runtime's plan variables.
         XCTAssertNil(plan(8192).environment["PLAYPORT_VK_BUDGET_MB"])
+        XCTAssertNil(plan(8192).environment["PLAYPORT_VK_HEAP_MB"])
+    }
+
+    /// Every game takes one video figure, its plan row's (decisions 0105, 0106, 0183): DXMT's
+    /// PLAYPORT_VRAM_MB, DXVK's DXGI report, KosmicKrisp's budget and the size of its heap 0.
+    func testOneVideoFigurePerRowIsReportedAndIsTheHeap() {
+        // (RAM, L, V)
+        for (ram, limit, video) in [(11734, 8191, "3072"), (7679, 6046, "2048"), (5734, 3064, "1024"), (3662, 2090, "768")] {
+            let p = plan(limit, ram: ram)
+            XCTAssertEqual(p.environment["PLAYPORT_VRAM_MB"], video, "RAM \(ram)")
+            XCTAssertEqual(p.dxvkOption, "dxgi.maxDeviceMemory = \(video)", "RAM \(ram)")
+            XCTAssertEqual(p.vulkanEnvironment, ["PLAYPORT_VK_BUDGET_MB": video, "PLAYPORT_VK_HEAP_MB": video], "RAM \(ram)")
+        }
+        // A clamped row's figure is the heap too.
+        XCTAssertEqual(plan(6144).vulkanEnvironment["PLAYPORT_VK_HEAP_MB"], "2048")
     }
 
     func testUnreadLimitSetsNothing() {

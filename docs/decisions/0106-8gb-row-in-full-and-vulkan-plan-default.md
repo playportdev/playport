@@ -4,7 +4,10 @@
 test that will be run one day can change them"); the 512 MiB margin is the implementing
 worker's choice. Amended by
 [0142](0142-rdr2-owner-test-defaults-heap-size-semaphores-and-afp.md) (a title may set KosmicKrisp's heap
-size too). Amends [0105](0105-memory-defaults-per-phone.md).
+size too), and 2026-11-12 by [0183](0183-no-per-game-memory-keys.md) ([PLA-845](https://linear.app/playportdev/issue/PLA-845)): the
+plan's V is KosmicKrisp's heap size as well as its budget, in every game, and no title sets its
+own `vram-mb` or heap; only the shared madeira.cfg's `vram-mb`, the same for every game, wins
+over V. Amends [0105](0105-memory-defaults-per-phone.md).
 [PLA-355](https://linear.app/playportdev/issue/PLA-355) (the 8 GB row),
 [PLA-362](https://linear.app/playportdev/issue/PLA-362) (Vulkan),
 [PLA-216](https://linear.app/playportdev/issue/PLA-216).

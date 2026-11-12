@@ -7,6 +7,11 @@ value, not only its budget. Revisit with the owner's results: each default stays
 supports it. **Amended the same day:** `inproc-sync=1` is dropped from the default after the
 owner's first play (below, and the evidence). **Amended 2026-10-30 (owner, PLA-476):** RDR2 is told
 2,304 MiB of video memory ([below](#amendment-2026-10-30-rdr2-is-told-2304-mib-of-video-memory)).
+**Amended 2026-11-12 by [0183](0183-no-per-game-memory-keys.md) ([PLA-845](https://linear.app/playportdev/issue/PLA-845)):** RDR2's
+`vram-mb=2304 env.PLAYPORT_VK_HEAP_MB=2304` and everyGame's 3,072 MiB heap are gone. Every game,
+RDR2 too, is told its memory plan row's video figure (0105, 0106), which sets the heap size, the
+budget and DXGI's report alike; the configuration check refuses both keys as a title's. If RDR2
+needs less than the row's figure, the row drops for every game.
 
 ## Context
 

@@ -1361,12 +1361,12 @@ private struct GameDetailPage: View {
         let forThisGame: (String) -> String? = { $0.isEmpty ? nil : "\(OptionValue.compatMarker) For this game: \($0); your own key of the same name wins" }
         let keys = settings.wrappedValue.runtime.trimmingCharacters(in: .whitespaces)
         PadRow(id: "opt:runtime", title: "Runtime keys",
-               subtitle: keys.isEmpty || LaunchSettings.runtimeKeys(keys) != nil ? forThisGame(compatKeys) : "Not key=value items: not used",
+               subtitle: LaunchSettings.unusedRuntimeKeysNote(keys) ?? forThisGame(compatKeys),
                subtitleLines: 2,
                value: keys.isEmpty ? "None" : keys, accessory: .chevron, changed: !keys.isEmpty, style: .plain,
                reset: keys.isEmpty ? nil : { settings.wrappedValue.runtime = "" }) {
             PadModal.shared.keyboard(title: "Runtime keys", text: settings.wrappedValue.runtime,
-                                     placeholder: "For example vram-mb=1024 inproc-sync=1",
+                                     placeholder: "For example inproc-sync=1 env.FEX_SMCCHECKS=mtrack",
                                      maxLength: 200) { settings.wrappedValue.runtime = $0 }
         }
         // The game's environment variables and Vulkan layers' options (decisions 0060, 0137).

@@ -66,7 +66,10 @@ lands, the keys it removes stay as built, and no part of it is shown on the phon
   - One video figure from the phone's memory plan row
     ([0105](0105-memory-defaults-per-phone.md), [0106](0106-8gb-row-in-full-and-vulkan-plan-default.md))
     for every game, in place of RDR2's entry and `everyGame`'s fixed heap
-    ([PLA-845](https://linear.app/playportdev/issue/PLA-845)).
+    ([PLA-845](https://linear.app/playportdev/issue/PLA-845)). The plan's V is DXGI's report and
+    KosmicKrisp's heap size and budget; the configuration check (PlayportKit `TitleConfig`) refuses
+    `vram-mb` and `env.PLAYPORT_VK_HEAP_MB` as any title's key. The shared madeira.cfg's `vram-mb`
+    still wins over V, the same in every game.
   - One JIT pool, the same size in every Play, whose untouched pages cost nothing, in place of
     per-title sizes ([PLA-846](https://linear.app/playportdev/issue/PLA-846)).
   - Play is never refused for a stored memory figure: `memoryMB` goes, and a game ended for memory

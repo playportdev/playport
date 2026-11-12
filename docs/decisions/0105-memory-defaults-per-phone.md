@@ -10,6 +10,9 @@ default. [PLA-355](https://linear.app/playportdev/issue/PLA-355),
 [PLA-216](https://linear.app/playportdev/issue/PLA-216) (the donor pool). Replaces the memory
 plan's formulas ([evidence](../evidence/2026-10-14-memory-plan.md)) and Auto's sizing from the
 headroom ([evidence](../evidence/2026-10-15-donor-pool-auto-headroom.md)).
+**Amended 2026-11-12 by [0183](0183-no-per-game-memory-keys.md)** ([PLA-845](https://linear.app/playportdev/issue/PLA-845)): no
+title has its own `vram-mb`; the row's V is every game's video figure and Vulkan heap, and only
+the shared madeira.cfg's `vram-mb` wins over it, for every game alike.
 [Evidence](../evidence/2026-10-15-memory-defaults.md).
 
 **Amended 2026-10-30 (owner, PLA-476):** during a play the donor pool also grows again on

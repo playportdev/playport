@@ -19,13 +19,20 @@ public enum TitleConfig {
     /// Under the prefix's Documents: `title-cfg/<install folder>/madeira.cfg`.
     public static let rootName = "title-cfg"
 
-    /// Keys are the reader's names (`jumbo-mb`, `env.NAME`); values are one line.
+    /// Keys no title may set (decision 0183): a video memory or heap figure is no game's own;
+    /// every game takes its memory plan row's (MemoryPlan). Refused here, so no cohort entry,
+    /// compatibility entry, launcher, everyGame default, dev Runtime keys row or driven launch
+    /// sets one. The shared madeira.cfg is the person's for every game alike and is not checked.
+    public static let refusedKeys: Set<String> = [MemoryPlan.videoKey, "env." + MemoryPlan.vulkanHeapVariable]
+
+    /// Keys are the reader's names (`jumbo-mb`, `env.NAME`); values are one line; no refused key.
     public static func validate(_ config: [String: String]) throws {
         let keyChars = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._-"))
         for (k, v) in config {
             guard !k.isEmpty, k.unicodeScalars.allSatisfy({ keyChars.contains($0) && $0.isASCII }),
                   !v.contains(where: { $0 == "\n" || $0 == "\r" })
             else { throw LaunchPlanError.badConfig("\(k) = \(v)") }
+            if refusedKeys.contains(k) { throw LaunchPlanError.refusedKey(k) }
         }
     }
 

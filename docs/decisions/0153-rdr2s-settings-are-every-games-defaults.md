@@ -98,6 +98,10 @@ Hollow Knight and RDR2, the only titles installed on the phone, on dev IPAs 55b6
 
 ## Amendment 2026-10-30: RDR2's video memory
 
+*Superseded 2026-11-12 by [0183](0183-no-per-game-memory-keys.md) ([PLA-845](https://linear.app/playportdev/issue/PLA-845)):
+everyGame's `env.PLAYPORT_VK_HEAP_MB=3072` and RDR2's own figure are gone; every game is told its
+memory plan row's video figure, as its heap too.*
+
 **Approved by the owner, 2026-10-30 (PLA-476).** everyGame's `env.PLAYPORT_VK_HEAP_MB=3072` stays
 every game's default, but RDR2's own entry now overrides it with `vram-mb=2304
 env.PLAYPORT_VK_HEAP_MB=2304`

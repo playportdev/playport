@@ -5,8 +5,8 @@
       "reason": "This game takes no controller on PC without a third-party fix (its Options list only keyboard layouts), so its on-screen controls start as a keyboard and mouse."
     },
     "app-1174180": {
-      "settings": {"graphics": "vulkan", "runtime": "vram-mb=2304 env.PLAYPORT_VK_HEAP_MB=2304"},
-      "reason": "This game draws through Vulkan or Direct3D 12, which only the Vulkan layer runs, so it keeps Vulkan even when Settings chooses DXMT for every game. It is told 2,304 MB of video memory, not 3,072: it sizes its texture streaming from that figure, and Story's first load otherwise passes the app's memory limit."
+      "settings": {"graphics": "vulkan"},
+      "reason": "This game draws through Vulkan or Direct3D 12, which only the Vulkan layer runs, so it keeps Vulkan even when Settings chooses DXMT for every game."
     },
     "bnet-wow": {
       "settings": {"runtime": "env.FEX_HOSTFEATURES=disableafp,disableavx"},

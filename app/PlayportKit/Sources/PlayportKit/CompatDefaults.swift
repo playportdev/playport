@@ -97,6 +97,7 @@ public struct CompatDefaults: Equatable, Sendable {
         if let screen = s.screen, !LaunchPlan.validScreen(screen) { throw CompatDefaultsError.badSetting("\(id).screen") }
         if let aspect = s.aspect, ScreenAspect(rawValue: aspect) == nil { throw CompatDefaultsError.badSetting("\(id).aspect") }
         if let limit = s.frameLimit, limit < 0 { throw CompatDefaultsError.badSetting("\(id).frameLimit") }
+        if LaunchSettings.runtimeKeys(s.runtime) == nil { throw CompatDefaultsError.badSetting("\(id).runtime") }
         if let pool = s.jitPoolMB, !(JitPool.minimumMB...JitPool.maximumMB).contains(pool) || pool % 16 != 0 {
             throw CompatDefaultsError.badSetting("\(id).jitPoolMB")
         }

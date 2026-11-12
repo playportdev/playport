@@ -138,6 +138,31 @@ final class TitleConfigTests: XCTestCase {
         XCTAssertNil(TitleConfig.parse("a=1%0A"))
         XCTAssertThrowsError(try LaunchPlan.make(installDir: "G", executable: "g.exe", arguments: [], config: ["=": "1"]))
     }
+
+    /// A title's video memory figure is no key (decision 0183): every game takes its memory plan
+    /// row's (MemoryPlan), so no cohort entry, compatibility entry, launcher, everyGame default,
+    /// dev Runtime keys row or driven launch can set `vram-mb` or the Vulkan heap again.
+    func testTheDeletedVideoMemoryKeysAreRefused() {
+        for key in ["vram-mb", "env.PLAYPORT_VK_HEAP_MB"] {
+            XCTAssertThrowsError(try TitleConfig.validate([key: "2304"]), key) {
+                XCTAssertEqual($0 as? LaunchPlanError, .refusedKey(key))
+            }
+            XCTAssertThrowsError(try LaunchPlan.make(installDir: "G", executable: "g.exe", arguments: [], config: [key: "2304"]), key)
+            XCTAssertNil(TitleConfig.parse("\(key)=2304"), key)
+            XCTAssertNil(LaunchSettings.runtimeKeys("inproc-sync=1 \(key)=2304"), key)
+            XCTAssertEqual(LaunchSettings.unusedRuntimeKeysNote("inproc-sync=1 \(key)=2304"),
+                           "\(key) is not a game's own key (no per-game memory keys): not used")
+            XCTAssertThrowsError(try CompatDefaults.parse(Data(#"""
+                {"titles": {"app-1": {"settings": {"runtime": "\#(key)=2304"}, "reason": "A reason."}}}
+                """#.utf8)), key) { XCTAssertEqual($0 as? CompatDefaultsError, .badSetting("app-1.runtime")) }
+        }
+        XCTAssertEqual(LaunchSettings.unusedRuntimeKeysNote("inproc-sync"), "Not key=value items: not used")
+        XCTAssertNil(LaunchSettings.unusedRuntimeKeysNote("inproc-sync=1"))
+        XCTAssertNil(LaunchSettings.unusedRuntimeKeysNote(""))
+        // Neither is refused in another key's value or name.
+        XCTAssertEqual(LaunchSettings.runtimeKeys("vram-mbx=1 env.PLAYPORT_VK_HEAP_MB_X=1"),
+                       ["vram-mbx": "1", "env.PLAYPORT_VK_HEAP_MB_X": "1"])
+    }
 }
 
 final class CatalogTests: XCTestCase {
@@ -907,15 +932,15 @@ final class FEXProfileTests: XCTestCase {
         XCTAssertNil(try! JSONDecoder().decode(LaunchSettings.self, from: Data("{}".utf8)).maxInst)
 
         // Runtime keys: the game's own only, over the title's cohort keys; a bad line is not used.
-        let keys = try! JSONDecoder().decode(LaunchSettings.self, from: Data(#"{"runtime":"vram-mb=1024 inproc-sync=1 vram-mb=768"}"#.utf8))
+        let keys = try! JSONDecoder().decode(LaunchSettings.self, from: Data(#"{"runtime":"avail-phys-cef-mb=100 inproc-sync=1 avail-phys-cef-mb=0"}"#.utf8))
         XCTAssertFalse(keys.isEmpty)
         let on = LaunchSettings.resolve(game: keys, global: LaunchSettings())
-        XCTAssertEqual(on.runtime, ["vram-mb": "768", "inproc-sync": "1"])
+        XCTAssertEqual(on.runtime, ["avail-phys-cef-mb": "0", "inproc-sync": "1"])
         // All over every game's keys (decision 0153), the title's cohort jumbo-mb with them.
-        XCTAssertEqual(on.config(over: ["jumbo-mb": "32768", "vram-mb": "2048"]),
-                       LaunchSettings.everyGameKeys.merging(["jumbo-mb": "32768", "vram-mb": "768", "inproc-sync": "1"]) { _, b in b })
+        XCTAssertEqual(on.config(over: ["jumbo-mb": "32768", "inproc-sync": "0"]),
+                       LaunchSettings.everyGameKeys.merging(["jumbo-mb": "32768", "avail-phys-cef-mb": "0", "inproc-sync": "1"]) { _, b in b })
         XCTAssertEqual(LaunchSettings.resolve(game: nil, global: keys).runtime, [:])
-        XCTAssertNil(LaunchSettings.runtimeKeys("vram-mb"))
+        XCTAssertNil(LaunchSettings.runtimeKeys("inproc-sync"))
         XCTAssertNil(LaunchSettings.runtimeKeys("a b=1"))
         XCTAssertEqual(LaunchSettings.resolve(game: LaunchSettings(runtime: "oops"), global: LaunchSettings()).runtime, [:])
         XCTAssertEqual(LaunchSettings.runtimeKeys(""), [:])

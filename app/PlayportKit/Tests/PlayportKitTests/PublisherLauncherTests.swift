@@ -67,8 +67,8 @@ final class PublisherLauncherTests: XCTestCase {
         XCTAssertEqual(r.runtime, Self.rockstarRuntime)
         XCTAssertEqual(r.openSettings(saved: nil), .init(config: Self.rockstarRuntime))
         XCTAssertEqual(r.openSettings(saved: LaunchSettings()).config, Self.rockstarRuntime)
-        let own = r.openSettings(saved: LaunchSettings(runtime: "env.FEX_SMCCHECKS=mtrack vram-mb=1024"))
-        XCTAssertEqual(own.config, Self.socialClub.merging(["env.FEX_SMCCHECKS": "mtrack", "vram-mb": "1024"]) { $1 })
+        let own = r.openSettings(saved: LaunchSettings(runtime: "env.FEX_SMCCHECKS=mtrack inproc-sync=1"))
+        XCTAssertEqual(own.config, Self.socialClub.merging(["env.FEX_SMCCHECKS": "mtrack", "inproc-sync": "1"]) { $1 })
     }
 
     /// PLA-401: a game's Runtime keys can give Launcher.exe alone its SMC checks
@@ -87,10 +87,10 @@ final class PublisherLauncherTests: XCTestCase {
         var ordering = MemoryOrdering()
         ordering[.tso] = false
         let saved = LaunchSettings(screen: "1080", graphics: .dxmt, ordering: ordering, maxInst: 100, x87Reduced: true,
-                                   diskCache: false, runtime: "env.FEX_SMCCHECKS=none vram-mb=1024",
+                                   diskCache: false, runtime: "env.FEX_SMCCHECKS=none inproc-sync=1",
                                    windowsServices: false, jitPoolMB: 512)
         let open = launcher.openSettings(saved: saved)
-        XCTAssertEqual(open.config, Self.rockstarRuntime.merging(["vram-mb": "1024"]) { $1 })
+        XCTAssertEqual(open.config, Self.rockstarRuntime.merging(["inproc-sync": "1"]) { $1 })
         XCTAssertEqual(open.ordering, ordering)
         XCTAssertEqual(open.maxInst, 100)
         XCTAssertEqual(open.x87Reduced, true)

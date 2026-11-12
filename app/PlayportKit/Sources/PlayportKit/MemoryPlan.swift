@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // One memory plan per Play (PLA-352): the RAM the guest is told it has and the
-// video budget DXGI reports. Both come from the phone's tier (Tier, decision
+// one video figure every game is told (decision 0183): DXGI's video budget and,
+// on Vulkan, DXVK's report and KosmicKrisp's heap size and budget. Both come
+// from the phone's tier (Tier, decision
 // 0105, the owner's table of 2026-10-15), clamped to the app's limit L read
 // just before Wine starts: a limit lower than the tier assumes (no
 // increased-memory-limit entitlement, or Game Mode not on yet) tells the guest
@@ -9,11 +11,14 @@
 // 6,046) and takes the row in full.
 //
 // The app passes the plan through the environment: MADEIRA_TOTAL_PHYS_MB
-// (ml992's own override) and PLAYPORT_VRAM_MB (patches/dxmt 0011, after
-// madeira.cfg `vram-mb`, before ml1042's formula, which stays the fallback). A
-// title's own `totalphys` or `vram-mb` (its cohort entry's `config`, the dev
-// Runtime keys, the shared madeira.cfg) wins over the plan. The DXMT trim
-// (ml1075) still shrinks the budget as the footprint nears the limit.
+// (ml992's own override), PLAYPORT_VRAM_MB (patches/dxmt 0011, after
+// madeira.cfg `vram-mb`, before ml1042's formula, which stays the fallback) and, on
+// Vulkan, PLAYPORT_VK_HEAP_MB and PLAYPORT_VK_BUDGET_MB (patches/mesa 0064, 0036). A
+// title's own `totalphys` (its cohort entry's `config`, the dev Runtime keys, the
+// shared madeira.cfg) wins over the plan. `vram-mb` is no title's (TitleConfig
+// refuses it, decision 0183): only the shared madeira.cfg, the same for every game,
+// sets it over the plan. The DXMT trim (ml1075) still shrinks the budget as the
+// footprint nears the limit.
 //
 // A dev build's donor pool (DonorPoolSizing) backs guest RAM outside L; its Auto
 // size is the tier's too. The pool no longer raises the guest's RAM: the tier's
@@ -83,11 +88,14 @@ public struct MemoryPlan: Equatable, Sendable {
     /// madeira.cfg keys that win over the plan (ml993, ml1095).
     public static let guestRAMKey = "totalphys"
     public static let videoKey = "vram-mb"
-    /// madeira.cfg key: DXVK's reported video memory and KosmicKrisp's heap budget follow the
-    /// plan unless it is 0 (on by default, decision 0106).
+    /// madeira.cfg key: DXVK's reported video memory and KosmicKrisp's heap size and budget
+    /// follow the plan unless it is 0 (on by default, decision 0106).
     public static let vulkanKey = "vulkan-vram-plan"
     /// KosmicKrisp's cap on its heap's VK_EXT_memory_budget budget, MiB (patches/mesa 0036).
     public static let vulkanBudgetVariable = "PLAYPORT_VK_BUDGET_MB"
+    /// The size KosmicKrisp reports for its heap 0 in place of Metal's working set, MiB
+    /// (patches/mesa 0064): a game may size its pools from the heap, not the budget (RDR2).
+    public static let vulkanHeapVariable = "PLAYPORT_VK_HEAP_MB"
 
     /// What the plan reads at Play.
     public struct Inputs: Equatable, Sendable {
@@ -105,14 +113,15 @@ public struct MemoryPlan: Equatable, Sendable {
         }
     }
 
-    /// A title's own values, which win over the plan's.
+    /// The values over the plan's: a title's own `totalphys`, and the shared file's `vram-mb`.
     public struct Overrides: Equatable, Sendable {
         /// `totalphys` from madeira.cfg, or MADEIRA_TOTAL_PHYS_MB already set (an `env.` key).
         public var guestRAMMB: Int?
-        /// `vram-mb` from madeira.cfg (ml1042 honours 256 or more).
+        /// `vram-mb` from madeira.cfg (ml1042 honours 256 or more): the shared file's alone,
+        /// since TitleConfig refuses it as a title's key.
         public var videoMB: Int?
-        /// DXVK's DXGI report and KosmicKrisp's heap budget take the plan's; false only with
-        /// `vulkan-vram-plan = 0`.
+        /// DXVK's DXGI report and KosmicKrisp's heap size and budget take the plan's; false only
+        /// with `vulkan-vram-plan = 0`.
         public var vulkan: Bool
 
         public init(guestRAMMB: Int? = nil, videoMB: Int? = nil, vulkan: Bool = true) {
@@ -176,10 +185,11 @@ public struct MemoryPlan: Equatable, Sendable {
         overrides.vulkan ? "dxgi.maxDeviceMemory = \(videoMB)" : nil
     }
 
-    /// KosmicKrisp's heap budget capped at this plan's video memory (patches/mesa 0036; the
-    /// heap's size stays Metal's working set); empty with `vulkan-vram-plan = 0`.
+    /// KosmicKrisp's heap 0 reported at this plan's video memory and its budget capped there
+    /// (patches/mesa 0064 and 0036): one figure for every game (decision 0183); empty with
+    /// `vulkan-vram-plan = 0`, which leaves Metal's working set for both.
     public var vulkanEnvironment: [String: String] {
-        overrides.vulkan ? [Self.vulkanBudgetVariable: String(videoMB)] : [:]
+        overrides.vulkan ? [Self.vulkanBudgetVariable: String(videoMB), Self.vulkanHeapVariable: String(videoMB)] : [:]
     }
 
     /// The one `memory plan:` log line: the tier and its row, L and the clamp, what the guest

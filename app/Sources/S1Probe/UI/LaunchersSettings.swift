@@ -117,7 +117,7 @@ struct LaunchersSettings: View {
             let runtime = launchSettings.binding(for: l.titleID)
             let keys = runtime.wrappedValue.runtime.trimmingCharacters(in: .whitespaces)
             PadRow(id: "set:launcher-" + l.id + "-runtime", title: "Runtime keys",
-                   subtitle: keys.isEmpty || LaunchSettings.runtimeKeys(keys) != nil ? l.name : "Not key=value items: not used",
+                   subtitle: LaunchSettings.unusedRuntimeKeysNote(keys) ?? l.name,
                    value: keys.isEmpty ? "None" : keys, accessory: .chevron, changed: !keys.isEmpty, style: .plain,
                    reset: keys.isEmpty ? nil : { runtime.wrappedValue.runtime = "" }) {
                 PadModal.shared.keyboard(title: "Runtime keys", text: runtime.wrappedValue.runtime,
