@@ -34,7 +34,7 @@ knob. One log tag, [va-pin].
 
 Linear: PLA-837
 Class: feature
-Evidence: docs/evidence/2026-11-02-elastic-reservations.md
+Evidence: tools/tests/test_va_pin.py (host checks; phone gates not run)
 Offered-upstream: no; a Playport dev knob for the iOS port's address-space layout
 ---
  build/ntdll-unix/pp_va_pin.h   | 115 +++++++++++++++++++++++++++++++++

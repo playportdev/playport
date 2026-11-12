@@ -55,10 +55,9 @@ final class PublisherLauncherTests: XCTestCase {
         XCTAssertEqual(GraphicsBackend.vulkan.runtimeEnvironment, ["DXVK_CONFIG": "dxvk.tilerMode = False"])
     }
 
-    /// The Social Club key every Play of Rockstar's launcher runs with (decision 0169): the
-    /// stock-CEF layout. Single-process needs no key: sc_single.h has it on by default.
-    static let socialClub = ["env.PLAYPORT_SC_LAYOUT": "1"]
-    static let rockstarRuntime = socialClub.merging(["env.FEX_SMCCHECKS": "none"]) { $1 }
+    /// The runtime keys every Play of Rockstar's launcher runs with. No memory key (decision 0183): the
+    /// Social Club layout follows the game folder's bootstrap (SocialClubBootstrapTests).
+    static let rockstarRuntime = ["env.FEX_SMCCHECKS": "none"]
 
     /// Decision 0116: the Rockstar launcher's Open runs with FEX's self-modifying-code checks off
     /// when nothing is saved, and a saved key of the same name replaces it.
@@ -68,7 +67,7 @@ final class PublisherLauncherTests: XCTestCase {
         XCTAssertEqual(r.openSettings(saved: nil), .init(config: Self.rockstarRuntime))
         XCTAssertEqual(r.openSettings(saved: LaunchSettings()).config, Self.rockstarRuntime)
         let own = r.openSettings(saved: LaunchSettings(runtime: "env.FEX_SMCCHECKS=mtrack inproc-sync=1"))
-        XCTAssertEqual(own.config, Self.socialClub.merging(["env.FEX_SMCCHECKS": "mtrack", "inproc-sync": "1"]) { $1 })
+        XCTAssertEqual(own.config, ["env.FEX_SMCCHECKS": "mtrack", "inproc-sync": "1"])
     }
 
     /// PLA-401: a game's Runtime keys can give Launcher.exe alone its SMC checks
@@ -139,63 +138,9 @@ final class PublisherLauncherTests: XCTestCase {
         let own = LaunchSettings.resolve(game: LaunchSettings(runtime: "env.FEX_SMCCHECKS=mtrack env.X=1",
                                                                graphicsOptions: "dxvk.tilerMode=False"), global: LaunchSettings())
         let (t, _) = PublisherLauncher.rockstar.startingGame(own)
-        XCTAssertEqual(t.runtime, Self.socialClub.merging(["env.FEX_SMCCHECKS": "mtrack", "env.X": "1"]) { $1 })
+        XCTAssertEqual(t.runtime, ["env.FEX_SMCCHECKS": "mtrack", "env.X": "1"])
         XCTAssertEqual(t.graphicsEnvironment["DXVK_CONFIG"], "dxvk.numCompilerThreads = 1;" + (own.graphicsEnvironment["DXVK_CONFIG"] ?? ""))
         XCTAssertEqual(t.graphicsEnvironment["DXVK_SHADER_CACHE"], "0")
-    }
-
-    /// A game's Play config as LibraryModel builds it: a dev build's person's keys over the
-    /// compatibility default over every game's; a release build's compatibility keys only
-    /// (decision 0126); then the launcher it starts, if any (decision 0115).
-    static func play(_ id: String, person: String, release: Bool) throws -> [String: String] {
-        let compat = try CompatDefaults.load(directory: CompatDefaultsTests.shipped).entry(for: id)?.settings
-        let base = LaunchSettings.overEveryGame(compat)
-        var s = LaunchSettings.resolve(game: LaunchSettings(runtime: person).over(base), global: LaunchSettings())
-        if release { s.runtime = LaunchSettings.releaseRuntime(compat: compat) }
-        if let l = PublisherLauncher.startedBy(game: id) { s = l.startingGame(s).settings }
-        return s.config(over: [:])
-    }
-
-    /// PLA-602 (decision 0169): every Play that runs Rockstar's launcher, RDR2's and the Open,
-    /// runs the stock-CEF layout with no keys, in both builds; a release build ignores a person's
-    /// keys but keeps the launcher's.
-    func testRockstarPlaysRunTheSocialClubLayoutInBothBuilds() throws {
-        let layout = { (c: [String: String]) in GameSocialClubEndPolicy.socialClubLayout(config: c, environment: nil) }
-        for release in [false, true] {
-            let rdr2 = try Self.play("app-1174180", person: "", release: release)
-            XCTAssertEqual(rdr2["env.PLAYPORT_SC_LAYOUT"], "1")
-            XCTAssertTrue(layout(rdr2))
-        }
-        let open = PublisherLauncher.rockstar.openSettings(saved: nil).config   // a release build's Open
-        XCTAssertEqual(open["env.PLAYPORT_SC_LAYOUT"], "1")
-        XCTAssertTrue(layout(open))
-        // A person's =0 in a release build: dropped with every person's key, so single-process
-        // stays at its default too.
-        let release = try Self.play("app-1174180", person: "env.PLAYPORT_SC_LAYOUT=0 env.PLAYPORT_SC_SINGLE=0", release: true)
-        XCTAssertEqual(release["env.PLAYPORT_SC_LAYOUT"], "1")
-        XCTAssertNil(release["env.PLAYPORT_SC_SINGLE"])
-    }
-
-    /// Hollow Knight and every title that starts no Rockstar launcher get no layout key: the layout
-    /// changes every process of the session (madeira-unix 0225).
-    func testAPlayWithoutRockstarsLauncherGetsNoLayoutKey() throws {
-        for release in [false, true] {
-            let hk = try Self.play("app-367520", person: "", release: release)
-            XCTAssertNil(hk["env.PLAYPORT_SC_LAYOUT"])
-            XCTAssertFalse(GameSocialClubEndPolicy.socialClubLayout(config: hk, environment: nil))
-        }
-        XCTAssertNil(LaunchSettings.everyGameKeys["env.PLAYPORT_SC_LAYOUT"])
-    }
-
-    /// A dev build's `=0` key, the game's or the Open's saved one, wins over the launcher's.
-    func testADevBuildsZeroKeyTurnsTheLayoutOff() throws {
-        let rdr2 = try Self.play("app-1174180", person: "env.PLAYPORT_SC_LAYOUT=0 env.PLAYPORT_SC_SINGLE=0", release: false)
-        XCTAssertEqual(rdr2["env.PLAYPORT_SC_LAYOUT"], "0")
-        XCTAssertEqual(rdr2["env.PLAYPORT_SC_SINGLE"], "0")
-        XCTAssertFalse(GameSocialClubEndPolicy.socialClubLayout(config: rdr2, environment: nil))
-        let open = PublisherLauncher.rockstar.openSettings(saved: LaunchSettings(runtime: "env.PLAYPORT_SC_LAYOUT=0")).config
-        XCTAssertEqual(open["env.PLAYPORT_SC_LAYOUT"], "0")
-        XCTAssertFalse(GameSocialClubEndPolicy.socialClubLayout(config: open, environment: nil))
     }
 
     /// Forgetting the Rockstar launcher's window settings deletes settings_user.dat and nothing

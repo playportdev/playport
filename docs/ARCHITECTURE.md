@@ -504,7 +504,9 @@ cannot be placed whole gets a short grant with the same guard and is told it got
 commit reaching a guard or a claim grows the view in place while the space above is free, else
 returns `STATUS_NO_MEMORY`; it is never served in another view. `VirtualQuery` reports the real view.
 Hinted, aligned, placeholder, limited, commit-at-reserve and hold-served asks, and every ask the
-Social Club layout's router sees, are never shortened. One log tag, `[elastic]`, covers place, grant,
+Social Club layout's router sees, are never shortened. A WoW64 process's 4 GiB window is such an ask
+(madeira-unix 0292): placed as before, at its fixed slots then a first fit, and when both fail a
+lender's freed range that holds it whole is given back and the window placed again; it never lends. One log tag, `[elastic]`, covers place, grant,
 lend, grow, refuse and a query inside a shortened view's claim, in both variants.
 
 Two holds keep address space for a title's large reservations from boot, both set by its
@@ -523,6 +525,17 @@ unhinted, unlimited `NtAllocateVirtualMemory` reservation of exactly its size is
 (`[va-pin]` lines). A pin replaces the boot hold of its size, the cage's 8 GB or `jumbo-mb`'s. The
 release app never sets one: `pp verify` fails a release executable that names the variable or links
 ntdll's setter, `madeira_set_va_pins`, which the release link drops since nothing there calls it.
+
+A dev build's Social Club census (PLA-841; madeira-unix 0294's `pp_sc_census.h`) measures, under
+the Social Club layout, the committed extent of each kind the layout holds: every slot by its real
+range, V8's code range (a helper's 1 GiB view at a 4 GiB-aligned base in the layout's window) and
+the JIT pool's RW alias (its head plus its tail). `[sc-census] peak` lines give a kind's committed
+bytes, peak and highest committed end offset at its first commit and each 16 MiB of growth;
+`[sc-census] exit` lines give every kind's at a layout owner's exit, with the guest modules whose
+commits landed there (each one's commits, bytes and offset span), and `[sc-census] commit` lines
+the first four commits per module and kind. A commit is attributed to the module of the first
+image address on the guest stack saved at the x64 caller's switch to `VirtualAlloc`. The release
+app prints none of them (`MADEIRA_NO_DIAGNOSTICS`).
 
 ### The FEX host band
 
@@ -1119,13 +1132,19 @@ menu opens). Behind the menu the game is paused:
     along with the launcher's tree.
 - **The game's own Social Club end.** `PP_CONTROL_END_GAME_SOCIAL_CLUB`, 120 s or more after the
   sign-in near the limit, ends the `SocialClubHelper.exe` processes under RDR2.exe, and ntdll refuses
-  their later starts (`PLAYPORT_REFUSE_GAME_SC_RESTART`). Every Play of Rockstar's launcher, RDR2's and
-  the Open, runs Social Club on Rockstar's own CEF, single-process (on by default), in the stock-CEF
-  layout, in both builds (`PublisherLauncher.rockstar`'s `env.PLAYPORT_SC_LAYOUT=1`; decision
-  [0169](decisions/0169-social-club-on-rockstars-cef-in-the-stock-cef-layout.md)), and under the layout
-  neither runs unless a dev build's stored switch turns the end on (`GameSocialClubEndPolicy`). Only a
-  dev build's `env.PLAYPORT_SC_LAYOUT=0` brings back 0153's default: both on unless Settings › Graphics
-  turns them off (`GameSocialClubEnd.swift`; decisions 0133, 0138, 0141,
+  their later starts (`PLAYPORT_REFUSE_GAME_SC_RESTART`). Social Club runs on Rockstar's own CEF,
+  single-process (on by default), in both builds; a Play runs it in the stock-CEF layout (decision
+  [0169](decisions/0169-social-club-on-rockstars-cef-in-the-stock-cef-layout.md)) only when what it
+  starts is a Rockstar bootstrap Playport verified by hash (`SocialClubBootstrap`, decision
+  [0183](decisions/0183-no-per-game-memory-keys.md), PLA-840): a game whose install folder holds one
+  (RDR2's Steam copy: `PlayRDR2.exe` and `Redistributables/Rockstar-Games-Launcher.exe`), or the
+  launcher's Open when the `Launcher.exe` it starts is verified. No key and no launcher switches it:
+  the launch sets `PLAYPORT_SC_LAYOUT=1` from that check alone and ignores an
+  `env.PLAYPORT_SC_LAYOUT` key. The hashes are kept by path, size and modification time between Plays,
+  and a dev build logs an unverified file's hash. Under the layout neither the end nor the refusal
+  runs unless a dev build's stored switch turns the end on (`GameSocialClubEndPolicy`); without it
+  0153's default holds: both on unless Settings › Graphics turns them off (`GameSocialClubEnd.swift`;
+  decisions 0133, 0138, 0141,
   [0153](decisions/0153-rdr2s-settings-are-every-games-defaults.md)). If the game signs in again
   after the end (a new sign-in line in its Social Club log, or a GetCurrentGameLanguage burst within
   60 s) and the footprint plus 600 MB is under the limit less 400 MB, the app sends

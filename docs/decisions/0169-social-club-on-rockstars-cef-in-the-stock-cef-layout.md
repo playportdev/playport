@@ -13,23 +13,35 @@ a launcher helper's slot view is [0166](0166-detach-a-parked-threads-wait-then-u
 [evidence](../evidence/2026-10-29-sc-stock-cef-probe.md),
 [l19](../evidence/2026-10-30-rdr2-kk-audio-diagnostics.md).
 
-**Amended 2026-11-12 by [0183](0183-no-per-game-memory-keys.md):** the layout engages when the Play's
-installed copy contains a verified `SocialClubHelper.exe`, as this record first said, not for every Play
-of Rockstar's launcher: `PublisherLauncher.rockstar`'s `env.PLAYPORT_SC_LAYOUT=1` goes
+**Amended 2026-11-12 by [0183](0183-no-per-game-memory-keys.md):** the layout is no longer every Play of
+Rockstar's launcher: `PublisherLauncher.rockstar`'s `env.PLAYPORT_SC_LAYOUT=1` goes
 ([PLA-840](https://linear.app/playportdev/issue/PLA-840)), and any other Play holds no Social Club
 range. The layout shrinks to the anchors its window forces, the rest claimed at the helper's first
 ask; ELF_META2 and the 8,960 MiB game hold go ([PLA-841](https://linear.app/playportdev/issue/PLA-841),
 [PLA-842](https://linear.app/playportdev/issue/PLA-842)). The low hold at exec stays in every Play, and
-0236's refusal runs before the elastic policy. Until PLA-840 lands, the layout is Rockstar's launcher's.
+0236's refusal runs before the elastic policy.
+
+**The trigger, as the owner decided on PLA-840 (2026-11-12) and as built:** the layout engages when what a
+Play starts is a Rockstar bootstrap Playport verified by hash (`SocialClubBootstrap`, PlayportKit): a
+game whose install folder holds one, which for RDR2's Steam copy is `PlayRDR2.exe` with depot 1899671's
+`Redistributables/Rockstar-Games-Launcher.exe`, or the launcher's Open when the `Launcher.exe` it starts
+in the launcher's install folder is verified. Not `SocialClubHelper.exe`, which this record first named
+and 0183 repeated: it is in the shared prefix, missing until the launcher's first run, while the layout
+must be decided before the runtime starts, since libcef's range at `0x7000000000` comes from the low
+hold at exec. The app checks before the runtime starts and sets `PLAYPORT_SC_LAYOUT=1` from the check
+alone, ignoring any `env.PLAYPORT_SC_LAYOUT` key; a dev build's `=0` no longer turns it off. A copy
+with an unverified bootstrap (a Steam update of `PlayRDR2.exe`, a launcher self-update) gets no layout
+until its hashes join the table; a dev build logs them.
 
 **What is built and what is open.** Built: the layout (madeira-unix 0224–0231), the low hold (PLA-480),
 ELF_META2 (0228), the probe refusal (0236), the code-range placement (0243), the game-helper end's default
 under the layout (`GameSocialClubEndPolicy`) and the plan's chunk 4 (2026-10-31): single-process on by default
 in both builds (`d1aff807`, PLA-602), the layout carried by `PublisherLauncher.rockstar`'s runtime for every
-Rockstar Play (`1424a0ac`), and Playport's CEF build removed with `pp verify`'s `cef` check (merge
-`b5814a58`, PLA-603). A layout play needs no keys, and no IPA, dev or release, carries a CEF payload. Other
-titles never get the layout, and a dev build's `=0` key turns the layout or single-process off. Which Plays
-run the layout is amended as built (the Decision's layout bullet). Open: the phone gates, chunk 6
+Rockstar Play (`1424a0ac`; replaced by PLA-840's verified-bootstrap trigger, above), and Playport's CEF build
+removed with `pp verify`'s `cef` check (merge `b5814a58`, PLA-603). A layout play needs no keys, and no IPA,
+dev or release, carries a CEF payload. A dev build's `=0` key turns single-process off; since PLA-840 no key
+turns the layout on or off. Which Plays run the layout is amended as built (the Decision's layout bullet).
+Open: the phone gates, chunk 6
 ([PLA-605](https://linear.app/playportdev/issue/PLA-605)).
 
 ## Context
@@ -94,13 +106,14 @@ run the layout is amended as built (the Decision's layout bullet). Open: the pho
   play without the layout keeps the retry as it was.
 - **The game's own Social Club helper is not ended under the layout.** A Play under the layout does not
   send `PP_CONTROL_END_GAME_SOCIAL_CLUB` (`GameSocialClubEndPolicy`, PlayportKit;
-  `GameSocialClubEnd.enabled(config:)`).
+  `GameSocialClubEnd.enabled(socialClubLayout:)`).
   - The layout is the Play's `env.PLAYPORT_SC_LAYOUT=1` key, else the app's environment; the runtime holds
     it for such a Play or refuses the launch. *Amended as built, 2026-10-31:* the layout is every Play of
     Rockstar's launcher, its Open and RDR2's, per the plan's §2 rule "Keep these out of it" (owner's plan,
     2026-10-29: the layout applies only to a Play whose launcher is `PublisherLauncher.rockstar`). That is
     every Play that can start a verified helper in the catalog today. This record first said "every Play
-    with a verified helper".
+    with a verified helper". *Amended 2026-11-12 by 0183 (PLA-840):* a Play whose start is a verified
+    Rockstar bootstrap, as the amendment note above says; no key.
   - `endGameSocialClubAfterSignIn` and `refuseGameSocialClubRestart` stay. Without the layout they are
     unchanged: on unless turned off, both builds (0153). Under the layout the end is off when never set; a
     dev build's stored switch (`pp ui --action set:endGameSocialClubAfterSignIn=true`) still turns it on,

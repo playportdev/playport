@@ -4,9 +4,12 @@
 
 The model stands in for the Wine glue (PLA-802): it keeps the window's free ranges between the bottom of
 the guest window and FEX's band at 0x7c00000000 (the holds and furniture of each run's [va-gaps] walk
-outside them), places an ask as today (its logged address, else the lowest gap that fits), and performs
-what the module decides: whole placements, short grants with their guard, lends, growth, refusals.
-The fixtures in fixtures/elastic/ name the runs they come from."""
+outside them), places an ask as today (its logged address, else the lowest gap that fits; a WoW64
+window its first free fixed slot from madeira-unix 0146's wow64_slots.h, else the lowest gap), and
+performs what the module decides: whole placements, short grants with their guard, lends, growth,
+refusals. The fixtures in fixtures/elastic/ name the runs they come from. A fixture's `held` ranges
+are the Social Club layout's slots, held from boot; a routed ask with a `real` size takes its slot's
+real range."""
 import copy
 import ctypes
 import json
@@ -18,6 +21,8 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 PATCH = ROOT / "patches/madeira-unix/0289-ntdll-the-elastic-reservation-policy-pp_elastic.h.patch"
+WINDOW_PATCH = ROOT / "patches/madeira-unix/0049-ntdll-reserve-an-owned-i386-address-window.patch"
+SLOTS_PATCH = ROOT / "patches/madeira-unix/0146-ntdll-reserve-a-WoW64-window-in-a-fixed-slot-first.patch"
 FIXTURES = ROOT / "tools/tests/fixtures/elastic"
 
 MB = 1 << 20
@@ -26,16 +31,18 @@ GRAIN = 0x10000
 GUARD = 32 * MB
 LO, HI = 0x7000000000, 0x7C00000000   # the guest window; FEX's band above
 WINDOW = HI - LO
+CEILING = 0x73FFFF0000                 # ios_furniture_ceiling: the WoW64 window's slots count down from it
 
 TODAY, FAIL, PLACE, SHORT, LEND = range(5)
 SERVE, GROW, REFUSE = range(3)
 FLAG = {"hint": 0x1, "align": 0x2, "placeholder": 0x4, "ex": 0x8, "limit": 0x10, "commit": 0x20,
-        "held": 0x40, "layout": 0x80}
+        "held": 0x40, "layout": 0x80, "wow64": 0x100}
+WHOLE = 0x1FF                         # PPE_ASK_WHOLE: never shrunk
 
 
-def added_header():
-    text = PATCH.read_text()
-    section = text.split("diff --git a/build/ntdll-unix/pp_elastic.h", 1)[1]
+def added_file(patch, path):
+    """A file the patch creates, as it creates it."""
+    section = patch.read_text().split(f"diff --git a/{path}", 1)[1]
     section = section.split("diff --git ", 1)[0]
     return "\n".join(line[1:] for line in section.splitlines()
                      if line.startswith("+") and not line.startswith("+++")) + "\n"
@@ -43,6 +50,7 @@ def added_header():
 
 SHIM_C = r'''
 #include "pp_elastic.h"
+#include "wow64_slots.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -72,6 +80,7 @@ void s_view( struct ppe_state *s, int i, uint64_t *o )
 { o[0] = s->v[i].base; o[1] = s->v[i].real; o[2] = s->v[i].guard; o[3] = s->v[i].claim; o[4] = s->v[i].high; }
 void s_counts( struct ppe_state *s, unsigned *o )
 { o[0] = s->engaged; o[1] = s->lends; o[2] = s->shorts; o[3] = s->grows; o[4] = s->refusals; o[5] = s->shortened; }
+uint64_t s_slot( uint64_t ceiling, uint64_t floor, unsigned k ) { return ios_wow64_slot_base( ceiling, floor, k ); }
 '''
 
 LIB = None
@@ -90,7 +99,9 @@ def setUpModule():
     scratch.mkdir(parents=True, exist_ok=True)
     _tmp = tempfile.TemporaryDirectory(dir=scratch)
     d = pathlib.Path(_tmp.name)
-    (d / "pp_elastic.h").write_text(added_header())
+    (d / "pp_elastic.h").write_text(added_file(PATCH, "build/ntdll-unix/pp_elastic.h"))
+    (d / "wow64_window.h").write_text(added_file(WINDOW_PATCH, "build/ntdll-unix/wow64_window.h"))
+    (d / "wow64_slots.h").write_text(added_file(SLOTS_PATCH, "build/ntdll-unix/wow64_slots.h"))
     (d / "shim.c").write_text(SHIM_C)
     subprocess.run([cc, "-std=gnu11", "-O1", "-Wall", "-Wextra", "-Werror", "-shared", "-fPIC",
                     "-o", str(d / "libppe.so"), str(d / "shim.c")], check=True)
@@ -104,7 +115,8 @@ def setUpModule():
            "s_owner": (ctypes.c_int, [p, u64, u64]),
            "s_commit": (ctypes.c_int, [p, ctypes.c_int, u64, u64, u64, u64, p]),
            "s_grown": (None, [p, ctypes.c_int, u64]), "s_served": (None, [p, ctypes.c_int, u64, u64]),
-           "s_n": (ctypes.c_uint, [p]), "s_view": (None, [p, ctypes.c_int, p]), "s_counts": (None, [p, p])}
+           "s_n": (ctypes.c_uint, [p]), "s_view": (None, [p, ctypes.c_int, p]), "s_counts": (None, [p, p]),
+           "s_slot": (u64, [u64, u64, ctypes.c_uint])}
     for name, (res, args) in sig.items():
         fn = getattr(LIB, name)
         fn.restype, fn.argtypes = res, args
@@ -124,7 +136,7 @@ def flags_of(names):
 class Space:
     """The guest window as the glue sees it, with the module's state beside it."""
 
-    def __init__(self, free, elastic=True):
+    def __init__(self, free, elastic=True, held=()):
         self.occ = []                       # sorted [base, end, owner]
         cur = LO
         for b, e in sorted((int(b, 16), int(e, 16)) for b, e in free):
@@ -133,6 +145,11 @@ class Space:
             cur = max(cur, e)
         if cur < HI:
             self.occ.append([cur, HI, "furniture"])
+        # The Social Club layout's slots, held natively from boot: furniture a routed ask takes over.
+        for name, b, size in held:
+            b, size = int(b, 16), int(size, 16)
+            self.vacate(b, b + size)
+            self.occupy(b, size, "held:" + name)
         self.elastic = elastic
         self.st = LIB.s_new(WINDOW) if elastic else None
         self.views = {}                     # id -> dict(base, span, claim, height)
@@ -208,6 +225,16 @@ class Space:
                 return b
         return None
 
+    def window_today(self, size):
+        """A WoW64 window placed as today (ios_wow64_reserve_window): its first free fixed slot below
+        the furniture ceiling, else a first fit."""
+        k = 0
+        while base := LIB.s_slot(CEILING, LO, k):
+            if self.is_free(base, size):
+                return base
+            k += 1
+        return self.today(size, None)
+
     # -- the module
     def gap_array(self):
         g = self.gaps()
@@ -249,8 +276,12 @@ class Space:
         return base
 
     # -- the glue
-    def reserve(self, vid, size, names, at=None, routed=None, limit=0, align=0):
+    def reserve(self, vid, size, names, at=None, routed=None, limit=0, align=0, real=None):
         flags = flags_of(names)
+
+        def today():
+            return self.window_today(size) if flags & FLAG["wow64"] else self.today(size, at, limit, align)
+
         if names and "layout" in names:
             # The Social Club router decides first; the module, asked anyway, leaves it alone.
             if self.st:
@@ -260,19 +291,27 @@ class Space:
             if routed is None:
                 self.placements[vid] = None
                 return None
-            if self.is_free(routed, size):
+            span, hold = size, None
+            if real is not None:
+                # A slot's grant: its real range out of the hold, the reported extent only a claim.
+                hold = self.owner_at(routed)[1]
+                assert hold and hold.startswith("held:") and self.owner_at(routed + real - 1)[1] == hold, (vid, hold)
+                self.vacate(routed, routed + real)
+                self.occupy(routed, real, vid)
+                span = real
+            elif self.is_free(routed, size):
                 self.occupy(routed, size, vid)
-            self.views[vid] = dict(base=routed, span=size, claim=size, height=0, flags=flags)
+            self.views[vid] = dict(base=routed, span=span, claim=size, height=0, flags=flags, hold=hold)
             self.placements[vid] = routed
             return routed
         if not self.elastic:
-            b = self.today(size, at)
+            b = today()
             self.placements[vid] = b
             return None if b is None else self.map(vid, b, size, size, flags)
         kind, addr, real, keep, view = self.decide(LIB.s_before, size, flags, limit, align)
         assert kind in (TODAY, PLACE), "ppe_before lent or shortened before today's placement"
         if kind == TODAY:
-            b = self.today(size, at, limit, align)
+            b = today()
             if b is not None:
                 self.map(vid, b, size, size, flags)
                 LIB.s_placed(self.st, b, size, size, flags)
@@ -280,12 +319,12 @@ class Space:
             kind, addr, real, keep, view = self.decide(LIB.s_failed, size, flags, limit, align)
         for _ in range(4096):
             if kind == PLACE:
-                assert not flags & 0xFF, "a never-shrunk ask placed by the module"
+                assert not flags & WHOLE, "a never-shrunk ask placed by the module"
                 self.map(vid, addr, size, size, flags)
                 LIB.s_placed(self.st, addr, size, size, flags)
                 return addr
             if kind == SHORT:
-                assert not flags & 0xFF, "a never-shrunk ask shortened"
+                assert not flags & WHOLE, "a never-shrunk ask shortened"
                 assert size >= GB and real >= 64 * MB and real % GRAIN == 0
                 self.map(vid, addr, real + GUARD, size, flags)
                 LIB.s_placed(self.st, addr, size, real, flags)
@@ -298,9 +337,9 @@ class Space:
                 self.vacate(lender["base"] + keep, lender["base"] + span)
                 self.views[did]["span"] = keep
                 LIB.s_lent(self.st, view, keep)
-                if flags & 0xFF:
+                if flags & WHOLE:
                     # A never-shrunk ask retries today's placement once, then fails.
-                    b = self.today(size, at, limit, align)
+                    b = today()
                     if b is not None:
                         self.map(vid, b, size, size, flags)
                         LIB.s_placed(self.st, b, size, size, flags)
@@ -317,6 +356,9 @@ class Space:
     def release(self, vid):
         v = self.views.pop(vid)
         self.vacate(v["base"], v["base"] + v["span"])
+        if v.get("hold"):
+            # A slot's owner exits: the slot is held in place (madeira-unix 0231), never a gap.
+            self.occupy(v["base"], v["span"], v["hold"])
         if self.st:
             LIB.s_released(self.st, v["base"])
 
@@ -387,13 +429,14 @@ def load(name):
 
 
 def replay(fx, elastic=True):
-    sp = Space(fx["free"], elastic)
+    sp = Space(fx["free"], elastic, fx.get("held", ()))
     for ev in fx["events"]:
         op = ev[0]
         if op == "reserve":
             _, vid, size, names, extra = ev
-            at, routed = extra.get("at"), extra.get("routed")
-            sp.reserve(vid, int(size, 16), names, int(at, 16) if at else None, int(routed, 16) if routed else None)
+            at, routed, real = extra.get("at"), extra.get("routed"), extra.get("real")
+            sp.reserve(vid, int(size, 16), names, int(at, 16) if at else None, int(routed, 16) if routed else None,
+                       real=int(real, 16) if real else None)
         elif op == "commit":
             if sp.placements.get(ev[1]) is not None and sp.elastic:
                 sp.commit(ev[1], int(ev[2], 16))
@@ -449,11 +492,23 @@ class NoPressure(unittest.TestCase):
         for vid in ("v8_512g", "v8_64g", "v8_32g", "v8_16g", "v8_5119_a1", "v8_5119_b2"):
             self.assertIsNone(sp.placements[vid], vid)
 
+    def test_rdr2_helper_slots_are_placed_in_their_holds(self):
+        sp, fx = self.check("rdr2-helper-slots.json")
+        for who in ("a", "b"):
+            for kind, (base, _) in SLOTS.items():
+                self.assertEqual(sp.placements[f"{who}_{kind}"], base, (who, kind))
+
     def test_the_witcher_3_132_without_its_keys_places_whole(self):
         sp, fx = self.check("witcher3-132.json")
         self.assertEqual(sp.views["pool32g"]["span"], 32 * GB)
         self.assertEqual(sp.views["pool32g"]["height"], 1600 * MB)
         self.assertEqual(sp.views["pool8g"]["height"], 600 * MB)
+
+    def test_portal_2s_wow64_window_takes_its_first_fixed_slot(self):
+        sp, fx = self.check("portal2-wow64.json")
+        self.assertEqual(sp.placements["window"], 0x72BFFF0000)   # its [wow64-window] fixed slot line
+        self.assertEqual(sp.views["window"]["span"], 4 * GB)
+        self.assertEqual(LIB.s_n(sp.st), 0)                       # not the module's to track: never a lender
 
 
 class Pressure(unittest.TestCase):
@@ -526,7 +581,7 @@ class Exceptions(unittest.TestCase):
         return replay(dict(fx, events=events))
 
     def test_never_shrunk_asks_are_placed_whole_or_fail(self):
-        for name in ("hint", "align", "placeholder", "ex", "limit", "commit", "held", "layout"):
+        for name in ("hint", "align", "placeholder", "ex", "limit", "commit", "held", "layout", "wow64"):
             sp = self.full()
             sp.reserve("pool43", GB, [])                         # shortened, for contrast
             self.assertLess(sp.views["pool43"]["span"], GB)
@@ -544,6 +599,56 @@ class Exceptions(unittest.TestCase):
         self.assertIsNone(sp.reserve("huge", 2 * WINDOW + GRAIN, []))
         self.assertEqual(sp.counts()["lends"], 0)
         self.assertIsNotNone(sp.reserve("big", 2 * WINDOW, []))
+
+
+class Wow64Window(unittest.TestCase):
+    """A WoW64 process's 4 GiB window (PLA-839) is an ask of the policy: placed as today (its fixed slots,
+    then a first fit), lent room when that fails, never shrunk and never a lender."""
+
+    def test_senren_banka_on_an_unentitled_map_fails_honestly(self):
+        sp = replay(load("senren-banka-unentitled.json"))
+        self.assertIsNone(sp.placements["window"])
+        c = sp.counts()
+        # Asked once today's placement failed; no lender, nothing shortened: STATUS_NO_MEMORY as reported.
+        self.assertEqual((c["engaged"], c["lends"], c["shorts"]), (1, 0, 0))
+        # The 1,124 MB left beside FEX's arena would not hold a 2 GiB window either.
+        self.assertIsNone(sp.today(2 * GB, None))
+
+    def rdr2_then_its_dllhost(self, elastic=True):
+        # Run 20261030T122917-rdr2-p476l7: RDR2's Play started C:\windows\syswow64\dllhost.exe (line 126023),
+        # whose 4 GiB window found no gap (maxgap 0xfb810000, line 126061) and failed with 0xc0000017
+        # (lines 126074-126075). Here RDR2's own asks off the layout, then the rest of the window taken.
+        fx = load("rdr2-off-layout.json")
+        events = fx["events"] + [["fill"], ["reserve", "dllhost", "0x100000000", ["wow64"], {}]]
+        return replay(dict(fx, events=events), elastic)
+
+    def test_a_window_with_no_room_today_is_lent_room_and_placed_whole(self):
+        self.assertIsNone(self.rdr2_then_its_dllhost(elastic=False).placements["dllhost"])
+        sp = self.rdr2_then_its_dllhost()
+        game = sp.views["game8960"]
+        # The 8,960 MB pool, 2,357 MB committed, keeps twice its height and its guard (4,746 MB) and lends
+        # the rest (4,214 MB): the window's first fit, whole.
+        self.assertEqual(game["span"], 4746 * MB)
+        self.assertEqual(sp.placements["dllhost"], game["base"] + 4746 * MB)
+        self.assertEqual(sp.views["dllhost"]["span"], 4 * GB)
+        self.assertEqual(sp.landed_in_claim, [("dllhost", game["base"])])
+        c = sp.counts()
+        self.assertEqual((c["lends"], c["shorts"]), (1, 0))
+        # The pool commits to twice its height; past it, refused, never served in the window.
+        sp.commit("game8960", 4714 * MB)
+        self.assertEqual(sp.refused, {})
+        sp.commit("game8960", 4714 * MB + MB)
+        self.assertEqual(sp.refused, {"game8960": 4714 * MB})
+        self.assertEqual(sp.wrong_view, [])
+
+    def test_a_window_never_lends(self):
+        sp = self.rdr2_then_its_dllhost()
+        window = sp.placements["dllhost"]
+        self.assertNotIn(window, [v["base"] for v in sp.mviews()])
+        lends = sp.counts()["lends"]
+        self.assertIsNotNone(sp.reserve("pool", GB, []))        # fails today: someone else lends
+        self.assertGreater(sp.counts()["lends"], lends)
+        self.assertEqual(sp.views["dllhost"]["span"], 4 * GB)
 
 
 class GrowthAndRefusal(unittest.TestCase):
@@ -649,6 +754,74 @@ class ReviewFixes(unittest.TestCase):
         sp.release("b")
         sp.release("a")
         self.assertEqual(sp.counts()["shortened"], 0)
+
+
+# The verified helper's slots on the Social Club layout (pp_sc_layout.h): real base and size.
+SLOTS = {"cef": (0x7000000000, 0x10000000), "elf_meta": (0x7400000000, 0x190000000),
+         "cef_meta": (0x7590000000, 0x40000000), "elf": (0x7800000000, 0x100000000),
+         "cage": (0x7A00000000, 0x200000000)}
+
+
+class HelperSlots(unittest.TestCase):
+    """The verified helper's slot asks (PLA-840): the Social Club router places each in its slot's real
+    range, so the policy never tracks them. Under pressure that lends the game's pools, no slot is lent or
+    shortened, its growth inside the real prefix is served, and V8's ladder is refused before the policy."""
+
+    def replayed(self):
+        return replay(load("rdr2-helper-slots.json"))
+
+    def assert_slots_whole(self, sp):
+        tracked = {v["base"] for v in sp.mviews()}
+        for kind, (base, real) in SLOTS.items():
+            v = sp.views["b_" + kind]
+            self.assertEqual((v["base"], v["span"]), (base, real), kind)
+            self.assertNotIn(base, tracked, kind)
+
+    def test_a_dead_helpers_slots_are_held_in_place_for_the_next(self):
+        sp = self.replayed()
+        self.assert_slots_whole(sp)
+        self.assertEqual(sp.views["b_elf_meta"]["height"], 0xAB00000)
+        for kind, (base, _) in SLOTS.items():
+            self.assertNotIn(base, [b for b, _ in sp.gaps()], kind)
+
+    def test_pressure_lends_only_the_games_pool_and_the_slots_grow_through_their_prefix(self):
+        sp = self.replayed()
+        sp.commit("game1175", 64 * MB)
+        sp.fill()
+        self.assertIsNotNone(sp.reserve("game512", 512 * MB, []))      # fails today: the game's pool lends
+        c = sp.counts()
+        self.assertEqual((c["lends"], c["shorts"]), (1, 0))
+        self.assertLess(sp.views["game1175"]["span"], 0x49701000)
+        for kind, (_, real) in SLOTS.items():
+            sp.commit("b_" + kind, real, step=64 * MB)
+            self.assertEqual(sp.views["b_" + kind]["height"], real, kind)
+        self.assert_slots_whole(sp)
+        self.assertEqual(sp.refused, {})
+        self.assertEqual(sp.wrong_view, [])
+
+    def test_a_shortened_claim_over_a_slot_never_takes_its_growth(self):
+        sp = self.replayed()
+        base = sp.reserve("game16g", 16 * GB, [])                       # no 16 GiB gap: shortened
+        self.assertEqual(sp.counts()["shorts"], 1)
+        meta = SLOTS["elf_meta"][0]
+        self.assertTrue(base < meta < base + 16 * GB)                   # its claim runs over ELF_META's slot
+        sp.commit("b_elf_meta", SLOTS["elf_meta"][1], step=64 * MB)
+        sp.commit("game16g", 16 * GB, step=64 * MB)
+        self.assertNotIn("b_elf_meta", sp.refused)
+        self.assertIn("game16g", sp.refused)                            # refused at the next mapping, never served past it
+        self.assert_slots_whole(sp)
+        self.assertEqual(sp.wrong_view, [])
+
+    def test_v8s_ladder_is_refused_before_the_policy_could_lend(self):
+        sp = self.replayed()
+        sp.fill()
+        before = sp.counts()
+        for n in (512, 256, 128, 64, 32, 16):
+            self.assertIsNone(sp.reserve(f"ladder{n}", n * GB, ["layout"]), n)
+        self.assertEqual(sp.counts(), before)
+        # The same 16 GiB, were it not the router's, would have engaged the policy.
+        self.assertIsNotNone(sp.reserve("plain16", 16 * GB, []))
+        self.assertNotEqual(sp.counts(), before)
 
 
 if __name__ == "__main__":
