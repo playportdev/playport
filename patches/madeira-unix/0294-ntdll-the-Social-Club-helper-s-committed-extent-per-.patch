@@ -231,7 +231,7 @@ index 0000000..c5282f9
 +}
 +#endif
 diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
-index 08c733d..16e2710 100644
+index edba417..b974031 100644
 --- a/build/ntdll-unix/virtual_ios.c
 +++ b/build/ntdll-unix/virtual_ios.c
 @@ -9819,6 +9819,219 @@ static SIZE_T get_vprot_range_size( char *base, SIZE_T size, BYTE mask, BYTE *vp
@@ -488,7 +488,7 @@ index 08c733d..16e2710 100644
  }
  
  
-@@ -19976,6 +20195,7 @@ static void ios_proc_end_release_views_locked( void *peb, const struct ppe_censu
+@@ -19991,6 +20210,7 @@ static void ios_proc_end_release_views_locked( void *peb, const struct ppe_censu
      struct thread_data *data;
      unsigned int nrefs = 0, nthreads = 0, ndropped = 0;
  
