@@ -1104,13 +1104,19 @@ menu opens). Behind the menu the game is paused:
     along with the launcher's tree.
 - **The game's own Social Club end.** `PP_CONTROL_END_GAME_SOCIAL_CLUB`, 120 s or more after the
   sign-in near the limit, ends the `SocialClubHelper.exe` processes under RDR2.exe, and ntdll refuses
-  their later starts (`PLAYPORT_REFUSE_GAME_SC_RESTART`). Every Play of Rockstar's launcher, RDR2's and
-  the Open, runs Social Club on Rockstar's own CEF, single-process (on by default), in the stock-CEF
-  layout, in both builds (`PublisherLauncher.rockstar`'s `env.PLAYPORT_SC_LAYOUT=1`; decision
-  [0169](decisions/0169-social-club-on-rockstars-cef-in-the-stock-cef-layout.md)), and under the layout
-  neither runs unless a dev build's stored switch turns the end on (`GameSocialClubEndPolicy`). Only a
-  dev build's `env.PLAYPORT_SC_LAYOUT=0` brings back 0153's default: both on unless Settings › Graphics
-  turns them off (`GameSocialClubEnd.swift`; decisions 0133, 0138, 0141,
+  their later starts (`PLAYPORT_REFUSE_GAME_SC_RESTART`). Social Club runs on Rockstar's own CEF,
+  single-process (on by default), in both builds; a Play runs it in the stock-CEF layout (decision
+  [0169](decisions/0169-social-club-on-rockstars-cef-in-the-stock-cef-layout.md)) only when what it
+  starts is a Rockstar bootstrap Playport verified by hash (`SocialClubBootstrap`, decision
+  [0183](decisions/0183-no-per-game-memory-keys.md), PLA-840): a game whose install folder holds one
+  (RDR2's Steam copy: `PlayRDR2.exe` and `Redistributables/Rockstar-Games-Launcher.exe`), or the
+  launcher's Open when the `Launcher.exe` it starts is verified. No key and no launcher switches it:
+  the launch sets `PLAYPORT_SC_LAYOUT=1` from that check alone and ignores an
+  `env.PLAYPORT_SC_LAYOUT` key. The hashes are kept by path, size and modification time between Plays,
+  and a dev build logs an unverified file's hash. Under the layout neither the end nor the refusal
+  runs unless a dev build's stored switch turns the end on (`GameSocialClubEndPolicy`); without it
+  0153's default holds: both on unless Settings › Graphics turns them off (`GameSocialClubEnd.swift`;
+  decisions 0133, 0138, 0141,
   [0153](decisions/0153-rdr2s-settings-are-every-games-defaults.md)). If the game signs in again
   after the end (a new sign-in line in its Social Club log, or a GetCurrentGameLanguage burst within
   60 s) and the footprint plus 600 MB is under the limit less 400 MB, the app sends

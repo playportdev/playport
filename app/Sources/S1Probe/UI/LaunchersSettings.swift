@@ -27,6 +27,18 @@ enum LauncherOpen {
         return title_path_resolve(prefix.path, dos, &tp, &msg, msg.count) == 0 ? dos : nil
     }
 
+    /// Whether the Open holds the Social Club layout: the executable it starts, in the launcher's install
+    /// folder, is a verified Rockstar bootstrap (SocialClubLayout, decision 0183), and its log lines.
+    nonisolated static func socialClubLayout(exe dos: String, prefix: URL) -> (engaged: Bool, lines: [String]) {
+        var tp = title_path()
+        var msg = [CChar](repeating: 0, count: 512)
+        guard title_path_resolve(prefix.path, dos, &tp, &msg, msg.count) == 0 else {
+            return (false, ["the Social Club layout is off: \(dos) is not resolved"])
+        }
+        let unix = withUnsafeBytes(of: tp.unix_path) { String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) }
+        return SocialClubLayout.check(folder: URL(fileURLWithPath: unix).deletingLastPathComponent(), place: .launcher)
+    }
+
     #if !PLAYPORT_RELEASE
     /// Deletes the launcher's saved window settings file in the prefix user's profile (a dev
     /// build's Launchers row and `forget-launcher-window:ID`). Nil on success, else the failure.
@@ -85,10 +97,14 @@ enum LauncherOpen {
         }
         let fex = FEXProfile.launch(appID: nil, exe: exe, ordering: saved.ordering, maxInst: saved.maxInst,
                                     x87Reduced: saved.x87Reduced, diskCache: saved.diskCache)
+        // The Social Club layout when the Launcher.exe it starts is verified (decisions 0169, 0183).
+        let socialClub = await Task.detached(priority: .userInitiated) { socialClubLayout(exe: exe, prefix: prefix) }.value
+        for line in socialClub.lines { log("open \(l.id): " + line) }
         guard TitleLaunch.shared.start(title: l.name, titleID: l.titleID, exe: exe, args: l.arguments, config: saved.config,
                                        graphics: l.graphics, graphicsEnvironment: l.graphicsEnvironment,
                                        fex: fex, windowsServices: l.windowsServices,
-                                       jitPoolMB: l.jitPoolMB, exhaustionGrace: l.exhaustionGrace) else { return false }
+                                       jitPoolMB: l.jitPoolMB, socialClubLayout: socialClub.engaged,
+                                       exhaustionGrace: l.exhaustionGrace) else { return false }
         log("open \(l.id) on \(l.graphics.rawValue): \(exe) \(l.arguments.joined(separator: " "))")
         return true
     }

@@ -102,6 +102,10 @@ enum LaunchCoordinator {
         /// The game's own pool from its compatibility entry (LaunchSettings.jitPoolMB, decision
         /// 0108), granted when the memory limit allows; nil for the default.
         var gamePoolMB: Int? = nil
+        /// Whether the Play holds the Social Club layout: what it starts is a verified Rockstar bootstrap
+        /// (SocialClubLayout, decisions 0169, 0183). The launch sets PLAYPORT_SC_LAYOUT=1 for the runtime
+        /// from it alone, and unsets it for every other Play.
+        var socialClubLayout = false
         /// The game's sign-in through the publisher launcher the Play starts: the session root
         /// ends the launcher once it comes, or before it near the memory limit (decision 0130;
         /// LaunchSettings.endLauncherAfterSignIn); nil leaves the launcher to the title.
@@ -424,10 +428,10 @@ enum LaunchCoordinator {
         }
         // Decisions 0138, 0153, 0169: ntdll refuses RDR2's later Social Club helper starts, only
         // with the end of the game's own Social Club, which the Social Club layout leaves off.
-        let endGameSocialClub = GameSocialClubEnd.enabled(config: r.config)
+        let endGameSocialClub = GameSocialClubEnd.enabled(socialClubLayout: r.socialClubLayout)
         let refuseGameSocialClubRestart = GameSocialClubEnd.refusesRestarts(ends: endGameSocialClub)
         if r.endLauncher != nil && !endGameSocialClub {
-            log(GameSocialClubEnd.socialClubLayout(config: r.config)
+            log(r.socialClubLayout
                 ? "launcher: the game's own Social Club is not ended under the Social Club layout (decision 0169)"
                 : "launcher: the game's own Social Club is not ended (Settings)")
         }
@@ -455,12 +459,24 @@ enum LaunchCoordinator {
                 // starts, as Madeira's app did (madeira_cfg.h): ntdll reads WINEDEBUG
                 // and the like once, at its own start.
                 for key in r.config.keys.sorted() where key.hasPrefix("env.") && key.count > 4 {
+                    // The layout is what the Play starts, never a key (decision 0183): set below.
+                    if key == "env." + GameSocialClubEndPolicy.layoutVariable {
+                        log("config: \(key) ignored: the Social Club layout follows the verified Rockstar bootstrap (PLA-840)")
+                        continue
+                    }
                     setenv(String(key.dropFirst(4)), r.config[key]!, 1)
                     log("config: environment \(key.dropFirst(4))=\(r.config[key]!)")
                 }
             } catch {
                 return Outcome(kind: .refused, line: "launch=refused config=\(error)")
             }
+        }
+        // wine_host.c holds libcef's range and ntdll the layout's slots only with this (madeira-unix 0225):
+        // from what the Play starts, over the app's own environment.
+        if r.socialClubLayout {
+            setenv(GameSocialClubEndPolicy.layoutVariable, "1", 1)
+        } else {
+            unsetenv(GameSocialClubEndPolicy.layoutVariable)
         }
 
         if let s = r.steamAPI { prepareSteamAPI(s) }

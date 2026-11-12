@@ -79,7 +79,7 @@ final class TitleLaunch: ObservableObject {
                memory: MemoryNeed? = nil, epic: LaunchCoordinator.Epic? = nil, galaxy: GalaxyListener? = nil,
                guestEnvironment: [String: Secret<String>] = [:], atEnd: (@Sendable () -> Void)? = nil,
                prerequisites: [Prerequisite] = [], windowsServices: Bool = false, khronosVulkanLoader: Bool = false,
-               jitPoolMB: Int? = nil,
+               jitPoolMB: Int? = nil, socialClubLayout: Bool = false,
                endLauncher: GameSignIn? = nil,
                epicOffline: Bool = false, exhaustionGrace: TimeInterval = JitPool.exhaustionGrace,
                uncoverWithoutFrame: TimeInterval = LaunchProgress.uncoverWithoutFrame) -> Bool {
@@ -120,7 +120,8 @@ final class TitleLaunch: ObservableObject {
                                                 guestEnvironment: guestEnvironment, atEnd: atEnd,
                                                 prerequisites: prerequisites, windowsServices: windowsServices,
                                                 khronosVulkanLoader: khronosVulkanLoader,
-                                                gamePoolMB: jitPoolMB, endLauncher: endLauncher, exhaustionGrace: exhaustionGrace,
+                                                gamePoolMB: jitPoolMB, socialClubLayout: socialClubLayout,
+                                                endLauncher: endLauncher, exhaustionGrace: exhaustionGrace,
                                                 restartAfterPrerequisites: restartAfterPrerequisites,
                                                 quitting: { DispatchQueue.main.sync { MainActor.assumeIsolated { TitleLaunch.shared.quitting } } })
         Thread.detachNewThread {
