@@ -500,7 +500,9 @@ cannot be placed whole gets a short grant with the same guard and is told it got
 commit reaching a guard or a claim grows the view in place while the space above is free, else
 returns `STATUS_NO_MEMORY`; it is never served in another view. `VirtualQuery` reports the real view.
 Hinted, aligned, placeholder, limited, commit-at-reserve and hold-served asks, and every ask the
-Social Club layout's router sees, are never shortened. One log tag, `[elastic]`, covers place, grant,
+Social Club layout's router sees, are never shortened. A WoW64 process's 4 GiB window is such an ask
+(madeira-unix 0292): placed as before, at its fixed slots then a first fit, and when both fail a
+lender's freed range that holds it whole is given back and the window placed again; it never lends. One log tag, `[elastic]`, covers place, grant,
 lend, grow, refuse and a query inside a shortened view's claim, in both variants.
 
 Two holds keep address space for a title's large reservations from boot, both set by its

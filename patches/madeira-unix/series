@@ -257,3 +257,4 @@
 0288-win32u-the-guest-windows-get-each-surface-s-shape-a-.patch
 0289-ntdll-the-elastic-reservation-policy-pp_elastic.h.patch
 0290-virtual-elastic-reservations-replace-short-reserve-m.patch
+0292-ntdll-a-WoW64-window-is-an-ask-of-the-elastic-policy.patch

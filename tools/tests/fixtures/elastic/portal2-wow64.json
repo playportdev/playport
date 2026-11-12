@@ -1,0 +1,8 @@
+{
+  "title": "Portal 2 (620), i386 and large-address-aware: its WoW64 window",
+  "sources": ["phone run pla802-portal2 (dev IPA c6bdd627 with the elastic reservations, 2026-11-02, increased-memory-limit yes): the [va-gaps] walk at JIT pool init, Machine=0x14c chars=0x122, [wow64-window] fixed slot 0x72bfff0000, no [elastic] line"],
+  "free": [["0x70731b4000", "0x73fede0000"], ["0x73ffff0000", "0x7c00000000"]],
+  "events": [
+    ["reserve", "window", "0x100000000", ["wow64"], {}]
+  ]
+}

@@ -1,0 +1,126 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 12 Nov 2026 19:05:08 +0100
+Subject: [PATCH] ntdll: a WoW64 window is an ask of the elastic policy
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A 32-bit process's 4 GiB window was placed only by today's two steps,
+its fixed slots (madeira-unix 0146) and a first fit (0049). When both
+failed for room, virtual_map_main_module returned 0xc0000017, though a
+large reservation with untouched room could have given some back.
+
+ios_wow64_reserve_window now asks pp_elastic.h about the window when
+both steps fail, as an ask of class PPE_ASK_WOW64 (madeira-unix 0289).
+A lender whose freed range holds the window whole gives that range
+back, with 0290's lend and its [elastic] lend line, and the slots and
+the first fit run once more ("in room the elastic policy lent").
+Otherwise the window fails as before, logged "[wow64-window] the
+elastic policy lent it no room".
+
+The window is never shrunk: it is 4 GiB whatever the image, since FEX
+zero-extends a 32-bit guest pointer over all of it, and
+large-address-aware only bounds allocations inside it. It is never
+tracked, so it never lends: every page of it is a guest address, and
+its commits go to the window's own allocator, never through the
+policy, which could not know its committed height.
+
+On an install without the increased-memory-limit entitlement the map
+ends at 0x7180000000 and FEX's 4 GiB arena takes most of the guest
+window (PLA-326): no lender exists at window time, and the window
+still fails (PLA-849).
+
+tools/tests/test_elastic_reserve.py replays the rule: Portal 2's window
+at its first fixed slot as today, RDR2's syswow64 dllhost.exe window in
+a full window placed in the room its 8,960 MB pool lends, and
+Senren＊Banka's small map failing with nothing lent or shortened.
+
+Linear: PLA-839
+Class: feature
+Evidence: tools/tests/test_elastic_reserve.py (Wow64Window; host checks; phone gates not run)
+Offered-upstream: no; the address-space layout is the iOS port's
+---
+ build/ntdll-unix/virtual_ios.c | 46 ++++++++++++++++++++++++++++------
+ 1 file changed, 38 insertions(+), 8 deletions(-)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index a9f0e4d..e6f68eb 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -18712,6 +18712,8 @@ static int ios_wow64_try_slot( uintptr_t base, void *ctx )
+     return 1;
+ }
+ 
++static int ios_elastic_window_lend( void );
++
+ static NTSTATUS ios_wow64_reserve_window( void *owner )
+ {
+     unsigned int i, slot = IOS_WOW64_WINDOWS_MAX;
+@@ -18719,6 +18721,7 @@ static NTSTATUS ios_wow64_reserve_window( void *owner )
+     sigset_t sigset;
+     struct file_view *view;
+     uintptr_t fixed;
++    int lent;
+ 
+     if (!owner) return STATUS_NOT_SUPPORTED; /* no process identity, no shared fallback */
+     ios_wow64_reap_threads( NULL );  /* a dead owner's last threads release its window */
+@@ -18731,16 +18734,28 @@ static NTSTATUS ios_wow64_reserve_window( void *owner )
+     if (slot == IOS_WOW64_WINDOWS_MAX) goto done;
+ 
+     server_enter_uninterrupted_section( &virtual_mutex, &sigset );
+-    if ((fixed = ios_wow64_reserve_slot( ios_furniture_ceiling, ios_usable_va_floor,
+-                                         ios_wow64_try_slot, &view )))
+-    {
+-        status = STATUS_SUCCESS;
+-        dprintf( 2, "[wow64-window] fixed slot %#llx\n", (unsigned long long)fixed );
+-    }
+-    else
++    /* Placed as today, its fixed slots then a first fit; when that fails the
++     * window is an ask of the elastic policy (PLA-839), and today's placement
++     * runs once more in the room a lender gave back. */
++    for (lent = 0;;)
+     {
++        if ((fixed = ios_wow64_reserve_slot( ios_furniture_ceiling, ios_usable_va_floor,
++                                             ios_wow64_try_slot, &view )))
++        {
++            status = STATUS_SUCCESS;
++            dprintf( 2, "[wow64-window] fixed slot %#llx%s\n", (unsigned long long)fixed,
++                     lent ? " in room the elastic policy lent" : "" );
++            break;
++        }
+         status = map_view( &view, NULL, IOS_WOW64_WINDOW_SIZE, 0, 0, 0, 0, 0 );
+-        dprintf( 2, "[wow64-window] no fixed slot free: first fit %s\n", status ? "failed" : "placed" );
++        dprintf( 2, "[wow64-window] no fixed slot free: first fit %s%s\n", status ? "failed" : "placed",
++                 lent ? " in room the elastic policy lent" : "" );
++        if (!status || lent) break;
++        if (!(lent = ios_elastic_window_lend()))
++        {
++            dprintf( 2, "[wow64-window] the elastic policy lent it no room\n" );
++            break;
++        }
+     }
+     if (!status && !ios_wow64_valid_base( (uintptr_t)view->base ))
+     {
+@@ -21975,6 +21990,21 @@ static NTSTATUS ios_elastic_failed( void **ret, SIZE_T *size_ptr, ULONG type, UL
+     return status;
+ }
+ 
++/* A WoW64 process's 4 GiB window failed today's placement, its fixed slots
++ * and a first fit (ios_wow64_reserve_window, virtual_mutex held): asked of
++ * pp_elastic.h as PPE_ASK_WOW64, never shrunk and never tracked. Returns 1
++ * when a lender gave back room that holds the window whole: today's
++ * placement runs once more there. */
++static int ios_elastic_window_lend( void )
++{
++    const struct ppe_ask ask = { IOS_WOW64_WINDOW_SIZE, PPE_ASK_WOW64, 0, 0 };
++    struct ppe_decision d;
++
++    ios_ppe.window = IOS_PPE_TOP - ios_usable_va_floor;
++    d = ppe_failed( &ios_ppe, &ask, ios_ppe_gaps, ios_ppe_gaps_read( ppe_gap_min( ask.size ) ) );
++    return d.kind == PPE_LEND && ios_ppe_lend( d.view, d.keep, ask.size );
++}
++
+ /* After today's placement of an ask: track it, or hand a failure for room to
+  * pp_elastic.h. Any other ask and status is returned as is. */
+ static NTSTATUS ios_elastic_after( NTSTATUS status, void **ret, SIZE_T *size_ptr, void *hint, ULONG type,
