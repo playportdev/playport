@@ -8,6 +8,11 @@
 `short-reserve-mb=6144`: elastic reservations replace madeira-unix 0222's short-reserve path and
 place The Witcher 3's 64 and 32 GiB asks without a key. It keeps FEX's PAUSE (YIELD).
 
+**Amended 2026-11-12 by [0183](0183-no-per-game-memory-keys.md):** no memory key comes back to
+`app-292030`'s row or to The Witcher 3 1.32's cohort entry, whose `jumbo-mb=32768 cage-hold=1` go
+([PLA-838](https://linear.app/playportdev/issue/PLA-838)); both versions play under the general
+rules. FEX's PAUSE (YIELD) is not a memory key and is unchanged.
+
 ## Context
 
 - **What 0162 measured.** 0162 made `env.MADEIRA_FEX_PAUSE=wfe` (`patches/fex` 0083) The Witcher 3's default

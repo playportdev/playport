@@ -19,6 +19,16 @@ madeira-unix 0222's short-reserve path
 ([evidence](../evidence/2026-10-27-witcher3-short-reserve.md)).
 [Evidence](../evidence/2026-11-02-elastic-reservations.md).
 
+**Amended 2026-11-12 by [0183](0183-no-per-game-memory-keys.md):** no title keeps a memory key.
+The Witcher 3 1.32's cohort keys go with natural alignment for very large reservations
+([PLA-838](https://linear.app/playportdev/issue/PLA-838)), not after a phone run without any rule
+(the third bullet of "Keys removed"). "Mechanisms kept" is superseded: the jumbo hold, the cage
+hold and the short-reserve path are deleted with their keys
+([PLA-843](https://linear.app/playportdev/issue/PLA-843)), and the Social Club layout engages for a
+Play whose installed copy contains a verified helper, not for Rockstar's launcher
+([PLA-840](https://linear.app/playportdev/issue/PLA-840)). A refused commit is not answered with a
+hold key per title.
+
 ## Context
 
 - **The guest's address space is small.** Windows gives a 64-bit process 128 TB of user address

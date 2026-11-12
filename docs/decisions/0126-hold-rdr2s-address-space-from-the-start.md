@@ -9,6 +9,11 @@ sets `jumbo-mb=8960`. Shipped Plays use the Social Club layout, which places the
 ignores the key, and in six off-layout runs the 8,960 MB reservation was placed outside the hold;
 elastic reservations make room when a placement fails. The jumbo-hold mechanism stays.
 
+**Amended 2026-11-12 by [0183](0183-no-per-game-memory-keys.md):** RDR2's `jumbo-mb` cannot come
+back: no title carries an address-space key, and the jumbo hold is deleted with its key
+([PLA-843](https://linear.app/playportdev/issue/PLA-843)). The Social Club layout's 8,960 MiB game
+hold goes too ([PLA-842](https://linear.app/playportdev/issue/PLA-842)).
+
 ## Context
 
 - **The reservation.** RDR2.exe reserves 8,960 MB of address space in one piece

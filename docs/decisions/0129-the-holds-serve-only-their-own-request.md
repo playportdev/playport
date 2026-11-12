@@ -10,6 +10,13 @@ Witcher 3 1.32's cohort entry loses `jumbo-mb=32768 cage-hold=1` only once a pho
 reaches Kaer Morhen with its 32 GB ask placed whole, or short with at least 4 GB usable, and no
 refused commit; until then it keeps them. The jumbo-hold and cage-hold mechanisms stay.
 
+**Amended 2026-11-12 by [0183](0183-no-per-game-memory-keys.md):** The Witcher 3 1.32's cohort
+entry loses `jumbo-mb=32768 cage-hold=1` when natural alignment for very large reservations plays
+it ([PLA-837](https://linear.app/playportdev/issue/PLA-837),
+[PLA-838](https://linear.app/playportdev/issue/PLA-838)), not after a run without any rule. The
+jumbo-hold and cage-hold mechanisms are deleted with their keys
+([PLA-843](https://linear.app/playportdev/issue/PLA-843)).
+
 ## Context
 
 In run `20261019T173829` ([evidence](../evidence/2026-10-19-rdr2-whole-launcher-end.md)), two

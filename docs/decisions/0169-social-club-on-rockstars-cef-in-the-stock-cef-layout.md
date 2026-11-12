@@ -13,6 +13,15 @@ a launcher helper's slot view is [0166](0166-detach-a-parked-threads-wait-then-u
 [evidence](../evidence/2026-10-29-sc-stock-cef-probe.md),
 [l19](../evidence/2026-10-30-rdr2-kk-audio-diagnostics.md).
 
+**Amended 2026-11-12 by [0183](0183-no-per-game-memory-keys.md):** the layout engages when the Play's
+installed copy contains a verified `SocialClubHelper.exe`, as this record first said, not for every Play
+of Rockstar's launcher: `PublisherLauncher.rockstar`'s `env.PLAYPORT_SC_LAYOUT=1` goes
+([PLA-840](https://linear.app/playportdev/issue/PLA-840)), and any other Play holds no Social Club
+range. The layout shrinks to the anchors its window forces, the rest claimed at the helper's first
+ask; ELF_META2 and the 8,960 MiB game hold go ([PLA-841](https://linear.app/playportdev/issue/PLA-841),
+[PLA-842](https://linear.app/playportdev/issue/PLA-842)). The low hold at exec stays in every Play, and
+0236's refusal runs before the elastic policy. Until PLA-840 lands, the layout is Rockstar's launcher's.
+
 **What is built and what is open.** Built: the layout (madeira-unix 0224–0231), the low hold (PLA-480),
 ELF_META2 (0228), the probe refusal (0236), the code-range placement (0243), the game-helper end's default
 under the layout (`GameSocialClubEndPolicy`) and the plan's chunk 4 (2026-10-31): single-process on by default
