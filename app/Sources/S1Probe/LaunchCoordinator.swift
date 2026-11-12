@@ -439,13 +439,9 @@ enum LaunchCoordinator {
                 log("config: MADEIRA_DOCS_DIR=\(dir.path) with " + r.config.keys.sorted().map { "\($0) = \(r.config[$0]!)" }.joined(separator: ", "))
                 // The file's `env.NAME = value` keys are exported before the runtime
                 // starts, as Madeira's app did (madeira_cfg.h): ntdll reads WINEDEBUG
-                // and the like once, at its own start.
+                // and the like once, at its own start. TitleConfig refused a layout key
+                // (decision 0183): the layout is set below, from what the Play starts.
                 for key in r.config.keys.sorted() where key.hasPrefix("env.") && key.count > 4 {
-                    // The layout is what the Play starts, never a key (decision 0183): set below.
-                    if key == "env." + SocialClubBootstrap.layoutVariable {
-                        log("config: \(key) ignored: the Social Club layout follows the verified Rockstar bootstrap (PLA-840)")
-                        continue
-                    }
                     setenv(String(key.dropFirst(4)), r.config[key]!, 1)
                     log("config: environment \(key.dropFirst(4))=\(r.config[key]!)")
                 }
@@ -553,7 +549,7 @@ enum LaunchCoordinator {
         // DXVK would report Metal's whole working set as video memory, and KosmicKrisp report it as
         // its heap and budget most of the limit: all take the plan's one figure instead, in every
         // game (MemoryPlan.dxvkOption and vulkanEnvironment; decisions 0106, 0183;
-        // `vulkan-vram-plan = 0` turns it off).
+        // the shared madeira.cfg's `vulkan-vram-plan = 0` turns it off).
         if r.graphics == .vulkan, let p = plan, let option = p.dxvkOption {
             backend["DXVK_CONFIG"] = backend["DXVK_CONFIG"].map { $0 + ";" + option } ?? option
             backend.merge(p.vulkanEnvironment) { _, planned in planned }

@@ -18,8 +18,8 @@ final class MemoryPlanTests: XCTestCase {
     func testPerTier() {
         // (RAM, L, tier, G, Auto pool, V)
         let table: [(Int, Int, Int, Int, Int, Int)] = [
-            (11734, 8191, 12, 8192, 4096, 3072),  // 12 GB with Game Mode: L read as 8,191
-            (16 * 1024, 8192, 12, 8192, 4096, 3072),  // more than 12 GB: the 12 GB row
+            (11734, 8191, 12, 8192, 4096, 2304),  // 12 GB with Game Mode: L read as 8,191
+            (16 * 1024, 8192, 12, 8192, 4096, 2304),  // more than 12 GB: the 12 GB row
             (7679, 6144, 8, 6144, 1024, 2048),
             (7679, 6046, 8, 6144, 1024, 2048),  // 8 GB at the public figure: the owner's row in full
             (5734, 3064, 6, 3072, 0, 1024),   // 6 GB unentitled (public figure): L within the slack
@@ -45,11 +45,15 @@ final class MemoryPlanTests: XCTestCase {
         }
     }
 
-    /// The table's V is the rule a clamped G follows: 3/8 of G rounded down to 512, at least 768.
-    func testTableVideoFollowsTheRule() {
+    /// The table's V is the rule a clamped G follows, 3/8 of G rounded down to 512, at least 768,
+    /// and never over the 2,304 MiB RDR2 was proven on: run l11 was killed on Story's first load at
+    /// 3,072 (decision 0142's amendment), and when RDR2 needs less than the plan's figure, the
+    /// figure drops for every game (PLA-845). So the 12 GB row's V is 2,304.
+    func testTableVideoFollowsTheRuleUnderRDR2sFigure() {
         for t in MemoryPlan.Tier.table {
-            XCTAssertEqual(MemoryPlan.videoMB(guestRAMMB: t.guestRAMMB), t.videoMB, "\(t.ramGB) GB")
+            XCTAssertEqual(min(MemoryPlan.videoMB(guestRAMMB: t.guestRAMMB), 2304), t.videoMB, "\(t.ramGB) GB")
         }
+        XCTAssertEqual(MemoryPlan.Tier.table.first { $0.ramGB == 12 }?.videoMB, 2304)
     }
 
     /// A limit more than 512 MiB under the tier's G: G is L rounded down to a GiB (after 64 MiB
@@ -75,7 +79,7 @@ final class MemoryPlanTests: XCTestCase {
         XCTAssertEqual(plan(8192 - 512).guestRAMMB, 8192)
         XCTAssertTrue(plan(8192 - 513).clamped)
         XCTAssertEqual(plan(8192 - 513).guestRAMMB, 7168)
-        XCTAssertEqual(plan(8192 - 513).videoMB, 2560)
+        XCTAssertEqual(plan(8192 - 513).videoMB, 2304)   // the rule's 2,560, under the row's
         XCTAssertFalse(plan(6144 - 512, ram: 7679).clamped)
         XCTAssertEqual(plan(6144 - 513, ram: 7679).guestRAMMB, 5120)
         XCTAssertEqual(plan(6144 - 513, ram: 7679).videoMB, 1536)
@@ -87,7 +91,7 @@ final class MemoryPlanTests: XCTestCase {
     /// A pool no longer raises the guest's RAM: G is the tier's whatever was granted.
     func testPoolDoesNotRaiseGuestRAM() {
         XCTAssertEqual(plan(8191, pool: 4096).guestRAMMB, 8192)
-        XCTAssertEqual(plan(8191, pool: 4096).videoMB, 3072)
+        XCTAssertEqual(plan(8191, pool: 4096).videoMB, 2304)
         XCTAssertEqual(plan(6144, pool: 4096).guestRAMMB, 6144)
         XCTAssertEqual(plan(6144, ram: 7679, pool: 1024).guestRAMMB, 6144)
     }
@@ -98,10 +102,10 @@ final class MemoryPlanTests: XCTestCase {
         XCTAssertEqual(p.guestRAMMB, 9216)
         XCTAssertEqual(p.videoMB, 1536)
         XCTAssertEqual(p.plannedGuestRAMMB, 8192)
-        XCTAssertEqual(p.plannedVideoMB, 3072)
+        XCTAssertEqual(p.plannedVideoMB, 2304)
         XCTAssertEqual(p.environment, [:])  // the runtime reads the title's own keys
         XCTAssertEqual(plan(8191, MemoryPlan.Overrides(videoMB: 2048)).environment, ["MADEIRA_TOTAL_PHYS_MB": "8192"])
-        XCTAssertEqual(plan(8191, MemoryPlan.Overrides(guestRAMMB: 4096)).environment, ["PLAYPORT_VRAM_MB": "3072"])
+        XCTAssertEqual(plan(8191, MemoryPlan.Overrides(guestRAMMB: 4096)).environment, ["PLAYPORT_VRAM_MB": "2304"])
         XCTAssertTrue(p.logLine.contains("override=totalphys=9216,vram-mb=1536"), p.logLine)
         // An override wins over a clamped plan too.
         let c = plan(6144, MemoryPlan.Overrides(videoMB: 3072))
@@ -126,8 +130,8 @@ final class MemoryPlanTests: XCTestCase {
     }
 
     func testVulkanClampIsOnByDefault() {
-        XCTAssertEqual(plan(8192).dxvkOption, "dxgi.maxDeviceMemory = 3072")
-        XCTAssertEqual(plan(8192).vulkanEnvironment, ["PLAYPORT_VK_BUDGET_MB": "3072", "PLAYPORT_VK_HEAP_MB": "3072"])
+        XCTAssertEqual(plan(8192).dxvkOption, "dxgi.maxDeviceMemory = 2304")
+        XCTAssertEqual(plan(8192).vulkanEnvironment, ["PLAYPORT_VK_BUDGET_MB": "2304", "PLAYPORT_VK_HEAP_MB": "2304"])
         // The tier's V, and a clamped plan's.
         XCTAssertEqual(plan(6046, ram: 7679).dxvkOption, "dxgi.maxDeviceMemory = 2048")
         XCTAssertEqual(plan(6144).vulkanEnvironment, ["PLAYPORT_VK_BUDGET_MB": "2048", "PLAYPORT_VK_HEAP_MB": "2048"])
@@ -147,7 +151,7 @@ final class MemoryPlanTests: XCTestCase {
     /// PLAYPORT_VRAM_MB, DXVK's DXGI report, KosmicKrisp's budget and the size of its heap 0.
     func testOneVideoFigurePerRowIsReportedAndIsTheHeap() {
         // (RAM, L, V)
-        for (ram, limit, video) in [(11734, 8191, "3072"), (7679, 6046, "2048"), (5734, 3064, "1024"), (3662, 2090, "768")] {
+        for (ram, limit, video) in [(11734, 8191, "2304"), (7679, 6046, "2048"), (5734, 3064, "1024"), (3662, 2090, "768")] {
             let p = plan(limit, ram: ram)
             XCTAssertEqual(p.environment["PLAYPORT_VRAM_MB"], video, "RAM \(ram)")
             XCTAssertEqual(p.dxvkOption, "dxgi.maxDeviceMemory = \(video)", "RAM \(ram)")
@@ -163,9 +167,9 @@ final class MemoryPlanTests: XCTestCase {
 
     func testLogLine() {
         XCTAssertEqual(plan(8191, pool: 4096).logLine,
-                       "tier=12GB ram_mb=11734 tier_guest_ram_mb=8192 tier_video_mb=3072 tier_pool_mb=4096 L_mb=8191 "
-                       + "clamp=none planned_guest_ram_mb=8192 planned_video_mb=3072 pool_mb=4096 "
-                       + "guest_ram_mb=8192 video_mb=3072 override=none vulkan_clamp=1")
+                       "tier=12GB ram_mb=11734 tier_guest_ram_mb=8192 tier_video_mb=2304 tier_pool_mb=4096 L_mb=8191 "
+                       + "clamp=none planned_guest_ram_mb=8192 planned_video_mb=2304 pool_mb=4096 "
+                       + "guest_ram_mb=8192 video_mb=2304 override=none vulkan_clamp=1")
     }
 
     func testMadeiraConfigReadsAsTheRuntime() throws {

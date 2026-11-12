@@ -139,29 +139,38 @@ final class TitleConfigTests: XCTestCase {
         XCTAssertThrowsError(try LaunchPlan.make(installDir: "G", executable: "g.exe", arguments: [], config: ["=": "1"]))
     }
 
-    /// A title's video memory figure is no key (decision 0183): every game takes its memory plan
-    /// row's (MemoryPlan), so no cohort entry, compatibility entry, launcher, everyGame default,
-    /// dev Runtime keys row or driven launch can set `vram-mb` or the Vulkan heap again.
-    func testTheDeletedVideoMemoryKeysAreRefused() {
-        for key in ["vram-mb", "env.PLAYPORT_VK_HEAP_MB"] {
-            XCTAssertThrowsError(try TitleConfig.validate([key: "2304"]), key) {
+    /// No title sets the memory plan's figures or the Social Club layout (decision 0183): every game
+    /// takes its memory plan row's guest RAM and video figure (MemoryPlan), and the layout follows the
+    /// verified Rockstar bootstrap (SocialClubBootstrap). So no cohort entry, compatibility entry,
+    /// launcher, everyGame default, dev Runtime keys row or driven launch can set the plan's
+    /// madeira.cfg keys, its variables or PLAYPORT_SC_LAYOUT.
+    func testThePlansKeysAndTheLayoutVariableAreRefused() {
+        let keys = ["totalphys", "vram-mb", "vulkan-vram-plan", "env.MADEIRA_TOTAL_PHYS_MB", "env.PLAYPORT_VRAM_MB",
+                    "env.PLAYPORT_VK_HEAP_MB", "env.PLAYPORT_VK_BUDGET_MB", "env.PLAYPORT_SC_LAYOUT"]
+        XCTAssertEqual(TitleConfig.refusedKeys, Set(keys))
+        for key in keys {
+            XCTAssertThrowsError(try TitleConfig.validate([key: "0"]), key) {
                 XCTAssertEqual($0 as? LaunchPlanError, .refusedKey(key))
             }
-            XCTAssertThrowsError(try LaunchPlan.make(installDir: "G", executable: "g.exe", arguments: [], config: [key: "2304"]), key)
-            XCTAssertNil(TitleConfig.parse("\(key)=2304"), key)
-            XCTAssertNil(LaunchSettings.runtimeKeys("inproc-sync=1 \(key)=2304"), key)
-            XCTAssertEqual(LaunchSettings.unusedRuntimeKeysNote("inproc-sync=1 \(key)=2304"),
+            XCTAssertThrowsError(try LaunchPlan.make(installDir: "G", executable: "g.exe", arguments: [], config: [key: "0"]), key)
+            XCTAssertNil(TitleConfig.parse("\(key)=0"), key)
+            XCTAssertNil(LaunchSettings.runtimeKeys("inproc-sync=1 \(key)=0"), key)
+            XCTAssertEqual(LaunchSettings.unusedRuntimeKeysNote("inproc-sync=1 \(key)=0"),
                            "\(key) is not a game's own key (no per-game memory keys): not used")
             XCTAssertThrowsError(try CompatDefaults.parse(Data(#"""
-                {"titles": {"app-1": {"settings": {"runtime": "\#(key)=2304"}, "reason": "A reason."}}}
+                {"titles": {"app-1": {"settings": {"runtime": "\#(key)=0"}, "reason": "A reason."}}}
                 """#.utf8)), key) { XCTAssertEqual($0 as? CompatDefaultsError, .badSetting("app-1.runtime")) }
         }
+        // Of two refused keys the note names the first by name; an item that is not key=value wins.
+        XCTAssertEqual(LaunchSettings.unusedRuntimeKeysNote("vram-mb=1 totalphys=1"),
+                       "totalphys is not a game's own key (no per-game memory keys): not used")
+        XCTAssertEqual(LaunchSettings.unusedRuntimeKeysNote("vram-mb=1 inproc-sync"), "Not key=value items: not used")
         XCTAssertEqual(LaunchSettings.unusedRuntimeKeysNote("inproc-sync"), "Not key=value items: not used")
         XCTAssertNil(LaunchSettings.unusedRuntimeKeysNote("inproc-sync=1"))
         XCTAssertNil(LaunchSettings.unusedRuntimeKeysNote(""))
-        // Neither is refused in another key's value or name.
-        XCTAssertEqual(LaunchSettings.runtimeKeys("vram-mbx=1 env.PLAYPORT_VK_HEAP_MB_X=1"),
-                       ["vram-mbx": "1", "env.PLAYPORT_VK_HEAP_MB_X": "1"])
+        // None is refused in another key's value or name.
+        XCTAssertEqual(LaunchSettings.runtimeKeys("vram-mbx=1 env.PLAYPORT_VK_HEAP_MB_X=1 inproc-sync=vram-mb"),
+                       ["vram-mbx": "1", "env.PLAYPORT_VK_HEAP_MB_X": "1", "inproc-sync": "vram-mb"])
     }
 }
 

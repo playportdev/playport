@@ -72,26 +72,36 @@ final class CompatDefaultsTests: XCTestCase {
         XCTAssertEqual(LaunchSettings.overEveryGame(LaunchSettings(endLauncherAfterSignIn: false)).endLauncherAfterSignIn, false)
     }
 
-    /// No compatibility entry, launcher or everyGame default sets a video memory or heap figure
-    /// (decision 0183): every game, RDR2 too, is told its memory plan row's (MemoryPlan), the same
-    /// figure for the reported video memory and the Vulkan heap.
-    func testNoEntryOverridesThePlansVideoFigure() throws {
+    /// No shipped entry (a compatibility entry, a cohort entry's `config`, a launcher or the everyGame
+    /// default) carries a key the configuration check refuses (TitleConfig.refusedKeys, decision 0183):
+    /// every game, RDR2 too, is told its memory plan row's guest RAM and its one video figure
+    /// (MemoryPlan), the same for the reported video memory and the Vulkan heap and budget. Nor does
+    /// one pin an address: PLAYPORT_VA_PINS is a dev build's Runtime keys row's alone (PLA-837).
+    func testNoShippedEntryOverridesThePlanOrPinsAnAddress() throws {
         let table = try CompatDefaults.load(directory: Self.shipped)
-        var configs = ["everyGame": LaunchSettings.resolve(game: LaunchSettings.overEveryGame(nil), global: LaunchSettings())
-            .config(over: [:])]
-        for (id, entry) in table.entries {
-            configs[id] = LaunchSettings.resolve(game: LaunchSettings.overEveryGame(entry.settings), global: LaunchSettings())
-                .config(over: [:])
+        func config(_ compat: LaunchSettings?, over base: [String: String] = [:]) -> [String: String] {
+            LaunchSettings.resolve(game: LaunchSettings.overEveryGame(compat), global: LaunchSettings()).config(over: base)
+        }
+        var configs = ["everyGame": config(nil)]
+        for (id, entry) in table.entries { configs[id] = config(entry.settings) }
+        for title in try Cohort.load(directory: Self.shipped).titles {
+            configs["cohort \(title.name)"] = config(table.entry(for: "app-\(title.appID)")?.settings, over: title.config ?? [:])
         }
         for launcher in PublisherLauncher.all { configs[launcher.name] = launcher.openSettings(saved: nil).config }
         XCTAssertNotNil(configs["app-1174180"])
+        XCTAssertNotNil(configs["cohort The Witcher 3: Wild Hunt"])
         for (id, config) in configs {
-            XCTAssertNil(config["vram-mb"], id)
-            XCTAssertNil(config["env.PLAYPORT_VK_HEAP_MB"], id)
-            let overrides = MemoryPlan.Overrides.read(value: { config[$0] }, environment: [:])
+            XCTAssertNoThrow(try TitleConfig.validate(config), id)
+            XCTAssertNil(config["env.PLAYPORT_VA_PINS"], id)
+            // As a launch reads them: madeira.cfg's keys, and the `env.` keys it exports.
+            let environment = Dictionary(uniqueKeysWithValues: config.compactMap { k, v in
+                k.hasPrefix("env.") ? (String(k.dropFirst(4)), v) : nil
+            })
+            let overrides = MemoryPlan.Overrides.read(value: { config[$0] }, environment: environment)
             let plan = MemoryPlan(MemoryPlan.Inputs(limitMB: 6046, physicalMB: 7679), overrides: overrides)
-            XCTAssertEqual(plan.environment["PLAYPORT_VRAM_MB"], "2048", id)   // the 8 GB row's V
-            XCTAssertEqual(plan.vulkanEnvironment["PLAYPORT_VK_HEAP_MB"], "2048", id)
+            // The 8 GB row's G and V.
+            XCTAssertEqual(plan.environment, ["MADEIRA_TOTAL_PHYS_MB": "6144", "PLAYPORT_VRAM_MB": "2048"], id)
+            XCTAssertEqual(plan.vulkanEnvironment, ["PLAYPORT_VK_BUDGET_MB": "2048", "PLAYPORT_VK_HEAP_MB": "2048"], id)
         }
     }
 

@@ -11,8 +11,14 @@ default. [PLA-355](https://linear.app/playportdev/issue/PLA-355),
 plan's formulas ([evidence](../evidence/2026-10-14-memory-plan.md)) and Auto's sizing from the
 headroom ([evidence](../evidence/2026-10-15-donor-pool-auto-headroom.md)).
 **Amended 2026-11-12 by [0183](0183-no-per-game-memory-keys.md)** ([PLA-845](https://linear.app/playportdev/issue/PLA-845)): no
-title has its own `vram-mb`; the row's V is every game's video figure and Vulkan heap, and only
-the shared madeira.cfg's `vram-mb` wins over it, for every game alike.
+title has its own `totalphys`, `vram-mb` or `vulkan-vram-plan`, nor the plan's variables (the
+configuration check refuses them as a title's key); the row's V is every game's video figure and
+Vulkan heap, and only the shared madeira.cfg's keys win over the plan, for every game alike. The
+12 GB row's V is 2,304, not 3,072: RDR2's run l11 was killed on Story's first load at 3,072
+([0142](0142-rdr2-owner-test-defaults-heap-size-semaphores-and-afp.md)'s amendment) and it was proven
+on 2,304, and by 0183 the plan's figure drops for every game when RDR2 needs less. A clamped 12 GB
+plan's V is the lesser of 2,304 and 3/8 of its G. No phone has run the row at 2,304: a 12 GB phone's
+check is owed.
 [Evidence](../evidence/2026-10-15-memory-defaults.md).
 
 **Amended 2026-10-30 (owner, PLA-476):** during a play the donor pool also grows again on

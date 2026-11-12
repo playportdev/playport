@@ -13,12 +13,12 @@
 // The app passes the plan through the environment: MADEIRA_TOTAL_PHYS_MB
 // (ml992's own override), PLAYPORT_VRAM_MB (patches/dxmt 0011, after
 // madeira.cfg `vram-mb`, before ml1042's formula, which stays the fallback) and, on
-// Vulkan, PLAYPORT_VK_HEAP_MB and PLAYPORT_VK_BUDGET_MB (patches/mesa 0064, 0036). A
-// title's own `totalphys` (its cohort entry's `config`, the dev Runtime keys, the
-// shared madeira.cfg) wins over the plan. `vram-mb` is no title's (TitleConfig
-// refuses it, decision 0183): only the shared madeira.cfg, the same for every game,
-// sets it over the plan. The DXMT trim (ml1075) still shrinks the budget as the
-// footprint nears the limit.
+// Vulkan, PLAYPORT_VK_HEAP_MB and PLAYPORT_VK_BUDGET_MB (patches/mesa 0064, 0036). No
+// title sets the plan's figures (decision 0183): TitleConfig refuses `totalphys`,
+// `vram-mb`, `vulkan-vram-plan` and these variables as any title's keys. Only the
+// shared madeira.cfg, the same for every game, and the app's own environment
+// (MADEIRA_TOTAL_PHYS_MB already set) override the plan. The DXMT trim (ml1075)
+// still shrinks the budget as the footprint nears the limit.
 //
 // A dev build's donor pool (DonorPoolSizing) backs guest RAM outside L; its Auto
 // size is the tier's too. The pool no longer raises the guest's RAM: the tier's
@@ -28,7 +28,10 @@ import Foundation
 
 public struct MemoryPlan: Equatable, Sendable {
     /// The defaults per phone, by its RAM (decision 0105: the owner's 12 and 8 GB rows,
-    /// 2026-10-15; the 6 and 4 GB rows extrapolated from them and unmeasured, PLA-355).
+    /// 2026-10-15; the 6 and 4 GB rows extrapolated from them and unmeasured, PLA-355). The 12 GB
+    /// row's V is RDR2's proven 2,304, not 0105's 3,072, at which RDR2's run l11 was killed on
+    /// Story's first load (decision 0142's amendment): when RDR2 needs less than the plan's figure,
+    /// the figure drops for every game (decision 0183, PLA-845). No phone has run the row since.
     public struct Tier: Equatable, Sendable {
         /// The phone's marketed RAM, GB.
         public var ramGB: Int
@@ -43,7 +46,7 @@ public struct MemoryPlan: Equatable, Sendable {
         public var videoMB: Int
 
         public static let table: [Tier] = [
-            Tier(ramGB: 12, fromMB: 10 * 1024, guestRAMMB: 8192, poolMB: 4096, videoMB: 3072),
+            Tier(ramGB: 12, fromMB: 10 * 1024, guestRAMMB: 8192, poolMB: 4096, videoMB: 2304),
             Tier(ramGB: 8, fromMB: 7 * 1024, guestRAMMB: 6144, poolMB: 1024, videoMB: 2048),
             Tier(ramGB: 6, fromMB: 5 * 1024, guestRAMMB: 3072, poolMB: 0, videoMB: 1024),
             Tier(ramGB: 4, fromMB: 0, guestRAMMB: 2048, poolMB: 0, videoMB: 768),
@@ -85,7 +88,7 @@ public struct MemoryPlan: Equatable, Sendable {
     /// The environment variables the runtime reads.
     public static let guestRAMVariable = "MADEIRA_TOTAL_PHYS_MB"
     public static let videoVariable = "PLAYPORT_VRAM_MB"
-    /// madeira.cfg keys that win over the plan (ml993, ml1095).
+    /// The shared madeira.cfg's keys that win over the plan (ml993, ml1095); no title's.
     public static let guestRAMKey = "totalphys"
     public static let videoKey = "vram-mb"
     /// madeira.cfg key: DXVK's reported video memory and KosmicKrisp's heap size and budget
@@ -113,15 +116,15 @@ public struct MemoryPlan: Equatable, Sendable {
         }
     }
 
-    /// The values over the plan's: a title's own `totalphys`, and the shared file's `vram-mb`.
+    /// The values over the plan's: the shared madeira.cfg's and the app's environment, the same in
+    /// every game (no title sets one: TitleConfig.refusedKeys).
     public struct Overrides: Equatable, Sendable {
-        /// `totalphys` from madeira.cfg, or MADEIRA_TOTAL_PHYS_MB already set (an `env.` key).
+        /// `totalphys` from the shared madeira.cfg, or MADEIRA_TOTAL_PHYS_MB already set.
         public var guestRAMMB: Int?
-        /// `vram-mb` from madeira.cfg (ml1042 honours 256 or more): the shared file's alone,
-        /// since TitleConfig refuses it as a title's key.
+        /// `vram-mb` from the shared madeira.cfg (ml1042 honours 256 or more).
         public var videoMB: Int?
         /// DXVK's DXGI report and KosmicKrisp's heap size and budget take the plan's; false only
-        /// with `vulkan-vram-plan = 0`.
+        /// with the shared file's `vulkan-vram-plan = 0`.
         public var vulkan: Bool
 
         public init(guestRAMMB: Int? = nil, videoMB: Int? = nil, vulkan: Bool = true) {
@@ -130,8 +133,8 @@ public struct MemoryPlan: Equatable, Sendable {
             self.vulkan = vulkan
         }
 
-        /// From the launch's effective madeira.cfg values (`value(key)`: the title's keys over
-        /// the shared file) and the environment the runtime will read.
+        /// From the launch's effective madeira.cfg values (`value(key)`: the shared file's, as no
+        /// title's keys name them) and the environment the runtime will read.
         public static func read(value: (String) -> String?, environment: [String: String]) -> Overrides {
             func int(_ s: String?) -> Int? { s.flatMap { Int($0.trimmingCharacters(in: .whitespaces)) } }
             var ram = int(value(guestRAMKey)).flatMap { $0 > 0 ? $0 : nil }

@@ -61,7 +61,8 @@ lands, the keys it removes stay as built, and no part of it is shown on the phon
     `Redistributables/Rockstar-Games-Launcher.exe`), or the launcher's Open of a verified
     `Launcher.exe`. The helper itself cannot decide it: it is in the shared prefix, missing until the
     launcher's first run, and the layout is decided before the runtime starts (0169's amendment note).
-    Any other Play holds no Social Club range. The layout shrinks to the anchors its window forces,
+    Any other Play holds no Social Club range, and the configuration check refuses an
+    `env.PLAYPORT_SC_LAYOUT` key. The layout shrinks to the anchors its window forces,
     and the rest is claimed at the helper's first ask; ELF_META2 and RDR2's 8,960 MiB game hold go
     ([PLA-841](https://linear.app/playportdev/issue/PLA-841),
     [PLA-842](https://linear.app/playportdev/issue/PLA-842)).
@@ -74,8 +75,13 @@ lands, the keys it removes stay as built, and no part of it is shown on the phon
     for every game, in place of RDR2's entry and `everyGame`'s fixed heap
     ([PLA-845](https://linear.app/playportdev/issue/PLA-845)). The plan's V is DXGI's report and
     KosmicKrisp's heap size and budget; the configuration check (PlayportKit `TitleConfig`) refuses
-    `vram-mb` and `env.PLAYPORT_VK_HEAP_MB` as any title's key. The shared madeira.cfg's `vram-mb`
-    still wins over V, the same in every game.
+    the plan's keys (`totalphys`, `vram-mb`, `vulkan-vram-plan`) and its variables
+    (`MADEIRA_TOTAL_PHYS_MB`, `PLAYPORT_VRAM_MB`, `PLAYPORT_VK_HEAP_MB`, `PLAYPORT_VK_BUDGET_MB`) as any
+    title's key. The shared madeira.cfg's keys still win over the plan, the same in every game. RDR2
+    needs less than the 12 GB row's 3,072: its run l11 was killed on Story's first load there
+    ([0142](0142-rdr2-owner-test-defaults-heap-size-semaphores-and-afp.md)'s amendment), and it was
+    proven on 2,304. So that row's V is 2,304 for every game; no phone has run the row since, and a
+    12 GB phone's check of it is owed. The 8 GB row's 2,048 is under RDR2's figure already.
   - One JIT pool, the same size in every Play, whose untouched pages cost nothing, in place of
     per-title sizes ([PLA-846](https://linear.app/playportdev/issue/PLA-846)).
   - Play is never refused for a stored memory figure: `memoryMB` goes, and a game ended for memory
@@ -84,7 +90,8 @@ lands, the keys it removes stay as built, and no part of it is shown on the phon
     for memory, and the memory-kill note, that Play's peak and the limit, is an observation of the
     Play, never a stored requirement or a reason to refuse or size the next one.
 - **Unchanged.** Per-game keys that are not about memory (`FEX_HOSTFEATURES`, the graphics backend,
-  controls); the memory plan's table (0105) and the donor pool's sizing; the iOS low hold at exec
+  controls); the memory plan's table (0105), but for the 12 GB row's V (PLA-845's rule, above), and
+  the donor pool's sizing; the iOS low hold at exec
   in every Play; madeira-unix 0236's refusal of V8's reserve ladder, which runs before the elastic
   policy.
 

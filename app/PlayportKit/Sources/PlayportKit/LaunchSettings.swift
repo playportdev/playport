@@ -198,24 +198,33 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
     /// a later item for a key winning. nil when an item has no `=` or TitleConfig refuses it (a
     /// refused key such as `vram-mb`, decision 0183).
     public static func runtimeKeys(_ line: String) -> [String: String]? {
+        guard let items = runtimeItems(line), (try? TitleConfig.validate(items)) != nil else { return nil }
+        return items
+    }
+
+    /// What a Runtime keys row says when a launch does not use it: the refused key TitleConfig names
+    /// (TitleConfig.refusedKeys), else that its items are not `key=value`; nil when it is used.
+    public static func unusedRuntimeKeysNote(_ line: String) -> String? {
+        do {
+            guard let items = runtimeItems(line) else { return "Not key=value items: not used" }
+            try TitleConfig.validate(items)
+            return nil
+        } catch LaunchPlanError.refusedKey(let key) {
+            return "\(key) is not a game's own key (no per-game memory keys): not used"
+        } catch {
+            return "Not key=value items: not used"
+        }
+    }
+
+    /// The `key=value` items of a Runtime keys line, a later item for a key winning; nil when an
+    /// item has no `=`.
+    private static func runtimeItems(_ line: String) -> [String: String]? {
         var out: [String: String] = [:]
         for item in splitArguments(line) {
             guard let eq = item.firstIndex(of: "=") else { return nil }
             out[String(item[..<eq])] = String(item[item.index(after: eq)...])
         }
-        return (try? TitleConfig.validate(out)) == nil ? nil : out
-    }
-
-    /// What a Runtime keys row says when a launch does not use it: the refused key it names
-    /// (TitleConfig.refusedKeys), else that its items are not `key=value`; nil when it is used.
-    public static func unusedRuntimeKeysNote(_ line: String) -> String? {
-        guard runtimeKeys(line) == nil else { return nil }
-        for item in splitArguments(line) {
-            if let eq = item.firstIndex(of: "="), TitleConfig.refusedKeys.contains(String(item[..<eq])) {
-                return "\(item[..<eq]) is not a game's own key (no per-game memory keys): not used"
-            }
-        }
-        return "Not key=value items: not used"
+        return out
     }
 
     /// The list variables a game's Graphics options join when repeated (decision 0060):

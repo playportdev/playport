@@ -1139,7 +1139,7 @@ menu opens). Behind the menu the game is paused:
   [0183](decisions/0183-no-per-game-memory-keys.md), PLA-840): a game whose install folder holds one
   (RDR2's Steam copy: `PlayRDR2.exe` and `Redistributables/Rockstar-Games-Launcher.exe`), or the
   launcher's Open when the `Launcher.exe` it starts is verified. No key and no launcher switches it:
-  the launch sets `PLAYPORT_SC_LAYOUT=1` from that check alone and ignores an
+  the launch sets `PLAYPORT_SC_LAYOUT=1` from that check alone, and `TitleConfig` refuses an
   `env.PLAYPORT_SC_LAYOUT` key. The hashes are kept by path, size and modification time between Plays,
   and a dev build logs an unverified file's hash. Under the layout neither the end nor the refusal
   runs unless a dev build's stored switch turns the end on (`GameSocialClubEndPolicy`); without it
@@ -1462,23 +1462,28 @@ after the JIT pool and the donor pool, the app tells the runtime the
 guest's RAM G and the video figure V through the environment: `MADEIRA_TOTAL_PHYS_MB`
 (ml992) and `PLAYPORT_VRAM_MB` (DXMT ml1042, patches/dxmt 0011; its formula stays the
 fallback). Both come from the phone's tier by its RAM
-([decision 0105](decisions/0105-memory-defaults-per-phone.md)): G / V 8,192 / 3,072 MiB
-on 12 GB, 6,144 / 2,048 on 8 GB, 3,072 / 1,024 on 6 GB, 2,048 / 768 on 4 GB. A limit L
+([decision 0105](decisions/0105-memory-defaults-per-phone.md)): G / V 8,192 / 2,304 MiB
+on 12 GB, 6,144 / 2,048 on 8 GB, 3,072 / 1,024 on 6 GB, 2,048 / 768 on 4 GB. The 12 GB row's
+V is RDR2's proven 2,304, not 0105's 3,072, which RDR2 was killed at on Story's first load
+(decision 0183's rule, PLA-845: the plan's figure drops for every game when RDR2 needs less;
+no phone has run the row since). A limit L
 read more than 512 MiB under the tier's G (no entitlement, or before Game Mode) clamps G
-to L rounded down to a GiB (after 64 MiB of slack) and V to 3/8 of that G, rounded down
-to 512, at least 768; a limit within 512 MiB (the 8 GB phone's 6,046) keeps the row
+to L rounded down to a GiB (after 64 MiB of slack) and V to the lesser of the row's and 3/8
+of that G, rounded down to 512, at least 768; a limit within 512 MiB (the 8 GB phone's 6,046) keeps the row
 ([decision 0106](decisions/0106-8gb-row-in-full-and-vulkan-plan-default.md)). A pool does
-not raise G. A title's `totalphys` wins. V is every game's one video figure
-([decision 0183](decisions/0183-no-per-game-memory-keys.md)): `TitleConfig` refuses `vram-mb`
-and `env.PLAYPORT_VK_HEAP_MB` as a title's key (cohort or compatibility entry, launcher,
-`everyGame`, a dev Runtime keys row), and only the shared madeira.cfg's `vram-mb` wins over V,
+not raise G. G and V are every game's
+([decision 0183](decisions/0183-no-per-game-memory-keys.md)): `TitleConfig` refuses `totalphys`,
+`vram-mb`, `vulkan-vram-plan` and the plan's variables (as `env.` keys) as any title's key
+(cohort or compatibility entry, launcher, `everyGame`, a dev Runtime keys row), and only the shared
+madeira.cfg's keys (or `MADEIRA_TOTAL_PHYS_MB` in the app's environment) win over the plan,
 in every game alike. The `memory plan:` app-log line has
 every input and output. On the Vulkan backend the plan's V also adds
 `dxgi.maxDeviceMemory` = V to `DXVK_CONFIG` (DXVK otherwise reports KosmicKrisp's 8 GiB
 heap) and sets `PLAYPORT_VK_HEAP_MB` and `PLAYPORT_VK_BUDGET_MB` to V: KosmicKrisp reports
 heap 0 as V in place of Metal's working set (patches/mesa 0064; RDR2 sizes its streaming
 from the heap) and caps its `VK_EXT_memory_budget` budget there (patches/mesa 0036); on by
-default (decision 0106), `vulkan-vram-plan = 0` turns all three off for a title. Opt-in, off
+default (decision 0106); the shared madeira.cfg's `vulkan-vram-plan = 0` turns all three off
+for every game. Opt-in, off
 by default: `vram-budget-event = 1` signals DXGI's budget-change event when the ml1075
 trim moves the budget (it hung RDR2 when it never fired).
 

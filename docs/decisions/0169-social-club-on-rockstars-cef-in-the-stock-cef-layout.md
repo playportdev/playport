@@ -29,7 +29,8 @@ in the launcher's install folder is verified. Not `SocialClubHelper.exe`, which 
 and 0183 repeated: it is in the shared prefix, missing until the launcher's first run, while the layout
 must be decided before the runtime starts, since libcef's range at `0x7000000000` comes from the low
 hold at exec. The app checks before the runtime starts and sets `PLAYPORT_SC_LAYOUT=1` from the check
-alone, ignoring any `env.PLAYPORT_SC_LAYOUT` key; a dev build's `=0` no longer turns it off. A copy
+alone, and the configuration check refuses an `env.PLAYPORT_SC_LAYOUT` key (`TitleConfig`); a dev
+build's `=0` no longer turns it off. A copy
 with an unverified bootstrap (a Steam update of `PlayRDR2.exe`, a launcher self-update) gets no layout
 until its hashes join the table; a dev build logs them.
 

@@ -11,7 +11,9 @@ owner's first play (below, and the evidence). **Amended 2026-10-30 (owner, PLA-4
 `vram-mb=2304 env.PLAYPORT_VK_HEAP_MB=2304` and everyGame's 3,072 MiB heap are gone. Every game,
 RDR2 too, is told its memory plan row's video figure (0105, 0106), which sets the heap size, the
 budget and DXGI's report alike; the configuration check refuses both keys as a title's. If RDR2
-needs less than the row's figure, the row drops for every game.
+needs less than the row's figure, the row drops for every game: run l11 (below) is why the 12 GB
+row's V drops from 3,072 to RDR2's 2,304 (0105's amendment note), unchecked on a 12 GB phone since;
+the 8 GB row's 2,048 is under it already.
 
 ## Context
 

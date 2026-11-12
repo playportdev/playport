@@ -19,16 +19,23 @@ public enum TitleConfig {
     /// Under the prefix's Documents: `title-cfg/<install folder>/madeira.cfg`.
     public static let rootName = "title-cfg"
 
-    /// Keys no title may set (decision 0183): a video memory or heap figure is no game's own;
-    /// every game takes its memory plan row's (MemoryPlan). Refused here, so no cohort entry,
-    /// compatibility entry, launcher, everyGame default, dev Runtime keys row or driven launch
-    /// sets one. The shared madeira.cfg is the person's for every game alike and is not checked.
-    public static let refusedKeys: Set<String> = [MemoryPlan.videoKey, "env." + MemoryPlan.vulkanHeapVariable]
+    /// Keys no title may set (decision 0183): the memory plan's guest RAM and video figure are no
+    /// game's own, every game takes its plan row's (MemoryPlan), so neither its madeira.cfg keys
+    /// (`totalphys`, `vram-mb`, `vulkan-vram-plan`) nor its variables are a title's; and the Social
+    /// Club layout follows a verified Rockstar bootstrap (SocialClubBootstrap), never a key. Refused
+    /// here, so no cohort entry, compatibility entry, launcher, everyGame default, dev Runtime keys
+    /// row or driven launch sets one. The shared madeira.cfg is the person's for every game alike
+    /// and is not checked.
+    public static let refusedKeys = Set([MemoryPlan.guestRAMKey, MemoryPlan.videoKey, MemoryPlan.vulkanKey]
+        + [MemoryPlan.guestRAMVariable, MemoryPlan.videoVariable, MemoryPlan.vulkanHeapVariable,
+           MemoryPlan.vulkanBudgetVariable, SocialClubBootstrap.layoutVariable].map { "env." + $0 })
 
     /// Keys are the reader's names (`jumbo-mb`, `env.NAME`); values are one line; no refused key.
+    /// The keys are checked in order, so the error names the first.
     public static func validate(_ config: [String: String]) throws {
         let keyChars = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._-"))
-        for (k, v) in config {
+        for k in config.keys.sorted() {
+            let v = config[k]!
             guard !k.isEmpty, k.unicodeScalars.allSatisfy({ keyChars.contains($0) && $0.isASCII }),
                   !v.contains(where: { $0 == "\n" || $0 == "\r" })
             else { throw LaunchPlanError.badConfig("\(k) = \(v)") }
