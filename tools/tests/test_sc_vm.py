@@ -4,7 +4,8 @@
 The headers are extracted from the patches at run time (created by 0224 and
 0226, then changed by LATER's hunks) and compiled against a small fake of the
 ntdll view table, native holds and process identity. 0231's teardown call is
-replayed by teardown_views below.
+replayed by teardown_views below. The on-demand slots (0299) are placed from
+a fake list of the window's free runs, the anchors' holds taken out.
 """
 import os
 import pathlib
@@ -22,7 +23,8 @@ HEADERS = [('0224-ntdll-social-club-layout-geometry.patch', 'pp_sc_layout.h'),
 LATER = ['0228-ntdll-second-social-club-elf-metadata-slot.patch',
          '0231-ntdll-hold-a-dead-owner-s-Social-Club-slot-in-place-.patch',
          '0236-ntdll-refuse-the-Social-Club-helper-s-impossible-V8-.patch',
-         '0243-ntdll-place-the-Social-Club-helper-s-V8-code-range-o.patch']
+         '0243-ntdll-place-the-Social-Club-helper-s-V8-code-range-o.patch',
+         '0299-ntdll-the-Social-Club-layout-holds-only-its-anchors-.patch']
 
 
 def header(patch, name):
@@ -250,6 +252,30 @@ static NTSTATUS free_pages(struct file_view *v, void *base, size_t size)
 #include "pp_sc_vm.h"
 #include "pp_sc_access.h"
 
+/* The window's free runs the on-demand slots are placed from: by default the
+ * guest window below FEX's band without the anchors and the JIT pool's RW
+ * alias at its largest (896 MiB); a test may crowd it. Views are left out:
+ * a placed slot's range is never offered again while it is held or owned. */
+static struct ppsc_gap fake_gaps[8];
+static unsigned fake_ngaps, gaps_calls;
+static void default_gaps(void)
+{
+    static const struct ppsc_gap g[] = {
+        {0x7004000000ULL, 0x3fc000000ULL}, {0x7440000000ULL, 0x3c0000000ULL},
+        {0x7804000000ULL, 0xfc000000ULL}, {0x7938000000ULL, 0x2c8000000ULL}};
+    memcpy(fake_gaps, g, sizeof g);
+    fake_ngaps = 4;
+}
+static unsigned ppsc_gaps_locked(struct ppsc_gap *out, unsigned max, uint64_t min)
+{
+    unsigned n = 0;
+    gaps_calls++;
+    assert(mutex_depth == 1);
+    for (unsigned i = 0; i < fake_ngaps && n < max; i++)
+        if (fake_gaps[i].size >= min) out[n++] = fake_gaps[i];
+    return n;
+}
+
 #define GiB(n) ((uint64_t)(n) << 30)
 static void reset(void)
 {
@@ -268,8 +294,10 @@ static void reset(void)
     ppsc_ready = 1;
     reserved_count = 0;
     memset(vprot_pages, 0, sizeof vprot_pages);
-    ppsc_held = 0;
-    for (int k = PPSC_ELF; k <= PPSC_LAST_SLOT; k++) { ppsc_held |= PPSC_BIT(k); native_held[k] = 1; }
+    ppsc_held = PPSC_ANCHORS;
+    memset(ppsc_placed, 0, sizeof ppsc_placed);
+    for (int k = PPSC_ELF; k <= PPSC_LAST_SLOT; k++) native_held[k] = !!(PPSC_ANCHORS & PPSC_BIT(k));
+    default_gaps(); gaps_calls = 0;
     foreign_mapping = dealloc_fail = alloc_fail = alloc_mismatch = mismatch_foreign_owner = free_fail = 0;
     alloc_calls = dealloc_calls = hold_calls = free_calls = dprintf_calls = 0;
     hold_over_fail = hold_over_calls = delete_calls = unmap_calls = intruder_on_unmap = alias_release_calls = 0;
@@ -293,12 +321,15 @@ static int reserve(uint64_t hint, uint64_t size, ULONG type, ULONG prot, int ext
     *out = ret; *outsize = sz;
     return routed;
 }
+/* An on-demand slot's range is known once the ask placed it. */
 static void grant_ok(uint64_t hint, uint64_t size, int ext, enum ppsc_slot k)
 {
     NTSTATUS st; void *ret; SIZE_T sz;
-    struct ppsc_range r = ppsc_range(k);
+    struct ppsc_range r;
     assert(reserve(hint, size, MEM_RESERVE, PAGE_NOACCESS, ext, &st, &ret, &sz));
     assert(st == STATUS_SUCCESS);
+    r = ppsc_range(k);
+    assert(r.size);
     assert((uint64_t)(uintptr_t)ret == r.report && sz == size);
     struct file_view *v = find_view((void *)(uintptr_t)r.base, 0);
     assert(v && (uint64_t)(uintptr_t)v->base == r.base && v->size == r.size && v->ios_owner_peb == cur);
@@ -345,8 +376,10 @@ static void t_route_not_routed(void)
     /* A helper small ask keeps the ordinary path, even one below the giant threshold. */
     assert(!reserve(0, 0x10000, MEM_RESERVE, PAGE_READWRITE, 0, &st, &ret, &sz));
     assert(!reserve(0, GiB(8), MEM_RESERVE, PAGE_READWRITE, 0, &st, &ret, &sz));
-    assert(!reserve(0, PPSC_GAME_SIZE, MEM_RESERVE, PAGE_READWRITE, 0, &st, &ret, &sz));
-    assert(!alloc_calls && !dprintf_calls && ppsc_held == (1u << (PPSC_LAST_SLOT + 1)) - 2);
+    assert(!reserve(0, 0x230000000ULL, MEM_RESERVE, PAGE_READWRITE, 0, &st, &ret, &sz));   /* RDR2's 8,960 MiB */
+    /* A 1 GiB at a hint that is not 4 GiB-aligned is not V8's code range. */
+    assert(!reserve(0x7a1230000ULL, GiB(1), MEM_RESERVE, PAGE_NOACCESS, 0, &st, &ret, &sz));
+    assert(!alloc_calls && !dprintf_calls && !gaps_calls && ppsc_held == PPSC_ANCHORS);
     check_holds();
 }
 
@@ -375,9 +408,12 @@ static void t_route_sequence(void)
 {
     reset();
     grant_sequence();
-    assert(alloc_calls == 5 && dealloc_calls == 5 && view_count() == 5);
-    assert(ppsc_held == (PPSC_BIT(PPSC_CAGE) | PPSC_BIT(PPSC_ELF_META2)));   /* the spare stays held */
-    assert(strstr(all_msgs, "grant kind=5") && !strstr(all_msgs, "grant kind=7"));        /* a diagnostic is logged per grant */
+    /* Four anchors out of their holds; libcef's metadata placed at its home, nothing to give back. */
+    assert(alloc_calls == 5 && dealloc_calls == 4 && view_count() == 5 && gaps_calls == 1);
+    assert(!ppsc_held && ppsc_avail() == (PPSC_BIT(PPSC_CAGE) | PPSC_BIT(PPSC_CODE)));
+    assert(ppsc_range(PPSC_CEF_META).base == 0x78c0000000ULL && ppsc_range(PPSC_CEF_META).report == 0x78c0000000ULL);
+    assert(strstr(all_msgs, "kind=4 placed at 0x78c0000000+0x40000000 (its home)"));
+    assert(strstr(all_msgs, "grant kind=5") && !strstr(all_msgs, "grant kind=6"));        /* a diagnostic is logged per grant */
 }
 static void t_route_cage(void)
 {
@@ -388,7 +424,7 @@ static void t_route_cage(void)
     grant_ok(GiB(64), GiB(32), 0, PPSC_ELF);
     assert(!reserve(0, GiB(8), MEM_RESERVE, PAGE_NOACCESS, 1, &st, &ret, &sz));     /* ELF only */
     grant_ok(GiB(64), GiB(32), 0, PPSC_CEF);
-    assert(alloc_calls == 2 && (ppsc_held & PPSC_BIT(PPSC_CAGE)));
+    assert(alloc_calls == 2 && (ppsc_avail() & PPSC_BIT(PPSC_CAGE)) && !ppsc_placed[PPSC_CAGE]);
     cur = &pebs[1];                                                                 /* another helper */
     assert(!reserve(0, GiB(8), MEM_RESERVE, PAGE_NOACCESS, 1, &st, &ret, &sz));
     assert(alloc_calls == 2 && !ppsc_owner[PPSC_CAGE]);
@@ -398,7 +434,7 @@ static void t_route_cage(void)
     assert(!reserve(0, GiB(8), MEM_RESERVE, PAGE_NOACCESS, 0, &st, &ret, &sz));     /* not extended */
     assert(alloc_calls == 2);
     grant_ok(0, GiB(8), 1, PPSC_CAGE);
-    assert(last_protect == PAGE_NOACCESS);
+    assert(last_protect == PAGE_NOACCESS && ppsc_range(PPSC_CAGE).base == 0x7a00000000ULL);
     /* The cage already taken: its owner's next unhinted 8 GiB is a sandbox probe,
      * refused without a walk (0236); a hinted one keeps the ordinary path. */
     assert(reserve(0, GiB(8), MEM_RESERVE, PAGE_NOACCESS, 1, &st, &ret, &sz) && st == STATUS_NO_MEMORY);
@@ -457,35 +493,56 @@ static void t_route_impossible_probes(void)
     check_holds();
 }
 
-/* 0243: l16 B's V8 code-range asks (hinted 1 GiB, offsets 0 and 4 GiB) and its
- * padded fallback are never routed, so Wine's hinted retry gets them. Every base
- * that retry tries lies outside every slot's real range, and the helper may commit
- * there; as the guard walk's 0x7100000000-0x7300000000 always did, it lies in
- * kind 2's reported tail, which is noted, not refused. */
+/* 0299: V8's code range (l16 B's hinted 1 GiB asks, offsets 0 and 4 GiB) is an
+ * on-demand slot: the first ask places it at its home, a 4 GiB-aligned base,
+ * whatever the hint; it is held in place across the hand-off, so the next
+ * helper's ask gets the same range. A second one, or one at the extended entry
+ * point, is Wine's as before. */
 static void t_route_code_range(void)
 {
-    NTSTATUS st; void *ret; SIZE_T sz;
+    NTSTATUS st; void *ret, *addr; SIZE_T sz;
     uint64_t hints[] = {0x60800000000ULL, 0xbf000000000ULL, 0x4c7d00000000ULL};
-    unsigned bases = 0;
     int calls;
     reset();
     cur = &pebs[1];
     grant_sequence();
     grant_ok(0, GiB(8), 1, PPSC_CAGE);
     calls = alloc_calls;
-    memset(all_msgs, 0, sizeof all_msgs);
-    for (unsigned i = 0; i < 3; i++) {
+    assert(!reserve(hints[0], GiB(1), MEM_RESERVE, PAGE_NOACCESS, 1, &st, &ret, &sz));   /* extended: not routed */
+    assert(alloc_calls == calls && !ppsc_placed[PPSC_CODE]);
+    grant_ok(hints[0], GiB(1), 0, PPSC_CODE);
+    assert(ppsc_range(PPSC_CODE).base == 0x7700000000ULL && !(ppsc_range(PPSC_CODE).base & (GiB(4) - 1)));
+    for (unsigned i = 1; i < 3; i++)                                                      /* its second: Wine's */
         assert(!reserve(hints[i], GiB(1), MEM_RESERVE, PAGE_NOACCESS, 0, &st, &ret, &sz));
-        assert(!reserve(hints[i], GiB(1), MEM_RESERVE, PAGE_NOACCESS, 1, &st, &ret, &sz));
-        for (uint64_t b = 0; (b = ppsc_code_range_next(GiB(1), hints[i], b)); bases++) {
-            assert(!ppsc_in_slot(b, GiB(1)));
-            assert(ppsc_access((void *)(uintptr_t)b, 0x1000, PPSC_OP_COMMIT));
-        }
-    }
-    assert(bases == 9);
-    assert(!reserve(0, 0x13fff0000ULL, MEM_RESERVE, PAGE_NOACCESS, 0, &st, &ret, &sz));
-    assert(alloc_calls == calls);
-    assert(!count_msg("refused") && !count_msg("probe") && count_msg("in reported tail of kind=2"));
+    assert(ppsc_access((void *)(uintptr_t)0x7700001000ULL, 0x1000, PPSC_OP_COMMIT));
+    cur = &pebs[3];                                                                      /* not another helper's */
+    assert(!reserve(hints[1], GiB(1), MEM_RESERVE, PAGE_NOACCESS, 0, &st, &ret, &sz));
+    assert(!ppsc_access((void *)(uintptr_t)0x7700001000ULL, 0x1000, PPSC_OP_COMMIT));
+    cur = &pebs[1];
+    addr = (void *)(uintptr_t)0x7700000000ULL; sz = 0;                                    /* V8 gives it back */
+    assert(ppsc_free(&addr, &sz, MEM_RELEASE, &st) && st == STATUS_SUCCESS && sz == GiB(1));
+    assert((ppsc_held & PPSC_BIT(PPSC_CODE)) && ppsc_placed[PPSC_CODE] == 0x7700000000ULL);
+    check_holds();
+    teardown_views(&pebs[1]);                                                             /* the hand-off */
+    cur = &pebs[3];
+    grant_sequence();
+    grant_ok(hints[2], GiB(1), 0, PPSC_CODE);
+    assert(ppsc_range(PPSC_CODE).base == 0x7700000000ULL && gaps_calls == 3);              /* placed once */
+    check_holds();
+
+    /* Its home taken: the highest free 4 GiB-aligned GiB. l16 B's largest hole
+     * [0x72b0364000, 0x73b6ef4000) holds one at 0x7300000000; l13's restarts
+     * (largest hole 515 MB) none, and the ask is refused. */
+    reset(); grant_sequence();
+    fake_gaps[0] = (struct ppsc_gap){0x72b0364000ULL, 0x73b6ef4000ULL - 0x72b0364000ULL}; fake_ngaps = 1;
+    grant_ok(hints[0], GiB(1), 0, PPSC_CODE);
+    assert(ppsc_range(PPSC_CODE).base == 0x7300000000ULL && strstr(all_msgs, "(its home was taken)"));
+    reset(); grant_sequence();
+    fake_gaps[0] = (struct ppsc_gap){0x7280000000ULL, 0x20300000ULL}; fake_ngaps = 1;
+    calls = alloc_calls;
+    assert(reserve(hints[0], GiB(1), MEM_RESERVE, PAGE_NOACCESS, 0, &st, &ret, &sz) && st == STATUS_NO_MEMORY);
+    assert(alloc_calls == calls && !ppsc_placed[PPSC_CODE] && !ppsc_owner[PPSC_CODE]);
+    assert(strstr(all_msgs, "kind=7: no free 0x100000000-aligned 0x40000000 in the window; not placed"));
     check_holds();
 }
 
@@ -683,7 +740,8 @@ static void t_access(void)
         assert(!ppsc_access((void *)(uintptr_t)c.base, 0x1000, PPSC_OP_COMMIT));
     }
     assert(ppsc_access((void *)(uintptr_t)0x1000, 0x1000, PPSC_OP_COMMIT));                 /* outside all slots */
-    assert(ppsc_access((void *)(uintptr_t)(PPSC_GAME_BASE + 0x1000), 0x1000, PPSC_OP_COMMIT));
+    assert(ppsc_access((void *)(uintptr_t)0x75d0001000ULL, 0x1000, PPSC_OP_COMMIT));       /* the old game hold */
+    assert(ppsc_access((void *)(uintptr_t)0x7a00001000ULL, 0x1000, PPSC_OP_COMMIT));       /* the cage's home, not placed */
     cur = &pebs[1];
     assert(ppsc_access((void *)(uintptr_t)0x1000, 0x1000, PPSC_OP_COMMIT));                 /* outside, any process */
     cur = &pebs[0];
@@ -738,21 +796,23 @@ static void t_reported_oilpan_low(void)
 
 static void t_reported_cross_slot(void)
 {
+    NTSTATUS st; void *ret; SIZE_T sz;
     reset(); grant_sequence();
+    assert(reserve(0x60800000000ULL, GiB(1), MEM_RESERVE, PAGE_NOACCESS, 0, &st, &ret, &sz) && !st);
     memset(all_msgs, 0, sizeof all_msgs);
-    for (int i = 0; i < 17; i++) {   /* kind 3's report covers kind 4's real range, both owned by us */
-        assert(ppsc_access((void *)(uintptr_t)(0x7590001000ULL + i * 0x1000), 0x1000, PPSC_OP_COMMIT));
+    for (int i = 0; i < 17; i++) {   /* kind 3's report covers the code range's home, both owned by us */
+        assert(ppsc_access((void *)(uintptr_t)(0x7700001000ULL + i * 0x1000), 0x1000, PPSC_OP_COMMIT));
         assert(count_msg("in reported extent of kind=3 ") == (i < 16 ? i + 1 : 16));
     }
     /* Kind 3 is metadata, so past its real end that is possible overflow;
      * kind 2's report covers it too, and kind 2 is not metadata. */
-    assert(count_msg("possible metadata overflow into kind=4") == 16);
+    assert(count_msg("possible metadata overflow into kind=7") == 16);
     assert(count_msg("in reported extent of kind=3 off=") == 16 && count_msg("past its real end") == 16);
-    assert(count_msg("lands in its own kind=4 real range") == 16);
+    assert(count_msg("lands in its own kind=7 real range") == 16);
     assert(!count_msg("refused") && !count_msg("reported tail"));
     cur = &pebs[1];                                   /* not ours: refused, not noted */
     memset(all_msgs, 0, sizeof all_msgs);
-    assert(!ppsc_access((void *)(uintptr_t)0x7590001000ULL, 0x1000, PPSC_OP_COMMIT));
+    assert(!ppsc_access((void *)(uintptr_t)0x7700001000ULL, 0x1000, PPSC_OP_COMMIT));
     assert(count_msg("refused") == 1 && !count_msg("reported extent"));
 }
 
@@ -875,134 +935,85 @@ static void t_owner_held_in_place(void)
     check_holds();
 }
 
-/* PLA-476 second chrome_elf metadata slot (0228). */
-#define ALL_SLOTS ((1u << (PPSC_LAST_SLOT + 1)) - 2)
 static void grant_all(void) { grant_sequence(); grant_ok(0, GiB(8), 1, PPSC_CAGE); }
-/* What teardown leaves: every view of peb gone but kind keep's, then the slot ledger. */
-static void exit_keeping(PEB *peb, int keep)
-{
-    for (int i = 0; i < MAXV; i++)
-        if (views[i].size && views[i].ios_owner_peb == peb &&
-            !(keep && (uintptr_t)views[i].base == ppsc_range(keep).base)) memset(&views[i], 0, sizeof views[i]);
-    if (keep) vprot_base = ppsc_range(keep).base;
-    ppsc_owner_died_locked(peb);
-}
-/* Helper A takes every kind but the spare, then dies with its ELF metadata
- * kept (l3-l5); helper B starts. */
-static void a_died_metadata_kept(void)
-{
-    reset(); grant_all();
-    assert(ppsc_held == PPSC_BIT(PPSC_ELF_META2));
-    exit_keeping(&pebs[0], PPSC_ELF_META);
-    assert(ppsc_owner[PPSC_ELF_META] == &pebs[0] && ppsc_held == (ALL_SLOTS & ~PPSC_BIT(PPSC_ELF_META)));
-    check_holds();
-    cur = &pebs[1];
-}
 
-static void t_meta2_second_helper(void)
+/* 0299: a failed first placement leaves the on-demand slot unplaced, with no
+ * hold of its own, and the next ask places it again. */
+static void t_on_demand_failures(void)
 {
     NTSTATUS st; void *ret; SIZE_T sz;
-    a_died_metadata_kept();
-    memset(all_msgs, 0, sizeof all_msgs);
-    grant_ok(GiB(64), GiB(32), 0, PPSC_ELF);
-    grant_ok(0x12340000ULL, GiB(16), 0, PPSC_ELF_META2);
-    assert(strstr(all_msgs, "grant kind=7 ") &&
-           strstr(all_msgs, "report=0x79c0000000+0x400000000 real=0x79c0000000+0x40000000"));
-    grant_ok(GiB(64), GiB(32), 0, PPSC_CEF);
-    grant_ok(0x12340000ULL, GiB(16), 0, PPSC_CEF_META);
-    grant_ok(GiB(64), GiB(32), 0, PPSC_OILPAN);
+    struct ppsc_range r;
+    int deallocs;
+    reset(); grant_ok(GiB(64), GiB(32), 0, PPSC_ELF); grant_ok(GiB(64), GiB(32), 0, PPSC_CEF);
+    deallocs = dealloc_calls;
+    alloc_fail = 1;                                       /* something mapped its home meanwhile */
+    assert(reserve(0, GiB(8), MEM_RESERVE, PAGE_NOACCESS, 1, &st, &ret, &sz) && st == STATUS_NO_MEMORY);
+    assert(!ppsc_placed[PPSC_CAGE] && !ppsc_owner[PPSC_CAGE] && !(ppsc_held & PPSC_BIT(PPSC_CAGE)));
+    assert(dealloc_calls == deallocs && !hold_calls && strstr(all_msgs, "kind=6 view not placed") &&
+           strstr(all_msgs, "slot not placed"));
+    check_holds();
+    alloc_fail = 0;
     grant_ok(0, GiB(8), 1, PPSC_CAGE);
-    assert(ppsc_mine(&pebs[1]) == (ALL_SLOTS & ~PPSC_BIT(PPSC_ELF_META)) && !ppsc_held);
-    assert(ppsc_owner[PPSC_ELF_META] == &pebs[0]);
-    assert(reserve(0x12340000ULL, GiB(16), MEM_RESERVE, PAGE_NOACCESS, 0, &st, &ret, &sz) && st == STATUS_NO_MEMORY);
-    assert(!ppsc_access((void *)(uintptr_t)0x7400001000ULL, 0x1000, PPSC_OP_COMMIT));   /* A's kept view */
-    assert(strstr(all_msgs, "refused reserve") && strstr(all_msgs, "kind=8 "));       /* PPSC_REFUSE is 8 */
+    assert(ppsc_range(PPSC_CAGE).base == 0x7a00000000ULL && gaps_calls == 2);
 
-    /* Helper C, while B lives and A's metadata is kept, gets nothing. */
-    cur = &pebs[3]; alloc_calls = 0;
-    assert(reserve(GiB(64), GiB(32), MEM_RESERVE, PAGE_NOACCESS, 0, &st, &ret, &sz) && st == STATUS_NO_MEMORY);
-    assert(reserve(0x12340000ULL, GiB(16), MEM_RESERVE, PAGE_NOACCESS, 0, &st, &ret, &sz) && st == STATUS_NO_MEMORY);
-    assert(!reserve(0, GiB(8), MEM_RESERVE, PAGE_NOACCESS, 1, &st, &ret, &sz));
-    assert(!alloc_calls && !ppsc_mine(&pebs[3]));
-
-    /* B exits and its views are freed: its six slots are held again, A's is not. */
-    exit_keeping(&pebs[1], 0);
-    assert(ppsc_held == (ALL_SLOTS & ~PPSC_BIT(PPSC_ELF_META)) && !ppsc_mine(&pebs[1]));
-    assert(ppsc_owner[PPSC_ELF_META] == &pebs[0]);
+    reset(); grant_ok(GiB(64), GiB(32), 0, PPSC_ELF); grant_ok(GiB(64), GiB(32), 0, PPSC_CEF);
+    alloc_mismatch = 1;                                   /* our own wrong-shaped view is freed */
+    assert(reserve(0, GiB(8), MEM_RESERVE, PAGE_NOACCESS, 1, &st, &ret, &sz) && st == STATUS_NO_MEMORY);
+    assert(free_calls == 1 && view_count() == 2 && !ppsc_placed[PPSC_CAGE] && !hold_calls);
     check_holds();
-    grant_ok(GiB(64), GiB(32), 0, PPSC_ELF);                /* C now, as B was */
-    grant_ok(0x12340000ULL, GiB(16), 0, PPSC_ELF_META2);
 
-    /* A's view goes at last: ELF_META is held again but C never gets both. */
-    exit_keeping(&pebs[0], 0);
-    assert(!ppsc_owner[PPSC_ELF_META] && (ppsc_held & PPSC_BIT(PPSC_ELF_META)));
-    check_holds();
-    assert(reserve(0x12340000ULL, GiB(16), MEM_RESERVE, PAGE_NOACCESS, 0, &st, &ret, &sz) && st == STATUS_NO_MEMORY);
-    assert(!ppsc_owner[PPSC_ELF_META] && ppsc_owner[PPSC_ELF_META2] == &pebs[3]);
-    /* ...and once C is gone the next helper takes ELF_META, not the spare. */
-    exit_keeping(&pebs[3], 0);
-    cur = &pebs[1];
-    grant_ok(GiB(64), GiB(32), 0, PPSC_ELF);
-    grant_ok(0x12340000ULL, GiB(16), 0, PPSC_ELF_META);
-    assert(!ppsc_owner[PPSC_ELF_META2] && (ppsc_held & PPSC_BIT(PPSC_ELF_META2)));
-}
+    reset(); grant_ok(GiB(64), GiB(32), 0, PPSC_ELF); grant_ok(GiB(64), GiB(32), 0, PPSC_CEF);
+    reserved_areas[0] = (struct reserved_area){(void *)(uintptr_t)0x7b00000000ULL, 0x1000, 0};
+    reserved_count = 1;                                   /* a Wine reserved area at its home */
+    alloc_calls = 0;
+    assert(reserve(0, GiB(8), MEM_RESERVE, PAGE_NOACCESS, 1, &st, &ret, &sz) && st == STATUS_NO_MEMORY);
+    assert(!alloc_calls && !ppsc_placed[PPSC_CAGE] && strstr(all_msgs, "slot overlaps a reserved area; not granted, not placed"));
+    reserved_count = 0;
+    grant_ok(0, GiB(8), 1, PPSC_CAGE);
 
-/* The spare goes only to a helper owning ELF, no ELF metadata, while another
- * PEB owns ELF_META; never to a helper as its second ELF metadata. */
-static void t_meta2_only_for_another_owner(void)
-{
-    NTSTATUS st; void *ret; SIZE_T sz; void *addr;
-    reset(); grant_ok(GiB(64), GiB(32), 0, PPSC_ELF);
-    ppsc_held &= ~PPSC_BIT(PPSC_ELF_META); native_held[PPSC_ELF_META] = 0;   /* not held, nobody owns it */
-    assert(reserve(0x12340000ULL, GiB(16), MEM_RESERVE, PAGE_NOACCESS, 0, &st, &ret, &sz) && st == STATUS_NO_MEMORY);
-    assert(!ppsc_owner[PPSC_ELF_META2] && (ppsc_held & PPSC_BIT(PPSC_ELF_META2)) && alloc_calls == 1);
-
-    reset(); grant_ok(GiB(64), GiB(32), 0, PPSC_ELF);              /* A lives, owning ELF and its metadata */
-    grant_ok(0x12340000ULL, GiB(16), 0, PPSC_ELF_META);
-    assert(reserve(0x12340000ULL, GiB(16), MEM_RESERVE, PAGE_NOACCESS, 0, &st, &ret, &sz) && st == STATUS_NO_MEMORY);
-    assert(!ppsc_owner[PPSC_ELF_META2]);                           /* never both */
-    addr = (void *)(uintptr_t)ppsc_range(PPSC_ELF).report; sz = 0;  /* A gives ELF back, keeps its metadata */
-    assert(ppsc_free(&addr, &sz, MEM_RELEASE, &st) && st == STATUS_SUCCESS);
-    cur = &pebs[1];                                                 /* B: ELF, and the spare for metadata */
-    grant_ok(GiB(64), GiB(32), 0, PPSC_ELF);
-    grant_ok(0x12340000ULL, GiB(16), 0, PPSC_ELF_META2);
-    assert(reserve(0x12340000ULL, GiB(16), MEM_RESERVE, PAGE_NOACCESS, 0, &st, &ret, &sz) && st == STATUS_NO_MEMORY);
-    cur = &pebs[0];                                                 /* A owns no ELF now: no metadata */
-    assert(reserve(0x12340000ULL, GiB(16), MEM_RESERVE, PAGE_NOACCESS, 0, &st, &ret, &sz) && st == STATUS_NO_MEMORY);
-    assert(ppsc_owner[PPSC_ELF_META] == &pebs[0] && ppsc_owner[PPSC_ELF_META2] == &pebs[1]);
+    /* Its home taken: the highest free 4 GiB-aligned 8 GiB; libcef's metadata
+     * the highest free 256 MiB-aligned GiB. */
+    reset(); grant_ok(GiB(64), GiB(32), 0, PPSC_ELF); grant_ok(GiB(64), GiB(32), 0, PPSC_CEF);
+    fake_gaps[3] = (struct ppsc_gap){0x7b10000000ULL, 0xf0000000ULL};    /* something at 0x7b00000000 */
+    grant_ok(0x12340000ULL, GiB(16), 0, PPSC_CEF_META);
+    r = ppsc_range(PPSC_CEF_META);
+    assert(r.base == 0x78c0000000ULL);                    /* its home is still free */
+    fake_gaps[2] = (struct ppsc_gap){0x7804000000ULL, 0x80000000ULL};    /* as if it were not */
+    grant_ok(0, GiB(8), 1, PPSC_CAGE);
+    assert(ppsc_range(PPSC_CAGE).base == 0x7600000000ULL);
+    reset(); grant_ok(GiB(64), GiB(32), 0, PPSC_ELF); grant_ok(GiB(64), GiB(32), 0, PPSC_CEF);
+    fake_gaps[2] = (struct ppsc_gap){0x7804000000ULL, 0x80000000ULL};
+    grant_ok(0x12340000ULL, GiB(16), 0, PPSC_CEF_META);
+    assert(ppsc_range(PPSC_CEF_META).base == 0x7bc0000000ULL);
     check_holds();
 }
 
-static void t_meta2_free_and_exit(void)
+/* A placed on-demand slot whose range something else mapped while it was
+ * free is placed anew at the next ask; an anchor is lost. */
+static void t_on_demand_lost(void)
 {
-    NTSTATUS st; void *ret, *addr; SIZE_T sz;
-    struct ppsc_range m = ppsc_range(PPSC_ELF_META2);
-    a_died_metadata_kept();
-    grant_ok(GiB(64), GiB(32), 0, PPSC_ELF);
-    grant_ok(0x12340000ULL, GiB(16), 0, PPSC_ELF_META2);
-    addr = (void *)(uintptr_t)m.report; sz = 0;                    /* whole release at its reported base */
-    assert(ppsc_free(&addr, &sz, MEM_RELEASE, &st) && st == STATUS_SUCCESS && sz == GiB(16));
-    assert(!ppsc_owner[PPSC_ELF_META2] && (ppsc_held & PPSC_BIT(PPSC_ELF_META2)) && !find_view(addr, 0));
+    void *addr; SIZE_T sz; NTSTATUS st;
+    reset(); grant_all();
+    memset(views, 0, sizeof views); foreign_mapping = 1;  /* teardown freed every view, then a mapping */
+    memset(all_msgs, 0, sizeof all_msgs);
+    ppsc_owner_died_locked(&pebs[0]);
+    assert(!ppsc_held && !ppsc_placed[PPSC_CEF_META] && !ppsc_placed[PPSC_CAGE]);
+    assert(ppsc_avail() == PPSC_ON_DEMAND);
+    assert(strstr(all_msgs, "kind=6 slot NOT held again (something mapped it); placed anew at the next ask"));
+    assert(strstr(all_msgs, "kind=1 slot NOT held again (something mapped it)\n"));
     check_holds();
-    grant_ok(0x12340000ULL, GiB(16), 0, PPSC_ELF_META2);           /* asked again: granted again */
-    addr = (void *)(uintptr_t)(m.report + 0x1000); sz = 0;         /* not its base: not the layout's */
-    assert(!ppsc_free(&addr, &sz, MEM_RELEASE, &st));
-    addr = (void *)(uintptr_t)m.report; sz = 0x1000; st = 0x777;  /* partial: refused */
-    assert(ppsc_free(&addr, &sz, MEM_RELEASE, &st) && st == STATUS_UNABLE_TO_FREE_VM);
 
-    memset(all_msgs, 0, sizeof all_msgs);                           /* B dies with the spare's view kept */
-    exit_keeping(&pebs[1], PPSC_ELF_META2);
-    assert(ppsc_owner[PPSC_ELF_META2] == &pebs[1] && !(ppsc_held & PPSC_BIT(PPSC_ELF_META2)));
-    assert(strstr(all_msgs, "kind=7 view kept") && strstr(all_msgs, "kind=1 slot held again"));
+    reset(); grant_all();
+    hold_over_fail = foreign_mapping = 1;                 /* freed, and not held again */
+    addr = (void *)(uintptr_t)0x7a00000000ULL; sz = 0;
+    memset(all_msgs, 0, sizeof all_msgs);
+    assert(ppsc_free(&addr, &sz, MEM_RELEASE, &st) && st == STATUS_SUCCESS && sz == GiB(8));
+    assert(!ppsc_placed[PPSC_CAGE] && !ppsc_owner[PPSC_CAGE]);
+    assert(strstr(all_msgs, "released kind=6") && strstr(all_msgs, "placed anew at the next ask"));
     check_holds();
-    cur = &pebs[3]; alloc_calls = 0;                                /* C: ELF, but both metadata slots are kept */
-    grant_ok(GiB(64), GiB(32), 0, PPSC_ELF);
-    assert(reserve(0x12340000ULL, GiB(16), MEM_RESERVE, PAGE_NOACCESS, 0, &st, &ret, &sz) && st == STATUS_NO_MEMORY);
-    assert(alloc_calls == 1);
-    exit_keeping(&pebs[1], 0);                                      /* the spare's view goes: held again */
-    assert(!ppsc_owner[PPSC_ELF_META2] && (ppsc_held & PPSC_BIT(PPSC_ELF_META2)));
-    check_holds();
-    grant_ok(0x12340000ULL, GiB(16), 0, PPSC_ELF_META2);
+    hold_over_fail = foreign_mapping = 0;
+    grant_ok(0, GiB(8), 1, PPSC_CAGE);                    /* placed again */
+    assert(ppsc_range(PPSC_CAGE).base == 0x7a00000000ULL && gaps_calls == 3);
 }
 
 /* An operation must lie wholly in one owned real range: one straddling two
@@ -1017,38 +1028,24 @@ static void straddles_refused(uint64_t a, uint64_t n)
 }
 static void t_access_straddle(void)
 {
-    reset(); grant_all();                                   /* A owns both sides of each */
+    reset(); grant_all();                                   /* A owns both sides */
     memset(all_msgs, 0, sizeof all_msgs);
-    straddles_refused(0x758ffff000ULL, 0x2000);             /* ELF_META | CEF_META */
     straddles_refused(0x7bfffff000ULL, 0x2000);             /* cage | Oilpan */
-    assert(count_msg("refused memory operation") == 6);
-    a_died_metadata_kept();                                 /* B: the spare and the cage */
-    grant_ok(GiB(64), GiB(32), 0, PPSC_ELF);
-    grant_ok(0x12340000ULL, GiB(16), 0, PPSC_ELF_META2);
-    grant_ok(GiB(64), GiB(32), 0, PPSC_CEF);
-    grant_ok(0, GiB(8), 1, PPSC_CAGE);
-    memset(all_msgs, 0, sizeof all_msgs);
-    straddles_refused(0x79ffff0000ULL, 0x20000);            /* ELF_META2 | cage */
     assert(count_msg("refused memory operation") == 3);
     assert(mutex_depth == 0);
 }
 
 /* Real-range containment decides; past a metadata kind's real end it is
- * logged as possible overflow, for metadata kinds only, never refused. */
+ * logged as possible overflow, for metadata kinds only, never refused.
+ * libcef's metadata reports 16 GiB from its home, over the cage and Oilpan. */
 static void t_meta_overflow_note(void)
 {
     char want[256];
-    a_died_metadata_kept();
-    grant_ok(GiB(64), GiB(32), 0, PPSC_ELF);
-    grant_ok(0x12340000ULL, GiB(16), 0, PPSC_ELF_META2);
-    grant_ok(GiB(64), GiB(32), 0, PPSC_CEF);
-    grant_ok(0x12340000ULL, GiB(16), 0, PPSC_CEF_META);
-    grant_ok(GiB(64), GiB(32), 0, PPSC_OILPAN);
-    grant_ok(0, GiB(8), 1, PPSC_CAGE);
+    reset(); grant_all();
     memset(all_msgs, 0, sizeof all_msgs);
-    assert(ppsc_access((void *)(uintptr_t)0x7a00001000ULL, 0x1000, PPSC_OP_COMMIT));   /* cage, past the spare */
-    snprintf(want, sizeof want, "helper %p op=0 %p+0x1000 in reported extent of kind=7 off=0x40001000 past its real end: possible metadata overflow into kind=6",
-             (void *)&pebs[1], (void *)(uintptr_t)0x7a00001000ULL);
+    assert(ppsc_access((void *)(uintptr_t)0x7a00001000ULL, 0x1000, PPSC_OP_COMMIT));   /* the cage */
+    snprintf(want, sizeof want, "helper %p op=0 %p+0x1000 in reported extent of kind=4 off=0x140001000 past its real end: possible metadata overflow into kind=6",
+             (void *)&pebs[0], (void *)(uintptr_t)0x7a00001000ULL);
     assert(count_msg(want) == 1 && count_msg("possible metadata overflow") == 1);
     assert(count_msg("in reported extent of kind=1 off=0x200001000 lands in its own kind=6 real range") == 1);
     assert(count_msg("in Oilpan's reported lower half off=0x200001000 (real slot kind=6)") == 1);
@@ -1057,24 +1054,27 @@ static void t_meta_overflow_note(void)
     assert(count_msg("possible metadata overflow into kind=6") == 1);
     assert(count_msg("of kind=5 off=0x200001000 lands in its own kind=6") == 1);       /* Oilpan is not metadata */
     memset(all_msgs, 0, sizeof all_msgs);
-    assert(ppsc_access((void *)(uintptr_t)0x7c00001000ULL, 0x1000, PPSC_OP_COMMIT));   /* Oilpan, still in the spare's report */
-    assert(count_msg("of kind=7 off=0x240001000 past its real end: possible metadata overflow into kind=5") == 1);
+    assert(ppsc_access((void *)(uintptr_t)0x7c00001000ULL, 0x1000, PPSC_OP_COMMIT));   /* Oilpan, still in its report */
+    assert(count_msg("of kind=4 off=0x340001000 past its real end: possible metadata overflow into kind=5") == 1);
     assert(count_msg("possible metadata overflow") == 1);
     memset(all_msgs, 0, sizeof all_msgs);
-    assert(ppsc_access((void *)(uintptr_t)0x79c0001000ULL, 0x1000, PPSC_OP_COMMIT));   /* the spare's own range */
-    assert(!count_msg("possible metadata overflow") && count_msg("lands in its own kind=7 real range") == 1);
+    assert(ppsc_access((void *)(uintptr_t)0x78c0001000ULL, 0x1000, PPSC_OP_COMMIT));   /* its own range */
+    assert(!count_msg("possible metadata overflow") && count_msg("lands in its own kind=4 real range") == 1);
     memset(all_msgs, 0, sizeof all_msgs);
     for (int i = 0; i < 17; i++)                                    /* capped per reported kind */
         assert(ppsc_access((void *)(uintptr_t)(0x7a00100000ULL + i * 0x200000), 0x1000, PPSC_OP_COMMIT));
-    assert(count_msg("of kind=7 off=") == 13);                      /* 3 above + 13 = the cap of 16 */
+    assert(count_msg("of kind=4 off=") == 13);                      /* 3 above + 13 = the cap of 16 */
     assert(!count_msg("refused"));
 }
 
-/* The same check for a helper that owns no metadata report reaching the cage
+/* The same check for a helper whose metadata reports do not reach the cage
  * (its own process: the notes' limits are per run). */
 static void t_meta_overflow_core_kinds(void)
 {
-    reset(); grant_all();
+    reset();
+    grant_ok(GiB(64), GiB(32), 0, PPSC_ELF); grant_ok(0x12340000ULL, GiB(16), 0, PPSC_ELF_META);
+    grant_ok(GiB(64), GiB(32), 0, PPSC_CEF); grant_ok(GiB(64), GiB(32), 0, PPSC_OILPAN);
+    grant_ok(0, GiB(8), 1, PPSC_CAGE);
     memset(all_msgs, 0, sizeof all_msgs);
     assert(ppsc_access((void *)(uintptr_t)0x7b00000000ULL, 0x1000, PPSC_OP_PROTECT));
     assert(!count_msg("possible metadata overflow"));
@@ -1092,9 +1092,8 @@ static const struct { const char *name; void (*fn)(void); } tests[] = {
     {"reported_cross_slot", t_reported_cross_slot},
     {"free_whole", t_free_whole}, {"free_refusals", t_free_refusals},
     {"free_null_owner", t_free_null_owner}, {"access", t_access}, {"owner_died", t_owner_died},
-    {"owner_held_in_place", t_owner_held_in_place},
-    {"meta2_second_helper", t_meta2_second_helper}, {"meta2_only_for_another_owner", t_meta2_only_for_another_owner},
-    {"meta2_free_and_exit", t_meta2_free_and_exit}, {"access_straddle", t_access_straddle},
+    {"owner_held_in_place", t_owner_held_in_place}, {"on_demand_failures", t_on_demand_failures},
+    {"on_demand_lost", t_on_demand_lost}, {"access_straddle", t_access_straddle},
     {"meta_overflow_note", t_meta_overflow_note}, {"meta_overflow_core_kinds", t_meta_overflow_core_kinds},
 };
 int main(int argc, char **argv)
@@ -1111,8 +1110,8 @@ int main(int argc, char **argv)
 NAMES = ['route_not_routed', 'route_giant_unknown', 'route_sequence', 'route_cage', 'route_impossible_probes', 'route_code_range',
          'route_second_helper', 'grant_failures', 'grant_reserved_area', 'grant_intruder',
          'free_whole', 'free_refusals', 'free_null_owner', 'access', 'reported_tail',
-         'reported_oilpan_low', 'reported_cross_slot', 'owner_died', 'owner_held_in_place', 'meta2_second_helper',
-         'meta2_only_for_another_owner', 'meta2_free_and_exit', 'access_straddle', 'meta_overflow_note',
+         'reported_oilpan_low', 'reported_cross_slot', 'owner_died', 'owner_held_in_place', 'on_demand_failures',
+         'on_demand_lost', 'access_straddle', 'meta_overflow_note',
          'meta_overflow_core_kinds']
 
 

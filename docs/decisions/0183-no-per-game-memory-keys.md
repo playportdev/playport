@@ -96,6 +96,16 @@ lands, the keys it removes stay as built, and no part of it is shown on the phon
   in every Play; madeira-unix 0236's refusal of V8's reserve ladder, which runs before the elastic
   policy.
 
+**Built in part 2026-11-13 ([PLA-843](https://linear.app/playportdev/issue/PLA-843)):** madeira-unix 0016
+deletes Madeira's boot holds, the jumbo hold (`jumbo-mb`, `jumbo-keep-mb`) and the cage hold
+(`cage-hold`); the patches that served from them (0017, 0171) and the short-reserve path (0222,
+`short-reserve-mb`) are gone from the series, and the elastic policy has no hold-served asks.
+`TitleConfig` refuses the four keys wherever a launch's keys come from, and PlayportKit's
+`MemoryKeyTests` fails any compatibility entry, cohort entry, launcher or `everyGame` default that
+carries a memory key it lists, the deleted keys and those the configuration check refuses as any
+title's (`TitleConfig.refusedKeys`), or a cohort entry that carries `memoryMB`; each ticket that
+deletes or refuses a key adds it there.
+
 ## Costs and risks
 
 - **No per-title way out.** A game the general rules do not serve fails until a rule serves it or a

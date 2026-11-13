@@ -1,6 +1,6 @@
 {
-  "title": "Red Dead Redemption 2 (1174180) off the Social Club layout, without jumbo-mb",
-  "sources": ["phone run 20261030T141431-rdr2-p476d1: [va-gaps] walk with the jumbo hold's range returned to the window, the [jumbo#]/[bigres] asks that placed (CEF's hinted 2 GB pools, 256 MB placeholders, PartitionAlloc's unhinted 512 MB retries, the game's 8,960 and 1,175 MB pools), [bigres-use] committed MB (8,960 MB pool: 2,357 MB); a view the log shows reused is released first"],
+  "title": "Red Dead Redemption 2 (1174180) off the Social Club layout, with no key",
+  "sources": ["phone run 20261030T141431-rdr2-p476d1: [va-gaps] walk with the boot hold's range returned to the window, the [jumbo#]/[bigres] asks that placed (CEF's hinted 2 GB pools, 256 MB placeholders, PartitionAlloc's unhinted 512 MB retries, the game's 8,960 and 1,175 MB pools), [bigres-use] committed MB (8,960 MB pool: 2,357 MB); a view the log shows reused is released first"],
   "free": [["0x706a478000", "0x73fede0000"], ["0x73ffff0000", "0x7c00000000"]],
   "events": [
     ["reserve", "cef2g_a", "0x80000000", ["hint"], {}],

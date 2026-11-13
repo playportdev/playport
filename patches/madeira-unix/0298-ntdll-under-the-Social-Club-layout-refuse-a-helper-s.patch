@@ -142,12 +142,12 @@ index 52ad03a6..b7f0eba5 100644
                  int len = params->CommandLine.Length / sizeof(WCHAR), how, n;
                  int cap = len + 256;
 diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
-index 0470806e..2ecef932 100644
+index cf4e29b8..e2dac3c3 100644
 --- a/build/ntdll-unix/virtual_ios.c
 +++ b/build/ntdll-unix/virtual_ios.c
-@@ -2157,6 +2157,8 @@ static size_t    ios_jumbo_hold_size;
-  * pre-ml1029 behaviour. */
- static size_t    ios_jumbo_hold_keep;
+@@ -2082,6 +2082,8 @@ static void ios_va_gap_probe( const char *why )
+ }
+ 
  #include "pp_sc_boot.h"
 +/* For process_ios.c (PLA-865): whether this Play holds the Social Club layout. */
 +int pp_sc_layout_ready(void) { return ppsc_ready; }

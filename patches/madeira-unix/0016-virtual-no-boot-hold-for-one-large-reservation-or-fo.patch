@@ -1,0 +1,402 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 13 Nov 2026 12:00:00 +0100
+Subject: [PATCH] virtual: no boot hold for one large reservation or for V8's
+ cage
+
+Madeira reserved two ranges at boot for reservations a title had not made
+yet: ml996 held the largest free hole for one large reservation of a size
+madeira.cfg named (ml997 and ml1029 handed it out), and ml433 held
+[0x7200000000, 0x7400000000) for V8's 8 GB cage. Both are gone, with the
+calls that served from them: under decision 0183 no title sizes or
+switches on an address-space hold, and a game's large reservations are
+placed by the rules every game gets. A large ask that finds no room fails
+as on any full address space.
+
+Linear: PLA-843
+Class: upstream-bug
+Evidence: docs/decisions/0183-no-per-game-memory-keys.md; tools/tests/test_elastic_reserve.py (host checks; phone gates not run)
+Offered-upstream: no; the holds are the iOS port's
+---
+ build/ntdll-unix/loader_ios.c  |   9 -
+ build/ntdll-unix/virtual_ios.c | 305 +--------------------------------
+ 2 files changed, 2 insertions(+), 312 deletions(-)
+
+diff --git a/build/ntdll-unix/loader_ios.c b/build/ntdll-unix/loader_ios.c
+index 43a775c..39a26c1 100644
+--- a/build/ntdll-unix/loader_ios.c
++++ b/build/ntdll-unix/loader_ios.c
+@@ -2770,15 +2770,6 @@ static void start_main_thread(void)
+      * first PE placement. */
+     WINE_IOS_LOG("ios_reserve_fex_arena...");
+     ios_reserve_fex_arena();
+-    /* ml997: the guest jumbo holdback runs AFTER the arena, never before.
+-     * rdr65 held 9216 MB at jit-pool-init and the arena then found nothing in 9
+-     * candidates ("ml774 NO ARENA RESERVED"), which cost FEX its private band
+-     * and produced 683 failed 64KB RWX CodeBuffer allocations. The arena is
+-     * small and must win; the holdback takes what is left. */
+-    {
+-        extern void ios_jumbo_holdback_init( void );
+-        ios_jumbo_holdback_init();
+-    }
+ 
+     WINE_IOS_LOG("load_ntdll...");
+     load_ntdll();
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index cff7b23..cc8792e 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -1358,28 +1358,6 @@ static void ios_pool_owner_search( const uint64_t *wanted, unsigned nwanted )
+ static struct { uint64_t base, size, committed; unsigned commits, collisions; unsigned cage; } ios_soft[IOS_SOFT_MAX];
+ static unsigned ios_soft_n;
+ 
+-/* ml433 (#72): the V8/cppgc cage holdback.
+- *
+- * Single-process CEF means exactly ONE process-wide cppgc/V8 cage: an 8GB
+- * reservation the guest requires 8GB-ALIGNED. On Windows' 128TB that is free;
+- * in our 64GB usable band the only 8GB-aligned stretch outside the PA pool
+- * slots is [0x7200000000, 0x7400000000), and top-down furniture placement
+- * fills its tail with DLL image copies long before CEF asks (~85s in). The
+- * guest's fallback — reserve size+align-64K = 16383MB and trim — needs a 16GB
+- * gap that cannot exist here, so PA retries three times and abort()s the
+- * webhelper (ml432, one minute after the first-ever BrowserReady).
+- *
+- * So reserve the stretch at boot, before any furniture can land in it, and
+- * hand it to the first 8GB jumbo ask. It deliberately stops 64KB short of
+- * 0x7400000000: that page is the PA guard pool's home base (guard-style base
+- * = slot - 64KB, see the jumbo walk), which stays REAL and untouched. The
+- * guest is told it got the full 8GB — the top 64KB overlaps only PA's
+- * never-committed forbidden zone, and a stray commit there is absorbed by an
+- * ios_soft tail entry. */
+-#define IOS_CAGE_BASE      0x7200000000ULL
+-#define IOS_CAGE_REAL_SIZE 0x1ffff0000ULL   /* 8GB - 64KB */
+-static int ios_cage_holdback_live;
+-
+ static int ios_soft_find( uint64_t addr )
+ {
+     /* ml434: smallest matching range wins — the 4GB soft cages sit INSIDE the
+@@ -1879,6 +1857,8 @@ static void ios_va_gap_probe( const char *why )
+             usable_mb, usable_mb >> 10);
+ }
+ 
++static void *anon_mmap_tryfixed( void *start, size_t size, int prot, int flags );
++
+ /***********************************************************************
+  *           ios_va_occupancy_probe                               (ml994)
+  *
+@@ -1894,195 +1874,6 @@ static void ios_va_gap_probe( const char *why )
+  * mach_vm_region -- the latter returns an object-name port on every call and
+  * leaks it.
+  */
+-/***********************************************************************
+- *           ios_jumbo_holdback                                   (ml996)
+- *
+- * Hold the largest free VA hole from BOOT, for one large guest reservation.
+- *
+- * rdr64 measured the whole problem. The guest's reservation is a hard 8960 MB
+- * (rdr61..rdr63: max(7/8 x reported_phys, 8960 MB), and no reported value
+- * lowers it). At boot the largest hole below the 63 GB ceiling is 9947 MB --
+- * enough. By the time the guest asks it is 8796 MB, because Wine's own
+- * furniture took ~700 MB off the bottom (the PEB band lands there) and ~1143 MB
+- * off the top. Short by ~164 MB after all that work.
+- *
+- * Hinting cannot fix that: the hardcoded jumbo slot walk runs from
+- * 0x7C00000000 down to 0x6800000000, every candidate above this device's
+- * 0xfc0000000 ceiling, so all of them fail by construction -- the same
+- * hardcoded-band defect ml706 fixed for the FEX band. And a hint is useless
+- * against a hole that is simply too small. The hole has to be RESERVED before
+- * anything else can nibble it, which is what ml977 does for the fixed-base
+- * image window and what ios_cage_holdback does for the 8GB V8 cage.
+- *
+- * OPT-IN via Documents/madeira-jumbo-mb.txt, so the default path is unchanged
+- * and nothing regresses on hardware or for the titles that currently work. The
+- * cost is real and must be measured, not assumed: holding ~9 GB forces Wine's
+- * furniture into the remaining holes (4175 MB low, plus whatever the arena
+- * leaves), and if that does not fit, the desktop breaks instead of the game.
+- */
+-static uintptr_t ios_jumbo_hold_base;
+-static size_t    ios_jumbo_hold_size;
+-/* ml1029: how much of the holdback must stay reserved for the ONE big guest
+- * reservation. Anything above this may be carved off the TOP to satisfy an
+- * allocation that would otherwise fail outright. Read from
+- * madeira-jumbo-keep-mb.txt; 0 (absent) => keep everything, i.e. exactly the
+- * pre-ml1029 behaviour. */
+-static size_t    ios_jumbo_hold_keep;
+-
+-static void *anon_mmap_tryfixed( void *start, size_t size, int prot, int flags );
+-
+-void ios_jumbo_holdback_init( void )
+-{
+-    static int done;
+-    unsigned long long want = 0, ceiling = 0;
+-    mach_vm_address_t addr = 0, prev_end = 0, best_at = 0;
+-    unsigned long long best = 0;
+-    task_vm_info_data_t vmi;
+-    mach_msg_type_number_t cnt = TASK_VM_INFO_COUNT;
+-    void *got;
+-
+-    if (done) return;
+-    done = 1;
+-
+-    want = (size_t)(madeira_cfg_int( "jumbo-mb", 0 ) * 1024ll * 1024ll);   /* ml1095: madeira.cfg jumbo-mb = N */
+-    if (!want) return;                       /* opt-in: absent or 0 => off */
+-
+-    /* ml1029: the keep floor, same units. ml1095: madeira.cfg jumbo-keep-mb = N */
+-    ios_jumbo_hold_keep = (size_t)(madeira_cfg_int( "jumbo-keep-mb", 0 ) * 1024ll * 1024ll);
+-    if (ios_jumbo_hold_keep)
+-        dprintf( 2, "[jumbo-hold] ml1029 keep floor from jumbo-keep-mb: "
+-                    "%llu MB (the rest of the holdback may be carved off the top)\n",
+-                 (unsigned long long)ios_jumbo_hold_keep >> 20 );
+-
+-    if (task_info( mach_task_self(), TASK_VM_INFO, (task_info_t)&vmi, &cnt ) == KERN_SUCCESS)
+-        ceiling = (unsigned long long)vmi.max_address;
+-    if (!ceiling) ceiling = 0x1000000000ull;
+-
+-    /* largest free hole below the ceiling */
+-    while (addr < ceiling)
+-    {
+-        mach_vm_size_t size = 0;
+-        natural_t depth = 0;
+-        vm_region_submap_info_data_64_t info;
+-        mach_msg_type_number_t c2 = VM_REGION_SUBMAP_INFO_COUNT_64;
+-
+-        if (mach_vm_region_recurse( mach_task_self(), &addr, &size, &depth,
+-                                    (vm_region_recurse_info_t)&info, &c2 ) != KERN_SUCCESS)
+-            break;
+-        if (addr >= ceiling) break;
+-        if (addr > prev_end && (unsigned long long)(addr - prev_end) > best)
+-        {
+-            best = (unsigned long long)(addr - prev_end);
+-            best_at = prev_end;
+-        }
+-        prev_end = addr + size;
+-        addr = prev_end;
+-    }
+-    if (prev_end < ceiling && (unsigned long long)(ceiling - prev_end) > best)
+-    {
+-        best = (unsigned long long)(ceiling - prev_end);
+-        best_at = prev_end;
+-    }
+-
+-    dprintf( 2, "[jumbo-hold] ml996 want=%llu MB; largest free hole 0x%llx +%llu MB "
+-             "(ceiling 0x%llx)\n", want >> 20, (unsigned long long)best_at, best >> 20,
+-             ceiling );
+-    if (best < want)
+-    {
+-        dprintf( 2, "[jumbo-hold] ml996 NOT holding: the largest hole is smaller than the "
+-                 "request. Nothing to reserve, and a partial hold would only fragment it\n" );
+-        return;
+-    }
+-
+-    /* place at the TOP of the hole: Wine's furniture and the PEB band grow from
+-     * the bottom, so leaving the bottom free is what keeps them out of here. */
+-    {
+-        uintptr_t base = (uintptr_t)(best_at + (best - want));
+-        base &= ~(uintptr_t)0xffff;          /* 64K granule */
+-        got = anon_mmap_tryfixed( (void *)base, (size_t)want, PROT_NONE, MAP_NORESERVE );
+-        if (got == MAP_FAILED)
+-        {
+-            dprintf( 2, "[jumbo-hold] ml996 reserve of 0x%llx +%llu MB FAILED errno=%d -- not "
+-                     "overwriting anything; the guest reservation will fail as before\n",
+-                     (unsigned long long)base, want >> 20, errno );
+-            return;
+-        }
+-        ios_jumbo_hold_base = (uintptr_t)got;
+-        ios_jumbo_hold_size = (size_t)want;
+-        dprintf( 2, "[jumbo-hold] ml996 HELD 0x%llx +%llu MB PROT_NONE (no-overwrite) for one "
+-                 "large guest reservation\n",
+-                 (unsigned long long)ios_jumbo_hold_base, want >> 20 );
+-    }
+-}
+-
+-/* Returns the held base if this request can be served from it, else 0. The
+- * caller maps at that address; the hold is released first and consumed once. */
+-static uintptr_t ios_jumbo_holdback_take( size_t size )
+-{
+-    uintptr_t base = ios_jumbo_hold_base;
+-
+-    if (!ios_jumbo_hold_size || size > ios_jumbo_hold_size) return 0;
+-    dprintf( 2, "[jumbo-hold] ml996 releasing the holdback 0x%llx +%llu MB for a %llu MB "
+-             "request\n", (unsigned long long)base,
+-             (unsigned long long)ios_jumbo_hold_size >> 20,
+-             (unsigned long long)size >> 20 );
+-    munmap( (void *)base, ios_jumbo_hold_size );
+-    ios_jumbo_hold_base = 0;
+-    ios_jumbo_hold_size = 0;
+-    return base;
+-}
+-
+-/* ml1029: carve `size` off the TOP of the holdback, or 0 if it cannot be spared.
+- *
+- * WHY: the holdback reserves one large hole for the guest's single big
+- * reservation. But the guest also makes a ~692MB commit during startup, and the
+- * ORDER of the two varies between runs. rdr98 got the big ask first, which
+- * consumed the holdback and left the 692MB ask free to use the released space --
+- * that run reached the loading screen and rendered. rdr99 got the 692MB ask
+- * FIRST, and it died: our own 9216MB holdback was the reason the placement scan
+- * reported `gaps_seen=0`. We starved a request happening NOW to protect one that
+- * might never come, and the game dies either way. That is the coin flip that has
+- * made this failure look like variance for a dozen runs.
+- *
+- * Both fit: 8960 + 692 = 9652 MB inside the 9907 MB hole the holdback is cut
+- * from. So serve both out of it -- take() hands out the BOTTOM (it returns
+- * `base`), so carving comes off the TOP and the two never collide.
+- *
+- * The keep floor is a config value and defaults to "keep everything", so this
+- * cannot change behaviour for the titles that depend on the arena/holdback
+- * today unless it is explicitly turned on. */
+-static uintptr_t ios_jumbo_holdback_carve( size_t size )
+-{
+-    uintptr_t top, at;
+-
+-    if (!ios_jumbo_hold_size || !ios_jumbo_hold_keep) return 0;
+-    if (size > ios_jumbo_hold_size) return 0;
+-    if (ios_jumbo_hold_size - size < ios_jumbo_hold_keep) return 0;
+-
+-    top = ios_jumbo_hold_base + ios_jumbo_hold_size;
+-    at  = (top - size) & ~(uintptr_t)0xffff;      /* 64K granule */
+-    if (at < ios_jumbo_hold_base) return 0;
+-    size = (size_t)(top - at);
+-    if (ios_jumbo_hold_size - size < ios_jumbo_hold_keep) return 0;
+-
+-    /* Release just this slice; the rest of the holdback stays PROT_NONE-held. */
+-    if (munmap( (void *)at, size ) != 0)
+-    {
+-        dprintf( 2, "[jumbo-hold] ml1029 carve munmap(0x%llx +%llu MB) FAILED errno=%d\n",
+-                 (unsigned long long)at, (unsigned long long)size >> 20, errno );
+-        return 0;
+-    }
+-    ios_jumbo_hold_size -= size;
+-    dprintf( 2, "[jumbo-hold] ml1029 CARVED 0x%llx +%llu MB off the top; holdback now "
+-                "0x%llx +%llu MB (keep floor %llu MB) -- this request would otherwise have "
+-                "FAILED with the holdback as the only thing in its way\n",
+-             (unsigned long long)at, (unsigned long long)size >> 20,
+-             (unsigned long long)ios_jumbo_hold_base,
+-             (unsigned long long)ios_jumbo_hold_size >> 20,
+-             (unsigned long long)ios_jumbo_hold_keep >> 20 );
+-    return at;
+-}
+-
+ 
+ static void ios_va_occupancy_probe( const char *why )
+ {
+@@ -5813,22 +5604,6 @@ void *anon_mmap_alloc( size_t size, int prot )
+             ret = ios_ml1027_place( size, prot );
+             if (ret == MAP_FAILED) errno = saved;
+         }
+-        /* ml1029: still nothing, and our own holdback may be the only thing in
+-         * the way. Carve it rather than fail -- see ios_jumbo_holdback_carve. */
+-        if (ret == MAP_FAILED)
+-        {
+-            int saved = errno;
+-            uintptr_t carved = ios_jumbo_holdback_carve( size );
+-
+-            if (carved)
+-            {
+-                ret = anon_mmap_tryfixed( (void *)carved, size, prot, 0 );
+-                if (ret == MAP_FAILED)
+-                    dprintf( 2, "[jumbo-hold] ml1029 carved 0x%llx but the map there FAILED "
+-                                "errno=%d\n", (unsigned long long)carved, errno );
+-            }
+-            if (ret == MAP_FAILED) errno = saved;
+-        }
+         if (ret == MAP_FAILED || !ios_jit_pool_intersects( ret, size )) break;
+         dprintf( 2, "[jit-clobber] kernel-pick %p+0x%lx prot=%x landed INSIDE the JIT pool"
+                     " (rx=%p rw=%p size=0x%lx) — rejecting, try %d\n",
+@@ -14179,16 +13954,6 @@ void virtual_init(void)
+     size = (char *)address_space_start - (char *)0x10000;
+     if (size && mmap_is_in_reserved_area( (void*)0x10000, size ) == 1)
+         anon_mmap_fixed( (void *)0x10000, size, PROT_READ | PROT_WRITE, 0 );
+-
+-    /* ml433 (#72): hold back the only 8GB-aligned stretch in the guest band
+-     * before top-down placement can put furniture in it — see IOS_CAGE_BASE. */
+-    if (anon_mmap_fixed( (void *)(uintptr_t)IOS_CAGE_BASE, IOS_CAGE_REAL_SIZE, PROT_NONE, 0 ) != MAP_FAILED)
+-    {
+-        ios_cage_holdback_live = 1;
+-        dprintf( 2, "[cage] holdback reserved 0x%llx+0x%llx rev=ml433\n",
+-                 (unsigned long long)IOS_CAGE_BASE, (unsigned long long)IOS_CAGE_REAL_SIZE );
+-    }
+-    else dprintf( 2, "[cage] holdback reserve FAILED (errno %d) rev=ml433\n", errno );
+ }
+ 
+ 
+@@ -17255,31 +17020,6 @@ NTSTATUS WINAPI NtAllocateVirtualMemory( HANDLE process, PVOID *ret, ULONG_PTR z
+                 static int probed;
+                 dprintf(2, "[jumbo] kernel-pick reserve failed (0x%x) for size=0x%lx — top window is full\n",
+                         (unsigned)st, (unsigned long)*size_ptr);
+-                /* ml997: serve it from the boot holdback HERE. rdr65 proved this
+-                 * is the branch that runs -- it printed the line above and then
+-                 * gave up, while ml996's take() sat in the hinted-retry branch
+-                 * further down and was never reached (no "releasing" line in the
+-                 * whole log). Confirm the live branch from a log before patching
+-                 * one; this is the third time in this effort that a hook went
+-                 * into a path the evidence never showed executing. */
+-                {
+-                    uintptr_t hb = ios_jumbo_holdback_take( *size_ptr );
+-                    if (hb)
+-                    {
+-                        void *pick2 = (void *)hb;
+-                        SIZE_T csz = *size_ptr;
+-                        unsigned int st3 = allocate_virtual_memory( &pick2, &csz, type, protect,
+-                                                                    0, 0, 0, 0 );
+-                        dprintf( 2, "[jumbo-hold] ml997 mapped at the holdback -> %p size=0x%lx "
+-                                 "st=0x%x\n", pick2, (unsigned long)csz, st3 );
+-                        if (!st3)
+-                        {
+-                            *ret = pick2;
+-                            *size_ptr = csz;
+-                            return STATUS_SUCCESS;
+-                        }
+-                    }
+-                }
+                 if (probed++ < 2)
+                 {
+                     ios_va_gap_probe( "jumbo reserve failed" );
+@@ -17572,47 +17312,6 @@ NTSTATUS WINAPI NtAllocateVirtualMemory( HANDLE process, PVOID *ret, ULONG_PTR z
+                             (unsigned long long)slot, (unsigned long)csz, (unsigned)st2);
+                     if (!st2) sz = csz;
+                 }
+-                /* ml996: the boot holdback, if this request fits it. */
+-                if (st2)
+-                {
+-                    uintptr_t hb = ios_jumbo_holdback_take( *size_ptr );
+-                    if (hb)
+-                    {
+-                        SIZE_T csz = *size_ptr;
+-                        pick = (void *)hb;
+-                        st2 = allocate_virtual_memory( &pick, &csz, type, protect, 0, 0, 0, 0 );
+-                        dprintf( 2, "[jumbo-hold] ml996 mapped at the holdback -> %p size=0x%lx "
+-                                 "st=0x%x\n", pick, (unsigned long)csz, (unsigned)st2 );
+-                        if (!st2) sz = csz;
+-                    }
+-                }
+-                /* ml433 (#72): an 8GB ask is the process-wide V8/cppgc cage and
+-                 * must come back 8GB-ALIGNED, or the guest frees it and dies in
+-                 * a 16GB overreserve retry loop — serve it from the boot
+-                 * holdback, the only aligned stretch left. See IOS_CAGE_BASE. */
+-                if (st2 && ios_cage_holdback_live && *size_ptr == 0x200000000ULL)
+-                {
+-                    SIZE_T csz = IOS_CAGE_REAL_SIZE;
+-                    munmap( (void *)(uintptr_t)IOS_CAGE_BASE, IOS_CAGE_REAL_SIZE );
+-                    ios_cage_holdback_live = 0;
+-                    pick = (void *)(uintptr_t)IOS_CAGE_BASE;
+-                    st2 = allocate_virtual_memory( &pick, &csz, type, protect, 0, 0, 0, 0 );
+-                    if (!st2 && (uintptr_t)pick == IOS_CAGE_BASE)
+-                    {
+-                        sz = *size_ptr;   /* report the full 8GB; the real view is 64K short */
+-                        if (ios_soft_n < IOS_SOFT_MAX)
+-                        {
+-                            ios_soft[ios_soft_n].base = IOS_CAGE_BASE + IOS_CAGE_REAL_SIZE;
+-                            ios_soft[ios_soft_n].size = 0x200000000ULL - IOS_CAGE_REAL_SIZE;
+-                            ios_soft[ios_soft_n].cage = 1;
+-                            ios_soft_n++;
+-                        }
+-                    }
+-                    else if (!st2) sz = csz;   /* landed elsewhere: honest grant, no size lie */
+-                    dprintf(2, "[cage] grant %p real=0x%llx reported=0x%lx st=0x%x rev=ml433\n",
+-                            pick, (unsigned long long)IOS_CAGE_REAL_SIZE,
+-                            (unsigned long)(st2 ? 0 : sz), (unsigned)st2);
+-                }
+                 /* ml434 (#72 layer 2): the 4GB ask is the cppgc caged heap and
+                  * must come back 4GB-ALIGNED. By the time it arrives (~69s) the
+                  * furniture window is 89% full (ml433: free=1701MB, maxhole

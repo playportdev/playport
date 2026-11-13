@@ -1,6 +1,6 @@
 {
   "title": "Hollow Knight (367520)",
-  "sources": ["phone run regression-2026-10-27/01-hollow-knight: [va-gaps] walk (the 8,960 MB jumbo hold then every game's, outside the free list), each [bigres] 511 MB Unity arena at its [big-reserve] address"],
+  "sources": ["phone run regression-2026-10-27/01-hollow-knight: [va-gaps] walk (the 8,960 MB boot hold then every game's, outside the free list), each [bigres] 511 MB Unity arena at its [big-reserve] address"],
   "free": [["0x7043060000", "0x73fede0000"], ["0x73ffff0000", "0x79d0000000"]],
   "events": [
     ["reserve", "arena1", "0x1ffff000", [], {"at": "0x7400000000"}],

@@ -126,6 +126,12 @@ _Avoid_: anti-cheat warning, disclaimer
 
 ## Guest address space
 
+**Memory key**:
+A setting that reserves, places, commits or sizes guest memory, carried by a compatibility entry, a
+cohort entry, a launcher or every game's default rather than following from what the game does.
+Decision 0183 allows none: what a game needs is decided by a property the runtime observes.
+_Avoid_: per-title hold, address-space key
+
 **Claim**:
 The size a guest reservation was told it got. Under elastic reservations it can be larger than the
 view behind it; a later commit inside the claim grows the view or is refused (decision 0180).
@@ -150,6 +156,17 @@ _Avoid_: donor (the donor pool is the helpers' memory that backs guest commits),
 A reservation of 1 GiB or more that cannot be placed whole, given a smaller real part with a guard
 while the caller is told it got its full size.
 _Avoid_: partial reservation, lean reserve
+
+**Anchor**:
+A range of the Social Club layout held from boot, in a Play that starts a verified Rockstar bootstrap:
+an address the Social Club helper's 64 GiB window forces, sized from its measured committed peak with
+a margin.
+_Avoid_: fixed slot, hold
+
+**On-demand slot**:
+A range of the Social Club layout that nothing holds until the helper's first ask for it places it;
+from then on it is held in place for the next helper.
+_Avoid_: claim (the size a reservation was told it got), lazy slot
 
 **Guard (elastic)**:
 The 32 MiB of inaccessible view above a shortened view's or short grant's real part. A commit

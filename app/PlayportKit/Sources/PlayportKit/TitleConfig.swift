@@ -32,8 +32,12 @@ public enum TitleConfig {
         + [MemoryPlan.guestRAMVariable, MemoryPlan.videoVariable, MemoryPlan.vulkanHeapVariable,
            MemoryPlan.vulkanBudgetVariable, SocialClubBootstrap.layoutVariable].map { "env." + $0 })
 
-    /// Keys are the reader's names (`jumbo-mb`, `env.NAME`); values are one line; no refused key.
-    /// The keys are checked in order, so the error names the first.
+    /// Memory keys whose mechanisms are gone (decision 0183): validate refuses them, so no cohort
+    /// entry, compatibility entry, dev build's Runtime keys row or driven launch sets one again.
+    public static let deletedKeys: Set<String> = ["jumbo-mb", "jumbo-keep-mb", "cage-hold", "short-reserve-mb"]
+
+    /// Keys are the reader's names (`inproc-sync`, `env.NAME`); values are one line; no refused or
+    /// deleted key. The keys are checked in order, so the error names the first.
     public static func validate(_ config: [String: String]) throws {
         let keyChars = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._-"))
         for k in config.keys.sorted() {
@@ -42,6 +46,7 @@ public enum TitleConfig {
                   !v.contains(where: { $0 == "\n" || $0 == "\r" })
             else { throw LaunchPlanError.badConfig("\(k) = \(v)") }
             if refusedKeys.contains(k) { throw LaunchPlanError.refusedKey(k) }
+            if deletedKeys.contains(k) { throw LaunchPlanError.deletedKey(k) }
         }
     }
 

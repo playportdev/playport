@@ -1,6 +1,6 @@
 {
   "title": "The Witcher 3 1.32, without its keys, an early 82 MB view at the ceiling",
-  "sources": ["host Wine trace in docs/evidence/2026-09-25-witcher3-setup.md section 6: 8,192 MB (600 MB committed), 32,768 MB (1,600 MB at its base), 300 MB, 2,048 MB (128 MB), 40 MB, reserve+commit 72/72/52/512 MB, 32.1 MB; no phone log of 1.32 on this runtime yet (decision 0180)", "the guest window of phone run pla452-2026-10-27/witcher-3-short3 ([va-gaps] walk), no jumbo or cage hold (the keys removed)", "the early view: Mewgenics run 20261102T152055's first [big-reserve] above the ceiling, 0x5210000 at 0x7400000000, which splits the 32 GiB gap"],
+  "sources": ["host Wine trace in docs/evidence/2026-09-25-witcher3-setup.md section 6: 8,192 MB (600 MB committed), 32,768 MB (1,600 MB at its base), 300 MB, 2,048 MB (128 MB), 40 MB, reserve+commit 72/72/52/512 MB, 32.1 MB; no phone log of 1.32 on this runtime yet (decision 0180)", "the guest window of phone run pla452-2026-10-27/witcher-3-short3 ([va-gaps] walk), with no boot hold", "the early view: Mewgenics run 20261102T152055's first [big-reserve] above the ceiling, 0x5210000 at 0x7400000000, which splits the 32 GiB gap"],
   "free": [["0x704a860000", "0x73fede0000"], ["0x73ffff0000", "0x7c00000000"]],
   "events": [
     ["occupy", "0x7400000000", "0x5210000"],

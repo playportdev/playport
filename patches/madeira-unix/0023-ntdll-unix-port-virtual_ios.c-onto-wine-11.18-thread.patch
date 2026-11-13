@@ -18,7 +18,7 @@ Offered-upstream: no
  1 file changed, 456 insertions(+), 360 deletions(-)
 
 diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
-index 4aa41d7..e9e3e4a 100644
+index 009a3f3..f0fd9a9 100644
 --- a/build/ntdll-unix/virtual_ios.c
 +++ b/build/ntdll-unix/virtual_ios.c
 @@ -99,7 +99,7 @@ extern kern_return_t vm_protect(mach_port_t target_task, vm_address_t address,
@@ -30,7 +30,7 @@ index 4aa41d7..e9e3e4a 100644
  # include <linux/userfaultfd.h>
  # include <linux/fs.h>
  #if defined(UFFD_FEATURE_WP_ASYNC) && defined(PM_SCAN_WP_MATCHING)
-@@ -4905,6 +4905,7 @@ static const BYTE VIRTUAL_Win32Flags[16] =
+@@ -4679,6 +4679,7 @@ static const BYTE VIRTUAL_Win32Flags[16] =
  
  static struct wine_rb_tree views_tree;
  static pthread_mutex_t virtual_mutex;
@@ -38,7 +38,7 @@ index 4aa41d7..e9e3e4a 100644
  
  static const UINT page_shift = 12;
  static const UINT_PTR page_mask = 0xfff;
-@@ -4919,9 +4920,7 @@ static const UINT_PTR host_page_mask = 0xfff;
+@@ -4693,9 +4694,7 @@ static const UINT_PTR host_page_mask = 0xfff;
  #endif
  
  /* Note: these are Windows limits, you cannot change them. */
@@ -49,7 +49,7 @@ index 4aa41d7..e9e3e4a 100644
  static void *address_space_start = (void *)0x100010000; /* above iOS 4GB __PAGEZERO */
  #else
  static void *address_space_start = (void *)0x10000;
-@@ -5489,6 +5488,7 @@ struct _KUSER_SHARED_DATA *user_shared_data = (void *)0x7ffe0000;
+@@ -5263,6 +5262,7 @@ struct _KUSER_SHARED_DATA *user_shared_data = (void *)0x7ffe0000;
  static void *teb_block;
  static void **next_free_teb;
  static int teb_block_pos;
@@ -57,7 +57,7 @@ index 4aa41d7..e9e3e4a 100644
  static struct list teb_list = LIST_INIT( teb_list );
  
  #define ROUND_ADDR(addr,mask) ((void *)((UINT_PTR)(addr) & ~(UINT_PTR)(mask)))
-@@ -5547,6 +5547,13 @@ static inline BOOL is_vprot_exec_write( BYTE vprot )
+@@ -5321,6 +5321,13 @@ static inline BOOL is_vprot_exec_write( BYTE vprot )
  static void ios_jit_range_tripwire( const char *tag, const void *addr, size_t size,
                                      int prot, void *retaddr );
  
@@ -71,7 +71,7 @@ index 4aa41d7..e9e3e4a 100644
  /* mmap() anonymous memory at a fixed address */
  void *anon_mmap_fixed( void *start, size_t size, int prot, int flags )
  {
-@@ -6065,7 +6072,7 @@ static void mmap_add_reserved_area( void *addr, SIZE_T size )
+@@ -5823,7 +5830,7 @@ static void mmap_add_reserved_area( void *addr, SIZE_T size )
      assert( !((UINT_PTR)addr & host_page_mask) );
      assert( !(size & host_page_mask) );
  
@@ -80,7 +80,7 @@ index 4aa41d7..e9e3e4a 100644
      end = (char *)addr + size;
  
      LIST_FOR_EACH( ptr, &reserved_areas )
-@@ -6167,7 +6174,7 @@ static void mmap_remove_reserved_area( void *addr, SIZE_T size )
+@@ -5925,7 +5932,7 @@ static void mmap_remove_reserved_area( void *addr, SIZE_T size )
      assert( !((UINT_PTR)addr & host_page_mask) );
      assert( !(size & host_page_mask) );
  
@@ -89,7 +89,7 @@ index 4aa41d7..e9e3e4a 100644
  
      ptr = list_head( &reserved_areas );
      /* find the first area covering address */
-@@ -6231,9 +6238,10 @@ static int mmap_is_in_reserved_area( void *addr, SIZE_T size )
+@@ -5989,9 +5996,10 @@ static int mmap_is_in_reserved_area( void *addr, SIZE_T size )
  
      LIST_FOR_EACH_ENTRY( area, &reserved_areas, struct reserved_area, entry )
      {
@@ -101,7 +101,7 @@ index 4aa41d7..e9e3e4a 100644
          if ((char *)area->base + area->size < (char *)addr + size) return -1;
          return 1;
      }
-@@ -6906,7 +6914,7 @@ void *get_builtin_so_handle( void *module )
+@@ -6664,7 +6672,7 @@ void *get_builtin_so_handle( void *module )
  static NTSTATUS get_unixlib_funcs( void *so_handle, BOOL wow, const void **funcs, NTSTATUS (**entry)(void) )
  {
      *funcs = dlsym( so_handle, wow ? "__wine_unix_call_wow64_funcs" : "__wine_unix_call_funcs" );
@@ -110,7 +110,7 @@ index 4aa41d7..e9e3e4a 100644
      return *funcs || *entry ? STATUS_SUCCESS : STATUS_ENTRYPOINT_NOT_FOUND;
  }
  
-@@ -8360,7 +8368,7 @@ static void *map_free_area_inner( void *base, void *end, size_t size, int top_do
+@@ -8118,7 +8126,7 @@ static void *map_free_area_inner( void *base, void *end, size_t size, int top_do
          while (first)
          {
              struct file_view *view = WINE_RB_ENTRY_VALUE( first, struct file_view, entry );
@@ -119,7 +119,7 @@ index 4aa41d7..e9e3e4a 100644
  
              ios_scan_views++;
              if ((char *)start + size > gap_lo && (size_t)((char *)start + size - gap_lo) > ios_scan_maxgap)
-@@ -8385,7 +8393,7 @@ static void *map_free_area_inner( void *base, void *end, size_t size, int top_do
+@@ -8143,7 +8151,7 @@ static void *map_free_area_inner( void *base, void *end, size_t size, int top_do
              ios_scan_views++;
              if ((char *)view->base > (char *)start && (size_t)((char *)view->base - (char *)start) > ios_scan_maxgap)
                  ios_scan_maxgap = (char *)view->base - (char *)start;
@@ -128,7 +128,7 @@ index 4aa41d7..e9e3e4a 100644
                                              start, size, unix_prot ))) break;
              start = ROUND_ADDR( (char *)view->base + view->size + align_mask, align_mask );
              /* stop if remaining space is not large enough */
-@@ -8500,6 +8508,42 @@ static void remove_reserved_area( void *addr, size_t size )
+@@ -8258,6 +8266,42 @@ static void remove_reserved_area( void *addr, size_t size )
  }
  
  
@@ -171,7 +171,7 @@ index 4aa41d7..e9e3e4a 100644
  /***********************************************************************
   *           unmap_area
   *
-@@ -11265,44 +11309,6 @@ static inline void *unmap_extra_space( void *ptr, size_t total_size, size_t want
+@@ -11023,44 +11067,6 @@ static inline void *unmap_extra_space( void *ptr, size_t total_size, size_t want
  }
  
  
@@ -216,7 +216,7 @@ index 4aa41d7..e9e3e4a 100644
  /***********************************************************************
   *           map_reserved_area
   *
-@@ -11371,7 +11377,7 @@ static void *map_reserved_area_inner( void *limit_low, void *limit_high, size_t
+@@ -11129,7 +11135,7 @@ static void *map_reserved_area_inner( void *limit_low, void *limit_high, size_t
              if (end <= limit_low) return NULL;
              if (start < limit_low) start = (void *)ROUND_SIZE( 0, limit_low, host_page_mask );
              if (end > limit_high) end = ROUND_ADDR( limit_high, host_page_mask );
@@ -225,7 +225,7 @@ index 4aa41d7..e9e3e4a 100644
              if (ptr) break;
          }
      }
-@@ -11388,7 +11394,7 @@ static void *map_reserved_area_inner( void *limit_low, void *limit_high, size_t
+@@ -11146,7 +11152,7 @@ static void *map_reserved_area_inner( void *limit_low, void *limit_high, size_t
              if (end <= limit_low) continue;
              if (start < limit_low) start = (void *)ROUND_SIZE( 0, limit_low, host_page_mask );
              if (end > limit_high) end = ROUND_ADDR( limit_high, host_page_mask );
@@ -234,7 +234,7 @@ index 4aa41d7..e9e3e4a 100644
              if (ptr) break;
          }
      }
-@@ -11501,7 +11507,7 @@ static NTSTATUS map_view( struct file_view **view_ret, void *base, size_t size,
+@@ -11259,7 +11265,7 @@ static NTSTATUS map_view( struct file_view **view_ret, void *base, size_t size,
  
      if (base)
      {
@@ -243,7 +243,7 @@ index 4aa41d7..e9e3e4a 100644
          if (limit_low && base < (void *)limit_low) return STATUS_CONFLICTING_ADDRESSES;
          if (limit_high && is_beyond_limit( base, size, (void *)limit_high )) return STATUS_CONFLICTING_ADDRESSES;
          if (is_beyond_limit( base, size, host_addr_space_limit )) return STATUS_CONFLICTING_ADDRESSES;
-@@ -12931,6 +12937,12 @@ static void ios_clamp_user_space_limit( const char *when )
+@@ -12689,6 +12695,12 @@ static void ios_clamp_user_space_limit( const char *when )
  
  static void *get_host_addr_space_limit(void)
  {
@@ -256,7 +256,7 @@ index 4aa41d7..e9e3e4a 100644
      unsigned int flags = MAP_PRIVATE | MAP_ANON;
      UINT_PTR addr = (UINT_PTR)1 << 63;
  
-@@ -13001,12 +13013,25 @@ static void *get_host_addr_space_limit(void)
+@@ -12759,12 +12771,25 @@ static void *get_host_addr_space_limit(void)
  
          return walked;
      }
@@ -282,7 +282,7 @@ index 4aa41d7..e9e3e4a 100644
  /***********************************************************************
   *           alloc_arm64ec_map
   */
-@@ -13040,7 +13065,7 @@ static void alloc_arm64ec_map(void)
+@@ -12798,7 +12823,7 @@ static void alloc_arm64ec_map(void)
          ERR( "failed to allocate ARM64EC map: %08x\n", status );
          exit(1);
      }
@@ -291,7 +291,7 @@ index 4aa41d7..e9e3e4a 100644
      /* ml127: dprintf, not ERR — the `virtual` channel's ERR is suppressed in
       * this build, which is why this line has never once appeared in a log. */
      dprintf(2, "[ec-map] peb->EcCodeBitMap=%p size=0x%lx (%lu MB)\n",
-@@ -13641,53 +13666,61 @@ done:
+@@ -13399,53 +13424,61 @@ done:
  }
  
  
@@ -372,7 +372,7 @@ index 4aa41d7..e9e3e4a 100644
  
      return STATUS_SUCCESS;
  }
-@@ -13812,14 +13845,14 @@ static NTSTATUS map_image_view( struct file_view **view_ret, struct pe_image_inf
+@@ -13570,14 +13603,14 @@ static NTSTATUS map_image_view( struct file_view **view_ret, struct pe_image_inf
   *
   * Map a PE image section into memory.
   */
@@ -391,7 +391,7 @@ index 4aa41d7..e9e3e4a 100644
      struct file_view *view;
      unsigned int status;
      sigset_t sigset;
-@@ -13830,28 +13863,29 @@ static NTSTATUS virtual_map_image( HANDLE mapping, void **addr_ptr, SIZE_T *size
+@@ -13588,28 +13621,29 @@ static NTSTATUS virtual_map_image( HANDLE mapping, void **addr_ptr, SIZE_T *size
      if ((status = server_get_unix_fd( mapping, 0, &unix_fd, &needs_close, NULL, NULL )))
          return status;
  
@@ -428,7 +428,7 @@ index 4aa41d7..e9e3e4a 100644
      /* ml366: NAME the image whose placement failed. ml365's mmdevapi load
       * returned c0000017 with zero attributable evidence — the [va-scan]
       * FAILED line was storm-gated and nothing tied a placement failure to a
-@@ -13861,11 +13895,12 @@ static NTSTATUS virtual_map_image( HANDLE mapping, void **addr_ptr, SIZE_T *size
+@@ -13619,11 +13653,12 @@ static NTSTATUS virtual_map_image( HANDLE mapping, void **addr_ptr, SIZE_T *size
          static unsigned imgfail;
          if (imgfail++ < 64)
              ERR( "[img-map-fail] rev=ml366 %s status=%x size=%zx limits=%lx..%lx\n",
@@ -443,7 +443,7 @@ index 4aa41d7..e9e3e4a 100644
      if (status == STATUS_SUCCESS)
      {
          if (offset)
-@@ -13874,14 +13909,14 @@ static NTSTATUS virtual_map_image( HANDLE mapping, void **addr_ptr, SIZE_T *size
+@@ -13632,14 +13667,14 @@ static NTSTATUS virtual_map_image( HANDLE mapping, void **addr_ptr, SIZE_T *size
              size -= offset;
          }
  
@@ -462,7 +462,7 @@ index 4aa41d7..e9e3e4a 100644
              req->offset  = offset;
              status = wine_server_call( req );
          }
-@@ -13912,7 +13947,7 @@ static NTSTATUS virtual_map_image( HANDLE mapping, void **addr_ptr, SIZE_T *size
+@@ -13670,7 +13705,7 @@ static NTSTATUS virtual_map_image( HANDLE mapping, void **addr_ptr, SIZE_T *size
                  if (nt->Signature == IMAGE_NT_SIGNATURE)
                  {
                      IMAGE_SECTION_HEADER *s = IMAGE_FIRST_SECTION(nt);
@@ -471,7 +471,7 @@ index 4aa41d7..e9e3e4a 100644
                      for (int i = 0; i < nt->FileHeader.NumberOfSections; i++)
                      {
                          if (!(s[i].Characteristics & IMAGE_SCN_MEM_EXECUTE)) continue;
-@@ -13958,14 +13993,11 @@ static unsigned int virtual_map_section( HANDLE handle, PVOID *addr_ptr, ULONG_P
+@@ -13716,14 +13751,11 @@ static unsigned int virtual_map_section( HANDLE handle, PVOID *addr_ptr, ULONG_P
      mem_size_t full_size;
      ACCESS_MASK access;
      SIZE_T size;
@@ -487,7 +487,7 @@ index 4aa41d7..e9e3e4a 100644
      LARGE_INTEGER offset;
      sigset_t sigset;
  
-@@ -13991,8 +14023,7 @@ static unsigned int virtual_map_section( HANDLE handle, PVOID *addr_ptr, ULONG_P
+@@ -13749,8 +13781,7 @@ static unsigned int virtual_map_section( HANDLE handle, PVOID *addr_ptr, ULONG_P
          return STATUS_INVALID_PAGE_PROTECTION;
      }
  
@@ -497,7 +497,7 @@ index 4aa41d7..e9e3e4a 100644
      if (res)
      {
          dprintf(2, "[map-sec] get_mapping_info handle=%p access=0x%x -> 0x%x\n",
-@@ -14002,25 +14033,26 @@ static unsigned int virtual_map_section( HANDLE handle, PVOID *addr_ptr, ULONG_P
+@@ -13760,25 +13791,26 @@ static unsigned int virtual_map_section( HANDLE handle, PVOID *addr_ptr, ULONG_P
  
      offset.QuadPart = offset_ptr ? offset_ptr->QuadPart : 0;
  
@@ -535,7 +535,7 @@ index 4aa41d7..e9e3e4a 100644
          return res;
      }
  
-@@ -14207,6 +14239,7 @@ void virtual_init(void)
+@@ -13965,6 +13997,7 @@ void virtual_init(void)
      int i;
      pthread_mutexattr_t attr;
  
@@ -543,7 +543,7 @@ index 4aa41d7..e9e3e4a 100644
      pthread_mutexattr_init( &attr );
      pthread_mutexattr_settype( &attr, PTHREAD_MUTEX_RECURSIVE );
      pthread_mutex_init( &virtual_mutex, &attr );
-@@ -14246,9 +14279,6 @@ void virtual_init(void)
+@@ -14004,9 +14037,6 @@ void virtual_init(void)
          {
              preload_reserve_start = ROUND_ADDR( start, host_page_mask );
              preload_reserve_end = (void *)ROUND_SIZE( 0, end, host_page_mask );
@@ -553,19 +553,16 @@ index 4aa41d7..e9e3e4a 100644
          }
          unsetenv( "WINEPRELOADRESERVE" );
      }
-@@ -14271,11 +14301,6 @@ void virtual_init(void)
+@@ -14028,24 +14058,18 @@ void virtual_init(void)
+     free_ranges[0].base = (void *)0;
      free_ranges[0].end = (void *)~0;
      free_ranges_end = free_ranges + 1;
- 
+-
 -    /* make the DOS area accessible (except the low 64K) to hide bugs in broken apps like Excel 2003 */
 -    size = (char *)address_space_start - (char *)0x10000;
 -    if (size && mmap_is_in_reserved_area( (void*)0x10000, size ) == 1)
 -        anon_mmap_fixed( (void *)0x10000, size, PROT_READ | PROT_WRITE, 0 );
--
-     /* ml433 (#72): hold back the only 8GB-aligned stretch in the guest band
-      * before top-down placement can put furniture in it — see IOS_CAGE_BASE. */
-     if (anon_mmap_fixed( (void *)(uintptr_t)IOS_CAGE_BASE, IOS_CAGE_REAL_SIZE, PROT_NONE, 0 ) != MAP_FAILED)
-@@ -14289,15 +14314,14 @@ void virtual_init(void)
+ }
  
  
  /***********************************************************************
@@ -585,7 +582,7 @@ index 4aa41d7..e9e3e4a 100644
  /***********************************************************************
   *           virtual_get_system_info
   */
-@@ -14462,7 +14486,7 @@ void virtual_get_system_info( SYSTEM_BASIC_INFORMATION *info, BOOL wow64 )
+@@ -14210,7 +14234,7 @@ void virtual_get_system_info( SYSTEM_BASIC_INFORMATION *info, BOOL wow64 )
      info->AllocationGranularity   = granularity_mask + 1;
      info->LowestUserAddress       = (void *)0x10000;
      info->ActiveProcessorsAffinityMask = get_system_affinity_mask();
@@ -594,7 +591,7 @@ index 4aa41d7..e9e3e4a 100644
      if (wow64) info->HighestUserAddress = (char *)get_wow_user_space_limit() - 1;
      else info->HighestUserAddress = (char *)user_space_limit - 1;
  
-@@ -14511,79 +14535,71 @@ NTSTATUS virtual_map_builtin_module( HANDLE mapping, void **module, SIZE_T *size
+@@ -14259,79 +14283,71 @@ NTSTATUS virtual_map_builtin_module( HANDLE mapping, void **module, SIZE_T *size
  {
      mem_size_t full_size;
      unsigned int sec_flags;
@@ -702,7 +699,7 @@ index 4aa41d7..e9e3e4a 100644
      return status;
  }
  
-@@ -14711,95 +14727,148 @@ NTSTATUS virtual_relocate_module( void *module )
+@@ -14459,95 +14475,148 @@ NTSTATUS virtual_relocate_module( void *module )
  
  
  /* set some initial values in a new TEB */
@@ -915,7 +912,7 @@ index 4aa41d7..e9e3e4a 100644
      if (status)
      {
          ERR( "wine: failed to map the shared user data: %08x\n", status );
-@@ -14838,66 +14907,104 @@ TEB *virtual_alloc_first_teb(void)
+@@ -14586,66 +14655,104 @@ TEB *virtual_alloc_first_teb(void)
      }
  #endif
  
@@ -1048,7 +1045,7 @@ index 4aa41d7..e9e3e4a 100644
      {
          *(void **)ptr = next_free_teb;
          next_free_teb = ptr;
-@@ -14908,15 +15015,40 @@ NTSTATUS virtual_alloc_teb( TEB **ret_teb )
+@@ -14656,15 +14763,40 @@ NTSTATUS virtual_alloc_teb( TEB **ret_teb )
  
  
  /***********************************************************************
@@ -1093,7 +1090,7 @@ index 4aa41d7..e9e3e4a 100644
  
      if (teb->DeallocationStack)
      {
-@@ -14930,12 +15062,7 @@ void virtual_free_teb( TEB *teb )
+@@ -14678,12 +14810,7 @@ void virtual_free_teb( TEB *teb )
          NtFreeVirtualMemory( GetCurrentProcess(), (void **)&teb->ChpeV2CpuAreaInfo, &size, MEM_RELEASE );
      }
  #endif
@@ -1107,7 +1104,7 @@ index 4aa41d7..e9e3e4a 100644
      {
          size = 0;
          NtFreeVirtualMemory( GetCurrentProcess(), &ptr, &size, MEM_RELEASE );
-@@ -14943,12 +15070,17 @@ void virtual_free_teb( TEB *teb )
+@@ -14691,12 +14818,17 @@ void virtual_free_teb( TEB *teb )
  
      server_enter_uninterrupted_section( &virtual_mutex, &sigset );
      signal_free_thread( teb );
@@ -1127,7 +1124,7 @@ index 4aa41d7..e9e3e4a 100644
  }
  
  
-@@ -15012,7 +15144,7 @@ NTSTATUS ldt_get_entry( WORD sel, CLIENT_ID client_id, LDT_ENTRY *entry )
+@@ -14760,7 +14892,7 @@ NTSTATUS ldt_get_entry( WORD sel, CLIENT_ID client_id, LDT_ENTRY *entry )
      struct ldt_bits bits = { 0 };
      unsigned int idx = sel >> 3;
  
@@ -1136,7 +1133,7 @@ index 4aa41d7..e9e3e4a 100644
      {
          if (ldt_copy)
          {
-@@ -15100,15 +15232,15 @@ NTSTATUS WINAPI NtSetLdtEntries( ULONG sel1, ULONG entry1_low, ULONG entry1_high
+@@ -14848,15 +14980,15 @@ NTSTATUS WINAPI NtSetLdtEntries( ULONG sel1, ULONG entry1_low, ULONG entry1_high
   */
  NTSTATUS virtual_clear_tls_index( ULONG index )
  {
@@ -1155,7 +1152,7 @@ index 4aa41d7..e9e3e4a 100644
  #ifdef _WIN64
              WOW_TEB *wow_teb = get_wow_teb( teb );
              if (wow_teb) wow_teb->TlsSlots[index] = 0;
-@@ -15124,9 +15256,9 @@ NTSTATUS virtual_clear_tls_index( ULONG index )
+@@ -14872,9 +15004,9 @@ NTSTATUS virtual_clear_tls_index( ULONG index )
          if (index >= 8 * sizeof(peb->TlsExpansionBitmapBits)) return STATUS_INVALID_PARAMETER;
  
          server_enter_uninterrupted_section( &virtual_mutex, &sigset );
@@ -1167,7 +1164,7 @@ index 4aa41d7..e9e3e4a 100644
  #ifdef _WIN64
              WOW_TEB *wow_teb = get_wow_teb( teb );
              if (wow_teb)
-@@ -15288,7 +15420,7 @@ void virtual_init_user_shared_data(void)
+@@ -15036,7 +15168,7 @@ void virtual_init_user_shared_data(void)
      data->SystemCall            = 1;
      data->NumberOfPhysicalPages = info.MmNumberOfPhysicalPages;
      data->NXSupportPolicy       = NX_SUPPORT_POLICY_OPTIN;
@@ -1176,7 +1173,7 @@ index 4aa41d7..e9e3e4a 100644
      data->ActiveGroupCount      = 1;
  
      switch (native_machine)
-@@ -15317,12 +15449,13 @@ struct thread_stack_info
+@@ -15065,12 +15197,13 @@ struct thread_stack_info
  /***********************************************************************
   *           is_inside_thread_stack
   */
@@ -1193,7 +1190,7 @@ index 4aa41d7..e9e3e4a 100644
      stack->start = teb->DeallocationStack;
      stack->limit = teb->Tib.StackLimit;
      stack->end   = teb->Tib.StackBase;
-@@ -15330,7 +15463,7 @@ static BOOL is_inside_thread_stack( void *ptr, struct thread_stack_info *stack )
+@@ -15078,7 +15211,7 @@ static BOOL is_inside_thread_stack( void *ptr, struct thread_stack_info *stack )
      stack->is_wow = FALSE;
      if ((char *)ptr > stack->start && (char *)ptr <= stack->end) return TRUE;
  
@@ -1202,7 +1199,7 @@ index 4aa41d7..e9e3e4a 100644
      stack->start = ULongToPtr( wow_teb->DeallocationStack );
      stack->limit = ULongToPtr( wow_teb->Tib.StackLimit );
      stack->end   = ULongToPtr( wow_teb->Tib.StackBase );
-@@ -15343,7 +15476,7 @@ static BOOL is_inside_thread_stack( void *ptr, struct thread_stack_info *stack )
+@@ -15091,7 +15224,7 @@ static BOOL is_inside_thread_stack( void *ptr, struct thread_stack_info *stack )
  /***********************************************************************
   *           grow_thread_stack
   */
@@ -1211,7 +1208,7 @@ index 4aa41d7..e9e3e4a 100644
  {
      NTSTATUS ret = 0;
  
-@@ -15363,10 +15496,10 @@ static NTSTATUS grow_thread_stack( char *page, struct thread_stack_info *stack_i
+@@ -15111,10 +15244,10 @@ static NTSTATUS grow_thread_stack( char *page, struct thread_stack_info *stack_i
      }
      if (stack_info->is_wow)
      {
@@ -1224,7 +1221,7 @@ index 4aa41d7..e9e3e4a 100644
      return ret;
  }
  
-@@ -15374,7 +15507,7 @@ static NTSTATUS grow_thread_stack( char *page, struct thread_stack_info *stack_i
+@@ -15122,7 +15255,7 @@ static NTSTATUS grow_thread_stack( char *page, struct thread_stack_info *stack_i
  /***********************************************************************
   *           virtual_handle_fault
   */
@@ -1233,7 +1230,7 @@ index 4aa41d7..e9e3e4a 100644
  {
      NTSTATUS ret = STATUS_ACCESS_VIOLATION;
      ULONG_PTR err = rec->ExceptionInformation[0];
-@@ -15394,22 +15527,22 @@ NTSTATUS virtual_handle_fault( EXCEPTION_RECORD *rec, void *stack )
+@@ -15142,22 +15275,22 @@ NTSTATUS virtual_handle_fault( EXCEPTION_RECORD *rec, void *stack )
      }
  #endif
  
@@ -1260,7 +1257,7 @@ index 4aa41d7..e9e3e4a 100644
              {
                  rec->NumberParameters = 3;
                  rec->ExceptionInformation[2] = STATUS_EXECUTABLE_MEMORY_WRITE;
-@@ -15596,21 +15729,21 @@ static int ios_range_writable( const void *addr, size_t size )
+@@ -15344,21 +15477,21 @@ static int ios_range_writable( const void *addr, size_t size )
      return 1;
  }
  
@@ -1287,7 +1284,7 @@ index 4aa41d7..e9e3e4a 100644
          /* ml262 LIVELOCK FIX: this branch used to return an UNVALIDATED pointer.
           *
           * "Outside a Wine thread stack" is routine in this port -- FEX guest stacks
-@@ -15651,7 +15784,7 @@ void *virtual_setup_exception( void *stack_ptr, size_t size, EXCEPTION_RECORD *r
+@@ -15399,7 +15532,7 @@ void *virtual_setup_exception( void *stack_ptr, size_t size, EXCEPTION_RECORD *r
      {
          char *page = ROUND_ADDR( stack, host_page_mask );
          mutex_lock( &virtual_mutex );  /* no need for signal masking inside signal handler */
@@ -1296,7 +1293,7 @@ index 4aa41d7..e9e3e4a 100644
          {
              rec->ExceptionCode = STATUS_STACK_OVERFLOW;
              rec->NumberParameters = 0;
-@@ -16143,37 +16276,6 @@ void virtual_enable_write_exceptions( BOOL enable )
+@@ -15891,37 +16024,6 @@ void virtual_enable_write_exceptions( BOOL enable )
  }
  
  
@@ -1334,7 +1331,7 @@ index 4aa41d7..e9e3e4a 100644
  #ifndef _WIN64
  
  /***********************************************************************
-@@ -16192,36 +16294,6 @@ static void virtual_release_address_space(void)
+@@ -15940,36 +16042,6 @@ static void virtual_release_address_space(void)
  #endif  /* _WIN64 */
  
  
@@ -1371,7 +1368,7 @@ index 4aa41d7..e9e3e4a 100644
  /***********************************************************************
   *             allocate_virtual_memory
   *
-@@ -16275,7 +16347,19 @@ static NTSTATUS allocate_virtual_memory( void **ret, SIZE_T *size_ptr, ULONG typ
+@@ -16023,7 +16095,19 @@ static NTSTATUS allocate_virtual_memory( void **ret, SIZE_T *size_ptr, ULONG typ
          WARN("called with wrong alloc type flags (%08x) !\n", type);
          return STATUS_INVALID_PARAMETER;
      }
@@ -1392,7 +1389,7 @@ index 4aa41d7..e9e3e4a 100644
      if (type & MEM_RESERVE_PLACEHOLDER && (protect != PAGE_NOACCESS)) return STATUS_INVALID_PARAMETER;
      if (!arm64ec_view && (attributes & MEM_EXTENDED_PARAMETER_EC_CODE)) return STATUS_INVALID_PARAMETER;
  
-@@ -16964,7 +17048,8 @@ NTSTATUS WINAPI NtAllocateVirtualMemory( HANDLE process, PVOID *ret, ULONG_PTR z
+@@ -16712,7 +16796,8 @@ NTSTATUS WINAPI NtAllocateVirtualMemory( HANDLE process, PVOID *ret, ULONG_PTR z
  #ifdef WINE_IOS
      ios_tls38_poll( "valloc" );
  #endif
@@ -1402,7 +1399,7 @@ index 4aa41d7..e9e3e4a 100644
      ULONG_PTR limit;
  #ifdef WINE_IOS
      /* ml373: *ret is overwritten with the result, so the [guest-reserve] census
-@@ -17054,6 +17139,8 @@ NTSTATUS WINAPI NtAllocateVirtualMemory( HANDLE process, PVOID *ret, ULONG_PTR z
+@@ -16802,6 +16887,8 @@ NTSTATUS WINAPI NtAllocateVirtualMemory( HANDLE process, PVOID *ret, ULONG_PTR z
          union apc_result result;
          unsigned int status;
  
@@ -1411,7 +1408,7 @@ index 4aa41d7..e9e3e4a 100644
          memset( &call, 0, sizeof(call) );
  
          call.virtual_alloc.type         = APC_VIRTUAL_ALLOC;
-@@ -18078,10 +18165,6 @@ static NTSTATUS get_extended_params( const MEM_EXTENDED_PARAMETER *parameters, U
+@@ -17712,10 +17799,6 @@ static NTSTATUS get_extended_params( const MEM_EXTENDED_PARAMETER *parameters, U
          case MemExtendedParameterAddressRequirements:
          {
              MEM_ADDRESS_REQUIREMENTS *r = parameters[i].Pointer;
@@ -1422,7 +1419,7 @@ index 4aa41d7..e9e3e4a 100644
  
              if (r->Alignment)
              {
-@@ -18095,7 +18178,7 @@ static NTSTATUS get_extended_params( const MEM_EXTENDED_PARAMETER *parameters, U
+@@ -17729,7 +17812,7 @@ static NTSTATUS get_extended_params( const MEM_EXTENDED_PARAMETER *parameters, U
              if (r->LowestStartingAddress)
              {
                  *limit_low = (ULONG_PTR)r->LowestStartingAddress;
@@ -1431,7 +1428,7 @@ index 4aa41d7..e9e3e4a 100644
                  {
                      WARN( "Invalid limit %p.\n", r->LowestStartingAddress );
                      return STATUS_INVALID_PARAMETER;
-@@ -18104,7 +18187,7 @@ static NTSTATUS get_extended_params( const MEM_EXTENDED_PARAMETER *parameters, U
+@@ -17738,7 +17821,7 @@ static NTSTATUS get_extended_params( const MEM_EXTENDED_PARAMETER *parameters, U
              if (r->HighestEndingAddress)
              {
                  *limit_high = (ULONG_PTR)r->HighestEndingAddress;
@@ -1440,7 +1437,7 @@ index 4aa41d7..e9e3e4a 100644
                      *limit_high <= *limit_low ||
                      ((*limit_high + 1) & (page_mask - 1)))
                  {
-@@ -18519,8 +18602,9 @@ NTSTATUS WINAPI NtAllocateVirtualMemoryEx( HANDLE process, PVOID *ret, SIZE_T *s
+@@ -18153,8 +18236,9 @@ NTSTATUS WINAPI NtAllocateVirtualMemoryEx( HANDLE process, PVOID *ret, SIZE_T *s
                                             ULONG protect, MEM_EXTENDED_PARAMETER *parameters,
                                             ULONG count )
  {
@@ -1452,7 +1449,7 @@ index 4aa41d7..e9e3e4a 100644
      ULONG_PTR limit_low = 0;
      ULONG_PTR limit_high = 0;
      ULONG_PTR align = 0;
-@@ -18876,6 +18960,8 @@ NTSTATUS WINAPI NtAllocateVirtualMemoryEx( HANDLE process, PVOID *ret, SIZE_T *s
+@@ -18510,6 +18594,8 @@ NTSTATUS WINAPI NtAllocateVirtualMemoryEx( HANDLE process, PVOID *ret, SIZE_T *s
          union apc_call call;
          union apc_result result;
  
@@ -1461,7 +1458,7 @@ index 4aa41d7..e9e3e4a 100644
          memset( &call, 0, sizeof(call) );
  
          call.virtual_alloc_ex.type         = APC_VIRTUAL_ALLOC_EX;
-@@ -20008,8 +20094,11 @@ static unsigned int get_basic_memory_info( HANDLE process, LPCVOID addr,
+@@ -19642,8 +19728,11 @@ static unsigned int get_basic_memory_info( HANDLE process, LPCVOID addr,
              info->AllocationProtect = result.virtual_query.alloc_prot;
              info->State             = (DWORD)result.virtual_query.state << 12;
              info->Type              = (DWORD)result.virtual_query.alloc_type << 16;
@@ -1475,7 +1472,7 @@ index 4aa41d7..e9e3e4a 100644
              if (res_len) *res_len = sizeof(*info);
          }
          return result.virtual_query.status;
-@@ -20448,7 +20537,7 @@ NTSTATUS WINAPI NtQueryVirtualMemory( HANDLE process, LPCVOID addr,
+@@ -20082,7 +20171,7 @@ NTSTATUS WINAPI NtQueryVirtualMemory( HANDLE process, LPCVOID addr,
              {
                  UINT64 res[2];
                  const UNICODE_STRING *name = addr;
@@ -1484,7 +1481,7 @@ index 4aa41d7..e9e3e4a 100644
                  const void *funcs;
                  void *handle;
  
-@@ -20646,6 +20735,8 @@ NTSTATUS WINAPI NtMapViewOfSection( HANDLE handle, HANDLE process, PVOID *addr_p
+@@ -20280,6 +20369,8 @@ NTSTATUS WINAPI NtMapViewOfSection( HANDLE handle, HANDLE process, PVOID *addr_p
          union apc_call call;
          union apc_result result;
  
@@ -1493,7 +1490,7 @@ index 4aa41d7..e9e3e4a 100644
          memset( &call, 0, sizeof(call) );
  
          call.map_view.type         = APC_MAP_VIEW;
-@@ -20720,6 +20811,8 @@ NTSTATUS WINAPI NtMapViewOfSectionEx( HANDLE handle, HANDLE process, PVOID *addr
+@@ -20354,6 +20445,8 @@ NTSTATUS WINAPI NtMapViewOfSectionEx( HANDLE handle, HANDLE process, PVOID *addr
          union apc_call call;
          union apc_result result;
  
@@ -1502,7 +1499,7 @@ index 4aa41d7..e9e3e4a 100644
          memset( &call, 0, sizeof(call) );
  
          call.map_view_ex.type         = APC_MAP_VIEW_EX;
-@@ -21068,13 +21161,16 @@ NTSTATUS WINAPI NtQuerySection( HANDLE handle, SECTION_INFORMATION_CLASS class,
+@@ -20702,13 +20795,16 @@ NTSTATUS WINAPI NtQuerySection( HANDLE handle, SECTION_INFORMATION_CLASS class,
   *             ZwFlushVirtualMemory   (NTDLL.@)
   */
  NTSTATUS WINAPI NtFlushVirtualMemory( HANDLE process, LPCVOID *addr_ptr,

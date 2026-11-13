@@ -62,12 +62,12 @@ index f3fd88b..91d6ec0 100644
 +}
  #endif
 diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
-index 1fc12e6..73a0e2b 100644
+index 67618d3..314a1a7 100644
 --- a/build/ntdll-unix/virtual_ios.c
 +++ b/build/ntdll-unix/virtual_ios.c
-@@ -22080,6 +22080,24 @@ NTSTATUS WINAPI NtAllocateVirtualMemory( HANDLE process, PVOID *ret, ULONG_PTR z
-                             pick, (unsigned long long)IOS_CAGE_REAL_SIZE,
-                             (unsigned long)(st2 ? 0 : sz), (unsigned)st2);
+@@ -21545,6 +21545,24 @@ NTSTATUS WINAPI NtAllocateVirtualMemory( HANDLE process, PVOID *ret, ULONG_PTR z
+                             (unsigned long long)slot, (unsigned long)csz, (unsigned)st2);
+                     if (!st2) sz = csz;
                  }
 +                /* PLA-476 (decision 0169): the verified Social Club helper's V8
 +                 * code range needs a 4 GiB-aligned base and releases any other.

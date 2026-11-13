@@ -21,6 +21,26 @@ ask; ELF_META2 and the 8,960 MiB game hold go ([PLA-841](https://linear.app/play
 [PLA-842](https://linear.app/playportdev/issue/PLA-842)). The low hold at exec stays in every Play, and
 0236's refusal runs before the elastic policy.
 
+**Amended as built 2026-11-13 ([PLA-842](https://linear.app/playportdev/issue/PLA-842), madeira-unix 0299):**
+the layout holds from boot only its anchors, about 1.6 GiB where it held 30.25 GiB: libcef's pool prefix
+at `0x7000000000` (64 MiB, from exec; the host's low hold keeps 64 MiB, not 256), chrome_elf's at
+`0x7800000000` (64 MiB), Oilpan at `0x7c00000000` (512 MiB; FEX's arena starts at its end,
+`0x7c20000000`) and ELF_META at `0x7400000000` (1 GiB). An anchor's size is the highest committed end
+any phone run measured in it, rounded up to a power of two, times four, at least 64 MiB
+([census](../evidence/2026-11-13-sc-census-rdr2.md): 0x5000, 0x5000 and 0x6420000; ELF_META's 0xaa82000
+from l5). H1 was not settled (every attributed ELF_META commit was libcef's, at stack word 4, never 0),
+so ELF_META stays an anchor, the conservative reading; it becomes on demand if a census shows no libcef
+commit there and chrome_elf's at word 0. libcef's metadata (1 GiB), V8's cage (8 GiB) and V8's code
+range (1 GiB, kind 7) are on demand: nothing is held until the helper's first ask places one at its home
+(`0x78c0000000`, `0x7a00000000`, `0x7700000000`) when free, else at the highest free base aligned as it
+needs (256 MiB, 4 GiB, 4 GiB); from then on it is held in place like an anchor, so the next helper gets
+the same range, and one whose range something else took is placed anew. The code range's retry over
+0243's bases goes, since the router serves that ask first. ELF_META2 (0228) and the 8,960 MiB game hold
+are deleted: the game's pools are the elastic policy's, as in any Play. The JIT pool's RW alias stays
+where the host maps it before any guest runs, `0x7900000000`, ending at or below the cage's home; no ask
+can move it, so it is not one of the layout's slots. The Decision's layout bullet below gives the old
+geometry.
+
 **Amended as built 2026-11-13 ([PLA-865](https://linear.app/playportdev/issue/PLA-865)):** under the layout
 every `SocialClubHelper.exe` `--type=` child is refused at its start (`STATUS_ACCESS_DENIED`, madeira-unix
 0298), verified or not, and whether or not single-process is on. The layout holds one CEF process's pools, so a

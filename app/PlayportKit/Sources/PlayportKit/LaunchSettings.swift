@@ -153,10 +153,8 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
     /// without AFP unless FIZ follows DAZ); a game's `env.FEX_HOSTFEATURES=enableafp` keeps AFP.
     /// `avail-phys-cef-mb=300` tells only SocialClubHelper.exe 300 MB of available memory, so
     /// Chromium's memory-pressure evaluator purges (decision 0168; `avail-phys-cef-mb=0` turns it off).
-    /// No address-space hold (`jumbo-mb`): it held 8,960 MB for RDR2's one reservation in every game,
-    /// and a game that reserves in smaller pieces ran out of room around it (decision 0179). No video
-    /// memory or Vulkan heap figure: every game takes its memory plan row's (MemoryPlan, decision 0183).
-    /// No JIT pool size: every Play gets the one pool (JitPool.sizeMB, decision 0184).
+    /// No video memory or Vulkan heap figure: every game takes its memory plan row's (MemoryPlan,
+    /// decision 0183). No JIT pool size: every Play gets the one pool (JitPool.sizeMB, decision 0184).
     public static let everyGame = LaunchSettings(
         steamAPI: .client,
         runtime: "env.MADEIRA_X64_CS_FASTPATH=1 env.MADEIRA_FEX_BATCH2=1 env.PLAYPORT_SC_BLOCK_CRASHPAD=1 "
@@ -198,8 +196,9 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
         return items
     }
 
-    /// What a Runtime keys row says when a launch does not use it: the refused key TitleConfig names
-    /// (TitleConfig.refusedKeys), else that its items are not `key=value`; nil when it is used.
+    /// What a Runtime keys row says when a launch does not use it: the refused or deleted key
+    /// TitleConfig names (TitleConfig.refusedKeys, deletedKeys), else that its items are not
+    /// `key=value`; nil when it is used.
     public static func unusedRuntimeKeysNote(_ line: String) -> String? {
         do {
             guard let items = runtimeItems(line) else { return "Not key=value items: not used" }
@@ -207,6 +206,8 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
             return nil
         } catch LaunchPlanError.refusedKey(let key) {
             return "\(key) is not a game's own key (no per-game memory keys): not used"
+        } catch LaunchPlanError.deletedKey(let key) {
+            return "\(key) is no longer a key (no per-game memory keys): not used"
         } catch {
             return "Not key=value items: not used"
         }
