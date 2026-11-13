@@ -75,6 +75,12 @@
       "status": "broken"
     },
     {
+      "name": "Borderlands 2",
+      "store": "steam",
+      "id": "49520",
+      "status": "runs"
+    },
+    {
       "name": "Burnout Paradise: The Ultimate Box",
       "store": "steam",
       "id": "24740",
