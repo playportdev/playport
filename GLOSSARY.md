@@ -96,6 +96,22 @@ iOS ending a Play because Playport went past its memory limit; an observation of
 reason to refuse the next one.
 _Avoid_: memory need, memory requirement (no game carries a memory figure), out of memory, crash
 
+## Shaders
+
+**Pipeline record**:
+The list of a game's compiled pipelines that Playport keeps, where iOS does not purge it, to
+rebuild that game's shader caches.
+_Avoid_: shader cache (Mesa's and Apple's caches, which iOS may purge), state cache, journal
+
+**Shader preparation**:
+Rebuilding a game's shader caches from its pipeline record, at each Play and from Prepare shaders on
+the game page.
+_Avoid_: precompile, warm-up, shader pre-caching
+
+**Skipped draw**:
+A draw a game issued that is not rendered because its pipeline is still compiling.
+_Avoid_: async shaders, pop-in, deferred draw
+
 ## Play gates
 
 **Anti-cheat refusal**:
