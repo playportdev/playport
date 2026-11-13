@@ -1,7 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: The Playport authors <dev@playport.dev>
 Date: Fri, 13 Nov 2026 12:00:00 +0100
-Subject: [PATCH] win32u: iOS: a process flushes only its own window surfaces
+Subject: [PATCH 206/207] win32u: iOS: a process flushes only its own window
+ surfaces
 
 On iOS every Wine process is a pseudo-process of one app, so win32u's
 list of window surfaces and its surfaces_lock are shared by all of
@@ -25,18 +26,44 @@ A process now skips a surface whose window is not its own
 which is the set a desktop process's list holds. A surface an ended
 process left behind is no longer touched.
 
+The time a non-idle flush is throttled by (50 ms after going idle) was
+a static, one value for every pseudo-process: once each process
+flushed only its own surfaces, another process's idle flush would hold
+back the flush of a process whose GUI thread paints but never goes
+idle, and its windows would show nothing. Each thread now keeps the
+time it last went idle (struct user_thread_info), which only ever
+flushes more often than one time per process would.
+
 Class: ios-port
-Evidence: PLA-870 (the phone's log of IPA 0023f811: the session root in window_surface_flush on a lock whose owner thread is gone, the 2008 installer's thread in register_window_surface); tools/tests/test_window_surfaces_ios.py (this function, with an ended process's surface whose lock a dead thread holds: the caller's idle flush returns and flushes only its own surface)
+Evidence: PLA-870 (the phone's log of IPA 0023f811: the session root in window_surface_flush on a lock whose owner thread is gone, the 2008 installer's thread in register_window_surface); tools/tests/test_window_surfaces_ios.py (this function, with an ended process's surface whose lock a dead thread holds: the caller's idle flush returns and flushes only its own surface; another process's idle flush, then the caller's non-idle one from a thread that never went idle: its surface is flushed)
 Offered-upstream: no; iOS one-process runtime integration
 ---
- dlls/win32u/dce.c | 12 ++++++++++++
- 1 file changed, 12 insertions(+)
+ dlls/win32u/dce.c            | 24 ++++++++++++++++++++++++
+ dlls/win32u/ntuser_private.h |  3 +++
+ 2 files changed, 27 insertions(+)
 
 diff --git a/dlls/win32u/dce.c b/dlls/win32u/dce.c
-index 67d3dc84bc7..434a3743ef7 100644
+index 67d3dc8..2627c72 100644
 --- a/dlls/win32u/dce.c
 +++ b/dlls/win32u/dce.c
-@@ -766,7 +766,19 @@ void flush_window_surfaces( BOOL idle )
+@@ -755,7 +755,16 @@ void register_window_surface( struct window_surface *old, struct window_surface
+  */
+ void flush_window_surfaces( BOOL idle )
+ {
++#ifdef WINE_IOS
++    /* Playport (PLA-870): a static here is one time for every pseudo-process of the app,
++     * and a process flushes only its own surfaces below, so another process going idle
++     * held back the non-idle flush of a process whose thread never goes idle, and its
++     * windows showed nothing. Each thread keeps the time it last went idle. */
++    struct user_thread_info *thread_info = get_user_thread_info();
++    DWORD last_idle = thread_info->last_idle;
++#else
+     static DWORD last_idle;
++#endif
+     DWORD now;
+     struct window_surface *surface;
+ 
+@@ -766,9 +775,24 @@ void flush_window_surfaces( BOOL idle )
      else if ((int)(now - last_idle) < 50) goto done;
  
      LIST_FOR_EACH_ENTRY( surface, &window_surfaces, struct window_surface, entry )
@@ -55,4 +82,23 @@ index 67d3dc84bc7..434a3743ef7 100644
 +    }
  done:
      pthread_mutex_unlock( &surfaces_lock );
++#ifdef WINE_IOS
++    thread_info->last_idle = last_idle;
++#endif
  }
+ 
+ /***********************************************************************
+diff --git a/dlls/win32u/ntuser_private.h b/dlls/win32u/ntuser_private.h
+index 26bab84..954849c 100644
+--- a/dlls/win32u/ntuser_private.h
++++ b/dlls/win32u/ntuser_private.h
+@@ -132,6 +132,9 @@ struct user_thread_info
+     struct mouse_tracking_info   *mouse_tracking_info;    /* NtUserTrackMouseEvent handling */
+     struct opengl_thread_data    *opengl_data;            /* OpenGL private thread data */
+     struct list                   known_pointers;         /* list of known pointers */
++#ifdef WINE_IOS
++    DWORD                         last_idle;              /* flush_window_surfaces: when it last went idle */
++#endif
+ };
+ 
+ extern struct user_thread_info *get_user_thread_info(void);

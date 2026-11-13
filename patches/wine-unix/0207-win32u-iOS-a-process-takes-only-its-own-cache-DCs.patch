@@ -44,7 +44,7 @@ Offered-upstream: no; iOS one-process runtime integration
  1 file changed, 49 insertions(+)
 
 diff --git a/dlls/win32u/dce.c b/dlls/win32u/dce.c
-index 434a3743ef7..97f9716a4f8 100644
+index 2627c72..3e54d97 100644
 --- a/dlls/win32u/dce.c
 +++ b/dlls/win32u/dce.c
 @@ -43,6 +43,10 @@ struct dce
@@ -58,7 +58,7 @@ index 434a3743ef7..97f9716a4f8 100644
  };
  
  static struct list dce_list = LIST_INIT(dce_list);
-@@ -971,6 +975,23 @@ void update_dc( DC *dc )
+@@ -983,6 +987,23 @@ void update_dc( DC *dc )
      }
  }
  
@@ -82,7 +82,7 @@ index 434a3743ef7..97f9716a4f8 100644
  /***********************************************************************
   *           alloc_dce
   *
-@@ -990,6 +1011,10 @@ static struct dce *alloc_dce(void)
+@@ -1002,6 +1023,10 @@ static struct dce *alloc_dce(void)
      dce->clip_rgn  = 0;
      dce->flags     = 0;
      dce->count     = 1;
@@ -93,7 +93,7 @@ index 434a3743ef7..97f9716a4f8 100644
  
      set_dc_dce( dce->hdc, dce );
      return dce;
-@@ -1331,6 +1356,10 @@ HDC WINAPI NtUserGetDCEx( HWND hwnd, HRGN clip_rgn, DWORD flags )
+@@ -1343,6 +1368,10 @@ HDC WINAPI NtUserGetDCEx( HWND hwnd, HRGN clip_rgn, DWORD flags )
      {
          struct dce *dceEmpty = NULL, *dceUnused = NULL, *found = NULL;
          unsigned int count = 0;
@@ -104,7 +104,7 @@ index 434a3743ef7..97f9716a4f8 100644
  
          /* Strategy: First, we attempt to find a non-empty but unused DCE with
           * compatible flags. Next, we look for an empty entry. If the cache is
-@@ -1340,6 +1369,14 @@ HDC WINAPI NtUserGetDCEx( HWND hwnd, HRGN clip_rgn, DWORD flags )
+@@ -1352,6 +1381,14 @@ HDC WINAPI NtUserGetDCEx( HWND hwnd, HRGN clip_rgn, DWORD flags )
          LIST_FOR_EACH_ENTRY( dce, &dce_list, struct dce, entry )
          {
              if (!(dce->flags & DCX_CACHE)) break;
@@ -119,7 +119,7 @@ index 434a3743ef7..97f9716a4f8 100644
              count++;
              if (dce->count) continue;
              dceUnused = dce;
-@@ -1354,6 +1391,18 @@ HDC WINAPI NtUserGetDCEx( HWND hwnd, HRGN clip_rgn, DWORD flags )
+@@ -1366,6 +1403,18 @@ HDC WINAPI NtUserGetDCEx( HWND hwnd, HRGN clip_rgn, DWORD flags )
          }
          if (!found) found = dceEmpty;
          if (!found && count >= DCE_CACHE_SIZE) found = dceUnused;
