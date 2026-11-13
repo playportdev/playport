@@ -1,0 +1,493 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 13 Nov 2026 13:47:36 +0100
+Subject: [PATCH] ntdll: iOS: a miss under a kept directory listing costs one
+ stat
+
+Wine-unix 0208 keeps directory listings for case-insensitive lookups,
+but a lookup that misses still pays for the path. The whole-path stat
+misses; when an earlier component is missing too, the walk stats each
+existing component from the drive root, then the directory and the
+reparse point's name, twice each: 11 stats for "Documents/My
+Games/Borderlands 2/Engine/..." when "Engine" is missing, 3 for a
+missing file in a directory that exists. On the phone a stat costs
+45-50 us through the sandbox (those two took 529 and 140 us), so
+Borderlands 2's DLC install, which probes such paths about 24,000 times
+every 10 s, spent 9.3 to 9.7 s of each 10 s in lookups, with every
+listing it searched kept.
+
+- A listing read through an absolute path is also kept under that path,
+  byte for byte as the walk had it; a listing read through a directory
+  handle gets the absolute path that next finds it.
+- Before its whole-path stat, a lookup through an absolute path looks
+  for the deepest prefix of its path that is a kept listing's path, as
+  spelled. When that listing holds neither the next component nor its
+  reparse point "name?", in any case, the walk would stop there: each
+  earlier component exists as spelled, so the walk finds it by its exact
+  stat, and then searches that directory in vain. One stat of the prefix
+  proves the listing is still that directory's; the lookup then fails as
+  the walk would, OBJECT_PATH_NOT_FOUND for a missing directory on the
+  way and OBJECT_NAME_NOT_FOUND for a missing last component that is
+  opened, with the name cut at that directory. Anything else is left to
+  the walk as before: a component that is there in some case, a path
+  spelled in another case, an 8.3 short name, a name that is not ASCII
+  (the volume finds either Unicode normalization by its exact stat), a
+  changed or moved directory (dropped), a trailing backslash, or a
+  missing last component to be created.
+- The cache keeps up to 1024 listings (was 64, full with 66 to 76
+  evicted during the DLC install, while it held 285-634 KiB of 24 MiB),
+  found by inode and by path through hash chains.
+- [file-miss] counts the misses answered by path.
+
+Class: ios-port
+Evidence: PLA-879 (owner log pla844/owner-bl2g on IPA 868b7664: [file-miss] every 10 s of the DLC install, 23,188-24,681 slow lookups, almost all not found, 9.3-9.7 s; "My Games/Borderlands 2" missing "Engine" 529-537 us each, "Gearbox" missing "Localization" 426-432 us, "Engine/Localization/INT" 138-140 us; cache 64 dirs, 602 KiB); tools/tests/test_dircase_ios.py (ios_dircase.h alone, and lookup_unix_name with this file.c over a real directory tree: a miss under a kept directory costs one stat, a hit the whole-path stat alone)
+Offered-upstream: no; it builds on 0208's cache, which is iOS-only
+---
+ dlls/ntdll/unix/file.c        | 142 ++++++++++++++++++++++++++++-
+ dlls/ntdll/unix/ios_dircase.h | 167 ++++++++++++++++++++++++++++------
+ 2 files changed, 278 insertions(+), 31 deletions(-)
+
+diff --git a/dlls/ntdll/unix/file.c b/dlls/ntdll/unix/file.c
+index 6ce2e68..af461f3 100644
+--- a/dlls/ntdll/unix/file.c
++++ b/dlls/ntdll/unix/file.c
+@@ -2776,12 +2776,14 @@ static void ios_fm_flush_locked( unsigned long long now, const char *why )
+     int i, n = ios_fm_used < IOS_FM_TOP ? ios_fm_used : IOS_FM_TOP;
+     if (!ios_fm_lookups) return;
+     dprintf( 2, "[file-miss] %s %.1f s: %llu slow lookups (%llu not found), %.1f ms; cache %llu hits %llu builds "
+-             "%llu stale %llu evicted %llu racy-or-big, %u dirs %llu KiB; %llu lookups not tabled\n",
++             "%llu stale %llu evicted %llu racy-or-big, %u dirs %llu KiB, %llu misses answered by path; "
++             "%llu lookups not tabled\n",
+              why, (now - ios_fm_t0) / 1e9, ios_fm_lookups, ios_fm_missing, ios_fm_ns / 1e6,
+              (unsigned long long)ios_dircase.hits, (unsigned long long)ios_dircase.builds,
+              (unsigned long long)ios_dircase.stale, (unsigned long long)ios_dircase.evicted,
+              (unsigned long long)ios_dircase.uncached, ios_dircase.count,
+-             (unsigned long long)(ios_dircase.bytes >> 10), ios_fm_dropped );
++             (unsigned long long)(ios_dircase.bytes >> 10), (unsigned long long)ios_dircase.by_path_misses,
++             ios_fm_dropped );
+     qsort( ios_fm_tab, ios_fm_used, sizeof(*ios_fm_tab), ios_fm_cmp );
+     for (i = 0; i < n; i++)
+     {
+@@ -2887,6 +2889,10 @@ static int ios_dircase_lookup( int root_fd, char *unix_name, int pos, const WCHA
+     mutex_lock( &ios_dircase_mutex );
+     if ((dir = ios_dircase_get( &ios_dircase, &key )))
+     {
++        /* A listing read through a directory handle gets the absolute path that
++         * led to it now, for ios_dircase_known_missing. */
++        if (!dir->path && root_fd == AT_FDCWD && unix_name[0] == '/')
++            ios_dircase_name( &ios_dircase, dir, unix_name, strlen( unix_name ) );
+         found = dir->case_sensitive ? ios_dircase_find( dir, upper, length ) : NULL;
+         ios_fm_scan( unix_name, name, length, !!found, 1 );
+         if (found)
+@@ -2936,6 +2942,9 @@ static int ios_dircase_lookup( int root_fd, char *unix_name, int pos, const WCHA
+     clock_gettime( CLOCK_REALTIME, &now );
+     keep = !fstatat( root_fd, unix_name, &st, 0 ) && (ios_dircase_key_of( &st, &after ), ios_dircase_key_equal( &key, &after ))
+            && !ios_dircase_racy( &key, now.tv_sec, now.tv_nsec );
++    /* Read through an absolute path: kept under that path too (0209). */
++    if (keep && root_fd == AT_FDCWD && unix_name[0] == '/' && !ios_dircase_set_path( dir, unix_name, strlen( unix_name ) ))
++        keep = 0;
+     found = dir->case_sensitive ? ios_dircase_find( dir, upper, length ) : NULL;
+     ios_fm_scan( unix_name, name, length, !!found, 0 );
+     if (found)
+@@ -2950,6 +2959,132 @@ static int ios_dircase_lookup( int root_fd, char *unix_name, int pos, const WCHA
+     return !!found;
+ }
+ 
++/* Whether find_file_in_dir looks for a name as an 8.3 short name too, which no
++ * listing holds. */
++static int ios_dircase_short_name( const WCHAR *name, int length )
++{
++    int is_short = is_legal_8dot3_name( name, length );
++#ifndef VFAT_IOCTL_READDIR_BOTH
++    is_short = is_short && length >= 8 && name[4] == '~';
++#endif
++    return is_short;
++}
++
++/* Whether a kept listing holds neither the name nor its reparse point "name?",
++ * in any case: then the walk would not find the component. Only for an ASCII
++ * name: the listing holds names composed (NFC), and the volume finds a name by
++ * its exact stat in either normalization. Under ios_dircase_mutex. */
++static int ios_dircase_absent( const struct ios_dircase_dir *dir, const WCHAR *name, int length )
++{
++    WCHAR upper[MAX_DIR_ENTRY_LEN + 1];
++    int i;
++
++    if (!dir->case_sensitive || length > MAX_DIR_ENTRY_LEN || ios_dircase_short_name( name, length )) return 0;
++    for (i = 0; i < length; i++)
++    {
++        if (name[i] >= 0x80) return 0;
++        upper[i] = ntdll_towupper( name[i] );
++    }
++    upper[length] = '?';
++    return !ios_dircase_find( dir, upper, length ) && !ios_dircase_find( dir, upper, length + 1 );
++}
++
++#define IOS_DIRCASE_COMPS 64   /* the components ios_dircase_known_missing takes */
++
++/* Playport (iOS, wine-unix 0209): a lookup that misses under a directory whose
++ * listing is kept by its absolute path, answered from that listing. unix_name
++ * holds the whole path as lookup_unix_name_walk's shortcut converted it: the
++ * prefix up to pos, then name with each backslash a slash. The deepest prefix
++ * that is a kept listing's path, byte for byte, decides. When its listing holds
++ * neither the next component nor that component's reparse point, the walk would
++ * stop there: every earlier component exists as spelled, so it finds each one
++ * by its exact stat, and then searches that directory in vain. One stat of the
++ * prefix first proves the listing is still that directory's. Returns 1 with
++ * *status, unix_name cut at that directory as the walk leaves it. Returns 0 to
++ * leave the lookup to the shortcut and the walk: no listing kept on the path, a
++ * component that is there in some case, an 8.3 short name, a directory changed
++ * or gone, a trailing backslash, or a missing last component that is to be
++ * created (the walk gives its name). */
++static int ios_dircase_known_missing( int root_fd, char *unix_name, int pos, const WCHAR *name,
++                                      unsigned int name_len, UINT disposition, NTSTATUS *status )
++{
++    uint32_t ends[IOS_DIRCASE_COMPS], hashes[IOS_DIRCASE_COMPS], h;
++    const WCHAR *comps[IOS_DIRCASE_COMPS], *p = name, *q, *end = name + name_len;
++    int lens[IOS_DIRCASE_COMPS], n = 0, k, absent, current;
++    struct ios_dircase_dir *dir;
++    struct ios_dircase_key key;
++    char *c = unix_name + pos, *slash, cut;
++    struct stat st;
++
++    if (root_fd != AT_FDCWD || unix_name[0] != '/' || !name_len || name[name_len - 1] == '\\') return 0;
++
++    /* Each component, and its directory's path (the prefix of unix_name before
++     * it) with that path's hash, in one pass. */
++    h = ios_dircase_path_hash( IOS_DIRCASE_FNV, unix_name, pos );
++    for (;;)
++    {
++        if (n == IOS_DIRCASE_COMPS) return 0;
++        for (q = p; q < end && *q != '\\'; q++) ;
++        ends[n] = c - unix_name;
++        hashes[n] = h;
++        comps[n] = p;
++        lens[n++] = q - p;
++        if (q == end) break;
++        if (!(slash = strchr( c + 1, '/' ))) return 0;
++        h = ios_dircase_path_hash( h, c, slash - c );
++        c = slash;
++        p = q + 1;
++    }
++
++    for (k = n - 1; k >= 0; k--)
++    {
++        mutex_lock( &ios_dircase_mutex );
++        dir = ios_dircase_at( &ios_dircase, unix_name, ends[k], hashes[k] );
++        absent = dir && ios_dircase_absent( dir, comps[k], lens[k] );
++        mutex_unlock( &ios_dircase_mutex );
++        if (!dir) continue;
++        if (!absent) return 0;
++        if (k == n - 1 && disposition != FILE_OPEN && disposition != FILE_OVERWRITE) return 0;
++
++        /* Is it still that directory's listing? */
++        cut = unix_name[ends[k]];
++        unix_name[ends[k]] = 0;
++        current = !fstatat( AT_FDCWD, unix_name, &st, 0 ) && S_ISDIR( st.st_mode );
++        if (current) ios_dircase_key_of( &st, &key );
++        mutex_lock( &ios_dircase_mutex );
++        if ((dir = ios_dircase_at( &ios_dircase, unix_name, ends[k], hashes[k] )))
++        {
++            if (!current || !ios_dircase_key_equal( &dir->key, &key ))
++            {
++                ios_dircase.stale++;
++                ios_dircase_drop( &ios_dircase, dir );
++                dir = NULL;
++            }
++            else if (!ios_dircase_absent( dir, comps[k], lens[k] )) dir = NULL;  /* another thread's newer listing */
++            else
++            {
++                dir->used = ++ios_dircase.clock;
++                ios_dircase.hits++;
++                ios_dircase.by_path_misses++;
++            }
++        }
++        mutex_unlock( &ios_dircase_mutex );
++        if (!dir)
++        {
++            unix_name[ends[k]] = cut;
++            return 0;
++        }
++        if (ios_fm_cur)
++        {
++            ios_fm_cur->walked = 1;
++            ios_fm_scan( unix_name, comps[k], lens[k], 0, 1 );
++        }
++        *status = k < n - 1 ? STATUS_OBJECT_PATH_NOT_FOUND : STATUS_OBJECT_NAME_NOT_FOUND;
++        return 1;
++    }
++    return 0;
++}
++
+ /***********************************************************************
+  *           find_file_in_dir
+  *
+@@ -3585,6 +3720,9 @@ static NTSTATUS lookup_unix_name_walk( int root_fd, OBJECT_ATTRIBUTES *attr, UNI
+         char *p;
+         unix_name[pos + 1 + ret] = 0;
+         for (p = unix_name + pos ; *p; p++) if (*p == '\\') *p = '/';
++        /* Playport (iOS): a miss under a kept listing costs one stat (0209). */
++        if (!is_unix && ios_dircase_known_missing( root_fd, unix_name, pos, name, name_len, disposition, &status ))
++            return status;
+         if (!fstatat( root_fd, unix_name, &st, 0 ))
+         {
+             if (disposition == FILE_CREATE) return STATUS_OBJECT_NAME_COLLISION;
+diff --git a/dlls/ntdll/unix/ios_dircase.h b/dlls/ntdll/unix/ios_dircase.h
+index 80fbdcd..e4252c7 100644
+--- a/dlls/ntdll/unix/ios_dircase.h
++++ b/dlls/ntdll/unix/ios_dircase.h
+@@ -15,7 +15,14 @@
+  * its mtime and ctime are older than IOS_DIRCASE_RACY_NS: a change within the
+  * same clock tick as the read could leave both times as they were.
+  *
+- * Plain C, no Wine headers: build/dircase/test.py compiles it on the host.
++ * A listing read through an absolute path is also kept under that path, byte
++ * for byte as the walk spelled it (wine-unix 0209). A lookup whose path runs
++ * through that directory, spelled the same, finds the listing by the path's
++ * prefix; one stat of the prefix proves the path still leads to the same,
++ * unchanged directory, and its listing then says whether the next component
++ * is there at all.
++ *
++ * Plain C, no Wine headers: tools/tests/test_dircase_ios.py compiles it on the host.
+  */
+ 
+ #ifndef IOS_DIRCASE_H
+@@ -25,8 +32,10 @@
+ #include <stdlib.h>
+ #include <string.h>
+ 
+-#define IOS_DIRCASE_MAX_DIRS 64
++#define IOS_DIRCASE_MAX_DIRS 1024
+ #define IOS_DIRCASE_MAX_BYTES (24u << 20)       /* all listings together */
++#define IOS_DIRCASE_BUCKETS 1024                /* each index's chains, a power of two */
++#define IOS_DIRCASE_FNV 2166136261u             /* FNV-1a's offset basis */
+ #define IOS_DIRCASE_MAX_ENTRIES 200000u         /* a bigger directory is not cached */
+ #define IOS_DIRCASE_RACY_NS 2000000000ull       /* 2 s */
+ 
+@@ -55,24 +64,43 @@ struct ios_dircase_dir
+     uint32_t names_len, names_cap, uppers_len, uppers_cap;
+     size_t bytes;
+     uint64_t used;                /* the cache's clock at the last use */
++    unsigned index;               /* in the cache's dirs, while kept */
++    char *path;                   /* the absolute path it was read through, or NULL */
++    uint32_t path_len, path_hash;
++    struct ios_dircase_dir *next_ino, *next_path;   /* the cache's chains */
+ };
+ 
+ struct ios_dircase_cache
+ {
+     struct ios_dircase_dir *dirs[IOS_DIRCASE_MAX_DIRS];
++    struct ios_dircase_dir *by_ino[IOS_DIRCASE_BUCKETS], *by_path[IOS_DIRCASE_BUCKETS];
+     unsigned count;
+     size_t bytes;
+     uint64_t clock;
+     uint64_t hits, misses, builds, stale, evicted, uncached;
++    uint64_t by_path_misses;      /* lookups answered as missing through by_path */
+ };
+ 
+ static inline uint32_t ios_dircase_hash( const uint16_t *upper, uint32_t len )
+ {
+-    uint32_t h = 2166136261u;
++    uint32_t h = IOS_DIRCASE_FNV;
+     while (len--) { h ^= *upper++; h *= 16777619u; }
+     return h ? h : 1;
+ }
+ 
++/* FNV-1a over a path's bytes, continuing from h (IOS_DIRCASE_FNV to start), so
++ * that a lookup hashes each of its path's prefixes in one pass. */
++static inline uint32_t ios_dircase_path_hash( uint32_t h, const char *path, uint32_t len )
++{
++    while (len--) { h ^= (unsigned char)*path++; h *= 16777619u; }
++    return h;
++}
++
++static inline unsigned ios_dircase_ino_bucket( uint64_t dev, uint64_t ino )
++{
++    return (unsigned)(((ino ^ (dev << 32)) * 0x9e3779b97f4a7c15ull) >> 40) & (IOS_DIRCASE_BUCKETS - 1);
++}
++
+ static inline int ios_dircase_key_equal( const struct ios_dircase_key *a, const struct ios_dircase_key *b )
+ {
+     return a->dev == b->dev && a->ino == b->ino && a->mtime_sec == b->mtime_sec && a->mtime_nsec == b->mtime_nsec &&
+@@ -92,6 +120,7 @@ static inline int ios_dircase_racy( const struct ios_dircase_key *key, int64_t n
+ static inline void ios_dircase_free( struct ios_dircase_dir *dir )
+ {
+     if (!dir) return;
++    free( dir->path );
+     free( dir->slots );
+     free( dir->names );
+     free( dir->uppers );
+@@ -207,67 +236,147 @@ static inline const char *ios_dircase_find( const struct ios_dircase_dir *dir, c
+     return s->name == UINT32_MAX ? NULL : dir->names + s->name;
+ }
+ 
++/* Names a listing by the absolute path it was read through, before
++ * ios_dircase_put. 0 when out of memory. */
++static inline int ios_dircase_set_path( struct ios_dircase_dir *dir, const char *path, uint32_t len )
++{
++    if (!(dir->path = malloc( len + 1 ))) return 0;
++    memcpy( dir->path, path, len );
++    dir->path[len] = 0;
++    dir->path_len = len;
++    dir->path_hash = ios_dircase_path_hash( IOS_DIRCASE_FNV, path, len );
++    dir->bytes += len + 1;
++    return 1;
++}
++
++static inline void ios_dircase_unchain( struct ios_dircase_dir **link, struct ios_dircase_dir *dir, int by_path )
++{
++    for (; *link; link = by_path ? &(*link)->next_path : &(*link)->next_ino)
++        if (*link == dir)
++        {
++            *link = by_path ? dir->next_path : dir->next_ino;
++            return;
++        }
++}
++
++static inline void ios_dircase_chain_path( struct ios_dircase_cache *cache, struct ios_dircase_dir *dir )
++{
++    struct ios_dircase_dir **head = &cache->by_path[dir->path_hash & (IOS_DIRCASE_BUCKETS - 1)];
++    dir->next_path = *head;
++    *head = dir;
++}
++
++/* Drops a kept listing from the cache and frees it. */
++static inline void ios_dircase_drop( struct ios_dircase_cache *cache, struct ios_dircase_dir *dir )
++{
++    ios_dircase_unchain( &cache->by_ino[ios_dircase_ino_bucket( dir->key.dev, dir->key.ino )], dir, 0 );
++    if (dir->path) ios_dircase_unchain( &cache->by_path[dir->path_hash & (IOS_DIRCASE_BUCKETS - 1)], dir, 1 );
++    cache->bytes -= dir->bytes;
++    cache->dirs[dir->index] = cache->dirs[--cache->count];
++    cache->dirs[dir->index]->index = dir->index;
++    ios_dircase_free( dir );
++}
++
++/* The listing kept for a directory, whatever its key, or NULL. */
++static inline struct ios_dircase_dir *ios_dircase_of( const struct ios_dircase_cache *cache, uint64_t dev, uint64_t ino )
++{
++    struct ios_dircase_dir *dir = cache->by_ino[ios_dircase_ino_bucket( dev, ino )];
++    while (dir && (dir->key.dev != dev || dir->key.ino != ino)) dir = dir->next_ino;
++    return dir;
++}
++
++/* The listing kept under a path, byte for byte (hash: ios_dircase_path_hash of
++ * it), or NULL. Its names hold only once a fresh stat of the path matches its key. */
++static inline struct ios_dircase_dir *ios_dircase_at( const struct ios_dircase_cache *cache, const char *path,
++                                                      uint32_t len, uint32_t hash )
++{
++    struct ios_dircase_dir *dir = cache->by_path[hash & (IOS_DIRCASE_BUCKETS - 1)];
++    for (; dir; dir = dir->next_path)
++        if (dir->path_hash == hash && dir->path_len == len && !memcmp( dir->path, path, len )) return dir;
++    return NULL;
++}
++
+ /* The cached listing of a directory whose fresh stat gave `key`, or NULL. A
+  * listing of the same directory with an older key is dropped. */
+ static inline struct ios_dircase_dir *ios_dircase_get( struct ios_dircase_cache *cache, const struct ios_dircase_key *key )
+ {
+-    unsigned i;
+-    for (i = 0; i < cache->count; i++)
++    struct ios_dircase_dir *dir = ios_dircase_of( cache, key->dev, key->ino );
++    if (dir && ios_dircase_key_equal( &dir->key, key ))
++    {
++        dir->used = ++cache->clock;
++        cache->hits++;
++        return dir;
++    }
++    if (dir)
+     {
+-        struct ios_dircase_dir *dir = cache->dirs[i];
+-        if (dir->key.dev != key->dev || dir->key.ino != key->ino) continue;
+-        if (ios_dircase_key_equal( &dir->key, key ))
+-        {
+-            dir->used = ++cache->clock;
+-            cache->hits++;
+-            return dir;
+-        }
+         cache->stale++;
+-        cache->bytes -= dir->bytes;
+-        ios_dircase_free( dir );
+-        cache->dirs[i] = cache->dirs[--cache->count];
+-        break;
++        ios_dircase_drop( cache, dir );
+     }
+     cache->misses++;
+     return NULL;
+ }
+ 
++/* Names a kept listing that has no path yet (it was read through a directory
++ * handle) by an absolute path that leads to it now. A listing kept under that
++ * path before, of another directory, is dropped. 0 when out of memory. */
++static inline int ios_dircase_name( struct ios_dircase_cache *cache, struct ios_dircase_dir *dir, const char *path,
++                                    uint32_t len )
++{
++    struct ios_dircase_dir *old;
++    size_t bytes = dir->bytes;
++
++    if (dir->path) return 1;
++    if ((old = ios_dircase_at( cache, path, len, ios_dircase_path_hash( IOS_DIRCASE_FNV, path, len ) )))
++    {
++        cache->stale++;
++        ios_dircase_drop( cache, old );
++    }
++    if (!ios_dircase_set_path( dir, path, len )) return 0;
++    cache->bytes += dir->bytes - bytes;
++    ios_dircase_chain_path( cache, dir );
++    return 1;
++}
++
+ /* Keeps a listing, evicting the least recently used ones to stay within the
+  * limits. Returns 0 when it is not kept (too big, or another thread kept the
+  * same listing first); the caller frees it then. A kept listing of the same
+- * directory with another key is replaced. */
++ * directory with another key, or of another directory under the same path, is
++ * replaced. */
+ static inline int ios_dircase_put( struct ios_dircase_cache *cache, struct ios_dircase_dir *dir )
+ {
+-    unsigned i;
++    struct ios_dircase_dir *old, **head;
+ 
+     if (dir->bytes > IOS_DIRCASE_MAX_BYTES / 4)
+     {
+         cache->uncached++;
+         return 0;
+     }
+-    for (i = 0; i < cache->count; i++)
++    if ((old = ios_dircase_of( cache, dir->key.dev, dir->key.ino )))
+     {
+-        struct ios_dircase_dir *old = cache->dirs[i];
+-        if (old->key.dev != dir->key.dev || old->key.ino != dir->key.ino) continue;
+         if (ios_dircase_key_equal( &old->key, &dir->key )) return 0;
+-        cache->bytes -= old->bytes;
+-        ios_dircase_free( old );
+-        cache->dirs[i] = cache->dirs[--cache->count];
+         cache->stale++;
+-        break;
++        ios_dircase_drop( cache, old );
++    }
++    if (dir->path && (old = ios_dircase_at( cache, dir->path, dir->path_len, dir->path_hash )))
++    {
++        cache->stale++;
++        ios_dircase_drop( cache, old );
+     }
+     while (cache->count && (cache->count >= IOS_DIRCASE_MAX_DIRS || cache->bytes + dir->bytes > IOS_DIRCASE_MAX_BYTES))
+     {
+         unsigned i, lru = 0;
+         for (i = 1; i < cache->count; i++) if (cache->dirs[i]->used < cache->dirs[lru]->used) lru = i;
+-        cache->bytes -= cache->dirs[lru]->bytes;
+-        ios_dircase_free( cache->dirs[lru] );
+-        cache->dirs[lru] = cache->dirs[--cache->count];
++        ios_dircase_drop( cache, cache->dirs[lru] );
+         cache->evicted++;
+     }
+     dir->used = ++cache->clock;
++    dir->index = cache->count;
+     cache->dirs[cache->count++] = dir;
+     cache->bytes += dir->bytes;
++    head = &cache->by_ino[ios_dircase_ino_bucket( dir->key.dev, dir->key.ino )];
++    dir->next_ino = *head;
++    *head = dir;
++    if (dir->path) ios_dircase_chain_path( cache, dir );
+     cache->builds++;
+     return 1;
+ }

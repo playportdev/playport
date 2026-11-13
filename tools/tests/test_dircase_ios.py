@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""wine-unix 0208 (PLA-879): ntdll's case-insensitive lookups through a cache of directory
-listings, and a walk that starts at the last component when the rest exists as named.
+"""wine-unix 0208 and 0209 (PLA-879): ntdll's case-insensitive lookups through a cache of
+directory listings, a walk that starts at the last component when the rest exists as named,
+and a miss under a kept directory answered from its listing after one stat.
 
 The cache (dlls/ntdll/unix/ios_dircase.h) is tested alone (dircase_ios_test.c). Then
 find_file_in_dir, lookup_unix_name and the patch's iOS block, as file.c is with the series
@@ -13,7 +14,7 @@ import tempfile
 import unittest
 
 REPO = Path(__file__).resolve().parents[2]
-PATCH = REPO / "patches/wine-unix/0208-ntdll-iOS-case-insensitive-lookups-from-a-cached-dir.patch"
+PATCHES = sorted((REPO / "patches/wine-unix").glob("020[89]-ntdll-iOS-*.patch"))
 SOURCE = "dlls/ntdll/unix/file.c"
 HEADER = "dlls/ntdll/unix/ios_dircase.h"
 _spec = importlib.util.spec_from_file_location("wow64_test", REPO / "build/wow64/test.py")
@@ -29,6 +30,7 @@ HARNESS = r'''
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -98,12 +100,14 @@ static int is_case_sensitive = 1;
 static int is_invalid_dos_char( WCHAR c ) { static const WCHAR bad[] = { INVALID_DOS_CHARS, 0 }; return wcschr( bad, c ) != NULL; }
 static int case_queries;
 static BOOLEAN get_dir_case_sensitivity( int root_fd, const char *dir ) { (void)root_fd; (void)dir; case_queries++; return TRUE; }
+static int reparse_calls;
 static NTSTATUS resolve_reparse_point( int fd, int root_fd, OBJECT_ATTRIBUTES *attr, UNICODE_STRING *nt_name,
                                        unsigned int nt_pos, int len, char **buffer, int unix_len, int pos,
                                        UINT disposition, BOOL open_reparse, BOOL is_unix, unsigned int reparse_count )
 {
     (void)fd; (void)root_fd; (void)attr; (void)nt_name; (void)nt_pos; (void)len; (void)buffer; (void)unix_len;
     (void)pos; (void)disposition; (void)open_reparse; (void)is_unix; (void)reparse_count;
+    reparse_calls++;
     return STATUS_OBJECT_NAME_NOT_FOUND;
 }
 int ios_counters_on = 1;
@@ -139,6 +143,28 @@ static NTSTATUS look( const char *name, UINT disposition, char *out )
     return status;
 }
 
+static char tree[PATH_MAX];
+
+/* The same, from an absolute unix prefix (root AT_FDCWD), as a game's C: path is. */
+static NTSTATUS look_abs( const char *name, UINT disposition, char *out )
+{
+    WCHAR w[512];
+    UNICODE_STRING us;
+    OBJECT_ATTRIBUTES attr = { sizeof(attr), NULL, &us };
+    int n = (int)strlen( name ), unix_len = 2 * MAX_DIR_ENTRY_LEN + 3 * n + (int)strlen( tree ) + 16;
+    char *buffer = malloc( unix_len );
+    NTSTATUS status;
+    for (int i = 0; i < n; i++) w[i] = (unsigned char)name[i];
+    us.Buffer = w;
+    us.Length = us.MaximumLength = n * sizeof(WCHAR);
+    strcpy( buffer, tree );
+    status = lookup_unix_name( AT_FDCWD, &attr, &us, 0, &buffer, unix_len, (int)strlen( tree ), disposition, FALSE,
+                               FALSE, 0 );
+    strcpy( out, buffer + strlen( tree ) );
+    free( buffer );
+    return status;
+}
+
 static void touch( const char *path )
 {
     int fd = openat( root_fd, path, O_CREAT | O_WRONLY, 0644 );
@@ -160,6 +186,7 @@ int main( int argc, char **argv )
 
     assert( argc == 2 );
     assert( (root_fd = open( argv[1], O_RDONLY | O_DIRECTORY )) >= 0 );
+    assert( realpath( argv[1], tree ) );
     assert( !mkdirat( root_fd, "Games", 0755 ) && !mkdirat( root_fd, "Games/Borderlands 2", 0755 ) );
     assert( !mkdirat( root_fd, "Games/Borderlands 2/WillowGame", 0755 ) );
     assert( !mkdirat( root_fd, "Games/Borderlands 2/WillowGame/CookedPCConsole", 0755 ) );
@@ -225,6 +252,91 @@ int main( int argc, char **argv )
     /* A trailing backslash names a directory; the walk handles it as before. */
     assert( look( "games\\", FILE_OPEN, out ) == STATUS_SUCCESS && !strcmp( out, "./Games/" ) );
 
+    /* From an absolute prefix (root AT_FDCWD), as a C: path is: a lookup that misses under a
+     * directory whose listing is kept by its path, spelled as kept, is answered from that
+     * listing after one stat of the directory: no whole-path stat, no walk. A hit costs the
+     * whole-path stat alone, as before. */
+    sleep( 3 );   /* CookedPCConsole's last change (the unlink above) past the 2 s rule */
+    assert( look_abs( "Games\\Borderlands 2\\WillowGame\\CookedPCConsole\\engine.UPK", FILE_OPEN, out ) == STATUS_SUCCESS );
+    assert( !strcmp( out, "/Games/Borderlands 2/WillowGame/CookedPCConsole/Engine.upk" ) );
+    stats = 0;
+    assert( look_abs( "Games\\Borderlands 2\\WillowGame\\CookedPCConsole\\Pkg_LOC_DEU.upk", FILE_OPEN, out ) ==
+            STATUS_OBJECT_NAME_NOT_FOUND );
+    assert( stats == 1 );
+    stats = 0;
+    assert( look_abs( "Games\\Borderlands 2\\WillowGame\\CookedPCConsole\\Engine.upk", FILE_OPEN, out ) == STATUS_SUCCESS );
+    assert( stats == 1 );
+    /* A missing directory on the way: its parent's listing answers, for any disposition, and
+     * leaves the name where the walk leaves it, at that parent. */
+    assert( look_abs( "Games\\Borderlands 2\\Nowhere\\x.upk", FILE_OPEN, out ) == STATUS_OBJECT_PATH_NOT_FOUND );
+    assert( !strcmp( out, "/Games/Borderlands 2" ) );
+    stats = 0;
+    assert( look_abs( "Games\\Borderlands 2\\NOWHERE\\Localization\\INT\\x.INT", FILE_OPEN, out ) ==
+            STATUS_OBJECT_PATH_NOT_FOUND );
+    assert( stats == 1 && !strcmp( out, "/Games/Borderlands 2" ) );
+    stats = 0;
+    assert( look_abs( "Games\\Borderlands 2\\Nowhere\\New.upk", FILE_CREATE, out ) == STATUS_OBJECT_PATH_NOT_FOUND );
+    assert( stats == 1 );
+    /* Creating a missing file still gets the walk's name for it. */
+    assert( look_abs( "Games\\Borderlands 2\\WillowGame\\CookedPCConsole\\New.upk", FILE_CREATE, out ) ==
+            STATUS_NO_SUCH_FILE );
+    assert( !strcmp( out, "/Games/Borderlands 2/WillowGame/CookedPCConsole/New.upk" ) );
+    /* A trailing backslash walks, as before. */
+    assert( look_abs( "Games\\Borderlands 2\\Nowhere\\", FILE_OPEN, out ) == STATUS_OBJECT_NAME_NOT_FOUND );
+
+    /* The path as spelled, not folded: in another case the walk folds it, and a directory
+     * whose name differs only in case from a kept one is its own. */
+    stats = 0;
+    assert( look_abs( "games\\borderlands 2\\Nowhere\\x.upk", FILE_OPEN, out ) == STATUS_OBJECT_PATH_NOT_FOUND );
+    assert( stats > 1 );
+    assert( !mkdirat( root_fd, "GAMES", 0755 ) && !mkdirat( root_fd, "GAMES/Borderlands 2", 0755 ) );
+    assert( !mkdirat( root_fd, "GAMES/Borderlands 2/Nowhere", 0755 ) );
+    touch( "GAMES/Borderlands 2/Nowhere/x.upk" );
+    assert( look_abs( "GAMES\\Borderlands 2\\Nowhere\\x.upk", FILE_OPEN, out ) == STATUS_SUCCESS );
+    assert( !strcmp( out, "/GAMES/Borderlands 2/Nowhere/x.upk" ) );
+
+    /* An 8.3 short name is not in a listing; the walk's scan finds it. */
+    assert( look_abs( "Games\\Absent.upk", FILE_OPEN, out ) == STATUS_OBJECT_NAME_NOT_FOUND );   /* keeps Games */
+    {
+        static const WCHAR longw[] = { 'B','o','r','d','e','r','l','a','n','d','s',' ','2' };
+        WCHAR shortw[12];
+        char path[256] = "Games\\";
+        ULONG n = hash_short_file_name( longw, 13, shortw ), i, len = strlen( path );
+        assert( n == 8 && shortw[4] == '~' );
+        for (i = 0; i < n; i++) path[len++] = (char)shortw[i];
+        strcpy( path + len, "\\WillowGame\\CookedPCConsole\\Engine.upk" );
+        stats = 0;
+        assert( look_abs( "Games\\Nowhere.upk", FILE_OPEN, out ) == STATUS_OBJECT_NAME_NOT_FOUND && stats == 1 );
+        assert( look_abs( path, FILE_OPEN, out ) == STATUS_SUCCESS );
+        assert( !strcmp( out, "/Games/Borderlands 2/WillowGame/CookedPCConsole/Engine.upk" ) );
+    }
+
+    /* A reparse point ("name?") under a missing name: the walk resolves it. */
+    touch( "Games/Borderlands 2/Link?" );
+    sleep( 3 );
+    assert( look_abs( "Games\\Borderlands 2\\Nowhere\\x.upk", FILE_OPEN, out ) == STATUS_OBJECT_PATH_NOT_FOUND );
+    stats = 0;
+    assert( look_abs( "Games\\Borderlands 2\\Nowhere\\x.upk", FILE_OPEN, out ) == STATUS_OBJECT_PATH_NOT_FOUND );
+    assert( stats == 1 );   /* Borderlands 2 kept again, Link? in it */
+    reparse_calls = 0;
+    assert( look_abs( "Games\\Borderlands 2\\LINK\\x.upk", FILE_OPEN, out ) == STATUS_OBJECT_NAME_NOT_FOUND );
+    assert( reparse_calls == 1 );
+
+    /* The directory changed (a file added): the revalidation drops the listing, and the
+     * whole-path stat or the walk finds the file. */
+    touch( "Games/Borderlands 2/WillowGame/CookedPCConsole/Late.upk" );
+    assert( look_abs( "Games\\Borderlands 2\\WillowGame\\CookedPCConsole\\Late.upk", FILE_OPEN, out ) == STATUS_SUCCESS );
+    touch( "Games/Borderlands 2/WillowGame/CookedPCConsole/Pkg_LOC_DEU.upk" );
+    assert( look_abs( "Games\\Borderlands 2\\WillowGame\\CookedPCConsole\\pkg_loc_deu.upk", FILE_OPEN, out ) ==
+            STATUS_SUCCESS );
+    assert( !strcmp( out, "/Games/Borderlands 2/WillowGame/CookedPCConsole/Pkg_LOC_DEU.upk" ) );
+    /* A directory on the way renamed: the kept path no longer leads to its listing. */
+    assert( !renameat( root_fd, "Games/Borderlands 2/WillowGame", root_fd, "Games/Borderlands 2/Moved" ) );
+    assert( look_abs( "Games\\Borderlands 2\\WillowGame\\CookedPCConsole\\Missing.upk", FILE_OPEN, out ) ==
+            STATUS_OBJECT_PATH_NOT_FOUND );
+    assert( look_abs( "Games\\Borderlands 2\\Moved\\CookedPCConsole\\ENGINE.upk", FILE_OPEN, out ) == STATUS_SUCCESS );
+    assert( !strcmp( out, "/Games/Borderlands 2/Moved/CookedPCConsole/Engine.upk" ) );
+
     /* The census reports the walks it timed. */
     ios_fm_flush( "test" );
     return 0;
@@ -253,7 +365,9 @@ class DirCaseIOS(unittest.TestCase):
         root = self.root / "header"
         root.mkdir()
         subprocess.run(["git", "init", "-q", str(root)], check=True)
-        subprocess.run(["git", "-C", str(root), "apply", f"--include={HEADER}", str(PATCH)], check=True)
+        self.assertEqual(len(PATCHES), 2)
+        for patch in PATCHES:
+            subprocess.run(["git", "-C", str(root), "apply", f"--include={HEADER}", str(patch)], check=True)
         exe = root / "dircase-test"
         subprocess.run(["cc", "-std=c11", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
                         "-fsanitize=address,undefined", "-fno-sanitize-recover=all",
@@ -293,6 +407,7 @@ class DirCaseIOS(unittest.TestCase):
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         self.assertIn("[file-miss] test", run.stderr)
         self.assertIn('dir="./Games/Borderlands 2/WillowGame/CookedPCConsole"', run.stderr)
+        self.assertRegex(run.stderr, r"[1-9][0-9]* misses answered by path")
 
 
 if __name__ == "__main__":
