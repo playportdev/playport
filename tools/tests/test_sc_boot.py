@@ -12,9 +12,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 UNIX = ROOT / 'patches/madeira-unix'
 HEADERS = [('0224-ntdll-social-club-layout-geometry.patch', 'pp_sc_layout.h'),
            ('0225-ntdll-social-club-boot-layout.patch', 'pp_sc_boot.h')]
-LATER = ['0228-ntdll-second-social-club-elf-metadata-slot.patch',
-         '0236-ntdll-refuse-the-Social-Club-helper-s-impossible-V8-.patch',
-         '0243-ntdll-place-the-Social-Club-helper-s-V8-code-range-o.patch',
+LATER = ['0236-ntdll-refuse-the-Social-Club-helper-s-impossible-V8-.patch',
          '0299-ntdll-the-Social-Club-layout-holds-only-its-anchors-.patch']
 
 

@@ -35,8 +35,10 @@ range (1 GiB, kind 7) are on demand: nothing is held until the helper's first as
 (`0x78c0000000`, `0x7a00000000`, `0x7700000000`) when free, else at the highest free base aligned as it
 needs (256 MiB, 4 GiB, 4 GiB); from then on it is held in place like an anchor, so the next helper gets
 the same range, and one whose range something else took is placed anew. The code range's retry over
-0243's bases goes, since the router serves that ask first. ELF_META2 (0228) and the 8,960 MiB game hold
-are deleted: the game's pools are the elastic policy's, as in any Play. The JIT pool's RW alias stays
+0243's bases goes, since the router serves that ask first: one kind 7 does not serve (another helper's, live
+or kept, or a helper's second) gets a plain view where kind 7's first placement would go, 4 GiB-aligned.
+ELF_META2 and the 8,960 MiB game hold are deleted, and 0228 and 0243 leave the series (0228 keeps only
+PLA-482's overflow log): the game's pools are the elastic policy's, as in any Play. The JIT pool's RW alias stays
 where the host maps it before any guest runs, `0x7900000000`, ending at or below the cage's home; no ask
 can move it, so it is not one of the layout's slots. The Decision's layout bullet below gives the old
 geometry.

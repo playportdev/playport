@@ -302,6 +302,27 @@ static void test_kick(void)
 /* A wait on no object is a sleep (ntdll's NtDelayExecution on iOS, PLA-851): it ends at its
  * deadline, and a kick ends it early so that the thread runs its system APC, as SIGUSR1 ends a
  * sleep in select() on desktop. */
+static uint64_t real_ns(void)
+{
+    struct timespec ts;
+    clock_gettime( CLOCK_REALTIME, &ts );
+    return (uint64_t)ts.tv_sec * 1000000000ull + ts.tv_nsec;
+}
+
+/* A sleep as NtDelayExecution makes it (wine-unix 0205): a wait on no object
+ * to a deadline computed once, waited again after each kick, as
+ * linux_wait_objs() does. */
+struct sleeper { struct ntsync_wait_args a; int ret, err; unsigned int kicks; atomic_int done; };
+static void *sleeper_main( void *p )
+{
+    struct sleeper *s = p;
+    while ((s->ret = ioctl( PPSYNC_DEVICE_FD, NTSYNC_IOC_WAIT_ANY, &s->a )) == -1 && errno == ECANCELED)
+        s->kicks++;
+    s->err = errno;
+    atomic_store( &s->done, 1 );
+    return NULL;
+}
+
 static void test_sleep(void)
 {
     struct waiter_arg w = { .count = 0, .owner = 0x280, .timeout_ms = 30 };
@@ -323,6 +344,31 @@ static void test_sleep(void)
     errno = 0; CHECK( wait_objs( NULL, 0, 0, 0x280, 0, 1000, NULL ) == -1 && errno == ECANCELED );
     CHECK( mono_ns() - start < 500000000ull );
     errno = 0; CHECK( wait_objs( NULL, 0, 0, 0x280, 0, 0, NULL ) == -1 && errno == ETIMEDOUT );
+
+    /* A relative Sleep: its deadline is on CLOCK_MONOTONIC (no flag), so a step
+     * of the wall clock cannot stretch it, and a kick does not move it. */
+    {
+        struct sleeper s = { .a = { .owner = 0x280, .index = ~0u } };
+        unsigned long long before = slept();
+        pthread_t th;
+        start = mono_ns();
+        s.a.timeout = start + 100000000ull;
+        CHECK( !pthread_create( &th, NULL, sleeper_main, &s ) );
+        while (slept() == before && mono_ns() < start + 50000000ull) sleep_ms( 1 );
+        ppsync_kick( 0x280 );
+        pthread_join( th, NULL );
+        CHECK( s.ret == -1 && s.err == ETIMEDOUT && s.kicks == 1 );
+        CHECK( mono_ns() - start >= 100000000ull && mono_ns() - start < 600000000ull );
+    }
+    /* An absolute Sleep: on CLOCK_REALTIME with NTSYNC_WAIT_REALTIME. Read on
+     * the other clock, either deadline would be decades off one way. */
+    {
+        struct ntsync_wait_args a = { .owner = 0x280, .index = ~0u, .flags = NTSYNC_WAIT_REALTIME };
+        start = mono_ns();
+        a.timeout = real_ns() + 30000000ull;
+        errno = 0; CHECK( ioctl( PPSYNC_DEVICE_FD, NTSYNC_IOC_WAIT_ANY, &a ) == -1 && errno == ETIMEDOUT );
+        CHECK( mono_ns() - start >= 29000000ull && mono_ns() - start < 500000000ull );
+    }
 }
 
 static void test_freeze(void)

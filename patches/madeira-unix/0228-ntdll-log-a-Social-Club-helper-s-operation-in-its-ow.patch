@@ -1,0 +1,69 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: playportdev <dev@playport.dev>
+Date: Fri, 30 Oct 2026 16:00:00 +0100
+Subject: [PATCH] ntdll: log a Social Club helper's operation in its own slot
+ past a metadata kind's end as a possible overflow
+
+PLA-482, under the Social Club layout. An operation inside a slot the
+caller owns still belongs to that slot. One that also lies past a
+metadata kind's real end in that kind's reported extent is logged as a
+possible metadata overflow into that slot, not as an alias of it: l5's
+2 MiB-stride metadata commits land legitimately in their own slots, and
+the reported extents alias the cage, chrome_elf and Oilpan. An operation
+straddling two real ranges stays refused, even when the caller owns both;
+a comment at the check says so.
+
+Linear: PLA-482
+Class: diagnostics
+Evidence: docs/evidence/2026-10-29-sc-stock-cef-probe.md
+Offered-upstream: no
+---
+ build/ntdll-unix/pp_sc_access.h | 17 +++++++++++++++--
+ 1 file changed, 15 insertions(+), 2 deletions(-)
+
+diff --git a/build/ntdll-unix/pp_sc_access.h b/build/ntdll-unix/pp_sc_access.h
+index 13d9e5d..84f5111 100644
+--- a/build/ntdll-unix/pp_sc_access.h
++++ b/build/ntdll-unix/pp_sc_access.h
+@@ -19,12 +19,16 @@ static enum ppsc_slot ppsc_real_slot(uint64_t a, uint64_t n)
+  * outside k's real range, say what is underneath: another slot it also owns
+  * (the reported extents alias real slots), a commit in a reported tail, an
+  * Oilpan commit in the lower half of its report (chrome_elf's), or a view of
+- * another owner. Each message has its own per-kind limit. */
++ * another owner. Each message has its own per-kind limit.
++ * An operation inside owned slot j belongs to j (real-range containment
++ * decides). When it also lies past a metadata kind's real end in that kind's
++ * report, it may be that pool overflowing into j, which an address cannot
++ * tell apart from j's own use (PLA-482): logged as possible overflow. */
+ static void ppsc_note_reported_locked(void *owner, const void *address, uint64_t a, uint64_t n,
+                                       enum ppsc_op op)
+ {
+     static unsigned said_view[PPSC_CAGE + 1], said_alias[PPSC_CAGE + 1], said_tail[PPSC_CAGE + 1];
+-    static unsigned said_oilpan_low;
++    static unsigned said_oilpan_low, said_overflow[PPSC_CAGE + 1];
+     enum ppsc_slot j = ppsc_real_slot(a, n);
+     int k;
+     for (k = PPSC_ELF; k <= PPSC_CAGE; k++) {
+@@ -40,6 +44,13 @@ static void ppsc_note_reported_locked(void *owner, const void *address, uint64_t
+                         owner, address, (unsigned long long)n, (unsigned long long)off, j);
+             continue;
+         }
++        if (j && ppsc_owner[j] == owner && a >= r.base + r.size &&
++            (k == PPSC_ELF_META || k == PPSC_CEF_META)) {
++            if (said_overflow[k]++ < 16)
++                dprintf(2, "[sc-layout] helper %p op=%d %p+0x%llx in reported extent of kind=%d off=0x%llx past its real end: possible metadata overflow into kind=%d\n",
++                        owner, op, address, (unsigned long long)n, k, (unsigned long long)off, j);
++            continue;
++        }
+         if (j && ppsc_owner[j] == owner) {
+             if (said_alias[k]++ < 16)
+                 dprintf(2, "[sc-layout] helper %p op=%d %p+0x%llx in reported extent of kind=%d off=0x%llx lands in its own kind=%d real range\n",
+@@ -72,6 +83,8 @@ static int ppsc_access(const void *address, SIZE_T size, enum ppsc_op op)
+     if (n > UINT64_MAX - a) return 0;
+     owner = ios_jit_current_peb();
+     server_enter_uninterrupted_section(&virtual_mutex, &sigset);
++    /* Wholly inside one real range this caller owns: an operation that
++     * straddles two slots is refused even when it owns both. */
+     if ((k = ppsc_real_slot(a, n))) ok = owner && ppsc_owner[k] == owner && ppsc_contains(ppsc_range(k), a, n);
+     if (!ok) dprintf(2, "[sc-layout] refused memory operation owner=%p addr=%p size=0x%llx: outside owned real range\n",
+                      owner, address, (unsigned long long)size);

@@ -34,10 +34,10 @@ Offered-upstream: no
  3 files changed, 102 insertions(+), 7 deletions(-)
 
 diff --git a/build/ntdll-unix/pp_sc_layout.h b/build/ntdll-unix/pp_sc_layout.h
-index b0c3249..f3fd88b 100644
+index abf83a5..842646c 100644
 --- a/build/ntdll-unix/pp_sc_layout.h
 +++ b/build/ntdll-unix/pp_sc_layout.h
-@@ -78,4 +78,23 @@ static inline enum ppsc_slot ppsc_classify(uint64_t size, uint64_t hint,
+@@ -64,4 +64,23 @@ static inline enum ppsc_slot ppsc_classify(uint64_t size, uint64_t hint,
      }
      return PPSC_NONE;
  }
@@ -62,12 +62,12 @@ index b0c3249..f3fd88b 100644
 +}
  #endif
 diff --git a/build/ntdll-unix/pp_sc_owner.h b/build/ntdll-unix/pp_sc_owner.h
-index 5c8a7f5..dd4ed7b 100644
+index 81a23c9..2222861 100644
 --- a/build/ntdll-unix/pp_sc_owner.h
 +++ b/build/ntdll-unix/pp_sc_owner.h
 @@ -2,6 +2,51 @@
  /* Shared by the layout router and the existing safe process teardown. */
- static void *ppsc_owner[PPSC_LAST_SLOT + 1]; /* virtual_mutex protects grants and holds */
+ static void *ppsc_owner[PPSC_CAGE + 1]; /* virtual_mutex protects grants and holds */
  
 +/* The router's ppsc_impossible refusals per helper PEB, for its owner-exit
 + * line (virtual_mutex protects them). A ninth PEB at once is refused uncounted. */
@@ -125,7 +125,7 @@ index 5c8a7f5..dd4ed7b 100644
 +    unsigned n;
      int k;
      if (!peb || !ppsc_ready) return;
-     for (k = PPSC_ELF; k <= PPSC_LAST_SLOT; k++) {
+     for (k = PPSC_ELF; k <= PPSC_CAGE; k++) {
 @@ -45,9 +92,12 @@ static void ppsc_owner_died_locked(void *peb)
          }
          ppsc_owner[k] = NULL;
@@ -142,10 +142,10 @@ index 5c8a7f5..dd4ed7b 100644
  
  /* A view inside a layout slot is a Social Club grant, never FEX's band, even
 diff --git a/build/ntdll-unix/pp_sc_vm.h b/build/ntdll-unix/pp_sc_vm.h
-index d47ea0c..d5a6024 100644
+index 21d9531..51fdf12 100644
 --- a/build/ntdll-unix/pp_sc_vm.h
 +++ b/build/ntdll-unix/pp_sc_vm.h
-@@ -23,11 +23,12 @@ static unsigned ppsc_others(void *peb)
+@@ -13,11 +13,12 @@ static unsigned ppsc_mine(void *peb)
   * owner's slot view (PLA-476 retained-extent diagnostic, no policy). */
  static void ppsc_note_kept_view_locked(int k, void *peb, struct file_view *v)
  {
@@ -161,7 +161,7 @@ index d47ea0c..d5a6024 100644
      while (p < end) {
          BYTE vprot;
          SIZE_T len = get_vprot_range_size(p, end - p, VPROT_COMMITTED, &vprot);
-@@ -73,7 +74,9 @@ static enum ppsc_slot ppsc_hold_in_place_locked(void *owner, struct file_view *v
+@@ -63,7 +64,9 @@ static enum ppsc_slot ppsc_hold_in_place_locked(void *owner, struct file_view *v
  static int ppsc_owner_view_freed_locked(void *peb, struct file_view *view)
  {
      enum ppsc_slot k = ppsc_hold_in_place_locked(peb, view);
@@ -172,7 +172,7 @@ index d47ea0c..d5a6024 100644
      return k != PPSC_NONE;
  }
  
-@@ -136,6 +139,25 @@ static NTSTATUS ppsc_grant(enum ppsc_slot k, SIZE_T asked, void **ret, SIZE_T *s
+@@ -126,6 +129,25 @@ static NTSTATUS ppsc_grant(enum ppsc_slot k, SIZE_T asked, void **ret, SIZE_T *s
      return STATUS_SUCCESS;
  }
  
@@ -198,7 +198,7 @@ index d47ea0c..d5a6024 100644
  static int ppsc_route(void **ret, SIZE_T *size, ULONG type, ULONG protect, ULONG_PTR limit,
                        int extended, NTSTATUS *status)
  {
-@@ -150,10 +172,14 @@ static int ppsc_route(void **ret, SIZE_T *size, ULONG type, ULONG protect, ULONG
+@@ -140,10 +162,14 @@ static int ppsc_route(void **ret, SIZE_T *size, ULONG type, ULONG protect, ULONG
           * cage (every logged play asks for it after both). */
          if (*size != 0x200000000ULL || protect != PAGE_NOACCESS ||
              !(ppsc_held & PPSC_BIT(PPSC_CAGE)) || (ppsc_mine(ios_jit_current_peb()) & both) != both) {
@@ -212,5 +212,5 @@ index d47ea0c..d5a6024 100644
 +        server_leave_uninterrupted_section(&virtual_mutex, &sigset);
 +        return 1;
      } else {
-         k = ppsc_classify(*size, (uintptr_t)*ret, ppsc_held, ppsc_mine(ios_jit_current_peb()),
-                           ppsc_others(ios_jit_current_peb()));
+         k = ppsc_classify(*size, (uintptr_t)*ret, ppsc_held, ppsc_mine(ios_jit_current_peb()));
+         if (k == PPSC_NONE) {

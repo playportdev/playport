@@ -39,7 +39,7 @@ Offered-upstream: no
  4 files changed, 60 insertions(+), 4 deletions(-)
 
 diff --git a/build/ntdll-unix/pp_sc_boot.h b/build/ntdll-unix/pp_sc_boot.h
-index 8c01dba..cb7d5e1 100644
+index edc4b89..c508bbd 100644
 --- a/build/ntdll-unix/pp_sc_boot.h
 +++ b/build/ntdll-unix/pp_sc_boot.h
 @@ -15,6 +15,18 @@ static int ppsc_native_hold(uint64_t base, uint64_t size)
@@ -62,7 +62,7 @@ index 8c01dba..cb7d5e1 100644
  {
      const char *low, *rw, *span, *e = getenv("PLAYPORT_SC_LAYOUT");
 diff --git a/build/ntdll-unix/pp_sc_owner.h b/build/ntdll-unix/pp_sc_owner.h
-index e120867..5c8a7f5 100644
+index 99c103b..81a23c9 100644
 --- a/build/ntdll-unix/pp_sc_owner.h
 +++ b/build/ntdll-unix/pp_sc_owner.h
 @@ -23,10 +23,13 @@ static int ppsc_helper(void)
@@ -81,10 +81,10 @@ index e120867..5c8a7f5 100644
  {
      int k;
 diff --git a/build/ntdll-unix/pp_sc_vm.h b/build/ntdll-unix/pp_sc_vm.h
-index 4513ed8..d47ea0c 100644
+index eb9ef2f..21d9531 100644
 --- a/build/ntdll-unix/pp_sc_vm.h
 +++ b/build/ntdll-unix/pp_sc_vm.h
-@@ -42,6 +42,41 @@ static void ppsc_note_kept_view_locked(int k, void *peb, struct file_view *v)
+@@ -32,6 +32,41 @@ static void ppsc_note_kept_view_locked(int k, void *peb, struct file_view *v)
      dprintf(2, "[sc-layout] kind=%d committed runs=%u bytes=0x%llx highest_end_off=0x%llx\n", k, runs, bytes, high);
  }
  
@@ -98,7 +98,7 @@ index 4513ed8..d47ea0c 100644
 +{
 +    int k;
 +    if (!ppsc_ready || !owner) return PPSC_NONE;
-+    for (k = PPSC_ELF; k <= PPSC_LAST_SLOT; k++) {
++    for (k = PPSC_ELF; k <= PPSC_CAGE; k++) {
 +        struct ppsc_range r = ppsc_range(k);
 +        if (ppsc_owner[k] != owner || (uintptr_t)view->base != r.base || view->size != r.size) continue;
 +        if (!ppsc_native_hold_over(r.base, r.size)) {
@@ -126,7 +126,7 @@ index 4513ed8..d47ea0c 100644
  /* Whether any of Wine's reserved areas overlaps slot r. */
  static int ppsc_in_reserved_area_locked(struct ppsc_range r)
  {
-@@ -159,12 +194,17 @@ static int ppsc_free(void **addr, SIZE_T *size, ULONG type, NTSTATUS *status)
+@@ -148,12 +183,17 @@ static int ppsc_free(void **addr, SIZE_T *size, ULONG type, NTSTATUS *status)
          struct file_view *v = find_view((void *)(uintptr_t)r.base, 0);
          *status = STATUS_UNABLE_TO_FREE_VM;
          if (!*size && v && (uintptr_t)v->base == r.base && v->size == r.size && v->ios_owner_peb == owner) {
@@ -148,10 +148,10 @@ index 4513ed8..d47ea0c 100644
          }
      }
 diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
-index 21d3dc1..1464709 100644
+index e0db83f..436bef8 100644
 --- a/build/ntdll-unix/virtual_ios.c
 +++ b/build/ntdll-unix/virtual_ios.c
-@@ -18320,6 +18320,7 @@ static void ios_proc_end_release_views_locked( void *peb, const struct ppe_censu
+@@ -18037,6 +18037,7 @@ static void ios_proc_end_release_views_locked( void *peb, const struct ppe_censu
          }
          r->freed[cls] += view->size;
          view->wow64_mapping = 0;   /* the server closed the dead process's handles (0139) */

@@ -24,17 +24,21 @@ answers in 89 ms and the update applies in 1.4 s.
 With ppsync, a timed non-alertable sleep is now a ppsync wait on no
 object, until the same deadline. A kick ends it, linux_wait_objs() runs
 the APC through a zero-timeout server wait, and the sleep goes on. A
-sleep forever does the same in a loop. Without ppsync nothing changes.
+sleep forever does the same in a loop. The timeout goes as given: a
+relative one is a CLOCK_MONOTONIC deadline, so a step of the wall clock
+does not stretch the sleep, as select()'s relative sleep was not
+stretched; an absolute one waits on CLOCK_REALTIME. Without ppsync
+nothing changes.
 
 Class: ios-port
-Evidence: docs/evidence/2026-11-13-rockstar-launcher-self-update.md (PLA-851: Rockstar Service's log on the phone, desktop Proton with SIGUSR1 withheld)
+Evidence: docs/evidence/2026-11-13-rockstar-launcher-self-update.md (PLA-851: Rockstar Service's log on the phone, desktop Proton with SIGUSR1 withheld); build/ppsync/ppsync_test.c test_sleep (a no-object wait to a monotonic or a realtime deadline, kicked and resumed)
 Offered-upstream: no; iOS one-process runtime integration
 ---
  dlls/ntdll/unix/sync.c | 22 ++++++++++++++++++++++
  1 file changed, 22 insertions(+)
 
 diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
-index 8df2581..69ddc6f 100644
+index 8df2581..2d94914 100644
 --- a/dlls/ntdll/unix/sync.c
 +++ b/dlls/ntdll/unix/sync.c
 @@ -3353,6 +3353,9 @@ NTSTATUS WINAPI NtDelayExecution( BOOLEAN alertable, const LARGE_INTEGER *timeou
@@ -60,12 +64,12 @@ index 8df2581..69ddc6f 100644
 +         * service's pipe between Sleep()s saw each reply only at its 10 s ping. The sleep is
 +         * a ppsync wait on no object instead: a kick ends it, linux_wait_objs() runs
 +         * the APC through a zero-timeout server wait, and the sleep goes on to the same
-+         * deadline. */
++         * deadline. The timeout goes as given: a relative one is a CLOCK_MONOTONIC
++         * deadline, so a step of the wall clock does not stretch it (select() slept a
++         * relative time too); an absolute one waits on CLOCK_REALTIME. */
 +        if (inproc_device_fd >= 0)
 +        {
-+            LARGE_INTEGER deadline;
-+            deadline.QuadPart = when;
-+            linux_wait_objs( inproc_device_fd, 0, NULL, WaitAny, 0, &deadline );
++            linux_wait_objs( inproc_device_fd, 0, NULL, WaitAny, 0, timeout );
 +            return STATUS_SUCCESS;
 +        }
 +#endif

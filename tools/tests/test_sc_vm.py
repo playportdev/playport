@@ -20,10 +20,9 @@ HEADERS = [('0224-ntdll-social-club-layout-geometry.patch', 'pp_sc_layout.h'),
            ('0226-ntdll-route-social-club-helper-reservations.patch', 'pp_sc_owner.h'),
            ('0226-ntdll-route-social-club-helper-reservations.patch', 'pp_sc_vm.h'),
            ('0226-ntdll-route-social-club-helper-reservations.patch', 'pp_sc_access.h')]
-LATER = ['0228-ntdll-second-social-club-elf-metadata-slot.patch',
+LATER = ['0228-ntdll-log-a-Social-Club-helper-s-operation-in-its-ow.patch',
          '0231-ntdll-hold-a-dead-owner-s-Social-Club-slot-in-place-.patch',
          '0236-ntdll-refuse-the-Social-Club-helper-s-impossible-V8-.patch',
-         '0243-ntdll-place-the-Social-Club-helper-s-V8-code-range-o.patch',
          '0299-ntdll-the-Social-Club-layout-holds-only-its-anchors-.patch']
 
 
@@ -220,7 +219,9 @@ static void delete_view(struct file_view *v)
 static int alias_release_calls;
 static void ios_jit_anon_alias_release(const void *base, size_t size) { (void)base; (void)size; alias_release_calls++; }
 
-/* Fake allocator: a fixed reserve inside a slot; options inject failures. */
+/* Fake allocator: a fixed reserve inside a slot, or (0299) V8's code range as
+ * a plain view at a 4 GiB-aligned base off every held slot; options inject
+ * failures. */
 static int alloc_calls, alloc_fail, alloc_mismatch, mismatch_foreign_owner, free_fail;
 static ULONG last_protect;
 static NTSTATUS allocate_virtual_memory(void **ret, SIZE_T *size, ULONG type, ULONG protect,
@@ -230,7 +231,17 @@ static NTSTATUS allocate_virtual_memory(void **ret, SIZE_T *size, ULONG type, UL
     (void)a; (void)b; (void)c; (void)d;
     alloc_calls++;
     last_protect = protect;
-    assert(type == MEM_RESERVE && k);
+    assert(type == MEM_RESERVE);
+    if (!k) {
+        uint64_t base = (uintptr_t)*ret;
+        assert(*size == 0x40000000ULL && !(base & 0xffffffffULL));
+        for (int j = PPSC_ELF; j <= PPSC_LAST_SLOT; j++)
+            if (native_held[j] && base < ppsc_range(j).base + ppsc_range(j).size && base + *size > ppsc_range(j).base)
+                return STATUS_NO_MEMORY;
+        if (alloc_fail || overlaps_view(base, *size)) return STATUS_NO_MEMORY;
+        add_view(base, *size, cur);
+        return STATUS_SUCCESS;
+    }
     assert(!native_held[k]); /* the hold must be dropped before the real map */
     if (alloc_fail || overlaps_view((uintptr_t)*ret, *size)) return STATUS_NO_MEMORY;
     if (alloc_mismatch) *size = ppsc_range(k).size / 2;
@@ -496,8 +507,10 @@ static void t_route_impossible_probes(void)
 /* 0299: V8's code range (l16 B's hinted 1 GiB asks, offsets 0 and 4 GiB) is an
  * on-demand slot: the first ask places it at its home, a 4 GiB-aligned base,
  * whatever the hint; it is held in place across the hand-off, so the next
- * helper's ask gets the same range. A second one, or one at the extended entry
- * point, is Wine's as before. */
+ * helper's ask gets the same range. One kind 7 does not serve (its second,
+ * another helper's while kind 7 is owned) gets a plain view at the highest
+ * free 4 GiB-aligned base, never the kernel's unaligned pick; with none, and
+ * at the extended entry point, it is Wine's as before. */
 static void t_route_code_range(void)
 {
     NTSTATUS st; void *ret, *addr; SIZE_T sz;
@@ -512,12 +525,35 @@ static void t_route_code_range(void)
     assert(alloc_calls == calls && !ppsc_placed[PPSC_CODE]);
     grant_ok(hints[0], GiB(1), 0, PPSC_CODE);
     assert(ppsc_range(PPSC_CODE).base == 0x7700000000ULL && !(ppsc_range(PPSC_CODE).base & (GiB(4) - 1)));
-    for (unsigned i = 1; i < 3; i++)                                                      /* its second: Wine's */
-        assert(!reserve(hints[i], GiB(1), MEM_RESERVE, PAGE_NOACCESS, 0, &st, &ret, &sz));
+    /* Its second: a plain view, no slot, at the highest free 4 GiB-aligned GiB
+     * of the window as the task's map shows it (kind 7, the cage and libcef's
+     * metadata out of it). */
+    fake_gaps[1] = (struct ppsc_gap){0x7440000000ULL, 0x7700000000ULL - 0x7440000000ULL};
+    fake_gaps[2] = (struct ppsc_gap){0x7804000000ULL, 0x78c0000000ULL - 0x7804000000ULL};
+    fake_gaps[3] = (struct ppsc_gap){0x7938000000ULL, 0x7a00000000ULL - 0x7938000000ULL};
+    calls = alloc_calls;
+    assert(reserve(hints[1], GiB(1), MEM_RESERVE, PAGE_NOACCESS, 0, &st, &ret, &sz) && st == STATUS_SUCCESS);
+    assert((uint64_t)(uintptr_t)ret == 0x7600000000ULL && sz == GiB(1) && alloc_calls == calls + 1);
+    {
+        struct file_view *v = find_view(ret, 0);
+        assert(v && v->base == ret && v->size == GiB(1) && v->ios_owner_peb == &pebs[1]);
+    }
+    assert(ppsc_owner[PPSC_CODE] == &pebs[1] && ppsc_placed[PPSC_CODE] == 0x7700000000ULL);
+    assert(strstr(all_msgs, "not kind=7's: plain view at 0x7600000000+0x40000000 status=0"));
     assert(ppsc_access((void *)(uintptr_t)0x7700001000ULL, 0x1000, PPSC_OP_COMMIT));
     cur = &pebs[3];                                                                      /* not another helper's */
-    assert(!reserve(hints[1], GiB(1), MEM_RESERVE, PAGE_NOACCESS, 0, &st, &ret, &sz));
+    fake_gaps[1].size = 0x7600000000ULL - 0x7440000000ULL;                                /* the plain view's out */
+    assert(reserve(hints[1], GiB(1), MEM_RESERVE, PAGE_NOACCESS, 0, &st, &ret, &sz) && st == STATUS_SUCCESS);
+    assert((uint64_t)(uintptr_t)ret == 0x7500000000ULL && find_view(ret, 0)->ios_owner_peb == &pebs[3]);
+    assert(ppsc_owner[PPSC_CODE] == &pebs[1]);
     assert(!ppsc_access((void *)(uintptr_t)0x7700001000ULL, 0x1000, PPSC_OP_COMMIT));
+    /* No free aligned GiB (l13's restarts): left to Wine, nothing mapped. */
+    fake_gaps[0] = (struct ppsc_gap){0x7280000000ULL, 0x20300000ULL}; fake_ngaps = 1;
+    calls = alloc_calls;
+    assert(!reserve(hints[2], GiB(1), MEM_RESERVE, PAGE_NOACCESS, 0, &st, &ret, &sz) && st == 0x12345);
+    assert(alloc_calls == calls && strstr(all_msgs, "not kind=7's: no free 0x100000000-aligned 0x40000000; left to Wine"));
+    teardown_views(&pebs[3]);
+    default_gaps();
     cur = &pebs[1];
     addr = (void *)(uintptr_t)0x7700000000ULL; sz = 0;                                    /* V8 gives it back */
     assert(ppsc_free(&addr, &sz, MEM_RELEASE, &st) && st == STATUS_SUCCESS && sz == GiB(1));
@@ -527,7 +563,7 @@ static void t_route_code_range(void)
     cur = &pebs[3];
     grant_sequence();
     grant_ok(hints[2], GiB(1), 0, PPSC_CODE);
-    assert(ppsc_range(PPSC_CODE).base == 0x7700000000ULL && gaps_calls == 3);              /* placed once */
+    assert(ppsc_range(PPSC_CODE).base == 0x7700000000ULL && gaps_calls == 6);              /* placed once; 3 plain-view reads */
     check_holds();
 
     /* Its home taken: the highest free 4 GiB-aligned GiB. l16 B's largest hole

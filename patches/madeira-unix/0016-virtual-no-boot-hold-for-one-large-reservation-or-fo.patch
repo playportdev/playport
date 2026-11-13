@@ -14,8 +14,8 @@ placed by the rules every game gets. A large ask that finds no room fails
 as on any full address space.
 
 Linear: PLA-843
-Class: upstream-bug
-Evidence: docs/decisions/0183-no-per-game-memory-keys.md; tools/tests/test_elastic_reserve.py (host checks; phone gates not run)
+Class: ios-port
+Evidence: docs/decisions/0183-no-per-game-memory-keys.md (PLA-843); tools/tests/test_no_boot_holds.py (the series leaves no hold in loader_ios.c or virtual_ios.c; phone gates not run)
 Offered-upstream: no; the holds are the iOS port's
 ---
  build/ntdll-unix/loader_ios.c  |   9 -

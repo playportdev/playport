@@ -191,7 +191,7 @@
 0225-ntdll-social-club-boot-layout.patch
 0226-ntdll-route-social-club-helper-reservations.patch
 0227-ntdll-name-the-parked-register-that-keeps-a-view.patch
-0228-ntdll-second-social-club-elf-metadata-slot.patch
+0228-ntdll-log-a-Social-Club-helper-s-operation-in-its-ow.patch
 0229-ntdll-detach-a-parked-thread-s-alert-wait-then-free-a-view.patch
 0230-ntdll-count-finished-teardowns-for-a-post-teardown-m.patch
 0231-ntdll-hold-a-dead-owner-s-Social-Club-slot-in-place-.patch
@@ -206,7 +206,6 @@
 0240-ntdll-limit-the-thr-prio-lines-per-process-not-per-a.patch
 0241-ntdll-count-audio-underruns-and-name-a-stream-s-prod.patch
 0242-ntdll-split-the-xp-line-s-CPU-time-into-user-and-sys.patch
-0243-ntdll-place-the-Social-Club-helper-s-V8-code-range-o.patch
 0244-ntdll-log-each-render-stream-s-steady-GetBuffer-call.patch
 0245-ntdll-give-a-render-stream-s-producer-a-time-constra.patch
 0246-ntdll-after-repeated-underruns-play-whole-callbacks-.patch

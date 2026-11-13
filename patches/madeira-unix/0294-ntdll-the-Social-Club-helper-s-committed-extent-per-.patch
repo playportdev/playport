@@ -7,8 +7,8 @@ PLA-841, a dev app's census for shrinking the Social Club layout
 (decision 0169) to what Chromium uses: per kind, the bytes committed
 now, their peak and the highest committed end offset from the kind's
 base. The kinds are the layout's slots by their real ranges (chrome_elf's
-pool, libcef's pool, ELF_META, CEF_META, Oilpan, the cage, ELF_META2),
-V8's code range (a helper's 1 GiB view at a 4 GiB-aligned base in the
+pool, libcef's pool, ELF_META, CEF_META, Oilpan, the cage), V8's code
+range (a helper's 1 GiB view at a 4 GiB-aligned base in the
 layout's window, recorded at its first change) and the JIT pool's RW
 alias (the pool's head plus its tail, read from the pool).
 
@@ -37,17 +37,17 @@ Class: diagnostics
 Evidence: tools/tests/test_sc_census.py (host checks; phone gates not run)
 Offered-upstream: no; a Playport diagnostic for the iOS port's Social Club layout
 ---
- build/ntdll-unix/pp_sc_census.h | 182 ++++++++++++++++++++++++++
+ build/ntdll-unix/pp_sc_census.h | 183 ++++++++++++++++++++++++++
  build/ntdll-unix/virtual_ios.c  | 220 ++++++++++++++++++++++++++++++++
- 2 files changed, 402 insertions(+)
+ 2 files changed, 403 insertions(+)
  create mode 100644 build/ntdll-unix/pp_sc_census.h
 
 diff --git a/build/ntdll-unix/pp_sc_census.h b/build/ntdll-unix/pp_sc_census.h
 new file mode 100644
-index 0000000..c5282f9
+index 0000000..b34ac41
 --- /dev/null
 +++ b/build/ntdll-unix/pp_sc_census.h
-@@ -0,0 +1,182 @@
+@@ -0,0 +1,183 @@
 +/* SPDX-License-Identifier: LGPL-2.1-or-later */
 +/* PLA-841: the Social Club helper's committed extent per kind, the evidence
 + * that sizes the layout's anchors (decision 0169). A kind is a layout slot's
@@ -63,12 +63,13 @@ index 0000000..c5282f9
 +#include <stdint.h>
 +#include "pp_sc_layout.h"
 +
-+enum { PPSC_CENSUS_CODE = PPSC_LAST_SLOT + 1, PPSC_CENSUS_JIT_RW, PPSC_CENSUS_KINDS };
++enum { PPSC_CENSUS_CODE = PPSC_CAGE + 1, PPSC_CENSUS_JIT_RW, PPSC_CENSUS_KINDS };
 +/* A kind's line is due at its first commit, then whenever its peak or highest
 + * end has grown this much since its last line. */
 +#define PPSC_CENSUS_STEP (UINT64_C(16) << 20)
 +#define PPSC_CENSUS_CALLERS 4
 +#define PPSC_CENSUS_CODE_SIZE UINT64_C(0x40000000)
++#define PPSC_CENSUS_CODE_ALIGN UINT64_C(0x100000000)
 +/* 4 GiB-aligned GiBs inside [PPSC_FLOOR, PPSC_CEILING): 0x71, 0x72, 0x73. */
 +#define PPSC_CENSUS_CODE_RANGES 3
 +/* One page-protection change spans at most a few adjacent ranges. */
@@ -101,7 +102,7 @@ index 0000000..c5282f9
 +static inline const char *ppsc_census_name(int k)
 +{
 +    static const char *const names[PPSC_CENSUS_KINDS] = {
-+        "?", "ELF", "CEF", "ELF_META", "CEF_META", "OILPAN", "CAGE", "ELF_META2",
++        "?", "ELF", "CEF", "ELF_META", "CEF_META", "OILPAN", "CAGE",
 +        "V8_CODE_RANGE", "JIT_RW_ALIAS" };
 +    return k > 0 && k < PPSC_CENSUS_KINDS ? names[k] : "?";
 +}
@@ -110,13 +111,13 @@ index 0000000..c5282f9
 +static inline const char *ppsc_census_id(int k)
 +{
 +    static const char *const ids[PPSC_CENSUS_KINDS] = {
-+        "?", "1", "2", "3", "4", "5", "6", "7", "code", "jit-rw" };
++        "?", "1", "2", "3", "4", "5", "6", "code", "jit-rw" };
 +    return k > 0 && k < PPSC_CENSUS_KINDS ? ids[k] : "?";
 +}
 +
 +static inline int ppsc_census_code_shape(uint64_t base, uint64_t size)
 +{
-+    return size == PPSC_CENSUS_CODE_SIZE && !(base & (PPSC_CODE_RANGE_ALIGN - 1)) &&
++    return size == PPSC_CENSUS_CODE_SIZE && !(base & (PPSC_CENSUS_CODE_ALIGN - 1)) &&
 +           base >= PPSC_FLOOR && base < PPSC_CEILING && size <= PPSC_CEILING - base;
 +}
 +
@@ -159,7 +160,7 @@ index 0000000..c5282f9
 +    unsigned got = 0;
 +    int k, i;
 +    if (!n || n > UINT64_MAX - a) return 0;
-+    for (k = PPSC_ELF; k <= PPSC_LAST_SLOT; k++) {
++    for (k = PPSC_ELF; k <= PPSC_CAGE; k++) {
 +        struct ppsc_range r = ppsc_range(k);
 +        got = ppsc_census_clip(a, n, k, r.base, r.size, out, got, max);
 +    }
@@ -231,10 +232,10 @@ index 0000000..c5282f9
 +}
 +#endif
 diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
-index 393c649..697e89e 100644
+index 4cd4028..546bf4a 100644
 --- a/build/ntdll-unix/virtual_ios.c
 +++ b/build/ntdll-unix/virtual_ios.c
-@@ -9819,6 +9819,219 @@ static SIZE_T get_vprot_range_size( char *base, SIZE_T size, BYTE mask, BYTE *vp
+@@ -9558,6 +9558,219 @@ static SIZE_T get_vprot_range_size( char *base, SIZE_T size, BYTE mask, BYTE *vp
      return size;
  }
  
@@ -334,7 +335,7 @@ index 393c649..697e89e 100644
 +    char where[96], who[40] = "";
 +    unsigned i;
 +
-+    if (k <= PPSC_LAST_SLOT)
++    if (k <= PPSC_CAGE)
 +        snprintf( where, sizeof(where), "real=0x%llx+0x%llx", (unsigned long long)ppsc_range( k ).base,
 +                  (unsigned long long)ppsc_range( k ).size );
 +    else if (k == PPSC_CENSUS_CODE)
@@ -444,7 +445,7 @@ index 393c649..697e89e 100644
 +    int k, owner = 0;
 +
 +    if (!ppsc_ready || !peb || ios_no_diagnostics()) return;
-+    for (k = PPSC_ELF; k <= PPSC_LAST_SLOT; k++) if (ppsc_owner[k] == peb) owner = 1;
++    for (k = PPSC_ELF; k <= PPSC_CAGE; k++) if (ppsc_owner[k] == peb) owner = 1;
 +    if (!owner) return;
 +    ppsc_census_jit_locked();
 +    for (k = PPSC_ELF; k < PPSC_CENSUS_KINDS; k++)
@@ -454,7 +455,7 @@ index 393c649..697e89e 100644
  /***********************************************************************
   *           set_page_vprot
   *
-@@ -9828,6 +10041,8 @@ static void set_page_vprot( const void *addr, size_t size, BYTE vprot )
+@@ -9567,6 +9780,8 @@ static void set_page_vprot( const void *addr, size_t size, BYTE vprot )
  {
      size_t idx = (size_t)addr >> page_shift;
      size_t end = ((size_t)addr + size + page_mask) >> page_shift;
@@ -463,7 +464,7 @@ index 393c649..697e89e 100644
  
  #ifdef _WIN64
      while (idx >> pages_vprot_shift != end >> pages_vprot_shift)
-@@ -9840,6 +10055,7 @@ static void set_page_vprot( const void *addr, size_t size, BYTE vprot )
+@@ -9579,6 +9794,7 @@ static void set_page_vprot( const void *addr, size_t size, BYTE vprot )
  #else
      memset( pages_vprot + idx, vprot, end - idx );
  #endif
@@ -471,7 +472,7 @@ index 393c649..697e89e 100644
  }
  
  
-@@ -9852,6 +10068,8 @@ static void set_page_vprot_bits( const void *addr, size_t size, BYTE set, BYTE c
+@@ -9591,6 +9807,8 @@ static void set_page_vprot_bits( const void *addr, size_t size, BYTE set, BYTE c
  {
      size_t idx = (size_t)addr >> page_shift;
      size_t end = ((size_t)addr + size + page_mask) >> page_shift;
@@ -480,7 +481,7 @@ index 393c649..697e89e 100644
  
  #ifdef _WIN64
      for ( ; idx < end; idx++)
-@@ -9862,6 +10080,7 @@ static void set_page_vprot_bits( const void *addr, size_t size, BYTE set, BYTE c
+@@ -9601,6 +9819,7 @@ static void set_page_vprot_bits( const void *addr, size_t size, BYTE set, BYTE c
  #else
      for ( ; idx < end; idx++) pages_vprot[idx] = (pages_vprot[idx] & ~clear) | set;
  #endif
@@ -488,7 +489,7 @@ index 393c649..697e89e 100644
  }
  
  
-@@ -19991,6 +20210,7 @@ static void ios_proc_end_release_views_locked( void *peb, const struct ppe_censu
+@@ -19705,6 +19924,7 @@ static void ios_proc_end_release_views_locked( void *peb, const struct ppe_censu
      struct thread_data *data;
      unsigned int nrefs = 0, nthreads = 0, ndropped = 0;
  

@@ -11,10 +11,9 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 UNIX = ROOT / 'patches/madeira-unix'
 PATCH = UNIX / '0224-ntdll-social-club-layout-geometry.patch'
 OWNER_PATCH = UNIX / '0226-ntdll-route-social-club-helper-reservations.patch'
-LATER = [UNIX / '0228-ntdll-second-social-club-elf-metadata-slot.patch',
+LATER = [UNIX / '0228-ntdll-log-a-Social-Club-helper-s-operation-in-its-ow.patch',
          UNIX / '0231-ntdll-hold-a-dead-owner-s-Social-Club-slot-in-place-.patch',
          UNIX / '0236-ntdll-refuse-the-Social-Club-helper-s-impossible-V8-.patch',
-         UNIX / '0243-ntdll-place-the-Social-Club-helper-s-V8-code-range-o.patch',
          UNIX / '0299-ntdll-the-Social-Club-layout-holds-only-its-anchors-.patch']
 
 
@@ -152,8 +151,8 @@ int main(void) {
         assert(ppsc_place(PPSC_CAGE, taken, 4) == 0x7600000000ULL);
         assert(ppsc_place(PPSC_CEF_META, taken, 4) == 0x7bc0000000ULL);
         assert(ppsc_place(PPSC_CODE, taken, 4) == 0x7700000000ULL);
-        /* l16 B's largest hole holds one 4 GiB-aligned GiB, as 0243 found; l13's
-         * restarts (largest hole 515 MB) none. */
+        /* l16 B's largest hole holds one 4 GiB-aligned GiB; l13's restarts
+         * (largest hole 515 MB) none. */
         assert(ppsc_place(PPSC_CODE, l16, 1) == 0x7300000000ULL);
         assert(!ppsc_place(PPSC_CODE, l13, 2) && !ppsc_place(PPSC_CODE, l13, 0));
         /* An unaligned run that holds the size but no aligned base; one that wraps. */
@@ -193,6 +192,10 @@ int main(void) {
     assert(ppsc_classify(GiB(1), 0x60800000000ULL, avail & ~PPSC_BIT(PPSC_CODE), mine) == PPSC_NONE);   /* another's */
     assert(ppsc_classify(GiB(1), 0x60800000000ULL, avail, mine | PPSC_BIT(PPSC_CODE)) == PPSC_NONE);    /* its second */
     assert(ppsc_classify(GiB(1), 0x60800000000ULL, avail, 0) == PPSC_CODE);        /* before its pools too */
+    /* The shape the router places at an aligned base when kind 7 does not serve it. */
+    assert(ppsc_code_range_ask(GiB(1), 0x4c7000000000ULL) && ppsc_code_range_ask(GiB(1), 0x60800000000ULL));
+    assert(!ppsc_code_range_ask(GiB(1), 0x4c7d00010000ULL) && !ppsc_code_range_ask(GiB(1), 0));
+    assert(!ppsc_code_range_ask(GiB(1) - 0x10000, 0x60800000000ULL) && !ppsc_code_range_ask(GiB(2), 0x60800000000ULL));
 
     /* ppsc_impossible (madeira-unix 0236): every helper reserve size l12 logged. */
     {

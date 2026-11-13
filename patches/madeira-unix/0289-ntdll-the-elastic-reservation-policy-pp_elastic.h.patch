@@ -48,7 +48,7 @@ Offered-upstream: no; the address-space layout is the iOS port's
 
 diff --git a/build/ntdll-unix/pp_elastic.h b/build/ntdll-unix/pp_elastic.h
 new file mode 100644
-index 0000000..c5225db
+index 0000000..0d3a3d0
 --- /dev/null
 +++ b/build/ntdll-unix/pp_elastic.h
 @@ -0,0 +1,551 @@
@@ -64,7 +64,8 @@ index 0000000..c5225db
 + *
 + * Nothing changes until a placement fails. Then:
 + *  - lending: the lender with the most lendable room (an unhinted reserve-only
-+ *    view of 256 MiB or more, not held, not committed to its top) keeps
++ *    view of 256 MiB or more, not committed to its top; an address pin's view
++ *    is never one) keeps
 + *    max(2h, h + 64 MiB) plus a 32 MiB guard, h its committed height, and
 + *    gives the rest of its view back; its claim (the size the guest was told)
 + *    is remembered;
@@ -432,9 +433,8 @@ index 0000000..c5225db
 +    if (!ppe_elastic_ask( ask->flags ))
 +    {
 +        /* Never shrunk: lend room for today's placement to retry in, unless
-+         * the ask's place is given (a hint) or a hold serves it, and only
-+         * from a lender whose freed range holds the ask at its alignment and
-+         * under its limit. */
++         * the ask's place is given (a hint), and only from a lender whose
++         * freed range holds the ask at its alignment and under its limit. */
 +        if (!(ask->flags & PPE_ASK_HINT) && (d.view = ppe_lender( st, ask->size, ask, &keep )) >= 0)
 +        {
 +            d.kind = PPE_LEND;

@@ -572,7 +572,10 @@ the verified helper's 64 GiB window forces: libcef's and chrome_elf's PartitionA
 Oilpan and ELF_META, about 1.6 GiB. libcef's metadata, V8's cage and V8's code range are on-demand
 slots: the router places each at the helper's first ask, at its home when free, else at the highest
 free base aligned as it needs, and holds it in place from then on for the next helper (`[sc-layout]
-kind=K placed at …` lines). The game's pools are the elastic policy's, as in any Play.
+kind=K placed at …` lines). A V8 code range kind 7 does not serve (another helper owns it, live or
+kept, or a helper asks a second) gets a plain view where kind 7's first placement would go, never
+the kernel's unaligned pick, which V8 releases (`[sc-layout] code range … plain view at …`); with no
+free 4 GiB-aligned GiB it is Wine's. The game's pools are the elastic policy's, as in any Play.
 
 A dev build's Social Club census (PLA-841; madeira-unix 0294's `pp_sc_census.h`) measures, under
 the Social Club layout, the committed extent of each kind the layout holds: every slot by its real
