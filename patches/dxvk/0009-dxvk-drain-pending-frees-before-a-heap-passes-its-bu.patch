@@ -1,0 +1,545 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 13 Nov 2026 10:43:28 +0100
+Subject: [PATCH] dxvk: drain pending frees before a heap passes its budget,
+ and fail an allocation rather than hand out no storage
+
+The Witcher 3 1.32 on the forced 8 GB row (V 2,048 MiB) crashed 8 s
+after its first frame: its render thread read address 0x78 in
+DxvkImage::assignStorageWithUsage, called from the DxvkImage
+constructor. In about a second the game's render targets had grown
+from 155 to 994 MiB, 642 MiB more were released but held by GPU work
+in flight, and Metal refused new heaps once the driver held about
+2.1 GiB. createImageResource logged "Memory allocation failed" and
+returned no storage, which the constructor, like every caller of an
+allocation that must succeed, dereferenced. DXVK 2.4 threw a DxvkError
+there, which a resource's creation reports as an error.
+
+On a unified memory device DXVK never enforces a heap's budget, and it
+never waits for the memory GPU work in flight holds: the storage a
+discard retired and the storage of a released resource come back only
+when the command list that used them last completes. Now an allocation
+that must succeed (not a relocation or eviction, which pass NoFallback,
+NoAllocation or NoDeviceMemory) is first tried with the new
+WithinBudget mode, which allocates no device memory that would take
+its heap past the budget. Failing that, it waits for the submissions in
+flight until they have freed as much as it needs or none is left, then
+is tried as asked, and may grow past the budget. If that fails too it
+throws "DxvkMemoryAllocator: Memory allocation failed", and a buffer or
+image whose storage it was unregisters itself before the exception
+leaves its constructor. A drain that waited logs, at most once a
+second:
+
+  [dxvk-drain] waited W ms, F MiB freed for N MiB | drains=D waited=T ms freed=M MiB
+
+The policy and its counters are in dxvk_memory_drain.h, which makes no
+Vulkan call.
+
+Linear: PLA-875
+Class: upstream-bug
+Evidence: tools/tests/test_dxvk_memory_drain.py (host); the phone run (The Witcher 3 1.32 past first frame +300 s on the forced 8 GB row) is PLA-875's check, not run here
+Offered-upstream: no
+---
+ src/dxvk/dxvk_buffer.cpp     |   9 ++-
+ src/dxvk/dxvk_device.h       |  14 ++++
+ src/dxvk/dxvk_image.cpp      |   9 ++-
+ src/dxvk/dxvk_memory.cpp     | 121 ++++++++++++++++++++++++++-
+ src/dxvk/dxvk_memory.h       |  20 +++++
+ src/dxvk/dxvk_memory_drain.h | 153 +++++++++++++++++++++++++++++++++++
+ src/dxvk/dxvk_queue.h        |  28 +++++++
+ 7 files changed, 348 insertions(+), 6 deletions(-)
+ create mode 100644 src/dxvk/dxvk_memory_drain.h
+
+diff --git a/src/dxvk/dxvk_buffer.cpp b/src/dxvk/dxvk_buffer.cpp
+index 907b318..29343c7 100644
+--- a/src/dxvk/dxvk_buffer.cpp
++++ b/src/dxvk/dxvk_buffer.cpp
+@@ -31,7 +31,14 @@ namespace dxvk {
+     m_info.usage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+ 
+     // Create and assign actual buffer resource
+-    assignStorage(allocateStorage());
++    // The allocator throws when it finds no memory: a resource that
++    // never got storage must not stay registered for relocation
++    try {
++      assignStorage(allocateStorage());
++    } catch (...) {
++      m_allocator->unregisterResource(this);
++      throw;
++    }
+   }
+ 
+ 
+diff --git a/src/dxvk/dxvk_device.h b/src/dxvk/dxvk_device.h
+index 27338f3..9c48dec 100644
+--- a/src/dxvk/dxvk_device.h
++++ b/src/dxvk/dxvk_device.h
+@@ -741,6 +741,20 @@ namespace dxvk {
+      */
+     void waitForResource(const DxvkPagedResource& resource, DxvkAccess access);
+     
++    /**
++     * \brief Waits for GPU work in flight until a condition holds
++     *
++     * Command lists that complete release the objects they kept
++     * alive. Returns once the predicate holds or nothing is left
++     * in flight.
++     * \param [in] pred Predicate to check
++     * \returns Whether any command list was in flight
++     */
++    template<typename Pred>
++    bool waitForSubmissionsUntil(const Pred& pred) {
++      return m_submissionQueue.waitForCompletionUntil(pred);
++    }
++
+     /**
+      * \brief Waits until the device becomes idle
+      * 
+diff --git a/src/dxvk/dxvk_image.cpp b/src/dxvk/dxvk_image.cpp
+index 36b3c3a..deacea7 100644
+--- a/src/dxvk/dxvk_image.cpp
++++ b/src/dxvk/dxvk_image.cpp
+@@ -157,7 +157,14 @@ namespace dxvk {
+     m_globalLayout = (m_info.sharing.mode != DxvkSharedHandleMode::Import)
+       ? m_info.initialLayout : m_info.layout;
+ 
+-    assignStorage(allocateStorage());
++    // The allocator throws when it finds no memory: a resource that
++    // never got storage must not stay registered for relocation
++    try {
++      assignStorage(allocateStorage());
++    } catch (...) {
++      m_allocator->unregisterResource(this);
++      throw;
++    }
+   }
+ 
+ 
+diff --git a/src/dxvk/dxvk_memory.cpp b/src/dxvk/dxvk_memory.cpp
+index b3cac8a..56165e1 100644
+--- a/src/dxvk/dxvk_memory.cpp
++++ b/src/dxvk/dxvk_memory.cpp
+@@ -8,6 +8,7 @@
+ #include "dxvk_device.h"
+ #include "dxvk_memory.h"
+ #include "dxvk_sparse.h"
++#include "dxvk_util.h"
+ 
+ namespace dxvk {
+ 
+@@ -896,6 +897,9 @@ namespace dxvk {
+       }
+ 
+       if (size * minResourcesPerChunk > maxChunkSize) {
++        if (!canGrowHeap(type, requirements.size, allocationInfo))
++          continue;
++
+         DxvkDeviceMemory memory = allocateDeviceMemory(type, requirements.size, nullptr);
+ 
+         if (!memory.memory)
+@@ -912,6 +916,9 @@ namespace dxvk {
+       while (desiredSize < size * minResourcesPerChunk)
+         desiredSize *= 2u;
+ 
++      if (!canGrowHeap(type, desiredSize, allocationInfo))
++        continue;
++
+       if (allocateChunkInPool(type, selectedPool, allocationInfo.properties, size, desiredSize)) {
+         address = selectedPool.alloc(size, requirements.alignment);
+         return createAllocation(type, selectedPool, address, size, allocationInfo);
+@@ -932,6 +939,10 @@ namespace dxvk {
+ 
+     for (auto typeIndex : bit::BitMask(requirements.memoryTypeBits & getMemoryTypeMask(allocationInfo.properties))) {
+       auto& type = m_memTypes[typeIndex];
++
++      if (!canGrowHeap(type, requirements.size, allocationInfo))
++        continue;
++
+       memory = allocateDeviceMemory(type, requirements.size, next);
+ 
+       if (likely(memory.memory != VK_NULL_HANDLE)) {
+@@ -944,12 +955,53 @@ namespace dxvk {
+   }
+ 
+ 
++  template<typename Size, typename Create>
++  Rc<DxvkResourceAllocation> DxvkMemoryAllocator::allocateUnderPressure(
++    const DxvkAllocationInfo&         allocationInfo,
++    const Size&                       size,
++    const Create&                     create) {
++    // Playport (PLA-875): an allocation that may fail, a relocation or an
++    // eviction, is tried as asked. One that must succeed first takes no heap
++    // past its budget, which DXVK never enforces on a unified memory device;
++    // then the memory GPU work in flight holds (storage discards retired,
++    // resources released) comes back, and only then may a heap grow past it.
++    bool mustSucceed = !allocationInfo.mode.any(
++      DxvkAllocationMode::NoFallback,
++      DxvkAllocationMode::NoAllocation,
++      DxvkAllocationMode::NoDeviceMemory);
++
++    Rc<DxvkResourceAllocation> allocation = DxvkMemoryDrain::allocate(mustSucceed,
++      [&] (bool withinBudget) {
++        DxvkAllocationInfo info = allocationInfo;
++
++        if (withinBudget)
++          info.mode.set(DxvkAllocationMode::WithinBudget);
++
++        return create(info);
++      },
++      [&] {
++        drainPendingFrees(size());
++      });
++
++    // Every caller of an allocation that must succeed uses the storage: fail
++    // as DXVK 2.4 did, which creating a resource reports as an error, rather
++    // than hand out no storage for the caller to dereference
++    if (unlikely(!allocation && mustSucceed))
++      throw DxvkError("DxvkMemoryAllocator: Memory allocation failed");
++
++    return allocation;
++  }
++
++
+   Rc<DxvkResourceAllocation> DxvkMemoryAllocator::createBufferResource(
+     const VkBufferCreateInfo&         createInfo,
+     const DxvkAllocationInfo&         allocationInfo,
+           DxvkLocalAllocationCache*   allocationCache) {
+-    Rc<DxvkResourceAllocation> allocation = createBufferResourceUncounted(
+-      createInfo, allocationInfo, allocationCache);
++    Rc<DxvkResourceAllocation> allocation = allocateUnderPressure(allocationInfo,
++      [&] { return createInfo.size; },
++      [&] (const DxvkAllocationInfo& info) {
++        return createBufferResourceUncounted(createInfo, info, allocationCache);
++      });
+ 
+     // Sparse buffers have no memory type, their pages are not counted
+     if (unlikely(m_census) && allocation && allocation->m_type) {
+@@ -1141,8 +1193,24 @@ namespace dxvk {
+     const VkImageCreateInfo&          createInfo,
+     const DxvkAllocationInfo&         allocationInfo,
+     const void*                       next) {
+-    Rc<DxvkResourceAllocation> allocation = createImageResourceUncounted(
+-      createInfo, allocationInfo, next);
++    Rc<DxvkResourceAllocation> allocation = allocateUnderPressure(allocationInfo,
++      [&] {
++        // What a drain waits for: the image's texels, a third more with
++        // mips; with a format DXVK does not know, everything in flight
++        if (!lookupFormatInfo(createInfo.format))
++          return ~VkDeviceSize(0u);
++
++        VkDeviceSize size = util::computeImageDataSize(createInfo.format, createInfo.extent)
++          * createInfo.arrayLayers * uint32_t(createInfo.samples);
++
++        if (createInfo.mipLevels > 1u)
++          size += size / 3u;
++
++        return size;
++      },
++      [&] (const DxvkAllocationInfo& info) {
++        return createImageResourceUncounted(createInfo, info, next);
++      });
+ 
+     if (unlikely(m_census) && allocation && allocation->m_type) {
+       m_census->add(allocation->m_census, DxvkMemoryCensus::classifyImage(
+@@ -1698,6 +1766,7 @@ namespace dxvk {
+ 
+       if (likely(allocation->m_type)) {
+         allocation->m_type->stats.memoryUsed -= allocation->m_size;
++        m_drain.freed(allocation->m_size);
+ 
+         if (unlikely(allocation->m_flags.test(DxvkAllocationFlag::OwnsMemory))) {
+           // We free the actual allocation later, just update stats here.
+@@ -2835,6 +2904,50 @@ namespace dxvk {
+   }
+ 
+ 
++  void DxvkMemoryAllocator::drainPendingFrees(
++          VkDeviceSize                size) {
++    DxvkMemoryDrain::Wait wait = m_drain.begin(size);
++
++    auto t0 = high_resolution_clock::now();
++
++    bool waited = m_device->waitForSubmissionsUntil([this, &wait] {
++      return m_drain.done(wait, false);
++    });
++
++    if (!waited)
++      return;
++
++    auto t1 = high_resolution_clock::now();
++
++    auto ns = [] (high_resolution_clock::duration d) {
++      return int64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(d).count());
++    };
++
++    if (m_drain.finish(wait, ns(t1 - t0), ns(t1.time_since_epoch()))) {
++      auto mib = [] (uint64_t bytes) {
++        return (bytes + (1u << 19)) >> 20;
++      };
++
++      Logger::info(str::format("[dxvk-drain] waited ", ns(t1 - t0) / 1000000, " ms, ",
++        mib(m_drain.freedSince(wait)), " MiB freed for ", mib(size), " MiB",
++        " | drains=", m_drain.drains(), " waited=", m_drain.waitedNs() / 1000000, " ms",
++        " freed=", mib(m_drain.drainedBytes()), " MiB"));
++    }
++  }
++
++
++  bool DxvkMemoryAllocator::canGrowHeap(
++    const DxvkMemoryType&             type,
++          VkDeviceSize                size,
++    const DxvkAllocationInfo&         allocationInfo) const {
++    if (!allocationInfo.mode.test(DxvkAllocationMode::WithinBudget))
++      return true;
++
++    return !DxvkMemoryDrain::overBudget(getMemoryStats(type.heap->index).memoryAllocated,
++      size, type.heap->memoryBudget);
++  }
++
++
+   void DxvkMemoryAllocator::logMemoryCensus(
+           high_resolution_clock::time_point currentTime) {
+     int64_t now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+diff --git a/src/dxvk/dxvk_memory.h b/src/dxvk/dxvk_memory.h
+index a4fcca2..71027a8 100644
+--- a/src/dxvk/dxvk_memory.h
++++ b/src/dxvk/dxvk_memory.h
+@@ -9,6 +9,7 @@
+ #include "dxvk_descriptor.h"
+ #include "dxvk_hash.h"
+ #include "dxvk_memory_census.h"
++#include "dxvk_memory_drain.h"
+ 
+ #include "../util/util_time.h"
+ 
+@@ -1035,6 +1036,9 @@ namespace dxvk {
+     NoDedicated     = 2,
+     /// Do not use device memory. Used to evict resources.
+     NoDeviceMemory  = 3,
++    /// Do not allocate device memory that would take its heap
++    /// past the budget. Used before draining pending frees.
++    WithinBudget    = 4,
+ 
+     eFlagEnum
+   };
+@@ -1436,6 +1440,22 @@ namespace dxvk {
+ 
+     std::unique_ptr<DxvkMemoryCensus> m_census;
+ 
++    DxvkMemoryDrain           m_drain;
++
++    template<typename Size, typename Create>
++    Rc<DxvkResourceAllocation> allocateUnderPressure(
++      const DxvkAllocationInfo&         allocationInfo,
++      const Size&                       size,
++      const Create&                     create);
++
++    void drainPendingFrees(
++            VkDeviceSize                size);
++
++    bool canGrowHeap(
++      const DxvkMemoryType&             type,
++            VkDeviceSize                size,
++      const DxvkAllocationInfo&         allocationInfo) const;
++
+     Rc<DxvkResourceAllocation> createBufferResourceUncounted(
+       const VkBufferCreateInfo&         createInfo,
+       const DxvkAllocationInfo&         allocationInfo,
+diff --git a/src/dxvk/dxvk_memory_drain.h b/src/dxvk/dxvk_memory_drain.h
+new file mode 100644
+index 0000000..4492a12
+--- /dev/null
++++ b/src/dxvk/dxvk_memory_drain.h
+@@ -0,0 +1,153 @@
++#pragma once
++
++#include <atomic>
++#include <cstdint>
++
++namespace dxvk {
++
++  /**
++   * \brief Pending frees drained under memory pressure
++   *
++   * Memory that only GPU work in flight holds, the storage a discard
++   * retired or the storage of a released resource, returns to the
++   * allocator only when the command list that used it last completes.
++   * When an allocation that must succeed would grow a heap past its
++   * budget, or finds no memory at all, the allocator first waits for
++   * that work, then tries again. The wait ends as soon as the GPU work
++   * has returned as much memory as the allocation needs, or when no
++   * work is left in flight.
++   *
++   * Counters only: no Vulkan call, no lock.
++   */
++  class DxvkMemoryDrain {
++
++  public:
++
++    /// At most one log line a second
++    constexpr static int64_t LogIntervalNs = 1'000'000'000ll;
++
++    /**
++     * \brief One drain in progress
++     */
++    struct Wait {
++      /// Bytes freed before the drain started
++      uint64_t start = 0u;
++      /// Bytes the allocation needs
++      uint64_t need = 0u;
++    };
++
++    /**
++     * \brief Runs one allocation under memory pressure
++     *
++     * An allocation that may fail, a relocation or an eviction, is
++     * tried once as asked. One that must succeed is first tried with
++     * no heap growing past its budget; failing that, the pending frees
++     * are drained and it is tried as asked.
++     * \param [in] mustSucceed The caller uses what it gets
++     * \param [in] create Tries the allocation, keeping heaps within
++     *    their budgets when its argument is \c true
++     * \param [in] drain Waits for GPU work in flight to return memory
++     * \returns What the last try gave
++     */
++    template<typename Create, typename Drain>
++    static auto allocate(bool mustSucceed, const Create& create, const Drain& drain) {
++      if (!mustSucceed)
++        return create(false);
++
++      auto allocation = create(true);
++
++      if (allocation)
++        return allocation;
++
++      drain();
++      return create(false);
++    }
++
++    /**
++     * \brief Whether growing a heap passes its budget
++     *
++     * \param [in] allocated Memory the heap holds
++     * \param [in] size Memory the allocation would add
++     * \param [in] budget The heap's budget, 0 for none
++     */
++    static bool overBudget(uint64_t allocated, uint64_t size, uint64_t budget) {
++      return budget && allocated + size > budget;
++    }
++
++    /**
++     * \brief Counts memory returned to the allocator
++     *
++     * Called for each allocation freed into a pool or
++     * whose dedicated memory is released.
++     */
++    void freed(uint64_t size) {
++      m_freedBytes.fetch_add(size, std::memory_order_relaxed);
++    }
++
++    /**
++     * \brief Starts a drain
++     * \param [in] need Bytes the allocation needs
++     */
++    Wait begin(uint64_t need) const {
++      Wait wait;
++      wait.start = m_freedBytes.load(std::memory_order_relaxed);
++      wait.need = need ? need : 1u;
++      return wait;
++    }
++
++    /**
++     * \brief Bytes freed since a drain started
++     */
++    uint64_t freedSince(const Wait& wait) const {
++      return m_freedBytes.load(std::memory_order_relaxed) - wait.start;
++    }
++
++    /**
++     * \brief Whether a drain may stop waiting
++     *
++     * \param [in] wait The drain
++     * \param [in] idle No GPU work is left in flight
++     */
++    bool done(const Wait& wait, bool idle) const {
++      return idle || freedSince(wait) >= wait.need;
++    }
++
++    /**
++     * \brief Records a finished drain
++     *
++     * \param [in] wait The drain
++     * \param [in] waitedNs How long it waited
++     * \param [in] nowNs Current time
++     * \returns Whether to log a line now
++     */
++    bool finish(const Wait& wait, int64_t waitedNs, int64_t nowNs) {
++      m_drains.fetch_add(1u, std::memory_order_relaxed);
++      m_waitedNs.fetch_add(uint64_t(waitedNs > 0 ? waitedNs : 0), std::memory_order_relaxed);
++      m_drainedBytes.fetch_add(freedSince(wait), std::memory_order_relaxed);
++
++      int64_t last = m_lastLogNs.load(std::memory_order_relaxed);
++
++      if (last && nowNs - last < LogIntervalNs)
++        return false;
++
++      return m_lastLogNs.compare_exchange_strong(last, nowNs ? nowNs : 1);
++    }
++
++    /// Drains so far
++    uint64_t drains() const { return m_drains.load(std::memory_order_relaxed); }
++    /// Time all drains waited, in ns
++    uint64_t waitedNs() const { return m_waitedNs.load(std::memory_order_relaxed); }
++    /// Memory returned while drains waited
++    uint64_t drainedBytes() const { return m_drainedBytes.load(std::memory_order_relaxed); }
++
++  private:
++
++    std::atomic<uint64_t> m_freedBytes    = { 0u };
++    std::atomic<uint64_t> m_drains        = { 0u };
++    std::atomic<uint64_t> m_waitedNs      = { 0u };
++    std::atomic<uint64_t> m_drainedBytes  = { 0u };
++    std::atomic<int64_t>  m_lastLogNs     = { 0 };
++
++  };
++
++}
+diff --git a/src/dxvk/dxvk_queue.h b/src/dxvk/dxvk_queue.h
+index 5e05690..2b5e2e0 100644
+--- a/src/dxvk/dxvk_queue.h
++++ b/src/dxvk/dxvk_queue.h
+@@ -171,6 +171,34 @@ namespace dxvk {
+       m_finishCond.wait(lock, pred);
+     }
+ 
++    /**
++     * \brief Waits for submissions in flight until a condition holds
++     *
++     * Returns as soon as the predicate holds, or once no command list
++     * is left to submit or to complete. Must not be called from the
++     * submission or completion threads.
++     * \param [in] pred Predicate to check, with the queue locked
++     * \returns Whether any command list was in flight
++     */
++    template<typename Pred>
++    bool waitForCompletionUntil(const Pred& pred) {
++      std::unique_lock<dxvk::mutex> lock(m_mutex);
++
++      auto idle = [this] {
++        return m_submitQueue.empty() && m_finishQueue.empty();
++      };
++
++      if (idle())
++        return false;
++
++      // Each completed command list wakes this up. A failed submission
++      // leaves the queue without doing so, so check now and then too.
++      while (!pred() && !idle())
++        m_finishCond.wait_for(lock, std::chrono::milliseconds(10));
++
++      return true;
++    }
++
+     /**
+      * \brief Waits for all submissions to complete
+      */
