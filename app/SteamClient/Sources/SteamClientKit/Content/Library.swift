@@ -263,22 +263,18 @@ public struct Library: Sendable {
         return appToPackage
     }
 
-    /// The depots the given packages grant: Steam hands out a depot's key only
-    /// to an account one of whose packages lists it (a pre-order or edition
-    /// bonus depot is in the app's table for everyone).
-    public func ownedDepotIDs(packages: [(id: UInt32, token: UInt64)]) async throws -> Set<UInt32> {
+    /// What the given packages grant, from one PICS query: the depots and the apps they list.
+    public func ownership(packages: [(id: UInt32, token: UInt64)]) async throws -> DepotSelection.Ownership {
         var packageTokens: [UInt32: UInt64] = [:]
         for p in packages { packageTokens[p.id] = p.token }
-        var out: Set<UInt32> = []
+        var records: [KeyValue] = []
         let packageIDs = Array(packageTokens.keys).sorted()
         for batch in stride(from: 0, to: packageIDs.count, by: 100) {
             let ids = packageIDs[batch..<min(batch + 100, packageIDs.count)]
             let info = try await productInfo(packages: ids.map { ($0, packageTokens[$0] ?? 0) })
-            for pid in ids {
-                for d in info.packages[pid]?["depotids"]?.children ?? [] { if let id = d.uint32 { out.insert(id) } }
-            }
+            records += ids.compactMap { info.packages[$0] }
         }
-        return out
+        return DepotSelection.Ownership(packages: records)
     }
 
     /// Full PICS app records, fetched in batches of 50 with whatever access
