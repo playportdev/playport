@@ -98,6 +98,15 @@ _Avoid_: memory need, memory requirement (no game carries a memory figure), out 
 
 ## Shaders
 
+**AIR path**:
+KosmicKrisp writing a shader's Metal library (AIR) itself, with no MSL for Metal to compile.
+_Avoid_: AIR backend, precompiled shaders, binary shaders
+
+**MSL fallback**:
+KosmicKrisp handing Metal MSL to compile, as it did before the AIR path, for a shader, library
+or device the AIR path does not serve.
+_Avoid_: slow path, legacy path, MSL mode
+
 **Pipeline record**:
 The list of a game's compiled pipelines that Playport keeps, where iOS does not purge it, to
 rebuild that game's shader caches.

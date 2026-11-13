@@ -4,7 +4,9 @@
 built yet. Evidence: [cold shader compiles](../evidence/2026-11-13-cold-shader-compiles.md).
 Companion records: [0185](0185-kosmickrisp-builds-cheaper-msl-under-one-compile-budget.md) and
 [0186](0186-dxvk-skips-a-draw-whose-pipeline-is-still-compiling.md). Implements decision
-[0012](0012-the-ui-is-the-only-entry-point.md)'s rule for the new control.
+[0012](0012-the-ui-is-the-only-entry-point.md)'s rule for the new control. Amended by
+[0190](0190-kosmickrisp-writes-air.md): an entry holds the form it was compiled to (a metallib on
+the AIR path), keyed by its final NIR and the AIR generation.
 
 ## Context
 
