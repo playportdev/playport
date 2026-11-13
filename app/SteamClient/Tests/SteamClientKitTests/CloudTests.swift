@@ -41,6 +41,22 @@ func portal2CloudApp() throws -> KeyValue {
     """.utf8))
 }
 
+/// Public PICS save rule/Windows override read from the local Steam client's
+/// Turing Complete appinfo record; no account or save content is included.
+func turingCloudApp() throws -> KeyValue {
+    try KeyValue.parseText(Array("""
+    "1444480" {
+        "ufs" {
+            "savefiles" { "1" { "root" "SteamCloudDocuments" "path" "Turing Complete" "pattern" "*" "recursive" "1" } }
+            "rootoverrides" {
+                "3" { "root" "SteamCloudDocuments" "os" "Windows" "oscompare" "=" "useinstead" "WinAppDataRoaming" "addpath" "" }
+                "4" { "root" "SteamCloudDocuments" "os" "MacOS" "oscompare" "=" "useinstead" "MacHome" "addpath" "/Library/Application Support/" }
+            }
+        }
+    }
+    """.utf8))
+}
+
 final class CloudTests: XCTestCase {
     var dir: URL!
     var roots: Cloud.Roots!
@@ -69,6 +85,27 @@ final class CloudTests: XCTestCase {
         try write(dir.appendingPathComponent("users/playport/AppData/LocalLow/TEAM CHERRY/x.dat"), "a")
         XCTAssertEqual(roots.file("%WinAppDataLocalLow%Team Cherry/x.dat")?.path,
                        dir.appendingPathComponent("users/playport/AppData/LocalLow/TEAM CHERRY/x.dat").path)
+    }
+
+    func testWindowsRootOverrideKeepsCloudNamesAndFindsExistingGameSaves() throws {
+        let app = try turingCloudApp()
+        let mapped = roots.applyingWindowsOverrides(app)
+        let save = roots.user.appendingPathComponent("AppData/Roaming/Turing Complete/schematics/and_gate/Default/circuit.data")
+        try write(save, "local circuit")
+        let name = "%SteamCloudDocuments%Turing Complete/schematics/and_gate/Default/circuit.data"
+        XCTAssertEqual(mapped.file(name), save)
+        XCTAssertNil(roots.file(name), "the original roots are unchanged")
+        XCTAssertNil(mapped.file("%SteamCloudDocuments%../escape"))
+        XCTAssertNil(mapped.file("%UnknownRoot%Turing Complete/levels.txt"))
+        let local = Cloud.localFiles(rules: Cloud.rules(app), roots: mapped, steamID: 42)
+        XCTAssertEqual(local[name], save, "uploads use SteamCloudDocuments, not a new WinAppDataRoaming name")
+
+        let unsafe = try KeyValue.parseText(Array("""
+        "app" { "ufs" { "rootoverrides" {
+            "0" { "root" "SteamCloudDocuments" "os" "Windows" "useinstead" "WinAppDataRoaming" "addpath" "../escape" }
+        } } }
+        """.utf8))
+        XCTAssertNil(roots.applyingWindowsOverrides(unsafe).file(name))
     }
 
     func testARulesRootTakesSteamsSpellingAndLocalNamesTakeSteamsCase() throws {
@@ -168,6 +205,58 @@ final class CloudServiceTests: XCTestCase {
     }
 
     func text(_ url: URL) -> String? { (try? Data(contentsOf: url)).map { String(decoding: $0, as: UTF8.self) } }
+
+    func write(_ url: URL, _ text: String) throws {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(text.utf8).write(to: url)
+    }
+
+    func testTuringNineteenCloudFilesDownloadToItsWindowsOverrideAndLaterSyncBothWays() async throws {
+        let b = FakeBackend()
+        await b.set(library: [1444480], [1444480: try turingCloudApp()])
+        await b.set(stored: FakeBackend.session(exp: 2_000_000_000))
+        let s = SteamService(backend: b, log: .silent, stateDirectory: dir.appendingPathComponent("state"))
+        _ = await s.restoreIfPossible()
+        let names = (1...19).map { "%SteamCloudDocuments%Turing Complete/schematics/test\($0)/circuit.data" }
+        let files = Dictionary(uniqueKeysWithValues: names.map { ($0, Array("cloud circuit \($0)".utf8)) })
+        await b.set(cloud: files)
+        let first = try await s.syncCloud(appID: 1444480, roots: roots, backups: backups)
+        XCTAssertEqual(first.downloaded.sorted(), names.sorted())
+        XCTAssertTrue(first.failed.isEmpty)
+        XCTAssertTrue(first.uploaded.isEmpty)
+        let mapped = roots.applyingWindowsOverrides(try turingCloudApp())
+        for name in names { XCTAssertEqual(try Data(contentsOf: mapped.file(name)!), Data(files[name]!)) }
+        let unchanged = try await s.syncCloud(appID: 1444480, roots: roots, backups: backups)
+        XCTAssertTrue(unchanged.downloaded.isEmpty && unchanged.uploaded.isEmpty && unchanged.failed.isEmpty)
+        try write(mapped.file(names[0])!, "phone edit")
+        let up = try await s.syncCloud(appID: 1444480, roots: roots, backups: backups)
+        XCTAssertEqual(up.uploaded, [names[0]], "preserve the server's original root token")
+        let remote = await b.cloudFile(names[0])
+        XCTAssertEqual(remote, Array("phone edit".utf8))
+        var pc = files; pc[names[0]] = Array("PC edit".utf8)
+        await b.set(cloud: pc)
+        let down = try await s.syncCloud(appID: 1444480, roots: roots, backups: backups)
+        XCTAssertEqual(down.downloaded, [names[0]])
+        XCTAssertEqual(text(mapped.file(names[0])!), "PC edit")
+        XCTAssertTrue(TitleInstaller.regularFiles(under: backups).contains { text(backups.appendingPathComponent($0)) == "phone edit" })
+    }
+
+    func testTuringExistingDifferentLocalCircuitIsAConflictAndStaysUntouched() async throws {
+        let b = FakeBackend()
+        await b.set(library: [1444480], [1444480: try turingCloudApp()])
+        await b.set(stored: FakeBackend.session(exp: 2_000_000_000))
+        let s = SteamService(backend: b, log: .silent, stateDirectory: dir.appendingPathComponent("state"))
+        _ = await s.restoreIfPossible()
+        let name = "%SteamCloudDocuments%Turing Complete/levels.txt"
+        let local = roots.user.appendingPathComponent("AppData/Roaming/Turing Complete/levels.txt")
+        try write(local, "phone progress")
+        await b.set(cloud: [name: Array("PC progress".utf8)])
+        let result = try await s.syncCloud(appID: 1444480, roots: roots, backups: backups)
+        XCTAssertEqual(result.conflicts.map(\.name), [name])
+        XCTAssertTrue(result.downloaded.isEmpty && result.uploaded.isEmpty && result.failed.isEmpty)
+        XCTAssertEqual(text(local), "phone progress")
+    }
+
 
     func testAFreshPhoneGetsSteamsSaveAndThenSendsItsPlays() async throws {
         let b = FakeBackend()
