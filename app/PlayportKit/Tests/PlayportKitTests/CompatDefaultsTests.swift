@@ -11,6 +11,16 @@ final class CompatDefaultsTests: XCTestCase {
 
     func parse(_ json: String) throws -> CompatDefaults { try CompatDefaults.parse(Data(json.utf8)) }
 
+    func testTuringUsesTitleScopedOpenGLOverridesInRelease() throws {
+        let table = try CompatDefaults.load(directory: Self.shipped)
+        let profile = try XCTUnwrap(table.entry(for: "app-1444480"))
+        XCTAssertEqual(profile.settings.graphics, .vulkan)
+        let keys = LaunchSettings.releaseRuntime(compat: profile.settings)
+        XCTAssertEqual(keys["env.MESA_GL_VERSION_OVERRIDE"], "4.1")
+        XCTAssertEqual(keys["env.MESA_GLSL_VERSION_OVERRIDE"], "410")
+        XCTAssertNil(table.entry(for: "app-379720"))
+    }
+
     func testTheShippedTableReadsAndGivesSuperMeatBoy16x9() throws {
         let table = try CompatDefaults.load(directory: Self.shipped)
         let smb = try XCTUnwrap(table.entry(for: "epic-Buffalo"))
