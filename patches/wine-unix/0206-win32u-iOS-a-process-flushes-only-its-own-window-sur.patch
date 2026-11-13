@@ -1,0 +1,58 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 13 Nov 2026 12:00:00 +0100
+Subject: [PATCH] win32u: iOS: a process flushes only its own window surfaces
+
+On iOS every Wine process is a pseudo-process of one app, so win32u's
+list of window surfaces and its surfaces_lock are shared by all of
+them, and flush_window_surfaces(), which a thread runs from its message
+wait, flushed every process's surfaces instead of its own.
+
+Borderlands 2's Steam prerequisites showed what that costs (PLA-870).
+The VC++ 2005 ATL installer's inner process faulted in solid_rects_32
+while painting its dialog, inside windrv_PatBlt, which holds the
+surface's lock; the fault could not be dispatched, the process ended,
+and the lock stayed held by a thread that no longer exists. The session
+root's next message wait took surfaces_lock and waited on that lock for
+ever, so the VC++ 2008 installer's dialog thread waited in
+register_window_surface() as it showed "Extracting Files", its main
+thread waited in a WM_SETTEXT sent to that dialog, and the app closed
+the installer after 300 s: the Play failed. Desktop Wine and Proton
+run the same installers in under a second each.
+
+A process now skips a surface whose window is not its own
+(is_current_process_window(), a read of the shared user handle table),
+which is the set a desktop process's list holds. A surface an ended
+process left behind is no longer touched.
+
+Class: ios-port
+Evidence: PLA-870 (the phone's log of IPA 0023f811: the session root in window_surface_flush on a lock whose owner thread is gone, the 2008 installer's thread in register_window_surface); tools/tests/test_window_surfaces_ios.py (this function, with an ended process's surface whose lock a dead thread holds: the caller's idle flush returns and flushes only its own surface)
+Offered-upstream: no; iOS one-process runtime integration
+---
+ dlls/win32u/dce.c | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/dlls/win32u/dce.c b/dlls/win32u/dce.c
+index 67d3dc84bc7..434a3743ef7 100644
+--- a/dlls/win32u/dce.c
++++ b/dlls/win32u/dce.c
+@@ -766,7 +766,19 @@ void flush_window_surfaces( BOOL idle )
+     else if ((int)(now - last_idle) < 50) goto done;
+ 
+     LIST_FOR_EACH_ENTRY( surface, &window_surfaces, struct window_surface, entry )
++    {
++#ifdef WINE_IOS
++        /* Playport (PLA-870): every pseudo-process of the app shares this list, which on
++         * desktop holds only the calling process's surfaces. Flushing another process's
++         * surface waited on its lock, and a process that ended with a thread inside
++         * windrv_PatBlt left that lock held for ever: the session root's message wait
++         * stopped there holding surfaces_lock, and every window a later process showed
++         * waited in register_window_surface (Borderlands 2's VC++ 2008 prerequisite).
++         * A process flushes its own windows' surfaces, as on desktop. */
++        if (!is_current_process_window( surface->hwnd )) continue;
++#endif
+         window_surface_flush( surface );
++    }
+ done:
+     pthread_mutex_unlock( &surfaces_lock );
+ }
