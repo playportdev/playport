@@ -11,7 +11,8 @@ limits), heaps and buffers backed by host memory (GPU address == CPU address),
 and dummy handles for everything else. The command stream is not executed:
 commits complete at once unless the replay fixture opts into deferred FIFO feedback
 (KK_MOCK_DEFER_FEEDBACK): callbacks drain before the next queue signal. No GPU
-commands execute in either mode. Every MSL library the driver compiles is written to
+commands execute in either mode. With KK_MOCK_COMMIT_ERROR set every commit
+fails with a timeout and a two-level error chain (PLA-880). Every MSL library the driver compiles is written to
 $KK_MOCK_MSL_DIR (if set), and one the MSL backend could not translate (it
 prints "Unknown intrinsic NAME", or "ALU OP" for an ALU op, "Unknown ALU OP"
 from mesa 0042 on) is reported on stderr and counted; the process exits 3 at
@@ -20,7 +21,8 @@ builds that take an error report (the pipelines', not the driver's own
 shaders') fail as if Metal's compiler service had been interrupted (mesa
 0053's compile_retry builds them again). With KK_MOCK_TRACE_ENCODERS set,
 encoders begun and ended, their barriers and their store actions are
-printed on stderr as "kk-mock-enc: ..." lines (PLA-72). A command allocator
+printed on stderr as "kk-mock-enc: ..." lines (PLA-72), and encoder labels
+too (PLA-880). A command allocator
 keeps the size a test sets across a reset, as Metal keeps its heaps, and a
 reset of one a command buffer was begun on and never committed aborts (the
 IOGPU fault KosmicKrisp's cmd_retire must avoid).
@@ -496,8 +498,16 @@ body("mtl_command_queue_commit", r'''
          .user_data = (void *)(uintptr_t)o->value,
          .gpu_start = gpu_clock,
          .gpu_end = gpu_clock + 0.002 * count,
+         .commit_time = gpu_clock - 0.001,
+         .feedback_time = gpu_clock + 0.002 * count + 0.0005,
          .error = MTL_COMMAND_QUEUE_ERROR_NONE,
       };
+      if (getenv("KK_MOCK_COMMIT_ERROR")) {
+         fb.error = MTL_COMMAND_QUEUE_ERROR_TIMEOUT;
+         fb.error_message = "kk-mock commit error";
+         fb.error_detail = "domain=kk-mock code=1 desc=\"mock timeout\"\n"
+                           "  underlying: domain=kk-mock-gpu code=3 desc=\"mock page fault\"";
+      }
       gpu_clock += 0.002 * count;
       if (getenv("KK_MOCK_DEFER_FEEDBACK")) {
          struct kk_mock_obj *q = queue;
@@ -521,6 +531,7 @@ body("mtl_drawable_get_texture", "return kk_mock_new(7, 0);")
 body("mtl_new_render_command_encoder_with_descriptor", 'kk_mock_trace("render"); return kk_mock_new(0, 0);')
 body("mtl_new_compute_command_encoder", 'kk_mock_trace("compute"); return kk_mock_new(0, 0);')
 body("mtl_end_encoding", 'kk_mock_trace("end");')
+body("mtl_encoder_set_label", 'kk_mock_trace("label %s", label);')
 body("mtl_barrier_after_stages", 'kk_mock_trace("producer-barrier after=%#x before-queue=%#x%s", (unsigned)after_stages, (unsigned)before_queue_stages, alias_visibility ? "" : " visibility=device");')
 body("mtl_barrier_after_queue_stages", 'kk_mock_trace("consumer-barrier after-queue=%#x before=%#x", (unsigned)after_queue_stages, (unsigned)before_stages);')
 body("mtl_render_set_color_store_action", 'kk_mock_trace("color-store %u action=%u", index, (unsigned)action);')
