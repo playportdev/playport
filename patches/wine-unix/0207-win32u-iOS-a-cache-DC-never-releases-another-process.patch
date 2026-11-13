@@ -1,0 +1,269 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 13 Nov 2026 13:00:00 +0100
+Subject: [PATCH 207/207] win32u: iOS: a cache DC never releases another
+ process's window surface
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+On iOS every Wine process is a pseudo-process of one app, so win32u's
+list of DCEs is shared by all of them, and NtUserGetDCEx handed a
+process the cache DCs of others, including those of a process that
+had ended. A released cache DC keeps the surface of the window it was
+last taken for until it is taken again, and the process that takes
+it releases that surface. When that was the last reference, the
+surface's pixels were freed with NtFreeVirtualMemory in the taker's
+own address space.
+
+Borderlands 2's Steam prerequisites showed what that costs (PLA-871).
+The pixels of a 32-bit process's window are in its WoW64 window. The
+VC++ 2005 installer's inner process had its dialog's pixels at host
+0x71c0f90000, and its window slot was then given to the VC++ 2005 ATL
+installer's inner process, whose dialog's pixels were allocated at the
+same address. Painting its dialog, that process took a DC the first
+one left, dropped the old surface, and freed its own pixels: the view
+became a window gap, and the erase fault in solid_rects_32 could not
+be dispatched. The process ended with 0x45 holding its surface's lock
+(PLA-870), and VC++ 2005 ATL was recorded as installed although it was
+not.
+
+A DC now records the process that took it last, keyed on the pid and
+PEB as the builtin classes are (a reused pid alone does not match):
+the window surface it can hold is that process's. The cache stays one
+list of 64 DCs in all, as before, but a process takes another
+process's unused DC only when it cannot hold a live surface of that
+process: an empty DC, or one whose window went with its thread or
+process, which never ran free_dce for it. Taking one, it forgets the
+surface the DC may still hold (dibdrv_forget_window_surface: the DC
+gets the dummy surface, and the old reference is left, never
+released) instead of releasing it, so no surface is ever released
+outside its process. A DC on a live window of another process is
+never taken; when the full list has only such DCs, the caller makes a
+new one and says so on its first eight times ("[dce] pid …: a full DC
+cache, N DCs of other processes not taken"), so a phone log shows the
+case PLA-871 was.
+
+A released cache DC is disabled, and set_visible_region does nothing
+to a disabled DC, so release_dce (DestroyWindow's free_dce) left the
+window's surface in it. The process destroying its window now enables
+its own DC for that call, which releases the surface there: an empty
+DC holds none, and a later taker has nothing to forget.
+
+Class: ios-port
+Evidence: PLA-871 (the phone's log of IPA 0023f811: the committed 0x60000 allocation at guest 0xfa0000 of the ATL installer's process is a window-gap view coalesced with its left neighbour when it faults, the same address and size the VC++ 2005 installer's process had in the same slot); tools/tests/test_dce_cache_ios.py (alloc_dce, release_dce, free_dce, the helpers and this search, with a DC model that fails a surface released outside its process: a hundred processes that each fill the cache and then die or destroy their windows leave one list of 64 DCs; a full cache of another process's DCs on its live windows gets the next process a new DC; an ended process's DC is taken with its surface forgotten; a process reuses its own DCs)
+Offered-upstream: no; iOS one-process runtime integration
+---
+ dlls/win32u/dce.c           | 104 ++++++++++++++++++++++++++++++++++++
+ dlls/win32u/dibdrv/dc.c     |  19 +++++++
+ dlls/win32u/ntgdi_private.h |   3 ++
+ 3 files changed, 126 insertions(+)
+
+diff --git a/dlls/win32u/dce.c b/dlls/win32u/dce.c
+index 2627c72..bfdc355 100644
+--- a/dlls/win32u/dce.c
++++ b/dlls/win32u/dce.c
+@@ -43,6 +43,10 @@ struct dce
+     UINT        flags;
+     LONG        count;         /* usage count; 0 or 1 for cache DCEs, always 1 for window DCEs,
+                                   always >= 1 for class DCEs */
++#ifdef WINE_IOS
++    DWORD       pid;           /* the pseudo-process that took it last, and its PEB */
++    void       *peb;
++#endif
+ };
+ 
+ static struct list dce_list = LIST_INIT(dce_list);
+@@ -908,14 +912,78 @@ static void update_visible_region( struct dce *dce )
+     if (surface) window_surface_release( surface );
+ }
+ 
++#ifdef WINE_IOS
++/* Playport (PLA-871): every pseudo-process of the app shares dce_list, which on desktop
++ * holds only the calling process's DCs. A cache DC keeps the surface of the window it was
++ * last taken for, and the process that takes it next releases that surface. When that was
++ * the last reference, the release freed the surface's pixels with NtFreeVirtualMemory in
++ * the taker's own address space: the pixels of a 32-bit process were in its WoW64 window,
++ * and when the next 32-bit process's window reused that slot, the address was the new
++ * process's own window surface (the VC++ 2005 ATL installer then faulted painting its
++ * dialog). A DC records the process that took it last, keyed on (pid, PEB) as the builtin
++ * classes are, so that a reused pid alone does not match: the surface it can hold is that
++ * process's. */
++static BOOL is_current_process_dce( const struct dce *dce )
++{
++    return dce->pid == HandleToULong( NtCurrentTeb()->ClientId.UniqueProcess ) &&
++           dce->peb == NtCurrentTeb()->Peb;
++}
++
++/* Whether an unused cache DC another process took last is on a live window of that
++ * process, and so may hold that window's surface: such a DC is never taken. An empty DC
++ * holds none, and the window of any other went with its thread or process, which never
++ * ran free_dce for it. */
++static BOOL is_live_other_process_dce( const struct dce *dce )
++{
++    DWORD error = RtlGetLastWin32Error(), pid;
++    BOOL ret = dce->hwnd && get_window_thread( dce->hwnd, &pid ) && pid == dce->pid;
++
++    RtlSetLastWin32Error( error );  /* get_window_thread sets it for a window that is gone */
++    return ret;
++}
++
++/* Make a cache DC another process took last the caller's, with the DC enabled. A surface
++ * it still holds is that process's: the DC forgets it rather than release it, since its
++ * last release would free the pixels in the caller's address space; they went, or go,
++ * with their own process. A DC another thread holds cannot be reached, by the
++ * set_visible_region of the caller either. */
++static void take_other_process_dce( struct dce *dce )
++{
++    DC *dc = get_dc_ptr( dce->hdc );
++
++    if (dc)
++    {
++        dibdrv_forget_window_surface( dc );
++        release_dc_ptr( dc );
++    }
++    dce->pid = HandleToULong( NtCurrentTeb()->ClientId.UniqueProcess );
++    dce->peb = NtCurrentTeb()->Peb;
++}
++#endif
++
+ /***********************************************************************
+  *           release_dce
+  */
+ static void release_dce( struct dce *dce )
+ {
++#ifdef WINE_IOS
++    BOOL disabled;
++#endif
++
+     if (!dce->hwnd) return;  /* already released */
+ 
++#ifdef WINE_IOS
++    /* Playport (PLA-871): an unused cache DC is disabled, and set_visible_region does
++     * nothing to a disabled DC, so the DC kept its window's surface after the window was
++     * gone, until some process took the DC again. Its own process (the one destroying the
++     * window) enables it for the call and releases the surface here: an empty DC holds
++     * none, whichever process takes it next. */
++    disabled = is_current_process_dce( dce ) && set_dce_flags( dce->hdc, DCHF_ENABLEDC );
++#endif
+     set_visible_region( dce->hdc, 0, &dummy_surface.rect, &dummy_surface.rect, &dummy_surface );
++#ifdef WINE_IOS
++    if (disabled) set_dce_flags( dce->hdc, DCHF_DISABLEDC );
++#endif
+     user_driver->pReleaseDC( dce->hwnd, dce->hdc );
+ 
+     if (dce->clip_rgn) NtGdiDeleteObjectApp( dce->clip_rgn );
+@@ -1002,6 +1070,10 @@ static struct dce *alloc_dce(void)
+     dce->clip_rgn  = 0;
+     dce->flags     = 0;
+     dce->count     = 1;
++#ifdef WINE_IOS
++    dce->pid       = HandleToULong( NtCurrentTeb()->ClientId.UniqueProcess );
++    dce->peb       = NtCurrentTeb()->Peb;
++#endif
+ 
+     set_dc_dce( dce->hdc, dce );
+     return dce;
+@@ -1343,6 +1415,10 @@ HDC WINAPI NtUserGetDCEx( HWND hwnd, HRGN clip_rgn, DWORD flags )
+     {
+         struct dce *dceEmpty = NULL, *dceUnused = NULL, *found = NULL;
+         unsigned int count = 0;
++#ifdef WINE_IOS
++        struct dce *other_unused = NULL;
++        unsigned int others = 0;
++#endif
+ 
+         /* Strategy: First, we attempt to find a non-empty but unused DCE with
+          * compatible flags. Next, we look for an empty entry. If the cache is
+@@ -1354,6 +1430,18 @@ HDC WINAPI NtUserGetDCEx( HWND hwnd, HRGN clip_rgn, DWORD flags )
+             if (!(dce->flags & DCX_CACHE)) break;
+             count++;
+             if (dce->count) continue;
++#ifdef WINE_IOS
++            if (!is_current_process_dce( dce ))  /* PLA-871 */
++            {
++                if (!is_live_other_process_dce( dce )) dceEmpty = dce;
++                else
++                {
++                    others++;
++                    other_unused = dce;
++                }
++                continue;
++            }
++#endif
+             dceUnused = dce;
+             if (!dce->hwnd) dceEmpty = dce;
+             else if ((dce->hwnd == hwnd) && !((dce->flags ^ flags) & clip_flags))
+@@ -1366,12 +1454,28 @@ HDC WINAPI NtUserGetDCEx( HWND hwnd, HRGN clip_rgn, DWORD flags )
+         }
+         if (!found) found = dceEmpty;
+         if (!found && count >= DCE_CACHE_SIZE) found = dceUnused;
++#ifdef WINE_IOS
++        /* the case PLA-871 was: the shared list full, with unused DCs of other processes on
++         * their live windows in it */
++        if (!found && other_unused && count >= DCE_CACHE_SIZE)
++        {
++            static LONG logged;
++            if (InterlockedIncrement( &logged ) <= 8)
++                fprintf( stderr, "[dce] pid %04x: a full DC cache, %u DCs of other processes not taken "
++                         "(the oldest unused: pid %04x, hwnd %p)\n",
++                         (UINT)HandleToULong( NtCurrentTeb()->ClientId.UniqueProcess ), others,
++                         (UINT)other_unused->pid, other_unused->hwnd );
++        }
++#endif
+ 
+         dce = found;
+         if (dce)
+         {
+             dce->count = 1;
+             set_dce_flags( dce->hdc, DCHF_ENABLEDC );
++#ifdef WINE_IOS
++            if (!is_current_process_dce( dce )) take_other_process_dce( dce );
++#endif
+         }
+         user_unlock();
+ 
+diff --git a/dlls/win32u/dibdrv/dc.c b/dlls/win32u/dibdrv/dc.c
+index 8a72d97..d0afa31 100644
+--- a/dlls/win32u/dibdrv/dc.c
++++ b/dlls/win32u/dibdrv/dc.c
+@@ -610,6 +610,25 @@ void dibdrv_set_window_surface( DC *dc, struct window_surface *surface )
+     }
+ }
+ 
++#ifdef WINE_IOS
++/* Playport (PLA-871): the DC gives up its window surface for the dummy one without
++ * releasing it. The caller takes over a cache DC another process took last: the surface
++ * is that process's, and its last release would free its pixels with NtFreeVirtualMemory
++ * in the caller's address space. The reference is left, so the surface is never freed. */
++void dibdrv_forget_window_surface( DC *dc )
++{
++    PHYSDEV windev = find_dc_driver( dc, &window_driver );
++    struct windrv_physdev *physdev;
++
++    if (!windev) return;
++    physdev = get_windrv_physdev( windev );
++    if (physdev->surface == &dummy_surface) return;
++    window_surface_add_ref( &dummy_surface );
++    physdev->surface = &dummy_surface;
++    dibdrv_set_window_surface( dc, &dummy_surface );  /* and draws to the dummy surface's bits */
++}
++#endif
++
+ static BOOL windrv_AlphaBlend( PHYSDEV dst_dev, struct bitblt_coords *dst,
+                                PHYSDEV src_dev, struct bitblt_coords *src, BLENDFUNCTION func )
+ {
+diff --git a/dlls/win32u/ntgdi_private.h b/dlls/win32u/ntgdi_private.h
+index fcfbce5..9c4e4e5 100644
+--- a/dlls/win32u/ntgdi_private.h
++++ b/dlls/win32u/ntgdi_private.h
+@@ -223,6 +223,9 @@ extern UINT get_dib_dc_color_table( HDC hdc, UINT startpos, UINT entries,
+ extern UINT set_dib_dc_color_table( HDC hdc, UINT startpos, UINT entries,
+                                     const RGBQUAD *colors );
+ extern void dibdrv_set_window_surface( DC *dc, struct window_surface *surface );
++#ifdef WINE_IOS
++extern void dibdrv_forget_window_surface( DC *dc );
++#endif
+ 
+ /* driver.c */
+ extern const struct gdi_dc_funcs null_driver;
