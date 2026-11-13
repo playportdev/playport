@@ -4,8 +4,8 @@
  * steamclient64.dll (app/SteamClientShim, decision 0115) asks the host for what
  * Steam's client gives a game: a snapshot of the account for the launched app,
  * auth session and web API tickets (the play's SteamTicketBroker, decision 0062),
- * the launched app's ownership ticket, and the encrypted app ticket fetched at
- * Play (decision 0017). The shim
+ * the launched app's ownership ticket, the encrypted app ticket fetched at
+ * Play (decision 0017), and the launched app's DLC the account owns. The shim
  * reaches it as any Wine library reaches its unix side: NtQueryVirtualMemory(
  * MemoryWineLoadUnixLib) on its own module, which the runtime answers with
  * playport_steamclient_unix_call_funcs by the module's export name
@@ -47,7 +47,8 @@ enum pp_sc_method {
     PP_SC_TICKET_CANCEL = 3,   /* CancelAuthTicket: handle in */
     PP_SC_APP_TICKET = 4,      /* the encrypted app ticket fetched at Play: bytes out */
     PP_SC_OWNERSHIP_TICKET = 5, /* GetAppOwnershipTicketData: the play's ownership ticket, bytes out */
-    PP_SC_METHODS = 6
+    PP_SC_DLC = 6,             /* the launched app's DLC the account owns: pp_sc_dlc records out */
+    PP_SC_METHODS = 7
 };
 
 /* POLL's states, as the ticket broker's. */
@@ -86,6 +87,14 @@ typedef struct {
     uint32_t reserved;
     uint8_t data[PP_SC_DATA_MAX];          /* out */
 } pp_sc_call;
+
+/* PP_SC_DLC's records, data_size / sizeof(pp_sc_dlc) of them: a DLC app of the launched app the
+ * account owns, and whether its content is installed (its depots, or it has none). */
+typedef struct {
+    uint32_t app_id;
+    uint32_t installed;   /* 1 or 0 */
+} pp_sc_dlc;
+#define PP_SC_DLC_MAX (PP_SC_DATA_MAX / 8)
 
 typedef struct {
     uint32_t magic, size;

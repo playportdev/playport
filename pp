@@ -118,6 +118,7 @@ C_TESTS = [
     ("steam tickets", ["app/tests/steam_ticket_test.c", "app/Sources/WineHost/steam_ticket.c"], []),
     ("steam client", ["app/tests/steam_client_test.c", "app/Sources/WineHost/steam_client.c"], []),
     ("steamclient trace", ["app/tests/steamclient_trace_test.c"], []),
+    ("steamclient calls", ["app/tests/steamclient_calls_test.c"], []),
     ("url opener", ["app/tests/url_opener_test.c", "app/Sources/WineHost/url_opener.c"], []),
     ("time zone bias", ["app/tests/timezone_bias_test.c", "app/Sources/WineHost/timezone_bias.c"], ["-D_DEFAULT_SOURCE"]),
     ("command line", ["app/tests/command_line_test.c"], []),

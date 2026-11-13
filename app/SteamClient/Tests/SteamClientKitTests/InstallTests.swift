@@ -359,6 +359,21 @@ final class DepotSelectionTests: XCTestCase {
         XCTAssertEqual(unknown.receipt.depotsToRecheck, [378640, 378647])
     }
 
+    /// The DLC whose content an install left out (its depots skipped as not owned): Playport's Steam
+    /// client answers BIsDlcInstalled false for them, true for the rest of the account's DLC.
+    func testTheDLCAnInstallLeftOut() {
+        let r = InstallReceipt(appID: 49520, name: "Borderlands 2", installDir: "Borderlands 2", buildID: 1,
+                               depots: [DepotRef(depotID: 49521, gid: 1)], files: 1, bytes: 1,
+                               skippedDepots: ["49522: language german", "213231: DLC app 213230 not owned",
+                                               "213232: DLC app 213230 not owned", "218561: DLC app 218560 not owned",
+                                               "228987: shared install from app 228980 (redistributable, not installed)"],
+                               skippedSymlinks: 0, installedAt: "-")
+        XCTAssertEqual(r.dlcLeftOut, [213230, 218560])
+        XCTAssertEqual(DepotSelection.unownedDLCApp(skipped: "218561: DLC app 218560 not owned"), 218560)
+        XCTAssertNil(DepotSelection.unownedDLCApp(skipped: "218561: DLC app 218560 not owned (old)"))
+        XCTAssertNil(DepotSelection.unownedDLCApp(skipped: "49522: language german"))
+    }
+
     /// The launch entry an install records: Counter-Strike's `hl.exe -steam -game cstrike`,
     /// Windows only (macOS and Linux start `hl.sh`); Half-Life's own carries just `-steam`.
     func testTheWindowsLaunchEntryCarriesItsArguments() throws {

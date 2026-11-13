@@ -101,6 +101,7 @@ static const struct { const char *method; char kind; } pp_tr_kinds[] = {
     { "GetPersonaName", 'S' }, { "GetPersonaState", 'i' }, { "GetFriendCount", 'i' },
     { "GetFriendPersonaName", 'S' }, { "GetPlayerNickname", 'S' }, { "GetFriendPersonaNameHistory", 'S' },
     { "GetUserDataFolder", 'S' }, { "GetAppInstallDir", 'u' }, { "GetCurrentBetaName", 'b' },
+    { "RequestCurrentStats", 'b' }, { "RequestUserStats", 'q' }, { "CreateLobby", 'q' },
 };
 
 static inline char pp_tr_kind_of(const char *method)
