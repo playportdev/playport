@@ -1116,13 +1116,14 @@ static vm_address_t largest_gap(vm_address_t lo, vm_address_t hi, vm_address_t *
 /* PLA-476: the bottom of the guest window, held from exec. At pool time iOS
  * has already put a system region (tag 87, ~74 MiB) at 0x7000000000, so a hold
  * taken then can never get the address. A Social Club layout play keeps its
- * bottom 256 MiB for libcef.dll's PartitionAlloc pools; every other play gets
+ * bottom 64 MiB, the layout's anchor for libcef.dll's PartitionAlloc pool
+ * (PLA-842); every other play gets
  * the JIT pool's RW alias there, where Madeira put it and where ntdll's floor
  * (0x7000000000 + pool size, ios_usable_va_floor_get) expects it. Untouched
  * PROT_NONE costs no footprint. */
 #define LOW_HOLD_BASE 0x7000000000ull
 #define LOW_HOLD_SIZE 0x60000000ull   /* 1.5 GiB: the largest JIT pool's alias */
-#define SC_LOW_SIZE   0x10000000ull   /* 256 MiB: pp_sc_layout.h PPSC_CEF */
+#define SC_LOW_SIZE   0x4000000ull    /* 64 MiB: pp_sc_layout.h's PPSC_CEF anchor */
 static vm_address_t g_low_hold;
 static vm_size_t g_low_hold_size;
 static int g_low_hold_taken;   /* held at exec; g_low_hold is 0 once handed over or released */
@@ -1304,7 +1305,7 @@ int wine_host_jit_pool_acquire(const char *log_path, size_t size, int wait_ms, v
     }
     if (sc_hold) {
         setenv("WINE_IOS_SC_LOW_HELD", "1", 1);
-        host_log("sc-layout: low 256 MiB held, RW alias fixed at 0x%lx", (unsigned long)rw);
+        host_log("sc-layout: low %llu MiB held, RW alias fixed at 0x%lx", SC_LOW_SIZE >> 20, (unsigned long)rw);
     }
     *rx_out = rx;
     *rw_out = (void *)rw;

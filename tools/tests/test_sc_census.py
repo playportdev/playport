@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Social Club committed-extent census (PLA-841): compile pp_sc_census.h as madeira-unix 0294
-ships it, over pp_sc_layout.h as the series leaves it, and check its counting.
+"""Social Club committed-extent census (PLA-841): compile pp_sc_census.h and pp_sc_layout.h as the
+series leaves them (madeira-unix 0294, then 0299), and check its counting.
 
 The census splits a page-protection change into the census ranges it touches (each layout slot's
-real range and each V8 code range found), keeps per kind the committed bytes, their peak and the
+real range, V8's code range among them once placed), keeps per kind the committed bytes, their peak and the
 highest committed end offset, says when a line is due (a kind's first commit, then each 16 MiB of
 peak or highest end), and keeps per kind the guest modules whose commits landed there. The runtime
 glue in virtual_ios.c measures the pages and prints; the phone run reads its lines."""
@@ -13,7 +13,7 @@ import subprocess
 import tempfile
 import unittest
 
-from test_sc_layout import PATCH, ROOT, added_header, series_headers
+from test_sc_layout import PATCH, ROOT, series_headers
 
 UNIX = ROOT / 'patches/madeira-unix'
 
@@ -25,10 +25,9 @@ TEST_C = r'''
 #define MB(n) ((uint64_t)(n) << 20)
 #define GB(n) ((uint64_t)(n) << 30)
 
-static unsigned pieces(const struct ppsc_census_state *s, uint64_t a, uint64_t n,
-                       struct ppsc_census_piece *p)
+static unsigned pieces(uint64_t a, uint64_t n, struct ppsc_census_piece *p)
 {
-    return ppsc_census_pieces(s, a, n, p, PPSC_CENSUS_PIECES);
+    return ppsc_census_pieces(a, n, p, PPSC_CENSUS_PIECES);
 }
 
 int main(void)
@@ -39,54 +38,42 @@ int main(void)
     unsigned i;
     int first;
 
-    /* Kinds: the seven slots, then the V8 code range and the JIT pool's RW alias. */
-    assert(PPSC_CENSUS_CODE == 8 && PPSC_CENSUS_JIT_RW == 9 && PPSC_CENSUS_KINDS == 10);
+    /* Kinds: the seven slots, V8's code range the last, then the JIT pool's RW alias. */
+    assert(PPSC_CENSUS_JIT_RW == 8 && PPSC_CENSUS_KINDS == 9);
     assert(!strcmp(ppsc_census_name(PPSC_CEF), "CEF") && !strcmp(ppsc_census_id(PPSC_CEF), "2"));
     assert(!strcmp(ppsc_census_name(PPSC_ELF_META), "ELF_META") && !strcmp(ppsc_census_id(PPSC_ELF_META), "3"));
     assert(!strcmp(ppsc_census_name(PPSC_OILPAN), "OILPAN") && !strcmp(ppsc_census_id(PPSC_OILPAN), "5"));
-    assert(!strcmp(ppsc_census_name(PPSC_CENSUS_CODE), "V8_CODE_RANGE") && !strcmp(ppsc_census_id(PPSC_CENSUS_CODE), "code"));
+    assert(!strcmp(ppsc_census_name(PPSC_CODE), "V8_CODE_RANGE") && !strcmp(ppsc_census_id(PPSC_CODE), "7"));
     assert(!strcmp(ppsc_census_name(PPSC_CENSUS_JIT_RW), "JIT_RW_ALIAS") && !strcmp(ppsc_census_id(PPSC_CENSUS_JIT_RW), "jit-rw"));
 
     /* helper-oom.md's l15 signature: libcef's PartitionAlloc slot span at 0x740844b000 is
      * ELF_META's page 0x844b000 into its real range. */
-    assert(pieces(&s, 0x740844b000ULL, 0x1000, p) == 1);
+    assert(pieces(0x740844b000ULL, 0x1000, p) == 1);
     assert(p[0].kind == PPSC_ELF_META && p[0].base == 0x7400000000ULL);
     assert(p[0].a == 0x740844b000ULL && p[0].n == 0x1000);
     /* Oilpan's upper half: its real range starts 16 GiB above its reported base. */
-    assert(pieces(&s, 0x7c00010000ULL, 0x4000, p) == 1 && p[0].kind == PPSC_OILPAN && p[0].base == 0x7c00000000ULL);
+    assert(pieces(0x7c00010000ULL, 0x4000, p) == 1 && p[0].kind == PPSC_OILPAN && p[0].base == 0x7c00000000ULL);
     /* Its lower half is chrome_elf's real range: only the address is known here. */
-    assert(pieces(&s, 0x7800020000ULL, 0x4000, p) == 1 && p[0].kind == PPSC_ELF);
-    /* Past a slot's real end: nothing (ELF_META ends at 0x7590000000, CEF_META starts there). */
-    assert(pieces(&s, 0x7590000000ULL - 0x1000, 0x2000, p) == 2);
-    assert(p[0].kind == PPSC_ELF_META && p[0].a == 0x758ffff000ULL && p[0].n == 0x1000);
-    assert(p[1].kind == PPSC_CEF_META && p[1].a == 0x7590000000ULL && p[1].n == 0x1000);
-    assert(pieces(&s, 0x7590000000ULL + GB(1), 0x1000, p) == 0);
-    /* ELF_META2 and the cage are adjacent; pieces come in kind order. */
-    assert(pieces(&s, 0x79fffff000ULL, 0x2000, p) == 2 && p[0].kind == PPSC_CAGE && p[1].kind == PPSC_ELF_META2);
-    assert(p[0].a == 0x7a00000000ULL && p[0].n == 0x1000 && p[1].a == 0x79fffff000ULL && p[1].n == 0x1000);
+    assert(pieces(0x7800020000ULL, 0x4000, p) == 1 && p[0].kind == PPSC_ELF);
+    /* Past a slot's real end: nothing (ELF_META's anchor ends at 0x7440000000). */
+    assert(pieces(0x7440000000ULL - 0x1000, 0x2000, p) == 1);
+    assert(p[0].kind == PPSC_ELF_META && p[0].a == 0x743ffff000ULL && p[0].n == 0x1000);
+    assert(pieces(0x7440000000ULL, 0x1000, p) == 0);
     /* The RW alias at 0x7900000000 is no view: the JIT pool's figures come from the pool. */
-    assert(pieces(&s, 0x7900000000ULL, 0x1000, p) == 0);
+    assert(pieces(0x7900000000ULL, 0x1000, p) == 0);
 
-    /* V8's code range: 1 GiB at a 4 GiB-aligned base inside [PPSC_FLOOR, PPSC_CEILING). */
-    assert(ppsc_census_code_shape(0x7300000000ULL, GB(1)));
-    assert(ppsc_census_code_shape(0x7100000000ULL, GB(1)));
-    assert(!ppsc_census_code_shape(0x72b0370000ULL, GB(1)));   /* l16's kernel pick */
-    assert(!ppsc_census_code_shape(0x7300000000ULL, GB(1) - 0x10000));
-    assert(!ppsc_census_code_shape(0x7000000000ULL, GB(1)));   /* below the floor: CEF's slot */
-    assert(!ppsc_census_code_shape(0x7400000000ULL, GB(1)));   /* ELF_META's */
-    assert(pieces(&s, 0x7300001000ULL, 0x1000, p) == 0);
-    assert(ppsc_census_code_add(&s, 0x7300000000ULL) == 1);
-    assert(ppsc_census_code_add(&s, 0x7300000000ULL) == 0);    /* once */
-    assert(pieces(&s, 0x7300001000ULL, 0x1000, p) == 1);
-    assert(p[0].kind == PPSC_CENSUS_CODE && p[0].base == 0x7300000000ULL && p[0].a == 0x7300001000ULL);
-    assert(ppsc_census_code_add(&s, 0x7100000000ULL) == 1);
-    assert(ppsc_census_code_add(&s, 0x7200000000ULL) == 1);
-    assert(pieces(&s, 0x7200000000ULL, 0x1000, p) == 1 && p[0].base == 0x7200000000ULL);
-    /* The window holds three such bases, so the table never fills. */
-    assert(PPSC_CENSUS_CODE_RANGES == 3);
-    assert(ppsc_census_code_add(&s, 0x7000000000ULL) == 0);   /* not the shape */
-    assert(ppsc_census_code_add(&s, 0x73c0000000ULL) == 0);
-    assert(ppsc_census_code_at(&s, 0x7100000000ULL + GB(1) - 1) && !ppsc_census_code_at(&s, 0x7100000000ULL + GB(1)));
+    /* An on-demand slot counts once an ask placed it: libcef's metadata, the
+     * cage (adjacent to Oilpan's anchor; pieces come in kind order) and V8's code range. */
+    assert(pieces(0x78c0001000ULL, 0x1000, p) == 0 && pieces(0x7700001000ULL, 0x1000, p) == 0);
+    ppsc_placed[PPSC_CEF_META] = 0x78c0000000ULL;
+    ppsc_placed[PPSC_CAGE] = 0x7a00000000ULL;
+    ppsc_placed[PPSC_CODE] = 0x7700000000ULL;
+    assert(pieces(0x78c0001000ULL, 0x1000, p) == 1 && p[0].kind == PPSC_CEF_META && p[0].base == 0x78c0000000ULL);
+    assert(pieces(0x7bfffff000ULL, 0x2000, p) == 2 && p[0].kind == PPSC_OILPAN && p[1].kind == PPSC_CAGE);
+    assert(p[0].a == 0x7c00000000ULL && p[0].n == 0x1000 && p[1].a == 0x7bfffff000ULL && p[1].n == 0x1000);
+    assert(pieces(0x7700001000ULL, 0x1000, p) == 1);
+    assert(p[0].kind == PPSC_CODE && p[0].base == 0x7700000000ULL && p[0].a == 0x7700001000ULL);
+    assert(pieces(0x7700000000ULL + GB(1), 0x1000, p) == 0);
 
     /* Committed, peak and highest end (l5-diagnostics.md's kind 3 ended at
      * highest_end_off=0xaa82000). */
@@ -144,8 +131,7 @@ class SocialClubCensusTests(unittest.TestCase):
         scratch = ROOT / '.work/tmp'
         scratch.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=scratch) as td:
-            d = series_headers(pathlib.Path(td), [(PATCH, 'pp_sc_layout.h')])
-            (d / 'pp_sc_census.h').write_text(added_header(census, 'pp_sc_census.h'))
+            d = series_headers(pathlib.Path(td), [(PATCH, 'pp_sc_layout.h'), (census, 'pp_sc_census.h')])
             (d / 'test.c').write_text(TEST_C)
             subprocess.run([cc, '-std=c11', '-Wall', '-Wextra', '-Werror', '-fsanitize=undefined,address',
                             str(d / 'test.c'), '-o', str(d / 'test')], check=True)

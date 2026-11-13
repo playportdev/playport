@@ -8,8 +8,9 @@ outside them), places an ask as today (its logged address, else the lowest gap t
 window its first free fixed slot from madeira-unix 0146's wow64_slots.h, else the lowest gap), and
 performs what the module decides: whole placements, short grants with their guard, lends, growth,
 refusals. The fixtures in fixtures/elastic/ name the runs they come from. A fixture's `held` ranges
-are the Social Club layout's slots, held from boot; a routed ask with a `real` size takes its slot's
-real range."""
+are the Social Club layout's anchors, held from boot; a routed ask with a `real` size takes its slot's
+real range. An `on_demand` slot's ask (madeira-unix 0299) is placed by the layout's own rule
+(pp_sc_layout.h as the series leaves it) at its first ask, then held in place for the next helper."""
 import copy
 import ctypes
 import json
@@ -18,6 +19,8 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+
+from test_sc_layout import PATCH as LAYOUT_PATCH, series_headers
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 PATCH = ROOT / "patches/madeira-unix/0289-ntdll-the-elastic-reservation-policy-pp_elastic.h.patch"
@@ -38,6 +41,7 @@ SERVE, GROW, REFUSE = range(3)
 FLAG = {"hint": 0x1, "align": 0x2, "placeholder": 0x4, "ex": 0x8, "limit": 0x10, "commit": 0x20,
         "held": 0x40, "layout": 0x80, "wow64": 0x100}
 WHOLE = 0x1FF                         # PPE_ASK_WHOLE: never shrunk
+ON_DEMAND = {"cef_meta": 4, "cage": 6, "code": 7}   # pp_sc_layout.h's on-demand kinds
 
 
 def added_file(patch, path):
@@ -51,6 +55,7 @@ def added_file(patch, path):
 SHIM_C = r'''
 #include "pp_elastic.h"
 #include "wow64_slots.h"
+#include "pp_sc_layout.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -81,6 +86,14 @@ void s_view( struct ppe_state *s, int i, uint64_t *o )
 void s_counts( struct ppe_state *s, unsigned *o )
 { o[0] = s->engaged; o[1] = s->lends; o[2] = s->shorts; o[3] = s->grows; o[4] = s->refusals; o[5] = s->shortened; }
 uint64_t s_slot( uint64_t ceiling, uint64_t floor, unsigned k ) { return ios_wow64_slot_base( ceiling, floor, k ); }
+uint64_t s_place( int k, const uint64_t *g, unsigned n )
+{
+    struct ppsc_gap gaps[64];
+    unsigned i;
+    if (n > 64) n = 64;
+    for (i = 0; i < n; i++) { gaps[i].base = g[2 * i]; gaps[i].size = g[2 * i + 1]; }
+    return ppsc_place( (enum ppsc_slot)k, gaps, n );
+}
 '''
 
 LIB = None
@@ -103,7 +116,8 @@ def setUpModule():
     (d / "wow64_window.h").write_text(added_file(WINDOW_PATCH, "build/ntdll-unix/wow64_window.h"))
     (d / "wow64_slots.h").write_text(added_file(SLOTS_PATCH, "build/ntdll-unix/wow64_slots.h"))
     (d / "shim.c").write_text(SHIM_C)
-    subprocess.run([cc, "-std=gnu11", "-O1", "-Wall", "-Wextra", "-Werror", "-shared", "-fPIC",
+    layout = series_headers(d / "layout", [(LAYOUT_PATCH, "pp_sc_layout.h")])
+    subprocess.run([cc, "-std=gnu11", "-O1", "-Wall", "-Wextra", "-Werror", "-shared", "-fPIC", f"-I{layout}",
                     "-o", str(d / "libppe.so"), str(d / "shim.c")], check=True)
     LIB = ctypes.CDLL(str(d / "libppe.so"))
     u64, p = ctypes.c_uint64, ctypes.c_void_p
@@ -116,7 +130,7 @@ def setUpModule():
            "s_commit": (ctypes.c_int, [p, ctypes.c_int, u64, u64, u64, u64, p]),
            "s_grown": (None, [p, ctypes.c_int, u64]), "s_served": (None, [p, ctypes.c_int, u64, u64]),
            "s_n": (ctypes.c_uint, [p]), "s_view": (None, [p, ctypes.c_int, p]), "s_counts": (None, [p, p]),
-           "s_slot": (u64, [u64, u64, ctypes.c_uint])}
+           "s_slot": (u64, [u64, u64, ctypes.c_uint]), "s_place": (u64, [ctypes.c_int, p, ctypes.c_uint])}
     for name, (res, args) in sig.items():
         fn = getattr(LIB, name)
         fn.restype, fn.argtypes = res, args
@@ -150,6 +164,7 @@ class Space:
             b, size = int(b, 16), int(size, 16)
             self.vacate(b, b + size)
             self.occupy(b, size, "held:" + name)
+        self.on_demand = {}                 # an on-demand slot's name -> the base its first ask placed it at
         self.elastic = elastic
         self.st = LIB.s_new(WINDOW) if elastic else None
         self.views = {}                     # id -> dict(base, span, claim, height)
@@ -167,6 +182,7 @@ class Space:
         new.landed_in_claim = list(self.landed_in_claim)
         new.wrong_view = list(self.wrong_view)
         new.refused = dict(self.refused)
+        new.on_demand = dict(self.on_demand)
         new.st = LIB.s_clone(self.st) if self.st else None
         return new
 
@@ -276,8 +292,20 @@ class Space:
         return base
 
     # -- the glue
-    def reserve(self, vid, size, names, at=None, routed=None, limit=0, align=0, real=None):
+    def place_on_demand(self, name, real):
+        """The base the layout gives on-demand slot name: where its first ask placed it, held since."""
+        if name not in self.on_demand:
+            arr, n = self.gap_array()
+            base = LIB.s_place(ON_DEMAND[name], arr, n)
+            assert base, name
+            self.occupy(base, real, "held:" + name)
+            self.on_demand[name] = base
+        return self.on_demand[name]
+
+    def reserve(self, vid, size, names, at=None, routed=None, limit=0, align=0, real=None, on_demand=None):
         flags = flags_of(names)
+        if on_demand is not None:
+            routed = self.place_on_demand(on_demand, real)
 
         def today():
             return self.window_today(size) if flags & FLAG["wow64"] else self.today(size, at, limit, align)
@@ -436,7 +464,7 @@ def replay(fx, elastic=True):
             _, vid, size, names, extra = ev
             at, routed, real = extra.get("at"), extra.get("routed"), extra.get("real")
             sp.reserve(vid, int(size, 16), names, int(at, 16) if at else None, int(routed, 16) if routed else None,
-                       real=int(real, 16) if real else None)
+                       real=int(real, 16) if real else None, on_demand=extra.get("on_demand"))
         elif op == "commit":
             if sp.placements.get(ev[1]) is not None and sp.elastic:
                 sp.commit(ev[1], int(ev[2], 16))
@@ -484,16 +512,21 @@ class NoPressure(unittest.TestCase):
         self.assertEqual(sp.views["game8960"]["span"], 8960 * MB)
         self.assertEqual(sp.views["game8960"]["height"], 2357 * MB)
 
-    def test_rdr2_on_layout_is_routed_first(self):
+    def test_rdr2_on_layout_with_no_game_hold_is_served_whole(self):
+        # PLA-842: the game's 8,960 MiB pool is an ordinary ask; every ask is served whole and every
+        # commit, the game's 2,357 MB and the helper's measured heights, with nothing refused.
         sp, fx = self.check("rdr2-on-layout.json")
-        self.assertEqual(sp.placements["game8960"], 0x75D0000000)
-        self.assertEqual(sp.placements["game1175"], 0x726B1E0000)
-        # V8's ladder and the helper's 5,119 MB asks fail as today, never shortened.
-        for vid in ("v8_512g", "v8_64g", "v8_32g", "v8_16g", "v8_5119_a1", "v8_5119_b2"):
-            self.assertIsNone(sp.placements[vid], vid)
+        self.assertTrue(all(sp.placements[ev[1]] is not None for ev in asks(fx)))
+        self.assertEqual(sp.views["game8960"]["span"], 8960 * MB)
+        self.assertEqual(sp.views["game8960"]["height"], 2357 * MB)
+        self.assertEqual(sp.views["game1175"]["span"], 0x49701000)
+        self.assertEqual(sp.views["b_elf_meta"]["height"], 0x7B04000)
+        # From boot the layout holds only its anchors in the window (Oilpan's lies above it).
+        held = sum(e - b for b, e, o in Space(fx["free"], held=fx["held"]).occ if o.startswith("held:"))
+        self.assertEqual(held, 64 * MB + GB + 64 * MB)
 
-    def test_rdr2_helper_slots_are_placed_in_their_holds(self):
-        sp, fx = self.check("rdr2-helper-slots.json")
+    def test_rdr2_helper_slots_are_placed_at_their_anchors_and_homes(self):
+        sp, fx = self.check("rdr2-on-layout.json")
         for who in ("a", "b"):
             for kind, (base, _) in SLOTS.items():
                 self.assertEqual(sp.placements[f"{who}_{kind}"], base, (who, kind))
@@ -767,19 +800,21 @@ class ReviewFixes(unittest.TestCase):
         self.assertEqual(sp.counts()["shortened"], 0)
 
 
-# The verified helper's slots on the Social Club layout (pp_sc_layout.h): real base and size.
-SLOTS = {"cef": (0x7000000000, 0x10000000), "elf_meta": (0x7400000000, 0x190000000),
-         "cef_meta": (0x7590000000, 0x40000000), "elf": (0x7800000000, 0x100000000),
-         "cage": (0x7A00000000, 0x200000000)}
+# The verified helper's slots on the Social Club layout (pp_sc_layout.h): real base and size; the
+# anchors', and the on-demand slots' at their homes.
+SLOTS = {"cef": (0x7000000000, 0x4000000), "elf_meta": (0x7400000000, 0x40000000),
+         "cef_meta": (0x78C0000000, 0x40000000), "elf": (0x7800000000, 0x4000000),
+         "cage": (0x7A00000000, 0x200000000), "code": (0x7700000000, 0x40000000)}
 
 
 class HelperSlots(unittest.TestCase):
-    """The verified helper's slot asks (PLA-840): the Social Club router places each in its slot's real
-    range, so the policy never tracks them. Under pressure that lends the game's pools, no slot is lent or
-    shortened, its growth inside the real prefix is served, and V8's ladder is refused before the policy."""
+    """The verified helper's slot asks (PLA-840, PLA-842): the Social Club router places each in its slot's
+    real range, an anchor's or an on-demand slot's, so the policy never tracks them. Under pressure that
+    lends the game's pools, no slot is lent or shortened, its growth inside the real prefix is served, and
+    V8's ladder is refused before the policy."""
 
     def replayed(self):
-        return replay(load("rdr2-helper-slots.json"))
+        return replay(load("rdr2-on-layout.json"))
 
     def assert_slots_whole(self, sp):
         tracked = {v["base"] for v in sp.mviews()}
@@ -791,7 +826,7 @@ class HelperSlots(unittest.TestCase):
     def test_a_dead_helpers_slots_are_held_in_place_for_the_next(self):
         sp = self.replayed()
         self.assert_slots_whole(sp)
-        self.assertEqual(sp.views["b_elf_meta"]["height"], 0xAB00000)
+        self.assertEqual(sp.views["b_elf_meta"]["height"], 0x7B04000)
         for kind, (base, _) in SLOTS.items():
             self.assertNotIn(base, [b for b, _ in sp.gaps()], kind)
 
@@ -799,10 +834,10 @@ class HelperSlots(unittest.TestCase):
         sp = self.replayed()
         sp.commit("game1175", 64 * MB)
         sp.fill()
-        self.assertIsNotNone(sp.reserve("game512", 512 * MB, []))      # fails today: the game's pool lends
+        self.assertIsNotNone(sp.reserve("game512", 512 * MB, []))      # fails today: a game's pool lends
         c = sp.counts()
         self.assertEqual((c["lends"], c["shorts"]), (1, 0))
-        self.assertLess(sp.views["game1175"]["span"], 0x49701000)
+        self.assertLess(sp.views["game8960"]["span"], 8960 * MB)       # the one with the most lendable room
         for kind, (_, real) in SLOTS.items():
             sp.commit("b_" + kind, real, step=64 * MB)
             self.assertEqual(sp.views["b_" + kind]["height"], real, kind)
@@ -814,11 +849,12 @@ class HelperSlots(unittest.TestCase):
         sp = self.replayed()
         base = sp.reserve("game16g", 16 * GB, [])                       # no 16 GiB gap: shortened
         self.assertEqual(sp.counts()["shorts"], 1)
-        meta = SLOTS["elf_meta"][0]
-        self.assertTrue(base < meta < base + 16 * GB)                   # its claim runs over ELF_META's slot
-        sp.commit("b_elf_meta", SLOTS["elf_meta"][1], step=64 * MB)
+        for kind in ("code", "elf", "cef_meta"):                        # its claim runs over three slots
+            self.assertTrue(base < SLOTS[kind][0] < base + 16 * GB, kind)
+            sp.commit("b_" + kind, SLOTS[kind][1], step=64 * MB)
         sp.commit("game16g", 16 * GB, step=64 * MB)
-        self.assertNotIn("b_elf_meta", sp.refused)
+        for kind in ("code", "elf", "cef_meta"):
+            self.assertNotIn("b_" + kind, sp.refused)
         self.assertIn("game16g", sp.refused)                            # refused at the next mapping, never served past it
         self.assert_slots_whole(sp)
         self.assertEqual(sp.wrong_view, [])

@@ -1,0 +1,744 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 13 Nov 2026 03:05:51 +0100
+Subject: [PATCH] ntdll: the Social Club layout holds only its anchors; the
+ rest at the first ask
+
+PLA-842 (decision 0183, amending 0169). The layout held about 30 GiB of
+the guest window from boot. It now holds from boot only the anchors the
+helper's 64 GiB window forces, each sized from the PLA-841 census:
+
+- libcef's pool prefix at 0x7000000000, held from exec by the host's low
+  hold (iOS otherwise takes that address during exec): 64 MiB, was 256;
+- chrome_elf's pool prefix at 0x7800000000: 64 MiB, was 4 GiB;
+- Oilpan, 16 GiB above chrome_elf's base, at 0x7c00000000: 512 MiB, was
+  1 GiB; FEX's arena now starts at its end, 0x7c20000000;
+- ELF_META at 0x7400000000, the upper half of libcef's pool, where
+  libcef's PartitionAlloc commits: 1 GiB, was 6.25 GiB. H1 was not
+  settled by the census (every attributed commit there is libcef's, at
+  stack word 4, never 0), so it stays an anchor, the conservative
+  reading; it becomes on demand only if a census shows no libcef commit
+  there and chrome_elf's at word 0.
+
+An anchor's size is the highest committed end any phone run measured in
+it, rounded up to a power of two, times four, at least 64 MiB:
+libcef's and chrome_elf's 0x5000 and Oilpan's 0x6420000
+(pla841-rdr2-census5), ELF_META's 0xaa82000 (l5).
+
+libcef's metadata (1 GiB), V8's cage (8 GiB, 4 GiB-aligned) and V8's
+code range (1 GiB, 4 GiB-aligned; a new kind 7) are on demand: nothing is
+held until the helper's first ask places one, at its home when that is
+free (0x78c0000000, 0x7a00000000, 0x7700000000), else at the highest
+free base aligned as it needs, from the window's free runs as the
+elastic policy reads them. From then on it is held in place like an
+anchor (0231), so the next helper gets the same range; one whose range
+something else mapped is placed anew at the next ask. The code range's
+hinted retry over [0x7100000000, 0x7400000000) (0243) goes: the router
+serves that ask first.
+
+ELF_META2 (0228) and RDR2's 8,960 MiB game hold go: the game's pools are
+the elastic policy's, as in any Play. The JIT pool's RW alias stays where
+the host maps it at exec, 0x7900000000, and must end below Oilpan's
+anchor. The census's kinds follow: the slots, V8's code range among them,
+and the JIT pool's RW alias.
+
+Linear: PLA-842
+Class: feature
+Evidence: docs/evidence/2026-11-13-sc-census-rdr2.md; tools/tests/test_sc_layout.py, test_sc_vm.py, test_sc_boot.py, test_sc_census.py, test_elastic_reserve.py (host checks; phone gates not run)
+Offered-upstream: no
+---
+ build/ntdll-unix/pp_sc_access.h |   2 +-
+ build/ntdll-unix/pp_sc_boot.h   |  23 +++--
+ build/ntdll-unix/pp_sc_census.h |  55 +++--------
+ build/ntdll-unix/pp_sc_layout.h | 165 +++++++++++++++++++++-----------
+ build/ntdll-unix/pp_sc_owner.h  |  17 +++-
+ build/ntdll-unix/pp_sc_vm.h     |  80 ++++++++++++----
+ build/ntdll-unix/virtual_ios.c  |  58 ++++-------
+ 7 files changed, 231 insertions(+), 169 deletions(-)
+
+diff --git a/build/ntdll-unix/pp_sc_access.h b/build/ntdll-unix/pp_sc_access.h
+index f22abaa..25fee55 100644
+--- a/build/ntdll-unix/pp_sc_access.h
++++ b/build/ntdll-unix/pp_sc_access.h
+@@ -45,7 +45,7 @@ static void ppsc_note_reported_locked(void *owner, const void *address, uint64_t
+             continue;
+         }
+         if (j && ppsc_owner[j] == owner && a >= r.base + r.size &&
+-            (k == PPSC_ELF_META || k == PPSC_CEF_META || k == PPSC_ELF_META2)) {
++            (k == PPSC_ELF_META || k == PPSC_CEF_META)) {
+             if (said_overflow[k]++ < 16)
+                 dprintf(2, "[sc-layout] helper %p op=%d %p+0x%llx in reported extent of kind=%d off=0x%llx past its real end: possible metadata overflow into kind=%d\n",
+                         owner, op, address, (unsigned long long)n, k, (unsigned long long)off, j);
+diff --git a/build/ntdll-unix/pp_sc_boot.h b/build/ntdll-unix/pp_sc_boot.h
+index cb7d5e1..d9d2dac 100644
+--- a/build/ntdll-unix/pp_sc_boot.h
++++ b/build/ntdll-unix/pp_sc_boot.h
+@@ -1,5 +1,5 @@
+ /* SPDX-License-Identifier: LGPL-2.1-or-later */
+-/* Included by virtual_ios.c after the jumbo hold globals. */
++/* Included by virtual_ios.c. */
+ #include "pp_sc_layout.h"
+ static unsigned ppsc_held;
+ static int ppsc_ready;
+@@ -42,8 +42,8 @@ static void ppsc_boot(void)
+         return;
+     }
+     if (strtoull(span, NULL, 16) > PPSC_RW_CAP) {
+-        dprintf(2, "[sc-layout] RW alias 0x%llx+0x%llx reaches the second ELF metadata slot at 0x%llx; layout unavailable\n",
+-                (unsigned long long)PPSC_RW_BASE, strtoull(span, NULL, 16), (unsigned long long)PPSC_ELF_META2_BASE);
++        dprintf(2, "[sc-layout] RW alias 0x%llx+0x%llx reaches the cage's home at 0x%llx; layout unavailable\n",
++                (unsigned long long)PPSC_RW_BASE, strtoull(span, NULL, 16), (unsigned long long)(PPSC_RW_BASE + PPSC_RW_CAP));
+         return;
+     }
+     /* Only this marker transfers the host's own hold. A foreign PROT_NONE
+@@ -52,19 +52,18 @@ static void ppsc_boot(void)
+     ppsc_held = PPSC_BIT(PPSC_CEF);
+     for (k = PPSC_ELF; k <= PPSC_LAST_SLOT; k++) {
+         struct ppsc_range r = ppsc_range(k);
+-        if (k == PPSC_CEF) continue;
++        if (k == PPSC_CEF || !(PPSC_ANCHORS & PPSC_BIT(k))) continue;
+         if (!ppsc_native_hold(r.base, r.size)) goto failed;
+         ppsc_held |= PPSC_BIT(k);
+     }
+-    if (ios_jumbo_hold_size || !ppsc_native_hold(PPSC_GAME_BASE, PPSC_GAME_SIZE)) goto failed;
+-    ios_jumbo_hold_base = PPSC_GAME_BASE;
+-    ios_jumbo_hold_size = PPSC_GAME_SIZE;
+-    ios_jumbo_hold_keep = 0;
+     ppsc_ready = 1;
+-    dprintf(2, "[sc-layout] RDR2 layout held: furniture 0x%llx..0x%llx, game 8960 MiB at 0x%llx, FEX floor 0x%llx, second ELF metadata 0x%llx+0x%llx\n",
+-            (unsigned long long)PPSC_FLOOR, (unsigned long long)PPSC_CEILING,
+-            (unsigned long long)PPSC_GAME_BASE, (unsigned long long)PPSC_FEX_BASE,
+-            (unsigned long long)PPSC_ELF_META2_BASE, (unsigned long long)ppsc_range(PPSC_ELF_META2).size);
++    dprintf(2, "[sc-layout] anchors held: libcef 0x%llx+0x%llx (from exec), ELF_META 0x%llx+0x%llx, chrome_elf 0x%llx+0x%llx, "
++               "Oilpan 0x%llx+0x%llx; FEX floor 0x%llx; libcef's metadata, V8's cage and code range are placed at the helper's first ask\n",
++            (unsigned long long)ppsc_range(PPSC_CEF).base, (unsigned long long)ppsc_range(PPSC_CEF).size,
++            (unsigned long long)ppsc_range(PPSC_ELF_META).base, (unsigned long long)ppsc_range(PPSC_ELF_META).size,
++            (unsigned long long)ppsc_range(PPSC_ELF).base, (unsigned long long)ppsc_range(PPSC_ELF).size,
++            (unsigned long long)ppsc_range(PPSC_OILPAN).base, (unsigned long long)ppsc_range(PPSC_OILPAN).size,
++            (unsigned long long)PPSC_FEX_BASE);
+     return;
+ failed:
+     for (k = PPSC_ELF; k <= PPSC_LAST_SLOT; k++) if (ppsc_held & PPSC_BIT(k)) {
+diff --git a/build/ntdll-unix/pp_sc_census.h b/build/ntdll-unix/pp_sc_census.h
+index c5282f9..acc7023 100644
+--- a/build/ntdll-unix/pp_sc_census.h
++++ b/build/ntdll-unix/pp_sc_census.h
+@@ -1,8 +1,8 @@
+ /* SPDX-License-Identifier: LGPL-2.1-or-later */
+ /* PLA-841: the Social Club helper's committed extent per kind, the evidence
+  * that sizes the layout's anchors (decision 0169). A kind is a layout slot's
+- * real range, a V8 code range (1 GiB at a 4 GiB-aligned base in the layout's
+- * window) or the JIT pool's RW alias. Per kind: the bytes committed now, their
++ * real range (an on-demand slot's once an ask placed it; V8's code range is
++ * one, PLA-842) or the JIT pool's RW alias. Per kind: the bytes committed now, their
+  * peak, the highest committed end offset from the kind's base, and the guest
+  * modules whose commits landed there (H1: libcef's PartitionAlloc in
+  * ELF_META's real range; where Oilpan commits). A dev-app diagnostic: the
+@@ -13,14 +13,11 @@
+ #include <stdint.h>
+ #include "pp_sc_layout.h"
+ 
+-enum { PPSC_CENSUS_CODE = PPSC_LAST_SLOT + 1, PPSC_CENSUS_JIT_RW, PPSC_CENSUS_KINDS };
++enum { PPSC_CENSUS_JIT_RW = PPSC_LAST_SLOT + 1, PPSC_CENSUS_KINDS };
+ /* A kind's line is due at its first commit, then whenever its peak or highest
+  * end has grown this much since its last line. */
+ #define PPSC_CENSUS_STEP (UINT64_C(16) << 20)
+ #define PPSC_CENSUS_CALLERS 4
+-#define PPSC_CENSUS_CODE_SIZE UINT64_C(0x40000000)
+-/* 4 GiB-aligned GiBs inside [PPSC_FLOOR, PPSC_CEILING): 0x71, 0x72, 0x73. */
+-#define PPSC_CENSUS_CODE_RANGES 3
+ /* One page-protection change spans at most a few adjacent ranges. */
+ #define PPSC_CENSUS_PIECES 4
+ 
+@@ -42,7 +39,6 @@ struct ppsc_census {
+ 
+ struct ppsc_census_state {
+     struct ppsc_census kind[PPSC_CENSUS_KINDS];
+-    uint64_t code[PPSC_CENSUS_CODE_RANGES];   /* the code ranges' bases, 0 = none */
+ };
+ 
+ /* [a, a + n) inside the census range of kind, which starts at base. */
+@@ -51,8 +47,8 @@ struct ppsc_census_piece { int kind; uint64_t base, a, n; };
+ static inline const char *ppsc_census_name(int k)
+ {
+     static const char *const names[PPSC_CENSUS_KINDS] = {
+-        "?", "ELF", "CEF", "ELF_META", "CEF_META", "OILPAN", "CAGE", "ELF_META2",
+-        "V8_CODE_RANGE", "JIT_RW_ALIAS" };
++        "?", "ELF", "CEF", "ELF_META", "CEF_META", "OILPAN", "CAGE", "V8_CODE_RANGE",
++        "JIT_RW_ALIAS" };
+     return k > 0 && k < PPSC_CENSUS_KINDS ? names[k] : "?";
+ }
+ 
+@@ -60,35 +56,10 @@ static inline const char *ppsc_census_name(int k)
+ static inline const char *ppsc_census_id(int k)
+ {
+     static const char *const ids[PPSC_CENSUS_KINDS] = {
+-        "?", "1", "2", "3", "4", "5", "6", "7", "code", "jit-rw" };
++        "?", "1", "2", "3", "4", "5", "6", "7", "jit-rw" };
+     return k > 0 && k < PPSC_CENSUS_KINDS ? ids[k] : "?";
+ }
+ 
+-static inline int ppsc_census_code_shape(uint64_t base, uint64_t size)
+-{
+-    return size == PPSC_CENSUS_CODE_SIZE && !(base & (PPSC_CODE_RANGE_ALIGN - 1)) &&
+-           base >= PPSC_FLOOR && base < PPSC_CEILING && size <= PPSC_CEILING - base;
+-}
+-
+-/* The base of the code range holding a, or 0. */
+-static inline uint64_t ppsc_census_code_at(const struct ppsc_census_state *s, uint64_t a)
+-{
+-    int i;
+-    for (i = 0; i < PPSC_CENSUS_CODE_RANGES; i++)
+-        if (s->code[i] && a >= s->code[i] && a - s->code[i] < PPSC_CENSUS_CODE_SIZE) return s->code[i];
+-    return 0;
+-}
+-
+-/* Records a code range at base; 1 when it is new. */
+-static inline int ppsc_census_code_add(struct ppsc_census_state *s, uint64_t base)
+-{
+-    int i;
+-    if (!ppsc_census_code_shape(base, PPSC_CENSUS_CODE_SIZE) || ppsc_census_code_at(s, base)) return 0;
+-    for (i = 0; i < PPSC_CENSUS_CODE_RANGES; i++)
+-        if (!s->code[i]) { s->code[i] = base; return 1; }
+-    return 0;
+-}
+-
+ static inline unsigned ppsc_census_clip(uint64_t a, uint64_t n, int kind, uint64_t base, uint64_t size,
+                                         struct ppsc_census_piece *out, unsigned got, unsigned max)
+ {
+@@ -100,22 +71,18 @@ static inline unsigned ppsc_census_clip(uint64_t a, uint64_t n, int kind, uint64
+     return got + 1;
+ }
+ 
+-/* The parts of [a, a + n) in each census range that has pages: the slots'
+- * real ranges in kind order, then the code ranges found. The JIT pool's RW
+- * alias is not Wine's memory and never a piece. */
+-static inline unsigned ppsc_census_pieces(const struct ppsc_census_state *s, uint64_t a, uint64_t n,
+-                                          struct ppsc_census_piece *out, unsigned max)
++/* The parts of [a, a + n) in each slot's real range, in kind order (an
++ * on-demand slot not placed has none). The JIT pool's RW alias is not Wine's
++ * memory and never a piece. */
++static inline unsigned ppsc_census_pieces(uint64_t a, uint64_t n, struct ppsc_census_piece *out, unsigned max)
+ {
+     unsigned got = 0;
+-    int k, i;
++    int k;
+     if (!n || n > UINT64_MAX - a) return 0;
+     for (k = PPSC_ELF; k <= PPSC_LAST_SLOT; k++) {
+         struct ppsc_range r = ppsc_range(k);
+         got = ppsc_census_clip(a, n, k, r.base, r.size, out, got, max);
+     }
+-    for (i = 0; i < PPSC_CENSUS_CODE_RANGES; i++)
+-        if (s->code[i])
+-            got = ppsc_census_clip(a, n, PPSC_CENSUS_CODE, s->code[i], PPSC_CENSUS_CODE_SIZE, out, got, max);
+     return got;
+ }
+ 
+diff --git a/build/ntdll-unix/pp_sc_layout.h b/build/ntdll-unix/pp_sc_layout.h
+index 91d6ec0..7639330 100644
+--- a/build/ntdll-unix/pp_sc_layout.h
++++ b/build/ntdll-unix/pp_sc_layout.h
+@@ -2,40 +2,89 @@
+ /* PLA-476: RDR2 geometry from willfaust/Madeira's Social Club layout 2.
+  * Real ranges are disjoint; reported Chromium reservations deliberately overlap.
+  * A caller MUST restrict commits/releases to its owned real range, not the
+- * reported extent. This header allocates nothing and changes no runtime policy. */
++ * reported extent. This header allocates nothing and changes no runtime policy.
++ *
++ * PLA-842 (decision 0183): the layout holds from boot only the anchors the
++ * helper's 64 GiB window forces; the other slots are on demand.
++ * - Anchors, held natively from boot (libcef's from exec, by the host's low
++ *   hold): libcef's and chrome_elf's PartitionAlloc pool prefixes at the
++ *   window's two 32 GiB-aligned bases, Oilpan 16 GiB above chrome_elf's base,
++ *   and ELF_META, the upper half of libcef's pool, where libcef's
++ *   PartitionAlloc commits (H1). The census (PLA-841) left H1 unsettled: every
++ *   attributed commit in ELF_META's range was libcef's, at stack word 4, never
++ *   word 0. ELF_META is held as an anchor, the conservative reading; it becomes
++ *   on demand only if a census shows no libcef commit there and chrome_elf's at
++ *   word 0. Each anchor's real size is the highest committed end any phone run
++ *   measured in it, rounded up to a power of two, times four, and at least
++ *   64 MiB: libcef's and chrome_elf's 0x5000 (pla841-rdr2-census5), ELF_META's
++ *   0xaa82000 (l5), Oilpan's 0x6420000 (census5).
++ * - On-demand slots, libcef's metadata, V8's cage and V8's code range: nothing
++ *   is held until the helper's first ask places one, at its home when that is
++ *   free, else at the highest free base aligned as it needs. From then on it is
++ *   held in place like an anchor, so the next helper gets the same range. */
+ #ifndef PP_SC_LAYOUT_H
+ #define PP_SC_LAYOUT_H
+ #include <stdint.h>
+ 
+-/* PPSC_ELF_META2 is chrome_elf's metadata for a helper started while another
+- * PEB owns PPSC_ELF_META (a dead helper's kept view, or a live one). */
+ enum ppsc_slot { PPSC_NONE, PPSC_ELF, PPSC_CEF, PPSC_ELF_META,
+-                 PPSC_CEF_META, PPSC_OILPAN, PPSC_CAGE, PPSC_ELF_META2, PPSC_REFUSE };
+-#define PPSC_LAST_SLOT PPSC_ELF_META2
++                 PPSC_CEF_META, PPSC_OILPAN, PPSC_CAGE, PPSC_CODE, PPSC_REFUSE };
++#define PPSC_LAST_SLOT PPSC_CODE
+ struct ppsc_range { uint64_t base, size, report, asked; };
++#define PPSC_BIT(k) (1u << (k))
++#define PPSC_ANCHORS (PPSC_BIT(PPSC_ELF) | PPSC_BIT(PPSC_CEF) | PPSC_BIT(PPSC_ELF_META) | PPSC_BIT(PPSC_OILPAN))
++#define PPSC_ON_DEMAND (PPSC_BIT(PPSC_CEF_META) | PPSC_BIT(PPSC_CAGE) | PPSC_BIT(PPSC_CODE))
++#define PPSC_ANCHOR_MIN UINT64_C(0x4000000)            /* 64 MiB */
++#define PPSC_CEF_BASE UINT64_C(0x7000000000)
++#define PPSC_OILPAN_BASE UINT64_C(0x7c00000000)
++#define PPSC_OILPAN_SIZE UINT64_C(0x20000000)          /* 512 MiB */
+ #define PPSC_RW_BASE UINT64_C(0x7900000000)
+-#define PPSC_ELF_META2_BASE UINT64_C(0x79c0000000)
+-/* The RW alias ends at or below PPSC_ELF_META2's real range. */
+-#define PPSC_RW_CAP (PPSC_ELF_META2_BASE - PPSC_RW_BASE)
+-#define PPSC_FLOOR UINT64_C(0x7010000000)
++/* The RW alias ends at or below the cage's home, 0x7a00000000 (ppsc_home);
++ * the host maps no pool over 4 GiB. */
++#define PPSC_RW_CAP (UINT64_C(0x7a00000000) - PPSC_RW_BASE)
++/* [PPSC_FLOOR, PPSC_CEILING): the largest run the anchors leave, from libcef's
++ * anchor to the furniture ceiling below ELF_META's. */
++#define PPSC_FLOOR (PPSC_CEF_BASE + PPSC_ANCHOR_MIN)
+ #define PPSC_CEILING UINT64_C(0x73ffff0000)
+-#define PPSC_GAME_BASE UINT64_C(0x75d0000000)
+-#define PPSC_GAME_SIZE UINT64_C(0x230000000)
+-#define PPSC_FEX_BASE UINT64_C(0x7c40000000)
++#define PPSC_FEX_BASE (PPSC_OILPAN_BASE + PPSC_OILPAN_SIZE)
+ #define PPSC_TOP UINT64_C(0x8000000000)
+-#define PPSC_BIT(k) (1u << (k))
+ 
++/* Where an on-demand slot goes: its home, real size, the alignment its base
++ * needs, and the size the helper asks (its reported extent, from its base).
++ * The homes keep the run above ELF_META's anchor whole for the game's pools. */
++struct ppsc_home { uint64_t home, size, align, asked; };
++static inline struct ppsc_home ppsc_home(enum ppsc_slot k)
++{
++    switch (k) {
++    /* libcef's metadata, 256 MiB-aligned as its old base 0x7590000000: the top
++     * of the run between chrome_elf's anchor and the RW alias. */
++    case PPSC_CEF_META: return (struct ppsc_home){0x78c0000000ULL, 0x40000000ULL, 0x10000000ULL, 0x400000000ULL};
++    /* V8's pointer-compression cage, 4 GiB-aligned: below Oilpan's anchor, as before. */
++    case PPSC_CAGE: return (struct ppsc_home){0x7a00000000ULL, 0x200000000ULL, 0x100000000ULL, 0x200000000ULL};
++    /* V8's code range, 1 GiB at a 4 GiB-aligned base (it releases any other):
++     * the top of the run above ELF_META's anchor. */
++    case PPSC_CODE: return (struct ppsc_home){0x7700000000ULL, 0x40000000ULL, 0x100000000ULL, 0x40000000ULL};
++    default: return (struct ppsc_home){0, 0, 0, 0};
++    }
++}
++
++/* The on-demand slots' bases, 0 until the helper's first ask places one
++ * (virtual_mutex). */
++static uint64_t ppsc_placed[PPSC_LAST_SLOT + 1];
++
++/* A slot's real range and reported extent; an on-demand slot not placed has
++ * none (size 0). */
+ static inline struct ppsc_range ppsc_range(enum ppsc_slot k)
+ {
+     switch (k) {
+-    case PPSC_ELF: return (struct ppsc_range){0x7800000000ULL, 0x100000000ULL, 0x7800000000ULL, 0x800000000ULL};
+-    case PPSC_CEF: return (struct ppsc_range){0x7000000000ULL, 0x10000000ULL, 0x7000000000ULL, 0x800000000ULL};
+-    case PPSC_ELF_META: return (struct ppsc_range){0x7400000000ULL, 0x190000000ULL, 0x7400000000ULL, 0x400000000ULL};
+-    case PPSC_CEF_META: return (struct ppsc_range){0x7590000000ULL, 0x40000000ULL, 0x7590000000ULL, 0x400000000ULL};
+-    case PPSC_OILPAN: return (struct ppsc_range){0x7c00000000ULL, 0x40000000ULL, 0x7800000000ULL, 0x800000000ULL};
+-    case PPSC_CAGE: return (struct ppsc_range){0x7a00000000ULL, 0x200000000ULL, 0x7a00000000ULL, 0x200000000ULL};
+-    /* 1 GiB real; the 16 GiB report overlaps the cage, Oilpan and FEX. */
+-    case PPSC_ELF_META2: return (struct ppsc_range){PPSC_ELF_META2_BASE, 0x40000000ULL, PPSC_ELF_META2_BASE, 0x400000000ULL};
++    case PPSC_ELF: return (struct ppsc_range){0x7800000000ULL, PPSC_ANCHOR_MIN, 0x7800000000ULL, 0x800000000ULL};
++    case PPSC_CEF: return (struct ppsc_range){PPSC_CEF_BASE, PPSC_ANCHOR_MIN, PPSC_CEF_BASE, 0x800000000ULL};
++    case PPSC_ELF_META: return (struct ppsc_range){0x7400000000ULL, 0x40000000ULL, 0x7400000000ULL, 0x400000000ULL};
++    case PPSC_OILPAN: return (struct ppsc_range){PPSC_OILPAN_BASE, PPSC_OILPAN_SIZE, 0x7800000000ULL, 0x800000000ULL};
++    case PPSC_CEF_META: case PPSC_CAGE: case PPSC_CODE: {
++        struct ppsc_home h = ppsc_home(k);
++        uint64_t b = ppsc_placed[k];
++        return (struct ppsc_range){b, b ? h.size : 0, b, h.asked};
++    }
+     default: return (struct ppsc_range){0, 0, 0, 0};
+     }
+ }
+@@ -46,36 +95,57 @@ static inline int ppsc_contains(struct ppsc_range r, uint64_t a, uint64_t n)
+     return n && a >= r.base && a - r.base < r.size && n <= r.size - (a - r.base);
+ }
+ 
+-/* Only call for the verified helper's reserve-only requests. 'mine' describes
+- * this live helper, not another helper's grants; 'held' describes free slots;
+- * 'others' the slots another PEB owns, live or dead with a kept view.
+- * In particular, a second helper cannot consume the first helper's remaining
+- * slots: the only slot it gets instead of another's is PPSC_ELF_META2.
+- * Refusal must not fall through to the unsafe generic soft-pool path. */
+-static inline enum ppsc_slot ppsc_classify(uint64_t size, uint64_t hint,
+-                                         unsigned held, unsigned mine, unsigned others)
++/* A free run of the guest window, below FEX's band. */
++struct ppsc_gap { uint64_t base, size; };
++
++/* The base on-demand slot k gets at its first ask, given the window's free
++ * runs: its home when that is free, else the highest base aligned as it needs
++ * whose range is free; 0 when there is none. */
++static inline uint64_t ppsc_place(enum ppsc_slot k, const struct ppsc_gap *g, unsigned n)
++{
++    struct ppsc_home h = ppsc_home(k);
++    uint64_t best = 0;
++    unsigned i;
++    if (!h.size) return 0;
++    for (i = 0; i < n; i++) {
++        uint64_t end = g[i].base + g[i].size, b;
++        if (g[i].size < h.size || end < g[i].base) continue;
++        if (h.home >= g[i].base && h.home - g[i].base <= g[i].size - h.size) return h.home;
++        b = (end - h.size) & ~(h.align - 1);
++        if (b >= g[i].base && b > best) best = b;
++    }
++    return best;
++}
++
++/* Only call for the verified helper's reserve-only requests. 'avail' are the
++ * slots a grant may take: the held ones, and the on-demand slots not placed
++ * yet; 'mine' are this live helper's. A second helper cannot consume the
++ * first helper's slots. Refusal must not fall through to the unsafe generic
++ * soft-pool path; PPSC_NONE leaves the ask to Wine. */
++static inline enum ppsc_slot ppsc_classify(uint64_t size, uint64_t hint, unsigned avail, unsigned mine)
+ {
+     unsigned both = PPSC_BIT(PPSC_ELF) | PPSC_BIT(PPSC_CEF);
+-    unsigned elf_meta = PPSC_BIT(PPSC_ELF_META) | PPSC_BIT(PPSC_ELF_META2);
+     if (size == 0x800000000ULL) {
+         if (hint && !(hint & (0x400000000ULL - 1)) &&
+-            (mine & both) == both && (held & PPSC_BIT(PPSC_OILPAN)))
++            (mine & both) == both && (avail & PPSC_BIT(PPSC_OILPAN)))
+             return PPSC_OILPAN;
+         if (hint && !(hint & (0x800000000ULL - 1))) {
+-            if (!(mine & both) && (held & both) == both) return PPSC_ELF;
+-            if ((mine & both) == PPSC_BIT(PPSC_ELF) && (held & PPSC_BIT(PPSC_CEF))) return PPSC_CEF;
++            if (!(mine & both) && (avail & both) == both) return PPSC_ELF;
++            if ((mine & both) == PPSC_BIT(PPSC_ELF) && (avail & PPSC_BIT(PPSC_CEF))) return PPSC_CEF;
+         }
+         return PPSC_REFUSE;
+     }
+     if (size == 0x400000000ULL && (hint & 0xffffffffULL) && !(mine & PPSC_BIT(PPSC_CAGE))) {
+-        if ((mine & both) == PPSC_BIT(PPSC_ELF) && !(mine & elf_meta)) {
+-            if (held & PPSC_BIT(PPSC_ELF_META)) return PPSC_ELF_META;
+-            if ((others & PPSC_BIT(PPSC_ELF_META)) && (held & PPSC_BIT(PPSC_ELF_META2))) return PPSC_ELF_META2;
+-            return PPSC_REFUSE;
+-        }
+-        if ((mine & both) == both && (held & PPSC_BIT(PPSC_CEF_META))) return PPSC_CEF_META;
++        if ((mine & both) == PPSC_BIT(PPSC_ELF) && !(mine & PPSC_BIT(PPSC_ELF_META)))
++            return (avail & PPSC_BIT(PPSC_ELF_META)) ? PPSC_ELF_META : PPSC_REFUSE;
++        if ((mine & both) == both && (avail & PPSC_BIT(PPSC_CEF_META))) return PPSC_CEF_META;
+         return PPSC_REFUSE;
+     }
++    /* V8's code range: a hinted 1 GiB at a 4 GiB-aligned hint. Taken, or a
++     * second one, it is Wine's as before. */
++    if (size == ppsc_home(PPSC_CODE).size && hint && !(hint & (ppsc_home(PPSC_CODE).align - 1)) &&
++        !(mine & PPSC_BIT(PPSC_CODE)) && (avail & PPSC_BIT(PPSC_CODE)))
++        return PPSC_CODE;
+     return PPSC_NONE;
+ }
+ 
+@@ -97,21 +167,4 @@ static inline enum ppsc_probe ppsc_impossible(uint64_t size, uint64_t hint, unsi
+     if (size >= 0x200000000ULL && (mine & PPSC_BIT(PPSC_CAGE))) return PPSC_PROBE_SANDBOX;
+     return PPSC_PROBE_NONE;
+ }
+-
+-/* V8's 1 GiB code range in the verified helper (PLA-476, decision 0169): V8
+- * hints a 4 GiB-aligned base and releases a reservation anywhere else. The
+- * hinted retry tries these before the kernel's pick: each 4 GiB-aligned base b
+- * with [b, b + size) inside [PPSC_FLOOR, PPSC_CEILING), lowest first. Returns
+- * the base after prev (0 for the first), or 0 when none is left or the hint is
+- * not 4 GiB-aligned. */
+-#define PPSC_CODE_RANGE_ALIGN UINT64_C(0x100000000)
+-static inline uint64_t ppsc_code_range_next(uint64_t size, uint64_t hint, uint64_t prev)
+-{
+-    uint64_t b;
+-    if (!size || !hint || (hint & (PPSC_CODE_RANGE_ALIGN - 1)) || prev >= PPSC_CEILING) return 0;
+-    b = prev ? (prev & ~(PPSC_CODE_RANGE_ALIGN - 1)) + PPSC_CODE_RANGE_ALIGN
+-             : (PPSC_FLOOR + PPSC_CODE_RANGE_ALIGN - 1) & ~(PPSC_CODE_RANGE_ALIGN - 1);
+-    if (b < PPSC_FLOOR || b >= PPSC_CEILING || size > PPSC_CEILING - b) return 0;
+-    return b;
+-}
+ #endif
+diff --git a/build/ntdll-unix/pp_sc_owner.h b/build/ntdll-unix/pp_sc_owner.h
+index dd4ed7b..a98d2ca 100644
+--- a/build/ntdll-unix/pp_sc_owner.h
++++ b/build/ntdll-unix/pp_sc_owner.h
+@@ -66,6 +66,20 @@ static int ppsc_helper(void)
+     return 1;
+ }
+ 
++/* virtual_mutex held: slot k is neither owned nor held (something mapped its
++ * range). An on-demand slot is placed anew at the next ask; an anchor is lost. */
++static void ppsc_lost_locked(int k)
++{
++    if (PPSC_ON_DEMAND & PPSC_BIT(k)) ppsc_placed[k] = 0;
++}
++
++/* The log's words for a slot ppsc_lost_locked gave up. */
++static const char *ppsc_not_held(int k)
++{
++    return (PPSC_ON_DEMAND & PPSC_BIT(k)) ? "NOT held again (something mapped it); placed anew at the next ask"
++                                          : "NOT held again (something mapped it)";
++}
++
+ /* virtual_mutex held, from the existing process teardown after the dead
+  * process's views were released. A grant whose real view is still present
+  * (kept for a parked register) stays owned; nothing else may take it. A view
+@@ -92,8 +106,9 @@ static void ppsc_owner_died_locked(void *peb)
+         }
+         ppsc_owner[k] = NULL;
+         if (ppsc_native_hold(r.base, r.size)) ppsc_held |= PPSC_BIT(k);
++        else ppsc_lost_locked(k);
+         dprintf(2, "[sc-layout] owner %p exited; kind=%d slot %s%s\n", peb, k,
+-                (ppsc_held & PPSC_BIT(k)) ? "held again" : "NOT held again (something mapped it)",
++                (ppsc_held & PPSC_BIT(k)) ? "held again" : ppsc_not_held(k),
+                 ppsc_probe_suffix_locked(k, peb, probes, sizeof(probes)));
+     }
+     if ((n = ppsc_probe_take_locked(peb)))   /* a helper that never owned the cage, or released it */
+diff --git a/build/ntdll-unix/pp_sc_vm.h b/build/ntdll-unix/pp_sc_vm.h
+index d5a6024..cb89a09 100644
+--- a/build/ntdll-unix/pp_sc_vm.h
++++ b/build/ntdll-unix/pp_sc_vm.h
+@@ -9,16 +9,38 @@ static unsigned ppsc_mine(void *peb)
+     return bits;
+ }
+ 
+-/* The slots another PEB owns: a live helper, or a dead one whose view was kept. */
+-static unsigned ppsc_others(void *peb)
++/* The slots a grant may take: the held ones, and the on-demand slots no ask
++ * has placed yet. */
++static unsigned ppsc_avail(void)
+ {
+-    unsigned bits = 0;
++    unsigned bits = ppsc_held;
+     int k;
+     for (k = PPSC_ELF; k <= PPSC_LAST_SLOT; k++)
+-        if (ppsc_owner[k] && ppsc_owner[k] != peb) bits |= PPSC_BIT(k);
++        if ((PPSC_ON_DEMAND & PPSC_BIT(k)) && !ppsc_placed[k]) bits |= PPSC_BIT(k);
+     return bits;
+ }
+ 
++/* The guest window's free runs of at least min bytes, below FEX's band, in
++ * out (at most max); virtual_ios.c reads them from the task's map. */
++#define PPSC_GAPS_MAX 512
++static unsigned ppsc_gaps_locked(struct ppsc_gap *out, unsigned max, uint64_t min);
++
++/* virtual_mutex held: where on-demand slot k goes at its first ask (0: no
++ * free range). */
++static uint64_t ppsc_place_locked(enum ppsc_slot k)
++{
++    static struct ppsc_gap gaps[PPSC_GAPS_MAX];
++    unsigned n = ppsc_gaps_locked(gaps, PPSC_GAPS_MAX, ppsc_home(k).size);
++    uint64_t b = ppsc_place(k, gaps, n);
++    if (!b)
++        dprintf(2, "[sc-layout] kind=%d: no free 0x%llx-aligned 0x%llx in the window; not placed\n", k,
++                (unsigned long long)ppsc_home(k).align, (unsigned long long)ppsc_home(k).size);
++    else
++        dprintf(2, "[sc-layout] kind=%d placed at 0x%llx+0x%llx (%s)\n", k, (unsigned long long)b,
++                (unsigned long long)ppsc_home(k).size, b == ppsc_home(k).home ? "its home" : "its home was taken");
++    return b;
++}
++
+ /* virtual_mutex held, from the existing process teardown: what kept a dead
+  * owner's slot view (PLA-476 retained-extent diagnostic, no policy). */
+ static void ppsc_note_kept_view_locked(int k, void *peb, struct file_view *v)
+@@ -101,24 +123,46 @@ static int ppsc_in_reserved_area_locked(struct ppsc_range r)
+  * user limit; FEX's arena starts at PPSC_FEX_BASE), and this is checked, not
+  * assumed: a slot in one is refused rather than mapped over. So an intruder
+  * makes the grant fail with STATUS_NO_MEMORY and keeps its memory. */
+-static NTSTATUS ppsc_grant(enum ppsc_slot k, SIZE_T asked, void **ret, SIZE_T *size_ptr, ULONG protect)
++/* virtual_mutex held: after a failed grant of slot k, hold its range again;
++ * an on-demand slot that was placed only now is not held but unplaced. */
++static void ppsc_hold_again_locked(enum ppsc_slot k, int first)
+ {
+     struct ppsc_range r = ppsc_range(k);
+-    void *p = (void *)(uintptr_t)r.base;
+-    SIZE_T n = r.size;
++    if (first) ppsc_placed[k] = 0;
++    else if (ppsc_native_hold(r.base, r.size)) ppsc_held |= PPSC_BIT(k);
++    else ppsc_lost_locked(k);
++}
++
++/* An anchor, or an on-demand slot placed earlier, comes out of its hold; an
++ * on-demand slot no ask has placed is placed now (ppsc_place_locked) and
++ * mapped there with nothing to give back. */
++static NTSTATUS ppsc_grant(enum ppsc_slot k, SIZE_T asked, void **ret, SIZE_T *size_ptr, ULONG protect)
++{
++    int first = (PPSC_ON_DEMAND & PPSC_BIT(k)) && !ppsc_placed[k];
++    struct ppsc_range r;
++    void *p;
++    SIZE_T n;
+     NTSTATUS st;
+-    if (!(ppsc_held & PPSC_BIT(k)) || ppsc_owner[k]) return STATUS_NO_MEMORY;
++    if (ppsc_owner[k] || (!first && !(ppsc_held & PPSC_BIT(k)))) return STATUS_NO_MEMORY;
++    if (first && !(ppsc_placed[k] = ppsc_place_locked(k))) return STATUS_NO_MEMORY;
++    r = ppsc_range(k);
++    p = (void *)(uintptr_t)r.base;
++    n = r.size;
+     if (ppsc_in_reserved_area_locked(r)) {
+-        dprintf(2, "[sc-layout] kind=%d slot overlaps a reserved area; not granted, hold kept\n", k);
++        dprintf(2, "[sc-layout] kind=%d slot overlaps a reserved area; not granted, %s\n", k,
++                first ? "not placed" : "hold kept");
++        if (first) ppsc_placed[k] = 0;
+         return STATUS_NO_MEMORY;
+     }
+-    if (mach_vm_deallocate(mach_task_self(), r.base, r.size) != KERN_SUCCESS) return STATUS_NO_MEMORY;
+-    ppsc_held &= ~PPSC_BIT(k);
++    if (!first) {
++        if (mach_vm_deallocate(mach_task_self(), r.base, r.size) != KERN_SUCCESS) return STATUS_NO_MEMORY;
++        ppsc_held &= ~PPSC_BIT(k);
++    }
+     st = allocate_virtual_memory(&p, &n, MEM_RESERVE, protect, 0, 0, 0, 0);
+     if (st) {
+-        if (ppsc_native_hold(r.base, r.size)) ppsc_held |= PPSC_BIT(k);
++        ppsc_hold_again_locked(k, first);
+         dprintf(2, "[sc-layout] kind=%d view not placed (status=%x): something mapped the slot; it was left alone, slot %s\n",
+-                k, (unsigned)st, (ppsc_held & PPSC_BIT(k)) ? "held again" : "NOT held again");
++                k, (unsigned)st, first ? "not placed" : (ppsc_held & PPSC_BIT(k)) ? "held again" : ppsc_not_held(k));
+         return STATUS_NO_MEMORY;
+     }
+     /* Fixed allocate_virtual_memory does not relocate. Do not silently accept
+@@ -127,7 +171,7 @@ static NTSTATUS ppsc_grant(enum ppsc_slot k, SIZE_T asked, void **ret, SIZE_T *s
+         struct file_view *v = find_view(p, 0);
+         if (v && v->base == p && v->ios_owner_peb == ios_jit_current_peb())
+             free_pages(v, p, n);
+-        if (ppsc_native_hold(r.base, r.size)) ppsc_held |= PPSC_BIT(k);
++        ppsc_hold_again_locked(k, first);
+         return STATUS_NO_MEMORY;
+     }
+     ppsc_owner[k] = ios_jit_current_peb();
+@@ -171,7 +215,7 @@ static int ppsc_route(void **ret, SIZE_T *size, ULONG type, ULONG protect, ULONG
+         /* As Oilpan's: only the helper that holds both core pools takes the
+          * cage (every logged play asks for it after both). */
+         if (*size != 0x200000000ULL || protect != PAGE_NOACCESS ||
+-            !(ppsc_held & PPSC_BIT(PPSC_CAGE)) || (ppsc_mine(ios_jit_current_peb()) & both) != both) {
++            !(ppsc_avail() & PPSC_BIT(PPSC_CAGE)) || (ppsc_mine(ios_jit_current_peb()) & both) != both) {
+             int refused = ppsc_refuse_probe_locked(ret, *size, status);
+             server_leave_uninterrupted_section(&virtual_mutex, &sigset);
+             return refused;
+@@ -181,8 +225,7 @@ static int ppsc_route(void **ret, SIZE_T *size, ULONG type, ULONG protect, ULONG
+         server_leave_uninterrupted_section(&virtual_mutex, &sigset);
+         return 1;
+     } else {
+-        k = ppsc_classify(*size, (uintptr_t)*ret, ppsc_held, ppsc_mine(ios_jit_current_peb()),
+-                          ppsc_others(ios_jit_current_peb()));
++        k = ppsc_classify(*size, (uintptr_t)*ret, ppsc_avail(), ppsc_mine(ios_jit_current_peb()));
+         if (k == PPSC_NONE) {
+             /* Unsupported giant asks must fail, not reach soft-pool granting.
+              * Ordinary small requests keep Wine's normal path. */
+@@ -226,7 +269,8 @@ static int ppsc_free(void **addr, SIZE_T *size, ULONG type, NTSTATUS *status)
+             else if (!(*status = free_pages(v, v->base, v->size))) {
+                 ppsc_owner[chosen] = NULL;
+                 if (ppsc_native_hold(r.base, r.size)) ppsc_held |= PPSC_BIT(chosen);
+-                held = (ppsc_held & PPSC_BIT(chosen)) ? "held again" : "NOT held again (something mapped it)";
++                else ppsc_lost_locked(chosen);
++                held = (ppsc_held & PPSC_BIT(chosen)) ? "held again" : ppsc_not_held(chosen);
+             }
+             if (!*status) {
+                 *size = r.asked;
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 697e89e..bef3d33 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -2118,7 +2118,8 @@ void ios_jumbo_holdback_init( void )
+ 
+     if (done) return;
+     done = 1;
+-    if (ppsc_ready) return; /* The Social Club layout already owns the exact game hold. */
++    if (ppsc_ready) return; /* No boot hold beside the Social Club layout's anchors: its on-demand slots
++                              * and the game's pools need the window's room (PLA-842). */
+ 
+     want = (size_t)(madeira_cfg_int( "jumbo-mb", 0 ) * 1024ll * 1024ll);   /* ml1095: madeira.cfg jumbo-mb = N */
+     if (!want) return;                       /* opt-in: absent or 0 => off */
+@@ -9918,10 +9919,6 @@ static void ppsc_census_say_locked( int k, const char *why, void *owner )
+     if (k <= PPSC_LAST_SLOT)
+         snprintf( where, sizeof(where), "real=0x%llx+0x%llx", (unsigned long long)ppsc_range( k ).base,
+                   (unsigned long long)ppsc_range( k ).size );
+-    else if (k == PPSC_CENSUS_CODE)
+-        snprintf( where, sizeof(where), "ranges=0x%llx,0x%llx,0x%llx+0x%llx",
+-                  (unsigned long long)ppsc_cs.code[0], (unsigned long long)ppsc_cs.code[1],
+-                  (unsigned long long)ppsc_cs.code[2], (unsigned long long)PPSC_CENSUS_CODE_SIZE );
+     else
+         snprintf( where, sizeof(where), "rw=%p+0x%llx tail=0x%llx", ios_jit_rw_base_global,
+                   (unsigned long long)ios_jit_pool_size_global, (unsigned long long)ios_jit_tail_reserved );
+@@ -9974,8 +9971,7 @@ static void ppsc_census_attribute_locked( const struct ppsc_census_piece *p, uin
+ }
+ 
+ /* virtual_mutex held, before a page-protection change of [addr, addr + size):
+- * the committed bytes of each census piece it touches. A helper's view of the
+- * code range's shape is recorded as a code range at its first change. */
++ * the committed bytes of each census piece it touches. */
+ static int ppsc_census_begin_locked( const void *addr, size_t size, struct ppsc_census_op *op )
+ {
+     uint64_t a = (uintptr_t)addr & ~(uint64_t)page_mask;
+@@ -9983,16 +9979,7 @@ static int ppsc_census_begin_locked( const void *addr, size_t size, struct ppsc_
+     unsigned i;
+ 
+     if (e <= ppsc_range( PPSC_CEF ).base || a >= PPSC_TOP || !ppsc_ready || ios_no_diagnostics()) return 0;
+-    if (a < PPSC_CEILING && e > PPSC_FLOOR && !ppsc_census_code_at( &ppsc_cs, a ) && ppsc_helper())
+-    {
+-        struct file_view *view = find_view( (const void *)(uintptr_t)a, 0 );
+-        if (view && view->ios_owner_peb == ios_jit_current_peb() &&
+-            ppsc_census_code_shape( (uintptr_t)view->base, view->size ) &&
+-            ppsc_census_code_add( &ppsc_cs, (uintptr_t)view->base ))
+-            dprintf( 2, "[sc-census] found kind=code %s at %p+0x%llx owner=%p\n", ppsc_census_name( PPSC_CENSUS_CODE ),
+-                     view->base, (unsigned long long)view->size, view->ios_owner_peb );
+-    }
+-    op->n = ppsc_census_pieces( &ppsc_cs, a, e - a, op->p, PPSC_CENSUS_PIECES );
++    op->n = ppsc_census_pieces( a, e - a, op->p, PPSC_CENSUS_PIECES );
+     for (i = 0; i < op->n; i++) op->before[i] = ppsc_census_committed_locked( op->p[i].a, op->p[i].n, &high );
+     return op->n != 0;
+ }
+@@ -17866,7 +17853,7 @@ void virtual_init(void)
+ #endif
+ 
+     kernel_writewatch_init();
+-    ppsc_boot(); /* Before Wine places furniture in the fixed Social Club slots. */
++    ppsc_boot(); /* Before Wine places furniture in the Social Club layout's anchors. */
+     if (ppsc_requested && !ppsc_ready)
+     {
+         /* The host already moved the RW alias and gave back the low hold but
+@@ -17925,7 +17912,7 @@ void virtual_init(void)
+      * replaces the cage hold. */
+     ios_va_pins_hold();
+     if (ppsc_ready)
+-        dprintf(2, "[sc-layout] V8 cage held by layout, classic cage disabled\n");
++        dprintf(2, "[sc-layout] V8 cage placed by the layout at the helper's first ask, classic cage disabled\n");
+     else if (!ppj_cage_hold_wanted( madeira_cfg_int( "cage-hold", 0 ) ))
+         dprintf( 2, "[cage] no holdback: no cage-hold for this title\n" );
+     else if (ppvp_replaces( &ios_va_pins, IOS_CAGE_ASK_SIZE ))
+@@ -22075,6 +22062,21 @@ static unsigned ios_ppe_gaps_read( uint64_t min )
+     return n;
+ }
+ 
++/* pp_sc_vm.h (PLA-842): the free runs an on-demand Social Club slot may take
++ * at its first ask, read as the policy reads them. */
++static unsigned ppsc_gaps_locked( struct ppsc_gap *out, unsigned max, uint64_t min )
++{
++    unsigned i, n = ios_ppe_gaps_read( min );
++
++    if (n > max) n = max;
++    for (i = 0; i < n; i++)
++    {
++        out[i].base = ios_ppe_gaps[i].base;
++        out[i].size = ios_ppe_gaps[i].size;
++    }
++    return n;
++}
++
+ /* Free bytes from `from` up to the next mapping or FEX's band; *next: where they end. */
+ static uint64_t ios_ppe_free_above( uint64_t from, uint64_t *next )
+ {
+@@ -23985,24 +23987,6 @@ NTSTATUS WINAPI NtAllocateVirtualMemory( HANDLE process, PVOID *ret, ULONG_PTR z
+                             pick, (unsigned long long)IOS_CAGE_REAL_SIZE,
+                             (unsigned long)(st2 ? 0 : sz), (unsigned)st2);
+                 }
+-                /* PLA-476 (decision 0169): the verified Social Club helper's V8
+-                 * code range needs a 4 GiB-aligned base and releases any other.
+-                 * The walks above try at most one aligned GiB of the layout's
+-                 * window (none for off == 0), so try each before the kernel's
+-                 * unaligned pick (l16's game helper died on that pick). */
+-                if (st2 && ppsc_ready && ppsc_helper())
+-                {
+-                    uint64_t base = 0;
+-                    while (st2 && (base = ppsc_code_range_next( *size_ptr, (ULONG_PTR)hint, base )))
+-                    {
+-                        SIZE_T csz = *size_ptr;
+-                        pick = (void *)(uintptr_t)base;
+-                        st2 = allocate_virtual_memory( &pick, &csz, type, protect, 0, 0, 0, 0 );
+-                        dprintf(2, "[jumbo] cand sc-aligned base=0x%llx size=0x%lx st=0x%x\n",
+-                                (unsigned long long)base, (unsigned long)csz, (unsigned)st2);
+-                        if (!st2) sz = csz;
+-                    }
+-                }
+                 if (st2)
+                 {
+                     pick = NULL;

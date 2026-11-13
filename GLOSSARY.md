@@ -128,6 +128,17 @@ A reservation of 1 GiB or more that cannot be placed whole, given a smaller real
 while the caller is told it got its full size.
 _Avoid_: partial reservation, lean reserve
 
+**Anchor**:
+A range of the Social Club layout held from boot, in a Play that starts a verified Rockstar bootstrap:
+an address the Social Club helper's 64 GiB window forces, sized from its measured committed peak with
+a margin.
+_Avoid_: fixed slot, hold (the jumbo and cage holds)
+
+**On-demand slot**:
+A range of the Social Club layout that nothing holds until the helper's first ask for it places it;
+from then on it is held in place for the next helper.
+_Avoid_: claim (the size a reservation was told it got), lazy slot
+
 **Guard (elastic)**:
 The 32 MiB of inaccessible view above a shortened view's or short grant's real part. A commit
 there grows the view or is refused, so a pool that outgrows its room faults at its own end, never
