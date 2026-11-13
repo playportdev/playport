@@ -1,6 +1,6 @@
 # 0189: No Social Club helper child under the layout
 
-**Status:** proposed, 2026-11-13, for the owner. Built ahead of acceptance by
+**Status:** accepted by the owner, 2026-11-13: "we had it before and we still need it". Built ahead of acceptance by
 [PLA-865](https://linear.app/playportdev/issue/PLA-865) (madeira-unix 0298, commit `dddd51be`). Amends
 [0150](0150-dev-single-process-social-club.md)'s child policy ("Other executables and unverified helper
 children keep today's policy") and [0169](0169-social-club-on-rockstars-cef-in-the-stock-cef-layout.md)'s

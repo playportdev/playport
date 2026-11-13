@@ -1,6 +1,6 @@
 # 0188: The Witcher 3 1.32's memory keys go without an alignment rule
 
-**Status:** proposed, 2026-11-13, for the owner. Built ahead of acceptance by
+**Status:** accepted by the owner, 2026-11-13. Built ahead of acceptance by
 [PLA-838](https://linear.app/playportdev/issue/PLA-838) (commit `ab4a6b16`, spec
 [PLA-835](https://linear.app/playportdev/issue/PLA-835)). Supersedes one line of
 [0183](0183-no-per-game-memory-keys.md), "The keys go when that rule plays it, not after a run without

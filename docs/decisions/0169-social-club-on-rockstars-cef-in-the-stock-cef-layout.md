@@ -30,7 +30,8 @@ any phone run measured in it, rounded up to a power of two, times four, at least
 ([census](../evidence/2026-11-13-sc-census-rdr2.md): 0x5000, 0x5000 and 0x6420000; ELF_META's 0xaa82000
 from l5). H1 was not settled (every attributed ELF_META commit was libcef's, at stack word 4, never 0),
 so ELF_META stays an anchor, the conservative reading; it becomes on demand if a census shows no libcef
-commit there and chrome_elf's at word 0. libcef's metadata (1 GiB), V8's cage (8 GiB) and V8's code
+commit there and chrome_elf's at word 0. The owner chose this fixed anchor on 2026-11-13, accepting PLA-842's departure
+from its ticket's text. libcef's metadata (1 GiB), V8's cage (8 GiB) and V8's code
 range (1 GiB, kind 7) are on demand: nothing is held until the helper's first ask places one at its home
 (`0x78c0000000`, `0x7a00000000`, `0x7700000000`) when free, else at the highest free base aligned as it
 needs (256 MiB, 4 GiB, 4 GiB); from then on it is held in place like an anchor, so the next helper gets
@@ -43,8 +44,8 @@ where the host maps it before any guest runs, `0x7900000000`, ending at or below
 can move it, so it is not one of the layout's slots. The Decision's layout bullet below gives the old
 geometry.
 
-**Amended, proposed 2026-11-13, by [0189](0189-no-social-club-helper-child-under-the-layout.md)
-([PLA-865](https://linear.app/playportdev/issue/PLA-865), built as madeira-unix 0298):** under the layout
+**Amended 2026-11-13 by [0189](0189-no-social-club-helper-child-under-the-layout.md)
+([PLA-865](https://linear.app/playportdev/issue/PLA-865), built as madeira-unix 0298; accepted by the owner, 2026-11-13):** under the layout
 every `SocialClubHelper.exe` `--type=` child is refused at its start, so the multi-process fallback below
 runs no child under the layout; the policy and its evidence are that record's.
 

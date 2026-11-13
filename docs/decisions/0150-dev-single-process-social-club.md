@@ -8,8 +8,8 @@ Amends [0109](0109-chromium-switches-for-a-cef-browser.md) and
 rule covers only the installed `SocialClubHelper.exe` page bridge described here.
 It does not permit patching any other Rockstar component or build.
 
-**Amendment proposed 2026-11-13 ([PLA-866](https://linear.app/playportdev/issue/PLA-866)), pending the owner's
-acceptance:** the exception moves to Social Club 2.4.0.302's `SocialClubHelper.exe` (TimeDateStamp `0x6aeb6937`,
+**Amended 2026-11-13 ([PLA-866](https://linear.app/playportdev/issue/PLA-866)), accepted by the owner, 2026-11-13:
+"we had it before and we still need it":** the exception moves to Social Club 2.4.0.302's `SocialClubHelper.exe` (TimeDateStamp `0x6aeb6937`,
 SizeOfImage `0x26e000`), the build RDR2's Steam depot installs since November 2026, in place of 2.4.0.240's.
 - **Why.** Since the update every RDR2 Play falls back to multi-process, which one address space cannot hold
   (`pla841-rdr2-census3`, `census4`; [PLA-865](https://linear.app/playportdev/issue/PLA-865)).
@@ -67,7 +67,7 @@ added: under `--single-process` the GPU service already runs as a thread of the 
   keeps today's multi-process policy.
 - **Exact build and code, not just a name.** Only `SocialClubHelper.exe`, x64,
   TimeDateStamp `0x6a86d563`, SizeOfImage `0x244000`, is eligible *(2.4.0.302's `0x6aeb6937`/`0x26e000` instead,
-  as proposed above)*. Before changing
+  as amended above)*. Before changing
   flags or refusing a child, madeira-unix 0190 reads the already-open image into
   a private, non-executable buffer and runs willfaust/Madeira's `293cd39` guard:
   all 48 SHA-256 ranges, section layout, vtables, and zero code/data tails.
@@ -82,7 +82,7 @@ added: under `--single-process` the GPU service already runs as a thread of the 
   `--disable-gpu-compositing`, each unless present.)* Every verified `--type=` helper child is refused with
   `STATUS_ACCESS_DENIED`. Other executables and unverified helper children keep
   today's policy. *(Under the Social Club layout every helper `--type=` child is refused:
-  [0189](0189-no-social-club-helper-child-under-the-layout.md), proposed.)* No generic child blocklist or stock-CEF address-space changes.
+  [0189](0189-no-social-club-helper-child-under-the-layout.md), accepted 2026-11-13.)* No generic child blocklist or stock-CEF address-space changes.
 - **The in-memory compatibility change.** Port the helper adapter from
   willfaust/Madeira (`61dce1d`, originally `0f40502`/`fcfb69a`, guarded by `293cd39`):
   - Put position-independent x64 thunks in the checked zero tails of `.text`
