@@ -1,0 +1,156 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 13 Nov 2026 01:55:35 +0100
+Subject: [PATCH] ntdll: under the Social Club layout, refuse a helper's
+ --type= children
+
+PLA-865. Social Club 2.4.0.302 brought a SocialClubHelper.exe build
+(TimeDateStamp 0x6aeb6937, SizeOfImage 0x26e000) that madeira-unix
+0190's guard does not verify, so its browser runs multi-process. The
+layout routes every SocialClubHelper.exe by name (0226): the browser
+took the slots, and each child's chrome_elf asked for its 32 GiB
+PartitionAlloc pool, was refused (kind=8, STATUS_NO_MEMORY) and trapped
+in its allocator's start (0x80000003). The browser started its storage
+service again 1,237 times in 90 s (pla841-rdr2-census4); after 64
+processes the identity registry refused every child, each still costing
+about 2.4 MB, until the footprint reached the limit.
+
+Under the layout every --type= child is now refused at
+NtCreateUserProcess with STATUS_ACCESS_DENIED, as a verified helper's
+child already was, whether or not single-process is enabled: the layout
+holds one CEF process's pools, so no child could start. A refused start
+creates no process. The first four refusals and every 256th are logged
+with their count ([sc-layout] refusing helper --type= child #n). The
+decision is pp_sc_child.h's, which test_sc_child compiles from this
+patch. A play without the layout, and a verified browser, are unchanged.
+
+Linear: PLA-865
+Class: ios-port
+Evidence: tools/tests/test_sc_child.py (host check; the phone gate, an RDR2 Play on the layout with Social Club 2.4.0.302, is not run)
+Offered-upstream: no; the Social Club layout is Playport's own
+---
+ build/ntdll-unix/pp_sc_child.h | 35 +++++++++++++++++++++++++++++
+ build/ntdll-unix/process_ios.c | 40 +++++++++++++++++++++++++---------
+ build/ntdll-unix/virtual_ios.c |  2 ++
+ 3 files changed, 67 insertions(+), 10 deletions(-)
+ create mode 100644 build/ntdll-unix/pp_sc_child.h
+
+diff --git a/build/ntdll-unix/pp_sc_child.h b/build/ntdll-unix/pp_sc_child.h
+new file mode 100644
+index 00000000..6a789e30
+--- /dev/null
++++ b/build/ntdll-unix/pp_sc_child.h
+@@ -0,0 +1,35 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later */
++/* Included by process_ios.c: whether a SocialClubHelper.exe --type= child may
++ * start (decision 0150, PLA-865).
++ *
++ * A verified helper's child is refused: its browser runs single-process, so
++ * the child would be a second CEF process. Under the Social Club layout every
++ * child is refused as well, verified or not. The layout holds one CEF
++ * process's PartitionAlloc pools in its slots, and the helper that asked first
++ * owns them; ppsc_route refuses each later helper's 16 GiB-and-up reserve with
++ * STATUS_NO_MEMORY, so a child's chrome_elf traps in its allocator's start
++ * (0x80000003) before its first line of Chromium runs. Its browser starts it
++ * again: Social Club 2.4.0.302, which the single-process guard does not
++ * verify, started its storage service 1,237 times in 90 s
++ * (pla841-rdr2-census4), until the dead children's memory ended the Play.
++ * A refused start costs no process. */
++#ifndef PP_SC_CHILD_H
++#define PP_SC_CHILD_H
++
++enum pp_sc_child { PPSCC_START, PPSCC_REFUSE_VERIFIED, PPSCC_REFUSE_LAYOUT };
++
++static enum pp_sc_child pp_sc_child_verdict( int verified, int layout )
++{
++    if (verified) return PPSCC_REFUSE_VERIFIED;
++    return layout ? PPSCC_REFUSE_LAYOUT : PPSCC_START;
++}
++
++/* Whether the n-th layout refusal (from 1) is logged: the first four, then
++ * every 256th, which carries the count. A browser restarting a child must
++ * not fill the log. */
++static int pp_sc_child_logged( unsigned n )
++{
++    return n <= 4 || !(n & 255);
++}
++
++#endif
+diff --git a/build/ntdll-unix/process_ios.c b/build/ntdll-unix/process_ios.c
+index 52ad03a6..b7f0eba5 100644
+--- a/build/ntdll-unix/process_ios.c
++++ b/build/ntdll-unix/process_ios.c
+@@ -76,6 +76,7 @@
+ #include "wine/debug.h"
+ #include "pp_game_sc_refuse.h"
+ #include "pp_sc_single_cmdline.h"
++#include "pp_sc_child.h"
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(process);
+ 
+@@ -1249,23 +1250,42 @@ NTSTATUS WINAPI NtCreateUserProcess( HANDLE *process_handle_ptr, HANDLE *thread_
+                                    params->ImagePathName.Length / sizeof(WCHAR),
+                                    params->CommandLine.Buffer,
+                                    params->CommandLine.Length / sizeof(WCHAR) );
+-        if (kind != SC_NOT_HELPER && playport_sc_single_enabled())
++        if (kind != SC_NOT_HELPER)
+         {
+             int fd, needs_close;
+             int verified = 0;
+-            if (!server_get_unix_fd( file_handle, FILE_READ_DATA, &fd, &needs_close, NULL, NULL ))
++            if (playport_sc_single_enabled())
+             {
+-                verified = pp_sc_single_preflight( fd );
+-                if (needs_close) close( fd );
++                if (!server_get_unix_fd( file_handle, FILE_READ_DATA, &fd, &needs_close, NULL, NULL ))
++                {
++                    verified = pp_sc_single_preflight( fd );
++                    if (needs_close) close( fd );
++                }
++                else dprintf( 2, "[sc-single] cannot read helper; multi-process fallback\n" );
+             }
+-            else dprintf( 2, "[sc-single] cannot read helper; multi-process fallback\n" );
+-            if (verified && kind == SC_CHILD)
++            if (kind == SC_CHILD)
+             {
+-                dprintf( 2, "[sc-single] refusing verified helper --type= child\n" );
+-                status = STATUS_ACCESS_DENIED;
+-                goto done;
++                extern int pp_sc_layout_ready(void);
++                static unsigned layout_refused;
++                unsigned n;
++                switch (pp_sc_child_verdict( verified, pp_sc_layout_ready() ))
++                {
++                case PPSCC_REFUSE_VERIFIED:
++                    dprintf( 2, "[sc-single] refusing verified helper --type= child\n" );
++                    status = STATUS_ACCESS_DENIED;
++                    goto done;
++                case PPSCC_REFUSE_LAYOUT:
++                    n = __atomic_add_fetch( &layout_refused, 1, __ATOMIC_RELAXED );
++                    if (pp_sc_child_logged( n ))
++                        dprintf( 2, "[sc-layout] refusing helper --type= child #%u: the layout holds one CEF process's pools, "
++                                    "so its allocator could not start (PLA-865)\n", n );
++                    status = STATUS_ACCESS_DENIED;
++                    goto done;
++                case PPSCC_START:
++                    break;
++                }
+             }
+-            if (verified)
++            else if (verified)
+             {
+                 int len = params->CommandLine.Length / sizeof(WCHAR), how, n;
+                 int cap = len + 256;
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 0470806e..2ecef932 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -2157,6 +2157,8 @@ static size_t    ios_jumbo_hold_size;
+  * pre-ml1029 behaviour. */
+ static size_t    ios_jumbo_hold_keep;
+ #include "pp_sc_boot.h"
++/* For process_ios.c (PLA-865): whether this Play holds the Social Club layout. */
++int pp_sc_layout_ready(void) { return ppsc_ready; }
+ #include "pp_sc_owner.h"
+ 
+ static void *anon_mmap_tryfixed( void *start, size_t size, int prot, int flags );

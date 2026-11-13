@@ -21,6 +21,14 @@ ask; ELF_META2 and the 8,960 MiB game hold go ([PLA-841](https://linear.app/play
 [PLA-842](https://linear.app/playportdev/issue/PLA-842)). The low hold at exec stays in every Play, and
 0236's refusal runs before the elastic policy.
 
+**Amended as built 2026-11-13 ([PLA-865](https://linear.app/playportdev/issue/PLA-865)):** under the layout
+every `SocialClubHelper.exe` `--type=` child is refused at its start (`STATUS_ACCESS_DENIED`, madeira-unix
+0298), verified or not, and whether or not single-process is on. The layout holds one CEF process's pools, so a
+child's 32 GiB PartitionAlloc ask is refused and its chrome_elf traps. With Social Club 2.4.0.302, a build the
+guard does not verify ([PLA-866](https://linear.app/playportdev/issue/PLA-866)), the multi-process browser
+started its storage service 1,237 times in 90 s and the dead children's memory ended the Play
+(`pla841-rdr2-census4`). The multi-process fallback below therefore runs no child under the layout.
+
 **The trigger, as the owner decided on PLA-840 (2026-11-12) and as built:** the layout engages when what a
 Play starts is a Rockstar bootstrap Playport verified by hash (`SocialClubBootstrap`, PlayportKit): a
 game whose install folder holds one, which for RDR2's Steam copy is `PlayRDR2.exe` with depot 1899671's
