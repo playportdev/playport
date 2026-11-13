@@ -47,7 +47,9 @@ The unix stage copies this directory into the Madeira tree as `build/ppsync`
   - `ppsync_kick(tid)`: a system APC was queued, or the thread is being ended.
     Its wait, now or the next one, returns `ECANCELED` having consumed nothing.
     ntdll then makes a zero-timeout server wait, which runs the APC (or ends the
-    thread), and waits again.
+    thread), and waits again. A non-alertable `NtDelayExecution` is a wait on no
+    object (wine-unix 0205), so a thread in `Sleep()` is kicked too; in
+    `select()` nothing reached it (PLA-851).
   - `ppsync_freeze(tid, on)`: the thread's logical suspend count left or
     reached zero. A frozen thread's wait is not satisfied, and a frozen thread
     does not start or leave a wait. A server wait behaves the same way:
