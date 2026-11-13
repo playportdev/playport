@@ -1,0 +1,336 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 13 Nov 2026 15:56:42 +0100
+Subject: [PATCH] signal: a host abort on a game's thread logs its reason
+
+The Witcher 3 1.32 ended with exception 0x80000101 in a run with
+MESA_KK_FAULT_SPLIT=1 (PLA-880 repro 4), and nothing said why. That code is
+EXCEPTION_WINE_ASSERTION, which abrt_handler raises for SIGABRT: host code
+called abort() on the game's dxvk-cs thread (the one that records its
+Vulkan command buffers), inside winevulkan, at a pc in libsystem_kernel.
+A thread with a TEB keeps its SIGABRT (ml784's rule), so the game gets the
+exception, the pseudo-process teardown ends only the game, and the crash
+report that would hold the abort's reason is never written.
+
+The library that aborts leaves its reason in its crash-reporter
+annotations, the __crash_info section an iOS crash report shows as
+"Application Specific Information": Metal's failed assertion, libc's
+assert, an uncaught Objective-C or C++ exception, a malloc error. Before
+abrt_handler adopts a SIGABRT whose pc is host code (not the JIT pool or a
+guest band), it now writes, once a process:
+- "[abort-why] SIGABRT from host code on tid T, adopted as the game's
+  EXCEPTION_WINE_ASSERTION (0x80000101); what the aborting library left:";
+- "[abort-why] <image>: <message>" for each message of every loaded
+  image's annotations, and its abort cause, or "no library left a message";
+- "[abort-why] #i <address> <image>`<symbol>+<offset>": the pc, the link
+  register and the frame pointer chain above the abort, without their
+  pointer authentication codes.
+
+pp_abort_why.h finds a section by name in any segment of a Mach-O image
+(__DATA, or __DATA_DIRTY in the shared cache), takes an annotation's
+messages and walks a frame chain through a reader that may refuse an
+address. The handler reads everything with mach_vm_read_overwrite, so a
+bad pointer ends a read instead of faulting, and allocates nothing. Under
+MADEIRA_NO_DIAGNOSTICS (the release app) it writes nothing.
+
+Linear: PLA-880
+Class: diagnostics
+Evidence: tools/tests/test_abort_why.py (a synthetic dylib's sections, annotations of versions 0, 4 and 5, frame chains ended by a loop, a jump and a refused read); PLA-880 (repro 4: exception 80000101 at host pc 0x2503c51fc on dxvk-cs with no reason)
+Offered-upstream: no
+---
+ build/ntdll-unix/pp_abort_why.h     | 136 ++++++++++++++++++++++++++++
+ build/ntdll-unix/signal_arm64_ios.c | 131 +++++++++++++++++++++++++++
+ 2 files changed, 267 insertions(+)
+ create mode 100644 build/ntdll-unix/pp_abort_why.h
+
+diff --git a/build/ntdll-unix/pp_abort_why.h b/build/ntdll-unix/pp_abort_why.h
+new file mode 100644
+index 0000000..92d24ac
+--- /dev/null
++++ b/build/ntdll-unix/pp_abort_why.h
+@@ -0,0 +1,136 @@
++/* Playport (PLA-880): why host code called abort() on a thread of a game.
++ *
++ * SIGABRT from host code on a thread with a TEB becomes the game's
++ * EXCEPTION_WINE_ASSERTION (0x80000101, abrt_handler), and the game ends with
++ * that code and nothing else: The Witcher 3's dxvk-cs thread did, inside
++ * winevulkan, at a pc in libsystem_kernel. The library that aborts leaves its
++ * reason in its crash-reporter annotations (the __crash_info section an iOS
++ * crash report reads as "Application Specific Information": Metal's failed
++ * assertion, libc's assert, an uncaught Objective-C or C++ exception, a
++ * malloc error), and the host frames above the abort name the caller. These
++ * are the parts of finding them that need no Apple headers: a Mach-O image's
++ * section by name, the messages of an annotation, and a walk of a frame
++ * pointer chain through a reader that may refuse an address. The handler
++ * (signal_arm64_ios.c) reads with mach_vm_read_overwrite, so a bad pointer
++ * ends a walk instead of faulting in the handler. */
++#ifndef PP_ABORT_WHY_H
++#define PP_ABORT_WHY_H
++
++#include <stddef.h>
++#include <stdint.h>
++#include <string.h>
++
++#define PPAW_MH_MAGIC_64 0xfeedfacfu
++#define PPAW_LC_SEGMENT_64 0x19u
++
++struct ppaw_mach_header {
++    uint32_t magic, cputype, cpusubtype, filetype, ncmds, sizeofcmds, flags, reserved;
++};
++struct ppaw_load_command {
++    uint32_t cmd, cmdsize;
++};
++struct ppaw_segment {
++    uint32_t cmd, cmdsize;
++    char segname[16];
++    uint64_t vmaddr, vmsize, fileoff, filesize;
++    uint32_t maxprot, initprot, nsects, flags;
++};
++struct ppaw_section {
++    char sectname[16], segname[16];
++    uint64_t addr, size;
++    uint32_t offset, align, reloff, nreloc, flags, reserved1, reserved2, reserved3;
++};
++
++/* The loaded (slid) address and size of the 64-bit image's first section of
++ * that name, in any segment: __crash_info is in __DATA, or in __DATA_DIRTY in
++ * the shared cache. 0 when the header is not one or has no such section. */
++static inline int ppaw_find_section( const void *header, intptr_t slide, const char *name,
++                                     uint64_t *addr, uint64_t *size )
++{
++    const struct ppaw_mach_header *mh = header;
++    const uint8_t *p, *end;
++    uint32_t i, j;
++
++    if (!mh || mh->magic != PPAW_MH_MAGIC_64) return 0;
++    p = (const uint8_t *)(mh + 1);
++    end = p + mh->sizeofcmds;
++    for (i = 0; i < mh->ncmds; i++)
++    {
++        const struct ppaw_load_command *lc = (const void *)p;
++        if ((size_t)(end - p) < sizeof(*lc) || lc->cmdsize < sizeof(*lc) ||
++            lc->cmdsize > (size_t)(end - p))
++            return 0;
++        if (lc->cmd == PPAW_LC_SEGMENT_64)
++        {
++            const struct ppaw_segment *seg = (const void *)p;
++            const struct ppaw_section *sect = (const void *)(seg + 1);
++            if (lc->cmdsize < sizeof(*seg) ||
++                (uint64_t)seg->nsects * sizeof(*sect) > lc->cmdsize - sizeof(*seg))
++                return 0;
++            for (j = 0; j < seg->nsects; j++)
++            {
++                if (strncmp( sect[j].sectname, name, sizeof(sect[j].sectname) )) continue;
++                *addr = sect[j].addr + (uint64_t)slide;
++                *size = sect[j].size;
++                return 1;
++            }
++        }
++        p += lc->cmdsize;
++    }
++    return 0;
++}
++
++/* CrashReporterClient's crashreporter_annotations_t (version 5) */
++struct ppaw_crash_info {
++    uint64_t version;          /* 0: never filled */
++    uint64_t message;          /* char *, CRSetCrashLogMessage */
++    uint64_t signature_string;
++    uint64_t backtrace;
++    uint64_t message2;         /* char *, CRSetCrashLogMessage2 */
++    uint64_t thread;
++    uint64_t dialog_mode;
++    uint64_t abort_cause;      /* version 5 */
++};
++
++/* The message pointers of an annotation the section held `size` bytes of,
++ * into msgs (message, then message2), and its abort cause (0 if none): how
++ * many messages */
++static inline unsigned ppaw_crash_messages( const struct ppaw_crash_info *info, uint64_t size,
++                                            uint64_t msgs[2], uint64_t *abort_cause )
++{
++    unsigned n = 0;
++
++    *abort_cause = 0;
++    if (size < offsetof(struct ppaw_crash_info, message) + sizeof(uint64_t) || !info->version)
++        return 0;
++    if (info->message) msgs[n++] = info->message;
++    if (size >= offsetof(struct ppaw_crash_info, message2) + sizeof(uint64_t) && info->message2)
++        msgs[n++] = info->message2;
++    if (info->version >= 5 && size >= sizeof(*info)) *abort_cause = info->abort_cause;
++    return n;
++}
++
++/* A frame pointer chain's return addresses, from fp: each frame is the
++ * caller's fp and the return address. It ends at a frame the reader refuses,
++ * an fp that is not 8-aligned, does not grow toward older frames or jumps more
++ * than PPAW_FRAME_MAX, or a return address of 0. */
++#define PPAW_FRAME_MAX (8u << 20)
++typedef int (*ppaw_reader)( uint64_t addr, uint64_t frame[2], void *ctx );
++
++static inline unsigned ppaw_walk( uint64_t fp, ppaw_reader read, void *ctx, uint64_t *ret,
++                                  unsigned max )
++{
++    unsigned n = 0;
++
++    while (n < max && fp && !(fp & 7))
++    {
++        uint64_t frame[2];
++        if (!read( fp, frame, ctx ) || !frame[1]) break;
++        ret[n++] = frame[1];
++        if (frame[0] <= fp || frame[0] - fp > PPAW_FRAME_MAX) break;
++        fp = frame[0];
++    }
++    return n;
++}
++
++#endif /* PP_ABORT_WHY_H */
+diff --git a/build/ntdll-unix/signal_arm64_ios.c b/build/ntdll-unix/signal_arm64_ios.c
+index de7acb8..826c642 100644
+--- a/build/ntdll-unix/signal_arm64_ios.c
++++ b/build/ntdll-unix/signal_arm64_ios.c
+@@ -10021,6 +10021,135 @@ static void ios_decline_foreign_fault( int sig, const void *pc, const void *addr
+     if (ios_play_end_hook) ios_play_end_hook( sig );
+     signal( sig, SIG_DFL );
+ }
++
++/* PLA-880: SIGABRT from host code on a thread with a TEB is adopted as the
++ * game's EXCEPTION_WINE_ASSERTION (0x80000101, abrt_handler): the game ends
++ * with that code, the pseudo-process teardown keeps the app, and no crash
++ * report is written, so the abort's reason was lost (The Witcher 3's dxvk-cs
++ * thread, inside winevulkan, at a pc in libsystem_kernel). Before it is
++ * adopted, write what the aborting library left in its crash-reporter
++ * annotations and the host frames above the abort (pp_abort_why.h), once a
++ * process. Every read is mach_vm_read_overwrite and nothing allocates. Quiet
++ * under MADEIRA_NO_DIAGNOSTICS (the release app). */
++#include <mach-o/dyld.h>
++#include "pp_abort_why.h"
++
++static int ios_abort_read_frame( uint64_t addr, uint64_t frame[2], void *ctx )
++{
++    mach_vm_size_t got = 0;
++
++    (void)ctx;
++    return mach_vm_read_overwrite( mach_task_self(), (mach_vm_address_t)addr, 2 * sizeof(uint64_t),
++                                   (mach_vm_address_t)frame, &got ) == KERN_SUCCESS &&
++           got == 2 * sizeof(uint64_t);
++}
++
++/* A C string of host memory, at most size - 1 bytes, read a page at a time */
++static void ios_abort_read_str( uint64_t addr, char *buf, size_t size )
++{
++    size_t have = 0;
++
++    while (have + 1 < size)
++    {
++        uint64_t at = addr + have;
++        size_t n = 0x4000 - (size_t)(at & 0x3fff);
++        mach_vm_size_t got = 0;
++
++        if (n > size - 1 - have) n = size - 1 - have;
++        if (mach_vm_read_overwrite( mach_task_self(), (mach_vm_address_t)at, n,
++                                    (mach_vm_address_t)(buf + have), &got ) != KERN_SUCCESS || got != n)
++            break;
++        if (memchr( buf + have, 0, n )) return;
++        have += n;
++    }
++    buf[have] = 0;
++}
++
++/* A return address without its pointer authentication code */
++static uint64_t ios_abort_strip( uint64_t p )
++{
++    register uint64_t lr __asm__( "x30" ) = p;
++
++    __asm__ volatile( "xpaclri" : "+r"(lr) );
++    return lr;
++}
++
++static void ios_log_host_abort( ucontext_t *context )
++{
++    extern void *ios_jit_rx_base_global;
++    extern void *ios_jit_rw_base_global;
++    extern size_t ios_jit_pool_size_global;
++    static int said;
++    uintptr_t pc = (uintptr_t)PC_sig( context );
++    uintptr_t rx = (uintptr_t)ios_jit_rx_base_global, rw = (uintptr_t)ios_jit_rw_base_global;
++    size_t sz = ios_jit_pool_size_global;
++    uint64_t ret[24];
++    unsigned count, i, n, found = 0;
++    char text[512];
++
++    /* the guest's own abort runs in the pool or a guest band */
++    if ((sz && rx && pc >= rx && pc < rx + sz) || (sz && rw && pc >= rw && pc < rw + sz) ||
++        (pc >= 0x7000000000ull && pc < 0x8000000000ull))
++        return;
++    if (said++ || getenv( "MADEIRA_NO_DIAGNOSTICS" )) return;
++
++    dprintf( 2, "[abort-why] SIGABRT from host code on tid %04x, adopted as the game's "
++                "EXCEPTION_WINE_ASSERTION (0x80000101); what the aborting library left:\n",
++             NtCurrentTeb() ? (unsigned)(ULONG_PTR)NtCurrentTeb()->ClientId.UniqueThread : 0 );
++    count = _dyld_image_count();
++    for (i = 0; i < count; i++)
++    {
++        struct ppaw_crash_info info;
++        uint64_t addr, size, msgs[2], cause;
++        mach_vm_size_t got = 0;
++        const char *name, *slash;
++        unsigned m, k;
++
++        if (!ppaw_find_section( _dyld_get_image_header( i ), _dyld_get_image_vmaddr_slide( i ),
++                                "__crash_info", &addr, &size ))
++            continue;
++        if (size > sizeof(info)) size = sizeof(info);
++        memset( &info, 0, sizeof(info) );
++        if (mach_vm_read_overwrite( mach_task_self(), (mach_vm_address_t)addr, size,
++                                    (mach_vm_address_t)&info, &got ) != KERN_SUCCESS)
++            continue;
++        m = ppaw_crash_messages( &info, got, msgs, &cause );
++        if (!m && !cause) continue;
++        name = _dyld_get_image_name( i );
++        slash = name ? strrchr( name, '/' ) : NULL;
++        name = slash ? slash + 1 : name ? name : "?";
++        for (k = 0; k < m; k++)
++        {
++            ios_abort_read_str( msgs[k], text, sizeof(text) );
++            dprintf( 2, "[abort-why] %s: %s\n", name, text );
++        }
++        if (cause) dprintf( 2, "[abort-why] %s: abort cause %llu\n", name, (unsigned long long)cause );
++        found++;
++    }
++    if (!found) dprintf( 2, "[abort-why] no library left a message\n" );
++
++    ret[0] = pc;
++    ret[1] = LR_sig( context );
++    n = 2 + ppaw_walk( FP_sig( context ), ios_abort_read_frame, NULL, ret + 2, 22 );
++    for (i = 0; i < n; i++)
++    {
++        uint64_t a = i ? ios_abort_strip( ret[i] ) : ret[i];
++        Dl_info dl;
++
++        if (dladdr( (void *)(uintptr_t)a, &dl ) && dl.dli_fname)
++        {
++            const char *file = strrchr( dl.dli_fname, '/' );
++            file = file ? file + 1 : dl.dli_fname;
++            if (dl.dli_sname)
++                dprintf( 2, "[abort-why] #%u 0x%llx %s`%s+0x%llx\n", i, (unsigned long long)a, file,
++                         dl.dli_sname, (unsigned long long)(a - (uintptr_t)dl.dli_saddr) );
++            else
++                dprintf( 2, "[abort-why] #%u 0x%llx %s+0x%llx\n", i, (unsigned long long)a, file,
++                         (unsigned long long)(a - (uintptr_t)dl.dli_fbase) );
++        }
++        else dprintf( 2, "[abort-why] #%u 0x%llx\n", i, (unsigned long long)a );
++    }
++}
+ #endif
+ 
+ /* ---------------------------------------------------------------------------
+@@ -14558,6 +14687,8 @@ static void abrt_handler( int signal, siginfo_t *siginfo, void *sigcontext )
+         return;
+     }
+     ios_track_signal( signal, sigcontext );
++    /* PLA-880: a host abort's reason, before it becomes the game's exception */
++    ios_log_host_abort( (ucontext_t *)sigcontext );
+ #endif
+     setup_exception( sigcontext, &rec );
+ }

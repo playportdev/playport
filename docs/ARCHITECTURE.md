@@ -114,8 +114,13 @@ with its own PEB and private ntdll copy:
   thread of a child that has already exited ends at its first unclaimed fault, and a
   live child's thread that takes one fault 2,000 times ends its process with
   `c0000005`. Any other unhandled host fault, and a storm in the session, still end
-  the app. A thread the server kills (`TerminateThread`, or the threads of an ended
-  process) gets no signal on iOS. The server stops it with `thread_suspend` and sends
+  the app. A host `abort()` on a thread of a game (one with a TEB; a Metal assertion
+  inside the Vulkan driver, say) becomes the game's `EXCEPTION_WINE_ASSERTION`,
+  `0x80000101`, which ends only the game and leaves no crash report; a dev build first
+  writes `[abort-why]` lines: the aborting library's crash-reporter message and the
+  host frames above the abort (`patches/madeira-unix` 0301, PLA-880). A thread the
+  server kills (`TerminateThread`, or the threads of an ended process) gets no signal
+  on iOS. The server stops it with `thread_suspend` and sends
   it to `user_mode_abort_thread` once it is in code FEX translated and holds nothing
   (`patches/madeira-unix` 0127, retried on a timer for about a minute). Anywhere else,
   such as host code, FEX itself, or an in-process wait, it runs on until its next
