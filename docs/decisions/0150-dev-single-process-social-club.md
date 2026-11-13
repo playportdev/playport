@@ -70,8 +70,8 @@ added: under `--single-process` the GPU service already runs as a thread of the 
   present.)* *(Amended again 2026-10-30: and `--disable-gpu` and
   `--disable-gpu-compositing`, each unless present.)* Every verified `--type=` helper child is refused with
   `STATUS_ACCESS_DENIED`. Other executables and unverified helper children keep
-  today's policy. *(Amended 2026-11-13, PLA-865: under the Social Club layout an unverified helper's
-  `--type=` child is refused as well; 0169's amendment of that date.)* No generic child blocklist or stock-CEF address-space changes.
+  today's policy. *(Under the Social Club layout every helper `--type=` child is refused:
+  [0189](0189-no-social-club-helper-child-under-the-layout.md), proposed.)* No generic child blocklist or stock-CEF address-space changes.
 - **The in-memory compatibility change.** Port the helper adapter from
   willfaust/Madeira (`61dce1d`, originally `0f40502`/`fcfb69a`, guarded by `293cd39`):
   - Put position-independent x64 thunks in the checked zero tails of `.text`

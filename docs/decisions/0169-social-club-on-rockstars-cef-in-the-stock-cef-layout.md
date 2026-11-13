@@ -43,13 +43,10 @@ where the host maps it before any guest runs, `0x7900000000`, ending at or below
 can move it, so it is not one of the layout's slots. The Decision's layout bullet below gives the old
 geometry.
 
-**Amended as built 2026-11-13 ([PLA-865](https://linear.app/playportdev/issue/PLA-865)):** under the layout
-every `SocialClubHelper.exe` `--type=` child is refused at its start (`STATUS_ACCESS_DENIED`, madeira-unix
-0298), verified or not, and whether or not single-process is on. The layout holds one CEF process's pools, so a
-child's 32 GiB PartitionAlloc ask is refused and its chrome_elf traps. With Social Club 2.4.0.302, a build the
-guard does not verify ([PLA-866](https://linear.app/playportdev/issue/PLA-866)), the multi-process browser
-started its storage service 1,237 times in 90 s and the dead children's memory ended the Play
-(`pla841-rdr2-census4`). The multi-process fallback below therefore runs no child under the layout.
+**Amended, proposed 2026-11-13, by [0189](0189-no-social-club-helper-child-under-the-layout.md)
+([PLA-865](https://linear.app/playportdev/issue/PLA-865), built as madeira-unix 0298):** under the layout
+every `SocialClubHelper.exe` `--type=` child is refused at its start, so the multi-process fallback below
+runs no child under the layout; the policy and its evidence are that record's.
 
 **The trigger, as the owner decided on PLA-840 (2026-11-12) and as built:** the layout engages when what a
 Play starts is a Rockstar bootstrap Playport verified by hash (`SocialClubBootstrap`, PlayportKit): a

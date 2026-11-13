@@ -11,6 +11,11 @@ Morhen, and the "Mechanisms kept" of 0180 and of its spec
 [PLA-799](https://linear.app/playportdev/issue/PLA-799). PLA-835's tickets build it; until a ticket
 lands, the keys it removes stay as built, and no part of it is shown on the phone yet.
 
+**Superseded in part, proposed 2026-11-13, by [0188](0188-the-witcher-3-132s-keys-go-without-an-alignment-rule.md):**
+The Witcher 3 1.32's keys go without a natural-alignment rule, since its Loading stall was a corrupt
+`content/metadata.store`, not placement (PLA-837); that record replaces the line "The keys go when that
+rule plays it, not after a run without any rule" below.
+
 ## Context
 
 - **Every memory key was set after its game had failed for players.** A game nobody here has tried
