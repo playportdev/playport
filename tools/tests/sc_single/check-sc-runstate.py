@@ -25,17 +25,17 @@ blob = bytes(int(x, 16) for x in re.findall(r'0x([\da-fA-F]{2})', array))
 assert define('IOS_SCH_TASK') + 64 == define('IOS_SCH_RUN_RING')
 assert define('IOS_SCH_RUN_RING') + define('IOS_SCH_RUN_RING_SIZE') <= define('IOS_SCH_CACHE')
 assert define('IOS_SCH_TASK_ANY') + 11 <= define('IOS_SCH_RUN_INSTALL')
-assert define('IOS_SCH_RUN_INSTALL') + len(blob) <= 0x181000
+assert define('IOS_SCH_RUN_INSTALL') + len(blob) <= 0x1a5000
 assert int(re.search(r'#define IOS_SC_RUN_RING_RVA (0x[\da-f]+)', header_text)[1], 0) == define('IOS_SCH_RUN_RING')
 
 with tempfile.TemporaryDirectory(dir=SCRATCH, prefix='madeira-sc-runstate-') as name:
     folder = Path(name)
     (folder / 'ios_sc_runstate_diag.h').write_text(header_text)
     linker = folder / 'trace.ld'
-    linker.write_text('SECTIONS { . = 0x1740e0; .fixture : { *(.fixture) }\n'
+    linker.write_text('SECTIONS { . = 0x198310; .fixture : { *(.fixture) }\n'
                       ' . = 0x%x; .text : { *(.text) } }\n' % define('IOS_SCH_RUN_INSTALL') +
-                      'install_return = 0x174128; restore_return = 0x174134;\n'
-                      'get_thread_id = 0x1814a8; trace_ring = 0x%x;\n' % define('IOS_SCH_RUN_RING'))
+                      'install_return = 0x198358; restore_return = 0x198364;\n'
+                      'get_thread_id = 0x1a54b0; trace_ring = 0x%x;\n' % define('IOS_SCH_RUN_RING'))
     objects = []
     for source in ('sc-runstate-trace', 'sc-pump-run-fixture'):
         obj = folder / (source + '.o')
@@ -52,7 +52,7 @@ with tempfile.TemporaryDirectory(dir=SCRATCH, prefix='madeira-sc-runstate-') as 
     symbols = subprocess.check_output(['nm', str(folder / 'trace.elf')], text=True)
     for symbol, expected in (('sc_run_install', define('IOS_SCH_RUN_INSTALL')),
                              ('sc_run_restore', define('IOS_SCH_RUN_RESTORE')),
-                             ('fixture_install', 0x174121), ('fixture_restore', 0x17412b)):
+                             ('fixture_install', 0x198351), ('fixture_restore', 0x19835b)):
         assert int(re.search(r'([\da-f]+) T ' + symbol, symbols)[1], 16) == expected
     print('PASS: production trace bytes, hook return RVAs and disjoint code/data ranges', flush=True)
 
@@ -97,7 +97,7 @@ void *ios_jit_translate_addr_for_owner(void *addr, void *owner)
 unsigned long long ios_jit_module_base_for_va(unsigned long long addr, unsigned long long *size)
 {
     uintptr_t base = (uintptr_t)image;
-    if (addr >= base && addr - base < 0x244000) { *size = 0x244000; return base; }
+    if (addr >= base && addr - base < 0x26e000) { *size = 0x26e000; return base; }
     return 0;
 }
 #include "ios_sc_runstate_diag.h"
@@ -162,15 +162,15 @@ int main(void)
     struct sigaction sa = {0}; sa.sa_handler = fault_handler;
     sigemptyset(&sa.sa_mask);
     assert(!sigaction(SIGSEGV, &sa, NULL)); assert(!sigaction(SIGBUS, &sa, NULL));
-    image = mmap(NULL, 0x244000, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    pool = mmap(NULL, 0x244000, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    image = mmap(NULL, 0x26e000, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    pool = mmap(NULL, 0x26e000, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     assert(image != MAP_FAILED && pool != MAP_FAILED);
-    memcpy(image + 0x1740e0, fixture, sizeof(fixture));
+    memcpy(image + 0x198310, fixture, sizeof(fixture));
     memcpy(image + TRACE_ENTRY, trace, sizeof(trace));
-    patch(0x174121, TRACE_ENTRY, 7); patch(0x17412b, TRACE_RESTORE, 9);
-    *(uintptr_t *)(image + 0x1814a8) = (uintptr_t)get_tid;
-    assert(!mprotect(image + 0x1000, 0x180000, PROT_READ | PROT_EXEC));
-    run = (void *)(image + 0x1740e0);
+    patch(0x198351, TRACE_ENTRY, 7); patch(0x19835b, TRACE_RESTORE, 9);
+    *(uintptr_t *)(image + 0x1a54b0) = (uintptr_t)get_tid;
+    assert(!mprotect(image + 0x1000, 0x1a4000, PROT_READ | PROT_EXEC));
+    run = (void *)(image + 0x198310);
     void *vtable[6] = {0}; vtable[5] = body;
     struct Pump p = {vtable, {0}, NULL, 0x1234};
     struct ios_sc_run_ring *ring = (void *)(image + IOS_SC_RUN_RING_RVA);
@@ -213,19 +213,19 @@ int main(void)
     *(uint32_t *)(image + 0x3c) = 0x80;
     memcpy(image + 0x80, "PE\0\0", 4);
     *(uint16_t *)(image + 0x84) = 0x8664;
-    *(uint32_t *)(image + 0x88) = 0x6a86d563;
+    *(uint32_t *)(image + 0x88) = 0x6aeb6937;
     *(uint16_t *)(image + 0x98) = 0x20b;
-    *(uint32_t *)(image + 0xd0) = 0x244000;
-    assert(ios_sc_diag_helper((uintptr_t)image, (uintptr_t)image + 0x173be4));
-    assert(!ios_sc_diag_helper((uintptr_t)image, (uintptr_t)image + 0x7e60));
+    *(uint32_t *)(image + 0xd0) = 0x26e000;
+    assert(ios_sc_diag_helper((uintptr_t)image, (uintptr_t)image + 0x197df4));
+    assert(!ios_sc_diag_helper((uintptr_t)image, (uintptr_t)image + 0x8880));
     *(uint32_t *)(image + 0x88) ^= 1;
-    assert(!ios_sc_diag_helper((uintptr_t)image, (uintptr_t)image + 0x173be4));
+    assert(!ios_sc_diag_helper((uintptr_t)image, (uintptr_t)image + 0x197df4));
     *(uint32_t *)(image + 0x88) ^= 1;
     memcpy(pool + IOS_SC_RUN_RING_RVA, ring, sizeof(*ring));
-    uint64_t stack[256] = {0}; stack[12] = (uintptr_t)image + 0x17412b;
-    ios_sc_runstate_dump((uintptr_t)image, (uintptr_t)image + 0x173be4, (uintptr_t)&p, (uintptr_t)stack);
+    uint64_t stack[256] = {0}; stack[12] = (uintptr_t)image + 0x19835b;
+    ios_sc_runstate_dump((uintptr_t)image, (uintptr_t)image + 0x197df4, (uintptr_t)&p, (uintptr_t)stack);
     puts("PASS: exact helper/fault gate, protected/unmapped/partial reads and view/pool diagnostics");
-    assert(!munmap(image, 0x244000)); assert(!munmap(pool, 0x244000));
+    assert(!munmap(image, 0x26e000)); assert(!munmap(pool, 0x26e000));
     return 0;
 }
 '''

@@ -2,7 +2,7 @@
  * delivery. The guarded constructor takes only RCX=this, RDX=payload; it sets
  * R8/R9 itself before its first call and reads no incoming vector arguments.
  * Replay its RBX home store, retain both inputs across the logger, then resume
- * its original body. For the guarded 0x32070 delegate call only, its known
+ * its original body. For the guarded 0x32500 delegate call only, its known
  * frame gives the parent caller and its owning window field gives the HWND.
  * Other constructor callers carry no such frame/object assumption.
  * At most 16 scalar records per image; no URLs or tickets.
@@ -31,7 +31,7 @@ sc_ui_close:
     lea r10, [rip+delegate_caller]
     cmp rax, r10
     jne log
-    mov rax, qword ptr [rsp+0x78]  /* 0x32070 pushes RBX and allocates 0x20 */
+    mov rax, qword ptr [rsp+0x78]  /* 0x32500 pushes RDI and allocates 0x20 */
     mov qword ptr [rsp+0x28], rax
     mov rax, qword ptr [r9+0x188]  /* source=owner+0x10; HWND=owner+0x198 */
     mov qword ptr [rsp+0x30], rax

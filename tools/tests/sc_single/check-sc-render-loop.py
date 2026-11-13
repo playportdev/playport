@@ -67,7 +67,7 @@ static unsigned char *CC_SHA256(const void *data, uint32_t len, unsigned char *m
 
 defines = '\n'.join(line for line in native.splitlines() if line.startswith('#define IOS_SCH_'))
 symbols = {
-    'current_loop': define('IOS_SCH_CURRENT_LOOP'), 'helper_new': 0x13e708,
+    'current_loop': define('IOS_SCH_CURRENT_LOOP'), 'helper_new': 0x162928,
     'loop_ctor': define('IOS_SCH_LOOP_CTOR'), 'original_webkit': define('IOS_SCH_WEBKIT'),
     'loop_work': define('IOS_SCH_LOOP_WORK'), 'loop_delayed': define('IOS_SCH_LOOP_DELAYED'),
     'loop_idle': define('IOS_SCH_LOOP_IDLE'), 'task': define('IOS_SCH_TASK'),
@@ -94,13 +94,13 @@ with tempfile.TemporaryDirectory(dir=SCRATCH, prefix='madeira-sc-loop-') as name
     ):
         assert int(re.search(r'([\da-f]+) T ' + symbol + r'\b', table)[1], 16) == define(macro)
     assert define('IOS_SCH_THUNK') + 112 <= define('IOS_SCH_LOOP_INIT')
-    assert 0x180400 <= define('IOS_SCH_LOOP_INIT') < define('IOS_SCH_LOOP_INIT') + len(blob) <= 0x181000
-    assert 0x1d03bc <= define('IOS_SCH_TASK') < define('IOS_SCH_TASK') + 64 <= define('IOS_SCH_CACHE')
+    assert 0x1a4400 <= define('IOS_SCH_LOOP_INIT') < define('IOS_SCH_LOOP_INIT') + len(blob) <= 0x1a5000
+    assert 0x1f936c <= define('IOS_SCH_TASK') < define('IOS_SCH_TASK') + 64 <= define('IOS_SCH_CACHE')
     print('PASS: assembly matches production bytes, entry RVAs and disjoint zero-tail ranges', flush=True)
 
     drain_linker = folder / 'drain.ld'
     drain_linker.write_text('SECTIONS { . = %d; .text : { *(.text) } }\n' % define('IOS_SCH_RENDER_DRAIN') +
-                           'current_loop = %d; run_until_idle = 0x1728b0;\n' % define('IOS_SCH_CURRENT_LOOP'))
+                           'current_loop = %d; run_until_idle = 0x196c40;\n' % define('IOS_SCH_CURRENT_LOOP'))
     subprocess.run(['as', '--64', str(fixtures / 'sc-render-drain.S'),
                     '-o', str(folder / 'drain.o')], check=True)
     subprocess.run(['ld', '-T', str(drain_linker), str(folder / 'drain.o'),
@@ -111,7 +111,7 @@ with tempfile.TemporaryDirectory(dir=SCRATCH, prefix='madeira-sc-loop-') as name
     assert (folder / 'drain.bin').read_bytes() == drain_blob
     trace_blob = bytes(int(x, 16) for x in re.findall(r'0x([\da-fA-F]{2})', array('ios_sch_run_trace')))
     assert define('IOS_SCH_RUN_INSTALL') + len(trace_blob) <= define('IOS_SCH_RENDER_DRAIN')
-    assert define('IOS_SCH_RENDER_DRAIN') + len(drain_blob) <= 0x181000
+    assert define('IOS_SCH_RENDER_DRAIN') + len(drain_blob) <= 0x1a5000
 
     code = r'''
 #define _GNU_SOURCE
@@ -153,8 +153,8 @@ static void reset_image(char *image, uint64_t base)
     memset(image, 0, IOS_SCH_SIZE);
     nt = (IMAGE_NT_HEADERS){{ IMAGE_FILE_MACHINE_AMD64, 2, IOS_SCH_STAMP },
                            { IMAGE_NT_OPTIONAL_HDR64_MAGIC, IOS_SCH_SIZE }};
-    sections[0] = (IMAGE_SECTION_HEADER){ IOS_SCH_TEXT, {0x17f34c}, 0x17f400, IMAGE_SCN_MEM_EXECUTE };
-    sections[1] = (IMAGE_SECTION_HEADER){ IOS_SCH_DATA, {0x43bc}, 0x1a00, IMAGE_SCN_MEM_WRITE };
+    sections[0] = (IMAGE_SECTION_HEADER){ IOS_SCH_TEXT, {0x1a3358}, 0x1a3400, IMAGE_SCN_MEM_EXECUTE };
+    sections[1] = (IMAGE_SECTION_HEADER){ IOS_SCH_DATA, {0x436c}, 0x1a00, IMAGE_SCN_MEM_WRITE };
     sch_fill(image);
     uint64_t *vb = (void *)(image + IOS_SCH_VT_BROWSER), *vr = (void *)(image + IOS_SCH_VT_RENDERER);
     vb[IOS_SCH_SLOT_BROWSER] = vr[IOS_SCH_SLOT_RENDERER] = base + IOS_SCH_GET_HANDLER;
@@ -412,7 +412,7 @@ int main(int argc, char **argv)
     assert(IOS_SCH_IPC_CONNECT + 5 + ipc_disp == IOS_SCH_IPC_TRACE);
     assert(!memcmp(image + IOS_SCH_IPC_TRACE, ios_sch_ipc_rebind, sizeof(ios_sch_ipc_rebind)));
     assert(!memcmp(image + IOS_SCH_IPC_SPLIT, ios_sch_ipc_split, sizeof(ios_sch_ipc_split)));
-    const size_t split_sites[] = {0x4b290, 0x4ba50, 0x4a5c3, 0x4baab, 0x4d255, 0x4d2fb, 0x4a719, 0x4da6c};
+    const size_t split_sites[] = {0x4c0d0, 0x4c840, 0x4b0e3, 0x4c8a6, 0x4e097, 0x4e143, 0x4b279, 0x4e76a};
     const size_t split_entries[] = {IOS_SCH_IPC_SPLIT, IOS_SCH_IPC_CAPTURE, IOS_SCH_IPC_STORE,
         IOS_SCH_IPC_ROLE, IOS_SCH_IPC_GLOBAL_LOOP, IOS_SCH_IPC_INITIAL_CONNECT, IOS_SCH_IPC_DESTROY,
         IOS_SCH_IPC_DIRECT};
@@ -422,7 +422,7 @@ int main(int argc, char **argv)
         memcpy(&displacement, image + split_sites[i] + 1, sizeof(displacement));
         assert(split_sites[i] + 5 + displacement == split_entries[i]);
     }
-    const size_t trace_sites[] = {0x174121, 0x17412b};
+    const size_t trace_sites[] = {0x198351, 0x19835b};
     const size_t trace_entries[] = {IOS_SCH_RUN_INSTALL, IOS_SCH_RUN_RESTORE};
     const size_t trace_spans[] = {7, 9};
     assert(!memcmp(image + IOS_SCH_RUN_INSTALL, ios_sch_run_trace, sizeof(ios_sch_run_trace)));
@@ -455,14 +455,14 @@ int main(int argc, char **argv)
     puts("PASS: production patch accepts view/preferred bases and rejects changed code/layout/tails without writes");
 
     stub(image, IOS_SCH_CURRENT_LOOP, (uintptr_t)get_loop);
-    stub(image, 0x13e708, (uintptr_t)helper_new);
+    stub(image, 0x162928, (uintptr_t)helper_new);
     stub(image, IOS_SCH_LOOP_CTOR, (uintptr_t)construct_loop);
     stub(image, IOS_SCH_WEBKIT, (uintptr_t)original_webkit);
     stub(image, IOS_SCH_LOOP_WORK, (uintptr_t)do_work);
     stub(image, IOS_SCH_LOOP_DELAYED, (uintptr_t)do_delayed);
     stub(image, IOS_SCH_LOOP_IDLE, (uintptr_t)do_idle);
-    stub(image, 0x1728b0, (uintptr_t)run_until_idle);
-    stub(image, 0x11be60, (uintptr_t)browser_drain);
+    stub(image, 0x196c40, (uintptr_t)run_until_idle);
+    stub(image, 0x13f410, (uintptr_t)browser_drain);
     /* Self-written call-frame fixture around the real patched CALL. */
     const unsigned char enter[] = {0x48,0x83,0xec,0x28};
     const unsigned char leave[] = {0x48,0x83,0xc4,0x28,0xc3};
@@ -472,17 +472,17 @@ int main(int argc, char **argv)
     if (argc > 1 && !strcmp(argv[1], "legacy-drain")) {
         /* Control: the original global drain must fail the TLS ownership
          * check while the browser's state is active on the other thread. */
-        int32_t old_disp = 0x11be60 - IOS_SCH_RENDER_DRAIN_SITE - 5;
+        int32_t old_disp = 0x13f410 - IOS_SCH_RENDER_DRAIN_SITE - 5;
         memcpy(image + IOS_SCH_RENDER_DRAIN_SITE + 1, &old_disp, sizeof(old_disp));
     }
     *(uintptr_t *)(image + IOS_SCH_POST_TASK) = (uintptr_t)post_delayed;
-    assert(!mprotect(image + 0x1000, 0x180000, PROT_READ | PROT_EXEC));
+    assert(!mprotect(image + 0x1000, 0x1a4000, PROT_READ | PROT_EXEC));
     struct Loop browser = {0};
     struct RunState active_browser = {7, 0, (void *)0x87654321};
     browser.state = &active_browser;
     browser_loop = &browser;
     browser_parent = &active_browser;
-    *(struct Loop **)(image + 0x1cea00) = &browser;
+    *(struct Loop **)(image + 0x1f7a10) = &browser;
     current = &browser;
     pthread_t thread;
     void *initialize = (void *)(uintptr_t)*(uint64_t *)(image + IOS_SCH_VT_RPH);
@@ -497,7 +497,7 @@ int main(int argc, char **argv)
     ((void (ABI *)(void *))(image + IOS_SCH_LOOP_INIT))(expected_handler);
     assert(current == &browser && posts == before && constructions == 1);
     assert(browser.state == browser_parent && drain_calls == 4);
-    ((void (ABI *)(void))(image + 0x11be60))(); /* Browser's original global drain still works. */
+    ((void (ABI *)(void))(image + 0x13f410))(); /* Browser's original global drain still works. */
     assert(browser.state == browser_parent && drain_calls == 5);
     assert(!munmap(image, IOS_SCH_SIZE));
     puts("PASS: preferred vtables + unrelocated task callbacks execute; TLS, IPC work/timers, bounds, refs and shutdown");

@@ -62,13 +62,13 @@ static unsigned char *CC_SHA256(const void *data, uint32_t len, unsigned char *m
 defines = '\n'.join(x for x in native.splitlines() if x.startswith('#define IOS_SCH_'))
 blob = bytes(int(x, 16) for x in re.findall(r'0x([\da-fA-F]{2})', array('ios_sch_ipc_split')))
 symbols = {
-    'cef_currently_on': 0x181af8, 'renderer_manager': define('IOS_SCH_IPC_CONTEXT'),
-    'command_line': define('IOS_SCH_IPC_CONTEXT') + 8, 'browser_manager': 0x1cdb90,
-    'helper_new': 0x13e708, 'manager_ctor': 0x4a400, 'manager_init': 0x4ba50,
-    'init_continue': 0x4ba55, 'ctor_continue': 0x4a5ca, 'role_continue': 0x4bab2,
-    'helper_global_loop': 0x11bb70, 'manager_connect': 0x4ac10,
-    'manager_dtor': 0x4a6e0, 'helper_delete': 0x13e744, 'dtor_continue': 0x4a720,
-    'helper_log': 0x111340, 'manager_getter': 0x4b290, 'direct_continue': 0x4da73,
+    'cef_currently_on': 0x1a5b00, 'renderer_manager': define('IOS_SCH_IPC_CONTEXT'),
+    'command_line': define('IOS_SCH_IPC_CONTEXT') + 8, 'browser_manager': 0x1f6ba0,
+    'helper_new': 0x162928, 'manager_ctor': 0x4af20, 'manager_init': 0x4c840,
+    'init_continue': 0x4c845, 'ctor_continue': 0x4b0ea, 'role_continue': 0x4c8ad,
+    'helper_global_loop': 0x13f090, 'manager_connect': 0x4ba30,
+    'manager_dtor': 0x4b240, 'helper_delete': 0x162964, 'dtor_continue': 0x4b280,
+    'helper_log': 0x133f80, 'manager_getter': 0x4c0d0, 'direct_continue': 0x4e771,
 }
 entries = {
     'sc_ipc_get_manager': 'IOS_SCH_IPC_SPLIT', 'sc_ipc_capture_config': 'IOS_SCH_IPC_CAPTURE',
@@ -95,7 +95,7 @@ with tempfile.TemporaryDirectory(dir=SCRATCH, prefix='madeira-sc-split-') as nam
         assert int(re.search(r'([\da-f]+) T ' + entry + r'\b', table)[1], 16) == define(macro)
     trace = bytes(int(x, 16) for x in re.findall(r'0x([\da-fA-F]{2})', array('ios_sch_ipc_rebind')))
     assert define('IOS_SCH_IPC_TRACE') + len(trace) <= define('IOS_SCH_IPC_SPLIT')
-    assert define('IOS_SCH_IPC_SPLIT') + len(blob) <= 0x181000
+    assert define('IOS_SCH_IPC_SPLIT') + len(blob) <= 0x1a5000
     assert define('IOS_SCH_IPC_COUNT') + 4 <= define('IOS_SCH_IPC_CONTEXT')
     assert define('IOS_SCH_IPC_CONTEXT') + 16 <= define('IOS_SCH_CACHE')
     channel_symbols = {'reply_continue': define('IOS_SCH_RENDER_CHANNEL_KEEP') + 7,
@@ -111,7 +111,7 @@ with tempfile.TemporaryDirectory(dir=SCRATCH, prefix='madeira-sc-split-') as nam
                     str(folder / 'channels.elf'), str(folder / 'channels.bin')], check=True)
     channel_blob = bytes(int(x, 16) for x in re.findall(r'0x([\da-fA-F]{2})', array('ios_sch_renderer_channels')))
     assert (folder / 'channels.bin').read_bytes() == channel_blob
-    assert 0x180400 <= define('IOS_SCH_RENDER_CHANNEL_THUNK')
+    assert 0x1a4400 <= define('IOS_SCH_RENDER_CHANNEL_THUNK')
     assert define('IOS_SCH_RENDER_CHANNEL_THUNK') + len(channel_blob) <= define('IOS_SCH_THUNK')
 
     code = r'''
@@ -196,7 +196,7 @@ static int pause_init;
 static uint16_t channel0[] = {'r','g','s','c','_','i','p','c','_','c','4','_','c','h','a','n','n','e','l','_','0',0};
 static uint16_t channel1[] = {'r','g','s','c','_','i','p','c','_','c','4','_','c','h','a','n','n','e','l','_','1',0};
 static uint16_t channel2[] = {'r','g','s','c','_','i','p','c','_','c','4','_','c','h','a','n','n','e','l','_','2',0};
-static struct Manager **browser_slot(void) { return (void *)(image + 0x1cdb90); }
+static struct Manager **browser_slot(void) { return (void *)(image + 0x1f6ba0); }
 static struct Manager **renderer_slot(void) { return (void *)(image + IOS_SCH_IPC_CONTEXT); }
 static int ABI currently_on(int thread)
 {
@@ -224,7 +224,7 @@ static struct Manager *ABI construct(struct Manager *m)
 {
     assert(on_renderer && *renderer_slot() == m && *browser_slot() == &browser);
     constructions++; init_members(m);
-    store_ctor(m, image + 0x4a5c3);
+    store_ctor(m, image + 0x4b0e3);
     assert(*browser_slot() == &browser);
     return m;
 }
@@ -257,11 +257,11 @@ static int ABI initialize(struct Manager *m, struct Config **cfg)
         atomic_store(&initializing, 1);
         while (!atomic_load(&proceed)) { }
     }
-    store_role(m, 0, image + 0x4baab);
+    store_role(m, 0, image + 0x4c8a6);
     assert(m->role == (unsigned int)on_renderer);
     if (on_renderer) assert(get_manager() == m); /* original Initialize uses this getter too */
-    call_loop(m, image + 0x4d255);
-    initial_connect(m, channel0, 0, image + 0x4d2fb);
+    call_loop(m, image + 0x4e097);
+    initial_connect(m, channel0, 0, image + 0x4e143);
     if (on_renderer) assert(!m->client.active); /* browser's channel must never be opened here */
     else assert(m->client.active);
     config.ref.refs--;
@@ -316,13 +316,13 @@ static void destructor_fixture(void)
     /* Same aligned frame and live values as the original destructor at its hook. */
     const unsigned char prologue[] = {0x57,0x56,0x48,0x83,0xec,0x28,0x48,0x89,0xcf,0x31,0xf6,
                                       0x48,0x8b,0x8f,0x28,0x1a,0,0,0xe9,0,0,0,0};
-    memcpy(image + 0x4a6e0, prologue, sizeof(prologue));
-    int32_t disp = 0x4a719 - (0x4a6e0 + sizeof(prologue));
-    memcpy(image + 0x4a6e0 + sizeof(prologue) - 4, &disp, 4);
+    memcpy(image + 0x4b240, prologue, sizeof(prologue));
+    int32_t disp = 0x4b279 - (0x4b240 + sizeof(prologue));
+    memcpy(image + 0x4b240 + sizeof(prologue) - 4, &disp, 4);
     unsigned char tail[] = {0x48,0x89,0xca,0x48,0x89,0xf9,0x48,0xb8,0,0,0,0,0,0,0,0,
                             0xff,0xd0,0x48,0x83,0xc4,0x28,0x5e,0x5f,0xc3};
     uintptr_t fn = (uintptr_t)finish_destroy;
-    memcpy(tail + 8, &fn, 8); memcpy(image + 0x4a720, tail, sizeof(tail));
+    memcpy(tail + 8, &fn, 8); memcpy(image + 0x4b280, tail, sizeof(tail));
 }
 static void *renderer_thread(void *unused)
 {
@@ -330,7 +330,7 @@ static void *renderer_thread(void *unused)
     on_renderer = 1;
     struct Manager *m = probe_get(get_manager);
     assert(m != &browser && m == *renderer_slot() && m->role == 1);
-    assert(lookup_direct(image + 0x4da6c) == m);
+    assert(lookup_direct(image + 0x4e76a) == m);
     m->client.handler = 2; /* renderer handler registration from OnWebKitInitialized */
     assert(config.ref.refs == 1 && m->owned != browser.owned && m->name.heap != browser.name.heap);
     const uint16_t *name = channel1;
@@ -375,8 +375,8 @@ __asm__(
 "initial_connect: sub $40,%rsp; jmp *%r9\n"
 "lookup_direct: push %rbx; sub $32,%rsp; jmp *%rcx\n"
 /* Execute the actual Channel Response instruction, subsequent argument loads
- * and relative CALL to Connect. RSI is its CefString pointer wrapper. */
-"receive_channel: push %rbx; push %rsi; sub $40,%rsp; mov %rcx,%rax; mov %rdx,%rsi;"
+ * and relative CALL to Connect. RDI is its CefString pointer wrapper. */
+"receive_channel: push %rbx; push %rdi; sub $40,%rsp; mov %rcx,%rax; mov %rdx,%rdi;"
 "mov %r8b,%bl; jmp *%r9\n"
 "probe_get: push %rbx; push %rdi; sub $40,%rsp; mov %rcx,%rbx;"
 "mov $11,%ecx; mov $22,%edx; mov $33,%r8d; mov $44,%r9d; mov $55,%r10d; mov $66,%r11d;"
@@ -396,8 +396,8 @@ int main(int argc, char **argv)
     IMAGE_NT_HEADERS nt = {{ IMAGE_FILE_MACHINE_AMD64, 2, IOS_SCH_STAMP },
                            { IMAGE_NT_OPTIONAL_HDR64_MAGIC, IOS_SCH_SIZE }};
     IMAGE_SECTION_HEADER sec[2] = {
-        { IOS_SCH_TEXT, {0x17f34c}, 0x17f400, IMAGE_SCN_MEM_EXECUTE },
-        { IOS_SCH_DATA, {0x43bc}, 0x1a00, IMAGE_SCN_MEM_WRITE }};
+        { IOS_SCH_TEXT, {0x1a3358}, 0x1a3400, IMAGE_SCN_MEM_EXECUTE },
+        { IOS_SCH_DATA, {0x436c}, 0x1a00, IMAGE_SCN_MEM_WRITE }};
     sch_fill(image);
     uint64_t base = IOS_SCH_IMAGE_BASE;
     *(uint64_t *)(image + IOS_SCH_VT_BROWSER + IOS_SCH_SLOT_BROWSER * 8) = base + IOS_SCH_GET_HANDLER;
@@ -407,7 +407,7 @@ int main(int argc, char **argv)
     *(uint64_t *)(image + IOS_SCH_VT_RPH) = base + IOS_SCH_WEBKIT;
     ios_sc_render_handler_patch(image, IOS_SCH_SIZE, &nt, sec);
     if (argc > 1 && !strcmp(argv[1], "disabled")) {
-        assert(!memcmp(image + 0x4b290, "\x48\x8b\x05\xf9\x28\x18\x00\xc3", 8));
+        assert(!memcmp(image + 0x4c0d0, "\x48\x8b\x05\xc9\xaa\x1a\x00\xc3", 8));
         for (size_t i = 0; i < sizeof(ios_sch_ipc_split); i++) assert(!image[IOS_SCH_IPC_SPLIT+i]);
         assert((unsigned char)image[IOS_SCH_IPC_CONNECT] == 0xe9);
         assert((unsigned char)image[IOS_SCH_RENDER_DRAIN_SITE] == 0xe8);
@@ -418,44 +418,44 @@ int main(int argc, char **argv)
         puts("PASS: IPC split opt-out preserves the earlier renderer, drain and diagnostic patches");
         return 0;
     }
-    assert((unsigned char)image[0x4b290] == 0xe9);
+    assert((unsigned char)image[0x4c0d0] == 0xe9);
     assert((unsigned char)image[IOS_SCH_RENDER_CHANNEL_KEEP] == 0xe9);
     if (argc > 1 && !strcmp(argv[1], "legacy"))
-        memcpy(image + 0x4b290, "\x48\x8b\x05\xf9\x28\x18\x00\xc3", 8);
+        memcpy(image + 0x4c0d0, "\x48\x8b\x05\xc9\xaa\x1a\x00\xc3", 8);
     if (argc > 1 && !strcmp(argv[1], "old-rebind"))
         memcpy(image + IOS_SCH_RENDER_CHANNEL_KEEP, "\x44\x0f\xb6\xc3\x48\x8b\xc8", 7);
-    stub(0x13e708, (uintptr_t)allocate); stub(0x4a400, (uintptr_t)construct);
-    image[0x4a5ca] = image[0x4bab2] = (char)0xc3;
-    stub(0x4ba55, (uintptr_t)initialize); stub(0x11bb70, (uintptr_t)global_loop);
+    stub(0x162928, (uintptr_t)allocate); stub(0x4af20, (uintptr_t)construct);
+    image[0x4b0ea] = image[0x4c8ad] = (char)0xc3;
+    stub(0x4c845, (uintptr_t)initialize); stub(0x13f090, (uintptr_t)global_loop);
     stub(IOS_SCH_IPC_CONNECT + 5, (uintptr_t)connect_body);
-    stub(0x111340, (uintptr_t)log_rebind); stub(0x13e744, (uintptr_t)delete_manager);
+    stub(0x133f80, (uintptr_t)log_rebind); stub(0x162964, (uintptr_t)delete_manager);
     const unsigned char loop_return[] = {0x48,0x83,0xc4,0x20,0x41,0x5e,0xc3};
     const unsigned char connect_return[] = {0x48,0x83,0xc4,0x28,0xc3};
     const unsigned char direct_return[] = {0x48,0x89,0xd8,0x48,0x83,0xc4,0x20,0x5b,0xc3};
-    memcpy(image + 0x4d25a, loop_return, sizeof(loop_return));
-    memcpy(image + 0x4d300, connect_return, sizeof(connect_return));
-    memcpy(image + 0x4da73, direct_return, sizeof(direct_return));
+    memcpy(image + 0x4e09c, loop_return, sizeof(loop_return));
+    memcpy(image + 0x4e148, connect_return, sizeof(connect_return));
+    memcpy(image + 0x4e771, direct_return, sizeof(direct_return));
     /* Hash-guard fillers are not executable helper instructions. Model the
      * untouched continuation: unwrap the name, call Connect, then clean up.
      * These synthetic instructions are independent of the supplied binary. */
-    unsigned char reply_continue[13] = {0x48,0x8b,0x16,0xe8,0,0,0,0,0x90,0x90,0x90,0x90,0x90};
+    unsigned char reply_continue[13] = {0x48,0x8b,0x17,0xe8,0,0,0,0,0x90,0x90,0x90,0x90,0x90};
     int32_t reply_disp = IOS_SCH_IPC_CONNECT - (IOS_SCH_RENDER_CHANNEL_KEEP + 7 + 8);
     memcpy(reply_continue + 4, &reply_disp, 4);
     memcpy(image + IOS_SCH_RENDER_CHANNEL_KEEP + 7, reply_continue, sizeof(reply_continue));
-    const unsigned char reply_return[] = {0x48,0x83,0xc4,0x28,0x5e,0x5b,0xc3};
+    const unsigned char reply_return[] = {0x48,0x83,0xc4,0x28,0x5f,0x5b,0xc3};
     memcpy(image + IOS_SCH_RENDER_CHANNEL_REPLY + 0x19, reply_return, sizeof(reply_return));
     destructor_fixture();
-    *(uintptr_t *)(image + 0x181af8) = (uintptr_t)currently_on;
-    assert(!mprotect(image + 0x1000, 0x180000, PROT_READ | PROT_EXEC));
+    *(uintptr_t *)(image + 0x1a5b00) = (uintptr_t)currently_on;
+    assert(!mprotect(image + 0x1000, 0x1a4000, PROT_READ | PROT_EXEC));
     static void *ref_vtable[] = {(void *)add_ref};
     config = (struct Config){NULL, vbtable, {ref_vtable, 1}};
     *browser_slot() = &browser; init_members(&browser); browser.client.handler = 1;
-    get_manager = (void *)(image + 0x4b290);
+    get_manager = (void *)(image + 0x4c0d0);
     assert(probe_get(get_manager) == &browser && !allocations);
-    assert(lookup_direct(image + 0x4da6c) == &browser);
+    assert(lookup_direct(image + 0x4e76a) == &browser);
     struct Config *argument = &config;
     config.ref.refs++; /* same ownership as the original WinMain call */
-    ((int (ABI *)(struct Manager *, struct Config **))(image + 0x4ba50))(&browser, &argument);
+    ((int (ABI *)(struct Manager *, struct Config **))(image + 0x4c840))(&browser, &argument);
     assert(config.ref.refs == 1 && browser.client.active && global_loops == 1);
     /* Browser reconnection still closes its old channel when requested; only
      * the renderer's Channel Response instruction changed. */
@@ -476,7 +476,7 @@ int main(int argc, char **argv)
     assert(get_manager() == &browser && browser.client.active && *renderer_slot());
     assert(logs == 7 && creation_logs == 1 && config.ref.refs == 1);
     shutdown_complete = 1;
-    ((void (ABI *)(struct Manager *))(image + 0x4a6e0))(&browser);
+    ((void (ABI *)(struct Manager *))(image + 0x4b240))(&browser);
     assert(destroys == 2 && deletes == 1 && !*renderer_slot() && !*browser_slot());
     assert(destroyed_channels == 3);
     assert(!munmap(image, IOS_SCH_SIZE));

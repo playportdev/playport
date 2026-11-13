@@ -22,11 +22,11 @@ def define(name):
 start = native.index('static const unsigned char ios_sch_ui_trace[')
 array = native[start:native.index('};', start) + 2]
 blob = bytes(int(x, 16) for x in re.findall(r'0x([\da-fA-F]{2})', array))
-symbols = {'close_count': define('IOS_SCH_UI_COUNT'), 'helper_log': 0x111340,
+symbols = {'close_count': define('IOS_SCH_UI_COUNT'), 'helper_log': 0x133f80,
            'ctor_continue': define('IOS_SCH_UI_CTOR') + 5,
            'delegate_caller': define('IOS_SCH_UI_DELEGATE_CALLER')}
 assert define('IOS_SCH_IPC_SPLIT') + 661 <= define('IOS_SCH_UI_TRACE')
-assert define('IOS_SCH_UI_TRACE') + len(blob) <= 0x181000
+assert define('IOS_SCH_UI_TRACE') + len(blob) <= 0x1a5000
 assert define('IOS_SCH_IPC_CONTEXT') + 16 <= define('IOS_SCH_UI_COUNT')
 assert define('IOS_SCH_UI_COUNT') + 4 <= define('IOS_SCH_CACHE')
 
@@ -133,26 +133,26 @@ static void *worker(void *unused)
 ''' + array + r'''
 int main(void)
 {
-    char *image = mmap(NULL, 0x244000, PROT_READ | PROT_WRITE,
+    char *image = mmap(NULL, 0x26e000, PROT_READ | PROT_WRITE,
                        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     assert(image != MAP_FAILED);
     memcpy(image + TRACE, ios_sch_ui_trace, sizeof(ios_sch_ui_trace));
     image[CTOR] = (char)0xe9;
     int32_t displacement = TRACE - CTOR - 5;
     memcpy(image + CTOR + 1, &displacement, sizeof(displacement));
-    stub(image, 0x111340, (uintptr_t)logger);
+    stub(image, 0x133f80, (uintptr_t)logger);
     stub(image, CTOR + 5, (uintptr_t)ctor_tail);
-    /* Reproduce the guarded delegate's PUSH RBX / SUB RSP,0x20 frame and
-     * constructor CALL at its exact image offset. No external code runs. */
-    const unsigned char frame[] = {0x40,0x53,0x48,0x83,0xec,0x20};
-    const unsigned char epilogue[] = {0x48,0x83,0xc4,0x20,0x5b,0xc3};
+    /* Reproduce the guarded delegate's RBX home store, PUSH RDI / SUB RSP,0x20
+     * frame and constructor CALL at its exact image offset. No external code runs. */
+    const unsigned char frame[] = {0x48,0x89,0x5c,0x24,0x10,0x57,0x48,0x83,0xec,0x20};
+    const unsigned char epilogue[] = {0x48,0x8b,0x5c,0x24,0x38,0x48,0x83,0xc4,0x20,0x5f,0xc3};
     memcpy(image + DELEGATE, frame, sizeof(frame));
     memset(image + DELEGATE + sizeof(frame), 0x90, DELEGATE_RET - 5 - DELEGATE - sizeof(frame));
     image[DELEGATE_RET - 5] = (char)0xe8;
     displacement = CTOR - DELEGATE_RET;
     memcpy(image + DELEGATE_RET - 4, &displacement, sizeof(displacement));
     memcpy(image + DELEGATE_RET, epilogue, sizeof(epilogue));
-    assert(!mprotect(image + 0x1000, 0x180000, PROT_READ | PROT_EXEC));
+    assert(!mprotect(image + 0x1000, 0x1a4000, PROT_READ | PROT_EXEC));
     entry = (void *)(image + CTOR);
     delegate = (void *)(image + DELEGATE);
     invoke(0, 0); invoke(1, 0); invoke(UINT32_MAX, 0);
@@ -163,7 +163,7 @@ int main(void)
     for (unsigned i=0; i<6; i++) assert(!pthread_create(&threads[i], NULL, worker, NULL));
     for (unsigned i=0; i<6; i++) assert(!pthread_join(threads[i], NULL));
     assert(logs == 16 && bodies == 151 && *(unsigned int *)(image + COUNT) >= 16);
-    assert(!munmap(image, 0x244000));
+    assert(!munmap(image, 0x26e000));
     puts("PASS: observer retains delivery/state, identifies delegate parent/HWND, bounds unknown sources; 151 deliveries, 16 concurrent records");
     return 0;
 }
@@ -222,7 +222,7 @@ ctor_tail:
     subprocess.run(['cc', '-std=gnu11', '-O1', '-Wall', '-fsanitize=address,undefined',
                     '-fno-sanitize-recover=all', '-pthread',
                     '-DTRACE=%d' % define('IOS_SCH_UI_TRACE'), '-DCTOR=%d' % define('IOS_SCH_UI_CTOR'),
-                    '-DCOUNT=%d' % define('IOS_SCH_UI_COUNT'), '-DDELEGATE=0x32070',
+                    '-DCOUNT=%d' % define('IOS_SCH_UI_COUNT'), '-DDELEGATE=0x32500',
                     '-DDELEGATE_RET=%d' % define('IOS_SCH_UI_DELEGATE_CALLER'),
                     str(c), str(asm), '-o', str(binary)], check=True)
     subprocess.run([str(binary)], check=True)

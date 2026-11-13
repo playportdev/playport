@@ -4,7 +4,7 @@
  * the RunState the install site publishes (delegate, dispatcher, quit, depth at
  * +0x14); rbx holding the pump and rdi the outer state across the call; and the
  * caller's rbx in the home slot the restore site reloads ([rsp+0x50] there).
- * Link at 0x1740e0. */
+ * Link at 0x198310. */
 .intel_syntax noprefix
 .section .fixture,"ax"
 .global fixture_run, fixture_install, fixture_restore
