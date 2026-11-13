@@ -2716,6 +2716,37 @@ main(int argc, char **argv)
       printf("ok float-target%s\n", clamp ? " clamp_float_output" : "");
    }
 
+   /* MESA_KK_EXPERIMENTAL=layer_clamp (PLA-880): a vertex shader that writes
+    * its instance as the layer writes it behind a compare with the render
+    * pass's layers from the root table (0 past them, as Direct3D does).
+    * Without the switch the layer is written as it is. */
+   {
+      const char *e = getenv("MESA_KK_EXPERIMENTAL");
+      const bool clamp = e && strstr(e, "layer_clamp");
+      const int before = msl_count();
+      struct pipe_desc d = {"layer", "layer.vert", NULL, NULL, NULL,
+                            "color.frag", TRI, false, FIRST, FILL};
+      make_pipeline(&d, layout);
+      if (before >= 0) {
+         const bool layer = msl_contains(before, msl_count(),
+                                         "[[render_target_array_index]]");
+         /* "tN = tC ? tL : uint(0u);" with tC "tL < <the root table's
+          * render_target_layers>" */
+         const bool clamped =
+            msl_contains(before, msl_count(),
+                         " : uint(0u);\nout.render_target_array_index = t");
+         if (!layer || clamped != clamp) {
+            fprintf(stderr, "layer: the vertex MSL %s a layer, %s the pass's "
+                            "layers; layer_clamp %d\n",
+                    layer ? "writes" : "does not write",
+                    clamped ? "compares it with" : "does not compare it with",
+                    clamp);
+            return 1;
+         }
+      }
+      printf("ok layer%s\n", clamp ? " layer_clamp" : "");
+   }
+
    /* Texel buffers whose views start at a texel that is not 16-byte aligned
     * (storage/uniformTexelBufferOffsetSingleTexelAlignment, which
     * vkd3d-proton requires). The mock aborts if the driver creates a Metal

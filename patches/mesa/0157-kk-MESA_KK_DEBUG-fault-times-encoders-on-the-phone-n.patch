@@ -1,0 +1,700 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 13 Nov 2026 13:56:54 +0100
+Subject: [PATCH] kk: MESA_KK_DEBUG=fault times encoders on the phone, names
+ vertex stages that write a layer, and can leave draws out
+
+The second phone repro of The Witcher 3 1.32's GPU hang (PLA-880) printed
+no encoder timestamps: the counter heap 0156 asked for had 8192 entries,
+and the phone refuses more than 4096 ("Requested Heap size is too large
+(requested 8192 max is 4096)"). The heap now has KK_TS_HEAP_ENTRIES (4096,
+the query pools' limit), so 2048 encoders, and a failed commit says where
+the GPU stopped: "cb #N stopped in enc i" (started, not ended), "stopped
+after enc i ... enc i+1 did not start", or that no encoder wrote one.
+
+The failed command buffer held, after the game's G-buffer passes, a 5-layer
+64x64 RGBA32F pass and a 5-layer 1024x1024 RG16F pass of one 4-vertex draw
+each, then one pass per other layer of each image with the same pipeline,
+then 5 instances into a single-layer R8 target. A vertex stage that writes
+a layer at or past the pass's layers is undefined in Vulkan and Metal
+(Direct3D uses layer 0). With MESA_KK_DEBUG=fault:
+- the trail marks each pipeline whose hardware vertex stage writes a layer
+  or viewport index (msl=...xN[layer]), and the first draw of such a
+  pipeline in a pass of each layer count is logged once ("msl=X writes
+  [layer]: drawn in a pass of L layer(s) WxH, xI instance(s)"), so a run
+  shows whether the game draws one into fewer layers than it may write;
+- MESA_KK_FAULT_SKIP=<MSL hash prefix>,...,layer,viewport (the game's
+  Graphics options) leaves out the draws of those pipelines, counted as
+  skipped=N in the trail and the encoder label, so one run can test
+  whether they are what hangs.
+
+MESA_KK_EXPERIMENTAL=layer_clamp (off by default, in the pipeline cache
+UUID when on) makes a hardware vertex stage write layer 0 for a layer at or
+past the render pass's layers, as Direct3D does: a new system value,
+render_target_layers_kk, read from the root table, which each
+vkCmdBeginRendering sets to Metal's renderTargetArrayLength (1 without
+attachments).
+
+Linear: PLA-880
+Class: diagnostics
+Evidence: build/mesa-host-test/kk-fault-test.c (mock Metal refusing a heap over 4096 entries; layered blits; skips; a stop between encoders), kk-host-test.c "ok layer layer_clamp" (layer.vert); PLA-880 (phone2 repro: timestamps "(none)")
+Offered-upstream: no
+---
+ src/compiler/nir/nir_divergence_analysis.c    |   1 +
+ src/compiler/nir/nir_intrinsics.py            |   3 +
+ src/kosmickrisp/vulkan/kk_cmd_buffer.h        |   4 +
+ src/kosmickrisp/vulkan/kk_cmd_draw.c          |  17 ++
+ src/kosmickrisp/vulkan/kk_debug.c             |   1 +
+ src/kosmickrisp/vulkan/kk_debug.h             |   7 +
+ src/kosmickrisp/vulkan/kk_device_lib.c        |   2 +-
+ src/kosmickrisp/vulkan/kk_fault.c             | 208 +++++++++++++++++-
+ src/kosmickrisp/vulkan/kk_fault.h             |  54 ++++-
+ .../vulkan/kk_nir_lower_descriptors.c         |   3 +
+ src/kosmickrisp/vulkan/kk_physical_device.c   |   3 +-
+ src/kosmickrisp/vulkan/kk_shader.c            |  30 ++-
+ 12 files changed, 312 insertions(+), 21 deletions(-)
+
+diff --git a/src/compiler/nir/nir_divergence_analysis.c b/src/compiler/nir/nir_divergence_analysis.c
+index d45de5b..0d31f6f 100644
+--- a/src/compiler/nir/nir_divergence_analysis.c
++++ b/src/compiler/nir/nir_divergence_analysis.c
+@@ -267,6 +267,7 @@ visit_intrinsic(nir_intrinsic_instr *instr, struct divergence_state *state)
+    case nir_intrinsic_load_blend_const_color_rgba:
+    case nir_intrinsic_load_blend_const_color_aaaa8888_unorm:
+    case nir_intrinsic_load_blend_const_color_rgba8888_unorm:
++   case nir_intrinsic_load_render_target_layers_kk:
+    case nir_intrinsic_load_line_width:
+    case nir_intrinsic_load_aa_line_width:
+    case nir_intrinsic_load_xfb_address:
+diff --git a/src/compiler/nir/nir_intrinsics.py b/src/compiler/nir/nir_intrinsics.py
+index 22505dd..5f06525 100644
+--- a/src/compiler/nir/nir_intrinsics.py
++++ b/src/compiler/nir/nir_intrinsics.py
+@@ -3332,3 +3332,6 @@ system_value("is_depth_clamp_emulated_kk", 1, bit_sizes=[1])
+ system_value("is_viewport_z_transform_emulated_kk", 1, bit_sizes=[1])
+ # Loads the viewport Z range for a given viewport index.
+ load("viewport_z_range_kk", [1], [], [CAN_ELIMINATE, CAN_REORDER])
++# The render pass's layer count (Metal's renderTargetArrayLength, at least 1),
++# for the hardware vertex stage's layer clamp.
++system_value("render_target_layers_kk", 1)
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.h b/src/kosmickrisp/vulkan/kk_cmd_buffer.h
+index 422a809..c15b12a 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_buffer.h
++++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.h
+@@ -46,6 +46,10 @@ struct kk_root_descriptor_table {
+          float viewport_z_range[KK_MAX_VIEWPORTS * 2];
+          bool emulate_depth_clamp;
+          bool emulate_viewport_z;
++
++         /* Playport (PLA-880): the render pass's layers, at least 1, for
++          * MESA_KK_EXPERIMENTAL=layer_clamp */
++         uint32_t render_target_layers;
+       } draw;
+       struct {
+          uint32_t base_group[3];
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_draw.c b/src/kosmickrisp/vulkan/kk_cmd_draw.c
+index 2421899..1b07f01 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_draw.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_draw.c
+@@ -363,6 +363,18 @@ kk_CmdBeginRendering(VkCommandBuffer commandBuffer,
+          pass_descriptor, layer_count ? layer_count : 1u);
+    }
+ 
++   /* Playport (PLA-880): the layers a vertex stage may write, for
++    * MESA_KK_EXPERIMENTAL=layer_clamp; without attachments Metal's length is
++    * 0, so layer 0 only */
++   if (KK_EXPERIMENTAL(LAYER_CLAMP)) {
++      struct kk_descriptor_state *gfx_desc = &cmd->state.gfx.descriptors;
++      const uint32_t rt_layers = no_framebuffer ? 1u : MAX2(layer_count, 1u);
++      if (gfx_desc->root.draw.render_target_layers != rt_layers) {
++         gfx_desc->root.draw.render_target_layers = rt_layers;
++         gfx_desc->root_dirty = true;
++      }
++   }
++
+    /* Check if we are rendering to the whole framebuffer. Required to understand
+     * if we need to load to avoid clearing all attachment when loading.
+     */
+@@ -1805,6 +1817,11 @@ kk_dispatch_draw(struct kk_cmd_buffer *cmd, struct kk_draw_data data)
+       kk_fault_note(cmd, KK_FAULT_INDIRECT);
+    else
+       kk_fault_draw_size(cmd, data.grid.size.x, data.grid.size.y);
++   /* Playport (PLA-880): MESA_KK_FAULT_SKIP leaves the draw out */
++   if (unlikely(cmd->fault.serial) &&
++       kk_fault_skip_draw(cmd, kk_grid_is_indirect(data.grid) ? 0u
++                                                              : data.grid.size.y))
++      return;
+ 
+    if (KK_DEBUG(PASSES)) {
+       KK_PASS_STAT(DRAWS);
+diff --git a/src/kosmickrisp/vulkan/kk_debug.c b/src/kosmickrisp/vulkan/kk_debug.c
+index 4845e52..c6d3914 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.c
++++ b/src/kosmickrisp/vulkan/kk_debug.c
+@@ -81,6 +81,7 @@ const struct debug_named_value experimental_flags[] = {
+    {"soft_fp64", KK_EXPERIMENTAL_SOFT_FP64},
+    {"clamp_float_output", KK_EXPERIMENTAL_CLAMP_FLOAT_OUTPUT},
+    {"zero_init", KK_EXPERIMENTAL_ZERO_INIT},
++   {"layer_clamp", KK_EXPERIMENTAL_LAYER_CLAMP},
+    {NULL, 0},
+ };
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_debug.h b/src/kosmickrisp/vulkan/kk_debug.h
+index 346b58e..7604c6b 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.h
++++ b/src/kosmickrisp/vulkan/kk_debug.h
+@@ -339,6 +339,13 @@ enum kk_experimental {
+     * own, so a Direct3D 12 title's resources start at zero as Direct3D 12
+     * promises; diagnostic until the reason for DIRT 5's Inf and NaN is known. */
+    KK_EXPERIMENTAL_ZERO_INIT = 1ull << 25,
++   /* Playport (PLA-880): a hardware vertex stage that writes a layer writes
++    * layer 0 instead of one past the render pass's layers, as Direct3D
++    * does. Vulkan leaves such a layer's result undefined and Metal its
++    * behaviour; whether one hangs the GPU (The Witcher 3's world transition)
++    * is what this switch tests. In the pipeline cache UUID: it changes the
++    * MSL of every vertex stage that writes a layer */
++   KK_EXPERIMENTAL_LAYER_CLAMP = 1ull << 26,
+ };
+ 
+ extern enum kk_experimental kk_mesa_experimental_flags;
+diff --git a/src/kosmickrisp/vulkan/kk_device_lib.c b/src/kosmickrisp/vulkan/kk_device_lib.c
+index a09d3f6..eea8f06 100644
+--- a/src/kosmickrisp/vulkan/kk_device_lib.c
++++ b/src/kosmickrisp/vulkan/kk_device_lib.c
+@@ -62,7 +62,7 @@ build_precompiled_shaders(struct kk_device *dev)
+          if (pdev->settings.pass_prof)
+             kk_pass_prof_log_pipeline(dev, shader->pipeline, false, hex,
+                                       local_size_threads);
+-         kk_fault_pipeline_built(dev, shader->pipeline, hex);
++         kk_fault_pipeline_built(dev, shader->pipeline, hex, 0u);
+       }
+       memcpy(&shader->info, info, sizeof(*info));
+    }
+diff --git a/src/kosmickrisp/vulkan/kk_fault.c b/src/kosmickrisp/vulkan/kk_fault.c
+index 9960042..8dfd4da 100644
+--- a/src/kosmickrisp/vulkan/kk_fault.c
++++ b/src/kosmickrisp/vulkan/kk_fault.c
+@@ -21,7 +21,9 @@
+ #include "kk_image.h"
+ #include "kk_image_view.h"
+ #include "kk_physical_device.h"
++#include "kk_query_pool.h"
+ 
++#include "compiler/shader_enums.h"
+ #include "kosmickrisp/bridge/mtl_bridge.h"
+ #include "poly/geometry.h"
+ #include "util/hash_table.h"
+@@ -29,6 +31,45 @@
+ 
+ #define MIB (1024.0 * 1024.0)
+ 
++/* Encoder timestamps the counter heap keeps, two an encoder: as many as one
++ * heap may have (the phone refuses 8192: "max is 4096") */
++#define KK_FAULT_TIMESTAMPS KK_TS_HEAP_ENTRIES
++
++/* MESA_KK_FAULT_SKIP=a,b,...: each entry an MSL hash prefix of 1 to 16 hex
++ * digits, or "layer" or "viewport" (a vertex stage writing one) */
++static void
++parse_skip(struct kk_fault_device *f, char *out, size_t size)
++{
++   const char *s = getenv("MESA_KK_FAULT_SKIP");
++   out[0] = '\0';
++   while (s && *s) {
++      const size_t len = strcspn(s, ",");
++      char entry[24];
++      snprintf(entry, sizeof(entry), "%.*s", (int)MIN2(len, sizeof(entry) - 1u), s);
++      const char *what = NULL;
++      if (!strcmp(entry, "layer")) {
++         f->skip_writes |= KK_FAULT_WRITES_LAYER;
++         what = entry;
++      } else if (!strcmp(entry, "viewport")) {
++         f->skip_writes |= KK_FAULT_WRITES_VIEWPORT;
++         what = entry;
++      } else if (len >= 1u && len <= 16u && strspn(entry, "0123456789abcdefABCDEF") == len &&
++                 f->skip_count < KK_FAULT_SKIPS) {
++         f->skip[f->skip_count].prefix = strtoull(entry, NULL, 16);
++         f->skip[f->skip_count].digits = len;
++         f->skip_count++;
++         what = entry;
++      }
++      const size_t used = strlen(out);
++      if (len)
++         snprintf(out + used, size - used, "%s%s%s", used ? "," : "",
++                  what ? what : entry, what ? "" : "(ignored)");
++      s += len;
++      if (*s == ',')
++         s++;
++   }
++}
++
+ void
+ kk_fault_device_init(struct kk_device *dev)
+ {
+@@ -48,12 +89,17 @@ kk_fault_device_init(struct kk_device *dev)
+          mtl_new_timestamp_counter_heap(dev->mtl_handle, KK_FAULT_TIMESTAMPS);
+       dev->fault.timestamp_hz = mtl_device_timestamp_frequency(dev->mtl_handle);
+    }
++   char skip[160];
++   parse_skip(&dev->fault, skip, sizeof(skip));
+    fprintf(stderr,
+            "[kk-fault] on: encoder labels, command buffer trails, geometry heap "
+-           "ring%s, encoder timestamps%s; Metal encoder status: %s\n",
++           "ring%s, encoder timestamps%s; Metal encoder status: %s%s%s; "
++           "vertex layer clamp %s\n",
+            dev->fault.ring ? "" : " (not allocated)",
+            dev->fault.timestamps ? "" : " (none)",
+-           mtl_enable_encoder_execution_status());
++           mtl_enable_encoder_execution_status(),
++           skip[0] ? "; skipping draws: " : "", skip,
++           KK_EXPERIMENTAL(LAYER_CLAMP) ? "on" : "off");
+    fflush(stderr);
+ }
+ 
+@@ -73,8 +119,11 @@ kk_fault_device_finish(struct kk_device *dev)
+          free(entry.data);
+       _mesa_hash_table_u64_destroy(dev->fault.views);
+    }
+-   if (dev->fault.pipelines)
++   if (dev->fault.pipelines) {
++      hash_table_u64_foreach(dev->fault.pipelines, entry)
++         free(entry.data);
+       _mesa_hash_table_u64_destroy(dev->fault.pipelines);
++   }
+    dev->fault.views = dev->fault.pipelines = NULL;
+    simple_mtx_destroy(&dev->fault.lock);
+ }
+@@ -100,6 +149,7 @@ kk_fault_begin_cmd(struct kk_cmd_buffer *cmd)
+    f->open = f->rendering = f->desc_dirty = false;
+    f->meta = NULL;
+    f->dropped = 0u;
++   f->pipeline = NULL;
+    f->serial = KK_DEBUG(FAULT)
+                   ? p_atomic_inc_return(&kk_cmd_buffer_device(cmd)->fault.serial)
+                   : 0u;
+@@ -220,6 +270,8 @@ describe(const struct kk_fault_encoder *e, char *buf, size_t size)
+       if (e->flags & (1u << i))
+          n += snprintf(buf + n, size - n, " %s", names[i]);
+    }
++   if (e->skipped && n > 0 && (size_t)n < size)
++      n += snprintf(buf + n, size - n, " skipped=%u", e->skipped);
+    if (e->meta && n > 0 && (size_t)n < size)
+       snprintf(buf + n, size - n, " %s", e->meta);
+ }
+@@ -302,9 +354,13 @@ kk_fault_pipeline(struct kk_cmd_buffer *cmd, void *pipeline)
+       return;
+    struct kk_device *dev = kk_cmd_buffer_device(cmd);
+    simple_mtx_lock(&dev->fault.lock);
+-   const uint64_t msl = (uint64_t)(uintptr_t)_mesa_hash_table_u64_search(
++   struct kk_fault_pipeline_info *info = _mesa_hash_table_u64_search(
+       dev->fault.pipelines, (uint64_t)(uintptr_t)pipeline);
++   const uint64_t msl = info ? info->msl : 0u;
++   const uint8_t writes = info ? info->writes : 0u;
+    simple_mtx_unlock(&dev->fault.lock);
++   if (e->render)
++      cmd->fault.pipeline = info;
+    unsigned i = 0;
+    while (i < e->pipeline_count && e->pipelines[i].msl != msl)
+       i++;
+@@ -316,7 +372,8 @@ kk_fault_pipeline(struct kk_cmd_buffer *cmd, void *pipeline)
+             e->dispatches++;
+          return;
+       }
+-      e->pipelines[e->pipeline_count++] = (struct kk_fault_pipeline){.msl = msl};
++      e->pipelines[e->pipeline_count++] =
++         (struct kk_fault_pipeline){.msl = msl, .writes = writes};
+    }
+    e->current = i;
+    if (!e->render) {
+@@ -363,7 +420,7 @@ kk_fault_descriptors_changed(struct kk_cmd_buffer *cmd)
+ 
+ void
+ kk_fault_pipeline_built(struct kk_device *dev, void *pipeline,
+-                        const char *msl_hex)
++                        const char *msl_hex, uint64_t outputs_written)
+ {
+    if (!KK_DEBUG(FAULT) || !pipeline || !msl_hex)
+       return;
+@@ -371,13 +428,92 @@ kk_fault_pipeline_built(struct kk_device *dev, void *pipeline,
+    memcpy(prefix, msl_hex, 16);
+    prefix[16] = '\0';
+    const uint64_t msl = strtoull(prefix, NULL, 16);
++   const uint8_t writes =
++      ((outputs_written & VARYING_BIT_LAYER) ? KK_FAULT_WRITES_LAYER : 0u) |
++      ((outputs_written & VARYING_BIT_VIEWPORT) ? KK_FAULT_WRITES_VIEWPORT : 0u);
+    simple_mtx_lock(&dev->fault.lock);
+-   _mesa_hash_table_u64_insert(dev->fault.pipelines,
+-                               (uint64_t)(uintptr_t)pipeline,
+-                               (void *)(uintptr_t)msl);
++   /* A Metal object freed and its address reused: the entry is rewritten in
++    * place, as a command buffer may still point at it */
++   struct kk_fault_pipeline_info *info = _mesa_hash_table_u64_search(
++      dev->fault.pipelines, (uint64_t)(uintptr_t)pipeline);
++   if (!info) {
++      info = malloc(sizeof(*info));
++      if (info)
++         _mesa_hash_table_u64_insert(dev->fault.pipelines,
++                                     (uint64_t)(uintptr_t)pipeline, info);
++   }
++   if (info)
++      *info = (struct kk_fault_pipeline_info){.msl = msl, .writes = writes};
+    simple_mtx_unlock(&dev->fault.lock);
+ }
+ 
++static void
++format_writes(uint8_t writes, char *buf, size_t size)
++{
++   snprintf(buf, size, "%s%s%s%s", writes ? "[" : "",
++            (writes & KK_FAULT_WRITES_LAYER) ? "layer" : "",
++            writes == (KK_FAULT_WRITES_LAYER | KK_FAULT_WRITES_VIEWPORT)
++               ? ","
++               : "",
++            (writes & KK_FAULT_WRITES_VIEWPORT) ? "viewport]"
++            : writes                            ? "]"
++                                                : "");
++}
++
++static bool
++skipped(const struct kk_device *dev, const struct kk_fault_pipeline_info *p)
++{
++   if (!p)
++      return false;
++   if (p->writes & dev->fault.skip_writes)
++      return true;
++   for (uint32_t i = 0; i < dev->fault.skip_count; i++) {
++      if (p->msl && (p->msl >> (64u - 4u * dev->fault.skip[i].digits)) ==
++                       dev->fault.skip[i].prefix)
++         return true;
++   }
++   return false;
++}
++
++bool
++kk_fault_skip_draw(struct kk_cmd_buffer *cmd, uint32_t instances)
++{
++   struct kk_fault_encoder *e = open_encoder(cmd);
++   struct kk_fault_pipeline_info *p = cmd->fault.pipeline;
++   if (!e || !e->render || !p)
++      return false;
++   struct kk_device *dev = kk_cmd_buffer_device(cmd);
++   if (p->writes) {
++      const uint32_t layers = MAX2(e->layers, 1u);
++      const uint32_t bit = 1u << (MIN2(layers, 32u) - 1u);
++      simple_mtx_lock(&dev->fault.lock);
++      const bool log = !(p->noted_layers & bit) &&
++                       dev->fault.layer_notes < KK_FAULT_LAYER_NOTES;
++      if (log) {
++         p->noted_layers |= bit;
++         dev->fault.layer_notes++;
++      }
++      simple_mtx_unlock(&dev->fault.lock);
++      if (log) {
++         char writes[24];
++         format_writes(p->writes, writes, sizeof(writes));
++         fprintf(stderr,
++                 "[kk-fault] msl=%016" PRIx64 " writes %s: drawn in a pass of "
++                 "%u layer(s) %ux%u, x%u instance(s) (cb #%u enc %u)\n",
++                 p->msl, writes, e->layers, e->area_w, e->area_h, instances,
++                 cmd->fault.serial,
++                 (unsigned)util_dynarray_num_elements(&cmd->fault.trail,
++                                                      struct kk_fault_encoder) -
++                    1u);
++         fflush(stderr);
++      }
++   }
++   if (!skipped(dev, p))
++      return false;
++   e->skipped++;
++   return true;
++}
++
+ static void
+ view_ids(const struct kk_image_view *view, uint64_t ids[9])
+ {
+@@ -700,17 +836,62 @@ log_high_water(struct kk_fault_commit *c)
+ static const char *const attachment_names[KK_FAULT_ATTACHMENTS] = {
+    "c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7", "depth", "stencil"};
+ 
++static bool
++ts_written(const struct kk_fault_commit *c, uint64_t ts)
++{
++   return ts && ts >= c->committed_ts && c->dev->fault.timestamp_hz;
++}
++
+ /* "+1.234" ms after the commit, "-" if the GPU wrote none for this cb */
+ static void
+ format_ts(const struct kk_fault_commit *c, uint64_t ts, char *buf, size_t size)
+ {
+-   if (!ts || ts < c->committed_ts || !c->dev->fault.timestamp_hz)
++   if (!ts_written(c, ts))
+       snprintf(buf, size, "-");
+    else
+       snprintf(buf, size, "+%.3f",
+                (double)(ts - c->committed_ts) * 1000.0 / c->dev->fault.timestamp_hz);
+ }
+ 
++/* Where the GPU stopped, from the encoders' timestamps: the first encoder
++ * that started and did not end, else the one after the last that ended */
++static void
++log_stop(const struct kk_fault_commit *c, const struct kk_fault_encoder *trail,
++         uint32_t count, const uint64_t *ts)
++{
++   if (!ts) {
++      fprintf(stderr, "[kk-fault] cb #%u stopped: not known (no encoder "
++                      "timestamps)\n", c->serial);
++      return;
++   }
++   int32_t unfinished = -1, last_ended = -1;
++   uint32_t written = 0;
++   for (uint32_t i = 0; i < count; i++) {
++      if (trail[i].ts == ~0u)
++         continue;
++      const bool started = ts_written(c, ts[2u * i]);
++      const bool ended = ts_written(c, ts[2u * i + 1u]);
++      written += started || ended;
++      if (started && !ended && unfinished < 0)
++         unfinished = i;
++      if (ended)
++         last_ended = i;
++   }
++   if (unfinished >= 0)
++      fprintf(stderr, "[kk-fault] cb #%u stopped in enc %d: it started and "
++                      "did not end\n", c->serial, unfinished);
++   else if (!written)
++      fprintf(stderr, "[kk-fault] cb #%u stopped before any encoder wrote a "
++                      "timestamp\n", c->serial);
++   else if ((uint32_t)(last_ended + 1) < count)
++      fprintf(stderr, "[kk-fault] cb #%u stopped after enc %d, the last that "
++                      "ended: enc %d did not start\n",
++              c->serial, last_ended, last_ended + 1);
++   else
++      fprintf(stderr, "[kk-fault] cb #%u stopped after its last encoder "
++                      "ended\n", c->serial);
++}
++
+ static void
+ log_encoder(struct kk_fault_commit *c, uint32_t i,
+             const struct kk_fault_encoder *e, const uint64_t *ts)
+@@ -753,9 +934,11 @@ log_encoder(struct kk_fault_commit *c, uint32_t i,
+    if (e->pipeline_count) {
+       fprintf(stderr, "[kk-fault] cb #%u enc %u   pipelines", c->serial, i);
+       for (unsigned p = 0; p < e->pipeline_count; p++) {
++         char writes[24];
++         format_writes(e->pipelines[p].writes, writes, sizeof(writes));
+          if (e->pipelines[p].msl)
+-            fprintf(stderr, " msl=%016" PRIx64 "x%u", e->pipelines[p].msl,
+-                    e->pipelines[p].uses);
++            fprintf(stderr, " msl=%016" PRIx64 "x%u%s", e->pipelines[p].msl,
++                    e->pipelines[p].uses, writes);
+          else
+             fprintf(stderr, " driver-internal x%u", e->pipelines[p].uses);
+       }
+@@ -868,6 +1051,7 @@ log_failure(struct kk_fault_commit *c, const struct mtl_feedback_data *data,
+    if (count + c->dropped > listed)
+       fprintf(stderr, "[kk-fault] cb #%u: %u more encoders not listed\n",
+               c->serial, count + c->dropped - listed);
++   log_stop(c, trail, listed, ts);
+    free(ts);
+ 
+    log_submits(c);
+diff --git a/src/kosmickrisp/vulkan/kk_fault.h b/src/kosmickrisp/vulkan/kk_fault.h
+index a4762e0..0fb721e 100644
+--- a/src/kosmickrisp/vulkan/kk_fault.h
++++ b/src/kosmickrisp/vulkan/kk_fault.h
+@@ -25,6 +25,12 @@
+  * - each encoder writes a GPU timestamp when it starts and when it ends into
+  *   a ring in a counter heap, so a failed commit shows which encoders ran,
+  *   which finished, and the one the GPU stopped in;
++ * - each pipeline's hardware vertex stage that writes a layer or viewport
++ *   index is marked in the trail ([layer]), and the first draw of it in a
++ *   pass of each layer count is logged: a layer past the pass's layers is
++ *   undefined in Vulkan and Metal (MESA_KK_EXPERIMENTAL=layer_clamp);
++ * - MESA_KK_FAULT_SKIP=<MSL hash prefix>,...,layer,viewport leaves out the
++ *   draws of those pipelines, so one run can test whether they hang;
+  * - each submit's semaphore waits and signals (Metal events and values) are
+  *   kept, and a failure shows them with each event's value then;
+  * - each reset of the geometry heap (kk_heap, the 128 MiB scratch of
+@@ -74,9 +80,23 @@ struct kk_fault_attachment {
+ #define KK_FAULT_ATTACHMENTS 10u
+ #define KK_FAULT_PIPELINES 8u
+ 
++/* What a pipeline's hardware vertex stage writes besides its varyings */
++enum kk_fault_writes {
++   KK_FAULT_WRITES_LAYER = 1u << 0,    /* [[render_target_array_index]] */
++   KK_FAULT_WRITES_VIEWPORT = 1u << 1, /* [[viewport_array_index]] */
++};
++
+ struct kk_fault_pipeline {
+    uint64_t msl; /* the first 16 hex digits of the MSL hash; 0 unknown */
+    uint32_t uses; /* draws in a render encoder, dispatches in compute */
++   uint8_t writes; /* enum kk_fault_writes */
++};
++
++/* A pipeline Metal built, by its Metal object (the device's map) */
++struct kk_fault_pipeline_info {
++   uint64_t msl;
++   uint8_t writes;      /* enum kk_fault_writes */
++   uint32_t noted_layers; /* bit n-1: a layer write in a pass of n was logged */
+ };
+ 
+ /* The first image a draw's descriptors name that is also an attachment of
+@@ -97,6 +117,7 @@ struct kk_fault_encoder {
+    uint8_t end_barrier; /* 1 narrowed (no vertex), 2 device visibility */
+    uint16_t resolves;   /* timestamp resolves encoded after it */
+    uint32_t draws, dispatches, copies, pipelines_dropped;
++   uint32_t skipped;    /* draws MESA_KK_FAULT_SKIP left out */
+    uint32_t ts;         /* its two timestamp slots: ts, ts + 1; ~0 none */
+    uint32_t max_count, max_instances; /* the largest direct draw */
+    const char *meta;    /* the vk_meta operation, a static string */
+@@ -115,14 +136,18 @@ struct kk_fault_cmd {
+    bool desc_dirty; /* graphics descriptors changed since the last scan */
+    const char *meta; /* the vk_meta operation being recorded, if any */
+    uint32_t dropped; /* encoders past KK_FAULT_MAX_ENCODERS, counted only */
++   /* The bound render pipeline's, NULL if unknown */
++   struct kk_fault_pipeline_info *pipeline;
+    struct util_dynarray trail; /* struct kk_fault_encoder */
+ };
+ 
+ #define KK_FAULT_MAX_ENCODERS 2048u
+ /* Geometry heap resets the ring keeps: the bytes each found allocated */
+ #define KK_FAULT_RING 1024u
+-/* Encoder timestamps the counter heap keeps, two an encoder */
+-#define KK_FAULT_TIMESTAMPS 8192u
++/* Lines that name a vertex stage writing a layer or viewport, at most */
++#define KK_FAULT_LAYER_NOTES 64u
++/* MESA_KK_FAULT_SKIP's MSL hash prefixes, at most */
++#define KK_FAULT_SKIPS 8u
+ /* Submits whose waits and signals are kept */
+ #define KK_FAULT_SUBMITS 16u
+ #define KK_FAULT_SUBMIT_SYNCS 8u
+@@ -162,11 +187,23 @@ struct kk_fault_device {
+    uint64_t timestamp_hz;
+ 
+    simple_mtx_t lock; /* the maps and the submit ring */
+-   struct hash_table_u64 *pipelines; /* Metal pipeline -> MSL hash prefix */
++   /* Metal pipeline -> struct kk_fault_pipeline_info, kept to the end */
++   struct hash_table_u64 *pipelines;
+    struct hash_table_u64 *views;     /* GPU resource ID -> kk_fault_view */
+    struct kk_fault_submit submits[KK_FAULT_SUBMITS];
+    uint32_t submit_count;
+    struct kk_fault_submit *current; /* the submit kk_queue_submit is in */
++   uint32_t layer_notes; /* lines logged, KK_FAULT_LAYER_NOTES at most */
++
++   /* MESA_KK_FAULT_SKIP: a draw whose pipeline's MSL hash begins with one of
++    * these (digits hex digits) or whose vertex stage writes one of
++    * skip_writes is not encoded */
++   struct {
++      uint64_t prefix;
++      uint8_t digits;
++   } skip[KK_FAULT_SKIPS];
++   uint32_t skip_count;
++   uint8_t skip_writes; /* enum kk_fault_writes */
+ };
+ 
+ void kk_fault_device_init(struct kk_device *dev);
+@@ -198,9 +235,16 @@ void kk_fault_draw_descriptors(struct kk_cmd_buffer *cmd);
+ /* The graphics descriptors changed (a bind or a push) */
+ void kk_fault_descriptors_changed(struct kk_cmd_buffer *cmd);
+ 
+-/* A pipeline Metal built, with its MSL hash (hex) */
++/* A pipeline Metal built, with its MSL hash (hex) and what its hardware
++ * vertex stage writes (VARYING_BIT_LAYER, VARYING_BIT_VIEWPORT of its
++ * outputs; 0 for compute) */
+ void kk_fault_pipeline_built(struct kk_device *dev, void *pipeline,
+-                             const char *msl_hex);
++                             const char *msl_hex, uint64_t outputs_written);
++
++/* Before a draw is encoded: whether MESA_KK_FAULT_SKIP leaves it out; once
++ * per pipeline and pass layer count, logs a vertex stage that writes a layer
++ * or viewport */
++bool kk_fault_skip_draw(struct kk_cmd_buffer *cmd, uint32_t instances);
+ /* An image view's textures, by GPU resource ID, made and destroyed */
+ void kk_fault_view_init(struct kk_device *dev, const struct kk_image_view *view);
+ void kk_fault_view_finish(struct kk_device *dev,
+diff --git a/src/kosmickrisp/vulkan/kk_nir_lower_descriptors.c b/src/kosmickrisp/vulkan/kk_nir_lower_descriptors.c
+index 4b246ce..b847105 100644
+--- a/src/kosmickrisp/vulkan/kk_nir_lower_descriptors.c
++++ b/src/kosmickrisp/vulkan/kk_nir_lower_descriptors.c
+@@ -475,6 +475,9 @@ try_lower_intrin(nir_builder *b, nir_intrinsic_instr *intrin,
+    case nir_intrinsic_load_clip_z_coeff:
+       return lower_sysval_to_root_table(b, intrin, draw.clip_z_coeff);
+ 
++   case nir_intrinsic_load_render_target_layers_kk:
++      return lower_sysval_to_root_table(b, intrin, draw.render_target_layers);
++
+    case nir_intrinsic_load_is_depth_clamp_emulated_kk: {
+       unsigned offset = kk_root_descriptor_offset(draw.emulate_depth_clamp);
+       b->cursor = nir_instr_remove(&intrin->instr);
+diff --git a/src/kosmickrisp/vulkan/kk_physical_device.c b/src/kosmickrisp/vulkan/kk_physical_device.c
+index bfab549..05dba6d 100644
+--- a/src/kosmickrisp/vulkan/kk_physical_device.c
++++ b/src/kosmickrisp/vulkan/kk_physical_device.c
+@@ -1094,7 +1094,8 @@ kk_physical_device_init_pipeline_cache(struct kk_physical_device *pdev)
+       kk_mesa_experimental_flags &
+       (KK_EXPERIMENTAL_FP_PRECISE_ONLY | KK_EXPERIMENTAL_ROOT_TABLE_LOADS |
+        KK_EXPERIMENTAL_UBO_UNBOUNDED | KK_EXPERIMENTAL_CONST_OFFSET_LOADS |
+-       KK_EXPERIMENTAL_UBO_VEC4_BOUNDS | KK_EXPERIMENTAL_NO_QUAD_MERGE_BLOCK);
++       KK_EXPERIMENTAL_UBO_VEC4_BOUNDS | KK_EXPERIMENTAL_NO_QUAD_MERGE_BLOCK |
++       KK_EXPERIMENTAL_LAYER_CLAMP);
+    if (msl_experimental)
+       _mesa_blake3_update(&blake3_ctx, &msl_experimental,
+                           sizeof(msl_experimental));
+diff --git a/src/kosmickrisp/vulkan/kk_shader.c b/src/kosmickrisp/vulkan/kk_shader.c
+index 9bbb210..2e316ec 100644
+--- a/src/kosmickrisp/vulkan/kk_shader.c
++++ b/src/kosmickrisp/vulkan/kk_shader.c
+@@ -525,11 +525,34 @@ kk_lower_vs_vbo(nir_shader *nir, const struct vk_graphics_pipeline_state *state,
+    NIR_PASS(_, nir, kk_nir_lower_vbo, attributes, robustness2);
+ }
+ 
++/* Playport (PLA-880), MESA_KK_EXPERIMENTAL=layer_clamp: a layer at or past
++ * the render pass's layers becomes 0 */
++static bool
++kk_clamp_layer_store(nir_builder *b, nir_intrinsic_instr *intr, void *data)
++{
++   if (intr->intrinsic != nir_intrinsic_store_output ||
++       nir_intrinsic_io_semantics(intr).location != VARYING_SLOT_LAYER)
++      return false;
++   b->cursor = nir_before_instr(&intr->instr);
++   nir_def *layer = intr->src[0].ssa;
++   if (layer->bit_size != 32)
++      return false;
++   nir_def *layers = nir_load_render_target_layers_kk(b);
++   nir_src_rewrite(&intr->src[0],
++                   nir_bcsel(b, nir_ult(b, layer, layers), layer,
++                             nir_imm_int(b, 0)));
++   return true;
++}
++
+ /* Lowering for the stage which ends up as the vertex stage on hardware */
+ static void
+ kk_lower_hw_vs(nir_shader *nir, const struct vk_graphics_pipeline_state *state,
+                bool is_point)
+ {
++   if (KK_EXPERIMENTAL(LAYER_CLAMP))
++      NIR_PASS(_, nir, nir_shader_intrinsics_pass, kk_clamp_layer_store,
++               nir_metadata_control_flow, NULL);
++
+    if (is_point)
+       NIR_PASS(_, nir, msl_ensure_vertex_point_size_output);
+    else
+@@ -2543,7 +2566,7 @@ kk_compile_compute_pipeline(struct kk_device *device,
+    *pipe = pipeline;
+    kk_pass_prof_log_pipeline(device, pipeline, false, build.msl,
+                              local_size_threads);
+-   kk_fault_pipeline_built(device, pipeline, build.msl);
++   kk_fault_pipeline_built(device, pipeline, build.msl, 0u);
+ 
+    return VK_SUCCESS;
+ }
+@@ -3086,7 +3109,10 @@ kk_compile_graphics_pipeline(struct kk_device *device, struct kk_shader *vs,
+    }
+ 
+    kk_pass_prof_log_pipeline(device, pipe->gfx.render, true, build.msl, 0);
+-   kk_fault_pipeline_built(device, pipe->gfx.render, build.msl);
++   kk_fault_pipeline_built(device, pipe->gfx.render, build.msl,
++                           vs_stage == MESA_SHADER_VERTEX
++                              ? vs->info.vs.outputs_written
++                              : 0u);
+    mtl_release(pipeline_descriptor);
+    mtl_release(fragment_function);
+    mtl_release(vertex_function);

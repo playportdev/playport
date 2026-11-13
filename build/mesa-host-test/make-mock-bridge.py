@@ -391,11 +391,19 @@ body("mtl_new_texture_with_descriptor_linear", r'''
 body("mtl_texture_get_gpu_resource_id", "return (uint64_t)(uintptr_t)texture;")
 # Metal's capture layer refuses a device with a counter heap; with
 # KK_MOCK_REFUSE_COUNTER_HEAP set, making one aborts (patches/mesa 0044).
+# An A19 refuses a heap of more than 4096 entries, with the bridge's message
+# (PLA-880: the phone's "requested 8192 max is 4096").
 body("mtl_new_timestamp_counter_heap", r'''
    if (getenv("KK_MOCK_REFUSE_COUNTER_HEAP")) {
       fprintf(stderr, "kk-mock: a timestamp counter heap of %u entries\n",
               count);
       abort();
+   }
+   if (count > 4096u) {
+      fprintf(stderr, "Failed to create timestamp counter heap: Requested "
+                      "Heap size is too large (requested %u max is 4096)\n",
+              count);
+      return NULL;
    }
    return kk_mock_new(9, count * sizeof(uint64_t));''')
 # Deliberately synthetic intervals, NOT GPU time. Exercise the documented
