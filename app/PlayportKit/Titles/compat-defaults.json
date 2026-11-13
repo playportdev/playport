@@ -5,36 +5,60 @@
       "reason": "This game takes no controller on PC without a third-party fix (its Options list only keyboard layouts), so its on-screen controls start as a keyboard and mouse."
     },
     "app-1174180": {
-      "settings": {"graphics": "vulkan", "runtime": "vram-mb=2304 env.PLAYPORT_VK_HEAP_MB=2304"},
+      "settings": {
+        "graphics": "vulkan",
+        "runtime": "vram-mb=2304 env.PLAYPORT_VK_HEAP_MB=2304"
+      },
       "reason": "This game draws through Vulkan or Direct3D 12, which only the Vulkan layer runs, so it keeps Vulkan even when Settings chooses DXMT for every game. It is told 2,304 MB of video memory, not 3,072: it sizes its texture streaming from that figure, and Story's first load otherwise passes the app's memory limit."
     },
     "app-292030": {
-      "settings": {"runtime": "short-reserve-mb=6144"},
+      "settings": {
+        "runtime": "short-reserve-mb=6144"
+      },
       "reason": "The current build reserves 64 GB and 32 GB of address space at start, more than an iPhone app has, so it gets the first 6 GB of each and is told it got all of it."
     },
     "bnet-wow": {
-      "settings": {"runtime": "env.FEX_HOSTFEATURES=disableafp,disableavx"},
+      "settings": {
+        "runtime": "env.FEX_HOSTFEATURES=disableafp,disableavx"
+      },
       "reason": "The game's x86-64 client runs without AVX and takes its SSE paths: its start handles many exceptions, and the emulator does not keep the AVX registers' upper halves in an exception's context, so AVX code could resume with wrong values."
     },
     "bnet-wow_anniversary": {
-      "settings": {"runtime": "env.FEX_HOSTFEATURES=disableafp,disableavx"},
+      "settings": {
+        "runtime": "env.FEX_HOSTFEATURES=disableafp,disableavx"
+      },
       "reason": "The game's x86-64 client runs without AVX and takes its SSE paths: its start handles many exceptions, and the emulator does not keep the AVX registers' upper halves in an exception's context, so AVX code could resume with wrong values."
     },
     "bnet-wow_classic": {
-      "settings": {"runtime": "env.FEX_HOSTFEATURES=disableafp,disableavx"},
+      "settings": {
+        "runtime": "env.FEX_HOSTFEATURES=disableafp,disableavx"
+      },
       "reason": "The game's x86-64 client runs without AVX and takes its SSE paths: its start handles many exceptions, and the emulator does not keep the AVX registers' upper halves in an exception's context, so AVX code could resume with wrong values."
     },
     "bnet-wow_classic_era": {
-      "settings": {"runtime": "env.FEX_HOSTFEATURES=disableafp,disableavx"},
+      "settings": {
+        "runtime": "env.FEX_HOSTFEATURES=disableafp,disableavx"
+      },
       "reason": "The game's x86-64 client runs without AVX and takes its SSE paths: its start handles many exceptions, and the emulator does not keep the AVX registers' upper halves in an exception's context, so AVX code could resume with wrong values."
     },
     "epic-Buffalo": {
-      "settings": {"aspect": "16:9"},
+      "settings": {
+        "aspect": "16:9"
+      },
       "reason": "This game draws nothing on a screen wider than 16:9."
     },
     "xbox-9PJGM0T0827V": {
-      "settings": {"graphicsOptions": "MESA_KK_EXPERIMENTAL=soft_fp64,clamp_float_output,zero_init"},
+      "settings": {
+        "graphicsOptions": "MESA_KK_EXPERIMENTAL=soft_fp64,clamp_float_output,zero_init"
+      },
       "reason": "One of this game's compute shaders does its arithmetic in 64-bit floating point, which the iPhone's GPU does not have, so its 64-bit maths is done in software and the game is told it is supported. Without that it stops at its first screen with an error. Its sky and transmittance tables then get an infinity or a NaN from its float outputs: the D3D12 render target store writes 0 for those and Metal keeps them, and the lighting reads a NaN and draws the race black (or a kept infinity lights it white). The clamp writes 0 for an Inf or NaN color output, as D3D12 does."
+    },
+    "app-1444480": {
+      "settings": {
+        "graphics": "vulkan",
+        "runtime": "env.MESA_GL_VERSION_OVERRIDE=4.1 env.MESA_GLSL_VERSION_OVERRIDE=410"
+      },
+      "reason": "Turing Complete requires OpenGL 4.1 / GLSL 410 version overrides to start on the current renderer. Verified running by the owner on Duo; this does not imply complete OpenGL 4.1 support."
     }
   }
 }
