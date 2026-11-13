@@ -80,7 +80,7 @@ struct SettingsView: View {
                     navigation.pageSection = nil
                     return navigation.openSettingsControllerMap()
                 }
-                focus.ring(name == "gyro" ? "set:" + GyroDefaultsRows.id(.output) : name == "jitdump" ? "dev:jitDump" : s.navItem)
+                focus.ring(name == "gyro" ? "set:" + GyroDefaultsRows.id(.output) : name == "jitdump" ? "set:dev:jitDump" : s.navItem)
             }
             navigation.pageSection = nil
         }
