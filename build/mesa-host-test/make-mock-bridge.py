@@ -80,6 +80,8 @@ extern unsigned kk_mock_begins;
 void kk_mock_drain_feedback(void *queue);
 void kk_mock_record_msl(const char *src);
 void kk_mock_trace(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+/* A test writes a timestamp as the GPU would (PLA-880: an unfinished encoder) */
+void kk_mock_counter_heap_set(void *heap, uint32_t index, uint64_t value);
 int kk_mock_interrupt_build(void);
 
 /* The sample counts of an A19 (supportsTextureSampleCount:). */
@@ -135,6 +137,14 @@ kk_mock_exit(void)
       fflush(stderr);
       _exit(3);
    }
+}
+
+void
+kk_mock_counter_heap_set(void *heap, uint32_t index, uint64_t value)
+{
+   struct kk_mock_obj *h = heap;
+   assert(index < h->size / sizeof(uint64_t));
+   ((uint64_t *)h->mem)[index] = value;
 }
 
 void
@@ -400,6 +410,11 @@ for function in ("mtl_compute_write_timestamp_precise", "mtl_render_write_timest
    struct kk_mock_obj *h = heap;
    assert(index < h->size / sizeof(uint64_t));
    ((uint64_t *)h->mem)[index] = (++h->value) * 10000u;''')
+body("mtl_timestamp_counter_heap_read_range", r'''
+   struct kk_mock_obj *h = heap;
+   assert(first + count <= h->size / sizeof(uint64_t));
+   memcpy(timestamps, (uint64_t *)h->mem + first, count * sizeof(uint64_t));
+   return !getenv("KK_MOCK_COUNTER_READ_FAIL");''')
 body("mtl_timestamp_counter_heap_read", r'''
    struct kk_mock_obj *h = heap;
    assert(count <= h->size / sizeof(uint64_t));
