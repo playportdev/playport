@@ -4,8 +4,8 @@
 // play's snapshot (the SteamID, the persona name, logged on, ownership of the
 // launched app, the language); CALL passes auth session and web API tickets to
 // the play's SteamTicketBroker (decision 0062), hands out the broker's ownership
-// ticket and the encrypted app ticket fetched at Play (decision 0017); POLL
-// reads a ticket's state. The calls
+// ticket, the encrypted app ticket fetched at Play (decision 0017) and the
+// launched app's DLC the account owns; POLL reads a ticket's state. The calls
 // come on the guest's threads and answer from a lock, never waiting on the
 // network. Armed by the launch (LaunchCoordinator) for a play in client mode,
 // or with nil: then HELLO answers off and the shim answers as Steam's client
@@ -30,6 +30,14 @@ enum SteamClientHost {
         /// account holds grants it, so BIsSubscribedApp and the rest answer false, as Steam's would.
         var owned: Bool = true
         var appTicket: Secret<[UInt8]>?
+        /// The launched app's DLC the account owns (its profile's), each with whether its content is
+        /// installed: BIsSubscribedApp, BIsDlcInstalled and BIsAppInstalled answer from it.
+        var dlc: [DLC] = []
+
+        struct DLC: Equatable {
+            var appID: UInt32
+            var installed: Bool
+        }
     }
 
     private static let lock = NSLock()
@@ -91,7 +99,8 @@ enum SteamClientHost {
                             + "steamid \(p.steamID == nil ? "none" : "set"), persona \(p.personaName == nil ? "none" : "set"), "
                             + "\(loggedOn ? "logged on, tickets armed" : "not logged on"), "
                             + "\(p.owned ? "owned" : "not owned (Steam refused its ownership ticket: AccessDenied)"), language \(p.language), "
-                            + "encrypted app ticket \(p.appTicket == nil ? "none" : "held")")
+                            + "encrypted app ticket \(p.appTicket == nil ? "none" : "held"), "
+                            + "\(p.dlc.count) DLC owned (\(p.dlc.filter(\.installed).count) installed)")
         return 1
     }
 
@@ -130,6 +139,13 @@ enum SteamClientHost {
         case UInt32(PP_SC_APP_TICKET.rawValue):
             guard let t = p.appTicket else { return UInt32(PP_SC_NO_MORE_ENTRIES) }
             return put(t.value) ? SteamClientHost.ok : UInt32(PP_SC_NO_MORE_ENTRIES)
+        case UInt32(PP_SC_DLC.rawValue):
+            // pp_sc_dlc records, as many as the block holds (320).
+            let records = p.dlc.prefix(cap / MemoryLayout<pp_sc_dlc>.size).flatMap { d -> [UInt8] in
+                var r = pp_sc_dlc(app_id: d.appID, installed: d.installed ? 1 : 0)
+                return withUnsafeBytes(of: &r) { Array($0) }
+            }
+            return put(records) ? SteamClientHost.ok : UInt32(PP_SC_INVALID_PARAMETER)
         case UInt32(PP_SC_OWNERSHIP_TICKET.rawValue):
             guard let t = p.tickets?.ownershipTicket, put(t.value) else {
                 SteamClientHost.log("ownership ticket: none")

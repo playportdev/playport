@@ -229,6 +229,12 @@ public struct InstallReceipt: Sendable, Codable, Equatable {
     public var dlcOwnershipChecked: Bool? = nil
 }
 
+extension InstallReceipt {
+    /// The DLC apps whose depots this install left out as not owned: their content is not here,
+    /// whatever the account owns now (until a repair adds it).
+    public var dlcLeftOut: Set<UInt32> { Set(skippedDepots.compactMap { DepotSelection.unownedDLCApp(skipped: $0) }) }
+}
+
 /// The parsed manifest kept on disk (§6.2 G11): paths, sizes and hashes, no
 /// key. Re-validated on load like a download, since the file is outside the
 /// signed CDN reply.

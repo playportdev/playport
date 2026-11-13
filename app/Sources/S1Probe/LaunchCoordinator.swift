@@ -140,6 +140,9 @@ enum LaunchCoordinator {
         /// False when Steam refused the app's ownership ticket with AccessDenied: the
         /// account has no licence for it, and Playport's Steam client answers so.
         var owned: Bool = true
+        /// The DLC whose depots the install left out as not owned (InstallReceipt.dlcLeftOut):
+        /// Playport's Steam client says they are not installed.
+        var dlcLeftOut: Set<UInt32> = []
     }
 
     enum Step: Equatable {
@@ -271,7 +274,8 @@ enum LaunchCoordinator {
         }
         return SteamClientHost.Play(appID: s.appID, steamID: settings?.steamID, personaName: settings?.personaName,
                                     language: settings?.language ?? "english", tickets: s.tickets, owned: s.owned,
-                                    appTicket: s.ticket)
+                                    appTicket: s.ticket,
+                                    dlc: (settings?.dlc ?? []).map { .init(appID: $0.appID, installed: !s.dlcLeftOut.contains($0.appID)) })
     }
 
     /// Takes the encrypted app ticket out of the game's emulator settings

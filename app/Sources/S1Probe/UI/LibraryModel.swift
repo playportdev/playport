@@ -419,7 +419,9 @@ final class LibraryModel: ObservableObject {
             LaunchCoordinator.SteamAPI(appID: app, root: Self.paths.games.appendingPathComponent(t.installDir, isDirectory: true),
                                        mode: settings.steamAPI,
                                        settings: { await service?.emulatorSettings(appID: app) ?? .init(appID: app) },
-                                       ticket: ticket, tickets: tickets, owned: owned)
+                                       ticket: ticket, tickets: tickets, owned: owned,
+                                       dlcLeftOut: TitleInstaller(layout: Self.paths.layout, session: nil, log: SteamUILog.logger)
+                                           .loadReceipt(app)?.dlcLeftOut ?? [])
         }
         let endTickets = { if tickets != nil { Task { await service?.endPlay() } } }
         // An Epic game's sign-in (decision 0059), fetched now: the code lives five minutes.

@@ -49,6 +49,12 @@ static unsigned p_call(void *args)
     case PP_SC_TICKET_CANCEL: cancelled = c->handle; return PP_SC_OK;
     case PP_SC_APP_TICKET: return PP_SC_NO_MORE_ENTRIES;
     case PP_SC_OWNERSHIP_TICKET: memcpy(c->data, "own", 3); c->data_size = 3; return PP_SC_OK;
+    case PP_SC_DLC: {
+        pp_sc_dlc d[2] = { { 213230, 1 }, { 218560, 0 } };
+        memcpy(c->data, d, sizeof d);
+        c->data_size = sizeof d;
+        return PP_SC_OK;
+    }
     }
     return PP_SC_INVALID_PARAMETER;
 }
@@ -113,6 +119,14 @@ int main(void)
     CHECK(call(PP_SC_CALL, &c) == PP_SC_NO_MORE_ENTRIES && c.data_size == 0);
     fresh_call(&c, PP_SC_OWNERSHIP_TICKET);
     CHECK(call(PP_SC_CALL, &c) == PP_SC_OK && c.data_size == 3 && !memcmp(c.data, "own", 3));
+    /* DLC: the owned DLC's records, as the provider wrote them. */
+    fresh_call(&c, PP_SC_DLC);
+    CHECK(call(PP_SC_CALL, &c) == PP_SC_OK && called_method == PP_SC_DLC && c.data_size == 2 * sizeof(pp_sc_dlc));
+    {
+        pp_sc_dlc d[2];
+        memcpy(d, c.data, sizeof d);
+        CHECK(d[0].app_id == 213230 && d[0].installed == 1 && d[1].app_id == 218560 && d[1].installed == 0);
+    }
     /* A provider that claims more than the block holds is not believed. */
     oversize = 1;
     fresh_call(&c, PP_SC_TICKET_SESSION);

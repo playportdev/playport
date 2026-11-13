@@ -23,9 +23,10 @@
 // caller's arguments, calls the served C method (cdecl, `this` first, as on x86-64)
 // or the unserved answer, and pops what the table says that slot's arguments take.
 //
-// Callbacks and call results (auth ticket answers, the encrypted app ticket) are
-// made here and handed out through Steam_BGetCallback and Steam_GetAPICallResult,
-// as Steam's client hands them to steam_api.
+// Callbacks and call results (auth ticket answers, the encrypted app ticket, user
+// stats, a lobby) are made here (steamclient_calls.h) and handed out through
+// Steam_BGetCallback and Steam_GetAPICallResult, as Steam's client hands them to
+// steam_api.
 //
 // Freestanding: kernel32 alone, no C runtime (built by build/stages/steamclient.sh;
 // i386 adds the compiler's builtins for 64-bit division); ntdll's unix-call entry
@@ -36,6 +37,7 @@
 #include "../Sources/WineHost/include/steam_client_protocol.h"
 #include "steamclient_slots.h"
 #include "steamclient_trace.h"
+#include "steamclient_calls.h"
 
 void *memset(void *d, int c, size_t n)
 {
@@ -84,6 +86,8 @@ static INIT_ONCE hello_once = INIT_ONCE_STATIC_INIT;
 static wine_unix_call_fn unix_call;
 static UINT64 unix_handle;
 static pp_sc_hello snapshot;   /* zero: not logged on, app 0, until HELLO answers */
+static pp_sc_dlc dlc[PP_SC_DLC_MAX];   /* the launched app's DLC the account owns, from the host */
+static uint32_t ndlc;
 static ULONGLONG started;
 
 /* One `steamclient:` line in the app log, of up to six parts (NULL for none). */
@@ -130,6 +134,17 @@ static BOOL CALLBACK say_hello(INIT_ONCE *once, void *param, void **context)
     unix_call = call;
     unix_handle = h;
     if (call(h, PP_SC_HELLO, &hello) == PP_SC_OK && hello.version == PP_SC_PROTOCOL && hello.armed) snapshot = hello;
+    if (snapshot.armed) {
+        static pp_sc_call c;
+        memset(&c, 0, sizeof(c));
+        c.magic = PP_SC_MAGIC;
+        c.size = sizeof(c);
+        c.method = PP_SC_DLC;
+        if (call(h, PP_SC_CALL, &c) == PP_SC_OK && c.data_size <= sizeof(dlc) && c.data_size % sizeof(pp_sc_dlc) == 0) {
+            memcpy(dlc, c.data, c.data_size);
+            ndlc = c.data_size / sizeof(pp_sc_dlc);
+        }
+    }
     return TRUE;
 }
 
@@ -139,18 +154,12 @@ static void hello(void) { InitOnceExecuteOnce(&hello_once, say_hello, NULL, NULL
 
 #define CB_AUTH_SESSION_TICKET 163   /* GetAuthSessionTicketResponse_t */
 #define CB_WEB_API_TICKET 168        /* GetTicketForWebApiResponse_t */
-#define CB_ENCRYPTED_APP_TICKET 154  /* EncryptedAppTicketResponse_t */
-#define CB_CALL_COMPLETED 703        /* SteamAPICallCompleted_t */
-#define ER_OK 1
-#define ER_FAIL 2
-#define ER_NO_CONNECTION 3
 
 typedef struct { int32_t user; int32_t callback; uint8_t *param; int32_t size; } callback_msg;   /* CallbackMsg_t */
 
 #define MAX_PENDING 16
 static struct ticket { uint32_t handle; int web; uint32_t size; uint8_t bytes[PP_SC_DATA_MAX]; } tickets[MAX_PENDING];
-static struct result { uint64_t call; int32_t callback; uint32_t size; int32_t eresult; int done; } results[MAX_PENDING];
-static uint64_t next_call = 1;
+static pp_cb_queue queue;   /* every other callback and call result */
 static uint8_t app_ticket[PP_SC_DATA_MAX];
 static uint32_t app_ticket_size;
 /* The callback steam_api holds until Steam_FreeLastCallback. */
@@ -158,24 +167,10 @@ static uint8_t current[16 + PP_SC_DATA_MAX];
 static int holding;
 static int32_t pipes;
 
-/* An at-once call result: SteamAPICallCompleted_t first, then its bytes. */
-static uint64_t result_now(int32_t callback, int32_t eresult)
-{
-    for (int i = 0; i < MAX_PENDING; i++)
-        if (!results[i].call) {
-            results[i].call = next_call++;
-            results[i].callback = callback;
-            results[i].eresult = eresult;
-            results[i].size = 4;
-            results[i].done = 0;
-            return results[i].call;
-        }
-    return 0;   /* k_uAPICallInvalid */
-}
-
 static int next_callback(callback_msg *msg)
 {
     pp_sc_poll p;
+    pp_cb_record r;
     if (holding) return 0;
     for (int i = 0; i < MAX_PENDING; i++) {
         if (!tickets[i].handle || !unix_call) continue;
@@ -184,14 +179,14 @@ static int next_callback(callback_msg *msg)
         p.size = sizeof(p);
         p.handle = tickets[i].handle;
         if (unix_call(unix_handle, PP_SC_POLL, &p) == PP_SC_OK && p.state == PP_SC_PENDING) continue;
-        int32_t eresult = p.state == PP_SC_ACKED ? ER_OK : ER_FAIL;
+        int32_t eresult = p.state == PP_SC_ACKED ? PP_ER_OK : PP_ER_FAIL;
         memset(current, 0, sizeof(current));
         memcpy(current, &tickets[i].handle, 4);
         memcpy(current + 4, &eresult, 4);
         msg->user = 1;
         msg->param = current;
         if (tickets[i].web) {
-            int32_t n = eresult == ER_OK ? (int32_t)tickets[i].size : 0;
+            int32_t n = eresult == PP_ER_OK ? (int32_t)tickets[i].size : 0;
             memcpy(current + 8, &n, 4);
             memcpy(current + 12, tickets[i].bytes, (size_t)n);
             msg->callback = CB_WEB_API_TICKET;
@@ -204,49 +199,15 @@ static int next_callback(callback_msg *msg)
         holding = 1;
         return 1;
     }
-    for (int i = 0; i < MAX_PENDING; i++) {
-        if (!results[i].call || results[i].done) continue;
-        memset(current, 0, sizeof(current));
-        memcpy(current, &results[i].call, 8);
-        memcpy(current + 8, &results[i].callback, 4);
-        memcpy(current + 12, &results[i].size, 4);
-        msg->user = 1;
-        msg->callback = CB_CALL_COMPLETED;
-        msg->param = current;
-        msg->size = 16;
-        results[i].done = 1;
-        holding = 1;
-        return 1;
-    }
-    return 0;
-}
-
-static int take_result(uint64_t call, void *buf, int size, int expected, uint8_t *failed)
-{
-    for (int i = 0; i < MAX_PENDING; i++) {
-        if (results[i].call != call || !call) continue;
-        if (expected != results[i].callback || size < (int)results[i].size) {
-            if (failed) *failed = 1;
-            return 0;
-        }
-        memcpy(buf, &results[i].eresult, 4);
-        if (failed) *failed = 0;
-        results[i].call = 0;
-        return 1;
-    }
-    if (failed) *failed = 1;
-    return 0;
-}
-
-static int result_completed(uint64_t call, uint8_t *failed)
-{
-    for (int i = 0; i < MAX_PENDING; i++)
-        if (results[i].call == call && call) {
-            if (failed) *failed = 0;
-            return 1;
-        }
-    if (failed) *failed = 1;
-    return 0;
+    if (!pp_cb_next(&queue, &r)) return 0;
+    memset(current, 0, sizeof(current));
+    memcpy(current, r.data, r.size);
+    msg->user = 1;
+    msg->callback = r.callback;
+    msg->param = current;
+    msg->size = (int32_t)r.size;
+    holding = 1;
+    return 1;
 }
 
 /* --- interface objects */
@@ -607,7 +568,22 @@ static uint64_t app_id(void)
     for (DWORD i = 0; i < n && i < sizeof(v) && v[i] >= '0' && v[i] <= '9'; i++) id = id * 10 + (uint64_t)(v[i] - '0');
     return id <= 0xffffffffu ? id : 0;
 }
-static int owns(uint32_t app) { return snapshot.armed && snapshot.owns_app && app && app == snapshot.app_id; }
+/* The launched app, or one of its DLC the host lists. */
+static int owns(uint32_t app)
+{
+    if (!snapshot.armed || !app) return 0;
+    return app == snapshot.app_id ? (int)snapshot.owns_app : pp_dlc_find(dlc, ndlc, app) != 0;
+}
+/* Its content is here: the launched app when owned, a DLC the host lists as installed. */
+static int installed(uint32_t app)
+{
+    const pp_sc_dlc *d;
+    if (!snapshot.armed || !app) return 0;
+    if (app == snapshot.app_id) return (int)snapshot.owns_app;
+    d = pp_dlc_find(dlc, ndlc, app);
+    return d && d->installed;
+}
+static int logged_on(void) { return snapshot.armed && snapshot.logged_on; }
 
 static iface *find(const char *version, const char *through);
 
@@ -766,7 +742,10 @@ static uint64_t user_RequestEncryptedAppTicket(iface *self, void *data, int size
         }
         memset(c.data, 0, sizeof(c.data));
     }
-    call = result_now(CB_ENCRYPTED_APP_TICKET, app_ticket_size ? ER_OK : ER_NO_CONNECTION);
+    {
+        int32_t eresult = app_ticket_size ? PP_ER_OK : PP_ER_NO_CONNECTION;
+        call = pp_cb_call(&queue, PP_CB_ENCRYPTED_APP_TICKET, &eresult, 4);
+    }
     ReleaseSRWLockExclusive(&lock);
     say("encrypted app ticket: ", app_ticket_size ? "the Play's ticket" : "none", NULL, NULL, NULL, NULL);
     return call;
@@ -848,7 +827,7 @@ static uint8_t utils_IsAPICallCompleted(iface *self, uint64_t call, uint8_t *fai
     uint8_t r;
     (void)self;
     AcquireSRWLockExclusive(&lock);
-    r = (uint8_t)result_completed(call, failed);
+    r = (uint8_t)pp_cb_completed(&queue, call, failed);
     ReleaseSRWLockExclusive(&lock);
     return r;
 }
@@ -862,7 +841,7 @@ static uint8_t utils_GetAPICallResult(iface *self, uint64_t call, void *buf, int
     uint8_t r;
     (void)self;
     AcquireSRWLockExclusive(&lock);
-    r = (uint8_t)take_result(call, buf, size, expected, failed);
+    r = (uint8_t)pp_cb_take(&queue, call, buf, size, expected, failed);
     ReleaseSRWLockExclusive(&lock);
     return r;
 }
@@ -871,9 +850,70 @@ static const char *utils_language(iface *self) { (void)self; return snapshot.lan
 /* ISteamApps */
 static uint8_t apps_BIsSubscribed(iface *self) { (void)self; return (uint8_t)owns(snapshot.app_id); }
 static uint8_t apps_BIsSubscribedApp(iface *self, uint32_t app) { (void)self; return (uint8_t)owns(app); }
-static uint8_t apps_BIsAppInstalled(iface *self, uint32_t app) { (void)self; return (uint8_t)owns(app); }
+static uint8_t apps_BIsAppInstalled(iface *self, uint32_t app) { (void)self; return (uint8_t)installed(app); }
+static uint8_t apps_BIsDlcInstalled(iface *self, uint32_t app)
+{
+    (void)self;
+    return (uint8_t)(app != snapshot.app_id && installed(app));
+}
 static uint64_t *apps_GetAppOwner(iface *self, uint64_t *ret) { (void)self; *ret = snapshot.steam_id; return ret; }
 static const char *apps_GetLaunchQueryParam(iface *self, const char *key) { (void)self; (void)key; return ""; }
+
+/* ISteamUserStats (PLA-879). Playport's client loads no stats from Steam yet (PLA-647): a request is
+ * answered at once with UserStatsReceived_t's k_EResultFail, what Steam answers for a user with
+ * no stats for the game, and every getter answers false. Not logged on: RequestCurrentStats is
+ * false, as Steam's; a call completes with k_EResultNoConnection. */
+static void say_once(int *done, const char *a, const char *b)
+{
+    if (*done) return;
+    *done = 1;
+    say(a, b, NULL, NULL, NULL, NULL);
+}
+static int stats_said;
+static uint8_t stats_RequestCurrentStats(iface *self)
+{
+    uint8_t d[PP_CB_DATA_MAX];
+    int ok;
+    (void)self;
+    if (!logged_on()) return 0;
+    AcquireSRWLockExclusive(&lock);
+    ok = pp_cb_post(&queue, PP_CB_USER_STATS_RECEIVED, d,
+                    pp_cb_user_stats_received(d, (uint32_t)app_id(), PP_ER_FAIL, snapshot.steam_id));
+    ReleaseSRWLockExclusive(&lock);
+    say_once(&stats_said, "user stats: none loaded (PLA-647); ", "UserStatsReceived answers k_EResultFail, as for a user with no stats");
+    return (uint8_t)ok;
+}
+static uint64_t stats_RequestUserStats(iface *self, uint64_t user)
+{
+    uint8_t d[PP_CB_DATA_MAX];
+    uint64_t call;
+    (void)self;
+    AcquireSRWLockExclusive(&lock);
+    call = pp_cb_call(&queue, PP_CB_USER_STATS_RECEIVED, d,
+                      pp_cb_user_stats_received(d, (uint32_t)app_id(), logged_on() ? PP_ER_FAIL : PP_ER_NO_CONNECTION, user));
+    ReleaseSRWLockExclusive(&lock);
+    say_once(&stats_said, "user stats: none loaded (PLA-647); ", "UserStatsReceived answers k_EResultFail, as for a user with no stats");
+    return call;
+}
+
+/* ISteamMatchmaking (PLA-879). Playport's client has no lobbies yet (PLA-265): CreateLobby's call completes
+ * at once with LobbyCreated_t's k_EResultFail (k_EResultNoConnection when not logged on), as a
+ * call result and as the callback Steam also posts. */
+static int lobby_said;
+static uint64_t mm_CreateLobby(iface *self, int32_t type, int32_t max_members)
+{
+    uint8_t d[PP_CB_DATA_MAX];
+    uint32_t n;
+    uint64_t call;
+    (void)self; (void)type; (void)max_members;
+    AcquireSRWLockExclusive(&lock);
+    n = pp_cb_lobby_created(d, logged_on() ? PP_ER_FAIL : PP_ER_NO_CONNECTION, 0);
+    call = pp_cb_call(&queue, PP_CB_LOBBY_CREATED, d, n);
+    if (call) pp_cb_post(&queue, PP_CB_LOBBY_CREATED, d, n);
+    ReleaseSRWLockExclusive(&lock);
+    say_once(&lobby_said, "lobbies: none (PLA-265); ", "CreateLobby completes with k_EResultFail");
+    return call;
+}
 
 /* ISteamFriends */
 static const char *friends_GetPersonaName(iface *self) { (void)self; return snapshot.persona; }
@@ -945,7 +985,7 @@ static const struct { const char *family, *method; void *fn; } served[] = {
     { "ISteamApps", "GetCurrentGameLanguage", (void *)utils_language },
     { "ISteamApps", "GetAvailableGameLanguages", (void *)utils_language },
     { "ISteamApps", "BIsSubscribedApp", (void *)apps_BIsSubscribedApp },
-    { "ISteamApps", "BIsDlcInstalled", (void *)client_false },
+    { "ISteamApps", "BIsDlcInstalled", (void *)apps_BIsDlcInstalled },
     { "ISteamApps", "BIsSubscribedFromFreeWeekend", (void *)client_false },
     { "ISteamApps", "GetDLCCount", (void *)client_false },
     { "ISteamApps", "BIsAppInstalled", (void *)apps_BIsAppInstalled },
@@ -953,6 +993,9 @@ static const struct { const char *family, *method; void *fn; } served[] = {
     { "ISteamApps", "GetLaunchQueryParam", (void *)apps_GetLaunchQueryParam },
     { "ISteamApps", "BIsSubscribedFromFamilySharing", (void *)client_false },
     { "ISteamApps", "BIsTimedTrial", (void *)client_false },
+    { "ISteamUserStats", "RequestCurrentStats", (void *)stats_RequestCurrentStats },
+    { "ISteamUserStats", "RequestUserStats", (void *)stats_RequestUserStats },
+    { "ISteamMatchmaking", "CreateLobby", (void *)mm_CreateLobby },
     { "ISteamFriends", "GetPersonaName", (void *)friends_GetPersonaName },
     { "ISteamFriends", "GetPersonaState", (void *)friends_GetPersonaState },
     { "ISteamFriends", "GetFriendCount", (void *)client_false },
@@ -1001,6 +1044,11 @@ static void fill(iface *o)
             if (of_family(o->name, served[k].family) && same(m, served[k].method)) fn = served[k].fn;
         /* InitiateGameConnection's (blob, cap, CSteamID, ip, port, secure) is 7 words; 004–009's differ. */
         if (fn == (void *)user_InitiateGameConnection && o->words[i] != 7) fn = NULL;
+        /* UserStats 001–002's RequestCurrentStats takes a CGameID; Matchmaking 001–006's CreateLobby
+         * is (game, private), (private) or (type) and posts its answer only as a callback. */
+        if (fn == (void *)stats_RequestCurrentStats && o->words[i] != 0) fn = NULL;
+        if (fn == (void *)stats_RequestUserStats && o->words[i] != 2) fn = NULL;
+        if (fn == (void *)mm_CreateLobby && o->words[i] != 2) fn = NULL;
         o->targets[i] = fn;
         o->kinds[i] = fn ? pp_tr_kind_of(m) : 0;
 #ifdef __i386__
@@ -1101,7 +1149,7 @@ __declspec(dllexport) uint8_t Steam_GetAPICallResult(int32_t pipe, uint64_t call
     uint8_t r;
     (void)pipe;
     AcquireSRWLockExclusive(&lock);
-    r = (uint8_t)take_result(call, buf, size, expected, failed);
+    r = (uint8_t)pp_cb_take(&queue, call, buf, size, expected, failed);
     ReleaseSRWLockExclusive(&lock);
     trace_line("export", "GetAPICallResult", 1, 'b', r, NULL, call, 0, (uint64_t)(uint32_t)expected, NULL, r);
     return r;

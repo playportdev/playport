@@ -122,12 +122,17 @@ public struct DepotSelection: Sendable, Equatable {
     static func unownedDLCReason(_ app: UInt32) -> String { "DLC app \(app) not owned" }
 
     /// The depot of a receipt's `skippedDepots` entry for an unowned DLC's depot; nil for any other.
-    public static func unownedDLC(skipped entry: String) -> UInt32? {
+    public static func unownedDLC(skipped entry: String) -> UInt32? { unownedDLCEntry(entry)?.depotID }
+
+    /// The DLC app of a receipt's `skippedDepots` entry for an unowned DLC's depot; nil for any other.
+    public static func unownedDLCApp(skipped entry: String) -> UInt32? { unownedDLCEntry(entry)?.appID }
+
+    static func unownedDLCEntry(_ entry: String) -> (depotID: UInt32, appID: UInt32)? {
         let parts = entry.split(separator: ":", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
         guard parts.count == 2, let depot = UInt32(parts[0]), parts[1].hasPrefix("DLC app ") else { return nil }
         guard let app = UInt32(parts[1].dropFirst("DLC app ".count).prefix { $0.isNumber }),
               parts[1] == unownedDLCReason(app) else { return nil }
-        return depot
+        return (depot, app)
     }
 
     /// The depot a receipt's `skippedDepots` entry ("<depot>: <reason>") names.
