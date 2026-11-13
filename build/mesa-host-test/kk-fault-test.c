@@ -18,6 +18,7 @@
 #include "kk_device.h"
 #include "kk_entrypoints.h"
 #include "kk_fault.h"
+#include "kk_image.h"
 #include "kk_queue.h"
 #include "vk_common_entrypoints.h"
 #include "poly/geometry.h"
@@ -26,6 +27,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+void kk_mock_counter_heap_set(void *heap, uint32_t index, uint64_t value);
 
 #define CHECK(call) assert((call) == VK_SUCCESS)
 #define MIB (1024u * 1024u)
@@ -148,6 +151,91 @@ record(VkCommandBuffer handle, bool heap)
 }
 
 static struct kk_cmd_buffer *submitted;
+static VkImage mip_image;
+static VkCommandBuffer recording; /* defined with cbs below */
+
+/* A 64x64 RGBA8 image with 4 levels, as a game's mip chain */
+static void
+create_mip_image(void)
+{
+   const VkImageCreateInfo ici = {
+      .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+      .imageType = VK_IMAGE_TYPE_2D,
+      .format = VK_FORMAT_R8G8B8A8_UNORM,
+      .extent = {64, 64, 1},
+      .mipLevels = 4,
+      .arrayLayers = 1,
+      .samples = VK_SAMPLE_COUNT_1_BIT,
+      .tiling = VK_IMAGE_TILING_OPTIMAL,
+      .usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+               VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+   };
+   CHECK(kk_CreateImage(device, &ici, NULL, &mip_image));
+   VkMemoryRequirements req;
+   vk_common_GetImageMemoryRequirements(device, mip_image, &req);
+   const VkMemoryAllocateInfo mai = {
+      .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+      .allocationSize = req.size,
+   };
+   VkDeviceMemory mem;
+   CHECK(kk_AllocateMemory(device, &mai, NULL, &mem));
+   const VkBindImageMemoryInfo bind = {
+      .sType = VK_STRUCTURE_TYPE_BIND_IMAGE_MEMORY_INFO,
+      .image = mip_image, .memory = mem,
+   };
+   CHECK(kk_BindImageMemory2(device, 1, &bind));
+}
+
+static void
+blit(VkCommandBuffer handle, uint32_t src_level, uint32_t dst_level)
+{
+   const int32_t src = 64 >> src_level, dst = 64 >> dst_level;
+   const VkImageBlit2 region = {
+      .sType = VK_STRUCTURE_TYPE_IMAGE_BLIT_2,
+      .srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, src_level, 0, 1},
+      .srcOffsets = {{0, 0, 0}, {src, src, 1}},
+      .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, dst_level, 0, 1},
+      .dstOffsets = {{0, 0, 0}, {dst, dst, 1}},
+   };
+   const VkBlitImageInfo2 info = {
+      .sType = VK_STRUCTURE_TYPE_BLIT_IMAGE_INFO_2,
+      .srcImage = mip_image,
+      .srcImageLayout = VK_IMAGE_LAYOUT_GENERAL,
+      .dstImage = mip_image,
+      .dstImageLayout = VK_IMAGE_LAYOUT_GENERAL,
+      .regionCount = 1,
+      .pRegions = &region,
+      .filter = VK_FILTER_LINEAR,
+   };
+   kk_CmdBlitImage2(handle, &info);
+}
+
+/* A mip chain made by blits, as DXVK's GenerateMips (levels 0 to 1, 1 to 2),
+ * then a blit of level 2 onto itself (a read of the level its pass renders),
+ * then a buffer copy */
+static void
+record_blits(void *unused)
+{
+   const VkCommandBufferBeginInfo begin = {
+      .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+      .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+   };
+   CHECK(kk_BeginCommandBuffer(recording, &begin));
+   blit(recording, 0, 1);
+   blit(recording, 1, 2);
+   blit(recording, 2, 2);
+   const VkBufferCopy2 region = {
+      .sType = VK_STRUCTURE_TYPE_BUFFER_COPY_2, .size = 256,
+   };
+   const VkCopyBufferInfo2 info = {
+      .sType = VK_STRUCTURE_TYPE_COPY_BUFFER_INFO_2,
+      .srcBuffer = buffers[0], .dstBuffer = buffers[1],
+      .regionCount = 1, .pRegions = &region,
+   };
+   kk_CmdCopyBuffer2(recording, &info);
+   CHECK(kk_EndCommandBuffer(recording));
+   submitted = kk_cmd_buffer_from_handle(recording);
+}
 
 static void
 submit(void *arg)
@@ -158,7 +246,7 @@ submit(void *arg)
    CHECK(q->vk.driver_submit(&q->vk, &s));
 }
 
-static VkCommandBuffer cbs[3], recording;
+static VkCommandBuffer cbs[4], recording;
 
 /* Records `recording` (with a heap reset unless it is cbs[2]) */
 static void
@@ -191,7 +279,7 @@ main(void)
    setenv("KK_MOCK_TRACE_ENCODERS", "1", 1);
    char *log = capture(create_device, NULL);
    expect(log, "[kk-fault] on: encoder labels, command buffer trails, geometry "
-               "heap ring; Metal encoder status: unavailable");
+               "heap ring, encoder timestamps; Metal encoder status: unavailable");
    d = kk_device_from_handle(device);
    q = &d->queue;
    assert(d->fault.ring && d->fault.ring->cpu);
@@ -206,7 +294,7 @@ main(void)
    const VkCommandBufferAllocateInfo ai = {
       .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
       .commandPool = pool, .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-      .commandBufferCount = 3,
+      .commandBufferCount = 4,
    };
    CHECK(vk_common_AllocateCommandBuffers(device, &ai, cbs));
 
@@ -260,7 +348,7 @@ main(void)
             failed, first);
    expect(log, want);
    snprintf(want, sizeof(want),
-            "[kk-fault] cb #%u enc 0 compute dispatches=0 copies=2 heap\n", failed);
+            "[kk-fault] cb #%u enc 0 compute dispatches=0 copies=2 heap gpu=", failed);
    expect(log, want);
    expect(log, "[kk-fault] geometry heap: last user's bottom=3.0 MiB of 2.0 MiB "
                "OVERFLOW\n");
@@ -285,6 +373,60 @@ main(void)
    assert(poly_heap_fits(0u, heap_B, poly_tess_heap_bytes(1000u * 384u, 1000u)));
    assert(poly_tess_heap_bytes(UINT32_MAX, UINT32_MAX) > (uint64_t)UINT32_MAX * 12u);
    puts("ok fault: the geometry heap guard refuses what does not fit, without wrapping");
+
+   /* A command buffer of blits fails with its second blit's pass begun and
+    * not ended (its end timestamp left unwritten, as by a GPU that stopped
+    * in it): each encoder's attachments, pipelines, timestamps and the pass
+    * that reads the level it renders are logged, and the submit */
+   create_mip_image();
+   recording = cbs[3];
+   log = capture(record_blits, NULL);
+   const uint32_t blits = submitted->fault.serial;
+   const struct kk_fault_encoder *trail = util_dynarray_begin(&submitted->fault.trail);
+   const uint32_t encoders =
+      util_dynarray_num_elements(&submitted->fault.trail, struct kk_fault_encoder);
+   assert(encoders >= 4);
+   uint32_t render_encoders = 0;
+   for (uint32_t i = 0; i < encoders; i++)
+      render_encoders += trail[i].render;
+   assert(render_encoders == 3);
+   snprintf(want, sizeof(want), "label kk#%u.", blits);
+   expect(log, want);
+   expect(log, " render draws=1 meta:vkCmdBlitImage2");
+   /* The second render pass: find its encoder, leave its end unwritten */
+   uint32_t second = ~0u;
+   for (uint32_t i = 0, r = 0; i < encoders && second == ~0u; i++)
+      if (trail[i].render && r++ == 1)
+         second = i;
+   assert(!trail[second].feedback.count);
+   kk_mock_counter_heap_set(d->fault.timestamps, trail[second].ts + 1u, 0);
+   setenv("KK_MOCK_COMMIT_ERROR", "1", 1);
+   log = capture(submit, NULL);
+   unsetenv("KK_MOCK_COMMIT_ERROR");
+   snprintf(want, sizeof(want), "[kk-fault] cb #%u enc %u render draws=1 "
+            "meta:vkCmdBlitImage2 gpu=+", blits, second);
+   expect(log, want);
+   expect(log, " ms UNFINISHED area=16x16 layers=1");
+   snprintf(want, sizeof(want), "[kk-fault] cb #%u enc %u   c0 image=%p format=%u "
+            "level=2 layer=0+1 16x16 samples=1", blits, second,
+            (void *)kk_image_from_handle(mip_image), VK_FORMAT_R8G8B8A8_UNORM);
+   expect(log, want);
+   snprintf(want, sizeof(want), "[kk-fault] cb #%u enc %u   pipelines msl=", blits,
+            second);
+   expect(log, want);
+   /* The first two blits read another level than they render; the third
+    * reads level 2 into level 2 */
+   snprintf(want, sizeof(want), "FEEDBACK 1 draw(s), first draw 0: set 0 "
+            "binding 1[0] (descriptor type %u) views levels 2+1 layers 0+1 of "
+            "c0's image\n", VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
+   expect(log, want);
+   assert(!strstr(log, "levels 0+1 layers 0+1 of c0's image") &&
+          !strstr(log, "levels 1+1 layers 0+1 of c0's image"));
+   snprintf(want, sizeof(want), " (the failed cb's): cbs #%u\n", blits);
+   expect(log, want);
+   puts("ok fault: a failed command buffer of blits names the unfinished "
+        "encoder, its attachments and pipelines, the pass reading the level it "
+        "renders, and its submit");
 
    /* Without the flag nothing is labelled or traced */
    kk_mesa_debug_flags &= ~KK_DEBUG_FAULT;

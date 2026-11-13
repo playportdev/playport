@@ -125,3 +125,4 @@
 0153-kk-clamp_float_output-tests-the-exponent-bits.patch
 0154-kk-MESA_KK_DEBUG-fault-logs-a-failed-command-buffer-.patch
 0155-kk-a-draw-the-geometry-heap-has-no-room-for-draws-no.patch
+0156-kk-MESA_KK_DEBUG-fault-names-where-a-failed-command-.patch

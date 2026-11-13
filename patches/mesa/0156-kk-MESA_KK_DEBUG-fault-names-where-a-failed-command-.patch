@@ -1,0 +1,1401 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 13 Nov 2026 12:59:57 +0100
+Subject: [PATCH] kk: MESA_KK_DEBUG=fault names where a failed command buffer
+ stopped and what each encoder did
+
+The first failure 0154 logged on the phone (The Witcher 3 1.32, PLA-880)
+was "Caused GPU Hang Error (kIOGPUCommandBufferCallbackErrorHang)" 28 ms
+into a command buffer of 15 encoders: three render passes of the game,
+eleven passes of one draw (a mip chain, DXVK's GenerateMips by blits)
+and a copy. Neither Metal nor the trail said which encoder the GPU stopped
+in, or what any of them rendered to and read.
+
+With MESA_KK_DEBUG=fault each trail entry now also holds:
+- two GPU timestamps, written when the encoder starts and when it ends,
+  into a ring of 8192 in a counter heap (none while a GPU capture is
+  armed: 0044). A failed commit reads them on the CPU and prints each
+  encoder's gpu=+start..+end ms after the commit, "-" for none written
+  since, and UNFINISHED for one that started and did not end: where the
+  GPU stopped;
+- the attachments of a render encoder: image, VkFormat, level, layers,
+  extent, samples, load and store op and the store action Metal got, and
+  whether the encoder continues a render pass begun in an earlier one;
+- the pipelines it drew or dispatched with and how often, by the first 16
+  hex digits of their MSL hash ([kk-compile] msl=), "driver-internal" for
+  libkk's; the largest direct draw;
+- the vk_meta operation that made it (meta:vkCmdBlitImage2, ...);
+- the timestamp fence it waited for, the resolves encoded after it, a
+  queue barrier before its vertex stage and its end barrier;
+- a sampled, storage or input attachment descriptor of its draws that
+  names one of its own attachments at overlapping levels and layers
+  (FEEDBACK), found by looking up each descriptor's texture in a map of
+  image views by GPU resource ID once after each change of the graphics
+  descriptors or the encoder.
+
+Each submit's semaphore waits, command buffers and signals are kept too
+(16 submits), and a failure prints the failed command buffer's submit
+and the two before it with each event's signaled value now.
+
+The trail moves into the commit instead of being copied.
+
+Linear: PLA-880
+Class: diagnostics
+Evidence: build/mesa-host-test/kk-fault-test.c (mock Metal: a failed command buffer of blits); PLA-880 (the phone's first [kk-fault] lines)
+Offered-upstream: no
+---
+ src/kosmickrisp/bridge/mtl_device.h       |   5 +
+ src/kosmickrisp/bridge/mtl_device.m       |  14 +
+ src/kosmickrisp/bridge/stubs/mtl_device.c |   7 +
+ src/kosmickrisp/vulkan/kk_cmd_buffer.c    |   6 +
+ src/kosmickrisp/vulkan/kk_cmd_draw.c      |   5 +
+ src/kosmickrisp/vulkan/kk_cmd_meta.c      |   3 +
+ src/kosmickrisp/vulkan/kk_device_lib.c    |   9 +-
+ src/kosmickrisp/vulkan/kk_fault.c         | 636 ++++++++++++++++++++--
+ src/kosmickrisp/vulkan/kk_fault.h         | 147 ++++-
+ src/kosmickrisp/vulkan/kk_image_view.c    |   2 +
+ src/kosmickrisp/vulkan/kk_pass_prof.c     |   3 +-
+ src/kosmickrisp/vulkan/kk_queue.c         |  12 +
+ src/kosmickrisp/vulkan/kk_shader.c        |   2 +
+ 13 files changed, 799 insertions(+), 52 deletions(-)
+
+diff --git a/src/kosmickrisp/bridge/mtl_device.h b/src/kosmickrisp/bridge/mtl_device.h
+index 998a0a9..0d4ebfd 100644
+--- a/src/kosmickrisp/bridge/mtl_device.h
++++ b/src/kosmickrisp/bridge/mtl_device.h
+@@ -50,6 +50,11 @@ mtl_counter_heap *mtl_new_timestamp_counter_heap(mtl_device *dev,
+ /* CPU timeline resolve, only after all writes completed. One uint64_t per entry. */
+ bool mtl_timestamp_counter_heap_read(mtl_counter_heap *heap, uint32_t count,
+                                       uint64_t *timestamps);
++/* Playport (PLA-880): the same for entries first..first+count-1; an entry
++ * never written (or invalidated) reads 0 */
++bool mtl_timestamp_counter_heap_read_range(mtl_counter_heap *heap,
++                                           uint32_t first, uint32_t count,
++                                           uint64_t *timestamps);
+ 
+ /* Resource queries */
+ void mtl_heap_buffer_size_and_align_with_length(mtl_device *device,
+diff --git a/src/kosmickrisp/bridge/mtl_device.m b/src/kosmickrisp/bridge/mtl_device.m
+index 575c130..2ec6aec 100644
+--- a/src/kosmickrisp/bridge/mtl_device.m
++++ b/src/kosmickrisp/bridge/mtl_device.m
+@@ -263,6 +263,20 @@ mtl_timestamp_counter_heap_read(mtl_counter_heap *heap, uint32_t count,
+    }
+ }
+ 
++bool
++mtl_timestamp_counter_heap_read_range(mtl_counter_heap *heap, uint32_t first,
++                                      uint32_t count, uint64_t *timestamps)
++{
++   @autoreleasepool {
++      NSData *data = [(id<MTL4CounterHeap>)heap
++         resolveCounterRange:NSMakeRange(first, count)];
++      if (!data || data.length != count * sizeof(MTL4TimestampHeapEntry))
++         return false;
++      memcpy(timestamps, data.bytes, data.length);
++      return true;
++   }
++}
++
+ /* Resource queries */
+ /* TODO_KOSMICKRISP Return a struct */
+ void
+diff --git a/src/kosmickrisp/bridge/stubs/mtl_device.c b/src/kosmickrisp/bridge/stubs/mtl_device.c
+index 93a4c16..8038d84 100644
+--- a/src/kosmickrisp/bridge/stubs/mtl_device.c
++++ b/src/kosmickrisp/bridge/stubs/mtl_device.c
+@@ -121,6 +121,13 @@ mtl_timestamp_counter_heap_read(mtl_counter_heap *heap, uint32_t count,
+    return false;
+ }
+ 
++bool
++mtl_timestamp_counter_heap_read_range(mtl_counter_heap *heap, uint32_t first,
++                                      uint32_t count, uint64_t *timestamps)
++{
++   return false;
++}
++
+ /* Resource queries */
+ void
+ mtl_heap_buffer_size_and_align_with_length(mtl_device *device, uint64_t *size_B,
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.c b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+index eada6e3..0ceefc6 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_buffer.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+@@ -742,6 +742,7 @@ cs_start_render(struct kk_cmd_buffer *cmd)
+       KK_PASS_STAT(VERTEX_WAITS);
+       mtl_barrier_after_queue_stages(cmd->metal.render, MTL_STAGE_ALL,
+                                      MTL_STAGE_VERTEX);
++      kk_fault_note(cmd, KK_FAULT_VERTEX_WAIT);
+       cmd->vertex_wait = false;
+    }
+    /* Starting a new render pass means we already flushed and no barrier is
+@@ -814,6 +815,7 @@ cs_get_compute(struct kk_cmd_buffer *cmd)
+       mtl_compute_set_argument_table(cmd->metal.compute, cmd->argument_table);
+       kk_encoder_update_debug(cmd, cmd->metal.compute);
+       if (cmd->ts_fence_pending) {
++         kk_fault_note(cmd, KK_FAULT_FENCE_WAIT);
+          mtl_wait_for_fence(cmd->metal.compute, cmd->ts_fence,
+                             MTL_STAGE_DISPATCH | MTL_STAGE_BLIT);
+          cmd->ts_fence_pending = false;
+@@ -858,6 +860,7 @@ end_encoder(struct kk_cmd_buffer *cmd, mtl_command_encoder *encoder,
+                             narrow ? MTL_STAGE_ALL & ~MTL_STAGE_VERTEX
+                                    : MTL_STAGE_ALL,
+                             alias_visibility);
++   kk_fault_end_barrier(cmd, narrow, !alias_visibility);
+    KK_PASS_STAT(END_BARRIERS);
+    if (narrow)
+       KK_PASS_STAT(NARROW_END_BARRIERS);
+@@ -876,6 +879,7 @@ end_encoder(struct kk_cmd_buffer *cmd, mtl_command_encoder *encoder,
+    util_dynarray_foreach(&cmd->ts_resolves, struct kk_ts_resolve, r) {
+       mtl_command_resolve_counter_heap(cmd->metal.cmd_buf, r->heap, r->index,
+                                        1u, r->dst_addr, cmd->ts_fence);
++      kk_fault_resolve(cmd);
+       cmd->ts_fence_pending = cmd->ts_fence != NULL;
+    }
+ 
+@@ -1170,6 +1174,7 @@ kk_CmdBindDescriptorSets2KHR_impl(
+    if (pBindDescriptorSetsInfo->stageFlags & VK_SHADER_STAGE_ALL_GRAPHICS) {
+       kk_bind_descriptor_sets(&cmd->state.gfx.descriptors,
+                               pBindDescriptorSetsInfo);
++      kk_fault_descriptors_changed(cmd);
+    }
+ 
+    if (pBindDescriptorSetsInfo->stageFlags & VK_SHADER_STAGE_COMPUTE_BIT) {
+@@ -1225,6 +1230,7 @@ kk_cmd_push_descriptors(struct kk_cmd_buffer *cmd,
+ 
+    /* Pushing descriptors replaces whatever sets are bound */
+    desc->push[set]->layout = set_layout;
++   kk_fault_descriptors_changed(cmd);
+    desc->sets[set] = NULL;
+    desc->push_dirty |= BITFIELD_BIT(set);
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_draw.c b/src/kosmickrisp/vulkan/kk_cmd_draw.c
+index c0f679a..2421899 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_draw.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_draw.c
+@@ -386,6 +386,7 @@ kk_CmdBeginRendering(VkCommandBuffer commandBuffer,
+ 
+    if (KK_DEBUG(PASSES))
+       kk_pass_debug_begin_rendering(cmd);
++   kk_fault_begin_rendering(cmd);
+    /* Playport (PLA-72): the pass before may have left its encoder open for
+     * this one's depth and stencil load actions (ds_dont_care) */
+    kk_end_deferred_render(cmd, render);
+@@ -655,6 +656,7 @@ kk_CmdEndRendering2KHR(VkCommandBuffer commandBuffer,
+ 
+    if (KK_DEBUG(PASSES))
+       kk_pass_debug_end_rendering(cmd);
++   kk_fault_end_rendering(cmd);
+ 
+    /* Playport (PLA-72), MESA_KK_EXPERIMENTAL=ds_dont_care: a pass that
+     * stores depth or stencil leaves its encoder open, those stores unset,
+@@ -1797,9 +1799,12 @@ static void
+ kk_dispatch_draw(struct kk_cmd_buffer *cmd, struct kk_draw_data data)
+ {
+    mtl_render_encoder *enc = cs_get_render(cmd);
++   kk_fault_draw_descriptors(cmd);
+    kk_pass_prof_draw(cmd);
+    if (kk_grid_is_indirect(data.grid))
+       kk_fault_note(cmd, KK_FAULT_INDIRECT);
++   else
++      kk_fault_draw_size(cmd, data.grid.size.x, data.grid.size.y);
+ 
+    if (KK_DEBUG(PASSES)) {
+       KK_PASS_STAT(DRAWS);
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_meta.c b/src/kosmickrisp/vulkan/kk_cmd_meta.c
+index 6f28519..8d1507c 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_meta.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_meta.c
+@@ -96,6 +96,7 @@ kk_meta_begin(struct kk_cmd_buffer *cmd, struct kk_meta_save *save,
+               VkPipelineBindPoint bind_point, const char *debug_label)
+ {
+    struct kk_descriptor_state *desc = kk_get_descriptors_state(cmd, bind_point);
++   kk_fault_meta(cmd, debug_label);
+ 
+    if (bind_point == VK_PIPELINE_BIND_POINT_GRAPHICS) {
+       save->dynamic = cmd->vk.dynamic_graphics_state;
+@@ -149,6 +150,8 @@ kk_meta_end(struct kk_cmd_buffer *cmd, struct kk_meta_save *save,
+ {
+    struct kk_descriptor_state *desc = kk_get_descriptors_state(cmd, bind_point);
+    desc->root_dirty = true;
++   kk_fault_meta(cmd, NULL);
++   kk_fault_descriptors_changed(cmd);
+ 
+    if (kk_device_physical(kk_cmd_buffer_device(cmd))
+           ->settings.gpu_capture_enabled) {
+diff --git a/src/kosmickrisp/vulkan/kk_device_lib.c b/src/kosmickrisp/vulkan/kk_device_lib.c
+index 8397861..a09d3f6 100644
+--- a/src/kosmickrisp/vulkan/kk_device_lib.c
++++ b/src/kosmickrisp/vulkan/kk_device_lib.c
+@@ -4,6 +4,7 @@
+  * SPDX-License-Identifier: MIT
+  */
+ 
++#include "kk_debug.h"
+ #include "kk_device.h"
+ #include "kk_physical_device.h"
+ #include "kk_shader.h"
+@@ -53,13 +54,15 @@ build_precompiled_shaders(struct kk_device *dev)
+       if (!shader->pipeline)
+          goto fail;
+ 
+-      if (pdev->settings.pass_prof) {
++      if (pdev->settings.pass_prof || KK_DEBUG(FAULT)) {
+          blake3_hash hash;
+          char hex[BLAKE3_HEX_LEN];
+          _mesa_blake3_compute(msl, strlen(msl) + 1u, hash);
+          _mesa_blake3_format(hex, hash);
+-         kk_pass_prof_log_pipeline(dev, shader->pipeline, false, hex,
+-                                   local_size_threads);
++         if (pdev->settings.pass_prof)
++            kk_pass_prof_log_pipeline(dev, shader->pipeline, false, hex,
++                                      local_size_threads);
++         kk_fault_pipeline_built(dev, shader->pipeline, hex);
+       }
+       memcpy(&shader->info, info, sizeof(*info));
+    }
+diff --git a/src/kosmickrisp/vulkan/kk_fault.c b/src/kosmickrisp/vulkan/kk_fault.c
+index 7f47e98..9960042 100644
+--- a/src/kosmickrisp/vulkan/kk_fault.c
++++ b/src/kosmickrisp/vulkan/kk_fault.c
+@@ -7,6 +7,7 @@
+ 
+ #include "kk_fault.h"
+ 
++#include <inttypes.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
+@@ -14,10 +15,16 @@
+ #include "kk_bo.h"
+ #include "kk_cmd_buffer.h"
+ #include "kk_debug.h"
++#include "kk_descriptor_set.h"
++#include "kk_descriptor_set_layout.h"
+ #include "kk_device.h"
++#include "kk_image.h"
++#include "kk_image_view.h"
++#include "kk_physical_device.h"
+ 
+ #include "kosmickrisp/bridge/mtl_bridge.h"
+ #include "poly/geometry.h"
++#include "util/hash_table.h"
+ #include "util/u_atomic.h"
+ 
+ #define MIB (1024.0 * 1024.0)
+@@ -27,15 +34,25 @@ kk_fault_device_init(struct kk_device *dev)
+ {
+    if (!KK_DEBUG(FAULT))
+       return;
++   simple_mtx_init(&dev->fault.lock, mtx_plain);
++   dev->fault.pipelines = _mesa_hash_table_u64_create(NULL);
++   dev->fault.views = _mesa_hash_table_u64_create(NULL);
+    if (kk_alloc_bo(dev, &dev->vk.base, KK_FAULT_RING * sizeof(uint32_t), 0,
+                    &dev->fault.ring) == VK_SUCCESS)
+       memset(dev->fault.ring->cpu, 0, KK_FAULT_RING * sizeof(uint32_t));
+    else
+       dev->fault.ring = NULL;
++   /* Metal's capture layer refuses a device with a counter heap (0044) */
++   if (!kk_device_physical(dev)->settings.gpu_capture_enabled) {
++      dev->fault.timestamps =
++         mtl_new_timestamp_counter_heap(dev->mtl_handle, KK_FAULT_TIMESTAMPS);
++      dev->fault.timestamp_hz = mtl_device_timestamp_frequency(dev->mtl_handle);
++   }
+    fprintf(stderr,
+            "[kk-fault] on: encoder labels, command buffer trails, geometry heap "
+-           "ring%s; Metal encoder status: %s\n",
++           "ring%s, encoder timestamps%s; Metal encoder status: %s\n",
+            dev->fault.ring ? "" : " (not allocated)",
++           dev->fault.timestamps ? "" : " (none)",
+            mtl_enable_encoder_execution_status());
+    fflush(stderr);
+ }
+@@ -43,9 +60,23 @@ kk_fault_device_init(struct kk_device *dev)
+ void
+ kk_fault_device_finish(struct kk_device *dev)
+ {
++   if (!KK_DEBUG(FAULT))
++      return;
+    if (dev->fault.ring)
+       kk_destroy_bo(dev, dev->fault.ring);
+    dev->fault.ring = NULL;
++   if (dev->fault.timestamps)
++      mtl_release(dev->fault.timestamps);
++   dev->fault.timestamps = NULL;
++   if (dev->fault.views) {
++      hash_table_u64_foreach(dev->fault.views, entry)
++         free(entry.data);
++      _mesa_hash_table_u64_destroy(dev->fault.views);
++   }
++   if (dev->fault.pipelines)
++      _mesa_hash_table_u64_destroy(dev->fault.pipelines);
++   dev->fault.views = dev->fault.pipelines = NULL;
++   simple_mtx_destroy(&dev->fault.lock);
+ }
+ 
+ void
+@@ -66,7 +97,8 @@ kk_fault_begin_cmd(struct kk_cmd_buffer *cmd)
+    struct kk_fault_cmd *f = &cmd->fault;
+    util_dynarray_clear(&f->trail);
+    f->flags = 0u;
+-   f->open = false;
++   f->open = f->rendering = f->desc_dirty = false;
++   f->meta = NULL;
+    f->dropped = 0u;
+    f->serial = KK_DEBUG(FAULT)
+                   ? p_atomic_inc_return(&kk_cmd_buffer_device(cmd)->fault.serial)
+@@ -81,6 +113,50 @@ open_encoder(struct kk_cmd_buffer *cmd)
+    return util_dynarray_last_ptr(&cmd->fault.trail, struct kk_fault_encoder);
+ }
+ 
++static struct kk_fault_encoder *
++last_encoder(struct kk_cmd_buffer *cmd)
++{
++   if (!cmd->fault.serial ||
++       !util_dynarray_num_elements(&cmd->fault.trail, struct kk_fault_encoder))
++      return NULL;
++   return util_dynarray_last_ptr(&cmd->fault.trail, struct kk_fault_encoder);
++}
++
++void
++kk_fault_begin_rendering(struct kk_cmd_buffer *cmd)
++{
++   cmd->fault.rendering = false;
++   cmd->fault.desc_dirty = true;
++}
++
++void
++kk_fault_end_rendering(struct kk_cmd_buffer *cmd)
++{
++   cmd->fault.rendering = false;
++}
++
++static void
++note_attachment(struct kk_fault_attachment *a, const struct kk_attachment *att,
++                const struct kk_rendering_state *r)
++{
++   const struct kk_image_view *view = att->iview;
++   if (!view)
++      return;
++   *a = (struct kk_fault_attachment){
++      .image = view->vk.image,
++      .vk_format = att->vk_format,
++      .level = view->vk.base_mip_level,
++      .layer = view->vk.base_array_layer,
++      .layers = r->view_mask ? util_last_bit(r->view_mask) : r->layer_count,
++      .width = view->vk.extent.width,
++      .height = view->vk.extent.height,
++      .samples = view->vk.image->samples,
++      .load_op = att->load_op,
++      .store_op = att->store_op,
++      .store_action = 0xff,
++   };
++}
++
+ void
+ kk_fault_begin_encoder(struct kk_cmd_buffer *cmd, bool render)
+ {
+@@ -93,7 +169,39 @@ kk_fault_begin_encoder(struct kk_cmd_buffer *cmd, bool render)
+       f->open = false;
+       return;
+    }
+-   util_dynarray_append(&f->trail, (struct kk_fault_encoder){.render = render});
++   struct kk_fault_encoder e = {
++      .render = render,
++      .current = KK_FAULT_PIPELINES,
++      .ts = ~0u,
++      .meta = f->meta,
++   };
++   struct kk_device *dev = kk_cmd_buffer_device(cmd);
++   if (render) {
++      const struct kk_rendering_state *r = &cmd->state.gfx.render;
++      e.area_w = r->area.extent.width;
++      e.area_h = r->area.extent.height;
++      e.layers = r->layer_count;
++      e.view_mask = r->view_mask;
++      for (unsigned i = 0; i < MIN2(r->color_att_count, 8u); i++)
++         note_attachment(&e.att[i], &r->color_att[i], r);
++      note_attachment(&e.att[8], &r->depth_att, r);
++      note_attachment(&e.att[9], &r->stencil_att, r);
++      if (f->rendering)
++         e.flags |= KK_FAULT_CONTINUED;
++      f->rendering = true;
++      f->desc_dirty = true;
++   }
++   if (dev->fault.timestamps) {
++      e.ts = (p_atomic_add_return(&dev->fault.timestamp_next, 2u) - 2u) %
++             KK_FAULT_TIMESTAMPS;
++      if (render)
++         mtl_render_write_timestamp(cmd->metal.render, MTL_RENDER_STAGE_VERTEX,
++                                    dev->fault.timestamps, e.ts);
++      else
++         mtl_compute_write_timestamp_precise(cmd->metal.compute,
++                                             dev->fault.timestamps, e.ts);
++   }
++   util_dynarray_append(&f->trail, e);
+    f->open = true;
+ }
+ 
+@@ -105,12 +213,15 @@ describe(const struct kk_fault_encoder *e, char *buf, size_t size)
+               ? snprintf(buf, size, "render draws=%u", e->draws)
+               : snprintf(buf, size, "compute dispatches=%u copies=%u",
+                          e->dispatches, e->copies);
+-   static const char *const names[] = {"tess", "gs", "unroll", "heap",
+-                                       "indirect"};
++   static const char *const names[] = {"tess",  "gs",          "unroll",
++                                       "heap",  "indirect",    "fence-wait",
++                                       "vertex-wait", "continued"};
+    for (unsigned i = 0; i < ARRAY_SIZE(names) && n > 0 && (size_t)n < size; i++) {
+       if (e->flags & (1u << i))
+          n += snprintf(buf + n, size - n, " %s", names[i]);
+    }
++   if (e->meta && n > 0 && (size_t)n < size)
++      snprintf(buf + n, size - n, " %s", e->meta);
+ }
+ 
+ void
+@@ -119,7 +230,16 @@ kk_fault_end_encoder(struct kk_cmd_buffer *cmd, void *encoder)
+    struct kk_fault_encoder *e = open_encoder(cmd);
+    if (!e)
+       return;
+-   char what[128], label[160];
++   struct kk_device *dev = kk_cmd_buffer_device(cmd);
++   if (e->ts != ~0u) {
++      if (e->render)
++         mtl_render_write_timestamp(encoder, MTL_RENDER_STAGE_FRAGMENT,
++                                    dev->fault.timestamps, e->ts + 1u);
++      else
++         mtl_compute_write_timestamp_precise(encoder, dev->fault.timestamps,
++                                             e->ts + 1u);
++   }
++   char what[192], label[224];
+    describe(e, what, sizeof(what));
+    const unsigned index =
+       util_dynarray_num_elements(&cmd->fault.trail, struct kk_fault_encoder) - 1u;
+@@ -128,20 +248,81 @@ kk_fault_end_encoder(struct kk_cmd_buffer *cmd, void *encoder)
+    cmd->fault.open = false;
+ }
+ 
++void
++kk_fault_end_barrier(struct kk_cmd_buffer *cmd, bool narrow, bool device)
++{
++   struct kk_fault_encoder *e = last_encoder(cmd);
++   if (e)
++      e->end_barrier = (narrow ? 1u : 0u) | (device ? 2u : 0u);
++}
++
++void
++kk_fault_resolve(struct kk_cmd_buffer *cmd)
++{
++   struct kk_fault_encoder *e = last_encoder(cmd);
++   if (e)
++      e->resolves++;
++}
++
++void
++kk_fault_store(struct kk_cmd_buffer *cmd, unsigned index, unsigned action)
++{
++   struct kk_fault_encoder *e = open_encoder(cmd);
++   if (e && index < KK_FAULT_ATTACHMENTS)
++      e->att[index].store_action = action;
++}
++
+ void
+ kk_fault_draw(struct kk_cmd_buffer *cmd)
+ {
+    struct kk_fault_encoder *e = open_encoder(cmd);
+-   if (e)
+-      e->draws++;
++   if (!e)
++      return;
++   e->draws++;
++   if (e->current < KK_FAULT_PIPELINES)
++      e->pipelines[e->current].uses++;
++}
++
++void
++kk_fault_draw_size(struct kk_cmd_buffer *cmd, uint32_t count,
++                   uint32_t instances)
++{
++   struct kk_fault_encoder *e = open_encoder(cmd);
++   if (!e)
++      return;
++   e->max_count = MAX2(e->max_count, count);
++   e->max_instances = MAX2(e->max_instances, instances);
+ }
+ 
+ void
+-kk_fault_pipeline(struct kk_cmd_buffer *cmd)
++kk_fault_pipeline(struct kk_cmd_buffer *cmd, void *pipeline)
+ {
+    struct kk_fault_encoder *e = open_encoder(cmd);
+-   if (e && !e->render)
++   if (!e)
++      return;
++   struct kk_device *dev = kk_cmd_buffer_device(cmd);
++   simple_mtx_lock(&dev->fault.lock);
++   const uint64_t msl = (uint64_t)(uintptr_t)_mesa_hash_table_u64_search(
++      dev->fault.pipelines, (uint64_t)(uintptr_t)pipeline);
++   simple_mtx_unlock(&dev->fault.lock);
++   unsigned i = 0;
++   while (i < e->pipeline_count && e->pipelines[i].msl != msl)
++      i++;
++   if (i == e->pipeline_count) {
++      if (i == KK_FAULT_PIPELINES) {
++         e->pipelines_dropped++;
++         e->current = KK_FAULT_PIPELINES;
++         if (!e->render)
++            e->dispatches++;
++         return;
++      }
++      e->pipelines[e->pipeline_count++] = (struct kk_fault_pipeline){.msl = msl};
++   }
++   e->current = i;
++   if (!e->render) {
+       e->dispatches++;
++      e->pipelines[i].uses++;
++   }
+ }
+ 
+ void
+@@ -163,6 +344,243 @@ kk_fault_note(struct kk_cmd_buffer *cmd, uint32_t flags)
+       e->flags |= flags;
+ }
+ 
++void
++kk_fault_meta(struct kk_cmd_buffer *cmd, const char *name)
++{
++   if (!cmd->fault.serial)
++      return;
++   cmd->fault.meta = name;
++   struct kk_fault_encoder *e = open_encoder(cmd);
++   if (e && name && !e->meta)
++      e->meta = name;
++}
++
++void
++kk_fault_descriptors_changed(struct kk_cmd_buffer *cmd)
++{
++   cmd->fault.desc_dirty = true;
++}
++
++void
++kk_fault_pipeline_built(struct kk_device *dev, void *pipeline,
++                        const char *msl_hex)
++{
++   if (!KK_DEBUG(FAULT) || !pipeline || !msl_hex)
++      return;
++   char prefix[17];
++   memcpy(prefix, msl_hex, 16);
++   prefix[16] = '\0';
++   const uint64_t msl = strtoull(prefix, NULL, 16);
++   simple_mtx_lock(&dev->fault.lock);
++   _mesa_hash_table_u64_insert(dev->fault.pipelines,
++                               (uint64_t)(uintptr_t)pipeline,
++                               (void *)(uintptr_t)msl);
++   simple_mtx_unlock(&dev->fault.lock);
++}
++
++static void
++view_ids(const struct kk_image_view *view, uint64_t ids[9])
++{
++   for (unsigned p = 0; p < 3; p++) {
++      ids[3 * p] = p < view->plane_count ? view->planes[p].sampled_gpu_resource_id : 0;
++      ids[3 * p + 1] = p < view->plane_count ? view->planes[p].storage_gpu_resource_id : 0;
++      ids[3 * p + 2] = p < view->plane_count ? view->planes[p].input_gpu_resource_id : 0;
++   }
++}
++
++void
++kk_fault_view_init(struct kk_device *dev, const struct kk_image_view *view)
++{
++   if (!KK_DEBUG(FAULT))
++      return;
++   uint64_t ids[9];
++   view_ids(view, ids);
++   simple_mtx_lock(&dev->fault.lock);
++   for (unsigned i = 0; i < 9; i++) {
++      if (!ids[i])
++         continue;
++      struct kk_fault_view *v = malloc(sizeof(*v));
++      if (!v)
++         break;
++      *v = (struct kk_fault_view){
++         .image = view->vk.image,
++         .level = view->vk.base_mip_level,
++         .levels = view->vk.level_count,
++         .layer = view->vk.base_array_layer,
++         .layers = view->vk.layer_count,
++      };
++      free(_mesa_hash_table_u64_search(dev->fault.views, ids[i]));
++      _mesa_hash_table_u64_insert(dev->fault.views, ids[i], v);
++   }
++   simple_mtx_unlock(&dev->fault.lock);
++}
++
++void
++kk_fault_view_finish(struct kk_device *dev, const struct kk_image_view *view)
++{
++   if (!KK_DEBUG(FAULT))
++      return;
++   uint64_t ids[9];
++   view_ids(view, ids);
++   simple_mtx_lock(&dev->fault.lock);
++   for (unsigned i = 0; i < 9; i++) {
++      if (!ids[i])
++         continue;
++      struct kk_fault_view *v = _mesa_hash_table_u64_search(dev->fault.views, ids[i]);
++      /* Another view may have the ID now (a reused texture) */
++      if (v && v->image == view->vk.image) {
++         _mesa_hash_table_u64_remove(dev->fault.views, ids[i]);
++         free(v);
++      }
++   }
++   simple_mtx_unlock(&dev->fault.lock);
++}
++
++static bool
++ranges_overlap(uint32_t a, uint32_t a_count, uint32_t b, uint32_t b_count)
++{
++   return a < b + b_count && b < a + a_count;
++}
++
++/* The draw's sampled, storage and input attachment descriptors, against the
++ * encoder's attachments, once after each change of the graphics descriptors
++ * or of the render encoder */
++static void
++scan_feedback(struct kk_cmd_buffer *cmd, struct kk_fault_encoder *e)
++{
++   struct kk_device *dev = kk_cmd_buffer_device(cmd);
++   const struct kk_descriptor_state *desc = &cmd->state.gfx.descriptors;
++   bool found = false;
++   simple_mtx_lock(&dev->fault.lock);
++   for (uint32_t s = 0; s < KK_MAX_SETS && !found; s++) {
++      const struct kk_descriptor_set_layout *layout;
++      const uint8_t *data;
++      uint32_t size;
++      if (desc->sets[s]) {
++         layout = desc->sets[s]->layout;
++         data = desc->sets[s]->mapped_ptr;
++         size = desc->sets[s]->size;
++      } else if (desc->push[s]) {
++         layout = desc->push[s]->layout;
++         data = desc->push[s]->data;
++         size = sizeof(desc->push[s]->data);
++      } else {
++         continue;
++      }
++      if (!layout || !data)
++         continue;
++      for (uint32_t b = 0; b < layout->binding_count && !found; b++) {
++         const struct kk_descriptor_set_binding_layout *bl = &layout->binding[b];
++         if (bl->type != VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE &&
++             bl->type != VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER &&
++             bl->type != VK_DESCRIPTOR_TYPE_STORAGE_IMAGE &&
++             bl->type != VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT)
++            continue;
++         const uint32_t count = MIN2(bl->array_size, 256u);
++         for (uint32_t el = 0; el < count && !found; el++) {
++            const uint32_t offset = bl->offset + el * bl->stride;
++            if (offset + sizeof(uint64_t) > size)
++               break;
++            uint64_t id;
++            memcpy(&id, data + offset, sizeof(id));
++            if (!id)
++               continue;
++            const struct kk_fault_view *v =
++               _mesa_hash_table_u64_search(dev->fault.views, id);
++            if (!v)
++               continue;
++            for (unsigned a = 0; a < KK_FAULT_ATTACHMENTS; a++) {
++               const struct kk_fault_attachment *att = &e->att[a];
++               if (att->image != v->image ||
++                   !ranges_overlap(v->level, v->levels, att->level, 1u) ||
++                   !ranges_overlap(v->layer, v->layers, att->layer,
++                                   MAX2(att->layers, 1u)))
++                  continue;
++               if (!e->feedback.count)
++                  e->feedback = (struct kk_fault_feedback){
++                     .draw = e->draws,
++                     .set = s,
++                     .attachment = a,
++                     .binding = b,
++                     .elem = el,
++                     .type = bl->type,
++                     .level = v->level,
++                     .levels = v->levels,
++                     .layer = v->layer,
++                     .layers = v->layers,
++                  };
++               e->feedback.count++;
++               found = true;
++               break;
++            }
++         }
++      }
++   }
++   simple_mtx_unlock(&dev->fault.lock);
++}
++
++void
++kk_fault_draw_descriptors(struct kk_cmd_buffer *cmd)
++{
++   struct kk_fault_encoder *e = open_encoder(cmd);
++   if (!e || !e->render || !cmd->fault.desc_dirty)
++      return;
++   cmd->fault.desc_dirty = false;
++   scan_feedback(cmd, e);
++}
++
++struct kk_fault_submit *
++kk_fault_submit_begin(struct kk_device *dev)
++{
++   if (!KK_DEBUG(FAULT))
++      return NULL;
++   simple_mtx_lock(&dev->fault.lock);
++   struct kk_fault_submit *s =
++      &dev->fault.submits[dev->fault.submit_count % KK_FAULT_SUBMITS];
++   *s = (struct kk_fault_submit){.index = ++dev->fault.submit_count};
++   simple_mtx_unlock(&dev->fault.lock);
++   return s;
++}
++
++void
++kk_fault_submit_wait(struct kk_device *dev, struct kk_fault_submit *s,
++                     void *event, uint64_t value)
++{
++   if (!s)
++      return;
++   simple_mtx_lock(&dev->fault.lock);
++   if (s->wait_count < KK_FAULT_SUBMIT_SYNCS)
++      s->waits[s->wait_count] = (struct kk_fault_sync){event, value};
++   s->wait_count++;
++   simple_mtx_unlock(&dev->fault.lock);
++}
++
++void
++kk_fault_submit_cb(struct kk_device *dev, struct kk_fault_submit *s,
++                   struct kk_cmd_buffer *cmd)
++{
++   if (!s)
++      return;
++   simple_mtx_lock(&dev->fault.lock);
++   if (s->cb_count < KK_FAULT_SUBMIT_CBS)
++      s->cbs[s->cb_count] = cmd->fault.serial;
++   s->cb_count++;
++   simple_mtx_unlock(&dev->fault.lock);
++}
++
++void
++kk_fault_submit_signal(struct kk_device *dev, struct kk_fault_submit *s,
++                       void *event, uint64_t value)
++{
++   if (!s)
++      return;
++   simple_mtx_lock(&dev->fault.lock);
++   if (s->signal_count < KK_FAULT_SUBMIT_SYNCS)
++      s->signals[s->signal_count] = (struct kk_fault_sync){event, value};
++   s->signal_count++;
++   simple_mtx_unlock(&dev->fault.lock);
++}
++
+ void
+ kk_fault_heap_reset(struct kk_cmd_buffer *cmd, mtl_compute_encoder *encoder)
+ {
+@@ -189,8 +607,9 @@ struct kk_fault_commit {
+    struct kk_device *dev;
+    mtl_feedback_handler_callback callback;
+    void *user_data;
+-   uint32_t serial, flags, dropped, count;
+-   struct kk_fault_encoder trail[];
++   uint32_t serial, flags, dropped;
++   uint64_t committed_ts; /* the GPU's timestamp at the commit */
++   struct util_dynarray trail; /* taken from the command buffer */
+ };
+ 
+ struct kk_fault_commit *
+@@ -199,31 +618,30 @@ kk_fault_commit_new(struct kk_cmd_buffer *cmd,
+ {
+    if (!cmd->fault.serial)
+       return NULL;
+-   const uint32_t count =
+-      util_dynarray_num_elements(&cmd->fault.trail, struct kk_fault_encoder);
+-   struct kk_fault_commit *c =
+-      malloc(sizeof(*c) + count * sizeof(struct kk_fault_encoder));
++   struct kk_fault_commit *c = malloc(sizeof(*c));
+    if (!c)
+       return NULL;
++   struct kk_device *dev = kk_cmd_buffer_device(cmd);
+    *c = (struct kk_fault_commit){
+-      .dev = kk_cmd_buffer_device(cmd),
++      .dev = dev,
+       .callback = callback,
+       .user_data = user_data,
+       .serial = cmd->fault.serial,
+       .flags = cmd->fault.flags,
+       .dropped = cmd->fault.dropped,
+-      .count = count,
++      .committed_ts = dev->fault.timestamps
++                         ? mtl_device_get_gpu_timestamp(dev->mtl_handle)
++                         : 0u,
++      .trail = cmd->fault.trail,
+    };
+-   if (count)
+-      memcpy(c->trail, util_dynarray_begin(&cmd->fault.trail),
+-             count * sizeof(struct kk_fault_encoder));
++   /* A Metal command buffer commits once: a resubmission re-records */
++   cmd->fault.trail = UTIL_DYNARRAY_INIT;
+    return c;
+ }
+ 
+ /* The heap's size and the most any user of it has allocated that the GPU has
+  * left for the CPU to see: the bottom each recorded reset found, and the
+- * header's bottom (the last user's, not reset yet). *serial is the command
+- * buffer whose reset found the most, 0 for the header's. */
++ * header's bottom (the last user's, not reset yet). */
+ struct heap_usage {
+    uint32_t size, header_bottom, largest, largest_serial, recorded, over;
+ };
+@@ -279,20 +697,147 @@ log_high_water(struct kk_fault_commit *c)
+    }
+ }
+ 
++static const char *const attachment_names[KK_FAULT_ATTACHMENTS] = {
++   "c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7", "depth", "stencil"};
++
++/* "+1.234" ms after the commit, "-" if the GPU wrote none for this cb */
++static void
++format_ts(const struct kk_fault_commit *c, uint64_t ts, char *buf, size_t size)
++{
++   if (!ts || ts < c->committed_ts || !c->dev->fault.timestamp_hz)
++      snprintf(buf, size, "-");
++   else
++      snprintf(buf, size, "+%.3f",
++               (double)(ts - c->committed_ts) * 1000.0 / c->dev->fault.timestamp_hz);
++}
++
++static void
++log_encoder(struct kk_fault_commit *c, uint32_t i,
++            const struct kk_fault_encoder *e, const uint64_t *ts)
++{
++   char what[192];
++   describe(e, what, sizeof(what));
++   char gpu[64] = "";
++   if (e->ts != ~0u && ts) {
++      char start[24], end[24];
++      format_ts(c, ts[0], start, sizeof(start));
++      format_ts(c, ts[1], end, sizeof(end));
++      const bool started = start[0] != '-', ended = end[0] != '-';
++      snprintf(gpu, sizeof(gpu), " gpu=%s..%s ms%s", start, end,
++               started && !ended ? " UNFINISHED" : !started ? " not-started" : "");
++   }
++   fprintf(stderr, "[kk-fault] cb #%u enc %u %s%s", c->serial, i, what, gpu);
++   if (e->render)
++      fprintf(stderr, " area=%ux%u layers=%u%s", e->area_w, e->area_h,
++              e->layers, e->view_mask ? " multiview" : "");
++   if (e->max_count)
++      fprintf(stderr, " largest-draw=%u x%u", e->max_count, e->max_instances);
++   if (e->resolves)
++      fprintf(stderr, " resolves-after=%u", e->resolves);
++   fprintf(stderr, " end-barrier=%s%s\n", e->end_barrier & 1u ? "narrow" : "all",
++           e->end_barrier & 2u ? ",device" : "");
++   for (unsigned a = 0; a < KK_FAULT_ATTACHMENTS; a++) {
++      const struct kk_fault_attachment *att = &e->att[a];
++      if (!att->image)
++         continue;
++      fprintf(stderr,
++              "[kk-fault] cb #%u enc %u   %s image=%p format=%u level=%u "
++              "layer=%u+%u %ux%u samples=%u load-op=%u store-op=%u",
++              c->serial, i, attachment_names[a], att->image, att->vk_format,
++              att->level, att->layer, att->layers, att->width, att->height,
++              att->samples, att->load_op, att->store_op);
++      if (att->store_action != 0xff)
++         fprintf(stderr, " store-action=%u", att->store_action);
++      fputc('\n', stderr);
++   }
++   if (e->pipeline_count) {
++      fprintf(stderr, "[kk-fault] cb #%u enc %u   pipelines", c->serial, i);
++      for (unsigned p = 0; p < e->pipeline_count; p++) {
++         if (e->pipelines[p].msl)
++            fprintf(stderr, " msl=%016" PRIx64 "x%u", e->pipelines[p].msl,
++                    e->pipelines[p].uses);
++         else
++            fprintf(stderr, " driver-internal x%u", e->pipelines[p].uses);
++      }
++      if (e->pipelines_dropped)
++         fprintf(stderr, " +%u more binds", e->pipelines_dropped);
++      fputc('\n', stderr);
++   }
++   if (e->feedback.count) {
++      const struct kk_fault_feedback *fb = &e->feedback;
++      fprintf(stderr,
++              "[kk-fault] cb #%u enc %u   FEEDBACK %u draw(s), first draw %u: "
++              "set %u binding %u[%u] (descriptor type %u) views levels %u+%u "
++              "layers %u+%u of %s's image\n",
++              c->serial, i, fb->count, fb->draw, fb->set, fb->binding, fb->elem,
++              fb->type, fb->level, fb->levels, fb->layer, fb->layers,
++              attachment_names[fb->attachment]);
++   }
++}
++
++static void
++log_syncs(const struct kk_fault_sync *syncs, uint32_t count, const char *what)
++{
++   for (uint32_t i = 0; i < MIN2(count, KK_FAULT_SUBMIT_SYNCS); i++) {
++      fprintf(stderr, " %s=%p:%" PRIu64 "(now %" PRIu64 ")", what,
++              syncs[i].event, syncs[i].value,
++              mtl_shared_event_get_signaled_value(syncs[i].event));
++   }
++   if (count > KK_FAULT_SUBMIT_SYNCS)
++      fprintf(stderr, " +%u more %ss", count - KK_FAULT_SUBMIT_SYNCS, what);
++}
++
++/* The submits that held the command buffer and the two before it */
++static void
++log_submits(struct kk_fault_commit *c)
++{
++   struct kk_device *dev = c->dev;
++   simple_mtx_lock(&dev->fault.lock);
++   int32_t at = -1;
++   for (uint32_t k = 0; k < KK_FAULT_SUBMITS && at < 0; k++) {
++      const struct kk_fault_submit *s = &dev->fault.submits[k];
++      for (uint32_t j = 0; j < MIN2(s->cb_count, KK_FAULT_SUBMIT_CBS); j++)
++         if (s->index && s->cbs[j] == c->serial)
++            at = s->index;
++   }
++   for (uint32_t k = 0; k < KK_FAULT_SUBMITS; k++) {
++      const struct kk_fault_submit *s = &dev->fault.submits[k];
++      if (!s->index || at < 0 || s->index > (uint32_t)at ||
++          s->index + 2u < (uint32_t)at)
++         continue;
++      fprintf(stderr, "[kk-fault] submit %u%s: cbs", s->index,
++              s->index == (uint32_t)at ? " (the failed cb's)" : "");
++      for (uint32_t j = 0; j < MIN2(s->cb_count, KK_FAULT_SUBMIT_CBS); j++)
++         fprintf(stderr, " #%u", s->cbs[j]);
++      if (s->drawables)
++         fprintf(stderr, " drawable-waits=%u", s->drawables);
++      log_syncs(s->waits, s->wait_count, "wait");
++      log_syncs(s->signals, s->signal_count, "signal");
++      fputc('\n', stderr);
++   }
++   if (at < 0)
++      fprintf(stderr, "[kk-fault] submit: the failed cb's is no longer kept\n");
++   simple_mtx_unlock(&dev->fault.lock);
++}
++
+ static void
+ log_failure(struct kk_fault_commit *c, const struct mtl_feedback_data *data,
+             uint32_t last_completed)
+ {
++   const uint32_t count =
++      util_dynarray_num_elements(&c->trail, struct kk_fault_encoder);
++   const struct kk_fault_encoder *trail = util_dynarray_begin(&c->trail);
+    uint32_t render = 0u, draws = 0u, dispatches = 0u, copies = 0u;
+-   for (uint32_t i = 0; i < c->count; i++) {
+-      render += c->trail[i].render;
+-      draws += c->trail[i].draws;
+-      dispatches += c->trail[i].dispatches;
+-      copies += c->trail[i].copies;
++   for (uint32_t i = 0; i < count; i++) {
++      render += trail[i].render;
++      draws += trail[i].draws;
++      dispatches += trail[i].dispatches;
++      copies += trail[i].copies;
+    }
+-   char flags[64] = "";
++   char flags[96] = "";
+    static const char *const names[] = {"tess", "gs", "unroll", "heap",
+-                                       "indirect"};
++                                       "indirect", "fence-wait", "vertex-wait",
++                                       "continued"};
+    for (unsigned i = 0; i < ARRAY_SIZE(names); i++) {
+       if (c->flags & (1u << i))
+          snprintf(flags + strlen(flags), sizeof(flags) - strlen(flags), "%s%s",
+@@ -302,18 +847,30 @@ log_failure(struct kk_fault_commit *c, const struct mtl_feedback_data *data,
+            "[kk-fault] cb #%u failed (error=%d): encoders=%u render=%u "
+            "compute=%u draws=%u dispatches=%u copies=%u flags=%s "
+            "last-completed=#%u\n",
+-           c->serial, (int)data->error, c->count + c->dropped, render,
+-           c->count - render, draws, dispatches, copies,
++           c->serial, (int)data->error, count + c->dropped, render,
++           count - render, draws, dispatches, copies,
+            flags[0] ? flags : "none", last_completed);
+-   const uint32_t listed = MIN2(c->count, 512u);
+-   for (uint32_t i = 0; i < listed; i++) {
+-      char what[128];
+-      describe(&c->trail[i], what, sizeof(what));
+-      fprintf(stderr, "[kk-fault] cb #%u enc %u %s\n", c->serial, i, what);
++
++   /* Each encoder's two timestamps; the GPU has stopped */
++   uint64_t *ts = NULL;
++   if (c->dev->fault.timestamps && count) {
++      ts = calloc(2u * count, sizeof(uint64_t));
++      for (uint32_t i = 0; ts && i < count; i++) {
++         if (trail[i].ts != ~0u &&
++             !mtl_timestamp_counter_heap_read_range(c->dev->fault.timestamps,
++                                                    trail[i].ts, 2u, &ts[2u * i]))
++            ts[2u * i] = ts[2u * i + 1u] = 0u;
++      }
+    }
+-   if (c->count + c->dropped > listed)
++   const uint32_t listed = MIN2(count, 512u);
++   for (uint32_t i = 0; i < listed; i++)
++      log_encoder(c, i, &trail[i], ts ? &ts[2u * i] : NULL);
++   if (count + c->dropped > listed)
+       fprintf(stderr, "[kk-fault] cb #%u: %u more encoders not listed\n",
+-              c->serial, c->count + c->dropped - listed);
++              c->serial, count + c->dropped - listed);
++   free(ts);
++
++   log_submits(c);
+ 
+    struct heap_usage u;
+    if (!heap_usage(c->dev, &u)) {
+@@ -352,5 +909,6 @@ kk_fault_feedback(struct mtl_feedback_data *data)
+       if (c->flags & KK_FAULT_HEAP)
+          log_high_water(c);
+    }
++   util_dynarray_fini(&c->trail);
+    free(c);
+ }
+diff --git a/src/kosmickrisp/vulkan/kk_fault.h b/src/kosmickrisp/vulkan/kk_fault.h
+index bcd8800..a4762e0 100644
+--- a/src/kosmickrisp/vulkan/kk_fault.h
++++ b/src/kosmickrisp/vulkan/kk_fault.h
+@@ -13,14 +13,24 @@
+  * - each encoder is labelled "kk#<serial>.<index> <kind> ..." with what it
+  *   encoded, so a label Metal reports (or a GPU capture shows) names the
+  *   command buffer and pass;
+- * - each command buffer keeps a trail of its encoders (kind, draws,
+- *   dispatches, copies, tessellation / geometry / unroll / geometry heap
+- *   use), copied at commit; a failed commit logs it as [kk-fault] lines;
++ * - each command buffer keeps a trail of its encoders, which its commit takes
++ *   over and a failed commit logs as [kk-fault] lines: kind, draws,
++ *   dispatches, copies, the meta operation (vk_meta) that made it, the
++ *   attachments (image, format, level, layers, size, load and store), the
++ *   pipelines it drew with (the first 16 hex digits of their MSL hash, as
++ *   [kk-compile] msl= shows them) and how many draws each, the largest
++ *   direct draw, the timestamp fence it waited for and the resolves after it,
++ *   its barriers, and a sampled or storage image the draws' descriptors name
++ *   that is one of its own attachments (feedback);
++ * - each encoder writes a GPU timestamp when it starts and when it ends into
++ *   a ring in a counter heap, so a failed commit shows which encoders ran,
++ *   which finished, and the one the GPU stopped in;
++ * - each submit's semaphore waits and signals (Metal events and values) are
++ *   kept, and a failure shows them with each event's value then;
+  * - each reset of the geometry heap (kk_heap, the 128 MiB scratch of
+  *   tessellation, geometry shaders and strip unrolls that every draw using
+  *   it allocates from) first copies the bytes the previous user allocated
+- *   into a ring, so a failure shows whether a draw overflowed the heap
+- *   (poly_heap_alloc_offs has no way to fail: its abort is a return).
++ *   into a ring, so a failure shows whether a draw overflowed the heap.
+  *
+  * Without the flag none of this runs; a failed commit still logs the full
+  * error chain (kk_queue.c). */
+@@ -29,11 +39,14 @@
+ #include <stdint.h>
+ 
+ #include "kosmickrisp/bridge/mtl_types.h"
++#include "util/simple_mtx.h"
+ #include "util/u_dynarray.h"
+ 
++struct hash_table_u64;
+ struct kk_bo;
+ struct kk_cmd_buffer;
+ struct kk_device;
++struct kk_image_view;
+ 
+ enum kk_fault_flag {
+    KK_FAULT_TESS = 1u << 0,     /* a tessellated draw's compute stages */
+@@ -41,13 +54,56 @@ enum kk_fault_flag {
+    KK_FAULT_UNROLL = 1u << 2,   /* a strip or fan unrolled for restart */
+    KK_FAULT_HEAP = 1u << 3,     /* a geometry heap reset (kk_heap) */
+    KK_FAULT_INDIRECT = 1u << 4, /* an indirect draw */
++   KK_FAULT_FENCE_WAIT = 1u << 5,  /* waited for the timestamp fence */
++   KK_FAULT_VERTEX_WAIT = 1u << 6, /* a queue barrier before its vertex stage */
++   KK_FAULT_CONTINUED = 1u << 7,   /* a render pass begun in an earlier encoder */
++};
++
++/* An attachment of a render encoder: the Vulkan view's image and
++ * subresource, its format, the load op and the store action Metal got
++ * (MTLStoreAction, ~0 if not set on the encoder) */
++struct kk_fault_attachment {
++   const void *image; /* NULL: no attachment */
++   uint32_t vk_format;
++   uint16_t level, layer, layers;
++   uint16_t width, height, samples;
++   uint8_t load_op, store_op, store_action;
++};
++
++/* c0..c7, depth, stencil */
++#define KK_FAULT_ATTACHMENTS 10u
++#define KK_FAULT_PIPELINES 8u
++
++struct kk_fault_pipeline {
++   uint64_t msl; /* the first 16 hex digits of the MSL hash; 0 unknown */
++   uint32_t uses; /* draws in a render encoder, dispatches in compute */
++};
++
++/* The first image a draw's descriptors name that is also an attachment of
++ * its encoder, at overlapping levels and layers */
++struct kk_fault_feedback {
++   uint32_t count; /* draws that had one */
++   uint32_t draw;  /* the first: its index in the encoder */
++   uint8_t set, attachment;
++   uint16_t binding, elem, type;
++   uint16_t level, levels, layer, layers; /* the descriptor's view */
+ };
+ 
+ /* One encoder of a command buffer's trail */
+ struct kk_fault_encoder {
+    bool render;
+    uint8_t flags; /* enum kk_fault_flag */
+-   uint32_t draws, dispatches, copies;
++   uint8_t pipeline_count, current; /* current: KK_FAULT_PIPELINES none */
++   uint8_t end_barrier; /* 1 narrowed (no vertex), 2 device visibility */
++   uint16_t resolves;   /* timestamp resolves encoded after it */
++   uint32_t draws, dispatches, copies, pipelines_dropped;
++   uint32_t ts;         /* its two timestamp slots: ts, ts + 1; ~0 none */
++   uint32_t max_count, max_instances; /* the largest direct draw */
++   const char *meta;    /* the vk_meta operation, a static string */
++   uint16_t area_w, area_h, layers, view_mask;
++   struct kk_fault_pipeline pipelines[KK_FAULT_PIPELINES];
++   struct kk_fault_attachment att[KK_FAULT_ATTACHMENTS];
++   struct kk_fault_feedback feedback;
+ };
+ 
+ /* A command buffer's trail, reset at vkBeginCommandBuffer */
+@@ -55,6 +111,9 @@ struct kk_fault_cmd {
+    uint32_t serial; /* 0: not traced (no MESA_KK_DEBUG=fault) */
+    uint32_t flags;  /* every encoder's flags */
+    bool open;       /* the last encoder is still being encoded */
++   bool rendering;  /* in a render pass whose first encoder began */
++   bool desc_dirty; /* graphics descriptors changed since the last scan */
++   const char *meta; /* the vk_meta operation being recorded, if any */
+    uint32_t dropped; /* encoders past KK_FAULT_MAX_ENCODERS, counted only */
+    struct util_dynarray trail; /* struct kk_fault_encoder */
+ };
+@@ -62,6 +121,32 @@ struct kk_fault_cmd {
+ #define KK_FAULT_MAX_ENCODERS 2048u
+ /* Geometry heap resets the ring keeps: the bytes each found allocated */
+ #define KK_FAULT_RING 1024u
++/* Encoder timestamps the counter heap keeps, two an encoder */
++#define KK_FAULT_TIMESTAMPS 8192u
++/* Submits whose waits and signals are kept */
++#define KK_FAULT_SUBMITS 16u
++#define KK_FAULT_SUBMIT_SYNCS 8u
++#define KK_FAULT_SUBMIT_CBS 8u
++
++struct kk_fault_sync {
++   void *event; /* mtl_shared_event */
++   uint64_t value;
++};
++
++struct kk_fault_submit {
++   uint32_t index; /* the submit's number, 0: unused */
++   uint32_t cbs[KK_FAULT_SUBMIT_CBS], cb_count;
++   struct kk_fault_sync waits[KK_FAULT_SUBMIT_SYNCS], signals[KK_FAULT_SUBMIT_SYNCS];
++   uint32_t wait_count, signal_count;
++   uint32_t drawables; /* command buffers that waited for a drawable */
++};
++
++/* What a sampled or storage image descriptor names, by its texture's GPU
++ * resource ID */
++struct kk_fault_view {
++   const void *image;
++   uint16_t level, levels, layer, layers;
++};
+ 
+ /* The device's part */
+ struct kk_fault_device {
+@@ -71,6 +156,17 @@ struct kk_fault_device {
+    uint32_t serial;    /* the last command buffer serial, atomic */
+    uint32_t last_completed; /* the last serial that completed, atomic */
+    uint32_t heap_high_water; /* bytes, the highest logged */
++
++   mtl_counter_heap *timestamps; /* KK_FAULT_TIMESTAMPS, NULL if none */
++   uint32_t timestamp_next;      /* atomic, in pairs */
++   uint64_t timestamp_hz;
++
++   simple_mtx_t lock; /* the maps and the submit ring */
++   struct hash_table_u64 *pipelines; /* Metal pipeline -> MSL hash prefix */
++   struct hash_table_u64 *views;     /* GPU resource ID -> kk_fault_view */
++   struct kk_fault_submit submits[KK_FAULT_SUBMITS];
++   uint32_t submit_count;
++   struct kk_fault_submit *current; /* the submit kk_queue_submit is in */
+ };
+ 
+ void kk_fault_device_init(struct kk_device *dev);
+@@ -80,20 +176,53 @@ void kk_fault_cmd_init(struct kk_cmd_buffer *cmd);
+ void kk_fault_cmd_finish(struct kk_cmd_buffer *cmd);
+ void kk_fault_begin_cmd(struct kk_cmd_buffer *cmd);
+ 
++void kk_fault_begin_rendering(struct kk_cmd_buffer *cmd);
++void kk_fault_end_rendering(struct kk_cmd_buffer *cmd);
+ void kk_fault_begin_encoder(struct kk_cmd_buffer *cmd, bool render);
+ void kk_fault_end_encoder(struct kk_cmd_buffer *cmd, void *encoder);
++void kk_fault_end_barrier(struct kk_cmd_buffer *cmd, bool narrow, bool device);
++void kk_fault_resolve(struct kk_cmd_buffer *cmd);
++void kk_fault_store(struct kk_cmd_buffer *cmd, unsigned index, unsigned action);
+ void kk_fault_draw(struct kk_cmd_buffer *cmd);
+-void kk_fault_pipeline(struct kk_cmd_buffer *cmd);
++void kk_fault_draw_size(struct kk_cmd_buffer *cmd, uint32_t count,
++                        uint32_t instances);
++void kk_fault_pipeline(struct kk_cmd_buffer *cmd, void *pipeline);
+ void kk_fault_copy(struct kk_cmd_buffer *cmd);
+ void kk_fault_note(struct kk_cmd_buffer *cmd, uint32_t flags);
++void kk_fault_meta(struct kk_cmd_buffer *cmd, const char *name);
++
++/* Before a draw in a render encoder: the first after a change of the
++ * graphics descriptors looks for an attachment its descriptors also name */
++void kk_fault_draw_descriptors(struct kk_cmd_buffer *cmd);
++
++/* The graphics descriptors changed (a bind or a push) */
++void kk_fault_descriptors_changed(struct kk_cmd_buffer *cmd);
++
++/* A pipeline Metal built, with its MSL hash (hex) */
++void kk_fault_pipeline_built(struct kk_device *dev, void *pipeline,
++                             const char *msl_hex);
++/* An image view's textures, by GPU resource ID, made and destroyed */
++void kk_fault_view_init(struct kk_device *dev, const struct kk_image_view *view);
++void kk_fault_view_finish(struct kk_device *dev,
++                          const struct kk_image_view *view);
++
++/* A submit's waits and signals, before its command buffers commit */
++struct kk_fault_submit *kk_fault_submit_begin(struct kk_device *dev);
++void kk_fault_submit_wait(struct kk_device *dev, struct kk_fault_submit *s,
++                          void *event, uint64_t value);
++void kk_fault_submit_cb(struct kk_device *dev, struct kk_fault_submit *s,
++                        struct kk_cmd_buffer *cmd);
++void kk_fault_submit_signal(struct kk_device *dev, struct kk_fault_submit *s,
++                            void *event, uint64_t value);
+ 
+ /* Before a command buffer's first use of the geometry heap resets it: copies
+  * the heap's bottom (what the last user allocated) into the next ring slot,
+  * in encoder, before the reset's write */
+ void kk_fault_heap_reset(struct kk_cmd_buffer *cmd, mtl_compute_encoder *encoder);
+ 
+-/* Wraps a commit's feedback: the trail is copied now, logged if the commit
+- * fails, and callback(user_data) runs as before. NULL when not traced. */
++/* Wraps a commit's feedback: the trail is taken over now, logged if the
++ * commit fails, and callback(user_data) runs as before. NULL when not
++ * traced. */
+ struct kk_fault_commit;
+ struct kk_fault_commit *
+ kk_fault_commit_new(struct kk_cmd_buffer *cmd,
+diff --git a/src/kosmickrisp/vulkan/kk_image_view.c b/src/kosmickrisp/vulkan/kk_image_view.c
+index 52e04fb..6da877a 100644
+--- a/src/kosmickrisp/vulkan/kk_image_view.c
++++ b/src/kosmickrisp/vulkan/kk_image_view.c
+@@ -253,12 +253,14 @@ kk_image_view_init(struct kk_device *dev, struct kk_image_view *view,
+       }
+    }
+ 
++   kk_fault_view_init(dev, view);
+    return VK_SUCCESS;
+ }
+ 
+ void
+ kk_image_view_finish(struct kk_device *dev, struct kk_image_view *view)
+ {
++   kk_fault_view_finish(dev, view);
+    for (uint8_t plane = 0; plane < view->plane_count; plane++) {
+       if (view->planes[plane].mtl_handle_sampled)
+          mtl_release(view->planes[plane].mtl_handle_sampled);
+diff --git a/src/kosmickrisp/vulkan/kk_pass_prof.c b/src/kosmickrisp/vulkan/kk_pass_prof.c
+index 67e4827..15fb17b 100644
+--- a/src/kosmickrisp/vulkan/kk_pass_prof.c
++++ b/src/kosmickrisp/vulkan/kk_pass_prof.c
+@@ -281,7 +281,7 @@ kk_pass_prof_pipeline(struct kk_cmd_buffer *cmd, void *pipeline)
+ {
+    /* Playport (PLA-880): this hook, the draw and the copy one feed
+     * MESA_KK_DEBUG=fault's trail too */
+-   kk_fault_pipeline(cmd);
++   kk_fault_pipeline(cmd, pipeline);
+    if (!cmd->pass_prof || cmd->pass_prof_index == PP_PASSES)
+       return;
+    struct kk_profile_pass *p = &cmd->pass_prof->passes[cmd->pass_prof_index];
+@@ -294,6 +294,7 @@ kk_pass_prof_pipeline(struct kk_cmd_buffer *cmd, void *pipeline)
+ void
+ kk_pass_prof_store(struct kk_cmd_buffer *cmd, unsigned index, unsigned action)
+ {
++   kk_fault_store(cmd, index, action);
+    if (cmd->pass_prof && cmd->pass_prof_index != PP_PASSES)
+       cmd->pass_prof->passes[cmd->pass_prof_index].attachments.stores[index] = action;
+ }
+diff --git a/src/kosmickrisp/vulkan/kk_queue.c b/src/kosmickrisp/vulkan/kk_queue.c
+index 7e5a549..2b81513 100644
+--- a/src/kosmickrisp/vulkan/kk_queue.c
++++ b/src/kosmickrisp/vulkan/kk_queue.c
+@@ -273,6 +273,8 @@ kk_queue_commit(struct kk_queue *queue, struct kk_cmd_buffer *cmd,
+    mtl_commit_options *options = mtl_new_commit_options();
+    /* Playport (PLA-880): MESA_KK_DEBUG=fault keeps the recording's encoders
+     * for its feedback */
++   kk_fault_submit_cb(kk_queue_device(queue), kk_queue_device(queue)->fault.current,
++                      cmd);
+    struct kk_fault_commit *fault =
+       kk_fault_commit_new(cmd, callback, user_data);
+    if (fault)
+@@ -432,11 +434,17 @@ kk_queue_submit(struct vk_queue *vk_queue, struct vk_queue_submit *submit)
+       kk_residency_log(dev);
+    }
+ 
++   /* Playport (PLA-880): MESA_KK_DEBUG=fault keeps the submit's waits,
++    * command buffers and signals */
++   struct kk_fault_submit *fault = kk_fault_submit_begin(dev);
++   dev->fault.current = fault;
++
+    for (struct vk_sync_wait *wait = submit->waits,
+                             *end = submit->waits + submit->wait_count;
+         wait != end; ++wait) {
+       struct kk_sync_timeline *sync =
+          container_of(wait->sync, struct kk_sync_timeline, base);
++      kk_fault_submit_wait(dev, fault, sync->mtl_handle, wait->wait_value);
+       mtl_wait_for_event(queue->mtl_handle, sync->mtl_handle, wait->wait_value);
+    }
+ 
+@@ -450,6 +458,8 @@ kk_queue_submit(struct vk_queue *vk_queue, struct vk_queue_submit *submit)
+          container_of(submit->command_buffers[i], struct kk_cmd_buffer, vk);
+ 
+       if (cmd_buffer->drawable) {
++         if (fault)
++            fault->drawables++;
+          mtl_command_queue_wait_for_drawable(queue->mtl_handle,
+                                              cmd_buffer->drawable);
+       }
+@@ -495,9 +505,11 @@ kk_queue_submit(struct vk_queue *vk_queue, struct vk_queue_submit *submit)
+       struct vk_sync_signal *signal = &submit->signals[i];
+       struct kk_sync_timeline *sync =
+          container_of(signal->sync, struct kk_sync_timeline, base);
++      kk_fault_submit_signal(dev, fault, sync->mtl_handle, signal->signal_value);
+       mtl_signal_event(queue->mtl_handle, sync->mtl_handle,
+                        signal->signal_value);
+    }
++   dev->fault.current = NULL;
+ 
+    if (KK_DEBUG(GPU))
+       kk_gpu_log(frames, os_time_get_nano() - submit_start, false);
+diff --git a/src/kosmickrisp/vulkan/kk_shader.c b/src/kosmickrisp/vulkan/kk_shader.c
+index 2f14450..9bbb210 100644
+--- a/src/kosmickrisp/vulkan/kk_shader.c
++++ b/src/kosmickrisp/vulkan/kk_shader.c
+@@ -2543,6 +2543,7 @@ kk_compile_compute_pipeline(struct kk_device *device,
+    *pipe = pipeline;
+    kk_pass_prof_log_pipeline(device, pipeline, false, build.msl,
+                              local_size_threads);
++   kk_fault_pipeline_built(device, pipeline, build.msl);
+ 
+    return VK_SUCCESS;
+ }
+@@ -3085,6 +3086,7 @@ kk_compile_graphics_pipeline(struct kk_device *device, struct kk_shader *vs,
+    }
+ 
+    kk_pass_prof_log_pipeline(device, pipe->gfx.render, true, build.msl, 0);
++   kk_fault_pipeline_built(device, pipe->gfx.render, build.msl);
+    mtl_release(pipeline_descriptor);
+    mtl_release(fragment_function);
+    mtl_release(vertex_function);
+-- 
+2.56.1
+
