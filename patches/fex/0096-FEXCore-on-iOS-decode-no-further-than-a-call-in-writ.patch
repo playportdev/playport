@@ -1,0 +1,95 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 13 Nov 2026 10:48:44 +0100
+Subject: [PATCH] FEXCore: on iOS, decode no further than a call in writable
+ code
+
+PLA-873. Borderlands 2's launcher (Wine Mono, i386 WPF) called 0xfeec7cc0
+from Mono's JIT code in a window procedure under ShowWindow. The address is
+never mapped. It is what Mono's unpatched `call 0` placeholder becomes: the
+call is emitted into a temporary buffer (here near 0x14a4ab50, in the
+launcher's heap), copied to the code chunk, and patched in place
+afterwards. The thread ran a translation of the call made before the patch.
+
+Mono ends each method with its exception throws, calls to a throw helper
+that never returns, and writes the next method right after it. Without
+MonoHacks the multiblock decoder goes on past every call, so a block of the
+earlier method translates the next one too, possibly between its memcpy and
+its patches. A compile traps a code page only after decoding it. When the
+patch lands in between, it does not fault, and the translation stays. In
+the 140 log lines before the call, threads 0068 and 0088 both write Mono
+code into that host page while blocks are compiled from it.
+
+Upstream stops past calls only once Mono is detected by its DLL's name.
+Wine Mono's detection is opt-in (MADEIRA_WINEMONO_BRIDGE), and in the WOW64
+module every image's name is empty (GetSectionFilePath fails), so no 32-bit
+Mono is ever detected. On iOS, DecodesPastCall (IosMultiblock.h) stops past
+a call in every writable executable range, a JIT's code; an image's code
+is decoded as before. The call's return site starts its own block, as it
+does for Mono under MonoHacks.
+
+Class: upstream-bug
+Evidence: tools/tests/test_fex_decode_past_call.py (host check; the phone gate, Borderlands 2's launcher window over several launches, not run)
+Offered-upstream: no; upstream's MonoHacks cover the same code where Mono is detected
+---
+ FEXCore/Source/Interface/Core/Frontend.cpp    |  5 ++--
+ FEXCore/Source/Interface/Core/IosMultiblock.h | 25 +++++++++++++++++++
+ 2 files changed, 28 insertions(+), 2 deletions(-)
+ create mode 100644 FEXCore/Source/Interface/Core/IosMultiblock.h
+
+diff --git a/FEXCore/Source/Interface/Core/Frontend.cpp b/FEXCore/Source/Interface/Core/Frontend.cpp
+index e71850288..bfdf03942 100644
+--- a/FEXCore/Source/Interface/Core/Frontend.cpp
++++ b/FEXCore/Source/Interface/Core/Frontend.cpp
+@@ -10,6 +10,7 @@ $end_info$
+ #include "Interface/Core/Frontend.h"
+ #include "Interface/Core/OpcodeDispatcher.h"
+ #include "Interface/Core/X86Tables/X86Tables.h"
++#include "Interface/Core/IosMultiblock.h"
+ #include "Interface/Core/LookupCache.h"
+ 
+ #include <array>
+@@ -1136,10 +1137,10 @@ void Decoder::BranchTargetInMultiblockRange() {
+   const auto InstEnd = DecodeInst->PC + DecodeInst->InstSize;
+ 
+   if (DecodeInst->TableInfo->Flags & FEXCore::X86Tables::InstFlags::FLAGS_CALL) {
+-    if (ExecutableRangeWritable && CTX->AreMonoHacksActive()) {
++    if (!DecodesPastCall(ExecutableRangeWritable, CTX->AreMonoHacksActive())) {
+       // Mono generated code often contains noreturn calls with garbage following them, and calls are always backpatched
+       // after CIL compilation leading to n recompiles for a multiblock with n calls. Choose to minimize stutters over
+-      // raw performance and disable tracking past calls for mono generated code.
++      // raw performance and disable tracking past calls for mono generated code (on iOS, all writable code: IosMultiblock.h).
+       return;
+     }
+ 
+diff --git a/FEXCore/Source/Interface/Core/IosMultiblock.h b/FEXCore/Source/Interface/Core/IosMultiblock.h
+new file mode 100644
+index 000000000..0e3bfef83
+--- /dev/null
++++ b/FEXCore/Source/Interface/Core/IosMultiblock.h
+@@ -0,0 +1,25 @@
++// SPDX-License-Identifier: MIT
++#pragma once
++
++namespace FEXCore::Frontend {
++
++// Playport (PLA-873): whether the multiblock decoder goes on past a CALL, decoding the bytes after
++// it as the return site. Mono ends a method with its exception throws, each a call to a throw
++// helper that never returns, and writes the next method right after it: a memcpy, then every call
++// patched in place. Past that last call the decoder translates the next method, possibly between
++// its memcpy and its patches. A patch that lands before the compile traps the page (another
++// thread's compile; the trap comes after decoding) leaves that translation in place, and the
++// thread runs an unpatched `call 0` placeholder: Borderlands 2's launcher called 0xfeec7cc0 from
++// Wine Mono's code. Upstream stops only once Mono is detected by its DLL's name, which on iOS a
++// WoW64 module never has, and Wine Mono's detection is opt-in. On iOS no writable executable range
++// (a JIT's code) is decoded past a call; an image's code still is.
++inline bool DecodesPastCall(bool RangeWritable, bool MonoHacksActive) {
++#ifdef FEX_IOS_HOST
++  (void)MonoHacksActive;
++  return !RangeWritable;
++#else
++  return !(RangeWritable && MonoHacksActive);
++#endif
++}
++
++} // namespace FEXCore::Frontend
