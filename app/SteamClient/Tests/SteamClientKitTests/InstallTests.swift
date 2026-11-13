@@ -326,6 +326,39 @@ final class DepotSelectionTests: XCTestCase {
         XCTAssertEqual(now.depotsToRecheck, [])
     }
 
+    /// A record written before PLA-850's fix left every owned DLC whose depot no package lists out as
+    /// "DLC app N not owned" (the phone's Witcher 3 classic install: no DLC folder). It checks its DLC
+    /// depots with Steam at a repair, which adds those the account owns now and decides the others;
+    /// a record written with the account's ownership does not.
+    func testAnOlderRecordsDLCDepotsAreRecheckedAtRepair() throws {
+        let old = InstallReceipt(appID: 292030, name: "The Witcher 3", installDir: "The Witcher 3", buildID: 3280809,
+                                 depots: [DepotRef(depotID: 292031, gid: 1), DepotRef(depotID: 292034, gid: 2),
+                                          DepotRef(depotID: 310613, gid: 3)],
+                                 files: 10, bytes: 1,
+                                 skippedDepots: ["292032: language russian", "378640: DLC app 378640 not owned",
+                                                 "378647: DLC app 378647 not owned"],
+                                 skippedSymlinks: 0, installedAt: "-")
+        XCTAssertEqual(old.depotsToRecheck, [378640, 378647])
+        var since = old
+        since.dlcOwnershipChecked = true
+        XCTAssertEqual(since.depotsToRecheck, [])
+
+        let w3 = AppDepots(appID: 292030, name: "The Witcher 3", publicBuildID: 3280809, changeNumber: nil, depots: [
+            depot(292031, os: []), depot(292032, os: [], language: "russian"), depot(292034, os: []),
+            depot(378640, os: [], dlc: 378640), depot(310613, os: [], dlc: 378648), depot(378647, os: [], dlc: 378647),
+        ], installDir: "The Witcher 3")
+        let owned = DepotSelection.Ownership(depots: [292031, 292032, 292034, 310613], apps: [292030, 378640, 378648])
+        let checked = old.rechecked(by: try DepotSelection.select(w3, .init(owned: owned)), ownershipKnown: true)
+        XCTAssertEqual(checked.joining.map(\.depotID), [378640])
+        XCTAssertEqual(checked.receipt.skippedDepots, ["292032: language russian", "378647: DLC app 378647 not owned"])
+        XCTAssertEqual(checked.receipt.depotsToRecheck, [])
+        // Without the account's ownership nothing is decided, and the record keeps asking.
+        let unknown = old.rechecked(by: try DepotSelection.select(w3), ownershipKnown: false)
+        XCTAssertEqual(unknown.joining.map(\.depotID), [])
+        XCTAssertEqual(unknown.receipt.skippedDepots, old.skippedDepots)
+        XCTAssertEqual(unknown.receipt.depotsToRecheck, [378640, 378647])
+    }
+
     /// The launch entry an install records: Counter-Strike's `hl.exe -steam -game cstrike`,
     /// Windows only (macOS and Linux start `hl.sh`); Half-Life's own carries just `-steam`.
     func testTheWindowsLaunchEntryCarriesItsArguments() throws {
@@ -713,6 +746,34 @@ final class VerifyRepairTests: XCTestCase {
         XCTAssertEqual(again.bad, [])
         XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: final.appendingPathComponent("one.bin").path)[.modificationDate] as? Date, oneBefore)
         XCTAssertTrue(FileManager.default.fileExists(atPath: final.appendingPathComponent("user.sav").path))
+    }
+
+    /// Verify names an older record's DLC depots as content to check with Steam (PLA-850), so the
+    /// page offers Repair though every file matches.
+    func testVerifyAsksToCheckAnOlderRecordsDLC() async throws {
+        let dir = try scratchDir("verify-dlc")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let fx = Fixture()
+        let m = try DepotManifest(depotID: 1, gid: 1, files: [fx.file("one.bin", bytes("AAAA"))])
+        let layout = InstallLayout.root(dir)
+        let installer = TitleInstaller(layout: layout, session: nil, log: .silent)
+        let root = layout.gamesRoot.appendingPathComponent("Title")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data(bytes("AAAA")).write(to: root.appendingPathComponent("one.bin"))
+        try RetainedManifest.save(m, to: layout.manifestFile(DepotRef(depotID: 1, gid: 1)))
+        var receipt = InstallReceipt(appID: 9, name: "T", installDir: "Title", buildID: 3, depots: [DepotRef(depotID: 1, gid: 1)],
+                                     files: 1, bytes: 4, skippedDepots: ["2: DLC app 20 not owned"], skippedSymlinks: 0, installedAt: "-")
+        try installer.saveReceipt(receipt)
+        var report = try await installer.verify(appID: 9)
+        XCTAssertEqual(report.bad, [])
+        XCTAssertEqual(report.depotsToRecheck, [2])
+        XCTAssertFalse(report.ok)
+
+        receipt.dlcOwnershipChecked = true
+        try installer.saveReceipt(receipt)
+        report = try await installer.verify(appID: 9)
+        XCTAssertEqual(report.depotsToRecheck, [])
+        XCTAssertTrue(report.ok)
     }
 
     func testReinstallRecordsTheNewBuildBeforeDeletingTheOldTree() throws {

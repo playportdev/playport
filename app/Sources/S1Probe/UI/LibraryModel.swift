@@ -883,7 +883,7 @@ final class LibraryModel: ObservableObject {
                     (v, report) = (InstalledTitle.Verification(date: Date(), files: r.files, bad: r.bad.count, unlisted: r.unlisted.count,
                                                                depotsToRecheck: r.depotsToRecheck.isEmpty ? nil : r.depotsToRecheck.count), r)
                     if !r.depotsToRecheck.isEmpty {
-                        LibraryModel.log("verify \(t.name): depots \(r.depotsToRecheck) left out as shared installs; Repair checks them with Steam")
+                        LibraryModel.log("verify \(t.name): depots \(r.depotsToRecheck) left out as shared installs or unowned DLC; Repair checks them with Steam")
                     }
                 } else {
                     (v, report) = try await TitleVerifier.verify(t, games: LibraryModel.paths.games, cohort: LibraryModel.cohort)

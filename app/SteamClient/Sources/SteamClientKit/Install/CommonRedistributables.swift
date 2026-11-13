@@ -26,14 +26,39 @@ extension InstallReceipt {
             .filter { $0.appID == CommonRedistributables.appID }.map(\.depotID)
     }
 
-    /// Other apps' depots (any source app but 228980) this record left out as shared installs: a
-    /// record written before Playport installed another app's depots into a game's folder
-    /// (`DepotInfo.isContentFromAnotherApp`; PLA-365) gave them all that reason, so Steam's depot
-    /// list decides again at a repair. A record written since names a true shared install
-    /// otherwise (`DepotSelection.sharedInstallElsewhereReason`).
+    /// The depots this record left out that Steam's depot list decides again at a repair:
+    /// - other apps' depots (any source app but 228980) left out as shared installs: a record
+    ///   written before Playport installed another app's depots into a game's folder
+    ///   (`DepotInfo.isContentFromAnotherApp`; PLA-365) gave them all that reason. A record written
+    ///   since names a true shared install otherwise (`DepotSelection.sharedInstallElsewhereReason`);
+    /// - DLC depots left out as not owned, unless the record says that was decided with the
+    ///   account's ownership (`dlcOwnershipChecked`): a record written before PLA-850's fix left
+    ///   every owned DLC whose depot no package lists out so.
     public var depotsToRecheck: [UInt32] {
-        skippedDepots.compactMap { DepotSelection.sharedInstall(skipped: $0) }
-            .filter { $0.appID != CommonRedistributables.appID }.map(\.depotID)
+        skippedDepots.compactMap { e in
+            if let shared = DepotSelection.sharedInstall(skipped: e) {
+                return shared.appID == CommonRedistributables.appID ? nil : shared.depotID
+            }
+            return dlcOwnershipChecked == true ? nil : DepotSelection.unownedDLC(skipped: e)
+        }
+    }
+
+    /// This record after a repair's check of its `depotsToRecheck` against `selection`, Steam's
+    /// depot list now (with the account's ownership when `ownershipKnown`): `joining`, the rechecked
+    /// depots the selection installs that the record lacks; the record with the others' entries
+    /// as the selection gives them now and every other entry kept. Its DLC entries count as
+    /// decided only when the ownership was known; until then they stay as they were.
+    public func rechecked(by selection: DepotSelection, ownershipKnown: Bool)
+        -> (receipt: InstallReceipt, joining: [DepotInfo]) {
+        let recheck = Set(depotsToRecheck.filter { d in
+            ownershipKnown || !skippedDepots.contains { DepotSelection.unownedDLC(skipped: $0) == d }
+        })
+        let have = Set(depots.map(\.depotID))
+        var updated = self
+        updated.skippedDepots = skippedDepots.filter { e in DepotSelection.skippedDepotID(e).map { !recheck.contains($0) } ?? true }
+            + selection.skipped.filter { recheck.contains($0.depotID) }.map { "\($0.depotID): \($0.reason)" }
+        if ownershipKnown { updated.dlcOwnershipChecked = true }
+        return (updated, selection.depots.filter { !have.contains($0.depotID) && recheck.contains($0.depotID) })
     }
 }
 

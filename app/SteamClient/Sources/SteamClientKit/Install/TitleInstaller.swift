@@ -79,7 +79,8 @@ public struct TitleInstaller: Sendable {
         public var seconds: Double
         public var repaired: Int?
         /// Depots the record left out that Steam's depot list may have installed in the folder
-        /// (InstallReceipt.depotsToRecheck): a repair asks Steam and downloads those it would.
+        /// (InstallReceipt.depotsToRecheck: shared installs, or DLC an older record left out as
+        /// not owned): a repair asks Steam and downloads those it would.
         public var depotsToRecheck: [UInt32] = []
 
         /// Whether a repair has something to do: a bad file, or a depot to check again.
@@ -151,7 +152,8 @@ public struct TitleInstaller: Sendable {
                                      skippedDepots: selection.skipped.map { "\($0.depotID): \($0.reason)" },
                                      skippedSymlinks: plan.skippedSymlinks.count, installedAt: "",
                                      branch: branch == Branch.publicName ? nil : branch,
-                                     executable: app.launchExecutable, arguments: app.launchArguments)
+                                     executable: app.launchExecutable, arguments: app.launchArguments,
+                                     dlcOwnershipChecked: options.explicit == nil && options.ownedDepots != nil ? true : nil)
         let source = CDNChunkSource(content: content, keys: keys, pool: ServerPool(servers, use: r.servers, log: log), log: log)
         let (written, result) = try await stageAndCommit(plan, to: final, replacing: replacing, sharing: sharing, receipt: receipt,
                                                          source: source, options: r.engine, progress: progress, say: say)
@@ -317,7 +319,8 @@ public struct TitleInstaller: Sendable {
                 first.files = plan.files.count
                 first.bytes = plan.totalBytes
             }
-            first.depotsToRecheck = []
+            // What stays undecided: DLC depots, when the account's ownership was unknown.
+            first.depotsToRecheck = (added?.receipt ?? loadReceipt(appID) ?? receipt).depotsToRecheck
             guard !first.bad.isEmpty else { return first }
         }
 
@@ -333,7 +336,7 @@ public struct TitleInstaller: Sendable {
                                  progress: progress, say: say)
     }
 
-    /// A repair's check of the depots an earlier record left out as shared installs
+    /// A repair's check of the depots an earlier record left out as shared installs or unowned DLC
     /// (VerifyReport.depotsToRecheck), against Steam's depot list now: those the selection now
     /// installs in the folder join the record, which is saved at once, with their files (those not
     /// already there as the plan has them) returned as missing for the repair to download; the
@@ -348,18 +351,16 @@ public struct TitleInstaller: Sendable {
             throw SteamError.unsupported("app \(receipt.appID) is at build \(app.publicBuildID.map(String.init) ?? "?") on Steam, "
                                          + "\(receipt.buildID.map(String.init) ?? "?") here: update it rather than repair")
         }
-        var options = DepotSelection.Options()
-        if let owned = await ownership(try requireSession(), say: say) { options = DepotSelection.Options(owned: owned) }
-        let selection = try DepotSelection.select(app, options)
-        let have = Set(receipt.depots.map(\.depotID))
-        let joining = selection.depots.filter { !have.contains($0.depotID) && receipt.depotsToRecheck.contains($0.depotID) }
-        var updated = receipt
+        let owned = await ownership(try requireSession(), say: say)
+        let selection = try DepotSelection.select(app, owned.map { DepotSelection.Options(owned: $0) } ?? .init())
+        let checked = receipt.rechecked(by: selection, ownershipKnown: owned != nil)
+        var updated = checked.receipt
+        let joining = checked.joining
         let recheck = Set(receipt.depotsToRecheck)
-        // The rechecked depots' entries as the selection gives them now; every other entry is kept.
-        updated.skippedDepots = receipt.skippedDepots.filter { e in
-            DepotSelection.sharedInstall(skipped: e).map { !recheck.contains($0.depotID) } ?? true
-        } + selection.skipped.filter { recheck.contains($0.depotID) }.map { "\($0.depotID): \($0.reason)" }
         for s in selection.skipped where recheck.contains(s.depotID) { say("  depot \(s.depotID) still skipped: \(s.reason)") }
+        if owned == nil, receipt.dlcOwnershipChecked != true, receipt.skippedDepots.contains(where: { DepotSelection.unownedDLC(skipped: $0) != nil }) {
+            say("  DLC depots not checked: the account's ownership is unknown")
+        }
         guard !joining.isEmpty else {
             try saveReceipt(updated)
             return nil
