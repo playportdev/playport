@@ -1,0 +1,845 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 13 Nov 2026 15:21:27 +0100
+Subject: [PATCH] kk: MESA_KK_FAULT_SPLIT commits each encoder alone,
+ MESA_KK_FAULT_SKIP leaves out passes by kind and copies, and fault checks its
+ timestamps
+
+The third phone repro of The Witcher 3 1.32's GPU hang (PLA-880) failed
+with the same command buffer as the first two: three G-buffer passes, the
+5-layer passes, the x5-instance pass and a copy. Every encoder said
+"not-started", and the hang came 27 ms after the GPU began the command
+buffer. Two things kept that run from naming the encoder:
+- Nothing ever showed that the encoder timestamps work: they are read only
+  after a failure, and a commit tick on another clock than the counter
+  heap's would turn every encoder into "not-started".
+- The suspect pipelines' MSL hashes were new. That is not a per-run seed:
+  0157 added a field to the root table's draw part, which moved push
+  constants and every later field from byte 672 to 680, so every shader
+  reading them has new MSL. A hash prefix holds for one build only.
+
+With MESA_KK_DEBUG=fault:
+- MESA_KK_FAULT_SPLIT=N (the game's Graphics options) ends a command
+  buffer's Metal command buffer after every N encoders and begins another on
+  the same allocator; the queue commits each one alone, in order, with a
+  feedback of its own. A failure then says "cb #C part p of P (enc i)
+  failed" and lists only that part's encoders, so the failing encoder is
+  named without timestamps or hashes. MESA_KK_FAULT_SPLIT=draw also ends the
+  render encoder after every draw (as a compute encoder inside a pass does),
+  so each draw is a commit of its own. A command buffer keeps the extra
+  Metal command buffers it took for the next recording and gives them back
+  to its pool when it is freed.
+- MESA_KK_FAULT_SKIP also takes layered (draws in passes of more than one
+  layer), instanced (direct draws of more than one instance), copy (buffer
+  and image copies) and WxH (draws in passes of that render area): a
+  suspect is left out by its shape instead of its hash. The [kk-fault] on:
+  line now says "leaving out:", and names the split.
+- The first three completed command buffers with encoder timestamps log
+  "timestamp check: cb #C: S of E encoder(s) wrote a start and D an end;
+  enc i start tick T, commit tick K, F Hz: the starts follow|precede the
+  commit". It shows in any run whether the GPU writes the timestamps, and
+  whether the commit tick a failure's gpu= times and not-started count from
+  is on the same clock.
+
+Without MESA_KK_DEBUG=fault none of this runs, and nothing changes.
+
+Linear: PLA-880
+Class: diagnostics
+Evidence: build/mesa-host-test/kk-fault-test.c (mock Metal: each encoder, or each two, committed as a Metal command buffer of its own and named by a failure; a draw a render encoder; the skips by kind, area and copy; the timestamp check on both clocks); PLA-880 (phone3 repro: every encoder not-started, new hashes)
+Offered-upstream: no
+---
+ src/kosmickrisp/vulkan/kk_cmd_buffer.c |   2 +
+ src/kosmickrisp/vulkan/kk_cmd_copy.c   |  20 +-
+ src/kosmickrisp/vulkan/kk_cmd_draw.c   |   3 +
+ src/kosmickrisp/vulkan/kk_fault.c      | 325 ++++++++++++++++++++++---
+ src/kosmickrisp/vulkan/kk_fault.h      |  75 +++++-
+ src/kosmickrisp/vulkan/kk_pass_prof.c  |   7 +-
+ src/kosmickrisp/vulkan/kk_pass_prof.h  |   2 +-
+ src/kosmickrisp/vulkan/kk_queue.c      |   6 +-
+ 8 files changed, 388 insertions(+), 52 deletions(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.c b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+index 0ceefc6..bf313c7 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_buffer.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+@@ -727,6 +727,7 @@ cs_start_render(struct kk_cmd_buffer *cmd)
+    cs_end(cmd);
+ 
+    kk_cmd_begin_metal(cmd);
++   kk_fault_split(cmd);
+    cmd->metal.render = mtl_new_render_command_encoder_with_descriptor(
+       cmd->metal.cmd_buf, state->render_pass_descriptor);
+    if (KK_DEBUG(PASSES)) {
+@@ -805,6 +806,7 @@ cs_get_compute(struct kk_cmd_buffer *cmd)
+ 
+    if (cmd->metal.compute == NULL) {
+       kk_cmd_begin_metal(cmd);
++      kk_fault_split(cmd);
+       cmd->metal.compute = mtl_new_compute_command_encoder(cmd->metal.cmd_buf);
+       if (KK_DEBUG(PASSES)) {
+          KK_PASS_STAT(COMPUTE_ENCODERS);
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_copy.c b/src/kosmickrisp/vulkan/kk_cmd_copy.c
+index a521df7..307a5bb 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_copy.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_copy.c
+@@ -27,7 +27,9 @@ kk_CmdCopyBuffer2(VkCommandBuffer commandBuffer,
+    VK_FROM_HANDLE(kk_buffer, dst, pCopyBufferInfo->dstBuffer);
+ 
+    mtl_compute_encoder *encoder = cs_get_compute(cmd);
+-   kk_pass_prof_copy(cmd);
++   /* Playport (PLA-880): MESA_KK_FAULT_SKIP=copy leaves it out */
++   if (kk_pass_prof_copy(cmd))
++      return;
+    for (uint32_t i = 0; i < pCopyBufferInfo->regionCount; i++) {
+       const VkBufferCopy2 *region = &pCopyBufferInfo->pRegions[i];
+       mtl_copy_from_buffer_to_buffer(
+@@ -93,7 +95,9 @@ kk_CmdCopyBufferToImage2(VkCommandBuffer commandBuffer,
+    VK_FROM_HANDLE(kk_image, image, pCopyBufferToImageInfo->dstImage);
+ 
+    mtl_compute_encoder *encoder = cs_get_compute(cmd);
+-   kk_pass_prof_copy(cmd);
++   /* Playport (PLA-880): MESA_KK_FAULT_SKIP=copy leaves it out */
++   if (kk_pass_prof_copy(cmd))
++      return;
+    for (int r = 0; r < pCopyBufferToImageInfo->regionCount; r++) {
+       const VkBufferImageCopy2 *region = &pCopyBufferToImageInfo->pRegions[r];
+       const uint8_t plane_index = kk_image_memory_aspects_to_plane(
+@@ -124,7 +128,9 @@ kk_CmdCopyImageToBuffer2(VkCommandBuffer commandBuffer,
+    VK_FROM_HANDLE(kk_buffer, buffer, pCopyImageToBufferInfo->dstBuffer);
+ 
+    mtl_compute_encoder *encoder = cs_get_compute(cmd);
+-   kk_pass_prof_copy(cmd);
++   /* Playport (PLA-880): MESA_KK_FAULT_SKIP=copy leaves it out */
++   if (kk_pass_prof_copy(cmd))
++      return;
+    for (unsigned r = 0; r < pCopyImageToBufferInfo->regionCount; r++) {
+       const VkBufferImageCopy2 *region = &pCopyImageToBufferInfo->pRegions[r];
+       const uint8_t plane_index = kk_image_memory_aspects_to_plane(
+@@ -184,7 +190,9 @@ copy_through_buffer(struct kk_cmd_buffer *cmd, struct kk_image *src,
+    bool is_dst_compressed = util_format_is_compressed(dst_format);
+ 
+    mtl_compute_encoder *encoder = cs_get_compute(cmd);
+-   kk_pass_prof_copy(cmd);
++   /* Playport (PLA-880): MESA_KK_FAULT_SKIP=copy leaves it out */
++   if (kk_pass_prof_copy(cmd))
++      return buffer_offset;
+ 
+    const uint32_t buffer_stride_B =
+       util_format_get_stride(src_format, region->extent.width);
+@@ -302,7 +310,9 @@ copy_image(struct kk_cmd_buffer *cmd, struct kk_image *src, uint32_t src_index,
+            struct kk_image *dst, uint32_t dst_index, const VkImageCopy2 *region)
+ {
+    mtl_compute_encoder *encoder = cs_get_compute(cmd);
+-   kk_pass_prof_copy(cmd);
++   /* Playport (PLA-880): MESA_KK_FAULT_SKIP=copy leaves it out */
++   if (kk_pass_prof_copy(cmd))
++      return;
+    struct kk_image_plane *src_plane = &src->planes[src_index];
+    struct kk_image_plane *dst_plane = &dst->planes[dst_index];
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_draw.c b/src/kosmickrisp/vulkan/kk_cmd_draw.c
+index 1b07f01..9fb9645 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_draw.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_draw.c
+@@ -1858,6 +1858,9 @@ kk_dispatch_draw(struct kk_cmd_buffer *cmd, struct kk_draw_data data)
+                                 data.grid.size.z);
+       }
+    }
++   /* Playport (PLA-880): MESA_KK_FAULT_SPLIT=draw ends the encoder */
++   if (unlikely(cmd->fault.serial))
++      kk_fault_end_draw(cmd);
+ }
+ 
+ static bool
+diff --git a/src/kosmickrisp/vulkan/kk_fault.c b/src/kosmickrisp/vulkan/kk_fault.c
+index 8dfd4da..40cd2c4 100644
+--- a/src/kosmickrisp/vulkan/kk_fault.c
++++ b/src/kosmickrisp/vulkan/kk_fault.c
+@@ -14,6 +14,7 @@
+ 
+ #include "kk_bo.h"
+ #include "kk_cmd_buffer.h"
++#include "kk_cmd_pool.h"
+ #include "kk_debug.h"
+ #include "kk_descriptor_set.h"
+ #include "kk_descriptor_set_layout.h"
+@@ -36,7 +37,8 @@
+ #define KK_FAULT_TIMESTAMPS KK_TS_HEAP_ENTRIES
+ 
+ /* MESA_KK_FAULT_SKIP=a,b,...: each entry an MSL hash prefix of 1 to 16 hex
+- * digits, or "layer" or "viewport" (a vertex stage writing one) */
++ * digits, "layer" or "viewport" (a vertex stage writing one), "layered",
++ * "instanced", "copy" (enum kk_fault_skip_kind) or a render area WxH */
+ static void
+ parse_skip(struct kk_fault_device *f, char *out, size_t size)
+ {
+@@ -47,12 +49,30 @@ parse_skip(struct kk_fault_device *f, char *out, size_t size)
+       char entry[24];
+       snprintf(entry, sizeof(entry), "%.*s", (int)MIN2(len, sizeof(entry) - 1u), s);
+       const char *what = NULL;
++      unsigned w = 0, h = 0;
++      char end;
+       if (!strcmp(entry, "layer")) {
+          f->skip_writes |= KK_FAULT_WRITES_LAYER;
+          what = entry;
+       } else if (!strcmp(entry, "viewport")) {
+          f->skip_writes |= KK_FAULT_WRITES_VIEWPORT;
+          what = entry;
++      } else if (!strcmp(entry, "layered")) {
++         f->skip_kinds |= KK_FAULT_SKIP_LAYERED;
++         what = entry;
++      } else if (!strcmp(entry, "instanced")) {
++         f->skip_kinds |= KK_FAULT_SKIP_INSTANCED;
++         what = entry;
++      } else if (!strcmp(entry, "copy")) {
++         f->skip_kinds |= KK_FAULT_SKIP_COPY;
++         what = entry;
++      } else if (sscanf(entry, "%ux%u%c", &w, &h, &end) == 2 && w && h &&
++                 w <= UINT16_MAX && h <= UINT16_MAX &&
++                 f->skip_area_count < KK_FAULT_SKIP_AREAS) {
++         f->skip_areas[f->skip_area_count].w = w;
++         f->skip_areas[f->skip_area_count].h = h;
++         f->skip_area_count++;
++         what = entry;
+       } else if (len >= 1u && len <= 16u && strspn(entry, "0123456789abcdefABCDEF") == len &&
+                  f->skip_count < KK_FAULT_SKIPS) {
+          f->skip[f->skip_count].prefix = strtoull(entry, NULL, 16);
+@@ -70,6 +90,33 @@ parse_skip(struct kk_fault_device *f, char *out, size_t size)
+    }
+ }
+ 
++/* MESA_KK_FAULT_SPLIT=N (encoders a Metal command buffer holds) or draw
++ * (each draw its own render encoder, each encoder alone); what the [kk-fault]
++ * on: line says of it */
++static void
++parse_split(struct kk_fault_device *f, char *out, size_t size)
++{
++   const char *s = getenv("MESA_KK_FAULT_SPLIT");
++   out[0] = '\0';
++   if (!s || !*s)
++      return;
++   char *end;
++   const unsigned long n = strtoul(s, &end, 10);
++   if (!strcmp(s, "draw")) {
++      f->split = 1u;
++      f->split_draws = true;
++      snprintf(out, size, "; Metal command buffers: one per draw");
++   } else if (*end == '\0' && n >= 1u && n <= KK_FAULT_MAX_ENCODERS) {
++      f->split = n;
++      if (n == 1u)
++         snprintf(out, size, "; Metal command buffers: one per encoder");
++      else
++         snprintf(out, size, "; Metal command buffers: one per %lu encoders", n);
++   } else {
++      snprintf(out, size, "; MESA_KK_FAULT_SPLIT=%.16s ignored", s);
++   }
++}
++
+ void
+ kk_fault_device_init(struct kk_device *dev)
+ {
+@@ -89,17 +136,18 @@ kk_fault_device_init(struct kk_device *dev)
+          mtl_new_timestamp_counter_heap(dev->mtl_handle, KK_FAULT_TIMESTAMPS);
+       dev->fault.timestamp_hz = mtl_device_timestamp_frequency(dev->mtl_handle);
+    }
+-   char skip[160];
++   char skip[192], split[64];
+    parse_skip(&dev->fault, skip, sizeof(skip));
++   parse_split(&dev->fault, split, sizeof(split));
+    fprintf(stderr,
+            "[kk-fault] on: encoder labels, command buffer trails, geometry heap "
+            "ring%s, encoder timestamps%s; Metal encoder status: %s%s%s; "
+-           "vertex layer clamp %s\n",
++           "vertex layer clamp %s%s\n",
+            dev->fault.ring ? "" : " (not allocated)",
+            dev->fault.timestamps ? "" : " (none)",
+            mtl_enable_encoder_execution_status(),
+-           skip[0] ? "; skipping draws: " : "", skip,
+-           KK_EXPERIMENTAL(LAYER_CLAMP) ? "on" : "off");
++           skip[0] ? "; leaving out: " : "", skip,
++           KK_EXPERIMENTAL(LAYER_CLAMP) ? "on" : "off", split);
+    fflush(stderr);
+ }
+ 
+@@ -132,12 +180,30 @@ void
+ kk_fault_cmd_init(struct kk_cmd_buffer *cmd)
+ {
+    cmd->fault.trail = UTIL_DYNARRAY_INIT;
++   cmd->fault.parts = UTIL_DYNARRAY_INIT;
++   cmd->fault.spare = UTIL_DYNARRAY_INIT;
++}
++
++/* The parts a recording ended and did not commit become spares */
++static void
++keep_parts(struct kk_fault_cmd *f)
++{
++   util_dynarray_foreach(&f->parts, struct kk_fault_part, part)
++      util_dynarray_append(&f->spare, part->cb);
++   util_dynarray_clear(&f->parts);
++   f->part_encoders = f->part_first = 0u;
+ }
+ 
+ void
+ kk_fault_cmd_finish(struct kk_cmd_buffer *cmd)
+ {
+-   util_dynarray_fini(&cmd->fault.trail);
++   struct kk_fault_cmd *f = &cmd->fault;
++   keep_parts(f);
++   util_dynarray_foreach(&f->spare, mtl_command_buffer *, cb)
++      kk_cmd_pool_return_cmd_buf(kk_cmd_buffer_pool(cmd), *cb);
++   util_dynarray_fini(&f->spare);
++   util_dynarray_fini(&f->parts);
++   util_dynarray_fini(&f->trail);
+ }
+ 
+ void
+@@ -145,6 +211,7 @@ kk_fault_begin_cmd(struct kk_cmd_buffer *cmd)
+ {
+    struct kk_fault_cmd *f = &cmd->fault;
+    util_dynarray_clear(&f->trail);
++   keep_parts(f);
+    f->flags = 0u;
+    f->open = f->rendering = f->desc_dirty = false;
+    f->meta = NULL;
+@@ -155,6 +222,52 @@ kk_fault_begin_cmd(struct kk_cmd_buffer *cmd)
+                   : 0u;
+ }
+ 
++void
++kk_fault_split(struct kk_cmd_buffer *cmd)
++{
++   struct kk_fault_cmd *f = &cmd->fault;
++   struct kk_device *dev = kk_cmd_buffer_device(cmd);
++   if (!f->serial || !dev->fault.split)
++      return;
++   if (f->part_encoders < dev->fault.split) {
++      f->part_encoders++;
++      return;
++   }
++   mtl_command_buffer *next =
++      util_dynarray_num_elements(&f->spare, mtl_command_buffer *)
++         ? util_dynarray_pop(&f->spare, mtl_command_buffer *)
++         : kk_cmd_pool_get_cmd_buf(kk_cmd_buffer_pool(cmd));
++   if (!next) {
++      /* No other Metal command buffer: this one takes the encoder too */
++      f->part_encoders++;
++      return;
++   }
++   mtl_end_command_buffer(cmd->metal.cmd_buf);
++   const struct kk_fault_part part = {
++      .cb = cmd->metal.cmd_buf,
++      .first = f->part_first,
++      .count = f->part_encoders,
++   };
++   util_dynarray_append(&f->parts, part);
++   mtl_begin_command_buffer(next, cmd->metal.allocator);
++   cmd->metal.cmd_buf = next;
++   f->part_first += f->part_encoders;
++   f->part_encoders = 1u;
++}
++
++void
++kk_fault_end_draw(struct kk_cmd_buffer *cmd)
++{
++   if (!cmd->fault.serial || !kk_cmd_buffer_device(cmd)->fault.split_draws ||
++       !cmd->metal.render)
++      return;
++   /* As a compute encoder inside a pass ends it (cs_get_compute) */
++   kk_apply_attachment_store_ops(cmd, true);
++   cs_end(cmd);
++   kk_cmd_buffer_dirty_all_gfx(cmd);
++   cmd->state.gfx.need_to_start_render_pass = true;
++}
++
+ static struct kk_fault_encoder *
+ open_encoder(struct kk_cmd_buffer *cmd)
+ {
+@@ -382,12 +495,17 @@ kk_fault_pipeline(struct kk_cmd_buffer *cmd, void *pipeline)
+    }
+ }
+ 
+-void
++bool
+ kk_fault_copy(struct kk_cmd_buffer *cmd)
+ {
+    struct kk_fault_encoder *e = open_encoder(cmd);
+-   if (e)
+-      e->copies++;
++   if (!e)
++      return false;
++   e->copies++;
++   if (!(kk_cmd_buffer_device(cmd)->fault.skip_kinds & KK_FAULT_SKIP_COPY))
++      return false;
++   e->skipped++;
++   return true;
+ }
+ 
+ void
+@@ -475,15 +593,32 @@ skipped(const struct kk_device *dev, const struct kk_fault_pipeline_info *p)
+    return false;
+ }
+ 
++/* MESA_KK_FAULT_SKIP's pass kinds and render areas */
++static bool
++skipped_pass(const struct kk_device *dev, const struct kk_fault_encoder *e,
++             uint32_t instances)
++{
++   const uint8_t kinds = dev->fault.skip_kinds;
++   if (((kinds & KK_FAULT_SKIP_LAYERED) && e->layers > 1u) ||
++       ((kinds & KK_FAULT_SKIP_INSTANCED) && instances > 1u))
++      return true;
++   for (uint32_t i = 0; i < dev->fault.skip_area_count; i++) {
++      if (e->area_w == dev->fault.skip_areas[i].w &&
++          e->area_h == dev->fault.skip_areas[i].h)
++         return true;
++   }
++   return false;
++}
++
+ bool
+ kk_fault_skip_draw(struct kk_cmd_buffer *cmd, uint32_t instances)
+ {
+    struct kk_fault_encoder *e = open_encoder(cmd);
+    struct kk_fault_pipeline_info *p = cmd->fault.pipeline;
+-   if (!e || !e->render || !p)
++   if (!e || !e->render)
+       return false;
+    struct kk_device *dev = kk_cmd_buffer_device(cmd);
+-   if (p->writes) {
++   if (p && p->writes) {
+       const uint32_t layers = MAX2(e->layers, 1u);
+       const uint32_t bit = 1u << (MIN2(layers, 32u) - 1u);
+       simple_mtx_lock(&dev->fault.lock);
+@@ -508,7 +643,7 @@ kk_fault_skip_draw(struct kk_cmd_buffer *cmd, uint32_t instances)
+          fflush(stderr);
+       }
+    }
+-   if (!skipped(dev, p))
++   if (!skipped(dev, p) && !skipped_pass(dev, e, instances))
+       return false;
+    e->skipped++;
+    return true;
+@@ -746,14 +881,18 @@ struct kk_fault_commit {
+    uint32_t serial, flags, dropped;
+    uint64_t committed_ts; /* the GPU's timestamp at the commit */
+    struct util_dynarray trail; /* taken from the command buffer */
++   /* The trail's entries from begin on are this Metal command buffer's
++    * encoders, the first being the command buffer's encoder first */
++   uint32_t begin, first;
++   /* MESA_KK_FAULT_SPLIT: its part of parts (1-based); 0 unsplit */
++   uint32_t part, parts;
++   bool last; /* the command buffer's last Metal command buffer */
+ };
+ 
+-struct kk_fault_commit *
+-kk_fault_commit_new(struct kk_cmd_buffer *cmd,
+-                    mtl_feedback_handler_callback callback, void *user_data)
++static struct kk_fault_commit *
++new_commit(struct kk_cmd_buffer *cmd, mtl_feedback_handler_callback callback,
++           void *user_data)
+ {
+-   if (!cmd->fault.serial)
+-      return NULL;
+    struct kk_fault_commit *c = malloc(sizeof(*c));
+    if (!c)
+       return NULL;
+@@ -768,10 +907,61 @@ kk_fault_commit_new(struct kk_cmd_buffer *cmd,
+       .committed_ts = dev->fault.timestamps
+                          ? mtl_device_get_gpu_timestamp(dev->mtl_handle)
+                          : 0u,
+-      .trail = cmd->fault.trail,
++      .trail = UTIL_DYNARRAY_INIT,
+    };
++   return c;
++}
++
++struct kk_fault_commit *
++kk_fault_commit_new(struct kk_cmd_buffer *cmd, mtl_command_queue *queue,
++                    mtl_feedback_handler_callback part_callback,
++                    void *part_data, mtl_feedback_handler_callback callback,
++                    void *user_data)
++{
++   struct kk_fault_cmd *f = &cmd->fault;
++   if (!f->serial)
++      return NULL;
++   /* MESA_KK_FAULT_SPLIT: the parts before metal.cmd_buf, each alone with a
++    * copy of its encoders' trail */
++   const uint32_t parts =
++      util_dynarray_num_elements(&f->parts, struct kk_fault_part);
++   const uint32_t recorded =
++      util_dynarray_num_elements(&f->trail, struct kk_fault_encoder);
++   const struct kk_fault_encoder *trail = util_dynarray_begin(&f->trail);
++   uint32_t part_index = 0u;
++   util_dynarray_foreach(&f->parts, struct kk_fault_part, part) {
++      struct kk_fault_commit *pc = new_commit(cmd, part_callback, part_data);
++      mtl_commit_options *options = mtl_new_commit_options();
++      part_index++;
++      if (pc) {
++         pc->first = part->first;
++         pc->part = part_index;
++         pc->parts = parts + 1u;
++         if (part->first < recorded) {
++            const uint32_t n = MIN2(part->count, recorded - part->first);
++            void *copy = util_dynarray_grow(&pc->trail, struct kk_fault_encoder, n);
++            if (copy)
++               memcpy(copy, trail + part->first, n * sizeof(*trail));
++         }
++         mtl_commit_options_add_feedback_handler(options, kk_fault_feedback, pc);
++      } else {
++         mtl_commit_options_add_feedback_handler(options, part_callback, part_data);
++      }
++      mtl_command_queue_commit(queue, &part->cb, 1u, options);
++      mtl_release(options);
++   }
++   const uint32_t first = f->part_first;
++   keep_parts(f);
++
++   struct kk_fault_commit *c = new_commit(cmd, callback, user_data);
++   if (!c)
++      return NULL;
++   c->begin = c->first = first;
++   c->part = c->parts = parts ? parts + 1u : 0u;
++   c->last = true;
+    /* A Metal command buffer commits once: a resubmission re-records */
+-   cmd->fault.trail = UTIL_DYNARRAY_INIT;
++   c->trail = f->trail;
++   f->trail = UTIL_DYNARRAY_INIT;
+    return c;
+ }
+ 
+@@ -878,15 +1068,15 @@ log_stop(const struct kk_fault_commit *c, const struct kk_fault_encoder *trail,
+          last_ended = i;
+    }
+    if (unfinished >= 0)
+-      fprintf(stderr, "[kk-fault] cb #%u stopped in enc %d: it started and "
+-                      "did not end\n", c->serial, unfinished);
++      fprintf(stderr, "[kk-fault] cb #%u stopped in enc %u: it started and "
++                      "did not end\n", c->serial, c->first + unfinished);
+    else if (!written)
+       fprintf(stderr, "[kk-fault] cb #%u stopped before any encoder wrote a "
+                       "timestamp\n", c->serial);
+    else if ((uint32_t)(last_ended + 1) < count)
+-      fprintf(stderr, "[kk-fault] cb #%u stopped after enc %d, the last that "
+-                      "ended: enc %d did not start\n",
+-              c->serial, last_ended, last_ended + 1);
++      fprintf(stderr, "[kk-fault] cb #%u stopped after enc %u, the last that "
++                      "ended: enc %u did not start\n",
++              c->serial, c->first + last_ended, c->first + last_ended + 1u);
+    else
+       fprintf(stderr, "[kk-fault] cb #%u stopped after its last encoder "
+                       "ended\n", c->serial);
+@@ -1003,13 +1193,24 @@ log_submits(struct kk_fault_commit *c)
+    simple_mtx_unlock(&dev->fault.lock);
+ }
+ 
++/* The trail's entries of this Metal command buffer's encoders */
++static const struct kk_fault_encoder *
++commit_encoders(const struct kk_fault_commit *c, uint32_t *count)
++{
++   const uint32_t total =
++      util_dynarray_num_elements(&c->trail, struct kk_fault_encoder);
++   *count = total > c->begin ? total - c->begin : 0u;
++   return (const struct kk_fault_encoder *)util_dynarray_begin(&c->trail) +
++          c->begin;
++}
++
+ static void
+ log_failure(struct kk_fault_commit *c, const struct mtl_feedback_data *data,
+             uint32_t last_completed)
+ {
+-   const uint32_t count =
+-      util_dynarray_num_elements(&c->trail, struct kk_fault_encoder);
+-   const struct kk_fault_encoder *trail = util_dynarray_begin(&c->trail);
++   uint32_t count;
++   const struct kk_fault_encoder *trail = commit_encoders(c, &count);
++   const uint32_t dropped = c->last ? c->dropped : 0u;
+    uint32_t render = 0u, draws = 0u, dispatches = 0u, copies = 0u;
+    for (uint32_t i = 0; i < count; i++) {
+       render += trail[i].render;
+@@ -1026,11 +1227,19 @@ log_failure(struct kk_fault_commit *c, const struct mtl_feedback_data *data,
+          snprintf(flags + strlen(flags), sizeof(flags) - strlen(flags), "%s%s",
+                   flags[0] ? "," : "", names[i]);
+    }
++   /* MESA_KK_FAULT_SPLIT: " part 3 of 15 (enc 2)", " part 1 of 8 (enc 0..1)" */
++   char part[64] = "";
++   if (c->parts && count + dropped > 1u)
++      snprintf(part, sizeof(part), " part %u of %u (enc %u..%u)", c->part,
++               c->parts, c->first, c->first + count + dropped - 1u);
++   else if (c->parts)
++      snprintf(part, sizeof(part), " part %u of %u (enc %u)", c->part,
++               c->parts, c->first);
+    fprintf(stderr,
+-           "[kk-fault] cb #%u failed (error=%d): encoders=%u render=%u "
++           "[kk-fault] cb #%u%s failed (error=%d): encoders=%u render=%u "
+            "compute=%u draws=%u dispatches=%u copies=%u flags=%s "
+            "last-completed=#%u\n",
+-           c->serial, (int)data->error, count + c->dropped, render,
++           c->serial, part, (int)data->error, count + dropped, render,
+            count - render, draws, dispatches, copies,
+            flags[0] ? flags : "none", last_completed);
+ 
+@@ -1047,10 +1256,10 @@ log_failure(struct kk_fault_commit *c, const struct mtl_feedback_data *data,
+    }
+    const uint32_t listed = MIN2(count, 512u);
+    for (uint32_t i = 0; i < listed; i++)
+-      log_encoder(c, i, &trail[i], ts ? &ts[2u * i] : NULL);
+-   if (count + c->dropped > listed)
++      log_encoder(c, c->first + i, &trail[i], ts ? &ts[2u * i] : NULL);
++   if (count + dropped > listed)
+       fprintf(stderr, "[kk-fault] cb #%u: %u more encoders not listed\n",
+-              c->serial, count + c->dropped - listed);
++              c->serial, count + dropped - listed);
+    log_stop(c, trail, listed, ts);
+    free(ts);
+ 
+@@ -1075,6 +1284,49 @@ log_failure(struct kk_fault_commit *c, const struct mtl_feedback_data *data,
+    fflush(stderr);
+ }
+ 
++/* The first completed command buffers with encoder timestamps: whether the
++ * GPU wrote them, and whether they follow the commit's GPU tick, which the
++ * failed trail's gpu= times and not-started count from. These are a fresh
++ * heap's first slots, which hold 0 until written. */
++static void
++check_timestamps(struct kk_fault_commit *c)
++{
++   struct kk_device *dev = c->dev;
++   uint32_t count;
++   const struct kk_fault_encoder *trail = commit_encoders(c, &count);
++   if (!dev->fault.timestamps ||
++       p_atomic_read(&dev->fault.ts_checks) >= KK_FAULT_TS_CHECKS)
++      return;
++   uint32_t timed = 0u, started = 0u, ended = 0u, first = 0u;
++   uint64_t first_start = 0u;
++   for (uint32_t i = 0; i < count; i++) {
++      uint64_t t[2];
++      if (trail[i].ts == ~0u ||
++          !mtl_timestamp_counter_heap_read_range(dev->fault.timestamps,
++                                                 trail[i].ts, 2u, t))
++         continue;
++      if (!timed++) {
++         first = c->first + i;
++         first_start = t[0];
++      }
++      started += t[0] != 0u;
++      ended += t[1] != 0u;
++   }
++   if (!timed || p_atomic_inc_return(&dev->fault.ts_checks) > KK_FAULT_TS_CHECKS)
++      return;
++   fprintf(stderr,
++           "[kk-fault] timestamp check: cb #%u: %u of %u encoder(s) wrote a "
++           "start and %u an end; enc %u start tick %" PRIu64 ", commit tick "
++           "%" PRIu64 ", %" PRIu64 " Hz: %s\n",
++           c->serial, started, timed, ended, first, first_start,
++           c->committed_ts, dev->fault.timestamp_hz,
++           first_start >= c->committed_ts
++              ? "the starts follow the commit"
++              : "the starts precede the commit (another clock: gpu= and "
++                "not-started on a failure are not to be trusted)");
++   fflush(stderr);
++}
++
+ void
+ kk_fault_feedback(struct mtl_feedback_data *data)
+ {
+@@ -1089,9 +1341,12 @@ kk_fault_feedback(struct mtl_feedback_data *data)
+    if (data->error != MTL_COMMAND_QUEUE_ERROR_NONE) {
+       log_failure(c, data, last_completed);
+    } else {
+-      p_atomic_set(&dev->fault.last_completed, c->serial);
+-      if (c->flags & KK_FAULT_HEAP)
+-         log_high_water(c);
++      check_timestamps(c);
++      if (c->last) {
++         p_atomic_set(&dev->fault.last_completed, c->serial);
++         if (c->flags & KK_FAULT_HEAP)
++            log_high_water(c);
++      }
+    }
+    util_dynarray_fini(&c->trail);
+    free(c);
+diff --git a/src/kosmickrisp/vulkan/kk_fault.h b/src/kosmickrisp/vulkan/kk_fault.h
+index 0fb721e..1552ddc 100644
+--- a/src/kosmickrisp/vulkan/kk_fault.h
++++ b/src/kosmickrisp/vulkan/kk_fault.h
+@@ -24,13 +24,22 @@
+  *   that is one of its own attachments (feedback);
+  * - each encoder writes a GPU timestamp when it starts and when it ends into
+  *   a ring in a counter heap, so a failed commit shows which encoders ran,
+- *   which finished, and the one the GPU stopped in;
++ *   which finished, and the one the GPU stopped in; the first completed
++ *   command buffers check that the GPU wrote them, on the commit's clock;
+  * - each pipeline's hardware vertex stage that writes a layer or viewport
+  *   index is marked in the trail ([layer]), and the first draw of it in a
+  *   pass of each layer count is logged: a layer past the pass's layers is
+  *   undefined in Vulkan and Metal (MESA_KK_EXPERIMENTAL=layer_clamp);
+- * - MESA_KK_FAULT_SKIP=<MSL hash prefix>,...,layer,viewport leaves out the
+- *   draws of those pipelines, so one run can test whether they hang;
++ * - MESA_KK_FAULT_SKIP=<MSL hash prefix>,...,layer,viewport,layered,
++ *   instanced,copy,<W>x<H> leaves out the draws of those pipelines, the draws
++ *   in passes of more than one layer, the draws of more than one instance,
++ *   copies, and the draws in passes of that render area, so one run can test
++ *   whether they hang;
++ * - MESA_KK_FAULT_SPLIT=<N>|draw commits a command buffer's encoders as
++ *   Metal command buffers of N encoders each, every one alone, so a failed
++ *   commit names its encoders without timestamps; draw: every draw in a
++ *   render encoder (the pass begun again) and a Metal command buffer of its
++ *   own;
+  * - each submit's semaphore waits and signals (Metal events and values) are
+  *   kept, and a failure shows them with each event's value then;
+  * - each reset of the geometry heap (kk_heap, the 128 MiB scratch of
+@@ -54,6 +63,24 @@ struct kk_cmd_buffer;
+ struct kk_device;
+ struct kk_image_view;
+ 
++/* MESA_KK_FAULT_SKIP's kinds */
++enum kk_fault_skip_kind {
++   KK_FAULT_SKIP_LAYERED = 1u << 0,   /* draws in passes of more than one layer */
++   KK_FAULT_SKIP_INSTANCED = 1u << 1, /* direct draws of more than one instance */
++   KK_FAULT_SKIP_COPY = 1u << 2,      /* buffer and image copies */
++};
++/* MESA_KK_FAULT_SKIP's render areas, at most */
++#define KK_FAULT_SKIP_AREAS 4u
++/* Completed command buffers whose encoder timestamps are checked */
++#define KK_FAULT_TS_CHECKS 3u
++
++/* MESA_KK_FAULT_SPLIT: a Metal command buffer a recording ended before its
++ * last, and its encoders */
++struct kk_fault_part {
++   mtl_command_buffer *cb;
++   uint32_t first, count;
++};
++
+ enum kk_fault_flag {
+    KK_FAULT_TESS = 1u << 0,     /* a tessellated draw's compute stages */
+    KK_FAULT_GS = 1u << 1,       /* a geometry shader's compute stages */
+@@ -139,6 +166,13 @@ struct kk_fault_cmd {
+    /* The bound render pipeline's, NULL if unknown */
+    struct kk_fault_pipeline_info *pipeline;
+    struct util_dynarray trail; /* struct kk_fault_encoder */
++   /* MESA_KK_FAULT_SPLIT: the Metal command buffers this recording ended
++    * before metal.cmd_buf (struct kk_fault_part), the encoders begun in
++    * metal.cmd_buf and the index of its first, and the Metal command buffers
++    * kept for the next parts (mtl_command_buffer *), which this command
++    * buffer owns until it is freed */
++   struct util_dynarray parts, spare;
++   uint32_t part_encoders, part_first;
+ };
+ 
+ #define KK_FAULT_MAX_ENCODERS 2048u
+@@ -204,6 +238,19 @@ struct kk_fault_device {
+    } skip[KK_FAULT_SKIPS];
+    uint32_t skip_count;
+    uint8_t skip_writes; /* enum kk_fault_writes */
++   uint8_t skip_kinds;  /* enum kk_fault_skip_kind */
++   struct {
++      uint16_t w, h;
++   } skip_areas[KK_FAULT_SKIP_AREAS]; /* render areas whose draws are left out */
++   uint32_t skip_area_count;
++
++   /* MESA_KK_FAULT_SPLIT: encoders a Metal command buffer holds, 0 for all;
++    * split_draws: each draw ends its render encoder */
++   uint32_t split;
++   bool split_draws;
++
++   /* Completed command buffers whose encoder timestamps were checked, atomic */
++   uint32_t ts_checks;
+ };
+ 
+ void kk_fault_device_init(struct kk_device *dev);
+@@ -224,10 +271,20 @@ void kk_fault_draw(struct kk_cmd_buffer *cmd);
+ void kk_fault_draw_size(struct kk_cmd_buffer *cmd, uint32_t count,
+                         uint32_t instances);
+ void kk_fault_pipeline(struct kk_cmd_buffer *cmd, void *pipeline);
+-void kk_fault_copy(struct kk_cmd_buffer *cmd);
++/* A copy is about to be encoded in the compute encoder: whether
++ * MESA_KK_FAULT_SKIP=copy leaves it out */
++bool kk_fault_copy(struct kk_cmd_buffer *cmd);
+ void kk_fault_note(struct kk_cmd_buffer *cmd, uint32_t flags);
+ void kk_fault_meta(struct kk_cmd_buffer *cmd, const char *name);
+ 
++/* MESA_KK_FAULT_SPLIT, before an encoder is made on metal.cmd_buf: ends
++ * metal.cmd_buf when it holds its N encoders and begins another in its place
++ * on the same allocator */
++void kk_fault_split(struct kk_cmd_buffer *cmd);
++/* MESA_KK_FAULT_SPLIT=draw, after a draw was encoded: ends the render
++ * encoder, so the next draw begins the pass again with what was stored */
++void kk_fault_end_draw(struct kk_cmd_buffer *cmd);
++
+ /* Before a draw in a render encoder: the first after a change of the
+  * graphics descriptors looks for an attachment its descriptors also name */
+ void kk_fault_draw_descriptors(struct kk_cmd_buffer *cmd);
+@@ -266,11 +323,15 @@ void kk_fault_heap_reset(struct kk_cmd_buffer *cmd, mtl_compute_encoder *encoder
+ 
+ /* Wraps a commit's feedback: the trail is taken over now, logged if the
+  * commit fails, and callback(user_data) runs as before. NULL when not
+- * traced. */
++ * traced. With MESA_KK_FAULT_SPLIT the Metal command buffers the recording
++ * ended before metal.cmd_buf are committed on queue first, in order, each
++ * alone, with part_callback(part_data) as their feedback. */
+ struct kk_fault_commit;
+ struct kk_fault_commit *
+-kk_fault_commit_new(struct kk_cmd_buffer *cmd,
+-                    mtl_feedback_handler_callback callback, void *user_data);
++kk_fault_commit_new(struct kk_cmd_buffer *cmd, mtl_command_queue *queue,
++                    mtl_feedback_handler_callback part_callback,
++                    void *part_data, mtl_feedback_handler_callback callback,
++                    void *user_data);
+ void kk_fault_feedback(struct mtl_feedback_data *data);
+ 
+ #endif /* KK_FAULT_H */
+diff --git a/src/kosmickrisp/vulkan/kk_pass_prof.c b/src/kosmickrisp/vulkan/kk_pass_prof.c
+index 15fb17b..492b6f9 100644
+--- a/src/kosmickrisp/vulkan/kk_pass_prof.c
++++ b/src/kosmickrisp/vulkan/kk_pass_prof.c
+@@ -299,12 +299,15 @@ kk_pass_prof_store(struct kk_cmd_buffer *cmd, unsigned index, unsigned action)
+       cmd->pass_prof->passes[cmd->pass_prof_index].attachments.stores[index] = action;
+ }
+ 
+-void
++/* Playport (PLA-880): true when MESA_KK_FAULT_SKIP=copy leaves the copy out */
++bool
+ kk_pass_prof_copy(struct kk_cmd_buffer *cmd)
+ {
+-   kk_fault_copy(cmd);
++   if (kk_fault_copy(cmd))
++      return true;
+    if (cmd->pass_prof && cmd->pass_prof_index != PP_PASSES)
+       cmd->pass_prof->passes[cmd->pass_prof_index].native_copy = true;
++   return false;
+ }
+ 
+ void
+diff --git a/src/kosmickrisp/vulkan/kk_pass_prof.h b/src/kosmickrisp/vulkan/kk_pass_prof.h
+index 6f4e8d0..abd7e62 100644
+--- a/src/kosmickrisp/vulkan/kk_pass_prof.h
++++ b/src/kosmickrisp/vulkan/kk_pass_prof.h
+@@ -25,7 +25,7 @@ void kk_pass_prof_begin(struct kk_cmd_buffer *cmd, bool render);
+ void kk_pass_prof_end(struct kk_cmd_buffer *cmd, bool render);
+ void kk_pass_prof_pipeline(struct kk_cmd_buffer *cmd, void *pipeline);
+ void kk_pass_prof_draw(struct kk_cmd_buffer *cmd);
+-void kk_pass_prof_copy(struct kk_cmd_buffer *cmd);
++bool kk_pass_prof_copy(struct kk_cmd_buffer *cmd);
+ void kk_pass_prof_store(struct kk_cmd_buffer *cmd, unsigned index, unsigned action);
+ void kk_pass_prof_log_pipeline(struct kk_device *dev, void *pipeline,
+                                bool render, const char *msl, uint32_t requested);
+diff --git a/src/kosmickrisp/vulkan/kk_queue.c b/src/kosmickrisp/vulkan/kk_queue.c
+index 2b81513..17df22b 100644
+--- a/src/kosmickrisp/vulkan/kk_queue.c
++++ b/src/kosmickrisp/vulkan/kk_queue.c
+@@ -272,11 +272,13 @@ kk_queue_commit(struct kk_queue *queue, struct kk_cmd_buffer *cmd,
+ 
+    mtl_commit_options *options = mtl_new_commit_options();
+    /* Playport (PLA-880): MESA_KK_DEBUG=fault keeps the recording's encoders
+-    * for its feedback */
++    * for its feedback, and with MESA_KK_FAULT_SPLIT commits the Metal
++    * command buffers it ended before cmd_buf first */
+    kk_fault_submit_cb(kk_queue_device(queue), kk_queue_device(queue)->fault.current,
+                       cmd);
+    struct kk_fault_commit *fault =
+-      kk_fault_commit_new(cmd, callback, user_data);
++      kk_fault_commit_new(cmd, queue->mtl_handle, commit_callback,
++                          kk_queue_device(queue), callback, user_data);
+    if (fault)
+       mtl_commit_options_add_feedback_handler(options, kk_fault_feedback, fault);
+    else

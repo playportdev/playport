@@ -25,7 +25,9 @@ printed on stderr as "kk-mock-enc: ..." lines (PLA-72), and encoder labels
 too (PLA-880). A command allocator
 keeps the size a test sets across a reset, as Metal keeps its heaps, and a
 reset of one a command buffer was begun on and never committed aborts (the
-IOGPU fault KosmicKrisp's cmd_retire must avoid).
+IOGPU fault KosmicKrisp's cmd_retire must avoid). With
+KK_MOCK_MAX_ENCODERS_PER_CB=N a commit of a command buffer that holds more
+than N encoders aborts (PLA-880: MESA_KK_FAULT_SPLIT).
 
 The stubs are the template, so a new bridge function upstream still links:
 it gets the stub's body, with a dummy handle for a pointer return.
@@ -68,6 +70,8 @@ struct kk_mock_obj {
    struct kk_mock_obj *begun_on;
    int begin_committed;
    uint32_t uncommitted_begins;
+   /* Command buffers: the encoders made on it since its begin */
+   uint32_t encoders;
 };
 #define KK_MOCK_MAGIC 0x6b6b6d6bu
 #define KK_MOCK_MSL_POINT_SIZE 0x1u
@@ -77,6 +81,12 @@ void *kk_mock_new(int kind, uint64_t size);
 void kk_mock_set_size(void *handle, uint64_t size);
 unsigned kk_mock_command_buffer_begins(void);
 extern unsigned kk_mock_begins;
+/* Command buffers committed (PLA-880) */
+unsigned kk_mock_command_buffer_commits(void);
+extern unsigned kk_mock_commits;
+/* What mtl_device_get_gpu_timestamp gives, 0 until a test sets it */
+void kk_mock_set_gpu_timestamp(uint64_t ticks);
+extern uint64_t kk_mock_gpu_timestamp;
 void kk_mock_drain_feedback(void *queue);
 void kk_mock_record_msl(const char *src);
 void kk_mock_trace(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
@@ -180,6 +190,24 @@ kk_mock_command_buffer_begins(void)
    return __atomic_load_n(&kk_mock_begins, __ATOMIC_SEQ_CST);
 }
 
+/* Test-only: Metal command buffers committed so far (kk-fault-test.c) */
+unsigned kk_mock_commits;
+
+unsigned
+kk_mock_command_buffer_commits(void)
+{
+   return __atomic_load_n(&kk_mock_commits, __ATOMIC_SEQ_CST);
+}
+
+/* Test-only: the GPU tick sampleTimestamps gives (kk-fault-test.c) */
+uint64_t kk_mock_gpu_timestamp;
+
+void
+kk_mock_set_gpu_timestamp(uint64_t ticks)
+{
+   kk_mock_gpu_timestamp = ticks;
+}
+
 void *
 kk_mock_new(int kind, uint64_t size)
 {
@@ -274,7 +302,9 @@ body("mtl_begin_command_buffer", r'''
    __atomic_add_fetch(&kk_mock_begins, 1u, __ATOMIC_SEQ_CST);
    cb->begun_on = a;
    cb->begin_committed = 0;
+   cb->encoders = 0;
    a->uncommitted_begins++;''')
+body("mtl_device_get_gpu_timestamp", "return kk_mock_gpu_timestamp;")
 body("mtl_retain", "return handle;")
 body("mtl_release", "kk_mock_drain_feedback(handle);")
 body("mtl_device_create", "return kk_mock_new(1, 0);")
@@ -509,8 +539,15 @@ body("mtl_commit_options_add_feedback_handler", r'''
 body("mtl_command_queue_commit", r'''
    struct kk_mock_obj *o = options;
    static double gpu_clock = 100.0;
+   const char *max_encoders = getenv("KK_MOCK_MAX_ENCODERS_PER_CB");
    for (uint32_t k = 0; k < count; k++) {
       struct kk_mock_obj *cb = command_buffers[k];
+      if (max_encoders && cb->encoders > strtoul(max_encoders, NULL, 10)) {
+         fprintf(stderr, "kk-mock: a commit of a command buffer of %u "
+                         "encoders, more than %s\n", cb->encoders, max_encoders);
+         abort();
+      }
+      __atomic_add_fetch(&kk_mock_commits, 1u, __ATOMIC_SEQ_CST);
       if (cb->begun_on && !cb->begin_committed) {
          cb->begun_on->uncommitted_begins--;
          cb->begin_committed = 1;
@@ -551,8 +588,8 @@ body("mtl_command_queue_commit", r'''
 body("ns_is_os_version_at_least", "return major < 27 || (major == 27 && minor == 0 && patch == 0);")
 body("mtl_drawable_get_texture", "return kk_mock_new(7, 0);")
 # KK_MOCK_TRACE_ENCODERS: the encoder sequence, barriers and store actions.
-body("mtl_new_render_command_encoder_with_descriptor", 'kk_mock_trace("render"); return kk_mock_new(0, 0);')
-body("mtl_new_compute_command_encoder", 'kk_mock_trace("compute"); return kk_mock_new(0, 0);')
+body("mtl_new_render_command_encoder_with_descriptor", 'if (command_buffer) ((struct kk_mock_obj *)command_buffer)->encoders++; kk_mock_trace("render"); return kk_mock_new(0, 0);')
+body("mtl_new_compute_command_encoder", 'if (cmd_buffer) ((struct kk_mock_obj *)cmd_buffer)->encoders++; kk_mock_trace("compute"); return kk_mock_new(0, 0);')
 body("mtl_end_encoding", 'kk_mock_trace("end");')
 body("mtl_encoder_set_label", 'kk_mock_trace("label %s", label);')
 body("mtl_barrier_after_stages", 'kk_mock_trace("producer-barrier after=%#x before-queue=%#x%s", (unsigned)after_stages, (unsigned)before_queue_stages, alias_visibility ? "" : " visibility=device");')
