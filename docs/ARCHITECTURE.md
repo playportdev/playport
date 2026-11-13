@@ -1469,7 +1469,11 @@ installer checks, `.NETFramework`, XNA Framework 4.0) is in the prefix seed
 (`WINE_MONO`, "Prefix registry seeding"). An i386 program loads `libmono-2.0-x86.dll`
 into its WoW64 window: the window maps .NET images whatever their COM+ flags
 (madeira-unix 0112), and FEX services Mono's stores into its own compiled code, atomic
-ones included (0113). At each session start `link_dotnet_fakedlls` links the support
+ones included (0113). FEX on iOS does not decode a JIT's writable code past a call
+(`patches/fex` 0096, PLA-873). Mono ends each method with calls that never return, and it
+patches the next method's calls only after copying that method in. A block decoded past
+such a call could keep a call that was not patched yet. Upstream stops there only for a Mono it
+detects by name, and Wine Mono is not detected. At each session start `link_dotnet_fakedlls` links the support
 package's `dotnetfakedlls.inf` (`Microsoft.NET\Framework\v*\fusion.dll`, which
 `LoadLibraryShim` loads, and the rest) to the i386 and ARM64EC builtins, and a WoW64
 process's `mscoree` reads `InstallRoot` as the 32-bit view would say it, `Framework\`
