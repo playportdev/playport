@@ -1,6 +1,6 @@
 {
   "comment": "Playport's public compatibility list, shown by site/compatibility/index.html: each title's status from Linear project Compatibility (team PLA), with Works and Playable with issues both shown as runs. Keep entries sorted by name; tools/tests/test_compat_site.py checks the format.",
-  "updated": "2026-11-10",
+  "updated": "2026-11-13",
   "games": [
     {
       "name": "#DRIVE Rally",
@@ -649,7 +649,7 @@
       "name": "The Witcher 2: Assassins of Kings Enhanced Edition",
       "store": "steam",
       "id": "20920",
-      "status": "broken"
+      "status": "runs"
     },
     {
       "name": "The Witcher 3: Wild Hunt",
