@@ -1,6 +1,6 @@
 # 0186: DXVK skips a draw whose pipeline is still compiling
 
-**Status:** accepted, 2026-11-13, by the owner (grilling session on cold shader compiles). Not
+**Status:** accepted, 2026-11-13, by the owner (grilling session on cold shader compiles; spec [PLA-852](https://linear.app/playportdev/issue/PLA-852)). Not
 built yet. Evidence: [cold shader compiles](../evidence/2026-11-13-cold-shader-compiles.md).
 Companion records: [0185](0185-kosmickrisp-builds-cheaper-msl-under-one-compile-budget.md) and
 [0187](0187-pipeline-records-and-shader-preparation.md). In the spirit of

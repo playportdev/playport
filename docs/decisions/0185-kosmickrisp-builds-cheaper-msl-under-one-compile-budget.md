@@ -1,7 +1,7 @@
 # 0185: KosmicKrisp builds cheaper MSL, under one compile budget
 
-**Status:** accepted, 2026-11-13, by the owner (grilling session on cold shader compiles: "games
-still need to be playable" with no cache). Not built yet. Evidence:
+**Status:** accepted, 2026-11-13, by the owner (grilling session on cold shader compiles; spec [PLA-852](https://linear.app/playportdev/issue/PLA-852): "games
+still need to be playable" with no cache). Not built yet. Tickets: PLA-853 (initialisers), PLA-854 (budget), PLA-856–PLA-858 (builtins), PLA-820 (output state). Evidence:
 [cold shader compiles](../evidence/2026-11-13-cold-shader-compiles.md). Companion records:
 [0186](0186-dxvk-skips-a-draw-whose-pipeline-is-still-compiling.md) (DXVK skips a draw that is
 still compiling) and [0187](0187-pipeline-records-and-shader-preparation.md) (pipeline records).

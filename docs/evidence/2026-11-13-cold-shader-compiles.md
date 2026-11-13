@@ -1,6 +1,6 @@
 # Cold shader compiles: where the time goes and why games freeze (2026-11-13)
 
-**Linear:** the spec for playable with no shader cache (decisions
+**Linear:** [PLA-852](https://linear.app/playportdev/issue/PLA-852), Playable with no shader cache (decisions
 [0185](../decisions/0185-kosmickrisp-builds-cheaper-msl-under-one-compile-budget.md),
 [0186](../decisions/0186-dxvk-skips-a-draw-whose-pipeline-is-still-compiling.md),
 [0187](../decisions/0187-pipeline-records-and-shader-preparation.md)). Log analysis of phone runs
