@@ -47,3 +47,4 @@
 0204-ntdll-server-iOS-a-new-event-s-in-process-sync-comes.patch
 0205-ntdll-iOS-a-non-alertable-sleep-is-a-ppsync-wait-so-a.patch
 0206-win32u-iOS-a-process-flushes-only-its-own-window-sur.patch
+0207-win32u-iOS-a-process-takes-only-its-own-cache-DCs.patch
