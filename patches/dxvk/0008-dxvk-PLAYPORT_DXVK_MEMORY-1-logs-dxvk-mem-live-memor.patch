@@ -1,0 +1,804 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 13 Nov 2026 08:27:46 +0100
+Subject: [PATCH] dxvk: PLAYPORT_DXVK_MEMORY=1 logs [dxvk-mem], live memory by
+ kind, on [kk-mem]'s cadence
+
+A Vulkan play's graphics memory was only KosmicKrisp's [kk-mem]
+memory= figure: the device memory DXVK allocated, with nothing saying
+what it backs. Fitting SANABI's Black Market scene switch into the 8 GB
+phone's limit (PLA-803) needs to know which of it grows.
+
+With PLAYPORT_DXVK_MEMORY=1 (the dev app sets it; the release app never
+does), the allocator counts each buffer and image allocation it hands
+out under one kind until it is freed: images as render targets (colour
+or depth-stencil attachment usage), storage images (storage usage, no
+attachment) or sampled textures (the rest); buffers in host-visible
+memory as staging and upload, the others as buffers. An allocation
+moves to the pending frees when nothing but GPU work that has not
+completed holds it: the storage a discard or a relocation retires into
+the command list, and the storage of a resource whose last reference
+other than GPU work goes. The pending frees are a list in release
+order, so the oldest one's wait is known. Imported memory and sparse
+pages are not counted. The counters live in dxvk_memory_census.h, which
+makes no Vulkan call.
+
+The line comes as [kk-mem] does (mesa 0135): from the submission
+thread, every 10 s, and at most once a second as soon as the counted
+memory grew by 64 MiB since the last line (marked "| growing
+live+N MiB"):
+
+  [dxvk-mem] metal=M allocated=A used=U | rt=n/MiB sampled=n/MiB
+  storage=n/MiB staging=n/MiB buffers=n/MiB pending=n/MiB oldest=S s
+  | cached=C free=F MiB
+
+metal= is the driver's heap usage (VK_EXT_memory_budget: on
+KosmicKrisp Metal's current allocated size, [kk-mem]'s metal=),
+allocated= and used= the allocator's device memory and what of it is
+suballocated. allocated is the kinds + pending + cached (what the
+allocator's caches hold) + free (chunk space not handed out), so DXVK's
+memory plus KosmicKrisp's own allocations ([kk-mem] internal,
+descriptor, query, command, command-pooled) reconciles with metal=
+(tools/memreconcile.py).
+
+Without the variable nothing is counted: a release builds no census,
+and a resource's release reads one flag first.
+
+Linear: PLA-808
+Class: diagnostics
+Evidence: tools/tests/test_dxvk_memory_census.py, tools/tests/test_memreconcile.py (host); the phone run with Hollow Knight is PLA-808's acceptance, not run here
+Offered-upstream: no
+---
+ src/dxvk/dxvk_buffer.h        |   8 +
+ src/dxvk/dxvk_cmdlist.h       |  15 ++
+ src/dxvk/dxvk_image.h         |   8 +
+ src/dxvk/dxvk_memory.cpp      | 134 +++++++++++++++
+ src/dxvk/dxvk_memory.h        |  35 ++++
+ src/dxvk/dxvk_memory_census.h | 307 ++++++++++++++++++++++++++++++++++
+ src/dxvk/dxvk_sparse.cpp      |   7 +
+ src/dxvk/dxvk_sparse.h        |  44 +++++
+ 8 files changed, 558 insertions(+)
+ create mode 100644 src/dxvk/dxvk_memory_census.h
+
+diff --git a/src/dxvk/dxvk_buffer.h b/src/dxvk/dxvk_buffer.h
+index 003fb74..adca96e 100644
+--- a/src/dxvk/dxvk_buffer.h
++++ b/src/dxvk/dxvk_buffer.h
+@@ -374,6 +374,14 @@ namespace dxvk {
+      */
+     DxvkSparsePageTable* getSparsePageTable();
+ 
++    /**
++     * \brief Current backing storage, for the memory census
++     * \returns Backing storage
++     */
++    DxvkResourceAllocation* getCensusStorage() {
++      return m_storage.ptr();
++    }
++
+     /**
+      * \brief Allocates new backing storage with constraints
+      *
+diff --git a/src/dxvk/dxvk_cmdlist.h b/src/dxvk/dxvk_cmdlist.h
+index d629744..aed0f27 100644
+--- a/src/dxvk/dxvk_cmdlist.h
++++ b/src/dxvk/dxvk_cmdlist.h
+@@ -323,6 +323,21 @@ namespace dxvk {
+       m_objectTracker.track<DxvkObjectRef<T>>(std::move(object));
+     }
+ 
++    /**
++     * \brief Tracks storage a resource no longer uses
++     *
++     * Keeps the allocation alive until the command list finishes
++     * execution on the GPU; the memory census counts it as a
++     * pending free from now on.
++     * \param [in] allocation Former backing storage
++     */
++    void track(Rc<DxvkResourceAllocation>&& allocation) {
++      if (allocation)
++        allocation->markReleased();
++
++      m_objectTracker.track<DxvkObjectRef<DxvkResourceAllocation>>(std::move(allocation));
++    }
++
+     /**
+      * \brief Tracks a sampler object
+      *
+diff --git a/src/dxvk/dxvk_image.h b/src/dxvk/dxvk_image.h
+index 5577472..f37ce7f 100644
+--- a/src/dxvk/dxvk_image.h
++++ b/src/dxvk/dxvk_image.h
+@@ -649,6 +649,14 @@ namespace dxvk {
+      */
+     DxvkSparsePageTable* getSparsePageTable();
+ 
++    /**
++     * \brief Current backing storage, for the memory census
++     * \returns Backing storage
++     */
++    DxvkResourceAllocation* getCensusStorage() {
++      return m_storage.ptr();
++    }
++
+     /**
+      * \brief Allocates new backing storage with constraints
+      *
+diff --git a/src/dxvk/dxvk_memory.cpp b/src/dxvk/dxvk_memory.cpp
+index fc18044..b3cac8a 100644
+--- a/src/dxvk/dxvk_memory.cpp
++++ b/src/dxvk/dxvk_memory.cpp
+@@ -3,6 +3,7 @@
+ #include <sstream>
+ 
+ #include "../util/util_bit.h"
++#include "../util/util_env.h"
+ 
+ #include "dxvk_device.h"
+ #include "dxvk_memory.h"
+@@ -781,6 +782,13 @@ namespace dxvk {
+     determineBufferUsageFlagsPerMemoryType();
+ 
+     updateMemoryHeapBudgets();
++
++    // Playport (PLA-808): the dev app's [dxvk-mem] line, beside KosmicKrisp's
++    // [kk-mem]. Off unless asked for; the release app never asks.
++    if (env::getEnvVar("PLAYPORT_DXVK_MEMORY") == "1") {
++      m_census = std::make_unique<DxvkMemoryCensus>();
++      DxvkPagedResource::enableCensus();
++    }
+   }
+   
+   
+@@ -937,6 +945,23 @@ namespace dxvk {
+ 
+ 
+   Rc<DxvkResourceAllocation> DxvkMemoryAllocator::createBufferResource(
++    const VkBufferCreateInfo&         createInfo,
++    const DxvkAllocationInfo&         allocationInfo,
++          DxvkLocalAllocationCache*   allocationCache) {
++    Rc<DxvkResourceAllocation> allocation = createBufferResourceUncounted(
++      createInfo, allocationInfo, allocationCache);
++
++    // Sparse buffers have no memory type, their pages are not counted
++    if (unlikely(m_census) && allocation && allocation->m_type) {
++      m_census->add(allocation->m_census, DxvkMemoryCensus::classifyBuffer(
++        allocation->m_type->properties.propertyFlags), allocation->m_size);
++    }
++
++    return allocation;
++  }
++
++
++  Rc<DxvkResourceAllocation> DxvkMemoryAllocator::createBufferResourceUncounted(
+     const VkBufferCreateInfo&         createInfo,
+     const DxvkAllocationInfo&         allocationInfo,
+           DxvkLocalAllocationCache*   allocationCache) {
+@@ -1113,6 +1138,22 @@ namespace dxvk {
+ 
+ 
+   Rc<DxvkResourceAllocation> DxvkMemoryAllocator::createImageResource(
++    const VkImageCreateInfo&          createInfo,
++    const DxvkAllocationInfo&         allocationInfo,
++    const void*                       next) {
++    Rc<DxvkResourceAllocation> allocation = createImageResourceUncounted(
++      createInfo, allocationInfo, next);
++
++    if (unlikely(m_census) && allocation && allocation->m_type) {
++      m_census->add(allocation->m_census, DxvkMemoryCensus::classifyImage(
++        createInfo.usage), allocation->m_size);
++    }
++
++    return allocation;
++  }
++
++
++  Rc<DxvkResourceAllocation> DxvkMemoryAllocator::createImageResourceUncounted(
+     const VkImageCreateInfo&          createInfo,
+     const DxvkAllocationInfo&         allocationInfo,
+     const void*                       next) {
+@@ -1634,6 +1675,9 @@ namespace dxvk {
+ 
+   void DxvkMemoryAllocator::freeAllocation(
+           DxvkResourceAllocation* allocation) {
++    if (unlikely(allocation->m_census.kind != DxvkMemoryKind::None))
++      m_census->remove(allocation->m_census, allocation->m_size);
++
+     if (allocation->m_flags.test(DxvkAllocationFlag::ClearOnFree)) {
+       if (allocation->m_mapPtr)
+         bit::bclear(allocation->m_mapPtr, allocation->m_size);
+@@ -2735,6 +2779,9 @@ namespace dxvk {
+     // updating the deadline is fine without taking the global lock
+     auto currentTime = high_resolution_clock::now();
+ 
++    if (unlikely(m_census))
++      logMemoryCensus(currentTime);
++
+     if (m_taskDeadline != high_resolution_clock::time_point()
+      && m_taskDeadline > currentTime)
+       return;
+@@ -2780,6 +2827,93 @@ namespace dxvk {
+   }
+ 
+ 
++  void DxvkMemoryAllocator::releaseToCensus(
++          DxvkResourceAllocation* allocation) {
++    auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
++      high_resolution_clock::now().time_since_epoch());
++    m_census->release(allocation->m_census, allocation->m_size, now.count());
++  }
++
++
++  void DxvkMemoryAllocator::logMemoryCensus(
++          high_resolution_clock::time_point currentTime) {
++    int64_t now = std::chrono::duration_cast<std::chrono::nanoseconds>(
++      currentTime.time_since_epoch()).count();
++
++    // At most one line a second, so the work below is rare
++    DxvkMemoryCensusTick tick = m_census->tick(now);
++
++    if (!tick.log)
++      return;
++
++    DxvkMemoryCensusSnapshot census = m_census->snapshot(now);
++
++    VkDeviceSize allocated = 0u;
++    VkDeviceSize used = 0u;
++
++    { std::lock_guard<dxvk::mutex> lock(m_mutex);
++
++      for (uint32_t i = 0; i < m_memHeapCount; i++) {
++        DxvkMemoryStats stats = getMemoryStats(i);
++        allocated += stats.memoryAllocated;
++        used += stats.memoryUsed;
++      }
++    }
++
++    // The driver's usage: on KosmicKrisp, Metal's current allocated
++    // size, the metal= of its [kk-mem] line
++    std::string metal = "-";
++
++    if (m_device->features().extMemoryBudget) {
++      VkPhysicalDeviceMemoryBudgetPropertiesEXT memBudget = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT };
++      VkPhysicalDeviceMemoryProperties2 memInfo = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2, &memBudget };
++
++      auto vki = m_device->adapter()->vki();
++      vki->vkGetPhysicalDeviceMemoryProperties2(m_device->adapter()->handle(), &memInfo);
++
++      VkDeviceSize usage = 0u;
++
++      for (uint32_t i = 0; i < m_memHeapCount; i++)
++        usage += memBudget.heapUsage[i];
++
++      metal = std::to_string((usage + (1u << 19)) >> 20);
++    }
++
++    auto mib = [] (int64_t bytes) {
++      return (bytes + (bytes < 0 ? -(1 << 19) : (1 << 19))) / (1 << 20);
++    };
++
++    auto kind = [&census, &mib] (DxvkMemoryKind k) {
++      const auto& count = census.kinds[size_t(k)];
++      return str::format(count.count, "/", mib(int64_t(count.bytes)));
++    };
++
++    // allocated = the kinds + pending + cached + free: cached is what the
++    // allocator's caches hold, free the chunks' unallocated space
++    int64_t counted = int64_t(census.totalBytes());
++
++    std::stringstream line;
++    line << "[dxvk-mem] metal=" << metal
++         << " allocated=" << mib(int64_t(allocated))
++         << " used=" << mib(int64_t(used))
++         << " | rt=" << kind(DxvkMemoryKind::RenderTarget)
++         << " sampled=" << kind(DxvkMemoryKind::Sampled)
++         << " storage=" << kind(DxvkMemoryKind::Storage)
++         << " staging=" << kind(DxvkMemoryKind::Staging)
++         << " buffers=" << kind(DxvkMemoryKind::Buffer)
++         << " pending=" << census.pending.count << "/" << mib(int64_t(census.pending.bytes))
++         << " oldest=" << std::fixed << std::setprecision(2) << double(census.oldestPendingNs) / 1e9 << " s"
++         << " | cached=" << mib(int64_t(used) - counted)
++         << " free=" << mib(int64_t(allocated) - int64_t(used))
++         << " MiB";
++
++    if (tick.growing)
++      line << " | growing live" << (tick.grewBytes < 0 ? "" : "+") << mib(tick.grewBytes) << " MiB";
++
++    Logger::info(line.str());
++  }
++
++
+   bool DxvkMemoryAllocator::enableDefrag() const {
+     auto option = m_device->config().enableMemoryDefrag;
+ 
+diff --git a/src/dxvk/dxvk_memory.h b/src/dxvk/dxvk_memory.h
+index 8da44ed..a4fcca2 100644
+--- a/src/dxvk/dxvk_memory.h
++++ b/src/dxvk/dxvk_memory.h
+@@ -8,6 +8,7 @@
+ #include "dxvk_allocator.h"
+ #include "dxvk_descriptor.h"
+ #include "dxvk_hash.h"
++#include "dxvk_memory_census.h"
+ 
+ #include "../util/util_time.h"
+ 
+@@ -671,6 +672,14 @@ namespace dxvk {
+     const DxvkDescriptor* createImageView(
+       const DxvkImageViewKey&           key);
+ 
++    /**
++     * \brief Counts the allocation as a pending free
++     *
++     * For the memory census (PLAYPORT_DXVK_MEMORY=1): nothing but GPU
++     * work that has not completed holds the allocation any more.
++     */
++    void markReleased();
++
+   private:
+ 
+     std::atomic<uint32_t>       m_useCount = { 0u };
+@@ -703,6 +712,8 @@ namespace dxvk {
+     DxvkResourceAllocation*     m_prevInChunk = nullptr;
+     DxvkResourceAllocation*     m_nextInChunk = nullptr;
+ 
++    DxvkMemoryCensusEntry       m_census;
++
+     void initKmtHandles(VkExternalMemoryHandleTypeFlagBits handleType);
+ 
+     void destroyBufferViews();
+@@ -1423,6 +1434,24 @@ namespace dxvk {
+     alignas(CACHE_LINE_SIZE)
+     DxvkRelocationList        m_relocations;
+ 
++    std::unique_ptr<DxvkMemoryCensus> m_census;
++
++    Rc<DxvkResourceAllocation> createBufferResourceUncounted(
++      const VkBufferCreateInfo&         createInfo,
++      const DxvkAllocationInfo&         allocationInfo,
++            DxvkLocalAllocationCache*   allocationCache);
++
++    Rc<DxvkResourceAllocation> createImageResourceUncounted(
++      const VkImageCreateInfo&          createInfo,
++      const DxvkAllocationInfo&         allocationInfo,
++      const void*                       next);
++
++    void releaseToCensus(
++            DxvkResourceAllocation* allocation);
++
++    void logMemoryCensus(
++            high_resolution_clock::time_point currentTime);
++
+     DxvkDeviceMemory allocateDeviceMemory(
+             DxvkMemoryType&       type,
+             VkDeviceSize          size,
+@@ -1556,4 +1585,10 @@ namespace dxvk {
+     m_allocator->freeAllocation(this);
+   }
+ 
++
++  inline void DxvkResourceAllocation::markReleased() {
++    if (unlikely(m_allocator->m_census))
++      m_allocator->releaseToCensus(this);
++  }
++
+ }
+diff --git a/src/dxvk/dxvk_memory_census.h b/src/dxvk/dxvk_memory_census.h
+new file mode 100644
+index 0000000..7700eed
+--- /dev/null
++++ b/src/dxvk/dxvk_memory_census.h
+@@ -0,0 +1,307 @@
++#pragma once
++
++#include <array>
++#include <atomic>
++#include <cstdint>
++#include <mutex>
++
++#include <vulkan/vulkan_core.h>
++
++namespace dxvk {
++
++  /**
++   * \brief What a live allocation backs
++   *
++   * The memory census (PLAYPORT_DXVK_MEMORY=1) counts every allocation
++   * the allocator hands out for a buffer or image under one kind until
++   * it is freed. Imported memory and sparse pages are not counted.
++   */
++  enum class DxvkMemoryKind : uint8_t {
++    None          = 0, ///< Not counted
++    RenderTarget  = 1, ///< Image with colour or depth-stencil attachment usage
++    Sampled       = 2, ///< Image with neither attachment nor storage usage
++    Storage       = 3, ///< Image with storage and no attachment usage
++    Staging       = 4, ///< Buffer in host-visible memory: staging and upload
++    Buffer        = 5, ///< Any other buffer
++    Count         = 6,
++  };
++
++
++  /**
++   * \brief Census state of one allocation
++   *
++   * Kept in the allocation itself. An allocation that is released, i.e.
++   * nothing but GPU work that has not completed holds it any more, is
++   * linked into the census' list of pending frees, oldest first.
++   */
++  struct DxvkMemoryCensusEntry {
++    DxvkMemoryCensusEntry*  prev        = nullptr;
++    DxvkMemoryCensusEntry*  next        = nullptr;
++    int64_t                 releasedNs  = 0;
++    DxvkMemoryKind          kind        = DxvkMemoryKind::None;
++  };
++
++
++  struct DxvkMemoryCensusCount {
++    uint64_t count = 0u;
++    uint64_t bytes = 0u;
++  };
++
++
++  /**
++   * \brief Live memory by kind at one time
++   *
++   * The kinds and the pending frees partition what the census counts:
++   * an allocation is in its kind while live and in \c pending once
++   * released, until it is freed.
++   */
++  struct DxvkMemoryCensusSnapshot {
++    std::array<DxvkMemoryCensusCount, size_t(DxvkMemoryKind::Count)> kinds = { };
++    /// Released but not yet freed: waiting on GPU completion
++    DxvkMemoryCensusCount pending = { };
++    /// How long the oldest pending free has waited, 0 without one
++    int64_t oldestPendingNs = 0;
++
++    uint64_t totalBytes() const {
++      uint64_t total = pending.bytes;
++
++      for (const auto& kind : kinds)
++        total += kind.bytes;
++
++      return total;
++    }
++  };
++
++
++  /**
++   * \brief Whether to log now, and why
++   */
++  struct DxvkMemoryCensusTick {
++    bool    log       = false;
++    /// Logged early, within a second, because memory grew fast
++    bool    growing   = false;
++    /// What the census' total grew by since the last line
++    int64_t grewBytes = 0;
++  };
++
++
++  /**
++   * \brief Live allocator memory by kind
++   *
++   * Counters only: no Vulkan call, no allocation. Thread-safe; the
++   * pending list takes a lock, the counters are atomic.
++   */
++  class DxvkMemoryCensus {
++
++  public:
++
++    /// A line every 10 s, as KosmicKrisp's [kk-mem]
++    constexpr static int64_t IntervalNs = 10'000'000'000ll;
++    /// Within a second while memory grows fast
++    constexpr static int64_t FastIntervalNs = 1'000'000'000ll;
++    /// Growth since the last line that counts as fast
++    constexpr static int64_t GrowthBytes = int64_t(64) << 20;
++
++    /**
++     * \brief Kind of an image allocation
++     *
++     * Attachment usage wins over storage usage: a render target
++     * that is also a UAV is a render target.
++     */
++    static DxvkMemoryKind classifyImage(VkImageUsageFlags usage) {
++      if (usage & (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT))
++        return DxvkMemoryKind::RenderTarget;
++
++      if (usage & VK_IMAGE_USAGE_STORAGE_BIT)
++        return DxvkMemoryKind::Storage;
++
++      return DxvkMemoryKind::Sampled;
++    }
++
++    /**
++     * \brief Kind of a buffer allocation
++     *
++     * Host-visible memory is what the CPU writes: staging buffers and
++     * upload (dynamic) buffers. Everything else is GPU-only.
++     */
++    static DxvkMemoryKind classifyBuffer(VkMemoryPropertyFlags memoryProperties) {
++      return (memoryProperties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)
++        ? DxvkMemoryKind::Staging
++        : DxvkMemoryKind::Buffer;
++    }
++
++    /**
++     * \brief Counts a live allocation
++     */
++    void add(DxvkMemoryCensusEntry& entry, DxvkMemoryKind kind, uint64_t size) {
++      if (kind == DxvkMemoryKind::None)
++        return;
++
++      entry = DxvkMemoryCensusEntry();
++      entry.kind = kind;
++
++      counter(kind).add(size);
++    }
++
++    /**
++     * \brief Moves a live allocation to the pending frees
++     *
++     * Called when only GPU work holds it. Once only: a second call,
++     * or a call for an allocation that is not counted, does nothing.
++     */
++    void release(DxvkMemoryCensusEntry& entry, uint64_t size, int64_t nowNs) {
++      if (entry.kind == DxvkMemoryKind::None)
++        return;
++
++      std::lock_guard<std::mutex> lock(m_mutex);
++
++      if (entry.releasedNs)
++        return;
++
++      // Keep the list in release order even when two threads race
++      if (m_tail && m_tail->releasedNs > nowNs)
++        nowNs = m_tail->releasedNs;
++
++      entry.releasedNs = nowNs > 0 ? nowNs : 1;
++      entry.prev = m_tail;
++      entry.next = nullptr;
++
++      if (m_tail)
++        m_tail->next = &entry;
++      else
++        m_head = &entry;
++
++      m_tail = &entry;
++
++      counter(entry.kind).sub(size);
++      m_pending.add(size);
++    }
++
++    /**
++     * \brief Stops counting a freed allocation
++     */
++    void remove(DxvkMemoryCensusEntry& entry, uint64_t size) {
++      if (entry.kind == DxvkMemoryKind::None)
++        return;
++
++      if (entry.releasedNs) {
++        std::lock_guard<std::mutex> lock(m_mutex);
++
++        if (entry.prev)
++          entry.prev->next = entry.next;
++        else
++          m_head = entry.next;
++
++        if (entry.next)
++          entry.next->prev = entry.prev;
++        else
++          m_tail = entry.prev;
++
++        m_pending.sub(size);
++      } else {
++        counter(entry.kind).sub(size);
++      }
++
++      entry = DxvkMemoryCensusEntry();
++    }
++
++    /**
++     * \brief Decides whether a line is due
++     *
++     * The first call logs. Then a line every 10 s, or, at most once a
++     * second, as soon as the total has grown by 64 MiB since the last
++     * line. One caller wins a given line.
++     */
++    DxvkMemoryCensusTick tick(int64_t nowNs) {
++      DxvkMemoryCensusTick result = { };
++
++      int64_t last = m_lastNs.load();
++      int64_t total = int64_t(totalBytes());
++
++      if (last && nowNs - last < IntervalNs) {
++        if (nowNs - last < FastIntervalNs
++         || total < m_lastBytes.load() + GrowthBytes)
++          return result;
++
++        result.growing = true;
++      }
++
++      if (!m_lastNs.compare_exchange_strong(last, nowNs))
++        return DxvkMemoryCensusTick();
++
++      result.log = true;
++      result.grewBytes = total - m_lastBytes.exchange(total);
++      return result;
++    }
++
++    /**
++     * \brief Live memory by kind, and the pending frees
++     */
++    DxvkMemoryCensusSnapshot snapshot(int64_t nowNs) const {
++      DxvkMemoryCensusSnapshot result;
++
++      // Under the lock, so that no allocation moving to the pending
++      // frees is counted twice or not at all
++      std::lock_guard<std::mutex> lock(m_mutex);
++
++      for (size_t i = 0; i < result.kinds.size(); i++)
++        result.kinds[i] = m_kinds[i].read();
++
++      result.pending = m_pending.read();
++
++      if (m_head && nowNs > m_head->releasedNs)
++        result.oldestPendingNs = nowNs - m_head->releasedNs;
++
++      return result;
++    }
++
++  private:
++
++    struct Counter {
++      std::atomic<uint64_t> count = { 0u };
++      std::atomic<uint64_t> bytes = { 0u };
++
++      void add(uint64_t size) {
++        count.fetch_add(1u, std::memory_order_relaxed);
++        bytes.fetch_add(size, std::memory_order_relaxed);
++      }
++
++      void sub(uint64_t size) {
++        count.fetch_sub(1u, std::memory_order_relaxed);
++        bytes.fetch_sub(size, std::memory_order_relaxed);
++      }
++
++      DxvkMemoryCensusCount read() const {
++        DxvkMemoryCensusCount result;
++        result.count = count.load(std::memory_order_relaxed);
++        result.bytes = bytes.load(std::memory_order_relaxed);
++        return result;
++      }
++    };
++
++    std::array<Counter, size_t(DxvkMemoryKind::Count)> m_kinds = { };
++    Counter m_pending;
++
++    mutable std::mutex      m_mutex;
++    DxvkMemoryCensusEntry*  m_head = nullptr;
++    DxvkMemoryCensusEntry*  m_tail = nullptr;
++
++    std::atomic<int64_t>    m_lastNs    = { 0 };
++    std::atomic<int64_t>    m_lastBytes = { 0 };
++
++    Counter& counter(DxvkMemoryKind kind) {
++      return m_kinds[size_t(kind)];
++    }
++
++    uint64_t totalBytes() const {
++      uint64_t total = m_pending.bytes.load(std::memory_order_relaxed);
++
++      for (const auto& kind : m_kinds)
++        total += kind.bytes.load(std::memory_order_relaxed);
++
++      return total;
++    }
++
++  };
++
++}
+diff --git a/src/dxvk/dxvk_sparse.cpp b/src/dxvk/dxvk_sparse.cpp
+index 852a67c..78a66f2 100644
+--- a/src/dxvk/dxvk_sparse.cpp
++++ b/src/dxvk/dxvk_sparse.cpp
+@@ -9,6 +9,7 @@
+ namespace dxvk {
+ 
+   std::atomic<uint64_t> DxvkPagedResource::s_cookie = { 0u };
++  std::atomic<bool>     DxvkPagedResource::s_census = { false };
+ 
+ 
+   DxvkPagedResource::~DxvkPagedResource() {
+@@ -21,6 +22,12 @@ namespace dxvk {
+   }
+ 
+ 
++  void DxvkPagedResource::censusRelease() {
++    if (DxvkResourceAllocation* storage = getCensusStorage())
++      storage->markReleased();
++  }
++
++
+   DxvkResourceRef::~DxvkResourceRef() {
+     auto resource = reinterpret_cast<DxvkPagedResource*>(m_ptr & ~AccessMask);
+     auto access = DxvkAccess(m_ptr & AccessMask);
+diff --git a/src/dxvk/dxvk_sparse.h b/src/dxvk/dxvk_sparse.h
+index 1dd7ab8..5c50b63 100644
+--- a/src/dxvk/dxvk_sparse.h
++++ b/src/dxvk/dxvk_sparse.h
+@@ -490,6 +490,10 @@ namespace dxvk {
+      */
+     force_inline void release(DxvkAccess access) {
+       uint64_t increment = getIncrement(access);
++
++      if (access == DxvkAccess::None && unlikely(s_census.load(std::memory_order_relaxed)))
++        censusCheckRelease(false);
++
+       uint64_t remaining = m_useCount.fetch_sub(increment);
+ 
+       if (unlikely(remaining == increment))
+@@ -505,6 +509,10 @@ namespace dxvk {
+     force_inline void convertRef(DxvkAccess from, DxvkAccess to) {
+       uint64_t increment = getIncrement(to) - getIncrement(from);
+ 
++      if (from == DxvkAccess::None && to != DxvkAccess::None
++       && unlikely(s_census.load(std::memory_order_relaxed)))
++        censusCheckRelease(true);
++
+       if (increment)
+         m_useCount.fetch_add(increment);
+     }
+@@ -705,6 +713,22 @@ namespace dxvk {
+      */
+     virtual const char* getDebugName() const = 0;
+ 
++    /**
++     * \brief Current backing storage, for the memory census
++     * \returns Backing storage, if any
++     */
++    virtual DxvkResourceAllocation* getCensusStorage() = 0;
++
++    /**
++     * \brief Turns on the memory census' release tracking
++     *
++     * From then on, a resource whose last reference other than
++     * GPU work goes counts its storage as a pending free.
++     */
++    static void enableCensus() {
++      s_census.store(true);
++    }
++
+   protected:
+ 
+     DxvkMemoryAllocator*  m_allocator = nullptr;
+@@ -732,11 +756,31 @@ namespace dxvk {
+ 
+     void makeResourceResident();
+ 
++    /**
++     * \brief Counts the storage as released if this reference is the
++     *    last one other than GPU work
++     *
++     * Called while the reference that goes, or becomes GPU work,
++     * still keeps the resource alive. The last reference of all
++     * frees the resource at once, so it is never a pending free.
++     * \param [in] converting The reference becomes GPU work
++     */
++    force_inline void censusCheckRelease(bool converting) {
++      uint64_t count = m_useCount.load(std::memory_order_relaxed);
++      uint64_t references = count & (getIncrement(DxvkAccess::Read) - 1u);
++
++      if (unlikely(references == 1u) && (converting || count != 1u))
++        censusRelease();
++    }
++
++    void censusRelease();
++
+     static constexpr uint64_t getIncrement(DxvkAccess access) {
+       return uint64_t(1u) << (uint32_t(access) * 20u);
+     }
+ 
+     static std::atomic<uint64_t> s_cookie;
++    static std::atomic<bool>     s_census;
+ 
+   };
+ 

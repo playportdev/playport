@@ -54,8 +54,10 @@ final class WineHostRuntime: @unchecked Sendable {
         #else
         // KosmicKrisp's shader-source counts and slow Metal builds (mesa 0016), its
         // live memory by kind every 10 s (mesa 0046), and its GPU time, frames and
-        // present waits every second (mesa 0080, [kk-gpu]).
+        // present waits every second (mesa 0080, [kk-gpu]). DXVK's live memory by
+        // kind on the same cadence, to reconcile with [kk-mem] (dxvk 0008, [dxvk-mem]).
         setenv("MESA_KK_DEBUG", "compile,memory,gpu", 0)
+        setenv("PLAYPORT_DXVK_MEMORY", "1", 0)
         #endif
         let size = mb << 20
         let t0 = Date()
