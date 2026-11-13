@@ -74,12 +74,13 @@ struct SettingsView: View {
             if let s = SettingsSection.named(name), SettingsSection.shown.contains(s) {
                 navigation.settingsSection = s
                 try? await Task.sleep(for: .milliseconds(200))
-                // `gyro`: Controls, at its Gyro aim rows; `controller`: its Controller page.
+                // `gyro`: Controls, at its Gyro aim rows; `jitdump`: Developer, at its JIT pool
+                // dump switch; `controller`: its Controller page.
                 if name == "controller" {
                     navigation.pageSection = nil
                     return navigation.openSettingsControllerMap()
                 }
-                focus.ring(name == "gyro" ? "set:" + GyroDefaultsRows.id(.output) : s.navItem)
+                focus.ring(name == "gyro" ? "set:" + GyroDefaultsRows.id(.output) : name == "jitdump" ? "dev:jitDump" : s.navItem)
             }
             navigation.pageSection = nil
         }

@@ -59,6 +59,7 @@ best-effort and reported as unconfirmed; transport loss/SIGKILL can leave cancel
                          controls, storage, setup, about, developer; also account, jit, memory,
                          diagnostics, pairing, probes, logs for the section that holds them,
                          controllers, the old name of controls, gyro: Controls at its Gyro aim rows,
+                         jitdump: Developer at its JIT pool dump switch,
                          and controller: Settings › Controls › Controller, the default's page);
                          open:licences shows Settings › About › Licences, open:licences#PREFIX the
                          files of the first component whose name starts with PREFIX (open:licences#wine);

@@ -42,14 +42,15 @@ public enum SettingsSection: String, CaseIterable, Sendable {
 
     /// The section `open:settings#NAME` names: a section's own name, or what
     /// used to be a section of the old Settings list (account, jit, memory,
-    /// diagnostics, pairing, probes, logs), or its old name (controllers).
+    /// diagnostics, pairing, probes, logs), or its old name (controllers);
+    /// jitdump: Developer, at its JIT pool dump switch.
     public static func named(_ name: String) -> SettingsSection? {
         if let s = SettingsSection(rawValue: name) { return s }
         switch name {
         case "account", "steam": return .accounts
         case "controllers", "gyro", "controller": return .controls
         case "jit", "memory": return .setup
-        case "diagnostics", "pairing", "probes", "logs": return .developer
+        case "diagnostics", "pairing", "probes", "logs", "jitdump": return .developer
         default: return nil
         }
     }
