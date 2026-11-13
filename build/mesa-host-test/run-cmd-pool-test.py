@@ -5,7 +5,7 @@
     python3 build/mesa-host-test/run-cmd-pool-test.py HOSTTEST_BUILD [TEST]
 
 TEST is the test's name: kk-cmd-pool-test (the default), kk-residency-test,
-kk-cmd-census-test or kk-cmd-retire-test.
+kk-cmd-census-test, kk-cmd-retire-test or kk-fault-test.
 
 Run after run.sh has built the mock, or rebuild its driver with ninja first.
 Uses the build's own compile/link flags; no independently modelled pool.

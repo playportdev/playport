@@ -123,3 +123,5 @@
 0151-kk-MESA_KK_EXPERIMENTAL-zero_init-zeroes-a-device-a.patch
 0152-kk-expose-VK_EXT_dynamic_rendering_unused_attachment.patch
 0153-kk-clamp_float_output-tests-the-exponent-bits.patch
+0154-kk-MESA_KK_DEBUG-fault-logs-a-failed-command-buffer-.patch
+0155-kk-a-draw-the-geometry-heap-has-no-room-for-draws-no.patch

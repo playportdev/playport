@@ -1,0 +1,1179 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 13 Nov 2026 12:13:04 +0100
+Subject: [PATCH 154/155] kk: MESA_KK_DEBUG=fault logs a failed command
+ buffer's encoders
+
+A Metal command buffer that fails loses the device for good, and the
+driver logged only the localized description of the commit feedback's
+error ("MTL4CommandQueueErrorDomain error 1", which the SDK's
+MTL4CommandQueueError names Timeout: the workload took longer than the
+system allows). Metal 4 has no public encoder execution status:
+MTL4CommitFeedback gives an NSError and two GPU times, and
+MTL4CommandBufferOptions has only a log state.
+
+Always, a failed commit now also logs ([kk-queue] error:) the whole
+error chain, a line per item: domain, code, description and failure
+reason, every user info entry, Metal's encoder infos
+(MTLCommandBufferEncoderInfoErrorKey: label, state, signposts) and the
+underlying errors (NSUnderlyingErrorKey, NSMultipleUnderlyingErrorsKey)
+in turn, then the feedback object's class and methods; and its timing
+(commit to GPU start, GPU run, GPU end to feedback). An error code the
+enum lacks maps to a name instead of being unreachable.
+
+With MESA_KK_DEBUG=fault (kk_fault.h):
+- every encoder is labelled "kk#<cb serial>.<index> render draws=N" or
+  "... compute dispatches=N copies=N", with tess, gs, unroll, heap and
+  indirect when it did them;
+- each recording keeps that trail; a failed commit logs it ([kk-fault]
+  cb #N failed ..., one line per encoder) with the serial of the last
+  command buffer that completed;
+- each reset of the 128 MiB geometry heap that tessellation, geometry
+  shaders and strip unrolls allocate from first copies the bytes the
+  previous user allocated into a ring; a failure logs the heap's
+  header and the ring's largest entry, and a completed command buffer
+  that used the heap logs each new high-water mark (first, then 8 MiB
+  more, or an overflow);
+- device creation logs whether the runtime's MTL4CommandBufferOptions
+  answers to setErrorOptions: (then every command buffer begins with
+  encoder execution status asked for) and the methods of the commit
+  and command buffer option classes.
+
+Without the flag no encoder is labelled and nothing is recorded.
+
+Linear: PLA-880
+Class: diagnostics
+Evidence: build/mesa-host-test/kk-fault-test.c (mock Metal, a failed commit's lines); PLA-880 (13 of 18 The Witcher 3 1.32 loads lost the device on one failed command buffer)
+Offered-upstream: no
+---
+ src/kosmickrisp/bridge/mtl_command_buffer.h   |  10 +
+ src/kosmickrisp/bridge/mtl_command_buffer.m   |  65 +++-
+ src/kosmickrisp/bridge/mtl_command_queue.m    | 135 +++++++
+ src/kosmickrisp/bridge/mtl_types.h            |   9 +
+ .../bridge/stubs/mtl_command_buffer.c         |   6 +
+ src/kosmickrisp/bridge/vk_to_mtl_map.c        |   4 +-
+ src/kosmickrisp/vulkan/kk_cmd_buffer.c        |   6 +
+ src/kosmickrisp/vulkan/kk_cmd_buffer.h        |   5 +
+ src/kosmickrisp/vulkan/kk_cmd_draw.c          |   8 +
+ src/kosmickrisp/vulkan/kk_debug.c             |   1 +
+ src/kosmickrisp/vulkan/kk_debug.h             |   5 +
+ src/kosmickrisp/vulkan/kk_device.c            |   3 +
+ src/kosmickrisp/vulkan/kk_device.h            |   4 +
+ src/kosmickrisp/vulkan/kk_fault.c             | 356 ++++++++++++++++++
+ src/kosmickrisp/vulkan/kk_fault.h             | 103 +++++
+ src/kosmickrisp/vulkan/kk_pass_prof.c         |   5 +
+ src/kosmickrisp/vulkan/kk_queue.c             |  40 +-
+ src/kosmickrisp/vulkan/meson.build            |   2 +
+ 18 files changed, 764 insertions(+), 3 deletions(-)
+ create mode 100644 src/kosmickrisp/vulkan/kk_fault.c
+ create mode 100644 src/kosmickrisp/vulkan/kk_fault.h
+
+diff --git a/src/kosmickrisp/bridge/mtl_command_buffer.h b/src/kosmickrisp/bridge/mtl_command_buffer.h
+index a9e3bc6..f1a7701 100644
+--- a/src/kosmickrisp/bridge/mtl_command_buffer.h
++++ b/src/kosmickrisp/bridge/mtl_command_buffer.h
+@@ -27,4 +27,14 @@ void mtl_command_resolve_counter_heap(mtl_command_buffer *command_buffer,
+ 
+ void mtl_command_buffer_set_label(mtl_command_buffer *cb, const char *label);
+ 
++/* Playport (PLA-880): asks Metal for each encoder's execution status in a
++ * failed command buffer's error (MTLCommandBufferErrorOptionEncoderExecution
++ * Status). Metal 4 declares no such option (MTL4CommandBufferOptions has only
++ * logState), so this sets errorOptions on the options every later
++ * mtl_begin_command_buffer uses only if the runtime's MTL4CommandBufferOptions
++ * answers to setErrorOptions:. Returns what it did and the methods the
++ * runtime's commit and command buffer option classes have, for the log; a
++ * static string. */
++const char *mtl_enable_encoder_execution_status(void);
++
+ #endif /* MTL_COMMAND_BUFFER_H */
+diff --git a/src/kosmickrisp/bridge/mtl_command_buffer.m b/src/kosmickrisp/bridge/mtl_command_buffer.m
+index c5b1fa9..acde257 100644
+--- a/src/kosmickrisp/bridge/mtl_command_buffer.m
++++ b/src/kosmickrisp/bridge/mtl_command_buffer.m
+@@ -10,6 +10,16 @@
+ #include <Metal/MTL4CommandAllocator.h>
+ #include <Metal/MTL4CommandBuffer.h>
+ #include <Metal/MTL4Counters.h>
++#include <Metal/MTL4CommandQueue.h>
++#include <Metal/MTLCommandBuffer.h>
++
++#include <objc/message.h>
++#include <objc/runtime.h>
++#include <stdio.h>
++
++/* Playport (PLA-880): the options every command buffer begins with once
++ * mtl_enable_encoder_execution_status found errorOptions; nil until then */
++static MTL4CommandBufferOptions *kk_status_options;
+ 
+ void
+ mtl_command_allocator_reset(mtl_command_allocator *allocator)
+@@ -36,7 +46,10 @@ mtl_begin_command_buffer(mtl_command_buffer *command_buffer,
+    @autoreleasepool {
+       id<MTL4CommandBuffer> cmd_buf = (id<MTL4CommandBuffer>)command_buffer;
+       id<MTL4CommandAllocator> alloc = (id<MTL4CommandAllocator>)allocator;
+-      [cmd_buf beginCommandBufferWithAllocator:alloc];
++      if (kk_status_options)
++         [cmd_buf beginCommandBufferWithAllocator:alloc options:kk_status_options];
++      else
++         [cmd_buf beginCommandBufferWithAllocator:alloc];
+    }
+ }
+ 
+@@ -79,3 +92,53 @@ mtl_command_buffer_set_label(mtl_command_buffer *command_buffer,
+       cb.label = @(label);
+    }
+ }
++
++/* Playport (PLA-880): "Class: methods", the instance methods of obj's class
++ * and its superclasses below NSObject (mtl_command_queue.m uses it too) */
++NSString *
++kk_methods_of(id obj)
++{
++   NSMutableArray<NSString *> *names = [NSMutableArray array];
++   for (Class c = object_getClass(obj); c && c != [NSObject class];
++        c = class_getSuperclass(c)) {
++      unsigned count = 0;
++      Method *methods = class_copyMethodList(c, &count);
++      for (unsigned i = 0; i < count; i++) {
++         NSString *name = NSStringFromSelector(method_getName(methods[i]));
++         if (![name hasPrefix:@"."] && ![names containsObject:name])
++            [names addObject:name];
++      }
++      free(methods);
++   }
++   return [NSString stringWithFormat:@"%s: %@", object_getClassName(obj),
++                                     [names componentsJoinedByString:@" "]];
++}
++
++const char *
++mtl_enable_encoder_execution_status(void)
++{
++   static char note[4096];
++   @autoreleasepool {
++      MTL4CommandBufferOptions *options = [MTL4CommandBufferOptions new];
++      SEL set = NSSelectorFromString(@"setErrorOptions:");
++      NSString *what;
++      if ([options respondsToSelector:set]) {
++         ((void (*)(id, SEL, NSUInteger))objc_msgSend)(
++            options, set, MTLCommandBufferErrorOptionEncoderExecutionStatus);
++         kk_status_options = options;
++         what = @"on (MTL4CommandBufferOptions errorOptions, not public API)";
++      } else {
++         what = @"unavailable (MTL4CommandBufferOptions has no errorOptions)";
++      }
++      MTL4CommitOptions *commit = [[MTL4CommitOptions new] autorelease];
++      MTL4CommandQueueDescriptor *queue =
++         [[MTL4CommandQueueDescriptor new] autorelease];
++      snprintf(note, sizeof(note), "%s; methods %s; %s; %s", what.UTF8String,
++               kk_methods_of(options).UTF8String,
++               kk_methods_of(commit).UTF8String,
++               kk_methods_of(queue).UTF8String);
++      if (!kk_status_options)
++         [options release];
++   }
++   return note;
++}
+diff --git a/src/kosmickrisp/bridge/mtl_command_queue.m b/src/kosmickrisp/bridge/mtl_command_queue.m
+index c8ed5bb..ef68a1d 100644
+--- a/src/kosmickrisp/bridge/mtl_command_queue.m
++++ b/src/kosmickrisp/bridge/mtl_command_queue.m
+@@ -7,8 +7,136 @@
+ #include "mtl_command_queue.h"
+ 
+ #include <Metal/MTLDevice.h>
++#include <Metal/MTLCommandBuffer.h>
+ #include <Metal/MTLCommandQueue.h>
+ 
++#include <mach/mach_time.h>
++#include <objc/runtime.h>
++
++/* mtl_command_buffer.m */
++NSString *kk_methods_of(id obj);
++
++/* Playport (PLA-880): host time in seconds, the clock of MTL4CommitFeedback's
++ * GPUStartTime and GPUEndTime */
++static double
++kk_host_time_s(void)
++{
++   static mach_timebase_info_data_t timebase;
++   if (!timebase.denom)
++      mach_timebase_info(&timebase);
++   return (double)mach_absolute_time() * timebase.numer / timebase.denom / 1e9;
++}
++
++static const char *
++kk_encoder_error_state(MTLCommandEncoderErrorState state)
++{
++   switch (state) {
++   case MTLCommandEncoderErrorStateCompleted: return "completed";
++   case MTLCommandEncoderErrorStateAffected: return "affected";
++   case MTLCommandEncoderErrorStatePending: return "pending";
++   case MTLCommandEncoderErrorStateFaulted: return "FAULTED";
++   default: return "unknown";
++   }
++}
++
++/* One line, quoted, of an object's description, at most 400 characters */
++static NSString *
++kk_one_line(id value)
++{
++   NSString *s = [[value description]
++      stringByReplacingOccurrencesOfString:@"\n" withString:@" "];
++   return s.length > 400 ? [[s substringToIndex:400] stringByAppendingString:@"..."] : s;
++}
++
++/* Playport (PLA-880): an NSError and everything under it, a line per item,
++ * indented by depth: domain, code, description, failure reason, each user
++ * info entry, Metal's encoder infos (MTLCommandBufferEncoderInfoErrorKey),
++ * and the underlying errors (NSUnderlyingErrorKey,
++ * NSMultipleUnderlyingErrorsKey) in turn */
++static void
++kk_append_error(NSMutableString *out, NSError *error, unsigned depth,
++                NSString *what)
++{
++   NSString *indent = [@"" stringByPaddingToLength:2 * depth withString:@" "
++                                     startingAtIndex:0];
++   if (depth > 8 || out.length > 16384) {
++      [out appendFormat:@"%@%@...\n", indent, what];
++      return;
++   }
++   [out appendFormat:@"%@%@domain=%@ code=%ld desc=\"%@\"\n", indent, what,
++                     error.domain, (long)error.code,
++                     kk_one_line(error.localizedDescription)];
++   if (error.localizedFailureReason)
++      [out appendFormat:@"%@  reason=\"%@\"\n", indent,
++                        kk_one_line(error.localizedFailureReason)];
++   NSArray *keys = [error.userInfo.allKeys
++      sortedArrayUsingSelector:@selector(compare:)];
++   for (NSString *key in keys) {
++      id value = error.userInfo[key];
++      if ([key isEqual:NSLocalizedDescriptionKey] ||
++          [key isEqual:NSLocalizedFailureReasonErrorKey] ||
++          [key isEqual:NSUnderlyingErrorKey] ||
++          [key isEqual:NSMultipleUnderlyingErrorsKey])
++         continue;
++      if ([value isKindOfClass:[NSError class]]) {
++         kk_append_error(out, value, depth + 1,
++                         [NSString stringWithFormat:@"%@: ", key]);
++      } else if ([value isKindOfClass:[NSArray class]]) {
++         NSArray *items = value;
++         [out appendFormat:@"%@  %@: %lu item(s)\n", indent, key,
++                           (unsigned long)items.count];
++         NSUInteger i = 0;
++         for (id item in items) {
++            if ([item conformsToProtocol:@protocol(MTLCommandBufferEncoderInfo)]) {
++               id<MTLCommandBufferEncoderInfo> info = item;
++               [out appendFormat:@"%@    encoder[%lu] state=%s label=\"%@\" "
++                                 @"signposts=%@\n",
++                                 indent, (unsigned long)i,
++                                 kk_encoder_error_state(info.errorState),
++                                 info.label,
++                                 kk_one_line([info.debugSignposts
++                                    componentsJoinedByString:@","])];
++            } else if ([item isKindOfClass:[NSError class]]) {
++               kk_append_error(out, item, depth + 2,
++                               [NSString stringWithFormat:@"[%lu] ", (unsigned long)i]);
++            } else {
++               [out appendFormat:@"%@    [%lu] %s %@\n", indent, (unsigned long)i,
++                                 object_getClassName(item), kk_one_line(item)];
++            }
++            if (++i == 512)
++               break;
++         }
++      } else {
++         [out appendFormat:@"%@  %@=%@\n", indent, key, kk_one_line(value)];
++      }
++   }
++   NSError *underlying = error.userInfo[NSUnderlyingErrorKey];
++   if ([underlying isKindOfClass:[NSError class]])
++      kk_append_error(out, underlying, depth + 1, @"underlying: ");
++   NSArray *multiple = error.userInfo[NSMultipleUnderlyingErrorsKey];
++   if ([multiple isKindOfClass:[NSArray class]]) {
++      NSUInteger i = 0;
++      for (id item in multiple) {
++         if ([item isKindOfClass:[NSError class]])
++            kk_append_error(out, item, depth + 1,
++                            [NSString stringWithFormat:@"underlying[%lu]: ",
++                                                       (unsigned long)i]);
++         i++;
++      }
++   }
++}
++
++/* The error chain, then the feedback object's class and methods (Metal 4's
++ * concrete feedback may carry more than its protocol declares) */
++static NSString *
++kk_error_detail(NSError *error, id feedback)
++{
++   NSMutableString *out = [NSMutableString string];
++   kk_append_error(out, error, 0, @"");
++   [out appendFormat:@"feedback %@", kk_methods_of(feedback)];
++   return out;
++}
++
+ /* MTL4CommitOptions */
+ mtl_commit_options *
+ mtl_new_commit_options(void)
+@@ -25,15 +153,22 @@ mtl_commit_options_add_feedback_handler(mtl_commit_options *options,
+ {
+    @autoreleasepool {
+       MTL4CommitOptions* opt = (MTL4CommitOptions *)options;
++      /* The handler is added just before the commit */
++      const double commit_time = kk_host_time_s();
+       [opt addFeedbackHandler:^(id<MTL4CommitFeedback> feedback) {
+          @autoreleasepool {
++            const double feedback_time = kk_host_time_s();
+             NSError *error = feedback.error;
+             struct mtl_feedback_data feedback_data = (struct mtl_feedback_data){
+                .user_data = data,
+                .error_message =
+                   error ? error.localizedDescription.UTF8String : NULL,
++               .error_detail =
++                  error ? kk_error_detail(error, feedback).UTF8String : NULL,
+                .gpu_start = feedback.GPUStartTime,
+                .gpu_end = feedback.GPUEndTime,
++               .commit_time = commit_time,
++               .feedback_time = feedback_time,
+                .error = error
+                            ? (enum mtl_command_queue_error)error.code
+                            : MTL_COMMAND_QUEUE_ERROR_NONE,
+diff --git a/src/kosmickrisp/bridge/mtl_types.h b/src/kosmickrisp/bridge/mtl_types.h
+index fc28a9d..db52b76 100644
+--- a/src/kosmickrisp/bridge/mtl_types.h
++++ b/src/kosmickrisp/bridge/mtl_types.h
+@@ -396,8 +396,17 @@ struct mtl_texture_memory_copy {
+ struct mtl_feedback_data {
+    void *user_data;
+    const char *error_message;
++   /* Playport (PLA-880): with an error, the whole NSError chain (domain,
++    * code, description and user info of the error and of every underlying
++    * one, Metal's encoder infos), one line per item; NULL without one. Valid
++    * during the callback. */
++   const char *error_detail;
+    double gpu_start;
+    double gpu_end;
++   /* Playport (PLA-880): host times, in the GPU times' clock, of the commit
++    * and of this feedback; 0 when unknown */
++   double commit_time;
++   double feedback_time;
+    enum mtl_command_queue_error error;
+ };
+ 
+diff --git a/src/kosmickrisp/bridge/stubs/mtl_command_buffer.c b/src/kosmickrisp/bridge/stubs/mtl_command_buffer.c
+index 1a4330c..de5d7db 100644
+--- a/src/kosmickrisp/bridge/stubs/mtl_command_buffer.c
++++ b/src/kosmickrisp/bridge/stubs/mtl_command_buffer.c
+@@ -41,3 +41,9 @@ mtl_command_buffer_set_label(mtl_command_buffer *command_buffer,
+                              const char *label)
+ {
+ }
++
++const char *
++mtl_enable_encoder_execution_status(void)
++{
++   return "unavailable (no Metal)";
++}
+diff --git a/src/kosmickrisp/bridge/vk_to_mtl_map.c b/src/kosmickrisp/bridge/vk_to_mtl_map.c
+index 86bb1fe..ed1289a 100644
+--- a/src/kosmickrisp/bridge/vk_to_mtl_map.c
++++ b/src/kosmickrisp/bridge/vk_to_mtl_map.c
+@@ -322,6 +322,8 @@ mtl_command_queue_error_to_string(enum mtl_command_queue_error error)
+    case MTL_COMMAND_QUEUE_ERROR_INTERNAL:
+       return "MTL_COMMAND_QUEUE_ERROR_INTERNAL";
+    default:
+-      UNREACHABLE("Unsupported error value");
++      /* Playport (PLA-880): a code this enum lacks (4, DeviceRemoved, or one
++       * from another domain) must not be unreachable: it is logged */
++      return "unknown MTL4CommandQueueError";
+    }
+ }
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.c b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+index 5f61c08..eada6e3 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_buffer.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+@@ -522,6 +522,7 @@ kk_destroy_cmd_buffer(struct vk_command_buffer *vk_cmd_buffer)
+    util_dynarray_fini(&cmd->post_render_writes);
+    util_dynarray_fini(&cmd->ts_resolves);
+    util_dynarray_fini(&cmd->ts_stage_map);
++   kk_fault_cmd_finish(cmd);
+ 
+    vk_free(&pool->vk.alloc, cmd);
+ }
+@@ -554,6 +555,7 @@ kk_create_cmd_buffer(struct vk_command_pool *vk_pool,
+    cmd->ts_resolves = UTIL_DYNARRAY_INIT;
+    cmd->ts_stage_map = UTIL_DYNARRAY_INIT;
+    cmd->post_render_writes = UTIL_DYNARRAY_INIT;
++   kk_fault_cmd_init(cmd);
+ 
+    {
+       mtl_argument_table_descriptor *desc = mtl_new_argument_table_descriptor();
+@@ -651,6 +653,7 @@ kk_BeginCommandBuffer(VkCommandBuffer commandBuffer,
+       memset(&cmd->pass_debug, 0, sizeof(cmd->pass_debug));
+       KK_PASS_STAT(CMD_BUFFERS);
+    }
++   kk_fault_begin_cmd(cmd);
+    /* Playport (PLA-72): the first render encoder waits for whatever the
+     * queue ran before, as every encoder end used to make it */
+    cmd->vertex_wait = KK_EXPERIMENTAL(NARROW_BARRIERS);
+@@ -733,6 +736,7 @@ cs_start_render(struct kk_cmd_buffer *cmd)
+    }
+ 
+    kk_pass_prof_begin(cmd, true);
++   kk_fault_begin_encoder(cmd, true);
+    kk_encoder_update_debug(cmd, cmd->metal.render);
+    if (cmd->vertex_wait) {
+       KK_PASS_STAT(VERTEX_WAITS);
+@@ -806,6 +810,7 @@ cs_get_compute(struct kk_cmd_buffer *cmd)
+          cmd->pass_debug.encoders++;
+       }
+       kk_pass_prof_begin(cmd, false);
++      kk_fault_begin_encoder(cmd, false);
+       mtl_compute_set_argument_table(cmd->metal.compute, cmd->argument_table);
+       kk_encoder_update_debug(cmd, cmd->metal.compute);
+       if (cmd->ts_fence_pending) {
+@@ -833,6 +838,7 @@ end_encoder(struct kk_cmd_buffer *cmd, mtl_command_encoder *encoder,
+     * encoders inside transform feedback, whose vertex stage advances the
+     * counters the next one reads. */
+    kk_pass_prof_end(cmd, render);
++   kk_fault_end_encoder(cmd, encoder);
+    const bool narrow = render && KK_EXPERIMENTAL(NARROW_BARRIERS) &&
+                        !cmd->state.gfx.xfb.enabled;
+    /* Playport (PLA-541), MESA_KK_EXPERIMENTAL=barrier_device_vis: device
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.h b/src/kosmickrisp/vulkan/kk_cmd_buffer.h
+index 133d567..422a809 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_buffer.h
++++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.h
+@@ -11,6 +11,7 @@
+ #include "kk_private.h"
+ 
+ #include "kk_descriptor_set.h"
++#include "kk_fault.h"
+ #include "kk_gpl.h"
+ #include "kk_image.h"
+ #include "kk_nir_lower_vbo.h"
+@@ -436,6 +437,10 @@ struct kk_cmd_buffer {
+    /* Non-owning, attached only to a queue-owned profiling replay. */
+    struct kk_pass_prof *pass_prof;
+    uint32_t pass_prof_cb, pass_prof_index;
++
++   /* Playport (PLA-880): MESA_KK_DEBUG=fault's trail of this recording's
++    * encoders (kk_fault.h) */
++   struct kk_fault_cmd fault;
+ };
+ 
+ VK_DEFINE_HANDLE_CASTS(kk_cmd_buffer, vk.base, VkCommandBuffer,
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_draw.c b/src/kosmickrisp/vulkan/kk_cmd_draw.c
+index c60296c..c0f679a 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_draw.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_draw.c
+@@ -1110,6 +1110,9 @@ kk_heap(struct kk_cmd_buffer *cmd)
+        * since this path is only taken by tessellation and unroll which already
+        * force a compute encoder break */
+       mtl_compute_encoder *encoder = cs_get_compute(cmd);
++      /* Playport (PLA-880): MESA_KK_DEBUG=fault records what the last user
++       * allocated before the reset */
++      kk_fault_heap_reset(cmd, encoder);
+       kk_cmd_write(cmd, (struct libkk_imm_write){
+                            addr + offsetof(struct poly_heap, bottom), 0});
+ 
+@@ -1240,6 +1243,7 @@ kk_upload_tess_params(struct kk_cmd_buffer *cmd, struct poly_tess_params *out,
+          ? POLY_TESS_PARTITIONING_FRACTIONAL_ODD
+          : POLY_TESS_PARTITIONING_FRACTIONAL_EVEN;
+ 
++   kk_fault_note(cmd, KK_FAULT_TESS);
+    struct poly_tess_params args = {
+       .heap = kk_heap(cmd),
+       .tcs_stride_el = tcs->info.tess.tcs_output_stride / 4,
+@@ -1677,6 +1681,7 @@ kk_unroll_geometry(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
+    if (unlikely(!out_draws.gpu))
+       return false;
+ 
++   kk_fault_note(cmd, KK_FAULT_UNROLL);
+    struct libkk_unroll_geometry_args info = {
+       .index_buffer = data->index_buffer.addr,
+       .heap = kk_heap(cmd),
+@@ -1793,6 +1798,8 @@ kk_dispatch_draw(struct kk_cmd_buffer *cmd, struct kk_draw_data data)
+ {
+    mtl_render_encoder *enc = cs_get_render(cmd);
+    kk_pass_prof_draw(cmd);
++   if (kk_grid_is_indirect(data.grid))
++      kk_fault_note(cmd, KK_FAULT_INDIRECT);
+ 
+    if (KK_DEBUG(PASSES)) {
+       KK_PASS_STAT(DRAWS);
+@@ -2223,6 +2230,7 @@ kk_launch_gs(struct kk_cmd_buffer *cmd, struct kk_draw_data draw,
+    struct kk_shader *tes = cmd->state.shaders[MESA_SHADER_TESS_EVAL];
+    const struct poly_gs_info *gsi = &vs->info.vs.gs;
+    bool indirect = kk_grid_is_indirect(draw.grid);
++   kk_fault_note(cmd, KK_FAULT_GS);
+ 
+    /* The stage before the geometry shader: with tessellation that is the tess
+     * eval shader, run as compute over the tessellator's indices, whose outputs
+diff --git a/src/kosmickrisp/vulkan/kk_debug.c b/src/kosmickrisp/vulkan/kk_debug.c
+index 135863c..4845e52 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.c
++++ b/src/kosmickrisp/vulkan/kk_debug.c
+@@ -36,6 +36,7 @@ const struct debug_named_value debug_flags[] = {
+    {"no_compression", KK_DEBUG_NO_COMPRESSION},
+    {"null_desc", KK_DEBUG_NULL_DESC},
+    {"image_binds", KK_DEBUG_IMAGE_BINDS},
++   {"fault", KK_DEBUG_FAULT},
+    {NULL, 0},
+ };
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_debug.h b/src/kosmickrisp/vulkan/kk_debug.h
+index eb29ae3..346b58e 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.h
++++ b/src/kosmickrisp/vulkan/kk_debug.h
+@@ -79,6 +79,11 @@ enum kk_debug {
+     * plane bind: the offset asked for, the offset bound after alignment,
+     * and the size and alignment the plane takes (kk_image.c) */
+    KK_DEBUG_IMAGE_BINDS = 1ull << 19,
++   /* Playport (PLA-880): label every encoder with its command buffer and
++    * what it encoded, keep each command buffer's encoders and log them when
++    * its commit fails, record each geometry heap reset's usage, and ask
++    * Metal for encoder execution status where it has it (kk_fault.h) */
++   KK_DEBUG_FAULT = 1ull << 20,
+ };
+ 
+ extern enum kk_debug kk_mesa_debug_flags;
+diff --git a/src/kosmickrisp/vulkan/kk_device.c b/src/kosmickrisp/vulkan/kk_device.c
+index 3d9de82..8000946 100644
+--- a/src/kosmickrisp/vulkan/kk_device.c
++++ b/src/kosmickrisp/vulkan/kk_device.c
+@@ -339,6 +339,7 @@ kk_CreateDevice(VkPhysicalDevice physicalDevice,
+    memset(dev->sink_bo->cpu, 0, 2u * KK_SINK_PAGE_SIZE);
+    dev->zero_page_addr = dev->sink_bo->gpu;
+    dev->scratch_page_addr = dev->sink_bo->gpu + KK_SINK_PAGE_SIZE;
++   kk_fault_device_init(dev);
+ 
+    result = kk_device_init_meta(dev);
+    if (result != VK_SUCCESS)
+@@ -384,6 +385,7 @@ fail_query_table:
+ fail_meta:
+    kk_device_finish_meta(dev);
+ fail_sink:
++   kk_fault_device_finish(dev);
+    kk_destroy_bo(dev, dev->sink_bo);
+ fail_mem_cache:
+    vk_pipeline_cache_destroy(dev->vk.mem_cache, NULL);
+@@ -438,6 +440,7 @@ kk_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
+    /* Geometry heap */
+    if (dev->heap)
+       kk_destroy_bo(dev, dev->heap);
++   kk_fault_device_finish(dev);
+    kk_destroy_bo(dev, dev->sink_bo);
+ 
+    if (dev->has_queue) {
+diff --git a/src/kosmickrisp/vulkan/kk_device.h b/src/kosmickrisp/vulkan/kk_device.h
+index bed91cb..5170ded 100644
+--- a/src/kosmickrisp/vulkan/kk_device.h
++++ b/src/kosmickrisp/vulkan/kk_device.h
+@@ -11,6 +11,7 @@
+ #include "kk_private.h"
+ 
+ #include "kk_descriptor_stats.h"
++#include "kk_fault.h"
+ #include "kk_query_table.h"
+ #include "kk_queue.h"
+ 
+@@ -127,6 +128,9 @@ struct kk_device {
+    struct kk_bo *heap;
+    util_once_flag heap_init_once;
+ 
++   /* Playport (PLA-880): MESA_KK_DEBUG=fault's records (kk_fault.h) */
++   struct kk_fault_device fault;
++
+    /* Two pages for geometry and transform feedback emulation: a zero page
+     * that is only ever read (the offset of an unbound transform feedback
+     * buffer) and a scratch page that absorbs writes nobody reads (counters of
+diff --git a/src/kosmickrisp/vulkan/kk_fault.c b/src/kosmickrisp/vulkan/kk_fault.c
+new file mode 100644
+index 0000000..7f47e98
+--- /dev/null
++++ b/src/kosmickrisp/vulkan/kk_fault.c
+@@ -0,0 +1,356 @@
++/*
++ * Copyright 2026 The Playport authors
++ * SPDX-License-Identifier: MIT
++ */
++
++/* Playport (PLA-880), MESA_KK_DEBUG=fault: see kk_fault.h */
++
++#include "kk_fault.h"
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++#include "kk_bo.h"
++#include "kk_cmd_buffer.h"
++#include "kk_debug.h"
++#include "kk_device.h"
++
++#include "kosmickrisp/bridge/mtl_bridge.h"
++#include "poly/geometry.h"
++#include "util/u_atomic.h"
++
++#define MIB (1024.0 * 1024.0)
++
++void
++kk_fault_device_init(struct kk_device *dev)
++{
++   if (!KK_DEBUG(FAULT))
++      return;
++   if (kk_alloc_bo(dev, &dev->vk.base, KK_FAULT_RING * sizeof(uint32_t), 0,
++                   &dev->fault.ring) == VK_SUCCESS)
++      memset(dev->fault.ring->cpu, 0, KK_FAULT_RING * sizeof(uint32_t));
++   else
++      dev->fault.ring = NULL;
++   fprintf(stderr,
++           "[kk-fault] on: encoder labels, command buffer trails, geometry heap "
++           "ring%s; Metal encoder status: %s\n",
++           dev->fault.ring ? "" : " (not allocated)",
++           mtl_enable_encoder_execution_status());
++   fflush(stderr);
++}
++
++void
++kk_fault_device_finish(struct kk_device *dev)
++{
++   if (dev->fault.ring)
++      kk_destroy_bo(dev, dev->fault.ring);
++   dev->fault.ring = NULL;
++}
++
++void
++kk_fault_cmd_init(struct kk_cmd_buffer *cmd)
++{
++   cmd->fault.trail = UTIL_DYNARRAY_INIT;
++}
++
++void
++kk_fault_cmd_finish(struct kk_cmd_buffer *cmd)
++{
++   util_dynarray_fini(&cmd->fault.trail);
++}
++
++void
++kk_fault_begin_cmd(struct kk_cmd_buffer *cmd)
++{
++   struct kk_fault_cmd *f = &cmd->fault;
++   util_dynarray_clear(&f->trail);
++   f->flags = 0u;
++   f->open = false;
++   f->dropped = 0u;
++   f->serial = KK_DEBUG(FAULT)
++                  ? p_atomic_inc_return(&kk_cmd_buffer_device(cmd)->fault.serial)
++                  : 0u;
++}
++
++static struct kk_fault_encoder *
++open_encoder(struct kk_cmd_buffer *cmd)
++{
++   if (!cmd->fault.open)
++      return NULL;
++   return util_dynarray_last_ptr(&cmd->fault.trail, struct kk_fault_encoder);
++}
++
++void
++kk_fault_begin_encoder(struct kk_cmd_buffer *cmd, bool render)
++{
++   struct kk_fault_cmd *f = &cmd->fault;
++   if (!f->serial)
++      return;
++   if (util_dynarray_num_elements(&f->trail, struct kk_fault_encoder) ==
++       KK_FAULT_MAX_ENCODERS) {
++      f->dropped++;
++      f->open = false;
++      return;
++   }
++   util_dynarray_append(&f->trail, (struct kk_fault_encoder){.render = render});
++   f->open = true;
++}
++
++/* "render draws=N" or "compute dispatches=N copies=N", then the flags */
++static void
++describe(const struct kk_fault_encoder *e, char *buf, size_t size)
++{
++   int n = e->render
++              ? snprintf(buf, size, "render draws=%u", e->draws)
++              : snprintf(buf, size, "compute dispatches=%u copies=%u",
++                         e->dispatches, e->copies);
++   static const char *const names[] = {"tess", "gs", "unroll", "heap",
++                                       "indirect"};
++   for (unsigned i = 0; i < ARRAY_SIZE(names) && n > 0 && (size_t)n < size; i++) {
++      if (e->flags & (1u << i))
++         n += snprintf(buf + n, size - n, " %s", names[i]);
++   }
++}
++
++void
++kk_fault_end_encoder(struct kk_cmd_buffer *cmd, void *encoder)
++{
++   struct kk_fault_encoder *e = open_encoder(cmd);
++   if (!e)
++      return;
++   char what[128], label[160];
++   describe(e, what, sizeof(what));
++   const unsigned index =
++      util_dynarray_num_elements(&cmd->fault.trail, struct kk_fault_encoder) - 1u;
++   snprintf(label, sizeof(label), "kk#%u.%u %s", cmd->fault.serial, index, what);
++   mtl_encoder_set_label(encoder, label);
++   cmd->fault.open = false;
++}
++
++void
++kk_fault_draw(struct kk_cmd_buffer *cmd)
++{
++   struct kk_fault_encoder *e = open_encoder(cmd);
++   if (e)
++      e->draws++;
++}
++
++void
++kk_fault_pipeline(struct kk_cmd_buffer *cmd)
++{
++   struct kk_fault_encoder *e = open_encoder(cmd);
++   if (e && !e->render)
++      e->dispatches++;
++}
++
++void
++kk_fault_copy(struct kk_cmd_buffer *cmd)
++{
++   struct kk_fault_encoder *e = open_encoder(cmd);
++   if (e)
++      e->copies++;
++}
++
++void
++kk_fault_note(struct kk_cmd_buffer *cmd, uint32_t flags)
++{
++   if (!cmd->fault.serial)
++      return;
++   cmd->fault.flags |= flags;
++   struct kk_fault_encoder *e = open_encoder(cmd);
++   if (e)
++      e->flags |= flags;
++}
++
++void
++kk_fault_heap_reset(struct kk_cmd_buffer *cmd, mtl_compute_encoder *encoder)
++{
++   struct kk_device *dev = kk_cmd_buffer_device(cmd);
++   if (!cmd->fault.serial)
++      return;
++   kk_fault_note(cmd, KK_FAULT_HEAP);
++   if (!dev->fault.ring || !dev->heap)
++      return;
++   const uint32_t slot =
++      (p_atomic_inc_return(&dev->fault.ring_next) - 1u) % KK_FAULT_RING;
++   dev->fault.ring_serial[slot] = cmd->fault.serial;
++   /* After the heap's users before it in this encoder, and before the reset
++    * the caller encodes next */
++   mtl_barrier_after_encoder_stages(encoder, MTL_STAGE_DISPATCH, MTL_STAGE_BLIT);
++   mtl_copy_from_buffer_to_buffer(encoder, dev->heap->map,
++                                  offsetof(struct poly_heap, bottom),
++                                  dev->fault.ring->map,
++                                  slot * sizeof(uint32_t), sizeof(uint32_t));
++   mtl_barrier_after_encoder_stages(encoder, MTL_STAGE_BLIT, MTL_STAGE_DISPATCH);
++}
++
++struct kk_fault_commit {
++   struct kk_device *dev;
++   mtl_feedback_handler_callback callback;
++   void *user_data;
++   uint32_t serial, flags, dropped, count;
++   struct kk_fault_encoder trail[];
++};
++
++struct kk_fault_commit *
++kk_fault_commit_new(struct kk_cmd_buffer *cmd,
++                    mtl_feedback_handler_callback callback, void *user_data)
++{
++   if (!cmd->fault.serial)
++      return NULL;
++   const uint32_t count =
++      util_dynarray_num_elements(&cmd->fault.trail, struct kk_fault_encoder);
++   struct kk_fault_commit *c =
++      malloc(sizeof(*c) + count * sizeof(struct kk_fault_encoder));
++   if (!c)
++      return NULL;
++   *c = (struct kk_fault_commit){
++      .dev = kk_cmd_buffer_device(cmd),
++      .callback = callback,
++      .user_data = user_data,
++      .serial = cmd->fault.serial,
++      .flags = cmd->fault.flags,
++      .dropped = cmd->fault.dropped,
++      .count = count,
++   };
++   if (count)
++      memcpy(c->trail, util_dynarray_begin(&cmd->fault.trail),
++             count * sizeof(struct kk_fault_encoder));
++   return c;
++}
++
++/* The heap's size and the most any user of it has allocated that the GPU has
++ * left for the CPU to see: the bottom each recorded reset found, and the
++ * header's bottom (the last user's, not reset yet). *serial is the command
++ * buffer whose reset found the most, 0 for the header's. */
++struct heap_usage {
++   uint32_t size, header_bottom, largest, largest_serial, recorded, over;
++};
++
++static bool
++heap_usage(struct kk_device *dev, struct heap_usage *u)
++{
++   struct kk_bo *heap = p_atomic_read(&dev->heap);
++   if (!heap)
++      return false;
++   const volatile struct poly_heap *h = heap->cpu;
++   *u = (struct heap_usage){.size = h->size, .header_bottom = h->bottom};
++   if (dev->fault.ring) {
++      const volatile uint32_t *ring = dev->fault.ring->cpu;
++      u->recorded = MIN2(p_atomic_read(&dev->fault.ring_next), KK_FAULT_RING);
++      for (uint32_t i = 0; i < u->recorded; i++) {
++         const uint32_t b = ring[i];
++         if (b > u->largest) {
++            u->largest = b;
++            u->largest_serial = dev->fault.ring_serial[i];
++         }
++         if (b >= u->size)
++            u->over++;
++      }
++   }
++   return true;
++}
++
++static void
++log_high_water(struct kk_fault_commit *c)
++{
++   struct heap_usage u;
++   if (!heap_usage(c->dev, &u))
++      return;
++   const uint32_t high = MAX2(u.largest, u.header_bottom);
++   uint32_t old = p_atomic_read(&c->dev->fault.heap_high_water);
++   /* A first mark, 8 MiB more, or an overflow */
++   while (high > old &&
++          (old == 0u || high >= old + (8u << 20) ||
++           (high >= u.size && old < u.size))) {
++      const uint32_t seen =
++         p_atomic_cmpxchg(&c->dev->fault.heap_high_water, old, high);
++      if (seen == old) {
++         fprintf(stderr,
++                 "[kk-fault] geometry heap high-water %.1f MiB of %.1f MiB "
++                 "(cb #%u)%s\n",
++                 high / MIB, u.size / MIB, c->serial,
++                 high >= u.size ? " OVERFLOW" : "");
++         fflush(stderr);
++         return;
++      }
++      old = seen;
++   }
++}
++
++static void
++log_failure(struct kk_fault_commit *c, const struct mtl_feedback_data *data,
++            uint32_t last_completed)
++{
++   uint32_t render = 0u, draws = 0u, dispatches = 0u, copies = 0u;
++   for (uint32_t i = 0; i < c->count; i++) {
++      render += c->trail[i].render;
++      draws += c->trail[i].draws;
++      dispatches += c->trail[i].dispatches;
++      copies += c->trail[i].copies;
++   }
++   char flags[64] = "";
++   static const char *const names[] = {"tess", "gs", "unroll", "heap",
++                                       "indirect"};
++   for (unsigned i = 0; i < ARRAY_SIZE(names); i++) {
++      if (c->flags & (1u << i))
++         snprintf(flags + strlen(flags), sizeof(flags) - strlen(flags), "%s%s",
++                  flags[0] ? "," : "", names[i]);
++   }
++   fprintf(stderr,
++           "[kk-fault] cb #%u failed (error=%d): encoders=%u render=%u "
++           "compute=%u draws=%u dispatches=%u copies=%u flags=%s "
++           "last-completed=#%u\n",
++           c->serial, (int)data->error, c->count + c->dropped, render,
++           c->count - render, draws, dispatches, copies,
++           flags[0] ? flags : "none", last_completed);
++   const uint32_t listed = MIN2(c->count, 512u);
++   for (uint32_t i = 0; i < listed; i++) {
++      char what[128];
++      describe(&c->trail[i], what, sizeof(what));
++      fprintf(stderr, "[kk-fault] cb #%u enc %u %s\n", c->serial, i, what);
++   }
++   if (c->count + c->dropped > listed)
++      fprintf(stderr, "[kk-fault] cb #%u: %u more encoders not listed\n",
++              c->serial, c->count + c->dropped - listed);
++
++   struct heap_usage u;
++   if (!heap_usage(c->dev, &u)) {
++      fprintf(stderr, "[kk-fault] geometry heap: not allocated (no draw has "
++                      "used it)\n");
++   } else {
++      fprintf(stderr,
++              "[kk-fault] geometry heap: last user's bottom=%.1f MiB of %.1f "
++              "MiB%s\n",
++              u.header_bottom / MIB, u.size / MIB,
++              u.header_bottom >= u.size ? " OVERFLOW" : "");
++      if (c->dev->fault.ring)
++         fprintf(stderr,
++                 "[kk-fault] geometry heap resets: %u recorded, largest %.1f "
++                 "MiB found by the reset in cb #%u, %u over the heap\n",
++                 u.recorded, u.largest / MIB, u.largest_serial, u.over);
++   }
++   fflush(stderr);
++}
++
++void
++kk_fault_feedback(struct mtl_feedback_data *data)
++{
++   struct kk_fault_commit *c = data->user_data;
++   struct kk_device *dev = c->dev;
++   const uint32_t last_completed = p_atomic_read(&dev->fault.last_completed);
++
++   struct mtl_feedback_data inner = *data;
++   inner.user_data = c->user_data;
++   c->callback(&inner);
++
++   if (data->error != MTL_COMMAND_QUEUE_ERROR_NONE) {
++      log_failure(c, data, last_completed);
++   } else {
++      p_atomic_set(&dev->fault.last_completed, c->serial);
++      if (c->flags & KK_FAULT_HEAP)
++         log_high_water(c);
++   }
++   free(c);
++}
+diff --git a/src/kosmickrisp/vulkan/kk_fault.h b/src/kosmickrisp/vulkan/kk_fault.h
+new file mode 100644
+index 0000000..bcd8800
+--- /dev/null
++++ b/src/kosmickrisp/vulkan/kk_fault.h
+@@ -0,0 +1,103 @@
++/*
++ * Copyright 2026 The Playport authors
++ * SPDX-License-Identifier: MIT
++ */
++#ifndef KK_FAULT_H
++#define KK_FAULT_H 1
++
++/* Playport (PLA-880), MESA_KK_DEBUG=fault: what a failed Metal command buffer
++ * held. Metal 4 has no public encoder execution status (MTL4CommitFeedback
++ * gives an NSError and two GPU times; MTL4CommandBufferOptions has only a log
++ * state), so the driver keeps its own record:
++ *
++ * - each encoder is labelled "kk#<serial>.<index> <kind> ..." with what it
++ *   encoded, so a label Metal reports (or a GPU capture shows) names the
++ *   command buffer and pass;
++ * - each command buffer keeps a trail of its encoders (kind, draws,
++ *   dispatches, copies, tessellation / geometry / unroll / geometry heap
++ *   use), copied at commit; a failed commit logs it as [kk-fault] lines;
++ * - each reset of the geometry heap (kk_heap, the 128 MiB scratch of
++ *   tessellation, geometry shaders and strip unrolls that every draw using
++ *   it allocates from) first copies the bytes the previous user allocated
++ *   into a ring, so a failure shows whether a draw overflowed the heap
++ *   (poly_heap_alloc_offs has no way to fail: its abort is a return).
++ *
++ * Without the flag none of this runs; a failed commit still logs the full
++ * error chain (kk_queue.c). */
++
++#include <stdbool.h>
++#include <stdint.h>
++
++#include "kosmickrisp/bridge/mtl_types.h"
++#include "util/u_dynarray.h"
++
++struct kk_bo;
++struct kk_cmd_buffer;
++struct kk_device;
++
++enum kk_fault_flag {
++   KK_FAULT_TESS = 1u << 0,     /* a tessellated draw's compute stages */
++   KK_FAULT_GS = 1u << 1,       /* a geometry shader's compute stages */
++   KK_FAULT_UNROLL = 1u << 2,   /* a strip or fan unrolled for restart */
++   KK_FAULT_HEAP = 1u << 3,     /* a geometry heap reset (kk_heap) */
++   KK_FAULT_INDIRECT = 1u << 4, /* an indirect draw */
++};
++
++/* One encoder of a command buffer's trail */
++struct kk_fault_encoder {
++   bool render;
++   uint8_t flags; /* enum kk_fault_flag */
++   uint32_t draws, dispatches, copies;
++};
++
++/* A command buffer's trail, reset at vkBeginCommandBuffer */
++struct kk_fault_cmd {
++   uint32_t serial; /* 0: not traced (no MESA_KK_DEBUG=fault) */
++   uint32_t flags;  /* every encoder's flags */
++   bool open;       /* the last encoder is still being encoded */
++   uint32_t dropped; /* encoders past KK_FAULT_MAX_ENCODERS, counted only */
++   struct util_dynarray trail; /* struct kk_fault_encoder */
++};
++
++#define KK_FAULT_MAX_ENCODERS 2048u
++/* Geometry heap resets the ring keeps: the bytes each found allocated */
++#define KK_FAULT_RING 1024u
++
++/* The device's part */
++struct kk_fault_device {
++   struct kk_bo *ring; /* KK_FAULT_RING uint32_t, written by the GPU */
++   uint32_t ring_next; /* the next slot, atomic */
++   uint32_t ring_serial[KK_FAULT_RING]; /* the command buffer of each slot */
++   uint32_t serial;    /* the last command buffer serial, atomic */
++   uint32_t last_completed; /* the last serial that completed, atomic */
++   uint32_t heap_high_water; /* bytes, the highest logged */
++};
++
++void kk_fault_device_init(struct kk_device *dev);
++void kk_fault_device_finish(struct kk_device *dev);
++
++void kk_fault_cmd_init(struct kk_cmd_buffer *cmd);
++void kk_fault_cmd_finish(struct kk_cmd_buffer *cmd);
++void kk_fault_begin_cmd(struct kk_cmd_buffer *cmd);
++
++void kk_fault_begin_encoder(struct kk_cmd_buffer *cmd, bool render);
++void kk_fault_end_encoder(struct kk_cmd_buffer *cmd, void *encoder);
++void kk_fault_draw(struct kk_cmd_buffer *cmd);
++void kk_fault_pipeline(struct kk_cmd_buffer *cmd);
++void kk_fault_copy(struct kk_cmd_buffer *cmd);
++void kk_fault_note(struct kk_cmd_buffer *cmd, uint32_t flags);
++
++/* Before a command buffer's first use of the geometry heap resets it: copies
++ * the heap's bottom (what the last user allocated) into the next ring slot,
++ * in encoder, before the reset's write */
++void kk_fault_heap_reset(struct kk_cmd_buffer *cmd, mtl_compute_encoder *encoder);
++
++/* Wraps a commit's feedback: the trail is copied now, logged if the commit
++ * fails, and callback(user_data) runs as before. NULL when not traced. */
++struct kk_fault_commit;
++struct kk_fault_commit *
++kk_fault_commit_new(struct kk_cmd_buffer *cmd,
++                    mtl_feedback_handler_callback callback, void *user_data);
++void kk_fault_feedback(struct mtl_feedback_data *data);
++
++#endif /* KK_FAULT_H */
+diff --git a/src/kosmickrisp/vulkan/kk_pass_prof.c b/src/kosmickrisp/vulkan/kk_pass_prof.c
+index faae0c8..67e4827 100644
+--- a/src/kosmickrisp/vulkan/kk_pass_prof.c
++++ b/src/kosmickrisp/vulkan/kk_pass_prof.c
+@@ -279,6 +279,9 @@ kk_pass_prof_end(struct kk_cmd_buffer *cmd, bool render)
+ void
+ kk_pass_prof_pipeline(struct kk_cmd_buffer *cmd, void *pipeline)
+ {
++   /* Playport (PLA-880): this hook, the draw and the copy one feed
++    * MESA_KK_DEBUG=fault's trail too */
++   kk_fault_pipeline(cmd);
+    if (!cmd->pass_prof || cmd->pass_prof_index == PP_PASSES)
+       return;
+    struct kk_profile_pass *p = &cmd->pass_prof->passes[cmd->pass_prof_index];
+@@ -298,6 +301,7 @@ kk_pass_prof_store(struct kk_cmd_buffer *cmd, unsigned index, unsigned action)
+ void
+ kk_pass_prof_copy(struct kk_cmd_buffer *cmd)
+ {
++   kk_fault_copy(cmd);
+    if (cmd->pass_prof && cmd->pass_prof_index != PP_PASSES)
+       cmd->pass_prof->passes[cmd->pass_prof_index].native_copy = true;
+ }
+@@ -305,6 +309,7 @@ kk_pass_prof_copy(struct kk_cmd_buffer *cmd)
+ void
+ kk_pass_prof_draw(struct kk_cmd_buffer *cmd)
+ {
++   kk_fault_draw(cmd);
+    if (cmd->pass_prof && cmd->pass_prof_index != PP_PASSES)
+       cmd->pass_prof->passes[cmd->pass_prof_index].draws++;
+ }
+diff --git a/src/kosmickrisp/vulkan/kk_queue.c b/src/kosmickrisp/vulkan/kk_queue.c
+index f0b19c4..7e5a549 100644
+--- a/src/kosmickrisp/vulkan/kk_queue.c
++++ b/src/kosmickrisp/vulkan/kk_queue.c
+@@ -8,6 +8,7 @@
+ #include "kk_queue.h"
+ 
+ #include <stdio.h>
++#include <string.h>
+ #include <time.h>
+ #include "util/os_time.h"
+ #include "util/simple_mtx.h"
+@@ -155,6 +156,34 @@ kk_queue_release_cmd_buffer_locked(struct kk_queue *queue,
+    util_dynarray_append(&queue->free_cmd_buffers, &cmd->vk);
+ }
+ 
++/* Playport (PLA-880): a failed commit's whole error chain, a line per item,
++ * and when the GPU ran it: from the commit to its start (time queued, or a
++ * wait), its run, and from its end to this feedback. A watchdog timeout
++ * shows as a long run; a fault as a short one. */
++static void
++kk_queue_log_error(const struct mtl_feedback_data *data)
++{
++   fprintf(stderr, "[kk-queue] error: %s (%s)\n",
++           mtl_command_queue_error_to_string(data->error),
++           data->error == MTL_COMMAND_QUEUE_ERROR_TIMEOUT
++              ? "Metal 4: the workload took longer than the system allows"
++              : "see the chain");
++   for (const char *line = data->error_detail; line && *line;) {
++      const char *end = strchr(line, '\n');
++      const int len = end ? (int)(end - line) : (int)strlen(line);
++      fprintf(stderr, "[kk-queue] error: %.*s\n", len, line);
++      line = end ? end + 1 : NULL;
++   }
++   if (data->commit_time > 0.0)
++      fprintf(stderr,
++              "[kk-queue] error timing: commit->gpu-start=%.1f ms gpu=%.1f ms "
++              "gpu-end->feedback=%.1f ms commit->feedback=%.1f ms\n",
++              (data->gpu_start - data->commit_time) * 1000.0,
++              (data->gpu_end - data->gpu_start) * 1000.0,
++              (data->feedback_time - data->gpu_end) * 1000.0,
++              (data->feedback_time - data->commit_time) * 1000.0);
++}
++
+ static void
+ check_device_lost(struct kk_device *dev, struct mtl_feedback_data *data)
+ {
+@@ -168,6 +197,8 @@ check_device_lost(struct kk_device *dev, struct mtl_feedback_data *data)
+       fprintf(stderr, "[kk-queue] commit done error=%d gpu=%.3f ms %s\n", (int)data->error,
+               (data->gpu_end - data->gpu_start) * 1000.0,
+               data->error_message ? data->error_message : "");
++      if (data->error != MTL_COMMAND_QUEUE_ERROR_NONE)
++         kk_queue_log_error(data);
+       fflush(stderr);
+    }
+    if (data->error != MTL_COMMAND_QUEUE_ERROR_NONE) {
+@@ -240,7 +271,14 @@ kk_queue_commit(struct kk_queue *queue, struct kk_cmd_buffer *cmd,
+    assert(kk_cmd_buffer_has_work(cmd));
+ 
+    mtl_commit_options *options = mtl_new_commit_options();
+-   mtl_commit_options_add_feedback_handler(options, callback, user_data);
++   /* Playport (PLA-880): MESA_KK_DEBUG=fault keeps the recording's encoders
++    * for its feedback */
++   struct kk_fault_commit *fault =
++      kk_fault_commit_new(cmd, callback, user_data);
++   if (fault)
++      mtl_commit_options_add_feedback_handler(options, kk_fault_feedback, fault);
++   else
++      mtl_commit_options_add_feedback_handler(options, callback, user_data);
+ 
+    cmd->metal.committed = true;
+    mtl_command_queue_commit(queue->mtl_handle, &cmd->metal.cmd_buf, 1u,
+diff --git a/src/kosmickrisp/vulkan/meson.build b/src/kosmickrisp/vulkan/meson.build
+index 1b5d4d0..9adfd4e 100644
+--- a/src/kosmickrisp/vulkan/meson.build
++++ b/src/kosmickrisp/vulkan/meson.build
+@@ -78,6 +78,8 @@ kk_files = files(
+   'kk_device.c',
+   'kk_event.h',
+   'kk_event.c',
++  'kk_fault.h',
++  'kk_fault.c',
+   'kk_format.h',
+   'kk_format.c',
+   'kk_gpl.c',
+-- 
+2.56.1
+

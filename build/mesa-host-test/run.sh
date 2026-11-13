@@ -67,6 +67,7 @@ python3 "$HERE/run-cmd-pool-test.py" "$ROOT/build"
 python3 "$HERE/run-cmd-pool-test.py" "$ROOT/build" kk-residency-test
 python3 "$HERE/run-cmd-pool-test.py" "$ROOT/build" kk-cmd-census-test
 python3 "$HERE/run-cmd-pool-test.py" "$ROOT/build" kk-cmd-retire-test
+python3 "$HERE/run-cmd-pool-test.py" "$ROOT/build" kk-fault-test
 python3 "$HERE/run-pass-prof-test.py" "$ROOT/build"
 python3 "$HERE/run-nir-tests.py" "$ROOT/build"
 
