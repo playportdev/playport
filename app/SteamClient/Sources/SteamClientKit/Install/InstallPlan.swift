@@ -222,6 +222,11 @@ public struct InstallReceipt: Sendable, Codable, Equatable {
     public var executable: String? = nil
     /// The arguments Steam starts `executable` with (its launch entry's), nil when none.
     public var arguments: String? = nil
+    /// Whether the "DLC app N not owned" entries of `skippedDepots` were decided with the account's
+    /// ownership. Nil in a record written before PLA-850's fix, which left out with that reason
+    /// every owned DLC whose depot no package lists, or when the ownership was unknown: a repair
+    /// checks those depots with Steam again (`depotsToRecheck`).
+    public var dlcOwnershipChecked: Bool? = nil
 }
 
 /// The parsed manifest kept on disk (§6.2 G11): paths, sizes and hashes, no

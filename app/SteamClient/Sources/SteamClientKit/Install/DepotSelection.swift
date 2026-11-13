@@ -117,6 +117,24 @@ public struct DepotSelection: Sendable, Equatable {
         return (depot, app)
     }
 
+    /// The reason a DLC's depot is left out for: the account does not own its DLC app, or its
+    /// ownership was unknown (an anonymous session, licenses not fetched).
+    static func unownedDLCReason(_ app: UInt32) -> String { "DLC app \(app) not owned" }
+
+    /// The depot of a receipt's `skippedDepots` entry for an unowned DLC's depot; nil for any other.
+    public static func unownedDLC(skipped entry: String) -> UInt32? {
+        let parts = entry.split(separator: ":", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+        guard parts.count == 2, let depot = UInt32(parts[0]), parts[1].hasPrefix("DLC app ") else { return nil }
+        guard let app = UInt32(parts[1].dropFirst("DLC app ".count).prefix { $0.isNumber }),
+              parts[1] == unownedDLCReason(app) else { return nil }
+        return depot
+    }
+
+    /// The depot a receipt's `skippedDepots` entry ("<depot>: <reason>") names.
+    static func skippedDepotID(_ entry: String) -> UInt32? {
+        UInt32(entry.prefix { $0 != ":" }.trimmingCharacters(in: .whitespaces))
+    }
+
     static func exclusion(_ d: DepotInfo, _ o: Options) -> String? {
         if let from = d.depotFromApp, !d.isContentFromAnotherApp {
             return from == CommonRedistributables.appID ? sharedInstallReason(from) : sharedInstallElsewhereReason(from)
@@ -126,9 +144,9 @@ public struct DepotSelection: Sendable, Equatable {
         if let arch = d.osArch, !arch.isEmpty, arch != "64" { return "osarch \(arch)" }
         let dlcOwned = d.dlcAppID.map(o.ownedDLC.contains)
         if let owned = o.ownedDepots, !owned.contains(d.depotID), dlcOwned != true {
-            return d.dlcAppID.map { "DLC app \($0) not owned" } ?? "not in an owned package"
+            return d.dlcAppID.map(unownedDLCReason) ?? "not in an owned package"
         }
-        if let dlc = d.dlcAppID, dlcOwned == false { return "DLC app \(dlc) not owned" }
+        if let dlc = d.dlcAppID, dlcOwned == false { return unownedDLCReason(dlc) }
         if d.lowViolence { return "low-violence variant" }
         if let lang = d.language, lang != o.language { return "language \(lang)" }
         return nil
