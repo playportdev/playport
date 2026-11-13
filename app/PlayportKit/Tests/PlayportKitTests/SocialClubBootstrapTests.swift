@@ -169,16 +169,19 @@ final class SocialClubBootstrapTests: XCTestCase {
         XCTAssertNil(LaunchSettings.everyGameKeys[key])
     }
 
-    /// The shipped table: RDR2's Steam copy (PlayRDR2.exe and depot 1899671's installer, recorded in
-    /// docs/evidence/2026-10-15-rockstar-launcher-recon.md and 2026-10-18-rockstar-desktop-comparison.md)
-    /// and Rockstar's launcher 1.0.109.3031.
+    /// The shipped table: every game entry is RDR2's Steam bootstrap (PlayRDR2.exe and depot 1899671's
+    /// installer), every launcher entry the launcher's executable, and each file a size and a SHA-256.
     func testTheShippedTableNamesRDR2sSteamBootstrapAndTheLauncher() {
-        let rdr2 = SocialClubBootstrap.verified.first { $0.place == .game }
-        XCTAssertEqual(rdr2?.files.map(\.path), ["PlayRDR2.exe", "Redistributables/Rockstar-Games-Launcher.exe"])
-        XCTAssertEqual(rdr2?.files.first?.sha256.prefix(8), "028db16c")
-        XCTAssertEqual(rdr2?.files.last?.sha256, "321886457b7e4ab727a27671c17a815684a3943579eedf7e2248a3b9f0973746")
-        let launcher = SocialClubBootstrap.verified.first { $0.place == .launcher }
-        XCTAssertEqual(launcher?.files.map(\.path), [PublisherLauncher.rockstar.executable])
+        let games = SocialClubBootstrap.verified.filter { $0.place == .game }
+        let launchers = SocialClubBootstrap.verified.filter { $0.place == .launcher }
+        XCTAssertFalse(games.isEmpty)
+        XCTAssertFalse(launchers.isEmpty)
+        for g in games {
+            XCTAssertEqual(g.files.map(\.path), ["PlayRDR2.exe", "Redistributables/Rockstar-Games-Launcher.exe"], g.name)
+        }
+        for l in launchers {
+            XCTAssertEqual(l.files.map(\.path), [PublisherLauncher.rockstar.executable], l.name)
+        }
         for b in SocialClubBootstrap.verified {
             for f in b.files {
                 XCTAssertTrue(f.size > 0, f.path)

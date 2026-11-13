@@ -82,8 +82,26 @@ public struct SocialClubBootstrap: Equatable, Sendable {
              sha256: "d47e8c82c6b422724ab89866cd635ba247c50290ec70ac2bf765518e4af894cf"),
     ])
 
+    /// The same copy after depot 1899671 moved its installer to 1.0.110.3150 (seen on the phone
+    /// 2026-11-13, PLA-851: a reinstall of buildid 13773296 brought it; PlayRDR2.exe is unchanged).
+    public static let rdr2SteamLauncher3150 = SocialClubBootstrap(name: "Red Dead Redemption 2 (Steam, installer 1.0.110.3150)",
+                                                                  place: .game, files: [
+        File(path: "PlayRDR2.exe", size: 507_888,
+             sha256: "028db16cbd90c7ab07358a7d6dfc981800b6fd4f1583d9b39fe5ea0441d9483d"),
+        File(path: "Redistributables/Rockstar-Games-Launcher.exe", size: 113_170_552,
+             sha256: "7bcbe2fa7e218aa740cced4e72a74e3b0f32e6a6ba7cd8228dd65f3b07f2e575"),
+    ])
+
+    /// Rockstar Games Launcher 1.0.110.3150's Launcher.exe after its self-update to build 1311, pulled
+    /// from the phone's prefix (2026-11-13, PLA-851).
+    public static let rockstarLauncher3150 = SocialClubBootstrap(name: "Rockstar Games Launcher 1.0.110.3150", place: .launcher,
+                                                                 files: [
+        File(path: "Launcher.exe", size: 30_977_144,
+             sha256: "2197506b615467288064642b4da8b88589f6791efd29e4f6652fe94f7339c970"),
+    ])
+
     /// The bootstraps that engage the layout.
-    public static let verified: [SocialClubBootstrap] = [rdr2Steam, rockstarLauncher]
+    public static let verified: [SocialClubBootstrap] = [rdr2Steam, rdr2SteamLauncher3150, rockstarLauncher, rockstarLauncher3150]
 
     /// Each file's SHA-256 as last computed, keyed by its full path and valid while its size and
     /// modification time are unchanged. The app keeps it between Plays.
