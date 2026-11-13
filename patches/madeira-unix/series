@@ -261,3 +261,4 @@
 0297-ntdll-the-JIT-pool-dump-only-when-a-Diagnostics-swit.patch
 0298-ntdll-under-the-Social-Club-layout-refuse-a-helper-s.patch
 0299-ntdll-the-Social-Club-layout-holds-only-its-anchors-.patch
+0300-signal-emulate-LD1-LD4-and-ST1-ST4-multiple-structur.patch

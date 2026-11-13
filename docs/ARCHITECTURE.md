@@ -62,7 +62,12 @@ with its own PEB and private ntdll copy:
 - **i386 guests run through WoW64.** iOS still reserves the low 4 GiB, but
   each i386 pseudo-process owns a 4 GiB guest window at a host base `B`.
   FEX translates memory operands as `B + zext32(EA)`; Wine converts guest
-  pointers at the WoW64 boundary. Support is limited to the shipped DLLs and
+  pointers at the WoW64 boundary. Host code that follows an unconverted guest
+  pointer (FreeType reading a font that dwrite passes by its 32-bit address)
+  faults below 4 GiB. The signal code's sub-floor service then emulates the access
+  at `B + addr`: scalar, pair and LD1/ST1 lane loads and stores, and
+  LD1–LD4/ST1–ST4 with multiple structures (`patches/madeira-unix` 0300, PLA-872). It logs
+  an encoding it does not know as `[subfloor] ml939 … UNHANDLED`. Support is limited to the shipped DLLs and
   audited guest-pointer thunks (wow64win's `window_audited.h` in
   `patches/wine-pe`), not every i386 title or API
   ([decision 0047](decisions/0047-i386-titles-on-vulkan.md)).

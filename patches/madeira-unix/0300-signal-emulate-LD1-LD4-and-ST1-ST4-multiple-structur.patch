@@ -1,0 +1,167 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 13 Nov 2026 10:05:37 +0100
+Subject: [PATCH] signal: emulate LD1-LD4 and ST1-ST4 (multiple structures) in
+ the sub-floor service
+
+PLA-872. Host code that follows a 32-bit game's pointer faults into its
+WoW64 window and is emulated by the sub-floor service. Wine's dwrite hands
+FreeType a font by its 32-bit address, and FreeType's TT_RunIns (NPUSHW)
+reads the font's bytecode with `ld2 {v0.8b, v1.8b}, [x13], #16`
+(0x0cdf81a0). The service knew only the single-structure lane forms of
+LD1/ST1, so it declined. dwrite's unix call then returned an access
+violation, and every fifth fault at that pc tripped segv_handler's loop
+guard, which skipped the ld2 and resumed FreeType with stale vector
+registers. Borderlands 2's launcher logged it for each glyph outline on
+its main thread.
+
+Decode the multiple-structure class (LD1 to LD4 and ST1 to ST4, no offset or
+post-index) once in ios_simd_multi. Move the registers in the
+architecture's element order, clearing the upper half of a 64-bit load.
+Classify the access by its full span for the backing probe, and write
+back Rn for the post-index forms (Rm 11111 adds the size, any other Rm adds
+Xm). Loads go through ios_emulate_load and stores through
+ios_emulate_store_rel, the two emulators whose callers apply the
+writeback. The JIT pool's store path, which writes nothing back, does not
+take them.
+
+Class: ios-port
+Evidence: tools/tests/test_subfloor_simd_multi.py (host check; the phone gate, Borderlands 2's launcher window, not run)
+Offered-upstream: no; the WoW64 window exists only on the iOS port
+---
+ build/ntdll-unix/signal_arm64_ios.c | 94 +++++++++++++++++++++++++++++
+ 1 file changed, 94 insertions(+)
+
+diff --git a/build/ntdll-unix/signal_arm64_ios.c b/build/ntdll-unix/signal_arm64_ios.c
+index b6f88c2..de7acb8 100644
+--- a/build/ntdll-unix/signal_arm64_ios.c
++++ b/build/ntdll-unix/signal_arm64_ios.c
+@@ -11718,6 +11718,57 @@ static int ios_simd_lane( uint32_t insn, int *offset )
+     return 0;
+ }
+ 
++/* Playport (PLA-872): LD1-LD4/ST1-ST4 (multiple structures), no offset
++ * (0 Q 0011000 L 000000 opcode size Rn Rt) or post-index (0 Q 0011001 L 0 Rm
++ * opcode size Rn Rt). Vectorised host code reaches a WoW64 guest's memory this
++ * way: FreeType's NPUSHW reads a 32-bit game's font with `ld2 {v0.8b, v1.8b},
++ * [x13], #16`. Returns the bytes accessed, with the register count and the
++ * elements per structure, or 0 for any other encoding. */
++static unsigned ios_simd_multi( uint32_t insn, int *nregs, int *selem )
++{
++    const int q = (insn >> 30) & 1, size = (insn >> 10) & 3;
++
++    if ((insn & 0xBFBF0000) != 0x0C000000 && (insn & 0xBFA00000) != 0x0C800000) return 0;
++    switch ((insn >> 12) & 0xF)
++    {
++    case 0x0: *nregs = 4; *selem = 4; break;   /* LD4/ST4 */
++    case 0x2: *nregs = 4; *selem = 1; break;   /* LD1/ST1, four registers */
++    case 0x4: *nregs = 3; *selem = 3; break;   /* LD3/ST3 */
++    case 0x6: *nregs = 3; *selem = 1; break;   /* LD1/ST1, three registers */
++    case 0x7: *nregs = 1; *selem = 1; break;   /* LD1/ST1, one register */
++    case 0x8: *nregs = 2; *selem = 2; break;   /* LD2/ST2 */
++    case 0xA: *nregs = 2; *selem = 1; break;   /* LD1/ST1, two registers */
++    default: return 0;
++    }
++    if (size == 3 && !q && *selem > 1) return 0;   /* reserved */
++    return *nregs * (q ? 16u : 8u);
++}
++
++/* Move a multiple-structure access between memory and v0..v31 (16 bytes each),
++ * in the architecture's order: element e of Vt+r+s (mod 32) for each register
++ * group r, element e and structure member s. A 64-bit load clears the upper
++ * half of every register it writes. The encoding must be ios_simd_multi's. */
++static void ios_simd_multi_move( unsigned char *v, uint32_t insn, unsigned char *mem, int load )
++{
++    const int rt = insn & 0x1F, q = (insn >> 30) & 1, esize = 1 << ((insn >> 10) & 3);
++    const int elems = (q ? 16 : 8) / esize;
++    int nregs = 0, selem = 1, rpt, r, e, s;
++    unsigned offs = 0;
++
++    ios_simd_multi( insn, &nregs, &selem );
++    rpt = nregs / selem;
++    if (load && !q)
++        for (r = 0; r < nregs; r++) memset( v + 16 * ((rt + r) & 31) + 8, 0, 8 );
++    for (r = 0; r < rpt; r++)
++        for (e = 0; e < elems; e++)
++            for (s = 0; s < selem; s++, offs += esize)
++            {
++                unsigned char *lane = v + 16 * ((rt + r + s) & 31) + e * esize;
++                if (load) memcpy( lane, mem + offs, esize );
++                else memcpy( mem + offs, lane, esize );
++            }
++}
++
+ static int ios_emulate_store(ucontext_t *ctx, uint32_t insn, uintptr_t rw_addr)
+ {
+     int rt = insn & 0x1F;
+@@ -12370,6 +12421,17 @@ static int ios_emulate_load( ucontext_t *ctx, uint32_t insn, uintptr_t rd_addr )
+         }
+     }
+ 
++    /* LD1-LD4 (multiple structures) (Playport, PLA-872) */
++    {
++        int nregs, selem;
++        if ((insn & (1u << 22)) && ios_simd_multi( insn, &nregs, &selem ))
++        {
++            if (!ios_neon_valid) return 0;
++            ios_simd_multi_move( (unsigned char *)ctx->uc_mcontext->__ns.__v, insn, (unsigned char *)rd_addr, 1 );
++            return 1;
++        }
++    }
++
+     return 0;
+ }
+ 
+@@ -12498,6 +12560,17 @@ static int ios_emulate_store_rel( ucontext_t *ctx, uint32_t insn, uintptr_t addr
+         return 1;
+     }
+ 
++    /* ST1-ST4 (multiple structures) (Playport, PLA-872) */
++    {
++        int nregs, selem;
++        if (!(insn & (1u << 22)) && ios_simd_multi( insn, &nregs, &selem ))
++        {
++            if (!ios_neon_valid) return 0;   /* never store a zeroed vector block */
++            ios_simd_multi_move( (unsigned char *)ctx->uc_mcontext->__ns.__v, insn, (unsigned char *)addr, 0 );
++            return 1;
++        }
++    }
++
+     return 0;
+ }
+ 
+@@ -12542,6 +12615,17 @@ static void ios_subfloor_writeback( ucontext_t *ctx, uint32_t insn, uint64_t ori
+         imm7 *= scale;
+         REGn_sig(rn, ctx) = (kind == 1) ? orig_addr + imm7 : orig_addr;
+     }
++
++    /* Playport (PLA-872): LDn/STn (multiple structures), post-index: Rm 11111
++     * adds the access's size, any other Rm adds Xm. */
++    if ((insn & 0xBFA00000) == 0x0C800000)
++    {
++        const int rm = (insn >> 16) & 0x1F;
++        int nregs, selem;
++        unsigned bytes = ios_simd_multi( insn, &nregs, &selem );
++
++        if (bytes) REGn_sig(rn, ctx) = orig_addr + (rm == 31 ? bytes : REGn_sig(rm, ctx));
++    }
+ }
+ 
+ /*
+@@ -12623,6 +12707,16 @@ static int ios_subfloor_classify( uint32_t insn, unsigned *bytes, int *is_write
+             return 1;
+         }
+     }
++    {
++        int nregs, selem;
++        unsigned multi_bytes = ios_simd_multi( insn, &nregs, &selem );    /* LDn/STn (PLA-872) */
++        if (multi_bytes)
++        {
++            *bytes    = multi_bytes;
++            *is_write = !(insn & (1u << 22));
++            return 1;
++        }
++    }
+ 
+     /* ---- ios_emulate_store_rel: release / exclusive / LSE ---- */
+     if ((insn & 0x3FFFFC00) == 0x089FFC00 ||                        /* STLR*   */
