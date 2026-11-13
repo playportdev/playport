@@ -1,4 +1,4 @@
-From 91d1f5d20ec7b16f2adfefa4a9dd3aff1c25356d Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Playport contributors <playport@users.noreply.github.com>
 Date: Sat, 3 Oct 2026 13:17:53 +0200
 Subject: [PATCH] ntdll: map fixed i386 images into the owned window
@@ -43,7 +43,7 @@ index d340d7a..3166274 100644
  
      size = (sizeof(*params)
 diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
-index eb7a62c..5b4bed1 100644
+index f81ab9e..2158f6c 100644
 --- a/build/ntdll-unix/virtual_ios.c
 +++ b/build/ntdll-unix/virtual_ios.c
 @@ -116,6 +116,7 @@ extern kern_return_t vm_protect(mach_port_t target_task, vm_address_t address,
@@ -54,7 +54,7 @@ index eb7a62c..5b4bed1 100644
  #include "ios_process_image.h"
  #include "wine/debug.h"
  
-@@ -11475,33 +11476,40 @@ int ios_jit_copy_module_for_child(void *module_addr, void *child_peb)
+@@ -11233,33 +11234,40 @@ int ios_jit_copy_module_for_child(void *module_addr, void *child_peb)
   */
  static int mprotect_range( void *base, size_t size, BYTE set, BYTE clear )
  {
@@ -99,7 +99,7 @@ index eb7a62c..5b4bed1 100644
  }
  
  
-@@ -13854,7 +13862,8 @@ static NTSTATUS map_image_into_view( struct file_view *view, const UNICODE_STRIN
+@@ -13612,7 +13620,8 @@ static NTSTATUS map_image_into_view( struct file_view *view, const UNICODE_STRIN
       * (image_info->map_addr - image_info->base) for delta — that produces the
       * WRONG delta if map_addr disagrees with ptr. Force them to match so all
       * ARM64 PC-relative relocations (ADRP/ADR/BRANCH26) target real addresses. */
@@ -109,7 +109,7 @@ index eb7a62c..5b4bed1 100644
      {
          ERR("iOS: forcing map_addr 0x%lx -> %p (actual view base) so reloc delta is correct\n",
              (unsigned long)image_info->map_addr, ptr);
-@@ -14117,7 +14126,8 @@ static NTSTATUS map_image_into_view( struct file_view *view, const UNICODE_STRIN
+@@ -13875,7 +13884,8 @@ static NTSTATUS map_image_into_view( struct file_view *view, const UNICODE_STRIN
       * Register the window so the Mach fault handler can service accesses to
       * it against THIS mapping -- same memory, so the two views cannot diverge.
       * Registered after relocation so real_base is final. */
@@ -119,7 +119,7 @@ index eb7a62c..5b4bed1 100644
      {
          extern void ios_register_subfloor_image( unsigned long long pref_base,
                                                   unsigned long long size,
-@@ -14167,6 +14177,7 @@ static NTSTATUS map_image_into_view( struct file_view *view, const UNICODE_STRIN
+@@ -13925,6 +13935,7 @@ static NTSTATUS map_image_into_view( struct file_view *view, const UNICODE_STRIN
      /* Eagerly JIT-copy all EXEC sections right here — every PE load goes
       * through map_image_into_view, regardless of whether it's via
       * virtual_map_image (builtin flag) or any alternate path. */
@@ -127,7 +127,7 @@ index eb7a62c..5b4bed1 100644
      ERR("iOS map_image_into_view: view=%p EXEC fixup\n", ptr);
      for (int si = 0; si < nt->FileHeader.NumberOfSections; si++)
      {
-@@ -14267,8 +14278,12 @@ static unsigned int get_mapping_info( HANDLE handle, ACCESS_MASK access, unsigne
+@@ -14025,8 +14036,12 @@ static unsigned int get_mapping_info( HANDLE handle, ACCESS_MASK access, unsigne
   *
   * Map a view for a PE image at an appropriate address.
   */
@@ -141,7 +141,7 @@ index eb7a62c..5b4bed1 100644
  {
      unsigned int vprot = SEC_IMAGE | SEC_FILE | VPROT_COMMITTED | VPROT_READ | VPROT_EXEC | VPROT_WRITECOPY;
      void *base;
-@@ -14277,6 +14292,12 @@ static NTSTATUS map_image_view( struct file_view **view_ret, struct pe_image_inf
+@@ -14035,6 +14050,12 @@ static NTSTATUS map_image_view( struct file_view **view_ret, struct pe_image_inf
      BOOL top_down = (image_info->image_charact & IMAGE_FILE_DLL) &&
                      (image_info->image_flags & IMAGE_FLAGS_ImageDynamicallyRelocated);
  
@@ -154,7 +154,7 @@ index eb7a62c..5b4bed1 100644
      limit_low = max( limit_low, (ULONG_PTR)address_space_start );  /* make sure the DOS area remains free */
      /* task #35 furniture ceiling: images pack below it (inclusive limit).
       * Disabled while ios_furniture_ceiling == 0 — see its definition. */
-@@ -14389,12 +14410,17 @@ static NTSTATUS virtual_map_image( HANDLE mapping, void **addr_ptr, SIZE_T *size
+@@ -14147,12 +14168,17 @@ static NTSTATUS virtual_map_image( HANDLE mapping, void **addr_ptr, SIZE_T *size
      int unix_fd = -1, needs_close;
      int shared_fd = -1, shared_needs_close = 0;
      SIZE_T size = pe_mapping->image.map_size;
@@ -172,7 +172,7 @@ index eb7a62c..5b4bed1 100644
  
      if ((status = server_get_unix_fd( mapping, 0, &unix_fd, &needs_close, NULL, NULL )))
          return status;
-@@ -14421,7 +14447,7 @@ static NTSTATUS virtual_map_image( HANDLE mapping, void **addr_ptr, SIZE_T *size
+@@ -14179,7 +14205,7 @@ static NTSTATUS virtual_map_image( HANDLE mapping, void **addr_ptr, SIZE_T *size
  
      server_enter_uninterrupted_section( &virtual_mutex, &sigset );
  
@@ -181,7 +181,7 @@ index eb7a62c..5b4bed1 100644
      /* ml366: NAME the image whose placement failed. ml365's mmdevapi load
       * returned c0000017 with zero attributable evidence — the [va-scan]
       * FAILED line was storm-gated and nothing tied a placement failure to a
-@@ -14445,11 +14471,23 @@ static NTSTATUS virtual_map_image( HANDLE mapping, void **addr_ptr, SIZE_T *size
+@@ -14203,11 +14229,23 @@ static NTSTATUS virtual_map_image( HANDLE mapping, void **addr_ptr, SIZE_T *size
              size -= offset;
          }
  
@@ -207,7 +207,7 @@ index eb7a62c..5b4bed1 100644
              req->size    = size;
              req->entry   = pe_mapping->image.entry_point;
              req->machine = pe_mapping->image.machine;
-@@ -14474,7 +14512,7 @@ static NTSTATUS virtual_map_image( HANDLE mapping, void **addr_ptr, SIZE_T *size
+@@ -14232,7 +14270,7 @@ static NTSTATUS virtual_map_image( HANDLE mapping, void **addr_ptr, SIZE_T *size
           * EXEC). Without the JIT copy, triangle.exe's .text isn't executable
           * and we bus-fault on its first instruction.
           */
@@ -216,7 +216,7 @@ index eb7a62c..5b4bed1 100644
          {
              IMAGE_DOS_HEADER *dos = (IMAGE_DOS_HEADER *)view->base;
              if (dos && dos->e_magic == IMAGE_DOS_SIGNATURE)
-@@ -14505,7 +14543,16 @@ static NTSTATUS virtual_map_image( HANDLE mapping, void **addr_ptr, SIZE_T *size
+@@ -14263,7 +14301,16 @@ static NTSTATUS virtual_map_image( HANDLE mapping, void **addr_ptr, SIZE_T *size
          *size_ptr = size;
          VIRTUAL_DEBUG_DUMP_VIEW( view );
      }
@@ -234,7 +234,7 @@ index eb7a62c..5b4bed1 100644
  
  done:
      server_leave_uninterrupted_section( &virtual_mutex, &sigset );
-@@ -15111,9 +15158,8 @@ NTSTATUS virtual_map_builtin_module( HANDLE mapping, void **module, SIZE_T *size
+@@ -14859,9 +14906,8 @@ NTSTATUS virtual_map_builtin_module( HANDLE mapping, void **module, SIZE_T *size
   * and PROT_NONE gaps without dropping the host reservation. Bootstrap the
   * initial thread's native/32-bit TEB pair in its own window, never setting
   * wow_peb, the session TEB free lists or session allocation limits.
@@ -245,7 +245,7 @@ index eb7a62c..5b4bed1 100644
  #include "wow64_pair.h"
  C_ASSERT( sizeof(TEB) <= IOS_WOW64_TEB_OFFSET );
  C_ASSERT( sizeof(TEB32) <= 0x1000 );
-@@ -15400,6 +15446,27 @@ NTSTATUS virtual_map_main_module( HANDLE mapping, USHORT machine )
+@@ -15148,6 +15194,27 @@ NTSTATUS virtual_map_main_module( HANDLE mapping, USHORT machine )
                                      pe_mapping, machine, FALSE, 0 );
          virtual_fill_image_information( &pe_mapping->image, ios_main_image_info_slot() );
      }
@@ -348,6 +348,3 @@ index 0000000..48ddd2c
 +}
 +
 +#endif
--- 
-2.55.0
-

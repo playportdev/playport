@@ -499,27 +499,29 @@ claim (what the guest was told) is remembered. An unhinted reserve-only ask of 1
 cannot be placed whole gets a short grant with the same guard and is told it got its full size. A
 commit reaching a guard or a claim grows the view in place while the space above is free, else
 returns `STATUS_NO_MEMORY`; it is never served in another view. `VirtualQuery` reports the real view.
-Hinted, aligned, placeholder, limited, commit-at-reserve and hold-served asks, and every ask the
-Social Club layout's router sees, are never shortened. A WoW64 process's 4 GiB window is such an ask
+Hinted, aligned, placeholder, limited and commit-at-reserve asks, and every ask the Social Club
+layout's router sees, are never shortened. A WoW64 process's 4 GiB window is such an ask
 (madeira-unix 0292): placed as before, at its fixed slots then a first fit, and when both fail a
 lender's freed range that holds it whole is given back and the window placed again; it never lends. One log tag, `[elastic]`, covers place, grant,
 lend, grow, refuse and a query inside a shortened view's claim, in both variants.
 
-Two holds keep address space for a title's large reservations from boot, both set by its
-`madeira.cfg` keys ([decisions 0126](decisions/0126-hold-rdr2s-address-space-from-the-start.md),
-[0129](decisions/0129-the-holds-serve-only-their-own-request.md)); no compatibility entry sets them
-since decision 0180, and no cohort title since The Witcher 3 1.32 played without them (PLA-837):
-
-- `jumbo-mb` holds a gap of that size below FEX's band, for the one reservation of that size;
-- `cage-hold` holds 8 GB of the guest window at 0x7200000000, for an 8 GB ask.
+Every game, 32-bit and 64-bit, gets this one address-space layout
+([decision 0183](decisions/0183-no-per-game-memory-keys.md)): nothing holds address space from boot
+for a title's reservation, and no title's key places or holds it. Where a game needs something
+else, the runtime decides it by a property it observes (a hinted or aligned ask, a WoW64 window, a
+verified Rockstar bootstrap), never by title. Madeira's boot holds for one large reservation and
+for V8's cage are deleted (madeira-unix 0016), and so is the short-reserve path; `TitleConfig`
+refuses their keys (`jumbo-mb`, `jumbo-keep-mb`, `cage-hold`, `short-reserve-mb`) wherever a
+launch's keys come from, a cohort entry, a compatibility entry, a dev build's Runtime keys row or a
+driven launch. PlayportKit's `MemoryKeyTests` fails any compatibility entry, cohort entry, launcher
+or `everyGame` default that carries one of the memory keys it lists.
 
 A dev build's address pins (PLA-837; madeira-unix 0291's `pp_va_pin.h`) put a reservation of a
 given size at a given address, to tell what a title's large pools need. The Runtime keys row's
 `env.PLAYPORT_VA_PINS=MiB@0xBASE[,MiB@0xBASE]` (at most four) is read by WineHost only in the dev
-app: each pin's range is held from `virtual_init`, where the cage hold is taken, and the first
+app: each pin's range is held from `virtual_init`, before furniture is placed, and the first
 unhinted, unlimited `NtAllocateVirtualMemory` reservation of exactly its size is mapped there
-(`[va-pin]` lines). A pin replaces the boot hold of its size, the cage's 8 GB or `jumbo-mb`'s. The
-release app never sets one: `pp verify` fails a release executable that names the variable or links
+(`[va-pin]` lines). The release app never sets one: `pp verify` fails a release executable that names the variable or links
 ntdll's setter, `madeira_set_va_pins`, which the release link drops since nothing there calls it.
 
 Under the Social Club layout (decision [0169](decisions/0169-social-club-on-rockstars-cef-in-the-stock-cef-layout.md),

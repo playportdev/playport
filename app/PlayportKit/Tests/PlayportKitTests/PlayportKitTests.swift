@@ -83,12 +83,12 @@ final class LaunchPlanTests: XCTestCase {
 
 final class TitleConfigTests: XCTestCase {
     func testMergedFileKeepsTheSharedKeysAndPutsTheTitleKeysLast() {
-        let text = TitleConfig.merged(shared: "inproc-sync = 1\njumbo-mb = 0", config: ["jumbo-mb": "32768", "arena-mb": "64"],
-                                      title: "W3")
+        let text = TitleConfig.merged(shared: "inproc-sync = 1\nenv.WINEDEBUG = -all",
+                                      config: ["env.WINEDEBUG": "+virtual", "env.DXVK_HUD": "fps"], title: "W3")
         let lines = text.split(separator: "\n").map(String.init)
         XCTAssertEqual(lines.first, "inproc-sync = 1")
         // The reader keeps the last line for a key.
-        XCTAssertEqual(Array(lines.suffix(2)), ["arena-mb = 64", "jumbo-mb = 32768"])
+        XCTAssertEqual(Array(lines.suffix(2)), ["env.DXVK_HUD = fps", "env.WINEDEBUG = +virtual"])
         XCTAssertTrue(text.hasSuffix("\n"))
         XCTAssertEqual(TitleConfig.merged(shared: nil, config: ["a": "1"], title: "T").split(separator: "\n").last, "a = 1")
     }
@@ -106,20 +106,20 @@ final class TitleConfigTests: XCTestCase {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         try Data("pool = 896\n".utf8).write(to: root.appendingPathComponent("madeira.cfg"))
         let dir = try TitleConfig.prepare(shared: root, documents: root, exe: #"Games\The Witcher 3\bin\x64\witcher3.exe"#,
-                                          config: ["jumbo-mb": "32768"], title: "W3")
+                                          config: ["env.WINEDEBUG": "+virtual"], title: "W3")
         XCTAssertEqual(dir.path, root.appendingPathComponent("title-cfg/The Witcher 3").path)
         let text = try String(contentsOf: dir.appendingPathComponent("madeira.cfg"), encoding: .utf8)
         XCTAssertTrue(text.hasPrefix("pool = 896\n"))
-        XCTAssertTrue(text.hasSuffix("jumbo-mb = 32768\n"))
+        XCTAssertTrue(text.hasSuffix("env.WINEDEBUG = +virtual\n"))
         // The shared file is untouched.
         XCTAssertEqual(try String(contentsOf: root.appendingPathComponent("madeira.cfg"), encoding: .utf8), "pool = 896\n")
     }
 
     func testDrivenItemsParseAndBadOnesAreRefused() {
         XCTAssertEqual(TitleConfig.parse(nil), [:])
-        XCTAssertEqual(TitleConfig.parse("jumbo-mb=32768,env.WINEDEBUG=%2Bvirtual%2Cerr"),
-                       ["jumbo-mb": "32768", "env.WINEDEBUG": "+virtual,err"])
-        XCTAssertNil(TitleConfig.parse("jumbo-mb"))
+        XCTAssertEqual(TitleConfig.parse("inproc-sync=1,env.WINEDEBUG=%2Bvirtual%2Cerr"),
+                       ["inproc-sync": "1", "env.WINEDEBUG": "+virtual,err"])
+        XCTAssertNil(TitleConfig.parse("inproc-sync"))
         XCTAssertNil(TitleConfig.parse("a b=1"))
         XCTAssertNil(TitleConfig.parse("a=1%0A"))
         XCTAssertThrowsError(try LaunchPlan.make(installDir: "G", executable: "g.exe", arguments: [], config: ["=": "1"]))
@@ -888,9 +888,9 @@ final class FEXProfileTests: XCTestCase {
         XCTAssertFalse(keys.isEmpty)
         let on = LaunchSettings.resolve(game: keys, global: LaunchSettings())
         XCTAssertEqual(on.runtime, ["vram-mb": "768", "inproc-sync": "1"])
-        // All over every game's keys (decision 0153), the title's cohort jumbo-mb with them.
-        XCTAssertEqual(on.config(over: ["jumbo-mb": "32768", "vram-mb": "2048"]),
-                       LaunchSettings.everyGameKeys.merging(["jumbo-mb": "32768", "vram-mb": "768", "inproc-sync": "1"]) { _, b in b })
+        // All over every game's keys (decision 0153), the title's cohort keys with them.
+        XCTAssertEqual(on.config(over: ["env.WINEDEBUG": "+virtual", "vram-mb": "2048"]),
+                       LaunchSettings.everyGameKeys.merging(["env.WINEDEBUG": "+virtual", "vram-mb": "768", "inproc-sync": "1"]) { _, b in b })
         XCTAssertEqual(LaunchSettings.resolve(game: nil, global: keys).runtime, [:])
         XCTAssertNil(LaunchSettings.runtimeKeys("vram-mb"))
         XCTAssertNil(LaunchSettings.runtimeKeys("a b=1"))

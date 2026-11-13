@@ -367,18 +367,18 @@ index 0000000..eb9ef2f
 +    return chosen != 0;
 +}
 diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
-index ffcaebf..5275323 100644
+index ed9c245..d4d07d4 100644
 --- a/build/ntdll-unix/virtual_ios.c
 +++ b/build/ntdll-unix/virtual_ios.c
-@@ -2023,6 +2023,7 @@ static size_t    ios_jumbo_hold_size;
-  * pre-ml1029 behaviour. */
- static size_t    ios_jumbo_hold_keep;
+@@ -1942,6 +1942,7 @@ static void ios_va_gap_probe( const char *why )
+ }
+ 
  #include "pp_sc_boot.h"
 +#include "pp_sc_owner.h"
  
  static void *anon_mmap_tryfixed( void *start, size_t size, int prot, int flags );
  
-@@ -16173,6 +16174,11 @@ void virtual_get_system_info( SYSTEM_BASIC_INFORMATION *info, BOOL wow64 )
+@@ -15890,6 +15891,11 @@ void virtual_get_system_info( SYSTEM_BASIC_INFORMATION *info, BOOL wow64 )
      info->NumberOfProcessors      = cpu_count;
      if (wow64) info->HighestUserAddress = (char *)get_wow_user_space_limit() - 1;
      else info->HighestUserAddress = (char *)user_space_limit - 1;
@@ -390,7 +390,7 @@ index ffcaebf..5275323 100644
  
      /* ml991: report, once, exactly what an application is told about memory.
       *
-@@ -17890,7 +17896,8 @@ static BOOL ios_view_owner_kept_range( const struct file_view *view )
+@@ -17607,7 +17613,8 @@ static BOOL ios_view_owner_kept_range( const struct file_view *view )
      uintptr_t pool = (uintptr_t)ios_jit_rx_base_global;
      unsigned int i;
  
@@ -400,7 +400,7 @@ index ffcaebf..5275323 100644
      if (pool && end > pool && base < pool + ios_jit_pool_size_global) return TRUE;
      pool = (uintptr_t)ios_jit_rw_base_global;
      if (pool && end > pool && base < pool + ios_jit_pool_size_global) return TRUE;
-@@ -18141,7 +18148,8 @@ static void ios_proc_end_release_views_locked( void *peb, const struct ppe_censu
+@@ -17858,7 +17865,8 @@ static void ios_proc_end_release_views_locked( void *peb, const struct ppe_censu
      WINE_RB_FOR_EACH_ENTRY_DESTRUCTOR( view, next, &views_tree, struct file_view, entry )
      {
          uintptr_t base = (uintptr_t)view->base;
@@ -410,7 +410,7 @@ index ffcaebf..5275323 100644
          enum ppe_class cls = (view->protect & SEC_IMAGE) ? PPE_IMAGE : PPE_PRIVATE;
          enum ppe_fate fate;
  
-@@ -18174,6 +18182,7 @@ static void ios_proc_end_release_views_locked( void *peb, const struct ppe_censu
+@@ -17891,6 +17899,7 @@ static void ios_proc_end_release_views_locked( void *peb, const struct ppe_censu
          view->wow64_mapping = 0;   /* the server closed the dead process's handles (0139) */
          delete_view( view );
      }
@@ -418,7 +418,7 @@ index ffcaebf..5275323 100644
  }
  
  /* virtual_mutex held. The killed peb's views, then its TEBs. */
-@@ -19851,6 +19860,9 @@ static NTSTATUS allocate_virtual_memory( void **ret, SIZE_T *size_ptr, ULONG typ
+@@ -19568,6 +19577,9 @@ static NTSTATUS allocate_virtual_memory( void **ret, SIZE_T *size_ptr, ULONG typ
      ios_view_owner_scope = saved;
      return status;
  }
@@ -428,7 +428,7 @@ index ffcaebf..5275323 100644
  
  static NTSTATUS allocate_virtual_memory_body( void **ret, SIZE_T *size_ptr, ULONG type, ULONG protect,
                                                ULONG_PTR limit_low, ULONG_PTR limit_high,
-@@ -20727,6 +20739,11 @@ NTSTATUS WINAPI NtAllocateVirtualMemory( HANDLE process, PVOID *ret, ULONG_PTR z
+@@ -20444,6 +20456,11 @@ NTSTATUS WINAPI NtAllocateVirtualMemory( HANDLE process, PVOID *ret, ULONG_PTR z
          limit = 0;
  
  #ifdef WINE_IOS
@@ -440,7 +440,7 @@ index ffcaebf..5275323 100644
      {
          NTSTATUS st;
          /* task #35 DEMAND CENSUS: is CEF's ~144GB real, or is it retries?
-@@ -22301,6 +22318,15 @@ NTSTATUS WINAPI NtAllocateVirtualMemoryEx( HANDLE process, PVOID *ret, SIZE_T *s
+@@ -21766,6 +21783,15 @@ NTSTATUS WINAPI NtAllocateVirtualMemoryEx( HANDLE process, PVOID *ret, SIZE_T *s
      if (type & ~type_mask) return STATUS_INVALID_PARAMETER;
      if (*ret && (align || limit_low || limit_high)) return STATUS_INVALID_PARAMETER;
      if (!*size_ptr) return STATUS_INVALID_PARAMETER;
@@ -456,7 +456,7 @@ index ffcaebf..5275323 100644
  
  #ifdef WINE_IOS
      /* iOS-Madeira: For FEX-style EC_CODE RWX allocations, allocate from the
-@@ -22888,6 +22914,12 @@ NTSTATUS WINAPI NtFreeVirtualMemory( HANDLE process, PVOID *addr_ptr, SIZE_T *si
+@@ -22353,6 +22379,12 @@ NTSTATUS WINAPI NtFreeVirtualMemory( HANDLE process, PVOID *addr_ptr, SIZE_T *si
      NTSTATUS wow64_status;
      if (ios_wow64_route_vm( 1, process, addr_ptr, size_ptr, type, 0, 0, NULL, &wow64_status ))
          return wow64_status;
@@ -469,7 +469,7 @@ index ffcaebf..5275323 100644
      ios_vm_note_free( addr, size, type );
      /* ml966: a low guest allocation must be freed through its backing, and the
       * translation retired so nothing can resolve through it afterwards.
-@@ -23119,6 +23151,7 @@ NTSTATUS WINAPI NtProtectVirtualMemory( HANDLE process, PVOID *addr_ptr, SIZE_T
+@@ -22584,6 +22616,7 @@ NTSTATUS WINAPI NtProtectVirtualMemory( HANDLE process, PVOID *addr_ptr, SIZE_T
      NTSTATUS wow64_status;
      if (ios_wow64_route_vm( 2, process, addr_ptr, size_ptr, 0, new_prot, 0, old_prot, &wow64_status ))
          return wow64_status;

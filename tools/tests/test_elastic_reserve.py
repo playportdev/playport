@@ -39,8 +39,8 @@ CEILING = 0x73FFFF0000                 # ios_furniture_ceiling: the WoW64 window
 TODAY, FAIL, PLACE, SHORT, LEND = range(5)
 SERVE, GROW, REFUSE = range(3)
 FLAG = {"hint": 0x1, "align": 0x2, "placeholder": 0x4, "ex": 0x8, "limit": 0x10, "commit": 0x20,
-        "held": 0x40, "layout": 0x80, "wow64": 0x100}
-WHOLE = 0x1FF                         # PPE_ASK_WHOLE: never shrunk
+        "layout": 0x40, "wow64": 0x80}
+WHOLE = 0xFF                          # PPE_ASK_WHOLE: never shrunk
 ON_DEMAND = {"cef_meta": 4, "cage": 6, "code": 7}   # pp_sc_layout.h's on-demand kinds
 
 
@@ -625,7 +625,7 @@ class Exceptions(unittest.TestCase):
         return replay(dict(fx, events=events))
 
     def test_never_shrunk_asks_are_placed_whole_or_fail(self):
-        for name in ("hint", "align", "placeholder", "ex", "limit", "commit", "held", "layout", "wow64"):
+        for name in ("hint", "align", "placeholder", "ex", "limit", "commit", "layout", "wow64"):
             sp = self.full()
             sp.reserve("pool43", GB, [])                         # shortened, for contrast
             self.assertLess(sp.views["pool43"]["span"], GB)

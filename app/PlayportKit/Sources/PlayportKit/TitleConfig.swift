@@ -19,13 +19,19 @@ public enum TitleConfig {
     /// Under the prefix's Documents: `title-cfg/<install folder>/madeira.cfg`.
     public static let rootName = "title-cfg"
 
-    /// Keys are the reader's names (`jumbo-mb`, `env.NAME`); values are one line.
+    /// Memory keys whose mechanisms are gone (decision 0183): validate refuses them, so no cohort
+    /// entry, compatibility entry, dev build's Runtime keys row or driven launch sets one again.
+    public static let deletedKeys: Set<String> = ["jumbo-mb", "jumbo-keep-mb", "cage-hold", "short-reserve-mb"]
+
+    /// Keys are the reader's names (`inproc-sync`, `env.NAME`); values are one line. A deleted key
+    /// is refused.
     public static func validate(_ config: [String: String]) throws {
         let keyChars = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._-"))
         for (k, v) in config {
             guard !k.isEmpty, k.unicodeScalars.allSatisfy({ keyChars.contains($0) && $0.isASCII }),
                   !v.contains(where: { $0 == "\n" || $0 == "\r" })
             else { throw LaunchPlanError.badConfig("\(k) = \(v)") }
+            if deletedKeys.contains(k) { throw LaunchPlanError.deletedKey(k) }
         }
     }
 

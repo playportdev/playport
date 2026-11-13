@@ -7,8 +7,8 @@ Subject: [PATCH] ntdll: place a request the furniture ceiling clamped above
 Death's Door (Unity, D3D11) quit 14 s in on every launch with DXMT's
 MTLD3DError: its d3d11.dll created a thread, and the thread's 1 MB emulator
 stack could not be placed. The furniture ceiling clamps every request without
-a limit_high to [floor, 0x73ffff0000), a 16 GB window of which 8 GB is the
-ml433 holdback and 0.5 GB the JIT pool's RW alias. The game's ~7.6 GB of
+a limit_high to [floor, 0x73ffff0000), a 16 GB window of which 8 GB was
+then held at boot and 0.5 GB is the JIT pool's RW alias. The game's ~7.6 GB of
 views (FEX ~4 GB, UnityPlayer.dll 2.2 GB, d3d11.dll 0.6 GB) filled the rest.
 
 Requests with a 4 GB floor (limit_4g: every x64 thread's CHPE emulator stack
@@ -32,10 +32,10 @@ Offered-upstream: no
  1 file changed, 33 insertions(+), 1 deletion(-)
 
 diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
-index e1da28e..189749e 100644
+index 50e6fe5..2534ce5 100644
 --- a/build/ntdll-unix/virtual_ios.c
 +++ b/build/ntdll-unix/virtual_ios.c
-@@ -12002,10 +12002,12 @@ static NTSTATUS map_view( struct file_view **view_ret, void *base, size_t size,
+@@ -11760,10 +11760,12 @@ static NTSTATUS map_view( struct file_view **view_ret, void *base, size_t size,
           * top-of-space tenant from ml106) stay below 464G-64K; only the PA
           * 16GB/32GB pool reserves may use the slots above. */
          int ceiling_relaxable = 0;
@@ -48,7 +48,7 @@ index e1da28e..189749e 100644
              /* Relaxable when the only *effective* constraint is ours. ml119
               * BUG: the first cut used !limit_low, so a caller passing a small
               * non-zero limit_low (<= address_space_start, i.e. not actually
-@@ -12108,7 +12110,7 @@ static NTSTATUS map_view( struct file_view **view_ret, void *base, size_t size,
+@@ -11866,7 +11868,7 @@ static NTSTATUS map_view( struct file_view **view_ret, void *base, size_t size,
                           ios_scan_stop_name( ios_scan_stop ),
                           ios_scan_fail_addr, ios_scan_fail_errno,
                           ios_scan_fail_errno ? strerror( ios_scan_fail_errno ) : "-", what,
@@ -57,15 +57,15 @@ index e1da28e..189749e 100644
                                                         : "  <-- STATUS_NO_MEMORY (callers see a NULL alloc)") );
                  }
              }
-@@ -12117,6 +12119,36 @@ static NTSTATUS map_view( struct file_view **view_ret, void *base, size_t size,
+@@ -11875,6 +11877,36 @@ static NTSTATUS map_view( struct file_view **view_ret, void *base, size_t size,
                  TRACE( "got mem with map_free_area %p-%p\n", ptr, (char *)ptr + size );
                  goto done;
              }
 +            /* Playport: the ceiling is ours, so a request it clamped tries the space
 +             * above it before anything else, for every caller whose own limits allow
 +             * it: limit_low (if any) stays the floor, and a caller with a limit_high
-+             * was never clamped. Death's Door filled the clamped window (8 GB of it
-+             * is the ml433 holdback) 14 s in. The 4 GB-floored requests, every x64
++             * was never clamped. Death's Door filled the clamped window 14 s in.
++             * The 4 GB-floored requests, every x64
 +             * thread's emulator stack among them, are not ceiling_relaxable, so they
 +             * failed with 30 GB free above the ceiling, and DXMT threw when its
 +             * thread could not start. The relaxable ones escaped through a kernel

@@ -31,11 +31,11 @@ Evidence: docs/evidence/2026-10-29-sc-stock-cef-probe.md
 Offered-upstream: no
 ---
  build/ntdll-unix/pp_sc_access.h | 23 ++++++++++++++++++-----
- build/ntdll-unix/pp_sc_boot.h   | 16 +++++++++++-----
+ build/ntdll-unix/pp_sc_boot.h   | 17 +++++++++++------
  build/ntdll-unix/pp_sc_layout.h | 26 ++++++++++++++++++++------
  build/ntdll-unix/pp_sc_owner.h  |  6 +++---
  build/ntdll-unix/pp_sc_vm.h     | 17 ++++++++++++++---
- 5 files changed, 66 insertions(+), 22 deletions(-)
+ 5 files changed, 66 insertions(+), 23 deletions(-)
 
 diff --git a/build/ntdll-unix/pp_sc_access.h b/build/ntdll-unix/pp_sc_access.h
 index 13d9e5d..f22abaa 100644
@@ -98,10 +98,10 @@ index 13d9e5d..f22abaa 100644
      if (!ok) dprintf(2, "[sc-layout] refused memory operation owner=%p addr=%p size=0x%llx: outside owned real range\n",
                       owner, address, (unsigned long long)size);
 diff --git a/build/ntdll-unix/pp_sc_boot.h b/build/ntdll-unix/pp_sc_boot.h
-index d6b8a41..8c01dba 100644
+index edc4b89..da24e30 100644
 --- a/build/ntdll-unix/pp_sc_boot.h
 +++ b/build/ntdll-unix/pp_sc_boot.h
-@@ -25,15 +25,20 @@ static void ppsc_boot(void)
+@@ -25,27 +25,32 @@ static void ppsc_boot(void)
      rw = getenv("WINE_IOS_JIT_RW");
      span = getenv("WINE_IOS_JIT_SIZE");
      if (!low || strcmp(low, "1") || !rw || strtoull(rw, NULL, 16) != PPSC_RW_BASE ||
@@ -124,15 +124,14 @@ index d6b8a41..8c01dba 100644
          struct ppsc_range r = ppsc_range(k);
          if (k == PPSC_CEF) continue;
          if (!ppsc_native_hold(r.base, r.size)) goto failed;
-@@ -44,12 +49,13 @@ static void ppsc_boot(void)
-     ios_jumbo_hold_size = PPSC_GAME_SIZE;
-     ios_jumbo_hold_keep = 0;
+         ppsc_held |= PPSC_BIT(k);
+     }
      ppsc_ready = 1;
--    dprintf(2, "[sc-layout] RDR2 layout held: furniture 0x%llx..0x%llx, game 8960 MiB at 0x%llx, FEX floor 0x%llx\n",
-+    dprintf(2, "[sc-layout] RDR2 layout held: furniture 0x%llx..0x%llx, game 8960 MiB at 0x%llx, FEX floor 0x%llx, second ELF metadata 0x%llx+0x%llx\n",
-             (unsigned long long)PPSC_FLOOR, (unsigned long long)PPSC_CEILING,
--            (unsigned long long)PPSC_GAME_BASE, (unsigned long long)PPSC_FEX_BASE);
-+            (unsigned long long)PPSC_GAME_BASE, (unsigned long long)PPSC_FEX_BASE,
+-    dprintf(2, "[sc-layout] RDR2 layout held: furniture 0x%llx..0x%llx, FEX floor 0x%llx\n",
+-            (unsigned long long)PPSC_FLOOR, (unsigned long long)PPSC_CEILING,
+-            (unsigned long long)PPSC_FEX_BASE);
++    dprintf(2, "[sc-layout] RDR2 layout held: furniture 0x%llx..0x%llx, FEX floor 0x%llx, second ELF metadata 0x%llx+0x%llx\n",
++            (unsigned long long)PPSC_FLOOR, (unsigned long long)PPSC_CEILING, (unsigned long long)PPSC_FEX_BASE,
 +            (unsigned long long)PPSC_ELF_META2_BASE, (unsigned long long)ppsc_range(PPSC_ELF_META2).size);
      return;
  failed:

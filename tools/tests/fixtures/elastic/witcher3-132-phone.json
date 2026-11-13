@@ -1,6 +1,6 @@
 {
   "title": "The Witcher 3 1.32 on the phone with no memory key, its copy repaired",
-  "sources": ["phone run .work/ui-runs/pla837-nokey-repaired (IPA 671ca956, forced 8 GB row, jumbo-mb=0 cage-hold=0; Continue loads Kaer Morhen): run/pull/s1-host.log [va-gaps] walk at JIT pool init; [jumbo#1] 8,192 MB -> 0x707c000000, [jumbo#2] 32,768 MB -> 0x73ffff0000, [jumbo#3] 2,048 MB -> 0x727c000000; [bigres-use] heights 600 and 1,600 MB, the 2 GB pool's 128 MB first commit ([valloc] at its base); no [elastic] line", "the 300 MB and 40 MB asks between them landed above 0x7c00000000, outside the replay's window, and are left out"],
+  "sources": ["phone run .work/ui-runs/pla837-nokey-repaired (IPA 671ca956, forced 8 GB row, no keys; Continue loads Kaer Morhen): run/pull/s1-host.log [va-gaps] walk at JIT pool init; [jumbo#1] 8,192 MB -> 0x707c000000, [jumbo#2] 32,768 MB -> 0x73ffff0000, [jumbo#3] 2,048 MB -> 0x727c000000; [bigres-use] heights 600 and 1,600 MB, the 2 GB pool's 128 MB first commit ([valloc] at its base); no [elastic] line", "the 300 MB and 40 MB asks between them landed above 0x7c00000000, outside the replay's window, and are left out"],
   "free": [["0x707c000000", "0x73fede0000"], ["0x73ffff0000", "0x7c00000000"]],
   "events": [
     ["reserve", "pool8g", "0x200000000", [], {}],

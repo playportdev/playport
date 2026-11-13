@@ -53,12 +53,14 @@ public struct LaunchPlan: Equatable, Sendable {
 public enum LaunchPlanError: Error, Equatable, CustomStringConvertible {
     case badPath(String)
     case badConfig(String)
+    case deletedKey(String)
     case badScreen(String)
 
     public var description: String {
         switch self {
         case .badPath(let p): "not a path inside C:\\Games: \(p)"
         case .badConfig(let k): "not a madeira.cfg key = value line: \(k)"
+        case .deletedKey(let k): "no longer a madeira.cfg key: \(k) (no game has a memory key of its own)"
         case .badScreen(let s): "not a screen (native, <rows>, 4:3 or WxH): \(s)"
         }
     }

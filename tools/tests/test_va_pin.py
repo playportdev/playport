@@ -3,7 +3,7 @@
 two crossed The Witcher 3 1.32 runs, and check that the knob's name stays out of the release app.
 
 A pin, "MiB@0xBASE", holds [base, base + size) from boot and serves the first unhinted, unlimited
-reservation of exactly its size; it replaces the boot hold of that size (the cage's 8 GB, jumbo-mb's).
+reservation of exactly its size.
 The dev app's WineHost reads the list from its Runtime keys row (env.PLAYPORT_VA_PINS); build/verify-ipa.py
 fails a release executable that names it or links ntdll's setter, madeira_set_va_pins."""
 import importlib.util
@@ -45,8 +45,8 @@ int main(void)
     struct ppvp p;
     unsigned i;
 
-    /* Run A: the keyed run's addresses (pla802-witcher3-keys: the cage at 0x7200000000, the jumbo
-     * hold at 0x7400000000). */
+    /* Run A: the keyed run's addresses (pla802-witcher3-keys: 8 GB at 0x7200000000, 32 GB at
+     * 0x7400000000). */
     p = pins("8192@0x7200000000,32768@0x7400000000", 0);
     assert(p.n == 2);
     assert(p.pin[0].size == MB(8192) && p.pin[0].base == 0x7200000000ull && p.pin[0].state == PPVP_SET);
@@ -85,13 +85,6 @@ int main(void)
     /* Adjacent ranges do not overlap; four pins are the most. */
     p = pins("64@0x7000000000,64@0x7004000000,64@0x7010000000,64@0x7020000000", 0);
     assert(p.n == 4);
-
-    /* A pin replaces the boot hold of its size, held or not: the cage's 8 GB and jumbo-mb's 32 GB. */
-    p = pins("8192@0x707a350000,32768@0x73ffff0000", 0);
-    assert(ppvp_replaces(&p, MB(8192)) && ppvp_replaces(&p, MB(32768)));
-    assert(!ppvp_replaces(&p, MB(2048)) && !ppvp_replaces(&p, 0));
-    p = pins(0, 0);
-    assert(!ppvp_replaces(&p, MB(8192)));
 
     /* Only a held pin serves, once, to a reservation of exactly its size. */
     p = pins("8192@0x7200000000,32768@0x7400000000", 0);

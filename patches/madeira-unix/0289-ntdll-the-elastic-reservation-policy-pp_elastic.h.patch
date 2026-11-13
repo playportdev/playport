@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: The Playport authors <dev@playport.dev>
 Date: Mon, 2 Nov 2026 17:43:30 +0100
-Subject: [PATCH 289/290] ntdll: the elastic-reservation policy, pp_elastic.h
+Subject: [PATCH] ntdll: the elastic-reservation policy, pp_elastic.h
 
 Decision 0180's rule as one pure header, with no Wine or Mach
 dependency: whether an ask engages it, short grants, lending (the lender
@@ -11,13 +11,13 @@ large plain reservation with the most lendable room keeps
 max(2h, h + 64 MiB) plus a 32 MiB guard and lends the rest, and an
 unhinted reserve-only ask from 1 GiB to twice the guest window that
 cannot be placed whole gets half the largest gap outside every live
-claim, less the guard, at the gap's top and below earlier claims (0222's
-ordering, for The Witcher 3's first-match dispatch). A commit reaching
+claim, less the guard, at the gap's top and below earlier claims (for
+The Witcher 3's first-match dispatch). A commit reaching
 the guard grows its view by doubling while the space above is free,
 else is refused with what blocked growth; it is matched to its own view
 first, then to the covering claim, and never served in another view.
-Hinted, aligned, placeholder, address-limited, commit-at-reserve,
-hold-served and Social Club layout asks are never shrunk, and so is a
+Hinted, aligned, placeholder, address-limited, commit-at-reserve and
+Social Club layout asks are never shrunk, and so is a
 WoW64 process's 4 GiB address window (PPE_ASK_WOW64, PLA-839): FEX
 zero-extends a guest pointer over all of it. It is never tracked, so it
 never lends; like any never-shrunk ask it can be lent room.
@@ -42,16 +42,16 @@ Class: feature
 Evidence: docs/evidence/2026-11-02-elastic-reservations.md
 Offered-upstream: no; the address-space layout is the iOS port's
 ---
- build/ntdll-unix/pp_elastic.h | 552 ++++++++++++++++++++++++++++++++++
- 1 file changed, 552 insertions(+)
+ build/ntdll-unix/pp_elastic.h | 551 ++++++++++++++++++++++++++++++++++
+ 1 file changed, 551 insertions(+)
  create mode 100644 build/ntdll-unix/pp_elastic.h
 
 diff --git a/build/ntdll-unix/pp_elastic.h b/build/ntdll-unix/pp_elastic.h
 new file mode 100644
-index 0000000..95423f2
+index 0000000..c5225db
 --- /dev/null
 +++ b/build/ntdll-unix/pp_elastic.h
-@@ -0,0 +1,552 @@
+@@ -0,0 +1,551 @@
 +/* SPDX-License-Identifier: LGPL-2.1-or-later
 + * Elastic reservations (Playport, PLA-799, decision 0180): the policy.
 + *
@@ -73,15 +73,15 @@ index 0000000..95423f2
 + *    outside every live claim, minus the guard, rounded down to 64 KiB, at
 + *    least 64 MiB, at the gap's top, below the lowest earlier claim when a gap
 + *    there allows; else after lending, in the room lending freed. The caller
-+ *    is told it got its full size (0222's short grants);
++ *    is told it got its full size;
 + *  - growth: a commit reaching the guard or the claim beyond it grows the view
 + *    in place by doubling while the space above is free; otherwise it is
 + *    refused (STATUS_NO_MEMORY) with what blocked growth. A commit is matched
 + *    to the view that owns it first, then to the claim covering it; it is
 + *    never served in another view.
 + * Never shrunk, by property: hinted, aligned, placeholder, ...Ex with address
-+ * requirements, zero_bits/limited, commit-at-reserve and hold-served asks, and
-+ * a WoW64 process's address window.
++ * requirements, zero_bits/limited and commit-at-reserve asks, and a WoW64
++ * process's address window.
 + * Asks the Social Club layout's router decides (any reserve passing its
 + * guards: layout held, verified helper) carry PPE_ASK_LAYOUT and get no
 + * decision here.
@@ -155,10 +155,9 @@ index 0000000..95423f2
 +#define PPE_ASK_EX_ADDR     0x008u  /* ...Ex with address requirements */
 +#define PPE_ASK_LIMIT       0x010u  /* zero_bits or an upper limit */
 +#define PPE_ASK_COMMIT      0x020u  /* MEM_COMMIT at reserve time */
-+#define PPE_ASK_HELD        0x040u  /* served by the jumbo or cage hold */
-+#define PPE_ASK_LAYOUT      0x080u  /* the Social Club layout's router decides it */
-+#define PPE_ASK_WOW64       0x100u  /* a WoW64 process's address window */
-+#define PPE_ASK_WHOLE       0x1ffu
++#define PPE_ASK_LAYOUT      0x040u  /* the Social Club layout's router decides it */
++#define PPE_ASK_WOW64       0x080u  /* a WoW64 process's address window */
++#define PPE_ASK_WHOLE       0x0ffu
 +
 +/* A WoW64 window is 4 GiB whatever the image: FEX zero-extends a 32-bit guest
 + * pointer to the window's base plus 32 bits, so every page of it is one the
@@ -436,7 +435,7 @@ index 0000000..95423f2
 +         * the ask's place is given (a hint) or a hold serves it, and only
 +         * from a lender whose freed range holds the ask at its alignment and
 +         * under its limit. */
-+        if (!(ask->flags & (PPE_ASK_HINT | PPE_ASK_HELD)) && (d.view = ppe_lender( st, ask->size, ask, &keep )) >= 0)
++        if (!(ask->flags & PPE_ASK_HINT) && (d.view = ppe_lender( st, ask->size, ask, &keep )) >= 0)
 +        {
 +            d.kind = PPE_LEND;
 +            d.keep = keep;

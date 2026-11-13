@@ -1,20 +1,16 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: playportdev <dev@playport.dev>
 Date: Tue, 6 Oct 2026 16:26:54 +0200
-Subject: [PATCH 83/85] ntdll, process: drop what was there only for CEF
+Subject: [PATCH] ntdll, process: drop what was there only for CEF
 
 Playport runs no CEF (its Steam client is the app's own; no steamwebhelper
-is ever started), but four pieces built for Steam's CEF were still live:
+is ever started), but three pieces built for Steam's CEF were still live:
 
-- The ml433 8 GB "V8/cppgc cage" holdback at 0x7200000000, reserved at
-  every boot: half of the 16 GB guest window under the furniture ceiling.
-  Death's Door filled the other half 14 s in. It is now reserved only for a
-  title whose madeira.cfg sets jumbo-mb (The Witcher 3, whose exact 8 GB ask
-  it serves next to the jumbo hold); "[cage] no holdback" says so otherwise.
 - The ml434 4 GB soft "cppgc caged heap" grant: any 4 GB reserve the kernel
   could not place was answered with unbacked address space at 0x7500000000
   or 0x7600000000, where steered arenas and placements above the ceiling
-  now live. Removed; such an ask now fails as on any full address space.
+  now live. Removed with the soft ranges' "[cage-commit]" accounting; such
+  an ask now fails as on any full address space.
 - The ml462 V8 CodeRange service: every reserve-only PAGE_NOACCESS ask of
   512 MB to 513 MB went to [0x7180000000, 0x71c0000000) "near libcef's
   builtins", and was refused outright after 32 reserve/release cycles on a
@@ -28,8 +24,8 @@ Evidence: docs/evidence/2026-10-06-guest-va-exhaustion.md
 Offered-upstream: no
 ---
  build/ntdll-unix/process_ios.c | 332 ---------------------------------
- build/ntdll-unix/virtual_ios.c | 128 +------------
- 2 files changed, 10 insertions(+), 450 deletions(-)
+ build/ntdll-unix/virtual_ios.c | 138 +-------------
+ 2 files changed, 3 insertions(+), 467 deletions(-)
 
 diff --git a/build/ntdll-unix/process_ios.c b/build/ntdll-unix/process_ios.c
 index 888862f..2d60539 100644
@@ -375,10 +371,26 @@ index 888862f..2d60539 100644
  
      unixdir = get_unix_curdir( params );
 diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
-index 189749e..6176264 100644
+index 2534ce5..48bd6b5 100644
 --- a/build/ntdll-unix/virtual_ios.c
 +++ b/build/ntdll-unix/virtual_ios.c
-@@ -1582,42 +1582,6 @@ static void ios_span_census( void *base, size_t size, int is_free )
+@@ -1389,13 +1389,12 @@ static void ios_pool_owner_search( const uint64_t *wanted, unsigned nwanted )
+  * so the margin should be large; if [soft-pool] COLLISION appears, this design
+  * needs the full own-and-broker-the-window treatment before it can be trusted. */
+ #define IOS_SOFT_MAX 8
+-static struct { uint64_t base, size, committed; unsigned commits, collisions; unsigned cage; } ios_soft[IOS_SOFT_MAX];
++static struct { uint64_t base, size, committed; unsigned commits, collisions; } ios_soft[IOS_SOFT_MAX];
+ static unsigned ios_soft_n;
+ 
+ static int ios_soft_find( uint64_t addr )
+ {
+-    /* ml434: smallest matching range wins — the 4GB soft cages sit INSIDE the
+-     * 16GB soft pools' claimed ranges, and first-match would shadow them. */
++    /* The smallest matching range wins. */
+     unsigned i;
+     int best = -1;
+     for (i = 0; i < ios_soft_n; i++)
+@@ -1560,42 +1559,6 @@ static void ios_span_census( void *base, size_t size, int is_free )
                  (int)ios_span_alloc_n - (int)ios_span_free_n);
  }
  
@@ -421,7 +433,7 @@ index 189749e..6176264 100644
  /* ml433 (#72): drop released ranges so [bigres-use] stops double-counting the
   * guest's reserve/free alignment retries — ml432 reported 163,840MB "reserved"
   * when all but ~72GB had already been freed again (the same base regranted up
-@@ -1631,8 +1595,6 @@ static void ios_bigres_release( void *base )
+@@ -1609,8 +1572,6 @@ static void ios_bigres_release( void *base )
          if (ios_bigres_tab[i].base != a) continue;
          dprintf(2, "[bigres-free] 0x%llx +%lluMB released rev=ml433\n",
                  (unsigned long long)a, (unsigned long long)(ios_bigres_tab[i].size >> 20));
@@ -430,26 +442,31 @@ index 189749e..6176264 100644
          ios_bigres_tab[i] = ios_bigres_tab[--ios_bigres_cnt];
          return;
      }
-@@ -14713,8 +14675,16 @@ void virtual_init(void)
-     free_ranges_end = free_ranges + 1;
- 
-     /* ml433 (#72): hold back the only 8GB-aligned stretch in the guest band
--     * before top-down placement can put furniture in it — see IOS_CAGE_BASE. */
--    if (anon_mmap_fixed( (void *)(uintptr_t)IOS_CAGE_BASE, IOS_CAGE_REAL_SIZE, PROT_NONE, 0 ) != MAP_FAILED)
-+     * before top-down placement can put furniture in it — see IOS_CAGE_BASE.
-+     *
-+     * Playport: only for a title whose madeira.cfg sets jumbo-mb (The Witcher 3,
-+     * whose 8 GB ask this serves). The hold was built for CEF's V8/cppgc cage,
-+     * and Playport runs no CEF. For every other title it took 8 GB of the 16 GB
-+     * guest window for nothing: Death's Door filled the other 8 GB 14 s in
-+     * (evidence 2026-10-06-guest-va-exhaustion.md). */
-+    if (madeira_cfg_int( "jumbo-mb", 0 ) <= 0)
-+        dprintf( 2, "[cage] no holdback: no jumbo-mb for this title\n" );
-+    else if (anon_mmap_fixed( (void *)(uintptr_t)IOS_CAGE_BASE, IOS_CAGE_REAL_SIZE, PROT_NONE, 0 ) != MAP_FAILED)
-     {
-         ios_cage_holdback_live = 1;
-         dprintf( 2, "[cage] holdback reserved 0x%llx+0x%llx rev=ml433\n",
-@@ -19073,55 +19043,6 @@ NTSTATUS WINAPI NtAllocateVirtualMemory( HANDLE process, PVOID *ret, ULONG_PTR z
+@@ -18486,22 +18447,7 @@ NTSTATUS WINAPI NtAllocateVirtualMemory( HANDLE process, PVOID *ret, ULONG_PTR z
+                  * Wine does NOT own yet something else has mapped. */
+                 if (find_view( (void *)(uintptr_t)want, need ))
+                 {
+-                    /* furniture's own commit — normal path, no bookkeeping.
+-                     * ml434 (#72): EXCEPT the soft cages, which deliberately sit
+-                     * inside the PA guard pool's real (mostly dead) reservation —
+-                     * their commits ride the guard view silently, so count them
+-                     * and log the first few. A commit near the guard pool's
+-                     * ACTIVE bottom would be the collision to watch for. */
+-                    if (ios_soft[si].cage)
+-                    {
+-                        ios_soft[si].commits++;
+-                        ios_soft[si].committed += need;
+-                        if (ios_soft[si].commits <= 8)
+-                            dprintf(2, "[cage-commit] #%u 0x%llx+0x%lx in soft cage 0x%llx (total %lluMB) rev=ml434\n",
+-                                    ios_soft[si].commits, (unsigned long long)want, (unsigned long)need,
+-                                    (unsigned long long)ios_soft[si].base,
+-                                    (unsigned long long)(ios_soft[si].committed >> 20));
+-                    }
++                    /* furniture's own commit — normal path, no bookkeeping. */
+                 }
+                 else if (occupied)
+                 {
+@@ -18748,55 +18694,6 @@ NTSTATUS WINAPI NtAllocateVirtualMemory( HANDLE process, PVOID *ret, ULONG_PTR z
               * a steer that cannot be served is still never worse than not
               * steering. The 1GB ceiling stays: >=1GB reserves are PartitionAlloc
               * pool business and go through the jumbo path above. */
@@ -505,9 +522,9 @@ index 189749e..6176264 100644
              if (!ios_steered
                  && !*ret && !limit && (type & MEM_RESERVE) && !(type & MEM_COMMIT)
                  && *size_ptr >= 0x2000000 && *size_ptr < 0x40000000
-@@ -19357,35 +19278,6 @@ NTSTATUS WINAPI NtAllocateVirtualMemory( HANDLE process, PVOID *ret, ULONG_PTR z
-                             pick, (unsigned long long)IOS_CAGE_REAL_SIZE,
-                             (unsigned long)(st2 ? 0 : sz), (unsigned)st2);
+@@ -18991,35 +18888,6 @@ NTSTATUS WINAPI NtAllocateVirtualMemory( HANDLE process, PVOID *ret, ULONG_PTR z
+                             (unsigned long long)slot, (unsigned long)csz, (unsigned)st2);
+                     if (!st2) sz = csz;
                  }
 -                /* ml434 (#72 layer 2): the 4GB ask is the cppgc caged heap and
 -                 * must come back 4GB-ALIGNED. By the time it arrives (~69s) the
