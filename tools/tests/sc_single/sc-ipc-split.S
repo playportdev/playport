@@ -82,7 +82,7 @@ get_done:
     ret
 
 sc_ipc_capture_config:
-    mov qword ptr [rsp+0x20], rbx  /* displaced Initialize instruction */
+    mov qword ptr [rsp+0x10], rbx  /* displaced Initialize instruction */
     push rax
     mov rax, qword ptr [rdx]
     mov qword ptr [rip+command_line], rax

@@ -54,8 +54,8 @@ assert 'status = STATUS_INVALID_IMAGE_FORMAT;' in mapper
 # --- constants ----------------------------------------------------------------
 THUNK = define('IOS_SCH_THUNK')
 CACHE = define('IOS_SCH_CACHE')
-NEW = 0x13e708
-CTOR = 0x69a0
+NEW = 0x162928
+CTOR = 0x73c0
 GET = define('IOS_SCH_GET_HANDLER')
 VT_BROWSER = define('IOS_SCH_VT_BROWSER')
 VT_RENDERER = define('IOS_SCH_VT_RENDERER')
@@ -129,9 +129,9 @@ assert '((ULONG64 *)(base + IOS_SCH_VT_BROWSER))[IOS_SCH_SLOT_RENDERER] = vtbase
 # accepted only as the view or the preferred base.
 assert '*vtbase = vb[IOS_SCH_SLOT_BROWSER] - IOS_SCH_GET_HANDLER;' in guard, 'derives the vtable base from a slot'
 assert "!= IOS_SCH_IMAGE_BASE" in guard and '*vtbase != b' in guard, 'base is the view or the preferred base'
-# the two writes land in zero tails past SizeOfRawData (.text raw 0x17f400, .data raw end 0x1cc000+0x1a00)
-assert THUNK >= 0x1000 + 0x17f400 - 0x1000, 'thunk past .text raw data'
-assert 0x180800 <= THUNK < 0x181000 and 0x1d0000 <= CACHE < 0x1d1000, (hex(THUNK), hex(CACHE))
+# the two writes land in zero tails past SizeOfRawData (.text raw 0x1a3400, .data raw end 0x1f5000+0x1a00)
+assert THUNK >= 0x1000 + 0x1a3400 - 0x1000, 'thunk past .text raw data'
+assert 0x1a4800 <= THUNK < 0x1a5000 and 0x1f9000 <= CACHE < 0x1fa000, (hex(THUNK), hex(CACHE))
 # The CefApp change is still only browser slot 4. The separate render-process
 # handler vtable's WebKit callback now initializes and pumps the renderer loop.
 assert 'VT_BROWSER))[IOS_SCH_SLOT_RENDERER]' in patch

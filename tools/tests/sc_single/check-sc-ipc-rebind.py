@@ -20,7 +20,7 @@ blob = bytes(int(h, 16) for h in re.findall(r'0x([\da-fA-F]{2})', array))
 
 with tempfile.TemporaryDirectory(dir=SCRATCH, prefix='madeira-sc-ipc-') as name:
     folder = Path(name)
-    symbols = {'rebind_counter': define('IOS_SCH_IPC_COUNT'), 'helper_log': 0x111340,
+    symbols = {'rebind_counter': define('IOS_SCH_IPC_COUNT'), 'helper_log': 0x133f80,
                'connect_return': define('IOS_SCH_IPC_CONNECT') + 5}
     linker = folder / 'trace.ld'
     linker.write_text('SECTIONS { . = %d; .text : { *(.text) } }\n' % define('IOS_SCH_IPC_TRACE') +
@@ -33,7 +33,7 @@ with tempfile.TemporaryDirectory(dir=SCRATCH, prefix='madeira-sc-ipc-') as name:
                     str(folder / 'trace.elf'), str(folder / 'trace.bin')], check=True)
     assert (folder / 'trace.bin').read_bytes() == blob
     assert define('IOS_SCH_RENDER_DRAIN') + 31 <= define('IOS_SCH_IPC_TRACE')
-    assert define('IOS_SCH_IPC_TRACE') + len(blob) <= 0x181000
+    assert define('IOS_SCH_IPC_TRACE') + len(blob) <= 0x1a5000
     assert define('IOS_SCH_RUN_RING') + define('IOS_SCH_RUN_RING_SIZE') <= define('IOS_SCH_IPC_COUNT')
     assert define('IOS_SCH_IPC_COUNT') + 4 <= define('IOS_SCH_CACHE')
 
@@ -104,16 +104,16 @@ static void *worker(void *unused)
 ''' + array + r'''
 int main(void)
 {
-    char *image = mmap(NULL, 0x244000, PROT_READ | PROT_WRITE,
+    char *image = mmap(NULL, 0x26e000, PROT_READ | PROT_WRITE,
                        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     assert(image != MAP_FAILED);
     memcpy(image + TRACE_ENTRY, ios_sch_ipc_rebind, sizeof(ios_sch_ipc_rebind));
     int32_t disp = TRACE_ENTRY - CONNECT_ENTRY - 5;
     image[CONNECT_ENTRY] = (char)0xe9;
     memcpy(image + CONNECT_ENTRY + 1, &disp, sizeof(disp));
-    stub(image, 0x111340, (uintptr_t)logger);
+    stub(image, 0x133f80, (uintptr_t)logger);
     stub(image, CONNECT_ENTRY + 5, (uintptr_t)original_continuation);
-    assert(!mprotect(image + 0x1000, 0x180000, PROT_READ | PROT_EXEC));
+    assert(!mprotect(image + 0x1000, 0x1a4000, PROT_READ | PROT_EXEC));
     connect_entry = (void *)(image + CONNECT_ENTRY);
     unsigned int *counter = (void *)(image + COUNTER);
     expect_inline = 1;
@@ -137,7 +137,7 @@ int main(void)
     for (unsigned int i = 0; i < 16; i++) assert(!pthread_join(threads[i], NULL));
     assert(logs == 8 && bodies == 16 * 12 && *counter >= 8 && *counter <= 16 * 12);
     assert(!memcmp(&manager, &before, sizeof(manager)));
-    assert(!munmap(image, 0x244000));
+    assert(!munmap(image, 0x26e000));
     puts("PASS: concurrent diagnostic emits eight records and every original connect still runs");
 }
 '''

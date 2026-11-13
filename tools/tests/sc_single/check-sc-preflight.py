@@ -107,20 +107,20 @@ int main(int argc, char **argv)
 
 
 def fixture():
-    image = bytearray(0x244000)
+    image = bytearray(0x26e000)
     image[:2] = b'MZ'
     struct.pack_into('<I', image, 0x3c, 0x80)
     image[0x80:0x84] = b'PE\0\0'
-    struct.pack_into('<HHI', image, 0x84, 0x8664, 3, 0x6a86d563)
+    struct.pack_into('<HHI', image, 0x84, 0x8664, 3, 0x6aeb6937)
     struct.pack_into('<H', image, 0x94, 240)
     opt = 0x98
     struct.pack_into('<H', image, opt, 0x20b)
     struct.pack_into('<Q', image, opt + 24, 0x140000000)
     struct.pack_into('<II', image, opt + 32, 0x1000, 0x200)
-    struct.pack_into('<II', image, opt + 56, 0x244000, 0x400)
-    sections = [(0x1000, 0x17f34c, 0x17f400, 0x60000020),
-                (0x181000, 0x4b000, 0x4b000, 0x40000040),
-                (0x1cc000, 0x43bc, 0x1a00, 0xc0000040)]
+    struct.pack_into('<II', image, opt + 56, 0x26e000, 0x400)
+    sections = [(0x1000, 0x1a3358, 0x1a3400, 0x60000020),
+                (0x1a5000, 0x4b000, 0x4b000, 0x40000040),
+                (0x1f5000, 0x436c, 0x1a00, 0xc0000040)]
     raw = 0x400
     for i, (rva, virtual_size, raw_size, flags) in enumerate(sections):
         struct.pack_into('<IIII', image, 0x188 + i * 40 + 8, virtual_size, rva, raw_size, raw)
@@ -134,8 +134,8 @@ def fixture():
         image[rva:rva + length] = bytes(((rva + i) * 131 + 7) & 255 for i in range(length))
         ranges.append((rva, length))
     assert len(ranges) == 48, len(ranges)
-    for rva, target in [(0x182268 + 3 * 8, 0x51b0), (0x182268 + 4 * 8, 0x4330),
-                        (0x182658 + 3 * 8, 0x4330), (0x182658 + 4 * 8, 0x51b0), (0x182688, 0x7e60)]:
+    for rva, target in [(0x1a6288 + 3 * 8, 0x5ae0), (0x1a6288 + 4 * 8, 0x4a90),
+                        (0x1a6678 + 3 * 8, 0x4a90), (0x1a6678 + 4 * 8, 0x5ae0), (0x1a66a8, 0x8880)]:
         struct.pack_into('<Q', image, rva, 0x140000000 + target)
     packed = bytearray(image[:0x400])
     for rva, _, raw_size, _ in sections:
@@ -171,7 +171,7 @@ with tempfile.TemporaryDirectory(dir=SCRATCH, prefix='sc-preflight-') as td:
     for offset in (0, 0x3c, 0x80, 0x84, 0x86, 0x88, 0x94, 0x98,
                    0x98 + 32, 0x98 + 36, 0x98 + 56,
                    0x188 + 12, 0x188 + 20,
-                   0x400 + 0x17f400 + 0x1268 + 3 * 8):
+                   0x400 + 0x1a3400 + 0x1288 + 3 * 8):
         changed = good.copy()
         changed[offset] ^= 1
         check(changed, 1)

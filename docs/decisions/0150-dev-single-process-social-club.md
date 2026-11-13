@@ -8,6 +8,16 @@ Amends [0109](0109-chromium-switches-for-a-cef-browser.md) and
 rule covers only the installed `SocialClubHelper.exe` page bridge described here.
 It does not permit patching any other Rockstar component or build.
 
+**Amendment proposed 2026-11-13 ([PLA-866](https://linear.app/playportdev/issue/PLA-866)), pending the owner's
+acceptance:** the exception moves to Social Club 2.4.0.302's `SocialClubHelper.exe` (TimeDateStamp `0x6aeb6937`,
+SizeOfImage `0x26e000`), the build RDR2's Steam depot installs since November 2026, in place of 2.4.0.240's.
+- **Why.** Since the update every RDR2 Play falls back to multi-process, which one address space cannot hold
+  (`pla841-rdr2-census3`, `census4`; [PLA-865](https://linear.app/playportdev/issue/PLA-865)).
+- **What changed.** The same bridge, thunks and hooks, re-aimed at the new build's RVAs. Every hook site, displaced
+  instruction and structure offset was checked against both builds, and the guard's 48 SHA-256 windows were taken
+  from the new build.
+- **What did not change.** Nothing else is patched, and no check is bypassed. 2.4.0.240 is no longer accepted.
+
 **Amended 2026-10-30 by [0169](0169-social-club-on-rockstars-cef-in-the-stock-cef-layout.md) (owner, PLA-476):** single-process is on by default, in release
 too, with the stock-CEF layout and no keys. Built 2026-10-31 (the plan's chunk 4, `d1aff807`, `1424a0ac`,
 PLA-602): `playport_sc_single_enabled` is on in both builds, and only a dev build's `env.PLAYPORT_SC_SINGLE=0`
@@ -56,7 +66,8 @@ added: under `--single-process` the GPU service already runs as a thread of the 
   No compatibility default changes before a phone A/B. `0` or an absent key
   keeps today's multi-process policy.
 - **Exact build and code, not just a name.** Only `SocialClubHelper.exe`, x64,
-  TimeDateStamp `0x6a86d563`, SizeOfImage `0x244000`, is eligible. Before changing
+  TimeDateStamp `0x6a86d563`, SizeOfImage `0x244000`, is eligible *(2.4.0.302's `0x6aeb6937`/`0x26e000` instead,
+  as proposed above)*. Before changing
   flags or refusing a child, madeira-unix 0190 reads the already-open image into
   a private, non-executable buffer and runs willfaust/Madeira's `293cd39` guard:
   all 48 SHA-256 ranges, section layout, vtables, and zero code/data tails.
