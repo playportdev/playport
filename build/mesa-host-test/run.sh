@@ -138,6 +138,22 @@ clamp_new=$(comm -13 <(cd "$ROOT/msl" && md5sum -- *.metal | cut -d' ' -f1 | sor
     { echo "clamp_float_output: $clamp_new libraries not in the default run's MSL, not the two float-target fragments" >&2; exit 1; }
 echo "clamp_float_output: a float target keeps the fragment's color behind an exponent test; the other libraries keep their MSL"
 
+# layer_clamp (PLA-880): kk-host-test's layer pipeline writes its instance as the
+# layer behind a compare with the render pass's layers ("ok layer layer_clamp");
+# its vertex library is the only MSL the switch changes (gpl-layer.vert writes a
+# constant 0, which needs no compare).
+rm -rf "$ROOT/msl-layer"; mkdir -p "$ROOT/msl-layer"
+MESA_KK_EXPERIMENTAL=layer_clamp KK_MOCK_MSL_DIR="$ROOT/msl-layer" MESA_SHADER_CACHE_DISABLE=true \
+    "$ROOT/kk-host-test" "$ROOT/build/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.so" "$ROOT/spv" \
+    >"$ROOT/layer.log" 2>&1 || { cat "$ROOT/layer.log" >&2; exit 1; }
+grep -qx "ok layer layer_clamp" "$ROOT/layer.log" ||
+    { echo "layer_clamp: the layer pipeline was not checked" >&2; exit 1; }
+layer_new=$(comm -13 <(cd "$ROOT/msl" && md5sum -- *.metal | cut -d' ' -f1 | sort) \
+    <(cd "$ROOT/msl-layer" && md5sum -- *.metal | cut -d' ' -f1 | sort) | wc -l)
+[ "$layer_new" = 1 ] && [ "$(ls "$ROOT/msl-layer" | wc -l)" = "$(ls "$ROOT/msl" | wc -l)" ] ||
+    { echo "layer_clamp: $layer_new libraries not in the default run's MSL, not layer.vert's alone" >&2; exit 1; }
+echo "layer_clamp: a vertex layer is compared with the pass's layers; the other libraries keep their MSL"
+
 # A null sampled image into a buffer-only mutable binding (PLA-815): vkd3d-proton
 # splats a null of the game's type over every set, its 16-byte raw buffer set too.
 # The next element's storage buffer descriptor survives: the copy of it that

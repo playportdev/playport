@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
- * patches/mesa 0154 (PLA-880): a failed commit, on the real driver and mock
+ * patches/mesa 0154, 0156, 0157 (PLA-880): a failed commit, on the real driver and mock
  * Metal (make-mock-bridge.py's KK_MOCK_COMMIT_ERROR fails every commit with a
  * two-level error chain). Always: the error chain Metal gave and the commit's
  * timing. With MESA_KK_DEBUG=fault: each encoder is labelled with its command
@@ -151,12 +151,13 @@ record(VkCommandBuffer handle, bool heap)
 }
 
 static struct kk_cmd_buffer *submitted;
-static VkImage mip_image;
+static VkImage mip_image, array_image;
 static VkCommandBuffer recording; /* defined with cbs below */
 
-/* A 64x64 RGBA8 image with 4 levels, as a game's mip chain */
-static void
-create_mip_image(void)
+/* A 64x64 RGBA8 image with 4 levels and the given layers, as a game's mip
+ * chain or its array of shadow cascades */
+static VkImage
+create_image(uint32_t layers)
 {
    const VkImageCreateInfo ici = {
       .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
@@ -164,15 +165,16 @@ create_mip_image(void)
       .format = VK_FORMAT_R8G8B8A8_UNORM,
       .extent = {64, 64, 1},
       .mipLevels = 4,
-      .arrayLayers = 1,
+      .arrayLayers = layers,
       .samples = VK_SAMPLE_COUNT_1_BIT,
       .tiling = VK_IMAGE_TILING_OPTIMAL,
       .usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
    };
-   CHECK(kk_CreateImage(device, &ici, NULL, &mip_image));
+   VkImage image;
+   CHECK(kk_CreateImage(device, &ici, NULL, &image));
    VkMemoryRequirements req;
-   vk_common_GetImageMemoryRequirements(device, mip_image, &req);
+   vk_common_GetImageMemoryRequirements(device, image, &req);
    const VkMemoryAllocateInfo mai = {
       .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
       .allocationSize = req.size,
@@ -181,27 +183,30 @@ create_mip_image(void)
    CHECK(kk_AllocateMemory(device, &mai, NULL, &mem));
    const VkBindImageMemoryInfo bind = {
       .sType = VK_STRUCTURE_TYPE_BIND_IMAGE_MEMORY_INFO,
-      .image = mip_image, .memory = mem,
+      .image = image, .memory = mem,
    };
    CHECK(kk_BindImageMemory2(device, 1, &bind));
+   return image;
 }
 
+/* Levels src_level into dst_level of every one of the image's layers */
 static void
-blit(VkCommandBuffer handle, uint32_t src_level, uint32_t dst_level)
+blit(VkCommandBuffer handle, VkImage image, uint32_t layers,
+     uint32_t src_level, uint32_t dst_level)
 {
    const int32_t src = 64 >> src_level, dst = 64 >> dst_level;
    const VkImageBlit2 region = {
       .sType = VK_STRUCTURE_TYPE_IMAGE_BLIT_2,
-      .srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, src_level, 0, 1},
+      .srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, src_level, 0, layers},
       .srcOffsets = {{0, 0, 0}, {src, src, 1}},
-      .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, dst_level, 0, 1},
+      .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, dst_level, 0, layers},
       .dstOffsets = {{0, 0, 0}, {dst, dst, 1}},
    };
    const VkBlitImageInfo2 info = {
       .sType = VK_STRUCTURE_TYPE_BLIT_IMAGE_INFO_2,
-      .srcImage = mip_image,
+      .srcImage = image,
       .srcImageLayout = VK_IMAGE_LAYOUT_GENERAL,
-      .dstImage = mip_image,
+      .dstImage = image,
       .dstImageLayout = VK_IMAGE_LAYOUT_GENERAL,
       .regionCount = 1,
       .pRegions = &region,
@@ -221,9 +226,9 @@ record_blits(void *unused)
       .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
    };
    CHECK(kk_BeginCommandBuffer(recording, &begin));
-   blit(recording, 0, 1);
-   blit(recording, 1, 2);
-   blit(recording, 2, 2);
+   blit(recording, mip_image, 1, 0, 1);
+   blit(recording, mip_image, 1, 1, 2);
+   blit(recording, mip_image, 1, 2, 2);
    const VkBufferCopy2 region = {
       .sType = VK_STRUCTURE_TYPE_BUFFER_COPY_2, .size = 256,
    };
@@ -233,6 +238,21 @@ record_blits(void *unused)
       .regionCount = 1, .pRegions = &region,
    };
    kk_CmdCopyBuffer2(recording, &info);
+   CHECK(kk_EndCommandBuffer(recording));
+   submitted = kk_cmd_buffer_from_handle(recording);
+}
+
+/* Level 0 into level 1 of a 5-layer image: vk_meta draws one rectangle per
+ * layer, its vertex shader writing the layer (instance) */
+static void
+record_layered(void *unused)
+{
+   const VkCommandBufferBeginInfo begin = {
+      .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+      .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+   };
+   CHECK(kk_BeginCommandBuffer(recording, &begin));
+   blit(recording, array_image, 5, 0, 1);
    CHECK(kk_EndCommandBuffer(recording));
    submitted = kk_cmd_buffer_from_handle(recording);
 }
@@ -277,10 +297,20 @@ main(void)
 {
    setenv("MESA_KK_DEBUG", "fault", 1);
    setenv("KK_MOCK_TRACE_ENCODERS", "1", 1);
+   /* Entries MESA_KK_FAULT_SKIP takes and ignores; the skips themselves are
+    * set on the device below */
+   setenv("MESA_KK_FAULT_SKIP", "0123456789abcdef0,zz,ABCD", 1);
    char *log = capture(create_device, NULL);
+   unsetenv("MESA_KK_FAULT_SKIP");
+   /* The phone's limit is 4096 timestamps a heap (the mock's too) */
    expect(log, "[kk-fault] on: encoder labels, command buffer trails, geometry "
                "heap ring, encoder timestamps; Metal encoder status: unavailable");
+   expect(log, "; skipping draws: 0123456789abcdef0(ignored),zz(ignored),ABCD; "
+               "vertex layer clamp off\n");
    d = kk_device_from_handle(device);
+   assert(d->fault.skip_count == 1 && d->fault.skip[0].prefix == 0xabcd &&
+          d->fault.skip[0].digits == 4 && !d->fault.skip_writes);
+   d->fault.skip_count = 0;
    q = &d->queue;
    assert(d->fault.ring && d->fault.ring->cpu);
    create_buffers();
@@ -378,7 +408,7 @@ main(void)
     * not ended (its end timestamp left unwritten, as by a GPU that stopped
     * in it): each encoder's attachments, pipelines, timestamps and the pass
     * that reads the level it renders are logged, and the submit */
-   create_mip_image();
+   mip_image = create_image(1);
    recording = cbs[3];
    log = capture(record_blits, NULL);
    const uint32_t blits = submitted->fault.serial;
@@ -393,6 +423,8 @@ main(void)
    snprintf(want, sizeof(want), "label kk#%u.", blits);
    expect(log, want);
    expect(log, " render draws=1 meta:vkCmdBlitImage2");
+   expect(log, "writes [layer]: drawn in a pass of 1 layer(s) 32x32, x1 "
+               "instance(s)");
    /* The second render pass: find its encoder, leave its end unwritten */
    uint32_t second = ~0u;
    for (uint32_t i = 0, r = 0; i < encoders && second == ~0u; i++)
@@ -414,6 +446,7 @@ main(void)
    snprintf(want, sizeof(want), "[kk-fault] cb #%u enc %u   pipelines msl=", blits,
             second);
    expect(log, want);
+   expect(log, "x1[layer]\n");
    /* The first two blits read another level than they render; the third
     * reads level 2 into level 2 */
    snprintf(want, sizeof(want), "FEEDBACK 1 draw(s), first draw 0: set 0 "
@@ -424,9 +457,80 @@ main(void)
           !strstr(log, "levels 1+1 layers 0+1 of c0's image"));
    snprintf(want, sizeof(want), " (the failed cb's): cbs #%u\n", blits);
    expect(log, want);
+   snprintf(want, sizeof(want), "[kk-fault] cb #%u stopped in enc %u: it started "
+            "and did not end\n", blits, second);
+   expect(log, want);
    puts("ok fault: a failed command buffer of blits names the unfinished "
         "encoder, its attachments and pipelines, the pass reading the level it "
         "renders, and its submit");
+
+   /* The same, stopped before the second blit's pass began: the encoder
+    * after the last that ended is named */
+   log = capture(record_blits, NULL);
+   const uint32_t blits2 = submitted->fault.serial;
+   trail = util_dynarray_begin(&submitted->fault.trail);
+   for (uint32_t i = second; i < encoders; i++) {
+      kk_mock_counter_heap_set(d->fault.timestamps, trail[i].ts, 0);
+      kk_mock_counter_heap_set(d->fault.timestamps, trail[i].ts + 1u, 0);
+   }
+   setenv("KK_MOCK_COMMIT_ERROR", "1", 1);
+   log = capture(submit, NULL);
+   unsetenv("KK_MOCK_COMMIT_ERROR");
+   snprintf(want, sizeof(want), "[kk-fault] cb #%u stopped after enc %u, the "
+            "last that ended: enc %u did not start\n", blits2, second - 1u, second);
+   expect(log, want);
+   puts("ok fault: a command buffer stopped between encoders names the one "
+        "that did not start");
+
+   /* A vertex stage that writes the layer (vk_meta's rectangles, one an
+    * instance) is logged once per pipeline and pass layer count, and
+    * MESA_KK_FAULT_SKIP leaves its draws out by what it writes or by its MSL
+    * hash */
+   array_image = create_image(5);
+   recording = cbs[0];
+   log = capture(record_layered, NULL);
+   expect(log, "writes [layer]: drawn in a pass of 5 layer(s) 32x32, x5 "
+               "instance(s)");
+   expect(log, " render draws=1 meta:vkCmdBlitImage2");
+   const struct kk_fault_encoder *layered = NULL;
+   trail = util_dynarray_begin(&submitted->fault.trail);
+   for (uint32_t i = 0; i < util_dynarray_num_elements(&submitted->fault.trail,
+                                                     struct kk_fault_encoder);
+        i++)
+      if (trail[i].render)
+         layered = &trail[i];
+   assert(layered && layered->pipeline_count == 1 &&
+          layered->pipelines[0].writes == KK_FAULT_WRITES_LAYER &&
+          !layered->skipped);
+   const uint64_t layered_msl = layered->pipelines[0].msl;
+   d->fault.skip_writes = KK_FAULT_WRITES_LAYER;
+   log = capture(record_layered, NULL);
+   expect(log, " render draws=1 skipped=1 meta:vkCmdBlitImage2");
+   assert(!strstr(log, "drawn in a pass of"));
+   d->fault.skip_writes = 0;
+   d->fault.skip[0].prefix = layered_msl >> 52;
+   d->fault.skip[0].digits = 3;
+   d->fault.skip_count = 1;
+   log = capture(record_layered, NULL);
+   expect(log, " render draws=1 skipped=1 meta:vkCmdBlitImage2");
+   d->fault.skip[0].prefix ^= 1u;
+   log = capture(record_layered, NULL);
+   assert(!strstr(log, "skipped="));
+   d->fault.skip_count = 0;
+   puts("ok fault: a vertex stage writing the layer is logged with its pass's "
+        "layers, and MESA_KK_FAULT_SKIP leaves its draws out");
+
+   /* MESA_KK_EXPERIMENTAL=layer_clamp: each render pass gives its vertex
+    * stages its layers, 5 for the array's blit, 1 for the mip chain's */
+   kk_mesa_experimental_flags |= KK_EXPERIMENTAL_LAYER_CLAMP;
+   capture(record_layered, NULL);
+   assert(submitted->state.gfx.descriptors.root.draw.render_target_layers == 5u);
+   recording = cbs[3];
+   capture(record_blits, NULL);
+   assert(submitted->state.gfx.descriptors.root.draw.render_target_layers == 1u);
+   kk_mesa_experimental_flags &= ~KK_EXPERIMENTAL_LAYER_CLAMP;
+   puts("ok fault: with layer_clamp a render pass gives its vertex stages its "
+        "layers");
 
    /* Without the flag nothing is labelled or traced */
    kk_mesa_debug_flags &= ~KK_DEBUG_FAULT;
