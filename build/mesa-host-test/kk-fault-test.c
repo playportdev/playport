@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
- * patches/mesa 0154, 0156, 0157 (PLA-880): a failed commit, on the real driver and mock
+ * patches/mesa 0154, 0156, 0157, 0158 (PLA-880): a failed commit, on the real driver and mock
  * Metal (make-mock-bridge.py's KK_MOCK_COMMIT_ERROR fails every commit with a
  * two-level error chain). Always: the error chain Metal gave and the commit's
  * timing. With MESA_KK_DEBUG=fault: each encoder is labelled with its command
@@ -7,9 +7,11 @@
  * logs the encoders of its command buffer and the state of the geometry heap
  * (the 128 MiB scratch of tessellation, geometry shaders and strip unrolls),
  * and a completed command buffer that used the heap logs a new high-water
- * mark. Linked to the driver's archives (run-cmd-pool-test.py). The mock runs
- * no GPU work: the heap's header and the ring of usage the driver reads are
- * written here, as the GPU would.
+ * mark. MESA_KK_FAULT_SPLIT commits a command buffer's encoders as Metal
+ * command buffers of their own, and MESA_KK_FAULT_SKIP leaves out draws by
+ * the pass they are in and copies. Linked to the driver's archives
+ * (run-cmd-pool-test.py). The mock runs no GPU work: the heap's header and
+ * the ring of usage the driver reads are written here, as the GPU would.
  */
 #include "kk_bo.h"
 #include "kk_buffer.h"
@@ -29,6 +31,8 @@
 #include <unistd.h>
 
 void kk_mock_counter_heap_set(void *heap, uint32_t index, uint64_t value);
+unsigned kk_mock_command_buffer_commits(void);
+void kk_mock_set_gpu_timestamp(uint64_t ticks);
 
 #define CHECK(call) assert((call) == VK_SUCCESS)
 #define MIB (1024u * 1024u)
@@ -257,6 +261,65 @@ record_layered(void *unused)
    submitted = kk_cmd_buffer_from_handle(recording);
 }
 
+/* A render pass on level 0 of the mip image with two vkCmdClearAttachments
+ * in it: two vk_meta draws in one pass */
+static VkImageView mip_view;
+
+static void
+record_clears(void *unused)
+{
+   const VkCommandBufferBeginInfo begin = {
+      .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+      .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+   };
+   CHECK(kk_BeginCommandBuffer(recording, &begin));
+   const VkRenderingAttachmentInfo color = {
+      .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+      .imageView = mip_view,
+      .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
+      .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
+      .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+   };
+   const VkRenderingInfo rendering = {
+      .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+      .renderArea = {{0, 0}, {64, 64}},
+      .layerCount = 1,
+      .colorAttachmentCount = 1,
+      .pColorAttachments = &color,
+   };
+   kk_CmdBeginRendering(recording, &rendering);
+   const VkClearAttachment clear = {
+      .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+      .colorAttachment = 0,
+      .clearValue = {.color = {.float32 = {1.0f, 0.0f, 0.0f, 1.0f}}},
+   };
+   const VkClearRect rects[2] = {
+      {{{0, 0}, {32, 32}}, 0, 1},
+      {{{32, 32}, {32, 32}}, 0, 1},
+   };
+   kk_CmdClearAttachments(recording, 1, &clear, 1, &rects[0]);
+   kk_CmdClearAttachments(recording, 1, &clear, 1, &rects[1]);
+   kk_CmdEndRendering2KHR(recording, NULL);
+   CHECK(kk_EndCommandBuffer(recording));
+   submitted = kk_cmd_buffer_from_handle(recording);
+}
+
+/* The trail's encoders of the command buffer just recorded, and its render
+ * encoders' draws */
+static uint32_t
+trail_encoders(uint32_t *render, uint32_t *draws)
+{
+   const struct kk_fault_encoder *t = util_dynarray_begin(&submitted->fault.trail);
+   const uint32_t n =
+      util_dynarray_num_elements(&submitted->fault.trail, struct kk_fault_encoder);
+   *render = *draws = 0;
+   for (uint32_t i = 0; i < n; i++) {
+      *render += t[i].render;
+      *draws += t[i].draws;
+   }
+   return n;
+}
+
 static void
 submit(void *arg)
 {
@@ -297,20 +360,30 @@ main(void)
 {
    setenv("MESA_KK_DEBUG", "fault", 1);
    setenv("KK_MOCK_TRACE_ENCODERS", "1", 1);
-   /* Entries MESA_KK_FAULT_SKIP takes and ignores; the skips themselves are
-    * set on the device below */
-   setenv("MESA_KK_FAULT_SKIP", "0123456789abcdef0,zz,ABCD", 1);
+   /* Entries MESA_KK_FAULT_SKIP takes and ignores, and a split of each
+    * encoder; the skips and splits themselves are set on the device below */
+   setenv("MESA_KK_FAULT_SKIP",
+          "0123456789abcdef0,zz,ABCD,layered,instanced,copy,32x32,0x5", 1);
+   setenv("MESA_KK_FAULT_SPLIT", "1", 1);
    char *log = capture(create_device, NULL);
    unsetenv("MESA_KK_FAULT_SKIP");
+   unsetenv("MESA_KK_FAULT_SPLIT");
    /* The phone's limit is 4096 timestamps a heap (the mock's too) */
    expect(log, "[kk-fault] on: encoder labels, command buffer trails, geometry "
                "heap ring, encoder timestamps; Metal encoder status: unavailable");
-   expect(log, "; skipping draws: 0123456789abcdef0(ignored),zz(ignored),ABCD; "
-               "vertex layer clamp off\n");
+   expect(log, "; leaving out: 0123456789abcdef0(ignored),zz(ignored),ABCD,"
+               "layered,instanced,copy,32x32,0x5(ignored); vertex layer clamp "
+               "off; Metal command buffers: one per encoder\n");
    d = kk_device_from_handle(device);
    assert(d->fault.skip_count == 1 && d->fault.skip[0].prefix == 0xabcd &&
           d->fault.skip[0].digits == 4 && !d->fault.skip_writes);
-   d->fault.skip_count = 0;
+   assert(d->fault.skip_kinds == (KK_FAULT_SKIP_LAYERED |
+                                  KK_FAULT_SKIP_INSTANCED | KK_FAULT_SKIP_COPY));
+   assert(d->fault.skip_area_count == 1 && d->fault.skip_areas[0].w == 32 &&
+          d->fault.skip_areas[0].h == 32);
+   assert(d->fault.split == 1u && !d->fault.split_draws);
+   d->fault.skip_count = d->fault.skip_kinds = d->fault.skip_area_count = 0;
+   d->fault.split = 0u;
    q = &d->queue;
    assert(d->fault.ring && d->fault.ring->cpu);
    create_buffers();
@@ -346,14 +419,41 @@ main(void)
    expect(log, want);
    set_heap(512 * 1024);
    set_ring(d->fault.ring_next - 1u, 1 * MIB);
+   /* The first completed command buffers with encoder timestamps say whether
+    * the GPU wrote them, and on which clock: here the commit's GPU tick is 0
+    * and the mock's timestamps count up from 10000 */
+   d->fault.ts_checks = 0u;
+   kk_mock_set_gpu_timestamp(0u);
    log = capture(submit, NULL);
    snprintf(want, sizeof(want),
             "[kk-fault] geometry heap high-water 1.0 MiB of 2.0 MiB (cb #%u)", first);
    expect(log, want);
+   snprintf(want, sizeof(want),
+            "[kk-fault] timestamp check: cb #%u: 1 of 1 encoder(s) wrote a start "
+            "and 1 an end; enc 0 start tick ", first);
+   expect(log, want);
+   expect(log, ", commit tick 0, 1000000000 Hz: the starts follow the commit\n");
    assert(!strstr(log, "[kk-fault] cb #"));
    assert(!vk_device_is_lost_no_report(&d->vk));
    puts("ok fault: a completed command buffer's encoders are labelled; a heap "
-        "high-water mark is logged");
+        "high-water mark is logged; its timestamps are checked");
+
+   /* A commit tick past the encoders' (another clock, or another origin) is
+    * named: the failed trail's gpu= times would then be wrong */
+   recording = cbs[2];
+   capture(record_one, NULL);
+   kk_mock_set_gpu_timestamp(1ull << 62);
+   log = capture(submit, NULL);
+   kk_mock_set_gpu_timestamp(0u);
+   expect(log, "commit tick 4611686018427387904, 1000000000 Hz: the starts "
+               "precede the commit (another clock: gpu= and not-started on a "
+               "failure are not to be trusted)\n");
+   d->fault.ts_checks = KK_FAULT_TS_CHECKS;
+   capture(record_one, NULL);
+   log = capture(submit, NULL);
+   assert(!strstr(log, "timestamp check"));
+   const uint32_t last_ok = submitted->fault.serial;
+   puts("ok fault: a commit tick on another clock than the encoders' is named");
 
    /* Failed: the error chain and timing, the command buffer's encoders, and
     * a heap that overflowed (3 MiB asked of 2) */
@@ -375,7 +475,7 @@ main(void)
    snprintf(want, sizeof(want),
             "[kk-fault] cb #%u failed (error=1): encoders=1 render=0 compute=1 "
             "draws=0 dispatches=0 copies=2 flags=heap last-completed=#%u\n",
-            failed, first);
+            failed, last_ok);
    expect(log, want);
    snprintf(want, sizeof(want),
             "[kk-fault] cb #%u enc 0 compute dispatches=0 copies=2 heap gpu=", failed);
@@ -531,6 +631,138 @@ main(void)
    kk_mesa_experimental_flags &= ~KK_EXPERIMENTAL_LAYER_CLAMP;
    puts("ok fault: with layer_clamp a render pass gives its vertex stages its "
         "layers");
+
+   /* MESA_KK_FAULT_SKIP's kinds: draws in passes of more than one layer, of
+    * more than one instance or of a size, and copies */
+   recording = cbs[0];
+   d->fault.skip_kinds = KK_FAULT_SKIP_LAYERED;
+   log = capture(record_layered, NULL);
+   expect(log, " render draws=1 skipped=1 meta:vkCmdBlitImage2");
+   recording = cbs[3];
+   log = capture(record_blits, NULL);
+   assert(!strstr(log, "skipped="));
+   d->fault.skip_kinds = KK_FAULT_SKIP_INSTANCED;
+   recording = cbs[0];
+   log = capture(record_layered, NULL);
+   expect(log, " render draws=1 skipped=1 meta:vkCmdBlitImage2");
+   recording = cbs[3];
+   log = capture(record_blits, NULL);
+   assert(!strstr(log, "skipped="));
+   d->fault.skip_kinds = 0;
+   d->fault.skip_areas[0].w = d->fault.skip_areas[0].h = 32;
+   d->fault.skip_area_count = 1;
+   recording = cbs[0];
+   log = capture(record_layered, NULL);
+   expect(log, " render draws=1 skipped=1 meta:vkCmdBlitImage2");
+   d->fault.skip_areas[0].w = d->fault.skip_areas[0].h = 16;
+   log = capture(record_layered, NULL);
+   assert(!strstr(log, "skipped="));
+   d->fault.skip_area_count = 0;
+   d->fault.skip_kinds = KK_FAULT_SKIP_COPY;
+   recording = cbs[2];
+   log = capture(record_one, NULL);
+   expect(log, " compute dispatches=0 copies=2 skipped=2\n");
+   d->fault.skip_kinds = 0;
+   puts("ok fault: MESA_KK_FAULT_SKIP leaves out draws in layered passes, "
+        "instanced draws, draws in passes of a size, and copies");
+
+   /* MESA_KK_FAULT_SPLIT=1: each encoder is a Metal command buffer of its
+    * own, committed alone, so a failed commit names one encoder (the mock
+    * refuses to commit a command buffer holding more encoders) */
+   recording = cbs[3];
+   d->fault.split = 1u;
+   setenv("KK_MOCK_MAX_ENCODERS_PER_CB", "1", 1);
+   capture(record_blits, NULL);
+   const uint32_t split_serial = submitted->fault.serial;
+   uint32_t render, draws;
+   const uint32_t split_encoders = trail_encoders(&render, &draws);
+   unsigned commits = kk_mock_command_buffer_commits();
+   setenv("KK_MOCK_COMMIT_ERROR", "1", 1);
+   log = capture(submit, NULL);
+   unsetenv("KK_MOCK_COMMIT_ERROR");
+   assert(kk_mock_command_buffer_commits() == commits + split_encoders);
+   for (uint32_t i = 0; i < split_encoders; i++) {
+      snprintf(want, sizeof(want), "[kk-fault] cb #%u part %u of %u (enc %u) "
+               "failed (error=1): encoders=1 ", split_serial, i + 1u,
+               split_encoders, i);
+      expect(log, want);
+   }
+   snprintf(want, sizeof(want), "[kk-fault] cb #%u enc 1 render draws=1 "
+            "meta:vkCmdBlitImage2", split_serial);
+   expect(log, want);
+   /* Completed: again (the command buffer's Metal command buffers are
+    * reused), and nothing is logged */
+   capture(record_blits, NULL);
+   commits = kk_mock_command_buffer_commits();
+   log = capture(submit, NULL);
+   assert(kk_mock_command_buffer_commits() == commits + split_encoders);
+   assert(!strstr(log, " failed"));
+   /* Two encoders a Metal command buffer */
+   d->fault.split = 2u;
+   setenv("KK_MOCK_MAX_ENCODERS_PER_CB", "2", 1);
+   capture(record_blits, NULL);
+   commits = kk_mock_command_buffer_commits();
+   setenv("KK_MOCK_COMMIT_ERROR", "1", 1);
+   log = capture(submit, NULL);
+   unsetenv("KK_MOCK_COMMIT_ERROR");
+   assert(kk_mock_command_buffer_commits() ==
+          commits + (split_encoders + 1u) / 2u);
+   snprintf(want, sizeof(want), "part 1 of %u (enc 0..1) failed (error=1): "
+            "encoders=2 ", (split_encoders + 1u) / 2u);
+   expect(log, want);
+   puts("ok fault: MESA_KK_FAULT_SPLIT commits each encoder, or each N, as a "
+        "Metal command buffer of its own, and a failure names its encoders");
+
+   /* MESA_KK_FAULT_SPLIT=draw: each draw in a render encoder of its own (the
+    * pass begins again on what was stored), each one committed alone */
+   const VkImageViewCreateInfo vci = {
+      .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+      .image = mip_image,
+      .viewType = VK_IMAGE_VIEW_TYPE_2D,
+      .format = VK_FORMAT_R8G8B8A8_UNORM,
+      .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
+   };
+   CHECK(kk_CreateImageView(device, &vci, NULL, &mip_view));
+   d->fault.split = 0u;
+   unsetenv("KK_MOCK_MAX_ENCODERS_PER_CB");
+   capture(record_clears, NULL);
+   trail_encoders(&render, &draws);
+   assert(render == 1u && draws == 2u);
+   d->fault.split = 1u;
+   d->fault.split_draws = true;
+   setenv("KK_MOCK_MAX_ENCODERS_PER_CB", "1", 1);
+   capture(record_clears, NULL);
+   const uint32_t draw_encoders = trail_encoders(&render, &draws);
+   /* The pass's end may begin it once more, for no draw */
+   assert(render >= 2u && draws == 2u);
+   const struct kk_fault_encoder *t = util_dynarray_begin(&submitted->fault.trail);
+   for (uint32_t i = 0; i < draw_encoders; i++)
+      assert(t[i].draws <= 1u);
+   commits = kk_mock_command_buffer_commits();
+   log = capture(submit, NULL);
+   assert(kk_mock_command_buffer_commits() == commits + draw_encoders);
+   unsetenv("KK_MOCK_MAX_ENCODERS_PER_CB");
+   d->fault.split = 0u;
+   d->fault.split_draws = false;
+   puts("ok fault: MESA_KK_FAULT_SPLIT=draw gives each draw its own render "
+        "encoder and Metal command buffer");
+
+   /* The other MESA_KK_FAULT_SPLIT values, read at device creation */
+   const VkDevice first_device = device;
+   setenv("MESA_KK_FAULT_SPLIT", "draw", 1);
+   log = capture(create_device, NULL);
+   expect(log, "; Metal command buffers: one per draw\n");
+   assert(kk_device_from_handle(device)->fault.split == 1u &&
+          kk_device_from_handle(device)->fault.split_draws);
+   setenv("MESA_KK_FAULT_SPLIT", "4", 1);
+   log = capture(create_device, NULL);
+   expect(log, "; Metal command buffers: one per 4 encoders\n");
+   setenv("MESA_KK_FAULT_SPLIT", "0", 1);
+   log = capture(create_device, NULL);
+   expect(log, "vertex layer clamp off; MESA_KK_FAULT_SPLIT=0 ignored\n");
+   unsetenv("MESA_KK_FAULT_SPLIT");
+   device = first_device;
+   puts("ok fault: MESA_KK_FAULT_SPLIT takes a number of encoders or draw");
 
    /* Without the flag nothing is labelled or traced */
    kk_mesa_debug_flags &= ~KK_DEBUG_FAULT;
