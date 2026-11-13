@@ -53,16 +53,16 @@ public struct LaunchPlan: Equatable, Sendable {
 public enum LaunchPlanError: Error, Equatable, CustomStringConvertible {
     case badPath(String)
     case badConfig(String)
+    /// A memory key no title sets (decision 0183): one TitleConfig.refusedKeys names, or one whose
+    /// mechanism is gone (TitleConfig.deletedKeys).
     case refusedKey(String)
-    case deletedKey(String)
     case badScreen(String)
 
     public var description: String {
         switch self {
         case .badPath(let p): "not a path inside C:\\Games: \(p)"
         case .badConfig(let k): "not a madeira.cfg key = value line: \(k)"
-        case .refusedKey(let k): "not a game's own key (no per-game memory keys, decision 0183): \(k)"
-        case .deletedKey(let k): "no longer a madeira.cfg key: \(k) (no game has a memory key of its own)"
+        case .refusedKey(let k): "\(k) \(TitleConfig.refusal(k)) (no per-game memory keys, decision 0183)"
         case .badScreen(let s): "not a screen (native, <rows>, 4:3 or WxH): \(s)"
         }
     }

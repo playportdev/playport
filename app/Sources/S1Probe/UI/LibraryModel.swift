@@ -176,11 +176,13 @@ final class LibraryModel: ObservableObject {
 
     /// Finds a Steam game's file written since it was verified (TitleInstaller.recheck, PLA-850): at
     /// app start, after any copy's originals are back, which after decision 0029 follows every game
-    /// played. Only the files whose size, time or inode changed are hashed; one that no longer matches
-    /// its manifest marks the game Needs repair, so its page offers Repair before Play.
+    /// played. Only the files whose size, time or inode changed are hashed, and the `files:` line logs
+    /// them with what no longer matches its manifest. It marks nothing: a game may rewrite a file its
+    /// manifest lists (a config, The Witcher 3's `content/metadata.store`), so such a file is no sign
+    /// of damage, and only Verify says Needs repair.
     func recheckSteamInstalls(_ when: String) {
         let titles = catalog.titles.filter { $0.source == .installed && $0.store == .steam }
-            .compactMap { t in t.appID.map { (id: t.id, name: t.name, app: $0) } }
+            .compactMap { t in t.appID.map { (name: t.name, app: $0) } }
         Task.detached(priority: .utility) {
             let installer = TitleInstaller(layout: LibraryModel.paths.layout, session: nil, log: SteamUILog.logger)
             var written = 0
@@ -192,19 +194,12 @@ final class LibraryModel: ObservableObject {
                     let notes = r.notes.isEmpty ? "" : "; " + r.notes.prefix(20).joined(separator: "; ")
                     LibraryModel.log("files: \(t.name): \(r.changed.count) written since they were verified (\(names)), "
                                      + "\(r.bad.count) no longer match its Steam manifests" + notes)
-                    if !r.bad.isEmpty { await LibraryModel.shared.damaged(t.id, files: r.files, bad: r.bad.count) }
                 } catch {
                     LibraryModel.log("files: \(t.name) not checked \(when): \(error)")
                 }
             }
             LibraryModel.log("files: \(written) written since they were verified, found \(when) (\(titles.count) Steam game(s) checked)")
         }
-    }
-
-    /// A recheck's damaged files: the game needs repair, as a Verify would have said.
-    private func damaged(_ id: String, files: Int, bad: Int) {
-        catalog.update(id) { $0.lastVerification = .init(date: Date(), files: files, bad: bad, unlisted: $0.lastVerification?.unlisted ?? 0) }
-        save()
     }
 
     /// The game ended in this process: its session counts when the runtime ran it

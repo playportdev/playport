@@ -196,8 +196,8 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
         return items
     }
 
-    /// What a Runtime keys row says when a launch does not use it: the refused or deleted key
-    /// TitleConfig names (TitleConfig.refusedKeys, deletedKeys), else that its items are not
+    /// What a Runtime keys row says when a launch does not use it: the refused key TitleConfig names
+    /// (TitleConfig.refusedKeys, deletedKeys), else that its items are not
     /// `key=value`; nil when it is used.
     public static func unusedRuntimeKeysNote(_ line: String) -> String? {
         do {
@@ -205,9 +205,7 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
             try TitleConfig.validate(items)
             return nil
         } catch LaunchPlanError.refusedKey(let key) {
-            return "\(key) is not a game's own key (no per-game memory keys): not used"
-        } catch LaunchPlanError.deletedKey(let key) {
-            return "\(key) is no longer a key (no per-game memory keys): not used"
+            return "\(key) \(TitleConfig.refusal(key)) (no per-game memory keys): not used"
         } catch {
             return "Not key=value items: not used"
         }

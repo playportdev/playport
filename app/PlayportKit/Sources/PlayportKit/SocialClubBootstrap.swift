@@ -63,12 +63,16 @@ public struct SocialClubBootstrap: Equatable, Sendable {
         self.files = files
     }
 
-    /// Red Dead Redemption 2's Steam copy (app 1174180, buildid 13773296): the phone's PlayRDR2.exe
-    /// (docs/evidence/2026-10-18-rockstar-desktop-comparison.md) and depot 1899671's installer 1.0.109.3031
-    /// (docs/evidence/2026-10-15-rockstar-launcher-recon.md, byte-identical to Rockstar's download).
+    /// Red Dead Redemption 2's Steam copy's PlayRDR2.exe (app 1174180, buildid 13773296), the phone's
+    /// (docs/evidence/2026-10-18-rockstar-desktop-comparison.md): the same with either installer.
+    static let playRDR2 = File(path: "PlayRDR2.exe", size: 507_888,
+                               sha256: "028db16cbd90c7ab07358a7d6dfc981800b6fd4f1583d9b39fe5ea0441d9483d")
+
+    /// Red Dead Redemption 2's Steam copy (app 1174180, buildid 13773296): PlayRDR2.exe and depot
+    /// 1899671's installer 1.0.109.3031 (docs/evidence/2026-10-15-rockstar-launcher-recon.md,
+    /// byte-identical to Rockstar's download).
     public static let rdr2Steam = SocialClubBootstrap(name: "Red Dead Redemption 2 (Steam)", place: .game, files: [
-        File(path: "PlayRDR2.exe", size: 507_888,
-             sha256: "028db16cbd90c7ab07358a7d6dfc981800b6fd4f1583d9b39fe5ea0441d9483d"),
+        playRDR2,
         File(path: "Redistributables/Rockstar-Games-Launcher.exe", size: 111_419_512,
              sha256: "321886457b7e4ab727a27671c17a815684a3943579eedf7e2248a3b9f0973746"),
     ])
@@ -86,8 +90,7 @@ public struct SocialClubBootstrap: Equatable, Sendable {
     /// 2026-11-13, PLA-851: a reinstall of buildid 13773296 brought it; PlayRDR2.exe is unchanged).
     public static let rdr2SteamLauncher3150 = SocialClubBootstrap(name: "Red Dead Redemption 2 (Steam, installer 1.0.110.3150)",
                                                                   place: .game, files: [
-        File(path: "PlayRDR2.exe", size: 507_888,
-             sha256: "028db16cbd90c7ab07358a7d6dfc981800b6fd4f1583d9b39fe5ea0441d9483d"),
+        playRDR2,
         File(path: "Redistributables/Rockstar-Games-Launcher.exe", size: 113_170_552,
              sha256: "7bcbe2fa7e218aa740cced4e72a74e3b0f32e6a6ba7cd8228dd65f3b07f2e575"),
     ])

@@ -187,6 +187,11 @@ public enum SteamAPISwap {
         return path + originalSuffix
     }
 
+    /// Where a manifest path's content is under `root`: manifestFile, resolved inside it.
+    public static func manifestURL(_ root: URL, _ path: String, createParents: Bool = false) throws -> URL {
+        try InstallFS.resolveInside(root, manifestFile(root, path), createParents: createParents)
+    }
+
     /// A file the swap made, which no manifest lists: a kept `.orig`, or a file
     /// in a steam_settings folder Playport wrote.
     public static func isSwapFile(_ root: URL, _ path: String) -> Bool {

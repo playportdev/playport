@@ -10,15 +10,19 @@ import Darwin
 /// its manifest's SHA-1: recorded by an install's commit for the files its stage verified, and by every
 /// check (Verify, a repair's) for the files that passed. A file that no longer looks so was written
 /// since, by anything: `TitleInstaller.recheck` reads only these and hashes only such files, so a copy
-/// damaged after it was verified is found without hashing the title (PLA-850: The Witcher 3's
-/// `content/metadata.store` stopped matching some time after a branch switch that had verified it,
-/// and nothing said so before Play).
+/// that stopped matching after it was verified is found and logged without hashing the title (PLA-850:
+/// The Witcher 3's `content/metadata.store` stopped matching some time after a branch switch that had
+/// verified it, and nothing said so before Play). A game may rewrite such a file itself, so a recheck
+/// marks nothing; Verify decides Needs repair.
 struct VerifiedStamps: Codable {
     struct Look: Codable, Equatable {
-        var s: UInt64
+        var size: UInt64
         /// Modification time, nanoseconds since 1970.
-        var m: Int64
-        var i: UInt64
+        var modified: Int64
+        var inode: UInt64
+
+        /// One entry per file of a title: short keys.
+        enum CodingKeys: String, CodingKey { case size = "s", modified = "m", inode = "i" }
     }
 
     var version = 1
@@ -33,12 +37,14 @@ struct VerifiedStamps: Codable {
         #else
         let t = st.st_mtim
         #endif
-        return Look(s: UInt64(st.st_size), m: Int64(t.tv_sec) * 1_000_000_000 + Int64(t.tv_nsec), i: UInt64(st.st_ino))
+        return Look(size: UInt64(st.st_size), modified: Int64(t.tv_sec) * 1_000_000_000 + Int64(t.tv_nsec),
+                    inode: UInt64(st.st_ino))
     }
 
-    /// Where verify and repair read a manifest file: a swapped steam_api DLL's kept original (SteamAPISwap).
-    static func location(_ root: URL, _ path: String) -> URL? {
-        try? InstallFS.resolveInside(root, SteamAPISwap.manifestFile(root, path), createParents: false)
+    /// How the file verify and repair read for a manifest path looks now (SteamAPISwap.manifestURL: a
+    /// swapped steam_api DLL's kept original); nil when it is not there.
+    static func look(_ root: URL, _ path: String) -> Look? {
+        (try? SteamAPISwap.manifestURL(root, path)).flatMap(look)
     }
 
     static func load(_ url: URL) -> VerifiedStamps? {
@@ -49,13 +55,13 @@ struct VerifiedStamps: Codable {
 
     /// The recorded files that look otherwise now, or are gone.
     func changed(root: URL) -> [String] {
-        files.compactMap { path, look in Self.location(root, path).flatMap(Self.look) == look ? nil : path }.sorted()
+        files.compactMap { path, look in Self.look(root, path) == look ? nil : path }.sorted()
     }
 
     /// Whether `path` was recorded and looks otherwise now.
     func written(_ path: String, root: URL) -> Bool {
         guard let look = files[path] else { return false }
-        return Self.location(root, path).flatMap(Self.look) != look
+        return Self.look(root, path) != look
     }
 }
 
@@ -91,7 +97,7 @@ extension TitleInstaller {
             stamps.files = old.files.filter { keeping.contains($0.key) }
         }
         for p in paths {
-            stamps.files[p] = VerifiedStamps.location(root, p).flatMap(VerifiedStamps.look)
+            stamps.files[p] = VerifiedStamps.look(root, p)
         }
         do {
             try InstallFS.makeDirectory(layout.installsDir)

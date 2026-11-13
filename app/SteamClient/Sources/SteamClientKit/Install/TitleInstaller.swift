@@ -268,7 +268,7 @@ public struct TitleInstaller: Sendable {
         let entries = plan.files.filter { only?.contains($0.path) ?? true }
         // A steam_api DLL swapped for the emulator is checked as its kept original (SteamAPISwap).
         let checks = try entries.map { f in
-            (f, try InstallFS.resolveInside(root, SteamAPISwap.manifestFile(root, f.path), createParents: false))
+            (f, try SteamAPISwap.manifestURL(root, f.path))
         }
         let stamps = VerifiedStamps.load(layout.verifiedFile(appID: appID))
         let failed = await Self.parallel(checks, width: concurrency) { c in
@@ -386,7 +386,7 @@ public struct TitleInstaller: Sendable {
         let joined = Set(added.map(\.depotID))
         let missing = try plan.files.filter { f in
             guard joined.contains(f.depotID) else { return false }
-            let url = try InstallFS.resolveInside(root, SteamAPISwap.manifestFile(root, f.path), createParents: false)
+            let url = try SteamAPISwap.manifestURL(root, f.path)
             return !InstallEngine.fileMatches(url, size: f.size, hash: f.sha.map(FileHash.sha1) ?? .none)
         }.map(\.path)
         for d in plan.directories { try InstallFS.makeDirectory(try InstallFS.resolveInside(root, d, createParents: true)) }
@@ -411,7 +411,7 @@ public struct TitleInstaller: Sendable {
         say(Self.stageLine(result))
         for f in sub.files {
             let src = try InstallFS.resolveInside(tree, f.path, createParents: false)
-            let dst = try InstallFS.resolveInside(root, SteamAPISwap.manifestFile(root, f.path), createParents: true)
+            let dst = try SteamAPISwap.manifestURL(root, f.path, createParents: true)
             guard rename(src.path, dst.path) == 0 else { throw SteamError.transport("repair rename \(f.path) errno \(errno)") }
         }
         try? FileManager.default.removeItem(at: tree)
@@ -442,7 +442,7 @@ public struct TitleInstaller: Sendable {
             rows.append((try SafePath.normalize(path), digest))
         }
         let started = Date()
-        let checks = try rows.map { ($0.0, try InstallFS.resolveInside(dir, SteamAPISwap.manifestFile(dir, $0.0), createParents: false), $0.1) }
+        let checks = try rows.map { ($0.0, try SteamAPISwap.manifestURL(dir, $0.0), $0.1) }
         let bad = await parallel(checks, width: concurrency) { c in InstallFS.sha256(c.1) == c.2 ? nil : c.0 }
         let known = Set(rows.map { $0.0 })
         let unlisted = regularFiles(under: dir).filter { !known.contains($0) && !SteamAPISwap.isSwapFile(dir, $0) }
@@ -518,7 +518,7 @@ public struct TitleInstaller: Sendable {
         for d in plan.directories { try InstallFS.makeDirectory(try InstallFS.resolveInside(final, d, createParents: true)) }
         for f in staged.files {
             let src = try InstallFS.resolveInside(tree, f.path, createParents: false)
-            let dst = try InstallFS.resolveInside(final, SteamAPISwap.manifestFile(final, f.path), createParents: true)
+            let dst = try SteamAPISwap.manifestURL(final, f.path, createParents: true)
             guard rename(src.path, dst.path) == 0 else { throw SteamError.transport("shared commit rename \(f.path) errno \(errno)") }
         }
         try saveReceipt(receipt)

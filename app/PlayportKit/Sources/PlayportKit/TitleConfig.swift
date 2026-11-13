@@ -45,9 +45,14 @@ public enum TitleConfig {
             guard !k.isEmpty, k.unicodeScalars.allSatisfy({ keyChars.contains($0) && $0.isASCII }),
                   !v.contains(where: { $0 == "\n" || $0 == "\r" })
             else { throw LaunchPlanError.badConfig("\(k) = \(v)") }
-            if refusedKeys.contains(k) { throw LaunchPlanError.refusedKey(k) }
-            if deletedKeys.contains(k) { throw LaunchPlanError.deletedKey(k) }
+            if refusedKeys.contains(k) || deletedKeys.contains(k) { throw LaunchPlanError.refusedKey(k) }
         }
+    }
+
+    /// Why `key` is refused, after the key: a deleted key is no key at all any more, a refused one
+    /// is no game's own.
+    public static func refusal(_ key: String) -> String {
+        deletedKeys.contains(key) ? "is no longer a key" : "is not a game's own key"
     }
 
     /// The shared file's text, then the title's keys in key order.

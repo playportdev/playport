@@ -81,7 +81,7 @@ final class MemoryKeyTests: XCTestCase {
     func testTheConfigurationCheckRefusesEachDeletedKey() {
         for key in ["jumbo-mb", "jumbo-keep-mb", "cage-hold", "short-reserve-mb"] {
             XCTAssertThrowsError(try TitleConfig.validate(["inproc-sync": "1", key: "1"]), key) {
-                XCTAssertEqual($0 as? LaunchPlanError, .deletedKey(key))
+                XCTAssertEqual($0 as? LaunchPlanError, .refusedKey(key))
             }
             XCTAssertThrowsError(try LaunchPlan.make(installDir: "G", executable: "g.exe", arguments: [], config: [key: "32768"]), key)
             XCTAssertNil(LaunchSettings.runtimeKeys("inproc-sync=1 \(key)=32768"), key)
