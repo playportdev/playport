@@ -299,6 +299,32 @@ static void test_kick(void)
     close( w.fds[0] );
 }
 
+/* A wait on no object is a sleep (ntdll's NtDelayExecution on iOS, PLA-851): it ends at its
+ * deadline, and a kick ends it early so that the thread runs its system APC, as SIGUSR1 ends a
+ * sleep in select() on desktop. */
+static void test_sleep(void)
+{
+    struct waiter_arg w = { .count = 0, .owner = 0x280, .timeout_ms = 30 };
+    uint64_t start = mono_ns();
+    pthread_t t;
+
+    errno = 0; CHECK( wait_objs( NULL, 0, 0, 0x280, 0, 30, NULL ) == -1 && errno == ETIMEDOUT );
+    CHECK( mono_ns() - start >= 30000000ull );
+
+    w.timeout_ms = -1;                                  /* forever, until kicked */
+    t = start_blocked( &w );
+    CHECK( !atomic_load( &w.done ) );
+    ppsync_kick( 0x280 );
+    pthread_join( t, NULL );
+    CHECK( w.ret == -1 && w.err == ECANCELED );
+
+    ppsync_kick( 0x280 );                                /* a kick before the sleep ends it at once */
+    start = mono_ns();
+    errno = 0; CHECK( wait_objs( NULL, 0, 0, 0x280, 0, 1000, NULL ) == -1 && errno == ECANCELED );
+    CHECK( mono_ns() - start < 500000000ull );
+    errno = 0; CHECK( wait_objs( NULL, 0, 0, 0x280, 0, 0, NULL ) == -1 && errno == ETIMEDOUT );
+}
+
 static void test_freeze(void)
 {
     struct waiter_arg w = { .count = 1, .owner = 0x300, .timeout_ms = -1 };
@@ -617,6 +643,7 @@ int main(void)
     test_timeouts();
     test_blocking();
     test_kick();
+    test_sleep();
     test_freeze();
     test_handoff();
     test_handoff_leaks();

@@ -1,0 +1,75 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 13 Nov 2026 01:30:00 +0100
+Subject: [PATCH] ntdll: iOS: a non-alertable sleep is a ppsync wait, so a
+ system APC reaches it
+
+On desktop, the SIGUSR1 that comes with a system APC ends a sleep in
+select() (a non-alertable NtDelayExecution) and runs the APC, such as the
+APC_ASYNC_IO that completes a named-pipe read the thread started. On iOS
+no signal reaches a thread (wine-unix 0002). The server kicks a thread in
+a ppsync wait (wine-unix 0045), but a thread asleep in select() still
+waited for its next server wait.
+
+The Rockstar Games Launcher's thread that talks to Rockstar Service sleeps
+between its checks of the service's pipe, and on the phone it saw each
+reply only at its next 10 s ping. The 500 ms handshake timed out, each
+step of a self-update took 10 s or more, and the self-update to build
+1311 never finished (PLA-851). Desktop Proton reproduces it once
+wineserver drops SIGUSR1 and fsync and esync are off, which leaves the
+server waits that a ppsync kick stands for. Delivering SIGUSR1 only to
+threads asleep in select() restores the desktop timing: the handshake
+answers in 89 ms and the update applies in 1.4 s.
+
+With ppsync, a timed non-alertable sleep is now a ppsync wait on no
+object, until the same deadline. A kick ends it, linux_wait_objs() runs
+the APC through a zero-timeout server wait, and the sleep goes on. A
+sleep forever does the same in a loop. Without ppsync nothing changes.
+
+Class: ios-port
+Evidence: docs/evidence/2026-11-13-rockstar-launcher-self-update.md (PLA-851: Rockstar Service's log on the phone, desktop Proton with SIGUSR1 withheld)
+Offered-upstream: no; iOS one-process runtime integration
+---
+ dlls/ntdll/unix/sync.c | 22 ++++++++++++++++++++++
+ 1 file changed, 22 insertions(+)
+
+diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
+index 8df2581..69ddc6f 100644
+--- a/dlls/ntdll/unix/sync.c
++++ b/dlls/ntdll/unix/sync.c
+@@ -3353,6 +3353,9 @@ NTSTATUS WINAPI NtDelayExecution( BOOLEAN alertable, const LARGE_INTEGER *timeou
+ 
+     if (!timeout || timeout->QuadPart == TIMEOUT_INFINITE)  /* sleep forever */
+     {
++#ifdef WINE_IOS
++        if (inproc_device_fd >= 0) for (;;) linux_wait_objs( inproc_device_fd, 0, NULL, WaitAny, 0, NULL );
++#endif
+         for (;;) select( 0, NULL, NULL, NULL, NULL );
+     }
+     else
+@@ -3371,6 +3374,25 @@ NTSTATUS WINAPI NtDelayExecution( BOOLEAN alertable, const LARGE_INTEGER *timeou
+         status = NtYieldExecution();
+         if (!when) return status;
+ 
++#ifdef WINE_IOS
++        /* Playport (PLA-851): on desktop the SIGUSR1 of a system APC ends a sleep in
++         * select() and runs the APC, such as the one that completes a named-pipe read
++         * this thread started. On iOS no signal reaches the thread, and ppsync's kick
++         * reaches only a thread in a ppsync wait, so the APC waited for the sleeper's
++         * next server wait: the Rockstar Games Launcher's thread that polls its
++         * service's pipe between Sleep()s saw each reply only at its 10 s ping. The sleep is
++         * a ppsync wait on no object instead: a kick ends it, linux_wait_objs() runs
++         * the APC through a zero-timeout server wait, and the sleep goes on to the same
++         * deadline. */
++        if (inproc_device_fd >= 0)
++        {
++            LARGE_INTEGER deadline;
++            deadline.QuadPart = when;
++            linux_wait_objs( inproc_device_fd, 0, NULL, WaitAny, 0, &deadline );
++            return STATUS_SUCCESS;
++        }
++#endif
++
+         for (;;)
+         {
+             struct timeval tv;
