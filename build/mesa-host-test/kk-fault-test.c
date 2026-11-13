@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
- * patches/mesa 0154, 0156, 0157, 0158 (PLA-880): a failed commit, on the real driver and mock
+ * patches/mesa 0154, 0156, 0157, 0158, 0159 (PLA-880): a failed commit, on the real driver and mock
  * Metal (make-mock-bridge.py's KK_MOCK_COMMIT_ERROR fails every commit with a
  * two-level error chain). Always: the error chain Metal gave and the commit's
  * timing. With MESA_KK_DEBUG=fault: each encoder is labelled with its command
@@ -373,7 +373,8 @@ main(void)
                "heap ring, encoder timestamps; Metal encoder status: unavailable");
    expect(log, "; leaving out: 0123456789abcdef0(ignored),zz(ignored),ABCD,"
                "layered,instanced,copy,32x32,0x5(ignored); vertex layer clamp "
-               "off; Metal command buffers: one per encoder\n");
+               "off; Metal command buffers: one per encoder, at most 16 a "
+               "command buffer\n");
    d = kk_device_from_handle(device);
    assert(d->fault.skip_count == 1 && d->fault.skip[0].prefix == 0xabcd &&
           d->fault.skip[0].digits == 4 && !d->fault.skip_writes);
@@ -381,7 +382,8 @@ main(void)
                                   KK_FAULT_SKIP_INSTANCED | KK_FAULT_SKIP_COPY));
    assert(d->fault.skip_area_count == 1 && d->fault.skip_areas[0].w == 32 &&
           d->fault.skip_areas[0].h == 32);
-   assert(d->fault.split == 1u && !d->fault.split_draws);
+   assert(d->fault.split == 1u && !d->fault.split_draws &&
+          d->fault.split_parts == KK_FAULT_SPLIT_PARTS && KK_FAULT_SPLIT_PARTS == 16u);
    d->fault.skip_count = d->fault.skip_kinds = d->fault.skip_area_count = 0;
    d->fault.split = 0u;
    q = &d->queue;
@@ -420,8 +422,8 @@ main(void)
    set_heap(512 * 1024);
    set_ring(d->fault.ring_next - 1u, 1 * MIB);
    /* The first completed command buffers with encoder timestamps say whether
-    * the GPU wrote them, and on which clock: here the commit's GPU tick is 0
-    * and the mock's timestamps count up from 10000 */
+    * the GPU wrote them, and on which clock: here the commit's GPU time is 0
+    * and the mock's timestamps count up from 10000, at the mock's 1 GHz */
    d->fault.ts_checks = 0u;
    kk_mock_set_gpu_timestamp(0u);
    log = capture(submit, NULL);
@@ -432,7 +434,8 @@ main(void)
             "[kk-fault] timestamp check: cb #%u: 1 of 1 encoder(s) wrote a start "
             "and 1 an end; enc 0 start tick ", first);
    expect(log, want);
-   expect(log, ", commit tick 0, 1000000000 Hz: the starts follow the commit\n");
+   expect(log, ", commit at 0 ns = tick 0 at 1000000000 Hz: the starts follow "
+               "the commit by ");
    assert(!strstr(log, "[kk-fault] cb #"));
    assert(!vk_device_is_lost_no_report(&d->vk));
    puts("ok fault: a completed command buffer's encoders are labelled; a heap "
@@ -445,15 +448,58 @@ main(void)
    kk_mock_set_gpu_timestamp(1ull << 62);
    log = capture(submit, NULL);
    kk_mock_set_gpu_timestamp(0u);
-   expect(log, "commit tick 4611686018427387904, 1000000000 Hz: the starts "
-               "precede the commit (another clock: gpu= and not-started on a "
-               "failure are not to be trusted)\n");
+   expect(log, ", commit at 4611686018427387904 ns = tick 4611686018427387904 "
+               "at 1000000000 Hz: the starts precede the commit by ");
+   expect(log, " ms (another clock: gpu= and not-started on a failure are not "
+               "to be trusted)\n");
    d->fault.ts_checks = KK_FAULT_TS_CHECKS;
    capture(record_one, NULL);
    log = capture(submit, NULL);
    assert(!strstr(log, "timestamp check"));
-   const uint32_t last_ok = submitted->fault.serial;
    puts("ok fault: a commit tick on another clock than the encoders' is named");
+
+   /* The phone's clocks (PLA-880 repro 4, The Witcher 3): the counter heap
+    * counts at 24 MHz and sampleTimestamps' GPU time is in nanoseconds. The
+    * commit at 225160167939958 ns is tick 5403844030558, and enc 0 began at
+    * tick 5403844077740, 1.966 ms after it. Before 0159 the ticks were
+    * compared with the nanoseconds: "the starts precede the commit". */
+   d->fault.timestamp_hz = 24000000u;
+   d->fault.ts_checks = 0u;
+   recording = cbs[2];
+   capture(record_one, NULL);
+   const struct kk_fault_encoder *phone = util_dynarray_begin(&submitted->fault.trail);
+   kk_mock_counter_heap_set(d->fault.timestamps, phone[0].ts, 5403844077740ull);
+   kk_mock_counter_heap_set(d->fault.timestamps, phone[0].ts + 1u,
+                            5403844077740ull + 48000u);
+   kk_mock_set_gpu_timestamp(225160167939958ull);
+   log = capture(submit, NULL);
+   expect(log, "1 of 1 encoder(s) wrote a start and 1 an end; enc 0 start tick "
+               "5403844077740, commit at 225160167939958 ns = tick "
+               "5403844030558 at 24000000 Hz: the starts follow the commit by "
+               "1.966 ms\n");
+   const uint32_t last_ok = submitted->fault.serial;
+   /* Failed on the same clocks: enc 0 began 1.966 ms after the commit and
+    * did not end */
+   d->fault.ts_checks = KK_FAULT_TS_CHECKS;
+   capture(record_one, NULL);
+   const uint32_t phone_failed = submitted->fault.serial;
+   phone = util_dynarray_begin(&submitted->fault.trail);
+   kk_mock_counter_heap_set(d->fault.timestamps, phone[0].ts, 5403844077740ull);
+   kk_mock_counter_heap_set(d->fault.timestamps, phone[0].ts + 1u, 0u);
+   setenv("KK_MOCK_COMMIT_ERROR", "1", 1);
+   log = capture(submit, NULL);
+   unsetenv("KK_MOCK_COMMIT_ERROR");
+   snprintf(want, sizeof(want), "[kk-fault] cb #%u enc 0 compute dispatches=0 "
+            "copies=2 gpu=+1.966..- ms UNFINISHED", phone_failed);
+   expect(log, want);
+   snprintf(want, sizeof(want), "[kk-fault] cb #%u stopped in enc 0: it started "
+            "and did not end\n", phone_failed);
+   expect(log, want);
+   kk_mock_set_gpu_timestamp(0u);
+   d->fault.timestamp_hz = 1000000000u;
+   puts("ok fault: on the phone's clocks (24 MHz ticks, a commit in ns) an "
+        "encoder's start follows the commit, and a failure names the one that "
+        "did not end");
 
    /* Failed: the error chain and timing, the command buffer's encoders, and
     * a heap that overflowed (3 MiB asked of 2) */
@@ -710,8 +756,31 @@ main(void)
    snprintf(want, sizeof(want), "part 1 of %u (enc 0..1) failed (error=1): "
             "encoders=2 ", (split_encoders + 1u) / 2u);
    expect(log, want);
+
+   /* At most split_parts Metal command buffers a command buffer, the encoders
+    * past them in the last (PLA-880 repro 4: a part for each of hundreds of
+    * encoders grew the command allocators to 1.1 GB, 82 MiB without) */
+   d->fault.split = 1u;
+   d->fault.split_parts = 2u;
+   unsetenv("KK_MOCK_MAX_ENCODERS_PER_CB");
+   capture(record_blits, NULL);
+   const uint32_t capped = submitted->fault.serial;
+   commits = kk_mock_command_buffer_commits();
+   setenv("KK_MOCK_COMMIT_ERROR", "1", 1);
+   log = capture(submit, NULL);
+   unsetenv("KK_MOCK_COMMIT_ERROR");
+   assert(kk_mock_command_buffer_commits() == commits + 2u);
+   snprintf(want, sizeof(want), "[kk-fault] cb #%u part 1 of 2 (enc 0) failed "
+            "(error=1): encoders=1 ", capped);
+   expect(log, want);
+   snprintf(want, sizeof(want), "[kk-fault] cb #%u part 2 of 2 (enc 1..%u) "
+            "failed (error=1): encoders=%u ", capped, split_encoders - 1u,
+            split_encoders - 1u);
+   expect(log, want);
+   d->fault.split_parts = KK_FAULT_SPLIT_PARTS;
    puts("ok fault: MESA_KK_FAULT_SPLIT commits each encoder, or each N, as a "
-        "Metal command buffer of its own, and a failure names its encoders");
+        "Metal command buffer of its own, at most 16 a command buffer, and a "
+        "failure names its encoders");
 
    /* MESA_KK_FAULT_SPLIT=draw: each draw in a render encoder of its own (the
     * pass begins again on what was stored), each one committed alone */
@@ -751,12 +820,14 @@ main(void)
    const VkDevice first_device = device;
    setenv("MESA_KK_FAULT_SPLIT", "draw", 1);
    log = capture(create_device, NULL);
-   expect(log, "; Metal command buffers: one per draw\n");
+   expect(log, "; Metal command buffers: one per draw, at most 16 a command "
+               "buffer\n");
    assert(kk_device_from_handle(device)->fault.split == 1u &&
           kk_device_from_handle(device)->fault.split_draws);
    setenv("MESA_KK_FAULT_SPLIT", "4", 1);
    log = capture(create_device, NULL);
-   expect(log, "; Metal command buffers: one per 4 encoders\n");
+   expect(log, "; Metal command buffers: one per 4 encoders, at most 16 a "
+               "command buffer\n");
    setenv("MESA_KK_FAULT_SPLIT", "0", 1);
    log = capture(create_device, NULL);
    expect(log, "vertex layer clamp off; MESA_KK_FAULT_SPLIT=0 ignored\n");

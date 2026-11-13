@@ -1,0 +1,259 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 13 Nov 2026 15:57:31 +0100
+Subject: [PATCH] kk: MESA_KK_DEBUG=fault times encoders from the commit on the
+ heap's clock, and MESA_KK_FAULT_SPLIT makes 16 parts at most
+
+Two things the fourth phone repro of The Witcher 3 1.32's GPU hang
+(PLA-880) showed:
+- The encoder timestamps are written, but the timestamp check said "the
+  starts precede the commit" in every run: the counter heap counts ticks of
+  queryTimestampFrequency (24 MHz on the phone), and sampleTimestamps' GPU
+  time, the commit time that a failure's gpu= times and not-started count
+  from, is in nanoseconds. Hollow Knight's first command buffers began at
+  tick 5396851410669 after a commit at 224868807470416 ns, which is tick
+  5396851379289: 1.3 ms later. So repro 3's "every encoder not-started" said
+  nothing about where the GPU stopped.
+- With MESA_KK_FAULT_SPLIT=1 the game ran 624 frames with no GPU error, then
+  its dxvk-cs thread aborted (exception 0x80000101) while it loaded. A
+  Metal command buffer for every encoder of the load's command buffers had
+  grown KosmicKrisp's command allocators to 1.1 GB, against 82 MiB without
+  the split at the same point, and an allocator's reset keeps its memory.
+
+So, with MESA_KK_DEBUG=fault:
+- A commit's GPU time is kept in nanoseconds and as heap ticks, converted
+  as kk_get_timestamp converts it for vkGetCalibratedTimestamps; the
+  failed trail's gpu= times, UNFINISHED, not-started and "stopped in enc i"
+  compare the encoders' ticks with the commit's ticks. The timestamp check
+  says "enc i start tick T, commit at N ns = tick C at F Hz: the starts
+  follow|precede the commit by X ms".
+- MESA_KK_FAULT_SPLIT splits a command buffer into at most 16 Metal command
+  buffers (KK_FAULT_SPLIT_PARTS); the last holds the encoders past the
+  first 15 and fails as "part 16 of 16 (enc 15..E)". With draw, a render
+  encoder in the last part is no longer ended after every draw. The
+  [kk-fault] on: line says "one per encoder, at most 16 a command buffer".
+
+Without MESA_KK_DEBUG=fault none of this runs, and nothing changes.
+
+Linear: PLA-880
+Class: diagnostics
+Evidence: build/mesa-host-test/kk-fault-test.c (the phone's clocks: 24 MHz ticks, a commit in nanoseconds, a completed and a failed command buffer; a split capped at 2 parts); PLA-880 (repro 4: timestamp checks, allocators=34/1107.0 MiB with the split)
+Offered-upstream: no
+---
+ src/kosmickrisp/vulkan/kk_fault.c | 69 ++++++++++++++++++++++---------
+ src/kosmickrisp/vulkan/kk_fault.h | 18 ++++++--
+ 2 files changed, 63 insertions(+), 24 deletions(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_fault.c b/src/kosmickrisp/vulkan/kk_fault.c
+index 40cd2c4..fc7ec20 100644
+--- a/src/kosmickrisp/vulkan/kk_fault.c
++++ b/src/kosmickrisp/vulkan/kk_fault.c
+@@ -91,8 +91,9 @@ parse_skip(struct kk_fault_device *f, char *out, size_t size)
+ }
+ 
+ /* MESA_KK_FAULT_SPLIT=N (encoders a Metal command buffer holds) or draw
+- * (each draw its own render encoder, each encoder alone); what the [kk-fault]
+- * on: line says of it */
++ * (each draw its own render encoder, each encoder alone), into at most
++ * KK_FAULT_SPLIT_PARTS Metal command buffers; what the [kk-fault] on: line
++ * says of it */
+ static void
+ parse_split(struct kk_fault_device *f, char *out, size_t size)
+ {
+@@ -102,19 +103,24 @@ parse_split(struct kk_fault_device *f, char *out, size_t size)
+       return;
+    char *end;
+    const unsigned long n = strtoul(s, &end, 10);
++   char each[32];
+    if (!strcmp(s, "draw")) {
+       f->split = 1u;
+       f->split_draws = true;
+-      snprintf(out, size, "; Metal command buffers: one per draw");
++      snprintf(each, sizeof(each), "draw");
+    } else if (*end == '\0' && n >= 1u && n <= KK_FAULT_MAX_ENCODERS) {
+       f->split = n;
+       if (n == 1u)
+-         snprintf(out, size, "; Metal command buffers: one per encoder");
++         snprintf(each, sizeof(each), "encoder");
+       else
+-         snprintf(out, size, "; Metal command buffers: one per %lu encoders", n);
++         snprintf(each, sizeof(each), "%lu encoders", n);
+    } else {
+       snprintf(out, size, "; MESA_KK_FAULT_SPLIT=%.16s ignored", s);
++      return;
+    }
++   f->split_parts = KK_FAULT_SPLIT_PARTS;
++   snprintf(out, size, "; Metal command buffers: one per %s, at most %u a "
++                       "command buffer", each, f->split_parts);
+ }
+ 
+ void
+@@ -136,7 +142,7 @@ kk_fault_device_init(struct kk_device *dev)
+          mtl_new_timestamp_counter_heap(dev->mtl_handle, KK_FAULT_TIMESTAMPS);
+       dev->fault.timestamp_hz = mtl_device_timestamp_frequency(dev->mtl_handle);
+    }
+-   char skip[192], split[64];
++   char skip[192], split[96];
+    parse_skip(&dev->fault, skip, sizeof(skip));
+    parse_split(&dev->fault, split, sizeof(split));
+    fprintf(stderr,
+@@ -222,6 +228,15 @@ kk_fault_begin_cmd(struct kk_cmd_buffer *cmd)
+                   : 0u;
+ }
+ 
++/* MESA_KK_FAULT_SPLIT: metal.cmd_buf is the last of split_parts, which holds
++ * the rest of the command buffer's encoders */
++static bool
++last_part(const struct kk_fault_cmd *f, const struct kk_device *dev)
++{
++   return util_dynarray_num_elements(&f->parts, struct kk_fault_part) + 1u >=
++          dev->fault.split_parts;
++}
++
+ void
+ kk_fault_split(struct kk_cmd_buffer *cmd)
+ {
+@@ -229,7 +244,7 @@ kk_fault_split(struct kk_cmd_buffer *cmd)
+    struct kk_device *dev = kk_cmd_buffer_device(cmd);
+    if (!f->serial || !dev->fault.split)
+       return;
+-   if (f->part_encoders < dev->fault.split) {
++   if (f->part_encoders < dev->fault.split || last_part(f, dev)) {
+       f->part_encoders++;
+       return;
+    }
+@@ -259,7 +274,7 @@ void
+ kk_fault_end_draw(struct kk_cmd_buffer *cmd)
+ {
+    if (!cmd->fault.serial || !kk_cmd_buffer_device(cmd)->fault.split_draws ||
+-       !cmd->metal.render)
++       !cmd->metal.render || last_part(&cmd->fault, kk_cmd_buffer_device(cmd)))
+       return;
+    /* As a compute encoder inside a pass ends it (cs_get_compute) */
+    kk_apply_attachment_store_ops(cmd, true);
+@@ -879,7 +894,9 @@ struct kk_fault_commit {
+    mtl_feedback_handler_callback callback;
+    void *user_data;
+    uint32_t serial, flags, dropped;
+-   uint64_t committed_ts; /* the GPU's timestamp at the commit */
++   /* The GPU's time at the commit: sampleTimestamps' nanoseconds, and those
++    * as ticks of the counter heap, which the encoders' timestamps count */
++   uint64_t committed_ns, committed_ts;
+    struct util_dynarray trail; /* taken from the command buffer */
+    /* The trail's entries from begin on are this Metal command buffer's
+     * encoders, the first being the command buffer's encoder first */
+@@ -897,6 +914,14 @@ new_commit(struct kk_cmd_buffer *cmd, mtl_feedback_handler_callback callback,
+    if (!c)
+       return NULL;
+    struct kk_device *dev = kk_cmd_buffer_device(cmd);
++   /* PLA-880: sampleTimestamps gives nanoseconds and the counter heap ticks
++    * of queryTimestampFrequency (24 MHz on the phone), converted as
++    * kk_get_timestamp does for vkGetCalibratedTimestamps: a commit at
++    * 224868807470416 ns was tick 5396851379289, and the first command
++    * buffers' encoders began 1.3 to 2.6 ms after their commits */
++   const uint64_t ns = dev->fault.timestamps
++                          ? mtl_device_get_gpu_timestamp(dev->mtl_handle)
++                          : 0u;
+    *c = (struct kk_fault_commit){
+       .dev = dev,
+       .callback = callback,
+@@ -904,9 +929,9 @@ new_commit(struct kk_cmd_buffer *cmd, mtl_feedback_handler_callback callback,
+       .serial = cmd->fault.serial,
+       .flags = cmd->fault.flags,
+       .dropped = cmd->fault.dropped,
+-      .committed_ts = dev->fault.timestamps
+-                         ? mtl_device_get_gpu_timestamp(dev->mtl_handle)
+-                         : 0u,
++      .committed_ns = ns,
++      .committed_ts = (uint64_t)(((unsigned __int128)ns * dev->fault.timestamp_hz) /
++                                 1000000000ull),
+       .trail = UTIL_DYNARRAY_INIT,
+    };
+    return c;
+@@ -1294,7 +1319,7 @@ check_timestamps(struct kk_fault_commit *c)
+    struct kk_device *dev = c->dev;
+    uint32_t count;
+    const struct kk_fault_encoder *trail = commit_encoders(c, &count);
+-   if (!dev->fault.timestamps ||
++   if (!dev->fault.timestamps || !dev->fault.timestamp_hz ||
+        p_atomic_read(&dev->fault.ts_checks) >= KK_FAULT_TS_CHECKS)
+       return;
+    uint32_t timed = 0u, started = 0u, ended = 0u, first = 0u;
+@@ -1314,16 +1339,20 @@ check_timestamps(struct kk_fault_commit *c)
+    }
+    if (!timed || p_atomic_inc_return(&dev->fault.ts_checks) > KK_FAULT_TS_CHECKS)
+       return;
++   const bool follows = first_start >= c->committed_ts;
++   const uint64_t apart = follows ? first_start - c->committed_ts
++                                  : c->committed_ts - first_start;
+    fprintf(stderr,
+            "[kk-fault] timestamp check: cb #%u: %u of %u encoder(s) wrote a "
+-           "start and %u an end; enc %u start tick %" PRIu64 ", commit tick "
+-           "%" PRIu64 ", %" PRIu64 " Hz: %s\n",
++           "start and %u an end; enc %u start tick %" PRIu64 ", commit at "
++           "%" PRIu64 " ns = tick %" PRIu64 " at %" PRIu64 " Hz: the starts "
++           "%s the commit by %.3f ms%s\n",
+            c->serial, started, timed, ended, first, first_start,
+-           c->committed_ts, dev->fault.timestamp_hz,
+-           first_start >= c->committed_ts
+-              ? "the starts follow the commit"
+-              : "the starts precede the commit (another clock: gpu= and "
+-                "not-started on a failure are not to be trusted)");
++           c->committed_ns, c->committed_ts, dev->fault.timestamp_hz,
++           follows ? "follow" : "precede",
++           (double)apart * 1000.0 / dev->fault.timestamp_hz,
++           follows ? "" : " (another clock: gpu= and not-started on a failure "
++                          "are not to be trusted)");
+    fflush(stderr);
+ }
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_fault.h b/src/kosmickrisp/vulkan/kk_fault.h
+index 1552ddc..0ce85df 100644
+--- a/src/kosmickrisp/vulkan/kk_fault.h
++++ b/src/kosmickrisp/vulkan/kk_fault.h
+@@ -25,7 +25,9 @@
+  * - each encoder writes a GPU timestamp when it starts and when it ends into
+  *   a ring in a counter heap, so a failed commit shows which encoders ran,
+  *   which finished, and the one the GPU stopped in; the first completed
+- *   command buffers check that the GPU wrote them, on the commit's clock;
++ *   command buffers check that the GPU wrote them after the commit (the
++ *   heap counts ticks of timestamp_hz, the commit's GPU time is in
++ *   nanoseconds);
+  * - each pipeline's hardware vertex stage that writes a layer or viewport
+  *   index is marked in the trail ([layer]), and the first draw of it in a
+  *   pass of each layer count is logged: a layer past the pass's layers is
+@@ -39,7 +41,8 @@
+  *   Metal command buffers of N encoders each, every one alone, so a failed
+  *   commit names its encoders without timestamps; draw: every draw in a
+  *   render encoder (the pass begun again) and a Metal command buffer of its
+- *   own;
++ *   own; at most KK_FAULT_SPLIT_PARTS a command buffer, the last holding
++ *   the encoders past them;
+  * - each submit's semaphore waits and signals (Metal events and values) are
+  *   kept, and a failure shows them with each event's value then;
+  * - each reset of the geometry heap (kk_heap, the 128 MiB scratch of
+@@ -73,6 +76,11 @@ enum kk_fault_skip_kind {
+ #define KK_FAULT_SKIP_AREAS 4u
+ /* Completed command buffers whose encoder timestamps are checked */
+ #define KK_FAULT_TS_CHECKS 3u
++/* MESA_KK_FAULT_SPLIT: Metal command buffers a command buffer is split into,
++ * at most. A part for each encoder of The Witcher 3's loads grew its command
++ * allocators from 82 MiB to 1.1 GB (PLA-880 repro 4), and an allocator's
++ * reset keeps its memory. */
++#define KK_FAULT_SPLIT_PARTS 16u
+ 
+ /* MESA_KK_FAULT_SPLIT: a Metal command buffer a recording ended before its
+  * last, and its encoders */
+@@ -245,8 +253,10 @@ struct kk_fault_device {
+    uint32_t skip_area_count;
+ 
+    /* MESA_KK_FAULT_SPLIT: encoders a Metal command buffer holds, 0 for all;
+-    * split_draws: each draw ends its render encoder */
+-   uint32_t split;
++    * split_parts: Metal command buffers a command buffer is split into, at
++    * most (KK_FAULT_SPLIT_PARTS); split_draws: each draw ends its render
++    * encoder */
++   uint32_t split, split_parts;
+    bool split_draws;
+ 
+    /* Completed command buffers whose encoder timestamps were checked, atomic */
