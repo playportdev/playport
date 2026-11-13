@@ -15,12 +15,35 @@ public struct DepotSelection: Sendable, Equatable {
         public var reason: String
     }
 
+    /// What an account's packages grant (Library.ownership): the depots they list and the apps
+    /// they list. A package can list a DLC app without its depots: The Witcher 3's lists its 16
+    /// free DLC and both expansions as apps, and Steam installs their depots for it (PLA-850).
+    public struct Ownership: Sendable, Equatable {
+        public var depots: Set<UInt32>
+        public var apps: Set<UInt32>
+
+        public init(depots: Set<UInt32>, apps: Set<UInt32>) {
+            self.depots = depots
+            self.apps = apps
+        }
+
+        /// From PICS package records (`depotids`, `appids`).
+        public init(packages: [KeyValue]) {
+            func ids(_ key: String) -> Set<UInt32> {
+                Set(packages.flatMap { $0[key]?.children ?? [] }.compactMap(\.uint32))
+            }
+            self.init(depots: ids("depotids"), apps: ids("appids"))
+        }
+    }
+
     public struct Options: Sendable, Equatable {
         public var language: String
-        /// DLC app IDs the session's licenses cover; empty for anonymous sessions.
+        /// DLC app IDs the session's packages list; empty for anonymous sessions. A DLC depot is
+        /// installed only when its DLC app is here, and then even when no package lists the
+        /// depot itself.
         public var ownedDLC: Set<UInt32>
-        /// The depots the session's packages list (Library.ownedDepotIDs), when
-        /// known: a depot outside it is left out, as Steam denies its key.
+        /// The depots the session's packages list (Ownership.depots), when known: a depot
+        /// outside it and not an owned DLC's is left out, as Steam denies its key.
         public var ownedDepots: Set<UInt32>?
         /// An explicit depot list (`--depot`): exactly these, in PICS order.
         public var explicit: [UInt32]?
@@ -31,6 +54,11 @@ public struct DepotSelection: Sendable, Equatable {
             self.ownedDLC = ownedDLC
             self.ownedDepots = ownedDepots
             self.explicit = explicit
+        }
+
+        /// Automatic selection for an account whose packages grant `owned`.
+        public init(language: String = "english", owned: Ownership) {
+            self.init(language: language, ownedDLC: owned.apps, ownedDepots: owned.depots)
         }
     }
 
@@ -96,10 +124,11 @@ public struct DepotSelection: Sendable, Equatable {
         if d.publicManifestGID == nil { return d.encryptedManifestsOnly ? "encrypted manifests only" : "no public manifest" }
         if !d.isWindows { return "os \(d.osList.joined(separator: ","))" }
         if let arch = d.osArch, !arch.isEmpty, arch != "64" { return "osarch \(arch)" }
-        if let owned = o.ownedDepots, !owned.contains(d.depotID) {
+        let dlcOwned = d.dlcAppID.map(o.ownedDLC.contains)
+        if let owned = o.ownedDepots, !owned.contains(d.depotID), dlcOwned != true {
             return d.dlcAppID.map { "DLC app \($0) not owned" } ?? "not in an owned package"
         }
-        if let dlc = d.dlcAppID, !o.ownedDLC.contains(dlc) { return "DLC app \(dlc) not owned" }
+        if let dlc = d.dlcAppID, dlcOwned == false { return "DLC app \(dlc) not owned" }
         if d.lowViolence { return "low-violence variant" }
         if let lang = d.language, lang != o.language { return "language \(lang)" }
         return nil

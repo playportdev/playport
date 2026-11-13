@@ -127,6 +127,39 @@ final class DepotSelectionTests: XCTestCase {
         XCTAssertEqual(try DepotSelection.select(app, .init(language: "German")).depots.map(\.depotID), [11, 12, 15, 19])
     }
 
+    func testOwnedDLCDepotNoPackageLists() throws {
+        // An owned DLC app's depot is kept though no package lists the depot itself (Steam
+        // grants its key through the DLC app); an unowned DLC's depot stays out.
+        let s = try DepotSelection.select(app, .init(ownedDLC: [99], ownedDepots: [11, 15]))
+        XCTAssertEqual(s.depots.map(\.depotID), [11, 15, 17])
+        XCTAssertEqual(s.skipped.first { $0.depotID == 18 }?.reason, "DLC app 98 not owned")
+        XCTAssertEqual(s.skipped.first { $0.depotID == 12 }?.reason, "not in an owned package")
+    }
+
+    func testWitcher3ClassicInstallsItsOwnedDLC() throws {
+        // The Witcher 3's package (124923, abridged) lists the free DLC 378640 and the expansion
+        // 378648 only as apps, and the expansion's depot 310613 also as a depot (PLA-850).
+        let package = try KeyValue.parseText(Array("""
+        "124923"
+        {
+            "packageid" "124923"
+            "appids" { "0" "292030" "1" "378640" "2" "378648" }
+            "depotids" { "0" "292031" "1" "292034" "2" "310613" }
+        }
+        """.utf8))
+        let owned = DepotSelection.Ownership(packages: [package])
+        XCTAssertEqual(owned, .init(depots: [292031, 292034, 310613], apps: [292030, 378640, 378648]))
+        let w3 = AppDepots(appID: 292030, name: "The Witcher 3", publicBuildID: 3280809, changeNumber: nil, depots: [
+            depot(292031, os: []), depot(292034, os: []),
+            depot(378640, os: [], dlc: 378640),   // free DLC: the package lists its app, not its depot
+            depot(310613, os: [], dlc: 378648),   // expansion: both
+            depot(378647, os: [], dlc: 378647),   // a DLC this account does not own
+        ], installDir: "The Witcher 3")
+        let s = try DepotSelection.select(w3, .init(owned: owned))
+        XCTAssertEqual(s.depots.map(\.depotID), [292031, 292034, 378640, 310613])
+        XCTAssertEqual(s.skipped, [.init(depotID: 378647, reason: "DLC app 378647 not owned")])
+    }
+
     func testExplicitSelection() throws {
         XCTAssertEqual(try DepotSelection.select(app, .init(explicit: [13, 12])).depots.map(\.depotID), [12, 13])
         XCTAssertThrowsError(try DepotSelection.select(app, .init(explicit: [16])))   // redistributable

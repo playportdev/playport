@@ -96,8 +96,9 @@ public struct TitleInstaller: Sendable {
         let branch = r.branch ?? stagedBranch(appID: r.appID) ?? loadReceipt(r.appID)?.branch ?? Branch.publicName
         let app = try await Library(session: session).depots(appID: r.appID).onBranch(branch)
         var options = r.selection
-        if options.ownedDepots == nil, options.explicit == nil {
-            options.ownedDepots = await ownedDepots(session, say: say)
+        if options.ownedDepots == nil, options.explicit == nil, let owned = await ownership(session, say: say) {
+            options.ownedDepots = owned.depots
+            options.ownedDLC.formUnion(owned.apps)
         }
         let selection = try DepotSelection.select(app, options)
         say("app \(r.appID) \(app.name) branch=\(branch) buildid=\(app.publicBuildID.map(String.init) ?? "?") installdir=\(app.installDir ?? "-")")
@@ -201,14 +202,14 @@ public struct TitleInstaller: Sendable {
         return (receipt, result)
     }
 
-    /// The depots the account's packages list, or nil (anonymous, or not
-    /// fetched: then every depot is tried, and an unowned one stops the install).
-    func ownedDepots(_ session: SteamSession, say: @Sendable (String) -> Void) async -> Set<UInt32>? {
+    /// What the account's packages grant, or nil (anonymous, or not fetched: then every depot
+    /// but a DLC's is tried, and an unowned one stops the install).
+    func ownership(_ session: SteamSession, say: @Sendable (String) -> Void) async -> DepotSelection.Ownership? {
         do {
             let licenses = try await session.awaitLicenses(timeout: 20)
             guard !licenses.isEmpty else { return nil }
-            let owned = try await Library(session: session).ownedDepotIDs(packages: licenses.map { ($0.packageID, $0.accessToken) })
-            return owned.isEmpty ? nil : owned
+            let owned = try await Library(session: session).ownership(packages: licenses.map { ($0.packageID, $0.accessToken) })
+            return owned.depots.isEmpty ? nil : owned
         } catch {
             say("owned depots unknown (\(error)); every selected depot is tried")
             return nil
@@ -348,7 +349,7 @@ public struct TitleInstaller: Sendable {
                                          + "\(receipt.buildID.map(String.init) ?? "?") here: update it rather than repair")
         }
         var options = DepotSelection.Options()
-        options.ownedDepots = await ownedDepots(try requireSession(), say: say)
+        if let owned = await ownership(try requireSession(), say: say) { options = DepotSelection.Options(owned: owned) }
         let selection = try DepotSelection.select(app, options)
         let have = Set(receipt.depots.map(\.depotID))
         let joining = selection.depots.filter { !have.contains($0.depotID) && receipt.depotsToRecheck.contains($0.depotID) }
