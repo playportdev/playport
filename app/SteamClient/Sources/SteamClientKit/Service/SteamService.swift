@@ -807,12 +807,14 @@ public actor SteamService {
     /// Brings the game's cloud files on Steam and on the phone together
     /// (Cloud.plan), settling conflicts the player chose in `resolve`. What a
     /// download or a choice replaces goes to `backups/<appid>/<time>/` first.
-    public func syncCloud(appID: UInt32, roots: Cloud.Roots, backups: URL, resolve: [String: CloudChoice] = [:]) async throws -> CloudSync {
+    public func syncCloud(appID: UInt32, roots originalRoots: Cloud.Roots, backups: URL, resolve: [String: CloudChoice] = [:]) async throws -> CloudSync {
         try checkNotSuspended()
         if case .signedIn = state {} else { await restoreIfPossible() }
         guard case .signedIn = state, let stored = try await backend.storedSession() else { throw SteamError.notLoggedOn }
         let account = Account(stored: stored).accountTag
-        let rules = (try await backend.appRecords([appID])[appID]).map(Cloud.rules) ?? []
+        let app = try await backend.appRecords([appID])[appID]
+        let roots = app.map { originalRoots.applyingWindowsOverrides($0) } ?? originalRoots
+        let rules = app.map(Cloud.rules) ?? []
         let changes = try await backend.cloudChangelist(appID: appID)
         let remote = changes.remote
         let kept = loadCloud(appID)

@@ -19,6 +19,7 @@ public enum Cloud {
         public var gameInstall: URL
         /// The emulator's remote storage for the game: `GSE Saves/<appid>/remote`.
         public var remote: URL
+        private var overriddenFolders: [String: URL] = [:]
 
         public init(user: URL, gameInstall: URL, remote: URL) {
             self.user = user
@@ -28,7 +29,8 @@ public enum Cloud {
 
         /// A root token's folder; nil for a root Playport does not map.
         public func folder(_ token: String) -> URL? {
-            switch token.lowercased() {
+            if let override = overriddenFolders[token.lowercased()] { return override }
+            return switch token.lowercased() {
             case "": remote
             case "gameinstall": gameInstall
             case "winmydocuments": user.appendingPathComponent("Documents", isDirectory: true)
@@ -38,6 +40,29 @@ public enum Cloud {
             case "winsavedgames": user.appendingPathComponent("Saved Games", isDirectory: true)
             default: nil
             }
+        }
+
+        /// Auto-Cloud keeps the original root in cloud file names even when
+        /// Windows stores it elsewhere. Use the game's PICS mapping, rather
+        /// than assigning every SteamCloudDocuments save a guessed location.
+        /// Path-transform/replacement overrides require a rule-aware mapping;
+        /// leave those unsupported instead of writing a save to a wrong path.
+        func applyingWindowsOverrides(_ app: KeyValue) -> Roots {
+            var result = self
+            for entry in app.path("ufs", "rootoverrides")?.children ?? [] {
+                guard entry["os"]?.value?.lowercased() == "windows",
+                      (entry["oscompare"]?.value ?? "=") == "=",
+                      entry["replacepath"]?.value != "1",
+                      entry["pathtransforms"]?.children.isEmpty ?? true,
+                      let root = entry["root"]?.value, !root.isEmpty,
+                      let target = entry["useinstead"]?.value,
+                      let base = folder(target) else { continue }
+                let extra = entry["addpath"]?.value ?? ""
+                let parts = extra.split(whereSeparator: { $0 == "/" || $0 == "\\" }).map(String.init)
+                guard !parts.contains(".."), !parts.contains("."), !extra.contains(":"), !extra.contains("\0") else { continue }
+                result.overriddenFolders[root.lowercased()] = Cloud.resolve(parts, in: base)
+            }
+            return result
         }
 
         /// The local file for a cloud name; nil when its root is not mapped or
@@ -55,7 +80,7 @@ public enum Cloud {
     /// Windows client uploaded: a PICS rule may spell it in another case
     /// (Portal 2's `gameinstall`). A token Playport does not map stays as given.
     static func canonicalRoot(_ token: String) -> String {
-        let steam = ["GameInstall", "WinMyDocuments", "WinAppDataLocal", "WinAppDataLocalLow", "WinAppDataRoaming", "WinSavedGames"]
+        let steam = ["GameInstall", "WinMyDocuments", "WinAppDataLocal", "WinAppDataLocalLow", "WinAppDataRoaming", "WinSavedGames", "SteamCloudDocuments"]
         return steam.first { $0.lowercased() == token.lowercased() } ?? token
     }
 
