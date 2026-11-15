@@ -527,6 +527,7 @@ private final class LayoutCanvasView: UIView, UIGestureRecognizerDelegate {
     init() {
         super.init(frame: .zero)
         backgroundColor = .clear
+        clipsToBounds = true
         isMultipleTouchEnabled = true
         grid.strokeColor = Self.edge.withAlphaComponent(0.05).cgColor
         grid.lineWidth = 1
@@ -566,10 +567,12 @@ private final class LayoutCanvasView: UIView, UIGestureRecognizerDelegate {
 
         let tap = UITapGestureRecognizer(target: self, action: #selector(tapped(_:)))
         let drag = UIPanGestureRecognizer(target: self, action: #selector(panned(_:)))
-        drag.maximumNumberOfTouches = 2
+        drag.maximumNumberOfTouches = 1
         drag.delegate = self
         let pinch = UIPinchGestureRecognizer(target: self, action: #selector(pinched(_:)))
         pinch.delegate = self
+        tap.require(toFail: drag)
+        tap.require(toFail: pinch)
         [tap, drag, pinch].forEach(addGestureRecognizer)
         accessibilityIdentifier = "layout-editor-canvas"
     }
@@ -589,6 +592,9 @@ private final class LayoutCanvasView: UIView, UIGestureRecognizerDelegate {
     // MARK: drawing
 
     func show(_ e: LayoutEditor, opacity: Double) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
         editor = e
         controlsLayer.alpha = CGFloat(opacity)
         let area = e.insets.area(width: e.width, height: e.height)
@@ -647,10 +653,12 @@ private final class LayoutCanvasView: UIView, UIGestureRecognizerDelegate {
             var key = c
             key.anchor = .center; key.x = 0; key.y = 0; key.floatingZone = nil
             key.width = Double(f.width); key.height = Double(f.height)
-            if let old = views.removeValue(forKey: c.id), old.key == key {
+            let old = views.removeValue(forKey: c.id)
+            if let old, old.key == key {
                 old.view.frame = f
                 kept[c.id] = old
             } else {
+                old?.view.removeFromSuperview()
                 kept[c.id] = (key, Self.container(c, frame: f))
             }
             controlsLayer.addSubview(kept[c.id]!.view)   // to the front, in order
