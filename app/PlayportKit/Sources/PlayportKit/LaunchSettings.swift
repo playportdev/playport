@@ -422,7 +422,10 @@ public enum GraphicsBackend: String, Codable, CaseIterable, Sendable {
     /// saved. DXVK still picks its own compiler thread count (decision 0024).
     public var runtimeEnvironment: [String: String] {
         switch self {
-        case .dxmt: [:]
+        case .dxmt: [
+            "DXMT_METALFX_SPATIAL_SWAPCHAIN": "1",
+            "DXMT_CONFIG": "d3d11.metalSpatialUpscaleFactor=2.0;",
+        ]
         case .vulkan: ["DXVK_CONFIG": "dxvk.tilerMode = False"]
         }
     }
