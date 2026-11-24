@@ -714,7 +714,10 @@ final class LaunchSettingsTests: XCTestCase {
         XCTAssertFalse(LaunchSettings(graphics: .dxmt).isEmpty)
         XCTAssertNil(GraphicsBackend.dxmt.runtimeOverlay)
         XCTAssertEqual(GraphicsBackend.vulkan.runtimeOverlay, "vulkan")
-        XCTAssertEqual(GraphicsBackend.dxmt.runtimeEnvironment, [:])
+        XCTAssertEqual(GraphicsBackend.dxmt.runtimeEnvironment, [
+            "DXMT_METALFX_SPATIAL_SWAPCHAIN": "1",
+            "DXMT_CONFIG": "d3d11.metalSpatialUpscaleFactor=2.0;",
+        ])
         // DXVK picks its own compiler thread count (decision 0024); tiler mode is off (decision 0066).
         XCTAssertEqual(GraphicsBackend.vulkan.runtimeEnvironment, ["DXVK_CONFIG": "dxvk.tilerMode = False"])
     }
@@ -728,7 +731,10 @@ final class LaunchSettingsTests: XCTestCase {
                        ["DXVK_CONFIG": "dxvk.tilerMode = False", "VKD3D_CONFIG": "one_time_submit"])
         XCTAssertEqual(GraphicsBackend.vulkan.environment(graphicsOptions: [:]), GraphicsBackend.vulkan.runtimeEnvironment)
         XCTAssertEqual(GraphicsBackend.dxmt.environment(graphicsOptions: ["DXVK_CONFIG": "dxvk.hud = fps"]),
-                       ["DXVK_CONFIG": "dxvk.hud = fps"])
+                       ["DXMT_METALFX_SPATIAL_SWAPCHAIN": "1",
+                        "DXMT_CONFIG": "d3d11.metalSpatialUpscaleFactor=2.0;",
+                        "DXVK_CONFIG": "dxvk.hud = fps"])
+        XCTAssertEqual(GraphicsBackend.dxmt.environment(graphicsOptions: [:]), GraphicsBackend.dxmt.runtimeEnvironment)
     }
 
     func testASteamGameRunsWithItsAppIDAsSteamsGameID() {
