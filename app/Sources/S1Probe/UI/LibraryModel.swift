@@ -8,6 +8,7 @@
 // a Steam install is verified against its retained manifests.
 
 import BattleNetClientKit
+import Darwin
 import EpicClientKit
 import GOGClientKit
 import Foundation
@@ -18,6 +19,14 @@ import SwiftUI
 @MainActor
 final class LibraryModel: ObservableObject {
     static let shared = LibraryModel()
+
+    nonisolated private static let deviceModel: String? = {
+        var system = utsname()
+        guard uname(&system) == 0 else { return nil }
+        return withUnsafeBytes(of: &system.machine) {
+            String(decoding: $0.prefix(while: { $0 != 0 }), as: UTF8.self)
+        }
+    }()
 
     /// The app container, the parent of Documents.
     nonisolated static let home = WineHostRuntime.documents.deletingLastPathComponent()
@@ -226,7 +235,7 @@ final class LibraryModel: ObservableObject {
             let paths = LibraryModel.paths
             let scanned = Adoption.scan(games: paths.games, cohort: LibraryModel.cohort,
                                         receipts: Adoption.receipts(in: paths.layout.installsDir),
-                                        storeReceipts: paths.layout.storeReceipts(), previous: previous)
+                                        storeReceipts: paths.layout.storeReceipts(), previous: previous, deviceModel: LibraryModel.deviceModel)
             await LibraryModel.shared.adopted(scanned)
         }
     }

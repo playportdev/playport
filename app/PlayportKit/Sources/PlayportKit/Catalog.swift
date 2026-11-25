@@ -241,7 +241,7 @@ public enum Adoption {
     /// `receipts` are Steam's install records and `storeReceipts` every other
     /// store's and the imports' (InstallLayout.installsDir).
     public static func scan(games: URL, cohort: Cohort, receipts: [InstallReceipt], storeReceipts: [StoreReceipt] = [],
-                            previous: Catalog, now: Date = Date()) -> Catalog {
+                            previous: Catalog, now: Date = Date(), deviceModel: String? = nil) -> Catalog {
         let fm = FileManager.default
         let folders = ((try? fm.contentsOfDirectory(atPath: games.path)) ?? [])
             .filter { !$0.hasPrefix(".") && isDirectory(games.appendingPathComponent($0)) }
@@ -321,11 +321,19 @@ public enum Adoption {
                     if t.source == .found, old.source == .found { t.sizeBytes = old.sizeBytes }
                     if old.storeVersion != t.storeVersion { t.lastVerification = nil }
                     t.chosenExecutable = old.chosenExecutable
-                    if let chosen = old.chosenExecutable, let there = locate(chosen, in: dir) { t.executable = there }
                     t.displayName = old.displayName
                     if let name = old.displayName, !name.isEmpty { t.name = name }
                     // The copy's own: never another title's that used the folder before.
                     if old.id == t.id { t.riskNoticeAccepted = old.riskNoticeAccepted }
+                }
+                if let chosen = t.chosenExecutable, let path = locate(chosen, in: dir) {
+                    t.executable = path
+                } else if deviceModel == "iPhone19,4", t.id == "app-1145360" || t.id == "dir-hades",
+                          let x86 = locate(#"x86\Hades.exe"#, in: dir), x86 != t.executable {
+                    // Hades ships three clients. The Duo reaches gameplay with the x86 client
+                    // and its detected Vulkan default. Store arguments belong to the original client.
+                    t.executable = x86
+                    t.storeArguments = nil
                 }
                 t.direct3D = t.executable.map {
                     Direct3D.detect(executable: dir.appendingPathComponent($0.replacingOccurrences(of: "\\", with: "/")), root: dir)
