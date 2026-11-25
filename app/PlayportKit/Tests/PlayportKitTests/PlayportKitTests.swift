@@ -189,6 +189,43 @@ final class CatalogTests: XCTestCase {
         return try JSONDecoder().decode(InstallReceipt.self, from: Data(json.utf8))
     }
 
+    func testHadesUsesThe32BitClientOnDuoUnlessThePlayerChoosesAnother() throws {
+        let cohort = Cohort(titles: [])
+        var steam = try receipt(app: 1145360, dir: "Hades")
+        let x64 = #"x64\Hades.exe"#
+        let x86 = #"x86\Hades.exe"#
+        steam.executable = x64
+        steam.arguments = "-original-client"
+        func scan(_ receipts: [InstallReceipt], previous: Catalog = Catalog(),
+                  model: String = "iPhone19,4") -> Catalog {
+            Adoption.scan(games: games, cohort: cohort, receipts: receipts, previous: previous, deviceModel: model)
+        }
+
+        try file("Hades/x64/Hades.exe")
+        let original = scan([steam])
+        XCTAssertEqual(original.titles.first?.executable, x64)
+        XCTAssertEqual(original.titles.first?.storeArguments, ["-original-client"])
+        try file("Hades/x86/Hades.exe")
+        var pe = Direct3D12Tests.pe(plus: false, name: "d3d11.dll")
+        pe[0x84] = 0x4c
+        pe[0x85] = 0x01
+        try pe.write(to: games.appendingPathComponent("Hades/x86/Hades.exe"))
+        XCTAssertEqual(scan([]).title(id: "dir-hades")?.executable, x86)
+        var updated = scan([steam], previous: original)
+        let title = try XCTUnwrap(updated.title(id: "app-1145360"))
+        XCTAssertEqual(title.executable, x86)
+        XCTAssertTrue(title.isI386)
+        XCTAssertEqual(LaunchSettings.resolve(game: nil, global: LaunchSettings(), i386: title.isI386).graphics, .vulkan)
+        XCTAssertNil(updated.titles.first?.storeArguments)
+        updated.update("app-1145360") { $0.chosenExecutable = x64 }
+        XCTAssertEqual(scan([steam], previous: updated).titles.first?.executable, x64)
+        XCTAssertEqual(scan([steam], previous: updated).titles.first?.storeArguments, ["-original-client"])
+        XCTAssertEqual(scan([steam], model: "iPhone19,1").titles.first?.executable, x64)
+        var sequel = try receipt(app: 1145350, dir: "Hades")
+        sequel.executable = x64
+        XCTAssertEqual(scan([sequel]).titles.first?.executable, x64)
+    }
+
     func testAdoptionDetectsDX12AndRefreshesItAfterAnUpdate() throws {
         try file("DX Game/game/Binaries/Win64/game-Win64-Shipping.exe")
         let exe = games.appendingPathComponent("DX Game/game/Binaries/Win64/game-Win64-Shipping.exe")
