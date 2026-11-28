@@ -263,3 +263,4 @@
 0299-ntdll-the-Social-Club-layout-holds-only-its-anchors-.patch
 0300-signal-emulate-LD1-LD4-and-ST1-ST4-multiple-structur.patch
 0301-signal-a-host-abort-on-a-game-s-thread-logs-its-reas.patch
+0302-virtual-round-section-view-size-to-host-page-in-mpro.patch
