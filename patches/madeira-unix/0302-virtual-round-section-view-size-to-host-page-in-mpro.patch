@@ -1,0 +1,94 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: vibecodooor <vibecodooor@users.noreply.github.com>
+Date: Sat, 28 Nov 2026 16:26:39 +0100
+Subject: [PATCH] virtual: round section view size to host page in
+ mprotect_exec
+
+madeira-unix 0274 keeps an ARM64EC view of a pagefile section on its
+section's memory instead of remapping it into the JIT pool, checking
+(char *)base + size <= (char *)sv->base + sv->size.
+
+mprotect_range rounds size up to iOS's 16 KB host page before calling
+mprotect_exec, while Wine records sv->size at 4 KB granularity. When a
+loader remaps a 4 KB-aligned image through a pagefile section whose size
+is not a multiple of 16 KB (for example Diablo II: Resurrected's
+D2R_loader.dll mapping 0x140080000+0x279b000, which mprotect_range rounds
+to 0x279c000), the unrounded comparison fails by up to 12 KB.
+mprotect_exec then falls through to the JIT pool vm_remap path, detaching
+the executable view from the section so pages later decrypted through the
+read-write view stay stale in the executable view (hitting encrypted
+on-disk bytes and raising STATUS_PRIVILEGED_INSTRUCTION 0xc0000096).
+
+Compare against the host-page-rounded view extent via ppsv_range_in_view
+(pp_section_view.h), matching mprotect_range and Windows' 64 KB view
+allocation granularity.
+
+Class: ios-port
+Evidence: tools/tests/test_section_view_keep.py (host check; full Linux IPA rebuild and phone smoke gate not run on macOS)
+Offered-upstream: no; the JIT pool and 16 KB host page handling are the iOS port's
+---
+ build/ntdll-unix/pp_section_view.h | 30 ++++++++++++++++++++++++++++++
+ build/ntdll-unix/virtual_ios.c     |  3 ++-
+ 2 files changed, 32 insertions(+), 1 deletion(-)
+ create mode 100644 build/ntdll-unix/pp_section_view.h
+
+diff --git a/build/ntdll-unix/pp_section_view.h b/build/ntdll-unix/pp_section_view.h
+new file mode 100644
+index 0000000..f7f9418
+--- /dev/null
++++ b/build/ntdll-unix/pp_section_view.h
+@@ -0,0 +1,30 @@
++/* Playport: whether a host-page-rounded mprotect_exec(base, size) range stays
++ * inside a mapped section view (host test: tools/tests/test_section_view_keep.py).
++ *
++ * Wine records a view's size at 4 KB Windows page granularity, while iOS's
++ * mprotect_range rounds the protect length up to the 16 KB host page before
++ * calling mprotect_exec. A section whose size is not a multiple of the host
++ * page (for example a 4 KB-aligned image remapped through a pagefile section)
++ * still owns the rest of its trailing host page (Windows maps views on 64 KB
++ * boundaries), so the bounds check compares against the host-page-rounded
++ * view extent. */
++#ifndef PP_SECTION_VIEW_H
++#define PP_SECTION_VIEW_H
++
++#include <stddef.h>
++#include <stdint.h>
++
++static inline int ppsv_range_in_view( uintptr_t base, size_t size,
++                                      uintptr_t view_base, size_t view_size,
++                                      size_t host_page_mask )
++{
++    size_t pad, view_host_size, offset;
++
++    if (!view_size || base < view_base) return 0;
++    pad = (size_t)(view_base & host_page_mask) + host_page_mask;
++    if (view_size > ~(size_t)0 - pad) return 0;
++    view_host_size = (view_size + pad) & ~host_page_mask;
++    offset = (size_t)(base - view_base);
++    return offset <= view_host_size && size <= view_host_size - offset;
++}
++#endif /* PP_SECTION_VIEW_H */
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 3febcbd..edc5a49 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -9416,6 +9416,7 @@ int ios_split_page_write_allowed( unsigned long long va )
+  * raises the access violation, as on Windows (pp_noaccess_split.h). Lock-free,
+  * like get_page_vprot. */
+ #include "pp_noaccess_split.h"
++#include "pp_section_view.h"
+ C_ASSERT( PPNS_READ == VPROT_READ && PPNS_WRITE == VPROT_WRITE && PPNS_EXEC == VPROT_EXEC &&
+           PPNS_WRITECOPY == VPROT_WRITECOPY && PPNS_GUARD == VPROT_GUARD &&
+           PPNS_COMMITTED == VPROT_COMMITTED && PPNS_WRITEWATCH == VPROT_WRITEWATCH );
+@@ -11832,7 +11833,7 @@ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
+         {
+             struct file_view *sv = find_view( base, 0 );
+             if (sv && !is_view_valloc( sv ) && !(sv->protect & SEC_IMAGE)
+-                && (char *)base + size <= (char *)sv->base + sv->size)
++                && ppsv_range_in_view( (uintptr_t)base, size, (uintptr_t)sv->base, sv->size, host_page_mask ))
+             {
+                 vm_prot_t vp = VM_PROT_READ | ((unix_prot & PROT_WRITE) ? VM_PROT_WRITE : 0);
+                 kern_return_t pkr = vm_protect( mach_task_self(), (vm_address_t)base, size, FALSE, vp );
+-- 
+2.54.0 (Apple Git-157)
+
